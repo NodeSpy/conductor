@@ -1036,18 +1036,16 @@ func (r *Runner) execStep(ctx context.Context, t core.Trigger, step config.Step,
 
 // execVerb invokes uses: <connector>.<verb> with rendered, merged options.
 // skipBotReply reports whether a verb call is a conversational reply back to
-// the bot that authored the triggering event, under reply_to_bots=off: a
-// comment/reply verb on a github connector. The substantive work (fixes,
+// the automated author of the triggering event, under reply_to_bots=off: a
+// verb its connector declares conversation_post. The substantive work (fixes,
 // labels, thread resolution) is never gated here.
 func (r *Runner) skipBotReply(ctx context.Context, in *connector.Instance, verb string) (string, bool) {
 	st, ok := botReply(ctx)
-	if !ok || !st.authorIsBot || st.mode != config.ReplyToBotsOff {
+	if !ok || !st.authorIsBot || st.mode != config.ReplyToBotsOff || in.Decl == nil {
 		return "", false
 	}
-	if in.Decl == nil || in.Decl.Type != "github" {
-		return "", false
-	}
-	if verb != "comment" && verb != "reply" {
+	v, ok := in.Decl.Verb(verb)
+	if !ok || v.Semantics == nil || !v.Semantics.ConversationPost {
 		return "", false
 	}
 	return st.login, true

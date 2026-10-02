@@ -272,17 +272,28 @@ func TestIdentitySourceReadsTheConnection(t *testing.T) {
 	}
 }
 
-// A plugin declaring a sweep verb has it answered by the daemon — any
-// plugin, there is no tier.
-func TestSweepVerbIsAnsweredByTheDaemon(t *testing.T) {
-	SetSweepHook(func(context.Context) (int, error) { return 4, nil })
+// A connector declaring the poll semantic gets the engine's poll verb under
+// the name it declares, answered by the daemon for THIS instance and never
+// forwarded — any plugin, there is no tier; one declaring none has no such
+// verb.
+func TestPollVerbIsTheEngines(t *testing.T) {
+	var polled string
+	SetSweepHook(func(_ context.Context, instance string) (int, error) { polled = instance; return 4, nil })
 	defer SetSweepHook(nil)
 	inv := &countInvoker{}
-	decl := &TypeDecl{Type: "github", Verbs: []VerbDecl{{Name: "sweep"}}}
-	e := &externalImpl{client: inv, decl: decl, log: t.Logf}
-	out, err := e.Invoke(context.Background(), "sweep", nil)
-	if err != nil || out["nudged"] != 4 || inv.calls != 0 {
-		t.Fatalf("sweep: out=%v err=%v forwarded=%d", out, err, inv.calls)
+	decl := mapDecl(&sdk.Decl{Type: "acme", Semantics: &sdk.ConnSemantics{Poll: &sdk.PollSemantics{VerbName: "refresh"}}})
+	if _, ok := decl.Verb("refresh"); !ok {
+		t.Fatal("the engine-provided poll verb is not declared")
+	}
+	e := &externalImpl{client: inv, decl: decl, instance: "acme1", log: t.Logf}
+	out, err := e.Invoke(context.Background(), "refresh", nil)
+	if err != nil || out["nudged"] != 4 || inv.calls != 0 || polled != "acme1" {
+		t.Fatalf("poll verb: out=%v err=%v forwarded=%d polled=%q", out, err, inv.calls, polled)
+	}
+	plain := mapDecl(&sdk.Decl{Type: "acme", Verbs: []sdk.Verb{{Name: "sweep"}}})
+	e2 := &externalImpl{client: inv, decl: plain, instance: "acme1", log: t.Logf}
+	if _, err := e2.Invoke(context.Background(), "sweep", nil); err != nil || inv.calls != 1 {
+		t.Fatalf("a connector declaring no poll semantic keeps its own sweep verb: err=%v forwarded=%d", err, inv.calls)
 	}
 }
 

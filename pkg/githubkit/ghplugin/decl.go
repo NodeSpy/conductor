@@ -15,8 +15,8 @@ const Type = "github"
 // plugin returns it from Describe — so the two cannot drift: an operator's
 // config means the same thing whichever implementation backs it.
 //
-// The sweep verb is conductor-defined (plugin.VerbSweep): the daemon answers
-// it for either implementation.
+// The sweep verb is the name github's poll semantic gives the engine's "poll
+// this instance now" verb: the daemon answers it for either implementation.
 func Decl() plugin.Decl { return decl() }
 
 // filterSchema turns the source's filter surface (fact/match-key name → value
@@ -179,7 +179,7 @@ func decl() plugin.Decl {
 		},
 		Verbs: []plugin.Verb{
 			{
-				Name: "comment", Desc: "post an issue/PR conversation comment",
+				Name: "comment", Semantics: &plugin.VerbSemantics{ConversationPost: true}, Desc: "post an issue/PR conversation comment",
 				Options: plugin.Schema{
 					"repo":   {Type: "string", Required: true, Scope: "repo"},
 					"number": {Type: "integer", Desc: "issue or PR number (alias: pr)"},
@@ -190,7 +190,7 @@ func decl() plugin.Decl {
 				Outputs: plugin.Schema{"id": {Type: "integer"}, "url": {Type: "string"}},
 			},
 			{
-				Name: "reply", Desc: "reply to a PR review comment thread",
+				Name: "reply", Semantics: &plugin.VerbSemantics{ConversationPost: true}, Desc: "reply to a PR review comment thread",
 				Options: plugin.Schema{
 					"repo":        {Type: "string", Required: true, Scope: "repo"},
 					"pr":          {Type: "integer", Required: true},

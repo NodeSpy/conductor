@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/secrets"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // A web hand-off's expose: names an exposure connector; each draft's link
@@ -124,4 +126,20 @@ func (l leaseCounter) leaseCount() int { return l.t.Leases() }
 func mustTunnel(t *testing.T, _ *Registry) leaseCounter {
 	t.Helper()
 	return leaseCounter{t: inprocessTunnel}
+}
+
+// Pack consent follows the declaration: any connector type declaring a
+// consent scope gets it, and one declaring none does not — whatever its name.
+func TestScopeConsentIsDeclared(t *testing.T) {
+	RegisterType(&TypeDecl{Type: "acmeforge", Semantics: &sdk.ConnSemantics{
+		Scope: &sdk.ConnScope{Dimension: "repo", Option: "repos", Consent: true}}}, nil)
+	if dim, ok := config.ScopeConsent("acmeforge"); !ok || dim != "repo" {
+		t.Fatalf("declared consent scope not seen: %q %v", dim, ok)
+	}
+	if _, ok := config.ScopeConsent("cron"); ok {
+		t.Fatal("a connector declaring no consent scope got one")
+	}
+	if _, ok := config.ScopeConsent("github"); !ok {
+		t.Fatal("github declares its repo consent scope")
+	}
 }

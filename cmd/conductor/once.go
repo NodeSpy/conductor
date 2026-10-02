@@ -98,8 +98,8 @@ func (e *exitError) Error() string { return e.msg }
 // --config/--state-dir.
 type onceOptions struct {
 	trigger      string
-	eventPath    string   // raw event body (an Actions $GITHUB_EVENT_PATH payload)
-	eventName    string   // the webhook event name ($GITHUB_EVENT_NAME)
+	eventPath    string   // raw event body (default: the runner env var the trigger's connector declares)
+	eventName    string   // the event name (likewise)
 	fixturePath  string   // a replay-style {"event":…,"body":…} fixture
 	failOn       []string // outcome categories that make the job fail
 	requireMatch bool     // a non-matching event is an ERROR, not a pass
@@ -124,8 +124,9 @@ background loops (no sweep, no webhook watcher, no auto-update, no reaper, no
 control socket). Built for an ephemeral runner — a GitHub Actions job.
 
 flags:
-  --event PATH        the raw event body (default $GITHUB_EVENT_PATH)
-  --event-name NAME   the event name, e.g. pull_request (default $GITHUB_EVENT_NAME)
+  --event PATH        the raw event body (default: the CI runner variable the
+                      trigger's connector declares, e.g. a forge's event-path)
+  --event-name NAME   the event name, e.g. pull_request (likewise)
   --fixture PATH      a replay fixture {"event": "...", "body": {...}} instead
                       of --event/--event-name (for local testing)
   --config PATH       config file (default ~/.config/conductor/config.yaml)
@@ -185,9 +186,7 @@ func cmdOnce(args []string) error {
 // (--config, --state-dir, the trigger name) through to loadConfig.
 func parseOnceFlags(args []string) (onceOptions, []string, error) {
 	o := onceOptions{
-		eventPath: os.Getenv("GITHUB_EVENT_PATH"),
-		eventName: os.Getenv("GITHUB_EVENT_NAME"),
-		failOn:    append([]string(nil), onceFailOnCategories...),
+		failOn: append([]string(nil), onceFailOnCategories...),
 	}
 	var rest []string
 	need := func(i int, flag string) (string, error) {
@@ -288,10 +287,10 @@ func readOnceEvent(o onceOptions) (onceEvent, error) {
 		return onceEvent{Name: name, Body: fx.Body}, nil
 	}
 	if o.eventPath == "" {
-		return onceEvent{}, fmt.Errorf("once: no event — pass --event PATH (or --fixture PATH); in GitHub Actions $GITHUB_EVENT_PATH is set for you")
+		return onceEvent{}, fmt.Errorf("once: no event — pass --event PATH (or --fixture PATH); a CI runner the trigger's connector declares sets it for you")
 	}
 	if o.eventName == "" {
-		return onceEvent{}, fmt.Errorf("once: no event name — pass --event-name NAME (e.g. pull_request); in GitHub Actions $GITHUB_EVENT_NAME is set for you")
+		return onceEvent{}, fmt.Errorf("once: no event name — pass --event-name NAME (e.g. pull_request); a CI runner the trigger's connector declares sets it for you")
 	}
 	body, err := os.ReadFile(o.eventPath)
 	if err != nil {
@@ -305,7 +304,7 @@ func readOnceEvent(o onceOptions) (onceEvent, error) {
 
 // fixtureNameOverridden reports whether an explicit --event-name should win
 // over the fixture's own. It cannot, today: the fixture names its event and a
-// stray $GITHUB_EVENT_NAME in the environment must not silently retarget it.
+// stray runner variable in the environment must not silently retarget it.
 func (o onceOptions) fixtureNameOverridden() bool { return false }
 
 // runOnce is the one-shot pipeline. Split from cmdOnce so tests drive it with
@@ -313,11 +312,12 @@ func (o onceOptions) fixtureNameOverridden() bool { return false }
 func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 	out, errOut := o.writers()
 
-	ev, err := readOnceEvent(o)
+	spec, tidx, err := onceTriggerByName(cfg, o.trigger)
 	if err != nil {
 		return err
 	}
-	spec, tidx, err := onceTriggerByName(cfg, o.trigger)
+	o = withRunnerEnv(cfg, spec, o)
+	ev, err := readOnceEvent(o)
 	if err != nil {
 		return err
 	}
@@ -902,4 +902,30 @@ func joinDetail(head, detail string) string {
 		return head
 	}
 	return head + ": " + detail
+}
+
+// withRunnerEnv fills an unset --event / --event-name from the CI runner
+// variables the trigger's connector DECLARES (its translate.env semantic):
+// conductor names no runner itself.
+func withRunnerEnv(cfg *config.Config, spec config.TriggerSpec, o onceOptions) onceOptions {
+	conn, _, ok := strings.Cut(spec.On, ".")
+	if !ok {
+		return o
+	}
+	ref, ok := cfg.ConnectorsMap[conn]
+	if !ok {
+		return o
+	}
+	d, ok := connector.TypeDeclFor(ref.TypeName())
+	if !ok || d.Semantics == nil || d.Semantics.Translate == nil {
+		return o
+	}
+	env := d.Semantics.Translate.Env
+	if o.eventPath == "" && env["event_path"] != "" {
+		o.eventPath = os.Getenv(env["event_path"])
+	}
+	if o.eventName == "" && env["event_name"] != "" {
+		o.eventName = os.Getenv(env["event_name"])
+	}
+	return o
 }

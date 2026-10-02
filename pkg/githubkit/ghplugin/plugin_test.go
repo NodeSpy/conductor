@@ -25,12 +25,17 @@ func TestDescribeIsTheSharedDecl(t *testing.T) {
 	if d.Type != "github" || d.Kind != plugin.KindConnector {
 		t.Fatalf("type=%q kind=%q abi=%d", d.Type, d.Kind, d.ABI)
 	}
+	// The poll semantic names the engine's poll verb `sweep`, and the
+	// declaration carries it (so `gh.sweep` keeps its name).
+	if d.Semantics == nil || d.Semantics.Poll == nil || d.Semantics.Poll.VerbName != "sweep" {
+		t.Fatalf("poll semantic = %+v", d.Semantics)
+	}
 	var sweep bool
 	for _, v := range d.Verbs {
-		sweep = sweep || v.Name == plugin.VerbSweep
+		sweep = sweep || v.Name == "sweep"
 	}
 	if !sweep {
-		t.Fatal("the conductor-defined sweep verb must be declared")
+		t.Fatal("the sweep (poll) verb must be declared")
 	}
 	for _, e := range d.Events {
 		if e.Name == "new_comment" && (len(e.Facts) == 0 || len(e.MatchKeys) == 0) {

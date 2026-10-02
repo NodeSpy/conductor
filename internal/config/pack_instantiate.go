@@ -905,7 +905,7 @@ func applyTriggerArm(tr *TriggerSpec, arm TriggerArm) error {
 		for i, r := range arm.Repos {
 			repos[i] = r
 		}
-		f, err := FilterFromValue(map[string]any{githubRepoKey: repos})
+		f, err := FilterFromValue(map[string]any{repoScopeKey: repos})
 		if err != nil {
 			return err
 		}
@@ -931,10 +931,11 @@ func applyTriggerArm(tr *TriggerSpec, arm TriggerArm) error {
 	return nil
 }
 
-// githubRepoKey is the routing match key a pack's repo consent lowers into.
-// Named here because arming has to write it before any connector is resolved;
-// the github integration owns its meaning (internal/integrations/github).
-const githubRepoKey = "repo"
+// repoScopeKey is the match key a pack's `repos:` consent lowers into — the
+// repo scope dimension. Named here because arming has to write it before any
+// connector is resolved; which connectors consent applies to is their
+// declaration's business (ScopeConsent).
+const repoScopeKey = "repo"
 
 // andFilters ANDs the live operands, returning a lone survivor as-is (so its
 // authored YAML round-trips verbatim) and nil when none are set.
@@ -979,14 +980,14 @@ func clearTriggerRepos(tr *TriggerSpec) {
 		return
 	}
 	if f.Op != FilterOpAnd {
-		if f.Op == FilterOpMatch && f.Key == githubRepoKey {
+		if f.Op == FilterOpMatch && f.Key == repoScopeKey {
 			tr.Filter = nil
 		}
 		return
 	}
 	kept := make([]*Filter, 0, len(f.Kids))
 	for _, k := range f.Kids {
-		if k != nil && k.Op == FilterOpMatch && k.Key == githubRepoKey {
+		if k != nil && k.Op == FilterOpMatch && k.Key == repoScopeKey {
 			continue
 		}
 		kept = append(kept, k)
@@ -1023,20 +1024,18 @@ func TriggerRepoScope(f *Filter) []string {
 	}
 	var out []string
 	for _, k := range kids {
-		if k != nil && k.Op == FilterOpMatch && k.Key == githubRepoKey {
+		if k != nil && k.Op == FilterOpMatch && k.Key == repoScopeKey {
 			out = append(out, FilterValueStrings(k.Val)...)
 		}
 	}
 	return out
 }
 
-// sourceIsRepoScoped reports whether a trigger's `on:` names a github-type
-// connector — the only source whose matcher treats an empty repo set as "match
-// every repo", which makes an explicit repo scope load-bearing for consent.
-// Bare sources like the built-in `manual` (no ".") and non-github connectors
-// have no repo scope and are exempt.
-// anySourceIsRepoScoped reports whether the trigger fires on any repo-scoped
-// (github) source, in either `on:` form. This is the consent question: if even
+// anySourceIsRepoScoped reports whether the trigger fires on any source whose
+// connector DECLARES a consent scope (plugin-contract.md §2.4, scope.consent):
+// its matcher treats an empty scope as "everything", which makes an explicit
+// scope load-bearing for consent. Bare sources like the built-in `manual` (no
+// ".") and connectors declaring no consent scope are exempt. This is the consent question: if even
 // one source is repo-scoped, an empty repo set means "every repo".
 func (st *packInstantiation) anySourceIsRepoScoped(tr *TriggerSpec) bool {
 	for _, src := range tr.Sources() {
@@ -1053,8 +1052,17 @@ func (st *packInstantiation) sourceIsRepoScoped(on string) bool {
 		return false
 	}
 	ref, ok := st.cfg.ConnectorsMap[conn]
-	return ok && ref.TypeName() == "github"
+	if !ok || ScopeConsent == nil {
+		return false
+	}
+	_, consent := ScopeConsent(ref.TypeName())
+	return consent
 }
+
+// ScopeConsent reports the consent-scope dimension a connector type declares
+// (its scope semantic with consent: true). Set by the connector registry,
+// which owns the declarations; nil (no registry) declares none.
+var ScopeConsent func(typeName string) (dimension string, ok bool)
 
 // hasTrigger reports whether a pack ships a trigger a consumer named.
 // An instance-array trigger carries a content-addressed name

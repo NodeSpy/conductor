@@ -250,12 +250,8 @@ func (g *githubImpl) lowerTrigger(t CompiledTrigger) (config.Action, error) {
 // githubkit.Client, which resolves the `as: me|bot` identity, issues the
 // authenticated API call, and returns its outputs.
 func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
-	if verb == "sweep" {
-		nudged, err := runSweepHook(ctx)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"nudged": nudged}, nil
+	if verb == githubDecl.PollVerb() {
+		return pollNow(ctx, g.name)
 	}
 	out, err := g.kit.Invoke(ctx, verb, opts)
 	if err == nil && verb == "set_status" {

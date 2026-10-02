@@ -173,6 +173,13 @@ func mapDecl(d *plugin.Decl) *TypeDecl {
 			Semantics: e.Semantics,
 		})
 	}
+	if pv := td.PollVerb(); pv != "" {
+		if _, ok := td.Verb(pv); !ok {
+			// The engine provides it: poll this instance now.
+			td.Verbs = append(td.Verbs, VerbDecl{Name: pv, Desc: "poll this source now (its catch-up pass)",
+				Outputs: Schema{"nudged": {Type: TInt}}})
+		}
+	}
 	return td
 }
 
@@ -419,16 +426,8 @@ func (s *identitySource) RetryPolicy() config.Retry {
 // Invoke forwards the verb to the plugin with this instance's credentials and
 // schema-validates the untrusted response.
 func (e *externalImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
-	if verb == sdk.VerbSweep {
-		if _, declared := e.decl.Verb(verb); declared {
-			// Conductor-defined: the daemon answers it, for every source with
-			// a sweep, exactly as the bundled connector's sweep verb does.
-			nudged, err := runSweepHook(ctx)
-			if err != nil {
-				return nil, err
-			}
-			return map[string]any{"nudged": nudged}, nil
-		}
+	if pv := e.decl.PollVerb(); pv != "" && verb == pv {
+		return pollNow(ctx, e.instance)
 	}
 	// Audit the credential hand-off once per instance (name, never value).
 	if len(e.secretRefs) > 0 {

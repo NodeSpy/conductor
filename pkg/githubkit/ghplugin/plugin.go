@@ -69,10 +69,10 @@ func (p *Plugin) Describe() plugin.Decl { return Decl() }
 
 // Invoke runs one verb with the instance's credentials.
 func (p *Plugin) Invoke(req plugin.InvokeRequest) (plugin.InvokeResult, error) {
-	if req.Verb == plugin.VerbSweep {
-		// A current daemon answers sweep itself and never sends it here.
-		// An older one does: nudge this process's own sources, which is the
-		// most this side of the wire can reach.
+	if req.Verb == "sweep" {
+		// The daemon answers the declared poll verb itself and never sends it
+		// here; an older daemon does: nudge this process's own sources, which
+		// is the most this side of the wire can reach.
 		n := 0
 		p.mu.Lock()
 		for _, s := range p.sources {

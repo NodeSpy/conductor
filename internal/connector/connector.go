@@ -406,6 +406,17 @@ var (
 // plugin repo — and so a newly-bundled type cannot drift out of the resolver's
 // seed list. RegisterExternalType (plugin-backed) deliberately does NOT do this:
 // a plugin type is what `use:` fetches, not what it short-circuits.
+func init() {
+	// The pack consent rule reads the declarations through this, not names.
+	config.ScopeConsent = func(typeName string) (string, bool) {
+		d, ok := TypeDeclFor(typeName)
+		if !ok || d.Semantics == nil || d.Semantics.Scope == nil || !d.Semantics.Scope.Consent {
+			return "", false
+		}
+		return d.Semantics.Scope.Dimension, true
+	}
+}
+
 func RegisterType(decl *TypeDecl, b Builder) {
 	regMu.Lock()
 	defer regMu.Unlock()

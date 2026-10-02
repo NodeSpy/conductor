@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 // One-shot mode (once.go) end-to-end through its internal entrypoint: a real
@@ -431,13 +432,34 @@ func TestParseOnceFlags(t *testing.T) {
 	if len(o.failOn) != len(onceFailOnCategories) {
 		t.Errorf("default --fail-on = %v, want %v", o.failOn, onceFailOnCategories)
 	}
-	// Defaults come from the two variables Actions sets.
+	// The runner defaults are the trigger's connector's DECLARED variables
+	// (translate.env) — github declares the two Actions sets — filled once
+	// the trigger is known, never by flag parsing.
 	t.Setenv("GITHUB_EVENT_PATH", "/gh/event.json")
 	t.Setenv("GITHUB_EVENT_NAME", "issue_comment")
 	o, _, _ = parseOnceFlags([]string{"review"})
-	if o.eventPath != "/gh/event.json" || o.eventName != "issue_comment" {
-		t.Errorf("Actions env defaults not picked up: %+v", o)
+	if o.eventPath != "" || o.eventName != "" {
+		t.Errorf("flag parsing must not read a runner's variables: %+v", o)
 	}
+	cfg := &config.Config{ConnectorsMap: map[string]config.ConnectorRef{"gh": mustRef(t, "github")}}
+	o = withRunnerEnv(cfg, config.TriggerSpec{On: "gh.new_comment"}, o)
+	if o.eventPath != "/gh/event.json" || o.eventName != "issue_comment" {
+		t.Errorf("the declared runner variables were not picked up: %+v", o)
+	}
+	cron := withRunnerEnv(&config.Config{ConnectorsMap: map[string]config.ConnectorRef{"c": mustRef(t, "cron")}},
+		config.TriggerSpec{On: "c.tick"}, onceOptions{})
+	if cron.eventPath != "" {
+		t.Errorf("a connector declaring no runner variables read some: %+v", cron)
+	}
+}
+
+func mustRef(t *testing.T, use string) config.ConnectorRef {
+	t.Helper()
+	var r config.ConnectorRef
+	if err := yaml.Unmarshal([]byte("use: "+use), &r); err != nil {
+		t.Fatal(err)
+	}
+	return r
 }
 
 // TestReadOnceEvent covers both intakes: the Actions pair (a raw payload plus
@@ -596,7 +618,7 @@ func TestOnceStartsNoDaemonSurfaces(t *testing.T) {
 		"memory.ServeIPC(",
 		"handoff.RunDiscordGateway(",
 		"ig.Start(",                    // source integrations (webhook/smee/sweep watchers)
-		"connector.SetSweepHook(",      // the gh.sweep verb's nudge
+		"connector.SetSweepHook(",      // a declared poll verb's nudge
 		"connector.SetConductorOps(",   // daemon self-ops verbs
 		"notifier.SetPublisher(",       // lifecycle → conductor.* (needs a live engine)
 		"dispatch.InitSkillTunnels(",   // per-host SSH reverse tunnels

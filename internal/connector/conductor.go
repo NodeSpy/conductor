@@ -91,12 +91,12 @@ type ConductorOps struct {
 	Run     func(ctx context.Context, name string, inputs map[string]any) (string, error)
 }
 
-// SweepHook runs the github catch-up sweep now (all github connectors),
-// wired by the daemon; the gh.sweep verb calls it.
+// sweepHook polls sources now (instance "" = every source), wired by the
+// daemon; a connector's declared poll verb calls it for its own instance.
 var (
 	opsMu     sync.Mutex
 	ops       *ConductorOps
-	sweepHook func(ctx context.Context) (int, error)
+	sweepHook func(ctx context.Context, instance string) (int, error)
 )
 
 // SetConductorOps wires the daemon facilities (nil clears; tests inject
@@ -107,8 +107,8 @@ func SetConductorOps(o *ConductorOps) {
 	opsMu.Unlock()
 }
 
-// SetSweepHook wires the on-demand github sweep the gh.sweep verb runs.
-func SetSweepHook(fn func(ctx context.Context) (int, error)) {
+// SetSweepHook wires the on-demand poll a connector's declared poll verb runs.
+func SetSweepHook(fn func(ctx context.Context, instance string) (int, error)) {
 	opsMu.Lock()
 	sweepHook = fn
 	opsMu.Unlock()
@@ -120,14 +120,37 @@ func conductorOps() *ConductorOps {
 	return ops
 }
 
-func runSweepHook(ctx context.Context) (int, error) {
+func runSweepHook(ctx context.Context, instance string) (int, error) {
 	opsMu.Lock()
 	fn := sweepHook
 	opsMu.Unlock()
 	if fn == nil {
-		return 0, fmt.Errorf("gh.sweep: the sweep runs inside the daemon — not available in this context")
+		return 0, fmt.Errorf("%s: polling runs inside the daemon — not available in this context", instance)
 	}
-	return fn(ctx)
+	return fn(ctx, instance)
+}
+
+// PollVerb is the verb name a connector's poll semantic gives the
+// engine-provided "poll this instance now" verb ("" when it declares none).
+func (d *TypeDecl) PollVerb() string {
+	if d == nil || d.Semantics == nil || d.Semantics.Poll == nil {
+		return ""
+	}
+	if n := d.Semantics.Poll.VerbName; n != "" {
+		return n
+	}
+	return "poll"
+}
+
+// pollNow answers a connector's poll verb: the engine polls this instance's
+// source now (plugin.poll, mode now) — the verb is the engine's, never
+// forwarded.
+func pollNow(ctx context.Context, instance string) (map[string]any, error) {
+	n, err := runSweepHook(ctx, instance)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"nudged": n}, nil
 }
 
 func init() { RegisterType(conductorDecl, newConductorImpl) }

@@ -13,15 +13,6 @@ const (
 	MethodAppToken = "plugin.app_token"
 )
 
-// VerbSweep is a CONDUCTOR-DEFINED verb name. A connector plugin that
-// declares a verb by this name is declaring "run the
-// catch-up sweep now", and the DAEMON answers it — it nudges every source in
-// the daemon that has a sweep (this plugin's instances through plugin.nudge,
-// and any other), exactly as `conductor sweep --now` does. The call is never
-// forwarded to the plugin, so the verb means the same thing whichever
-// implementation backs the connector. Outputs: {nudged: <int>}.
-const VerbSweep = "sweep"
-
 // SourceTrigger is one configured trigger on a source instance, as the daemon
 // hands it to a plugin in StartSourceRequest.Triggers.
 //

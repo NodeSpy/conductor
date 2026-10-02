@@ -209,7 +209,7 @@ func TestConductorVerbsWithoutDaemon(t *testing.T) {
 			t.Errorf("%s: %v", verb, err)
 		}
 	}
-	if _, err := runSweepHook(context.Background()); err == nil || !strings.Contains(err.Error(), "not available") {
+	if _, err := runSweepHook(context.Background(), "gh"); err == nil || !strings.Contains(err.Error(), "not available") {
 		t.Errorf("sweep hook: %v", err)
 	}
 }
@@ -263,7 +263,7 @@ func TestConductorVerbsWithOps(t *testing.T) {
 
 // TestGHSweepVerb: gh.sweep runs the injected daemon-global catch-up nudge.
 func TestGHSweepVerb(t *testing.T) {
-	SetSweepHook(func(context.Context) (int, error) { return 3, nil })
+	SetSweepHook(func(context.Context, string) (int, error) { return 3, nil })
 	t.Cleanup(func() { SetSweepHook(nil) })
 	reg := buildAPIRegistry(t, `
 connectors:

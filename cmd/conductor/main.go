@@ -1020,15 +1020,19 @@ func cmdRun(args []string) error {
 	// resolved through the engine's live-hand-off registry.
 	connector.SetStepOps(func() *connector.StepOps { return eng.StepOps() })
 	defer connector.SetStepOps(nil)
-	// gh.sweep: the same nudge the SIGUSR1 handler runs.
-	connector.SetSweepHook(func(context.Context) (int, error) {
+	// A connector's declared poll verb: the same nudge the SIGUSR1 handler
+	// runs, for that instance.
+	connector.SetSweepHook(func(_ context.Context, instance string) (int, error) {
 		n := 0
 		for _, ig := range igs {
+			if instance != "" && ig.Name() != instance {
+				continue
+			}
 			if sn, ok := ig.(sweepNower); ok && sn.SweepNow() {
 				n++
 			}
 		}
-		logf("sweep requested (gh.sweep verb) — nudged %d integration(s)", n)
+		logf("poll requested (%s) — nudged %d source(s)", instance, n)
 		return n, nil
 	})
 	defer connector.SetSweepHook(nil)
