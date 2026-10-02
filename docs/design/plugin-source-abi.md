@@ -132,27 +132,55 @@ they stay the default.
   `_closed` consumes a target's engagements and settles its outcome;
   `failing_checks` can re-run CI with the operator's token.
 
-`trusted_source: true` on a **plugin-backed** connector entry is the operator's
-grant that this plugin's events are authoritative for the platform they
-describe — built from deliveries it verified or reads it made with this
-connector's own credentials. Only with it does the daemon:
+Trust follows the model plugin INSTALLS already use
+(`internal/config/pack_trust.go`): "the official plugin and pack repos are
+trusted by default: naming an official component needs no ceremony, a
+third-party source still does." Concretely, a plugin connector is a **trusted
+source** when (`connector.SourceTrusted`):
 
-- believe the event's `target_trusted` **claim** (absent the grant, every plugin
-  target is untrusted, claim or no claim);
-- accept an engine-interpreted kind — and only one the plugin **declares** as an
-  event, plus `_closed` from a ConnectorABI source (the lifecycle fact those
-  kinds are about). An undeclared reserved kind is dropped even from a trusted
-  source.
+| `trusted_source` | source | trusted? |
+|---|---|---|
+| unset | official (`config.IsOfficialSource` — the same classifier `PluginSourceAllowed` admits official installs on) **and** the installed binary is release-verified | **yes** |
+| unset | official but not release-verified (no checksums published / asset not listed) | no |
+| unset | any third-party remote source | no |
+| unset | a local path (`use: ./conductor-github`) | no |
+| `false` | anything | no — an official plugin opted out |
+| `true` | anything plugin-backed | yes — the operator vouches |
+| set either way | a builtin | refused at load |
 
-It is refused on a builtin connector (meaningless — conductor's own code) and is
-never passed to the plugin. Without it, an untrusted github plugin still runs,
-but its `new_comment` / `review_requested` / `merge_conflict` /
+*Release-verified* is the integrity precondition, and closing it was part of
+this change: `FetchRemote` checked a download against the release's
+`checksums.txt` only when one was published and listed the asset, and recorded
+the sha either way — so "installed from the official repo" did not mean "the
+binary that release published". `FetchRemoteVerified` now reports whether the
+checksum (or a config sha pin) actually matched; the install state records it
+(`release_verified`) and the plugin `Spec` carries it. Verify-before-execute
+already refuses any other binary at every start, so a release-verified record
+means the binary that runs is the one the official release published. Records
+written before the field existed are not verified until the next fetch
+re-verifies the same build (a no-op install that upgrades the record).
+
+A trusted source's events are treated as a bundled connector's:
+
+- the daemon believes the event's `target_trusted` **claim** (an untrusted
+  source's targets are untrusted, claim or no claim);
+- an engine-interpreted kind is accepted — only one the plugin **declares** as
+  an event, plus `_closed` from a ConnectorABI source. An undeclared reserved
+  kind is dropped even from a trusted source.
+
+`trusted_source` is never passed to the plugin. An untrusted github plugin
+still runs, but its `new_comment` / `review_requested` / `merge_conflict` /
 `failing_checks` / `_closed` are dropped, with a one-time log line naming the
 setting.
 
-Why an operator grant rather than "the official plugin is trusted": the trust
-is in *the operator's choice of this binary for this platform*, not in where the
-binary came from. It is visible in the config, greppable, and per instance.
+**So `use:` naming the official github plugin needs no extra config** — once
+the builtin is gone, `use: github` resolves there and simply works.
+
+**The dev loop for an official plugin** is a local build, which is never
+trusted by default (a local path is whatever the operator built — conductor
+cannot tell a build of the official source from anything else). Name it
+explicitly: `use: ./conductor-github` with `trusted_source: true`. The e2e
+harness's plugin mode does exactly that.
 
 ## Standing in for a bundled type
 

@@ -69,20 +69,22 @@ subprocess. For GitHub App setup specifically, see [GitHub App setup](https://gi
 The github connector also ships as a plugin (`conductor-plugins`
 `connectors/github`) that is the **same implementation** as the builtin — the
 same event source (`pkg/githubkit/ghsource`), the same declaration, the same
-trigger lowering — run out of process over the plugin source extension. To use
-it, point the connector at the plugin and grant it source trust:
+trigger lowering — run out of process over the plugin source extension. While
+`github` is still bundled, point the connector at the plugin by path:
 
 ```yaml
 connectors:
   gh:
-    use: NodeSpy/conductor-plugins/connectors/github   # or a local ./conductor-github
-    trusted_source: true      # its events are verified GitHub deliveries: let the
-                              # engine act on new_comment/merge_conflict/… and
-                              # trust their targets, exactly as the builtin's
+    use: NodeSpy/conductor-plugins/connectors/github
     app: { app_id: 123456, private_key_path: ~/.config/conductor/github-app.pem }
     webhook: { listen: "127.0.0.1:8787", secret: ${GITHUB_WEBHOOK_SECRET} }
     me: { logins: [your-login] }
 ```
+
+Nothing else is needed: an OFFICIAL plugin whose installed binary was verified
+against its release is a **trusted source** by default — its events are
+verified GitHub deliveries, so the engine acts on `new_comment` /
+`merge_conflict` / … and trusts their targets, exactly as the builtin's.
 
 Every connection field, event, filter key, option, and verb means what it
 means on the builtin (parity is a shared test suite both run — see the
@@ -92,10 +94,23 @@ cannot use the builtin and the plugin side by side (one of them must back every
 Enterprise Server or a test double — a plugin's environment is scrubbed, so it
 does not inherit `PC_GITHUB_API_BASE`. `api_base:` works on the builtin too.
 
-`trusted_source:` is accepted only on a plugin-backed connector. Without it a
-plugin source is untrusted third-party input: its target-trust claims are
-ignored and its engine-interpreted kinds are dropped (the daemon logs the
-setting to use once).
+#### `trusted_source`
+
+| | default | `trusted_source: true` | `trusted_source: false` |
+|---|---|---|---|
+| official plugin, release-verified | trusted | trusted | **untrusted** (opt out) |
+| official plugin, unverified release | untrusted | trusted | untrusted |
+| third-party plugin | untrusted | trusted | untrusted |
+| local build (`use: ./conductor-github`) | untrusted | trusted | untrusted |
+
+An untrusted source is third-party input: its target-trust claims are
+ignored and its engine-interpreted kinds are dropped (logged once). A local
+build of an official plugin — the development loop — needs `trusted_source:
+true`; conductor cannot tell a build of the official source from anything
+else on disk.
+
+`trusted_source:` is accepted only on a plugin-backed connector (on a builtin
+it is refused either way).
 
 ## The contract
 

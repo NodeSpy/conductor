@@ -390,11 +390,13 @@ behavior ([design](https://github.com/NodeSpy/conductor/blob/main/docs/design/pl
   daemon answers it itself (daemon-wide nudge) and never forwards it.
 
 Every addition is optional and ignored for a plugin that does not report the
-ABI. **Trust stays the operator's**: a plugin's target-trust claim, and any
-engine-interpreted kind it emits (`new_comment`, `review_requested`,
-`merge_conflict`, `failing_checks`, `_closed`), are honored only when the
-connector entry sets `trusted_source: true` — and a kind only if the plugin
-declares that event. See [[Connectors]] for the github plugin.
+ABI. **Source trust follows the install trust model**: a plugin's
+target-trust claim, and any engine-interpreted kind it emits (`new_comment`,
+`review_requested`, `merge_conflict`, `failing_checks`, `_closed`), are honored
+only from a **trusted source** — by default an official plugin whose installed
+binary was verified against its release; `trusted_source: false` opts one out,
+`trusted_source: true` grants a third-party or local one — and a kind only if
+the plugin declares that event. See [[Connectors]] for the table.
 
 **Runtime plugin:** an ACP-speaking subprocess. conductor verifies it, then
 drives it through the existing ACP controller — session create/resume, streamed
