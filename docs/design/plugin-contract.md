@@ -1,6 +1,6 @@
 # The plugin contract
 
-**Status:** PROPOSAL — design only, nothing here is implemented. Supersedes the
+**Status:** PROPOSAL — design only, nothing here is implemented. All open questions are decided (§7); implementation waits for approval of the design as a whole. Supersedes the
 direction of `plugin-source-abi.md` (the "connector ABI 1" extension and
 `trusted_source`), which stays in the tree only as a record of what is being
 replaced.
@@ -856,19 +856,21 @@ The plugins-repo draft is rebased into step P.
 
 ---
 
-## 7. Open questions
+## 7. Decisions (formerly open questions)
 
-| # | Question | Recommendation |
+All resolved on review: Q5 as discussed, the rest as recommended.
+
+| # | Question | Decision |
 |---|---|---|
-| Q1 | Should an `assigned` claim be believed for every installed plugin, bounded by the operator's `scope` (§2.4)? | yes: install was the trust decision, and scope is defense in depth |
-| Q2 | Must-understand for unknown `semantics` keys (refuse the plugin) vs warn-and-ignore? | refuse, with `optional: true` as the escape hatch |
-| Q3 | paseo's forge path (X1): opaque `runtime_hints` vs always branch-off | `runtime_hints` now; revisit when paseo exposes a forge-neutral worktree call |
-| Q4 | Legacy `integrations:` / `handoffs:` / `notify:` blocks and `internal/migrate` | `conductor migrate` keeps working in N (builtins still present); N+1 drops the legacy blocks and the migrator, and `validate --next` flags them. Alternative: a frozen, data-only translator in N+1 |
+| Q1 | Should an `assigned` claim be believed for every installed plugin, bounded by the operator's `scope` (§2.4)? | **Decided:** yes: install was the trust decision, and scope is defense in depth |
+| Q2 | Must-understand for unknown `semantics` keys (refuse the plugin) vs warn-and-ignore? | **Decided:** refuse, with `optional: true` as the escape hatch |
+| Q3 | paseo's forge path (X1): opaque `runtime_hints` vs always branch-off | **Decided:** `runtime_hints` now; revisit when paseo exposes a forge-neutral worktree call |
+| Q4 | Legacy `integrations:` / `handoffs:` / `notify:` blocks and `internal/migrate` | **Decided:** `conductor migrate` keeps working in N (builtins still present); N+1 drops the legacy blocks and the migrator, and `validate --next` flags them. |
 | ~~Q5~~ | **Decided:** tunnels and relays are connectors declaring `exposes` (V4–V4c). `static`, `lan` and `command` stay as vendor-neutral builtins; a plugin may always reach the local address it is handed; straight cutover with no compatibility shim. The web approve/revise page stays a core surface with no tunnel code | — |
-| Q6 | rest/graphql `InstanceDecler` (instance-specific verbs) | `plugin.describe {instance}` (optional) |
-| Q7 | Binary verb outputs (Slack `download` → agent `images:`): the wire cannot carry `BinaryOut` today | the host gives each instance a staging directory inside its fs capability; outputs return paths under it, and the engine accepts only those |
-| Q8 | The GitHub write credential via `gh auth token` inside a confined plugin (needs `commands: [gh]` and read access to gh's config) | declare it in the github plugin's capabilities; the `pat` / `token:` paths need neither |
-| Q9 | `host.state` limits and lifetime | per-instance quota, entries survive restarts, dropped when the instance is removed |
-| Q10 | In conductor-plugins, `internal/` or `pkg/` for githubkit and the fake? | `internal/` until a third party asks. Conductor's own e2e runs the fake and the github plugin as built binaries or containers, never as a Go import, so conductor never depends on conductor-plugins' code (that repo already depends on conductor's SDK) |
-| Q11 | Discord hand-off: plugin in P, or drop it? | plugin in P (it is small), so nothing regresses |
-| Q12 | A daemon on auto-update could skip release N and lose the plugins-first pre-fetch | N+1 never drops a builtin whose replacement plugin is not installed and verified; it keeps the old behavior for that connector, logs it, and fetches in the background until the plugin is in place |
+| Q6 | rest/graphql `InstanceDecler` (instance-specific verbs) | **Decided:** `plugin.describe {instance}` (optional) |
+| Q7 | Binary verb outputs (Slack `download` → agent `images:`): the wire cannot carry `BinaryOut` today | **Decided:** the host gives each instance a staging directory inside its fs capability; outputs return paths under it, and the engine accepts only those |
+| Q8 | The GitHub write credential via `gh auth token` inside a confined plugin (needs `commands: [gh]` and read access to gh's config) | **Decided:** declare it in the github plugin's capabilities; the `pat` / `token:` paths need neither |
+| Q9 | `host.state` limits and lifetime | **Decided:** per-instance quota, entries survive restarts, dropped when the instance is removed |
+| Q10 | In conductor-plugins, `internal/` or `pkg/` for githubkit and the fake? | **Decided:** `internal/` until a third party asks. Conductor's own e2e runs the fake and the github plugin as built binaries or containers, never as a Go import, so conductor never depends on conductor-plugins' code (that repo already depends on conductor's SDK) |
+| Q11 | Discord hand-off: plugin in P, or drop it? | **Decided:** plugin in P (it is small), so nothing regresses |
+| Q12 | A daemon on auto-update could skip release N and lose the plugins-first pre-fetch | **Decided:** N+1 never drops a builtin whose replacement plugin is not installed and verified; it keeps the old behavior for that connector, logs it, and fetches in the background until the plugin is in place |
