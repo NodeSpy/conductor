@@ -301,7 +301,7 @@ func (t Trigger) Facts() map[string]any {
 }
 
 // LookupFact reads a fact by name, walking a dotted path through nested maps
-// ("slack.user" → facts["slack"]["user"]); a flat key of that exact name
+// ("chat.user" → facts["chat"]["user"]); a flat key of that exact name
 // wins.
 func LookupFact(facts map[string]any, name string) (any, bool) {
 	if v, ok := facts[name]; ok {

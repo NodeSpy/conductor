@@ -1269,7 +1269,7 @@ type adoptCand struct {
 func (d *Dispatcher) adoptAgentForBranch(ctx context.Context, req Request) string {
 	headRef, _ := req.Trigger.Context["head_ref"].(string)
 	if headRef == "" {
-		return "" // no branch to match on (dispatch stays repo-agnostic; the github side supplies it)
+		return "" // no branch to match on (dispatch stays repo-agnostic; the source declares it)
 	}
 	repo := req.Trigger.Target.Repo
 	var cands []adoptCand
@@ -1395,15 +1395,9 @@ func normCwd(p string) string {
 }
 
 // prHints are the PR number and forge the runtime's PR-aware workspace takes:
-// the declared checkout's runtime hints, passed through unread; an event
-// declaring no semantics keeps the legacy target-shaped values.
+// the declared checkout's runtime hints, passed through unread. An event
+// declaring no checkout gives none.
 func prHints(req Request) (number, forge string) {
-	if req.Trigger.HasSemantics() {
-		co, _ := req.Trigger.Checkout()
-		return co.Hints["pr_number"], co.Hints["forge"]
-	}
-	if req.Trigger.Target.PR > 0 {
-		return itoa(req.Trigger.Target.PR), "github"
-	}
-	return "", ""
+	co, _ := req.Trigger.Checkout()
+	return co.Hints["pr_number"], co.Hints["forge"]
 }

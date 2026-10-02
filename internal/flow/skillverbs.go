@@ -48,7 +48,7 @@ type SkillIdentity struct {
 	TargetTrusted bool
 	// Context is the ORIGINATING trigger's context, captured at dispatch. It
 	// is what a connector's ContextScope hook reads to answer "which channel
-	// did this dispatch come from" — without it a slack-triggered agent could
+	// did this dispatch come from" — without it a chat-triggered agent could
 	// not reply in its own channel without an explicit grant. Daemon-side
 	// only; it never crosses back to the agent.
 	Context map[string]any
@@ -291,7 +291,7 @@ func validateSkillProfiles(cfg *config.Config, reg *connector.Registry) error {
 			}
 		}
 		// A per-verb resource constraint must name an option the verb
-		// actually declares as a resource (Field.Scope). `slack.post:
+		// actually declares as a resource (Field.Scope). `chat.post:
 		// {chanel: [...]}` or `{text: [...]}` would otherwise sit in the
 		// config looking like a restriction while constraining nothing —
 		// the typo class this catches at load rather than at 3am.
@@ -317,7 +317,7 @@ func validateSkillProfiles(cfg *config.Config, reg *connector.Registry) error {
 // Scope by at least one verb the pattern admits.
 //
 // "At least one" rather than "all", because a pattern is allowed to be
-// broader than the constraint: `github.*: {repo: [...]}` scopes every github
+// broader than the constraint: `forge.*: {repo: [...]}` scopes every forge
 // verb that takes a repo and leaves the gist verbs (which take none) alone.
 // What it refuses is a key NO admitted verb treats as a resource — a typo, or
 // a content option the author thought was one.
@@ -619,7 +619,7 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	// names. The plan surface has always checked that (checkVerbResources),
 	// so a `skill.verbs: [gh.submit_review]` grant intended for the PR under
 	// review could be turned on any repo the connector could reach simply by
-	// passing a different `repo:` option — and a `slack.post` grant on any
+	// passing a different `repo:` option — and a `chat.post` grant on any
 	// channel the token reached. Same function, same allowlists, walked from
 	// the same connector-declared Scope tags, so the two surfaces cannot
 	// drift: the dispatch's own target/channel is implicitly allowed, the

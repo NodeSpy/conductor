@@ -144,7 +144,7 @@ type RunRef struct {
 // automatically if the target produces one.
 //
 //   - RerunStep re-dispatches the SAME step on the current state — surface-
-//     agnostic (agent, Slack, Discord, …), since it just redoes what the step
+//     agnostic (agent, chat, web, …), since it just redoes what the step
 //     does. extraPrompt (may be "") is appended to the step's prompt.
 //   - RunWorkflow runs a NAMED workflow with `with` inputs (rendered against the
 //     trigger scope) — "run whatever you want," including a different workflow

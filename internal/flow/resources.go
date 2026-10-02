@@ -114,7 +114,7 @@ func policyScopesFor(pol *config.AgentAuthoredPolicy, uses string) map[string][]
 //
 // This is the one place the rename could not be purely mechanical. `skill.verbs`
 // keys by option name; the `allow_scopes:` it replaces keyed by dimension, and
-// the two are not always the same word — slack's `channel_id` option carries
+// the two are not always the same word — a chat connector's `channel_id` option carries
 // dimension `channel`, a vault's `key` option carries `secret`. Keying by
 // option name alone would silently drop an operator's `channel:`/`secret:`
 // entry on exactly those verbs: a scope that used to apply, quietly not
@@ -135,7 +135,7 @@ func scopeListFor(scopes map[string][]string, optName, dim string) []string {
 //
 // The difference is not an oversight, it is the whole point: on the skill
 // surface the scoping is INTRINSIC TO THE GRANT, not a plan-policy feature.
-// `skill.verbs: {slack.post: {channel: ["#x"]}}` is a sentence the operator
+// `skill.verbs: {chat.post: {channel: ["#x"]}}` is a sentence the operator
 // wrote about this agent; it means the same thing whether or not the config
 // also has a policy.agent_authored block, which governs a different surface
 // entirely (agent-authored plans). Resolving to nil here — as the plan
@@ -175,7 +175,7 @@ func trustedTargetRepo(t core.Trigger) string { return t.OwnRepo() }
 // `extra` (the calling verb's own skill grant, which widens but never narrows).
 // Everything else is refused — including a dimension with no context value and
 // no list, which is the deliberate strong default: a fixed-channel post from a
-// non-slack trigger has to say which channel.
+// non-chat trigger has to say which channel.
 //
 // An empty value means the option wasn't supplied, which names no resource.
 func (rp *resourcePolicy) scopeOK(in *connector.Instance, dim, value string, policy, extra []string) bool {

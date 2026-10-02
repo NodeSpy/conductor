@@ -565,7 +565,7 @@ func checkAskCapable(reg *connector.Registry, w, name string) error {
 		return fmt.Errorf("%s: handoff %q is not a configured connector", w, name)
 	}
 	if v, ok := in.Decl.FlowVerb("ask"); !ok || !v.Ask {
-		return fmt.Errorf("%s: connector %q (%s) has no ask verb — hand-offs need slack/discord/web", w, name, in.Decl.Type)
+		return fmt.Errorf("%s: connector %q (%s) has no ask verb — a hand-off needs a connector with one (web, or a chat plugin's)", w, name, in.Decl.Type)
 	}
 	return nil
 }

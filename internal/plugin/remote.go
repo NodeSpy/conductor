@@ -26,7 +26,7 @@ type RemoteSource struct {
 	// git@host:path).
 	URL string
 	// Component is "" for a single-plugin repo; else the path inside it
-	// ("connectors/sentry").
+	// ("connectors/widget").
 	Component string
 }
 
@@ -39,9 +39,9 @@ func (rs RemoteSource) Display() string {
 }
 
 // AssetName is the per-platform binary conductor expects in a release. The
-// component may be a PATH inside the repo ("connectors/sentry"), but an asset
-// name is flat — so the LEAF names the asset: connectors/sentry publishes
-// conductor-sentry_linux_amd64.
+// component may be a PATH inside the repo ("connectors/widget"), but an asset
+// name is flat — so the LEAF names the asset: connectors/widget publishes
+// conductor-widget_linux_amd64.
 func (rs RemoteSource) AssetName() string {
 	base := rs.Component
 	if i := strings.LastIndex(base, "/"); i >= 0 {
@@ -53,7 +53,7 @@ func (rs RemoteSource) AssetName() string {
 	return fmt.Sprintf("conductor-%s_%s_%s", base, runtime.GOOS, runtime.GOARCH)
 }
 
-// tagPrefix is the component prefix on a monorepo's release tags ("sentry/").
+// tagPrefix is the component prefix on a monorepo's release tags ("widget/").
 func (rs RemoteSource) tagPrefix() string {
 	if rs.Component == "" {
 		return ""

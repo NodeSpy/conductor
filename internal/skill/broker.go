@@ -36,7 +36,7 @@ const (
 	// hand-off and still bounds a scraped token.
 	HandoffSessionTTL = 7 * 24 * time.Hour
 	// SessionTTL bounds a dispatch token's life — roughly a dispatch's
-	// lifetime (typical wait_timeouts are minutes; 2h leaves slack for slow
+	// lifetime (typical wait_timeouts are minutes; 2h leaves room for slow
 	// runs). A long-lived affinity session whose token ages out simply loses
 	// its skill tools; it never gets a stale identity. The table is
 	// in-memory, so tokens also die with the daemon.

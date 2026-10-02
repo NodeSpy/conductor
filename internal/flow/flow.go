@@ -1639,11 +1639,11 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// TRIGGER's action checkout. This is what makes a source's
 	// ForceNoCheckout (every synthetic-target integration forces its
 	// trigger-level action to Checkout: "none" — there is no real repo to
-	// clone for e.g. "slack:C123") actually reach dispatch: without this
+	// clone for e.g. "chat:C123") actually reach dispatch: without this
 	// fallback, a trigger-level ForceNoCheckout had no effect on an agent
 	// step at all, because this Action is built fresh from the STEP, never
 	// reading t.Action.Checkout — so an agent step with no explicit
-	// `checkout:` under a Slack/RSS/webhook trigger silently defaulted to
+	// `checkout:` under a chat/RSS/webhook trigger silently defaulted to
 	// branch-off against the synthetic target instead of staying checkout-less.
 	//
 	// A step `repo:` names a real checkout of its own, so the trigger's
@@ -2046,7 +2046,7 @@ func extractOutputs(out string) map[string]any {
 
 // runHooks fires the hooks of one phase, in order, best-effort: a failing
 // hook is logged and audited but never fails the workflow (matching the
-// legacy slack-feedback semantics).
+// legacy chat-feedback semantics).
 // hookData layers the uniform `hook` lifecycle contract (docs/wiki/Workflows.md) onto a
 // COPY of the run scope for a hook phase, leaving the shared scope untouched. EVERY phase
 // gets `hook.{phase,status,run_id,step}`; the `fail` phase adds `hook.failure`. The flat

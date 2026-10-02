@@ -274,7 +274,7 @@ func TestStderrTailAndTruncate(t *testing.T) {
 func TestCreateWorktreeStrategies(t *testing.T) {
 	bin, dir := fakePaseoDir(t)
 	d := &Dispatcher{PaseoBin: bin}
-	prReq := Request{Trigger: core.Trigger{Target: core.Target{Repo: "a/w", PR: 5, Number: 5, BaseRef: "main"}},
+	prReq := Request{Trigger: core.Trigger{Kind: "failing_checks", Target: core.Target{Repo: "a/w", PR: 5, Number: 5, BaseRef: "main"}},
 		Action: config.Action{Checkout: "checkout-pr"}}
 	id, cwd, err := d.createWorktree(context.Background(), prReq, "/base")
 	if err != nil || id != "wks_new" || cwd == "" {

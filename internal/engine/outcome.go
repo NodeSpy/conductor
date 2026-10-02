@@ -17,7 +17,7 @@ import (
 // records an ENGAGEMENT (who acted, under which workflow, at what cost).
 // Terminal signals close the loop:
 //
-//   - the github connector's `_closed` signal — merged vs closed-unmerged,
+//   - a forge connector's closes_target event — merged vs closed-unmerged,
 //     plus the revert back-references a merged revert PR carries — consumes
 //     the target's engagements and writes one `outcome` audit row per
 //     engagement (merged / closed / reverted);
@@ -43,7 +43,7 @@ func (e *Engine) observeOutcomeSignals(ctx context.Context, t core.Trigger) {
 	// OUTCOME SIGNALS COME FROM THE PLATFORM OR THEY DO NOT COUNT.
 	//
 	// `_closed` with merged/reverts, and `failing_checks`, are facts the
-	// github integration reads off a signature-verified payload. A trigger
+	// forge connector reads off a signature-verified payload. A trigger
 	// whose TARGET the sender chose is a trigger whose Context they wrote
 	// too: it could mark another PR merged, consume its engagements, and —
 	// worse — assert `reverts_corroborated`, which is the one bit that turns

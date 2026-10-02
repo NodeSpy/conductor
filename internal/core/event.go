@@ -9,7 +9,8 @@ import (
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
-// Target identifies the GitHub (or future-source) object a Trigger concerns.
+// Target identifies the object a Trigger concerns (a pull request, an issue, a
+// channel thread — whatever the source declares).
 // Fields are populated best-effort from the webhook payload; zero values mean
 // "not applicable" (e.g. PR == 0 for an issue-only trigger).
 type Target struct {
@@ -41,7 +42,7 @@ func (t Target) CheckoutRepo() string {
 // Trigger is the normalized unit of work. Integrations translate raw provider
 // events into Triggers and hand them to the engine via an EmitFunc.
 type Trigger struct {
-	Source   string            // e.g. "github"
+	Source   string            // the connector type that emitted it
 	Instance string            // integration instance name (for labels/logs)
 	Kind     string            // e.g. "merge_conflict", "review_requested"
 	Variant  string            // action-variant name when a kind has multiple; "" for the sole action
@@ -52,7 +53,7 @@ type Trigger struct {
 	Labels   map[string]string // extra labels to attach to dispatched work
 	Action   any               // integration-resolved action (engine asserts to config.Action)
 	// TargetTrusted marks a dispatch whose TARGET was assigned by the SOURCE
-	// ITSELF — a signature-verified github payload, a slack channel id, a
+	// ITSELF — a signature-verified forge payload, a chat channel id, a
 	// synthetic target derived from the source's own configured name — rather
 	// than taken from data the sender of the event supplied.
 	//
@@ -164,7 +165,7 @@ type EmitFunc func(context.Context, Trigger)
 // dispatch's outcome (see the engine's auditDispatch), once per trigger, with
 // the final outcome: "ok", "failed", "skipped", "adopted", "queued", or
 // "shadow". It lets an integration correlate a completed dispatch back to the
-// Trigger it originally emitted (via Trigger.Dedup) — e.g. Slack posting
+// Trigger it originally emitted (via Trigger.Dedup) — e.g. a chat connector posting
 // on_done/on_fail feedback. nil (default) is a no-op: dispatch behavior is
 // unchanged.
 var CompletionHook func(t Trigger, outcome string)
@@ -173,7 +174,7 @@ var CompletionHook func(t Trigger, outcome string)
 // wiring). Passing nil clears it.
 func SetCompletionHook(fn func(t Trigger, outcome string)) { CompletionHook = fn }
 
-// Integration is a source of Triggers (GitHub today; Slack/Discord later).
+// Integration is a source of Triggers.
 // Each configured instance is one Integration value.
 type Integration interface {
 	// Name is the instance name (unique across the config).

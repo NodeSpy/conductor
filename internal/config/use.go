@@ -158,6 +158,11 @@ const OfficialSource = "github.com/" + OfficialRepo
 // defaultHost is assumed whenever a remote reference names no host.
 const defaultHost = "github.com"
 
+// DefaultGitHost is the host a bare owner/repo clones from when nothing
+// declares a remote (a step's `repo: owner/name`, an event declaring no
+// checkout): the same default a `use:` reference naming no host gets.
+const DefaultGitHost = defaultHost
+
 // namesAHost reports whether a reference's FIRST segment is a hostname rather
 // than an owner. The rule is the dot: `git.corp.example/team/repo` names a
 // host, `acme/repo` does not and gets defaultHost.

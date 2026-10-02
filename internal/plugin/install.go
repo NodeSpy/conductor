@@ -22,7 +22,7 @@ import (
 //
 //	~/.local/state/conductor/plugins/
 //	  installed.yaml
-//	  connectors/sentry/conductor-sentry_linux_amd64
+//	  connectors/widget/conductor-widget_linux_amd64
 //	  runtimes/paseo/conductor-paseo_linux_amd64
 //
 // Boot reads it OFFLINE. Nothing on the hot path touches the network: a fetch
@@ -84,7 +84,7 @@ func (m Manifest) Summary() string {
 
 // Installed is one installed plugin's local record.
 type Installed struct {
-	// Key is "<kind-dir>/<name>" — "connectors/sentry".
+	// Key is "<kind-dir>/<name>" — "connectors/widget".
 	Key string `yaml:"key"`
 	// Kind is connector | runtime.
 	Kind string `yaml:"kind"`
@@ -93,7 +93,7 @@ type Installed struct {
 	// Use is the reference as written in the config, so a changed reference is
 	// detectable without re-resolving.
 	Use string `yaml:"use"`
-	// Source is the canonical fetch source ("github.com/o/r//comp").
+	// Source is the canonical fetch source ("host.example/o/r//comp").
 	Source string `yaml:"source,omitempty"`
 	// Resolved is the concrete release tag this build came from.
 	Resolved string `yaml:"resolved,omitempty"`

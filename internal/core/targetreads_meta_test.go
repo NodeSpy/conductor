@@ -250,7 +250,6 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	// check out; a forged target clones the attacker's own repo into the
 	// agent's sandbox, which is the sandbox doing its job.
 	"internal/dispatch/paseo.go": {
-		{"prHints", "the legacy target-shaped checkout hint for an event declaring no semantics: it checks out, as repoStrategy's legacy rule does"},
 		{"repoStrategy", "checkout strategy for the clone"},
 		{"checkoutArgs", "the clone/checkout arguments"},
 		{"createWorktree", "the worktree path for that checkout"},

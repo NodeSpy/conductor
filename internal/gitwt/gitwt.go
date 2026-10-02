@@ -422,7 +422,7 @@ func DefaultRemoteURL(repo string) string {
 		}
 		return base + repo + ".git"
 	}
-	return "git@github.com:" + repo + ".git"
+	return "git@" + config.DefaultGitHost + ":" + repo + ".git"
 }
 
 func (p *Provisioner) remoteURL(repo string) string {

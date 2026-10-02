@@ -35,7 +35,7 @@ type Manager struct {
 
 // SpecFromRef resolves one derived config.PluginRef into a runnable Spec.
 //
-//   - A LOCAL reference (`use: ./bin/conductor-jira`) points straight at the
+//   - A LOCAL reference (`use: ./bin/conductor-widget`) points straight at the
 //     operator's own binary, made absolute against configDir. There is no sha to
 //     pin: a development binary changes on every build, so the guarantee here is
 //     the safe-permissions check (an attacker-swappable path is still refused),
