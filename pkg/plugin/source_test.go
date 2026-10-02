@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// sourceExt is a ConnectorABI source implementing every extension handler.
+// sourceExt is a source implementing the optional source handlers.
 type sourceExt struct {
 	funcHandler
 	started chan StartSourceRequest
@@ -20,11 +20,11 @@ func (s *sourceExt) StartSource(_ context.Context, req StartSourceRequest, emit 
 	s.started <- req
 	return emit(SourceEvent{Event: "e", Instance: req.Instance, Trigger: req.Triggers[0].ID, CatchUp: true})
 }
-func (s *sourceExt) Nudge(r NudgeRequest) (NudgeResult, error) {
-	return NudgeResult{Nudged: r.Instance == "gh"}, nil
-}
-func (s *sourceExt) Force(r ForceRequest) (ForceResult, error) {
-	return ForceResult{Events: []SourceEvent{{Event: r.Kind, Target: Target{Repo: r.Repo, Number: r.Number}}}}, nil
+func (s *sourceExt) Poll(_ context.Context, r PollRequest) (PollResult, error) {
+	if r.Mode != PollTarget {
+		return PollResult{}, nil
+	}
+	return PollResult{Events: []SourceEvent{{Event: r.Event, Target: Target{Key: r.Target}}}}, nil
 }
 func (s *sourceExt) AppToken(r AppTokenRequest) (AppTokenResult, error) {
 	if r.InstallationID == 0 {
@@ -64,24 +64,23 @@ func serveLines(t *testing.T, h Handler, lines ...string) map[string]wireMessage
 	return byID
 }
 
-// The three extension methods reach their handlers with their params decoded,
+// The source methods reach their handlers with their params decoded,
 // and a handler's own *Error crosses as itself.
 func TestServeSourceExtensionMethods(t *testing.T) {
 	h := &sourceExt{started: make(chan StartSourceRequest, 1)}
 	got := serveLines(t, h,
-		`{"jsonrpc":"2.0","id":1,"method":"plugin.nudge","params":{"instance":"gh"}}`,
-		`{"jsonrpc":"2.0","id":2,"method":"plugin.force","params":{"instance":"gh","kind":"merge_conflict","repo":"o/r","number":7}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"plugin.poll","params":{"instance":"gh","mode":"now"}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"plugin.poll","params":{"instance":"gh","mode":"target","event":"merge_conflict","target":"o/r#7"}}`,
 		`{"jsonrpc":"2.0","id":3,"method":"plugin.app_token","params":{"instance":"gh","installation_id":42}}`,
 		`{"jsonrpc":"2.0","id":4,"method":"plugin.app_token","params":{"instance":"gh"}}`,
 	)
-	var n NudgeResult
-	if err := json.Unmarshal(got["1"].Result, &n); err != nil || !n.Nudged {
-		t.Fatalf("nudge: %s %v", got["1"].Result, err)
+	if got["1"].Error != nil {
+		t.Fatalf("poll now: %+v", got["1"].Error)
 	}
-	var f ForceResult
+	var f PollResult
 	if err := json.Unmarshal(got["2"].Result, &f); err != nil || len(f.Events) != 1 ||
-		f.Events[0].Target.Repo != "o/r" || f.Events[0].Target.Number != 7 || f.Events[0].Event != "merge_conflict" {
-		t.Fatalf("force: %s %v", got["2"].Result, err)
+		f.Events[0].Target.Key != "o/r#7" || f.Events[0].Event != "merge_conflict" {
+		t.Fatalf("poll target: %s %v", got["2"].Result, err)
 	}
 	var a AppTokenResult
 	if err := json.Unmarshal(got["3"].Result, &a); err != nil || a.Token != "tok" {
@@ -92,14 +91,14 @@ func TestServeSourceExtensionMethods(t *testing.T) {
 	}
 }
 
-// A plugin that implements none of the extension answers method-not-found —
+// A plugin that implements none of them answers method-not-found —
 // which the daemon reads as "not supported" — and the old surface is unchanged.
 func TestServeSourceExtensionNotImplemented(t *testing.T) {
 	h := ConnectorFunc(func() Decl { return Decl{Type: "old"} },
 		func(InvokeRequest) (InvokeResult, error) { return InvokeResult{}, nil })
 	got := serveLines(t, h,
-		`{"jsonrpc":"2.0","id":1,"method":"plugin.nudge","params":{"instance":"x"}}`,
-		`{"jsonrpc":"2.0","id":2,"method":"plugin.force","params":{}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"plugin.poll","params":{"instance":"x"}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"plugin.translate","params":{}}`,
 		`{"jsonrpc":"2.0","id":3,"method":"plugin.app_token"}`,
 	)
 	for _, id := range []string{"1", "2", "3"} {

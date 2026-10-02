@@ -84,7 +84,6 @@ func githubEvent(name, desc string, contextExtra, options plugin.Schema) plugin.
 func decl() plugin.Decl {
 	return plugin.Decl{
 		Kind: plugin.KindConnector,
-		ABI:  plugin.ConnectorABI,
 		Type: Type,
 		// The plugin's permission manifest (the bundled connector, in
 		// process, has none to declare): the public API, GitHub Enterprise

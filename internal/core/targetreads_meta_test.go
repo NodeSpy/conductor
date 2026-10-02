@@ -161,7 +161,7 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"read", "the conformance driver records an event's target to compare it; nothing is dispatched"},
 	},
 	"internal/connector/external.go": {
-		{"TargetHead", "a ConnectorABI plugin's head read: reads Target.Number beside OwnRepo(), only for a target " +
+		{"TargetHead", "a plugin source's head read: reads Target.Number beside OwnRepo(), only for a target " +
 			"this instance emitted, and reads nothing when OwnRepo() is empty"},
 	},
 	"internal/flow/runfacts.go": {

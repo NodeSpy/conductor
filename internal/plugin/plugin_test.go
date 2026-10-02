@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -161,10 +162,13 @@ func TestBoundedReader(t *testing.T) {
 type fakeConn struct {
 	mu       sync.Mutex
 	describe *Decl
-	invoke   func(InvokeRequest) (map[string]any, error)
-	hang     bool
-	done     chan struct{}
-	calls    int
+	// rawDescribe, when set, is the describe result verbatim (fields Decl
+	// does not model, such as an unknown semantic, survive).
+	rawDescribe string
+	invoke      func(InvokeRequest) (map[string]any, error)
+	hang        bool
+	done        chan struct{}
+	calls       int
 }
 
 func newFakeConn() *fakeConn { return &fakeConn{done: make(chan struct{})} }
@@ -180,8 +184,13 @@ func (f *fakeConn) Call(ctx context.Context, method string, params, result any) 
 	}
 	switch method {
 	case MethodDescribe:
-		*result.(*Decl) = *f.describe
-		return nil
+		// Through JSON, as a real transport does: the client decodes the
+		// raw result itself (it checks the declarations on the raw form).
+		b, _ := json.Marshal(f.describe)
+		if f.rawDescribe != "" {
+			b = []byte(f.rawDescribe)
+		}
+		return json.Unmarshal(b, result)
 	case MethodInvoke:
 		req := params.(InvokeRequest)
 		out, err := f.invoke(req)

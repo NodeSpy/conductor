@@ -145,7 +145,6 @@ func registerExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin
 			pluginType: spec.Provides,
 			audit:      deps.Audit,
 			log:        log,
-			abi:        connectorABI(decl),
 			trusted:    SourceTrusted(ref.TrustedSource, spec),
 		}, nil
 	}
@@ -180,15 +179,6 @@ func SourceTrusted(explicit *bool, spec plugin.Spec) bool {
 		return false
 	}
 	return config.IsOfficialSource(spec.Use.Source())
-}
-
-// connectorABI is a connector plugin's source-extension ABI (0 = none). The
-// field is kind-specific: only a connector's ABI means this.
-func connectorABI(d *plugin.Decl) int {
-	if d.Kind != "" && d.Kind != plugin.KindConnector {
-		return 0
-	}
-	return d.ABI
 }
 
 // mapDecl converts the plugin wire Decl into a connector.TypeDecl.
@@ -339,9 +329,6 @@ type externalImpl struct {
 	audit      func(map[string]any)
 	auditOnce  sync.Once
 	log        func(string, ...any)
-	// abi is the plugin's connector ABI; >= sdk.ConnectorABI speaks the
-	// source extension (pluginsource.go).
-	abi int
 	// trusted is the instance's trusted_source grant.
 	trusted bool
 }
@@ -386,11 +373,10 @@ func (e *externalImpl) Source(triggers []CompiledTrigger) (core.Integration, err
 		config:   e.conn,
 		triggers: mine,
 		log:      e.log,
-		abi:      e.abi,
 		trusted:  e.trusted,
 		declared: declared,
 	}
-	if e.abi >= sdk.ConnectorABI && e.declaresConn("identity") {
+	if e.declaresConn("identity") {
 		// The connection carries the dispatch credential policy the bundled
 		// github connector does: expose it the same way (dispatchTuner).
 		return &identitySource{pluginSourceIntegration: base}, nil
@@ -404,7 +390,7 @@ func (e *externalImpl) declaresConn(field string) bool {
 	return ok
 }
 
-// identitySource is a ConnectorABI source whose connection declares the
+// identitySource is a source whose connection declares the
 // dispatch credential policy — `identity: {read_token, write_token,
 // commit_author}` and `retry: {max, backoff}` — with the meaning the bundled
 // github connector gives them: which token an agent this source dispatches
@@ -454,7 +440,7 @@ func (s *identitySource) RetryPolicy() config.Retry {
 // Invoke forwards the verb to the plugin with this instance's credentials and
 // schema-validates the untrusted response.
 func (e *externalImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
-	if verb == sdk.VerbSweep && e.abi >= sdk.ConnectorABI {
+	if verb == sdk.VerbSweep {
 		if _, declared := e.decl.Verb(verb); declared {
 			// Conductor-defined: the daemon answers it, for every source with
 			// a sweep, exactly as the bundled connector's sweep verb does.
@@ -507,13 +493,13 @@ func (e *externalImpl) Invoke(ctx context.Context, verb string, opts map[string]
 	return out, nil
 }
 
-// TargetHead implements HeadReader for a ConnectorABI source: the plugin reads
+// TargetHead implements HeadReader for a source: the plugin reads
 // the target's current head with the instance's own credentials. Only a target
 // this instance emitted, and only a trusted one — the same "a target the
 // source assigned itself" rule the bundled github connector applies.
 func (e *externalImpl) TargetHead(ctx context.Context, t core.Trigger) (TargetHead, error) {
 	ext, ok := e.source.(pluginSourceExt)
-	if !ok || e.abi < sdk.ConnectorABI || t.Instance != e.instance || t.OwnRepo() == "" || t.Target.Number == 0 {
+	if !ok || t.Instance != e.instance || t.OwnRepo() == "" || t.Target.Number == 0 {
 		return TargetHead{}, nil
 	}
 	res, err := ext.TargetHead(ctx, e.instance, wireTarget(t.Target))

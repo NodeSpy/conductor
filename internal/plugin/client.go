@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,6 +53,12 @@ type Deps struct {
 
 	MaxMessageBytes int
 	CallTimeout     time.Duration
+
+	// State backs host.state (instance-scoped durable state). nil answers
+	// every host.state call with an error.
+	State *StateStore
+	// HostVersion is the daemon version sent on describe.
+	HostVersion string
 
 	// dial is the transport opener; nil uses the real subprocess dialer.
 	// Tests inject a fake.
@@ -107,6 +114,10 @@ type Client struct {
 	// again the instant a run returns — so a plugin that keeps a token, or
 	// guesses one, has nothing to present it to.
 	runs map[string]RunHost
+	// served are the instances this plugin has been called for. host.state
+	// answers only for these: a plugin reads and writes its OWN instances'
+	// state, never another plugin's or an instance it was never handed.
+	served map[string]bool
 }
 
 // RunHost authorizes and executes ONE data-plane op on behalf of a run. It is
@@ -138,7 +149,7 @@ func NewClient(spec Spec, deps Deps) *Client {
 	if deps.dial == nil {
 		deps.dial = realDial
 	}
-	c := &Client{spec: spec, runs: map[string]RunHost{}}
+	c := &Client{spec: spec, runs: map[string]RunHost{}, served: map[string]bool{}}
 	c.reloadCond = sync.NewCond(&c.mu)
 	deps.onNotify = c.handleNotify
 	deps.onRequest = c.handleRequest
@@ -179,6 +190,7 @@ func (c *Client) StartSource(ctx context.Context, req StartSourceRequest, emit f
 // startSource is StartSource returning the transport the stream rides, whose
 // Done channel closes when that plugin process goes away.
 func (c *Client) startSource(ctx context.Context, req StartSourceRequest, emit func(json.RawMessage)) (transport, error) {
+	c.serve(req.Instance)
 	c.mu.Lock()
 	c.onEvent = emit
 	if c.sinks == nil {
@@ -251,26 +263,64 @@ func notSupported(err error) error {
 	return err
 }
 
-// Nudge asks a ConnectorABI source to run its catch-up sweep now.
-func (c *Client) Nudge(ctx context.Context, instance string) (bool, error) {
-	var res sdk.NudgeResult
-	if err := c.call(ctx, sdk.MethodNudge, sdk.NudgeRequest{Instance: instance}, &res); err != nil {
-		return false, notSupported(err)
+// serve records that this plugin has been handed instance.
+func (c *Client) serve(instance string) {
+	if instance == "" {
+		return
 	}
-	return res.Nudged, nil
+	c.mu.Lock()
+	c.served[instance] = true
+	c.mu.Unlock()
 }
 
-// Force asks a ConnectorABI source for the events kind would fire for one
-// target, now (`conductor force`).
-func (c *Client) Force(ctx context.Context, req sdk.ForceRequest) ([]sdk.SourceEvent, error) {
-	var res sdk.ForceResult
-	if err := c.call(ctx, sdk.MethodForce, req, &res); err != nil {
+func (c *Client) serves(instance string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.served[instance]
+}
+
+// Poll asks a source to poll: now (a catch-up pass), for one target (the
+// returned events are forced), or as a dry run. ErrNotSupported when the
+// plugin does not poll.
+func (c *Client) Poll(ctx context.Context, req sdk.PollRequest) ([]sdk.SourceEvent, error) {
+	c.serve(req.Instance)
+	var res sdk.PollResult
+	if err := c.call(ctx, sdk.MethodPoll, req, &res); err != nil {
 		return nil, notSupported(err)
 	}
 	return res.Events, nil
 }
 
-// AppToken asks a ConnectorABI source for a fresh App installation token.
+// Translate decodes one raw delivery into events (replay, once).
+func (c *Client) Translate(ctx context.Context, req sdk.TranslateRequest) ([]sdk.SourceEvent, error) {
+	c.serve(req.Instance)
+	var res sdk.TranslateResult
+	if err := c.call(ctx, sdk.MethodTranslate, req, &res); err != nil {
+		return nil, notSupported(err)
+	}
+	return res.Events, nil
+}
+
+// Validate runs the plugin's own config and trigger checks.
+func (c *Client) Validate(ctx context.Context, req sdk.ValidateRequest) ([]sdk.Problem, error) {
+	c.serve(req.Instance)
+	var res sdk.ValidateResult
+	if err := c.call(ctx, sdk.MethodValidate, req, &res); err != nil {
+		return nil, notSupported(err)
+	}
+	return res.Problems, nil
+}
+
+// Stop tells the plugin one instance is going away. A plugin with nothing to
+// stop answers ErrNotSupported, which callers treat as done.
+func (c *Client) Stop(ctx context.Context, instance string) error {
+	if err := c.call(ctx, sdk.MethodStop, sdk.StopRequest{Instance: instance}, &struct{}{}); err != nil {
+		return notSupported(err)
+	}
+	return nil
+}
+
+// AppToken asks a source for a fresh App installation token.
 func (c *Client) AppToken(ctx context.Context, instance string, installationID int64) (string, error) {
 	var res sdk.AppTokenResult
 	req := sdk.AppTokenRequest{Instance: instance, InstallationID: installationID}
@@ -350,10 +400,21 @@ func (c *Client) Run(ctx context.Context, req RunRequest, host RunHost) (map[str
 // it never received a token, because it is never given a plugin.run — so
 // every call it could make is refused here.
 func (c *Client) handleRequest(_ context.Context, method string, params json.RawMessage) (any, *acp.RPCError) {
+	if method == sdk.MethodHostState {
+		var req sdk.HostStateRequest
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, acp.NewRPCError(acp.CodeInvalidParams, err.Error())
+		}
+		// Instance-scoped, and only for instances this plugin was handed.
+		if !c.serves(req.Instance) {
+			return sdk.HostStateResult{Error: fmt.Sprintf("instance %q is not one this plugin serves", req.Instance)}, nil
+		}
+		return c.deps.State.Do(c.spec.Key(), req), nil
+	}
 	kind := sdk.HostKindFor(method)
 	if kind == "" {
 		return nil, acp.NewRPCError(acp.CodeMethodNotFound,
-			"daemon exposes no plugin callbacks other than "+MethodHostKV+"/"+MethodHostSQL+"/"+MethodHostMemory)
+			"daemon exposes no plugin callbacks other than "+sdk.MethodHostState+"/"+MethodHostKV+"/"+MethodHostSQL+"/"+MethodHostMemory)
 	}
 	var req HostRequest
 	if len(params) > 0 {
@@ -490,9 +551,14 @@ func (c *Client) teardownLocked() {
 
 // Describe fetches and validates the plugin's self-description.
 func (c *Client) Describe(ctx context.Context) (*Decl, error) {
-	var decl Decl
-	if err := c.call(ctx, MethodDescribe, struct{}{}, &decl); err != nil {
+	var raw json.RawMessage
+	req := sdk.DescribeRequest{Host: &sdk.HostInfo{Version: c.deps.HostVersion, Semantics: sdk.KnownSemantics()}}
+	if err := c.call(ctx, MethodDescribe, req, &raw); err != nil {
 		return nil, err
+	}
+	var decl Decl
+	if err := json.Unmarshal(raw, &decl); err != nil {
+		return nil, fmt.Errorf("plugin %s: describe: %w", c.spec.Name, err)
 	}
 	if decl.ProtocolVersion != ProtocolVersion {
 		return nil, fmt.Errorf("plugin %s: unsupported protocol version %d (daemon speaks %d)", c.spec.Name, decl.ProtocolVersion, ProtocolVersion)
@@ -507,12 +573,12 @@ func (c *Client) Describe(ctx context.Context) (*Decl, error) {
 	if (c.spec.Kind == KindConnector || c.spec.Kind == KindStep) && decl.Type != c.spec.Provides {
 		return nil, fmt.Errorf("plugin %s: describe claims type %q but is configured to provide %q — refusing (identity forgery)", c.spec.Name, decl.Type, c.spec.Provides)
 	}
-	// ABI is read HERE and only here, and only for a step engine. A connector
-	// or runtime never reaches this branch, which is why adding the field
-	// cannot change what any existing plugin means: its ABI is zero and
-	// nobody asks.
-	if decl.Kind == KindStep && decl.ABI != EngineABI {
-		return nil, fmt.Errorf("plugin %s: step-engine ABI %d, daemon speaks %d — rebuild the engine against a matching SDK (the wire protocol itself is unchanged at version %d)", c.spec.Name, decl.ABI, EngineABI, ProtocolVersion)
+	// Declarations are must-understand and must hang together: a semantic
+	// this daemon does not implement, or one naming a verb that is not
+	// there, refuses the plugin rather than half-applying it.
+	// (Decl.ABI is not read: there are no tiers.)
+	if p := append(sdk.CheckSemantics(raw), sdk.ValidateSemantics(decl)...); len(p) > 0 {
+		return nil, fmt.Errorf("plugin %s: declarations refused:\n  %s", c.spec.Name, strings.Join(p, "\n  "))
 	}
 	return &decl, nil
 }
@@ -521,6 +587,7 @@ func (c *Client) Describe(ctx context.Context) (*Decl, error) {
 // resolved credentials (least privilege). A transport error tears the
 // subprocess down so the next call restarts it (subject to backoff).
 func (c *Client) Invoke(ctx context.Context, req InvokeRequest) (map[string]any, error) {
+	c.serve(req.Instance)
 	var res InvokeResult
 	if err := c.call(ctx, MethodInvoke, req, &res); err != nil {
 		return nil, err
@@ -580,11 +647,41 @@ func (c *Client) callFor(ctx context.Context, timeout time.Duration, method stri
 
 // Close stops the subprocess for good.
 func (c *Client) Close() error {
+	c.stopServed()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closed = true
 	c.teardownLocked()
 	return nil
+}
+
+// stopGrace bounds the plugin.stop courtesy at close. A var so tests can
+// shrink it.
+var stopGrace = 2 * time.Second
+
+// stopServed sends plugin.stop for every instance this plugin served, when
+// its process is up, so it can release what it holds (a tunnel, a relay
+// subscription) before the process goes. Best effort and bounded: a plugin
+// with nothing to stop answers method-not-found, and a hung one is killed
+// anyway.
+func (c *Client) stopServed() {
+	c.mu.Lock()
+	up := c.conn != nil && !c.closed
+	insts := make([]string, 0, len(c.served))
+	for i := range c.served {
+		insts = append(insts, i)
+	}
+	c.mu.Unlock()
+	if !up {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), stopGrace)
+	defer cancel()
+	for _, i := range insts {
+		if err := c.Stop(ctx, i); err != nil && err != ErrNotSupported && ctx.Err() == nil {
+			c.deps.Log("plugin %s: stop %s: %v", c.spec.Name, i, err)
+		}
+	}
 }
 
 // reloadDrainTimeout bounds how long Reload waits for in-flight bounded calls to
@@ -774,7 +871,7 @@ func (h pluginHandler) HandleNotification(_ context.Context, method string, para
 	}
 }
 
-// TargetHead asks a ConnectorABI source for a target's current head and state.
+// TargetHead asks a source for a target's current head and state.
 func (c *Client) TargetHead(ctx context.Context, instance string, t sdk.Target) (sdk.TargetHeadResult, error) {
 	var res sdk.TargetHeadResult
 	if err := c.call(ctx, sdk.MethodTargetHead, sdk.TargetHeadRequest{Instance: instance, Target: t}, &res); err != nil {

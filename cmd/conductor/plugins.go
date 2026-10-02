@@ -6,9 +6,11 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/acp"
 	"github.com/NodeSpy/conductor/internal/code"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
@@ -38,9 +40,11 @@ func pluginDeps(sec *secrets.Resolver, audit func(map[string]any)) plugin.Deps {
 		masks = []string{config.StateDir(), configDir()}
 	}
 	return plugin.Deps{
-		Log:    logf,
-		Redact: sec.Redact,
-		Audit:  audit,
+		Log:         logf,
+		Redact:      sec.Redact,
+		Audit:       audit,
+		State:       pluginStateStore(),
+		HostVersion: acp.ClientVersion,
 		Sandbox: plugin.SandboxDeps{
 			Self:       exe,
 			MaskPaths:  masks,
@@ -49,6 +53,10 @@ func pluginDeps(sec *secrets.Resolver, audit func(map[string]any)) plugin.Deps {
 		},
 	}
 }
+
+// pluginStateStore is the daemon's one host.state store, shared by every
+// plugin client (opened lazily, on the first host.state call).
+var pluginStateStore = sync.OnceValue(func() *plugin.StateStore { return plugin.NewStateStore(config.StateDir()) })
 
 // codeSandboxDeps builds the sandbox.LocalWrapDeps a code step's OWN
 // `isolation:` block wraps through (internal/code's execCLILocal/

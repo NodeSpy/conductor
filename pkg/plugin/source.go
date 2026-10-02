@@ -2,41 +2,20 @@ package plugin
 
 import "encoding/json"
 
-// THE SOURCE EXTENSION (connector ABI 1) — what a source plugin needs to be a
-// full event source rather than a payload forwarder: its own triggers, its
-// own filter evaluation, a catch-up sweep the daemon can nudge, manual
-// injection (`conductor force`), and App-token re-mint for a resumed run. The
-// design and its security reasoning are in docs/design/plugin-source-abi.md.
-//
-// Negotiation is Decl.ABI, as the protocol's version note prescribes: a
-// connector plugin that sets ABI >= ConnectorABI speaks all of it; one that
-// does not (every connector plugin before this extension) is driven exactly
-// as before — no triggers on start_source, events matched by the daemon,
-// none of the methods below ever called. A new method a plugin does not
-// implement answers method-not-found, which the daemon treats as "not
-// supported", so a plugin may implement any subset of the handlers.
-//
-//	daemon → plugin   plugin.start_source  + Triggers (the instance's triggers)
-//	plugin → daemon   plugin.event         + Trigger / CatchUp / Instance
-//	daemon → plugin   plugin.nudge         run the catch-up sweep now
-//	daemon → plugin   plugin.force         build the events for one target, now
-//	daemon → plugin   plugin.app_token     re-mint an App installation token
-//	daemon → plugin   plugin.target_head   a target's head commit + state, now
+// Source surface of the one contract (docs/design/plugin-contract.md §1.5).
+// Every source is handed its triggers on start_source and may route each
+// event to one of them; plugin.poll and plugin.translate are in contract.go.
+// The two methods below are still served for the bundled github source and
+// are replaced by declared verbs (reads_revision, mints_credential).
 
-// ConnectorABI is the connector-kind ABI revision this SDK speaks. A connector
-// plugin reports it in Decl.ABI to receive the source extension.
-const ConnectorABI = 1
-
-// Source-extension methods (daemon → plugin requests).
+// Methods (daemon → plugin requests).
 const (
-	MethodNudge      = "plugin.nudge"
-	MethodForce      = "plugin.force"
 	MethodAppToken   = "plugin.app_token"
 	MethodTargetHead = "plugin.target_head"
 )
 
 // VerbSweep is a CONDUCTOR-DEFINED verb name. A connector plugin speaking
-// ConnectorABI that declares a verb by this name is declaring "run the
+// that declares a verb by this name is declaring "run the
 // catch-up sweep now", and the DAEMON answers it — it nudges every source in
 // the daemon that has a sweep (this plugin's instances through plugin.nudge,
 // and any other), exactly as `conductor sweep --now` does. The call is never
@@ -45,7 +24,7 @@ const (
 const VerbSweep = "sweep"
 
 // SourceTrigger is one configured trigger on a source instance, as the daemon
-// hands it to a ConnectorABI plugin in StartSourceRequest.Triggers.
+// hands it to a plugin in StartSourceRequest.Triggers.
 //
 // The plugin evaluates it — routing, identity gates, its declared match keys,
 // the trigger's `filter:` — and names it by ID on every event it fires for it.
@@ -95,7 +74,7 @@ type Target struct {
 }
 
 // SourceEvent is one plugin.event payload. The first block is what every
-// source plugin has always sent; the second is the ConnectorABI extension.
+// source plugin has always sent; the second, routing and catch-up.
 type SourceEvent struct {
 	// Event is the declared event name this is (the `on:` suffix).
 	Event string `json:"event"`
@@ -128,33 +107,6 @@ type SourceEvent struct {
 	TargetTrusted bool `json:"target_trusted,omitempty"`
 }
 
-// NudgeRequest asks a source to run its catch-up sweep now (and reset any
-// adaptive cadence). It must not block on the sweep.
-type NudgeRequest struct {
-	Instance string `json:"instance"`
-}
-
-// NudgeResult reports whether the instance has a sweep that was nudged.
-type NudgeResult struct {
-	Nudged bool `json:"nudged"`
-}
-
-// ForceRequest asks a source to build, now, the events kind would fire for
-// one target — the `conductor force` path. The daemon marks every returned
-// event forced (it bypasses the engine's dedup/backoff gates), which is why
-// they come back in the response rather than on the event stream.
-type ForceRequest struct {
-	Instance string `json:"instance"`
-	Kind     string `json:"kind"`
-	Repo     string `json:"repo"`
-	Number   int    `json:"number"`
-}
-
-// ForceResult is the events a ForceRequest built, each routed to its trigger.
-type ForceResult struct {
-	Events []SourceEvent `json:"events"`
-}
-
 // AppTokenRequest asks for a fresh installation token for a GitHub-App-style
 // source — what a persisted run resumed after a restart re-mints, from the
 // installation_id its trigger context carried.
@@ -183,24 +135,13 @@ type TargetHeadResult struct {
 	State string `json:"state,omitempty"`
 }
 
-// NudgeHandler is implemented by a ConnectorABI source with a catch-up sweep.
-type NudgeHandler interface {
-	Nudge(NudgeRequest) (NudgeResult, error)
-}
-
-// ForceHandler is implemented by a ConnectorABI source that supports manual
-// injection.
-type ForceHandler interface {
-	Force(ForceRequest) (ForceResult, error)
-}
-
-// AppTokenHandler is implemented by a ConnectorABI source that mints App
+// AppTokenHandler is implemented by a source that mints App
 // installation tokens.
 type AppTokenHandler interface {
 	AppToken(AppTokenRequest) (AppTokenResult, error)
 }
 
-// TargetHeadHandler is implemented by a ConnectorABI source whose targets have
+// TargetHeadHandler is implemented by a source whose targets have
 // a head (a PR's head commit).
 type TargetHeadHandler interface {
 	TargetHead(TargetHeadRequest) (TargetHeadResult, error)

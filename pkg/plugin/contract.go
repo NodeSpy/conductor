@@ -55,6 +55,8 @@ type PollRequest struct {
 	Instance string `json:"instance"`
 	Mode     string `json:"mode"`
 	Target   string `json:"target,omitempty"`
+	// Event, with mode target, limits the poll to events of this name.
+	Event string `json:"event,omitempty"`
 }
 
 // PollResult carries the events the pass produced (a plugin may also stream
@@ -63,9 +65,16 @@ type PollResult struct {
 	Events []SourceEvent `json:"events,omitempty"`
 }
 
-// TranslateRequest is plugin.translate's params: one raw delivery.
+// TranslateRequest is plugin.translate's params: one raw delivery, and the
+// instance's config and triggers, so a plugin translates without a running
+// source (replay and once run in a CLI process that starts none). Event is
+// the delivery's event name when the caller knows it (a replay fixture, a CI
+// runner's environment) rather than reading it from a header.
 type TranslateRequest struct {
 	Instance string            `json:"instance"`
+	Config   map[string]any    `json:"config,omitempty"`
+	Triggers []SourceTrigger   `json:"triggers,omitempty"`
+	Event    string            `json:"event,omitempty"`
 	Headers  map[string]string `json:"headers,omitempty"`
 	Body     string            `json:"body"`
 }

@@ -245,22 +245,49 @@ func TestExistingPluginsLoadUnchanged(t *testing.T) {
 	}
 }
 
-// An ENGINE's ABI, by contrast, IS checked — and only an engine's.
-func TestEngineABIIsNegotiated(t *testing.T) {
-	fc := newFakeConn()
-	fc.describe = &Decl{ProtocolVersion: ProtocolVersion, Kind: KindStep, ABI: EngineABI + 1, Type: "acme-engine"}
-	sp := engineSpec(t)
-	c := NewClient(sp, Deps{dial: fakeDial(fc)})
-	defer c.Close()
-	_, err := c.Describe(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "step-engine ABI") {
-		t.Fatalf("want an ABI refusal, got %v", err)
+// Decl.ABI is accepted and IGNORED, for every kind: there are no tiers. An
+// engine reporting any ABI (or none) loads.
+func TestABIIsIgnored(t *testing.T) {
+	for _, abi := range []int{0, EngineABI, EngineABI + 1, 99} {
+		fc := newFakeConn()
+		fc.describe = &Decl{ProtocolVersion: ProtocolVersion, Kind: KindStep, ABI: abi, Type: "acme-engine"}
+		c := NewClient(engineSpec(t), Deps{dial: fakeDial(fc)})
+		if _, err := c.Describe(context.Background()); err != nil {
+			t.Fatalf("abi %d refused: %v", abi, err)
+		}
+		c.Close()
 	}
-	// The refusal must NOT be phrased as a protocol-version problem: the wire
-	// protocol is unchanged and an operator told otherwise would go looking in
-	// the wrong place.
-	if strings.Contains(err.Error(), "unsupported protocol version") {
-		t.Fatalf("an ABI mismatch was reported as a protocol mismatch: %v", err)
+}
+
+// Declarations are must-understand: a semantic this daemon does not
+// implement refuses the plugin, naming it — and the same plugin marking it
+// optional loads. A declaration that does not hang together is refused too.
+func TestDeclarationsAreMustUnderstand(t *testing.T) {
+	load := func(raw string) error {
+		fc := newFakeConn()
+		var d Decl
+		if err := json.Unmarshal([]byte(raw), &d); err != nil {
+			t.Fatal(err)
+		}
+		fc.describe = &d
+		fc.rawDescribe = raw
+		sp := connectorSpec()
+		sp.BinPath = writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+		c := NewClient(sp, Deps{dial: fakeDial(fc)})
+		defer c.Close()
+		_, err := c.Describe(context.Background())
+		return err
+	}
+	err := load(`{"protocol_version":1,"type":"jira","events":[{"name":"e","semantics":{"teleport":true}}]}`)
+	if err == nil || !strings.Contains(err.Error(), "events[e].semantics.teleport") {
+		t.Fatalf("an unknown semantic must refuse the plugin, naming it: %v", err)
+	}
+	if err := load(`{"protocol_version":1,"type":"jira","events":[{"name":"e","semantics":{"teleport":true,"optional":["teleport"]}}]}`); err != nil {
+		t.Fatalf("an optional unknown semantic must load: %v", err)
+	}
+	err = load(`{"protocol_version":1,"type":"jira","verbs":[{"name":"mint","semantics":{"mints_credential":{"credential":"w"}}}]}`)
+	if err == nil || !strings.Contains(err.Error(), "host_only") {
+		t.Fatalf("an inconsistent declaration must refuse the plugin: %v", err)
 	}
 }
 

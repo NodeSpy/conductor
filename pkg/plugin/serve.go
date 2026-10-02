@@ -497,26 +497,6 @@ func dispatch(ctx context.Context, h Handler, method string, params json.RawMess
 		// Ack immediately; stream events in the background until ctx cancels.
 		go func() { _ = sh.StartSource(ctx, req, emit) }()
 		return struct{}{}, nil
-	case MethodNudge:
-		h, ok := h.(NudgeHandler)
-		if !ok {
-			return nil, Errorf(CodeMethodNotFound, "this plugin has no sweep to nudge")
-		}
-		var req NudgeRequest
-		if err := decodeParams(params, &req); err != nil {
-			return nil, err
-		}
-		return wrapResult(h.Nudge(req))
-	case MethodForce:
-		h, ok := h.(ForceHandler)
-		if !ok {
-			return nil, Errorf(CodeMethodNotFound, "this plugin does not support force")
-		}
-		var req ForceRequest
-		if err := decodeParams(params, &req); err != nil {
-			return nil, err
-		}
-		return wrapResult(h.Force(req))
 	case MethodAppToken:
 		h, ok := h.(AppTokenHandler)
 		if !ok {

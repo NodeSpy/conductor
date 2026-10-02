@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,17 +20,12 @@ import (
 // a config.Action. This keeps Trigger.Action (a Go value the engine asserts) on
 // the daemon side, out of the wire.
 //
-// Two shapes of plugin arrive here:
-//
-//   - a plain source (every plugin before the source extension): it is handed
-//     its instance config, and the daemon matches each event against the
-//     triggers on `on:` with the generic evaluator. It is UNTRUSTED input.
-//   - a ConnectorABI source (sdk.ConnectorABI, pkg/plugin/source.go): it is
-//     ALSO handed the instance's triggers, evaluates them itself — its own
-//     match keys, identity gates, sweep — and routes each event to exactly the
-//     trigger it fired for. It can be nudged, forced, asked for an App token
-//     and a target's head. It is still untrusted unless the operator marked
-//     the connector trusted_source (see trustedKind and the design doc).
+// Every source gets the same contract (docs/design/plugin-contract.md): it is
+// handed its instance config AND its triggers. A plugin may route each event
+// to the one trigger it evaluated it for (its own match keys), or name none
+// and let the daemon match it against every trigger on `on:` with the
+// generic evaluator. It may implement plugin.poll (catch-up now, one forced
+// target, a dry run) and plugin.translate (replay, once).
 
 // pluginSourcer is the streaming capability of *plugin.Client the source
 // integration needs (Invoke lives on the verb path).
@@ -43,10 +39,11 @@ type pluginStreamer interface {
 	StreamSource(ctx context.Context, req plugin.StartSourceRequest, emit func(json.RawMessage)) error
 }
 
-// pluginSourceExt is the ConnectorABI request surface of *plugin.Client.
+// pluginSourceExt is the optional source surface of *plugin.Client.
 type pluginSourceExt interface {
-	Nudge(ctx context.Context, instance string) (bool, error)
-	Force(ctx context.Context, req sdk.ForceRequest) ([]sdk.SourceEvent, error)
+	Poll(ctx context.Context, req sdk.PollRequest) ([]sdk.SourceEvent, error)
+	Translate(ctx context.Context, req sdk.TranslateRequest) ([]sdk.SourceEvent, error)
+	Validate(ctx context.Context, req sdk.ValidateRequest) ([]sdk.Problem, error)
 	AppToken(ctx context.Context, instance string, installationID int64) (string, error)
 	TargetHead(ctx context.Context, instance string, t sdk.Target) (sdk.TargetHeadResult, error)
 }
@@ -65,9 +62,6 @@ type pluginSourceIntegration struct {
 	triggers []CompiledTrigger
 	log      func(string, ...any)
 
-	// abi is the plugin's connector ABI (sdk.ConnectorABI and up speaks the
-	// source extension); 0 for every plugin before it.
-	abi int
 	// trusted is the operator's trusted_source grant for this instance.
 	trusted bool
 	// declared are the event names the plugin declares: the only
@@ -75,23 +69,54 @@ type pluginSourceIntegration struct {
 	declared map[string]bool
 
 	hintOnce sync.Once
+
+	mu   sync.Mutex
+	emit core.EmitFunc // the running stream's emit, for events a poll returns
+	ctx  context.Context
 }
 
-// sourceABI reports whether this plugin speaks the source extension.
-func (p *pluginSourceIntegration) sourceABI() bool { return p.abi >= sdk.ConnectorABI }
+func (p *pluginSourceIntegration) Name() string { return p.instance }
 
-func (p *pluginSourceIntegration) Name() string    { return p.instance }
-func (p *pluginSourceIntegration) Validate() error { return nil }
+// Validate runs the plugin's own config and trigger checks (plugin.validate)
+// — at boot and under `conductor validate`, which both build the stack. A
+// plugin with no checks of its own (method-not-found) is valid.
+func (p *pluginSourceIntegration) Validate() error {
+	ext, ok := p.source.(pluginSourceExt)
+	if !ok {
+		return nil
+	}
+	ctx, cancel := extReq()
+	defer cancel()
+	problems, err := ext.Validate(ctx, sdk.ValidateRequest{Instance: p.instance, Config: p.config, Triggers: p.wireTriggers()})
+	if err == plugin.ErrNotSupported {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("connector %q: validate: %w", p.instance, err)
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(problems))
+	for _, pr := range problems {
+		if pr.Path != "" {
+			lines = append(lines, pr.Path+": "+pr.Message)
+		} else {
+			lines = append(lines, pr.Message)
+		}
+	}
+	return fmt.Errorf("connector %q:\n  %s", p.instance, strings.Join(lines, "\n  "))
+}
 
 // Start opens the plugin's event stream and, for each event, emits a Trigger for
 // every configured trigger whose `on:` and filters match (or, for a routed
 // event, the one trigger it names). Runs until ctx is cancelled (which tears
 // down the plugin subprocess and ends the stream).
 func (p *pluginSourceIntegration) Start(ctx context.Context, emit core.EmitFunc) error {
-	req := plugin.StartSourceRequest{Instance: p.instance, Config: p.config}
-	if p.sourceABI() {
-		req.Triggers = p.wireTriggers()
-	}
+	req := plugin.StartSourceRequest{Instance: p.instance, Config: p.config, Triggers: p.wireTriggers()}
+	p.mu.Lock()
+	p.emit, p.ctx = emit, ctx
+	p.mu.Unlock()
 	sink := func(raw json.RawMessage) {
 		var ev pluginEvent
 		if err := json.Unmarshal(raw, &ev); err != nil {
@@ -108,8 +133,7 @@ func (p *pluginSourceIntegration) Start(ctx context.Context, emit core.EmitFunc)
 	return p.source.StartSource(ctx, req, sink)
 }
 
-// wireTriggers is the instance's triggers as a ConnectorABI plugin receives
-// them: identity, event, options, and the filter in its structural form. What
+// wireTriggers is the instance's triggers as a plugin receives them: identity, event, options, and the filter in its structural form. What
 // a trigger DOES stays here.
 func (p *pluginSourceIntegration) wireTriggers() []sdk.SourceTrigger {
 	out := make([]sdk.SourceTrigger, 0, len(p.triggers))
@@ -151,7 +175,7 @@ func (p *pluginSourceIntegration) triggersFor(ev pluginEvent, force bool) []core
 			TargetTrusted: trusted,
 		}}
 	}
-	if p.sourceABI() && ev.Trigger != "" {
+	if ev.Trigger != "" {
 		t, ok := p.routedTrigger(ev)
 		if !ok {
 			return nil
@@ -188,8 +212,8 @@ func (p *pluginSourceIntegration) triggersFor(ev pluginEvent, force bool) []core
 // with the operator's token (round-13). Those come from sources that read a
 // verified platform payload. A plugin is believed to be one only when the
 // operator said so (trusted_source), and even then only for an event it
-// DECLARES — or `_closed` from a ConnectorABI source, which is the lifecycle
-// fact every such engine-interpreted kind is about.
+// DECLARES — or `_closed`, the lifecycle fact every such engine-interpreted
+// kind is about.
 func (p *pluginSourceIntegration) kindFor(ev pluginEvent) (string, bool) {
 	kind := ev.Kind
 	if kind == "" {
@@ -198,7 +222,7 @@ func (p *pluginSourceIntegration) kindFor(ev pluginEvent) (string, bool) {
 	if !core.ReservedKind(kind) {
 		return kind, true
 	}
-	if p.trusted && (p.declared[kind] || (kind == core.KindClosed && p.sourceABI())) {
+	if p.trusted && (p.declared[kind] || kind == core.KindClosed) {
 		return kind, true
 	}
 	if !p.trusted {
@@ -261,7 +285,7 @@ func (p *pluginSourceIntegration) trigger(t CompiledTrigger, kind string, ev plu
 		Context:       ev.Context,
 		Dedup:         ev.Dedup,
 		Labels:        ev.Labels,
-		CatchUp:       ev.CatchUp && p.sourceABI(),
+		CatchUp:       ev.CatchUp,
 		Force:         force,
 		Action:        pluginAction(t),
 	}
@@ -281,31 +305,78 @@ func extReq() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 15*time.Second)
 }
 
-// SweepNow nudges a ConnectorABI source's catch-up sweep (SIGUSR1,
-// `conductor sweep --now`, the sweep verb). false when the plugin has no
-// sweep or does not speak the extension.
+// SweepNow asks the source to poll now (SIGUSR1, `conductor sweep --now`,
+// the sweep verb). false when the plugin does not poll.
 func (p *pluginSourceIntegration) SweepNow() bool {
 	ext, ok := p.source.(pluginSourceExt)
-	if !ok || !p.sourceABI() {
+	if !ok {
 		return false
 	}
 	ctx, cancel := extReq()
 	defer cancel()
-	nudged, err := ext.Nudge(ctx, p.instance)
-	if err != nil && err != plugin.ErrNotSupported {
-		p.log("plugin source %s: nudge: %v", p.instance, err)
+	evs, err := ext.Poll(ctx, sdk.PollRequest{Instance: p.instance, Mode: sdk.PollNow})
+	if err == plugin.ErrNotSupported {
+		return false
 	}
-	return nudged
+	if err != nil {
+		p.log("plugin source %s: poll: %v", p.instance, err)
+		return false
+	}
+	p.routeReturned(evs)
+	return true
 }
 
-// Force implements core.Forcer for a ConnectorABI source: the plugin builds
-// the events, the daemon routes them and marks them forced.
+// routeReturned routes events a poll RETURNED (rather than streamed) into
+// the engine, through the same emit the stream uses.
+func (p *pluginSourceIntegration) routeReturned(evs []sdk.SourceEvent) {
+	p.mu.Lock()
+	emit, ctx := p.emit, p.ctx
+	p.mu.Unlock()
+	if emit == nil {
+		return
+	}
+	for _, ev := range evs {
+		for _, t := range p.triggersFor(ev, false) {
+			emit(ctx, t)
+		}
+	}
+}
+
+// SweepOnce is the dry-run preview (`conductor sweep`): the events a poll
+// would emit, handed to emit, with nothing dispatched by the plugin itself.
+func (p *pluginSourceIntegration) SweepOnce(ctx context.Context, emit core.EmitFunc) error {
+	ext, ok := p.source.(pluginSourceExt)
+	if !ok {
+		return fmt.Errorf("plugin source %s does not poll", p.instance)
+	}
+	evs, err := ext.Poll(ctx, sdk.PollRequest{Instance: p.instance, Mode: sdk.PollDryRun})
+	if err == plugin.ErrNotSupported {
+		return fmt.Errorf("plugin source %s does not poll", p.instance)
+	}
+	if err != nil {
+		return err
+	}
+	for _, ev := range evs {
+		for _, t := range p.triggersFor(ev, false) {
+			emit(ctx, t)
+		}
+	}
+	return nil
+}
+
+// Force implements core.Forcer: the plugin returns one target's events for
+// kind (plugin.poll, mode target), and the daemon routes them and marks them
+// forced. Only RETURNED events are ever forced.
 func (p *pluginSourceIntegration) Force(ctx context.Context, kind, repo string, number int, emit core.EmitFunc) (int, error) {
 	ext, ok := p.source.(pluginSourceExt)
-	if !ok || !p.sourceABI() {
+	if !ok {
 		return 0, fmt.Errorf("plugin source %s does not support force", p.instance)
 	}
-	evs, err := ext.Force(ctx, sdk.ForceRequest{Instance: p.instance, Kind: kind, Repo: repo, Number: number})
+	target := repo
+	if number != 0 {
+		target = fmt.Sprintf("%s#%d", repo, number)
+	}
+	evs, err := ext.Poll(ctx, sdk.PollRequest{Instance: p.instance, Mode: sdk.PollTarget, Event: kind, Target: target})
 	if err == plugin.ErrNotSupported {
 		return 0, fmt.Errorf("plugin source %s does not support force", p.instance)
 	}
@@ -320,16 +391,48 @@ func (p *pluginSourceIntegration) Force(ctx context.Context, kind, repo string, 
 		}
 	}
 	if n == 0 {
-		return 0, fmt.Errorf("no %q trigger fired for %s#%d", kind, repo, number)
+		return 0, fmt.Errorf("no %q trigger fired for %s", kind, target)
 	}
 	return n, nil
 }
 
+// Translate decodes one delivery into the triggers it fires (replay, once),
+// through the plugin's plugin.translate. A plugin that does not translate
+// yields none.
+func (p *pluginSourceIntegration) Translate(ctx context.Context, event string, body []byte) []core.Trigger {
+	trs, err := p.TranslateDelivery(ctx, event, nil, body)
+	if err != nil {
+		p.log("plugin source %s: translate: %v", p.instance, err)
+	}
+	return trs
+}
+
+// TranslateDelivery is Translate with the delivery's headers.
+func (p *pluginSourceIntegration) TranslateDelivery(ctx context.Context, event string, headers map[string]string, body []byte) ([]core.Trigger, error) {
+	ext, ok := p.source.(pluginSourceExt)
+	if !ok {
+		return nil, fmt.Errorf("plugin source %s does not translate deliveries", p.instance)
+	}
+	evs, err := ext.Translate(ctx, sdk.TranslateRequest{Instance: p.instance, Config: p.config, Triggers: p.wireTriggers(),
+		Event: event, Headers: headers, Body: string(body)})
+	if err == plugin.ErrNotSupported {
+		return nil, fmt.Errorf("plugin source %s does not translate deliveries", p.instance)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []core.Trigger
+	for _, ev := range evs {
+		out = append(out, p.triggersFor(ev, false)...)
+	}
+	return out, nil
+}
+
 // AppToken implements the engine's resume-time App token re-mint for a
-// ConnectorABI source.
+// source.
 func (p *pluginSourceIntegration) AppToken(ctx context.Context, instID int64) (string, error) {
 	ext, ok := p.source.(pluginSourceExt)
-	if !ok || !p.sourceABI() {
+	if !ok {
 		return "", fmt.Errorf("plugin source %s cannot mint app tokens", p.instance)
 	}
 	return ext.AppToken(ctx, p.instance, instID)

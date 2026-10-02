@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -35,6 +36,11 @@ type Plugin struct {
 	mu      sync.Mutex
 	clients map[string]*githubkit.Client
 	sources map[string]*ghsource.Source
+	// started are the start_source requests behind sources, kept so a dry
+	// run can build a throwaway source with the same config and triggers
+	// (a dry run against the live one would claim reviews it then never
+	// dispatches).
+	started map[string]plugin.StartSourceRequest
 	// ownStatus holds status contexts an instance's set_status posted before
 	// its source started, applied when it does (see noteOwnStatus).
 	ownStatus map[string][]string
@@ -45,6 +51,7 @@ func New() *Plugin {
 	return &Plugin{
 		clients:   map[string]*githubkit.Client{},
 		sources:   map[string]*ghsource.Source{},
+		started:   map[string]plugin.StartSourceRequest{},
 		ownStatus: map[string][]string{},
 	}
 }
@@ -52,8 +59,8 @@ func New() *Plugin {
 var (
 	_ plugin.Handler           = (*Plugin)(nil)
 	_ plugin.SourceHandler     = (*Plugin)(nil)
-	_ plugin.NudgeHandler      = (*Plugin)(nil)
-	_ plugin.ForceHandler      = (*Plugin)(nil)
+	_ plugin.PollHandler       = (*Plugin)(nil)
+	_ plugin.TranslateHandler  = (*Plugin)(nil)
 	_ plugin.AppTokenHandler   = (*Plugin)(nil)
 	_ plugin.TargetHeadHandler = (*Plugin)(nil)
 )
@@ -64,7 +71,7 @@ func (p *Plugin) Describe() plugin.Decl { return Decl() }
 // Invoke runs one verb with the instance's credentials.
 func (p *Plugin) Invoke(req plugin.InvokeRequest) (plugin.InvokeResult, error) {
 	if req.Verb == plugin.VerbSweep {
-		// A ConnectorABI daemon answers sweep itself and never sends it here.
+		// A current daemon answers sweep itself and never sends it here.
 		// An older one does: nudge this process's own sources, which is the
 		// most this side of the wire can reach.
 		n := 0
@@ -175,6 +182,7 @@ func (p *Plugin) StartSource(ctx context.Context, req plugin.StartSourceRequest,
 	}
 	p.mu.Lock()
 	p.sources[req.Instance] = src
+	p.started[req.Instance] = req
 	for _, c := range p.ownStatus[req.Instance] {
 		src.NoteOwnStatusContext(c)
 	}
@@ -229,32 +237,109 @@ func (p *Plugin) source(instance string) (*ghsource.Source, error) {
 	return s, nil
 }
 
-// Nudge runs the instance's catch-up sweep now.
-func (p *Plugin) Nudge(req plugin.NudgeRequest) (plugin.NudgeResult, error) {
-	s, err := p.source(req.Instance)
-	if err != nil {
-		return plugin.NudgeResult{}, nil // nothing running: nothing nudged
+// Poll serves plugin.poll: now runs the catch-up sweep (its events stream as
+// usual); target returns one PR's or issue's events for req.Event (the host
+// marks them forced); dry_run returns what a sweep would emit, from a
+// throwaway source so the live one's review claims are untouched.
+func (p *Plugin) Poll(ctx context.Context, req plugin.PollRequest) (plugin.PollResult, error) {
+	switch req.Mode {
+	case plugin.PollNow:
+		s, err := p.source(req.Instance)
+		if err != nil {
+			return plugin.PollResult{}, nil // nothing running: nothing to poll
+		}
+		s.SweepNow()
+		return plugin.PollResult{}, nil
+	case plugin.PollTarget:
+		s, err := p.source(req.Instance)
+		if err != nil {
+			return plugin.PollResult{}, err
+		}
+		repo, number, err := parseTargetRef(req.Target)
+		if err != nil {
+			return plugin.PollResult{}, plugin.Fail(plugin.CodeInvalid, err.Error(), nil)
+		}
+		if req.Event == "" {
+			return plugin.PollResult{}, plugin.Fail(plugin.CodeInvalid, "github: a forced poll names the event to build", nil)
+		}
+		out, err := collect(ctx, req.Instance, func(emit ghsource.EmitFunc) error {
+			_, err := s.Force(ctx, req.Event, repo, number, emit)
+			return err
+		})
+		return plugin.PollResult{Events: out}, err
+	case plugin.PollDryRun:
+		p.mu.Lock()
+		sreq, ok := p.started[req.Instance]
+		p.mu.Unlock()
+		if !ok {
+			return plugin.PollResult{}, plugin.Fail(plugin.CodeInvalid, fmt.Sprintf("no running source for instance %q", req.Instance), nil)
+		}
+		dry, err := BuildSource(req.Instance, sreq.Config, sreq.Triggers)
+		if err != nil {
+			return plugin.PollResult{}, err
+		}
+		out, err := collect(ctx, req.Instance, func(emit ghsource.EmitFunc) error { return dry.SweepOnce(ctx, emit) })
+		return plugin.PollResult{Events: out}, err
 	}
-	return plugin.NudgeResult{Nudged: s.SweepNow()}, nil
+	return plugin.PollResult{}, plugin.Fail(plugin.CodeInvalid, fmt.Sprintf("unknown poll mode %q", req.Mode), nil)
 }
 
-// Force builds the events kind would fire for one target, now.
-func (p *Plugin) Force(req plugin.ForceRequest) (plugin.ForceResult, error) {
-	s, err := p.source(req.Instance)
+// Translate decodes one webhook delivery into routed events, from a source
+// built for the request's config and triggers (replay and once run with no
+// source started). The event name comes from req.Event, else the delivery's
+// X-GitHub-Event header.
+func (p *Plugin) Translate(ctx context.Context, req plugin.TranslateRequest) (plugin.TranslateResult, error) {
+	event := req.Event
+	if event == "" {
+		for k, v := range req.Headers {
+			if strings.EqualFold(k, "X-GitHub-Event") {
+				event = v
+			}
+		}
+	}
+	if event == "" {
+		return plugin.TranslateResult{}, plugin.Fail(plugin.CodeInvalid, "github: the delivery names no event (X-GitHub-Event)", nil)
+	}
+	src, err := BuildSource(req.Instance, req.Config, req.Triggers)
 	if err != nil {
-		return plugin.ForceResult{}, err
+		return plugin.TranslateResult{}, plugin.Fail(plugin.CodeInvalid, err.Error(), nil)
 	}
 	var out []plugin.SourceEvent
-	var mu sync.Mutex
-	_, err = s.Force(context.Background(), req.Kind, req.Repo, req.Number, func(_ context.Context, t ghsource.Trigger) {
-		mu.Lock()
+	for _, t := range src.Translate(ctx, event, []byte(req.Body)) {
 		out = append(out, Event(req.Instance, t))
+	}
+	return plugin.TranslateResult{Events: out}, nil
+}
+
+// collect runs fn with an emit that gathers wire events.
+func collect(_ context.Context, instance string, fn func(ghsource.EmitFunc) error) ([]plugin.SourceEvent, error) {
+	var out []plugin.SourceEvent
+	var mu sync.Mutex
+	err := fn(func(_ context.Context, t ghsource.Trigger) {
+		mu.Lock()
+		out = append(out, Event(instance, t))
 		mu.Unlock()
 	})
 	if err != nil {
-		return plugin.ForceResult{}, plugin.Errorf(plugin.CodeInternalError, err.Error())
+		return nil, plugin.Errorf(plugin.CodeInternalError, err.Error())
 	}
-	return plugin.ForceResult{Events: out}, nil
+	return out, nil
+}
+
+// parseTargetRef reads "owner/repo#n" (or "owner/repo").
+func parseTargetRef(ref string) (string, int, error) {
+	repo, num, ok := strings.Cut(ref, "#")
+	if !strings.Contains(repo, "/") {
+		return "", 0, fmt.Errorf("github: target %q is not owner/repo#number", ref)
+	}
+	if !ok {
+		return repo, 0, nil
+	}
+	n, err := strconv.Atoi(num)
+	if err != nil || n <= 0 {
+		return "", 0, fmt.Errorf("github: target %q is not owner/repo#number", ref)
+	}
+	return repo, n, nil
 }
 
 // AppToken mints a fresh App installation token for a resumed run.

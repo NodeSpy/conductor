@@ -13,17 +13,32 @@ import (
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
-// abiSourcer is a ConnectorABI plugin client double: it records the
-// start_source request and streams fixed events, and answers the extension
-// requests.
+// abiSourcer is a plugin client double implementing the whole source
+// surface: it records the start_source request, streams fixed events, and
+// answers poll / translate / app_token / target_head.
 type abiSourcer struct {
-	mu      sync.Mutex
-	req     plugin.StartSourceRequest
-	events  []sdk.SourceEvent
-	nudged  []string
-	forced  []sdk.ForceRequest
-	forceEv []sdk.SourceEvent
-	heads   []sdk.Target
+	mu     sync.Mutex
+	req    plugin.StartSourceRequest
+	events []sdk.SourceEvent
+	polls  []sdk.PollRequest
+	pollEv []sdk.SourceEvent
+	heads  []sdk.Target
+	transl []sdk.TranslateRequest
+}
+
+// plainSourcer is a source that implements nothing optional.
+type plainSourcer struct {
+	req    plugin.StartSourceRequest
+	events []sdk.SourceEvent
+}
+
+func (p *plainSourcer) StartSource(_ context.Context, req plugin.StartSourceRequest, emit func(json.RawMessage)) error {
+	p.req = req
+	for _, e := range p.events {
+		raw, _ := json.Marshal(e)
+		emit(raw)
+	}
+	return nil
 }
 
 func (a *abiSourcer) StartSource(_ context.Context, req plugin.StartSourceRequest, emit func(json.RawMessage)) error {
@@ -36,13 +51,21 @@ func (a *abiSourcer) StartSource(_ context.Context, req plugin.StartSourceReques
 	}
 	return nil
 }
-func (a *abiSourcer) Nudge(_ context.Context, instance string) (bool, error) {
-	a.nudged = append(a.nudged, instance)
-	return true, nil
+func (a *abiSourcer) Poll(_ context.Context, req sdk.PollRequest) ([]sdk.SourceEvent, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.polls = append(a.polls, req)
+	return a.pollEv, nil
 }
-func (a *abiSourcer) Force(_ context.Context, req sdk.ForceRequest) ([]sdk.SourceEvent, error) {
-	a.forced = append(a.forced, req)
-	return a.forceEv, nil
+func (a *abiSourcer) Validate(_ context.Context, req sdk.ValidateRequest) ([]sdk.Problem, error) {
+	if req.Config["secret"] == nil {
+		return []sdk.Problem{{Path: "secret", Message: "required"}}, nil
+	}
+	return nil, nil
+}
+func (a *abiSourcer) Translate(_ context.Context, req sdk.TranslateRequest) ([]sdk.SourceEvent, error) {
+	a.transl = append(a.transl, req)
+	return a.pollEv, nil
 }
 func (a *abiSourcer) AppToken(_ context.Context, _ string, id int64) (string, error) {
 	return "tok-" + itoa64(id), nil
@@ -72,7 +95,7 @@ func runPSI(t *testing.T, psi *pluginSourceIntegration) []core.Trigger {
 	return got
 }
 
-// A ConnectorABI plugin is handed its triggers — filters in structural form —
+// A plugin is handed its triggers — filters in structural form —
 // and a routed event fires exactly the trigger it names: not its siblings on
 // the same event, and with no daemon-side re-evaluation of a filter whose
 // keys only the plugin understands.
@@ -83,7 +106,7 @@ func TestABISourceRoutesToTheNamedTrigger(t *testing.T) {
 	src := &abiSourcer{events: []sdk.SourceEvent{
 		{Event: "self_review", Trigger: a.Ref(), Target: sdk.Target{Repo: "o/r", Number: 7}, Context: map[string]any{"pr": 7}, CatchUp: true},
 	}}
-	psi := &pluginSourceIntegration{source: src, instance: "gh", typ: "github", abi: sdk.ConnectorABI,
+	psi := &pluginSourceIntegration{source: src, instance: "gh", typ: "github",
 		triggers: []CompiledTrigger{a, b}, log: t.Logf}
 	got := runPSI(t, psi)
 
@@ -111,7 +134,7 @@ func TestABISourceRefusesMisroutedEvents(t *testing.T) {
 		{Event: "new_comment", Trigger: "9:gh.new_comment"},       // no such trigger
 		{Event: "new_comment", Trigger: a.Ref(), Instance: "gh2"}, // another instance
 	}}
-	psi := &pluginSourceIntegration{source: src, instance: "gh", typ: "github", abi: sdk.ConnectorABI,
+	psi := &pluginSourceIntegration{source: src, instance: "gh", typ: "github",
 		triggers: []CompiledTrigger{a}, log: t.Logf}
 	if got := runPSI(t, psi); len(got) != 0 {
 		t.Fatalf("misrouted events fired: %+v", got)
@@ -121,7 +144,7 @@ func TestABISourceRefusesMisroutedEvents(t *testing.T) {
 // TRUST. Without trusted_source a plugin's events are untrusted input, as
 // they always were: a target-trust claim is ignored and an engine-interpreted
 // kind is dropped. With it, both are believed — but only for an event the
-// plugin declares (and _closed, from a ConnectorABI source).
+// plugin declares (and _closed).
 func TestABISourceTrustIsTheOperatorsGrant(t *testing.T) {
 	nc := abiTrigger(t, 0, "gh.new_comment", "", "", nil)
 	rel := abiTrigger(t, 1, "gh.release", "", "", nil)
@@ -134,7 +157,7 @@ func TestABISourceTrustIsTheOperatorsGrant(t *testing.T) {
 	declared := map[string]bool{"new_comment": true, "release": true}
 
 	untrusted := runPSI(t, &pluginSourceIntegration{source: &abiSourcer{events: events}, instance: "gh", typ: "github",
-		abi: sdk.ConnectorABI, triggers: []CompiledTrigger{nc, rel}, declared: declared, log: t.Logf})
+		triggers: []CompiledTrigger{nc, rel}, declared: declared, log: t.Logf})
 	// new_comment and _closed are engine-interpreted: dropped. release fires
 	// twice (its own event, and the failing_checks claim falling back to it),
 	// neither trusted.
@@ -148,7 +171,7 @@ func TestABISourceTrustIsTheOperatorsGrant(t *testing.T) {
 	}
 
 	trusted := runPSI(t, &pluginSourceIntegration{source: &abiSourcer{events: events}, instance: "gh", typ: "github",
-		abi: sdk.ConnectorABI, trusted: true, triggers: []CompiledTrigger{nc, rel}, declared: declared, log: t.Logf})
+		trusted: true, triggers: []CompiledTrigger{nc, rel}, declared: declared, log: t.Logf})
 	kinds := map[string]core.Trigger{}
 	for _, tr := range trusted {
 		kinds[tr.Kind] = tr
@@ -168,49 +191,75 @@ func TestABISourceTrustIsTheOperatorsGrant(t *testing.T) {
 	}
 }
 
-// A plain (pre-extension) plugin is driven exactly as before: no triggers on
-// start_source, routing fields ignored, catch_up and target claims ignored.
-func TestLegacySourceIgnoresExtensionFields(t *testing.T) {
+// Every source gets the same contract — there is no older tier driven
+// differently. A plugin that implements nothing optional is still sent its
+// triggers and still has catch_up honored; it simply cannot be polled or
+// forced, and says so.
+func TestEverySourceGetsTheSameContract(t *testing.T) {
 	tr := abiTrigger(t, 0, "s.alert", "", "", nil)
-	src := &abiSourcer{events: []sdk.SourceEvent{
-		{Event: "alert", Trigger: "nonsense", CatchUp: true, TargetTrusted: true},
-	}}
-	psi := &pluginSourceIntegration{source: src, instance: "s", typ: "sentry", trusted: false,
-		triggers: []CompiledTrigger{tr}, log: t.Logf}
+	src := &plainSourcer{events: []sdk.SourceEvent{{Event: "alert", CatchUp: true}}}
+	psi := &pluginSourceIntegration{source: src, instance: "s", typ: "sentry", triggers: []CompiledTrigger{tr}, log: t.Logf}
 	got := runPSI(t, psi)
-	if len(src.req.Triggers) != 0 {
-		t.Fatal("a plugin that did not ask for triggers was sent them")
+	if len(src.req.Triggers) != 1 || src.req.Triggers[0].ID != tr.Ref() {
+		t.Fatalf("every source is sent its triggers: %+v", src.req.Triggers)
 	}
-	if len(got) != 1 || got[0].CatchUp || got[0].TargetTrusted {
-		t.Fatalf("legacy source behaviour changed: %+v", got)
+	if len(got) != 1 || !got[0].CatchUp {
+		t.Fatalf("catch_up is honored for every source: %+v", got)
 	}
 	if psi.SweepNow() {
-		t.Fatal("a legacy source has no nudge")
+		t.Fatal("a source that does not poll cannot be nudged")
 	}
 	if _, err := psi.Force(context.Background(), "alert", "o/r", 1, func(context.Context, core.Trigger) {}); err == nil {
-		t.Fatal("a legacy source has no force")
+		t.Fatal("a source that does not poll cannot be forced")
+	}
+	if err := psi.SweepOnce(context.Background(), func(context.Context, core.Trigger) {}); err == nil {
+		t.Fatal("a source that does not poll has no dry run")
 	}
 }
 
-// nudge / force / app_token reach the plugin; forced events are routed like
-// any other and marked Force.
-func TestABISourceExtensionCalls(t *testing.T) {
+// poll (now, target, dry run), translate and app_token reach the plugin;
+// only events a target poll RETURNS are forced.
+func TestSourcePollTranslateAndAppToken(t *testing.T) {
 	mc := abiTrigger(t, 0, "gh.merge_conflict", "", "", nil)
-	src := &abiSourcer{forceEv: []sdk.SourceEvent{{Event: "merge_conflict", Trigger: mc.Ref(), TargetTrusted: true,
+	src := &abiSourcer{pollEv: []sdk.SourceEvent{{Event: "merge_conflict", Trigger: mc.Ref(), TargetTrusted: true,
 		Target: sdk.Target{Repo: "o/r", Number: 3}}}}
-	psi := &pluginSourceIntegration{source: src, instance: "gh", typ: "github", abi: sdk.ConnectorABI, trusted: true,
+	psi := &pluginSourceIntegration{source: src, instance: "gh", typ: "github", trusted: true,
 		triggers: []CompiledTrigger{mc}, declared: map[string]bool{"merge_conflict": true}, log: t.Logf}
-	if !psi.SweepNow() || len(src.nudged) != 1 || src.nudged[0] != "gh" {
-		t.Fatalf("nudge not delivered: %v", src.nudged)
+
+	var streamed []core.Trigger
+	if err := psi.Start(context.Background(), func(_ context.Context, tr core.Trigger) { streamed = append(streamed, tr) }); err != nil {
+		t.Fatal(err)
 	}
+	if !psi.SweepNow() || len(src.polls) != 1 || src.polls[0].Mode != sdk.PollNow || src.polls[0].Instance != "gh" {
+		t.Fatalf("poll now not delivered: %+v", src.polls)
+	}
+	// Events a poll-now RETURNS are routed through the stream's emit, unforced.
+	if len(streamed) != 1 || streamed[0].Force {
+		t.Fatalf("poll-now events: %+v", streamed)
+	}
+
 	var got []core.Trigger
 	n, err := psi.Force(context.Background(), "merge_conflict", "o/r", 3, func(_ context.Context, tr core.Trigger) { got = append(got, tr) })
 	if err != nil || n != 1 || len(got) != 1 || !got[0].Force || got[0].Kind != "merge_conflict" {
 		t.Fatalf("force: n=%d err=%v got=%+v", n, err, got)
 	}
-	if src.forced[0].Kind != "merge_conflict" || src.forced[0].Repo != "o/r" || src.forced[0].Number != 3 {
-		t.Fatalf("force request: %+v", src.forced[0])
+	if p := src.polls[1]; p.Mode != sdk.PollTarget || p.Event != "merge_conflict" || p.Target != "o/r#3" {
+		t.Fatalf("target poll request: %+v", p)
 	}
+
+	var dry []core.Trigger
+	if err := psi.SweepOnce(context.Background(), func(_ context.Context, tr core.Trigger) { dry = append(dry, tr) }); err != nil || len(dry) != 1 || dry[0].Force {
+		t.Fatalf("dry run: %v %+v", err, dry)
+	}
+	if src.polls[2].Mode != sdk.PollDryRun {
+		t.Fatalf("dry run request: %+v", src.polls[2])
+	}
+
+	trs := psi.Translate(context.Background(), "pull_request", []byte(`{}`))
+	if tr := src.transl[0]; len(trs) != 1 || tr.Event != "pull_request" || tr.Body != "{}" || len(tr.Triggers) != 1 || tr.Instance != "gh" {
+		t.Fatalf("translate: %+v %+v", trs, src.transl)
+	}
+
 	if tok, err := psi.AppToken(context.Background(), 42); err != nil || tok != "tok-42" {
 		t.Fatalf("app token: %q %v", tok, err)
 	}
@@ -236,21 +285,17 @@ func TestIdentitySourceReadsTheConnection(t *testing.T) {
 	}
 }
 
-// Only a ConnectorABI plugin declaring a sweep verb has it answered by the
-// daemon; anything else is forwarded as it always was.
+// A plugin declaring a sweep verb has it answered by the daemon — any
+// plugin, there is no tier.
 func TestSweepVerbIsAnsweredByTheDaemon(t *testing.T) {
 	SetSweepHook(func(context.Context) (int, error) { return 4, nil })
 	defer SetSweepHook(nil)
 	inv := &countInvoker{}
 	decl := &TypeDecl{Type: "github", Verbs: []VerbDecl{{Name: "sweep"}}}
-	e := &externalImpl{client: inv, decl: decl, abi: sdk.ConnectorABI, log: t.Logf}
+	e := &externalImpl{client: inv, decl: decl, log: t.Logf}
 	out, err := e.Invoke(context.Background(), "sweep", nil)
 	if err != nil || out["nudged"] != 4 || inv.calls != 0 {
-		t.Fatalf("ABI sweep: out=%v err=%v forwarded=%d", out, err, inv.calls)
-	}
-	old := &externalImpl{client: inv, decl: decl, abi: 0, log: t.Logf}
-	if _, err := old.Invoke(context.Background(), "sweep", nil); err != nil || inv.calls != 1 {
-		t.Fatalf("a pre-extension plugin's sweep verb must be forwarded: err=%v calls=%d", err, inv.calls)
+		t.Fatalf("sweep: out=%v err=%v forwarded=%d", out, err, inv.calls)
 	}
 }
 
@@ -264,7 +309,7 @@ func (f *countInvoker) Invoke(context.Context, plugin.InvokeRequest) (map[string
 // A head read goes to the plugin only for a trusted target this instance emitted.
 func TestABITargetHeadOnlyForOwnTrustedTargets(t *testing.T) {
 	src := &abiSourcer{}
-	e := &externalImpl{source: src, instance: "gh", abi: sdk.ConnectorABI, decl: &TypeDecl{}}
+	e := &externalImpl{source: src, instance: "gh", decl: &TypeDecl{}}
 	own := core.Trigger{Instance: "gh", TargetTrusted: true, Target: core.Target{Repo: "o/r", Number: 5}}
 	if h, err := e.TargetHead(context.Background(), own); err != nil || h.SHA != "head1" || h.State != "open" {
 		t.Fatalf("own trusted target: %+v %v", h, err)
@@ -306,5 +351,22 @@ func TestPluginInPlaceOfBundledIsRestored(t *testing.T) {
 	UnregisterExternalType("github")
 	if got, _ := TypeDeclFor("github"); got != bundled || IsExternalType("github") {
 		t.Fatal("the bundled github registration was not restored")
+	}
+}
+
+// The plugin's own checks run as the source's Validate, naming each problem;
+// a plugin with none of its own is valid.
+func TestSourceValidateRunsThePluginsChecks(t *testing.T) {
+	tr := abiTrigger(t, 0, "gh.release", "", "", nil)
+	bad := &pluginSourceIntegration{source: &abiSourcer{}, instance: "gh", config: map[string]any{}, triggers: []CompiledTrigger{tr}, log: t.Logf}
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "secret: required") {
+		t.Fatalf("plugin's problems not reported: %v", err)
+	}
+	good := &pluginSourceIntegration{source: &abiSourcer{}, instance: "gh", config: map[string]any{"secret": "s"}, log: t.Logf}
+	if err := good.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&pluginSourceIntegration{source: &plainSourcer{}, instance: "s"}).Validate(); err != nil {
+		t.Fatalf("a plugin without checks is valid: %v", err)
 	}
 }

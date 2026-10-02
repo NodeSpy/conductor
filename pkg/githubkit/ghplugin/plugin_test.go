@@ -22,7 +22,7 @@ func TestDescribeIsTheSharedDecl(t *testing.T) {
 	if !reflect.DeepEqual(d, Decl()) {
 		t.Fatal("Describe must return Decl() itself")
 	}
-	if d.Type != "github" || d.Kind != plugin.KindConnector || d.ABI < plugin.ConnectorABI {
+	if d.Type != "github" || d.Kind != plugin.KindConnector {
 		t.Fatalf("type=%q kind=%q abi=%d", d.Type, d.Kind, d.ABI)
 	}
 	var sweep bool

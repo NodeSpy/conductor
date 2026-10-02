@@ -17,7 +17,7 @@ import (
 	"github.com/NodeSpy/conductor/pkg/sourcekit"
 )
 
-// WireTriggers is a case's triggers as a ConnectorABI plugin receives them on
+// WireTriggers is a case's triggers as a plugin receives them on
 // start_source — ids, events, options, and filters in the structural form —
 // plus the id → name map a host routes events back by.
 func WireTriggers(t *testing.T, ts []Trigger) ([]plugin.SourceTrigger, map[string]string) {
@@ -45,7 +45,7 @@ func WireTriggers(t *testing.T, ts []Trigger) ([]plugin.SourceTrigger, map[strin
 }
 
 // WireStarter drives a plugin BINARY over the bare SDK protocol, as a minimal
-// daemon would: describe (it must speak ConnectorABI), start_source with the
+// daemon would: describe start_source with the
 // case's connection and triggers, collect plugin.event notifications, answer
 // a nudge with plugin.nudge. A routed event is mapped back to its trigger's
 // name; its target-trust claim is taken at its word (there is no operator
@@ -76,9 +76,6 @@ func WireStarter(bin string) Starter {
 		var decl plugin.Decl
 		if err := w.call("plugin.describe", struct{}{}, &decl); err != nil {
 			t.Fatalf("describe: %v", err)
-		}
-		if decl.ABI < plugin.ConnectorABI {
-			t.Fatalf("plugin speaks connector ABI %d, want >= %d", decl.ABI, plugin.ConnectorABI)
 		}
 		req := plugin.StartSourceRequest{Instance: "gh", Config: c.Connection(env), Triggers: triggers}
 		if err := w.call(plugin.MethodStartSource, req, nil); err != nil {
@@ -169,9 +166,9 @@ func (w *wire) call(method string, params, result any) error {
 
 func (w *wire) Nudge(t *testing.T) {
 	t.Helper()
-	var res plugin.NudgeResult
-	if err := w.call(plugin.MethodNudge, plugin.NudgeRequest{Instance: "gh"}, &res); err != nil || !res.Nudged {
-		t.Fatalf("nudge: nudged=%v err=%v", res.Nudged, err)
+	var res plugin.PollResult
+	if err := w.call(plugin.MethodPoll, plugin.PollRequest{Instance: "gh", Mode: plugin.PollNow}, &res); err != nil {
+		t.Fatalf("poll: %v", err)
 	}
 }
 
