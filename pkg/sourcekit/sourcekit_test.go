@@ -51,7 +51,6 @@ func TestDedup(t *testing.T) {
 	}
 }
 
-
 func freeAddr(t *testing.T) string {
 	t.Helper()
 	// Bind :0 to grab a free port, then hand the address to the Listener.
@@ -134,7 +133,6 @@ func TestServeBackCompat(t *testing.T) {
 		t.Fatal("back-compat callback never fired")
 	}
 }
-
 
 func TestServeReqNeedsAddr(t *testing.T) {
 	if err := (Listener{}).ServeReq(context.Background(), func(*Request) {}); err == nil {
