@@ -32,6 +32,10 @@ func TestOnlyAuditedSourcesClaimTargetTrust(t *testing.T) {
 		"pkg/githubkit/ghsource/events.go": "a signature-verified GitHub payload (or a read the source made with " +
 			"its own credentials); the repo and number are GitHub's",
 		"pkg/githubkit/ghsource/types.go": "ghsource.Trigger declares the field it carries for its hosts",
+		"pkg/githubkit/ghsource/ghsourcetest/ghsourcetest.go": "the conformance suite RECORDS the bit an implementation " +
+			"fired, to assert it; it dispatches nothing",
+		"pkg/githubkit/ghsource/ghsourcetest/wire.go": "the conformance wire driver records a plugin's claim to " +
+			"compare it; it dispatches nothing",
 		"internal/connector/pluginsource.go": "believes a source plugin's target-trust CLAIM only under the operator's " +
 			"trusted_source grant for that connector; any other plugin target is untrusted, claim or no claim",
 		"internal/integrations/slack/handle.go": "a synthetic target built from the channel id Slack assigned",
