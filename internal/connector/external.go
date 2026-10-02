@@ -429,6 +429,17 @@ func (e *externalImpl) Invoke(ctx context.Context, verb string, opts map[string]
 	if pv := e.decl.PollVerb(); pv != "" && verb == pv {
 		return pollNow(ctx, e.instance)
 	}
+	if v, ok := e.decl.Verb(verb); ok && v.Ask && v.Semantics != nil && v.Semantics.OpensConversation != nil {
+		// An ask over a declared conversation: the plugin posts, the
+		// engine waits for the reply (runAsk over the conversation channel).
+		return runAsk(ctx, &conversationChannel{e: e, verb: v, opts: opts}, opts)
+	}
+	return e.invokePlugin(ctx, verb, opts)
+}
+
+// invokePlugin forwards the verb to the plugin with this instance's
+// credentials and schema-validates the untrusted response.
+func (e *externalImpl) invokePlugin(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
 	// Audit the credential hand-off once per instance (name, never value).
 	if len(e.secretRefs) > 0 {
 		e.auditOnce.Do(func() {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/plugin"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
@@ -161,6 +162,19 @@ func (p *pluginSourceIntegration) triggersFor(ev pluginEvent, force bool) []core
 	kind, ok := p.kindFor(ev)
 	if !ok {
 		return nil
+	}
+	if r := p.sem[kind]; r != nil && r.ConversationReply != nil {
+		// A reply in a conversation the plugin opened: delivered to the
+		// engine's inbox first; one nobody is waiting on is an ordinary event.
+		facts := core.Trigger{Context: ev.Context, Target: coreTarget(ev.Target)}.Facts()
+		cr := r.ConversationReply
+		a, _ := core.LookupFact(facts, cr.Author)
+		tx, _ := core.LookupFact(facts, cr.Text)
+		author, _ := a.(string)
+		text, _ := tx.(string)
+		if handoff.Conversations.DeliverReply(p.instance, core.RenderFacts(cr.ID, facts), author, text) {
+			return nil
+		}
 	}
 	// The plugin's claim that the platform assigned this target. Trust in a
 	// plugin was decided once, at install (plugin_trust); after that its

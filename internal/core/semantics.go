@@ -79,7 +79,7 @@ func (t Trigger) Cursor() (id int64, stream string, ok bool) {
 	if c == nil {
 		return 0, "", false
 	}
-	id, ok = intFact(t.Context[c.ID])
+	id, ok = intFact(fact(t, c.ID))
 	if !ok || id <= 0 {
 		return 0, "", false
 	}
@@ -92,7 +92,7 @@ func (t Trigger) AuthorLogin() string {
 	if a == nil {
 		return ""
 	}
-	s, _ := t.Context[a.Login].(string)
+	s, _ := fact(t, a.Login).(string)
 	return s
 }
 
@@ -102,7 +102,7 @@ func (t Trigger) AuthorAutomated() bool {
 	if a == nil || a.Automated == "" {
 		return false
 	}
-	b, _ := t.Context[a.Automated].(bool)
+	b, _ := fact(t, a.Automated).(bool)
 	return b
 }
 
@@ -113,7 +113,7 @@ func (t Trigger) TargetLabels() []string {
 		return nil
 	}
 	var out []string
-	switch v := t.Context[f].(type) {
+	switch v := fact(t, f).(type) {
 	case []string:
 		out = v
 	case []any:
@@ -139,7 +139,7 @@ func (t Trigger) CloseOutcome() string {
 	if c == nil || c.Outcome == nil {
 		return ""
 	}
-	if b, _ := t.Context[c.Outcome.Fact].(bool); b {
+	if b, _ := fact(t, c.Outcome.Fact).(bool); b {
 		return c.Outcome.True
 	}
 	return c.Outcome.False
@@ -153,9 +153,9 @@ func (t Trigger) Reverts() (numbers []int, corroborated bool) {
 		return nil, false
 	}
 	if c.Reverts.Corroborated != "" {
-		corroborated, _ = t.Context[c.Reverts.Corroborated].(bool)
+		corroborated, _ = fact(t, c.Reverts.Corroborated).(bool)
 	}
-	switch v := t.Context[c.Reverts.Fact].(type) {
+	switch v := fact(t, c.Reverts.Fact).(type) {
 	case []int:
 		numbers = v
 	case []any:
@@ -206,7 +206,7 @@ func renderFacts(tmpl string, facts map[string]any) string {
 		}
 		b.WriteString(tmpl[:i])
 		name := strings.TrimPrefix(strings.TrimSpace(tmpl[i+2:i+j]), ".")
-		if v, ok := facts[name]; ok && v != nil {
+		if v, ok := LookupFact(facts, name); ok && v != nil {
 			b.WriteString(fmt.Sprint(v))
 		}
 		tmpl = tmpl[i+j+2:]
@@ -298,4 +298,31 @@ func (t Trigger) Facts() map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+// LookupFact reads a fact by name, walking a dotted path through nested maps
+// ("slack.user" → facts["slack"]["user"]); a flat key of that exact name
+// wins.
+func LookupFact(facts map[string]any, name string) (any, bool) {
+	if v, ok := facts[name]; ok {
+		return v, true
+	}
+	var cur any = facts
+	for _, part := range strings.Split(name, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		if cur, ok = m[part]; !ok {
+			return nil, false
+		}
+	}
+	return cur, true
+}
+
+// fact reads a declared fact off the trigger's context (dotted paths walk
+// nested maps).
+func fact(t Trigger, name string) any {
+	v, _ := LookupFact(t.Context, name)
+	return v
 }
