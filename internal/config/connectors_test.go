@@ -55,33 +55,60 @@ triggers:
 	}
 }
 
-func TestLoadLegacyOnlyStillLoads(t *testing.T) {
-	path := writeTestConfig(t, `
-integrations:
-  - type: github
-    name: acme
-x-steps:
-  fixer: &fixer
-    type: agent
-    name: fixer
-`)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+// TestLoadRejectsEachLegacyBlock proves every top-level key removed with the
+// legacy config schema (plugin-contract.md decision Q4, §3 rows V3/G17/G18)
+// fails to load with the one uniform migration message, naming the key.
+func TestLoadRejectsEachLegacyBlock(t *testing.T) {
+	cases := []struct {
+		key  string
+		body string
+	}{
+		{"integrations", "integrations:\n  - type: github\n    name: acme\n"},
+		{"notify", "notify: { push: true }\n"},
+		{"handoff", "handoff: { web: { base_url: https://a.test } }\n"},
+		{"handoffs", "handoffs: { x: { web: { base_url: https://a.test } } }\n"},
+		{"controllers", "controllers: { pae: { type: paseo } }\n"},
+		{"control", "control: { shadow: true }\n"},
+		{"paseo_bin", "paseo_bin: /usr/local/bin/paseo\n"},
 	}
-	if cfg.HasConnectors() {
-		t.Fatal("a legacy-only config should report HasConnectors() = false")
+	for _, c := range cases {
+		t.Run(c.key, func(t *testing.T) {
+			path := writeTestConfig(t, c.body)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("%s: should have failed to load", c.key)
+			}
+			want := "`" + c.key + ":` was removed with the legacy config schema"
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s: error = %q, want substring %q", c.key, err.Error(), want)
+			}
+			if !strings.Contains(err.Error(), "conductor config migrate") {
+				t.Fatalf("%s: error should point at `conductor config migrate`, got %q", c.key, err.Error())
+			}
+		})
+	}
+}
+
+// TestLoadRejectsFirstLegacyBlockDeterministically proves that when several
+// removed keys are present at once, checkLegacyBlocks reports the same one
+// every time (its fixed check order), not whichever map iteration happened
+// to land first.
+func TestLoadRejectsFirstLegacyBlockDeterministically(t *testing.T) {
+	path := writeTestConfig(t, "integrations: []\nnotify: {}\ncontrollers: {}\n")
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "`integrations:`") {
+		t.Fatalf("want the integrations: error first, got %v", err)
 	}
 }
 
 func TestLoadNeitherIntegrationsNorConnectorsErrors(t *testing.T) {
-	path := writeTestConfig(t, "control: {}\n")
+	path := writeTestConfig(t, "x-steps:\n  fixer: &fixer { type: agent, name: fixer }\n")
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("a config with neither integrations nor connectors should fail to load")
+		t.Fatal("a config with no connectors should fail to load")
 	}
-	if !strings.Contains(err.Error(), "no integrations or connectors") {
-		t.Fatalf("error = %q, want substring %q", err.Error(), "no integrations or connectors")
+	if !strings.Contains(err.Error(), "no connectors configured") {
+		t.Fatalf("error = %q, want substring %q", err.Error(), "no connectors configured")
 	}
 }
 
@@ -155,26 +182,17 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			wantErr: `runtime "r1": unknown host "nope"`,
 		},
 		{
-			name: "more than one default across runtimes and controllers combined",
+			name: "more than one default across runtimes",
 			build: func() *Config {
 				return &Config{
 					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
-					Runtimes:      map[string]RuntimeConfig{"r1": {Use: "paseo", Default: true}},
-					Controllers:   map[string]ControllerConfig{"c1": {Type: "paseo", Default: true}},
+					Runtimes: map[string]RuntimeConfig{
+						"r1": {Use: "paseo", Default: true},
+						"r2": {Use: "paseo", Default: true},
+					},
 				}
 			},
 			wantErr: "at most one runtime may set `default: true`",
-		},
-		{
-			name: "same name in runtimes and controllers",
-			build: func() *Config {
-				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
-					Runtimes:      map[string]RuntimeConfig{"dup": {Use: "paseo"}},
-					Controllers:   map[string]ControllerConfig{"dup": {Type: "paseo"}},
-				}
-			},
-			wantErr: `"dup" is defined under both runtimes: and controllers:`,
 		},
 		{
 			name: "host missing address",
@@ -551,7 +569,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			build: func() *Config {
 				return &Config{
 					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
-					Controllers:   map[string]ControllerConfig{"gem": {Agent: "gemini"}},
+					Runtimes:      map[string]RuntimeConfig{"gem": {Use: "acp", Agent: "gemini"}},
 					Triggers: []TriggerSpec{validTrigger([]Step{
 						{ID: "s1", Type: "agent", Agent: "a", Runtime: "gem", Images: []string{"/tmp/x.png"}},
 					}, nil)},
@@ -564,7 +582,7 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			build: func() *Config {
 				return &Config{
 					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
-					Controllers:   map[string]ControllerConfig{"gem": {Agent: "gemini"}},
+					Runtimes:      map[string]RuntimeConfig{"gem": {Use: "acp", Agent: "gemini"}},
 					Triggers: []TriggerSpec{validTrigger([]Step{
 						{ID: "s1", Type: "agent", Agent: "a", Runtime: "gem", Detach: true},
 					}, nil)},
@@ -992,20 +1010,11 @@ func TestAgentHostReferenceUnknown(t *testing.T) {
 	}
 }
 
-func TestAgentLegacyControllerReferenceStillPasses(t *testing.T) {
-	c := connBaseCfg()
-	c.Controllers = map[string]ControllerConfig{"pae": {Type: "paseo"}}
-	setTestStep(c, "fixer", Step{Runtime: "pae"})
-	if err := c.Validate(); err != nil {
-		t.Fatalf("an agent referencing a legacy controllers: entry should still pass, got %v", err)
-	}
-}
-
 // TestConfigAgentCapPrecedence proves the effective concurrency accessors
-// prefer the global policy.concurrency values and fall back to the legacy
-// control fields.
+// prefer the global policy.concurrency values and fall back to the built-in
+// defaults.
 func TestConfigAgentCapPrecedence(t *testing.T) {
-	// Nothing set: the legacy default (3) applies.
+	// Nothing set: the built-in default (3) applies.
 	c := &Config{}
 	if got := c.AgentCap(); got != 3 {
 		t.Fatalf("default AgentCap = %d, want 3", got)
@@ -1014,17 +1023,7 @@ func TestConfigAgentCapPrecedence(t *testing.T) {
 		t.Fatalf("default AgentsPerHour = %d, want 0 (unlimited)", got)
 	}
 
-	// Only legacy set: it applies.
-	c.Control.MaxConcurrentAgents = intPtr(5)
-	c.Control.MaxAgentsPerHour = 7
-	if got := c.AgentCap(); got != 5 {
-		t.Fatalf("legacy AgentCap = %d, want 5", got)
-	}
-	if got := c.AgentsPerHour(); got != 7 {
-		t.Fatalf("legacy AgentsPerHour = %d, want 7", got)
-	}
-
-	// policy.concurrency set: it wins over legacy.
+	// policy.concurrency set: it wins over the default.
 	c.Policy = &Policy{Concurrency: &Concurrency{MaxAgents: intPtr(2), MaxAgentsPerHour: intPtr(9)}}
 	if got := c.AgentCap(); got != 2 {
 		t.Fatalf("policy AgentCap = %d, want 2", got)
@@ -1033,10 +1032,25 @@ func TestConfigAgentCapPrecedence(t *testing.T) {
 		t.Fatalf("policy AgentsPerHour = %d, want 9", got)
 	}
 
-	// A policy block without concurrency still falls back to legacy.
+	// A policy block without concurrency falls back to the built-in default.
 	c.Policy = &Policy{}
-	if got := c.AgentCap(); got != 5 {
-		t.Fatalf("fallback AgentCap = %d, want 5", got)
+	if got := c.AgentCap(); got != 3 {
+		t.Fatalf("fallback AgentCap = %d, want 3", got)
+	}
+}
+
+// TestConfigGlobalPauseLabel proves the top-level policy.pause_label is
+// readable without a trigger-scoped cascade (the universal gate's fleet-wide
+// default — see (*Engine).Run's early pause-label check).
+func TestConfigGlobalPauseLabel(t *testing.T) {
+	c := &Config{}
+	if got := c.GlobalPauseLabel(); got != "" {
+		t.Fatalf("default GlobalPauseLabel = %q, want empty", got)
+	}
+	label := "conductor:off"
+	c.Policy = &Policy{PauseLabel: &label}
+	if got := c.GlobalPauseLabel(); got != label {
+		t.Fatalf("GlobalPauseLabel = %q, want %q", got, label)
 	}
 }
 

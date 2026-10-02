@@ -1715,12 +1715,6 @@ func (c *Config) validateConnectors() error {
 	if len(c.SecretRefs) > 0 {
 		return fmt.Errorf("config: the secrets: block was replaced by vaults: entries and {{ vault \"<name>\" \"<key>\" }} references — run `conductor config migrate` with the release before the plugin contract, or rewrite it by hand")
 	}
-	// The notify: block was replaced by conductor.* lifecycle triggers on
-	// the connectors model. Legacy configs (integrations:) keep the legacy
-	// delivery until they migrate.
-	if c.Notify.Configured() && len(c.Integrations) == 0 && c.HasConnectors() {
-		return fmt.Errorf("config: the notify: block was replaced by triggers on the conductor.* lifecycle events (on: conductor.escalate, …) — run `conductor config migrate` with the release before the plugin contract, or rewrite it by hand")
-	}
 	for name, ref := range c.ConnectorsMap {
 		if name == "" {
 			return fmt.Errorf("config: connectors: empty connector name")
@@ -1889,8 +1883,8 @@ func (c *Config) validateConnectors() error {
 	return nil
 }
 
-// validateRuntimeDefaults enforces at most one default across runtimes and
-// legacy controllers combined (they share the registry).
+// validateRuntimeDefaults enforces at most one `runtimes:` entry flagged
+// default:true.
 func (c *Config) validateRuntimeDefaults() error {
 	defaults := 0
 	for _, rt := range c.Runtimes {
@@ -1898,18 +1892,8 @@ func (c *Config) validateRuntimeDefaults() error {
 			defaults++
 		}
 	}
-	for _, cc := range c.Controllers {
-		if cc.Default {
-			defaults++
-		}
-	}
 	if defaults > 1 {
 		return fmt.Errorf("config: at most one runtime may set `default: true` (%d do)", defaults)
-	}
-	for name := range c.Runtimes {
-		if _, dup := c.Controllers[name]; dup {
-			return fmt.Errorf("config: %q is defined under both runtimes: and controllers:", name)
-		}
 	}
 	return nil
 }

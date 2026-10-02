@@ -598,14 +598,17 @@ func (st *packInstantiation) validateRequires(ns string, man *PackManifest, inst
 			return fmt.Errorf("pack %q: store binding %s -> %q names no store in your config", ns, name, bound)
 		}
 	}
-	// Handoffs.
+	// Handoffs: a bare connector name (an ask-capable connector — slack,
+	// discord, web — presents the draft), the same binding a step's own
+	// `handoff:` resolves to in the connectors model (see
+	// pack_connboundary.go, pack_refs.go).
 	for _, name := range req.Handoffs {
 		bound, ok := env.handoff[name]
 		if !ok {
-			return fmt.Errorf("pack %q: requires handoff %q — bind it: handoffs: { %s: <your-handoff> }", ns, name, name)
+			return fmt.Errorf("pack %q: requires handoff %q — bind it: handoffs: { %s: <your-connector> }", ns, name, name)
 		}
-		if _, ok := st.cfg.Handoffs[bound]; !ok {
-			return fmt.Errorf("pack %q: handoff binding %s -> %q names no handoff in your config", ns, name, bound)
+		if _, ok := st.cfg.ConnectorsMap[bound]; !ok {
+			return fmt.Errorf("pack %q: handoff binding %s -> %q names no connector in your config (defined: %s)", ns, name, bound, connectorNames(st.cfg))
 		}
 	}
 	// Secrets: bound to a secret/vault reference the consumer owns.
