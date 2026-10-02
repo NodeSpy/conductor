@@ -119,6 +119,10 @@ func mapDecl(d *plugin.Decl) *TypeDecl {
 		td.Events = append(td.Events, EventDecl{
 			Name: e.Name, Desc: e.Desc, Dynamic: e.Dynamic,
 			Filters: mapSchema(e.Filters), Context: mapSchema(e.Context), Options: mapSchema(e.Options),
+			// The unified filter surface crosses the wire like the rest of the
+			// schema: a plugin that declares it owns its whole filter surface
+			// exactly as a bundled connector does (EventDecl.FilterKeys).
+			Facts: mapSchema(e.Facts), MatchKeys: mapSchema(e.MatchKeys),
 		})
 	}
 	return td

@@ -73,6 +73,12 @@ type Config struct {
 	// agents it dispatches.
 	Identity Identity `yaml:"identity"`
 
+	// APIBase overrides the GitHub REST/GraphQL API base (GitHub Enterprise
+	// Server, or a hermetic test double). Empty uses PC_GITHUB_API_BASE when
+	// set, else the public API — which an external plugin, whose environment
+	// conductor scrubs, cannot rely on inheriting.
+	APIBase string `yaml:"api_base"`
+
 	// MergeExt merges the host's Action.Ext payloads when a rule's variant is
 	// overlaid onto the defaults' (see MergeRule) — conductor's builtin
 	// adapter merges its config.Action there. nil keeps the override's Ext
@@ -351,6 +357,9 @@ func (g *Source) ensureClients() error {
 			return fmt.Errorf("github[%s]: no credentials — configure app: or token:, or log in with `gh auth login`: %w", g.name, err)
 		}
 		app = newStaticAuth(tok)
+	}
+	if b := strings.TrimRight(g.cfg.APIBase, "/"); b != "" {
+		app.apiBase = b
 	}
 	g.app = app
 	g.rest = newRESTClient(app)

@@ -443,7 +443,62 @@ func dispatch(ctx context.Context, h Handler, method string, params json.RawMess
 		// Ack immediately; stream events in the background until ctx cancels.
 		go func() { _ = sh.StartSource(ctx, req, emit) }()
 		return struct{}{}, nil
+	case MethodNudge:
+		h, ok := h.(NudgeHandler)
+		if !ok {
+			return nil, Errorf(CodeMethodNotFound, "this plugin has no sweep to nudge")
+		}
+		var req NudgeRequest
+		if err := decodeParams(params, &req); err != nil {
+			return nil, err
+		}
+		return wrapResult(h.Nudge(req))
+	case MethodForce:
+		h, ok := h.(ForceHandler)
+		if !ok {
+			return nil, Errorf(CodeMethodNotFound, "this plugin does not support force")
+		}
+		var req ForceRequest
+		if err := decodeParams(params, &req); err != nil {
+			return nil, err
+		}
+		return wrapResult(h.Force(req))
+	case MethodAppToken:
+		h, ok := h.(AppTokenHandler)
+		if !ok {
+			return nil, Errorf(CodeMethodNotFound, "this plugin mints no app tokens")
+		}
+		var req AppTokenRequest
+		if err := decodeParams(params, &req); err != nil {
+			return nil, err
+		}
+		return wrapResult(h.AppToken(req))
 	default:
 		return nil, Errorf(CodeMethodNotFound, "unknown method "+method)
 	}
+}
+
+// decodeParams unmarshals a request's params, as a structured invalid-params
+// error when they do not decode. Absent params leave v zero.
+func decodeParams(params json.RawMessage, v any) *Error {
+	if len(params) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(params, v); err != nil {
+		return Errorf(CodeInvalidParams, err.Error())
+	}
+	return nil
+}
+
+// wrapResult maps a handler's (result, error) onto the dispatch return,
+// keeping a handler's own *Error and wrapping anything else as internal.
+func wrapResult[T any](res T, err error) (any, *Error) {
+	if err != nil {
+		var re *Error
+		if errors.As(err, &re) {
+			return nil, re
+		}
+		return nil, Errorf(CodeInternalError, err.Error())
+	}
+	return res, nil
 }

@@ -14,622 +14,19 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 	gh "github.com/NodeSpy/conductor/internal/integrations/github"
 	"github.com/NodeSpy/conductor/pkg/githubkit"
+	"github.com/NodeSpy/conductor/pkg/githubkit/ghplugin"
+	"github.com/NodeSpy/conductor/pkg/githubkit/ghsource"
 )
 
-// baseGithubContext are the context facts every github event publishes.
-func baseGithubContext() Schema {
-	return Schema{
-		"repo": {Type: TString}, "owner": {Type: TString}, "name": {Type: TString},
-		"pr": {Type: TInt}, "issue": {Type: TInt}, "number": {Type: TInt},
-		"head": {Type: TString}, "base": {Type: TString}, "url": {Type: TString},
-		"kind": {Type: TString}, "title": {Type: TString}, "labels": {Type: TList},
-		"me": {Type: TMap, Desc: "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""},
-	}
-}
-
-// reactionSubjectsDesc documents the comment/review events' reaction_subjects.
-const reactionSubjectsDesc = "what a run handling this event reacts on, as [{kind, id}] for github.react: the review (kind review), the standalone comment (issue_comment | review_comment), or — sweep-recovered — each unresolved thread's opening comment (capped)"
-
-// githubEvent builds one event declaration on the shared base.
-//
-// It declares no Filters schema: github's whole filter surface is the unified
-// `filter:`, whose facts and match keys come from the integration that computes
-// and evaluates them (gh.FilterFacts / gh.FilterMatchKeys). What used to sit in
-// `filters:` and is NOT a predicate over the event — repo routing, the
-// reviewer/assignee identity gates, per-check suppression, the release
-// prerelease switch — is declared in Options instead, next to the other
-// source-side knobs.
-func githubEvent(name, desc string, contextExtra, options Schema) EventDecl {
-	c := baseGithubContext()
-	for k, v := range contextExtra {
-		c[k] = v
-	}
-	o := Schema{
-		"max_attempts_per_head": {Type: TInt, Desc: "soft attempt threshold before backoff"},
-	}
-	for k, v := range options {
-		o[k] = v
-	}
-	return EventDecl{
-		Name: name, Desc: desc, Context: c, Options: o,
-		Facts:     filterSchema(gh.FilterFacts(name)),
-		MatchKeys: filterSchema(gh.FilterMatchKeys(name)),
-	}
-}
-
-// filterSchema converts the github integration's filter surface (the one place
-// facts and match keys are defined, next to the code that computes and
-// evaluates them) into this package's Schema, so a fact cannot be declared
-// here without being published there.
-func filterSchema(kinds map[string]string) Schema {
-	if len(kinds) == 0 {
-		return nil
-	}
-	s := make(Schema, len(kinds))
-	for name, kind := range kinds {
-		switch kind {
-		case gh.FilterBool:
-			s[name] = Field{Type: TBool}
-		case gh.FilterList:
-			s[name] = Field{Type: TList}
-		default:
-			s[name] = Field{Type: TString}
-		}
-	}
-	return s
-}
-
-var githubDecl = &TypeDecl{
-	Type: "github",
-	Desc: "GitHub: PR/issue/check/release events in; comments, reviews, and review requests out.",
-	Connection: Schema{
-		"app":             {Type: TMap, Desc: "GitHub App credentials: app_id, private_key_path"},
-		"token":           {Type: TString, Desc: "PAT used when no App is configured (chain: app → token → gh auth token)"},
-		"webhook":         {Type: TMap, Desc: "event transport and delivery auth: smee_url and/or listen (+ path), secret, verify_signature"},
-		"sweep":           {Type: TMap, Desc: "catch-up sweep: enabled, interval, min_interval, repos"},
-		"me":              {Type: TMap, Desc: "your GitHub login(s): { logins: [...] } — defines \"you\""},
-		"repos":           {Type: TList, Desc: "default repo globs for triggers whose filter names no repo"},
-		"identity":        {Type: TMap, Desc: "credential policy: read_token, write_token, commit_author"},
-		"retry":           {Type: TMap, Desc: "transient dispatch retry: max, backoff"},
-		"project_map":     {Type: TMap, Desc: "repo -> paseo project checkout remap"},
-		"project_rewrite": {Type: TMap, Desc: "blanket owner/org rewrite for checkouts"},
-	},
-	Events: []EventDecl{
-		githubEvent("review_requested", "your review was requested on a PR",
-			nil,
-			Schema{
-				"reviewer": {Type: TMap, Desc: "whose requested review triggers: { logins: [...], teams: [...] } (default: the connector's me:) — an identity gate, not a fact predicate"},
-			}),
-		githubEvent("changes_requested", "a review requested changes, or left inline comments without approving, on your PR (or threads went unresolved) — one event per review",
-			Schema{
-				"head_ref": {Type: TString},
-				"author":   {Type: TString}, "author_is_bot": {Type: TBool, Desc: "the reviewer is an automated bot (account type Bot, or a [bot] login)"},
-				"review_id":               {Type: TInt, Desc: "the submitted review's id (absent for a sweep-recovered run over unresolved threads)"},
-				"review_body":             {Type: TString, Desc: "the review's summary comment"},
-				"review_comments":         {Type: TList, Desc: "the feedback to address: the review's inline comments (or, sweep-recovered, each unresolved thread's opening comment) as {author, path, line, body, url}. A review is ONE event — its inline comments never also fire new_comment"},
-				"review_comments_omitted": {Type: TInt, Desc: "how many comments the size cap left out of review_comments (absent when none) — read them on the PR"},
-				"review_state":            {Type: TString, Desc: "the review's state: changes_requested or commented (absent for a sweep-recovered run)"},
-				"comment_id":              {Type: TInt, Desc: "the highest inline comment id the run covers; the engine dispatches a review once on it"},
-				"comment_kind":            {Type: TString},
-				"reaction_subjects":       {Type: TList, Desc: reactionSubjectsDesc},
-			}, nil),
-		githubEvent("new_comment", "a new comment on your PR — a standalone comment, or ONE submitted review no changes_requested trigger takes (always so for an approval) with all its inline comments",
-			Schema{
-				"author": {Type: TString}, "author_is_bot": {Type: TBool, Desc: "the commenter (or reviewer) is an automated bot (account type Bot, or a [bot] login)"},
-				"comment_body": {Type: TString, Desc: "the comment; for a review, its body then each inline comment as \"path:line: body\""},
-				"head_ref":     {Type: TString},
-				"comment_id":   {Type: TInt, Desc: "the comment's id; for a review, its highest inline comment's"}, "comment_kind": {Type: TString},
-				"review_id":               {Type: TInt, Desc: "set when the event is a submitted review"},
-				"review_body":             {Type: TString, Desc: "the review's summary comment (review events)"},
-				"review_state":            {Type: TString, Desc: "the review's state: commented, approved, changes_requested (review events)"},
-				"review_comments":         {Type: TList, Desc: "the review's inline comments as {author, path, line, body, url} (review events)"},
-				"review_comments_omitted": {Type: TInt, Desc: "how many comments the size cap left out of review_comments (absent when none)"},
-				"reaction_subjects":       {Type: TList, Desc: reactionSubjectsDesc},
-			}, nil),
-		githubEvent("merge_conflict", "your PR became unmergeable", nil, nil),
-		githubEvent("pr_behind", "your PR fell behind its base", nil, nil),
-		githubEvent("failing_checks", "CI concluded failing on your PR",
-			Schema{"failing_check": {Type: TString}, "run_id": {Type: TInt}},
-			Schema{
-				"flaky_rerun": {Type: TMap, Desc: "rerun failed jobs once before dispatching: { enabled, max }"},
-				// Per-CHECK suppression, not a trigger predicate: it decides
-				// which failing check counts as an event at all, one check at
-				// a time, before any trigger is consulted. That is the same
-				// kind of thing flaky_rerun is, so it lives beside it.
-				"ignore_checks": {Type: TList, Desc: "check names that never trigger"},
-			}),
-		githubEvent("stuck_checks", "a CI run has been running too long on your PR",
-			Schema{"run_id": {Type: TInt}, "run_name": {Type: TString}, "run_status": {Type: TString}},
-			Schema{
-				"stuck_after":   {Type: TDuration, Desc: "how long a run may take before it is stuck (default 30m)"},
-				"poll_interval": {Type: TDuration, Desc: "poller cadence (default 15m)"},
-			}),
-		githubEvent("merge_ready", "your PR turned all-green", nil, nil),
-		githubEvent("self_review", "you opened/updated your own PR", nil, nil),
-		githubEvent("issue_matched", "an issue matches your criteria",
-			nil,
-			Schema{
-				"assignee": {Type: TMap, Desc: "whose assignment triggers: { logins: [...] } (default: the connector's me:) — an identity gate, not a fact predicate"},
-			}),
-		githubEvent("release", "a release was published",
-			Schema{"tag_name": {Type: TString}, "prerelease": {Type: TBool}, "draft": {Type: TBool}},
-			Schema{"include_prereleases": {Type: TBool, Desc: "also fire on prereleases (default: skip them)"}}),
-		githubEvent("deployment_status", "a deployment failed or errored",
-			Schema{"state": {Type: TString}, "environment": {Type: TString}, "description": {Type: TString}}, nil),
-		githubEvent("dependabot_alert", "a new Dependabot alert",
-			Schema{"severity": {Type: TString}, "package": {Type: TString}, "summary": {Type: TString}}, nil),
-		githubEvent("secret_scanning_alert", "a new secret-scanning alert",
-			Schema{"secret_type": {Type: TString}}, nil),
-	},
-	Verbs: []VerbDecl{
-		{
-			Name: "comment", Desc: "post an issue/PR conversation comment",
-			Options: Schema{
-				"repo":   {Type: TString, Required: true, Scope: "repo"},
-				"number": {Type: TInt, Desc: "issue or PR number (alias: pr)"},
-				"pr":     {Type: TInt},
-				"body":   {Type: TString, Required: true},
-				"as":     {Type: TString, Enum: []string{"me", "bot"}, Desc: "identity (default me)"},
-			},
-			Outputs: Schema{"id": {Type: TInt}, "url": {Type: TString}},
-		},
-		{
-			Name: "reply", Desc: "reply to a PR review comment thread",
-			Options: Schema{
-				"repo":        {Type: TString, Required: true, Scope: "repo"},
-				"pr":          {Type: TInt, Required: true},
-				"in_reply_to": {Type: TInt, Required: true, Desc: "review comment id to reply to"},
-				"body":        {Type: TString, Required: true},
-				"as":          {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"id": {Type: TInt}, "url": {Type: TString}},
-		},
-		{
-			Name: "request_review", Desc: "request review from users/teams on a PR (also re-requests one who already reviewed)",
-			Options: Schema{
-				"repo":           {Type: TString, Required: true, Scope: "repo"},
-				"pr":             {Type: TInt, Required: true},
-				"reviewers":      {Type: TList, Desc: "user logins"},
-				"team_reviewers": {Type: TList, Desc: "team slugs"},
-				"as":             {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"ok": {Type: TBool}},
-		},
-		{
-			// Re-requesting a prior reviewer is the same GitHub call as
-			// request_review, but guarded: by default only reviewers still
-			// waiting on changes are pinged (see only_outstanding).
-			Name: "rerequest_review", Desc: "re-request review from reviewers whose latest review requested changes on an older commit (skips approvers, pending requests, closed PRs)",
-			Options: Schema{
-				"repo":             {Type: TString, Required: true, Scope: "repo"},
-				"pr":               {Type: TInt, Required: true},
-				"reviewers":        {Type: TList, Desc: "logins"},
-				"team_reviewers":   {Type: TList, Desc: "team slugs"},
-				"as":               {Type: TString, Enum: []string{"me", "bot"}},
-				"only_outstanding": {Type: TBool, Desc: "default true: ping only reviewers whose latest review is CHANGES_REQUESTED on an older commit and who aren't already requested, on an open PR; false re-requests unconditionally"},
-			},
-			Outputs: Schema{"ok": {Type: TBool}, "skipped": {Type: TString}},
-		},
-		{
-			Name: "remove_reviewer", Desc: "cancel a pending review request (remove requested users/teams)",
-			Options: Schema{
-				"repo":           {Type: TString, Required: true, Scope: "repo"},
-				"pr":             {Type: TInt, Required: true},
-				"reviewers":      {Type: TList, Desc: "user logins to un-request"},
-				"team_reviewers": {Type: TList, Desc: "team slugs to un-request"},
-				"as":             {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"ok": {Type: TBool}},
-		},
-		{
-			Name: "submit_review", Desc: "submit a PR review: a summary + verdict, with optional inline file:line comments",
-			Options: Schema{
-				"repo":  {Type: TString, Required: true, Scope: "repo"},
-				"pr":    {Type: TInt, Required: true},
-				"body":  {Type: TString, Desc: "the review summary (top-level comment)"},
-				"event": {Type: TString, Enum: []string{"APPROVE", "REQUEST_CHANGES", "COMMENT"}, Required: true},
-				"comments": {Type: TList, Desc: "inline comments posted with the review: a list of " +
-					"{path, line, body, side?, start_line?, start_side?}. line is the file's line number; " +
-					"side defaults to RIGHT (the new version). start_line/start_side make a multi-line range. " +
-					"Every commented line MUST fall within the PR's diff, or GitHub rejects the whole review."},
-				"as": {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"id": {Type: TInt}, "comments": {Type: TInt, Desc: "inline comments posted"}},
-		},
-		{
-			Name: "pr_diff", Desc: "the PR's unified diff (cached; GitHub caps the .diff media type around 300 files)",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
-				"as": {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"diff": {Type: TString}},
-		},
-		{
-			Name: "pr_get", Desc: "PR metadata + review status: state, merged, base/head, line counts, labels, and the current review decision/approvals",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
-				"as": {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{
-				"title": {Type: TString}, "body": {Type: TString}, "state": {Type: TString},
-				"draft": {Type: TBool}, "merged": {Type: TBool}, "mergeable": {Type: TBool},
-				"author": {Type: TString}, "base": {Type: TString},
-				"head": {Type: TString}, "head_sha": {Type: TString}, "additions": {Type: TInt},
-				"deletions": {Type: TInt}, "changed_files": {Type: TInt}, "labels": {Type: TList}, "url": {Type: TString},
-				"review_decision": {Type: TString, Desc: "APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED, derived from the latest review per reviewer"},
-				"approvals":       {Type: TInt, Desc: "count of reviewers whose latest review is APPROVED"},
-				"approvers":       {Type: TList, Desc: "logins of reviewers whose latest review is APPROVED"},
-			},
-		},
-		{
-			Name: "pr_files", Desc: "changed files: [{path, status, additions, deletions, changes}] (100/page; pass page for more)",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
-				"all": {Type: TBool, Desc: "fetch every page (default: first 100)"},
-				"as":  {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"files": {Type: TList}},
-		},
-		{
-			Name: "review_comments", Desc: "existing inline review comments on the PR: [{path, line, body, user, id}] (100/page)",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
-				"all": {Type: TBool, Desc: "fetch every page (default: first 100)"},
-				"as":  {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"comments": {Type: TList}},
-		},
-		{
-			Name: "file", Desc: "a repo file's raw contents at a ref (cached; GitHub's raw media type caps at ~1 MiB)",
-			Options: Schema{
-				"repo":     {Type: TString, Required: true, Scope: "repo"},
-				"path":     {Type: TString, Required: true, Desc: "repo-relative file path"},
-				"ref":      {Type: TString, Desc: "branch / tag / sha (default: the repo's default branch)"},
-				"as":       {Type: TString, Enum: []string{"me", "bot"}},
-				"optional": {Type: TBool, Desc: "return empty text instead of erroring when the file is missing (404) — for optional convention files"},
-			},
-			Outputs: Schema{"text": {Type: TString}},
-		},
-		{
-			Name: "create_pr", Desc: "open a pull request",
-			Options: Schema{
-				"repo":  {Type: TString, Required: true, Scope: "repo"},
-				"title": {Type: TString, Required: true},
-				"head":  {Type: TString, Required: true, Desc: "the branch with your changes (owner:branch for a fork)"},
-				"base":  {Type: TString, Required: true, Desc: "the branch to merge into"},
-				"body":  {Type: TString},
-				"draft": {Type: TBool},
-				"as":    {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"number": {Type: TInt}, "url": {Type: TString}},
-		},
-		{
-			Name: "merge_pr", Desc: "merge a pull request",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
-				"method":         {Type: TString, Enum: []string{"merge", "squash", "rebase"}, Desc: "default merge"},
-				"commit_title":   {Type: TString},
-				"commit_message": {Type: TString},
-				"sha":            {Type: TString, Desc: "require the PR head to match this sha (safety)"},
-				"as":             {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"merged": {Type: TBool}, "sha": {Type: TString}},
-		},
-		{
-			Name: "update_pr", Desc: "edit a PR: state (open|closed → close/reopen), title, body, base",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
-				"state": {Type: TString, Enum: []string{"open", "closed"}},
-				"title": {Type: TString}, "body": {Type: TString},
-				"base": {Type: TString, Desc: "retarget the PR onto this branch"},
-				"as":   {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"number": {Type: TInt}, "state": {Type: TString}},
-		},
-		{
-			Name: "create_issue", Desc: "open an issue",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"}, "title": {Type: TString, Required: true},
-				"body":   {Type: TString},
-				"labels": {Type: TList}, "assignees": {Type: TList, Desc: "logins to assign"},
-				"as": {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"number": {Type: TInt}, "url": {Type: TString}},
-		},
-		{
-			Name: "update_issue", Desc: "edit an issue: state (open|closed → close/reopen), state_reason, title, body",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"}, "number": {Type: TInt, Required: true},
-				"state":        {Type: TString, Enum: []string{"open", "closed"}},
-				"state_reason": {Type: TString, Enum: []string{"completed", "not_planned", "reopened"}},
-				"title":        {Type: TString}, "body": {Type: TString},
-				"as": {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"number": {Type: TInt}, "state": {Type: TString}},
-		},
-		{
-			Name: "assign", Desc: "add and/or remove issue/PR assignees",
-			Options: Schema{
-				"repo":   {Type: TString, Required: true, Scope: "repo"},
-				"number": {Type: TInt, Desc: "issue or PR number (alias: pr)"}, "pr": {Type: TInt},
-				"add": {Type: TList, Desc: "logins to assign"}, "remove": {Type: TList, Desc: "logins to unassign"},
-				"as": {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"assignees": {Type: TList}},
-		},
-		{
-			Name: "remove_label", Desc: "remove one label from an issue or PR",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"}, "number": {Type: TInt, Required: true},
-				"label": {Type: TString, Required: true},
-				"as":    {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"ok": {Type: TBool}},
-		},
-		{
-			Name: "get_issue", Desc: "read an issue: title, body, state, labels, assignees, author, url",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"}, "number": {Type: TInt, Required: true},
-				"as": {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{
-				"title": {Type: TString}, "body": {Type: TString}, "state": {Type: TString},
-				"labels": {Type: TList}, "assignees": {Type: TList}, "author": {Type: TString}, "url": {Type: TString},
-			},
-		},
-		{
-			Name: "put_file", Desc: "create or update a file in one commit",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"}, "path": {Type: TString, Required: true},
-				"content": {Type: TString, Required: true, Desc: "the new file content (UTF-8 text; base64-encoded for the API automatically)"},
-				"message": {Type: TString, Required: true, Desc: "commit message"},
-				"branch":  {Type: TString, Desc: "branch to commit on (default: the repo's default branch)"},
-				"sha":     {Type: TString, Desc: "blob sha of the file being replaced (required to UPDATE an existing file; get it from `file`)"},
-				"as":      {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"commit": {Type: TString}, "sha": {Type: TString, Desc: "the new blob sha"}},
-		},
-		{
-			Name: "delete_file", Desc: "delete a file in one commit",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"}, "path": {Type: TString, Required: true},
-				"message": {Type: TString, Required: true},
-				"sha":     {Type: TString, Required: true, Desc: "blob sha of the file to delete"},
-				"branch":  {Type: TString},
-				"as":      {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"commit": {Type: TString}},
-		},
-		{
-			Name: "get_ref", Desc: "the commit sha a branch/tag/ref points at",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"},
-				"ref":  {Type: TString, Required: true, Desc: "branch, tag, or sha"},
-				"as":   {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"sha": {Type: TString}},
-		},
-		{
-			Name: "create_branch", Desc: "create a branch from another ref",
-			Options: Schema{
-				"repo":   {Type: TString, Required: true, Scope: "repo"},
-				"branch": {Type: TString, Required: true, Desc: "new branch name"},
-				"from":   {Type: TString, Desc: "source branch/tag/sha (default: the default branch's HEAD)"},
-				"as":     {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"sha": {Type: TString}},
-		},
-		{
-			Name: "dispatch_workflow", Desc: "trigger a workflow_dispatch run",
-			Options: Schema{
-				"repo":     {Type: TString, Required: true, Scope: "repo"},
-				"workflow": {Type: TString, Required: true, Desc: "workflow file name (ci.yml) or numeric id"},
-				"ref":      {Type: TString, Required: true, Desc: "branch or tag to run on"},
-				"inputs":   {Type: TMap, Desc: "workflow_dispatch inputs"},
-				"as":       {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"ok": {Type: TBool}},
-		},
-		{
-			Name: "rerun_run", Desc: "re-run a workflow run (optionally only its failed jobs)",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"}, "run_id": {Type: TInt, Required: true},
-				"failed_only": {Type: TBool, Desc: "re-run only failed jobs"},
-				"as":          {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"ok": {Type: TBool}},
-		},
-		{
-			Name: "cancel_run", Desc: "cancel a workflow run",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"}, "run_id": {Type: TInt, Required: true},
-				"as": {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"ok": {Type: TBool}},
-		},
-		{
-			Name: "list_runs", Desc: "recent workflow runs: [{id, name, status, conclusion, head_branch, head_sha, url}]",
-			Options: Schema{
-				"repo":     {Type: TString, Required: true, Scope: "repo"},
-				"branch":   {Type: TString, Desc: "filter to a branch"},
-				"status":   {Type: TString, Desc: "queued|in_progress|completed|success|failure|…"},
-				"per_page": {Type: TInt, Desc: "default 20, max 100"},
-				"all":      {Type: TBool, Desc: "fetch every page"},
-				"as":       {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"runs": {Type: TList}},
-		},
-		{
-			Name: "get_run", Desc: "one workflow run by id: {run_id, name, status, conclusion, head_branch, head_sha, url}",
-			Options: Schema{
-				"repo":   {Type: TString, Required: true, Scope: "repo"},
-				"run_id": {Type: TInt, Required: true},
-				"as":     {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{
-				"run_id": {Type: TInt}, "name": {Type: TString}, "status": {Type: TString},
-				"conclusion": {Type: TString}, "head_branch": {Type: TString},
-				"head_sha": {Type: TString}, "url": {Type: TString},
-			},
-		},
-		{
-			Name: "create_release", Desc: "publish a release for a tag",
-			Options: Schema{
-				"repo":   {Type: TString, Required: true, Scope: "repo"},
-				"tag":    {Type: TString, Required: true, Desc: "the tag to release (created if it doesn't exist, on target)"},
-				"target": {Type: TString, Desc: "commitish the tag points at when created (default: default branch)"},
-				"name":   {Type: TString, Desc: "release title"}, "body": {Type: TString, Desc: "release notes"},
-				"draft": {Type: TBool}, "prerelease": {Type: TBool},
-				"as": {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"id": {Type: TInt}, "url": {Type: TString}, "upload_url": {Type: TString}},
-		},
-		{
-			Name: "upload_asset", Desc: "attach a file to a release",
-			Options: Schema{
-				"repo":         {Type: TString, Required: true, Scope: "repo"},
-				"release_id":   {Type: TInt, Required: true, Desc: "id from create_release"},
-				"name":         {Type: TString, Required: true, Desc: "asset file name"},
-				"content":      {Type: TString, Desc: "inline asset bytes (mutually exclusive with path)"},
-				"path":         {Type: TString, Desc: "local file to upload"},
-				"content_type": {Type: TString, Desc: "MIME type (default application/octet-stream)"},
-				"as":           {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"id": {Type: TInt}, "url": {Type: TString}},
-		},
-		{
-			Name: "list_issues", Desc: "list issues (PRs excluded): [{number, title, state, labels, author, url}]",
-			Options: Schema{
-				"repo":     {Type: TString, Required: true, Scope: "repo"},
-				"state":    {Type: TString, Desc: "open|closed|all (default open)"},
-				"labels":   {Type: TList, Desc: "filter to issues with all these labels"},
-				"assignee": {Type: TString, Desc: "filter to this assignee (or * / none)"},
-				"per_page": {Type: TInt, Desc: "default 30, max 100"},
-				"all":      {Type: TBool, Desc: "fetch every page"},
-				"as":       {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"issues": {Type: TList}},
-		},
-		{
-			Name: "search_issues", Desc: "search issues/PRs in this repo: [{number, title, state, is_pr, url}]",
-			Options: Schema{
-				"repo":     {Type: TString, Required: true, Scope: "repo"},
-				"q":        {Type: TString, Required: true, Desc: "GitHub search query (scoped to this repo automatically)"},
-				"per_page": {Type: TInt, Desc: "default 30, max 100"},
-				"all":      {Type: TBool, Desc: "fetch every page"},
-				"as":       {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"total": {Type: TInt}, "items": {Type: TList}},
-		},
-		{
-			Name: "checks", Desc: "check-run status for a ref: [{name, status, conclusion, url}]",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"},
-				"ref":  {Type: TString, Required: true, Desc: "branch, tag, or sha"},
-				"as":   {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"checks": {Type: TList}},
-		},
-		{
-			Name: "ready_for_review", Desc: "mark a draft PR ready for review",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
-				"as": {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"ok": {Type: TBool}},
-		},
-		{
-			Name: "convert_to_draft", Desc: "convert a PR back to a draft",
-			Options: Schema{
-				"repo": {Type: TString, Required: true, Scope: "repo"}, "pr": {Type: TInt, Required: true},
-				"as": {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"ok": {Type: TBool}},
-		},
-		{
-			Name: "create_gist", Desc: "create a gist (user-scoped, no repo)",
-			Options: Schema{
-				"files":       {Type: TMap, Required: true, Desc: "{filename: content} — the gist's files"},
-				"description": {Type: TString},
-				"public":      {Type: TBool, Desc: "default false (secret gist)"},
-			},
-			Outputs: Schema{"id": {Type: TString}, "url": {Type: TString}},
-		},
-		{
-			Name: "get_gist", Desc: "read a gist: its files, description, visibility",
-			Options: Schema{
-				"id": {Type: TString, Required: true},
-			},
-			Outputs: Schema{"files": {Type: TMap, Desc: "{filename: content}"}, "description": {Type: TString}, "public": {Type: TBool}, "url": {Type: TString}},
-		},
-		{
-			Name: "update_gist", Desc: "edit a gist's files and/or description",
-			Options: Schema{
-				"id":          {Type: TString, Required: true},
-				"files":       {Type: TMap, Desc: "{filename: content}; a null/empty content deletes that file"},
-				"description": {Type: TString},
-			},
-			Outputs: Schema{"id": {Type: TString}, "url": {Type: TString}},
-		},
-		{
-			Name: "delete_gist", Desc: "delete a gist",
-			Options: Schema{"id": {Type: TString, Required: true}},
-			Outputs: Schema{"ok": {Type: TBool}},
-		},
-		{
-			Name: "list_gists", Desc: "list gists: [{id, description, public, url}]",
-			Options: Schema{
-				"user":     {Type: TString, Desc: "whose public gists (default: your own, incl. secret)"},
-				"per_page": {Type: TInt, Desc: "default 30, max 100"},
-				"all":      {Type: TBool, Desc: "fetch every page, not just the first"},
-			},
-			Outputs: Schema{"gists": {Type: TList}},
-		},
-		{
-			Name: "add_labels", Desc: "add labels to an issue or PR",
-			Options: Schema{
-				"repo":   {Type: TString, Required: true, Scope: "repo"},
-				"number": {Type: TInt, Required: true},
-				"labels": {Type: TList, Required: true},
-				"as":     {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"ok": {Type: TBool}},
-		},
-		{
-			Name: "react", Desc: "add (or, remove: true, take away) your reaction on comments/reviews — idempotent both ways",
-			Options: Schema{
-				"repo":     {Type: TString, Required: true, Scope: "repo"},
-				"pr":       {Type: TInt, Desc: "the PR (required for a review subject)"},
-				"subjects": {Type: TList, Desc: "[{kind, id}] — kind is issue_comment | review_comment | review; an event's reaction_subjects is this shape"},
-				"kind":     {Type: TString, Enum: []string{githubkit.SubjectIssueComment, githubkit.SubjectReviewComment, githubkit.SubjectReview}, Desc: "single-subject shorthand (with id)"},
-				"id":       {Type: TInt, Desc: "single-subject shorthand (with kind)"},
-				"content":  {Type: TString, Required: true, Enum: githubkit.ReactionContents()},
-				"remove":   {Type: TBool, Desc: "take the reaction away instead: only the acting user's reaction of this content; a no-op where there is none"},
-				"as":       {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"ok": {Type: TBool}, "reacted": {Type: TInt, Desc: "subjects reacted to"}, "removed": {Type: TInt, Desc: "reactions removed (remove: true)"}},
-		},
-		{
-			Name: "set_status", Desc: "post a commit status on a sha, or on a PR's head as it is at call time (shown on any PR whose head it is)",
-			Options: Schema{
-				"repo":        {Type: TString, Required: true, Scope: "repo"},
-				"sha":         {Type: TString, Desc: "the commit (one of sha / pr)"},
-				"pr":          {Type: TInt, Desc: "a PR whose CURRENT head gets the status, read at call time (one of sha / pr; sha wins when both are set)"},
-				"state":       {Type: TString, Required: true, Enum: githubkit.StatusStates()},
-				"description": {Type: TString, Desc: "clipped to GitHub's 140 characters"},
-				"context":     {Type: TString, Desc: "the status's name on the PR, entirely yours (templates allowed); default only when unset: the login the call acts as"},
-				"target_url":  {Type: TString},
-				"as":          {Type: TString, Enum: []string{"me", "bot"}},
-			},
-			Outputs: Schema{"ok": {Type: TBool}, "context": {Type: TString}, "sha": {Type: TString, Desc: "the commit the status went on"}},
-		},
-		{
-			Name: "sweep", Desc: "run the catch-up sweep now (daemon-global; same as `conductor sweep --now`)",
-			Options: Schema{},
-			Outputs: Schema{"nudged": {Type: TInt, Desc: "integrations whose sweep was nudged"}},
-		},
-	},
-}
+// githubDecl is the bundled github connector's declaration, built from THE
+// github declaration (pkg/githubkit/ghplugin.Decl) the conductor-github
+// plugin also describes itself with — connection fields, events with their
+// unified-filter facts and match keys, verbs. Declared once, so the two
+// implementations cannot offer different surfaces under one name.
+var githubDecl = func() *TypeDecl {
+	d := ghplugin.Decl()
+	return mapDecl(&d)
+}()
 
 func init() { RegisterType(githubDecl, newGithubImpl) }
 
@@ -646,6 +43,7 @@ type githubConn struct {
 	Retry          config.Retry      `yaml:"retry"`
 	ProjectMap     map[string]string `yaml:"project_map"`
 	ProjectRewrite gh.ProjectRewrite `yaml:"project_rewrite"`
+	APIBase        string            `yaml:"api_base"`
 }
 
 // githubWebhook mirrors gh.WebhookConfig: transport (smee_url/listen/path) and
@@ -706,6 +104,7 @@ func newGithubImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error
 	kitCfg := githubkit.Config{
 		Token:      conn.Token,
 		WriteToken: conn.Identity.WriteToken,
+		APIBase:    conn.APIBase,
 	}
 	if conn.App.AppID > 0 && conn.App.PrivateKeyPath != "" {
 		kitCfg.App = &githubkit.AppConfig{AppID: conn.App.AppID, PrivateKeyPath: conn.App.PrivateKeyPath}
@@ -727,117 +126,134 @@ func (g *githubImpl) Validate() error {
 
 func (g *githubImpl) DeclaredEvents() []string { return nil }
 
-// Source lowers the connector's triggers into a github integration instance.
-// Every trigger becomes a variant of its event kind on the Defaults rule; the
-// per-variant repo gates carry the `repo`/`not_repo` scope hoisted out of each
-// trigger's filter, so triggers stay independent (all matching triggers fire)
-// while the integration evaluates the rest of the filter per event.
+// Source lowers the connector's triggers into a github source: each trigger
+// through ghsource.LowerTrigger, the connection plus all of them through
+// ghsource.Connection.SourceConfig — the two functions the conductor-github
+// plugin calls on the far side of the wire, so a config builds the same
+// source in either. Every trigger is a variant of its event kind; its
+// lowered config.Action rides in Ext and is what the engine runs.
 func (g *githubImpl) Source(triggers []CompiledTrigger) (core.Integration, error) {
 	if len(triggers) == 0 {
 		return nil, nil
 	}
-	actions := map[string]config.ActionSet{}
+	kitActions := map[string]ghsource.ActionSet{}
+	legacyActions := map[string]config.ActionSet{}
 	for _, t := range triggers {
-		act, err := g.lowerTrigger(t)
+		act, k, err := g.lower(t)
 		if err != nil {
 			return nil, err
 		}
 		kind := t.Spec.Event()
-		actions[kind] = append(actions[kind], act)
+		kitActions[kind] = append(kitActions[kind], k)
+		legacyActions[kind] = append(legacyActions[kind], act)
 	}
-	sweep := g.conn.Sweep
-	if sweep.IsEnabled() && len(sweep.Repos) == 0 {
-		sweep.Repos = g.conn.Repos
-	}
-	cfg := gh.Config{
+	kc := g.connection().SourceConfig(kitActions)
+	// legacy is the same lowering in conductor's own types: the retry policy
+	// and the sweep block as written (SweepSettings), and the rules the CLI
+	// enumerates (Actions).
+	legacy := gh.Config{
 		App:   g.conn.App,
 		Token: g.conn.Token,
 		Webhook: gh.WebhookConfig{
 			SmeeURL: g.conn.Webhook.SmeeURL, Listen: g.conn.Webhook.Listen, Path: g.conn.Webhook.Path,
 			Secret: g.conn.Webhook.Secret, VerifySig: g.conn.Webhook.VerifySig,
 		},
-		Sweep:          sweep,
+		Sweep:          g.conn.Sweep,
 		Identity:       g.conn.Identity,
 		Retry:          g.conn.Retry,
 		ProjectMap:     g.conn.ProjectMap,
 		ProjectRewrite: g.conn.ProjectRewrite,
 		Defaults:       gh.Rule{Me: g.conn.Me},
-		// One catch-all rule carries every trigger as a variant: the legacy
-		// resolve() only matches explicit rules (defaults never fire on their
-		// own), and the per-variant repo gates scope each trigger.
-		Rules: []gh.Rule{{
-			Match:   gh.Match{Repos: []string{"*/*"}},
-			Actions: actions,
-		}},
+		Rules:          []gh.Rule{{Match: gh.Match{Repos: []string{"*/*"}}, Actions: legacyActions}},
 	}
-	src, err := buildIntegration("github", g.name, cfg)
-	if gi, ok := src.(*gh.Integration); ok {
-		g.srcMu.Lock()
-		g.src = gi
-		g.srcMu.Unlock()
+	if legacy.Sweep.IsEnabled() && len(legacy.Sweep.Repos) == 0 {
+		legacy.Sweep.Repos = g.conn.Repos
 	}
-	return src, err
+	src, err := gh.NewConnector(g.name, kc, legacy)
+	if err != nil {
+		return nil, err
+	}
+	g.srcMu.Lock()
+	g.src = src
+	g.srcMu.Unlock()
+	return src, nil
 }
 
-// lowerTrigger maps one trigger spec's filter/options onto the Action fields
-// the github integration evaluates.
-//
-// The trigger's whole predicate is its `filter:`, which rides through as the
-// IR untouched. Two things are read OUT of it here, because they are answered
-// structurally rather than per event:
-//
-//   - `repo` scopes the trigger (Action.Repos). emit() gates on it before any
-//     keep-condition, and the stuck_checks poller and the sweep derive their
-//     repo scope from it — neither of which has an event to evaluate against.
-//     The union across the WHOLE filter is taken, so an OR of repo sets is a
-//     superset rather than a miss; the filter itself still decides precisely.
-//   - top-level `not_repo` excludes (Action.ExcludeRepos).
-//
-// A filter that is nothing but a flat conjunction of those two routing keys
-// leaves Action.Filter nil, so the event's intrinsic default keep-condition
-// still applies. `filter: {repo: […]}` is the replacement for
-// `filters: {repos: […]}`, and that never waived merge_ready's gates or any
-// other default — stating where a trigger applies is not stating what it wants
-// of the event. The shape has to be FLAT for that: an Or of repo sets is more
-// than the pre-gate can carry, so it stays in the filter and is evaluated.
-func (g *githubImpl) lowerTrigger(t CompiledTrigger) (config.Action, error) {
+// connection is the connector's connection block as the source reads it.
+func (g *githubImpl) connection() ghsource.Connection {
+	return ghsource.Connection{
+		App:   ghsource.AppConfig{AppID: g.conn.App.AppID, PrivateKeyPath: g.conn.App.PrivateKeyPath},
+		Token: g.conn.Token,
+		Webhook: gh.WebhookConfig{
+			SmeeURL: g.conn.Webhook.SmeeURL, Listen: g.conn.Webhook.Listen, Path: g.conn.Webhook.Path,
+			Secret: g.conn.Webhook.Secret, VerifySig: g.conn.Webhook.VerifySig,
+		},
+		Sweep: ghsource.SweepConfig{
+			Enabled: g.conn.Sweep.Enabled, Interval: g.conn.Sweep.Interval.D(),
+			MinInterval: g.conn.Sweep.MinInterval.D(), Repos: g.conn.Sweep.Repos,
+		},
+		Me:             ghsource.Actors{Logins: g.conn.Me.Logins, Teams: g.conn.Me.Teams},
+		Repos:          g.conn.Repos,
+		Identity:       g.conn.Identity,
+		ProjectMap:     g.conn.ProjectMap,
+		ProjectRewrite: g.conn.ProjectRewrite,
+		APIBase:        g.conn.APIBase,
+	}
+}
+
+// lower lowers one trigger twice over the same reading: the source's
+// Action (ghsource.LowerTrigger — routing, identity gates, the options the
+// source evaluates, the filter-or-default decision) and the config.Action the
+// engine runs, which carries the same values plus what only the engine reads
+// (the flow reference, shadow, the attempt threshold, the flaky rerun). The
+// config.Action rides in the source Action's Ext.
+func (g *githubImpl) lower(t CompiledTrigger) (config.Action, ghsource.Action, error) {
+	k, err := ghsource.LowerTrigger(ghsource.TriggerSpec{
+		Name: t.Spec.Name, Event: t.Spec.Event(), Enabled: t.Spec.Enabled,
+		Options: t.Spec.Options, Filter: t.Spec.Filter.Kit(),
+	}, g.conn.Repos)
+	if err != nil {
+		return config.Action{}, k, fmt.Errorf("trigger on %s: %w", t.Spec.On, err)
+	}
 	act := config.Action{
-		Name:    t.Spec.Name,
-		Enabled: t.Spec.Enabled,
-		Shadow:  t.Spec.Shadow,
-		FlowRef: t.Ref(),
+		Name:               t.Spec.Name,
+		Enabled:            t.Spec.Enabled,
+		Shadow:             t.Spec.Shadow,
+		FlowRef:            t.Ref(),
+		Repos:              k.Repos,
+		ExcludeRepos:       k.ExcludeRepos,
+		Reviewer:           config.Actors{Logins: k.Reviewer.Logins, Teams: k.Reviewer.Teams},
+		Assignee:           config.Actors{Logins: k.Assignee.Logins, Teams: k.Assignee.Teams},
+		IgnoreChecks:       k.IgnoreChecks,
+		IncludePrereleases: k.IncludePrereleases,
+		StuckAfter:         config.Duration(k.StuckAfter),
+		PollInterval:       config.Duration(k.PollInterval),
 	}
-	f := t.Spec.Filter
-	if !f.FlatConjunctionOf(gh.FilterRepoKey) {
-		act.Filter = f
+	if k.Filter != nil {
+		// The operator's own node, so the action keeps its surface spelling.
+		act.Filter = t.Spec.Filter
 	}
-	act.Repos = f.MatchUnion(gh.FilterRepoKey)
-	if len(act.Repos) == 0 {
-		act.Repos = g.conn.Repos
-	}
-	act.ExcludeRepos = f.TopLevelNegated(gh.FilterRepoKey)
-	o := t.Spec.Options
-	act.Reviewer = toActors(o["reviewer"])
-	act.Assignee = toActors(o["assignee"])
-	act.IgnoreChecks = toStrings(o["ignore_checks"])
-	act.IncludePrereleases, _ = o["include_prereleases"].(bool)
+	lowerEngineOptions(&act, t.Spec.Options)
+	k.Ext = act
+	return act, k, nil
+}
+
+// lowerTrigger is lower's engine half: the config.Action a trigger runs as.
+func (g *githubImpl) lowerTrigger(t CompiledTrigger) (config.Action, error) {
+	act, _, err := g.lower(t)
+	return act, err
+}
+
+// lowerEngineOptions lowers the trigger options the ENGINE interprets — the
+// soft attempt threshold and the flaky-check rerun — onto the action it runs.
+// They are the same for every source that declares them, bundled or plugin.
+func lowerEngineOptions(act *config.Action, o map[string]any) {
 	if n := toInt(o["max_attempts_per_head"]); n > 0 {
 		act.MaxAttemptsPerHead = n
 	}
 	if m, ok := o["flaky_rerun"].(map[string]any); ok {
 		act.FlakyRerun = config.FlakyRerun{Enabled: truthy(m["enabled"]), Max: toInt(m["max"])}
 	}
-	if d, err := toDuration(o["stuck_after"]); err != nil {
-		return act, fmt.Errorf("trigger on %s: options.stuck_after: %w", t.Spec.On, err)
-	} else if d > 0 {
-		act.StuckAfter = config.Duration(d)
-	}
-	if d, err := toDuration(o["poll_interval"]); err != nil {
-		return act, fmt.Errorf("trigger on %s: options.poll_interval: %w", t.Spec.On, err)
-	} else if d > 0 {
-		act.PollInterval = config.Duration(d)
-	}
-	return act, nil
 }
 
 // Invoke runs a github verb. sweep is daemon-global (no repo/token involved)

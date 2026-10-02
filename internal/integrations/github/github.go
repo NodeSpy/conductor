@@ -162,6 +162,21 @@ func newIntegration(name string, decode func(any) error) (core.Integration, erro
 	return &Integration{name: name, cfg: cfg, src: src}, nil
 }
 
+// NewConnector builds the bundled connectors-model source: kc is the source
+// config the connector lowered (ghsource.Connection.SourceConfig — the same
+// function the conductor-github plugin calls), each Action carrying its
+// lowered config.Action in Ext. legacy carries what is conductor's own — the
+// retry policy, the sweep block as written, and the lowered rules for the
+// CLI's action enumeration.
+func NewConnector(name string, kc ghsource.Config, legacy Config) (*Integration, error) {
+	kc.MergeExt = mergeExt
+	src, err := ghsource.New(name, kc)
+	if err != nil {
+		return nil, err
+	}
+	return &Integration{name: name, cfg: legacy, src: src}, nil
+}
+
 // kit converts the instance config to the source's: every config.Action
 // becomes a ghsource.Action carrying itself in Ext, and the merge hook is this
 // package's full config.Action merge, so a resolved trigger's Action is

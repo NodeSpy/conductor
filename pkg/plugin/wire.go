@@ -125,6 +125,10 @@ func HostKindFor(method string) string {
 type StartSourceRequest struct {
 	Instance string         `json:"instance"`
 	Config   map[string]any `json:"config,omitempty"`
+	// Triggers are the instance's configured triggers, sent only to a plugin
+	// speaking ConnectorABI (see source.go). Empty for every other plugin —
+	// it never asked, and the daemon matches its events itself.
+	Triggers []SourceTrigger `json:"triggers,omitempty"`
 }
 
 // Kind is what a plugin provides.
@@ -188,6 +192,17 @@ type Event struct {
 	Context Schema `json:"context,omitempty"`
 	Options Schema `json:"options,omitempty"`
 	Dynamic bool   `json:"dynamic,omitempty"`
+	// Facts and MatchKeys declare the event's UNIFIED `filter:` surface, the
+	// way a bundled connector with a richer surface does: Facts are the
+	// values an expr string may read by name, MatchKeys the structured keys
+	// legal as object keys (base keys only — the grammar's not_ prefix negates
+	// any of them). Declaring either makes them the event's whole filter
+	// surface, and Filters is not consulted. Both empty (every plugin before
+	// this field) keeps the generic surface: Filters as match keys, Context as
+	// facts. The daemon validates a trigger's filter against them at load; a
+	// ConnectorABI plugin evaluates the filter itself (SourceEvent.Trigger).
+	Facts     Schema `json:"facts,omitempty"`
+	MatchKeys Schema `json:"match_keys,omitempty"`
 }
 
 // Capabilities is the plugin's DECLARED PERMISSION MANIFEST: what it says it
@@ -225,11 +240,14 @@ type Decl struct {
 	// surface gets added to the protocol WITHOUT touching ProtocolVersion.
 	//
 	// Absent/zero means "a plugin from before this field existed" — every
-	// connector and runtime in the field today — and is read by nobody: the
-	// daemon accepts any ProtocolVersion==1 plugin exactly as it always did,
-	// and consults ABI only for KindStep, where it selects which plugin.run /
-	// host.* shape both sides speak (EngineABI). A connector that sets it is
-	// simply describing something no one asks about.
+	// runtime, and every connector before the source extension — and is read
+	// by nobody: the daemon accepts any ProtocolVersion==1 plugin exactly as it
+	// always did. It is consulted per kind: for KindStep it selects which
+	// plugin.run / host.* shape both sides speak (EngineABI); for
+	// KindConnector, ABI >= ConnectorABI opts the plugin into the source
+	// extension (source.go) — triggers on start_source, routed events, nudge,
+	// force, app_token. A runtime that sets it is describing something no one
+	// asks about.
 	//
 	// This is the whole negotiation, and it is deliberately boring: a new
 	// field with a zero value that means "the old thing" cannot break an old
