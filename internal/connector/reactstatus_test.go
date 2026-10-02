@@ -48,6 +48,8 @@ func newFakeGH(t *testing.T) *fakeGH {
 		case r.Method == http.MethodGet && p == "/repos/org/repo/pulls/7":
 			f.pullHits++
 			_ = json.NewEncoder(w).Encode(map[string]any{"state": "open", "head": map[string]any{"sha": f.head}})
+		case r.Method == http.MethodGet && p == "/repos/org/repo/pulls/7/reviews":
+			_, _ = w.Write([]byte(`[]`))
 		case r.Method == http.MethodGet && reReview.MatchString(p):
 			_ = json.NewEncoder(w).Encode(map[string]any{"node_id": "PRR_" + reReview.FindStringSubmatch(p)[2]})
 		case r.Method == http.MethodPost && reIssueReact.MatchString(p):
@@ -156,6 +158,16 @@ func TestSetStatusPRResolvesCurrentHead(t *testing.T) {
 		"status ccccccc3333 success octo-me explicit sha wins")
 	if f.pullHits != 2 {
 		t.Fatalf("PR head reads = %d, want one fresh read per pr: call (none when sha is given)", f.pullHits)
+	}
+	// Fresh, not cached: a read verb cached the PR, then the head moved with
+	// no write in between (a push from elsewhere) — pr: must still see it.
+	if _, err := g.Invoke(ctx, "pr_get", map[string]any{"repo": "org/repo", "pr": 7}); err != nil {
+		t.Fatal(err)
+	}
+	f.push("ddddddd4444")
+	call(map[string]any{"pr": 7, "state": "pending", "context": "c"})
+	if c := f.take(); len(c) != 1 || !strings.HasPrefix(c[0], "status ddddddd4444 ") {
+		t.Fatalf("pr: after an outside push = %q — served a cached head", c)
 	}
 	if _, err := g.Invoke(ctx, "set_status", map[string]any{"repo": "org/repo", "state": "pending"}); err == nil {
 		t.Fatal("set_status with neither sha nor pr succeeded")
