@@ -96,7 +96,6 @@ func tempStore(t *testing.T) *store.Store {
 
 func baseCfg() *config.Config {
 	c := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{{ID: "fixer"}}}}}
-	c.Control.Enabled = ptrBool(true)
 	return c
 }
 
@@ -151,7 +150,8 @@ func TestRuntimePauseSkips(t *testing.T) {
 
 func TestPauseLabelSkips(t *testing.T) {
 	cfg := baseCfg()
-	cfg.Control.PauseLabel = "conductor:off"
+	label := "conductor:off"
+	cfg.Policy = &config.Policy{PauseLabel: &label}
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, cfg, d, n, nil)
 
@@ -172,7 +172,8 @@ func TestPauseLabelSkips(t *testing.T) {
 
 func TestAgentBudgetShedsOverCap(t *testing.T) {
 	cfg := baseCfg()
-	cfg.Control.MaxAgentsPerHour = 2
+	maxPerHour := 2
+	cfg.Policy = &config.Policy{Concurrency: &config.Concurrency{MaxAgentsPerHour: &maxPerHour}}
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, cfg, d, n, nil)
 	act := config.Action{Type: "agent", Agent: "w/fixer"}
@@ -580,7 +581,6 @@ func TestFixersDoNotGetAskGuidance(t *testing.T) {
 		{ID: "archived", ArchiveWhenDone: true},
 		{ID: "kept"},
 	}}}}
-	cfg.Control.Enabled = ptrBool(true)
 
 	for _, agent := range []string{"archived", "kept"} {
 		d := &fakeDispatcher{}
@@ -598,7 +598,6 @@ func TestFixersDoNotGetAskGuidance(t *testing.T) {
 
 func TestAgentGuidanceConfigOverride(t *testing.T) {
 	run := func(cfg *config.Config) string {
-		cfg.Control.Enabled = ptrBool(true)
 		d := &fakeDispatcher{}
 		e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
 		e.process(context.Background(), agentTrigger("new_comment", "a/w", 1, "h", "s",
@@ -748,7 +747,6 @@ func TestAdditiveGuidanceLayering(t *testing.T) {
 	// is no registry left to borrow them from.
 	run := func(profile config.Step, globalGuidance *string) string {
 		cfg := &config.Config{AgentGuidance: globalGuidance}
-		cfg.Control.Enabled = ptrBool(true)
 		e, _ := newEng(t, cfg, &fakeDispatcher{}, &fakeNotifier{}, nil)
 		return e.agentGuidance(profile, config.Policy{})
 	}
@@ -792,7 +790,6 @@ func TestAdditiveGuidanceLayering(t *testing.T) {
 	// on top of it, exactly like the top-level agent_guidance alias does.
 	runPol := func(profile config.Step, base *config.GuidanceSpec) string {
 		cfg := &config.Config{Policy: &config.Policy{Guidance: base}}
-		cfg.Control.Enabled = ptrBool(true)
 		e, _ := newEng(t, cfg, &fakeDispatcher{}, &fakeNotifier{}, nil)
 		return e.agentGuidance(profile, config.Policy{Guidance: base})
 	}
@@ -834,20 +831,9 @@ func TestLiveGatedKindNotAbandonedOnDispatch(t *testing.T) {
 	}
 }
 
-func TestKillSwitch(t *testing.T) {
-	cfg := baseCfg()
-	cfg.Control.Enabled = ptrBool(false)
-	d, n := &fakeDispatcher{}, &fakeNotifier{}
-	e, _ := newEng(t, cfg, d, n, nil)
-	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 4, "h", "s", config.Action{Type: "agent", Agent: "w/fixer"}))
-	if len(d.reqs) != 0 {
-		t.Fatal("kill switch should block dispatch")
-	}
-}
-
 func TestShadowPropagates(t *testing.T) {
 	cfg := baseCfg()
-	cfg.Control.Shadow = true
+	cfg.Policy = &config.Policy{Shadow: ptrBool(true)}
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, cfg, d, n, nil)
 	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 5, "h", "s", config.Action{Type: "agent", Agent: "w/fixer"}))
@@ -919,7 +905,7 @@ func (g *gateFake) count() int {
 func TestConcurrencyCapBlocksSecondAgent(t *testing.T) {
 	cfg := baseCfg()
 	one := 1
-	cfg.Control.MaxConcurrentAgents = &one // only one agent at a time
+	cfg.Policy = &config.Policy{Concurrency: &config.Concurrency{MaxAgents: &one}} // only one agent at a time
 	g := &gateFake{waitCh: make(chan struct{})}
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: g, Notifier: &fakeNotifier{},
 		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
@@ -1152,7 +1138,7 @@ func TestLogTag(t *testing.T) {
 // this build escalates and never dispatches (rather than silently running paseo).
 func TestAgentWithUnrunnableControllerEscalates(t *testing.T) {
 	cfg := baseCfg()
-	cfg.Controllers = map[string]config.ControllerConfig{"ocode": {Agent: "opencode"}}
+	cfg.Runtimes = map[string]config.RuntimeConfig{"ocode": {Use: "acp", Agent: "opencode"}}
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, cfg, d, n, nil)
 

@@ -10,10 +10,11 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
-	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
@@ -94,7 +95,6 @@ func stepEngine(t *testing.T, d *stepFake) *Engine {
 		{ID: "planner", Model: config.ModelSpecOf("claude-haiku")}, // cheap model to plan
 		{ID: "worker", Model: config.ModelSpecOf("claude-opus")},   // strong model to do the work
 	}}}}
-	cfg.Control.Enabled = ptrBool(true)
 	return New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: &fakeNotifier{},
 		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
 }
@@ -146,7 +146,6 @@ func TestWorkflowBackgroundStepHandsOff(t *testing.T) {
 	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
 		{ID: "interactive"},
 	}}}}
-	cfg.Control.Enabled = ptrBool(true)
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n,
 		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
 
@@ -184,7 +183,6 @@ func TestWorkflowBackgroundStepNotReapable(t *testing.T) {
 		// Profile mistakenly (or staleley) opts into archiving.
 		{ID: "interactive", ArchiveWhenDone: true},
 	}}}}
-	cfg.Control.Enabled = ptrBool(true)
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: &fakeNotifier{},
 		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
 
@@ -199,18 +197,19 @@ func TestWorkflowBackgroundStepNotReapable(t *testing.T) {
 }
 
 // TestWorkflowBackgroundStepUnknownHandoffEscalates covers a step naming a
-// `handoff:` the registry doesn't have (config validation should normally catch
-// this before a live trigger reaches here — see config.CheckAgentRefs — but the
-// engine must still fail loudly rather than silently, if it somehow does).
+// `handoff:` connector that doesn't exist (config validation should normally
+// catch this before a live trigger reaches here — see
+// internal/flow/validate.go's checkAskCapable — but the engine must still
+// fail loudly rather than silently, if it somehow does).
 func TestWorkflowBackgroundStepUnknownHandoffEscalates(t *testing.T) {
 	d := newStepFake()
 	n := &fakeNotifier{}
 	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
 		{ID: "interactive"},
 	}}}}
-	cfg.Control.Enabled = ptrBool(true)
-	reg := handoff.NewRegistry(nil, "", nil) // no entries at all
-	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n, Handoffs: reg,
+	// No connectors: block at all — e.connectors is nil, so any handoff: name
+	// fails to resolve.
+	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n,
 		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
 
 	act := config.Action{Steps: []config.Action{
@@ -230,19 +229,25 @@ func TestWorkflowBackgroundStepUnknownHandoffEscalates(t *testing.T) {
 }
 
 // TestWorkflowBackgroundStepHandoffResolvesButNoBrokerFallsBack: a real handoff
-// resolves cleanly, but with no session broker configured the engine can't rewire
-// the review loop, so it must keep today's plain fallback (no escalate).
+// — an ask-capable `web` connector — resolves cleanly, but with no session
+// broker configured the engine can't rewire the review loop, so it must keep
+// today's plain fallback (no escalate).
 func TestWorkflowBackgroundStepHandoffResolvesButNoBrokerFallsBack(t *testing.T) {
 	d := newStepFake()
 	n := &fakeNotifier{}
-	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
-		{ID: "interactive"},
-	}}}}
-	cfg.Control.Enabled = ptrBool(true)
-	reg := handoff.NewRegistry(map[string]config.HandoffConfig{
-		"page": {Web: &config.HandoffWeb{BaseURL: "https://conductor.example.com"}},
-	}, "", nil)
-	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n, Handoffs: reg,
+	cfg := &config.Config{
+		ConnectorsMap: map[string]config.ConnectorRef{
+			"page": {Use: "web", Options: map[string]any{"base_url": "https://conductor.example.com"}},
+		},
+		Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
+			{ID: "interactive"},
+		}}},
+	}
+	reg, err := connector.Build(cfg, connector.Deps{Secrets: secrets.New(), Config: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n, Connectors: reg,
 		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
 
 	act := config.Action{Steps: []config.Action{
@@ -274,7 +279,6 @@ func TestWorkflowResumesFromCheckpoint(t *testing.T) {
 	st := tempStore(t)
 	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
 		{ID: "planner"}, {ID: "worker"}}}}}
-	cfg.Control.Enabled = ptrBool(true)
 	e := New(Options{Config: cfg, Store: st, Dispatch: d, Notifier: &fakeNotifier{},
 		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil },
 		RefreshAppToken: func(core.Trigger) (string, error) { return "app", nil }})

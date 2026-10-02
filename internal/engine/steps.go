@@ -222,20 +222,16 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			// or hold marker for the reaper to observe), then hand it to you.
 			e.hold.Add(ref.AgentID)
 			e.log("%s step %s launched in background after %s (agent %s)", tag(t), id, took, ref.AgentID)
-			// Resolve the step's hand-off channel (explicit `handoff:` name → the
-			// default:true entry → the sole configured entry). A step naming an
-			// unknown handoff is caught by config validation before a live trigger
-			// ever reaches here, but resolve defensively and escalate rather than
-			// silently falling back if it somehow does.
-			var handoffCh handoff.Channel
-			if e.handoffs != nil {
-				ch, herr := e.handoffs.Resolve(s.Handoff)
-				if herr != nil {
-					e.log("%s step %s handoff %q: %v", tag(t), id, s.Handoff, herr)
-					e.notif.Emit(ctx, notify.EventEscalate, t,
-						fmt.Sprintf("workflow step %q: handoff %q: %v", id, s.Handoff, herr))
-				}
-				handoffCh = ch
+			// Resolve the step's hand-off channel: `handoff:` names an
+			// ask-capable connector (slack/discord/web). A step naming an
+			// unknown or non-ask-capable connector is caught by config
+			// validation before a live trigger ever reaches here, but
+			// escalate rather than silently falling back if it somehow does.
+			handoffCh := e.askChannelFor(s.Handoff)
+			if handoffCh == nil && s.Handoff != "" {
+				e.log("%s step %s handoff %q: did not resolve to an ask-capable connector", tag(t), id, s.Handoff)
+				e.notif.Emit(ctx, notify.EventEscalate, t,
+					fmt.Sprintf("workflow step %q: handoff %q: did not resolve to an ask-capable connector", id, s.Handoff))
 			}
 			// With a hand-off channel resolved, rewire the review over the session
 			// broker + channel (present → await → revise/submit), controller-agnostic.

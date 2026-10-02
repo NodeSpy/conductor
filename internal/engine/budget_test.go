@@ -200,7 +200,8 @@ func TestBudgetReservationClosesCheckThenActRace(t *testing.T) {
 // that goes through process races the assertion.
 func TestLegacyStepsWorkflowRespectsTheAgentBudget(t *testing.T) {
 	cfg := budgetCfg(nil, nil)
-	cfg.Control.MaxAgentsPerHour = 1
+	maxPerHour := 1
+	cfg.Policy = &config.Policy{Concurrency: &config.Concurrency{MaxAgentsPerHour: &maxPerHour}}
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, cfg, d, n, nil)
 	e.recordAgentDispatch() // burn the window

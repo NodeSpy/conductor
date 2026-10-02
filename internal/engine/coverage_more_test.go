@@ -45,7 +45,7 @@ func TestEmitRunLoop(t *testing.T) {
 func TestAcquireCancelled(t *testing.T) {
 	cfg := baseCfg()
 	one := 1
-	cfg.Control.MaxConcurrentAgents = &one
+	cfg.Policy = &config.Policy{Concurrency: &config.Concurrency{MaxAgents: &one}}
 	d := &fakeDispatcher{}
 	e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
 	if !e.acquire(context.Background()) {

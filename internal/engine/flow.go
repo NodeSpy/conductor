@@ -75,7 +75,7 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 		}
 	}
 
-	shadow := e.cfg.Control.Shadow || (pol.Shadow != nil && *pol.Shadow) || (act.Shadow != nil && *act.Shadow)
+	shadow := (pol.Shadow != nil && *pol.Shadow) || (act.Shadow != nil && *act.Shadow)
 
 	// Consume dedup state now (mirrors the legacy multi-step branch): the
 	// event is committed to a run. NOT for grouped triggers: their events
@@ -433,8 +433,8 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 }
 
 // askChannelFor resolves the hand-off channel a background step presents on:
-// an ask-capable connector by name, then the legacy handoffs: registry, then
-// nil (runtime-native — the notify-to-open-paseo fallback).
+// an ask-capable connector by name, else nil (runtime-native — the
+// notify-to-open-paseo fallback).
 func (e *Engine) askChannelFor(name string) handoff.Channel {
 	if name != "" && e.connectors != nil {
 		if in, ok := e.connectors.Get(name); ok && in.Impl != nil {
@@ -447,14 +447,6 @@ func (e *Engine) askChannelFor(name string) handoff.Channel {
 				return ch
 			}
 		}
-	}
-	if e.handoffs != nil {
-		ch, err := e.handoffs.Resolve(name)
-		if err != nil {
-			e.log("handoff %q: %v", name, err)
-			return nil
-		}
-		return ch
 	}
 	return nil
 }

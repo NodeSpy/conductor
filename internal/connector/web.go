@@ -29,8 +29,9 @@ var webDecl = &TypeDecl{
 
 func init() { RegisterType(webDecl, newWebImpl) }
 
-// webConn mirrors config.HandoffWeb — the connectors-model connection schema
-// for the web hand-off channel.
+// webConn is the connectors-model connection schema for the web hand-off
+// channel (the legacy `handoffs: { web: ... }` shape this mirrors was
+// removed with the legacy config schema).
 type webConn struct {
 	BaseURL string          `yaml:"base_url"`
 	Listen  string          `yaml:"listen"`

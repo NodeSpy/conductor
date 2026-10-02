@@ -81,7 +81,6 @@ func affinityCfg() *config.Config {
 		}},
 		{ID: "fresh-agent"},
 	}}}}
-	cfg.Control.Enabled = ptrBool(true)
 	return cfg
 }
 

@@ -122,10 +122,3 @@ func TestRunDiscordGatewayLoop(t *testing.T) {
 		t.Fatal("gateway never reconnected")
 	}
 }
-
-func TestNotWiredChannelPresent(t *testing.T) {
-	_, err := notWiredChannel{name: "x"}.Present(context.Background(), Draft{})
-	if err == nil || !strings.Contains(err.Error(), "not wired") {
-		t.Fatalf("notWired: %v", err)
-	}
-}

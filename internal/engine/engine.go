@@ -22,7 +22,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/decider"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/flow"
-	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/notify"
@@ -117,7 +116,6 @@ type Engine struct {
 	owner       map[string]Dispatcher
 	controllers *controller.Registry // resolves which controller runs each agent
 	broker      *controller.Broker   // owns one live session per PR (interactive hand-off); nil = disabled
-	handoffs    *handoff.Registry    // resolves a step's hand-off channel by name; nil = paseo-native hand-off
 	notif       Notifier
 	author      dispatch.Author
 	userTok     func() (string, error)
@@ -231,13 +229,7 @@ type Options struct {
 	// a conductor restart and follow-ups funnel to the live session instead of a
 	// duplicate agent. nil disables it — the interactive hand-off then stays
 	// paseo-native (you drive the agent in paseo, as before).
-	Broker *controller.Broker
-	// Handoffs resolves the portable human↔agent channel an interactive review is
-	// presented on (a step's `handoff:` name → the handoffs: entry flagged
-	// default:true → the sole configured entry). nil, or resolving to nil, → the
-	// review hand-off keeps today's behavior (notify you to open the live agent
-	// in paseo).
-	Handoffs  *handoff.Registry
+	Broker    *controller.Broker
 	Notifier  Notifier
 	Author    dispatch.Author
 	UserToken func() (string, error)
@@ -297,7 +289,7 @@ func New(o Options) *Engine {
 	e := &Engine{
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, controllers: reg, notif: o.Notifier,
 		owner:  map[string]Dispatcher{},
-		broker: o.Broker, handoffs: o.Handoffs,
+		broker: o.Broker,
 		author: o.Author, userTok: o.UserToken, readTok: o.ReadToken, log: log,
 		hold:      o.Hold,
 		affinity:  o.Affinity,
@@ -776,17 +768,17 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		return
 	}
 
-	// Kill switch (config) + runtime pause (a control file toggled by `pause`/
-	// `resume` without a restart).
-	if !e.cfg.Control.IsEnabled() {
-		return
-	}
+	// Runtime pause (a control file toggled by `pause`/`resume` without a
+	// restart) is the fleet-wide kill switch — there is deliberately no
+	// config-level `enabled` (see Policy.Shadow's doc comment).
 	if e.isPaused() {
 		e.log("%s skipped — conductor is paused", tag(t))
 		return
 	}
-	// Per-PR/issue opt-out: a label on the object (e.g. `conductor:off`) parks it.
-	if pl := e.cfg.Control.PauseLabel; pl != "" && triggerHasLabel(t, pl) {
+	// Per-PR/issue opt-out: a label on the object (e.g. `conductor:off`) parks
+	// it. The fleet-wide default lives at `policy.pause_label`; a connector/
+	// trigger-scoped one is checked again, more specifically, in processFlow.
+	if pl := e.cfg.GlobalPauseLabel(); pl != "" && triggerHasLabel(t, pl) {
 		e.log("%s skipped — carries pause label %q", tag(t), pl)
 		return
 	}
@@ -988,7 +980,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			// via the sweep.
 		}
 	}
-	shadow := e.cfg.Control.Shadow || (act.Shadow != nil && *act.Shadow)
+	shadow := e.cfg.GlobalShadow() || (act.Shadow != nil && *act.Shadow)
 
 	// Multi-step workflow: record now (so it doesn't re-fire), take a slot as
 	// backpressure, and run the steps in their own goroutine (releasing the slot
