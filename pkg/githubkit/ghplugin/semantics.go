@@ -67,8 +67,10 @@ func eventSemantics(name string) *plugin.EventSemantics {
 		s.VerificationFailed = true
 		s.Remediate = &plugin.RemediateSemantics{
 			Option: "flaky_rerun", Run: "run_id", Budget: 1,
-			Status: plugin.RemediateCheck{Verb: "get_run", DoneWhen: "status == 'completed'"},
-			Action: plugin.RemediateVerb{Verb: "rerun_run"},
+			Status: plugin.RemediateCheck{Verb: "get_run", DoneWhen: "status == 'completed'",
+				Args: map[string]string{"repo": "{{.repo}}", "run_id": "{{.run_id}}"}},
+			Action: plugin.RemediateVerb{Verb: "rerun_run",
+				Args: map[string]string{"repo": "{{.repo}}", "run_id": "{{.run_id}}", "failed_only": "true"}},
 		}
 	case ClosedEvent:
 		s.ClosesTarget = &plugin.ClosesTargetSemantics{

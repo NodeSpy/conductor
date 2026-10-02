@@ -264,7 +264,7 @@ func (p *pluginSourceIntegration) trigger(t CompiledTrigger, kind string, ev plu
 		Labels:        ev.Labels,
 		CatchUp:       ev.CatchUp,
 		Force:         force,
-		Action:        pluginAction(t),
+		Action:        pluginAction(t, p.sem[kind]),
 		Sem:           p.sem[kind],
 	}
 }
@@ -272,9 +272,9 @@ func (p *pluginSourceIntegration) trigger(t CompiledTrigger, kind string, ev plu
 // pluginAction is the config.Action a plugin-sourced trigger runs: the
 // generic lowering plus the trigger options the ENGINE interprets, which mean
 // the same thing whichever connector the trigger is on.
-func pluginAction(t CompiledTrigger) config.Action {
+func pluginAction(t CompiledTrigger, sem *sdk.EventSemantics) config.Action {
 	act := lowerAction(t)
-	lowerEngineOptions(&act, t.Spec.Options)
+	lowerEngineOptions(&act, t.Spec.Options, sem)
 	return act
 }
 

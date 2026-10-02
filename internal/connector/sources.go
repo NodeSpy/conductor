@@ -19,6 +19,7 @@ import (
 	rssint "github.com/NodeSpy/conductor/internal/integrations/rss"
 	webhookint "github.com/NodeSpy/conductor/internal/integrations/webhook"
 	"github.com/NodeSpy/conductor/internal/netguard"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // lowerAction builds the trigger-identity fields every connectors-model
@@ -564,4 +565,22 @@ func rssFilter(event string, filters map[string]any, trigCtx map[string]any) (bo
 	title, _ := item["title"].(string)
 	summary, _ := item["summary"].(string)
 	return re.MatchString(title + "\n" + summary), nil
+}
+
+// lowerEngineOptions lowers the trigger options the ENGINE interprets onto the
+// action it runs — the same for every source (plugin-contract.md §2.5): the
+// per-revision attempt threshold, and the option the event's declared
+// remediation names ({enabled, max}).
+func lowerEngineOptions(act *config.Action, o map[string]any, sem *sdk.EventSemantics) {
+	for _, k := range []string{"max_attempts_per_revision", "max_attempts_per_head"} {
+		if n := toInt(o[k]); n > 0 {
+			act.MaxAttemptsPerHead = n
+			break
+		}
+	}
+	if sem != nil && sem.Remediate != nil {
+		if m, ok := o[sem.Remediate.Option].(map[string]any); ok {
+			act.FlakyRerun = config.FlakyRerun{Enabled: truthy(m["enabled"]), Max: toInt(m["max"])}
+		}
+	}
 }

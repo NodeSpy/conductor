@@ -107,8 +107,10 @@ connectors:
 	if len(act.Reviewer.Logins) != 1 || act.Reviewer.Logins[0] != "alice" {
 		t.Fatalf("act.Reviewer = %+v", act.Reviewer)
 	}
-	if !act.FlakyRerun.Enabled || act.FlakyRerun.Max != 3 {
-		t.Fatalf("act.FlakyRerun = %+v", act.FlakyRerun)
+	// flaky_rerun is the option failing_checks' declared remediation names:
+	// on an event that declares no remediation it lowers to nothing.
+	if act.FlakyRerun.Enabled {
+		t.Fatalf("act.FlakyRerun = %+v on review_requested, which declares no remediation", act.FlakyRerun)
 	}
 	if act.StuckAfter.D().String() != "45m0s" {
 		t.Fatalf("act.StuckAfter = %v", act.StuckAfter.D())

@@ -106,8 +106,10 @@ func TestABISourceRoutesToTheNamedTrigger(t *testing.T) {
 	src := &abiSourcer{events: []sdk.SourceEvent{
 		{Event: "self_review", Trigger: a.Ref(), Target: sdk.Target{Repo: "o/r", Number: 7}, Context: map[string]any{"pr": 7}, CatchUp: true},
 	}}
+	// The event declares a remediation, so the option it names is lowered.
+	rem := &sdk.EventSemantics{Remediate: &sdk.RemediateSemantics{Option: "flaky_rerun", Run: "run_id"}}
 	psi := &pluginSourceIntegration{source: src, instance: "gh", typ: "github",
-		triggers: []CompiledTrigger{a, b}, log: t.Logf}
+		triggers: []CompiledTrigger{a, b}, log: t.Logf, sem: map[string]*sdk.EventSemantics{"self_review": rem}}
 	got := runPSI(t, psi)
 
 	if len(src.req.Triggers) != 2 || src.req.Triggers[0].ID != a.Ref() || src.req.Triggers[0].Event != "self_review" ||
@@ -358,5 +360,26 @@ func TestSourceValidateRunsThePluginsChecks(t *testing.T) {
 	}
 	if err := (&pluginSourceIntegration{source: &plainSourcer{}, instance: "s"}).Validate(); err != nil {
 		t.Fatalf("a plugin without checks is valid: %v", err)
+	}
+}
+
+// The engine options lower the same way for every source: the attempt
+// threshold (either spelling) always, and a remediation's option — whatever
+// the event's declaration names it — only on an event that declares one.
+func TestEngineOptionsLowerFromTheDeclaration(t *testing.T) {
+	opts := map[string]any{"max_attempts_per_revision": 2, "retry_ci": map[string]any{"enabled": true, "max": 4}}
+	var act config.Action
+	lowerEngineOptions(&act, opts, &sdk.EventSemantics{Remediate: &sdk.RemediateSemantics{Option: "retry_ci", Run: "build"}})
+	if act.MaxAttemptsPerHead != 2 || !act.FlakyRerun.Enabled || act.FlakyRerun.Max != 4 {
+		t.Fatalf("declared remediation option not lowered: %+v", act)
+	}
+	var plain config.Action
+	lowerEngineOptions(&plain, opts, nil)
+	if plain.FlakyRerun.Enabled || plain.MaxAttemptsPerHead != 2 {
+		t.Fatalf("an event declaring no remediation got one: %+v", plain)
+	}
+	// Bundled github: failing_checks declares flaky_rerun.
+	if s := githubEventSemantics("failing_checks"); s == nil || s.Remediate == nil || s.Remediate.Option != "flaky_rerun" {
+		t.Fatalf("github failing_checks remediation = %+v", s)
 	}
 }

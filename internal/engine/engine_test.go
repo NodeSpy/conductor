@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 	"os"
@@ -105,9 +106,9 @@ func newEng(t *testing.T, cfg *config.Config, d *fakeDispatcher, n *fakeNotifier
 		Config: cfg, Store: st, Dispatch: d, Notifier: n,
 		Author:    dispatch.Author{Name: "Me"},
 		UserToken: func() (string, error) { return "utok", nil },
-		Rerun:     rerun,
-		// Runs are finished unless a test says otherwise (never shell out to gh).
-		RunStatus: func(context.Context, core.Trigger, int64) (string, error) { return "completed", nil },
+		// The declared remediation's verbs: the status read reports runs
+		// finished, and the remedy goes to the test's spy.
+		InvokeVerb: remediationVerbs(rerun, func() string { return "completed" }),
 	})
 	return e, st
 }
@@ -1046,9 +1047,10 @@ func TestFlakyRerunWaitsForRunToFinish(t *testing.T) {
 	// (no rerun, no fixer) until it completes.
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	var reran int
-	e, _ := newEng(t, baseCfg(), d, n, func(context.Context, core.Trigger, int64) error { reran++; return nil })
+	rerun := func(context.Context, core.Trigger, int64) error { reran++; return nil }
+	e, _ := newEng(t, baseCfg(), d, n, rerun)
 	status := "in_progress"
-	e.runStatus = func(context.Context, core.Trigger, int64) (string, error) { return status, nil }
+	e.invokeVerb = remediationVerbs(rerun, func() string { return status })
 	act := config.Action{Type: "agent", Agent: "w/fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
 	tr := agentTrigger("failing_checks", "a/w", 8, "h", "fail@h", act)
 	tr.Context["run_id"] = int64(555)
@@ -1086,9 +1088,9 @@ func TestFlakyRerunSkippedWithoutRunID(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	var reran int
 	e, _ := newEng(t, baseCfg(), d, n, func(context.Context, core.Trigger, int64) error { reran++; return nil })
-	e.runStatus = func(context.Context, core.Trigger, int64) (string, error) {
-		t.Fatal("run status should not be looked up without a run id")
-		return "", nil
+	e.invokeVerb = func(context.Context, string, string, map[string]any) (map[string]any, error) {
+		t.Fatal("no remediation verb should run without a run id")
+		return nil, nil
 	}
 	act := config.Action{Type: "agent", Agent: "w/fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
 	tr := agentTrigger("failing_checks", "a/w", 8, "h", "fail@h", act)
@@ -1274,3 +1276,21 @@ func (*gateFake) DispatchInFlight(string) bool   { return false }
 func (*fakeDispatcher) DeliverOutput(string, any) (bool, error) { return false, nil }
 
 func (*gateFake) DeliverOutput(string, any) (bool, error) { return false, nil }
+
+// remediationVerbs fakes the instance verbs a declared remediation invokes:
+// the status read answers status(), and the remedy calls rerun with the run
+// id (nil rerun: the remedy fails, as an unconfigured one would).
+func remediationVerbs(rerun func(context.Context, core.Trigger, int64) error, status func() string) func(context.Context, string, string, map[string]any) (map[string]any, error) {
+	return func(ctx context.Context, instance, verb string, opts map[string]any) (map[string]any, error) {
+		switch verb {
+		case "get_run":
+			return map[string]any{"status": status()}, nil
+		case "rerun_run":
+			if rerun == nil {
+				return nil, errors.New("no remedy configured")
+			}
+			return nil, rerun(ctx, core.Trigger{Instance: instance, Target: core.Target{Repo: fmt.Sprint(opts["repo"])}}, toInt64(opts["run_id"]))
+		}
+		return nil, fmt.Errorf("unexpected verb %s", verb)
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"github.com/NodeSpy/conductor/pkg/githubkit"
 	"github.com/NodeSpy/conductor/pkg/githubkit/ghplugin"
 	"github.com/NodeSpy/conductor/pkg/githubkit/ghsource"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // githubDecl is the bundled github connector's declaration, built from THE
@@ -233,7 +234,7 @@ func (g *githubImpl) lower(t CompiledTrigger) (config.Action, ghsource.Action, e
 		// The operator's own node, so the action keeps its surface spelling.
 		act.Filter = t.Spec.Filter
 	}
-	lowerEngineOptions(&act, t.Spec.Options)
+	lowerEngineOptions(&act, t.Spec.Options, githubEventSemantics(t.Spec.Event()))
 	k.Ext = act
 	return act, k, nil
 }
@@ -242,18 +243,6 @@ func (g *githubImpl) lower(t CompiledTrigger) (config.Action, ghsource.Action, e
 func (g *githubImpl) lowerTrigger(t CompiledTrigger) (config.Action, error) {
 	act, _, err := g.lower(t)
 	return act, err
-}
-
-// lowerEngineOptions lowers the trigger options the ENGINE interprets — the
-// soft attempt threshold and the flaky-check rerun — onto the action it runs.
-// They are the same for every source that declares them, bundled or plugin.
-func lowerEngineOptions(act *config.Action, o map[string]any) {
-	if n := toInt(o["max_attempts_per_head"]); n > 0 {
-		act.MaxAttemptsPerHead = n
-	}
-	if m, ok := o["flaky_rerun"].(map[string]any); ok {
-		act.FlakyRerun = config.FlakyRerun{Enabled: truthy(m["enabled"]), Max: toInt(m["max"])}
-	}
 }
 
 // Invoke runs a github verb. sweep is daemon-global (no repo/token involved)
@@ -419,4 +408,12 @@ func sortedFilterKeys(s Schema) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// githubEventSemantics is the declared semantics of one github event.
+func githubEventSemantics(event string) *sdk.EventSemantics {
+	if ev, ok := githubDecl.Event(event); ok {
+		return ev.Semantics
+	}
+	return nil
 }

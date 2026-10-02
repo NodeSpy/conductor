@@ -185,13 +185,15 @@ type RemediateSemantics struct {
 // RemediateCheck is the status read: a verb, and the expr that says the
 // run has finished.
 type RemediateCheck struct {
-	Verb     string `json:"verb"`
-	DoneWhen string `json:"done_when"`
+	Verb     string            `json:"verb"`
+	Args     map[string]string `json:"args,omitempty"` // option → template over the event's facts
+	DoneWhen string            `json:"done_when"`
 }
 
 // RemediateVerb is the remedy itself.
 type RemediateVerb struct {
-	Verb string `json:"verb"`
+	Verb string            `json:"verb"`
+	Args map[string]string `json:"args,omitempty"`
 }
 
 // AuthorSemantics: who caused the event, and whether they are automated.
