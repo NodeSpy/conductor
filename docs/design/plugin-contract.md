@@ -582,7 +582,7 @@ code.
 | G16 | `internal/config/connectors.go:1687-1707`; `config/vaults.go:55`; `connector.go:503-528` | reserved-name lists disagree (`handoff`, `step` missing) | one list |
 | G17 | `internal/config/config.go:536-546, 563`; `internal/notify/notify.go:32-50, 237-353` | legacy `notify:` Slack/Discord/ntfy/Pushover/Notifiarr sinks | DEL with legacy blocks (Q4); the sinks are plugin verbs via `notify.via` |
 | G18 | `internal/config/config.go:105, 346-374, 1496-1497`; `cmd/conductor/main.go:306-326` | legacy `integrations:` layer, `actionLister` | DEL (Q4) |
-| G19 | `internal/migrate/{github,actions,sources,migrate,notify,legacy_extracted}.go` | legacy-config translator importing the github/slack integrations | Q4 |
+| G19 | `internal/migrate/{github,actions,sources,migrate,notify,legacy_extracted}.go` | legacy-config translator importing the github/slack integrations | DEL in step C (Q4) |
 | G20 | `config/config.go:648-651, 1422-1423` | `MaxTrackedPRs` | NAME `max_tracked_targets` (alias kept) |
 
 ### 3.10 Cannot be generalized — called out
@@ -762,34 +762,45 @@ A reply nobody is waiting on is an ordinary `reply` event, so a trigger can be
 
 ## 5. Migration
 
-### 5.1 PR order
+### 5.1 Where the work goes, and in what order
 
-| Step | Repo | Contents | Behavior change |
+All conductor work lands in **one PR, #164**, as a series of commits in the
+order below. The plugins-repo work lands in its existing companion draft.
+Each step leaves the branch building and passing; the steps are commit groups,
+not separate PRs or releases.
+
+| Step | Repo / PR | Contents | Behavior change at that commit |
 |---|---|---|---|
-| **A** | conductor | **Contract core.** `pkg/plugin` semantics types; `describe {host}`; must-understand; `plugin.poll / translate / validate / stop`, `host.state`; triggers sent and `catch_up` honored for every plugin; `abi` ignored; error codes §1.11; cron/rss/webhook as in-process contract builtins (§1.10); `pkg/sourcekit` scheduler and dedupe; `pkg/plugintest`; reserved-name unification; G15 fix. **Git-only distribution** (X2): `gh` removed from plugin fetch and self-update; any git host; private repos via git credentials. **Tunnels cut over** (V4–V4c): `exposes` + `listeners`, builtin `static`/`lan`/`command`, the `tunnel:` block and provider names deleted outright. | none for existing plugins or configs; the `tunnel:` block is removed (no current users) |
-| **B** | conductor | **Engine reads semantics.** Every row of §3.1–§3.8 replaced by a semantic lookup. The still-bundled github and slack are re-wired as in-process contract plugins that declare exactly the §4 semantics, so the existing unit and e2e suites prove equivalence. Delete `trusted_source`, `SourceTrusted`, `ConnectorABI`, `kindFor`, `ReservedKind`, `BranchFixKind`, the ABI-gated methods, the `sweep` intercept, `identitySource`/`dispatchTuner`, `lowerEngineOptions`, the vendor `config.Action` fields. Outcome vocabulary with a read-side mapping. | none observable (same kinds, facts, templates and run facts) |
-| **P** | conductor-plugins | `connectors/github` and `connectors/slack` (+ `discord`, Q11) on the contract; exposure plugins `cloudflared`, `ngrok`, `tailscale`, `localxpose`, `ssh-tunnel`, `smee`; `githubkit`, `ghsource`, `ghplugin`, the GitHub fake and the conformance cases move here; `pkg/plugintest` conformance, plus engine-outcome scenarios (the incident list: N inline comments → 1 run + 1 push + re-request; bot COMMENTED review; APPROVED with suggestions; edited bot review; concurrent dispatch on one PR; progress hooks incl. stop-on-merge; own failure status) in CI; e2e against a release-N daemon. Tagged releases. | new plugin versions |
-| **N** | conductor release | A + B. Also **plugins-first pre-fetch**: at boot, for every connector backed by a builtin that N+1 removes, fetch and verify the official plugin into the install state without activating it, and log it. `conductor validate --next` loads the config as N+1 would (plugin-backed) and reports problems. | none |
-| **C** | conductor | Remove the github/slack/discord builtins, `internal/integrations/{github,slack}`, `internal/handoff` vendor channels, legacy `integrations:` / `handoffs:` / `notify:` per Q4, `pkg/githubkit`. Strict vendor boundary tests (§1.13). | `use: github` / `use: slack` resolve to the official plugins |
-| **N+1** | conductor release | C | — |
-| **K** | conductor-packs | Raise `requires.conductor` for pr-autopilot, ci-unsticker and pr-review-team to N. No YAML change: the kinds, facts, verbs and socket names are identical (survey: `on: github.*`, `{{.repo}} {{.pr}} {{.number}} {{.title}} {{.author}} {{.run_id}}`, `github.rerequest_review`, `pr_get` outputs). audiobookshelf-import is unaffected. | — |
+| **A** | conductor, #164 | **Contract core.** `pkg/plugin` semantics types; `describe {host}`; must-understand; `plugin.poll / translate / validate / stop`, `host.state`; triggers sent and `catch_up` honored for every plugin; `abi` ignored; error codes §1.11; cron/rss/webhook as in-process contract builtins (§1.10); `pkg/sourcekit` scheduler and dedupe; `pkg/plugintest`; reserved-name unification; G15 fix. **Git-only distribution** (X2). **Tunnels cut over** (V4–V4c). | none for existing plugins or configs; the `tunnel:` block is removed (no current users) |
+| **B** | conductor, #164 | **Engine reads semantics.** Every row of §3.1–§3.8 replaced by a semantic lookup. The still-bundled github and slack are re-wired as in-process contract plugins declaring exactly the §4 semantics, so the existing unit and e2e suites prove equivalence before anything is removed. Delete `trusted_source`, `SourceTrusted`, `ConnectorABI`, `kindFor`, `ReservedKind`, `BranchFixKind`, the ABI-gated methods, the `sweep` intercept, `identitySource`/`dispatchTuner`, `lowerEngineOptions`, the vendor `config.Action` fields. Outcome vocabulary with a read-side mapping. | none observable |
+| **P** | conductor-plugins, companion draft | `connectors/github`, `connectors/slack`, `connectors/discord` on the contract; exposure plugins `cloudflared`, `ngrok`, `tailscale`, `localxpose`, `ssh-tunnel`, `smee`; `githubkit`, `ghsource`, `ghplugin`, the GitHub fake and the conformance cases move here; `pkg/plugintest` conformance plus engine-outcome scenarios (the incident list) in CI; release workflow publishes `refs/dist/<tag>` (X2). | new plugin versions |
+| **C** | conductor, #164 | **Plugins-first boot**, then the removal. Boot fetches and verifies the official plugin for every connector that names a removed builtin before any connector starts. Then remove the github/slack/discord builtins, `internal/integrations/{github,slack}`, the `internal/handoff` vendor channels, the legacy `integrations:` / `handoffs:` / `notify:` blocks (Q4), and `pkg/githubkit` (moved in P). Strict vendor boundary tests (§1.13). e2e runs against the plugin builds from P. | `use: github` / `use: slack` resolve to the official plugins |
+| **K** | conductor-packs | Raise `requires.conductor` for pr-autopilot, ci-unsticker and pr-review-team to the release that ships #164. No YAML change. | — |
+
+**Merge order:** P's plugin releases are tagged and published first, so the
+official plugins exist when #164 merges. Then #164 merges and is released.
+Then K.
 
 ### 5.2 How a deployed daemon moves
 
-1. Update to **N** the usual way. Nothing changes at runtime. Boot pre-fetches
-   the official github/slack plugins (official means admitted at install;
-   checksums are verified) and logs it.
-2. Run `conductor validate --next`. It must be clean. The only expected
-   findings are legacy blocks (Q4) and a write credential the confined plugin
-   cannot reach (Q8).
-3. Update to **N+1**. `use: github` resolves to the already-installed plugin.
-   **No config change**: the connection fields (`app`, `token`, `webhook`,
-   `sweep`, `me`, `repos`, `identity`, `retry`, `project_map`, `api_base`)
-   keep their names and are parsed by the plugin. `policy:` (`pause_label`,
-   `reply_to_bots`) and dispatch `retry:` become generic host-owned connection
-   keys.
-4. Rollback to N works: N resolves `use: github` to its builtin and ignores
-   the installed plugin record.
+There is one release, so there is no intermediate step:
+
+1. **Before switching (optional, recommended):** run the new binary's
+   `conductor validate` against a copy of the config. It reports whether each
+   official plugin can be fetched and verified from this machine, any legacy
+   block (Q4), and a write credential the confined plugin cannot reach (Q8).
+2. **Update the usual way** (auto-update included). On first boot the release
+   fetches and verifies the official github/slack plugins before starting
+   connectors. `use: github` then resolves to that plugin. **No config change**:
+   the connection fields (`app`, `token`, `webhook`, `sweep`, `me`, `repos`,
+   `identity`, `retry`, `project_map`, `api_base`) keep their names and are
+   parsed by the plugin; `policy:` and dispatch `retry:` become generic
+   host-owned connection keys.
+3. **If a fetch fails** (network down at that boot): only the affected
+   connector stays down, with a loud error and a background retry until the
+   plugin is in place. Every other connector, trigger and run proceeds (Q12).
+4. **Rollback** to the previous release works: it resolves `use: github` to
+   its builtin and ignores the installed plugin record.
 
 ### 5.3 Open work items
 
@@ -850,9 +861,11 @@ A reply nobody is waiting on is an ordinary `reply` event, so a trigger can be
 - `internal/connector/github.go` and the `internal/integrations/github` adapter.
 - The trust-model docs and tests added in the WIP commits.
 
-**#164 itself** stays a draft. It carries this document and its summary. The
-reusable commits are cherry-picked into step A, and the rest closes with it.
-The plugins-repo draft is rebased into step P.
+**#164 itself** carries all of it: this document, then steps A, B and C as
+commits on the same branch. The superseded WIP work (the `trusted_source`
+trust model, ConnectorABI) is removed by those commits within the PR, and the
+GitHub fake moves out to the plugins repo in step P. The plugins-repo companion
+draft carries step P.
 
 ---
 
@@ -865,7 +878,7 @@ All resolved on review: Q5 as discussed, the rest as recommended.
 | Q1 | Should an `assigned` claim be believed for every installed plugin, bounded by the operator's `scope` (§2.4)? | **Decided:** yes: install was the trust decision, and scope is defense in depth |
 | Q2 | Must-understand for unknown `semantics` keys (refuse the plugin) vs warn-and-ignore? | **Decided:** refuse, with `optional: true` as the escape hatch |
 | Q3 | paseo's forge path (X1): opaque `runtime_hints` vs always branch-off | **Decided:** `runtime_hints` now; revisit when paseo exposes a forge-neutral worktree call |
-| Q4 | Legacy `integrations:` / `handoffs:` / `notify:` blocks and `internal/migrate` | **Decided:** `conductor migrate` keeps working in N (builtins still present); N+1 drops the legacy blocks and the migrator, and `validate --next` flags them. |
+| Q4 | Legacy `integrations:` / `handoffs:` / `notify:` blocks and `internal/migrate` | **Decided:** removed in the release. Run `conductor migrate` with the current release first; the new binary's `conductor validate` names any legacy block still present |
 | ~~Q5~~ | **Decided:** tunnels and relays are connectors declaring `exposes` (V4–V4c). `static`, `lan` and `command` stay as vendor-neutral builtins; a plugin may always reach the local address it is handed; straight cutover with no compatibility shim. The web approve/revise page stays a core surface with no tunnel code | — |
 | Q6 | rest/graphql `InstanceDecler` (instance-specific verbs) | **Decided:** `plugin.describe {instance}` (optional) |
 | Q7 | Binary verb outputs (Slack `download` → agent `images:`): the wire cannot carry `BinaryOut` today | **Decided:** the host gives each instance a staging directory inside its fs capability; outputs return paths under it, and the engine accepts only those |
@@ -873,5 +886,5 @@ All resolved on review: Q5 as discussed, the rest as recommended.
 | Q9 | `host.state` limits and lifetime | **Decided:** per-instance quota, entries survive restarts, dropped when the instance is removed |
 | Q10 | In conductor-plugins, `internal/` or `pkg/` for githubkit and the fake? | **Decided:** `internal/` until a third party asks. Conductor's own e2e runs the fake and the github plugin as built binaries or containers, never as a Go import, so conductor never depends on conductor-plugins' code (that repo already depends on conductor's SDK) |
 | Q11 | Discord hand-off: plugin in P, or drop it? | **Decided:** plugin in P (it is small), so nothing regresses |
-| Q12 | A daemon on auto-update could skip release N and lose the plugins-first pre-fetch | **Decided:** N+1 never drops a builtin whose replacement plugin is not installed and verified; it keeps the old behavior for that connector, logs it, and fetches in the background until the plugin is in place |
+| Q12 | The release that removes the builtins is the same one that must install their replacements (one PR, one release) | **Decided:** plugins-first boot: the release fetches and verifies the official plugins before starting connectors. A failed fetch keeps only that connector down, loudly, with a background retry; nothing else is affected. `conductor validate` on the new binary reports it in advance. Rollback to the previous release works |
 | Q13 | Where plugins and conductor itself are fetched from | **Decided:** git only, no vendor lock-in and no `gh` (X2). The release workflow publishes binaries on `refs/dist/<tag>`; any git host; private repos via the daemon's git credentials |
