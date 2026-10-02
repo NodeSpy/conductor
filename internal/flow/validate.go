@@ -161,6 +161,9 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 	}
 
 	sc := newScope(ev, cfg, spec.Group != nil)
+	if in.Decl.Unavailable != "" {
+		sc = openScope(cfg) // nothing to check its facts against yet
+	}
 	// A fan-in trigger's steps are shared across every listed source, so
 	// their references check against the UNION of the sources' contexts
 	// (heterogeneous fields are read defensively — {{.x | default ""}}).

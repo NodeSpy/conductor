@@ -180,6 +180,11 @@ type TypeDecl struct {
 	// Semantics are the connection-level declarations (credentials, scope,
 	// poll, translate, listeners, preflight).
 	Semantics *sdk.ConnSemantics
+	// Unavailable, when set, says why this type cannot describe itself yet
+	// (a plugin referenced by the config but not installed): any event and
+	// verb name is accepted, unchecked, and every instance is disabled with
+	// this reason until the plugin lands.
+	Unavailable string
 
 	// Filter, when non-nil, evaluates match keys against an emitted event's
 	// context in the flow runner — the uniform path for synthetic sources
@@ -194,6 +199,9 @@ type TypeDecl struct {
 // Event looks up an event declaration by name; for Dynamic events the
 // declared entry with Dynamic=true is the template all names share.
 func (d *TypeDecl) Event(name string) (EventDecl, bool) {
+	if d.Unavailable != "" {
+		return EventDecl{Name: name, Dynamic: true}, true
+	}
 	var dyn *EventDecl
 	for i := range d.Events {
 		if d.Events[i].Name == name {
@@ -226,6 +234,9 @@ func (v VerbDecl) HostOnly() bool { return v.Semantics != nil && v.Semantics.Hos
 // FlowVerb is Verb for the surfaces a flow, skill or agent reaches: a
 // host-only verb is not one of them.
 func (d *TypeDecl) FlowVerb(name string) (VerbDecl, bool) {
+	if d.Unavailable != "" {
+		return VerbDecl{Name: name, Open: true}, true
+	}
 	v, ok := d.Verb(name)
 	if !ok || v.HostOnly() {
 		return VerbDecl{}, false
@@ -737,4 +748,14 @@ func (s Schema) ContextKeys() map[string]bool {
 		out[k] = true
 	}
 	return out
+}
+
+// RegisterUnavailableType registers a connector type whose plugin cannot be
+// started yet (referenced but not installed): configs naming it load, and
+// each instance is disabled with reason until the plugin lands.
+func RegisterUnavailableType(typ, reason string) {
+	d := &TypeDecl{Type: typ, Desc: "unavailable: " + reason, Unavailable: reason}
+	_ = registerExternalType(d, func(name string, _ config.ConnectorRef, _ Deps) (Impl, error) {
+		return nil, fmt.Errorf("%s", reason)
+	}, true)
 }

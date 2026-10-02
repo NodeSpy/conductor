@@ -457,6 +457,10 @@ func cmdRun(args []string) error {
 	// pure connectors-model config (no legacy integrations: block) has none
 	// until this stack's lowered integrations are appended (#60 — otherwise the
 	// acts-as-the-user write silently fell back to a bare `gh auth token`).
+	// Plugins first: fetch any referenced plugin that is not installed yet
+	// (bounded; never fatal — a connector whose plugin is still missing runs
+	// disabled and pendingPluginRetry restarts into it once it lands).
+	bootGapFill(cfg)
 	stack, err := buildFlowStack(cfg, st, notifier, cfg.DryRun)
 	if err != nil {
 		return err
@@ -1068,6 +1072,7 @@ func cmdRun(args []string) error {
 	}
 	// conductor.updated fires on the first boot of a new release.
 	go emitUpdatedOnBoot(cfg, notifier)
+	go pendingPluginRetry(ctx, cfg, stop)
 
 	// Periodic activity digest (opt-in via notify.digest).
 	if cfg.Notify.Digest.D() > 0 {

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 )
 
@@ -103,5 +104,43 @@ triggers:
 	// The healthy connector still built; the box keeps running.
 	if in, ok := stack.Registry.Get("box"); !ok || in.DisabledReason != "" {
 		t.Fatal("healthy connector should be unaffected")
+	}
+}
+
+// PLUGINS FIRST, NEVER BOOT-FATAL: a connector whose plugin is referenced but
+// not installed yet (its fetch failed) loads disabled with the reason — its
+// triggers and verbs are accepted unchecked — and the rest of the config
+// boots.
+func TestMissingConnectorPluginDisablesOnlyItsConnector(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	pendingPlugins = nil
+	cfg := loadConfigDoc(t, `
+connectors:
+  forge:
+    use: acme/conductor-plugins/connectors/widget
+  box:
+    use: command
+triggers:
+  - on: forge.new_comment
+    steps: [{ id: hi, uses: forge.comment, options: { body: "{{.comment_id}}" } }]
+  - on: manual
+    name: still-works
+    steps: [{ id: ok, uses: box.run, options: { command: "true" } }]
+`)
+	stack, err := buildFlowStack(cfg, nil, nil, true)
+	if err != nil {
+		t.Fatalf("a missing plugin must not fail the boot: %v", err)
+	}
+	defer stack.Close()
+	defer connector.UnregisterExternalType("widget")
+	in, ok := stack.Registry.Get("forge")
+	if !ok || !strings.Contains(in.DisabledReason, "not installed") {
+		t.Fatalf("forge = %+v, want disabled as not installed", in)
+	}
+	if box, _ := stack.Registry.Get("box"); box == nil || box.DisabledReason != "" {
+		t.Fatal("an unrelated connector was affected")
+	}
+	if len(pendingPlugins) != 1 || pendingPlugins[0] != "widget" {
+		t.Fatalf("pending = %v", pendingPlugins)
 	}
 }

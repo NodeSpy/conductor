@@ -99,6 +99,10 @@ func pluginManagerFor(cfg *config.Config, sec *secrets.Resolver, audit func(map[
 	return plugin.NewManager(cfg.PluginRefs(), cfg.BaseDir(), state, pluginDeps(sec, audit))
 }
 
+// pendingPlugins are connector plugins this boot found referenced but not
+// installed (their connectors run disabled); the daemon retries their fetch.
+var pendingPlugins []string
+
 // loadConnectorPlugins builds the plugin manager for the config and registers
 // every connector-kind plugin's type into the connector registry (verify →
 // spawn → describe → register). Fail-closed: any load failure returns an error.
@@ -117,6 +121,19 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 		mgr.Close()
 	}
 	for _, spec := range mgr.ConnectorSpecs() {
+		if !spec.Installed() {
+			// PLUGINS FIRST, NEVER BOOT-FATAL: a connector plugin the config
+			// references but that is not installed yet (its fetch failed — no
+			// network at this boot, a release not published yet) takes down
+			// only its own connectors, loudly, while the daemon retries the
+			// fetch and restarts into it once it lands (pendingPluginRetry).
+			reason := spec.NotInstalledError().Error() + " — the daemon retries and restarts into it once it lands"
+			connector.RegisterUnavailableType(spec.Provides, reason)
+			registered = append(registered, spec.Provides)
+			pendingPlugins = append(pendingPlugins, spec.Name)
+			logf("plugin %s: NOT INSTALLED — its connectors are disabled until it is fetched", spec.Name)
+			continue
+		}
 		decl, err := mgr.StartAndDescribe(ctx, spec.Key())
 		if err != nil {
 			rollback()
@@ -190,7 +207,7 @@ func loadEnginePlugins(mgr *plugin.Manager) (code.EngineLookup, error) {
 		// install state recorded, the running binary must still describe
 		// itself as an engine. A runtime or connector accepted here would be
 		// handed a step's ctx data plane it was never granted.
-		if decl.Kind != plugin.KindStep {
+		if !decl.IsStepEngine() {
 			kind := string(decl.Kind)
 			if kind == "" {
 				kind = "an unspecified kind"
@@ -199,8 +216,8 @@ func loadEnginePlugins(mgr *plugin.Manager) (code.EngineLookup, error) {
 		}
 		cl, _ := mgr.Client(spec.Key())
 		engines[spec.Name] = cl
-		logf("plugin %s: registered code-step engine %q (ABI %d); permissions: %s",
-			spec.Ref(), spec.Name, decl.ABI, spec.EffectiveManifest().Summary())
+		logf("plugin %s: registered code-step engine %q; permissions: %s",
+			spec.Ref(), spec.Name, spec.EffectiveManifest().Summary())
 	}
 	if len(engines) == 0 {
 		return nil, nil
@@ -863,4 +880,68 @@ func publishConnectorVersions() {
 		}
 	}
 	config.SetConnectorVersions(vers)
+}
+
+// bootGapFillTimeout bounds the boot-time fetch of missing plugins.
+var bootGapFillTimeout = 2 * time.Minute
+
+// bootGapFill installs referenced plugins that are not installed yet, and
+// nothing else (an installed build stays as it is: updating is update's
+// job). Failures are logged, never fatal.
+func bootGapFill(cfg *config.Config) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		res, err := reconcilePlugins(cfg, plugin.Options{GapsOnly: true, Log: logf})
+		if err != nil {
+			logf("plugins: boot fetch: %v", err)
+		}
+		for _, r := range res {
+			if r.Err != nil {
+				logf("plugins: %s: %v", r.Name, r.Err)
+			}
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(bootGapFillTimeout):
+		logf("plugins: boot fetch still running after %s — continuing; missing plugins' connectors start disabled", bootGapFillTimeout)
+	}
+}
+
+// pendingPluginInterval is how often a missing plugin's fetch is retried.
+var pendingPluginInterval = 5 * time.Minute
+
+// pendingPluginRetry retries fetching the plugins this boot found missing
+// and, once every one of them is installed, asks the daemon to restart into
+// them (stop): their connectors were disabled until then.
+func pendingPluginRetry(ctx context.Context, cfg *config.Config, stop func()) {
+	if len(pendingPlugins) == 0 {
+		return
+	}
+	logf("plugins: %s not installed — retrying every %s", strings.Join(pendingPlugins, ", "), pendingPluginInterval)
+	t := time.NewTicker(pendingPluginInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		bootGapFill(cfg)
+		state := plugin.LoadInstallState(plugin.InstallDir())
+		mgr := plugin.NewManager(cfg.PluginRefs(), cfg.BaseDir(), state, plugin.Deps{})
+		missing := 0
+		for _, spec := range mgr.ConnectorSpecs() {
+			if !spec.Installed() {
+				missing++
+			}
+		}
+		mgr.Close()
+		if missing == 0 {
+			logf("plugins: every missing plugin is installed now — restarting into them")
+			stop()
+			return
+		}
+	}
 }
