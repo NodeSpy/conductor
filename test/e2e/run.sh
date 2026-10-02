@@ -7,15 +7,11 @@
 #   MODE=stub (default) — hermetic stubs, CI-safe, no secrets → `make e2e`
 #   MODE=live           — real agents + keys (manual)         → `make e2e-live`
 #
-#   E2E_GITHUB=plugin   — run every daemon's github connector on the conductor-github
-#                         PLUGIN instead of the builtin (→ `make e2e-plugin`). The
-#                         configs are copied and rewritten: `use: github` becomes the
-#                         plugin binary, with the mock's
-#                         `api_base:` (a plugin's environment is scrubbed, so it cannot
-#                         inherit PC_GITHUB_API_BASE). The binary is the in-tree
-#                         reference build (test/plugins/conductor-github), or the one
-#                         GITHUB_PLUGIN_BIN names — e.g. the official conductor-plugins
-#                         build — staged into the image.
+#   GITHUB_PLUGIN_BIN   — every daemon's github connector is the conductor-plugins
+#                         github plugin (/usr/local/bin/conductor-github, with the
+#                         mock's `api_base:`); the image builds the pinned version
+#                         (Dockerfile GITHUB_PLUGIN_VERSION) unless this names a
+#                         locally built one to stage into the image.
 #
 # Only groups whose milestones have merged are asserted; the rest are recorded as
 # SKIP with the milestone that unlocks them. Set KEEP=1 to leave the stack up.
@@ -27,7 +23,6 @@ cd "$DIR"
 source "$DIR/lib/assert.sh"
 
 MODE="${MODE:-stub}"
-E2E_GITHUB="${E2E_GITHUB:-builtin}"
 PROJECT="${PROJECT:-pc-e2e}"
 KEEP="${KEEP:-0}"
 COMPOSE=(docker compose -f "$DIR/docker-compose.yml")
@@ -100,9 +95,9 @@ post_webhook_to() {
 
 banner() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 
-# stage_github_plugin puts GITHUB_PLUGIN_BIN (an externally built conductor-github)
-# where the image build picks it up, or clears a stale one so the in-tree reference
-# build is used.
+# stage_github_plugin puts GITHUB_PLUGIN_BIN (a locally built github plugin)
+# where the image build picks it up, or clears a stale one so the pinned build
+# is used.
 stage_github_plugin() {
   mkdir -p "$DIR/plugin-bin"
   rm -f "$DIR/plugin-bin/conductor-github"
@@ -113,30 +108,8 @@ stage_github_plugin() {
   fi
 }
 
-# plugin_configs writes the github-plugin copy of ./config and points the compose
-# mounts at it (E2E_CONFIG_DIR). Every connector block's `use: github` line becomes
-# the plugin, the operator's trust grant, and the mock API base; nothing else in
-# any config changes.
-plugin_configs() {
-  local out="$DIR/.plugin-config"
-  rm -rf "$out"
-  cp -a "$DIR/config" "$out"
-  local f
-  for f in "$out"/*.yaml; do
-    awk '{
-      if (match($0, /^[ ]+use: github[ ]*$/)) {
-        ind = substr($0, 1, index($0, "use:") - 1)
-        print ind "use: /usr/local/bin/conductor-github"
-        print ind "api_base: http://mock-github:8080"
-      } else print
-    }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
-  done
-  export E2E_CONFIG_DIR="$out"
-  echo "github plugin mode: $(grep -l 'conductor-github' "$out"/*.yaml | wc -l | tr -d ' ') config(s) rewritten into $out"
-}
-
 setup() {
-  banner "build & up ($MODE mode, github: $E2E_GITHUB, project $PROJECT)"
+  banner "build & up ($MODE mode, project $PROJECT)"
   dc down -v --remove-orphans >/dev/null 2>&1 || true
   stage_github_plugin
   dc build || { echo "build failed"; exit 1; }
@@ -160,17 +133,13 @@ setup() {
   docker run --rm -v "$DIR/config:/c" conductor-e2e:latest \
     chmod 644 /c/github-app.pem >/dev/null 2>&1
 
-  if [ "$E2E_GITHUB" = plugin ]; then
-    plugin_configs
-  fi
-
   dc up -d || { echo "up failed"; dc logs; exit 1; }
 
   banner "wait for readiness"
   wait_for 60 cexec mock-github  curl -sf http://localhost:8080/_health  || fatal "mock-github not ready"
   wait_for 60 cexec sink-catcher curl -sf http://localhost:8080/_health  || fatal "sink-catcher not ready"
   wait_for 60 cexec forge git ls-remote git://localhost/acme/web.git      || fatal "forge not ready"
-  for c in conductor conductor-ctrl conductor-fail conductor-conn conductor-migrate; do
+  for c in conductor conductor-ctrl conductor-fail conductor-conn; do
     wait_for 60 cexec "$c" test -S /data/control.sock || fatal "$c daemon not ready (control socket)"
   done
   echo "stack ready"
@@ -1021,73 +990,6 @@ group_K_connectors() {
 }
 
 # ---------------------------------------------------------------------------
-# Group L — automatic legacy→connectors migration on boot (issue #36, hard
-# requirement): transform + backup + validate, still working afterwards; an
-# unmappable config refuses and stays legacy.
-# ---------------------------------------------------------------------------
-group_L_migration() {
-  banner "Group L — auto-migration (legacy → connectors)"
-
-  # L1: the daemon booted on a LEGACY config; its boot transformed it.
-  if cexec conductor-migrate test -f /data/config/config.yaml.pre-connectors; then
-    ok "L1 pre-migration backup written (config.yaml.pre-connectors)" L L1-backup
-  else
-    bad "L1 backup written" L L1-backup "no .pre-connectors file"
-  fi
-  if cexec conductor-migrate grep -q "^connectors:" /data/config/config.yaml \
-     && ! cexec conductor-migrate grep -q "^integrations:" /data/config/config.yaml; then
-    ok "L1 config now on the connectors schema (integrations: gone)" L L1-schema
-  else
-    bad "L1 config migrated in place" L L1-schema "config.yaml not transformed"
-  fi
-  if cexec conductor-migrate grep -q "integrations:" /data/config/config.yaml.pre-connectors; then
-    ok "L1 backup holds the original legacy config" L L1-original
-  else
-    bad "L1 backup holds the original" L L1-original "backup is not the legacy file"
-  fi
-
-  # The migrated behavior still works: the same event fires the same work.
-  code="$(post_webhook_to conductor-migrate pull_request migr_merge_conflict.json)"
-  if [ "$code" = "200" ] || [ "$code" = "202" ]; then
-    ok "L1 webhook accepted post-migration (HTTP $code)" L L1-http
-  else
-    bad "L1 webhook accepted post-migration" L L1-http "unexpected HTTP $code"
-  fi
-  if wait_for 45 forge_has_conductor_commit migr/mweb pr-1; then
-    ok "L1 migrated trigger fixed & pushed (same event → same work)" L L1-works
-  else
-    bad "L1 migrated trigger still works" L L1-works "no conductor commit on migr/mweb pr-1"
-  fi
-  # The legacy ntfy sink was mapped onto a connector + via route; the dispatch
-  # notification must reach the sink through the VERB layer post-migration.
-  if wait_for 30 slack_sink_has "migrate-e2e"; then
-    ok "L1 migrated notify sink delivers through the verb layer (ntfy via route)" L L1-notify
-  else
-    bad "L1 migrated notify via route" L L1-notify "no ntfy capture for topic migrate-e2e"
-  fi
-
-  # L2: an UNMAPPABLE legacy config refuses with a hard error naming the
-  # construct, leaves the file untouched, and never commits a partial result.
-  out="$(cexec conductor-conn bash -c '
-    cp /etc/conductor/unmappable.yaml /tmp/unmappable.yaml
-    if conductor config migrate --config /tmp/unmappable.yaml 2>&1; then
-      echo MIGRATE_EXIT_ZERO
-    fi
-    grep -c "^integrations:" /tmp/unmappable.yaml || true
-    test ! -f /tmp/unmappable.yaml.pre-connectors && echo NO_PARTIAL_BACKUP_COMMIT || true
-  ' 2>&1)"
-  case "$out" in
-    *MIGRATE_EXIT_ZERO*) bad "L2 unmappable config refused" L L2-refuse "migrate exited zero" ;;
-    *"nested steps"*) ok "L2 unmappable construct hard-errors naming it (nested steps)" L L2-refuse ;;
-    *) bad "L2 unmappable config refused" L L2-refuse "error did not name the construct: $(echo "$out" | head -2)" ;;
-  esac
-  case "$out" in
-    *NO_PARTIAL_BACKUP_COMMIT*) ok "L2 refusal left no partial backup/commit" L L2-intact ;;
-    *) bad "L2 refusal left the file alone" L L2-intact "partial state written" ;;
-  esac
-}
-
-# ---------------------------------------------------------------------------
 # Functional groups for issue #36 §14/§16/§17/§20/§21. Each drives the REAL
 # connectors daemon (conductor-conn) and asserts the feature's OBSERVABLE
 # side-effect — an audit row, a forge commit, a blob digest, a history record,
@@ -1644,7 +1546,6 @@ main() {
   group_F_capability
   group_J_failure
   group_K_connectors
-  group_L_migration
   group_M_cost
   group_N_budget
   group_O_gate

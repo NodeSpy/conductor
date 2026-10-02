@@ -17,20 +17,8 @@ import (
 // these tests assert the steps ACTUALLY RAN (a marker file on disk), which is
 // the whole distinction from `replay`.
 
-// onceFixture is a pull_request review_requested delivery for
-// AcmeCorp/Widget#5300 — the same shape TestCmdReplayConnectorsModel uses.
-const onceFixture = `{"event": "pull_request", "body": {
-  "action": "review_requested",
-  "installation": { "id": 0 },
-  "repository": { "full_name": "AcmeCorp/Widget", "name": "Widget",
-    "default_branch": "main", "owner": { "login": "AcmeCorp" } },
-  "pull_request": { "number": 5300, "state": "open", "draft": false,
-    "title": "auth: rework session refresh",
-    "html_url": "https://github.com/AcmeCorp/Widget/pull/5300",
-    "head": { "sha": "cafebabe1234", "ref": "feature/auth-refresh" },
-    "base": { "ref": "main" }, "user": { "login": "someone-else" } },
-  "requested_reviewer": { "login": "danielcbaldwin" }
-}}`
+// onceFixture is the shared review-requested fixture delivery.
+const onceFixture = reviewRequestedDelivery
 
 // onceConnectors is the connector block every one-shot test shares: a github
 // connector with the sweep and webhook inert (nothing must listen in one-shot
@@ -480,7 +468,7 @@ func TestReadOnceEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev, err = readOnceEvent(onceOptions{fixturePath: fx})
-	if err != nil || ev.Name != "pull_request" {
+	if err != nil || ev.Name != "review_requested" {
 		t.Fatalf("fixture intake: %+v %v", ev, err)
 	}
 

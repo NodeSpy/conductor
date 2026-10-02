@@ -755,7 +755,7 @@ func (s Schema) ContextKeys() map[string]bool {
 // each instance is disabled with reason until the plugin lands.
 func RegisterUnavailableType(typ, reason string) {
 	d := &TypeDecl{Type: typ, Desc: "unavailable: " + reason, Unavailable: reason}
-	_ = registerExternalType(d, func(name string, _ config.ConnectorRef, _ Deps) (Impl, error) {
+	_ = RegisterExternalType(d, func(name string, _ config.ConnectorRef, _ Deps) (Impl, error) {
 		return nil, fmt.Errorf("%s", reason)
-	}, true)
+	})
 }

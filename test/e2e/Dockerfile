@@ -1,6 +1,7 @@
 # Single hermetic image for the whole e2e stack (test/e2e/). It builds the real
 # conductor binary plus every harness service (fake paseo CLI, mock GitHub API,
-# sink-catcher, and the M3/M4 scaffolds) into one static-binary image, and each
+# sink-catcher, the M3/M4 scaffolds, and the github connector plugin) into one
+# static-binary image, and each
 # compose service just overrides `command:`. Runtime is alpine + git so the fake
 # paseo can clone/commit/push against the bare-git forge. NO LLM, NO secrets.
 #
@@ -24,23 +25,33 @@ RUN go build -o /out/conductor ./cmd/conductor \
  && go build -o /out/fakeagentdeck ./test/e2e/services/fakeagentdeck \
  && go build -o /out/fakeacp       ./test/e2e/services/fakeacp \
  && go build -o /out/fakecli       ./test/e2e/services/fakecli \
- && go build -o /out/conductor-acme-engine ./test/plugins/acme-engine \
- && go build -o /out/conductor-github ./test/plugins/conductor-github
+ && go build -o /out/conductor-acme-engine ./test/plugins/acme-engine
+
+# ---- github connector plugin ----
+# GitHub is a connector plugin (conductor-plugins, connectors/github): every
+# daemon's github connector names this binary. GITHUB_PLUGIN_VERSION pins the
+# build (a tag or commit of the plugins module); a locally built plugin staged
+# into test/e2e/plugin-bin/ (GITHUB_PLUGIN_BIN, run.sh) replaces it below.
+FROM golang:1.26-alpine AS github-plugin
+ARG GITHUB_PLUGIN_VERSION=cb90a92a5bda444f4e0ce1e0d08166d819df44f6
+RUN apk add --no-cache git
+ENV CGO_ENABLED=0 GOBIN=/out
+RUN go install github.com/NodeSpy/conductor-plugins/connectors/github@${GITHUB_PLUGIN_VERSION} \
+ && mv /out/github /out/conductor-github
 
 # ---- runtime stage ----
 FROM alpine:3.20
 RUN apk add --no-cache git git-daemon curl bash coreutils openssl openssh \
  && adduser -D -h /home/conductor conductor
 COPY --from=build /out/ /usr/local/bin/
+COPY --from=github-plugin /out/conductor-github /usr/local/bin/conductor-github
 # The reference ENGINE plugin (test/plugins/acme-engine) is a real out-of-process
 # plugin, not a harness fake: group V points a step's `use:` straight at this
 # path. verify-before-execute refuses a group/world-writable binary or parent, so
 # the mode is pinned rather than left to the builder's umask.
 RUN chmod 0755 /usr/local/bin/conductor-acme-engine
-# The github connector PLUGIN (E2E_GITHUB=plugin, see run.sh): the reference
-# build of the same ghplugin handler the official conductor-plugins build
-# serves — unless the run supplied that official build (GITHUB_PLUGIN_BIN,
-# staged into test/e2e/plugin-bin/), which then replaces it.
+# A github plugin the run supplied (GITHUB_PLUGIN_BIN, staged into
+# test/e2e/plugin-bin/) replaces the pinned build.
 COPY --from=build /src/test/e2e/plugin-bin/ /opt/plugin-bin/
 RUN if [ -f /opt/plugin-bin/conductor-github ]; then cp /opt/plugin-bin/conductor-github /usr/local/bin/conductor-github; fi \
  && chmod 0755 /usr/local/bin/conductor-github

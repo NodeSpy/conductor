@@ -6,7 +6,8 @@
 # filter's failure mode is silence.
 connectors:
   gh:
-    use: github
+    use: /usr/local/bin/conductor-github
+    api_base: http://mock-github:8080
     token: e2e-dummy-token
     repos: ["func/badfilter"]
 

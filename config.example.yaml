@@ -6,9 +6,7 @@
 # named templates in steps: — there is no `agents:` block. A trigger
 # is four keys — on / filters / steps / hooks — and a step can run an agent,
 # run a command, run inline code, call any connector's verb, or call a
-# reusable workflow. Everything here is optional except at least one trigger
-# (or a legacy integrations: block — the previous schema still loads, and
-# `conductor config migrate` converts it; see config.example.legacy.yaml).
+# reusable workflow. Everything here is optional except at least one trigger.
 #
 # Secrets: ${VAR} / env:VAR reads the environment / the sibling conductor.env
 # — the implicit baseline, nothing to declare. Everything beyond env is a

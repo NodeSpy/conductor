@@ -584,7 +584,7 @@ func validateUseRef(where, use, legacyType string, kind UseKind) error {
 	u := strings.TrimSpace(use)
 	if u == "" {
 		if legacyType != "" {
-			return fmt.Errorf("config: %s: `type: %s` was replaced by `use: %s` — the daemon migrates automatically at boot, or run `conductor config migrate`", where, legacyType, legacyType)
+			return fmt.Errorf("config: %s: `type: %s` was replaced by `use: %s` — run `conductor config migrate` with the release before the plugin contract, or rewrite it by hand", where, legacyType, legacyType)
 		}
 		return fmt.Errorf("config: %s: missing use: — name what implements it (a builtin such as %s, a plugin name, or owner/repo/component)", where, strings.Join(firstN(BuiltinNames(kind), 3), " / "))
 	}
@@ -674,7 +674,7 @@ var (
 	builtinMu         sync.RWMutex
 	builtinConnectors = map[string]bool{
 		"blob": true, "command": true, "conductor": true, "cron": true,
-		"discord": true, "github": true, "graphql": true, "kv": true,
+		"discord": true, "graphql": true, "kv": true,
 		"memory": true, "rest": true, "rss": true, "slack": true,
 		"sql": true, "web": true, "webhook": true, "workflow": true,
 	}

@@ -93,39 +93,34 @@ feature addition beyond e2e scope. The identical controller-agnostic Review loop
 Every scenario prints expected-vs-actual and a final **results matrix**. The run
 exits non-zero if any assertion fails.
 
-## github plugin mode (`make e2e-plugin`)
+## The github connector plugin
 
-The same hermetic suite, with every daemon's github connector backed by the
-**conductor-github plugin** instead of the builtin:
-
-```sh
-make e2e-plugin                                         # the in-tree reference build
-GITHUB_PLUGIN_BIN=/path/to/conductor-github make e2e-plugin   # e.g. the official conductor-plugins build
-```
-
-`E2E_GITHUB=plugin` (what the target sets) makes `run.sh` copy `config/` to
-`.plugin-config/` and rewrite each connector's `use: github` line into:
+GitHub is a connector plugin (conductor-plugins, `connectors/github`), so every
+daemon's github connector names the plugin binary the image carries:
 
 ```yaml
     use: /usr/local/bin/conductor-github
     api_base: http://mock-github:8080  # a plugin's env is scrubbed: no PC_GITHUB_API_BASE
 ```
 
-Nothing else in any config changes, so every group asserts the same behavior
-against the plugin that it asserts against the builtin. The compose mounts read
-`${E2E_CONFIG_DIR:-./config}`. The image always builds the reference plugin
-(`test/plugins/conductor-github` — the same `pkg/githubkit/ghplugin` handler the
-official build serves); `GITHUB_PLUGIN_BIN` stages an external build into
-`plugin-bin/`, which replaces it in the image. The migration daemon (group L)
-migrates a legacy file to `use: github` at boot, so it exercises the builtin in
-either mode — by design: it tests the migrator.
+The image builds the plugin at the version the Dockerfile pins
+(`GITHUB_PLUGIN_VERSION`, a tag or commit of the plugins module). To run the
+suite on a local build instead:
+
+```sh
+GITHUB_PLUGIN_BIN=/path/to/conductor-github make e2e
+```
+
+`run.sh` stages it into `plugin-bin/`, which replaces the pinned build in the
+image.
 
 ## Minimal testability hooks (production behavior unchanged when unset)
 
 The harness needs a few seams into otherwise-hardwired endpoints. Each is env-gated
 and a no-op in production:
 
-- `PC_GITHUB_API_BASE` — point conductor's GitHub REST/GraphQL reads at the mock.
+- `PC_GITHUB_API_BASE` — point the fake paseo's GitHub reads at the mock (the
+  github plugin takes `api_base:` from its connector config instead).
 - `PC_PUSHOVER_URL` / `PC_NOTIFIARR_URL` / `PC_NTFY_DEFAULT_URL` — redirect the
   vendor-hardcoded notify sinks at the sink-catcher (Slack/Discord/ntfy already
   take their URL from config).

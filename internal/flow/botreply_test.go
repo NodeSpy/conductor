@@ -1,14 +1,14 @@
 package flow
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/core/coretest"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // botTrigger is a trigger whose event context carries the author facts the
@@ -19,18 +19,18 @@ func botTrigger(author string, isBot bool) core.Trigger {
 	})
 }
 
-// TestReplyToBotsOffSkipsGithubReply (enforcement, mode off): with the
+// TestReplyToBotsOffSkipsTheReply (enforcement, mode off): with the
 // trigger authored by a bot, a uses: gh.comment step (and hook) never reaches
-// the GitHub API; a human-authored trigger dispatches it.
-func TestReplyToBotsOffSkipsGithubReply(t *testing.T) {
+// the connector; a human-authored trigger dispatches it.
+func TestReplyToBotsOffSkipsTheReply(t *testing.T) {
 	var hits atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		w.WriteHeader(201)
-		w.Write([]byte(`{"id": 7, "html_url": "u"}`))
-	}))
-	defer srv.Close()
-	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	coretest.Forge.Respond(func(req sdk.InvokeRequest) (sdk.InvokeResult, error) {
+		if req.Verb == "comment" {
+			hits.Add(1)
+		}
+		return sdk.InvokeResult{Outputs: map[string]any{"id": 7, "url": "u"}}, nil
+	})
+	t.Cleanup(func() { coretest.Forge.Respond(nil) })
 
 	cfg := loadConfig(t, `
 connectors:
@@ -58,7 +58,7 @@ hooks:
 		t.Fatalf("workflow failed: %s", errStr)
 	}
 	if n := hits.Load(); n != 0 {
-		t.Fatalf("bot-authored trigger must not reach the API, got %d calls", n)
+		t.Fatalf("bot-authored trigger must not reach the connector, got %d calls", n)
 	}
 	var skipped int
 	for _, e := range rig.Store.audits {

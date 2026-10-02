@@ -10,7 +10,7 @@ func TestParseUseBuiltin(t *testing.T) {
 		kind UseKind
 		ref  string
 	}{
-		{UseKindConnector, "github"},
+		{UseKindConnector, "webhook"},
 		{UseKindConnector, "slack"},
 		{UseKindConnector, "kv"},
 		{UseKindRuntime, "paseo"},
@@ -73,12 +73,23 @@ func TestParseUseOfficialFallthrough(t *testing.T) {
 
 // Builtin beats official: a name that IS builtin never reaches the plugin repo.
 func TestParseUseBuiltinBeatsOfficial(t *testing.T) {
-	u, err := ParseUse(UseKindConnector, "github")
+	u, err := ParseUse(UseKindConnector, "webhook")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if u.Origin != OriginBuiltin {
-		t.Fatalf("github resolved to %s, want builtin", u.Origin)
+		t.Fatalf("webhook resolved to %s, want builtin", u.Origin)
+	}
+}
+
+// A vendor connector is never builtin: `use: github` is the official plugin.
+func TestParseUseVendorConnectorIsThePlugin(t *testing.T) {
+	u, err := ParseUse(UseKindConnector, "github")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Origin != OriginOfficial || u.Component != "connectors/github" {
+		t.Fatalf("github resolved to %s %q, want the official plugin", u.Origin, u.Component)
 	}
 }
 
@@ -186,7 +197,7 @@ func TestParseUseVersionSuffix(t *testing.T) {
 // A builtin has no version to pin, and a local binary is whatever is on disk —
 // both refuse an @version rather than silently ignoring it.
 func TestParseUseVersionRefused(t *testing.T) {
-	if _, err := ParseUse(UseKindConnector, "github@v1.0.0"); err == nil {
+	if _, err := ParseUse(UseKindConnector, "webhook@v1.0.0"); err == nil {
 		t.Fatal("builtin accepted an @version")
 	}
 	if _, err := ParseUse(UseKindConnector, "./p/conductor-jira@v1.0.0"); err == nil {
@@ -204,8 +215,8 @@ func TestParseUseKindMismatchRefused(t *testing.T) {
 	if !strings.Contains(err.Error(), "can never be wired as a connector") {
 		t.Fatalf("unhelpful error: %v", err)
 	}
-	if _, err := ParseUse(UseKindRuntime, "github"); err == nil {
-		t.Fatal("runtimes: use: github was accepted")
+	if _, err := ParseUse(UseKindRuntime, "webhook"); err == nil {
+		t.Fatal("runtimes: use: webhook was accepted")
 	}
 }
 

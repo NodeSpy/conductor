@@ -572,7 +572,7 @@ var errLegacyFiltersKey = errors.New("`filters:` was removed — state the whole
 	"(`filters: {repos: [o/r]}` → `filter: {repo: [o/r]}`, `exclude: {branches: [x]}` → `not_branch: [x]`, " +
 	"`ignore_users:` → `not_comment_author:`, `gates: {not_draft: true}` → `not_draft: true`, " +
 	"`labels_any:` → `label_any:`; `ignore_checks:` moved to `options:`). " +
-	"Run `conductor config migrate`, or see docs/design/unified-filter-phase2.md")
+	"Run `conductor config migrate` with the release before the plugin contract, or see docs/design/unified-filter-phase2.md")
 
 // rejectLegacyFilters fails a mapping node that still carries `filters:`.
 // yaml.v3's KnownFields does not reach into a custom unmarshaler, and even
@@ -1670,13 +1670,13 @@ func (c *Config) validateConnectors() error {
 		return err
 	}
 	if len(c.SecretRefs) > 0 {
-		return fmt.Errorf("config: the secrets: block was replaced by vaults: entries and {{ vault \"<name>\" \"<key>\" }} references — auto-migration rewrites it at boot, or run `conductor config migrate`")
+		return fmt.Errorf("config: the secrets: block was replaced by vaults: entries and {{ vault \"<name>\" \"<key>\" }} references — run `conductor config migrate` with the release before the plugin contract, or rewrite it by hand")
 	}
 	// The notify: block was replaced by conductor.* lifecycle triggers on
 	// the connectors model. Legacy configs (integrations:) keep the legacy
 	// delivery until they migrate.
 	if c.Notify.Configured() && len(c.Integrations) == 0 && c.HasConnectors() {
-		return fmt.Errorf("config: the notify: block was replaced by triggers on the conductor.* lifecycle events (on: conductor.escalate, …) — auto-migration rewrites it at boot, or run `conductor config migrate`")
+		return fmt.Errorf("config: the notify: block was replaced by triggers on the conductor.* lifecycle events (on: conductor.escalate, …) — run `conductor config migrate` with the release before the plugin contract, or rewrite it by hand")
 	}
 	for name, ref := range c.ConnectorsMap {
 		if name == "" {

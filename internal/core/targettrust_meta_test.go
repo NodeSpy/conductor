@@ -29,15 +29,8 @@ func TestOnlyAuditedSourcesClaimTargetTrust(t *testing.T) {
 	// Each entry is a file that constructs a trusted Target, with WHY. The
 	// list is the audit.
 	audited := map[string]string{
-		"pkg/githubkit/ghsource/events.go": "a signature-verified GitHub payload (or a read the source made with " +
-			"its own credentials); the repo and number are GitHub's",
-		"pkg/githubkit/ghsource/types.go": "ghsource.Trigger declares the field it carries for its hosts",
-		"pkg/githubkit/ghsource/ghsourcetest/ghsourcetest.go": "the conformance suite RECORDS the bit an implementation " +
-			"fired, to assert it; it dispatches nothing",
-		"pkg/githubkit/ghsource/ghsourcetest/wire.go": "the conformance wire driver records a plugin's claim to " +
-			"compare it; it dispatches nothing",
-		"internal/connector/pluginsource.go": "believes a source plugin's target-trust CLAIM only under the operator's " +
-			"trusted_source grant for that connector; any other plugin target is untrusted, claim or no claim",
+		"internal/connector/pluginsource.go": "carries a connector plugin's target.assigned CLAIM: the plugin was " +
+			"trusted once, at install, and the platform it reads assigned the target (plugin-contract.md, the `target` semantic)",
 		"internal/integrations/slack/handle.go": "a synthetic target built from the channel id Slack assigned",
 		"internal/integrations/rss/rss.go":      "the feed's CONFIGURED repo, or a synthetic target named after the feed",
 		"internal/integrations/cron/cron.go":    "a synthetic target named after the operator's own schedule",
@@ -49,9 +42,6 @@ func TestOnlyAuditedSourcesClaimTargetTrust(t *testing.T) {
 		"cmd/conductor/mcp.go": "the memory MCP subprocess parses --target-trusted, which the daemon " +
 			"emits from the dispatch it launched; absent means untrusted",
 		// Carriers, not claimants: they propagate a bit decided upstream.
-		"internal/integrations/github/github.go": "the bundled adapter copies the kit's bit onto core.Trigger",
-		"pkg/githubkit/ghplugin/plugin.go": "the github plugin copies the kit's bit onto the wire as a claim, " +
-			"which the daemon weighs (internal/connector/pluginsource.go)",
 		"internal/flow/plan.go":       "run_step carries the launching dispatch's provenance",
 		"internal/flow/skillverbs.go": "the skill surface carries the dispatch's provenance",
 		"internal/flow/flow.go":       "the runner carries the trigger's provenance into memory.Source",
@@ -101,6 +91,11 @@ func TestOnlyAuditedSourcesClaimTargetTrust(t *testing.T) {
 	}
 	if len(claims) == 0 {
 		t.Fatal("found no TargetTrusted sites at all — this test has stopped looking where the code is")
+	}
+	for rel := range audited {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			t.Errorf("%s is on the audit list but no longer exists — drop its entry", rel)
+		}
 	}
 	for rel := range claims {
 		if _, ok := audited[rel]; !ok {

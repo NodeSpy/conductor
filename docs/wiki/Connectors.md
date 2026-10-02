@@ -36,14 +36,16 @@ order — **first match wins** (full rules in [[Plugins]]):
 
 | `use:` value | resolves to |
 |---|---|
-| `use: github` | a **built-in** — compiled into the daemon (see [Built-in connector types](#built-in-connector-types)) |
+| `use: cron` | a **built-in** — compiled into the daemon (see [Built-in connector types](#built-in-connector-types)) |
+| `use: github` | not built-in → the **official plugin** `connectors/github` |
 | `use: sonarr` | not built-in → the **official plugin repo** `NodeSpy/conductor-plugins`, at `connectors/sonarr` |
 | `use: acme/plugins/jira` | an explicit **GitHub** repo (`github.com` implied) |
 | `use: git.corp.example/team/p//jira` | an explicit **non-GitHub** host (`//` separates the repo from the component) |
 | `use: ./bin/conductor-jira` | a **local** binary, for developing one |
 
-**Built-in beats official** — `use: github` is always the in-binary connector,
-never the plugin repo. A plugin stays current by default; pin an exact build
+**Built-in beats official** — `use: cron` is always the in-binary connector,
+never the plugin repo. Built-ins are vendor-neutral; every vendor connector
+(GitHub, Slack, Discord, …) is a plugin. A plugin stays current by default; pin an exact build
 with `use: sonarr@v1.2.3` (or a range, `@^1.2`). Built-ins and local binaries
 have no version to pin. See [[Plugins]] for versioning, the trust/allowlist
 model, and the `conductor plugin` commands.
@@ -64,36 +66,21 @@ You don't clone the repo: name one in `connectors:` and run `conductor init`,
 and conductor downloads it, verifies the checksum, and runs it as a sandboxed
 subprocess. For GitHub App setup specifically, see [GitHub App setup](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/connectors/github.md#setup).
 
-### github as a plugin
+### github is a plugin
 
-The github connector also ships as a plugin (`conductor-plugins`
-`connectors/github`) that is the **same implementation** as the builtin — the
-same event source (`pkg/githubkit/ghsource`), the same declaration, the same
-trigger lowering — run out of process over the plugin source extension. While
-`github` is still bundled, point the connector at the plugin by path:
-
-```yaml
-connectors:
-  gh:
-    use: NodeSpy/conductor-plugins/connectors/github
-    app: { app_id: 123456, private_key_path: ~/.config/conductor/github-app.pem }
-    webhook: { listen: "127.0.0.1:8787", secret: ${GITHUB_WEBHOOK_SECRET} }
-    me: { logins: [your-login] }
-```
+The github connector is the official plugin (`conductor-plugins`
+`connectors/github`); `use: github` names it. The daemon fetches and verifies
+it at boot before any connector starts, and a connector whose plugin is not
+installed yet runs disabled with the reason while the daemon retries — nothing
+else is held up.
 
 Like every installed plugin, its events carry the semantics its declaration
 gives them (a `new_comment` dedupes on its comment cursor, a `_closed` ends
 the PR's runs, …) and its targets are taken as the platform assigned them:
 trust in a plugin is decided once, at install (`plugin_trust:`), and after
-that all plugins are equal.
-
-Every connection field, event, filter key, option, and verb means what it
-means on the builtin (parity is a shared test suite both run — see the
-plugin's page for the checklist and the known gaps). Two config rules: a config
-cannot use the builtin and the plugin side by side (one of them must back every
-`github` connector), and `api_base:` is how the plugin reaches GitHub
-Enterprise Server or a test double — a plugin's environment is scrubbed, so it
-does not inherit `PC_GITHUB_API_BASE`. `api_base:` works on the builtin too.
+that all plugins are equal. `api_base:` is how the plugin reaches GitHub
+Enterprise Server or a test double — a plugin's environment is scrubbed, so
+it reads no API base from the environment.
 
 ## The contract
 
@@ -135,19 +122,15 @@ for that verb.
 
 These ship **compiled into the daemon** — no download, always available by name.
 (The [plugin catalog](#the-plugin-catalog) adds ~69 more as sandboxed
-subprocesses; several — `github`, `sentry`, `pagerduty`, `ntfy`, `pushover`,
-`notifiarr` — exist as both, and the built-in wins the name.)
+subprocesses — every vendor connector, `github` among them, is one.)
 
 | type | events | verbs | notes |
 |---|---|---|---|
-| `github` | `merge_conflict`, `pr_behind`, `failing_checks`, `changes_requested`, `new_comment`, `review_requested`, `self_review`, `merge_ready`, `issue_matched`, `release`, `deployment_status`, `dependabot_alert`, `secret_scanning_alert`, `stuck_checks` | `comment`, `reply`, `request_review`, `rerequest_review`, `remove_reviewer`, `submit_review`, `add_labels`, `react`, `set_status`, `sweep`, `pr_diff`, `pr_get`, `pr_files`, `review_comments`, `file`, `create_pr`, `merge_pr`, `update_pr`, `create_issue`, `update_issue`, `assign`, `remove_label`, `get_issue`, `put_file`, `delete_file`, `get_ref`, `create_branch`, `dispatch_workflow`, `rerun_run`, `cancel_run`, `list_runs`, `checks`, `create_release`, `upload_asset`, `list_issues`, `search_issues`, `ready_for_review`, `convert_to_draft`, `create_gist`, `get_gist`, `update_gist`, `delete_gist`, `list_gists` | creds: app → token → gh ([setup](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/connectors/github.md#setup)) |
 | `slack` | `app_mention`, `reaction_added`, `slash_command` | `post`, `react`, `ask` | Socket Mode in, Web API out |
 | `discord` | — | `post`, `ask` | bot token; gateway captures ask replies |
 | `web` | — | `ask` | approve/revise/discard page on the inbound listener; [[Hand-offs]] tunnels |
 | `cron` | one per declared schedule | — | `schedules:` on the connection |
 | `webhook` | one per declared source | `post` (generic outbound HTTP) | `sources:` with signing/match/title/dedup |
-| `sentry` | `alert` | — | filter keys: projects/levels/environments |
-| `pagerduty` | `incident` | — | filter keys: event_types/services/urgencies/priorities |
 | `rss` | one per declared feed | — | per-trigger `match:` regex filter |
 | `command` | — | `run` | commands local or over SSH via `host:`/`ssh:`; outputs `stdout`/`stderr`/`exit_code` |
 | `rest` | user-declared polled `events:` | user-declared `verbs:` | any HTTP API from config: `base_url` + shared `auth:` (incl. oauth2 w/ refresh rotation) — see [[Configuration]] |

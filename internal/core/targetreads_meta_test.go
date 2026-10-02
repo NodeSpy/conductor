@@ -139,9 +139,6 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"BuildToolServer", "argv provenance for the tool subprocess; the trust bit travels beside it and the socket resolves authorization from the credential, not from these"},
 		{"SkillEnv", "as above"},
 	},
-	"internal/dispatch/ghwrite.go": {
-		{"Comment", "the github API call's own target — the write goes where the dispatch says, which is what a forged target's OWN repo is"},
-	},
 	"internal/controller/runner.go": {
 		{"runKey", "delegates to Trigger.Key"},
 	},
@@ -158,14 +155,8 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	"internal/connector/scope.go": {
 		{"ContextScope", "reads Target.Repo only on the !TargetTrusted-checked branch"},
 	},
-	"internal/connector/github.go": {
-		{"TargetHead", "reads Target.Number beside OwnRepo(), and reads nothing when OwnRepo() is empty"},
-	},
 	"pkg/plugintest/plugintest.go": {
 		{"record", "the conformance harness's comparison key for a fixture plugin's own events (the legacy Repo#Number when a target names no key): nothing is authorized, keyed or scoped by it"},
-	},
-	"pkg/githubkit/ghsource/ghsourcetest/wire.go": {
-		{"read", "the conformance driver records an event's target to compare it; nothing is dispatched"},
 	},
 	"internal/connector/external.go": {
 		{"TargetHead", "a plugin source's head read: reads Target.Number beside OwnRepo(), only for a target " +
@@ -253,9 +244,6 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	},
 	"internal/controller/opencode.go": {
 		{"opencodeTitle", "a session title"},
-	},
-	"pkg/githubkit/ghsource/events.go": { // the github source kit (the bundled integration and the plugin share it)
-		{"triggersFor", "CONSTRUCTS the trigger from the verified payload"},
 	},
 
 	// ---- The checkout. paseo is told which repo to clone and which PR to
@@ -400,7 +388,11 @@ func allowed(file, fn string) bool {
 
 // Every exception carries a reason, so the list cannot rot into a silencer.
 func TestEveryRawTargetExceptionHasAReason(t *testing.T) {
+	root := repoRootFor(t)
 	for file, es := range rawTargetExceptions {
+		if _, err := os.Stat(filepath.Join(root, file)); err != nil {
+			t.Errorf("%s has raw-target exceptions but no longer exists — drop its entry", file)
+		}
 		for _, e := range es {
 			if strings.TrimSpace(e.reason) == "" {
 				t.Errorf("%s: %s() is excepted with no reason", file, e.fn)

@@ -52,7 +52,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/vaults"
 
 	_ "github.com/NodeSpy/conductor/internal/integrations/cron"    // register "cron"
-	_ "github.com/NodeSpy/conductor/internal/integrations/github"  // register "github"
 	_ "github.com/NodeSpy/conductor/internal/integrations/rss"     // register "rss"
 	_ "github.com/NodeSpy/conductor/internal/integrations/webhook" // register "webhook"
 )
@@ -208,7 +207,6 @@ usage:
   conductor connector auth <name> [--revoke]  oauth2 login (or clear stored tokens)
   conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
   conductor unlock                      seed the default vault key for non-interactive restarts
-  conductor config migrate [--dry-run]  transform a legacy config to the connectors schema
   conductor mcp memory --socket <path>  stdio MCP server: memory + skill broker (agent-facing)
   conductor mcp callable --token <name> [--config PATH]  stdio MCP server: invoke callable workflows (external MCP clients)
   conductor workflows ls|review|rm      manage saved (agent-promoted) workflows
@@ -268,24 +266,20 @@ func loadConfig(args []string) (*config.Config, []string, error) {
 	return cfg, rest, err
 }
 
-// resolveBootConfig runs the daemon's boot config pipeline: migrate-on-boot,
-// then load, and on ANY load failure holds degraded until the config becomes
-// loadable rather than returning an error that exits cmdRun into a
-// service-manager crash-loop (H1). The failure that must hold is not only a
-// failed migration — a connectors-schema config the strict loader rejects (a
-// stray key, an env ref that didn't resolve) reaches here with migrateWarning
-// == "", just as much a restart-loop trap. Returns the loaded config and any
-// escalate warning to surface. This is the testable boot seam: the gate lives
-// here, not inline in cmdRun.
+// resolveBootConfig runs the daemon's boot config pipeline: load, and on ANY
+// load failure hold degraded until the config becomes loadable rather than
+// returning an error that exits cmdRun into a service-manager crash-loop (H1).
+// Returns the loaded config and any escalate warning to surface. This is the
+// testable boot seam: the gate lives here, not inline in cmdRun.
 func resolveBootConfig(args []string) (*config.Config, string, error) {
-	migrateWarning := autoMigrateOnBoot(args)
 	// loadConfig loads the sibling conductor.env first, so ${...} refs resolve
 	// (this is also how launchd — which has no EnvironmentFile — gets secrets).
 	cfg, _, err := loadConfig(args)
+	warning := ""
 	if err != nil {
-		cfg, migrateWarning, err = holdDegradedUntilLoadable(args, migrateWarning, err)
+		cfg, warning, err = holdDegradedUntilLoadable(args, "", err)
 	}
-	return cfg, migrateWarning, err
+	return cfg, warning, err
 }
 
 // buildIntegrations instantiates every configured integration via the registry.
@@ -416,7 +410,7 @@ func cmdRun(args []string) error {
 	// connectors schema (backed up, validated, swapped) BEFORE the strict
 	// runtime load; on any failure the daemon keeps running on the legacy
 	// config and notifies.
-	cfg, migrateWarning, err := resolveBootConfig(args)
+	cfg, bootWarning, err := resolveBootConfig(args)
 	if err != nil {
 		return err
 	}
@@ -642,8 +636,8 @@ func cmdRun(args []string) error {
 		st.SetAuditRedactor(stack.Secrets.Redact)
 	}
 	notifyStackFailures(stack, notifier)
-	if migrateWarning != "" {
-		notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "config", Kind: "migration"}, migrateWarning)
+	if bootWarning != "" {
+		notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "config", Kind: "boot"}, bootWarning)
 	}
 	// notify.via routes deliver through connector verbs — wire the router when
 	// a connectors: block exists (via with no connectors logs a warning).

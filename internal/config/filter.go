@@ -416,7 +416,7 @@ func (f *Filter) MarshalYAML() (any, error) {
 // FilterFromValue builds a Filter from an in-memory value in the same shapes
 // the YAML accepts (a condition string, a list to OR, a map of keys to AND) —
 // for the producers that SYNTHESISE a filter rather than parse one, notably
-// `conductor config migrate` rewriting a legacy `filters:` block. Going through
+// a pack instance's repo scope. Going through
 // the decoder rather than assembling nodes keeps one grammar (and one set of
 // error messages), and leaves the result marshallable as what was passed in.
 func FilterFromValue(v any) (*Filter, error) {

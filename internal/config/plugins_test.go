@@ -11,7 +11,7 @@ import (
 func TestPluginRefsDerivedFromUse(t *testing.T) {
 	c := &Config{
 		ConnectorsMap: map[string]ConnectorRef{
-			"gh":      {Use: "github"},                           // builtin: not a plugin
+			"hook":    {Use: "webhook"},                          // builtin: not a plugin
 			"tickets": {Use: "acme/plugins/jira"},                // explicit repo
 			"alerts":  {Use: "sentry", Network: []string{"x:1"}}, // official repo
 		},
@@ -89,7 +89,7 @@ func TestValidatePluginRefsRejectsNameConflict(t *testing.T) {
 // A builtin never becomes a plugin, however many instances name it.
 func TestPluginRefsIgnoresBuiltins(t *testing.T) {
 	c := &Config{
-		ConnectorsMap: map[string]ConnectorRef{"a": {Use: "github"}, "b": {Use: "slack"}},
+		ConnectorsMap: map[string]ConnectorRef{"a": {Use: "webhook"}, "b": {Use: "cron"}},
 		Runtimes:      map[string]RuntimeConfig{"r": {Use: "paseo"}},
 	}
 	if refs := c.PluginRefs(); len(refs) != 0 {

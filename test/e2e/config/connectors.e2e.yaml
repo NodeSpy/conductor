@@ -6,7 +6,8 @@
 
 connectors:
   gh:
-    use: github
+    use: /usr/local/bin/conductor-github
+    api_base: http://mock-github:8080
     app:
       app_id: 123456
       private_key_path: /etc/conductor/github-app.pem

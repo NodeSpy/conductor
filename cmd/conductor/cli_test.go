@@ -185,18 +185,7 @@ triggers:
 		t.Fatal(err)
 	}
 	fixture := filepath.Join(dir, "fixture.json")
-	fx := `{"event": "pull_request", "body": {
-  "action": "review_requested",
-  "installation": { "id": 0 },
-  "repository": { "full_name": "AcmeCorp/Widget", "name": "Widget",
-    "default_branch": "main", "owner": { "login": "AcmeCorp" } },
-  "pull_request": { "number": 5300, "state": "open", "draft": false,
-    "title": "auth: rework session refresh",
-    "html_url": "https://github.com/AcmeCorp/Widget/pull/5300",
-    "head": { "sha": "cafebabe1234", "ref": "feature/auth-refresh" },
-    "base": { "ref": "main" }, "user": { "login": "someone-else" } },
-  "requested_reviewer": { "login": "danielcbaldwin" }
-}}`
+	fx := reviewRequestedDelivery
 	if err := os.WriteFile(fixture, []byte(fx), 0o600); err != nil {
 		t.Fatal(err)
 	}

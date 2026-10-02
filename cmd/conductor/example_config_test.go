@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
-	"github.com/NodeSpy/conductor/internal/migrate"
 )
 
 // TestExampleConfigValidates proves the shipped connectors-model example
@@ -81,53 +80,6 @@ func TestExampleConfigValidates(t *testing.T) {
 	pd, ok := over["gpu-paseo"]
 	if !ok || pd.Remote == nil || pd.Remote.Name != "build-box" {
 		t.Fatalf("gpu-paseo must lower to a remote dispatcher, got %+v", over)
-	}
-}
-
-// TestLegacyExampleConfigStillLoads: the retained legacy example must still
-// reach a loadable, valid config through the boot path — which now means
-// MIGRATION FIRST. `agents:` left the schema (docs/design/agents-removal.md),
-// so a file carrying it is exactly the case autoMigrateOnBoot exists for; the
-// point of this test is that the legacy example never dead-ends.
-func TestLegacyExampleConfigStillLoads(t *testing.T) {
-	raw, err := os.ReadFile("../../config.example.legacy.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyPath := writeTempRSAKey(t)
-	doc := strings.Replace(string(raw), "~/.config/conductor/github-app.pem", keyPath, 1)
-	// The legacy example ships app_id: 0 as a fill-me-in placeholder.
-	doc = strings.Replace(doc, "app_id: 0", "app_id: 123456", 1)
-	for _, v := range []string{
-		"GH_SMEE_URL", "GH_WEBHOOK_SECRET", "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN",
-		"SENTRY_CLIENT_SECRET", "PAGERDUTY_SIGNING_SECRET", "CW_SECRET",
-	} {
-		t.Setenv(v, "dummy")
-	}
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// Boot migrates before it loads.
-	res, err := migrate.Transform([]byte(doc))
-	if err != nil {
-		t.Fatalf("legacy example must migrate: %v", err)
-	}
-	if res.Changed {
-		if err := os.WriteFile(path, res.Output, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("legacy example must load after migration: %v", err)
-	}
-	igs, err := buildIntegrations(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := validateAll(cfg, igs); err != nil {
-		t.Fatal(err)
 	}
 }
 

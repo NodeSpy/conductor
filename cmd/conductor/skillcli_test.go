@@ -2,19 +2,18 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core/coretest"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/skill"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // TestSkillCLIEndToEnd drives the agent-facing CLI (discover + call) through the
@@ -92,23 +91,17 @@ func TestSkillCLIEndToEnd(t *testing.T) {
 }
 
 // TestSkillCLISubmitReviewRoundTrip drives `conductor call gh.submit_review`
-// the whole way — agent CLI → IPC socket → broker → the REAL github connector →
-// a stub GitHub server — with NO skill-level identity anywhere. It proves:
-//   - the round trip works end to end and reaches the reviews endpoint;
+// the whole way — agent CLI → IPC socket → broker → the forge connector's
+// plugin.invoke — with NO skill-level identity anywhere. It proves:
+//   - the round trip works end to end and reaches the plugin's verb;
 //   - the inline `--comments` JSON array survives the CLI as a real list;
-//   - with no `--as`, the review posts AS ME (the connector's write_token),
-//     never a forced bot — i.e. identity now defaults to the connector default.
+//   - with no `--as`, the call carries the connection's own identity, never a
+//     forced bot — i.e. identity defaults to the connector default.
 func TestSkillCLISubmitReviewRoundTrip(t *testing.T) {
-	var gotPath, gotAuth string
-	var gotBody map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotAuth = r.Header.Get("Authorization")
-		_ = json.NewDecoder(r.Body).Decode(&gotBody)
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": 42})
-	}))
-	defer srv.Close()
-	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	coretest.Forge.Respond(func(sdk.InvokeRequest) (sdk.InvokeResult, error) {
+		return sdk.InvokeResult{Outputs: map[string]any{"id": 42, "comments": 1}}, nil
+	})
+	t.Cleanup(func() { coretest.Forge.Respond(nil) })
 
 	// A github connector that writes as "me" via a literal write_token, and a
 	// profile granted ONLY gh.submit_review with no identity field at all.
@@ -190,19 +183,22 @@ workflows:
 		t.Fatalf("call result should report posted comments, got:\n%s", out)
 	}
 
-	if gotPath != "/repos/o/r/pulls/1/reviews" {
-		t.Fatalf("reviews endpoint not hit; path = %q", gotPath)
+	calls := coretest.Forge.Calls()
+	if len(calls) != 1 || calls[0].Verb != "submit_review" {
+		t.Fatalf("submit_review not invoked once: %+v", calls)
 	}
-	// Posted as me (write_token), never a forced bot — the crux of the redesign.
-	if gotAuth != "Bearer me-sentinel" {
-		t.Fatalf("must post as me (write_token) by default; Authorization = %q", gotAuth)
+	// Posted as me (the connection's write_token), never a forced bot — the
+	// crux of the redesign.
+	if id, _ := calls[0].Connection["identity"].(map[string]any); id["write_token"] != "me-sentinel" {
+		t.Fatalf("must post as me (the connection's write_token) by default; connection = %v", calls[0].Connection)
 	}
-	if gotBody["event"] != "APPROVE" || gotBody["body"] != "lgtm" {
-		t.Fatalf("review body not carried: %v", gotBody)
+	got := calls[0].Options
+	if got["event"] != "APPROVE" || got["body"] != "lgtm" {
+		t.Fatalf("review body not carried: %v", got)
 	}
-	cs, ok := gotBody["comments"].([]any)
+	cs, ok := got["comments"].([]any)
 	if !ok || len(cs) != 1 {
-		t.Fatalf("inline comments not carried through the CLI: %v", gotBody["comments"])
+		t.Fatalf("inline comments not carried through the CLI: %v", got["comments"])
 	}
 	if c0, _ := cs[0].(map[string]any); c0["path"] != "a.go" || c0["body"] != "nit" {
 		t.Fatalf("comment payload wrong: %v", cs[0])

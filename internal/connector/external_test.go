@@ -38,8 +38,8 @@ func (f *fakeInvoker) Invoke(_ context.Context, req plugin.InvokeRequest) (map[s
 }
 
 func TestRegisterExternalTypeRefusesBundledOverride(t *testing.T) {
-	// github is a bundled type registered via init().
-	err := RegisterExternalType(&TypeDecl{Type: "github"}, nil)
+	// cron is a bundled type registered via init().
+	err := RegisterExternalType(&TypeDecl{Type: "cron"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "bundled") {
 		t.Fatalf("want bundled-override refusal, got %v", err)
 	}
@@ -58,9 +58,9 @@ func TestRegisterExternalTypeRefusesBundledOverride(t *testing.T) {
 		t.Fatal("expected type removed")
 	}
 	// Unregister must never drop a bundled type.
-	UnregisterExternalType("github")
-	if _, ok := TypeDeclFor("github"); !ok {
-		t.Fatal("bundled github must survive UnregisterExternalType")
+	UnregisterExternalType("cron")
+	if _, ok := TypeDeclFor("cron"); !ok {
+		t.Fatal("bundled cron must survive UnregisterExternalType")
 	}
 
 	// Two plugins providing the same type must not silently clobber each other

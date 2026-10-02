@@ -23,9 +23,7 @@ var moduleRef = regexp.MustCompile(`github\.com/NodeSpy/conductor`)
 
 // transitional are the paths still under pkg/ that the plan moves out. Each
 // entry names where it goes; the list only shrinks.
-var transitional = map[string]string{
-	"githubkit/": "the github plugin's code — moves to conductor-plugins (plugin-contract.md §5, step P)",
-}
+var transitional = map[string]string{}
 
 func TestPkgNamesNoVendor(t *testing.T) {
 	var hits []string

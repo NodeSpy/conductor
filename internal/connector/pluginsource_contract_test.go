@@ -304,32 +304,6 @@ func (f *countInvoker) Invoke(context.Context, plugin.InvokeRequest) (map[string
 	return map[string]any{}, nil
 }
 
-// A plugin standing in for a bundled type replaces it only while it is
-// registered, and the bundled registration comes back.
-func TestPluginInPlaceOfBundledIsRestored(t *testing.T) {
-	bundled, ok := TypeDeclFor("github")
-	if !ok {
-		t.Fatal("github is not registered")
-	}
-	if err := RegisterExternalType(&TypeDecl{Type: "github"}, nil); err == nil {
-		t.Fatal("the plain registration must still refuse a bundled type")
-	}
-	stand := &TypeDecl{Type: "github", Desc: "plugin"}
-	if err := RegisterExternalTypeInPlaceOfBundled(stand, nil); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := TypeDeclFor("github"); got != stand || !IsExternalType("github") {
-		t.Fatal("the plugin did not take the type")
-	}
-	if err := RegisterExternalTypeInPlaceOfBundled(&TypeDecl{Type: "github"}, nil); err == nil {
-		t.Fatal("a second plugin must still collide")
-	}
-	UnregisterExternalType("github")
-	if got, _ := TypeDeclFor("github"); got != bundled || IsExternalType("github") {
-		t.Fatal("the bundled github registration was not restored")
-	}
-}
-
 // The plugin's own checks run as the source's Validate, naming each problem;
 // a plugin with none of its own is valid.
 func TestSourceValidateRunsThePluginsChecks(t *testing.T) {
@@ -361,9 +335,5 @@ func TestEngineOptionsLowerFromTheDeclaration(t *testing.T) {
 	lowerEngineOptions(&plain, opts, nil)
 	if plain.FlakyRerun.Enabled || plain.MaxAttemptsPerHead != 2 {
 		t.Fatalf("an event declaring no remediation got one: %+v", plain)
-	}
-	// Bundled github: failing_checks declares flaky_rerun.
-	if s := githubEventSemantics("failing_checks"); s == nil || s.Remediate == nil || s.Remediate.Option != "flaky_rerun" {
-		t.Fatalf("github failing_checks remediation = %+v", s)
 	}
 }

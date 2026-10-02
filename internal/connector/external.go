@@ -26,30 +26,6 @@ var externalTypes = map[string]bool{}
 // (external-overrides-bundled is disallowed — §7 open Q4). Safe to call at
 // daemon boot after config load, before connector.Build.
 func RegisterExternalType(decl *TypeDecl, b Builder) error {
-	return registerExternalType(decl, b, false)
-}
-
-// RegisterExternalTypeInPlaceOfBundled is RegisterExternalType for a plugin
-// that stands in for a BUNDLED type of the same name — the conductor-github
-// plugin for the builtin github, which the plugin exists to be able to
-// replace. The caller must have established that NO configured connector
-// resolves to the builtin of that type (cmd/conductor's loadConnectorPlugins
-// checks the config): with none, nothing is redirected — the operator named
-// the plugin and only the plugin — so the refusal's reason does not apply.
-// The bundled registration is kept and restored by UnregisterExternalType.
-// Two plugins claiming one type still collide.
-func RegisterExternalTypeInPlaceOfBundled(decl *TypeDecl, b Builder) error {
-	return registerExternalType(decl, b, true)
-}
-
-// replacedBundled holds a bundled type's registration while a plugin stands
-// in for it (RegisterExternalTypeInPlaceOfBundled), for restoration.
-var replacedBundled = map[string]struct {
-	decl *TypeDecl
-	b    Builder
-}{}
-
-func registerExternalType(decl *TypeDecl, b Builder, inPlaceOfBundled bool) error {
 	regMu.Lock()
 	defer regMu.Unlock()
 	if _, dup := typeReg[decl.Type]; dup {
@@ -58,13 +34,7 @@ func registerExternalType(decl *TypeDecl, b Builder, inPlaceOfBundled bool) erro
 			// credentials to whichever registered last — refuse the collision.
 			return fmt.Errorf("connector type %q is already provided by another plugin — two plugins cannot provide the same type", decl.Type)
 		}
-		if !inPlaceOfBundled {
-			return fmt.Errorf("connector type %q is bundled and cannot be replaced by a plugin", decl.Type)
-		}
-		replacedBundled[decl.Type] = struct {
-			decl *TypeDecl
-			b    Builder
-		}{typeReg[decl.Type], buildReg[decl.Type]}
+		return fmt.Errorf("connector type %q is bundled and cannot be replaced by a plugin", decl.Type)
 	}
 	typeReg[decl.Type] = decl
 	buildReg[decl.Type] = b
@@ -73,7 +43,7 @@ func registerExternalType(decl *TypeDecl, b Builder, inPlaceOfBundled bool) erro
 }
 
 // UnregisterExternalType removes an external type (config reload, test cleanup).
-// It never removes a bundled type: one a plugin stood in for is restored.
+// It never removes a bundled type.
 func UnregisterExternalType(typ string) {
 	regMu.Lock()
 	defer regMu.Unlock()
@@ -81,10 +51,6 @@ func UnregisterExternalType(typ string) {
 		delete(typeReg, typ)
 		delete(buildReg, typ)
 		delete(externalTypes, typ)
-		if r, ok := replacedBundled[typ]; ok {
-			typeReg[typ], buildReg[typ] = r.decl, r.b
-			delete(replacedBundled, typ)
-		}
 	}
 }
 
@@ -100,17 +66,6 @@ func IsExternalType(typ string) bool {
 // that, per configured instance, resolves that instance's credentials and hands
 // them to the plugin subprocess per-call (least privilege, own-type-only).
 func RegisterExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin.Decl) (*TypeDecl, error) {
-	return registerExternalConnector(cl, spec, decl, false)
-}
-
-// RegisterExternalConnectorInPlaceOfBundled is RegisterExternalConnector for
-// a plugin standing in for a bundled type (see
-// RegisterExternalTypeInPlaceOfBundled for the precondition the caller owns).
-func RegisterExternalConnectorInPlaceOfBundled(cl *plugin.Client, spec plugin.Spec, decl *plugin.Decl) (*TypeDecl, error) {
-	return registerExternalConnector(cl, spec, decl, true)
-}
-
-func registerExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin.Decl, inPlaceOfBundled bool) (*TypeDecl, error) {
 	td := mapDecl(decl)
 	allow := map[string]bool{}
 	for _, s := range spec.AllowSecrets {
@@ -147,7 +102,7 @@ func registerExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin
 			log:        log,
 		}, nil
 	}
-	if err := registerExternalType(td, builder, inPlaceOfBundled); err != nil {
+	if err := RegisterExternalType(td, builder); err != nil {
 		return nil, err
 	}
 	return td, nil

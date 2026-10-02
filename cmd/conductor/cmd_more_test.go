@@ -50,44 +50,12 @@ triggers:
 	}
 }
 
-func TestCmdConfigMigrate(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	os.WriteFile(path, []byte(legacyMini), 0o600)
-
-	// Usage error.
-	if err := cmdConfig([]string{"--config", path}); err == nil {
-		t.Fatal("missing subcommand must error")
-	}
-	// Dry run: nothing written.
-	if err := cmdConfig([]string{"--config", path, "migrate", "--dry-run"}); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "integrations:") {
-		t.Fatal("dry run must not touch the file")
-	}
-	// Real migrate: file transformed, backup written.
-	if err := cmdConfig([]string{"--config", path, "migrate"}); err != nil {
-		t.Fatal(err)
-	}
-	b, _ := os.ReadFile(path)
-	if !strings.Contains(string(b), "connectors:") || strings.Contains(string(b), "integrations:") {
-		t.Fatalf("migrated config:\n%s", b)
-	}
-	if _, err := os.Stat(path + ".pre-connectors"); err != nil {
-		t.Fatal("backup missing")
-	}
-	// Idempotent second run.
-	if err := cmdConfig([]string{"--config", path, "migrate"}); err != nil {
-		t.Fatal(err)
-	}
-	// autoMigrateOnBoot on an already-migrated config is a quiet no-op; on a
-	// missing path it stays silent.
-	if warn := autoMigrateOnBoot([]string{"--config", path}); warn != "" {
-		t.Fatalf("no-op boot migrate warned: %q", warn)
-	}
-	if warn := autoMigrateOnBoot([]string{"--config", filepath.Join(dir, "nope.yaml")}); warn != "" {
-		t.Fatalf("missing config warned: %q", warn)
+// `config migrate` went with the legacy schema (plugin-contract.md Q4); the
+// command says so instead of failing as an unknown subcommand.
+func TestCmdConfigMigrateRemoved(t *testing.T) {
+	err := cmdConfig([]string{"migrate"})
+	if err == nil || !strings.Contains(err.Error(), "removed with the legacy config schema") {
+		t.Fatalf("config migrate must explain its removal, got %v", err)
 	}
 }
 
