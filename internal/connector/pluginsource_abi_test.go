@@ -105,8 +105,8 @@ func TestABISourceRoutesToTheNamedTrigger(t *testing.T) {
 func TestABISourceRefusesMisroutedEvents(t *testing.T) {
 	a := abiTrigger(t, 0, "gh.new_comment", "a", "", nil)
 	src := &abiSourcer{events: []sdk.SourceEvent{
-		{Event: "release", Trigger: a.Ref()},                     // wrong event for the trigger
-		{Event: "new_comment", Trigger: "9:gh.new_comment"},      // no such trigger
+		{Event: "release", Trigger: a.Ref()},                      // wrong event for the trigger
+		{Event: "new_comment", Trigger: "9:gh.new_comment"},       // no such trigger
 		{Event: "new_comment", Trigger: a.Ref(), Instance: "gh2"}, // another instance
 	}}
 	psi := &pluginSourceIntegration{source: src, instance: "gh", typ: "github", abi: sdk.ConnectorABI,
@@ -268,7 +268,7 @@ func TestABITargetHeadOnlyForOwnTrustedTargets(t *testing.T) {
 		t.Fatalf("own trusted target: %+v %v", h, err)
 	}
 	for _, tr := range []core.Trigger{
-		{Instance: "gh", Target: core.Target{Repo: "o/r", Number: 5}},                      // untrusted
+		{Instance: "gh", Target: core.Target{Repo: "o/r", Number: 5}},                         // untrusted
 		{Instance: "other", TargetTrusted: true, Target: core.Target{Repo: "o/r", Number: 5}}, // not ours
 		{Instance: "gh", TargetTrusted: true, Target: core.Target{Repo: "o/r"}},               // no number
 	} {
