@@ -1074,3 +1074,25 @@ func TestMergePolicySameKeyThreeScopes(t *testing.T) {
 		t.Fatalf("global applies when nothing overrides, got %+v", out)
 	}
 }
+
+// A runtime's transport and session model are closed sets: a typo is a load
+// error, not a runtime that silently falls back to its default transport.
+func TestRuntimeTransportAndSessionModelAreChecked(t *testing.T) {
+	for _, tc := range []struct{ field, want string }{
+		{"transport: carrier-pigeon", "transport must be acp|native|cli"},
+		{"session_model: forever", "session_model must be native|resumable|oneshot"},
+	} {
+		doc := `
+connectors:
+  timer: { use: cron, schedules: { tick: { every: 1h } } }
+runtimes:
+  bad: { use: acp, agent: gemini, ` + tc.field + ` }
+triggers:
+  - on: timer.tick
+    steps: [{ id: t, type: command, command: ["true"] }]
+`
+		if _, err := loadDoc(t, doc); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: want %q, got %v", tc.field, tc.want, err)
+		}
+	}
+}

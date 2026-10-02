@@ -1770,6 +1770,12 @@ func (c *Config) validateConnectors() error {
 		if rt.Agent != "" && !(u.IsBuiltin() && u.Name == "acp") {
 			return fmt.Errorf("config: runtime %q: `agent:` applies to `use: acp` only (got use: %s)", name, rt.Use)
 		}
+		if rt.Transport != "" && !map[string]bool{"acp": true, "native": true, "cli": true}[rt.Transport] {
+			return fmt.Errorf("config: runtime %q: transport must be acp|native|cli, got %q", name, rt.Transport)
+		}
+		if rt.SessionModel != "" && !map[string]bool{"native": true, "resumable": true, "oneshot": true}[rt.SessionModel] {
+			return fmt.Errorf("config: runtime %q: session_model must be native|resumable|oneshot, got %q", name, rt.SessionModel)
+		}
 		if err := c.checkRemoteHostSupport("runtime", name, rt.Host, rt.BuiltinType(), rt.Agent, rt.Controller().EffectiveTransport()); err != nil {
 			return err
 		}
