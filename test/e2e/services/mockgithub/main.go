@@ -129,6 +129,11 @@ func route(w http.ResponseWriter, r *http.Request) {
 		case p == "/graphql":
 			writeJSON(w, 200, graphQL())
 			return
+		case p == "/user":
+			// whoami on the user write token: run progress posts its commit
+			// status under this login.
+			writeJSON(w, 200, map[string]any{"login": me()})
+			return
 		}
 		writeJSON(w, 200, map[string]any{}) // benign default read
 		return

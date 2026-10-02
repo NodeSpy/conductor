@@ -1037,6 +1037,10 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 			return nil, err
 		}
 		return map[string]any{"gists": gists}, nil
+	case "react":
+		return c.react(ctx, tok, base, repo, number, opts)
+	case "set_status":
+		return c.setStatus(ctx, tok, base, repo, number, opts)
 	case "add_labels":
 		if number == 0 {
 			return nil, fmt.Errorf("github.add_labels: options.number is required")

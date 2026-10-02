@@ -7,6 +7,7 @@
 //   - equality/ordering against another path:     pr.head_sha != handoff.pr.head_sha
 //   - numeric ordering against literals:          score > 7, score <= 3.5
 //   - truthiness of a bare path (and negation):   x   /   !x
+//   - the boolean literals:                        true   /   false
 //   - boolean combinators:                        a && b || c
 //   - parenthesised grouping (and its negation):  !(a && (b || c))
 //   - functions: contains(x, y), startswith(x, y), endswith(x, y),
@@ -104,6 +105,15 @@ func atom(a string, data map[string]any, depth int) (bool, error) {
 		return res != neg, nil
 	}
 
+	// The boolean literals are themselves, not paths named "true"/"false":
+	// `if: true` (often a substituted setting, `if: "${settings.on}"`) used to
+	// look up a key called "true", miss, and read as false.
+	switch a {
+	case "true":
+		return !neg, nil
+	case "false":
+		return neg, nil
+	}
 	res, err := evalTerm(a, data)
 	if err != nil {
 		return false, err

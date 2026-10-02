@@ -273,3 +273,19 @@ func TestNegationDepthCap(t *testing.T) {
 		t.Fatalf("Eval(%q) should error on a dangling negation", "!")
 	}
 }
+
+// TestBooleanLiterals: a bare true/false is the literal, not a path lookup —
+// `if: true` (typically a substituted boolean setting) used to read as false.
+func TestBooleanLiterals(t *testing.T) {
+	d := map[string]any{"xs": []any{1}}
+	for cond, want := range map[string]bool{
+		"true": true, "false": false, "!true": false, "!false": true,
+		"true && xs": true, "true && missing": false, "false || xs": true,
+		"true && !missing": true, "(true)": true, "xs == true": true,
+	} {
+		got, err := Eval(cond, d)
+		if err != nil || got != want {
+			t.Errorf("Eval(%q) = %v, %v; want %v", cond, got, err, want)
+		}
+	}
+}

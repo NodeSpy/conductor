@@ -165,20 +165,34 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 		}
 	}
 	// Workflow-level at:start hooks see the trigger context only.
-	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "start", sc); err != nil {
+	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "start", runHookScope(sc)); err != nil {
 		return err
 	}
 	if err := validateStepList(cfg, reg, where, spec.Steps, sc); err != nil {
 		return err
 	}
 	// at:done sees all step outputs; at:fail adds failure metadata.
-	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "done", sc); err != nil {
+	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "done", runHookScope(sc)); err != nil {
 		return err
 	}
-	failScope := sc.clone()
+	failScope := runHookScope(sc)
 	failScope.add("error")
 	failScope.add("failed_step")
-	return validateHookRefs(cfg, reg, where, spec.Hooks, "fail", failScope)
+	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "fail", failScope); err != nil {
+		return err
+	}
+	// at:stop (the target closed under the run) sees what at:done sees.
+	return validateHookRefs(cfg, reg, where, spec.Hooks, "stop", runHookScope(sc))
+}
+
+// runHookScope is a workflow-level hook's scope: the position's, plus the
+// `hook` lifecycle object every hook gets and the {{.run.*}} run facts
+// (runfacts.go) only workflow-level hooks get.
+func runHookScope(sc *scope) *scope {
+	out := sc.clone()
+	out.add("hook")
+	out.add("run")
+	return out
 }
 
 // checkStoreSelector enforces the data verbs' store: selector at LOAD time:
@@ -250,19 +264,22 @@ func validateManualTrigger(cfg *config.Config, reg *connector.Registry, where st
 			}
 		}
 	}
-	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "start", sc); err != nil {
+	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "start", runHookScope(sc)); err != nil {
 		return err
 	}
 	if err := validateStepList(cfg, reg, where, spec.Steps, sc); err != nil {
 		return err
 	}
-	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "done", sc); err != nil {
+	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "done", runHookScope(sc)); err != nil {
 		return err
 	}
-	failScope := sc.clone()
+	failScope := runHookScope(sc)
 	failScope.add("error")
 	failScope.add("failed_step")
-	return validateHookRefs(cfg, reg, where, spec.Hooks, "fail", failScope)
+	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "fail", failScope); err != nil {
+		return err
+	}
+	return validateHookRefs(cfg, reg, where, spec.Hooks, "stop", runHookScope(sc))
 }
 
 // validateWorkflow checks a reusable workflow standalone. Its trigger-context
@@ -445,16 +462,18 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 		}
 	}
 
-	// Step-level hooks: at:start sees the prior scope; at:done adds this
-	// step's own output; at:fail adds failure metadata.
+	// Step-level hooks: at:start and at:stop see the prior scope; at:done
+	// adds this step's own output; at:fail adds failure metadata.
 	id := step.ID
 	if id == "" {
 		id = "this step"
 	}
-	if err := validateHookRefs(cfg, reg, w, step.Hooks, "start", stepScope); err != nil {
+	hookScope := stepScope.clone()
+	hookScope.add("hook") // the lifecycle object every hook gets; run facts are workflow-level only
+	if err := validateHookRefs(cfg, reg, w, step.Hooks, "start", hookScope); err != nil {
 		return err
 	}
-	doneScope := stepScope.clone()
+	doneScope := hookScope.clone()
 	if step.ID != "" {
 		doneScope.addStep(step.ID, stepOutputSchema(reg, step))
 	}
@@ -464,7 +483,11 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 	failScope := doneScope.clone()
 	failScope.add("error")
 	failScope.add("failed_step")
-	return validateHookRefs(cfg, reg, w, step.Hooks, "fail", failScope)
+	if err := validateHookRefs(cfg, reg, w, step.Hooks, "fail", failScope); err != nil {
+		return err
+	}
+	// at:stop (the step's target closed under it) sees the prior scope.
+	return validateHookRefs(cfg, reg, w, step.Hooks, "stop", hookScope)
 }
 
 // validateHookRefs checks one phase's hooks: the verb exists, its options

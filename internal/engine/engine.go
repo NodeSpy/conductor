@@ -951,6 +951,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 				e.notif.Emit(ctx, notify.EventEscalate, t,
 					fmt.Sprintf("parked after %d tries at %s — no progress; needs a human or new commits", n, short(head)))
 				e.log("%s parked after %d attempts at %s — no progress", tag(t), n, short(head))
+				e.fireParkedHooks(ctx, t, act, head, n)
 				return
 			}
 			if ready, wait := e.store.RetryReady(key, dkind, head, soft, base, retryBackoffFactor, max); !ready {

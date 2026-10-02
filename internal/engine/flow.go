@@ -181,6 +181,19 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 	}()
 }
 
+// fireParkedHooks fires the trigger's workflow-level `at: fail` hooks for a
+// (PR, kind, head) the engine just PARKED: it kept failing and won't be
+// retried until new commits, so it never reaches a run whose own fail hooks
+// would say so (flow.FireParkedHooks: hook.failure.kind "parked", run.reason
+// flow.ParkedReason). Off the engine loop: hooks make API calls. Fired once,
+// on the pass that parks — later passes over a parked tuple stay silent.
+func (e *Engine) fireParkedHooks(ctx context.Context, t core.Trigger, act config.Action, head string, attempts int) {
+	if act.FlowRef == "" || e.flow == nil {
+		return
+	}
+	go e.flow.FireParkedHooks(context.WithoutCancel(ctx), t, act.FlowRef, head, attempts)
+}
+
 // closedRetention bounds how long a PR's close is remembered for closedSince —
 // far longer than any wait for an agent slot.
 const closedRetention = 24 * time.Hour

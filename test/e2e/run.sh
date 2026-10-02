@@ -485,6 +485,47 @@ group_H_webhook() {
   post_webhook issue_comment new_comment.json >/dev/null
   after_wait_dispatch conductor '"repo":"acme/svc"' '"kind":"new_comment"' "$before" \
     H H3 "H3 new_comment dispatched from the webhook path"
+
+  # H4: the trigger's progress HOOKS on the H3 comment, as the user (the
+  # pr-autopilot pack's shape; see config/conductor.yaml). 👀 on the comment
+  # and a pending status ("<login> / comment") on the commit the run started
+  # on, at start; then 👍 (the mock's head never moves: no push) and success
+  # on that same commit. One captured write per line, so each pattern matches
+  # within a single write.
+  local caps i
+  local react='"path":"/repos/acme/svc/issues/comments/9001/reactions"'
+  local status='"path":"/repos/acme/svc/statuses/canned-head-svc1"'
+  local ctx='context\\":\\"conductor-user / comment\\"'
+  for i in $(seq 1 60); do
+    caps="$(netcurl http://mock-github:8080/_captured | sed 's/},{"method"/}\n{"method"/g')"
+    if printf '%s\n' "$caps" | grep "$react" | grep -Eq 'content\\":\\"(\+1|rocket|confused)' \
+       && printf '%s\n' "$caps" | grep "$status" | grep "$ctx" | grep -Eq 'state\\":\\"(success|failure)'; then
+      break
+    fi
+    sleep 1
+  done
+  if printf '%s\n' "$caps" | grep "$react" | grep -q 'content\\":\\"eyes'; then
+    ok "H4 start hook: 👀 on the handled comment" H H4-eyes
+  else
+    bad "H4 start hook: 👀 on the handled comment" H H4-eyes "no eyes reaction captured on comment 9001"
+  fi
+  if printf '%s\n' "$caps" | grep "$status" | grep "$ctx" | grep -q 'state\\":\\"pending'; then
+    ok "H4 start hook: pending '<login> / comment' on the start commit" H H4-pending
+  else
+    bad "H4 start hook: pending status" H H4-pending "no pending 'conductor-user / comment' on canned-head-svc1"
+  fi
+  if printf '%s\n' "$caps" | grep "$react" | grep -q 'content\\":\\"+1' \
+     && printf '%s\n' "$caps" | grep "$status" | grep "$ctx" | grep -q 'state\\":\\"success'; then
+    ok "H4 done hooks: 👍 + success on the start commit (no push)" H H4-outcome
+  else
+    bad "H4 done hooks: 👍 + success" H H4-outcome "no +1 / success on the start commit within 60s"
+  fi
+  if printf '%s\n' "$caps" | grep -E "$react|$status" | grep -q 'e2e-user-write-token' \
+     && ! printf '%s\n' "$caps" | grep -E "$react|$status" | grep -q 'fake-installation-token'; then
+    ok "H4 hook writes go out as the user, not the App" H H4-identity
+  else
+    bad "H4 hook writes as the user" H H4-identity "a hook write lacked the user token or used the App's"
+  fi
 }
 
 # nonfailed_dispatch <container> <pat> <pat> — count of successful (non-failed)

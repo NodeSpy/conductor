@@ -1336,7 +1336,7 @@ func (r *RetrySpec) StepRetry() *StepRetry {
 // anchored to a workflow (trigger-level `hooks:`) or to a single step
 // (step-level `hooks:`).
 type Hook struct {
-	At      string         `yaml:"at,omitempty"` // start | done | fail
+	At      string         `yaml:"at,omitempty"` // start | done | fail | stop
 	ID      string         `yaml:"id,omitempty"`
 	If      string         `yaml:"if,omitempty"`
 	Uses    string         `yaml:"uses,omitempty"`
@@ -2025,9 +2025,9 @@ func validateHooks(where string, hooks []Hook) error {
 	for i, h := range hooks {
 		w := fmt.Sprintf("%s hooks[%d]", where, i)
 		switch h.At {
-		case "start", "done", "fail":
+		case "start", "done", "fail", "stop":
 		default:
-			return fmt.Errorf("config: %s: `at:` must be start|done|fail, got %q", w, h.At)
+			return fmt.Errorf("config: %s: `at:` must be start|done|fail|stop, got %q", w, h.At)
 		}
 		if h.Uses == "" {
 			return fmt.Errorf("config: %s: hooks are verb action units — set `uses: <connector>.<verb>`", w)

@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path"
 	"strings"
+	"sync"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
@@ -204,6 +205,63 @@ type Integration struct {
 	// turned into their one event, so a review's many deliveries become
 	// exactly one trigger (see reviewfold.go).
 	reviews reviewCache
+
+	// ownStatus holds the commit-status contexts conductor posts under — the
+	// configured ones plus whatever the progress reporter resolved at run
+	// time (NoteOwnStatusContext). Guarded by ownMu: noted from run
+	// goroutines, read on the webhook path.
+	ownMu     sync.Mutex
+	ownStatus map[string]bool
+	// acting is the login your writes act as — published to every event as
+	// {{.me.login}}: the one discovered from the write identity, else the
+	// first login `self` was built from (me:, or the reviewer/assignee
+	// fallback). Guarded by ownMu.
+	acting string
+}
+
+// meFact is the `me` event fact: { login } — you, as your writes act. nil
+// while no login is known.
+func (g *Integration) meFact() map[string]any {
+	g.ownMu.Lock()
+	defer g.ownMu.Unlock()
+	if g.acting == "" {
+		return nil
+	}
+	return map[string]any{"login": g.acting}
+}
+
+// NoteOwnStatusContext records a commit-status context conductor posts
+// under, so a delivery of that status never reads as CI (see ownStatus).
+func (g *Integration) NoteOwnStatusContext(c string) {
+	if c == "" {
+		return
+	}
+	g.ownMu.Lock()
+	defer g.ownMu.Unlock()
+	if g.ownStatus == nil {
+		g.ownStatus = map[string]bool{}
+	}
+	g.ownStatus[strings.ToLower(c)] = true
+}
+
+// OwnStatus reports whether a commit-status context is one conductor posts
+// (see isOwnStatus).
+func (g *Integration) OwnStatus(c string) bool { return g.isOwnStatus(c) }
+
+// isOwnStatus reports whether a commit status's context is one conductor
+// posts: a configured/noted progress context, or one of your logins — the
+// default progress context. A status conductor wrote must never come back as
+// a failing check, or a `failure` verdict would launch the next fixer, whose
+// verdict launches the next.
+func (g *Integration) isOwnStatus(c string) bool {
+	c = strings.ToLower(strings.TrimSpace(c))
+	if c == "" {
+		return false
+	}
+	g.ownMu.Lock()
+	own := g.ownStatus[c]
+	g.ownMu.Unlock()
+	return own || g.self[c]
 }
 
 // SweepNow triggers an immediate catch-up sweep (and resets the adaptive cadence)
@@ -248,12 +306,18 @@ func newIntegration(name string, decode func(any) error) (core.Integration, erro
 	for _, r := range rules {
 		for _, l := range r.Me.Logins {
 			g.self[strings.ToLower(l)] = true
+			if g.acting == "" {
+				g.acting = l // the first one you named; discovery overrides it
+			}
 		}
 	}
 	if len(g.self) == 0 {
 		add := func(a config.Actors) {
 			for _, l := range a.Logins {
 				g.self[strings.ToLower(l)] = true
+				if g.acting == "" {
+					g.acting = l
+				}
 			}
 		}
 		for _, r := range rules {
@@ -342,6 +406,9 @@ func (g *Integration) discoverSelf(ctx context.Context) {
 		return
 	}
 	if login != "" {
+		g.ownMu.Lock()
+		g.acting = login
+		g.ownMu.Unlock()
 		g.self[strings.ToLower(login)] = true
 		log.Printf("github[%s]: me: auto-discovered as %q from the write identity — set me.logins to override", g.name, login)
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/store"
+	"github.com/NodeSpy/conductor/pkg/githubkit"
 )
 
 // failureConclusions are check conclusions we treat as "failing".
@@ -82,6 +83,11 @@ type ghPayload struct {
 	RequestedTeam *struct {
 		Slug string `json:"slug"`
 	} `json:"requested_team"`
+	// Context/State/SHA are a `status` (commit status) delivery's own
+	// top-level fields.
+	Context        string        `json:"context"`
+	State          string        `json:"state"`
+	SHA            string        `json:"sha"`
 	CheckRun       *checkPayload `json:"check_run"`
 	CheckSuite     *checkPayload `json:"check_suite"`
 	WorkflowRun    *checkPayload `json:"workflow_run"`
@@ -184,6 +190,8 @@ func (g *Integration) triggersFor(ctx context.Context, eventType string, body []
 
 	var trs []core.Trigger
 	switch eventType {
+	case "status":
+		trs = g.statusTriggers(repo, p)
 	case "pull_request_review":
 		trs = g.reviewTriggers(ctx, repo, p)
 	case "pull_request_review_thread":
@@ -403,7 +411,8 @@ func (g *Integration) commentTriggers(ctx context.Context, repo, eventType strin
 	authorIsBot := isBotActor(p.Comment.User.Type, p.Comment.User.Login)
 	extra := map[string]any{"author": p.Comment.User.Login, "author_is_bot": authorIsBot,
 		"comment_body": p.Comment.Body, "head_ref": headRef,
-		"comment_id": p.Comment.ID, "comment_kind": kind}
+		"comment_id": p.Comment.ID, "comment_kind": kind,
+		"reaction_subjects": reactionSubjects(commentSubjectKind(kind), p.Comment.ID)}
 	// Each variant may set its own from_users / author_bot filters.
 	return g.emit(repo, "new_comment", t,
 		fmt.Sprintf("new comment by %s on %s#%d", p.Comment.User.Login, repo, num),
@@ -463,6 +472,43 @@ func loginMatch(logins []string, author string) bool {
 		}
 	}
 	return false
+}
+
+// reactionSubjects is an event's `reaction_subjects` context: what a run
+// handling it reacts on (the connector's run progress; github.react's
+// `subjects` shape). One subject per call; ids that aren't real are dropped.
+func reactionSubjects(kind string, ids ...int64) []any {
+	var out []any // nil, not empty, when there is no subject: `if: reaction_subjects` reads it false
+	for _, id := range ids {
+		if id > 0 {
+			out = append(out, map[string]any{"kind": kind, "id": id})
+		}
+	}
+	return out
+}
+
+// commentSubjectKind maps a comment's high-water-mark kind to its reaction
+// subject kind: the two comment id sequences have separate reactions APIs.
+func commentSubjectKind(kind string) string {
+	if kind == store.CommentKindReview {
+		return githubkit.SubjectReviewComment
+	}
+	return githubkit.SubjectIssueComment
+}
+
+// statusTriggers handles a commit-status delivery. Commit statuses are not a
+// CI signal conductor acts on — failing_checks comes from check runs, check
+// suites, and workflow runs — and the first thing this does is make sure the
+// statuses conductor posts ITSELF (run progress, see the connector's
+// github_progress.go) never become one: a `failure` verdict read back as a
+// failing check would dispatch the next fixer, whose verdict dispatches the
+// next. Any handling a status ever grows goes below this guard.
+func (g *Integration) statusTriggers(repo string, p ghPayload) []core.Trigger {
+	if g.isOwnStatus(p.Context) {
+		log.Printf("github[%s]: %s status %q (%s) on %.7s is conductor's own progress — ignored", g.name, repo, p.Context, p.State, p.SHA)
+		return nil
+	}
+	return nil
 }
 
 func (g *Integration) checkTriggers(ctx context.Context, repo string, p ghPayload) []core.Trigger {
@@ -999,6 +1045,9 @@ func (g *Integration) emit(repo, kind string, t core.Target, title, dedup string
 		ctxMap := map[string]any{}
 		for k, v := range extra {
 			ctxMap[k] = v
+		}
+		if me := g.meFact(); me != nil {
+			ctxMap["me"] = me
 		}
 		out = append(out, core.Trigger{
 			// As above: a signature-verified payload's repo/number are

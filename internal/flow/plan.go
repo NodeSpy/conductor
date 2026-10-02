@@ -263,9 +263,9 @@ func ValidatePlanSteps(cfg *config.Config, reg *connector.Registry, steps []conf
 			for hi, h := range step.Hooks {
 				hw := fmt.Sprintf("%s hook[%d]", w, hi)
 				switch h.At {
-				case "start", "done", "fail":
+				case "start", "done", "fail", "stop":
 				default:
-					return fmt.Errorf("%s: at must be start|done|fail, got %q", hw, h.At)
+					return fmt.Errorf("%s: at must be start|done|fail|stop, got %q", hw, h.At)
 				}
 				connName, verb, okCut := strings.Cut(h.Uses, ".")
 				if !okCut || connName == "" || verb == "" {

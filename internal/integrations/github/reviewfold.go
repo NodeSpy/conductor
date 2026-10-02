@@ -12,6 +12,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/store"
+	"github.com/NodeSpy/conductor/pkg/githubkit"
 )
 
 // ONE REVIEW SUBMISSION IS ONE EVENT; A STANDALONE COMMENT IS ITS OWN EVENT.
@@ -234,7 +235,8 @@ func (g *Integration) reviewEvent(ctx context.Context, repo string, instID int64
 		}
 		extra := map[string]any{"head_ref": pr.Head.Ref,
 			"author": ri.Author, "author_is_bot": ri.AuthorIsBot,
-			"review_id": reviewID, "review_body": ri.Body, "review_state": ri.State}
+			"review_id": reviewID, "review_body": ri.Body, "review_state": ri.State,
+			"reaction_subjects": reactionSubjects(githubkit.SubjectReview, reviewID)}
 		if len(cs) > 0 {
 			// The review's inline comments ride this run; its highest id
 			// dispatches it once (the engine's comment high-water mark).
@@ -290,7 +292,8 @@ func (g *Integration) reviewNewComment(repo string, t core.Target, headRef strin
 	extra := map[string]any{"author": ri.Author, "author_is_bot": ri.AuthorIsBot,
 		"comment_body": body, "head_ref": headRef,
 		"comment_id": maxID, "comment_kind": store.CommentKindReview,
-		"review_id": reviewID, "review_body": ri.Body, "review_state": ri.State}
+		"review_id": reviewID, "review_body": ri.Body, "review_state": ri.State,
+		"reaction_subjects": reactionSubjects(githubkit.SubjectReview, reviewID)}
 	addReviewComments(extra, cs)
 	return g.emit(repo, "new_comment", t,
 		fmt.Sprintf("review by %s on %s#%d (%d inline comment(s))", ri.Author, repo, t.Number, len(cs)),

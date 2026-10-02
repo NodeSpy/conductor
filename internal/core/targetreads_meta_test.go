@@ -154,6 +154,12 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	"internal/connector/scope.go": {
 		{"ContextScope", "reads Target.Repo only on the !TargetTrusted-checked branch"},
 	},
+	"internal/connector/github.go": {
+		{"TargetHead", "reads Target.Number beside OwnRepo(), and reads nothing when OwnRepo() is empty"},
+	},
+	"internal/flow/runfacts.go": {
+		{"readHead", "a log line + an audit row for a head read that failed; it records, it authorizes nothing"},
+	},
 	"internal/flow/scoperender.go": {
 		{"scopeRenderData", "derives owner/name/number only when OwnRepo() is non-empty"},
 	},

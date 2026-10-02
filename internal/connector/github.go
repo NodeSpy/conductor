@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -22,8 +23,12 @@ func baseGithubContext() Schema {
 		"pr": {Type: TInt}, "issue": {Type: TInt}, "number": {Type: TInt},
 		"head": {Type: TString}, "base": {Type: TString}, "url": {Type: TString},
 		"kind": {Type: TString}, "title": {Type: TString}, "labels": {Type: TList},
+		"me": {Type: TMap, Desc: "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""},
 	}
 }
+
+// reactionSubjectsDesc documents the comment/review events' reaction_subjects.
+const reactionSubjectsDesc = "what a run handling this event reacts on, as [{kind, id}] for github.react: the review (kind review), the standalone comment (issue_comment | review_comment), or — sweep-recovered — each unresolved thread's opening comment (capped)"
 
 // githubEvent builds one event declaration on the shared base.
 //
@@ -106,6 +111,7 @@ var githubDecl = &TypeDecl{
 				"review_state":            {Type: TString, Desc: "the review's state: changes_requested or commented (absent for a sweep-recovered run)"},
 				"comment_id":              {Type: TInt, Desc: "the highest inline comment id the run covers; the engine dispatches a review once on it"},
 				"comment_kind":            {Type: TString},
+				"reaction_subjects":       {Type: TList, Desc: reactionSubjectsDesc},
 			}, nil),
 		githubEvent("new_comment", "a new comment on your PR — a standalone comment, or ONE submitted review no changes_requested trigger takes (always so for an approval) with all its inline comments",
 			Schema{
@@ -118,6 +124,7 @@ var githubDecl = &TypeDecl{
 				"review_state":            {Type: TString, Desc: "the review's state: commented, approved, changes_requested (review events)"},
 				"review_comments":         {Type: TList, Desc: "the review's inline comments as {author, path, line, body, url} (review events)"},
 				"review_comments_omitted": {Type: TInt, Desc: "how many comments the size cap left out of review_comments (absent when none)"},
+				"reaction_subjects":       {Type: TList, Desc: reactionSubjectsDesc},
 			}, nil),
 		githubEvent("merge_conflict", "your PR became unmergeable", nil, nil),
 		githubEvent("pr_behind", "your PR fell behind its base", nil, nil),
@@ -589,6 +596,34 @@ var githubDecl = &TypeDecl{
 			Outputs: Schema{"ok": {Type: TBool}},
 		},
 		{
+			Name: "react", Desc: "add (or, remove: true, take away) your reaction on comments/reviews — idempotent both ways",
+			Options: Schema{
+				"repo":     {Type: TString, Required: true, Scope: "repo"},
+				"pr":       {Type: TInt, Desc: "the PR (required for a review subject)"},
+				"subjects": {Type: TList, Desc: "[{kind, id}] — kind is issue_comment | review_comment | review; an event's reaction_subjects is this shape"},
+				"kind":     {Type: TString, Enum: []string{githubkit.SubjectIssueComment, githubkit.SubjectReviewComment, githubkit.SubjectReview}, Desc: "single-subject shorthand (with id)"},
+				"id":       {Type: TInt, Desc: "single-subject shorthand (with kind)"},
+				"content":  {Type: TString, Required: true, Enum: githubkit.ReactionContents()},
+				"remove":   {Type: TBool, Desc: "take the reaction away instead: only the acting user's reaction of this content; a no-op where there is none"},
+				"as":       {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"ok": {Type: TBool}, "reacted": {Type: TInt, Desc: "subjects reacted to"}, "removed": {Type: TInt, Desc: "reactions removed (remove: true)"}},
+		},
+		{
+			Name: "set_status", Desc: "post a commit status on a sha, or on a PR's head as it is at call time (shown on any PR whose head it is)",
+			Options: Schema{
+				"repo":        {Type: TString, Required: true, Scope: "repo"},
+				"sha":         {Type: TString, Desc: "the commit (one of sha / pr)"},
+				"pr":          {Type: TInt, Desc: "a PR whose CURRENT head gets the status, read at call time (one of sha / pr; sha wins when both are set)"},
+				"state":       {Type: TString, Required: true, Enum: githubkit.StatusStates()},
+				"description": {Type: TString, Desc: "clipped to GitHub's 140 characters"},
+				"context":     {Type: TString, Desc: "the status's name on the PR, entirely yours (templates allowed); default only when unset: the login the call acts as"},
+				"target_url":  {Type: TString},
+				"as":          {Type: TString, Enum: []string{"me", "bot"}},
+			},
+			Outputs: Schema{"ok": {Type: TBool}, "context": {Type: TString}, "sha": {Type: TString, Desc: "the commit the status went on"}},
+		},
+		{
 			Name: "sweep", Desc: "run the catch-up sweep now (daemon-global; same as `conductor sweep --now`)",
 			Options: Schema{},
 			Outputs: Schema{"nudged": {Type: TInt, Desc: "integrations whose sweep was nudged"}},
@@ -634,6 +669,12 @@ type githubImpl struct {
 	// call delegates to — credentials, HTTP mechanics, caching, rate-limit
 	// handling, and the verb switch all live there now.
 	kit *githubkit.Client
+
+	// src is the event source Source built, so every context set_status
+	// posts under joins its own-status guard. Set once at build; read under
+	// srcMu.
+	srcMu sync.Mutex
+	src   *gh.Integration
 }
 
 func newGithubImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
@@ -647,6 +688,7 @@ func newGithubImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error
 	if conn.App.LegacyWebhookKeys() {
 		return nil, ConfigErr(fmt.Errorf("connector %q: %w", name, gh.ErrAppWebhookMoved))
 	}
+
 	// Resolve secret references in credential fields. An unresolvable secret
 	// disables the connector (the registry handles that) rather than failing
 	// the boot.
@@ -728,7 +770,13 @@ func (g *githubImpl) Source(triggers []CompiledTrigger) (core.Integration, error
 			Actions: actions,
 		}},
 	}
-	return buildIntegration("github", g.name, cfg)
+	src, err := buildIntegration("github", g.name, cfg)
+	if gi, ok := src.(*gh.Integration); ok {
+		g.srcMu.Lock()
+		g.src = gi
+		g.srcMu.Unlock()
+	}
+	return src, err
 }
 
 // lowerTrigger maps one trigger spec's filter/options onto the Action fields
@@ -804,7 +852,32 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 		}
 		return map[string]any{"nudged": nudged}, nil
 	}
-	return g.kit.Invoke(ctx, verb, opts)
+	out, err := g.kit.Invoke(ctx, verb, opts)
+	if err == nil && verb == "set_status" {
+		// Whatever context a status went out under is conductor's own from
+		// now on: the source never reads it back as a CI signal, or a
+		// `failure` a hook posted could dispatch the next fixer.
+		if c, _ := out["context"].(string); c != "" {
+			g.srcMu.Lock()
+			src := g.src
+			g.srcMu.Unlock()
+			if src != nil {
+				src.NoteOwnStatusContext(c)
+			}
+		}
+	}
+	return out, err
+}
+
+// TargetHead implements HeadReader: a PR's head commit, read fresh. Only a
+// target the source assigned itself (core.OwnRepo) is read.
+func (g *githubImpl) TargetHead(ctx context.Context, t core.Trigger) (TargetHead, error) {
+	repo, number := t.OwnRepo(), t.Target.Number
+	if t.Source != "github" || repo == "" || number == 0 {
+		return TargetHead{}, nil
+	}
+	sha, state, err := g.kit.PRHead(ctx, "me", repo, number)
+	return TargetHead{SHA: sha, State: state}, err
 }
 
 // post/patch/put/del are the write verbs' authenticated JSON requests.
