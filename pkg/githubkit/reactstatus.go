@@ -55,6 +55,9 @@ func (c *Client) react(ctx context.Context, tok, base, repo string, number int, 
 	if len(subjects) == 0 {
 		return nil, fmt.Errorf("github.react: set options.subjects (or kind + id)")
 	}
+	if optBool(opts, "remove", false) {
+		return c.unreact(ctx, tok, base, repo, number, subjects, content, gqlContent)
+	}
 	var errs []error
 	n := 0
 	for _, s := range subjects {
@@ -103,6 +106,96 @@ func (c *Client) reactReview(ctx context.Context, tok, base, repo string, number
 		"mutation($id:ID!,$c:ReactionContent!){addReaction(input:{subjectId:$id,content:$c}){reaction{content}}}",
 		map[string]any{"id": rv.NodeID, "c": content}, nil)
 }
+
+// unreact removes the acting user's reaction of `content` from each subject —
+// only theirs, never anyone else's — and is idempotent: a subject that has no
+// such reaction (never added, or already removed) is a no-op, not an error.
+// Comments go through REST (find your reaction's id among that content's,
+// then DELETE it); a review, which REST can't reach, through GraphQL
+// removeReaction, which removes the viewer's own.
+func (c *Client) unreact(ctx context.Context, tok, base, repo string, number int, subjects []ReactionSubject, content, gqlContent string) (map[string]any, error) {
+	var errs []error
+	removed := 0
+	for _, s := range subjects {
+		var n int
+		var err error
+		switch s.Kind {
+		case SubjectIssueComment:
+			n, err = c.unreactREST(ctx, tok, fmt.Sprintf("%s/repos/%s/issues/comments/%d/reactions", base, repo, s.ID), content)
+		case SubjectReviewComment:
+			n, err = c.unreactREST(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/comments/%d/reactions", base, repo, s.ID), content)
+		case SubjectReview:
+			n, err = c.unreactReview(ctx, tok, base, repo, number, s.ID, gqlContent)
+		default:
+			err = fmt.Errorf("unknown subject kind %q (want %s|%s|%s)", s.Kind, SubjectIssueComment, SubjectReviewComment, SubjectReview)
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s %d: %w", s.Kind, s.ID, err))
+			continue
+		}
+		removed += n
+	}
+	if len(errs) > 0 {
+		return map[string]any{"ok": false, "removed": removed}, fmt.Errorf("github.react: remove: %w", errors.Join(errs...))
+	}
+	return map[string]any{"ok": true, "removed": removed}, nil
+}
+
+// unreactREST deletes the acting user's `content` reaction listed at
+// reactionsURL (a comment's reactions collection). Read fresh: a reaction
+// added seconds ago must be found.
+func (c *Client) unreactREST(ctx context.Context, tok, reactionsURL, content string) (int, error) {
+	login, err := c.Login(ctx, tok)
+	if err != nil {
+		return 0, err
+	}
+	var rs []struct {
+		ID   int64 `json:"id"`
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	}
+	if err := c.getFresh(ctx, tok, reactionsURL+"?per_page=100&content="+url.QueryEscape(content), &rs); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, r := range rs {
+		if !strings.EqualFold(r.User.Login, login) {
+			continue
+		}
+		if err := c.del(ctx, tok, fmt.Sprintf("%s/%d", reactionsURL, r.ID), nil); err != nil && !isNotFound(err) {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}
+
+// unreactReview removes the viewer's `content` reaction from a review.
+func (c *Client) unreactReview(ctx context.Context, tok, base, repo string, number int, reviewID int64, content string) (int, error) {
+	if number == 0 {
+		return 0, fmt.Errorf("a review subject needs options.pr")
+	}
+	var rv struct {
+		NodeID string `json:"node_id"`
+	}
+	if err := c.get(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d/reviews/%d", base, repo, number, reviewID), &rv); err != nil {
+		return 0, err
+	}
+	if rv.NodeID == "" {
+		return 0, fmt.Errorf("review has no node id")
+	}
+	err := c.graphql(ctx, tok,
+		"mutation($id:ID!,$c:ReactionContent!){removeReaction(input:{subjectId:$id,content:$c}){reaction{content}}}",
+		map[string]any{"id": rv.NodeID, "c": content}, nil)
+	if err != nil {
+		return 0, err
+	}
+	return 1, nil
+}
+
+// isNotFound reports a 404 — for a DELETE, "already gone".
+func isNotFound(err error) bool { return strings.Contains(err.Error(), "HTTP 404") }
 
 // ReactionSubject is one thing a reaction lands on.
 type ReactionSubject struct {
@@ -221,21 +314,26 @@ func (c *Client) Login(ctx context.Context, tok string) (string, error) {
 	return u.Login, nil
 }
 
-// PRHead reads a PR's current head sha and state, bypassing the read cache:
-// a caller comparing heads across a push must not be served the pre-push copy.
+// PRHead reads a PR's current head sha and state — "open", "closed", or
+// "merged" (a closed PR that merged) — bypassing the read cache: a caller
+// comparing heads across a push must not be served the pre-push copy.
 func (c *Client) PRHead(ctx context.Context, as, repo string, number int) (sha, state string, err error) {
 	tok, err := c.TokenFor(ctx, as, repo)
 	if err != nil {
 		return "", "", err
 	}
 	var pr struct {
-		State string `json:"state"`
-		Head  struct {
+		State  string `json:"state"`
+		Merged bool   `json:"merged"`
+		Head   struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
 	}
 	if err := c.getFresh(ctx, tok, fmt.Sprintf("%s/repos/%s/pulls/%d", c.base(), repo, number), &pr); err != nil {
 		return "", "", err
+	}
+	if pr.Merged {
+		return pr.Head.SHA, "merged", nil
 	}
 	return pr.Head.SHA, pr.State, nil
 }

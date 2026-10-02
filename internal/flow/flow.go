@@ -383,6 +383,9 @@ func (r *Runner) resolveBotReply(t core.Trigger, spec config.TriggerSpec) botRep
 // SpecFor returns it; a caller holding a spec from elsewhere can use
 // Runner.IndexOf.
 func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger, spec config.TriggerSpec, triggerIndex int, batch *Batch, shadow bool) {
+	// The caller's context ends only when the daemon shuts down; remember it,
+	// so an interruption is told apart from a run that failed (shutdown.go).
+	ctx = withShutdownSignal(ctx, ctx)
 	ctx = withIdentityScope(ctx, config.ScopeForTrigger(spec, triggerIndex))
 	ctx = context.WithValue(ctx, policyKey{}, r.resolvePolicy(spec))
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
@@ -423,14 +426,14 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	// its start hooks.
 	var facts runFacts
 	if len(spec.Hooks) > 0 {
-		facts.startSHA = r.readHead(ctx, t)
+		facts.startSHA, facts.state = r.readHead(ctx, t)
 		facts.headSHA = facts.startSHA
 	}
 	endFacts := func(phase, reason string) runFacts {
 		f := facts
-		f.headSHA, f.reason = "", reason
+		f.headSHA, f.state, f.reason = "", "", reason
 		if hasPhase(spec.Hooks, phase) {
-			f.headSHA = r.readHead(ctx, t)
+			f.headSHA, f.state = r.readHead(ctx, t)
 		}
 		return f
 	}
@@ -449,11 +452,31 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	}
 
 	err := r.runSteps(ctx, &run, t, spec.Steps, data, shadow, true)
+	if err != nil && shuttingDown(ctx) {
+		// The daemon is shutting down under the run. That is neither a
+		// failure nor a stop: the run record stays, and the run resumes on
+		// restart and ends there — so no terminal hooks, no notification,
+		// and above all no finishRun (which would delete the record and with
+		// it the resume).
+		r.Log("%s workflow interrupted by shutdown at step %s — resumes on restart", flowTag(t), failedStepID(err))
+		r.audit(map[string]any{"event": "workflow_interrupted", "repo": t.Target.Repo,
+			"number": t.Target.Number, "kind": t.Kind, "step": failedStepID(err)})
+		r.auditRunCost(t, run.ID, runCost)
+		hist.finish("interrupted", "daemon shutdown", failedStepID(err), runCost)
+		return
+	}
 	if errors.Is(err, dispatch.ErrTargetClosed) {
 		// The PR merged or closed while a fixer was on it, and conductor
 		// stopped it: the work is moot, not failed — no failure hooks, no
-		// failed/escalate notification, and nothing left for a retry.
+		// failed/escalate notification, and nothing left for a retry. The
+		// `stop` hooks fire instead, so whatever the start hooks put up (a
+		// 👀, a pending status) can be taken down.
 		r.Log("%s workflow stopped — the PR closed while step %s was running", flowTag(t), failedStepID(err))
+		if hasPhase(spec.Hooks, "stop") {
+			f := endFacts("stop", "")
+			f.reason = stopReason(f.state)
+			r.fireHooks(ctx, t, spec.Hooks, "stop", "stopped", run.ID, "", withRun(data, f), nil, "workflow")
+		}
 		r.audit(map[string]any{"event": "workflow_stopped", "repo": t.Target.Repo,
 			"number": t.Target.Number, "kind": t.Kind, "step": failedStepID(err), "reason": "target closed"})
 		r.auditRunCost(t, run.ID, runCost)
@@ -602,8 +625,16 @@ func (r *Runner) runSteps(ctx context.Context, run *store.WorkflowRun, t core.Tr
 			// a REST secret in a URL query rides url.Error verbatim. Redact
 			// before the string reaches hooks' template scope or disk.
 			errStr := r.redactErr(err)
-			r.fireHooks(ctx, t, step.Hooks, "fail", "failed", run.ID, id, data,
-				failureCtx(err, errStr, id), "step "+id)
+			switch {
+			case shuttingDown(ctx):
+				// Interrupted, not ended: the step re-runs on resume.
+			case errors.Is(err, dispatch.ErrTargetClosed):
+				// Moot, not failed: the step's stop hooks, not its fail hooks.
+				r.fireHooks(ctx, t, step.Hooks, "stop", "stopped", run.ID, id, data, nil, "step "+id)
+			default:
+				r.fireHooks(ctx, t, step.Hooks, "fail", "failed", run.ID, id, data,
+					failureCtx(err, errStr, id), "step "+id)
+			}
 			r.audit(map[string]any{"event": "step_error", "repo": t.Target.Repo,
 				"number": t.Target.Number, "kind": t.Kind, "step": id, "error": errStr})
 			if step.ContinueOnError {

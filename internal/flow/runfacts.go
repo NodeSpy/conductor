@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 )
@@ -21,8 +22,8 @@ import (
 //	                start), read fresh
 //	run.head_short  head_sha's first 7 characters
 //	run.pushed      the head moved during the run (both ends known, unequal)
-//	run.reason      at fail: a short, public-safe phrase for why (never the
-//	                error text); "" otherwise
+//	run.reason      at fail / stop: a short, public-safe phrase for why
+//	                (never the error text); "" otherwise
 //
 // Heads come from the event connector's HeadReader (a PR's head commit); a
 // target with none, or a read that fails, leaves the shas "" and pushed
@@ -30,6 +31,9 @@ import (
 // so a hookless trigger costs nothing.
 type runFacts struct {
 	startSHA, headSHA, reason string
+	// state is the target's state as of the last head read (open | closed |
+	// merged | ""); it names a stop's reason.
+	state string
 }
 
 func (f runFacts) data() map[string]any {
@@ -52,28 +56,38 @@ func shortSHA(s string) string {
 // headReadTimeout bounds one head read: run facts must never hold up a run.
 const headReadTimeout = 10 * time.Second
 
-// readHead reads the trigger target's current head through the connector
-// that emitted it. "" when there is none or the read fails (logged and
-// audited, never fatal). Dry runs read nothing.
-func (r *Runner) readHead(ctx context.Context, t core.Trigger) string {
+// readHead reads the trigger target's current head and state through the
+// connector that emitted it. "" when there is none or the read fails (logged
+// and audited, never fatal). Dry runs read nothing.
+func (r *Runner) readHead(ctx context.Context, t core.Trigger) (sha, state string) {
 	if r.DryRun || r.Conns == nil || t.Instance == "" {
-		return ""
+		return "", ""
 	}
 	in, ok := r.Conns.Get(t.Instance)
 	if !ok {
-		return ""
+		return "", ""
 	}
 	c, cancel := context.WithTimeout(context.WithoutCancel(ctx), headReadTimeout)
 	defer cancel()
-	sha, err := in.TargetHead(c, t)
+	h, err := in.TargetHead(c, t)
 	if err != nil {
 		msg := r.redactErr(err)
 		r.Log("%s run facts: read head: %s", flowTag(t), msg)
 		r.audit(map[string]any{"event": "run_head", "outcome": "failed", "repo": t.Target.Repo,
 			"number": t.Target.Number, "kind": t.Kind, "error": msg})
-		return ""
+		return "", ""
 	}
-	return sha
+	return h.SHA, h.State
+}
+
+// stopReason is run.reason for a stop: the run's target went away under it.
+// Whether it merged or just closed comes from the head read the stop hooks
+// take anyway; unknown reads as closed.
+func stopReason(state string) string {
+	if state == connector.TargetMerged {
+		return "the PR merged"
+	}
+	return "the PR closed"
 }
 
 // hasPhase reports whether hooks declares any hook at phase.
@@ -134,7 +148,8 @@ func (r *Runner) FireParkedHooks(ctx context.Context, t core.Trigger, flowRef, p
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
 	data := baseData(t, r.SecretVals)
 	addVaultData(data, r.VaultVals)
-	facts := runFacts{startSHA: parkedAt, headSHA: r.readHead(ctx, t), reason: ParkedReason}
+	head, _ := r.readHead(ctx, t)
+	facts := runFacts{startSHA: parkedAt, headSHA: head, reason: ParkedReason}
 	failure := map[string]any{"kind": "parked", "gave_up": true, "step": "",
 		"error": fmt.Sprintf("parked after %d tries at %s", attempts, shortSHA(parkedAt))}
 	r.fireHooks(ctx, t, spec.Hooks, "fail", "failed", "", "", withRun(data, facts), failure, "workflow")

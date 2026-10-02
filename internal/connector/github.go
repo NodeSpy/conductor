@@ -596,7 +596,7 @@ var githubDecl = &TypeDecl{
 			Outputs: Schema{"ok": {Type: TBool}},
 		},
 		{
-			Name: "react", Desc: "add a reaction to comments/reviews (idempotent: an existing reaction is kept, not duplicated)",
+			Name: "react", Desc: "add (or, remove: true, take away) your reaction on comments/reviews — idempotent both ways",
 			Options: Schema{
 				"repo":     {Type: TString, Required: true, Scope: "repo"},
 				"pr":       {Type: TInt, Desc: "the PR (required for a review subject)"},
@@ -604,9 +604,10 @@ var githubDecl = &TypeDecl{
 				"kind":     {Type: TString, Enum: []string{githubkit.SubjectIssueComment, githubkit.SubjectReviewComment, githubkit.SubjectReview}, Desc: "single-subject shorthand (with id)"},
 				"id":       {Type: TInt, Desc: "single-subject shorthand (with kind)"},
 				"content":  {Type: TString, Required: true, Enum: githubkit.ReactionContents()},
+				"remove":   {Type: TBool, Desc: "take the reaction away instead: only the acting user's reaction of this content; a no-op where there is none"},
 				"as":       {Type: TString, Enum: []string{"me", "bot"}},
 			},
-			Outputs: Schema{"ok": {Type: TBool}, "reacted": {Type: TInt, Desc: "subjects reacted to"}},
+			Outputs: Schema{"ok": {Type: TBool}, "reacted": {Type: TInt, Desc: "subjects reacted to"}, "removed": {Type: TInt, Desc: "reactions removed (remove: true)"}},
 		},
 		{
 			Name: "set_status", Desc: "post a commit status on a sha, or on a PR's head as it is at call time (shown on any PR whose head it is)",
@@ -870,13 +871,13 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 
 // TargetHead implements HeadReader: a PR's head commit, read fresh. Only a
 // target the source assigned itself (core.OwnRepo) is read.
-func (g *githubImpl) TargetHead(ctx context.Context, t core.Trigger) (string, error) {
+func (g *githubImpl) TargetHead(ctx context.Context, t core.Trigger) (TargetHead, error) {
 	repo, number := t.OwnRepo(), t.Target.Number
 	if t.Source != "github" || repo == "" || number == 0 {
-		return "", nil
+		return TargetHead{}, nil
 	}
-	sha, _, err := g.kit.PRHead(ctx, "me", repo, number)
-	return sha, err
+	sha, state, err := g.kit.PRHead(ctx, "me", repo, number)
+	return TargetHead{SHA: sha, State: state}, err
 }
 
 // post/patch/put/del are the write verbs' authenticated JSON requests.

@@ -21,6 +21,8 @@ import (
 type fakeGH struct {
 	mu       sync.Mutex
 	head     string
+	state    string // "" = open
+	merged   bool
 	userHits int
 	pullHits int
 	calls    []string
@@ -47,7 +49,11 @@ func newFakeGH(t *testing.T) *fakeGH {
 			_ = json.NewEncoder(w).Encode(map[string]any{"login": "octo-me"})
 		case r.Method == http.MethodGet && p == "/repos/org/repo/pulls/7":
 			f.pullHits++
-			_ = json.NewEncoder(w).Encode(map[string]any{"state": "open", "head": map[string]any{"sha": f.head}})
+			st := f.state
+			if st == "" {
+				st = "open"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"state": st, "merged": f.merged, "head": map[string]any{"sha": f.head}})
 		case r.Method == http.MethodGet && p == "/repos/org/repo/pulls/7/reviews":
 			_, _ = w.Write([]byte(`[]`))
 		case r.Method == http.MethodGet && reReview.MatchString(p):
@@ -227,17 +233,111 @@ func TestTargetHead(t *testing.T) {
 	g := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
 	tr := core.Trigger{Source: "github", Instance: "gh", Kind: "new_comment", TargetTrusted: true,
 		Target: core.Target{Repo: "org/repo", Number: 7}}
-	if h, err := g.TargetHead(context.Background(), tr); err != nil || h != "aaaaaaa1111" {
-		t.Fatalf("head = %q, %v", h, err)
+	if h, err := g.TargetHead(context.Background(), tr); err != nil || h.SHA != "aaaaaaa1111" || h.State != TargetOpen {
+		t.Fatalf("head = %+v, %v", h, err)
 	}
 	f.push("bbbbbbb2222")
-	if h, _ := g.TargetHead(context.Background(), tr); h != "bbbbbbb2222" {
-		t.Fatalf("head after a push = %q — served a cached read", h)
+	if h, _ := g.TargetHead(context.Background(), tr); h.SHA != "bbbbbbb2222" {
+		t.Fatalf("head after a push = %q — served a cached read", h.SHA)
+	}
+	// A merged PR reads merged (it names a stop's reason); a closed one closed.
+	for _, c := range []struct {
+		state  string
+		merged bool
+		want   string
+	}{{"closed", true, TargetMerged}, {"closed", false, TargetClosed}} {
+		f.mu.Lock()
+		f.state, f.merged = c.state, c.merged
+		f.mu.Unlock()
+		if h, _ := g.TargetHead(context.Background(), tr); h.State != c.want {
+			t.Fatalf("state %s merged=%v reads %q, want %q", c.state, c.merged, h.State, c.want)
+		}
 	}
 	forged := tr
 	forged.TargetTrusted = false
 	before := f.pullHits
-	if h, _ := g.TargetHead(context.Background(), forged); h != "" || f.pullHits != before {
-		t.Fatalf("an untrusted target was read (head %q)", h)
+	if h, _ := g.TargetHead(context.Background(), forged); h.SHA != "" || f.pullHits != before {
+		t.Fatalf("an untrusted target was read (head %q)", h.SHA)
 	}
+}
+
+// react remove: true takes away ONLY the acting user's reaction of that
+// content — someone else's 👀 stays — on every subject kind (a review via
+// GraphQL removeReaction), and is idempotent: absent, or already gone (a 404
+// on the DELETE), is a no-op.
+func TestReactRemove(t *testing.T) {
+	type rx struct {
+		id      int64
+		user    string
+		content string
+	}
+	var mu sync.Mutex
+	// What's on each comment: mine and someone else's 👀, plus my 🚀.
+	onComment := map[string][]rx{
+		"issues/comments/5": {{11, "octo-me", "eyes"}, {12, "alice", "eyes"}, {13, "octo-me", "rocket"}},
+		"pulls/comments/42": {{21, "OCTO-ME", "eyes"}},
+		"issues/comments/6": {{31, "alice", "eyes"}}, // none of mine
+	}
+	var calls []string
+	reList := regexp.MustCompile(`^/repos/org/repo/((?:issues|pulls)/comments/\d+)/reactions$`)
+	reDel := regexp.MustCompile(`^/repos/org/repo/((?:issues|pulls)/comments/\d+)/reactions/(\d+)$`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		p := r.URL.Path
+		switch {
+		case r.Method == http.MethodGet && p == "/user":
+			_ = json.NewEncoder(w).Encode(map[string]any{"login": "octo-me"})
+		case r.Method == http.MethodGet && reList.MatchString(p):
+			var out []map[string]any
+			for _, x := range onComment[reList.FindStringSubmatch(p)[1]] {
+				if x.content == r.URL.Query().Get("content") {
+					out = append(out, map[string]any{"id": x.id, "content": x.content, "user": map[string]any{"login": x.user}})
+				}
+			}
+			if out == nil {
+				out = []map[string]any{}
+			}
+			_ = json.NewEncoder(w).Encode(out)
+		case r.Method == http.MethodDelete && reDel.MatchString(p):
+			m := reDel.FindStringSubmatch(p)
+			calls = append(calls, "DELETE "+m[1]+" "+m[2])
+			if m[2] == "21" { // already gone by the time we got there
+				w.WriteHeader(404)
+				_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+				return
+			}
+			w.WriteHeader(204)
+		case r.Method == http.MethodGet && reReview.MatchString(p):
+			_ = json.NewEncoder(w).Encode(map[string]any{"node_id": "PRR_" + reReview.FindStringSubmatch(p)[2]})
+		case r.Method == http.MethodPost && p == "/graphql":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			vars, _ := body["variables"].(map[string]any)
+			q := fmt.Sprint(body["query"])
+			if !strings.Contains(q, "removeReaction") {
+				t.Errorf("review removal must use removeReaction, got %s", q)
+			}
+			calls = append(calls, fmt.Sprintf("removeReaction %v %v", vars["id"], vars["c"]))
+			_, _ = w.Write([]byte(`{"data":{"removeReaction":{"reaction":{"content":"EYES"}}}}`))
+		default:
+			t.Errorf("unexpected %s %s", r.Method, p)
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+	g := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	ss := append(append(append(subj("issue_comment", 5), subj("review_comment", 42)...), subj("review", 99)...), subj("issue_comment", 6)...)
+	out, err := g.Invoke(context.Background(), "react", map[string]any{"repo": "org/repo", "pr": 7, "subjects": ss, "content": "eyes", "remove": true})
+	if err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if out["removed"] != 3 {
+		t.Fatalf("removed = %v, want 3 (mine on #5, mine on #42 — already gone is fine — and the review)", out["removed"])
+	}
+	wantCalls(t, calls,
+		"DELETE issues/comments/5 11", // mine — never alice's 12, never my rocket 13
+		"DELETE pulls/comments/42 21",
+		"removeReaction PRR_99 EYES")
 }

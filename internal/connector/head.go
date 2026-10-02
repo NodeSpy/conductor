@@ -14,20 +14,33 @@ import (
 // hook's business.
 type HeadReader interface {
 	// TargetHead returns the target's head as it is NOW (never a cached
-	// copy: a caller compares heads across a push), or "" when the target
-	// has none this connector can name.
-	TargetHead(ctx context.Context, t core.Trigger) (string, error)
+	// copy: a caller compares heads across a push), with its state; a zero
+	// value when the target has none this connector can name.
+	TargetHead(ctx context.Context, t core.Trigger) (TargetHead, error)
 }
 
+// TargetHead is a target's current revision and state.
+type TargetHead struct {
+	SHA   string
+	State string // TargetOpen | TargetClosed | TargetMerged | "" (unknown)
+}
+
+// Target states a HeadReader reports.
+const (
+	TargetOpen   = "open"
+	TargetClosed = "closed"
+	TargetMerged = "merged"
+)
+
 // TargetHead reads the trigger target's current head through this instance,
-// when its connector has a head face. ("", nil) when it has none.
-func (in *Instance) TargetHead(ctx context.Context, t core.Trigger) (string, error) {
+// when its connector has a head face. A zero value when it has none.
+func (in *Instance) TargetHead(ctx context.Context, t core.Trigger) (TargetHead, error) {
 	if in == nil || !in.Enabled {
-		return "", nil
+		return TargetHead{}, nil
 	}
 	hr, ok := in.Impl.(HeadReader)
 	if !ok {
-		return "", nil
+		return TargetHead{}, nil
 	}
 	return hr.TargetHead(ctx, t)
 }

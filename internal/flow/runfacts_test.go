@@ -43,6 +43,7 @@ func init() {
 // heads[0], heads[1], … (the last one repeating); every call lands in log.
 type headLog struct {
 	mu    sync.Mutex
+	state string // the target state every read reports
 	heads []string
 	reads int
 	log   []string
@@ -101,7 +102,7 @@ func (h *headImpl) Invoke(_ context.Context, verb string, opts map[string]any) (
 	l.add(fmt.Sprintf("post:%v", opts["text"]))
 	return map[string]any{"id": 1}, nil
 }
-func (h *headImpl) TargetHead(context.Context, core.Trigger) (string, error) {
+func (h *headImpl) TargetHead(context.Context, core.Trigger) (connector.TargetHead, error) {
 	l := headLogFor(h.name)
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -109,12 +110,12 @@ func (h *headImpl) TargetHead(context.Context, core.Trigger) (string, error) {
 	i := l.reads
 	l.reads++
 	if len(l.heads) == 0 {
-		return "", nil
+		return connector.TargetHead{}, nil
 	}
 	if i >= len(l.heads) {
 		i = len(l.heads) - 1
 	}
-	return l.heads[i], nil
+	return connector.TargetHead{SHA: l.heads[i], State: l.state}, nil
 }
 
 // headRig builds a runner over one fakehead connector named name, whose head
@@ -339,9 +340,10 @@ triggers:
 	}
 }
 
-// `conductor validate` admits the hook contract where hooks see it: {{.run.*}}
-// and {{.hook.*}} in workflow-level hooks, {{.hook.*}} in step hooks — and
-// refuses {{.run.*}} in a step hook (run facts are workflow-level).
+// `conductor validate` admits the hook contract where hooks see it — every
+// phase, start|done|fail|stop, at both levels: {{.run.*}} and {{.hook.*}} in
+// workflow-level hooks, {{.hook.*}} in step hooks — and refuses {{.run.*}} in
+// a step hook (run facts are workflow-level).
 func TestValidateHookScope(t *testing.T) {
 	good := loadConfig(t, `
 connectors: { hv: { use: fakehead } }
@@ -351,12 +353,14 @@ triggers:
       - { at: start, uses: hv.post, options: { text: "{{.run.start_sha}} {{.hook.phase}}" } }
       - { at: done,  if: "run.pushed", uses: hv.post, options: { text: "{{.run.head_short}}" } }
       - { at: fail,  uses: hv.post, options: { text: "{{.run.reason}} {{.hook.failure.kind}} {{.error}}" } }
+      - { at: stop,  uses: hv.post, options: { text: "{{.run.reason}} {{.run.start_sha}} {{.hook.status}}" } }
     steps:
       - id: s
         uses: hv.post
         options: { text: x }
         hooks:
           - { at: fail, uses: hv.post, options: { text: "{{.hook.failure.kind}}" } }
+          - { at: stop, uses: hv.post, options: { text: "{{.hook.phase}}" } }
 `)
 	if err := Validate(good, buildRegistry(t, good)); err != nil {
 		t.Fatalf("the hook contract should validate: %v", err)
@@ -374,5 +378,129 @@ triggers:
 `)
 	if err := Validate(bad, buildRegistry(t, bad)); err == nil || !strings.Contains(err.Error(), "run.pushed") {
 		t.Fatalf("run facts in a STEP hook should be refused at load, got %v", err)
+	}
+}
+
+// assertInterrupted: the run was recorded interrupted by shutdown — not ok,
+// not failed — and its terminal notifications never went out.
+func assertInterrupted(t *testing.T, rig *testRig) {
+	t.Helper()
+	if len(rig.Store.auditsWithEvent("workflow_interrupted")) != 1 {
+		t.Fatalf("the run was not recorded interrupted (audit: %v)", rig.Store.auditsWithEvent("workflow_failed"))
+	}
+	if failed, _ := rig.workflowFailed(); failed {
+		t.Fatal("an interrupted run was recorded failed")
+	}
+	for _, e := range rig.Notifier.snapshot() {
+		if e.Event == "complete" || e.Event == "failed" || e.Event == "escalate" {
+			t.Fatalf("an interrupted run emitted %q", e.Event)
+		}
+	}
+}
+
+// stepErrorText is the last step_error audit's error.
+func stepErrorText(rig *testRig) string {
+	es := rig.Store.auditsWithEvent("step_error")
+	if len(es) == 0 {
+		return ""
+	}
+	s, _ := es[len(es)-1]["error"].(string)
+	return s
+}
+
+// stopSpec posts every terminal phase, at workflow and step level.
+const stopSpec = `
+on: %[1]s.ping
+hooks:
+  - { at: done, uses: %[1]s.post, options: { text: "done" } }
+  - { at: fail, uses: %[1]s.post, options: { text: "fail" } }
+  - { at: stop, uses: %[1]s.post, options: { text: "stop start={{.run.start_sha}} head={{.run.head_sha}} pushed={{.run.pushed}} reason={{.run.reason}} status={{.hook.status}}" } }
+steps:
+  - id: fix
+    type: agent
+    prompt: p
+    hooks:
+      - { at: fail, uses: %[1]s.post, options: { text: "step-fail" } }
+      - { at: stop, uses: %[1]s.post, options: { text: "step-stop {{.hook.phase}}" } }
+`
+
+// The target closed under the run (the PR merged or closed; conductor stopped
+// the fixer): the `stop` hooks fire — step-level then workflow-level — with
+// run facts and a reason naming merged vs closed; no fail or done hooks.
+func TestStopHooksOnTargetClosed(t *testing.T) {
+	for _, tc := range []struct{ state, reason string }{
+		{"merged", "the PR merged"}, {"closed", "the PR closed"}, {"", "the PR closed"},
+	} {
+		t.Run("state="+tc.state, func(t *testing.T) {
+			rig, l := headRig(t, "hst", "aaaaaaa1111", "bbbbbbb2222")
+			l.state = tc.state
+			rig.Agents.dispatchFunc = func(context.Context, dispatch.Request) (dispatch.RunRef, error) {
+				return dispatch.RunRef{}, dispatch.ErrTargetClosed
+			}
+			runTrigger(rig, headTrigger("hst"), mustSpec(t, fmt.Sprintf(stopSpec, "hst")))
+			want := "step-stop stop | stop start=aaaaaaa1111 head=bbbbbbb2222 pushed=true reason=" + tc.reason + " status=stopped"
+			if got := strings.Join(l.posts(), " | "); got != want {
+				t.Fatalf("hooks:\n got  %s\n want %s", got, want)
+			}
+			if len(rig.Store.auditsWithEvent("workflow_stopped")) != 1 {
+				t.Fatal("the run wasn't recorded stopped")
+			}
+		})
+	}
+}
+
+// Stop hooks fire on NOTHING else: not on done, not on fail.
+func TestStopHooksNotOnDoneOrFail(t *testing.T) {
+	rig, l := headRig(t, "hsd", "aaaaaaa1111")
+	runTrigger(rig, headTrigger("hsd"), mustSpec(t, fmt.Sprintf(stopSpec, "hsd")))
+	if got := strings.Join(l.posts(), " | "); got != "done" {
+		t.Fatalf("a successful run fired %q, want only done", got)
+	}
+	rig, l = headRig(t, "hsf", "aaaaaaa1111")
+	rig.Agents.dispatchFunc = func(context.Context, dispatch.Request) (dispatch.RunRef, error) {
+		return dispatch.RunRef{}, dispatch.Unrecoverable(errors.New("gitwt: exit status 128"))
+	}
+	runTrigger(rig, headTrigger("hsf"), mustSpec(t, fmt.Sprintf(stopSpec, "hsf")))
+	if got := strings.Join(l.posts(), " | "); got != "step-fail | fail" {
+		t.Fatalf("a failed run fired %q, want only the fail hooks", got)
+	}
+}
+
+// A daemon shutdown under the run is neither a stop nor a failure: no
+// terminal hook fires at either level, nothing is notified, and the run
+// record is kept (not finished) so it resumes on restart.
+func TestShutdownIsNotAStop(t *testing.T) {
+	rig, l := headRig(t, "hsh", "aaaaaaa1111")
+	ctx, cancel := context.WithCancel(context.Background())
+	rig.Agents.dispatchFunc = func(c context.Context, _ dispatch.Request) (dispatch.RunRef, error) {
+		cancel() // the daemon shuts down while the agent works
+		<-c.Done()
+		return dispatch.RunRef{}, c.Err()
+	}
+	run := emptyRun()
+	run.ID = "run-1"
+	spec := mustSpec(t, fmt.Sprintf(stopSpec, "hsh"))
+	rig.Runner.Run(ctx, run, headTrigger("hsh"), spec, rig.Runner.IndexOf(spec), nil, false)
+	if p := l.posts(); len(p) != 0 {
+		t.Fatalf("a shutdown fired terminal hooks: %v", p)
+	}
+	assertInterrupted(t, rig)
+	for _, id := range rig.Store.delLog {
+		if id == "run-1" {
+			t.Fatal("an interrupted run's record was deleted — it would never resume")
+		}
+	}
+}
+
+// Shutdown vs a run's OWN deadline: a step timeout under a live daemon is a
+// failure (fail hooks), never mistaken for an interruption.
+func TestOwnTimeoutIsAFailureNotAShutdown(t *testing.T) {
+	rig, l := headRig(t, "hto", "aaaaaaa1111")
+	rig.Agents.dispatchFunc = func(context.Context, dispatch.Request) (dispatch.RunRef, error) {
+		return dispatch.RunRef{}, fmt.Errorf("wait: %w", context.DeadlineExceeded)
+	}
+	runTrigger(rig, headTrigger("hto"), mustSpec(t, fmt.Sprintf(stopSpec, "hto")))
+	if got := strings.Join(l.posts(), " | "); got != "step-fail | fail" {
+		t.Fatalf("a timed-out run fired %q, want the fail hooks", got)
 	}
 }

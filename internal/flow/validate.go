@@ -178,7 +178,11 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 	failScope := runHookScope(sc)
 	failScope.add("error")
 	failScope.add("failed_step")
-	return validateHookRefs(cfg, reg, where, spec.Hooks, "fail", failScope)
+	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "fail", failScope); err != nil {
+		return err
+	}
+	// at:stop (the target closed under the run) sees what at:done sees.
+	return validateHookRefs(cfg, reg, where, spec.Hooks, "stop", runHookScope(sc))
 }
 
 // runHookScope is a workflow-level hook's scope: the position's, plus the
@@ -272,7 +276,10 @@ func validateManualTrigger(cfg *config.Config, reg *connector.Registry, where st
 	failScope := runHookScope(sc)
 	failScope.add("error")
 	failScope.add("failed_step")
-	return validateHookRefs(cfg, reg, where, spec.Hooks, "fail", failScope)
+	if err := validateHookRefs(cfg, reg, where, spec.Hooks, "fail", failScope); err != nil {
+		return err
+	}
+	return validateHookRefs(cfg, reg, where, spec.Hooks, "stop", runHookScope(sc))
 }
 
 // validateWorkflow checks a reusable workflow standalone. Its trigger-context
@@ -455,8 +462,8 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 		}
 	}
 
-	// Step-level hooks: at:start sees the prior scope; at:done adds this
-	// step's own output; at:fail adds failure metadata.
+	// Step-level hooks: at:start and at:stop see the prior scope; at:done
+	// adds this step's own output; at:fail adds failure metadata.
 	id := step.ID
 	if id == "" {
 		id = "this step"
@@ -476,7 +483,11 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 	failScope := doneScope.clone()
 	failScope.add("error")
 	failScope.add("failed_step")
-	return validateHookRefs(cfg, reg, w, step.Hooks, "fail", failScope)
+	if err := validateHookRefs(cfg, reg, w, step.Hooks, "fail", failScope); err != nil {
+		return err
+	}
+	// at:stop (the step's target closed under it) sees the prior scope.
+	return validateHookRefs(cfg, reg, w, step.Hooks, "stop", hookScope)
 }
 
 // validateHookRefs checks one phase's hooks: the verb exists, its options
