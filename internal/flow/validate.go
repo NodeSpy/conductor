@@ -68,7 +68,7 @@ func validateNotifyVia(cfg *config.Config, reg *connector.Registry) error {
 		if !found {
 			return fmt.Errorf("%s: unknown connector %q", w, connName)
 		}
-		vd, found := in.Decl.Verb(verb)
+		vd, found := in.Decl.FlowVerb(verb)
 		if !found {
 			return fmt.Errorf("%s: connector %q (%s) has no verb %q (verbs: %s)",
 				w, connName, in.Decl.Type, verb, strings.Join(in.Decl.VerbNames(), ", "))
@@ -390,7 +390,7 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 		if !ok {
 			return fmt.Errorf("%s: `uses: %s` — unknown connector %q", w, step.Uses, connName)
 		}
-		vd, ok := in.Decl.Verb(verb)
+		vd, ok := in.Decl.FlowVerb(verb)
 		if !ok {
 			return fmt.Errorf("%s: connector %q (%s) has no verb %q (verbs: %s)",
 				w, connName, in.Decl.Type, verb, strings.Join(in.Decl.VerbNames(), ", "))
@@ -503,7 +503,7 @@ func validateHookRefs(cfg *config.Config, reg *connector.Registry, where string,
 		if !ok {
 			return fmt.Errorf("%s: unknown connector %q", w, connName)
 		}
-		vd, ok := in.Decl.Verb(verb)
+		vd, ok := in.Decl.FlowVerb(verb)
 		if !ok {
 			return fmt.Errorf("%s: connector %q (%s) has no verb %q (verbs: %s)",
 				w, connName, in.Decl.Type, verb, strings.Join(in.Decl.VerbNames(), ", "))
@@ -535,7 +535,7 @@ func checkAskCapable(reg *connector.Registry, w, name string) error {
 	if !ok {
 		return fmt.Errorf("%s: handoff %q is not a configured connector", w, name)
 	}
-	if v, ok := in.Decl.Verb("ask"); !ok || !v.Ask {
+	if v, ok := in.Decl.FlowVerb("ask"); !ok || !v.Ask {
 		return fmt.Errorf("%s: connector %q (%s) has no ask verb — hand-offs need slack/discord/web", w, name, in.Decl.Type)
 	}
 	return nil
@@ -774,7 +774,7 @@ func stepOutputSchema(reg *connector.Registry, step config.Step) connector.Schem
 	if !ok {
 		return nil
 	}
-	if vd, ok := in.Decl.Verb(verb); ok && len(vd.Outputs) > 0 {
+	if vd, ok := in.Decl.FlowVerb(verb); ok && len(vd.Outputs) > 0 {
 		s := connector.Schema{}
 		for k, v := range vd.Outputs {
 			s[k] = v

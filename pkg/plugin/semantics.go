@@ -230,6 +230,10 @@ type ReadsRevision struct {
 	Revision string              `json:"revision"`
 	State    string              `json:"state,omitempty"`
 	States   map[string][]string `json:"states,omitempty"`
+	// Reasons is what a run stopped because its target went away reports
+	// as its reason, per generic state ("closed", "accepted"); the engine
+	// falls back to a neutral phrase.
+	Reasons map[string]string `json:"reasons,omitempty"`
 }
 
 // MintsCredential: this verb mints the named connection credential.

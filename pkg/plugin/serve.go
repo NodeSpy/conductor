@@ -507,16 +507,6 @@ func dispatch(ctx context.Context, h Handler, method string, params json.RawMess
 			return nil, err
 		}
 		return wrapResult(h.AppToken(req))
-	case MethodTargetHead:
-		h, ok := h.(TargetHeadHandler)
-		if !ok {
-			return nil, Errorf(CodeMethodNotFound, "this plugin reads no target heads")
-		}
-		var req TargetHeadRequest
-		if err := decodeParams(params, &req); err != nil {
-			return nil, err
-		}
-		return wrapResult(h.TargetHead(req))
 	default:
 		return nil, Errorf(CodeMethodNotFound, "unknown method "+method)
 	}

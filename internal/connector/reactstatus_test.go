@@ -226,38 +226,44 @@ func TestSetStatusContextJoinsOwnStatusGuard(t *testing.T) {
 	}
 }
 
-// TargetHead: a trusted github PR target's head, read fresh (never cached —
-// it is compared across a push); nothing for a target the sender chose.
+// TargetHead through github's declared reads_revision verb (pr_head): a
+// trusted PR target's head, read fresh (never cached — it is compared across
+// a push), its state in the contract's terms, the stop reason in github's
+// words; nothing for a target the sender chose, or another instance's.
 func TestTargetHead(t *testing.T) {
 	f := newFakeGH(t)
 	g := newGithubTestImpl(t, "\n    identity:\n      write_token: literal-tok\n")
+	in := &Instance{Name: "gh", Enabled: true, Decl: githubDecl, Impl: g}
 	tr := core.Trigger{Source: "github", Instance: "gh", Kind: "new_comment", TargetTrusted: true,
-		Target: core.Target{Repo: "org/repo", Number: 7}}
-	if h, err := g.TargetHead(context.Background(), tr); err != nil || h.SHA != "aaaaaaa1111" || h.State != TargetOpen {
+		Target: core.Target{Repo: "org/repo", Number: 7}, Context: map[string]any{"repo": "org/repo", "number": 7}}
+	if h, err := in.TargetHead(context.Background(), tr); err != nil || h.SHA != "aaaaaaa1111" || h.State != TargetOpen {
 		t.Fatalf("head = %+v, %v", h, err)
 	}
 	f.push("bbbbbbb2222")
-	if h, _ := g.TargetHead(context.Background(), tr); h.SHA != "bbbbbbb2222" {
+	if h, _ := in.TargetHead(context.Background(), tr); h.SHA != "bbbbbbb2222" {
 		t.Fatalf("head after a push = %q — served a cached read", h.SHA)
 	}
-	// A merged PR reads merged (it names a stop's reason); a closed one closed.
 	for _, c := range []struct {
-		state  string
-		merged bool
-		want   string
-	}{{"closed", true, TargetMerged}, {"closed", false, TargetClosed}} {
+		state       string
+		merged      bool
+		want, words string
+	}{{"closed", true, TargetAccepted, "the PR merged"}, {"closed", false, TargetClosed, "the PR closed"}} {
 		f.mu.Lock()
 		f.state, f.merged = c.state, c.merged
 		f.mu.Unlock()
-		if h, _ := g.TargetHead(context.Background(), tr); h.State != c.want {
-			t.Fatalf("state %s merged=%v reads %q, want %q", c.state, c.merged, h.State, c.want)
+		if h, _ := in.TargetHead(context.Background(), tr); h.State != c.want || h.StopReason != c.words {
+			t.Fatalf("state %s merged=%v reads %+v, want %q / %q", c.state, c.merged, h, c.want, c.words)
 		}
 	}
+	before := f.pullHits
 	forged := tr
 	forged.TargetTrusted = false
-	before := f.pullHits
-	if h, _ := g.TargetHead(context.Background(), forged); h.SHA != "" || f.pullHits != before {
-		t.Fatalf("an untrusted target was read (head %q)", h.SHA)
+	other := tr
+	other.Instance = "gh2"
+	for _, x := range []core.Trigger{forged, other} {
+		if h, _ := in.TargetHead(context.Background(), x); h.SHA != "" || f.pullHits != before {
+			t.Fatalf("read a head it should not have (head %q) for %+v", h.SHA, x)
+		}
 	}
 }
 

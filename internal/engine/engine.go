@@ -1543,7 +1543,7 @@ func agentWaitTimeout(p config.Step) time.Duration {
 // false falls through to dispatching the fixer.
 func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.RemediateSemantics, act config.Action, key, head string, run any) bool {
 	waitKey := fmt.Sprintf("%s|%v", key, run)
-	out, err := e.invokeVerb(ctx, t.Instance, rem.Status.Verb, declaredArgs(rem.Status.Args, t.Context))
+	out, err := e.invokeVerb(ctx, t.Instance, rem.Status.Verb, core.DeclaredArgs(rem.Status.Args, t.Context))
 	if err == nil {
 		done, eerr := expr.Eval(rem.Status.DoneWhen, out)
 		if eerr == nil && !done {
@@ -1568,7 +1568,7 @@ func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.Remedia
 	if e.store.Attempts(key, rkey, head) >= budget {
 		return false
 	}
-	if _, err := e.invokeVerb(ctx, t.Instance, rem.Action.Verb, declaredArgs(rem.Action.Args, t.Context)); err != nil {
+	if _, err := e.invokeVerb(ctx, t.Instance, rem.Action.Verb, core.DeclaredArgs(rem.Action.Args, t.Context)); err != nil {
 		// Not requested, so the attempt is not counted; dispatch the fixer.
 		e.log("%s remediation %s for run %v: %v — dispatching the fixer instead", tag(t), rem.Action.Verb, run, err)
 		return false
@@ -1578,31 +1578,6 @@ func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.Remedia
 		"number": t.Target.Number, "run": run})
 	e.log("%s remediation %s requested (run %v)", tag(t), rem.Action.Verb, run)
 	return true
-}
-
-// declaredArgs renders a declaration's verb args over an event's facts: a
-// template naming one fact passes that fact's value as is (an integer stays
-// an integer); other templates render to strings; a literal parses as JSON
-// when it can (true, 3), else stays a string.
-func declaredArgs(args map[string]string, facts map[string]any) map[string]any {
-	out := make(map[string]any, len(args))
-	for k, v := range args {
-		if name := sdk.FactName(v); name != v {
-			out[k] = facts[name]
-			continue
-		}
-		if strings.Contains(v, "{{") {
-			out[k] = core.RenderFacts(v, facts)
-			continue
-		}
-		var lit any
-		if json.Unmarshal([]byte(v), &lit) == nil {
-			out[k] = lit
-		} else {
-			out[k] = v
-		}
-	}
-	return out
 }
 
 // userToken returns your GitHub token ("" when unavailable).

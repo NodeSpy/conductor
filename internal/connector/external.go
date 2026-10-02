@@ -471,19 +471,3 @@ func (e *externalImpl) Invoke(ctx context.Context, verb string, opts map[string]
 	}
 	return out, nil
 }
-
-// TargetHead implements HeadReader for a source: the plugin reads
-// the target's current head with the instance's own credentials. Only a target
-// this instance emitted, and only a trusted one — the same "a target the
-// source assigned itself" rule the bundled github connector applies.
-func (e *externalImpl) TargetHead(ctx context.Context, t core.Trigger) (TargetHead, error) {
-	ext, ok := e.source.(pluginSourceExt)
-	if !ok || t.Instance != e.instance || t.OwnRepo() == "" || t.Target.Number == 0 {
-		return TargetHead{}, nil
-	}
-	res, err := ext.TargetHead(ctx, e.instance, wireTarget(t.Target))
-	if err == plugin.ErrNotSupported {
-		return TargetHead{}, nil
-	}
-	return TargetHead{SHA: res.SHA, State: res.State}, err
-}

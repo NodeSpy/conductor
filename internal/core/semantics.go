@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -215,3 +216,28 @@ func renderFacts(tmpl string, facts map[string]any) string {
 // RenderFacts is renderFacts for other packages rendering a declaration's
 // templates (target keys, checkout refs, credential args).
 func RenderFacts(tmpl string, facts map[string]any) string { return renderFacts(tmpl, facts) }
+
+// DeclaredArgs renders a declaration's verb args over an event's facts: a
+// template naming one fact passes that fact's value as is (an integer stays
+// an integer); other templates render to strings; a literal parses as JSON
+// when it can (true, 3), else stays a string.
+func DeclaredArgs(args map[string]string, facts map[string]any) map[string]any {
+	out := make(map[string]any, len(args))
+	for k, v := range args {
+		if name := sdk.FactName(v); name != v {
+			out[k] = facts[name]
+			continue
+		}
+		if strings.Contains(v, "{{") {
+			out[k] = renderFacts(v, facts)
+			continue
+		}
+		var lit any
+		if json.Unmarshal([]byte(v), &lit) == nil {
+			out[k] = lit
+		} else {
+			out[k] = v
+		}
+	}
+	return out
+}

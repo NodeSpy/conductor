@@ -57,12 +57,11 @@ func New() *Plugin {
 }
 
 var (
-	_ plugin.Handler           = (*Plugin)(nil)
-	_ plugin.SourceHandler     = (*Plugin)(nil)
-	_ plugin.PollHandler       = (*Plugin)(nil)
-	_ plugin.TranslateHandler  = (*Plugin)(nil)
-	_ plugin.AppTokenHandler   = (*Plugin)(nil)
-	_ plugin.TargetHeadHandler = (*Plugin)(nil)
+	_ plugin.Handler          = (*Plugin)(nil)
+	_ plugin.SourceHandler    = (*Plugin)(nil)
+	_ plugin.PollHandler      = (*Plugin)(nil)
+	_ plugin.TranslateHandler = (*Plugin)(nil)
+	_ plugin.AppTokenHandler  = (*Plugin)(nil)
 )
 
 // Describe returns the github declaration.
@@ -356,26 +355,4 @@ func (p *Plugin) AppToken(req plugin.AppTokenRequest) (plugin.AppTokenResult, er
 		return plugin.AppTokenResult{}, plugin.Errorf(plugin.CodeInternalError, strings.TrimSpace(err.Error()))
 	}
 	return plugin.AppTokenResult{Token: tok}, nil
-}
-
-// TargetHead reads a PR target's current head and state with the instance's
-// own credentials — the read the bundled connector makes for the same run
-// facts (githubkit.Client.PRHead, as `me`).
-func (p *Plugin) TargetHead(req plugin.TargetHeadRequest) (plugin.TargetHeadResult, error) {
-	t := req.Target
-	if t.Repo == "" || t.Number == 0 {
-		return plugin.TargetHeadResult{}, nil
-	}
-	p.mu.Lock()
-	kit := p.clients[req.Instance]
-	p.mu.Unlock()
-	if kit == nil {
-		return plugin.TargetHeadResult{}, plugin.Errorf(plugin.CodeInvalidParams,
-			fmt.Sprintf("instance %q has made no call yet — no credentials to read with", req.Instance))
-	}
-	sha, state, err := kit.PRHead(context.Background(), "me", t.Repo, t.Number)
-	if err != nil {
-		return plugin.TargetHeadResult{}, plugin.Errorf(plugin.CodeInternalError, err.Error())
-	}
-	return plugin.TargetHeadResult{SHA: sha, State: state}, nil
 }

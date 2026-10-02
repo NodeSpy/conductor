@@ -274,17 +274,6 @@ func (g *githubImpl) Invoke(ctx context.Context, verb string, opts map[string]an
 	return out, err
 }
 
-// TargetHead implements HeadReader: a PR's head commit, read fresh. Only a
-// target the source assigned itself (core.OwnRepo) is read.
-func (g *githubImpl) TargetHead(ctx context.Context, t core.Trigger) (TargetHead, error) {
-	repo, number := t.OwnRepo(), t.Target.Number
-	if t.Source != "github" || repo == "" || number == 0 {
-		return TargetHead{}, nil
-	}
-	sha, state, err := g.kit.PRHead(ctx, "me", repo, number)
-	return TargetHead{SHA: sha, State: state}, err
-}
-
 // post/patch/put/del are the write verbs' authenticated JSON requests.
 // isRateLimited/retryAfter are thin wrappers over githubkit's exported
 // helpers, kept as package-level functions in `connector` for existing test

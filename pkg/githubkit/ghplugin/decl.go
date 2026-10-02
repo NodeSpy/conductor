@@ -260,6 +260,19 @@ func decl() plugin.Decl {
 				Outputs: plugin.Schema{"diff": {Type: "string"}},
 			},
 			{
+				Name: "pr_head", Desc: "a PR's current head commit and state (open | closed | merged), read fresh — what the engine's run facts read",
+				Semantics: &plugin.VerbSemantics{HostOnly: true, ReadsRevision: &plugin.ReadsRevision{
+					Args:     map[string]string{"repo": "{{.repo}}", "pr": "{{.number}}"},
+					Revision: "sha", State: "state",
+					States:  map[string][]string{"open": {"open"}, "closed": {"closed"}, "accepted": {"merged"}},
+					Reasons: map[string]string{"accepted": "the PR merged", "closed": "the PR closed"},
+				}},
+				Options: plugin.Schema{
+					"repo": {Type: "string", Required: true, Scope: "repo"}, "pr": {Type: "integer", Required: true},
+				},
+				Outputs: plugin.Schema{"sha": {Type: "string"}, "state": {Type: "string"}},
+			},
+			{
 				Name: "pr_get", Desc: "PR metadata + review status: state, merged, base/head, line counts, labels, and the current review decision/approvals",
 				Options: plugin.Schema{
 					"repo": {Type: "string", Required: true, Scope: "repo"}, "pr": {Type: "integer", Required: true},

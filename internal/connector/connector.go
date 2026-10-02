@@ -219,6 +219,20 @@ func (d *TypeDecl) Verb(name string) (VerbDecl, bool) {
 	return VerbDecl{}, false
 }
 
+// HostOnly reports whether the verb is the engine's alone (declared
+// host_only): flows, skills and agents may not call it.
+func (v VerbDecl) HostOnly() bool { return v.Semantics != nil && v.Semantics.HostOnly }
+
+// FlowVerb is Verb for the surfaces a flow, skill or agent reaches: a
+// host-only verb is not one of them.
+func (d *TypeDecl) FlowVerb(name string) (VerbDecl, bool) {
+	v, ok := d.Verb(name)
+	if !ok || v.HostOnly() {
+		return VerbDecl{}, false
+	}
+	return v, true
+}
+
 // EventNames lists declared event names (sorted, for errors/introspection).
 func (d *TypeDecl) EventNames() []string {
 	out := make([]string, 0, len(d.Events))
@@ -233,6 +247,9 @@ func (d *TypeDecl) EventNames() []string {
 func (d *TypeDecl) VerbNames() []string {
 	out := make([]string, 0, len(d.Verbs))
 	for _, v := range d.Verbs {
+		if v.HostOnly() {
+			continue // the engine's alone; never offered to a flow or agent
+		}
 		out = append(out, v.Name)
 	}
 	sort.Strings(out)

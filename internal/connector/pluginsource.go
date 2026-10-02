@@ -45,7 +45,6 @@ type pluginSourceExt interface {
 	Translate(ctx context.Context, req sdk.TranslateRequest) ([]sdk.SourceEvent, error)
 	Validate(ctx context.Context, req sdk.ValidateRequest) ([]sdk.Problem, error)
 	AppToken(ctx context.Context, instance string, installationID int64) (string, error)
-	TargetHead(ctx context.Context, instance string, t sdk.Target) (sdk.TargetHeadResult, error)
 }
 
 // pluginEvent is the wire shape a source plugin emits (one plugin.event) —

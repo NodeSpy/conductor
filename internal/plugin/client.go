@@ -880,15 +880,6 @@ func (h pluginHandler) HandleNotification(_ context.Context, method string, para
 	}
 }
 
-// TargetHead asks a source for a target's current head and state.
-func (c *Client) TargetHead(ctx context.Context, instance string, t sdk.Target) (sdk.TargetHeadResult, error) {
-	var res sdk.TargetHeadResult
-	if err := c.call(ctx, sdk.MethodTargetHead, sdk.TargetHeadRequest{Instance: instance, Target: t}, &res); err != nil {
-		return sdk.TargetHeadResult{}, notSupported(err)
-	}
-	return res, nil
-}
-
 // inProcessDial serves h over an in-memory pipe and returns the daemon's end
 // of it: the same acp.Conn, the same handler routing (notifications, host
 // callbacks) as a subprocess.

@@ -147,6 +147,17 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 			return nil, err
 		}
 		return map[string]any{"id": out.ID, "comments": len(comments)}, nil
+	case "pr_head":
+		// The revision read the engine's run facts take (reads_revision):
+		// uncached, since a caller compares heads across a push.
+		if number == 0 {
+			return nil, fmt.Errorf("github.pr_head: options.pr is required")
+		}
+		sha, state, err := c.PRHead(ctx, as, repo, number)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"sha": sha, "state": state}, nil
 	case "pr_diff":
 		if number == 0 {
 			return nil, fmt.Errorf("github.pr_diff: options.pr is required")

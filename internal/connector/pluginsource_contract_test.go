@@ -22,7 +22,6 @@ type abiSourcer struct {
 	events []sdk.SourceEvent
 	polls  []sdk.PollRequest
 	pollEv []sdk.SourceEvent
-	heads  []sdk.Target
 	transl []sdk.TranslateRequest
 }
 
@@ -69,10 +68,6 @@ func (a *abiSourcer) Translate(_ context.Context, req sdk.TranslateRequest) ([]s
 }
 func (a *abiSourcer) AppToken(_ context.Context, _ string, id int64) (string, error) {
 	return "tok-" + itoa64(id), nil
-}
-func (a *abiSourcer) TargetHead(_ context.Context, _ string, t sdk.Target) (sdk.TargetHeadResult, error) {
-	a.heads = append(a.heads, t)
-	return sdk.TargetHeadResult{SHA: "head1", State: "open"}, nil
 }
 
 func itoa64(n int64) string { b, _ := json.Marshal(n); return string(b) }
@@ -296,28 +291,6 @@ type countInvoker struct{ calls int }
 func (f *countInvoker) Invoke(context.Context, plugin.InvokeRequest) (map[string]any, error) {
 	f.calls++
 	return map[string]any{}, nil
-}
-
-// A head read goes to the plugin only for a trusted target this instance emitted.
-func TestABITargetHeadOnlyForOwnTrustedTargets(t *testing.T) {
-	src := &abiSourcer{}
-	e := &externalImpl{source: src, instance: "gh", decl: &TypeDecl{}}
-	own := core.Trigger{Instance: "gh", TargetTrusted: true, Target: core.Target{Repo: "o/r", Number: 5}}
-	if h, err := e.TargetHead(context.Background(), own); err != nil || h.SHA != "head1" || h.State != "open" {
-		t.Fatalf("own trusted target: %+v %v", h, err)
-	}
-	for _, tr := range []core.Trigger{
-		{Instance: "gh", Target: core.Target{Repo: "o/r", Number: 5}},                         // untrusted
-		{Instance: "other", TargetTrusted: true, Target: core.Target{Repo: "o/r", Number: 5}}, // not ours
-		{Instance: "gh", TargetTrusted: true, Target: core.Target{Repo: "o/r"}},               // no number
-	} {
-		if h, _ := e.TargetHead(context.Background(), tr); h.SHA != "" {
-			t.Fatalf("read a head it should not have: %+v for %+v", h, tr)
-		}
-	}
-	if len(src.heads) != 1 {
-		t.Fatalf("plugin asked %d times, want 1", len(src.heads))
-	}
 }
 
 // A plugin standing in for a bundled type replaces it only while it is

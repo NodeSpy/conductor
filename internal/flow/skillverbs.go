@@ -356,7 +356,7 @@ func validateVerbScopes(where string, sk *config.SkillPolicy, reg *connector.Reg
 			if !ok || in.Decl == nil {
 				continue
 			}
-			vd, ok := in.Decl.Verb(verb)
+			vd, ok := in.Decl.FlowVerb(verb)
 			if !ok {
 				continue
 			}
@@ -435,7 +435,7 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 		for _, connName := range reg.Names() {
 			if in, ok := reg.Get(connName); ok {
 				for _, vn := range in.Decl.VerbNames() {
-					if vd, ok := in.Decl.Verb(vn); ok {
+					if vd, ok := in.Decl.FlowVerb(vn); ok {
 						for _, so := range vd.ScopedOptions() {
 							known[so.Name] = true
 						}

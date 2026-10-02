@@ -5,17 +5,16 @@ import "encoding/json"
 // Source surface of the one contract (docs/design/plugin-contract.md §1.5).
 // Every source is handed its triggers on start_source and may route each
 // event to one of them; plugin.poll and plugin.translate are in contract.go.
-// The two methods below are transitional and
-// are replaced by declared verbs (reads_revision, mints_credential).
+// The method below is transitional: credential minting becomes a declared
+// verb (mints_credential).
 
 // Methods (daemon → plugin requests).
 const (
-	MethodAppToken   = "plugin.app_token"
-	MethodTargetHead = "plugin.target_head"
+	MethodAppToken = "plugin.app_token"
 )
 
-// VerbSweep is a CONDUCTOR-DEFINED verb name. A connector plugin speaking
-// that declares a verb by this name is declaring "run the
+// VerbSweep is a CONDUCTOR-DEFINED verb name. A connector plugin that
+// declares a verb by this name is declaring "run the
 // catch-up sweep now", and the DAEMON answers it — it nudges every source in
 // the daemon that has a sweep (this plugin's instances through plugin.nudge,
 // and any other), exactly as `conductor sweep --now` does. The call is never
@@ -120,29 +119,8 @@ type AppTokenResult struct {
 	Token string `json:"token"`
 }
 
-// TargetHeadRequest asks for the CURRENT head commit and state of a target
-// this instance's source emitted — what a run's hooks read as
-// {{.run.start_sha}} / {{.run.head_sha}} and what names a stop's reason.
-type TargetHeadRequest struct {
-	Instance string `json:"instance"`
-	Target   Target `json:"target"`
-}
-
-// TargetHeadResult is the head commit and the target's state: open | closed |
-// merged, or "" when unknown.
-type TargetHeadResult struct {
-	SHA   string `json:"sha"`
-	State string `json:"state,omitempty"`
-}
-
 // AppTokenHandler is implemented by a source that mints App
 // installation tokens.
 type AppTokenHandler interface {
 	AppToken(AppTokenRequest) (AppTokenResult, error)
-}
-
-// TargetHeadHandler is implemented by a source whose targets have
-// a head (a PR's head commit).
-type TargetHeadHandler interface {
-	TargetHead(TargetHeadRequest) (TargetHeadResult, error)
 }

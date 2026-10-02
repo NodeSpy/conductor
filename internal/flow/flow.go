@@ -424,14 +424,14 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	// its start hooks.
 	var facts runFacts
 	if len(spec.Hooks) > 0 {
-		facts.startSHA, facts.state = r.readHead(ctx, t)
+		facts.startSHA, facts.state, facts.stopWords = r.readHead(ctx, t)
 		facts.headSHA = facts.startSHA
 	}
 	endFacts := func(phase, reason string) runFacts {
 		f := facts
-		f.headSHA, f.state, f.reason = "", "", reason
+		f.headSHA, f.state, f.stopWords, f.reason = "", "", "", reason
 		if hasPhase(spec.Hooks, phase) {
-			f.headSHA, f.state = r.readHead(ctx, t)
+			f.headSHA, f.state, f.stopWords = r.readHead(ctx, t)
 		}
 		return f
 	}
@@ -472,7 +472,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 		r.Log("%s workflow stopped — the PR closed while step %s was running", flowTag(t), failedStepID(err))
 		if hasPhase(spec.Hooks, "stop") {
 			f := endFacts("stop", "")
-			f.reason = stopReason(f.state)
+			f.reason = stopReason(f.stopWords)
 			r.fireHooks(ctx, t, spec.Hooks, "stop", "stopped", run.ID, "", withRun(data, f), nil, "workflow")
 		}
 		r.audit(map[string]any{"event": "workflow_stopped", "repo": t.Target.Repo,
@@ -1141,7 +1141,12 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 	// Verb-level binary IO (#36 §21): declared binary-in options resolve
 	// from blob handles to local paths; declared binary-out outputs come
 	// back as bytes and leave as run-scoped handles.
-	decl, _ := in.Decl.Verb(verb)
+	decl, ok := in.Decl.Verb(verb)
+	if ok && decl.HostOnly() {
+		err := fmt.Errorf("verb %s.%s is host-only — the engine uses it through a declared semantic; a flow may not call it", connName, verb)
+		r.auditVerb(t, connName, verb, rendered, "refused", err)
+		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
+	}
 	if final, err = r.stageBlobInputs(ctx, decl, final); err != nil {
 		r.auditVerb(t, connName, verb, rendered, "failed", err)
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
