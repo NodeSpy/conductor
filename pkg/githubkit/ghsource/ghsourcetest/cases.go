@@ -124,6 +124,24 @@ func Cases() []Case {
 			Want: []Want{{Kind: "review_requested", Trigger: "rr", Repo: repo, Number: 9}},
 		},
 		{
+			Name:       "reviewer and assignee options gate on the named identity, not on me",
+			Connection: base,
+			Triggers: []Trigger{
+				{On: "review_requested", Name: "lead", Options: map[string]any{"reviewer": map[string]any{"logins": []any{"teamlead"}}}},
+				{On: "issue_matched", Name: "ops", Options: map[string]any{"assignee": map[string]any{"logins": []any{"oncall"}}}},
+			},
+			Steps: []Step{
+				{Event: "pull_request", Body: fmt.Sprintf(`{"action":"review_requested",%s,"pull_request":%s,"requested_reviewer":{"login":"teamlead"}}`, repoJSON, prJSON(30, "someone", "open"))},
+				{Event: "pull_request", Body: fmt.Sprintf(`{"action":"review_requested",%s,"pull_request":%s,"requested_reviewer":{"login":"me"}}`, repoJSON, prJSON(31, "someone", "open"))},
+				{Event: "issues", Body: fmt.Sprintf(`{"action":"assigned",%s,"issue":{"number":32,"state":"open","title":"page","user":{"login":"x"},"assignees":[{"login":"oncall"}],"labels":[]}}`, repoJSON)},
+				{Event: "issues", Body: fmt.Sprintf(`{"action":"assigned",%s,"issue":{"number":33,"state":"open","title":"mine","user":{"login":"x"},"assignees":[{"login":"me"}],"labels":[]}}`, repoJSON)},
+			},
+			Want: []Want{
+				{Kind: "review_requested", Trigger: "lead", Repo: repo, Number: 30},
+				{Kind: "issue_matched", Trigger: "ops", Repo: repo, Number: 32},
+			},
+		},
+		{
 			Name:       "a changes-request and its inline comments are ONE changes_requested",
 			Connection: base,
 			Triggers:   []Trigger{{On: "changes_requested", Name: "cr"}, {On: "new_comment", Name: "nc"}},

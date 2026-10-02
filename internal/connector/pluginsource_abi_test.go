@@ -77,7 +77,8 @@ func runPSI(t *testing.T, psi *pluginSourceIntegration) []core.Trigger {
 // the same event, and with no daemon-side re-evaluation of a filter whose
 // keys only the plugin understands.
 func TestABISourceRoutesToTheNamedTrigger(t *testing.T) {
-	a := abiTrigger(t, 0, "gh.self_review", "a", "label_any: [x]", map[string]any{"max_attempts_per_head": 3})
+	a := abiTrigger(t, 0, "gh.self_review", "a", "label_any: [x]", map[string]any{"max_attempts_per_head": 3,
+		"flaky_rerun": map[string]any{"enabled": true, "max": 2}})
 	b := abiTrigger(t, 1, "gh.self_review", "b", "", nil)
 	src := &abiSourcer{events: []sdk.SourceEvent{
 		{Event: "self_review", Trigger: a.Ref(), Target: sdk.Target{Repo: "o/r", Number: 7}, Context: map[string]any{"pr": 7}, CatchUp: true},
@@ -95,7 +96,8 @@ func TestABISourceRoutesToTheNamedTrigger(t *testing.T) {
 	}
 	g := got[0]
 	act, _ := g.Action.(config.Action)
-	if g.Variant != "a" || act.FlowRef != a.Ref() || act.MaxAttemptsPerHead != 3 || !g.CatchUp || g.Target.Number != 7 {
+	if g.Variant != "a" || act.FlowRef != a.Ref() || act.MaxAttemptsPerHead != 3 || !g.CatchUp || g.Target.Number != 7 ||
+		!act.FlakyRerun.Enabled || act.FlakyRerun.Max != 2 {
 		t.Fatalf("routed trigger wrong: variant=%q act=%+v catchup=%v target=%+v", g.Variant, act, g.CatchUp, g.Target)
 	}
 }
