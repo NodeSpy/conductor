@@ -217,11 +217,16 @@ type Use struct {
 	// otherwise the last segment of the component (or the repo name when the
 	// reference names no component).
 	Name string
-	// Host is the forge host for a remote reference ("github.com" unless the
+	// Host is the git host for a remote reference ("github.com" unless the
 	// reference named another).
 	Host string
-	// Repo is "owner/name" for a remote reference.
+	// Repo is the repository path on Host: "owner/name", or the full path
+	// before a `//` component separator on another host ("group/sub/name").
 	Repo string
+	// SSHUser is set for an ssh reference (ssh://git@host/… or
+	// git@host:…): the repository is fetched over ssh as that user, with the
+	// daemon user's own keys. Empty means https.
+	SSHUser string
 	// Component is the path within the repo ("connectors/sentry"). Empty for a
 	// single-plugin repo.
 	Component string
@@ -230,6 +235,18 @@ type Use struct {
 	Version string
 	// Path is the local executable path for OriginLocal, as written.
 	Path string
+}
+
+// GitURL is the repository's git URL for a remote reference: ssh when the
+// reference was ssh, otherwise https.
+func (u Use) GitURL() string {
+	if u.Host == "" || u.Repo == "" {
+		return ""
+	}
+	if u.SSHUser != "" {
+		return "ssh://" + u.SSHUser + "@" + u.Host + "/" + u.Repo
+	}
+	return "https://" + u.Host + "/" + u.Repo
 }
 
 // IsBuiltin reports whether the reference resolves to an in-binary implementation.
@@ -332,11 +349,25 @@ func ParseUse(kind UseKind, ref string) (Use, error) {
 		return u, nil
 	}
 
+	// scp-like `user@host:path` is ssh, the form private repositories are
+	// usually cloned with.
+	if at := strings.Index(body, "@"); at > 0 && !strings.Contains(body[:at], "/") && !strings.Contains(body, "://") {
+		if colon := strings.Index(body[at:], ":"); colon > 0 {
+			body = "ssh://" + body[:at+colon] + "/" + strings.TrimPrefix(body[at+colon+1:], "/")
+		}
+	}
 	scheme := ""
-	for _, p := range []string{"https://", "http://"} {
+	for _, p := range []string{"https://", "http://", "ssh://"} {
 		if strings.HasPrefix(strings.ToLower(body), p) {
 			scheme, body = p, body[len(p):]
 			break
+		}
+	}
+	if scheme == "ssh://" {
+		if at := strings.Index(body, "@"); at > 0 && at < strings.IndexAny(body+"/", "/") {
+			u.SSHUser, body = body[:at], body[at+1:]
+		} else {
+			u.SSHUser = "git"
 		}
 	}
 	// A separator ANYWHERE (even a trailing one, which the trim below removes)
@@ -442,6 +473,11 @@ func ParseUse(kind UseKind, ref string) (Use, error) {
 	}
 	u.Host, u.Repo = host, segs[0]+"/"+segs[1]
 	rest := segs[2:]
+	if host != defaultHost && comp != "" {
+		// On another host a repository may be nested (group/sub/name): with
+		// an explicit `//`, everything before it is the repository.
+		u.Repo, rest = strings.Join(segs, "/"), nil
+	}
 	if comp != "" {
 		rest = append(rest, splitSegments(comp)...)
 	}

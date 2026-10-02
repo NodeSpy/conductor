@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -13,39 +12,30 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 )
 
-// Remote plugin fetch (#59): a plugin is a binary, so — unlike a pack, which is
-// a git tree — it is served as a GitHub release ASSET. A remote source names a
-// repo (and, for a monorepo, a component that prefixes its release tags and
-// asset names); a version: constraint selects the highest matching tag; the
-// per-platform binary is downloaded, checksum-verified, and cached, then the
-// existing verify-before-execute + sandbox path (#54) takes over.
+// Remote plugin fetch (#59): a plugin is a binary, published per platform on
+// the release's dist refs (gitdist.go) and fetched over plain git from any
+// host. A remote source names a repo (and, for a monorepo, a component that
+// prefixes its release tags and names its binary); a version: constraint
+// selects the highest matching tag; this platform's binary is fetched,
+// checksum-verified, and cached, then the existing verify-before-execute +
+// sandbox path (#54) takes over.
 
 // RemoteSource is a parsed remote plugin source.
 type RemoteSource struct {
-	Repo      string // "owner/name"
-	Component string // "" for a single-plugin repo; else the //subdir
+	// URL is the repository's git URL (https://, ssh://, file://, or
+	// git@host:path).
+	URL string
+	// Component is "" for a single-plugin repo; else the path inside it
+	// ("connectors/sentry").
+	Component string
 }
 
-// ParseRemoteSource recognizes github.com/<owner>/<repo>[//<component>] and
-// https:// variants. ok=false for a local filesystem path.
-func ParseRemoteSource(src string) (RemoteSource, bool) {
-	s := strings.TrimSpace(src)
-	s = strings.TrimPrefix(s, "https://")
-	s = strings.TrimPrefix(s, "http://")
-	if !strings.HasPrefix(s, "github.com/") {
-		return RemoteSource{}, false
+// Display is the source as an operator reads it in a message.
+func (rs RemoteSource) Display() string {
+	if rs.Component == "" {
+		return rs.URL
 	}
-	s = strings.TrimPrefix(s, "github.com/")
-	var comp string
-	if i := strings.Index(s, "//"); i >= 0 {
-		comp = strings.Trim(s[i+2:], "/")
-		s = s[:i]
-	}
-	parts := strings.SplitN(strings.Trim(s, "/"), "/", 3)
-	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-		return RemoteSource{}, false
-	}
-	return RemoteSource{Repo: parts[0] + "/" + parts[1], Component: comp}, true
+	return rs.URL + "//" + rs.Component
 }
 
 // AssetName is the per-platform binary conductor expects in a release. The
@@ -71,11 +61,12 @@ func (rs RemoteSource) tagPrefix() string {
 	return rs.Component + "/"
 }
 
-// ReleaseAPI lists a repo's release tags and downloads an asset. Injectable so
-// resolution + verification are testable without the gh CLI / network.
+// ReleaseAPI lists a source's release tags and fetches one file (the
+// binary, or checksums.txt) of a release for this platform. GitDist is the
+// implementation; tests inject a stub.
 type ReleaseAPI interface {
-	ListTags(repo string) ([]string, error)
-	Download(repo, tag, asset, destDir string) (path string, err error)
+	ListTags(rs RemoteSource) ([]string, error)
+	Download(rs RemoteSource, tag, file, destDir string) (path string, err error)
 }
 
 // FetchRemote resolves the constraint to a release tag, downloads the
@@ -95,13 +86,13 @@ func FetchRemote(rs RemoteSource, constraint, pinnedSha, cacheDir string, api Re
 // not verified, and nothing that is granted on the strength of a verified
 // release (an official source's default event trust) is granted to it.
 func FetchRemoteVerified(rs RemoteSource, constraint, pinnedSha, cacheDir string, api ReleaseAPI) (binPath, tag, sha string, verified bool, err error) {
-	tags, err := api.ListTags(rs.Repo)
+	tags, err := api.ListTags(rs)
 	if err != nil {
-		return "", "", "", false, fmt.Errorf("list releases for %s: %w", rs.Repo, err)
+		return "", "", "", false, fmt.Errorf("list releases for %s: %w", rs.Display(), err)
 	}
 	tag, ok := config.BestMatch(tags, rs.tagPrefix(), constraint)
 	if !ok {
-		return "", "", "", false, fmt.Errorf("no release tag satisfies version %q for %s (looked for %q<semver> among %d tags)", constraint, rs.Repo, rs.tagPrefix(), len(tags))
+		return "", "", "", false, fmt.Errorf("no release tag satisfies version %q for %s (looked for %q<semver> among %d tags)", constraint, rs.Display(), rs.tagPrefix(), len(tags))
 	}
 	tmp, err := os.MkdirTemp("", "conductor-plugin-dl-*")
 	if err != nil {
@@ -110,16 +101,16 @@ func FetchRemoteVerified(rs RemoteSource, constraint, pinnedSha, cacheDir string
 	defer os.RemoveAll(tmp)
 
 	asset := rs.AssetName()
-	dl, err := api.Download(rs.Repo, tag, asset, tmp)
+	dl, err := api.Download(rs, tag, asset, tmp)
 	if err != nil {
-		return "", "", "", false, fmt.Errorf("download %s from %s %s: %w", asset, rs.Repo, tag, err)
+		return "", "", "", false, fmt.Errorf("fetch %s from %s %s: %w", asset, rs.Display(), tag, err)
 	}
 	got, err := fileSha256(dl)
 	if err != nil {
 		return "", "", "", false, err
 	}
 	// checksums.txt, when present, is authoritative for what the release published.
-	if cs, cerr := api.Download(rs.Repo, tag, "checksums.txt", tmp); cerr == nil {
+	if cs, cerr := api.Download(rs, tag, "checksums.txt", tmp); cerr == nil {
 		want, found := checksumFor(cs, asset)
 		if found && !strings.EqualFold(want, got) {
 			return "", "", "", false, fmt.Errorf("checksum mismatch for %s@%s: release lists %s, downloaded %s", asset, tag, want, got)
@@ -199,28 +190,20 @@ func copyExecutable(src, dst string) error {
 	return os.Rename(tmpName, dst)
 }
 
-// GHReleaseAPI implements ReleaseAPI via the gh CLI — conductor's release
-// transport, same as self-update.
-type GHReleaseAPI struct{}
-
-func (GHReleaseAPI) ListTags(repo string) ([]string, error) {
-	out, err := exec.Command("gh", "api", "--paginate", "repos/"+repo+"/releases", "--jq", ".[].tag_name").Output()
+// VerifyChecksum checks the file at bin against asset's entry in the
+// checksums file at sums. A missing entry is an error: what is verified is
+// that the release published exactly these bytes.
+func VerifyChecksum(bin, sums, asset string) error {
+	want, ok := checksumFor(sums, asset)
+	if !ok {
+		return fmt.Errorf("checksums.txt does not list %s — refusing an unverified binary", asset)
+	}
+	got, err := fileSha256(bin)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var tags []string
-	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			tags = append(tags, l)
-		}
+	if !strings.EqualFold(want, got) {
+		return fmt.Errorf("checksum mismatch for %s: release lists %s, fetched %s", asset, want, got)
 	}
-	return tags, nil
-}
-
-func (GHReleaseAPI) Download(repo, tag, asset, destDir string) (string, error) {
-	cmd := exec.Command("gh", "release", "download", tag, "--repo", repo, "--pattern", asset, "--dir", destDir, "--clobber")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
-	}
-	return filepath.Join(destDir, asset), nil
+	return nil
 }

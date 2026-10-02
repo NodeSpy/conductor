@@ -2,13 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -19,7 +16,26 @@ import (
 	"github.com/NodeSpy/conductor/internal/plugin"
 )
 
-const updateRepo = "NodeSpy/conductor"
+// updateSource is the git repository conductor updates itself from. Releases
+// are tags; each platform's binary is published on refs/dist/<tag>/<platform>
+// (internal/plugin/gitdist.go), fetched over plain git — no forge CLI.
+const updateSource = "https://github.com/NodeSpy/conductor"
+
+func updateRemote() plugin.RemoteSource { return plugin.RemoteSource{URL: updateSource} }
+
+// latestRelease is the newest stable release tag published for this
+// platform.
+func latestRelease() (string, error) {
+	tags, err := plugin.GitDist{}.ListTags(updateRemote())
+	if err != nil {
+		return "", err
+	}
+	tag, ok := config.BestMatch(tags, "", "")
+	if !ok {
+		return "", fmt.Errorf("no release published for %s in %s", plugin.Platform(), updateSource)
+	}
+	return tag, nil
+}
 
 // cmdUpdate is the manual `update` subcommand.
 func cmdUpdate(args []string) error {
@@ -73,23 +89,14 @@ func cmdUpdate(args []string) error {
 
 // doUpdate installs the latest (or pinned) release binary for this OS/arch,
 // replacing the running executable in place. Returns updated=false when already
-// current (and not forced). The repo is private, so it uses the `gh` CLI.
+// current (and not forced). It fetches over git with the daemon user's own git
+// credentials, and verifies the binary against the release's checksums.txt.
 func doUpdate(force bool, pinTag string) (updated bool, tag string, err error) {
-	if _, err := exec.LookPath("gh"); err != nil {
-		return false, "", fmt.Errorf("update needs the GitHub CLI (gh), authenticated — this repo is private")
-	}
-
 	tag = pinTag
 	if tag == "" {
-		out, err := exec.Command("gh", "release", "view", "--repo", updateRepo,
-			"--json", "tagName", "--jq", ".tagName").Output()
-		if err != nil {
-			return false, "", fmt.Errorf("look up latest release (any published yet?): %w", err)
+		if tag, err = latestRelease(); err != nil {
+			return false, "", fmt.Errorf("look up latest release: %w", err)
 		}
-		tag = strings.TrimSpace(string(out))
-	}
-	if tag == "" {
-		return false, "", fmt.Errorf("no release found in %s", updateRepo)
 	}
 	if tag == version && !force {
 		return false, tag, nil
@@ -103,25 +110,31 @@ func doUpdate(force bool, pinTag string) (updated bool, tag string, err error) {
 		exe = resolved
 	}
 
-	tmp := exe + ".new"
-	_ = os.Remove(tmp)
-
 	asset := fmt.Sprintf("conductor_%s_%s", runtime.GOOS, runtime.GOARCH)
-	logf("update: downloading %s %s", asset, tag)
-	dl := exec.Command("gh", "release", "download", tag,
-		"--repo", updateRepo, "--pattern", asset, "--output", tmp, "--clobber")
-	dl.Stderr = os.Stderr
-	if err := dl.Run(); err != nil {
-		_ = os.Remove(tmp)
-		return false, tag, fmt.Errorf("download conductor binary from %s %s: %w", updateRepo, tag, err)
+	logf("update: fetching %s %s", asset, tag)
+	dl, err := os.MkdirTemp(filepath.Dir(exe), ".conductor-update-*")
+	if err != nil {
+		return false, tag, fmt.Errorf("stage update next to %s (need write access to its directory): %w", exe, err)
 	}
-	if err := os.Chmod(tmp, 0o755); err != nil {
+	defer os.RemoveAll(dl)
+	g := plugin.GitDist{}
+	bin, err := g.Download(updateRemote(), tag, asset, dl)
+	if err != nil {
+		return false, tag, fmt.Errorf("fetch conductor binary %s: %w", tag, err)
+	}
+	sums, err := g.Download(updateRemote(), tag, "checksums.txt", dl)
+	if err != nil {
+		return false, tag, fmt.Errorf("fetch checksums for %s: %w", tag, err)
+	}
+	if err := plugin.VerifyChecksum(bin, sums, asset); err != nil {
+		return false, tag, err
+	}
+	if err := os.Chmod(bin, 0o755); err != nil {
 		return false, tag, err
 	}
 	// Atomic replace: rename over the running executable (same dir/FS). The
 	// running process keeps its old inode; the next launch is the new binary.
-	if err := os.Rename(tmp, exe); err != nil {
-		_ = os.Remove(tmp)
+	if err := os.Rename(bin, exe); err != nil {
 		return false, tag, fmt.Errorf("replace %s (need write access to its directory): %w", exe, err)
 	}
 	return true, tag, nil
@@ -132,14 +145,10 @@ func doUpdate(force bool, pinTag string) (updated bool, tag string, err error) {
 // context to trigger a graceful shutdown when the restart is handed to the service
 // manager.
 //
-// Detection is decoupled from install: each tick is a cheap CONDITIONAL request
-// (see releaseChecker) that returns 304 Not Modified — a tiny reply GitHub does
-// not bill against the rate limit — whenever nothing has been published since the
-// last check. That makes a tight interval effectively free, so a newly-published
-// release is picked up within one interval (minutes) rather than hours, for anyone
-// running conductor, with no webhook or per-operator setup. GitHub exposes no
-// release push a non-admin consumer can subscribe to, so a near-free conditional
-// poll is the portable stand-in.
+// Detection is decoupled from install: each tick is one `git ls-remote` of the
+// release refs (see releaseChecker) — a small reply from any git host — so a
+// tight interval is cheap and a newly-published release is picked up within one
+// interval, with no webhook or per-operator setup.
 // reloadFunc attempts to apply the moved plugins IN PLACE (no daemon restart)
 // and returns true only if it handled ALL of them. nil disables in-place reload
 // (always restart on a dep change). Built in cmdRun so it can reach the live
@@ -343,75 +352,29 @@ func newerRelease(tag string, changed bool, running string) bool {
 	return changed && tag != "" && tag != running
 }
 
-// releaseChecker performs cheap conditional polling of the release repo's latest
-// release, remembering the last ETag so an unchanged repo answers 304 Not Modified.
-// A 304 is tiny and un-billed against the rate limit, so a tight poll costs almost
-// nothing — the whole point of decoupling detection from the (heavy) download.
+// releaseChecker polls the release refs, remembering the last tag it saw so
+// an unchanged repository reports changed=false.
 type releaseChecker struct {
-	etag string
+	last   string
+	latest func() (string, error)
 }
 
-// check does one conditional GET for the latest release tag via the operator's
-// authenticated `gh` (the same credential the manual update path uses, so it works
-// for the private repo). changed=false means a 304 — nothing new since last check.
+// check lists the published releases once. changed=false means the newest
+// tag is the one the previous check saw.
 func (rc *releaseChecker) check() (tag string, changed bool, err error) {
-	args := []string{"api", "repos/" + updateRepo + "/releases/latest", "-i"}
-	if rc.etag != "" {
-		args = append(args, "-H", "If-None-Match: "+rc.etag)
+	latest := rc.latest
+	if latest == nil {
+		latest = latestRelease
 	}
-	// gh exits non-zero on a 304 (and other non-2xx), so ignore the exit code and
-	// read the HTTP status line from the -i output instead.
-	out, _ := exec.Command("gh", args...).CombinedOutput()
-	status, etag, body := parseHTTPResponse(string(out))
-	switch status {
-	case 304:
-		return "", false, nil
-	case 200:
-		if etag != "" {
-			rc.etag = etag
-		}
-		var rel struct {
-			TagName string `json:"tag_name"`
-		}
-		if err := json.Unmarshal([]byte(body), &rel); err != nil {
-			return "", false, fmt.Errorf("parse release json: %w", err)
-		}
-		if rel.TagName == "" {
-			return "", false, fmt.Errorf("release lookup: empty tag (any published yet?)")
-		}
-		return rel.TagName, true, nil
-	case 0:
-		return "", false, fmt.Errorf("release check: no HTTP response from gh (auth/network?): %s", tail(out, 200))
-	default:
-		return "", false, fmt.Errorf("release check: gh api returned HTTP %d", status)
+	tag, err = latest()
+	if err != nil {
+		return "", false, fmt.Errorf("release check: %w", err)
 	}
-}
-
-// parseHTTPResponse splits `gh api -i` output into the HTTP status code, the ETag
-// header value, and the JSON body (everything past the first blank line).
-func parseHTTPResponse(out string) (status int, etag, body string) {
-	lines := strings.Split(out, "\n")
-	i := 0
-	for ; i < len(lines); i++ {
-		t := strings.TrimRight(lines[i], "\r")
-		if t == "" { // blank line: headers end, body begins
-			i++
-			break
-		}
-		if strings.HasPrefix(t, "HTTP/") {
-			if f := strings.Fields(t); len(f) >= 2 {
-				if n, e := strconv.Atoi(f[1]); e == nil {
-					status = n
-				}
-			}
-		} else if strings.HasPrefix(strings.ToLower(t), "etag:") {
-			etag = strings.TrimSpace(t[len("etag:"):])
-		}
+	if tag == rc.last {
+		return tag, false, nil
 	}
-	if i < len(lines) {
-		body = strings.Join(lines[i:], "\n")
-	}
-	return status, etag, body
+	rc.last = tag
+	return tag, true, nil
 }
 
 // tail returns the last n bytes of b, for compact error context.

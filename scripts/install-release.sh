@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
-# Install a released conductor binary for this OS/arch. The repo is public, so this
-# needs no auth — just curl. It lives in the repo and is run straight from it:
+# Install a released conductor binary for this OS/arch, over plain git (the
+# same release refs `conductor update` reads: refs/dist/<tag>/<os>_<arch>).
+# It lives in the repo and is run straight from it:
 #
 #   curl -fsSL https://raw.githubusercontent.com/NodeSpy/conductor/main/scripts/install-release.sh | bash
 #
-# Optional: pin a version, e.g. `... | bash -s -- v0.6.4`.
+# Optional: pin a version, e.g. `... | bash -s -- v0.6.4`. CONDUCTOR_GIT
+# points at another git URL (a mirror, a private fork — your own git
+# credentials are used).
 set -euo pipefail
 
 REPO="${CONDUCTOR_REPO:-NodeSpy/conductor}"
+GIT_URL="${CONDUCTOR_GIT:-https://github.com/$REPO}"
 BIN_DIR="${CONDUCTOR_BIN_DIR:-$HOME/.local/bin}"
 RAW="https://raw.githubusercontent.com/$REPO/main"
 NAME="conductor"
 
+command -v git >/dev/null || { echo "error: git is required" >&2; exit 1; }
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"
 case "$(uname -m)" in
   x86_64 | amd64) arch=amd64 ;;
@@ -19,20 +24,30 @@ case "$(uname -m)" in
   i386 | i686) arch=386 ;;
   *) echo "error: unsupported arch $(uname -m)" >&2; exit 1 ;;
 esac
-asset="${NAME}_${os}_${arch}"
+plat="${os}_${arch}"
+asset="${NAME}_${plat}"
 
-# GitHub's stable download URLs for public releases (no gh, no auth).
-if [ "${1:-}" != "" ]; then
-  url="https://github.com/$REPO/releases/download/$1/$asset"
-else
-  url="https://github.com/$REPO/releases/latest/download/$asset"
+tag="${1:-}"
+if [ -z "$tag" ]; then
+  # The newest stable vX.Y.Z published for this platform.
+  tag="$(git ls-remote --refs "$GIT_URL" "refs/dist/v*/$plat" \
+    | sed -n "s#.*refs/dist/\(v[0-9][0-9.]*\)/$plat\$#\1#p" | sort -V | tail -n1)"
+  [ -n "$tag" ] || { echo "error: no release published for $plat at $GIT_URL" >&2; exit 1; }
 fi
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+git -C "$work" init -q
+git -C "$work" fetch -q --depth 1 --no-tags "$GIT_URL" "refs/dist/$tag/$plat"
+git -C "$work" cat-file blob "FETCH_HEAD:$asset" >"$work/$asset"
+git -C "$work" cat-file blob "FETCH_HEAD:checksums.txt" >"$work/checksums.txt"
+( cd "$work" && grep "  $asset\$" checksums.txt | sha256sum -c - ) >/dev/null \
+  || { echo "error: checksum mismatch for $asset $tag" >&2; exit 1; }
 
 mkdir -p "$BIN_DIR"
 dest="$BIN_DIR/$NAME"
-echo "==> installing $asset -> $dest"
-curl -fsSL "$url" -o "$dest"
-chmod +x "$dest"
+echo "==> installing $asset $tag -> $dest"
+install -m 0755 "$work/$asset" "$dest"
 
 "$dest" version || true
 case ":$PATH:" in

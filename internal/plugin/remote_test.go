@@ -15,26 +15,6 @@ import (
 	"time"
 )
 
-func TestParseRemoteSource(t *testing.T) {
-	cases := []struct {
-		src            string
-		wantRepo, comp string
-		ok             bool
-	}{
-		{"github.com/NodeSpy/conductor-plugins//sentry", "NodeSpy/conductor-plugins", "sentry", true},
-		{"https://github.com/acme/conductor-jira", "acme/conductor-jira", "", true},
-		{"./plugins/local", "", "", false},
-		{"/abs/path", "", "", false},
-		{"github.com/onlyowner", "", "", false},
-	}
-	for _, c := range cases {
-		rs, ok := ParseRemoteSource(c.src)
-		if ok != c.ok || rs.Repo != c.wantRepo || rs.Component != c.comp {
-			t.Errorf("ParseRemoteSource(%q) = {%q %q} ok=%v, want {%q %q} ok=%v", c.src, rs.Repo, rs.Component, ok, c.wantRepo, c.comp, c.ok)
-		}
-	}
-}
-
 // stubAPI serves tags and a fixed binary; checksums.txt carries the real sha.
 type stubAPI struct {
 	tags      []string
@@ -46,13 +26,13 @@ type stubAPI struct {
 	otherSum  bool // publish a checksums.txt that does not list this asset
 }
 
-func (s stubAPI) ListTags(string) ([]string, error) {
+func (s stubAPI) ListTags(RemoteSource) ([]string, error) {
 	if s.tagsErr {
 		return nil, errors.New("network unreachable")
 	}
 	return s.tags, nil
 }
-func (s stubAPI) Download(_, _, asset, destDir string) (string, error) {
+func (s stubAPI) Download(_ RemoteSource, _, asset, destDir string) (string, error) {
 	p := filepath.Join(destDir, asset)
 	if asset == "checksums.txt" {
 		if s.noSums {
@@ -72,7 +52,7 @@ func (s stubAPI) Download(_, _, asset, destDir string) (string, error) {
 }
 
 func TestFetchRemoteResolvesVerifiesCaches(t *testing.T) {
-	rs := RemoteSource{Repo: "NodeSpy/conductor-plugins", Component: "sentry"}
+	rs := RemoteSource{URL: "https://github.com/NodeSpy/conductor-plugins", Component: "sentry"}
 	bin := []byte("#!/bin/sh\necho conductor-sentry\n")
 	api := stubAPI{
 		tags:      []string{"sentry/v1.0.0", "sentry/v1.1.0", "sentry/v2.0.0", "sentry/nightly"},
@@ -186,10 +166,10 @@ func TestCopyExecutableReplacesRunningBinary(t *testing.T) {
 // sha is recorded and checked before every exec — but it is not verified,
 // and an official source's default event trust is not granted on it.
 func TestFetchRemoteReportsReleaseVerification(t *testing.T) {
-	rs := RemoteSource{Repo: "NodeSpy/conductor-plugins", Component: "github"}
+	rs := RemoteSource{URL: "https://github.com/NodeSpy/conductor-plugins", Component: "github"}
 	bin := []byte("#!/bin/sh\necho conductor-github\n")
 	tags := []string{"connectors/github/v1.0.0"}
-	rs = RemoteSource{Repo: "NodeSpy/conductor-plugins", Component: "connectors/github"}
+	rs = RemoteSource{URL: "https://github.com/NodeSpy/conductor-plugins", Component: "connectors/github"}
 	for _, c := range []struct {
 		name string
 		api  stubAPI

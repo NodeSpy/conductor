@@ -803,3 +803,31 @@ func loadPacksBlock(path string) (map[string]PackInstance, *PackTrustConfig, err
 	}
 	return c.Packs, c.PackTrust, nil
 }
+
+// SafeGitTransport is safeGitTransport for the other git fetchers (plugin
+// and self-update distribution), so every git fetch conductor makes refuses
+// the same transports.
+func SafeGitTransport(url string) bool { return safeGitTransport(url) }
+
+// RunGit is runGit for the other git fetchers: the remote-helper transports
+// disabled at the git level and no credential prompt.
+func RunGit(dir string, args ...string) (string, error) { return runGit(dir, args...) }
+
+// RunGitStdout is RunGit returning stdout alone (stderr is kept for the
+// error), for reading object bytes: a warning git prints must never land in
+// a blob it is asked for.
+func RunGitStdout(dir string, args ...string) ([]byte, error) {
+	full := append([]string{"-c", "protocol.ext.allow=never", "-c", "protocol.fd.allow=never"}, args...)
+	cmd := exec.Command("git", full...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return out, nil
+}

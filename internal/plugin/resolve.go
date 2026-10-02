@@ -191,7 +191,7 @@ func reconcileOne(key string, ref config.PluginRef, state *InstallState, trust *
 		}
 	}
 
-	rs := RemoteSource{Repo: ref.Use.Repo, Component: ref.Use.Component}
+	rs := RemoteSource{URL: ref.Use.GitURL(), Component: ref.Use.Component}
 	dir := BinDirFor(state.Dir(), key)
 	binPath, tag, sha, verified, err := FetchRemoteVerified(rs, ref.Use.Version, "", dir, api)
 	if err != nil {

@@ -568,7 +568,7 @@ func cmdPluginAdd(args []string) error {
 	// so even the plugin being added is not referenced anywhere.
 	results, err := plugin.Reconcile(
 		map[string]config.PluginRef{u.InstallKey(): pr}, state, cfg.PluginTrust,
-		plugin.GHReleaseAPI{},
+		plugin.GitDist{},
 		plugin.Options{AllowUnlisted: allowUnlisted, Describe: describeForInstall(cfg), Log: logf},
 	)
 	if err != nil {
@@ -765,7 +765,7 @@ func reconcilePlugins(cfg *config.Config, opts plugin.Options) ([]plugin.Resolut
 	}
 	opts.Prune = cfg.PluginRefsComplete()
 	state := plugin.LoadInstallState(plugin.InstallDir())
-	return plugin.Reconcile(cfg.PluginRefs(), state, cfg.PluginTrust, plugin.GHReleaseAPI{}, opts)
+	return plugin.Reconcile(cfg.PluginRefs(), state, cfg.PluginTrust, plugin.GitDist{}, opts)
 }
 
 // describeForInstall spawns a freshly-installed plugin ONCE to record its

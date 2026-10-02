@@ -1,45 +1,25 @@
 package main
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
-// A 200 response with headers + JSON body: status, ETag, and tag_name all parse.
-func TestParseHTTPResponse200(t *testing.T) {
-	out := "HTTP/2.0 200 OK\r\n" +
-		"Content-Type: application/json\r\n" +
-		"Etag: W/\"abc123\"\r\n" +
-		"X-Ratelimit-Remaining: 4999\r\n" +
-		"\r\n" +
-		"{\"tag_name\":\"v0.5.24\",\"name\":\"v0.5.24\"}\n"
-	status, etag, body := parseHTTPResponse(out)
-	if status != 200 {
-		t.Fatalf("status = %d, want 200", status)
+// The release check reports changed only when the newest published tag
+// moves, and surfaces a lookup failure.
+func TestReleaseCheckerReportsMovement(t *testing.T) {
+	tags := []string{"v1.0.0", "v1.0.0", "v1.1.0"}
+	i := 0
+	rc := &releaseChecker{latest: func() (string, error) { i++; return tags[i-1], nil }}
+	for n, want := range []bool{true, false, true} {
+		tag, changed, err := rc.check()
+		if err != nil || changed != want || tag != tags[n] {
+			t.Fatalf("check %d: tag=%q changed=%v err=%v, want changed=%v", n, tag, changed, err, want)
+		}
 	}
-	if etag != `W/"abc123"` {
-		t.Fatalf("etag = %q, want W/\"abc123\"", etag)
-	}
-	if want := `{"tag_name":"v0.5.24","name":"v0.5.24"}`; body != want+"\n" && body != want {
-		t.Fatalf("body = %q, want the JSON payload", body)
-	}
-}
-
-// A 304 (gh appends a "gh: HTTP 304" line to stderr in the combined output) parses
-// to status 304 — the cheap "nothing new" path.
-func TestParseHTTPResponse304(t *testing.T) {
-	out := "HTTP/2.0 304 Not Modified\r\n" +
-		"Etag: \"abc123\"\r\n" +
-		"\r\n" +
-		"gh: HTTP 304\n"
-	status, _, _ := parseHTTPResponse(out)
-	if status != 304 {
-		t.Fatalf("status = %d, want 304", status)
-	}
-}
-
-// Non-HTTP output (gh failed to run at all) parses to status 0 so the checker can
-// report an error rather than misread it as a release.
-func TestParseHTTPResponseNoHTTP(t *testing.T) {
-	if status, _, _ := parseHTTPResponse("could not connect\n"); status != 0 {
-		t.Fatalf("status = %d, want 0 for non-HTTP output", status)
+	bad := &releaseChecker{latest: func() (string, error) { return "", errors.New("unreachable") }}
+	if _, _, err := bad.check(); err == nil {
+		t.Fatal("a failed lookup must be reported")
 	}
 }
 
@@ -51,7 +31,7 @@ func TestNewerRelease(t *testing.T) {
 		running string
 		want    bool
 	}{
-		{"304 nothing new", "", false, "v0.5.23", false},
+		{"nothing new", "", false, "v0.5.23", false},
 		{"changed but same tag", "v0.5.23", true, "v0.5.23", false},
 		{"changed and newer", "v0.5.24", true, "v0.5.23", true},
 		{"changed but empty tag", "", true, "v0.5.23", false},

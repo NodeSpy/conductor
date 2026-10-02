@@ -261,3 +261,22 @@ func TestRegisterBuiltinConnector(t *testing.T) {
 		t.Fatal("BuiltinNames omits a registered type")
 	}
 }
+
+// Remote references resolve to a git URL on any host, over https or ssh.
+func TestUseGitURL(t *testing.T) {
+	for ref, want := range map[string][2]string{
+		"github.com/acme/conductor-jira":                  {"https://github.com/acme/conductor-jira", ""},
+		"acme/conductor-plugins//connectors/jira":         {"https://github.com/acme/conductor-plugins", "connectors/jira"},
+		"gitlab.com/group/sub/plugins//connectors/jira":   {"https://gitlab.com/group/sub/plugins", "connectors/jira"},
+		"ssh://git@git.corp.example/team/plugins//x":      {"ssh://git@git.corp.example/team/plugins", "x"},
+		"git@git.corp.example:team/plugins//connectors/x": {"ssh://git@git.corp.example/team/plugins", "connectors/x"},
+	} {
+		u, err := ParseUse(UseKindConnector, ref)
+		if err != nil {
+			t.Fatalf("%s: %v", ref, err)
+		}
+		if u.GitURL() != want[0] || u.Component != want[1] {
+			t.Fatalf("%s: url=%q component=%q, want %q %q", ref, u.GitURL(), u.Component, want[0], want[1])
+		}
+	}
+}
