@@ -9,13 +9,14 @@ stripped and one reserved-namespace list, git-only distribution
 process), the vendor-neutral `pkg/` (relay client out, boundary test),
 `pkg/plugintest`, `sourcekit.Poller`, and the engine reading declared
 semantics (cron and rss in process; webhook, rest and graphql wait on a
-per-instance describe, Q6). **Step C is under way**: plugins-first
-boot, then github removed from the binary (`use: github` is the official
-plugin; `pkg/githubkit` lives in conductor-plugins; `internal/migrate` and
-`config migrate` gone with the legacy schema, Q4), and #161's vendor-neutral
-half carried over. Still to land in C: slack, discord, ntfy, pushover and
-notifiarr out of the binary once their plugins (P) are in, and the legacy
-blocks. Supersedes the
+per-instance describe, Q6). **Step C is in**: plugins-first boot; github, slack, discord, ntfy,
+pushover and notifiarr out of the binary (each `use:` is the official plugin;
+`pkg/githubkit` lives in conductor-plugins); the legacy blocks,
+`internal/migrate` and `config migrate` removed (Q4); the vendor hand-off
+channels replaced by the one conversation inbox; credentials only as
+declared (no daemon-wide token); Q7 staging; the engine-side vendor boundary
+test; #161's vendor-neutral half carried over. Step P (the plugins) is in the
+companion draft. Supersedes the
 direction of `plugin-source-abi.md` (the "connector ABI 1" extension and
 `trusted_source`), which stays in the tree only as a record of what is being
 replaced.
