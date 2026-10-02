@@ -96,12 +96,6 @@ connectors:
     #                              # identity (GET /user); set only to override
     repos: ["your-org/*"] # default repo scope for triggers with no repos filter
     identity: { read_token: app, write_token: gh_auth, commit_author: self }
-    # Run progress on your PRs, as you: 👀 on the handled review/comment at
-    # dispatch, then 🚀 pushed / 👍 no push / 😕 failed; plus a pending →
-    # success/failure commit status on the PR head under your login. ON by
-    # default for the your-PR kinds; switch either face off here or per
-    # trigger (`options: { progress: { reactions: false } }`).
-    # progress: { reactions: true, status: true }   # status_context: <your login>
     # Default verb options: every gh verb call merges over these (call wins).
     # `as: me` posts as you; `as: bot` (per call or here) posts as the App.
     options: { as: me }

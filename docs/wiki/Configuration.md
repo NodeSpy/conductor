@@ -292,109 +292,75 @@ read it sensibly. `author` and `comment_author` are the reviewer, so
 `not_comment_author` still filters bots. `comment_body` is the review body
 followed by each inline comment as `path:line: body`, capped at 8KB.
 
-## Run progress on the PR (github)
+## Showing progress on the PR (github)
 
-**You can see on the PR that conductor picked something up, and how it went.**
-A run on one of your PRs leaves two signals, both posted as you (your write
-identity, never the App):
-
-- **A reaction on what it's handling.** 👀 goes on the review or comment the
-  moment the run starts, before any worktree is provisioned or agent launched,
-  so a run that dies at dispatch has still visibly been taken. When the run
-  ends, one outcome reaction is added beside the 👀:
-
-  | outcome | reaction |
-  |---|---|
-  | pushed a fix (the PR's head moved during the run) | 🚀 |
-  | finished without pushing (replied, or nothing to do) | 👍 |
-  | failed, gave up, escalated, or was parked | 😕 |
-
-  The 👀 stays. It records that the run happened; the outcome reaction is its
-  answer. The subject comes from the event's `reaction_subjects`: the
-  **review** for a review event (`changes_requested`, or a `new_comment` that
-  is a review), the **comment** for a standalone comment, and for a
-  sweep-recovered `changes_requested` over unresolved threads, each thread's
-  opening comment (at most 10). Events with no comment or review
-  (`failing_checks`, `merge_conflict`, `pr_behind`) get no reaction.
-- **A commit status on the PR's head.** It shows as a row in the PR's checks
-  under your GitHub login (resolved once via `GET /user`), with no tool name.
-  It is `pending` while the run works ("addressing alice's review", "replying
-  to bob's comment", "fixing failing check build", "resolving merge
-  conflict", "addressing unresolved review threads"). When the run ends it
-  becomes `success` ("pushed 1a2b3c4", "done — no changes pushed") or
-  `failure` ("gave up: the agent couldn't be started", "gave up: timed out",
-  "gave up: parked after repeated tries — …"). A status belongs to a commit,
-  so the final one goes on the head as it is after the run. When the run
-  pushed, that's the new commit, and the old commit's pending is resolved too.
-  Every run on a PR gets a status, including the ones with no reaction subject.
-
-Both default **on** for the your-PR kinds (`new_comment`, `changes_requested`,
-`failing_checks`, `merge_conflict`, `pr_behind`) and **off** for every other
-event. A review run on someone else's PR doesn't stamp statuses on it. A
-failure reason is a short fixed phrase, never the error text, since the
-status is public on the PR.
-
-Turn either off connector-wide, or per trigger (a pack instance's trigger
-`options:` merge onto the pack's):
+**Progress is ordinary hooks.** Nothing posts on its own. A trigger that wants
+the PR to show "taken" and "how it went" says so in its `hooks:`, with two
+github verbs, and controls every word. The [pr-autopilot pack](https://github.com/NodeSpy/conductor-packs/tree/main/pr-autopilot)
+ships exactly this for its flows. The same hooks work on any trigger of your
+own:
 
 ```yaml
-connectors:
-  gh:
-    use: github
-    progress:
-      reactions: true          # default (your-PR kinds)
-      status: true             # default (your-PR kinds)
-      status_context: ""       # default: your login. Connector-level only.
-
-packs:
-  autopilot:
-    triggers:
-      on_new_comment:
-        enabled: true
-        repos: [your-org/app]
-        options:
-          progress: { status: false }    # keep the reactions, drop the status
+triggers:
+  - on: gh.new_comment
+    filter: { repo: [your-org/app] }
+    hooks:
+      # start fires before any worktree is provisioned or agent launched
+      - { at: start, if: reaction_subjects, uses: gh.react,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", subjects: "{{.reaction_subjects}}", content: eyes } }
+      - { at: start, uses: gh.set_status,
+          options: { repo: "{{.repo}}", sha: "{{.run.start_sha}}", state: pending,
+                     context: "{{.me.login}} / comment", description: "replying to {{.author}}" } }
+      - { at: done, if: reaction_subjects, uses: gh.react,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", subjects: "{{.reaction_subjects}}",
+                     content: "{{if .run.pushed}}rocket{{else}}+1{{end}}" } }
+      # success on the commit the run STARTED on: after a push the PR's new
+      # head has no row of this context, so the row disappears from the PR
+      - { at: done, uses: gh.set_status,
+          options: { repo: "{{.repo}}", sha: "{{.run.start_sha}}", state: success,
+                     context: "{{.me.login}} / comment", description: "done" } }
+      - { at: fail, if: reaction_subjects, uses: gh.react,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", subjects: "{{.reaction_subjects}}", content: confused } }
+      - { at: fail, uses: gh.set_status,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", state: failure,
+                     context: "{{.me.login}} / comment", description: "gave up: {{.run.reason}}" } }
+    steps: [ … ]
 ```
 
-Precedence is the trigger's `options.progress`, then the connector's
-`progress:`, then the per-kind default. A trigger can also opt a non-PR kind
-in (`options: { progress: { status: true } }`). Misspelled keys are rejected
-at load, so a mistyped off switch can't leave the feature on.
+The pieces:
 
-**Concurrency.** One status row per PR. The most recently *started* run on a
-PR owns it. A run that ends after a newer one started on the same PR never
-writes the PR's current head: the newer run's pending, or its final status,
-stands. The older run only resolves its own starting commit, and only when
-that isn't where the newer run's status sits. This is tracked in memory, so
-after a restart the next run on the PR takes the row.
+| | what |
+|---|---|
+| `github.react` | `{repo, pr, subjects: [{kind, id}] \| kind + id, content}` adds a reaction, as you. `kind` is `issue_comment`, `review_comment`, or `review` (reacted to over GraphQL, since REST has none for a review, so it needs `pr`). `content` is `+1` `-1` `laugh` `confused` `heart` `hooray` `rocket` `eyes`. Idempotent: GitHub keeps one reaction per person and content. → `ok`, `reacted` |
+| `github.set_status` | `{repo, sha \| pr, state, context, description, target_url}` posts a commit status, as you. `pr:` puts it on the PR's head **as it is at call time** (read fresh); `sha:` wins when both are set. `state` is `pending` \| `success` \| `failure` \| `error`. `context` (the row's name on the PR) is entirely yours, templates included; only when unset does it default to the login the call acts as. `description` is clipped to GitHub's 140 characters. → `ok`, `context`, `sha` |
+| `reaction_subjects` | on `changes_requested` / `new_comment`: what the run handles, in `react`'s `subjects` shape. That's the review for a review event, the comment for a standalone comment, and for a sweep-recovered run over unresolved threads, each thread's opening comment (at most 10). Absent when there's nothing to react to, so `if: reaction_subjects` skips the hook. |
+| `me` | on every github event: `{login}`, the login your writes act as (discovered from the write identity, else your first `me:` login). Name rows after yourself without hardcoding a username: `"{{.me.login}} / review"`. |
+| `run.*` | [run facts](Workflows#run-facts) in workflow-level hooks: `start_sha` (the head the run started on, read as it starts, not the event's), `head_sha` / `head_short` (the head now), `pushed`, and at fail a public-safe `reason`. |
 
-**Never a CI signal.** conductor ignores a commit status under its own
-context: your login(s), the configured `status_context`, or the one it
-resolved at run time. That check runs at the webhook router before any
-handler, so a `failure` verdict can't come back as a failing check and launch
-the next fixer. (Today `failing_checks` comes only from check runs, check
-suites and workflow runs, and the sweep doesn't read commit statuses at all.
-The guard keeps it that way.)
+**Statuses are GitHub's, unmodified.** A status is one row per (commit,
+context), and the last write wins. Conductor adds no ownership or ordering of
+its own, so two flows with two contexts sit side by side, and two runs of one
+flow on one commit write the same row in turn. Since a status belongs to a
+commit, the commit you write decides what the PR shows. Writing the success on
+`run.start_sha` makes the row vanish from the PR after a push (GitHub has no
+way to delete a status; this is how it goes). Writing it on the PR (`pr:`)
+keeps it on the new head.
 
-**Best-effort.** A reaction or status that fails to post (an API error, a
-token without access) is logged and audited (`event: progress`,
-`outcome: failed`) and never fails, delays, or blocks the run. Each lifecycle
-point's API calls are time-bounded. Reactions are idempotent: re-adding one
-you already left returns the existing one. Shadow and dry runs post nothing.
+**Never a CI signal.** The github source ignores a commit status under any
+context `set_status` has posted, noted at call time, custom names included,
+or under one of your logins. That check runs at the webhook router before any
+handler, so a `failure` a hook posted can't come back as a failing check and
+launch the next fixer. (Today `failing_checks` comes only from check runs,
+check suites and workflow runs, and the sweep doesn't read commit statuses at
+all. The guard keeps it that way.)
+
+**Best-effort.** Hooks never fail a run: a reaction or status that fails to
+post is logged and audited (`event: verb`, `outcome: hook_failed`).
 
 Note one side effect: GitHub counts a pending or failing status as
-non-passing, so while a run is pending, and after a `failure`, the PR's merge
-state reads `UNSTABLE` rather than `CLEAN`. So
-`merge_ready` doesn't fire on a PR conductor is still working on, or gave up
-on, until a new commit lands. Set `progress.status: false` if you want
-`merge_ready` to ignore conductor's own runs.
-
-The two verbs are available to any flow:
-
-| verb | does |
-|---|---|
-| `github.react` | `{repo, pr, subjects: [{kind, id}] \| kind + id, content}` — `kind` is `issue_comment` \| `review_comment` \| `review`; `content` is `+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket`, `eyes` |
-| `github.set_status` | `{repo, sha, state: pending\|success\|failure\|error, description, context, target_url}` — `context` defaults to your login; `description` is clipped to GitHub's 140 characters |
+non-passing, so while a pending row is up, and after a `failure`, the PR's
+merge state reads `UNSTABLE` rather than `CLEAN`, and `merge_ready` (which
+needs `CLEAN`) waits.
 
 ## Bot-authored comments (github)
 

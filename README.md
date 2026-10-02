@@ -123,9 +123,10 @@ like) can call conductor's authenticated `/invoke` API for the agent work it doe
   agent work it does — [Callable Service](https://github.com/NodeSpy/conductor/wiki/Callable-Service)
 - Execution **history**, live **watch**, **retry-from-step**, and an
   **outcome-learning** loop — [Runs](https://github.com/NodeSpy/conductor/wiki/Runs) · [Outcomes](https://github.com/NodeSpy/conductor/wiki/Outcomes)
-- **Run progress on the PR**, as you: 👀 on the review or comment the moment a
-  run takes it, then 🚀 / 👍 / 😕 for how it ended, plus a pending → success /
-  failure commit status under your login — [Configuration](https://github.com/NodeSpy/conductor/wiki/Configuration#run-progress-on-the-pr-github)
+- **Progress on the PR as plain hooks**, as you: `github.react` / `github.set_status`
+  with run facts (`{{.run.pushed}}`, `{{.run.start_sha}}`, a public-safe
+  `{{.run.reason}}`) — 👀 when a run takes a comment, 🚀 / 👍 / 😕 and a status
+  row for how it went, every word yours — [Configuration](https://github.com/NodeSpy/conductor/wiki/Configuration#showing-progress-on-the-pr-github)
 - Introspection and dry-run; self-update; and a config that **auto-migrates**
   itself across schema changes (backup + validate-before-commit, never a restart
   loop) — [Migration](https://github.com/NodeSpy/conductor/wiki/Migration)

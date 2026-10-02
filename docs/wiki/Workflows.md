@@ -188,8 +188,10 @@ values) and work bare or as a comparison's left side:
 ## Hooks
 
 `hooks:` entries are verb action units `{at, uses, options, if, id}` at
-`start` (on match, before steps, synchronous), `done` (steps succeeded), or
-`fail` (steps failed); multiple per phase run in order. **Hooks nest on steps
+`start` (on match, before steps, synchronous — before any worktree is
+provisioned or agent launched), `done` (steps succeeded), or `fail` (the run
+failed, however it failed — see [Failure paths](#failure-paths)); multiple per
+phase run in order. **Hooks nest on steps
 too** — the same unit under a step's own `hooks:` fires around that step, so
 a step can announce itself, post its result the moment it finishes, or handle
 its own failure. A failing step fires its own `at: fail` hooks, then (unless
@@ -214,8 +216,10 @@ lifecycle moment, so a handler parses the same shape regardless of phase:
 | `hook.failure` | `fail` | the failure sub-object (below) |
 
 On `fail`, `hook.failure` carries `{ kind, error, step, gave_up }` — `kind` is
-`ordinary`, `gave_up` (retries exhausted; the same signal as the `escalate`
-event), or **`no_progress`**. A `no_progress` failure is a fixer step marked
+`ordinary`, `gave_up` (retries exhausted, or a dispatch that never reached a
+working runtime; the same signal as the `escalate` event), `parked` (see
+below), `internal` (a panic), or **`no_progress`**. `error` is the redacted
+error text — for anything you post publicly, use `{{.run.reason}}` instead. A `no_progress` failure is a fixer step marked
 **`expect_push: true`** that ran cleanly but left its work *unlanded* — a
 non-empty proposed diff that never reached the remote, so the PR didn't move and
 the fix didn't take. It also carries `hook.failure.agent_summary` (the agent's
@@ -231,6 +235,49 @@ hooks:
       name: on-failure
       with: { failure: "{{.hook.failure}}", repo: "{{.repo}}", pr: "{{.pr}}" }
 ```
+
+### Run facts
+
+Workflow-level hooks (not step hooks) also get `run`, what they need to say
+what the run did to its target:
+
+| field | meaning |
+| --- | --- |
+| `run.start_sha` | the target's head when the run started, read fresh as the run begins (after any wait for an agent slot), so not the head the event saw |
+| `run.head_sha` | the target's head when the hook fires, read fresh (at `start`, the same as `start_sha`) |
+| `run.head_short` | `head_sha`'s first 7 characters |
+| `run.pushed` | the head moved during the run (both ends known and different) |
+| `run.reason` | at `fail`: a short, public-safe phrase. It is `the agent couldn't be started`, `the change was never pushed`, `timed out`, `step "<id>" failed`, `parked after repeated tries — needs a human or new commits`, `internal error`, or `the run failed`, and never the error text. `""` otherwise |
+
+A head is the target's current revision as its connector knows it (a pull
+request's head commit on github). It's read only when the trigger declares a
+hook for that phase, so a hookless trigger costs nothing. A target with no
+head, or a read that fails (logged and audited), leaves the shas `""` and
+`pushed` false. `run` and `hook` are reserved names in hook scope: they shadow
+a step with that id there.
+
+### Failure paths
+
+Every way a run fails fires its workflow-level `at: fail` hooks:
+
+- a dispatch that never came up (an unknown controller, a worktree or
+  workspace that failed to provision, an agent that crashed before starting),
+  which also escalates
+- a failed step, a step `timeout:`, a gate that discards, and an
+  `expect_push` fixer that left its change unpushed (`no_progress`)
+- a panic inside the run (`kind: internal`); the hooks fire, then the panic
+  carries on to the engine's recovery
+- an **engine park**. A (target, kind, head) that kept failing past
+  `max_attempts_per_head` is parked: it won't be retried until new commits
+  arrive, and it never reaches a run. On the pass that parks it, the engine
+  fires the trigger's `at: fail` hooks itself, with `hook.failure.kind:
+  parked` (`gave_up: true`), `run.start_sha` = the head it parked at,
+  `run.head_sha` = the head now, and `run.reason` = the parked phrase. No
+  `start` or `done` hooks fire, since nothing started. Later passes over a
+  parked tuple stay silent.
+
+The one exception is a PR closing under its fixer. That run is stopped, not
+failed, so no fail hooks fire.
 
 ## Control flow
 
