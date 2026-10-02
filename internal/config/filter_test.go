@@ -440,3 +440,36 @@ func TestFilterMatchKeysAndFactRefs(t *testing.T) {
 		t.Errorf("FactRefs = %q, want %q", gotRefs, want)
 	}
 }
+
+// The YAML face and the public IR are one tree: Kit converts node for node,
+// FilterFromKit converts back, and a filter that crossed to a source plugin's
+// wire form and back is the same filter — same string, same YAML.
+func TestFilterKitRoundTrip(t *testing.T) {
+	var f Filter
+	src := "{not_branch: [wip/*], label_any: [urgent], expr: \"!is_draft\"}"
+	if err := yaml.Unmarshal([]byte(src), &f); err != nil {
+		t.Fatal(err)
+	}
+	k := f.Kit()
+	if k.String() != f.String() {
+		t.Fatalf("Kit changed the tree:\n got %s\nwant %s", k.String(), f.String())
+	}
+	back := FilterFromKit(k)
+	if back.String() != f.String() {
+		t.Fatalf("FilterFromKit changed the tree:\n got %s\nwant %s", back.String(), f.String())
+	}
+	out, err := yaml.Marshal(back)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var again Filter
+	if err := yaml.Unmarshal(out, &again); err != nil {
+		t.Fatalf("structural form does not reparse: %v\n%s", err, out)
+	}
+	if again.String() != f.String() {
+		t.Fatalf("YAML round trip changed the tree:\n got %s\nwant %s", again.String(), f.String())
+	}
+	if (*Filter)(nil).Kit() != nil || FilterFromKit(nil) != nil {
+		t.Fatal("nil must stay nil in both directions")
+	}
+}
