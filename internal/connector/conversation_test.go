@@ -43,7 +43,7 @@ func TestPluginConversationResolvesAnAsk(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the ask never posted")
 	}
-	time.Sleep(20 * time.Millisecond) // the conversation registers after the post returns
+	time.Sleep(20 * time.Millisecond)                     // the conversation registers after the post returns
 	psi.triggersFor(reply("U-someone", "approve"), false) // not an approver: not consumed
 	select {
 	case out := <-got:
