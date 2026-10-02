@@ -157,6 +157,9 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	"internal/connector/github.go": {
 		{"TargetHead", "reads Target.Number beside OwnRepo(), and reads nothing when OwnRepo() is empty"},
 	},
+	"pkg/plugintest/plugintest.go": {
+		{"record", "the conformance harness's comparison key for a fixture plugin's own events (the legacy Repo#Number when a target names no key): nothing is authorized, keyed or scoped by it"},
+	},
 	"pkg/githubkit/ghsource/ghsourcetest/wire.go": {
 		{"read", "the conformance driver records an event's target to compare it; nothing is dispatched"},
 	},

@@ -30,21 +30,13 @@ func everyConnectorYAML(t *testing.T) string {
 	var b strings.Builder
 	b.WriteString("connectors:\n")
 	for _, typ := range connector.Types() {
-		if reservedConnectorName[typ] {
+		if _, reserved := config.ReservedNamespaces[typ]; reserved {
 			continue // always in the registry; naming one is a config error
 		}
 		fmt.Fprintf(&b, "  %s: { use: %s }\n", typ, typ)
 	}
 	fmt.Fprintf(&b, "vaults:\n  housevault: { type: file, dir: %s }\n", t.TempDir())
 	return b.String()
-}
-
-// reservedConnectorName are the built-ins the registry always adds and the
-// loader refuses to see in `connectors:` — they are enumerated all the same,
-// because they are in the registry either way.
-var reservedConnectorName = map[string]bool{
-	"kv": true, "sql": true, "memory": true, "blob": true,
-	"workflow": true, "conductor": true, "manual": true,
 }
 
 // everyScopeDim is every dimension any registered connector declares.

@@ -1,6 +1,13 @@
 # The plugin contract
 
-**Status:** PROPOSAL — design only, nothing here is implemented. All open questions are decided (§7); implementation waits for approval of the design as a whole. Supersedes the
+**Status:** approved; being built on #164 in the §5 order. **Step A is in**:
+the contract types and must-understand declarations (`pkg/plugin`), the host
+side with no tiers (`plugin.poll` replacing nudge/force, `translate`,
+`validate`, `stop`, `host.state`), host-owned keys stripped and one
+reserved-namespace list, git-only distribution (`refs/dist`), tunnels as
+exposure connectors (`lan`, `tunnel` builtins in process), the vendor-neutral
+`pkg/` (relay client out, boundary test), `pkg/plugintest` and
+`sourcekit.Poller`. Steps B, P and C follow. Supersedes the
 direction of `plugin-source-abi.md` (the "connector ABI 1" extension and
 `trusted_source`), which stays in the tree only as a record of what is being
 replaced.
@@ -65,8 +72,10 @@ of it shares the process and each call names its `instance`.
   ("connector `gh` declares `semantics.events[new_comment].cursor`; this
   conductor does not implement it — needs conductor ≥ X"). Silently ignoring a
   semantic would mean silently changing behavior (no dedupe, no stop-on-close).
-  A plugin that wants to run on older hosts marks a block `optional: true`;
-  the host then ignores it if unknown.
+  A plugin that wants to run on older hosts lists the keys it can live
+  without in the block's `optional: [key, …]`; the host then ignores those
+  if unknown (and Serve strips them before replying to a host that
+  advertised it lacks them).
 - The host sends `host: {version, semantics: [names]}` on `plugin.describe`,
   so an SDK can drop optional blocks an older host lacks before replying.
 - `Decl.abi` is **deprecated and ignored**: it is accepted on the wire, so
@@ -550,7 +559,7 @@ code.
 | V1 | `internal/handoff/slack.go:1-265`, `slack_poster.go:1-104` | Slack channel, DM, poster, inbox keyed `channel:thread_ts` | PLUGIN (slack) + SEM `opens_conversation` / `conversation_reply`; the engine keeps a generic inbox keyed `(instance, id)` |
 | V2 | `internal/handoff/discord*.go` | Discord REST and gateway | PLUGIN (discord) |
 | V3 | `internal/handoff/registry.go:39-170`; `config/config.go:169-179, 443-534, 773-781, 1436-1460, 1692-1858` | legacy `handoffs:` block, `HandoffConfig{Web,Slack,Discord}`, validators | DEL legacy block (§5 open question Q4); hand-off = any verb with `opens_conversation` |
-| V4 | `internal/handoff/tunnel.go:36-616` | the web hand-off's `Tunnel` interface plus a provider `switch`: static, lan, cloudflared, ngrok, tailscale, ssh (localhost.run/serveo/pinggy), localxpose, command | SEM `exposes`. `static`, `lan` and `command` become vendor-neutral builtin exposure connectors on the contract (§1.10). cloudflared, ngrok, tailscale, localxpose and ssh become small plugins. **Straight cutover** (no current users) |
+| V4 | `internal/handoff/tunnel.go:36-616` | the web hand-off's `Tunnel` interface plus a provider `switch`: static, lan, cloudflared, ngrok, tailscale, ssh (localhost.run/serveo/pinggy), localxpose, command | SEM `exposes`. `lan` and `tunnel` (runs any tunnelling command, reads the URL off its output) become vendor-neutral builtin exposure connectors on the contract (§1.10); `static` is the web connector's own `base_url`. cloudflared, ngrok, tailscale, localxpose and ssh become small plugins. **Straight cutover** (no current users) |
 | V4a | `internal/config/config.go:488-510, 1677-1815` | `TunnelConfig`, `validTunnelProviders`, `validateTunnel` | DEL; the web connector takes `expose: <conn>` or `base_url` |
 | V4b | `internal/connector/web.go:19, 38, 64-68`; `internal/handoff/web.go:77, 129` | the web connector builds its tunnel from `tunnel:` and opens it per draft | `expose:` names an exposure connector; the engine calls `exposes` per draft. The web page itself stays a core surface |
 | V4c | `internal/inbound/smee.go:14-144`; the smee client in `pkg/sourcekit` | the smee.io relay transport inside conductor | a `smee` plugin declaring `exposes`; a source plugin's listener uses it through `listeners` |
@@ -568,6 +577,7 @@ code.
 | G2 | `internal/connector/external.go:18-21, 32-91, 106-111`; `cmd/conductor/plugins.go:134-147, 206-215` | override refusal; `…InPlaceOfBundled`; `builtinUsers` | DEL (no bundled github to stand in for) |
 | G3 | `internal/connector/github.go` (all); `internal/integrations/github/**`; `pkg/githubkit/**` | bundled github | PLUGIN |
 | G4 | `internal/connector/slack.go` (all); `internal/integrations/slack/**` | bundled slack | PLUGIN |
+| G4a | `internal/connector` `ntfyDecl`, `pushoverDecl`, `notifiarrDecl`, `discordDecl` (registered at `init` like any builtin) | vendor notification/chat connectors compiled into conductor | PLUGIN (conductor-plugins already ships pushover and notifiarr; ntfy and discord ported in P) |
 | G5 | `internal/connector/sources.go:61, 126, 178, 363, 471-473, 542`; `github.go:397-412` (`buildIntegration`); `cmd/conductor/main.go:54-58`; `internal/core/registry.go:21,32` | cron/rss/webhook via `core.Build` side door | in-process contract builtins (§1.10); DEL `core.Integration` |
 | G6 | `pkg/plugin/source.go:5-28`; `wire.go:239-256, 129-132`; `connector/external.go:185-192, 342-344, 389`; `internal/plugin/resolve.go:285-292`; `cmd/conductor/reload.go:24,75` | `ConnectorABI`, `Decl.ABI`, triggers sent only at ABI 1, ABI part of reload surface | DEL (`abi` accepted and ignored) |
 | G7 | `pkg/plugin/wire.go:45-49`; `internal/plugin/client.go:510-516`; `plugin.go:46-52`; `cmd/conductor/plugins.go:182-188` | `EngineABI` exact match; empty kind refused for engines | `step_engine` declared; must-understand semantics |
@@ -771,10 +781,10 @@ not separate PRs or releases.
 
 | Step | Repo / PR | Contents | Behavior change at that commit |
 |---|---|---|---|
-| **A** | conductor, #164 | **Contract core.** `pkg/plugin` semantics types; `describe {host}`; must-understand; `plugin.poll / translate / validate / stop`, `host.state`; triggers sent and `catch_up` honored for every plugin; `abi` ignored; error codes §1.11; cron/rss/webhook as in-process contract builtins (§1.10); `pkg/sourcekit` scheduler and dedupe; `pkg/plugintest`; reserved-name unification; G15 fix. **Git-only distribution** (X2). **Tunnels cut over** (V4–V4c). | none for existing plugins or configs; the `tunnel:` block is removed (no current users) |
-| **B** | conductor, #164 | **Engine reads semantics.** Every row of §3.1–§3.8 replaced by a semantic lookup. The still-bundled github and slack are re-wired as in-process contract plugins declaring exactly the §4 semantics, so the existing unit and e2e suites prove equivalence before anything is removed. Delete `trusted_source`, `SourceTrusted`, `ConnectorABI`, `kindFor`, `ReservedKind`, `BranchFixKind`, the ABI-gated methods, the `sweep` intercept, `identitySource`/`dispatchTuner`, `lowerEngineOptions`, the vendor `config.Action` fields. Outcome vocabulary with a read-side mapping. | none observable |
+| **A** | conductor, #164 | **Contract core.** `pkg/plugin` semantics types; `describe {host}`; must-understand; `plugin.poll / translate / validate / stop`, `host.state`; triggers sent and `catch_up` honored for every plugin; `abi` ignored; error codes §1.11; the in-process contract transport (§1.10) and the exposure builtins on it; `pkg/sourcekit` scheduler and dedupe; `pkg/plugintest`; reserved-name unification; G15 fix. **Git-only distribution** (X2). **Tunnels cut over** (V4–V4c). | none for existing plugins or configs; the `tunnel:` block is removed (no current users) |
+| **B** | conductor, #164 | **Engine reads semantics.** cron, rss and webhook move onto the in-process contract (their synthetic targets and no-checkout become declarations, so they wait for the engine to read them). Every row of §3.1–§3.8 replaced by a semantic lookup. The still-bundled github and slack are re-wired as in-process contract plugins declaring exactly the §4 semantics, so the existing unit and e2e suites prove equivalence before anything is removed. Delete `trusted_source`, `SourceTrusted`, `ConnectorABI`, `kindFor`, `ReservedKind`, `BranchFixKind`, the ABI-gated methods, the `sweep` intercept, `identitySource`/`dispatchTuner`, `lowerEngineOptions`, the vendor `config.Action` fields. Outcome vocabulary with a read-side mapping. | none observable |
 | **P** | conductor-plugins, companion draft | `connectors/github`, `connectors/slack`, `connectors/discord` on the contract; exposure plugins `cloudflared`, `ngrok`, `tailscale`, `localxpose`, `ssh-tunnel`, `smee`; `githubkit`, `ghsource`, `ghplugin`, the GitHub fake and the conformance cases move here; `pkg/plugintest` conformance plus engine-outcome scenarios (the incident list) in CI; release workflow publishes `refs/dist/<tag>` (X2). | new plugin versions |
-| **C** | conductor, #164 | **Plugins-first boot**, then the removal. Boot fetches and verifies the official plugin for every connector that names a removed builtin before any connector starts. Then remove the github/slack/discord builtins, `internal/integrations/{github,slack}`, the `internal/handoff` vendor channels, the legacy `integrations:` / `handoffs:` / `notify:` blocks (Q4), and `pkg/githubkit` (moved in P). Strict vendor boundary tests (§1.13). e2e runs against the plugin builds from P. | `use: github` / `use: slack` resolve to the official plugins |
+| **C** | conductor, #164 | **Plugins-first boot**, then the removal. Boot fetches and verifies the official plugin for every connector that names a removed builtin before any connector starts. Then remove the github, slack and discord builtins and the other vendor connectors compiled in (`ntfy`, `pushover`, `notifiarr`; plugins exist or are ported in P), `internal/integrations/{github,slack}`, the `internal/handoff` vendor channels, the legacy `integrations:` / `handoffs:` / `notify:` blocks (Q4), and `pkg/githubkit` (moved in P). Strict vendor boundary tests (§1.13). e2e runs against the plugin builds from P. | `use: github` / `use: slack` resolve to the official plugins |
 | **K** | conductor-packs | Raise `requires.conductor` for pr-autopilot, ci-unsticker and pr-review-team to the release that ships #164. No YAML change. | — |
 
 **Merge order:** P's plugin releases are tagged and published first, so the
@@ -881,10 +891,10 @@ All resolved on review: Q5 as discussed, the rest as recommended.
 | # | Question | Decision |
 |---|---|---|
 | Q1 | Should an `assigned` claim be believed for every installed plugin, bounded by the operator's `scope` (§2.4)? | **Decided:** yes: install was the trust decision, and scope is defense in depth |
-| Q2 | Must-understand for unknown `semantics` keys (refuse the plugin) vs warn-and-ignore? | **Decided:** refuse, with `optional: true` as the escape hatch |
+| Q2 | Must-understand for unknown `semantics` keys (refuse the plugin) vs warn-and-ignore? | **Decided:** refuse, with `optional: [keys]` as the escape hatch |
 | Q3 | paseo's forge path (X1): opaque `runtime_hints` vs always branch-off | **Decided:** `runtime_hints` now; revisit when paseo exposes a forge-neutral worktree call |
 | Q4 | Legacy `integrations:` / `handoffs:` / `notify:` blocks and `internal/migrate` | **Decided:** removed in the release. Run `conductor migrate` with the current release first; the new binary's `conductor validate` names any legacy block still present |
-| ~~Q5~~ | **Decided:** tunnels and relays are connectors declaring `exposes` (V4–V4c). `static`, `lan` and `command` stay as vendor-neutral builtins; a plugin may always reach the local address it is handed; straight cutover with no compatibility shim. The web approve/revise page stays a core surface with no tunnel code | — |
+| ~~Q5~~ | **Decided:** tunnels and relays are connectors declaring `exposes` (V4–V4c). `lan` and `tunnel` (any tunnelling command) are the vendor-neutral builtins, and a fixed origin stays the web connector's `base_url`; a plugin may always reach the local address it is handed; straight cutover with no compatibility shim. The web approve/revise page stays a core surface with no tunnel code | — |
 | Q6 | rest/graphql `InstanceDecler` (instance-specific verbs) | **Decided:** `plugin.describe {instance}` (optional) |
 | Q7 | Binary verb outputs (Slack `download` → agent `images:`): the wire cannot carry `BinaryOut` today | **Decided:** the host gives each instance a staging directory inside its fs capability; outputs return paths under it, and the engine accepts only those |
 | Q8 | The GitHub write credential via `gh auth token` inside a confined plugin (needs `commands: [gh]` and read access to gh's config) | **Decided:** declare it in the github plugin's capabilities; the `pat` / `token:` paths need neither |
