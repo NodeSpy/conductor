@@ -24,13 +24,13 @@ import (
 func TestForgedSignalsCannotTouchATrustedEngagement(t *testing.T) {
 	eng, st, _, _ := buildFlowEngine(t, gateCfg2())
 	// A real dispatch acted on a real PR.
-	real := core.Trigger{Source: "github", Instance: "i", Kind: core.KindClosed,
+	real := core.Trigger{Source: "github", Instance: "i", Kind: "_closed",
 		TargetTrusted: true, Target: core.Target{Repo: "o/r", PR: 5, Number: 5}}
 	st.RecordEngagement(real.Key(), store.Engagement{Key: "fixer", Workflow: "eg.ping", CostUSD: 1.5})
 
 	// The forgery: same repo and number, but the target came off a plugin's
 	// wire event, so TargetTrusted is false.
-	forged := core.Trigger{Source: "acme", Instance: "plug", Kind: core.KindClosed,
+	forged := core.Trigger{Source: "acme", Instance: "plug", Kind: "_closed",
 		Target: core.Target{Repo: "o/r", PR: 5, Number: 5},
 		Context: map[string]any{
 			"merged": true, "reverts": []int{9}, "reverts_corroborated": true,
@@ -58,7 +58,7 @@ func TestForgedSignalsCannotTouchATrustedEngagement(t *testing.T) {
 
 	// The real signal still works — the fix is a gate, not a wall.
 	eng.process(context.Background(), core.Trigger{Source: "github", Instance: "i",
-		Kind: core.KindClosed, TargetTrusted: true,
+		Kind: "_closed", TargetTrusted: true,
 		Target:  core.Target{Repo: "o/r", PR: 5, Number: 5},
 		Context: map[string]any{"merged": true}})
 	if got := outcomesFrom(st); len(got) != 1 || got[0] != "merged:fixer" {

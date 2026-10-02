@@ -141,53 +141,43 @@ func TestABISourceRefusesMisroutedEvents(t *testing.T) {
 	}
 }
 
-// TRUST. Without trusted_source a plugin's events are untrusted input, as
-// they always were: a target-trust claim is ignored and an engine-interpreted
-// kind is dropped. With it, both are believed — but only for an event the
-// plugin declares (and _closed).
-func TestABISourceTrustIsTheOperatorsGrant(t *testing.T) {
+// A plugin emits only the events it DECLARES, each carrying its declared
+// semantics; a terminal event is known by its semantics (closes_target), not
+// its name, and fires no trigger of its own. The target claim is the
+// plugin's: trust was decided at install, so it is believed — and an event
+// that makes no claim stays unassigned.
+func TestSourceEventsCarryTheirDeclarations(t *testing.T) {
 	nc := abiTrigger(t, 0, "gh.new_comment", "", "", nil)
 	rel := abiTrigger(t, 1, "gh.release", "", "", nil)
+	closes := &sdk.EventSemantics{ClosesTarget: &sdk.ClosesTargetSemantics{}}
+	cursor := &sdk.EventSemantics{Cursor: &sdk.CursorSemantics{ID: "comment_id"}}
 	events := []sdk.SourceEvent{
 		{Event: "new_comment", Trigger: nc.Ref(), TargetTrusted: true, Target: sdk.Target{Repo: "o/r", Number: 1}},
-		{Event: "release", Trigger: rel.Ref(), TargetTrusted: true, Target: sdk.Target{Repo: "o/r"}},
-		{Event: "_closed", Kind: "_closed", TargetTrusted: true, Target: sdk.Target{Repo: "o/r", Number: 1}, Context: map[string]any{"merged": true}},
-		{Event: "release", Kind: "failing_checks", Trigger: rel.Ref()}, // claims a kind it does not declare
+		{Event: "release", Trigger: rel.Ref(), Target: sdk.Target{Repo: "o/r"}}, // no claim
+		{Event: "finished", Target: sdk.Target{Key: "o/r#1", Assigned: true}, Context: map[string]any{"merged": true}},
+		{Event: "release", Kind: "failing_checks", Trigger: rel.Ref()}, // a kind it does not declare
+		{Event: "teleported"}, // an event it does not declare
 	}
-	declared := map[string]bool{"new_comment": true, "release": true}
-
-	untrusted := runPSI(t, &pluginSourceIntegration{source: &abiSourcer{events: events}, instance: "gh", typ: "github",
-		triggers: []CompiledTrigger{nc, rel}, declared: declared, log: t.Logf})
-	// new_comment and _closed are engine-interpreted: dropped. release fires
-	// twice (its own event, and the failing_checks claim falling back to it),
-	// neither trusted.
-	if len(untrusted) != 2 {
-		t.Fatalf("untrusted: want the two release events only, got %+v", untrusted)
+	got := runPSI(t, &pluginSourceIntegration{source: &abiSourcer{events: events}, instance: "gh", typ: "github",
+		triggers: []CompiledTrigger{nc, rel}, log: t.Logf,
+		declared: map[string]bool{"new_comment": true, "release": true, "finished": true},
+		sem:      map[string]*sdk.EventSemantics{"new_comment": cursor, "finished": closes}})
+	kinds := map[string][]core.Trigger{}
+	for _, tr := range got {
+		kinds[tr.Kind] = append(kinds[tr.Kind], tr)
 	}
-	for _, tr := range untrusted {
-		if tr.Kind != "release" || tr.TargetTrusted {
-			t.Fatalf("untrusted source produced %q trusted=%v", tr.Kind, tr.TargetTrusted)
-		}
+	if len(got) != 4 || len(kinds["new_comment"]) != 1 || len(kinds["release"]) != 2 || len(kinds["finished"]) != 1 {
+		t.Fatalf("want new_comment, release ×2 (the undeclared kind falls back to its event), finished — got %+v", got)
 	}
-
-	trusted := runPSI(t, &pluginSourceIntegration{source: &abiSourcer{events: events}, instance: "gh", typ: "github",
-		trusted: true, triggers: []CompiledTrigger{nc, rel}, declared: declared, log: t.Logf})
-	kinds := map[string]core.Trigger{}
-	for _, tr := range trusted {
-		kinds[tr.Kind] = tr
+	if !kinds["new_comment"][0].TargetTrusted || kinds["release"][0].TargetTrusted {
+		t.Fatal("the target claim is the plugin's: believed when made, absent when not")
 	}
-	if len(trusted) != 3 || kinds["new_comment"].Kind == "" || kinds["release"].Kind == "" || kinds[core.KindClosed].Kind == "" {
-		t.Fatalf("trusted: want new_comment, release, _closed — got %+v", trusted)
+	if kinds["new_comment"][0].Sem != cursor {
+		t.Fatal("a trigger must carry its event's declared semantics")
 	}
-	if !kinds["new_comment"].TargetTrusted || !kinds[core.KindClosed].TargetTrusted {
-		t.Fatal("trusted source's target claims were not believed")
-	}
-	if kinds[core.KindClosed].Action != nil || kinds[core.KindClosed].Context["merged"] != true {
-		t.Fatalf("_closed must carry its facts and no action: %+v", kinds[core.KindClosed])
-	}
-	// failing_checks was not declared: even a trusted source may not claim it.
-	if _, ok := kinds["failing_checks"]; ok {
-		t.Fatal("a trusted source emitted an engine-interpreted kind it does not declare")
+	fin := kinds["finished"][0]
+	if !fin.ClosesTarget() || fin.Action != nil || !fin.TargetTrusted || fin.Context["merged"] != true {
+		t.Fatalf("a closes_target event is the lifecycle fact: no action, its facts, its claim: %+v", fin)
 	}
 }
 
@@ -223,7 +213,7 @@ func TestSourcePollTranslateAndAppToken(t *testing.T) {
 	mc := abiTrigger(t, 0, "gh.merge_conflict", "", "", nil)
 	src := &abiSourcer{pollEv: []sdk.SourceEvent{{Event: "merge_conflict", Trigger: mc.Ref(), TargetTrusted: true,
 		Target: sdk.Target{Repo: "o/r", Number: 3}}}}
-	psi := &pluginSourceIntegration{source: src, instance: "gh", typ: "github", trusted: true,
+	psi := &pluginSourceIntegration{source: src, instance: "gh", typ: "github",
 		triggers: []CompiledTrigger{mc}, declared: map[string]bool{"merge_conflict": true}, log: t.Logf}
 
 	var streamed []core.Trigger

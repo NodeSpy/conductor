@@ -5,33 +5,9 @@ package core
 
 import (
 	"context"
-	"strings"
+
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
-
-// KindClosed is a reserved kind an integration emits when the underlying object
-// (e.g. a PR) reaches a terminal state, so the engine drops its dedup state. It
-// never dispatches an action.
-const KindClosed = "_closed"
-
-// ReservedKind reports whether a kind is one the ENGINE itself interprets —
-// a fact it acts on rather than a name it routes by. `_closed` consumes a
-// target's engagements and settles its outcome; `failing_checks` records CI
-// failure and can re-run checks with the operator's token.
-//
-// A source that did not DECLARE such an event may not emit it. The bundled
-// integrations produce these from platform payloads they verified; a
-// third-party plugin emitting one is claiming a fact about somebody else's
-// world (round-13). Any kind beginning with `_` is reserved for the engine.
-func ReservedKind(kind string) bool {
-	if strings.HasPrefix(kind, "_") {
-		return true
-	}
-	switch kind {
-	case "failing_checks", "merge_conflict", "review_requested", "new_comment":
-		return true
-	}
-	return false
-}
 
 // Target identifies the GitHub (or future-source) object a Trigger concerns.
 // Fields are populated best-effort from the webhook payload; zero values mean
@@ -109,6 +85,13 @@ type Trigger struct {
 	// bypasses its dedup / liveness / backoff gates so the action runs now, even if
 	// it thinks the state is already handled. The kill switch and pause still apply.
 	Force bool
+	// Sem is the event's DECLARED semantics (plugin-contract.md §2.2): what
+	// the engine does with it — its target and revision, dedupe cursor,
+	// lifecycle effects. The source adapter attaches it from the connector
+	// type's declaration; the engine reads it through the accessors in
+	// semantics.go and never keys behavior on the kind's name. nil is a
+	// plain trigger.
+	Sem *sdk.EventSemantics
 	// HistoryID, when non-empty, pins the id of this run's §20 history record
 	// instead of the engine minting a fresh one. It exists so a caller that
 	// dispatched the trigger (the §13 callable-invoke surface) can hand back a
@@ -231,13 +214,3 @@ func itoa(n int) string {
 	return string(b[i:])
 }
 
-// BranchFixKind reports whether a trigger kind's fixer works on, and pushes to,
-// its PR's own head branch — work that stops mattering once the PR closes, and
-// whose pushes belong on that one branch.
-func BranchFixKind(kind string) bool {
-	switch kind {
-	case "new_comment", "changes_requested", "failing_checks", "merge_conflict", "pr_behind":
-		return true
-	}
-	return false
-}

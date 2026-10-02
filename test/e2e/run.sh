@@ -10,7 +10,7 @@
 #   E2E_GITHUB=plugin   — run every daemon's github connector on the conductor-github
 #                         PLUGIN instead of the builtin (→ `make e2e-plugin`). The
 #                         configs are copied and rewritten: `use: github` becomes the
-#                         plugin binary, with `trusted_source: true` and the mock's
+#                         plugin binary, with the mock's
 #                         `api_base:` (a plugin's environment is scrubbed, so it cannot
 #                         inherit PC_GITHUB_API_BASE). The binary is the in-tree
 #                         reference build (test/plugins/conductor-github), or the one
@@ -127,7 +127,6 @@ plugin_configs() {
       if (match($0, /^[ ]+use: github[ ]*$/)) {
         ind = substr($0, 1, index($0, "use:") - 1)
         print ind "use: /usr/local/bin/conductor-github"
-        print ind "trusted_source: true"
         print ind "api_base: http://mock-github:8080"
       } else print
     }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"

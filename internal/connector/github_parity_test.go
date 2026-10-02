@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 
@@ -28,7 +27,7 @@ import (
 //     same ghplugin handler the official build serves), spawned as a real
 //     subprocess and driven through the daemon's own plugin path — describe,
 //     registration in place of the bundled type, start_source carrying the
-//     triggers, routed events, and the trusted_source grant;
+//     triggers, routed events carrying their declared semantics;
 //   - wire:    the same binary over the bare SDK protocol, which is what the
 //     plugin repository runs against its own release build.
 //
@@ -38,14 +37,13 @@ import (
 
 func TestGithubConformanceBuiltin(t *testing.T) {
 	ghsourcetest.Run(t, func(t *testing.T, c ghsourcetest.Case, env ghsourcetest.Env) ghsourcetest.Driver {
-		return startParity(t, c, env, nil)
+		return startParity(t, c, env)
 	})
 }
 
-// The plugin run is the OFFICIAL github plugin as an install records it — the
-// official source, the recorded sha, release-verified — with NO
-// trusted_source in the config: the default trust an official, verified
-// plugin gets is what this run depends on.
+// The plugin run is the github plugin as an install records it — the source,
+// the recorded sha — driven like any installed plugin: there is no per-plugin
+// trust to grant.
 func TestGithubConformancePlugin(t *testing.T) {
 	spec := officialGithubSpec(t, githubPluginBin(t))
 	ghsourcetest.Run(t, func(t *testing.T, c ghsourcetest.Case, env ghsourcetest.Env) ghsourcetest.Driver {
@@ -57,7 +55,7 @@ func TestGithubConformancePlugin(t *testing.T) {
 		if _, err := RegisterExternalConnectorInPlaceOfBundled(cl, spec, decl); err != nil {
 			t.Fatalf("register: %v", err)
 		}
-		d := startParity(t, c, env, nil)
+		d := startParity(t, c, env)
 		d.cleanup = append(d.cleanup, func() {
 			UnregisterExternalType("github")
 			_ = cl.Close()
@@ -94,42 +92,6 @@ func officialGithubSpec(t *testing.T, bin string) plugin.Spec {
 		BinPath: bin, Sha256: hex.EncodeToString(sum[:]), ReleaseVerified: true}
 }
 
-// An official plugin that opted OUT, and a local build with no grant, are
-// untrusted: their engine-interpreted events are dropped, so the case the
-// official default passes fires nothing.
-func TestGithubPluginUntrustedFiresNoEngineKinds(t *testing.T) {
-	bin := githubPluginBin(t)
-	no := false
-	official := officialGithubSpec(t, bin)
-	local := plugin.Spec{Name: "github", Kind: plugin.KindConnector, Provides: "github", BinPath: bin, Local: true}
-	var c ghsourcetest.Case
-	for _, k := range ghsourcetest.Cases() {
-		if strings.HasPrefix(k.Name, "new_comment on your PR") {
-			c = k
-		}
-	}
-	for _, v := range []struct {
-		name     string
-		spec     plugin.Spec
-		explicit *bool
-	}{{"official, trusted_source: false", official, &no}, {"local build, no grant", local, nil}} {
-		t.Run(v.name, func(t *testing.T) {
-			ghsourcetest.RunCaseExpecting(t, c, nil, func(t *testing.T, c ghsourcetest.Case, env ghsourcetest.Env) ghsourcetest.Driver {
-				cl := plugin.NewClient(v.spec, plugin.Deps{})
-				decl, err := cl.Describe(context.Background())
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err := RegisterExternalConnectorInPlaceOfBundled(cl, v.spec, decl); err != nil {
-					t.Fatal(err)
-				}
-				d := startParity(t, c, env, v.explicit)
-				d.cleanup = append(d.cleanup, func() { UnregisterExternalType("github"); _ = cl.Close() })
-				return d
-			})
-		})
-	}
-}
 
 // githubPluginBin builds the reference conductor-github plugin once.
 func githubPluginBin(t *testing.T) string {
@@ -167,13 +129,10 @@ type parityDriver struct {
 	got []ghsourcetest.Got
 }
 
-func startParity(t *testing.T, c ghsourcetest.Case, env ghsourcetest.Env, trusted *bool) *parityDriver {
+func startParity(t *testing.T, c ghsourcetest.Case, env ghsourcetest.Env) *parityDriver {
 	t.Helper()
 	conn := c.Connection(env)
 	conn["use"] = "github"
-	if trusted != nil {
-		conn["trusted_source"] = *trusted
-	}
 	var trigs []map[string]any
 	for _, tr := range c.Triggers {
 		m := map[string]any{"on": "gh." + tr.On, "name": tr.Name}

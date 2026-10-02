@@ -6,18 +6,25 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/core"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
-func TestIsFeedbackKind(t *testing.T) {
+// Feedback is the event's declaration (feedback: true), not its name: a
+// trigger of ANY kind that declares it is eligible for open-workspace
+// adoption, and one that does not is not.
+func TestFeedbackIsDeclared(t *testing.T) {
 	for _, k := range []string{"new_comment", "changes_requested"} {
-		if !isFeedbackKind(k) {
-			t.Fatalf("%q should be a feedback kind", k)
+		if !(core.Trigger{Kind: k}).Feedback() {
+			t.Fatalf("%q declares feedback", k)
 		}
 	}
 	for _, k := range []string{"merge_conflict", "issue_matched", "release", "review_requested"} {
-		if isFeedbackKind(k) {
-			t.Fatalf("%q should NOT be a feedback kind", k)
+		if (core.Trigger{Kind: k}).Feedback() {
+			t.Fatalf("%q declares no feedback", k)
 		}
+	}
+	if !(core.Trigger{Kind: "anything", Sem: &sdk.EventSemantics{Feedback: true}}).Feedback() {
+		t.Fatal("any event declaring feedback is feedback")
 	}
 }
 

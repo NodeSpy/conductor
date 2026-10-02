@@ -371,9 +371,7 @@ func (r *Runner) resolvePolicy(spec config.TriggerSpec) config.Policy {
 // trigger's author facts.
 func (r *Runner) resolveBotReply(t core.Trigger, spec config.TriggerSpec) botReplyState {
 	pol := r.resolvePolicy(spec)
-	isBot, _ := t.Context["author_is_bot"].(bool)
-	login, _ := t.Context["author"].(string)
-	return botReplyState{mode: pol.ReplyToBotsMode(), authorIsBot: isBot, login: login}
+	return botReplyState{mode: pol.ReplyToBotsMode(), authorIsBot: t.AuthorAutomated(), login: t.AuthorLogin()}
 }
 
 // Run executes one fired trigger. triggerIndex is the spec's position in

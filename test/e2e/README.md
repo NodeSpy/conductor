@@ -108,7 +108,6 @@ GITHUB_PLUGIN_BIN=/path/to/conductor-github make e2e-plugin   # e.g. the officia
 
 ```yaml
     use: /usr/local/bin/conductor-github
-    trusted_source: true            # a LOCAL build is never trusted by default — the dev loop names it
     api_base: http://mock-github:8080  # a plugin's env is scrubbed: no PC_GITHUB_API_BASE
 ```
 

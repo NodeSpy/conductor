@@ -1,8 +1,6 @@
 package config
 
 import (
-	"os"
-	"strings"
 	"testing"
 )
 
@@ -278,20 +276,3 @@ func TestIsOfficialSource(t *testing.T) {
 	}
 }
 
-// trusted_source is refused on a builtin connector in EITHER direction: the
-// builtin is conductor's own code, so neither granting nor withholding source
-// trust means anything there, and a config that says so is mistaken.
-func TestTrustedSourceRefusedOnBuiltin(t *testing.T) {
-	for _, v := range []string{"true", "false"} {
-		dir := t.TempDir()
-		p := dir + "/conductor.yaml"
-		doc := "connectors:\n  gh:\n    use: github\n    token: x\n    trusted_source: " + v + "\n"
-		if err := os.WriteFile(p, []byte(doc), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		_, err := Load(p)
-		if err == nil || !strings.Contains(err.Error(), "trusted_source applies to a plugin-backed connector") {
-			t.Errorf("trusted_source: %s on a builtin: got %v", v, err)
-		}
-	}
-}

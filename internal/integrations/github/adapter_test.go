@@ -8,6 +8,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/store"
+	"github.com/NodeSpy/conductor/pkg/githubkit/ghplugin"
 	"github.com/NodeSpy/conductor/pkg/githubkit/ghsource"
 )
 
@@ -72,8 +73,8 @@ func TestKitMergeAgreesWithMergeRule(t *testing.T) {
 // values the engine reads back off the trigger, so a drift is a silent
 // behavior change.
 func TestKitConstantsMatchConductor(t *testing.T) {
-	if ghsource.KindClosed != core.KindClosed {
-		t.Errorf("KindClosed: kit %q, core %q", ghsource.KindClosed, core.KindClosed)
+	if ghsource.KindClosed != ghplugin.ClosedEvent || !(core.Trigger{Kind: ghsource.KindClosed, Sem: ghplugin.EventSemantics(ghsource.KindClosed)}).ClosesTarget() {
+		t.Errorf("the kit's close kind %q must be the declared terminal event", ghsource.KindClosed)
 	}
 	if ghsource.CommentKindIssue != store.CommentKindIssue || ghsource.CommentKindReview != store.CommentKindReview {
 		t.Errorf("comment kinds: kit %q/%q, store %q/%q", ghsource.CommentKindIssue, ghsource.CommentKindReview,
@@ -82,9 +83,11 @@ func TestKitConstantsMatchConductor(t *testing.T) {
 	if ghsource.FilterNotPrefix != config.FilterNotPrefix {
 		t.Errorf("FilterNotPrefix: kit %q, config %q", ghsource.FilterNotPrefix, config.FilterNotPrefix)
 	}
+	// The kit's own notion of a branch fix (it drops one on a closed PR) is
+	// what the declaration says the engine binds to the target.
 	for kind := range ghsource.KnownKinds() {
-		if ghsource.BranchFixKind(kind) != core.BranchFixKind(kind) {
-			t.Errorf("BranchFixKind(%q): kit %v, core %v", kind, ghsource.BranchFixKind(kind), core.BranchFixKind(kind))
+		if got := ghplugin.EventSemantics(kind).BoundToTarget; ghsource.BranchFixKind(kind) != got {
+			t.Errorf("BranchFixKind(%q): kit %v, declared bound_to_target %v", kind, ghsource.BranchFixKind(kind), got)
 		}
 	}
 }
@@ -105,13 +108,15 @@ func TestTriggerConversionCarriesEveryField(t *testing.T) {
 		Target: core.Target{Repo: "o/r", Owner: "o", Name: "r", PR: 3, Number: 3, HeadSHA: "h", BaseRef: "main", HTMLURL: "u", Project: "p"},
 		Title:  "t", Context: map[string]any{"k": 1}, Dedup: "d", Labels: map[string]string{"l": "1"},
 		Action: act, TargetTrusted: true, CatchUp: true, Force: true,
+		Sem: ghplugin.EventSemantics("merge_conflict"),
 	}
 	if !reflect.DeepEqual(ct, want) {
 		t.Fatalf("conversion lost something:\n got %+v\nwant %+v", ct, want)
 	}
 	// Every exported core.Trigger field is either carried or deliberately
 	// daemon-only. A new field fails here until it is classified.
-	daemonOnly := map[string]bool{"DispatchID": true, "HistoryID": true}
+	// Sem is attached by the adapter from the declaration, not carried by the kit.
+	daemonOnly := map[string]bool{"DispatchID": true, "HistoryID": true, "Sem": true}
 	carried := map[string]bool{}
 	kv := reflect.TypeOf(ghsource.Trigger{})
 	for i := 0; i < kv.NumField(); i++ {

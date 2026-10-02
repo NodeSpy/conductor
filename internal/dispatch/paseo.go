@@ -1194,7 +1194,7 @@ func (d *Dispatcher) queueOrAdopt(ctx context.Context, req Request, prompt strin
 		ref.AgentID, ref.Queued, ref.Output = id, true, "queued to live agent "+id
 		return ref, true, nil
 	}
-	if d.AdoptOpenWorkspaces && isFeedbackKind(req.Trigger.Kind) {
+	if d.AdoptOpenWorkspaces && req.Trigger.Feedback() {
 		if id := d.adoptAgentForBranch(ctx, req); !d.remote() && id != "" {
 			if req.CatchUp {
 				ref.Skipped = true
@@ -1226,10 +1226,6 @@ func (d *Dispatcher) liveAgentForPR(ctx context.Context, prKey string) string {
 	}
 	return ""
 }
-
-// isFeedbackKind reports whether a kind is PR feedback eligible for open-workspace
-// adoption (mirrors the github integration's feedbackKind).
-func isFeedbackKind(k string) bool { return k == "new_comment" || k == "changes_requested" }
 
 // adoptCand is a candidate open agent whose checkout is on the PR's head branch.
 type adoptCand struct {

@@ -738,25 +738,10 @@ func (e *Engine) isPaused() bool {
 	return err == nil
 }
 
-// triggerHasLabel reports whether the object's labels (stamped into Context by the
-// integration where available) include label, case-insensitively.
+// triggerHasLabel reports whether the target's labels (the fact its event
+// declares as labels) include label, case-insensitively.
 func triggerHasLabel(t core.Trigger, label string) bool {
-	raw, ok := t.Context["labels"]
-	if !ok {
-		return false
-	}
-	var labels []string
-	switch v := raw.(type) {
-	case []string:
-		labels = v
-	case []any:
-		for _, e := range v {
-			if s, ok := e.(string); ok {
-				labels = append(labels, s)
-			}
-		}
-	}
-	for _, l := range labels {
+	for _, l := range t.TargetLabels() {
 		if strings.EqualFold(l, label) {
 			return true
 		}
@@ -775,8 +760,9 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// trigger before any gate can drop it.
 	e.observeOutcomeSignals(ctx, t)
 
-	// Terminal state: drop dedup record, no dispatch.
-	if t.Kind == core.KindClosed {
+	// Terminal state (the event declares closes_target): drop dedup record,
+	// stop the runs bound to the target, no dispatch.
+	if t.ClosesTarget() {
 		_ = e.store.Delete(key)
 		e.markClosed(key)
 		e.log("%s closed; dropped state", tag(t))
@@ -825,8 +811,8 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// review ONCE — a later sweep still seeing its threads unresolved (or a
 	// reviewer editing the review) re-derives the same comments, at or below
 	// the mark, while a new review's comments are above it.
-	if !t.Force && commentMarked(t.Kind) {
-		if id := commentID(t); id > 0 && id <= e.store.LastCommentID(key, commentMarkKind(t)) {
+	if !t.Force {
+		if id, _, ok := t.Cursor(); ok && id <= e.store.LastCommentID(key, cursorMarkKey(t)) {
 			return
 		}
 	}
@@ -881,7 +867,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// reviewer — not "we launched something once." For those, gate on whether a
 	// conductor agent for this PR is already working/parked instead of a permanent
 	// dedup flag, so a still-pending review keeps coming back until you do it.
-	liveGate := livenessGated(t.Kind)
+	liveGate := t.LevelTriggered()
 	if t.Force {
 		// Forced: skip the dedup / liveness gates entirely and dispatch below.
 	} else if liveGate {
@@ -898,8 +884,8 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			// it. A same-head re-request (or a duplicate webhook delivery) has a recorded
 			// attempt at this head, so it's suppressed here: no double-fire, no re-review
 			// of identical code.
-			if t.Kind == "review_requested" && head != "" && e.store.Attempts(key, dkind, head) == 0 {
-				e.log("%s re-engaging — review re-requested on a new head %s (agent parked on older code)", tag(t), short(head))
+			if t.RearmOnRevision() && head != "" && e.store.Attempts(key, dkind, head) == 0 {
+				e.log("%s re-engaging — the target moved to a new revision %s (agent parked on an older one)", tag(t), short(head))
 			} else {
 				e.log("%s skipped — an agent is already working/parked for it", tag(t))
 				return
@@ -923,7 +909,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	if soft == 0 && pol.MaxAttemptsPerHead != nil {
 		soft = *pol.MaxAttemptsPerHead
 	}
-	if soft == 0 && t.Kind != "new_comment" {
+	if soft == 0 && !t.NoAttemptCap() {
 		soft = defaultMaxAttempts
 	}
 	base, max := retryBackoffBase, retryBackoffMax
@@ -1191,10 +1177,8 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	}
 	// A comment was handled (fresh agent, queued, or adopted) — raise the high-water
 	// mark so the sweep's re-listing of recent comments won't re-dispatch this one.
-	if commentMarked(t.Kind) {
-		if id := commentID(t); id > 0 {
-			_ = e.store.AdvanceCommentID(key, commentKind(t), id)
-		}
+	if id, _, ok := t.Cursor(); ok {
+		_ = e.store.AdvanceCommentID(key, cursorMarkKey(t), id)
 	}
 
 	// A finished agent's captured output may carry the memory output contract.
@@ -1368,7 +1352,7 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 		go func() {
 			// Wait for the slot here so resuming more runs than slots doesn't
 			// stall startup.
-			if !e.acquireFor(ctx, t.Kind) {
+			if !e.acquireFor(ctx, t.Interactive()) {
 				return
 			}
 			defer e.release()
@@ -1439,22 +1423,6 @@ func interruptedByShutdown(ctx context.Context, err error) bool {
 		strings.Contains(s, "context canceled")
 }
 
-// livenessGated reports whether a kind's completion is EXTERNAL state the sweep
-// re-derives each run (review still pending? PR still dirty? threads still
-// unresolved?) rather than a one-shot "we dispatched once" flag. For these we
-// never record "done" on dispatch — a culled/failed/incomplete agent would
-// otherwise mark the work done and it'd be abandoned. Instead we gate on whether
-// an agent is already working/parked for it, and let the sweep retry until the
-// underlying condition clears. new_comment stays dedup-gated (keyed per comment
-// id — each distinct comment must be handled, not collapsed to "an agent ran").
-func livenessGated(kind string) bool {
-	switch kind {
-	case "review_requested", "merge_conflict", "changes_requested":
-		return true
-	}
-	return false
-}
-
 // runnerFor resolves the controller that runs an agent (from the profile's
 // `controller:`, then the default:true controller, then the built-in paseo) and
 // returns its dispatch surface. An error means the controller is unknown or its
@@ -1507,15 +1475,15 @@ func (e *Engine) controllerFor(profile config.Step) (controller.Controller, erro
 // free (backpressure). Returns false if the context is cancelled first. No-op
 // (true) when uncapped.
 func (e *Engine) acquire(ctx context.Context) bool {
-	return e.acquireFor(ctx, "")
+	return e.acquireFor(ctx, false)
 }
 
-// acquireFor is acquire at the trigger kind's slot priority (slotPriority).
-func (e *Engine) acquireFor(ctx context.Context, kind string) bool {
+// acquireFor is acquire at a trigger's slot priority (slotPriority).
+func (e *Engine) acquireFor(ctx context.Context, interactive bool) bool {
 	if e.sem == nil {
 		return true
 	}
-	return e.sem.acquire(ctx, slotPriority(kind))
+	return e.sem.acquire(ctx, slotPriority(interactive))
 }
 
 // release returns a concurrency slot.
@@ -1642,51 +1610,15 @@ func toInt64(v any) int64 {
 	return 0
 }
 
-// commentID reads a new_comment trigger's source comment id from Context (0 if
-// absent — e.g. an older trigger without the field, which then can't be gated).
-func commentID(t core.Trigger) int64 {
-	if t.Context == nil {
-		return 0
-	}
-	return toInt64(t.Context["comment_id"])
-}
-
-// commentMarkKind returns the high-water-mark key for a comment trigger:
-// the comment kind, suffixed per variant for connectors-model triggers so
-// sibling triggers on the same event keep independent marks.
-func commentMarkKind(t core.Trigger) string {
-	ck := commentKind(t)
+// cursorMarkKey is the high-water-mark key for a trigger's declared cursor:
+// its stream, suffixed per variant for connectors-model triggers so sibling
+// triggers on the same event keep independent marks.
+func cursorMarkKey(t core.Trigger) string {
+	_, stream, _ := t.Cursor()
 	if act, ok := t.Action.(config.Action); ok && act.FlowRef != "" && t.Variant != "" {
-		ck += "#" + t.Variant
+		stream += "#" + t.Variant
 	}
-	return ck
-}
-
-// commentKind reads a new_comment trigger's comment kind (store.CommentKindIssue /
-// store.CommentKindReview) from Context, selecting which high-water mark applies.
-// Absent (an older trigger) → issue, matching the pre-per-kind single mark.
-//
-// changes_requested keeps marks of its own ("changes_requested:review"), apart
-// from new_comment's: the two kinds are dispatched for different comments, and a
-// shared mark would let one starve the other.
-func commentKind(t core.Trigger) string {
-	k := store.CommentKindIssue
-	if t.Context != nil {
-		if ck, _ := t.Context["comment_kind"].(string); ck != "" {
-			k = ck
-		}
-	}
-	if t.Kind == "changes_requested" {
-		return "changes_requested:" + k
-	}
-	return k
-}
-
-// commentMarked reports whether a kind is gated by (and advances) the comment
-// high-water mark: new_comment, and changes_requested when it carries a
-// comment_id.
-func commentMarked(kind string) bool {
-	return kind == "new_comment" || kind == "changes_requested"
+	return stream
 }
 
 func shadowNote(shadow bool) string {

@@ -17,7 +17,8 @@ import (
 
 // KindClosed is the reserved kind emitted when a PR reaches a terminal state,
 // so the host engine drops its dedup state and settles its outcome. It never
-// dispatches an action. Same value as conductor's core.KindClosed.
+// dispatches an action. It is the event the github declaration marks
+// closes_target (ghplugin.ClosedEvent).
 const KindClosed = "_closed"
 
 // The two GitHub comment id sequences, published as `comment_kind` so the host
@@ -35,7 +36,7 @@ const FilterNotPrefix = sourcekit.FilterNotPrefix
 // BranchFixKind reports whether a trigger kind's fixer works on, and pushes
 // to, its PR's own head branch — work that stops mattering once the PR closes,
 // and whose triggers must carry head_ref. Same set as conductor's
-// core.BranchFixKind.
+// the declaration's bound_to_target (ghplugin.EventSemantics).
 func BranchFixKind(kind string) bool {
 	switch kind {
 	case "new_comment", "changes_requested", "failing_checks", "merge_conflict", "pr_behind":

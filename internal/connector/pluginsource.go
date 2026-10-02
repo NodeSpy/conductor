@@ -62,13 +62,13 @@ type pluginSourceIntegration struct {
 	triggers []CompiledTrigger
 	log      func(string, ...any)
 
-	// trusted is the operator's trusted_source grant for this instance.
-	trusted bool
-	// declared are the event names the plugin declares: the only
-	// engine-interpreted kinds a trusted source may emit.
+	// declared are the event names the plugin declares: the only events it
+	// may emit.
 	declared map[string]bool
+	// sem are the declared events' semantics, attached to every trigger the
+	// event fires (the engine reads them, never the event's name).
+	sem map[string]*sdk.EventSemantics
 
-	hintOnce sync.Once
 
 	mu   sync.Mutex
 	emit core.EmitFunc // the running stream's emit, for events a poll returns
@@ -164,15 +164,19 @@ func (p *pluginSourceIntegration) triggersFor(ev pluginEvent, force bool) []core
 	if !ok {
 		return nil
 	}
-	trusted := p.trusted && ev.TargetTrusted
-	if kind == core.KindClosed {
-		// The lifecycle fact about a target, not an event any trigger is on:
-		// emitted once, with no action, exactly as the bundled github source
-		// does. Only a trusted source reaches here (kindFor).
+	// The plugin's claim that the platform assigned this target. Trust in a
+	// plugin was decided once, at install (plugin_trust); after that its
+	// word is taken like any installed plugin's.
+	assigned := ev.Target.Assigned || ev.TargetTrusted
+	sem := p.sem[kind]
+	if sem != nil && sem.ClosesTarget != nil && ev.Trigger == "" {
+		// A terminal event: the lifecycle fact about a target. It fires no
+		// trigger of its own (the engine settles the target on it) — a
+		// trigger explicitly `on:` it may still take it, by routing.
 		return []core.Trigger{{
 			Source: p.typ, Instance: p.instance, Kind: kind,
 			Target: coreTarget(ev.Target), Title: ev.Title, Context: ev.Context,
-			TargetTrusted: trusted,
+			TargetTrusted: assigned, Sem: sem,
 		}}
 	}
 	if ev.Trigger != "" {
@@ -180,7 +184,7 @@ func (p *pluginSourceIntegration) triggersFor(ev pluginEvent, force bool) []core
 		if !ok {
 			return nil
 		}
-		return []core.Trigger{p.trigger(t, kind, ev, trusted, force)}
+		return []core.Trigger{p.trigger(t, kind, ev, assigned, force)}
 	}
 	var out []core.Trigger
 	on := p.instance + "." + ev.Event
@@ -199,52 +203,29 @@ func (p *pluginSourceIntegration) triggersFor(ev pluginEvent, force bool) []core
 		} else if !keep {
 			continue
 		}
-		out = append(out, p.trigger(t, kind, ev, trusted, force))
+		out = append(out, p.trigger(t, kind, ev, assigned, force))
 	}
 	return out
 }
 
-// kindFor decides the kind an event is emitted as, or refuses it.
-//
-// A plugin may name its own event's KIND, and nothing else. A source plugin
-// emitting `_closed` or `failing_checks` claims a fact the ENGINE acts on —
-// consuming a target's engagements, settling its outcome, re-running its CI
-// with the operator's token (round-13). Those come from sources that read a
-// verified platform payload. A plugin is believed to be one only when the
-// operator said so (trusted_source), and even then only for an event it
-// DECLARES — or `_closed`, the lifecycle fact every such engine-interpreted
-// kind is about.
+// kindFor decides the kind an event is emitted as, or refuses it: a plugin
+// may emit only events it DECLARES (when it declares any — a plugin that
+// declares none is a plain source whose events are taken by name). There are
+// no reserved names: what the engine does with an event comes from its
+// declared semantics, never its name.
 func (p *pluginSourceIntegration) kindFor(ev pluginEvent) (string, bool) {
 	kind := ev.Kind
 	if kind == "" {
 		kind = ev.Event
 	}
-	if !core.ReservedKind(kind) {
+	if len(p.declared) == 0 || p.declared[kind] {
 		return kind, true
 	}
-	if p.trusted && (p.declared[kind] || kind == core.KindClosed) {
-		return kind, true
+	if ev.Kind != "" && ev.Kind != ev.Event && p.declared[ev.Event] {
+		p.log("plugin source %s: event kind %q is not one the plugin declares; using its declared event %q", p.instance, ev.Kind, ev.Event)
+		return ev.Event, true
 	}
-	if !p.trusted {
-		// The untrusted rule, as it always was: a reserved kind falls back to
-		// the declared event's own name, and a declared name that is itself
-		// reserved is dropped.
-		if ev.Kind != "" && ev.Kind != ev.Event {
-			p.log("plugin source %s: refusing event kind %q — a plugin may not emit a kind the engine interprets; using its declared event %q",
-				p.instance, kind, ev.Event)
-		}
-		kind = ev.Event
-		if !core.ReservedKind(kind) {
-			return kind, true
-		}
-		p.hintOnce.Do(func() {
-			p.log("plugin source %s: dropping %q — its kind is one the engine interprets, and this connector is not marked trusted_source "+
-				"(set trusted_source: true on it if you vouch that its events come from verified platform deliveries; see docs/design/plugin-source-abi.md)",
-				p.instance, kind)
-		})
-		return "", false
-	}
-	p.log("plugin source %s: dropping event kind %q — reserved for the engine and not an event this plugin declares", p.instance, kind)
+	p.log("plugin source %s: dropping event %q — not an event the plugin declares", p.instance, kind)
 	return "", false
 }
 
@@ -267,15 +248,12 @@ func (p *pluginSourceIntegration) routedTrigger(ev pluginEvent) (CompiledTrigger
 }
 
 // trigger builds the core.Trigger one matched trigger fires.
-func (p *pluginSourceIntegration) trigger(t CompiledTrigger, kind string, ev pluginEvent, trusted, force bool) core.Trigger {
+func (p *pluginSourceIntegration) trigger(t CompiledTrigger, kind string, ev pluginEvent, assigned, force bool) core.Trigger {
 	return core.Trigger{
-		// TargetTrusted is the plugin's CLAIM, believed only under the
-		// operator's trusted_source grant (round-8 #3). The target arrives on
-		// the wire from a third-party plugin, which built it from whatever
-		// payload it was handed — the same provenance as a webhook body. A
-		// plugin-sourced dispatch the operator has not vouched for gets no
-		// implicit own-repo trust; an operator scoping one lists the repos.
-		TargetTrusted: trusted,
+		// TargetTrusted is the plugin's claim that the platform assigned the
+		// target (a signature-verified delivery, a read with its own
+		// credentials) rather than the sender choosing it.
+		TargetTrusted: assigned,
 		Source:        p.typ,
 		Instance:      p.instance,
 		Kind:          kind,
@@ -288,6 +266,7 @@ func (p *pluginSourceIntegration) trigger(t CompiledTrigger, kind string, ev plu
 		CatchUp:       ev.CatchUp,
 		Force:         force,
 		Action:        pluginAction(t),
+		Sem:           p.sem[kind],
 	}
 }
 

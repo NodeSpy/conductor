@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 	"os"
 	"path/filepath"
 	"strings"
@@ -313,18 +314,31 @@ func TestCommentHWMIsPerKind(t *testing.T) {
 
 // A trigger without comment_kind (persisted/emitted before kinds existed) gates
 // against the issue mark, matching the old single-mark behavior.
-func TestCommentHWMKindDefaultsToIssue(t *testing.T) {
+// The cursor's stream is what the event declares, rendered over its facts:
+// a source that declares its own namespace gets marks of its own, and the
+// engine supplies no vendor default for a missing fact.
+func TestCursorStreamIsDeclared(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, baseCfg(), d, n, nil)
 	act := config.Action{Type: "agent", Agent: "w/fixer"}
-	if err := st.AdvanceCommentID("a/w#1", store.CommentKindIssue, 200); err != nil {
+	if err := st.AdvanceCommentID("a/w#1", "inbox:mail", 200); err != nil {
 		t.Fatal(err)
 	}
-	tr := commentTrigger("a/w", 1, 150, "c150", act)
-	delete(tr.Context, "comment_kind")
-	e.process(context.Background(), tr)
+	sem := &sdk.EventSemantics{Cursor: &sdk.CursorSemantics{ID: "msg_id", Stream: "inbox:{{.box}}"}}
+	mk := func(id int, box string) core.Trigger {
+		return core.Trigger{Source: "mail", Kind: "message", Target: core.Target{Repo: "a/w", Number: 1}, TargetTrusted: true,
+			Dedup: fmt.Sprint("m", id), Context: map[string]any{"msg_id": id, "box": box}, Action: act, Sem: sem}
+	}
+	e.process(context.Background(), mk(150, "mail"))
 	if len(d.reqs) != 0 {
-		t.Fatalf("kind-less comment under the issue mark should be skipped, got %d dispatches", len(d.reqs))
+		t.Fatalf("a cursor at or below its stream's mark must be skipped, got %d dispatches", len(d.reqs))
+	}
+	e.process(context.Background(), mk(150, "spam"))
+	if len(d.reqs) != 1 {
+		t.Fatalf("another stream has its own mark: want 1 dispatch, got %d", len(d.reqs))
+	}
+	if got := st.LastCommentID("a/w#1", "inbox:spam"); got != 150 {
+		t.Fatalf("the spam stream's mark = %d, want 150", got)
 	}
 }
 
@@ -853,7 +867,7 @@ func TestClosedDeletesState(t *testing.T) {
 	if st.LastSignature("a/w#6", "new_comment") == "" {
 		t.Fatal("precondition: expected recorded state")
 	}
-	e.process(context.Background(), core.Trigger{Source: "github", Kind: core.KindClosed,
+	e.process(context.Background(), core.Trigger{Source: "github", Kind: "_closed",
 		TargetTrusted: true, Target: core.Target{Repo: "a/w", PR: 6, Number: 6}})
 	if st.LastSignature("a/w#6", "new_comment") != "" {
 		t.Fatal("closed trigger should delete state")

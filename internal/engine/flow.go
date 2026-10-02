@@ -52,7 +52,7 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 		return
 	}
 	if ig := pol.Ignore; ig != nil && len(ig.Users) > 0 {
-		if author, _ := t.Context["author"].(string); author != "" {
+		if author := t.AuthorLogin(); author != "" {
 			for _, u := range ig.Users {
 				if strings.EqualFold(u, author) {
 					e.log("%s skipped — author %q is ignored by policy", tag(t), author)
@@ -87,14 +87,14 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 		// Committed to the waiting run: consume a dedup signature so a
 		// redelivery stays suppressed, but don't count a live-gated attempt —
 		// it hasn't run.
-		if !livenessGated(t.Kind) && !t.Force {
+		if !t.LevelTriggered() && !t.Force {
 			_ = e.store.Record(key, dkind, t.Dedup, head)
 		}
 		e.log("%s already waiting for an agent slot — coalesced (newest event kept)", tag(t))
 		return
 	}
 	if !shadow && !grouped {
-		if livenessGated(t.Kind) || t.Force {
+		if t.LevelTriggered() || t.Force {
 			_ = e.store.RecordAttempt(key, dkind, head)
 		} else {
 			_ = e.store.Record(key, dkind, t.Dedup, head)
@@ -102,10 +102,8 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 	}
 	// A comment was accepted for handling — raise the high-water mark
 	// (grouped comments raise it at flush, with the same reasoning).
-	if commentMarked(t.Kind) && !grouped {
-		if id := commentID(t); id > 0 {
-			_ = e.store.AdvanceCommentID(key, commentMarkKind(t), id)
-		}
+	if id, _, ok := t.Cursor(); ok && !grouped {
+		_ = e.store.AdvanceCommentID(key, cursorMarkKey(t), id)
 	}
 
 	if grouped {
@@ -157,7 +155,7 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 		e.log("%s waiting for an agent slot (all %d busy)", tag(t), e.cfg.AgentCap())
 	}
 	go func() {
-		ok := e.acquireFor(ctx, t.Kind)
+		ok := e.acquireFor(ctx, t.Interactive())
 		// The newest trigger that coalesced into this wait is the one that runs.
 		e.queuedMu.Lock()
 		if nt, found := e.queued[qk]; found {
@@ -169,10 +167,10 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 			return // shutdown while waiting — the sweep re-derives on restart
 		}
 		defer e.release()
-		if core.BranchFixKind(t.Kind) && e.closedSince(t.Key(), queuedAt) {
-			// The PR merged or closed while this fixer waited for a slot:
-			// there's no branch left to push to.
-			e.log("%s dropped — PR closed while waiting for an agent slot", tag(t))
+		if t.BoundToTarget() && e.closedSince(t.Key(), queuedAt) {
+			// The target closed while this run waited for a slot: the work
+			// it was bound to is gone.
+			e.log("%s dropped — its target closed while waiting for an agent slot", tag(t))
 			return
 		}
 		run := e.newFlowRun(t, spec, false)
@@ -325,15 +323,13 @@ func (e *Engine) recordBatch(events []core.Trigger) []core.Trigger {
 		}
 		seen[sig] = true
 		kept = append(kept, ev)
-		if livenessGated(ev.Kind) || ev.Force {
+		if ev.LevelTriggered() || ev.Force {
 			_ = e.store.RecordAttempt(key, dkind, head)
 		} else {
 			_ = e.store.Record(key, dkind, ev.Dedup, head)
 		}
-		if commentMarked(ev.Kind) {
-			if cid := commentID(ev); cid > 0 {
-				_ = e.store.AdvanceCommentID(key, commentMarkKind(ev), cid)
-			}
+		if cid, _, ok := ev.Cursor(); ok {
+			_ = e.store.AdvanceCommentID(key, cursorMarkKey(ev), cid)
 		}
 	}
 	return kept
@@ -427,7 +423,7 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 	go func() {
 		// Wait for the slot here, not on the caller: resume runs at startup,
 		// and more persisted runs than slots must not stall it.
-		if !e.acquireFor(ctx, t.Kind) {
+		if !e.acquireFor(ctx, t.Interactive()) {
 			return
 		}
 		defer e.release()

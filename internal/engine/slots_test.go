@@ -11,7 +11,6 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
-	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
@@ -178,7 +177,7 @@ func TestFlowWaitingFixerDroppedWhenPRCloses(t *testing.T) {
 	fix.Kind = "new_comment"
 	eng.process(context.Background(), fix)
 	closed := flowTrigger("")
-	closed.Kind = core.KindClosed
+	closed.Kind = "_closed"
 	eng.process(context.Background(), closed)
 	eng.release()
 
@@ -229,7 +228,7 @@ func TestClosedPRStopsRunningFixers(t *testing.T) {
 		Flow: flow.New(flow.Runner{Cfg: &cfg, Conns: reg, Secrets: secrets.New(), Store: st}), Connectors: reg})
 
 	closed := flowTrigger("")
-	closed.Kind = core.KindClosed
+	closed.Kind = "_closed"
 	eng.process(context.Background(), closed)
 
 	d.mu.Lock()

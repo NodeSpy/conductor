@@ -389,14 +389,11 @@ behavior ([design](https://github.com/NodeSpy/conductor/blob/main/docs/design/pl
 - `sweep` is a **conductor-defined verb**: declared by an `abi: 1` plugin, the
   daemon answers it itself (daemon-wide nudge) and never forwards it.
 
-Every addition is optional and ignored for a plugin that does not report the
-ABI. **Source trust follows the install trust model**: a plugin's
-target-trust claim, and any engine-interpreted kind it emits (`new_comment`,
-`review_requested`, `merge_conflict`, `failing_checks`, `_closed`), are honored
-only from a **trusted source** — by default an official plugin whose installed
-binary was verified against its release; `trusted_source: false` opts one out,
-`trusted_source: true` grants a third-party or local one — and a kind only if
-the plugin declares that event. See [[Connectors]] for the table.
+There are no tiers: every plugin speaks the same contract, an optional method
+it does not implement answers method-not-found, and what the engine does with
+an event comes from the semantics the plugin DECLARES for it — never its name
+(docs/design/plugin-contract.md). Trust is decided once, at install
+(`plugin_trust:`); after that every plugin is equal.
 
 **Runtime plugin:** an ACP-speaking subprocess. conductor verifies it, then
 drives it through the existing ACP controller — session create/resume, streamed

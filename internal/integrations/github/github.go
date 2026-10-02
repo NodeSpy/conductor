@@ -22,6 +22,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/pkg/githubkit/ghplugin"
 	"github.com/NodeSpy/conductor/pkg/githubkit/ghsource"
 )
 
@@ -267,6 +268,9 @@ func trigger(t ghsource.Trigger) core.Trigger {
 		Target: core.Target(t.Target), Title: t.Title, Context: t.Context,
 		Dedup: t.Dedup, Labels: t.Labels,
 		TargetTrusted: t.TargetTrusted, CatchUp: t.CatchUp, Force: t.Force,
+		// The event's declared semantics: the same declaration the plugin
+		// sends (ghplugin), so both implementations drive the engine alike.
+		Sem: ghplugin.EventSemantics(t.Kind),
 	}
 	if a, ok := t.Action.(ghsource.Action); ok {
 		if ext, ok := a.Ext.(config.Action); ok {

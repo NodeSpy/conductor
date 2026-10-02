@@ -722,18 +722,9 @@ models:
 # plugin_trust: { allow: [github.com/acme/*] }   # third-party sources need an
 #                                                # entry; the official repo does not
 #
-# SOURCE TRUST follows the same model. A plugin connector's events are a
-# trusted source — the engine acts on the kinds it interprets (new_comment,
-# merge_conflict, …) and trusts their targets, as for a builtin — when the
-# plugin is OFFICIAL and its installed binary was verified against the
-# release. Nothing to write for that. Everything else is untrusted unless you
-# say otherwise, and an official plugin can be opted out:
-#
-#   connectors:
-#     gh: { use: NodeSpy/conductor-plugins/connectors/github }   # trusted: official + verified
-#     dev: { use: ./bin/conductor-github, trusted_source: true } # a LOCAL build is never trusted by default
-#     ext: { use: acme/plugins/forge, trusted_source: true }     # vouch for a third-party source
-#     quiet: { use: sentry, trusted_source: false }              # opt an official one out
+# Trust is decided ONCE, at install (plugin_trust above): after that every
+# plugin is equal, and what the engine does with its events comes from the
+# semantics it declares — there is nothing per plugin to grant.
 #
 # SECURITY. A plugin declares the hosts it calls and the commands it spawns.
 # Conductor records that manifest when it installs the plugin, SHOWS it to you

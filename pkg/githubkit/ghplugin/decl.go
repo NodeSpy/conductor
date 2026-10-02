@@ -78,6 +78,7 @@ func githubEvent(name, desc string, contextExtra, options plugin.Schema) plugin.
 		Name: name, Desc: desc, Context: c, Options: o,
 		Facts:     filterSchema(ghsource.FilterFacts(name)),
 		MatchKeys: filterSchema(ghsource.FilterMatchKeys(name)),
+		Semantics: eventSemantics(name),
 	}
 }
 
@@ -171,6 +172,9 @@ func decl() plugin.Decl {
 				plugin.Schema{"severity": {Type: "string"}, "package": {Type: "string"}, "summary": {Type: "string"}}, nil),
 			githubEvent("secret_scanning_alert", "a new secret-scanning alert",
 				plugin.Schema{"secret_type": {Type: "string"}}, nil),
+			githubEvent(ClosedEvent, "a PR closed (merged or not) — terminal for the PR: runs on it stop, and the outcome is recorded",
+				plugin.Schema{"merged": {Type: "boolean"}, "reverts": {Type: "list", Desc: "PR numbers this one reverts"},
+					"reverts_corroborated": {Type: "boolean", Desc: "the revert claim is backed by the commit messages"}}, nil),
 		},
 		Verbs: []plugin.Verb{
 			{
