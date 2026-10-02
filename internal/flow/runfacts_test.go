@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
@@ -502,5 +503,25 @@ func TestOwnTimeoutIsAFailureNotAShutdown(t *testing.T) {
 	runTrigger(rig, headTrigger("hto"), mustSpec(t, fmt.Sprintf(stopSpec, "hto")))
 	if got := strings.Join(l.posts(), " | "); got != "step-fail | fail" {
 		t.Fatalf("a timed-out run fired %q, want the fail hooks", got)
+	}
+}
+
+// A run whose OWN context runs out of time (a caller's deadline — a timed
+// one-shot run) timed out: that is a failure with fail hooks, not a shutdown.
+// Only a cancellation of the run's context is the daemon going away.
+func TestRunDeadlineIsAFailureNotAShutdown(t *testing.T) {
+	rig, l := headRig(t, "hdl", "aaaaaaa1111")
+	rig.Agents.dispatchFunc = func(c context.Context, _ dispatch.Request) (dispatch.RunRef, error) {
+		<-c.Done()
+		return dispatch.RunRef{}, c.Err()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	runTriggerCtx(ctx, rig, headTrigger("hdl"), mustSpec(t, fmt.Sprintf(stopSpec, "hdl")))
+	if got := strings.Join(l.posts(), " | "); got != "step-fail | fail" {
+		t.Fatalf("a run past its deadline fired %q, want the fail hooks", got)
+	}
+	if len(rig.Store.auditsWithEvent("workflow_interrupted")) != 0 {
+		t.Fatal("a run's own deadline was taken for a shutdown")
 	}
 }
