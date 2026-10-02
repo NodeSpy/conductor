@@ -5,7 +5,7 @@ import "encoding/json"
 // Source surface of the one contract (docs/design/plugin-contract.md §1.5).
 // Every source is handed its triggers on start_source and may route each
 // event to one of them; plugin.poll and plugin.translate are in contract.go.
-// The two methods below are still served for the bundled github source and
+// The two methods below are transitional and
 // are replaced by declared verbs (reads_revision, mints_credential).
 
 // Methods (daemon → plugin requests).
@@ -37,8 +37,8 @@ type SourceTrigger struct {
 	// Name is the trigger's configured name ("" when unnamed) — the variant a
 	// run is labelled with.
 	Name string `json:"name,omitempty"`
-	// Event is the declared event the trigger is `on:` (gh.new_comment →
-	// "new_comment").
+	// Event is the declared event the trigger is `on:` (acme.alert →
+	// "alert").
 	Event string `json:"event"`
 	// Enabled is the trigger's enabled switch (nil = enabled).
 	Enabled *bool `json:"enabled,omitempty"`
@@ -107,7 +107,7 @@ type SourceEvent struct {
 	TargetTrusted bool `json:"target_trusted,omitempty"`
 }
 
-// AppTokenRequest asks for a fresh installation token for a GitHub-App-style
+// AppTokenRequest asks for a fresh installation-scoped token for a
 // source — what a persisted run resumed after a restart re-mints, from the
 // installation_id its trigger context carried.
 type AppTokenRequest struct {

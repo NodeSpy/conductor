@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -52,62 +51,6 @@ func TestDedup(t *testing.T) {
 	}
 }
 
-func TestParseRelayPayload(t *testing.T) {
-	t.Run("body as string", func(t *testing.T) {
-		r, ok := parseRelayPayload([]byte(`{"body":"hello","X-Token":"abc"}`))
-		if !ok {
-			t.Fatal("ok=false for string body")
-		}
-		if string(r.Body) != "hello" {
-			t.Fatalf("body = %q", r.Body)
-		}
-		if r.Header.Get("x-token") != "abc" {
-			t.Fatalf("header lookup (case-insensitive) failed: %v", r.Header)
-		}
-	})
-
-	t.Run("body as object is re-marshaled", func(t *testing.T) {
-		r, ok := parseRelayPayload([]byte(`{"body":{"n":1}}`))
-		if !ok {
-			t.Fatal("ok=false for object body")
-		}
-		if string(r.Body) != `{"n":1}` {
-			t.Fatalf("body = %q", r.Body)
-		}
-	})
-
-	t.Run("query passthrough", func(t *testing.T) {
-		r, ok := parseRelayPayload([]byte(`{"body":"x","query":{"token":"t","tag":["a","b"]}}`))
-		if !ok {
-			t.Fatal("ok=false")
-		}
-		if r.Query.Get("token") != "t" {
-			t.Fatalf("query token = %q", r.Query.Get("token"))
-		}
-		if got := r.Query["tag"]; len(got) != 2 || got[0] != "a" || got[1] != "b" {
-			t.Fatalf("query tag = %v", got)
-		}
-		// query keys must not leak into headers
-		if r.Header.Get("query") != "" || r.Header.Get("body") != "" {
-			t.Fatalf("structural keys leaked into headers: %v", r.Header)
-		}
-	})
-
-	t.Run("missing body means keep-alive, not a delivery", func(t *testing.T) {
-		if _, ok := parseRelayPayload([]byte(`{"timestamp":123}`)); ok {
-			t.Fatal("ok=true for body-less envelope")
-		}
-		if _, ok := parseRelayPayload([]byte(`{"body":null}`)); ok {
-			t.Fatal("ok=true for null body")
-		}
-	})
-
-	t.Run("invalid json", func(t *testing.T) {
-		if _, ok := parseRelayPayload([]byte(`not json`)); ok {
-			t.Fatal("ok=true for invalid json")
-		}
-	})
-}
 
 func freeAddr(t *testing.T) string {
 	t.Helper()
@@ -192,51 +135,10 @@ func TestServeBackCompat(t *testing.T) {
 	}
 }
 
-func TestServeReqRelay(t *testing.T) {
-	// A fake smee-style SSE relay that emits one keep-alive then one delivery.
-	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fl, ok := w.(http.Flusher)
-		if !ok {
-			t.Error("relay response not flushable")
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		// keep-alive (no body) — must be ignored
-		fmt.Fprint(w, "data: {\"timestamp\":1}\n\n")
-		// real delivery with body + query
-		fmt.Fprint(w, "data: {\"body\":\"{\\\"ok\\\":true}\",\"query\":{\"token\":\"t\"},\"X-Src\":\"relay\"}\n\n")
-		fl.Flush()
-		<-r.Context().Done()
-	}))
-	defer relay.Close()
 
-	got := make(chan *Request, 1)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	ln := Listener{Relay: relay.URL} // relay-only, no Addr
-	go func() { _ = ln.ServeReq(ctx, func(r *Request) { got <- r }) }()
-
-	select {
-	case r := <-got:
-		if string(r.Body) != `{"ok":true}` {
-			t.Fatalf("relayed body = %q", r.Body)
-		}
-		if r.Query.Get("token") != "t" {
-			t.Fatalf("relayed query = %v", r.Query)
-		}
-		if r.Header.Get("X-Src") != "relay" {
-			t.Fatalf("relayed header = %v", r.Header)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("relay delivery never dispatched")
-	}
-}
-
-func TestServeReqNeedsAddrOrRelay(t *testing.T) {
+func TestServeReqNeedsAddr(t *testing.T) {
 	if err := (Listener{}).ServeReq(context.Background(), func(*Request) {}); err == nil {
-		t.Fatal("expected error when neither Addr nor Relay is set")
+		t.Fatal("expected error when Addr is not set")
 	}
 }
 
