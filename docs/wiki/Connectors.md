@@ -122,12 +122,12 @@ for that verb.
 
 These ship **compiled into the daemon** — no download, always available by name.
 (The [plugin catalog](#the-plugin-catalog) adds ~69 more as sandboxed
-subprocesses — every vendor connector, `github` among them, is one.)
+subprocesses — every vendor connector is one: `github`, `slack`, `discord`,
+`ntfy`, `pushover`, `notifiarr`, and the tunnel services `cloudflared`,
+`ngrok`, `localxpose`, `sshtunnel`, `tailscale` and `smee`.)
 
 | type | events | verbs | notes |
 |---|---|---|---|
-| `slack` | `app_mention`, `reaction_added`, `slash_command` | `post`, `react`, `ask` | Socket Mode in, Web API out |
-| `discord` | — | `post`, `ask` | bot token; gateway captures ask replies |
 | `web` | — | `ask` | approve/revise/discard page on the inbound listener; [[Hand-offs]] tunnels |
 | `cron` | one per declared schedule | — | `schedules:` on the connection |
 | `webhook` | one per declared source | `post` (generic outbound HTTP) | `sources:` with signing/match/title/dedup |
@@ -139,9 +139,6 @@ subprocesses — every vendor connector, `github` among them, is one.)
 | `sql` | — | `query`, `exec` | parameterized SQL over the `stores:` section's SQL types (postgres/mysql/sqlite, pure-Go drivers); `store:` required, values bind through `args:` to driver placeholders — see [[Configuration]] |
 | `memory` | — | `remember`, `recall`, `forget`, `list` | shared agent memory over the `memory:` section; always available, load-checked against it — see [[Memory]] |
 | `workflow` | — | `list`, `run`, `save` | the workflow catalog, run-by-name / inline plans (guarded by `policy.agent_authored`), and agent promotion — see [[Workflows]] |
-| `ntfy` | — | `publish` | ntfy.sh or self-hosted; `server:` (default https://ntfy.sh) + default `topic:` |
-| `pushover` | — | `notify` | Pushover message API: `token:` + `user:` |
-| `notifiarr` | — | `notify` | Notifiarr passthrough to a Discord channel: `api_key:` (+ default `channel_id:`) |
 | `conductor` | `dispatch`, `escalate`, `needs_input`, `complete`, `failed`, `updated`, `update_available` | `update`, `pause`, `resume`, `restart`, `reload`, `run` | conductor itself — lifecycle events as a source (alerting is an ordinary trigger; loop-guarded), daemon operations as verbs; always available, name reserved — see [[Notifications]] |
 
 Every `vaults:` entry also surfaces under its own name with `read` (all

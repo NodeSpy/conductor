@@ -121,9 +121,6 @@ and a no-op in production:
 
 - `PC_GITHUB_API_BASE` — point the fake paseo's GitHub reads at the mock (the
   github plugin takes `api_base:` from its connector config instead).
-- `PC_PUSHOVER_URL` / `PC_NOTIFIARR_URL` / `PC_NTFY_DEFAULT_URL` — redirect the
-  vendor-hardcoded notify sinks at the sink-catcher (Slack/Discord/ntfy already
-  take their URL from config).
 - `PC_REAPER_INTERVAL` / `PC_REAPER_MIN_AGE` — shrink the reaper cadence so
   archive-when-done is observable without the 3-minute production grace.
 

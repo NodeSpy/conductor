@@ -2,9 +2,13 @@
 
 A hand-off presents work to a human and returns their answer into the
 workflow. In the connectors model it is a request-response verb — `uses:
-<conn>.ask` — on the ask-capable connector types: `web`, `slack`, `discord`.
-The channel machinery (draft pages, exposures, TTLs, reply capture) is the
-implementation of those verbs.
+<conn>.ask` — on any ask-capable connector: the builtin `web`, or a plugin
+whose ask verb declares `opens_conversation` (the official `slack` and
+`discord` plugins). Conductor waits for the answer the same way for all of
+them: the plugin posts the question in its own medium and returns the
+conversation's id, and the reply arrives as the plugin's `conversation_reply`
+event, which conductor matches to the waiting ask (enforcing `approvers:`)
+before any trigger sees it.
 
 ```yaml
 steps:
@@ -44,16 +48,16 @@ presented. `timeout:` (default 1h) bounds an unanswered ask.
       command: [cloudflared, tunnel, --url, "http://{{.addr}}"]
       url_pattern: 'https://\S+\.trycloudflare\.com'
   ```
-- **`slack`** — `to: dm` (a user id) or `to: thread` (a channel); the reply is
-  captured over the connector's Socket Mode connection. Replies parse as
+- **`slack`** (plugin) — `to: dm` (a user id) or `to: thread` (a channel);
+  the plugin captures the reply over its Socket Mode connection. Replies parse as
   approve (`approve`, `lgtm`, `+1`, …), discard (`discard`, `cancel`, …), or
   anything else = a revision. For `to: thread`, an optional `approvers:`
   list of user ids restricts WHO may resolve the ask — without it, anyone
   in the channel can approve an agent's draft; with it, replies from anyone
   else are ignored and the ask keeps waiting. (Also an `options.approvers`
   on the ask verb itself.)
-- **`discord`** — same shape (including `approvers:` for `to: thread`);
-  conductor runs the bot gateway itself.
+- **`discord`** (plugin) — same shape (including `approvers:` for `to:
+  thread`); the plugin runs the bot gateway that captures replies.
 
 ## Background review steps
 
@@ -111,7 +115,7 @@ The action steps:
   it for `pr.merged`, `pr.state == "closed"`, or approved-elsewhere.
 - **`uses: step.rerun`** — re-running *this step* is enough. **Supersedes**:
   tears down, then re-dispatches the same step on the current state (surface-
-  agnostic — agent, Slack, Discord). Optional `options.prompt` is appended to the
+  agnostic — agent, web, any chat plugin). Optional `options.prompt` is appended to the
   step's prompt ("here's what changed"). Use when the hand-off step is itself the
   producer.
 - **`workflow: <name>` + `with:`** — the review must be **done again**. Supersedes:
