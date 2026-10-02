@@ -395,21 +395,27 @@ func cmdSchema(args []string) error {
 		}
 		return fmt.Errorf("no connector %q configured (and no such type); types: %s", name, strings.Join(connector.Types(), ", "))
 	}
-	decl, ok := connector.TypeDeclFor(ref.TypeName())
-	if !ok {
-		return fmt.Errorf("connector %q has unknown type %q", name, ref.TypeName())
-	}
+	// Build first: a plugin-backed type is registered only once its plugin
+	// is loaded, and rest/graphql materialize their user-declared
+	// verbs/events into a per-instance declaration — print that contract,
+	// not the shell.
+	var decl *connector.TypeDecl
 	var dyn []string
 	if stack, err := buildFlowStack(cfg, nil, nil, true); err == nil {
 		defer stack.Close()
-		if in, ok := stack.Registry.Get(name); ok && in.Impl != nil {
-			dyn = in.Impl.DeclaredEvents()
-			// rest/graphql materialize their user-declared verbs/events into
-			// a per-instance declaration — print that contract, not the shell.
-			if in.Decl != nil {
-				decl = in.Decl
+		if in, ok := stack.Registry.Get(name); ok {
+			decl = in.Decl
+			if in.Impl != nil {
+				dyn = in.Impl.DeclaredEvents()
 			}
 		}
+	}
+	if decl == nil {
+		d, ok := connector.TypeDeclFor(ref.TypeName())
+		if !ok {
+			return fmt.Errorf("connector %q has unknown type %q", name, ref.TypeName())
+		}
+		decl = d
 	}
 	fmt.Printf("connector %s (use %s, type %s)\n", name, ref.Use, ref.TypeName())
 	printTypeDecl(decl, dyn)

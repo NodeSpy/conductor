@@ -34,7 +34,7 @@ RUN go build -o /out/conductor ./cmd/conductor \
 # or commit of the plugins module); a locally built github plugin staged into
 # test/e2e/plugin-bin/ (GITHUB_PLUGIN_BIN, run.sh) replaces that one below.
 FROM golang:1.26-alpine AS github-plugin
-ARG GITHUB_PLUGIN_VERSION=61a8cc5
+ARG GITHUB_PLUGIN_VERSION=94a930f
 RUN apk add --no-cache git
 ENV CGO_ENABLED=0 GOBIN=/out
 RUN set -e; for p in github slack discord ntfy pushover notifiarr; do \
