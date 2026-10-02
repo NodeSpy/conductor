@@ -1,6 +1,10 @@
 # The plugin source extension (connector ABI 1)
 
-**Status:** implemented. SDK surface in `pkg/plugin/source.go`; daemon side in
+**Status:** SUPERSEDED by [`plugin-contract.md`](plugin-contract.md) — one
+contract for every plugin, no ABI tiers, no reserved kinds, trust decided once
+at install (`trusted_source` removed). Kept as the record of what that design
+replaces; the §3 mapping there lists each piece below and its replacement.
+Originally: implemented. SDK surface in `pkg/plugin/source.go`; daemon side in
 `internal/connector/pluginsource.go`, `internal/connector/external.go`,
 `internal/plugin/client.go`. First user: the github connector
 (`pkg/githubkit/ghplugin`, served by `conductor-plugins/connectors/github`).
