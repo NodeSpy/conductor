@@ -173,7 +173,7 @@ func TestDetachDispatchArgvAndNoOwnership(t *testing.T) {
 func TestDetachDispatchNoConductorEnv(t *testing.T) {
 	owned := NewOwnedSet("")
 	req, backend := detachRequest(owned)
-	req.Tokens = Tokens{App: "APPTOK", User: "USERTOK"}
+	req.Credentials = Credentials{Env: map[string]string{"GH_TOKEN": "APPTOK", "PC_GH_WRITE_TOKEN": "USERTOK"}, Templates: map[string]string{"app_token": "APPTOK", "gh_token": "USERTOK"}}
 	req.Author = Author{Name: "Operator", Email: "op@example.com"}
 	d := newDetachDispatcher(backend, owned)
 

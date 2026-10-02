@@ -60,11 +60,11 @@ esac
 			Target: core.Target{Repo: "slack:C1", Number: 3}, Title: "the login page 500s"},
 		// DecisionLaunch-free agent step: the prompt arrives pre-rendered from
 		// flow; dispatch renders it once with the request data.
-		Action:   config.Action{Type: "agent", Prompt: prompt, Checkout: "none"},
-		Step:     config.Step{Detach: true, Repo: "acme/widgets", Mode: "plan", Images: []string{dir + "/shot.png"}},
-		Tokens:   Tokens{App: "APPTOK", User: "USERTOK"},
-		Author:   Author{Name: "Op", Email: "op@example.com"},
-		Provider: "anthropic", Model: "claude-x", DispatchID: "disp-1",
+		Action:      config.Action{Type: "agent", Prompt: prompt, Checkout: "none"},
+		Step:        config.Step{Detach: true, Repo: "acme/widgets", Mode: "plan", Images: []string{dir + "/shot.png"}},
+		Credentials: Credentials{Env: map[string]string{"GH_TOKEN": "APPTOK", "PC_GH_WRITE_TOKEN": "USERTOK"}, Templates: map[string]string{"app_token": "APPTOK", "gh_token": "USERTOK"}},
+		Author:      Author{Name: "Op", Email: "op@example.com"},
+		Provider:    "anthropic", Model: "claude-x", DispatchID: "disp-1",
 	}
 	// The fake logs any CONDUCTOR_* it sees; start from an environment with
 	// none, so only what dispatch itself adds could appear.
