@@ -113,9 +113,9 @@ type Issue struct {
 	// that will close it.
 	LinkedBranches []string
 	ClosedBy       []int
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	ClosedAt    time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	ClosedAt       time.Time
 }
 
 // File is one changed file of a PR, with the new-side lines its diff covers
@@ -130,15 +130,15 @@ type File struct {
 
 // Pull is the pull-request half of an Issue.
 type Pull struct {
-	ID       int64
-	Issue    *Issue
-	Draft    bool
-	HeadRef  string
-	BaseRef  string
-	HeadSHA  string
+	ID        int64
+	Issue     *Issue
+	Draft     bool
+	HeadRef   string
+	BaseRef   string
+	HeadSHA   string
 	MergeBase string // the base sha the head branched from (or last caught up with)
-	Conflict bool   // the head conflicts with the base (mergeable_state dirty)
-	Files    []File
+	Conflict  bool   // the head conflicts with the base (mergeable_state dirty)
+	Files     []File
 
 	Merged         bool
 	MergedAt       time.Time

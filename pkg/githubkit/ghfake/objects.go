@@ -157,12 +157,12 @@ func (f *Fake) pullJSON(r *Repo, p *Pull, simple bool) map[string]any {
 	over := map[string]any{
 		"url": api, "id": p.ID, "node_id": nodeID("PR", p.ID), "html_url": html,
 		"diff_url": html + ".diff", "patch_url": html + ".patch",
-		"issue_url": f.api("/repos/%s/issues/%d", r.FullName(), is.Number),
+		"issue_url":   f.api("/repos/%s/issues/%d", r.FullName(), is.Number),
 		"commits_url": api + "/commits", "review_comments_url": api + "/comments",
 		"review_comment_url": f.api("/repos/%s/pulls/comments{/number}", r.FullName()),
-		"comments_url": f.api("/repos/%s/issues/%d/comments", r.FullName(), is.Number),
-		"statuses_url": f.api("/repos/%s/statuses/%s", r.FullName(), p.HeadSHA),
-		"number": is.Number, "state": state, "locked": is.Locked, "title": is.Title,
+		"comments_url":       f.api("/repos/%s/issues/%d/comments", r.FullName(), is.Number),
+		"statuses_url":       f.api("/repos/%s/statuses/%s", r.FullName(), p.HeadSHA),
+		"number":             is.Number, "state": state, "locked": is.Locked, "title": is.Title,
 		"user": f.userJSON(is.User), "body": nullable(is.Body), "labels": f.labelsJSON(r, is.Labels),
 		"milestone": nil, "active_lock_reason": nil,
 		"created_at": ts(is.CreatedAt), "updated_at": ts(is.UpdatedAt), "closed_at": ts(is.ClosedAt),
@@ -220,9 +220,9 @@ func (f *Fake) teamJSON(r *Repo, slug string) map[string]any {
 	return ShapeOf("team", map[string]any{
 		"id": int64(len(slug)) + 7000, "node_id": nodeID("T", int64(len(slug))+7000), "name": slug, "slug": slug,
 		"url": f.api("/orgs/%s/teams/%s", r.Owner.Login, slug), "html_url": htmlBase + "/orgs/" + r.Owner.Login + "/teams/" + slug,
-		"members_url": f.api("/orgs/%s/teams/%s/members{/member}", r.Owner.Login, slug),
+		"members_url":      f.api("/orgs/%s/teams/%s/members{/member}", r.Owner.Login, slug),
 		"repositories_url": f.api("/orgs/%s/teams/%s/repos", r.Owner.Login, slug),
-		"permission": "push", "description": nil, "parent": nil,
+		"permission":       "push", "description": nil, "parent": nil,
 	})
 }
 
@@ -243,7 +243,7 @@ func (f *Fake) issueJSON(r *Repo, is *Issue) map[string]any {
 		"active_lock_reason": nil, "comments": len(is.Comments),
 		"closed_at": ts(is.ClosedAt), "created_at": ts(is.CreatedAt), "updated_at": ts(is.UpdatedAt),
 		"author_association": association(r, is.User),
-		"reactions": f.rollup(api+"/reactions", nil),
+		"reactions":          f.rollup(api+"/reactions", nil),
 	}
 	if is.Pull != nil {
 		ph := fmt.Sprintf("%s/%s/pull/%d", htmlBase, r.FullName(), is.Number)
@@ -276,9 +276,9 @@ func (f *Fake) issueCommentJSON(r *Repo, c *IssueComment) map[string]any {
 	}
 	return ShapeOf("issue-comment", map[string]any{
 		"id": c.ID, "node_id": nodeID("IC", c.ID), "url": api,
-		"html_url":   fmt.Sprintf("%s/%s/%s/%d#issuecomment-%d", htmlBase, r.FullName(), kind, c.Issue.Number, c.ID),
-		"issue_url":  f.api("/repos/%s/issues/%d", r.FullName(), c.Issue.Number),
-		"body":       c.Body, "user": f.userJSON(c.User),
+		"html_url":  fmt.Sprintf("%s/%s/%s/%d#issuecomment-%d", htmlBase, r.FullName(), kind, c.Issue.Number, c.ID),
+		"issue_url": f.api("/repos/%s/issues/%d", r.FullName(), c.Issue.Number),
+		"body":      c.Body, "user": f.userJSON(c.User),
 		"created_at": ts(c.CreatedAt), "updated_at": ts(c.UpdatedAt),
 		"author_association": association(r, c.User), "reactions": f.rollup(api+"/reactions", c.Reactions),
 	})
@@ -348,7 +348,7 @@ func (f *Fake) appJSON() map[string]any {
 		"description": nil, "external_url": htmlBase, "html_url": htmlBase + "/apps/" + a.Slug,
 		"created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
 		"permissions": map[string]any{"checks": "write", "contents": "write", "pull_requests": "write", "issues": "write"},
-		"events": []any{"pull_request", "check_run"},
+		"events":      []any{"pull_request", "check_run"},
 	})
 }
 
@@ -416,7 +416,7 @@ func (f *Fake) runJSON(r *Repo, w *WorkflowRun) map[string]any {
 		"check_suite_url": f.api("/repos/%s/check-suites/%d", r.FullName(), w.SuiteID), "artifacts_url": api + "/artifacts",
 		"cancel_url": api + "/cancel", "rerun_url": api + "/rerun", "previous_attempt_url": nil,
 		"workflow_url": f.api("/repos/%s/actions/workflows/%d", r.FullName(), w.WorkflowID),
-		"head_commit": hc, "repository": f.minimalRepoJSON(r), "head_repository": f.minimalRepoJSON(r),
+		"head_commit":  hc, "repository": f.minimalRepoJSON(r), "head_repository": f.minimalRepoJSON(r),
 		"actor": f.userJSON(w.Actor), "triggering_actor": f.userJSON(w.Actor),
 	})
 }
@@ -481,7 +481,7 @@ func (f *Fake) installationJSON(in *Installation) map[string]any {
 		"access_tokens_url": f.api("/app/installations/%d/access_tokens", in.ID),
 		"repositories_url":  f.api("/installation/repositories"), "html_url": htmlBase + "/settings/installations/" + fmt.Sprint(in.ID),
 		"permissions": map[string]any{"checks": "write", "contents": "write", "pull_requests": "write", "issues": "write"},
-		"events": []any{"pull_request", "check_run"}, "single_file_name": nil,
+		"events":      []any{"pull_request", "check_run"}, "single_file_name": nil,
 		"created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z", "suspended_by": nil, "suspended_at": nil,
 	})
 }

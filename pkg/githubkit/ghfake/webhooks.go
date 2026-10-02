@@ -248,7 +248,7 @@ func (f *Fake) suiteWebhook(r *Repo, s *CheckSuite) map[string]any {
 		"before": nil, "after": s.HeadSHA, "pull_requests": f.prRefs(r, s.HeadSHA), "app": f.appJSON(),
 		"created_at": ts(s.CreatedAt), "updated_at": ts(s.CreatedAt), "latest_check_runs_count": 1,
 		"check_runs_url": f.api("/repos/%s/check-suites/%d/check-runs", r.FullName(), s.ID),
-		"head_commit": f.simpleCommitJSON(r.Commits[s.HeadSHA]), "rerequestable": true, "runs_rerequestable": true,
+		"head_commit":    f.simpleCommitJSON(r.Commits[s.HeadSHA]), "rerequestable": true, "runs_rerequestable": true,
 	}
 }
 

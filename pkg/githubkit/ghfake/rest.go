@@ -498,7 +498,7 @@ func hMintToken(c *call) (int, any) {
 	tok := c.f.mintInstallationToken(in.ID)
 	return 201, ShapeOf("installation-token", map[string]any{
 		"token": tok, "expires_at": c.f.now().Add(time.Hour).Format(time.RFC3339),
-		"permissions": map[string]any{"contents": "write", "pull_requests": "write", "issues": "write", "checks": "write"},
+		"permissions":          map[string]any{"contents": "write", "pull_requests": "write", "issues": "write", "checks": "write"},
 		"repository_selection": "all",
 	})
 }
@@ -915,7 +915,9 @@ func hPullComments(c *call) (int, any) {
 	}
 	cs := append([]*ReviewComment(nil), p.ReviewComments...)
 	if c.r.URL.Query().Get("direction") == "desc" {
-		sort.SliceStable(cs, func(i, j int) bool { return cs[i].CreatedAt.After(cs[j].CreatedAt) || (cs[i].CreatedAt.Equal(cs[j].CreatedAt) && cs[i].ID > cs[j].ID) })
+		sort.SliceStable(cs, func(i, j int) bool {
+			return cs[i].CreatedAt.After(cs[j].CreatedAt) || (cs[i].CreatedAt.Equal(cs[j].CreatedAt) && cs[i].ID > cs[j].ID)
+		})
 	}
 	out := []any{}
 	for _, cm := range cs {
@@ -1589,7 +1591,7 @@ func hUploadAsset(c *call) (int, any) {
 		"name": name, "label": nil, "state": "uploaded", "content_type": c.r.Header.Get("Content-Type"), "size": len(c.raw),
 		"download_count": 0, "created_at": ts(c.f.now()), "updated_at": ts(c.f.now()), "uploader": c.f.userJSON(c.actor()),
 		"browser_download_url": fmt.Sprintf("%s/%s/releases/download/%s/%s", htmlBase, c.repo.FullName(), rel.TagName, name),
-		"digest": nil,
+		"digest":               nil,
 	})
 }
 

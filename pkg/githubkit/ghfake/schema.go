@@ -26,10 +26,10 @@ import (
 var openapiJSON []byte
 
 type openapiDoc struct {
-	Source     string                     `json:"source"`
-	Operations map[string]map[string]any  `json:"operations"`
-	Webhooks   map[string]any             `json:"webhooks"`
-	Schemas    map[string]any             `json:"schemas"`
+	Source     string                    `json:"source"`
+	Operations map[string]map[string]any `json:"operations"`
+	Webhooks   map[string]any            `json:"webhooks"`
+	Schemas    map[string]any            `json:"schemas"`
 }
 
 var (
