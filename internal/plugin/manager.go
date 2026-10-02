@@ -70,6 +70,7 @@ func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool
 	if ok {
 		s.BinPath, s.Sha256, s.Resolved = inst.Path, inst.Sha256, inst.Resolved
 		s.Manifest = inst.Manifest
+		s.ReleaseVerified = inst.ReleaseVerified && inst.Sha256 != ""
 	}
 	return s
 }

@@ -55,18 +55,22 @@ type ConnectorRef struct {
 	// globs). Empty = no extra restriction beyond the structural guarantee that
 	// an implementation only ever receives its own instances' credentials.
 	AllowSecrets []string `yaml:"allow_secrets,omitempty"`
-	// TrustedSource is the operator's grant that a PLUGIN-backed connector's
-	// source events are authoritative for the platform they describe — that it
-	// built them from deliveries it verified, or from reads made with this
-	// connector's own credentials. With it, and only with it, the daemon
-	// believes the plugin's target-trust claim (own-repo scope) and lets it
-	// emit the engine-interpreted kinds it DECLARES (new_comment,
-	// review_requested, merge_conflict, failing_checks) and the `_closed`
-	// lifecycle kind. Without it a plugin source is untrusted third-party
-	// input, exactly as before. Meaningless on a builtin connector (it is
-	// conductor's own code), and refused there. See
+	// TrustedSource is whether a PLUGIN-backed connector's source events are
+	// authoritative for the platform they describe — built from deliveries
+	// the plugin verified, or from reads made with this connector's own
+	// credentials. Trusted, the daemon believes the plugin's target-trust
+	// claim (own-repo scope) and lets it emit the engine-interpreted kinds it
+	// DECLARES (new_comment, review_requested, merge_conflict, failing_checks)
+	// and the `_closed` lifecycle kind.
+	//
+	// nil follows the official-trust model plugin installs already use
+	// (PluginSourceAllowed): an OFFICIAL plugin (IsOfficialSource) whose
+	// installed binary was verified against its release is trusted; any other
+	// remote source, and every local path, is not. `false` opts an official
+	// plugin out; `true` grants a third-party or local one. Meaningless on a
+	// builtin connector (conductor's own code) and refused there. See
 	// docs/design/plugin-source-abi.md §Trust.
-	TrustedSource bool `yaml:"trusted_source,omitempty"`
+	TrustedSource *bool `yaml:"trusted_source,omitempty"`
 	raw           yaml.Node
 	// legacyType holds a pre-`use:` `type:` value. It is NOT part of the schema
 	// — it exists only so validateConnectors can emit a migration-specific error
@@ -86,7 +90,7 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 		Type          string           `yaml:"type,omitempty"`
 		Isolation     *IsolationConfig `yaml:"isolation,omitempty"`
 		AllowSecrets  []string         `yaml:"allow_secrets,omitempty"`
-		TrustedSource bool             `yaml:"trusted_source,omitempty"`
+		TrustedSource *bool            `yaml:"trusted_source,omitempty"`
 	}
 	var h hdr
 	if err := n.Decode(&h); err != nil {
@@ -1709,7 +1713,7 @@ func (c *Config) validateConnectors() error {
 				return err
 			}
 		}
-		if ref.TrustedSource {
+		if ref.TrustedSource != nil {
 			if u, err := ParseUse(UseKindConnector, ref.Use); err == nil && u.Origin == OriginBuiltin {
 				return fmt.Errorf("config: connector %q: trusted_source applies to a plugin-backed connector — %q is builtin, conductor's own code, and already trusted for what it emits", name, ref.Use)
 			}

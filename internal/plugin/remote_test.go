@@ -42,6 +42,8 @@ type stubAPI struct {
 	assetName string
 	badSum    bool // publish a wrong checksum to force a mismatch
 	tagsErr   bool // fail the tag listing, to exercise the degraded path
+	noSums    bool // publish no checksums.txt at all
+	otherSum  bool // publish a checksums.txt that does not list this asset
 }
 
 func (s stubAPI) ListTags(string) ([]string, error) {
@@ -53,6 +55,12 @@ func (s stubAPI) ListTags(string) ([]string, error) {
 func (s stubAPI) Download(_, _, asset, destDir string) (string, error) {
 	p := filepath.Join(destDir, asset)
 	if asset == "checksums.txt" {
+		if s.noSums {
+			return "", errors.New("404: no checksums.txt in this release")
+		}
+		if s.otherSum {
+			return p, os.WriteFile(p, []byte("abc123  some-other-asset\n"), 0o644)
+		}
 		sum := sha256.Sum256(s.bin)
 		hexsum := hex.EncodeToString(sum[:])
 		if s.badSum {
@@ -168,6 +176,38 @@ func TestCopyExecutableReplacesRunningBinary(t *testing.T) {
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), ".conductor-engine") {
 			t.Fatalf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
+// A fetch is VERIFIED only when the release's own checksums.txt lists the
+// asset with the downloaded sha (or a config pin matches). A release that
+// publishes no checksums, or one that omits the asset, still installs — the
+// sha is recorded and checked before every exec — but it is not verified,
+// and an official source's default event trust is not granted on it.
+func TestFetchRemoteReportsReleaseVerification(t *testing.T) {
+	rs := RemoteSource{Repo: "NodeSpy/conductor-plugins", Component: "github"}
+	bin := []byte("#!/bin/sh\necho conductor-github\n")
+	tags := []string{"connectors/github/v1.0.0"}
+	rs = RemoteSource{Repo: "NodeSpy/conductor-plugins", Component: "connectors/github"}
+	for _, c := range []struct {
+		name string
+		api  stubAPI
+		pin  string
+		want bool
+	}{
+		{"checksums list the asset", stubAPI{tags: tags, bin: bin, assetName: rs.AssetName()}, "", true},
+		{"no checksums.txt", stubAPI{tags: tags, bin: bin, assetName: rs.AssetName(), noSums: true}, "", false},
+		{"checksums omit the asset", stubAPI{tags: tags, bin: bin, assetName: rs.AssetName(), otherSum: true}, "", false},
+		{"no checksums but a matching pin", stubAPI{tags: tags, bin: bin, assetName: rs.AssetName(), noSums: true},
+			func() string { s := sha256.Sum256(bin); return hex.EncodeToString(s[:]) }(), true},
+	} {
+		_, _, sha, verified, err := FetchRemoteVerified(rs, "", c.pin, t.TempDir(), c.api)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if sha == "" || verified != c.want {
+			t.Errorf("%s: verified=%v want %v (sha %q)", c.name, verified, c.want, sha)
 		}
 	}
 }

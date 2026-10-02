@@ -104,6 +104,13 @@ type Installed struct {
 	Path string `yaml:"path"`
 	// Manifest is the permission manifest recorded at install.
 	Manifest Manifest `yaml:"manifest,omitempty"`
+	// ReleaseVerified records that Sha256 was VERIFIED against the release at
+	// install — the release's checksums.txt listed the asset with this sha —
+	// rather than merely computed from whatever was downloaded. Absent on
+	// records written before the field existed and on releases that publish no
+	// checksums: those still run (Sha256 is checked before every exec), but
+	// get nothing that is granted on the strength of a verified release.
+	ReleaseVerified bool `yaml:"release_verified,omitempty"`
 }
 
 // InstallState is the whole local install record, loaded from and saved to the

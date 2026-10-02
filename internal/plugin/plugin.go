@@ -106,6 +106,11 @@ type Spec struct {
 	Local bool
 	// Sha256 is the verified sha recorded at install, checked before every exec.
 	Sha256 string
+	// ReleaseVerified: Sha256 was verified against the release's published
+	// checksums at install (Installed.ReleaseVerified). With the sha check
+	// before every exec, it means the binary that runs is the one the
+	// release published.
+	ReleaseVerified bool
 	// Manifest is the permission manifest recorded at install.
 	Manifest Manifest
 	// Network is the referencing connector's declared egress.

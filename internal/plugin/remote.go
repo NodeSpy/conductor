@@ -83,47 +83,64 @@ type ReleaseAPI interface {
 // pinned sha256), and caches it. Returns the cached path, the resolved tag, and
 // the verified sha.
 func FetchRemote(rs RemoteSource, constraint, pinnedSha, cacheDir string, api ReleaseAPI) (binPath, tag, sha string, err error) {
+	binPath, tag, sha, _, err = FetchRemoteVerified(rs, constraint, pinnedSha, cacheDir, api)
+	return binPath, tag, sha, err
+}
+
+// FetchRemoteVerified is FetchRemote that also reports whether the download
+// was VERIFIED against the release: its sha matched the release's own
+// checksums.txt entry for the asset (or a config-pinned sha). A release that
+// publishes no checksums.txt, or one that does not list the asset, still
+// installs — the sha is recorded and checked before every exec — but it is
+// not verified, and nothing that is granted on the strength of a verified
+// release (an official source's default event trust) is granted to it.
+func FetchRemoteVerified(rs RemoteSource, constraint, pinnedSha, cacheDir string, api ReleaseAPI) (binPath, tag, sha string, verified bool, err error) {
 	tags, err := api.ListTags(rs.Repo)
 	if err != nil {
-		return "", "", "", fmt.Errorf("list releases for %s: %w", rs.Repo, err)
+		return "", "", "", false, fmt.Errorf("list releases for %s: %w", rs.Repo, err)
 	}
 	tag, ok := config.BestMatch(tags, rs.tagPrefix(), constraint)
 	if !ok {
-		return "", "", "", fmt.Errorf("no release tag satisfies version %q for %s (looked for %q<semver> among %d tags)", constraint, rs.Repo, rs.tagPrefix(), len(tags))
+		return "", "", "", false, fmt.Errorf("no release tag satisfies version %q for %s (looked for %q<semver> among %d tags)", constraint, rs.Repo, rs.tagPrefix(), len(tags))
 	}
 	tmp, err := os.MkdirTemp("", "conductor-plugin-dl-*")
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", false, err
 	}
 	defer os.RemoveAll(tmp)
 
 	asset := rs.AssetName()
 	dl, err := api.Download(rs.Repo, tag, asset, tmp)
 	if err != nil {
-		return "", "", "", fmt.Errorf("download %s from %s %s: %w", asset, rs.Repo, tag, err)
+		return "", "", "", false, fmt.Errorf("download %s from %s %s: %w", asset, rs.Repo, tag, err)
 	}
 	got, err := fileSha256(dl)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", false, err
 	}
 	// checksums.txt, when present, is authoritative for what the release published.
 	if cs, cerr := api.Download(rs.Repo, tag, "checksums.txt", tmp); cerr == nil {
-		if want, found := checksumFor(cs, asset); found && !strings.EqualFold(want, got) {
-			return "", "", "", fmt.Errorf("checksum mismatch for %s@%s: release lists %s, downloaded %s", asset, tag, want, got)
+		want, found := checksumFor(cs, asset)
+		if found && !strings.EqualFold(want, got) {
+			return "", "", "", false, fmt.Errorf("checksum mismatch for %s@%s: release lists %s, downloaded %s", asset, tag, want, got)
 		}
+		verified = found
 	}
 	// A config-pinned sha256 must also match (defense in depth).
-	if pinnedSha != "" && !strings.EqualFold(strings.TrimSpace(pinnedSha), got) {
-		return "", "", "", fmt.Errorf("sha256 pin mismatch for %s@%s: config pins %s, downloaded %s", asset, tag, pinnedSha, got)
+	if pinnedSha != "" {
+		if !strings.EqualFold(strings.TrimSpace(pinnedSha), got) {
+			return "", "", "", false, fmt.Errorf("sha256 pin mismatch for %s@%s: config pins %s, downloaded %s", asset, tag, pinnedSha, got)
+		}
+		verified = true
 	}
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		return "", "", "", err
+		return "", "", "", false, err
 	}
 	dest := filepath.Join(cacheDir, asset)
 	if err := copyExecutable(dl, dest); err != nil {
-		return "", "", "", err
+		return "", "", "", false, err
 	}
-	return dest, tag, got, nil
+	return dest, tag, got, verified, nil
 }
 
 func fileSha256(path string) (string, error) {

@@ -137,7 +137,12 @@ func Run(t *testing.T, start Starter) {
 }
 
 // RunCase plays one case.
-func RunCase(t *testing.T, c Case, start Starter) {
+func RunCase(t *testing.T, c Case, start Starter) { RunCaseExpecting(t, c, c.Want, start) }
+
+// RunCaseExpecting plays one case's steps against start and compares what
+// fired with want instead of the case's own expectations — for running a
+// case under a configuration that should change the outcome.
+func RunCaseExpecting(t *testing.T, c Case, want []Want, start Starter) {
 	api := mockAPI(t, c.Routes)
 	env := Env{API: api.URL, Listen: freeAddr(t), Path: "/webhook"}
 	d := start(t, c, env)
@@ -150,8 +155,8 @@ func RunCase(t *testing.T, c Case, start Starter) {
 		}
 		deliver(t, env, fmt.Sprintf("%s-%d", strings.ReplaceAll(c.Name, " ", "-"), i), s.Event, s.Body)
 	}
-	got := waitFor(d, len(c.Want))
-	compare(t, c.Want, got)
+	got := waitFor(d, len(want))
+	compare(t, want, got)
 }
 
 // waitFor waits for want triggers, then a grace period for any extra one.

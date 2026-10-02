@@ -450,3 +450,45 @@ func TestSpecFromRefUsesInstallState(t *testing.T) {
 		t.Fatalf("local spec = %+v", ls)
 	}
 }
+
+// The install records whether the release verified the binary, the record
+// survives a reload, and the Spec built from it carries the bit — the
+// integrity half of an official plugin's default event trust. A release with
+// no checksums installs unverified; a later fetch that DOES verify the same
+// build upgrades the record.
+func TestReconcileRecordsReleaseVerification(t *testing.T) {
+	ref := refFor(t, config.UseKindConnector, "NodeSpy/conductor-plugins/connectors/github")
+
+	st := stateAt(t)
+	api := stubFor("connectors/github", "connectors/github/v1.0.0")
+	if _, err := Reconcile(map[string]config.PluginRef{ref.Key(): ref}, st, nil, api, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	inst, _ := LoadInstallState(st.Dir()).Get(ref.Key())
+	if !inst.ReleaseVerified {
+		t.Fatalf("a checksum-verified install must record it: %+v", inst)
+	}
+	if spec := SpecFromRef(ref, "", inst, true); !spec.ReleaseVerified {
+		t.Fatal("the spec must carry release verification")
+	}
+
+	st2 := stateAt(t)
+	unverified := api
+	unverified.noSums = true
+	if _, err := Reconcile(map[string]config.PluginRef{ref.Key(): ref}, st2, nil, unverified, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	inst2, _ := st2.Get(ref.Key())
+	if inst2.ReleaseVerified || inst2.Sha256 == "" {
+		t.Fatalf("a release with no checksums installs, unverified: %+v", inst2)
+	}
+	if spec := SpecFromRef(ref, "", inst2, true); spec.ReleaseVerified {
+		t.Fatal("an unverified install must not produce a verified spec")
+	}
+	if _, err := Reconcile(map[string]config.PluginRef{ref.Key(): ref}, st2, nil, api, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if inst3, _ := st2.Get(ref.Key()); !inst3.ReleaseVerified {
+		t.Fatalf("re-fetching the same build with checksums must upgrade the record: %+v", inst3)
+	}
+}

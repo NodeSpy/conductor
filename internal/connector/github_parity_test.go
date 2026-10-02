@@ -2,9 +2,12 @@ package connector
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -35,24 +38,26 @@ import (
 
 func TestGithubConformanceBuiltin(t *testing.T) {
 	ghsourcetest.Run(t, func(t *testing.T, c ghsourcetest.Case, env ghsourcetest.Env) ghsourcetest.Driver {
-		return startParity(t, c, env, false)
+		return startParity(t, c, env, nil)
 	})
 }
 
+// The plugin run is the OFFICIAL github plugin as an install records it — the
+// official source, the recorded sha, release-verified — with NO
+// trusted_source in the config: the default trust an official, verified
+// plugin gets is what this run depends on.
 func TestGithubConformancePlugin(t *testing.T) {
-	bin := githubPluginBin(t)
+	spec := officialGithubSpec(t, githubPluginBin(t))
 	ghsourcetest.Run(t, func(t *testing.T, c ghsourcetest.Case, env ghsourcetest.Env) ghsourcetest.Driver {
-		cl := plugin.NewClient(plugin.Spec{Name: "github", Kind: plugin.KindConnector, Provides: "github", BinPath: bin, Local: true},
-			plugin.Deps{})
+		cl := plugin.NewClient(spec, plugin.Deps{})
 		decl, err := cl.Describe(context.Background())
 		if err != nil {
 			t.Fatalf("describe: %v", err)
 		}
-		if _, err := RegisterExternalConnectorInPlaceOfBundled(cl, plugin.Spec{Name: "github", Kind: plugin.KindConnector,
-			Provides: "github", BinPath: bin, Local: true}, decl); err != nil {
+		if _, err := RegisterExternalConnectorInPlaceOfBundled(cl, spec, decl); err != nil {
 			t.Fatalf("register: %v", err)
 		}
-		d := startParity(t, c, env, true)
+		d := startParity(t, c, env, nil)
 		d.cleanup = append(d.cleanup, func() {
 			UnregisterExternalType("github")
 			_ = cl.Close()
@@ -70,6 +75,61 @@ var (
 	ghPluginPath string
 	ghPluginErr  string
 )
+
+// officialGithubSpec is the reference plugin binary as an install of the
+// OFFICIAL github plugin records it: the official source, its sha, and
+// release-verified. verify-before-execute checks that sha at every start.
+func officialGithubSpec(t *testing.T, bin string) plugin.Spec {
+	t.Helper()
+	u, err := config.ParseUse(config.UseKindConnector, "NodeSpy/conductor-plugins/connectors/github")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(b)
+	return plugin.Spec{Name: "github", Kind: plugin.KindConnector, Provides: "github", Use: u,
+		BinPath: bin, Sha256: hex.EncodeToString(sum[:]), ReleaseVerified: true}
+}
+
+// An official plugin that opted OUT, and a local build with no grant, are
+// untrusted: their engine-interpreted events are dropped, so the case the
+// official default passes fires nothing.
+func TestGithubPluginUntrustedFiresNoEngineKinds(t *testing.T) {
+	bin := githubPluginBin(t)
+	no := false
+	official := officialGithubSpec(t, bin)
+	local := plugin.Spec{Name: "github", Kind: plugin.KindConnector, Provides: "github", BinPath: bin, Local: true}
+	var c ghsourcetest.Case
+	for _, k := range ghsourcetest.Cases() {
+		if strings.HasPrefix(k.Name, "new_comment on your PR") {
+			c = k
+		}
+	}
+	for _, v := range []struct {
+		name     string
+		spec     plugin.Spec
+		explicit *bool
+	}{{"official, trusted_source: false", official, &no}, {"local build, no grant", local, nil}} {
+		t.Run(v.name, func(t *testing.T) {
+			ghsourcetest.RunCaseExpecting(t, c, nil, func(t *testing.T, c ghsourcetest.Case, env ghsourcetest.Env) ghsourcetest.Driver {
+				cl := plugin.NewClient(v.spec, plugin.Deps{})
+				decl, err := cl.Describe(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := RegisterExternalConnectorInPlaceOfBundled(cl, v.spec, decl); err != nil {
+					t.Fatal(err)
+				}
+				d := startParity(t, c, env, v.explicit)
+				d.cleanup = append(d.cleanup, func() { UnregisterExternalType("github"); _ = cl.Close() })
+				return d
+			})
+		})
+	}
+}
 
 // githubPluginBin builds the reference conductor-github plugin once.
 func githubPluginBin(t *testing.T) string {
@@ -107,12 +167,12 @@ type parityDriver struct {
 	got []ghsourcetest.Got
 }
 
-func startParity(t *testing.T, c ghsourcetest.Case, env ghsourcetest.Env, trusted bool) *parityDriver {
+func startParity(t *testing.T, c ghsourcetest.Case, env ghsourcetest.Env, trusted *bool) *parityDriver {
 	t.Helper()
 	conn := c.Connection(env)
 	conn["use"] = "github"
-	if trusted {
-		conn["trusted_source"] = true
+	if trusted != nil {
+		conn["trusted_source"] = *trusted
 	}
 	var trigs []map[string]any
 	for _, tr := range c.Triggers {

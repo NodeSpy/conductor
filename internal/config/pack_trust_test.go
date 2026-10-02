@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
 // A pack_trust/plugin_trust allow entry for one exact repo must not admit a
 // different, attacker-registered repo whose name merely CONTINUES the trusted
@@ -245,5 +249,49 @@ func TestANonGithubForgeIsGovernedByTheAllowlist(t *testing.T) {
 	ok := PackTrustConfig{Allow: []string{"gitlab.com/team/*"}}
 	if !ok.SourceAllowed("gitlab.com/team/pack") {
 		t.Error("a listed gitlab source must resolve")
+	}
+}
+
+// IsOfficialSource is THE official classifier (PluginSourceAllowed and a
+// plugin source's default event trust both key on it): the official repos and
+// paths under them, delimiter-anchored, on the canonical host — and nothing
+// that merely looks like them.
+func TestIsOfficialSource(t *testing.T) {
+	for src, want := range map[string]bool{
+		"github.com/NodeSpy/conductor-plugins":                         true,
+		"github.com/NodeSpy/conductor-plugins//connectors/github":      true,
+		"github.com/NodeSpy/conductor-packs//pr-autopilot":             true,
+		"git::github.com/NodeSpy/conductor-plugins//connectors/github": true,
+		"github.com/NodeSpy/conductor-plugins-evil//connectors/github": false,
+		"github.com/NodeSpy/conductor-plugin//connectors/github":       false,
+		"github.com/NodeSpy-evil/conductor-plugins//connectors/github": false,
+		"gitlab.com/NodeSpy/conductor-plugins//connectors/github":      false,
+		"github.com.evil.example/NodeSpy/conductor-plugins":            false,
+		"evil.example/github.com/NodeSpy/conductor-plugins":            false,
+		"./conductor-plugins/connectors/github":                        false,
+		"/opt/NodeSpy/conductor-plugins":                               false,
+		"":                                                             false,
+	} {
+		if got := IsOfficialSource(src); got != want {
+			t.Errorf("IsOfficialSource(%q) = %v, want %v", src, got, want)
+		}
+	}
+}
+
+// trusted_source is refused on a builtin connector in EITHER direction: the
+// builtin is conductor's own code, so neither granting nor withholding source
+// trust means anything there, and a config that says so is mistaken.
+func TestTrustedSourceRefusedOnBuiltin(t *testing.T) {
+	for _, v := range []string{"true", "false"} {
+		dir := t.TempDir()
+		p := dir + "/conductor.yaml"
+		doc := "connectors:\n  gh:\n    use: github\n    token: x\n    trusted_source: " + v + "\n"
+		if err := os.WriteFile(p, []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(p)
+		if err == nil || !strings.Contains(err.Error(), "trusted_source applies to a plugin-backed connector") {
+			t.Errorf("trusted_source: %s on a builtin: got %v", v, err)
+		}
 	}
 }

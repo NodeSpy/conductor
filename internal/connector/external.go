@@ -146,13 +146,40 @@ func registerExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin
 			audit:      deps.Audit,
 			log:        log,
 			abi:        connectorABI(decl),
-			trusted:    ref.TrustedSource,
+			trusted:    SourceTrusted(ref.TrustedSource, spec),
 		}, nil
 	}
 	if err := registerExternalType(td, builder, inPlaceOfBundled); err != nil {
 		return nil, err
 	}
 	return td, nil
+}
+
+// SourceTrusted decides whether a plugin connector's events are a TRUSTED
+// source (pluginsource.go weighs its claims by it). It follows the
+// official-trust model plugin installs use, plus the integrity precondition
+// that trust in a publisher is trust in what it published:
+//
+//	explicit trusted_source: true   → trusted (the operator vouches)
+//	explicit trusted_source: false  → untrusted (an official plugin opted out)
+//	unset, official + release-verified + not local → trusted
+//	unset, anything else            → untrusted
+//
+// "Official" is config.IsOfficialSource — the same classifier that lets an
+// official plugin install without a plugin_trust entry. "Release-verified"
+// means the installed binary's sha matched the release's own checksums at
+// install (Spec.ReleaseVerified) — and verify-before-execute refuses any
+// other binary at every start. A local path is the operator's build: it is
+// never trusted by default, even when it IS a build of an official plugin
+// (the dev loop names it explicitly with `trusted_source: true`).
+func SourceTrusted(explicit *bool, spec plugin.Spec) bool {
+	if explicit != nil {
+		return *explicit
+	}
+	if spec.Local || spec.Sha256 == "" || !spec.ReleaseVerified {
+		return false
+	}
+	return config.IsOfficialSource(spec.Use.Source())
 }
 
 // connectorABI is a connector plugin's source-extension ABI (0 = none). The
