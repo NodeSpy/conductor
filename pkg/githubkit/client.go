@@ -33,8 +33,12 @@ type Config struct {
 	// available.
 	Token string
 	// WriteToken is identity.write_token: a literal token, or "" / "gh_auth" to
-	// fall through to GhToken then Token.
+	// fall through to GhToken then Token, or "app" for the App's token.
 	WriteToken string
+	// ReadToken is identity.read_token: "" / "app" for the App's installation
+	// token (the static token when App-less), "gh_auth" for the write chain,
+	// or a literal token. It is what the read credential mints.
+	ReadToken string
 	// GhToken resolves a token via `gh auth token` (or a test stub). Defaults
 	// to shelling out to the real `gh` CLI.
 	GhToken func() (string, error)
@@ -67,6 +71,7 @@ const DefaultCacheTTL = 45 * time.Second
 type Client struct {
 	token      string
 	writeToken string
+	readToken  string
 	ghToken    func() (string, error)
 	app        *AppAuth // nil when App-less (no `bot` identity)
 
@@ -113,7 +118,7 @@ func NewClient(cfg Config) (*Client, error) {
 		ttl = DefaultCacheTTL
 	}
 	c := &Client{
-		token: cfg.Token, writeToken: cfg.WriteToken, ghToken: ghToken,
+		token: cfg.Token, writeToken: cfg.WriteToken, readToken: cfg.ReadToken, ghToken: ghToken,
 		httpc: httpc, CacheTTL: ttl, apiBase: cfg.APIBase,
 		getCache: map[string]*cacheEntry{}, logins: map[string]string{}, rlRemaining: -1,
 	}
@@ -184,4 +189,33 @@ func (c *Client) TokenFor(ctx context.Context, as, repo string) (string, error) 
 		return c.app.TokenForRepo(ctx, owner, name)
 	}
 	return "", fmt.Errorf("as: must be me|bot, got %q", as)
+}
+
+// MintCredential resolves one of the credentials the github connector declares
+// for agents (plugin-contract.md §2.4): "read" by identity.read_token (default:
+// the App's installation token for repo, the static token when App-less),
+// "write" by identity.write_token (default: the `me` chain; "app" for the
+// App's token).
+func (c *Client) MintCredential(ctx context.Context, which, repo string) (string, error) {
+	policy := c.writeToken
+	if which == "read" {
+		policy = c.readToken
+		if policy == "" {
+			policy = "app"
+		}
+	}
+	switch policy {
+	case "app":
+		if c.app == nil {
+			return c.TokenFor(ctx, "me", repo)
+		}
+		return c.TokenFor(ctx, "bot", repo)
+	case "", "gh_auth":
+		saved := c.writeToken
+		if which == "read" && saved != "" && saved != "gh_auth" && saved != "app" {
+			return saved, nil
+		}
+		return c.TokenFor(ctx, "me", repo)
+	}
+	return policy, nil // a literal token
 }

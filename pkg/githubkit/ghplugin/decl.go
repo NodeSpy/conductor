@@ -106,6 +106,7 @@ func decl() plugin.Decl {
 			"project_rewrite": {Type: "map", Desc: "blanket owner/org rewrite for checkouts"},
 			"api_base":        {Type: "string", Desc: "GitHub API base URL (GitHub Enterprise Server); default https://api.github.com, or PC_GITHUB_API_BASE for the bundled connector"},
 		},
+		Semantics: connSemantics(),
 		Events: []plugin.Event{
 			githubEvent("review_requested", "your review was requested on a PR",
 				nil,
@@ -258,6 +259,18 @@ func decl() plugin.Decl {
 					"as": {Type: "string", Enum: []string{"me", "bot"}},
 				},
 				Outputs: plugin.Schema{"diff": {Type: "string"}},
+			},
+			{
+				Name: "read_token", Desc: "the read credential agents receive (identity.read_token: the App's installation token by default)",
+				Semantics: &plugin.VerbSemantics{HostOnly: true, MintsCredential: &plugin.MintsCredential{Credential: "read"}},
+				Options:   plugin.Schema{"repo": {Type: "string", Required: true, Scope: "repo"}},
+				Outputs:   plugin.Schema{"token": {Type: "string"}},
+			},
+			{
+				Name: "write_token", Desc: "the write credential agents receive (identity.write_token: your gh login by default)",
+				Semantics: &plugin.VerbSemantics{HostOnly: true, MintsCredential: &plugin.MintsCredential{Credential: "write"}},
+				Options:   plugin.Schema{"repo": {Type: "string", Required: true, Scope: "repo"}},
+				Outputs:   plugin.Schema{"token": {Type: "string"}},
 			},
 			{
 				Name: "pr_head", Desc: "a PR's current head commit and state (open | closed | merged), read fresh — what the engine's run facts read",

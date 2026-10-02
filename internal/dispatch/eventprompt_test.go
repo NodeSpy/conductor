@@ -144,7 +144,7 @@ func TestEventPromptKeepsEventTextLiteral(t *testing.T) {
 	body := "use {{ .gh_token }} in the chart, and {{ this is not a template"
 	tr := core.Trigger{Kind: "changes_requested", Target: core.Target{Repo: "o/r", PR: 7, Number: 7},
 		Context: map[string]any{"review_comments": []any{map[string]any{"path": "a.yaml", "body": body}}}}
-	req := Request{Trigger: tr, Tokens: Tokens{User: "SECRET-USER", App: "SECRET-APP"}}
+	req := Request{Trigger: tr, Credentials: ghCreds("SECRET-USER", "SECRET-APP")}
 
 	for name, prompt := range map[string]string{
 		"event prompt": EventPrompt(tr, nil),

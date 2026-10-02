@@ -60,7 +60,9 @@ type AgentServices struct {
 	// (explicit runtime → default → built-in paseo).
 	Dispatch func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error)
 	// Tokens resolves the acts-as-you / App tokens for a trigger.
-	Tokens func(t core.Trigger) dispatch.Tokens
+	// Credentials are what an agent dispatched for t receives (the
+	// connector's declared credentials, resolved by the engine).
+	Credentials func(ctx context.Context, t core.Trigger) dispatch.Credentials
 	// Guidance is the house prompt guidance for a step (its IDENTITY keys the
 	// optional outcome-feedback tuning — #36 §18). pol is the trigger's
 	// resolved policy cascade — its Guidance is the scoped layer-0 baseline
@@ -1569,8 +1571,12 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// A decide step's session is the adapter prompt and nothing else: no
 	// write-wrapper, guidance, memory, or done instructions (its reply is the
 	// schema'd JSON, delivered the output_schema way).
+	var creds dispatch.Credentials
+	if r.Agents.Credentials != nil {
+		creds = r.Agents.Credentials(ctx, t)
+	}
 	if act.Prompt != "" && step.DecisionLaunch == nil {
-		act.Prompt += dispatch.WriteWrapperGuidance
+		act.Prompt += creds.Guidance
 		if r.Agents.Guidance != nil {
 			act.Prompt += r.Agents.Guidance(identity, step, policyFrom(ctx))
 		}
@@ -1592,10 +1598,6 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 			// directive instead — never both (see DoneGuidance).
 			act.Prompt += dispatch.DoneGuidance
 		}
-	}
-	var tokens dispatch.Tokens
-	if r.Agents.Tokens != nil {
-		tokens = r.Agents.Tokens(t)
 	}
 	// Spend budget (#36 §14): an over-cap dispatch sheds — the step fails
 	// with the budget error (the workflow's fail path notifies, and the
@@ -1632,7 +1634,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		sanitizeAgentAuthoredStep(&step)
 	}
 	req := dispatch.Request{
-		Trigger: t, Action: act, Step: step, Identity: identity, Model: model, Provider: provider, Tokens: tokens,
+		Trigger: t, Action: act, Step: step, Identity: identity, Model: model, Provider: provider, Credentials: creds,
 		Shadow: shadow, Wait: !step.Background, Interactive: step.Background, Data: data,
 		AgentAuthored: authored,
 		// The daemon's own id for THIS dispatch — what a live tool's
@@ -1818,12 +1820,12 @@ func (r *Runner) execCommand(ctx context.Context, t core.Trigger, step config.St
 		Type: "command", ID: id, Command: step.Command,
 		WorkDir: step.WorkDir, Env: step.Env, Backend: step.Backend,
 	}
-	var tokens dispatch.Tokens
-	if r.Agents.Tokens != nil {
-		tokens = r.Agents.Tokens(t)
+	var creds dispatch.Credentials
+	if r.Agents.Credentials != nil {
+		creds = r.Agents.Credentials(ctx, t)
 	}
 	req := dispatch.Request{
-		Trigger: t, Action: act, Tokens: tokens,
+		Trigger: t, Action: act, Credentials: creds,
 		Shadow: shadow, Wait: true, Data: data,
 	}
 	ref, err := r.Agents.Dispatch(ctx, req)

@@ -109,7 +109,7 @@ func TestWorkflowBranchHasContext(t *testing.T) {
 	d.outputs["evaluate"] = `{"has_context": true, "summary": "clear repro"}`
 	e := stepEngine(t, d)
 
-	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), triageAction(), "app", "usr", false)
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), triageAction(), ghCreds("usr", "app"), false)
 
 	if got := d.ran; len(got) != 2 || got[0] != "evaluate" || got[1] != "work" {
 		t.Fatalf("expected evaluate→work, got %v", got)
@@ -133,7 +133,7 @@ func TestWorkflowBranchNoContext(t *testing.T) {
 	d.outputs["evaluate"] = `{"has_context": false}`
 	e := stepEngine(t, d)
 
-	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), triageAction(), "app", "usr", false)
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), triageAction(), ghCreds("usr", "app"), false)
 
 	if got := d.ran; len(got) != 2 || got[0] != "evaluate" || got[1] != "ask" {
 		t.Fatalf("expected evaluate→ask, got %v", got)
@@ -154,7 +154,7 @@ func TestWorkflowBackgroundStepHandsOff(t *testing.T) {
 		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true,
 			Prompt: "draft and hand off {{.issue}}"},
 	}}
-	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, "app", "usr", false)
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, ghCreds("usr", "app"), false)
 
 	if got := d.ran; len(got) != 1 || got[0] != "handoff" {
 		t.Fatalf("expected handoff to run, got %v", got)
@@ -191,7 +191,7 @@ func TestWorkflowBackgroundStepNotReapable(t *testing.T) {
 	act := config.Action{Steps: []config.Action{
 		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true, Prompt: "hand off {{.issue}}"},
 	}}
-	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, "app", "usr", false)
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, ghCreds("usr", "app"), false)
 
 	if d.archive["handoff"] {
 		t.Fatal("background hand-off must dispatch with ArchiveWhenDone=false so the reaper can't cull it")
@@ -217,7 +217,7 @@ func TestWorkflowBackgroundStepUnknownHandoffEscalates(t *testing.T) {
 		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true,
 			Handoff: "does-not-exist", Prompt: "draft and hand off {{.issue}}"},
 	}}
-	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, "app", "usr", false)
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, ghCreds("usr", "app"), false)
 
 	if !n.has(notify.EventEscalate) {
 		t.Fatalf("an unresolvable handoff name should escalate, got %v", n.events)
@@ -249,7 +249,7 @@ func TestWorkflowBackgroundStepHandoffResolvesButNoBrokerFallsBack(t *testing.T)
 		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true,
 			Handoff: "page", Prompt: "draft and hand off {{.issue}}"},
 	}}
-	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, "app", "usr", false)
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, ghCreds("usr", "app"), false)
 
 	if n.has(notify.EventEscalate) {
 		t.Fatalf("a resolvable handoff with no broker should not escalate, got %v", n.events)

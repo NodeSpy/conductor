@@ -29,11 +29,11 @@ func TestPaseoAgentArgv(t *testing.T) {
 			TargetTrusted: true, // a signature-verified github payload
 			Target:        core.Target{Repo: "acme/w", Owner: "acme", Name: "w", PR: 5, Number: 5, HeadSHA: "deadbeef", BaseRef: "main"},
 		},
-		Action: config.Action{Type: "agent", Agent: "fixer", Prompt: "fix {{.repo}}#{{.pr}} on {{.base}}"},
-		Model:  "claude-opus",
-		Step:   config.Step{Model: config.ModelSpecOf("claude-opus"), Workspace: config.Workspace{Isolation: "worktree"}},
-		Tokens: Tokens{App: "APPTOK", User: "USERTOK"},
-		Author: Author{Name: "Me", Email: "me@example.com"},
+		Action:      config.Action{Type: "agent", Agent: "fixer", Prompt: "fix {{.repo}}#{{.pr}} on {{.base}}"},
+		Model:       "claude-opus",
+		Step:        config.Step{Model: config.ModelSpecOf("claude-opus"), Workspace: config.Workspace{Isolation: "worktree"}},
+		Credentials: ghCreds("USERTOK", "APPTOK"),
+		Author:      Author{Name: "Me", Email: "me@example.com"},
 	}
 	ref, err := d.Dispatch(context.Background(), req)
 	if err != nil {
@@ -50,7 +50,7 @@ func TestPaseoAgentArgv(t *testing.T) {
 		// Agent acts as YOU: GH_TOKEN is the user token (writes post as you), App
 		// token is reads-only under PC_GH_APP_TOKEN.
 		"--env GH_TOKEN=USERTOK", "--env GITHUB_TOKEN=USERTOK",
-		"--env " + envGHWriteToken + "=USERTOK", "--env " + envGHAppToken + "=APPTOK",
+		"--env " + "PC_GH_WRITE_TOKEN" + "=USERTOK", "--env " + "PC_GH_APP_TOKEN" + "=APPTOK",
 		"--env GIT_AUTHOR_NAME=Me", "--env GIT_AUTHOR_EMAIL=me@example.com",
 		"--label kind=merge_conflict", "--label pr=acme/w#5", "--label head=deadbeef",
 		"--background", "--json",

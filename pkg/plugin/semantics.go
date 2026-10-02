@@ -272,9 +272,12 @@ type ConnSemantics struct {
 // Credential is one credential agents dispatched on this connection's
 // events receive.
 type Credential struct {
-	Name      string            `json:"name"`
-	Role      string            `json:"role"` // read | write
-	Mint      CredentialMint    `json:"mint"`
+	Name string         `json:"name"`
+	Role string         `json:"role"` // read | write
+	Mint CredentialMint `json:"mint"`
+	// Value is the mint verb's output carrying the credential (default
+	// "token").
+	Value     string            `json:"value,omitempty"`
 	Env       []string          `json:"env,omitempty"`
 	Template  string            `json:"template,omitempty"`
 	Expires   string            `json:"expires,omitempty"`

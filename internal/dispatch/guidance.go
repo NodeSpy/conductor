@@ -1,30 +1,5 @@
 package dispatch
 
-// Token identity model for dispatched work:
-//
-//	GH_TOKEN / GITHUB_TOKEN = YOUR token → the default for everything an agent or
-//	command does, so all writes (comments, reviews, replies, any gh/API call) are
-//	attributed to YOU, never the App/bot. Commits and `git push` go over SSH as you.
-//
-//	PC_GH_APP_TOKEN = the App installation token, exposed ONLY for optional
-//	rate-limited READS — it must never be used to post/submit anything.
-//
-// envGHWriteToken is kept as an alias of your token for backward compatibility with
-// any prompt still referencing it; GH_TOKEN is now the same token, so it's redundant.
-const (
-	envGHWriteToken = "PC_GH_WRITE_TOKEN"
-	envGHAppToken   = "PC_GH_APP_TOKEN"
-)
-
-// WriteWrapperGuidance is appended to agent prompts so the agent knows its GitHub
-// identity IS you — writing as the App bot must never happen.
-const WriteWrapperGuidance = "\n\n---\n" +
-	"IDENTITY: you act as ME. GH_TOKEN/GITHUB_TOKEN are MY token, so every comment, " +
-	"review, reply, and `gh`/API write is attributed to me — and commits and `git push` " +
-	"go over SSH as me. NEVER post, submit, approve, or otherwise write anything with the " +
-	"App/bot token. If a large read would burn my rate limit you MAY read (only) with the " +
-	"App token via `GH_TOKEN=$" + envGHAppToken + " gh ...`, but never write with it."
-
 // BotReplyGuidance is appended to an agent prompt when the triggering
 // comment/review was authored by a bot and the resolved reply_to_bots policy
 // is decline_only (the default): a bot cannot read pleasantries, so the only

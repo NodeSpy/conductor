@@ -94,3 +94,32 @@ func eventSemantics(name string) *plugin.EventSemantics {
 
 // ClosedEvent is the event a PR's close emits: terminal for its target.
 const ClosedEvent = "_closed"
+
+// connSemantics are the connection-level declarations: the credentials an
+// agent dispatched on a github event receives. GH_TOKEN is YOUR token, so
+// every write the agent makes is attributed to you; the App's token is
+// offered for rate-limited reads only.
+func connSemantics() *plugin.ConnSemantics {
+	repo := map[string]string{"repo": "{{.repo}}"}
+	return &plugin.ConnSemantics{
+		Credentials: []plugin.Credential{
+			{Name: "read", Role: "read", Mint: plugin.CredentialMint{Verb: "read_token", Args: repo},
+				Env: []string{"PC_GH_APP_TOKEN"}, Template: "app_token", Refresh: "resume"},
+			{Name: "write", Role: "write", Mint: plugin.CredentialMint{Verb: "write_token", Args: repo},
+				Env: []string{"GH_TOKEN", "GITHUB_TOKEN", "PC_GH_WRITE_TOKEN"}, Template: "gh_token", Refresh: "resume",
+				Guidance: identityGuidance},
+		},
+		Scope: &plugin.ConnScope{Dimension: "repo", Option: "repos", Consent: true},
+		Poll:  &plugin.PollSemantics{VerbName: "sweep"},
+		Translate: &plugin.TranslateSemantics{Env: map[string]string{
+			"event_path": "GITHUB_EVENT_PATH", "event_name": "GITHUB_EVENT_NAME"}},
+	}
+}
+
+// identityGuidance tells an agent its GitHub identity IS the operator.
+const identityGuidance = "\n\n---\n" +
+	"IDENTITY: you act as ME. GH_TOKEN/GITHUB_TOKEN are MY token, so every comment, " +
+	"review, reply, and `gh`/API write is attributed to me — and commits and `git push` " +
+	"go over SSH as me. NEVER post, submit, approve, or otherwise write anything with the " +
+	"App/bot token. If a large read would burn my rate limit you MAY read (only) with the " +
+	"App token via `GH_TOKEN=$PC_GH_APP_TOKEN gh ...`, but never write with it."

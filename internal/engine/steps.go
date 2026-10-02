@@ -25,7 +25,7 @@ import (
 // {{ .steps.<id>.outputs.<key> }} and `if` conditions like
 // `steps.<id>.outputs.<key> == true`. Steps run to completion in order; the
 // whole workflow runs in its own goroutine so the engine loop isn't blocked.
-func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Trigger, act config.Action, appTok, userTok string, shadow bool) {
+func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Trigger, act config.Action, creds dispatch.Credentials, shadow bool) {
 	data := e.stepBaseData(t)
 	stepsOut := map[string]any{}
 	// Restore completed steps' outputs (resume) so `if:`/templating see them.
@@ -96,7 +96,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 				s.Prompt = dispatch.EventPrompt(t, nil)
 			}
 			if s.Prompt != "" {
-				s.Prompt += dispatch.WriteWrapperGuidance
+				s.Prompt += creds.Guidance
 				s.Prompt += e.agentGuidance(profile, e.retryPolicyFor(act))
 				s.Prompt += e.memoryPrompt(identity, profile, t, "")
 				// Only the interactive hand-off (a background step) is told to ask. A
@@ -114,8 +114,8 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		}
 		req := dispatch.Request{
 			Trigger: t, Action: s, Step: profile, Identity: identity, Model: model, Provider: modelProvider,
-			Tokens: dispatch.Tokens{App: appTok, User: userTok},
-			Author: e.author, Shadow: shadow, Wait: !s.Background, Interactive: s.Background, Data: data,
+			Credentials: creds,
+			Author:      e.author, Shadow: shadow, Wait: !s.Background, Interactive: s.Background, Data: data,
 		}
 		// Resolve which controller runs this agent step (explicit `controller:` →
 		// default:true → built-in paseo). Command steps use the base dispatcher. An

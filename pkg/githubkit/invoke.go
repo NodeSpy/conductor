@@ -22,6 +22,15 @@ func (c *Client) Invoke(ctx context.Context, verb string, opts map[string]any) (
 	if repo == "" && !isGistVerb(verb) {
 		return nil, fmt.Errorf("github.%s: options.repo is required", verb)
 	}
+	if verb == "read_token" || verb == "write_token" {
+		// The credentials agents receive (mints_credential, host-only): each
+		// resolves by its own identity policy, not the call's `as`.
+		tok, err := c.MintCredential(ctx, strings.TrimSuffix(verb, "_token"), repo)
+		if err != nil {
+			return nil, fmt.Errorf("github.%s: %w", verb, err)
+		}
+		return map[string]any{"token": tok}, nil
+	}
 	as, _ := opts["as"].(string)
 	tok, err := c.TokenFor(ctx, as, repo)
 	if err != nil {

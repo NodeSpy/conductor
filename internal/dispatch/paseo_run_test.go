@@ -46,8 +46,8 @@ func TestPaseoDryRunArgvShape(t *testing.T) {
 		Model: "m1",
 		Step: config.Step{Model: config.ModelSpecOf("m1"), Thinking: "high", Mode: "auto",
 			WaitTimeout: config.Duration(5 * time.Minute)},
-		Tokens: Tokens{App: "at", User: "ut"},
-		Author: Author{Name: "Me", Email: "me@x"},
+		Credentials: ghCreds("ut", "at"),
+		Author:      Author{Name: "Me", Email: "me@x"},
 	}
 	ref, err := d.paseo(context.Background(), req)
 	if err != nil || !ref.Shadowed {

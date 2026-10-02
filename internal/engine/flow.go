@@ -395,7 +395,7 @@ func (e *Engine) newFlowRun(t core.Trigger, spec config.TriggerSpec, shadow bool
 	tp := t
 	act, _ := tp.Action.(config.Action)
 	tp.Action = nil
-	tp.Context = sanitizeContext(t.Context)
+	tp.Context = sanitizeContext(t)
 	run.Trigger, _ = json.Marshal(tp)
 	run.Action, _ = json.Marshal(act)
 	if shadow || e.store == nil {
@@ -485,19 +485,7 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			req.Author = e.author
 			return e.dispatchAgent(ctx, runner, req)
 		},
-		Tokens: func(t core.Trigger) dispatch.Tokens {
-			appTok, _ := t.Context["app_token"].(string)
-			if e.readTok != nil {
-				if tok, err := e.readTok(); err == nil && tok != "" {
-					appTok = tok
-				}
-			}
-			userTok := ""
-			if e.userTok != nil {
-				userTok, _ = e.userTok()
-			}
-			return dispatch.Tokens{App: appTok, User: userTok}
-		},
+		Credentials: e.credentialsFor,
 		Guidance: func(identity string, p config.Step, pol config.Policy) string {
 			return e.agentGuidance(p, pol) + e.outcomeGuidance(identity, p)
 		},

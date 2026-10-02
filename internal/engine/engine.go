@@ -963,6 +963,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	if modelRuntime != "" && profile.Runtime == "" {
 		profile.Runtime = modelRuntime
 	}
+	creds := e.credentialsFor(ctx, t)
 	if act.Type == "agent" {
 		// No prompt of its own → act on the event itself (connector-neutral
 		// event object), synthesized before the guidance stack. This legacy
@@ -972,7 +973,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			act.Prompt = dispatch.EventPrompt(t, nil)
 		}
 		if act.Prompt != "" {
-			act.Prompt += dispatch.WriteWrapperGuidance
+			act.Prompt += creds.Guidance
 			act.Prompt += e.agentGuidance(profile, e.retryPolicyFor(act))
 			act.Prompt += e.memoryPrompt(identity, profile, t, "")
 			// NOTE: no HoldGuidance here. A top-level single-action agent is an
@@ -983,16 +984,6 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			// steps). A fixer that can't proceed just stops; live-gated kinds re-derive
 			// via the sweep.
 		}
-	}
-	appTok, _ := t.Context["app_token"].(string)
-	if e.readTok != nil { // identity.read_token override → reads use it, not the App token
-		if tok, err := e.readTok(); err == nil && tok != "" {
-			appTok = tok
-		}
-	}
-	userTok := ""
-	if e.userTok != nil {
-		userTok, _ = e.userTok()
 	}
 	shadow := e.cfg.Control.Shadow || (act.Shadow != nil && *act.Shadow)
 
@@ -1022,15 +1013,15 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			if !shadow {
 				defer e.release()
 			}
-			e.runSteps(ctx, run, t, act, appTok, userTok, shadow)
+			e.runSteps(ctx, run, t, act, creds, shadow)
 		}()
 		return
 	}
 
 	req := dispatch.Request{
 		Trigger: t, Action: act, Step: profile, Identity: identity, Model: model, Provider: modelProvider,
-		Tokens: dispatch.Tokens{App: appTok, User: userTok},
-		Author: e.author, Shadow: shadow, CatchUp: t.CatchUp,
+		Credentials: creds,
+		Author:      e.author, Shadow: shadow, CatchUp: t.CatchUp,
 	}
 
 	// Resolve which controller runs this agent before taking a slot. Commands
@@ -1211,7 +1202,7 @@ func (e *Engine) newRun(t core.Trigger, act config.Action, shadow bool) store.Wo
 	}
 	tp := t
 	tp.Action = nil
-	tp.Context = sanitizeContext(t.Context)
+	tp.Context = sanitizeContext(t)
 	run.Trigger, _ = json.Marshal(tp)
 	run.Action, _ = json.Marshal(act)
 	if shadow || e.store == nil {
@@ -1260,14 +1251,19 @@ func (e *Engine) recoverDispatch(ctx context.Context, t core.Trigger, run store.
 	e.finishRun(run)
 }
 
-// sanitizeContext copies a trigger context minus secrets (re-minted on resume).
-func sanitizeContext(in map[string]any) map[string]any {
-	if in == nil {
+// sanitizeContext copies a trigger's context minus the facts its event
+// declares secret (credentials are minted afresh on resume, never persisted).
+func sanitizeContext(t core.Trigger) map[string]any {
+	if t.Context == nil {
 		return nil
 	}
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		if k == "app_token" || k == "gh_token" {
+	secret := map[string]bool{}
+	for _, k := range t.SecretFacts() {
+		secret[k] = true
+	}
+	out := make(map[string]any, len(t.Context))
+	for k, v := range t.Context {
+		if secret[k] {
 			continue
 		}
 		out[k] = v
@@ -1297,33 +1293,13 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 				e.log("engine: resume %s: flow run but no flow runner — leaving for next start", r.ID)
 				continue
 			}
-			if t.Context != nil {
-				if appTok, err := e.refreshTok(t); err == nil && appTok != "" {
-					t.Context["app_token"] = appTok
-				}
-			}
 			e.resumeFlowRun(ctx, r, t, act)
 			continue
 		}
 		t.Action = act
-		appTok, err := e.refreshTok(t)
-		if err != nil {
-			e.log("engine: resume %s: app token: %v (leaving for next start)", r.ID, err)
-			continue
-		}
-		if e.readTok != nil { // identity.read_token override
-			if tok, terr := e.readTok(); terr == nil && tok != "" {
-				appTok = tok
-			}
-		}
-		userTok := ""
-		if e.userTok != nil {
-			userTok, _ = e.userTok()
-		}
-		if t.Context == nil {
-			t.Context = map[string]any{}
-		}
-		t.Context["app_token"] = appTok
+		// Credentials are minted afresh for the resumed run (the recorded
+		// ones were never persisted).
+		creds := e.credentialsFor(ctx, t)
 		run := r
 		if run.Outputs == nil {
 			run.Outputs = map[string]map[string]any{}
@@ -1339,7 +1315,7 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 			}
 			defer e.release()
 			defer e.recoverDispatch(ctx, t, run, "workflow resume")
-			e.runSteps(ctx, run, t, act, appTok, userTok, false)
+			e.runSteps(ctx, run, t, act, creds, false)
 		}()
 	}
 }

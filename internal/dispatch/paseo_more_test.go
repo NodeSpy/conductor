@@ -441,8 +441,8 @@ func TestTemplateDataPrecedence(t *testing.T) {
 		Trigger: core.Trigger{Kind: "k", Title: "T",
 			Target:  core.Target{Repo: "a/w", PR: 1},
 			Context: map[string]any{"repo": "shadowed", "extra": "ctx"}},
-		Tokens: Tokens{App: "at", User: "ut"},
-		Data:   map[string]any{"extra": "step-wins", "out": 7},
+		Credentials: ghCreds("ut", "at"),
+		Data:        map[string]any{"extra": "step-wins", "out": 7},
 	}
 	d := templateData(req)
 	if d["repo"] != "a/w" {

@@ -135,9 +135,11 @@ func TestFlowAgentServices(t *testing.T) {
 	eng, _, notif, _ := buildFlowEngine(t, gateCfg)
 	svcs := eng.flowAgentServices()
 
-	// Tokens: user token minted via the engine's token funcs (nil here → zero).
-	toks := svcs.Tokens(flowTrigger("d-svc"))
-	_ = toks
+	// Credentials: resolved through the engine (the event's connector here
+	// declares none).
+	if c := svcs.Credentials(context.Background(), flowTrigger("d-svc")); len(c.Env) != 0 {
+		t.Fatalf("a connector declaring no credentials gave some: %+v", c)
+	}
 
 	// Command dispatch goes through the engine's dispatcher.
 	ref, err := svcs.Dispatch(context.Background(), dispatch.Request{

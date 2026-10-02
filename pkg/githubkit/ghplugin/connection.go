@@ -93,7 +93,7 @@ func ParseConnection(m map[string]any) (Connection, error) {
 		ProjectRewrite: ghsource.ProjectRewrite{Org: w.ProjectRewrite.Org},
 		APIBase:        w.APIBase,
 	}
-	cl := githubkit.Config{Token: w.Token, WriteToken: w.Identity.WriteToken, APIBase: w.APIBase}
+	cl := githubkit.Config{Token: w.Token, WriteToken: w.Identity.WriteToken, ReadToken: w.Identity.ReadToken, APIBase: w.APIBase}
 	if w.App.AppID > 0 && w.App.PrivateKeyPath != "" {
 		cl.App = &githubkit.AppConfig{AppID: int64(w.App.AppID), PrivateKeyPath: w.App.PrivateKeyPath}
 	}

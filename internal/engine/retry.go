@@ -105,12 +105,8 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 		}
 	}
 
-	// Re-mint tokens like crash resume — the recorded ones were stripped.
-	if e.refreshTok != nil && t.Context != nil {
-		if appTok, err := e.refreshTok(t); err == nil && appTok != "" {
-			t.Context["app_token"] = appTok
-		}
-	}
+	// Credentials are minted at dispatch, as on crash resume — the recorded
+	// ones were never persisted.
 	t.Action = act
 
 	run := store.WorkflowRun{

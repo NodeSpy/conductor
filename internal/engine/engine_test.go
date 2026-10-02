@@ -209,9 +209,9 @@ func TestDispatchAndRecord(t *testing.T) {
 	if !n.has("dispatch") || !n.has("complete") {
 		t.Fatalf("missing notifications: %v", n.events)
 	}
-	// Tokens threaded through.
-	if d.reqs[0].Tokens.App != "atok" || d.reqs[0].Tokens.User != "utok" {
-		t.Fatalf("tokens not threaded: %+v", d.reqs[0].Tokens)
+	// Credentials threaded through.
+	if c := d.reqs[0].Credentials; c.Env["PC_GH_APP_TOKEN"] != "atok" || c.Env["GH_TOKEN"] != "utok" {
+		t.Fatalf("credentials not threaded: %+v", c)
 	}
 }
 

@@ -13,9 +13,29 @@ import (
 var universalKeys = []string{
 	"repo", "owner", "name", "pr", "issue", "number", "head", "base", "url",
 	"kind", "title", "labels", "steps",
-	// dispatch injects the resolved tokens into every step's template data
-	// (legacy prompts reference them, e.g. env: {GH_TOKEN: "{{.gh_token}}"}).
-	"gh_token", "app_token",
+}
+
+// credentialKeys are the template keys connectors declare for the
+// credentials their events' work receives (e.g. env: {X: "{{.<key>}}"}):
+// addressable wherever such work runs.
+func credentialKeys() []string {
+	var out []string
+	for _, typ := range connector.Types() {
+		d, ok := connector.TypeDeclFor(typ)
+		if !ok || d.Semantics == nil {
+			continue
+		}
+		for _, c := range d.Semantics.Credentials {
+			if c.Template != "" {
+				out = append(out, c.Template)
+			}
+		}
+	}
+	return out
+}
+
+func universalOrCredential() []string {
+	return append(append([]string(nil), universalKeys...), credentialKeys()...)
 }
 
 // Validate is the load-time semantic pass over the connectors-model config:
@@ -579,7 +599,7 @@ func vaultNameSet(cfg *config.Config) map[string]bool {
 
 func newScope(ev connector.EventDecl, cfg *config.Config, grouped bool) *scope {
 	sc := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}, vaults: vaultNameSet(cfg), secrets: secretNameSet(cfg)}
-	for _, k := range universalKeys {
+	for _, k := range universalOrCredential() {
 		sc.top[k] = true
 	}
 	for k := range ev.Context {
@@ -599,7 +619,7 @@ func newScope(ev connector.EventDecl, cfg *config.Config, grouped bool) *scope {
 
 func openScope(cfg *config.Config) *scope {
 	sc := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}, vaults: vaultNameSet(cfg), secrets: secretNameSet(cfg), open: true}
-	for _, k := range universalKeys {
+	for _, k := range universalOrCredential() {
 		sc.top[k] = true
 	}
 	if len(cfg.SecretRefs) > 0 {
@@ -851,7 +871,7 @@ func sortedIDs(ids map[string]bool) string {
 }
 
 func isUniversal(k string) bool {
-	for _, u := range universalKeys {
+	for _, u := range universalOrCredential() {
 		if u == k {
 			return true
 		}

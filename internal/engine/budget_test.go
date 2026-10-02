@@ -209,7 +209,7 @@ func TestLegacyStepsWorkflowRespectsTheAgentBudget(t *testing.T) {
 		{ID: "one", Type: "agent", Agent: "w/fixer", Prompt: "go"},
 	}}
 	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}},
-		agentTrigger("merge_conflict", "o/r", 1, "h", "sig", wf), wf, "app", "usr", false)
+		agentTrigger("merge_conflict", "o/r", 1, "h", "sig", wf), wf, ghCreds("usr", "app"), false)
 	if len(d.reqs) != 0 {
 		t.Fatalf("an over-cap steps: workflow must shed like the single-action path, got %d dispatches", len(d.reqs))
 	}
@@ -226,7 +226,7 @@ func TestLegacyStepsWorkflowRespectsTheSpendBudget(t *testing.T) {
 		{ID: "one", Type: "agent", Agent: "w/fixer", Prompt: "go"},
 	}}
 	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}},
-		agentTrigger("merge_conflict", "o/r", 2, "h", "sig2", wf), wf, "app", "usr", false)
+		agentTrigger("merge_conflict", "o/r", 2, "h", "sig2", wf), wf, ghCreds("usr", "app"), false)
 	if len(d.reqs) != 0 {
 		t.Fatalf("an over-spend steps: workflow must shed, got %d dispatches", len(d.reqs))
 	}
@@ -245,7 +245,7 @@ func TestLegacyStepsWorkflowDispatchesWhenUnderBudget(t *testing.T) {
 		{ID: "one", Type: "agent", Agent: "w/fixer", Prompt: "go"},
 	}}
 	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}},
-		agentTrigger("merge_conflict", "o/r", 3, "h", "sig3", wf), wf, "app", "usr", false)
+		agentTrigger("merge_conflict", "o/r", 3, "h", "sig3", wf), wf, ghCreds("usr", "app"), false)
 	if len(d.reqs) != 1 {
 		t.Fatalf("under budget the workflow must dispatch, got %d", len(d.reqs))
 	}
