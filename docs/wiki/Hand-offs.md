@@ -158,12 +158,9 @@ workspace rather than sit held until you archive it by hand. Two paths:
   idle_timeout: 12h   # step.done is auto-granted; the agent releases early
 ```
 
-## Legacy `handoffs:`
-
-The legacy named `handoffs:` block still loads and resolves exactly as
-before. [[Migration]] converts each entry into a connector of the matching
-type (its dm/thread target becomes the connector's default `options:`) and
-stamps the default entry's name onto background steps that named none.
+The legacy named `handoffs:` block (and the singular `handoff:` block before
+it) was removed with the legacy config schema — see [[Migration]]. A step's
+`handoff:` now always names an ask-capable connector directly, as above.
 
 Related: [[Verbs]] · [[Connectors]] · [[Runtimes]] · [[Workflows]]
 
