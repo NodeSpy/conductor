@@ -157,7 +157,7 @@ func autopilotTrigger(kind string, ctx map[string]any) core.Trigger {
 	ctx["me"] = map[string]any{"login": "octo-me"} // the source stamps it on every event
 	return core.Trigger{Source: "github", Instance: "gh", Kind: kind, TargetTrusted: true,
 		// The event saw an older head; the run must use the one it starts on.
-		Target: core.Target{Repo: "org/repo", Owner: "org", Name: "repo", Number: 7, PR: 7, HeadSHA: "event0000000"},
+		Target:  core.Target{Repo: "org/repo", Owner: "org", Name: "repo", Number: 7, PR: 7, HeadSHA: "event0000000"},
 		Context: ctx}
 }
 
