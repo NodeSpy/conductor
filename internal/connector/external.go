@@ -218,11 +218,17 @@ func mapSchema(s plugin.Schema) Schema {
 	return out
 }
 
-// reservedConnKeys are the ConnectorRef header fields — not part of the
-// plugin's connection config. `auth` is the daemon-managed OAuth2 block (see
-// buildManagedAuth): conductor runs the token exchange and injects the bearer,
-// so the block never crosses to the plugin as a connection field.
-var reservedConnKeys = map[string]bool{"type": true, "enabled": true, "options": true, "policy": true, "auth": true, "trusted_source": true}
+// reservedConnKeys are the ConnectorRef header fields — host-owned, never
+// part of the plugin's connection config: what to run (use, type), whether
+// (enabled), the host's confinement of it (network, isolation,
+// allow_secrets), the engine's policy and option defaults, and `auth`, the
+// daemon-managed OAuth2 block (see buildManagedAuth: conductor runs the token
+// exchange and injects the bearer). A header key that leaked across would be
+// a host setting the plugin could read and mistake for its own.
+var reservedConnKeys = map[string]bool{
+	"type": true, "use": true, "enabled": true, "options": true, "policy": true, "auth": true,
+	"network": true, "isolation": true, "allow_secrets": true, "trusted_source": true,
+}
 
 // resolveConnection decodes an instance's connection block, resolves every
 // secret reference (env:/vault), and returns the connection map to hand the

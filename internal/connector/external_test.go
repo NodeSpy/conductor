@@ -187,3 +187,19 @@ func flatten(m map[string]any) []string {
 	}
 	return out
 }
+
+// Host-owned header keys never cross to the plugin as connection fields.
+func TestResolveConnectionStripsHostOwnedKeys(t *testing.T) {
+	conn, _, err := resolveConnection(refWith(t, map[string]any{
+		"use": "./conductor-jira", "type": "jira", "enabled": true, "network": []any{"x:443"},
+		"isolation": map[string]any{"mode": "none"}, "allow_secrets": []any{"env:A"},
+		"policy": map[string]any{}, "options": map[string]any{}, "auth": map[string]any{},
+		"base_url": "https://acme.example",
+	}), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conn) != 1 || conn["base_url"] != "https://acme.example" {
+		t.Fatalf("host-owned keys leaked to the plugin: %+v", conn)
+	}
+}

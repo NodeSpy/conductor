@@ -92,3 +92,22 @@ func TestMemoryConnectorNameReserved(t *testing.T) {
 		t.Fatalf("want reserved-name error, got %v", err)
 	}
 }
+
+// Every reserved namespace is refused as a connector name AND as a vault
+// name, from one list (handoff and step were once missing from both).
+func TestReservedNamespacesAreOneList(t *testing.T) {
+	for name := range ReservedNamespaces {
+		var cfg Config
+		y := "connectors:\n  " + name + ": { use: command }\ntriggers:\n  - { on: cron.x, steps: [ { run: js, code: \"1\" } ] }\n"
+		if err := yaml.Unmarshal([]byte(y), &cfg); err != nil {
+			t.Fatal(err)
+		}
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), `"`+name+`" is reserved`) {
+			t.Fatalf("connector %q: want reserved-name error, got %v", name, err)
+		}
+		v := Config{Vaults: map[string]VaultRef{name: {Type: "x"}}}
+		if err := v.validateVaults(); err == nil || !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("vault %q: want reserved-name error, got %v", name, err)
+		}
+	}
+}

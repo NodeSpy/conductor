@@ -612,6 +612,22 @@ func rejectLegacyFilters(n *yaml.Node) error {
 // listing it is runnable on demand via `conductor run <name>`.
 const ManualSource = "manual"
 
+// ReservedNamespaces are conductor's OWN namespaces — its state and
+// facilities, not integrations (plugin-contract.md §1.10): no connector or
+// vault may take these names, and each is always available. One list, so
+// connectors and vaults cannot disagree about what is reserved.
+var ReservedNamespaces = map[string]string{
+	ManualSource: "the built-in `on: manual` source",
+	"kv":         "the built-in state store — always available, nothing to configure",
+	"sql":        "the built-in SQL verbs — always available; connections live in stores:",
+	"conductor":  "conductor's own lifecycle events and verbs — always available, nothing to configure",
+	"memory":     "the built-in shared agent memory — configure it via the top-level memory: section",
+	"workflow":   "the built-in workflow verbs — always available, nothing to configure",
+	"blob":       "the built-in artifact verbs — always available, nothing to configure",
+	"handoff":    "a hand-off's own lifecycle verbs (handoff.done) — always available",
+	"step":       "the built-in step verbs — always available, nothing to configure",
+}
+
 // TriggerSpec is one entry in the `triggers:` list: on/filters/steps/hooks
 // plus optional grouping, policy, and source-side options.
 type TriggerSpec struct {
@@ -1684,26 +1700,8 @@ func (c *Config) validateConnectors() error {
 		if name == "" {
 			return fmt.Errorf("config: connectors: empty connector name")
 		}
-		if name == ManualSource {
-			return fmt.Errorf("config: connectors: %q is reserved (the built-in `on: manual` source)", ManualSource)
-		}
-		if name == "kv" {
-			return fmt.Errorf("config: connectors: %q is reserved (the built-in state store — always available, nothing to configure)", name)
-		}
-		if name == "sql" {
-			return fmt.Errorf("config: connectors: %q is reserved (the built-in SQL verbs — always available; connections live in stores:)", name)
-		}
-		if name == "conductor" {
-			return fmt.Errorf("config: connectors: %q is reserved (conductor's own lifecycle events and verbs — always available, nothing to configure)", name)
-		}
-		if name == "memory" {
-			return fmt.Errorf("config: connectors: %q is reserved (the built-in shared agent memory — configure it via the top-level memory: section)", name)
-		}
-		if name == "workflow" {
-			return fmt.Errorf("config: connectors: %q is reserved (the built-in workflow verbs — always available, nothing to configure)", name)
-		}
-		if name == "blob" {
-			return fmt.Errorf("config: connectors: %q is reserved (the built-in artifact verbs — always available, nothing to configure)", name)
+		if why, ok := ReservedNamespaces[name]; ok {
+			return fmt.Errorf("config: connectors: %q is reserved (%s)", name, why)
 		}
 		if err := validateUseRef("connector "+name, ref.Use, ref.legacyType, UseKindConnector); err != nil {
 			return err
