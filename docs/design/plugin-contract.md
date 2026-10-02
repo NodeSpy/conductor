@@ -804,13 +804,18 @@ There is one release, so there is no intermediate step:
 
 ### 5.3 Open work items
 
-- **#161 (Slack hand-over, draft).** Split it.
-  - The vendor-neutral half lands in conductor unchanged: `detach:`, `repo:`,
+- **#161 (Slack hand-over, draft): combined into #164, then closed.** After
+  steps A–C are built out on #164, #161's work is carried over and #161 is
+  closed:
+  - The vendor-neutral half becomes commits on #164: the `detach:`, `repo:`,
     `branch:`, `images:` and `mode:` step fields, `HonorsLaunchFields`, the
     `ForceNoCheckout` fix and the detach launcher.
   - `TypeDecl.ValidateTrigger` becomes `plugin.validate`.
-  - The Slack half moves into the slack plugin (P): forms, shortcuts,
-    interactive ACK, `thread` / `download`.
+  - The Slack half (forms, shortcuts, the interactive ACK, `thread` /
+    `download`) lands in the slack plugin in the companion plugins PR, since
+    #164 moves Slack out of conductor. Downloaded files use the Q7 staging
+    directory.
+  - #161 is closed once both halves are in, with a pointer to #164.
 - **#163-era hooks and verbs (merged).** Unchanged. The hooks are already
   generic flow config. `react` / `set_status` are plain plugin verbs.
   `run.start_sha` / `run.head_sha` come from `revision` + `reads_revision`.
