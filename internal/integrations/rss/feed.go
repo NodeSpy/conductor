@@ -116,3 +116,10 @@ func firstNonEmpty(vs ...string) string {
 	}
 	return ""
 }
+
+// ParseFeed parses an RSS 2.0 or Atom document into its items (shared with
+// the rss connector's contract handler).
+func ParseFeed(body []byte) []Item { return parseFeed(body) }
+
+// DedupID is the item's stable id.
+func (i Item) DedupID() string { return i.dedupID() }

@@ -8,14 +8,12 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
-	rssint "github.com/NodeSpy/conductor/internal/integrations/rss"
 	webhookint "github.com/NodeSpy/conductor/internal/integrations/webhook"
 	"github.com/NodeSpy/conductor/internal/netguard"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
@@ -351,130 +349,6 @@ func (w *webhookImpl) Invoke(ctx context.Context, verb string, opts map[string]a
 // ---------------------------------------------------------------------------
 // rss
 // ---------------------------------------------------------------------------
-
-var rssDecl = &TypeDecl{
-	Type: "rss",
-	Desc: "RSS/Atom: polls feeds and fires on new items; no verbs.",
-	Connection: Schema{
-		"feeds": {Type: TMap, Required: true, Desc: "name -> { url, interval }"},
-	},
-	Events: []EventDecl{
-		{
-			Name: "<feed>", Dynamic: true, Desc: "a configured feed produced a new item",
-			Filters: Schema{
-				"match": {Type: TString, Desc: "case-insensitive regex over the item's title+summary"},
-			},
-			Context: Schema{
-				"item.title":     {Type: TString},
-				"item.link":      {Type: TString},
-				"item.id":        {Type: TString},
-				"item.summary":   {Type: TString},
-				"item.published": {Type: TString},
-				"url":            {Type: TString},
-				"kind":           {Type: TString},
-				"title":          {Type: TString},
-			},
-		},
-	},
-}
-
-func init() {
-	rssDecl.Filter = rssFilter
-	RegisterType(rssDecl, newRSSImpl)
-}
-
-type rssFeed struct {
-	URL      string          `yaml:"url"`
-	Interval config.Duration `yaml:"interval"`
-}
-
-type rssConn struct {
-	Feeds map[string]rssFeed `yaml:"feeds"`
-}
-
-type rssImpl struct {
-	name string
-	conn rssConn
-	deps Deps
-}
-
-func newRSSImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
-	var conn rssConn
-	if err := ref.Decode(&conn); err != nil {
-		return nil, fmt.Errorf("connector %q: decode rss connection: %w", name, err)
-	}
-	return &rssImpl{name: name, conn: conn, deps: deps}, nil
-}
-
-func (r *rssImpl) Validate() error { return nil }
-
-func (r *rssImpl) DeclaredEvents() []string {
-	out := make([]string, 0, len(r.conn.Feeds))
-	for k := range r.conn.Feeds {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// Source lowers the connector's triggers into an rss integration: each
-// referenced feed name becomes one rssint.Feed carrying every trigger on it
-// as an action variant. Match is left empty on the lowered feed — per-trigger
-// match filtering is evaluated at the flow layer instead (see rssFilter),
-// since two triggers on one feed can each want their own pattern.
-func (r *rssImpl) Source(triggers []CompiledTrigger) (core.Integration, error) {
-	if len(triggers) == 0 {
-		return nil, nil
-	}
-	byName := map[string]config.ActionSet{}
-	var order []string
-	for _, t := range triggers {
-		name := t.Spec.Event()
-		if _, ok := r.conn.Feeds[name]; !ok {
-			return nil, fmt.Errorf("trigger on %s: unknown rss feed %q (declared: %s)", t.Spec.On, name, strings.Join(r.DeclaredEvents(), ", "))
-		}
-		if _, ok := byName[name]; !ok {
-			order = append(order, name)
-		}
-		byName[name] = append(byName[name], lowerAction(t))
-	}
-	feeds := make([]rssint.Feed, 0, len(order))
-	for _, name := range order {
-		f := r.conn.Feeds[name]
-		feeds = append(feeds, rssint.Feed{
-			Name:     name,
-			URL:      f.URL,
-			Interval: f.Interval,
-			Match:    "",
-			Actions:  byName[name],
-		})
-	}
-	return buildIntegration("rss", r.name, rssint.Config{Feeds: feeds})
-}
-
-func (r *rssImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (map[string]any, error) {
-	return nil, fmt.Errorf("rss: no verbs")
-}
-
-// rssFilter evaluates an rss trigger's match filter against the emitted
-// item's title+summary — mirroring rss.Integration.process's own
-// re.MatchString(it.Title+"\n"+it.Summary) exactly, but at the trigger level:
-// the lowered rssint.Feed.Match is left empty, so every item reaches the
-// flow, and this filter decides per-trigger whether it fires.
-func rssFilter(event string, filters map[string]any, trigCtx map[string]any) (bool, error) {
-	match, _ := filters["match"].(string)
-	if match == "" {
-		return true, nil
-	}
-	re, err := regexp.Compile("(?i)" + match)
-	if err != nil {
-		return false, fmt.Errorf("filters.match: bad regex: %w", err)
-	}
-	item, _ := trigCtx["item"].(map[string]any)
-	title, _ := item["title"].(string)
-	summary, _ := item["summary"].(string)
-	return re.MatchString(title + "\n" + summary), nil
-}
 
 // lowerEngineOptions lowers the trigger options the ENGINE interprets onto the
 // action it runs — the same for every source (plugin-contract.md §2.5): the

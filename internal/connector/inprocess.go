@@ -8,6 +8,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/builtins/cron"
 	"github.com/NodeSpy/conductor/internal/builtins/exposure"
+	"github.com/NodeSpy/conductor/internal/builtins/rss"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/plugin"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
@@ -28,6 +29,7 @@ var inprocessTunnel = exposure.NewTunnel()
 
 func init() {
 	RegisterInProcessConnector(cron.Cron{})
+	RegisterInProcessConnector(rss.New())
 	RegisterInProcessConnector(exposure.LAN{})
 	RegisterInProcessConnector(inprocessTunnel)
 }

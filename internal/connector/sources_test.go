@@ -101,8 +101,10 @@ connectors:
 	if err := in.Impl.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	if got := in.Impl.DeclaredEvents(); len(got) != 2 || got[0] != "blog" || got[1] != "rel" {
-		t.Fatalf("DeclaredEvents = %v, want [blog rel]", got)
+	// rss speaks the contract in process: its feed names are dynamic events
+	// it validates itself.
+	if got := in.Impl.DeclaredEvents(); got != nil {
+		t.Fatalf("DeclaredEvents = %v, want nil (validated by the plugin)", got)
 	}
 
 	// Two triggers on one feed coexist (variants), plus one on another feed.
@@ -117,42 +119,12 @@ connectors:
 	if err := src.Validate(); err != nil {
 		t.Fatalf("lowered rss integration invalid: %v", err)
 	}
-	_, err = in.Impl.Source([]CompiledTrigger{{Spec: specOn(t, "on: news.nope")}})
-	if err == nil || !strings.Contains(err.Error(), `unknown rss feed "nope"`) {
+	bad, _ := in.Impl.Source([]CompiledTrigger{{Spec: specOn(t, "on: news.nope")}})
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), `unknown rss feed "nope"`) {
 		t.Fatalf("unknown feed: %v", err)
 	}
 	if _, err := in.Impl.Invoke(context.Background(), "post", nil); err == nil || !strings.Contains(err.Error(), "no verbs") {
 		t.Fatalf("Invoke should refuse: %v", err)
-	}
-}
-
-func TestRSSFilter(t *testing.T) {
-	ctx := map[string]any{"item": map[string]any{
-		"title": "Go 1.26 released", "summary": "toolchain and runtime updates",
-	}}
-	cases := []struct {
-		name    string
-		filters map[string]any
-		want    bool
-		wantErr string
-	}{
-		{"no match filter matches all", map[string]any{}, true, ""},
-		{"title match, case-insensitive", map[string]any{"match": "go 1\\.26"}, true, ""},
-		{"summary match", map[string]any{"match": "runtime"}, true, ""},
-		{"no match", map[string]any{"match": "security advisory"}, false, ""},
-		{"bad regex errors", map[string]any{"match": "("}, false, "bad regex"},
-	}
-	for _, c := range cases {
-		got, err := rssFilter("rel", c.filters, ctx)
-		if c.wantErr != "" {
-			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-				t.Errorf("%s: err = %v, want %q", c.name, err, c.wantErr)
-			}
-			continue
-		}
-		if err != nil || got != c.want {
-			t.Errorf("%s: got %v, %v; want %v", c.name, got, err, c.want)
-		}
 	}
 }
 
