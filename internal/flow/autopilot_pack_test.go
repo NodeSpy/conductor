@@ -36,17 +36,25 @@ import (
 type ghAPI struct {
 	mu       sync.Mutex
 	head     string
+	merged   bool     // the PR merged (state closed)
 	statuses []string // "<sha> <state> <context> | <description>"
-	reacts   []string // "<kind> <id> <content>"
+	reacts   []string // "<kind> <id> <content>"; a removal is "<kind> <id> -<content>"
+	// on is what each comment carries now: reaction id -> content (all as
+	// octo-me) — so a test can assert what is LEFT, not just what was called.
+	on     map[string]map[int64]string
+	nextID int64
+	// rows is each (sha, context)'s latest state — what the PR shows.
+	rows map[string]string
 }
 
 var (
 	reIssueReact = regexp.MustCompile(`^/repos/org/repo/issues/comments/(\d+)/reactions$`)
+	reIssueUnrx  = regexp.MustCompile(`^/repos/org/repo/issues/comments/(\d+)/reactions/(\d+)$`)
 	reStatus     = regexp.MustCompile(`^/repos/org/repo/statuses/(\w+)$`)
 )
 
 func newGHAPI(t *testing.T, head string) *ghAPI {
-	api := &ghAPI{head: head}
+	api := &ghAPI{head: head, on: map[string]map[int64]string{}, rows: map[string]string{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		api.mu.Lock()
 		defer api.mu.Unlock()
@@ -54,15 +62,45 @@ func newGHAPI(t *testing.T, head string) *ghAPI {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		switch p := r.URL.Path; {
 		case r.Method == http.MethodGet && p == "/repos/org/repo/pulls/7":
-			_ = json.NewEncoder(w).Encode(map[string]any{"state": "open", "head": map[string]any{"sha": api.head}})
+			state := "open"
+			if api.merged {
+				state = "closed"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"state": state, "merged": api.merged, "head": map[string]any{"sha": api.head}})
 		case r.Method == http.MethodGet && p == "/user":
 			_ = json.NewEncoder(w).Encode(map[string]any{"login": "octo-me"})
 		case r.Method == http.MethodPost && reIssueReact.MatchString(p):
-			api.reacts = append(api.reacts, fmt.Sprintf("issue_comment %s %v", reIssueReact.FindStringSubmatch(p)[1], body["content"]))
+			id := reIssueReact.FindStringSubmatch(p)[1]
+			api.reacts = append(api.reacts, fmt.Sprintf("issue_comment %s %v", id, body["content"]))
+			if api.on[id] == nil {
+				api.on[id] = map[int64]string{}
+			}
+			api.nextID++
+			api.on[id][api.nextID] = fmt.Sprint(body["content"])
 			w.WriteHeader(201)
 			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodGet && reIssueReact.MatchString(p):
+			var out []map[string]any
+			for rid, c := range api.on[reIssueReact.FindStringSubmatch(p)[1]] {
+				if c == r.URL.Query().Get("content") {
+					out = append(out, map[string]any{"id": rid, "content": c, "user": map[string]any{"login": "octo-me"}})
+				}
+			}
+			if out == nil {
+				out = []map[string]any{}
+			}
+			_ = json.NewEncoder(w).Encode(out)
+		case r.Method == http.MethodDelete && reIssueUnrx.MatchString(p):
+			m := reIssueUnrx.FindStringSubmatch(p)
+			var rid int64
+			fmt.Sscan(m[2], &rid)
+			api.reacts = append(api.reacts, fmt.Sprintf("issue_comment %s -%s", m[1], api.on[m[1]][rid]))
+			delete(api.on[m[1]], rid)
+			w.WriteHeader(204)
 		case r.Method == http.MethodPost && reStatus.MatchString(p):
-			api.statuses = append(api.statuses, fmt.Sprintf("%s %v %v | %v", reStatus.FindStringSubmatch(p)[1], body["state"], body["context"], body["description"]))
+			sha := reStatus.FindStringSubmatch(p)[1]
+			api.statuses = append(api.statuses, fmt.Sprintf("%s %v %v | %v", sha, body["state"], body["context"], body["description"]))
+			api.rows[sha+" "+fmt.Sprint(body["context"])] = fmt.Sprint(body["state"])
 			w.WriteHeader(201)
 			_, _ = w.Write([]byte(`{}`))
 		default:
@@ -249,4 +287,36 @@ func TestAutopilotPackContextsCoexist(t *testing.T) {
 		"aaaaaaa1111 pending octo-me / conflict | resolving the merge conflict",
 		"aaaaaaa1111 success octo-me / conflict | done — no changes pushed")
 	wantList(t, "reactions (none: no subject)", re)
+}
+
+// The PR merges while the agent works: conductor stops the fixer, and the
+// pack's `stop` hooks leave nothing behind — no pending row (the start
+// commit's turns success, "stopped — the PR merged") and no 👀 (removed). No
+// failure, no 😕.
+func TestAutopilotPackClosedMidRunLeavesNothing(t *testing.T) {
+	api := newGHAPI(t, "aaaaaaa1111")
+	rig, cfg := autopilotRig(t)
+	rig.Agents.dispatchFunc = func(context.Context, dispatch.Request) (dispatch.RunRef, error) {
+		api.mu.Lock()
+		api.merged = true // merged under the agent; the engine stops the fixer
+		api.mu.Unlock()
+		return dispatch.RunRef{}, dispatch.ErrTargetClosed
+	}
+	runAutopilot(rig, autopilotSpec(t, cfg, "on_new_comment"), autopilotTrigger("new_comment", map[string]any{
+		"author": "bob", "reaction_subjects": []any{map[string]any{"kind": "issue_comment", "id": int64(5)}}}))
+	st, re := api.take()
+	wantList(t, "statuses", st,
+		"aaaaaaa1111 pending octo-me / comment | replying to bob's comment",
+		"aaaaaaa1111 success octo-me / comment | stopped — the PR merged")
+	wantList(t, "reactions", re, "issue_comment 5 eyes", "issue_comment 5 -eyes")
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	for row, state := range api.rows {
+		if state == "pending" {
+			t.Fatalf("row %q left pending on the closed PR", row)
+		}
+	}
+	if n := len(api.on["5"]); n != 0 {
+		t.Fatalf("%d reaction(s) left on the comment: %v", n, api.on["5"])
+	}
 }
