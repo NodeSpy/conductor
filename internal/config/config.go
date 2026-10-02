@@ -485,26 +485,6 @@ type HandoffWeb struct {
 	// TTL is how long a presented draft's link stays valid before the server-side
 	// pending entry expires (default 30m when unset).
 	TTL Duration `yaml:"ttl"`
-	// Tunnel configures a per-hand-off ephemeral public URL (cloudflared, ngrok,
-	// tailscale, ssh, …), opened fresh for each draft instead of using a fixed
-	// BaseURL. Unset (or provider: static/"") keeps today's BaseURL-as-is
-	// behavior.
-	Tunnel TunnelConfig `yaml:"tunnel"`
-}
-
-// TunnelConfig is the schema for a pluggable tunnel that gives the web hand-off
-// channel a fresh public URL per draft, instead of a persistent `base_url` you
-// host yourself. See handoff.NewTunnel for the provider implementations
-// (lan/static/cloudflared/ngrok/tailscale/ssh/localxpose/command).
-type TunnelConfig struct {
-	Provider   string   `yaml:"provider"`
-	Host       string   `yaml:"host"`
-	Mode       string   `yaml:"mode"`
-	SSHHost    string   `yaml:"ssh_host"`
-	Authtoken  string   `yaml:"authtoken"`
-	URLPattern string   `yaml:"url_pattern"`
-	Command    []string `yaml:"command"`
-	Account    bool     `yaml:"account"`
 }
 
 // HandoffChat is the schema for a chat-based (Slack/Discord) hand-off channel:
@@ -1674,21 +1654,6 @@ func (c *Config) controllerNames() string {
 	return strings.Join(names, ", ")
 }
 
-// validTunnelProviders are the recognized `handoffs.*.web.tunnel.provider`
-// values (empty == "static": no process, base_url used as-is). See
-// internal/handoff/tunnel.go for what each spawns.
-var validTunnelProviders = map[string]bool{
-	"":            true,
-	"static":      true,
-	"lan":         true,
-	"cloudflared": true,
-	"ngrok":       true,
-	"tailscale":   true,
-	"ssh":         true,
-	"localxpose":  true,
-	"command":     true,
-}
-
 // validateHandoffs checks the optional `handoffs:` block: each entry sets
 // exactly one channel sub-block (web/slack/discord), and at most one entry is
 // flagged default:true. A `web` entry's `tunnel:` block (if any) is checked for
@@ -1708,9 +1673,6 @@ func (c *Config) validateHandoffs() error {
 		set := 0
 		if hc.Web != nil {
 			set++
-			if err := validateTunnel(name, hc.Web.Tunnel); err != nil {
-				return err
-			}
 		}
 		if hc.Slack != nil {
 			set++
@@ -1777,41 +1739,6 @@ func validateDiscordChat(handoffName string, hc *HandoffChat) error {
 	}
 	if hc.BotToken == "" {
 		return fmt.Errorf("config: handoff %q: discord.bot_token is required", handoffName)
-	}
-	return nil
-}
-
-// validateTunnel checks one `handoffs.<name>.web.tunnel:` block. An empty
-// Provider ("") is valid — it means "static" (no process, base_url used as-is).
-func validateTunnel(handoffName string, t TunnelConfig) error {
-	if !validTunnelProviders[t.Provider] {
-		names := make([]string, 0, len(validTunnelProviders))
-		for p := range validTunnelProviders {
-			if p != "" {
-				names = append(names, p)
-			}
-		}
-		sort.Strings(names)
-		return fmt.Errorf("config: handoff %q: tunnel provider must be one of %s, got %q", handoffName, strings.Join(names, "|"), t.Provider)
-	}
-	switch t.Provider {
-	case "tailscale":
-		if t.Mode != "" && t.Mode != "serve" && t.Mode != "funnel" {
-			return fmt.Errorf("config: handoff %q: tunnel mode must be serve|funnel, got %q", handoffName, t.Mode)
-		}
-	case "ssh":
-		if t.SSHHost == "" {
-			return fmt.Errorf("config: handoff %q: tunnel provider \"ssh\" requires ssh_host (e.g. localhost.run, serveo.net, a.pinggy.io)", handoffName)
-		}
-	case "command":
-		if len(t.Command) == 0 {
-			return fmt.Errorf("config: handoff %q: tunnel provider \"command\" requires a non-empty command:", handoffName)
-		}
-	}
-	if t.URLPattern != "" {
-		if _, err := regexp.Compile(t.URLPattern); err != nil {
-			return fmt.Errorf("config: handoff %q: invalid tunnel url_pattern %q: %w", handoffName, t.URLPattern, err)
-		}
 	}
 	return nil
 }

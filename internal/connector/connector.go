@@ -31,6 +31,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/vaults"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // FieldType is a schema field's type.
@@ -89,6 +90,8 @@ type EventDecl struct {
 	// Dynamic marks event names that come from connection config (cron
 	// schedules, webhook sources, rss feeds) rather than a fixed set.
 	Dynamic bool
+	// Semantics are what the ENGINE does with this event (pkg/plugin).
+	Semantics *sdk.EventSemantics
 }
 
 // FilterKeys returns the match keys legal as an object key in this event's
@@ -151,6 +154,20 @@ type VerbDecl struct {
 	// flow runner stores each as a run-scoped blob and replaces the bytes
 	// with the opaque handle before the value enters the JSON scope.
 	BinaryOut []string
+	// Semantics are what the ENGINE may use this verb for (reading a
+	// target's revision, minting a credential, exposing a local address) —
+	// pkg/plugin semantics, the same for a plugin and a builtin.
+	Semantics *sdk.VerbSemantics
+}
+
+// ExposeVerb returns the verb declaring the `exposes` semantic, if any.
+func (d *TypeDecl) ExposeVerb() (VerbDecl, bool) {
+	for _, v := range d.Verbs {
+		if v.Semantics != nil && v.Semantics.Exposes != nil {
+			return v, true
+		}
+	}
+	return VerbDecl{}, false
 }
 
 // TypeDecl is a connector type's full self-description.
@@ -160,6 +177,9 @@ type TypeDecl struct {
 	Events     []EventDecl
 	Verbs      []VerbDecl
 	Connection Schema // documented connection fields, for `conductor schema`
+	// Semantics are the connection-level declarations (credentials, scope,
+	// poll, translate, listeners, preflight).
+	Semantics *sdk.ConnSemantics
 
 	// Filter, when non-nil, evaluates match keys against an emitted event's
 	// context in the flow runner — the uniform path for synthetic sources
@@ -331,6 +351,9 @@ type Builder func(name string, ref config.ConnectorRef, deps Deps) (Impl, error)
 type Deps struct {
 	Secrets *secrets.Resolver
 	Log     func(string, ...any)
+	// Lookup finds another configured instance by name, at use time (set by
+	// Build). nil outside a built registry.
+	Lookup func(name string) (*Instance, bool)
 	// UserToken returns the acts-as-you GitHub token (`gh auth token` or the
 	// configured write token). nil in contexts with no github wiring.
 	UserToken func() (string, error)
@@ -431,6 +454,9 @@ func isConfigErr(err error) bool {
 // ConfigErr) still fail: they are config bugs, not runtime conditions.
 func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 	r := &Registry{byName: map[string]*Instance{}}
+	// Instances may name one another (a web hand-off's `expose:`); the
+	// lookup resolves at use time, against the registry being built.
+	deps.Lookup = r.Get
 	// Vaults build FIRST: connector credentials may hold {{ vault … }}
 	// references, which resolve through the registry this wires. A vault
 	// that won't unlock registers disabled (the daemon boots; dependents
@@ -495,6 +521,7 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 		r.byName[name] = in
 		r.order = append(r.order, name)
 	}
+	r.checkExposures(deps.Log)
 	// Wire the stores: section into the kv registry — a bad store is a load
 	// error, never a disabled connector.
 	if err := buildStores(cfg, deps); err != nil {

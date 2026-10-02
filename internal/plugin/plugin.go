@@ -82,6 +82,12 @@ const (
 type Spec struct {
 	// Name is the implementation name (connector type / runtime name).
 	Name string
+	// InProcess, when set, is a builtin implementing the contract in-process
+	// (plugin-contract.md §1.10): it is served over an in-memory pipe through
+	// the same JSON-RPC transport as a spawned plugin, so nothing about it
+	// takes a private path. There is no binary, so BinPath, Sha256 and the
+	// manifest do not apply.
+	InProcess sdk.Handler
 	// Kind is what it provides, derived from the block that referenced it.
 	Kind Kind
 	// Provides is the registered name — the same as Name.

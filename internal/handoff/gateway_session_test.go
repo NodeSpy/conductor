@@ -123,26 +123,6 @@ func TestRunDiscordGatewayLoop(t *testing.T) {
 	}
 }
 
-func TestParseNgrokTunnelsFetch(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"tunnels":[{"public_url":""},{"public_url":"https://x.ngrok.app"}]}`)
-	}))
-	defer srv.Close()
-	url, err := fetchNgrokTunnelURL(srv.URL)
-	if err != nil || url != "https://x.ngrok.app" {
-		t.Fatalf("fetch: %q %v", url, err)
-	}
-	if _, err := fetchNgrokTunnelURL("http://127.0.0.1:1/api"); err == nil {
-		t.Fatal("unreachable API should error")
-	}
-	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `nope`)
-	}))
-	defer bad.Close()
-	if _, err := fetchNgrokTunnelURL(bad.URL); err == nil {
-		t.Fatal("bad body should error")
-	}
-}
 
 func TestNotWiredChannelPresent(t *testing.T) {
 	_, err := notWiredChannel{name: "x"}.Present(context.Background(), Draft{})

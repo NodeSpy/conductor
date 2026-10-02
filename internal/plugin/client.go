@@ -514,6 +514,15 @@ func (c *Client) ensureLocked(ctx context.Context) error {
 		return fmt.Errorf("plugin %s is down (crash-loop guard)", c.spec.Name)
 	}
 
+	if c.spec.InProcess != nil {
+		// A builtin speaking the contract in-process: no binary to verify,
+		// the same transport and protocol as every spawned plugin.
+		c.starts = append(c.starts, now)
+		c.totalStart++
+		c.conn, c.kill = inProcessDial(c.spec.InProcess, c.deps)
+		c.digest = "in-process"
+		return nil
+	}
 	if !c.spec.Installed() {
 		return c.spec.NotInstalledError()
 	}
@@ -878,4 +887,22 @@ func (c *Client) TargetHead(ctx context.Context, instance string, t sdk.Target) 
 		return sdk.TargetHeadResult{}, notSupported(err)
 	}
 	return res, nil
+}
+
+// inProcessDial serves h over an in-memory pipe and returns the daemon's end
+// of it: the same acp.Conn, the same handler routing (notifications, host
+// callbacks) as a subprocess.
+func inProcessDial(h sdk.Handler, d Deps) (transport, func()) {
+	toPlugin, fromDaemon := io.Pipe()
+	toDaemon, fromPlugin := io.Pipe()
+	go func() {
+		_ = sdk.ServeConn(toPlugin, fromPlugin, h)
+		_ = fromPlugin.Close()
+	}()
+	conn := acp.NewConn(toDaemon, fromDaemon, pluginHandler{onNotify: d.onNotify, onRequest: d.onRequest})
+	kill := func() {
+		_ = fromDaemon.Close()
+		_ = toDaemon.Close()
+	}
+	return conn, kill
 }

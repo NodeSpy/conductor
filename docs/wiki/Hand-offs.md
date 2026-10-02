@@ -3,7 +3,7 @@
 A hand-off presents work to a human and returns their answer into the
 workflow. In the connectors model it is a request-response verb — `uses:
 <conn>.ask` — on the ask-capable connector types: `web`, `slack`, `discord`.
-The channel machinery (draft pages, tunnels, TTLs, reply capture) is the
+The channel machinery (draft pages, exposures, TTLs, reply capture) is the
 implementation of those verbs.
 
 ```yaml
@@ -25,13 +25,25 @@ presented. `timeout:` (default 1h) bounds an unanswered ask.
 - **`web`** — an approve / revise / discard page with an editable draft,
   served on the inbound listener. The default `listen:` binds loopback only
   (`127.0.0.1:8099`) — draft pages carry approve/deny actions and are meant
-  to be reached through the tunnel or a same-box reverse proxy; bind wider
-  explicitly if you mean to. `base_url:` for a fixed origin, or a `tunnel:`
-  provider (`static`, `lan`, `cloudflared`, `ngrok`, `tailscale`, `ssh`,
-  `localxpose`, `command`) for a fresh public URL per ask. Links carry a 192-bit token and
-  expire (`ttl:`, default 30m). The `tailscale` provider leaves a serve
-  mapping that existed before the draft in place at close (it tears down
-  only its own).
+  to be reached through an exposure or a same-box reverse proxy; bind wider
+  explicitly if you mean to. `base_url:` for a fixed origin, or `expose:
+  <connector>` for a fresh public URL per ask: it names an **exposure
+  connector** — any connector declaring an `exposes` verb. Builtins: `lan`
+  (this machine's LAN address, or `host:`) and `tunnel` (runs any tunnelling
+  `command:` — `{{.port}}` / `{{.addr}}` expand — and reads the public URL
+  from its output, `url_pattern:` to pick it). Named tunnel services
+  (cloudflared, ngrok, tailscale, …) are plugins; conductor ships none. Each
+  ask opens its own exposure and releases it when the ask resolves or
+  expires. Links carry a 192-bit token and expire (`ttl:`, default 30m).
+
+  ```yaml
+  connectors:
+    review: { use: web, expose: tun }
+    tun:
+      use: tunnel
+      command: [cloudflared, tunnel, --url, "http://{{.addr}}"]
+      url_pattern: 'https://\S+\.trycloudflare\.com'
+  ```
 - **`slack`** — `to: dm` (a user id) or `to: thread` (a channel); the reply is
   captured over the connector's Socket Mode connection. Replies parse as
   approve (`approve`, `lgtm`, `+1`, …), discard (`discard`, `cancel`, …), or

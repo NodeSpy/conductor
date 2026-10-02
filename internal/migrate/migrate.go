@@ -603,35 +603,6 @@ func handoffConnector(name string, hc config.HandoffConfig, existing map[string]
 		if hc.Web.TTL != 0 {
 			conn["ttl"] = hc.Web.TTL.String()
 		}
-		if hc.Web.Tunnel.Provider != "" || len(hc.Web.Tunnel.Command) > 0 {
-			t := map[string]any{}
-			tc := hc.Web.Tunnel
-			if tc.Provider != "" {
-				t["provider"] = tc.Provider
-			}
-			if tc.Host != "" {
-				t["host"] = tc.Host
-			}
-			if tc.Mode != "" {
-				t["mode"] = tc.Mode
-			}
-			if tc.SSHHost != "" {
-				t["ssh_host"] = tc.SSHHost
-			}
-			if tc.Authtoken != "" {
-				t["authtoken"] = tc.Authtoken
-			}
-			if tc.URLPattern != "" {
-				t["url_pattern"] = tc.URLPattern
-			}
-			if len(tc.Command) > 0 {
-				t["command"] = strSlice(tc.Command)
-			}
-			if tc.Account {
-				t["account"] = true
-			}
-			conn["tunnel"] = t
-		}
 		return conn, nil
 	case hc.Slack != nil:
 		conn := map[string]any{"type": "slack", "bot_token": hc.Slack.BotToken}

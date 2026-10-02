@@ -58,6 +58,9 @@ func pluginDeps(sec *secrets.Resolver, audit func(map[string]any)) plugin.Deps {
 // plugin client (opened lazily, on the first host.state call).
 var pluginStateStore = sync.OnceValue(func() *plugin.StateStore { return plugin.NewStateStore(config.StateDir()) })
 
+// In-process builtins share it (connector.InProcessState).
+func init() { connector.InProcessState = pluginStateStore() }
+
 // codeSandboxDeps builds the sandbox.LocalWrapDeps a code step's OWN
 // `isolation:` block wraps through (internal/code's execCLILocal/
 // execHostLocal) — the same egress-proxy/mask/self-exe wiring pluginDeps

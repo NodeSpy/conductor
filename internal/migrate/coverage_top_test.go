@@ -176,8 +176,8 @@ func TestPrefixBranchSteps(t *testing.T) {
 	}
 }
 
-// TestHandoffWebTunnelAndErrors: the web hand-off carries every tunnel
-// field; a name collision with an integration and an empty hand-off block
+// TestHandoffWebTunnelAndErrors: the web hand-off carries its fields (no
+// tunnel: that is an exposure connector now); a name collision with an integration and an empty hand-off block
 // both hard-error.
 func TestHandoffWebTunnelAndErrors(t *testing.T) {
 	doc, _ := transformYAML(t, `
@@ -194,32 +194,13 @@ handoffs:
       base_url: https://c.example.com
       listen: ":8099"
       ttl: 45m
-      tunnel:
-        provider: ngrok
-        host: h.example
-        mode: http
-        ssh_host: bastion
-        authtoken: ${NGROK_TOKEN}
-        url_pattern: "https://(\\S+)"
-        command: [my-tunnel, --up]
-        account: true
 `)
 	hoff := doc["connectors"].(map[string]any)["hoff"].(map[string]any)
 	if hoff["use"] != "web" || hoff["base_url"] != "https://c.example.com" || hoff["ttl"] != "45m0s" {
 		t.Fatalf("web connector: %v", hoff)
 	}
-	tun := hoff["tunnel"].(map[string]any)
-	for k, want := range map[string]any{
-		"provider": "ngrok", "host": "h.example", "mode": "http",
-		"ssh_host": "bastion", "authtoken": "${NGROK_TOKEN}",
-		"url_pattern": "https://(\\S+)", "account": true,
-	} {
-		if tun[k] != want {
-			t.Errorf("tunnel.%s = %v, want %v", k, tun[k], want)
-		}
-	}
-	if cmd := tun["command"].([]any); len(cmd) != 2 || cmd[0] != "my-tunnel" {
-		t.Fatalf("tunnel command: %v", tun["command"])
+	if _, ok := hoff["tunnel"]; ok {
+		t.Fatalf("a tunnel must not be migrated (tunnels are exposure connectors): %v", hoff)
 	}
 
 	// A hand-off named like an integration collides.

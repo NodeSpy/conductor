@@ -119,7 +119,16 @@ connectors:
     base_url: https://conductor.example.com
     listen: ":8099"
     ttl: 30m
-    # tunnel: { provider: cloudflared }   # or lan|ngrok|tailscale|ssh|command
+    # expose: tun   # instead of base_url: each draft gets a public URL from an
+    #               # exposure connector (one declaring an exposes verb)
+
+  # Exposure connectors make a local address reachable. Builtins: `lan` (this
+  # machine's LAN address) and `tunnel` (any tunnelling command; the public
+  # URL is read from its output). Named services are plugins.
+  # tun:
+  #   use: tunnel
+  #   command: [cloudflared, tunnel, --url, "http://{{.addr}}"]
+  #   url_pattern: 'https://\S+\.trycloudflare\.com'
 
   # discord-ops:
   #   type: discord

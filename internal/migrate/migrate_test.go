@@ -448,8 +448,7 @@ handoffs:
     slack: { to: dm, user: U123, bot_token: ${SLACK_BOT_TOKEN} }
     default: true
   page:
-    web: { base_url: "https://c.example.com", listen: ":8099", ttl: 45m,
-           tunnel: { provider: cloudflared } }
+    web: { base_url: "https://c.example.com", listen: ":8099", ttl: 45m }
 controllers:
   deck: { type: agent-deck }
   gem:  { agent: gemini, default: true }

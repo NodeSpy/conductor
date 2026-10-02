@@ -128,7 +128,7 @@ func webListen(w *config.HandoffWeb) string {
 }
 
 // buildChannel constructs one hand-off channel from its config: a Web entry
-// builds a real *WebChannel wired to its tunnel (see NewTunnel); a Slack entry
+// builds a real *WebChannel at its base_url; a Slack entry
 // builds a real *SlackChannel (dm or thread, per hc.Slack.To) sharing
 // slackInbox with every other slack entry; a Discord entry builds a real
 // *DiscordChannel (dm or thread, per hc.Discord.To) sharing discordInbox with
@@ -139,18 +139,9 @@ func webListen(w *config.HandoffWeb) string {
 func buildChannel(name string, hc config.HandoffConfig, slackInbox, discordInbox *Inbox, log func(string, ...any)) Channel {
 	switch {
 	case hc.Web != nil:
-		w := NewWebChannel(hc.Web.BaseURL, hc.Web.TTL.D(), log)
-		t, err := NewTunnel(hc.Web.Tunnel, hc.Web.BaseURL, log)
-		if err != nil {
-			// config.Validate already guards the provider/mode/ssh_host/url_pattern
-			// shape, so this only fires when a caller builds a Registry from
-			// unvalidated config; fall back to base_url rather than leaving the
-			// channel unusable.
-			log("handoff %s: tunnel config invalid (%v); falling back to base_url", name, err)
-		} else {
-			w.SetTunnel(t, webListen(hc.Web))
-		}
-		return w
+		// A legacy web hand-off serves at its base_url; a tunnel is the
+		// connectors-model web connector's `expose:` (an exposure connector).
+		return NewWebChannel(hc.Web.BaseURL, hc.Web.TTL.D(), log)
 	case hc.Slack != nil:
 		// config.Validate already guards `to`/channel/user/bot_token, so this
 		// only fires when a caller builds a Registry from unvalidated config.

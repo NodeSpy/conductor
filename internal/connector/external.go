@@ -183,11 +183,11 @@ func SourceTrusted(explicit *bool, spec plugin.Spec) bool {
 
 // mapDecl converts the plugin wire Decl into a connector.TypeDecl.
 func mapDecl(d *plugin.Decl) *TypeDecl {
-	td := &TypeDecl{Type: d.Type, Desc: d.Desc, Connection: mapSchema(d.Connection)}
+	td := &TypeDecl{Type: d.Type, Desc: d.Desc, Connection: mapSchema(d.Connection), Semantics: d.Semantics}
 	for _, v := range d.Verbs {
 		td.Verbs = append(td.Verbs, VerbDecl{
 			Name: v.Name, Desc: v.Desc, Usage: v.Usage, Ask: v.Ask,
-			Options: mapSchema(v.Options), Outputs: mapSchema(v.Outputs),
+			Options: mapSchema(v.Options), Outputs: mapSchema(v.Outputs), Semantics: v.Semantics,
 		})
 	}
 	for _, e := range d.Events {
@@ -198,6 +198,7 @@ func mapDecl(d *plugin.Decl) *TypeDecl {
 			// schema: a plugin that declares it owns its whole filter surface
 			// exactly as a bundled connector does (EventDecl.FilterKeys).
 			Facts: mapSchema(e.Facts), MatchKeys: mapSchema(e.MatchKeys),
+			Semantics: e.Semantics,
 		})
 	}
 	return td
