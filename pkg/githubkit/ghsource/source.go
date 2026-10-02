@@ -95,9 +95,9 @@ type Config struct {
 //     you, never the bot, so "app" is not a write option.
 //   - CommitAuthor: "self" (default) — commits/pushes carry your git identity.
 type Identity struct {
-	ReadToken    string `yaml:"read_token"`
-	WriteToken   string `yaml:"write_token"`
-	CommitAuthor string `yaml:"commit_author"`
+	ReadToken    string `yaml:"read_token" json:"read_token,omitempty"`
+	WriteToken   string `yaml:"write_token" json:"write_token,omitempty"`
+	CommitAuthor string `yaml:"commit_author" json:"commit_author,omitempty"`
 }
 
 // ProjectRewrite derives a paseo project name from a repo (owner/name) without
