@@ -16,3 +16,7 @@ audit.jsonl
 /test/plugins/acme-echo/acme-echo
 /conductor-github
 /test/plugins/conductor-github/conductor-github
+
+# e2e github-plugin mode: the rewritten config copy and a staged external plugin build.
+/test/e2e/.plugin-config/
+/test/e2e/plugin-bin/conductor-github

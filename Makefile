@@ -4,7 +4,7 @@
 # bare-git forge, a mock GitHub API, a notify sink-catcher, and stub controllers —
 # NO production GitHub/smee/repos, NO LLM keys.
 
-.PHONY: build test vet fmt e2e e2e-live e2e-down e2e-packs ship-gate
+.PHONY: build test vet fmt e2e e2e-plugin e2e-live e2e-down e2e-packs ship-gate
 
 # Go build / test / static checks.
 build:
@@ -22,6 +22,13 @@ fmt:
 # Hermetic e2e (CI-safe): stub controllers, no secrets. Ship gate for M6.
 e2e:
 	MODE=stub bash test/e2e/run.sh
+
+# The same hermetic e2e with every github connector on the conductor-github
+# PLUGIN instead of the builtin (see test/e2e/README.md, "github plugin mode").
+# GITHUB_PLUGIN_BIN=/path/to/conductor-github runs it on that build instead of
+# the in-tree reference one.
+e2e-plugin:
+	E2E_GITHUB=plugin MODE=stub bash test/e2e/run.sh
 
 # Live e2e (manual): real agents + mounted API keys. See test/e2e/README.md.
 e2e-live:

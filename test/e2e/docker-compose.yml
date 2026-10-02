@@ -79,7 +79,9 @@ services:
       PC_NOTIFIARR_URL: "http://sink-catcher:8080/notifiarr"
       PC_NTFY_DEFAULT_URL: "http://sink-catcher:8080/ntfy"
     volumes:
-      - ./config:/etc/conductor:ro
+      # E2E_CONFIG_DIR: the github-plugin mode (E2E_GITHUB=plugin, run.sh) runs on
+      # a rewritten copy of ./config; unset, the configs are used as written.
+      - ${E2E_CONFIG_DIR:-./config}:/etc/conductor:ro
       - ./fixtures:/fixtures:ro
     command: ["bash", "/etc/conductor/entrypoint.sh", "/etc/conductor/conductor.yaml"]
 
@@ -97,7 +99,9 @@ services:
       PC_GIT_WORKTREE_REAP_INTERVAL: "5s"   # testability hook: the cli git-worktree orphan reaper
       PC_GIT_WORKTREE_MIN_AGE: "30s"
     volumes:
-      - ./config:/etc/conductor:ro
+      # E2E_CONFIG_DIR: the github-plugin mode (E2E_GITHUB=plugin, run.sh) runs on
+      # a rewritten copy of ./config; unset, the configs are used as written.
+      - ${E2E_CONFIG_DIR:-./config}:/etc/conductor:ro
     command: ["bash", "/etc/conductor/entrypoint.sh", "/etc/conductor/controllers.yaml"]
 
   # The connectors-model daemon (group K): new-schema config, slack verbs
@@ -116,7 +120,9 @@ services:
       CONDUCTOR_GIT_REMOTE_BASE: "git://forge/"
       FAKE_PASEO_STATE: /data/fakepaseo
     volumes:
-      - ./config:/etc/conductor:ro
+      # E2E_CONFIG_DIR: the github-plugin mode (E2E_GITHUB=plugin, run.sh) runs on
+      # a rewritten copy of ./config; unset, the configs are used as written.
+      - ${E2E_CONFIG_DIR:-./config}:/etc/conductor:ro
       - ./fixtures:/fixtures:ro
     command: ["bash", "/etc/conductor/entrypoint-conn.sh", "/etc/conductor/connectors.e2e.yaml"]
 
@@ -134,7 +140,9 @@ services:
       CONDUCTOR_GIT_REMOTE_BASE: "git://forge/"
       FAKE_PASEO_STATE: /data/fakepaseo
     volumes:
-      - ./config:/etc/conductor:ro
+      # E2E_CONFIG_DIR: the github-plugin mode (E2E_GITHUB=plugin, run.sh) runs on
+      # a rewritten copy of ./config; unset, the configs are used as written.
+      - ${E2E_CONFIG_DIR:-./config}:/etc/conductor:ro
       - ./fixtures:/fixtures:ro
     command: ["bash", "/etc/conductor/entrypoint-migrate.sh"]
 
@@ -153,5 +161,7 @@ services:
       FAKE_PASEO_STATE: /data/fakepaseo
       FAKE_PASEO_FAIL_WORKSPACE: "1"
     volumes:
-      - ./config:/etc/conductor:ro
+      # E2E_CONFIG_DIR: the github-plugin mode (E2E_GITHUB=plugin, run.sh) runs on
+      # a rewritten copy of ./config; unset, the configs are used as written.
+      - ${E2E_CONFIG_DIR:-./config}:/etc/conductor:ro
     command: ["bash", "/etc/conductor/entrypoint.sh", "/etc/conductor/conductor.yaml"]

@@ -24,7 +24,8 @@ RUN go build -o /out/conductor ./cmd/conductor \
  && go build -o /out/fakeagentdeck ./test/e2e/services/fakeagentdeck \
  && go build -o /out/fakeacp       ./test/e2e/services/fakeacp \
  && go build -o /out/fakecli       ./test/e2e/services/fakecli \
- && go build -o /out/conductor-acme-engine ./test/plugins/acme-engine
+ && go build -o /out/conductor-acme-engine ./test/plugins/acme-engine \
+ && go build -o /out/conductor-github ./test/plugins/conductor-github
 
 # ---- runtime stage ----
 FROM alpine:3.20
@@ -36,6 +37,13 @@ COPY --from=build /out/ /usr/local/bin/
 # path. verify-before-execute refuses a group/world-writable binary or parent, so
 # the mode is pinned rather than left to the builder's umask.
 RUN chmod 0755 /usr/local/bin/conductor-acme-engine
+# The github connector PLUGIN (E2E_GITHUB=plugin, see run.sh): the reference
+# build of the same ghplugin handler the official conductor-plugins build
+# serves — unless the run supplied that official build (GITHUB_PLUGIN_BIN,
+# staged into test/e2e/plugin-bin/), which then replaces it.
+COPY --from=build /src/test/e2e/plugin-bin/ /opt/plugin-bin/
+RUN if [ -f /opt/plugin-bin/conductor-github ]; then cp /opt/plugin-bin/conductor-github /usr/local/bin/conductor-github; fi \
+ && chmod 0755 /usr/local/bin/conductor-github
 # The fake paseo is installed as `paseo` too, so a config without an explicit
 # paseo_bin: still resolves it on PATH. The fake tool runtimes are installed under
 # the exact names conductor's controllers exec on PATH (stub mode): the cli

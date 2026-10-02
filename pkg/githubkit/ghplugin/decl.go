@@ -86,7 +86,13 @@ func decl() plugin.Decl {
 		Kind: plugin.KindConnector,
 		ABI:  plugin.ConnectorABI,
 		Type: Type,
-		Desc: "GitHub: PR/issue/check/release events in; comments, reviews, and review requests out.",
+		// The plugin's permission manifest (the bundled connector, in
+		// process, has none to declare): the public API, GitHub Enterprise
+		// Cloud with data residency, and the smee relay. A GHES host on its
+		// own domain, or a test double, is outside it — an INSTALLED plugin
+		// is confined to this list; a local development build is not.
+		Capabilities: plugin.Capabilities{Egress: []string{"api.github.com:443", "*.ghe.com:443", "smee.io:443"}},
+		Desc:         "GitHub: PR/issue/check/release events in; comments, reviews, and review requests out.",
 		Connection: plugin.Schema{
 			"app":             {Type: "map", Desc: "GitHub App credentials: app_id, private_key_path"},
 			"token":           {Type: "string", Desc: "PAT used when no App is configured (chain: app → token → gh auth token)"},

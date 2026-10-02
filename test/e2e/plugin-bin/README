@@ -1,0 +1,2 @@
+Staging directory for an externally built conductor-github plugin (GITHUB_PLUGIN_BIN=... make e2e-plugin).
+run.sh copies the binary here before the image build; it is never committed.

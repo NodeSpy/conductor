@@ -64,6 +64,39 @@ You don't clone the repo: name one in `connectors:` and run `conductor init`,
 and conductor downloads it, verifies the checksum, and runs it as a sandboxed
 subprocess. For GitHub App setup specifically, see [GitHub App setup](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/connectors/github.md#setup).
 
+### github as a plugin
+
+The github connector also ships as a plugin (`conductor-plugins`
+`connectors/github`) that is the **same implementation** as the builtin — the
+same event source (`pkg/githubkit/ghsource`), the same declaration, the same
+trigger lowering — run out of process over the plugin source extension. To use
+it, point the connector at the plugin and grant it source trust:
+
+```yaml
+connectors:
+  gh:
+    use: NodeSpy/conductor-plugins/connectors/github   # or a local ./conductor-github
+    trusted_source: true      # its events are verified GitHub deliveries: let the
+                              # engine act on new_comment/merge_conflict/… and
+                              # trust their targets, exactly as the builtin's
+    app: { app_id: 123456, private_key_path: ~/.config/conductor/github-app.pem }
+    webhook: { listen: "127.0.0.1:8787", secret: ${GITHUB_WEBHOOK_SECRET} }
+    me: { logins: [your-login] }
+```
+
+Every connection field, event, filter key, option, and verb means what it
+means on the builtin (parity is a shared test suite both run — see the
+plugin's page for the checklist and the known gaps). Two config rules: a config
+cannot use the builtin and the plugin side by side (one of them must back every
+`github` connector), and `api_base:` is how the plugin reaches GitHub
+Enterprise Server or a test double — a plugin's environment is scrubbed, so it
+does not inherit `PC_GITHUB_API_BASE`. `api_base:` works on the builtin too.
+
+`trusted_source:` is accepted only on a plugin-backed connector. Without it a
+plugin source is untrusted third-party input: its target-trust claims are
+ignored and its engine-interpreted kinds are dropped (the daemon logs the
+setting to use once).
+
 ## The contract
 
 Every connector type is self-describing. It declares:

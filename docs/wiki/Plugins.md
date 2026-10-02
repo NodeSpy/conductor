@@ -369,6 +369,33 @@ transport the ACP runtime uses. stdout is the transport; logging goes to stderr.
 See `test/plugins/acme-echo/` for a reference connector plugin, and
 `github.com/NodeSpy/conductor-plugins` for production ones.
 
+**Source extension (connector `abi: 1`).** A source plugin that reports
+`abi: 1` becomes a full event source rather than a payload forwarder — the
+surface the github connector needs to run out of process with the builtin's
+behavior ([design](https://github.com/NodeSpy/conductor/blob/main/docs/design/plugin-source-abi.md)):
+
+- `plugin.start_source` also carries the instance's **triggers** — id, name,
+  event, options, and the `filter:` in structural form (`pkg/sourcekit.Filter`)
+  — and the plugin evaluates them itself (its own match keys, identity gates);
+- each `plugin.event` may name the **trigger** it fired for (that trigger alone
+  fires, and the daemon does not re-evaluate its filter), mark itself
+  **catch-up** (sweep-recovered), name its **instance**, and **claim** its
+  target is the platform's;
+- `plugin.nudge` (run the catch-up sweep now — SIGUSR1, `conductor sweep
+  --now`), `plugin.force` (`conductor force`), `plugin.app_token` (re-mint on
+  resume), `plugin.target_head` (run facts);
+- event declarations may carry `facts` / `match_keys` — the unified `filter:`
+  surface, validated at load exactly as a bundled connector's is;
+- `sweep` is a **conductor-defined verb**: declared by an `abi: 1` plugin, the
+  daemon answers it itself (daemon-wide nudge) and never forwards it.
+
+Every addition is optional and ignored for a plugin that does not report the
+ABI. **Trust stays the operator's**: a plugin's target-trust claim, and any
+engine-interpreted kind it emits (`new_comment`, `review_requested`,
+`merge_conflict`, `failing_checks`, `_closed`), are honored only when the
+connector entry sets `trusted_source: true` — and a kind only if the plugin
+declares that event. See [[Connectors]] for the github plugin.
+
 **Runtime plugin:** an ACP-speaking subprocess. conductor verifies it, then
 drives it through the existing ACP controller — session create/resume, streamed
 status/output, cancel/cleanup.
@@ -409,9 +436,10 @@ New surface negotiates through a separate `Decl.abi` field instead:
 {"protocol_version": 1, "kind": "engine", "abi": 1, "type": "wasmtime"}
 ```
 
-`abi` is **absent/zero on every existing plugin**, and the daemon reads it *only
-for `kind: engine`*. A connector or runtime that sets it is describing something
-nobody asks about. That is the whole negotiation, and it is deliberately boring:
+`abi` is **absent/zero on every existing plugin**, and the daemon reads it per
+kind: for `kind: engine` it selects the `plugin.run` / `host.*` shape; for a
+connector, `abi: 1` opts into the source extension above. A runtime that sets
+it is describing something nobody asks about. That is the whole negotiation, and it is deliberately boring:
 a new field whose zero value means "the old thing" cannot break an old plugin,
 because an old plugin never emits it and the daemon never requires it.
 
@@ -549,7 +577,10 @@ Documented follow-ups, not silent gaps:
   process; creds are scoped per-call, but shared-process inter-instance
   hardening is a follow-up.
 - **External-overrides-bundled**: a plugin may not replace a bundled
-  implementation (builtin beats official by design); opt-in override is a
-  follow-up.
+  implementation that the config also uses (builtin beats official by design).
+  It MAY stand in for a bundled type of the same name when no connector in the
+  config resolves to that builtin — nothing is then redirected; the operator
+  named the plugin. This is how the github plugin runs while github is still
+  bundled. A config mixing the two is refused at boot.
 - **Runtime plugin supervision depth**: re-verified per spawn and env-scrubbed,
   but still on ACP's supervision rather than `internal/plugin`'s.

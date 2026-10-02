@@ -7,6 +7,16 @@
 #   MODE=stub (default) — hermetic stubs, CI-safe, no secrets → `make e2e`
 #   MODE=live           — real agents + keys (manual)         → `make e2e-live`
 #
+#   E2E_GITHUB=plugin   — run every daemon's github connector on the conductor-github
+#                         PLUGIN instead of the builtin (→ `make e2e-plugin`). The
+#                         configs are copied and rewritten: `use: github` becomes the
+#                         plugin binary, with `trusted_source: true` and the mock's
+#                         `api_base:` (a plugin's environment is scrubbed, so it cannot
+#                         inherit PC_GITHUB_API_BASE). The binary is the in-tree
+#                         reference build (test/plugins/conductor-github), or the one
+#                         GITHUB_PLUGIN_BIN names — e.g. the official conductor-plugins
+#                         build — staged into the image.
+#
 # Only groups whose milestones have merged are asserted; the rest are recorded as
 # SKIP with the milestone that unlocks them. Set KEEP=1 to leave the stack up.
 set -uo pipefail
@@ -17,6 +27,7 @@ cd "$DIR"
 source "$DIR/lib/assert.sh"
 
 MODE="${MODE:-stub}"
+E2E_GITHUB="${E2E_GITHUB:-builtin}"
 PROJECT="${PROJECT:-pc-e2e}"
 KEEP="${KEEP:-0}"
 COMPOSE=(docker compose -f "$DIR/docker-compose.yml")
@@ -89,9 +100,46 @@ post_webhook_to() {
 
 banner() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 
+# stage_github_plugin puts GITHUB_PLUGIN_BIN (an externally built conductor-github)
+# where the image build picks it up, or clears a stale one so the in-tree reference
+# build is used.
+stage_github_plugin() {
+  mkdir -p "$DIR/plugin-bin"
+  rm -f "$DIR/plugin-bin/conductor-github"
+  if [ -n "${GITHUB_PLUGIN_BIN:-}" ]; then
+    [ -x "$GITHUB_PLUGIN_BIN" ] || { echo "GITHUB_PLUGIN_BIN=$GITHUB_PLUGIN_BIN is not an executable"; exit 1; }
+    cp "$GITHUB_PLUGIN_BIN" "$DIR/plugin-bin/conductor-github"
+    echo "github plugin: $GITHUB_PLUGIN_BIN (staged into the image)"
+  fi
+}
+
+# plugin_configs writes the github-plugin copy of ./config and points the compose
+# mounts at it (E2E_CONFIG_DIR). Every connector block's `use: github` line becomes
+# the plugin, the operator's trust grant, and the mock API base; nothing else in
+# any config changes.
+plugin_configs() {
+  local out="$DIR/.plugin-config"
+  rm -rf "$out"
+  cp -a "$DIR/config" "$out"
+  local f
+  for f in "$out"/*.yaml; do
+    awk '{
+      if (match($0, /^[ ]+use: github[ ]*$/)) {
+        ind = substr($0, 1, index($0, "use:") - 1)
+        print ind "use: /usr/local/bin/conductor-github"
+        print ind "trusted_source: true"
+        print ind "api_base: http://mock-github:8080"
+      } else print
+    }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  done
+  export E2E_CONFIG_DIR="$out"
+  echo "github plugin mode: $(grep -l 'conductor-github' "$out"/*.yaml | wc -l | tr -d ' ') config(s) rewritten into $out"
+}
+
 setup() {
-  banner "build & up ($MODE mode, project $PROJECT)"
+  banner "build & up ($MODE mode, github: $E2E_GITHUB, project $PROJECT)"
   dc down -v --remove-orphans >/dev/null 2>&1 || true
+  stage_github_plugin
   dc build || { echo "build failed"; exit 1; }
 
   # Throwaway RSA key for the (mock) GitHub App — generated into the gitignored
@@ -112,6 +160,10 @@ setup() {
   # mode from here.
   docker run --rm -v "$DIR/config:/c" conductor-e2e:latest \
     chmod 644 /c/github-app.pem >/dev/null 2>&1
+
+  if [ "$E2E_GITHUB" = plugin ]; then
+    plugin_configs
+  fi
 
   dc up -d || { echo "up failed"; dc logs; exit 1; }
 
