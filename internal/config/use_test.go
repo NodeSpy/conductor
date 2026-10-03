@@ -1,7 +1,9 @@
 package config
 
 import (
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -243,8 +245,17 @@ func TestUseKindDir(t *testing.T) {
 	}
 }
 
+// registerBuiltinConnectorTestSeq makes each TestRegisterBuiltinConnector run
+// register a FRESH type name: RegisterBuiltinConnector mutates the package-
+// global builtinConnectors map with no unregister API (production has no
+// reason to offer one — a bundled type never un-bundles at runtime), so a
+// fixed name's registration from one run leaks into the next under
+// `-count>1` (same process, same map) and trips this test's own precondition
+// check.
+var registerBuiltinConnectorTestSeq int32
+
 func TestRegisterBuiltinConnector(t *testing.T) {
-	const name = "use-test-fake-type"
+	name := fmt.Sprintf("use-test-fake-type-%d", atomic.AddInt32(&registerBuiltinConnectorTestSeq, 1))
 	if BuiltinConnector(name) {
 		t.Fatal("precondition")
 	}
