@@ -484,10 +484,6 @@ type flakyExposer struct {
 	mu        sync.Mutex
 	failUntil int
 	calls     int
-	// onCall, when set, is called (outside the lock) on every Invoke attempt
-	// with its 1-based attempt number — a hook for a test to time attempts
-	// without adding its own counter.
-	onCall func(attempt int)
 }
 
 func (f *flakyExposer) Validate() error                                    { return nil }
@@ -501,9 +497,6 @@ func (f *flakyExposer) Invoke(_ context.Context, verb string, opts map[string]an
 	f.calls++
 	n := f.calls
 	f.mu.Unlock()
-	if f.onCall != nil {
-		f.onCall(n)
-	}
 	if n < f.failUntil {
 		return nil, fmt.Errorf("flaky: not yet (attempt %d)", n)
 	}
@@ -612,21 +605,22 @@ func TestPluginSourceListenerExposureFailureStopsOnCancel(t *testing.T) {
 // schedule would eventually leave a struggling exposure retrying only once
 // an hour, then once a day.
 func TestPluginSourceListenerExposureBackoffNeverExceedsCap(t *testing.T) {
-	oldInitial, oldMax := exposureRetryInitial, exposureRetryMax
+	oldInitial, oldMax, oldWait := exposureRetryInitial, exposureRetryMax, exposureWait
 	exposureRetryInitial, exposureRetryMax = 2*time.Millisecond, 10*time.Millisecond
-	t.Cleanup(func() { exposureRetryInitial, exposureRetryMax = oldInitial, oldMax })
+	// Record each requested wait instead of sleeping: the schedule itself is
+	// what's under test, and wall-clock gaps flake under a loaded -race run.
+	var waits []time.Duration
+	exposureWait = func(ctx context.Context, d time.Duration) error {
+		waits = append(waits, d)
+		return ctx.Err()
+	}
+	t.Cleanup(func() { exposureRetryInitial, exposureRetryMax, exposureWait = oldInitial, oldMax, oldWait })
 
-	// Uncapped doubling from 2ms would be 2,4,8,16,32,64,128,256,512ms by the
-	// 9th attempt — many multiples of the 10ms cap. failUntil=10 forces 9
-	// failed attempts (and therefore 9 backoff waits) before success.
+	// Uncapped doubling from 2ms would be 2,4,8,16,32,…,512ms by the 9th
+	// wait — many multiples of the 10ms cap. failUntil=10 forces 9 failed
+	// attempts (and therefore 9 backoff waits) before success.
 	const failUntil = 10
-	var mu sync.Mutex
-	var times []time.Time
-	flaky := &flakyExposer{failUntil: failUntil, onCall: func(int) {
-		mu.Lock()
-		times = append(times, time.Now())
-		mu.Unlock()
-	}}
+	flaky := &flakyExposer{failUntil: failUntil}
 	decl := &TypeDecl{
 		Type: "capcheck",
 		Verbs: []VerbDecl{{
@@ -647,27 +641,13 @@ func TestPluginSourceListenerExposureBackoffNeverExceedsCap(t *testing.T) {
 	if _, _, err := p.openExposure(ctx, "tun", "127.0.0.1:0", "/"); err != nil {
 		t.Fatalf("openExposure: %v", err)
 	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(times) != failUntil {
-		t.Fatalf("got %d attempts, want %d (failUntil)", len(times), failUntil)
+	want := []time.Duration{2, 4, 8, 10, 10, 10, 10, 10, 10}
+	if len(waits) != len(want) {
+		t.Fatalf("got %d waits %v, want %d", len(waits), waits, len(want))
 	}
-	// The grace window absorbs scheduler jitter without hiding a real
-	// uncapped-growth regression (which would blow past it by 10s of ms at
-	// the later attempts).
-	const grace = 30 * time.Millisecond
-	sawCapped := false
-	for i := 1; i < len(times); i++ {
-		gap := times[i].Sub(times[i-1])
-		if gap > exposureRetryMax+grace {
-			t.Fatalf("gap between attempt %d and %d = %s, want <= %s (the cap, plus scheduler grace)", i, i+1, gap, exposureRetryMax+grace)
+	for i, w := range want {
+		if waits[i] != w*time.Millisecond {
+			t.Fatalf("wait %d = %s, want %s (schedule %v)", i+1, waits[i], w*time.Millisecond, waits)
 		}
-		if gap >= exposureRetryMax-grace {
-			sawCapped = true
-		}
-	}
-	if !sawCapped {
-		t.Fatalf("no observed gap reached the %s cap — the backoff schedule in %v never grew enough to exercise it", exposureRetryMax, times)
 	}
 }

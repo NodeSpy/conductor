@@ -213,15 +213,26 @@ func (p *pluginSourceIntegration) openExposure(ctx context.Context, name, listen
 			return "", nil, ctx.Err()
 		}
 		p.log("plugin source %s: open exposure via %q (attempt %d): %v — retrying in %s", p.instance, name, attempt, err, delay)
-		select {
-		case <-ctx.Done():
-			return "", nil, ctx.Err()
-		case <-time.After(delay):
+		if err := exposureWait(ctx, delay); err != nil {
+			return "", nil, err
 		}
 		delay *= 2
 		if delay > exposureRetryMax {
 			delay = exposureRetryMax
 		}
+	}
+}
+
+// exposureWait sleeps one backoff step, or returns ctx's error if it ends
+// first. A var so a test can record the schedule without real sleeps.
+var exposureWait = func(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
 }
 
