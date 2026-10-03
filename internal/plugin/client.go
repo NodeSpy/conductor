@@ -542,7 +542,11 @@ func (c *Client) ensureLocked(ctx context.Context) error {
 	}
 	c.starts = append(c.starts, now)
 	c.totalStart++
-	conn, kill, err := c.deps.dial(ctx, c.spec, c.deps)
+	// The process lives as long as the client, not as long as the call that
+	// happened to start it: a describe made under a boot timeout must not
+	// take the plugin (and every source stream it serves) down when that
+	// timeout's context is cancelled. Close and teardown end it.
+	conn, kill, err := c.deps.dial(context.WithoutCancel(ctx), c.spec, c.deps)
 	if err != nil {
 		return fmt.Errorf("plugin %s: launch: %w", c.spec.Name, err)
 	}
@@ -836,8 +840,9 @@ func realDial(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
 			cleanup()
 		})
 	}
-	// Bind the process to ctx: daemon shutdown (ctx cancel) kills the plugin.
-	// On either path we call kill(): it is once-guarded and reaps the child via
+	// Bind the process to ctx (the client's lifetime — ensureLocked strips a
+	// call's cancellation) and to the connection: on either path we call
+	// kill(): it is once-guarded and reaps the child via
 	// cmd.Wait() (avoiding a zombie when the plugin exits on its own) and
 	// releases the egress credential.
 	go func() {

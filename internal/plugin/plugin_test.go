@@ -410,3 +410,27 @@ func TestClientLifetimeCap(t *testing.T) {
 		t.Fatal("expected downForGood after lifetime cap")
 	}
 }
+
+// REGRESSION: the process outlives the call that started it. A describe made
+// under a boot timeout (cancelled as soon as boot moves on) used to bind the
+// plugin process to that context, so every connector plugin was killed right
+// after boot — the next call raced the kill ("connection closed") and every
+// source stream it served went down with it.
+func TestPluginProcessOutlivesTheStartingCall(t *testing.T) {
+	fc := newFakeConn()
+	fc.describe = &Decl{ProtocolVersion: ProtocolVersion, Type: "jira"}
+	var lifetime context.Context
+	c := NewClient(connectorSpec(), Deps{dial: func(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
+		lifetime = ctx
+		return fakeDial(fc)(ctx, s, d)
+	}})
+	boot, cancel := context.WithCancel(context.Background())
+	if _, err := c.Describe(boot); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if lifetime == nil || lifetime.Err() != nil {
+		t.Fatalf("the plugin process is bound to the starting call's context (err=%v)", lifetime.Err())
+	}
+	_ = c.Close()
+}
