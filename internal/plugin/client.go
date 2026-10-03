@@ -106,6 +106,8 @@ type Client struct {
 	spec Spec
 	deps Deps
 
+	logLim hostLogLimiter
+
 	mu          sync.Mutex
 	conn        transport
 	kill        func()
@@ -541,7 +543,14 @@ func (c *Client) handleRequest(ctx context.Context, method string, params json.R
 		if !c.isActive(req.Instance) {
 			return sdk.HostLogResult{Error: fmt.Sprintf("instance %q is not one this plugin serves", req.Instance)}, nil
 		}
-		c.deps.Log("plugin %s instance %s: %s", c.spec.Name, req.Instance, req.Message)
+		ok, dropped := c.logLim.admit(req.Instance, time.Now())
+		if dropped > 0 {
+			c.deps.Log("plugin %s instance %s: (%d log line(s) dropped over the host.log rate limit)", c.spec.Name, req.Instance, dropped)
+		}
+		if !ok {
+			return sdk.HostLogResult{Error: "host.log rate limit exceeded; line dropped"}, nil
+		}
+		c.deps.Log("plugin %s instance %s: %s", c.spec.Name, req.Instance, sanitizeHostLog(req.Message))
 		return sdk.HostLogResult{OK: true}, nil
 	}
 	kind := sdk.HostKindFor(method)

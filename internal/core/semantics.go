@@ -218,8 +218,14 @@ func renderFacts(tmpl string, facts map[string]any) string {
 // over the facts, else the host's Key. A plugin's target_gone names the
 // target it addressed by this same string (plugin-contract.md §1.11), so
 // this — not Key, which is the host's dedup/session key — is what such an
-// answer is compared against.
+// answer is compared against. A target the platform did not assign is
+// named by the sender, so it gets the namespaced Key instead: a sender
+// must not be able to pick the key of some other target a run's later
+// call addresses and turn that call's real failure into a silent stop.
 func (t Trigger) DeclaredKey() string {
+	if !t.TargetTrusted {
+		return t.Key()
+	}
 	if t.Target.Key != "" {
 		return t.Target.Key
 	}

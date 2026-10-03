@@ -491,7 +491,7 @@ steps:
 			rig := newTestRunner(t, cfg, reg)
 			rig.Runner.sleep = fastSleep
 			tr := newTrigger("ping", map[string]any{"msg": "x"})
-			tr.Target = core.Target{Key: "chat:C1:1.5"}
+			tr.Target, tr.TargetTrusted = core.Target{Key: "chat:C1:1.5"}, true
 			runTrigger(rig, tr, spec)
 			failed, errStr := rig.workflowFailed()
 			if tc.stop && failed {
