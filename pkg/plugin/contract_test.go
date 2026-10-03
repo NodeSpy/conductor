@@ -93,6 +93,52 @@ func TestValidateSemanticsReferences(t *testing.T) {
 	}
 }
 
+// option_hooks: a verb it names must exist, its `at` must be a known phase,
+// and the same option may not be mapped twice.
+func TestValidateSemanticsOptionHooks(t *testing.T) {
+	good := Decl{
+		Verbs: []Verb{{Name: "feedback"}},
+		Events: []Event{{Name: "e", Semantics: &EventSemantics{OptionHooks: []OptionHook{
+			{Option: "ack", At: "start", Verb: "feedback"},
+			{Option: "on_done", At: "done", Verb: "feedback"},
+			{Option: "on_fail", At: "fail", Verb: "feedback"},
+		}}}},
+	}
+	if p := ValidateSemantics(good); len(p) != 0 {
+		t.Fatalf("valid decl reported %q", p)
+	}
+
+	cases := []struct {
+		name string
+		oh   OptionHook
+		want string
+	}{
+		{"unknown verb", OptionHook{Option: "ack", At: "start", Verb: "nope"}, `names verb "nope"`},
+		{"bad at", OptionHook{Option: "ack", At: "sometimes", Verb: "feedback"}, "must be start, done or fail"},
+		{"missing fields", OptionHook{}, "option, at and verb are required"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := Decl{Verbs: []Verb{{Name: "feedback"}}, Events: []Event{{Name: "e", Semantics: &EventSemantics{OptionHooks: []OptionHook{c.oh}}}}}
+			p := strings.Join(ValidateSemantics(d), "\n")
+			if !strings.Contains(p, c.want) {
+				t.Fatalf("problems missing %q:\n%s", c.want, p)
+			}
+		})
+	}
+
+	t.Run("duplicate option", func(t *testing.T) {
+		d := Decl{Verbs: []Verb{{Name: "feedback"}}, Events: []Event{{Name: "e", Semantics: &EventSemantics{OptionHooks: []OptionHook{
+			{Option: "ack", At: "start", Verb: "feedback"},
+			{Option: "ack", At: "done", Verb: "feedback"},
+		}}}}}
+		p := strings.Join(ValidateSemantics(d), "\n")
+		if !strings.Contains(p, `option "ack" is mapped more than once`) {
+			t.Fatalf("want a duplicate-option problem, got %q", p)
+		}
+	})
+}
+
 // An exposes verb that is not host_only lets a flow step or agent tunnel an
 // arbitrary local address out to the public internet — it must be refused
 // exactly like a mints_credential verb that isn't host_only.

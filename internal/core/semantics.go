@@ -249,7 +249,7 @@ func DeclaredArgs(args map[string]string, facts map[string]any) map[string]any {
 	out := make(map[string]any, len(args))
 	for k, v := range args {
 		if name := sdk.FactName(v); name != v {
-			out[k] = facts[name]
+			out[k], _ = LookupFact(facts, name)
 			continue
 		}
 		if strings.Contains(v, "{{") {

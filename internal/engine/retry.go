@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/store"
@@ -59,6 +60,9 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 	spec, tidx, ok := e.flow.SpecFor(act.FlowRef)
 	if !ok {
 		return "", fmt.Errorf("run %s: its trigger is no longer in the config", rec.ID)
+	}
+	if extra := connector.OptionHooks(t, spec.Options); len(extra) > 0 {
+		spec.Hooks = append(append([]config.Hook{}, spec.Hooks...), extra...)
 	}
 
 	// Resolve the starting step: an explicit id, else the recorded failure,

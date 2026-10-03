@@ -38,8 +38,30 @@ type EventSemantics struct {
 	Private            []string               `json:"private,omitempty"`
 	Secret             []string               `json:"secret,omitempty"`
 	ConversationReply  *ConversationReply     `json:"conversation_reply,omitempty"`
+	// OptionHooks turns a trigger's own `options.<Option>` into a flow hook,
+	// fired exactly as if the operator had written it under `hooks:`: the
+	// generic successor to a connector's own dispatch-time/completion
+	// feedback (an acknowledgement when work starts, a note when it
+	// finishes or fails). See OptionHook.
+	OptionHooks []OptionHook `json:"option_hooks,omitempty"`
 	// Optional lists semantic keys an older host may ignore.
 	Optional []string `json:"optional,omitempty"`
+}
+
+// OptionHook: when the operator sets `options.<Option>` on a trigger using
+// this event, the host invokes Verb at run phase At (start | done | fail —
+// the same phases a hand-written `hooks:` entry uses), exactly once per
+// trigger (done/fail decided across every step/branch the run has, the same
+// join an explicit hook's done/fail already uses). The option's own value
+// becomes the invoked verb's options; Args (verb option name → template
+// over the event's facts) adds whatever the verb needs to address the right
+// object (e.g. which message this event was about) — rendered the same way
+// any hook's `options:` are. One option maps to at most one phase.
+type OptionHook struct {
+	Option string            `json:"option"`
+	At     string            `json:"at"` // start | done | fail
+	Verb   string            `json:"verb"`
+	Args   map[string]string `json:"args,omitempty"`
 }
 
 // TargetSemantics: what an event is about. Key is a template over the
@@ -339,7 +361,7 @@ type PreflightSemantics struct {
 var semanticKeys = map[string][]string{
 	"event": {"target", "revision", "checkout", "closes_target", "bound_to_target", "completion", "cursor",
 		"attempts", "priority", "feedback", "verification_failed", "remediate", "author", "labels",
-		"private", "secret", "conversation_reply"},
+		"private", "secret", "conversation_reply", "option_hooks"},
 	"verb": {"reads_revision", "mints_credential", "opens_conversation", "conversation_post", "host_only",
 		"target_args", "exposes"},
 	"connection": {"credentials", "scope", "poll", "translate", "listeners", "preflight"},
@@ -571,6 +593,23 @@ func ValidateSemantics(d Decl) []string {
 			}
 			need(path+".remediate.status.verb", r.Status.Verb)
 			need(path+".remediate.action.verb", r.Action.Verb)
+		}
+		seenOption := map[string]bool{}
+		for i, oh := range s.OptionHooks {
+			ohPath := fmt.Sprintf("%s.option_hooks[%d]", path, i)
+			if oh.Option == "" || oh.At == "" || oh.Verb == "" {
+				p = append(p, ohPath+": option, at and verb are required")
+			}
+			if oh.At != "" && oh.At != "start" && oh.At != "done" && oh.At != "fail" {
+				p = append(p, ohPath+".at: must be start, done or fail")
+			}
+			if oh.Option != "" {
+				if seenOption[oh.Option] {
+					p = append(p, fmt.Sprintf("%s.option_hooks: option %q is mapped more than once", path, oh.Option))
+				}
+				seenOption[oh.Option] = true
+			}
+			need(ohPath+".verb", oh.Verb)
 		}
 	}
 	for _, v := range d.Verbs {

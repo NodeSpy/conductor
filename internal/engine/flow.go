@@ -33,6 +33,15 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 	if !spec.IsEnabled() {
 		return
 	}
+	// A connector's declared option_hooks (plugin-contract.md §2.2): the
+	// trigger's own options.<option> become extra start/done/fail hooks,
+	// exactly as if the operator had written them under hooks: — the generic
+	// successor to a connector's own dispatch-time/completion feedback. A
+	// copy of spec is mutated (not e.flow's own compiled one, which every
+	// other firing of this trigger shares) so this never leaks across runs.
+	if extra := connector.OptionHooks(t, spec.Options); len(extra) > 0 {
+		spec.Hooks = append(append([]config.Hook{}, spec.Hooks...), extra...)
+	}
 	// Flow-side filters (synthetic sources): a non-matching event is dropped
 	// before any dedup state is consumed.
 	if ok, err := e.flow.FilterMatch(t, spec); err != nil {
@@ -288,6 +297,13 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 		return
 	}
 	t = events[len(events)-1]
+	// Same option_hooks lowering processFlow does for an ungrouped trigger
+	// (see its comment): the batch's own spec is a fresh copy from SpecFor,
+	// so it needs the same treatment here, keyed off the representative
+	// (last) event's own options/facts.
+	if extra := connector.OptionHooks(t, spec.Options); len(extra) > 0 {
+		spec.Hooks = append(append([]config.Hook{}, spec.Hooks...), extra...)
+	}
 
 	// The grouper's fire callback carries no ctx of its own; tie the run to
 	// the engine's shutdown so a SATURATED acquire() can be interrupted
@@ -417,6 +433,9 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 		return
 	}
 	t.Action = act
+	if extra := connector.OptionHooks(t, spec.Options); len(extra) > 0 {
+		spec.Hooks = append(append([]config.Hook{}, spec.Hooks...), extra...)
+	}
 	e.log("%s resuming flow from step %d", tag(t), r.StepIndex)
 	e.store.Audit(map[string]any{"event": "resume", "repo": t.Target.Repo,
 		"number": t.Target.Number, "kind": t.Kind, "step_index": r.StepIndex})

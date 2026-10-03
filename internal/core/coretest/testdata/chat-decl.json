@@ -91,6 +91,54 @@
       }
     },
     {
+      "name": "feedback",
+      "desc": "react to and/or reply on a message — the generic ack/on_done/on_fail block",
+      "options": {
+        "channel": {
+          "type": "string",
+          "desc": "the message's channel",
+          "scope": "channel"
+        },
+        "ephemeral": {
+          "type": "boolean",
+          "desc": "say is visible only to user: via chat.postEphemeral"
+        },
+        "in_thread": {
+          "type": "boolean",
+          "desc": "say posts into the message's thread (default true)"
+        },
+        "react": {
+          "type": "string",
+          "desc": "reactions.add emoji name, no colons; \"\" = no reaction"
+        },
+        "say": {
+          "type": "string",
+          "desc": "chat.postMessage/postEphemeral text; \"\" = no message"
+        },
+        "thread_ts": {
+          "type": "string",
+          "desc": "the message's thread, for say's in_thread"
+        },
+        "ts": {
+          "type": "string",
+          "desc": "the message's timestamp, for react"
+        },
+        "user": {
+          "type": "string",
+          "desc": "the message's user, for an ephemeral say",
+          "scope": "user"
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        }
+      },
+      "semantics": {
+        "host_only": true
+      }
+    },
+    {
       "name": "ask",
       "desc": "present a question/draft and wait for the reply",
       "options": {
@@ -322,6 +370,10 @@
         }
       },
       "options": {
+        "ack": {
+          "type": "map",
+          "desc": "fired when the trigger dispatches — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        },
         "any_user": {
           "type": "boolean",
           "desc": "allow a form/shortcut trigger with no users: filter (anyone in the workspace)"
@@ -329,6 +381,14 @@
         "form": {
           "type": "map",
           "desc": "a modal to collect before firing: {title, submit, fields: [{name, label, type: select|text|textarea, options, default, optional}]}"
+        },
+        "on_done": {
+          "type": "map",
+          "desc": "fired when the dispatched work finishes successfully — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        },
+        "on_fail": {
+          "type": "map",
+          "desc": "fired when the dispatched work fails — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
         }
       },
       "semantics": {
@@ -353,6 +413,41 @@
         },
         "secret": [
           "slack_bot_token"
+        ],
+        "option_hooks": [
+          {
+            "option": "ack",
+            "at": "start",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          },
+          {
+            "option": "on_done",
+            "at": "done",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          },
+          {
+            "option": "on_fail",
+            "at": "fail",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          }
         ]
       }
     },
@@ -425,6 +520,10 @@
         }
       },
       "options": {
+        "ack": {
+          "type": "map",
+          "desc": "fired when the trigger dispatches — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        },
         "any_user": {
           "type": "boolean",
           "desc": "allow a form/shortcut trigger with no users: filter (anyone in the workspace)"
@@ -432,6 +531,14 @@
         "form": {
           "type": "map",
           "desc": "a modal to collect before firing: {title, submit, fields: [{name, label, type: select|text|textarea, options, default, optional}]}"
+        },
+        "on_done": {
+          "type": "map",
+          "desc": "fired when the dispatched work finishes successfully — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        },
+        "on_fail": {
+          "type": "map",
+          "desc": "fired when the dispatched work fails — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
         }
       },
       "semantics": {
@@ -456,6 +563,41 @@
         },
         "secret": [
           "slack_bot_token"
+        ],
+        "option_hooks": [
+          {
+            "option": "ack",
+            "at": "start",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          },
+          {
+            "option": "on_done",
+            "at": "done",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          },
+          {
+            "option": "on_fail",
+            "at": "fail",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          }
         ]
       }
     },
@@ -525,6 +667,20 @@
           "desc": "the connection's bot token"
         }
       },
+      "options": {
+        "ack": {
+          "type": "map",
+          "desc": "fired when the trigger dispatches — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        },
+        "on_done": {
+          "type": "map",
+          "desc": "fired when the dispatched work finishes successfully — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        },
+        "on_fail": {
+          "type": "map",
+          "desc": "fired when the dispatched work fails — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        }
+      },
       "semantics": {
         "target": {
           "key": "slack:{{.slack.channel}}:{{.slack.ts}}",
@@ -547,6 +703,41 @@
         },
         "secret": [
           "slack_bot_token"
+        ],
+        "option_hooks": [
+          {
+            "option": "ack",
+            "at": "start",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          },
+          {
+            "option": "on_done",
+            "at": "done",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          },
+          {
+            "option": "on_fail",
+            "at": "fail",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          }
         ]
       }
     },
@@ -616,6 +807,20 @@
           "desc": "the connection's bot token"
         }
       },
+      "options": {
+        "ack": {
+          "type": "map",
+          "desc": "fired when the trigger dispatches — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        },
+        "on_done": {
+          "type": "map",
+          "desc": "fired when the dispatched work finishes successfully — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        },
+        "on_fail": {
+          "type": "map",
+          "desc": "fired when the dispatched work fails — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        }
+      },
       "semantics": {
         "target": {
           "key": "slack:{{.slack.channel}}:{{.slack.trigger_id}}",
@@ -638,6 +843,41 @@
         },
         "secret": [
           "slack_bot_token"
+        ],
+        "option_hooks": [
+          {
+            "option": "ack",
+            "at": "start",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          },
+          {
+            "option": "on_done",
+            "at": "done",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          },
+          {
+            "option": "on_fail",
+            "at": "fail",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          }
         ]
       }
     },

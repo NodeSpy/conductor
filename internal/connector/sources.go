@@ -6,6 +6,7 @@ package connector
 
 import (
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/core"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
@@ -40,4 +41,38 @@ func lowerEngineOptions(act *config.Action, o map[string]any, sem *sdk.EventSema
 			act.FlakyRerun = config.FlakyRerun{Enabled: truthy(m["enabled"]), Max: toInt(m["max"])}
 		}
 	}
+}
+
+// OptionHooks lowers a trigger's own `options.<option>` into flow hooks, per
+// the event's declared `option_hooks` (plugin-contract.md §2.2): for each
+// declared {option, at, verb}, when the trigger sets options.<option>, the
+// host fires verb at that run phase exactly as an operator-authored `hooks:`
+// entry would. The option's own value (an operator-authored block, e.g. a
+// reaction/message description) becomes the hook's options; the semantic's
+// own Args (verb option name → template over the event's facts) are merged
+// in first, so the verb also knows what the event itself was about — the
+// generic replacement for a connector's own dispatch-time/completion
+// feedback (plugin-contract.md §3.8 V8). Returns nil when the event declares
+// none, or the trigger sets none of the options they name.
+func OptionHooks(t core.Trigger, opts map[string]any) []config.Hook {
+	sem := t.Semantics()
+	if sem == nil || len(sem.OptionHooks) == 0 || len(opts) == 0 {
+		return nil
+	}
+	facts := t.Facts()
+	var hooks []config.Hook
+	for _, oh := range sem.OptionHooks {
+		raw, ok := opts[oh.Option]
+		if !ok {
+			continue
+		}
+		merged := core.DeclaredArgs(oh.Args, facts)
+		if m, ok := raw.(map[string]any); ok {
+			for k, v := range m {
+				merged[k] = v
+			}
+		}
+		hooks = append(hooks, config.Hook{At: oh.At, Uses: t.Instance + "." + oh.Verb, Options: merged})
+	}
+	return hooks
 }
