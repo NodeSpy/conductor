@@ -18,7 +18,7 @@ func TestParseDuration(t *testing.T) {
 			t.Errorf("ParseDuration(%v) = %v, %v; want %v", tc.in, got, err, tc.want)
 		}
 	}
-	for _, bad := range []any{"soon", "7dx", true, nil} {
+	for _, bad := range []any{"soon", "7dx", true, nil, "999999999d", "-1d"} {
 		if _, err := ParseDuration(bad); err == nil {
 			t.Errorf("ParseDuration(%v) accepted", bad)
 		}

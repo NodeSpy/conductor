@@ -2,6 +2,7 @@ package sourcekit
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -26,9 +27,15 @@ func ParseDuration(v any) (time.Duration, error) {
 	return 0, fmt.Errorf("want a duration string or seconds, got %T", v)
 }
 
+// maxDays keeps days*24h inside time.Duration (it would wrap past ~106751).
+const maxDays = int(math.MaxInt64 / int64(24*time.Hour))
+
 func parseDurationString(s string) (time.Duration, error) {
 	if i := strings.IndexByte(s, 'd'); i > 0 {
 		if days, err := strconv.Atoi(s[:i]); err == nil {
+			if days < 0 || days > maxDays {
+				return 0, fmt.Errorf("duration %q: day count out of range", s)
+			}
 			rest := time.Duration(0)
 			if tail := s[i+1:]; tail != "" {
 				r, err := time.ParseDuration(tail)
