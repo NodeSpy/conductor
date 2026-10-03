@@ -265,6 +265,28 @@ func notSupported(err error) error {
 	return err
 }
 
+// UpstreamUnauthorized reports whether err is a plugin-returned
+// sdk.CodeUpstream error (plugin-contract.md §1.11) whose data names HTTP 401
+// — the upstream rejected the credential the daemon handed it. It lets a
+// connector with a managed OAuth2 credential (buildManagedAuth) retry once
+// with a freshly-minted token, GENERICALLY: the plugin (spawned or an
+// in-process contract builtin such as rest/graphql) never sees or manages the
+// token's lifecycle itself, so it reports the upstream status and the host
+// decides whether that is worth a retry.
+func UpstreamUnauthorized(err error) bool {
+	var re *acp.RPCError
+	if !errors.As(err, &re) || re.Code != sdk.CodeUpstream || len(re.Data) == 0 {
+		return false
+	}
+	var data struct {
+		Status int `json:"status"`
+	}
+	if json.Unmarshal(re.Data, &data) != nil {
+		return false
+	}
+	return data.Status == 401
+}
+
 // serve records that this plugin has been handed instance.
 func (c *Client) serve(instance string) {
 	if instance == "" {

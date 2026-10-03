@@ -4,10 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"time"
-
-	"gopkg.in/yaml.v3"
-
-	"github.com/NodeSpy/conductor/internal/core"
 )
 
 // --- shared option/filter coercion helpers ---
@@ -84,23 +80,6 @@ func truthy(v any) bool {
 		return x != 0
 	}
 	return false
-}
-
-// buildIntegration constructs a legacy integration instance from an in-memory
-// config struct by round-tripping it through YAML into core.Build — the same
-// decode path a hand-written legacy config takes, so lowered connectors run
-// the exact code legacy configs run.
-func buildIntegration(typ, name string, cfg any) (core.Integration, error) {
-	b, err := yaml.Marshal(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("connector %q: lower to %s config: %w", name, typ, err)
-	}
-	var node yaml.Node
-	if err := yaml.Unmarshal(b, &node); err != nil {
-		return nil, fmt.Errorf("connector %q: reparse %s config: %w", name, typ, err)
-	}
-	decode := func(v any) error { return node.Decode(v) }
-	return core.Build(typ, name, decode)
 }
 
 // sortedFilterKeys is a debug/introspection helper listing a schema's keys.

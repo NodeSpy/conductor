@@ -187,6 +187,13 @@ type Verb struct {
 	Options Schema `json:"options,omitempty"`
 	Outputs Schema `json:"outputs,omitempty"`
 	Ask     bool   `json:"ask,omitempty"`
+	// Open marks a verb whose option keys are USER-DEFINED (a rest/graphql
+	// instance's own declared verbs, materialized per instance — Q6):
+	// unknown-key/type validation against Options is skipped; template
+	// references inside the options are still scope-checked. Meaningless
+	// without Options also being empty (a verb with a real Options schema
+	// means something by "unknown key").
+	Open bool `json:"open,omitempty"`
 	// Semantics are what the ENGINE may use this verb for (semantics.go):
 	// reading a target's revision, minting a credential, opening a
 	// conversation, exposing a local address. Absent: a plain verb.

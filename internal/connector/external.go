@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
@@ -88,11 +89,27 @@ func RegisterExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin
 		if err != nil {
 			return nil, err
 		}
+		if err := enrichConnection(conn, ref, deps, allow); err != nil {
+			return nil, err
+		}
+		// Q6: a per-instance declaration, when the plugin has one, REPLACES
+		// the shared type-level decl for this instance — not just for the
+		// registry (Build reads it off externalImpl), but for everything
+		// externalImpl itself does with a Decl (PollVerb, Verb lookups,
+		// output validation), so the two can never silently disagree.
+		effDecl := td
+		id, err := resolveInstanceDecl(cl, name, conn)
+		if err != nil {
+			return nil, err
+		}
+		if id != nil {
+			effDecl = id
+		}
 		return &externalImpl{
 			client:     cl,
 			source:     cl, // *plugin.Client also satisfies pluginSourcer
 			instance:   name,
-			decl:       td,
+			decl:       effDecl,
 			conn:       conn,
 			auth:       au,
 			secretRefs: refs,
@@ -113,7 +130,7 @@ func mapDecl(d *plugin.Decl) *TypeDecl {
 	td := &TypeDecl{Type: d.Type, Desc: d.Desc, Connection: mapSchema(d.Connection), Semantics: d.Semantics}
 	for _, v := range d.Verbs {
 		td.Verbs = append(td.Verbs, VerbDecl{
-			Name: v.Name, Desc: v.Desc, Usage: v.Usage, Ask: v.Ask,
+			Name: v.Name, Desc: v.Desc, Usage: v.Usage, Ask: v.Ask, Open: v.Open,
 			Options: mapSchema(v.Options), Outputs: mapSchema(v.Outputs), Semantics: v.Semantics,
 		})
 	}
@@ -305,6 +322,70 @@ type pluginInvoker interface {
 	Invoke(ctx context.Context, req plugin.InvokeRequest) (map[string]any, error)
 }
 
+// instanceDescriber is the per-instance Q6 describe capability of
+// *plugin.Client — a seam so a fake invoker in tests need not implement it.
+type instanceDescriber interface {
+	DescribeInstance(ctx context.Context, instance string, config map[string]any) (*plugin.Decl, bool, error)
+}
+
+// instanceDescribeTimeout bounds the one-time per-instance describe call made
+// while building a connector instance (mirrors the type-level describe's
+// bound in inprocess.go/manager.go).
+const instanceDescribeTimeout = 10 * time.Second
+
+// resolveInstanceDecl asks cl for instance's own declaration (Q6,
+// plugin-contract.md §3.9 G13), when cl implements it. nil, nil means the
+// plugin has no per-instance declaration (CodeMethodNotFound) — the caller
+// keeps the shared type-level decl.
+func resolveInstanceDecl(cl any, instance string, conn map[string]any) (*TypeDecl, error) {
+	id, ok := cl.(instanceDescriber)
+	if !ok {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), instanceDescribeTimeout)
+	defer cancel()
+	d, supported, err := id.DescribeInstance(ctx, instance, conn)
+	if err != nil {
+		return nil, fmt.Errorf("connector %q: per-instance describe: %w", instance, err)
+	}
+	if !supported {
+		return nil, nil
+	}
+	return mapDecl(d), nil
+}
+
+// enrichConnection adds, beyond resolveConnection's result, the extras any
+// contract connector (spawned plugin or in-process builtin) may use:
+//
+//   - a non-oauth2 `auth:` block (none/bearer/basic/header) passed through
+//     verbatim, secrets resolved — these are static, stateless credentials
+//     with no refresh/rotation to own, so the daemon has no reason to hide
+//     them from the connector (oauth2 is different: buildManagedAuth owns
+//     the token exchange and injects only the resulting bearer, never the
+//     client secret, via AccessTokenKey — see reservedConnKeys).
+//   - the config's named `secrets:` block, as a connector's own templates
+//     see it ({{.secrets.*}} — the rest/graphql convenience, generalized to
+//     every contract connector rather than special-cased to those two).
+func enrichConnection(conn map[string]any, ref config.ConnectorRef, deps Deps, allow map[string]bool) error {
+	var wrap struct {
+		Auth map[string]any `yaml:"auth"`
+	}
+	if err := ref.Decode(&wrap); err == nil && wrap.Auth != nil {
+		if t, _ := wrap.Auth["type"].(string); t != "oauth2" {
+			var refs []string
+			resolved, err := resolveSecrets("auth", wrap.Auth, deps.Secrets, allow, &refs)
+			if err != nil {
+				return err
+			}
+			if m, ok := resolved.(map[string]any); ok {
+				conn["auth"] = m
+			}
+		}
+	}
+	conn["secrets"] = resolveNamedSecrets(context.Background(), deps.Config, deps.Secrets)
+	return nil
+}
+
 // externalImpl is the RPC-proxy connector.Impl: it forwards Invoke to the
 // plugin subprocess and validates the response against the declared Decl.
 type externalImpl struct {
@@ -322,8 +403,46 @@ type externalImpl struct {
 	log        func(string, ...any)
 }
 
-// Validate is a no-op: the plugin was verified and described at registration.
-func (e *externalImpl) Validate() error { return nil }
+// pluginValidator is the plugin.validate capability of *plugin.Client — a
+// seam so a fake invoker in tests need not implement it.
+type pluginValidator interface {
+	Validate(ctx context.Context, req sdk.ValidateRequest) ([]sdk.Problem, error)
+}
+
+// Validate runs the plugin's own config checks (plugin.validate), when it
+// implements one. This is the ONE place every contract connector's checks
+// run unconditionally at load — a verb-only connector (most rest/graphql/
+// webhook instances declare no events) never gets a pluginSourceIntegration
+// built, so pluginSourceIntegration.Validate's call to the same method would
+// otherwise never fire for it. A plugin with no checks of its own
+// (CodeMethodNotFound) is valid.
+func (e *externalImpl) Validate() error {
+	pv, ok := e.client.(pluginValidator)
+	if !ok {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), instanceDescribeTimeout)
+	defer cancel()
+	problems, err := pv.Validate(ctx, sdk.ValidateRequest{Instance: e.instance, Config: e.conn})
+	if err == plugin.ErrNotSupported {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("connector %q: validate: %w", e.instance, err)
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(problems))
+	for _, p := range problems {
+		if p.Path != "" {
+			lines = append(lines, p.Path+": "+p.Message)
+		} else {
+			lines = append(lines, p.Message)
+		}
+	}
+	return fmt.Errorf("connector %q:\n  %s", e.instance, strings.Join(lines, "\n  "))
+}
 
 // DeclaredEvents returns nil: an external plugin's per-instance, config-named
 // (Dynamic) event names live out in the plugin's own connection config, not
@@ -404,21 +523,6 @@ func (e *externalImpl) invokePlugin(ctx context.Context, verb string, opts map[s
 			}
 		})
 	}
-	conn := e.conn
-	if e.auth != nil {
-		// Managed OAuth2: mint/refresh the token and inject it into a per-call
-		// COPY of the connection (never mutate the shared map). The plugin reads
-		// it via plugin.AccessToken and does no token handling itself.
-		tok, err := e.auth.accessToken(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("connector %q: oauth2: %w", e.instance, err)
-		}
-		conn = make(map[string]any, len(e.conn)+1)
-		for k, v := range e.conn {
-			conn[k] = v
-		}
-		conn[plugin.AccessTokenKey] = tok
-	}
 	staging := ""
 	if st, ok := e.client.(interface{ StagingDir(string) (string, error) }); ok {
 		dir, err := st.StagingDir(e.instance)
@@ -427,9 +531,41 @@ func (e *externalImpl) invokePlugin(ctx context.Context, verb string, opts map[s
 		}
 		staging = dir
 	}
-	out, err := e.client.Invoke(ctx, plugin.InvokeRequest{
-		Instance: e.instance, Verb: verb, Options: opts, Connection: conn, Staging: staging,
-	})
+	call := func(forceFresh bool) (map[string]any, error) {
+		conn := e.conn
+		if e.auth != nil && e.auth.oauth2() {
+			if forceFresh {
+				e.auth.invalidate()
+			}
+			// Managed OAuth2: mint/refresh the token and inject it into a
+			// per-call COPY of the connection (never mutate the shared map).
+			// The plugin reads it via plugin.AccessToken and does no token
+			// handling itself. Every OTHER scheme (none/bearer/basic/header)
+			// is static — enrichConnection already passed its resolved
+			// `auth:` block through verbatim, and the plugin applies it
+			// itself; there is no lifecycle for the host to own.
+			tok, err := e.auth.accessToken(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("connector %q: oauth2: %w", e.instance, err)
+			}
+			conn = make(map[string]any, len(e.conn)+1)
+			for k, v := range e.conn {
+				conn[k] = v
+			}
+			conn[plugin.AccessTokenKey] = tok
+		}
+		return e.client.Invoke(ctx, plugin.InvokeRequest{
+			Instance: e.instance, Verb: verb, Options: opts, Connection: conn, Staging: staging,
+		})
+	}
+	out, err := call(false)
+	if err != nil && e.auth != nil && e.auth.oauth2() && plugin.UpstreamUnauthorized(err) {
+		// The upstream rejected the bearer we handed the plugin (§1.11
+		// CodeUpstream, status 401) — the same "retry once on 401" every
+		// managed-OAuth2 connector gets, generically: the plugin never
+		// touches the token's lifecycle, so it cannot retry this itself.
+		out, err = call(true)
+	}
 	if err != nil {
 		// An answered JSON-RPC error (plugin-contract.md §1.11) becomes a
 		// *ContractError here, carrying Code/Data the rest of the engine acts

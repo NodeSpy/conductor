@@ -370,14 +370,6 @@ func MergeOptions(defaults, call map[string]any) map[string]any {
 	return out
 }
 
-// InstanceDecler lets an Impl replace its type's static declaration with a
-// per-instance one — rest/graphql materialize their user-declared verbs and
-// events into a real TypeDecl so validation, introspection, and InvokeFinal
-// see the instance's actual contract.
-type InstanceDecler interface {
-	InstanceDecl(base *TypeDecl) *TypeDecl
-}
-
 // Builder constructs a connector type's Impl from its instance name, the raw
 // connection config, and shared runtime dependencies.
 type Builder func(name string, ref config.ConnectorRef, deps Deps) (Impl, error)
@@ -551,8 +543,16 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 			}
 		} else {
 			in.Impl = impl
-			if id, ok := impl.(InstanceDecler); ok {
-				in.Decl = id.InstanceDecl(decl)
+			// Per-instance declarations (Q6, plugin-contract.md §3.9 G13) come
+			// ONLY through the contract: externalImpl is the one generic Impl
+			// that asks its connected plugin (spawned or in-process builtin)
+			// for an instance-specific Decl over the wire, and already carries
+			// the EFFECTIVE decl (instance-specific when the plugin has one,
+			// else the shared type-level one) — there is no type-specific Go
+			// side door; rest/graphql/webhook declare themselves exactly like
+			// any third-party plugin would.
+			if ei, ok := impl.(*externalImpl); ok {
+				in.Decl = ei.decl
 			}
 			if verr := impl.Validate(); verr != nil {
 				in.DisabledReason = verr.Error()

@@ -8,7 +8,10 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/builtins/cron"
 	"github.com/NodeSpy/conductor/internal/builtins/exposure"
+	"github.com/NodeSpy/conductor/internal/builtins/graphql"
+	"github.com/NodeSpy/conductor/internal/builtins/rest"
 	"github.com/NodeSpy/conductor/internal/builtins/rss"
+	"github.com/NodeSpy/conductor/internal/builtins/webhook"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/plugin"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
@@ -30,6 +33,9 @@ var inprocessTunnel = exposure.NewTunnel()
 func init() {
 	RegisterInProcessConnector(cron.Cron{})
 	RegisterInProcessConnector(rss.New())
+	RegisterInProcessConnector(webhook.New())
+	RegisterInProcessConnector(rest.New())
+	RegisterInProcessConnector(graphql.New())
 	RegisterInProcessConnector(exposure.LAN{})
 	RegisterInProcessConnector(inprocessTunnel)
 }
@@ -77,8 +83,30 @@ func RegisterInProcessConnector(h sdk.Handler) {
 		if log == nil {
 			log = func(string, ...any) {}
 		}
+		// Builtins get exactly the same generic contract treatment a spawned
+		// plugin does (RegisterExternalConnector): a declared `auth:` block
+		// may be managed OAuth2 (the daemon owns the token exchange and
+		// injects the bearer) or passed through for the builtin's own static
+		// schemes, and a per-instance declaration (Q6) — rest/graphql/webhook
+		// get no special case the engine or this registration path knows
+		// about.
+		au, err := buildManagedAuth(name, d.Auth, ref, deps)
+		if err != nil {
+			return nil, fmt.Errorf("builtin %s: %w", d.Type, err)
+		}
+		if err := enrichConnection(conn, ref, deps, nil); err != nil {
+			return nil, fmt.Errorf("builtin %s: %w", d.Type, err)
+		}
+		effDecl := td
+		id, err := resolveInstanceDecl(c, name, conn)
+		if err != nil {
+			return nil, fmt.Errorf("builtin %s: %w", d.Type, err)
+		}
+		if id != nil {
+			effDecl = id
+		}
 		return &externalImpl{
-			client: c, source: c, instance: name, decl: td, conn: conn, secretRefs: refs,
+			client: c, source: c, instance: name, decl: effDecl, conn: conn, auth: au, secretRefs: refs,
 			pluginRef: "builtin:" + d.Type, pluginType: d.Type, audit: deps.Audit, log: log,
 		}, nil
 	})
