@@ -360,3 +360,116 @@ func TestInstanceDeclLegitimateEventWithNewTargetAssignedPasses(t *testing.T) {
 		t.Fatalf("a genuinely new per-instance event (absent from the type decl) must not disable the connector: %s", in.DisabledReason)
 	}
 }
+
+// TestInstanceDeclCannotChangeOptionHooksOnExistingEvent and
+// TestInstanceDeclCannotAddOptionHooksToNewEvent are finding 4(b)'s
+// regression tests: eventSemanticsRefine (and the brand-new-event path in
+// validateInstanceRefinement) did not compare OptionHooks at all, so a
+// per-instance decl could add an option hook invoking a host_only verb
+// (e.g. a credential minter) to an event install-time review already
+// approved — same-named events must keep option_hooks IDENTICAL, and a
+// brand-new event may not declare option_hooks at all.
+func TestInstanceDeclCannotChangeOptionHooksOnExistingEvent(t *testing.T) {
+	h := &fakeInstanceHandler{
+		typeDecl: sdk.Decl{
+			Verbs: []sdk.Verb{{Name: "react"}, {Name: "mint_token"}},
+			Events: []sdk.Event{{Name: "message", Semantics: &sdk.EventSemantics{
+				OptionHooks: []sdk.OptionHook{{Option: "ack", At: "start", Verb: "react"}},
+			}}},
+		},
+		instance: func(string, map[string]any) sdk.Decl {
+			return sdk.Decl{
+				Verbs: []sdk.Verb{{Name: "mint_token"}},
+				Events: []sdk.Event{{Name: "message", Semantics: &sdk.EventSemantics{
+					// Same option, but now targets a DIFFERENT (potentially
+					// host_only / credential-minting) verb.
+					OptionHooks: []sdk.OptionHook{{Option: "ack", At: "start", Verb: "mint_token"}},
+				}}},
+			}
+		},
+	}
+	in := buildFakeInstanceConnector(t, "fakeoptionhookchange", h)
+	if in.DisabledReason == "" {
+		t.Fatal("an instance decl that changes option_hooks on an existing event must disable the connector")
+	}
+	if !strings.Contains(in.DisabledReason, "message") || !strings.Contains(in.DisabledReason, "option_hooks") {
+		t.Fatalf("DisabledReason = %q, want it to name the event and option_hooks", in.DisabledReason)
+	}
+}
+
+func TestInstanceDeclCannotDropOptionHooksOnExistingEvent(t *testing.T) {
+	h := &fakeInstanceHandler{
+		typeDecl: sdk.Decl{
+			Verbs: []sdk.Verb{{Name: "react"}},
+			Events: []sdk.Event{{Name: "message", Semantics: &sdk.EventSemantics{
+				OptionHooks: []sdk.OptionHook{{Option: "ack", At: "start", Verb: "react"}},
+			}}},
+		},
+		instance: func(string, map[string]any) sdk.Decl {
+			return sdk.Decl{
+				// Same event, option_hooks silently dropped — narrowing is
+				// refused too (documented behavior, not just widening).
+				Events: []sdk.Event{{Name: "message", Semantics: &sdk.EventSemantics{}}},
+			}
+		},
+	}
+	in := buildFakeInstanceConnector(t, "fakeoptionhookdrop", h)
+	if in.DisabledReason == "" {
+		t.Fatal("an instance decl that drops option_hooks from an existing event must disable the connector")
+	}
+	if !strings.Contains(in.DisabledReason, "message") || !strings.Contains(in.DisabledReason, "option_hooks") {
+		t.Fatalf("DisabledReason = %q, want it to name the event and option_hooks", in.DisabledReason)
+	}
+}
+
+func TestInstanceDeclCannotAddOptionHooksToNewEvent(t *testing.T) {
+	h := &fakeInstanceHandler{
+		typeDecl: sdk.Decl{}, // no events, no verbs at all at the type level
+		instance: func(string, map[string]any) sdk.Decl {
+			return sdk.Decl{
+				Verbs: []sdk.Verb{{Name: "mint_token"}},
+				Events: []sdk.Event{{Name: "delivery", Semantics: &sdk.EventSemantics{
+					Target:      &sdk.TargetSemantics{Assigned: []byte("true")},
+					OptionHooks: []sdk.OptionHook{{Option: "ack", At: "start", Verb: "mint_token"}},
+				}}},
+			}
+		},
+	}
+	in := buildFakeInstanceConnector(t, "fakeoptionhooknewevent", h)
+	if in.DisabledReason == "" {
+		t.Fatal("a brand-new event declaring option_hooks must disable the connector")
+	}
+	if !strings.Contains(in.DisabledReason, "delivery") || !strings.Contains(in.DisabledReason, "option_hooks") {
+		t.Fatalf("DisabledReason = %q, want it to name the event and option_hooks", in.DisabledReason)
+	}
+}
+
+// TestInstanceDeclIdenticalOptionHooksOnExistingEventPasses is the positive
+// control: keeping option_hooks byte-for-byte identical (even with Args in
+// a different map iteration order) must not disable the connector.
+func TestInstanceDeclIdenticalOptionHooksOnExistingEventPasses(t *testing.T) {
+	h := &fakeInstanceHandler{
+		typeDecl: sdk.Decl{
+			Verbs: []sdk.Verb{{Name: "react", Options: sdk.Schema{
+				"channel": {Type: "string"}, "ts": {Type: "string"},
+			}}},
+			Events: []sdk.Event{{Name: "message", Semantics: &sdk.EventSemantics{
+				OptionHooks: []sdk.OptionHook{{Option: "ack", At: "start", Verb: "react", Args: map[string]string{"channel": "{{.channel}}", "ts": "{{.ts}}"}}},
+			}}},
+		},
+		instance: func(string, map[string]any) sdk.Decl {
+			return sdk.Decl{
+				Verbs: []sdk.Verb{{Name: "react", Options: sdk.Schema{
+					"channel": {Type: "string"}, "ts": {Type: "string"},
+				}}},
+				Events: []sdk.Event{{Name: "message", Semantics: &sdk.EventSemantics{
+					OptionHooks: []sdk.OptionHook{{Option: "ack", At: "start", Verb: "react", Args: map[string]string{"ts": "{{.ts}}", "channel": "{{.channel}}"}}},
+				}}},
+			}
+		},
+	}
+	in := buildFakeInstanceConnector(t, "fakeoptionhookidentical", h)
+	if in.DisabledReason != "" {
+		t.Fatalf("identical option_hooks (modulo map order) must not disable the connector: %s", in.DisabledReason)
+	}
+}

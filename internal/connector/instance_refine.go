@@ -137,7 +137,20 @@ func validateInstanceRefinement(typeDecl, instanceDecl *sdk.Decl) error {
 		ev := &instanceDecl.Events[i]
 		te, known := typeEvents[ev.Name]
 		if !known {
-			continue // a genuinely new event: the legitimate Q6 case
+			// A genuinely new event (the legitimate Q6 case) may not
+			// declare option_hooks at all: an option_hooks entry invokes a
+			// verb — potentially a host_only one — at a run phase, exactly
+			// as an operator-authored `hooks:` entry would, so a per-
+			// instance decl smuggling one in on an event install-time
+			// review never saw is the same class of escalation the verb
+			// checks above exist for; unlike a verb's OWN semantics (which
+			// a brand-new verb may carry none of), there is no legitimate
+			// reason for a brand-new EVENT to come with one.
+			if ev.Semantics != nil && len(ev.Semantics.OptionHooks) > 0 {
+				problems = append(problems, fmt.Sprintf(
+					"event %q: a brand-new event (absent from the type-level declaration) declares option_hooks — not permitted", ev.Name))
+			}
+			continue
 		}
 		if msg, ok := eventSemanticsRefine(te.Semantics, ev.Semantics); !ok {
 			problems = append(problems, fmt.Sprintf("event %q: %s", ev.Name, msg))
@@ -192,7 +205,61 @@ func eventSemanticsRefine(t, i *sdk.EventSemantics) (string, bool) {
 	if !scopeFactsEqual(tScope, iScope) {
 		return "target scope dimensions differ from the type-level declaration's same-named event", false
 	}
+
+	// option_hooks (plugin-contract.md §2.2): a per-instance decl can add an
+	// option hook invoking a host_only verb to an APPROVED event just as
+	// easily as it could smuggle in a conversation_reply/closes_target —
+	// same-named events must keep option_hooks IDENTICAL, not merely
+	// "no widening": narrowing (silently dropping one the type decl
+	// declared) is refused too, since that changes what the operator sees
+	// documented for this event out from under them just as surely as
+	// adding one does.
+	var tOH, iOH []sdk.OptionHook
+	if t != nil {
+		tOH = t.OptionHooks
+	}
+	if i != nil {
+		iOH = i.OptionHooks
+	}
+	if !optionHooksEqual(tOH, iOH) {
+		return "option_hooks differ from the type-level declaration's same-named event", false
+	}
 	return "", true
+}
+
+// optionHooksEqual compares two OptionHook lists as SETS (the wire gives no
+// ordering guarantee, matching scopeFactsEqual's treatment of ScopeFact) —
+// byte-for-byte on every field, not just the option name, since a hook that
+// renamed its own verb or at-phase while keeping the same Option would still
+// be a materially different hook.
+func optionHooksEqual(a, b []sdk.OptionHook) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	key := func(h sdk.OptionHook) string {
+		args := make([]string, 0, len(h.Args))
+		for k, v := range h.Args {
+			args = append(args, k+"\x00"+v)
+		}
+		sort.Strings(args)
+		return h.Option + "\x01" + h.At + "\x01" + h.Verb + "\x01" + strings.Join(args, "\x02")
+	}
+	ak := make([]string, len(a))
+	for i, h := range a {
+		ak[i] = key(h)
+	}
+	bk := make([]string, len(b))
+	for i, h := range b {
+		bk[i] = key(h)
+	}
+	sort.Strings(ak)
+	sort.Strings(bk)
+	for i := range ak {
+		if ak[i] != bk[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // scopeFactsEqual compares two ScopeFact lists as sets (order-independent —
