@@ -38,7 +38,18 @@ import (
 // it declared, narrowed by whatever the referencing connector declared under
 // `network:`. Empty `network:` means "no narrowing" — the plugin's own
 // declaration stands.
+//
+// A Probe Spec (the type-level `plugin.describe` probe, finding 2) is the one
+// exception: it gets NO egress at all, regardless of what the plugin
+// declares. Without this, an empty Spec.Network was read as "unconfigured",
+// which for the throwaway type-level probe (never a real instance, so there
+// is nothing to narrow FOR) silently fell back to the plugin's WHOLE declared
+// egress — docs/wiki/Plugins.md says the probe gets the minimum (none of it),
+// not "whatever the binary says it needs".
 func (s Spec) EffectiveManifest() Manifest {
+	if s.Probe {
+		return Manifest{}
+	}
 	m := s.Manifest
 	if len(s.Network) == 0 {
 		return m

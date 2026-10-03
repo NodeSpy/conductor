@@ -368,6 +368,79 @@ func TestManifestConfinesCommands(t *testing.T) {
 	}
 }
 
+// TestProbeSpecConfinesToNoEgressEvenWithDeclaredManifest is the finding-2
+// regression: the type-level probe (Spec.Probe) must be routed through the
+// egress proxy with an EMPTY allowlist — confined to no network — even though
+// confineToManifest's ordinary rule for a connector is "an empty allowlist
+// means unconfined" (allow==nil normally skips the proxy entirely). Without
+// Probe forcing confine=true, a probe spec's empty Spec.Network reads as
+// "unconfigured" and EffectiveManifest falls back to the plugin's WHOLE
+// declared egress — this spec declares api.github.com:443, so a stray proxy
+// call recording ANY non-empty allowlist, or no call at all while one was
+// expected, would both be the bug this guards.
+func TestProbeSpecConfinesToNoEgressEvenWithDeclaredManifest(t *testing.T) {
+	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	var gotAllow []string
+	called := false
+	egressAddr := func(allow []string) (addr, cred string, revoke func(), err error) {
+		called = true
+		gotAllow = allow
+		return "127.0.0.1:9", "tok", func() {}, nil
+	}
+	s := Spec{
+		Name: "p", Kind: KindConnector, Provides: "acme-github", BinPath: bin, Local: true,
+		Probe:    true,
+		Manifest: Manifest{Egress: []string{"api.github.com:443"}},
+	}
+	cmd, cleanup, _, err := buildCommand(s, SandboxDeps{EgressAddr: egressAddr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if !called {
+		t.Fatal("a probe spec must be routed through the egress proxy (confined to no network), not left unconfined")
+	}
+	if len(gotAllow) != 0 {
+		t.Fatalf("a probe spec's allowlist must be empty (deny all), got %v", gotAllow)
+	}
+	var sawProxy bool
+	for _, kv := range cmd.Env {
+		if strings.HasPrefix(kv, "HTTP_PROXY=") || strings.HasPrefix(kv, "HTTPS_PROXY=") {
+			sawProxy = true
+		}
+	}
+	if !sawProxy {
+		t.Fatalf("probe spec env does not carry the egress proxy, so nothing would actually enforce the deny-all: %v", cmd.Env)
+	}
+}
+
+// TestNonProbeEmptyManifestStaysUnconfined is the control for the above: an
+// ORDINARY connector spec (Probe: false) that declares no egress at all keeps
+// the existing "empty allowlist means unconfined" behavior — Probe-forced
+// confinement must not leak onto every connector.
+func TestNonProbeEmptyManifestStaysUnconfined(t *testing.T) {
+	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	called := false
+	egressAddr := func(allow []string) (addr, cred string, revoke func(), err error) {
+		called = true
+		return "127.0.0.1:9", "tok", func() {}, nil
+	}
+	s := Spec{Name: "p", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Local: true}
+	cmd, cleanup, _, err := buildCommand(s, SandboxDeps{EgressAddr: egressAddr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if called {
+		t.Fatal("a non-probe connector that declares no egress must stay unconfined (the manifest predates this plugin, or declares nothing) — Probe-only confinement leaked")
+	}
+	for _, kv := range cmd.Env {
+		if strings.HasPrefix(kv, "HTTP_PROXY=") || strings.HasPrefix(kv, "HTTPS_PROXY=") {
+			t.Fatalf("unconfined connector env should carry no proxy: %v", cmd.Env)
+		}
+	}
+}
+
 // A plugin that declares NOTHING gets no PATH rewrite: it declared no needs, so
 // there is no allowlist to build, and inventing one would break plugins that
 // predate the manifest.

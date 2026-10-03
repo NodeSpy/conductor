@@ -137,8 +137,13 @@ func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool
 	if s.Kind == KindConnector && !ref.SharedProcess {
 		// Per-instance isolation: the type-level Spec gets no grant of its
 		// own (the minimum, for ProbeDescribe above); InstanceClient looks
-		// each configured instance's grant up here instead.
+		// each configured instance's grant up here instead. Probe marks this
+		// as that type-level probe Spec explicitly (finding 2) — Network
+		// being empty here means "deny all", not "unconfigured; fall back to
+		// the plugin's declared egress" the way it would for an instance
+		// that simply didn't set `network:`.
 		s.Instances = ref.Instances
+		s.Probe = true
 	} else {
 		s.Isolation = ref.Isolation
 		s.IsolationDefaulted = ref.IsolationDefaulted
@@ -171,6 +176,41 @@ func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool
 		s.ReleaseVerified = inst.ReleaseVerified && inst.Sha256 != ""
 	}
 	return s
+}
+
+// InstanceSpec derives the per-process Spec for ONE configured connector
+// instance from its plugin's type-level Spec (as SpecFromRef built it) —
+// exactly the shape Manager.InstanceClient spawns that instance's own
+// subprocess from. It is also what any OTHER caller that must probe one
+// instance in its own process — cmd/conductor's per-instance reload re-probe
+// (reload.go describeInstancesForInstall, finding 1) — uses, so both build an
+// instance's process identically rather than one of them drifting.
+//
+// The instance's OWN grant travels — never a sibling's, and never the union
+// (see SpecFromRef's doc comment): ghA's process gets exactly ghA's
+// allow_env/network/allow_secrets/isolation. A key missing from
+// spec.Instances (should not happen: config.PluginRefs populates one entry
+// per configured instance) leaves the per-instance Spec at its zero grant —
+// least privilege, not a silent widening. The returned Spec carries no
+// Instances map of its own: there is nothing sibling to it once it names one
+// instance.
+func InstanceSpec(spec Spec, instance string) Spec {
+	instSpec := spec
+	instSpec.Instance = instance
+	if g, ok := spec.Instances[instance]; ok {
+		instSpec.Network = g.Network
+		instSpec.AllowSecrets = g.AllowSecrets
+		instSpec.AllowEnv = g.AllowEnv
+		instSpec.Isolation = g.Isolation
+	} else {
+		instSpec.Network = nil
+		instSpec.AllowSecrets = nil
+		instSpec.AllowEnv = nil
+		instSpec.Isolation = nil
+	}
+	instSpec.Instances = nil
+	instSpec.Probe = false
+	return instSpec
 }
 
 // NewManager builds a Manager from the config's derived plugin set. configDir is
@@ -324,27 +364,7 @@ func (m *Manager) InstanceClient(key, instance string) (*Client, error) {
 	m.mu.RLock()
 	spec = m.specs[key]
 	m.mu.RUnlock()
-	instSpec := spec
-	instSpec.Instance = instance
-	// This instance's OWN grant — never a sibling's, and never the union
-	// (see SpecFromRef): ghA's process gets exactly ghA's allow_env/network/
-	// allow_secrets/isolation. A key missing from the map (should not
-	// happen: config.PluginRefs populates one entry per configured instance)
-	// leaves the per-instance Spec at its zero grant — least privilege, not
-	// a silent widening.
-	if g, ok := spec.Instances[instance]; ok {
-		instSpec.Network = g.Network
-		instSpec.AllowSecrets = g.AllowSecrets
-		instSpec.AllowEnv = g.AllowEnv
-		instSpec.Isolation = g.Isolation
-	} else {
-		instSpec.Network = nil
-		instSpec.AllowSecrets = nil
-		instSpec.AllowEnv = nil
-		instSpec.Isolation = nil
-	}
-	instSpec.Instances = nil // per-instance Spec needs no sibling map of its own
-	c := NewClient(instSpec, m.deps)
+	c := NewClient(InstanceSpec(spec, instance), m.deps)
 	m.instClients[key][instance] = c
 	return c, nil
 }

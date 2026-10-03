@@ -270,8 +270,21 @@ func confineToManifest(s Spec, env []string, sd SandboxDeps) ([]string, func(), 
 	// it confines a cooperating client, which is the same manifest-level
 	// confinement every non-isolation: plugin gets (see the package doc). An
 	// `isolation:` block is what turns it into an OS-enforced wall.
+	//
+	// A Probe Spec (finding 2) ALSO confines even though its allowlist is
+	// empty — the opposite of a connector's normal "empty allow means
+	// unconfined" default (the rule right above this comment). It is never a
+	// real connector that merely declared no egress; it is the type-level
+	// `plugin.describe` probe, which must get NO network at all. Routed
+	// through the same enforced proxy path as a step engine's deny-by-default
+	// case, with an allowlist of nothing: every host is refused. Where
+	// sd.EgressAddr is nil (no proxy manager wired — this default,
+	// non-isolation: path has no OTHER enforcement mechanism) the probe runs
+	// with no confinement at all, same as every other plugin on this path
+	// without a wired proxy; realDial's "running WITHOUT OS sandbox" log
+	// already says so.
 	allow := m.Egress
-	confine := len(allow) > 0 || s.Kind == KindStep
+	confine := len(allow) > 0 || s.Kind == KindStep || s.Probe
 	if confine && sd.EgressAddr != nil {
 		addr, cred, revoke, err := sd.EgressAddr(allow)
 		if err != nil {

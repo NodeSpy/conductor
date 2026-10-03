@@ -71,6 +71,32 @@ func TestEffectiveManifest(t *testing.T) {
 	}
 }
 
+// TestEffectiveManifestProbeIsAlwaysEmpty is the finding-2 regression: the
+// type-level `plugin.describe` probe (Spec.Probe) must get NO egress at all —
+// not the plugin's full declared manifest, which an empty/nil Network would
+// otherwise fall back to (the same empty value a REAL instance that simply
+// never set `network:` also carries, which correctly DOES stand on its own
+// declaration — Probe is what tells the two apart).
+func TestEffectiveManifestProbeIsAlwaysEmpty(t *testing.T) {
+	s := Spec{
+		Probe: true,
+		Manifest: Manifest{
+			Egress:   []string{"api.github.com:443"},
+			Commands: []string{"git"},
+			Env:      []string{"GH_TOKEN"},
+		},
+	}
+	if got := s.EffectiveManifest(); !got.IsZero() {
+		t.Fatalf("a probe Spec's effective manifest must be empty regardless of the plugin's declared capabilities: %+v", got)
+	}
+	// Network narrowing (were it ever set on a probe Spec, which SpecFromRef
+	// never does) must not resurrect any egress either.
+	s.Network = []string{"api.github.com:443"}
+	if got := s.EffectiveManifest(); !got.IsZero() {
+		t.Fatalf("a probe Spec's effective manifest must stay empty even with Network set: %+v", got)
+	}
+}
+
 func TestManifestSummary(t *testing.T) {
 	if s := (Manifest{}).Summary(); s != "no declared capabilities" {
 		t.Fatalf("empty manifest summary = %q", s)

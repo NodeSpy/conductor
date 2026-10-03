@@ -535,6 +535,15 @@ func TestTouchSnapshotUsedRefreshesMtime(t *testing.T) {
 // documented early-return branch instead ("a plugin declaring 'I spawn
 // things I am not naming' gets no PATH rewrite at all" — manifest.go),
 // isolating the assertion to the explicit touch alone.
+//
+// SpecFromRef also marks a non-shared connector's TYPE-level Spec as a Probe
+// (finding 2) — fine for the real type-level probe, whose EffectiveManifest
+// must stay empty no matter what Manifest.Spawns says, but this test spawns
+// the Spec directly to stand in for a live per-instance process (the shape
+// Manager.InstanceClient/InstanceSpec would hand to a real spawn, which
+// clears Probe), not the throwaway describe probe — so it clears Probe
+// itself, the same way InstanceSpec would, letting the Manifest.Spawns trick
+// above work as intended.
 func TestClientStartTouchesLocalSnapshotOnSpawn(t *testing.T) {
 	config.SetStateDir(t.TempDir())
 	t.Cleanup(func() { config.SetStateDir("") })
@@ -545,6 +554,7 @@ func TestClientStartTouchesLocalSnapshotOnSpawn(t *testing.T) {
 	if spec.SnapshotErr != nil {
 		t.Fatal(spec.SnapshotErr)
 	}
+	spec.Probe = false          // stand in for a live per-instance process, not the type-level probe
 	spec.Manifest.Spawns = true // see comment above
 
 	dir := filepath.Dir(spec.BinPath)

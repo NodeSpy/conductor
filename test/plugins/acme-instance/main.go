@@ -21,6 +21,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -56,10 +57,53 @@ func (handler) Invoke(req plugin.InvokeRequest) (plugin.InvokeResult, error) {
 	return plugin.InvokeResult{Outputs: map[string]any{"ok": true}}, nil
 }
 
+// describeLogEntry is one line appended to the file named by the connection
+// field "describe_log", when a test sets it: cmd/conductor's finding-1
+// regression (two instances each probed in their OWN process) can't observe
+// process boundaries from the RPC responses alone — every instance answers
+// plugin.describe {instance} correctly regardless of which process it runs
+// in, since the config it was CALLED with is always right. What the test
+// needs to see is whether a SINGLE process ever receives more than one
+// instance's connection — exactly what this records, keyed by this process's
+// own pid.
+type describeLogEntry struct {
+	Pid      int            `json:"pid"`
+	Instance string         `json:"instance"`
+	Config   map[string]any `json:"config"`
+}
+
+// recordDescribeInstance appends one describeLogEntry to the file named by
+// config["describe_log"] (a no-op when that key is absent — every other test
+// and the reload fixtures above never set it). Best-effort: a logging failure
+// must not fail the describe call itself.
+func recordDescribeInstance(instance string, config map[string]any) {
+	path, _ := config["describe_log"].(string)
+	if path == "" {
+		return
+	}
+	logged := make(map[string]any, len(config))
+	for k, v := range config {
+		if k != "describe_log" {
+			logged[k] = v
+		}
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	b, err := json.Marshal(describeLogEntry{Pid: os.Getpid(), Instance: instance, Config: logged})
+	if err != nil {
+		return
+	}
+	_, _ = f.Write(append(b, '\n'))
+}
+
 // DescribeInstance answers Q6: the declared "go" verb's option/output shape
 // differs between "v1" and "v2" builds, while the type-level Describe() above
 // stays byte-identical across both — the exact gap finding 1 closes.
 func (handler) DescribeInstance(_ context.Context, instance string, config map[string]any) (plugin.Decl, error) {
+	recordDescribeInstance(instance, config)
 	d := describe()
 	opts := plugin.Schema{"a": {Type: "string"}}
 	if variant == "v2" {

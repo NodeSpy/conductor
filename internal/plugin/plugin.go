@@ -172,6 +172,25 @@ type Spec struct {
 	// Manager.NewManager/InstanceClient builds per-instance Specs from); nil
 	// everywhere else.
 	Instances map[string]config.ConnectorGrant
+	// Probe marks the type-level `plugin.describe` probe Spec (Manager.
+	// ProbeDescribe/StartAndDescribe at boot, cmd/conductor's hot-reload
+	// re-describe) — a pure self-description that calls no verb and reads no
+	// instance connection, so docs/wiki/Plugins.md "Multi-instance isolation"
+	// says it gets the MINIMUM of everything: no secrets, no env, and — the
+	// finding-2 fix — no egress either, confined to NOTHING rather than
+	// falling back to the plugin's full declared manifest.
+	//
+	// Network/AllowSecrets/AllowEnv are already nil/empty on this Spec (see
+	// SpecFromRef), but EffectiveManifest's "empty Network means no
+	// narrowing, so the plugin's own declared egress stands" reading of that
+	// is correct for a REAL connector instance that simply didn't set
+	// `network:` — it conflates with a probe Spec's empty Network for an
+	// entirely different reason (no instance to narrow FOR) unless the two
+	// are told apart explicitly. Probe is that explicit signal: EffectiveManifest
+	// and confineToManifest (spawn.go) both honor it instead of inferring
+	// "no egress configured" from an overloaded empty slice. Never set on a
+	// per-instance Spec (InstanceSpec always clears it).
+	Probe bool
 }
 
 // Ref is the `plugin@version` attribution string carried on audit records and

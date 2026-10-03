@@ -135,23 +135,33 @@ func instancesWithQ6Decl(insts []connector.PluginInstanceDecl) []connector.Plugi
 	return out
 }
 
-// describeInstancesForInstall spawns the plugin's NEW build once and asks it
-// to re-describe every given instance (Q6, plugin-contract.md §1.4), the same
-// way describeForInstall probes the type-level Decl. The returned map holds a
-// nil entry for an instance the new build no longer answers
-// plugin.describe {instance} for at all — reloadMoved treats that drop the
-// same as any other declaration change: unsafe to swap in place.
+// describeInstancesForInstall re-describes every given LIVE instance (Q6,
+// plugin-contract.md §1.4) against the plugin's NEW build — each in its OWN
+// process, spawned with exactly that instance's own grant (plugin.InstanceSpec:
+// the same Network/AllowSecrets/AllowEnv/Isolation Manager.InstanceClient
+// would build that instance's real process from), closed the moment it
+// answers.
+//
+// This is finding 1: instances is built from connector.InstancesUsingPlugin,
+// whose Connection field is ei.conn — each instance's RESOLVED connection,
+// holding real secret values. A single shared process asked to describe every
+// instance in turn (as this once did) would hand every sibling's connection,
+// secrets included, to that one process — exactly the cross-instance
+// exposure per-instance processes (docs/wiki/Plugins.md "Multi-instance
+// isolation") exist to prevent, even though the type-level Decl surface this
+// re-probes never calls a verb or needs a secret itself. One throwaway
+// process per instance, each confined to only that one instance's own grant,
+// closes that gap.
+//
+// The returned map holds a nil entry for an instance the new build no longer
+// answers plugin.describe {instance} for at all — reloadMoved treats that
+// drop the same as any other declaration change: unsafe to swap in place.
 func describeInstancesForInstall(ctx context.Context, spec plugin.Spec, instances []connector.PluginInstanceDecl) (map[string]*plugin.Decl, error) {
 	sec := secrets.New()
 	deps := pluginDeps(sec, func(map[string]any) {}, nil)
-	cl := plugin.NewClient(spec, deps)
-	defer cl.Close()
-	if err := cl.Start(ctx); err != nil {
-		return nil, err
-	}
 	out := make(map[string]*plugin.Decl, len(instances))
 	for _, in := range instances {
-		d, supported, err := cl.DescribeInstance(ctx, in.Instance, in.Connection)
+		d, supported, err := describeOneInstanceForInstall(ctx, spec, in, deps)
 		if err != nil {
 			return nil, fmt.Errorf("instance %s: %w", in.Instance, err)
 		}
@@ -162,4 +172,16 @@ func describeInstancesForInstall(ctx context.Context, spec plugin.Spec, instance
 		}
 	}
 	return out, nil
+}
+
+// describeOneInstanceForInstall spawns ONE instance's own process — confined
+// to exactly that instance's grant (plugin.InstanceSpec), never a sibling's —
+// describes it, and closes it before returning.
+func describeOneInstanceForInstall(ctx context.Context, spec plugin.Spec, in connector.PluginInstanceDecl, deps plugin.Deps) (*plugin.Decl, bool, error) {
+	cl := plugin.NewClient(plugin.InstanceSpec(spec, in.Instance), deps)
+	defer cl.Close()
+	if err := cl.Start(ctx); err != nil {
+		return nil, false, err
+	}
+	return cl.DescribeInstance(ctx, in.Instance, in.Connection)
 }

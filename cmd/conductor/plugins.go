@@ -242,8 +242,18 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			return nil, fmt.Errorf("plugin %s: %w", spec.Name, err)
 		}
 		registered = append(registered, spec.Provides)
+		// spec.Manifest (the plugin's own DECLARED capabilities), not
+		// spec.EffectiveManifest(): for the default per-instance-isolated
+		// shape, spec here is the type-level Spec, which is now a Probe Spec
+		// (finding 2) — its EffectiveManifest is deliberately "nothing", not
+		// what any configured instance actually runs with (that is shown per
+		// instance by `plugin show`/`plugin list --caps`). A SharedProcess
+		// plugin's EffectiveManifest, by contrast, IS what its one real
+		// process runs with — but spec.Manifest here still answers the
+		// simpler, always-true question this log line asks: what does the
+		// installed BINARY declare.
 		logf("plugin %s: registered connector type %q (%d verb(s)); permissions: %s",
-			spec.Ref(), spec.Provides, len(decl.Verbs), spec.EffectiveManifest().Summary())
+			spec.Ref(), spec.Provides, len(decl.Verbs), spec.Manifest.Summary())
 	}
 	return mgr, nil
 }
