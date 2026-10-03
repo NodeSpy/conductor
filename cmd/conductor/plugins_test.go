@@ -205,6 +205,44 @@ func TestPendingPluginBackoffCapsAtOneHour(t *testing.T) {
 	}
 }
 
+// TestPendingPluginsStillMissingNeverSnapshotsLocalPlugins is finding 3(c):
+// pendingPluginRetry's ticker (backing off from pendingPluginInterval to
+// pendingPluginBackoffCap for as long as a REMOTE plugin stays missing) used
+// to build a throwaway plugin.Manager on every tick just to check install
+// status — and a Manager resolves (SpecFromRef), and for a LOCAL `use:
+// ./path` reference SNAPSHOTS, every plugin the config references, not only
+// the one(s) actually missing. A config with ONLY a local connector plugin
+// (never itself "missing" — see pendingPluginsStillMissing's doc) must
+// therefore produce not a single byte under the local snapshot directory
+// from this check, no matter how many times it runs.
+func TestPendingPluginsStillMissingNeverSnapshotsLocalPlugins(t *testing.T) {
+	config.SetStateDir(t.TempDir())
+	t.Cleanup(func() { config.SetStateDir("") })
+	bin := buildTestPlugin(t, "acme-ticker")
+
+	cfg := &config.Config{ConnectorsMap: map[string]config.ConnectorRef{
+		"forge": {Use: bin},
+	}}
+	state := plugin.LoadInstallState(plugin.InstallDir())
+
+	for i := 0; i < 5; i++ {
+		if missing := pendingPluginsStillMissing(cfg, state); missing != 0 {
+			t.Fatalf("a local plugin must never count as missing: %d", missing)
+		}
+	}
+
+	root := plugin.LocalSnapshotRoot()
+	if _, err := os.Stat(root); err == nil {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("pendingPluginsStillMissing must never snapshot a local plugin, but %s now has %d entries: %v", root, len(entries), entries)
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
 // TestPendingPluginRetryWontRestartOnBadConfig: once a pending plugin is
 // installed, pendingPluginRetry must validate the config against what the
 // plugin ACTUALLY declares before asking the daemon to restart into it — its

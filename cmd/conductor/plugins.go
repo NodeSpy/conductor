@@ -1024,7 +1024,13 @@ func gcLocalPluginSnapshots(stack *flowStack, rtMgr *plugin.Manager) {
 			keep[sha] = true
 		}
 	}
-	removed, errs := plugin.GCLocalSnapshots(plugin.LocalSnapshotRoot(), keep)
+	// GCLocalSnapshotsSafely, not the bare keep-set GCLocalSnapshots: two
+	// daemons can share a state dir (docs/wiki/Plugins.md "Local builds are
+	// snapshotted"), and `keep` only ever reflects what THIS process's own
+	// Managers resolved — a sibling daemon's live snapshot (or one about to
+	// be respawned into) is invisible to it. The grace period catches that;
+	// touchSnapshotUsed refreshes it on every resolve and every spawn.
+	removed, errs := plugin.GCLocalSnapshotsSafely(plugin.LocalSnapshotRoot(), keep, plugin.DefaultLocalSnapshotGrace)
 	for _, sha := range removed {
 		logf("plugins: GC'd stale local-build snapshot %s", shortSha(sha))
 	}
@@ -1052,6 +1058,41 @@ func nextPendingPluginWait(cur time.Duration) time.Duration {
 		next = pendingPluginBackoffCap
 	}
 	return next
+}
+
+// pendingPluginsStillMissing reports how many currently-referenced CONNECTOR
+// plugins are still not installed, reading install state DIRECTLY rather
+// than through a full plugin.Manager (what this used to do, via
+// plugin.NewManager(cfg.PluginRefs(), …)). A Manager resolves — and, for a
+// LOCAL `use: ./path` reference, SNAPSHOTS — every plugin the config
+// references at construction (SpecFromRef), including every plugin that is
+// NOT the one this retry loop is waiting on. pendingPluginRetry ticks
+// (backing off from pendingPluginInterval to pendingPluginBackoffCap) for as
+// long as something stays missing, so building a Manager on every tick kept
+// re-snapshotting every local plugin's current build on a timer that has
+// nothing to do with it, growing the local snapshot directory with a copy
+// per tick for however long the unrelated remote fetch keeps failing — a
+// local reference is never "missing" in the sense this loop cares about (see
+// below), so there is nothing for it to even check there.
+//
+// A LOCAL reference is skipped outright: loadConnectorPlugins never adds one
+// to pendingPlugins in the first place (SpecFromRef gives it a non-empty
+// BinPath — the snapshot path, or the raw source on a snapshot failure —
+// regardless of whether the snapshot itself succeeded, so spec.Installed()
+// is always true for it), so it can never be one of the plugins THIS loop is
+// retrying; resolving it here would be pure overhead.
+func pendingPluginsStillMissing(cfg *config.Config, state *plugin.InstallState) int {
+	missing := 0
+	for key, ref := range cfg.PluginRefs() {
+		if ref.Kind() != config.PluginKindConnector || ref.Use.Origin == config.OriginLocal {
+			continue
+		}
+		inst, ok := state.Get(key)
+		if !ok || inst.Path == "" {
+			missing++
+		}
+	}
+	return missing
 }
 
 // pendingPluginRetry retries fetching the plugins this boot found missing,
@@ -1083,14 +1124,7 @@ func pendingPluginRetry(ctx context.Context, cfg *config.Config, cfgFile string,
 		}
 		bootGapFill(cfg)
 		state := plugin.LoadInstallState(plugin.InstallDir())
-		mgr := plugin.NewManager(cfg.PluginRefs(), cfg.BaseDir(), state, plugin.Deps{})
-		missing := 0
-		for _, spec := range mgr.ConnectorSpecs() {
-			if !spec.Installed() {
-				missing++
-			}
-		}
-		mgr.Close()
+		missing := pendingPluginsStillMissing(cfg, state)
 		if missing > 0 {
 			wait = nextPendingPluginWait(wait)
 			logf("plugins: still missing %s — next retry in %s", strings.Join(pendingPlugins, ", "), wait)

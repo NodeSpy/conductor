@@ -718,6 +718,12 @@ func (c *Client) ensureLocked(ctx context.Context) error {
 		// to verify against", which stopped being true the moment the snapshot
 		// existed.
 		c.deps.Log("plugin %s: local build snapshotted at %s (sha %s) — rebuild and reload/restart to pick up a new build", c.spec.Name, c.spec.BinPath, digest)
+		// GC coordination (local_snapshot.go's GCLocalSnapshotsOld): every
+		// SPAWN refreshes the snapshot dir's mtime, same as every resolve
+		// does, so a GC running concurrently (this process's own boot GC, or
+		// a sibling daemon's) never removes a snapshot a respawn is about to
+		// exec from.
+		touchSnapshotUsed(filepath.Dir(c.spec.BinPath))
 	}
 	c.starts = append(c.starts, now)
 	c.totalStart++
