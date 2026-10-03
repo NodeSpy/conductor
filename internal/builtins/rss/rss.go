@@ -85,8 +85,8 @@ func feeds(cfg map[string]any) (map[string]feed, []plugin.Problem) {
 			problems = append(problems, plugin.Problem{Path: "feeds." + name + ".url", Message: "required"})
 			continue
 		}
-		if s, ok := m["interval"].(string); ok && s != "" {
-			d, err := time.ParseDuration(s)
+		if v, ok := m["interval"]; ok && v != nil && v != "" {
+			d, err := sourcekit.ParseDuration(v)
 			if err != nil || d <= 0 {
 				problems = append(problems, plugin.Problem{Path: "feeds." + name + ".interval", Message: "not a positive duration"})
 				continue

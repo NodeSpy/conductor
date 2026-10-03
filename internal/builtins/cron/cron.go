@@ -14,6 +14,7 @@ import (
 	robfig "github.com/robfig/cron/v3"
 
 	"github.com/NodeSpy/conductor/pkg/plugin"
+	"github.com/NodeSpy/conductor/pkg/sourcekit"
 )
 
 // Cron is the cron handler.
@@ -82,17 +83,7 @@ func schedules(cfg map[string]any) (map[string]schedule, []plugin.Problem) {
 	return out, problems
 }
 
-func duration(v any) (time.Duration, error) {
-	switch x := v.(type) {
-	case string:
-		return time.ParseDuration(x)
-	case int:
-		return time.Duration(x) * time.Second, nil
-	case float64:
-		return time.Duration(x) * time.Second, nil
-	}
-	return 0, fmt.Errorf("unsupported %T", v)
-}
+func duration(v any) (time.Duration, error) { return sourcekit.ParseDuration(v) }
 
 func names(m map[string]schedule) string {
 	out := make([]string, 0, len(m))

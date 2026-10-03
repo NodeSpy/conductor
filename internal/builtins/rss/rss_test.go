@@ -82,3 +82,20 @@ func TestMatcher(t *testing.T) {
 		t.Fatal(p)
 	}
 }
+
+// interval: takes the config duration grammar (a day unit, plain seconds),
+// and a bad one is a validation problem, not a silent fall-back to the default.
+func TestFeedIntervalGrammar(t *testing.T) {
+	got, problems := feeds(map[string]any{"feeds": map[string]any{
+		"daily":  map[string]any{"url": "https://x.example/a", "interval": "1d"},
+		"hourly": map[string]any{"url": "https://x.example/b", "interval": 3600},
+	}})
+	if len(problems) != 0 || got["daily"].interval != 24*time.Hour || got["hourly"].interval != time.Hour {
+		t.Fatalf("feeds=%+v problems=%+v", got, problems)
+	}
+	if _, problems := feeds(map[string]any{"feeds": map[string]any{
+		"x": map[string]any{"url": "https://x.example/c", "interval": "soon"},
+	}}); len(problems) == 0 {
+		t.Fatal("a bad interval was accepted")
+	}
+}
