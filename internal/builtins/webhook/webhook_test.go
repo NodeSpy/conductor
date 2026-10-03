@@ -324,6 +324,80 @@ func TestStartSourceDedupsRedelivery(t *testing.T) {
 	}
 }
 
+// A source with NO `dedup:` template must not drop every delivery after the
+// first: before the fix, an empty rendered dedup template made the dedup key
+// a per-source constant (name+"\x00"), so the second and every later,
+// DIFFERENT delivery was treated as a "duplicate" of the first and silently
+// dropped. Two distinct bodies must both fire.
+func TestStartSourceNoDedupTemplateBothDeliveriesFire(t *testing.T) {
+	w := New()
+	addr := freeAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	emit, got := collectEvents()
+	go func() {
+		_ = w.StartSource(ctx, plugin.StartSourceRequest{
+			Instance: "wh",
+			Config: map[string]any{
+				"listen":  addr,
+				"sources": map[string]any{"x": map[string]any{"path": "/h"}}, // no dedup:
+			},
+		}, emit)
+	}()
+	waitListening(t, addr)
+	postTo(t, "http://"+addr+"/h", `{"id":"evt-1"}`, nil)
+	postTo(t, "http://"+addr+"/h", `{"id":"evt-2"}`, nil)
+
+	var titles []string
+	for i := 0; i < 2; i++ {
+		select {
+		case ev := <-got:
+			titles = append(titles, fmt.Sprint(ev.Context["body"]))
+		case <-time.After(5 * time.Second):
+			t.Fatalf("delivery %d of 2 never fired (got %d so far)", i+1, len(titles))
+		}
+	}
+	select {
+	case ev := <-got:
+		t.Fatalf("exactly 2 deliveries were sent, got an unexpected 3rd: %+v", ev)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// A source with no `dedup:` template still dedupes an exact retry of the
+// SAME delivery (identical body): the fallback key is a content hash, so a
+// byte-identical redelivery collapses to the same key as before.
+func TestStartSourceNoDedupTemplateStillDedupesIdenticalRetry(t *testing.T) {
+	w := New()
+	addr := freeAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	emit, got := collectEvents()
+	go func() {
+		_ = w.StartSource(ctx, plugin.StartSourceRequest{
+			Instance: "wh",
+			Config: map[string]any{
+				"listen":  addr,
+				"sources": map[string]any{"x": map[string]any{"path": "/h"}},
+			},
+		}, emit)
+	}()
+	waitListening(t, addr)
+	postTo(t, "http://"+addr+"/h", `{"id":"evt-1"}`, nil)
+	postTo(t, "http://"+addr+"/h", `{"id":"evt-1"}`, nil) // byte-identical retry
+
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first delivery should emit")
+	}
+	select {
+	case ev := <-got:
+		t.Fatalf("an identical retry with no dedup: configured should still dedupe via the body hash, got %+v", ev)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 func TestStartSourceVerifiesSignature(t *testing.T) {
 	w := New()
 	addr := freeAddr(t)

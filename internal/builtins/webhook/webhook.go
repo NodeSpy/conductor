@@ -16,6 +16,8 @@ package webhook
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,6 +32,15 @@ import (
 	"github.com/NodeSpy/conductor/internal/netguard"
 	"github.com/NodeSpy/conductor/pkg/plugin"
 )
+
+// deliveryIDHeader is the one header name this builtin treats as a
+// vendor-neutral delivery id, when a sender sets it: a stronger dedup key
+// than a body hash for a redelivery whose body is re-serialized or whose
+// timestamp fields differ slightly between attempts. Operators whose sender
+// uses a different header can still get exact behavior with an explicit
+// `dedup:` template over `{{.body...}}`; this is only the fallback used when
+// a source declares no `dedup:` at all.
+const deliveryIDHeader = "X-Delivery-Id"
 
 const maxBody = 25 << 20
 
@@ -236,7 +247,7 @@ func (w *Webhook) StartSource(ctx context.Context, req plugin.StartSourceRequest
 					if sc.Sign.Header != "" {
 						sig = f.Header(sc.Sign.Header)
 					}
-					w.deliver(req.Instance, name, sc, sig, f.Body, true, seen, emit)
+					w.deliver(req.Instance, name, sc, sig, f.Body, true, seen, emit, f.Header(deliveryIDHeader))
 				}
 			})
 		}()
@@ -262,7 +273,7 @@ func (w *Webhook) handler(ctx context.Context, instance, name string, sc sourceC
 			http.Error(rw, "bad signature", http.StatusUnauthorized)
 			return
 		}
-		w.deliver(instance, name, sc, "", body, false, seen, emit)
+		w.deliver(instance, name, sc, "", body, false, seen, emit, r.Header.Get(deliveryIDHeader))
 		rw.WriteHeader(http.StatusAccepted)
 	}
 }
@@ -271,7 +282,11 @@ func (w *Webhook) handler(ctx context.Context, instance, name string, sc sourceC
 // when it matches and is not a duplicate delivery. smeeSig/viaSmee: a smee
 // relay re-serializes the body, so its signature check is best-effort and
 // applied here rather than at a listener boundary.
-func (w *Webhook) deliver(instance, name string, sc sourceCfg, smeeSig string, body []byte, viaSmee bool, seen *inbound.DeliveryDedup, emit func(any) error) {
+//
+// deliveryID is the sender's own delivery id (deliveryIDHeader), when it set
+// one — used only as a fallback dedup/target key for a source that declares
+// no `dedup:` template (below).
+func (w *Webhook) deliver(instance, name string, sc sourceCfg, smeeSig string, body []byte, viaSmee bool, seen *inbound.DeliveryDedup, emit func(any) error, deliveryID string) {
 	if viaSmee && sc.Sign.Secret != "" && !inbound.VerifyHMAC(sc.Sign.Secret, body, smeeSig, sc.Sign.Scheme) {
 		return
 	}
@@ -282,7 +297,22 @@ func (w *Webhook) deliver(instance, name string, sc sourceCfg, smeeSig string, b
 		return // this delivery isn't for this source
 	}
 	dedup := render(sc.Dedup, data)
-	if !seen.Add(name + "\x00" + dedup) {
+	// synthKey disambiguates deliveries for the dedup/target-key computation
+	// below. A declared `dedup:` renders to the operator's own signature, as
+	// before. A source with NO `dedup:` used to render "" for every
+	// delivery, so the dedup/target key collapsed to one constant value per
+	// source (name+"\x00"+"") — every delivery after the first was a
+	// "duplicate" of that same key and was silently dropped, and every one
+	// that WAS emitted shared one synthetic target. Falling back to the
+	// sender's own delivery id (when present) or a hash of the body instead
+	// gives every distinct delivery its own key while staying deterministic
+	// for an exact retry of the SAME delivery (identical id, or identical
+	// body).
+	synthKey := dedup
+	if sc.Dedup == "" {
+		synthKey = deliveryFallbackKey(deliveryID, body)
+	}
+	if !seen.Add(name + "\x00" + synthKey) {
 		return // duplicate delivery (smee redelivery / retried POST)
 	}
 
@@ -294,11 +324,11 @@ func (w *Webhook) deliver(instance, name string, sc sourceCfg, smeeSig string, b
 
 	var tgt plugin.Target
 	if repo == "" {
-		synth := inbound.SyntheticTarget("webhook:"+name, name+dedup)
+		synth := inbound.SyntheticTarget("webhook:"+name, name+synthKey)
 		tgt = plugin.Target{Repo: synth.Repo, Number: synth.Number}
 	} else {
 		owner, nm, _ := strings.Cut(repo, "/")
-		tgt = plugin.Target{Repo: repo, Owner: owner, Name: nm, Number: inbound.SyntheticTarget("", name+dedup).Number}
+		tgt = plugin.Target{Repo: repo, Owner: owner, Name: nm, Number: inbound.SyntheticTarget("", name+synthKey).Number}
 	}
 
 	_ = emit(plugin.SourceEvent{
@@ -306,6 +336,19 @@ func (w *Webhook) deliver(instance, name string, sc sourceCfg, smeeSig string, b
 		Target:  tgt,
 		Context: map[string]any{"body": parsed, "kind": name, "title": title, "repo": repo, "number": tgt.Number},
 	})
+}
+
+// deliveryFallbackKey is the dedup/target key for a source with no declared
+// `dedup:` template: the sender's own delivery id when it set one (so a
+// retried/redelivered copy of the SAME delivery still dedupes), else a
+// content hash of the body (so two deliveries with different bodies never
+// collide, and a byte-identical retry still dedupes).
+func deliveryFallbackKey(deliveryID string, body []byte) string {
+	if deliveryID != "" {
+		return "id:" + deliveryID
+	}
+	sum := sha256.Sum256(body)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func parseBody(body []byte) any {
