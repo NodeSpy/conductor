@@ -133,6 +133,16 @@ type Client struct {
 	reloading  bool
 	reloadCond *sync.Cond
 	inflight   sync.WaitGroup
+	// closing is set by Close() BEFORE it does anything else, and broadcasts
+	// reloadCond — strictly to release a bounded call parked waiting for a
+	// Reload that is stuck draining (finding 4): Close must not wait up to
+	// reloadDrainTimeout just because Reload happens to be mid-drain when
+	// it's invoked. Distinct from `closed` (set only once Close actually
+	// tears the connection down, at the very end): a call that was never
+	// parked behind a reload is unaffected by `closing` and still gets its
+	// best-effort plugin.stop out over the live connection exactly as
+	// before stopServed runs.
+	closing bool
 	// runs are the step-engine runs currently in flight on this plugin, keyed
 	// by the capability token minted for each. It is the daemon half of the
 	// run_id model: a host.* callback is answered only while the run it names
@@ -857,9 +867,44 @@ func (c *Client) call(ctx context.Context, method string, params, result any) er
 // bounded by ctx alone (plugin.run — see Run).
 func (c *Client) callFor(ctx context.Context, timeout time.Duration, method string, params, result any) error {
 	c.mu.Lock()
-	// Park while a Reload is swapping the process, then re-dial the new binary.
-	for c.reloading {
-		c.reloadCond.Wait()
+	// Park while a Reload is swapping the process, then re-dial the new
+	// binary. A plain `for c.reloading { c.reloadCond.Wait() }` (as this once
+	// was) ignores ctx entirely and ignores Close(): sync.Cond has no
+	// ctx-aware wait, so a call bounded by a short ctx (stopServed's
+	// stopGrace) or arriving during Close() would still sleep until Reload's
+	// own reloadDrainTimeout elapses and broadcasts (finding 4) — up to 30s
+	// of a Close() that was supposed to return in ~stopGrace. A watcher
+	// goroutine broadcasts reloadCond when ctx ends, so a parked call wakes
+	// and re-checks instead of waiting on Reload alone; `closing` (set by
+	// Close before it does anything else) gives the same early wakeup to a
+	// call with no deadline at all.
+	if c.reloading {
+		stopWatch := make(chan struct{})
+		if done := ctx.Done(); done != nil {
+			go func() {
+				select {
+				case <-done:
+					c.mu.Lock()
+					c.reloadCond.Broadcast()
+					c.mu.Unlock()
+				case <-stopWatch:
+				}
+			}()
+		}
+		for c.reloading && !c.closing && ctx.Err() == nil {
+			c.reloadCond.Wait()
+		}
+		close(stopWatch)
+		if c.reloading {
+			// Bailed without the reload actually finishing: Close is tearing
+			// this client down, or ctx ended first. Either way, waiting any
+			// longer serves nothing — report whichever applies.
+			c.mu.Unlock()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return fmt.Errorf("plugin %s: closing", c.spec.Name)
+		}
 	}
 	if err := c.ensureLocked(ctx); err != nil {
 		c.mu.Unlock()
@@ -899,6 +944,18 @@ func (c *Client) callFor(ctx context.Context, timeout time.Duration, method stri
 
 // Close stops the subprocess for good.
 func (c *Client) Close() error {
+	// Mark closing and wake anything parked behind a stuck Reload FIRST
+	// (finding 4) — before stopServed's best-effort plugin.stop calls, which
+	// would otherwise themselves park on reloadCond and make Close wait out
+	// the full reloadDrainTimeout just because a reload happened to be
+	// mid-drain. A call that isn't parked on a reload is unaffected: it never
+	// consults `closing` at all (callFor only checks it inside the
+	// `c.reloading` branch), so stopServed's calls still go out over the live
+	// connection exactly as before in the common (no concurrent reload) case.
+	c.mu.Lock()
+	c.closing = true
+	c.reloadCond.Broadcast()
+	c.mu.Unlock()
 	c.stopServed()
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -994,6 +1051,12 @@ func (c *Client) Reload(newSpec Spec) error {
 		c.reloadCond.Broadcast()
 		c.mu.Unlock()
 	}()
+	if c.closed {
+		// Close ran concurrently while this reload was draining (finding 4:
+		// Close no longer waits for us). The client is torn down; swapping
+		// its spec now would just be racing teardownLocked for nothing.
+		return fmt.Errorf("plugin %s: closed", c.spec.Name)
+	}
 	if !drained {
 		return ErrReloadBusy
 	}
