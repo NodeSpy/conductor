@@ -565,6 +565,7 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 		r.order = append(r.order, name)
 	}
 	r.checkExposures(deps.Log)
+	r.checkListenerExposures(cfg, deps.Log)
 	// Wire the stores: section into the kv registry — a bad store is a load
 	// error, never a disabled connector.
 	if err := buildStores(cfg, deps); err != nil {

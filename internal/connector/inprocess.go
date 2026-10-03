@@ -108,6 +108,7 @@ func RegisterInProcessConnector(h sdk.Handler) {
 		return &externalImpl{
 			client: c, source: c, instance: name, decl: effDecl, conn: conn, auth: au, secretRefs: refs,
 			pluginRef: "builtin:" + d.Type, pluginType: d.Type, audit: deps.Audit, log: log,
+			lookup: deps.Lookup,
 		}, nil
 	})
 }

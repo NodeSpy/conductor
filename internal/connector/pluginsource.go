@@ -72,6 +72,15 @@ type pluginSourceIntegration struct {
 	// cron schedule): any name is one of its events, with its semantics.
 	dynamic *EventDecl
 
+	// listeners are the connection-level `listeners` semantic this
+	// connector's type declares (listeners.go): for each, the config's
+	// listen/expose/url_to field paths. nil for a type that declares none.
+	listeners []sdk.Listener
+	// lookup resolves another configured connector instance by name, for
+	// opening a declared listener's named exposure. nil when none of
+	// listeners names an expose field (never used in that case).
+	lookup func(string) (*Instance, bool)
+
 	mu   sync.Mutex
 	emit core.EmitFunc // the running stream's emit, for events a poll returns
 	ctx  context.Context
@@ -115,7 +124,12 @@ func (p *pluginSourceIntegration) Validate() error {
 // event, the one trigger it names). Runs until ctx is cancelled (which tears
 // down the plugin subprocess and ends the stream).
 func (p *pluginSourceIntegration) Start(ctx context.Context, emit core.EmitFunc) error {
-	req := plugin.StartSourceRequest{Instance: p.instance, Config: p.config, Triggers: p.wireTriggers()}
+	cfg, release, err := p.openListeners(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	req := plugin.StartSourceRequest{Instance: p.instance, Config: cfg, Triggers: p.wireTriggers()}
 	p.mu.Lock()
 	p.emit, p.ctx = emit, ctx
 	p.mu.Unlock()

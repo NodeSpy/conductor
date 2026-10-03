@@ -117,6 +117,7 @@ func RegisterExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin
 			pluginType: spec.Provides,
 			audit:      deps.Audit,
 			log:        log,
+			lookup:     deps.Lookup,
 		}, nil
 	}
 	if err := RegisterExternalType(td, builder); err != nil {
@@ -398,9 +399,13 @@ type externalImpl struct {
 	secretRefs []string
 	pluginRef  string
 	pluginType string
-	audit      func(map[string]any)
-	auditOnce  sync.Once
-	log        func(string, ...any)
+	// lookup resolves another configured connector instance by name — used
+	// at source start to open this instance's declared `listeners` exposure
+	// (listeners.go), the same registry lookup web's own `expose:` uses.
+	lookup    func(string) (*Instance, bool)
+	audit     func(map[string]any)
+	auditOnce sync.Once
+	log       func(string, ...any)
 }
 
 // pluginValidator is the plugin.validate capability of *plugin.Client — a
@@ -481,15 +486,17 @@ func (e *externalImpl) Source(triggers []CompiledTrigger) (core.Integration, err
 		}
 	}
 	base := &pluginSourceIntegration{
-		source:   e.source,
-		instance: e.instance,
-		typ:      e.pluginType,
-		config:   e.conn,
-		triggers: mine,
-		log:      e.log,
-		declared: declared,
-		sem:      sem,
-		dynamic:  dynamic,
+		source:    e.source,
+		instance:  e.instance,
+		typ:       e.pluginType,
+		config:    e.conn,
+		triggers:  mine,
+		log:       e.log,
+		declared:  declared,
+		sem:       sem,
+		dynamic:   dynamic,
+		listeners: listenersOf(e.decl),
+		lookup:    e.lookup,
 	}
 	return base, nil
 }
