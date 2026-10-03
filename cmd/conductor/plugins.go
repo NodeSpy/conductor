@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -185,6 +186,19 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			if err := plugin.CheckNetworkWithinManifest(cname, decl.Capabilities.Egress, cref.Network); err != nil {
 				rollback()
 				return nil, err
+			}
+		}
+		// allow_env likewise grants only what the plugin declares it reads.
+		for cname, cref := range cfg.ConnectorsMap {
+			if cref.TypeName() != spec.Name {
+				continue
+			}
+			for _, n := range cref.AllowEnv {
+				if !slices.Contains(decl.Capabilities.Env, n) {
+					rollback()
+					return nil, fmt.Errorf("connector %q: allow_env %q is not a variable the %s plugin declares it reads (%s)",
+						cname, n, spec.Name, strings.Join(decl.Capabilities.Env, ", "))
+				}
 			}
 		}
 		cl, _ := mgr.Client(spec.Key())

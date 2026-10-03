@@ -44,7 +44,11 @@ func parseDurationString(s string) (time.Duration, error) {
 				}
 				rest = r
 			}
-			return time.Duration(days)*24*time.Hour + rest, nil
+			d := time.Duration(days) * 24 * time.Hour
+			if rest > 0 && d > time.Duration(math.MaxInt64)-rest {
+				return 0, fmt.Errorf("duration %q: out of range", s)
+			}
+			return d + rest, nil
 		}
 	}
 	return time.ParseDuration(s)

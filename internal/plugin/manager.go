@@ -57,6 +57,7 @@ func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool
 		TrustFull:          ref.TrustFull,
 		Network:            ref.Network,
 		AllowSecrets:       ref.AllowSecrets,
+		AllowEnv:           ref.AllowEnv,
 		Use:                ref.Use,
 	}
 	if ref.Use.Origin == config.OriginLocal {

@@ -164,8 +164,15 @@ func doUpdate(force bool, pinTag, cfgFile string, notifier *notify.Notifier) (up
 	// the daemon's config, read-only, bounded — never the running binary's.
 	if cfgFile != "" {
 		if _, statErr := os.Stat(cfgFile); statErr == nil {
-			if perr := preflightValidate(bin, cfgFile); perr != nil {
+			// A forced update still proves the config loads, but does not
+			// require the release's plugins to be fetchable from here: that
+			// is the operator's escape hatch when a plugin source is
+			// unreachable for a reason they know about.
+			if perr := preflightValidate(bin, cfgFile, !force); perr != nil {
 				msg := fmt.Sprintf("update: %s failed its own config preflight — NOT applying: %v", tag, perr)
+				if !force {
+					msg += " (if a plugin source is unreachable for a reason you know about, `conductor update --force` applies it anyway)"
+				}
 				logf("%s", msg)
 				if notifier != nil {
 					notifier.Emit(context.Background(), notify.EventEscalate,
@@ -194,12 +201,16 @@ func doUpdate(force bool, pinTag, cfgFile string, notifier *notify.Notifier) (up
 // `validate --config <cfgFile>` — read-only, bounded by
 // selfUpdatePreflightTimeout — and returns a trimmed error combining the
 // failure with the tail of its output when it refuses the config.
-func preflightValidate(bin, cfgFile string) error {
+func preflightValidate(bin, cfgFile string, requirePlugins bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), selfUpdatePreflightTimeout)
 	defer cancel()
 	// --require-plugins: a release whose plugins this box can neither find
 	// installed nor fetch is not applied (it would boot with them dark).
-	cmd := exec.CommandContext(ctx, bin, "validate", "--config", cfgFile, "--require-plugins")
+	args := []string{"validate", "--config", cfgFile}
+	if requirePlugins {
+		args = append(args, "--require-plugins")
+	}
+	cmd := exec.CommandContext(ctx, bin, args...)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return nil

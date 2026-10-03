@@ -52,9 +52,26 @@ func spawnBaseEnv() []string {
 	return sandbox.MinimalEnv()
 }
 
-// withDeclaredEnv passes the daemon's values of the variables a plugin
-// declared (Capabilities.Env) through to it. Conductor's own control
-// variables are never passed, declared or not.
+// grantedEnv is what a plugin may read from the daemon's environment: the
+// variables it declares (Capabilities.Env) AND the operator granted
+// (allow_env). A declaration alone grants nothing — the daemon's environment
+// carries the operator's secrets under names of their choosing.
+func grantedEnv(s Spec) []string {
+	declared := map[string]bool{}
+	for _, n := range s.EffectiveManifest().Env {
+		declared[n] = true
+	}
+	var out []string
+	for _, n := range s.AllowEnv {
+		if declared[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// withDeclaredEnv passes the daemon's values of the named variables through
+// to a plugin. Conductor's own control variables are never passed.
 func withDeclaredEnv(env, names []string) []string {
 	for _, n := range names {
 		if n == "" || strings.HasPrefix(n, "CONDUCTOR_") || strings.ContainsAny(n, "= ") {
@@ -106,7 +123,7 @@ type SandboxDeps struct {
 // warn — env scrubbing and all transport guards still apply.
 func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandboxed bool, err error) {
 	argv := append([]string{s.BinPath}, s.Args...)
-	env := withDeclaredEnv(spawnBaseEnv(), s.EffectiveManifest().Env)
+	env := withDeclaredEnv(spawnBaseEnv(), grantedEnv(s))
 	cleanup = func() {}
 
 	spec := sandbox.FromConfig(s.Isolation)
@@ -149,7 +166,7 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandbo
 	if err := spec.Check(spawnGOOS, os.Geteuid(), spawnLookPath); err != nil {
 		if s.IsolationDefaulted {
 			log.Printf("plugin %s: default sandbox unavailable (%v) — running WITHOUT OS confinement; install util-linux (unshare) + enable unprivileged user namespaces to sandbox it", s.Name, err)
-			env, cleanup, cerr := confineToManifest(s, withDeclaredEnv(spawnBaseEnv(), s.EffectiveManifest().Env), sd)
+			env, cleanup, cerr := confineToManifest(s, withDeclaredEnv(spawnBaseEnv(), grantedEnv(s)), sd)
 			if cerr != nil {
 				return nil, nil, false, cerr
 			}

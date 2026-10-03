@@ -727,6 +727,16 @@ func (r *Runner) scrubOutputs(step config.Step, outputs map[string]any) map[stri
 // re-resolve marker re-runs the step's verb (a vault read) against the
 // restored scope; anything else restores as persisted.
 func (r *Runner) restoreOutputs(ctx context.Context, t core.Trigger, steps []config.Step, id string, out map[string]any, data map[string]any) map[string]any {
+	// A restored verb step was run by this run before the restart: its
+	// connector's staged files stay reachable to the steps after it.
+	for i, s := range steps {
+		if stepID(s, i) == id && s.Uses != "" {
+			connName, _, _ := strings.Cut(s.Uses, ".")
+			if in, ok := r.Conns.Get(connName); ok {
+				recordRunStaging(ctx, in)
+			}
+		}
+	}
 	if out == nil || out[reresolveMarker] != true {
 		return anyMap(out)
 	}

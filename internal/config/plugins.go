@@ -42,6 +42,9 @@ type PluginRef struct {
 	// AllowSecrets optionally tightens which secret refs may cross to the
 	// plugin (exact names, no globs).
 	AllowSecrets []string
+	// AllowEnv are the daemon environment variables the operator granted the
+	// plugin (connectors.<name>.allow_env), within what it declares.
+	AllowEnv []string
 }
 
 // PluginKind values, retained as the wire/CLI spelling of UseKind.
@@ -112,6 +115,7 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		}
 		p.Network = appendUnique(p.Network, ref.Network...)
 		p.AllowSecrets = appendUnique(p.AllowSecrets, ref.AllowSecrets...)
+		p.AllowEnv = appendUnique(p.AllowEnv, ref.AllowEnv...)
 		out[u.InstallKey()] = p
 	}
 

@@ -388,8 +388,15 @@ func checkPluginFetchability(cfg *config.Config) []string {
 		if ref.Use.Origin == config.OriginLocal {
 			continue
 		}
-		if _, ok := state.Get(key); ok {
-			continue
+		if inst, ok := state.Get(key); ok {
+			// Installed — and at a version the config's pin accepts (a pin
+			// raised past what is installed must still be fetchable).
+			if ref.Use.Version == "" {
+				continue
+			}
+			if _, ok := config.BestMatch([]string{inst.Resolved}, ref.Use.TagPrefix(), ref.Use.Version); ok {
+				continue
+			}
 		}
 		rs := plugin.RemoteSource{URL: ref.Use.GitURL(), Component: ref.Use.Component}
 		tag, err := plugin.CheckFetchable(rs, ref.Use.Version, validateReleaseAPI)

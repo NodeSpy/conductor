@@ -109,3 +109,32 @@ func TestValidateReportsPluginFetchability(t *testing.T) {
 		}
 	})
 }
+
+// An installed plugin satisfies --require-plugins only at a version the
+// config's pin accepts: a pin raised past the installed build must be
+// fetchable, or the check fails.
+func TestRequirePluginsChecksTheInstalledVersionAgainstThePin(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	st := plugin.LoadInstallState(plugin.InstallDir())
+	st.Put(plugin.Installed{Key: "connectors/widget", Kind: "connector", Name: "widget",
+		Use: "acme/conductor-plugins/connectors/widget", Resolved: "connectors/widget/v1.0.0"})
+	if err := st.Save(); err != nil {
+		t.Fatal(err)
+	}
+	oldAPI := validateReleaseAPI
+	t.Cleanup(func() { validateReleaseAPI = oldAPI })
+	validateReleaseAPI = fakeReleaseAPI{err: errors.New("network unreachable")}
+	write := func(pin string) string {
+		p := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(p, []byte("connectors:\n  forge:\n    use: acme/conductor-plugins/connectors/widget"+pin+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	if _, err := captureStdout(t, func() error { return cmdValidate([]string{write("@~>1.0"), "--require-plugins"}) }); err != nil {
+		t.Fatalf("the installed v1.0.0 satisfies ~>1.0: %v", err)
+	}
+	if _, err := captureStdout(t, func() error { return cmdValidate([]string{write("@>=1.2"), "--require-plugins"}) }); err == nil {
+		t.Fatal("a pin past the installed build, with nothing fetchable, passed --require-plugins")
+	}
+}

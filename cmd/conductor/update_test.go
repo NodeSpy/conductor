@@ -26,7 +26,7 @@ func writeFakeConductor(t *testing.T, body string) string {
 // `validate` exits 0 against the daemon's config preflights clean.
 func TestPreflightValidatePassesThroughSuccess(t *testing.T) {
 	bin := writeFakeConductor(t, "exit 0")
-	if err := preflightValidate(bin, "/any/config.yaml"); err != nil {
+	if err := preflightValidate(bin, "/any/config.yaml", true); err != nil {
 		t.Fatalf("preflightValidate: %v", err)
 	}
 }
@@ -37,7 +37,7 @@ func TestPreflightValidatePassesThroughSuccess(t *testing.T) {
 // status 1".
 func TestPreflightValidateReportsFailureWithOutputTail(t *testing.T) {
 	bin := writeFakeConductor(t, `echo "config: the legacy integrations: block is no longer supported" >&2; exit 1`)
-	err := preflightValidate(bin, "/any/config.yaml")
+	err := preflightValidate(bin, "/any/config.yaml", true)
 	if err == nil {
 		t.Fatal("want an error when the downloaded binary's validate fails")
 	}
@@ -62,7 +62,7 @@ func TestPreflightValidateTimesOut(t *testing.T) {
 	// of the timeout.
 	bin := writeFakeConductor(t, "exec sleep 5")
 	start := time.Now()
-	err := preflightValidate(bin, "/any/config.yaml")
+	err := preflightValidate(bin, "/any/config.yaml", true)
 	elapsed := time.Since(start)
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("want a timeout error, got: %v", err)
@@ -143,7 +143,19 @@ func TestNewerRelease(t *testing.T) {
 // auto-updates into a release whose plugins it cannot find or fetch.
 func TestPreflightValidateRequiresPlugins(t *testing.T) {
 	bin := writeFakeConductor(t, `case "$*" in *--require-plugins*) exit 0;; esac; echo "preflight must pass --require-plugins" >&2; exit 1`)
-	if err := preflightValidate(bin, "/any/config.yaml"); err != nil {
+	if err := preflightValidate(bin, "/any/config.yaml", true); err != nil {
 		t.Fatalf("preflight did not pass --require-plugins: %v", err)
+	}
+}
+
+// A forced update does not require the plugins (the operator's escape hatch
+// for an unreachable source), but still proves the config loads.
+func TestPreflightValidateForcedSkipsThePluginRequirement(t *testing.T) {
+	bin := writeFakeConductor(t, `case "$*" in *--require-plugins*) echo "plugins required" >&2; exit 1;; esac; exit 0`)
+	if err := preflightValidate(bin, "/any/config.yaml", false); err != nil {
+		t.Fatalf("a forced preflight still required the plugins: %v", err)
+	}
+	if err := preflightValidate(bin, "/any/config.yaml", true); err == nil {
+		t.Fatal("an unforced preflight must require them")
 	}
 }

@@ -272,3 +272,19 @@ steps:
 		t.Fatalf("a step with repo: must not inherit the trigger's forced checkout, got %q", got.Action.Checkout)
 	}
 }
+
+// A run resumed from a checkpoint keeps reaching what its restored steps'
+// connectors staged: the restored verb step registers its instance as the
+// live one did.
+func TestResumedRunKeepsItsStagedFiles(t *testing.T) {
+	stage := stagedFiles(t, "svc", "a.png")
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
+	r := newTestRunner(t, cfg, buildRegistry(t, cfg)).Runner
+	ctx := withRunInstances(context.Background())
+	steps := []config.Step{{ID: "dl", Uses: "svc.post", Options: map[string]any{"text": "x"}}}
+	r.restoreOutputs(ctx, newTrigger("ping", nil), steps, "dl", map[string]any{"id": 1}, map[string]any{})
+	step := config.Step{Images: []string{"{{.p}}"}}
+	if err := renderLaunchFields(ctx, &step, map[string]any{"p": stage["a.png"]}); err != nil {
+		t.Fatalf("a resumed run lost its restored step's staged file: %v", err)
+	}
+}

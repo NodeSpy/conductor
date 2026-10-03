@@ -311,3 +311,28 @@ func TestPluginStatusSurfacesUnverifiedRelease(t *testing.T) {
 		t.Fatalf("an unverified release is still installed, got %q", got)
 	}
 }
+
+// allow_env may only grant what the plugin declares it reads
+// (capabilities.env): a grant beyond the declaration is a config error, like
+// a network: wider than declared.
+func TestAllowEnvBeyondTheDeclarationIsRefused(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	bin := buildTestPlugin(t, "acme-ticker") // declares no env
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	doc := fmt.Sprintf("connectors:\n  forge:\n    use: %s\n    allow_env: [SOME_SECRET]\n", bin)
+	if err := os.WriteFile(cfgPath, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stack, err := buildFlowStack(cfg, nil, nil, true)
+	if err == nil {
+		stack.Close()
+		t.Fatal("an allow_env grant the plugin does not declare was accepted")
+	}
+	if !strings.Contains(err.Error(), `allow_env "SOME_SECRET"`) {
+		t.Fatalf("unhelpful refusal: %v", err)
+	}
+}

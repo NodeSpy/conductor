@@ -133,6 +133,9 @@ type Spec struct {
 	TrustFull bool
 	// AllowSecrets optionally tightens which secret refs may cross the boundary.
 	AllowSecrets []string
+	// AllowEnv are the daemon environment variables the operator granted
+	// (allow_env); only those the plugin also declares are passed.
+	AllowEnv []string
 }
 
 // Ref is the `plugin@version` attribution string carried on audit records and

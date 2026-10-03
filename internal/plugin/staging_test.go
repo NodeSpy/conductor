@@ -30,8 +30,8 @@ func TestStagingDirPerInstance(t *testing.T) {
 	}
 }
 
-// A plugin's environment is scrubbed except the variables it declared
-// (Capabilities.Env, recorded in its install manifest) — passed through
+// A plugin's environment is scrubbed except the variables it declares
+// (Capabilities.Env) AND the operator granted (allow_env) — passed through
 // from the daemon's own environment — and never conductor's own.
 func TestDeclaredEnvIsPassedThrough(t *testing.T) {
 	t.Setenv("ACME_TOKEN", "tok")
@@ -42,7 +42,18 @@ func TestDeclaredEnvIsPassedThrough(t *testing.T) {
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd, cleanup, _, err := buildCommand(Spec{Name: "acme", BinPath: bin, Manifest: m}, SandboxDeps{})
+	// Declared but not granted: nothing passes.
+	ungranted, cleanup0, _, err := buildCommand(Spec{Name: "acme", BinPath: bin, Manifest: m}, SandboxDeps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup0()
+	if strings.Contains(strings.Join(ungranted.Env, "\n"), "ACME_TOKEN") {
+		t.Fatal("a declared variable passed without the operator's allow_env grant")
+	}
+	// Granted but not declared (OTHER_SECRET): still nothing.
+	cmd, cleanup, _, err := buildCommand(Spec{Name: "acme", BinPath: bin, Manifest: m,
+		AllowEnv: []string{"ACME_TOKEN", "CONDUCTOR_SKILL_TOKEN", "OTHER_SECRET", "MISSING"}}, SandboxDeps{})
 	if err != nil {
 		t.Fatal(err)
 	}

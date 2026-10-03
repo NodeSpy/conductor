@@ -816,7 +816,8 @@ There is one release, so there is no intermediate step:
    reach its write credential (Q8): a credential that cannot be minted stops
    the work it was for (logged, never dispatched without it). A plugin that
    reads its platform CLI's token from the environment declares the variable
-   (`capabilities.env`) and gets it passed through. The connection fields of
+   (`capabilities.env`); the operator grants it per connector (`allow_env:`,
+   within the declaration), and only then is it passed through. The connection fields of
    a plugin that is not installed yet are checked only once it is.
 2. **Update the usual way** (auto-update included). The update preflight runs
    the new release's `validate --require-plugins` and does not apply a release

@@ -162,7 +162,7 @@ func mapSchema(s plugin.Schema) Schema {
 // a host setting the plugin could read and mistake for its own.
 var reservedConnKeys = map[string]bool{
 	"type": true, "use": true, "enabled": true, "options": true, "policy": true, "auth": true,
-	"network": true, "isolation": true, "allow_secrets": true,
+	"network": true, "isolation": true, "allow_secrets": true, "allow_env": true,
 }
 
 // resolveConnection decodes an instance's connection block, resolves every

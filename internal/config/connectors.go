@@ -55,7 +55,12 @@ type ConnectorRef struct {
 	// globs). Empty = no extra restriction beyond the structural guarantee that
 	// an implementation only ever receives its own instances' credentials.
 	AllowSecrets []string `yaml:"allow_secrets,omitempty"`
-	raw          yaml.Node
+	// AllowEnv grants a plugin-backed connector the daemon environment
+	// variables it may read (exact names): each must be one the plugin
+	// declares (capabilities.env). Nothing passes without a grant — a
+	// plugin's declaration alone cannot pull a secret the daemon holds.
+	AllowEnv []string `yaml:"allow_env,omitempty"`
+	raw      yaml.Node
 	// legacyType holds a pre-`use:` `type:` value. It is NOT part of the schema
 	// — it exists only so validateConnectors can emit a migration-specific error
 	// instead of the silent "missing use:" a dropped field would produce.
@@ -74,6 +79,7 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 		Type         string           `yaml:"type,omitempty"`
 		Isolation    *IsolationConfig `yaml:"isolation,omitempty"`
 		AllowSecrets []string         `yaml:"allow_secrets,omitempty"`
+		AllowEnv     []string         `yaml:"allow_env,omitempty"`
 	}
 	var h hdr
 	if err := n.Decode(&h); err != nil {
@@ -81,6 +87,7 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 	}
 	r.Use, r.Network, r.Enabled, r.Options, r.Policy = h.Use, h.Network, h.Enabled, h.Options, h.Policy
 	r.Isolation, r.AllowSecrets, r.legacyType, r.raw = h.Isolation, h.AllowSecrets, h.Type, *n
+	r.AllowEnv = h.AllowEnv
 	return nil
 }
 
