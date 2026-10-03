@@ -6,12 +6,27 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/plugin"
 )
+
+// processAlive reports whether a pid still names a live process. Signal 0
+// performs only the existence/permission check, delivering nothing — same
+// technique as internal/paseover/endpoint.go's processAlive.
+func processAlive(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = proc.Signal(syscall.Signal(0))
+	return err == nil || err == syscall.EPERM
+}
 
 // describeLogEntry mirrors test/plugins/acme-instance's own type: one line the
 // fixture appends to the file its connection's "describe_log" field names,
@@ -111,5 +126,59 @@ func TestDescribeInstancesForInstallUsesOnePerInstanceProcess(t *testing.T) {
 	}
 	if a.Pid == b.Pid {
 		t.Fatalf("instA and instB were probed in the SAME process (pid %d) — one process saw both instances' connections, secrets included", a.Pid)
+	}
+}
+
+// TestDescribeOneInstanceForInstallClosesProcess is the item-7 regression:
+// describeOneInstanceForInstall spawns a per-instance probe process to
+// re-describe it, and must close it (plugin.Client.Close, via `defer
+// cl.Close()`) before returning — never leak it running. A reload path that
+// re-describes many live instances before deciding whether to swap in place
+// would otherwise accumulate one live subprocess per instance, forever.
+//
+// Proven directly against the OS: the fixture process's own pid (from the
+// describe log, same mechanism as the sibling test above) must no longer
+// name a live process shortly after describeInstancesForInstall returns.
+func TestDescribeOneInstanceForInstallClosesProcess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix process-signal check")
+	}
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	bin, sum := buildAcmeInstance(t, "v1")
+
+	logPath := filepath.Join(t.TempDir(), "describe.log")
+	spec := plugin.Spec{
+		Name: "acme-instance", Kind: plugin.KindConnector, Provides: "acme-instance",
+		BinPath: bin, Sha256: sum,
+		Instances: map[string]config.ConnectorGrant{"solo": {}},
+	}
+	instances := []connector.PluginInstanceDecl{
+		{Instance: "solo", Connection: map[string]any{"token": "secret", "describe_log": logPath}},
+	}
+
+	out, err := describeInstancesForInstall(context.Background(), spec, instances)
+	if err != nil {
+		t.Fatalf("describeInstancesForInstall: %v", err)
+	}
+	if out["solo"] == nil {
+		t.Fatalf("expected instance solo to answer plugin.describe {instance}: %+v", out)
+	}
+
+	entries := readDescribeLog(t, logPath)
+	if len(entries) != 1 {
+		t.Fatalf("want 1 describe call logged, got %d: %+v", len(entries), entries)
+	}
+	pid := entries[0].Pid
+
+	// Close()'s teardown kills the process and reaps it with cmd.Wait()
+	// before returning, so it should already be gone by the time
+	// describeInstancesForInstall itself has returned — but poll briefly to
+	// absorb scheduler noise rather than assert on the very first instant.
+	deadline := time.Now().Add(2 * time.Second)
+	for processAlive(pid) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if processAlive(pid) {
+		t.Fatalf("probe process (pid %d) for instance solo is still alive after describeInstancesForInstall returned — it was never closed", pid)
 	}
 }
