@@ -235,3 +235,41 @@ func TestManagerReloadSwapsEveryInstance(t *testing.T) {
 		t.Fatalf("instance b must be running a NEW process after reload: was %d, now %d", pidB, b.PID())
 	}
 }
+
+// TestInstanceClientRuntimeKindTakesSharedPath is a test gap from finding
+// 4(d): a runtime (or engine) key has no "several configured instances of
+// one plugin" multiplicity to isolate — InstanceClient must fall through to
+// the ONE persistent client Client(key) already holds for it, the same
+// path a shared_process: true connector takes, regardless of what
+// "instance" string is asked for.
+func TestInstanceClientRuntimeKindTakesSharedPath(t *testing.T) {
+	bin, _ := buildExamplePlugin(t)
+	config.SetStateDir(t.TempDir())
+	t.Cleanup(func() { config.SetStateDir("") })
+
+	ref := refFor(t, config.UseKindRuntime, bin)
+	key := ref.Key()
+	state := LoadInstallState(InstallDir())
+	mgr := NewManager(map[string]config.PluginRef{key: ref}, "", state, Deps{})
+	defer mgr.Close()
+
+	persistent, ok := mgr.Client(key)
+	if !ok {
+		t.Fatal("a runtime key must get its persistent client eagerly at construction")
+	}
+	a, err := mgr.InstanceClient(key, "whatever-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := mgr.InstanceClient(key, "whatever-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a != persistent || b != persistent {
+		t.Fatalf("a runtime key's InstanceClient must always return the ONE persistent client regardless of instance name: persistent=%v a=%v b=%v", persistent, a, b)
+	}
+	// And it must never have created any per-instance client at all.
+	if n := len(mgr.InstanceClients(key)); n != 0 {
+		t.Fatalf("a runtime key must never populate instClients: got %d", n)
+	}
+}

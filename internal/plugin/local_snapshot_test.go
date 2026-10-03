@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -130,6 +131,53 @@ func TestLocalBuildSnapshotIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestLocalBuildSnapshotReuseNeverRewritesTheFile is a test gap from
+// finding 4(d): TestLocalBuildSnapshotIsIdempotent above only checks that
+// the two resolutions AGREE on path/sha — it would pass just as well if
+// the second resolution quietly rewrote the file with identical bytes.
+// This observes the actual short-circuit: the snapshot FILE's inode is
+// unchanged across the second resolve (touchSnapshotUsed only ever updates
+// the DIRECTORY's mtime — see local_snapshot.go — so the file itself must
+// be untouched on a reuse).
+func TestLocalBuildSnapshotReuseNeverRewritesTheFile(t *testing.T) {
+	config.SetStateDir(t.TempDir())
+	t.Cleanup(func() { config.SetStateDir("") })
+
+	src := filepath.Join(t.TempDir(), "conductor-widget")
+	if err := os.WriteFile(src, []byte("v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ref := refFor(t, config.UseKindConnector, src)
+
+	spec1 := SpecFromRef(ref, "", Installed{}, false)
+	if spec1.SnapshotErr != nil {
+		t.Fatal(spec1.SnapshotErr)
+	}
+	inoOf := func(path string) uint64 {
+		t.Helper()
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			t.Skip("inode not available on this platform")
+		}
+		return st.Ino
+	}
+	ino1 := inoOf(spec1.BinPath)
+
+	spec2 := SpecFromRef(ref, "", Installed{}, false)
+	if spec2.SnapshotErr != nil {
+		t.Fatal(spec2.SnapshotErr)
+	}
+	ino2 := inoOf(spec2.BinPath)
+
+	if ino1 != ino2 {
+		t.Fatalf("a second resolve of the unchanged source rewrote the snapshot file (inode %d -> %d) instead of reusing it", ino1, ino2)
+	}
+}
+
 // TestLocalBuildSnapshotPermissions proves the snapshot directory is private
 // (0700) and the snapshotted binary is read+execute only, no write for anyone
 // (0500) — nothing, not even the daemon's own later code, can mutate what a
@@ -221,6 +269,58 @@ func TestManagerLocalSnapshotShas(t *testing.T) {
 	shas := mgr.LocalSnapshotShas()
 	if !shas[spec.Sha256] {
 		t.Fatalf("expected %s's sha %s in LocalSnapshotShas, got %v", key, spec.Sha256, shas)
+	}
+}
+
+// TestManagerLocalSnapshotShasIgnoresNonLocalSpecs is a test gap from
+// finding 4(d): LocalSnapshotShas exists to build the GC-keep set for
+// local-build snapshots specifically (local_snapshot.go) — a REMOTE
+// (installed) plugin's own Sha256 (which pins a release binary, nothing
+// under LocalSnapshotRoot) must never appear in it, or GC would treat an
+// unrelated release sha as a "local snapshot in use" and could, by sheer
+// coincidence of a matching hex string, leave a genuinely stale local
+// snapshot behind.
+func TestManagerLocalSnapshotShasIgnoresNonLocalSpecs(t *testing.T) {
+	config.SetStateDir(t.TempDir())
+	t.Cleanup(func() { config.SetStateDir("") })
+
+	localRef := refFor(t, config.UseKindConnector, func() string {
+		bin, _ := buildExamplePlugin(t)
+		return bin
+	}())
+	remoteRef := refFor(t, config.UseKindConnector, "acme/plugins/remote-widget")
+	remoteKey := remoteRef.Key()
+	const remoteSha = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	state := LoadInstallState(InstallDir())
+	state.Put(Installed{Key: remoteKey, Kind: "connector", Name: "remote-widget", Resolved: "v1.0.0", Sha256: remoteSha, Path: "/nonexistent/remote-widget"})
+
+	mgr := NewManager(map[string]config.PluginRef{
+		localRef.Key(): localRef,
+		remoteKey:      remoteRef,
+	}, "", state, Deps{})
+	defer mgr.Close()
+
+	localSpec, ok := mgr.Spec(localRef.Key())
+	if !ok {
+		t.Fatal("local spec not found")
+	}
+	remoteSpec, ok := mgr.Spec(remoteKey)
+	if !ok {
+		t.Fatal("remote spec not found")
+	}
+	if remoteSpec.Sha256 != remoteSha {
+		t.Fatalf("remote spec sha = %q, want %q (test setup)", remoteSpec.Sha256, remoteSha)
+	}
+
+	shas := mgr.LocalSnapshotShas()
+	if !shas[localSpec.Sha256] {
+		t.Fatalf("the local spec's own sha must be present: %v", shas)
+	}
+	if shas[remoteSha] {
+		t.Fatalf("a remote (non-local) spec's sha must NEVER appear in LocalSnapshotShas: %v", shas)
+	}
+	if len(shas) != 1 {
+		t.Fatalf("expected exactly 1 entry (the local spec only), got %v", shas)
 	}
 }
 

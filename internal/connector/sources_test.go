@@ -192,3 +192,37 @@ func TestOptionHooksSkipsUnassignedTarget(t *testing.T) {
 		t.Fatalf("lowered hook options = %+v", hooks[0].Options)
 	}
 }
+
+// TestOptionHooksOperatorOptionWinsOverArgs is a test gap from finding
+// 4(d): when an option_hooks Args key collides with a key the operator's
+// own `options.<option>` block also sets, the operator's raw option wins —
+// Args (the event's own facts) are merged in FIRST, so the operator's
+// explicit choice overrides it, not the other way around (sources.go's
+// OptionHooks doc comment: "the semantic's own Args … are merged in
+// first").
+func TestOptionHooksOperatorOptionWinsOverArgs(t *testing.T) {
+	sem := &sdk.EventSemantics{
+		OptionHooks: []sdk.OptionHook{{
+			Option: "ack", At: "start", Verb: "react",
+			Args: map[string]string{"channel": "{{.channel}}", "emoji": "from-args"},
+		}},
+	}
+	trig := core.Trigger{
+		Instance: "chat", Kind: "message", Sem: sem, TargetTrusted: true,
+		Context: map[string]any{"channel": "C1"},
+	}
+	// The operator's own option sets "emoji" too — colliding with the
+	// semantic's own Args key of the same name.
+	opts := map[string]any{"ack": map[string]any{"emoji": "from-operator"}}
+
+	hooks := OptionHooks(trig, opts)
+	if len(hooks) != 1 {
+		t.Fatalf("expected exactly one lowered hook, got %+v", hooks)
+	}
+	if hooks[0].Options["emoji"] != "from-operator" {
+		t.Fatalf("operator option must win a colliding key over Args: got %q", hooks[0].Options["emoji"])
+	}
+	if hooks[0].Options["channel"] != "C1" {
+		t.Fatalf("a non-colliding Args key must still come through: got %+v", hooks[0].Options)
+	}
+}
