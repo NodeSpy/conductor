@@ -607,6 +607,18 @@ func (c *Client) Digest() string {
 	return c.digest
 }
 
+// EffectiveManifest is this client's own confinement — its Spec's
+// EffectiveManifest (manifest.go), i.e. what THIS process (one configured
+// instance's own, by default — see Manager.InstanceClient) is actually
+// confined to. Read-only/observational, for a caller that wants to show or
+// assert a specific client's own narrowed egress (e.g. a per-instance
+// isolation proof) without reaching into the unexported Spec field.
+func (c *Client) EffectiveManifest() Manifest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.spec.EffectiveManifest()
+}
+
 // PID is the OS process id of this client's live subprocess, or 0 when it has
 // none — not started yet, an in-process builtin (no subprocess at all), or a
 // test fake with no pid to report. Purely observational: nothing in this

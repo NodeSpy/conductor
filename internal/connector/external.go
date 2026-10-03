@@ -81,14 +81,23 @@ func IsExternalType(typ string) bool {
 // — it just drives whatever client comes back, instance-scoped as always.
 func RegisterExternalConnector(clientFor plugin.ClientFactory, spec plugin.Spec, decl *plugin.Decl) (*TypeDecl, error) {
 	td := mapDecl(decl)
-	allow := map[string]bool{}
-	for _, s := range spec.AllowSecrets {
-		allow[s] = true
-	}
 	builder := func(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
 		cl, err := clientFor(name)
 		if err != nil {
 			return nil, fmt.Errorf("connector %q: %w", name, err)
+		}
+		// allow_secrets is THIS connector entry's own — never a sibling
+		// instance's. Built per-instance, from ref (the config this builder
+		// was handed for exactly this instance), not from spec.AllowSecrets
+		// (the plugin-wide union multi-instance isolation keeps ONLY for a
+		// shared_process: true plugin — see config.PluginRef.Instances and
+		// plugin.SpecFromRef). Using the union here would let one instance's
+		// allow_secrets list wrongly restrict (or widen, if its own
+		// allow_secrets is empty and it inherited the union's entries) a
+		// sibling instance's own secret refs.
+		allow := map[string]bool{}
+		for _, s := range ref.AllowSecrets {
+			allow[s] = true
 		}
 		conn, refs, err := resolveConnection(ref, deps.Secrets, allow)
 		if err != nil {

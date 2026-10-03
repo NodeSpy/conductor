@@ -92,20 +92,44 @@ type Manager struct {
 //
 // Besides the local-build snapshot (a private copy, never executed by this
 // call), it performs no I/O on the binary — verification happens at Start.
+//
+// Grant fields (Network/AllowSecrets/AllowEnv/Isolation): for a connector
+// ref that is NOT SharedProcess, the returned type-level Spec carries the
+// MINIMUM, not the union ref carries — empty/nil. That type-level Spec is
+// what Manager.ProbeDescribe runs the connector's throwaway type-level
+// describe probe with, and the probe needs none of it: `plugin.describe` is
+// a pure self-description, calling no verb and reading no instance
+// connection (docs/wiki/Plugins.md "Security": "the install-time describe
+// runs before any manifest exists, confined to nothing"). Granting it the
+// union of every sibling instance's secrets/env/network would hand the
+// probe process access nothing about it needs justifies. Each configured
+// instance's OWN grant still travels, in ref.Instances, for
+// Manager.InstanceClient to apply to that instance's own per-process Spec.
+//
+// A SharedProcess connector ref (or a runtime/engine ref, which was never
+// unioned to begin with) keeps the union: one process then serves every
+// instance, so it must be permitted whatever any of them declares.
 func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool) Spec {
 	s := Spec{
-		Name:               ref.Name,
-		Kind:               Kind(ref.Kind()),
-		Provides:           ref.Name,
-		Version:            ref.Version(),
-		Isolation:          ref.Isolation,
-		IsolationDefaulted: ref.IsolationDefaulted,
-		TrustFull:          ref.TrustFull,
-		Network:            ref.Network,
-		AllowSecrets:       ref.AllowSecrets,
-		AllowEnv:           ref.AllowEnv,
-		SharedProcess:      ref.SharedProcess,
-		Use:                ref.Use,
+		Name:          ref.Name,
+		Kind:          Kind(ref.Kind()),
+		Provides:      ref.Name,
+		Version:       ref.Version(),
+		TrustFull:     ref.TrustFull,
+		SharedProcess: ref.SharedProcess,
+		Use:           ref.Use,
+	}
+	if s.Kind == KindConnector && !ref.SharedProcess {
+		// Per-instance isolation: the type-level Spec gets no grant of its
+		// own (the minimum, for ProbeDescribe above); InstanceClient looks
+		// each configured instance's grant up here instead.
+		s.Instances = ref.Instances
+	} else {
+		s.Isolation = ref.Isolation
+		s.IsolationDefaulted = ref.IsolationDefaulted
+		s.Network = ref.Network
+		s.AllowSecrets = ref.AllowSecrets
+		s.AllowEnv = ref.AllowEnv
 	}
 	if ref.Use.Origin == config.OriginLocal {
 		bin := ref.Use.Path
@@ -266,6 +290,24 @@ func (m *Manager) InstanceClient(key, instance string) (*Client, error) {
 	}
 	instSpec := spec
 	instSpec.Instance = instance
+	// This instance's OWN grant — never a sibling's, and never the union
+	// (see SpecFromRef): ghA's process gets exactly ghA's allow_env/network/
+	// allow_secrets/isolation. A key missing from the map (should not
+	// happen: config.PluginRefs populates one entry per configured instance)
+	// leaves the per-instance Spec at its zero grant — least privilege, not
+	// a silent widening.
+	if g, ok := spec.Instances[instance]; ok {
+		instSpec.Network = g.Network
+		instSpec.AllowSecrets = g.AllowSecrets
+		instSpec.AllowEnv = g.AllowEnv
+		instSpec.Isolation = g.Isolation
+	} else {
+		instSpec.Network = nil
+		instSpec.AllowSecrets = nil
+		instSpec.AllowEnv = nil
+		instSpec.Isolation = nil
+	}
+	instSpec.Instances = nil // per-instance Spec needs no sibling map of its own
 	c := NewClient(instSpec, m.deps)
 	m.instClients[key][instance] = c
 	return c, nil

@@ -32,13 +32,18 @@ func describe() plugin.Decl {
 			Options: plugin.Schema{
 				"message": {Type: "string", Required: true, Desc: "text to echo back"},
 				"leak":    {Type: "boolean", Desc: "if true, log the received token to stderr (to exercise daemon redaction)"},
+				"env_var": {Type: "string", Desc: "if set, report os.Getenv(env_var) in env_value — exercises per-instance allow_env isolation"},
 			},
 			Outputs: plugin.Schema{
 				"message":        {Type: "string", Required: true},
 				"received_token": {Type: "boolean", Required: true},
+				"env_value":      {Type: "string", Desc: "os.Getenv(env_var), or \"\" if env_var was empty/unset/ungranted"},
 			},
 		}},
-		Capabilities: plugin.Capabilities{}, // no egress, no fs, no spawn
+		// Declares two env vars it reads (neither granted by default: an
+		// operator must still allow_env each one per connector instance) —
+		// exercises the daemon's grantedEnv/allow_env isolation end to end.
+		Capabilities: plugin.Capabilities{Env: []string{"ACME_ECHO_VAR_A", "ACME_ECHO_VAR_B"}},
 	}
 }
 
@@ -63,9 +68,14 @@ func invoke(req plugin.InvokeRequest) (plugin.InvokeResult, error) {
 		return plugin.InvokeResult{Outputs: map[string]any{"surprise": "undeclared"}}, nil
 	}
 	msg, _ := req.Options["message"].(string)
+	envValue := ""
+	if envVar, _ := req.Options["env_var"].(string); envVar != "" {
+		envValue = os.Getenv(envVar)
+	}
 	return plugin.InvokeResult{Outputs: map[string]any{
 		"message":        msg,
 		"received_token": token != "",
+		"env_value":      envValue,
 	}}, nil
 }
 

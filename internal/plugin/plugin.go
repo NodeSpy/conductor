@@ -163,6 +163,15 @@ type Spec struct {
 	// level probe Spec, an engine/runtime Spec, and a SharedProcess
 	// connector's one shared Spec.
 	Instance string
+	// Instances carries each configured connector instance's OWN grant
+	// (config.PluginRef.Instances, carried through unchanged by
+	// SpecFromRef) — Manager.InstanceClient consults it to confine a
+	// per-instance process to exactly that one instance's own Network/
+	// AllowSecrets/AllowEnv/Isolation, never a sibling's. Only meaningful on
+	// a TYPE-level connector Spec that is NOT SharedProcess (the shape
+	// Manager.NewManager/InstanceClient builds per-instance Specs from); nil
+	// everywhere else.
+	Instances map[string]config.ConnectorGrant
 }
 
 // Ref is the `plugin@version` attribution string carried on audit records and
