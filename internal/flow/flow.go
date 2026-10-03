@@ -387,6 +387,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	// The caller's context ends only when the daemon shuts down; remember it,
 	// so an interruption is told apart from a run that failed (shutdown.go).
 	ctx = withShutdownSignal(ctx, ctx)
+	ctx = withRunInstances(ctx)
 	ctx = withIdentityScope(ctx, config.ScopeForTrigger(spec, triggerIndex))
 	ctx = context.WithValue(ctx, policyKey{}, r.resolvePolicy(spec))
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
@@ -1058,6 +1059,9 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 	if !ok {
 		return nil, fmt.Errorf("unknown connector %q", connName)
 	}
+	// This run used the instance: a file it staged may be handed to a
+	// launch later in the run (renderLaunchFields).
+	recordRunInstance(ctx, connName)
 	if login, skip := r.skipBotReply(ctx, in, verb); skip {
 		r.Log("%s reply_to_bots=off: skipped %s.%s to bot %s", flowTag(t), connName, verb, login)
 		r.auditVerb(t, connName, verb, nil, "skipped_reply_to_bots", nil)
@@ -1541,7 +1545,7 @@ func (r *Runner) execDetached(ctx context.Context, t core.Trigger, step config.S
 // file name), and a second render would evaluate any {{…}} inside it.
 // images: items that are a sole field reference to a list (a prior step's
 // `images` output) are flattened in place.
-func renderLaunchFields(step *config.Step, data map[string]any) error {
+func renderLaunchFields(ctx context.Context, step *config.Step, data map[string]any) error {
 	for _, f := range []struct {
 		name string
 		v    *string
@@ -1568,7 +1572,7 @@ func renderLaunchFields(step *config.Step, data map[string]any) error {
 			// A templated path came from a step's output or the event: only a
 			// file a connector staged (plugin-contract.md Q7) is accepted, so
 			// event text cannot attach an arbitrary file from this machine.
-			if err := stagedFile(path); err != nil {
+			if err := stagedFile(ctx, path); err != nil {
 				return fmt.Errorf("images: %w", err)
 			}
 		}
@@ -1606,9 +1610,12 @@ func renderLaunchFields(step *config.Step, data map[string]any) error {
 	return nil
 }
 
-// stagedFile reports whether path is a file under a connector's staging
-// directory (config.PluginStagingDir), symlinks resolved on both sides.
-func stagedFile(path string) error {
+// stagedFile reports whether path is a file staged by a connector instance
+// THIS run invoked: under <PluginStagingDir>/<plugin>/<instance>/ for one of
+// the run's instances (instance names are unique daemon-wide), symlinks
+// resolved on both sides. Another instance's files — a different
+// connector's downloads — are out of reach however the path is spelled.
+func stagedFile(ctx context.Context, path string) error {
 	root, err := filepath.EvalSymlinks(config.PluginStagingDir())
 	if err != nil {
 		return fmt.Errorf("%q is not a file a connector staged (no staging directory)", path)
@@ -1617,10 +1624,45 @@ func stagedFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("%q is not a file a connector staged: %v", path, err)
 	}
-	if !strings.HasPrefix(real, root+string(filepath.Separator)) {
+	rel, err := filepath.Rel(root, real)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
 		return fmt.Errorf("%q is not a file a connector staged (outside %s)", path, root)
 	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) < 3 || !runUsedInstance(ctx, parts[1]) {
+		return fmt.Errorf("%q is not a file a connector this run invoked staged", path)
+	}
 	return nil
+}
+
+type runInstancesKey struct{}
+
+// runInstances is the set of connector instances a run invoked.
+type runInstances struct {
+	mu sync.Mutex
+	m  map[string]bool
+}
+
+func withRunInstances(ctx context.Context) context.Context {
+	return context.WithValue(ctx, runInstancesKey{}, &runInstances{m: map[string]bool{}})
+}
+
+func recordRunInstance(ctx context.Context, instance string) {
+	if ri, ok := ctx.Value(runInstancesKey{}).(*runInstances); ok {
+		ri.mu.Lock()
+		ri.m[instance] = true
+		ri.mu.Unlock()
+	}
+}
+
+func runUsedInstance(ctx context.Context, instance string) bool {
+	ri, ok := ctx.Value(runInstancesKey{}).(*runInstances)
+	if !ok {
+		return false
+	}
+	ri.mu.Lock()
+	defer ri.mu.Unlock()
+	return ri.m[instance]
 }
 
 // execAgent dispatches a type: agent step through the engine-provided
@@ -1668,7 +1710,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 			return outputs, "", nil
 		}
 	}
-	if err := renderLaunchFields(&step, data); err != nil {
+	if err := renderLaunchFields(ctx, &step, data); err != nil {
 		return nil, "", err
 	}
 	// A step's own `checkout:` always wins; absent one, fall back to the

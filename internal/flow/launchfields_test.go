@@ -84,7 +84,7 @@ steps:
 func TestLaunchFieldsRenderedOnce(t *testing.T) {
 	step := config.Step{Repo: "{{.form.repo}}", Branch: "{{.form.branch}}"}
 	data := map[string]any{"form": map[string]any{"repo": "a/b", "branch": "x-{{.gh_token}}"}, "gh_token": "SECRET"}
-	if err := renderLaunchFields(&step, data); err != nil {
+	if err := renderLaunchFields(context.Background(), &step, data); err != nil {
 		t.Fatal(err)
 	}
 	if step.Branch != "x-{{.gh_token}}" {
