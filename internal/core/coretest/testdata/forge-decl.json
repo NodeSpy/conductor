@@ -42,7 +42,8 @@
     },
     "token": {
       "type": "string",
-      "desc": "PAT used when no App is configured (chain: app → token → gh auth token)"
+      "desc": "PAT used when no App is configured (chain: app → token → gh auth token)",
+      "secret": true
     },
     "webhook": {
       "type": "map",
@@ -3660,6 +3661,9 @@
       "api.github.com:443",
       "*.ghe.com:443",
       "smee.io:443"
+    ],
+    "commands": [
+      "gh"
     ]
   },
   "semantics": {

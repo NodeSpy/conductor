@@ -10,17 +10,17 @@
     },
     "app_token": {
       "type": "string",
-      "desc": "Socket Mode app token (xapp-\u2026) \u2014 needed for events and ask replies",
+      "desc": "Socket Mode app token (xapp-…) — needed for events and ask replies",
       "secret": true
     },
     "bot_token": {
       "type": "string",
-      "desc": "bot token (xoxb-\u2026) for the Web API verbs",
+      "desc": "bot token (xoxb-…) for the Web API verbs",
       "secret": true
     },
     "webhook_url": {
       "type": "string",
-      "desc": "an incoming-webhook URL \u2014 post-only alternative to a bot token",
+      "desc": "an incoming-webhook URL — post-only alternative to a bot token",
       "secret": true
     }
   },
@@ -96,7 +96,7 @@
       "options": {
         "approvers": {
           "type": "list",
-          "desc": "to: thread \u2014 only these user ids may resolve the ask (default: anyone in the channel)"
+          "desc": "to: thread — only these user ids may resolve the ask (default: anyone in the channel)"
         },
         "channel": {
           "type": "string",
@@ -114,7 +114,7 @@
         },
         "timeout": {
           "type": "string",
-          "desc": "how long to wait for an answer (default 1h) \u2014 enforced by the host"
+          "desc": "how long to wait for an answer (default 1h) — enforced by the host"
         },
         "title": {
           "type": "string",
@@ -643,7 +643,7 @@
     },
     {
       "name": "reply",
-      "desc": "a thread reply or a DM, as Socket Mode delivers them \u2014 consumed by a pending ask/hand-off when one is waiting on it, otherwise an ordinary event a trigger may match with `on: slack.reply`",
+      "desc": "a thread reply or a DM, as Socket Mode delivers them — consumed by a pending ask/hand-off when one is waiting on it, otherwise an ordinary event a trigger may match with `on: slack.reply`",
       "context": {
         "slack.callback_id": {
           "type": "string",
@@ -728,7 +728,8 @@
   ],
   "capabilities": {
     "egress": [
-      "slack.com:443"
+      "slack.com:443",
+      "*.slack.com:443"
     ]
   }
 }
