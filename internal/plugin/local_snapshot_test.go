@@ -630,3 +630,261 @@ func TestGCLocalSnapshotsSafelyNeedsBothSignals(t *testing.T) {
 		t.Fatalf("%s (outside keep AND stale) must be removed, stat err = %v", staleUnknownSha, err)
 	}
 }
+
+// TestSnapshotLocalRefusesSymlinkAncestor is finding 5(a): a symlinked
+// ANCESTOR of the snapshot root (here, the state root's "plugins" child,
+// StateDir()/plugins) must refuse — secureSnapshotDir alone only Lstats the
+// LEAF (root, then root/sha), so a symlinked ancestor silently relocates
+// where "local" resolves to regardless of how tightly the leaf itself is
+// permissioned.
+func TestSnapshotLocalRefusesSymlinkAncestor(t *testing.T) {
+	state := t.TempDir()
+	config.SetStateDir(state)
+	t.Cleanup(func() { config.SetStateDir("") })
+
+	elsewhere := filepath.Join(t.TempDir(), "evil-plugins-dir")
+	if err := os.MkdirAll(elsewhere, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// "plugins" (the direct ancestor of "local") is a symlink to an
+	// attacker-writable location elsewhere on disk.
+	if err := os.Symlink(elsewhere, filepath.Join(state, "plugins")); err != nil {
+		t.Fatal(err)
+	}
+
+	src := filepath.Join(t.TempDir(), "conductor-widget")
+	if err := os.WriteFile(src, []byte("v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ref := refFor(t, config.UseKindConnector, src)
+	spec := SpecFromRef(ref, "", Installed{}, false)
+	if spec.SnapshotErr == nil {
+		t.Fatalf("a symlinked ancestor must be refused, got a clean Spec: %+v", spec)
+	}
+	if !strings.Contains(spec.SnapshotErr.Error(), "symlink") {
+		t.Fatalf("refusal should call out the symlink ancestor, got: %v", spec.SnapshotErr)
+	}
+	// The symlink target must never be written through.
+	if ents, _ := os.ReadDir(elsewhere); len(ents) != 0 {
+		t.Fatalf("the symlinked-to directory must never be written through: %v", ents)
+	}
+}
+
+// TestSnapshotLocalRefusesWorldWritableAncestor is finding 5(a)'s other half:
+// an ancestor that is a REAL directory (not a symlink) but group/world
+// WRITABLE must also refuse — anyone else on the box could delete-and-replace
+// what "local" resolves to, regardless of "local"'s own tight permissions.
+func TestSnapshotLocalRefusesWorldWritableAncestor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix permission bits")
+	}
+	state := t.TempDir()
+	config.SetStateDir(state)
+	t.Cleanup(func() { config.SetStateDir("") })
+
+	pluginsDir := filepath.Join(state, "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	// MkdirAll's requested mode is masked by the process umask (typically
+	// 022), so the directory as CREATED is usually 0755, not 0777 — chmod
+	// explicitly (unaffected by umask) to actually get a writable ancestor.
+	if err := os.Chmod(pluginsDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+
+	src := filepath.Join(t.TempDir(), "conductor-widget")
+	if err := os.WriteFile(src, []byte("v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ref := refFor(t, config.UseKindConnector, src)
+	spec := SpecFromRef(ref, "", Installed{}, false)
+	if spec.SnapshotErr == nil {
+		t.Fatalf("a group/world-writable ancestor must be refused, got a clean Spec: %+v", spec)
+	}
+	if !strings.Contains(strings.ToUpper(spec.SnapshotErr.Error()), "WRITABLE") {
+		t.Fatalf("refusal should call out the writable ancestor, got: %v", spec.SnapshotErr)
+	}
+}
+
+// TestSnapshotLocalCreatesMissingAncestorsAt0700 proves the non-attack path of
+// finding 5(a) still works: a brand-new state dir with NO "plugins" or
+// "local" directory yet gets both created at 0700, not refused.
+func TestSnapshotLocalCreatesMissingAncestorsAt0700(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix permission bits")
+	}
+	state := t.TempDir()
+	config.SetStateDir(state)
+	t.Cleanup(func() { config.SetStateDir("") })
+
+	src := filepath.Join(t.TempDir(), "conductor-widget")
+	if err := os.WriteFile(src, []byte("v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ref := refFor(t, config.UseKindConnector, src)
+	spec := SpecFromRef(ref, "", Installed{}, false)
+	if spec.SnapshotErr != nil {
+		t.Fatalf("a fresh state dir must snapshot cleanly: %v", spec.SnapshotErr)
+	}
+	// state itself pre-existed (created by the test harness, not by this
+	// code path) — secureAncestorDir validates an EXISTING ancestor without
+	// chmod'ing it, so only the two components this resolution actually
+	// CREATED ("plugins" and "local") are asserted at exactly 0700.
+	for _, p := range []string{filepath.Join(state, "plugins"), filepath.Join(state, "plugins", "local")} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("expected %s to exist: %v", p, err)
+		}
+		if fi.Mode().Perm() != 0o700 {
+			t.Fatalf("%s perms = %v, want 0700", p, fi.Mode().Perm())
+		}
+	}
+}
+
+// TestTouchSnapshotUsedSkipsSymlink is finding 5(b): os.Chtimes FOLLOWS a
+// symlink, so touchSnapshotUsed must Lstat first and refuse to touch anything
+// but a confirmed real directory — otherwise an attacker who swaps a
+// snapshot dir for a symlink between validation and a later touch (every
+// SPAWN re-touches with no re-validation of its own) gets an arbitrary
+// file's mtime silently updated.
+func TestTouchSnapshotUsedSkipsSymlink(t *testing.T) {
+	target := t.TempDir()
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	if err := os.Chtimes(target, old, old); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "snapshot-dir-symlink")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	touchSnapshotUsed(link)
+
+	fi, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.ModTime().After(time.Now().Add(-time.Minute)) {
+		t.Fatalf("touchSnapshotUsed followed the symlink and touched its TARGET's mtime: %v", fi.ModTime())
+	}
+}
+
+// TestGCLocalSnapshotsOldRemovesStaleSnapTemps is finding 5(c): an orphaned
+// ".snap-*" temp file (snapshotLocal's os.CreateTemp scratch file, left
+// behind by a hard kill between CreateTemp and the rename) is a FILE, not a
+// directory, directly under root — GC's directory-only loop never looked at
+// it before, so it sat forever. One older than snapTempGrace is removed; one
+// still fresh (might be mid-copy) survives.
+func TestGCLocalSnapshotsOldRemovesStaleSnapTemps(t *testing.T) {
+	root := t.TempDir()
+	staleTmp := filepath.Join(root, ".snap-stale12345")
+	freshTmp := filepath.Join(root, ".snap-freshabcde")
+	for _, p := range []string{staleTmp, freshTmp} {
+		if err := os.WriteFile(p, []byte("partial"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(staleTmp, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, errs := GCLocalSnapshotsOld(root, DefaultLocalSnapshotGrace)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if len(removed) != 1 || removed[0] != filepath.Base(staleTmp) {
+		t.Fatalf("removed = %v, want only the stale temp file", removed)
+	}
+	if _, err := os.Stat(staleTmp); !os.IsNotExist(err) {
+		t.Fatalf("stale .snap-* temp file must be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(freshTmp); err != nil {
+		t.Fatalf("a fresh .snap-* temp file (might be mid-copy) must survive: %v", err)
+	}
+}
+
+// TestGCLocalSnapshotsSafelyRemovesStaleSnapTemps is the same finding-5(c)
+// coverage for the GC entry point the daemon's boot actually calls.
+func TestGCLocalSnapshotsSafelyRemovesStaleSnapTemps(t *testing.T) {
+	root := t.TempDir()
+	staleTmp := filepath.Join(root, ".snap-stale12345")
+	if err := os.WriteFile(staleTmp, []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(staleTmp, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, errs := GCLocalSnapshotsSafely(root, map[string]bool{}, DefaultLocalSnapshotGrace)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if len(removed) != 1 || removed[0] != filepath.Base(staleTmp) {
+		t.Fatalf("removed = %v, want only the stale temp file", removed)
+	}
+}
+
+// TestSecureSnapshotDirRefusesGroupWorldPerms is finding 5(e)'s test gap:
+// secureSnapshotDir's group/world permission refusal had no test at all. A
+// pre-existing 0750 directory (group-readable+executable, not owner-only)
+// must be refused, not silently reused or tightened.
+func TestSecureSnapshotDirRefusesGroupWorldPerms(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix permission bits")
+	}
+	dir := filepath.Join(t.TempDir(), "loose-perms")
+	if err := os.Mkdir(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	err := secureSnapshotDir(dir)
+	if err == nil {
+		t.Fatal("a 0750 snapshot dir must be refused, not silently reused")
+	}
+	if !strings.Contains(err.Error(), "group/world") {
+		t.Fatalf("refusal should call out the group/world bits, got: %v", err)
+	}
+	// Never silently tightened either — the operator must fix it themselves.
+	fi, statErr := os.Stat(dir)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if fi.Mode().Perm() != 0o750 {
+		t.Fatalf("secureSnapshotDir must never chmod a refused dir, got %v", fi.Mode().Perm())
+	}
+}
+
+// TestManagerRetouchLocalSnapshots is finding 5(d): RetouchLocalSnapshots
+// refreshes the mtime of every live local-build snapshot a Manager depends
+// on, so a long-running daemon's periodic keep-alive (cmd/conductor's
+// retouchLocalPluginSnapshotsLoop) has something real to call.
+func TestManagerRetouchLocalSnapshots(t *testing.T) {
+	config.SetStateDir(t.TempDir())
+	t.Cleanup(func() { config.SetStateDir("") })
+
+	snapRoot := LocalSnapshotRoot()
+	const sha = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	dir := filepath.Join(snapRoot, sha)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	if err := os.Chtimes(dir, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &Manager{specs: map[string]Spec{
+		"connectors/widget": {Local: true, Sha256: sha},
+	}}
+	m.RetouchLocalSnapshots()
+
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.ModTime().Before(time.Now().Add(-time.Minute)) {
+		t.Fatalf("RetouchLocalSnapshots did not refresh the live snapshot's mtime, got %v", fi.ModTime())
+	}
+}

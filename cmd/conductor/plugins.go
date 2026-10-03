@@ -1113,6 +1113,51 @@ func gcLocalPluginSnapshots(stack *flowStack, rtMgr *plugin.Manager) {
 	}
 }
 
+// localSnapshotRetouchInterval is how often a long-running daemon re-touches
+// every local-build snapshot it currently depends on (finding 5d) — see
+// retouchLocalPluginSnapshots. A var so a test can shrink it.
+var localSnapshotRetouchInterval = 24 * time.Hour
+
+// retouchLocalPluginSnapshotsLoop periodically re-touches this boot's live
+// local-build snapshots (finding 5d: resolve-time and spawn-time touches
+// alone go quiet for a plugin that simply never crashes or reloads across
+// many days, which a SIBLING daemon's grace-period GC does not assume).
+// ctx-aware, same shape as autoUpdateLoop: exits on shutdown. The tick→action
+// split (a plain func()) keeps the ticker logic itself testable with a short
+// interval and a fake action, with no real Manager or filesystem involved.
+func retouchLocalPluginSnapshotsLoop(ctx context.Context, interval time.Duration, retouch func()) {
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			retouch()
+		}
+	}
+}
+
+// retouchLocalPluginSnapshots is retouchLocalPluginSnapshotsLoop's one-shot
+// action: every Manager this boot built gets its live local-build snapshots'
+// mtimes refreshed right now (Manager.RetouchLocalSnapshots) — the same
+// stack/rtMgr union gcLocalPluginSnapshots computes its keep set from.
+func retouchLocalPluginSnapshots(stack *flowStack, rtMgr *plugin.Manager) {
+	var stackMgr *plugin.Manager
+	if stack != nil {
+		stackMgr = stack.Plugins
+	}
+	if stackMgr != nil {
+		stackMgr.RetouchLocalSnapshots()
+	}
+	if rtMgr != nil && rtMgr != stackMgr {
+		rtMgr.RetouchLocalSnapshots()
+	}
+}
+
 // pendingPluginInterval is the initial (and minimum) delay between retries of
 // a missing plugin's fetch.
 var pendingPluginInterval = 5 * time.Minute

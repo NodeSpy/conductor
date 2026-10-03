@@ -405,6 +405,29 @@ func (m *Manager) LocalSnapshotShas() map[string]bool {
 	return out
 }
 
+// RetouchLocalSnapshots refreshes the mtime of every local-build snapshot
+// directory this Manager currently depends on (LocalSnapshotShas) — finding
+// 5(d)'s daily keep-alive. touchSnapshotUsed otherwise only runs at a
+// RESOLVE (SpecFromRef/snapshotLocal — boot, a reload) and at a SPAWN
+// (Client.ensureLocked — including every crash-respawn), so a long-running
+// daemon whose local plugin simply never crashes or reloads across many days
+// never touches its snapshot again after boot. A SIBLING daemon's
+// GCLocalSnapshotsOld assumes nothing goes that long between touches —
+// DefaultLocalSnapshotGrace (7 days) is generous, but "this plugin has been
+// rock-solid for a week" should never be the reason its snapshot looks
+// abandoned to another process sharing the state dir. The caller
+// (cmd/conductor's periodic retouch loop) is expected to call this roughly
+// daily for as long as the daemon runs.
+func (m *Manager) RetouchLocalSnapshots() {
+	root := LocalSnapshotRoot()
+	if root == "" {
+		return
+	}
+	for sha := range m.LocalSnapshotShas() {
+		touchSnapshotUsed(filepath.Join(root, sha))
+	}
+}
+
 // ConnectorSpecs / RuntimeSpecs / EngineSpecs list the plugins of each kind.
 func (m *Manager) ConnectorSpecs() []Spec { return m.specsOfKind(KindConnector) }
 func (m *Manager) RuntimeSpecs() []Spec   { return m.specsOfKind(KindRuntime) }

@@ -1024,6 +1024,12 @@ func cmdRun(args []string) error {
 	// conductor.updated fires on the first boot of a new release.
 	go emitUpdatedOnBoot(cfg, notifier)
 	go pendingPluginRetry(ctx, cfg, cfgFile, stop)
+	// Daily keep-alive for this boot's local-build snapshots (finding 5d):
+	// gcLocalPluginSnapshots' touch happens once, at boot, via SpecFromRef —
+	// a long-running daemon whose local plugin never crashes or reloads
+	// across many days would otherwise never touch its snapshot again,
+	// which a SIBLING daemon's grace-period GC does not assume.
+	go retouchLocalPluginSnapshotsLoop(ctx, localSnapshotRetouchInterval, func() { retouchLocalPluginSnapshots(stack, rtMgr) })
 
 	// Start integrations.
 	for _, ig := range igs {

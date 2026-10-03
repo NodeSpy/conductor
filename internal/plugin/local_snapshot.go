@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -90,6 +91,14 @@ func snapshotLocal(name, srcPath string) (snapPath, sha string, err error) {
 	if root == "" {
 		return "", "", fmt.Errorf("plugin %s: local build: no state directory to snapshot into", name)
 	}
+	// Ancestors FIRST (finding 5a): secureSnapshotDir below only Lstats the
+	// LEAF (root, then dir=root/sha) — a symlinked or attacker-writable
+	// ancestor (the state root itself, or its "plugins" child) silently
+	// relocates where "local" — and everything under it — actually resolves
+	// to, regardless of how tightly the leaf itself is permissioned.
+	if err := secureSnapshotAncestors(root); err != nil {
+		return "", "", fmt.Errorf("plugin %s: local build: %w", name, err)
+	}
 	if err := secureSnapshotDir(root); err != nil {
 		return "", "", fmt.Errorf("plugin %s: local build: %w", name, err)
 	}
@@ -162,6 +171,84 @@ func snapshotLocal(name, srcPath string) (snapPath, sha string, err error) {
 	return dst, sha, nil
 }
 
+// secureSnapshotAncestors validates every path component from config.
+// StateDir() down to (but not including) leaf — the state root itself, then
+// each intermediate directory ("plugins", "local") — confirming each is a
+// REAL directory (Lstat, never a symlink), owned by this process's own uid,
+// and not group/world WRITABLE; a missing one is created at 0700. leaf
+// itself is NOT checked here — that is secureSnapshotDir's job, with its
+// stricter, conductor-EXCLUSIVE check (no group/other permission bits at
+// all, not just the write bit).
+//
+// The weaker "not writable" bar here (rather than secureSnapshotDir's "no
+// group/other bits whatsoever") is deliberate: StateDir() and its "plugins"
+// child are not conductor's exclusive property the way a content-addressed
+// snapshot directory is — other state (the install-state file, a release
+// cache) can legitimately share them, and this codebase itself sometimes
+// creates them at a looser-than-0700 mode (internal/plugin/remote.go's
+// 0o755 cache dir, an operator's own umask on first run). Demanding 0700 on
+// those would refuse to snapshot on installs that have run for years. What
+// actually matters for this attack — another user on the box relocating
+// (symlinking) or deleting-and-replacing what "local" resolves to — is
+// whether an ancestor is writable by anyone but this process's own uid, not
+// whether it is also readable by them.
+func secureSnapshotAncestors(leaf string) error {
+	root := config.StateDir()
+	if root == "" {
+		return fmt.Errorf("no state directory configured")
+	}
+	rel, err := filepath.Rel(root, leaf)
+	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+		return fmt.Errorf("snapshot path %s is not under the state root %s", leaf, root)
+	}
+	segs := strings.Split(rel, string(filepath.Separator))
+	dir := root
+	// root itself, then each ancestor up to (not including) leaf.
+	for i := -1; i < len(segs)-1; i++ {
+		if i >= 0 {
+			dir = filepath.Join(dir, segs[i])
+		}
+		if err := secureAncestorDir(dir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// secureAncestorDir is secureSnapshotAncestors' per-component check: a real
+// directory (Lstat), owned by this process's own uid, not group/world
+// writable — created at 0700 if missing. See secureSnapshotAncestors for why
+// this is a weaker bar than secureSnapshotDir's.
+func secureAncestorDir(dir string) error {
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("stat %s: %w", dir, err)
+		}
+		if err := os.Mkdir(dir, 0o700); err != nil && !os.IsExist(err) {
+			return fmt.Errorf("create %s: %w", dir, err)
+		}
+		fi, err = os.Lstat(dir)
+		if err != nil {
+			return fmt.Errorf("stat %s after create: %w", dir, err)
+		}
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink — refusing to trust the local-build snapshot store beneath it", dir)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%s exists and is not a directory", dir)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if ok && st.Uid != uint32(os.Geteuid()) {
+		return fmt.Errorf("%s is owned by uid %d, not this process (uid %d) — refusing to trust the local-build snapshot store beneath it", dir, st.Uid, os.Geteuid())
+	}
+	if fi.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("%s is group/world WRITABLE (mode %v) — refusing to trust the local-build snapshot store beneath it; fix its permissions", dir, fi.Mode().Perm())
+	}
+	return nil
+}
+
 // secureSnapshotDir ensures dir is a REAL directory (never a symlink) owned
 // by this process's own effective uid, with no group/world permission bits
 // — creating it fresh at exactly 0700 if it does not exist yet. It refuses
@@ -225,6 +312,18 @@ func secureSnapshotDir(dir string) error {
 // already exited — so a single missed touch does not immediately cost it its
 // snapshot.
 func touchSnapshotUsed(dir string) {
+	// Lstat first (finding 5b): os.Chtimes FOLLOWS a symlink, so calling it
+	// blindly on dir would silently update an ARBITRARY file's mtime —
+	// outside the snapshot store entirely — if something swapped dir for a
+	// symlink between its last validation (secureSnapshotDir, at resolve) and
+	// this call (which runs again, unconditionally, at every SPAWN —
+	// Client.ensureLocked — with no re-validation of its own). Touch only a
+	// confirmed real directory; anything else is silently skipped, same as
+	// every other best-effort path here.
+	fi, err := os.Lstat(dir)
+	if err != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+		return
+	}
 	now := time.Now()
 	_ = os.Chtimes(dir, now, now)
 }
@@ -262,6 +361,46 @@ func GCLocalSnapshots(root string, keep map[string]bool) (removed []string, errs
 		}
 		if err := os.RemoveAll(filepath.Join(root, e.Name())); err != nil {
 			errs = append(errs, fmt.Errorf("local snapshot %s: %w", e.Name(), err))
+			continue
+		}
+		removed = append(removed, e.Name())
+	}
+	return removed, errs
+}
+
+// snapTempGrace bounds how long an orphaned ".snap-*" temp file (snapshotLocal's
+// os.CreateTemp scratch file, never renamed because the process was hard-
+// killed between creating it and the rename a few lines later — the deferred
+// os.Remove on an error path never runs after a kill -9 either) is left alone
+// before GC treats it as abandoned (finding 5c). Short relative to
+// DefaultLocalSnapshotGrace: unlike a snapshot directory, which legitimately
+// sits untouched for days between resolves, a .snap-* file's entire normal
+// life is the few seconds between CreateTemp and the rename — an hour is
+// generous for "still mid-copy", never for "actually orphaned".
+const snapTempGrace = time.Hour
+
+// removeStaleSnapTemps removes every ".snap-*" FILE (never a directory — those
+// are content-addressed snapshot dirs, a different thing) directly under root
+// whose mtime is older than snapTempGrace. Both GC entry points below read
+// `root` with a directory listing that already skips non-dirs entirely
+// (`if !e.IsDir() { continue }`), so an orphaned temp file was never looked
+// at, let alone removed, by either — it sat forever.
+func removeStaleSnapTemps(root string, ents []os.DirEntry) (removed []string, errs []error) {
+	cutoff := time.Now().Add(-snapTempGrace)
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), ".snap-") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("local snapshot temp %s: %w", e.Name(), err))
+			continue
+		}
+		if info.ModTime().After(cutoff) {
+			continue // might still be mid-copy
+		}
+		if err := os.Remove(filepath.Join(root, e.Name())); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("local snapshot temp %s: %w", e.Name(), err))
 			continue
 		}
 		removed = append(removed, e.Name())
@@ -317,6 +456,9 @@ func GCLocalSnapshotsOld(root string, olderThan time.Duration) (removed []string
 		}
 		removed = append(removed, e.Name())
 	}
+	tr, terrs := removeStaleSnapTemps(root, ents)
+	removed = append(removed, tr...)
+	errs = append(errs, terrs...)
 	return removed, errs
 }
 
@@ -362,5 +504,8 @@ func GCLocalSnapshotsSafely(root string, keep map[string]bool, olderThan time.Du
 		}
 		removed = append(removed, e.Name())
 	}
+	tr, terrs := removeStaleSnapTemps(root, ents)
+	removed = append(removed, tr...)
+	errs = append(errs, terrs...)
 	return removed, errs
 }
