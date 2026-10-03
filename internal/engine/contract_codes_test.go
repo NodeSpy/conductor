@@ -41,6 +41,46 @@ func TestMintTargetGoneStopsNotFails(t *testing.T) {
 	}
 }
 
+// stopAsTargetGone (internal/engine/contract.go) only turns -32011
+// target_gone into a stop. invalid, a non-retryable upstream answer, and a
+// not_ready during mint (mint never retries it itself — see finding 2) must
+// all stay ordinary errors: a FAILURE (dispatch_failed, the caller's own
+// error handling), never silently treated as a stop just because they also
+// came back from a mint call.
+func TestMintNonTargetGoneCodesAreFailuresNotStops(t *testing.T) {
+	cases := []struct {
+		name string
+		err  *connector.ContractError
+	}{
+		{"invalid", &connector.ContractError{Code: sdk.CodeInvalid, Message: "bad request"}},
+		{"upstream not retryable", &connector.ContractError{Code: sdk.CodeUpstream, Data: map[string]any{"status": 400, "retryable": false}}},
+		{"not_ready", &connector.ContractError{Code: sdk.CodeNotReady}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e, _ := newEng(t, baseCfg(), &fakeDispatcher{}, &fakeNotifier{}, nil)
+			e.invokeVerb = func(context.Context, string, string, map[string]any) (map[string]any, error) {
+				return nil, c.err
+			}
+			sem := &sdk.ConnSemantics{Credentials: []sdk.Credential{
+				{Name: "w", Role: "write", Mint: sdk.CredentialMint{Verb: "write_token"}, Value: "token", Env: []string{"GH_TOKEN"}},
+			}}
+			tr := core.Trigger{Instance: "i", TargetTrusted: true}
+			_, err := e.declaredCredentials(context.Background(), tr, "i", sem)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if errors.Is(err, dispatch.ErrTargetClosed) {
+				t.Fatalf("%s must be a FAILURE, not a stop (dispatch.ErrTargetClosed): %v", c.name, err)
+			}
+			ce, ok := connector.AsContractError(err)
+			if !ok || ce.Code != c.err.Code {
+				t.Fatalf("the original *connector.ContractError (code %d) must still be reachable via errors.As: %v", c.err.Code, err)
+			}
+		})
+	}
+}
+
 // A credential mint that answers -32013 rate_limited or -32014 not_ready is
 // returned to the caller on the FIRST call, never retried inside mint
 // itself: mint() runs synchronously in process(), fed by the engine's single
@@ -173,6 +213,34 @@ func TestRemediateStatusTargetGoneDropsWithoutFixer(t *testing.T) {
 	}
 	if len(d.reqs) != 0 {
 		t.Fatalf("a target_gone remediation must not dispatch the fixer, got %d dispatches", len(d.reqs))
+	}
+}
+
+// remediate's ACTION verb (the remedy itself, e.g. rerun_run) answering
+// target_gone stops — handled, no fixer dispatch — exactly like the
+// status-verb case above: the target the remedy and the fixer would both
+// act on is confirmed gone.
+func TestRemediateActionTargetGoneDropsWithoutFixer(t *testing.T) {
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, _ := newEng(t, baseCfg(), d, n, nil)
+	e.invokeVerb = func(_ context.Context, _ string, verb string, _ map[string]any) (map[string]any, error) {
+		switch verb {
+		case "read_token", "write_token":
+			return map[string]any{"token": "t"}, nil
+		case "get_run":
+			return map[string]any{"status": "completed"}, nil // done: fall through to the remedy
+		case "rerun_run":
+			return nil, &connector.ContractError{Code: sdk.CodeTargetGone}
+		}
+		return nil, errors.New("unexpected verb " + verb)
+	}
+	act := config.Action{Type: "agent", Agent: "w/fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
+	tr := agentTrigger("failing_checks", "a/w", 11, "h", "fail@h", act)
+	tr.Context["run_id"] = int64(999)
+
+	e.process(context.Background(), tr)
+	if len(d.reqs) != 0 {
+		t.Fatalf("a target_gone remedy must not dispatch the fixer, got %d dispatches", len(d.reqs))
 	}
 }
 

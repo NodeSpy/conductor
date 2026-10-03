@@ -141,6 +141,37 @@ steps:
 	}
 }
 
+// An upstream error with data.retryable ABSENT entirely (not even false)
+// must fail closed exactly like an explicit false: UpstreamRetryable treats
+// a missing field as not-retryable, so a plugin that forgets to set it never
+// gets retried just because the step configured a retry: budget.
+func TestVerbStepUpstreamAbsentRetryableIsNotStepRetried(t *testing.T) {
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
+	reg := buildRegistry(t, cfg)
+	st := newFakeState(t, "svc")
+	st.errFn["post"] = func(int, map[string]any) error {
+		return &connector.ContractError{Code: sdk.CodeUpstream, Data: map[string]any{"status": 500}} // no "retryable" key at all
+	}
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - id: post1
+    uses: svc.post
+    options: { text: x }
+    retry: { max: 3, backoff: 1ms }
+`)
+	rig := newTestRunner(t, cfg, reg)
+	rig.Runner.sleep = fastSleep
+	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "x"}), spec)
+
+	if failed, _ := rig.workflowFailed(); !failed {
+		t.Fatal("an upstream error with no retryable field must fail the run (fail closed)")
+	}
+	if got := st.count("post"); got != 1 {
+		t.Fatalf("an absent retryable field must never retry, got %d calls (retry: max=3 configured)", got)
+	}
+}
+
 // -32013 rate_limited is retried after data.retry_after independently of the
 // step's own retry: policy — here there is NO retry: block at all, and it
 // still recovers.

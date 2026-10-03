@@ -2,6 +2,8 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
@@ -107,5 +109,61 @@ func TestClientDescribeInstanceRefusesIdentityForgery(t *testing.T) {
 	_, _, err := c.DescribeInstance(context.Background(), "a", nil)
 	if err == nil {
 		t.Fatal("expected a refusal when the instance describe claims a different type")
+	}
+}
+
+// Declarations are must-understand on the PER-INSTANCE describe path too
+// (plugin-contract.md §1.4, §3.9 G13): the returned Decl is checked exactly
+// like the type-level one — an unknown semantic, or one that does not hang
+// together, refuses the instance. This kills a dropped/short-circuited
+// CheckSemantics/ValidateSemantics call on DescribeInstance specifically
+// (client.go's type-level Describe has its own, separately-tested check;
+// these two paths are easy to accidentally diverge).
+//
+// fakeConn.rawDescribe round-trips the describe result VERBATIM (bytes a
+// Decl struct cannot model survive) — the only way to put a semantic key
+// this SDK does not implement on the wire at all, since a typed
+// InstanceDescriber return value can never carry a field its own Decl
+// struct lacks.
+func TestClientDescribeInstanceRefusesUnknownSemantic(t *testing.T) {
+	fc := newFakeConn()
+	raw := `{"protocol_version":1,"type":"jira","events":[{"name":"e","semantics":{"teleport":true}}]}`
+	var d Decl
+	if err := json.Unmarshal([]byte(raw), &d); err != nil {
+		t.Fatal(err)
+	}
+	fc.describe = &d
+	fc.rawDescribe = raw
+	sp := connectorSpec()
+	sp.BinPath = writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	c := NewClient(sp, Deps{dial: fakeDial(fc)})
+	defer c.Close()
+
+	_, _, err := c.DescribeInstance(context.Background(), "a", nil)
+	if err == nil || !strings.Contains(err.Error(), "events[e].semantics.teleport") {
+		t.Fatalf("an unknown semantic on the per-instance describe must refuse it, naming it: %v", err)
+	}
+}
+
+// Same path, an INCONSISTENT declaration: a mints_credential verb that is
+// not host_only does not hang together (ValidateSemantics), on the
+// per-instance describe exactly as on the type-level one.
+func TestClientDescribeInstanceRefusesInconsistentSemantics(t *testing.T) {
+	fc := newFakeConn()
+	raw := `{"protocol_version":1,"type":"jira","verbs":[{"name":"mint","semantics":{"mints_credential":{"credential":"w"}}}]}`
+	var d Decl
+	if err := json.Unmarshal([]byte(raw), &d); err != nil {
+		t.Fatal(err)
+	}
+	fc.describe = &d
+	fc.rawDescribe = raw
+	sp := connectorSpec()
+	sp.BinPath = writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	c := NewClient(sp, Deps{dial: fakeDial(fc)})
+	defer c.Close()
+
+	_, _, err := c.DescribeInstance(context.Background(), "a", nil)
+	if err == nil || !strings.Contains(err.Error(), "host_only") {
+		t.Fatalf("an inconsistent per-instance declaration must be refused: %v", err)
 	}
 }

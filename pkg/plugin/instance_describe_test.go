@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -108,8 +109,8 @@ func TestInstanceDescribeUnsupportedIsMethodNotFound(t *testing.T) {
 	}
 }
 
-// TestInstanceDescribeErrorPropagates proves a handler-returned *Error survives
-// the wire with its code, and a plain error is wrapped as internal.
+// TestInstanceDescribeErrorPropagates proves a handler-returned *Error
+// survives the wire with its own code.
 func TestInstanceDescribeErrorPropagates(t *testing.T) {
 	h := instanceDescriberHandler{
 		perInstance: func(string, map[string]any) (Decl, error) {
@@ -125,6 +126,31 @@ func TestInstanceDescribeErrorPropagates(t *testing.T) {
 	m := byID["1"]
 	if m.Error == nil || m.Error.Code != CodeInvalid {
 		t.Fatalf("expected CodeInvalid, got %+v", m.Error)
+	}
+}
+
+// TestInstanceDescribePlainErrorIsWrappedInternal proves the OTHER half of
+// the propagation rule: a handler that returns a plain error (not a *Error
+// the handler deliberately coded) is wrapped as CodeInternalError rather
+// than leaking an untyped error over the wire or panicking serve.
+func TestInstanceDescribePlainErrorIsWrappedInternal(t *testing.T) {
+	h := instanceDescriberHandler{
+		perInstance: func(string, map[string]any) (Decl, error) {
+			return Decl{}, errors.New("database connection refused")
+		},
+	}
+	in := `{"jsonrpc":"2.0","id":1,"method":"plugin.describe","params":{"instance":"a"}}` + "\n"
+	var out strings.Builder
+	if err := serve(strings.NewReader(in), &out, h); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	byID := decodeResponses(t, out.String())
+	m := byID["1"]
+	if m.Error == nil || m.Error.Code != CodeInternalError {
+		t.Fatalf("expected a plain error wrapped as CodeInternalError (%d), got %+v", CodeInternalError, m.Error)
+	}
+	if !strings.Contains(m.Error.Message, "database connection refused") {
+		t.Fatalf("the wrapped error must keep the original message, got %q", m.Error.Message)
 	}
 }
 
