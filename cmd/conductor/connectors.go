@@ -419,6 +419,8 @@ func cmdSchema(args []string) error {
 	// not the shell.
 	var decl *connector.TypeDecl
 	var dyn []string
+	var disabledReason string
+	var enabled = true
 	if stack, err := buildFlowStack(cfg, nil, nil, true); err == nil {
 		defer stack.Close()
 		if in, ok := stack.Registry.Get(name); ok {
@@ -426,6 +428,7 @@ func cmdSchema(args []string) error {
 			if in.Impl != nil {
 				dyn = in.Impl.DeclaredEvents()
 			}
+			enabled, disabledReason = in.Enabled, in.DisabledReason
 		}
 	}
 	if decl == nil {
@@ -436,7 +439,22 @@ func cmdSchema(args []string) error {
 		decl = d
 	}
 	fmt.Printf("connector %s (use %s, type %s)\n", name, ref.Use, ref.TypeName())
+	// Match what `connectors ls` shows (cmdConnectors above): a per-instance
+	// describe/refinement failure (DisabledReason) falls back to the shared
+	// type-level decl, which for a rest/graphql-shaped plugin declares no
+	// verbs or events at all — printed bare, that looks like a connector with
+	// an empty contract rather than one that is actually broken. Say so
+	// plainly, and exit non-zero: the schema below is NOT this instance's
+	// real one.
+	if !enabled {
+		fmt.Println("  state: disabled (enabled: false)")
+	} else if disabledReason != "" {
+		fmt.Println("  state: disabled: " + disabledReason)
+	}
 	printTypeDecl(decl, dyn)
+	if enabled && disabledReason != "" {
+		return fmt.Errorf("connector %q is disabled: %s (schema shown is the shared type-level declaration, not this instance's own)", name, disabledReason)
+	}
 	return nil
 }
 

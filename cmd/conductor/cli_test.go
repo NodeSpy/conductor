@@ -111,6 +111,37 @@ func TestCmdSchema(t *testing.T) {
 	}
 }
 
+// TestCmdSchemaReportsDisabledInstance: a connector whose per-instance build
+// failed (here: slack's missing credentials) must not print a silent,
+// empty-looking schema and exit 0 — it must say WHY, the same reason
+// `connectors ls` shows, and exit non-zero so a script checking `schema`
+// against a broken instance notices instead of reading a bare shell.
+func TestCmdSchemaReportsDisabledInstance(t *testing.T) {
+	path := writeCLIConfig(t)
+	out, err := captureStdout(t, func() error { return cmdSchema([]string{"--config", path, "broken"}) })
+	if err == nil {
+		t.Fatalf("schema of a disabled instance must exit non-zero, output:\n%s", out)
+	}
+	for _, want := range []string{"disabled: resolve \"", "is not set"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("schema output missing %q:\n%s", want, out)
+		}
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("returned error missing %q: %v", want, err)
+		}
+	}
+
+	// A deliberately `enabled: false` connector is not a failure — the
+	// schema still prints and the command still succeeds.
+	out, err = captureStdout(t, func() error { return cmdSchema([]string{"--config", path, "timer"}) })
+	if err != nil {
+		t.Fatalf("schema of an authored-off connector must not error: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "disabled (enabled: false)") {
+		t.Errorf("schema output missing the authored-off state:\n%s", out)
+	}
+}
+
 func TestCmdSecretsCheck(t *testing.T) {
 	path := writeCLIConfig(t)
 	out, err := captureStdout(t, func() error { return cmdSecrets([]string{"--config", path, "check"}) })
