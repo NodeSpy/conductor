@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -195,6 +196,11 @@ workflows:
 	got := calls[0].Options
 	if got["event"] != "APPROVE" || got["body"] != "lgtm" {
 		t.Fatalf("review body not carried: %v", got)
+	}
+	// The resource the agent named reaches the plugin — the repo and PR the
+	// review is for (checked against the dispatch's own target on the way).
+	if got["repo"] != "o/r" || fmt.Sprint(got["pr"]) != "1" {
+		t.Fatalf("target not carried: repo=%v pr=%v", got["repo"], got["pr"])
 	}
 	cs, ok := got["comments"].([]any)
 	if !ok || len(cs) != 1 {
