@@ -117,3 +117,34 @@ func TestSpecFromRefSharedProcessKeepsUnion(t *testing.T) {
 		t.Fatalf("shared_process spec AllowEnv = %v, want the union %v", s.AllowEnv, ref.AllowEnv)
 	}
 }
+
+// TestSpecFromRefProbeFlag is the finding-2 regression: SpecFromRef must mark
+// Spec.Probe true ONLY on the type-level Spec it builds for a non-shared
+// connector (the per-instance-isolation branch that gives the type-level
+// Spec no grant of its own) — never for a shared_process connector, and
+// never for a runtime or engine ref, both of which keep the union and were
+// never per-instance to begin with. Deleting the `s.Probe = true` line in
+// SpecFromRef currently passes every other test, since nothing else checks
+// this flag directly.
+func TestSpecFromRefProbeFlag(t *testing.T) {
+	nonShared := refFor(t, config.UseKindConnector, "acme/plugins/jira")
+	if s := SpecFromRef(nonShared, "", Installed{}, false); !s.Probe {
+		t.Fatalf("a non-shared connector's type-level spec must have Probe = true, got %+v", s)
+	}
+
+	shared := refFor(t, config.UseKindConnector, "acme/plugins/jira")
+	shared.SharedProcess = true
+	if s := SpecFromRef(shared, "", Installed{}, false); s.Probe {
+		t.Fatalf("a shared_process connector's spec must NOT have Probe set, got %+v", s)
+	}
+
+	runtime := refFor(t, config.UseKindRuntime, "acme/plugins/node")
+	if s := SpecFromRef(runtime, "", Installed{}, false); s.Probe {
+		t.Fatalf("a runtime spec must NOT have Probe set, got %+v", s)
+	}
+
+	engine := refFor(t, config.UseKindEngine, "acme/plugins/js")
+	if s := SpecFromRef(engine, "", Installed{}, false); s.Probe {
+		t.Fatalf("an engine spec must NOT have Probe set, got %+v", s)
+	}
+}
