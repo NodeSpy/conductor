@@ -20,7 +20,9 @@ import (
 // scheduled recheck fires.
 func TestResumeRecheckRecoversAfterATransientMintError(t *testing.T) {
 	oldBackoff, oldMin := resumeRecheckBackoff, minDeferredWait
-	resumeRecheckBackoff, minDeferredWait = []time.Duration{time.Millisecond}, time.Millisecond
+	// Long enough that "not dispatched yet" right after ResumeWorkflows is
+	// a real check, not a race with a 1ms timer under a loaded -race run.
+	resumeRecheckBackoff, minDeferredWait = []time.Duration{500 * time.Millisecond}, time.Millisecond
 	t.Cleanup(func() { resumeRecheckBackoff, minDeferredWait = oldBackoff, oldMin })
 
 	d := newStepFake()
