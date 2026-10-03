@@ -793,7 +793,21 @@ func cmdPluginRemove(args []string) error {
 // that may authorize a prune — and only once the config confirms its packs were
 // instantiated, because a pack's internal `run: <engine>` is part of that set
 // and is invisible until then (see config.PluginRefsComplete).
+// reconcileMu serializes every reconcile/install pass in this process. The
+// daemon runs more than one of these concurrently on its own — pendingPluginRetry's
+// ticker and autoUpdateLoop's dependency refresh both call this function from
+// their own goroutine — and each pass reads the install state file, mutates
+// it in memory, and writes it back. Two overlapping passes race on that
+// read-modify-write (the loser's changes are silently dropped) and, without
+// this lock, nothing stops a slow pass (a git fetch) from still being in
+// flight when the next ticker fires. A process-wide mutex is sufficient here
+// (not a file lock): the race this closes is BETWEEN THIS PROCESS'S OWN
+// goroutines, not across separate `conductor` invocations.
+var reconcileMu sync.Mutex
+
 func reconcilePlugins(cfg *config.Config, opts plugin.Options) ([]plugin.Resolution, error) {
+	reconcileMu.Lock()
+	defer reconcileMu.Unlock()
 	if opts.Describe == nil {
 		opts.Describe = describeForInstall(cfg)
 	}

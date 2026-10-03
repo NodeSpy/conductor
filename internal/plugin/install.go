@@ -222,7 +222,15 @@ func (s *InstallState) Delete(key string) bool {
 	return false
 }
 
-// Save writes the state back, sorted by key so the file is stable across runs.
+// Save writes the state back, sorted by key so the file is stable across
+// runs. The write is ATOMIC (temp file in the same directory, fsynced, then
+// renamed over the final path): a concurrent reader — another `conductor`
+// invocation's LoadInstallState, or this daemon's own install dir on a crash
+// mid-write — must never observe a truncated or half-written file. A plain
+// os.WriteFile truncates the existing file in place first, so a reader (or a
+// crash) landing between the truncate and the write sees an empty/corrupt
+// file; rename is atomic on the same filesystem and always resolves to
+// either the old, complete content or the new, complete content.
 func (s *InstallState) Save() error {
 	if s == nil || s.dir == "" {
 		return nil
@@ -238,5 +246,39 @@ func (s *InstallState) Save() error {
 	}
 	header := "# conductor plugin install state — LOCAL to this machine, written by\n" +
 		"# `conductor init` / `conductor plugin update`. Do not commit it.\n"
-	return os.WriteFile(filepath.Join(s.dir, installStateFile), append([]byte(header), b...), 0o600)
+	content := append([]byte(header), b...)
+
+	final := filepath.Join(s.dir, installStateFile)
+	tmp, err := os.CreateTemp(s.dir, "."+installStateFile+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("plugin install state: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename below has consumed it
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return fmt.Errorf("plugin install state: %w", err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("plugin install state: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("plugin install state: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("plugin install state: %w", err)
+	}
+	if err := os.Rename(tmpName, final); err != nil {
+		return fmt.Errorf("plugin install state: %w", err)
+	}
+	// Best-effort: fsync the directory entry too, so the rename itself
+	// survives a crash (POSIX does not guarantee a rename is durable until
+	// the containing directory is synced).
+	if dir, err := os.Open(s.dir); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
+	return nil
 }

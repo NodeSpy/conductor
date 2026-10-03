@@ -249,3 +249,36 @@ triggers:
 		t.Fatal("pendingPluginRetry neither restarted nor returned")
 	}
 }
+
+// TestReconcilePluginsSerializesConcurrentPasses: the daemon runs more than
+// one reconcile pass concurrently on its own — pendingPluginRetry's ticker
+// and autoUpdateLoop's dependency refresh each call reconcilePlugins from
+// their own goroutine, and both read-modify-write the same on-disk install
+// state. reconcileMu must make a second pass WAIT for the first rather than
+// run alongside it (the race: the loser's changes get silently clobbered).
+func TestReconcilePluginsSerializesConcurrentPasses(t *testing.T) {
+	reconcileMu.Lock()
+	cfg := &config.Config{} // no plugin refs: Reconcile returns instantly once unblocked
+	done := make(chan error, 1)
+	go func() {
+		_, err := reconcilePlugins(cfg, plugin.Options{})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		reconcileMu.Unlock()
+		t.Fatalf("reconcilePlugins ran while reconcileMu was already held (err=%v) — passes are not serialized", err)
+	case <-time.After(150 * time.Millisecond):
+		// still blocked on the held lock, as required.
+	}
+	reconcileMu.Unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("reconcilePlugins: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconcilePlugins did not proceed after the lock was released")
+	}
+}

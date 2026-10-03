@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -10,9 +11,18 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// gitCommandTimeout bounds every git subprocess conductor spawns to fetch a
+// pack, a plugin, or a self-update: a black-holed connection (a firewall that
+// drops packets instead of refusing them, a credential helper that blocks on
+// a prompt despite GIT_TERMINAL_PROMPT=0) must not hang a reconcile pass, a
+// boot gap-fill, or the retry loop driving it forever. Generous on purpose —
+// a slow clone must still finish — not tight.
+var gitCommandTimeout = 2 * time.Minute
 
 // LockfileName is the sha-pinned, committable lockfile `conductor init` writes
 // next to the config. It records the whole resolved pack graph so `conductor
@@ -574,13 +584,18 @@ func runGit(dir string, args ...string) (string, error) {
 		"-c", "protocol.ext.allow=never",
 		"-c", "protocol.fd.allow=never",
 	}, args...)
-	cmd := exec.Command("git", full...)
+	ctx, cancel := context.WithTimeout(context.Background(), gitCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", full...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
 	// Never prompt: a missing credential should fail fast, not hang.
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return string(out), fmt.Errorf("git %s: timed out after %s (a black-holed connection?)", strings.Join(args, " "), gitCommandTimeout)
+	}
 	return string(out), err
 }
 
@@ -818,7 +833,9 @@ func RunGit(dir string, args ...string) (string, error) { return runGit(dir, arg
 // a blob it is asked for.
 func RunGitStdout(dir string, args ...string) ([]byte, error) {
 	full := append([]string{"-c", "protocol.ext.allow=never", "-c", "protocol.fd.allow=never"}, args...)
-	cmd := exec.Command("git", full...)
+	ctx, cancel := context.WithTimeout(context.Background(), gitCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", full...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
@@ -826,6 +843,9 @@ func RunGitStdout(dir string, args ...string) ([]byte, error) {
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		return nil, fmt.Errorf("git %s: timed out after %s (a black-holed connection?)", strings.Join(args, " "), gitCommandTimeout)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 	}
