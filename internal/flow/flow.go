@@ -1041,7 +1041,7 @@ func (r *Runner) execStep(ctx context.Context, t core.Trigger, step config.Step,
 // the automated author of the triggering event, under reply_to_bots=off: a
 // verb its connector declares conversation_post. The substantive work (fixes,
 // labels, thread resolution) is never gated here.
-func (r *Runner) skipBotReply(ctx context.Context, in *connector.Instance, verb string) (string, bool) {
+func (r *Runner) skipBotReply(ctx context.Context, in *connector.Instance, verb string, t core.Trigger, opts map[string]any) (string, bool) {
 	st, ok := botReply(ctx)
 	if !ok || !st.authorIsBot || st.mode != config.ReplyToBotsOff || in.Decl == nil {
 		return "", false
@@ -1049,6 +1049,22 @@ func (r *Runner) skipBotReply(ctx context.Context, in *connector.Instance, verb 
 	v, ok := in.Decl.Verb(verb)
 	if !ok || v.Semantics == nil || !v.Semantics.ConversationPost {
 		return "", false
+	}
+	// A reply goes back into the bot's conversation: on the connector the
+	// event came from, to the event's own destination. A post on another
+	// connector (an ops alert in chat about a bot's PR comment), or to a
+	// destination it names that differs from the event's own, is not one.
+	if in.Name != t.Instance {
+		return "", false
+	}
+	for _, so := range v.ScopedOptions() {
+		val, named := opts[so.Name]
+		if !named || val == nil || fmt.Sprint(val) == "" {
+			continue
+		}
+		if own := in.ContextScope(so.Dim, t); own != "" && own != fmt.Sprint(val) {
+			return "", false
+		}
 	}
 	return st.login, true
 }
@@ -1062,15 +1078,15 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 	// This run used the instance: a file it staged may be handed to a
 	// launch later in the run (renderLaunchFields).
 	recordRunInstance(ctx, connName)
-	if login, skip := r.skipBotReply(ctx, in, verb); skip {
-		r.Log("%s reply_to_bots=off: skipped %s.%s to bot %s", flowTag(t), connName, verb, login)
-		r.auditVerb(t, connName, verb, nil, "skipped_reply_to_bots", nil)
-		return map[string]any{"skipped": true}, nil
-	}
 	merged := connector.MergeOptions(in.DefaultOptions, step.Options)
 	rendered, err := renderOptions(merged, data)
 	if err != nil {
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
+	}
+	if login, skip := r.skipBotReply(ctx, in, verb, t, rendered); skip {
+		r.Log("%s reply_to_bots=off: skipped %s.%s to bot %s", flowTag(t), connName, verb, login)
+		r.auditVerb(t, connName, verb, nil, "skipped_reply_to_bots", nil)
+		return map[string]any{"skipped": true}, nil
 	}
 	// The run history records the step's RENDERED inputs (#36 §20) — the
 	// handle-form options, scrubbed of tracked secret values like the audit.
@@ -2216,16 +2232,16 @@ func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Ho
 			r.Log("%s %s hook[%d]: unknown connector %q", flowTag(t), where, i, connName)
 			continue
 		}
-		if login, skip := r.skipBotReply(ctx, in, verb); skip {
-			r.Log("%s reply_to_bots=off: skipped %s.%s to bot %s", flowTag(t), connName, verb, login)
-			r.auditVerb(t, connName, verb, nil, "skipped_reply_to_bots", nil)
-			continue
-		}
 		merged := connector.MergeOptions(in.DefaultOptions, h.Options)
 		rendered, err := renderOptions(merged, data)
 		if err != nil {
 			r.Log("%s %s hook[%d] render: %v", flowTag(t), where, i, err)
 			r.auditVerb(t, connName, verb, nil, "hook_render_failed", err)
+			continue
+		}
+		if login, skip := r.skipBotReply(ctx, in, verb, t, rendered); skip {
+			r.Log("%s reply_to_bots=off: skipped %s.%s to bot %s", flowTag(t), connName, verb, login)
+			r.auditVerb(t, connName, verb, nil, "skipped_reply_to_bots", nil)
 			continue
 		}
 		if connName == "workflow" {

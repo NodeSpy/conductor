@@ -19,6 +19,15 @@ func botTrigger(author string, isBot bool) core.Trigger {
 	})
 }
 
+// ghBotTrigger is a comment on o/r#1 from the gh connector, as its source
+// emits it: a platform-assigned target, with the author facts.
+func ghBotTrigger(author string, isBot bool) core.Trigger {
+	t := botTrigger(author, isBot)
+	t.Source, t.Instance, t.TargetTrusted = "github", "gh", true
+	t.Target = core.Target{Repo: "o/r", Number: 1, PR: 1}
+	return t
+}
+
 // TestReplyToBotsOffSkipsTheReply (enforcement, mode off): with the
 // trigger authored by a bot, a uses: gh.comment step (and hook) never reaches
 // the connector; a human-authored trigger dispatches it.
@@ -53,7 +62,7 @@ hooks:
 
 	// Bot author: both the step and the hook are skipped structurally.
 	rig := newTestRunner(t, cfg, reg)
-	runTrigger(rig, botTrigger("cursor[bot]", true), spec)
+	runTrigger(rig, ghBotTrigger("cursor[bot]", true), spec)
 	if failed, errStr := rig.workflowFailed(); failed {
 		t.Fatalf("workflow failed: %s", errStr)
 	}
@@ -72,12 +81,58 @@ hooks:
 
 	// Human author: the verb dispatches.
 	rig = newTestRunner(t, cfg, reg)
-	runTrigger(rig, botTrigger("alice", false), spec)
+	runTrigger(rig, ghBotTrigger("alice", false), spec)
 	if failed, errStr := rig.workflowFailed(); failed {
 		t.Fatalf("workflow failed: %s", errStr)
 	}
 	if n := hits.Load(); n != 2 { // step + hook
 		t.Fatalf("human-authored trigger should dispatch step+hook, got %d calls", n)
+	}
+}
+
+// reply_to_bots: off suppresses REPLIES — a post back into the bot's own
+// conversation — not every message a bot's event leads to: a comment on a
+// different target, or a post on another connector (an ops alert in chat
+// about the bot's PR comment), still goes out.
+func TestReplyToBotsOffSkipsOnlyReplies(t *testing.T) {
+	var comments, posts atomic.Int64
+	coretest.Forge.Respond(func(req sdk.InvokeRequest) (sdk.InvokeResult, error) {
+		if req.Verb == "comment" {
+			comments.Add(1)
+		}
+		return sdk.InvokeResult{Outputs: map[string]any{"id": 7, "url": "u"}}, nil
+	})
+	coretest.Chat.Respond(func(req sdk.InvokeRequest) (sdk.InvokeResult, error) {
+		if req.Verb == "post" {
+			posts.Add(1)
+		}
+		return sdk.InvokeResult{Outputs: map[string]any{"ts": "1", "channel": "C1"}}, nil
+	})
+	t.Cleanup(func() { coretest.Forge.Respond(nil); coretest.Chat.Respond(nil) })
+	cfg := loadConfig(t, `
+connectors:
+  gh: { use: github, token: dummy, webhook: { listen: "127.0.0.1:0", secret: s }, repos: ["o/r"] }
+  chat: { use: slack, bot_token: x }
+`)
+	reg := buildRegistry(t, cfg)
+	spec := mustSpec(t, `
+on: gh.new_comment
+policy: { reply_to_bots: off }
+steps:
+  - { id: reply, uses: gh.comment, options: { repo: o/r, number: 1, body: "thanks" } }
+  - { id: elsewhere, uses: gh.comment, options: { repo: o/other, number: 9, body: "tracking" } }
+  - { id: alert, uses: chat.post, options: { channel: "#ops", text: "a bot commented" } }
+`)
+	rig := newTestRunner(t, cfg, reg)
+	runTrigger(rig, ghBotTrigger("cursor[bot]", true), spec)
+	if failed, errStr := rig.workflowFailed(); failed {
+		t.Fatalf("workflow failed: %s", errStr)
+	}
+	if n := comments.Load(); n != 1 {
+		t.Fatalf("want only the comment on another target to go out, got %d comments", n)
+	}
+	if n := posts.Load(); n != 1 {
+		t.Fatalf("the chat alert on another connector was suppressed (%d posts)", n)
 	}
 }
 
