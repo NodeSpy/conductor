@@ -598,6 +598,50 @@ func (c *Client) Describe(ctx context.Context) (*Decl, error) {
 	return &decl, nil
 }
 
+// DescribeInstance asks the plugin for ONE configured instance's declaration
+// (Q6, plugin-contract.md §1.4, §3.9 G13): rest/graphql materialize their
+// user-declared verbs and events this way, instance by instance, replacing
+// the InstanceDecler Go-side door. supported=false (with a nil error) means
+// the plugin does not implement InstanceDescriber (CodeMethodNotFound) — the
+// type-level Describe() applies to this instance too.
+//
+// The returned Decl passes the same checks the type-level one does:
+// must-understand semantics (CheckSemantics) and internal consistency
+// (ValidateSemantics), so a per-instance declaration can never act on a
+// semantic the engine does not implement or that does not hang together.
+func (c *Client) DescribeInstance(ctx context.Context, instance string, config map[string]any) (decl *Decl, supported bool, err error) {
+	var raw json.RawMessage
+	req := sdk.DescribeRequest{
+		Host:     &sdk.HostInfo{Version: c.deps.HostVersion, Semantics: sdk.KnownSemantics()},
+		Instance: instance,
+		Config:   config,
+	}
+	if err := c.call(ctx, MethodDescribe, req, &raw); err != nil {
+		var re *acp.RPCError
+		if errors.As(err, &re) && re.Code == acp.CodeMethodNotFound {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	var d Decl
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return nil, false, fmt.Errorf("plugin %s: describe instance %s: %w", c.spec.Name, instance, err)
+	}
+	if d.ProtocolVersion != ProtocolVersion {
+		return nil, false, fmt.Errorf("plugin %s: instance %s: unsupported protocol version %d (daemon speaks %d)", c.spec.Name, instance, d.ProtocolVersion, ProtocolVersion)
+	}
+	if d.Type == "" {
+		return nil, false, fmt.Errorf("plugin %s: instance %s: describe returned empty type", c.spec.Name, instance)
+	}
+	if (c.spec.Kind == KindConnector || c.spec.Kind == KindStep) && d.Type != c.spec.Provides {
+		return nil, false, fmt.Errorf("plugin %s: instance %s: describe claims type %q but is configured to provide %q — refusing (identity forgery)", c.spec.Name, instance, d.Type, c.spec.Provides)
+	}
+	if p := append(sdk.CheckSemantics(raw), sdk.ValidateSemantics(d)...); len(p) > 0 {
+		return nil, false, fmt.Errorf("plugin %s: instance %s: declarations refused:\n  %s", c.spec.Name, instance, strings.Join(p, "\n  "))
+	}
+	return &d, true, nil
+}
+
 // Invoke runs a verb. The connection map carries only the calling instance's
 // resolved credentials (least privilege). A transport error tears the
 // subprocess down so the next call restarts it (subject to backoff).

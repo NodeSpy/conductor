@@ -36,8 +36,20 @@ const (
 
 // DescribeRequest is plugin.describe's params. Host is absent from an older
 // daemon.
+//
+// Instance and Config are Q6 (plugin-contract.md §1.4, §3.9 G13): when
+// Instance is set, the host is asking for ONE CONFIGURED INSTANCE's
+// declaration rather than the plugin's type-level one — rest/graphql's
+// user-declared verbs and events depend on the instance's own config, so the
+// type-level Decl alone cannot describe them. The host calls this once per
+// configured instance, in ADDITION to the once-per-process {host} call.
+// CodeMethodNotFound (the plugin does not implement InstanceDescriber) means
+// "no per-instance declaration" — the type-level Describe() is this
+// instance's declaration too.
 type DescribeRequest struct {
-	Host *HostInfo `json:"host,omitempty"`
+	Host     *HostInfo      `json:"host,omitempty"`
+	Instance string         `json:"instance,omitempty"`
+	Config   map[string]any `json:"config,omitempty"`
 }
 
 // HostInfo is what the daemon tells a plugin about itself on describe.
@@ -143,6 +155,23 @@ type ValidateHandler interface {
 // StopHandler releases one instance.
 type StopHandler interface {
 	Stop(ctx context.Context, req StopRequest) error
+}
+
+// InstanceDescriber is implemented by a plugin whose declaration depends on a
+// configured INSTANCE's config (Q6, plugin-contract.md §3.9 G13): rest and
+// graphql materialize their user-declared verbs and events this way instead
+// of through a Go-side door (the retired InstanceDecler). The host calls
+// plugin.describe{instance, config} once per configured instance; a plugin
+// that does not implement this interface answers CodeMethodNotFound for that
+// call, and the host falls back to treating Describe() (the type-level
+// declaration) as this instance's declaration too.
+//
+// The returned Decl is checked exactly like the type-level one — must-
+// understand semantics (CheckSemantics) and internal consistency
+// (ValidateSemantics) — so an instance cannot declare something the engine
+// does not implement or that does not hang together.
+type InstanceDescriber interface {
+	DescribeInstance(ctx context.Context, instance string, config map[string]any) (Decl, error)
 }
 
 // HostAware is implemented by a Handler that wants the host channel for

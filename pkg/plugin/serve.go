@@ -393,7 +393,27 @@ func dispatch(ctx context.Context, h Handler, method string, params json.RawMess
 		if err := decodeParams(params, &req); err != nil {
 			return nil, err
 		}
-		d := h.Describe()
+		var d Decl
+		if req.Instance != "" {
+			// Q6: a per-instance describe. A plugin that does not implement
+			// InstanceDescriber has nothing instance-specific to say — the
+			// caller falls back to the type-level Describe().
+			id, ok := h.(InstanceDescriber)
+			if !ok {
+				return nil, Errorf(CodeMethodNotFound, "this plugin has no per-instance declaration")
+			}
+			var err error
+			d, err = id.DescribeInstance(ctx, req.Instance, req.Config)
+			if err != nil {
+				var re *Error
+				if errors.As(err, &re) {
+					return nil, re
+				}
+				return nil, Errorf(CodeInternalError, err.Error())
+			}
+		} else {
+			d = h.Describe()
+		}
 		if d.ProtocolVersion == 0 {
 			d.ProtocolVersion = ProtocolVersion
 		}
