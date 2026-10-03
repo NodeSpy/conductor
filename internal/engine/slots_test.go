@@ -178,6 +178,7 @@ func TestFlowWaitingFixerDroppedWhenPRCloses(t *testing.T) {
 	eng.process(context.Background(), fix)
 	closed := flowTrigger("")
 	closed.Kind = "_closed"
+	closed.Action = nil // an unrouted closing event carries no trigger's work
 	eng.process(context.Background(), closed)
 	eng.release()
 
@@ -229,6 +230,7 @@ func TestClosedPRStopsRunningFixers(t *testing.T) {
 
 	closed := flowTrigger("")
 	closed.Kind = "_closed"
+	closed.Action = nil // an unrouted closing event carries no trigger's work
 	eng.process(context.Background(), closed)
 
 	d.mu.Lock()
