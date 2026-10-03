@@ -55,7 +55,27 @@ type ConnectorRef struct {
 	// globs). Empty = no extra restriction beyond the structural guarantee that
 	// an implementation only ever receives its own instances' credentials.
 	AllowSecrets []string `yaml:"allow_secrets,omitempty"`
-	raw          yaml.Node
+	// AllowEnv grants a plugin-backed connector the daemon environment
+	// variables it may read (exact names): each must be one the plugin
+	// declares (capabilities.env). Nothing passes without a grant — a
+	// plugin's declaration alone cannot pull a secret the daemon holds.
+	AllowEnv []string `yaml:"allow_env,omitempty"`
+	// SharedProcess opts an external (spawned) plugin-backed connector OUT of
+	// the default one-process-per-configured-instance isolation: every
+	// instance of this plugin's TYPE shares the one subprocess, as every
+	// plugin did before multi-instance isolation existed. This is a resource
+	// trade-off for an operator running many instances of one plugin (N
+	// processes costs N times the memory/fds) — explicit and documented
+	// because it also gives up the per-instance sandbox/env/staging-dir
+	// isolation (docs/wiki/Plugins.md "Multi-instance isolation"). Setting it
+	// on ANY instance of a plugin shares the WHOLE plugin's process (the
+	// process is per plugin BINARY, not per connector entry) — see
+	// config.PluginRefs, which unions this flag across every instance of the
+	// same plugin exactly as it does Network/AllowEnv/AllowSecrets. Ignored
+	// for a builtin connector (always in-process and shared; nothing to opt
+	// out of).
+	SharedProcess bool `yaml:"shared_process,omitempty"`
+	raw           yaml.Node
 	// legacyType holds a pre-`use:` `type:` value. It is NOT part of the schema
 	// — it exists only so validateConnectors can emit a migration-specific error
 	// instead of the silent "missing use:" a dropped field would produce.
@@ -71,9 +91,11 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 		Options map[string]any `yaml:"options,omitempty"`
 		Policy  *Policy        `yaml:"policy,omitempty"`
 		// Type is the retired field, read for diagnostics only (see legacyType).
-		Type         string           `yaml:"type,omitempty"`
-		Isolation    *IsolationConfig `yaml:"isolation,omitempty"`
-		AllowSecrets []string         `yaml:"allow_secrets,omitempty"`
+		Type          string           `yaml:"type,omitempty"`
+		Isolation     *IsolationConfig `yaml:"isolation,omitempty"`
+		AllowSecrets  []string         `yaml:"allow_secrets,omitempty"`
+		AllowEnv      []string         `yaml:"allow_env,omitempty"`
+		SharedProcess bool             `yaml:"shared_process,omitempty"`
 	}
 	var h hdr
 	if err := n.Decode(&h); err != nil {
@@ -81,6 +103,8 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 	}
 	r.Use, r.Network, r.Enabled, r.Options, r.Policy = h.Use, h.Network, h.Enabled, h.Options, h.Policy
 	r.Isolation, r.AllowSecrets, r.legacyType, r.raw = h.Isolation, h.AllowSecrets, h.Type, *n
+	r.AllowEnv = h.AllowEnv
+	r.SharedProcess = h.SharedProcess
 	return nil
 }
 
@@ -572,7 +596,7 @@ var errLegacyFiltersKey = errors.New("`filters:` was removed — state the whole
 	"(`filters: {repos: [o/r]}` → `filter: {repo: [o/r]}`, `exclude: {branches: [x]}` → `not_branch: [x]`, " +
 	"`ignore_users:` → `not_comment_author:`, `gates: {not_draft: true}` → `not_draft: true`, " +
 	"`labels_any:` → `label_any:`; `ignore_checks:` moved to `options:`). " +
-	"Run `conductor config migrate`, or see docs/design/unified-filter-phase2.md")
+	"Run `conductor config migrate` with the release before the plugin contract, or see docs/design/unified-filter-phase2.md")
 
 // rejectLegacyFilters fails a mapping node that still carries `filters:`.
 // yaml.v3's KnownFields does not reach into a custom unmarshaler, and even
@@ -593,6 +617,22 @@ func rejectLegacyFilters(n *yaml.Node) error {
 // ManualSource is the built-in `on:` source with no connector: a trigger
 // listing it is runnable on demand via `conductor run <name>`.
 const ManualSource = "manual"
+
+// ReservedNamespaces are conductor's OWN namespaces — its state and
+// facilities, not integrations (plugin-contract.md §1.10): no connector or
+// vault may take these names, and each is always available. One list, so
+// connectors and vaults cannot disagree about what is reserved.
+var ReservedNamespaces = map[string]string{
+	ManualSource: "the built-in `on: manual` source",
+	"kv":         "the built-in state store — always available, nothing to configure",
+	"sql":        "the built-in SQL verbs — always available; connections live in stores:",
+	"conductor":  "conductor's own lifecycle events and verbs — always available, nothing to configure",
+	"memory":     "the built-in shared agent memory — configure it via the top-level memory: section",
+	"workflow":   "the built-in workflow verbs — always available, nothing to configure",
+	"blob":       "the built-in artifact verbs — always available, nothing to configure",
+	"handoff":    "a hand-off's own lifecycle verbs (handoff.done) — always available",
+	"step":       "the built-in step verbs — always available, nothing to configure",
+}
 
 // TriggerSpec is one entry in the `triggers:` list: on/filters/steps/hooks
 // plus optional grouping, policy, and source-side options.
@@ -872,6 +912,49 @@ type Step struct {
 	OutputSchema map[string]any `yaml:"output_schema,omitempty"`
 	Background   bool           `yaml:"background,omitempty"`
 	Handoff      string         `yaml:"handoff,omitempty"` // ask-capable connector for a background review
+	// Repo overrides this agent step's CHECKOUT repo (templated; "owner/name"
+	// or a git URL), independent of the repo the trigger itself carries — a
+	// generic way for a step to work in a different codebase than the one
+	// the event came from (e.g. a chat trigger choosing which repo to work
+	// in). It selects the working copy only: forge authority (skill creds,
+	// own-repo scope) stays on the trigger's own target. With no `checkout:`
+	// of its own the step defaults to branch-off, and a trigger's forced
+	// checkout-less mode does not apply. Validated after templating, at
+	// dispatch. Unset keeps today's behavior: the trigger's own target.
+	Repo string `yaml:"repo,omitempty"`
+	// Images is a templated list of local file paths attached to this agent
+	// launch, one `paseo run --image <path>` per item. An item that is a sole
+	// reference to a list ("{{.dl.images}}") expands to every element. Only
+	// a paseo runtime carries it; any other runtime fails the dispatch (or
+	// validation, when the runtime is a static pin) rather than silently
+	// dropping the attachments.
+	Images []string `yaml:"images,omitempty"`
+	// Branch names the worktree branch a `detach:` step creates (templated,
+	// then validated as a plain branch name). Unset derives
+	// "handover/<slug of the agent label or trigger title>-<random>". Only
+	// valid with `detach:`.
+	Branch string `yaml:"branch,omitempty"`
+	// Detach launches this agent step as an UNOWNED, FORGOTTEN workspace: a
+	// fresh branch-off worktree (from `repo:`, or the trigger's own target —
+	// never an existing workspace on the branch), launched with `paseo run -d`
+	// and never recorded in conductor's ownership ledger — neither the agent
+	// nor the workspace. It gets no skill creds, no CONDUCTOR_*/token/git
+	// identity env, no appended guidance (the prompt runs exactly as
+	// templated), no hold/handoff/watch/idle_timeout, and no isolation shim:
+	// from the moment it starts it is the USER's workspace, not conductor's.
+	// Conductor cannot archive or reach it again — see
+	// dispatch.Dispatcher.Archive, gated on the ownership ledger a detach
+	// step is deliberately never added to. Outputs: agent_id, workspace_id,
+	// branch, path.
+	//
+	// Mutually exclusive with background/handoff/output_schema/watch/
+	// idle_timeout/archive_when_done/session/skill/team/gate and with the
+	// fields a detach launch would otherwise silently ignore (isolation/env/
+	// workdir/checkout/workspace/memory/guidance) — see validateDetach — and
+	// refused on an agent-authored step (internal/flow/agentauthored_fields.go):
+	// detach is a capability the operator grants, never one an agent can take
+	// for itself. Needs a paseo runtime.
+	Detach bool `yaml:"detach,omitempty"`
 
 	// command form (also carries workdir/env for agent/code forms), and the
 	// argv the `cli` engine runs. A list of words, or one string (see Argv).
@@ -934,7 +1017,7 @@ type Step struct {
 	// value is templated with types preserved. `set: { url: "…{{.pr}}" }`.
 	Set map[string]any `yaml:"set,omitempty"`
 	// Assert fails the step (and the run) unless the expr is truthy — the
-	// same expression grammar and truthiness as `if:` (internal/expr).
+	// same expression grammar and truthiness as `if:` (pkg/expr).
 	// `assert: "checks_passed && !draft"`. Pairs with nothing; it IS the guard.
 	Assert string `yaml:"assert,omitempty"`
 	// Fail stops the run with a rendered message, unconditionally. Guard it
@@ -1640,6 +1723,28 @@ func MergePolicy(scopes ...*Policy) Policy {
 	return out
 }
 
+// DispatchRetry is the retry policy for a transient dispatch failure: the
+// `retry:` block of the first connector (by name) that carries one — a
+// host-owned connection key any connector may set, like policy: — else the
+// defaults (Retry's zero value).
+func (c *Config) DispatchRetry() Retry {
+	names := make([]string, 0, len(c.ConnectorsMap))
+	for n := range c.ConnectorsMap {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		var raw struct {
+			Retry *Retry `yaml:"retry"`
+		}
+		ref := c.ConnectorsMap[n]
+		if err := ref.Decode(&raw); err == nil && raw.Retry != nil {
+			return *raw.Retry
+		}
+	}
+	return Retry{}
+}
+
 // HasConnectors reports whether the config is (at least partly) on the new
 // schema.
 func (c *Config) HasConnectors() bool {
@@ -1654,38 +1759,14 @@ func (c *Config) validateConnectors() error {
 		return err
 	}
 	if len(c.SecretRefs) > 0 {
-		return fmt.Errorf("config: the secrets: block was replaced by vaults: entries and {{ vault \"<name>\" \"<key>\" }} references — auto-migration rewrites it at boot, or run `conductor config migrate`")
-	}
-	// The notify: block was replaced by conductor.* lifecycle triggers on
-	// the connectors model. Legacy configs (integrations:) keep the legacy
-	// delivery until they migrate.
-	if c.Notify.Configured() && len(c.Integrations) == 0 && c.HasConnectors() {
-		return fmt.Errorf("config: the notify: block was replaced by triggers on the conductor.* lifecycle events (on: conductor.escalate, …) — auto-migration rewrites it at boot, or run `conductor config migrate`")
+		return fmt.Errorf("config: the secrets: block was replaced by vaults: entries and {{ vault \"<name>\" \"<key>\" }} references — run `conductor config migrate` with the release before the plugin contract, or rewrite it by hand")
 	}
 	for name, ref := range c.ConnectorsMap {
 		if name == "" {
 			return fmt.Errorf("config: connectors: empty connector name")
 		}
-		if name == ManualSource {
-			return fmt.Errorf("config: connectors: %q is reserved (the built-in `on: manual` source)", ManualSource)
-		}
-		if name == "kv" {
-			return fmt.Errorf("config: connectors: %q is reserved (the built-in state store — always available, nothing to configure)", name)
-		}
-		if name == "sql" {
-			return fmt.Errorf("config: connectors: %q is reserved (the built-in SQL verbs — always available; connections live in stores:)", name)
-		}
-		if name == "conductor" {
-			return fmt.Errorf("config: connectors: %q is reserved (conductor's own lifecycle events and verbs — always available, nothing to configure)", name)
-		}
-		if name == "memory" {
-			return fmt.Errorf("config: connectors: %q is reserved (the built-in shared agent memory — configure it via the top-level memory: section)", name)
-		}
-		if name == "workflow" {
-			return fmt.Errorf("config: connectors: %q is reserved (the built-in workflow verbs — always available, nothing to configure)", name)
-		}
-		if name == "blob" {
-			return fmt.Errorf("config: connectors: %q is reserved (the built-in artifact verbs — always available, nothing to configure)", name)
+		if why, ok := ReservedNamespaces[name]; ok {
+			return fmt.Errorf("config: connectors: %q is reserved (%s)", name, why)
 		}
 		if err := validateUseRef("connector "+name, ref.Use, ref.legacyType, UseKindConnector); err != nil {
 			return err
@@ -1728,6 +1809,12 @@ func (c *Config) validateConnectors() error {
 		}
 		if rt.Agent != "" && !(u.IsBuiltin() && u.Name == "acp") {
 			return fmt.Errorf("config: runtime %q: `agent:` applies to `use: acp` only (got use: %s)", name, rt.Use)
+		}
+		if rt.Transport != "" && !map[string]bool{"acp": true, "native": true, "cli": true}[rt.Transport] {
+			return fmt.Errorf("config: runtime %q: transport must be acp|native|cli, got %q", name, rt.Transport)
+		}
+		if rt.SessionModel != "" && !map[string]bool{"native": true, "resumable": true, "oneshot": true}[rt.SessionModel] {
+			return fmt.Errorf("config: runtime %q: session_model must be native|resumable|oneshot, got %q", name, rt.SessionModel)
 		}
 		if err := c.checkRemoteHostSupport("runtime", name, rt.Host, rt.BuiltinType(), rt.Agent, rt.Controller().EffectiveTransport()); err != nil {
 			return err
@@ -1842,8 +1929,8 @@ func (c *Config) validateConnectors() error {
 	return nil
 }
 
-// validateRuntimeDefaults enforces at most one default across runtimes and
-// legacy controllers combined (they share the registry).
+// validateRuntimeDefaults enforces at most one `runtimes:` entry flagged
+// default:true.
 func (c *Config) validateRuntimeDefaults() error {
 	defaults := 0
 	for _, rt := range c.Runtimes {
@@ -1851,18 +1938,8 @@ func (c *Config) validateRuntimeDefaults() error {
 			defaults++
 		}
 	}
-	for _, cc := range c.Controllers {
-		if cc.Default {
-			defaults++
-		}
-	}
 	if defaults > 1 {
 		return fmt.Errorf("config: at most one runtime may set `default: true` (%d do)", defaults)
-	}
-	for name := range c.Runtimes {
-		if _, dup := c.Controllers[name]; dup {
-			return fmt.Errorf("config: %q is defined under both runtimes: and controllers:", name)
-		}
 	}
 	return nil
 }
@@ -1922,6 +1999,13 @@ func validateStep(w string, s Step, c *Config) error {
 	if forms > 1 {
 		return fmt.Errorf("config: %s: step forms are mutually exclusive (set exactly one of type/decide/use/uses/call or a helper: sleep/log/set/assert/fail/wait_for)", w)
 	}
+	// Checked early, before any other field's own validation (gate name
+	// lookups, team role resolution, …) can fail first and mask the simpler,
+	// structural "these two fields don't mix" error a detach misconfiguration
+	// actually is.
+	if err := validateDetach(w, s); err != nil {
+		return err
+	}
 	if s.Decide != nil {
 		if err := validateDecideStep(w, s, c); err != nil {
 			return err
@@ -1936,6 +2020,11 @@ func validateStep(w string, s Step, c *Config) error {
 		}
 		if err := c.validateTeam(w, s.Team); err != nil {
 			return err
+		}
+	}
+	if s.Detach || s.Repo != "" || len(s.Images) > 0 {
+		if ok, known := c.runtimeSupportsLaunchFields(s); known && !ok {
+			return fmt.Errorf("config: %s: `detach:`/`repo:`/`images:` need the builtin paseo runtime (runtime %q cannot carry them)", w, s.Runtime)
 		}
 	}
 	if s.Uses != "" {
@@ -1970,6 +2059,65 @@ func validateStep(w string, s Step, c *Config) error {
 		return err
 	}
 	return validateHooks(w, s.Hooks)
+}
+
+// validateDetach enforces detach:'s isolation from every other hand-off/
+// lifecycle/capability mechanism a step can carry. detach is a complete,
+// self-contained launch mode (see Step.Detach) — combining it with any of
+// these would either contradict it (background/handoff/watch/idle_timeout all
+// assume conductor keeps driving or watching the agent it just forgot) or
+// hand it a capability grant a forgotten workspace can never use safely
+// (session/skill/team/gate, output_schema's capture contract,
+// archive_when_done's ledger-gated reclaim).
+func validateDetach(w string, s Step) error {
+	agent := s.Form() == "agent"
+	for _, f := range []struct {
+		name string
+		set  bool
+	}{
+		{"detach:", s.Detach}, {"repo:", s.Repo != ""}, {"images:", len(s.Images) > 0}, {"branch:", s.Branch != ""},
+	} {
+		if f.set && !agent {
+			return fmt.Errorf("config: %s: `%s` applies to agent steps only", w, f.name)
+		}
+	}
+	if s.Branch != "" && !s.Detach {
+		return fmt.Errorf("config: %s: `branch:` names a detach step's new worktree branch — it needs `detach: true`", w)
+	}
+	if !s.Detach {
+		return nil
+	}
+	type conflict struct {
+		name string
+		set  bool
+	}
+	for _, c := range []conflict{
+		{"background:", s.Background},
+		{"handoff:", s.Handoff != ""},
+		{"output_schema:", len(s.OutputSchema) > 0},
+		{"watch:", s.Watch != nil},
+		{"idle_timeout:", s.IdleTimeout > 0},
+		{"archive_when_done:", s.ArchiveWhenDone},
+		{"session:", s.Session != nil},
+		{"skill:", s.Skill != nil},
+		{"team:", s.Team != nil},
+		{"gate:", s.Gate != nil},
+		// Everything below would be silently ignored by a detach launch
+		// (no isolation shim, no env, a fresh branch-off worktree of its
+		// own, no guidance/memory appended), so it is refused instead.
+		{"isolation:", s.Isolation != nil},
+		{"env:", len(s.Env) > 0},
+		{"workdir:", s.WorkDir != ""},
+		{"checkout:", s.Checkout != ""},
+		{"workspace:", !s.Workspace.IsZero()},
+		{"memory:", s.Memory != nil},
+		{"guidance:", s.Guidance != nil},
+	} {
+		if c.set {
+			return fmt.Errorf("config: %s: `detach: true` cannot be combined with %s — a detached step is a complete, forgotten launch (see docs)", w, c.name)
+		}
+	}
+	return nil
 }
 
 // validateWatch checks a reactive hand-off's watch block. The old shape is

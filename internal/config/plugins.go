@@ -42,6 +42,45 @@ type PluginRef struct {
 	// AllowSecrets optionally tightens which secret refs may cross to the
 	// plugin (exact names, no globs).
 	AllowSecrets []string
+	// AllowEnv are the daemon environment variables the operator granted the
+	// plugin (connectors.<name>.allow_env), within what it declares.
+	AllowEnv []string
+	// SharedProcess opts this plugin's connector instances OUT of the default
+	// one-process-per-instance isolation (connectors.<name>.shared_process) —
+	// set if ANY instance of this plugin asked for it, since the process is
+	// shared per BINARY, not per connector entry. Always false for a runtime
+	// or engine reference: neither has the connector notion of "several
+	// configured instances of one plugin" this exists to isolate.
+	SharedProcess bool
+	// Instances carries each CONFIGURED CONNECTOR INSTANCE's own grants —
+	// Network/AllowSecrets/AllowEnv/Isolation exactly as that one
+	// connectors: entry declared them, never unioned with a sibling
+	// instance's. Keyed by the connectors: map name. Populated only for a
+	// connector-kind ref (nil for a runtime/engine ref, which has no
+	// "several instances of one plugin" multiplicity to begin with).
+	//
+	// The Network/AllowSecrets/AllowEnv/Isolation fields ABOVE remain the
+	// UNION across every instance of this plugin — that union is what a
+	// SHARED process needs (shared_process: true; one process then serves
+	// every instance, so it must be permitted whatever any of them
+	// declares) and nothing else. Per-instance process isolation
+	// (Manager.InstanceClient) must use THIS map instead: ghA's own process
+	// gets exactly ghA's own allow_env/network/allow_secrets, never ghB's —
+	// see docs/wiki/Plugins.md "Multi-instance isolation".
+	Instances map[string]ConnectorGrant
+}
+
+// ConnectorGrant is one configured connector instance's own sandbox/
+// isolation grant — Network, AllowSecrets, AllowEnv and Isolation exactly as
+// that connectors: entry declared them. PluginRef.Instances carries one of
+// these per configured instance so a per-instance plugin process
+// (internal/plugin.Manager.InstanceClient) can be confined to exactly its
+// own instance's grant instead of the union every sibling instance declares.
+type ConnectorGrant struct {
+	Network      []string
+	AllowSecrets []string
+	AllowEnv     []string
+	Isolation    *IsolationConfig
 }
 
 // PluginKind values, retained as the wire/CLI spelling of UseKind.
@@ -103,15 +142,26 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		}
 		p, seen := out[u.InstallKey()]
 		if !seen {
-			p = PluginRef{Name: u.Name, Instance: name, Use: u}
+			p = PluginRef{Name: u.Name, Instance: name, Use: u, Instances: map[string]ConnectorGrant{}}
 		}
-		// Hardening and declared egress union across instances: the plugin runs
-		// once, so it must be permitted whatever any of its instances declares.
+		// Hardening and declared egress union across instances: a SHARED
+		// process (shared_process: true) runs once for every instance, so it
+		// must be permitted whatever any of its instances declares. This
+		// union is NOT what a per-instance process gets — that is
+		// p.Instances[name] below, exactly this one entry's own grant.
 		if ref.Isolation != nil && p.Isolation == nil {
 			p.Isolation = ref.Isolation
 		}
 		p.Network = appendUnique(p.Network, ref.Network...)
 		p.AllowSecrets = appendUnique(p.AllowSecrets, ref.AllowSecrets...)
+		p.AllowEnv = appendUnique(p.AllowEnv, ref.AllowEnv...)
+		p.SharedProcess = p.SharedProcess || ref.SharedProcess
+		p.Instances[name] = ConnectorGrant{
+			Network:      append([]string(nil), ref.Network...),
+			AllowSecrets: append([]string(nil), ref.AllowSecrets...),
+			AllowEnv:     append([]string(nil), ref.AllowEnv...),
+			Isolation:    ref.Isolation,
+		}
 		out[u.InstallKey()] = p
 	}
 

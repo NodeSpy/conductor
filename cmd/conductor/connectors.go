@@ -17,7 +17,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/inbound"
-	"github.com/NodeSpy/conductor/internal/integrations/slack"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/plugin"
@@ -103,7 +102,14 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 			flowStore.Audit(e)
 		}
 	}
-	pluginMgr, err := loadConnectorPlugins(cfg, sec, auditSink)
+	// authReg is THIS STACK's own host.auth registry (finding 4,
+	// plugin-contract.md §1.9): every connector this Build call constructs
+	// registers its managed-auth authenticator into it, and spawned plugin
+	// clients are wired to it directly. A validation/dry-run build's authReg
+	// is never promoted to live (below), so its registerAuth calls can never
+	// change what the actually-running daemon's host.auth answers.
+	authReg := connector.NewAuthRegistry()
+	pluginMgr, err := loadConnectorPlugins(cfg, sec, auditSink, authReg.AuthProvider())
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +123,7 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		}
 	}()
 
-	deps := connector.Deps{Secrets: sec, Log: logf, Config: cfg, Blobs: blobs, Audit: auditSink}
+	deps := connector.Deps{Secrets: sec, Log: logf, Config: cfg, Blobs: blobs, Audit: auditSink, Auth: authReg}
 	reg, err := connector.Build(cfg, deps)
 	if err != nil {
 		return nil, err
@@ -193,6 +199,17 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		Blobs: blobs, Events: events,
 		Code: &code.Executor{Engines: engines, Sandbox: codeSandboxDeps()},
 	})
+	// Promote this stack's auth registry to the live one (finding 4) only
+	// when it is actually going to be used for real — flowStore is non-nil
+	// exactly for the running daemon's own stack and `conductor once`'s
+	// single stack, never for a validation/dry-run build (every such caller
+	// passes nil, nil). This is what keeps a throwaway `conductor validate`
+	// pass (or pendingPluginRetry's periodic re-validate while the daemon is
+	// already running) from ever changing what the LIVE daemon's host.auth
+	// answers.
+	if flowStore != nil {
+		connector.SetLiveAuthRegistry(authReg)
+	}
 	stackOK = true // ownership of pluginMgr passes to the returned stack
 	return &flowStack{
 		Secrets: sec, SecretVals: vals, Registry: reg, Runner: runner, Events: events,
@@ -284,35 +301,20 @@ func inertNote(n int) string {
 	return fmt.Sprintf(" — %d trigger(s) inert", n)
 }
 
-// webConnector / discordConnector / slackConnector are the duck-typed wiring
-// surfaces connector Impls expose for main (see internal/connector).
+// webConnector is the duck-typed wiring surface a web connector Impl exposes
+// for main (see internal/connector).
 type webConnector interface {
 	Channel() *handoff.WebChannel
 	Listen() string
 }
 
-type discordConnector interface {
-	BotToken() string
-	Inbox() *handoff.Inbox
-}
-
-type slackInboxer interface {
-	Inbox() *handoff.Inbox
-}
-
 // wireConnectorSurfaces mounts web connectors' draft pages on the inbound
-// listener, starts discord connectors' gateways, and fans Socket Mode replies
-// into every slack inbox (legacy handoffs + slack connectors).
-func wireConnectorSurfaces(ctx context.Context, stack *flowStack, handoffs *handoff.Registry, cfg *config.Config) {
+// listener. (A chat plugin's replies arrive as its own conversation_reply
+// events; nothing is wired for them here.)
+func wireConnectorSurfaces(ctx context.Context, stack *flowStack) {
 	if stack == nil {
-		wireSlackHandoffInbox(cfg, handoffs)
 		return
 	}
-	var slackInboxes []*handoff.Inbox
-	if legacy := handoffs.SlackInbox(); legacy != nil {
-		slackInboxes = append(slackInboxes, legacy)
-	}
-	seenGateway := map[string]bool{}
 	for _, name := range stack.Registry.Names() {
 		in, _ := stack.Registry.Get(name)
 		if in.Impl == nil || !in.Enabled || in.DisabledReason != "" {
@@ -324,29 +326,6 @@ func wireConnectorSurfaces(ctx context.Context, stack *flowStack, handoffs *hand
 				logf("connector %s: web ask pages on %s/handoff", name, wc.Listen())
 			}
 		}
-		if dc, ok := in.Impl.(discordConnector); ok {
-			if tok := dc.BotToken(); tok != "" && !seenGateway[tok] {
-				seenGateway[tok] = true
-				go handoff.RunDiscordGateway(ctx, tok, dc.Inbox(), logf)
-				logf("connector %s: discord gateway starting", name)
-			}
-		}
-		if si, ok := in.Impl.(slackInboxer); ok {
-			if ib := si.Inbox(); ib != nil {
-				slackInboxes = append(slackInboxes, ib)
-			}
-		}
-	}
-	if len(slackInboxes) > 0 {
-		inboxes := slackInboxes
-		slack.SetReplyHook(func(channel, threadTS, user, text string) bool {
-			for _, ib := range inboxes {
-				if ib.DeliverFrom(channel, threadTS, user, text) {
-					return true
-				}
-			}
-			return false
-		})
 	}
 }
 
@@ -362,7 +341,7 @@ func cmdConnectors(args []string) error {
 		return fmt.Errorf("usage: conductor connectors ls")
 	}
 	if !cfg.HasConnectors() {
-		fmt.Println("no connectors: block configured (legacy integrations: config)")
+		fmt.Println("no connectors: block configured")
 		return nil
 	}
 	stack, err := buildFlowStack(cfg, nil, nil, true)
@@ -376,10 +355,16 @@ func cmdConnectors(args []string) error {
 	}
 	for _, name := range stack.Registry.Names() {
 		in, _ := stack.Registry.Get(name)
+		// Disabled BY CHOICE (`enabled: false`) wins over an underlying build
+		// failure — it's not an error either way, just worth saying both: the
+		// operator turned it off, AND (if also true) it wouldn't build anyway.
 		state := "enabled"
-		if !in.Enabled {
+		switch {
+		case !in.Enabled && in.DisabledReason != "":
+			state = "disabled (enabled: false): " + in.DisabledReason
+		case !in.Enabled:
 			state = "disabled (enabled: false)"
-		} else if in.DisabledReason != "" {
+		case in.DisabledReason != "":
 			state = "disabled: " + in.DisabledReason
 		}
 		// Show what IMPLEMENTS each instance and where it came from — the
@@ -397,11 +382,6 @@ func cmdConnectors(args []string) error {
 			fmt.Printf("  use:    %s\n", use)
 		}
 		events := in.Decl.EventNames()
-		if in.Impl != nil {
-			if dyn := in.Impl.DeclaredEvents(); len(dyn) > 0 {
-				events = dyn
-			}
-		}
 		if len(events) > 0 {
 			fmt.Printf("  events: %s\n", strings.Join(events, ", "))
 		}
@@ -434,24 +414,57 @@ func cmdSchema(args []string) error {
 		}
 		return fmt.Errorf("no connector %q configured (and no such type); types: %s", name, strings.Join(connector.Types(), ", "))
 	}
-	decl, ok := connector.TypeDeclFor(ref.TypeName())
-	if !ok {
-		return fmt.Errorf("connector %q has unknown type %q", name, ref.TypeName())
-	}
-	var dyn []string
+	// Build first: a plugin-backed type is registered only once its plugin
+	// is loaded, and rest/graphql materialize their user-declared
+	// verbs/events into a per-instance declaration — print that contract,
+	// not the shell.
+	var decl *connector.TypeDecl
+	var disabledReason string
+	var enabled = true
 	if stack, err := buildFlowStack(cfg, nil, nil, true); err == nil {
 		defer stack.Close()
-		if in, ok := stack.Registry.Get(name); ok && in.Impl != nil {
-			dyn = in.Impl.DeclaredEvents()
-			// rest/graphql materialize their user-declared verbs/events into
-			// a per-instance declaration — print that contract, not the shell.
-			if in.Decl != nil {
-				decl = in.Decl
-			}
+		if in, ok := stack.Registry.Get(name); ok {
+			decl = in.Decl
+			enabled, disabledReason = in.Enabled, in.DisabledReason
 		}
 	}
+	if decl == nil {
+		d, ok := connector.TypeDeclFor(ref.TypeName())
+		if !ok {
+			return fmt.Errorf("connector %q has unknown type %q", name, ref.TypeName())
+		}
+		decl = d
+	}
 	fmt.Printf("connector %s (use %s, type %s)\n", name, ref.Use, ref.TypeName())
-	printTypeDecl(decl, dyn)
+	// Match what `connectors ls` shows (cmdConnectors above): a per-instance
+	// describe/refinement failure (DisabledReason) falls back to the shared
+	// type-level decl, which for a rest/graphql-shaped plugin declares no
+	// verbs or events at all — printed bare, that looks like a connector with
+	// an empty contract rather than one that is actually broken. Say so
+	// plainly, and exit non-zero: the schema below is NOT this instance's
+	// real one. Disabled BY CHOICE (enabled: false) wins — exit 0 either way
+	// (see the final check below) — but if the instance ALSO wouldn't build,
+	// say that too rather than hiding it behind the authored-off state.
+	switch {
+	case !enabled && disabledReason != "":
+		fmt.Println("  state: disabled (enabled: false): " + disabledReason)
+	case !enabled:
+		fmt.Println("  state: disabled (enabled: false)")
+	case disabledReason != "":
+		fmt.Println("  state: disabled: " + disabledReason)
+	}
+	// decl is already this instance's EFFECTIVE declaration (the per-instance
+	// Decl when the plugin/builtin implements Q6 — its events are concrete,
+	// real names, never Dynamic — else the shared type-level one, which for a
+	// type like cron that implements no per-instance describe still carries
+	// its Dynamic placeholder and prints the generic "<declared in
+	// connection>" stand-in below; there is no per-instance enumeration left
+	// to pass here (externalImpl.DeclaredEvents is always nil — dead for
+	// every contract connector, spawned or builtin).
+	printTypeDecl(decl, nil)
+	if enabled && disabledReason != "" {
+		return fmt.Errorf("connector %q is disabled: %s (schema shown is the shared type-level declaration, not this instance's own)", name, disabledReason)
+	}
 	return nil
 }
 

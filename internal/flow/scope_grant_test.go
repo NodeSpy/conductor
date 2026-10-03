@@ -67,7 +67,7 @@ func TestSkillGrantScopesSlackChannel(t *testing.T) {
 	// that one. This is what makes the strong default usable.
 	own := SkillIdentity{
 		TargetTrusted: true,
-		Agent:         "responder", Verbs: []string{"slack.*"},
+		Agent:         "responder", Verbs: []string{"slack.*"}, Trigger: "app_mention",
 		Context: map[string]any{"slack": map[string]any{"channel": "#ops"}},
 	}
 	if err := post(own, "#ops"); err != nil {

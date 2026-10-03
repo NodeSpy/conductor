@@ -25,11 +25,9 @@ import (
 // The two fields are independent — `isolation` says how a workspace is made,
 // `pin` says which one to reuse — so the object form may set either or both.
 //
-// DO NOT CONFUSE THIS WITH THE LEGACY GITHUB RULE'S `workspace:` (internal/
-// integrations/github.Rule.Workspace), which is a different key in a different
-// layer that happens to share a name: there it is a workspace ID/path to
-// worktree from, and it flows to dispatch.Request.Workspace. See the flow map
-// in docs/design/workspace-pin.md.
+// DO NOT CONFUSE THIS WITH dispatch.Request.Workspace, a workspace ID/path to
+// worktree from, which shares the name. See the flow map in
+// docs/design/workspace-pin.md.
 type Workspace struct {
 	// Isolation is the runtime's workspace isolation mode for this dispatch:
 	// "local" | "worktree", or "" for the runtime's own default.

@@ -38,8 +38,8 @@ func (f *fakeInvoker) Invoke(_ context.Context, req plugin.InvokeRequest) (map[s
 }
 
 func TestRegisterExternalTypeRefusesBundledOverride(t *testing.T) {
-	// github is a bundled type registered via init().
-	err := RegisterExternalType(&TypeDecl{Type: "github"}, nil)
+	// cron is a bundled type registered via init().
+	err := RegisterExternalType(&TypeDecl{Type: "cron"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "bundled") {
 		t.Fatalf("want bundled-override refusal, got %v", err)
 	}
@@ -58,9 +58,9 @@ func TestRegisterExternalTypeRefusesBundledOverride(t *testing.T) {
 		t.Fatal("expected type removed")
 	}
 	// Unregister must never drop a bundled type.
-	UnregisterExternalType("github")
-	if _, ok := TypeDeclFor("github"); !ok {
-		t.Fatal("bundled github must survive UnregisterExternalType")
+	UnregisterExternalType("cron")
+	if _, ok := TypeDeclFor("cron"); !ok {
+		t.Fatal("bundled cron must survive UnregisterExternalType")
 	}
 
 	// Two plugins providing the same type must not silently clobber each other
@@ -186,4 +186,44 @@ func flatten(m map[string]any) []string {
 		}
 	}
 	return out
+}
+
+// Host-owned header keys never cross to the plugin as connection fields.
+func TestResolveConnectionStripsHostOwnedKeys(t *testing.T) {
+	conn, _, err := resolveConnection(refWith(t, map[string]any{
+		"use": "./conductor-jira", "type": "jira", "enabled": true, "network": []any{"x:443"},
+		"isolation": map[string]any{"mode": "none"}, "allow_secrets": []any{"env:A"},
+		"policy": map[string]any{}, "options": map[string]any{}, "auth": map[string]any{},
+		"base_url": "https://acme.example",
+	}), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conn) != 1 || conn["base_url"] != "https://acme.example" {
+		t.Fatalf("host-owned keys leaked to the plugin: %+v", conn)
+	}
+}
+
+// Secret references resolve at any depth in a connection — tracked for
+// redaction and checked against allow_secrets like a top-level one.
+func TestResolveConnectionResolvesNestedSecrets(t *testing.T) {
+	sec := secrets.New()
+	sec.LookupEnv = func(k string) (string, bool) { return "secret-value-" + k, true }
+	conn, refs, err := resolveConnection(refWith(t, map[string]any{
+		"sources": map[string]any{"a": map[string]any{"sign": map[string]any{"secret": "env:A"}}},
+		"keys":    []any{"env:B", "plain"},
+	}), sec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign := conn["sources"].(map[string]any)["a"].(map[string]any)["sign"].(map[string]any)
+	if sign["secret"] != "secret-value-A" || conn["keys"].([]any)[0] != "secret-value-B" || conn["keys"].([]any)[1] != "plain" || len(refs) != 2 {
+		t.Fatalf("conn=%v refs=%v", conn, refs)
+	}
+	if got := sec.Redact("leak secret-value-A"); strings.Contains(got, "secret-value-A") {
+		t.Fatal("a nested secret was not tracked for redaction")
+	}
+	if _, _, err := resolveConnection(refWith(t, map[string]any{"x": map[string]any{"y": "env:C"}}), sec, map[string]bool{"env:A": true}); err == nil {
+		t.Fatal("a nested secret outside allow_secrets must be refused")
+	}
 }

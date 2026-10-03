@@ -22,7 +22,7 @@ import (
 //
 //	~/.local/state/conductor/plugins/
 //	  installed.yaml
-//	  connectors/sentry/conductor-sentry_linux_amd64
+//	  connectors/widget/conductor-widget_linux_amd64
 //	  runtimes/paseo/conductor-paseo_linux_amd64
 //
 // Boot reads it OFFLINE. Nothing on the hot path touches the network: a fetch
@@ -50,6 +50,8 @@ type Manifest struct {
 	// Spawns records the legacy boolean for a plugin that declares it spawns
 	// children without naming them.
 	Spawns bool `yaml:"spawns,omitempty"`
+	// Env are the daemon environment variables passed through to it.
+	Env []string `yaml:"env,omitempty"`
 	// Auth records the plugin's declared OAuth2 endpoints (Decl.Auth) so
 	// `conductor connector auth <name>` can run the one-time interactive login
 	// from the CLI without respawning the plugin to re-Describe it. nil for a
@@ -59,7 +61,7 @@ type Manifest struct {
 
 // IsZero reports whether the plugin declared no capabilities at all.
 func (m Manifest) IsZero() bool {
-	return len(m.Egress) == 0 && len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns
+	return len(m.Egress) == 0 && len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && len(m.Env) == 0
 }
 
 // Summary renders the manifest as one line for logs and install review.
@@ -79,12 +81,15 @@ func (m Manifest) Summary() string {
 	if len(m.FS) > 0 {
 		parts = append(parts, "fs "+strings.Join(m.FS, ","))
 	}
+	if len(m.Env) > 0 {
+		parts = append(parts, "env "+strings.Join(m.Env, ","))
+	}
 	return strings.Join(parts, "; ")
 }
 
 // Installed is one installed plugin's local record.
 type Installed struct {
-	// Key is "<kind-dir>/<name>" — "connectors/sentry".
+	// Key is "<kind-dir>/<name>" — "connectors/widget".
 	Key string `yaml:"key"`
 	// Kind is connector | runtime.
 	Kind string `yaml:"kind"`
@@ -93,7 +98,7 @@ type Installed struct {
 	// Use is the reference as written in the config, so a changed reference is
 	// detectable without re-resolving.
 	Use string `yaml:"use"`
-	// Source is the canonical fetch source ("github.com/o/r//comp").
+	// Source is the canonical fetch source ("host.example/o/r//comp").
 	Source string `yaml:"source,omitempty"`
 	// Resolved is the concrete release tag this build came from.
 	Resolved string `yaml:"resolved,omitempty"`
@@ -104,6 +109,13 @@ type Installed struct {
 	Path string `yaml:"path"`
 	// Manifest is the permission manifest recorded at install.
 	Manifest Manifest `yaml:"manifest,omitempty"`
+	// ReleaseVerified records that Sha256 was VERIFIED against the release at
+	// install — the release's checksums.txt listed the asset with this sha —
+	// rather than merely computed from whatever was downloaded. Absent on
+	// records written before the field existed and on releases that publish no
+	// checksums: those still run (Sha256 is checked before every exec), but
+	// get nothing that is granted on the strength of a verified release.
+	ReleaseVerified bool `yaml:"release_verified,omitempty"`
 }
 
 // InstallState is the whole local install record, loaded from and saved to the
@@ -215,7 +227,15 @@ func (s *InstallState) Delete(key string) bool {
 	return false
 }
 
-// Save writes the state back, sorted by key so the file is stable across runs.
+// Save writes the state back, sorted by key so the file is stable across
+// runs. The write is ATOMIC (temp file in the same directory, fsynced, then
+// renamed over the final path): a concurrent reader — another `conductor`
+// invocation's LoadInstallState, or this daemon's own install dir on a crash
+// mid-write — must never observe a truncated or half-written file. A plain
+// os.WriteFile truncates the existing file in place first, so a reader (or a
+// crash) landing between the truncate and the write sees an empty/corrupt
+// file; rename is atomic on the same filesystem and always resolves to
+// either the old, complete content or the new, complete content.
 func (s *InstallState) Save() error {
 	if s == nil || s.dir == "" {
 		return nil
@@ -231,5 +251,39 @@ func (s *InstallState) Save() error {
 	}
 	header := "# conductor plugin install state — LOCAL to this machine, written by\n" +
 		"# `conductor init` / `conductor plugin update`. Do not commit it.\n"
-	return os.WriteFile(filepath.Join(s.dir, installStateFile), append([]byte(header), b...), 0o600)
+	content := append([]byte(header), b...)
+
+	final := filepath.Join(s.dir, installStateFile)
+	tmp, err := os.CreateTemp(s.dir, "."+installStateFile+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("plugin install state: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename below has consumed it
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return fmt.Errorf("plugin install state: %w", err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("plugin install state: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("plugin install state: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("plugin install state: %w", err)
+	}
+	if err := os.Rename(tmpName, final); err != nil {
+		return fmt.Errorf("plugin install state: %w", err)
+	}
+	// Best-effort: fsync the directory entry too, so the rename itself
+	// survives a crash (POSIX does not guarantee a rename is durable until
+	// the containing directory is synced).
+	if dir, err := os.Open(s.dir); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
+	return nil
 }

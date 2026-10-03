@@ -1,6 +1,7 @@
 # Single hermetic image for the whole e2e stack (test/e2e/). It builds the real
 # conductor binary plus every harness service (fake paseo CLI, mock GitHub API,
-# sink-catcher, and the M3/M4 scaffolds) into one static-binary image, and each
+# sink-catcher, the M3/M4 scaffolds, and the github connector plugin) into one
+# static-binary image, and each
 # compose service just overrides `command:`. Runtime is alpine + git so the fake
 # paseo can clone/commit/push against the bare-git forge. NO LLM, NO secrets.
 #
@@ -19,23 +20,56 @@ ENV CGO_ENABLED=0
 RUN go build -o /out/conductor ./cmd/conductor \
  && go build -o /out/fakepaseo     ./test/e2e/services/fakepaseo \
  && go build -o /out/mockgithub    ./test/e2e/services/mockgithub \
+ && go build -o /out/mocksmee      ./test/e2e/services/mocksmee \
  && go build -o /out/sinkcatcher   ./test/e2e/services/sinkcatcher \
  && go build -o /out/fakeopencode  ./test/e2e/services/fakeopencode \
  && go build -o /out/fakeagentdeck ./test/e2e/services/fakeagentdeck \
  && go build -o /out/fakeacp       ./test/e2e/services/fakeacp \
  && go build -o /out/fakecli       ./test/e2e/services/fakecli \
- && go build -o /out/conductor-acme-engine ./test/plugins/acme-engine
+ && go build -o /out/conductor-acme-engine ./test/plugins/acme-engine \
+ && go build -o /out/conductor-acme-listener ./test/plugins/acme-listener
+
+# ---- vendor connector plugins ----
+# Every vendor connector is a plugin (conductor-plugins, connectors/<name>):
+# each daemon's github, slack, discord, ntfy, pushover, notifiarr and smee
+# (the `listeners` connection semantic's exposure half, group Y) connectors
+# name these binaries. GITHUB_PLUGIN_VERSION pins the build (a tag or commit
+# of the plugins module); a locally built github and/or smee plugin staged
+# into test/e2e/plugin-bin/ (GITHUB_PLUGIN_BIN / SMEE_PLUGIN_BIN, run.sh)
+# replaces the pinned one below.
+FROM golang:1.26-alpine AS github-plugin
+ARG GITHUB_PLUGIN_VERSION=f1a475d
+RUN apk add --no-cache git
+ENV CGO_ENABLED=0 GOBIN=/out
+RUN set -e; for p in github slack discord ntfy pushover notifiarr smee; do \
+      go install "github.com/NodeSpy/conductor-plugins/connectors/$p@${GITHUB_PLUGIN_VERSION}"; \
+      mv "/out/$p" "/out/conductor-$p"; \
+    done
 
 # ---- runtime stage ----
 FROM alpine:3.20
 RUN apk add --no-cache git git-daemon curl bash coreutils openssl openssh \
  && adduser -D -h /home/conductor conductor
 COPY --from=build /out/ /usr/local/bin/
+COPY --from=github-plugin /out/ /usr/local/bin/
 # The reference ENGINE plugin (test/plugins/acme-engine) is a real out-of-process
 # plugin, not a harness fake: group V points a step's `use:` straight at this
 # path. verify-before-execute refuses a group/world-writable binary or parent, so
-# the mode is pinned rather than left to the builder's umask.
-RUN chmod 0755 /usr/local/bin/conductor-acme-engine
+# the mode is pinned rather than left to the builder's umask. conductor-acme-listener
+# (group X, the listeners connection semantic) is the same kind of reference
+# plugin, named directly by a connector's `use:`.
+RUN chmod 0755 /usr/local/bin/conductor-acme-engine /usr/local/bin/conductor-acme-listener
+# A github, smee and/or slack plugin the run supplied (GITHUB_PLUGIN_BIN /
+# SMEE_PLUGIN_BIN / SLACK_PLUGIN_BIN, staged into test/e2e/plugin-bin/)
+# replaces the pinned build — group Y needs github+smee built from the same
+# (unpublished) plugins commit that declares the listeners connection
+# semantic; group K's ack/on_done case needs slack built from the
+# (unpublished) commit that declares option_hooks.
+COPY --from=build /src/test/e2e/plugin-bin/ /opt/plugin-bin/
+RUN if [ -f /opt/plugin-bin/conductor-github ]; then cp /opt/plugin-bin/conductor-github /usr/local/bin/conductor-github; fi \
+ && if [ -f /opt/plugin-bin/conductor-smee ]; then cp /opt/plugin-bin/conductor-smee /usr/local/bin/conductor-smee; fi \
+ && if [ -f /opt/plugin-bin/conductor-slack ]; then cp /opt/plugin-bin/conductor-slack /usr/local/bin/conductor-slack; fi \
+ && chmod 0755 /usr/local/bin/conductor-github /usr/local/bin/conductor-smee /usr/local/bin/conductor-slack
 # The fake paseo is installed as `paseo` too, so a config without an explicit
 # paseo_bin: still resolves it on PATH. The fake tool runtimes are installed under
 # the exact names conductor's controllers exec on PATH (stub mode): the cli

@@ -118,8 +118,9 @@ Work down this list and you go from zero to the most advanced setup:
    [[Isolation]] sandboxing, [[Runs]] (history / `watch` / retry),
    [[Binary-Data]] artifacts.
 10. **Growing the library** — [[Authoring-Connectors]].
-11. **Coming from the legacy schema** — [[Migration]] (automatic, total,
-    fail-safe).
+11. **Coming from the legacy schema** — [[Migration]] (removed in this
+    release; migrate on the release before the plugin contract, then
+    upgrade).
 
 ## Pages
 
@@ -135,4 +136,4 @@ Connector references: [[Connectors]] · [[Authoring-Connectors]] ·
 [connector catalog ↗](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/README.md)
 
 Operations: [[Runs]] · [[Notifications]] · [[Hand-offs]] · [[Migration]]
-(the legacy schema still loads and auto-migrates)
+(the legacy schema was removed in this release)

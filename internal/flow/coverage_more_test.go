@@ -171,37 +171,6 @@ func TestSmallHelpers(t *testing.T) {
 	}
 }
 
-// TestValidateNotifyVia: via routes resolve against the notify scope and the
-// connector's verb contract.
-func TestValidateNotifyVia(t *testing.T) {
-	base := `
-connectors:
-  svc: { use: fake }
-notify:
-  via:
-    - ROUTE
-`
-	load := func(route string) error {
-		cfg := loadConfig(t, strings.Replace(base, "ROUTE", route, 1))
-		return Validate(cfg, buildRegistry(t, cfg))
-	}
-	if err := load(`{ uses: svc.post, options: { text: "{{.message}}" }, on: [escalate] }`); err != nil {
-		t.Fatalf("valid route rejected: %v", err)
-	}
-	cases := []struct{ route, wantErr string }{
-		{`{ uses: bad }`, "must be <connector>.<verb>"},
-		{`{ uses: ghost.post }`, `unknown connector "ghost"`},
-		{`{ uses: svc.zap }`, `no verb "zap"`},
-		{`{ uses: svc.post, options: { text: t }, on: [nope] }`, `unknown event "nope"`},
-		{`{ uses: svc.post, options: { text: "{{.no_such}}" } }`, "no_such"},
-	}
-	for _, c := range cases {
-		if err := load(c.route); err == nil || !strings.Contains(err.Error(), c.wantErr) {
-			t.Errorf("route %s: err = %v, want %q", c.route, err, c.wantErr)
-		}
-	}
-}
-
 // TestGrouperRealClock: the default clock debounces and fires (Now/AfterFunc
 // on the real clock), and Wait drains.
 func TestGrouperRealClock(t *testing.T) {

@@ -82,6 +82,12 @@ const (
 type Spec struct {
 	// Name is the implementation name (connector type / runtime name).
 	Name string
+	// InProcess, when set, is a builtin implementing the contract in-process
+	// (plugin-contract.md §1.10): it is served over an in-memory pipe through
+	// the same JSON-RPC transport as a spawned plugin, so nothing about it
+	// takes a private path. There is no binary, so BinPath, Sha256 and the
+	// manifest do not apply.
+	InProcess sdk.Handler
 	// Kind is what it provides, derived from the block that referenced it.
 	Kind Kind
 	// Provides is the registered name — the same as Name.
@@ -101,11 +107,25 @@ type Spec struct {
 	// instance, not as process arguments shared by all of them. Retained for
 	// internal callers and tests that drive a reference plugin's modes.
 	Args []string
-	// Local marks a development binary the operator pointed at directly. There
-	// is no sha to pin (it changes on every build); safe-permissions still applies.
+	// Local marks a development binary the operator pointed at directly. Its
+	// BinPath/Sha256 name a content-addressed SNAPSHOT of it (SpecFromRef),
+	// not the mutable source path — safe-permissions still applies to that
+	// snapshot, and Sha256 is now populated (the snapshot's own hash) so
+	// verify() pins against it like any other binary.
 	Local bool
+	// SnapshotErr is set when SpecFromRef could not snapshot a LOCAL
+	// reference (no writable state dir, an unreadable source). A caller that
+	// only inspects the Spec (`plugin list`) still gets one back; Start
+	// refuses with this error before ever attempting to verify/exec the
+	// (unsnapshotted, therefore unpinned) source path.
+	SnapshotErr error
 	// Sha256 is the verified sha recorded at install, checked before every exec.
 	Sha256 string
+	// ReleaseVerified: Sha256 was verified against the release's published
+	// checksums at install (Installed.ReleaseVerified). With the sha check
+	// before every exec, it means the binary that runs is the one the
+	// release published.
+	ReleaseVerified bool
 	// Manifest is the permission manifest recorded at install.
 	Manifest Manifest
 	// Network is the referencing connector's declared egress.
@@ -122,6 +142,55 @@ type Spec struct {
 	TrustFull bool
 	// AllowSecrets optionally tightens which secret refs may cross the boundary.
 	AllowSecrets []string
+	// AllowEnv are the daemon environment variables the operator granted
+	// (allow_env); only those the plugin also declares are passed.
+	AllowEnv []string
+	// SharedProcess opts a connector plugin OUT of the default one-process-
+	// per-configured-instance isolation (config.ConnectorRef.SharedProcess,
+	// unioned across every instance of this plugin in config.PluginRefs): every
+	// configured instance of it shares the ONE subprocess a Manager starts for
+	// this Spec, the same as every plugin did before per-instance isolation
+	// existed. Not read for a runtime or engine Spec: neither has more than
+	// one "instance" sharing a Manager key to begin with (see
+	// docs/wiki/Plugins.md "Multi-instance isolation").
+	SharedProcess bool
+	// Instance is set ONLY on a per-instance Spec a Manager derives for one
+	// configured connector instance (Manager.InstanceClient) — it carries no
+	// install-state or wire meaning of its own; it exists purely so a log line
+	// or an error naming this Spec can say WHICH instance's own process it is
+	// talking about ("plugin widget instance primary: …") instead of just the
+	// shared type name both instances share. "" everywhere else: the type-
+	// level probe Spec, an engine/runtime Spec, and a SharedProcess
+	// connector's one shared Spec.
+	Instance string
+	// Instances carries each configured connector instance's OWN grant
+	// (config.PluginRef.Instances, carried through unchanged by
+	// SpecFromRef) — Manager.InstanceClient consults it to confine a
+	// per-instance process to exactly that one instance's own Network/
+	// AllowSecrets/AllowEnv/Isolation, never a sibling's. Only meaningful on
+	// a TYPE-level connector Spec that is NOT SharedProcess (the shape
+	// Manager.NewManager/InstanceClient builds per-instance Specs from); nil
+	// everywhere else.
+	Instances map[string]config.ConnectorGrant
+	// Probe marks the type-level `plugin.describe` probe Spec (Manager.
+	// ProbeDescribe/StartAndDescribe at boot, cmd/conductor's hot-reload
+	// re-describe) — a pure self-description that calls no verb and reads no
+	// instance connection, so docs/wiki/Plugins.md "Multi-instance isolation"
+	// says it gets the MINIMUM of everything: no secrets, no env, and — the
+	// finding-2 fix — no egress either, confined to NOTHING rather than
+	// falling back to the plugin's full declared manifest.
+	//
+	// Network/AllowSecrets/AllowEnv are already nil/empty on this Spec (see
+	// SpecFromRef), but EffectiveManifest's "empty Network means no
+	// narrowing, so the plugin's own declared egress stands" reading of that
+	// is correct for a REAL connector instance that simply didn't set
+	// `network:` — it conflates with a probe Spec's empty Network for an
+	// entirely different reason (no instance to narrow FOR) unless the two
+	// are told apart explicitly. Probe is that explicit signal: EffectiveManifest
+	// and confineToManifest (spawn.go) both honor it instead of inferring
+	// "no egress configured" from an overloaded empty slice. Never set on a
+	// per-instance Spec (InstanceSpec always clears it).
+	Probe bool
 }
 
 // Ref is the `plugin@version` attribution string carried on audit records and
@@ -148,6 +217,18 @@ func (s Spec) Key() string {
 
 // Installed reports whether a binary is available to run.
 func (s Spec) Installed() bool { return s.BinPath != "" }
+
+// Identity names this Spec for a log line: the plugin name, plus the
+// configured instance it is this process's own (Spec.Instance) when it has
+// one — so a per-instance process's logs ("subprocess started", a crash-loop
+// warning) are attributable to the instance that owns it, not just the type
+// every sibling instance also shares.
+func (s Spec) Identity() string {
+	if s.Instance == "" {
+		return s.Name
+	}
+	return s.Name + " instance " + s.Instance
+}
 
 // NotInstalledError is the error a not-yet-fetched plugin produces — a
 // direction, not a stack trace.

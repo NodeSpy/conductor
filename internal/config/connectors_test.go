@@ -55,33 +55,60 @@ triggers:
 	}
 }
 
-func TestLoadLegacyOnlyStillLoads(t *testing.T) {
-	path := writeTestConfig(t, `
-integrations:
-  - type: github
-    name: acme
-x-steps:
-  fixer: &fixer
-    type: agent
-    name: fixer
-`)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+// TestLoadRejectsEachLegacyBlock proves every top-level key removed with the
+// legacy config schema (plugin-contract.md decision Q4, §3 rows V3/G17/G18)
+// fails to load with the one uniform migration message, naming the key.
+func TestLoadRejectsEachLegacyBlock(t *testing.T) {
+	cases := []struct {
+		key  string
+		body string
+	}{
+		{"integrations", "integrations:\n  - type: github\n    name: acme\n"},
+		{"notify", "notify: { push: true }\n"},
+		{"handoff", "handoff: { web: { base_url: https://a.test } }\n"},
+		{"handoffs", "handoffs: { x: { web: { base_url: https://a.test } } }\n"},
+		{"controllers", "controllers: { pae: { type: paseo } }\n"},
+		{"control", "control: { shadow: true }\n"},
+		{"paseo_bin", "paseo_bin: /usr/local/bin/paseo\n"},
 	}
-	if cfg.HasConnectors() {
-		t.Fatal("a legacy-only config should report HasConnectors() = false")
+	for _, c := range cases {
+		t.Run(c.key, func(t *testing.T) {
+			path := writeTestConfig(t, c.body)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("%s: should have failed to load", c.key)
+			}
+			want := "`" + c.key + ":` was removed with the legacy config schema"
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s: error = %q, want substring %q", c.key, err.Error(), want)
+			}
+			if !strings.Contains(err.Error(), "conductor config migrate") {
+				t.Fatalf("%s: error should point at `conductor config migrate`, got %q", c.key, err.Error())
+			}
+		})
+	}
+}
+
+// TestLoadRejectsFirstLegacyBlockDeterministically proves that when several
+// removed keys are present at once, checkLegacyBlocks reports the same one
+// every time (its fixed check order), not whichever map iteration happened
+// to land first.
+func TestLoadRejectsFirstLegacyBlockDeterministically(t *testing.T) {
+	path := writeTestConfig(t, "integrations: []\nnotify: {}\ncontrollers: {}\n")
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "`integrations:`") {
+		t.Fatalf("want the integrations: error first, got %v", err)
 	}
 }
 
 func TestLoadNeitherIntegrationsNorConnectorsErrors(t *testing.T) {
-	path := writeTestConfig(t, "control: {}\n")
+	path := writeTestConfig(t, "x-steps:\n  fixer: &fixer { type: agent, name: fixer }\n")
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("a config with neither integrations nor connectors should fail to load")
+		t.Fatal("a config with no connectors should fail to load")
 	}
-	if !strings.Contains(err.Error(), "no integrations or connectors") {
-		t.Fatalf("error = %q, want substring %q", err.Error(), "no integrations or connectors")
+	if !strings.Contains(err.Error(), "no connectors configured") {
+		t.Fatalf("error = %q, want substring %q", err.Error(), "no connectors configured")
 	}
 }
 
@@ -155,26 +182,17 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			wantErr: `runtime "r1": unknown host "nope"`,
 		},
 		{
-			name: "more than one default across runtimes and controllers combined",
+			name: "more than one default across runtimes",
 			build: func() *Config {
 				return &Config{
 					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
-					Runtimes:      map[string]RuntimeConfig{"r1": {Use: "paseo", Default: true}},
-					Controllers:   map[string]ControllerConfig{"c1": {Type: "paseo", Default: true}},
+					Runtimes: map[string]RuntimeConfig{
+						"r1": {Use: "paseo", Default: true},
+						"r2": {Use: "paseo", Default: true},
+					},
 				}
 			},
 			wantErr: "at most one runtime may set `default: true`",
-		},
-		{
-			name: "same name in runtimes and controllers",
-			build: func() *Config {
-				return &Config{
-					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
-					Runtimes:      map[string]RuntimeConfig{"dup": {Use: "paseo"}},
-					Controllers:   map[string]ControllerConfig{"dup": {Type: "paseo"}},
-				}
-			},
-			wantErr: `"dup" is defined under both runtimes: and controllers:`,
 		},
 		{
 			name: "host missing address",
@@ -426,6 +444,224 @@ func TestValidateConnectorsStructural(t *testing.T) {
 			},
 			wantErr: "parallel branches cannot be combined with another step form",
 		},
+		{
+			name: "detach combined with background",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Background: true},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with background:",
+		},
+		{
+			name: "detach combined with handoff",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Handoff: "slack"},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with handoff:",
+		},
+		{
+			name: "detach combined with output_schema",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, OutputSchema: map[string]any{"x": "string"}},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with output_schema:",
+		},
+		{
+			name: "detach combined with watch",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Watch: &WatchSpec{Steps: []Step{{Uses: "gh.verb"}}}},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with watch:",
+		},
+		{
+			name: "detach combined with idle_timeout",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, IdleTimeout: Duration(time.Minute)},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with idle_timeout:",
+		},
+		{
+			name: "detach combined with archive_when_done",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, ArchiveWhenDone: true},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with archive_when_done:",
+		},
+		{
+			name: "detach combined with session",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Session: &SessionSpec{Key: "x"}},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with session:",
+		},
+		{
+			name: "detach combined with skill",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Skill: &SkillPolicy{Verbs: []string{"gh.comment"}}},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with skill:",
+		},
+		{
+			name: "detach combined with team",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Prompt: "p", Detach: true, Team: &TeamSpec{}},
+					}, nil)},
+				}
+			},
+			wantErr: "applies to agent steps only",
+		},
+		{
+			name: "detach combined with gate",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Gate: &GateSpec{Run: []string{"x"}}},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with gate:",
+		},
+		{
+			name: "images: on a non-paseo named runtime",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Runtimes:      map[string]RuntimeConfig{"gem": {Use: "acp", Agent: "gemini"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Runtime: "gem", Images: []string{"/tmp/x.png"}},
+					}, nil)},
+				}
+			},
+			wantErr: "need the builtin paseo runtime",
+		},
+		{
+			name: "detach on a non-paseo named runtime",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Runtimes:      map[string]RuntimeConfig{"gem": {Use: "acp", Agent: "gemini"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Runtime: "gem", Detach: true},
+					}, nil)},
+				}
+			},
+			wantErr: "need the builtin paseo runtime",
+		},
+		{
+			name: "detach combined with isolation",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Isolation: &IsolationConfig{}},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with isolation:",
+		},
+		{
+			name: "detach combined with env",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Env: map[string]string{"A": "b"}},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with env:",
+		},
+		{
+			name: "detach combined with checkout",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Detach: true, Checkout: "none"},
+					}, nil)},
+				}
+			},
+			wantErr: "cannot be combined with checkout:",
+		},
+		{
+			name: "detach on a verb step",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Uses: "gh.verb", Detach: true},
+					}, nil)},
+				}
+			},
+			wantErr: "applies to agent steps only",
+		},
+		{
+			name: "repo on a verb step",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Uses: "gh.verb", Repo: "a/b"},
+					}, nil)},
+				}
+			},
+			wantErr: "applies to agent steps only",
+		},
+		{
+			name: "branch without detach",
+			build: func() *Config {
+				return &Config{
+					ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+					Triggers: []TriggerSpec{validTrigger([]Step{
+						{ID: "s1", Type: "agent", Agent: "a", Branch: "x"},
+					}, nil)},
+				}
+			},
+			wantErr: "needs `detach: true`",
+		},
 	}
 
 	for _, tc := range cases {
@@ -439,6 +675,21 @@ func TestValidateConnectorsStructural(t *testing.T) {
 				t.Fatalf("error = %q, want substring %q", err.Error(), tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestDetachStepValid confirms a `detach: true` step with none of the
+// conflicting fields set, and `images:` on the implicit builtin paseo
+// runtime, both validate clean.
+func TestDetachStepValid(t *testing.T) {
+	cfg := &Config{
+		ConnectorsMap: map[string]ConnectorRef{"gh": {Use: "github"}},
+		Triggers: []TriggerSpec{{On: "gh.event", Steps: []Step{
+			{ID: "s1", Type: "agent", Agent: "a", Detach: true, Repo: "acme/w", Branch: "handover/x", Images: []string{"/tmp/x.png"}},
+		}}},
+	}
+	if err := cfg.validateConnectors(); err != nil {
+		t.Fatalf("expected a valid detach step to validate clean, got: %v", err)
 	}
 }
 
@@ -759,20 +1010,11 @@ func TestAgentHostReferenceUnknown(t *testing.T) {
 	}
 }
 
-func TestAgentLegacyControllerReferenceStillPasses(t *testing.T) {
-	c := connBaseCfg()
-	c.Controllers = map[string]ControllerConfig{"pae": {Type: "paseo"}}
-	setTestStep(c, "fixer", Step{Runtime: "pae"})
-	if err := c.Validate(); err != nil {
-		t.Fatalf("an agent referencing a legacy controllers: entry should still pass, got %v", err)
-	}
-}
-
 // TestConfigAgentCapPrecedence proves the effective concurrency accessors
-// prefer the global policy.concurrency values and fall back to the legacy
-// control fields.
+// prefer the global policy.concurrency values and fall back to the built-in
+// defaults.
 func TestConfigAgentCapPrecedence(t *testing.T) {
-	// Nothing set: the legacy default (3) applies.
+	// Nothing set: the built-in default (3) applies.
 	c := &Config{}
 	if got := c.AgentCap(); got != 3 {
 		t.Fatalf("default AgentCap = %d, want 3", got)
@@ -781,17 +1023,7 @@ func TestConfigAgentCapPrecedence(t *testing.T) {
 		t.Fatalf("default AgentsPerHour = %d, want 0 (unlimited)", got)
 	}
 
-	// Only legacy set: it applies.
-	c.Control.MaxConcurrentAgents = intPtr(5)
-	c.Control.MaxAgentsPerHour = 7
-	if got := c.AgentCap(); got != 5 {
-		t.Fatalf("legacy AgentCap = %d, want 5", got)
-	}
-	if got := c.AgentsPerHour(); got != 7 {
-		t.Fatalf("legacy AgentsPerHour = %d, want 7", got)
-	}
-
-	// policy.concurrency set: it wins over legacy.
+	// policy.concurrency set: it wins over the default.
 	c.Policy = &Policy{Concurrency: &Concurrency{MaxAgents: intPtr(2), MaxAgentsPerHour: intPtr(9)}}
 	if got := c.AgentCap(); got != 2 {
 		t.Fatalf("policy AgentCap = %d, want 2", got)
@@ -800,10 +1032,25 @@ func TestConfigAgentCapPrecedence(t *testing.T) {
 		t.Fatalf("policy AgentsPerHour = %d, want 9", got)
 	}
 
-	// A policy block without concurrency still falls back to legacy.
+	// A policy block without concurrency falls back to the built-in default.
 	c.Policy = &Policy{}
-	if got := c.AgentCap(); got != 5 {
-		t.Fatalf("fallback AgentCap = %d, want 5", got)
+	if got := c.AgentCap(); got != 3 {
+		t.Fatalf("fallback AgentCap = %d, want 3", got)
+	}
+}
+
+// TestConfigGlobalPauseLabel proves the top-level policy.pause_label is
+// readable without a trigger-scoped cascade (the universal gate's fleet-wide
+// default — see (*Engine).Run's early pause-label check).
+func TestConfigGlobalPauseLabel(t *testing.T) {
+	c := &Config{}
+	if got := c.GlobalPauseLabel(); got != "" {
+		t.Fatalf("default GlobalPauseLabel = %q, want empty", got)
+	}
+	label := "conductor:off"
+	c.Policy = &Policy{PauseLabel: &label}
+	if got := c.GlobalPauseLabel(); got != label {
+		t.Fatalf("GlobalPauseLabel = %q, want %q", got, label)
 	}
 }
 
@@ -839,5 +1086,55 @@ func TestMergePolicySameKeyThreeScopes(t *testing.T) {
 	out = MergePolicy(global, nil, nil)
 	if *out.PauseLabel != "global:hold" || *out.Concurrency.MaxAgents != 8 {
 		t.Fatalf("global applies when nothing overrides, got %+v", out)
+	}
+}
+
+// A runtime's transport and session model are closed sets: a typo is a load
+// error, not a runtime that silently falls back to its default transport.
+func TestRuntimeTransportAndSessionModelAreChecked(t *testing.T) {
+	for _, tc := range []struct{ field, want string }{
+		{"transport: carrier-pigeon", "transport must be acp|native|cli"},
+		{"session_model: forever", "session_model must be native|resumable|oneshot"},
+	} {
+		doc := `
+connectors:
+  timer: { use: cron, schedules: { tick: { every: 1h } } }
+runtimes:
+  bad: { use: acp, agent: gemini, ` + tc.field + ` }
+triggers:
+  - on: timer.tick
+    steps: [{ id: t, type: command, command: ["true"] }]
+`
+		if _, err := loadDoc(t, doc); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: want %q, got %v", tc.field, tc.want, err)
+		}
+	}
+}
+
+// `retry:` is a host-owned connection key any connector may carry: the
+// dispatch retry policy is the first one (by connector name), else defaults.
+func TestDispatchRetryFromAConnector(t *testing.T) {
+	cfg, err := loadDoc(t, `
+connectors:
+  zz: { use: command, retry: { max: 7, backoff: 1s } }
+  aa: { use: command, retry: { max: 2, backoff: 5s } }
+  mm: { use: command }
+triggers:
+  - on: manual
+    name: go
+    steps: [{ id: t, uses: aa.run, options: { command: "true" } }]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := cfg.DispatchRetry(); r.Max != 2 || r.Backoff.D().Seconds() != 5 {
+		t.Fatalf("retry = %+v, want the first connector's (aa)", r)
+	}
+	none, err := loadDoc(t, "connectors:\n  mm: { use: command }\ntriggers:\n  - on: manual\n    name: go\n    steps: [{ id: t, uses: mm.run, options: { command: \"true\" } }]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := none.DispatchRetry(); r.Max != 0 || r.Attempts() != 3 {
+		t.Fatalf("no retry: block must give the defaults, got %+v", r)
 	}
 }

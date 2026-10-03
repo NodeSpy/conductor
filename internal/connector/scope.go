@@ -69,42 +69,31 @@ func (d *TypeDecl) ScopeDims() []string {
 	return out
 }
 
-// ScopeContexter is the adapter hook a connector implements to map a dispatch
-// to the value it is IMPLICITLY allowed to name in one dimension: github → the
-// repo the trigger fired for, slack → the channel the event came from. Empty
-// means the dispatch carries no such value — and with nothing allow-listed,
-// that is a refusal (deny-by-default; the design chose this over
-// allow-with-warning, so a fixed-channel post from a non-slack trigger has to
-// say which channel).
-type ScopeContexter interface {
-	ContextScope(dim string, t core.Trigger) string
-}
-
 // ContextScope resolves the implicitly-allowed value for one dimension on this
 // connector instance, in precedence order:
 //
-//  1. the implementation's own hook (the event's channel, …);
-//  2. Target.Repo for the repo dimension — the dispatch's own target, which
-//     core.Trigger models for every connector;
+//  1. the event's declared target scope (target.scope: the repo a forge
+//     event fired for, the channel a chat event came from) — only for a
+//     target the platform assigned;
+//  2. Target.Repo for the repo dimension, for an event that declares no
+//     target scope at all (the same assigned-target rule);
 //  3. the operator's configured default for an option in that dimension
-//     (`connectors.slack.options.channel`) — the operator wrote it with their
+//     (`connectors.chat.options.channel`) — the operator wrote it with their
 //     own credential, so a call that lands there names nothing new.
 //
-// "" means the dimension has no implicit value for this dispatch.
+// "" means the dimension has no implicit value for this dispatch — and with
+// nothing allow-listed, that is a refusal (deny-by-default, so a
+// fixed-channel post from a non-chat trigger has to say which channel).
 func (in *Instance) ContextScope(dim string, t core.Trigger) string {
 	if in == nil || dim == "" {
 		return ""
 	}
-	if sc, ok := in.Impl.(ScopeContexter); ok {
-		if v := sc.ContextScope(dim, t); v != "" {
-			return v
-		}
+	if v := t.TargetScope(dim); v != "" {
+		return v
 	}
-	// The dispatch's own repo — UNLESS the target was derived from untrusted
-	// request data (a webhook whose `repo:` templates from the POST body).
 	// "Act on your own PR" is only a safe default while the platform decides
 	// which PR is yours; when the sender decides, there is no own.
-	if dim == DimRepo && t.Target.Repo != "" && t.TargetTrusted {
+	if dim == DimRepo && !t.DeclaresTargetScope() && t.Target.Repo != "" && t.TargetTrusted {
 		return t.Target.Repo
 	}
 	return in.defaultScope(dim)

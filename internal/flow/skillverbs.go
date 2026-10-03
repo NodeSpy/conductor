@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/memory"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // The skill verb surface (#36 §12): conductor's own verbs served to a
@@ -47,11 +49,14 @@ type SkillIdentity struct {
 	// render facts. See core.Trigger.TargetTrusted.
 	TargetTrusted bool
 	// Context is the ORIGINATING trigger's context, captured at dispatch. It
-	// is what a connector's ContextScope hook reads to answer "which channel
-	// did this dispatch come from" — without it a slack-triggered agent could
+	// is what the declared target scope reads to answer "which channel
+	// did this dispatch come from" — without it a chat-triggered agent could
 	// not reply in its own channel without an explicit grant. Daemon-side
 	// only; it never crosses back to the agent.
 	Context map[string]any
+	// Sem is the originating trigger's declared semantics (daemon-side, like
+	// Context): its target scope answers ContextScope.
+	Sem *sdk.EventSemantics
 }
 
 // OwnRepo is the repo this grant's dispatch may treat as its own — the same
@@ -291,7 +296,7 @@ func validateSkillProfiles(cfg *config.Config, reg *connector.Registry) error {
 			}
 		}
 		// A per-verb resource constraint must name an option the verb
-		// actually declares as a resource (Field.Scope). `slack.post:
+		// actually declares as a resource (Field.Scope). `chat.post:
 		// {chanel: [...]}` or `{text: [...]}` would otherwise sit in the
 		// config looking like a restriction while constraining nothing —
 		// the typo class this catches at load rather than at 3am.
@@ -317,7 +322,7 @@ func validateSkillProfiles(cfg *config.Config, reg *connector.Registry) error {
 // Scope by at least one verb the pattern admits.
 //
 // "At least one" rather than "all", because a pattern is allowed to be
-// broader than the constraint: `github.*: {repo: [...]}` scopes every github
+// broader than the constraint: `forge.*: {repo: [...]}` scopes every forge
 // verb that takes a repo and leaves the gist verbs (which take none) alone.
 // What it refuses is a key NO admitted verb treats as a resource — a typo, or
 // a content option the author thought was one.
@@ -356,7 +361,7 @@ func validateVerbScopes(where string, sk *config.SkillPolicy, reg *connector.Reg
 			if !ok || in.Decl == nil {
 				continue
 			}
-			vd, ok := in.Decl.Verb(verb)
+			vd, ok := in.Decl.FlowVerb(verb)
 			if !ok {
 				continue
 			}
@@ -410,7 +415,7 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 	}
 	universe := skillVerbUniverse(reg)
 	var warns []string
-	warns = append(warns, untrustedTargetWarnings(cfg)...)
+	warns = append(warns, untrustedTargetWarnings(cfg, reg)...)
 	// A `verbs:` scope key no connector declares grants nothing — a
 	// typo'd `repos:` reads like a grant and denies everything. It is a
 	// WARNING, not a load error, for the same reason validateVerbScopes lets
@@ -435,7 +440,7 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 		for _, connName := range reg.Names() {
 			if in, ok := reg.Get(connName); ok {
 				for _, vn := range in.Decl.VerbNames() {
-					if vd, ok := in.Decl.Verb(vn); ok {
+					if vd, ok := in.Decl.FlowVerb(vn); ok {
 						for _, so := range vd.ScopedOptions() {
 							known[so.Name] = true
 						}
@@ -486,9 +491,11 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 	return warns
 }
 
-// untrustedTargetWarnings surfaces a webhook source whose `repo:` is
-// TEMPLATED — rendered from the POST body, the only data that source has, so
-// whoever sends the request chooses the repo the dispatch claims to be for.
+// untrustedTargetWarnings surfaces a configured trigger whose event's
+// declared target is NOT assigned — statically `false`, or a fact the
+// plugin computes per occurrence (so it MAY be false): generically, for any
+// connector (plugin-contract.md §3.7 A6), not hard-coded to webhook's
+// `repo:` templating.
 //
 // The scope layer already refuses to trust such a target (it gets no implicit
 // own-repo and no target-derived render facts), which is the fix. The warning
@@ -496,36 +503,64 @@ func SkillWarnings(cfg *config.Config, reg *connector.Registry) []string {
 // operator who scopes these dispatches will find their agent cannot reach
 // "its own" repo, and the reason is not visible in the scoping config. Better
 // to say it at load than to let them discover it as a refusal.
-func untrustedTargetWarnings(cfg *config.Config) []string {
+//
+// Only an event that DECLARES a target semantic at all participates: an
+// event with none (conductor's own lifecycle events, kv, workflow, …) has no
+// target trust to warn about in the first place.
+func untrustedTargetWarnings(cfg *config.Config, reg *connector.Registry) []string {
 	var warns []string
-	for _, ref := range cfg.Integrations {
-		if ref.Type != "webhook" || !ref.IsEnabled() {
+	if reg == nil {
+		return warns
+	}
+	for i, spec := range cfg.Triggers {
+		if spec.Manual() || spec.Abstract {
 			continue
 		}
-		var conn struct {
-			Sources []struct {
-				Name string `yaml:"name"`
-				Repo string `yaml:"repo"`
-			} `yaml:"sources"`
-		}
-		if err := ref.Decode(&conn); err != nil {
+		in, ok := reg.Get(spec.Connector())
+		if !ok || in.Decl == nil {
 			continue
 		}
-		for _, src := range conn.Sources {
-			if !strings.Contains(src.Repo, "{{") {
-				continue
+		ev, ok := in.Decl.Event(spec.Event())
+		if !ok || ev.Semantics == nil || ev.Semantics.Target == nil {
+			continue
+		}
+		assigned := ev.Semantics.Target.Assigned
+		if staticallyAssigned(assigned) {
+			continue
+		}
+		how := "has no `target.assigned` declaration"
+		if len(assigned) > 0 {
+			var b bool
+			var name string
+			switch {
+			case json.Unmarshal(assigned, &b) == nil:
+				how = "declares `target.assigned: false`"
+			case json.Unmarshal(assigned, &name) == nil && name != "":
+				how = fmt.Sprintf("declares `target.assigned` as the fact %q, which may be false", name)
 			}
-			warns = append(warns, fmt.Sprintf(
-				"webhook %q source %q: `repo:` is templated from the request body, so the SENDER "+
-					"chooses the target repo. Such a dispatch gets NO implicit own-repo trust: an "+
-					"agent-authored step or skill grant must name the repos it may touch in "+
-					"policy.agent_authored.verbs.<verb>.repo, and a `{{ }}` allowlist entry built "+
-					"from .repo/.owner/.name/.number renders empty for it",
-				ref.Name, src.Name))
 		}
+		warns = append(warns, fmt.Sprintf(
+			"triggers[%d] (on: %s): connector %q event %q %s, so the SENDER (or an occurrence where the "+
+				"fact is false) may choose the target rather than the platform. Such a dispatch gets NO "+
+				"implicit own-repo trust: an agent-authored step or skill grant must name the repos it may "+
+				"touch in policy.agent_authored.verbs.<verb>.repo, and a `{{ }}` allowlist entry built from "+
+				".repo/.owner/.name/.number renders empty for it",
+			i, spec.On, spec.Connector(), spec.Event(), how))
 	}
 	sort.Strings(warns)
 	return warns
+}
+
+// staticallyAssigned reports whether a declared target.assigned is the
+// literal JSON `true` — the only form the engine (and this warning) can
+// prove ahead of any occurrence. Absent, `false`, or a fact name (computed
+// per occurrence, so it MAY be false) are all "not provably assigned".
+func staticallyAssigned(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var b bool
+	return json.Unmarshal(raw, &b) == nil && b
 }
 
 // skillVerbUniverse is every conn.verb class the skill surface could serve
@@ -557,6 +592,7 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 		Source: "skill", Instance: "skill", Kind: id.Trigger,
 		Target:        core.Target{Repo: id.Repo, Number: id.Number, PR: id.Number},
 		Context:       id.Context,
+		Sem:           id.Sem,
 		TargetTrusted: id.TargetTrusted,
 	}
 	// EVERY call on this surface is agent-facing, and the dispatch it belongs
@@ -619,7 +655,7 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	// names. The plan surface has always checked that (checkVerbResources),
 	// so a `skill.verbs: [gh.submit_review]` grant intended for the PR under
 	// review could be turned on any repo the connector could reach simply by
-	// passing a different `repo:` option — and a `slack.post` grant on any
+	// passing a different `repo:` option — and a `chat.post` grant on any
 	// channel the token reached. Same function, same allowlists, walked from
 	// the same connector-declared Scope tags, so the two surfaces cannot
 	// drift: the dispatch's own target/channel is implicitly allowed, the
@@ -653,10 +689,26 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 		r.auditSkillVerb(t, id.Agent, uses, merged, "stubbed", nil)
 		return stubOutputs(in, verb), nil
 	}
-	out, err := in.InvokeFinal(ctx, verb, merged)
+	// A skill verb is an agent's own live tool call: rate_limited/not_ready
+	// (§1.11) are retried transparently like any other invoke, so a
+	// transient answer never reaches the agent as a failure. target_gone and
+	// invalid are not translated into a run-level stop here — the call runs
+	// inside the agent's own turn, outside the step/hook control flow that
+	// fires stop hooks — so they surface to the agent as an ordinary tool
+	// error (never retried) for it to act on; the error is still tagged
+	// (stopAsTargetGone) so a future caller that DOES want to end the turn
+	// can tell target_gone apart from any other failure via errors.As.
+	out, err := connector.RetryContract(ctx, func() (map[string]any, error) {
+		return in.InvokeFinal(ctx, verb, merged)
+	})
 	if err != nil {
+		err = stopAsTargetGone(err, t.DeclaredKey())
 		r.auditSkillVerb(t, id.Agent, uses, merged, "failed", err)
-		return nil, fmt.Errorf("skill verb %s: %s", uses, r.redactErr(err))
+		// redactedErr keeps the returned TEXT redacted (this crosses to the
+		// agent) while Unwrap keeps err reachable, so errors.As still finds
+		// the *connector.ContractError underneath — redacting the message
+		// must not cost the type.
+		return nil, &redactedErr{msg: fmt.Sprintf("skill verb %s: %s", uses, r.redactErr(err)), err: err}
 	}
 	r.auditSkillVerb(t, id.Agent, uses, merged, "ok", nil)
 	// Outputs cross back into the agent's context: redact like every other

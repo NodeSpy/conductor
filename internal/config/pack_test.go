@@ -784,7 +784,8 @@ func TestBareNameResolutionIsUnchangedForConnectorsAndRuntimes(t *testing.T) {
 		wantOrigin UseOrigin
 		wantComp   string
 	}{
-		{UseKindConnector, "github", OriginBuiltin, ""},
+		{UseKindConnector, "webhook", OriginBuiltin, ""},
+		{UseKindConnector, "github", OriginOfficial, "connectors/github"},
 		{UseKindRuntime, "paseo", OriginBuiltin, ""},
 		{UseKindConnector, "linear", OriginOfficial, "connectors/linear"},
 		{UseKindRuntime, "aider", OriginOfficial, "runtimes/aider"},

@@ -7,7 +7,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
-	"github.com/NodeSpy/conductor/internal/expr"
+	"github.com/NodeSpy/conductor/pkg/expr"
 )
 
 // HELPER STEPS — the forms conductor executes itself: no dispatch identity,

@@ -164,6 +164,30 @@ What follows from that:
 - Every install and update is **logged with the sha it moved from**, so a
   surprise change is visible rather than silent.
 
+### Local builds are snapshotted
+
+A `use: ./bin/conductor-widget` reference is not installed — it is whatever
+the operator built, verified for safe permissions rather than pinned to a
+release sha. It still goes through install-state's spirit, not its letter:
+the moment it is RESOLVED (boot, a reload, `conductor plugin add`/`show`),
+conductor hashes it once and copies it into a private, content-addressed
+snapshot:
+
+```
+~/.local/state/conductor/plugins/local/
+  <sha256>/widget      # 0500 — read+execute only, no write, for anyone
+```
+
+(the `local/` directory itself is `0700`). Every process that resolution
+spawns — the type probe, a per-instance probe, the live subprocess, a
+crash-respawn — runs from that one immutable snapshot, never the mutable
+source path again, and verify-before-execute pins against the snapshot's own
+sha exactly as it would a release's. Rebuilding the source has no effect on
+anything already running: the new build is picked up only the NEXT time the
+reference is resolved (a reload or a restart), never mid-life. A snapshot
+nothing currently resolved still needs is garbage-collected on the daemon's
+next boot.
+
 ### Trust
 
 The official repo (`github.com/NodeSpy/conductor-plugins`) is in the **default**
@@ -284,6 +308,83 @@ connectors:
 A `network:` entry that is not covered by the plugin's declaration is a **load
 error**, not a silent grant.
 
+### Multi-instance isolation
+
+Configure the same plugin more than once —
+
+```yaml
+connectors:
+  gh:       { use: github, app_id: "${GH_APP_ID}" }
+  ghlisten: { use: github, app_id: "${GH_APP_ID_2}" }
+```
+
+— and by default each configured instance gets its **own subprocess**: its
+own OS-level sandbox (when `isolation:` is set), its own scrubbed/granted
+environment, and its own staging directory. `gh` and `ghlisten` above are two
+separate `github` plugin processes, not one process serving both. That means:
+
+- a crash, a hang, or a crash-loop in one instance's process never touches a
+  sibling instance — `gh` going down does not take `ghlisten` with it;
+- `host.state`, `host.auth` and `host.log` are naturally scoped to the
+  process that calls them, on top of the existing per-call instance check —
+  one instance's process cannot even ADDRESS a sibling's state or managed
+  token, let alone read it;
+- each instance's process is confined to exactly THAT instance's own
+  `network:`/`allow_secrets:`/`allow_env:`/`isolation:` — never a sibling
+  instance's, and never the union of every instance's (`gh`'s process never
+  sees `ghlisten`'s `allow_env` secret, or its narrower/wider `network:`). The
+  unioned view only ever applies to a `shared_process: true` plugin's one
+  process (which by definition must be permitted whatever any of its
+  instances needs) and to the type-level `plugin.describe` probe below, which
+  gets the opposite: the MINIMUM (none of it) — a pure self-description needs
+  neither network, secrets, nor env;
+- a hot reload (a moved plugin binary) swaps every configured instance's
+  process, one at a time;
+- the daemon log's `subprocess started (pid N)` lines, one per configured
+  instance, show two instances of one plugin are visibly two processes.
+  (`conductor connectors ls` does NOT show this: it builds its own,
+  throwaway, short-lived stack to describe each connector for display, so
+  any pid it could show would be that one-off process's, not the running
+  daemon's — it prints no pid at all, rather than one that looks live but
+  isn't.)
+
+The one process-level resource conductor shares regardless: the type-level
+`plugin.describe` probe (no instance) that runs once at load/install, to
+learn what the BINARY declares — a throwaway process, closed the moment it
+answers, since nothing instance-specific lives in it.
+
+**This costs memory and file descriptors**: N configured instances of one
+plugin is N processes. An operator running many instances of the same plugin
+who wants the old, pre-isolation behavior back — one process for all of
+them — opts out explicitly, on any instance:
+
+```yaml
+connectors:
+  gh:       { use: github, app_id: "${GH_APP_ID}", shared_process: true }
+  ghlisten: { use: github, app_id: "${GH_APP_ID_2}" }   # shares gh's process too
+```
+
+`shared_process: true` on ANY instance of a plugin shares the WHOLE plugin's
+process — it is a property of the binary conductor spawns, not of one
+`connectors:` entry — so set it once, on any instance, and every instance of
+that plugin shares it. With it set, isolation between instances is back to
+scoping by call only (credentials, `host.state`/`host.auth`/`host.log`'s
+per-instance checks), exactly as every plugin behaved before this existed.
+
+An **in-process builtin** (cron, rss, webhook, rest, graphql, the exposure
+connectors) is unaffected either way: it is trusted code served over an
+in-memory pipe, not a subprocess, so there is nothing to isolate by spawning
+more of it — every instance of a builtin type keeps sharing the one
+in-process client it always has.
+
+A **runtime** or **engine** plugin has no "several configured instances of
+one plugin" shape to isolate in the first place: a `runtimes:` entry already
+gets its own process (it is keyed by the `runtimes:` map name, not shared
+with another entry that happens to reference the same binary), and a
+code-step engine's one process is deliberately shared by every step that
+names it — a step is not a connector instance with its own credentials or
+sandbox to separate.
+
 ### What that enforces, exactly
 
 Stated plainly, because a security claim you cannot check is worse than none:
@@ -317,7 +418,7 @@ Stated plainly, because a security claim you cannot check is worse than none:
 |---|---|
 | **Download integrity** | The fetched binary is verified against the release's published `checksums.txt`, and the verified sha is recorded. Verify-before-execute re-checks it from a safe path (no group/world-writable binary or ancestor dir) before every spawn — a runtime plugin re-verifies on *every* launch via the `plugin-exec` wrapper. |
 | **Source trust** | `plugin_trust` gates where remote plugins come from. The official repo is allowed by default; anything else needs an entry. |
-| **Least-privilege credentials** | A connector plugin only ever receives creds for instances of **its own** implementation, delivered per-call over the RPC transport — never in argv or env. The child inherits a minimal env allowlist, never the daemon's credential-bearing environment. `allow_secrets:` narrows further. |
+| **Least-privilege credentials** | A connector plugin only ever receives creds for instances of **its own** implementation, delivered per-call over the RPC transport — never in argv or env. The child inherits a minimal env allowlist, never the daemon's credential-bearing environment. `allow_secrets:` narrows further. A plugin whose platform CLI reads a token from the environment declares the variable (`capabilities.env`); it is passed only if the connector also grants it (`allow_env: [GH_TOKEN]`, within the declaration). |
 | **Audit attribution** | Every credential hand-off is audited as `plugin_credential` with `plugin@version` and the secret **ref name — never the value**. |
 | **Transport redaction** | Plugin stdout/stderr is scrubbed through the secret redactor. **Best-effort**: it matches known secret *values*; a plugin that transforms a credential before printing can evade it. |
 | **Untrusted output** | Every response is size-bounded (a plugin cannot OOM the daemon). Responses for verbs declaring an `Outputs` schema are validated against it. A connector plugin cannot forge its identity. |
@@ -362,12 +463,56 @@ transport the ACP runtime uses. stdout is the transport; logging goes to stderr.
 
 - `plugin.describe → Decl` — `{protocol_version, kind, type, desc, connection,
   verbs[], events[], capabilities}`. Maps 1:1 to a connector `TypeDecl`.
+- `plugin.describe {instance, config} → Decl` (optional) — the SAME method,
+  called once per CONFIGURED instance with that instance's own connection
+  config, for a plugin whose verbs/events depend on it (rest/graphql's
+  user-declared verbs; webhook's one concrete event per configured source).
+  A plugin that does not implement this answers method-not-found, and its
+  type-level `Decl` stands for every instance. The returned `Decl` must be a
+  *refinement* of the type-level one: a verb present in both must keep
+  identical semantics, a brand-new verb may carry none at all, and
+  connection-level semantics/capabilities must match exactly — only events
+  are free to vary. See docs/design/plugin-contract.md §1.4 for the exact
+  rule; the host refuses an instance whose declaration does not refine.
 - `plugin.invoke {instance, verb, options, connection} → {outputs}` — the
   `connection` map carries **only the calling instance's** resolved credentials.
 - `plugin.start_source` — a source plugin emitting webhook/poll events.
 
+A verb declaring `exposes` (it makes a local address reachable from outside —
+a tunnel or a relay) **must also declare `host_only: true`**, the same rule a
+`mints_credential` verb follows: the host refuses a declaration that doesn't.
+Without it, a flow step or an agent could invoke the verb directly with an
+arbitrary local address and tunnel any local service to the public internet.
+The bundled `lan`/`tunnel` exposure builtins already declare `host_only`.
+
 See `test/plugins/acme-echo/` for a reference connector plugin, and
 `github.com/NodeSpy/conductor-plugins` for production ones.
+
+**Source extension (connector `abi: 1`).** A source plugin that reports
+`abi: 1` becomes a full event source rather than a payload forwarder — the
+surface the github connector needs to run out of process with the builtin's
+behavior ([design](https://github.com/NodeSpy/conductor/blob/main/docs/design/plugin-source-abi.md)):
+
+- `plugin.start_source` also carries the instance's **triggers** — id, name,
+  event, options, and the `filter:` in structural form (`pkg/sourcekit.Filter`)
+  — and the plugin evaluates them itself (its own match keys, identity gates);
+- each `plugin.event` may name the **trigger** it fired for (that trigger alone
+  fires, and the daemon does not re-evaluate its filter), mark itself
+  **catch-up** (sweep-recovered), name its **instance**, and **claim** its
+  target is the platform's;
+- `plugin.nudge` (run the catch-up sweep now — SIGUSR1, `conductor sweep
+  --now`), `plugin.force` (`conductor force`), `plugin.app_token` (re-mint on
+  resume), `plugin.target_head` (run facts);
+- event declarations may carry `facts` / `match_keys` — the unified `filter:`
+  surface, validated at load exactly as a bundled connector's is;
+- `sweep` is a **conductor-defined verb**: declared by an `abi: 1` plugin, the
+  daemon answers it itself (daemon-wide nudge) and never forwards it.
+
+There are no tiers: every plugin speaks the same contract, an optional method
+it does not implement answers method-not-found, and what the engine does with
+an event comes from the semantics the plugin DECLARES for it — never its name
+(docs/design/plugin-contract.md). Trust is decided once, at install
+(`plugin_trust:`); after that every plugin is equal.
 
 **Runtime plugin:** an ACP-speaking subprocess. conductor verifies it, then
 drives it through the existing ACP controller — session create/resume, streamed
@@ -409,9 +554,10 @@ New surface negotiates through a separate `Decl.abi` field instead:
 {"protocol_version": 1, "kind": "engine", "abi": 1, "type": "wasmtime"}
 ```
 
-`abi` is **absent/zero on every existing plugin**, and the daemon reads it *only
-for `kind: engine`*. A connector or runtime that sets it is describing something
-nobody asks about. That is the whole negotiation, and it is deliberately boring:
+`abi` is **absent/zero on every existing plugin**, and the daemon reads it per
+kind: for `kind: engine` it selects the `plugin.run` / `host.*` shape; for a
+connector, `abi: 1` opts into the source extension above. A runtime that sets
+it is describing something nobody asks about. That is the whole negotiation, and it is deliberately boring:
 a new field whose zero value means "the old thing" cannot break an old plugin,
 because an old plugin never emits it and the daemon never requires it.
 
@@ -437,9 +583,14 @@ on the same stdio.
   another run is refused before any policy is consulted. It is the plugin wire's
   spelling of `CONDUCTOR_CTX_TOKEN` (the `cli` engine's socket), with the same
   rules: do not log it, do not persist it.
-- **A connector plugin gets nothing from this.** It is never given a
-  `plugin.run`, so it holds no token, so every `host.*` call it could make is
-  refused.
+- **A connector plugin gets nothing RUN-SCOPED from this.** It is never given
+  a `plugin.run`, so it holds no `run_id`, so every `host.kv`/`host.sql`/
+  `host.memory` call it could make is refused. It DOES get two
+  INSTANCE-scoped callbacks with no `run_id` at all: `host.state` (durable
+  key/value storage for a source to remember across restarts) and `host.auth`
+  (a polled source's live managed-OAuth2 token — see [[Authoring-Connectors]]
+  § Sources). Both are scoped to "an instance this plugin was actually
+  handed," checked the same way a `run_id` is, just without one.
 - **The method is the kind.** A `host.kv` request whose body claims `sql` is
   refused rather than reconciled.
 - **Refusals are in-band.** `{"ok":false,"refused":true,"error":"…"}` means
@@ -510,8 +661,10 @@ denial paths.
 
 ## Migrating from `plugins:`
 
-`conductor config migrate` folds the old shape into the new, and the daemon runs
-it automatically at boot — a deployed box crosses this change without an edit.
+The legacy schema is gone from this release, and so is `conductor config
+migrate`. Run `conductor config migrate` on the previous release to fold the
+old shape into the new, then upgrade (design doc §5). The table records what
+that migration did:
 
 | Old | New |
 |---|---|
@@ -527,16 +680,23 @@ Retired fields are dropped **with a note naming what replaced them**:
 
 - `sha256` — the verified sha now lives in local install state, recorded when
   `conductor init` fetches the binary. Nothing to pin by hand.
-- `allow_unverified` — a local `use: ./path` binary is verified on safe
-  permissions rather than a pin (it changes on every build); a fetched one
-  always carries its release sha.
+- `allow_unverified` — a local `use: ./path` binary is snapshotted by content
+  hash the moment it is resolved (boot, reload, `plugin add`/`show`) into a
+  private, content-addressed copy, and THAT sha is what every verify-before-
+  execute check pins against from then on — the same guarantee a fetched
+  release's sha gives, just re-established on every resolution instead of
+  once at install. A rebuild is picked up only on the NEXT resolution (a
+  reload or restart), never mid-life, which is what closes the gap an
+  unpinned raw path left open: every separate verify-then-exec of it (the
+  type probe, a per-instance probe, the live spawn, a crash-respawn) could
+  otherwise each see different bytes if a rebuild landed in between.
 - `allow_unsandboxed` — running without OS isolation is now the *default*.
 - `hold` — pin an exact version instead (`use: <ref>@v1.2.3`).
 - `args` — a plugin is configured over the RPC transport per instance, not by
   process arguments shared across all of them.
 
-A `plugins:` entry nothing referenced still migrates, into an entry named after
-the plugin, so nothing is silently lost.
+A `plugins:` entry nothing referenced was migrated too, into an entry named
+after the plugin, so nothing was silently lost.
 
 ## Not yet implemented
 
@@ -545,11 +705,9 @@ Documented follow-ups, not silent gaps:
 - **Cryptographic signing** (cosign/Sigstore, build attestations). Checksum
   verification *is* implemented; signature verification is the next layer.
 - **Discovery/search** — a central index of available plugins.
-- **Multi-instance isolation**: one plugin serving several instances shares a
-  process; creds are scoped per-call, but shared-process inter-instance
-  hardening is a follow-up.
-- **External-overrides-bundled**: a plugin may not replace a bundled
-  implementation (builtin beats official by design); opt-in override is a
-  follow-up.
+- **External-overrides-bundled**: a plugin may not replace a bundled connector
+  type (the vendor-neutral builtins: cron, rss, webhook, rest, graphql, lan,
+  tunnel, and the data/flow connectors). Registering one is refused. Vendor
+  connectors are not bundled at all — `use: github` resolves to the plugin.
 - **Runtime plugin supervision depth**: re-verified per spawn and env-scrubbed,
   but still on ACP's supervision rather than `internal/plugin`'s.

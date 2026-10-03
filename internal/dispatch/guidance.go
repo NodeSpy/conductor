@@ -1,0 +1,61 @@
+package dispatch
+
+// BotReplyGuidance is appended to an agent prompt when the triggering
+// comment/review was authored by a bot and the resolved reply_to_bots policy
+// is decline_only (the default): a bot cannot read pleasantries, so the only
+// reply worth posting is a concrete decline.
+const BotReplyGuidance = "\n\n---\n" +
+	"The comment you are responding to was posted by an automated bot, not a person. " +
+	"Do not thank it, acknowledge it, or add pleasantries. Apply any valid fix directly. " +
+	"Post a reply comment ONLY to state a concrete reason for not applying a suggestion, " +
+	"and keep it terse."
+
+// HoldMarker is a legacy fallback: a file an agent may create in its working
+// directory to signal it still needs the user. The reaper still honors the marker
+// if present, for contexts where asking an interactive question isn't possible.
+const HoldMarker = ".paseo-hold"
+
+// NOTE: autonomous agents (top-level fixers AND non-background workflow steps) are
+// deliberately NOT told to ask — they make the best decision and finish. A schema
+// step like `assess` that pauses to ask fails to produce its structured output.
+// Only the interactive hand-off (a background step) is told to ask; see
+// HandoffGuidance. (There used to be a "HoldGuidance" that nudged archive-when-done
+// agents to ask "only if they need me"; it caused exactly that assess failure and
+// is retired.)
+
+// HandoffGuidance is appended to every background (hand-off) step. A hand-off
+// exists to bring a decision to the user, so it must ALWAYS finish by asking rather
+// than going idle. Ending idle shows up in paseo as merely "ready" and is easy to
+// miss; asking surfaces as "needs your input" (and pauses the agent, keeping its
+// workspace alive).
+const HandoffGuidance = "\n\n---\n" +
+	"HAND-OFF — this run is for ME to decide on. You do the work, then bring it to me " +
+	"as a decision; I'll drive you interactively in paseo. When you finish the work " +
+	"(e.g. you've drafted the review), do NOT stop or \"wait\" with your result written " +
+	"as plain text — that shows up only as \"ready\" and I may miss it. You MUST conclude " +
+	"by ASKING me with your interactive multiple-choice question tool (AskUserQuestion): " +
+	"briefly summarize what you produced and offer clear next-step choices (for a review, " +
+	"e.g. post as-is / revise / discard), then WAIT for my answer. Do this every time you " +
+	"need me — including after each revision — so I'm always alerted. Never end your turn " +
+	"idle while you still need a decision from me. " +
+	"When we are COMPLETELY finished and you have nothing more for me — the work is posted " +
+	"or discarded, or there's nothing left to decide — call the `step.done` tool to " +
+	"release this hand-off so its workspace is reclaimed. Do that promptly once done; " +
+	"don't leave the hand-off open waiting on nothing."
+
+// DoneGuidance is appended to every NON-hand-off agent step that carries NO
+// output_schema: the agent's final action is `conductor call step.done`, the
+// ONE uniform completion signal conductor hears and acts on. Schema steps are
+// EXCLUDED here because their done instruction is the verb schema directive
+// (step.done --output — output and done as one act; see
+// dispatch.verbSchemaDirective). That exclusion is load-bearing: a bare done
+// line alongside a "reply with only JSON" directive is the instruction
+// conflict that broke every pr-review-team reviewer on v0.50.0 (the
+// HoldGuidance failure mode) — never inject BOTH onto one step. The step
+// boundary archive remains the backstop for an agent that dies silently.
+const DoneGuidance = "\n\n---\n" +
+	"WHEN FINISHED: after you have completed your task, run " +
+	"`conductor call step.done` (optionally with --reason \"<one-line summary>\") " +
+	"as your very last action, so conductor knows you are done and can reclaim " +
+	"this workspace. Fire-and-forget: do not wait on it or ask about it, and if " +
+	"the command is unavailable or fails, just finish normally."

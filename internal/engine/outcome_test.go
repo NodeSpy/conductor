@@ -20,7 +20,7 @@ func closedTrigger(repo string, n int, merged bool, reverts []any) core.Trigger 
 	}
 	// A github `_closed`: a signature-verified payload assigned this target,
 	// which is what makes its outcome signals actionable at all (round-13).
-	return core.Trigger{Source: "github", Instance: "i", Kind: core.KindClosed,
+	return core.Trigger{Source: "github", Instance: "i", Kind: "_closed",
 		TargetTrusted: true,
 		Target:        core.Target{Repo: repo, PR: n, Number: n}, Context: ctx}
 }

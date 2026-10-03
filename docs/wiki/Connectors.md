@@ -36,14 +36,16 @@ order — **first match wins** (full rules in [[Plugins]]):
 
 | `use:` value | resolves to |
 |---|---|
-| `use: github` | a **built-in** — compiled into the daemon (see [Built-in connector types](#built-in-connector-types)) |
+| `use: cron` | a **built-in** — compiled into the daemon (see [Built-in connector types](#built-in-connector-types)) |
+| `use: github` | not built-in → the **official plugin** `connectors/github` |
 | `use: sonarr` | not built-in → the **official plugin repo** `NodeSpy/conductor-plugins`, at `connectors/sonarr` |
 | `use: acme/plugins/jira` | an explicit **GitHub** repo (`github.com` implied) |
 | `use: git.corp.example/team/p//jira` | an explicit **non-GitHub** host (`//` separates the repo from the component) |
 | `use: ./bin/conductor-jira` | a **local** binary, for developing one |
 
-**Built-in beats official** — `use: github` is always the in-binary connector,
-never the plugin repo. A plugin stays current by default; pin an exact build
+**Built-in beats official** — `use: cron` is always the in-binary connector,
+never the plugin repo. Built-ins are vendor-neutral; every vendor connector
+(GitHub, Slack, Discord, …) is a plugin. A plugin stays current by default; pin an exact build
 with `use: sonarr@v1.2.3` (or a range, `@^1.2`). Built-ins and local binaries
 have no version to pin. See [[Plugins]] for versioning, the trust/allowlist
 model, and the `conductor plugin` commands.
@@ -63,6 +65,22 @@ block), under
 You don't clone the repo: name one in `connectors:` and run `conductor init`,
 and conductor downloads it, verifies the checksum, and runs it as a sandboxed
 subprocess. For GitHub App setup specifically, see [GitHub App setup](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/connectors/github.md#setup).
+
+### github is a plugin
+
+The github connector is the official plugin (`conductor-plugins`
+`connectors/github`); `use: github` names it. The daemon fetches and verifies
+it at boot before any connector starts, and a connector whose plugin is not
+installed yet runs disabled with the reason while the daemon retries — nothing
+else is held up.
+
+Like every installed plugin, its events carry the semantics its declaration
+gives them (a `new_comment` dedupes on its comment cursor, a `_closed` ends
+the PR's runs, …) and its targets are taken as the platform assigned them:
+trust in a plugin is decided once, at install (`plugin_trust:`), and after
+that all plugins are equal. `api_base:` is how the plugin reaches GitHub
+Enterprise Server or a test double — a plugin's environment is scrubbed, so
+it reads no API base from the environment.
 
 ## The contract
 
@@ -104,19 +122,15 @@ for that verb.
 
 These ship **compiled into the daemon** — no download, always available by name.
 (The [plugin catalog](#the-plugin-catalog) adds ~69 more as sandboxed
-subprocesses; several — `github`, `sentry`, `pagerduty`, `ntfy`, `pushover`,
-`notifiarr` — exist as both, and the built-in wins the name.)
+subprocesses — every vendor connector is one: `github`, `slack`, `discord`,
+`ntfy`, `pushover`, `notifiarr`, and the tunnel services `cloudflared`,
+`ngrok`, `localxpose`, `sshtunnel`, `tailscale` and `smee`.)
 
 | type | events | verbs | notes |
 |---|---|---|---|
-| `github` | `merge_conflict`, `pr_behind`, `failing_checks`, `changes_requested`, `new_comment`, `review_requested`, `self_review`, `merge_ready`, `issue_matched`, `release`, `deployment_status`, `dependabot_alert`, `secret_scanning_alert`, `stuck_checks` | `comment`, `reply`, `request_review`, `rerequest_review`, `remove_reviewer`, `submit_review`, `add_labels`, `react`, `set_status`, `sweep`, `pr_diff`, `pr_get`, `pr_files`, `review_comments`, `file`, `create_pr`, `merge_pr`, `update_pr`, `create_issue`, `update_issue`, `assign`, `remove_label`, `get_issue`, `put_file`, `delete_file`, `get_ref`, `create_branch`, `dispatch_workflow`, `rerun_run`, `cancel_run`, `list_runs`, `checks`, `create_release`, `upload_asset`, `list_issues`, `search_issues`, `ready_for_review`, `convert_to_draft`, `create_gist`, `get_gist`, `update_gist`, `delete_gist`, `list_gists` | creds: app → token → gh ([setup](https://github.com/NodeSpy/conductor-plugins/blob/main/docs/connectors/github.md#setup)) |
-| `slack` | `app_mention`, `reaction_added`, `slash_command` | `post`, `react`, `ask` | Socket Mode in, Web API out |
-| `discord` | — | `post`, `ask` | bot token; gateway captures ask replies |
 | `web` | — | `ask` | approve/revise/discard page on the inbound listener; [[Hand-offs]] tunnels |
 | `cron` | one per declared schedule | — | `schedules:` on the connection |
 | `webhook` | one per declared source | `post` (generic outbound HTTP) | `sources:` with signing/match/title/dedup |
-| `sentry` | `alert` | — | filter keys: projects/levels/environments |
-| `pagerduty` | `incident` | — | filter keys: event_types/services/urgencies/priorities |
 | `rss` | one per declared feed | — | per-trigger `match:` regex filter |
 | `command` | — | `run` | commands local or over SSH via `host:`/`ssh:`; outputs `stdout`/`stderr`/`exit_code` |
 | `rest` | user-declared polled `events:` | user-declared `verbs:` | any HTTP API from config: `base_url` + shared `auth:` (incl. oauth2 w/ refresh rotation) — see [[Configuration]] |
@@ -125,10 +139,14 @@ subprocesses; several — `github`, `sentry`, `pagerduty`, `ntfy`, `pushover`,
 | `sql` | — | `query`, `exec` | parameterized SQL over the `stores:` section's SQL types (postgres/mysql/sqlite, pure-Go drivers); `store:` required, values bind through `args:` to driver placeholders — see [[Configuration]] |
 | `memory` | — | `remember`, `recall`, `forget`, `list` | shared agent memory over the `memory:` section; always available, load-checked against it — see [[Memory]] |
 | `workflow` | — | `list`, `run`, `save` | the workflow catalog, run-by-name / inline plans (guarded by `policy.agent_authored`), and agent promotion — see [[Workflows]] |
-| `ntfy` | — | `publish` | ntfy.sh or self-hosted; `server:` (default https://ntfy.sh) + default `topic:` |
-| `pushover` | — | `notify` | Pushover message API: `token:` + `user:` |
-| `notifiarr` | — | `notify` | Notifiarr passthrough to a Discord channel: `api_key:` (+ default `channel_id:`) |
 | `conductor` | `dispatch`, `escalate`, `needs_input`, `complete`, `failed`, `updated`, `update_available` | `update`, `pause`, `resume`, `restart`, `reload`, `run` | conductor itself — lifecycle events as a source (alerting is an ordinary trigger; loop-guarded), daemon operations as verbs; always available, name reserved — see [[Notifications]] |
+
+`webhook`'s `dedup:` is replay protection, not a default suppression: a
+source with no `dedup:` template fires on **every** delivery, full stop — no
+hash of the body is checked behind your back. A sender that legitimately
+re-POSTs an identical payload (a heartbeat/status webhook) is never silently
+dropped. Declare `dedup:` (a template over `{{.body...}}`) only when a
+retried/re-delivered body should collapse to one event.
 
 Every `vaults:` entry also surfaces under its own name with `read` (all
 types) and `write` (writable types) verbs — values read there are tainted

@@ -6,9 +6,10 @@ a load error naming it). `conductor validate` checks everything below —
 including every template reference against the scope at its position — before
 the daemon runs. The full annotated example ships as `config.example.yaml`.
 
-The LEGACY schema (`integrations:`/`notify:`/`handoffs:`/`controllers:`/
-`control:`/`paseo_bin`) still loads and runs unchanged, and auto-migrates on
-boot — see [[Migration]] and `config.example.legacy.yaml`.
+The LEGACY schema (`integrations:`/`notify:`/`handoff:`/`handoffs:`/
+`controllers:`/`control:`/`paseo_bin`) was removed in this release — see
+[[Migration]]. `conductor validate` names any of those blocks still present
+in a config.
 
 ## Top level
 
@@ -143,8 +144,10 @@ filter: "!is_draft && !( (head_branch == 'staging' || head_branch == 'prod') && 
 Prefer `startswith(title, 'Release ')` to the substring `title:` match key when
 you mean a prefix.
 
-**Migrating from `filters:`.** `conductor config migrate` rewrites a legacy
-config; by hand, the mapping is `repos`→`repo`, `exclude_repos`→`not_repo`,
+**Migrating from `filters:`.** `conductor config migrate` on the release
+before the plugin contract rewrites a legacy config (the command itself was
+removed with the legacy schema — see [[Migration]]); by hand, the mapping is
+`repos`→`repo`, `exclude_repos`→`not_repo`,
 `exclude: {branches, labels, title}`→`not_branch`/`not_label_any`/`not_title`,
 `gates: {not_draft: true}`→`not_draft: true`, `labels_any`→`label_any`,
 `labels_all`→`label_all`, `authors`→`author`, `from_users`→`comment_author`,
@@ -625,8 +628,8 @@ before anything runs. The full model: [[Workflows]]; the guardrails:
 ## Conductor itself (`conductor.*`) — events and verbs
 
 Conductor is a built-in connector (always available; the name is reserved).
-Its lifecycle events are a source — alerting is an ordinary trigger, and the
-retired `notify:` block auto-migrates onto it (see [[Notifications]] for the
+Its lifecycle events are a source — alerting is an ordinary trigger, the
+replacement for the retired `notify:` block (see [[Notifications]] for the
 event list, context, and examples):
 
 ```yaml
@@ -719,10 +722,9 @@ once. Validation runs over the merged config, so cross-file
 A workflow can also be pulled in per step, without a section import — see
 `workflow:`/`import:` in [[Workflows]].
 
-The legacy TOP-level `imports:` (whole-document deep merge: maps merge
-recursively, lists concatenate, the importing file's keys win) is unchanged,
-and auto-migration still walks it, transforming each legacy file with its own
-backup.
+The top-level `imports:` (whole-document deep merge: maps merge
+recursively, lists concatenate, the importing file's keys win) works the same
+way on a connectors-model config.
 
 ## Validation and fleet safety
 

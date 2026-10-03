@@ -6,12 +6,14 @@
 # filter's failure mode is silence.
 connectors:
   gh:
-    use: github
+    use: /usr/local/bin/conductor-github
+    api_base: http://mock-github:8080
     token: e2e-dummy-token
     repos: ["func/badfilter"]
 
   slack:
-    use: slack
+    use: /usr/local/bin/conductor-slack
+    api_base: http://sink-catcher:8080/slackapi
     bot_token: xoxb-e2e-dummy
 
 triggers:

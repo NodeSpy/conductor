@@ -17,7 +17,7 @@ import (
 // records an ENGAGEMENT (who acted, under which workflow, at what cost).
 // Terminal signals close the loop:
 //
-//   - the github connector's `_closed` signal — merged vs closed-unmerged,
+//   - a forge connector's closes_target event — merged vs closed-unmerged,
 //     plus the revert back-references a merged revert PR carries — consumes
 //     the target's engagements and writes one `outcome` audit row per
 //     engagement (merged / closed / reverted);
@@ -43,7 +43,7 @@ func (e *Engine) observeOutcomeSignals(ctx context.Context, t core.Trigger) {
 	// OUTCOME SIGNALS COME FROM THE PLATFORM OR THEY DO NOT COUNT.
 	//
 	// `_closed` with merged/reverts, and `failing_checks`, are facts the
-	// github integration reads off a signature-verified payload. A trigger
+	// forge connector reads off a signature-verified payload. A trigger
 	// whose TARGET the sender chose is a trigger whose Context they wrote
 	// too: it could mark another PR merged, consume its engagements, and —
 	// worse — assert `reverts_corroborated`, which is the one bit that turns
@@ -56,10 +56,10 @@ func (e *Engine) observeOutcomeSignals(ctx context.Context, t core.Trigger) {
 	if !t.TargetTrusted {
 		return
 	}
-	switch t.Kind {
-	case core.KindClosed:
+	switch {
+	case t.ClosesTarget():
 		e.observeClosed(ctx, t)
-	case "failing_checks":
+	case t.VerificationFailed():
 		// Once per head (per push), not once per check event: a fail-fast matrix
 		// emits one failing_checks per cancelled sibling — dozens for one failed
 		// push — and this loop runs before any dedup gate. Record ci_failed on the
@@ -100,14 +100,10 @@ func ciFailedEngagements(gs []store.Engagement, since time.Time) []store.Engagem
 	return out
 }
 
-// observeClosed handles the terminal `_closed` signal: the PR's own outcome,
-// and any same-repo PRs a merged revert PR reverts.
+// observeClosed handles a terminal signal (an event declaring closes_target):
+// the target's own outcome, and any sibling targets it reverts.
 func (e *Engine) observeClosed(ctx context.Context, t core.Trigger) {
-	merged, _ := t.Context["merged"].(bool)
-	outcome := "closed"
-	if merged {
-		outcome = "merged"
-	}
+	outcome := storedOutcome(t.CloseOutcome())
 	for _, g := range e.store.TakeEngagements(t.Key()) {
 		e.recordOutcome(ctx, t.Target.Repo, t.Target.Number, outcome, g)
 	}
@@ -122,20 +118,21 @@ func (e *Engine) observeClosed(ctx context.Context, t core.Trigger) {
 	// against the revert PR's own commit messages — the title/body a claim
 	// rides on are attacker-editable (#36 review M9). Absent or false →
 	// record the claim, act on nothing.
-	corroborated, _ := t.Context["reverts_corroborated"].(bool)
-	if reverts, ok := t.Context["reverts"].([]int); ok {
-		for _, n := range reverts {
-			e.recordRevert(ctx, t.Target.Repo, n, corroborated)
-		}
-	} else if revertsAny, ok := t.Context["reverts"].([]any); ok {
-		for _, v := range revertsAny {
-			if n, ok := v.(int); ok {
-				e.recordRevert(ctx, t.Target.Repo, n, corroborated)
-			} else if f, ok := v.(float64); ok {
-				e.recordRevert(ctx, t.Target.Repo, int(f), corroborated)
-			}
-		}
+	reverts, corroborated := t.Reverts()
+	for _, n := range reverts {
+		e.recordRevert(ctx, t.Target.Repo, n, corroborated)
 	}
+}
+
+// storedOutcome is the outcome store's label for a declared close outcome
+// (accepted | rejected). The stored vocabulary predates the declaration and
+// is kept as is, so existing state and reports read unchanged; an event that
+// declares no outcome closes as rejected.
+func storedOutcome(declared string) string {
+	if declared == "accepted" {
+		return "merged"
+	}
+	return "closed"
 }
 
 // recordRevert attributes a revert of repo#n. The merge that landed the

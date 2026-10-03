@@ -1,11 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/NodeSpy/conductor/internal/connector"
 )
 
 // captureStdout runs fn with os.Stdout redirected and returns what it printed.
@@ -72,12 +75,22 @@ func TestCmdConnectorsLs(t *testing.T) {
 	for _, want := range []string{
 		"box", "command", "enabled",
 		"timer", "disabled (enabled: false)",
-		"broken", "disabled: app_token",
+		"broken", `disabled: resolve "`, "is not set",
 		"verbs:  run",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("ls output missing %q:\n%s", want, out)
 		}
+	}
+
+	// finding 6: `connectors ls` builds its own throwaway, short-lived
+	// stack just to describe each connector for display — any pid it could
+	// show would be that one-off process's, never the running daemon's. It
+	// must print no "pid:" line at all rather than one that looks live but
+	// isn't (docs/wiki/Plugins.md "Multi-instance isolation" points at the
+	// daemon log's own "subprocess started (pid N)" lines instead).
+	if strings.Contains(out, "pid:") {
+		t.Errorf("ls output must never show a pid (it is this CLI invocation's own throwaway process, not the daemon's):\n%s", out)
 	}
 
 	// Wrong subcommand → usage error.
@@ -108,6 +121,113 @@ func TestCmdSchema(t *testing.T) {
 	_, err = captureStdout(t, func() error { return cmdSchema([]string{"--config", path, "nope"}) })
 	if err == nil || !strings.Contains(err.Error(), "types:") {
 		t.Errorf("unknown connector should error with the type list, got %v", err)
+	}
+}
+
+// TestCmdSchemaRestShowsDeclaredPlaceholder: `conductor schema rest` with no
+// configured instance must still show an event is possible — the
+// `<declared>` Dynamic placeholder restored on rest's type-level Describe()
+// (git show 4cade34:internal/connector/rest.go had it; Q6 dropped it when
+// real events moved to DescribeInstance).
+func TestCmdSchemaRestShowsDeclaredPlaceholder(t *testing.T) {
+	path := writeCLIConfig(t)
+	out, err := captureStdout(t, func() error { return cmdSchema([]string{"--config", path, "rest"}) })
+	if err != nil {
+		t.Fatalf("schema rest: %v", err)
+	}
+	for _, want := range []string{"event <declared in connection>", "a polled events: entry produced a new item"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("schema rest output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestCmdSchemaReportsDisabledInstance: a connector whose per-instance build
+// failed (here: slack's missing credentials) must not print a silent,
+// empty-looking schema and exit 0 — it must say WHY, the same reason
+// `connectors ls` shows, and exit non-zero so a script checking `schema`
+// against a broken instance notices instead of reading a bare shell.
+func TestCmdSchemaReportsDisabledInstance(t *testing.T) {
+	path := writeCLIConfig(t)
+	out, err := captureStdout(t, func() error { return cmdSchema([]string{"--config", path, "broken"}) })
+	if err == nil {
+		t.Fatalf("schema of a disabled instance must exit non-zero, output:\n%s", out)
+	}
+	for _, want := range []string{"disabled: resolve \"", "is not set"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("schema output missing %q:\n%s", want, out)
+		}
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("returned error missing %q: %v", want, err)
+		}
+	}
+
+	// A deliberately `enabled: false` connector is not a failure — the
+	// schema still prints and the command still succeeds.
+	out, err = captureStdout(t, func() error { return cmdSchema([]string{"--config", path, "timer"}) })
+	if err != nil {
+		t.Fatalf("schema of an authored-off connector must not error: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "disabled (enabled: false)") {
+		t.Errorf("schema output missing the authored-off state:\n%s", out)
+	}
+}
+
+// TestCmdSchemaDisabledByChoiceWinsOverABuildFailure covers an instance that
+// is BOTH `enabled: false` AND would fail to build on its own (here: a slack
+// connector with unresolvable credentials) — the registry still attempts the
+// build for a disabled instance, so DisabledReason can be set right alongside
+// Enabled=false. Disabled-by-choice must win: exit 0 (an operator's own
+// `enabled: false` is not an error), and the output must still say it's
+// disabled — ideally mentioning the underlying failure too, since otherwise
+// re-enabling it later would surprise the operator with a second problem
+// `connectors ls`/`schema` never mentioned. `ls` and `schema` must agree.
+func TestCmdSchemaDisabledByChoiceWinsOverABuildFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	doc := `
+connectors:
+  offbroken:
+    use: slack
+    enabled: false
+    app_token: env:PC_CLI_OFFBROKEN_APP
+    bot_token: env:PC_CLI_OFFBROKEN_BOT
+`
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The connector declares TWO credentials (app_token, bot_token), both
+	// unresolvable here; the registry doesn't guarantee which one's error
+	// wins the (unordered) DisabledReason, so assert on EITHER rather than a
+	// specific one — an earlier version of this test pinned "PC_CLI_
+	// OFFBROKEN_APP" specifically and flaked whenever bot_token's failure
+	// was the one that got reported instead.
+	mentionsBuildFailure := func(out string) bool {
+		return strings.Contains(out, "PC_CLI_OFFBROKEN_APP") || strings.Contains(out, "PC_CLI_OFFBROKEN_BOT")
+	}
+
+	out, err := captureStdout(t, func() error { return cmdSchema([]string{"--config", path, "offbroken"}) })
+	if err != nil {
+		t.Fatalf("disabled BY CHOICE (enabled: false) must exit 0 even though the instance also fails to build: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "disabled (enabled: false)") {
+		t.Errorf("schema output missing %q:\n%s", "disabled (enabled: false)", out)
+	}
+	if !mentionsBuildFailure(out) {
+		t.Errorf("schema output should also mention the build failure (neither OFFBROKEN_APP nor OFFBROKEN_BOT found):\n%s", out)
+	}
+
+	// `connectors ls` must show the same posture for the same instance.
+	out, err = captureStdout(t, func() error { return cmdConnectors([]string{"--config", path, "ls"}) })
+	if err != nil {
+		t.Fatalf("connectors ls: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "disabled (enabled: false)") {
+		t.Errorf("ls output missing %q:\n%s", "disabled (enabled: false)", out)
+	}
+	if !mentionsBuildFailure(out) {
+		t.Errorf("ls output should also mention the build failure (neither OFFBROKEN_APP nor OFFBROKEN_BOT found):\n%s", out)
 	}
 }
 
@@ -185,18 +305,7 @@ triggers:
 		t.Fatal(err)
 	}
 	fixture := filepath.Join(dir, "fixture.json")
-	fx := `{"event": "pull_request", "body": {
-  "action": "review_requested",
-  "installation": { "id": 0 },
-  "repository": { "full_name": "AcmeCorp/Widget", "name": "Widget",
-    "default_branch": "main", "owner": { "login": "AcmeCorp" } },
-  "pull_request": { "number": 5300, "state": "open", "draft": false,
-    "title": "auth: rework session refresh",
-    "html_url": "https://github.com/AcmeCorp/Widget/pull/5300",
-    "head": { "sha": "cafebabe1234", "ref": "feature/auth-refresh" },
-    "base": { "ref": "main" }, "user": { "login": "someone-else" } },
-  "requested_reviewer": { "login": "danielcbaldwin" }
-}}`
+	fx := reviewRequestedDelivery
 	if err := os.WriteFile(fixture, []byte(fx), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -216,5 +325,42 @@ triggers:
 		if !strings.Contains(out, want) {
 			t.Errorf("replay output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+// TestCmdConnectorsLsNeverShowsPidForARealExternalPlugin is finding 6's
+// mutation-sensitive proof: TestCmdConnectorsLs above never actually spawns
+// an external plugin process (box/timer/broken all resolve to builtins or
+// fail before ever reaching a live client), so it could not have caught a
+// regression that reintroduced the pid line. This drives a REAL external
+// plugin connector (acme-echo, built fresh) through `connectors ls` and
+// confirms no "pid:" line appears, even though a real subprocess genuinely
+// is live for the duration of this CLI invocation's own throwaway stack.
+func TestCmdConnectorsLsNeverShowsPidForARealExternalPlugin(t *testing.T) {
+	bin := buildTestPlugin(t, "acme-echo")
+	// buildFlowStack registers "acme-echo" into the process-wide connector
+	// type registry (connector.RegisterExternalType) and flowStack.Close
+	// only stops its plugin subprocesses, never unregisters the type —
+	// every other test in this package driving a real external plugin
+	// through buildFlowStack cleans this up itself (connectors_test.go,
+	// reload_inplace_test.go) for exactly this reason: a second test (or,
+	// as here, `go test -count=2` rerunning this SAME test) in the same
+	// binary would otherwise collide with "already provided by another
+	// plugin".
+	t.Cleanup(func() { connector.UnregisterExternalType("acme-echo") })
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	doc := fmt.Sprintf("connectors:\n  echo:\n    use: %s\n    token: s3cr3t\n", bin)
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := captureStdout(t, func() error { return cmdConnectors([]string{"--config", path, "ls"}) })
+	if err != nil {
+		t.Fatalf("connectors ls: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "echo") || !strings.Contains(out, "verbs:  echo") {
+		t.Fatalf("connectors ls did not describe the real acme-echo instance:\n%s", out)
+	}
+	if strings.Contains(out, "pid:") {
+		t.Fatalf("connectors ls must never show a pid, even for a genuinely live external plugin instance (it is this CLI invocation's own throwaway process, not the daemon's):\n%s", out)
 	}
 }

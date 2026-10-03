@@ -38,7 +38,29 @@ import (
 // it declared, narrowed by whatever the referencing connector declared under
 // `network:`. Empty `network:` means "no narrowing" — the plugin's own
 // declaration stands.
+//
+// A Probe Spec (the type-level `plugin.describe` probe, finding 2) gets NO
+// egress, env, or managed auth at all, regardless of what the plugin
+// declares — docs/wiki/Plugins.md says a pure self-description needs
+// "neither network, secrets, nor env". Without this, an empty Spec.Network
+// was read as "unconfigured", which for the throwaway type-level probe
+// (never a real instance, so there is nothing to narrow FOR) silently fell
+// back to the plugin's WHOLE declared egress.
+//
+// What the probe KEEPS: Commands, Spawns, and FS. None of those are egress,
+// secrets, or env — they are the plugin's declared command/filesystem
+// footprint, which commandPathDir (below) needs to build the probe's own
+// confined PATH. Dropping them too would strip a declared command off PATH
+// during the probe, breaking a type-level describe that shells out to a tool
+// the plugin itself declares.
 func (s Spec) EffectiveManifest() Manifest {
+	if s.Probe {
+		return Manifest{
+			Commands: s.Manifest.Commands,
+			Spawns:   s.Manifest.Spawns,
+			FS:       s.Manifest.FS,
+		}
+	}
 	m := s.Manifest
 	if len(s.Network) == 0 {
 		return m

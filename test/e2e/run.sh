@@ -7,6 +7,26 @@
 #   MODE=stub (default) — hermetic stubs, CI-safe, no secrets → `make e2e`
 #   MODE=live           — real agents + keys (manual)         → `make e2e-live`
 #
+#   GITHUB_PLUGIN_BIN   — every daemon's github connector is the conductor-plugins
+#                         github plugin (/usr/local/bin/conductor-github, with the
+#                         mock's `api_base:`); the image builds the pinned version
+#                         (Dockerfile GITHUB_PLUGIN_VERSION) unless this names a
+#                         locally built one to stage into the image.
+#   SMEE_PLUGIN_BIN     — same, for the conductor-plugins smee exposure plugin
+#                         (/usr/local/bin/conductor-smee; group Y's `ghsmee`
+#                         connector). Needed alongside GITHUB_PLUGIN_BIN
+#                         whenever the two must be built from the same
+#                         unpublished plugins commit (e.g. one that declares
+#                         the `listeners` connection semantic the published
+#                         pin predates).
+#   SLACK_PLUGIN_BIN    — same, for the conductor-plugins slack connector
+#                         plugin (/usr/local/bin/conductor-slack; group K's
+#                         `slack` connector). Needed when it must be built
+#                         from an unpublished plugins commit (e.g. one that
+#                         declares the `option_hooks` event semantic the
+#                         published pin predates) — group K's ack/on_done
+#                         feedback case needs it.
+#
 # Only groups whose milestones have merged are asserted; the rest are recorded as
 # SKIP with the milestone that unlocks them. Set KEEP=1 to leave the stack up.
 set -uo pipefail
@@ -87,11 +107,57 @@ post_webhook_to() {
   '
 }
 
+# post_webhook_via_smee <event> <fixture> — sign a fixture exactly like
+# post_webhook_to does, but deliver it to the mock smee channel (group Y)
+# instead of straight at a daemon's own webhook receiver: the real smee
+# plugin's relay is what gets it from there to ghlisten's listener.
+post_webhook_via_smee() {
+  local event="$1" fixture="$2"
+  cexec conductor-conn bash -c '
+    set -e
+    f="/fixtures/'"$fixture"'"
+    sig=$(openssl dgst -sha256 -hmac e2e-webhook-secret "$f" | sed "s/^.*= //")
+    curl -s -o /dev/null -w "%{http_code}" -X POST http://mock-smee:8080/e2e-gh-channel \
+      -H "X-GitHub-Event: '"$event"'" \
+      -H "X-GitHub-Delivery: $(head -c16 /dev/urandom | od -An -tx1 | tr -d " \n")" \
+      -H "X-Hub-Signature-256: sha256=$sig" \
+      -H "Content-Type: application/json" \
+      --data-binary @"$f"
+  '
+}
+
 banner() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
+
+# stage_github_plugin puts GITHUB_PLUGIN_BIN and/or SMEE_PLUGIN_BIN (locally
+# built plugins) where the image build picks them up, or clears any stale
+# staged binary so the pinned build is used instead. Group Y (the listeners
+# connection semantic against the real github+smee plugins) needs both built
+# from the same unpublished conductor-plugins commit when the published pin
+# predates the decl it exercises.
+stage_github_plugin() {
+  mkdir -p "$DIR/plugin-bin"
+  rm -f "$DIR/plugin-bin/conductor-github" "$DIR/plugin-bin/conductor-smee" "$DIR/plugin-bin/conductor-slack"
+  if [ -n "${GITHUB_PLUGIN_BIN:-}" ]; then
+    [ -x "$GITHUB_PLUGIN_BIN" ] || { echo "GITHUB_PLUGIN_BIN=$GITHUB_PLUGIN_BIN is not an executable"; exit 1; }
+    cp "$GITHUB_PLUGIN_BIN" "$DIR/plugin-bin/conductor-github"
+    echo "github plugin: $GITHUB_PLUGIN_BIN (staged into the image)"
+  fi
+  if [ -n "${SMEE_PLUGIN_BIN:-}" ]; then
+    [ -x "$SMEE_PLUGIN_BIN" ] || { echo "SMEE_PLUGIN_BIN=$SMEE_PLUGIN_BIN is not an executable"; exit 1; }
+    cp "$SMEE_PLUGIN_BIN" "$DIR/plugin-bin/conductor-smee"
+    echo "smee plugin: $SMEE_PLUGIN_BIN (staged into the image)"
+  fi
+  if [ -n "${SLACK_PLUGIN_BIN:-}" ]; then
+    [ -x "$SLACK_PLUGIN_BIN" ] || { echo "SLACK_PLUGIN_BIN=$SLACK_PLUGIN_BIN is not an executable"; exit 1; }
+    cp "$SLACK_PLUGIN_BIN" "$DIR/plugin-bin/conductor-slack"
+    echo "slack plugin: $SLACK_PLUGIN_BIN (staged into the image)"
+  fi
+}
 
 setup() {
   banner "build & up ($MODE mode, project $PROJECT)"
   dc down -v --remove-orphans >/dev/null 2>&1 || true
+  stage_github_plugin
   dc build || { echo "build failed"; exit 1; }
 
   # Throwaway RSA key for the (mock) GitHub App — generated into the gitignored
@@ -119,7 +185,7 @@ setup() {
   wait_for 60 cexec mock-github  curl -sf http://localhost:8080/_health  || fatal "mock-github not ready"
   wait_for 60 cexec sink-catcher curl -sf http://localhost:8080/_health  || fatal "sink-catcher not ready"
   wait_for 60 cexec forge git ls-remote git://localhost/acme/web.git      || fatal "forge not ready"
-  for c in conductor conductor-ctrl conductor-fail conductor-conn conductor-migrate; do
+  for c in conductor conductor-ctrl conductor-fail conductor-conn; do
     wait_for 60 cexec "$c" test -S /data/control.sock || fatal "$c daemon not ready (control socket)"
   done
   echo "stack ready"
@@ -806,9 +872,30 @@ wait_handoff_url_after() {
 # Group K — the connectors model (issue #36): new-schema config end to end.
 # ---------------------------------------------------------------------------
 
-# slack_sink_has <pattern> — a captured slack Web API call contains pattern.
+# slack_sink_has <pattern> — a captured SLACK Web API call (and only a
+# slack one: sinkcatcher's ?sink=slackapi filters by sink, server-side)
+# contains pattern. Before this it grepped the WHOLE combined /_captured
+# buffer across every sink (discord/ntfy/pushover/notifiarr too), so a name
+# promising "slack" could actually pass on another sink's captured body
+# happening to contain the same text.
 slack_sink_has() {
-  netcurl http://sink-catcher:8080/_captured | grep -q "$1"
+  netcurl "http://sink-catcher:8080/_captured?sink=slackapi" | grep -- "$1" >/dev/null
+}
+
+# slack_sink_method_has <method> <body-pattern> — a captured call to THIS
+# specific Slack Web API method (e.g. reactions.add, chat.postMessage) ALSO
+# carries body-pattern — not just "some slack call's body contains this
+# substring" (which slack_sink_has alone can't tell apart from the wrong
+# method: K10's react assertions used to pass on a body substring alone,
+# which a chat.postMessage call could in principle also satisfy). Splits
+# the captured JSON array one-object-per-line (the same convention
+# mock-github's checks already use) so method and body are checked on the
+# SAME captured call, not independently across the whole buffer.
+slack_sink_method_has() { # method body-pattern
+  local method="$1" pattern="$2"
+  local caps
+  caps="$(netcurl "http://sink-catcher:8080/_captured?sink=slackapi" | sed 's/},{"sink"/}\n{"sink"/g')"
+  printf '%s\n' "$caps" | grep -- "\"path\":\"/slackapi/$method\"" | grep -q -- "$pattern"
 }
 
 group_K_connectors() {
@@ -844,6 +931,39 @@ group_K_connectors() {
     bad "K1 no fail hook fired" K K1-nofail "K1-fail capture present"
   else
     ok "K1 at:fail hook did NOT fire on success" K K1-nofail
+  fi
+
+  # K10: option_hooks (plugin-contract.md §2.2) — fire a Socket Mode
+  # app_mention event (the sink-catcher's mock: POST /_fire_slack_event),
+  # over the slack connector's REAL Socket Mode connection (app_token set
+  # above). The trigger's own options.ack/on_done, with no explicit hooks: of
+  # its own, must reach the slack plugin's feedback verb as reactions.
+  netcurl -X POST http://sink-catcher:8080/_fire_slack_event \
+    -d '{"type":"app_mention","text":"K10 ping","user":"UACK","channel":"CACK","ts":"1700000222.000100"}' >/dev/null
+  # Each assertion below checks the METHOD PATH and the body together (on
+  # the SAME captured call), not just a body substring anywhere in the
+  # sink's buffer — a body-only check could not tell "the feedback verb
+  # called reactions.add" apart from "some OTHER slack call's body
+  # happened to contain the same text".
+  if wait_for 20 slack_sink_method_has reactions.add 'name\\":\\"eyes'; then
+    ok "K10 options.ack fired the feedback verb (react) at dispatch, no hooks: written" K K10-ack
+  else
+    bad "K10 options.ack fired the feedback verb" K K10-ack "no reactions.add(eyes) captured"
+  fi
+  if wait_for 20 slack_sink_method_has chat.postMessage "K10 mention handled: K10 ping"; then
+    ok "K10 the slack-sourced trigger's own step ran" K K10-step
+  else
+    bad "K10 the slack-sourced trigger's own step ran" K K10-step "no chat.postMessage step post captured"
+  fi
+  if wait_for 20 slack_sink_method_has reactions.add 'name\\":\\"white_check_mark'; then
+    ok "K10 options.on_done fired the feedback verb (react) after the run finished" K K10-done
+  else
+    bad "K10 options.on_done fired the feedback verb" K K10-done "no reactions.add(white_check_mark) captured"
+  fi
+  if slack_sink_method_has reactions.add 'name\\":\\"x'; then
+    bad "K10 no on_fail fired on a successful run" K K10-nofail "a reactions.add(x) was captured"
+  else
+    ok "K10 options.on_fail did NOT fire on success" K K10-nofail
   fi
 
   # K5: the remote sh step ran on selfbox via the system ssh — the container's
@@ -917,6 +1037,24 @@ group_K_connectors() {
     *gh*github*) ok "K4 conductor connectors ls lists the configured connectors" K K4-ls ;;
     *) bad "K4 connectors ls" K K4-ls "unexpected output: $(echo "$out" | head -2)" ;;
   esac
+
+  # K4-pid: multi-instance isolation (docs/wiki/Plugins.md) — gh and ghlisten
+  # are two configured instances of the SAME real github plugin binary
+  # (connectors.e2e.yaml). The DAEMON logs each per-instance process it
+  # spawns ("plugin <name> instance <inst>: subprocess started (pid N)"), so
+  # its own log is the evidence each instance runs as its own process.
+  # (`connectors ls` would show the pids of a throwaway CLI build instead.)
+  daemon_log="$(dc logs conductor-conn 2>&1)"
+  pid_for_instance() { # pid_for_instance <connector-name>: the latest spawn's pid
+    printf '%s\n' "$daemon_log" | sed -n "s/.*plugin github instance $1: subprocess started (pid \([0-9]*\)).*/\1/p" | tail -n 1
+  }
+  gh_pid="$(pid_for_instance gh)"
+  ghlisten_pid="$(pid_for_instance ghlisten)"
+  if [ -n "$gh_pid" ] && [ -n "$ghlisten_pid" ] && [ "$gh_pid" != "$ghlisten_pid" ]; then
+    ok "K4-pid gh and ghlisten (two instances of the github plugin) run as distinct daemon processes (pid $gh_pid vs $ghlisten_pid)" K K4-pid
+  else
+    bad "K4-pid gh and ghlisten run as distinct plugin processes" K K4-pid "gh pid=[$gh_pid] ghlisten pid=[$ghlisten_pid]; spawn lines: $(printf '%s\n' "$daemon_log" | grep 'subprocess started' | head -10)"
+  fi
   out="$(cexec conductor-conn conductor schema slack --config /etc/conductor/connectors.e2e.yaml 2>&1)"
   case "$out" in
     *"verb ask"*"request-response"*) ok "K4 conductor schema prints the ask verb contract" K K4-schema ;;
@@ -967,73 +1105,6 @@ group_K_connectors() {
   else
     bad "K7 ask answers reach the workflow" K K7-decisions "no K7 decision capture on the slack sink"
   fi
-}
-
-# ---------------------------------------------------------------------------
-# Group L — automatic legacy→connectors migration on boot (issue #36, hard
-# requirement): transform + backup + validate, still working afterwards; an
-# unmappable config refuses and stays legacy.
-# ---------------------------------------------------------------------------
-group_L_migration() {
-  banner "Group L — auto-migration (legacy → connectors)"
-
-  # L1: the daemon booted on a LEGACY config; its boot transformed it.
-  if cexec conductor-migrate test -f /data/config/config.yaml.pre-connectors; then
-    ok "L1 pre-migration backup written (config.yaml.pre-connectors)" L L1-backup
-  else
-    bad "L1 backup written" L L1-backup "no .pre-connectors file"
-  fi
-  if cexec conductor-migrate grep -q "^connectors:" /data/config/config.yaml \
-     && ! cexec conductor-migrate grep -q "^integrations:" /data/config/config.yaml; then
-    ok "L1 config now on the connectors schema (integrations: gone)" L L1-schema
-  else
-    bad "L1 config migrated in place" L L1-schema "config.yaml not transformed"
-  fi
-  if cexec conductor-migrate grep -q "integrations:" /data/config/config.yaml.pre-connectors; then
-    ok "L1 backup holds the original legacy config" L L1-original
-  else
-    bad "L1 backup holds the original" L L1-original "backup is not the legacy file"
-  fi
-
-  # The migrated behavior still works: the same event fires the same work.
-  code="$(post_webhook_to conductor-migrate pull_request migr_merge_conflict.json)"
-  if [ "$code" = "200" ] || [ "$code" = "202" ]; then
-    ok "L1 webhook accepted post-migration (HTTP $code)" L L1-http
-  else
-    bad "L1 webhook accepted post-migration" L L1-http "unexpected HTTP $code"
-  fi
-  if wait_for 45 forge_has_conductor_commit migr/mweb pr-1; then
-    ok "L1 migrated trigger fixed & pushed (same event → same work)" L L1-works
-  else
-    bad "L1 migrated trigger still works" L L1-works "no conductor commit on migr/mweb pr-1"
-  fi
-  # The legacy ntfy sink was mapped onto a connector + via route; the dispatch
-  # notification must reach the sink through the VERB layer post-migration.
-  if wait_for 30 slack_sink_has "migrate-e2e"; then
-    ok "L1 migrated notify sink delivers through the verb layer (ntfy via route)" L L1-notify
-  else
-    bad "L1 migrated notify via route" L L1-notify "no ntfy capture for topic migrate-e2e"
-  fi
-
-  # L2: an UNMAPPABLE legacy config refuses with a hard error naming the
-  # construct, leaves the file untouched, and never commits a partial result.
-  out="$(cexec conductor-conn bash -c '
-    cp /etc/conductor/unmappable.yaml /tmp/unmappable.yaml
-    if conductor config migrate --config /tmp/unmappable.yaml 2>&1; then
-      echo MIGRATE_EXIT_ZERO
-    fi
-    grep -c "^integrations:" /tmp/unmappable.yaml || true
-    test ! -f /tmp/unmappable.yaml.pre-connectors && echo NO_PARTIAL_BACKUP_COMMIT || true
-  ' 2>&1)"
-  case "$out" in
-    *MIGRATE_EXIT_ZERO*) bad "L2 unmappable config refused" L L2-refuse "migrate exited zero" ;;
-    *"nested steps"*) ok "L2 unmappable construct hard-errors naming it (nested steps)" L L2-refuse ;;
-    *) bad "L2 unmappable config refused" L L2-refuse "error did not name the construct: $(echo "$out" | head -2)" ;;
-  esac
-  case "$out" in
-    *NO_PARTIAL_BACKUP_COMMIT*) ok "L2 refusal left no partial backup/commit" L L2-intact ;;
-    *) bad "L2 refusal left the file alone" L L2-intact "partial state written" ;;
-  esac
 }
 
 # ---------------------------------------------------------------------------
@@ -1307,7 +1378,7 @@ cinvoke() {
 }
 
 # runs_get_has <id> <needle> — GET /runs/<id> with the scoped token contains needle.
-runs_get_has() { cexec conductor-conn curl -s "$CALL_BASE/runs/$1" -H "$CALL_AUTH" | grep -q "$2"; }
+runs_get_has() { cexec conductor-conn curl -s "$CALL_BASE/runs/$1" -H "$CALL_AUTH" | grep -- "$2" >/dev/null; }
 
 # callback_delivered — the callback POST reached the sink-catcher AND carries the
 # structured result (a status-ok body for the who=callback run).
@@ -1569,6 +1640,96 @@ group_V_engine_plugin() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# Group X — the `listeners` connection semantic (plugin-contract.md §2.4):
+# aclisten (test/plugins/acme-listener, connectors.e2e.yaml) declares a
+# webhook-shaped listener exposed through the builtin `tunnel` connector (a
+# fake script that just prints a URL — no real forwarding, which is fine: the
+# claim under test is that the ENGINE opened the exposure and threaded the
+# URL through, not that the fake tunnel relays bytes). aclisten also declares
+# `path: /acme-hook` — tun's exposes verb declares no `path` option of its
+# own, so the engine must APPEND the resolved path to the URL tun returns
+# (joinExposedPath); a bare tunnel URL with no path reaching the plugin would
+# mean the host silently dropped the listener's path instead of folding it
+# into the exposure, exactly the config-mistake class this whole feature
+# removes (no more operator-maintained `path:` kept in sync by hand).
+# ---------------------------------------------------------------------------
+group_X_listeners() {
+  banner "Group X — listeners: a source plugin's inbound exposed through the builtin tunnel"
+  func_reset_sink
+
+  # aclisten's "ready" event fired once already, at daemon boot — long before
+  # this (or any earlier) group's sink reset, so it can't be asserted here
+  # (see the comment on it in connectors.e2e.yaml). Instead: a plain HTTP
+  # POST straight at the bound listener address fires a "delivery" trigger
+  # on demand, and its context carries the SAME public_url ready did — so one
+  # capture proves both halves at once:
+  #   X1 — the public URL the tunnel returned, WITH aclisten's declared path
+  #        appended, reached the plugin's config (url_to).
+  #   X2 — the listener the engine opened the exposure FOR is the one
+  #        actually live and wired to the engine, independent of whether the
+  #        (fake, non-forwarding) tunnel relays real traffic.
+  cexec conductor-conn curl -s -X POST http://127.0.0.1:18877/ -d '{"hello":"world"}' >/dev/null
+  if wait_for 20 slack_sink_has "X-LISTENERS-DELIVERY seq=1"; then
+    ok "X2 a delivery to the listener fired a trigger" X X2
+  else
+    bad "X2 delivery to the listener dispatched" X X2 "no X-LISTENERS-DELIVERY capture"
+  fi
+  if slack_sink_has "url=https://hook.example/18877/acme-hook"; then
+    ok "X1 the engine opened tun for aclisten's listener, appended its declared path, and filled in public_url" X X1
+  else
+    bad "X1 exposure URL (with path appended) reached the plugin" X X1 "no url=https://hook.example/18877/acme-hook in the delivery capture"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Group Y — the SAME `listeners` connection semantic as group X, proven with
+# the REAL github and smee plugins (ghlisten/ghsmee, connectors.e2e.yaml)
+# instead of the reference/fake pair: a correctly HMAC-signed GitHub webhook
+# delivery posted to the mock smee service's channel is relayed over a real
+# SSE connection by the real smee plugin, replayed as an HTTP POST by that
+# same plugin, and verified + dispatched by the real github plugin's webhook
+# listener — the whole exposure chain, with no fakes anywhere in it but the
+# upstream GitHub and smee.io services themselves.
+#
+# ghsmee carries NO `path:` of its own in connectors.e2e.yaml (unlike before
+# this feature, where it had to mirror ghlisten's webhook.path by hand):
+# smee's `open` verb declares `exposes.path`, so the engine passes ghlisten's
+# own resolved webhook.path straight into ghsmee's open call every time. Y2
+# is the real proof of that — the relay only reaches ghlisten's listener at
+# all if the smee plugin replayed to the RIGHT path, which it can now only
+# know because the listener told it, not because an operator typed it twice.
+# ---------------------------------------------------------------------------
+group_Y_listeners_github_smee() {
+  banner "Group Y — listeners: the REAL github + smee plugins relayed through a mock smee channel"
+  func_reset_sink
+
+  # func/filterfire#1 (func_filter_fire.json) is an existing review_requested
+  # fixture naming conductor-user as the requested reviewer — reused here
+  # unchanged: ghlisten is a distinct connector instance from gh/the func/*
+  # groups' own connector, so its event stream is independent regardless of
+  # which repo the payload names.
+  post_webhook_via_smee pull_request func_filter_fire.json >/dev/null
+
+  if wait_for 30 slack_sink_has "Y-LISTENERS-GITHUB fired func/filterfire#1"; then
+    ok "Y2 a signed delivery relayed mock-smee -> smee plugin -> github plugin fired a trigger" Y Y2
+  else
+    bad "Y2 delivery relayed through the real smee plugin dispatched" Y Y2 "no Y-LISTENERS-GITHUB capture"
+  fi
+
+  # Y1: the engine opened ghsmee's exposure for ghlisten's webhook.listen and
+  # filled webhook.public_url with its channel URL — observable because the
+  # github plugin logs the public URL it was handed (ghsource/http.go) the
+  # moment its webhook listener starts, which is the plugin-side proof url_to
+  # actually reached it (as opposed to Y2 alone, which would also pass if the
+  # plugin fell back to some other address it guessed correctly).
+  if dc logs conductor-conn 2>&1 | grep "github\[ghlisten\]: webhook listener .* is reachable at http://mock-smee:8080/e2e-gh-channel" >/dev/null; then
+    ok "Y1 the engine opened ghsmee for ghlisten's listener and filled in webhook.public_url" Y Y1
+  else
+    bad "Y1 exposure URL reached the plugin" Y Y1 "no 'reachable at http://mock-smee:8080/e2e-gh-channel' in the github plugin's log"
+  fi
+}
+
 main() {
   trap teardown EXIT
   setup
@@ -1593,7 +1754,6 @@ main() {
   group_F_capability
   group_J_failure
   group_K_connectors
-  group_L_migration
   group_M_cost
   group_N_budget
   group_O_gate
@@ -1604,6 +1764,8 @@ main() {
   group_T_output_schema
   group_U_filter
   group_V_engine_plugin
+  group_X_listeners
+  group_Y_listeners_github_smee
   group_W_stepdone
   print_matrix
   [ "$FAIL" -eq 0 ]

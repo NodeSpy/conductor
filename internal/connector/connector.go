@@ -31,6 +31,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/vaults"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // FieldType is a schema field's type.
@@ -59,6 +60,9 @@ type Field struct {
 	// against what the dispatch may address; content options leave it empty
 	// and are never gated. See scope.go.
 	Scope string
+	// Secret, on a connection field, marks its value a credential even when
+	// written literally: it is tracked for redaction.
+	Secret bool
 }
 
 // Schema is a set of named fields (option/filter/context/output schemas).
@@ -70,6 +74,10 @@ type Schema map[string]Field
 type EventDecl struct {
 	Name string
 	Desc string
+	// Unchecked marks the stand-in for an event of an Unavailable type: its
+	// filter, options and context cannot be checked until the plugin that
+	// declares them is installed, so they are accepted as written.
+	Unchecked bool
 	// Filters are the match keys a GENERIC source's `filter:` object accepts —
 	// the keys TypeDecl.Filter evaluates against the emitted event's context
 	// (slack's channel/users, rss's match, a plugin source's own keys). A
@@ -89,6 +97,8 @@ type EventDecl struct {
 	// Dynamic marks event names that come from connection config (cron
 	// schedules, webhook sources, rss feeds) rather than a fixed set.
 	Dynamic bool
+	// Semantics are what the ENGINE does with this event (pkg/plugin).
+	Semantics *sdk.EventSemantics
 }
 
 // FilterKeys returns the match keys legal as an object key in this event's
@@ -151,6 +161,20 @@ type VerbDecl struct {
 	// flow runner stores each as a run-scoped blob and replaces the bytes
 	// with the opaque handle before the value enters the JSON scope.
 	BinaryOut []string
+	// Semantics are what the ENGINE may use this verb for (reading a
+	// target's revision, minting a credential, exposing a local address) —
+	// pkg/plugin semantics, the same for a plugin and a builtin.
+	Semantics *sdk.VerbSemantics
+}
+
+// ExposeVerb returns the verb declaring the `exposes` semantic, if any.
+func (d *TypeDecl) ExposeVerb() (VerbDecl, bool) {
+	for _, v := range d.Verbs {
+		if v.Semantics != nil && v.Semantics.Exposes != nil {
+			return v, true
+		}
+	}
+	return VerbDecl{}, false
 }
 
 // TypeDecl is a connector type's full self-description.
@@ -160,6 +184,14 @@ type TypeDecl struct {
 	Events     []EventDecl
 	Verbs      []VerbDecl
 	Connection Schema // documented connection fields, for `conductor schema`
+	// Semantics are the connection-level declarations (credentials, scope,
+	// poll, translate, listeners, preflight).
+	Semantics *sdk.ConnSemantics
+	// Unavailable, when set, says why this type cannot describe itself yet
+	// (a plugin referenced by the config but not installed): any event and
+	// verb name is accepted, unchecked, and every instance is disabled with
+	// this reason until the plugin lands.
+	Unavailable string
 
 	// Filter, when non-nil, evaluates match keys against an emitted event's
 	// context in the flow runner — the uniform path for synthetic sources
@@ -174,6 +206,9 @@ type TypeDecl struct {
 // Event looks up an event declaration by name; for Dynamic events the
 // declared entry with Dynamic=true is the template all names share.
 func (d *TypeDecl) Event(name string) (EventDecl, bool) {
+	if d.Unavailable != "" {
+		return EventDecl{Name: name, Dynamic: true, Unchecked: true}, true
+	}
 	var dyn *EventDecl
 	for i := range d.Events {
 		if d.Events[i].Name == name {
@@ -199,6 +234,23 @@ func (d *TypeDecl) Verb(name string) (VerbDecl, bool) {
 	return VerbDecl{}, false
 }
 
+// HostOnly reports whether the verb is the engine's alone (declared
+// host_only): flows, skills and agents may not call it.
+func (v VerbDecl) HostOnly() bool { return v.Semantics != nil && v.Semantics.HostOnly }
+
+// FlowVerb is Verb for the surfaces a flow, skill or agent reaches: a
+// host-only verb is not one of them.
+func (d *TypeDecl) FlowVerb(name string) (VerbDecl, bool) {
+	if d.Unavailable != "" {
+		return VerbDecl{Name: name, Open: true}, true
+	}
+	v, ok := d.Verb(name)
+	if !ok || v.HostOnly() {
+		return VerbDecl{}, false
+	}
+	return v, true
+}
+
 // EventNames lists declared event names (sorted, for errors/introspection).
 func (d *TypeDecl) EventNames() []string {
 	out := make([]string, 0, len(d.Events))
@@ -213,6 +265,9 @@ func (d *TypeDecl) EventNames() []string {
 func (d *TypeDecl) VerbNames() []string {
 	out := make([]string, 0, len(d.Verbs))
 	for _, v := range d.Verbs {
+		if v.HostOnly() {
+			continue // the engine's alone; never offered to a flow or agent
+		}
 		out = append(out, v.Name)
 	}
 	sort.Strings(out)
@@ -243,9 +298,16 @@ type Impl interface {
 	// that provides the event transport, or (nil, nil) when the connector has
 	// no source face or no triggers reference it.
 	Source(triggers []CompiledTrigger) (core.Integration, error)
-	// DeclaredEvents returns the instance's dynamic event names (cron
-	// schedule names, webhook source names, rss feed names). Static types
-	// return nil.
+	// DeclaredEvents returns the instance's dynamic event names, for a Go-
+	// native Impl that can enumerate them so trigger validation stays strict
+	// about an unknown name. Every contract connector (externalImpl — a
+	// spawned plugin or an in-process builtin: cron, rss, webhook, rest,
+	// graphql) always returns nil here regardless of what it could in
+	// principle enumerate (its own config's schedule/source/feed names): the
+	// daemon can't see into a plugin's connection config this way, and
+	// nothing wraps a builtin in anything other than externalImpl. Trigger
+	// validation treats a nil/empty return for a Dynamic event as "accept any
+	// name" (internal/flow/validate.go).
 	DeclaredEvents() []string
 }
 
@@ -315,14 +377,6 @@ func MergeOptions(defaults, call map[string]any) map[string]any {
 	return out
 }
 
-// InstanceDecler lets an Impl replace its type's static declaration with a
-// per-instance one — rest/graphql materialize their user-declared verbs and
-// events into a real TypeDecl so validation, introspection, and InvokeFinal
-// see the instance's actual contract.
-type InstanceDecler interface {
-	InstanceDecl(base *TypeDecl) *TypeDecl
-}
-
 // Builder constructs a connector type's Impl from its instance name, the raw
 // connection config, and shared runtime dependencies.
 type Builder func(name string, ref config.ConnectorRef, deps Deps) (Impl, error)
@@ -331,9 +385,9 @@ type Builder func(name string, ref config.ConnectorRef, deps Deps) (Impl, error)
 type Deps struct {
 	Secrets *secrets.Resolver
 	Log     func(string, ...any)
-	// UserToken returns the acts-as-you GitHub token (`gh auth token` or the
-	// configured write token). nil in contexts with no github wiring.
-	UserToken func() (string, error)
+	// Lookup finds another configured instance by name, at use time (set by
+	// Build). nil outside a built registry.
+	Lookup func(name string) (*Instance, bool)
 	// Config is the loaded config (identity defaults, hosts for the command
 	// connector, …).
 	Config *config.Config
@@ -350,6 +404,14 @@ type Deps struct {
 	// plugin@version (#54 §8.1). nil in contexts with no audit sink; callers
 	// must nil-check.
 	Audit func(map[string]any)
+	// Auth is the per-stack managed-auth registry (finding 4,
+	// plugin-contract.md §1.9): every connector builder registers its
+	// instance's authenticator into THIS registry, never a package-global
+	// one, so a throwaway validation/dry-run Build can never change what a
+	// live daemon's host.auth answers. nil is safe (AuthRegistry's methods
+	// are nil-receiver-safe no-ops) — a caller that doesn't care about
+	// host.auth (most tests) doesn't need to construct one.
+	Auth *AuthRegistry
 }
 
 var (
@@ -366,6 +428,17 @@ var (
 // plugin repo — and so a newly-bundled type cannot drift out of the resolver's
 // seed list. RegisterExternalType (plugin-backed) deliberately does NOT do this:
 // a plugin type is what `use:` fetches, not what it short-circuits.
+func init() {
+	// The pack consent rule reads the declarations through this, not names.
+	config.ScopeConsent = func(typeName string) (string, bool) {
+		d, ok := TypeDeclFor(typeName)
+		if !ok || d.Semantics == nil || d.Semantics.Scope == nil || !d.Semantics.Scope.Consent {
+			return "", false
+		}
+		return d.Semantics.Scope.Dimension, true
+	}
+}
+
 func RegisterType(decl *TypeDecl, b Builder) {
 	regMu.Lock()
 	defer regMu.Unlock()
@@ -431,6 +504,9 @@ func isConfigErr(err error) bool {
 // ConfigErr) still fail: they are config bugs, not runtime conditions.
 func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 	r := &Registry{byName: map[string]*Instance{}}
+	// Instances may name one another (a web hand-off's `expose:`); the
+	// lookup resolves at use time, against the registry being built.
+	deps.Lookup = r.Get
 	// Vaults build FIRST: connector credentials may hold {{ vault … }}
 	// references, which resolve through the registry this wires. A vault
 	// that won't unlock registers disabled (the daemon boots; dependents
@@ -482,8 +558,16 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 			}
 		} else {
 			in.Impl = impl
-			if id, ok := impl.(InstanceDecler); ok {
-				in.Decl = id.InstanceDecl(decl)
+			// Per-instance declarations (Q6, plugin-contract.md §3.9 G13) come
+			// ONLY through the contract: externalImpl is the one generic Impl
+			// that asks its connected plugin (spawned or in-process builtin)
+			// for an instance-specific Decl over the wire, and already carries
+			// the EFFECTIVE decl (instance-specific when the plugin has one,
+			// else the shared type-level one) — there is no type-specific Go
+			// side door; rest/graphql/webhook declare themselves exactly like
+			// any third-party plugin would.
+			if ei, ok := impl.(*externalImpl); ok {
+				in.Decl = ei.decl
 			}
 			if verr := impl.Validate(); verr != nil {
 				in.DisabledReason = verr.Error()
@@ -495,6 +579,8 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 		r.byName[name] = in
 		r.order = append(r.order, name)
 	}
+	r.checkExposures(deps.Log)
+	r.checkListenerExposures(cfg, deps.Log)
 	// Wire the stores: section into the kv registry — a bad store is a load
 	// error, never a disabled connector.
 	if err := buildStores(cfg, deps); err != nil {
@@ -682,4 +768,14 @@ func (s Schema) ContextKeys() map[string]bool {
 		out[k] = true
 	}
 	return out
+}
+
+// RegisterUnavailableType registers a connector type whose plugin cannot be
+// started yet (referenced but not installed): configs naming it load, and
+// each instance is disabled with reason until the plugin lands.
+func RegisterUnavailableType(typ, reason string) {
+	d := &TypeDecl{Type: typ, Desc: "unavailable: " + reason, Unavailable: reason}
+	_ = RegisterExternalType(d, func(name string, _ config.ConnectorRef, _ Deps) (Impl, error) {
+		return nil, fmt.Errorf("%s", reason)
+	})
 }

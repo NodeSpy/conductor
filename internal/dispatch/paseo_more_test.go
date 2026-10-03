@@ -274,7 +274,7 @@ func TestStderrTailAndTruncate(t *testing.T) {
 func TestCreateWorktreeStrategies(t *testing.T) {
 	bin, dir := fakePaseoDir(t)
 	d := &Dispatcher{PaseoBin: bin}
-	prReq := Request{Trigger: core.Trigger{Target: core.Target{Repo: "a/w", PR: 5, Number: 5, BaseRef: "main"}},
+	prReq := Request{Trigger: core.Trigger{Kind: "failing_checks", Target: core.Target{Repo: "a/w", PR: 5, Number: 5, BaseRef: "main"}},
 		Action: config.Action{Checkout: "checkout-pr"}}
 	id, cwd, err := d.createWorktree(context.Background(), prReq, "/base")
 	if err != nil || id != "wks_new" || cwd == "" {
@@ -441,8 +441,8 @@ func TestTemplateDataPrecedence(t *testing.T) {
 		Trigger: core.Trigger{Kind: "k", Title: "T",
 			Target:  core.Target{Repo: "a/w", PR: 1},
 			Context: map[string]any{"repo": "shadowed", "extra": "ctx"}},
-		Tokens: Tokens{App: "at", User: "ut"},
-		Data:   map[string]any{"extra": "step-wins", "out": 7},
+		Credentials: ghCreds("ut", "at"),
+		Data:        map[string]any{"extra": "step-wins", "out": 7},
 	}
 	d := templateData(req)
 	if d["repo"] != "a/w" {
@@ -521,5 +521,17 @@ func TestSanitizeBranchSuffixIdempotentAtBoundary(t *testing.T) {
 	b := branchSlug(WithBranchSuffix(context.Background(), "auth ui service refactor pass two"), tr)
 	if a == b {
 		t.Fatalf("distinct subtasks collided: %q", a)
+	}
+}
+
+// A checkout-pr whose event hints no PR number fails rather than asking the
+// runtime for PR 0.
+func TestCreateWorktreeRefusesAMissingPRNumber(t *testing.T) {
+	bin, _ := fakePaseoDir(t)
+	d := &Dispatcher{PaseoBin: bin}
+	req := Request{Trigger: core.Trigger{Kind: "no-such-kind", Target: core.Target{Repo: "a/w", PR: 5, Number: 5}},
+		Action: config.Action{Checkout: "checkout-pr"}}
+	if _, _, err := d.createWorktree(context.Background(), req, "/base"); err == nil || !strings.Contains(err.Error(), "no PR number") {
+		t.Fatalf("want a refusal, got %v", err)
 	}
 }

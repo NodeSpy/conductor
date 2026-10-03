@@ -70,10 +70,10 @@ func TestProvisionWorktreeNoRepoContext(t *testing.T) {
 
 func TestAgentEnvActsAsUser(t *testing.T) {
 	req := Request{
-		Trigger: core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "o/r"}},
-		Action:  config.Action{Type: "agent", Env: map[string]string{"EXTRA": "v-{{.repo}}"}},
-		Tokens:  Tokens{User: "utok", App: "atok"},
-		Author:  Author{Name: "Me", Email: "me@example.com"},
+		Trigger:     core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "o/r"}},
+		Action:      config.Action{Type: "agent", Env: map[string]string{"EXTRA": "v-{{.repo}}"}},
+		Credentials: ghCreds("utok", "atok"),
+		Author:      Author{Name: "Me", Email: "me@example.com"},
 	}
 	env, err := AgentEnv(req)
 	if err != nil {

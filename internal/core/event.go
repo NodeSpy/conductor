@@ -1,42 +1,27 @@
 // Package core holds the integration-agnostic types that flow through
 // conductor: the normalized Trigger emitted by every integration, and the
-// Integration interface + type registry the engine uses to start them.
+// Integration interface every source (a connector's Source(), a plugin's
+// pluginSourceIntegration) implements to be started by the engine. There is
+// no type registry here any more — connector.Build (internal/connector)
+// resolves and constructs every instance; the old core.Register/Build side
+// door (internal/integrations/rss's self-registration was its last user) is
+// gone.
 package core
 
 import (
 	"context"
-	"strings"
+
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
-// KindClosed is a reserved kind an integration emits when the underlying object
-// (e.g. a PR) reaches a terminal state, so the engine drops its dedup state. It
-// never dispatches an action.
-const KindClosed = "_closed"
-
-// ReservedKind reports whether a kind is one the ENGINE itself interprets —
-// a fact it acts on rather than a name it routes by. `_closed` consumes a
-// target's engagements and settles its outcome; `failing_checks` records CI
-// failure and can re-run checks with the operator's token.
-//
-// A source that did not DECLARE such an event may not emit it. The bundled
-// integrations produce these from platform payloads they verified; a
-// third-party plugin emitting one is claiming a fact about somebody else's
-// world (round-13). Any kind beginning with `_` is reserved for the engine.
-func ReservedKind(kind string) bool {
-	if strings.HasPrefix(kind, "_") {
-		return true
-	}
-	switch kind {
-	case "failing_checks", "merge_conflict", "review_requested", "new_comment":
-		return true
-	}
-	return false
-}
-
-// Target identifies the GitHub (or future-source) object a Trigger concerns.
+// Target identifies the object a Trigger concerns (a pull request, an issue, a
+// channel thread — whatever the source declares).
 // Fields are populated best-effort from the webhook payload; zero values mean
 // "not applicable" (e.g. PR == 0 for an issue-only trigger).
 type Target struct {
+	// Key is the key the source plugin itself names this target by (the
+	// wire event's target.key), when it sent one. See Trigger.DeclaredKey.
+	Key     string
 	Repo    string // "owner/name"
 	Owner   string
 	Name    string
@@ -65,7 +50,7 @@ func (t Target) CheckoutRepo() string {
 // Trigger is the normalized unit of work. Integrations translate raw provider
 // events into Triggers and hand them to the engine via an EmitFunc.
 type Trigger struct {
-	Source   string            // e.g. "github"
+	Source   string            // the connector type that emitted it
 	Instance string            // integration instance name (for labels/logs)
 	Kind     string            // e.g. "merge_conflict", "review_requested"
 	Variant  string            // action-variant name when a kind has multiple; "" for the sole action
@@ -76,7 +61,7 @@ type Trigger struct {
 	Labels   map[string]string // extra labels to attach to dispatched work
 	Action   any               // integration-resolved action (engine asserts to config.Action)
 	// TargetTrusted marks a dispatch whose TARGET was assigned by the SOURCE
-	// ITSELF — a signature-verified github payload, a slack channel id, a
+	// ITSELF — a signature-verified forge payload, a chat channel id, a
 	// synthetic target derived from the source's own configured name — rather
 	// than taken from data the sender of the event supplied.
 	//
@@ -109,6 +94,13 @@ type Trigger struct {
 	// bypasses its dedup / liveness / backoff gates so the action runs now, even if
 	// it thinks the state is already handled. The kill switch and pause still apply.
 	Force bool
+	// Sem is the event's DECLARED semantics (plugin-contract.md §2.2): what
+	// the engine does with it — its target and revision, dedupe cursor,
+	// lifecycle effects. The source adapter attaches it from the connector
+	// type's declaration; the engine reads it through the accessors in
+	// semantics.go and never keys behavior on the kind's name. nil is a
+	// plain trigger.
+	Sem *sdk.EventSemantics
 	// HistoryID, when non-empty, pins the id of this run's §20 history record
 	// instead of the engine minting a fresh one. It exists so a caller that
 	// dispatched the trigger (the §13 callable-invoke surface) can hand back a
@@ -177,20 +169,7 @@ func (t Trigger) Key() string {
 // concurrent use; the engine's implementation enqueues onto its work channel.
 type EmitFunc func(context.Context, Trigger)
 
-// CompletionHook, when set, is invoked by the engine right after it stamps a
-// dispatch's outcome (see the engine's auditDispatch), once per trigger, with
-// the final outcome: "ok", "failed", "skipped", "adopted", "queued", or
-// "shadow". It lets an integration correlate a completed dispatch back to the
-// Trigger it originally emitted (via Trigger.Dedup) — e.g. Slack posting
-// on_done/on_fail feedback. nil (default) is a no-op: dispatch behavior is
-// unchanged.
-var CompletionHook func(t Trigger, outcome string)
-
-// SetCompletionHook installs the completion hook (set once at startup by main
-// wiring). Passing nil clears it.
-func SetCompletionHook(fn func(t Trigger, outcome string)) { CompletionHook = fn }
-
-// Integration is a source of Triggers (GitHub today; Slack/Discord later).
+// Integration is a source of Triggers.
 // Each configured instance is one Integration value.
 type Integration interface {
 	// Name is the instance name (unique across the config).
@@ -229,15 +208,4 @@ func itoa(n int) string {
 		b[i] = '-'
 	}
 	return string(b[i:])
-}
-
-// BranchFixKind reports whether a trigger kind's fixer works on, and pushes to,
-// its PR's own head branch — work that stops mattering once the PR closes, and
-// whose pushes belong on that one branch.
-func BranchFixKind(kind string) bool {
-	switch kind {
-	case "new_comment", "changes_requested", "failing_checks", "merge_conflict", "pr_behind":
-		return true
-	}
-	return false
 }

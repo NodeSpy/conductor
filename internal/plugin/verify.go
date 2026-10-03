@@ -71,7 +71,7 @@ func verify(s Spec) (digest string, err error) {
 
 	if s.Sha256 == "" {
 		if s.Local {
-			// A LOCAL development binary (`use: ./bin/conductor-jira`): the
+			// A LOCAL development binary (`use: ./bin/conductor-widget`): the
 			// operator typed this path and rebuilds it constantly, so there is
 			// no meaningful sha to pin it to. The safe-permissions checks above
 			// still hold — that is what actually closes the swap window — and

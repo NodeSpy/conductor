@@ -11,13 +11,16 @@ import (
 )
 
 const sample = `
-integrations:
-  - type: github
-    name: acme
-    app: { app_id: 123, private_key_path: ~/key.pem }
-    webhook: { smee_url: https://smee.io/abc, secret: ${TEST_WH_SECRET} }
-control: { pause_label: "conductor:off" }
-notify: { push: true, on: [dispatch, escalate] }
+connectors:
+  hooks:
+    use: webhook
+    options:
+      sources: { push: { path: /push } }
+      secret: ${TEST_WH_SECRET}
+triggers:
+  - on: hooks.push
+    steps:
+      - command: ["true"]
 x-steps:
   fixer: &fixer { type: agent, name: fixer, workspace: worktree, wait_timeout: 30m, archive_when_done: true }
 store:
@@ -39,24 +42,17 @@ func TestLoadAndExpand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(cfg.Integrations) != 1 || cfg.Integrations[0].Name != "acme" {
-		t.Fatalf("bad integrations: %+v", cfg.Integrations)
+	ref, ok := cfg.ConnectorsMap["hooks"]
+	if !ok {
+		t.Fatalf("bad connectors: %+v", cfg.ConnectorsMap)
 	}
-	if !cfg.Integrations[0].IsEnabled() {
-		t.Fatal("integration should default to enabled")
+	if !ref.IsEnabled() {
+		t.Fatal("connector should default to enabled")
 	}
 
 	// Env expansion reached the raw node.
-	var gh struct {
-		Webhook struct {
-			Secret string `yaml:"secret"`
-		} `yaml:"webhook"`
-	}
-	if err := cfg.Integrations[0].Decode(&gh); err != nil {
-		t.Fatal(err)
-	}
-	if gh.Webhook.Secret != "shhh" {
-		t.Fatalf("env not expanded: %q", gh.Webhook.Secret)
+	if secret, _ := ref.Options["secret"].(string); secret != "shhh" {
+		t.Fatalf("env not expanded: %q", secret)
 	}
 
 	if cfg.Store.StateTTL.D() != 720*time.Hour {
@@ -64,16 +60,6 @@ func TestLoadAndExpand(t *testing.T) {
 	}
 	if cfg.Store.AuditMaxSize.Bytes() != 50*1024*1024 {
 		t.Fatalf("audit_max_size parse: %d", cfg.Store.AuditMaxSize.Bytes())
-	}
-	// Defaults applied.
-	if cfg.PaseoBin != "paseo" {
-		t.Fatalf("paseo_bin default not applied: %q", cfg.PaseoBin)
-	}
-	if !cfg.Control.IsEnabled() {
-		t.Fatal("control should default enabled")
-	}
-	if !cfg.Notify.Wants("escalate") || cfg.Notify.Wants("complete") {
-		t.Fatal("notify.on parsing wrong")
 	}
 }
 
@@ -126,7 +112,7 @@ func TestStateDir(t *testing.T) {
 	})
 }
 
-func TestValidateRejectsNoIntegrations(t *testing.T) {
+func TestValidateRejectsNoConnectors(t *testing.T) {
 	c := &Config{}
 	c.applyDefaults()
 	if err := c.Validate(); err == nil {
@@ -136,10 +122,10 @@ func TestValidateRejectsNoIntegrations(t *testing.T) {
 
 func TestLoadUndefinedEnvVarFails(t *testing.T) {
 	os.Unsetenv("TEST_WH_SECRET")
-	os.Unsetenv("TEST_SMEE_URL")
+	os.Unsetenv("TEST_SOURCE_PATH")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	body := strings.Replace(sample, "smee_url: https://smee.io/abc", "smee_url: ${TEST_SMEE_URL}", 1)
+	body := strings.Replace(sample, "path: /push", "path: ${TEST_SOURCE_PATH}", 1)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +134,7 @@ func TestLoadUndefinedEnvVarFails(t *testing.T) {
 		t.Fatal("expected error for undefined ${VAR} references")
 	}
 	// Names every missing variable (once) and points at the sibling conductor.env.
-	for _, want := range []string{"TEST_WH_SECRET", "TEST_SMEE_URL", filepath.Join(dir, "conductor.env")} {
+	for _, want := range []string{"TEST_WH_SECRET", "TEST_SOURCE_PATH", filepath.Join(dir, "conductor.env")} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error should mention %q, got: %v", want, err)
 		}
@@ -159,7 +145,7 @@ func TestLoadUndefinedEnvVarFails(t *testing.T) {
 
 	// Set-but-empty is intentional (KEY= in conductor.env) and must not error.
 	t.Setenv("TEST_WH_SECRET", "")
-	t.Setenv("TEST_SMEE_URL", "")
+	t.Setenv("TEST_SOURCE_PATH", "")
 	if _, err := Load(path); err != nil {
 		t.Fatalf("set-but-empty variables should load: %v", err)
 	}
@@ -168,18 +154,18 @@ func TestLoadUndefinedEnvVarFails(t *testing.T) {
 func TestImportsUndefinedEnvVarFails(t *testing.T) {
 	os.Unsetenv("TEST_IMPORTED_SECRET")
 	dir := t.TempDir()
-	imported := filepath.Join(dir, "gh.yaml")
+	imported := filepath.Join(dir, "hooks.yaml")
 	if err := os.WriteFile(imported, []byte(`
-integrations:
-  - type: github
-    name: gh
-    app: { app_id: 1, private_key_path: ~/k.pem }
-    webhook: { smee_url: https://smee.io/x, secret: ${TEST_IMPORTED_SECRET} }
+connectors:
+  hooks:
+    use: webhook
+    options:
+      sources: { push: { path: /push, sign: { secret: ${TEST_IMPORTED_SECRET} } } }
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	main := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(main, []byte("imports: [gh.yaml]\nsteps:\n  fixer: { type: agent, name: fixer }\n"), 0o644); err != nil {
+	if err := os.WriteFile(main, []byte("imports: [hooks.yaml]\ntriggers:\n  - on: hooks.push\n    steps: [{command: [\"true\"]}]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, err := Load(main)
@@ -203,48 +189,53 @@ func TestImportsMergeAndConcat(t *testing.T) {
 		return p
 	}
 
-	// Split across files: main + a conf.d dir with one integration per file.
-	write("conf.d/github.yaml", `
-integrations:
-  - type: github
-    name: gh
-    app: { app_id: 1, private_key_path: ~/k.pem }
-    webhook: { smee_url: https://smee.io/x, secret: ${TEST_WH_SECRET} }
+	// Split across files: main + a conf.d dir, one connector/trigger per file.
+	write("conf.d/hooks.yaml", `
+connectors:
+  hooks:
+    use: webhook
+    options:
+      sources: { push: { path: /push, sign: { secret: ${TEST_WH_SECRET} } } }
+triggers:
+  - on: hooks.push
+    steps: [{command: ["true"]}]
 `)
 	write("conf.d/rss.yaml", `
-integrations:
-  - type: rss
-    name: feeds
+connectors:
+  feeds:
+    use: rss
 workflows:
   plan:
-    steps: [{ id: p, type: agent, prompt: plan }]
+    steps: [{ id: p, command: ["true"] }]
 `)
 	main := write("config.yaml", `
 imports:
   - conf.d/*.yaml
-integrations:
-  - type: cron
-    name: chores
+connectors:
+  chores:
+    use: cron
+triggers:
+  - on: chores.tick
+    steps: [{command: ["true"]}]
 workflows:
   fix:
-    steps: [{ id: f, type: agent, prompt: fix, workspace: worktree }]
-paseo_bin: /custom/paseo    # importer scalar must win over any imported default
+    steps: [{ id: f, command: ["true"] }]
+dry_run: true    # importer scalar must win over any imported default
 `)
 
 	cfg, err := Load(main)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Lists concatenate: imported github + rss, then the main file's cron = 3.
-	if len(cfg.Integrations) != 3 {
-		t.Fatalf("want 3 integrations (2 imported + 1 inline), got %d: %+v", len(cfg.Integrations), cfg.Integrations)
+	// Maps merge: connectors from both the imports and the main file.
+	for _, want := range []string{"hooks", "feeds", "chores"} {
+		if _, ok := cfg.ConnectorsMap[want]; !ok {
+			t.Fatalf("missing connector %q after merge: %+v", want, cfg.ConnectorsMap)
+		}
 	}
-	names := map[string]bool{}
-	for _, ig := range cfg.Integrations {
-		names[ig.Name] = true
-	}
-	if !names["gh"] || !names["feeds"] || !names["chores"] {
-		t.Fatalf("missing an integration after merge: %v", names)
+	// Lists concatenate: imported trigger + the main file's = 2.
+	if len(cfg.Triggers) != 2 {
+		t.Fatalf("want 2 triggers (1 imported + 1 inline), got %d: %+v", len(cfg.Triggers), cfg.Triggers)
 	}
 	// Maps merge: workflows from both the import and the main file.
 	if _, ok := cfg.Workflows["fix"]; !ok {
@@ -254,24 +245,12 @@ paseo_bin: /custom/paseo    # importer scalar must win over any imported default
 		t.Fatal("imported workflow 'plan' missing")
 	}
 	// Importer scalar wins.
-	if cfg.PaseoBin != "/custom/paseo" {
-		t.Fatalf("importer scalar should win, got %q", cfg.PaseoBin)
+	if !cfg.DryRun {
+		t.Fatal("importer scalar (dry_run: true) should win")
 	}
-	// Env expansion reached an imported integration's raw node.
-	var gh struct {
-		Webhook struct {
-			Secret string `yaml:"secret"`
-		} `yaml:"webhook"`
-	}
-	for _, ig := range cfg.Integrations {
-		if ig.Name == "gh" {
-			if err := ig.Decode(&gh); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if gh.Webhook.Secret != "shhh" {
-		t.Fatalf("env not expanded in imported file: %q", gh.Webhook.Secret)
+	// Env expansion reached an imported connector's raw node.
+	if secret, _ := cfg.ConnectorsMap["hooks"].Options["sources"].(map[string]any)["push"].(map[string]any)["sign"].(map[string]any)["secret"].(string); secret != "shhh" {
+		t.Fatalf("env not expanded in imported file: %q", secret)
 	}
 }
 
@@ -294,7 +273,7 @@ func TestImportsDiamondDedup(t *testing.T) {
 		}
 	}
 	// base is imported by both a.yaml and the main file → must contribute once.
-	w("base.yaml", "integrations:\n  - { type: cron, name: base }\n")
+	w("base.yaml", "connectors:\n  base: { use: cron }\ntriggers:\n  - { on: base.tick, steps: [{command: [\"true\"]}] }\n")
 	w("a.yaml", "imports: [base.yaml]\n")
 	w("config.yaml", "imports: [a.yaml, base.yaml]\n")
 
@@ -302,8 +281,8 @@ func TestImportsDiamondDedup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Integrations) != 1 {
-		t.Fatalf("diamond import should include base once, got %d", len(cfg.Integrations))
+	if len(cfg.Triggers) != 1 {
+		t.Fatalf("diamond import should include base's trigger once, got %d", len(cfg.Triggers))
 	}
 }
 
@@ -329,106 +308,11 @@ func TestActionSetUnmarshal(t *testing.T) {
 	}
 }
 
-// CheckAgentRefs no longer resolves an agent PROFILE (there are none —
-// design §6); what it still guards is a step's `handoff:` reference.
-func TestCheckHandoffRefs(t *testing.T) {
-	c := &Config{Handoffs: map[string]HandoffConfig{"web": {}}}
-	ok := []ActionRef{{Where: "gh rules[0].actions.review_requested",
-		Action: Action{Steps: []Action{{Type: "agent", Handoff: "web"}}}}}
-	if err := c.CheckAgentRefs(ok); err != nil {
-		t.Fatalf("valid handoff ref rejected: %v", err)
-	}
-	bad := []ActionRef{{Where: "gh rules[0].actions.review_requested",
-		Action: Action{Steps: []Action{{Type: "agent", Handoff: "nope"}}}}}
-	err := c.CheckAgentRefs(bad)
-	if err == nil || !strings.Contains(err.Error(), `unknown handoff "nope"`) {
-		t.Fatalf("unknown handoff should fail, got %v", err)
-	}
-}
-
 func TestActionSetRefsNamesVariants(t *testing.T) {
 	set := ActionSet{{Type: "agent", Agent: "a"}, {Name: "v", Type: "agent", Agent: "b"}}
 	refs := set.Refs("issue_matched")
 	if len(refs) != 2 || refs[0].Where != "issue_matched" || refs[1].Where != "issue_matched[v]" {
 		t.Fatalf("unexpected refs: %+v", refs)
-	}
-}
-
-// ctrlBaseCfg is a minimal valid config (one integration) to exercise the
-// controllers/agent validation without tripping the no-integrations check.
-func ctrlBaseCfg() *Config {
-	return &Config{Integrations: []IntegrationRef{{Type: "github", Name: "gh"}}}
-}
-
-func TestControllersNoBlockIsValidAndPaseoDefault(t *testing.T) {
-	c := ctrlBaseCfg()
-	if err := c.Validate(); err != nil {
-		t.Fatalf("no controllers block must validate, got %v", err)
-	}
-	if got := c.DefaultControllerName(); got != "" {
-		t.Fatalf("no default flagged → empty name (falls back to built-in paseo), got %q", got)
-	}
-}
-
-func TestControllersValidBlock(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Controllers = map[string]ControllerConfig{
-		"pae":   {Type: "paseo", Default: true},
-		"gem":   {Agent: "gemini"},
-		"ocode": {Agent: "opencode", Transport: "native", SessionModel: "resumable"},
-	}
-	setTestStep(c, "reviewer", Step{Runtime: "gem"})
-	if err := c.Validate(); err != nil {
-		t.Fatalf("valid controllers block should pass, got %v", err)
-	}
-	if got := c.DefaultControllerName(); got != "pae" {
-		t.Fatalf("default:true should be found, got %q", got)
-	}
-}
-
-func TestControllersTwoDefaultsRejected(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Controllers = map[string]ControllerConfig{
-		"a": {Type: "paseo", Default: true},
-		"b": {Agent: "gemini", Default: true},
-	}
-	if err := c.Validate(); err == nil {
-		t.Fatal("two default:true controllers must be rejected")
-	}
-}
-
-func TestControllerTypeXorAgent(t *testing.T) {
-	both := ctrlBaseCfg()
-	both.Controllers = map[string]ControllerConfig{"x": {Type: "paseo", Agent: "gemini"}}
-	if err := both.Validate(); err == nil {
-		t.Fatal("setting both type and agent must be rejected")
-	}
-	neither := ctrlBaseCfg()
-	neither.Controllers = map[string]ControllerConfig{"x": {Transport: "acp"}}
-	if err := neither.Validate(); err == nil {
-		t.Fatal("setting neither type nor agent must be rejected")
-	}
-}
-
-func TestControllerBadTransportAndModel(t *testing.T) {
-	badT := ctrlBaseCfg()
-	badT.Controllers = map[string]ControllerConfig{"x": {Agent: "gemini", Transport: "carrier-pigeon"}}
-	if err := badT.Validate(); err == nil {
-		t.Fatal("unknown transport must be rejected")
-	}
-	badM := ctrlBaseCfg()
-	badM.Controllers = map[string]ControllerConfig{"x": {Agent: "gemini", SessionModel: "eternal"}}
-	if err := badM.Validate(); err == nil {
-		t.Fatal("unknown session_model must be rejected")
-	}
-}
-
-func TestAgentUnknownControllerRejected(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Controllers = map[string]ControllerConfig{"pae": {Type: "paseo"}}
-	setTestStep(c, "fixer", Step{Runtime: "does-not-exist"})
-	if err := c.Validate(); err == nil {
-		t.Fatal("an agent referencing an undefined controller must be rejected")
 	}
 }
 
@@ -441,326 +325,5 @@ func TestEffectiveTransportDefaults(t *testing.T) {
 	}
 	if got := (ControllerConfig{Agent: "aider", Transport: "cli"}).EffectiveTransport(); got != "cli" {
 		t.Fatalf("an explicit transport must win, got %q", got)
-	}
-}
-
-func TestHandoffsNoBlockIsValid(t *testing.T) {
-	c := ctrlBaseCfg()
-	if err := c.Validate(); err != nil {
-		t.Fatalf("no handoffs block must validate, got %v", err)
-	}
-	if got := c.DefaultHandoffName(); got != "" {
-		t.Fatalf("no default flagged → empty name, got %q", got)
-	}
-}
-
-func TestHandoffsValidBlock(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"phone": {Slack: &HandoffChat{To: "dm", User: "U123ABCD", BotToken: "xoxb-x"}, Default: true},
-		"page":  {Web: &HandoffWeb{BaseURL: "https://conductor.example.com"}},
-		"pager": {Discord: &HandoffChat{To: "thread", Channel: "C1", BotToken: "bot-x"}},
-	}
-	if err := c.Validate(); err != nil {
-		t.Fatalf("valid handoffs block should pass, got %v", err)
-	}
-	if got := c.DefaultHandoffName(); got != "phone" {
-		t.Fatalf("default:true should be found, got %q", got)
-	}
-}
-
-func TestHandoffsExactlyOneChannelRequired(t *testing.T) {
-	none := ctrlBaseCfg()
-	none.Handoffs = map[string]HandoffConfig{"x": {}}
-	if err := none.Validate(); err == nil {
-		t.Fatal("an entry with no channel sub-block must be rejected")
-	}
-	both := ctrlBaseCfg()
-	both.Handoffs = map[string]HandoffConfig{"x": {
-		Web:   &HandoffWeb{BaseURL: "https://a.test"},
-		Slack: &HandoffChat{To: "dm"},
-	}}
-	if err := both.Validate(); err == nil {
-		t.Fatal("an entry with two channel sub-blocks must be rejected")
-	}
-}
-
-func TestHandoffsTwoDefaultsRejected(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"a": {Web: &HandoffWeb{BaseURL: "https://a.test"}, Default: true},
-		"b": {Slack: &HandoffChat{To: "dm"}, Default: true},
-	}
-	if err := c.Validate(); err == nil {
-		t.Fatal("two default:true handoffs must be rejected")
-	}
-}
-
-func TestHandoffsSlackToInvalid(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"x": {Slack: &HandoffChat{To: "channel", Channel: "C1", BotToken: "xoxb-x"}},
-	}
-	if err := c.Validate(); err == nil {
-		t.Fatal("slack.to must be dm|thread — an unknown value must be rejected")
-	}
-}
-
-func TestHandoffsSlackThreadRequiresChannel(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"x": {Slack: &HandoffChat{To: "thread", BotToken: "xoxb-x"}},
-	}
-	if err := c.Validate(); err == nil {
-		t.Fatal("slack.to: thread with no channel must be rejected")
-	}
-}
-
-func TestHandoffsSlackDMRequiresUser(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"x": {Slack: &HandoffChat{To: "dm", BotToken: "xoxb-x"}},
-	}
-	if err := c.Validate(); err == nil {
-		t.Fatal("slack.to: dm with no user must be rejected")
-	}
-}
-
-func TestHandoffsSlackRequiresBotToken(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"x": {Slack: &HandoffChat{To: "dm", User: "U123ABCD"}},
-	}
-	if err := c.Validate(); err == nil {
-		t.Fatal("slack with no bot_token must be rejected")
-	}
-}
-
-func TestHandoffsSlackValidDMAndThread(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"phone":   {Slack: &HandoffChat{To: "dm", User: "U123ABCD", BotToken: "xoxb-x"}},
-		"warroom": {Slack: &HandoffChat{To: "thread", Channel: "C0456", BotToken: "xoxb-x"}},
-	}
-	if err := c.Validate(); err != nil {
-		t.Fatalf("valid dm and thread slack handoffs should pass, got %v", err)
-	}
-}
-
-func TestHandoffsDiscordToInvalid(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"x": {Discord: &HandoffChat{To: "channel", Channel: "C1", BotToken: "bot-x"}},
-	}
-	if err := c.Validate(); err == nil {
-		t.Fatal("discord.to must be dm|thread — an unknown value must be rejected")
-	}
-}
-
-func TestHandoffsDiscordThreadRequiresChannel(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"x": {Discord: &HandoffChat{To: "thread", BotToken: "bot-x"}},
-	}
-	if err := c.Validate(); err == nil {
-		t.Fatal("discord.to: thread with no channel must be rejected")
-	}
-}
-
-func TestHandoffsDiscordDMRequiresUser(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"x": {Discord: &HandoffChat{To: "dm", BotToken: "bot-x"}},
-	}
-	if err := c.Validate(); err == nil {
-		t.Fatal("discord.to: dm with no user must be rejected")
-	}
-}
-
-func TestHandoffsDiscordRequiresBotToken(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"x": {Discord: &HandoffChat{To: "dm", User: "123456789012345678"}},
-	}
-	if err := c.Validate(); err == nil {
-		t.Fatal("discord with no bot_token must be rejected")
-	}
-}
-
-func TestHandoffsDiscordValidDMAndThread(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"phone":   {Discord: &HandoffChat{To: "dm", User: "123456789012345678", BotToken: "bot-x"}},
-		"warroom": {Discord: &HandoffChat{To: "thread", Channel: "C0456", BotToken: "bot-x"}},
-	}
-	if err := c.Validate(); err != nil {
-		t.Fatalf("valid dm and thread discord handoffs should pass, got %v", err)
-	}
-}
-
-func TestHandoffTunnelUnknownProviderRejected(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"page": {Web: &HandoffWeb{BaseURL: "https://a.test", Tunnel: TunnelConfig{Provider: "bogus"}}},
-	}
-	if err := c.Validate(); err == nil {
-		t.Fatal("an unknown tunnel provider must be rejected")
-	}
-}
-
-func TestHandoffTunnelKnownProvidersAccepted(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		t    TunnelConfig
-	}{
-		{"empty", TunnelConfig{}},
-		{"static", TunnelConfig{Provider: "static"}},
-		{"lan", TunnelConfig{Provider: "lan"}},
-		{"lan with host", TunnelConfig{Provider: "lan", Host: "192.168.1.5"}},
-		{"cloudflared", TunnelConfig{Provider: "cloudflared"}},
-		{"ngrok", TunnelConfig{Provider: "ngrok", Authtoken: "${NGROK_AUTHTOKEN}"}},
-		{"tailscale serve", TunnelConfig{Provider: "tailscale"}},
-		{"tailscale funnel", TunnelConfig{Provider: "tailscale", Mode: "funnel"}},
-		{"ssh", TunnelConfig{Provider: "ssh", SSHHost: "localhost.run"}},
-		{"ssh pinggy", TunnelConfig{Provider: "ssh", SSHHost: "a.pinggy.io"}},
-		{"localxpose", TunnelConfig{Provider: "localxpose"}},
-		{"command", TunnelConfig{Provider: "command", Command: []string{"my-tunnel-cli", "--port", "{{.port}}"}, URLPattern: `https?://\S+`}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c := ctrlBaseCfg()
-			c.Handoffs = map[string]HandoffConfig{"page": {Web: &HandoffWeb{BaseURL: "https://a.test", Tunnel: tc.t}}}
-			if err := c.Validate(); err != nil {
-				t.Fatalf("provider %q should validate, got %v", tc.t.Provider, err)
-			}
-		})
-	}
-}
-
-func TestHandoffTunnelTailscaleBadModeRejected(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"page": {Web: &HandoffWeb{BaseURL: "https://a.test", Tunnel: TunnelConfig{Provider: "tailscale", Mode: "bogus"}}},
-	}
-	if err := c.Validate(); err == nil {
-		t.Fatal("tailscale mode must be serve|funnel")
-	}
-}
-
-func TestHandoffTunnelSSHRequiresHost(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"page": {Web: &HandoffWeb{BaseURL: "https://a.test", Tunnel: TunnelConfig{Provider: "ssh"}}},
-	}
-	if err := c.Validate(); err == nil {
-		t.Fatal("ssh provider without ssh_host must be rejected")
-	}
-}
-
-func TestHandoffTunnelCommandRequiresCommand(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"page": {Web: &HandoffWeb{BaseURL: "https://a.test", Tunnel: TunnelConfig{Provider: "command"}}},
-	}
-	if err := c.Validate(); err == nil {
-		t.Fatal("command provider without command: must be rejected")
-	}
-}
-
-func TestHandoffTunnelBadURLPatternRejected(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{
-		"page": {Web: &HandoffWeb{BaseURL: "https://a.test", Tunnel: TunnelConfig{
-			Provider: "command", Command: []string{"echo"}, URLPattern: "(unclosed",
-		}}},
-	}
-	if err := c.Validate(); err == nil {
-		t.Fatal("an invalid url_pattern regex must be rejected")
-	}
-}
-
-func TestCheckAgentRefsUnknownHandoffRejected(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{"page": {Web: &HandoffWeb{BaseURL: "https://a.test"}}}
-	refs := []ActionRef{{Where: "w", Action: Action{Steps: []Action{
-		{Type: "command", ID: "assess", Command: []string{"true"}},
-		{Type: "command", ID: "review", Background: true, Handoff: "does-not-exist", Command: []string{"true"}},
-	}}}}
-	err := c.CheckAgentRefs(refs)
-	if err == nil {
-		t.Fatal("a step naming an undefined handoff must be rejected")
-	}
-	for _, want := range []string{"w step review", `"does-not-exist"`, "page"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q should mention %q", err, want)
-		}
-	}
-}
-
-func TestCheckAgentRefsKnownHandoffPasses(t *testing.T) {
-	c := ctrlBaseCfg()
-	c.Handoffs = map[string]HandoffConfig{"page": {Web: &HandoffWeb{BaseURL: "https://a.test"}}}
-	refs := []ActionRef{{Where: "w", Action: Action{Steps: []Action{
-		{Type: "command", ID: "review", Background: true, Handoff: "page", Command: []string{"true"}},
-	}}}}
-	if err := c.CheckAgentRefs(refs); err != nil {
-		t.Fatalf("a step naming a defined handoff should pass, got %v", err)
-	}
-}
-
-// TestHandoffCompatShimSynthesizesDefault verifies the legacy singular
-// `handoff: { web: … }` block is folded into `handoffs: { default: { web: …,
-// default: true } }` by applyDefaults when `handoffs:` is empty, so an old
-// config keeps resolving to that channel unchanged.
-func TestHandoffCompatShimSynthesizesDefault(t *testing.T) {
-	c := &Config{}
-	c.Handoff.Web = HandoffWeb{BaseURL: "https://old.example.com", Listen: ":9099"}
-	c.applyDefaults()
-
-	if len(c.Handoffs) != 1 {
-		t.Fatalf("expected exactly one synthesized handoff entry, got %d: %+v", len(c.Handoffs), c.Handoffs)
-	}
-	hc, ok := c.Handoffs["default"]
-	if !ok {
-		t.Fatalf(`expected a "default" entry, got %+v`, c.Handoffs)
-	}
-	if !hc.Default {
-		t.Fatal("the synthesized entry must be flagged default:true")
-	}
-	if hc.Web == nil || hc.Web.BaseURL != "https://old.example.com" || hc.Web.Listen != ":9099" {
-		t.Fatalf("synthesized web config should carry over the legacy fields, got %+v", hc.Web)
-	}
-	if got := c.DefaultHandoffName(); got != "default" {
-		t.Fatalf("DefaultHandoffName should find the synthesized entry, got %q", got)
-	}
-}
-
-// TestHandoffCompatShimNoopWhenHandoffsSet confirms the new `handoffs:` map
-// always wins — the legacy block is ignored once it's populated.
-func TestHandoffCompatShimNoopWhenHandoffsSet(t *testing.T) {
-	c := &Config{}
-	c.Handoff.Web = HandoffWeb{BaseURL: "https://old.example.com"}
-	c.Handoffs = map[string]HandoffConfig{
-		"new": {Web: &HandoffWeb{BaseURL: "https://new.example.com"}, Default: true},
-	}
-	c.applyDefaults()
-
-	if len(c.Handoffs) != 1 {
-		t.Fatalf("handoffs map should be untouched, got %+v", c.Handoffs)
-	}
-	if _, ok := c.Handoffs["default"]; ok {
-		t.Fatal("the shim must not run when handoffs: is already set")
-	}
-	if c.Handoffs["new"].Web.BaseURL != "https://new.example.com" {
-		t.Fatalf("existing handoffs entry should be untouched, got %+v", c.Handoffs["new"])
-	}
-}
-
-// TestHandoffCompatShimNoopWhenLegacyEmpty confirms an unset legacy block
-// synthesizes nothing (an empty Handoffs map, not a spurious default entry).
-func TestHandoffCompatShimNoopWhenLegacyEmpty(t *testing.T) {
-	c := &Config{}
-	c.applyDefaults()
-	if len(c.Handoffs) != 0 {
-		t.Fatalf("no legacy handoff and no handoffs: should synthesize nothing, got %+v", c.Handoffs)
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
-	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 )
@@ -32,8 +31,8 @@ import (
 type runFacts struct {
 	startSHA, headSHA, reason string
 	// state is the target's state as of the last head read (open | closed |
-	// merged | ""); it names a stop's reason.
-	state string
+	// accepted | ""), and stopWords the connector's phrase for a stop in it.
+	state, stopWords string
 }
 
 func (f runFacts) data() map[string]any {
@@ -59,13 +58,13 @@ const headReadTimeout = 10 * time.Second
 // readHead reads the trigger target's current head and state through the
 // connector that emitted it. "" when there is none or the read fails (logged
 // and audited, never fatal). Dry runs read nothing.
-func (r *Runner) readHead(ctx context.Context, t core.Trigger) (sha, state string) {
+func (r *Runner) readHead(ctx context.Context, t core.Trigger) (sha, state, reason string) {
 	if r.DryRun || r.Conns == nil || t.Instance == "" {
-		return "", ""
+		return "", "", ""
 	}
 	in, ok := r.Conns.Get(t.Instance)
 	if !ok {
-		return "", ""
+		return "", "", ""
 	}
 	c, cancel := context.WithTimeout(context.WithoutCancel(ctx), headReadTimeout)
 	defer cancel()
@@ -75,19 +74,20 @@ func (r *Runner) readHead(ctx context.Context, t core.Trigger) (sha, state strin
 		r.Log("%s run facts: read head: %s", flowTag(t), msg)
 		r.audit(map[string]any{"event": "run_head", "outcome": "failed", "repo": t.Target.Repo,
 			"number": t.Target.Number, "kind": t.Kind, "error": msg})
-		return "", ""
+		return "", "", ""
 	}
-	return h.SHA, h.State
+	return h.SHA, h.State, h.StopReason
 }
 
 // stopReason is run.reason for a stop: the run's target went away under it.
-// Whether it merged or just closed comes from the head read the stop hooks
-// take anyway; unknown reads as closed.
-func stopReason(state string) string {
-	if state == connector.TargetMerged {
-		return "the PR merged"
+// The words are the connector's (its reads_revision reasons, carried on the
+// head read the stop hooks take anyway); a connector that declares none
+// gets a neutral phrase.
+func stopReason(declared string) string {
+	if declared != "" {
+		return declared
 	}
-	return "the PR closed"
+	return "its target closed"
 }
 
 // hasPhase reports whether hooks declares any hook at phase.
@@ -148,7 +148,7 @@ func (r *Runner) FireParkedHooks(ctx context.Context, t core.Trigger, flowRef, p
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
 	data := baseData(t, r.SecretVals)
 	addVaultData(data, r.VaultVals)
-	head, _ := r.readHead(ctx, t)
+	head, _, _ := r.readHead(ctx, t)
 	facts := runFacts{startSHA: parkedAt, headSHA: head, reason: ParkedReason}
 	failure := map[string]any{"kind": "parked", "gave_up": true, "step": "",
 		"error": fmt.Sprintf("parked after %d tries at %s", attempts, shortSHA(parkedAt))}

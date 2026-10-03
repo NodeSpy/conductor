@@ -138,6 +138,7 @@ func (b *rpcBackend) CreateWorktree(ctx context.Context, opts CreateWorktreeOpti
 	out, err := b.invoke(ctx, "create_worktree", map[string]any{
 		"isolation": opts.Isolation, "path": opts.Path, "strategy": opts.Strategy,
 		"prNumber": opts.PRNumber, "forge": opts.Forge, "newBranch": opts.NewBranch, "baseRef": opts.BaseRef,
+		"fresh": opts.Fresh,
 	})
 	if err != nil {
 		return CreateWorktreeResult{}, err

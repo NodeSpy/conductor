@@ -86,16 +86,34 @@ func (t *PackTrustConfig) PluginSourceAllowed(source string) bool {
 	}
 	// The official plugin and pack repos are trusted by default: naming an
 	// official component needs no ceremony, a third-party source still does.
-	for _, official := range []string{OfficialSource, OfficialPacksSource} {
-		if s == official || strings.HasPrefix(s, official+"/") {
-			return true
-		}
+	if IsOfficialSource(s) {
+		return true
 	}
 	if t == nil {
 		return false
 	}
 	for _, pat := range t.Allow {
 		if trustMatch(pat, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsOfficialSource reports whether a plugin or pack SOURCE is one of the
+// official repos (OfficialSource, OfficialPacksSource) — the repo itself or a
+// path under it (`//component`), on the canonical host. It is THE official
+// classifier: PluginSourceAllowed admits on it, and a plugin source's default
+// event trust (internal/connector) keys on it, so "official" cannot mean two
+// things. Anchored at a delimiter: `…/conductor-plugins-evil` is not
+// `…/conductor-plugins`, and a local path is never official.
+func IsOfficialSource(source string) bool {
+	s, remote := RemoteSourceRef(source)
+	if !remote {
+		return false
+	}
+	for _, official := range []string{OfficialSource, OfficialPacksSource} {
+		if s == official || strings.HasPrefix(s, official+"/") {
 			return true
 		}
 	}

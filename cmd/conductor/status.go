@@ -29,7 +29,11 @@ func cmdStatus(args []string) error {
 	fmt.Printf("service:  %s\n", serviceStateStr())
 
 	// Live conductor agents (running now).
-	agents := conductorAgents(cfg.PaseoBin)
+	paseoBin, err := resolvePaseoBin(cfg)
+	if err != nil {
+		return err
+	}
+	agents := conductorAgents(paseoBin)
 	fmt.Printf("\nlive agents (%d):\n", len(agents))
 	if len(agents) == 0 {
 		fmt.Println("  (none)")

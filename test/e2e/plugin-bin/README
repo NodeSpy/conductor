@@ -1,0 +1,1 @@
+Staging directory for a locally built github connector plugin (GITHUB_PLUGIN_BIN=... make e2e); it replaces the pinned build in the image.

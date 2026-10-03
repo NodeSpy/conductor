@@ -93,15 +93,34 @@ feature addition beyond e2e scope. The identical controller-agnostic Review loop
 Every scenario prints expected-vs-actual and a final **results matrix**. The run
 exits non-zero if any assertion fails.
 
+## The github connector plugin
+
+GitHub is a connector plugin (conductor-plugins, `connectors/github`), so every
+daemon's github connector names the plugin binary the image carries:
+
+```yaml
+    use: /usr/local/bin/conductor-github
+    api_base: http://mock-github:8080  # a plugin's env is scrubbed: no PC_GITHUB_API_BASE
+```
+
+The image builds the plugin at the version the Dockerfile pins
+(`GITHUB_PLUGIN_VERSION`, a tag or commit of the plugins module). To run the
+suite on a local build instead:
+
+```sh
+GITHUB_PLUGIN_BIN=/path/to/conductor-github make e2e
+```
+
+`run.sh` stages it into `plugin-bin/`, which replaces the pinned build in the
+image.
+
 ## Minimal testability hooks (production behavior unchanged when unset)
 
 The harness needs a few seams into otherwise-hardwired endpoints. Each is env-gated
 and a no-op in production:
 
-- `PC_GITHUB_API_BASE` — point conductor's GitHub REST/GraphQL reads at the mock.
-- `PC_PUSHOVER_URL` / `PC_NOTIFIARR_URL` / `PC_NTFY_DEFAULT_URL` — redirect the
-  vendor-hardcoded notify sinks at the sink-catcher (Slack/Discord/ntfy already
-  take their URL from config).
+- `PC_GITHUB_API_BASE` — point the fake paseo's GitHub reads at the mock (the
+  github plugin takes `api_base:` from its connector config instead).
 - `PC_REAPER_INTERVAL` / `PC_REAPER_MIN_AGE` — shrink the reaper cadence so
   archive-when-done is observable without the 3-minute production grace.
 

@@ -106,9 +106,11 @@ paseo does not support it.
 
 ## Partly a boundary: external plugins
 
-A plugin is a separate process, and conductor confines it to its declared
+A plugin is a separate process — by default, one PER CONFIGURED INSTANCE of
+it, not one shared by every instance of the same type (see [[Plugins]]
+"Multi-instance isolation") — and conductor confines each one to its declared
 [[Authoring-Connectors|capability manifest]]: the egress hosts, commands and
-paths it named, and its own type's credentials only. That is a real
+paths it named, and its own instance's credentials only. That is a real
 restriction and a visible one — you see the manifest when you install it.
 
 It is not an OS jail. A plugin that spawns a process spawns it as your user.

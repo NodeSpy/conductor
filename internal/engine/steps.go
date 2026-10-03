@@ -12,11 +12,11 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
-	"github.com/NodeSpy/conductor/internal/expr"
 	"github.com/NodeSpy/conductor/internal/gitdiff"
 	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/store"
+	"github.com/NodeSpy/conductor/pkg/expr"
 )
 
 // runSteps executes a multi-step workflow: each step may use a different
@@ -25,7 +25,7 @@ import (
 // {{ .steps.<id>.outputs.<key> }} and `if` conditions like
 // `steps.<id>.outputs.<key> == true`. Steps run to completion in order; the
 // whole workflow runs in its own goroutine so the engine loop isn't blocked.
-func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Trigger, act config.Action, appTok, userTok string, shadow bool) {
+func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Trigger, act config.Action, creds dispatch.Credentials, shadow bool) {
 	data := e.stepBaseData(t)
 	stepsOut := map[string]any{}
 	// Restore completed steps' outputs (resume) so `if:`/templating see them.
@@ -96,7 +96,7 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 				s.Prompt = dispatch.EventPrompt(t, nil)
 			}
 			if s.Prompt != "" {
-				s.Prompt += dispatch.WriteWrapperGuidance
+				s.Prompt += creds.Guidance
 				s.Prompt += e.agentGuidance(profile, e.retryPolicyFor(act))
 				s.Prompt += e.memoryPrompt(identity, profile, t, "")
 				// Only the interactive hand-off (a background step) is told to ask. A
@@ -114,8 +114,8 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 		}
 		req := dispatch.Request{
 			Trigger: t, Action: s, Step: profile, Identity: identity, Model: model, Provider: modelProvider,
-			Tokens: dispatch.Tokens{App: appTok, User: userTok},
-			Author: e.author, Shadow: shadow, Wait: !s.Background, Interactive: s.Background, Data: data,
+			Credentials: creds,
+			Author:      e.author, Shadow: shadow, Wait: !s.Background, Interactive: s.Background, Data: data,
 		}
 		// Resolve which controller runs this agent step (explicit `controller:` →
 		// default:true → built-in paseo). Command steps use the base dispatcher. An
@@ -222,20 +222,16 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			// or hold marker for the reaper to observe), then hand it to you.
 			e.hold.Add(ref.AgentID)
 			e.log("%s step %s launched in background after %s (agent %s)", tag(t), id, took, ref.AgentID)
-			// Resolve the step's hand-off channel (explicit `handoff:` name → the
-			// default:true entry → the sole configured entry). A step naming an
-			// unknown handoff is caught by config validation before a live trigger
-			// ever reaches here, but resolve defensively and escalate rather than
-			// silently falling back if it somehow does.
-			var handoffCh handoff.Channel
-			if e.handoffs != nil {
-				ch, herr := e.handoffs.Resolve(s.Handoff)
-				if herr != nil {
-					e.log("%s step %s handoff %q: %v", tag(t), id, s.Handoff, herr)
-					e.notif.Emit(ctx, notify.EventEscalate, t,
-						fmt.Sprintf("workflow step %q: handoff %q: %v", id, s.Handoff, herr))
-				}
-				handoffCh = ch
+			// Resolve the step's hand-off channel: `handoff:` names an
+			// ask-capable connector (web, or a chat plugin). A step naming an
+			// unknown or non-ask-capable connector is caught by config
+			// validation before a live trigger ever reaches here, but
+			// escalate rather than silently falling back if it somehow does.
+			handoffCh := e.askChannelFor(s.Handoff)
+			if handoffCh == nil && s.Handoff != "" {
+				e.log("%s step %s handoff %q: did not resolve to an ask-capable connector", tag(t), id, s.Handoff)
+				e.notif.Emit(ctx, notify.EventEscalate, t,
+					fmt.Sprintf("workflow step %q: handoff %q: did not resolve to an ask-capable connector", id, s.Handoff))
 			}
 			// With a hand-off channel resolved, rewire the review over the session
 			// broker + channel (present → await → revise/submit), controller-agnostic.

@@ -168,20 +168,20 @@ func TestRequiresConnectorVersionGateUsesDaemonVersionForBuiltins(t *testing.T) 
 
 	pack := `
 pack:
-  name: needs-gh
+  name: needs-hook
   version: "1.0.0"
   requires:
     conductor: ">=0.1"
     connectors:
-      github: ">=9.0"
+      webhook: ">=9.0"
 `
 	consumer := `
 connectors:
-  gh: { use: github, token: x }
+  hook: { use: webhook }
 packs:
-  needs-gh:
+  needs-hook:
     source: ./src/ng
-    connectors: { github: gh }
+    connectors: { webhook: hook }
 `
 	// Daemon below the constraint → refused, naming the daemon version.
 	SetRuntimeVersion("v1.2.3")

@@ -191,9 +191,9 @@ func reconcileOne(key string, ref config.PluginRef, state *InstallState, trust *
 		}
 	}
 
-	rs := RemoteSource{Repo: ref.Use.Repo, Component: ref.Use.Component}
+	rs := RemoteSource{URL: ref.Use.GitURL(), Component: ref.Use.Component}
 	dir := BinDirFor(state.Dir(), key)
-	binPath, tag, sha, err := FetchRemote(rs, ref.Use.Version, "", dir, api)
+	binPath, tag, sha, verified, err := FetchRemoteVerified(rs, ref.Use.Version, "", dir, api)
 	if err != nil {
 		res.Action, res.Err = ActionFailed, fmt.Errorf("plugin %s: %w", ref.Name, err)
 		if installed {
@@ -209,9 +209,11 @@ func reconcileOne(key string, ref config.PluginRef, state *InstallState, trust *
 	case installed && prev.Sha256 == sha && prev.Resolved == tag:
 		res.Action, res.Manifest = ActionCurrent, prev.Manifest
 		// Nothing moved, but the reference text may have changed (a widened
-		// constraint); keep the record honest.
-		if prev.Use != ref.Use.String() {
+		// constraint), or this fetch verified a build an older record did not
+		// mark verified; keep the record honest.
+		if prev.Use != ref.Use.String() || prev.ReleaseVerified != verified {
 			prev.Use = ref.Use.String()
+			prev.ReleaseVerified = verified
 			state.Put(prev)
 			return res, true
 		}
@@ -228,7 +230,7 @@ func reconcileOne(key string, ref config.PluginRef, state *InstallState, trust *
 	rec := Installed{
 		Key: key, Kind: ref.Kind(), Name: ref.Name,
 		Use: ref.Use.String(), Source: ref.Source(),
-		Resolved: tag, Sha256: sha, Path: binPath,
+		Resolved: tag, Sha256: sha, Path: binPath, ReleaseVerified: verified,
 	}
 	if opts.Describe != nil {
 		spec := SpecFromRef(ref, "", rec, true)
@@ -342,6 +344,7 @@ func manifestFromDecl(decl *Decl) Manifest {
 		Commands: append([]string(nil), c.Commands...),
 		FS:       append([]string(nil), c.FS...),
 		Spawns:   c.Spawns || len(c.Commands) > 0,
+		Env:      append([]string(nil), c.Env...),
 		// Auth (the plugin's declared OAuth2 endpoints) is recorded so
 		// `conductor connector auth <name>` can run the interactive login
 		// WITHOUT respawning the plugin to re-Describe it.
