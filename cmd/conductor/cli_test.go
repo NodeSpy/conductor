@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/NodeSpy/conductor/internal/connector"
 )
 
 // captureStdout runs fn with os.Stdout redirected and returns what it printed.
@@ -336,6 +338,16 @@ triggers:
 // is live for the duration of this CLI invocation's own throwaway stack.
 func TestCmdConnectorsLsNeverShowsPidForARealExternalPlugin(t *testing.T) {
 	bin := buildTestPlugin(t, "acme-echo")
+	// buildFlowStack registers "acme-echo" into the process-wide connector
+	// type registry (connector.RegisterExternalType) and flowStack.Close
+	// only stops its plugin subprocesses, never unregisters the type —
+	// every other test in this package driving a real external plugin
+	// through buildFlowStack cleans this up itself (connectors_test.go,
+	// reload_inplace_test.go) for exactly this reason: a second test (or,
+	// as here, `go test -count=2` rerunning this SAME test) in the same
+	// binary would otherwise collide with "already provided by another
+	// plugin".
+	t.Cleanup(func() { connector.UnregisterExternalType("acme-echo") })
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	doc := fmt.Sprintf("connectors:\n  echo:\n    use: %s\n    token: s3cr3t\n", bin)
 	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
