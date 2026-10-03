@@ -908,7 +908,7 @@ func cmdRun(args []string) error {
 	}()
 	connector.SetConductorOps(&connector.ConductorOps{
 		Update: func(context.Context) (bool, string, error) {
-			updated, tag, err := doUpdate(false, "")
+			updated, tag, err := doUpdate(false, "", cfgFile, notifier)
 			if err != nil {
 				return false, "", err
 			}

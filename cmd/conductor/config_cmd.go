@@ -18,9 +18,41 @@ import (
 func cmdConfig(args []string) error {
 	rest := positional(args)
 	if len(rest) > 0 && rest[0] == "migrate" {
-		return fmt.Errorf("`conductor config migrate` was removed with the legacy config schema: run it with the release before the plugin contract, then upgrade")
+		return fmt.Errorf("`conductor config migrate` was removed with the legacy config schema: %s", migrateHint())
 	}
-	return fmt.Errorf("usage: conductor config <subcommand> (none remain; `migrate` was removed with the legacy config schema)")
+	return fmt.Errorf("usage: conductor config <subcommand> (none remain; `migrate` was removed with the legacy config schema): %s", migrateHint())
+}
+
+// migrateHint is the actionable half of every "run `conductor config
+// migrate` with the release before the plugin contract" message in this
+// codebase (internal/config, internal/secrets, this file): the ONE place
+// that knows whether a usable previous-release binary actually exists on
+// this box. Before 5b, that advice pointed at a binary the operator usually
+// no longer had — an unattended auto-update replaces the executable in
+// place with nothing kept behind. doUpdate now saves the replaced binary
+// next to the new one as <exe>.prev (best effort), so when that file is
+// present and executable, THAT is almost always the needed release; this
+// tells the operator to run it directly instead of re-fetching anything.
+func migrateHint() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "run it with the release before the plugin contract, then upgrade"
+	}
+	if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+		exe = resolved
+	}
+	return migrateHintForExe(exe)
+}
+
+// migrateHintForExe is migrateHint's testable half: given the daemon's own
+// executable path, decide whether <exe>.prev — the rollback copy doUpdate
+// saves (5b) — is there to run the old migrate command against.
+func migrateHintForExe(exe string) string {
+	prev := exe + prevBinarySuffix
+	if info, serr := os.Stat(prev); serr == nil && !info.IsDir() {
+		return fmt.Sprintf("run `%s config migrate` (the release this box auto-updated from, saved alongside this binary), then upgrade", prev)
+	}
+	return "run it with the release before the plugin contract, then upgrade (no " + prev + " was found on this box — fetch that release if you no longer have it)"
 }
 
 // validateAt runs the full load+validate pipeline (the connectors-model

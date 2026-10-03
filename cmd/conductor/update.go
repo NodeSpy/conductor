@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -15,6 +16,20 @@ import (
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/plugin"
 )
+
+// selfUpdatePreflightTimeout bounds the downloaded binary's `validate` dry
+// run (below) — a hang in validate (a stuck network check, say) must not
+// hang the whole update.
+var selfUpdatePreflightTimeout = 60 * time.Second
+
+// prevBinarySuffix names the rollback copy doUpdate leaves next to the
+// executable (<exe>.prev) — best effort, so an operator can run the previous
+// release by hand (`mv <exe>.prev <exe>`) without needing to re-fetch it,
+// which matters most for `conductor config migrate`-style hints below: those
+// ask the operator to run the PREVIOUS release's binary, and after an
+// unattended auto-update there is otherwise no previous binary left on disk
+// to run.
+const prevBinarySuffix = ".prev"
 
 // updateSource is the git repository conductor updates itself from. Releases
 // are tags; each platform's binary is published on refs/dist/<tag>/<platform>
@@ -63,7 +78,10 @@ func cmdUpdate(args []string) error {
 			}
 		}
 	}
-	updated, tag, err := doUpdate(force, pinTag)
+	// The daemon's config path, resolved the same way it finds it at boot —
+	// the preflight below validates THIS file against the downloaded binary.
+	cfgFile, _ := configPath(args)
+	updated, tag, err := doUpdate(force, pinTag, cfgFile, nil)
 	if err != nil {
 		return err
 	}
@@ -91,7 +109,14 @@ func cmdUpdate(args []string) error {
 // replacing the running executable in place. Returns updated=false when already
 // current (and not forced). It fetches over git with the daemon user's own git
 // credentials, and verifies the binary against the release's checksums.txt.
-func doUpdate(force bool, pinTag string) (updated bool, tag string, err error) {
+//
+// cfgFile is the daemon's config path, resolved the same way the daemon
+// itself finds it (configPath); "" skips the preflight below (nothing to
+// validate against — a fresh install with no config yet must not be blocked
+// from updating). notifier, if non-nil, is used to escalate a preflight
+// failure through whatever attention route the operator already configured;
+// nil is fine for a one-off manual `conductor update`.
+func doUpdate(force bool, pinTag, cfgFile string, notifier *notify.Notifier) (updated bool, tag string, err error) {
 	tag = pinTag
 	if tag == "" {
 		if tag, err = latestRelease(); err != nil {
@@ -132,12 +157,77 @@ func doUpdate(force bool, pinTag string) (updated bool, tag string, err error) {
 	if err := os.Chmod(bin, 0o755); err != nil {
 		return false, tag, err
 	}
+	// PREFLIGHT: a release that cannot load THIS box's config (a removed
+	// legacy block, a schema change) must never be swapped in — on an
+	// unattended auto-updating box that is a silent crash-loop with no
+	// operator watching. Run the DOWNLOADED binary's own `validate` against
+	// the daemon's config, read-only, bounded — never the running binary's.
+	if cfgFile != "" {
+		if _, statErr := os.Stat(cfgFile); statErr == nil {
+			if perr := preflightValidate(bin, cfgFile); perr != nil {
+				msg := fmt.Sprintf("update: %s failed its own config preflight — NOT applying: %v", tag, perr)
+				logf("%s", msg)
+				if notifier != nil {
+					notifier.Emit(context.Background(), notify.EventEscalate,
+						core.Trigger{Source: "updater", Kind: "update_preflight_failed"}, msg)
+				}
+				return false, tag, fmt.Errorf("%s does not load this config (staying on %s): %w", tag, version, perr)
+			}
+		}
+	}
+	// Best-effort rollback copy, BEFORE the swap: an operator who hits a
+	// problem the preflight above didn't catch (it only proves the config
+	// loads, not that every workflow still behaves) can restore it by hand
+	// with no re-fetch — `mv <exe>.prev <exe>`. A failure here (read-only
+	// filesystem, out of space) must not block an update that already passed
+	// preflight.
+	saveRollbackCopy(exe, version)
 	// Atomic replace: rename over the running executable (same dir/FS). The
 	// running process keeps its old inode; the next launch is the new binary.
 	if err := os.Rename(bin, exe); err != nil {
 		return false, tag, fmt.Errorf("replace %s (need write access to its directory): %w", exe, err)
 	}
 	return true, tag, nil
+}
+
+// preflightValidate runs the DOWNLOADED (not yet installed) binary's
+// `validate --config <cfgFile>` — read-only, bounded by
+// selfUpdatePreflightTimeout — and returns a trimmed error combining the
+// failure with the tail of its output when it refuses the config.
+func preflightValidate(bin, cfgFile string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), selfUpdatePreflightTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "validate", "--config", cfgFile)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("validate timed out after %s", selfUpdatePreflightTimeout)
+	}
+	t := tail(out, 2000)
+	if t == "" {
+		return err
+	}
+	return fmt.Errorf("%w — %s", err, t)
+}
+
+// saveRollbackCopy best-effort copies exe to exe+prevBinarySuffix, so a
+// manual `mv <exe>.prev <exe>` can restore the previous release with no
+// re-fetch (5b). A failure (read-only filesystem, out of space) is logged,
+// never returned: it must not block an update that already passed preflight.
+func saveRollbackCopy(exe, fromVersion string) {
+	prev := exe + prevBinarySuffix
+	data, rerr := os.ReadFile(exe)
+	if rerr != nil {
+		logf("update: could not save a rollback copy of %s (best effort, continuing): %v", exe, rerr)
+		return
+	}
+	if werr := os.WriteFile(prev, data, 0o755); werr != nil {
+		logf("update: could not save a rollback copy at %s (best effort, continuing): %v", prev, werr)
+		return
+	}
+	logf("update: previous binary (%s) saved to %s for manual rollback", fromVersion, prev)
 }
 
 // autoUpdateLoop watches the release repo for a newer version and installs it,
@@ -200,7 +290,7 @@ func autoUpdateLoop(ctx context.Context, u config.Update, cfgFile string, notifi
 				continue // 304 (nothing new), or the latest is what we already run
 			}
 			var applied bool
-			announced, applied = handleNewerRelease(ctx, u, tag, announced, notifier, stop)
+			announced, applied = handleNewerRelease(ctx, u, tag, announced, notifier, stop, cfgFile)
 			if applied {
 				return // shutting down for a manager restart, or re-exec'd
 			}
@@ -310,7 +400,7 @@ var (
 // an unattended box self-updates. apply: false installs and stages.
 // apply: workflow installs NOTHING — it emits conductor.update_available
 // (once per tag) so a trigger drives the update as a workflow.
-func handleNewerRelease(ctx context.Context, u config.Update, tag, announced string, notifier *notify.Notifier, stop func()) (newAnnounced string, applied bool) {
+func handleNewerRelease(ctx context.Context, u config.Update, tag, announced string, notifier *notify.Notifier, stop func(), cfgFile string) (newAnnounced string, applied bool) {
 	if u.ApplyWorkflow() {
 		if tag == announced {
 			return announced, false // one announcement per release
@@ -324,7 +414,7 @@ func handleNewerRelease(ctx context.Context, u config.Update, tag, announced str
 		}
 		return tag, false
 	}
-	updated, installed, err := installRelease(false, tag)
+	updated, installed, err := installRelease(false, tag, cfgFile, notifier)
 	if err != nil {
 		logf("auto-update: install %s failed: %v", tag, err)
 		return announced, false

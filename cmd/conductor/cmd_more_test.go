@@ -63,6 +63,38 @@ func TestCmdConfigMigrateRemoved(t *testing.T) {
 	}
 }
 
+// TestMigrateHintForExe (finding 8, see 5b): every "run `conductor config
+// migrate` with the release before the plugin contract" hint in this
+// codebase is only actionable if the operator still HAS that release's
+// binary — which an unattended auto-update used to make untrue (it replaces
+// the executable in place with nothing kept behind). Once doUpdate's
+// rollback copy (<exe>.prev) exists, the hint must name it directly instead
+// of sending the operator to re-fetch a release they already have on disk.
+func TestMigrateHintForExe(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "conductor")
+
+	t.Run("no rollback copy on disk", func(t *testing.T) {
+		got := migrateHintForExe(exe)
+		if !strings.Contains(got, "run it with the release before the plugin contract") {
+			t.Fatalf("want the generic fetch-it-yourself hint, got: %q", got)
+		}
+		if strings.Contains(got, "config migrate`") {
+			t.Fatalf("must not name a binary that isn't there: %q", got)
+		}
+	})
+
+	t.Run("a rollback copy from a prior auto-update", func(t *testing.T) {
+		prev := exe + prevBinarySuffix
+		if err := os.WriteFile(prev, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got := migrateHintForExe(exe)
+		if !strings.Contains(got, prev) || !strings.Contains(got, "config migrate`") {
+			t.Fatalf("want the hint to name the actual rollback binary %q, got: %q", prev, got)
+		}
+	})
+}
+
 func TestSmallCmdHelpers(t *testing.T) {
 	if toInt64Any(int64(1)) != 1 || toInt64Any(2) != 2 || toInt64Any(3.0) != 3 || toInt64Any("x") != 0 {
 		t.Fatal("toInt64Any")
