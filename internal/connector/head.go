@@ -50,13 +50,20 @@ func (in *Instance) TargetHead(ctx context.Context, t core.Trigger) (TargetHead,
 			// that the target is gone, in the one call whose whole job is
 			// reading the target's state — prefer the code over a failed
 			// read's "" unknown state, so a stop fires off the vendor-free
-			// answer instead of silence.
-			if ce, ok := AsContractError(err); ok && ce.IsTargetGone() {
+			// answer instead of silence. Still gated on the target key
+			// matching t's own (finding 11, TargetGoneOrUpstream — the shared
+			// gate every target_gone interpreter in the tree uses):
+			// reads_revision addresses the target itself, by construction
+			// (rr.Args is templated from t.Facts()), but requiring the match
+			// here too refuses to stop on a plugin that names the wrong one,
+			// and keeps every interpreter consistent.
+			result, isStop := TargetGoneOrUpstream(err, t.Key())
+			if isStop {
 				h := TargetHead{State: TargetClosed}
 				h.StopReason = rr.Reasons[TargetClosed]
 				return h, nil
 			}
-			return TargetHead{}, err
+			return TargetHead{}, result
 		}
 		h := TargetHead{SHA: fmt.Sprint(out[rr.Revision])}
 		if h.SHA == "<nil>" {

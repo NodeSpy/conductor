@@ -26,7 +26,9 @@ func TestVerbStepTargetGoneStopsNotFails(t *testing.T) {
 	reg := buildRegistry(t, cfg)
 	st := newFakeState(t, "svc")
 	st.errFn["post"] = func(int, map[string]any) error {
-		return &connector.ContractError{Code: sdk.CodeTargetGone, Message: "the PR closed"}
+		// data.target must name the trigger's own key (finding 11):
+		// newTrigger's is "o/r#7".
+		return &connector.ContractError{Code: sdk.CodeTargetGone, Message: "the PR closed", Data: map[string]any{"target": "o/r#7"}}
 	}
 	spec := mustSpec(t, `
 on: svc.ping
@@ -439,7 +441,9 @@ func TestSkillVerbTargetGoneIsTaggedAndRedacted(t *testing.T) {
 	rig, st := skillRig(t)
 	rig.Runner.Secrets.Track("s3kr1t-value")
 	st.errFn["post"] = func(int, map[string]any) error {
-		return &connector.ContractError{Code: sdk.CodeTargetGone, Message: "leak s3kr1t-value here"}
+		// data.target must name the trigger's own key (finding 11): an
+		// untrusted-target, repo-less skill trigger's is "skill:skill".
+		return &connector.ContractError{Code: sdk.CodeTargetGone, Message: "leak s3kr1t-value here", Data: map[string]any{"target": "skill:skill"}}
 	}
 	id := SkillIdentity{Agent: "a", Verbs: []string{"svc.post"}}
 	_, err := rig.Runner.RunSkillVerb(context.Background(), id, "svc.post", map[string]any{"text": "x"})

@@ -1194,7 +1194,7 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 	})
 	took := time.Since(start).Round(time.Millisecond)
 	if err != nil {
-		err = stopAsTargetGone(err)
+		err = stopAsTargetGone(err, t.Key())
 		r.auditVerb(t, connName, verb, rendered, "failed", err)
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
 	}

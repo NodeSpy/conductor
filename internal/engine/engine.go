@@ -1534,12 +1534,19 @@ func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.Remedia
 	// code) does it fall through to today's handling.
 	out, err := e.invokeVerb(ctx, t.Instance, rem.Status.Verb, core.DeclaredArgs(rem.Status.Args, t.Facts()))
 	if ce, ok := connector.AsContractError(err); ok && ce.IsTargetGone() {
-		// The target this remediation (and the fixer it would otherwise
-		// dispatch) acts on is gone: stop — handled, not a failure, and no
-		// fixer dispatch for a target that no longer exists.
-		e.log("%s remediation %s: target gone — dropping", tag(t), rem.Status.Verb)
-		e.runWait.Delete(waitKey)
-		return true
+		// Honored as a stop ONLY when it names THIS run's own target
+		// (finding 11): the status verb addresses the run's own target by
+		// construction (rem.Status.Args is templated from t.Facts()), but a
+		// generic check still guards against a plugin naming the wrong one.
+		if ce.TargetGoneMatchesKey(t.Key()) {
+			// The target this remediation (and the fixer it would otherwise
+			// dispatch) acts on is gone: stop — handled, not a failure, and no
+			// fixer dispatch for a target that no longer exists.
+			e.log("%s remediation %s: target gone — dropping", tag(t), rem.Status.Verb)
+			e.runWait.Delete(waitKey)
+			return true
+		}
+		e.log("%s remediation %s: target_gone for a different target than this run's own — not stopping", tag(t), rem.Status.Verb)
 	}
 	if e.deferAndReemit(ctx, t, "remediation status "+rem.Status.Verb, err) {
 		return true // handled for now: re-emit scheduled, no fixer dispatch yet
@@ -1574,8 +1581,13 @@ func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.Remedia
 	}
 	if _, err := e.invokeVerb(ctx, t.Instance, rem.Action.Verb, core.DeclaredArgs(rem.Action.Args, t.Facts())); err != nil {
 		if ce, ok := connector.AsContractError(err); ok && ce.IsTargetGone() {
-			e.log("%s remediation %s: target gone — dropping (no fixer dispatch)", tag(t), rem.Action.Verb)
-			return true
+			// Honored as a stop ONLY when it names THIS run's own target
+			// (finding 11) — see the matching comment on the status verb above.
+			if ce.TargetGoneMatchesKey(t.Key()) {
+				e.log("%s remediation %s: target gone — dropping (no fixer dispatch)", tag(t), rem.Action.Verb)
+				return true
+			}
+			e.log("%s remediation %s: target_gone for a different target than this run's own — not stopping", tag(t), rem.Action.Verb)
 		}
 		if e.deferAndReemit(ctx, t, "remediation action "+rem.Action.Verb, err) {
 			return true // handled for now: re-emit scheduled, no fixer dispatch yet

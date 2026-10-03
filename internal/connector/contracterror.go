@@ -75,6 +75,67 @@ func (e *ContractError) IsRateLimited() bool { return e != nil && e.Code == sdk.
 func (e *ContractError) IsNotReady() bool    { return e != nil && e.Code == sdk.CodeNotReady }
 func (e *ContractError) IsUpstream() bool    { return e != nil && e.Code == sdk.CodeUpstream }
 
+// TargetKey reports CodeTargetGone's data.target — the key of the target the
+// CALL addressed (plugin-contract.md §1.11, finding 11), the same string a
+// target.key the plugin's own events carry. Absent (an older or careless
+// plugin) reports ok=false.
+func (e *ContractError) TargetKey() (key string, ok bool) {
+	if e == nil {
+		return "", false
+	}
+	s, _ := e.Data["target"].(string)
+	return s, s != ""
+}
+
+// TargetGoneMatchesKey reports whether a target_gone answer's data.target
+// names the SAME target as key — the only case a caller may honor it as a
+// stop (finding 11). key is the run's own trigger target key
+// (core.Trigger.Key()): a target_gone answered for some OTHER target the
+// call happened to touch (a missing Slack notification channel a hook posts
+// to, say) must never be read as "this run's own target is gone" just
+// because the CODE matches — that would silently stop an unrelated run (a PR
+// review, a deploy) over a problem with something it merely notifies, not
+// what it is about. An absent data.target, or one naming a different target,
+// both report false; the caller turns those into a loud, non-retryable
+// upstream failure instead (TargetGoneOrUpstream).
+func (e *ContractError) TargetGoneMatchesKey(key string) bool {
+	if !e.IsTargetGone() || key == "" {
+		return false
+	}
+	got, ok := e.TargetKey()
+	return ok && got == key
+}
+
+// TargetGoneOrUpstream is the shared finding-11 gate every target_gone
+// interpreter applies: err passes through completely UNCHANGED unless it is
+// a target_gone contract error. A target_gone is honored as a stop
+// (isStop=true, result is err itself — the caller wraps it as its own stop
+// sentinel, e.g. dispatch.ErrTargetClosed) ONLY when its data.target matches
+// key (TargetGoneMatchesKey). A target_gone that does NOT match — wrong
+// target, or no target named at all — comes back as a loud, NON-RETRYABLE
+// upstream failure instead (isStop=false), carrying the plugin's own
+// message: never silently dropped, and never reinterpreted as target_gone
+// again by anything further down the stack (noStepRetry/execWithRetry
+// already refuse to retry a non-retryable upstream answer regardless of the
+// step's own retry:).
+func TargetGoneOrUpstream(err error, key string) (result error, isStop bool) {
+	ce, ok := AsContractError(err)
+	if !ok || !ce.IsTargetGone() {
+		return err, false
+	}
+	if ce.TargetGoneMatchesKey(key) {
+		return err, true
+	}
+	got, _ := ce.TargetKey()
+	var msg string
+	if got != "" {
+		msg = fmt.Sprintf("target_gone for a different target (%q) than this run's own (%q): %s", got, key, ce.Message)
+	} else {
+		msg = fmt.Sprintf("target_gone named no target (this run's own is %q): %s", key, ce.Message)
+	}
+	return &ContractError{Code: sdk.CodeUpstream, Message: msg, Data: map[string]any{"retryable": false}}, false
+}
+
 // RetryAfter parses CodeRateLimited's data.retry_after (a Go duration
 // string, e.g. "90s"). ok is false when it is absent or unparseable.
 func (e *ContractError) RetryAfter() (d time.Duration, ok bool) {

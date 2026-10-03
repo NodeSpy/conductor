@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -181,7 +182,9 @@ func TestTargetHeadPrefersTargetGoneCode(t *testing.T) {
 		ReadsRevision: &sdk.ReadsRevision{Revision: "sha", State: "state",
 			States: map[string][]string{"open": {"open"}}, Reasons: map[string]string{TargetClosed: "the PR closed"}},
 	}}}})
-	inv := &rpcErrInvoker{seq: []invokeAnswer{{err: rpcErr(sdk.CodeTargetGone, "")}}}
+	// data.target must name the trigger's OWN target key ("o/r#1", finding
+	// 11) for target_gone to be honored as a stop.
+	inv := &rpcErrInvoker{seq: []invokeAnswer{{err: rpcErr(sdk.CodeTargetGone, `{"target":"o/r#1"}`)}}}
 	in := &Instance{Name: "gh", Decl: decl, Enabled: true,
 		Impl: &externalImpl{client: inv, decl: decl, instance: "gh"}}
 	tr := core.Trigger{Instance: "gh", TargetTrusted: true, Target: core.Target{Repo: "o/r", Number: 1}}
@@ -217,5 +220,88 @@ func TestTargetHeadRetriesNotReadyThenSucceeds(t *testing.T) {
 	h, err := in.TargetHead(context.Background(), tr)
 	if err != nil || h.SHA != "deadbeef" || inv.calls != 3 {
 		t.Fatalf("TargetHead = %+v err=%v calls=%d, want 3 calls ending in success", h, err, inv.calls)
+	}
+}
+
+// TestTargetGoneOrUpstream is finding 11's direct regression test on the
+// shared gate every target_gone interpreter in the tree (stopAsTargetGone in
+// both internal/engine and internal/flow, remediate, TargetHead, skill
+// verbs) goes through: target_gone is honored as a stop ONLY when
+// data.target names the SAME target as the run's own trigger key. This
+// prevents, e.g., a connector's own missing notification target (a deleted
+// chat channel a hook posts to) from being misread as "this run's own
+// target is gone" and silently stopping an unrelated run.
+func TestTargetGoneOrUpstream(t *testing.T) {
+	const key = "acme/repo#7"
+	cases := []struct {
+		name     string
+		data     map[string]any
+		wantStop bool
+	}{
+		{"matching key stops", map[string]any{"target": key}, true},
+		{"mismatched key fails", map[string]any{"target": "acme/other#1"}, false},
+		{"absent key fails", nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			orig := &ContractError{Code: sdk.CodeTargetGone, Message: "the target is gone", Data: c.data}
+			result, isStop := TargetGoneOrUpstream(orig, key)
+			if isStop != c.wantStop {
+				t.Fatalf("isStop = %v, want %v", isStop, c.wantStop)
+			}
+			if c.wantStop {
+				if result != error(orig) {
+					t.Fatalf("a matching target_gone must come back UNCHANGED for the caller to wrap as its own stop sentinel, got %v", result)
+				}
+				return
+			}
+			// A non-matching (or absent) target_gone must come back as a
+			// LOUD, NON-RETRYABLE upstream failure — never silently dropped,
+			// and never a target_gone a downstream check could still honor.
+			ce, ok := AsContractError(result)
+			if !ok {
+				t.Fatalf("result = %v, want a *ContractError", result)
+			}
+			if ce.IsTargetGone() {
+				t.Fatal("the rewritten error must no longer read as target_gone to a downstream check")
+			}
+			if !ce.IsUpstream() {
+				t.Fatalf("code = %d, want CodeUpstream", ce.Code)
+			}
+			if ce.UpstreamRetryable() {
+				t.Fatal("a mismatched/absent target_gone must be NON-retryable")
+			}
+			if !strings.Contains(result.Error(), orig.Message) {
+				t.Fatalf("the plugin's own message must survive: %v", result)
+			}
+		})
+	}
+}
+
+// TestStopAsTargetGoneHelpersRequireKeyMatch exercises the two package-local
+// stopAsTargetGone wrappers' SHARED dependency (connector.TargetGoneOrUpstream)
+// is exactly what every call site (internal/engine, internal/flow) is wired
+// to — a regression here would be caught by each package's own fixture
+// tests, but this pins the CONTRACT-LEVEL behavior in one place regardless of
+// which package is calling it.
+func TestTargetGoneMatchesKey(t *testing.T) {
+	cases := []struct {
+		name string
+		ce   *ContractError
+		key  string
+		want bool
+	}{
+		{"matching", &ContractError{Code: sdk.CodeTargetGone, Data: map[string]any{"target": "a/b#1"}}, "a/b#1", true},
+		{"mismatched", &ContractError{Code: sdk.CodeTargetGone, Data: map[string]any{"target": "a/b#2"}}, "a/b#1", false},
+		{"absent", &ContractError{Code: sdk.CodeTargetGone}, "a/b#1", false},
+		{"empty run key", &ContractError{Code: sdk.CodeTargetGone, Data: map[string]any{"target": "a/b#1"}}, "", false},
+		{"not target_gone at all", &ContractError{Code: sdk.CodeUpstream, Data: map[string]any{"target": "a/b#1"}}, "a/b#1", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.ce.TargetGoneMatchesKey(c.key); got != c.want {
+				t.Fatalf("TargetGoneMatchesKey(%q) = %v, want %v", c.key, got, c.want)
+			}
+		})
 	}
 }

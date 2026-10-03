@@ -14,16 +14,30 @@ import (
 // treats a dispatch-side closure as a stop (runSteps' stop/fail hook switch,
 // execWithRetry's retry-loop break, the workflow-level finish in Run) then
 // treats a plugin's own detection of it identically, with no further
-// changes needed there. Any other error, including a nil one, is returned
-// unchanged.
-func stopAsTargetGone(err error) error {
+// changes needed there.
+//
+// It is honored ONLY when the answer's data.target names key, the run's own
+// trigger target key (finding 11): a flow step may call ANY connector's verb
+// for ANY target (a chat connector's `post` to a notification channel, say),
+// and that call's own target_gone — the channel was deleted — must never be
+// read as "this run's own target (the PR this workflow is about) is gone."
+// Without this, a connector's own missing notification target could silently
+// stop an unrelated PR run. connector.TargetGoneOrUpstream is the shared gate
+// (every target_gone
+// interpreter in the tree uses it). A mismatched or absent target comes back
+// as a loud, non-retryable upstream failure instead — never silently
+// dropped, and execWithRetry's own non-retryable-upstream check already
+// refuses to retry it regardless of the step's retry:. Any other error,
+// including a nil one, is returned unchanged.
+func stopAsTargetGone(err error, key string) error {
 	if err == nil {
 		return nil
 	}
-	if ce, ok := connector.AsContractError(err); ok && ce.IsTargetGone() {
-		return fmt.Errorf("%w: %w", dispatch.ErrTargetClosed, err)
+	result, isStop := connector.TargetGoneOrUpstream(err, key)
+	if isStop {
+		return fmt.Errorf("%w: %w", dispatch.ErrTargetClosed, result)
 	}
-	return err
+	return result
 }
 
 // noStepRetry reports whether err is a plugin contract error a step's

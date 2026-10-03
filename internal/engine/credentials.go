@@ -148,7 +148,7 @@ func (e *Engine) mint(ctx context.Context, t core.Trigger, instance string, cr s
 		out, err = invoke()
 	}
 	if err != nil {
-		return "", stopAsTargetGone(err)
+		return "", stopAsTargetGone(err, t.Key())
 	}
 	key := cr.Value
 	if key == "" {

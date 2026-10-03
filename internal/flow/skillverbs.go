@@ -702,7 +702,7 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 		return in.InvokeFinal(ctx, verb, merged)
 	})
 	if err != nil {
-		err = stopAsTargetGone(err)
+		err = stopAsTargetGone(err, t.Key())
 		r.auditSkillVerb(t, id.Agent, uses, merged, "failed", err)
 		// redactedErr keeps the returned TEXT redacted (this crosses to the
 		// agent) while Unwrap keeps err reachable, so errors.As still finds

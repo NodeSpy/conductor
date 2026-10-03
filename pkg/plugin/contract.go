@@ -340,10 +340,20 @@ const (
 	// block) — a false or absent retryable fails closed, never retried, no
 	// matter how generous the caller's own retry: is.
 	CodeUpstream = -32010
-	// CodeTargetGone: the target closed or disappeared under the call. The
-	// run is STOPPED (stop hooks, not a failure) — the engine's
-	// dispatch.ErrTargetClosed, the same sentinel a dispatch-detected
-	// closure already produces.
+	// CodeTargetGone: the target closed or disappeared under the call. Data
+	// MUST carry {target: "<key>"} — the key of the target the call
+	// ADDRESSED, the same string spelling as the events' target.key (e.g.
+	// "acme/repo#7"). The host honors it as a stop (stop hooks, not a
+	// failure — the engine's dispatch.ErrTargetClosed, the same sentinel a
+	// dispatch-detected closure already produces) ONLY when data.target
+	// equals the run's own trigger target key; otherwise it is a loud,
+	// non-retryable upstream failure instead, never a silent stop. This
+	// matters because a call under a run can address a target OTHER than
+	// the run's own — a notify verb posting to a chat channel, say — and
+	// that channel being gone must never be read as "this run's own target
+	// (the PR this workflow is about) is gone" merely because the CODE
+	// matches. Omitting data.target (an older or careless plugin) is the
+	// same as a mismatch: never honored as a stop.
 	CodeTargetGone = -32011
 	// CodeInvalid: the request can never succeed. Never retried, regardless
 	// of any retry: the caller configured.

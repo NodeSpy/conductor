@@ -24,13 +24,16 @@ import (
 // treats it identically.
 func TestMintTargetGoneStopsNotFails(t *testing.T) {
 	e, _ := newEng(t, baseCfg(), &fakeDispatcher{}, &fakeNotifier{}, nil)
+	tr := core.Trigger{Instance: "i", TargetTrusted: true}
 	e.invokeVerb = func(context.Context, string, string, map[string]any) (map[string]any, error) {
-		return nil, &connector.ContractError{Code: sdk.CodeTargetGone, Message: "the PR closed"}
+		// data.target must name the trigger's OWN key (finding 11) for
+		// target_gone to be honored as a stop.
+		return nil, &connector.ContractError{Code: sdk.CodeTargetGone, Message: "the PR closed",
+			Data: map[string]any{"target": tr.Key()}}
 	}
 	sem := &sdk.ConnSemantics{Credentials: []sdk.Credential{
 		{Name: "w", Role: "write", Mint: sdk.CredentialMint{Verb: "write_token"}, Value: "token", Env: []string{"GH_TOKEN"}},
 	}}
-	tr := core.Trigger{Instance: "i", TargetTrusted: true}
 	_, err := e.declaredCredentials(context.Background(), tr, "i", sem, false)
 	if !errors.Is(err, dispatch.ErrTargetClosed) {
 		t.Fatalf("declaredCredentials error = %v, want it to wrap dispatch.ErrTargetClosed", err)
@@ -196,7 +199,8 @@ func TestRemediateStatusTargetGoneDropsWithoutFixer(t *testing.T) {
 		case "read_token", "write_token":
 			return map[string]any{"token": "t"}, nil
 		case "get_run":
-			return nil, &connector.ContractError{Code: sdk.CodeTargetGone}
+			// data.target must name the trigger's own key (finding 11).
+			return nil, &connector.ContractError{Code: sdk.CodeTargetGone, Data: map[string]any{"target": "a/w#8"}}
 		case "rerun_run":
 			rerunCalled = true
 			return nil, nil
@@ -230,7 +234,8 @@ func TestRemediateActionTargetGoneDropsWithoutFixer(t *testing.T) {
 		case "get_run":
 			return map[string]any{"status": "completed"}, nil // done: fall through to the remedy
 		case "rerun_run":
-			return nil, &connector.ContractError{Code: sdk.CodeTargetGone}
+			// data.target must name the trigger's own key (finding 11).
+			return nil, &connector.ContractError{Code: sdk.CodeTargetGone, Data: map[string]any{"target": "a/w#11"}}
 		}
 		return nil, errors.New("unexpected verb " + verb)
 	}
@@ -297,7 +302,9 @@ func TestResumeStopsWhenCredentialMintSaysTargetGone(t *testing.T) {
 	e := New(Options{Config: cfg, Store: st, Dispatch: d, Notifier: &fakeNotifier{},
 		Author: dispatch.Author{}, Connectors: forgeRegistry(t),
 		InvokeVerb: func(context.Context, string, string, map[string]any) (map[string]any, error) {
-			return nil, &connector.ContractError{Code: sdk.CodeTargetGone, Message: "gone"}
+			// data.target must name the trigger's own key (finding 11):
+			// issueTrigger()'s is "acme/w#42".
+			return nil, &connector.ContractError{Code: sdk.CodeTargetGone, Message: "gone", Data: map[string]any{"target": "acme/w#42"}}
 		}})
 	tr := issueTrigger()
 	tr.Instance, tr.TargetTrusted = "i", true

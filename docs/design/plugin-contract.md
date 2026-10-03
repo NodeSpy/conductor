@@ -187,17 +187,30 @@ this once, generically, for a spawned plugin and an in-process builtin alike
 
 - a verb present in **both** declarations keeps **identical** semantics
   (`host_only`, `mints_credential`, `exposes`, `reads_revision`,
-  `opens_conversation`, `conversation_post`, `target_args` — byte for byte);
+  `opens_conversation`, `conversation_post`, `target_args` — byte for byte),
+  AND keeps `open` unchanged and never drops or alters an option's `scope`
+  or loosens an output's schema — none of those three live inside
+  `semantics`, so comparing only that block (an earlier version of this
+  check) let an instance keep `semantics` byte-identical while still
+  flipping `open` to `true` (which skips output validation entirely) or
+  stripping an option's `scope` (which gates agent-authored access to that
+  option via `ScopedOptions`);
 - an instance may declare a **new** verb the type decl never named at all,
   but that verb's `semantics` block must then be empty — this is what
   rest/graphql's user-declared, `open` verbs do;
 - connection-level semantics (`credentials`, `listeners`, `poll`, `scope`,
   `preflight`, `translate`) and `capabilities` must match the type-level
   declaration exactly;
-- **events are exempt** — an instance may declare any events it likes, with
-  any semantics. This is the entire point of Q6: webhook materializes one
-  concrete, statically-known `target.assigned` per configured source; rest
-  and graphql materialize their user-declared polled events.
+- **a brand-new event is exempt** — an instance may declare any event name
+  the type decl never had, with any semantics. This is the entire point of
+  Q6: webhook materializes one concrete, statically-known `target.assigned`
+  per configured source; rest and graphql materialize their user-declared
+  polled events. A **same-named** event (one the type decl already
+  declares) is narrower: it may not add or change `conversation_reply` or
+  `closes_target`, or widen its target's scope dimensions, beyond what the
+  type-level declaration's own same-named event already said — those three
+  are engine-honored escalation paths an instance decl is not otherwise
+  checked against at all.
 
 A per-instance `Decl` that is not a refinement refuses the instance (disabled
 with the reason), the same as a plugin that fails `CheckSemantics`. Without
@@ -345,26 +358,72 @@ connection on every call (buildManagedAuth, §1.11's `invokePlugin`) — the
 host owns the token exchange, the plugin just reads
 `InvokeRequest.Connection[access_token]`. A **source** has no such call to
 hang that on: `plugin.start_source` fires once, and whatever connection it
-captured in that call lives as long as the stream does. Before `host.auth`,
-rest's polled `events:` ran on that one-time snapshot forever, so a managed
-token minted or rotated after the source started was invisible to it — the
-poller just kept 401ing, silently, for as long as the daemon ran (the
-regression `host.auth` fixes).
+captured in that call lives as long as the stream does. At `4cade34`, rest
+was still a native Go connector with its own live authenticator, so a
+managed token stayed fresh for as long as the process did — there was no
+staleness bug to fix. `host.auth` is what makes the SAME thing true now that
+rest (and graphql, and webhook) are contract builtins behind the generic
+`externalImpl`/wire path: without it, a polled source's managed token would
+be frozen at whatever the one-time `start_source` snapshot captured, and a
+token minted or rotated afterward would be invisible to it — the poller
+would just keep 401ing, silently, for as long as the daemon ran. `host.auth`
+is the seam that lets a long-lived poller keep asking for the CURRENT token
+instead of trusting a snapshot.
 
 `host.auth` asks the host directly, as often as it needs — once per poll is
 fine, the host caches — and `refresh: true` after the source's own upstream
 call comes back 401, exactly the retry-once-on-401 a verb invoke gets
-automatically. It is scoped exactly like `host.state`: refused for an
-instance this plugin was never handed (`served`, the same instance-scoping
-guard), and refused when that instance has no managed (oauth2) auth
-configured at all — a plugin with a static scheme (`none`/`bearer`/`basic`/
-`header`) has no use for it and gets a plain error, not a token. The token
-value is never logged, host-side or in any `host.auth`-adjacent code path.
+automatically. `refresh: true` is cooldown-throttled per instance (default
+30s, `internal/connector.refreshCooldown`): a call within the cooldown gets
+the cached token unchanged, so a plugin calling it on every poll tick cannot
+turn it into a token-endpoint flood. It is scoped exactly like `host.state`:
+refused for an instance this plugin was never handed REAL traffic for — a
+started source, a poll, a translate, or an invoke (`internal/plugin.Client`'s
+`active` set) — never merely validated (`plugin.validate` runs for every
+configured instance of a type at boot regardless of which process really
+serves it, and must never be enough on its own to unlock a sibling
+instance's token or state); and refused when that instance has no managed
+(oauth2) auth configured at all — a plugin with a static scheme
+(`none`/`bearer`/`basic`/`header`) has no use for it and gets a plain error,
+not a token. The token value is never logged, host-side or in any
+`host.auth`-adjacent code path.
+
+The managed-auth registry backing `host.auth` is owned **per connector
+stack** (`internal/connector.AuthRegistry`), not a package-global map: each
+`connector.Build` call gets its own, threaded through `Deps.Auth`, so a
+throwaway validation/dry-run build (`conductor validate`, or the daemon's own
+`pendingPluginRetry` re-validating a candidate config while it keeps running)
+populates a registry nobody ever reads from, never the live daemon's. A
+spawned plugin gets a fresh `*plugin.Client` per stack, wired directly to
+that stack's registry; an in-process builtin's ONE shared `*plugin.Client`
+(constructed once per daemon process, `RegisterInProcessConnector`'s
+`sync.Once`) instead forwards through a live-registry indirection
+(`connector.HostAuthProvider`/`SetLiveAuthRegistry`) that only a stack
+actually becoming the daemon's operating one ever updates. An instance
+dropped from config is simply absent from the next live registry — gone on
+rebuild, no explicit delete needed.
 
 `pkg/plugin`'s `HostConn.Auth(instance).Token(ctx, refresh)` is the Go face a
 source author calls; see `internal/builtins/rest`'s poller for the reference
 usage (ask first, retry once with `refresh: true` on a 401, fall back to the
-connection's own static `auth:` unchanged when `host.auth` errors).
+connection's own static `auth:` unchanged when `host.auth` errors — but FAIL
+CLOSED, skipping the poll entirely with a log through `host.log`, when the
+connection's own declared scheme IS managed oauth2 and no usable token could
+be had any way: `ApplyAuth` has no static fallback for oauth2 at all, so
+polling anyway would send the request with no `Authorization` header
+whatsoever).
+
+```text
+host.log {instance, message} → {ok, error?}
+```
+
+Best-effort logging through the daemon's own logger, for a plugin with no
+stderr of its own (every in-process builtin) — scoped exactly like
+`host.state`/`host.auth` (the same `active`-instance guard), and never fatal
+to the caller: `HostConn.Log` ignores its own result and any transport error
+entirely. `internal/builtins/rest`'s poller is the reference usage, rate-
+limited per (instance, event) so a connector stuck failing the same way
+doesn't flood the daemon's log forever.
 
 ### 1.10 Builtins speak the contract
 
@@ -403,7 +462,7 @@ subset.
 |---|---|---|
 | -32700/-32600/-32601/-32602/-32603 | JSON-RPC standard (-32601 = not implemented) | -32601 on an optional method means "unsupported"; the others fail the call |
 | **-32010 `upstream`** | the upstream answered with an error; `data: {status, retryable}` | step fails; retried by the step's `retry:` only when `retryable` |
-| **-32011 `target_gone`** | the target closed/disappeared under the call | the run is **stopped** (stop hooks, no failure) — today's `ErrTargetClosed` (`internal/dispatch/output_schema.go:632`) |
+| **-32011 `target_gone`** | the target closed/disappeared under the call; `data: {target}` — the key of the target the call ADDRESSED | the run is **stopped** (stop hooks, no failure) — today's `ErrTargetClosed` (`internal/dispatch/output_schema.go:632`) — but ONLY when `data.target` equals the run's own trigger target key; a mismatched or absent `data.target` is instead a loud, non-retryable `upstream` failure (see below) |
 | **-32012 `invalid`** | the request can never succeed (validation) | fail, never retry |
 | **-32013 `rate_limited`** | `data: {retry_after}` | retried after `retry_after`, regardless of `retry:`, bounded by a total wait budget and an attempt cap (below) |
 | **-32014 `not_ready`** | state not computed yet (e.g. mergeability "unknown") | retried with short backoff, bounded |
@@ -420,13 +479,31 @@ ordinary wrapped Go error (`errors.As`-reachable through any number of
 
 - `target_gone` is turned into `dispatch.ErrTargetClosed` (the same sentinel
   a dispatch-detected closure already produces) at every place that mints or
-  reads on the run's behalf: a flow verb step and hook (`internal/flow/flow.go`
-  `execVerb`/`runHooks`), a credential mint and the legacy pre-dispatch/resume
-  gates (`internal/engine/credentials.go`, `internal/engine/engine.go`
-  `remediate`/`ResumeWorkflows`), so the existing stop-hook switch
+  reads on the run's behalf: a flow verb step and skill verb
+  (`internal/flow/contract.go` `stopAsTargetGone`, used by `flow.go`
+  `execVerb` and `skillverbs.go` `RunSkillVerb`), a credential mint
+  (`internal/engine/contract.go` `stopAsTargetGone`, used by
+  `internal/engine/credentials.go` `mint`), and `remediate`'s status/action
+  verbs (`internal/engine/engine.go`), so the existing stop-hook switch
   (`runSteps`) needs no further change. `reads_revision`
   (`internal/connector/head.go` `TargetHead`) prefers the code directly over
   a failed read's blank state, per the note below.
+
+  **It is honored ONLY when `data.target` names the SAME target as the run's
+  own trigger key** (`core.Trigger.Key()`, `connector.ContractError.
+  TargetGoneMatchesKey`/`TargetGoneOrUpstream` — the one shared gate every
+  interpreter above goes through): a call under a run can address a target
+  OTHER than the run's own — a flow step's `uses: slack.post` to a
+  notification channel, say — and that channel being gone must never be
+  read as "this run's own target (the PR the workflow is about) is gone"
+  merely because the *code* matches. A mismatched or absent `data.target`
+  comes back as a loud, non-retryable `upstream` failure instead (never
+  silently dropped, and never re-interpreted as `target_gone` again further
+  down the stack) carrying the plugin's own message. `remediate`'s own two
+  checks and `TargetHead` apply the same gate even though their own calls
+  are constructed to address the run's target by convention — the check
+  costs nothing and keeps every interpreter in the tree consistent should
+  that ever not hold.
 - `invalid` never retries: `internal/flow/flow.go`'s `execWithRetry` breaks
   its retry loop on it regardless of `retry:`.
 - `rate_limited` and `not_ready` are retried independently of any caller's
@@ -441,22 +518,57 @@ ordinary wrapped Go error (`errors.As`-reachable through any number of
   rate-limited cannot park a caller forever. `not_ready` keeps its own fixed,
   short schedule (`NotReadyBackoff`) and then gives up.
 - **The engine's single dispatch loop never sleeps on `rate_limited`/
-  `not_ready`.** A credential mint (`internal/engine/credentials.go` `mint`)
-  and a declared `remediate`'s status/action verbs (`internal/engine/engine.go`
-  `remediate`) run synchronously inside `process()`, which is fed by `Run`'s
-  one `for t := <-e.ch` loop, and inside `ResumeWorkflows`' sequential loop
-  over pending runs — a blocking retry there would stall every OTHER queued
-  trigger, for every other connector, behind one slow or rate-limited one.
-  So neither goes through `RetryContract`: a single failed attempt is
-  enough, and the caller decides what the answer means:
-  - `process()` schedules a re-emission of the trigger after the error's own
-    wait (`deferAndReemit`: `time.AfterFunc` → `e.Emit`), bounded per
-    occurrence (`maxDeferredReemits`), ctx-aware (no re-emit once shutting
-    down), and both logged and audited (`dispatch_deferred`);
-  - `ResumeWorkflows` reaches its existing defer-on-credential-error path
-    immediately (the run stays pending, retried on the next daemon start) —
-    a rate_limited/not_ready answer there is just an ordinary mint error,
-    handled exactly like any other one already was.
+  `not_ready` — but a flow step's own per-run goroutine does.** This is two
+  different modes of the same `credentialsFor`/`mint` machinery
+  (`internal/engine/credentials.go`), chosen by WHICH loop the caller runs
+  on:
+  - **Shared-loop mode** (`credentialsFor`, `retry=false`): a credential mint
+    and a declared `remediate`'s status/action verbs
+    (`internal/engine/engine.go` `remediate`) run synchronously inside
+    `process()`, which is fed by `Run`'s one `for t := <-e.ch` loop, and
+    `ResumeWorkflows`' sequential loop over pending runs feeds the legacy
+    (non-flow) resume path the same way — a blocking retry in any of these
+    would stall every OTHER queued trigger or pending run, for every other
+    connector, behind one slow or rate-limited one. So none of them go
+    through `RetryContract`: a single failed attempt is enough, and the
+    caller decides what the answer means:
+    - `process()` schedules a re-emission of the trigger after the error's
+      own wait (`deferAndReemit`: `time.AfterFunc` → `e.Emit`), bounded per
+      occurrence (`maxDeferredReemits`, 20 by default), floored at a minimum
+      wait (`minDeferredWait`, 1s by default — a tiny `retry_after` cannot
+      turn this into a hot loop), ctx-aware (no re-emit once shutting down),
+      and both logged and audited (`dispatch_deferred`). The per-occurrence
+      counter is cleared only once a LATER attempt gets past the deferral
+      point — succeeds, or hits a different, non-deferrable error
+      (`clearDeferredFor`) — never merely on re-enqueue: clearing on
+      re-enqueue is what let the cap never actually trip in an earlier
+      version of this, since the re-emitted trigger's very next attempt
+      would read the counter back at zero regardless of how many times this
+      had already happened. Once the cap is reached, that is audited
+      separately too (`dispatch_deferred_cap`).
+    - `ResumeWorkflows`' legacy (non-flow) path schedules a bounded per-run
+      recheck instead of leaving the run "deferred" with nothing revisiting
+      it until the next daemon restart (`internal/engine/resume_recheck.go`
+      `scheduleResumeRecheck`/`recheckResumeRun`): `rate_limited`/
+      `not_ready` honor the same wait `deferAndReemit` computes; any other
+      mint error (a connector still starting up) falls back to a short fixed
+      schedule (`resumeRecheckBackoff`). Bounded at
+      `resumeRecheckMaxAttempts` (10 by default), after which the run is
+      left pending for the next start, logged and audited
+      (`resume_recheck_exhausted`) — ctx-aware, and never blocking the
+      sequential loop over every OTHER pending run.
+  - **Per-run-goroutine mode** (`credentialsForFlow`, `retry=true`): a flow
+    step and flow resume (`internal/flow/flow.go` `execAgent`,
+    `internal/engine/flow.go` `resumeFlowRun`) each run in their OWN
+    goroutine, dispatched per trigger/run rather than fed by one shared
+    channel or loop — blocking one of them in a retry sleep costs nothing
+    to any OTHER queued trigger. So `credentialsForFlow` retries a
+    `rate_limited`/`not_ready` mint through `connector.RetryContract`
+    instead, bounded by its own budget, rather than failing the step
+    outright. Without this, a flow step's `retry:` would never even get a
+    chance — `noStepRetry` (below) excludes `rate_limited`/`not_ready` from
+    a step's own `retry:` unconditionally, on the assumption that something
+    upstream of the step already retried them.
 - `upstream` retries only when `data.retryable` is true AND the step
   configured `retry:` — `execWithRetry` also breaks immediately on a
   non-retryable `upstream` answer, never consulting `retry:` for it.
@@ -473,7 +585,11 @@ ordinary wrapped Go error (`errors.As`-reachable through any number of
   synthesize a run-level stop on `target_gone` — the call runs inside an
   agent's own live turn, outside the step/hook control flow that fires stop
   hooks, so it surfaces as a tagged (`errors.As`-reachable), redacted tool
-  error for the agent to act on instead.
+  error for the agent to act on instead. It still goes through the same
+  `stopAsTargetGone`/key-matching gate as everything else — tagging a
+  mismatched-target `target_gone` as `ErrTargetClosed` would be just as
+  wrong here as acting on it directly would be elsewhere, even though this
+  call site never itself stops the run.
 - A hook is best-effort regardless of code: `rate_limited`/`not_ready` are
   retried the same bounded way as any other invoke (worth the short wait),
   but `target_gone`/`invalid` get no special treatment beyond the existing
