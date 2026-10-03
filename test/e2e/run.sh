@@ -862,7 +862,7 @@ wait_handoff_url_after() {
 
 # slack_sink_has <pattern> — a captured slack Web API call contains pattern.
 slack_sink_has() {
-  netcurl http://sink-catcher:8080/_captured | grep -q "$1"
+  netcurl http://sink-catcher:8080/_captured | grep -- "$1" >/dev/null
 }
 
 group_K_connectors() {
@@ -1294,7 +1294,7 @@ cinvoke() {
 }
 
 # runs_get_has <id> <needle> — GET /runs/<id> with the scoped token contains needle.
-runs_get_has() { cexec conductor-conn curl -s "$CALL_BASE/runs/$1" -H "$CALL_AUTH" | grep -q "$2"; }
+runs_get_has() { cexec conductor-conn curl -s "$CALL_BASE/runs/$1" -H "$CALL_AUTH" | grep -- "$2" >/dev/null; }
 
 # callback_delivered — the callback POST reached the sink-catcher AND carries the
 # structured result (a status-ok body for the who=callback run).
@@ -1625,7 +1625,7 @@ group_Y_listeners_github_smee() {
   # moment its webhook listener starts, which is the plugin-side proof url_to
   # actually reached it (as opposed to Y2 alone, which would also pass if the
   # plugin fell back to some other address it guessed correctly).
-  if dc logs conductor-conn 2>&1 | grep -q "github\[ghlisten\]: webhook listener .* is reachable at http://mock-smee:8080/e2e-gh-channel"; then
+  if dc logs conductor-conn 2>&1 | grep "github\[ghlisten\]: webhook listener .* is reachable at http://mock-smee:8080/e2e-gh-channel" >/dev/null; then
     ok "Y1 the engine opened ghsmee for ghlisten's listener and filled in webhook.public_url" Y Y1
   else
     bad "Y1 exposure URL reached the plugin" Y Y1 "no 'reachable at http://mock-smee:8080/e2e-gh-channel' in the github plugin's log"
