@@ -112,6 +112,7 @@ func TestReplyToBotsOffSkipsOnlyReplies(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:
   gh: { use: github, token: dummy, webhook: { listen: "127.0.0.1:0", secret: s }, repos: ["o/r"] }
+  gh2: { use: github, token: other, repos: ["o/r"] }
   chat: { use: slack, bot_token: x }
 `)
 	reg := buildRegistry(t, cfg)
@@ -120,6 +121,7 @@ on: gh.new_comment
 policy: { reply_to_bots: off }
 steps:
   - { id: reply, uses: gh.comment, options: { repo: o/r, number: 1, body: "thanks" } }
+  - { id: reply2, uses: gh2.comment, options: { repo: o/r, number: 1, body: "thanks again" } }
   - { id: elsewhere, uses: gh.comment, options: { repo: o/other, number: 9, body: "tracking" } }
   - { id: alert, uses: chat.post, options: { channel: "#ops", text: "a bot commented" } }
 `)

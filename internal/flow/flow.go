@@ -1050,11 +1050,13 @@ func (r *Runner) skipBotReply(ctx context.Context, in *connector.Instance, verb 
 	if !ok || v.Semantics == nil || !v.Semantics.ConversationPost {
 		return "", false
 	}
-	// A reply goes back into the bot's conversation: on the connector the
-	// event came from, to the event's own destination. A post on another
-	// connector (an ops alert in chat about a bot's PR comment), or to a
-	// destination it names that differs from the event's own, is not one.
-	if in.Name != t.Instance {
+	// A reply goes back into the bot's conversation: on the platform the
+	// event came from (the connector TYPE — any instance of it, so a second
+	// instance pointed at the same place is no way around this), to the
+	// event's own destination. A post on another platform (an ops alert in
+	// chat about a bot's PR comment), or to a destination it names that
+	// differs from the event's own, is not one.
+	if in.Decl.Type != t.Source {
 		return "", false
 	}
 	for _, so := range v.ScopedOptions() {
