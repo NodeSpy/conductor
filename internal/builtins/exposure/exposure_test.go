@@ -2,6 +2,7 @@ package exposure
 
 import (
 	"context"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -79,4 +80,35 @@ func firstLease(t *Tunnel) string {
 		return id
 	}
 	return ""
+}
+
+// LAN-IP detection, for a `lan` exposure with no `host:` (restored from the
+// former tunnel provider's tests).
+func TestIsPrivateIPv4(t *testing.T) {
+	for _, tc := range []struct {
+		ip   string
+		want bool
+	}{
+		{"10.0.0.5", true}, {"172.16.0.1", true}, {"172.31.255.255", true}, {"172.32.0.1", false},
+		{"192.168.1.1", true}, {"8.8.8.8", false},
+		{"127.0.0.1", false}, // loopback is not a LAN address here
+		{"203.0.113.5", false}, {"::1", false},
+	} {
+		if got := isPrivateIPv4(net.ParseIP(tc.ip)); got != tc.want {
+			t.Errorf("isPrivateIPv4(%s) = %v, want %v", tc.ip, got, tc.want)
+		}
+	}
+}
+
+// The real detector may legitimately fail in an offline sandbox; it must
+// never return a non-private or unparseable address.
+func TestDetectLANIPReturnsPrivateOrErrorsCleanly(t *testing.T) {
+	ip, err := detectLANIP()
+	if err != nil {
+		t.Logf("no LAN IP in this environment: %v", err)
+		return
+	}
+	if p := net.ParseIP(ip); p == nil || !isPrivateIPv4(p) {
+		t.Fatalf("detectLANIP returned %q", ip)
+	}
 }
