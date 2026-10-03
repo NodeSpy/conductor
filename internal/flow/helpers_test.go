@@ -512,6 +512,11 @@ type fakeStore struct {
 	history []store.RunHistory
 	delLog  []string
 	plans   map[string]store.PlanRecord
+	// putRunErr, when set, makes PutRun fail with this error WITHOUT
+	// recording anything (runs/putLog untouched) — a test's stand-in for a
+	// lost/failed write (finding 6: StartHooksFired persisted before firing
+	// must skip firing rather than risk a double-post when this happens).
+	putRunErr error
 }
 
 func newFakeStore() *fakeStore {
@@ -575,6 +580,9 @@ func (s *fakeStore) allHistory() []store.RunHistory {
 func (s *fakeStore) PutRun(r store.WorkflowRun) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.putRunErr != nil {
+		return s.putRunErr
+	}
 	s.runs[r.ID] = r
 	s.putLog = append(s.putLog, r)
 	return nil

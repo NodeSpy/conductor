@@ -449,25 +449,42 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 			panic(rec)
 		}
 	}()
-	// Start-phase hooks fire only once per run — the first time Run reaches
-	// this point for it, never again on a later resume/retry-continuation
-	// of the SAME attempt (finding 4a): a workflow-level `ack`-style option
-	// hook posted at `start` must not double-post after a daemon restart
-	// resumes a run that had already passed this point, or a retry
-	// continues one from a later step. run.StartHooksFired is persisted
-	// IMMEDIATELY, before any step runs, so a crash between firing and the
-	// first step's own checkpoint still can't cause a re-fire on the next
-	// resume. A deliberate retry-from-the-top (engine.retryRun with
-	// startIdx 0) is a fresh attempt, not a continuation: it persists a new
-	// record with StartHooksFired false, so it fires again there, same as
-	// a brand new run.
+	// Start-phase hooks fire AT MOST once per run — the first time Run
+	// reaches this point for it, never again on a later resume/retry-
+	// continuation of the SAME attempt (finding 4a/6): a workflow-level
+	// `ack`-style option hook posted at `start` must not double-post after a
+	// daemon restart resumes a run that had already passed this point, or a
+	// retry continues one from a later step. A deliberate retry-from-the-top
+	// (engine.retryRun with startIdx 0) is a fresh attempt, not a
+	// continuation: it persists a new record with StartHooksFired false, so
+	// it fires again there, same as a brand new run.
+	//
+	// run.StartHooksFired is set and PERSISTED BEFORE firing — not after, as
+	// this once was. Firing first and persisting after (with the persist
+	// error silently discarded) could double-fire: a crash between the fire
+	// and the persist landing left StartHooksFired still false on disk, so
+	// the next resume reached this point again and fired a SECOND time —
+	// the exact thing this guard exists to prevent, despite this comment, in
+	// the old wording, claiming the guarantee outright. Persisting first
+	// instead means the failure mode flips to at-most-once, never
+	// exactly-once: if PutRun itself fails, firing is skipped for this pass
+	// rather than risking a double-post with nothing durable backing it —
+	// logged, and left for a later resume (which sees StartHooksFired still
+	// false and tries the persist-then-fire sequence again) rather than
+	// firing on a wing and a prayer.
 	if !run.StartHooksFired {
-		if hasPhase(spec.Hooks, "start") {
-			r.fireHooks(ctx, t, spec.Hooks, "start", "running", run.ID, "", withRun(data, facts), nil, "workflow")
-		}
 		run.StartHooksFired = true
+		persisted := run.ID == "" // nothing to persist against (no run identity) is not a failure
 		if run.ID != "" {
-			_ = r.Store.PutRun(run)
+			if err := r.Store.PutRun(run); err != nil {
+				run.StartHooksFired = false // keep in-memory state honest: NOT durably recorded
+				r.Log("%s workflow: could not persist StartHooksFired before firing start hooks (%v) — skipping start hooks this pass; a later resume retries", flowTag(t), err)
+			} else {
+				persisted = true
+			}
+		}
+		if persisted && hasPhase(spec.Hooks, "start") {
+			r.fireHooks(ctx, t, spec.Hooks, "start", "running", run.ID, "", withRun(data, facts), nil, "workflow")
 		}
 	}
 

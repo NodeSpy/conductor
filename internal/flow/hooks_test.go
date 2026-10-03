@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/store"
@@ -328,5 +329,76 @@ steps:
 	}
 	if !last.StartHooksFired {
 		t.Fatal("Run must persist StartHooksFired=true after firing the start hook")
+	}
+}
+
+// TestStartHooksLostWriteNeverDoublesFireOnResume is finding 6: StartHooksFired
+// is set and PERSISTED BEFORE firing, not after. Before the fix, firing came
+// first and the persist's error was discarded — a crash (or here, any failed
+// write) between the fire and the persist landing left StartHooksFired still
+// false on disk, so a later resume fired a SECOND time. After the fix, a
+// failed persist must skip firing entirely THIS pass (logged, not fatal to
+// the run) rather than risk firing without anything durable backing it; a
+// later resume — which, with nothing durable changed, still sees
+// StartHooksFired false — then persists successfully and fires EXACTLY once,
+// never zero-then-two.
+func TestStartHooksLostWriteNeverDoublesFireOnResume(t *testing.T) {
+	cfg := loadConfig(t, `
+connectors:
+  svc:
+    use: fake
+`)
+	reg := buildRegistry(t, cfg)
+	st := newFakeState(t, "svc")
+
+	spec := mustSpec(t, `
+on: svc.ping
+hooks:
+  - at: start
+    uses: svc.post
+    options: {text: "ack"}
+steps:
+  - id: one
+    uses: svc.post
+    options: {text: "step-one"}
+`)
+	rig := newTestRunner(t, cfg, reg)
+	trig := newTrigger("ping", map[string]any{"msg": "x"})
+
+	acks := func() int {
+		n := 0
+		for _, c := range st.snapshot() {
+			if c.Verb == "post" && c.Opts["text"] == "ack" {
+				n++
+			}
+		}
+		return n
+	}
+
+	// Pass 1: the store's PutRun fails (a lost/failed write — a disk-full
+	// daemon crash's analog). StartHooksFired must NOT fire without a
+	// durable record of it backing that fire.
+	rig.Store.putRunErr = errors.New("disk full")
+	fresh := store.WorkflowRun{ID: "r1", Outputs: map[string]map[string]any{}}
+	runTriggerWithRun(rig, fresh, trig, spec)
+	if n := acks(); n != 0 {
+		t.Fatalf("a failed persist must not fire the start hook at all, got %d acks", n)
+	}
+	if _, ok := rig.Store.lastPut("r1"); ok {
+		t.Fatal("a failed PutRun must not be recorded as a successful put")
+	}
+
+	// Pass 2: "resume" — the store works again now, and (since nothing
+	// durable changed in pass 1) the loaded record still shows
+	// StartHooksFired false, exactly what a real resume would read back.
+	rig.Store.putRunErr = nil
+	resumed := store.WorkflowRun{ID: "r1", Outputs: map[string]map[string]any{}}
+	runTriggerWithRun(rig, resumed, trig, spec)
+	if n := acks(); n != 1 {
+		t.Fatalf("after the lost write, the next attempt must fire the start hook EXACTLY once, got %d total", n)
+	}
+	last, ok := rig.Store.lastPut("r1")
+	if !ok || !last.StartHooksFired {
+		t.Fatal("the successful pass must persist StartHooksFired=true")
 	}
 }
