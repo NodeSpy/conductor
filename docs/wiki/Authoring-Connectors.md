@@ -61,8 +61,11 @@ one you declare but ignore is a bug report. Special declaration flags:
   schedules, rss feeds); implement `DeclaredEvents()` to list them.
 - `VerbDecl.Ask` — a request-response verb that presents to a human and
   blocks for the answer (see [[Hand-offs]]).
-- `VerbDecl.Open` — user-defined option keys (the rest/graphql pattern);
-  pair with `InstanceDecler` (below).
+- `VerbDecl.Open` — user-defined option keys (the rest/graphql pattern); for
+  a bundled Go connector this is set directly in the `Decl` your `Impl`
+  returns. A plugin (spawned, or an in-process contract builtin) sets the
+  wire-level `Verb.Open` field instead — see "Per-instance declarations"
+  below.
 - `VerbDecl.BinaryIn` / `BinaryOut` — binary IO (#36 §21): declared inputs
   arrive as the blob's on-disk path; declared outputs return raw `[]byte`
   and leave as opaque handles. See [[Binary-Data]].
@@ -89,22 +92,40 @@ func newMyImpl(name string, ref config.ConnectorRef, deps connector.Deps) (conne
 ### Sources
 
 `Source(triggers)` lowers the triggers referencing this connector into the
-integration that provides event transport (webhook route, poll loop). A
+integration that provides event transport (a listener, a poll loop). A
 verb-only connector returns `(nil, nil)`. Emitted events must publish
 exactly the `Context` schema — the validator holds `{{…}}` references in
 user configs to it.
 
-### Per-instance declarations (`InstanceDecler`)
+### Per-instance declarations (Q6: `plugin.describe {instance, config}`)
 
-A type whose events/verbs come from user config (rest/graphql declare their
-own verbs) implements
+A type whose events/verbs come from user config — rest and graphql declare
+their own verbs this way (`internal/builtins/rest`, `internal/builtins/graphql`),
+and webhook materializes one concrete event per configured source — does
+**not** implement a connector-side Go interface for this. It is a contract
+mechanism (docs/design/plugin-contract.md §1.4, §3.9 G13), the same for a
+spawned plugin and an in-process builtin: the handler implements
+`pkg/plugin.InstanceDescriber`,
 
 ```go
-func (m *myImpl) InstanceDecl(base *connector.TypeDecl) *connector.TypeDecl
+func (h *myHandler) DescribeInstance(ctx context.Context, instance string, config map[string]any) (plugin.Decl, error)
 ```
 
-to materialize the instance's actual contract; validation, introspection,
-and dispatch then see it instead of the static declaration.
+and the host calls `plugin.describe {instance, config}` once per configured
+instance, in addition to the once-per-process `plugin.describe {host}` call.
+A handler that does not implement `InstanceDescriber` answers
+`CodeMethodNotFound` for that call automatically (the method dispatch does
+it), and the type-level `Describe()` is every instance's declaration. The
+returned `Decl` is checked exactly like the type-level one (must-understand
+semantics, internal consistency) before it becomes the instance's effective
+declaration everywhere — validation, introspection, verb dispatch.
+
+There is no equivalent for a bundled Go connector registered with
+`connector.RegisterType` (the pattern this page otherwise documents): that
+registration path has one static `TypeDecl` per type, with no per-instance
+hook. A connector whose contract genuinely varies per instance belongs on
+the plugin contract (even as an in-process builtin via
+`connector.RegisterInProcessConnector`), not as a bundled type.
 
 ## Heavy dependencies: the build-tag pattern
 

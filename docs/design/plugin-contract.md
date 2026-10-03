@@ -8,8 +8,15 @@ stripped and one reserved-namespace list, git-only distribution
 (`refs/dist`), tunnels as exposure connectors (`lan`, `tunnel` builtins in
 process), the vendor-neutral `pkg/` (relay client out, boundary test),
 `pkg/plugintest`, `sourcekit.Poller`, and the engine reading declared
-semantics (cron and rss in process; webhook, rest and graphql wait on a
-per-instance describe, Q6). **Step C is in**: plugins-first boot; github, slack, discord, ntfy,
+semantics (cron, rss, webhook, rest and graphql all in process). Q6
+(`plugin.describe {instance, config}`, optional, must-understand-checked like
+the type-level describe) is **in**: it replaced the `InstanceDecler` Go-side
+door outright — `externalImpl` asks its connected plugin (spawned or
+in-process) for a per-instance declaration over the wire, and that is the
+instance's whole declaration from then on (registry, verb/output validation).
+rest and graphql materialize their user-declared verbs and events through it;
+webhook materializes one concrete event per configured source, each carrying
+a statically-known `target.assigned` (G13, A6 below). **Step C is in**: plugins-first boot; github, slack, discord, ntfy,
 pushover and notifiarr out of the binary (each `use:` is the official plugin;
 `pkg/githubkit` lives in conductor-plugins); the legacy blocks,
 `internal/migrate` and `config migrate` removed (Q4); the vendor hand-off
@@ -292,13 +299,24 @@ dies — a known gap), a poll cursor. It is bounded per instance. The run-scoped
 
 ### 1.10 Builtins speak the contract
 
-cron, rss and webhook are rewritten as `pkg/plugin` handlers, served through
-an **in-process pipe** (`plugin.ServeConn(net.Pipe())`). They are registered
-by the same `RegisterExternalType` path as a spawned plugin, with
-`Spec{InProcess: handler}` instead of a binary.
+cron, rss, webhook, rest and graphql are rewritten as `pkg/plugin` handlers
+(`internal/builtins/{cron,rss,webhook,rest,graphql}`), served through an
+**in-process pipe** (`plugin.ServeConn(net.Pipe())`). They are registered by
+`RegisterInProcessConnector`, with `Spec{InProcess: handler}` instead of a
+binary, through the same `externalImpl` proxy a spawned plugin's builder
+uses — including Q6: when the handler implements `InstanceDescriber`, its
+per-instance `Decl` (rest/graphql's user-declared verbs, webhook's concrete
+per-source events) is the instance's effective declaration, exactly like an
+external plugin's would be.
 - Same JSON encoding, same routing, same semantics checks.
-- No `core.Integration` side door (`internal/connector/sources.go:126,363,542`).
+- No `core.Integration` side door (webhook and rest/graphql's events used to
+  lower into `core.Build`/a `httpPoller`; both now emit through
+  `plugin.event` like any source).
 - No `TypeDecl.Filter` hook (`internal/connector/connector.go:163-172`).
+- No `InstanceDecler` Go interface (`internal/connector/connector.go`, G13):
+  `externalImpl` is the one generic Impl that asks the wire for a
+  per-instance Decl; nothing bespoke to rest/graphql/webhook is left in the
+  engine.
 
 The engine cannot tell them from a spawned plugin, which is the point.
 
@@ -601,7 +619,7 @@ code.
 | A3 | `internal/engine/engine.go:741-765, 797`; `engine/flow.go:50`; `config/config.go:378-381` | `Context["labels"]` + `pause_label` | SEM `labels` |
 | A4 | `internal/connector/scope.go:28, 73-81, 98-107`; `connector/slack.go:187-202` | `DimRepo` implicit from a trusted `Target.Repo`; `ScopeContexter` bundled-only | SEM `target.scope` (any dimension, any plugin) |
 | A5 | `internal/flow/scoperender.go:89` | closed set `number, owner, name, repo, kind` of platform-assigned facts | SEM `target.assigned` + `target.scope` |
-| A6 | `internal/flow/skillverbs.go:499-528` | untrusted-target warning only for `ref.Type=="webhook"` | warn for any event whose `target.assigned` is false |
+| A6 | `internal/flow/skillverbs.go:499-528` | untrusted-target warning only for `ref.Type=="webhook"` | **built**: `untrustedTargetWarnings` walks every configured trigger and warns when its event's declared `target.assigned` is not statically `true` (absent, `false`, or a fact — which may be false at any occurrence), generic over connector type; tested with webhook (static vs body-templated `repo:`) and a fixture plugin declaring each shape |
 | A7 | `internal/config/pack_instantiate.go:467-493, 908, 934-1057`; `config/pack.go:259-283` | consent: `TypeName()=="github"`, `githubRepoKey="repo"`, `TriggerArm.Repos` | SEM `scope {dimension, option, consent}`; `TriggerArm.Repos` kept as an alias of `scope:` |
 
 ### 3.8 Conversation / hand-off / completion
@@ -630,7 +648,7 @@ code.
 | G3 | `internal/connector/github.go` (all); `internal/integrations/github/**`; `pkg/githubkit/**` | bundled github | PLUGIN |
 | G4 | `internal/connector/slack.go` (all); `internal/integrations/slack/**` | bundled slack | PLUGIN |
 | G4a | `internal/connector` `ntfyDecl`, `pushoverDecl`, `notifiarrDecl`, `discordDecl` (registered at `init` like any builtin) | vendor notification/chat connectors compiled into conductor | PLUGIN (conductor-plugins already ships pushover and notifiarr; ntfy and discord ported in P) |
-| G5 | `internal/connector/sources.go:61, 126, 178, 363, 471-473, 542`; `github.go:397-412` (`buildIntegration`); `cmd/conductor/main.go:54-58`; `internal/core/registry.go:21,32` | cron/rss/webhook via `core.Build` side door | in-process contract builtins (§1.10); DEL `core.Integration` |
+| G5 | `internal/connector/sources.go:61, 126, 178, 363, 471-473, 542`; `github.go:397-412` (`buildIntegration`); `cmd/conductor/main.go:54-58`; `internal/core/registry.go:21,32` | cron/rss/webhook via `core.Build` side door | **built**: in-process contract builtins (§1.10) for cron, rss and webhook; `buildIntegration` and the webhook path deleted from `internal/connector` (`internal/core.Integration`/`Register`/`Build` itself stays — `internal/integrations/rss` still self-registers there, orphaned, out of this scope) |
 | G6 | `pkg/plugin/source.go:5-28`; `wire.go:239-256, 129-132`; `connector/external.go:185-192, 342-344, 389`; `internal/plugin/resolve.go:285-292`; `cmd/conductor/reload.go:24,75` | `ConnectorABI`, `Decl.ABI`, triggers sent only at ABI 1, ABI part of reload surface | DEL (`abi` accepted and ignored) |
 | G7 | `pkg/plugin/wire.go:45-49`; `internal/plugin/client.go:510-516`; `plugin.go:46-52`; `cmd/conductor/plugins.go:182-188` | `EngineABI` exact match; empty kind refused for engines | `step_engine` declared; must-understand semantics |
 | G8 | `internal/connector/pluginsource.go:139-160, 183-254` | `kindFor` trust/ABI rules, `_closed` path, `TargetTrusted = trusted && claim` | DEL; SEM `target.assigned` bounded by SEM `scope` |
@@ -638,7 +656,7 @@ code.
 | G10 | `internal/config/pack_trust.go:37-42, 68-121`; `internal/plugin/remote.go:89-96`; `install.go:107-113`; `resolve.go:173-175, 214-233`; `plugin.go:104-113`; `manager.go:73` | `IsOfficialSource` also feeds event trust; `release_verified` exists for it | keep for install-time provenance and integrity only; DEL the runtime consumer |
 | G11 | `internal/connector/github.go:135-239`; `config/config.go:866, 901-941, 945-1072` | lowering into vendor `config.Action` fields (`Reviewer`, `IgnoreChecks`, `StuckAfter`, `Gates`, `Exclude` …) | PLUGIN (options delivered on `start_source.triggers`); DEL the fields |
 | G12 | `internal/connector/connector.go:163-172`; `connector/slack.go:102-105, 241-276` | `TypeDecl.Filter` hook (slack, rss) | DEL; plugins evaluate their own match keys or use the generic evaluator |
-| G13 | `internal/connector/connector.go:322-324, 485` | `InstanceDecler` (rest, graphql) | optional `plugin.describe {instance}` returning instance-specific verbs (Q6) |
+| G13 | `internal/connector/connector.go:322-324, 485` | `InstanceDecler` (rest, graphql) | **built**: `InstanceDecler` deleted; `plugin.describe {instance, config}` (Q6) returns the instance's declaration, resolved generically by `externalImpl` for any contract connector — rest and graphql (now `internal/builtins/{rest,graphql}`) are its only users today, but the mechanism knows nothing about them |
 | G14 | `internal/connector/github.go:272-284`; `integrations/github/github.go:337-340` | `set_status` → `NoteOwnStatusContext` (own-status loop guard) | PLUGIN-internal, made durable via `host.state` |
 | G15 | `internal/connector/external.go:235` | reserved connection keys omit `use, network, isolation, allow_secrets`, which leak to the plugin | fix: strip all host-owned keys |
 | G16 | `internal/config/connectors.go:1687-1707`; `config/vaults.go:55`; `connector.go:503-528` | reserved-name lists disagree (`handoff`, `step` missing) | one list |
@@ -956,7 +974,7 @@ All resolved on review: Q5 as discussed, the rest as recommended.
 | Q3 | paseo's forge path (X1): opaque `runtime_hints` vs always branch-off | **Decided:** `runtime_hints` now; revisit when paseo exposes a forge-neutral worktree call |
 | Q4 | Legacy `integrations:` / `handoffs:` / `notify:` blocks and `internal/migrate` | **Decided:** removed in the release. Run `conductor migrate` with the current release first; the new binary's `conductor validate` names any legacy block still present |
 | ~~Q5~~ | **Decided:** tunnels and relays are connectors declaring `exposes` (V4–V4c). `lan` and `tunnel` (any tunnelling command) are the vendor-neutral builtins, and a fixed origin stays the web connector's `base_url`; a plugin may always reach the local address it is handed; straight cutover with no compatibility shim. The web approve/revise page stays a core surface with no tunnel code | — |
-| Q6 | rest/graphql `InstanceDecler` (instance-specific verbs) | **Decided:** `plugin.describe {instance}` (optional) |
+| Q6 | rest/graphql `InstanceDecler` (instance-specific verbs) | **Decided and built:** `plugin.describe {instance, config}` (optional; `InstanceDescriber` in `pkg/plugin`). `CodeMethodNotFound` means the plugin has no per-instance declaration and the type-level `Describe()` applies to every instance. The returned `Decl` passes the same `CheckSemantics`/`ValidateSemantics` checks as the type-level one. `internal/connector`'s `externalImpl` calls it once per configured instance (spawned plugin or in-process builtin alike) and that becomes the instance's effective declaration — `InstanceDecler` is gone |
 | Q7 | Binary verb outputs (Slack `download` → agent `images:`): the wire cannot carry `BinaryOut` today | **Decided and built:** the host gives each instance a staging directory inside its fs capability (`invoke.staging`, §1.6); outputs return paths under it, and the engine accepts only those |
 | Q8 | The GitHub write credential via `gh auth token` inside a confined plugin (needs `commands: [gh]` and read access to gh's config) | **Decided:** declare it in the github plugin's capabilities; the `pat` / `token:` paths need neither |
 | Q9 | `host.state` limits and lifetime | **Decided:** per-instance quota, entries survive restarts, dropped when the instance is removed |
