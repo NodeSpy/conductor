@@ -112,6 +112,18 @@ instance with no managed auth — fall back to the connection's own static
 `auth:` unchanged. See `internal/builtins/rest`'s poller for the reference
 implementation.
 
+A plugin with no stderr of its own (every in-process builtin) can still log
+through the daemon's own logger: `host.Log(instance, message)` — best-effort,
+scoped like `host.auth` (docs/design/plugin-contract.md §1.9, `host.log`).
+The host bounds it the same way it bounds `host.state`/`host.auth`: a message
+is capped at 2 KiB and every control character is escaped (a plugin can't
+start a new log line, forge a daemon-looking one, or move the terminal
+cursor), and each instance gets a budget of 60 lines per rolling minute —
+past that, lines are dropped and the drop count is logged once the window
+turns over. Rate-limit your own calls per (instance, event) besides (see
+`internal/builtins/rest`'s poller) — this budget is a backstop, not a
+substitute for not flooding it in the first place.
+
 ### Per-instance declarations (Q6: `plugin.describe {instance, config}`)
 
 A type whose events/verbs come from user config — rest and graphql declare
@@ -134,6 +146,30 @@ it), and the type-level `Describe()` is every instance's declaration. The
 returned `Decl` is checked exactly like the type-level one (must-understand
 semantics, internal consistency) before it becomes the instance's effective
 declaration everywhere — validation, introspection, verb dispatch.
+
+The returned `Decl` must also be a **refinement** of the type-level one, not
+a replacement (plugin-contract.md §1.4; `internal/connector/instance_refine.go`
+`validateInstanceRefinement`) — a per-instance declaration that fails this is
+disabled with the reason, the same as one that fails the must-understand
+checks:
+
+- a verb present in both declarations keeps identical `semantics`
+  (`host_only`, `mints_credential`, `exposes`, …, byte for byte), keeps
+  `Open` unchanged, and never drops or changes an option's `scope`;
+- a verb's declared `outputs` may only get stricter (same type, at least as
+  `required`) — never dropped or loosened;
+- a brand-new verb the type decl never named is fine, as long as it carries
+  no `semantics` of its own (rest/graphql's user-declared, plain verbs);
+- connection-level semantics (`credentials`, `listeners`, `poll`, `scope`,
+  `preflight`, `translate`) and the `capabilities` manifest must match the
+  type-level declaration exactly — these are fixed at install, not per
+  instance;
+- a brand-new event (one the type decl never declared) is exempt — this is
+  Q6's whole point. A **same-named** event may not add or change
+  `conversation_reply` or `closes_target`, and its target's scope dimensions
+  must be identical (not wider, not narrower) to the type-level
+  declaration's same-named event — those three are the engine-honored
+  escalation paths otherwise unchecked.
 
 There is no equivalent for a bundled Go connector registered with
 `connector.RegisterType` (the pattern this page otherwise documents): that

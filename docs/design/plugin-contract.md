@@ -207,10 +207,12 @@ this once, generically, for a spawned plugin and an in-process builtin alike
   per configured source; rest and graphql materialize their user-declared
   polled events. A **same-named** event (one the type decl already
   declares) is narrower: it may not add or change `conversation_reply` or
-  `closes_target`, or widen its target's scope dimensions, beyond what the
-  type-level declaration's own same-named event already said — those three
-  are engine-honored escalation paths an instance decl is not otherwise
-  checked against at all.
+  `closes_target`, and its target's scope dimensions must be **identical**
+  to — not a superset of, and not a subset of — what the type-level
+  declaration's own same-named event already said (exact-set equality, not
+  merely "no widening": narrowing is rejected too) — those three are
+  engine-honored escalation paths an instance decl is not otherwise checked
+  against at all.
 
 A per-instance `Decl` that is not a refinement refuses the instance (disabled
 with the reason), the same as a plugin that fails `CheckSemantics`. Without
@@ -424,6 +426,15 @@ to the caller: `HostConn.Log` ignores its own result and any transport error
 entirely. `internal/builtins/rest`'s poller is the reference usage, rate-
 limited per (instance, event) so a connector stuck failing the same way
 doesn't flood the daemon's log forever.
+
+The host bounds `host.log` the same way it bounds `host.state`/`host.auth`
+(`internal/plugin/hostlog.go`): a message is capped at 2 KiB (truncated,
+UTF-8-safe, with a `…(truncated)` marker) and every control character
+(newlines, ESC, DEL, C1) is escaped (`\xNN`) so a plugin can never start a
+new log line, forge a daemon-looking one, or move the terminal cursor; each
+INSTANCE additionally gets a fixed budget of 60 lines per rolling minute —
+lines past that are dropped and counted, with the drop count logged once the
+window turns over.
 
 ### 1.10 Builtins speak the contract
 
