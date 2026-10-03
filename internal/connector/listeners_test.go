@@ -320,6 +320,10 @@ type flakyExposer struct {
 	mu        sync.Mutex
 	failUntil int
 	calls     int
+	// onCall, when set, is called (outside the lock) on every Invoke attempt
+	// with its 1-based attempt number — a hook for a test to time attempts
+	// without adding its own counter.
+	onCall func(attempt int)
 }
 
 func (f *flakyExposer) Validate() error                                    { return nil }
@@ -333,6 +337,9 @@ func (f *flakyExposer) Invoke(_ context.Context, verb string, opts map[string]an
 	f.calls++
 	n := f.calls
 	f.mu.Unlock()
+	if f.onCall != nil {
+		f.onCall(n)
+	}
 	if n < f.failUntil {
 		return nil, fmt.Errorf("flaky: not yet (attempt %d)", n)
 	}
@@ -433,5 +440,70 @@ func TestPluginSourceListenerExposureFailureStopsOnCancel(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Start did not honor cancellation during exposure backoff")
+	}
+}
+
+// openExposure's exponential backoff must never exceed exposureRetryMax, no
+// matter how many times the exposure keeps failing — an uncapped doubling
+// schedule would eventually leave a struggling exposure retrying only once
+// an hour, then once a day.
+func TestPluginSourceListenerExposureBackoffNeverExceedsCap(t *testing.T) {
+	oldInitial, oldMax := exposureRetryInitial, exposureRetryMax
+	exposureRetryInitial, exposureRetryMax = 2*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { exposureRetryInitial, exposureRetryMax = oldInitial, oldMax })
+
+	// Uncapped doubling from 2ms would be 2,4,8,16,32,64,128,256,512ms by the
+	// 9th attempt — many multiples of the 10ms cap. failUntil=10 forces 9
+	// failed attempts (and therefore 9 backoff waits) before success.
+	const failUntil = 10
+	var mu sync.Mutex
+	var times []time.Time
+	flaky := &flakyExposer{failUntil: failUntil, onCall: func(int) {
+		mu.Lock()
+		times = append(times, time.Now())
+		mu.Unlock()
+	}}
+	decl := &TypeDecl{
+		Type: "capcheck",
+		Verbs: []VerbDecl{{
+			Name: "open", Semantics: &sdk.VerbSemantics{Exposes: &sdk.Exposes{Local: "local_addr", URL: "public_url"}},
+		}},
+	}
+	in := &Instance{Name: "tun", Decl: decl, Enabled: true, Impl: flaky}
+	lookup := func(name string) (*Instance, bool) {
+		if name == "tun" {
+			return in, true
+		}
+		return nil, false
+	}
+	p := &pluginSourceIntegration{instance: "gh1", lookup: lookup, log: t.Logf}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, _, err := p.openExposure(ctx, "tun", "127.0.0.1:0"); err != nil {
+		t.Fatalf("openExposure: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(times) != failUntil {
+		t.Fatalf("got %d attempts, want %d (failUntil)", len(times), failUntil)
+	}
+	// The grace window absorbs scheduler jitter without hiding a real
+	// uncapped-growth regression (which would blow past it by 10s of ms at
+	// the later attempts).
+	const grace = 30 * time.Millisecond
+	sawCapped := false
+	for i := 1; i < len(times); i++ {
+		gap := times[i].Sub(times[i-1])
+		if gap > exposureRetryMax+grace {
+			t.Fatalf("gap between attempt %d and %d = %s, want <= %s (the cap, plus scheduler grace)", i, i+1, gap, exposureRetryMax+grace)
+		}
+		if gap >= exposureRetryMax-grace {
+			sawCapped = true
+		}
+	}
+	if !sawCapped {
+		t.Fatalf("no observed gap reached the %s cap — the backoff schedule in %v never grew enough to exercise it", exposureRetryMax, times)
 	}
 }
