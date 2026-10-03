@@ -41,6 +41,26 @@ var (
 	posts []post
 )
 
+// slackAPIMethodsUsed is every Slack Web API method the e2e suite's pinned
+// slack plugin (test/e2e/Dockerfile's GITHUB_PLUGIN_VERSION, built from
+// conductor-plugins) actually calls across every group K scenario this
+// suite drives: chat.postMessage/chat.postEphemeral (the chat verb's post/
+// ephemeral options), reactions.add (the feedback verb's react — K10's
+// ack/on_done/on_fail), apps.connections.open (Socket Mode's own handshake
+// — handled separately, above, but listed here too for completeness/
+// documentation) and conversations.open (DM-style posts, `user:` instead
+// of `channel:`). Anything else is refused (ok:false, unknown_method)
+// rather than silently answered as if it worked — update this set (from
+// real captured traffic, not guesswork: a plugin version bump can call a
+// method this list hasn't seen yet) if the suite starts exercising one.
+var slackAPIMethodsUsed = map[string]bool{
+	"chat.postMessage":      true,
+	"chat.postEphemeral":    true,
+	"reactions.add":         true,
+	"apps.connections.open": true,
+	"conversations.open":    true,
+}
+
 // socket Mode: every currently-connected slack plugin socket, so
 // /_fire_slack_event can broadcast to it. A real Slack workspace allows many
 // connections; the harness only ever opens one at a time.
@@ -67,6 +87,21 @@ func handle(w http.ResponseWriter, r *http.Request) {
 	case "/_captured":
 		mu.Lock()
 		defer mu.Unlock()
+		if sink := r.URL.Query().Get("sink"); sink != "" {
+			// Scoped to one sink's own captures (e.g. ?sink=slackapi) — the
+			// harness's slack_sink_has relies on this rather than
+			// substring-grepping the WHOLE combined buffer, which could
+			// false-positive on another sink's (discord/ntfy/pushover/
+			// notifiarr) captured body happening to contain the same text.
+			var filtered []post
+			for _, p := range posts {
+				if p.Sink == sink {
+					filtered = append(filtered, p)
+				}
+			}
+			writeJSON(w, filtered)
+			return
+		}
 		writeJSON(w, posts)
 		return
 	case "/_reset":
@@ -97,9 +132,21 @@ func handle(w http.ResponseWriter, r *http.Request) {
 	mu.Unlock()
 	// The slack-shaped base (PC_SLACK_API_URL=http://sink-catcher:8080/slackapi)
 	// must answer like the Slack Web API — the connector verb checks ok:true and
-	// reads ts/channel — while still capturing the call above.
+	// reads ts/channel — while still capturing the call above. Only for a
+	// method the e2e suite's own slack plugin actually calls
+	// (slackAPIMethodsUsed below): an unknown method answers like the real
+	// API does to one it doesn't recognize (ok:false, error:unknown_method)
+	// rather than blending in as a false "it worked" — a stub that answers
+	// ok:true to anything can't tell "the plugin called the method we
+	// expect" apart from "the plugin called the WRONG method and the mock
+	// didn't notice".
 	if strings.HasPrefix(r.URL.Path, "/slackapi/") {
 		log.Printf("captured %s post: %s", p.Sink, truncate(p.Body, 120))
+		method := strings.TrimPrefix(r.URL.Path, "/slackapi/")
+		if !slackAPIMethodsUsed[method] {
+			writeJSON(w, map[string]any{"ok": false, "error": "unknown_method"})
+			return
+		}
 		writeJSON(w, map[string]any{
 			"ok": true, "ts": "1700000000.000100",
 			"channel": map[string]any{"id": "CDM"},

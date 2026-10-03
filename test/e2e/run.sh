@@ -872,9 +872,30 @@ wait_handoff_url_after() {
 # Group K — the connectors model (issue #36): new-schema config end to end.
 # ---------------------------------------------------------------------------
 
-# slack_sink_has <pattern> — a captured slack Web API call contains pattern.
+# slack_sink_has <pattern> — a captured SLACK Web API call (and only a
+# slack one: sinkcatcher's ?sink=slackapi filters by sink, server-side)
+# contains pattern. Before this it grepped the WHOLE combined /_captured
+# buffer across every sink (discord/ntfy/pushover/notifiarr too), so a name
+# promising "slack" could actually pass on another sink's captured body
+# happening to contain the same text.
 slack_sink_has() {
-  netcurl http://sink-catcher:8080/_captured | grep -- "$1" >/dev/null
+  netcurl "http://sink-catcher:8080/_captured?sink=slackapi" | grep -- "$1" >/dev/null
+}
+
+# slack_sink_method_has <method> <body-pattern> — a captured call to THIS
+# specific Slack Web API method (e.g. reactions.add, chat.postMessage) ALSO
+# carries body-pattern — not just "some slack call's body contains this
+# substring" (which slack_sink_has alone can't tell apart from the wrong
+# method: K10's react assertions used to pass on a body substring alone,
+# which a chat.postMessage call could in principle also satisfy). Splits
+# the captured JSON array one-object-per-line (the same convention
+# mock-github's checks already use) so method and body are checked on the
+# SAME captured call, not independently across the whole buffer.
+slack_sink_method_has() { # method body-pattern
+  local method="$1" pattern="$2"
+  local caps
+  caps="$(netcurl "http://sink-catcher:8080/_captured?sink=slackapi" | sed 's/},{"sink"/}\n{"sink"/g')"
+  printf '%s\n' "$caps" | grep -- "\"path\":\"/slackapi/$method\"" | grep -q -- "$pattern"
 }
 
 group_K_connectors() {
@@ -919,23 +940,28 @@ group_K_connectors() {
   # its own, must reach the slack plugin's feedback verb as reactions.
   netcurl -X POST http://sink-catcher:8080/_fire_slack_event \
     -d '{"type":"app_mention","text":"K10 ping","user":"UACK","channel":"CACK","ts":"1700000222.000100"}' >/dev/null
-  if wait_for 20 slack_sink_has 'name\\":\\"eyes'; then
+  # Each assertion below checks the METHOD PATH and the body together (on
+  # the SAME captured call), not just a body substring anywhere in the
+  # sink's buffer — a body-only check could not tell "the feedback verb
+  # called reactions.add" apart from "some OTHER slack call's body
+  # happened to contain the same text".
+  if wait_for 20 slack_sink_method_has reactions.add 'name\\":\\"eyes'; then
     ok "K10 options.ack fired the feedback verb (react) at dispatch, no hooks: written" K K10-ack
   else
-    bad "K10 options.ack fired the feedback verb" K K10-ack "no eyes reaction captured"
+    bad "K10 options.ack fired the feedback verb" K K10-ack "no reactions.add(eyes) captured"
   fi
-  if wait_for 20 slack_sink_has "K10 mention handled: K10 ping"; then
+  if wait_for 20 slack_sink_method_has chat.postMessage "K10 mention handled: K10 ping"; then
     ok "K10 the slack-sourced trigger's own step ran" K K10-step
   else
-    bad "K10 the slack-sourced trigger's own step ran" K K10-step "no step post captured"
+    bad "K10 the slack-sourced trigger's own step ran" K K10-step "no chat.postMessage step post captured"
   fi
-  if wait_for 20 slack_sink_has 'name\\":\\"white_check_mark'; then
+  if wait_for 20 slack_sink_method_has reactions.add 'name\\":\\"white_check_mark'; then
     ok "K10 options.on_done fired the feedback verb (react) after the run finished" K K10-done
   else
-    bad "K10 options.on_done fired the feedback verb" K K10-done "no white_check_mark reaction captured"
+    bad "K10 options.on_done fired the feedback verb" K K10-done "no reactions.add(white_check_mark) captured"
   fi
-  if slack_sink_has 'name\\":\\"x'; then
-    bad "K10 no on_fail fired on a successful run" K K10-nofail "an x reaction was captured"
+  if slack_sink_method_has reactions.add 'name\\":\\"x'; then
+    bad "K10 no on_fail fired on a successful run" K K10-nofail "a reactions.add(x) was captured"
   else
     ok "K10 options.on_fail did NOT fire on success" K K10-nofail
   fi
