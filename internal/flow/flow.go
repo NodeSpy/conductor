@@ -1079,7 +1079,7 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 	}
 	// This run used the instance: a file it staged may be handed to a
 	// launch later in the run (renderLaunchFields).
-	recordRunInstance(ctx, connName)
+	recordRunStaging(ctx, in)
 	merged := connector.MergeOptions(in.DefaultOptions, step.Options)
 	rendered, err := renderOptions(merged, data)
 	if err != nil {
@@ -1628,59 +1628,70 @@ func renderLaunchFields(ctx context.Context, step *config.Step, data map[string]
 	return nil
 }
 
-// stagedFile reports whether path is a file staged by a connector instance
-// THIS run invoked: under <PluginStagingDir>/<plugin>/<instance>/ for one of
-// the run's instances (instance names are unique daemon-wide), symlinks
-// resolved on both sides. Another instance's files — a different
-// connector's downloads — are out of reach however the path is spelled.
+// stagedFile reports whether path is a file in the staging directory of a
+// connector instance THIS run invoked — the exact directory that instance's
+// connector reports for it now — symlinks resolved on both sides. Another
+// instance's files, or a stale directory from an instance's former plugin,
+// are out of reach however the path is spelled.
 func stagedFile(ctx context.Context, path string) error {
-	root, err := filepath.EvalSymlinks(config.PluginStagingDir())
-	if err != nil {
-		return fmt.Errorf("%q is not a file a connector staged (no staging directory)", path)
-	}
 	real, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return fmt.Errorf("%q is not a file a connector staged: %v", path, err)
 	}
-	rel, err := filepath.Rel(root, real)
-	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
-		return fmt.Errorf("%q is not a file a connector staged (outside %s)", path, root)
+	for _, dir := range runStagingDirs(ctx) {
+		if d, err := filepath.EvalSymlinks(dir); err == nil && strings.HasPrefix(real, d+string(filepath.Separator)) {
+			return nil
+		}
 	}
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-	if len(parts) < 3 || !runUsedInstance(ctx, parts[1]) {
-		return fmt.Errorf("%q is not a file a connector this run invoked staged", path)
-	}
-	return nil
+	return fmt.Errorf("%q is not a file a connector this run invoked staged", path)
 }
 
 type runInstancesKey struct{}
 
-// runInstances is the set of connector instances a run invoked.
+// runInstances is the set of staging directories of the connector instances
+// a run invoked.
 type runInstances struct {
-	mu sync.Mutex
-	m  map[string]bool
+	mu   sync.Mutex
+	dirs map[string]bool
 }
 
 func withRunInstances(ctx context.Context) context.Context {
-	return context.WithValue(ctx, runInstancesKey{}, &runInstances{m: map[string]bool{}})
+	return context.WithValue(ctx, runInstancesKey{}, &runInstances{dirs: map[string]bool{}})
 }
 
-func recordRunInstance(ctx context.Context, instance string) {
-	if ri, ok := ctx.Value(runInstancesKey{}).(*runInstances); ok {
+// stagingDirer is a connector that gives its instance a staging directory.
+type stagingDirer interface {
+	StagingDir() (string, error)
+}
+
+func recordRunStaging(ctx context.Context, in *connector.Instance) {
+	ri, ok := ctx.Value(runInstancesKey{}).(*runInstances)
+	if !ok || in == nil {
+		return
+	}
+	sd, ok := in.Impl.(stagingDirer)
+	if !ok {
+		return
+	}
+	if dir, err := sd.StagingDir(); err == nil && dir != "" {
 		ri.mu.Lock()
-		ri.m[instance] = true
+		ri.dirs[dir] = true
 		ri.mu.Unlock()
 	}
 }
 
-func runUsedInstance(ctx context.Context, instance string) bool {
+func runStagingDirs(ctx context.Context) []string {
 	ri, ok := ctx.Value(runInstancesKey{}).(*runInstances)
 	if !ok {
-		return false
+		return nil
 	}
 	ri.mu.Lock()
 	defer ri.mu.Unlock()
-	return ri.m[instance]
+	out := make([]string, 0, len(ri.dirs))
+	for d := range ri.dirs {
+		out = append(out, d)
+	}
+	return out
 }
 
 // execAgent dispatches a type: agent step through the engine-provided

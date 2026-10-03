@@ -190,6 +190,15 @@ func resolveConnection(ref config.ConnectorRef, sec *secrets.Resolver, allow map
 	return conn, refs, nil
 }
 
+// StagingDir is this instance's staging directory (plugin-contract.md Q7),
+// "" when its host gives none: where its file-returning verbs write.
+func (e *externalImpl) StagingDir() (string, error) {
+	if st, ok := e.client.(interface{ StagingDir(string) (string, error) }); ok {
+		return st.StagingDir(e.instance)
+	}
+	return "", nil
+}
+
 // trackDeclaredSecrets keeps the values of the connection fields the type
 // declares secret out of logs and audit records, however they were written.
 func trackDeclaredSecrets(conn map[string]any, declared Schema, sec *secrets.Resolver) {

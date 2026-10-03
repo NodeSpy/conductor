@@ -250,7 +250,13 @@ func newFakeImpl(name string, ref config.ConnectorRef, deps connector.Deps) (con
 	return &fakeImpl{name: name}, nil
 }
 
-func (f *fakeImpl) Validate() error          { return nil }
+func (f *fakeImpl) Validate() error { return nil }
+
+// StagingDir is where the fake's file-returning verbs would write (the
+// layout stagedFiles writes test files into).
+func (f *fakeImpl) StagingDir() (string, error) {
+	return filepath.Join(config.PluginStagingDir(), "chat", f.name), nil
+}
 func (f *fakeImpl) DeclaredEvents() []string { return nil }
 func (f *fakeImpl) Source(triggers []connector.CompiledTrigger) (core.Integration, error) {
 	return nil, nil

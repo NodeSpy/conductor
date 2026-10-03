@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 )
@@ -164,6 +165,19 @@ func TestImagesRefuseAnotherInstancesStagedFile(t *testing.T) {
 	if err := renderLaunchFields(context.Background(), &step, map[string]any{"p": mine["a.png"]}); err == nil {
 		t.Fatal("outside a run that invoked the instance, its file was accepted")
 	}
+	// A stale directory left by the instance's FORMER plugin is not its
+	// staging directory now.
+	stale := filepath.Join(config.PluginStagingDir(), "oldplugin", "mine")
+	if err := os.MkdirAll(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "old.png"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	step = config.Step{Images: []string{"{{.p}}"}}
+	if err := renderLaunchFields(ctx, &step, map[string]any{"p": filepath.Join(stale, "old.png")}); err == nil {
+		t.Fatal("a stale former-plugin directory of the instance was accepted")
+	}
 	// A sibling directory sharing the root's name prefix is not under it.
 	sib := config.PluginStagingDir() + "-evil"
 	if err := os.MkdirAll(filepath.Join(sib, "chat", "mine"), 0o700); err != nil {
@@ -179,11 +193,12 @@ func TestImagesRefuseAnotherInstancesStagedFile(t *testing.T) {
 	}
 }
 
-// runUsing is a run context that invoked the named connector instances.
+// runUsing is a run context that invoked the named connector instances (the
+// fake connector's staging layout, as stagedFiles writes it).
 func runUsing(instances ...string) context.Context {
 	ctx := withRunInstances(context.Background())
 	for _, i := range instances {
-		recordRunInstance(ctx, i)
+		recordRunStaging(ctx, &connector.Instance{Name: i, Impl: &fakeImpl{name: i}})
 	}
 	return ctx
 }
