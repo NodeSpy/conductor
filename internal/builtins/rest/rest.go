@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -32,10 +33,59 @@ import (
 // snapshot — see SetHost.
 type REST struct {
 	host atomic.Pointer[plugin.HostConn]
+
+	// errMu/lastPollErr/lastPollErrAt rate-limit repeated identical poll
+	// errors through host.log (finding 9a): a dead upstream or an expired
+	// static credential would otherwise log the SAME failure on every single
+	// poll tick, forever.
+	errMu         sync.Mutex
+	lastPollErr   map[string]string
+	lastPollErrAt map[string]time.Time
 }
 
 // New is the rest handler.
 func New() *REST { return &REST{} }
+
+// pollErrorLogInterval bounds how often the SAME poll error (instance+event)
+// is logged again through host.log — the first occurrence, and the first
+// occurrence of any DIFFERENTLY-WORDED error, always logs immediately. A var
+// so a test shrinks it.
+var pollErrorLogInterval = 5 * time.Minute
+
+// logPollError reports a poll failure through host.log (finding 9a: pollOnce
+// used to be completely silent on failure — the pre-contract native
+// connector logged every one, git show 4cade34:internal/connector/
+// httpapi.go httpPoller.pollOnce). Rate-limited per (instance, event) so a
+// connector stuck failing the same way doesn't flood the daemon's log.
+func (r *REST) logPollError(instance, name string, err error) {
+	if err == nil {
+		return
+	}
+	h := r.host.Load()
+	if h == nil {
+		return
+	}
+	key := instance + "\x00" + name
+	msg := err.Error()
+	r.errMu.Lock()
+	stale := r.lastPollErr != nil && r.lastPollErr[key] == msg &&
+		time.Since(r.lastPollErrAt[key]) < pollErrorLogInterval
+	if !stale {
+		if r.lastPollErr == nil {
+			r.lastPollErr = map[string]string{}
+			r.lastPollErrAt = map[string]time.Time{}
+		}
+		r.lastPollErr[key] = msg
+		r.lastPollErrAt[key] = time.Now()
+	}
+	r.errMu.Unlock()
+	if stale {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	h.Log(ctx, instance, fmt.Sprintf("rest poll %s: %v", name, err))
+}
 
 // SetHost wires the host channel (pkg/plugin.HostAware): the poller asks it,
 // on every poll, for this instance's CURRENT managed-auth access token
@@ -387,6 +437,7 @@ func (r *REST) pollOnce(ctx context.Context, instance string, conn map[string]an
 	baseURL := str(conn, "base_url")
 	resp, err := r.pollRequest(ctx, instance, conn, baseURL, ev, false)
 	if err != nil {
+		r.logPollError(instance, name, err)
 		return
 	}
 	if resp.Status == http.StatusUnauthorized {
@@ -398,15 +449,19 @@ func (r *REST) pollOnce(ctx context.Context, instance string, conn map[string]an
 		// auth: unchanged, and this retry is a harmless no-op.
 		if retried, rerr := r.pollRequest(ctx, instance, conn, baseURL, ev, true); rerr == nil {
 			resp = retried
+		} else {
+			r.logPollError(instance, name, fmt.Errorf("401, and the refreshed-token retry also failed: %w", rerr))
 		}
 	}
 	scope := map[string]any{"response": map[string]any{"status": resp.Status, "body": resp.Body, "headers": resp.Headers}}
 	v, err := httpconn.RenderValue(ev.List, scope)
 	if err != nil {
+		r.logPollError(instance, name, fmt.Errorf("rendering list: %w", err))
 		return
 	}
 	arr, ok := v.([]any)
 	if !ok {
+		r.logPollError(instance, name, fmt.Errorf("list rendered a %T, not an array", v))
 		return
 	}
 	firstPoll := !*primed
@@ -436,21 +491,52 @@ func (r *REST) pollOnce(ctx context.Context, instance string, conn map[string]an
 // instance's events: had no way to see a token the daemon minted after the
 // source started, so it died silently once the start_source-time token, if
 // any, expired). refresh asks the host for a freshly minted one (the 401
-// retry in pollOnce). An instance with no managed auth — host.Auth errors —
-// falls back unchanged to the connection's own static `auth:` (none/bearer/
-// basic/header), exactly as before host.auth existed.
+// retry in pollOnce). An instance with a STATIC auth scheme (none/bearer/
+// basic/header, or no `auth:` at all) falls back unchanged to the
+// connection's own `auth:`, exactly as before host.auth existed — host.auth
+// always refuses a non-oauth2 instance, which is fine, ApplyAuth handles
+// those itself.
+//
+// An OAUTH2 instance is different (finding 9b): before this, a host.auth
+// error here just left callConn as the plain conn, and ApplyAuth has no
+// case for auth.type "oauth2" at all (the daemon strips and manages that
+// scheme itself, never passing it through) — so the request went out with
+// NO Authorization header whatsoever, silently, to whatever upstream this
+// instance polls. An oauth2 instance whose token can't be had must instead
+// skip the request entirely.
 func (r *REST) pollRequest(ctx context.Context, instance string, conn map[string]any, baseURL string, ev eventCfg, refresh bool) (httpconn.Response, error) {
 	callConn := conn
+	var tokErr error
 	if h := r.host.Load(); h != nil {
-		if tok, err := h.Auth(instance).Token(ctx, refresh); err == nil && tok != "" {
+		tok, err := h.Auth(instance).Token(ctx, refresh)
+		switch {
+		case err == nil && tok != "":
 			callConn = withAccessToken(conn, tok)
+		case err != nil:
+			tokErr = err
+		default:
+			tokErr = fmt.Errorf("host.auth returned no token")
 		}
+	} else {
+		tokErr = fmt.Errorf("no host.auth channel available")
+	}
+	if tokErr != nil && isOAuth2Auth(conn) {
+		return httpconn.Response{}, fmt.Errorf("oauth2 instance %q: skipping poll — no managed token: %w", instance, tokErr)
 	}
 	fullURL, headers, err := buildRequest(baseURL, ev.Path, ev.Query, strMap(callConn["headers"]), map[string]any{"secrets": callConn["secrets"]})
 	if err != nil {
 		return httpconn.Response{}, err
 	}
 	return httpconn.Do(ctx, ev.Method, fullURL, headers, nil, ApplyAuth(callConn))
+}
+
+// isOAuth2Auth reports whether conn declares a managed oauth2 auth scheme —
+// the one scheme ApplyAuth has NO static fallback for (the daemon strips and
+// owns it entirely), so it is the one scheme a poll must never run with no
+// usable token at all (finding 9b).
+func isOAuth2Auth(conn map[string]any) bool {
+	auth, _ := conn["auth"].(map[string]any)
+	return str(auth, "type") == "oauth2"
 }
 
 // withAccessToken returns a COPY of conn carrying tok under

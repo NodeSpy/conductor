@@ -36,6 +36,14 @@ const (
 	// plugin was never handed, and refused when that instance has no managed
 	// auth at all.
 	MethodHostAuth = "host.auth"
+	// MethodHostLog (plugin→daemon): best-effort logging through the
+	// daemon's own logger, for a plugin with no stderr of its own (an
+	// in-process builtin) — a background poller (rest/graphql's events:)
+	// otherwise has nowhere to report a failure the operator can see.
+	// Scoped exactly like host.state/host.auth: refused for an instance this
+	// plugin was never handed. Never fatal to the caller — HostConn.Log
+	// ignores any error this returns.
+	MethodHostLog = "host.log"
 )
 
 // Poll modes.
@@ -163,6 +171,21 @@ type HostAuthResult struct {
 	Error string `json:"error,omitempty"`
 }
 
+// HostLogRequest is one host.log call.
+type HostLogRequest struct {
+	Instance string `json:"instance"`
+	Message  string `json:"message"`
+}
+
+// HostLogResult answers a host.log call. Logging is best-effort: HostConn.Log
+// ignores both this and any transport error entirely, so a daemon that is
+// down, or an older one that doesn't implement host.log at all, never costs
+// the caller anything beyond the one swallowed call.
+type HostLogResult struct {
+	OK    bool   `json:"ok,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
 // PollHandler, TranslateHandler, ValidateHandler and StopHandler are the
 // optional method handlers; a Handler that implements one serves it.
 type PollHandler interface {
@@ -220,6 +243,18 @@ func (h *HostConn) State(instance string) *State { return &State{h: h, instance:
 // it asks for one directly, as often as it needs (every poll is fine; the
 // host caches), and again with refresh after its own 401.
 func (h *HostConn) Auth(instance string) *Auth { return &Auth{h: h, instance: instance} }
+
+// Log sends instance's msg to the daemon's own logger (host.log) — best
+// effort, and deliberately silent about the outcome: a plugin with no stderr
+// of its own (an in-process builtin's background poller, rest/graphql's
+// events:) has nowhere else to report a failure, but logging must never be
+// something that itself needs error handling at every call site. Safe to
+// call as often as needed; a caller wanting to avoid flooding the daemon's
+// log with a repeating failure should rate-limit before calling, not after.
+func (h *HostConn) Log(ctx context.Context, instance, msg string) {
+	var res HostLogResult
+	_ = h.calls.call(ctx, MethodHostLog, HostLogRequest{Instance: instance, Message: msg}, &res)
+}
 
 // Auth is one instance's host.auth face.
 type Auth struct {

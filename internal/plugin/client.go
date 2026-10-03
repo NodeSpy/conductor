@@ -529,6 +529,21 @@ func (c *Client) handleRequest(ctx context.Context, method string, params json.R
 		}
 		return sdk.HostAuthResult{OK: true, Token: tok}, nil
 	}
+	if method == sdk.MethodHostLog {
+		var req sdk.HostLogRequest
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, acp.NewRPCError(acp.CodeInvalidParams, err.Error())
+		}
+		// Scoped exactly like host.state/host.auth — a plugin may only log
+		// as an instance it was handed real traffic for, so a log line can
+		// never misattribute itself to a sibling instance it merely shares a
+		// process with.
+		if !c.isActive(req.Instance) {
+			return sdk.HostLogResult{Error: fmt.Sprintf("instance %q is not one this plugin serves", req.Instance)}, nil
+		}
+		c.deps.Log("plugin %s instance %s: %s", c.spec.Name, req.Instance, req.Message)
+		return sdk.HostLogResult{OK: true}, nil
+	}
 	kind := sdk.HostKindFor(method)
 	if kind == "" {
 		return nil, acp.NewRPCError(acp.CodeMethodNotFound,
