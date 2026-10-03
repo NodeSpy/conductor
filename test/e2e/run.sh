@@ -19,6 +19,13 @@
 #                         unpublished plugins commit (e.g. one that declares
 #                         the `listeners` connection semantic the published
 #                         pin predates).
+#   SLACK_PLUGIN_BIN    — same, for the conductor-plugins slack connector
+#                         plugin (/usr/local/bin/conductor-slack; group K's
+#                         `slack` connector). Needed when it must be built
+#                         from an unpublished plugins commit (e.g. one that
+#                         declares the `option_hooks` event semantic the
+#                         published pin predates) — group K's ack/on_done
+#                         feedback case needs it.
 #
 # Only groups whose milestones have merged are asserted; the rest are recorded as
 # SKIP with the milestone that unlocks them. Set KEEP=1 to leave the stack up.
@@ -129,7 +136,7 @@ banner() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 # predates the decl it exercises.
 stage_github_plugin() {
   mkdir -p "$DIR/plugin-bin"
-  rm -f "$DIR/plugin-bin/conductor-github" "$DIR/plugin-bin/conductor-smee"
+  rm -f "$DIR/plugin-bin/conductor-github" "$DIR/plugin-bin/conductor-smee" "$DIR/plugin-bin/conductor-slack"
   if [ -n "${GITHUB_PLUGIN_BIN:-}" ]; then
     [ -x "$GITHUB_PLUGIN_BIN" ] || { echo "GITHUB_PLUGIN_BIN=$GITHUB_PLUGIN_BIN is not an executable"; exit 1; }
     cp "$GITHUB_PLUGIN_BIN" "$DIR/plugin-bin/conductor-github"
@@ -139,6 +146,11 @@ stage_github_plugin() {
     [ -x "$SMEE_PLUGIN_BIN" ] || { echo "SMEE_PLUGIN_BIN=$SMEE_PLUGIN_BIN is not an executable"; exit 1; }
     cp "$SMEE_PLUGIN_BIN" "$DIR/plugin-bin/conductor-smee"
     echo "smee plugin: $SMEE_PLUGIN_BIN (staged into the image)"
+  fi
+  if [ -n "${SLACK_PLUGIN_BIN:-}" ]; then
+    [ -x "$SLACK_PLUGIN_BIN" ] || { echo "SLACK_PLUGIN_BIN=$SLACK_PLUGIN_BIN is not an executable"; exit 1; }
+    cp "$SLACK_PLUGIN_BIN" "$DIR/plugin-bin/conductor-slack"
+    echo "slack plugin: $SLACK_PLUGIN_BIN (staged into the image)"
   fi
 }
 
@@ -898,6 +910,34 @@ group_K_connectors() {
     bad "K1 no fail hook fired" K K1-nofail "K1-fail capture present"
   else
     ok "K1 at:fail hook did NOT fire on success" K K1-nofail
+  fi
+
+  # K10: option_hooks (plugin-contract.md §2.2) — fire a Socket Mode
+  # app_mention event (the sink-catcher's mock: POST /_fire_slack_event),
+  # over the slack connector's REAL Socket Mode connection (app_token set
+  # above). The trigger's own options.ack/on_done, with no explicit hooks: of
+  # its own, must reach the slack plugin's feedback verb as reactions.
+  netcurl -X POST http://sink-catcher:8080/_fire_slack_event \
+    -d '{"type":"app_mention","text":"K10 ping","user":"UACK","channel":"CACK","ts":"1700000222.000100"}' >/dev/null
+  if wait_for 20 slack_sink_has 'name\\":\\"eyes'; then
+    ok "K10 options.ack fired the feedback verb (react) at dispatch, no hooks: written" K K10-ack
+  else
+    bad "K10 options.ack fired the feedback verb" K K10-ack "no eyes reaction captured"
+  fi
+  if wait_for 20 slack_sink_has "K10 mention handled: K10 ping"; then
+    ok "K10 the slack-sourced trigger's own step ran" K K10-step
+  else
+    bad "K10 the slack-sourced trigger's own step ran" K K10-step "no step post captured"
+  fi
+  if wait_for 20 slack_sink_has 'name\\":\\"white_check_mark'; then
+    ok "K10 options.on_done fired the feedback verb (react) after the run finished" K K10-done
+  else
+    bad "K10 options.on_done fired the feedback verb" K K10-done "no white_check_mark reaction captured"
+  fi
+  if slack_sink_has 'name\\":\\"x'; then
+    bad "K10 no on_fail fired on a successful run" K K10-nofail "an x reaction was captured"
+  else
+    ok "K10 options.on_fail did NOT fire on success" K K10-nofail
   fi
 
   # K5: the remote sh step ran on selfbox via the system ssh — the container's

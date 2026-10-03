@@ -5,17 +5,28 @@
 // channel fired. Captures are queryable at GET /_captured and reset at POST
 // /_reset.
 //
+// It also stands in for Slack's Socket Mode (group K's ack/on_done feedback
+// case): /slackapi/apps.connections.open answers like the real endpoint,
+// pointing the slack plugin's websocket at /slackapi/socket here; a harness
+// POST to /_fire_slack_event relays one events_api envelope to every
+// connected socket, so the daemon's `on: slack.<event>` triggers fire
+// without a real Slack workspace.
+//
 // NOT part of the shipped product; harness-only.
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/coder/websocket"
 )
 
 type post struct {
@@ -28,6 +39,14 @@ type post struct {
 var (
 	mu    sync.Mutex
 	posts []post
+)
+
+// socket Mode: every currently-connected slack plugin socket, so
+// /_fire_slack_event can broadcast to it. A real Slack workspace allows many
+// connections; the harness only ever opens one at a time.
+var (
+	socketsMu sync.Mutex
+	sockets   = map[*websocket.Conn]struct{}{}
 )
 
 func main() {
@@ -56,6 +75,15 @@ func handle(w http.ResponseWriter, r *http.Request) {
 		mu.Unlock()
 		writeJSON(w, map[string]any{"ok": true})
 		return
+	case "/_fire_slack_event":
+		fireSlackEvent(w, r)
+		return
+	case "/slackapi/apps.connections.open":
+		writeJSON(w, map[string]any{"ok": true, "url": socketURL(r)})
+		return
+	case "/slackapi/socket":
+		acceptSocket(w, r)
+		return
 	}
 	body, _ := io.ReadAll(r.Body)
 	p := post{
@@ -80,6 +108,72 @@ func handle(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("captured %s post: %s", p.Sink, truncate(p.Body, 120))
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// socketURL builds the ws:// URL apps.connections.open hands back, on the
+// same host:port the request itself arrived on (the compose network's own
+// service name, however the daemon is configured to reach it).
+func socketURL(r *http.Request) string {
+	return fmt.Sprintf("ws://%s/slackapi/socket", r.Host)
+}
+
+// acceptSocket upgrades to a websocket, sends the Socket Mode "hello" frame,
+// registers the connection so /_fire_slack_event can reach it, and blocks
+// reading (discarding, but ACKing nothing of its own — the plugin's envelope
+// acks are one-way) until the connection closes.
+func acceptSocket(w http.ResponseWriter, r *http.Request) {
+	c, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		return
+	}
+	ctx := r.Context()
+	socketsMu.Lock()
+	sockets[c] = struct{}{}
+	socketsMu.Unlock()
+	defer func() {
+		socketsMu.Lock()
+		delete(sockets, c)
+		socketsMu.Unlock()
+		c.Close(websocket.StatusNormalClosure, "")
+	}()
+	if err := c.Write(ctx, websocket.MessageText, []byte(`{"type":"hello"}`)); err != nil {
+		return
+	}
+	for {
+		if _, _, err := c.Read(ctx); err != nil {
+			return
+		}
+	}
+}
+
+// fireSlackEvent relays one events_api envelope (the POSTed body is the
+// Slack "event" object: {"type":"app_mention", "text":…, …}) to every
+// connected socket, wrapped exactly as Socket Mode delivers it.
+func fireSlackEvent(w http.ResponseWriter, r *http.Request) {
+	var event map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	envelope, err := json.Marshal(map[string]any{
+		"type":        "events_api",
+		"envelope_id": "e2e-envelope",
+		"payload":     map[string]any{"event": event},
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	ctx := context.Background()
+	socketsMu.Lock()
+	n := 0
+	for c := range sockets {
+		if c.Write(ctx, websocket.MessageText, envelope) == nil {
+			n++
+		}
+	}
+	socketsMu.Unlock()
+	writeJSON(w, map[string]any{"ok": true, "delivered": n})
 }
 
 // sinkName derives the sink from the first path segment (e.g. /ntfy/topic → ntfy).

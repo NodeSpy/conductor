@@ -20,3 +20,4 @@ audit.jsonl
 /test/e2e/.plugin-config/
 /test/e2e/plugin-bin/conductor-github
 /test/e2e/plugin-bin/conductor-smee
+/test/e2e/plugin-bin/conductor-slack

@@ -59,14 +59,17 @@ COPY --from=github-plugin /out/ /usr/local/bin/
 # (group X, the listeners connection semantic) is the same kind of reference
 # plugin, named directly by a connector's `use:`.
 RUN chmod 0755 /usr/local/bin/conductor-acme-engine /usr/local/bin/conductor-acme-listener
-# A github and/or smee plugin the run supplied (GITHUB_PLUGIN_BIN /
-# SMEE_PLUGIN_BIN, staged into test/e2e/plugin-bin/) replaces the pinned
-# build — group Y needs both built from the same (unpublished) plugins
-# commit that declares the listeners connection semantic.
+# A github, smee and/or slack plugin the run supplied (GITHUB_PLUGIN_BIN /
+# SMEE_PLUGIN_BIN / SLACK_PLUGIN_BIN, staged into test/e2e/plugin-bin/)
+# replaces the pinned build — group Y needs github+smee built from the same
+# (unpublished) plugins commit that declares the listeners connection
+# semantic; group K's ack/on_done case needs slack built from the
+# (unpublished) commit that declares option_hooks.
 COPY --from=build /src/test/e2e/plugin-bin/ /opt/plugin-bin/
 RUN if [ -f /opt/plugin-bin/conductor-github ]; then cp /opt/plugin-bin/conductor-github /usr/local/bin/conductor-github; fi \
  && if [ -f /opt/plugin-bin/conductor-smee ]; then cp /opt/plugin-bin/conductor-smee /usr/local/bin/conductor-smee; fi \
- && chmod 0755 /usr/local/bin/conductor-github /usr/local/bin/conductor-smee
+ && if [ -f /opt/plugin-bin/conductor-slack ]; then cp /opt/plugin-bin/conductor-slack /usr/local/bin/conductor-slack; fi \
+ && chmod 0755 /usr/local/bin/conductor-github /usr/local/bin/conductor-smee /usr/local/bin/conductor-slack
 # The fake paseo is installed as `paseo` too, so a config without an explicit
 # paseo_bin: still resolves it on PATH. The fake tool runtimes are installed under
 # the exact names conductor's controllers exec on PATH (stub mode): the cli

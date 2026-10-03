@@ -25,10 +25,12 @@ connectors:
   slack:
     use: /usr/local/bin/conductor-slack
     api_base: http://sink-catcher:8080/slackapi
-    # Verbs only (no slack triggers), so no Socket Mode connection is opened;
-    # bot_token is all the verb face needs. The API base comes from
-    # PC_SLACK_API_URL (the sink-catcher's slack-shaped endpoint).
+    # bot_token is all the verb-only face needs; app_token additionally opens
+    # Socket Mode (group K10 below) against the sink-catcher's Socket Mode
+    # stand-in (apps.connections.open + /slackapi/socket, fired on demand by
+    # a harness POST to /_fire_slack_event).
     bot_token: xoxb-e2e-dummy
+    app_token: xapp-e2e-dummy
     options: { channel: CDEFAULT }
 
   # K7: an ask-capable web connector — its draft pages serve on :8095 inside
@@ -152,6 +154,22 @@ triggers:
       - { at: start, uses: slack.post, options: { channel: C1, text: "K1-start {{.repo}}#{{.pr}}" } }
       - { at: done, uses: slack.post, options: { channel: C1, text: "K1-done {{.repo}}#{{.pr}}" } }
       - { at: fail, uses: slack.post, options: { channel: C1, text: "K1-fail {{.error}}" } }
+
+  # K10: option_hooks (plugin-contract.md §2.2) — a slack-SOURCED trigger
+  # (Socket Mode, via the sink-catcher's mock) whose own options.ack/
+  # on_done/on_fail fire the slack plugin's `feedback` verb at the matching
+  # run phase, with no explicit hooks: of its own — the generic engine
+  # mechanism restoring the old bundled connector's per-trigger feedback.
+  - on: slack.app_mention
+    filter: { channel: CACK }
+    options:
+      ack: { react: "eyes" }
+      on_done: { react: "white_check_mark" }
+      on_fail: { react: "x" }
+    steps:
+      - id: note
+        uses: slack.post
+        options: { channel: C1, text: "K10 mention handled: {{.slack.text}}" }
 
   # K5: remote execution — a host-interpreter code step runs over SSH on
   # selfbox (this container's sshd), its output flowing into a slack post.
