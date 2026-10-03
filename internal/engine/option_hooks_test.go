@@ -48,6 +48,15 @@ func feedbackTrigger(kind, dedup, flowRef string) core.Trigger {
 			"slack": map[string]any{"channel": "C1", "ts": "100.1", "user": "U1", "thread_ts": "100.1"},
 		},
 		Action: config.Action{FlowRef: flowRef},
+		// The fixture's app_mention event declares target.assigned: true
+		// (testdata/chat-decl.json) — Slack told us the channel/user
+		// directly, exactly what TargetTrusted means (core/event.go). The
+		// real pluginsource.go lowering sets this from that declaration;
+		// this hand-built trigger must say so itself, or
+		// connector.OptionHooks' assigned-target-only defense (§2.2) skips
+		// every option_hooks entry here as if the target were
+		// sender-controlled, which it is not.
+		TargetTrusted: true,
 	}
 }
 

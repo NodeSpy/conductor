@@ -7,6 +7,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 	"gopkg.in/yaml.v3"
 	"time"
 )
@@ -155,5 +156,39 @@ connectors:
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("run_on_start never fired")
+	}
+}
+
+// TestOptionHooksSkipsUnassignedTarget is the defensive proof for finding
+// 4(c): OptionHook Args render over the trigger's own facts, exactly like
+// target_args' option-defaulting — and like target_args, that is honored
+// only for a target the PLATFORM assigned (t.TargetTrusted). For an event
+// whose target was not platform-assigned (sender-controlled facts),
+// OptionHooks must lower nothing at all, not merely skip the Args
+// rendering — the same observable effect as the plugin never having
+// declared option_hooks.
+func TestOptionHooksSkipsUnassignedTarget(t *testing.T) {
+	sem := &sdk.EventSemantics{
+		OptionHooks: []sdk.OptionHook{{
+			Option: "ack", At: "start", Verb: "react",
+			Args: map[string]string{"channel": "{{.channel}}"},
+		}},
+	}
+	opts := map[string]any{"ack": map[string]any{"emoji": "eyes"}}
+
+	untrusted := core.Trigger{Instance: "chat", Kind: "message", Sem: sem,
+		Context: map[string]any{"channel": "C1"}, TargetTrusted: false}
+	if hooks := OptionHooks(untrusted, opts); hooks != nil {
+		t.Fatalf("an unassigned target must lower NO option hooks, got %+v", hooks)
+	}
+
+	trusted := untrusted
+	trusted.TargetTrusted = true
+	hooks := OptionHooks(trusted, opts)
+	if len(hooks) != 1 {
+		t.Fatalf("an assigned target must lower the declared option hook, got %+v", hooks)
+	}
+	if hooks[0].Options["emoji"] != "eyes" || hooks[0].Options["channel"] != "C1" {
+		t.Fatalf("lowered hook options = %+v", hooks[0].Options)
 	}
 }

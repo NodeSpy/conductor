@@ -5,6 +5,8 @@
 package connector
 
 import (
+	"log"
+
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
@@ -54,9 +56,27 @@ func lowerEngineOptions(act *config.Action, o map[string]any, sem *sdk.EventSema
 // generic replacement for a connector's own dispatch-time/completion
 // feedback (plugin-contract.md §3.8 V8). Returns nil when the event declares
 // none, or the trigger sets none of the options they name.
+//
+// Defensive (plugin-contract.md §2.2): Args render over t.Facts(), exactly
+// as target_args defaults a verb's options from the target — and that
+// semantic is honored "only for an assigned target" (§2.3) for the same
+// reason this one must be too. A target the platform did not assign
+// (t.TargetTrusted false) means the facts an Args template would render
+// are the SENDER's own, unverified payload data: lowering an option hook
+// over them would let whoever sent the event steer a verb's options (which
+// message a react verb addresses, say) through a path install-time review
+// never considered a sender-controlled input. Rather than refuse the whole
+// trigger over it, this logs once and skips every option_hooks entry for
+// it — the operator's own `options.<option>` still had no declared hook to
+// act on, same observable effect as the plugin never having declared
+// option_hooks at all.
 func OptionHooks(t core.Trigger, opts map[string]any) []config.Hook {
 	sem := t.Semantics()
 	if sem == nil || len(sem.OptionHooks) == 0 || len(opts) == 0 {
+		return nil
+	}
+	if !t.TargetTrusted {
+		log.Printf("connector %s: event %q declares option_hooks, but this target was not platform-assigned (sender-controlled facts) — skipping, same as target_args' assigned-target-only rule", t.Instance, t.Kind)
 		return nil
 	}
 	facts := t.Facts()
