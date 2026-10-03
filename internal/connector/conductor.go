@@ -288,7 +288,13 @@ func EmitLifecycle(ctx context.Context, event string, t core.Trigger, line strin
 		if ct.Spec.Event() != event || !ct.Spec.IsEnabled() {
 			continue
 		}
-		trigCtx := map[string]any{
+		// Event-specific context first, so the host's own keys below always
+		// win: origin_instance decides whose credentials the work gets.
+		trigCtx := map[string]any{}
+		for k, v := range extra {
+			trigCtx[k] = v
+		}
+		for k, v := range map[string]any{
 			"message": line, "event": event,
 			"ref":  fmt.Sprintf("%s#%d", t.Target.Repo, t.Target.Number),
 			"repo": t.Target.Repo, "number": t.Target.Number,
@@ -296,8 +302,7 @@ func EmitLifecycle(ctx context.Context, event string, t core.Trigger, line strin
 			// The connector the originating trigger came from: work for this
 			// event gets that connector's declared credentials.
 			"origin_instance": t.Instance,
-		}
-		for k, v := range extra {
+		} {
 			trigCtx[k] = v
 		}
 		act := config.Action{Name: ct.Spec.Name, Enabled: ct.Spec.Enabled, Shadow: ct.Spec.Shadow, FlowRef: ct.Ref()}

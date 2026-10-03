@@ -122,6 +122,17 @@ func TestEmitLifecycleRoutesToTriggers(t *testing.T) {
 		tr.Context["ref"] != "o/r#7" || tr.Context["origin_kind"] != "merge_conflict" {
 		t.Fatalf("context: %+v", tr.Context)
 	}
+	// The origin's connector and its target-trust bit ride along: they decide
+	// whose credentials the work gets, and whether any are minted.
+	if tr.Context["origin_instance"] != "gh" || tr.TargetTrusted {
+		t.Fatalf("origin: instance=%v trusted=%v (an untrusted origin stays untrusted)", tr.Context["origin_instance"], tr.TargetTrusted)
+	}
+	trusted := orig
+	trusted.TargetTrusted = true
+	EmitLifecycle(context.Background(), "escalate", trusted, "line", map[string]any{"origin_instance": "someone-else"})
+	if got := capture(); len(got) != 2 || !got[1].TargetTrusted || got[1].Context["origin_instance"] != "gh" {
+		t.Fatalf("an assigned origin's bit is carried, and extra context cannot rename the origin: %+v", got[len(got)-1])
+	}
 	act, isAct := tr.Action.(config.Action)
 	if !isAct || act.FlowRef == "" || !strings.Contains(act.FlowRef, "conductor.escalate") {
 		t.Fatalf("flow ref: %+v", tr.Action)
@@ -129,13 +140,13 @@ func TestEmitLifecycleRoutesToTriggers(t *testing.T) {
 
 	// The fan-in list's other event fires the same trigger.
 	EmitLifecycle(context.Background(), "needs_input", orig, "line", nil)
-	if got := capture(); len(got) != 2 || got[1].Kind != "needs_input" {
+	if got := capture(); len(got) != 3 || got[2].Kind != "needs_input" {
 		t.Fatalf("needs_input: %+v", got)
 	}
 
 	// An event nothing listens for is a no-op.
 	EmitLifecycle(context.Background(), "complete", orig, "line", nil)
-	if got := capture(); len(got) != 2 {
+	if got := capture(); len(got) != 3 {
 		t.Fatalf("complete must not fire: %+v", got)
 	}
 
@@ -143,14 +154,14 @@ func TestEmitLifecycleRoutesToTriggers(t *testing.T) {
 	EmitLifecycle(context.Background(), "update_available", core.Trigger{Source: "updater", Kind: "update"},
 		"release v1.2.3 available", map[string]any{"version": "v1.2.3"})
 	got = capture()
-	if len(got) != 3 {
+	if len(got) != 4 {
 		t.Fatalf("update_available: %+v", got)
 	}
-	if got[2].Context["version"] != "v1.2.3" || got[2].Variant != "on-update" {
-		t.Fatalf("update context: %+v", got[2].Context)
+	if got[3].Context["version"] != "v1.2.3" || got[3].Variant != "on-update" {
+		t.Fatalf("update context: %+v", got[3].Context)
 	}
-	if got[2].Target.Repo == "" {
-		t.Fatalf("synthetic target: %+v", got[2].Target)
+	if got[3].Target.Repo == "" {
+		t.Fatalf("synthetic target: %+v", got[3].Target)
 	}
 
 	// Checkout: an event about a real repo leaves checkout to normal
@@ -158,7 +169,7 @@ func TestEmitLifecycleRoutesToTriggers(t *testing.T) {
 	if a, _ := got[0].Action.(config.Action); a.Checkout != "" {
 		t.Fatalf("real-target lifecycle checkout = %q, want empty (derived)", a.Checkout)
 	}
-	if a, _ := got[2].Action.(config.Action); a.Checkout != "none" {
+	if a, _ := got[3].Action.(config.Action); a.Checkout != "none" {
 		t.Fatalf("synthetic-target lifecycle checkout = %q, want none", a.Checkout)
 	}
 }
