@@ -34,12 +34,14 @@ import (
 )
 
 // deliveryIDHeader is the one header name this builtin treats as a
-// vendor-neutral delivery id, when a sender sets it: a stronger dedup key
-// than a body hash for a redelivery whose body is re-serialized or whose
-// timestamp fields differ slightly between attempts. Operators whose sender
-// uses a different header can still get exact behavior with an explicit
-// `dedup:` template over `{{.body...}}`; this is only the fallback used when
-// a source declares no `dedup:` at all.
+// vendor-neutral delivery id, when a sender sets it. It is UNSIGNED (no
+// `sign:` scheme covers it, even when the body is HMAC-verified), so it is
+// never trusted alone (finding 8): folded into the fallback key only
+// alongside the body's own hash, never in place of it — see
+// deliveryFallbackKey and deliverBodyDedupKey. Operators whose sender uses a
+// different header can still get exact behavior with an explicit `dedup:`
+// template over `{{.body...}}`; this id is only consulted as part of the
+// fallback used when a source declares no `dedup:` at all.
 const deliveryIDHeader = "X-Delivery-Id"
 
 const maxBody = 25 << 20
@@ -303,13 +305,21 @@ func (w *Webhook) deliver(instance, name string, sc sourceCfg, smeeSig string, b
 	// delivery, so the dedup/target key collapsed to one constant value per
 	// source (name+"\x00"+"") — every delivery after the first was a
 	// "duplicate" of that same key and was silently dropped, and every one
-	// that WAS emitted shared one synthetic target. Falling back to the
-	// sender's own delivery id (when present) or a hash of the body instead
-	// gives every distinct delivery its own key while staying deterministic
-	// for an exact retry of the SAME delivery (identical id, or identical
-	// body).
+	// that WAS emitted shared one synthetic target. Falling back to a hash of
+	// the body (optionally combined with the sender's own delivery id) gives
+	// every distinct delivery its own key while staying deterministic for an
+	// exact retry of the SAME delivery.
 	synthKey := dedup
 	if sc.Dedup == "" {
+		// The body-hash-only gate ALWAYS applies first (finding 8), before
+		// deliveryFallbackKey folds in the (unsigned, sender-controlled)
+		// delivery id: a byte-identical body is a duplicate no matter what id
+		// rides along with it this time — closing the replay-under-a-new-id
+		// attack deliveryFallbackKey's own key (hash+id) cannot catch on its
+		// own, since a different id there means a different combined key.
+		if !seen.Add(name + "\x00body\x00" + deliverBodyDedupKey(body)) {
+			return // duplicate delivery (identical body, any delivery id)
+		}
 		synthKey = deliveryFallbackKey(deliveryID, body)
 	}
 	if !seen.Add(name + "\x00" + synthKey) {
@@ -338,17 +348,40 @@ func (w *Webhook) deliver(instance, name string, sc sourceCfg, smeeSig string, b
 	})
 }
 
-// deliveryFallbackKey is the dedup/target key for a source with no declared
-// `dedup:` template: the sender's own delivery id when it set one (so a
-// retried/redelivered copy of the SAME delivery still dedupes), else a
-// content hash of the body (so two deliveries with different bodies never
-// collide, and a byte-identical retry still dedupes).
+// deliveryFallbackKey is the TARGET/synth key for a source with no declared
+// `dedup:` template: a content hash of the body, ALWAYS — never replaced by
+// the sender's own (unsigned) delivery id — combined with that id when the
+// sender set one, purely to give two deliveries that happen to share an
+// identical body (and nothing else) distinct synthetic targets. It is never
+// the sole dedup gate: see deliverBodyDedupKey, checked first, unconditionally
+// (finding 8).
 func deliveryFallbackKey(deliveryID string, body []byte) string {
+	key := "sha256:" + bodyHash(body)
 	if deliveryID != "" {
-		return "id:" + deliveryID
+		key += ":id:" + deliveryID
 	}
+	return key
+}
+
+// deliverBodyDedupKey is the fallback delivery's PRIMARY, unconditional dedup
+// gate (finding 8): the body's content hash alone, deliberately never
+// combined with the delivery id header (unsigned, sender-controlled even
+// when the body itself is HMAC-verified). Without this gate, trusting the id
+// (deliveryFallbackKey, which DOES fold it in for target-assignment purposes)
+// as part of what decides "duplicate" let two attacks through:
+//   - a sender pre-sends its OWN body under the SAME delivery id a future
+//     legitimate delivery will carry, to suppress that later, real delivery
+//     — but the two bodies hash differently, so they never collide here;
+//   - a sender replays a previously-processed, genuinely signed body under a
+//     NEW delivery id, to get it processed a second time — but the body hash
+//     is identical either way, so it collides here regardless of the id.
+func deliverBodyDedupKey(body []byte) string {
+	return "sha256:" + bodyHash(body)
+}
+
+func bodyHash(body []byte) string {
 	sum := sha256.Sum256(body)
-	return "sha256:" + hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:])
 }
 
 func parseBody(body []byte) any {

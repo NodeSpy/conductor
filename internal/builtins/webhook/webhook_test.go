@@ -398,6 +398,83 @@ func TestStartSourceNoDedupTemplateStillDedupesIdenticalRetry(t *testing.T) {
 	}
 }
 
+// TestStartSourceDeliveryIDCannotSuppressALaterDifferentDelivery is finding
+// 8's first attack: a sender pre-sends ITS OWN body under the delivery id a
+// future, genuinely different delivery will use, hoping the id collision
+// alone suppresses the real one. It must not: the body-hash gate
+// (deliverBodyDedupKey) is keyed on content, not the (unsigned) id, so a
+// different body under the same id is never treated as a duplicate.
+func TestStartSourceDeliveryIDCannotSuppressALaterDifferentDelivery(t *testing.T) {
+	w := New()
+	addr := freeAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	emit, got := collectEvents()
+	go func() {
+		_ = w.StartSource(ctx, plugin.StartSourceRequest{
+			Instance: "wh",
+			Config: map[string]any{
+				"listen":  addr,
+				"sources": map[string]any{"x": map[string]any{"path": "/h"}}, // no dedup:
+			},
+		}, emit)
+	}()
+	waitListening(t, addr)
+	// The attacker's own, bogus body — pre-sent under id "shared", hoping to
+	// occupy that id before the real delivery arrives.
+	postTo(t, "http://"+addr+"/h", `{"id":"attacker-bogus"}`, map[string]string{"X-Delivery-Id": "shared"})
+	// The real, DIFFERENT delivery, carrying the SAME id (coincidence or a
+	// guessed/predictable id scheme) — it must still fire.
+	postTo(t, "http://"+addr+"/h", `{"id":"real-delivery"}`, map[string]string{"X-Delivery-Id": "shared"})
+
+	var titles []string
+	for i := 0; i < 2; i++ {
+		select {
+		case ev := <-got:
+			titles = append(titles, fmt.Sprint(ev.Context["body"]))
+		case <-time.After(5 * time.Second):
+			t.Fatalf("delivery %d of 2 never fired (got %d so far: %v) — a shared delivery id suppressed a genuinely different body", i+1, len(titles), titles)
+		}
+	}
+}
+
+// TestStartSourceReplayUnderANewDeliveryIDStillDedupes is finding 8's second
+// attack: a sender replays a PREVIOUSLY-SEEN, byte-identical body under a
+// NEW delivery id (the header is unsigned, even when the body itself is
+// HMAC-verified), hoping the id change alone defeats dedup. It must not: the
+// body-hash gate is checked BEFORE the id is ever folded into a key.
+func TestStartSourceReplayUnderANewDeliveryIDStillDedupes(t *testing.T) {
+	w := New()
+	addr := freeAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	emit, got := collectEvents()
+	go func() {
+		_ = w.StartSource(ctx, plugin.StartSourceRequest{
+			Instance: "wh",
+			Config: map[string]any{
+				"listen":  addr,
+				"sources": map[string]any{"x": map[string]any{"path": "/h"}}, // no dedup:
+			},
+		}, emit)
+	}()
+	waitListening(t, addr)
+	postTo(t, "http://"+addr+"/h", `{"id":"evt-1"}`, map[string]string{"X-Delivery-Id": "id-1"})
+	// The identical body, replayed under a brand-new delivery id.
+	postTo(t, "http://"+addr+"/h", `{"id":"evt-1"}`, map[string]string{"X-Delivery-Id": "id-2"})
+
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first delivery should emit")
+	}
+	select {
+	case ev := <-got:
+		t.Fatalf("a byte-identical body replayed under a new delivery id must still dedupe, got %+v", ev)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 func TestStartSourceVerifiesSignature(t *testing.T) {
 	w := New()
 	addr := freeAddr(t)
