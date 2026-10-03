@@ -324,6 +324,44 @@ subset.
 A JSON-RPC error answer never tears the process down. Transport errors and
 timeouts do. This is the #164 fix, kept.
 
+**Where each code is handled.** An answered JSON-RPC error becomes a typed
+`connector.ContractError{Code, Message, Data}` at the connector boundary
+(`internal/connector/external.go` `invokePlugin`, via `internal/plugin`'s
+`*acp.RPCError` passed through unwrapped) and travels from there as an
+ordinary wrapped Go error (`errors.As`-reachable through any number of
+`fmt.Errorf("…: %w", …)` wraps), never restringified:
+
+- `target_gone` is turned into `dispatch.ErrTargetClosed` (the same sentinel
+  a dispatch-detected closure already produces) at every place that mints or
+  reads on the run's behalf: a flow verb step and hook (`internal/flow/flow.go`
+  `execVerb`/`runHooks`), a credential mint and the legacy pre-dispatch/resume
+  gates (`internal/engine/credentials.go`, `internal/engine/engine.go`
+  `remediate`/`ResumeWorkflows`), so the existing stop-hook switch
+  (`runSteps`) needs no further change. `reads_revision`
+  (`internal/connector/head.go` `TargetHead`) prefers the code directly over
+  a failed read's blank state, per the note below.
+- `invalid` never retries: `internal/flow/flow.go`'s `execWithRetry` breaks
+  its retry loop on it regardless of `retry:`.
+- `rate_limited` and `not_ready` are retried independently of any caller's
+  own `retry:` policy, inside the single call, by
+  `connector.RetryContract` (`internal/connector/contract_retry.go`) — the
+  one place every surface (verb step, hook, skill verb, `reads_revision`,
+  credential mint, remediation status/action) goes through.
+- `upstream` retries only when `data.retryable` is true AND the step
+  configured `retry:` — `execWithRetry` also breaks immediately on a
+  non-retryable `upstream` answer, never consulting `retry:` for it.
+- A skill verb (`internal/flow/skillverbs.go` `RunSkillVerb`) gets the same
+  `rate_limited`/`not_ready` retry and never retries `invalid`, but does not
+  synthesize a run-level stop on `target_gone` — the call runs inside an
+  agent's own live turn, outside the step/hook control flow that fires stop
+  hooks, so it surfaces as a tagged (`errors.As`-reachable), redacted tool
+  error for the agent to act on instead.
+- A hook is best-effort regardless of code: `rate_limited`/`not_ready` are
+  retried the same bounded way as any other invoke (worth the short wait),
+  but `target_gone`/`invalid` get no special treatment beyond the existing
+  log-and-continue — a hook has no `retry:` to suppress, and by construction
+  the run's own stop-vs-fail decision was already made before the hook ran.
+
 ### 1.12 What the SDK (`pkg/`) provides
 
 Vendor-neutral only, enforced by a boundary test (§1.13):
@@ -795,7 +833,7 @@ not separate PRs or releases.
 
 | Step | Repo / PR | Contents | Behavior change at that commit |
 |---|---|---|---|
-| **A** | conductor, #164 | **Contract core.** `pkg/plugin` semantics types; `describe {host}`; must-understand; `plugin.poll / translate / validate / stop`, `host.state`; triggers sent and `catch_up` honored for every plugin; `abi` ignored; error codes §1.11 (defined; the engine treating `target_gone`/`not_ready` specially is follow-up work); the in-process contract transport (§1.10) and the exposure builtins on it; `pkg/sourcekit` scheduler and dedupe; `pkg/plugintest`; reserved-name unification; G15 fix. **Git-only distribution** (X2). **Tunnels cut over** (V4–V4c). | none for existing plugins or configs; the `tunnel:` block is removed (no current users) |
+| **A** | conductor, #164 | **Contract core.** `pkg/plugin` semantics types; `describe {host}`; must-understand; `plugin.poll / translate / validate / stop`, `host.state`; triggers sent and `catch_up` honored for every plugin; `abi` ignored; error codes §1.11, consumed by the engine per the table there; the in-process contract transport (§1.10) and the exposure builtins on it; `pkg/sourcekit` scheduler and dedupe; `pkg/plugintest`; reserved-name unification; G15 fix. **Git-only distribution** (X2). **Tunnels cut over** (V4–V4c). | none for existing plugins or configs; the `tunnel:` block is removed (no current users) |
 | **B** | conductor, #164 | **Engine reads semantics.** cron, rss and webhook move onto the in-process contract (their synthetic targets and no-checkout become declarations, so they wait for the engine to read them). Every row of §3.1–§3.8 replaced by a semantic lookup. The still-bundled github and slack are re-wired as in-process contract plugins declaring exactly the §4 semantics, so the existing unit and e2e suites prove equivalence before anything is removed. Delete `trusted_source`, `SourceTrusted`, `ConnectorABI`, `kindFor`, `ReservedKind`, `BranchFixKind`, the ABI-gated methods, the `sweep` intercept, `identitySource`/`dispatchTuner`, `lowerEngineOptions`, the vendor `config.Action` fields. Outcome vocabulary with a read-side mapping. | none observable |
 | **P** | conductor-plugins, companion draft | `connectors/github`, `connectors/slack`, `connectors/discord` on the contract; exposure plugins `cloudflared`, `ngrok`, `tailscale`, `localxpose`, `ssh-tunnel`, `smee`; `githubkit`, `ghsource`, `ghplugin`, the GitHub fake and the conformance cases move here; `pkg/plugintest` conformance plus engine-outcome scenarios (the incident list) in CI; release workflow publishes `refs/dist/<tag>` (X2). | new plugin versions |
 | **C** | conductor, #164 | **Plugins-first boot**, then the removal. Boot fetches and verifies the official plugin for every connector that names a removed builtin before any connector starts. Then remove the github, slack and discord builtins and the other vendor connectors compiled in (`ntfy`, `pushover`, `notifiarr`; plugins exist or are ported in P), `internal/integrations/{github,slack}`, the `internal/handoff` vendor channels, the legacy `integrations:` / `handoffs:` / `notify:` blocks (Q4), and `pkg/githubkit` (moved in P). Strict vendor boundary tests (§1.13). e2e runs against the plugin builds from P. | `use: github` / `use: slack` resolve to the official plugins |

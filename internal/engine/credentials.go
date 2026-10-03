@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
@@ -89,9 +90,18 @@ func (e *Engine) mint(ctx context.Context, t core.Trigger, instance string, cr s
 	if e.invokeVerb == nil {
 		return "", fmt.Errorf("no connector registry to mint through")
 	}
-	out, err := e.invokeVerb(ctx, instance, cr.Mint.Verb, core.DeclaredArgs(cr.Mint.Args, t.Facts()))
+	// rate_limited/not_ready (§1.11) are retried here, independently of any
+	// step retry: policy (a credential mint has none of its own); a
+	// target_gone answer is tagged dispatch.ErrTargetClosed so a run that
+	// can't mint because its target is gone stops instead of failing —
+	// execAgent (flow.go) returns this error straight out of a step, so the
+	// existing stop-hook switch (runSteps) and ResumeWorkflows both act on
+	// it with no further wiring.
+	out, err := connector.RetryContract(ctx, func() (map[string]any, error) {
+		return e.invokeVerb(ctx, instance, cr.Mint.Verb, core.DeclaredArgs(cr.Mint.Args, t.Facts()))
+	})
 	if err != nil {
-		return "", err
+		return "", stopAsTargetGone(err)
 	}
 	key := cr.Value
 	if key == "" {

@@ -658,10 +658,26 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 		r.auditSkillVerb(t, id.Agent, uses, merged, "stubbed", nil)
 		return stubOutputs(in, verb), nil
 	}
-	out, err := in.InvokeFinal(ctx, verb, merged)
+	// A skill verb is an agent's own live tool call: rate_limited/not_ready
+	// (§1.11) are retried transparently like any other invoke, so a
+	// transient answer never reaches the agent as a failure. target_gone and
+	// invalid are not translated into a run-level stop here — the call runs
+	// inside the agent's own turn, outside the step/hook control flow that
+	// fires stop hooks — so they surface to the agent as an ordinary tool
+	// error (never retried) for it to act on; the error is still tagged
+	// (stopAsTargetGone) so a future caller that DOES want to end the turn
+	// can tell target_gone apart from any other failure via errors.As.
+	out, err := connector.RetryContract(ctx, func() (map[string]any, error) {
+		return in.InvokeFinal(ctx, verb, merged)
+	})
 	if err != nil {
+		err = stopAsTargetGone(err)
 		r.auditSkillVerb(t, id.Agent, uses, merged, "failed", err)
-		return nil, fmt.Errorf("skill verb %s: %s", uses, r.redactErr(err))
+		// redactedErr keeps the returned TEXT redacted (this crosses to the
+		// agent) while Unwrap keeps err reachable, so errors.As still finds
+		// the *connector.ContractError underneath — redacting the message
+		// must not cost the type.
+		return nil, &redactedErr{msg: fmt.Sprintf("skill verb %s: %s", uses, r.redactErr(err)), err: err}
 	}
 	r.auditSkillVerb(t, id.Agent, uses, merged, "ok", nil)
 	// Outputs cross back into the agent's context: redact like every other

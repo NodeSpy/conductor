@@ -177,6 +177,15 @@ type fakeState struct {
 	// across polls (a run's status: in_progress → completed) for wait_for.
 	// Takes precedence over outputs[verb].
 	outputsFn map[string]func(callIndex int, opts map[string]any) map[string]any
+	// errFn[verb], when set, computes the error (nil for success) for each
+	// call from its 0-based per-verb call index — how a test scripts a
+	// plugin contract error (plugin-contract.md §1.11), including a
+	// *connector.ContractError directly (no plugin wire round trip needed:
+	// AsContractError works on any error in the chain, not just one that
+	// crossed a real transport), or a sequence of codes ending in success.
+	// Checked before failTimes/failIf, which only ever produce a generic
+	// "fake: ... failed" error.
+	errFn map[string]func(callIndex int, opts map[string]any) error
 	// slowMS[verb] sleeps that long (bounded by ctx) before returning.
 	slowMS map[string]time.Duration
 }
@@ -192,6 +201,7 @@ func newFakeStateEmpty() *fakeState {
 		failIf:    map[string]func(map[string]any) bool{},
 		outputs:   map[string]map[string]any{},
 		outputsFn: map[string]func(int, map[string]any) map[string]any{},
+		errFn:     map[string]func(int, map[string]any) error{},
 		slowMS:    map[string]time.Duration{},
 	}
 }
@@ -280,9 +290,15 @@ func (f *fakeImpl) Invoke(ctx context.Context, verb string, opts map[string]any)
 	pred := st.failIf[verb]
 	slow := st.slowMS[verb]
 	outFn := st.outputsFn[verb]
+	errFn := st.errFn[verb]
 	out, hasOut := st.outputs[verb]
 	st.mu.Unlock()
 
+	if errFn != nil {
+		if err := errFn(callIdx, opts); err != nil {
+			return nil, err
+		}
+	}
 	if verb == "fail" {
 		return nil, fmt.Errorf("fake: verb %q always fails", verb)
 	}

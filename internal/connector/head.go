@@ -42,8 +42,20 @@ func (in *Instance) TargetHead(ctx context.Context, t core.Trigger) (TargetHead,
 			continue
 		}
 		rr := v.Semantics.ReadsRevision
-		out, err := in.InvokeFinal(ctx, v.Name, core.DeclaredArgs(rr.Args, t.Facts()))
+		out, err := RetryContract(ctx, func() (map[string]any, error) {
+			return in.InvokeFinal(ctx, v.Name, core.DeclaredArgs(rr.Args, t.Facts()))
+		})
 		if err != nil {
+			// -32011 target_gone (§1.11): the plugin is telling us directly
+			// that the target is gone, in the one call whose whole job is
+			// reading the target's state — prefer the code over a failed
+			// read's "" unknown state, so a stop fires off the vendor-free
+			// answer instead of silence.
+			if ce, ok := AsContractError(err); ok && ce.IsTargetGone() {
+				h := TargetHead{State: TargetClosed}
+				h.StopReason = rr.Reasons[TargetClosed]
+				return h, nil
+			}
 			return TargetHead{}, err
 		}
 		h := TargetHead{SHA: fmt.Sprint(out[rr.Revision])}

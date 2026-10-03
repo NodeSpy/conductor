@@ -210,20 +210,32 @@ func (s *State) List(ctx context.Context, prefix string) ([]string, error) {
 }
 
 // Contract error codes (§1.11), in the JSON-RPC server-error range. A
-// handler returns one through Fail; the host maps each to engine behavior.
+// handler returns one through Fail; the host maps each to engine behavior
+// (internal/connector.ContractError and internal/connector.RetryContract
+// carry a decoded answer from there into the engine).
 const (
 	// CodeUpstream: the upstream answered with an error. Data: {status,
-	// retryable}. Retried by the step's retry: only when retryable.
+	// retryable}. The engine retries it only when BOTH retryable is true AND
+	// the caller's own retry: policy allows it (e.g. a flow step's retry:
+	// block) — a false or absent retryable fails closed, never retried, no
+	// matter how generous the caller's own retry: is.
 	CodeUpstream = -32010
 	// CodeTargetGone: the target closed or disappeared under the call. The
-	// run is STOPPED (stop hooks, not a failure).
+	// run is STOPPED (stop hooks, not a failure) — the engine's
+	// dispatch.ErrTargetClosed, the same sentinel a dispatch-detected
+	// closure already produces.
 	CodeTargetGone = -32011
-	// CodeInvalid: the request can never succeed. Never retried.
+	// CodeInvalid: the request can never succeed. Never retried, regardless
+	// of any retry: the caller configured.
 	CodeInvalid = -32012
-	// CodeRateLimited: Data: {retry_after} (a Go duration). Retried after it.
+	// CodeRateLimited: Data: {retry_after} (a Go duration). The engine
+	// retries after it (capped, e.g. 15m) independently of the caller's own
+	// retry: policy — a step with no retry: configured at all still gets
+	// this retry.
 	CodeRateLimited = -32013
-	// CodeNotReady: state not computed yet. Retried with a short, bounded
-	// backoff.
+	// CodeNotReady: state not computed yet. The engine retries it with a
+	// short, bounded backoff (a fixed small number of attempts), also
+	// independent of the caller's own retry: policy.
 	CodeNotReady = -32014
 )
 

@@ -952,6 +952,15 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	}
 	creds, err := e.credentialsFor(ctx, t)
 	if err != nil {
+		if errors.Is(err, dispatch.ErrTargetClosed) {
+			// target_gone (§1.11): its target is gone before this ever
+			// became a run — a stop, not a failure, so it is audited as one
+			// rather than as a dispatch failure.
+			e.log("%s not dispatched — target gone", tag(t))
+			e.store.Audit(map[string]any{"event": "workflow_stopped", "repo": t.Target.Repo,
+				"number": t.Target.Number, "kind": t.Kind, "reason": "target closed"})
+			return
+		}
 		e.log("%s not dispatched — %v", tag(t), err)
 		e.store.Audit(map[string]any{"event": "dispatch_failed", "repo": t.Target.Repo, "number": t.Target.Number,
 			"kind": t.Kind, "error": e.redact(err.Error())})
@@ -1294,6 +1303,17 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 		// rather than resuming it without.
 		creds, err := e.credentialsFor(ctx, t)
 		if err != nil {
+			if errors.Is(err, dispatch.ErrTargetClosed) {
+				// target_gone (§1.11) while re-minting a resumed run's
+				// credentials: its target is confirmed gone, so it stops
+				// here — recorded as a stop, not left pending to be
+				// "deferred" forever across every future restart.
+				e.log("%s resume: target gone — stopping", tag(t))
+				e.store.Audit(map[string]any{"event": "workflow_stopped", "repo": t.Target.Repo,
+					"number": t.Target.Number, "kind": t.Kind, "reason": "target closed"})
+				e.finishRun(r)
+				continue
+			}
 			e.log("%s resume deferred — %v", tag(t), err)
 			continue
 		}
@@ -1513,7 +1533,19 @@ func agentWaitTimeout(p config.Step) time.Duration {
 // false falls through to dispatching the fixer.
 func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.RemediateSemantics, act config.Action, key, head string, run any) bool {
 	waitKey := fmt.Sprintf("%s|%v", key, run)
-	out, err := e.invokeVerb(ctx, t.Instance, rem.Status.Verb, core.DeclaredArgs(rem.Status.Args, t.Facts()))
+	// rate_limited/not_ready (§1.11) are retried here, inside the one call;
+	// there is no step retry: to consult for a status/action verb.
+	out, err := connector.RetryContract(ctx, func() (map[string]any, error) {
+		return e.invokeVerb(ctx, t.Instance, rem.Status.Verb, core.DeclaredArgs(rem.Status.Args, t.Facts()))
+	})
+	if ce, ok := connector.AsContractError(err); ok && ce.IsTargetGone() {
+		// The target this remediation (and the fixer it would otherwise
+		// dispatch) acts on is gone: stop — handled, not a failure, and no
+		// fixer dispatch for a target that no longer exists.
+		e.log("%s remediation %s: target gone — dropping", tag(t), rem.Status.Verb)
+		e.runWait.Delete(waitKey)
+		return true
+	}
 	if err == nil {
 		done, eerr := expr.Eval(rem.Status.DoneWhen, out)
 		if eerr == nil && !done {
@@ -1538,7 +1570,13 @@ func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.Remedia
 	if e.store.Attempts(key, rkey, head) >= budget {
 		return false
 	}
-	if _, err := e.invokeVerb(ctx, t.Instance, rem.Action.Verb, core.DeclaredArgs(rem.Action.Args, t.Facts())); err != nil {
+	if _, err := connector.RetryContract(ctx, func() (map[string]any, error) {
+		return e.invokeVerb(ctx, t.Instance, rem.Action.Verb, core.DeclaredArgs(rem.Action.Args, t.Facts()))
+	}); err != nil {
+		if ce, ok := connector.AsContractError(err); ok && ce.IsTargetGone() {
+			e.log("%s remediation %s: target gone — dropping (no fixer dispatch)", tag(t), rem.Action.Verb)
+			return true
+		}
 		// Not requested, so the attempt is not counted; dispatch the fixer.
 		e.log("%s remediation %s for run %v: %v — dispatching the fixer instead", tag(t), rem.Action.Verb, run, err)
 		return false

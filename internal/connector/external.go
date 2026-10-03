@@ -431,7 +431,10 @@ func (e *externalImpl) invokePlugin(ctx context.Context, verb string, opts map[s
 		Instance: e.instance, Verb: verb, Options: opts, Connection: conn, Staging: staging,
 	})
 	if err != nil {
-		return nil, err
+		// An answered JSON-RPC error (plugin-contract.md §1.11) becomes a
+		// *ContractError here, carrying Code/Data the rest of the engine acts
+		// on; a transport failure or timeout passes through unchanged.
+		return nil, contractErrorFrom(err)
 	}
 	// Untrusted output (§8.2): validate against the declared verb outputs.
 	if vd, ok := e.decl.Verb(verb); ok && !vd.Open && len(vd.Outputs) > 0 {

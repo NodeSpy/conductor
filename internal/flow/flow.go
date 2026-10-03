@@ -970,7 +970,7 @@ func (r *Runner) execWithRetry(ctx context.Context, t core.Trigger, step config.
 	var err error
 	for attempt := 0; ; attempt++ {
 		out, raw, err = r.execStep(ctx, t, step, id, slot, data, shadow)
-		if err == nil || attempt >= max || ctx.Err() != nil || errors.Is(err, dispatch.ErrTargetClosed) {
+		if err == nil || attempt >= max || ctx.Err() != nil || errors.Is(err, dispatch.ErrTargetClosed) || noStepRetry(err) {
 			break
 		}
 		r.Log("%s step %s attempt %d failed: %v — retrying in %s", flowTag(t), id, attempt+1, err, backoff)
@@ -1185,9 +1185,16 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
 	}
 	start := time.Now()
-	out, err := in.InvokeFinal(ctx, verb, final)
+	// rate_limited/not_ready (§1.11) are retried here, inside the one call,
+	// independently of the step's own retry: policy; target_gone/invalid/
+	// upstream come back untouched for the checks below and execWithRetry's
+	// loop to act on.
+	out, err := connector.RetryContract(ctx, func() (map[string]any, error) {
+		return in.InvokeFinal(ctx, verb, final)
+	})
 	took := time.Since(start).Round(time.Millisecond)
 	if err != nil {
+		err = stopAsTargetGone(err)
 		r.auditVerb(t, connName, verb, rendered, "failed", err)
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
 	}
@@ -2242,6 +2249,17 @@ func (r *Runner) fireHooks(ctx context.Context, t core.Trigger, hooks []config.H
 	r.runHooks(ctx, t, hooks, phase, hookData(base, phase, status, runID, stepID, failure), where)
 }
 
+// runHooks fires every hook at phase. Hooks are best-effort (log and move
+// on; they never fail the run, which has already decided its own fate by
+// the time a hook fires): a plugin contract error (§1.11) gets the SAME
+// bounded, self-correcting retry as a verb step's own invoke (rate_limited/
+// not_ready via connector.RetryContract), because those are worth a short
+// wait regardless of context. target_gone and invalid get no special
+// treatment beyond that: a hook has no retry: policy to suppress, and by
+// construction (start/done/fail/stop phases) the run's own stop-vs-fail
+// decision was already made before the hook ran — a hook that fails here
+// because its own target is gone, or its request can never succeed, is
+// logged like any other best-effort hook failure, not escalated.
 func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Hook, phase string, data map[string]any, where string) {
 	for i, h := range hooks {
 		if h.At != phase {
@@ -2327,7 +2345,9 @@ func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Ho
 			}
 			final = rv.(map[string]any)
 		}
-		if _, err := in.InvokeFinal(hctx, verb, final); err != nil {
+		if _, err := connector.RetryContract(hctx, func() (map[string]any, error) {
+			return in.InvokeFinal(hctx, verb, final)
+		}); err != nil {
 			r.Log("%s %s hook %s.%s failed (best-effort): %v", flowTag(t), where, connName, verb, err)
 			r.auditVerb(t, connName, verb, rendered, "hook_failed", err)
 			continue
