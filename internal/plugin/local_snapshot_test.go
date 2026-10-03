@@ -707,6 +707,30 @@ func TestSnapshotLocalRefusesWorldWritableAncestor(t *testing.T) {
 	}
 }
 
+// TestSecureAncestorDirRefusesGroupWritableOnly is finding 5's narrower
+// regression: secureAncestorDir must refuse an ancestor that is GROUP-
+// writable (0o020) even when it is NOT world-writable — another user who
+// merely shares the directory's group can relocate/replace what "local"
+// resolves to exactly as a world-writable directory would allow. A mask
+// narrowed to 0o002 (world-write only) would miss this and wrongly pass.
+func TestSecureAncestorDirRefusesGroupWritableOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix permission bits")
+	}
+	dir := t.TempDir()
+	// 0700 | 0020: owner rwx, group write-only, no world bits at all.
+	if err := os.Chmod(dir, 0o720); err != nil {
+		t.Fatal(err)
+	}
+	err := secureAncestorDir(dir)
+	if err == nil {
+		t.Fatalf("a group-writable (but not world-writable) ancestor must be refused")
+	}
+	if !strings.Contains(strings.ToUpper(err.Error()), "WRITABLE") {
+		t.Fatalf("refusal should call out the writable ancestor, got: %v", err)
+	}
+}
+
 // TestSnapshotLocalCreatesMissingAncestorsAt0700 proves the non-attack path of
 // finding 5(a) still works: a brand-new state dir with NO "plugins" or
 // "local" directory yet gets both created at 0700, not refused.
