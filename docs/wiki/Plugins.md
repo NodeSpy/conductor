@@ -560,8 +560,10 @@ denial paths.
 
 ## Migrating from `plugins:`
 
-`conductor config migrate` folds the old shape into the new, and the daemon runs
-it automatically at boot — a deployed box crosses this change without an edit.
+The legacy schema is gone from this release, and so is `conductor config
+migrate`. Run `conductor config migrate` on the previous release to fold the
+old shape into the new, then upgrade (design doc §5). The table records what
+that migration did:
 
 | Old | New |
 |---|---|
@@ -585,8 +587,8 @@ Retired fields are dropped **with a note naming what replaced them**:
 - `args` — a plugin is configured over the RPC transport per instance, not by
   process arguments shared across all of them.
 
-A `plugins:` entry nothing referenced still migrates, into an entry named after
-the plugin, so nothing is silently lost.
+A `plugins:` entry nothing referenced was migrated too, into an entry named
+after the plugin, so nothing was silently lost.
 
 ## Not yet implemented
 
@@ -596,13 +598,13 @@ Documented follow-ups, not silent gaps:
   verification *is* implemented; signature verification is the next layer.
 - **Discovery/search** — a central index of available plugins.
 - **Multi-instance isolation**: one plugin serving several instances shares a
-  process; creds are scoped per-call, but shared-process inter-instance
-  hardening is a follow-up.
-- **External-overrides-bundled**: a plugin may not replace a bundled
-  implementation that the config also uses (builtin beats official by design).
-  It MAY stand in for a bundled type of the same name when no connector in the
-  config resolves to that builtin — nothing is then redirected; the operator
-  named the plugin. This is how the github plugin runs while github is still
-  bundled. A config mixing the two is refused at boot.
+  process. Creds are scoped per call, and the host calls (`host.state`,
+  `host.auth`, `host.log`) answer only for instances the process was actually
+  handed work for, but in-process isolation between those instances is a
+  follow-up.
+- **External-overrides-bundled**: a plugin may not replace a bundled connector
+  type (the vendor-neutral builtins: cron, rss, webhook, rest, graphql, lan,
+  tunnel, and the data/flow connectors). Registering one is refused. Vendor
+  connectors are not bundled at all — `use: github` resolves to the plugin.
 - **Runtime plugin supervision depth**: re-verified per spawn and env-scrubbed,
   but still on ACP's supervision rather than `internal/plugin`'s.
