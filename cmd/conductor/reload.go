@@ -64,7 +64,7 @@ func reloadMoved(cfg *config.Config, mgr *plugin.Manager, reg *connector.Registr
 			logf("reload: %q is not a live plugin (pack or removed ref) — restarting to apply", r.Key)
 			return false
 		}
-		if _, ok := mgr.Client(r.Key); !ok {
+		if !mgr.HasLiveClient(r.Key) {
 			logf("reload: %s has no live client (ACP runtime?) — restarting to apply", r.Name)
 			return false
 		}

@@ -50,7 +50,8 @@ func buildFakeInstanceConnector(t *testing.T, typ string, h *fakeInstanceHandler
 	if err != nil {
 		t.Fatalf("describe: %v", err)
 	}
-	if _, err := RegisterExternalConnector(cl, spec, decl); err != nil {
+	single := func(string) (*plugin.Client, error) { return cl, nil } // a fixed shared client, as every pre-isolation test expects
+	if _, err := RegisterExternalConnector(single, spec, decl); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	t.Cleanup(func() { UnregisterExternalType(typ) })

@@ -66,17 +66,30 @@ func IsExternalType(typ string) bool {
 	return externalTypes[typ]
 }
 
-// RegisterExternalConnector bridges a started plugin into the connector
-// registry: it maps the plugin's Decl to a TypeDecl and registers a Builder
-// that, per configured instance, resolves that instance's credentials and hands
-// them to the plugin subprocess per-call (least privilege, own-type-only).
-func RegisterExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin.Decl) (*TypeDecl, error) {
+// RegisterExternalConnector bridges a started plugin TYPE into the connector
+// registry: it maps the plugin's type-level Decl to a TypeDecl and registers a
+// Builder that, per configured instance, resolves that instance's credentials
+// and hands them to the instance's OWN plugin client per-call (least
+// privilege, own-type-only, own-process by default — multi-instance
+// isolation, docs/wiki/Plugins.md).
+//
+// clientFor is asked for the instance's *plugin.Client the first time this
+// builder runs for it (plugin.Manager.InstanceClientFactory): by default that
+// spawns a dedicated subprocess for exactly this instance; a plugin whose
+// operator set shared_process: true instead gets back the one process every
+// instance of it shares. Either way the builder neither knows nor cares which
+// — it just drives whatever client comes back, instance-scoped as always.
+func RegisterExternalConnector(clientFor plugin.ClientFactory, spec plugin.Spec, decl *plugin.Decl) (*TypeDecl, error) {
 	td := mapDecl(decl)
 	allow := map[string]bool{}
 	for _, s := range spec.AllowSecrets {
 		allow[s] = true
 	}
 	builder := func(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
+		cl, err := clientFor(name)
+		if err != nil {
+			return nil, fmt.Errorf("connector %q: %w", name, err)
+		}
 		conn, refs, err := resolveConnection(ref, deps.Secrets, allow)
 		if err != nil {
 			return nil, err
@@ -484,6 +497,29 @@ func InstancesUsingPlugin(r *Registry, key string) []PluginInstanceDecl {
 		out = append(out, PluginInstanceDecl{Instance: ei.instance, Connection: ei.conn, Decl: ei.instanceDecl})
 	}
 	return out
+}
+
+// InstancePID returns the OS process id of the subprocess backing a live
+// connector instance's plugin client (0, false for a non-plugin Impl, an
+// in-process builtin, or a plugin that has not started yet). Purely
+// observational — e.g. `conductor connectors ls` and the e2e suite's
+// distinct-process check (multi-instance isolation, docs/wiki/Plugins.md):
+// two configured instances of one external plugin get two different pids by
+// default, since each now runs its own process.
+func InstancePID(in *Instance) (int, bool) {
+	if in == nil || in.Impl == nil {
+		return 0, false
+	}
+	ei, ok := in.Impl.(*externalImpl)
+	if !ok {
+		return 0, false
+	}
+	pr, ok := ei.client.(interface{ PID() int })
+	if !ok {
+		return 0, false
+	}
+	pid := pr.PID()
+	return pid, pid > 0
 }
 
 // pluginValidator is the plugin.validate capability of *plugin.Client — a

@@ -45,6 +45,13 @@ type PluginRef struct {
 	// AllowEnv are the daemon environment variables the operator granted the
 	// plugin (connectors.<name>.allow_env), within what it declares.
 	AllowEnv []string
+	// SharedProcess opts this plugin's connector instances OUT of the default
+	// one-process-per-instance isolation (connectors.<name>.shared_process) —
+	// set if ANY instance of this plugin asked for it, since the process is
+	// shared per BINARY, not per connector entry. Always false for a runtime
+	// or engine reference: neither has the connector notion of "several
+	// configured instances of one plugin" this exists to isolate.
+	SharedProcess bool
 }
 
 // PluginKind values, retained as the wire/CLI spelling of UseKind.
@@ -116,6 +123,7 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		p.Network = appendUnique(p.Network, ref.Network...)
 		p.AllowSecrets = appendUnique(p.AllowSecrets, ref.AllowSecrets...)
 		p.AllowEnv = appendUnique(p.AllowEnv, ref.AllowEnv...)
+		p.SharedProcess = p.SharedProcess || ref.SharedProcess
 		out[u.InstallKey()] = p
 	}
 

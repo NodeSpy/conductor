@@ -51,9 +51,20 @@ func TestPluginRuntimeControllers(t *testing.T) {
 			t.Fatalf("runtime not registered: %+v", merged)
 		}
 		// The command routes through the plugin-exec re-verify wrapper and ends
-		// at the real binary.
-		if cc.Transport != "acp" || len(cc.Command) == 0 || cc.Command[len(cc.Command)-1] != bin {
+		// at the local build's content-addressed SNAPSHOT (the local-build
+		// TOCTOU fix) — not the raw, mutable source path.
+		got := ""
+		if len(cc.Command) > 0 {
+			got = cc.Command[len(cc.Command)-1]
+		}
+		// The snapshot is named after the runtimes: key ("my-runtime"), not the
+		// source file's own basename ("conductor-my-runtime") — see
+		// config.PluginRefs, which overrides a runtime ref's Name to the map key.
+		if cc.Transport != "acp" || got == "" || got == bin || filepath.Base(got) != "my-runtime" {
 			t.Fatalf("unexpected controller config: %+v", cc)
+		}
+		if !strings.HasPrefix(got, plugin.LocalSnapshotRoot()+string(filepath.Separator)) {
+			t.Fatalf("expected the snapshot path under %s, got %s", plugin.LocalSnapshotRoot(), got)
 		}
 		if !cc.ScrubEnv {
 			t.Fatal("a runtime plugin must not inherit the daemon's environment")
@@ -82,8 +93,14 @@ func TestPluginRuntimeControllers(t *testing.T) {
 		if len(cc.Command) < 4 || cc.Command[1] != "plugin-exec" || cc.Command[2] != "--sha" {
 			t.Fatalf("expected plugin-exec re-verify wrapper, got %v", cc.Command)
 		}
-		if cc.Command[len(cc.Command)-1] != bin {
-			t.Fatalf("wrapper must exec the real binary, got %v", cc.Command)
+		// The sha is the SOURCE's own content hash (the snapshot is a byte-for-
+		// byte copy), even though the exec target is the snapshot path.
+		if cc.Command[3] != sum {
+			t.Fatalf("expected --sha %s, got %v", sum, cc.Command)
+		}
+		got := cc.Command[len(cc.Command)-1]
+		if got == bin || !strings.HasPrefix(got, plugin.LocalSnapshotRoot()+string(filepath.Separator)) {
+			t.Fatalf("wrapper must exec the snapshotted local build, got %v", cc.Command)
 		}
 	})
 

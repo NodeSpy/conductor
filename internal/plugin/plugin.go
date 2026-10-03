@@ -107,9 +107,18 @@ type Spec struct {
 	// instance, not as process arguments shared by all of them. Retained for
 	// internal callers and tests that drive a reference plugin's modes.
 	Args []string
-	// Local marks a development binary the operator pointed at directly. There
-	// is no sha to pin (it changes on every build); safe-permissions still applies.
+	// Local marks a development binary the operator pointed at directly. Its
+	// BinPath/Sha256 name a content-addressed SNAPSHOT of it (SpecFromRef),
+	// not the mutable source path — safe-permissions still applies to that
+	// snapshot, and Sha256 is now populated (the snapshot's own hash) so
+	// verify() pins against it like any other binary.
 	Local bool
+	// SnapshotErr is set when SpecFromRef could not snapshot a LOCAL
+	// reference (no writable state dir, an unreadable source). A caller that
+	// only inspects the Spec (`plugin list`) still gets one back; Start
+	// refuses with this error before ever attempting to verify/exec the
+	// (unsnapshotted, therefore unpinned) source path.
+	SnapshotErr error
 	// Sha256 is the verified sha recorded at install, checked before every exec.
 	Sha256 string
 	// ReleaseVerified: Sha256 was verified against the release's published
@@ -136,6 +145,24 @@ type Spec struct {
 	// AllowEnv are the daemon environment variables the operator granted
 	// (allow_env); only those the plugin also declares are passed.
 	AllowEnv []string
+	// SharedProcess opts a connector plugin OUT of the default one-process-
+	// per-configured-instance isolation (config.ConnectorRef.SharedProcess,
+	// unioned across every instance of this plugin in config.PluginRefs): every
+	// configured instance of it shares the ONE subprocess a Manager starts for
+	// this Spec, the same as every plugin did before per-instance isolation
+	// existed. Not read for a runtime or engine Spec: neither has more than
+	// one "instance" sharing a Manager key to begin with (see
+	// docs/wiki/Plugins.md "Multi-instance isolation").
+	SharedProcess bool
+	// Instance is set ONLY on a per-instance Spec a Manager derives for one
+	// configured connector instance (Manager.InstanceClient) — it carries no
+	// install-state or wire meaning of its own; it exists purely so a log line
+	// or an error naming this Spec can say WHICH instance's own process it is
+	// talking about ("plugin widget instance primary: …") instead of just the
+	// shared type name both instances share. "" everywhere else: the type-
+	// level probe Spec, an engine/runtime Spec, and a SharedProcess
+	// connector's one shared Spec.
+	Instance string
 }
 
 // Ref is the `plugin@version` attribution string carried on audit records and
@@ -162,6 +189,18 @@ func (s Spec) Key() string {
 
 // Installed reports whether a binary is available to run.
 func (s Spec) Installed() bool { return s.BinPath != "" }
+
+// Identity names this Spec for a log line: the plugin name, plus the
+// configured instance it is this process's own (Spec.Instance) when it has
+// one — so a per-instance process's logs ("subprocess started", a crash-loop
+// warning) are attributable to the instance that owns it, not just the type
+// every sibling instance also shares.
+func (s Spec) Identity() string {
+	if s.Instance == "" {
+		return s.Name
+	}
+	return s.Name + " instance " + s.Instance
+}
 
 // NotInstalledError is the error a not-yet-fetched plugin produces — a
 // direction, not a stack trace.

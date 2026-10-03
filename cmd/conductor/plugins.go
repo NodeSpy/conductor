@@ -167,7 +167,20 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			logf("plugin %s: NOT INSTALLED — its connectors are disabled until it is fetched", spec.Name)
 			continue
 		}
-		decl, err := mgr.StartAndDescribe(ctx, spec.Key())
+		// The type-level probe (verify+spawn+describe) runs on a THROWAWAY
+		// process (ProbeDescribe) unless the operator opted this plugin into
+		// shared_process: — a per-instance-isolated connector's real, kept-
+		// running processes are started separately, one per configured
+		// instance, lazily by InstanceClient as connector.Build constructs
+		// each instance below (through the clientFor factory
+		// RegisterExternalConnector is handed). A SharedProcess plugin
+		// instead starts (and keeps) its ONE process right here, exactly as
+		// every connector plugin did before multi-instance isolation.
+		describe := mgr.ProbeDescribe
+		if spec.SharedProcess {
+			describe = mgr.StartAndDescribe
+		}
+		decl, err := describe(ctx, spec.Key())
 		if err != nil {
 			// An INSTALLED plugin whose verify/spawn/describe fails — a corrupt
 			// binary, a noexec mount, a sandbox preflight that can't run, a sha
@@ -224,8 +237,7 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 				}
 			}
 		}
-		cl, _ := mgr.Client(spec.Key())
-		if _, err := connector.RegisterExternalConnector(cl, spec, decl); err != nil {
+		if _, err := connector.RegisterExternalConnector(mgr.InstanceClientFactory(spec.Key()), spec, decl); err != nil {
 			rollback()
 			return nil, fmt.Errorf("plugin %s: %w", spec.Name, err)
 		}
@@ -988,6 +1000,36 @@ func bootGapFill(cfg *config.Config) {
 	case <-done:
 	case <-time.After(bootGapFillTimeout):
 		logf("plugins: boot fetch still running after %s — continuing; missing plugins' connectors start disabled", bootGapFillTimeout)
+	}
+}
+
+// gcLocalPluginSnapshots garbage-collects local-build snapshots
+// (internal/plugin's snapshotLocal, the local-build TOCTOU fix) that no
+// Manager in this boot depends on. stack may be nil (no connectors: block);
+// rtMgr may be the SAME *plugin.Manager as stack.Plugins (runtimePluginManager
+// reuses it when there is one) or a standalone one — either way its shas are
+// unioned in, and a shared Manager's shas are simply counted once. Logged,
+// never fatal: a GC failure wastes disk, nothing more (an already-running
+// process keeps its own open executable text regardless of what happens to
+// the path that used to name it).
+func gcLocalPluginSnapshots(stack *flowStack, rtMgr *plugin.Manager) {
+	keep := map[string]bool{}
+	if stack != nil && stack.Plugins != nil {
+		for sha := range stack.Plugins.LocalSnapshotShas() {
+			keep[sha] = true
+		}
+	}
+	if rtMgr != nil {
+		for sha := range rtMgr.LocalSnapshotShas() {
+			keep[sha] = true
+		}
+	}
+	removed, errs := plugin.GCLocalSnapshots(plugin.LocalSnapshotRoot(), keep)
+	for _, sha := range removed {
+		logf("plugins: GC'd stale local-build snapshot %s", shortSha(sha))
+	}
+	for _, err := range errs {
+		logf("plugins: local-build snapshot GC: %v", err)
 	}
 }
 

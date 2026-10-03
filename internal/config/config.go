@@ -1448,6 +1448,15 @@ func (c *Config) BaseDir() string { return c.baseDir }
 // A templated path a step hands to a launch (`images:`) must resolve under it.
 func PluginStagingDir() string { return filepath.Join(StateDir(), "plugins", "staging") }
 
+// PluginLocalSnapshotDir is the root under which a LOCAL plugin build
+// (`use: ./path`) is snapshotted by content hash before it is ever run — see
+// internal/plugin's local-build TOCTOU fix. Content-addressed and private
+// (the directory is 0700, each snapshotted binary 0500): a local build is an
+// operator's own development binary, rebuilt freely, so it is pinned once per
+// resolution rather than re-read from the mutable source path on every probe
+// and respawn.
+func PluginLocalSnapshotDir() string { return filepath.Join(StateDir(), "plugins", "local") }
+
 // stateDirOverride is set by --state-dir, for a CLI invocation or a test
 // that must not touch the real install state.
 var stateDirOverride string

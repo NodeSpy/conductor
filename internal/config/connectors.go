@@ -60,7 +60,22 @@ type ConnectorRef struct {
 	// declares (capabilities.env). Nothing passes without a grant — a
 	// plugin's declaration alone cannot pull a secret the daemon holds.
 	AllowEnv []string `yaml:"allow_env,omitempty"`
-	raw      yaml.Node
+	// SharedProcess opts an external (spawned) plugin-backed connector OUT of
+	// the default one-process-per-configured-instance isolation: every
+	// instance of this plugin's TYPE shares the one subprocess, as every
+	// plugin did before multi-instance isolation existed. This is a resource
+	// trade-off for an operator running many instances of one plugin (N
+	// processes costs N times the memory/fds) — explicit and documented
+	// because it also gives up the per-instance sandbox/env/staging-dir
+	// isolation (docs/wiki/Plugins.md "Multi-instance isolation"). Setting it
+	// on ANY instance of a plugin shares the WHOLE plugin's process (the
+	// process is per plugin BINARY, not per connector entry) — see
+	// config.PluginRefs, which unions this flag across every instance of the
+	// same plugin exactly as it does Network/AllowEnv/AllowSecrets. Ignored
+	// for a builtin connector (always in-process and shared; nothing to opt
+	// out of).
+	SharedProcess bool `yaml:"shared_process,omitempty"`
+	raw           yaml.Node
 	// legacyType holds a pre-`use:` `type:` value. It is NOT part of the schema
 	// — it exists only so validateConnectors can emit a migration-specific error
 	// instead of the silent "missing use:" a dropped field would produce.
@@ -76,10 +91,11 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 		Options map[string]any `yaml:"options,omitempty"`
 		Policy  *Policy        `yaml:"policy,omitempty"`
 		// Type is the retired field, read for diagnostics only (see legacyType).
-		Type         string           `yaml:"type,omitempty"`
-		Isolation    *IsolationConfig `yaml:"isolation,omitempty"`
-		AllowSecrets []string         `yaml:"allow_secrets,omitempty"`
-		AllowEnv     []string         `yaml:"allow_env,omitempty"`
+		Type          string           `yaml:"type,omitempty"`
+		Isolation     *IsolationConfig `yaml:"isolation,omitempty"`
+		AllowSecrets  []string         `yaml:"allow_secrets,omitempty"`
+		AllowEnv      []string         `yaml:"allow_env,omitempty"`
+		SharedProcess bool             `yaml:"shared_process,omitempty"`
 	}
 	var h hdr
 	if err := n.Decode(&h); err != nil {
@@ -88,6 +104,7 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 	r.Use, r.Network, r.Enabled, r.Options, r.Policy = h.Use, h.Network, h.Enabled, h.Options, h.Policy
 	r.Isolation, r.AllowSecrets, r.legacyType, r.raw = h.Isolation, h.AllowSecrets, h.Type, *n
 	r.AllowEnv = h.AllowEnv
+	r.SharedProcess = h.SharedProcess
 	return nil
 }
 

@@ -607,6 +607,25 @@ func (c *Client) Digest() string {
 	return c.digest
 }
 
+// PID is the OS process id of this client's live subprocess, or 0 when it has
+// none — not started yet, an in-process builtin (no subprocess at all), or a
+// test fake with no pid to report. Purely observational: nothing in this
+// package authorizes anything off of it. It is what lets a consumer (the
+// `plugin.go`-instance start log line, `conductor connectors ls`, the e2e
+// suite) show that two connector instances of one plugin are two distinct
+// processes, which is the point of multi-instance isolation.
+func (c *Client) PID() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		return 0
+	}
+	if pt, ok := c.conn.(interface{ Pid() int }); ok {
+		return pt.Pid()
+	}
+	return 0
+}
+
 // Start verifies the binary (verify-before-execute) and launches the
 // subprocess. Safe to call repeatedly; a no-op when already up.
 func (c *Client) Start(ctx context.Context) error {
@@ -665,6 +684,12 @@ func (c *Client) ensureLocked(ctx context.Context) error {
 		c.digest = "in-process"
 		return nil
 	}
+	if c.spec.SnapshotErr != nil {
+		// A LOCAL reference that could not be snapshotted (local-build TOCTOU
+		// fix, SpecFromRef): refuse rather than fall back to verifying/exec'ing
+		// the raw, mutable source path unpinned.
+		return fmt.Errorf("plugin %s: local build: %w", c.spec.Name, c.spec.SnapshotErr)
+	}
 	if !c.spec.Installed() {
 		return c.spec.NotInstalledError()
 	}
@@ -674,11 +699,13 @@ func (c *Client) ensureLocked(ctx context.Context) error {
 		return err
 	}
 	if c.spec.Local {
-		// A development binary the operator pointed at directly: there is no
-		// release sha to check it against (it changes on every build), so the
-		// guarantee is the safe-permissions check verify() just made. Say so,
-		// with the digest, so it is at least attributable in the log.
-		c.deps.Log("plugin %s: local build at %s (digest %s) — no release sha to verify against", c.spec.Name, c.spec.BinPath, digest)
+		// A development binary the operator pointed at directly: SpecFromRef
+		// already snapshotted it to a content-addressed, immutable copy (the
+		// local-build TOCTOU fix) and recorded that snapshot's own sha, which
+		// verify() just checked like any other pin — so say THAT, not "no sha
+		// to verify against", which stopped being true the moment the snapshot
+		// existed.
+		c.deps.Log("plugin %s: local build snapshotted at %s (sha %s) — rebuild and reload/restart to pick up a new build", c.spec.Name, c.spec.BinPath, digest)
 	}
 	c.starts = append(c.starts, now)
 	c.totalStart++
@@ -691,6 +718,13 @@ func (c *Client) ensureLocked(ctx context.Context) error {
 		return fmt.Errorf("plugin %s: launch: %w", c.spec.Name, err)
 	}
 	c.conn, c.kill, c.digest = conn, kill, digest
+	if pt, ok := conn.(interface{ Pid() int }); ok {
+		// One subprocess per configured connector instance is the point of
+		// multi-instance isolation — log the pid so an operator (or the e2e
+		// suite) can see two instances of one plugin are two processes, not
+		// one serving both.
+		c.deps.Log("plugin %s: subprocess started (pid %d)", c.spec.Identity(), pt.Pid())
+	}
 	return nil
 }
 
@@ -967,6 +1001,18 @@ func (c *Client) Reload(newSpec Spec) error {
 	return nil
 }
 
+// pidConn is *acp.Conn (satisfying transport by promotion) plus the pid of
+// the subprocess it talks to, so Client.PID can report it without the
+// transport interface itself needing to grow a method every fake in the test
+// suite would then have to implement. A test fake simply doesn't implement
+// Pid() int, and Client.PID() reports 0 for it — the same as "not started".
+type pidConn struct {
+	*acp.Conn
+	pid int
+}
+
+func (p pidConn) Pid() int { return p.pid }
+
 // realDial spawns the verified, sandbox-wrapped subprocess and wires the
 // JSON-RPC transport over its stdio, with stderr pumped through the redactor.
 func realDial(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
@@ -1012,7 +1058,7 @@ func realDial(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
 	go pumpStderr(stderr, s.Ref(), d)
 
 	bounded := newBoundedReader(stdout, d.MaxMessageBytes)
-	conn := acp.NewConn(bounded, stdin, pluginHandler{onNotify: d.onNotify, onRequest: d.onRequest})
+	conn := pidConn{Conn: acp.NewConn(bounded, stdin, pluginHandler{onNotify: d.onNotify, onRequest: d.onRequest}), pid: cmd.Process.Pid}
 
 	var once sync.Once
 	kill := func() {

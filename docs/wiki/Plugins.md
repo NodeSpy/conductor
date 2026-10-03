@@ -164,6 +164,30 @@ What follows from that:
 - Every install and update is **logged with the sha it moved from**, so a
   surprise change is visible rather than silent.
 
+### Local builds are snapshotted
+
+A `use: ./bin/conductor-widget` reference is not installed — it is whatever
+the operator built, verified for safe permissions rather than pinned to a
+release sha. It still goes through install-state's spirit, not its letter:
+the moment it is RESOLVED (boot, a reload, `conductor plugin add`/`show`),
+conductor hashes it once and copies it into a private, content-addressed
+snapshot:
+
+```
+~/.local/state/conductor/plugins/local/
+  <sha256>/widget      # 0500 — read+execute only, no write, for anyone
+```
+
+(the `local/` directory itself is `0700`). Every process that resolution
+spawns — the type probe, a per-instance probe, the live subprocess, a
+crash-respawn — runs from that one immutable snapshot, never the mutable
+source path again, and verify-before-execute pins against the snapshot's own
+sha exactly as it would a release's. Rebuilding the source has no effect on
+anything already running: the new build is picked up only the NEXT time the
+reference is resolved (a reload or a restart), never mid-life. A snapshot
+nothing currently resolved still needs is garbage-collected on the daemon's
+next boot.
+
 ### Trust
 
 The official repo (`github.com/NodeSpy/conductor-plugins`) is in the **default**
@@ -283,6 +307,69 @@ connectors:
 
 A `network:` entry that is not covered by the plugin's declaration is a **load
 error**, not a silent grant.
+
+### Multi-instance isolation
+
+Configure the same plugin more than once —
+
+```yaml
+connectors:
+  gh:       { use: github, app_id: "${GH_APP_ID}" }
+  ghlisten: { use: github, app_id: "${GH_APP_ID_2}" }
+```
+
+— and by default each configured instance gets its **own subprocess**: its
+own OS-level sandbox (when `isolation:` is set), its own scrubbed/granted
+environment, and its own staging directory. `gh` and `ghlisten` above are two
+separate `github` plugin processes, not one process serving both. That means:
+
+- a crash, a hang, or a crash-loop in one instance's process never touches a
+  sibling instance — `gh` going down does not take `ghlisten` with it;
+- `host.state`, `host.auth` and `host.log` are naturally scoped to the
+  process that calls them, on top of the existing per-call instance check —
+  one instance's process cannot even ADDRESS a sibling's state or managed
+  token, let alone read it;
+- a hot reload (a moved plugin binary) swaps every configured instance's
+  process, one at a time;
+- `conductor connectors ls` and the daemon log show each instance's own pid,
+  so two instances of one plugin are visibly two processes.
+
+The one process-level resource conductor shares regardless: the type-level
+`plugin.describe` probe (no instance) that runs once at load/install, to
+learn what the BINARY declares — a throwaway process, closed the moment it
+answers, since nothing instance-specific lives in it.
+
+**This costs memory and file descriptors**: N configured instances of one
+plugin is N processes. An operator running many instances of the same plugin
+who wants the old, pre-isolation behavior back — one process for all of
+them — opts out explicitly, on any instance:
+
+```yaml
+connectors:
+  gh:       { use: github, app_id: "${GH_APP_ID}", shared_process: true }
+  ghlisten: { use: github, app_id: "${GH_APP_ID_2}" }   # shares gh's process too
+```
+
+`shared_process: true` on ANY instance of a plugin shares the WHOLE plugin's
+process — it is a property of the binary conductor spawns, not of one
+`connectors:` entry — so set it once, on any instance, and every instance of
+that plugin shares it. With it set, isolation between instances is back to
+scoping by call only (credentials, `host.state`/`host.auth`/`host.log`'s
+per-instance checks), exactly as every plugin behaved before this existed.
+
+An **in-process builtin** (cron, rss, webhook, rest, graphql, the exposure
+connectors) is unaffected either way: it is trusted code served over an
+in-memory pipe, not a subprocess, so there is nothing to isolate by spawning
+more of it — every instance of a builtin type keeps sharing the one
+in-process client it always has.
+
+A **runtime** or **engine** plugin has no "several configured instances of
+one plugin" shape to isolate in the first place: a `runtimes:` entry already
+gets its own process (it is keyed by the `runtimes:` map name, not shared
+with another entry that happens to reference the same binary), and a
+code-step engine's one process is deliberately shared by every step that
+names it — a step is not a connector instance with its own credentials or
+sandbox to separate.
 
 ### What that enforces, exactly
 
@@ -579,9 +666,16 @@ Retired fields are dropped **with a note naming what replaced them**:
 
 - `sha256` — the verified sha now lives in local install state, recorded when
   `conductor init` fetches the binary. Nothing to pin by hand.
-- `allow_unverified` — a local `use: ./path` binary is verified on safe
-  permissions rather than a pin (it changes on every build); a fetched one
-  always carries its release sha.
+- `allow_unverified` — a local `use: ./path` binary is snapshotted by content
+  hash the moment it is resolved (boot, reload, `plugin add`/`show`) into a
+  private, content-addressed copy, and THAT sha is what every verify-before-
+  execute check pins against from then on — the same guarantee a fetched
+  release's sha gives, just re-established on every resolution instead of
+  once at install. A rebuild is picked up only on the NEXT resolution (a
+  reload or restart), never mid-life, which is what closes the gap an
+  unpinned raw path left open: every separate verify-then-exec of it (the
+  type probe, a per-instance probe, the live spawn, a crash-respawn) could
+  otherwise each see different bytes if a rebuild landed in between.
 - `allow_unsandboxed` — running without OS isolation is now the *default*.
 - `hold` — pin an exact version instead (`use: <ref>@v1.2.3`).
 - `args` — a plugin is configured over the RPC transport per instance, not by
@@ -597,11 +691,6 @@ Documented follow-ups, not silent gaps:
 - **Cryptographic signing** (cosign/Sigstore, build attestations). Checksum
   verification *is* implemented; signature verification is the next layer.
 - **Discovery/search** — a central index of available plugins.
-- **Multi-instance isolation**: one plugin serving several instances shares a
-  process. Creds are scoped per call, and the host calls (`host.state`,
-  `host.auth`, `host.log`) answer only for instances the process was actually
-  handed work for, but in-process isolation between those instances is a
-  follow-up.
 - **External-overrides-bundled**: a plugin may not replace a bundled connector
   type (the vendor-neutral builtins: cron, rss, webhook, rest, graphql, lan,
   tunnel, and the data/flow connectors). Registering one is refused. Vendor

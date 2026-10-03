@@ -69,8 +69,27 @@ keeping them.
 Unchanged from today, because it is already uniform: newline-delimited
 JSON-RPC 2.0 over the plugin's stdin/stdout, stderr for logs (redacted), the
 message caps (8 MiB plugin→host, 32 MiB host→plugin), concurrent requests in
-both directions, ids opaque. One process per installed plugin; every instance
-of it shares the process and each call names its `instance`.
+both directions, ids opaque. Every call still names its `instance`, but the
+process behind it is no longer necessarily shared: **by default, every
+configured instance of an external (spawned) connector plugin gets its OWN
+process** (`internal/plugin.Manager.InstanceClient`) — its own sandbox,
+scrubbed/granted env, and staging directory, so `host.state`/`host.auth`/
+`host.log`'s existing per-instance "active" scoping (Client.isActive) is
+backed by a process boundary, not bookkeeping alone. The type-level
+`plugin.describe` (no instance) still runs on one throwaway process, closed
+once it answers — there is nothing instance-specific in it to keep running. A
+plugin may opt a connector OUT of this with `shared_process: true` on any of
+its configured instances (an explicit, documented resource trade-off for an
+operator running many instances of one plugin: N processes costs N times the
+memory/fds) — one process then serves every instance of that plugin, exactly
+as every plugin kind did before this existed. An in-process BUILTIN
+(cron/rss/webhook/rest/graphql/the exposure connectors) is unaffected: it is
+trusted code served over an in-memory pipe (§1.10), and stays on the one
+shared in-process client regardless. A runtime or a step-engine plugin has no
+"configured instance" multiplicity to isolate in the first place — a
+`runtimes:` entry already gets its own `PluginRef`/process per block key, and
+an engine's one process is deliberately shared by every code step that names
+it (it has no per-step credential or sandbox to separate).
 
 ### 1.2 Versioning: one contract that grows additively
 
@@ -350,6 +369,17 @@ every plugin, for things a source must remember across restarts. Examples: a
 review-claim cache, own-status contexts (today lost when the plugin process
 dies — a known gap), a poll cursor. It is bounded per instance. The run-scoped
 `host.kv/sql/memory` keep their `run_id` capability as today.
+
+Scoping was always per-call (`Client.isActive`: refused for an instance this
+specific `*Client` was never handed real traffic for — see below). With
+multi-instance isolation (§1.1), that check now ALSO lines up with a process
+boundary for the default (non-`shared_process`) case: instance A's process is
+a different OS process than instance B's, wired to a different `*Client`
+whose own `active` set can structurally never contain B, so A cannot even
+ADDRESS B's state or token, let alone have the per-call check answer it. A
+`shared_process: true` plugin is back to call-scoping only — the per-call
+check is what carried this guarantee before isolation existed, and still does
+for anyone who opts out.
 
 ```text
 host.auth {instance, refresh?} → {ok, token?, error?}

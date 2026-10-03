@@ -562,6 +562,17 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Local-build snapshot GC (the local-build TOCTOU fix, internal/plugin's
+	// snapshotLocal): drop any content-addressed snapshot under
+	// PluginLocalSnapshotDir that no local plugin THIS boot resolved still
+	// depends on — a stale copy of a local plugin's binary from before the
+	// operator's last rebuild. Keep is the union of every Manager this
+	// process built (the connectors/engines stack plus, when distinct, the
+	// standalone runtime manager), so a snapshot in use by either is never
+	// removed. Best-effort and never fatal: an already-running process keeps
+	// its open executable text regardless (Linux/BSD semantics), so at worst
+	// a failed GC wastes some disk, never breaks a live plugin.
+	gcLocalPluginSnapshots(stack, rtMgr)
 	// External runtime plugins (#54) are verified (fail-closed) and merged into
 	// the controller set as sandboxed ACP subprocesses, selectable via a
 	// profile's runtime:.

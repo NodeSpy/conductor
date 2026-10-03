@@ -54,7 +54,8 @@ func TestListenersEndToEndThroughARealPluginAndTunnel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("describe: %v", err)
 	}
-	if _, err := RegisterExternalConnector(cl, spec, decl); err != nil {
+	single := func(string) (*plugin.Client, error) { return cl, nil } // one real subprocess, shared, as before per-instance isolation
+	if _, err := RegisterExternalConnector(single, spec, decl); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	defer UnregisterExternalType("acme-listener")
