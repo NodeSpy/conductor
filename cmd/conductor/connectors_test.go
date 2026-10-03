@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -148,5 +149,54 @@ triggers:
 	}
 	if len(pendingPlugins) != 1 || pendingPlugins[0] != "widget" {
 		t.Fatalf("pending = %v", pendingPlugins)
+	}
+}
+
+// TestCorruptInstalledConnectorPluginDisablesOnlyItsConnector: an INSTALLED
+// plugin binary that fails verify/spawn/describe (corrupt binary, noexec
+// mount, bad sha, a sandbox preflight failure) must not crash-loop the whole
+// daemon (a hard boot error would exit 1 and have systemd restart into the
+// same failure forever). Q12's "a plugin problem keeps only that connector
+// down" applies the same way to a failed START as it does to a missing
+// fetch.
+func TestCorruptInstalledConnectorPluginDisablesOnlyItsConnector(t *testing.T) {
+	// A binary that exists, is executable, and verifies (safe perms) but does
+	// not speak the plugin wire protocol at all — Describe() fails against it
+	// exactly like a corrupt binary or a bad build would.
+	pendingPlugins = nil
+	bin, _ := tempExecutable(t)
+	cfg := loadConfigDoc(t, fmt.Sprintf(`
+connectors:
+  forge:
+    use: %s
+  box:
+    use: command
+triggers:
+  - on: forge.new_comment
+    steps: [{ id: hi, uses: forge.comment, options: { body: "{{.comment_id}}" } }]
+  - on: manual
+    name: still-works
+    steps: [{ id: ok, uses: box.run, options: { command: "true" } }]
+`, bin))
+	stack, err := buildFlowStack(cfg, nil, nil, true)
+	if err != nil {
+		t.Fatalf("a plugin that fails to start must not fail the boot: %v", err)
+	}
+	defer stack.Close()
+	defer connector.UnregisterExternalType("my-runtime") // tempExecutable's derived plugin name
+	in, ok := stack.Registry.Get("forge")
+	if !ok || in.DisabledReason == "" || !strings.Contains(in.DisabledReason, "failed to start") {
+		t.Fatalf("forge = %+v, want disabled as failed to start", in)
+	}
+	if box, _ := stack.Registry.Get("box"); box == nil || box.DisabledReason != "" {
+		t.Fatal("an unrelated connector was affected")
+	}
+	// Unlike the not-installed case, this plugin must NOT be queued for the
+	// background install-gap retry: it IS installed, so pendingPluginRetry's
+	// gap-fill would never change anything about it.
+	for _, p := range pendingPlugins {
+		if p == "my-runtime" {
+			t.Fatal("a corrupt-but-installed plugin must not be queued for install-gap retry")
+		}
 	}
 }

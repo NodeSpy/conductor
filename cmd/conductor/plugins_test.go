@@ -10,6 +10,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/plugin"
+	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 func tempExecutable(t *testing.T) (path, sum string) {
@@ -123,6 +124,36 @@ func TestPluginRuntimeControllers(t *testing.T) {
 			t.Fatalf("a builtin runtime must not be wrapped: %+v", merged["local"])
 		}
 	})
+}
+
+// TestLoadEnginePluginsDegradesOnFailedEngine: an engine plugin that is
+// installed but fails to start/describe (corrupt binary) must not fail the
+// whole boot — Q12's posture generalizes to engines, since a code step using
+// a missing engine already has its own clear runtime error
+// (internal/code/engineplugin.go's execPluginEngine).
+func TestLoadEnginePluginsDegradesOnFailedEngine(t *testing.T) {
+	badBin, badSum := tempExecutable(t) // executable, verifies, speaks no protocol
+	u, err := config.ParseUse(config.UseKindEngine, "acme/widget")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &plugin.InstallState{Plugins: []plugin.Installed{{
+		Key: u.InstallKey(), Kind: config.PluginKindEngine, Name: u.Name,
+		Path: badBin, Sha256: badSum,
+	}}}
+	refs := map[string]config.PluginRef{u.InstallKey(): {Name: u.Name, Instance: u.Name, Use: u}}
+	mgr := plugin.NewManager(refs, t.TempDir(), state, pluginDeps(secrets.New(), func(map[string]any) {}))
+	defer mgr.Close()
+
+	lookup, err := loadEnginePlugins(mgr)
+	if err != nil {
+		t.Fatalf("a broken engine plugin must not fail the boot: %v", err)
+	}
+	if lookup != nil {
+		if _, ok := lookup(u.Name); ok {
+			t.Fatal("a broken engine plugin must not be wired as usable")
+		}
+	}
 }
 
 // A referenced-but-uninstalled plugin runtime reports a DIRECTION, not a crash.

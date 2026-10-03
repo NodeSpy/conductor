@@ -107,7 +107,14 @@ var pendingPlugins []string
 
 // loadConnectorPlugins builds the plugin manager for the config and registers
 // every connector-kind plugin's type into the connector registry (verify →
-// spawn → describe → register). Fail-closed: any load failure returns an error.
+// spawn → describe → register). A plugin that is not installed, or one that
+// IS installed but fails to verify/spawn/describe, degrades: that type alone
+// is registered Unavailable and every instance of it is disabled, loudly
+// (Q12) — see the loop body. What still stops boot outright is a CONFIG
+// error against a plugin that DID describe itself correctly (a kind the
+// config didn't expect, a network: block wider than the plugin declares):
+// that is the operator's file disagreeing with a plugin that is working
+// fine, not a plugin health problem, and retrying or disabling won't fix it.
 // Returns a manager the caller must Close.
 func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(map[string]any)) (*plugin.Manager, error) {
 	mgr := pluginManagerFor(cfg, sec, audit)
@@ -138,8 +145,27 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 		}
 		decl, err := mgr.StartAndDescribe(ctx, spec.Key())
 		if err != nil {
-			rollback()
-			return nil, fmt.Errorf("plugin %s: %w", spec.Name, err)
+			// An INSTALLED plugin whose verify/spawn/describe fails — a corrupt
+			// binary, a noexec mount, a sandbox preflight that can't run, a sha
+			// that no longer matches what's on disk — is a problem with THIS
+			// plugin, not grounds to crash-loop the whole daemon (Q12: "a failed
+			// fetch keeps only that connector down"; the same posture applies to
+			// a failed START). Fail CLOSED for the plugin — it is never run
+			// unverified or half-started — but only for the plugin: register its
+			// type Unavailable (the same path the not-installed branch above
+			// takes) so every OTHER connector, trigger and run proceeds, and log
+			// loudly so the operator notices and fixes/reinstalls it.
+			// NOT added to pendingPlugins: that retry loop (pendingPluginRetry)
+			// exists for an install GAP, which a background fetch can close. A
+			// binary that is already installed but fails to start needs an
+			// operator action (reinstall, fix the mount, fix the sandbox), not a
+			// timer — retrying it on a schedule would just repeat the same
+			// failure forever.
+			reason := fmt.Sprintf("failed to start: %v — reinstall with `conductor plugin update %s` or check the daemon log", err, spec.Name)
+			connector.RegisterUnavailableType(spec.Provides, reason)
+			registered = append(registered, spec.Provides)
+			logf("plugin %s: FAILED TO START (%v) — its connectors are disabled; every other connector, trigger and run proceeds", spec.Name, err)
+			continue
 		}
 		// KIND ENFORCEMENT at the point of use: whatever install state recorded,
 		// the running binary must still describe itself as a connector. A
@@ -179,10 +205,16 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 // through.
 //
 // It is deliberately the connector path with a different kind word: the same
-// manager, the same verify-before-execute, the same sandbox/manifest spawn,
-// the same fail-closed boot. What it adds is the two questions only an engine
-// has an answer to — is this really an engine, and does it speak an ABI this
-// daemon drives — asked once here rather than on every step.
+// manager, the same verify-before-execute, the same sandbox/manifest spawn —
+// but it DEGRADES, rather than fails closed, exactly like the connector path
+// now does (Q12's posture generalizes: an engine problem should take down
+// only the code steps that use it). The blast radius is naturally scoped
+// already: code.EngineLookup's false return ("no such engine is loaded") is
+// documented as reading like a config/install problem
+// (internal/code/engineplugin.go's execPluginEngine already spells out
+// "...or failed to start" in the step-level error), so a step using a broken
+// engine fails on its own, in place, instead of every connector and every
+// OTHER engine going down with it.
 func loadEnginePlugins(mgr *plugin.Manager) (code.EngineLookup, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), pluginBootTimeout)
 	defer cancel()
@@ -190,18 +222,24 @@ func loadEnginePlugins(mgr *plugin.Manager) (code.EngineLookup, error) {
 	for _, spec := range mgr.EngineSpecs() {
 		decl, err := mgr.StartAndDescribe(ctx, spec.Key())
 		if err != nil {
-			return nil, fmt.Errorf("engine plugin %s: %w", spec.Name, err)
+			logf("plugin %s: FAILED TO START (%v) — code steps using it will fail at run time until it is fixed", spec.Name, err)
+			continue
 		}
 		// KIND ENFORCEMENT at the point of use, as for connectors: whatever
 		// install state recorded, the running binary must still describe
 		// itself as an engine. A runtime or connector accepted here would be
-		// handed a step's ctx data plane it was never granted.
+		// handed a step's ctx data plane it was never granted. Same degrade as
+		// above: this engine is refused, nothing else is.
 		if !decl.IsStepEngine() {
 			kind := string(decl.Kind)
 			if kind == "" {
 				kind = "an unspecified kind"
 			}
-			return nil, fmt.Errorf("engine plugin %s: referenced as a code-step engine but it describes itself as %s — refusing", spec.Name, kind)
+			logf("plugin %s: FAILED TO START (referenced as a code-step engine but describes itself as %s) — code steps using it will fail at run time until it is fixed", spec.Name, kind)
+			if cl, ok := mgr.Client(spec.Key()); ok {
+				_ = cl.Close()
+			}
+			continue
 		}
 		cl, _ := mgr.Client(spec.Key())
 		engines[spec.Name] = cl
