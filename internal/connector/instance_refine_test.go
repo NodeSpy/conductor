@@ -192,3 +192,170 @@ func TestInstanceDeclLegitimateRefinementIsUsedOnExternalPath(t *testing.T) {
 		t.Fatal("the instance's new plain verb must be on the effective decl")
 	}
 }
+
+// TestInstanceDeclCannotStripOptionScope is finding 7's regression test: the
+// original Q6 refinement check compared only a verb's Semantics block, so an
+// instance decl could keep Semantics byte-identical while stripping an
+// option's Scope — the tag that gates an agent-authored call's VALUE for
+// that option (ScopedOptions). Before the fix, this silently handed an
+// agent free-form access to a resource dimension install-time review
+// believed was gated.
+func TestInstanceDeclCannotStripOptionScope(t *testing.T) {
+	h := &fakeInstanceHandler{
+		typeDecl: sdk.Decl{
+			Verbs: []sdk.Verb{{Name: "post", Options: sdk.Schema{
+				"channel": {Type: "string", Scope: "channel"},
+				"text":    {Type: "string"},
+			}}},
+		},
+		instance: func(string, map[string]any) sdk.Decl {
+			return sdk.Decl{
+				Verbs: []sdk.Verb{{Name: "post", Options: sdk.Schema{
+					"channel": {Type: "string"}, // scope silently dropped
+					"text":    {Type: "string"},
+				}}},
+			}
+		},
+	}
+	in := buildFakeInstanceConnector(t, "fakescopestrip", h)
+	if in.DisabledReason == "" {
+		t.Fatal("an instance decl that drops a type-level option's scope must disable the connector")
+	}
+	if !strings.Contains(in.DisabledReason, "channel") || !strings.Contains(in.DisabledReason, "scope") {
+		t.Fatalf("DisabledReason = %q, want it to name the option and the scope mismatch", in.DisabledReason)
+	}
+}
+
+// TestInstanceDeclCannotFlipOpenToTrue is finding 7's second regression
+// test: Open skips output validation entirely; an instance decl flipping it
+// to true on a verb the type decl declared closed (a real Options/Outputs
+// schema) must be refused even though VerbSemantics never changed.
+func TestInstanceDeclCannotFlipOpenToTrue(t *testing.T) {
+	h := &fakeInstanceHandler{
+		typeDecl: sdk.Decl{
+			Verbs: []sdk.Verb{{Name: "post", Open: false, Options: sdk.Schema{
+				"text": {Type: "string", Required: true},
+			}}},
+		},
+		instance: func(string, map[string]any) sdk.Decl {
+			return sdk.Decl{
+				Verbs: []sdk.Verb{{Name: "post", Open: true, Options: sdk.Schema{
+					"text": {Type: "string", Required: true},
+				}}},
+			}
+		},
+	}
+	in := buildFakeInstanceConnector(t, "fakeopenflip", h)
+	if in.DisabledReason == "" {
+		t.Fatal("an instance decl that flips Open to true must disable the connector")
+	}
+	if !strings.Contains(in.DisabledReason, "open") {
+		t.Fatalf("DisabledReason = %q, want it to name the open mismatch", in.DisabledReason)
+	}
+}
+
+// TestInstanceDeclCannotLoosenOutputs: an instance decl that drops a
+// type-declared output, or weakens it from required to optional, loosens
+// output validation for a verb the type decl already governed.
+func TestInstanceDeclCannotLoosenOutputs(t *testing.T) {
+	h := &fakeInstanceHandler{
+		typeDecl: sdk.Decl{
+			Verbs: []sdk.Verb{{Name: "create", Outputs: sdk.Schema{
+				"id": {Type: "string", Required: true},
+			}}},
+		},
+		instance: func(string, map[string]any) sdk.Decl {
+			return sdk.Decl{
+				Verbs: []sdk.Verb{{Name: "create", Outputs: sdk.Schema{
+					"id": {Type: "string", Required: false}, // required dropped
+				}}},
+			}
+		},
+	}
+	in := buildFakeInstanceConnector(t, "fakeoutputloosen", h)
+	if in.DisabledReason == "" {
+		t.Fatal("an instance decl that loosens a type-level output must disable the connector")
+	}
+	if !strings.Contains(in.DisabledReason, "id") {
+		t.Fatalf("DisabledReason = %q, want it to name the loosened output", in.DisabledReason)
+	}
+}
+
+// TestInstanceDeclCannotAddConversationReplyToExistingEvent and
+// TestInstanceDeclCannotWidenEventTargetScope are finding 7's event-side
+// regression tests: events are exempt from the refinement check in general
+// (Q6's whole point), but a SAME-NAMED event may not escalate what the
+// engine does with it beyond the type-level declaration's own same-named
+// event.
+func TestInstanceDeclCannotAddConversationReplyToExistingEvent(t *testing.T) {
+	h := &fakeInstanceHandler{
+		typeDecl: sdk.Decl{
+			Events: []sdk.Event{{Name: "comment"}}, // no conversation_reply at the type level
+		},
+		instance: func(string, map[string]any) sdk.Decl {
+			return sdk.Decl{
+				Events: []sdk.Event{{Name: "comment", Semantics: &sdk.EventSemantics{
+					ConversationReply: &sdk.ConversationReply{ID: "thread", Author: "a", Text: "t"},
+				}}},
+			}
+		},
+	}
+	in := buildFakeInstanceConnector(t, "fakeconvreply", h)
+	if in.DisabledReason == "" {
+		t.Fatal("an instance decl that adds conversation_reply to an existing event must disable the connector")
+	}
+	if !strings.Contains(in.DisabledReason, "comment") || !strings.Contains(in.DisabledReason, "conversation_reply") {
+		t.Fatalf("DisabledReason = %q, want it to name the event and conversation_reply", in.DisabledReason)
+	}
+}
+
+func TestInstanceDeclCannotWidenEventTargetScope(t *testing.T) {
+	h := &fakeInstanceHandler{
+		typeDecl: sdk.Decl{
+			Events: []sdk.Event{{Name: "comment", Semantics: &sdk.EventSemantics{
+				Target: &sdk.TargetSemantics{Scope: []sdk.ScopeFact{{Dimension: "repo", Fact: "repo"}}},
+			}}},
+		},
+		instance: func(string, map[string]any) sdk.Decl {
+			return sdk.Decl{
+				Events: []sdk.Event{{Name: "comment", Semantics: &sdk.EventSemantics{
+					Target: &sdk.TargetSemantics{Scope: []sdk.ScopeFact{
+						{Dimension: "repo", Fact: "repo"},
+						{Dimension: "channel", Fact: "channel"}, // a dimension the type decl never named
+					}},
+				}}},
+			}
+		},
+	}
+	in := buildFakeInstanceConnector(t, "fakescopewiden", h)
+	if in.DisabledReason == "" {
+		t.Fatal("an instance decl that widens an existing event's target scope dimensions must disable the connector")
+	}
+	if !strings.Contains(in.DisabledReason, "comment") || !strings.Contains(in.DisabledReason, "scope") {
+		t.Fatalf("DisabledReason = %q, want it to name the event and the scope mismatch", in.DisabledReason)
+	}
+}
+
+// TestInstanceDeclLegitimateEventWithNewTargetAssignedPasses: webhook's
+// actual shape — a per-instance event with its own statically-known
+// target.assigned, and no same-named event at the type level at all — must
+// still pass (the baseline Q6 case, re-asserted here alongside the stricter
+// checks above so a future change to this file can't tighten its way into
+// breaking the legitimate case).
+func TestInstanceDeclLegitimateEventWithNewTargetAssignedPasses(t *testing.T) {
+	h := &fakeInstanceHandler{
+		typeDecl: sdk.Decl{}, // no events at all at the type level (webhook's shape)
+		instance: func(instance string, _ map[string]any) sdk.Decl {
+			return sdk.Decl{
+				Events: []sdk.Event{{Name: "delivery", Semantics: &sdk.EventSemantics{
+					Target:            &sdk.TargetSemantics{Assigned: []byte("true")},
+					ConversationReply: &sdk.ConversationReply{ID: "thread", Author: "a", Text: "t"},
+				}}},
+			}
+		},
+	}
+	in := buildFakeInstanceConnector(t, "fakewebhookshape", h)
+	if in.DisabledReason != "" {
+		t.Fatalf("a genuinely new per-instance event (absent from the type decl) must not disable the connector: %s", in.DisabledReason)
+	}
+}
