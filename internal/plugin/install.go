@@ -50,6 +50,8 @@ type Manifest struct {
 	// Spawns records the legacy boolean for a plugin that declares it spawns
 	// children without naming them.
 	Spawns bool `yaml:"spawns,omitempty"`
+	// Env are the daemon environment variables passed through to it.
+	Env []string `yaml:"env,omitempty"`
 	// Auth records the plugin's declared OAuth2 endpoints (Decl.Auth) so
 	// `conductor connector auth <name>` can run the one-time interactive login
 	// from the CLI without respawning the plugin to re-Describe it. nil for a
@@ -59,7 +61,7 @@ type Manifest struct {
 
 // IsZero reports whether the plugin declared no capabilities at all.
 func (m Manifest) IsZero() bool {
-	return len(m.Egress) == 0 && len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns
+	return len(m.Egress) == 0 && len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && len(m.Env) == 0
 }
 
 // Summary renders the manifest as one line for logs and install review.
@@ -78,6 +80,9 @@ func (m Manifest) Summary() string {
 	}
 	if len(m.FS) > 0 {
 		parts = append(parts, "fs "+strings.Join(m.FS, ","))
+	}
+	if len(m.Env) > 0 {
+		parts = append(parts, "env "+strings.Join(m.Env, ","))
 	}
 	return strings.Join(parts, "; ")
 }

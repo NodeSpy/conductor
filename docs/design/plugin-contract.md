@@ -795,7 +795,7 @@ not separate PRs or releases.
 
 | Step | Repo / PR | Contents | Behavior change at that commit |
 |---|---|---|---|
-| **A** | conductor, #164 | **Contract core.** `pkg/plugin` semantics types; `describe {host}`; must-understand; `plugin.poll / translate / validate / stop`, `host.state`; triggers sent and `catch_up` honored for every plugin; `abi` ignored; error codes §1.11; the in-process contract transport (§1.10) and the exposure builtins on it; `pkg/sourcekit` scheduler and dedupe; `pkg/plugintest`; reserved-name unification; G15 fix. **Git-only distribution** (X2). **Tunnels cut over** (V4–V4c). | none for existing plugins or configs; the `tunnel:` block is removed (no current users) |
+| **A** | conductor, #164 | **Contract core.** `pkg/plugin` semantics types; `describe {host}`; must-understand; `plugin.poll / translate / validate / stop`, `host.state`; triggers sent and `catch_up` honored for every plugin; `abi` ignored; error codes §1.11 (defined; the engine treating `target_gone`/`not_ready` specially is follow-up work); the in-process contract transport (§1.10) and the exposure builtins on it; `pkg/sourcekit` scheduler and dedupe; `pkg/plugintest`; reserved-name unification; G15 fix. **Git-only distribution** (X2). **Tunnels cut over** (V4–V4c). | none for existing plugins or configs; the `tunnel:` block is removed (no current users) |
 | **B** | conductor, #164 | **Engine reads semantics.** cron, rss and webhook move onto the in-process contract (their synthetic targets and no-checkout become declarations, so they wait for the engine to read them). Every row of §3.1–§3.8 replaced by a semantic lookup. The still-bundled github and slack are re-wired as in-process contract plugins declaring exactly the §4 semantics, so the existing unit and e2e suites prove equivalence before anything is removed. Delete `trusted_source`, `SourceTrusted`, `ConnectorABI`, `kindFor`, `ReservedKind`, `BranchFixKind`, the ABI-gated methods, the `sweep` intercept, `identitySource`/`dispatchTuner`, `lowerEngineOptions`, the vendor `config.Action` fields. Outcome vocabulary with a read-side mapping. | none observable |
 | **P** | conductor-plugins, companion draft | `connectors/github`, `connectors/slack`, `connectors/discord` on the contract; exposure plugins `cloudflared`, `ngrok`, `tailscale`, `localxpose`, `ssh-tunnel`, `smee`; `githubkit`, `ghsource`, `ghplugin`, the GitHub fake and the conformance cases move here; `pkg/plugintest` conformance plus engine-outcome scenarios (the incident list) in CI; release workflow publishes `refs/dist/<tag>` (X2). | new plugin versions |
 | **C** | conductor, #164 | **Plugins-first boot**, then the removal. Boot fetches and verifies the official plugin for every connector that names a removed builtin before any connector starts. Then remove the github, slack and discord builtins and the other vendor connectors compiled in (`ntfy`, `pushover`, `notifiarr`; plugins exist or are ported in P), `internal/integrations/{github,slack}`, the `internal/handoff` vendor channels, the legacy `integrations:` / `handoffs:` / `notify:` blocks (Q4), and `pkg/githubkit` (moved in P). Strict vendor boundary tests (§1.13). e2e runs against the plugin builds from P. | `use: github` / `use: slack` resolve to the official plugins |
@@ -811,9 +811,17 @@ There is one release, so there is no intermediate step:
 
 1. **Before switching (optional, recommended):** run the new binary's
    `conductor validate` against a copy of the config. It reports whether each
-   official plugin can be fetched and verified from this machine, any legacy
-   block (Q4), and a write credential the confined plugin cannot reach (Q8).
-2. **Update the usual way** (auto-update included). On first boot the release
+   referenced plugin is installed or can be fetched from this machine, and
+   any legacy block (Q4). It does not yet check that a confined plugin can
+   reach its write credential (Q8): a credential that cannot be minted stops
+   the work it was for (logged, never dispatched without it). A plugin that
+   reads its platform CLI's token from the environment declares the variable
+   (`capabilities.env`) and gets it passed through. The connection fields of
+   a plugin that is not installed yet are checked only once it is.
+2. **Update the usual way** (auto-update included). The update preflight runs
+   the new release's `validate --require-plugins` and does not apply a release
+   whose plugins this box can neither find installed nor fetch, so publishing
+   the plugins (`refs/dist`) must come first. On first boot the release
    fetches and verifies the official github/slack plugins before starting
    connectors. `use: github` then resolves to that plugin. **No config change**:
    the connection fields (`app`, `token`, `webhook`, `sweep`, `me`, `repos`,

@@ -239,6 +239,12 @@ type Capabilities struct {
 	// Spawns reports that the plugin spawns child processes. Implied by a
 	// non-empty Commands.
 	Spawns bool `json:"spawns,omitempty"`
+	// Env are environment variables the plugin reads from the daemon's
+	// environment — a credential its platform CLI looks for there (a
+	// declared command's own token variable). A plugin's environment is
+	// otherwise scrubbed; these names, and only these, are passed through.
+	// Shown at install with the rest of the permissions.
+	Env []string `json:"env,omitempty"`
 }
 
 // Decl is a plugin's full self-description, returned by Describe.

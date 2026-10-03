@@ -52,6 +52,21 @@ func spawnBaseEnv() []string {
 	return sandbox.MinimalEnv()
 }
 
+// withDeclaredEnv passes the daemon's values of the variables a plugin
+// declared (Capabilities.Env) through to it. Conductor's own control
+// variables are never passed, declared or not.
+func withDeclaredEnv(env, names []string) []string {
+	for _, n := range names {
+		if n == "" || strings.HasPrefix(n, "CONDUCTOR_") || strings.ContainsAny(n, "= ") {
+			continue
+		}
+		if v, ok := os.LookupEnv(n); ok {
+			env = replaceEnv(env, n, v)
+		}
+	}
+	return env
+}
+
 // EgressUnixFunc mints an OS-enforced egress proxy endpoint for an allowlist,
 // returning the daemon-side unix socket, a per-launch credential, and a revoke
 // closure. Wired from main (sandbox.ProxyManager.UnixEndpoint); nil in contexts
@@ -91,7 +106,7 @@ type SandboxDeps struct {
 // warn — env scrubbing and all transport guards still apply.
 func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandboxed bool, err error) {
 	argv := append([]string{s.BinPath}, s.Args...)
-	env := spawnBaseEnv()
+	env := withDeclaredEnv(spawnBaseEnv(), s.EffectiveManifest().Env)
 	cleanup = func() {}
 
 	spec := sandbox.FromConfig(s.Isolation)
@@ -134,7 +149,7 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandbo
 	if err := spec.Check(spawnGOOS, os.Geteuid(), spawnLookPath); err != nil {
 		if s.IsolationDefaulted {
 			log.Printf("plugin %s: default sandbox unavailable (%v) — running WITHOUT OS confinement; install util-linux (unshare) + enable unprivileged user namespaces to sandbox it", s.Name, err)
-			env, cleanup, cerr := confineToManifest(s, spawnBaseEnv(), sd)
+			env, cleanup, cerr := confineToManifest(s, withDeclaredEnv(spawnBaseEnv(), s.EffectiveManifest().Env), sd)
 			if cerr != nil {
 				return nil, nil, false, cerr
 			}
