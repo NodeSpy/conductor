@@ -265,6 +265,7 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	// the agent gets, inside conductor's own state dir. Nothing authorizes off
 	// it, and the branch name it derives is validated before it reaches git.
 	"internal/gitwt/gitwt.go": {
+		{"declaredRemote", "whether the checkout is the event's own target, so its declared remote applies: it only picks where the checkout is cloned from, and a sender-chosen target clones into the agent's sandbox as any checkout does"},
 		{"fetchRef", "the legacy pull ref for an event declaring no semantics: it checks out"},
 		{"addPR", "the PR ref to fetch for that checkout"},
 		{"prBranch", "a branch name for the work (safeBranch validates it first)"},
