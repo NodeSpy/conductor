@@ -167,6 +167,45 @@ unchanged from `pkg/plugin/wire.go:151-206`. `facts` / `match_keys` (added in
 the #164 work) become available to **every** plugin; a plugin that sends only
 `filters` / `context` keeps the generic surface.
 
+**`plugin.describe {instance, config}` (optional params — Q6).** The same
+method, called a second way: once per configured INSTANCE, with that
+instance's own connection config, after the type-level `plugin.describe` (no
+params) has already run. `instance`/`config` are both optional on the wire —
+a plugin that does not implement `InstanceDescriber` (`pkg/plugin`) answers
+`-32601` (CodeMethodNotFound) for the instance-scoped call, and the
+type-level `Decl` stands for every instance. rest, graphql and webhook
+implement it because their verbs/events depend on the operator's own config
+(a rest instance's user-declared HTTP verbs; webhook's one concrete event
+per configured source) — the type-level describe alone cannot name them.
+
+The per-instance `Decl` passes the same `CheckSemantics`/`ValidateSemantics`
+checks the type-level one does (§1.2), and one more: it must be a
+**refinement** of the type-level `Decl`, not a replacement — the host checks
+this once, generically, for a spawned plugin and an in-process builtin alike
+(`internal/connector/external.go` `resolveInstanceDecl`,
+`validateInstanceRefinement`):
+
+- a verb present in **both** declarations keeps **identical** semantics
+  (`host_only`, `mints_credential`, `exposes`, `reads_revision`,
+  `opens_conversation`, `conversation_post`, `target_args` — byte for byte);
+- an instance may declare a **new** verb the type decl never named at all,
+  but that verb's `semantics` block must then be empty — this is what
+  rest/graphql's user-declared, `open` verbs do;
+- connection-level semantics (`credentials`, `listeners`, `poll`, `scope`,
+  `preflight`, `translate`) and `capabilities` must match the type-level
+  declaration exactly;
+- **events are exempt** — an instance may declare any events it likes, with
+  any semantics. This is the entire point of Q6: webhook materializes one
+  concrete, statically-known `target.assigned` per configured source; rest
+  and graphql materialize their user-declared polled events.
+
+A per-instance `Decl` that is not a refinement refuses the instance (disabled
+with the reason), the same as a plugin that fails `CheckSemantics`. Without
+this check, a per-instance declaration could silently redeclare a
+type-level, `host_only` `mints_credential` verb as an ordinary one — a flow
+step could then call it directly and receive the minted credential as an
+output.
+
 ### 1.5 Sources
 
 **`plugin.start_source {instance, config, triggers[]}` → `{}`**
@@ -366,7 +405,7 @@ subset.
 | **-32010 `upstream`** | the upstream answered with an error; `data: {status, retryable}` | step fails; retried by the step's `retry:` only when `retryable` |
 | **-32011 `target_gone`** | the target closed/disappeared under the call | the run is **stopped** (stop hooks, no failure) — today's `ErrTargetClosed` (`internal/dispatch/output_schema.go:632`) |
 | **-32012 `invalid`** | the request can never succeed (validation) | fail, never retry |
-| **-32013 `rate_limited`** | `data: {retry_after}` | retried after `retry_after`, regardless of `retry:` |
+| **-32013 `rate_limited`** | `data: {retry_after}` | retried after `retry_after`, regardless of `retry:`, bounded by a total wait budget and an attempt cap (below) |
 | **-32014 `not_ready`** | state not computed yet (e.g. mergeability "unknown") | retried with short backoff, bounded |
 
 A JSON-RPC error answer never tears the process down. Transport errors and
@@ -393,11 +432,42 @@ ordinary wrapped Go error (`errors.As`-reachable through any number of
 - `rate_limited` and `not_ready` are retried independently of any caller's
   own `retry:` policy, inside the single call, by
   `connector.RetryContract` (`internal/connector/contract_retry.go`) — the
-  one place every surface (verb step, hook, skill verb, `reads_revision`,
-  credential mint, remediation status/action) goes through.
+  one place every surface *except the engine's own single dispatch loop*
+  (verb step, hook, skill verb, `reads_revision`) goes through. `rate_limited`
+  is bounded by BOTH a cumulative wait budget (`RateLimitCap` per-wait,
+  `RateLimitBudget` total — 30 minutes by default) and an attempt cap
+  (`RateLimitAttemptCap`, 50 by default): whichever is hit first ends the
+  retry and surfaces the error, so a plugin honestly reporting it is still
+  rate-limited cannot park a caller forever. `not_ready` keeps its own fixed,
+  short schedule (`NotReadyBackoff`) and then gives up.
+- **The engine's single dispatch loop never sleeps on `rate_limited`/
+  `not_ready`.** A credential mint (`internal/engine/credentials.go` `mint`)
+  and a declared `remediate`'s status/action verbs (`internal/engine/engine.go`
+  `remediate`) run synchronously inside `process()`, which is fed by `Run`'s
+  one `for t := <-e.ch` loop, and inside `ResumeWorkflows`' sequential loop
+  over pending runs — a blocking retry there would stall every OTHER queued
+  trigger, for every other connector, behind one slow or rate-limited one.
+  So neither goes through `RetryContract`: a single failed attempt is
+  enough, and the caller decides what the answer means:
+  - `process()` schedules a re-emission of the trigger after the error's own
+    wait (`deferAndReemit`: `time.AfterFunc` → `e.Emit`), bounded per
+    occurrence (`maxDeferredReemits`), ctx-aware (no re-emit once shutting
+    down), and both logged and audited (`dispatch_deferred`);
+  - `ResumeWorkflows` reaches its existing defer-on-credential-error path
+    immediately (the run stays pending, retried on the next daemon start) —
+    a rate_limited/not_ready answer there is just an ordinary mint error,
+    handled exactly like any other one already was.
 - `upstream` retries only when `data.retryable` is true AND the step
   configured `retry:` — `execWithRetry` also breaks immediately on a
   non-retryable `upstream` answer, never consulting `retry:` for it.
+- **A step's own `retry:` never retries `rate_limited`/`not_ready` either**,
+  on top of whatever `RetryContract` already did inside the invoke: by the
+  time either code reaches the step's retry decision
+  (`internal/flow/contract.go` `noStepRetry`), the contract layer has already
+  spent its own bounded retry (and budget) on it — retrying it again at the
+  step level would compound the wait on every step attempt. The contract
+  layer owns these two codes end to end; the step-level retry excludes them
+  unconditionally, whether they ultimately succeeded or were exhausted.
 - A skill verb (`internal/flow/skillverbs.go` `RunSkillVerb`) gets the same
   `rate_limited`/`not_ready` retry and never retries `invalid`, but does not
   synthesize a run-level stop on `target_gone` — the call runs inside an
@@ -649,7 +719,7 @@ code.
 | A3 | `internal/engine/engine.go:741-765, 797`; `engine/flow.go:50`; `config/config.go:378-381` | `Context["labels"]` + `pause_label` | SEM `labels` |
 | A4 | `internal/connector/scope.go:28, 73-81, 98-107`; `connector/slack.go:187-202` | `DimRepo` implicit from a trusted `Target.Repo`; `ScopeContexter` bundled-only | SEM `target.scope` (any dimension, any plugin) |
 | A5 | `internal/flow/scoperender.go:89` | closed set `number, owner, name, repo, kind` of platform-assigned facts | SEM `target.assigned` + `target.scope` |
-| A6 | `internal/flow/skillverbs.go:499-528` | untrusted-target warning only for `ref.Type=="webhook"` | **built**: `untrustedTargetWarnings` walks every configured trigger and warns when its event's declared `target.assigned` is not statically `true` (absent, `false`, or a fact — which may be false at any occurrence), generic over connector type; tested with webhook (static vs body-templated `repo:`) and a fixture plugin declaring each shape |
+| A6 | `internal/flow/skillverbs.go:510-552` | untrusted-target warning only for `ref.Type=="webhook"` | **built**: `untrustedTargetWarnings` walks every configured trigger and warns when its event's declared `target.assigned` is not statically `true` (absent, `false`, or a fact — which may be false at any occurrence), generic over connector type; tested with webhook (static vs body-templated `repo:`) and a fixture plugin declaring each shape |
 | A7 | `internal/config/pack_instantiate.go:467-493, 908, 934-1057`; `config/pack.go:259-283` | consent: `TypeName()=="github"`, `githubRepoKey="repo"`, `TriggerArm.Repos` | SEM `scope {dimension, option, consent}`; `TriggerArm.Repos` kept as an alias of `scope:` |
 
 ### 3.8 Conversation / hand-off / completion

@@ -362,9 +362,27 @@ transport the ACP runtime uses. stdout is the transport; logging goes to stderr.
 
 - `plugin.describe → Decl` — `{protocol_version, kind, type, desc, connection,
   verbs[], events[], capabilities}`. Maps 1:1 to a connector `TypeDecl`.
+- `plugin.describe {instance, config} → Decl` (optional) — the SAME method,
+  called once per CONFIGURED instance with that instance's own connection
+  config, for a plugin whose verbs/events depend on it (rest/graphql's
+  user-declared verbs; webhook's one concrete event per configured source).
+  A plugin that does not implement this answers method-not-found, and its
+  type-level `Decl` stands for every instance. The returned `Decl` must be a
+  *refinement* of the type-level one: a verb present in both must keep
+  identical semantics, a brand-new verb may carry none at all, and
+  connection-level semantics/capabilities must match exactly — only events
+  are free to vary. See docs/design/plugin-contract.md §1.4 for the exact
+  rule; the host refuses an instance whose declaration does not refine.
 - `plugin.invoke {instance, verb, options, connection} → {outputs}` — the
   `connection` map carries **only the calling instance's** resolved credentials.
 - `plugin.start_source` — a source plugin emitting webhook/poll events.
+
+A verb declaring `exposes` (it makes a local address reachable from outside —
+a tunnel or a relay) **must also declare `host_only: true`**, the same rule a
+`mints_credential` verb follows: the host refuses a declaration that doesn't.
+Without it, a flow step or an agent could invoke the verb directly with an
+arbitrary local address and tunnel any local service to the public internet.
+The bundled `lan`/`tunnel` exposure builtins already declare `host_only`.
 
 See `test/plugins/acme-echo/` for a reference connector plugin, and
 `github.com/NodeSpy/conductor-plugins` for production ones.
