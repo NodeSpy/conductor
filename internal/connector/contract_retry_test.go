@@ -142,6 +142,52 @@ func TestRetryContractPassesThroughOtherCodes(t *testing.T) {
 	}
 }
 
+// A plugin that keeps answering rate_limited forever must not park its
+// caller forever: once the cumulative wait crosses RateLimitBudget, the
+// error is surfaced instead of sleeping again.
+func TestRetryContractRateLimitedBudgetExhausted(t *testing.T) {
+	waits := withFastRetry(t)
+	origBudget := RateLimitBudget
+	RateLimitBudget = 25 * time.Second
+	t.Cleanup(func() { RateLimitBudget = origBudget })
+	calls := 0
+	_, err := RetryContract(context.Background(), func() (map[string]any, error) {
+		calls++
+		return nil, &ContractError{Code: sdk.CodeRateLimited, Data: map[string]any{"retry_after": "10s"}}
+	})
+	ce, ok := AsContractError(err)
+	if !ok || !ce.IsRateLimited() {
+		t.Fatalf("want a surfaced rate_limited error once the budget is exhausted, got %v", err)
+	}
+	// 10s waits: 10, 20 (<=25 budget so it retries), 30 would exceed 25 →
+	// stop before a third wait. So exactly 2 waits, 3 calls.
+	if calls != 3 || len(*waits) != 2 {
+		t.Fatalf("calls=%d waits=%v, want 3 calls and 2 waits before the 30s cumulative total exceeds the 25s budget", calls, *waits)
+	}
+}
+
+// A plugin answering a very short retry_after many, many times must still
+// eventually give up, bounded by RateLimitAttemptCap, even though each wait
+// individually stays well under RateLimitBudget.
+func TestRetryContractRateLimitedAttemptCapExhausted(t *testing.T) {
+	withFastRetry(t)
+	origCap := RateLimitAttemptCap
+	RateLimitAttemptCap = 3
+	t.Cleanup(func() { RateLimitAttemptCap = origCap })
+	calls := 0
+	_, err := RetryContract(context.Background(), func() (map[string]any, error) {
+		calls++
+		return nil, &ContractError{Code: sdk.CodeRateLimited, Data: map[string]any{"retry_after": "1ms"}}
+	})
+	ce, ok := AsContractError(err)
+	if !ok || !ce.IsRateLimited() {
+		t.Fatalf("want a surfaced rate_limited error once the attempt cap is exhausted, got %v", err)
+	}
+	if calls != 4 {
+		t.Fatalf("calls=%d, want 1 initial + 3 capped retries = 4", calls)
+	}
+}
+
 // ctx cancellation during a rate_limited/not_ready wait must stop the retry
 // loop rather than spin or block past shutdown.
 func TestRetryContractStopsOnCtxCancel(t *testing.T) {

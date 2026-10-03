@@ -204,6 +204,73 @@ steps:
 	}
 }
 
+// -32013 rate_limited, once RetryContract's own bounded retry is exhausted
+// (no usable retry_after here, so it gives up after the first call), must
+// NOT be retried again by the step's own retry: — the contract layer already
+// owns and exhausted this code's retry (and its budget, §1.11); retrying it
+// again at the step level would compound the wait on every step attempt.
+func TestVerbStepRateLimitedExhaustedNeverStepRetried(t *testing.T) {
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
+	reg := buildRegistry(t, cfg)
+	st := newFakeState(t, "svc")
+	st.errFn["post"] = func(int, map[string]any) error {
+		// No data.retry_after: RetryContract has nothing to wait on and gives
+		// up on the very first call (TestRetryContractRateLimitedNoRetryAfterGivesUp).
+		return &connector.ContractError{Code: sdk.CodeRateLimited}
+	}
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - id: post1
+    uses: svc.post
+    options: { text: x }
+    retry: { max: 3, backoff: 1ms }
+`)
+	rig := newTestRunner(t, cfg, reg)
+	rig.Runner.sleep = fastSleep
+	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "x"}), spec)
+
+	if failed, _ := rig.workflowFailed(); !failed {
+		t.Fatal("an exhausted rate_limited must fail the run")
+	}
+	if got := st.count("post"); got != 1 {
+		t.Fatalf("rate_limited must never be retried a second time by the step's own retry:, got %d calls (retry: max=3 configured)", got)
+	}
+}
+
+// -32014 not_ready, once RetryContract's own bounded schedule is exhausted,
+// must likewise not be retried again by the step's own retry:.
+func TestVerbStepNotReadyExhaustedNeverStepRetried(t *testing.T) {
+	origBackoff := connector.NotReadyBackoff
+	connector.NotReadyBackoff = nil // empty schedule: RetryContract gives up after the first call
+	t.Cleanup(func() { connector.NotReadyBackoff = origBackoff })
+
+	cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
+	reg := buildRegistry(t, cfg)
+	st := newFakeState(t, "svc")
+	st.errFn["post"] = func(int, map[string]any) error {
+		return &connector.ContractError{Code: sdk.CodeNotReady}
+	}
+	spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - id: post1
+    uses: svc.post
+    options: { text: x }
+    retry: { max: 3, backoff: 1ms }
+`)
+	rig := newTestRunner(t, cfg, reg)
+	rig.Runner.sleep = fastSleep
+	runTrigger(rig, newTrigger("ping", map[string]any{"msg": "x"}), spec)
+
+	if failed, _ := rig.workflowFailed(); !failed {
+		t.Fatal("an exhausted not_ready must fail the run")
+	}
+	if got := st.count("post"); got != 1 {
+		t.Fatalf("not_ready must never be retried a second time by the step's own retry:, got %d calls (retry: max=3 configured)", got)
+	}
+}
+
 // Hooks are best-effort: rate_limited/not_ready are retried the same bounded
 // way as a verb step's own invoke (self-correcting, worth the short wait),
 // so a hook that hits a transient contract error still ends up firing.

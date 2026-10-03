@@ -33,11 +33,15 @@ func stopAsTargetGone(err error) error {
 //   - -32010 upstream retries only when the plugin marked it retryable; an
 //     upstream answer that says it is NOT retryable must not be retried
 //     just because the step configured a retry: block.
-//
-// rate_limited and not_ready are not decided here: they are retried
-// independently of retry: (RetryContract, applied at the invoke itself,
-// before a step-level attempt even completes), so by the time an error
-// reaches this check they have already exhausted their own bounded retry.
+//   - -32013 rate_limited and -32014 not_ready are retried independently of
+//     retry: by RetryContract, INSIDE the invoke itself, before a
+//     step-level attempt even completes — so by the time either reaches
+//     this check, the contract layer has already spent its own bounded
+//     retry (and budget, §1.11) on it. Retrying it again here would
+//     compound the waits: the step's own attempt would re-enter the same
+//     call, which re-runs RetryContract's retry from scratch. The contract
+//     layer owns these two codes; the step-level retry excludes them
+//     entirely, succeed or exhausted.
 func noStepRetry(err error) bool {
 	ce, ok := connector.AsContractError(err)
 	if !ok {
@@ -47,6 +51,9 @@ func noStepRetry(err error) bool {
 		return true
 	}
 	if ce.IsUpstream() && !ce.UpstreamRetryable() {
+		return true
+	}
+	if ce.IsRateLimited() || ce.IsNotReady() {
 		return true
 	}
 	return false
