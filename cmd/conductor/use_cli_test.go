@@ -103,6 +103,67 @@ connectors:
 	}
 }
 
+// TestCmdPluginListCapsSharedProcessShowsUnionAsOneProcess is the
+// shared_process: true half of permissionLines (cmd/conductor/plugins.go
+// ~587): `shared_process: true` on ANY instance folds PluginRefs' union
+// across every configured instance of this plugin (connectors.go), and that
+// ONE process is what actually runs for all of them — so `plugin list --caps`
+// must show the UNIONED grant, labelled as one shared process, not split out
+// per instance the way the default per-instance-isolated shape is.
+func TestCmdPluginListCapsSharedProcessShowsUnionAsOneProcess(t *testing.T) {
+	args := writeCfg(t, `
+connectors:
+  a: { use: acme/plugins/jira, network: ["one.example:443"], shared_process: true }
+  b: { use: acme/plugins/jira, network: ["two.example:443"] }
+`)
+	out, err := captureStdout(t, func() error {
+		return cmdPluginList(append(args, "--caps"))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "grant (one shared process):") {
+		t.Fatalf("--caps did not label the shared_process grant as one shared process:\n%s", out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "grant (one shared process):") {
+			if !strings.Contains(line, "one.example:443") || !strings.Contains(line, "two.example:443") {
+				t.Fatalf("shared_process grant line did not carry the union of both instances' network:\n%s", out)
+			}
+		}
+	}
+	if strings.Contains(out, "instance a (own process)") || strings.Contains(out, "instance b (own process)") {
+		t.Fatalf("shared_process: true must not show per-instance own-process lines:\n%s", out)
+	}
+}
+
+// TestCmdPluginShowSharedProcessShowsUnionAsOneProcess is `plugin show`'s half
+// of the same shared_process: true behavior.
+func TestCmdPluginShowSharedProcessShowsUnionAsOneProcess(t *testing.T) {
+	args := writeCfg(t, `
+connectors:
+  a: { use: acme/plugins/jira, network: ["one.example:443"], shared_process: true }
+  b: { use: acme/plugins/jira, network: ["two.example:443"] }
+`)
+	out, err := captureStdout(t, func() error { return cmdPluginShow(append(args, "jira")) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "grant (one shared process):") {
+		t.Fatalf("plugin show did not label the shared_process grant as one shared process:\n%s", out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "grant (one shared process):") {
+			if !strings.Contains(line, "one.example:443") || !strings.Contains(line, "two.example:443") {
+				t.Fatalf("shared_process grant line did not carry the union of both instances' network:\n%s", out)
+			}
+		}
+	}
+	if strings.Contains(out, "instance a (own process)") || strings.Contains(out, "instance b (own process)") {
+		t.Fatalf("shared_process: true must not show per-instance own-process lines:\n%s", out)
+	}
+}
+
 // `plugin add` on a builtin installs nothing and just prints the stub — adding
 // `github` should never reach for the plugin repo.
 func TestCmdPluginAddBuiltinInstallsNothing(t *testing.T) {
