@@ -144,3 +144,67 @@ func TestInvokeUpstreamStatusRetryable(t *testing.T) {
 		})
 	}
 }
+
+// TestInvokeErrorsOnHTTP200AreRetryableByDefault is finding 10's regression
+// test: a GraphQL errors-array-on-HTTP-200 answer used to carry nil data,
+// which noStepRetry/execWithRetry read as "not retryable" — silently
+// overriding the step's own retry: block, a behavior change from before this
+// branch (when the step's retry: always applied). An error with no
+// recognized client-side extensions.code must default to retryable: true so
+// the caller's own retry: decides, as before.
+func TestInvokeErrorsOnHTTP200AreRetryableByDefault(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"errors":[{"message":"upstream hiccup"}]}`))
+	}))
+	defer srv.Close()
+
+	g := New()
+	_, err := g.Invoke(plugin.InvokeRequest{
+		Instance: "shop", Verb: "q",
+		Connection: map[string]any{
+			"endpoint": srv.URL,
+			"verbs":    map[string]any{"q": map[string]any{"query": "{ ok }"}},
+		},
+	})
+	var pe *plugin.Error
+	if !errors.As(err, &pe) {
+		t.Fatalf("err = %v, want a *plugin.Error", err)
+	}
+	if pe.Code != plugin.CodeUpstream {
+		t.Fatalf("code = %d, want CodeUpstream (%d)", pe.Code, plugin.CodeUpstream)
+	}
+	if pe.Data == nil {
+		t.Fatal("data is nil — the step's own retry: can never see a decision either way")
+	}
+	if got, _ := pe.Data["retryable"].(bool); !got {
+		t.Fatalf("data.retryable = %v, want true (the caller's retry: should decide)", pe.Data["retryable"])
+	}
+}
+
+// TestInvokeErrorsAllClientSideAreNotRetryable: when every error in the
+// array carries a known client-side extensions.code (the query itself is
+// malformed), retrying verbatim can never succeed.
+func TestInvokeErrorsAllClientSideAreNotRetryable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"errors":[{"message":"bad query","extensions":{"code":"GRAPHQL_VALIDATION_FAILED"}}]}`))
+	}))
+	defer srv.Close()
+
+	g := New()
+	_, err := g.Invoke(plugin.InvokeRequest{
+		Instance: "shop", Verb: "q",
+		Connection: map[string]any{
+			"endpoint": srv.URL,
+			"verbs":    map[string]any{"q": map[string]any{"query": "{ ok }"}},
+		},
+	})
+	var pe *plugin.Error
+	if !errors.As(err, &pe) {
+		t.Fatalf("err = %v, want a *plugin.Error", err)
+	}
+	if got, _ := pe.Data["retryable"].(bool); got {
+		t.Fatal("data.retryable = true for an all-client-side error set, want false")
+	}
+}

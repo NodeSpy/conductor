@@ -182,8 +182,20 @@ func (g *GraphQL) Invoke(req plugin.InvokeRequest) (plugin.InvokeResult, error) 
 			if em, ok := errs[0].(map[string]any); ok {
 				first, _ = em["message"].(string)
 			}
+			// retryable (finding 10): before this branch, an errors-array-on-
+			// HTTP-200 answer still went through the caller's own retry:
+			// (execWithRetry/noStepRetry only exclude rate_limited/not_ready
+			// and an upstream answer explicitly marked NOT retryable — a nil
+			// data map meant absent, which noStepRetry/execWithRetry both read
+			// as "not retryable", silently turning every GraphQL
+			// errors-on-200 into a non-retryable failure regardless of the
+			// step's own retry: block). Restore retryable: true by default —
+			// the step's retry: decides, as before — except when EVERY error
+			// carries a known client-side extensions.code: a query that can
+			// never succeed no matter how many times it's retried.
 			return plugin.InvokeResult{}, plugin.Fail(plugin.CodeUpstream,
-				fmt.Sprintf("graphql %s.%s: %d error(s): %s", req.Instance, req.Verb, len(errs), first), nil)
+				fmt.Sprintf("graphql %s.%s: %d error(s): %s", req.Instance, req.Verb, len(errs), first),
+				map[string]any{"retryable": !allClientSideGraphQLErrors(errs)})
 		}
 	}
 	out, err := httpconn.ExtractOutputs(v.Output, resp.Scope(req.Options, secretsVal))
@@ -191,4 +203,39 @@ func (g *GraphQL) Invoke(req plugin.InvokeRequest) (plugin.InvokeResult, error) 
 		return plugin.InvokeResult{}, plugin.Fail(plugin.CodeInternalError, err.Error(), nil)
 	}
 	return plugin.InvokeResult{Outputs: out}, nil
+}
+
+// clientSideGraphQLCodes are GraphQL errors[].extensions.code values the
+// GraphQL spec's community conventions (and major server implementations)
+// use for a request that is malformed or invalid as written — retrying it
+// verbatim would just fail the same way forever.
+var clientSideGraphQLCodes = map[string]bool{
+	"GRAPHQL_VALIDATION_FAILED": true,
+	"GRAPHQL_PARSE_FAILED":      true,
+	"BAD_USER_INPUT":            true,
+}
+
+// allClientSideGraphQLErrors reports whether EVERY error in errs carries a
+// known client-side extensions.code. Anything else — an unrecognized or
+// absent code, a transient backend error — defaults to retryable: the caller
+// (allClientSideGraphQLErrors' one call site) fails closed toward
+// "retryable: true" unless every error is POSITIVELY identified as
+// client-side, matching finding 10: before the nil-data regression, the
+// step's own retry: always got a say.
+func allClientSideGraphQLErrors(errs []any) bool {
+	if len(errs) == 0 {
+		return false
+	}
+	for _, e := range errs {
+		em, ok := e.(map[string]any)
+		if !ok {
+			return false
+		}
+		ext, _ := em["extensions"].(map[string]any)
+		code, _ := ext["code"].(string)
+		if !clientSideGraphQLCodes[code] {
+			return false
+		}
+	}
+	return true
 }
