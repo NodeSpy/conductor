@@ -593,6 +593,9 @@ func ValidateSemantics(d Decl) []string {
 		if s.MintsCredential != nil && !s.HostOnly {
 			p = append(p, path+": a mints_credential verb must be host_only, so a credential never lands in a step's outputs")
 		}
+		if s.Exposes != nil && !s.HostOnly {
+			p = append(p, path+": an exposes verb must be host_only, so a flow step or agent cannot tunnel an arbitrary local address")
+		}
 	}
 	if c := d.Semantics; c != nil {
 		names := map[string]bool{}

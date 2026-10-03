@@ -93,6 +93,19 @@ func TestValidateSemanticsReferences(t *testing.T) {
 	}
 }
 
+// An exposes verb that is not host_only lets a flow step or agent tunnel an
+// arbitrary local address out to the public internet — it must be refused
+// exactly like a mints_credential verb that isn't host_only.
+func TestValidateSemanticsExposesMustBeHostOnly(t *testing.T) {
+	d := Decl{Verbs: []Verb{
+		{Name: "open", Semantics: &VerbSemantics{Exposes: &Exposes{Local: "addr", URL: "url"}}},
+	}}
+	p := strings.Join(ValidateSemantics(d), "\n")
+	if !strings.Contains(p, "must be host_only") {
+		t.Fatalf("an exposes verb without host_only must be refused, got %q", p)
+	}
+}
+
 // Serve drops the OPTIONAL semantics a host does not implement before
 // replying, and keeps everything else.
 func TestDescribeStripsOptionalSemanticsTheHostLacks(t *testing.T) {
