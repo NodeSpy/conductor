@@ -31,10 +31,9 @@ func TestOnlyAuditedSourcesClaimTargetTrust(t *testing.T) {
 	audited := map[string]string{
 		"internal/connector/pluginsource.go": "carries a connector plugin's target.assigned CLAIM: the plugin was " +
 			"trusted once, at install, and the platform it reads assigned the target (plugin-contract.md, the `target` semantic)",
-		"internal/integrations/rss/rss.go": "the feed's CONFIGURED repo, or a synthetic target named after the feed",
-		"internal/connector/conductor.go":  "a lifecycle event carries its ORIGINATING trigger's bit for the same target (false for a synthetic one)",
-		"internal/connector/httpapi.go":    "a synthetic target named after the source and event, from config",
-		"cmd/conductor/main.go":            "an operator-invoked manual trigger",
+		"internal/connector/conductor.go": "a lifecycle event carries its ORIGINATING trigger's bit for the same target (false for a synthetic one)",
+		"internal/connector/httpapi.go":   "a synthetic target named after the source and event, from config",
+		"cmd/conductor/main.go":           "an operator-invoked manual trigger",
 		"cmd/conductor/mcp.go": "the memory MCP subprocess parses --target-trusted, which the daemon " +
 			"emits from the dispatch it launched; absent means untrusted",
 		// Carriers, not claimants: they propagate a bit decided upstream.

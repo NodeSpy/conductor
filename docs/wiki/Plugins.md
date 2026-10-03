@@ -464,9 +464,14 @@ on the same stdio.
   another run is refused before any policy is consulted. It is the plugin wire's
   spelling of `CONDUCTOR_CTX_TOKEN` (the `cli` engine's socket), with the same
   rules: do not log it, do not persist it.
-- **A connector plugin gets nothing from this.** It is never given a
-  `plugin.run`, so it holds no token, so every `host.*` call it could make is
-  refused.
+- **A connector plugin gets nothing RUN-SCOPED from this.** It is never given
+  a `plugin.run`, so it holds no `run_id`, so every `host.kv`/`host.sql`/
+  `host.memory` call it could make is refused. It DOES get two
+  INSTANCE-scoped callbacks with no `run_id` at all: `host.state` (durable
+  key/value storage for a source to remember across restarts) and `host.auth`
+  (a polled source's live managed-OAuth2 token — see [[Authoring-Connectors]]
+  § Sources). Both are scoped to "an instance this plugin was actually
+  handed," checked the same way a `run_id` is, just without one.
 - **The method is the kind.** A `host.kv` request whose body claims `sql` is
   refused rather than reconciled.
 - **Refusals are in-band.** `{"ok":false,"refused":true,"error":"…"}` means

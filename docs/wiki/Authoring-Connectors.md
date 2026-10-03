@@ -97,6 +97,21 @@ verb-only connector returns `(nil, nil)`. Emitted events must publish
 exactly the `Context` schema — the validator holds `{{…}}` references in
 user configs to it.
 
+A source that polls on its own schedule and carries managed OAuth2 auth
+(`auth: {type: oauth2}`) needs the LIVE token, not the connection snapshot it
+was started with — `plugin.start_source` fires once, and a token minted or
+rotated afterward is otherwise invisible to it for as long as the stream
+runs. Ask the host directly instead of reading the connection's own
+`access_token` field: implement `pkg/plugin.HostAware`'s `SetHost(*plugin.
+HostConn)` (Serve calls it once, before serving anything) and call
+`host.Auth(instance).Token(ctx, refresh)` — once per poll is fine, the host
+caches; `refresh: true` after your own upstream call comes back 401, the
+same retry-once-on-401 a verb invoke gets automatically
+(docs/design/plugin-contract.md §1.9, `host.auth`). It errors for an
+instance with no managed auth — fall back to the connection's own static
+`auth:` unchanged. See `internal/builtins/rest`'s poller for the reference
+implementation.
+
 ### Per-instance declarations (Q6: `plugin.describe {instance, config}`)
 
 A type whose events/verbs come from user config — rest and graphql declare

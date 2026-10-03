@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/builtins/httpconn"
@@ -24,12 +25,28 @@ import (
 	"github.com/NodeSpy/conductor/pkg/sourcekit"
 )
 
-// REST is the rest handler. Stateless: every call carries its instance's
-// config/connection, exactly like a spawned plugin would receive it.
-type REST struct{}
+// REST is the rest handler. Stateless but for the host channel: every call
+// carries its instance's config/connection, exactly like a spawned plugin
+// would receive it, but the poller needs a live channel back to the daemon
+// (host.auth) rather than anything it could carry on a per-call connection
+// snapshot — see SetHost.
+type REST struct {
+	host atomic.Pointer[plugin.HostConn]
+}
 
 // New is the rest handler.
 func New() *REST { return &REST{} }
+
+// SetHost wires the host channel (pkg/plugin.HostAware): the poller asks it,
+// on every poll, for this instance's CURRENT managed-auth access token
+// (host.auth, plugin-contract.md §1), and again with refresh after its own
+// 401 — rather than running on the connection snapshot start_source captured
+// once at startup, which is what let an oauth2 polled source die silently
+// after its token expired (the regression this fixes). Serve calls this once,
+// before serving anything; nil-safe (an older daemon, or a handler run
+// outside plugin.Serve, just never implements managed auth: ApplyAuth falls
+// back to the connection's own static auth: unchanged).
+func (r *REST) SetHost(h *plugin.HostConn) { r.host.Store(h) }
 
 // Describe declares the type-level contract: connection shape only. Verbs
 // and events are per-instance (DescribeInstance).
@@ -368,13 +385,20 @@ func (r *REST) pollEvent(ctx context.Context, instance string, conn map[string]a
 
 func (r *REST) pollOnce(ctx context.Context, instance string, conn map[string]any, name string, ev eventCfg, seen map[string]bool, primed *bool, emit func(any) error) {
 	baseURL := str(conn, "base_url")
-	fullURL, headers, err := buildRequest(baseURL, ev.Path, ev.Query, strMap(conn["headers"]), map[string]any{"secrets": conn["secrets"]})
+	resp, err := r.pollRequest(ctx, instance, conn, baseURL, ev, false)
 	if err != nil {
 		return
 	}
-	resp, err := httpconn.Do(ctx, ev.Method, fullURL, headers, nil, ApplyAuth(conn))
-	if err != nil {
-		return
+	if resp.Status == http.StatusUnauthorized {
+		// The same retry-once-on-401 a verb invoke gets generically
+		// (internal/connector's buildManagedAuth/invokePlugin): ask the host
+		// for a freshly minted token and try exactly once more. An instance
+		// with no managed auth (host.Auth refuses) just gets the same 401
+		// again — pollRequest falls back to the connection's own static
+		// auth: unchanged, and this retry is a harmless no-op.
+		if retried, rerr := r.pollRequest(ctx, instance, conn, baseURL, ev, true); rerr == nil {
+			resp = retried
+		}
 	}
 	scope := map[string]any{"response": map[string]any{"status": resp.Status, "body": resp.Body, "headers": resp.Headers}}
 	v, err := httpconn.RenderValue(ev.List, scope)
@@ -403,6 +427,44 @@ func (r *REST) pollOnce(ctx context.Context, instance string, conn map[string]an
 		}
 		r.emitItem(instance, name, item, id, itemScope, ev, emit)
 	}
+}
+
+// pollRequest executes one poll request, asking the host for THIS instance's
+// current managed-auth access token first (host.auth) — on every call, not
+// just the first — so a long-lived source never runs on a token snapshot
+// frozen at start_source time (the regression: before host.auth, a rest
+// instance's events: had no way to see a token the daemon minted after the
+// source started, so it died silently once the start_source-time token, if
+// any, expired). refresh asks the host for a freshly minted one (the 401
+// retry in pollOnce). An instance with no managed auth — host.Auth errors —
+// falls back unchanged to the connection's own static `auth:` (none/bearer/
+// basic/header), exactly as before host.auth existed.
+func (r *REST) pollRequest(ctx context.Context, instance string, conn map[string]any, baseURL string, ev eventCfg, refresh bool) (httpconn.Response, error) {
+	callConn := conn
+	if h := r.host.Load(); h != nil {
+		if tok, err := h.Auth(instance).Token(ctx, refresh); err == nil && tok != "" {
+			callConn = withAccessToken(conn, tok)
+		}
+	}
+	fullURL, headers, err := buildRequest(baseURL, ev.Path, ev.Query, strMap(callConn["headers"]), map[string]any{"secrets": callConn["secrets"]})
+	if err != nil {
+		return httpconn.Response{}, err
+	}
+	return httpconn.Do(ctx, ev.Method, fullURL, headers, nil, ApplyAuth(callConn))
+}
+
+// withAccessToken returns a COPY of conn carrying tok under
+// plugin.AccessTokenKey — the same per-call-copy discipline
+// internal/connector's invokePlugin uses for a verb call, so the shared
+// connection snapshot every poll tick reads is never mutated out from under
+// the others.
+func withAccessToken(conn map[string]any, tok string) map[string]any {
+	out := make(map[string]any, len(conn)+1)
+	for k, v := range conn {
+		out[k] = v
+	}
+	out[plugin.AccessTokenKey] = tok
+	return out
 }
 
 func (r *REST) emitItem(instance, name string, item map[string]any, id string, scope map[string]any, ev eventCfg, emit func(any) error) {

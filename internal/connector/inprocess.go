@@ -61,7 +61,7 @@ func RegisterInProcessConnector(h sdk.Handler) {
 			if log == nil {
 				log = func(string, ...any) {}
 			}
-			cl = plugin.NewClient(spec, plugin.Deps{Log: log, State: InProcessState})
+			cl = plugin.NewClient(spec, plugin.Deps{Log: log, State: InProcessState, Auth: HostAuthProvider})
 			// Over the wire, like any plugin: must-understand applies.
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -94,6 +94,7 @@ func RegisterInProcessConnector(h sdk.Handler) {
 		if err != nil {
 			return nil, fmt.Errorf("builtin %s: %w", d.Type, err)
 		}
+		registerAuth(name, au)
 		if err := enrichConnection(conn, ref, deps, nil); err != nil {
 			return nil, fmt.Errorf("builtin %s: %w", d.Type, err)
 		}

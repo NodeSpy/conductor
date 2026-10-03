@@ -45,6 +45,7 @@ func pluginDeps(sec *secrets.Resolver, audit func(map[string]any)) plugin.Deps {
 		Redact:      sec.Redact,
 		Audit:       audit,
 		State:       pluginStateStore(),
+		Auth:        connector.HostAuthProvider,
 		HostVersion: acp.ClientVersion,
 		Sandbox: plugin.SandboxDeps{
 			Self:      exe,

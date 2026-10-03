@@ -25,6 +25,17 @@ const (
 	// MethodHostState (plugin→daemon): durable key/value state scoped to one
 	// instance, surviving plugin restarts.
 	MethodHostState = "host.state"
+	// MethodHostAuth (plugin→daemon): the CURRENT managed OAuth2 access
+	// token for the calling instance's own connector, when it has managed
+	// auth. A connector verb invoke gets a fresh token injected by the host
+	// on every call (plugin-contract.md §1.11, internal/connector's
+	// buildManagedAuth) — a SOURCE has no such call to hang that on, so it
+	// asks explicitly, as often as it needs to (every poll, not just the
+	// first), and again with refresh: true after its own upstream call comes
+	// back 401. Scoped exactly like host.state: refused for an instance this
+	// plugin was never handed, and refused when that instance has no managed
+	// auth at all.
+	MethodHostAuth = "host.auth"
 )
 
 // Poll modes.
@@ -136,6 +147,22 @@ type HostStateResult struct {
 	Error string `json:"error,omitempty"`
 }
 
+// HostAuthRequest is one host.auth call.
+type HostAuthRequest struct {
+	Instance string `json:"instance"`
+	// Refresh asks the host to mint a fresh token rather than hand back a
+	// cached one — the upstream just answered 401 with the last one.
+	Refresh bool `json:"refresh,omitempty"`
+}
+
+// HostAuthResult answers a host.auth call. Token is never logged by the
+// host; a plugin that logs it breaks the one rule this method has.
+type HostAuthResult struct {
+	OK    bool   `json:"ok"`
+	Token string `json:"token,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
 // PollHandler, TranslateHandler, ValidateHandler and StopHandler are the
 // optional method handlers; a Handler that implements one serves it.
 type PollHandler interface {
@@ -175,8 +202,8 @@ type InstanceDescriber interface {
 }
 
 // HostAware is implemented by a Handler that wants the host channel for
-// instance-scoped calls (host.state). Serve calls SetHost once, before it
-// serves anything.
+// instance-scoped calls (host.state, host.auth). Serve calls SetHost once,
+// before it serves anything.
 type HostAware interface {
 	SetHost(*HostConn)
 }
@@ -186,6 +213,35 @@ type HostConn struct{ calls *callTable }
 
 // State is instance's durable key/value store.
 func (h *HostConn) State(instance string) *State { return &State{h: h, instance: instance} }
+
+// Auth is instance's managed-OAuth2 access token face (host.auth). A source
+// that polls on its own schedule (rest's events:, and anything like it) has
+// no per-call verb invoke to get a fresh token injected into — this is how
+// it asks for one directly, as often as it needs (every poll is fine; the
+// host caches), and again with refresh after its own 401.
+func (h *HostConn) Auth(instance string) *Auth { return &Auth{h: h, instance: instance} }
+
+// Auth is one instance's host.auth face.
+type Auth struct {
+	h        *HostConn
+	instance string
+}
+
+// Token returns the instance's current managed access token, or a freshly
+// minted one when refresh is true. It errors when this instance has no
+// managed (oauth2) auth, or when the plugin was never handed this instance —
+// the same two refusals host.state gives.
+func (a *Auth) Token(ctx context.Context, refresh bool) (string, error) {
+	var res HostAuthResult
+	req := HostAuthRequest{Instance: a.instance, Refresh: refresh}
+	if err := a.h.calls.call(ctx, MethodHostAuth, req, &res); err != nil {
+		return "", err
+	}
+	if !res.OK {
+		return "", &Error{Code: CodeInternalError, Message: "host.auth: " + res.Error}
+	}
+	return res.Token, nil
+}
 
 // State is one instance's host.state.
 type State struct {

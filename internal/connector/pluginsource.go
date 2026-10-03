@@ -528,12 +528,6 @@ func coreTarget(t sdk.Target) core.Target {
 		HeadSHA: t.HeadSHA, BaseRef: t.BaseRef, HTMLURL: t.HTMLURL, Project: t.Project}
 }
 
-// wireTarget is coreTarget's inverse.
-func wireTarget(t core.Target) sdk.Target {
-	return sdk.Target{Repo: t.Repo, Owner: t.Owner, Name: t.Name, PR: t.PR, Issue: t.Issue, Number: t.Number,
-		HeadSHA: t.HeadSHA, BaseRef: t.BaseRef, HTMLURL: t.HTMLURL, Project: t.Project}
-}
-
 // declaredAssigned reads an event's declared target.assigned: true, or the
 // name of a fact that is true.
 func declaredAssigned(sem *sdk.EventSemantics, facts map[string]any) bool {

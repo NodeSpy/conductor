@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/plugin"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/vaults"
 )
@@ -339,6 +340,66 @@ func postTokenForm(ctx context.Context, a authConfig, form url.Values) (tokenRes
 		return tokenResponse{}, fmt.Errorf("oauth2 token: HTTP %d: %s", resp.StatusCode, reason)
 	}
 	return tr, nil
+}
+
+// authRegistry backs host.auth (plugin-contract.md §1): the live managed-auth
+// authenticator for each connector instance that has one, looked up by
+// instance name. Instance names are globally unique (`connectors:` is one Go
+// map across every type), so one flat registry is enough even though several
+// instances can share a single plugin.Client — a spawned plugin serving more
+// than one configured instance, or an in-process builtin's one shared Client
+// (RegisterInProcessConnector's sync.Once cl) serving every instance of that
+// builtin type. Populated as each instance is built (buildManagedAuth, called
+// from both RegisterExternalConnector's and RegisterInProcessConnector's
+// builder); a later Build (config reload) just overwrites an instance's
+// entry — there is no explicit removal, the same posture host.state's
+// StateStore takes today (Drop exists but nothing calls it yet).
+var authRegistry = struct {
+	mu  sync.RWMutex
+	byI map[string]*authenticator
+}{byI: map[string]*authenticator{}}
+
+// registerAuth records instance's managed-auth authenticator, when it has
+// one, so host.auth can find it later. A no-op for a nil au (no managed
+// auth), so every connector type can call it unconditionally right after
+// buildManagedAuth.
+func registerAuth(instance string, au *authenticator) {
+	if au == nil {
+		return
+	}
+	authRegistry.mu.Lock()
+	authRegistry.byI[instance] = au
+	authRegistry.mu.Unlock()
+}
+
+// HostAuthProvider is the internal/plugin.AuthProvider every plugin.Client's
+// Deps.Auth is wired to (cmd/conductor/plugins.go for spawned plugins,
+// RegisterInProcessConnector's shared Client for builtins) — the one seam
+// that lets internal/plugin answer a plugin's host.auth call without
+// importing internal/connector (which already imports internal/plugin to
+// drive *plugin.Client — the reverse import would cycle).
+var HostAuthProvider plugin.AuthProvider = hostAuthProvider{}
+
+type hostAuthProvider struct{}
+
+// AccessToken looks up instance's authenticator and returns its current
+// token (or a freshly minted one, when refresh is true), refusing an
+// instance with no managed oauth2 auth. It is deliberately silent about
+// which is true for an unregistered name (never served vs. never had managed
+// auth) — the caller (internal/plugin's handleRequest) already refused the
+// first case before this is ever reached (c.serves(instance)); from here on
+// out "no managed auth" is the one honest answer either way.
+func (hostAuthProvider) AccessToken(ctx context.Context, instance string, refresh bool) (string, error) {
+	authRegistry.mu.RLock()
+	au := authRegistry.byI[instance]
+	authRegistry.mu.RUnlock()
+	if au == nil || !au.oauth2() {
+		return "", fmt.Errorf("connector %q has no managed oauth2 auth", instance)
+	}
+	if refresh {
+		au.invalidate()
+	}
+	return au.accessToken(ctx)
 }
 
 // resolveNamedSecrets resolves the config's named secrets: block into the

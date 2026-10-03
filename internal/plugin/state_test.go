@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -82,5 +83,66 @@ func TestHostStateOnlyForServedInstances(t *testing.T) {
 	c.serve("jira")
 	if r := put("jira"); !r.OK {
 		t.Fatalf("state refused for a served instance: %+v", r)
+	}
+}
+
+// fakeAuthProvider is a minimal AuthProvider: it has a token for exactly the
+// instances it's constructed with.
+type fakeAuthProvider map[string]string
+
+func (f fakeAuthProvider) AccessToken(_ context.Context, instance string, _ bool) (string, error) {
+	tok, ok := f[instance]
+	if !ok {
+		return "", fmt.Errorf("instance %q has no managed oauth2 auth", instance)
+	}
+	return tok, nil
+}
+
+// host.auth is refused for an instance with no managed auth, even when the
+// plugin was handed that instance.
+func TestHostAuthRefusedWithoutManagedAuth(t *testing.T) {
+	sp := connectorSpec()
+	sp.BinPath = writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	c := NewClient(sp, Deps{Auth: fakeAuthProvider{}})
+	c.serve("gh")
+	res, rpcErr := c.handleRequest(context.Background(), sdk.MethodHostAuth,
+		mustJSON(sdk.HostAuthRequest{Instance: "gh"}))
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	if r := res.(sdk.HostAuthResult); r.OK {
+		t.Fatalf("host.auth answered OK for an instance with no managed auth: %+v", r)
+	}
+}
+
+// host.auth is instance-scoped exactly like host.state: a plugin may ask
+// only for an instance it has actually been handed — asking across instances
+// (even ones the SAME client serves, or ones with their own managed auth) is
+// refused.
+func TestHostAuthRefusedAcrossInstances(t *testing.T) {
+	sp := connectorSpec()
+	sp.BinPath = writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	c := NewClient(sp, Deps{Auth: fakeAuthProvider{"gh": "tok-gh", "jira": "tok-jira"}})
+	c.serve("gh")
+	ask := func(inst string) sdk.HostAuthResult {
+		res, rpcErr := c.handleRequest(context.Background(), sdk.MethodHostAuth, mustJSON(sdk.HostAuthRequest{Instance: inst}))
+		if rpcErr != nil {
+			t.Fatal(rpcErr)
+		}
+		return res.(sdk.HostAuthResult)
+	}
+	// "jira" has its own managed auth, but this plugin was never handed it.
+	if r := ask("jira"); r.OK {
+		t.Fatalf("host.auth answered OK for an instance this plugin was never handed: %+v", r)
+	}
+	// Its own instance still works.
+	if r := ask("gh"); !r.OK || r.Token != "tok-gh" {
+		t.Fatalf("host.auth for its own served instance = %+v", r)
+	}
+	// Once also handed "jira", it works too — scoping is about having been
+	// SERVED, not about some fixed one-instance-per-client rule.
+	c.serve("jira")
+	if r := ask("jira"); !r.OK || r.Token != "tok-jira" {
+		t.Fatalf("host.auth for a later-served instance = %+v", r)
 	}
 }

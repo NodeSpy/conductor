@@ -285,7 +285,7 @@ implements them. They are not privileges. ACP agents (`claude-code-acp` and
 the like) are not conductor plugins: ACP stays the transport conductor uses
 to drive a third-party agent process, and it is out of scope here.
 
-### 1.9 Host → plugin state: `host.state` (new, optional for the plugin to use)
+### 1.9 Host → plugin state and auth: `host.state`, `host.auth` (new, optional for the plugin to use)
 
 ```text
 host.state {instance, op: get|put|delete|list, key, value?, ttl?} → {ok, value?}
@@ -296,6 +296,36 @@ every plugin, for things a source must remember across restarts. Examples: a
 review-claim cache, own-status contexts (today lost when the plugin process
 dies — a known gap), a poll cursor. It is bounded per instance. The run-scoped
 `host.kv/sql/memory` keep their `run_id` capability as today.
+
+```text
+host.auth {instance, refresh?} → {ok, token?, error?}
+```
+
+A connector verb invoke gets a fresh managed OAuth2 bearer injected into its
+connection on every call (buildManagedAuth, §1.11's `invokePlugin`) — the
+host owns the token exchange, the plugin just reads
+`InvokeRequest.Connection[access_token]`. A **source** has no such call to
+hang that on: `plugin.start_source` fires once, and whatever connection it
+captured in that call lives as long as the stream does. Before `host.auth`,
+rest's polled `events:` ran on that one-time snapshot forever, so a managed
+token minted or rotated after the source started was invisible to it — the
+poller just kept 401ing, silently, for as long as the daemon ran (the
+regression `host.auth` fixes).
+
+`host.auth` asks the host directly, as often as it needs — once per poll is
+fine, the host caches — and `refresh: true` after the source's own upstream
+call comes back 401, exactly the retry-once-on-401 a verb invoke gets
+automatically. It is scoped exactly like `host.state`: refused for an
+instance this plugin was never handed (`served`, the same instance-scoping
+guard), and refused when that instance has no managed (oauth2) auth
+configured at all — a plugin with a static scheme (`none`/`bearer`/`basic`/
+`header`) has no use for it and gets a plain error, not a token. The token
+value is never logged, host-side or in any `host.auth`-adjacent code path.
+
+`pkg/plugin`'s `HostConn.Auth(instance).Token(ctx, refresh)` is the Go face a
+source author calls; see `internal/builtins/rest`'s poller for the reference
+usage (ask first, retry once with `refresh: true` on a 401, fall back to the
+connection's own static `auth:` unchanged when `host.auth` errors).
 
 ### 1.10 Builtins speak the contract
 
@@ -648,7 +678,7 @@ code.
 | G3 | `internal/connector/github.go` (all); `internal/integrations/github/**`; `pkg/githubkit/**` | bundled github | PLUGIN |
 | G4 | `internal/connector/slack.go` (all); `internal/integrations/slack/**` | bundled slack | PLUGIN |
 | G4a | `internal/connector` `ntfyDecl`, `pushoverDecl`, `notifiarrDecl`, `discordDecl` (registered at `init` like any builtin) | vendor notification/chat connectors compiled into conductor | PLUGIN (conductor-plugins already ships pushover and notifiarr; ntfy and discord ported in P) |
-| G5 | `internal/connector/sources.go:61, 126, 178, 363, 471-473, 542`; `github.go:397-412` (`buildIntegration`); `cmd/conductor/main.go:54-58`; `internal/core/registry.go:21,32` | cron/rss/webhook via `core.Build` side door | **built**: in-process contract builtins (§1.10) for cron, rss and webhook; `buildIntegration` and the webhook path deleted from `internal/connector` (`internal/core.Integration`/`Register`/`Build` itself stays — `internal/integrations/rss` still self-registers there, orphaned, out of this scope) |
+| G5 | `internal/connector/sources.go:61, 126, 178, 363, 471-473, 542`; `github.go:397-412` (`buildIntegration`); `cmd/conductor/main.go:54-58`; `internal/core/registry.go:21,32` | cron/rss/webhook via `core.Build` side door | **built**: in-process contract builtins (§1.10) for cron, rss and webhook; `buildIntegration` and the webhook path deleted from `internal/connector`; the `core.Build` side door itself (`Register`/`Build`/`Types`/`Constructor`, `internal/core/registry.go`) is now DELETED too, along with `internal/integrations/rss`'s old self-registering `Integration` (`Config`/`Feed`/`newIntegration`) that was its last caller — only that package's feed parsing (`Item`, `ParseFeed`) survives, shared with `internal/builtins/rss`. `core.Integration` the interface stays: `connector.Impl.Source` still returns one |
 | G6 | `pkg/plugin/source.go:5-28`; `wire.go:239-256, 129-132`; `connector/external.go:185-192, 342-344, 389`; `internal/plugin/resolve.go:285-292`; `cmd/conductor/reload.go:24,75` | `ConnectorABI`, `Decl.ABI`, triggers sent only at ABI 1, ABI part of reload surface | DEL (`abi` accepted and ignored) |
 | G7 | `pkg/plugin/wire.go:45-49`; `internal/plugin/client.go:510-516`; `plugin.go:46-52`; `cmd/conductor/plugins.go:182-188` | `EngineABI` exact match; empty kind refused for engines | `step_engine` declared; must-understand semantics |
 | G8 | `internal/connector/pluginsource.go:139-160, 183-254` | `kindFor` trust/ABI rules, `_closed` path, `TargetTrusted = trusted && claim` | DEL; SEM `target.assigned` bounded by SEM `scope` |

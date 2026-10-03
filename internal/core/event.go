@@ -1,6 +1,11 @@
 // Package core holds the integration-agnostic types that flow through
 // conductor: the normalized Trigger emitted by every integration, and the
-// Integration interface + type registry the engine uses to start them.
+// Integration interface every source (a connector's Source(), a plugin's
+// pluginSourceIntegration) implements to be started by the engine. There is
+// no type registry here any more — connector.Build (internal/connector)
+// resolves and constructs every instance; the old core.Register/Build side
+// door (internal/integrations/rss's self-registration was its last user) is
+// gone.
 package core
 
 import (

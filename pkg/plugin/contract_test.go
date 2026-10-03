@@ -230,6 +230,54 @@ func TestHostStateRoundTrip(t *testing.T) {
 	<-done
 }
 
+// host.auth goes out as a plugin→host request over the same connection, and
+// Refresh rides the wire — the "the upstream just said 401" signal.
+func TestHostAuthRoundTrip(t *testing.T) {
+	p := &fullPlugin{hostc: make(chan *HostConn, 1)}
+	toPlugin, hostW := io.Pipe()
+	hostR, fromPlugin := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- ServeConn(toPlugin, fromPlugin, p) }()
+	var host *HostConn
+	select {
+	case host = <-p.hostc:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SetHost was never called")
+	}
+
+	// Play the host: answer host.auth, echoing whether refresh was asked for
+	// so the test can see it crossed the wire.
+	go func() {
+		sc := bufio.NewScanner(hostR)
+		for sc.Scan() {
+			var m wireMessage
+			_ = json.Unmarshal(sc.Bytes(), &m)
+			if m.Method != MethodHostAuth {
+				continue
+			}
+			var req HostAuthRequest
+			_ = json.Unmarshal(m.Params, &req)
+			tok := "tok-" + req.Instance
+			if req.Refresh {
+				tok = "refreshed-" + req.Instance
+			}
+			res, _ := json.Marshal(HostAuthResult{OK: true, Token: tok})
+			b, _ := json.Marshal(wireMessage{JSONRPC: "2.0", ID: m.ID, Result: res})
+			_, _ = hostW.Write(append(b, '\n'))
+		}
+	}()
+	tok, err := host.Auth("gh").Token(context.Background(), false)
+	if err != nil || tok != "tok-gh" {
+		t.Fatalf("Auth.Token = %v, %v", tok, err)
+	}
+	tok, err = host.Auth("gh").Token(context.Background(), true)
+	if err != nil || tok != "refreshed-gh" {
+		t.Fatalf("Auth.Token(refresh) = %v, %v", tok, err)
+	}
+	_ = hostW.Close()
+	<-done
+}
+
 func roundTrip(t *testing.T, h Handler, lines string) map[string]wireMessage {
 	t.Helper()
 	var out strings.Builder

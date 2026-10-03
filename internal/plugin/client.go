@@ -46,6 +46,25 @@ type transport interface {
 	Done() <-chan struct{}
 }
 
+// AuthProvider is the host side of host.auth (plugin-contract.md §1): it
+// returns the current managed-OAuth2 access token for one connector
+// instance — minting or refreshing it exactly as a verb invoke's own
+// retry-on-401 would (internal/connector's buildManagedAuth) — and errors
+// when that instance has no managed auth configured.
+//
+// An INTERFACE, not a concrete type (unlike StateStore): the authenticator
+// behind it lives in internal/connector, which imports this package to drive
+// *Client, so a concrete dependency would cycle. internal/connector
+// implements this and cmd/conductor wires it into every Client's Deps, the
+// same way it wires State.
+type AuthProvider interface {
+	// AccessToken returns instance's current access token, refreshing it
+	// first when refresh is true (the caller's own upstream call just came
+	// back 401 with the cached one). It errors when instance has no managed
+	// (oauth2) auth.
+	AccessToken(ctx context.Context, instance string, refresh bool) (string, error)
+}
+
 // Deps carries what a Client needs from the daemon.
 type Deps struct {
 	Log     func(string, ...any)
@@ -59,6 +78,10 @@ type Deps struct {
 	// State backs host.state (instance-scoped durable state). nil answers
 	// every host.state call with an error.
 	State *StateStore
+	// Auth backs host.auth (a connector instance's current managed-OAuth2
+	// access token). nil answers every host.auth call with an error, same as
+	// a nil State does for host.state.
+	Auth AuthProvider
 	// HostVersion is the daemon version sent on describe.
 	HostVersion string
 
@@ -423,7 +446,7 @@ func (c *Client) Run(ctx context.Context, req RunRequest, host RunHost) (map[str
 // A connector or runtime plugin reaching this method has no run registered —
 // it never received a token, because it is never given a plugin.run — so
 // every call it could make is refused here.
-func (c *Client) handleRequest(_ context.Context, method string, params json.RawMessage) (any, *acp.RPCError) {
+func (c *Client) handleRequest(ctx context.Context, method string, params json.RawMessage) (any, *acp.RPCError) {
 	if method == sdk.MethodHostState {
 		var req sdk.HostStateRequest
 		if err := json.Unmarshal(params, &req); err != nil {
@@ -435,10 +458,33 @@ func (c *Client) handleRequest(_ context.Context, method string, params json.Raw
 		}
 		return c.deps.State.Do(c.spec.Key(), req), nil
 	}
+	if method == sdk.MethodHostAuth {
+		var req sdk.HostAuthRequest
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, acp.NewRPCError(acp.CodeInvalidParams, err.Error())
+		}
+		// Instance-scoped exactly like host.state: only for instances this
+		// plugin was handed — never another plugin's, and never an instance
+		// this one merely happens to share a process with but was never
+		// invoked/started for.
+		if !c.serves(req.Instance) {
+			return sdk.HostAuthResult{Error: fmt.Sprintf("instance %q is not one this plugin serves", req.Instance)}, nil
+		}
+		if c.deps.Auth == nil {
+			return sdk.HostAuthResult{Error: "this daemon has no managed-auth provider"}, nil
+		}
+		tok, err := c.deps.Auth.AccessToken(ctx, req.Instance, req.Refresh)
+		if err != nil {
+			// Never the token itself — only the (redacted-by-construction)
+			// reason it could not be produced, e.g. "no managed auth".
+			return sdk.HostAuthResult{Error: err.Error()}, nil
+		}
+		return sdk.HostAuthResult{OK: true, Token: tok}, nil
+	}
 	kind := sdk.HostKindFor(method)
 	if kind == "" {
 		return nil, acp.NewRPCError(acp.CodeMethodNotFound,
-			"daemon exposes no plugin callbacks other than "+sdk.MethodHostState+"/"+MethodHostKV+"/"+MethodHostSQL+"/"+MethodHostMemory)
+			"daemon exposes no plugin callbacks other than "+sdk.MethodHostState+"/"+sdk.MethodHostAuth+"/"+MethodHostKV+"/"+MethodHostSQL+"/"+MethodHostMemory)
 	}
 	var req HostRequest
 	if len(params) > 0 {

@@ -1,3 +1,10 @@
+// Package rss parses RSS 2.0 and Atom feeds into a normalized Item. It is no
+// longer an integration in its own right — the old core.Register-based
+// Integration (poll loop, Config/Feed, core.Trigger emission) was deleted as
+// dead code once internal/builtins/rss (the plugin-contract rewrite,
+// docs/design/plugin-contract.md §1.10) became the only thing that starts an
+// rss source. This package's feed-parsing (ParseFeed/Item) is the one part
+// still alive, shared with that builtin so there is one XML parser, not two.
 package rss
 
 import (
