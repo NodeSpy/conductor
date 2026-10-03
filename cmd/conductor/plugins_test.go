@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/plugin"
@@ -164,5 +167,85 @@ func TestPluginRuntimeNotInstalled(t *testing.T) {
 	_, err := mergedControllersWithPlugins(cfg, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "conductor init") {
 		t.Fatalf("want a not-installed direction, got %v", err)
+	}
+}
+
+// TestPendingPluginBackoffCapsAtOneHour: a still-missing plugin's retry wait
+// doubles each time, from the 5m default up to the 1h cap, instead of
+// retrying every 5 minutes forever.
+func TestPendingPluginBackoffCapsAtOneHour(t *testing.T) {
+	oldCap := pendingPluginBackoffCap
+	pendingPluginBackoffCap = time.Hour
+	t.Cleanup(func() { pendingPluginBackoffCap = oldCap })
+
+	wait := 5 * time.Minute
+	want := []time.Duration{10 * time.Minute, 20 * time.Minute, 40 * time.Minute, time.Hour, time.Hour, time.Hour}
+	for i, w := range want {
+		wait = nextPendingPluginWait(wait)
+		if wait != w {
+			t.Fatalf("step %d: got %s, want %s", i, wait, w)
+		}
+	}
+}
+
+// TestPendingPluginRetryWontRestartOnBadConfig: once a pending plugin is
+// installed, pendingPluginRetry must validate the config against what the
+// plugin ACTUALLY declares before asking the daemon to restart into it — its
+// triggers/options were never checked while the type was Unavailable (which
+// accepts any verb/event name, unchecked, so boot could proceed with no
+// Decl at all). A restart straight into a config that fails flow.Validate
+// would crash-loop the daemon on every subsequent boot, which is the exact
+// failure this whole mechanism exists to prevent.
+func TestPendingPluginRetryWontRestartOnBadConfig(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	bin := buildTestPlugin(t, "acme-ticker") // declares ONE event: "tick"; no verbs
+
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	doc := fmt.Sprintf(`
+connectors:
+  forge:
+    use: %s
+triggers:
+  - on: forge.not_a_real_event
+    steps: [{ id: hi, uses: forge.run, options: {} }]
+`, bin)
+	if err := os.WriteFile(cfgPath, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate "this boot found it missing" — a local `use:` path is always
+	// Installed() (it is a path to a binary already on disk), so the very
+	// first retry tick sees missing == 0 and goes straight to the new
+	// validate step; the test cares about that step, not the backoff path.
+	oldPending := pendingPlugins
+	pendingPlugins = []string{"acme-ticker"}
+	t.Cleanup(func() { pendingPlugins = oldPending })
+
+	oldInterval, oldCap := pendingPluginInterval, pendingPluginBackoffCap
+	pendingPluginInterval = 10 * time.Millisecond
+	t.Cleanup(func() { pendingPluginInterval, pendingPluginBackoffCap = oldInterval, oldCap })
+
+	stopped := make(chan struct{})
+	stop := func() { close(stopped) }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		pendingPluginRetry(ctx, cfg, cfgPath, stop)
+		close(done)
+	}()
+
+	select {
+	case <-stopped:
+		t.Fatal("must not restart into a plugin the config does not validate against")
+	case <-done:
+		// returned without restarting — correct: give up rather than loop.
+	case <-time.After(4 * time.Second):
+		t.Fatal("pendingPluginRetry neither restarted nor returned")
 	}
 }

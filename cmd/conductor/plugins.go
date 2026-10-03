@@ -923,24 +923,53 @@ func bootGapFill(cfg *config.Config) {
 	}
 }
 
-// pendingPluginInterval is how often a missing plugin's fetch is retried.
+// pendingPluginInterval is the initial (and minimum) delay between retries of
+// a missing plugin's fetch.
 var pendingPluginInterval = 5 * time.Minute
 
-// pendingPluginRetry retries fetching the plugins this boot found missing
-// and, once every one of them is installed, asks the daemon to restart into
-// them (stop): their connectors were disabled until then.
-func pendingPluginRetry(ctx context.Context, cfg *config.Config, stop func()) {
+// pendingPluginBackoffCap is the longest a still-missing plugin waits between
+// retries, once backoff has grown (finding: retrying every 5m forever is
+// needless load on a box that is genuinely offline or whose release just
+// isn't published yet).
+var pendingPluginBackoffCap = time.Hour
+
+// nextPendingPluginWait doubles a still-missing plugin's retry wait, capped at
+// pendingPluginBackoffCap — a pure function so the backoff schedule is
+// testable without driving the real ticker loop.
+func nextPendingPluginWait(cur time.Duration) time.Duration {
+	next := cur * 2
+	if next > pendingPluginBackoffCap {
+		next = pendingPluginBackoffCap
+	}
+	return next
+}
+
+// pendingPluginRetry retries fetching the plugins this boot found missing,
+// backing off from pendingPluginInterval to pendingPluginBackoffCap while
+// they stay missing. Once every one of them is installed, it validates the
+// config against what they actually declare — through the SAME pipeline
+// `conductor validate` runs — before asking the daemon to restart into them
+// (stop): their connectors were disabled, and so UNCHECKED (an Unavailable
+// type accepts any verb/event/filter), until now. A restart that then failed
+// flow.Validate would crash-loop the daemon on every boot from here on, which
+// is exactly the failure this whole mechanism exists to avoid. If validation
+// fails, the daemon does NOT restart: it logs loudly, keeps running with the
+// connector(s) disabled, and gives up retrying — nothing changes until the
+// operator edits the config (or the plugin) and restarts by hand.
+func pendingPluginRetry(ctx context.Context, cfg *config.Config, cfgFile string, stop func()) {
 	if len(pendingPlugins) == 0 {
 		return
 	}
-	logf("plugins: %s not installed — retrying every %s", strings.Join(pendingPlugins, ", "), pendingPluginInterval)
-	t := time.NewTicker(pendingPluginInterval)
-	defer t.Stop()
+	logf("plugins: %s not installed — retrying every %s, backing off to %s while still missing",
+		strings.Join(pendingPlugins, ", "), pendingPluginInterval, pendingPluginBackoffCap)
+	wait := pendingPluginInterval
 	for {
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-t.C:
+		case <-timer.C:
 		}
 		bootGapFill(cfg)
 		state := plugin.LoadInstallState(plugin.InstallDir())
@@ -952,10 +981,26 @@ func pendingPluginRetry(ctx context.Context, cfg *config.Config, stop func()) {
 			}
 		}
 		mgr.Close()
-		if missing == 0 {
-			logf("plugins: every missing plugin is installed now — restarting into them")
-			stop()
+		if missing > 0 {
+			wait = nextPendingPluginWait(wait)
+			logf("plugins: still missing %s — next retry in %s", strings.Join(pendingPlugins, ", "), wait)
+			continue
+		}
+		// Every missing plugin is installed now, but install state only proves
+		// the binary exists — not that this config's triggers/options are
+		// legal against what it actually declares. They were never checked
+		// while the type was Unavailable (which accepts any verb/event name
+		// unchecked, by design, so the boot above could proceed with no
+		// Decl). validateConfigFile runs the exact pipeline `conductor
+		// validate` does: load, build the flow stack (which now starts the
+		// real plugin and reads its real Decl), flow.Validate.
+		if err := validateConfigFile(cfgFile); err != nil {
+			logf("plugins: %s installed, but the config does not validate against it: %v", strings.Join(pendingPlugins, ", "), err)
+			logf("plugins: NOT restarting — the affected connector(s) stay disabled; fix the config and restart the daemon yourself; giving up on retrying %s", strings.Join(pendingPlugins, ", "))
 			return
 		}
+		logf("plugins: every missing plugin is installed now — restarting into them")
+		stop()
+		return
 	}
 }

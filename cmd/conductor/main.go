@@ -933,7 +933,7 @@ func cmdRun(args []string) error {
 	}
 	// conductor.updated fires on the first boot of a new release.
 	go emitUpdatedOnBoot(cfg, notifier)
-	go pendingPluginRetry(ctx, cfg, stop)
+	go pendingPluginRetry(ctx, cfg, cfgFile, stop)
 
 	// Start integrations.
 	for _, ig := range igs {
