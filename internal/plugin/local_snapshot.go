@@ -225,7 +225,13 @@ func secureAncestorDir(dir string) error {
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("stat %s: %w", dir, err)
 		}
-		if err := os.Mkdir(dir, 0o700); err != nil && !os.IsExist(err) {
+		// MkdirAll, not Mkdir: on a brand-new box nothing above the state
+		// root exists either (no ~/.local, no ~/.local/state) — the
+		// FIRST ancestor checked (the state root itself) must be able to
+		// create its own whole parent chain in one shot, exactly as
+		// secureSnapshotDir's own os.MkdirAll always has. Safe to call
+		// again for each later, already-created component: a no-op.
+		if err := os.MkdirAll(dir, 0o700); err != nil && !os.IsExist(err) {
 			return fmt.Errorf("create %s: %w", dir, err)
 		}
 		fi, err = os.Lstat(dir)

@@ -742,6 +742,48 @@ func TestSnapshotLocalCreatesMissingAncestorsAt0700(t *testing.T) {
 	}
 }
 
+// TestSnapshotLocalCreatesWhollyMissingStateTree is the e2e-caught regression
+// behind TestSnapshotLocalCreatesMissingAncestorsAt0700: on a genuinely FRESH
+// box, not even the state root's own PARENT exists yet (no ~/.local, no
+// ~/.local/state) — secureAncestorDir's first call is for the state root
+// itself, and must create its entire missing parent chain in one shot the
+// same way secureSnapshotDir's own os.MkdirAll always has. A first attempt
+// at this fix used os.Mkdir (single level) instead of os.MkdirAll for a
+// missing ancestor, which works when the test harness's t.TempDir() has
+// already created the state root's parent — exactly what
+// TestSnapshotLocalCreatesMissingAncestorsAt0700 does — but failed with
+// ENOENT the moment NOTHING above the state root exists either, which is
+// the real condition every container's first boot starts from.
+func TestSnapshotLocalCreatesWhollyMissingStateTree(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix permission bits")
+	}
+	// Several levels deep, none of which exist — config.SetStateDir does no
+	// I/O itself, so this is a legal (if unusual) state root.
+	state := filepath.Join(t.TempDir(), "nested", "parents", "do", "not", "exist", "conductor")
+	config.SetStateDir(state)
+	t.Cleanup(func() { config.SetStateDir("") })
+
+	src := filepath.Join(t.TempDir(), "conductor-widget")
+	if err := os.WriteFile(src, []byte("v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ref := refFor(t, config.UseKindConnector, src)
+	spec := SpecFromRef(ref, "", Installed{}, false)
+	if spec.SnapshotErr != nil {
+		t.Fatalf("a wholly-missing state tree must snapshot cleanly (the whole chain is created), got: %v", spec.SnapshotErr)
+	}
+	for _, p := range []string{state, filepath.Join(state, "plugins"), filepath.Join(state, "plugins", "local")} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("expected %s to exist: %v", p, err)
+		}
+		if fi.Mode().Perm() != 0o700 {
+			t.Fatalf("%s perms = %v, want 0700", p, fi.Mode().Perm())
+		}
+	}
+}
+
 // TestTouchSnapshotUsedSkipsSymlink is finding 5(b): os.Chtimes FOLLOWS a
 // symlink, so touchSnapshotUsed must Lstat first and refuse to touch anything
 // but a confirmed real directory — otherwise an attacker who swaps a
