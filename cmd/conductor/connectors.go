@@ -102,7 +102,14 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 			flowStore.Audit(e)
 		}
 	}
-	pluginMgr, err := loadConnectorPlugins(cfg, sec, auditSink)
+	// authReg is THIS STACK's own host.auth registry (finding 4,
+	// plugin-contract.md §1.9): every connector this Build call constructs
+	// registers its managed-auth authenticator into it, and spawned plugin
+	// clients are wired to it directly. A validation/dry-run build's authReg
+	// is never promoted to live (below), so its registerAuth calls can never
+	// change what the actually-running daemon's host.auth answers.
+	authReg := connector.NewAuthRegistry()
+	pluginMgr, err := loadConnectorPlugins(cfg, sec, auditSink, authReg.AuthProvider())
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +123,7 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		}
 	}()
 
-	deps := connector.Deps{Secrets: sec, Log: logf, Config: cfg, Blobs: blobs, Audit: auditSink}
+	deps := connector.Deps{Secrets: sec, Log: logf, Config: cfg, Blobs: blobs, Audit: auditSink, Auth: authReg}
 	reg, err := connector.Build(cfg, deps)
 	if err != nil {
 		return nil, err
@@ -192,6 +199,17 @@ func buildFlowStack(cfg *config.Config, flowStore flow.Store, flowNotif flow.Not
 		Blobs: blobs, Events: events,
 		Code: &code.Executor{Engines: engines, Sandbox: codeSandboxDeps()},
 	})
+	// Promote this stack's auth registry to the live one (finding 4) only
+	// when it is actually going to be used for real — flowStore is non-nil
+	// exactly for the running daemon's own stack and `conductor once`'s
+	// single stack, never for a validation/dry-run build (every such caller
+	// passes nil, nil). This is what keeps a throwaway `conductor validate`
+	// pass (or pendingPluginRetry's periodic re-validate while the daemon is
+	// already running) from ever changing what the LIVE daemon's host.auth
+	// answers.
+	if flowStore != nil {
+		connector.SetLiveAuthRegistry(authReg)
+	}
 	stackOK = true // ownership of pluginMgr passes to the returned stack
 	return &flowStack{
 		Secrets: sec, SecretVals: vals, Registry: reg, Runner: runner, Events: events,

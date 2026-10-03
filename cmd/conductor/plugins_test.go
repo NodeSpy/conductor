@@ -145,7 +145,7 @@ func TestLoadEnginePluginsDegradesOnFailedEngine(t *testing.T) {
 		Path: badBin, Sha256: badSum,
 	}}}
 	refs := map[string]config.PluginRef{u.InstallKey(): {Name: u.Name, Instance: u.Name, Use: u}}
-	mgr := plugin.NewManager(refs, t.TempDir(), state, pluginDeps(secrets.New(), func(map[string]any) {}))
+	mgr := plugin.NewManager(refs, t.TempDir(), state, pluginDeps(secrets.New(), func(map[string]any) {}, nil))
 	defer mgr.Close()
 
 	lookup, err := loadEnginePlugins(mgr)

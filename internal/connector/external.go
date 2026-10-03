@@ -89,7 +89,7 @@ func RegisterExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin
 		if err != nil {
 			return nil, err
 		}
-		registerAuth(name, au)
+		deps.Auth.register(name, au)
 		if err := enrichConnection(conn, ref, deps, allow); err != nil {
 			return nil, err
 		}

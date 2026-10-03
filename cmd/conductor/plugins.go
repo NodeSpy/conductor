@@ -27,7 +27,18 @@ import (
 // carries an OPTIONAL isolation: block — the default path is the permission
 // manifest, not OS confinement — but the egress proxy is also what enforces a
 // plugin's declared network, so it is wired either way.
-func pluginDeps(sec *secrets.Resolver, audit func(map[string]any)) plugin.Deps {
+//
+// auth is the host.auth provider a spawned plugin's Deps.Auth is wired to. A
+// connector stack (buildFlowStack) passes THIS STACK's own
+// *connector.AuthRegistry (via AuthRegistry.AuthProvider()) — spawned
+// plugins get a fresh *plugin.Client per stack, so they can be wired
+// directly to the right registry with no indirection needed (finding 4). A
+// caller with no stack of its own (a one-off `plugin show`/install-time
+// describe, or the connector-less runtime-plugin fallback) passes nil, which
+// falls back to connector.HostAuthProvider — the in-process-builtins'
+// live-stack indirection — matching every caller's behavior before finding
+// 4 existed.
+func pluginDeps(sec *secrets.Resolver, audit func(map[string]any), auth plugin.AuthProvider) plugin.Deps {
 	exe, _ := os.Executable()
 	egressUnix, egressAddr := controller.EgressProxyUnix, controller.EgressProxyFor
 	if egressUnix == nil || egressAddr == nil {
@@ -40,12 +51,15 @@ func pluginDeps(sec *secrets.Resolver, audit func(map[string]any)) plugin.Deps {
 	if len(masks) == 0 {
 		masks = []string{config.StateDir(), configDir()}
 	}
+	if auth == nil {
+		auth = connector.HostAuthProvider
+	}
 	return plugin.Deps{
 		Log:         logf,
 		Redact:      sec.Redact,
 		Audit:       audit,
 		State:       pluginStateStore(),
-		Auth:        connector.HostAuthProvider,
+		Auth:        auth,
 		HostVersion: acp.ClientVersion,
 		Sandbox: plugin.SandboxDeps{
 			Self:      exe,
@@ -99,8 +113,15 @@ func codeSandboxDeps() sandbox.LocalWrapDeps {
 // config's DERIVED plugin set (non-builtin `use:` references) with local install
 // state. It touches no network: install state is read offline.
 func pluginManagerFor(cfg *config.Config, sec *secrets.Resolver, audit func(map[string]any)) *plugin.Manager {
+	return pluginManagerForStack(cfg, sec, audit, nil)
+}
+
+// pluginManagerForStack is pluginManagerFor with an explicit per-stack
+// host.auth provider (finding 4) — nil falls back to
+// connector.HostAuthProvider, same as pluginManagerFor.
+func pluginManagerForStack(cfg *config.Config, sec *secrets.Resolver, audit func(map[string]any), auth plugin.AuthProvider) *plugin.Manager {
 	state := plugin.LoadInstallState(plugin.InstallDir())
-	return plugin.NewManager(cfg.PluginRefs(), cfg.BaseDir(), state, pluginDeps(sec, audit))
+	return plugin.NewManager(cfg.PluginRefs(), cfg.BaseDir(), state, pluginDeps(sec, audit, auth))
 }
 
 // pendingPlugins are connector plugins this boot found referenced but not
@@ -117,9 +138,10 @@ var pendingPlugins []string
 // config didn't expect, a network: block wider than the plugin declares):
 // that is the operator's file disagreeing with a plugin that is working
 // fine, not a plugin health problem, and retrying or disabling won't fix it.
-// Returns a manager the caller must Close.
-func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(map[string]any)) (*plugin.Manager, error) {
-	mgr := pluginManagerFor(cfg, sec, audit)
+// Returns a manager the caller must Close. auth is this stack's own
+// host.auth provider (finding 4) — see pluginDeps.
+func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(map[string]any), auth plugin.AuthProvider) (*plugin.Manager, error) {
+	mgr := pluginManagerForStack(cfg, sec, audit, auth)
 	// Bound the boot phase: verify+spawn+describe must not hang forever (a
 	// stalled binary read or sandbox preflight) with no deadline.
 	ctx, cancel := context.WithTimeout(context.Background(), pluginBootTimeout)
@@ -747,7 +769,7 @@ func showPlugin(cfg *config.Config, ref config.PluginRef) error {
 	}
 
 	sec := secrets.New()
-	mgr := plugin.NewManager(map[string]config.PluginRef{ref.Key(): ref}, cfg.BaseDir(), state, pluginDeps(sec, func(map[string]any) {}))
+	mgr := plugin.NewManager(map[string]config.PluginRef{ref.Key(): ref}, cfg.BaseDir(), state, pluginDeps(sec, func(map[string]any) {}, nil))
 	defer mgr.Close()
 	decl, err := mgr.StartAndDescribe(context.Background(), ref.Key())
 	if err != nil {
@@ -855,7 +877,7 @@ func reconcilePlugins(cfg *config.Config, opts plugin.Options) ([]plugin.Resolut
 func describeForInstall(cfg *config.Config) plugin.DescribeFunc {
 	return func(ctx context.Context, spec plugin.Spec) (*plugin.Decl, error) {
 		sec := secrets.New()
-		deps := pluginDeps(sec, func(map[string]any) {})
+		deps := pluginDeps(sec, func(map[string]any) {}, nil)
 		cl := plugin.NewClient(spec, deps)
 		defer cl.Close()
 		if err := cl.Start(ctx); err != nil {

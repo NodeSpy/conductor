@@ -139,10 +139,23 @@ type Client struct {
 	// again the instant a run returns — so a plugin that keeps a token, or
 	// guesses one, has nothing to present it to.
 	runs map[string]RunHost
-	// served are the instances this plugin has been called for. host.state
-	// answers only for these: a plugin reads and writes its OWN instances'
-	// state, never another plugin's or an instance it was never handed.
+	// served are every instance this plugin has EVER been called for,
+	// including a boot-time plugin.validate pass that runs for every
+	// configured instance of this plugin's type whether or not this specific
+	// client process ever starts a source or is invoked for it (serve() is
+	// called from Validate too). It is deliberately broad: it only backs
+	// stopServed's best-effort plugin.stop courtesy, where touching an
+	// instance this process never really served is harmless.
 	served map[string]bool
+	// active are the instances this plugin has been handed REAL traffic for:
+	// a started source, a poll, a translate, or an invoke — never a mere
+	// plugin.validate (finding 5). host.state and host.auth answer only for
+	// these: a plugin process serving several configured instances of the
+	// same type (one spawned process, several `connectors:` entries) must
+	// not be able to read or mint another, merely-validated sibling
+	// instance's state or managed-auth token just because it shares the
+	// process. Validate alone must never be enough to unlock either.
+	active map[string]bool
 }
 
 // RunHost authorizes and executes ONE data-plane op on behalf of a run. It is
@@ -174,7 +187,7 @@ func NewClient(spec Spec, deps Deps) *Client {
 	if deps.dial == nil {
 		deps.dial = realDial
 	}
-	c := &Client{spec: spec, runs: map[string]RunHost{}, served: map[string]bool{}}
+	c := &Client{spec: spec, runs: map[string]RunHost{}, served: map[string]bool{}, active: map[string]bool{}}
 	c.reloadCond = sync.NewCond(&c.mu)
 	deps.onNotify = c.handleNotify
 	deps.onRequest = c.handleRequest
@@ -216,6 +229,7 @@ func (c *Client) StartSource(ctx context.Context, req StartSourceRequest, emit f
 // Done channel closes when that plugin process goes away.
 func (c *Client) startSource(ctx context.Context, req StartSourceRequest, emit func(json.RawMessage)) (transport, error) {
 	c.serve(req.Instance)
+	c.markActive(req.Instance)
 	c.mu.Lock()
 	c.onEvent = emit
 	if c.sinks == nil {
@@ -326,11 +340,33 @@ func (c *Client) serves(instance string) bool {
 	return c.served[instance]
 }
 
+// markActive records that this plugin was handed REAL traffic for instance —
+// a started source, a poll, a translate, or an invoke (finding 5) — never
+// from Validate, which runs for every configured instance regardless of
+// whether this client is ever really used for it.
+func (c *Client) markActive(instance string) {
+	if instance == "" {
+		return
+	}
+	c.mu.Lock()
+	c.active[instance] = true
+	c.mu.Unlock()
+}
+
+// isActive reports whether instance has been handed real traffic (see
+// markActive) — the guard host.state and host.auth use, tighter than serves.
+func (c *Client) isActive(instance string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.active[instance]
+}
+
 // Poll asks a source to poll: now (a catch-up pass), for one target (the
 // returned events are forced), or as a dry run. ErrNotSupported when the
 // plugin does not poll.
 func (c *Client) Poll(ctx context.Context, req sdk.PollRequest) ([]sdk.SourceEvent, error) {
 	c.serve(req.Instance)
+	c.markActive(req.Instance)
 	var res sdk.PollResult
 	if err := c.call(ctx, sdk.MethodPoll, req, &res); err != nil {
 		return nil, notSupported(err)
@@ -341,6 +377,7 @@ func (c *Client) Poll(ctx context.Context, req sdk.PollRequest) ([]sdk.SourceEve
 // Translate decodes one raw delivery into events (replay, once).
 func (c *Client) Translate(ctx context.Context, req sdk.TranslateRequest) ([]sdk.SourceEvent, error) {
 	c.serve(req.Instance)
+	c.markActive(req.Instance)
 	var res sdk.TranslateResult
 	if err := c.call(ctx, sdk.MethodTranslate, req, &res); err != nil {
 		return nil, notSupported(err)
@@ -348,7 +385,12 @@ func (c *Client) Translate(ctx context.Context, req sdk.TranslateRequest) ([]sdk
 	return res.Events, nil
 }
 
-// Validate runs the plugin's own config and trigger checks.
+// Validate runs the plugin's own config and trigger checks. Deliberately
+// does NOT markActive: Validate runs at boot (and on every reload/validate
+// pass) for every configured instance of this plugin's type, whether or not
+// this process ever really serves it — marking active here would let a
+// plugin process serving several instances answer host.state/host.auth for
+// a sibling instance it was merely validated against (finding 5).
 func (c *Client) Validate(ctx context.Context, req sdk.ValidateRequest) ([]sdk.Problem, error) {
 	c.serve(req.Instance)
 	var res sdk.ValidateResult
@@ -452,8 +494,12 @@ func (c *Client) handleRequest(ctx context.Context, method string, params json.R
 		if err := json.Unmarshal(params, &req); err != nil {
 			return nil, acp.NewRPCError(acp.CodeInvalidParams, err.Error())
 		}
-		// Instance-scoped, and only for instances this plugin was handed.
-		if !c.serves(req.Instance) {
+		// Instance-scoped, and only for instances this plugin was handed REAL
+		// traffic for (isActive) — a boot-time plugin.validate pass alone
+		// (serves, but never isActive) is not enough (finding 5): a plugin
+		// process serving several configured instances of the same type must
+		// not read or write a merely-validated sibling's state.
+		if !c.isActive(req.Instance) {
 			return sdk.HostStateResult{Error: fmt.Sprintf("instance %q is not one this plugin serves", req.Instance)}, nil
 		}
 		return c.deps.State.Do(c.spec.Key(), req), nil
@@ -464,10 +510,12 @@ func (c *Client) handleRequest(ctx context.Context, method string, params json.R
 			return nil, acp.NewRPCError(acp.CodeInvalidParams, err.Error())
 		}
 		// Instance-scoped exactly like host.state: only for instances this
-		// plugin was handed — never another plugin's, and never an instance
-		// this one merely happens to share a process with but was never
-		// invoked/started for.
-		if !c.serves(req.Instance) {
+		// plugin was handed REAL traffic for — never another plugin's, and
+		// never a sibling instance this one merely happens to share a
+		// process with but was only ever validated for, not invoked/started
+		// (finding 5: serves() alone was not enough of a guard, because
+		// Validate marks it too).
+		if !c.isActive(req.Instance) {
 			return sdk.HostAuthResult{Error: fmt.Sprintf("instance %q is not one this plugin serves", req.Instance)}, nil
 		}
 		if c.deps.Auth == nil {
@@ -715,6 +763,7 @@ func (c *Client) DescribeInstance(ctx context.Context, instance string, config m
 // subprocess down so the next call restarts it (subject to backoff).
 func (c *Client) Invoke(ctx context.Context, req InvokeRequest) (map[string]any, error) {
 	c.serve(req.Instance)
+	c.markActive(req.Instance)
 	var res InvokeResult
 	if err := c.call(ctx, MethodInvoke, req, &res); err != nil {
 		return nil, err

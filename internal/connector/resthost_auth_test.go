@@ -28,9 +28,9 @@ import (
 // 401. This test wires the real pieces — internal/builtins/rest's handler, a
 // real internal/plugin.Client driving it in-process (the same path
 // RegisterInProcessConnector uses), and a real managed-auth authenticator
-// wired into HostAuthProvider through registerAuth — exactly the daemon's
-// own wiring (cmd/conductor/plugins.go, internal/connector/inprocess.go),
-// not a shortcut mock.
+// wired into a per-stack AuthRegistry (finding 4) through register — exactly
+// the daemon's own wiring (cmd/conductor/plugins.go, internal/connector/
+// inprocess.go), not a shortcut mock.
 func TestRestOAuth2PollSurvivesTokenRotation(t *testing.T) {
 	var (
 		mu                              sync.Mutex
@@ -80,15 +80,11 @@ func TestRestOAuth2PollSurvivesTokenRotation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newAuthenticator: %v", err)
 	}
-	registerAuth("gh", au)
-	t.Cleanup(func() {
-		authRegistry.mu.Lock()
-		delete(authRegistry.byI, "gh")
-		authRegistry.mu.Unlock()
-	})
+	authReg := NewAuthRegistry()
+	authReg.register("gh", au)
 
 	spec := plugin.Spec{Name: "rest", Kind: plugin.KindConnector, Provides: "rest", InProcess: rest.New()}
-	cl := plugin.NewClient(spec, plugin.Deps{Auth: HostAuthProvider})
+	cl := plugin.NewClient(spec, plugin.Deps{Auth: authReg.AuthProvider()})
 	defer cl.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())

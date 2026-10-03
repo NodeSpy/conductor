@@ -80,7 +80,7 @@ func TestHostStateOnlyForServedInstances(t *testing.T) {
 	if r := put("jira"); r.OK {
 		t.Fatal("state was written for an instance the plugin was never handed")
 	}
-	c.serve("jira")
+	c.markActive("jira")
 	if r := put("jira"); !r.OK {
 		t.Fatalf("state refused for a served instance: %+v", r)
 	}
@@ -104,7 +104,7 @@ func TestHostAuthRefusedWithoutManagedAuth(t *testing.T) {
 	sp := connectorSpec()
 	sp.BinPath = writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
 	c := NewClient(sp, Deps{Auth: fakeAuthProvider{}})
-	c.serve("gh")
+	c.markActive("gh")
 	res, rpcErr := c.handleRequest(context.Background(), sdk.MethodHostAuth,
 		mustJSON(sdk.HostAuthRequest{Instance: "gh"}))
 	if rpcErr != nil {
@@ -123,7 +123,7 @@ func TestHostAuthRefusedAcrossInstances(t *testing.T) {
 	sp := connectorSpec()
 	sp.BinPath = writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
 	c := NewClient(sp, Deps{Auth: fakeAuthProvider{"gh": "tok-gh", "jira": "tok-jira"}})
-	c.serve("gh")
+	c.markActive("gh")
 	ask := func(inst string) sdk.HostAuthResult {
 		res, rpcErr := c.handleRequest(context.Background(), sdk.MethodHostAuth, mustJSON(sdk.HostAuthRequest{Instance: inst}))
 		if rpcErr != nil {
@@ -141,8 +141,61 @@ func TestHostAuthRefusedAcrossInstances(t *testing.T) {
 	}
 	// Once also handed "jira", it works too — scoping is about having been
 	// SERVED, not about some fixed one-instance-per-client rule.
-	c.serve("jira")
+	c.markActive("jira")
 	if r := ask("jira"); !r.OK || r.Token != "tok-jira" {
 		t.Fatalf("host.auth for a later-served instance = %+v", r)
+	}
+}
+
+// TestHostAuthRefusedForValidatedOnlySibling is finding 5's regression test:
+// Validate (the boot-time config/trigger check that runs for EVERY
+// configured instance of a plugin's type, whether or not this process ever
+// really serves it) calls serve() but must never be enough, alone, to unlock
+// host.state/host.auth for that instance — only real traffic (a started
+// source, a poll, a translate, or an invoke) does. Without this, a plugin
+// process spawned for instance "a" but also named in the config for sibling
+// instance "b" (boot validates every configured instance against its type's
+// client) could fetch "b"'s managed-auth token merely by having been
+// validated against it, never having actually started or been invoked for
+// it.
+func TestHostAuthRefusedForValidatedOnlySibling(t *testing.T) {
+	sp := connectorSpec()
+	sp.BinPath = writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	c := NewClient(sp, Deps{Auth: fakeAuthProvider{"a": "tok-a", "b": "tok-b"}})
+	// "a" is this client's real instance: started/invoked, same as
+	// production traffic (every real call site does both serve() and
+	// markActive(), e.g. Invoke).
+	c.serve("a")
+	c.markActive("a")
+	// "b" is only ever VALIDATED against this client (serve(), never
+	// markActive()) — exactly what Client.Validate does, deliberately, for
+	// every configured instance at boot.
+	c.serve("b")
+
+	ask := func(inst string) sdk.HostAuthResult {
+		res, rpcErr := c.handleRequest(context.Background(), sdk.MethodHostAuth, mustJSON(sdk.HostAuthRequest{Instance: inst}))
+		if rpcErr != nil {
+			t.Fatal(rpcErr)
+		}
+		return res.(sdk.HostAuthResult)
+	}
+	if r := ask("a"); !r.OK || r.Token != "tok-a" {
+		t.Fatalf("host.auth for the client's own active instance = %+v", r)
+	}
+	if r := ask("b"); r.OK {
+		t.Fatalf("host.auth answered OK for a sibling instance this client only ever validated, never started/invoked: %+v", r)
+	}
+
+	// host.state is scoped identically.
+	getState := func(inst string) sdk.HostStateResult {
+		res, rpcErr := c.handleRequest(context.Background(), sdk.MethodHostState,
+			mustJSON(sdk.HostStateRequest{Instance: inst, Op: "get", Key: "k"}))
+		if rpcErr != nil {
+			t.Fatal(rpcErr)
+		}
+		return res.(sdk.HostStateResult)
+	}
+	if r := getState("b"); r.OK {
+		t.Fatalf("host.state answered OK for a sibling instance this client only ever validated: %+v", r)
 	}
 }

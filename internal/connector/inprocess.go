@@ -94,7 +94,7 @@ func RegisterInProcessConnector(h sdk.Handler) {
 		if err != nil {
 			return nil, fmt.Errorf("builtin %s: %w", d.Type, err)
 		}
-		registerAuth(name, au)
+		deps.Auth.register(name, au)
 		if err := enrichConnection(conn, ref, deps, nil); err != nil {
 			return nil, fmt.Errorf("builtin %s: %w", d.Type, err)
 		}

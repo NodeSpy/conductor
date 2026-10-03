@@ -129,6 +129,10 @@ type authenticator struct {
 	access  string
 	expiry  time.Time
 	refresh string // current refresh token value
+	// lastForcedRefresh is when host.auth's {refresh:true} last actually
+	// dropped the cached token (finding 6's cooldown) — zero until the
+	// first one.
+	lastForcedRefresh time.Time
 }
 
 // newAuthenticator resolves an auth block's credential fields. With a
@@ -342,64 +346,143 @@ func postTokenForm(ctx context.Context, a authConfig, form url.Values) (tokenRes
 	return tr, nil
 }
 
-// authRegistry backs host.auth (plugin-contract.md §1): the live managed-auth
+// AuthRegistry backs host.auth (plugin-contract.md §1): the live managed-auth
 // authenticator for each connector instance that has one, looked up by
-// instance name. Instance names are globally unique (`connectors:` is one Go
-// map across every type), so one flat registry is enough even though several
-// instances can share a single plugin.Client — a spawned plugin serving more
-// than one configured instance, or an in-process builtin's one shared Client
+// instance name, for ONE built connector stack. Instance names are globally
+// unique WITHIN a config (`connectors:` is one Go map across every type), so
+// one flat registry per stack is enough even though several instances can
+// share a single plugin.Client — a spawned plugin serving more than one
+// configured instance, or an in-process builtin's one shared Client
 // (RegisterInProcessConnector's sync.Once cl) serving every instance of that
-// builtin type. Populated as each instance is built (buildManagedAuth, called
-// from both RegisterExternalConnector's and RegisterInProcessConnector's
-// builder); a later Build (config reload) just overwrites an instance's
-// entry — there is no explicit removal, the same posture host.state's
-// StateStore takes today (Drop exists but nothing calls it yet).
-var authRegistry = struct {
+// builtin type.
+//
+// It is PER-STACK (finding 4), not package-global: each connector.Build call
+// gets its own, created by the caller and threaded through Deps.Auth, so a
+// throwaway validation/dry-run build's registerAuth calls land in a registry
+// nobody ever reads from, never in the one backing the LIVE daemon's
+// host.auth answers. A later Build for a NEW live stack (config reload) gets
+// a brand new registry populated only by that build's own instances, so an
+// instance removed from config is simply never registered into it — gone on
+// rebuild, with no explicit delete needed.
+type AuthRegistry struct {
 	mu  sync.RWMutex
 	byI map[string]*authenticator
-}{byI: map[string]*authenticator{}}
-
-// registerAuth records instance's managed-auth authenticator, when it has
-// one, so host.auth can find it later. A no-op for a nil au (no managed
-// auth), so every connector type can call it unconditionally right after
-// buildManagedAuth.
-func registerAuth(instance string, au *authenticator) {
-	if au == nil {
-		return
-	}
-	authRegistry.mu.Lock()
-	authRegistry.byI[instance] = au
-	authRegistry.mu.Unlock()
 }
 
-// HostAuthProvider is the internal/plugin.AuthProvider every plugin.Client's
-// Deps.Auth is wired to (cmd/conductor/plugins.go for spawned plugins,
-// RegisterInProcessConnector's shared Client for builtins) — the one seam
-// that lets internal/plugin answer a plugin's host.auth call without
-// importing internal/connector (which already imports internal/plugin to
-// drive *plugin.Client — the reverse import would cycle).
-var HostAuthProvider plugin.AuthProvider = hostAuthProvider{}
+// NewAuthRegistry returns an empty, ready-to-use registry for one connector
+// stack.
+func NewAuthRegistry() *AuthRegistry { return &AuthRegistry{byI: map[string]*authenticator{}} }
 
-type hostAuthProvider struct{}
+// register records instance's managed-auth authenticator, when it has one,
+// so host.auth can find it later. A no-op for a nil au (no managed auth) or
+// a nil receiver (a caller that built no registry at all), so every
+// connector type can call it unconditionally right after buildManagedAuth.
+func (r *AuthRegistry) register(instance string, au *authenticator) {
+	if r == nil || au == nil {
+		return
+	}
+	r.mu.Lock()
+	r.byI[instance] = au
+	r.mu.Unlock()
+}
 
-// AccessToken looks up instance's authenticator and returns its current
-// token (or a freshly minted one, when refresh is true), refusing an
-// instance with no managed oauth2 auth. It is deliberately silent about
-// which is true for an unregistered name (never served vs. never had managed
-// auth) — the caller (internal/plugin's handleRequest) already refused the
-// first case before this is ever reached (c.serves(instance)); from here on
-// out "no managed auth" is the one honest answer either way.
-func (hostAuthProvider) AccessToken(ctx context.Context, instance string, refresh bool) (string, error) {
-	authRegistry.mu.RLock()
-	au := authRegistry.byI[instance]
-	authRegistry.mu.RUnlock()
+// refreshCooldown bounds how often host.auth's {refresh:true} may force a
+// fresh token fetch, PER AUTHENTICATOR (finding 6): without it, a plugin
+// calling host.auth with refresh:true on every poll hits the token endpoint
+// every time, even when the token it already has is nowhere near expiry. A
+// var so a test shrinks it rather than waiting for real.
+var refreshCooldown = 30 * time.Second
+
+// accessToken answers host.auth for instance: the cached token, or a fresh
+// one when none is cached or it's past expiry — refresh additionally forces
+// a re-fetch, but only once per refreshCooldown for this instance; a caller
+// within the cooldown gets the cached token, same as a plain (non-refresh)
+// ask. Refusing an instance with no managed oauth2 auth is deliberately
+// silent about WHY an unregistered name has none (never active vs. never had
+// managed auth) — the caller (internal/plugin's handleRequest) already
+// refused the "never handed this instance" case before this is ever reached
+// (c.isActive(instance)); from here on out "no managed auth" is the one
+// honest answer either way.
+func (r *AuthRegistry) accessToken(ctx context.Context, instance string, refresh bool) (string, error) {
+	if r == nil {
+		return "", fmt.Errorf("connector %q has no managed oauth2 auth", instance)
+	}
+	r.mu.RLock()
+	au := r.byI[instance]
+	r.mu.RUnlock()
 	if au == nil || !au.oauth2() {
 		return "", fmt.Errorf("connector %q has no managed oauth2 auth", instance)
 	}
 	if refresh {
-		au.invalidate()
+		au.mu.Lock()
+		now := time.Now()
+		if au.lastForcedRefresh.IsZero() || now.Sub(au.lastForcedRefresh) >= refreshCooldown {
+			au.lastForcedRefresh = now
+			au.access = ""
+		}
+		au.mu.Unlock()
 	}
 	return au.accessToken(ctx)
+}
+
+// AuthProvider adapts r to the internal/plugin.AuthProvider seam that
+// plugin.Client's Deps.Auth takes. Spawned plugins get a fresh *plugin.Client
+// per connector stack (loadConnectorPlugins), so they're wired to exactly
+// this stack's registry directly. In-process builtins share ONE
+// *plugin.Client for the whole daemon process's lifetime (RegisterInProcess
+// Connector's sync.Once), so they go through HostAuthProvider below instead,
+// which forwards to whichever registry is CURRENTLY live.
+func (r *AuthRegistry) AuthProvider() plugin.AuthProvider { return authRegistryProvider{r} }
+
+type authRegistryProvider struct{ reg *AuthRegistry }
+
+func (p authRegistryProvider) AccessToken(ctx context.Context, instance string, refresh bool) (string, error) {
+	return p.reg.accessToken(ctx, instance, refresh)
+}
+
+// liveAuth is the current LIVE connector stack's AuthRegistry — the one
+// SetLiveAuthRegistry points at whenever a stack actually becomes the
+// daemon's operating one (never a throwaway validate/dry-run build). It
+// exists because in-process builtins' shared plugin.Client is constructed
+// exactly once per process (RegisterInProcessConnector's sync.Once) and so
+// cannot simply be wired to one stack's registry directly the way a spawned
+// plugin's fresh-per-stack Client is — it must always resolve to whichever
+// stack is live NOW, not whichever stack happened to construct it first
+// (which, in a daemon that validates candidate configs while running,
+// could easily have been a throwaway one).
+var liveAuth struct {
+	mu  sync.RWMutex
+	reg *AuthRegistry
+}
+
+// SetLiveAuthRegistry records reg as the current live stack's auth registry.
+// Call this ONLY for a stack that is actually becoming the daemon's
+// operating one — never for a validation/dry-run build — so a throwaway
+// build's registerAuth calls can never change what the live daemon's
+// host.auth answers (finding 4).
+func SetLiveAuthRegistry(reg *AuthRegistry) {
+	liveAuth.mu.Lock()
+	liveAuth.reg = reg
+	liveAuth.mu.Unlock()
+}
+
+// HostAuthProvider is the internal/plugin.AuthProvider every in-process
+// builtin's shared plugin.Client (RegisterInProcessConnector) is wired to at
+// its one-time construction — the one seam that lets internal/plugin answer
+// a plugin's host.auth call without importing internal/connector (which
+// already imports internal/plugin to drive *plugin.Client — the reverse
+// import would cycle). It always forwards to whichever registry
+// SetLiveAuthRegistry most recently recorded, so it tracks the live stack
+// across reloads instead of freezing on whichever stack built it first.
+var HostAuthProvider plugin.AuthProvider = hostAuthProvider{}
+
+type hostAuthProvider struct{}
+
+func (hostAuthProvider) AccessToken(ctx context.Context, instance string, refresh bool) (string, error) {
+	liveAuth.mu.RLock()
+	reg := liveAuth.reg
+	liveAuth.mu.RUnlock()
+	return reg.accessToken(ctx, instance, refresh)
 }
 
 // resolveNamedSecrets resolves the config's named secrets: block into the

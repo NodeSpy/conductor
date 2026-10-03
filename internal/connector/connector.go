@@ -397,6 +397,14 @@ type Deps struct {
 	// plugin@version (#54 §8.1). nil in contexts with no audit sink; callers
 	// must nil-check.
 	Audit func(map[string]any)
+	// Auth is the per-stack managed-auth registry (finding 4,
+	// plugin-contract.md §1.9): every connector builder registers its
+	// instance's authenticator into THIS registry, never a package-global
+	// one, so a throwaway validation/dry-run Build can never change what a
+	// live daemon's host.auth answers. nil is safe (AuthRegistry's methods
+	// are nil-receiver-safe no-ops) — a caller that doesn't care about
+	// host.auth (most tests) doesn't need to construct one.
+	Auth *AuthRegistry
 }
 
 var (
