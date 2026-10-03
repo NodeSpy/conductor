@@ -63,6 +63,17 @@ services:
     environment:
       LISTEN: ":8080"
 
+  # Group Y (plugin-contract.md §2.4, `listeners`): a hermetic stand-in for
+  # smee.io — accepts a POST to any channel path and re-broadcasts it as an
+  # SSE frame, in smee's own wire format, to that channel's subscribers. The
+  # real conductor-plugins smee connector (ghsmee, connectors.e2e.yaml)
+  # relays those deliveries to the real github plugin's webhook listener.
+  mock-smee:
+    <<: *image
+    command: ["mocksmee"]
+    environment:
+      LISTEN: ":8080"
+
   conductor:
     <<: *image
     depends_on: [forge, mock-github, sink-catcher]
@@ -102,7 +113,7 @@ services:
   # the remote-execution scenario.
   conductor-conn:
     <<: *image
-    depends_on: [forge, mock-github, sink-catcher]
+    depends_on: [forge, mock-github, sink-catcher, mock-smee]
     environment:
       HOME: /home/conductor
       PC_GITHUB_API_BASE: "http://mock-github:8080"

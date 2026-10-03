@@ -20,6 +20,7 @@ ENV CGO_ENABLED=0
 RUN go build -o /out/conductor ./cmd/conductor \
  && go build -o /out/fakepaseo     ./test/e2e/services/fakepaseo \
  && go build -o /out/mockgithub    ./test/e2e/services/mockgithub \
+ && go build -o /out/mocksmee      ./test/e2e/services/mocksmee \
  && go build -o /out/sinkcatcher   ./test/e2e/services/sinkcatcher \
  && go build -o /out/fakeopencode  ./test/e2e/services/fakeopencode \
  && go build -o /out/fakeagentdeck ./test/e2e/services/fakeagentdeck \
@@ -30,15 +31,17 @@ RUN go build -o /out/conductor ./cmd/conductor \
 
 # ---- vendor connector plugins ----
 # Every vendor connector is a plugin (conductor-plugins, connectors/<name>):
-# each daemon's github, slack, discord, ntfy, pushover and notifiarr
-# connectors name these binaries. GITHUB_PLUGIN_VERSION pins the build (a tag
-# or commit of the plugins module); a locally built github plugin staged into
-# test/e2e/plugin-bin/ (GITHUB_PLUGIN_BIN, run.sh) replaces that one below.
+# each daemon's github, slack, discord, ntfy, pushover, notifiarr and smee
+# (the `listeners` connection semantic's exposure half, group Y) connectors
+# name these binaries. GITHUB_PLUGIN_VERSION pins the build (a tag or commit
+# of the plugins module); a locally built github and/or smee plugin staged
+# into test/e2e/plugin-bin/ (GITHUB_PLUGIN_BIN / SMEE_PLUGIN_BIN, run.sh)
+# replaces the pinned one below.
 FROM golang:1.26-alpine AS github-plugin
 ARG GITHUB_PLUGIN_VERSION=03d4255
 RUN apk add --no-cache git
 ENV CGO_ENABLED=0 GOBIN=/out
-RUN set -e; for p in github slack discord ntfy pushover notifiarr; do \
+RUN set -e; for p in github slack discord ntfy pushover notifiarr smee; do \
       go install "github.com/NodeSpy/conductor-plugins/connectors/$p@${GITHUB_PLUGIN_VERSION}"; \
       mv "/out/$p" "/out/conductor-$p"; \
     done
@@ -56,11 +59,14 @@ COPY --from=github-plugin /out/ /usr/local/bin/
 # (group X, the listeners connection semantic) is the same kind of reference
 # plugin, named directly by a connector's `use:`.
 RUN chmod 0755 /usr/local/bin/conductor-acme-engine /usr/local/bin/conductor-acme-listener
-# A github plugin the run supplied (GITHUB_PLUGIN_BIN, staged into
-# test/e2e/plugin-bin/) replaces the pinned build.
+# A github and/or smee plugin the run supplied (GITHUB_PLUGIN_BIN /
+# SMEE_PLUGIN_BIN, staged into test/e2e/plugin-bin/) replaces the pinned
+# build — group Y needs both built from the same (unpublished) plugins
+# commit that declares the listeners connection semantic.
 COPY --from=build /src/test/e2e/plugin-bin/ /opt/plugin-bin/
 RUN if [ -f /opt/plugin-bin/conductor-github ]; then cp /opt/plugin-bin/conductor-github /usr/local/bin/conductor-github; fi \
- && chmod 0755 /usr/local/bin/conductor-github
+ && if [ -f /opt/plugin-bin/conductor-smee ]; then cp /opt/plugin-bin/conductor-smee /usr/local/bin/conductor-smee; fi \
+ && chmod 0755 /usr/local/bin/conductor-github /usr/local/bin/conductor-smee
 # The fake paseo is installed as `paseo` too, so a config without an explicit
 # paseo_bin: still resolves it on PATH. The fake tool runtimes are installed under
 # the exact names conductor's controllers exec on PATH (stub mode): the cli

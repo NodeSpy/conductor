@@ -12,6 +12,13 @@
 #                         mock's `api_base:`); the image builds the pinned version
 #                         (Dockerfile GITHUB_PLUGIN_VERSION) unless this names a
 #                         locally built one to stage into the image.
+#   SMEE_PLUGIN_BIN     — same, for the conductor-plugins smee exposure plugin
+#                         (/usr/local/bin/conductor-smee; group Y's `ghsmee`
+#                         connector). Needed alongside GITHUB_PLUGIN_BIN
+#                         whenever the two must be built from the same
+#                         unpublished plugins commit (e.g. one that declares
+#                         the `listeners` connection semantic the published
+#                         pin predates).
 #
 # Only groups whose milestones have merged are asserted; the rest are recorded as
 # SKIP with the milestone that unlocks them. Set KEEP=1 to leave the stack up.
@@ -93,18 +100,45 @@ post_webhook_to() {
   '
 }
 
+# post_webhook_via_smee <event> <fixture> — sign a fixture exactly like
+# post_webhook_to does, but deliver it to the mock smee channel (group Y)
+# instead of straight at a daemon's own webhook receiver: the real smee
+# plugin's relay is what gets it from there to ghlisten's listener.
+post_webhook_via_smee() {
+  local event="$1" fixture="$2"
+  cexec conductor-conn bash -c '
+    set -e
+    f="/fixtures/'"$fixture"'"
+    sig=$(openssl dgst -sha256 -hmac e2e-webhook-secret "$f" | sed "s/^.*= //")
+    curl -s -o /dev/null -w "%{http_code}" -X POST http://mock-smee:8080/e2e-gh-channel \
+      -H "X-GitHub-Event: '"$event"'" \
+      -H "X-GitHub-Delivery: $(head -c16 /dev/urandom | od -An -tx1 | tr -d " \n")" \
+      -H "X-Hub-Signature-256: sha256=$sig" \
+      -H "Content-Type: application/json" \
+      --data-binary @"$f"
+  '
+}
+
 banner() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 
-# stage_github_plugin puts GITHUB_PLUGIN_BIN (a locally built github plugin)
-# where the image build picks it up, or clears a stale one so the pinned build
-# is used.
+# stage_github_plugin puts GITHUB_PLUGIN_BIN and/or SMEE_PLUGIN_BIN (locally
+# built plugins) where the image build picks them up, or clears any stale
+# staged binary so the pinned build is used instead. Group Y (the listeners
+# connection semantic against the real github+smee plugins) needs both built
+# from the same unpublished conductor-plugins commit when the published pin
+# predates the decl it exercises.
 stage_github_plugin() {
   mkdir -p "$DIR/plugin-bin"
-  rm -f "$DIR/plugin-bin/conductor-github"
+  rm -f "$DIR/plugin-bin/conductor-github" "$DIR/plugin-bin/conductor-smee"
   if [ -n "${GITHUB_PLUGIN_BIN:-}" ]; then
     [ -x "$GITHUB_PLUGIN_BIN" ] || { echo "GITHUB_PLUGIN_BIN=$GITHUB_PLUGIN_BIN is not an executable"; exit 1; }
     cp "$GITHUB_PLUGIN_BIN" "$DIR/plugin-bin/conductor-github"
     echo "github plugin: $GITHUB_PLUGIN_BIN (staged into the image)"
+  fi
+  if [ -n "${SMEE_PLUGIN_BIN:-}" ]; then
+    [ -x "$SMEE_PLUGIN_BIN" ] || { echo "SMEE_PLUGIN_BIN=$SMEE_PLUGIN_BIN is not an executable"; exit 1; }
+    cp "$SMEE_PLUGIN_BIN" "$DIR/plugin-bin/conductor-smee"
+    echo "smee plugin: $SMEE_PLUGIN_BIN (staged into the image)"
   fi
 }
 
@@ -1558,6 +1592,46 @@ group_X_listeners() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# Group Y — the SAME `listeners` connection semantic as group X, proven with
+# the REAL github and smee plugins (ghlisten/ghsmee, connectors.e2e.yaml)
+# instead of the reference/fake pair: a correctly HMAC-signed GitHub webhook
+# delivery posted to the mock smee service's channel is relayed over a real
+# SSE connection by the real smee plugin, replayed as an HTTP POST by that
+# same plugin, and verified + dispatched by the real github plugin's webhook
+# listener — the whole exposure chain, with no fakes anywhere in it but the
+# upstream GitHub and smee.io services themselves.
+# ---------------------------------------------------------------------------
+group_Y_listeners_github_smee() {
+  banner "Group Y — listeners: the REAL github + smee plugins relayed through a mock smee channel"
+  func_reset_sink
+
+  # func/filterfire#1 (func_filter_fire.json) is an existing review_requested
+  # fixture naming conductor-user as the requested reviewer — reused here
+  # unchanged: ghlisten is a distinct connector instance from gh/the func/*
+  # groups' own connector, so its event stream is independent regardless of
+  # which repo the payload names.
+  post_webhook_via_smee pull_request func_filter_fire.json >/dev/null
+
+  if wait_for 30 slack_sink_has "Y-LISTENERS-GITHUB fired func/filterfire#1"; then
+    ok "Y2 a signed delivery relayed mock-smee -> smee plugin -> github plugin fired a trigger" Y Y2
+  else
+    bad "Y2 delivery relayed through the real smee plugin dispatched" Y Y2 "no Y-LISTENERS-GITHUB capture"
+  fi
+
+  # Y1: the engine opened ghsmee's exposure for ghlisten's webhook.listen and
+  # filled webhook.public_url with its channel URL — observable because the
+  # github plugin logs the public URL it was handed (ghsource/http.go) the
+  # moment its webhook listener starts, which is the plugin-side proof url_to
+  # actually reached it (as opposed to Y2 alone, which would also pass if the
+  # plugin fell back to some other address it guessed correctly).
+  if dc logs conductor-conn 2>&1 | grep -q "github\[ghlisten\]: webhook listener .* is reachable at http://mock-smee:8080/e2e-gh-channel"; then
+    ok "Y1 the engine opened ghsmee for ghlisten's listener and filled in webhook.public_url" Y Y1
+  else
+    bad "Y1 exposure URL reached the plugin" Y Y1 "no 'reachable at http://mock-smee:8080/e2e-gh-channel' in the github plugin's log"
+  fi
+}
+
 main() {
   trap teardown EXIT
   setup
@@ -1593,6 +1667,7 @@ main() {
   group_U_filter
   group_V_engine_plugin
   group_X_listeners
+  group_Y_listeners_github_smee
   group_W_stepdone
   print_matrix
   [ "$FAIL" -eq 0 ]

@@ -59,6 +59,48 @@ connectors:
     listen: "0.0.0.0:18877"
     expose: tun
 
+  # Group Y — the SAME `listeners` semantic as group X, but with the REAL
+  # github and smee plugins instead of the reference/fake pair: ghlisten's
+  # `webhook.expose: ghsmee` has the engine open an exposure on ghsmee for
+  # webhook.listen at instance start, and fill webhook.public_url with
+  # whatever ghsmee's `open` verb returns (its smee channel URL) — the
+  # github plugin logs that URL on boot (ghsource/http.go), which is this
+  # group's observable proof that url_to reached the plugin. App-less (no
+  # verb is ever invoked on this instance, only its webhook source): a
+  # review_requested delivery is entirely payload-driven, no GitHub API
+  # calls needed to decide whether it fires.
+  ghlisten:
+    use: /usr/local/bin/conductor-github
+    api_base: http://mock-github:8080
+    # App-less: a literal static token, never actually used (no verb is ever
+    # invoked on this instance) — but Source.Start's ensureClients resolves
+    # SOME credential unconditionally, even for a pure webhook listener, and
+    # falls back to `gh auth token` when neither app: nor token: is set,
+    # which fails hard in this image (no gh binary).
+    token: e2e-ghlisten-static-token
+    webhook:
+      # 127.0.0.1, not 0.0.0.0: unlike ghlisten's plain-webhook sibling `gh`
+      # (never dialed FROM inside this container), ghsmee's relay actually
+      # HTTP-POSTs to this address from the same container — a real
+      # destination, not just a bind address.
+      listen: "127.0.0.1:8788"
+      path: /webhook
+      secret: e2e-webhook-secret
+      verify_signature: true
+      expose: ghsmee
+    sweep: { enabled: false }
+    me: { logins: [conductor-user] }
+
+  # ghsmee is the real conductor-plugins smee connector: `channel:` is
+  # pinned straight at the mock smee service (test/e2e/services/mocksmee)
+  # instead of smee.io's own /new channel-creation redirect, and `path:`
+  # matches ghlisten's own webhook.path so a relayed delivery replays to
+  # exactly the URL ghlisten's listener is bound to.
+  ghsmee:
+    use: /usr/local/bin/conductor-smee
+    channel: "http://mock-smee:8080/e2e-gh-channel"
+    path: /webhook
+
 hosts:
   selfbox:
     host: 127.0.0.1 # this container's own sshd (started by entrypoint-conn.sh)
@@ -580,6 +622,20 @@ triggers:
       - id: tell
         uses: slack.post
         options: { channel: CLISTEN, text: "X-LISTENERS-DELIVERY seq={{.seq}} url={{.public_url}}" }
+
+  # Group Y — the SAME semantic, proven with the REAL github+smee plugins
+  # (ghlisten/ghsmee above): a signed GitHub delivery posted to the mock
+  # smee channel relays, over a real SSE connection, to ghlisten's actual
+  # webhook listener — an ordinary review_requested trigger firing is the
+  # proof the whole relay (mock smee -> smee plugin -> HTTP POST -> github
+  # plugin's HMAC-verified webhook handler -> trigger evaluation) held
+  # together end to end, not just that a config was accepted.
+  - on: ghlisten.review_requested
+    name: listeners-github-smee
+    steps:
+      - id: tell
+        uses: slack.post
+        options: { channel: CLISTENGH, text: "Y-LISTENERS-GITHUB fired {{.repo}}#{{.pr}}" }
 
 checks:
   # A code check that always passes / always fails — a crisp pass/fail verdict
