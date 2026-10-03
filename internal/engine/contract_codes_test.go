@@ -31,7 +31,7 @@ func TestMintTargetGoneStopsNotFails(t *testing.T) {
 		{Name: "w", Role: "write", Mint: sdk.CredentialMint{Verb: "write_token"}, Value: "token", Env: []string{"GH_TOKEN"}},
 	}}
 	tr := core.Trigger{Instance: "i", TargetTrusted: true}
-	_, err := e.declaredCredentials(context.Background(), tr, "i", sem)
+	_, err := e.declaredCredentials(context.Background(), tr, "i", sem, false)
 	if !errors.Is(err, dispatch.ErrTargetClosed) {
 		t.Fatalf("declaredCredentials error = %v, want it to wrap dispatch.ErrTargetClosed", err)
 	}
@@ -66,7 +66,7 @@ func TestMintNonTargetGoneCodesAreFailuresNotStops(t *testing.T) {
 				{Name: "w", Role: "write", Mint: sdk.CredentialMint{Verb: "write_token"}, Value: "token", Env: []string{"GH_TOKEN"}},
 			}}
 			tr := core.Trigger{Instance: "i", TargetTrusted: true}
-			_, err := e.declaredCredentials(context.Background(), tr, "i", sem)
+			_, err := e.declaredCredentials(context.Background(), tr, "i", sem, false)
 			if err == nil {
 				t.Fatal("expected an error")
 			}
@@ -100,7 +100,7 @@ func TestMintReturnsRateLimitedImmediatelyWithoutRetrying(t *testing.T) {
 		{Name: "w", Role: "write", Mint: sdk.CredentialMint{Verb: "write_token"}, Value: "token", Env: []string{"GH_TOKEN"}},
 	}}
 	tr := core.Trigger{Instance: "i", TargetTrusted: true}
-	_, err := e.declaredCredentials(context.Background(), tr, "i", sem)
+	_, err := e.declaredCredentials(context.Background(), tr, "i", sem, false)
 	if calls != 1 {
 		t.Fatalf("calls=%d, want exactly 1 — mint must never block this trigger's processing in a retry sleep", calls)
 	}

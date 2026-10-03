@@ -976,11 +976,17 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		if e.deferAndReemit(ctx, t, "credential mint", err) {
 			return
 		}
+		// Past the deferral point with a non-deferrable (or exhausted)
+		// error: a later, unrelated rate_limited/not_ready answer for this
+		// same (target, kind) gets its own full re-emit budget rather than
+		// inheriting this one's count.
+		e.clearDeferredFor(t, "credential mint")
 		e.log("%s not dispatched — %v", tag(t), err)
 		e.store.Audit(map[string]any{"event": "dispatch_failed", "repo": t.Target.Repo, "number": t.Target.Number,
 			"kind": t.Kind, "error": e.redact(err.Error())})
 		return
 	}
+	e.clearDeferredFor(t, "credential mint")
 	if act.Type == "agent" {
 		// No prompt of its own → act on the event itself (connector-neutral
 		// event object), synthesized before the guidance stack. This legacy
@@ -1314,41 +1320,12 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 		t.Action = act
 		// Credentials are minted afresh for the resumed run (the recorded
 		// ones were never persisted). One that cannot be minted yet (its
-		// plugin is still starting) leaves the run pending for the next start
-		// rather than resuming it without.
-		creds, err := e.credentialsFor(ctx, t)
-		if err != nil {
-			if errors.Is(err, dispatch.ErrTargetClosed) {
-				// target_gone (§1.11) while re-minting a resumed run's
-				// credentials: its target is confirmed gone, so it stops
-				// here — recorded as a stop, not left pending to be
-				// "deferred" forever across every future restart.
-				e.log("%s resume: target gone — stopping", tag(t))
-				e.store.Audit(map[string]any{"event": "workflow_stopped", "repo": t.Target.Repo,
-					"number": t.Target.Number, "kind": t.Kind, "reason": "target closed"})
-				e.finishRun(r)
-				continue
-			}
-			e.log("%s resume deferred — %v", tag(t), err)
-			continue
-		}
-		run := r
-		if run.Outputs == nil {
-			run.Outputs = map[string]map[string]any{}
-		}
-		e.log("%s resuming workflow from step %d", tag(t), r.StepIndex)
-		e.store.Audit(map[string]any{"event": "resume", "repo": t.Target.Repo,
-			"number": t.Target.Number, "kind": t.Kind, "step_index": r.StepIndex})
-		go func() {
-			// Wait for the slot here so resuming more runs than slots doesn't
-			// stall startup.
-			if !e.acquireFor(ctx, t.Interactive()) {
-				return
-			}
-			defer e.release()
-			defer e.recoverDispatch(ctx, t, run, "workflow resume")
-			e.runSteps(ctx, run, t, act, creds, false)
-		}()
+		// plugin is still starting) schedules a bounded per-run recheck
+		// (recheckResumeRun/scheduleResumeRecheck, finding 2) rather than
+		// leaving the run pending with nothing revisiting it until the next
+		// daemon restart — ctx-aware, and never blocking this sequential
+		// loop over every OTHER pending run.
+		e.recheckResumeRun(ctx, r, t, act)
 	}
 }
 
@@ -1567,6 +1544,10 @@ func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.Remedia
 	if e.deferAndReemit(ctx, t, "remediation status "+rem.Status.Verb, err) {
 		return true // handled for now: re-emit scheduled, no fixer dispatch yet
 	}
+	// Past the deferral point (success, or a non-deferrable/exhausted
+	// error): a later, unrelated rate_limited/not_ready answer for this
+	// status verb gets its own full re-emit budget.
+	e.clearDeferredFor(t, "remediation status "+rem.Status.Verb)
 	if err == nil {
 		done, eerr := expr.Eval(rem.Status.DoneWhen, out)
 		if eerr == nil && !done {
@@ -1599,10 +1580,12 @@ func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.Remedia
 		if e.deferAndReemit(ctx, t, "remediation action "+rem.Action.Verb, err) {
 			return true // handled for now: re-emit scheduled, no fixer dispatch yet
 		}
+		e.clearDeferredFor(t, "remediation action "+rem.Action.Verb)
 		// Not requested, so the attempt is not counted; dispatch the fixer.
 		e.log("%s remediation %s for run %v: %v — dispatching the fixer instead", tag(t), rem.Action.Verb, run, err)
 		return false
 	}
+	e.clearDeferredFor(t, "remediation action "+rem.Action.Verb)
 	_ = e.store.Record(key, rkey, head, head)
 	e.store.Audit(map[string]any{"event": "remediation", "verb": rem.Action.Verb, "repo": t.Target.Repo,
 		"number": t.Target.Number, "run": run})

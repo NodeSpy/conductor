@@ -128,6 +128,10 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	"internal/engine/defer_reemit.go": {
 		{"deferAndReemit", "an audit row for a deferred re-emit; the re-emit itself just re-sends the SAME trigger value back through e.Emit, and the per-occurrence defer-count bucket key uses Trigger.Key()"},
 	},
+	"internal/engine/resume_recheck.go": {
+		{"scheduleResumeRecheck", "audit/log rows for a deferred resume recheck (finding 2), the same treatment as ResumeWorkflows/deferAndReemit; the recheck itself just re-runs credentialsFor/dispatch for the SAME persisted run, and its attempt-count bucket key uses the run ID, not the target"},
+		{"recheckResumeRun", "audit/log rows (resume, workflow_stopped); the credential mint it re-attempts is gated on TargetTrusted inside credentialsFor, same as ResumeWorkflows' own inlined version of this before finding 2"},
+	},
 	"internal/engine/outcome.go": {
 		{"observeOutcomeSignals", "the gate is the first line (TargetTrusted); the keys go through Trigger.Key()"},
 		{"observeClosed", "reached only from a TRUSTED-target _closed (observeOutcomeSignals refuses the rest); the repo it reads is therefore platform-assigned, and the engagement key goes through Trigger.Key()"},

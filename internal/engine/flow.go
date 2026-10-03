@@ -487,7 +487,12 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			req.Author = e.author
 			return e.dispatchAgent(ctx, runner, req)
 		},
-		Credentials: e.credentialsFor,
+		// Flow steps and flow resume run in their own per-run goroutine, not
+		// on the engine's single shared dispatch loop, so they use the
+		// retrying mode: a rate_limited/not_ready mint is worth a bounded
+		// wait here instead of failing the step outright (plugin-contract.md
+		// §1.11, internal/engine/credentials.go credentialsForFlow).
+		Credentials: e.credentialsForFlow,
 		Guidance: func(identity string, p config.Step, pol config.Policy) string {
 			return e.agentGuidance(p, pol) + e.outcomeGuidance(identity, p)
 		},

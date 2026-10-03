@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
@@ -28,7 +29,30 @@ import (
 // source stamped stands in): the work must not run without it — a resumed
 // run stays pending, a dispatch is not made, a flow step fails (its retry
 // policy applies).
+//
+// credentialsFor is the SHARED-LOOP mode (process(), ResumeWorkflows' legacy
+// path): mint never blocks here (see mint's doc). Per-run-goroutine callers
+// (flow steps, flow resume) use credentialsForFlow instead, which retries a
+// rate_limited/not_ready mint through connector.RetryContract because
+// blocking THEIR goroutine does not stall any other queued trigger.
 func (e *Engine) credentialsFor(ctx context.Context, t core.Trigger) (dispatch.Credentials, error) {
+	return e.credentialsForMode(ctx, t, false)
+}
+
+// credentialsForFlow is credentialsFor for a flow step or flow resume: both
+// run in their own per-run goroutine (internal/flow/flow.go, engine/flow.go
+// resumeFlowRun), never on the engine's single shared dispatch loop, so a
+// rate_limited/not_ready mint answer is retried (bounded by RetryContract's
+// own budget) instead of failing the step immediately. Without this, a step
+// whose mint answers rate_limited once would fail outright: noStepRetry
+// (internal/flow/contract.go) excludes rate_limited/not_ready from the
+// step's own retry:, and processFlow has already consumed the trigger's
+// dedup, so a redelivery would be silently dropped.
+func (e *Engine) credentialsForFlow(ctx context.Context, t core.Trigger) (dispatch.Credentials, error) {
+	return e.credentialsForMode(ctx, t, true)
+}
+
+func (e *Engine) credentialsForMode(ctx context.Context, t core.Trigger, retry bool) (dispatch.Credentials, error) {
 	if e.connectors == nil {
 		return dispatch.Credentials{}, nil
 	}
@@ -42,10 +66,10 @@ func (e *Engine) credentialsFor(ctx context.Context, t core.Trigger) (dispatch.C
 	if !ok {
 		return dispatch.Credentials{}, nil
 	}
-	return e.declaredCredentials(ctx, t, instance, in.Decl.Semantics)
+	return e.declaredCredentials(ctx, t, instance, in.Decl.Semantics, retry)
 }
 
-func (e *Engine) declaredCredentials(ctx context.Context, t core.Trigger, instance string, sem *sdk.ConnSemantics) (dispatch.Credentials, error) {
+func (e *Engine) declaredCredentials(ctx context.Context, t core.Trigger, instance string, sem *sdk.ConnSemantics, retry bool) (dispatch.Credentials, error) {
 	var c dispatch.Credentials
 	var failed []error
 	// Work for a target the platform did not assign — one the event's sender
@@ -56,7 +80,7 @@ func (e *Engine) declaredCredentials(ctx context.Context, t core.Trigger, instan
 		return c, nil
 	}
 	for _, cr := range sem.Credentials {
-		v, err := e.mint(ctx, t, instance, cr)
+		v, err := e.mint(ctx, t, instance, cr, retry)
 		if err != nil {
 			e.log("%s credential %s: %v", tag(t), cr.Name, err)
 		}
@@ -86,27 +110,43 @@ func (e *Engine) declaredCredentials(ctx context.Context, t core.Trigger, instan
 
 // mint resolves one declared credential through its mint verb.
 //
-// It never retries rate_limited/not_ready itself (unlike most invoke call
-// sites, which go through connector.RetryContract): mint is called
-// synchronously from process(), fed by Run's single `for t := <-e.ch` loop,
-// and from ResumeWorkflows' sequential loop — a blocking sleep here would
-// stall every OTHER queued trigger behind one slow connector. The caller
-// decides what a rate_limited/not_ready answer means: process() defers a
-// re-emit of the trigger (deferAndReemit) instead of dispatching now;
-// ResumeWorkflows already leaves a run it can't mint for "deferred" to the
-// next start on ANY mint error, so returning promptly here is enough — it no
-// longer blocks behind a synchronous retry first.
+// retry=false (credentialsFor, the SHARED-LOOP mode) never retries
+// rate_limited/not_ready itself (unlike most invoke call sites, which go
+// through connector.RetryContract): mint is called synchronously from
+// process(), fed by Run's single `for t := <-e.ch` loop, and from
+// ResumeWorkflows' sequential loop — a blocking sleep here would stall every
+// OTHER queued trigger behind one slow connector. The caller decides what a
+// rate_limited/not_ready answer means: process() defers a re-emit of the
+// trigger (deferAndReemit) instead of dispatching now; ResumeWorkflows
+// schedules its own bounded per-run re-check (resumeRecheck) instead of
+// leaving the run for the next daemon start.
+//
+// retry=true (credentialsForFlow, the PER-RUN-GOROUTINE mode) retries a
+// rate_limited/not_ready answer through connector.RetryContract, bounded by
+// its own wait budget and attempt cap: blocking here only delays this one
+// run's own goroutine, not any other queued trigger, so there is no reason
+// to give up on the first rate_limited answer the way the shared-loop mode
+// must.
 //
 // A target_gone answer is tagged dispatch.ErrTargetClosed so a run that
 // can't mint because its target is gone stops instead of failing —
 // execAgent (flow.go) returns this error straight out of a step, so the
 // existing stop-hook switch (runSteps) and ResumeWorkflows both act on it
 // with no further wiring.
-func (e *Engine) mint(ctx context.Context, t core.Trigger, instance string, cr sdk.Credential) (string, error) {
+func (e *Engine) mint(ctx context.Context, t core.Trigger, instance string, cr sdk.Credential, retry bool) (string, error) {
 	if e.invokeVerb == nil {
 		return "", fmt.Errorf("no connector registry to mint through")
 	}
-	out, err := e.invokeVerb(ctx, instance, cr.Mint.Verb, core.DeclaredArgs(cr.Mint.Args, t.Facts()))
+	invoke := func() (map[string]any, error) {
+		return e.invokeVerb(ctx, instance, cr.Mint.Verb, core.DeclaredArgs(cr.Mint.Args, t.Facts()))
+	}
+	var out map[string]any
+	var err error
+	if retry {
+		out, err = connector.RetryContract(ctx, invoke)
+	} else {
+		out, err = invoke()
+	}
 	if err != nil {
 		return "", stopAsTargetGone(err)
 	}

@@ -28,7 +28,7 @@ func TestDeclaredCredentials(t *testing.T) {
 			Value: "secret", Env: []string{"ACME_READ"}, Template: "acme_read"},
 	}}
 	tr := core.Trigger{Instance: "acme1", TargetTrusted: true, Context: map[string]any{"project": "p1"}}
-	c, _ := e.declaredCredentials(context.Background(), tr, "acme1", sem)
+	c, _ := e.declaredCredentials(context.Background(), tr, "acme1", sem, false)
 	if c.Env["ACME_TOKEN"] != "tok-mint_w" || c.Env["ACME_TOKEN_ALIAS"] != "tok-mint_w" || c.Env["ACME_READ"] != "tok-mint_r" {
 		t.Fatalf("env = %v", c.Env)
 	}
@@ -42,7 +42,7 @@ func TestDeclaredCredentials(t *testing.T) {
 	// event carries.
 	minted = nil
 	forged := core.Trigger{Instance: "acme1", Context: map[string]any{"project": "p1", "acme_read": "from-the-event"}}
-	c, _ = e.declaredCredentials(context.Background(), forged, "acme1", sem)
+	c, _ = e.declaredCredentials(context.Background(), forged, "acme1", sem, false)
 	if len(minted) != 0 || len(c.Env) != 0 || len(c.Templates) != 0 || c.Guidance != "" {
 		t.Fatalf("forged target: minted=%v creds=%+v", minted, c)
 	}
@@ -52,7 +52,7 @@ func TestDeclaredCredentials(t *testing.T) {
 	e.invokeVerb = func(context.Context, string, string, map[string]any) (map[string]any, error) {
 		return map[string]any{}, nil
 	}
-	if c, _ = e.declaredCredentials(context.Background(), stamped, "acme1", sem); c.Env["ACME_READ"] != "stamped" {
+	if c, _ = e.declaredCredentials(context.Background(), stamped, "acme1", sem, false); c.Env["ACME_READ"] != "stamped" {
 		t.Fatalf("assigned target, stamped fact: env=%v", c.Env)
 	}
 }
@@ -93,11 +93,11 @@ func TestFailedMintIsAnError(t *testing.T) {
 	sem := &sdk.ConnSemantics{Credentials: []sdk.Credential{{Name: "w", Role: "write",
 		Mint: sdk.CredentialMint{Verb: "mint_w"}, Env: []string{"ACME_TOKEN"}, Template: "acme_token"}}}
 	tr := core.Trigger{Instance: "acme1", TargetTrusted: true, Context: map[string]any{}}
-	if c, err := e.declaredCredentials(context.Background(), tr, "acme1", sem); err == nil || len(c.Env) != 0 {
+	if c, err := e.declaredCredentials(context.Background(), tr, "acme1", sem, false); err == nil || len(c.Env) != 0 {
 		t.Fatalf("failed mint: creds=%+v err=%v", c, err)
 	}
 	tr.Context["acme_token"] = "stamped"
-	if c, err := e.declaredCredentials(context.Background(), tr, "acme1", sem); err != nil || c.Env["ACME_TOKEN"] != "stamped" {
+	if c, err := e.declaredCredentials(context.Background(), tr, "acme1", sem, false); err != nil || c.Env["ACME_TOKEN"] != "stamped" {
 		t.Fatalf("a stamped fact stands in: creds=%+v err=%v", c, err)
 	}
 }
@@ -111,7 +111,7 @@ func TestEmptyMintIsAnError(t *testing.T) {
 	}
 	sem := &sdk.ConnSemantics{Credentials: []sdk.Credential{{Name: "w", Role: "write",
 		Mint: sdk.CredentialMint{Verb: "mint_w"}, Env: []string{"ACME_TOKEN"}}}}
-	if c, err := e.declaredCredentials(context.Background(), core.Trigger{Instance: "acme1", TargetTrusted: true}, "acme1", sem); err == nil || len(c.Env) != 0 {
+	if c, err := e.declaredCredentials(context.Background(), core.Trigger{Instance: "acme1", TargetTrusted: true}, "acme1", sem, false); err == nil || len(c.Env) != 0 {
 		t.Fatalf("an empty mint: creds=%+v err=%v", c, err)
 	}
 }
