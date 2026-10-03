@@ -273,11 +273,23 @@ type OpensConversation struct {
 // Exposes: this verb makes a local address reachable from outside (a tunnel
 // or a relay). Local is the option the host fills with host:port; URL and
 // Lease are outputs; Release is the verb that ends the exposure.
+//
+// Path, when declared, names an OPTION this verb's open call accepts a
+// listener's resolved HTTP path in (plugin-contract.md §2.3). When a
+// consumer's `listeners` semantic (§2.4) resolves a path, the engine passes
+// it in this option and uses the returned URL AS IS — for a relay whose
+// returned URL already IS the public address and which replays deliveries
+// to local+path itself. When Path is absent, the engine instead appends the
+// resolved path to the returned URL itself (a byte-level tunnel that
+// forwards the whole origin, path included, has no use for the path at
+// all). Optional: a plugin exposing only `local`/`url` (no path awareness
+// of its own) keeps working unchanged; the host does the joining for it.
 type Exposes struct {
 	Local   string `json:"local"`
 	URL     string `json:"url"`
 	Lease   string `json:"lease,omitempty"`
 	Release string `json:"release,omitempty"`
+	Path    string `json:"path,omitempty"`
 }
 
 // ConnSemantics are connection-level semantics (Decl.Semantics).
@@ -343,10 +355,21 @@ type TranslateSemantics struct {
 
 // Listener: an inbound listener the plugin runs, which an exposure
 // connector can make reachable (config field paths, dot-separated).
+//
+// Path, when declared, names the dotted config field holding the listener's
+// own HTTP path (e.g. "webhook.path") — the path upstream deliveries must be
+// sent to, same as Listen names the address they're sent to. Optional: a
+// listener with no path concept of its own (Path absent, or the named field
+// unset at the configured instance) resolves to "/". The engine reads this
+// at instance start, alongside Listen/Expose, to resolve the exposure (§2.3
+// `exposes`): a verb declaring `exposes.path` receives the resolved path as
+// an option and its returned URL is used as is; one that doesn't gets the
+// resolved path appended to its returned URL instead.
 type Listener struct {
 	Listen string `json:"listen"`
 	Expose string `json:"expose,omitempty"`
 	URLTo  string `json:"url_to,omitempty"`
+	Path   string `json:"path,omitempty"`
 }
 
 // PreflightSemantics: commands checked at boot.
@@ -627,6 +650,11 @@ func ValidateSemantics(d Decl) []string {
 			}
 			if x.Release != "" {
 				need(path+".exposes.release", x.Release)
+			}
+			if x.Path != "" {
+				if _, ok := v.Options[x.Path]; !ok {
+					p = append(p, fmt.Sprintf("%s.exposes.path: names option %q, which verb %q does not declare", path, x.Path, v.Name))
+				}
 			}
 		}
 		if s.MintsCredential != nil && !s.HostOnly {

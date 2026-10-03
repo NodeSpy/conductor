@@ -19,6 +19,15 @@ import (
 // for the listen address at instance start and passes the public URL to the
 // plugin in the config field named by `url_to`, on start_source.
 //
+// The listener's own HTTP path (its optional `path` field, a dotted config
+// field like "webhook.path") rides along too, so an exposure never needs a
+// separately configured path of its own: resolveListenerPath reads it
+// (default "/"), and openExposure/exposureTunnel.OpenPath decide, from the
+// exposure verb's OWN `exposes.path` declaration (§2.3), whether to pass it
+// as an option (a relay that reconstructs the request itself, e.g. smee —
+// the returned URL is used as is) or append it to the returned URL (a
+// byte-level tunnel that forwards the whole origin, path included).
+//
 // Two gates, at two different times:
 //   - load time (checkListenerExposures, called from Build): the expose
 //     target names a connector that exists and declares an exposes verb, and
@@ -155,7 +164,8 @@ func (p *pluginSourceIntegration) openListeners(ctx context.Context) (map[string
 			release()
 			return nil, func() {}, fmt.Errorf("connector %q: listeners: %s is set with no %s", p.instance, l.Expose, l.Listen)
 		}
-		url, closeFn, err := p.openExposure(ctx, expose, listen)
+		path := resolveListenerPath(cfg, l)
+		url, closeFn, err := p.openExposure(ctx, expose, listen, path)
 		if err != nil {
 			release()
 			return nil, func() {}, fmt.Errorf("connector %q: %w", p.instance, err)
@@ -168,17 +178,34 @@ func (p *pluginSourceIntegration) openListeners(ctx context.Context) (map[string
 	return cfg, release, nil
 }
 
+// resolveListenerPath reads the listener's own HTTP path out of cfg at
+// l.Path (default "/" when the listener declares no Path field, or the
+// field is unset at this instance), normalized to start with "/".
+func resolveListenerPath(cfg map[string]any, l sdk.Listener) string {
+	if l.Path == "" {
+		return "/"
+	}
+	p := stringAtPath(cfg, l.Path)
+	if p == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return p
+}
+
 // openExposure opens one exposure through its connector's exposes verb
 // (exposureTunnel — the same adapter web's expose: uses), retrying with
 // capped exponential backoff on failure: a tunnel endpoint that's down at
 // boot (a DNS hiccup, a rate limit) must not take the whole source down
 // permanently, but it must not hot-loop the daemon either. It returns only
 // on success or when ctx is cancelled (daemon stop/reload).
-func (p *pluginSourceIntegration) openExposure(ctx context.Context, name, listen string) (string, func() error, error) {
+func (p *pluginSourceIntegration) openExposure(ctx context.Context, name, listen, path string) (string, func() error, error) {
 	tun := exposureTunnel{lookup: p.lookup, name: name, from: p.instance}
 	delay := exposureRetryInitial
 	for attempt := 1; ; attempt++ {
-		url, closeFn, err := tun.Open(ctx, listen)
+		url, closeFn, err := tun.OpenPath(ctx, listen, path)
 		if err == nil {
 			return url, closeFn, nil
 		}

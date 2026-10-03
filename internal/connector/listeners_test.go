@@ -313,6 +313,170 @@ func TestPluginSourceListenerStartRequiresListen(t *testing.T) {
 	}
 }
 
+// resolveListenerPath: no Path field declared, or the field unset at this
+// instance, both default to "/"; a configured value is normalized to start
+// with "/".
+func TestResolveListenerPath(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  map[string]any
+		l    sdk.Listener
+		want string
+	}{
+		{"no path field declared", map[string]any{}, sdk.Listener{}, "/"},
+		{"path field declared, unset in config", map[string]any{}, sdk.Listener{Path: "webhook.path"}, "/"},
+		{"path field set, already slash-prefixed", map[string]any{"webhook": map[string]any{"path": "/webhook"}}, sdk.Listener{Path: "webhook.path"}, "/webhook"},
+		{"path field set, no leading slash", map[string]any{"webhook": map[string]any{"path": "webhook"}}, sdk.Listener{Path: "webhook.path"}, "/webhook"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := resolveListenerPath(c.cfg, c.l); got != c.want {
+				t.Fatalf("resolveListenerPath = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// At instance start, a listener's resolved path is passed to an exposure
+// that declares `exposes.path` AS AN OPTION, and the returned URL lands in
+// url_to UNCHANGED — the smee case: the channel URL already IS the public
+// URL, and the path only matters to the plugin's own local relay.
+func TestPluginSourceListenerPathPassedToExposureThatDeclaresIt(t *testing.T) {
+	exp := &pathAwareExposer{url: "http://mock-smee:8080/e2e-gh-channel"}
+	decl := &TypeDecl{
+		Type: "pathtun3",
+		Verbs: []VerbDecl{{
+			Name:      "open",
+			Semantics: &sdk.VerbSemantics{Exposes: &sdk.Exposes{Local: "local_addr", URL: "public_url", Path: "path"}},
+		}},
+	}
+	in := &Instance{Name: "relay", Decl: decl, Enabled: true, Impl: exp}
+	lookup := func(name string) (*Instance, bool) {
+		if name == "relay" {
+			return in, true
+		}
+		return nil, false
+	}
+	src := &fakeBlockingSourcer{started: make(chan struct{})}
+	psi := &pluginSourceIntegration{
+		source:   src,
+		instance: "gh1",
+		config: map[string]any{
+			"webhook": map[string]any{"listen": "127.0.0.1:18203", "expose": "relay", "path": "/webhook"},
+		},
+		listeners: []sdk.Listener{{Listen: "webhook.listen", Expose: "webhook.expose", URLTo: "webhook.public_url", Path: "webhook.path"}},
+		lookup:    lookup,
+		log:       t.Logf,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- psi.Start(ctx, func(context.Context, core.Trigger) {}) }()
+	select {
+	case <-src.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartSource never called")
+	}
+	webhook, _ := src.config()["webhook"].(map[string]any)
+	if url, _ := webhook["public_url"].(string); url != exp.url {
+		t.Fatalf("webhook.public_url = %q, want the exposure's own URL unchanged", url)
+	}
+	if got := exp.gotOptions()["path"]; got != "/webhook" {
+		t.Fatalf("open options = %+v, want path=/webhook", exp.gotOptions())
+	}
+	cancel()
+	<-done
+}
+
+// The same listener semantic against an exposure that does NOT declare
+// `exposes.path` (the builtin tunnel): the resolved path is appended to the
+// returned URL instead, with no option passed.
+func TestPluginSourceListenerPathAppendedWhenExposureDoesNotDeclareIt(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	cfg := mustDecodeConfig(t, `
+connectors:
+  tun:
+    use: tunnel
+    command: [sh, -c, "echo serving at https://hook.example/{{.port}}; sleep 30"]
+`)
+	reg, err := Build(cfg, Deps{Secrets: secrets.New(), Log: t.Logf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := &fakeBlockingSourcer{started: make(chan struct{})}
+	psi := &pluginSourceIntegration{
+		source:   src,
+		instance: "gh1",
+		config: map[string]any{
+			"webhook": map[string]any{"listen": "127.0.0.1:18204", "expose": "tun", "path": "/webhook"},
+		},
+		listeners: []sdk.Listener{{Listen: "webhook.listen", Expose: "webhook.expose", URLTo: "webhook.public_url", Path: "webhook.path"}},
+		lookup:    reg.Get,
+		log:       t.Logf,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- psi.Start(ctx, func(context.Context, core.Trigger) {}) }()
+	select {
+	case <-src.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("StartSource never called")
+	}
+	webhook, _ := src.config()["webhook"].(map[string]any)
+	url, _ := webhook["public_url"].(string)
+	if !strings.HasPrefix(url, "https://hook.example/18204/webhook") {
+		t.Fatalf("webhook.public_url = %q, want the tunnel's URL with the path appended", url)
+	}
+	cancel()
+	<-done
+}
+
+// A listener that declares a Path field, but whose config never sets it,
+// defaults to "/" — unchanged from a type decl written before this feature
+// existed (old decls keep working, path optional).
+func TestPluginSourceListenerPathDefaultsToRootWhenUnconfigured(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	cfg := mustDecodeConfig(t, `
+connectors:
+  tun:
+    use: tunnel
+    command: [sh, -c, "echo serving at https://hook.example/{{.port}}; sleep 30"]
+`)
+	reg, err := Build(cfg, Deps{Secrets: secrets.New(), Log: t.Logf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := &fakeBlockingSourcer{started: make(chan struct{})}
+	psi := &pluginSourceIntegration{
+		source:   src,
+		instance: "gh1",
+		config: map[string]any{
+			"webhook": map[string]any{"listen": "127.0.0.1:18205", "expose": "tun"},
+		},
+		listeners: []sdk.Listener{{Listen: "webhook.listen", Expose: "webhook.expose", URLTo: "webhook.public_url", Path: "webhook.path"}},
+		lookup:    reg.Get,
+		log:       t.Logf,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- psi.Start(ctx, func(context.Context, core.Trigger) {}) }()
+	select {
+	case <-src.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("StartSource never called")
+	}
+	webhook, _ := src.config()["webhook"].(map[string]any)
+	url, _ := webhook["public_url"].(string)
+	if url != "https://hook.example/18205" {
+		t.Fatalf("webhook.public_url = %q, want the tunnel's URL unchanged (default path is a no-op)", url)
+	}
+	cancel()
+	<-done
+}
+
 // flakyExposer fails the first N-1 calls to its exposes verb, then succeeds
 // — proving openExposure retries with backoff rather than giving up (or
 // hot-looping) on a transient failure.
@@ -480,7 +644,7 @@ func TestPluginSourceListenerExposureBackoffNeverExceedsCap(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, _, err := p.openExposure(ctx, "tun", "127.0.0.1:0"); err != nil {
+	if _, _, err := p.openExposure(ctx, "tun", "127.0.0.1:0", "/"); err != nil {
 		t.Fatalf("openExposure: %v", err)
 	}
 

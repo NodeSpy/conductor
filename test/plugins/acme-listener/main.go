@@ -5,7 +5,10 @@
 // HTTP listener on its config field `listen`, and declares that config field
 // `expose` names an exposure connector the engine should open `listen`
 // through, handing the public URL back in config field `public_url` before
-// this plugin's start_source ever runs.
+// this plugin's start_source ever runs. It also declares config field
+// `path` as its listener's own HTTP path, so an exposure that has no path
+// concept of its own (a byte-level tunnel) gets it appended to the URL it
+// returns — the same shape the github plugin declares for webhook.path.
 //
 // Proof of both halves is simple and observable: the FIRST event this plugin
 // emits (before it even binds the listener) echoes `public_url` straight
@@ -41,9 +44,10 @@ func (acmeListenerHandler) Describe() plugin.Decl {
 			"listen":     {Type: "string", Required: true, Desc: "inbound HTTP address to bind"},
 			"expose":     {Type: "string", Desc: "an exposure connector (one declaring an exposes verb) to make `listen` reachable from outside"},
 			"public_url": {Type: "string", Desc: "filled in by the engine at instance start when `expose` is set"},
+			"path":       {Type: "string", Desc: "this listener's own HTTP path (default /); folded into the exposure, no exposure-side config needed"},
 		},
 		Semantics: &plugin.ConnSemantics{
-			Listeners: []plugin.Listener{{Listen: "listen", Expose: "expose", URLTo: "public_url"}},
+			Listeners: []plugin.Listener{{Listen: "listen", Expose: "expose", URLTo: "public_url", Path: "path"}},
 		},
 		Events: []plugin.Event{
 			{

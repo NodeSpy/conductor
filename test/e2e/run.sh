@@ -1622,7 +1622,13 @@ group_V_engine_plugin() {
 # webhook-shaped listener exposed through the builtin `tunnel` connector (a
 # fake script that just prints a URL — no real forwarding, which is fine: the
 # claim under test is that the ENGINE opened the exposure and threaded the
-# URL through, not that the fake tunnel relays bytes).
+# URL through, not that the fake tunnel relays bytes). aclisten also declares
+# `path: /acme-hook` — tun's exposes verb declares no `path` option of its
+# own, so the engine must APPEND the resolved path to the URL tun returns
+# (joinExposedPath); a bare tunnel URL with no path reaching the plugin would
+# mean the host silently dropped the listener's path instead of folding it
+# into the exposure, exactly the config-mistake class this whole feature
+# removes (no more operator-maintained `path:` kept in sync by hand).
 # ---------------------------------------------------------------------------
 group_X_listeners() {
   banner "Group X — listeners: a source plugin's inbound exposed through the builtin tunnel"
@@ -1634,8 +1640,8 @@ group_X_listeners() {
   # POST straight at the bound listener address fires a "delivery" trigger
   # on demand, and its context carries the SAME public_url ready did — so one
   # capture proves both halves at once:
-  #   X1 — the public URL the tunnel returned reached the plugin's config
-  #        (url_to): the capture names the tunnel's exact URL or nothing.
+  #   X1 — the public URL the tunnel returned, WITH aclisten's declared path
+  #        appended, reached the plugin's config (url_to).
   #   X2 — the listener the engine opened the exposure FOR is the one
   #        actually live and wired to the engine, independent of whether the
   #        (fake, non-forwarding) tunnel relays real traffic.
@@ -1645,10 +1651,10 @@ group_X_listeners() {
   else
     bad "X2 delivery to the listener dispatched" X X2 "no X-LISTENERS-DELIVERY capture"
   fi
-  if slack_sink_has "url=https://hook.example/18877"; then
-    ok "X1 the engine opened tun for aclisten's listener and filled in public_url" X X1
+  if slack_sink_has "url=https://hook.example/18877/acme-hook"; then
+    ok "X1 the engine opened tun for aclisten's listener, appended its declared path, and filled in public_url" X X1
   else
-    bad "X1 exposure URL reached the plugin" X X1 "no url=https://hook.example/18877 in the delivery capture"
+    bad "X1 exposure URL (with path appended) reached the plugin" X X1 "no url=https://hook.example/18877/acme-hook in the delivery capture"
   fi
 }
 
@@ -1661,6 +1667,14 @@ group_X_listeners() {
 # same plugin, and verified + dispatched by the real github plugin's webhook
 # listener — the whole exposure chain, with no fakes anywhere in it but the
 # upstream GitHub and smee.io services themselves.
+#
+# ghsmee carries NO `path:` of its own in connectors.e2e.yaml (unlike before
+# this feature, where it had to mirror ghlisten's webhook.path by hand):
+# smee's `open` verb declares `exposes.path`, so the engine passes ghlisten's
+# own resolved webhook.path straight into ghsmee's open call every time. Y2
+# is the real proof of that — the relay only reaches ghlisten's listener at
+# all if the smee plugin replayed to the RIGHT path, which it can now only
+# know because the listener told it, not because an operator typed it twice.
 # ---------------------------------------------------------------------------
 group_Y_listeners_github_smee() {
   banner "Group Y — listeners: the REAL github + smee plugins relayed through a mock smee channel"

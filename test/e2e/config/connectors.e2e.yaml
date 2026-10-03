@@ -51,26 +51,38 @@ connectors:
     command: [sh, -c, "echo serving at https://hook.example/{{.port}}; sleep 600"]
 
   # aclisten is the reference acme-listener plugin (test/plugins/acme-listener):
-  # it declares the SAME listeners shape (listen/expose/url_to) the github
-  # plugin declares for webhook.*, just with flat connection fields. At
-  # instance start the engine opens `tun` for `listen` and fills in
-  # public_url; the plugin echoes it straight back out on its first event
-  # ("ready"), and fires "delivery" on every HTTP POST the listener receives.
+  # it declares the SAME listeners shape (listen/expose/url_to/path) the
+  # github plugin declares for webhook.*, just with flat connection fields.
+  # At instance start the engine opens `tun` for `listen`, resolves `path`
+  # (declared below, non-default), and fills in public_url WITH that path
+  # appended — tun's exposes verb declares no path option of its own, so
+  # this is the "host appends it" half of the listeners path semantic
+  # (ghlisten/ghsmee below prove the other half, "the exposure takes it as
+  # an option"). The plugin echoes public_url straight back out on its first
+  # event ("ready"), and fires "delivery" on every HTTP POST the listener
+  # receives.
   aclisten:
     use: /usr/local/bin/conductor-acme-listener
     listen: "0.0.0.0:18877"
+    path: /acme-hook
     expose: tun
 
   # Group Y — the SAME `listeners` semantic as group X, but with the REAL
   # github and smee plugins instead of the reference/fake pair: ghlisten's
   # `webhook.expose: ghsmee` has the engine open an exposure on ghsmee for
-  # webhook.listen at instance start, and fill webhook.public_url with
-  # whatever ghsmee's `open` verb returns (its smee channel URL) — the
-  # github plugin logs that URL on boot (ghsource/http.go), which is this
-  # group's observable proof that url_to reached the plugin. App-less (no
-  # verb is ever invoked on this instance, only its webhook source): a
-  # review_requested delivery is entirely payload-driven, no GitHub API
-  # calls needed to decide whether it fires.
+  # webhook.listen at instance start, resolve webhook.path (below) through
+  # the github plugin's declared listeners.path, and fill webhook.public_url
+  # with whatever ghsmee's `open` verb returns (its smee channel URL,
+  # UNCHANGED — ghsmee declares an `exposes.path` option, so the engine
+  # passes the resolved path there instead of appending it) — the github
+  # plugin logs that URL on boot (ghsource/http.go), which is this group's
+  # observable proof that url_to reached the plugin. ghsmee itself gets NO
+  # `path:` of its own below: the whole point of this group is proving the
+  # path flows from the listener, not from an operator keeping a second
+  # `path:` in sync by hand. App-less (no verb is ever invoked on this
+  # instance, only its webhook source): a review_requested delivery is
+  # entirely payload-driven, no GitHub API calls needed to decide whether it
+  # fires.
   ghlisten:
     use: /usr/local/bin/conductor-github
     api_base: http://mock-github:8080
@@ -95,13 +107,17 @@ connectors:
 
   # ghsmee is the real conductor-plugins smee connector: `channel:` is
   # pinned straight at the mock smee service (test/e2e/services/mocksmee)
-  # instead of smee.io's own /new channel-creation redirect, and `path:`
-  # matches ghlisten's own webhook.path so a relayed delivery replays to
-  # exactly the URL ghlisten's listener is bound to.
+  # instead of smee.io's own /new channel-creation redirect. No `path:` here
+  # on purpose (it used to mirror ghlisten's webhook.path by hand) — ghsmee
+  # declares `exposes.path`, so the engine passes ghlisten's OWN resolved
+  # webhook.path straight into this instance's `open` call every time it
+  # opens the exposure; the connection-level `path:` field stays only as
+  # this connector's fallback default for an operator using it as a plain
+  # web exposure with no listener involved at all (see docs/connectors/
+  # smee.md's precedence note in the conductor-plugins repo).
   ghsmee:
     use: /usr/local/bin/conductor-smee
     channel: "http://mock-smee:8080/e2e-gh-channel"
-    path: /webhook
 
 hosts:
   selfbox:

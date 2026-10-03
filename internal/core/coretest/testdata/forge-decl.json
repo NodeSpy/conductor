@@ -3728,7 +3728,8 @@
       {
         "listen": "webhook.listen",
         "expose": "webhook.expose",
-        "url_to": "webhook.public_url"
+        "url_to": "webhook.public_url",
+        "path": "webhook.path"
       }
     ]
   }

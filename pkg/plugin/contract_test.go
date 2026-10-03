@@ -152,6 +152,31 @@ func TestValidateSemanticsExposesMustBeHostOnly(t *testing.T) {
 	}
 }
 
+// exposes.path (plugin-contract.md §2.3), when declared, names an OPTION the
+// verb itself accepts a listener's resolved path in — the same "must exist"
+// treatment local/url/release already imply by being the verb's own
+// option/output names. A typo (naming an option the verb never declares)
+// would otherwise be a silent no-op: the host would pass it, and the plugin
+// would just never see it.
+func TestValidateSemanticsExposesPathMustNameADeclaredOption(t *testing.T) {
+	bad := Decl{Verbs: []Verb{
+		{Name: "open", Options: Schema{"local_addr": {Type: "string"}},
+			Semantics: &VerbSemantics{HostOnly: true, Exposes: &Exposes{Local: "local_addr", URL: "public_url", Path: "route"}}},
+	}}
+	p := strings.Join(ValidateSemantics(bad), "\n")
+	if !strings.Contains(p, `names option "route"`) {
+		t.Fatalf("exposes.path naming an option the verb never declares must be refused, got %q", p)
+	}
+
+	good := Decl{Verbs: []Verb{
+		{Name: "open", Options: Schema{"local_addr": {Type: "string"}, "path": {Type: "string"}},
+			Semantics: &VerbSemantics{HostOnly: true, Exposes: &Exposes{Local: "local_addr", URL: "public_url", Path: "path"}}},
+	}}
+	if p := ValidateSemantics(good); len(p) != 0 {
+		t.Fatalf("exposes.path naming a real option reported %q", p)
+	}
+}
+
 // Serve drops the OPTIONAL semantics a host does not implement before
 // replying, and keeps everything else.
 func TestDescribeStripsOptionalSemanticsTheHostLacks(t *testing.T) {
