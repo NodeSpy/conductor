@@ -101,3 +101,17 @@ func TestFailedMintIsAnError(t *testing.T) {
 		t.Fatalf("a stamped fact stands in: creds=%+v err=%v", c, err)
 	}
 }
+
+// A mint verb that answers without the declared value is a failure too, not
+// a credential silently dropped.
+func TestEmptyMintIsAnError(t *testing.T) {
+	e, _ := newEng(t, baseCfg(), &fakeDispatcher{}, &fakeNotifier{}, nil)
+	e.invokeVerb = func(context.Context, string, string, map[string]any) (map[string]any, error) {
+		return map[string]any{}, nil
+	}
+	sem := &sdk.ConnSemantics{Credentials: []sdk.Credential{{Name: "w", Role: "write",
+		Mint: sdk.CredentialMint{Verb: "mint_w"}, Env: []string{"ACME_TOKEN"}}}}
+	if c, err := e.declaredCredentials(context.Background(), core.Trigger{Instance: "acme1", TargetTrusted: true}, "acme1", sem); err == nil || len(c.Env) != 0 {
+		t.Fatalf("an empty mint: creds=%+v err=%v", c, err)
+	}
+}

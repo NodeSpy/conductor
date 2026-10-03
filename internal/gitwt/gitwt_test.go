@@ -641,8 +641,9 @@ func pushExtraCommit(t *testing.T, bare, branch, file string) {
 func TestDeclaredRemote(t *testing.T) {
 	req := func(remote, project string) dispatch.Request {
 		return dispatch.Request{Trigger: core.Trigger{
-			Sem:    &sdk.EventSemantics{Checkout: &sdk.CheckoutSemantics{Remote: remote}},
-			Target: core.Target{Repo: "o/r", Number: 1, Project: project},
+			Sem:           &sdk.EventSemantics{Checkout: &sdk.CheckoutSemantics{Remote: remote}},
+			Target:        core.Target{Repo: "o/r", Number: 1, Project: project},
+			TargetTrusted: true,
 		}}
 	}
 	if got := declaredRemote(req("ssh://git.example.org/{{.repo}}.git", ""), "o/r"); got != "ssh://git.example.org/o/r.git" {
@@ -653,6 +654,14 @@ func TestDeclaredRemote(t *testing.T) {
 	}
 	if got := declaredRemote(req("ext::sh -c touch% /tmp/pwned", ""), "o/r"); got != "" {
 		t.Fatalf("an unsafe transport was used: %q", got)
+	}
+	// A sender-chosen target never picks the host: the remote renders over
+	// the event's facts.
+	forged := req("https://{{.clone_host}}/{{.repo}}.git", "")
+	forged.Trigger.TargetTrusted = false
+	forged.Trigger.Context = map[string]any{"clone_host": "evil.example"}
+	if got := declaredRemote(forged, "o/r"); got != "" {
+		t.Fatalf("a sender-chosen target picked the remote: %q", got)
 	}
 	p := &Provisioner{}
 	t.Setenv("CONDUCTOR_GIT_REMOTE_BASE", "")

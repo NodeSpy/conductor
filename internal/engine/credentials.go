@@ -98,5 +98,8 @@ func (e *Engine) mint(ctx context.Context, t core.Trigger, instance string, cr s
 		key = "token"
 	}
 	s, _ := out[key].(string)
+	if s == "" {
+		return "", fmt.Errorf("%s returned no %q", cr.Mint.Verb, key)
+	}
 	return s, nil
 }

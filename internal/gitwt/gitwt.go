@@ -441,9 +441,11 @@ func (p *Provisioner) remoteURL(repo, declared string) string {
 
 // declaredRemote is the event's declared checkout remote — only when the
 // checkout is the event's own target (a step's `repo:` names another repo,
-// whose remote the declaration does not describe).
+// whose remote the declaration does not describe), and only for a target the
+// platform assigned: the remote renders over the event's facts, so a
+// sender-chosen target must not pick the host conductor clones from.
 func declaredRemote(req dispatch.Request, repo string) string {
-	if repo != req.Trigger.Target.Repo {
+	if repo != req.Trigger.Target.Repo || !req.Trigger.TargetTrusted {
 		return ""
 	}
 	co, ok := req.Trigger.Checkout()
