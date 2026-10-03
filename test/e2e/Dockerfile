@@ -25,7 +25,8 @@ RUN go build -o /out/conductor ./cmd/conductor \
  && go build -o /out/fakeagentdeck ./test/e2e/services/fakeagentdeck \
  && go build -o /out/fakeacp       ./test/e2e/services/fakeacp \
  && go build -o /out/fakecli       ./test/e2e/services/fakecli \
- && go build -o /out/conductor-acme-engine ./test/plugins/acme-engine
+ && go build -o /out/conductor-acme-engine ./test/plugins/acme-engine \
+ && go build -o /out/conductor-acme-listener ./test/plugins/acme-listener
 
 # ---- vendor connector plugins ----
 # Every vendor connector is a plugin (conductor-plugins, connectors/<name>):
@@ -51,8 +52,10 @@ COPY --from=github-plugin /out/ /usr/local/bin/
 # The reference ENGINE plugin (test/plugins/acme-engine) is a real out-of-process
 # plugin, not a harness fake: group V points a step's `use:` straight at this
 # path. verify-before-execute refuses a group/world-writable binary or parent, so
-# the mode is pinned rather than left to the builder's umask.
-RUN chmod 0755 /usr/local/bin/conductor-acme-engine
+# the mode is pinned rather than left to the builder's umask. conductor-acme-listener
+# (group X, the listeners connection semantic) is the same kind of reference
+# plugin, named directly by a connector's `use:`.
+RUN chmod 0755 /usr/local/bin/conductor-acme-engine /usr/local/bin/conductor-acme-listener
 # A github plugin the run supplied (GITHUB_PLUGIN_BIN, staged into
 # test/e2e/plugin-bin/) replaces the pinned build.
 COPY --from=build /src/test/e2e/plugin-bin/ /opt/plugin-bin/

@@ -46,8 +46,18 @@ func (acmeListenerHandler) Describe() plugin.Decl {
 			Listeners: []plugin.Listener{{Listen: "listen", Expose: "expose", URLTo: "public_url"}},
 		},
 		Events: []plugin.Event{
-			{Name: "ready", Desc: "the source started; context.public_url carries whatever the engine filled in (empty when expose is unset)"},
-			{Name: "delivery", Desc: "an HTTP POST reached the listener"},
+			{
+				Name: "ready", Desc: "the source started; context.public_url carries whatever the engine filled in (empty when expose is unset)",
+				Context: plugin.Schema{"public_url": {Type: "string", Desc: "the exposure's public URL, or empty when expose is unset"}},
+			},
+			{
+				Name: "delivery", Desc: "an HTTP POST reached the listener",
+				Context: plugin.Schema{
+					"seq":        {Type: "integer", Desc: "a per-instance counter, 1 on the first delivery"},
+					"body":       {Type: "string", Desc: "the POST body"},
+					"public_url": {Type: "string", Desc: "the exposure's public URL, or empty when expose is unset — same value ready carried"},
+				},
+			},
 		},
 	}
 }
@@ -92,11 +102,15 @@ func (acmeListenerHandler) StartSource(ctx context.Context, req plugin.StartSour
 		n++
 		seq := n
 		mu.Unlock()
+		// public_url rides every delivery too (not just the one-shot
+		// `ready` event): a consumer that missed `ready` — the usual case,
+		// since start_source ran once at boot — can still see, on demand,
+		// whether the engine ever filled it in.
 		_ = emit(map[string]any{
 			"event":   "delivery",
 			"title":   fmt.Sprintf("delivery %d", seq),
 			"dedup":   req.Instance + "-delivery-" + strconv.FormatInt(seq, 10),
-			"context": map[string]any{"body": string(body), "seq": seq},
+			"context": map[string]any{"body": string(body), "seq": seq, "public_url": publicURL},
 		})
 		w.WriteHeader(http.StatusAccepted)
 	})

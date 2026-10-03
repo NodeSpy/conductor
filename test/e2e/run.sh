@@ -1522,6 +1522,42 @@ group_V_engine_plugin() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# Group X — the `listeners` connection semantic (plugin-contract.md §2.4):
+# aclisten (test/plugins/acme-listener, connectors.e2e.yaml) declares a
+# webhook-shaped listener exposed through the builtin `tunnel` connector (a
+# fake script that just prints a URL — no real forwarding, which is fine: the
+# claim under test is that the ENGINE opened the exposure and threaded the
+# URL through, not that the fake tunnel relays bytes).
+# ---------------------------------------------------------------------------
+group_X_listeners() {
+  banner "Group X — listeners: a source plugin's inbound exposed through the builtin tunnel"
+  func_reset_sink
+
+  # aclisten's "ready" event fired once already, at daemon boot — long before
+  # this (or any earlier) group's sink reset, so it can't be asserted here
+  # (see the comment on it in connectors.e2e.yaml). Instead: a plain HTTP
+  # POST straight at the bound listener address fires a "delivery" trigger
+  # on demand, and its context carries the SAME public_url ready did — so one
+  # capture proves both halves at once:
+  #   X1 — the public URL the tunnel returned reached the plugin's config
+  #        (url_to): the capture names the tunnel's exact URL or nothing.
+  #   X2 — the listener the engine opened the exposure FOR is the one
+  #        actually live and wired to the engine, independent of whether the
+  #        (fake, non-forwarding) tunnel relays real traffic.
+  cexec conductor-conn curl -s -X POST http://127.0.0.1:18877/ -d '{"hello":"world"}' >/dev/null
+  if wait_for 20 slack_sink_has "X-LISTENERS-DELIVERY seq=1"; then
+    ok "X2 a delivery to the listener fired a trigger" X X2
+  else
+    bad "X2 delivery to the listener dispatched" X X2 "no X-LISTENERS-DELIVERY capture"
+  fi
+  if slack_sink_has "url=https://hook.example/18877"; then
+    ok "X1 the engine opened tun for aclisten's listener and filled in public_url" X X1
+  else
+    bad "X1 exposure URL reached the plugin" X X1 "no url=https://hook.example/18877 in the delivery capture"
+  fi
+}
+
 main() {
   trap teardown EXIT
   setup
@@ -1556,6 +1592,7 @@ main() {
   group_T_output_schema
   group_U_filter
   group_V_engine_plugin
+  group_X_listeners
   group_W_stepdone
   print_matrix
   [ "$FAIL" -eq 0 ]

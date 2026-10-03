@@ -39,6 +39,26 @@ connectors:
     listen: ":8095"
     ttl: 5m
 
+  # Group X (listeners, plugin-contract.md §2.4): the builtin `tunnel`
+  # exposure, driven by a fake script that just prints a URL (no real
+  # forwarding — see test/e2e's README on the listeners group for why that's
+  # enough in a hermetic, egress-free stack). aclisten's `expose: tun` names
+  # it.
+  tun:
+    use: tunnel
+    command: [sh, -c, "echo serving at https://hook.example/{{.port}}; sleep 600"]
+
+  # aclisten is the reference acme-listener plugin (test/plugins/acme-listener):
+  # it declares the SAME listeners shape (listen/expose/url_to) the github
+  # plugin declares for webhook.*, just with flat connection fields. At
+  # instance start the engine opens `tun` for `listen` and fills in
+  # public_url; the plugin echoes it straight back out on its first event
+  # ("ready"), and fires "delivery" on every HTTP POST the listener receives.
+  aclisten:
+    use: /usr/local/bin/conductor-acme-listener
+    listen: "0.0.0.0:18877"
+    expose: tun
+
 hosts:
   selfbox:
     host: 127.0.0.1 # this container's own sshd (started by entrypoint-conn.sh)
@@ -537,6 +557,29 @@ triggers:
       - id: tell
         uses: slack.post
         options: { channel: CFILTER, text: "U-FILTER fired {{.repo}}#{{.pr}}" }
+
+  # Group X — the `listeners` connection semantic (plugin-contract.md §2.4):
+  # aclisten's `ready` event fires once, the moment start_source runs
+  # (daemon boot), carrying whatever public_url the engine filled in from
+  # the `tun` exposure. It's real and useful (see run.sh's note on why the
+  # e2e assertion doesn't key off it directly: every later group's sink
+  # reset would have wiped a boot-time capture by the time run.sh gets to
+  # group X). `delivery` fires on every HTTP POST the listener itself
+  # receives — independent of the (fake, non-forwarding) tunnel — and
+  # carries the SAME public_url, so a POST sent on demand during group X
+  # proves both the listener is live and that url_to reached the plugin.
+  - on: aclisten.ready
+    name: listeners-ready
+    steps:
+      - id: tell
+        uses: slack.post
+        options: { channel: CLISTEN, text: "X-LISTENERS-READY {{.public_url}}" }
+  - on: aclisten.delivery
+    name: listeners-delivery
+    steps:
+      - id: tell
+        uses: slack.post
+        options: { channel: CLISTEN, text: "X-LISTENERS-DELIVERY seq={{.seq}} url={{.public_url}}" }
 
 checks:
   # A code check that always passes / always fails — a crisp pass/fail verdict
