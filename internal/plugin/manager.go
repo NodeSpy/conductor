@@ -54,9 +54,10 @@ type Manager struct {
 	// the new build.
 	decls map[string]*Decl
 
-	// instMu guards instClients + closed — see the per-instance shape above.
-	// Separate from mu: InstanceClient must not block a concurrent Spec/Decl
-	// read (or vice versa) just because it is lazily creating a client.
+	// instMu guards instClients + closed + reloading — see the per-instance
+	// shape above. Separate from mu: InstanceClient must not block a
+	// concurrent Spec/Decl read (or vice versa) just because it is lazily
+	// creating a client.
 	instMu sync.Mutex
 	// instClients holds each connector key's per-instance clients, created on
 	// first InstanceClient call for that (key, instance) pair. nil entries are
@@ -66,6 +67,20 @@ type Manager struct {
 	// closed is set by Close so an InstanceClient call racing with shutdown
 	// creates no client that Close would never reach.
 	closed bool
+	// reloading marks a key currently being Reload()ed — set before Reload
+	// drains/swaps its snapshotted clients, cleared only after newSpec has
+	// landed in specs (both under instMu). InstanceClient waits on
+	// instCond while its key is set, rather than racing Reload: without
+	// this, a brand-new instance first asked for in the window between
+	// Reload's client snapshot and its specs[key] update would be built
+	// from the PRE-reload spec (the OLD BinPath/Sha256) and then cached —
+	// nothing ever revisits an already-created per-instance client, so
+	// that instance would silently keep running the old binary forever,
+	// even though Reload reported success and every OTHER instance (and a
+	// fresh `plugin list`) shows the new one.
+	reloading map[string]bool
+	// instCond signals waiters blocked on `reloading` (bound to instMu).
+	instCond *sync.Cond
 }
 
 // SpecFromRef resolves one derived config.PluginRef into a runnable Spec.
@@ -175,8 +190,10 @@ func NewManager(plugins map[string]config.PluginRef, configDir string, state *In
 		specs:       make(map[string]Spec, len(plugins)),
 		decls:       make(map[string]*Decl, len(plugins)),
 		instClients: make(map[string]map[string]*Client, len(plugins)),
+		reloading:   make(map[string]bool),
 		deps:        deps,
 	}
+	m.instCond = sync.NewCond(&m.instMu)
 	for key := range plugins {
 		m.order = append(m.order, key)
 	}
@@ -270,6 +287,10 @@ func (m *Manager) InstanceClient(key, instance string) (*Client, error) {
 	if !ok {
 		return nil, fmt.Errorf("plugin %q not found", key)
 	}
+	// Kind/SharedProcess never change after construction (Reload only ever
+	// moves BinPath/Sha256/Resolved), so this early read of them is safe
+	// regardless of a concurrent Reload — unlike the per-instance spec
+	// below, which must be re-read fresh (see the reloading wait).
 	if spec.Kind != KindConnector || spec.SharedProcess {
 		c, ok := m.Client(key)
 		if !ok {
@@ -279,6 +300,16 @@ func (m *Manager) InstanceClient(key, instance string) (*Client, error) {
 	}
 	m.instMu.Lock()
 	defer m.instMu.Unlock()
+	// A Reload for this key may be between its client snapshot and its
+	// specs[key] update (or still draining/swapping the clients it
+	// snapshotted) — wait it out rather than building a brand-new instance
+	// from the PRE-reload spec. Once built and cached, a per-instance
+	// client is never revisited, so racing ahead here would strand that one
+	// instance on the old binary forever, even though Reload reports
+	// success and every sibling instance is on the new build (finding 2).
+	for m.reloading[key] && !m.closed {
+		m.instCond.Wait()
+	}
 	if m.closed {
 		return nil, fmt.Errorf("plugin %q: manager is closed", key)
 	}
@@ -288,6 +319,11 @@ func (m *Manager) InstanceClient(key, instance string) (*Client, error) {
 	if c, ok := m.instClients[key][instance]; ok {
 		return c, nil
 	}
+	// Re-read: the wait above (or simply the window since the first read)
+	// may have let a Reload land, moving BinPath/Sha256/Resolved.
+	m.mu.RLock()
+	spec = m.specs[key]
+	m.mu.RUnlock()
 	instSpec := spec
 	instSpec.Instance = instance
 	// This instance's OWN grant — never a sibling's, and never the union
@@ -387,18 +423,42 @@ func (m *Manager) specsOfKind(k Kind) []Spec {
 // daemon restart (reloadMoved), which re-resolves every instance fresh; there
 // is no caller that treats a Reload error as "retry later" while serving
 // traffic from the partially-swapped set.
+//
+// Races with a brand-new instance's FIRST InstanceClient call (finding 2):
+// key is marked `reloading` (under instMu) before the snapshot below, and
+// stays marked for this whole call — including the slow, unlocked
+// client.Reload drain/swap loop and the final specs[key] update — so
+// InstanceClient blocks (on instCond) rather than building that new
+// instance's process from the pre-reload spec and caching it forever on the
+// old binary. The mark is cleared (and waiters woken) only once specs[key]
+// itself reflects newSpec, so a woken InstanceClient's re-read is always
+// current.
 func (m *Manager) Reload(key string, newSpec Spec) error {
+	m.instMu.Lock()
+	if m.reloading[key] {
+		m.instMu.Unlock()
+		return fmt.Errorf("plugin %q: a reload is already in progress", key)
+	}
+	m.reloading[key] = true
 	var clients []*Client
 	if c, ok := m.clients[key]; ok { // clients is immutable post-construction; no lock
 		clients = append(clients, c)
 	}
-	m.instMu.Lock()
 	for _, c := range m.instClients[key] {
 		clients = append(clients, c)
 	}
 	m.instMu.Unlock()
+
+	finish := func(err error) error {
+		m.instMu.Lock()
+		delete(m.reloading, key)
+		m.instCond.Broadcast()
+		m.instMu.Unlock()
+		return err
+	}
+
 	if len(clients) == 0 {
-		return fmt.Errorf("plugin %q not found", key)
+		return finish(fmt.Errorf("plugin %q not found", key))
 	}
 	for _, c := range clients {
 		// Client.Reload mutates only BinPath/Sha256/Resolved — a per-instance
@@ -406,7 +466,7 @@ func (m *Manager) Reload(key string, newSpec Spec) error {
 		// is untouched, so each keeps identifying itself correctly in logs
 		// after the swap.
 		if err := c.Reload(newSpec); err != nil {
-			return err
+			return finish(err)
 		}
 	}
 	m.mu.Lock()
@@ -415,7 +475,7 @@ func (m *Manager) Reload(key string, newSpec Spec) error {
 		m.specs[key] = s
 	}
 	m.mu.Unlock()
-	return nil
+	return finish(nil)
 }
 
 // Close stops every plugin subprocess this Manager ever started: every
@@ -428,6 +488,13 @@ func (m *Manager) Close() error {
 	instClients := m.instClients
 	m.instClients = nil
 	m.closed = true
+	// Wake anything blocked in InstanceClient waiting on a Reload for some
+	// key: Close itself does not clear `reloading` (that is Reload's own
+	// job, still in flight on its own goroutine), but a waiter re-checks
+	// m.closed every time it wakes, so this just avoids it sitting idle an
+	// extra beat once Reload's own finish() broadcast would otherwise be
+	// the only thing to wake it.
+	m.instCond.Broadcast()
 	m.instMu.Unlock()
 	for _, c := range m.clients {
 		_ = c.Close()

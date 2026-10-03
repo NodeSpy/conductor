@@ -166,11 +166,13 @@ func TestManagerReload(t *testing.T) {
 	sp := reloadableSpec(t)
 	c := NewClient(sp, Deps{dial: fakeDial(fc)})
 	m := &Manager{
-		clients: map[string]*Client{"connectors/jira": c},
-		specs:   map[string]Spec{"connectors/jira": sp},
-		decls:   map[string]*Decl{},
-		order:   []string{"connectors/jira"},
+		clients:   map[string]*Client{"connectors/jira": c},
+		specs:     map[string]Spec{"connectors/jira": sp},
+		decls:     map[string]*Decl{},
+		order:     []string{"connectors/jira"},
+		reloading: map[string]bool{},
 	}
+	m.instCond = sync.NewCond(&m.instMu)
 	newSpec := reloadableSpec(t)
 	newSpec.Sha256 = "deadbeef"
 	newSpec.Resolved = "v2"
