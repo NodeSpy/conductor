@@ -690,10 +690,45 @@ func ValidateSemantics(d Decl) []string {
 			if l.Listen == "" {
 				p = append(p, fmt.Sprintf("semantics.listeners[%d].listen: required", i))
 			}
+			checkConnField := func(field, value string) {
+				if value == "" {
+					return
+				}
+				if !connFieldDeclared(d.Connection, value) {
+					p = append(p, fmt.Sprintf("semantics.listeners[%d].%s: %q does not name a declared connection field", i, field, value))
+				}
+			}
+			checkConnField("listen", l.Listen)
+			checkConnField("expose", l.Expose)
+			checkConnField("url_to", l.URLTo)
+			checkConnField("path", l.Path)
 		}
 	}
 	sort.Strings(p)
 	return p
+}
+
+// connFieldDeclared reports whether a Listener field value (Listen/Expose/
+// URLTo/Path — each a dot-separated path into the connection config, e.g.
+// "webhook.path") names a field the Decl's connection schema actually
+// declares.
+//
+// Only the FIRST dotted segment is checked: Schema (map[string]Field) has
+// no recursive sub-schema for a nested object — a connection field of
+// Type "map" is opaque beyond its own name, exactly like a verb's Options/
+// Outputs schema is for any other nested value. So "webhook.path" is
+// checkable only as far as "webhook" being a declared top-level connection
+// field; conductor cannot see "path" inside it at describe time, the same
+// way it cannot see inside any other map-typed field's contents. A
+// Listener field with no dot (a top-level field directly) is checked in
+// full.
+func connFieldDeclared(conn Schema, value string) bool {
+	first := value
+	if i := strings.Index(value, "."); i >= 0 {
+		first = value[:i]
+	}
+	_, ok := conn[first]
+	return ok
 }
 
 // FactName strips a template's braces when it names a single fact

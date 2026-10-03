@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -174,6 +175,76 @@ func TestValidateSemanticsExposesPathMustNameADeclaredOption(t *testing.T) {
 	}}
 	if p := ValidateSemantics(good); len(p) != 0 {
 		t.Fatalf("exposes.path naming a real option reported %q", p)
+	}
+}
+
+// TestValidateSemanticsListenerFieldsMustNameDeclaredConnectionFields is
+// finding 5: Listener.Listen/Expose/URLTo/Path named config fields the
+// connection schema never declared went unchecked — a typo in any of them
+// silently resolved to nothing at instance start (an empty listen address,
+// no exposure opened, no public URL ever filled in) with no refusal at
+// describe time, the same class of gap TestValidateSemanticsExposesPath
+// MustNameADeclaredOption above closes for exposes.path.
+func TestValidateSemanticsListenerFieldsMustNameDeclaredConnectionFields(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		l     Listener
+		field string
+		value string
+	}{
+		{"listen", Listener{Listen: "nope"}, "listen", "nope"},
+		{"expose", Listener{Listen: "listen", Expose: "nope"}, "expose", "nope"},
+		{"url_to", Listener{Listen: "listen", URLTo: "nope"}, "url_to", "nope"},
+		{"path", Listener{Listen: "listen", Path: "nope"}, "path", "nope"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := Decl{
+				Connection: Schema{"listen": {Type: "string"}},
+				Semantics:  &ConnSemantics{Listeners: []Listener{tc.l}},
+			}
+			p := strings.Join(ValidateSemantics(d), "\n")
+			if !strings.Contains(p, fmt.Sprintf("%s: %q does not name a declared connection field", tc.field, tc.value)) {
+				t.Fatalf("listener.%s naming an undeclared connection field must be refused, got %q", tc.field, p)
+			}
+		})
+	}
+
+	// The positive case: every field present and declared (acme-listener's
+	// actual shape) passes clean.
+	good := Decl{
+		Connection: Schema{
+			"listen": {Type: "string"}, "expose": {Type: "string"},
+			"public_url": {Type: "string"}, "path": {Type: "string"},
+		},
+		Semantics: &ConnSemantics{Listeners: []Listener{
+			{Listen: "listen", Expose: "expose", URLTo: "public_url", Path: "path"},
+		}},
+	}
+	if p := ValidateSemantics(good); len(p) != 0 {
+		t.Fatalf("a listener naming only declared connection fields reported %q", p)
+	}
+
+	// The dotted/nested case (coretest's forge-decl.json, the github
+	// plugin's real shape): only the FIRST segment is checkable — a nested
+	// object field (Type "map") is opaque beyond its own name.
+	nested := Decl{
+		Connection: Schema{"webhook": {Type: "map"}},
+		Semantics: &ConnSemantics{Listeners: []Listener{
+			{Listen: "webhook.listen", Expose: "webhook.expose", URLTo: "webhook.public_url", Path: "webhook.path"},
+		}},
+	}
+	if p := ValidateSemantics(nested); len(p) != 0 {
+		t.Fatalf("a dotted listener field whose FIRST segment is declared must pass, got %q", p)
+	}
+	nestedBad := Decl{
+		Connection: Schema{"webhook": {Type: "map"}},
+		Semantics: &ConnSemantics{Listeners: []Listener{
+			{Listen: "webhook.listen", Expose: "wrongtop.expose"},
+		}},
+	}
+	p := strings.Join(ValidateSemantics(nestedBad), "\n")
+	if !strings.Contains(p, `"wrongtop.expose" does not name a declared connection field`) {
+		t.Fatalf("a dotted listener field whose FIRST segment is undeclared must be refused, got %q", p)
 	}
 }
 
