@@ -86,6 +86,41 @@ func TestDescribeInstanceEventsAreAssigned(t *testing.T) {
 	}
 }
 
+// TestDescribeCarriesDynamicPlaceholder proves the type-level Describe() (no
+// instance, no config) still names a stand-in event — git show
+// 4cade34:internal/connector/rest.go's restDecl declared a `<declared>`
+// Dynamic placeholder before Q6 moved real events to DescribeInstance;
+// `conductor schema rest` with no configured instance must still say "an
+// event is possible here", not show zero events as if rest could never have
+// one.
+func TestDescribeCarriesDynamicPlaceholder(t *testing.T) {
+	d := New().Describe()
+	if len(d.Events) != 1 {
+		t.Fatalf("type-level Describe() events = %+v, want exactly the 1 placeholder", d.Events)
+	}
+	ev := d.Events[0]
+	if ev.Name != "<declared>" || !ev.Dynamic {
+		t.Fatalf("placeholder event = %+v, want {Name: \"<declared>\", Dynamic: true}", ev)
+	}
+	if _, ok := ev.Context["item"]; !ok {
+		t.Fatalf("placeholder event missing its documented item context: %+v", ev.Context)
+	}
+	// DescribeInstance must still fully REPLACE this placeholder with the
+	// instance's real, concrete events — never append to it.
+	id, err := New().DescribeInstance(context.Background(), "api", map[string]any{
+		"base_url": "http://x",
+		"events": map[string]any{
+			"new_thing": map[string]any{"request": map[string]any{"path": "/things"}, "list": "{{.response.body.Items}}", "id": "{{.item.ID}}"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(id.Events) != 1 || id.Events[0].Name != "new_thing" {
+		t.Fatalf("instance events = %+v, want exactly [new_thing] (placeholder must not leak through)", id.Events)
+	}
+}
+
 func TestValidateRejectionTable(t *testing.T) {
 	r := New()
 	cases := []struct {

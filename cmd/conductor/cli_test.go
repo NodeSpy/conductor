@@ -111,6 +111,24 @@ func TestCmdSchema(t *testing.T) {
 	}
 }
 
+// TestCmdSchemaRestShowsDeclaredPlaceholder: `conductor schema rest` with no
+// configured instance must still show an event is possible — the
+// `<declared>` Dynamic placeholder restored on rest's type-level Describe()
+// (git show 4cade34:internal/connector/rest.go had it; Q6 dropped it when
+// real events moved to DescribeInstance).
+func TestCmdSchemaRestShowsDeclaredPlaceholder(t *testing.T) {
+	path := writeCLIConfig(t)
+	out, err := captureStdout(t, func() error { return cmdSchema([]string{"--config", path, "rest"}) })
+	if err != nil {
+		t.Fatalf("schema rest: %v", err)
+	}
+	for _, want := range []string{"event <declared in connection>", "a polled events: entry produced a new item"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("schema rest output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 // TestCmdSchemaReportsDisabledInstance: a connector whose per-instance build
 // failed (here: slack's missing credentials) must not print a silent,
 // empty-looking schema and exit 0 — it must say WHY, the same reason

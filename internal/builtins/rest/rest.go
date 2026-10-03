@@ -98,8 +98,15 @@ func (r *REST) logPollError(instance, name string, err error) {
 // back to the connection's own static auth: unchanged).
 func (r *REST) SetHost(h *plugin.HostConn) { r.host.Store(h) }
 
-// Describe declares the type-level contract: connection shape only. Verbs
-// and events are per-instance (DescribeInstance).
+// Describe declares the type-level contract: connection shape, plus a
+// `<declared>` Dynamic placeholder standing in for whatever events: entries
+// an instance's own config names (DescribeInstance materializes the real
+// ones). Verbs are per-instance only — a verb has no name conductor can show
+// before an instance declares it, where an event at least has this one
+// stand-in (git show 4cade34:internal/connector/rest.go's restDecl carried
+// the same placeholder before Q6 moved verbs/events to DescribeInstance;
+// losing it made `conductor schema rest` with no configured instance print no
+// event at all instead of saying one is possible).
 func (*REST) Describe() plugin.Decl {
 	return plugin.Decl{
 		Type: "rest", Kind: plugin.KindConnector,
@@ -110,6 +117,10 @@ func (*REST) Describe() plugin.Decl {
 			"headers":  {Type: "map", Desc: "default request headers (templated)"},
 			"verbs":    {Type: "map", Required: true, Desc: "name -> { method, path, query, headers, body, expect, output }"},
 			"events":   {Type: "map", Desc: "name -> { poll, request{method,path,query}, list, id, context } — a polled source"},
+		},
+		Events: []plugin.Event{
+			{Name: "<declared>", Dynamic: true, Desc: "a polled events: entry produced a new item",
+				Context: plugin.Schema{"item": {Type: "map", Desc: "the raw list item"}}},
 		},
 	}
 }
