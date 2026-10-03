@@ -388,13 +388,6 @@ func cmdConnectors(args []string) error {
 		if verbs := in.Decl.VerbNames(); len(verbs) > 0 {
 			fmt.Printf("  verbs:  %s\n", strings.Join(verbs, ", "))
 		}
-		if pid, ok := connector.InstancePID(in); ok {
-			// Multi-instance isolation (docs/wiki/Plugins.md): a plugin-backed
-			// instance runs its OWN subprocess by default, so this is useful
-			// evidence it is actually doing so — two instances of one plugin
-			// show two different pids here.
-			fmt.Printf("  pid:    %d\n", pid)
-		}
 		fmt.Printf("  triggers: %d\n", trigCount[name])
 	}
 	return nil

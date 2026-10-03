@@ -329,10 +329,24 @@ separate `github` plugin processes, not one process serving both. That means:
   process that calls them, on top of the existing per-call instance check —
   one instance's process cannot even ADDRESS a sibling's state or managed
   token, let alone read it;
+- each instance's process is confined to exactly THAT instance's own
+  `network:`/`allow_secrets:`/`allow_env:`/`isolation:` — never a sibling
+  instance's, and never the union of every instance's (`gh`'s process never
+  sees `ghlisten`'s `allow_env` secret, or its narrower/wider `network:`). The
+  unioned view only ever applies to a `shared_process: true` plugin's one
+  process (which by definition must be permitted whatever any of its
+  instances needs) and to the type-level `plugin.describe` probe below, which
+  gets the opposite: the MINIMUM (none of it) — a pure self-description needs
+  neither network, secrets, nor env;
 - a hot reload (a moved plugin binary) swaps every configured instance's
   process, one at a time;
-- `conductor connectors ls` and the daemon log show each instance's own pid,
-  so two instances of one plugin are visibly two processes.
+- the daemon log's `subprocess started (pid N)` lines, one per configured
+  instance, show two instances of one plugin are visibly two processes.
+  (`conductor connectors ls` does NOT show this: it builds its own,
+  throwaway, short-lived stack to describe each connector for display, so
+  any pid it could show would be that one-off process's, not the running
+  daemon's — it prints no pid at all, rather than one that looks live but
+  isn't.)
 
 The one process-level resource conductor shares regardless: the type-level
 `plugin.describe` probe (no instance) that runs once at load/install, to

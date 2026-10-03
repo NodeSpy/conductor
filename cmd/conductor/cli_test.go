@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -78,6 +79,16 @@ func TestCmdConnectorsLs(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("ls output missing %q:\n%s", want, out)
 		}
+	}
+
+	// finding 6: `connectors ls` builds its own throwaway, short-lived
+	// stack just to describe each connector for display — any pid it could
+	// show would be that one-off process's, never the running daemon's. It
+	// must print no "pid:" line at all rather than one that looks live but
+	// isn't (docs/wiki/Plugins.md "Multi-instance isolation" points at the
+	// daemon log's own "subprocess started (pid N)" lines instead).
+	if strings.Contains(out, "pid:") {
+		t.Errorf("ls output must never show a pid (it is this CLI invocation's own throwaway process, not the daemon's):\n%s", out)
 	}
 
 	// Wrong subcommand → usage error.
@@ -312,5 +323,32 @@ triggers:
 		if !strings.Contains(out, want) {
 			t.Errorf("replay output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+// TestCmdConnectorsLsNeverShowsPidForARealExternalPlugin is finding 6's
+// mutation-sensitive proof: TestCmdConnectorsLs above never actually spawns
+// an external plugin process (box/timer/broken all resolve to builtins or
+// fail before ever reaching a live client), so it could not have caught a
+// regression that reintroduced the pid line. This drives a REAL external
+// plugin connector (acme-echo, built fresh) through `connectors ls` and
+// confirms no "pid:" line appears, even though a real subprocess genuinely
+// is live for the duration of this CLI invocation's own throwaway stack.
+func TestCmdConnectorsLsNeverShowsPidForARealExternalPlugin(t *testing.T) {
+	bin := buildTestPlugin(t, "acme-echo")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	doc := fmt.Sprintf("connectors:\n  echo:\n    use: %s\n    token: s3cr3t\n", bin)
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := captureStdout(t, func() error { return cmdConnectors([]string{"--config", path, "ls"}) })
+	if err != nil {
+		t.Fatalf("connectors ls: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "echo") || !strings.Contains(out, "verbs:  echo") {
+		t.Fatalf("connectors ls did not describe the real acme-echo instance:\n%s", out)
+	}
+	if strings.Contains(out, "pid:") {
+		t.Fatalf("connectors ls must never show a pid, even for a genuinely live external plugin instance (it is this CLI invocation's own throwaway process, not the daemon's):\n%s", out)
 	}
 }
