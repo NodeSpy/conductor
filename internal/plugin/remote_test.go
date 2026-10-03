@@ -85,6 +85,54 @@ func TestFetchRemoteResolvesVerifiesCaches(t *testing.T) {
 	}
 }
 
+// TestCheckFetchableIsReadOnly: CheckFetchable resolves a release tag off
+// ListTags + the version constraint WITHOUT ever calling Download — the
+// read-only half `conductor validate` needs (plugin-contract.md §5.2 step 1).
+func TestCheckFetchableIsReadOnly(t *testing.T) {
+	rs := RemoteSource{URL: "https://github.com/NodeSpy/conductor-plugins", Component: "widget"}
+	calledDownload := false
+	api := downloadSpyAPI{
+		stubAPI:    stubAPI{tags: []string{"widget/v1.0.0", "widget/v1.1.0", "widget/v2.0.0"}},
+		onDownload: func() { calledDownload = true },
+	}
+	tag, err := CheckFetchable(rs, "~> 1.0", api)
+	if err != nil {
+		t.Fatalf("CheckFetchable: %v", err)
+	}
+	if tag != "widget/v1.1.0" {
+		t.Fatalf("resolved tag %q, want widget/v1.1.0 (highest 1.x, not 2.0.0)", tag)
+	}
+	if calledDownload {
+		t.Fatal("CheckFetchable must not download or install anything")
+	}
+
+	// No tag satisfies an impossible constraint: a clear error, not a panic
+	// or a silent empty tag.
+	if _, err := CheckFetchable(rs, "~> 9.0", api); err == nil {
+		t.Fatal("an unsatisfiable constraint must error")
+	}
+
+	// A ListTags failure (network down, host unreachable) surfaces as the
+	// exact error `conductor validate` reports, not a crash.
+	if _, err := CheckFetchable(rs, "~> 1.0", downloadSpyAPI{stubAPI: stubAPI{tagsErr: true}}); err == nil {
+		t.Fatal("a ListTags failure must surface as an error")
+	}
+}
+
+// downloadSpyAPI wraps stubAPI to record whether Download was ever called —
+// the thing CheckFetchable must never do.
+type downloadSpyAPI struct {
+	stubAPI
+	onDownload func()
+}
+
+func (d downloadSpyAPI) Download(rs RemoteSource, tag, asset, destDir string) (string, error) {
+	if d.onDownload != nil {
+		d.onDownload()
+	}
+	return d.stubAPI.Download(rs, tag, asset, destDir)
+}
+
 // TestCopyExecutableReplacesRunningBinary reproduces the box condition that made
 // every engine reconcile fail: the destination is a live, executing binary, so
 // an in-place O_TRUNC write is refused with ETXTBSY. copyExecutable must still

@@ -332,9 +332,59 @@ func cmdValidate(args []string) error {
 			fmt.Printf("warning: %s\n", w)
 		}
 	}
+	// plugin-contract.md §5.2 step 1 / Q12 / Q13: before switching to a
+	// release, an operator is told whether every plugin it references but
+	// does not yet have installed can actually be fetched from this box (a
+	// read-only git ls-remote — nothing is installed). A plugin that can't be
+	// fetched is reported as a WARNING, not a failure: Q12's whole point is
+	// that the daemon still boots with just that connector/engine/runtime
+	// disabled, so a config that is otherwise good must still pass validate.
+	for _, line := range checkPluginFetchability(cfg) {
+		fmt.Println(line)
+	}
 	fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s)\n",
 		len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows))
 	return nil
+}
+
+// validateReleaseAPI is the remote lookup `conductor validate` uses to check
+// whether a referenced-but-not-installed plugin can be fetched. A test
+// overrides it with a stub, so validate's unit tests need no real network.
+var validateReleaseAPI plugin.ReleaseAPI = plugin.GitDist{}
+
+// checkPluginFetchability reports, for every plugin cfg.PluginRefs() names
+// that is NOT already installed, whether it can be fetched from this
+// machine: a read-only `git ls-remote` plus the version-constraint match
+// (plugin.CheckFetchable) — no download, nothing written to install state.
+// A local dev binary (`use: ./...`) and an already-installed plugin are
+// skipped: there is nothing to fetch for the first, and validate does not
+// re-check an update for the second (that is `plugin update`'s job).
+func checkPluginFetchability(cfg *config.Config) []string {
+	refs := cfg.PluginRefs()
+	keys := make([]string, 0, len(refs))
+	for k := range refs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	state := plugin.LoadInstallState(plugin.InstallDir())
+	var lines []string
+	for _, key := range keys {
+		ref := refs[key]
+		if ref.Use.Origin == config.OriginLocal {
+			continue
+		}
+		if _, ok := state.Get(key); ok {
+			continue
+		}
+		rs := plugin.RemoteSource{URL: ref.Use.GitURL(), Component: ref.Use.Component}
+		tag, err := plugin.CheckFetchable(rs, ref.Use.Version, validateReleaseAPI)
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("warning: plugin %s (%s) is not installed and not fetchable: %v — the daemon boots with it disabled (only its connector/engine/runtime, per Q12) until this is fixed", ref.Name, ref.Use.String(), err))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("fetchable: %s -> %s", ref.Use.String(), tag))
+	}
+	return lines
 }
 
 func cmdRun(args []string) error {

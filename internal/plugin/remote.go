@@ -69,6 +69,25 @@ type ReleaseAPI interface {
 	Download(rs RemoteSource, tag, file, destDir string) (path string, err error)
 }
 
+// CheckFetchable is the read-only half of FetchRemoteVerified: it resolves
+// the constraint to a release tag WITHOUT downloading or installing anything
+// — a git ls-remote (ReleaseAPI.ListTags) plus the version-constraint match,
+// nothing else. `conductor validate` uses it (plugin-contract.md §5.2 step 1,
+// Q12, Q13) to report whether a referenced-but-not-installed plugin can be
+// fetched from this machine, before the operator switches to a release that
+// needs it.
+func CheckFetchable(rs RemoteSource, constraint string, api ReleaseAPI) (tag string, err error) {
+	tags, err := api.ListTags(rs)
+	if err != nil {
+		return "", fmt.Errorf("list releases for %s: %w", rs.Display(), err)
+	}
+	tag, ok := config.BestMatch(tags, rs.tagPrefix(), constraint)
+	if !ok {
+		return "", fmt.Errorf("no release tag satisfies version %q for %s (looked for %q<semver> among %d tags)", constraint, rs.Display(), rs.tagPrefix(), len(tags))
+	}
+	return tag, nil
+}
+
 // FetchRemote resolves the constraint to a release tag, downloads the
 // per-platform binary + checksums, verifies the sha (checksums.txt and/or the
 // pinned sha256), and caches it. Returns the cached path, the resolved tag, and
@@ -86,13 +105,9 @@ func FetchRemote(rs RemoteSource, constraint, pinnedSha, cacheDir string, api Re
 // not verified, and nothing that is granted on the strength of a verified
 // release (an official source's default event trust) is granted to it.
 func FetchRemoteVerified(rs RemoteSource, constraint, pinnedSha, cacheDir string, api ReleaseAPI) (binPath, tag, sha string, verified bool, err error) {
-	tags, err := api.ListTags(rs)
+	tag, err = CheckFetchable(rs, constraint, api)
 	if err != nil {
-		return "", "", "", false, fmt.Errorf("list releases for %s: %w", rs.Display(), err)
-	}
-	tag, ok := config.BestMatch(tags, rs.tagPrefix(), constraint)
-	if !ok {
-		return "", "", "", false, fmt.Errorf("no release tag satisfies version %q for %s (looked for %q<semver> among %d tags)", constraint, rs.Display(), rs.tagPrefix(), len(tags))
+		return "", "", "", false, err
 	}
 	tmp, err := os.MkdirTemp("", "conductor-plugin-dl-*")
 	if err != nil {
