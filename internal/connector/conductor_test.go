@@ -12,6 +12,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/core/coretest"
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
@@ -293,5 +294,43 @@ connectors:
 	out, err := in.Invoke(context.Background(), "sweep", nil)
 	if err != nil || out["nudged"] != 3 {
 		t.Fatalf("gh.sweep: %v %v", out, err)
+	}
+}
+
+// A lifecycle event about a real target checks it out the way the origin's
+// own runs do — by the origin's DECLARED checkout, not a vendor-shaped
+// fallback — and carries the origin's facts minus the private and secret
+// ones; none of the origin's other semantics (closing, dedupe) carry over.
+func TestEmitLifecycleCarriesTheOriginsCheckout(t *testing.T) {
+	capture, stop := startConductorSource(t, conductorTriggerYAML)
+	defer stop()
+	orig := core.Trigger{
+		Source: "github", Instance: "gh", Kind: "failing_checks", TargetTrusted: true,
+		Sem:    coretest.DeclaredSemantics(core.Trigger{Kind: "failing_checks"}),
+		Target: core.Target{Repo: "o/r", Number: 7, PR: 7},
+		Context: map[string]any{"head_ref": "fix-it", "app_token": "SECRET", "installation_id": 9,
+			"failing_check": "build"},
+	}
+	EmitLifecycle(context.Background(), "escalate", orig, "line", nil)
+	got := capture()
+	if len(got) != 1 {
+		t.Fatalf("emitted %d", len(got))
+	}
+	lt := got[0]
+	co, ok := lt.Checkout()
+	if !ok || co.Remote != "git@github.com:o/r.git" || co.FetchRef != "refs/pull/7/head" || co.PushBranch != "fix-it" {
+		t.Fatalf("checkout = %+v ok=%v, want the origin's declared checkout", co, ok)
+	}
+	if _, leaked := lt.Context["app_token"]; leaked {
+		t.Fatal("the origin's secret fact was carried into the lifecycle run")
+	}
+	if _, leaked := lt.Context["installation_id"]; leaked {
+		t.Fatal("the origin's private fact was carried into the lifecycle run")
+	}
+	if lt.Context["failing_check"] != "build" || lt.Context["message"] != "line" {
+		t.Fatalf("facts: %+v", lt.Context)
+	}
+	if lt.ClosesTarget() || lt.LevelTriggered() {
+		t.Fatal("the origin's other semantics carried over")
 	}
 }

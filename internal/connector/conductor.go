@@ -9,6 +9,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/inbound"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // The conductor connector makes conductor ITSELF a first-class connector:
@@ -288,9 +289,29 @@ func EmitLifecycle(ctx context.Context, event string, t core.Trigger, line strin
 		if ct.Spec.Event() != event || !ct.Spec.IsEnabled() {
 			continue
 		}
-		// Event-specific context first, so the host's own keys below always
-		// win: origin_instance decides whose credentials the work gets.
+		// The origin's own facts first (minus those it declares private or
+		// secret), then event-specific context, so the host's own keys below
+		// always win: origin_instance decides whose credentials the work gets.
 		trigCtx := map[string]any{}
+		real := t.Target.Repo != ""
+		var sem *sdk.EventSemantics
+		if real && t.HasSemantics() {
+			o := t.Semantics()
+			hidden := map[string]bool{}
+			for _, f := range append(append([]string(nil), o.Private...), o.Secret...) {
+				hidden[f] = true
+			}
+			for k, v := range t.Context {
+				if !hidden[k] {
+					trigCtx[k] = v
+				}
+			}
+			// What the work is about, as the origin declared it: its target,
+			// revision and checkout — so a run about a real target checks it
+			// out the way the origin's own runs do. Nothing else carries over
+			// (no dedupe, closing or remediation semantics of the origin).
+			sem = &sdk.EventSemantics{Target: o.Target, Revision: o.Revision, Checkout: o.Checkout}
+		}
 		for k, v := range extra {
 			trigCtx[k] = v
 		}
@@ -326,6 +347,7 @@ func EmitLifecycle(ctx context.Context, event string, t core.Trigger, line strin
 			Action:   act,
 			// The origin's target, as the platform assigned it (or not).
 			TargetTrusted: trusted,
+			Sem:           sem,
 		})
 	}
 }
