@@ -36,12 +36,14 @@ import (
 // deliveryIDHeader is the one header name this builtin treats as a
 // vendor-neutral delivery id, when a sender sets it. It is UNSIGNED (no
 // `sign:` scheme covers it, even when the body is HMAC-verified), so it is
-// never trusted alone (finding 8): folded into the fallback key only
-// alongside the body's own hash, never in place of it — see
-// deliveryFallbackKey and deliverBodyDedupKey. Operators whose sender uses a
-// different header can still get exact behavior with an explicit `dedup:`
-// template over `{{.body...}}`; this id is only consulted as part of the
-// fallback used when a source declares no `dedup:` at all.
+// never trusted as a dedup gate: a source with no `dedup:` template fires on
+// every delivery regardless (see deliveryFallbackKey) — this id only ever
+// folds into the synthetic TARGET key alongside the body's own hash, purely
+// to give deliveries with distinct ids distinct targets. Operators who want
+// replay protection declare an explicit `dedup:` template over `{{.body...}}`
+// (dedup: templates only see the parsed body, not headers); without one,
+// conductor does not invent suppression from the body or this header behind
+// the operator's back.
 const deliveryIDHeader = "X-Delivery-Id"
 
 const maxBody = 25 << 20
@@ -67,7 +69,7 @@ func (*Webhook) Describe() plugin.Decl {
 		Connection: plugin.Schema{
 			"listen":        {Type: "string", Desc: "direct HTTP listener address, e.g. :8099"},
 			"smee_url":      {Type: "string", Desc: "smee.io channel (no public ingress needed)"},
-			"sources":       {Type: "map", Required: true, Desc: "name -> { path, sign: {header,secret,scheme}, match, title, dedup, repo }"},
+			"sources":       {Type: "map", Required: true, Desc: "name -> { path, sign: {header,secret,scheme}, match, title, dedup, repo }. dedup: a template rendering the operator's own signature for replay protection; unset (the default) fires on EVERY delivery — no dedup check at all, so a sender that legitimately re-POSTs an identical payload (heartbeat/status webhooks) is never silently suppressed"},
 			"allow_private": {Type: "boolean", Desc: "permit webhook.post to reach loopback/private/link-local/CGNAT addresses (default false — blocked to prevent SSRF)"},
 			"allow_hosts":   {Type: "list", Desc: "specific hosts (by name) or exact IPs that webhook.post may reach even in an otherwise-blocked range"},
 		},
@@ -221,7 +223,9 @@ func (w *Webhook) Validate(_ context.Context, req plugin.ValidateRequest) (plugi
 }
 
 // StartSource runs the instance's direct listener and/or smee relay until ctx
-// ends, emitting one event per matched, deduped delivery. Routing to
+// ends, emitting one event per matched delivery that isn't a duplicate of an
+// operator-declared `dedup:` signature (a source with no `dedup:` has no
+// dedup gate: every matched delivery fires). Routing to
 // triggers is entirely generic (the daemon matches `on: <instance>.<source>`
 // the same way it does for any other plugin source) — the plugin does not
 // group deliveries by trigger/action the way the legacy integration did.
@@ -280,14 +284,17 @@ func (w *Webhook) handler(ctx context.Context, instance, name string, sc sourceC
 	}
 }
 
-// deliver maps one raw body through a source's templates and emits ONE event
-// when it matches and is not a duplicate delivery. smeeSig/viaSmee: a smee
-// relay re-serializes the body, so its signature check is best-effort and
-// applied here rather than at a listener boundary.
+// deliver maps one raw body through a source's templates and emits ONE event,
+// unless the match predicate rejects it or an operator-declared `dedup:`
+// signature says this is a duplicate. A source with no `dedup:` has no dedup
+// gate at all: it fires on every delivery. smeeSig/viaSmee: a smee relay
+// re-serializes the body, so its signature check is best-effort and applied
+// here rather than at a listener boundary.
 //
 // deliveryID is the sender's own delivery id (deliveryIDHeader), when it set
-// one — used only as a fallback dedup/target key for a source that declares
-// no `dedup:` template (below).
+// one — used only to help compute a distinct synthetic TARGET key for a
+// source that declares no `dedup:` template (below); it is never a dedup
+// gate.
 func (w *Webhook) deliver(instance, name string, sc sourceCfg, smeeSig string, body []byte, viaSmee bool, seen *inbound.DeliveryDedup, emit func(any) error, deliveryID string) {
 	if viaSmee && sc.Sign.Secret != "" && !inbound.VerifyHMAC(sc.Sign.Secret, body, smeeSig, sc.Sign.Scheme) {
 		return
@@ -299,31 +306,30 @@ func (w *Webhook) deliver(instance, name string, sc sourceCfg, smeeSig string, b
 		return // this delivery isn't for this source
 	}
 	dedup := render(sc.Dedup, data)
-	// synthKey disambiguates deliveries for the dedup/target-key computation
-	// below. A declared `dedup:` renders to the operator's own signature, as
-	// before. A source with NO `dedup:` used to render "" for every
-	// delivery, so the dedup/target key collapsed to one constant value per
-	// source (name+"\x00"+"") — every delivery after the first was a
-	// "duplicate" of that same key and was silently dropped, and every one
-	// that WAS emitted shared one synthetic target. Falling back to a hash of
-	// the body (optionally combined with the sender's own delivery id) gives
-	// every distinct delivery its own key while staying deterministic for an
-	// exact retry of the SAME delivery.
+	// synthKey is the per-delivery TARGET/synth key, never a dedup gate by
+	// itself. A declared `dedup:` renders to the operator's own signature,
+	// and remains the (only) dedup gate below, unaffected by any of this.
+	//
+	// A source with NO `dedup:` template fires on EVERY delivery — that is
+	// the documented contract (`git show
+	// 4cade34:internal/integrations/webhook/webhook.go`: `Dedup ""` = "fire
+	// on every delivery"), because sources like a heartbeat/status webhook
+	// legitimately re-POST an identical payload and must not be silently
+	// suppressed. A sender that wants replay protection gets it by declaring
+	// `dedup:`; conductor does not invent one from the body behind the
+	// operator's back. synthKey still needs SOME value so two deliveries
+	// don't collapse onto the same synthetic target: a hash of the body,
+	// optionally combined with the sender's own (unsigned) delivery id when
+	// set, gives each delivery its own target deterministically — but, since
+	// there is no dedup: declared, it is used ONLY to compute that key, never
+	// checked against `seen`. A sender who pre-sends under a future
+	// delivery's id, or replays a byte-identical body under a new id, cannot
+	// suppress anything this way: there is no gate left to fool.
 	synthKey := dedup
 	if sc.Dedup == "" {
-		// The body-hash-only gate ALWAYS applies first (finding 8), before
-		// deliveryFallbackKey folds in the (unsigned, sender-controlled)
-		// delivery id: a byte-identical body is a duplicate no matter what id
-		// rides along with it this time — closing the replay-under-a-new-id
-		// attack deliveryFallbackKey's own key (hash+id) cannot catch on its
-		// own, since a different id there means a different combined key.
-		if !seen.Add(name + "\x00body\x00" + deliverBodyDedupKey(body)) {
-			return // duplicate delivery (identical body, any delivery id)
-		}
 		synthKey = deliveryFallbackKey(deliveryID, body)
-	}
-	if !seen.Add(name + "\x00" + synthKey) {
-		return // duplicate delivery (smee redelivery / retried POST)
+	} else if !seen.Add(name + "\x00" + synthKey) {
+		return // duplicate delivery (smee redelivery / retried POST) of an operator-declared dedup: signature
 	}
 
 	title := render(sc.Title, data)
@@ -349,34 +355,20 @@ func (w *Webhook) deliver(instance, name string, sc sourceCfg, smeeSig string, b
 }
 
 // deliveryFallbackKey is the TARGET/synth key for a source with no declared
-// `dedup:` template: a content hash of the body, ALWAYS — never replaced by
-// the sender's own (unsigned) delivery id — combined with that id when the
-// sender set one, purely to give two deliveries that happen to share an
-// identical body (and nothing else) distinct synthetic targets. It is never
-// the sole dedup gate: see deliverBodyDedupKey, checked first, unconditionally
-// (finding 8).
+// `dedup:` template: a content hash of the body, combined with the sender's
+// own (unsigned) delivery id when it set one, purely so that two deliveries
+// which happen to share an identical body (and nothing else) still get
+// distinct synthetic targets when an id is available to tell them apart. It
+// is NOT a dedup gate — a source with no `dedup:` fires on every delivery
+// (see the call site in deliver) — so a sender choosing what id (or none) to
+// send can influence the target a delivery lands on, but can never suppress
+// a delivery this way.
 func deliveryFallbackKey(deliveryID string, body []byte) string {
 	key := "sha256:" + bodyHash(body)
 	if deliveryID != "" {
 		key += ":id:" + deliveryID
 	}
 	return key
-}
-
-// deliverBodyDedupKey is the fallback delivery's PRIMARY, unconditional dedup
-// gate (finding 8): the body's content hash alone, deliberately never
-// combined with the delivery id header (unsigned, sender-controlled even
-// when the body itself is HMAC-verified). Without this gate, trusting the id
-// (deliveryFallbackKey, which DOES fold it in for target-assignment purposes)
-// as part of what decides "duplicate" let two attacks through:
-//   - a sender pre-sends its OWN body under the SAME delivery id a future
-//     legitimate delivery will carry, to suppress that later, real delivery
-//     — but the two bodies hash differently, so they never collide here;
-//   - a sender replays a previously-processed, genuinely signed body under a
-//     NEW delivery id, to get it processed a second time — but the body hash
-//     is identical either way, so it collides here regardless of the id.
-func deliverBodyDedupKey(body []byte) string {
-	return "sha256:" + bodyHash(body)
 }
 
 func bodyHash(body []byte) string {

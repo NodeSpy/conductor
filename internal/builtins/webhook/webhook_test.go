@@ -364,10 +364,15 @@ func TestStartSourceNoDedupTemplateBothDeliveriesFire(t *testing.T) {
 	}
 }
 
-// A source with no `dedup:` template still dedupes an exact retry of the
-// SAME delivery (identical body): the fallback key is a content hash, so a
-// byte-identical redelivery collapses to the same key as before.
-func TestStartSourceNoDedupTemplateStillDedupesIdenticalRetry(t *testing.T) {
+// A source with no `dedup:` template has no dedup gate at all: an exact
+// retry of the SAME delivery (byte-identical body) still fires a second
+// time. The documented contract (`git show
+// 4cade34:internal/integrations/webhook/webhook.go`: `Dedup ""` = "fire on
+// every delivery") exists precisely so a sender that legitimately re-POSTs
+// an identical payload (a heartbeat/status webhook) is never silently
+// suppressed. An operator who wants retry/replay collapsed to one event
+// declares an explicit `dedup:` template (see TestStartSourceDedupsRedelivery).
+func TestStartSourceNoDedupTemplateIdenticalRetryStillFires(t *testing.T) {
 	w := New()
 	addr := freeAddr(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -386,14 +391,16 @@ func TestStartSourceNoDedupTemplateStillDedupesIdenticalRetry(t *testing.T) {
 	postTo(t, "http://"+addr+"/h", `{"id":"evt-1"}`, nil)
 	postTo(t, "http://"+addr+"/h", `{"id":"evt-1"}`, nil) // byte-identical retry
 
-	select {
-	case <-got:
-	case <-time.After(5 * time.Second):
-		t.Fatal("first delivery should emit")
+	for i := 0; i < 2; i++ {
+		select {
+		case <-got:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("delivery %d of 2 never fired: with no dedup: declared, every delivery (including an identical retry) must fire", i+1)
+		}
 	}
 	select {
 	case ev := <-got:
-		t.Fatalf("an identical retry with no dedup: configured should still dedupe via the body hash, got %+v", ev)
+		t.Fatalf("exactly 2 deliveries were sent, got an unexpected 3rd: %+v", ev)
 	case <-time.After(200 * time.Millisecond):
 	}
 }
@@ -401,9 +408,9 @@ func TestStartSourceNoDedupTemplateStillDedupesIdenticalRetry(t *testing.T) {
 // TestStartSourceDeliveryIDCannotSuppressALaterDifferentDelivery is finding
 // 8's first attack: a sender pre-sends ITS OWN body under the delivery id a
 // future, genuinely different delivery will use, hoping the id collision
-// alone suppresses the real one. It must not: the body-hash gate
-// (deliverBodyDedupKey) is keyed on content, not the (unsigned) id, so a
-// different body under the same id is never treated as a duplicate.
+// alone suppresses the real one. It must not — trivially true now that a
+// source with no `dedup:` has no dedup gate at all — but this stays pinned
+// as a regression test in case a future change reintroduces an implicit gate.
 func TestStartSourceDeliveryIDCannotSuppressALaterDifferentDelivery(t *testing.T) {
 	w := New()
 	addr := freeAddr(t)
@@ -438,12 +445,13 @@ func TestStartSourceDeliveryIDCannotSuppressALaterDifferentDelivery(t *testing.T
 	}
 }
 
-// TestStartSourceReplayUnderANewDeliveryIDStillDedupes is finding 8's second
-// attack: a sender replays a PREVIOUSLY-SEEN, byte-identical body under a
-// NEW delivery id (the header is unsigned, even when the body itself is
-// HMAC-verified), hoping the id change alone defeats dedup. It must not: the
-// body-hash gate is checked BEFORE the id is ever folded into a key.
-func TestStartSourceReplayUnderANewDeliveryIDStillDedupes(t *testing.T) {
+// TestStartSourceReplayUnderANewDeliveryIDStillFires documents that, with no
+// `dedup:` declared, a byte-identical body replayed under a brand-new
+// delivery id fires again — same as any other redelivery. There is no
+// implicit dedup gate to defeat: a sender cannot suppress a delivery this
+// way (there's nothing to suppress) any more than they can suppress one by
+// any other means. Replay protection is exactly what `dedup:` is for.
+func TestStartSourceReplayUnderANewDeliveryIDStillFires(t *testing.T) {
 	w := New()
 	addr := freeAddr(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -463,14 +471,16 @@ func TestStartSourceReplayUnderANewDeliveryIDStillDedupes(t *testing.T) {
 	// The identical body, replayed under a brand-new delivery id.
 	postTo(t, "http://"+addr+"/h", `{"id":"evt-1"}`, map[string]string{"X-Delivery-Id": "id-2"})
 
-	select {
-	case <-got:
-	case <-time.After(5 * time.Second):
-		t.Fatal("first delivery should emit")
+	for i := 0; i < 2; i++ {
+		select {
+		case <-got:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("delivery %d of 2 never fired: with no dedup: declared, a replayed body under a new id must still fire", i+1)
+		}
 	}
 	select {
 	case ev := <-got:
-		t.Fatalf("a byte-identical body replayed under a new delivery id must still dedupe, got %+v", ev)
+		t.Fatalf("exactly 2 deliveries were sent, got an unexpected 3rd: %+v", ev)
 	case <-time.After(200 * time.Millisecond):
 	}
 }

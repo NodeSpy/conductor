@@ -141,6 +141,13 @@ subprocesses — every vendor connector is one: `github`, `slack`, `discord`,
 | `workflow` | — | `list`, `run`, `save` | the workflow catalog, run-by-name / inline plans (guarded by `policy.agent_authored`), and agent promotion — see [[Workflows]] |
 | `conductor` | `dispatch`, `escalate`, `needs_input`, `complete`, `failed`, `updated`, `update_available` | `update`, `pause`, `resume`, `restart`, `reload`, `run` | conductor itself — lifecycle events as a source (alerting is an ordinary trigger; loop-guarded), daemon operations as verbs; always available, name reserved — see [[Notifications]] |
 
+`webhook`'s `dedup:` is replay protection, not a default suppression: a
+source with no `dedup:` template fires on **every** delivery, full stop — no
+hash of the body is checked behind your back. A sender that legitimately
+re-POSTs an identical payload (a heartbeat/status webhook) is never silently
+dropped. Declare `dedup:` (a template over `{{.body...}}`) only when a
+retried/re-delivered body should collapse to one event.
+
 Every `vaults:` entry also surfaces under its own name with `read` (all
 types) and `write` (writable types) verbs — values read there are tainted
 sensitive and redacted from logs/audit. See [[Secrets]].
