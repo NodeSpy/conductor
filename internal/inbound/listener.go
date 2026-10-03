@@ -7,6 +7,7 @@ package inbound
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -30,6 +31,11 @@ type listener struct {
 	routes   map[string]http.Handler // exact-path routes
 	prefixes map[string]http.Handler // prefix routes (longest match wins)
 	server   *http.Server
+	// ln is the raw socket, set (under lmu) once the bind goroutine below
+	// succeeds. Eviction closes it directly and synchronously, in the very
+	// same lmu critical section as removing the map entry — see the eviction
+	// goroutine's comment for why that matters.
+	ln net.Listener
 }
 
 // getListener returns the shared listener for addr, starting its server the
@@ -61,10 +67,41 @@ func getListener(ctx context.Context, addr string, logf func(string, ...any)) *l
 		// 5s) drain must build a fresh listener, never attach routes to
 		// this dying one — an attached route would look registered while
 		// serving nothing.
+		//
+		// Closing l.ln and disabling keep-alives happen in this SAME lmu
+		// critical section, not after (e.g. inside the Shutdown call below,
+		// scheduled separately): once this unlocks, any other goroutine can
+		// see addr as unregistered and start a fresh Register for it,
+		// including binding a NEW listener on the same port. If this
+		// listener could still answer a request at that point (merely
+		// scheduled to stop once Shutdown() gets its turn to run), two
+		// things can go wrong before that happens:
+		//   - the fresh listener's own bind can spuriously find the port
+		//     still in use (fixed by closing l.ln here, synchronously);
+		//   - a SENDER'S ALREADY-OPEN keep-alive connection — a real webhook
+		//     client reusing one persistent HTTP connection across
+		//     deliveries, same as this package's own tests' http.Client —
+		//     can have its NEXT delivery served by this dying listener's now-
+		//     stale routes (404) instead of erroring and reconnecting to the
+		//     fresh one. Closing the listener alone does not touch an
+		//     already-established, merely-idle connection; only closing it
+		//     (or disabling keep-alives, which does the same) does.
+		// Shutdown() would eventually do both of these as its own first two
+		// steps (close listeners, close idle conns) before its slow part
+		// (wait for BUSY conns up to 5s) — doing them here too, synchronously
+		// with the map eviction, removes the scheduling gap a racing client
+		// or a racing bind could otherwise land in while this goroutine
+		// hasn't yet been scheduled to reach its own Shutdown call. Shutdown
+		// (below) still runs, to gracefully drain any request actively being
+		// handled right now (TestRegisterDuringShutdownGraceGetsFreshListener).
 		lmu.Lock()
 		if listeners[addr] == l {
 			delete(listeners, addr)
 		}
+		if l.ln != nil {
+			_ = l.ln.Close()
+		}
+		l.server.SetKeepAlivesEnabled(false)
 		lmu.Unlock()
 		sd, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -72,18 +109,38 @@ func getListener(ctx context.Context, addr string, logf func(string, ...any)) *l
 	}()
 	go func() {
 		logf("inbound: listener on %s", addr)
-		// A fresh listener can race a dying predecessor: Shutdown closes
-		// the old listening socket early but not instantly, so retry a
-		// transient address-in-use briefly instead of dying silent.
+		// A fresh listener can race a dying predecessor: closing the old
+		// listening socket (above) happens as soon as its ctx is done, but
+		// the kernel may hold the port a little longer — retry a transient
+		// address-in-use briefly instead of dying silent.
+		var ln net.Listener
 		var err error
 		for i := 0; i < 100; i++ {
-			err = l.server.ListenAndServe()
-			if !errors.Is(err, syscall.EADDRINUSE) {
+			ln, err = net.Listen("tcp", addr)
+			if err == nil || !errors.Is(err, syscall.EADDRINUSE) {
 				break
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
-		if err != nil && err != http.ErrServerClosed {
+		if err != nil {
+			logf("inbound: listener %s stopped: %v", addr, err)
+			return
+		}
+		// Publish ln under lmu, and check ctx one more time first: a ctx
+		// that was already done before this bind finished retrying means
+		// the eviction goroutine above ran and found l.ln still nil (bound
+		// too late to close it there) — close it here instead of ever
+		// calling Serve, so a losing listener from a ctx that's already
+		// gone never answers a single request.
+		lmu.Lock()
+		if ctx.Err() != nil {
+			lmu.Unlock()
+			_ = ln.Close()
+			return
+		}
+		l.ln = ln
+		lmu.Unlock()
+		if err := l.server.Serve(ln); err != nil && err != http.ErrServerClosed && ctx.Err() == nil {
 			logf("inbound: listener %s stopped: %v", addr, err)
 		}
 	}()
