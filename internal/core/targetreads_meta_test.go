@@ -125,6 +125,9 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"workflowRunStatus", "the gh status query for the run the trigger already named"},
 		{"memoryPrompt", "recall now goes through OwnRepo(); the remaining read is the workflow/identity key convention"},
 	},
+	"internal/engine/defer_reemit.go": {
+		{"deferAndReemit", "an audit row for a deferred re-emit; the re-emit itself just re-sends the SAME trigger value back through e.Emit, and the per-occurrence defer-count bucket key uses Trigger.Key()"},
+	},
 	"internal/engine/outcome.go": {
 		{"observeOutcomeSignals", "the gate is the first line (TargetTrusted); the keys go through Trigger.Key()"},
 		{"observeClosed", "reached only from a TRUSTED-target _closed (observeOutcomeSignals refuses the rest); the repo it reads is therefore platform-assigned, and the engagement key goes through Trigger.Key()"},

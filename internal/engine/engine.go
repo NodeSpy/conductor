@@ -159,6 +159,13 @@ type Engine struct {
 	// unsupported remembers models a provider refused at run time; dispatchAgent
 	// marks + re-resolves through it (the resolver's Excluded hook reads it).
 	unsupported *models.UnsupportedCache
+
+	// deferMu guards deferCounts: how many times process() has re-scheduled
+	// ONE (target, kind#variant, reason) after a rate_limited/not_ready
+	// credential mint or remediation call, so the bound (maxDeferredReemits)
+	// applies per occurrence rather than globally. See deferAndReemit.
+	deferMu     sync.Mutex
+	deferCounts map[string]int
 }
 
 // hasLiveAgentFor asks the controller that would actually RUN this work
@@ -280,12 +287,13 @@ func New(o Options) *Engine {
 		owner:  map[string]Dispatcher{},
 		broker: o.Broker,
 		author: o.Author, log: log,
-		hold:      o.Hold,
-		affinity:  o.Affinity,
-		pausePath: o.PausePath,
-		secrets:   o.Secrets,
-		ch:        make(chan core.Trigger, 256),
-		meter:     cost.NewMeter(),
+		hold:        o.Hold,
+		affinity:    o.Affinity,
+		pausePath:   o.PausePath,
+		secrets:     o.Secrets,
+		ch:          make(chan core.Trigger, 256),
+		meter:       cost.NewMeter(),
+		deferCounts: map[string]int{},
 	}
 	if cap := o.Config.AgentCap(); cap > 0 {
 		e.sem = newSlots(cap)
@@ -961,6 +969,13 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 				"number": t.Target.Number, "kind": t.Kind, "reason": "target closed"})
 			return
 		}
+		// rate_limited/not_ready (§1.11): mint() never blocks this (the
+		// engine's single dispatch) loop in a sleep. Re-emit t after the
+		// error's own wait instead of treating it as a dispatch failure, so
+		// every OTHER queued trigger keeps dispatching in the meantime.
+		if e.deferAndReemit(ctx, t, "credential mint", err) {
+			return
+		}
 		e.log("%s not dispatched — %v", tag(t), err)
 		e.store.Audit(map[string]any{"event": "dispatch_failed", "repo": t.Target.Repo, "number": t.Target.Number,
 			"kind": t.Kind, "error": e.redact(err.Error())})
@@ -1533,11 +1548,14 @@ func agentWaitTimeout(p config.Step) time.Duration {
 // false falls through to dispatching the fixer.
 func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.RemediateSemantics, act config.Action, key, head string, run any) bool {
 	waitKey := fmt.Sprintf("%s|%v", key, run)
-	// rate_limited/not_ready (§1.11) are retried here, inside the one call;
-	// there is no step retry: to consult for a status/action verb.
-	out, err := connector.RetryContract(ctx, func() (map[string]any, error) {
-		return e.invokeVerb(ctx, t.Instance, rem.Status.Verb, core.DeclaredArgs(rem.Status.Args, t.Facts()))
-	})
+	// This call runs synchronously in process(), fed by Run's single
+	// dispatch loop: unlike most invoke call sites it deliberately does NOT
+	// go through connector.RetryContract (which sleeps). On rate_limited/
+	// not_ready it defers a re-emit of t instead (deferAndReemit) so one
+	// slow remediation status check cannot stall every other queued
+	// trigger; only once that is exhausted (or the error is some other
+	// code) does it fall through to today's handling.
+	out, err := e.invokeVerb(ctx, t.Instance, rem.Status.Verb, core.DeclaredArgs(rem.Status.Args, t.Facts()))
 	if ce, ok := connector.AsContractError(err); ok && ce.IsTargetGone() {
 		// The target this remediation (and the fixer it would otherwise
 		// dispatch) acts on is gone: stop — handled, not a failure, and no
@@ -1545,6 +1563,9 @@ func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.Remedia
 		e.log("%s remediation %s: target gone — dropping", tag(t), rem.Status.Verb)
 		e.runWait.Delete(waitKey)
 		return true
+	}
+	if e.deferAndReemit(ctx, t, "remediation status "+rem.Status.Verb, err) {
+		return true // handled for now: re-emit scheduled, no fixer dispatch yet
 	}
 	if err == nil {
 		done, eerr := expr.Eval(rem.Status.DoneWhen, out)
@@ -1570,12 +1591,13 @@ func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.Remedia
 	if e.store.Attempts(key, rkey, head) >= budget {
 		return false
 	}
-	if _, err := connector.RetryContract(ctx, func() (map[string]any, error) {
-		return e.invokeVerb(ctx, t.Instance, rem.Action.Verb, core.DeclaredArgs(rem.Action.Args, t.Facts()))
-	}); err != nil {
+	if _, err := e.invokeVerb(ctx, t.Instance, rem.Action.Verb, core.DeclaredArgs(rem.Action.Args, t.Facts())); err != nil {
 		if ce, ok := connector.AsContractError(err); ok && ce.IsTargetGone() {
 			e.log("%s remediation %s: target gone — dropping (no fixer dispatch)", tag(t), rem.Action.Verb)
 			return true
+		}
+		if e.deferAndReemit(ctx, t, "remediation action "+rem.Action.Verb, err) {
+			return true // handled for now: re-emit scheduled, no fixer dispatch yet
 		}
 		// Not requested, so the attempt is not counted; dispatch the fixer.
 		e.log("%s remediation %s for run %v: %v — dispatching the fixer instead", tag(t), rem.Action.Verb, run, err)

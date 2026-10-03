@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
@@ -86,20 +85,28 @@ func (e *Engine) declaredCredentials(ctx context.Context, t core.Trigger, instan
 }
 
 // mint resolves one declared credential through its mint verb.
+//
+// It never retries rate_limited/not_ready itself (unlike most invoke call
+// sites, which go through connector.RetryContract): mint is called
+// synchronously from process(), fed by Run's single `for t := <-e.ch` loop,
+// and from ResumeWorkflows' sequential loop — a blocking sleep here would
+// stall every OTHER queued trigger behind one slow connector. The caller
+// decides what a rate_limited/not_ready answer means: process() defers a
+// re-emit of the trigger (deferAndReemit) instead of dispatching now;
+// ResumeWorkflows already leaves a run it can't mint for "deferred" to the
+// next start on ANY mint error, so returning promptly here is enough — it no
+// longer blocks behind a synchronous retry first.
+//
+// A target_gone answer is tagged dispatch.ErrTargetClosed so a run that
+// can't mint because its target is gone stops instead of failing —
+// execAgent (flow.go) returns this error straight out of a step, so the
+// existing stop-hook switch (runSteps) and ResumeWorkflows both act on it
+// with no further wiring.
 func (e *Engine) mint(ctx context.Context, t core.Trigger, instance string, cr sdk.Credential) (string, error) {
 	if e.invokeVerb == nil {
 		return "", fmt.Errorf("no connector registry to mint through")
 	}
-	// rate_limited/not_ready (§1.11) are retried here, independently of any
-	// step retry: policy (a credential mint has none of its own); a
-	// target_gone answer is tagged dispatch.ErrTargetClosed so a run that
-	// can't mint because its target is gone stops instead of failing —
-	// execAgent (flow.go) returns this error straight out of a step, so the
-	// existing stop-hook switch (runSteps) and ResumeWorkflows both act on
-	// it with no further wiring.
-	out, err := connector.RetryContract(ctx, func() (map[string]any, error) {
-		return e.invokeVerb(ctx, instance, cr.Mint.Verb, core.DeclaredArgs(cr.Mint.Args, t.Facts()))
-	})
+	out, err := e.invokeVerb(ctx, instance, cr.Mint.Verb, core.DeclaredArgs(cr.Mint.Args, t.Facts()))
 	if err != nil {
 		return "", stopAsTargetGone(err)
 	}
