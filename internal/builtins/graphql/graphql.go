@@ -222,10 +222,13 @@ var clientSideGraphQLCodes = map[string]bool{
 // "retryable: true" unless every error is POSITIVELY identified as
 // client-side, matching finding 10: before the nil-data regression, the
 // step's own retry: always got a say.
+//
+// Requires len(errs) > 0: the one call site only reaches here after checking
+// that already, so an empty errs has no defined answer here — "all of zero
+// errors are client-side" is not a meaningful question for this caller, and
+// a vacuous-truth `true` would silently flip the call site's `retryable` to
+// false for a case that can't occur.
 func allClientSideGraphQLErrors(errs []any) bool {
-	if len(errs) == 0 {
-		return false
-	}
 	for _, e := range errs {
 		em, ok := e.(map[string]any)
 		if !ok {
