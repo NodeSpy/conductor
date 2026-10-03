@@ -93,13 +93,16 @@ func RegisterExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin
 		if err := enrichConnection(conn, ref, deps, allow); err != nil {
 			return nil, err
 		}
-		// Q6: a per-instance declaration, when the plugin has one, REPLACES
+		// Q6: a per-instance declaration, when the plugin has one, REFINES
 		// the shared type-level decl for this instance — not just for the
 		// registry (Build reads it off externalImpl), but for everything
 		// externalImpl itself does with a Decl (PollVerb, Verb lookups,
 		// output validation), so the two can never silently disagree.
+		// resolveInstanceDecl enforces that it is a refinement (events may
+		// vary; nothing install-time review looked at may) before it is ever
+		// used — see validateInstanceRefinement.
 		effDecl := td
-		id, err := resolveInstanceDecl(cl, name, conn)
+		id, err := resolveInstanceDecl(cl, name, decl, conn)
 		if err != nil {
 			return nil, err
 		}
@@ -336,10 +339,21 @@ type instanceDescriber interface {
 const instanceDescribeTimeout = 10 * time.Second
 
 // resolveInstanceDecl asks cl for instance's own declaration (Q6,
-// plugin-contract.md §3.9 G13), when cl implements it. nil, nil means the
-// plugin has no per-instance declaration (CodeMethodNotFound) — the caller
-// keeps the shared type-level decl.
-func resolveInstanceDecl(cl any, instance string, conn map[string]any) (*TypeDecl, error) {
+// plugin-contract.md §1.4, §3.9 G13), when cl implements it. nil, nil means
+// the plugin has no per-instance declaration (CodeMethodNotFound) — the
+// caller keeps the shared type-level decl.
+//
+// typeDecl is the SAME plugin's type-level declaration (spawned or
+// in-process, both callers already have it to hand). Before the instance
+// decl is used for anything, validateInstanceRefinement checks it is a
+// REFINEMENT of typeDecl — not a replacement: this is the one place that
+// check runs for every contract connector, spawned and in-process alike
+// (RegisterExternalConnector and RegisterInProcessConnector both call this).
+// A non-refining instance decl REFUSES the instance (the caller surfaces the
+// error as the connector's DisabledReason), rather than silently letting a
+// per-instance declaration redeclare a type-level host_only mints_credential
+// verb as an ordinary one that a flow step could call directly.
+func resolveInstanceDecl(cl any, instance string, typeDecl *plugin.Decl, conn map[string]any) (*TypeDecl, error) {
 	id, ok := cl.(instanceDescriber)
 	if !ok {
 		return nil, nil
@@ -352,6 +366,9 @@ func resolveInstanceDecl(cl any, instance string, conn map[string]any) (*TypeDec
 	}
 	if !supported {
 		return nil, nil
+	}
+	if err := validateInstanceRefinement(typeDecl, d); err != nil {
+		return nil, fmt.Errorf("connector %q: %w", instance, err)
 	}
 	return mapDecl(d), nil
 }
