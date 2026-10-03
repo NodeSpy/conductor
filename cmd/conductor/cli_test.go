@@ -184,14 +184,25 @@ connectors:
 		t.Fatal(err)
 	}
 
+	// The connector declares TWO credentials (app_token, bot_token), both
+	// unresolvable here; the registry doesn't guarantee which one's error
+	// wins the (unordered) DisabledReason, so assert on EITHER rather than a
+	// specific one — an earlier version of this test pinned "PC_CLI_
+	// OFFBROKEN_APP" specifically and flaked whenever bot_token's failure
+	// was the one that got reported instead.
+	mentionsBuildFailure := func(out string) bool {
+		return strings.Contains(out, "PC_CLI_OFFBROKEN_APP") || strings.Contains(out, "PC_CLI_OFFBROKEN_BOT")
+	}
+
 	out, err := captureStdout(t, func() error { return cmdSchema([]string{"--config", path, "offbroken"}) })
 	if err != nil {
 		t.Fatalf("disabled BY CHOICE (enabled: false) must exit 0 even though the instance also fails to build: %v\n%s", err, out)
 	}
-	for _, want := range []string{"disabled (enabled: false)", "PC_CLI_OFFBROKEN_APP"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("schema output missing %q (should state it's disabled AND mention the build failure):\n%s", want, out)
-		}
+	if !strings.Contains(out, "disabled (enabled: false)") {
+		t.Errorf("schema output missing %q:\n%s", "disabled (enabled: false)", out)
+	}
+	if !mentionsBuildFailure(out) {
+		t.Errorf("schema output should also mention the build failure (neither OFFBROKEN_APP nor OFFBROKEN_BOT found):\n%s", out)
 	}
 
 	// `connectors ls` must show the same posture for the same instance.
@@ -199,10 +210,11 @@ connectors:
 	if err != nil {
 		t.Fatalf("connectors ls: %v\n%s", err, out)
 	}
-	for _, want := range []string{"disabled (enabled: false)", "PC_CLI_OFFBROKEN_APP"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("ls output missing %q:\n%s", want, out)
-		}
+	if !strings.Contains(out, "disabled (enabled: false)") {
+		t.Errorf("ls output missing %q:\n%s", "disabled (enabled: false)", out)
+	}
+	if !mentionsBuildFailure(out) {
+		t.Errorf("ls output should also mention the build failure (neither OFFBROKEN_APP nor OFFBROKEN_BOT found):\n%s", out)
 	}
 }
 
