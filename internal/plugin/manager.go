@@ -293,7 +293,7 @@ func (m *Manager) InstanceClients(key string) map[string]*Client {
 // specs map alone is the complete set. A caller GC'ing
 // LocalSnapshotRoot must union this across every Manager it built in this
 // process before calling GCLocalSnapshots — removing a snapshot this Manager
-// still depends on would break its NEXT respawn (never a already-running
+// still depends on would break its NEXT respawn (never an already-running
 // process, which keeps its already-open executable text regardless).
 func (m *Manager) LocalSnapshotShas() map[string]bool {
 	m.mu.RLock()
