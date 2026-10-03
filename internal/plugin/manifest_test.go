@@ -71,29 +71,117 @@ func TestEffectiveManifest(t *testing.T) {
 	}
 }
 
-// TestEffectiveManifestProbeIsAlwaysEmpty is the finding-2 regression: the
-// type-level `plugin.describe` probe (Spec.Probe) must get NO egress at all —
-// not the plugin's full declared manifest, which an empty/nil Network would
-// otherwise fall back to (the same empty value a REAL instance that simply
-// never set `network:` also carries, which correctly DOES stand on its own
-// declaration — Probe is what tells the two apart).
-func TestEffectiveManifestProbeIsAlwaysEmpty(t *testing.T) {
+// TestEffectiveManifestProbeDropsEgressEnvAuthOnly is the finding-1/2
+// regression: the type-level `plugin.describe` probe (Spec.Probe) must get NO
+// egress, env, or managed auth at all — not the plugin's full declared
+// manifest, which an empty/nil Network would otherwise fall back to (the same
+// empty value a REAL instance that simply never set `network:` also carries,
+// which correctly DOES stand on its own declaration — Probe is what tells the
+// two apart). But it must KEEP the plugin's declared Commands/Spawns/FS:
+// docs/wiki/Plugins.md promises the probe drops only network, secrets, and
+// env — not the plugin's command/filesystem declaration, which
+// commandPathDir needs to keep a declared tool on the probe's own confined
+// PATH.
+func TestEffectiveManifestProbeDropsEgressEnvAuthOnly(t *testing.T) {
 	s := Spec{
 		Probe: true,
 		Manifest: Manifest{
 			Egress:   []string{"api.github.com:443"},
 			Commands: []string{"git"},
+			FS:       []string{"/tmp/widget"},
+			Spawns:   true,
 			Env:      []string{"GH_TOKEN"},
+			Auth:     &AuthSpec{TokenURL: "https://example.com/token"},
 		},
 	}
-	if got := s.EffectiveManifest(); !got.IsZero() {
-		t.Fatalf("a probe Spec's effective manifest must be empty regardless of the plugin's declared capabilities: %+v", got)
+	got := s.EffectiveManifest()
+	if len(got.Egress) != 0 {
+		t.Fatalf("a probe Spec's effective manifest must have no egress: %+v", got)
+	}
+	if len(got.Env) != 0 {
+		t.Fatalf("a probe Spec's effective manifest must have no env: %+v", got)
+	}
+	if got.Auth != nil {
+		t.Fatalf("a probe Spec's effective manifest must have no managed auth (secrets): %+v", got)
+	}
+	if len(got.Commands) != 1 || got.Commands[0] != "git" {
+		t.Fatalf("a probe Spec must keep the plugin's declared Commands: %+v", got)
+	}
+	if len(got.FS) != 1 || got.FS[0] != "/tmp/widget" {
+		t.Fatalf("a probe Spec must keep the plugin's declared FS: %+v", got)
+	}
+	if !got.Spawns {
+		t.Fatalf("a probe Spec must keep the plugin's declared Spawns: %+v", got)
 	}
 	// Network narrowing (were it ever set on a probe Spec, which SpecFromRef
 	// never does) must not resurrect any egress either.
 	s.Network = []string{"api.github.com:443"}
-	if got := s.EffectiveManifest(); !got.IsZero() {
-		t.Fatalf("a probe Spec's effective manifest must stay empty even with Network set: %+v", got)
+	if got := s.EffectiveManifest(); len(got.Egress) != 0 {
+		t.Fatalf("a probe Spec's effective manifest must stay egress-free even with Network set: %+v", got)
+	}
+}
+
+// TestEffectiveManifestProbeKeepsDeclaredCommandOnPath is the end-to-end
+// shape of finding 1: a probe's declared command must still resolve on the
+// PATH commandPathDir builds for it (so a type-level describe that shells out
+// to a declared tool does not break during the probe), while the probe still
+// gets no egress.
+func TestEffectiveManifestProbeKeepsDeclaredCommandOnPath(t *testing.T) {
+	dir := t.TempDir()
+	bin := writeBin(t, dir, "b", []byte("x"), 0o755)
+	toolDir := t.TempDir()
+	tool := writeBin(t, toolDir, "mytool", []byte("x"), 0o755)
+	t.Setenv("PATH", toolDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	s := Spec{
+		Name:    "p",
+		BinPath: bin,
+		Probe:   true,
+		Manifest: Manifest{
+			Egress:   []string{"api.github.com:443"},
+			Commands: []string{"mytool"},
+		},
+	}
+	got, err := commandPathDir(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == "" {
+		t.Fatal("expected a confined PATH dir for the probe")
+	}
+	link := got + string(os.PathSeparator) + "mytool"
+	if resolved, err := os.Readlink(link); err != nil {
+		t.Fatalf("declared command %q was not placed on the probe's confined PATH: %v", link, err)
+	} else if resolved != tool {
+		t.Fatalf("confined PATH entry points at %q, want %q", resolved, tool)
+	}
+	if em := s.EffectiveManifest(); len(em.Egress) != 0 {
+		t.Fatalf("probe must still have no egress: %+v", em)
+	}
+}
+
+// TestEffectiveManifestNonProbeUnchanged guards against a fix that
+// accidentally changes the non-probe path: a real connector/runtime Spec's
+// EffectiveManifest must behave exactly as before (see TestEffectiveManifest
+// above for the core narrowing behavior).
+func TestEffectiveManifestNonProbeUnchanged(t *testing.T) {
+	s := Spec{
+		Manifest: Manifest{
+			Egress:   []string{"api.github.com:443"},
+			Commands: []string{"git"},
+			Env:      []string{"GH_TOKEN"},
+			Auth:     &AuthSpec{TokenURL: "https://example.com/token"},
+		},
+	}
+	got := s.EffectiveManifest()
+	if len(got.Egress) != 1 || got.Egress[0] != "api.github.com:443" {
+		t.Fatalf("non-probe egress must stand: %+v", got)
+	}
+	if len(got.Env) != 1 || got.Env[0] != "GH_TOKEN" {
+		t.Fatalf("non-probe env must stand: %+v", got)
+	}
+	if got.Auth == nil {
+		t.Fatalf("non-probe auth must stand: %+v", got)
 	}
 }
 
