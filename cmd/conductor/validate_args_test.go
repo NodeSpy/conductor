@@ -96,4 +96,16 @@ func TestValidateReportsPluginFetchability(t *testing.T) {
 			t.Fatalf("validate must still report ok overall despite the warning, got:\n%s", out)
 		}
 	})
+
+	t.Run("--require-plugins makes it a failure", func(t *testing.T) {
+		validateReleaseAPI = fakeReleaseAPI{err: errors.New("network unreachable")}
+		if _, err := captureStdout(t, func() error { return cmdValidate([]string{cfgPath, "--require-plugins"}) }); err == nil ||
+			!strings.Contains(err.Error(), "neither installed nor fetchable") {
+			t.Fatalf("want a failure naming the missing plugin, got %v", err)
+		}
+		validateReleaseAPI = fakeReleaseAPI{tags: []string{"connectors/widget/v1.2.0"}}
+		if _, err := captureStdout(t, func() error { return cmdValidate([]string{cfgPath, "--require-plugins"}) }); err != nil {
+			t.Fatalf("a fetchable plugin passes --require-plugins: %v", err)
+		}
+	})
 }

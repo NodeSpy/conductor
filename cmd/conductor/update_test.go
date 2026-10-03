@@ -138,3 +138,12 @@ func TestNewerRelease(t *testing.T) {
 		})
 	}
 }
+
+// The self-update preflight requires the release's plugins: a box never
+// auto-updates into a release whose plugins it cannot find or fetch.
+func TestPreflightValidateRequiresPlugins(t *testing.T) {
+	bin := writeFakeConductor(t, `case "$*" in *--require-plugins*) exit 0;; esac; echo "preflight must pass --require-plugins" >&2; exit 1`)
+	if err := preflightValidate(bin, "/any/config.yaml"); err != nil {
+		t.Fatalf("preflight did not pass --require-plugins: %v", err)
+	}
+}

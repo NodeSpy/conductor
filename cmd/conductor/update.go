@@ -197,7 +197,9 @@ func doUpdate(force bool, pinTag, cfgFile string, notifier *notify.Notifier) (up
 func preflightValidate(bin, cfgFile string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), selfUpdatePreflightTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "validate", "--config", cfgFile)
+	// --require-plugins: a release whose plugins this box can neither find
+	// installed nor fetch is not applied (it would boot with them dark).
+	cmd := exec.CommandContext(ctx, bin, "validate", "--config", cfgFile, "--require-plugins")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return nil

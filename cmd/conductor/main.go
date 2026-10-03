@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -281,6 +282,8 @@ func cmdValidate(args []string) error {
 	// command validated the DEFAULT config instead — a footgun that hid a bad
 	// file behind an "ok" for a different one. Honor the positional; refuse an
 	// ambiguous invocation rather than pick one silently.
+	requirePlugins := slices.Contains(args, "--require-plugins")
+	args = slices.DeleteFunc(slices.Clone(args), func(a string) bool { return a == "--require-plugins" })
 	path, rest := configPath(args)
 	switch len(rest) {
 	case 0:
@@ -339,8 +342,20 @@ func cmdValidate(args []string) error {
 	// fetched is reported as a WARNING, not a failure: Q12's whole point is
 	// that the daemon still boots with just that connector/engine/runtime
 	// disabled, so a config that is otherwise good must still pass validate.
+	//
+	// --require-plugins makes it a failure: the self-update preflight passes
+	// it, so a box never auto-updates into a release whose plugins it can
+	// neither find installed nor fetch (it would boot with those connectors
+	// dark — for a one-connector box, all of its automation).
+	missing := 0
 	for _, line := range checkPluginFetchability(cfg) {
 		fmt.Println(line)
+		if strings.HasPrefix(line, "warning: plugin ") {
+			missing++
+		}
+	}
+	if missing > 0 && requirePlugins {
+		return fmt.Errorf("%d referenced plugin(s) neither installed nor fetchable (--require-plugins)", missing)
 	}
 	fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s)\n",
 		len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows))
