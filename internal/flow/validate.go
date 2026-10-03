@@ -79,13 +79,18 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 	}
 	if ev.Dynamic && in.Impl != nil {
 		// Enforce the configured name against the declared set ONLY when the impl
-		// can enumerate it. Builtin sources enumerate their config-named events
-		// (cron schedules, fswatch watches) and stay strict — a typo'd name is
-		// rejected. An EXTERNAL source plugin cannot enumerate its per-instance
-		// names at config-validate time (its connection config lives out in the
-		// plugin), so it returns none; there the Dynamic event's template already
-		// matched, and the plugin validates the name itself at StartSource, so we
-		// accept it rather than reject every out-of-process source's trigger.
+		// can enumerate it. In THIS codebase that never actually happens today:
+		// every contract connector (externalImpl — a spawned plugin, or an
+		// in-process builtin: cron, rss, webhook, rest, graphql) always returns
+		// nil from DeclaredEvents, even cron, whose own schedule names it could
+		// in principle enumerate — nothing wraps a builtin in any other Impl.
+		// The enumerate-and-stay-strict path below exists for a hypothetical
+		// Go-native Impl that CAN see its own dynamic names (see
+		// internal/flow/dynamic_event_validate_test.go's dynStrictImpl for the
+		// shape); for everything that exists today, the Dynamic event's
+		// template already matched and the connector/plugin validates the name
+		// itself at StartSource, so we accept it rather than reject every
+		// dynamic-event trigger.
 		if declared := in.Impl.DeclaredEvents(); len(declared) > 0 {
 			found := false
 			for _, d := range declared {

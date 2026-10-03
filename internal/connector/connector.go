@@ -298,9 +298,16 @@ type Impl interface {
 	// that provides the event transport, or (nil, nil) when the connector has
 	// no source face or no triggers reference it.
 	Source(triggers []CompiledTrigger) (core.Integration, error)
-	// DeclaredEvents returns the instance's dynamic event names (cron
-	// schedule names, webhook source names, rss feed names). Static types
-	// return nil.
+	// DeclaredEvents returns the instance's dynamic event names, for a Go-
+	// native Impl that can enumerate them so trigger validation stays strict
+	// about an unknown name. Every contract connector (externalImpl — a
+	// spawned plugin or an in-process builtin: cron, rss, webhook, rest,
+	// graphql) always returns nil here regardless of what it could in
+	// principle enumerate (its own config's schedule/source/feed names): the
+	// daemon can't see into a plugin's connection config this way, and
+	// nothing wraps a builtin in anything other than externalImpl. Trigger
+	// validation treats a nil/empty return for a Dynamic event as "accept any
+	// name" (internal/flow/validate.go).
 	DeclaredEvents() []string
 }
 

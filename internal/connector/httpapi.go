@@ -360,10 +360,14 @@ func postTokenForm(ctx context.Context, a authConfig, form url.Values) (tokenRes
 // gets its own, created by the caller and threaded through Deps.Auth, so a
 // throwaway validation/dry-run build's registerAuth calls land in a registry
 // nobody ever reads from, never in the one backing the LIVE daemon's
-// host.auth answers. A later Build for a NEW live stack (config reload) gets
-// a brand new registry populated only by that build's own instances, so an
-// instance removed from config is simply never registered into it — gone on
-// rebuild, with no explicit delete needed.
+// host.auth answers. There is only ever ONE live Build per PROCESS — a config
+// change (SIGHUP, `conductor reload`) re-execs the daemon into a brand new
+// process (cmd/conductor/main.go's restartSoon), it never calls Build a
+// second time in this one to swap the live stack in place — so there is no
+// live registry to reconcile across a reload: the next process's first (and
+// only) live Build gets its own fresh registry, populated only from the
+// config it boots with, with no explicit delete needed for an instance that
+// config dropped.
 type AuthRegistry struct {
 	mu  sync.RWMutex
 	byI map[string]*authenticator

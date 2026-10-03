@@ -43,8 +43,11 @@ func init() {
 // A dynamic-event source that cannot enumerate its configured names (an external
 // plugin) must NOT have its trigger rejected for naming an "undeclared" event —
 // the Dynamic template already matched, and the plugin validates the name at
-// StartSource. (Builtin sources that CAN enumerate stay strict — cron's own
-// tests cover that.)
+// StartSource. (No builtin actually enumerates today — cron included, despite
+// knowing its own schedule names, since RegisterInProcessConnector wraps every
+// builtin in the same externalImpl a spawned plugin gets, and that always
+// returns nil. TestEnumerableDynamicEventStaysStrict below exercises the
+// enumerate-and-stay-strict path with a synthetic Impl instead.)
 func TestExternalDynamicEventTriggerValidates(t *testing.T) {
 	cfg := loadConfig(t, `
 connectors:

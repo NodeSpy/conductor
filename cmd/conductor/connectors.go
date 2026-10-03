@@ -376,11 +376,6 @@ func cmdConnectors(args []string) error {
 			fmt.Printf("  use:    %s\n", use)
 		}
 		events := in.Decl.EventNames()
-		if in.Impl != nil {
-			if dyn := in.Impl.DeclaredEvents(); len(dyn) > 0 {
-				events = dyn
-			}
-		}
 		if len(events) > 0 {
 			fmt.Printf("  events: %s\n", strings.Join(events, ", "))
 		}
@@ -418,16 +413,12 @@ func cmdSchema(args []string) error {
 	// verbs/events into a per-instance declaration — print that contract,
 	// not the shell.
 	var decl *connector.TypeDecl
-	var dyn []string
 	var disabledReason string
 	var enabled = true
 	if stack, err := buildFlowStack(cfg, nil, nil, true); err == nil {
 		defer stack.Close()
 		if in, ok := stack.Registry.Get(name); ok {
 			decl = in.Decl
-			if in.Impl != nil {
-				dyn = in.Impl.DeclaredEvents()
-			}
 			enabled, disabledReason = in.Enabled, in.DisabledReason
 		}
 	}
@@ -451,7 +442,15 @@ func cmdSchema(args []string) error {
 	} else if disabledReason != "" {
 		fmt.Println("  state: disabled: " + disabledReason)
 	}
-	printTypeDecl(decl, dyn)
+	// decl is already this instance's EFFECTIVE declaration (the per-instance
+	// Decl when the plugin/builtin implements Q6 — its events are concrete,
+	// real names, never Dynamic — else the shared type-level one, which for a
+	// type like cron that implements no per-instance describe still carries
+	// its Dynamic placeholder and prints the generic "<declared in
+	// connection>" stand-in below; there is no per-instance enumeration left
+	// to pass here (externalImpl.DeclaredEvents is always nil — dead for
+	// every contract connector, spawned or builtin).
+	printTypeDecl(decl, nil)
 	if enabled && disabledReason != "" {
 		return fmt.Errorf("connector %q is disabled: %s (schema shown is the shared type-level declaration, not this instance's own)", name, disabledReason)
 	}

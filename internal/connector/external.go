@@ -42,8 +42,13 @@ func RegisterExternalType(decl *TypeDecl, b Builder) error {
 	return nil
 }
 
-// UnregisterExternalType removes an external type (config reload, test cleanup).
-// It never removes a bundled type.
+// UnregisterExternalType removes an external type — loadConnectorPlugins'
+// rollback when a LATER plugin in the same boot attempt fails partway through
+// registration (undoing the ones that already succeeded, within this one
+// process's one attempt — a config change doesn't reach here at all: SIGHUP/
+// `conductor reload` re-execs into a brand new process instead of unwinding
+// this one's registrations), and test cleanup. It never removes a bundled
+// type.
 func UnregisterExternalType(typ string) {
 	regMu.Lock()
 	defer regMu.Unlock()
@@ -527,8 +532,16 @@ func (e *externalImpl) Validate() error {
 // here, so the daemon can't enumerate them at config-validate time. Trigger
 // validation treats an empty declared set for a Dynamic event as "accept any
 // name" (the Dynamic template already matched; the plugin validates the name at
-// StartSource) — see internal/flow/validate.go. Builtin sources, which CAN
-// enumerate, return their names and stay strict.
+// StartSource) — see internal/flow/validate.go.
+//
+// This is ALWAYS nil for every contract connector, spawned or in-process
+// builtin alike (RegisterInProcessConnector wraps cron/rss/webhook/rest/
+// graphql in an externalImpl exactly like a spawned plugin — none of them has
+// a different Impl type this method could be overridden on). The
+// Impl.DeclaredEvents interface method stays for a hypothetical Go-native
+// (non-contract) Impl that CAN enumerate its dynamic names and wants trigger
+// validation to stay strict about them, but nothing in this codebase is that
+// today.
 func (e *externalImpl) DeclaredEvents() []string { return nil }
 
 // Source returns a streaming integration when this plugin declares events AND
