@@ -118,6 +118,13 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 		Kind: rec.Kind, Repo: rec.Repo, Number: rec.Number,
 		Trigger: rec.Trigger, Action: rec.Action,
 		Outputs: outputs, StepIndex: startIdx,
+		// A retry starting from step 0 is a fresh attempt — its start
+		// hooks fire, same as a brand new run (StartHooksFired false, the
+		// zero value). A retry continuing from a LATER step is the same
+		// attempt resuming partway through: its start hooks already fired
+		// the first time, so this record says so up front (finding 4a) —
+		// flow.Runner.Run never gets the chance to double-fire them.
+		StartHooksFired: startIdx > 0,
 	}
 	if run.ID == "" {
 		run.ID = t.Kind + ":" + t.Key()

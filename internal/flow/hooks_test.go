@@ -1,6 +1,10 @@
 package flow
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/NodeSpy/conductor/internal/store"
+)
 
 // TestWorkflowHooksOrderingAndData covers item 3 (workflow-level hooks):
 // at:start fires before steps, at:done sees step outputs, at:fail sees
@@ -194,5 +198,135 @@ steps:
 		if texts[i] != w {
 			t.Errorf("post call %d = %q, want %q (full: %v)", i, texts[i], w, texts)
 		}
+	}
+}
+
+// TestStartHooksDoNotRefireOnResumePastStepZero is finding 4(a): a
+// workflow-level `at: start` hook (the generic successor to a chat
+// connector's own `ack` feedback, docs/design/plugin-contract.md §2.2
+// option_hooks) must fire exactly once per run attempt — a daemon restart
+// that resumes a run already past its first step must NOT re-post it. The
+// reviewer's scratch test: a 2-step flow "checkpointed" at StepIndex 1 (as
+// resumeFlowRun would load it from the store), run again from there.
+func TestStartHooksDoNotRefireOnResumePastStepZero(t *testing.T) {
+	cfg := loadConfig(t, `
+connectors:
+  svc:
+    use: fake
+`)
+	reg := buildRegistry(t, cfg)
+	st := newFakeState(t, "svc")
+
+	spec := mustSpec(t, `
+on: svc.ping
+hooks:
+  - at: start
+    uses: svc.post
+    options: {text: "ack"}
+steps:
+  - id: one
+    uses: svc.post
+    options: {text: "step-one"}
+  - id: two
+    uses: svc.post
+    options: {text: "step-two"}
+`)
+
+	rig := newTestRunner(t, cfg, reg)
+	trig := newTrigger("ping", map[string]any{"msg": "x"})
+
+	// A FRESH run (StepIndex 0, StartHooksFired false — the zero value):
+	// the ack fires.
+	fresh := store.WorkflowRun{ID: "r1", Outputs: map[string]map[string]any{}}
+	runTriggerWithRun(rig, fresh, trig, spec)
+
+	acks := func() int {
+		n := 0
+		for _, c := range st.snapshot() {
+			if c.Verb == "post" && c.Opts["text"] == "ack" {
+				n++
+			}
+		}
+		return n
+	}
+	if n := acks(); n != 1 {
+		t.Fatalf("fresh run: expected the ack to fire once, got %d", n)
+	}
+
+	// A run "checkpointed at StepIndex 1" — exactly what resumeFlowRun loads
+	// from the store after step "one" completed and the daemon restarted
+	// before step "two" ran. StartHooksFired is true (persisted by the
+	// FIRST Run() call above, same as the real checkpoint/PutRun path) —
+	// the ack must NOT fire again.
+	resumed := store.WorkflowRun{
+		ID: "r1", StepIndex: 1, StartHooksFired: true,
+		Outputs: map[string]map[string]any{"one": {}},
+	}
+	runTriggerWithRun(rig, resumed, trig, spec)
+
+	if n := acks(); n != 1 {
+		t.Fatalf("resume past step 0: the ack must NOT re-fire, but saw %d total ack posts", n)
+	}
+	var steps []string
+	for _, c := range st.snapshot() {
+		if c.Verb == "post" && c.Opts["text"] != "ack" {
+			steps = append(steps, c.Opts["text"].(string))
+		}
+	}
+	want := []string{"step-one", "step-two", "step-two"}
+	if len(steps) != len(want) {
+		t.Fatalf("step posts = %v, want %v (step-one once from the fresh run, step-two once from each run)", steps, want)
+	}
+}
+
+// TestStartHooksFireOnFreshRunEvenWithNonZeroID proves the companion half:
+// a run's very first pass through Run() (StartHooksFired false, the zero
+// value a freshly persisted run always starts with — store.WorkflowRun) DOES
+// fire its start hooks, same as before finding 4(a)'s fix — the gate is
+// StartHooksFired, not run.ID or run.StepIndex alone.
+func TestStartHooksFireOnFreshRunEvenWithNonZeroID(t *testing.T) {
+	cfg := loadConfig(t, `
+connectors:
+  svc:
+    use: fake
+`)
+	reg := buildRegistry(t, cfg)
+	st := newFakeState(t, "svc")
+
+	spec := mustSpec(t, `
+on: svc.ping
+hooks:
+  - at: start
+    uses: svc.post
+    options: {text: "ack"}
+steps:
+  - id: one
+    uses: svc.post
+    options: {text: "step-one"}
+`)
+	rig := newTestRunner(t, cfg, reg)
+	trig := newTrigger("ping", map[string]any{"msg": "x"})
+
+	fresh := store.WorkflowRun{ID: "r2", Outputs: map[string]map[string]any{}}
+	runTriggerWithRun(rig, fresh, trig, spec)
+
+	n := 0
+	for _, c := range st.snapshot() {
+		if c.Verb == "post" && c.Opts["text"] == "ack" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("a fresh run must fire its start hook, got %d acks", n)
+	}
+
+	// And the persisted record now carries StartHooksFired — the state a
+	// real resume would load back.
+	last, ok := rig.Store.lastPut("r2")
+	if !ok {
+		t.Fatal("run r2 was never persisted")
+	}
+	if !last.StartHooksFired {
+		t.Fatal("Run must persist StartHooksFired=true after firing the start hook")
 	}
 }

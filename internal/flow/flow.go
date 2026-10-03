@@ -449,8 +449,26 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 			panic(rec)
 		}
 	}()
-	if hasPhase(spec.Hooks, "start") {
-		r.fireHooks(ctx, t, spec.Hooks, "start", "running", run.ID, "", withRun(data, facts), nil, "workflow")
+	// Start-phase hooks fire only once per run — the first time Run reaches
+	// this point for it, never again on a later resume/retry-continuation
+	// of the SAME attempt (finding 4a): a workflow-level `ack`-style option
+	// hook posted at `start` must not double-post after a daemon restart
+	// resumes a run that had already passed this point, or a retry
+	// continues one from a later step. run.StartHooksFired is persisted
+	// IMMEDIATELY, before any step runs, so a crash between firing and the
+	// first step's own checkpoint still can't cause a re-fire on the next
+	// resume. A deliberate retry-from-the-top (engine.retryRun with
+	// startIdx 0) is a fresh attempt, not a continuation: it persists a new
+	// record with StartHooksFired false, so it fires again there, same as
+	// a brand new run.
+	if !run.StartHooksFired {
+		if hasPhase(spec.Hooks, "start") {
+			r.fireHooks(ctx, t, spec.Hooks, "start", "running", run.ID, "", withRun(data, facts), nil, "workflow")
+		}
+		run.StartHooksFired = true
+		if run.ID != "" {
+			_ = r.Store.PutRun(run)
+		}
 	}
 
 	err := r.runSteps(ctx, &run, t, spec.Steps, data, shadow, true)
