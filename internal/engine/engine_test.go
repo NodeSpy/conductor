@@ -827,6 +827,29 @@ func TestClosedDeletesState(t *testing.T) {
 	}
 }
 
+// A closing event dispatches nothing by itself — but one the plugin routed to
+// a trigger explicitly `on:` it (on: gh._closed) runs that trigger's work,
+// after the target's state is dropped.
+func TestClosingEventRunsOnlyARoutedTrigger(t *testing.T) {
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, st := newEng(t, baseCfg(), d, n, nil)
+	e.process(context.Background(), agentTrigger("new_comment", "a/w", 6, "h", "s", config.Action{Type: "agent", Agent: "w/fixer"}))
+	before := len(d.reqs)
+	e.process(context.Background(), core.Trigger{Source: "github", Instance: "i", Kind: "_closed",
+		TargetTrusted: true, Target: core.Target{Repo: "a/w", PR: 6, Number: 6}})
+	if len(d.reqs) != before {
+		t.Fatal("an unrouted closing event dispatched")
+	}
+	routed := agentTrigger("_closed", "a/w", 6, "h", "closed@6", config.Action{Type: "agent", Agent: "w/fixer", Prompt: "write the release note"})
+	e.process(context.Background(), routed)
+	if len(d.reqs) != before+1 || !strings.Contains(d.reqs[len(d.reqs)-1].Action.Prompt, "write the release note") {
+		t.Fatalf("a routed on: _closed trigger did not run (%d dispatches)", len(d.reqs)-before)
+	}
+	if st.LastSignature("a/w#6", "new_comment") != "" {
+		t.Fatal("the closing housekeeping did not run for the routed event")
+	}
+}
+
 func TestDisabledActionSkipped(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, baseCfg(), d, n, nil)

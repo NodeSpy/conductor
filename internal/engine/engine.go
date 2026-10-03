@@ -747,13 +747,17 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	e.observeOutcomeSignals(ctx, t)
 
 	// Terminal state (the event declares closes_target): drop dedup record,
-	// stop the runs bound to the target, no dispatch.
+	// stop the runs bound to the target. The event itself dispatches nothing
+	// — unless the plugin routed it to a trigger explicitly `on:` it, which
+	// then runs like any other (after the housekeeping, so it is not stopped).
 	if t.ClosesTarget() {
 		_ = e.store.Delete(key)
 		e.markClosed(key)
 		e.log("%s closed; dropped state", tag(t))
 		e.stopFixers(ctx, t)
-		return
+		if t.Action == nil {
+			return
+		}
 	}
 
 	// Runtime pause (a control file toggled by `pause`/`resume` without a
