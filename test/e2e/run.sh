@@ -1014,22 +1014,20 @@ group_K_connectors() {
 
   # K4-pid: multi-instance isolation (docs/wiki/Plugins.md) — gh and ghlisten
   # are two configured instances of the SAME real github plugin binary
-  # (connectors.e2e.yaml); `connectors ls` prints each live instance's own
-  # plugin subprocess pid, so this is the cheapest evidence that each runs as
-  # its own process rather than sharing one.
-  pid_for_instance() { # pid_for_instance <ls-output> <connector-name>
-    printf '%s\n' "$1" | awk -v name="$2" '
-      $0 ~ "^"name"[ \t]" { want=1; next }
-      /^[^ \t]/            { want=0 }
-      want && /^[ \t]+pid:/ { print $2; exit }
-    '
+  # (connectors.e2e.yaml). The DAEMON logs each per-instance process it
+  # spawns ("plugin <name> instance <inst>: subprocess started (pid N)"), so
+  # its own log is the evidence each instance runs as its own process.
+  # (`connectors ls` would show the pids of a throwaway CLI build instead.)
+  daemon_log="$(dc logs conductor-conn 2>&1)"
+  pid_for_instance() { # pid_for_instance <connector-name>: the latest spawn's pid
+    printf '%s\n' "$daemon_log" | sed -n "s/.*plugin github instance $1: subprocess started (pid \([0-9]*\)).*/\1/p" | tail -n 1
   }
-  gh_pid="$(pid_for_instance "$out" gh)"
-  ghlisten_pid="$(pid_for_instance "$out" ghlisten)"
+  gh_pid="$(pid_for_instance gh)"
+  ghlisten_pid="$(pid_for_instance ghlisten)"
   if [ -n "$gh_pid" ] && [ -n "$ghlisten_pid" ] && [ "$gh_pid" != "$ghlisten_pid" ]; then
-    ok "K4-pid gh and ghlisten (two instances of the github plugin) run as distinct processes (pid $gh_pid vs $ghlisten_pid)" K K4-pid
+    ok "K4-pid gh and ghlisten (two instances of the github plugin) run as distinct daemon processes (pid $gh_pid vs $ghlisten_pid)" K K4-pid
   else
-    bad "K4-pid gh and ghlisten run as distinct plugin processes" K K4-pid "gh pid=[$gh_pid] ghlisten pid=[$ghlisten_pid]; out: $(echo "$out" | head -40)"
+    bad "K4-pid gh and ghlisten run as distinct plugin processes" K K4-pid "gh pid=[$gh_pid] ghlisten pid=[$ghlisten_pid]; spawn lines: $(printf '%s\n' "$daemon_log" | grep 'subprocess started' | head -10)"
   fi
   out="$(cexec conductor-conn conductor schema slack --config /etc/conductor/connectors.e2e.yaml 2>&1)"
   case "$out" in
