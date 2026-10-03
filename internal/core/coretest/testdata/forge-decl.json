@@ -47,7 +47,7 @@
     },
     "webhook": {
       "type": "map",
-      "desc": "event transport and delivery auth: smee_url and/or listen (+ path), secret, verify_signature"
+      "desc": "event transport and delivery auth: smee_url and/or listen (+ path), expose, public_url, secret, verify_signature"
     }
   },
   "verbs": [
@@ -3723,6 +3723,13 @@
         "event_name": "GITHUB_EVENT_NAME",
         "event_path": "GITHUB_EVENT_PATH"
       }
-    }
+    },
+    "listeners": [
+      {
+        "listen": "webhook.listen",
+        "expose": "webhook.expose",
+        "url_to": "webhook.public_url"
+      }
+    ]
   }
 }
