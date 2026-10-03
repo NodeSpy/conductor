@@ -971,6 +971,26 @@ group_K_connectors() {
     *gh*github*) ok "K4 conductor connectors ls lists the configured connectors" K K4-ls ;;
     *) bad "K4 connectors ls" K K4-ls "unexpected output: $(echo "$out" | head -2)" ;;
   esac
+
+  # K4-pid: multi-instance isolation (docs/wiki/Plugins.md) — gh and ghlisten
+  # are two configured instances of the SAME real github plugin binary
+  # (connectors.e2e.yaml); `connectors ls` prints each live instance's own
+  # plugin subprocess pid, so this is the cheapest evidence that each runs as
+  # its own process rather than sharing one.
+  pid_for_instance() { # pid_for_instance <ls-output> <connector-name>
+    printf '%s\n' "$1" | awk -v name="$2" '
+      $0 ~ "^"name"[ \t]" { want=1; next }
+      /^[^ \t]/            { want=0 }
+      want && /^[ \t]+pid:/ { print $2; exit }
+    '
+  }
+  gh_pid="$(pid_for_instance "$out" gh)"
+  ghlisten_pid="$(pid_for_instance "$out" ghlisten)"
+  if [ -n "$gh_pid" ] && [ -n "$ghlisten_pid" ] && [ "$gh_pid" != "$ghlisten_pid" ]; then
+    ok "K4-pid gh and ghlisten (two instances of the github plugin) run as distinct processes (pid $gh_pid vs $ghlisten_pid)" K K4-pid
+  else
+    bad "K4-pid gh and ghlisten run as distinct plugin processes" K K4-pid "gh pid=[$gh_pid] ghlisten pid=[$ghlisten_pid]; out: $(echo "$out" | head -40)"
+  fi
   out="$(cexec conductor-conn conductor schema slack --config /etc/conductor/connectors.e2e.yaml 2>&1)"
   case "$out" in
     *"verb ask"*"request-response"*) ok "K4 conductor schema prints the ask verb contract" K K4-schema ;;
