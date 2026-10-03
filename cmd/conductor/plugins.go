@@ -549,10 +549,74 @@ func cmdPluginList(args []string) error {
 		fmt.Printf("%-18s %-10s %-9s %-14s %s\n", ref.Name, ref.Kind(), ref.Use.Origin, ver, pluginStatus(spec))
 		if caps {
 			fmt.Printf("%-18s   use: %s\n", "", ref.Use.String())
-			fmt.Printf("%-18s   permissions: %s\n", "", spec.EffectiveManifest().Summary())
+			fmt.Printf("%-18s   permissions:\n", "")
+			for _, line := range permissionLines(ref, spec) {
+				fmt.Printf("%-18s     %s\n", "", line)
+			}
 		}
 	}
 	return nil
+}
+
+// permissionLines renders the TRUTHFUL permission picture for a derived
+// plugin ref (finding 3): the plugin's own DECLARED capabilities (spec.
+// Manifest — what the binary says it needs, independent of any narrowing),
+// plus what actually confines a running process.
+//
+// Two reviewers disagreed on whether the display should print the type-level
+// EffectiveManifest or ref.Network: neither alone is right once per-instance
+// isolation exists. spec.EffectiveManifest() is now a Probe Spec's (finding
+// 2) deliberately-empty manifest for a non-shared connector, which is not
+// what any configured instance's REAL process runs with — and ref.Network
+// alone is the UNIONED grant (config.PluginRefs), which is only what a
+// shared_process: true plugin's one process gets; printed for a per-instance
+// plugin it would silently claim a wider (or just WRONG) grant than any one
+// instance's own process is actually confined to.
+//
+// So: a SharedProcess plugin (or a runtime/engine, which never has more than
+// one process to begin with) shows the union (ref.Network/AllowSecrets/
+// AllowEnv — the real grant its one process gets). A per-instance-isolated
+// connector instead shows EACH configured instance's OWN grant (ref.
+// Instances, exactly what plugin.InstanceSpec would apply), labelled by
+// instance name, since there is no single "effective manifest" for the type
+// as a whole — only per-instance ones, and they can differ (two instances
+// with different `network:`).
+func permissionLines(ref config.PluginRef, spec plugin.Spec) []string {
+	lines := []string{"declared capabilities: " + spec.Manifest.Summary()}
+	switch {
+	case ref.Kind() != config.PluginKindConnector || ref.SharedProcess:
+		lines = append(lines, "grant (one shared process): "+grantSummary(ref.Network, ref.AllowSecrets, ref.AllowEnv))
+	default:
+		names := make([]string, 0, len(ref.Instances))
+		for n := range ref.Instances {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			g := ref.Instances[n]
+			lines = append(lines, fmt.Sprintf("instance %s (own process): %s", n, grantSummary(g.Network, g.AllowSecrets, g.AllowEnv)))
+		}
+	}
+	return lines
+}
+
+// grantSummary renders one process's actual confinement grant: the egress
+// it's narrowed to (or, with no `network:` set, the full declared egress —
+// spelled out explicitly rather than left looking like "no network at all"),
+// plus any allow_secrets/allow_env tightening.
+func grantSummary(network, allowSecrets, allowEnv []string) string {
+	net := "network: full declared egress (no network: narrowing set)"
+	if len(network) > 0 {
+		net = "network: " + strings.Join(network, ", ")
+	}
+	parts := []string{net}
+	if len(allowSecrets) > 0 {
+		parts = append(parts, "allow_secrets: "+strings.Join(allowSecrets, ", "))
+	}
+	if len(allowEnv) > 0 {
+		parts = append(parts, "allow_env: "+strings.Join(allowEnv, ", "))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // pluginStatus reports a plugin's readiness WITHOUT executing it: is it
@@ -763,9 +827,9 @@ func showPlugin(cfg *config.Config, ref config.PluginRef) error {
 	} else {
 		fmt.Printf("  binary: NOT INSTALLED — run `conductor init`\n")
 	}
-	fmt.Printf("\n  PERMISSIONS (declared by the plugin, enforced by conductor):\n    %s\n", spec.EffectiveManifest().Summary())
-	if len(ref.Network) > 0 {
-		fmt.Printf("    narrowed by this config's network: %s\n", strings.Join(ref.Network, ", "))
+	fmt.Println("\n  PERMISSIONS (declared by the plugin, enforced by conductor):")
+	for _, line := range permissionLines(ref, spec) {
+		fmt.Printf("    %s\n", line)
 	}
 	if ref.Isolation != nil {
 		fmt.Printf("    plus OPT-IN OS isolation: mode %s\n", ref.Isolation.Mode)

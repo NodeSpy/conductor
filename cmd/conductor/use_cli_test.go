@@ -66,6 +66,43 @@ func TestCmdPluginListCaps(t *testing.T) {
 	}
 }
 
+// TestCmdPluginListCapsShowsPerInstanceGrantsNotUnion is the finding-3
+// regression: `plugin list --caps` on a NON-shared-process connector plugin
+// configured as two instances with DIFFERENT `network:` must show each
+// instance's own grant, labelled by instance — never a single unioned or
+// type-level-probe-confined line that can't represent two different answers
+// at once.
+func TestCmdPluginListCapsShowsPerInstanceGrantsNotUnion(t *testing.T) {
+	args := writeCfg(t, `
+connectors:
+  a: { use: acme/plugins/jira, network: ["one.example:443"] }
+  b: { use: acme/plugins/jira, network: ["two.example:443"] }
+`)
+	out, err := captureStdout(t, func() error {
+		return cmdPluginList(append(args, "--caps"))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "declared capabilities:") {
+		t.Fatalf("--caps did not surface the plugin's declared capabilities:\n%s", out)
+	}
+	if !strings.Contains(out, "instance a") || !strings.Contains(out, "instance b") {
+		t.Fatalf("--caps did not label each configured instance's own grant:\n%s", out)
+	}
+	if !strings.Contains(out, "one.example:443") || !strings.Contains(out, "two.example:443") {
+		t.Fatalf("--caps lost one instance's own narrowed network:\n%s", out)
+	}
+	// Each instance's line must carry only ITS OWN network — not both hosts
+	// unioned onto one line (that is the shared_process: true shape, not the
+	// default per-instance one this config uses).
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "one.example:443") && strings.Contains(line, "two.example:443") {
+			t.Fatalf("instance grants were unioned onto one line, not shown per instance:\n%s", out)
+		}
+	}
+}
+
 // `plugin add` on a builtin installs nothing and just prints the stub — adding
 // `github` should never reach for the plugin repo.
 func TestCmdPluginAddBuiltinInstallsNothing(t *testing.T) {
@@ -114,6 +151,33 @@ func TestCmdPluginShowBuiltin(t *testing.T) {
 	}
 	if !strings.Contains(out, "builtin runtime") {
 		t.Fatalf("plugin show did not identify a builtin runtime:\n%s", out)
+	}
+}
+
+// TestCmdPluginShowPerInstanceGrantsNotUnion is `plugin show`'s half of the
+// finding-3 regression (cmdPluginListCapsShowsPerInstanceGrantsNotUnion
+// above covers `plugin list --caps`): two instances of a non-shared-process
+// plugin with different `network:` must each show their OWN grant.
+func TestCmdPluginShowPerInstanceGrantsNotUnion(t *testing.T) {
+	args := writeCfg(t, `
+connectors:
+  a: { use: acme/plugins/jira, network: ["one.example:443"] }
+  b: { use: acme/plugins/jira, network: ["two.example:443"] }
+`)
+	out, err := captureStdout(t, func() error { return cmdPluginShow(append(args, "jira")) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "instance a") || !strings.Contains(out, "instance b") {
+		t.Fatalf("plugin show did not label each configured instance's own grant:\n%s", out)
+	}
+	if !strings.Contains(out, "one.example:443") || !strings.Contains(out, "two.example:443") {
+		t.Fatalf("plugin show lost one instance's own narrowed network:\n%s", out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "one.example:443") && strings.Contains(line, "two.example:443") {
+			t.Fatalf("instance grants were unioned onto one line:\n%s", out)
+		}
 	}
 }
 
