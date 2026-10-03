@@ -1538,7 +1538,7 @@ func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.Remedia
 		// (finding 11): the status verb addresses the run's own target by
 		// construction (rem.Status.Args is templated from t.Facts()), but a
 		// generic check still guards against a plugin naming the wrong one.
-		if ce.TargetGoneMatchesKey(t.Key()) {
+		if ce.TargetGoneMatchesKey(t.DeclaredKey()) {
 			// The target this remediation (and the fixer it would otherwise
 			// dispatch) acts on is gone: stop — handled, not a failure, and no
 			// fixer dispatch for a target that no longer exists.
@@ -1583,7 +1583,7 @@ func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.Remedia
 		if ce, ok := connector.AsContractError(err); ok && ce.IsTargetGone() {
 			// Honored as a stop ONLY when it names THIS run's own target
 			// (finding 11) — see the matching comment on the status verb above.
-			if ce.TargetGoneMatchesKey(t.Key()) {
+			if ce.TargetGoneMatchesKey(t.DeclaredKey()) {
 				e.log("%s remediation %s: target gone — dropping (no fixer dispatch)", tag(t), rem.Action.Verb)
 				return true
 			}

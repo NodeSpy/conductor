@@ -213,6 +213,24 @@ func renderFacts(tmpl string, facts map[string]any) string {
 	}
 }
 
+// DeclaredKey is the key the source plugin names this trigger's target by:
+// the event's own target.key, else its declared target.key template rendered
+// over the facts, else the host's Key. A plugin's target_gone names the
+// target it addressed by this same string (plugin-contract.md §1.11), so
+// this — not Key, which is the host's dedup/session key — is what such an
+// answer is compared against.
+func (t Trigger) DeclaredKey() string {
+	if t.Target.Key != "" {
+		return t.Target.Key
+	}
+	if s := t.Semantics(); s.Target != nil && s.Target.Key != "" {
+		if k := renderFacts(s.Target.Key, t.Facts()); k != "" {
+			return k
+		}
+	}
+	return t.Key()
+}
+
 // RenderFacts is renderFacts for other packages rendering a declaration's
 // templates (target keys, checkout refs, credential args).
 func RenderFacts(tmpl string, facts map[string]any) string { return renderFacts(tmpl, facts) }

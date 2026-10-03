@@ -524,7 +524,7 @@ func eqFold(a, b string) bool {
 // coreTarget is the engine's target for a wire target (the legacy fields;
 // the generic key/assigned form is read by the source adapter).
 func coreTarget(t sdk.Target) core.Target {
-	return core.Target{Repo: t.Repo, Owner: t.Owner, Name: t.Name, PR: t.PR, Issue: t.Issue, Number: t.Number,
+	return core.Target{Key: t.Key, Repo: t.Repo, Owner: t.Owner, Name: t.Name, PR: t.PR, Issue: t.Issue, Number: t.Number,
 		HeadSHA: t.HeadSHA, BaseRef: t.BaseRef, HTMLURL: t.HTMLURL, Project: t.Project}
 }
 

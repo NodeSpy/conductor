@@ -58,9 +58,11 @@ func TestResumeRecheckRecoversAfterATransientMintError(t *testing.T) {
 	waitCond(t, "the resumed run recovers and dispatches after its transient mint error", func() bool {
 		return d.count() > 0
 	})
-	if len(st.PendingRuns()) != 0 {
-		t.Fatal("a recovered, dispatched run must no longer be pending")
-	}
+	// The run leaves the pending set just after it dispatches, on the same
+	// goroutine — wait for that too rather than racing it.
+	waitCond(t, "a recovered, dispatched run is no longer pending", func() bool {
+		return len(st.PendingRuns()) == 0
+	})
 }
 
 // TestResumeRecheckGivesUpAfterMaxAttempts is finding 2's bound: a plugin

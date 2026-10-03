@@ -19,6 +19,9 @@ import (
 // Fields are populated best-effort from the webhook payload; zero values mean
 // "not applicable" (e.g. PR == 0 for an issue-only trigger).
 type Target struct {
+	// Key is the key the source plugin itself names this target by (the
+	// wire event's target.key), when it sent one. See Trigger.DeclaredKey.
+	Key     string
 	Repo    string // "owner/name"
 	Owner   string
 	Name    string

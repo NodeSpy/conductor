@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/connector"
+	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
@@ -462,5 +463,43 @@ func TestSkillVerbTargetGoneIsTaggedAndRedacted(t *testing.T) {
 	}
 	if got := err.Error(); got == "" || strings.Contains(got, "s3kr1t-value") {
 		t.Fatalf("the returned message must be redacted, got %q", got)
+	}
+}
+
+// A target with no repo (a chat message) is named by its declared key: a
+// target_gone carrying that key stops the run; one naming another message
+// fails it loudly.
+func TestVerbStepTargetGoneMatchesTheDeclaredKey(t *testing.T) {
+	for _, tc := range []struct {
+		name, key string
+		stop      bool
+	}{{"own message", "chat:C1:1.5", true}, {"another message", "chat:C9:9.9", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := loadConfig(t, "connectors:\n  svc: { use: fake }\n")
+			reg := buildRegistry(t, cfg)
+			st := newFakeState(t, "svc")
+			st.errFn["post"] = func(int, map[string]any) error {
+				return &connector.ContractError{Code: sdk.CodeTargetGone, Message: "gone", Data: map[string]any{"target": tc.key}}
+			}
+			spec := mustSpec(t, `
+on: svc.ping
+steps:
+  - id: post1
+    uses: svc.post
+    options: { text: x }
+`)
+			rig := newTestRunner(t, cfg, reg)
+			rig.Runner.sleep = fastSleep
+			tr := newTrigger("ping", map[string]any{"msg": "x"})
+			tr.Target = core.Target{Key: "chat:C1:1.5"}
+			runTrigger(rig, tr, spec)
+			failed, errStr := rig.workflowFailed()
+			if tc.stop && failed {
+				t.Fatalf("target_gone for the run's own declared key must stop, not fail: %s", errStr)
+			}
+			if !tc.stop && !failed {
+				t.Fatal("target_gone for another target must fail the run")
+			}
+		})
 	}
 }

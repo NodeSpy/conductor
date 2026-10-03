@@ -57,7 +57,7 @@ func (in *Instance) TargetHead(ctx context.Context, t core.Trigger) (TargetHead,
 			// (rr.Args is templated from t.Facts()), but requiring the match
 			// here too refuses to stop on a plugin that names the wrong one,
 			// and keeps every interpreter consistent.
-			result, isStop := TargetGoneOrUpstream(err, t.Key())
+			result, isStop := TargetGoneOrUpstream(err, t.DeclaredKey())
 			if isStop {
 				h := TargetHead{State: TargetClosed}
 				h.StopReason = rr.Reasons[TargetClosed]

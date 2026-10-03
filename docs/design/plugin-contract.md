@@ -462,7 +462,7 @@ subset.
 |---|---|---|
 | -32700/-32600/-32601/-32602/-32603 | JSON-RPC standard (-32601 = not implemented) | -32601 on an optional method means "unsupported"; the others fail the call |
 | **-32010 `upstream`** | the upstream answered with an error; `data: {status, retryable}` | step fails; retried by the step's `retry:` only when `retryable` |
-| **-32011 `target_gone`** | the target closed/disappeared under the call; `data: {target}` — the key of the target the call ADDRESSED | the run is **stopped** (stop hooks, no failure) — today's `ErrTargetClosed` (`internal/dispatch/output_schema.go:632`) — but ONLY when `data.target` equals the run's own trigger target key; a mismatched or absent `data.target` is instead a loud, non-retryable `upstream` failure (see below) |
+| **-32011 `target_gone`** | the target closed/disappeared under the call; `data: {target}` — the key of the target the call ADDRESSED | the run is **stopped** (stop hooks, no failure) — today's `ErrTargetClosed` (`internal/dispatch/output_schema.go:632`) — but ONLY when `data.target` equals the key the source plugin names the run's own target by (`Trigger.DeclaredKey`); a mismatched or absent `data.target` is instead a loud, non-retryable `upstream` failure (see below) |
 | **-32012 `invalid`** | the request can never succeed (validation) | fail, never retry |
 | **-32013 `rate_limited`** | `data: {retry_after}` | retried after `retry_after`, regardless of `retry:`, bounded by a total wait budget and an attempt cap (below) |
 | **-32014 `not_ready`** | state not computed yet (e.g. mergeability "unknown") | retried with short backoff, bounded |
@@ -490,7 +490,11 @@ ordinary wrapped Go error (`errors.As`-reachable through any number of
   a failed read's blank state, per the note below.
 
   **It is honored ONLY when `data.target` names the SAME target as the run's
-  own trigger key** (`core.Trigger.Key()`, `connector.ContractError.
+  own trigger target, by the key the source plugin names it by**
+  (`core.Trigger.DeclaredKey()`: the event's `target.key`, else its declared
+  `target.key` template over the facts, else the host's own key — so a chat
+  message's `slack:<channel>:<ts>` and a forge PR's `<repo>#<n>` both match;
+  `connector.ContractError.
   TargetGoneMatchesKey`/`TargetGoneOrUpstream` — the one shared gate every
   interpreter above goes through): a call under a run can address a target
   OTHER than the run's own — a flow step's `uses: slack.post` to a
