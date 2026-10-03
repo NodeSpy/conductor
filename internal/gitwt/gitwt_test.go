@@ -13,6 +13,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // These tests drive the REAL git binary against real repositories in t.TempDir():
@@ -632,4 +633,37 @@ func pushExtraCommit(t *testing.T, bare, branch, file string) {
 	run(t, tmp, "git", "add", "-A")
 	run(t, tmp, "git", "commit", "-m", "more")
 	run(t, tmp, "git", "push", "origin", branch)
+}
+
+// A connector that declares where its targets' code lives (checkout.remote)
+// is cloned from there — not the default host — for its own target only;
+// an unsafe transport is never used, and the harness override still wins.
+func TestDeclaredRemote(t *testing.T) {
+	req := func(remote, project string) dispatch.Request {
+		return dispatch.Request{Trigger: core.Trigger{
+			Sem:    &sdk.EventSemantics{Checkout: &sdk.CheckoutSemantics{Remote: remote}},
+			Target: core.Target{Repo: "o/r", Number: 1, Project: project},
+		}}
+	}
+	if got := declaredRemote(req("ssh://git.example.org/{{.repo}}.git", ""), "o/r"); got != "ssh://git.example.org/o/r.git" {
+		t.Fatalf("declared remote = %q", got)
+	}
+	if got := declaredRemote(req("ssh://git.example.org/{{.repo}}.git", "other/repo"), "other/repo"); got != "" {
+		t.Fatalf("a step repo: override used the event's remote: %q", got)
+	}
+	if got := declaredRemote(req("ext::sh -c touch% /tmp/pwned", ""), "o/r"); got != "" {
+		t.Fatalf("an unsafe transport was used: %q", got)
+	}
+	p := &Provisioner{}
+	t.Setenv("CONDUCTOR_GIT_REMOTE_BASE", "")
+	if got := p.remoteURL("o/r", "ssh://git.example.org/o/r.git"); got != "ssh://git.example.org/o/r.git" {
+		t.Fatalf("remoteURL = %q", got)
+	}
+	if got := p.remoteURL("o/r", ""); got != DefaultRemoteURL("o/r") {
+		t.Fatalf("no declaration: %q", got)
+	}
+	t.Setenv("CONDUCTOR_GIT_REMOTE_BASE", "git://forge/")
+	if got := p.remoteURL("o/r", "ssh://git.example.org/o/r.git"); got != "git://forge/o/r.git" {
+		t.Fatalf("the harness override must win: %q", got)
+	}
 }

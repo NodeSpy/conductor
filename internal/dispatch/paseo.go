@@ -615,7 +615,13 @@ func (d *Dispatcher) createWorktree(ctx context.Context, req Request, baseDir st
 	switch strat {
 	case "checkout-pr":
 		n, forge := prHints(req)
-		opts.PRNumber, _ = strconv.Atoi(n)
+		pr, perr := strconv.Atoi(n)
+		if perr != nil || pr <= 0 {
+			// Never ask the runtime for PR 0: a checkout-pr needs the number
+			// the event's declaration hints.
+			return "", "", Unrecoverable(fmt.Errorf("checkout-pr: no PR number in the event's checkout hints (pr_number=%q)", n))
+		}
+		opts.PRNumber = pr
 		opts.Forge = forge
 	case "branch-off":
 		opts.NewBranch = branchSlug(ctx, req.Trigger)

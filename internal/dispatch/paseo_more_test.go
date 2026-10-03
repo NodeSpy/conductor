@@ -523,3 +523,15 @@ func TestSanitizeBranchSuffixIdempotentAtBoundary(t *testing.T) {
 		t.Fatalf("distinct subtasks collided: %q", a)
 	}
 }
+
+// A checkout-pr whose event hints no PR number fails rather than asking the
+// runtime for PR 0.
+func TestCreateWorktreeRefusesAMissingPRNumber(t *testing.T) {
+	bin, _ := fakePaseoDir(t)
+	d := &Dispatcher{PaseoBin: bin}
+	req := Request{Trigger: core.Trigger{Kind: "no-such-kind", Target: core.Target{Repo: "a/w", PR: 5, Number: 5}},
+		Action: config.Action{Checkout: "checkout-pr"}}
+	if _, _, err := d.createWorktree(context.Background(), req, "/base"); err == nil || !strings.Contains(err.Error(), "no PR number") {
+		t.Fatalf("want a refusal, got %v", err)
+	}
+}

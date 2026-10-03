@@ -151,7 +151,7 @@ func (p *Provisioner) provision(ctx context.Context, repo, strategy string, req 
 	mu.Lock()
 	defer mu.Unlock()
 
-	base, err = p.baseCloneLocked(ctx, repo)
+	base, err = p.baseCloneLocked(ctx, repo, declaredRemote(req, repo))
 	if err != nil {
 		return "", "", fmt.Errorf("gitwt: base checkout for %s: %w", repo, err)
 	}
@@ -373,11 +373,11 @@ func (p *Provisioner) baseClone(ctx context.Context, repo string) (string, error
 	mu := p.repoLock(repo)
 	mu.Lock()
 	defer mu.Unlock()
-	return p.baseCloneLocked(ctx, repo)
+	return p.baseCloneLocked(ctx, repo, "")
 }
 
 // baseCloneLocked is baseClone for a caller already holding the repo lock.
-func (p *Provisioner) baseCloneLocked(ctx context.Context, repo string) (string, error) {
+func (p *Provisioner) baseCloneLocked(ctx context.Context, repo, declared string) (string, error) {
 	dir := filepath.Join(p.CheckoutsDir(), repoSlug(repo))
 	if isGitDir(dir) {
 		if _, err := p.git(ctx, dir, "fetch", "--prune", "origin"); err != nil {
@@ -389,7 +389,7 @@ func (p *Provisioner) baseCloneLocked(ctx context.Context, repo string) (string,
 		return "", err
 	}
 	_ = os.RemoveAll(dir) // a previous clone that died half-written
-	url := p.remoteURL(repo)
+	url := p.remoteURL(repo, declared)
 	if _, err := p.git(ctx, "", "clone", "--filter=blob:none", url, dir); err != nil {
 		// A server with uploadpack.allowFilter off rejects a partial clone
 		// outright; a full clone is slower but always works.
@@ -425,11 +425,32 @@ func DefaultRemoteURL(repo string) string {
 	return "git@" + config.DefaultGitHost + ":" + repo + ".git"
 }
 
-func (p *Provisioner) remoteURL(repo string) string {
+// remoteURL is where repo is cloned from: the injected resolver, else the
+// harness override (CONDUCTOR_GIT_REMOTE_BASE), else the remote the event's
+// connector declared for its target (checkout.remote — a forge other than
+// the default host), else the default host.
+func (p *Provisioner) remoteURL(repo, declared string) string {
 	if p.RemoteURL != nil {
 		return p.RemoteURL(repo)
 	}
+	if os.Getenv("CONDUCTOR_GIT_REMOTE_BASE") == "" && declared != "" {
+		return declared
+	}
 	return DefaultRemoteURL(repo)
+}
+
+// declaredRemote is the event's declared checkout remote — only when the
+// checkout is the event's own target (a step's `repo:` names another repo,
+// whose remote the declaration does not describe).
+func declaredRemote(req dispatch.Request, repo string) string {
+	if repo != req.Trigger.Target.Repo {
+		return ""
+	}
+	co, ok := req.Trigger.Checkout()
+	if !ok || !config.SafeGitTransport(co.Remote) || strings.HasPrefix(co.Remote, "-") {
+		return ""
+	}
+	return co.Remote
 }
 
 // ---- paths ---------------------------------------------------------------
