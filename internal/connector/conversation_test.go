@@ -2,9 +2,11 @@ package connector
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/plugin"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
@@ -18,8 +20,15 @@ func TestPluginConversationResolvesAnAsk(t *testing.T) {
 	decl := mapDecl(&sdk.Decl{Type: "chat",
 		Verbs: []sdk.Verb{{Name: "ask", Ask: true, Semantics: &sdk.VerbSemantics{
 			OpensConversation: &sdk.OpensConversation{ID: "conversation_id", Approvers: "approvers"}}}},
-		Events: []sdk.Event{{Name: "reply", Semantics: &sdk.EventSemantics{
-			ConversationReply: &sdk.ConversationReply{ID: "{{.chat.room}}:{{.chat.thread}}", Author: "chat.user", Text: "chat.text"}}}},
+		Events: []sdk.Event{
+			{Name: "reply", Semantics: &sdk.EventSemantics{
+				Target:            &sdk.TargetSemantics{Key: "chat:{{.chat.room}}:{{.chat.thread}}", Assigned: json.RawMessage(`true`)},
+				ConversationReply: &sdk.ConversationReply{ID: "{{.chat.room}}:{{.chat.thread}}", Author: "chat.user", Text: "chat.text"}}},
+			// The same reply shape from a delivery the platform does not
+			// vouch for (no assigned target): it can never answer an ask.
+			{Name: "unvouched", Semantics: &sdk.EventSemantics{
+				ConversationReply: &sdk.ConversationReply{ID: "{{.chat.room}}:{{.chat.thread}}", Author: "chat.user", Text: "chat.text"}}},
+		},
 	})
 	inv := &postedInvoker{posted: make(chan string, 1), out: map[string]any{"conversation_id": "R1:t9", "ref": "chat://R1/t9"}}
 	e := &externalImpl{client: inv, decl: decl, instance: "chat1", log: t.Logf}
@@ -36,18 +45,34 @@ func TestPluginConversationResolvesAnAsk(t *testing.T) {
 		return sdk.SourceEvent{Event: "reply", Context: map[string]any{"chat": map[string]any{"room": "R1", "thread": "t9", "user": user, "text": text}}}
 	}
 	psi := &pluginSourceIntegration{instance: "chat1", typ: "chat", log: t.Logf,
-		declared: map[string]bool{"reply": true}, sem: map[string]*sdk.EventSemantics{"reply": decl.Events[0].Semantics}}
+		declared: map[string]bool{"reply": true, "unvouched": true},
+		sem:      map[string]*sdk.EventSemantics{"reply": decl.Events[0].Semantics, "unvouched": decl.Events[1].Semantics}}
 	// Wait until the ask has posted (the plugin was called).
 	select {
 	case <-inv.posted:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the ask never posted")
 	}
-	time.Sleep(20 * time.Millisecond)                     // the conversation registers after the post returns
+	// The conversation registers after the post returns: wait for it, so the
+	// checks below are about who may answer, not about timing.
+	for deadline := time.Now().Add(5 * time.Second); !handoff.Conversations.Waiting("chat1", "R1:t9"); {
+		if time.Now().After(deadline) {
+			t.Fatal("the ask never opened its conversation")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	psi.triggersFor(reply("U-someone", "approve"), false) // not an approver: not consumed
 	select {
 	case out := <-got:
 		t.Fatalf("a non-approver resolved the ask: %v", out)
+	case <-time.After(50 * time.Millisecond):
+	}
+	forged := reply("U-lead", "approve")
+	forged.Event = "unvouched"
+	psi.triggersFor(forged, false) // the approver's name, on an unvouched delivery
+	select {
+	case out := <-got:
+		t.Fatalf("an unvouched delivery resolved the ask: %v", out)
 	case <-time.After(50 * time.Millisecond):
 	}
 	if trs := psi.triggersFor(reply("U-lead", "lgtm"), false); len(trs) != 0 {

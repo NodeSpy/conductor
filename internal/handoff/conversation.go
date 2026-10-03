@@ -114,3 +114,10 @@ func (i *Inbox) DeliverFrom(instance, id, author, text string) bool {
 	})
 	return delivered
 }
+
+// Waiting reports whether a conversation is open on (instance, id).
+func (i *Inbox) Waiting(instance, id string) bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.pending[inboxKey(instance, id)] != nil
+}

@@ -47,7 +47,8 @@ steps:
     uses: svc.post
     options: { text: "{{.launch.agent_id}} {{.launch.workspace_id}} {{.launch.branch}} {{.launch.path}}" }
 `)
-	stage := stagedFiles(t, "a.png", "b.png")
+	// The run's own svc.post step is what staged them (svc's directory).
+	stage := stagedFiles(t, "svc", "a.png", "b.png")
 	trig := newTrigger("ping", map[string]any{
 		"form":  map[string]any{"repo": "acme/widgets"},
 		"shots": []any{stage["a.png"], stage["b.png"]},
@@ -94,10 +95,10 @@ func TestLaunchFieldsRenderedOnce(t *testing.T) {
 // TestImagesAcceptStringAndListRefs: an images: item referencing a single
 // path string attaches that path; one referencing a list attaches each.
 func TestImagesAcceptStringAndListRefs(t *testing.T) {
-	stage := stagedFiles(t, "a.png", "b.png", "c.png")
+	stage := stagedFiles(t, "inst", "a.png", "b.png", "c.png")
 	step := config.Step{Images: []string{"{{.one}}", "{{.many}}", "{{.missing}}", "/lit.png"}}
 	data := map[string]any{"one": stage["a.png"], "many": []any{stage["b.png"], stage["c.png"]}}
-	if err := renderLaunchFields(&step, data); err != nil {
+	if err := renderLaunchFields(runUsing("inst"), &step, data); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := strings.Join(step.Images, ","), stage["a.png"]+","+stage["b.png"]+","+stage["c.png"]+",/lit.png"; got != want {
@@ -111,7 +112,8 @@ func TestImagesAcceptStringAndListRefs(t *testing.T) {
 // refused before anything launches. A path the operator wrote literally is
 // theirs to choose.
 func TestImagesRefuseUnstagedPaths(t *testing.T) {
-	stage := stagedFiles(t, "ok.png")
+	stage := stagedFiles(t, "inst", "ok.png")
+	ctx := runUsing("inst")
 	outside := filepath.Join(t.TempDir(), "secret.png")
 	if err := os.WriteFile(outside, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
@@ -122,26 +124,76 @@ func TestImagesRefuseUnstagedPaths(t *testing.T) {
 	}
 	for _, bad := range []string{outside, filepath.Dir(stage["ok.png"]) + "/../../../../" + filepath.Base(outside), link, "/etc/passwd"} {
 		step := config.Step{Images: []string{"{{.p}}"}}
-		if err := renderLaunchFields(&step, map[string]any{"p": bad}); err == nil {
+		if err := renderLaunchFields(ctx, &step, map[string]any{"p": bad}); err == nil {
 			t.Errorf("%s: an unstaged templated path was accepted", bad)
 		}
 		step = config.Step{Images: []string{"{{.ps}}"}}
-		if err := renderLaunchFields(&step, map[string]any{"ps": []any{stage["ok.png"], bad}}); err == nil {
+		if err := renderLaunchFields(ctx, &step, map[string]any{"ps": []any{stage["ok.png"], bad}}); err == nil {
 			t.Errorf("%s: an unstaged path in a list was accepted", bad)
 		}
 	}
 	step := config.Step{Images: []string{outside}}
-	if err := renderLaunchFields(&step, nil); err != nil {
+	if err := renderLaunchFields(ctx, &step, nil); err != nil {
 		t.Fatalf("a literal operator path must stay accepted: %v", err)
 	}
 }
 
-// stagedFiles writes names into a connector staging directory under a fresh
+// A file another connector instance staged — one this run never invoked — is
+// refused even though it is a genuine staged file: the run may only hand a
+// launch what its own verbs produced.
+func TestImagesRefuseAnotherInstancesStagedFile(t *testing.T) {
+	mine := stagedFiles(t, "mine", "a.png")
+	dir := filepath.Join(config.PluginStagingDir(), "chat", "theirs")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	theirs := filepath.Join(dir, "secret.png")
+	if err := os.WriteFile(theirs, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := runUsing("mine")
+	step := config.Step{Images: []string{"{{.p}}"}}
+	if err := renderLaunchFields(ctx, &step, map[string]any{"p": theirs}); err == nil {
+		t.Fatal("another instance's staged file was accepted")
+	}
+	step = config.Step{Images: []string{"{{.p}}"}}
+	if err := renderLaunchFields(ctx, &step, map[string]any{"p": mine["a.png"]}); err != nil {
+		t.Fatalf("this run's own instance's file must be accepted: %v", err)
+	}
+	step = config.Step{Images: []string{"{{.p}}"}}
+	if err := renderLaunchFields(context.Background(), &step, map[string]any{"p": mine["a.png"]}); err == nil {
+		t.Fatal("outside a run that invoked the instance, its file was accepted")
+	}
+	// A sibling directory sharing the root's name prefix is not under it.
+	sib := config.PluginStagingDir() + "-evil"
+	if err := os.MkdirAll(filepath.Join(sib, "chat", "mine"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	evil := filepath.Join(sib, "chat", "mine", "x.png")
+	if err := os.WriteFile(evil, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	step = config.Step{Images: []string{"{{.p}}"}}
+	if err := renderLaunchFields(ctx, &step, map[string]any{"p": evil}); err == nil {
+		t.Fatal("a sibling of the staging root was accepted")
+	}
+}
+
+// runUsing is a run context that invoked the named connector instances.
+func runUsing(instances ...string) context.Context {
+	ctx := withRunInstances(context.Background())
+	for _, i := range instances {
+		recordRunInstance(ctx, i)
+	}
+	return ctx
+}
+
+// stagedFiles writes names into instance's staging directory under a fresh
 // state dir and returns each one's path.
-func stagedFiles(t *testing.T, names ...string) map[string]string {
+func stagedFiles(t *testing.T, instance string, names ...string) map[string]string {
 	t.Helper()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	dir := filepath.Join(config.PluginStagingDir(), "chat", "inst")
+	dir := filepath.Join(config.PluginStagingDir(), "chat", instance)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}

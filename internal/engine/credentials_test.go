@@ -48,7 +48,9 @@ func TestDeclaredCredentials(t *testing.T) {
 	// An assigned target whose mint yields nothing still uses the fact its
 	// source stamped.
 	stamped := core.Trigger{Instance: "acme1", TargetTrusted: true, Context: map[string]any{"project": "p1", "acme_read": "stamped"}}
-	e.invokeVerb = func(context.Context, string, string, map[string]any) (map[string]any, error) { return map[string]any{}, nil }
+	e.invokeVerb = func(context.Context, string, string, map[string]any) (map[string]any, error) {
+		return map[string]any{}, nil
+	}
 	if c = e.declaredCredentials(context.Background(), stamped, "acme1", sem); c.Env["ACME_READ"] != "stamped" {
 		t.Fatalf("assigned target, stamped fact: env=%v", c.Env)
 	}

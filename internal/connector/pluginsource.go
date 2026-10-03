@@ -166,10 +166,18 @@ func (p *pluginSourceIntegration) triggersFor(ev pluginEvent, force bool) []core
 	if !ok {
 		return nil
 	}
-	if r := p.semFor(kind); r != nil && r.ConversationReply != nil {
+	// The plugin's claim that the platform assigned this target — on the
+	// wire, or by the event's declaration (target.assigned: a bool, or the
+	// name of a bool fact). Trust in a plugin was decided once, at install
+	// (plugin_trust); after that its word is taken like any installed
+	// plugin's.
+	facts := core.Trigger{Context: ev.Context, Target: coreTarget(ev.Target)}.Facts()
+	assigned := ev.Target.Assigned || ev.TargetTrusted || declaredAssigned(p.semFor(kind), facts)
+	if r := p.semFor(kind); r != nil && r.ConversationReply != nil && assigned {
 		// A reply in a conversation the plugin opened: delivered to the
 		// engine's inbox first; one nobody is waiting on is an ordinary event.
-		facts := core.Trigger{Context: ev.Context, Target: coreTarget(ev.Target)}.Facts()
+		// Only a delivery the platform vouches for may answer an ask — the
+		// same assigned bit every other trust decision reads.
 		cr := r.ConversationReply
 		a, _ := core.LookupFact(facts, cr.Author)
 		tx, _ := core.LookupFact(facts, cr.Text)
@@ -179,10 +187,6 @@ func (p *pluginSourceIntegration) triggersFor(ev pluginEvent, force bool) []core
 			return nil
 		}
 	}
-	// The plugin's claim that the platform assigned this target. Trust in a
-	// plugin was decided once, at install (plugin_trust); after that its
-	// word is taken like any installed plugin's.
-	assigned := ev.Target.Assigned || ev.TargetTrusted
 	sem := p.semFor(kind)
 	if sem != nil && sem.ClosesTarget != nil && ev.Trigger == "" {
 		// A terminal event: the lifecycle fact about a target. It fires no
@@ -514,6 +518,25 @@ func coreTarget(t sdk.Target) core.Target {
 func wireTarget(t core.Target) sdk.Target {
 	return sdk.Target{Repo: t.Repo, Owner: t.Owner, Name: t.Name, PR: t.PR, Issue: t.Issue, Number: t.Number,
 		HeadSHA: t.HeadSHA, BaseRef: t.BaseRef, HTMLURL: t.HTMLURL, Project: t.Project}
+}
+
+// declaredAssigned reads an event's declared target.assigned: true, or the
+// name of a fact that is true.
+func declaredAssigned(sem *sdk.EventSemantics, facts map[string]any) bool {
+	if sem == nil || sem.Target == nil || len(sem.Target.Assigned) == 0 {
+		return false
+	}
+	var b bool
+	if json.Unmarshal(sem.Target.Assigned, &b) == nil {
+		return b
+	}
+	var name string
+	if json.Unmarshal(sem.Target.Assigned, &name) != nil || name == "" {
+		return false
+	}
+	v, _ := core.LookupFact(facts, name)
+	t, _ := v.(bool)
+	return t
 }
 
 // semFor is the declared semantics of event kind: its own declaration, else
