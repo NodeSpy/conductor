@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/core"
@@ -27,7 +28,7 @@ func TestDeclaredCredentials(t *testing.T) {
 			Value: "secret", Env: []string{"ACME_READ"}, Template: "acme_read"},
 	}}
 	tr := core.Trigger{Instance: "acme1", TargetTrusted: true, Context: map[string]any{"project": "p1"}}
-	c := e.declaredCredentials(context.Background(), tr, "acme1", sem)
+	c, _ := e.declaredCredentials(context.Background(), tr, "acme1", sem)
 	if c.Env["ACME_TOKEN"] != "tok-mint_w" || c.Env["ACME_TOKEN_ALIAS"] != "tok-mint_w" || c.Env["ACME_READ"] != "tok-mint_r" {
 		t.Fatalf("env = %v", c.Env)
 	}
@@ -41,7 +42,7 @@ func TestDeclaredCredentials(t *testing.T) {
 	// event carries.
 	minted = nil
 	forged := core.Trigger{Instance: "acme1", Context: map[string]any{"project": "p1", "acme_read": "from-the-event"}}
-	c = e.declaredCredentials(context.Background(), forged, "acme1", sem)
+	c, _ = e.declaredCredentials(context.Background(), forged, "acme1", sem)
 	if len(minted) != 0 || len(c.Env) != 0 || len(c.Templates) != 0 || c.Guidance != "" {
 		t.Fatalf("forged target: minted=%v creds=%+v", minted, c)
 	}
@@ -51,7 +52,7 @@ func TestDeclaredCredentials(t *testing.T) {
 	e.invokeVerb = func(context.Context, string, string, map[string]any) (map[string]any, error) {
 		return map[string]any{}, nil
 	}
-	if c = e.declaredCredentials(context.Background(), stamped, "acme1", sem); c.Env["ACME_READ"] != "stamped" {
+	if c, _ = e.declaredCredentials(context.Background(), stamped, "acme1", sem); c.Env["ACME_READ"] != "stamped" {
 		t.Fatalf("assigned target, stamped fact: env=%v", c.Env)
 	}
 }
@@ -67,16 +68,36 @@ func TestLifecycleWorkGetsTheOriginConnectorsCredentials(t *testing.T) {
 			Target:  core.Target{Repo: "a/w", Number: 1},
 			Context: map[string]any{"repo": "a/w", "origin_instance": origin}}
 	}
-	if c := e.credentialsFor(context.Background(), life("i", true)); c.Env["GH_TOKEN"] != "utok" || c.Env["PC_GH_APP_TOKEN"] != "atok" {
+	if c, _ := e.credentialsFor(context.Background(), life("i", true)); c.Env["GH_TOKEN"] != "utok" || c.Env["PC_GH_APP_TOKEN"] != "atok" {
 		t.Fatalf("lifecycle work for the forge's target: env = %v", c.Env)
 	}
-	if c := e.credentialsFor(context.Background(), life("i", false)); c.Env["GH_TOKEN"] != "" {
+	if c, _ := e.credentialsFor(context.Background(), life("i", false)); c.Env["GH_TOKEN"] != "" {
 		t.Fatalf("an unassigned origin target mints nothing: env = %v", c.Env)
 	}
-	if c := e.credentialsFor(context.Background(), life("nope", true)); len(c.Env) != 0 {
+	if c, _ := e.credentialsFor(context.Background(), life("nope", true)); len(c.Env) != 0 {
 		t.Fatalf("an unknown origin instance gets no credentials: env = %v", c.Env)
 	}
-	if c := e.credentialsFor(context.Background(), core.Trigger{Source: "conductor", Instance: "conductor", Kind: "boot", TargetTrusted: true}); len(c.Env) != 0 {
+	if c, _ := e.credentialsFor(context.Background(), core.Trigger{Source: "conductor", Instance: "conductor", Kind: "boot", TargetTrusted: true}); len(c.Env) != 0 {
 		t.Fatalf("a lifecycle event with no origin gets no credentials: env = %v", c.Env)
+	}
+}
+
+// A declared credential that cannot be minted (the plugin is down) is an
+// error, never a silent dispatch without it — unless a fact the source
+// stamped stands in.
+func TestFailedMintIsAnError(t *testing.T) {
+	e, _ := newEng(t, baseCfg(), &fakeDispatcher{}, &fakeNotifier{}, nil)
+	e.invokeVerb = func(context.Context, string, string, map[string]any) (map[string]any, error) {
+		return nil, errors.New("plugin not running")
+	}
+	sem := &sdk.ConnSemantics{Credentials: []sdk.Credential{{Name: "w", Role: "write",
+		Mint: sdk.CredentialMint{Verb: "mint_w"}, Env: []string{"ACME_TOKEN"}, Template: "acme_token"}}}
+	tr := core.Trigger{Instance: "acme1", TargetTrusted: true, Context: map[string]any{}}
+	if c, err := e.declaredCredentials(context.Background(), tr, "acme1", sem); err == nil || len(c.Env) != 0 {
+		t.Fatalf("failed mint: creds=%+v err=%v", c, err)
+	}
+	tr.Context["acme_token"] = "stamped"
+	if c, err := e.declaredCredentials(context.Background(), tr, "acme1", sem); err != nil || c.Env["ACME_TOKEN"] != "stamped" {
+		t.Fatalf("a stamped fact stands in: creds=%+v err=%v", c, err)
 	}
 }

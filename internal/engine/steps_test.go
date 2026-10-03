@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -342,3 +343,35 @@ func (*stepFake) AgentForDispatch(string) string { return "" }
 func (*stepFake) DispatchInFlight(string) bool   { return false }
 
 func (*stepFake) DeliverOutput(string, any) (bool, error) { return false, nil }
+
+// A run whose declared credential cannot be minted yet (its plugin is still
+// starting) is not resumed without it: it stays pending for the next start.
+func TestResumeDeferredWhenACredentialCannotBeMinted(t *testing.T) {
+	d := newStepFake()
+	st := tempStore(t)
+	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
+		{ID: "planner"}, {ID: "worker"}}}}}
+	e := New(Options{Config: cfg, Store: st, Dispatch: d, Notifier: &fakeNotifier{},
+		Author: dispatch.Author{}, Connectors: forgeRegistry(t),
+		InvokeVerb: func(context.Context, string, string, map[string]any) (map[string]any, error) {
+			return nil, errors.New("plugin not running yet")
+		}})
+	tr := issueTrigger()
+	tr.Instance, tr.TargetTrusted = "i", true
+	tp := tr
+	tp.Action = nil
+	trigJSON, _ := json.Marshal(tp)
+	actJSON, _ := json.Marshal(triageAction())
+	_ = st.PutRun(store.WorkflowRun{ID: "run1", Instance: "i",
+		Trigger: trigJSON, Action: actJSON, StepIndex: 1,
+		Outputs: map[string]map[string]any{"evaluate": {"has_context": true}}})
+
+	e.ResumeWorkflows(context.Background())
+	time.Sleep(100 * time.Millisecond)
+	if d.count() != 0 {
+		t.Fatalf("a run was resumed without its credential (%d dispatches)", d.count())
+	}
+	if len(st.PendingRuns()) != 1 {
+		t.Fatal("the deferred run must stay pending for the next start")
+	}
+}

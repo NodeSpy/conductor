@@ -950,7 +950,13 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	if modelRuntime != "" && profile.Runtime == "" {
 		profile.Runtime = modelRuntime
 	}
-	creds := e.credentialsFor(ctx, t)
+	creds, err := e.credentialsFor(ctx, t)
+	if err != nil {
+		e.log("%s not dispatched — %v", tag(t), err)
+		e.store.Audit(map[string]any{"event": "dispatch_failed", "repo": t.Target.Repo, "number": t.Target.Number,
+			"kind": t.Kind, "error": e.redact(err.Error())})
+		return
+	}
 	if act.Type == "agent" {
 		// No prompt of its own → act on the event itself (connector-neutral
 		// event object), synthesized before the guidance stack. This legacy
@@ -1283,8 +1289,14 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 		}
 		t.Action = act
 		// Credentials are minted afresh for the resumed run (the recorded
-		// ones were never persisted).
-		creds := e.credentialsFor(ctx, t)
+		// ones were never persisted). One that cannot be minted yet (its
+		// plugin is still starting) leaves the run pending for the next start
+		// rather than resuming it without.
+		creds, err := e.credentialsFor(ctx, t)
+		if err != nil {
+			e.log("%s resume deferred — %v", tag(t), err)
+			continue
+		}
 		run := r
 		if run.Outputs == nil {
 			run.Outputs = map[string]map[string]any{}

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/NodeSpy/conductor/internal/core"
@@ -22,9 +23,14 @@ import (
 // trigger's connector instance (origin_instance): its work gets that
 // connector's credentials, minted for the same target. Work on an instance
 // the registry does not know gets none.
-func (e *Engine) credentialsFor(ctx context.Context, t core.Trigger) dispatch.Credentials {
+//
+// An error means a declared credential could not be minted (and no fact the
+// source stamped stands in): the work must not run without it — a resumed
+// run stays pending, a dispatch is not made, a flow step fails (its retry
+// policy applies).
+func (e *Engine) credentialsFor(ctx context.Context, t core.Trigger) (dispatch.Credentials, error) {
 	if e.connectors == nil {
-		return dispatch.Credentials{}
+		return dispatch.Credentials{}, nil
 	}
 	instance := t.Instance
 	if t.Source == "conductor" {
@@ -34,19 +40,20 @@ func (e *Engine) credentialsFor(ctx context.Context, t core.Trigger) dispatch.Cr
 	}
 	in, ok := e.connectors.Get(instance)
 	if !ok {
-		return dispatch.Credentials{}
+		return dispatch.Credentials{}, nil
 	}
 	return e.declaredCredentials(ctx, t, instance, in.Decl.Semantics)
 }
 
-func (e *Engine) declaredCredentials(ctx context.Context, t core.Trigger, instance string, sem *sdk.ConnSemantics) dispatch.Credentials {
+func (e *Engine) declaredCredentials(ctx context.Context, t core.Trigger, instance string, sem *sdk.ConnSemantics) (dispatch.Credentials, error) {
 	var c dispatch.Credentials
+	var failed []error
 	// Work for a target the platform did not assign — one the event's sender
 	// chose — gets no credential in any form: not minted, and not taken from
 	// the event's own facts either (a source may stamp one, but an attacker-
 	// chosen target must never carry it).
 	if sem == nil || !t.TargetTrusted {
-		return c
+		return c, nil
 	}
 	for _, cr := range sem.Credentials {
 		v, err := e.mint(ctx, t, instance, cr)
@@ -58,6 +65,9 @@ func (e *Engine) declaredCredentials(ctx context.Context, t core.Trigger, instan
 			val, _ = t.Context[cr.Template].(string)
 		}
 		if val == "" {
+			if err != nil {
+				failed = append(failed, fmt.Errorf("credential %s: %w", cr.Name, err))
+			}
 			continue
 		}
 		if c.Env == nil {
@@ -71,7 +81,7 @@ func (e *Engine) declaredCredentials(ctx context.Context, t core.Trigger, instan
 		}
 		c.Guidance += cr.Guidance
 	}
-	return c
+	return c, errors.Join(failed...)
 }
 
 // mint resolves one declared credential through its mint verb.

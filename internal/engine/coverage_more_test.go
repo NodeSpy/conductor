@@ -140,7 +140,7 @@ func TestFlowAgentServices(t *testing.T) {
 
 	// Credentials: resolved through the engine (the event's connector here
 	// declares none).
-	if c := svcs.Credentials(context.Background(), flowTrigger("d-svc")); len(c.Env) != 0 {
+	if c, err := svcs.Credentials(context.Background(), flowTrigger("d-svc")); err != nil || len(c.Env) != 0 {
 		t.Fatalf("a connector declaring no credentials gave some: %+v", c)
 	}
 

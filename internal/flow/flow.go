@@ -63,7 +63,7 @@ type AgentServices struct {
 	// Tokens resolves the acts-as-you / App tokens for a trigger.
 	// Credentials are what an agent dispatched for t receives (the
 	// connector's declared credentials, resolved by the engine).
-	Credentials func(ctx context.Context, t core.Trigger) dispatch.Credentials
+	Credentials func(ctx context.Context, t core.Trigger) (dispatch.Credentials, error)
 	// Guidance is the house prompt guidance for a step (its IDENTITY keys the
 	// optional outcome-feedback tuning — #36 §18). pol is the trigger's
 	// resolved policy cascade — its Guidance is the scoped layer-0 baseline
@@ -1794,7 +1794,11 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 	// schema'd JSON, delivered the output_schema way).
 	var creds dispatch.Credentials
 	if r.Agents.Credentials != nil {
-		creds = r.Agents.Credentials(ctx, t)
+		c, err := r.Agents.Credentials(ctx, t)
+		if err != nil {
+			return nil, "", err
+		}
+		creds = c
 	}
 	if act.Prompt != "" && step.DecisionLaunch == nil {
 		act.Prompt += creds.Guidance
@@ -2043,7 +2047,11 @@ func (r *Runner) execCommand(ctx context.Context, t core.Trigger, step config.St
 	}
 	var creds dispatch.Credentials
 	if r.Agents.Credentials != nil {
-		creds = r.Agents.Credentials(ctx, t)
+		c, err := r.Agents.Credentials(ctx, t)
+		if err != nil {
+			return nil, "", err
+		}
+		creds = c
 	}
 	req := dispatch.Request{
 		Trigger: t, Action: act, Credentials: creds,

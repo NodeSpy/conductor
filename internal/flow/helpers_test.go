@@ -700,7 +700,7 @@ func newTestRunner(t *testing.T, cfg *config.Config, reg *connector.Registry) *t
 		Conns: reg,
 		Agents: AgentServices{
 			Dispatch:    ag.dispatch,
-			Credentials: func(context.Context, core.Trigger) dispatch.Credentials { return dispatch.Credentials{} },
+			Credentials: func(context.Context, core.Trigger) (dispatch.Credentials, error) { return dispatch.Credentials{}, nil },
 			Guidance:    func(agentName string, p config.Step, pol config.Policy) string { return "|G|" },
 			Background:  ag.background,
 			Archive:     ag.archive,
