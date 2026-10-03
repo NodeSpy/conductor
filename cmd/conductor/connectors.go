@@ -355,10 +355,16 @@ func cmdConnectors(args []string) error {
 	}
 	for _, name := range stack.Registry.Names() {
 		in, _ := stack.Registry.Get(name)
+		// Disabled BY CHOICE (`enabled: false`) wins over an underlying build
+		// failure — it's not an error either way, just worth saying both: the
+		// operator turned it off, AND (if also true) it wouldn't build anyway.
 		state := "enabled"
-		if !in.Enabled {
+		switch {
+		case !in.Enabled && in.DisabledReason != "":
+			state = "disabled (enabled: false): " + in.DisabledReason
+		case !in.Enabled:
 			state = "disabled (enabled: false)"
-		} else if in.DisabledReason != "" {
+		case in.DisabledReason != "":
 			state = "disabled: " + in.DisabledReason
 		}
 		// Show what IMPLEMENTS each instance and where it came from — the
@@ -436,10 +442,15 @@ func cmdSchema(args []string) error {
 	// verbs or events at all — printed bare, that looks like a connector with
 	// an empty contract rather than one that is actually broken. Say so
 	// plainly, and exit non-zero: the schema below is NOT this instance's
-	// real one.
-	if !enabled {
+	// real one. Disabled BY CHOICE (enabled: false) wins — exit 0 either way
+	// (see the final check below) — but if the instance ALSO wouldn't build,
+	// say that too rather than hiding it behind the authored-off state.
+	switch {
+	case !enabled && disabledReason != "":
+		fmt.Println("  state: disabled (enabled: false): " + disabledReason)
+	case !enabled:
 		fmt.Println("  state: disabled (enabled: false)")
-	} else if disabledReason != "" {
+	case disabledReason != "":
 		fmt.Println("  state: disabled: " + disabledReason)
 	}
 	// decl is already this instance's EFFECTIVE declaration (the per-instance

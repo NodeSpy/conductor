@@ -160,6 +160,52 @@ func TestCmdSchemaReportsDisabledInstance(t *testing.T) {
 	}
 }
 
+// TestCmdSchemaDisabledByChoiceWinsOverABuildFailure covers an instance that
+// is BOTH `enabled: false` AND would fail to build on its own (here: a slack
+// connector with unresolvable credentials) — the registry still attempts the
+// build for a disabled instance, so DisabledReason can be set right alongside
+// Enabled=false. Disabled-by-choice must win: exit 0 (an operator's own
+// `enabled: false` is not an error), and the output must still say it's
+// disabled — ideally mentioning the underlying failure too, since otherwise
+// re-enabling it later would surprise the operator with a second problem
+// `connectors ls`/`schema` never mentioned. `ls` and `schema` must agree.
+func TestCmdSchemaDisabledByChoiceWinsOverABuildFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	doc := `
+connectors:
+  offbroken:
+    use: slack
+    enabled: false
+    app_token: env:PC_CLI_OFFBROKEN_APP
+    bot_token: env:PC_CLI_OFFBROKEN_BOT
+`
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := captureStdout(t, func() error { return cmdSchema([]string{"--config", path, "offbroken"}) })
+	if err != nil {
+		t.Fatalf("disabled BY CHOICE (enabled: false) must exit 0 even though the instance also fails to build: %v\n%s", err, out)
+	}
+	for _, want := range []string{"disabled (enabled: false)", "PC_CLI_OFFBROKEN_APP"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("schema output missing %q (should state it's disabled AND mention the build failure):\n%s", want, out)
+		}
+	}
+
+	// `connectors ls` must show the same posture for the same instance.
+	out, err = captureStdout(t, func() error { return cmdConnectors([]string{"--config", path, "ls"}) })
+	if err != nil {
+		t.Fatalf("connectors ls: %v\n%s", err, out)
+	}
+	for _, want := range []string{"disabled (enabled: false)", "PC_CLI_OFFBROKEN_APP"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("ls output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestCmdSecretsCheck(t *testing.T) {
 	path := writeCLIConfig(t)
 	out, err := captureStdout(t, func() error { return cmdSecrets([]string{"--config", path, "check"}) })
