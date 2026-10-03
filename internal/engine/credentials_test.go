@@ -11,8 +11,8 @@ import (
 // What an agent receives is what its event's connector DECLARES: each
 // credential minted through the declared host-only verb with the declared
 // args, under the declared env names and template key, plus its guidance —
-// and nothing is minted for a target the platform did not assign (an event's
-// own fact is still used).
+// and a target the platform did not assign gets nothing: not minted, and not
+// the event's own fact of the same name either.
 func TestDeclaredCredentials(t *testing.T) {
 	e, _ := newEng(t, baseCfg(), &fakeDispatcher{}, &fakeNotifier{}, nil)
 	var minted []string
@@ -37,12 +37,20 @@ func TestDeclaredCredentials(t *testing.T) {
 	if len(minted) != 2 || minted[0] != "acme1.mint_w:p1" {
 		t.Fatalf("minted = %v", minted)
 	}
-	// An unassigned target mints nothing; a fact the source stamped is used.
+	// An unassigned target gets nothing — not even a token-named fact the
+	// event carries.
 	minted = nil
 	forged := core.Trigger{Instance: "acme1", Context: map[string]any{"project": "p1", "acme_read": "from-the-event"}}
 	c = e.declaredCredentials(context.Background(), forged, "acme1", sem)
-	if len(minted) != 0 || c.Env["ACME_TOKEN"] != "" || c.Env["ACME_READ"] != "from-the-event" {
-		t.Fatalf("forged target: minted=%v env=%v", minted, c.Env)
+	if len(minted) != 0 || len(c.Env) != 0 || len(c.Templates) != 0 || c.Guidance != "" {
+		t.Fatalf("forged target: minted=%v creds=%+v", minted, c)
+	}
+	// An assigned target whose mint yields nothing still uses the fact its
+	// source stamped.
+	stamped := core.Trigger{Instance: "acme1", TargetTrusted: true, Context: map[string]any{"project": "p1", "acme_read": "stamped"}}
+	e.invokeVerb = func(context.Context, string, string, map[string]any) (map[string]any, error) { return map[string]any{}, nil }
+	if c = e.declaredCredentials(context.Background(), stamped, "acme1", sem); c.Env["ACME_READ"] != "stamped" {
+		t.Fatalf("assigned target, stamped fact: env=%v", c.Env)
 	}
 }
 

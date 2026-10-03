@@ -41,18 +41,19 @@ func (e *Engine) credentialsFor(ctx context.Context, t core.Trigger) dispatch.Cr
 
 func (e *Engine) declaredCredentials(ctx context.Context, t core.Trigger, instance string, sem *sdk.ConnSemantics) dispatch.Credentials {
 	var c dispatch.Credentials
-	if sem == nil {
+	// Work for a target the platform did not assign — one the event's sender
+	// chose — gets no credential in any form: not minted, and not taken from
+	// the event's own facts either (a source may stamp one, but an attacker-
+	// chosen target must never carry it).
+	if sem == nil || !t.TargetTrusted {
 		return c
 	}
 	for _, cr := range sem.Credentials {
-		val := ""
-		if t.TargetTrusted {
-			v, err := e.mint(ctx, t, instance, cr)
-			if err != nil {
-				e.log("%s credential %s: %v", tag(t), cr.Name, err)
-			}
-			val = v
+		v, err := e.mint(ctx, t, instance, cr)
+		if err != nil {
+			e.log("%s credential %s: %v", tag(t), cr.Name, err)
 		}
+		val := v
 		if val == "" && cr.Template != "" {
 			val, _ = t.Context[cr.Template].(string)
 		}
