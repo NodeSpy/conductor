@@ -498,6 +498,14 @@ func cmdPluginList(args []string) error {
 
 // pluginStatus reports a plugin's readiness WITHOUT executing it: is it
 // installed, and does the binary still verify against its recorded sha?
+//
+// This is distinct from spec.ReleaseVerified below: VerifyOnly checks the
+// binary ON DISK NOW against the sha RECORDED at install (did it change
+// since, or is it corrupt?) — this always runs, for every plugin, and a
+// failure here is fatal at load (plugins.go's loadConnectorPlugins). Whether
+// that RECORDED sha was itself confirmed against the release's own
+// checksums.txt at install time is a separate, informational question,
+// answered below.
 func pluginStatus(spec plugin.Spec) string {
 	if !spec.Installed() {
 		return "not installed — run `conductor init`"
@@ -507,6 +515,15 @@ func pluginStatus(spec plugin.Spec) string {
 	}
 	if spec.Local {
 		return "ok (local build)"
+	}
+	// A release with no checksums.txt, or one that doesn't list this
+	// platform's asset, still installs (internal/plugin/remote.go
+	// FetchRemoteVerified) — the sha is recorded and checked on every exec
+	// either way, so this is not a safety gap, but an operator deciding
+	// whether to trust a third-party source should be able to see it, not
+	// have it silently blend in with a release whose checksum WAS confirmed.
+	if !spec.ReleaseVerified {
+		return "ok (unverified release — no checksums.txt matched this build at install)"
 	}
 	return "ok"
 }

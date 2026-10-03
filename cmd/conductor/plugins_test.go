@@ -282,3 +282,32 @@ func TestReconcilePluginsSerializesConcurrentPasses(t *testing.T) {
 		t.Fatal("reconcilePlugins did not proceed after the lock was released")
 	}
 }
+
+// TestPluginStatusSurfacesUnverifiedRelease: a plugin release with no
+// checksums.txt (or one that doesn't list this platform's asset) still
+// installs (internal/plugin/remote.go FetchRemoteVerified — the sha is
+// recorded and checked on every exec either way), but `plugin list` must not
+// let it silently blend in with a release whose checksum WAS confirmed at
+// install. See finding 6: reviewed and NOT changed to a hard refusal (that
+// would hold every third-party plugin release to the same bar as
+// conductor's own self-update, which plugin-contract.md's FetchRemoteVerified
+// doc comment and the deleted ReleaseVerified trust-consumer both say is not
+// the design) — but the missing observability is real and is fixed here.
+func TestPluginStatusSurfacesUnverifiedRelease(t *testing.T) {
+	bin, sum := tempExecutable(t)
+
+	verified := plugin.Spec{Name: "x", BinPath: bin, Sha256: sum, ReleaseVerified: true}
+	if got := pluginStatus(verified); got != "ok" {
+		t.Fatalf("a release-verified install should report plain ok, got %q", got)
+	}
+
+	unverified := plugin.Spec{Name: "x", BinPath: bin, Sha256: sum, ReleaseVerified: false}
+	got := pluginStatus(unverified)
+	if !strings.Contains(got, "unverified release") {
+		t.Fatalf("an install with no checksums.txt match must be visibly marked, got %q", got)
+	}
+	// Still reported as installed and runnable — not a refusal.
+	if strings.Contains(got, "not installed") {
+		t.Fatalf("an unverified release is still installed, got %q", got)
+	}
+}
