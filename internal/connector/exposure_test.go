@@ -131,7 +131,7 @@ func mustTunnel(t *testing.T, _ *Registry) leaseCounter {
 // Pack consent follows the declaration: any connector type declaring a
 // consent scope gets it, and one declaring none does not — whatever its name.
 func TestScopeConsentIsDeclared(t *testing.T) {
-	RegisterType(&TypeDecl{Type: "acmeforge", Semantics: &sdk.ConnSemantics{
+	registerTypeForTest(&TypeDecl{Type: "acmeforge", Semantics: &sdk.ConnSemantics{
 		Scope: &sdk.ConnScope{Dimension: "repo", Option: "repos", Consent: true}}}, nil)
 	if dim, ok := config.ScopeConsent("acmeforge"); !ok || dim != "repo" {
 		t.Fatalf("declared consent scope not seen: %q %v", dim, ok)

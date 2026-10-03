@@ -142,7 +142,7 @@ connectors:
 // within the same test binary).
 func registerListenerTestType(t *testing.T, typ string) {
 	t.Helper()
-	RegisterType(&TypeDecl{
+	registerTypeForTest(&TypeDecl{
 		Type: typ,
 		Connection: Schema{
 			"webhook": {Type: TMap},
