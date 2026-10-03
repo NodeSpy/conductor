@@ -102,7 +102,7 @@ func RegisterExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin
 		// vary; nothing install-time review looked at may) before it is ever
 		// used — see validateInstanceRefinement.
 		effDecl := td
-		id, err := resolveInstanceDecl(cl, name, decl, conn)
+		id, rawID, err := resolveInstanceDecl(cl, name, decl, conn)
 		if err != nil {
 			return nil, err
 		}
@@ -110,18 +110,19 @@ func RegisterExternalConnector(cl *plugin.Client, spec plugin.Spec, decl *plugin
 			effDecl = id
 		}
 		return &externalImpl{
-			client:     cl,
-			source:     cl, // *plugin.Client also satisfies pluginSourcer
-			instance:   name,
-			decl:       effDecl,
-			conn:       conn,
-			auth:       au,
-			secretRefs: refs,
-			pluginRef:  spec.Ref(),
-			pluginType: spec.Provides,
-			audit:      deps.Audit,
-			log:        log,
-			lookup:     deps.Lookup,
+			client:       cl,
+			source:       cl, // *plugin.Client also satisfies pluginSourcer
+			instance:     name,
+			decl:         effDecl,
+			instanceDecl: rawID,
+			conn:         conn,
+			auth:         au,
+			secretRefs:   refs,
+			pluginRef:    spec.Ref(),
+			pluginType:   spec.Provides,
+			audit:        deps.Audit,
+			log:          log,
+			lookup:       deps.Lookup,
 		}, nil
 	}
 	if err := RegisterExternalType(td, builder); err != nil {
@@ -339,8 +340,8 @@ type instanceDescriber interface {
 const instanceDescribeTimeout = 10 * time.Second
 
 // resolveInstanceDecl asks cl for instance's own declaration (Q6,
-// plugin-contract.md §1.4, §3.9 G13), when cl implements it. nil, nil means
-// the plugin has no per-instance declaration (CodeMethodNotFound) — the
+// plugin-contract.md §1.4, §3.9 G13), when cl implements it. (nil, nil, nil)
+// means the plugin has no per-instance declaration (CodeMethodNotFound) — the
 // caller keeps the shared type-level decl.
 //
 // typeDecl is the SAME plugin's type-level declaration (spawned or
@@ -353,24 +354,30 @@ const instanceDescribeTimeout = 10 * time.Second
 // error as the connector's DisabledReason), rather than silently letting a
 // per-instance declaration redeclare a type-level host_only mints_credential
 // verb as an ordinary one that a flow step could call directly.
-func resolveInstanceDecl(cl any, instance string, typeDecl *plugin.Decl, conn map[string]any) (*TypeDecl, error) {
+//
+// The second return is the RAW wire Decl (before mapDecl), when supported —
+// RegisterExternalConnector stashes it on externalImpl.instanceDecl so
+// cmd/conductor's hot-reload path can re-probe a plugin's NEW build against
+// it before an in-place swap (finding: in-place reload otherwise ignores a
+// changed per-instance declaration).
+func resolveInstanceDecl(cl any, instance string, typeDecl *plugin.Decl, conn map[string]any) (*TypeDecl, *plugin.Decl, error) {
 	id, ok := cl.(instanceDescriber)
 	if !ok {
-		return nil, nil
+		return nil, nil, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), instanceDescribeTimeout)
 	defer cancel()
 	d, supported, err := id.DescribeInstance(ctx, instance, conn)
 	if err != nil {
-		return nil, fmt.Errorf("connector %q: per-instance describe: %w", instance, err)
+		return nil, nil, fmt.Errorf("connector %q: per-instance describe: %w", instance, err)
 	}
 	if !supported {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err := validateInstanceRefinement(typeDecl, d); err != nil {
-		return nil, fmt.Errorf("connector %q: %w", instance, err)
+		return nil, nil, fmt.Errorf("connector %q: %w", instance, err)
 	}
-	return mapDecl(d), nil
+	return mapDecl(d), d, nil
 }
 
 // enrichConnection adds, beyond resolveConnection's result, the extras any
@@ -417,6 +424,17 @@ type externalImpl struct {
 	secretRefs []string
 	pluginRef  string
 	pluginType string
+	// instanceDecl is the RAW wire Decl this instance's plugin answered
+	// plugin.describe {instance} with at build time (Q6, plugin-contract.md
+	// §1.4) — nil when the plugin never implements/answers it for this
+	// instance, in which case the type-level Decl (above, as `decl`, mapped)
+	// is this instance's whole surface too. cmd/conductor's hot-reload path
+	// (reload.go) re-probes a plugin's NEW build against this before an
+	// in-place swap: the type-level reload-surface check alone cannot see a
+	// per-instance decl change (a rest/graphql-shaped type decl has no verbs
+	// or events at all), so it would otherwise keep serving a changed
+	// per-instance declaration under the stale cached one.
+	instanceDecl *plugin.Decl
 	// lookup resolves another configured connector instance by name — used
 	// at source start to open this instance's declared `listeners` exposure
 	// (listeners.go), the same registry lookup web's own `expose:` uses.
@@ -424,6 +442,43 @@ type externalImpl struct {
 	audit     func(map[string]any)
 	auditOnce sync.Once
 	log       func(string, ...any)
+}
+
+// PluginInstanceDecl pairs one live connector instance's identity and
+// connection config with the raw per-instance Decl (Q6, plugin-contract.md
+// §1.4) its plugin answered with at build time. cmd/conductor's hot-reload
+// path (reload.go) uses this to redo that describe call against a plugin's
+// NEW build before swapping its process in place, and refuse the swap unless
+// every live instance's declared surface is still the same. Decl is nil when
+// the plugin never implements/answers plugin.describe {instance} for this
+// instance — nothing instance-specific to re-check then, since the
+// type-level Decl (already gated by plugin.SameReloadSurface) is this
+// instance's whole surface too.
+type PluginInstanceDecl struct {
+	Instance   string
+	Connection map[string]any
+	Decl       *plugin.Decl
+}
+
+// InstancesUsingPlugin returns the registry's live connector instances backed
+// by the external plugin installed at key ("connectors/<name>" — the same key
+// plugin.Resolution.Key and config.PluginRef.Key name). It is the set a
+// hot-reload pass must re-check per-instance declarations for before an
+// in-place swap of that plugin's process.
+func InstancesUsingPlugin(r *Registry, key string) []PluginInstanceDecl {
+	if r == nil {
+		return nil
+	}
+	var out []PluginInstanceDecl
+	for _, name := range r.order {
+		in := r.byName[name]
+		ei, ok := in.Impl.(*externalImpl)
+		if !ok || "connectors/"+ei.pluginType != key {
+			continue
+		}
+		out = append(out, PluginInstanceDecl{Instance: ei.instance, Connection: ei.conn, Decl: ei.instanceDecl})
+	}
+	return out
 }
 
 // pluginValidator is the plugin.validate capability of *plugin.Client — a

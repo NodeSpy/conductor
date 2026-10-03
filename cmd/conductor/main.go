@@ -999,8 +999,15 @@ func cmdRun(args []string) error {
 		// In-place plugin hot-reload: a dep refresh tries to swap a moved
 		// plugin's process (rtMgr holds every live plugin client + its boot
 		// Decl) without restarting the daemon; unhandled cases fall back to a
-		// restart inside autoUpdateLoop.
-		reload := func(moved []plugin.Resolution) bool { return reloadMoved(cfg, rtMgr, moved) }
+		// restart inside autoUpdateLoop. connReg is nil when the config has no
+		// connectors: block (stack itself is then nil) — reloadMoved treats
+		// that as "no live connector instances to re-check" rather than
+		// dereferencing a nil stack.
+		var connReg *connector.Registry
+		if stack != nil {
+			connReg = stack.Registry
+		}
+		reload := func(moved []plugin.Resolution) bool { return reloadMoved(cfg, rtMgr, connReg, moved) }
 		go autoUpdateLoop(ctx, cfg.Update, cfgFile, notifier, stop, reload)
 	}
 	// conductor.updated fires on the first boot of a new release.

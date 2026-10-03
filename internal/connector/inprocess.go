@@ -99,7 +99,7 @@ func RegisterInProcessConnector(h sdk.Handler) {
 			return nil, fmt.Errorf("builtin %s: %w", d.Type, err)
 		}
 		effDecl := td
-		id, err := resolveInstanceDecl(c, name, &d, conn)
+		id, _, err := resolveInstanceDecl(c, name, &d, conn)
 		if err != nil {
 			return nil, fmt.Errorf("builtin %s: %w", d.Type, err)
 		}
