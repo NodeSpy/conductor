@@ -662,7 +662,11 @@ func cmdPluginList(args []string) error {
 		fmt.Printf("%-18s %-10s %-9s %-14s %s\n", e, "engine", "builtin", version, "bundled")
 	}
 
-	refs := cfg.PluginRefs()
+	// Exploded (one row per resolved-version GROUP, docs/wiki/Plugins.md
+	// "Side-by-side versions"): a plugin name pinned at two versions side by
+	// side gets two rows, each its own VERSION and its own connector(s) —
+	// never one row silently speaking for both.
+	refs := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
 	keys := make([]string, 0, len(refs))
 	for k := range refs {
 		keys = append(keys, k)
@@ -670,15 +674,32 @@ func cmdPluginList(args []string) error {
 	sort.Strings(keys)
 	for _, key := range keys {
 		ref := refs[key]
-		inst, ok := state.Get(key)
+		var inst plugin.Installed
+		var ok bool
+		if ref.Use.Origin != config.OriginLocal {
+			inst, ok = state.GetForConstraint(ref.Use.InstallKey(), ref.Use)
+		}
 		spec := plugin.SpecFromRef(ref, cfg.BaseDir(), inst, ok)
+		spec.GroupKey = key
 		ver := inst.Resolved
 		if spec.Local {
 			ver = "local"
 		} else if ver == "" {
 			ver = "-"
 		}
-		fmt.Printf("%-18s %-10s %-9s %-14s %s\n", ref.Name, ref.Kind(), ref.Use.Origin, ver, pluginStatus(spec))
+		name := ref.Name
+		if strings.Contains(key, "@") {
+			// More than one group shares this name — name which configured
+			// instance(s) this particular row/version serves, so two rows
+			// for the same plugin are tellable apart at a glance.
+			var insts []string
+			for i := range ref.Instances {
+				insts = append(insts, i)
+			}
+			sort.Strings(insts)
+			name = fmt.Sprintf("%s (%s)", ref.Name, strings.Join(insts, ","))
+		}
+		fmt.Printf("%-18s %-10s %-9s %-14s %s\n", name, ref.Kind(), ref.Use.Origin, ver, pluginStatus(spec))
 		if caps {
 			fmt.Printf("%-18s   use: %s\n", "", ref.Use.String())
 			fmt.Printf("%-18s   permissions:\n", "")
@@ -914,11 +935,46 @@ func cmdPluginShow(args []string) error {
 	}
 	name := rest[0]
 
-	refs := cfg.PluginRefs()
-	for _, key := range []string{"connectors/" + name, "runtimes/" + name} {
-		if ref, ok := refs[key]; ok {
-			return showPlugin(cfg, ref)
+	// Exploded: a name pinned at more than one version side by side
+	// (docs/wiki/Plugins.md "Side-by-side versions") has more than one
+	// group — show each, so `plugin show` never speaks for just whichever
+	// one happened to be found first.
+	state := plugin.LoadInstallState(plugin.InstallDir())
+	refs := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
+	var matches []string
+	for _, base := range []string{"connectors/" + name, "runtimes/" + name} {
+		for gk := range refs {
+			if gk == base {
+				matches = append(matches, gk)
+				continue
+			}
+			if before, _, cut := strings.Cut(gk, "@"); cut && before == base {
+				matches = append(matches, gk)
+			}
 		}
+	}
+	sort.Strings(matches)
+	if len(matches) > 0 {
+		// A failure describing ONE version group (a broken/missing binary)
+		// must not hide what `plugin show` can still say about a sibling
+		// group that's fine — printed, not swallowed, then surfaced via the
+		// final returned error so the command still exits non-zero.
+		var firstErr error
+		for i, gk := range matches {
+			if len(matches) > 1 {
+				if i > 0 {
+					fmt.Println()
+				}
+				fmt.Printf("--- %s: version %d of %d ---\n", name, i+1, len(matches))
+			}
+			if err := showPlugin(cfg, refs[gk]); err != nil {
+				fmt.Printf("  error: %v\n", err)
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+		return firstErr
 	}
 	if decl, ok := connector.TypeDeclFor(name); ok {
 		fmt.Printf("%s (builtin connector, conductor %s)\n", name, version)
@@ -935,7 +991,15 @@ func cmdPluginShow(args []string) error {
 
 func showPlugin(cfg *config.Config, ref config.PluginRef) error {
 	state := plugin.LoadInstallState(plugin.InstallDir())
-	inst, ok := state.Get(ref.Key())
+	var inst plugin.Installed
+	var ok bool
+	if ref.Use.Origin != config.OriginLocal {
+		// GetForConstraint, not Get: ref may be ONE of several
+		// resolved-version groups of this name (side by side) — resolve
+		// exactly the version THIS group's own `use:` constraint names,
+		// never an arbitrary sibling's.
+		inst, ok = state.GetForConstraint(ref.Use.InstallKey(), ref.Use)
+	}
 	spec := plugin.SpecFromRef(ref, cfg.BaseDir(), inst, ok)
 
 	fmt.Printf("%s (%s plugin)\n", ref.Name, ref.Kind())

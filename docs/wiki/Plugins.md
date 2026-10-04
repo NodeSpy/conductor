@@ -135,6 +135,57 @@ tracks, using the same resolver packs use.
 A builtin has no version to pin, and a local binary is whatever is on disk —
 both **refuse** an `@version` rather than ignoring it.
 
+### Side-by-side versions
+
+Two connectors can pin **different** versions of the same plugin:
+
+```yaml
+connectors:
+  gh-stable: { use: github@v1.4.0 }
+  gh-canary: { use: github@v2.0.0-rc1 }
+```
+
+Each pin resolves, is installed, and runs **independently** — `gh-stable` is
+served by the v1.4.0 binary's own process, `gh-canary` by v2.0.0-rc1's, and
+each sees only its own version's declared verbs/events/schema. Nothing
+silently "picks one for both": that used to be exactly the bug here — a
+plugin was keyed by name alone, so the first connector `conductor` happened
+to resolve decided the version *every* connector of that name got, no matter
+what the others asked for.
+
+**The split is by resolved version, not by the `use:` text you wrote.** Two
+instances whose constraints resolve to the *same* concrete build still share
+one process, exactly like two non-isolated instances of a single-version
+plugin always have (see [Multi-instance isolation](#multi-instance-isolation)
+below) — `use: github` (stay current) on one connector and `use: github@^1`
+on another land in the same process the moment they both resolve to, say,
+`v1.4.0`. `isolate: true` still applies *within* whichever group an instance
+lands in.
+
+A local `use: ./path` build is split by its content-addressed snapshot sha
+(see "Local builds are snapshotted" below): two connectors pointed at the
+same bytes share a process; different bytes — even under the same declared
+name — never do.
+
+**`single_process` plugins are the one exception.** A plugin that declares
+`capabilities.single_process` keeps some box-global resource only one
+process can hold (the running example throughout this doc is a tailscale
+funnel lease) — running two resolved versions of it side by side would mean
+two processes each believing they alone own that resource. conductor refuses
+this outright, as a config validation error naming the plugin and every
+connector involved, rather than silently starting a second process that
+would fight the first for it:
+
+```
+config: connector(s) gh-stable, gh-canary: plugin tailscale declares single_process — it keeps
+one box-global resource that only ONE process can own, so two different resolved versions of it
+cannot run side by side; pin every connector using it to the SAME version, or see
+docs/wiki/Plugins.md "Side-by-side versions"
+```
+
+The fix is always the same: pin every connector that uses a `single_process`
+plugin to the one version you want it running.
+
 ## Install state is local
 
 `conductor init` installs everything the config references. Where it goes:
@@ -142,8 +193,9 @@ both **refuse** an `@version` rather than ignoring it.
 ```
 ~/.local/state/conductor/plugins/
   installed.yaml                       # the record
-  connectors/sentry/conductor-sentry_linux_amd64
-  runtimes/modal/conductor-modal_linux_amd64
+  connectors/sentry/v1.4.0/conductor-sentry_linux_amd64
+  connectors/sentry/v2.0.0-rc1/conductor-sentry_linux_amd64   # side by side, when two versions are pinned
+  runtimes/modal/v1.0.0/conductor-modal_linux_amd64
 ```
 
 **This is not a committed lockfile, and that is deliberate.** A pack is config,
@@ -151,9 +203,15 @@ and config belongs in the repo. A plugin is an *installed binary*, and which
 binary is installed is a property of *this machine* — the same way an extension
 is installed in your browser, not in your project.
 
-`installed.yaml` records, per plugin: the `use:` reference as written, the
-resolved release tag, the verified sha, the binary path, and the plugin's
-**permission manifest** (below).
+`installed.yaml` records, per **(plugin, resolved version)** pair: the `use:`
+reference as written, the resolved release tag, the verified sha, the binary
+path, and the plugin's **permission manifest** (below). A plugin referenced at
+only one version — the overwhelmingly common case — has exactly one record,
+exactly as it always has; a plugin pinned at two versions side by side (above)
+has two, each with its own subdirectory so the two binaries never collide on
+disk. An `installed.yaml` written before side-by-side versions existed loads
+unchanged — the format didn't move, only the rule that at most one record
+exists per plugin NAME did.
 
 What follows from that:
 
@@ -163,6 +221,11 @@ What follows from that:
   build it already has, logs why, and retries on the next cycle.
 - Every install and update is **logged with the sha it moved from**, so a
   surprise change is visible rather than silent.
+- **A version nothing references any more is garbage-collected** the same
+  pass that drops a whole unreferenced plugin — if you repin every connector
+  of a plugin off `v1.4.0` onto `v2.0.0`, the next `conductor init` /
+  `plugin update` uninstalls `v1.4.0`'s binary once nothing resolves to it,
+  while a version still in use (by this plugin or any other) is left running.
 
 ### Local builds are snapshotted
 
