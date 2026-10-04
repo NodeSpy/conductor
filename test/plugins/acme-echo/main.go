@@ -28,28 +28,49 @@ import (
 // gets the ordinary per-instance-isolated shape, unaffected.
 var singleProcess = "false"
 
+// pingVerb selects whether this build's Decl ALSO declares a second verb,
+// "ping" — overridden at build time with `-ldflags "-X main.pingVerb=true"`.
+// It exists so two builds of this SAME connector TYPE can disagree about
+// their TYPE-level verb surface, the side-by-side-versions fixture
+// (internal/plugin's sidebyside_test.go): a "v1" build (plain, no flag) and
+// a "v2" build (pingVerb=true) published under two different release tags
+// of the same fake remote prove that two connectors pinning different
+// versions of one plugin are each served by THEIR OWN resolved version's
+// process and declaration — never one silently standing in for the other.
+// A plain build is "false": every other test that builds acme-echo is
+// unaffected.
+var pingVerb = "false"
+
 func describe() plugin.Decl {
 	sp, _ := strconv.ParseBool(singleProcess)
+	verbs := []plugin.Verb{{
+		Name: "echo",
+		Desc: "return the given message",
+		Options: plugin.Schema{
+			"message": {Type: "string", Required: true, Desc: "text to echo back"},
+			"leak":    {Type: "boolean", Desc: "if true, log the received token to stderr (to exercise daemon redaction)"},
+			"env_var": {Type: "string", Desc: "if set, report os.Getenv(env_var) in env_value — exercises per-instance allow_env isolation"},
+		},
+		Outputs: plugin.Schema{
+			"message":        {Type: "string", Required: true},
+			"received_token": {Type: "boolean", Required: true},
+			"env_value":      {Type: "string", Desc: "os.Getenv(env_var), or \"\" if env_var was empty/unset/ungranted"},
+		},
+	}}
+	if ping, _ := strconv.ParseBool(pingVerb); ping {
+		verbs = append(verbs, plugin.Verb{
+			Name:    "ping",
+			Desc:    "a verb only the pingVerb=true (\"v2\") build declares",
+			Outputs: plugin.Schema{"pong": {Type: "boolean", Required: true}},
+		})
+	}
 	return plugin.Decl{
 		Type: "acme-echo",
 		Desc: "reference echo connector (example plugin)",
 		Connection: plugin.Schema{
 			"token": {Type: "string", Desc: "an example credential the plugin receives per-call"},
 		},
-		Verbs: []plugin.Verb{{
-			Name: "echo",
-			Desc: "return the given message",
-			Options: plugin.Schema{
-				"message": {Type: "string", Required: true, Desc: "text to echo back"},
-				"leak":    {Type: "boolean", Desc: "if true, log the received token to stderr (to exercise daemon redaction)"},
-				"env_var": {Type: "string", Desc: "if set, report os.Getenv(env_var) in env_value — exercises per-instance allow_env isolation"},
-			},
-			Outputs: plugin.Schema{
-				"message":        {Type: "string", Required: true},
-				"received_token": {Type: "boolean", Required: true},
-				"env_value":      {Type: "string", Desc: "os.Getenv(env_var), or \"\" if env_var was empty/unset/ungranted"},
-			},
-		}},
+		Verbs: verbs,
 		// Declares two env vars it reads (neither granted by default: an
 		// operator must still allow_env each one per connector instance) —
 		// exercises the daemon's grantedEnv/allow_env isolation end to end.
@@ -61,6 +82,11 @@ func describe() plugin.Decl {
 }
 
 func invoke(req plugin.InvokeRequest) (plugin.InvokeResult, error) {
+	if req.Verb == "ping" {
+		if ping, _ := strconv.ParseBool(pingVerb); ping {
+			return plugin.InvokeResult{Outputs: map[string]any{"pong": true}}, nil
+		}
+	}
 	if req.Verb != "echo" {
 		return plugin.InvokeResult{}, plugin.Errorf(plugin.CodeInvalidParams, "unknown verb "+req.Verb)
 	}

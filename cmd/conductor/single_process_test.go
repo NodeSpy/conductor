@@ -229,6 +229,57 @@ func TestCheckIsolateAgainstKnownSingleProcessRefusesBoot(t *testing.T) {
 	}
 }
 
+// TestCheckIsolateAgainstKnownSingleProcessRefusesTwoVersions is the
+// side-by-side-versions half of the same guard (docs/wiki/Plugins.md "Side-
+// by-side versions"): a single_process plugin keeps one box-global resource
+// only ONE process can own (the design doc's example is a tailscale funnel),
+// so two connectors configured to run two DIFFERENT resolved versions of it
+// side by side — two groups sharing one install key — is refused outright,
+// naming every connector involved, rather than silently starting two
+// processes that would each think they alone own that resource.
+func TestCheckIsolateAgainstKnownSingleProcessRefusesTwoVersions(t *testing.T) {
+	installKey := "connectors/tailscale"
+	refV1 := config.PluginRef{
+		Name: "tailscale",
+		Use:  config.Use{Kind: config.UseKindConnector, Name: "tailscale", Origin: config.OriginGitHub, Host: "github.com", Repo: "acme/plugins", Version: "=1.0.0"},
+		Instances: map[string]config.ConnectorGrant{
+			"a": {Use: config.Use{Kind: config.UseKindConnector, Name: "tailscale", Origin: config.OriginGitHub, Host: "github.com", Repo: "acme/plugins", Version: "=1.0.0"}},
+		},
+	}
+	refV2 := config.PluginRef{
+		Name: "tailscale",
+		Use:  config.Use{Kind: config.UseKindConnector, Name: "tailscale", Origin: config.OriginGitHub, Host: "github.com", Repo: "acme/plugins", Version: "=2.0.0"},
+		Instances: map[string]config.ConnectorGrant{
+			"b": {Use: config.Use{Kind: config.UseKindConnector, Name: "tailscale", Origin: config.OriginGitHub, Host: "github.com", Repo: "acme/plugins", Version: "=2.0.0"}},
+		},
+	}
+	state := plugin.LoadInstallState(t.TempDir())
+	// Both versions installed, both declaring single_process (recorded, as a
+	// real describe at install time would have).
+	state.Put(plugin.Installed{Key: installKey, Resolved: "v1.0.0", Manifest: plugin.Manifest{SingleProcess: true}})
+	state.Put(plugin.Installed{Key: installKey, Resolved: "v2.0.0", Manifest: plugin.Manifest{SingleProcess: true}})
+
+	// Pre-exploded (two groups sharing one install key) — exactly what
+	// pluginManagerForStack feeds NewManager once two versions are
+	// configured side by side.
+	mgr := plugin.NewManager(map[string]config.PluginRef{
+		installKey + "@v1.0.0": refV1,
+		installKey + "@v2.0.0": refV2,
+	}, "", state, plugin.Deps{})
+	defer mgr.Close()
+
+	err := checkIsolateAgainstKnownSingleProcess(mgr)
+	if err == nil {
+		t.Fatal("expected a config validation error for two resolved versions of a single_process plugin")
+	}
+	if !strings.Contains(err.Error(), "tailscale") || !strings.Contains(err.Error(), "a") || !strings.Contains(err.Error(), "b") {
+		t.Fatalf("error must name the plugin and both connectors, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "single_process") {
+		t.Fatalf("error must explain single_process is the reason, got: %v", err)
+	}
+}
+
 // TestPermissionLinesShowsSingleProcessReason is permissionLines'
 // (cmd/conductor/plugins.go) display half: a plugin whose declared manifest
 // says single_process, with one shared instance and one isolate: true
