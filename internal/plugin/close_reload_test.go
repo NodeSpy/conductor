@@ -141,7 +141,8 @@ func TestClientCloseWakesCallParkedBehindStuckReloadNoDeadline(t *testing.T) {
 	time.Sleep(20 * time.Millisecond) // let it enter callFor and park on reloadCond
 
 	start := time.Now()
-	go c.Close()
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- c.Close() }()
 	select {
 	case err := <-secondErr:
 		if err == nil {
@@ -165,6 +166,19 @@ func TestClientCloseWakesCallParkedBehindStuckReloadNoDeadline(t *testing.T) {
 	case <-reloadDone:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the background Reload call never returned")
+	}
+	// JOIN the background Close() goroutine before restoring the
+	// package-level tunables below — like the sibling test above, an
+	// unjoined `go c.Close()` can still be reading reloadDrainTimeout/
+	// stopGrace (Close -> stopServed -> Stop reads stopGrace) when this test
+	// function returns and the restore below writes them: not a
+	// happens-before edge, and -race correctly flags it even though Close
+	// finishes almost immediately in practice once cancelCall unblocks the
+	// drain.
+	select {
+	case <-closeDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close never returned")
 	}
 	reloadDrainTimeout, stopGrace = oldDrain, oldGrace
 }
