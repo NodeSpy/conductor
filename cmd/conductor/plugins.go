@@ -963,6 +963,13 @@ func cmdPluginAdd(args []string) error {
 	}
 
 	pr := config.PluginRef{Name: u.Name, Instance: instance, Use: u}
+	// Finding 6: cross-process advisory lock, held across this whole
+	// load-mutate-save cycle — see reconcilePlugins' identical comment.
+	lock, err := plugin.LockInstallState(plugin.InstallDir())
+	if err != nil {
+		return err
+	}
+	defer lock.Unlock()
 	state := plugin.LoadInstallState(plugin.InstallDir())
 	// ADD ONE, TOUCH NOTHING ELSE. The refs map here names a single reference —
 	// the one being added — and says nothing about the rest of the config, so it
@@ -1175,6 +1182,13 @@ func cmdPluginRemove(args []string) error {
 		return fmt.Errorf("usage: conductor plugin remove <name>")
 	}
 	name := rest[0]
+	// Finding 6: cross-process advisory lock, held across this whole
+	// load-mutate-save cycle — see reconcilePlugins' identical comment.
+	lock, err := plugin.LockInstallState(plugin.InstallDir())
+	if err != nil {
+		return err
+	}
+	defer lock.Unlock()
 	state := plugin.LoadInstallState(plugin.InstallDir())
 	removed := false
 	for _, key := range []string{"connectors/" + name, "runtimes/" + name} {
@@ -1225,6 +1239,16 @@ var reconcileMu sync.Mutex
 func reconcilePlugins(cfg *config.Config, opts plugin.Options) ([]plugin.Resolution, error) {
 	reconcileMu.Lock()
 	defer reconcileMu.Unlock()
+	// Finding 6: reconcileMu only serializes THIS process's own goroutines.
+	// A concurrent `conductor plugin update` (a separate OS process) and
+	// this daemon's own auto-update cycle each have their own, unrelated
+	// reconcileMu — the cross-process advisory lock closes that gap, held
+	// across the whole load-mutate-save cycle below.
+	lock, err := plugin.LockInstallState(plugin.InstallDir())
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Unlock()
 	if opts.Describe == nil {
 		opts.Describe = describeForInstall(cfg)
 	}
