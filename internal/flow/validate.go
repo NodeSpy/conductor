@@ -21,13 +21,21 @@ var universalKeys = []string{
 func credentialKeys() []string {
 	var out []string
 	for _, typ := range connector.Types() {
-		d, ok := connector.TypeDeclFor(typ)
-		if !ok || d.Semantics == nil {
-			continue
-		}
-		for _, c := range d.Semantics.Credentials {
-			if c.Template != "" {
-				out = append(out, c.Template)
+		// TypeDeclsFor, not TypeDeclFor (finding 5): several resolved
+		// versions of the SAME type can be configured side by side, and a
+		// later release may declare a credential template an earlier one
+		// didn't — sweeping only the first-registered group's declaration
+		// would silently reject a {{.cred}} reference that a connector
+		// instance pinned to the OTHER version genuinely provides. Union
+		// across every group.
+		for _, d := range connector.TypeDeclsFor(typ) {
+			if d.Semantics == nil {
+				continue
+			}
+			for _, c := range d.Semantics.Credentials {
+				if c.Template != "" {
+					out = append(out, c.Template)
+				}
 			}
 		}
 	}

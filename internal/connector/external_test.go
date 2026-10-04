@@ -227,3 +227,66 @@ func TestResolveConnectionResolvesNestedSecrets(t *testing.T) {
 		t.Fatal("a nested secret outside allow_secrets must be refused")
 	}
 }
+
+// TestTypeDeclsForReturnsEveryGroupSideBySide is finding 5: a bare
+// type-name caller with no specific instance in mind (`conductor schema
+// <type>`, credentialKeys()'s type sweep) must see EVERY resolved-version
+// group's declaration, not silently just the first one registered
+// (TypeDeclFor's "representative"). DeclFor, by contrast, resolves exactly
+// the ONE group a specific bound instance belongs to.
+func TestTypeDeclsForReturnsEveryGroupSideBySide(t *testing.T) {
+	const typ = "zz-multi-version"
+	t.Cleanup(func() {
+		UnregisterExternalType(typ)
+		ResetInstanceGroups()
+	})
+	gk1, gk2 := "connectors/"+typ+"@v1.0.0", "connectors/"+typ+"@v2.0.0"
+	d1 := &TypeDecl{Type: typ, Desc: "v1 declaration"}
+	d2 := &TypeDecl{Type: typ, Desc: "v2 declaration"}
+	if err := RegisterExternalTypeGroup(d1, nil, gk1, "connectors/"+typ); err != nil {
+		t.Fatalf("register group 1: %v", err)
+	}
+	if err := RegisterExternalTypeGroup(d2, nil, gk2, "connectors/"+typ); err != nil {
+		t.Fatalf("register group 2: %v", err)
+	}
+	BindInstanceGroup("a", gk1)
+	BindInstanceGroup("b", gk2)
+
+	decls := TypeDeclsFor(typ)
+	if len(decls) != 2 {
+		t.Fatalf("expected 2 groups, got %d: %+v", len(decls), decls)
+	}
+	if decls[gk1] != d1 || decls[gk2] != d2 {
+		t.Fatalf("TypeDeclsFor did not return both groups' own decls: %+v", decls)
+	}
+
+	// DeclFor resolves each bound instance to its OWN group, never the
+	// other's.
+	da, ok := DeclFor(typ, "a")
+	if !ok || da != d1 {
+		t.Fatalf("DeclFor(a) = %+v, want d1", da)
+	}
+	db, ok := DeclFor(typ, "b")
+	if !ok || db != d2 {
+		t.Fatalf("DeclFor(b) = %+v, want d2", db)
+	}
+	// An instance with no binding at all falls back to the representative
+	// (the first-registered group) — unchanged, single-version behavior.
+	rep, ok := DeclFor(typ, "unbound")
+	if !ok || rep != d1 {
+		t.Fatalf("DeclFor(unbound) = %+v, want the representative d1", rep)
+	}
+
+	// A single-group (the overwhelmingly common) type still returns exactly
+	// one entry, keyed by the type name itself.
+	const single = "zz-single-version"
+	t.Cleanup(func() { UnregisterExternalType(single) })
+	ds := &TypeDecl{Type: single}
+	if err := RegisterExternalType(ds, nil); err != nil {
+		t.Fatalf("register single: %v", err)
+	}
+	only := TypeDeclsFor(single)
+	if len(only) != 1 || only[single] != ds {
+		t.Fatalf("single-group TypeDeclsFor = %+v, want exactly one entry keyed by the type name", only)
+	}
+}

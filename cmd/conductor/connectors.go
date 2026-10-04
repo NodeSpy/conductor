@@ -408,8 +408,26 @@ func cmdSchema(args []string) error {
 	ref, ok := cfg.ConnectorsMap[name]
 	if !ok {
 		// Allow a bare type name too (schema for an unconfigured type).
-		if decl, tok := connector.TypeDeclFor(name); tok {
-			printTypeDecl(decl, nil)
+		// Finding 5 (side-by-side versions, docs/wiki/Plugins.md): several
+		// resolved versions of the SAME type can be configured side by
+		// side, each with its own declaration — print every one of them,
+		// under a version header, rather than silently showing whichever
+		// group happened to register first.
+		if decls := connector.TypeDeclsFor(name); len(decls) > 0 {
+			gks := make([]string, 0, len(decls))
+			for gk := range decls {
+				gks = append(gks, gk)
+			}
+			sort.Strings(gks)
+			for i, gk := range gks {
+				if len(gks) > 1 {
+					if i > 0 {
+						fmt.Println()
+					}
+					fmt.Printf("--- %s: version %d of %d (%s) ---\n", name, i+1, len(gks), gk)
+				}
+				printTypeDecl(decls[gk], nil)
+			}
 			return nil
 		}
 		return fmt.Errorf("no connector %q configured (and no such type); types: %s", name, strings.Join(connector.Types(), ", "))
@@ -429,7 +447,10 @@ func cmdSchema(args []string) error {
 		}
 	}
 	if decl == nil {
-		d, ok := connector.TypeDeclFor(ref.TypeName())
+		// DeclFor, not TypeDeclFor: name is a SPECIFIC configured instance —
+		// its own bound group's declaration (side-by-side versions), never
+		// an arbitrary sibling's (finding 5).
+		d, ok := connector.DeclFor(ref.TypeName(), name)
 		if !ok {
 			return fmt.Errorf("connector %q has unknown type %q", name, ref.TypeName())
 		}

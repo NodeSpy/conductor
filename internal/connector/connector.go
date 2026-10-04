@@ -508,6 +508,49 @@ func TypeDeclFor(typ string) (*TypeDecl, bool) {
 	return d, ok
 }
 
+// TypeDeclsFor returns EVERY registered group's declaration for typ, keyed
+// by group key ("connectors/github@v1.2.3") — finding 5 (docs/wiki/Plugins.md
+// "Side-by-side versions"): a caller that means "the type in the abstract"
+// with NO specific configured instance in mind (a bare, unconfigured
+// `conductor schema <type>`, credentialKeys()'s type sweep) must not
+// silently show or union just the first-registered group's declaration when
+// several resolved versions are configured side by side — each may declare
+// different verbs, events, or credential templates. A builtin, or an
+// external type with only one group, returns exactly one entry, keyed by
+// typ itself — the overwhelmingly common case is unchanged in shape.
+func TypeDeclsFor(typ string) map[string]*TypeDecl {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	groups := groupsOf[typ]
+	if len(groups) == 0 {
+		if d, ok := typeReg[typ]; ok {
+			return map[string]*TypeDecl{typ: d}
+		}
+		return nil
+	}
+	out := make(map[string]*TypeDecl, len(groups))
+	for gk := range groups {
+		if d, ok := groupDecl[gk]; ok {
+			out[gk] = d
+		}
+	}
+	return out
+}
+
+// DeclFor resolves ONE configured instance's own declaration: its bound
+// group's (BindInstanceGroup — side-by-side versions, the instance's OWN
+// resolved version, never an arbitrary sibling's), falling back to typeName's
+// representative registration only when the instance has no recorded
+// binding (a builtin, or any caller that hasn't gone through
+// BindInstanceGroup — e.g. a dry CLI render with no live boot). The exported
+// form of the Build path's own declFor, for callers outside this package
+// that need one SPECIFIC instance's answer rather than every group's (see
+// TypeDeclsFor for that).
+func DeclFor(typeName, instance string) (*TypeDecl, bool) {
+	d, _, ok := declFor(typeName, instance)
+	return d, ok
+}
+
 // BindInstanceGroup records which registered GROUP (internal/plugin's
 // Spec.GroupKey — "connectors/github@v1.2.3") serves one configured
 // connector instance. Set once per boot by loadConnectorPlugins, after every

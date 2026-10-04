@@ -129,6 +129,36 @@ func TestCmdSchema(t *testing.T) {
 // `<declared>` Dynamic placeholder restored on rest's type-level Describe()
 // (git show 4cade34:internal/connector/rest.go had it; Q6 dropped it when
 // real events moved to DescribeInstance).
+// TestCmdSchemaBareTypeShowsEveryResolvedVersion is finding 5: `conductor
+// schema <type>` for a bare, unconfigured type name must show EVERY
+// resolved-version group's declaration when more than one is registered
+// (side by side), not silently whichever one happened to register first.
+func TestCmdSchemaBareTypeShowsEveryResolvedVersion(t *testing.T) {
+	path := writeCLIConfig(t)
+	const typ = "zz-schema-multi-version"
+	t.Cleanup(func() {
+		connector.UnregisterExternalType(typ)
+		connector.ResetInstanceGroups()
+	})
+	gk1, gk2 := "connectors/"+typ+"@v1.0.0", "connectors/"+typ+"@v2.0.0"
+	if err := connector.RegisterExternalTypeGroup(&connector.TypeDecl{Type: typ, Desc: "the v1 build"}, nil, gk1, "connectors/"+typ); err != nil {
+		t.Fatalf("register group 1: %v", err)
+	}
+	if err := connector.RegisterExternalTypeGroup(&connector.TypeDecl{Type: typ, Desc: "the v2 build"}, nil, gk2, "connectors/"+typ); err != nil {
+		t.Fatalf("register group 2: %v", err)
+	}
+
+	out, err := captureStdout(t, func() error { return cmdSchema([]string{"--config", path, typ}) })
+	if err != nil {
+		t.Fatalf("schema %s: %v", typ, err)
+	}
+	for _, want := range []string{"version 1 of 2", "version 2 of 2", "the v1 build", "the v2 build", gk1, gk2} {
+		if !strings.Contains(out, want) {
+			t.Errorf("schema output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestCmdSchemaRestShowsDeclaredPlaceholder(t *testing.T) {
 	path := writeCLIConfig(t)
 	out, err := captureStdout(t, func() error { return cmdSchema([]string{"--config", path, "rest"}) })

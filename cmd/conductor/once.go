@@ -908,7 +908,10 @@ func withRunnerEnv(cfg *config.Config, spec config.TriggerSpec, o onceOptions) o
 	if !ok {
 		return o
 	}
-	d, ok := connector.TypeDeclFor(ref.TypeName())
+	// DeclFor, not TypeDeclFor: conn is a SPECIFIC configured instance — its
+	// own bound group's declaration (side-by-side versions, finding 5),
+	// never an arbitrary sibling's.
+	d, ok := connector.DeclFor(ref.TypeName(), conn)
 	if !ok || d.Semantics == nil || d.Semantics.Translate == nil {
 		return o
 	}
