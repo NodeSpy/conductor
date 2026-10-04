@@ -158,28 +158,54 @@ func isolatedInstanceNames(spec plugin.Spec) []string {
 	return out
 }
 
-// checkIsolateAgainstKnownSingleProcess is the HARD, boot-refusing half of
-// the single_process + isolate/versions conflicts (docs/wiki/Plugins.md
-// "Multi-instance isolation", "Side-by-side versions"):
+// singleProcessConflict is one installKey's isolate/single_process or
+// side-by-side-single_process conflict (docs/wiki/Plugins.md "Multi-instance
+// isolation", "Side-by-side versions").
 //
-//   - when a plugin's RECORDED manifest (from a previous install's describe
-//     — mgr.ConnectorSpecs' Spec.Manifest) already says
-//     Capabilities.SingleProcess, isolate: true on any of its configured
-//     instances is knowable as a problem BEFORE anything spawns;
-//   - and, new for side-by-side versions: single_process means the plugin
-//     keeps a box-global resource only ONE process can own (the design
-//     doc's running example is a tailscale funnel) — two DIFFERENT resolved
-//     versions of it configured side by side would each try to run their
-//     own process and their own copy of that resource, which is exactly
-//     what single_process exists to prevent. Refusing is the safer default:
-//     every connector using this plugin must pin (or float to) the SAME
-//     version.
+// Finding 3: this is RESOLUTION-dependent, not statically knowable from the
+// written config alone — it needs mgr.ConnectorSpecs' Spec.Manifest, which
+// comes from whichever version each instance is CURRENTLY resolved to. An
+// auto-update that moves an unpinned instance onto a release that newly
+// declares single_process, while a pinned sibling (or an isolate: true
+// instance) conflicts, can make this conflict appear with NO config edit at
+// all. That means it can never be a hard boot-refusal the way a plugin
+// disagreeing with the written config (kind mismatch, a network: block wider
+// than declared) is — Q12's "a plugin problem degrades only that plugin's
+// connectors" posture applies here too.
+type singleProcessConflict struct {
+	// groupKeys are every resolved-version group this conflict touches —
+	// more than one only for the side-by-side shape (two different versions
+	// of one single_process plugin configured at once, which must ALL be
+	// disabled: single_process cannot run twice no matter who shares which
+	// process). Exactly one for the isolate-vs-single_process shape.
+	groupKeys []string
+	// isolatedOnly, when non-empty, names just the isolate: true instances
+	// of groupKeys[0] that conflict — the shared (non-isolated) instances of
+	// that SAME group are unaffected and keep running normally. Empty means
+	// every instance of every named group is disabled.
+	isolatedOnly []string
+	reason       string
+}
+
+// singleProcessConflicts finds every single_process + isolate/versions
+// conflict in mgr's CURRENTLY RESOLVED connector specs:
 //
-// Both are config validation errors naming the connector(s) and the plugin —
-// never silently refused only later, softly, the way the LATE discovery path
-// (ForbidIsolated, in loadConnectorPlugins' main loop below) has to be, since
-// that one truly cannot know any earlier than its own live describe.
-func checkIsolateAgainstKnownSingleProcess(mgr *plugin.Manager) error {
+//   - a plugin's RECORDED manifest (from a previous install's describe)
+//     already says Capabilities.SingleProcess, and some configured instance
+//     of its OWN resolved-version group declares isolate: true — a
+//     box-global resource only one process can own, so isolate: true cannot
+//     be honored for it;
+//   - two DIFFERENT resolved versions of a single_process plugin are
+//     configured side by side — each would try to run its own process and
+//     its own copy of that box-global resource (the design doc's running
+//     example is a tailscale funnel).
+//
+// Callers choose what a conflict MEANS: loadConnectorPlugins degrades (see
+// applySingleProcessConflicts), while `conductor validate` and the
+// auto-update pre-restart gate (refreshDeps, update.go) report it and refuse
+// to proceed — an update that would newly CREATE one is caught before the
+// daemon ever restarts into it, never discovered only after, mid-boot.
+func singleProcessConflicts(mgr *plugin.Manager) []singleProcessConflict {
 	byInstallKey := map[string][]plugin.Spec{}
 	var installKeys []string
 	for _, spec := range mgr.ConnectorSpecs() {
@@ -189,6 +215,7 @@ func checkIsolateAgainstKnownSingleProcess(mgr *plugin.Manager) error {
 		byInstallKey[spec.Key()] = append(byInstallKey[spec.Key()], spec)
 	}
 	sort.Strings(installKeys)
+	var out []singleProcessConflict
 	for _, installKey := range installKeys {
 		specs := byInstallKey[installKey]
 		anySingle := false
@@ -200,9 +227,11 @@ func checkIsolateAgainstKnownSingleProcess(mgr *plugin.Manager) error {
 		if !anySingle {
 			continue
 		}
+		name := strings.TrimPrefix(installKey, config.UseKindConnector.Dir()+"/")
 		if len(specs) > 1 {
-			var all []string
+			var all, groupKeys []string
 			for _, s := range specs {
+				groupKeys = append(groupKeys, s.GroupKey)
 				all = append(all, isolatedInstanceNames(s)...)
 				for n := range s.Instances {
 					all = append(all, n)
@@ -210,18 +239,62 @@ func checkIsolateAgainstKnownSingleProcess(mgr *plugin.Manager) error {
 			}
 			sort.Strings(all)
 			all = slices.Compact(all)
-			name := strings.TrimPrefix(installKey, config.UseKindConnector.Dir()+"/")
-			return fmt.Errorf("config: connector(s) %s: plugin %s declares single_process — it keeps one box-global resource that only ONE process can own, so two different resolved versions of it cannot run side by side; pin every connector using it to the SAME version, or see docs/wiki/Plugins.md \"Side-by-side versions\"",
-				strings.Join(all, ", "), name)
+			out = append(out, singleProcessConflict{
+				groupKeys: groupKeys,
+				reason: fmt.Sprintf("connector(s) %s: plugin %s declares single_process — it keeps one box-global resource that only ONE process can own, so two different resolved versions of it cannot run side by side; pin every connector using it to the SAME version, or see docs/wiki/Plugins.md \"Side-by-side versions\"",
+					strings.Join(all, ", "), name),
+			})
+			continue
 		}
 		isolated := isolatedInstanceNames(specs[0])
 		if len(isolated) == 0 {
 			continue
 		}
-		return fmt.Errorf("config: connector(s) %s: isolate: true is not possible — plugin %s declares single_process (every configured instance must share one process); remove isolate: true, or see docs/wiki/Plugins.md \"Multi-instance isolation\"",
-			strings.Join(isolated, ", "), specs[0].Name)
+		out = append(out, singleProcessConflict{
+			groupKeys: []string{specs[0].GroupKey}, isolatedOnly: isolated,
+			reason: fmt.Sprintf("connector(s) %s: isolate: true is not possible — plugin %s declares single_process (every configured instance must share one process); remove isolate: true, or see docs/wiki/Plugins.md \"Multi-instance isolation\"",
+				strings.Join(isolated, ", "), specs[0].Name),
+		})
 	}
-	return nil
+	return out
+}
+
+// applySingleProcessConflicts is the DEGRADE half of singleProcessConflicts,
+// for loadConnectorPlugins' boot path (finding 3): never boot-fatal. An
+// isolate: true instance colliding with its own group's single_process
+// plugin is refused via the SAME mechanism the late-discovery path
+// (ForbidIsolated, below) uses — only that instance is disabled, loudly; its
+// non-isolated siblings keep sharing the plugin's one process normally. A
+// side-by-side single_process version conflict has no such partial fix (the
+// resource can't run twice no matter who shares which process), so every
+// group it names is returned for the caller to register Unavailable instead
+// of starting.
+// singleProcessConflictsFor builds the (no-network, offline) plugin manager
+// for cfg and reports its single_process conflicts — the shared call used by
+// both `conductor validate` (main.go) and the auto-update pre-restart gate
+// (refreshDeps, update.go), so both see exactly the same conflicts
+// loadConnectorPlugins would at boot.
+func singleProcessConflictsFor(cfg *config.Config) []singleProcessConflict {
+	mgr := pluginManagerFor(cfg, secrets.New(), func(map[string]any) {})
+	defer mgr.Close()
+	return singleProcessConflicts(mgr)
+}
+
+func applySingleProcessConflicts(mgr *plugin.Manager) map[string]string {
+	disabledGroups := map[string]string{}
+	for _, c := range singleProcessConflicts(mgr) {
+		if len(c.isolatedOnly) > 0 {
+			for _, name := range c.isolatedOnly {
+				mgr.ForbidIsolated(c.groupKeys[0], name, c.reason)
+			}
+			logf("%s — will be disabled", c.reason)
+			continue
+		}
+		for _, gk := range c.groupKeys {
+			disabledGroups[gk] = c.reason
+		}
+	}
+	return disabledGroups
 }
 
 func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(map[string]any), auth plugin.AuthProvider) (*plugin.Manager, error) {
@@ -244,10 +317,13 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 	// the wrong (or a now-gone) declaration.
 	connector.ResetInstanceGroups()
 
-	if err := checkIsolateAgainstKnownSingleProcess(mgr); err != nil {
-		mgr.Close()
-		return nil, err
-	}
+	// Finding 3: a single_process conflict discovered against the CURRENTLY
+	// RESOLVED set (not the written config) never refuses boot outright —
+	// see applySingleProcessConflicts. disabledGroups names every
+	// resolved-version group a side-by-side single_process conflict
+	// disables wholesale; an isolate:true-vs-single_process conflict is
+	// applied directly to mgr (ForbidIsolated) and never appears here.
+	disabledGroups := applySingleProcessConflicts(mgr)
 
 	for _, spec := range mgr.ConnectorSpecs() {
 		// Side-by-side versions: every instance this spec (GROUP) serves is
@@ -258,6 +334,12 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 		// type once this loop has run.
 		for name := range spec.Instances {
 			connector.BindInstanceGroup(name, spec.GroupKey)
+		}
+		if reason, ok := disabledGroups[spec.GroupKey]; ok {
+			connector.RegisterUnavailableType(spec.Provides, spec.GroupKey, spec.Key(), reason)
+			registered = append(registered, spec.Provides)
+			logf("plugin %s: %s — its connectors are disabled", spec.Name, reason)
+			continue
 		}
 		if !spec.Installed() {
 			// PLUGINS FIRST, NEVER BOOT-FATAL: a connector plugin the config

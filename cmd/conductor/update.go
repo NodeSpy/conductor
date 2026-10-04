@@ -348,8 +348,22 @@ func refreshDeps(cfgFile string) (packMoved bool, pluginRes []plugin.Resolution,
 		return false, nil, false // nothing moved
 	}
 	// A dependency moved — only apply if the new graph still loads.
-	if _, err := config.Load(cfgFile); err != nil {
+	newCfg, err := config.Load(cfgFile)
+	if err != nil {
 		logf("auto-update: dependency update does NOT validate — NOT applying: %v", err)
+		return false, nil, false
+	}
+	// Finding 3: a single_process conflict is a property of the RESOLVED
+	// set, so an update that just moved an unpinned instance onto a release
+	// that newly declares single_process (colliding with a pinned sibling,
+	// or an isolate: true instance) must be caught HERE, before the daemon
+	// restarts into it — loadConnectorPlugins' boot-time check degrades
+	// rather than refuses, which is right for a conflict already running,
+	// but an update is free to simply not create one yet.
+	if conflicts := singleProcessConflictsFor(newCfg); len(conflicts) > 0 {
+		for _, c := range conflicts {
+			logf("auto-update: dependency update would create a single_process conflict — NOT applying: %s", c.reason)
+		}
 		return false, nil, false
 	}
 	return packMoved, results, true

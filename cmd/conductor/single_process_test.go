@@ -189,13 +189,17 @@ func TestLoadConnectorPluginsDisablesIsolatedInstanceOfSingleProcessPlugin(t *te
 	}
 }
 
-// TestCheckIsolateAgainstKnownSingleProcessRefusesBoot is the HARD,
-// ahead-of-time half: when a plugin's RECORDED install manifest already says
-// single_process (no live describe needed to learn it), isolate: true on any
-// configured instance is a config validation error that refuses boot
-// outright — never a soft per-instance disable, since the conflict was
-// knowable before anything spawned.
-func TestCheckIsolateAgainstKnownSingleProcessRefusesBoot(t *testing.T) {
+// TestSingleProcessConflictDegradesIsolatedInstanceNeverBootFatal is finding
+// 3 (MEDIUM): a plugin's RECORDED install manifest already saying
+// single_process, with isolate: true on one configured instance, used to be
+// a HARD, boot-refusing config validation error (checkIsolateAgainstKnownSingleProcess).
+// That is resolution-dependent — an auto-update can create or remove this
+// shape with no config edit — so it must never take the whole daemon down:
+// applySingleProcessConflicts (the boot path's degrade half) disables only
+// the conflicting instance (via Manager.ForbidIsolated, the SAME mechanism
+// the late-discovery path already used), while the shared instance of the
+// same group is completely unaffected and reports no disabled group at all.
+func TestSingleProcessConflictDegradesIsolatedInstanceNeverBootFatal(t *testing.T) {
 	ref := config.PluginRef{
 		Name: "tailscale",
 		Use:  config.Use{Kind: config.UseKindConnector, Name: "tailscale", Origin: config.OriginGitHub, Host: "github.com", Repo: "acme/plugins"},
@@ -210,12 +214,20 @@ func TestCheckIsolateAgainstKnownSingleProcessRefusesBoot(t *testing.T) {
 	mgr := plugin.NewManager(map[string]config.PluginRef{key: ref}, "", state, plugin.Deps{})
 	defer mgr.Close()
 
-	err := checkIsolateAgainstKnownSingleProcess(mgr)
-	if err == nil {
-		t.Fatal("expected a config validation error for isolate: true against a known single_process plugin")
+	conflicts := singleProcessConflicts(mgr)
+	if len(conflicts) != 1 {
+		t.Fatalf("expected exactly 1 conflict, got %d: %+v", len(conflicts), conflicts)
 	}
-	if !strings.Contains(err.Error(), "isolated") || !strings.Contains(err.Error(), "tailscale") {
-		t.Fatalf("error must name the isolated connector and the plugin, got: %v", err)
+	if !strings.Contains(conflicts[0].reason, "isolated") || !strings.Contains(conflicts[0].reason, "tailscale") {
+		t.Fatalf("reason must name the isolated connector and the plugin, got: %v", conflicts[0].reason)
+	}
+
+	disabledGroups := applySingleProcessConflicts(mgr)
+	if len(disabledGroups) != 0 {
+		t.Fatalf("an isolate-vs-single_process conflict must never disable the whole GROUP (the shared instance is fine), got %+v", disabledGroups)
+	}
+	if _, err := mgr.InstanceClient(key, "isolated"); err == nil {
+		t.Fatal("the isolated instance must be refused (ForbidIsolated) after applySingleProcessConflicts")
 	}
 
 	// A config with no isolated instance of the same known single_process
@@ -224,20 +236,20 @@ func TestCheckIsolateAgainstKnownSingleProcessRefusesBoot(t *testing.T) {
 	ref2.Instances = map[string]config.ConnectorGrant{"shared": {}, "shared2": {}}
 	mgr2 := plugin.NewManager(map[string]config.PluginRef{key: ref2}, "", state, plugin.Deps{})
 	defer mgr2.Close()
-	if err := checkIsolateAgainstKnownSingleProcess(mgr2); err != nil {
-		t.Fatalf("no isolated instance must pass: %v", err)
+	if c := singleProcessConflicts(mgr2); len(c) != 0 {
+		t.Fatalf("no isolated instance must report no conflicts, got: %+v", c)
 	}
 }
 
-// TestCheckIsolateAgainstKnownSingleProcessRefusesTwoVersions is the
+// TestSingleProcessConflictDisablesBothSideBySideVersions is the
 // side-by-side-versions half of the same guard (docs/wiki/Plugins.md "Side-
 // by-side versions"): a single_process plugin keeps one box-global resource
 // only ONE process can own (the design doc's example is a tailscale funnel),
 // so two connectors configured to run two DIFFERENT resolved versions of it
-// side by side — two groups sharing one install key — is refused outright,
-// naming every connector involved, rather than silently starting two
-// processes that would each think they alone own that resource.
-func TestCheckIsolateAgainstKnownSingleProcessRefusesTwoVersions(t *testing.T) {
+// side by side — two groups sharing one install key — has no partial fix;
+// applySingleProcessConflicts disables BOTH groups (never the whole daemon),
+// naming every connector involved in the reason.
+func TestSingleProcessConflictDisablesBothSideBySideVersions(t *testing.T) {
 	installKey := "connectors/tailscale"
 	refV1 := config.PluginRef{
 		Name: "tailscale",
@@ -262,21 +274,31 @@ func TestCheckIsolateAgainstKnownSingleProcessRefusesTwoVersions(t *testing.T) {
 	// Pre-exploded (two groups sharing one install key) — exactly what
 	// pluginManagerForStack feeds NewManager once two versions are
 	// configured side by side.
+	gk1, gk2 := installKey+"@v1.0.0", installKey+"@v2.0.0"
 	mgr := plugin.NewManager(map[string]config.PluginRef{
-		installKey + "@v1.0.0": refV1,
-		installKey + "@v2.0.0": refV2,
+		gk1: refV1,
+		gk2: refV2,
 	}, "", state, plugin.Deps{})
 	defer mgr.Close()
 
-	err := checkIsolateAgainstKnownSingleProcess(mgr)
-	if err == nil {
-		t.Fatal("expected a config validation error for two resolved versions of a single_process plugin")
+	conflicts := singleProcessConflicts(mgr)
+	if len(conflicts) != 1 {
+		t.Fatalf("expected exactly 1 conflict, got %d: %+v", len(conflicts), conflicts)
 	}
-	if !strings.Contains(err.Error(), "tailscale") || !strings.Contains(err.Error(), "a") || !strings.Contains(err.Error(), "b") {
-		t.Fatalf("error must name the plugin and both connectors, got: %v", err)
+	reason := conflicts[0].reason
+	if !strings.Contains(reason, "tailscale") || !strings.Contains(reason, "a") || !strings.Contains(reason, "b") {
+		t.Fatalf("reason must name the plugin and both connectors, got: %v", reason)
 	}
-	if !strings.Contains(err.Error(), "single_process") {
-		t.Fatalf("error must explain single_process is the reason, got: %v", err)
+	if !strings.Contains(reason, "single_process") {
+		t.Fatalf("reason must explain single_process is the cause, got: %v", reason)
+	}
+
+	disabledGroups := applySingleProcessConflicts(mgr)
+	if _, ok := disabledGroups[gk1]; !ok {
+		t.Errorf("expected group %s disabled, got %+v", gk1, disabledGroups)
+	}
+	if _, ok := disabledGroups[gk2]; !ok {
+		t.Errorf("expected group %s disabled, got %+v", gk2, disabledGroups)
 	}
 }
 

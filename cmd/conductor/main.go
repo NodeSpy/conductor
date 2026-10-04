@@ -357,6 +357,19 @@ func cmdValidate(args []string) error {
 	if missing > 0 && requirePlugins {
 		return fmt.Errorf("%d referenced plugin(s) neither installed nor fetchable (--require-plugins)", missing)
 	}
+	// Finding 3: a single_process conflict against what is CURRENTLY
+	// installed (no new network resolution — install state is read offline,
+	// same as checkPluginFetchability above) is a statically knowable
+	// config problem and stays a validate-time failure, unlike the same
+	// check at boot (loadConnectorPlugins), which degrades instead of
+	// refusing, because there the conflict can also arise from an update
+	// `validate` was never asked about.
+	if conflicts := singleProcessConflictsFor(cfg); len(conflicts) > 0 {
+		for _, c := range conflicts {
+			fmt.Printf("error: %s\n", c.reason)
+		}
+		return fmt.Errorf("%d plugin(s) have a single_process/isolation conflict against what is currently installed (see docs/wiki/Plugins.md \"Multi-instance isolation\")", len(conflicts))
+	}
 	fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s)\n",
 		len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows))
 	return nil
