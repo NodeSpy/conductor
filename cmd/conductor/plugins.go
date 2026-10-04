@@ -898,15 +898,20 @@ func cmdPluginAdd(args []string) error {
 	if err := printResolutions(results); err != nil {
 		return err
 	}
-	inst, ok := state.Get(u.InstallKey())
-	if !ok {
-		return fmt.Errorf("plugin %s was not installed", u.Name)
+	// The manifest THIS add just resolved — not state.Get(u.InstallKey()),
+	// which answers "the highest version installed under this name" and
+	// would silently report a DIFFERENT (newer, already-installed) sibling
+	// version's permissions if this add pinned something older than what is
+	// already on disk (docs/wiki/Plugins.md "Side-by-side versions").
+	if len(results) != 1 {
+		return fmt.Errorf("plugin %s: expected exactly one resolution, got %d", u.Name, len(results))
 	}
-	fmt.Printf("\n%s declares these permissions:\n  %s\n", u.Name, inst.Manifest.Summary())
+	manifest := results[0].Manifest
+	fmt.Printf("\n%s declares these permissions:\n  %s\n", u.Name, manifest.Summary())
 	fmt.Println("\nAdd it to your config:")
 	fmt.Print("\n" + useSnippet(kind, instance, ref))
-	if kind == config.UseKindConnector && len(inst.Manifest.Egress) > 0 {
-		fmt.Printf("    network: [%s]\n", strings.Join(inst.Manifest.Egress, ", "))
+	if kind == config.UseKindConnector && len(manifest.Egress) > 0 {
+		fmt.Printf("    network: [%s]\n", strings.Join(manifest.Egress, ", "))
 	}
 	return nil
 }
