@@ -11,24 +11,30 @@ import (
 )
 
 // Multi-instance isolation (docs/wiki/Plugins.md, docs/design/
-// plugin-contract.md): by default every configured connector INSTANCE of an
-// external plugin gets its own subprocess, not a process shared by every
-// instance of the plugin's type. These tests drive the real acme-echo
-// subprocess (buildExamplePlugin, integration_test.go) through a real
-// Manager, exactly the path cmd/conductor's loadConnectorPlugins +
-// RegisterExternalConnector takes.
+// plugin-contract.md): by DEFAULT every configured connector INSTANCE of an
+// external plugin SHARES its plugin's one process; isolate: true on a
+// specific instance gives it its own subprocess instead. These tests drive
+// the real acme-echo subprocess (buildExamplePlugin, integration_test.go)
+// through a real Manager, exactly the path cmd/conductor's
+// loadConnectorPlugins + RegisterExternalConnector takes.
 
 // managerWithLocalPlugin builds a Manager with ONE connector plugin reference
 // resolved as a local `use: <path>` build (exercising the local-build
-// snapshot path too), optionally opted into shared_process:.
-func managerWithLocalPlugin(t *testing.T, shared bool) (mgr *Manager, key string) {
+// snapshot path too), with instances "a" and "b" both set to isolate: true
+// when isolate is true, or left at the default (shared) otherwise.
+func managerWithLocalPlugin(t *testing.T, isolate bool) (mgr *Manager, key string) {
 	t.Helper()
 	bin, _ := buildExamplePlugin(t)
 	config.SetStateDir(t.TempDir())
 	t.Cleanup(func() { config.SetStateDir("") })
 
 	ref := refFor(t, config.UseKindConnector, bin)
-	ref.SharedProcess = shared
+	if isolate {
+		ref.Instances = map[string]config.ConnectorGrant{
+			"a": {Isolate: true},
+			"b": {Isolate: true},
+		}
+	}
 	key = ref.Key()
 	state := LoadInstallState(InstallDir())
 	mgr = NewManager(map[string]config.PluginRef{key: ref}, "", state, Deps{
@@ -51,12 +57,12 @@ func echoFrom(t *testing.T, c *Client, instance, msg string) {
 	}
 }
 
-// TestInstanceClientGivesEachInstanceItsOwnProcess is the headline
-// multi-instance-isolation guarantee: two configured instances of the SAME
-// plugin get two DIFFERENT *Client values, each backed by its own OS process
-// (distinct pids) — not one process shared by both.
+// TestInstanceClientGivesEachInstanceItsOwnProcess is the isolate: true
+// guarantee: two configured instances that both set isolate: true get two
+// DIFFERENT *Client values, each backed by its own OS process (distinct
+// pids) — not one process shared by both.
 func TestInstanceClientGivesEachInstanceItsOwnProcess(t *testing.T) {
-	mgr, key := managerWithLocalPlugin(t, false)
+	mgr, key := managerWithLocalPlugin(t, true)
 	defer mgr.Close()
 
 	a, err := mgr.InstanceClient(key, "a")
@@ -101,12 +107,12 @@ func TestInstanceClientGivesEachInstanceItsOwnProcess(t *testing.T) {
 	}
 }
 
-// TestInstanceClientSharedProcessOptOut proves the explicit, documented
-// resource trade-off: shared_process: true gives every configured instance
-// back the SAME client (and so the same process) — the pre-isolation
-// behavior every plugin kind had.
-func TestInstanceClientSharedProcessOptOut(t *testing.T) {
-	mgr, key := managerWithLocalPlugin(t, true)
+// TestInstanceClientDefaultIsOneSharedProcess proves the DEFAULT: with no
+// isolate: true anywhere, every configured instance gets back the SAME
+// client (and so the same process) — one process per plugin, serving all of
+// its instances.
+func TestInstanceClientDefaultIsOneSharedProcess(t *testing.T) {
+	mgr, key := managerWithLocalPlugin(t, false)
 	defer mgr.Close()
 
 	a, err := mgr.InstanceClient(key, "a")
@@ -118,20 +124,20 @@ func TestInstanceClientSharedProcessOptOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	if a != b {
-		t.Fatal("shared_process: true must give every instance the SAME *Client")
+		t.Fatal("the default (no isolate: true) must give every instance the SAME *Client")
 	}
-	// And it must be the Manager's persistent client (Client(key)), not some
+	// And it must be the Manager's shared client (Client(key)), not some
 	// other instance altogether.
-	persistent, ok := mgr.Client(key)
-	if !ok || persistent != a {
-		t.Fatalf("shared_process must reuse the persistent client: got %v, want %v (ok=%v)", a, persistent, ok)
+	shared, ok := mgr.Client(key)
+	if !ok || shared != a {
+		t.Fatalf("the default must reuse the shared client: got %v, want %v (ok=%v)", a, shared, ok)
 	}
 }
 
 // TestManagerCloseStopsEveryInstance proves teardown reaches every
 // per-instance process, not just the first one or a shared one.
 func TestManagerCloseStopsEveryInstance(t *testing.T) {
-	mgr, key := managerWithLocalPlugin(t, false)
+	mgr, key := managerWithLocalPlugin(t, true)
 	a, err := mgr.InstanceClient(key, "a")
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +171,7 @@ func TestManagerCloseStopsEveryInstance(t *testing.T) {
 // answered, even with no live process involved (handleRequest is pure
 // request routing).
 func TestInstanceHostStateScopedToItsOwnProcess(t *testing.T) {
-	mgr, key := managerWithLocalPlugin(t, false)
+	mgr, key := managerWithLocalPlugin(t, true)
 	defer mgr.Close()
 
 	a, err := mgr.InstanceClient(key, "a")
@@ -202,7 +208,7 @@ func TestInstanceHostStateScopedToItsOwnProcess(t *testing.T) {
 // TestManagerReloadSwapsEveryInstance proves the reload half: a moved plugin
 // binary is applied to EVERY live per-instance client, not just one.
 func TestManagerReloadSwapsEveryInstance(t *testing.T) {
-	mgr, key := managerWithLocalPlugin(t, false)
+	mgr, key := managerWithLocalPlugin(t, true)
 	defer mgr.Close()
 
 	a, err := mgr.InstanceClient(key, "a")
@@ -236,11 +242,45 @@ func TestManagerReloadSwapsEveryInstance(t *testing.T) {
 	}
 }
 
+// TestManagerReloadSwapsSharedProcess proves the reload half for the DEFAULT
+// (shared) shape: a moved plugin binary is applied to the one shared client
+// every non-isolated instance shares.
+func TestManagerReloadSwapsSharedProcess(t *testing.T) {
+	mgr, key := managerWithLocalPlugin(t, false)
+	defer mgr.Close()
+
+	a, err := mgr.InstanceClient(key, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := mgr.InstanceClient(key, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a != b {
+		t.Fatal("expected the default shared client for both instances")
+	}
+	echoFrom(t, a, "a", "x")
+	pid := a.PID()
+
+	spec, ok := mgr.Spec(key)
+	if !ok {
+		t.Fatal("spec not found")
+	}
+	if err := mgr.Reload(key, spec); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	echoFrom(t, b, "b", "y")
+	if a.PID() == 0 || a.PID() == pid {
+		t.Fatalf("the shared process must be a NEW process after reload: was %d, now %d", pid, a.PID())
+	}
+}
+
 // TestInstanceClientRuntimeKindTakesSharedPath is a test gap from finding
 // 4(d): a runtime (or engine) key has no "several configured instances of
 // one plugin" multiplicity to isolate — InstanceClient must fall through to
-// the ONE persistent client Client(key) already holds for it, the same
-// path a shared_process: true connector takes, regardless of what
+// the ONE shared client Client(key) already holds for it, the same path a
+// default (non-isolated) connector instance takes, regardless of what
 // "instance" string is asked for.
 func TestInstanceClientRuntimeKindTakesSharedPath(t *testing.T) {
 	bin, _ := buildExamplePlugin(t)

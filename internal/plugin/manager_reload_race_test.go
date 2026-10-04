@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 func shaOf(data []byte) string {
@@ -71,6 +73,14 @@ func TestManagerReloadRaceNewInstanceGetsNewBuild(t *testing.T) {
 
 	base := connectorSpec()
 	base.Name, base.Provides = "widget", "widget"
+	// Both configured instances isolate: this test is specifically about the
+	// per-instance client race (Manager.Reload vs. a brand-new instance's
+	// first InstanceClient call); the default (shared) path has no such race
+	// to construct a NEW per-instance client in the first place.
+	base.Instances = map[string]config.ConnectorGrant{
+		"a": {Isolate: true},
+		"b": {Isolate: true},
+	}
 	oldSpec := base
 	oldSpec.Sha256 = oldSha
 	oldSpec.BinPath = writeBin(t, t.TempDir(), "widget", oldData, 0o755)

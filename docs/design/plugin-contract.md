@@ -69,31 +69,47 @@ keeping them.
 Unchanged from today, because it is already uniform: newline-delimited
 JSON-RPC 2.0 over the plugin's stdin/stdout, stderr for logs (redacted), the
 message caps (8 MiB plugin→host, 32 MiB host→plugin), concurrent requests in
-both directions, ids opaque. Every call still names its `instance`, but the
-process behind it is no longer necessarily shared: **by default, every
-configured instance of an external (spawned) connector plugin gets its OWN
-process** (`internal/plugin.Manager.InstanceClient`) — its own sandbox,
-scrubbed/granted env, and staging directory, so `host.state`/`host.auth`/
-`host.log`'s existing per-instance "active" scoping (Client.isActive) is
-backed by a process boundary, not bookkeeping alone. The type-level
-`plugin.describe` (no instance) still runs on one throwaway process, closed
-once it answers — there is nothing instance-specific in it to keep running. A
-plugin may opt a connector OUT of this with `shared_process: true` on any of
-its configured instances (an explicit, documented resource trade-off for an
-operator running many instances of one plugin: N processes costs N times the
-memory/fds) — one process then serves every instance of that plugin, exactly
-as every plugin kind did before this existed. A plugin may instead REQUIRE
-it, unconditionally, by declaring `capabilities.single_process: true` (§1.4
-below, alongside egress/commands/fs/env in the permission manifest): the host
-then treats every configured instance as if `shared_process: true` had been
-set, including the union of grants that implies, REGARDLESS of what the
-operator wrote — the plugin keeps a box-global resource (a tunnel-service
-lease refcount is the motivating case) that a separate process per instance
-would silently fork into disjoint copies, so the operator cannot opt back
-into per-instance isolation for it. Like every other capability (and unlike
+both directions, ids opaque. Every call still names its `instance`, and the
+process behind it is shared by default: **every configured instance of an
+external (spawned) connector plugin's resolved name+version SHARES one
+process** (`internal/plugin.Manager`), confined to the UNION of every
+non-isolated instance's grant — one process per plugin, not one per
+configured instance, the resource-frugal default. A connector instance opts
+INTO its own dedicated process with `isolate: true`
+(`config.ConnectorRef.Isolate`) — its own sandbox, scrubbed/granted env, and
+staging directory, confined to EXACTLY its own grant, so
+`host.state`/`host.auth`/`host.log`'s existing per-instance "active" scoping
+(Client.isActive) is backed by a process boundary for that one instance, not
+bookkeeping alone. (Earlier revisions of this document, and of the shipped
+code, inverted this: per-instance isolation was the default and a plugin or
+operator opted BACK into sharing. That shape proved to cost more in the
+common case — most configured instances of a plugin have no need to be
+split apart — than the isolation bought a rare one that does, so the
+default was flipped: shared is now what you get for free, isolation is what
+you ask for. See docs/wiki/Plugins.md "Multi-instance isolation" for the
+current, authoritative behavior and config surface.) The type-level
+`plugin.describe` (no instance) is answered by the shared process itself
+when one exists — there is nothing instance-specific in a type-level
+describe, so the process that is going to run anyway is the right one to
+ask; only a connector whose EVERY configured instance isolates has no
+shared process, and gets a throwaway, minimal-grant probe process instead,
+closed once it answers.
+
+A plugin may REQUIRE every instance to share one process, unconditionally,
+by declaring `capabilities.single_process: true` (§1.4 below, alongside
+egress/commands/fs/env in the permission manifest): `isolate: true` on any
+of its instances is then refused — a hard config validation error when the
+capability is already known from a recorded install manifest, or that one
+instance disabled with the reason when it is discovered only at this
+describe — rather than ever silently folded back into the shared process.
+The plugin keeps a box-global resource (a tunnel-service lease refcount is
+the motivating case) that a separate process per instance would silently
+fork into disjoint copies, so the operator cannot opt an instance of it
+into per-instance isolation. Like every other capability (and unlike
 `semantics`, §1.2), this is NOT must-understand: an older host simply never
-reads it and keeps the plugin per-instance — this field cannot by itself
-make an old host safe for a plugin that needs it.
+reads it and keeps the plugin on whatever shape its own config implies —
+this field cannot by itself make an old host safe for a plugin that needs
+it.
 An in-process BUILTIN
 (cron/rss/webhook/rest/graphql/the exposure connectors) is unaffected: it is
 trusted code served over an in-memory pipe (§1.10), and stays on the one

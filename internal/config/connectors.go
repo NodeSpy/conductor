@@ -60,22 +60,30 @@ type ConnectorRef struct {
 	// declares (capabilities.env). Nothing passes without a grant — a
 	// plugin's declaration alone cannot pull a secret the daemon holds.
 	AllowEnv []string `yaml:"allow_env,omitempty"`
-	// SharedProcess opts an external (spawned) plugin-backed connector OUT of
-	// the default one-process-per-configured-instance isolation: every
-	// instance of this plugin's TYPE shares the one subprocess, as every
-	// plugin did before multi-instance isolation existed. This is a resource
-	// trade-off for an operator running many instances of one plugin (N
-	// processes costs N times the memory/fds) — explicit and documented
-	// because it also gives up the per-instance sandbox/env/staging-dir
-	// isolation (docs/wiki/Plugins.md "Multi-instance isolation"). Setting it
-	// on ANY instance of a plugin shares the WHOLE plugin's process (the
-	// process is per plugin BINARY, not per connector entry) — see
-	// config.PluginRefs, which unions this flag across every instance of the
-	// same plugin exactly as it does Network/AllowEnv/AllowSecrets. Ignored
-	// for a builtin connector (always in-process and shared; nothing to opt
-	// out of).
-	SharedProcess bool `yaml:"shared_process,omitempty"`
-	raw           yaml.Node
+	// Isolate opts THIS configured instance INTO its own dedicated subprocess,
+	// with exactly its own grant (Network/AllowSecrets/AllowEnv/Isolation),
+	// instead of sharing its plugin VERSION's one process with every sibling
+	// instance — the default (docs/wiki/Plugins.md "Multi-instance
+	// isolation"). This is the opposite default from a plain spawned program:
+	// conductor runs one process per plugin name+version, serving every
+	// configured instance of it, unless that one instance opts out with
+	// isolate: true. A crash, a hang, or a crash-loop in an isolated
+	// instance's own process never touches a sibling instance (or the shared
+	// one); giving it up (the default) trades that isolation for lower
+	// resource cost — N configured instances sharing one process instead of
+	// N processes.
+	//
+	// Refused at load when the plugin declares `capabilities.single_process`
+	// (it keeps a box-global resource every configured instance must agree
+	// on — a lease refcount, a fixed listener port — so a second process
+	// would silently fork that state into two copies that disagree): a
+	// config validation error when the capability is already known from a
+	// recorded install manifest, or that one connector is disabled with the
+	// reason if the capability is discovered only at a live describe.
+	// Ignored for a builtin connector (always in-process and shared; nothing
+	// to isolate).
+	Isolate bool `yaml:"isolate,omitempty"`
+	raw     yaml.Node
 	// legacyType holds a pre-`use:` `type:` value. It is NOT part of the schema
 	// — it exists only so validateConnectors can emit a migration-specific error
 	// instead of the silent "missing use:" a dropped field would produce.
@@ -91,11 +99,11 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 		Options map[string]any `yaml:"options,omitempty"`
 		Policy  *Policy        `yaml:"policy,omitempty"`
 		// Type is the retired field, read for diagnostics only (see legacyType).
-		Type          string           `yaml:"type,omitempty"`
-		Isolation     *IsolationConfig `yaml:"isolation,omitempty"`
-		AllowSecrets  []string         `yaml:"allow_secrets,omitempty"`
-		AllowEnv      []string         `yaml:"allow_env,omitempty"`
-		SharedProcess bool             `yaml:"shared_process,omitempty"`
+		Type         string           `yaml:"type,omitempty"`
+		Isolation    *IsolationConfig `yaml:"isolation,omitempty"`
+		AllowSecrets []string         `yaml:"allow_secrets,omitempty"`
+		AllowEnv     []string         `yaml:"allow_env,omitempty"`
+		Isolate      bool             `yaml:"isolate,omitempty"`
 	}
 	var h hdr
 	if err := n.Decode(&h); err != nil {
@@ -104,7 +112,7 @@ func (r *ConnectorRef) UnmarshalYAML(n *yaml.Node) error {
 	r.Use, r.Network, r.Enabled, r.Options, r.Policy = h.Use, h.Network, h.Enabled, h.Options, h.Policy
 	r.Isolation, r.AllowSecrets, r.legacyType, r.raw = h.Isolation, h.AllowSecrets, h.Type, *n
 	r.AllowEnv = h.AllowEnv
-	r.SharedProcess = h.SharedProcess
+	r.Isolate = h.Isolate
 	return nil
 }
 

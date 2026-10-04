@@ -40,8 +40,9 @@ func buildAcmeEchoForConnectorTest(t *testing.T) string {
 // plugin resolve to ONE plugin.PluginRef (config.PluginRefs folds them), but
 // — registered the real way, through RegisterExternalConnector and
 // plugin.Manager.InstanceClientFactory, exactly as cmd/conductor's
-// loadConnectorPlugins does — each configured instance ends up driven by its
-// OWN subprocess, not a process the two share.
+// loadConnectorPlugins does — each instance that sets isolate: true ends up
+// driven by its OWN subprocess, not the default process every non-isolated
+// instance of a plugin shares.
 func TestTwoConnectorInstancesOfOnePluginGetDistinctProcesses(t *testing.T) {
 	bin := buildAcmeEchoForConnectorTest(t)
 	config.SetStateDir(t.TempDir())
@@ -51,8 +52,10 @@ func TestTwoConnectorInstancesOfOnePluginGetDistinctProcesses(t *testing.T) {
 connectors:
   one:
     use: %s
+    isolate: true
   two:
     use: %s
+    isolate: true
 `, bin, bin))
 
 	refs := cfg.PluginRefs()
@@ -128,9 +131,9 @@ connectors:
 
 // TestTwoConnectorInstancesGetOnlyTheirOwnGrant is finding 1's end-to-end
 // proof: two `connectors:` entries naming the SAME external plugin, each
-// with its OWN allow_env/network, must each see only its own through the
-// REAL spawn env (grantedEnv/withDeclaredEnv) and the real egress manifest —
-// never a sibling instance's. acme-echo declares two env vars
+// isolate: true with its OWN allow_env/network, must each see only its own
+// through the REAL spawn env (grantedEnv/withDeclaredEnv) and the real
+// egress manifest — never a sibling instance's. acme-echo declares two env vars
 // (ACME_ECHO_VAR_A, ACME_ECHO_VAR_B); instance "one" is granted only the
 // first, instance "two" only the second.
 func TestTwoConnectorInstancesGetOnlyTheirOwnGrant(t *testing.T) {
@@ -156,10 +159,12 @@ connectors:
     use: acme/plugins/acme-echo
     allow_env: [ACME_ECHO_VAR_A]
     network: [one.example:443]
+    isolate: true
   two:
     use: acme/plugins/acme-echo
     allow_env: [ACME_ECHO_VAR_B]
     network: [two.example:443]
+    isolate: true
 `)
 
 	refs := cfg.PluginRefs()

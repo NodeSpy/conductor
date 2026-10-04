@@ -30,9 +30,14 @@ func setupMultiInstanceReloadFixture(t *testing.T, variant string, instanceNames
 	bin, sum := buildAcmeInstance(t, variant)
 	putInstalled(t, key, bin, sum)
 
+	// isolate: true on every instance: this test exercises Manager.Reload's
+	// serial swap across more than one LIVE per-instance client, which under
+	// the new default (one shared process) would otherwise collapse to a
+	// single client — isolate: true keeps each instance on its own process,
+	// exactly as multi-instance isolation's opt-in path.
 	refs := map[string]config.ConnectorRef{}
 	for _, n := range instanceNames {
-		refs[n] = config.ConnectorRef{Use: "acme/acme-instance"}
+		refs[n] = config.ConnectorRef{Use: "acme/acme-instance", Isolate: true}
 	}
 	cfg = &config.Config{ConnectorsMap: refs}
 

@@ -140,15 +140,42 @@ var pendingPlugins []string
 // fine, not a plugin health problem, and retrying or disabling won't fix it.
 // Returns a manager the caller must Close. auth is this stack's own
 // host.auth provider (finding 4) — see pluginDeps.
+// checkIsolateAgainstKnownSingleProcess is the HARD, boot-refusing half of
+// the single_process + isolate conflict (docs/wiki/Plugins.md "Multi-instance
+// isolation"): when a plugin's RECORDED manifest (from a previous install's
+// describe — mgr.ConnectorSpecs' Spec.Manifest) already says
+// Capabilities.SingleProcess, isolate: true on any of its configured
+// instances is knowable as a problem BEFORE anything spawns, so it is a
+// config validation error naming the connector(s) and the plugin — never
+// silently refused only later, softly, the way the LATE discovery path
+// (ForbidIsolated, in loadConnectorPlugins' main loop below) has to be, since
+// that one truly cannot know any earlier than its own live describe.
+func checkIsolateAgainstKnownSingleProcess(mgr *plugin.Manager, refs map[string]config.PluginRef) error {
+	for _, spec := range mgr.ConnectorSpecs() {
+		if !spec.Manifest.SingleProcess {
+			continue
+		}
+		ref := refs[spec.Key()]
+		isolated := ref.IsolatedInstanceNames()
+		if len(isolated) == 0 {
+			continue
+		}
+		return fmt.Errorf("config: connector(s) %s: isolate: true is not possible — plugin %s declares single_process (every configured instance must share one process); remove isolate: true, or see docs/wiki/Plugins.md \"Multi-instance isolation\"",
+			strings.Join(isolated, ", "), spec.Name)
+	}
+	return nil
+}
+
 func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(map[string]any), auth plugin.AuthProvider) (*plugin.Manager, error) {
 	mgr := pluginManagerForStack(cfg, sec, audit, auth)
 	// Bound the boot phase: verify+spawn+describe must not hang forever (a
 	// stalled binary read or sandbox preflight) with no deadline.
 	ctx, cancel := context.WithTimeout(context.Background(), pluginBootTimeout)
 	defer cancel()
-	// refs backs the single_process cold-start promotion below (a live
-	// describe's own ref, to rebuild its Spec in the shared shape) — the
-	// same derived set the Manager itself was built from.
+	// refs is the same derived set the Manager itself was built from — used
+	// below to find which configured instances isolate, for the single_process
+	// checks (both the ahead-of-time hard error and the late-discovery
+	// per-instance refusal).
 	refs := cfg.PluginRefs()
 	var registered []string
 	rollback := func() {
@@ -157,6 +184,12 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 		}
 		mgr.Close()
 	}
+
+	if err := checkIsolateAgainstKnownSingleProcess(mgr, refs); err != nil {
+		mgr.Close()
+		return nil, err
+	}
+
 	for _, spec := range mgr.ConnectorSpecs() {
 		if !spec.Installed() {
 			// PLUGINS FIRST, NEVER BOOT-FATAL: a connector plugin the config
@@ -171,18 +204,20 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			logf("plugin %s: NOT INSTALLED — its connectors are disabled until it is fetched", spec.Name)
 			continue
 		}
-		// The type-level probe (verify+spawn+describe) runs on a THROWAWAY
-		// process (ProbeDescribe) unless the operator opted this plugin into
-		// shared_process: — a per-instance-isolated connector's real, kept-
-		// running processes are started separately, one per configured
-		// instance, lazily by InstanceClient as connector.Build constructs
-		// each instance below (through the clientFor factory
-		// RegisterExternalConnector is handed). A SharedProcess plugin
-		// instead starts (and keeps) its ONE process right here, exactly as
-		// every connector plugin did before multi-instance isolation.
-		describe := mgr.ProbeDescribe
-		if spec.SharedProcess {
-			describe = mgr.StartAndDescribe
+		// The type-level describe comes from the plugin's own SHARED process
+		// (StartAndDescribe) when it has one — the default, since every
+		// configured instance that did not set isolate: true shares it, so
+		// describing it IS describing the type. Only a connector whose EVERY
+		// instance isolates has no shared process to ask; ProbeDescribe
+		// spins up a throwaway, minimal-grant process to learn its Decl
+		// instead (docs/wiki/Plugins.md "Multi-instance isolation"). Each
+		// isolated instance's own real, kept-running process is started
+		// separately, lazily, by InstanceClient as connector.Build constructs
+		// it below (through the clientFor factory RegisterExternalConnector
+		// is handed).
+		describe := mgr.StartAndDescribe
+		if !spec.Shared {
+			describe = mgr.ProbeDescribe
 		}
 		decl, err := describe(ctx, spec.Key())
 		if err != nil {
@@ -208,43 +243,29 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			logf("plugin %s: FAILED TO START (%v) — its connectors are disabled; every other connector, trigger and run proceeds", spec.Name, err)
 			continue
 		}
-		// single_process COLD START (docs/wiki/Plugins.md "Multi-instance
-		// isolation"): the common case already has this baked into spec
-		// from construction (SpecFromRef reads it off the RECORDED
-		// manifest, so spec.SharedProcess is already true and the describe
-		// above already ran through StartAndDescribe, on the real kept
-		// process). This is the first time EVER this boot learns the
-		// capability — no manifest had recorded it yet (a local
-		// development build, which never gets one at all, or this
-		// connector's very first install) — so the throwaway probe above
-		// ran instead, and must now be superseded: flip this key to the
-		// shared shape (Manager.PromoteSharedProcess), start its real,
-		// kept-running process for good, and use THAT describe from here
-		// on, not the throwaway one.
-		if !spec.SharedProcess && decl.Capabilities.SingleProcess {
+		// single_process discovered only NOW, at this live describe (no
+		// recorded manifest said so ahead of time — the hard pre-pass above
+		// would already have refused boot if it had): any instance of this
+		// plugin that set isolate: true cannot be honored after all. "Never
+		// silently share": refuse each of those instances specifically
+		// (ForbidIsolated — connector.Build disables just that one instance,
+		// loudly, the moment its builder asks for a client), never fold them
+		// into the shared process (if any) or start one for them that
+		// nothing in the config asked for.
+		if decl.Capabilities.SingleProcess {
 			ref := refs[spec.Key()]
-			shared := spec
-			shared.SharedProcess = true
-			shared.Instances, shared.Probe = nil, false
-			shared.Isolation, shared.IsolationDefaulted = ref.Isolation, ref.IsolationDefaulted
-			shared.Network, shared.AllowSecrets, shared.AllowEnv = ref.Network, ref.AllowSecrets, ref.AllowEnv
-			if _, perr := mgr.PromoteSharedProcess(spec.Key(), shared); perr != nil {
-				reason := fmt.Sprintf("declares single_process but could not switch to one shared process: %v", perr)
-				connector.RegisterUnavailableType(spec.Provides, reason)
-				registered = append(registered, spec.Provides)
-				logf("plugin %s: FAILED TO START (%v) — its connectors are disabled; every other connector, trigger and run proceeds", spec.Name, perr)
-				continue
+			isolated := ref.IsolatedInstanceNames()
+			if len(isolated) == 0 {
+				// Visibility only: nothing to refuse, since no instance asked
+				// for isolate: true, but the operator should still see WHY one
+				// would be refused if they added it later.
+				logf("plugin %s: declares single_process — isolate: true would be refused for any instance of it; every configured instance shares its one process", spec.Name)
 			}
-			newDecl, derr := mgr.StartAndDescribe(ctx, spec.Key())
-			if derr != nil {
-				reason := fmt.Sprintf("failed to start its single shared process: %v — reinstall with `conductor plugin update %s` or check the daemon log", derr, spec.Name)
-				connector.RegisterUnavailableType(spec.Provides, reason)
-				registered = append(registered, spec.Provides)
-				logf("plugin %s: FAILED TO START (%v) — its connectors are disabled; every other connector, trigger and run proceeds", spec.Name, derr)
-				continue
+			for _, name := range isolated {
+				reason := fmt.Sprintf("plugin %s declares single_process (discovered at describe) — isolate: true is not possible for it; every configured instance must share one process", spec.Name)
+				mgr.ForbidIsolated(spec.Key(), name, reason)
+				logf("connector %s: will be disabled (%s)", name, reason)
 			}
-			spec, decl = shared, newDecl
-			logf("plugin %s: declares single_process — every configured instance of it shares ONE process (grants unioned), same as shared_process: true", spec.Name)
 		}
 		// KIND ENFORCEMENT at the point of use: whatever install state recorded,
 		// the running binary must still describe itself as a connector. A
@@ -601,55 +622,37 @@ func cmdPluginList(args []string) error {
 }
 
 // permissionLines renders the TRUTHFUL permission picture for a derived
-// plugin ref (finding 3): the plugin's own DECLARED capabilities (spec.
-// Manifest — what the binary says it needs, independent of any narrowing),
-// plus what actually confines a running process.
+// plugin ref: the plugin's own DECLARED capabilities (spec.Manifest — what
+// the binary says it needs, independent of any narrowing), plus what
+// actually confines each process this plugin runs as — PER PROCESS, since
+// that is what multi-instance isolation now means: by default one shared
+// process (the union of every non-isolated instance's grant, labelled with
+// which instances it serves), plus one line per instance that set
+// isolate: true (its own, un-unioned grant).
 //
-// Two reviewers disagreed on whether the display should print the type-level
-// EffectiveManifest or ref.Network: neither alone is right once per-instance
-// isolation exists. spec.EffectiveManifest() is now a Probe Spec's (finding
-// 2) deliberately-empty manifest for a non-shared connector, which is not
-// what any configured instance's REAL process runs with — and ref.Network
-// alone is the UNIONED grant (config.PluginRefs), which is only what a
-// shared_process: true plugin's one process gets; printed for a per-instance
-// plugin it would silently claim a wider (or just WRONG) grant than any one
-// instance's own process is actually confined to.
-//
-// So: a SharedProcess plugin (or a runtime/engine, which never has more than
-// one process to begin with) shows the union (ref.Network/AllowSecrets/
-// AllowEnv — the real grant its one process gets). A per-instance-isolated
-// connector instead shows EACH configured instance's OWN grant (ref.
-// Instances, exactly what plugin.InstanceSpec would apply), labelled by
-// instance name, since there is no single "effective manifest" for the type
-// as a whole — only per-instance ones, and they can differ (two instances
-// with different `network:`).
-//
-// The branch below reads spec.SharedProcess, not ref.SharedProcess: the two
-// usually agree, but a plugin that declares Capabilities.SingleProcess gets
-// the shared shape (and its union-grant display) even when the OPERATOR
-// never wrote shared_process: true — SpecFromRef (and, the first time ever a
-// boot discovers it, Manager.PromoteSharedProcess) already folded that
-// override into spec by the time it reaches here. When single_process is
-// what put it in the shared branch, an extra line says so, so the operator
-// sees WHY the grants are unioned instead of per instance.
+// ref.Network/AllowSecrets/AllowEnv/Isolation are already the union across
+// NON-ISOLATED instances only (config.PluginRefs) — exactly the shared
+// process's real grant, for a connector or for a runtime/engine (which never
+// has more than one process to begin with, so it is always "shared"). An
+// isolated instance's OWN grant lives in ref.Instances instead (exactly what
+// plugin.InstanceSpec would apply to its own process) and is never folded
+// into the shared line.
 func permissionLines(ref config.PluginRef, spec plugin.Spec) []string {
 	lines := []string{"declared capabilities: " + spec.Manifest.Summary()}
-	switch {
-	case ref.Kind() != config.PluginKindConnector || spec.SharedProcess:
-		if ref.Kind() == config.PluginKindConnector && spec.Manifest.SingleProcess {
-			lines = append(lines, "single_process: the plugin declares every instance must share one process — grants unioned below, regardless of shared_process:")
+	if ref.Kind() == config.PluginKindConnector && spec.Manifest.SingleProcess {
+		lines = append(lines, "single_process: the plugin declares every instance must share one process — isolate: true is refused for it")
+	}
+	if ref.Kind() != config.PluginKindConnector || spec.Shared {
+		shared := ref.SharedInstanceNames()
+		label := "shared process (default)"
+		if ref.Kind() == config.PluginKindConnector {
+			label = fmt.Sprintf("shared process (instances: %s)", strings.Join(shared, ", "))
 		}
-		lines = append(lines, "grant (one shared process): "+grantSummary(ref.Network, ref.AllowSecrets, ref.AllowEnv))
-	default:
-		names := make([]string, 0, len(ref.Instances))
-		for n := range ref.Instances {
-			names = append(names, n)
-		}
-		sort.Strings(names)
-		for _, n := range names {
-			g := ref.Instances[n]
-			lines = append(lines, fmt.Sprintf("instance %s (own process): %s", n, grantSummary(g.Network, g.AllowSecrets, g.AllowEnv)))
-		}
+		lines = append(lines, label+": "+grantSummary(ref.Network, ref.AllowSecrets, ref.AllowEnv))
+	}
+	for _, n := range ref.IsolatedInstanceNames() {
+		g := ref.Instances[n]
+		lines = append(lines, fmt.Sprintf("instance %s (isolate: true, own process): %s", n, grantSummary(g.Network, g.AllowSecrets, g.AllowEnv)))
 	}
 	return lines
 }

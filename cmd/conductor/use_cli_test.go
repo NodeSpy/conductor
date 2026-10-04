@@ -66,13 +66,14 @@ func TestCmdPluginListCaps(t *testing.T) {
 	}
 }
 
-// TestCmdPluginListCapsShowsPerInstanceGrantsNotUnion is the finding-3
-// regression: `plugin list --caps` on a NON-shared-process connector plugin
-// configured as two instances with DIFFERENT `network:` must show each
-// instance's own grant, labelled by instance — never a single unioned or
-// type-level-probe-confined line that can't represent two different answers
-// at once.
-func TestCmdPluginListCapsShowsPerInstanceGrantsNotUnion(t *testing.T) {
+// TestCmdPluginListCapsDefaultSharesUnionAsOneProcess is the NEW default:
+// `plugin list --caps` on a connector plugin configured as two instances with
+// DIFFERENT `network:`, neither isolate: true, must show ONE shared-process
+// line carrying the UNION of both — that one process is what actually runs
+// for both of them (docs/wiki/Plugins.md "Multi-instance isolation") — never
+// split per instance, since there is no separate process to split per
+// instance in the first place.
+func TestCmdPluginListCapsDefaultSharesUnionAsOneProcess(t *testing.T) {
 	args := writeCfg(t, `
 connectors:
   a: { use: acme/plugins/jira, network: ["one.example:443"] }
@@ -87,33 +88,35 @@ connectors:
 	if !strings.Contains(out, "declared capabilities:") {
 		t.Fatalf("--caps did not surface the plugin's declared capabilities:\n%s", out)
 	}
-	if !strings.Contains(out, "instance a") || !strings.Contains(out, "instance b") {
-		t.Fatalf("--caps did not label each configured instance's own grant:\n%s", out)
+	if !strings.Contains(out, "shared process") {
+		t.Fatalf("--caps did not label the default shared-process grant:\n%s", out)
 	}
 	if !strings.Contains(out, "one.example:443") || !strings.Contains(out, "two.example:443") {
-		t.Fatalf("--caps lost one instance's own narrowed network:\n%s", out)
+		t.Fatalf("--caps lost one instance's network from the union:\n%s", out)
 	}
-	// Each instance's line must carry only ITS OWN network — not both hosts
-	// unioned onto one line (that is the shared_process: true shape, not the
-	// default per-instance one this config uses).
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "one.example:443") && strings.Contains(line, "two.example:443") {
-			t.Fatalf("instance grants were unioned onto one line, not shown per instance:\n%s", out)
+		if strings.Contains(line, "shared process") {
+			if !strings.Contains(line, "one.example:443") || !strings.Contains(line, "two.example:443") {
+				t.Fatalf("the shared-process grant line did not carry the union of both instances' network:\n%s", out)
+			}
+			if !strings.Contains(line, "a") || !strings.Contains(line, "b") {
+				t.Fatalf("the shared-process grant line did not label which instances it serves:\n%s", out)
+			}
 		}
+	}
+	if strings.Contains(out, "own process") {
+		t.Fatalf("neither instance isolates; --caps must show no own-process line:\n%s", out)
 	}
 }
 
-// TestCmdPluginListCapsSharedProcessShowsUnionAsOneProcess is the
-// shared_process: true half of permissionLines (cmd/conductor/plugins.go
-// ~587): `shared_process: true` on ANY instance folds PluginRefs' union
-// across every configured instance of this plugin (connectors.go), and that
-// ONE process is what actually runs for all of them — so `plugin list --caps`
-// must show the UNIONED grant, labelled as one shared process, not split out
-// per instance the way the default per-instance-isolated shape is.
-func TestCmdPluginListCapsSharedProcessShowsUnionAsOneProcess(t *testing.T) {
+// TestCmdPluginListCapsIsolateShowsOwnProcessGrant is the isolate: true half:
+// one isolated instance's grant must show on its OWN line, narrowed to
+// exactly what it declared, separate from the shared process the other
+// (non-isolated) instance still uses — never unioned together onto one line.
+func TestCmdPluginListCapsIsolateShowsOwnProcessGrant(t *testing.T) {
 	args := writeCfg(t, `
 connectors:
-  a: { use: acme/plugins/jira, network: ["one.example:443"], shared_process: true }
+  a: { use: acme/plugins/jira, network: ["one.example:443"], isolate: true }
   b: { use: acme/plugins/jira, network: ["two.example:443"] }
 `)
 	out, err := captureStdout(t, func() error {
@@ -122,45 +125,47 @@ connectors:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "grant (one shared process):") {
-		t.Fatalf("--caps did not label the shared_process grant as one shared process:\n%s", out)
+	if !strings.Contains(out, "instance a (isolate: true, own process): ") {
+		t.Fatalf("--caps did not label instance a's own isolated process:\n%s", out)
 	}
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "grant (one shared process):") {
-			if !strings.Contains(line, "one.example:443") || !strings.Contains(line, "two.example:443") {
-				t.Fatalf("shared_process grant line did not carry the union of both instances' network:\n%s", out)
+		if strings.Contains(line, "instance a") {
+			if !strings.Contains(line, "one.example:443") || strings.Contains(line, "two.example:443") {
+				t.Fatalf("instance a's own grant must carry only its own network, not b's:\n%s", out)
+			}
+		}
+		if strings.Contains(line, "shared process") {
+			if !strings.Contains(line, "two.example:443") || strings.Contains(line, "one.example:443") {
+				t.Fatalf("the shared process must carry only non-isolated instance b's network, not a's:\n%s", out)
 			}
 		}
 	}
-	if strings.Contains(out, "instance a (own process)") || strings.Contains(out, "instance b (own process)") {
-		t.Fatalf("shared_process: true must not show per-instance own-process lines:\n%s", out)
-	}
 }
 
-// TestCmdPluginShowSharedProcessShowsUnionAsOneProcess is `plugin show`'s half
-// of the same shared_process: true behavior.
-func TestCmdPluginShowSharedProcessShowsUnionAsOneProcess(t *testing.T) {
+// TestCmdPluginShowDefaultSharesUnionAsOneProcess is `plugin show`'s half of
+// the same default-sharing behavior.
+func TestCmdPluginShowDefaultSharesUnionAsOneProcess(t *testing.T) {
 	args := writeCfg(t, `
 connectors:
-  a: { use: acme/plugins/jira, network: ["one.example:443"], shared_process: true }
+  a: { use: acme/plugins/jira, network: ["one.example:443"] }
   b: { use: acme/plugins/jira, network: ["two.example:443"] }
 `)
 	out, err := captureStdout(t, func() error { return cmdPluginShow(append(args, "jira")) })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "grant (one shared process):") {
-		t.Fatalf("plugin show did not label the shared_process grant as one shared process:\n%s", out)
+	if !strings.Contains(out, "shared process") {
+		t.Fatalf("plugin show did not label the default shared-process grant:\n%s", out)
 	}
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "grant (one shared process):") {
+		if strings.Contains(line, "shared process") {
 			if !strings.Contains(line, "one.example:443") || !strings.Contains(line, "two.example:443") {
-				t.Fatalf("shared_process grant line did not carry the union of both instances' network:\n%s", out)
+				t.Fatalf("shared-process grant line did not carry the union of both instances' network:\n%s", out)
 			}
 		}
 	}
-	if strings.Contains(out, "instance a (own process)") || strings.Contains(out, "instance b (own process)") {
-		t.Fatalf("shared_process: true must not show per-instance own-process lines:\n%s", out)
+	if strings.Contains(out, "own process") {
+		t.Fatalf("neither instance isolates; plugin show must show no own-process line:\n%s", out)
 	}
 }
 
@@ -222,15 +227,15 @@ func TestCmdPluginShowBuiltin(t *testing.T) {
 func TestCmdPluginShowPerInstanceGrantsNotUnion(t *testing.T) {
 	args := writeCfg(t, `
 connectors:
-  a: { use: acme/plugins/jira, network: ["one.example:443"] }
-  b: { use: acme/plugins/jira, network: ["two.example:443"] }
+  a: { use: acme/plugins/jira, network: ["one.example:443"], isolate: true }
+  b: { use: acme/plugins/jira, network: ["two.example:443"], isolate: true }
 `)
 	out, err := captureStdout(t, func() error { return cmdPluginShow(append(args, "jira")) })
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, "instance a") || !strings.Contains(out, "instance b") {
-		t.Fatalf("plugin show did not label each configured instance's own grant:\n%s", out)
+		t.Fatalf("plugin show did not label each isolated instance's own grant:\n%s", out)
 	}
 	if !strings.Contains(out, "one.example:443") || !strings.Contains(out, "two.example:443") {
 		t.Fatalf("plugin show lost one instance's own narrowed network:\n%s", out)

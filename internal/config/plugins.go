@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 )
@@ -45,42 +47,44 @@ type PluginRef struct {
 	// AllowEnv are the daemon environment variables the operator granted the
 	// plugin (connectors.<name>.allow_env), within what it declares.
 	AllowEnv []string
-	// SharedProcess opts this plugin's connector instances OUT of the default
-	// one-process-per-instance isolation (connectors.<name>.shared_process) —
-	// set if ANY instance of this plugin asked for it, since the process is
-	// shared per BINARY, not per connector entry. Always false for a runtime
-	// or engine reference: neither has the connector notion of "several
-	// configured instances of one plugin" this exists to isolate.
-	SharedProcess bool
 	// Instances carries each CONFIGURED CONNECTOR INSTANCE's own grants —
-	// Network/AllowSecrets/AllowEnv/Isolation exactly as that one
+	// Network/AllowSecrets/AllowEnv/Isolation/Isolate exactly as that one
 	// connectors: entry declared them, never unioned with a sibling
 	// instance's. Keyed by the connectors: map name. Populated only for a
 	// connector-kind ref (nil for a runtime/engine ref, which has no
 	// "several instances of one plugin" multiplicity to begin with).
 	//
-	// The Network/AllowSecrets/AllowEnv/Isolation fields ABOVE remain the
-	// UNION across every instance of this plugin — that union is what a
-	// SHARED process needs (shared_process: true; one process then serves
-	// every instance, so it must be permitted whatever any of them
-	// declares) and nothing else. Per-instance process isolation
-	// (Manager.InstanceClient) must use THIS map instead: ghA's own process
-	// gets exactly ghA's own allow_env/network/allow_secrets, never ghB's —
-	// see docs/wiki/Plugins.md "Multi-instance isolation".
+	// The Network/AllowSecrets/AllowEnv/Isolation fields ABOVE are the UNION
+	// across every NON-ISOLATED (Isolate: false, the default) instance of
+	// this plugin — that union is what the ONE SHARED process needs (it
+	// serves every instance that did not opt into isolate: true, so it must
+	// be permitted whatever any of them declares). An isolated instance's own
+	// grant never joins that union; it travels only in THIS map, which
+	// internal/plugin.Manager's per-instance client path (still the existing
+	// machinery, just reserved for isolate: true now instead of being the
+	// default) confines that one instance's own process to — ghA's own
+	// process gets exactly ghA's own allow_env/network/allow_secrets/
+	// isolation, never ghB's, never the shared union — see
+	// docs/wiki/Plugins.md "Multi-instance isolation".
 	Instances map[string]ConnectorGrant
 }
 
 // ConnectorGrant is one configured connector instance's own sandbox/
-// isolation grant — Network, AllowSecrets, AllowEnv and Isolation exactly as
-// that connectors: entry declared them. PluginRef.Instances carries one of
-// these per configured instance so a per-instance plugin process
-// (internal/plugin.Manager.InstanceClient) can be confined to exactly its
-// own instance's grant instead of the union every sibling instance declares.
+// isolation grant — Network, AllowSecrets, AllowEnv, Isolation and Isolate
+// exactly as that connectors: entry declared them. PluginRef.Instances
+// carries one of these per configured instance so a per-instance plugin
+// process (internal/plugin.Manager's isolated-instance path) can be confined
+// to exactly its own instance's grant instead of the shared union every
+// non-isolated sibling instance shares.
 type ConnectorGrant struct {
 	Network      []string
 	AllowSecrets []string
 	AllowEnv     []string
 	Isolation    *IsolationConfig
+	// Isolate mirrors ConnectorRef.Isolate: true means this one configured
+	// instance gets its own dedicated process instead of sharing the
+	// plugin's one default process.
+	Isolate bool
 }
 
 // PluginKind values, retained as the wire/CLI spelling of UseKind.
@@ -117,6 +121,120 @@ func (p PluginRef) Ref() string {
 	return p.Name + "@" + p.Use.Version
 }
 
+// IsolatedInstanceNames lists the configured connector instances of this
+// plugin that opted into their own process (isolate: true), sorted. Empty for
+// a runtime/engine ref, or a connector ref with no isolated instance.
+func (p PluginRef) IsolatedInstanceNames() []string {
+	var out []string
+	for name, g := range p.Instances {
+		if g.Isolate {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// SharedInstanceNames lists the configured connector instances that share the
+// plugin's default process (isolate: false — every instance not in
+// IsolatedInstanceNames), sorted.
+func (p PluginRef) SharedInstanceNames() []string {
+	var out []string
+	for name, g := range p.Instances {
+		if !g.Isolate {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// HasSharedInstance reports whether at least one configured instance shares
+// the plugin's default process — the condition under which that one shared
+// process is actually started. A connector ref whose EVERY instance isolates
+// has no shared process at all. Always true for a runtime/engine ref (p.
+// Instances is nil for those — they have no several-instances-of-one-plugin
+// shape to isolate in the first place, so there is nothing to range over and
+// len(p.Instances) == 0 falls through to "shared").
+func (p PluginRef) HasSharedInstance() bool {
+	if p.Kind() != PluginKindConnector {
+		return true
+	}
+	if len(p.Instances) == 0 {
+		return true
+	}
+	for _, g := range p.Instances {
+		if !g.Isolate {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeIsolationBestEffort combines two non-isolated instances' isolation:
+// blocks for PluginRefs' running union. It is best-effort: a genuine conflict
+// (two different, incompatible blocks) is reported precisely by
+// validatePluginRefs/checkIsolationMerge, which runs after PluginRefs and
+// gates whether the config loads at all — this just must never panic or
+// silently invent a block neither instance wrote.
+func mergeIsolationBestEffort(a, b *IsolationConfig) *IsolationConfig {
+	merged, ok := combineIsolation(a, b)
+	if ok {
+		return merged
+	}
+	// Conflicting: keep the first seen so a caller that (incorrectly) never
+	// checked validatePluginRefs' error still gets SOME deterministic block
+	// rather than a nil that reads as "no isolation at all".
+	if a != nil {
+		return a
+	}
+	return b
+}
+
+// combineIsolation combines two non-isolated instances' isolation: blocks
+// into the one block their shared process runs under. nil combines with
+// anything (one instance wrote no block; the other's stands). Two written
+// blocks combine only when every field EXCEPT Network is identical: mode,
+// container image/engine, limits, privileged and allow_root are a choice of
+// WHICH sandbox shape to run, not a point on a shared strictness scale — mode:
+// namespace and mode: container are simply different, not comparable, so a
+// mismatch there is a conflict (reported as a config error), never resolved
+// by picking one. Network is the one dimension that DOES have a natural join,
+// the same "widen, never narrow a grant into something neither side asked
+// for" shape Network/AllowSecrets/AllowEnv already use: Deny is OR'd (either
+// instance asking the network be cut takes effect) and Egress is unioned —
+// the shared process must be permitted whatever any of its instances needs,
+// exactly like the network/allow_secrets/allow_env union above it.
+func combineIsolation(a, b *IsolationConfig) (*IsolationConfig, bool) {
+	if a == nil {
+		return b, true
+	}
+	if b == nil {
+		return a, true
+	}
+	ac, bc := *a, *b
+	ac.Network, bc.Network = nil, nil
+	if !reflect.DeepEqual(ac, bc) {
+		return nil, false
+	}
+	merged := *a
+	merged.Network = combineIsolationNetwork(a.Network, b.Network)
+	return &merged, true
+}
+
+func combineIsolationNetwork(a, b *IsolationNetwork) *IsolationNetwork {
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
+	return &IsolationNetwork{
+		Egress: appendUnique(append([]string(nil), a.Egress...), b.Egress...),
+		Deny:   a.Deny || b.Deny,
+	}
+}
+
 // PluginRefs derives the set of external plugins this config needs: every
 // connectors:/runtimes: entry whose `use:` did not resolve to a builtin, keyed
 // by "<kind-dir>/<name>" so a connector and a runtime of the same name never
@@ -144,23 +262,28 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 		if !seen {
 			p = PluginRef{Name: u.Name, Instance: name, Use: u, Instances: map[string]ConnectorGrant{}}
 		}
-		// Hardening and declared egress union across instances: a SHARED
-		// process (shared_process: true) runs once for every instance, so it
-		// must be permitted whatever any of its instances declares. This
-		// union is NOT what a per-instance process gets — that is
-		// p.Instances[name] below, exactly this one entry's own grant.
-		if ref.Isolation != nil && p.Isolation == nil {
-			p.Isolation = ref.Isolation
+		// Hardening and declared egress union across NON-ISOLATED instances
+		// only: the DEFAULT shared process runs once for every instance that
+		// did not ask for its own (isolate: true), so it must be permitted
+		// whatever any of THOSE declares — never an isolated sibling's,
+		// which never joins this union (p.Instances[name] below carries that
+		// instance's own grant instead, and nothing else reads it). A
+		// conflicting pair of isolation: blocks across non-isolated
+		// instances is a load error (validatePluginRefs); this best-effort
+		// merge takes the first and lets that later, authoritative check
+		// report it precisely.
+		if !ref.Isolate {
+			p.Isolation = mergeIsolationBestEffort(p.Isolation, ref.Isolation)
+			p.Network = appendUnique(p.Network, ref.Network...)
+			p.AllowSecrets = appendUnique(p.AllowSecrets, ref.AllowSecrets...)
+			p.AllowEnv = appendUnique(p.AllowEnv, ref.AllowEnv...)
 		}
-		p.Network = appendUnique(p.Network, ref.Network...)
-		p.AllowSecrets = appendUnique(p.AllowSecrets, ref.AllowSecrets...)
-		p.AllowEnv = appendUnique(p.AllowEnv, ref.AllowEnv...)
-		p.SharedProcess = p.SharedProcess || ref.SharedProcess
 		p.Instances[name] = ConnectorGrant{
 			Network:      append([]string(nil), ref.Network...),
 			AllowSecrets: append([]string(nil), ref.AllowSecrets...),
 			AllowEnv:     append([]string(nil), ref.AllowEnv...),
 			Isolation:    ref.Isolation,
+			Isolate:      ref.Isolate,
 		}
 		out[u.InstallKey()] = p
 	}
@@ -324,7 +447,59 @@ func (c *Config) validatePluginRefs() error {
 		}
 		engErr = check(UseKindEngine, sel, sel)
 	})
-	return engErr
+	if engErr != nil {
+		return engErr
+	}
+	return c.checkIsolationMerge()
+}
+
+// checkIsolationMerge is the authoritative check PluginRefs' own merge
+// (mergeIsolationBestEffort) defers to: every NON-ISOLATED instance of one
+// plugin shares that plugin's one process, so their isolation: blocks must
+// actually combine into a single block that process can run under
+// (combineIsolation) — a plugin with two non-isolated instances declaring
+// mode: namespace and mode: container, say, cannot be satisfied by any one
+// process. The fix the error names is either make the blocks match or set
+// isolate: true on one of them (giving it, and the conflict, its own process).
+func (c *Config) checkIsolationMerge() error {
+	type entry struct {
+		instance  string
+		isolation *IsolationConfig
+	}
+	byKey := map[string][]entry{}
+	names := make([]string, 0, len(c.ConnectorsMap))
+	for n := range c.ConnectorsMap {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		ref := c.ConnectorsMap[name]
+		if ref.Isolate {
+			continue
+		}
+		u, err := ref.Resolved()
+		if err != nil || u.IsBuiltin() {
+			continue
+		}
+		byKey[u.InstallKey()] = append(byKey[u.InstallKey()], entry{name, ref.Isolation})
+	}
+	for key, entries := range byKey {
+		if len(entries) < 2 {
+			continue
+		}
+		combined := entries[0].isolation
+		combinedFrom := entries[0].instance
+		for _, e := range entries[1:] {
+			merged, ok := combineIsolation(combined, e.isolation)
+			if !ok {
+				name := strings.TrimPrefix(key, UseKindConnector.Dir()+"/")
+				return fmt.Errorf("config: connectors: %s and %s share the %s plugin %s's one process by default, but declare different isolation: blocks that cannot combine — make them match, or set isolate: true on one to give it its own process",
+					combinedFrom, e.instance, key, name)
+			}
+			combined = merged
+		}
+	}
+	return nil
 }
 
 func errConflict(kind UseKind, name, aInst, aSrc, bInst, bSrc string) error {

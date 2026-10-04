@@ -318,79 +318,104 @@ connectors:
   ghlisten: { use: github, app_id: "${GH_APP_ID_2}" }
 ```
 
-— and by default each configured instance gets its **own subprocess**: its
-own OS-level sandbox (when `isolation:` is set), its own scrubbed/granted
-environment, and its own staging directory. `gh` and `ghlisten` above are two
-separate `github` plugin processes, not one process serving both. That means:
+— and by default `gh` and `ghlisten` **share one process**: one `github`
+plugin subprocess, serving both configured instances, confined to the UNION
+of what they each declared (`network:`/`allow_secrets:`/`allow_env:`/
+`isolation:`). This is the resource-frugal default — N configured instances
+of one plugin is one process, not N — and it is also, honestly, a smaller
+blast radius than it sounds: see "What isolation does and doesn't protect
+against" below before you reach for `isolate:` as a security boundary.
 
-- a crash, a hang, or a crash-loop in one instance's process never touches a
-  sibling instance — `gh` going down does not take `ghlisten` with it;
-- `host.state`, `host.auth` and `host.log` are naturally scoped to the
-  process that calls them, on top of the existing per-call instance check —
-  one instance's process cannot even ADDRESS a sibling's state or managed
-  token, let alone read it;
-- each instance's process is confined to exactly THAT instance's own
-  `network:`/`allow_secrets:`/`allow_env:`/`isolation:` — never a sibling
-  instance's, and never the union of every instance's (`gh`'s process never
-  sees `ghlisten`'s `allow_env` secret, or its narrower/wider `network:`). The
-  unioned view only ever applies to a `shared_process: true` plugin's one
-  process (which by definition must be permitted whatever any of its
-  instances needs — including a plugin that declares `capabilities.
-  single_process: true` and gets this shape regardless of `shared_process:`,
-  see below) and to the type-level `plugin.describe` probe below, which
-  gets the opposite: the MINIMUM (none of it) — a pure self-description needs
-  neither network, secrets, nor env;
-- a hot reload (a moved plugin binary) swaps every configured instance's
-  process, one at a time;
-- the daemon log's `subprocess started (pid N)` lines, one per configured
-  instance, show two instances of one plugin are visibly two processes.
-  (`conductor connectors ls` does NOT show this: it builds its own,
-  throwaway, short-lived stack to describe each connector for display, so
-  any pid it could show would be that one-off process's, not the running
-  daemon's — it prints no pid at all, rather than one that looks live but
-  isn't.)
-
-The one process-level resource conductor shares regardless: the type-level
-`plugin.describe` probe (no instance) that runs once at load/install, to
-learn what the BINARY declares — a throwaway process, closed the moment it
-answers, since nothing instance-specific lives in it.
-
-**This costs memory and file descriptors**: N configured instances of one
-plugin is N processes. An operator running many instances of the same plugin
-who wants the old, pre-isolation behavior back — one process for all of
-them — opts out explicitly, on any instance:
+Give one instance its own process with `isolate: true`:
 
 ```yaml
 connectors:
-  gh:       { use: github, app_id: "${GH_APP_ID}", shared_process: true }
-  ghlisten: { use: github, app_id: "${GH_APP_ID_2}" }   # shares gh's process too
+  gh:       { use: github, app_id: "${GH_APP_ID}" }
+  ghlisten: { use: github, app_id: "${GH_APP_ID_2}", isolate: true }
 ```
 
-`shared_process: true` on ANY instance of a plugin shares the WHOLE plugin's
-process — it is a property of the binary conductor spawns, not of one
-`connectors:` entry — so set it once, on any instance, and every instance of
-that plugin shares it. With it set, isolation between instances is back to
-scoping by call only (credentials, `host.state`/`host.auth`/`host.log`'s
-per-instance checks), exactly as every plugin behaved before this existed.
+Now `gh` shares the (still default) process with any other non-isolated
+instance of `github`, and `ghlisten` gets its own dedicated subprocess — its
+own OS-level sandbox (when `isolation:` is set on it), its own
+scrubbed/granted environment, and its own staging directory, confined to
+EXACTLY `ghlisten`'s own grant, never `gh`'s and never the shared union.
+`isolate: true` is a property of that one `connectors:` entry, not of the
+plugin binary — set it on just the instances that need their own process.
+That means, for an isolated instance:
 
-**Some plugins cannot be split at all, and say so.** A plugin that keeps a
-BOX-GLOBAL resource every configured instance must agree on — a lease
-refcount on a shared OS-level mapping, a listener bound to one fixed port —
-declares `capabilities.single_process: true` in its `plugin.describe`
-response. conductor then gives it the `shared_process: true` shape
-automatically, for every configured instance, whether or not the operator
-ever wrote `shared_process:` anywhere. This is not something the operator can
-override back to per-instance isolation: the plugin is saying a second
-process would silently fork its shared state into two copies that disagree,
-not merely that it would rather not pay for N processes. `conductor plugin
-show`/`plugin list --caps` label this explicitly (`single_process: the
-plugin declares every instance must share one process`), so it is clear the
-unioned grant comes from the plugin's own declaration, not a `shared_process:`
-line in the config. Changing whether a plugin declares this between builds is
-an interface change like any other (`SameReloadSurface`): a hot reload is
-refused and the daemon falls back to a full restart, since the Manager's
-shape for that plugin (one process vs one per instance) cannot change under
-a running daemon.
+- a crash, a hang, or a crash-loop in its process never touches the shared
+  process or a sibling isolated instance;
+- `host.state`, `host.auth` and `host.log` are naturally scoped to the
+  process that calls them, on top of the existing per-call instance check —
+  the shared process cannot even ADDRESS an isolated instance's state or
+  managed token, let alone read it, and vice versa;
+- its process is confined to exactly ITS OWN `network:`/`allow_secrets:`/
+  `allow_env:`/`isolation:` — never a sibling's, and never the shared
+  process's union;
+- a hot reload (a moved plugin binary) swaps the shared process AND every
+  isolated instance's own process, one at a time;
+- the daemon log's `subprocess started (pid N)` line shows it as its own
+  process, distinct from the shared one. (`conductor connectors ls` does NOT
+  show this: it builds its own, throwaway, short-lived stack to describe
+  each connector for display, so any pid it could show would be that one-off
+  process's, not the running daemon's — it prints no pid at all, rather than
+  one that looks live but isn't.)
+
+Non-isolated instances sharing the default process get the coarser,
+pre-isolation guarantee instead: isolation between THEM is scoping by call
+only (credentials, `host.state`/`host.auth`/`host.log`'s per-instance
+checks) — a crash in the shared process takes every non-isolated instance of
+that plugin down together, and the process is confined to the union of what
+every non-isolated instance declared (so `gh`'s process DOES see
+`ghlisten`'s broader `network:` if `ghlisten` is not isolated — narrow what
+you're willing to share, or isolate the instance that needs to be kept
+separate).
+
+Two non-isolated instances' `isolation:` blocks must actually combine into
+ONE block the shared process can run under. `network:`'s `egress`/`deny`
+combine the same way `network:`/`allow_secrets:`/`allow_env:` already do —
+union the egress, OR the deny — but every other field (`mode`, `container`,
+`limits`, `privileged`, `allow_root`) is a choice of WHICH sandbox shape to
+run, not a point on a shared strictness scale: `mode: namespace` and `mode:
+container` are different, not comparable. Two non-isolated instances
+declaring incompatible blocks there is a config validation error naming both
+connectors and the plugin — make the blocks match, or `isolate: true` one of
+them to give it (and the difference) its own process.
+
+**The one process-level resource conductor always isolates**: the
+type-level `plugin.describe` probe. When a connector key has a shared
+process at all, that process describes ITSELF — there is nothing
+instance-specific in a type-level describe, so the one process that is
+going to run anyway is the right one to ask. Only a connector whose EVERY
+configured instance isolates has no shared process to ask; for that one case
+a throwaway, minimal-grant process (closed the moment it answers) learns the
+plugin's declared surface instead, confined to NOTHING — neither network,
+secrets, nor env — since a pure self-description needs none of it.
+
+**Some plugins cannot be split into more than one process at all, and say
+so.** A plugin that keeps a BOX-GLOBAL resource every configured instance
+must agree on — a lease refcount on a shared OS-level mapping, a listener
+bound to one fixed port — declares `capabilities.single_process: true` in
+its `plugin.describe` response. `isolate: true` on any instance of such a
+plugin is refused, never silently folded back into the shared process:
+
+- if the capability is already known (a previous install's manifest
+  recorded it), `isolate: true` anywhere is a **config validation error**
+  naming the connector and the plugin, refusing boot before anything spawns;
+- if the capability is discovered only at THIS describe (a freshly-added or
+  locally-built plugin, with no recorded manifest yet to check ahead of
+  time), that one isolated connector is **disabled**, loudly, with the
+  reason — every other connector, including every non-isolated instance of
+  the SAME plugin, proceeds normally.
+
+`conductor plugin show`/`plugin list --caps` label this explicitly
+(`single_process: the plugin declares every instance must share one process
+— isolate: true is refused for it`), so it is clear the restriction comes
+from the plugin's own declaration, not a config choice. Changing whether a
+plugin declares this between builds is an interface change like any other
+(`SameReloadSurface`): a hot reload is refused and the daemon falls back to
+a full restart, since which instances the Manager has folded into which
+process cannot change under a running daemon.
 
 An **in-process builtin** (cron, rss, webhook, rest, graphql, the exposure
 connectors) is unaffected either way: it is trusted code served over an
@@ -405,6 +430,37 @@ with another entry that happens to reference the same binary), and a
 code-step engine's one process is deliberately shared by every step that
 names it — a step is not a connector instance with its own credentials or
 sandbox to separate.
+
+#### What isolation does and doesn't protect against
+
+Be honest about what `isolate: true` buys you, because a security claim you
+cannot check is worse than none:
+
+- **It is the same binary in every process**, shared or isolated. `isolate:
+  true` does not run different code, verify anything differently, or trust
+  the plugin any less or more — it is a resource/blast-radius knob, not a
+  trust boundary around a plugin you don't trust. For that, see
+  [Security](#security)'s `isolation:` block (OS-level sandboxing) and the
+  permission manifest, both orthogonal to `isolate:`.
+- **What it DOES contain**: a crash, a hang, or an unhandled panic triggered
+  by one instance's input (a malformed webhook payload, a hostile upstream
+  response) stays in that instance's own process — it does not take a
+  sibling instance down with it, and it cannot address a sibling's
+  `host.state`/`host.auth`/`host.log` calls, narrowing what one compromised
+  or merely-buggy instance's process can reach.
+- **What it does NOT contain**: a plugin binary that is itself malicious —
+  not merely buggy, but intentionally hostile — gains nothing from being
+  isolated INTO its own process; it is still the same trusted-to-run code,
+  with the same declared manifest, just running alone instead of alongside
+  a sibling. Isolating it narrows what a SEPARATE bug or exploit arriving
+  via a different instance's input could reach FROM that process, which is
+  a different claim from "this plugin is contained."
+- **It narrows grants, it does not add a wall.** An isolated instance's
+  process is confined to exactly its own `network:`/`allow_secrets:`/
+  `allow_env:` — smaller than the shared process's union — but that
+  confinement is the same permission-manifest enforcement every plugin gets
+  (egress proxy, command PATH confinement), not an OS jail. Add
+  `isolation:` on top for that.
 
 ### What that enforces, exactly
 

@@ -145,51 +145,53 @@ type Spec struct {
 	// AllowEnv are the daemon environment variables the operator granted
 	// (allow_env); only those the plugin also declares are passed.
 	AllowEnv []string
-	// SharedProcess opts a connector plugin OUT of the default one-process-
-	// per-configured-instance isolation (config.ConnectorRef.SharedProcess,
-	// unioned across every instance of this plugin in config.PluginRefs): every
-	// configured instance of it shares the ONE subprocess a Manager starts for
-	// this Spec, the same as every plugin did before per-instance isolation
-	// existed. Not read for a runtime or engine Spec: neither has more than
-	// one "instance" sharing a Manager key to begin with (see
-	// docs/wiki/Plugins.md "Multi-instance isolation").
-	//
-	// Also true when the plugin itself declares Capabilities.SingleProcess
-	// (pkg/plugin/wire.go) — a box-global resource it keeps forces every
-	// instance to share one process regardless of what the operator set.
-	// SpecFromRef sets this from the plugin's RECORDED manifest when known;
-	// Manager.PromoteSharedProcess flips it (and reshapes the rest of this
-	// Spec to match) the first time a live describe reveals the capability
-	// before any manifest recorded it.
-	SharedProcess bool
+	// Shared reports whether this key's DEFAULT process should exist: true
+	// for every runtime/engine Spec (neither has more than one "instance"
+	// sharing a Manager key to begin with) and for a connector Spec with at
+	// least one configured instance that did NOT opt into isolate: true
+	// (config.PluginRef.HasSharedInstance) — docs/wiki/Plugins.md
+	// "Multi-instance isolation": one process per plugin name+version,
+	// serving every non-isolated instance, by default. False only for a
+	// connector whose EVERY configured instance set isolate: true — there is
+	// then nothing for a shared process to serve, so Manager never starts
+	// one for this key at all.
+	Shared bool
 	// Instance is set ONLY on a per-instance Spec a Manager derives for one
-	// configured connector instance (Manager.InstanceClient) — it carries no
-	// install-state or wire meaning of its own; it exists purely so a log line
-	// or an error naming this Spec can say WHICH instance's own process it is
-	// talking about ("plugin widget instance primary: …") instead of just the
-	// shared type name both instances share. "" everywhere else: the type-
-	// level probe Spec, an engine/runtime Spec, and a SharedProcess
-	// connector's one shared Spec.
+	// ISOLATED configured connector instance (Manager.InstanceClient) — it
+	// carries no install-state or wire meaning of its own; it exists purely
+	// so a log line or an error naming this Spec can say WHICH instance's own
+	// process it is talking about ("plugin widget instance primary: …")
+	// instead of just the shared type name every non-isolated sibling
+	// shares. "" everywhere else: the type-level probe Spec, an
+	// engine/runtime Spec, and the shared connector Spec.
 	Instance string
-	// Instances carries each configured connector instance's OWN grant
+	// Instances carries EVERY configured connector instance's OWN grant
 	// (config.PluginRef.Instances, carried through unchanged by
-	// SpecFromRef) — Manager.InstanceClient consults it to confine a
-	// per-instance process to exactly that one instance's own Network/
-	// AllowSecrets/AllowEnv/Isolation, never a sibling's. Only meaningful on
-	// a TYPE-level connector Spec that is NOT SharedProcess (the shape
-	// Manager.NewManager/InstanceClient builds per-instance Specs from); nil
-	// everywhere else.
+	// SpecFromRef), each tagged with its own Isolate — Manager consults it
+	// two ways: to decide, per instance, whether a call routes to the one
+	// shared client or to that instance's own lazily-built isolated one
+	// (InstanceClient), and (every instance, isolated or not) to confine a
+	// per-instance RELOAD RECHECK probe (cmd/conductor's
+	// describeInstancesForInstall) to exactly that one instance's own
+	// Network/AllowSecrets/AllowEnv/Isolation, never a sibling's and never
+	// the shared union. nil for a runtime/engine Spec.
 	Instances map[string]config.ConnectorGrant
 	// Probe marks the type-level `plugin.describe` probe Spec (Manager.
-	// ProbeDescribe/StartAndDescribe at boot, cmd/conductor's hot-reload
-	// re-describe) — a pure self-description that calls no verb and reads no
-	// instance connection, so docs/wiki/Plugins.md "Multi-instance isolation"
-	// says it gets the MINIMUM of everything: no secrets, no env, and — the
-	// finding-2 fix — no egress either, confined to NOTHING rather than
-	// falling back to the plugin's full declared manifest.
+	// ProbeDescribe — used only when Shared is false: every configured
+	// instance isolates, so there is no shared process that could describe
+	// ITSELF, and a throwaway minimal-grant process is what learns the
+	// plugin's Decl/manifest instead, exactly as it always has) — a pure
+	// self-description that calls no verb and reads no instance connection,
+	// so docs/wiki/Plugins.md "Multi-instance isolation" says it gets the
+	// MINIMUM of everything: no secrets, no env, and no egress either,
+	// confined to NOTHING rather than falling back to the plugin's full
+	// declared manifest. When Shared is true the type-level describe instead
+	// comes from the shared process itself (Manager.StartAndDescribe) — it
+	// already holds no instance's traffic until one calls it, so there is
+	// nothing left for a SEPARATE throwaway probe to buy.
 	//
-	// Network/AllowSecrets/AllowEnv are already nil/empty on this Spec (see
-	// SpecFromRef), but EffectiveManifest's "empty Network means no
+	// Network/AllowSecrets/AllowEnv are already nil/empty on a Probe Spec
+	// (see SpecFromRef), but EffectiveManifest's "empty Network means no
 	// narrowing, so the plugin's own declared egress stands" reading of that
 	// is correct for a REAL connector instance that simply didn't set
 	// `network:` — it conflates with a probe Spec's empty Network for an

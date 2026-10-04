@@ -15,50 +15,46 @@ import (
 // holds the plugins derived from non-builtin `use:` references
 // (config.PluginRefs), keyed by "<kind-dir>/<name>".
 //
-// A key holds AT MOST ONE of two shapes of client, decided (usually) once at
-// construction by the Spec's Kind and SharedProcess flag:
+// A key holds up to two shapes of client at once, decided by the Spec's Kind
+// and the per-instance isolate: setting (docs/wiki/Plugins.md "Multi-instance
+// isolation"):
 //
-//   - a single, persistent, eagerly-created client in `clients` — every
-//     runtime and engine key (neither has more than one "instance" sharing a
-//     key), a connector key whose operator opted into shared_process:, and a
-//     connector key whose plugin declares Capabilities.SingleProcess (read
-//     from its recorded manifest — SpecFromRef);
-//   - a lazily-created client PER CONFIGURED CONNECTOR INSTANCE, in
-//     `instClients[key][instance]` (Manager.InstanceClient) — the default for
-//     a connector key: multi-instance isolation (docs/wiki/Plugins.md) gives
-//     each configured instance of an external plugin its own subprocess, its
-//     own sandbox/env/staging dir, rather than sharing the type's one
-//     process the way every plugin kind did before this existed.
+//   - a single, persistent, eagerly-created SHARED client in `clients` —
+//     every runtime and engine key (neither has more than one "instance"
+//     sharing a key), and a connector key with at least one configured
+//     instance that did NOT set isolate: true (Spec.Shared, the default:
+//     every such instance shares this one process, with the union of their
+//     grants);
+//   - a lazily-created client PER ISOLATED CONFIGURED CONNECTOR INSTANCE, in
+//     `instClients[key][instance]` (Manager.InstanceClient) — only for an
+//     instance that set isolate: true, confined to exactly its own grant.
 //
-// "Usually": a connector key built as the per-instance shape can be
-// PROMOTED to the shared shape exactly once, by PromoteSharedProcess — the
-// single_process capability's fallback for the one case SpecFromRef cannot
-// see ahead of time (no manifest recorded it yet: a local development build,
-// or the very first boot after install). Once promoted a key never reverts;
-// see PromoteSharedProcess for the ordering this relies on.
+// A connector key whose plugin declares Capabilities.SingleProcess cannot be
+// split at all: an isolated instance of it is refused (ForbidIsolated) rather
+// than ever folded into the shared client silently.
 //
 // The connector TYPE-level describe/install probe (ProbeDescribe) uses
 // neither of these: it is a throwaway client, started, described, and closed
-// without ever being retained here — the type-level Decl is a property of the
-// installed BINARY, not of any one configured instance, so there is nothing
-// to keep running once it is known.
+// without ever being retained here, used only when a key has NO shared
+// client at all (every configured instance isolates) — the type-level Decl
+// is a property of the installed BINARY, not of any one configured instance,
+// so there is nothing to gain from keeping this particular process running.
+// When a key DOES have a shared client, that client's own StartAndDescribe
+// IS the type-level describe; no separate probe process is spun up for it.
 type Manager struct {
-	// clients holds every KEY's persistent client — set (one entry per key
-	// that gets one at all) at NewManager and, for the pointers themselves,
-	// immutable from then on: a client's process is swapped IN PLACE by
-	// Reload, never replaced by a different *Client. The one exception is a
-	// brand-new ENTRY added by PromoteSharedProcess, after construction, for
-	// a key that started with no persistent client at all — reads and this
-	// one write path both go through instMu (see Client/HasLiveClient/
-	// StartAndDescribe/PromoteSharedProcess), never the bare map.
+	// clients holds every KEY's persistent SHARED client — set (one entry
+	// per key that has at least one non-isolated instance) at NewManager
+	// and, for the pointers themselves, immutable from then on: a client's
+	// process is swapped IN PLACE by Reload, never replaced by a different
+	// *Client.
 	clients map[string]*Client
 	order   []string // immutable after NewManager
 	deps    Deps     // shared by every client this Manager ever creates, including lazily
 
 	// mu guards specs + decls — the maps mutated after construction (Reload
 	// updates a plugin's binary-identity fields; StartAndDescribe/ProbeDescribe
-	// record a self-description; PromoteSharedProcess rewrites a key's Spec
-	// to the shared shape). order is built once and read-only thereafter.
+	// record a self-description). order is built once and read-only
+	// thereafter.
 	mu sync.RWMutex
 	// specs are the resolved specs, keyed by "<kind>/<name>".
 	specs map[string]Spec
@@ -71,16 +67,22 @@ type Manager struct {
 	// the new build.
 	decls map[string]*Decl
 
-	// instMu guards instClients + closed + reloading — see the per-instance
-	// shape above. Separate from mu: InstanceClient must not block a
-	// concurrent Spec/Decl read (or vice versa) just because it is lazily
-	// creating a client.
+	// instMu guards instClients + forbidden + closed + reloading — see the
+	// per-instance shape above. Separate from mu: InstanceClient must not
+	// block a concurrent Spec/Decl read (or vice versa) just because it is
+	// lazily creating a client.
 	instMu sync.Mutex
-	// instClients holds each connector key's per-instance clients, created on
-	// first InstanceClient call for that (key, instance) pair. nil entries are
-	// never stored; an absent map for a key simply means no instance of it has
-	// been asked for yet.
+	// instClients holds each connector key's ISOLATED instances' clients,
+	// created on first InstanceClient call for that (key, instance) pair.
+	// nil entries are never stored; an absent map for a key simply means no
+	// isolated instance of it has been asked for yet.
 	instClients map[string]map[string]*Client
+	// forbidden records an isolated instance ForbidIsolated has refused — the
+	// single_process capability discovered only at a live describe, after
+	// the operator already configured isolate: true on it (loadConnectorPlugins).
+	// InstanceClient refuses with the recorded reason instead of ever
+	// building that instance's own process.
+	forbidden map[string]map[string]string
 	// closed is set by Close so an InstanceClient call racing with shutdown
 	// creates no client that Close would never reach.
 	closed bool
@@ -125,57 +127,51 @@ type Manager struct {
 // Besides the local-build snapshot (a private copy, never executed by this
 // call), it performs no I/O on the binary — verification happens at Start.
 //
-// Grant fields (Network/AllowSecrets/AllowEnv/Isolation): for a connector
-// ref that is NOT SharedProcess, the returned type-level Spec carries the
-// MINIMUM, not the union ref carries — empty/nil. That type-level Spec is
-// what Manager.ProbeDescribe runs the connector's throwaway type-level
-// describe probe with, and the probe needs none of it: `plugin.describe` is
-// a pure self-description, calling no verb and reading no instance
-// connection (docs/wiki/Plugins.md "Security": "the install-time describe
-// runs before any manifest exists, confined to nothing"). Granting it the
-// union of every sibling instance's secrets/env/network would hand the
-// probe process access nothing about it needs justifies. Each configured
-// instance's OWN grant still travels, in ref.Instances, for
-// Manager.InstanceClient to apply to that instance's own per-process Spec.
+// Grant fields (Network/AllowSecrets/AllowEnv/Isolation): the returned
+// type-level Spec carries the UNION across every NON-ISOLATED configured
+// instance (config.PluginRef's own Network/AllowSecrets/AllowEnv/Isolation,
+// already unioned that way by config.PluginRefs) — what the ONE SHARED
+// process (Spec.Shared) must be permitted, since it serves every instance
+// that did not opt into isolate: true. Each configured instance's OWN grant
+// still travels separately, in ref.Instances (every instance, isolated or
+// not), for Manager.InstanceClient/InstanceSpec to apply to an isolated
+// instance's own per-process Spec, or to a reload per-instance recheck probe
+// (cmd/conductor's describeInstancesForInstall) for any instance regardless
+// of shape.
 //
-// A SharedProcess connector ref (or a runtime/engine ref, which was never
-// unioned to begin with) keeps the union: one process then serves every
-// instance, so it must be permitted whatever any of them declares.
-//
-// A plugin whose RECORDED manifest (inst.Manifest, from its last install-time
-// describe) declares single_process: true (pkg/plugin/wire.go
-// Capabilities.SingleProcess) gets exactly this same shared shape, even
-// though the operator never set shared_process: — the capability overrides
-// the operator's own setting, never the other way around. This is the
-// steady-state path: the manifest is normally already on disk by the time a
-// daemon boots (recorded at `plugin add`/`plugin update`/boot gap-fill,
-// docs/wiki/Plugins.md "Multi-instance isolation"), so the Manager gets the
-// right shape from construction, no live describe needed first. The one case
-// this cannot see — the FIRST time this boot ever learns the capability (a
-// local development build, which never gets a recorded manifest at all, or a
-// remote plugin installed with no Describe step) — is handled by
-// Manager.PromoteSharedProcess instead, called right after a live describe
-// reveals it.
+// When EVERY configured instance of a connector ref isolates
+// (!ref.HasSharedInstance()), there is no shared process to grant anything
+// to or to describe itself — the type-level Spec instead gets the MINIMUM
+// (empty/nil), and Probe is set: that is what Manager.ProbeDescribe runs the
+// connector's throwaway type-level describe probe with, and the probe needs
+// none of it: `plugin.describe` is a pure self-description, calling no verb
+// and reading no instance connection (docs/wiki/Plugins.md "Security": "the
+// install-time describe runs before any manifest exists, confined to
+// nothing"). Granting it the union of every sibling instance's secrets/env/
+// network would hand the probe process access nothing about it needs
+// justifies.
 func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool) Spec {
-	shared := ref.SharedProcess || inst.Manifest.SingleProcess
+	shared := ref.HasSharedInstance()
 	s := Spec{
-		Name:          ref.Name,
-		Kind:          Kind(ref.Kind()),
-		Provides:      ref.Name,
-		Version:       ref.Version(),
-		TrustFull:     ref.TrustFull,
-		SharedProcess: shared,
-		Use:           ref.Use,
+		Name:      ref.Name,
+		Kind:      Kind(ref.Kind()),
+		Provides:  ref.Name,
+		Version:   ref.Version(),
+		TrustFull: ref.TrustFull,
+		Shared:    shared,
+		Use:       ref.Use,
+	}
+	if s.Kind == KindConnector {
+		s.Instances = ref.Instances
 	}
 	if s.Kind == KindConnector && !shared {
-		// Per-instance isolation: the type-level Spec gets no grant of its
-		// own (the minimum, for ProbeDescribe above); InstanceClient looks
-		// each configured instance's grant up here instead. Probe marks this
-		// as that type-level probe Spec explicitly (finding 2) — Network
-		// being empty here means "deny all", not "unconfigured; fall back to
-		// the plugin's declared egress" the way it would for an instance
-		// that simply didn't set `network:`.
-		s.Instances = ref.Instances
+		// No shared process exists for this key (every configured instance
+		// isolates): the type-level Spec gets no grant of its own (the
+		// minimum, for ProbeDescribe above). Probe marks this as that
+		// type-level probe Spec explicitly (finding 2) — Network being empty
+		// here means "deny all", not "unconfigured; fall back to the
+		// plugin's declared egress" the way it would for an instance that
+		// simply didn't set `network:`.
 		s.Probe = true
 	} else {
 		s.Isolation = ref.Isolation
@@ -276,7 +272,7 @@ func NewManager(plugins map[string]config.PluginRef, configDir string, state *In
 		inst, ok := state.Get(key)
 		spec := SpecFromRef(ref, configDir, inst, ok)
 		m.specs[key] = spec
-		if spec.Kind != KindConnector || spec.SharedProcess {
+		if spec.Shared {
 			m.clients[key] = NewClient(spec, deps)
 		}
 	}
@@ -294,12 +290,12 @@ func (m *Manager) Spec(name string) (Spec, bool) {
 	return s, ok
 }
 
-// Client returns a plugin's PERSISTENT client — the one every runtime and
-// engine key has, and the one a shared_process: true connector key has. A
-// plain connector key (the default, per-instance-isolated shape) has none:
-// use InstanceClient for those. Goes through instMu — the same lock
-// PromoteSharedProcess's one post-construction write to `clients` uses —
-// rather than a bare map read, so the two can never race.
+// Client returns a plugin's PERSISTENT SHARED client — the one every runtime
+// and engine key has, and the one a connector key with at least one
+// non-isolated configured instance has (Spec.Shared). A connector key whose
+// EVERY configured instance isolates has none: use InstanceClient for those.
+// Goes through instMu rather than a bare map read, so a reader can never
+// observe a half-constructed map.
 func (m *Manager) Client(name string) (*Client, bool) {
 	m.instMu.Lock()
 	defer m.instMu.Unlock()
@@ -308,10 +304,10 @@ func (m *Manager) Client(name string) (*Client, bool) {
 }
 
 // HasLiveClient reports whether key has at least one live *Client — its
-// persistent one (Client), or any per-instance one InstanceClient has
+// shared one (Client), or any isolated-instance one InstanceClient has
 // created. Where code used to check Client(key) alone to mean "is this plugin
-// live", that is no longer sufficient for a (per-instance-isolated) connector
-// key, which never gets a persistent client at all.
+// live", that is no longer sufficient for a connector key whose every
+// instance isolates, which never gets a shared client at all.
 func (m *Manager) HasLiveClient(key string) bool {
 	m.instMu.Lock()
 	defer m.instMu.Unlock()
@@ -334,29 +330,32 @@ func (m *Manager) InstanceClientFactory(key string) ClientFactory {
 	return func(instance string) (*Client, error) { return m.InstanceClient(key, instance) }
 }
 
-// InstanceClient returns the dedicated *Client that serves one configured
-// connector INSTANCE of the plugin at key, constructing it (not yet started —
-// every Client is lazy) on first use and reusing it after.
+// InstanceClient returns the *Client that serves one configured connector
+// INSTANCE of the plugin at key: the key's one SHARED client, unless this
+// particular instance opted into isolate: true, in which case it gets its own
+// dedicated client, constructed (not yet started — every Client is lazy) on
+// first use and reused after.
 //
 // Multi-instance isolation (docs/wiki/Plugins.md, docs/design/
-// plugin-contract.md): by default, every configured instance of an external
-// connector plugin gets its OWN subprocess — its own sandbox, scrubbed env,
-// granted env, and staging subdirectory — rather than sharing the one process
-// every plugin kind shared before this existed. host.state/host.auth/
-// host.log's existing per-instance "active" scoping (Client.isActive) is now
-// backed by a structural boundary (a sibling instance's requests never even
-// reach this process) rather than bookkeeping alone.
-//
-// A plugin whose operator set shared_process: true on any configured instance
-// (config.ConnectorRef.SharedProcess, unioned across instances in
-// config.PluginRefs) instead shares the ONE persistent client Client(key)
-// already holds — an explicit, documented resource trade-off for an operator
-// running many instances of one plugin, at the cost of the isolation above.
+// plugin-contract.md): by DEFAULT, every configured instance of an external
+// connector plugin SHARES its plugin name+version's one process — the union
+// of every non-isolated instance's grant. An instance that sets isolate:
+// true instead gets its OWN subprocess — its own sandbox, scrubbed env,
+// granted env, and staging subdirectory, confined to exactly its own grant —
+// trading the lower resource cost of sharing for the isolation of a process
+// boundary: a crash, a hang, or a crash-loop in it never touches the shared
+// process or a sibling isolated instance, and host.state/host.auth/
+// host.log's existing per-instance "active" scoping (Client.isActive) is
+// backed by a structural boundary (the shared client's requests never
+// reach this instance's process, and vice versa) rather than bookkeeping
+// alone — see ForbidIsolated for the one case an isolated instance is
+// refused outright instead (its plugin cannot be split into more than one
+// process at all).
 //
 // Meaningless for a runtime or engine key (handled by falling through to the
-// persistent client the same as a SharedProcess connector, since neither has
-// more than one "instance" sharing a Manager key) — only the connector
-// builder path calls this.
+// shared client, since neither has more than one "instance" sharing a
+// Manager key, so spec.Instances is always nil for them) — only the
+// connector builder path calls this.
 func (m *Manager) InstanceClient(key, instance string) (*Client, error) {
 	m.mu.RLock()
 	spec, ok := m.specs[key]
@@ -364,16 +363,11 @@ func (m *Manager) InstanceClient(key, instance string) (*Client, error) {
 	if !ok {
 		return nil, fmt.Errorf("plugin %q not found", key)
 	}
-	// Kind never changes after construction (Reload only ever moves
-	// BinPath/Sha256/Resolved). SharedProcess normally doesn't either — the
-	// one exception is PromoteSharedProcess (the single_process capability's
-	// cold-start fallback), which can flip it false→true, exactly once,
-	// before this key ever gets a per-instance client (it refuses to run
-	// once one exists). So a spec that is ALREADY shared here is safe to
-	// trust immediately; a spec that is NOT (yet) shared must be re-checked
-	// after taking instMu below — the same lock PromoteSharedProcess holds
-	// while it flips the flag — rather than racing ahead on this stale read.
-	if spec.Kind != KindConnector || spec.SharedProcess {
+	if spec.Kind != KindConnector || !spec.Instances[instance].Isolate {
+		// The shared path: every runtime/engine key, and any connector
+		// instance that did not ask for its own process. Isolate is fixed by
+		// config at construction (Reload only ever moves
+		// BinPath/Sha256/Resolved), so this read is safe without instMu.
 		c, ok := m.Client(key)
 		if !ok {
 			return nil, fmt.Errorf("plugin %q not found", key)
@@ -395,18 +389,14 @@ func (m *Manager) InstanceClient(key, instance string) (*Client, error) {
 	if m.closed {
 		return nil, fmt.Errorf("plugin %q: manager is closed", key)
 	}
-	// Re-read under instMu: PromoteSharedProcess may have landed between the
-	// fast-path check above and this lock. A now-shared key falls through to
-	// its (just-created) persistent client instead of starting a per-instance
-	// one it would never need again.
-	m.mu.RLock()
-	spec = m.specs[key]
-	m.mu.RUnlock()
-	if spec.SharedProcess {
-		if c, ok := m.clients[key]; ok {
-			return c, nil
-		}
-		return nil, fmt.Errorf("plugin %q not found", key)
+	// The single_process capability discovered only at a live describe
+	// (ForbidIsolated, cmd/conductor's loadConnectorPlugins): this instance
+	// asked for its own process, but the plugin cannot be split into more
+	// than one at all — refuse it with the recorded reason rather than ever
+	// silently falling back to the shared client it never agreed to share
+	// grants with.
+	if reason, ok := m.forbidden[key][instance]; ok {
+		return nil, fmt.Errorf("plugin %q instance %q: %s", key, instance, reason)
 	}
 	if m.instClients[key] == nil {
 		m.instClients[key] = map[string]*Client{}
@@ -414,9 +404,39 @@ func (m *Manager) InstanceClient(key, instance string) (*Client, error) {
 	if c, ok := m.instClients[key][instance]; ok {
 		return c, nil
 	}
+	// Re-read under m.mu: a Reload that just finished (the wait above) has
+	// updated specs[key]'s BinPath/Sha256/Resolved, and this may be this
+	// instance's very FIRST client — build it from the CURRENT spec, never
+	// the stale one read before the wait, or it would be cached on the old
+	// binary forever (finding 2).
+	m.mu.RLock()
+	spec = m.specs[key]
+	m.mu.RUnlock()
 	c := NewClient(InstanceSpec(spec, instance), m.deps)
 	m.instClients[key][instance] = c
 	return c, nil
+}
+
+// ForbidIsolated refuses isolate: true for one configured connector instance
+// of key, recording reason so any (current or later) InstanceClient call for
+// it fails fast instead of ever building its own process. This is the
+// single_process capability's LATE-discovery path: its live describe
+// revealed Capabilities.SingleProcess only now — no recorded manifest said so
+// ahead of time, which is instead a hard config validation error naming the
+// connector and plugin BEFORE anything spawns (cmd/conductor's
+// loadConnectorPlugins checks the recorded manifest for that case). "Never
+// silently share": an instance that asked for isolation is refused, loud,
+// rather than folded into the shared client.
+func (m *Manager) ForbidIsolated(key, instance, reason string) {
+	m.instMu.Lock()
+	defer m.instMu.Unlock()
+	if m.forbidden == nil {
+		m.forbidden = map[string]map[string]string{}
+	}
+	if m.forbidden[key] == nil {
+		m.forbidden[key] = map[string]string{}
+	}
+	m.forbidden[key][instance] = reason
 }
 
 // InstanceClients returns a snapshot of key's live per-instance clients,
@@ -499,11 +519,11 @@ func (m *Manager) specsOfKind(k Kind) []Spec {
 }
 
 // Reload swaps a plugin's subprocess(es) to newSpec's binary IN PLACE (see
-// Client.Reload) and updates its recorded binary-identity fields. For a
-// per-instance-isolated connector key that means EVERY live per-instance
-// client — one moved plugin binary, every configured instance's process
-// swapped — not just one; a runtime/engine/SharedProcess-connector key has
-// just the one persistent client, as before multi-instance isolation. The
+// Client.Reload) and updates its recorded binary-identity fields: the key's
+// shared client (if it has one) AND every live isolated-instance client —
+// one moved plugin binary, every process it runs as swapped, not just one. A
+// runtime/engine key, or a connector key with no isolated instance, has just
+// the one shared client, as before multi-instance isolation existed. The
 // same *Client pointer(s) stay in place, so every consumer keeps driving the
 // new build with no re-registration. Client.Reload can block draining
 // in-flight calls, so it runs OUTSIDE m.mu.
@@ -534,7 +554,7 @@ func (m *Manager) Reload(key string, newSpec Spec) error {
 	}
 	m.reloading[key] = true
 	var clients []*Client
-	if c, ok := m.clients[key]; ok { // guarded by instMu (PromoteSharedProcess's one write path too)
+	if c, ok := m.clients[key]; ok { // guarded by instMu
 		clients = append(clients, c)
 	}
 	for _, c := range m.instClients[key] {
@@ -600,13 +620,14 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-// StartAndDescribe starts a plugin's PERSISTENT client and returns its
-// self-description — the runtime/engine/SharedProcess-connector registration
-// path, where the client that describes itself is the same one that goes on
-// to serve real traffic. A per-instance-isolated connector key has no
-// persistent client to start; its type-level probe is ProbeDescribe instead,
-// and each configured instance's own client is described separately
-// (externalImpl's per-instance Q6 describe) once InstanceClient creates it.
+// StartAndDescribe starts a plugin's SHARED client and returns its
+// self-description — the runtime/engine/connector-with-a-shared-process
+// registration path, where the client that describes itself is the same one
+// that goes on to serve real (non-isolated) traffic. A connector key whose
+// every instance isolates has no shared client to start; its type-level
+// probe is ProbeDescribe instead, and each isolated instance's own client is
+// described separately (externalImpl's per-instance Q6 describe) once
+// InstanceClient creates it.
 //
 // On any failure the client is left stopped and the error is returned (the
 // caller disables that plugin's type, mirroring the connector convention of
@@ -624,86 +645,30 @@ func (m *Manager) StartAndDescribe(ctx context.Context, name string) (*Decl, err
 	return decl, nil
 }
 
-// PromoteSharedProcess is the single_process capability's COLD-START
-// fallback (SpecFromRef is the steady-state path, reading it from a
-// RECORDED manifest): the first time this boot's own live describe reveals
-// Capabilities.SingleProcess on a key that was built as the default
-// per-instance shape (no manifest had recorded it yet — a local development
-// build, which never gets one at all, or a remote plugin's very first
-// install), this flips that key to the shared shape it should have had from
-// construction, and returns the one persistent client every configured
-// instance will now share.
-//
-// sharedSpec is the caller's responsibility to build correctly: it must be
-// key's existing type-level Spec with SharedProcess set true and reshaped
-// exactly like SpecFromRef's own shared branch — Instances cleared, Probe
-// cleared, Isolation/Network/AllowSecrets/AllowEnv set to the connector
-// ref's UNIONED grant (the same fields a shared_process: true ref's Spec
-// already carries) — so the one process this starts is permitted whatever
-// any of its instances needs, per docs/wiki/Plugins.md "Multi-instance
-// isolation". PromoteSharedProcess itself does not spawn anything —
-// construction is lazy, same as everywhere else in this package; the caller
-// still calls StartAndDescribe(ctx, key) afterward to actually start it (and
-// get its live Decl) through the now-persistent client this created.
-//
-// Refuses once a per-instance client already exists for key (len(instClients
-// [key]) > 0): folding live, already-split per-instance processes back into
-// one — stopping some, keeping another, redirecting in-flight calls — is a
-// disruptive operation this does not attempt; the caller is expected to
-// treat that refusal as a plugin problem (disable the type, log loudly,
-// exactly as every other describe-time failure already does) rather than
-// retry. In the one caller today (cmd/conductor's loadConnectorPlugins) this
-// can never actually happen: the type-level describe that discovers the
-// capability runs BEFORE RegisterExternalConnector hands out the
-// ClientFactory that is the only way a per-instance client ever gets
-// created, so there is nothing to fold yet.
-//
-// Idempotent: calling it again for an already-promoted key (one that
-// already has a persistent client) just returns that same client — a
-// double call (which does not happen on the one caller's path, but costs
-// nothing to make safe) never spawns a second process.
-func (m *Manager) PromoteSharedProcess(key string, sharedSpec Spec) (*Client, error) {
-	m.instMu.Lock()
-	defer m.instMu.Unlock()
-	if m.closed {
-		return nil, fmt.Errorf("plugin %q: manager is closed", key)
-	}
-	if c, ok := m.clients[key]; ok {
-		return c, nil
-	}
-	if len(m.instClients[key]) > 0 {
-		return nil, fmt.Errorf("plugin %q: cannot switch to a single shared process — %d per-instance client(s) are already live", key, len(m.instClients[key]))
-	}
-	m.mu.Lock()
-	if _, ok := m.specs[key]; !ok {
-		m.mu.Unlock()
-		return nil, fmt.Errorf("plugin %q not found", key)
-	}
-	m.specs[key] = sharedSpec
-	m.mu.Unlock()
-	c := NewClient(sharedSpec, m.deps)
-	m.clients[key] = c
-	return c, nil
-}
-
 // ProbeDescribe starts a THROWAWAY client for key's plugin — never retained —
 // describes it, closes it, and returns the Decl. This is the connector
 // type-level describe/install probe multi-instance isolation keeps as a
-// single process (docs/wiki/Plugins.md "Multi-instance isolation"): the
-// type-level Decl (kind, verbs, capabilities) is a property of the installed
-// BINARY, not of any one configured instance, so there is nothing to gain
-// from keeping this particular process running — each configured instance
-// gets its own, separately, the first time InstanceClient is asked for it.
+// single process (docs/wiki/Plugins.md "Multi-instance isolation"), used only
+// when key has NO shared client (every configured instance isolates — Spec.
+// Shared is false): the type-level Decl (kind, verbs, capabilities) is a
+// property of the installed BINARY, not of any one configured instance, so
+// there is nothing to gain from keeping this particular process running —
+// each isolated instance gets its own, separately, the first time
+// InstanceClient is asked for it. When key DOES have a shared client,
+// StartAndDescribe describes THAT one instead — it already holds no
+// instance's traffic until one calls it, so there is nothing left for a
+// separate throwaway probe to buy.
 //
 // Also records the boot surface into Decl(key) (same first-write-wins rule as
 // StartAndDescribe), so hot-reload's SameReloadSurface comparison works the
-// same for a per-instance connector as it always has for everything else.
+// same regardless of which path recorded it.
 //
 // The returned Decl may say Capabilities.SingleProcess — this throwaway
 // process is still the right one to learn that from (it is a pure
-// self-description either way), but the caller must act on it: it means
-// this key should not stay per-instance-isolated after all. See
-// PromoteSharedProcess, which the caller invokes next in that case.
+// self-description either way). The caller (cmd/conductor's
+// loadConnectorPlugins) acts on it: every one of this key's (necessarily all
+// isolated, since there is no shared client) configured instances is then
+// refused via ForbidIsolated rather than silently started anyway.
 func (m *Manager) ProbeDescribe(ctx context.Context, key string) (*Decl, error) {
 	m.mu.RLock()
 	spec, ok := m.specs[key]

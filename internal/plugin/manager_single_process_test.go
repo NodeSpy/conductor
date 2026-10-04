@@ -9,25 +9,27 @@ import (
 )
 
 // The single_process capability (pkg/plugin/wire.go Capabilities.
-// SingleProcess) is a plugin's own override of multi-instance isolation
-// (manager_instance_test.go): a plugin that keeps a box-global resource every
-// configured instance must agree on (the tailscale exposure plugin's funnel
-// lease refcount is the motivating case, docs/design/plugin-contract.md)
-// gets the shared-process path regardless of the operator's own
-// shared_process: setting. These tests drive the real acme-echo subprocess,
-// built with its singleProcess build flag set (buildExamplePluginSingleProcess,
-// integration_test.go), through the COLD-START promotion path
-// (Manager.PromoteSharedProcess) cmd/conductor's loadConnectorPlugins takes
-// the first time a boot ever learns the capability live — exactly the path a
-// freshly-added or locally-built single_process plugin takes.
+// SingleProcess) is a plugin's own declaration that it keeps a box-global
+// resource every configured instance must agree on (the tailscale exposure
+// plugin's funnel lease refcount is the motivating case,
+// docs/design/plugin-contract.md). Since sharing one process is now the
+// DEFAULT (docs/wiki/Plugins.md "Multi-instance isolation"), a single_process
+// plugin configured with no isolate: true anywhere needs NO special handling
+// at all — it is already served by the one shared process every other
+// plugin's non-isolated instances share. The capability only matters once an
+// operator asks for isolate: true on one of its instances: that request
+// cannot be honored, and must be refused rather than silently folded back
+// into the shared process (Manager.ForbidIsolated) — see cmd/conductor's
+// loadConnectorPlugins for the full sequence (including the hard config
+// validation error for the case the capability is already KNOWN from a
+// recorded install manifest, which this package has no install-manifest
+// fixture to drive end to end).
 
 // managerWithLocalSingleProcessPlugin builds a Manager for one connector
-// plugin reference resolved as a local `use:` build, WITHOUT shared_process:
-// set — the default per-instance shape SpecFromRef gives it, since a local
-// reference never gets a recorded manifest (single_process is not knowable
-// ahead of a live describe for one). singleProcess selects whether the
-// fixture's own Decl declares the capability.
-func managerWithLocalSingleProcessPlugin(t *testing.T, singleProcess bool) (mgr *Manager, ref config.PluginRef, key string) {
+// plugin reference resolved as a local `use:` build. singleProcess selects
+// whether the fixture's own Decl declares the capability; isolated names the
+// configured instances (if any) that set isolate: true.
+func managerWithLocalSingleProcessPlugin(t *testing.T, singleProcess bool, isolated ...string) (mgr *Manager, key string) {
 	t.Helper()
 	var bin string
 	if singleProcess {
@@ -38,26 +40,32 @@ func managerWithLocalSingleProcessPlugin(t *testing.T, singleProcess bool) (mgr 
 	config.SetStateDir(t.TempDir())
 	t.Cleanup(func() { config.SetStateDir("") })
 
-	ref = refFor(t, config.UseKindConnector, bin)
+	ref := refFor(t, config.UseKindConnector, bin)
+	iso := map[string]bool{}
+	for _, n := range isolated {
+		iso[n] = true
+	}
+	ref.Instances = map[string]config.ConnectorGrant{
+		"a": {Isolate: iso["a"]},
+		"b": {Isolate: iso["b"]},
+	}
 	key = ref.Key()
 	state := LoadInstallState(InstallDir())
 	mgr = NewManager(map[string]config.PluginRef{key: ref}, "", state, Deps{
 		CallTimeout: 5 * time.Second,
 		State:       NewStateStore(t.TempDir()),
 	})
-	return mgr, ref, key
+	return mgr, key
 }
 
-// TestPromoteSharedProcessFoldsSingleProcessPluginIntoOneProcess is the
-// headline guarantee: a plugin that declares single_process, configured as
-// TWO instances with no shared_process: set anywhere, ends up served by ONE
-// process (one pid) once the host follows the same cold-start sequence
-// cmd/conductor's loadConnectorPlugins does — ProbeDescribe (learns the
-// capability), PromoteSharedProcess (flips the key's shape), StartAndDescribe
-// (starts the real, kept-running process) — and BOTH configured instances
-// are served by that same client, never a per-instance one.
-func TestPromoteSharedProcessFoldsSingleProcessPluginIntoOneProcess(t *testing.T) {
-	mgr, ref, key := managerWithLocalSingleProcessPlugin(t, true)
+// TestSingleProcessPluginWithNoIsolatedInstanceNeedsNoPromotion proves the
+// new default needs no special-case machinery at all: a plugin that declares
+// single_process, configured as TWO instances with neither isolate: true, is
+// already served by ONE shared process (Spec.Shared, the default) — no
+// cold-start promotion step required, since there was never a per-instance
+// shape to fold back from.
+func TestSingleProcessPluginWithNoIsolatedInstanceNeedsNoPromotion(t *testing.T) {
+	mgr, key := managerWithLocalSingleProcessPlugin(t, true)
 	defer mgr.Close()
 	ctx := context.Background()
 
@@ -65,37 +73,16 @@ func TestPromoteSharedProcessFoldsSingleProcessPluginIntoOneProcess(t *testing.T
 	if !ok {
 		t.Fatal("spec not found")
 	}
-	if spec.SharedProcess {
-		t.Fatal("a local plugin with no recorded manifest must start in the default per-instance shape, not already shared")
+	if !spec.Shared {
+		t.Fatal("a connector with no isolated instance must already be Shared = true, single_process or not")
 	}
 
-	decl, err := mgr.ProbeDescribe(ctx, key)
+	decl, err := mgr.StartAndDescribe(ctx, key)
 	if err != nil {
-		t.Fatalf("ProbeDescribe: %v", err)
+		t.Fatalf("StartAndDescribe: %v", err)
 	}
 	if !decl.Capabilities.SingleProcess {
 		t.Fatal("fixture built with singleProcess=true must declare Capabilities.SingleProcess")
-	}
-
-	// Build the shared Spec exactly as loadConnectorPlugins' promotion does:
-	// the type-level spec, reshaped to the SharedProcess branch's fields.
-	shared := spec
-	shared.SharedProcess = true
-	shared.Instances, shared.Probe = nil, false
-	shared.Isolation, shared.IsolationDefaulted = ref.Isolation, ref.IsolationDefaulted
-	shared.Network, shared.AllowSecrets, shared.AllowEnv = ref.Network, ref.AllowSecrets, ref.AllowEnv
-
-	promoted, err := mgr.PromoteSharedProcess(key, shared)
-	if err != nil {
-		t.Fatalf("PromoteSharedProcess: %v", err)
-	}
-	if _, err := mgr.StartAndDescribe(ctx, key); err != nil {
-		t.Fatalf("StartAndDescribe after promotion: %v", err)
-	}
-
-	// The Manager's own spec now reflects the shared shape too.
-	if s, _ := mgr.Spec(key); !s.SharedProcess {
-		t.Fatalf("Manager.Spec must reflect the promotion, got %+v", s)
 	}
 
 	a, err := mgr.InstanceClient(key, "a")
@@ -106,11 +93,8 @@ func TestPromoteSharedProcessFoldsSingleProcessPluginIntoOneProcess(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a != promoted || b != promoted {
-		t.Fatalf("every instance must be served by the SAME promoted client, got a=%v b=%v want %v", a, b, promoted)
-	}
 	if a != b {
-		t.Fatal("two configured instances must get the SAME *Client once promoted")
+		t.Fatal("both instances must be served by the SAME shared client")
 	}
 
 	echoFrom(t, a, "a", "hello-a")
@@ -123,61 +107,71 @@ func TestPromoteSharedProcessFoldsSingleProcessPluginIntoOneProcess(t *testing.T
 	if pidA != pidB {
 		t.Fatalf("single_process must fold both instances onto ONE process; got two pids %d and %d", pidA, pidB)
 	}
-
-	// No per-instance client was ever created — both instances were served
-	// by the promoted persistent client from the start.
 	if n := len(mgr.InstanceClients(key)); n != 0 {
-		t.Fatalf("single_process must never create a per-instance client; got %d", n)
+		t.Fatalf("no isolated instance was ever configured; expected no per-instance client, got %d", n)
 	}
 }
 
-// TestPromoteSharedProcessRefusesOncePerInstanceClientsExist: folding
-// already-split per-instance processes back into one mid-flight is
-// disruptive (stopping some, keeping another, redirecting in-flight calls)
-// and out of scope — PromoteSharedProcess must refuse once this key already
-// has a live per-instance client, rather than silently discarding it.
-func TestPromoteSharedProcessRefusesOncePerInstanceClientsExist(t *testing.T) {
-	mgr, _, key := managerWithLocalSingleProcessPlugin(t, false)
-	defer mgr.Close()
-
-	if _, err := mgr.InstanceClient(key, "a"); err != nil {
-		t.Fatal(err)
-	}
-	spec, _ := mgr.Spec(key)
-	shared := spec
-	shared.SharedProcess = true
-	if _, err := mgr.PromoteSharedProcess(key, shared); err == nil {
-		t.Fatal("PromoteSharedProcess must refuse once a per-instance client already exists")
-	}
-}
-
-// TestPromoteSharedProcessUnknownKey: a key the Manager never resolved
-// (misuse, or a stale key from a reload race) must be refused, not silently
-// create a client for nothing.
-func TestPromoteSharedProcessUnknownKey(t *testing.T) {
-	mgr, _, _ := managerWithLocalSingleProcessPlugin(t, false)
-	defer mgr.Close()
-	if _, err := mgr.PromoteSharedProcess("connectors/does-not-exist", Spec{}); err == nil {
-		t.Fatal("PromoteSharedProcess must refuse an unknown key")
-	}
-}
-
-// TestPluginWithoutSingleProcessStaysPerInstance is the negative case this
-// whole mechanism must leave alone: a plugin that does NOT declare
-// single_process (the ordinary acme-echo build) still gets the default
-// per-instance-isolated shape end to end — ProbeDescribe reports no
-// capability, nothing promotes it, and InstanceClient keeps handing out a
-// distinct *Client (and process) per configured instance, exactly as
-// TestInstanceClientGivesEachInstanceItsOwnProcess (manager_instance_test.go)
-// already proves for the plain default path.
-func TestPluginWithoutSingleProcessStaysPerInstance(t *testing.T) {
-	mgr, _, key := managerWithLocalSingleProcessPlugin(t, false)
+// TestForbidIsolatedRefusesSingleProcessPluginsIsolatedInstance is the
+// late-discovery path end to end against the real fixture: an operator
+// configures one shared instance and one isolate: true instance of a plugin
+// that (only discoverable by describing it) requires single_process. The
+// shared instance keeps working normally; the isolated one must be refused,
+// never silently served by the shared process it never agreed to share
+// grants with.
+func TestForbidIsolatedRefusesSingleProcessPluginsIsolatedInstance(t *testing.T) {
+	mgr, key := managerWithLocalSingleProcessPlugin(t, true, "b")
 	defer mgr.Close()
 	ctx := context.Background()
 
-	decl, err := mgr.ProbeDescribe(ctx, key)
+	spec, ok := mgr.Spec(key)
+	if !ok {
+		t.Fatal("spec not found")
+	}
+	if !spec.Shared {
+		t.Fatal("instance a does not isolate, so this key must still have a shared process")
+	}
+
+	decl, err := mgr.StartAndDescribe(ctx, key)
 	if err != nil {
-		t.Fatalf("ProbeDescribe: %v", err)
+		t.Fatalf("StartAndDescribe: %v", err)
+	}
+	if !decl.Capabilities.SingleProcess {
+		t.Fatal("fixture built with singleProcess=true must declare Capabilities.SingleProcess")
+	}
+
+	// The sequence cmd/conductor's loadConnectorPlugins runs once it sees
+	// Capabilities.SingleProcess: forbid every instance that asked for its
+	// own process.
+	mgr.ForbidIsolated(key, "b", "plugin declares single_process — isolate: true is not possible for it")
+
+	a, err := mgr.InstanceClient(key, "a")
+	if err != nil {
+		t.Fatalf("the non-isolated instance must still resolve: %v", err)
+	}
+	echoFrom(t, a, "a", "hello-a")
+
+	if _, err := mgr.InstanceClient(key, "b"); err == nil {
+		t.Fatal("the isolated instance must be refused once single_process is discovered, got no error")
+	}
+	if n := len(mgr.InstanceClients(key)); n != 0 {
+		t.Fatalf("a refused isolated instance must never get a client; got %d", n)
+	}
+}
+
+// TestPluginWithoutSingleProcessHonorsIsolate is the negative case this whole
+// mechanism must leave alone: a plugin that does NOT declare single_process
+// (the ordinary acme-echo build) honors isolate: true normally — the
+// isolated instance gets its own distinct process, the non-isolated one
+// shares the default.
+func TestPluginWithoutSingleProcessHonorsIsolate(t *testing.T) {
+	mgr, key := managerWithLocalSingleProcessPlugin(t, false, "b")
+	defer mgr.Close()
+	ctx := context.Background()
+
+	decl, err := mgr.StartAndDescribe(ctx, key)
+	if err != nil {
+		t.Fatalf("StartAndDescribe: %v", err)
 	}
 	if decl.Capabilities.SingleProcess {
 		t.Fatal("the plain fixture build must not declare single_process")
@@ -192,11 +186,11 @@ func TestPluginWithoutSingleProcessStaysPerInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	if a == b {
-		t.Fatal("without single_process, two configured instances must still get distinct *Client values")
+		t.Fatal("instance b isolates; it must get its own *Client, distinct from a's shared one")
 	}
 	echoFrom(t, a, "a", "hello-a")
 	echoFrom(t, b, "b", "hello-b")
 	if a.PID() == b.PID() {
-		t.Fatalf("without single_process, two instances must run as two distinct processes; both reported pid %d", a.PID())
+		t.Fatalf("instance b must run as its own distinct process; both reported pid %d", a.PID())
 	}
 }
