@@ -46,3 +46,12 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes
+
+      # conductor fetches releases from git refs (refs/dist/<tag>/<os>_<arch>,
+      # internal/plugin/gitdist.go), not from the release assets, so a box can
+      # self-update from any git host with no API token.
+      - name: Publish binaries as git refs (refs/dist/<tag>/<platform>)
+        run: |
+          git config user.name "release"
+          git config user.email "release@users.noreply.github.com"
+          scripts/publish-dist.sh "${GITHUB_REF_NAME}" dist conductor
