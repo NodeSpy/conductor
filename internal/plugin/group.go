@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"fmt"
 	"path/filepath"
 	"sort"
 
@@ -102,7 +103,72 @@ func groupRef(ref config.PluginRef, configDir string, state *InstallState) []res
 
 	out := make([]resolvedGroup, 0, len(order))
 	for _, d := range order {
-		out = append(out, resolvedGroup{ref: narrowRef(ref, byDisc[d].names), discriminator: d})
+		// Finding 2 (security): two instances that resolved to the SAME
+		// version are not automatically one process — their isolation:
+		// blocks must actually combine (config.CombineIsolation). A version
+		// bucket whose non-isolated instances carry incompatible blocks
+		// (e.g. a pin and a range landing on the same release, each
+		// deny:true with different egress) is split further, by isolation
+		// compatibility, so each incompatible instance gets its OWN process
+		// running under exactly ITS OWN declared isolation — never a
+		// silently-picked, conflict-dropping merge (narrowRef enforces this
+		// as a hard invariant; see its comment).
+		clusters := splitByIsolation(byDisc[d].names, ref.Instances)
+		multiIso := len(clusters) > 1
+		for i, names := range clusters {
+			disc := d
+			if multiIso {
+				disc = fmt.Sprintf("%s~iso%d", d, i+1)
+			}
+			out = append(out, resolvedGroup{ref: narrowRef(ref, names), discriminator: disc})
+		}
+	}
+	return out
+}
+
+// splitByIsolation partitions one resolved-version bucket's instance names
+// into the fewest clusters whose SHARED (isolate: false) instances' isolation:
+// blocks actually combine into one (config.CombineIsolation) — greedy
+// first-fit over names in their given (sorted, so deterministic) order. An
+// isolate: true instance never conflicts with anything here (it always gets
+// its own process downstream regardless of which cluster carries it for
+// bookkeeping), so every isolated instance is folded into cluster 0 — the
+// one cluster that always exists, keeping the single-cluster case's output
+// identical to before this split existed.
+func splitByIsolation(names []string, instances map[string]config.ConnectorGrant) [][]string {
+	type cluster struct {
+		names []string
+		iso   *config.IsolationConfig
+	}
+	var clusters []*cluster
+	var isolated []string
+	for _, n := range names {
+		g := instances[n]
+		if g.Isolate {
+			isolated = append(isolated, n)
+			continue
+		}
+		placed := false
+		for _, c := range clusters {
+			if merged, ok := config.CombineIsolation(c.iso, g.Isolation); ok {
+				c.iso = merged
+				c.names = append(c.names, n)
+				placed = true
+				break
+			}
+		}
+		if !placed {
+			clusters = append(clusters, &cluster{names: []string{n}, iso: g.Isolation})
+		}
+	}
+	if len(clusters) == 0 {
+		clusters = append(clusters, &cluster{})
+	}
+	clusters[0].names = append(clusters[0].names, isolated...)
+	out := make([][]string, len(clusters))
+	for i, c := range clusters {
+		sort.Strings(c.names)
+		out[i] = c.names
 	}
 	return out
 }
@@ -140,6 +206,15 @@ func discriminatorFor(u config.Use, name, configDir string, state *InstallState)
 // to one representative instance's own reference (every instance in names
 // resolved to the identical concrete build, by construction, so which one's
 // constraint TEXT is shown is cosmetic).
+//
+// Finding 2 (security): names is REQUIRED to already be isolation-compatible
+// — groupRef's splitByIsolation is narrowRef's ONLY caller, and it never
+// hands this function a set whose non-isolated instances' isolation: blocks
+// fail to combine. If CombineIsolation ever disagrees here anyway, that is a
+// bug in that pre-split, not a condition this function may paper over by
+// silently keeping one side and dropping the other — it panics, loudly,
+// naming both instances, rather than ever running one of them under
+// isolation it did not declare (the vulnerability this fix closes).
 func narrowRef(ref config.PluginRef, names []string) config.PluginRef {
 	out := ref
 	out.Instances = make(map[string]config.ConnectorGrant, len(names))
@@ -147,6 +222,7 @@ func narrowRef(ref config.PluginRef, names []string) config.PluginRef {
 	rep := names[0]
 	out.Use = ref.Instances[rep].Use
 	out.Instance = rep
+	isoFrom := ""
 	for _, n := range names {
 		g := ref.Instances[n]
 		out.Instances[n] = g
@@ -156,11 +232,15 @@ func narrowRef(ref config.PluginRef, names []string) config.PluginRef {
 		out.Network = config.AppendUnique(out.Network, g.Network...)
 		out.AllowSecrets = config.AppendUnique(out.AllowSecrets, g.AllowSecrets...)
 		out.AllowEnv = config.AppendUnique(out.AllowEnv, g.AllowEnv...)
-		if merged, ok := config.CombineIsolation(out.Isolation, g.Isolation); ok {
-			out.Isolation = merged
-		} else if out.Isolation == nil {
-			out.Isolation = g.Isolation
+		if out.Isolation == nil && isoFrom == "" {
+			out.Isolation, isoFrom = g.Isolation, n
+			continue
 		}
+		merged, ok := config.CombineIsolation(out.Isolation, g.Isolation)
+		if !ok {
+			panic(fmt.Sprintf("plugin %s: instances %s and %s resolved to the same process group with isolation: blocks that do not combine — this must never happen (groupRef's isolation split is supposed to prevent it); this is a bug, not a config error", ref.Name, isoFrom, n))
+		}
+		out.Isolation = merged
 	}
 	return out
 }
