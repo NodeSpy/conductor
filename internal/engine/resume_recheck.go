@@ -81,13 +81,13 @@ func resumeRecheckWait(mintErr error, attempt int) time.Duration {
 			return w
 		}
 	}
-	sched := resumeRecheckBackoff
+	minWait, sched := deferTimings()
 	if attempt >= len(sched) {
 		attempt = len(sched) - 1
 	}
 	wait := sched[attempt]
-	if wait < minDeferredWait {
-		wait = minDeferredWait
+	if wait < minWait {
+		wait = minWait
 	}
 	return wait
 }

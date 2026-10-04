@@ -88,6 +88,9 @@ func TestUpdateDefaults(t *testing.T) {
 
 // TestStateDir proves StateDir always resolves to ~/.local/state/conductor.
 func TestStateDir(t *testing.T) {
+	// StateDir honors XDG_STATE_HOME; clear it so the HOME default is what
+	// these subtests see, whatever the developer's environment sets.
+	t.Setenv("XDG_STATE_HOME", "")
 	t.Run("resolves to the conductor state dir", func(t *testing.T) {
 		tmp := t.TempDir()
 		t.Setenv("HOME", tmp)

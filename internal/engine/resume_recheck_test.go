@@ -19,11 +19,9 @@ import (
 // starting) must recover on its own, within the SAME daemon run, once the
 // scheduled recheck fires.
 func TestResumeRecheckRecoversAfterATransientMintError(t *testing.T) {
-	oldBackoff, oldMin := resumeRecheckBackoff, minDeferredWait
 	// Long enough that "not dispatched yet" right after ResumeWorkflows is
 	// a real check, not a race with a 1ms timer under a loaded -race run.
-	resumeRecheckBackoff, minDeferredWait = []time.Duration{500 * time.Millisecond}, time.Millisecond
-	t.Cleanup(func() { resumeRecheckBackoff, minDeferredWait = oldBackoff, oldMin })
+	setDeferTimings(t, time.Millisecond, []time.Duration{500 * time.Millisecond})
 
 	d := newStepFake()
 	st := tempStore(t)
@@ -73,9 +71,7 @@ func TestResumeRecheckRecoversAfterATransientMintError(t *testing.T) {
 // start — not rechecked forever, and not left with zero further attempts
 // either (the bug this replaces).
 func TestResumeRecheckGivesUpAfterMaxAttempts(t *testing.T) {
-	oldBackoff, oldMin := resumeRecheckBackoff, minDeferredWait
-	resumeRecheckBackoff, minDeferredWait = []time.Duration{time.Millisecond}, time.Millisecond
-	t.Cleanup(func() { resumeRecheckBackoff, minDeferredWait = oldBackoff, oldMin })
+	setDeferTimings(t, time.Millisecond, []time.Duration{time.Millisecond})
 
 	d := newStepFake()
 	st := tempStore(t)

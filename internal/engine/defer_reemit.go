@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/connector"
@@ -109,6 +110,18 @@ func (e *Engine) clearDeferred(dk string) {
 // restore it when done.
 var minDeferredWait = time.Second
 
+// deferTimingMu guards minDeferredWait and resumeRecheckBackoff. A deferred
+// re-emit or resume recheck reads them from its own timer goroutine, which
+// can outlive the call that scheduled it; tests shorten them.
+var deferTimingMu sync.RWMutex
+
+// deferTimings reads the deferral timing knobs.
+func deferTimings() (minWait time.Duration, backoff []time.Duration) {
+	deferTimingMu.RLock()
+	defer deferTimingMu.RUnlock()
+	return minDeferredWait, resumeRecheckBackoff
+}
+
 // deferralWait computes the wait before the attempt-th (0-based) deferred
 // re-emit for ce, and whether to defer at all:
 //
@@ -130,8 +143,8 @@ func deferralWait(ce *connector.ContractError, attempt int) (time.Duration, bool
 		if wait > connector.RateLimitCap {
 			wait = connector.RateLimitCap
 		}
-		if wait < minDeferredWait {
-			wait = minDeferredWait
+		if minWait, _ := deferTimings(); wait < minWait {
+			wait = minWait
 		}
 		return wait, true
 	case ce.IsNotReady():
@@ -140,8 +153,8 @@ func deferralWait(ce *connector.ContractError, attempt int) (time.Duration, bool
 			return 0, false
 		}
 		wait := sched[attempt]
-		if wait < minDeferredWait {
-			wait = minDeferredWait
+		if minWait, _ := deferTimings(); wait < minWait {
+			wait = minWait
 		}
 		return wait, true
 	}

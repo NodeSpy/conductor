@@ -25,9 +25,7 @@ import (
 // non-deferrable error) — clearDeferredFor, called by process()/remediate(),
 // never by the AfterFunc itself.
 func TestDeferredReemitCapsConsecutiveRateLimitedAnswers(t *testing.T) {
-	oldMin := minDeferredWait
-	minDeferredWait = time.Millisecond
-	t.Cleanup(func() { minDeferredWait = oldMin })
+	setDeferTimings(t, time.Millisecond, nil)
 
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, baseCfg(), d, n, nil)
@@ -153,7 +151,7 @@ func TestDeferredReemitEnforcesAMinimumDelay(t *testing.T) {
 	if !ok {
 		t.Fatal("a tiny positive retry_after must still be deferrable")
 	}
-	if wait < minDeferredWait {
-		t.Fatalf("wait = %s, want at least minDeferredWait (%s)", wait, minDeferredWait)
+	if minWait, _ := deferTimings(); wait < minWait {
+		t.Fatalf("wait = %s, want at least minDeferredWait (%s)", wait, minWait)
 	}
 }

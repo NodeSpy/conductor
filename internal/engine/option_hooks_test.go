@@ -146,17 +146,18 @@ triggers:
 	if len(feedbackCalls()) != 1 {
 		t.Fatalf("want exactly one feedback call (on_fail only, no on_done), got %d", len(feedbackCalls()))
 	}
-	st.mu.Lock()
-	var failed bool
-	for _, a := range st.audits {
-		if a["event"] == "workflow_failed" {
-			failed = true
+	// The fail hook can fire before the run's own failure audit lands; wait
+	// for it rather than racing it.
+	waitCond(t, "the workflow recorded as failed", func() bool {
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		for _, a := range st.audits {
+			if a["event"] == "workflow_failed" {
+				return true
+			}
 		}
-	}
-	st.mu.Unlock()
-	if !failed {
-		t.Fatal("want the workflow recorded as failed")
-	}
+		return false
+	})
 }
 
 func TestOptionHooksAbsentOptionsFireNothing(t *testing.T) {
