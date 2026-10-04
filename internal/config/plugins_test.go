@@ -264,7 +264,7 @@ func TestCheckIsolationMergeRefusesIncompatibleBlocks(t *testing.T) {
 
 // TestCheckIsolationMergeCombinesNetwork is the merge rule's other half: two
 // non-isolated instances whose isolation: blocks are identical except for
-// `network:` must combine — Deny ORs, Egress unions — exactly like the
+// `network:` must combine — advisory egress lists union, exactly like the
 // plain Network/AllowSecrets/AllowEnv union above them.
 func TestCheckIsolationMergeCombinesNetwork(t *testing.T) {
 	c := &Config{ConnectorsMap: map[string]ConnectorRef{
@@ -281,6 +281,55 @@ func TestCheckIsolationMergeCombinesNetwork(t *testing.T) {
 	}
 	if len(got.Isolation.Network.Egress) != 2 {
 		t.Fatalf("merged egress must union both instances': %v", got.Isolation.Network.Egress)
+	}
+}
+
+// A deny is a promise of no network beyond the instance's own allowlist: a
+// sibling that shares its process must make the same promise. Otherwise the
+// sibling's egress would open a path the denying instance never asked for.
+func TestCheckIsolationMergeRefusesADenyMismatch(t *testing.T) {
+	deny := &IsolationConfig{Mode: "namespace", Network: &IsolationNetwork{Deny: true}}
+	for name, sibling := range map[string]*IsolationConfig{
+		"sibling egress":     {Mode: "namespace", Network: &IsolationNetwork{Egress: []string{"evil.example:443"}}},
+		"sibling no block":   nil,
+		"sibling no net":     {Mode: "namespace"},
+		"deny, other egress": {Mode: "namespace", Network: &IsolationNetwork{Deny: true, Egress: []string{"evil.example:443"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := &Config{ConnectorsMap: map[string]ConnectorRef{
+				"a": {Use: "acme/p/jira", Isolation: deny},
+				"b": {Use: "acme/p/jira", Isolation: sibling},
+			}}
+			if err := c.validatePluginRefs(); err == nil {
+				got := c.PluginRefs()["connectors/jira"].Isolation
+				t.Fatalf("a deny merged with %s was accepted: shared process runs under %+v", name, got)
+			}
+		})
+	}
+	t.Run("identical deny blocks share", func(t *testing.T) {
+		c := &Config{ConnectorsMap: map[string]ConnectorRef{
+			"a": {Use: "acme/p/jira", Isolation: &IsolationConfig{Mode: "namespace", Network: &IsolationNetwork{Deny: true, Egress: []string{"x.example:443"}}}},
+			"b": {Use: "acme/p/jira", Isolation: &IsolationConfig{Mode: "namespace", Network: &IsolationNetwork{Deny: true, Egress: []string{"x.example:443"}}}},
+		}}
+		if err := c.validatePluginRefs(); err != nil {
+			t.Fatalf("identical deny blocks must share a process: %v", err)
+		}
+		got := c.PluginRefs()["connectors/jira"].Isolation.Network
+		if !got.Deny || len(got.Egress) != 1 {
+			t.Fatalf("merged network must stay the shared deny block: %+v", got)
+		}
+	})
+}
+
+// Mode alone differing is a conflict too (namespace and user are different
+// sandboxes, not points on one scale).
+func TestCheckIsolationMergeRefusesAModeOnlyMismatch(t *testing.T) {
+	c := &Config{ConnectorsMap: map[string]ConnectorRef{
+		"a": {Use: "acme/p/jira", Isolation: &IsolationConfig{Mode: "namespace"}},
+		"b": {Use: "acme/p/jira", Isolation: &IsolationConfig{Mode: "user"}},
+	}}
+	if err := c.validatePluginRefs(); err == nil {
+		t.Fatal("namespace and user isolation were merged into one process")
 	}
 }
 

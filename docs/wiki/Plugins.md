@@ -435,9 +435,13 @@ you're willing to share, or isolate the instance that needs to be kept
 separate).
 
 Two non-isolated instances' `isolation:` blocks must actually combine into
-ONE block the shared process can run under. `network:`'s `egress`/`deny`
-combine the same way `network:`/`allow_secrets:`/`allow_env:` already do —
-union the egress, OR the deny — but every other field (`mode`, `container`,
+ONE block the shared process can run under. Advisory `network: {egress: …}`
+lists union, the same way `network:`/`allow_secrets:`/`allow_env:` do. A
+`deny: true` is a promise of no network beyond that instance's own allowlist,
+so a sibling can share its process only with the identical promise (deny,
+same egress). Anything else is a config error rather than a merge: a merge
+would either open a path the denying instance never asked for, or cut the
+sibling's network. Every other field (`mode`, `container`,
 `limits`, `privileged`, `allow_root`) is a choice of WHICH sandbox shape to
 run, not a point on a shared strictness scale: `mode: namespace` and `mode:
 container` are different, not comparable. Two non-isolated instances

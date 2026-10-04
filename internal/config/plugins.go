@@ -213,38 +213,81 @@ func mergeIsolationBestEffort(a, b *IsolationConfig) *IsolationConfig {
 // mismatch there is a conflict (reported as a config error), never resolved
 // by picking one. Network is the one dimension that DOES have a natural join,
 // the same "widen, never narrow a grant into something neither side asked
-// for" shape Network/AllowSecrets/AllowEnv already use: Deny is OR'd (either
-// instance asking the network be cut takes effect) and Egress is unioned —
-// the shared process must be permitted whatever any of its instances needs,
-// exactly like the network/allow_secrets/allow_env union above it.
+// for" shape Network/AllowSecrets/AllowEnv already use, but only while
+// neither instance denies: two advisory egress lists union, since the shared
+// process must be permitted whatever any of its instances needs. `deny: true`
+// is a promise of no network beyond the instance's own allowlist, so a
+// sibling must make the SAME promise (deny, with the same egress) to share
+// its process. Otherwise the sibling's egress would open a path the denying
+// instance never asked for, or the deny would cut the sibling's network. That
+// mismatch is a conflict (a missing block counts as no deny); isolate: true
+// gives either instance its own process.
 func combineIsolation(a, b *IsolationConfig) (*IsolationConfig, bool) {
-	if a == nil {
-		return b, true
-	}
-	if b == nil {
-		return a, true
+	if a == nil || b == nil {
+		other := a
+		if other == nil {
+			other = b
+		}
+		if other != nil && other.Network != nil && other.Network.Deny {
+			return nil, false // one denies, the other wrote no block: no deny
+		}
+		return other, true
 	}
 	ac, bc := *a, *b
 	ac.Network, bc.Network = nil, nil
 	if !reflect.DeepEqual(ac, bc) {
 		return nil, false
 	}
+	net, ok := combineIsolationNetwork(a.Network, b.Network)
+	if !ok {
+		return nil, false
+	}
 	merged := *a
-	merged.Network = combineIsolationNetwork(a.Network, b.Network)
+	merged.Network = net
 	return &merged, true
 }
 
-func combineIsolationNetwork(a, b *IsolationNetwork) *IsolationNetwork {
+// combineIsolationNetwork joins two network blocks for one shared process:
+// advisory egress lists union; a deny must be matched exactly (both deny,
+// with the same egress), or the instances can't share a process.
+func combineIsolationNetwork(a, b *IsolationNetwork) (*IsolationNetwork, bool) {
+	aDeny, bDeny := a != nil && a.Deny, b != nil && b.Deny
+	if aDeny || bDeny {
+		if !aDeny || !bDeny || !sameSet(a.Egress, b.Egress) {
+			return nil, false
+		}
+		return a, true
+	}
 	if a == nil {
-		return b
+		return b, true
 	}
 	if b == nil {
-		return a
+		return a, true
 	}
-	return &IsolationNetwork{
-		Egress: appendUnique(append([]string(nil), a.Egress...), b.Egress...),
-		Deny:   a.Deny || b.Deny,
+	return &IsolationNetwork{Egress: appendUnique(append([]string(nil), a.Egress...), b.Egress...)}, true
+}
+
+// sameSet reports whether two string lists hold the same members.
+func sameSet(a, b []string) bool {
+	seen := map[string]bool{}
+	for _, x := range a {
+		seen[x] = true
 	}
+	for _, x := range b {
+		if !seen[x] {
+			return false
+		}
+	}
+	other := map[string]bool{}
+	for _, x := range b {
+		other[x] = true
+	}
+	for _, x := range a {
+		if !other[x] {
+			return false
+		}
+	}
+	return true
 }
 
 // PluginRefs derives the set of external plugins this config needs: every

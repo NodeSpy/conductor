@@ -595,9 +595,9 @@ func InstancesUsingPlugin(r *Registry, groupKey string) []PluginInstanceDecl {
 // connector instance's plugin client (0, false for a non-plugin Impl, an
 // in-process builtin, or a plugin that has not started yet). Purely
 // observational — e.g. `conductor connectors ls` and the e2e suite's
-// distinct-process check (multi-instance isolation, docs/wiki/Plugins.md):
-// two configured instances of one external plugin get two different pids by
-// default, since each now runs its own process.
+// process checks (multi-instance isolation, docs/wiki/Plugins.md): instances
+// of one plugin version share one pid by default; an `isolate: true`
+// instance, or one on a different version, has its own.
 func InstancePID(in *Instance) (int, bool) {
 	if in == nil || in.Impl == nil {
 		return 0, false
