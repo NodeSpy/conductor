@@ -146,6 +146,10 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 	// stalled binary read or sandbox preflight) with no deadline.
 	ctx, cancel := context.WithTimeout(context.Background(), pluginBootTimeout)
 	defer cancel()
+	// refs backs the single_process cold-start promotion below (a live
+	// describe's own ref, to rebuild its Spec in the shared shape) — the
+	// same derived set the Manager itself was built from.
+	refs := cfg.PluginRefs()
 	var registered []string
 	rollback := func() {
 		for _, t := range registered {
@@ -203,6 +207,44 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			registered = append(registered, spec.Provides)
 			logf("plugin %s: FAILED TO START (%v) — its connectors are disabled; every other connector, trigger and run proceeds", spec.Name, err)
 			continue
+		}
+		// single_process COLD START (docs/wiki/Plugins.md "Multi-instance
+		// isolation"): the common case already has this baked into spec
+		// from construction (SpecFromRef reads it off the RECORDED
+		// manifest, so spec.SharedProcess is already true and the describe
+		// above already ran through StartAndDescribe, on the real kept
+		// process). This is the first time EVER this boot learns the
+		// capability — no manifest had recorded it yet (a local
+		// development build, which never gets one at all, or this
+		// connector's very first install) — so the throwaway probe above
+		// ran instead, and must now be superseded: flip this key to the
+		// shared shape (Manager.PromoteSharedProcess), start its real,
+		// kept-running process for good, and use THAT describe from here
+		// on, not the throwaway one.
+		if !spec.SharedProcess && decl.Capabilities.SingleProcess {
+			ref := refs[spec.Key()]
+			shared := spec
+			shared.SharedProcess = true
+			shared.Instances, shared.Probe = nil, false
+			shared.Isolation, shared.IsolationDefaulted = ref.Isolation, ref.IsolationDefaulted
+			shared.Network, shared.AllowSecrets, shared.AllowEnv = ref.Network, ref.AllowSecrets, ref.AllowEnv
+			if _, perr := mgr.PromoteSharedProcess(spec.Key(), shared); perr != nil {
+				reason := fmt.Sprintf("declares single_process but could not switch to one shared process: %v", perr)
+				connector.RegisterUnavailableType(spec.Provides, reason)
+				registered = append(registered, spec.Provides)
+				logf("plugin %s: FAILED TO START (%v) — its connectors are disabled; every other connector, trigger and run proceeds", spec.Name, perr)
+				continue
+			}
+			newDecl, derr := mgr.StartAndDescribe(ctx, spec.Key())
+			if derr != nil {
+				reason := fmt.Sprintf("failed to start its single shared process: %v — reinstall with `conductor plugin update %s` or check the daemon log", derr, spec.Name)
+				connector.RegisterUnavailableType(spec.Provides, reason)
+				registered = append(registered, spec.Provides)
+				logf("plugin %s: FAILED TO START (%v) — its connectors are disabled; every other connector, trigger and run proceeds", spec.Name, derr)
+				continue
+			}
+			spec, decl = shared, newDecl
+			logf("plugin %s: declares single_process — every configured instance of it shares ONE process (grants unioned), same as shared_process: true", spec.Name)
 		}
 		// KIND ENFORCEMENT at the point of use: whatever install state recorded,
 		// the running binary must still describe itself as a connector. A
@@ -581,10 +623,22 @@ func cmdPluginList(args []string) error {
 // instance name, since there is no single "effective manifest" for the type
 // as a whole — only per-instance ones, and they can differ (two instances
 // with different `network:`).
+//
+// The branch below reads spec.SharedProcess, not ref.SharedProcess: the two
+// usually agree, but a plugin that declares Capabilities.SingleProcess gets
+// the shared shape (and its union-grant display) even when the OPERATOR
+// never wrote shared_process: true — SpecFromRef (and, the first time ever a
+// boot discovers it, Manager.PromoteSharedProcess) already folded that
+// override into spec by the time it reaches here. When single_process is
+// what put it in the shared branch, an extra line says so, so the operator
+// sees WHY the grants are unioned instead of per instance.
 func permissionLines(ref config.PluginRef, spec plugin.Spec) []string {
 	lines := []string{"declared capabilities: " + spec.Manifest.Summary()}
 	switch {
-	case ref.Kind() != config.PluginKindConnector || ref.SharedProcess:
+	case ref.Kind() != config.PluginKindConnector || spec.SharedProcess:
+		if ref.Kind() == config.PluginKindConnector && spec.Manifest.SingleProcess {
+			lines = append(lines, "single_process: the plugin declares every instance must share one process — grants unioned below, regardless of shared_process:")
+		}
 		lines = append(lines, "grant (one shared process): "+grantSummary(ref.Network, ref.AllowSecrets, ref.AllowEnv))
 	default:
 		names := make([]string, 0, len(ref.Instances))

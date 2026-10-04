@@ -15,11 +15,21 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	plugin "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
+// singleProcess selects whether this build's Decl declares
+// Capabilities.SingleProcess — overridden at build time with
+// `-ldflags "-X main.singleProcess=true"` (cmd/conductor/plugins.go's
+// single_process cold-start promotion test, internal/plugin's Manager-level
+// one). A plain build is "false": every other test that builds acme-echo
+// gets the ordinary per-instance-isolated shape, unaffected.
+var singleProcess = "false"
+
 func describe() plugin.Decl {
+	sp, _ := strconv.ParseBool(singleProcess)
 	return plugin.Decl{
 		Type: "acme-echo",
 		Desc: "reference echo connector (example plugin)",
@@ -43,7 +53,10 @@ func describe() plugin.Decl {
 		// Declares two env vars it reads (neither granted by default: an
 		// operator must still allow_env each one per connector instance) —
 		// exercises the daemon's grantedEnv/allow_env isolation end to end.
-		Capabilities: plugin.Capabilities{Env: []string{"ACME_ECHO_VAR_A", "ACME_ECHO_VAR_B"}},
+		// SingleProcess, when this build opts in, exercises the OTHER
+		// box-global-resource path: every configured instance must share
+		// ONE process, the same as a real exposure plugin's funnel lease.
+		Capabilities: plugin.Capabilities{Env: []string{"ACME_ECHO_VAR_A", "ACME_ECHO_VAR_B"}, SingleProcess: sp},
 	}
 }
 

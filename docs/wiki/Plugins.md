@@ -335,7 +335,9 @@ separate `github` plugin processes, not one process serving both. That means:
   sees `ghlisten`'s `allow_env` secret, or its narrower/wider `network:`). The
   unioned view only ever applies to a `shared_process: true` plugin's one
   process (which by definition must be permitted whatever any of its
-  instances needs) and to the type-level `plugin.describe` probe below, which
+  instances needs — including a plugin that declares `capabilities.
+  single_process: true` and gets this shape regardless of `shared_process:`,
+  see below) and to the type-level `plugin.describe` probe below, which
   gets the opposite: the MINIMUM (none of it) — a pure self-description needs
   neither network, secrets, nor env;
 - a hot reload (a moved plugin binary) swaps every configured instance's
@@ -370,6 +372,25 @@ process — it is a property of the binary conductor spawns, not of one
 that plugin shares it. With it set, isolation between instances is back to
 scoping by call only (credentials, `host.state`/`host.auth`/`host.log`'s
 per-instance checks), exactly as every plugin behaved before this existed.
+
+**Some plugins cannot be split at all, and say so.** A plugin that keeps a
+BOX-GLOBAL resource every configured instance must agree on — a lease
+refcount on a shared OS-level mapping, a listener bound to one fixed port —
+declares `capabilities.single_process: true` in its `plugin.describe`
+response. conductor then gives it the `shared_process: true` shape
+automatically, for every configured instance, whether or not the operator
+ever wrote `shared_process:` anywhere. This is not something the operator can
+override back to per-instance isolation: the plugin is saying a second
+process would silently fork its shared state into two copies that disagree,
+not merely that it would rather not pay for N processes. `conductor plugin
+show`/`plugin list --caps` label this explicitly (`single_process: the
+plugin declares every instance must share one process`), so it is clear the
+unioned grant comes from the plugin's own declaration, not a `shared_process:`
+line in the config. Changing whether a plugin declares this between builds is
+an interface change like any other (`SameReloadSurface`): a hot reload is
+refused and the daemon falls back to a full restart, since the Manager's
+shape for that plugin (one process vs one per instance) cannot change under
+a running daemon.
 
 An **in-process builtin** (cron, rss, webhook, rest, graphql, the exposure
 connectors) is unaffected either way: it is trusted code served over an

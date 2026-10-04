@@ -213,6 +213,26 @@ func TestSameReloadSurface(t *testing.T) {
 	if SameReloadSurface(base, &eg) {
 		t.Fatal("a widened egress must NOT be reloadable")
 	}
+	// single_process is part of the recorded manifest (manifestFromDecl)
+	// exactly like egress/commands/fs/env: a build that newly declares it
+	// (or drops it) changes the Manager's SHAPE for this key (one process
+	// vs one per instance) — never something a live in-place swap may do
+	// silently — so it must force a restart just like a widened egress.
+	sp := cp()
+	sp.Capabilities = Capabilities{SingleProcess: true}
+	if SameReloadSurface(base, &sp) {
+		t.Fatal("a newly-declared single_process must NOT be reloadable")
+	}
+	spBoth := cp()
+	spBoth.Capabilities = Capabilities{SingleProcess: true}
+	baseSP := cp()
+	baseSP.Capabilities = Capabilities{SingleProcess: true}
+	if !SameReloadSurface(&baseSP, &spBoth) {
+		t.Fatal("single_process unchanged on both sides must still be reloadable")
+	}
+	if SameReloadSurface(&baseSP, base) {
+		t.Fatal("DROPPING single_process must NOT be reloadable either")
+	}
 	if SameReloadSurface(nil, base) || SameReloadSurface(base, nil) {
 		t.Fatal("nil decl must not be reloadable")
 	}

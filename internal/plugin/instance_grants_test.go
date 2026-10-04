@@ -118,6 +118,54 @@ func TestSpecFromRefSharedProcessKeepsUnion(t *testing.T) {
 	}
 }
 
+// TestSpecFromRefSingleProcessOverridesOperatorSetting proves the
+// single_process capability's steady-state path: a connector ref with NO
+// shared_process: set, but whose RECORDED manifest (Installed.Manifest, from
+// a prior install-time describe) says SingleProcess, must still resolve to
+// the shared shape — Probe cleared, Instances cleared, the union grant
+// applied — exactly as if the operator had written shared_process: true.
+// The plugin's own declaration overrides the operator's default, never the
+// other way around.
+func TestSpecFromRefSingleProcessOverridesOperatorSetting(t *testing.T) {
+	ref := refFor(t, config.UseKindConnector, "acme/plugins/tailscale")
+	// Deliberately NOT SharedProcess: the operator wrote nothing special.
+	ref.Network = []string{"a.example:443", "b.example:443"}
+	ref.AllowSecrets = []string{"secret-a", "secret-b"}
+	ref.AllowEnv = []string{"VAR_A", "VAR_B"}
+	ref.Instances = map[string]config.ConnectorGrant{
+		"a": {Network: []string{"a.example:443"}},
+		"b": {Network: []string{"b.example:443"}},
+	}
+	inst := Installed{Manifest: Manifest{SingleProcess: true}}
+
+	s := SpecFromRef(ref, "", inst, true)
+	if !s.SharedProcess {
+		t.Fatal("a plugin whose recorded manifest declares single_process must resolve SharedProcess = true")
+	}
+	if s.Probe {
+		t.Fatal("a single_process spec must not be marked as the minimum-grant type-level probe")
+	}
+	if s.Instances != nil {
+		t.Fatalf("a single_process spec must carry no per-instance grants map, got %+v", s.Instances)
+	}
+	if !reflect.DeepEqual(s.Network, ref.Network) {
+		t.Fatalf("single_process spec Network = %v, want the union %v", s.Network, ref.Network)
+	}
+	if !reflect.DeepEqual(s.AllowSecrets, ref.AllowSecrets) {
+		t.Fatalf("single_process spec AllowSecrets = %v, want the union %v", s.AllowSecrets, ref.AllowSecrets)
+	}
+	if !reflect.DeepEqual(s.AllowEnv, ref.AllowEnv) {
+		t.Fatalf("single_process spec AllowEnv = %v, want the union %v", s.AllowEnv, ref.AllowEnv)
+	}
+
+	// A plugin that does NOT declare it, with no shared_process: set either,
+	// is unaffected — the default per-instance shape stands.
+	plain := SpecFromRef(ref, "", Installed{}, true)
+	if plain.SharedProcess || !plain.Probe {
+		t.Fatalf("a plugin with no single_process manifest and no shared_process: must stay per-instance, got %+v", plain)
+	}
+}
+
 // TestSpecFromRefProbeFlag is the finding-2 regression: SpecFromRef must mark
 // Spec.Probe true ONLY on the type-level Spec it builds for a non-shared
 // connector (the per-instance-isolation branch that gives the type-level

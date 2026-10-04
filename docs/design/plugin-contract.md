@@ -82,7 +82,19 @@ plugin may opt a connector OUT of this with `shared_process: true` on any of
 its configured instances (an explicit, documented resource trade-off for an
 operator running many instances of one plugin: N processes costs N times the
 memory/fds) — one process then serves every instance of that plugin, exactly
-as every plugin kind did before this existed. An in-process BUILTIN
+as every plugin kind did before this existed. A plugin may instead REQUIRE
+it, unconditionally, by declaring `capabilities.single_process: true` (§1.4
+below, alongside egress/commands/fs/env in the permission manifest): the host
+then treats every configured instance as if `shared_process: true` had been
+set, including the union of grants that implies, REGARDLESS of what the
+operator wrote — the plugin keeps a box-global resource (a tunnel-service
+lease refcount is the motivating case) that a separate process per instance
+would silently fork into disjoint copies, so the operator cannot opt back
+into per-instance isolation for it. Like every other capability (and unlike
+`semantics`, §1.2), this is NOT must-understand: an older host simply never
+reads it and keeps the plugin per-instance — this field cannot by itself
+make an old host safe for a plugin that needs it.
+An in-process BUILTIN
 (cron/rss/webhook/rest/graphql/the exposure connectors) is unaffected: it is
 trusted code served over an in-memory pipe (§1.10), and stays on the one
 shared in-process client regardless. A runtime or a step-engine plugin has no
@@ -174,7 +186,7 @@ reload surface. The surface is `type`, verbs, events, `semantics` and manifest;
   "semantics": { … },                            // connection-level semantics (§2.4)
   "step_engine": { "languages": ["js"] },        // present ⇔ implements plugin.run
   "runtime":     { "role": "agent_backend" },    // present ⇔ is an agent runtime (§1.8)
-  "capabilities": { "egress": [], "commands": [], "fs": [], "spawns": false },  // confinement manifest (unchanged)
+  "capabilities": { "egress": [], "commands": [], "fs": [], "spawns": false, "single_process": false },  // confinement manifest, + single_process (§1.1)
   "auth": { … },                                 // managed OAuth (unchanged)
   "protocols": [ … ]                             // decision runtimes (unchanged)
 }

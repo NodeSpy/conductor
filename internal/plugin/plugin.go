@@ -153,6 +153,14 @@ type Spec struct {
 	// existed. Not read for a runtime or engine Spec: neither has more than
 	// one "instance" sharing a Manager key to begin with (see
 	// docs/wiki/Plugins.md "Multi-instance isolation").
+	//
+	// Also true when the plugin itself declares Capabilities.SingleProcess
+	// (pkg/plugin/wire.go) — a box-global resource it keeps forces every
+	// instance to share one process regardless of what the operator set.
+	// SpecFromRef sets this from the plugin's RECORDED manifest when known;
+	// Manager.PromoteSharedProcess flips it (and reshapes the rest of this
+	// Spec to match) the first time a live describe reveals the capability
+	// before any manifest recorded it.
 	SharedProcess bool
 	// Instance is set ONLY on a per-instance Spec a Manager derives for one
 	// configured connector instance (Manager.InstanceClient) — it carries no

@@ -252,6 +252,38 @@ type Capabilities struct {
 	// otherwise scrubbed; these names, and only these, are passed through.
 	// Shown at install with the rest of the permissions.
 	Env []string `json:"env,omitempty"`
+	// SingleProcess declares that every configured instance of this
+	// connector MUST share ONE process: the plugin keeps state a box-global
+	// RESOURCE forces every instance to agree on (a lease refcount on a
+	// shared OS-level mapping, an in-memory rate-limit tracker keyed only by
+	// upstream host, a listener bound to one fixed port) — state that a
+	// separate process per configured instance would silently fork into
+	// disjoint copies, each believing it alone holds the resource. The
+	// motivating case is an exposure plugin's tunnel-service lease refcount:
+	// two instances in two processes each keep their own count, so one
+	// instance's close can turn the box-global tunnel off out from under
+	// the other, and a "refuse a different port" guard no longer sees the
+	// sibling's port at all.
+	//
+	// A plugin declaring this gets the shared-process path (docs/wiki/
+	// Plugins.md "Multi-instance isolation") for EVERY configured instance,
+	// as if `shared_process: true` had been set on all of them — including
+	// the union of grants that implies — REGARDLESS of what the operator
+	// actually set. The operator cannot opt back into per-instance
+	// isolation for a plugin that declares this: the box-global resource it
+	// protects is not something a config knob can safely split apart.
+	//
+	// Meaningless outside a connector Decl (ignored on a runtime/engine
+	// Decl, neither of which has more than one "instance" sharing a process
+	// to begin with — same restriction as shared_process:).
+	//
+	// Like every other Capabilities field, this is NOT must-understand
+	// (§1.2): a host built before this field existed simply never reads it
+	// and keeps running the plugin per-instance — a plugin that needs this
+	// guarantee for correctness should require a minimum conductor version
+	// out of band (its own README, a connection-field check) rather than
+	// assume an old host enforces it.
+	SingleProcess bool `json:"single_process,omitempty"`
 }
 
 // Decl is a plugin's full self-description, returned by Describe.

@@ -15,12 +15,14 @@ import (
 // holds the plugins derived from non-builtin `use:` references
 // (config.PluginRefs), keyed by "<kind-dir>/<name>".
 //
-// A key holds AT MOST ONE of two shapes of client, decided once at
+// A key holds AT MOST ONE of two shapes of client, decided (usually) once at
 // construction by the Spec's Kind and SharedProcess flag:
 //
 //   - a single, persistent, eagerly-created client in `clients` — every
 //     runtime and engine key (neither has more than one "instance" sharing a
-//     key), and a connector key whose operator opted into shared_process:;
+//     key), a connector key whose operator opted into shared_process:, and a
+//     connector key whose plugin declares Capabilities.SingleProcess (read
+//     from its recorded manifest — SpecFromRef);
 //   - a lazily-created client PER CONFIGURED CONNECTOR INSTANCE, in
 //     `instClients[key][instance]` (Manager.InstanceClient) — the default for
 //     a connector key: multi-instance isolation (docs/wiki/Plugins.md) gives
@@ -28,20 +30,35 @@ import (
 //     own sandbox/env/staging dir, rather than sharing the type's one
 //     process the way every plugin kind did before this existed.
 //
+// "Usually": a connector key built as the per-instance shape can be
+// PROMOTED to the shared shape exactly once, by PromoteSharedProcess — the
+// single_process capability's fallback for the one case SpecFromRef cannot
+// see ahead of time (no manifest recorded it yet: a local development build,
+// or the very first boot after install). Once promoted a key never reverts;
+// see PromoteSharedProcess for the ordering this relies on.
+//
 // The connector TYPE-level describe/install probe (ProbeDescribe) uses
 // neither of these: it is a throwaway client, started, described, and closed
 // without ever being retained here — the type-level Decl is a property of the
 // installed BINARY, not of any one configured instance, so there is nothing
 // to keep running once it is known.
 type Manager struct {
-	clients map[string]*Client // immutable after NewManager (pointers; a client's process is swapped in place by Reload)
-	order   []string           // immutable after NewManager
-	deps    Deps               // shared by every client this Manager ever creates, including lazily
+	// clients holds every KEY's persistent client — set (one entry per key
+	// that gets one at all) at NewManager and, for the pointers themselves,
+	// immutable from then on: a client's process is swapped IN PLACE by
+	// Reload, never replaced by a different *Client. The one exception is a
+	// brand-new ENTRY added by PromoteSharedProcess, after construction, for
+	// a key that started with no persistent client at all — reads and this
+	// one write path both go through instMu (see Client/HasLiveClient/
+	// StartAndDescribe/PromoteSharedProcess), never the bare map.
+	clients map[string]*Client
+	order   []string // immutable after NewManager
+	deps    Deps     // shared by every client this Manager ever creates, including lazily
 
 	// mu guards specs + decls — the maps mutated after construction (Reload
 	// updates a plugin's binary-identity fields; StartAndDescribe/ProbeDescribe
-	// record a self-description). clients/order are built once and read-only
-	// thereafter.
+	// record a self-description; PromoteSharedProcess rewrites a key's Spec
+	// to the shared shape). order is built once and read-only thereafter.
 	mu sync.RWMutex
 	// specs are the resolved specs, keyed by "<kind>/<name>".
 	specs map[string]Spec
@@ -124,17 +141,33 @@ type Manager struct {
 // A SharedProcess connector ref (or a runtime/engine ref, which was never
 // unioned to begin with) keeps the union: one process then serves every
 // instance, so it must be permitted whatever any of them declares.
+//
+// A plugin whose RECORDED manifest (inst.Manifest, from its last install-time
+// describe) declares single_process: true (pkg/plugin/wire.go
+// Capabilities.SingleProcess) gets exactly this same shared shape, even
+// though the operator never set shared_process: — the capability overrides
+// the operator's own setting, never the other way around. This is the
+// steady-state path: the manifest is normally already on disk by the time a
+// daemon boots (recorded at `plugin add`/`plugin update`/boot gap-fill,
+// docs/wiki/Plugins.md "Multi-instance isolation"), so the Manager gets the
+// right shape from construction, no live describe needed first. The one case
+// this cannot see — the FIRST time this boot ever learns the capability (a
+// local development build, which never gets a recorded manifest at all, or a
+// remote plugin installed with no Describe step) — is handled by
+// Manager.PromoteSharedProcess instead, called right after a live describe
+// reveals it.
 func SpecFromRef(ref config.PluginRef, configDir string, inst Installed, ok bool) Spec {
+	shared := ref.SharedProcess || inst.Manifest.SingleProcess
 	s := Spec{
 		Name:          ref.Name,
 		Kind:          Kind(ref.Kind()),
 		Provides:      ref.Name,
 		Version:       ref.Version(),
 		TrustFull:     ref.TrustFull,
-		SharedProcess: ref.SharedProcess,
+		SharedProcess: shared,
 		Use:           ref.Use,
 	}
-	if s.Kind == KindConnector && !ref.SharedProcess {
+	if s.Kind == KindConnector && !shared {
 		// Per-instance isolation: the type-level Spec gets no grant of its
 		// own (the minimum, for ProbeDescribe above); InstanceClient looks
 		// each configured instance's grant up here instead. Probe marks this
@@ -264,8 +297,12 @@ func (m *Manager) Spec(name string) (Spec, bool) {
 // Client returns a plugin's PERSISTENT client — the one every runtime and
 // engine key has, and the one a shared_process: true connector key has. A
 // plain connector key (the default, per-instance-isolated shape) has none:
-// use InstanceClient for those.
+// use InstanceClient for those. Goes through instMu — the same lock
+// PromoteSharedProcess's one post-construction write to `clients` uses —
+// rather than a bare map read, so the two can never race.
 func (m *Manager) Client(name string) (*Client, bool) {
+	m.instMu.Lock()
+	defer m.instMu.Unlock()
 	c, ok := m.clients[name]
 	return c, ok
 }
@@ -276,11 +313,11 @@ func (m *Manager) Client(name string) (*Client, bool) {
 // live", that is no longer sufficient for a (per-instance-isolated) connector
 // key, which never gets a persistent client at all.
 func (m *Manager) HasLiveClient(key string) bool {
+	m.instMu.Lock()
+	defer m.instMu.Unlock()
 	if _, ok := m.clients[key]; ok {
 		return true
 	}
-	m.instMu.Lock()
-	defer m.instMu.Unlock()
 	return len(m.instClients[key]) > 0
 }
 
@@ -327,10 +364,15 @@ func (m *Manager) InstanceClient(key, instance string) (*Client, error) {
 	if !ok {
 		return nil, fmt.Errorf("plugin %q not found", key)
 	}
-	// Kind/SharedProcess never change after construction (Reload only ever
-	// moves BinPath/Sha256/Resolved), so this early read of them is safe
-	// regardless of a concurrent Reload — unlike the per-instance spec
-	// below, which must be re-read fresh (see the reloading wait).
+	// Kind never changes after construction (Reload only ever moves
+	// BinPath/Sha256/Resolved). SharedProcess normally doesn't either — the
+	// one exception is PromoteSharedProcess (the single_process capability's
+	// cold-start fallback), which can flip it false→true, exactly once,
+	// before this key ever gets a per-instance client (it refuses to run
+	// once one exists). So a spec that is ALREADY shared here is safe to
+	// trust immediately; a spec that is NOT (yet) shared must be re-checked
+	// after taking instMu below — the same lock PromoteSharedProcess holds
+	// while it flips the flag — rather than racing ahead on this stale read.
 	if spec.Kind != KindConnector || spec.SharedProcess {
 		c, ok := m.Client(key)
 		if !ok {
@@ -353,17 +395,25 @@ func (m *Manager) InstanceClient(key, instance string) (*Client, error) {
 	if m.closed {
 		return nil, fmt.Errorf("plugin %q: manager is closed", key)
 	}
+	// Re-read under instMu: PromoteSharedProcess may have landed between the
+	// fast-path check above and this lock. A now-shared key falls through to
+	// its (just-created) persistent client instead of starting a per-instance
+	// one it would never need again.
+	m.mu.RLock()
+	spec = m.specs[key]
+	m.mu.RUnlock()
+	if spec.SharedProcess {
+		if c, ok := m.clients[key]; ok {
+			return c, nil
+		}
+		return nil, fmt.Errorf("plugin %q not found", key)
+	}
 	if m.instClients[key] == nil {
 		m.instClients[key] = map[string]*Client{}
 	}
 	if c, ok := m.instClients[key][instance]; ok {
 		return c, nil
 	}
-	// Re-read: the wait above (or simply the window since the first read)
-	// may have let a Reload land, moving BinPath/Sha256/Resolved.
-	m.mu.RLock()
-	spec = m.specs[key]
-	m.mu.RUnlock()
 	c := NewClient(InstanceSpec(spec, instance), m.deps)
 	m.instClients[key][instance] = c
 	return c, nil
@@ -484,7 +534,7 @@ func (m *Manager) Reload(key string, newSpec Spec) error {
 	}
 	m.reloading[key] = true
 	var clients []*Client
-	if c, ok := m.clients[key]; ok { // clients is immutable post-construction; no lock
+	if c, ok := m.clients[key]; ok { // guarded by instMu (PromoteSharedProcess's one write path too)
 		clients = append(clients, c)
 	}
 	for _, c := range m.instClients[key] {
@@ -562,7 +612,7 @@ func (m *Manager) Close() error {
 // caller disables that plugin's type, mirroring the connector convention of
 // disable-not-crash).
 func (m *Manager) StartAndDescribe(ctx context.Context, name string) (*Decl, error) {
-	c, ok := m.clients[name]
+	c, ok := m.Client(name)
 	if !ok {
 		return nil, fmt.Errorf("plugin %q not found", name)
 	}
@@ -572,6 +622,68 @@ func (m *Manager) StartAndDescribe(ctx context.Context, name string) (*Decl, err
 	}
 	m.recordDecl(name, decl)
 	return decl, nil
+}
+
+// PromoteSharedProcess is the single_process capability's COLD-START
+// fallback (SpecFromRef is the steady-state path, reading it from a
+// RECORDED manifest): the first time this boot's own live describe reveals
+// Capabilities.SingleProcess on a key that was built as the default
+// per-instance shape (no manifest had recorded it yet — a local development
+// build, which never gets one at all, or a remote plugin's very first
+// install), this flips that key to the shared shape it should have had from
+// construction, and returns the one persistent client every configured
+// instance will now share.
+//
+// sharedSpec is the caller's responsibility to build correctly: it must be
+// key's existing type-level Spec with SharedProcess set true and reshaped
+// exactly like SpecFromRef's own shared branch — Instances cleared, Probe
+// cleared, Isolation/Network/AllowSecrets/AllowEnv set to the connector
+// ref's UNIONED grant (the same fields a shared_process: true ref's Spec
+// already carries) — so the one process this starts is permitted whatever
+// any of its instances needs, per docs/wiki/Plugins.md "Multi-instance
+// isolation". PromoteSharedProcess itself does not spawn anything —
+// construction is lazy, same as everywhere else in this package; the caller
+// still calls StartAndDescribe(ctx, key) afterward to actually start it (and
+// get its live Decl) through the now-persistent client this created.
+//
+// Refuses once a per-instance client already exists for key (len(instClients
+// [key]) > 0): folding live, already-split per-instance processes back into
+// one — stopping some, keeping another, redirecting in-flight calls — is a
+// disruptive operation this does not attempt; the caller is expected to
+// treat that refusal as a plugin problem (disable the type, log loudly,
+// exactly as every other describe-time failure already does) rather than
+// retry. In the one caller today (cmd/conductor's loadConnectorPlugins) this
+// can never actually happen: the type-level describe that discovers the
+// capability runs BEFORE RegisterExternalConnector hands out the
+// ClientFactory that is the only way a per-instance client ever gets
+// created, so there is nothing to fold yet.
+//
+// Idempotent: calling it again for an already-promoted key (one that
+// already has a persistent client) just returns that same client — a
+// double call (which does not happen on the one caller's path, but costs
+// nothing to make safe) never spawns a second process.
+func (m *Manager) PromoteSharedProcess(key string, sharedSpec Spec) (*Client, error) {
+	m.instMu.Lock()
+	defer m.instMu.Unlock()
+	if m.closed {
+		return nil, fmt.Errorf("plugin %q: manager is closed", key)
+	}
+	if c, ok := m.clients[key]; ok {
+		return c, nil
+	}
+	if len(m.instClients[key]) > 0 {
+		return nil, fmt.Errorf("plugin %q: cannot switch to a single shared process — %d per-instance client(s) are already live", key, len(m.instClients[key]))
+	}
+	m.mu.Lock()
+	if _, ok := m.specs[key]; !ok {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("plugin %q not found", key)
+	}
+	m.specs[key] = sharedSpec
+	m.mu.Unlock()
+	c := NewClient(sharedSpec, m.deps)
+	m.clients[key] = c
+	return c, nil
 }
 
 // ProbeDescribe starts a THROWAWAY client for key's plugin — never retained —
@@ -586,6 +698,12 @@ func (m *Manager) StartAndDescribe(ctx context.Context, name string) (*Decl, err
 // Also records the boot surface into Decl(key) (same first-write-wins rule as
 // StartAndDescribe), so hot-reload's SameReloadSurface comparison works the
 // same for a per-instance connector as it always has for everything else.
+//
+// The returned Decl may say Capabilities.SingleProcess — this throwaway
+// process is still the right one to learn that from (it is a pure
+// self-description either way), but the caller must act on it: it means
+// this key should not stay per-instance-isolated after all. See
+// PromoteSharedProcess, which the caller invokes next in that case.
 func (m *Manager) ProbeDescribe(ctx context.Context, key string) (*Decl, error) {
 	m.mu.RLock()
 	spec, ok := m.specs[key]

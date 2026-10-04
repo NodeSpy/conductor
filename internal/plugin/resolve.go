@@ -349,6 +349,15 @@ func manifestFromDecl(decl *Decl) Manifest {
 		// `conductor connector auth <name>` can run the interactive login
 		// WITHOUT respawning the plugin to re-Describe it.
 		Auth: decl.Auth,
+		// SingleProcess (the plugin's shared-process requirement) is part of
+		// the recorded manifest for the same reason every other capability
+		// is: SameReloadSurface compares manifests field for field, so a
+		// build that ADDS or DROPS this capability differs from the running
+		// one and forces a full restart (never a live in-place swap) — the
+		// Manager's shape for this key (one process vs one per instance) is
+		// decided once, at construction, and cannot change under a running
+		// daemon.
+		SingleProcess: c.SingleProcess,
 	}
 }
 

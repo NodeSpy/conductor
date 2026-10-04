@@ -57,11 +57,20 @@ type Manifest struct {
 	// from the CLI without respawning the plugin to re-Describe it. nil for a
 	// plugin that declares no managed auth.
 	Auth *AuthSpec `yaml:"auth,omitempty"`
+	// SingleProcess records the plugin's declared Capabilities.SingleProcess
+	// (pkg/plugin/wire.go): every configured instance of it must share ONE
+	// process, a box-global resource it keeps forces this regardless of the
+	// operator's own shared_process: setting. Recorded at install time, like
+	// every other capability, so it is known on a LATER boot before the
+	// plugin ever runs (SpecFromRef reads it to decide the Manager's shape
+	// up front) — not just at the live describe that first discovers it
+	// (Manager.PromoteSharedProcess is the fallback for that first time).
+	SingleProcess bool `yaml:"single_process,omitempty"`
 }
 
 // IsZero reports whether the plugin declared no capabilities at all.
 func (m Manifest) IsZero() bool {
-	return len(m.Egress) == 0 && len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && len(m.Env) == 0
+	return len(m.Egress) == 0 && len(m.Commands) == 0 && len(m.FS) == 0 && !m.Spawns && len(m.Env) == 0 && !m.SingleProcess
 }
 
 // Summary renders the manifest as one line for logs and install review.
@@ -83,6 +92,9 @@ func (m Manifest) Summary() string {
 	}
 	if len(m.Env) > 0 {
 		parts = append(parts, "env "+strings.Join(m.Env, ","))
+	}
+	if m.SingleProcess {
+		parts = append(parts, "single_process (every instance shares one process)")
 	}
 	return strings.Join(parts, "; ")
 }
