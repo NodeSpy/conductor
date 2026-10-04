@@ -60,11 +60,14 @@ type Manifest struct {
 	// SingleProcess records the plugin's declared Capabilities.SingleProcess
 	// (pkg/plugin/wire.go): every configured instance of it must share ONE
 	// process, a box-global resource it keeps forces this regardless of the
-	// operator's own shared_process: setting. Recorded at install time, like
-	// every other capability, so it is known on a LATER boot before the
-	// plugin ever runs (SpecFromRef reads it to decide the Manager's shape
-	// up front) — not just at the live describe that first discovers it
-	// (Manager.PromoteSharedProcess is the fallback for that first time).
+	// operator's own isolate: setting — isolate: true on any instance of it
+	// is refused rather than honored (cmd/conductor's loadConnectorPlugins,
+	// Manager.ForbidIsolated). Recorded at install time, like every other
+	// capability, so it is known on a LATER boot before the plugin ever
+	// runs — checked as a hard config validation error against isolate:
+	// true BEFORE anything spawns, rather than only at the live describe
+	// that first discovers it (which instead disables just the isolated
+	// instance, since the conflict was not knowable any earlier that time).
 	SingleProcess bool `yaml:"single_process,omitempty"`
 }
 

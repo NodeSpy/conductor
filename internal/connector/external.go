@@ -70,14 +70,13 @@ func IsExternalType(typ string) bool {
 // registry: it maps the plugin's type-level Decl to a TypeDecl and registers a
 // Builder that, per configured instance, resolves that instance's credentials
 // and hands them to the instance's OWN plugin client per-call (least
-// privilege, own-type-only, own-process by default — multi-instance
-// isolation, docs/wiki/Plugins.md).
+// privilege, own-type-only — multi-instance isolation, docs/wiki/Plugins.md).
 //
 // clientFor is asked for the instance's *plugin.Client the first time this
 // builder runs for it (plugin.Manager.InstanceClientFactory): by default that
-// spawns a dedicated subprocess for exactly this instance; a plugin whose
-// operator set shared_process: true instead gets back the one process every
-// instance of it shares. Either way the builder neither knows nor cares which
+// returns the one process every non-isolated instance of the plugin shares;
+// an instance whose config set isolate: true instead gets a dedicated
+// subprocess of its own. Either way the builder neither knows nor cares which
 // — it just drives whatever client comes back, instance-scoped as always.
 func RegisterExternalConnector(clientFor plugin.ClientFactory, spec plugin.Spec, decl *plugin.Decl) (*TypeDecl, error) {
 	td := mapDecl(decl)
@@ -89,12 +88,12 @@ func RegisterExternalConnector(clientFor plugin.ClientFactory, spec plugin.Spec,
 		// allow_secrets is THIS connector entry's own — never a sibling
 		// instance's. Built per-instance, from ref (the config this builder
 		// was handed for exactly this instance), not from spec.AllowSecrets
-		// (the plugin-wide union multi-instance isolation keeps ONLY for a
-		// shared_process: true plugin — see config.PluginRef.Instances and
-		// plugin.SpecFromRef). Using the union here would let one instance's
-		// allow_secrets list wrongly restrict (or widen, if its own
-		// allow_secrets is empty and it inherited the union's entries) a
-		// sibling instance's own secret refs.
+		// (the UNION across non-isolated instances multi-instance isolation
+		// keeps — see config.PluginRef.Instances and plugin.SpecFromRef).
+		// Using the union here would let one instance's allow_secrets list
+		// wrongly restrict (or widen, if its own allow_secrets is empty and
+		// it inherited the union's entries) a sibling instance's own secret
+		// refs.
 		allow := map[string]bool{}
 		for _, s := range ref.AllowSecrets {
 			allow[s] = true

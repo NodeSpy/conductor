@@ -22,6 +22,22 @@ connectors:
       read_token: app
       write_token: e2e-user-write-token # literal token; no gh binary in the image
 
+  # ghshare: a second, verb-only (no webhook/triggers) instance of the SAME
+  # github plugin binary as `gh`, neither isolate: true — K4-pid
+  # (test/e2e/run.sh) proves the process-model default with it: `gh` and
+  # `ghshare` must run as the SAME daemon subprocess (one pid), not two,
+  # since multi-instance isolation now shares one process per plugin by
+  # default (docs/wiki/Plugins.md "Multi-instance isolation") rather than
+  # isolating every configured instance.
+  ghshare:
+    use: /usr/local/bin/conductor-github
+    api_base: http://mock-github:8080
+    app:
+      app_id: 123456
+      private_key_path: /etc/conductor/github-app.pem
+    sweep: { enabled: false }
+    me: { logins: [conductor-user] }
+
   slack:
     use: /usr/local/bin/conductor-slack
     api_base: http://sink-catcher:8080/slackapi
@@ -86,6 +102,11 @@ connectors:
   ghlisten:
     use: /usr/local/bin/conductor-github
     api_base: http://mock-github:8080
+    # isolate: true — K4-pid (test/e2e/run.sh) proves the opt-in half of the
+    # process model alongside ghshare's proof of the default: ghlisten must
+    # run as its OWN daemon subprocess, distinct from the pid gh and ghshare
+    # share.
+    isolate: true
     # App-less: a literal static token, never actually used (no verb is ever
     # invoked on this instance) — but Source.Start's ensureClients resolves
     # SOME credential unconditionally, even for a pure webhook listener, and

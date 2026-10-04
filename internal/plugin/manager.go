@@ -248,11 +248,11 @@ func InstanceSpec(spec Spec, instance string) Spec {
 // client, including one created later by InstanceClient. It does not start any
 // subprocess.
 //
-// A runtime or engine key, and a connector key with shared_process: true, get
-// their persistent client HERE, eagerly — unchanged from before multi-instance
-// isolation. A plain connector key gets none yet: InstanceClient creates its
-// per-instance clients lazily, on the builder's first call for each configured
-// instance.
+// A runtime or engine key, and a connector key with at least one non-isolated
+// configured instance (Spec.Shared), get their shared client HERE, eagerly.
+// A connector key whose EVERY instance isolates gets none yet: InstanceClient
+// creates its isolated instances' clients lazily, on the builder's first call
+// for each.
 func NewManager(plugins map[string]config.PluginRef, configDir string, state *InstallState, deps Deps) *Manager {
 	m := &Manager{
 		clients:     make(map[string]*Client, len(plugins)),

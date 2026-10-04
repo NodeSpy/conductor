@@ -1038,23 +1038,33 @@ group_K_connectors() {
     *) bad "K4 connectors ls" K K4-ls "unexpected output: $(echo "$out" | head -2)" ;;
   esac
 
-  # K4-pid: multi-instance isolation (docs/wiki/Plugins.md) — gh and ghlisten
-  # are two configured instances of the SAME real github plugin binary
-  # (connectors.e2e.yaml). The DAEMON logs each per-instance process it
-  # spawns ("plugin <name> instance <inst>: subprocess started (pid N)"), so
-  # its own log is the evidence each instance runs as its own process.
-  # (`connectors ls` would show the pids of a throwaway CLI build instead.)
+  # K4-pid: the process-model default (docs/wiki/Plugins.md "Multi-instance
+  # isolation") — gh, ghshare and ghlisten are three configured instances of
+  # the SAME real github plugin binary (connectors.e2e.yaml); neither gh nor
+  # ghshare set isolate:, ghlisten does. The DAEMON logs what each process it
+  # spawns actually SERVES ("plugin github (shared: i1, i2, ...): subprocess
+  # started (pid N)" for the shared process, "plugin github instance <inst>:
+  # subprocess started (pid N)" for an isolated one — Spec.Identity), so its
+  # own log is the evidence of which connector names share a pid and which
+  # don't. (`connectors ls` would show the pids of a throwaway CLI build
+  # instead — it never shows one at all, see InstancePID.)
   daemon_log="$(dc logs conductor-conn 2>&1)"
-  pid_for_instance() { # pid_for_instance <connector-name>: the latest spawn's pid
-    printf '%s\n' "$daemon_log" | sed -n "s/.*plugin github instance $1: subprocess started (pid \([0-9]*\)).*/\1/p" | tail -n 1
-  }
-  gh_pid="$(pid_for_instance gh)"
-  ghlisten_pid="$(pid_for_instance ghlisten)"
-  if [ -n "$gh_pid" ] && [ -n "$ghlisten_pid" ] && [ "$gh_pid" != "$ghlisten_pid" ]; then
-    ok "K4-pid gh and ghlisten (two instances of the github plugin) run as distinct daemon processes (pid $gh_pid vs $ghlisten_pid)" K K4-pid
-  else
-    bad "K4-pid gh and ghlisten run as distinct plugin processes" K K4-pid "gh pid=[$gh_pid] ghlisten pid=[$ghlisten_pid]; spawn lines: $(printf '%s\n' "$daemon_log" | grep 'subprocess started' | head -10)"
-  fi
+  shared_pid="$(printf '%s\n' "$daemon_log" | sed -n 's/.*plugin github (shared: \([^)]*\)): subprocess started (pid \([0-9]*\)).*/\2 \1/p' | tail -n 1)"
+  shared_served="${shared_pid#* }"
+  shared_pid="${shared_pid%% *}"
+  isolated_pid="$(printf '%s\n' "$daemon_log" | sed -n 's/.*plugin github instance ghlisten: subprocess started (pid \([0-9]*\)).*/\1/p' | tail -n 1)"
+  case "$shared_served" in
+    *gh*ghshare*|*ghshare*gh*)
+      if [ -n "$shared_pid" ] && [ -n "$isolated_pid" ] && [ "$shared_pid" != "$isolated_pid" ]; then
+        ok "K4-pid gh and ghshare share one daemon process (pid $shared_pid, serving: $shared_served); isolate: true ghlisten runs as its own (pid $isolated_pid)" K K4-pid
+      else
+        bad "K4-pid gh/ghshare vs ghlisten pids" K K4-pid "shared pid=[$shared_pid] serving=[$shared_served] isolated pid=[$isolated_pid]; spawn lines: $(printf '%s\n' "$daemon_log" | grep 'subprocess started' | head -10)"
+      fi
+      ;;
+    *)
+      bad "K4-pid gh and ghshare did not share one labelled process" K K4-pid "shared served=[$shared_served]; spawn lines: $(printf '%s\n' "$daemon_log" | grep 'subprocess started' | head -10)"
+      ;;
+  esac
   out="$(cexec conductor-conn conductor schema slack --config /etc/conductor/connectors.e2e.yaml 2>&1)"
   case "$out" in
     *"verb ask"*"request-response"*) ok "K4 conductor schema prints the ask verb contract" K K4-schema ;;

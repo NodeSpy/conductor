@@ -27,6 +27,8 @@ package plugin
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	sdk "github.com/NodeSpy/conductor/pkg/plugin"
@@ -228,16 +230,32 @@ func (s Spec) Key() string {
 // Installed reports whether a binary is available to run.
 func (s Spec) Installed() bool { return s.BinPath != "" }
 
-// Identity names this Spec for a log line: the plugin name, plus the
-// configured instance it is this process's own (Spec.Instance) when it has
-// one — so a per-instance process's logs ("subprocess started", a crash-loop
-// warning) are attributable to the instance that owns it, not just the type
-// every sibling instance also shares.
+// Identity names this Spec for a log line: the plugin name, plus either the
+// ISOLATED instance it is this process's own (Spec.Instance) or, for the
+// shared process, the non-isolated instance(s) it serves — so "subprocess
+// started"/a crash-loop warning is attributable to exactly what runs in this
+// process, never ambiguous between "one process per plugin" and "one process
+// per configured instance" (the default inverted between them,
+// docs/wiki/Plugins.md "Multi-instance isolation"; `conductor connectors ls`
+// deliberately shows no pid at all — see InstancePID — so this log line is
+// the one place an operator can see which connector names share a process).
 func (s Spec) Identity() string {
-	if s.Instance == "" {
-		return s.Name
+	if s.Instance != "" {
+		return s.Name + " instance " + s.Instance
 	}
-	return s.Name + " instance " + s.Instance
+	if s.Kind == KindConnector && len(s.Instances) > 0 {
+		var shared []string
+		for name, g := range s.Instances {
+			if !g.Isolate {
+				shared = append(shared, name)
+			}
+		}
+		if len(shared) > 0 {
+			sort.Strings(shared)
+			return s.Name + " (shared: " + strings.Join(shared, ", ") + ")"
+		}
+	}
+	return s.Name
 }
 
 // NotInstalledError is the error a not-yet-fetched plugin produces — a

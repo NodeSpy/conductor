@@ -238,3 +238,35 @@ func TestForbidIsolatedRefusesInstance(t *testing.T) {
 		t.Fatalf("a non-isolated sibling must still resolve: %v", err)
 	}
 }
+
+// TestSpecIdentityNamesWhatAProcessServes is the log-line proof e2e's K4-pid
+// check relies on (test/e2e/run.sh): an isolated instance's process names
+// itself by that one instance, and the shared process names every
+// non-isolated instance it serves — never the ambiguous bare plugin name for
+// either, since "conductor connectors ls" deliberately shows no pid at all
+// and this log line is the one place an operator can tell which connector
+// names share a process.
+func TestSpecIdentityNamesWhatAProcessServes(t *testing.T) {
+	shared := Spec{Name: "github", Kind: KindConnector, Instances: map[string]config.ConnectorGrant{
+		"gh":      {},
+		"ghshare": {},
+		"solo":    {Isolate: true},
+	}}
+	if got, want := shared.Identity(), "github (shared: gh, ghshare)"; got != want {
+		t.Fatalf("shared Identity() = %q, want %q", got, want)
+	}
+
+	isolated := shared
+	isolated.Instance = "solo"
+	if got, want := isolated.Identity(), "github instance solo"; got != want {
+		t.Fatalf("isolated Identity() = %q, want %q", got, want)
+	}
+
+	// A connector with no configured instances at all (the minimal-grant
+	// type-level probe, or a not-yet-populated Spec) falls back to the bare
+	// name.
+	bare := Spec{Name: "github", Kind: KindConnector}
+	if got, want := bare.Identity(), "github"; got != want {
+		t.Fatalf("bare Identity() = %q, want %q", got, want)
+	}
+}

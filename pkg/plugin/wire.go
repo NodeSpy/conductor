@@ -265,21 +265,24 @@ type Capabilities struct {
 	// the other, and a "refuse a different port" guard no longer sees the
 	// sibling's port at all.
 	//
-	// A plugin declaring this gets the shared-process path (docs/wiki/
-	// Plugins.md "Multi-instance isolation") for EVERY configured instance,
-	// as if `shared_process: true` had been set on all of them — including
-	// the union of grants that implies — REGARDLESS of what the operator
-	// actually set. The operator cannot opt back into per-instance
-	// isolation for a plugin that declares this: the box-global resource it
-	// protects is not something a config knob can safely split apart.
+	// A plugin declaring this cannot be split into more than one process AT
+	// ALL (docs/wiki/Plugins.md "Multi-instance isolation"): isolate: true
+	// on any of its configured instances is refused — a config validation
+	// error when the capability is already known from a recorded install
+	// manifest, or that one instance disabled with the reason when it is
+	// discovered only at this describe — rather than ever silently folded
+	// back into the shared process every OTHER (non-isolated) instance
+	// already uses. The operator cannot opt an instance of it into
+	// per-instance isolation: the box-global resource it protects is not
+	// something a config knob can safely split apart.
 	//
 	// Meaningless outside a connector Decl (ignored on a runtime/engine
 	// Decl, neither of which has more than one "instance" sharing a process
-	// to begin with — same restriction as shared_process:).
+	// to begin with — same restriction as isolate:).
 	//
 	// Like every other Capabilities field, this is NOT must-understand
 	// (§1.2): a host built before this field existed simply never reads it
-	// and keeps running the plugin per-instance — a plugin that needs this
+	// and honors isolate: true regardless — a plugin that needs this
 	// guarantee for correctness should require a minimum conductor version
 	// out of band (its own README, a connection-field check) rather than
 	// assume an old host enforces it.
