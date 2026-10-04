@@ -40,7 +40,19 @@ const (
 
 // Resolution is one reference's reconcile outcome, for logging and the CLI.
 type Resolution struct {
-	Key      string // "<kind-dir>/<name>"
+	// Key is the plugin's plain install-state identity, "<kind-dir>/<name>"
+	// — shared by EVERY group of this plugin regardless of resolved version
+	// (install state keys its records by Key+Resolved, never GroupKey).
+	Key string
+	// GroupKey is the key this resolution was reconciled UNDER in the refs
+	// map Reconcile was called with — the plain Key when the plugin has only
+	// one resolved-version group (the common case, and every runtime/
+	// engine), or "<Key>@<resolved>" when more than one group is configured
+	// side by side (docs/wiki/Plugins.md "Side-by-side versions"). A caller
+	// that drives the Manager/registry for this specific group (reload,
+	// loadConnectorPlugins) keys off GroupKey; one that means "the plugin,
+	// regardless of version" (GC, `plugin list`) keys off Key.
+	GroupKey string
 	Name     string
 	Kind     string
 	Use      string // the reference as written
@@ -101,7 +113,14 @@ func (o Options) logf(format string, args ...any) {
 	}
 }
 
-// Reconcile brings install state in line with the config's referenced plugins.
+// Reconcile brings install state in line with the config's referenced
+// plugins. refs should be ExplodeRefs' output (one entry per resolved-version
+// GROUP, docs/wiki/Plugins.md "Side-by-side versions") for any caller
+// reconciling a whole config — reconcileOne resolves and records each
+// group's install under its own (Key, Resolved) pair, so two groups of the
+// same plugin NAME never overwrite one another's record or binary. A caller
+// reconciling a single, known plugin (`plugin add`) may pass a plain,
+// single-entry map instead — there is no multiplicity to explode.
 //
 // It is DEGRADE-SAFE: a reference that cannot be fetched (network down, release
 // missing) is recorded as failed and reconcile CONTINUES, so one unreachable
@@ -119,6 +138,7 @@ func Reconcile(refs map[string]config.PluginRef, state *InstallState, trust *con
 		results []Resolution
 		dirty   bool
 	)
+	keep := map[VersionKey]bool{}
 	for _, key := range keys {
 		ref := refs[key]
 		if opts.Only != "" && opts.Only != ref.Name && opts.Only != key {
@@ -127,24 +147,31 @@ func Reconcile(refs map[string]config.PluginRef, state *InstallState, trust *con
 		res, changed := reconcileOne(key, ref, state, trust, api, opts)
 		dirty = dirty || changed
 		results = append(results, res)
+		if res.Tag != "" {
+			keep[VersionKey{Key: res.Key, Resolved: res.Tag}] = true
+		}
 	}
 
-	// Drop records for plugins the config no longer references, so install
-	// state does not accumulate forever. The BINARY is left on disk: removing
-	// it is `plugin remove`'s job, and a reference removed by mistake should be
-	// cheap to restore.
+	// Drop install-state records no group in refs resolves to any more, so
+	// install state does not accumulate forever. The BINARY is left on disk
+	// for a plain whole-key removal only when `plugin remove` asks for it;
+	// GCVersions here removes a SPECIFIC version's own directory, since that
+	// version itself is genuinely gone from the desired set (a config change
+	// moved every instance of it off that version) rather than merely
+	// unmentioned.
 	//
 	// Only ever prune what we can PROVE is unreferenced: the caller must opt in
 	// (see Options.Prune), the pass must not be scoped to one plugin, and a
 	// gaps-only pass touches nothing. A partial refs map is a subset of the
 	// desired set, and "absent from a subset" is not evidence of "unused".
 	if opts.Prune && opts.Only == "" && !opts.GapsOnly {
-		for _, k := range state.Keys() {
-			if _, still := refs[k]; !still {
-				state.Delete(k)
-				dirty = true
-				opts.logf("plugin %s: no longer referenced by the config — dropped from install state", k)
-			}
+		dropped, err := state.GCVersions(keep)
+		if err != nil {
+			opts.logf("plugin install state: GC: %v", err)
+		}
+		for _, vk := range dropped {
+			dirty = true
+			opts.logf("plugin %s@%s: no longer referenced by the config — dropped from install state", vk.Key, vk.Resolved)
 		}
 	}
 	if dirty {
@@ -155,12 +182,12 @@ func Reconcile(refs map[string]config.PluginRef, state *InstallState, trust *con
 	return results, nil
 }
 
-func reconcileOne(key string, ref config.PluginRef, state *InstallState, trust *config.PackTrustConfig, api ReleaseAPI, opts Options) (Resolution, bool) {
+func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, trust *config.PackTrustConfig, api ReleaseAPI, opts Options) (Resolution, bool) {
+	key := ref.Use.InstallKey()
 	res := Resolution{
-		Key: key, Name: ref.Name, Kind: ref.Kind(),
+		Key: key, GroupKey: groupKey, Name: ref.Name, Kind: ref.Kind(),
 		Use: ref.Use.String(), Origin: string(ref.Use.Origin),
 	}
-	prev, installed := state.Get(key)
 
 	// A local development binary is not fetched, verified against a release, or
 	// pinned — it is whatever the operator built. Record it so `plugin list`
@@ -169,6 +196,8 @@ func reconcileOne(key string, ref config.PluginRef, state *InstallState, trust *
 		res.Action, res.Path = ActionLocal, ref.Use.Path
 		return res, false
 	}
+
+	prev, installed := state.GetForConstraint(key, ref.Use)
 
 	if !opts.AllowUnlisted && !trust.PluginSourceAllowed(ref.Source()) {
 		res.Action = ActionFailed
@@ -192,8 +221,8 @@ func reconcileOne(key string, ref config.PluginRef, state *InstallState, trust *
 	}
 
 	rs := RemoteSource{URL: ref.Use.GitURL(), Component: ref.Use.Component}
-	dir := BinDirFor(state.Dir(), key)
-	binPath, tag, sha, verified, err := FetchRemoteVerified(rs, ref.Use.Version, "", dir, api)
+	cacheDirFor := func(tag string) string { return BinDirForVersion(state.Dir(), key, tag) }
+	binPath, tag, sha, verified, err := FetchRemoteVerified(rs, ref.Use.Version, "", cacheDirFor, api)
 	if err != nil {
 		res.Action, res.Err = ActionFailed, fmt.Errorf("plugin %s: %w", ref.Name, err)
 		if installed {

@@ -45,7 +45,7 @@ func TestPublishDistScriptRoundTrip(t *testing.T) {
 	run(work, "bash", script, "connectors/sentry/v1.0.0", dist, "conductor-sentry")
 
 	rs := RemoteSource{URL: "file://" + remote, Component: "connectors/sentry"}
-	path, tag, _, verified, err := FetchRemoteVerified(rs, "", "", t.TempDir(), GitDist{})
+	path, tag, _, verified, err := FetchRemoteVerified(rs, "", "", fixedCacheDir(t.TempDir()), GitDist{})
 	if err != nil {
 		t.Fatal(err)
 	}

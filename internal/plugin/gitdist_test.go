@@ -68,7 +68,7 @@ func TestGitDistFetchesThisPlatformsBinary(t *testing.T) {
 	if strings.Join(tags, ",") != "connectors/sentry/v1.0.0,connectors/sentry/v1.1.0" {
 		t.Fatalf("tags = %v: want only the releases published for %s", tags, here)
 	}
-	path, tag, sha, verified, err := FetchRemoteVerified(rs, "^1", "", t.TempDir(), g)
+	path, tag, sha, verified, err := FetchRemoteVerified(rs, "^1", "", fixedCacheDir(t.TempDir()), g)
 	if err != nil {
 		t.Fatal(err)
 	}

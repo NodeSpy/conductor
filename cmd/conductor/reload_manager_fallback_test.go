@@ -106,7 +106,7 @@ func TestReloadMovedFallsBackToRestartOnManagerReloadError(t *testing.T) {
 		break // exactly one forced instance is enough to prove the guarantee
 	}
 
-	moved := []plugin.Resolution{{Key: key, Name: "acme-instance", Action: plugin.ActionUpdated}}
+	moved := []plugin.Resolution{{Key: key, GroupKey: key, Name: "acme-instance", Action: plugin.ActionUpdated}}
 	if ok := reloadMoved(cfg, mgr, reg, moved); ok {
 		t.Fatalf("a mid-loop Manager.Reload failure (forced on instance %q) must fall back to a restart (reloadMoved returning false), got an in-place success", forced)
 	}

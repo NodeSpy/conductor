@@ -153,8 +153,33 @@ func InstallDir() string {
 	return filepath.Join(sd, "plugins")
 }
 
-// BinDirFor is where a plugin's binary is installed: <install-dir>/<key>.
+// BinDirFor is a plugin KEY's installation directory: <install-dir>/<key> —
+// the parent of every version's own subdirectory (BinDirForVersion). `plugin
+// remove` removes it wholesale, taking every installed version with it.
 func BinDirFor(dir, key string) string { return filepath.Join(dir, filepath.FromSlash(key)) }
+
+// BinDirForVersion is where ONE resolved version of a plugin is installed:
+// <install-dir>/<key>/<version>. Side by side versions need their own
+// directory each — two versions of a plugin publish the SAME per-platform
+// asset filename (RemoteSource.AssetName), so fetching a second version into
+// the bare key directory would silently overwrite the first version's binary
+// on disk out from under any instance still pinned to it. resolved is
+// sanitized to a single path segment (no separators) so a monorepo's
+// component-prefixed tag ("connectors/widget/v1.2.3") can't escape the key's
+// own directory.
+func BinDirForVersion(dir, key, resolved string) string {
+	return filepath.Join(BinDirFor(dir, key), sanitizeVersionDir(resolved))
+}
+
+// sanitizeVersionDir maps a resolved version/tag to a safe single path
+// segment.
+func sanitizeVersionDir(v string) string {
+	v = strings.NewReplacer("/", "_", "\\", "_").Replace(v)
+	if v == "" {
+		v = "_"
+	}
+	return v
+}
 
 // LoadInstallState reads the install state under dir. A missing, empty, or
 // unreadable state file yields an EMPTY state with no error: install state is a
@@ -188,39 +213,140 @@ func (s *InstallState) Dir() string {
 	return s.dir
 }
 
-// Get returns the record for a "<kind-dir>/<name>" key.
+// Side-by-side versions: install state holds up to one record per (Key,
+// Resolved) pair now, not one record per Key — two connectors pinning
+// different versions of the same plugin are two DISTINCT installed builds,
+// each exec'd from its own path, never one silently standing in for the
+// other (docs/wiki/Plugins.md "Side-by-side versions"). A LOCAL reference
+// never reaches install state at all (SpecFromRef snapshots it independently
+// by content hash every time it resolves — see snapshotLocal — so two
+// connectors pointed at different local paths, or the same path at different
+// content, already run side by side with no install-state change needed).
+//
+// On-disk FORMAT is unchanged: Installed already carried Resolved, so an
+// old, single-version file — at most one record per Key — loads exactly as
+// it always did; "migration" is a property of the new in-memory matching
+// rules (Key+Resolved instead of Key alone), not a file rewrite. Get(key)
+// alone (no version) keeps the pre-versioning meaning of "the one installed
+// build for key" for a key that still has only one, and degrades to "an
+// arbitrary representative" the moment a second version is added under it —
+// every caller that must pick a SPECIFIC version among several uses
+// GetVersion or GetForConstraint instead.
+
+// Get returns a representative record for a "<kind-dir>/<name>" key: the
+// highest Resolved version installed under it. For a key with only ever one
+// version installed (the pre-versioning common case, and every runtime/engine
+// key, which carry no per-instance multiplicity to split) this is simply
+// "the" record, unchanged from before side-by-side versions existed. A
+// caller that must resolve one specific configured instance's own version
+// uses GetForConstraint instead.
 func (s *InstallState) Get(key string) (Installed, bool) {
+	all := s.AllVersions(key)
+	if len(all) == 0 {
+		return Installed{}, false
+	}
+	return all[len(all)-1], true
+}
+
+// GetVersion returns the record for key whose Resolved is EXACTLY version —
+// an exact-pin or already-resolved lookup, no constraint matching.
+func (s *InstallState) GetVersion(key, version string) (Installed, bool) {
 	if s == nil {
 		return Installed{}, false
 	}
 	for _, p := range s.Plugins {
-		if p.Key == key {
+		if p.Key == key && p.Resolved == version {
 			return p, true
 		}
 	}
 	return Installed{}, false
 }
 
-// Keys lists the installed keys, sorted.
+// GetForConstraint resolves ONE instance's own `use:` reference against every
+// version of key currently installed, returning the best (highest) match —
+// the install-state half of the version split a Manager builds its process
+// groups from (see groupInstances). An exact pin matches only that literal
+// Resolved tag (via BestMatch's semver compare — see config.SatisfiesConstraint);
+// an unpinned/ranged reference tracks the highest installed version the range
+// accepts, exactly like a fresh resolve would, but OFFLINE, against whatever
+// Reconcile has already fetched.
+func (s *InstallState) GetForConstraint(key string, u config.Use) (Installed, bool) {
+	all := s.AllVersions(key)
+	if len(all) == 0 {
+		return Installed{}, false
+	}
+	if u.Version == "" && len(all) == 1 {
+		// Genuinely UNCONSTRAINED (no @version at all) with nothing to
+		// disambiguate — the sole installed record for key IS this
+		// instance's build regardless of whether its Resolved happens to
+		// parse as semver (a record a test, or some other non-fetch path,
+		// wrote with no real release tag). A REAL constraint (a pin or a
+		// range) always goes through BestMatch below instead, even with
+		// only one candidate — "the one installed build" is not
+		// automatically "the build this constraint accepts".
+		return all[0], true
+	}
+	tags := make([]string, len(all))
+	for i, in := range all {
+		tags[i] = in.Resolved
+	}
+	tag, ok := config.BestMatch(tags, u.TagPrefix(), u.Version)
+	if !ok {
+		return Installed{}, false
+	}
+	for _, in := range all {
+		if in.Resolved == tag {
+			return in, true
+		}
+	}
+	return Installed{}, false
+}
+
+// AllVersions returns every installed record for key, sorted by Resolved
+// (ascending — lexical, which agrees with semver order for the tag shapes
+// BestMatch understands). Empty when nothing is installed under key.
+func (s *InstallState) AllVersions(key string) []Installed {
+	if s == nil {
+		return nil
+	}
+	var out []Installed
+	for _, p := range s.Plugins {
+		if p.Key == key {
+			out = append(out, p)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Resolved < out[j].Resolved })
+	return out
+}
+
+// Keys lists the DISTINCT installed keys, sorted — one entry per name even
+// when several versions are installed under it.
 func (s *InstallState) Keys() []string {
 	if s == nil {
 		return nil
 	}
+	seen := map[string]bool{}
 	out := make([]string, 0, len(s.Plugins))
 	for _, p := range s.Plugins {
-		out = append(out, p.Key)
+		if !seen[p.Key] {
+			seen[p.Key] = true
+			out = append(out, p.Key)
+		}
 	}
 	sort.Strings(out)
 	return out
 }
 
-// Put inserts or replaces a record.
+// Put inserts or replaces the record for in's (Key, Resolved) pair — the two
+// together are the identity now, so installing a second version under an
+// already-installed key ADDS a record rather than overwriting the existing
+// one.
 func (s *InstallState) Put(in Installed) {
 	if s == nil {
 		return
 	}
 	for i, p := range s.Plugins {
-		if p.Key == in.Key {
+		if p.Key == in.Key && p.Resolved == in.Resolved {
 			s.Plugins[i] = in
 			return
 		}
@@ -228,18 +354,87 @@ func (s *InstallState) Put(in Installed) {
 	s.Plugins = append(s.Plugins, in)
 }
 
-// Delete removes a record, reporting whether it was present.
+// Delete removes every record for key (every installed version), reporting
+// whether anything was present. Used by `plugin remove` and by a prune that
+// has decided NOTHING about key is referenced any more.
 func (s *InstallState) Delete(key string) bool {
 	if s == nil {
 		return false
 	}
-	for i, p := range s.Plugins {
+	found := false
+	kept := s.Plugins[:0]
+	for _, p := range s.Plugins {
 		if p.Key == key {
+			found = true
+			continue
+		}
+		kept = append(kept, p)
+	}
+	s.Plugins = kept
+	return found
+}
+
+// DeleteVersion removes exactly one (key, resolved) record — the GC
+// primitive: a version no live config reference resolves to any more is
+// dropped while a SIBLING version of the same key that is still referenced
+// stays installed and running.
+func (s *InstallState) DeleteVersion(key, resolved string) bool {
+	if s == nil {
+		return false
+	}
+	for i, p := range s.Plugins {
+		if p.Key == key && p.Resolved == resolved {
 			s.Plugins = append(s.Plugins[:i], s.Plugins[i+1:]...)
 			return true
 		}
 	}
 	return false
+}
+
+// GCVersions drops every installed (key, version) pair NOT in keep, removing
+// its on-disk directory too — the GC half of side-by-side versions: a
+// version no currently-configured instance resolves to any more (the config
+// changed, or every instance that pinned it moved on) is uninstalled, while
+// a SIBLING version of the same key that IS still referenced is left exactly
+// as it is, running. keep is built by the caller from the live, reconciled
+// set (ReconcileVersions' results, or an equivalent walk of the current
+// config's resolved groups) — GCVersions itself has no notion of what
+// "still referenced" means, same division of responsibility as the older
+// whole-key Reconcile prune.
+func (s *InstallState) GCVersions(keep map[VersionKey]bool) ([]VersionKey, error) {
+	if s == nil {
+		return nil, nil
+	}
+	var (
+		dropped []VersionKey
+		kept    []Installed
+	)
+	for _, p := range s.Plugins {
+		vk := VersionKey{Key: p.Key, Resolved: p.Resolved}
+		if keep[vk] {
+			kept = append(kept, p)
+			continue
+		}
+		dropped = append(dropped, vk)
+	}
+	if len(dropped) == 0 {
+		return nil, nil
+	}
+	s.Plugins = kept
+	for _, vk := range dropped {
+		dir := BinDirForVersion(s.dir, vk.Key, vk.Resolved)
+		if err := os.RemoveAll(dir); err != nil {
+			return dropped, fmt.Errorf("plugin %s@%s: remove install dir: %w", vk.Key, vk.Resolved, err)
+		}
+	}
+	return dropped, nil
+}
+
+// VersionKey identifies one installed (plugin key, resolved version) pair —
+// GCVersions' keep-set element and ReconcileVersions' result key.
+type VersionKey struct {
+	Key      string
+	Resolved string
 }
 
 // Save writes the state back, sorted by key so the file is stable across

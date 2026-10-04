@@ -85,6 +85,18 @@ type ConnectorGrant struct {
 	// instance gets its own dedicated process instead of sharing the
 	// plugin's one default process.
 	Isolate bool
+	// Use is THIS instance's own resolved `use:` reference, version
+	// constraint included — never a sibling's, and never collapsed to
+	// whichever instance PluginRefs happened to see first (the side-by-side
+	// versions fix, docs/wiki/Plugins.md "Side-by-side versions"). Two
+	// instances naming the same plugin NAME but different `@version`
+	// constraints are folded into one PluginRef by name (PluginRefs), but
+	// each keeps its OWN Use here — internal/plugin resolves each instance's
+	// own constraint against install state and groups instances by their
+	// RESOLVED concrete version, not by this shared PluginRef alone, so
+	// `use: github@v1` on one connector and `use: github@v2` on another each
+	// run their own version's process instead of one silently winning.
+	Use Use
 }
 
 // PluginKind values, retained as the wire/CLI spelling of UseKind.
@@ -284,6 +296,7 @@ func (c *Config) PluginRefs() map[string]PluginRef {
 			AllowEnv:     append([]string(nil), ref.AllowEnv...),
 			Isolation:    ref.Isolation,
 			Isolate:      ref.Isolate,
+			Use:          u,
 		}
 		out[u.InstallKey()] = p
 	}
@@ -453,14 +466,28 @@ func (c *Config) validatePluginRefs() error {
 	return c.checkIsolationMerge()
 }
 
-// checkIsolationMerge is the authoritative check PluginRefs' own merge
-// (mergeIsolationBestEffort) defers to: every NON-ISOLATED instance of one
-// plugin shares that plugin's one process, so their isolation: blocks must
-// actually combine into a single block that process can run under
+// checkIsolationMerge is the OFFLINE half of the isolation-merge check
+// PluginRefs' own merge (mergeIsolationBestEffort) defers to: every
+// NON-ISOLATED instance that shares one process must have isolation: blocks
+// that actually combine into a single block that process can run under
 // (combineIsolation) — a plugin with two non-isolated instances declaring
 // mode: namespace and mode: container, say, cannot be satisfied by any one
 // process. The fix the error names is either make the blocks match or set
 // isolate: true on one of them (giving it, and the conflict, its own process).
+//
+// Side-by-side versions (docs/wiki/Plugins.md): config validation runs
+// before install state is ever consulted, so it cannot know which CONCRETE
+// version two differently-WRITTEN `use:` constraints resolve to — only
+// whether they are the identical reference text, which is always the same
+// version. Grouping here is therefore by (key, raw `use:` text), not by key
+// alone: two instances with the exact same pin (or the exact same unpinned
+// reference) are PROVABLY one process and are checked here, offline, for a
+// fast load-time error; two instances whose constraints merely MIGHT
+// resolve to the same version (two different ranges that happen to pick the
+// same release) are deferred to the authoritative check internal/plugin
+// runs once install state is joined and the real grouping is known
+// (cmd/conductor's checkIsolateAgainstKnownSingleProcess's sibling for
+// isolation, loadConnectorPlugins).
 func (c *Config) checkIsolationMerge() error {
 	type entry struct {
 		instance  string
@@ -481,12 +508,14 @@ func (c *Config) checkIsolationMerge() error {
 		if err != nil || u.IsBuiltin() {
 			continue
 		}
-		byKey[u.InstallKey()] = append(byKey[u.InstallKey()], entry{name, ref.Isolation})
+		groupKey := u.InstallKey() + "\x00" + u.String()
+		byKey[groupKey] = append(byKey[groupKey], entry{name, ref.Isolation})
 	}
-	for key, entries := range byKey {
+	for groupKey, entries := range byKey {
 		if len(entries) < 2 {
 			continue
 		}
+		key, _, _ := strings.Cut(groupKey, "\x00")
 		combined := entries[0].isolation
 		combinedFrom := entries[0].instance
 		for _, e := range entries[1:] {
@@ -519,6 +548,16 @@ func (e *conflictError) Error() string {
 		", but from different sources (" + e.aSrc + " vs " + e.bSrc +
 		") — two implementations cannot share a name; rename one, or point both at the same source"
 }
+
+// CombineIsolation is the exported form of combineIsolation — internal/plugin
+// reuses it (ExplodeRefs/narrowRef) to recompute a process GROUP's isolation
+// union over only the configured instances that group actually serves, once
+// Manager construction knows which instances share one resolved version.
+func CombineIsolation(a, b *IsolationConfig) (*IsolationConfig, bool) { return combineIsolation(a, b) }
+
+// AppendUnique is the exported form of appendUnique, reused for the same
+// reason as CombineIsolation.
+func AppendUnique(dst []string, add ...string) []string { return appendUnique(dst, add...) }
 
 func appendUnique(dst []string, add ...string) []string {
 	for _, a := range add {

@@ -375,28 +375,37 @@ var validateReleaseAPI plugin.ReleaseAPI = plugin.GitDist{}
 // skipped: there is nothing to fetch for the first, and validate does not
 // re-check an update for the second (that is `plugin update`'s job).
 func checkPluginFetchability(cfg *config.Config) []string {
-	refs := cfg.PluginRefs()
+	state := plugin.LoadInstallState(plugin.InstallDir())
+	// Exploded (one entry per resolved-version GROUP): per pinned version,
+	// not per name — two connectors pinning different versions of the same
+	// plugin must each be checked against THEIR OWN constraint
+	// (docs/wiki/Plugins.md "Side-by-side versions"), never a sibling
+	// version's install satisfying the check for both.
+	//
+	// Local references are filtered out BEFORE exploding — there is
+	// nothing to fetch for one, and ExplodeRefs resolving it would
+	// snapshot it by content hash for no reason this read-only check needs.
+	remote := map[string]config.PluginRef{}
+	for k, ref := range cfg.PluginRefs() {
+		if ref.Use.Origin != config.OriginLocal {
+			remote[k] = ref
+		}
+	}
+	refs := plugin.ExplodeRefs(remote, cfg.BaseDir(), state)
 	keys := make([]string, 0, len(refs))
 	for k := range refs {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	state := plugin.LoadInstallState(plugin.InstallDir())
 	var lines []string
 	for _, key := range keys {
 		ref := refs[key]
-		if ref.Use.Origin == config.OriginLocal {
+		if _, ok := state.GetForConstraint(ref.Use.InstallKey(), ref.Use); ok {
+			// Installed at a version THIS group's own constraint accepts
+			// (GetForConstraint already resolved it that way) — a pin raised
+			// past what is installed must still be fetchable, so only an
+			// unsatisfied constraint falls through to the live check below.
 			continue
-		}
-		if inst, ok := state.Get(key); ok {
-			// Installed — and at a version the config's pin accepts (a pin
-			// raised past what is installed must still be fetchable).
-			if ref.Use.Version == "" {
-				continue
-			}
-			if _, ok := config.BestMatch([]string{inst.Resolved}, ref.Use.TagPrefix(), ref.Use.Version); ok {
-				continue
-			}
 		}
 		rs := plugin.RemoteSource{URL: ref.Use.GitURL(), Component: ref.Use.Component}
 		tag, err := plugin.CheckFetchable(rs, ref.Use.Version, validateReleaseAPI)

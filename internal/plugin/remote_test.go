@@ -230,7 +230,7 @@ func TestFetchRemoteReportsReleaseVerification(t *testing.T) {
 		{"no checksums but a matching pin", stubAPI{tags: tags, bin: bin, assetName: rs.AssetName(), noSums: true},
 			func() string { s := sha256.Sum256(bin); return hex.EncodeToString(s[:]) }(), true},
 	} {
-		_, _, sha, verified, err := FetchRemoteVerified(rs, "", c.pin, t.TempDir(), c.api)
+		_, _, sha, verified, err := FetchRemoteVerified(rs, "", c.pin, fixedCacheDir(t.TempDir()), c.api)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}

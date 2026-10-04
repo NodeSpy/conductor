@@ -25,38 +25,95 @@ var externalTypes = map[string]bool{}
 // so a bad plugin disables cleanly, and it REFUSES to override a bundled type
 // (external-overrides-bundled is disallowed — §7 open Q4). Safe to call at
 // daemon boot after config load, before connector.Build.
+//
+// This is RegisterExternalTypeGroup for a plugin with only ONE group — the
+// single-version case, and every existing caller/test that predates
+// side-by-side versions. Both groupKey and installKey collapse to decl.Type
+// itself, so calling this twice for the same type is, as it always was, an
+// unconditional collision (there is no "sibling group" to tell it apart
+// from a second, genuinely different plugin claiming the same name).
 func RegisterExternalType(decl *TypeDecl, b Builder) error {
+	return RegisterExternalTypeGroup(decl, b, decl.Type, decl.Type)
+}
+
+// RegisterExternalTypeGroup registers one resolved-version GROUP of a
+// connector type backed by an out-of-process plugin (docs/wiki/Plugins.md
+// "Side-by-side versions"). groupKey is internal/plugin's per-process-group
+// key (Spec.GroupKey — "connectors/github@v1.2.3"); installKey is the
+// plugin's plain install-state key (Spec.Key() — "connectors/github"),
+// shared by every group of the SAME plugin regardless of version.
+//
+// A SECOND group registering the same type name is allowed exactly when it
+// shares installKey with the first — another resolved version of the SAME
+// plugin, which is the whole point of a side-by-side config. It is refused
+// when the type is bundled, or when a DIFFERENT installKey (a genuinely
+// different plugin) claims the same type name — two plugins providing the
+// same type would silently redirect credentials to whichever registered
+// last, exactly the collision RegisterExternalType has always refused.
+//
+// The first group registered for a type becomes its REPRESENTATIVE in
+// typeReg/buildReg (what TypeDeclFor/Types/the bare single-arg Builder path
+// return) — cosmetic only: every configured instance still resolves its OWN
+// group via BindInstanceGroup + declFor, never the representative, once one
+// has been bound for it.
+func RegisterExternalTypeGroup(decl *TypeDecl, b Builder, groupKey, installKey string) error {
 	regMu.Lock()
 	defer regMu.Unlock()
-	if _, dup := typeReg[decl.Type]; dup {
-		if externalTypes[decl.Type] {
+	_, typeDup := typeReg[decl.Type]
+	_, groupDup := groupDecl[groupKey]
+	if typeDup {
+		if !externalTypes[decl.Type] {
+			return fmt.Errorf("connector type %q is bundled and cannot be replaced by a plugin", decl.Type)
+		}
+		if groupOwner[decl.Type] != installKey || groupDup {
 			// Two plugins providing the same type would silently redirect
 			// credentials to whichever registered last — refuse the collision.
 			return fmt.Errorf("connector type %q is already provided by another plugin — two plugins cannot provide the same type", decl.Type)
 		}
-		return fmt.Errorf("connector type %q is bundled and cannot be replaced by a plugin", decl.Type)
+		// A sibling group of the SAME plugin (another resolved version):
+		// allowed. The representative typeReg/buildReg entry stands.
+	} else {
+		typeReg[decl.Type] = decl
+		buildReg[decl.Type] = b
+		groupOwner[decl.Type] = installKey
 	}
-	typeReg[decl.Type] = decl
-	buildReg[decl.Type] = b
 	externalTypes[decl.Type] = true
+	groupDecl[groupKey] = decl
+	groupBuild[groupKey] = b
+	if groupsOf[decl.Type] == nil {
+		groupsOf[decl.Type] = map[string]bool{}
+	}
+	groupsOf[decl.Type][groupKey] = true
 	return nil
 }
 
-// UnregisterExternalType removes an external type — loadConnectorPlugins'
-// rollback when a LATER plugin in the same boot attempt fails partway through
-// registration (undoing the ones that already succeeded, within this one
-// process's one attempt — a config change doesn't reach here at all: SIGHUP/
-// `conductor reload` re-execs into a brand new process instead of unwinding
-// this one's registrations), and test cleanup. It never removes a bundled
-// type.
+// UnregisterExternalType removes an external type — EVERY group registered
+// under it — loadConnectorPlugins' rollback when a LATER plugin in the same
+// boot attempt fails partway through registration (undoing the ones that
+// already succeeded, within this one process's one attempt — a config
+// change doesn't reach here at all: SIGHUP/`conductor reload` re-execs into
+// a brand new process instead of unwinding this one's registrations), and
+// test cleanup. It never removes a bundled type.
 func UnregisterExternalType(typ string) {
 	regMu.Lock()
 	defer regMu.Unlock()
-	if externalTypes[typ] {
-		delete(typeReg, typ)
-		delete(buildReg, typ)
-		delete(externalTypes, typ)
+	if !externalTypes[typ] {
+		return
 	}
+	for gk := range groupsOf[typ] {
+		delete(groupDecl, gk)
+		delete(groupBuild, gk)
+		for inst, g := range instanceGroup {
+			if g == gk {
+				delete(instanceGroup, inst)
+			}
+		}
+	}
+	delete(groupsOf, typ)
+	delete(typeReg, typ)
+	delete(buildReg, typ)
+	delete(externalTypes, typ)
+	delete(groupOwner, typ)
 }
 
 // IsExternalType reports whether a registered type is plugin-backed.
@@ -151,7 +208,14 @@ func RegisterExternalConnector(clientFor plugin.ClientFactory, spec plugin.Spec,
 			lookup:       deps.Lookup,
 		}, nil
 	}
-	if err := RegisterExternalType(td, builder); err != nil {
+	groupKey := spec.GroupKey
+	if groupKey == "" {
+		// Built outside a Manager (a direct test construction, or a
+		// single-group plugin where GroupKey was never set) — the plain
+		// install key is its own, only, group.
+		groupKey = spec.Key()
+	}
+	if err := RegisterExternalTypeGroup(td, builder, groupKey, spec.Key()); err != nil {
 		return nil, err
 	}
 	return td, nil
@@ -487,19 +551,39 @@ type PluginInstanceDecl struct {
 }
 
 // InstancesUsingPlugin returns the registry's live connector instances backed
-// by the external plugin installed at key ("connectors/<name>" — the same key
-// plugin.Resolution.Key and config.PluginRef.Key name). It is the set a
-// hot-reload pass must re-check per-instance declarations for before an
-// in-place swap of that plugin's process.
-func InstancesUsingPlugin(r *Registry, key string) []PluginInstanceDecl {
+// by the external plugin GROUP at groupKey (internal/plugin's Spec.GroupKey —
+// "connectors/<name>" when the plugin has only one resolved-version group,
+// "connectors/<name>@<resolved>" when more than one is configured side by
+// side). It is the set a hot-reload pass must re-check per-instance
+// declarations for before an in-place swap of that GROUP's process —
+// never a sibling group's instances, which run as an entirely separate
+// process and are reloaded (or not) independently.
+//
+// Matching goes through BindInstanceGroup's bindings (instanceGroup) rather
+// than a bare type-name compare: two groups of the same plugin NAME share
+// the same pluginType, so a name-only match would wrongly pull in a sibling
+// group's instances the moment more than one version is configured. An
+// instance never bound (should not happen for a live external connector,
+// which loadConnectorPlugins always binds before Build) falls back to the
+// plain type-name compare, matching every group of the name — the
+// pre-versioning behavior, safe when there is only ever one.
+func InstancesUsingPlugin(r *Registry, groupKey string) []PluginInstanceDecl {
 	if r == nil {
 		return nil
 	}
+	typeKey, _, _ := strings.Cut(groupKey, "@")
 	var out []PluginInstanceDecl
 	for _, name := range r.order {
 		in := r.byName[name]
 		ei, ok := in.Impl.(*externalImpl)
-		if !ok || "connectors/"+ei.pluginType != key {
+		if !ok {
+			continue
+		}
+		if gk, bound := InstanceGroup(ei.instance); bound {
+			if gk != groupKey {
+				continue
+			}
+		} else if "connectors/"+ei.pluginType != typeKey {
 			continue
 		}
 		out = append(out, PluginInstanceDecl{Instance: ei.instance, Connection: ei.conn, Decl: ei.instanceDecl})

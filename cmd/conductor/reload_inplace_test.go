@@ -106,7 +106,7 @@ func setupReloadFixture(t *testing.T, oldVariant, newVariant string) (cfg *confi
 // restart needed.
 func TestReloadMovedSwapsUnchangedInstanceDeclInPlace(t *testing.T) {
 	cfg, mgr, reg, key := setupReloadFixture(t, "v1", "v1")
-	moved := []plugin.Resolution{{Key: key, Name: "acme-instance", Action: plugin.ActionUpdated}}
+	moved := []plugin.Resolution{{Key: key, GroupKey: key, Name: "acme-instance", Action: plugin.ActionUpdated}}
 	if ok := reloadMoved(cfg, mgr, reg, moved); !ok {
 		t.Fatal("an unchanged per-instance declaration must reload in place")
 	}
@@ -122,7 +122,7 @@ func TestReloadMovedSwapsUnchangedInstanceDeclInPlace(t *testing.T) {
 // under its stale cached per-instance Decl.
 func TestReloadMovedRestartsOnChangedInstanceDecl(t *testing.T) {
 	cfg, mgr, reg, key := setupReloadFixture(t, "v1", "v2")
-	moved := []plugin.Resolution{{Key: key, Name: "acme-instance", Action: plugin.ActionUpdated}}
+	moved := []plugin.Resolution{{Key: key, GroupKey: key, Name: "acme-instance", Action: plugin.ActionUpdated}}
 	if ok := reloadMoved(cfg, mgr, reg, moved); ok {
 		t.Fatal("a changed per-instance declaration must force a restart, not an in-place swap")
 	}

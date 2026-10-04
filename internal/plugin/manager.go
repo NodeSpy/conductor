@@ -242,11 +242,19 @@ func InstanceSpec(spec Spec, instance string) Spec {
 	return instSpec
 }
 
-// NewManager builds a Manager from the config's derived plugin set. configDir is
-// the directory the config file lives in (for resolving local paths); state
-// supplies each remote plugin's installed binary. deps is shared by every
-// client, including one created later by InstanceClient. It does not start any
-// subprocess.
+// NewManager builds a Manager from the config's derived plugin set. plugins
+// MUST already be exploded into one entry per process GROUP (ExplodeRefs) —
+// one per distinct resolved version among a plugin's configured instances,
+// not one per plugin NAME (docs/wiki/Plugins.md "Side-by-side versions"); a
+// name with two groups therefore occupies two entries, each its own fully
+// independent plugin as far as Manager is concerned. configDir is the
+// directory the config file lives in (for resolving local paths); state
+// supplies each group's installed binary, resolved against that GROUP's own
+// Use (ref.Use, already narrowed to one representative instance's
+// constraint by ExplodeRefs — every instance in the group resolved to the
+// same concrete build, so any of their constraints finds the same install
+// record). deps is shared by every client, including one created later by
+// InstanceClient. It does not start any subprocess.
 //
 // A runtime or engine key, and a connector key with at least one non-isolated
 // configured instance (Spec.Shared), get their shared client HERE, eagerly.
@@ -269,8 +277,14 @@ func NewManager(plugins map[string]config.PluginRef, configDir string, state *In
 	sort.Strings(m.order)
 	for _, key := range m.order {
 		ref := plugins[key]
-		inst, ok := state.Get(key)
-		spec := SpecFromRef(ref, configDir, inst, ok)
+		var spec Spec
+		if ref.Use.Origin == config.OriginLocal {
+			spec = SpecFromRef(ref, configDir, Installed{}, false)
+		} else {
+			inst, ok := state.GetForConstraint(ref.Use.InstallKey(), ref.Use)
+			spec = SpecFromRef(ref, configDir, inst, ok)
+		}
+		spec.GroupKey = key
 		m.specs[key] = spec
 		if spec.Shared {
 			m.clients[key] = NewClient(spec, deps)

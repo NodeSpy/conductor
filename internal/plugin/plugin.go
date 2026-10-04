@@ -178,6 +178,20 @@ type Spec struct {
 	// Network/AllowSecrets/AllowEnv/Isolation, never a sibling's and never
 	// the shared union. nil for a runtime/engine Spec.
 	Instances map[string]config.ConnectorGrant
+	// GroupKey is the key this Spec is stored under in the Manager that
+	// built it (NewManager) — the plain install key ("connectors/widget")
+	// when the plugin has only ONE resolved-version group (every runtime/
+	// engine, and the common single-version connector case, unchanged from
+	// before side-by-side versions existed), or "<install-key>@<resolved>"
+	// when more than one group exists for the name. Every Manager method
+	// that takes a "key" (Spec, Client, StartAndDescribe, ProbeDescribe,
+	// ForbidIsolated, InstanceClient, Reload, Decl) means THIS key, never
+	// Spec.Key() (which stays the plain install key regardless, for
+	// install-state/trust lookups) — see docs/wiki/Plugins.md "Side-by-side
+	// versions". Empty for a Spec built outside a Manager (SpecFromRef called
+	// directly, by Reconcile or a one-off CLI probe); such a caller already
+	// has its own key in hand and never needs to ask the Spec for one.
+	GroupKey string
 	// Probe marks the type-level `plugin.describe` probe Spec (Manager.
 	// ProbeDescribe — used only when Shared is false: every configured
 	// instance isolates, so there is no shared process that could describe

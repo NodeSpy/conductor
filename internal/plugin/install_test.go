@@ -56,8 +56,13 @@ func TestInstallStateSaveIsAtomic(t *testing.T) {
 		}
 	}()
 
+	// Resolved stays fixed across iterations (Put's identity is Key+Resolved
+	// now — side-by-side versions, docs/wiki/Plugins.md): this test stresses
+	// repeated Save() atomicity on ONE record, not multi-version Put, so
+	// what varies each pass is Sha256, same as a re-describe of the same
+	// installed version would.
 	for i := 0; i < 300; i++ {
-		s.Put(Installed{Key: "connectors/a", Kind: "connector", Name: "a", Resolved: fmt.Sprintf("v%d", i)})
+		s.Put(Installed{Key: "connectors/a", Kind: "connector", Name: "a", Resolved: "v0", Sha256: fmt.Sprintf("sha%d", i)})
 		if err := s.Save(); err != nil {
 			close(stop)
 			wg.Wait()
@@ -72,8 +77,8 @@ func TestInstallStateSaveIsAtomic(t *testing.T) {
 
 	// Sanity: the final content really did land (this isn't a no-op race).
 	final, ok := LoadInstallState(dir).Get("connectors/a")
-	if !ok || final.Resolved != "v299" {
-		t.Fatalf("final state = %+v, want Resolved v299", final)
+	if !ok || final.Sha256 != "sha299" {
+		t.Fatalf("final state = %+v, want Sha256 sha299", final)
 	}
 
 	// No stray temp file left behind (rename consumed it, each iteration).

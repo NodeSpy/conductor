@@ -46,8 +46,14 @@ func reloadMoved(cfg *config.Config, mgr *plugin.Manager, reg *connector.Registr
 	ctx, cancel := context.WithTimeout(context.Background(), pluginReloadTimeout)
 	defer cancel()
 
-	refs := cfg.PluginRefs()
+	// Side-by-side versions: refs is exploded into one entry per
+	// resolved-version GROUP, keyed the same way Manager and the connector
+	// registry are (Spec.GroupKey) — reloading the group a moved Resolution
+	// names must never touch a SIBLING group of the same plugin name still
+	// pinned to a different version (docs/wiki/Plugins.md "Side-by-side
+	// versions").
 	state := plugin.LoadInstallState(plugin.InstallDir())
+	refs := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
 	describe := describeForInstall(cfg)
 
 	type pending struct {
@@ -59,26 +65,27 @@ func reloadMoved(cfg *config.Config, mgr *plugin.Manager, reg *connector.Registr
 		if !r.Changed() {
 			continue
 		}
-		ref, ok := refs[r.Key]
+		ref, ok := refs[r.GroupKey]
 		if !ok {
-			logf("reload: %q is not a live plugin (pack or removed ref) — restarting to apply", r.Key)
+			logf("reload: %q is not a live plugin (pack or removed ref) — restarting to apply", r.GroupKey)
 			return false
 		}
-		if !mgr.HasLiveClient(r.Key) {
+		if !mgr.HasLiveClient(r.GroupKey) {
 			logf("reload: %s has no live client (ACP runtime?) — restarting to apply", r.Name)
 			return false
 		}
-		oldDecl, ok := mgr.Decl(r.Key)
+		oldDecl, ok := mgr.Decl(r.GroupKey)
 		if !ok {
 			logf("reload: %s has no recorded boot surface — restarting to apply", r.Name)
 			return false
 		}
-		inst, ok := state.Get(r.Key)
+		inst, ok := state.GetVersion(r.Key, r.Tag)
 		if !ok {
 			logf("reload: %s not in install state after reconcile — restarting to apply", r.Name)
 			return false
 		}
 		newSpec := plugin.SpecFromRef(ref, cfg.BaseDir(), inst, ok)
+		newSpec.GroupKey = r.GroupKey
 		newDecl, err := describe(ctx, newSpec)
 		if err != nil {
 			logf("reload: describing new %s build failed (%v) — restarting to apply", r.Name, err)
@@ -95,7 +102,7 @@ func reloadMoved(cfg *config.Config, mgr *plugin.Manager, reg *connector.Registr
 		// every live instance that had one against the new build, and refuse
 		// the in-place swap (fall back to restart) unless each is still the
 		// same.
-		if needCheck := instancesWithQ6Decl(connector.InstancesUsingPlugin(reg, r.Key)); len(needCheck) > 0 {
+		if needCheck := instancesWithQ6Decl(connector.InstancesUsingPlugin(reg, r.GroupKey)); len(needCheck) > 0 {
 			newInstDecls, err := describeInstancesForInstall(ctx, newSpec, needCheck)
 			if err != nil {
 				logf("reload: describing %s per-instance build failed (%v) — restarting to apply", r.Name, err)
@@ -109,7 +116,7 @@ func reloadMoved(cfg *config.Config, mgr *plugin.Manager, reg *connector.Registr
 				}
 			}
 		}
-		todo = append(todo, pending{r.Key, r.Name, newSpec})
+		todo = append(todo, pending{r.GroupKey, r.Name, newSpec})
 	}
 	for _, p := range todo {
 		if err := mgr.Reload(p.key, p.newSpec); err != nil {

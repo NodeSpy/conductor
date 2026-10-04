@@ -418,6 +418,38 @@ var (
 	regMu    sync.RWMutex
 	typeReg  = map[string]*TypeDecl{}
 	buildReg = map[string]Builder{}
+
+	// Side-by-side plugin versions (docs/wiki/Plugins.md "Side-by-side
+	// versions"): the user-facing connector TYPE name ("github") stays one
+	// name no matter how many resolved versions of its plugin are
+	// configured, but each configured INSTANCE must validate and build
+	// against its OWN version's declaration, never an arbitrary sibling's.
+	// typeReg/buildReg above keep exactly ONE "representative" decl/builder
+	// per type name (the first version's group, for every caller that only
+	// ever asks "what does type X look like" with no instance in mind —
+	// `conductor schema <type>` with no connector configured, `connectors
+	// ls`'s fallback, `credentialKeys()`'s type sweep); groupDecl/groupBuild
+	// below hold EVERY group's own decl/builder, keyed by internal/plugin's
+	// per-process-group key (Spec.GroupKey — "connectors/github@v1.2.3"),
+	// and instanceGroup binds each configured connector instance to the one
+	// group that actually serves it, so Build resolves the right one.
+	groupDecl  = map[string]*TypeDecl{}
+	groupBuild = map[string]Builder{}
+	// groupsOf tracks which group keys are registered under a type name, so
+	// UnregisterExternalType can remove every one of them, and so losing the
+	// "representative" group still leaves the others queryable.
+	groupsOf = map[string]map[string]bool{}
+	// groupOwner is the plugin install key ("connectors/github") that
+	// registered a type name — the collision guard: two DIFFERENT plugins
+	// claiming the same type name is refused exactly as before; two GROUPS
+	// of the SAME plugin (two resolved versions) is the whole point and is
+	// allowed.
+	groupOwner = map[string]string{}
+	// instanceGroup binds a configured connector instance name to the group
+	// key that serves it — set once per boot by loadConnectorPlugins
+	// (connector.BindInstanceGroup), after every group's TypeDecl/Builder is
+	// registered and before Build runs.
+	instanceGroup = map[string]string{}
 )
 
 // RegisterType makes a connector type available. Called from init() in each
@@ -462,12 +494,72 @@ func Types() []string {
 	return out
 }
 
-// TypeDeclFor returns a registered type's declaration.
+// TypeDeclFor returns a registered type's REPRESENTATIVE declaration — the
+// first resolved-version group registered for it. Every caller with a
+// specific configured INSTANCE in mind should prefer the Registry's own
+// in.Decl (Build already resolves that per-instance, group-aware) or, before
+// a registry exists, declFor; this is for the handful of callers that
+// genuinely mean "the type in the abstract" (a bare, unconfigured `conductor
+// schema <type>`, `credentialKeys()`'s sweep over every known type).
 func TypeDeclFor(typ string) (*TypeDecl, bool) {
 	regMu.RLock()
 	defer regMu.RUnlock()
 	d, ok := typeReg[typ]
 	return d, ok
+}
+
+// BindInstanceGroup records which registered GROUP (internal/plugin's
+// Spec.GroupKey — "connectors/github@v1.2.3") serves one configured
+// connector instance. Set once per boot by loadConnectorPlugins, after every
+// group of every plugin type is registered and before Build runs, so Build
+// routes each instance to its OWN resolved version's declaration/builder
+// instead of an arbitrary "the type's" one when more than one version of the
+// same type is configured side by side (docs/wiki/Plugins.md "Side-by-side
+// versions"). An instance never bound here (every builtin, and any external
+// instance whose plugin has only the one group) falls back to the plain
+// type registry in declFor — unchanged behavior for the overwhelmingly
+// common single-version case.
+func BindInstanceGroup(instance, groupKey string) {
+	regMu.Lock()
+	defer regMu.Unlock()
+	instanceGroup[instance] = groupKey
+}
+
+// InstanceGroup returns the group key BindInstanceGroup last recorded for
+// instance, if any — InstancesUsingPlugin's own group-scoped match, and
+// available to any other caller that needs to know precisely which
+// resolved-version process serves one configured connector instance.
+func InstanceGroup(instance string) (string, bool) {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	gk, ok := instanceGroup[instance]
+	return gk, ok
+}
+
+// ResetInstanceGroups clears every instance->group binding — a fresh boot
+// attempt (or a test rebuilding the registry) must not see a PRIOR attempt's
+// bindings for instances that may not even exist in the new one.
+func ResetInstanceGroups() {
+	regMu.Lock()
+	defer regMu.Unlock()
+	instanceGroup = map[string]string{}
+}
+
+// declFor resolves one configured connector instance's own declaration and
+// builder: its bound group's, when BindInstanceGroup named one, else the
+// type's plain (representative) registration — exactly TypeDeclFor/buildReg,
+// for a builtin or a single-group external type, where there is only ever
+// one answer anyway.
+func declFor(typeName, instance string) (*TypeDecl, Builder, bool) {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	if gk, ok := instanceGroup[instance]; ok {
+		if d, ok := groupDecl[gk]; ok {
+			return d, groupBuild[gk], true
+		}
+	}
+	d, ok := typeReg[typeName]
+	return d, buildReg[typeName], ok
 }
 
 // Registry holds the built connector instances for one config.
@@ -526,7 +618,7 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 	sort.Strings(names)
 	for _, name := range names {
 		ref := cfg.ConnectorsMap[name]
-		decl, ok := TypeDeclFor(ref.TypeName())
+		decl, build, ok := declFor(ref.TypeName(), name)
 		if !ok {
 			return nil, fmt.Errorf("connector %q: unknown type %q (known: %s)", name, ref.TypeName(), strings.Join(Types(), ", "))
 		}
@@ -540,7 +632,7 @@ func Build(cfg *config.Config, deps Deps) (*Registry, error) {
 		if p := effectiveRateLimit(cfg.Policy, ref.Policy); p > 0 {
 			in.limiter = newRateLimiter(p)
 		}
-		impl, err := buildReg[ref.TypeName()](name, ref, deps)
+		impl, err := build(name, ref, deps)
 		if err != nil {
 			// A CONFIG-SHAPE failure is a load error, not a disabled
 			// connector: the file names a key the schema no longer has, and
@@ -772,10 +864,14 @@ func (s Schema) ContextKeys() map[string]bool {
 
 // RegisterUnavailableType registers a connector type whose plugin cannot be
 // started yet (referenced but not installed): configs naming it load, and
-// each instance is disabled with reason until the plugin lands.
-func RegisterUnavailableType(typ, reason string) {
+// each instance is disabled with reason until the plugin lands. groupKey and
+// installKey are the SAME identity RegisterExternalTypeGroup takes (one
+// unavailable GROUP never blocks a sibling group of the same type that IS
+// up — a config pinning two versions of one plugin, one installed and one
+// not, keeps the installed version's connectors running).
+func RegisterUnavailableType(typ, groupKey, installKey, reason string) {
 	d := &TypeDecl{Type: typ, Desc: "unavailable: " + reason, Unavailable: reason}
-	_ = RegisterExternalType(d, func(name string, _ config.ConnectorRef, _ Deps) (Impl, error) {
+	_ = RegisterExternalTypeGroup(d, func(name string, _ config.ConnectorRef, _ Deps) (Impl, error) {
 		return nil, fmt.Errorf("%s", reason)
-	})
+	}, groupKey, installKey)
 }

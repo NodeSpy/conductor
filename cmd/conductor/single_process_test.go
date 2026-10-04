@@ -210,7 +210,7 @@ func TestCheckIsolateAgainstKnownSingleProcessRefusesBoot(t *testing.T) {
 	mgr := plugin.NewManager(map[string]config.PluginRef{key: ref}, "", state, plugin.Deps{})
 	defer mgr.Close()
 
-	err := checkIsolateAgainstKnownSingleProcess(mgr, map[string]config.PluginRef{key: ref})
+	err := checkIsolateAgainstKnownSingleProcess(mgr)
 	if err == nil {
 		t.Fatal("expected a config validation error for isolate: true against a known single_process plugin")
 	}
@@ -224,7 +224,7 @@ func TestCheckIsolateAgainstKnownSingleProcessRefusesBoot(t *testing.T) {
 	ref2.Instances = map[string]config.ConnectorGrant{"shared": {}, "shared2": {}}
 	mgr2 := plugin.NewManager(map[string]config.PluginRef{key: ref2}, "", state, plugin.Deps{})
 	defer mgr2.Close()
-	if err := checkIsolateAgainstKnownSingleProcess(mgr2, map[string]config.PluginRef{key: ref2}); err != nil {
+	if err := checkIsolateAgainstKnownSingleProcess(mgr2); err != nil {
 		t.Fatalf("no isolated instance must pass: %v", err)
 	}
 }

@@ -121,7 +121,8 @@ func pluginManagerFor(cfg *config.Config, sec *secrets.Resolver, audit func(map[
 // connector.HostAuthProvider, same as pluginManagerFor.
 func pluginManagerForStack(cfg *config.Config, sec *secrets.Resolver, audit func(map[string]any), auth plugin.AuthProvider) *plugin.Manager {
 	state := plugin.LoadInstallState(plugin.InstallDir())
-	return plugin.NewManager(cfg.PluginRefs(), cfg.BaseDir(), state, pluginDeps(sec, audit, auth))
+	exploded := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
+	return plugin.NewManager(exploded, cfg.BaseDir(), state, pluginDeps(sec, audit, auth))
 }
 
 // pendingPlugins are connector plugins this boot found referenced but not
@@ -140,28 +141,85 @@ var pendingPlugins []string
 // fine, not a plugin health problem, and retrying or disabling won't fix it.
 // Returns a manager the caller must Close. auth is this stack's own
 // host.auth provider (finding 4) — see pluginDeps.
+// isolatedInstanceNames lists a GROUP's own configured instances that opted
+// into isolate: true, sorted — the group-scoped equivalent of
+// config.PluginRef.IsolatedInstanceNames, read directly off the Spec
+// (spec.Instances is already narrowed to exactly this group's instances by
+// ExplodeRefs/SpecFromRef) so neither single_process check below needs the
+// name-grouped refs map at all.
+func isolatedInstanceNames(spec plugin.Spec) []string {
+	var out []string
+	for name, g := range spec.Instances {
+		if g.Isolate {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // checkIsolateAgainstKnownSingleProcess is the HARD, boot-refusing half of
-// the single_process + isolate conflict (docs/wiki/Plugins.md "Multi-instance
-// isolation"): when a plugin's RECORDED manifest (from a previous install's
-// describe — mgr.ConnectorSpecs' Spec.Manifest) already says
-// Capabilities.SingleProcess, isolate: true on any of its configured
-// instances is knowable as a problem BEFORE anything spawns, so it is a
-// config validation error naming the connector(s) and the plugin — never
-// silently refused only later, softly, the way the LATE discovery path
+// the single_process + isolate/versions conflicts (docs/wiki/Plugins.md
+// "Multi-instance isolation", "Side-by-side versions"):
+//
+//   - when a plugin's RECORDED manifest (from a previous install's describe
+//     — mgr.ConnectorSpecs' Spec.Manifest) already says
+//     Capabilities.SingleProcess, isolate: true on any of its configured
+//     instances is knowable as a problem BEFORE anything spawns;
+//   - and, new for side-by-side versions: single_process means the plugin
+//     keeps a box-global resource only ONE process can own (the design
+//     doc's running example is a tailscale funnel) — two DIFFERENT resolved
+//     versions of it configured side by side would each try to run their
+//     own process and their own copy of that resource, which is exactly
+//     what single_process exists to prevent. Refusing is the safer default:
+//     every connector using this plugin must pin (or float to) the SAME
+//     version.
+//
+// Both are config validation errors naming the connector(s) and the plugin —
+// never silently refused only later, softly, the way the LATE discovery path
 // (ForbidIsolated, in loadConnectorPlugins' main loop below) has to be, since
 // that one truly cannot know any earlier than its own live describe.
-func checkIsolateAgainstKnownSingleProcess(mgr *plugin.Manager, refs map[string]config.PluginRef) error {
+func checkIsolateAgainstKnownSingleProcess(mgr *plugin.Manager) error {
+	byInstallKey := map[string][]plugin.Spec{}
+	var installKeys []string
 	for _, spec := range mgr.ConnectorSpecs() {
-		if !spec.Manifest.SingleProcess {
+		if _, seen := byInstallKey[spec.Key()]; !seen {
+			installKeys = append(installKeys, spec.Key())
+		}
+		byInstallKey[spec.Key()] = append(byInstallKey[spec.Key()], spec)
+	}
+	sort.Strings(installKeys)
+	for _, installKey := range installKeys {
+		specs := byInstallKey[installKey]
+		anySingle := false
+		for _, s := range specs {
+			if s.Manifest.SingleProcess {
+				anySingle = true
+			}
+		}
+		if !anySingle {
 			continue
 		}
-		ref := refs[spec.Key()]
-		isolated := ref.IsolatedInstanceNames()
+		if len(specs) > 1 {
+			var all []string
+			for _, s := range specs {
+				all = append(all, isolatedInstanceNames(s)...)
+				for n := range s.Instances {
+					all = append(all, n)
+				}
+			}
+			sort.Strings(all)
+			all = slices.Compact(all)
+			name := strings.TrimPrefix(installKey, config.UseKindConnector.Dir()+"/")
+			return fmt.Errorf("config: connector(s) %s: plugin %s declares single_process — it keeps one box-global resource that only ONE process can own, so two different resolved versions of it cannot run side by side; pin every connector using it to the SAME version, or see docs/wiki/Plugins.md \"Side-by-side versions\"",
+				strings.Join(all, ", "), name)
+		}
+		isolated := isolatedInstanceNames(specs[0])
 		if len(isolated) == 0 {
 			continue
 		}
 		return fmt.Errorf("config: connector(s) %s: isolate: true is not possible — plugin %s declares single_process (every configured instance must share one process); remove isolate: true, or see docs/wiki/Plugins.md \"Multi-instance isolation\"",
-			strings.Join(isolated, ", "), spec.Name)
+			strings.Join(isolated, ", "), specs[0].Name)
 	}
 	return nil
 }
@@ -172,25 +230,35 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 	// stalled binary read or sandbox preflight) with no deadline.
 	ctx, cancel := context.WithTimeout(context.Background(), pluginBootTimeout)
 	defer cancel()
-	// refs is the same derived set the Manager itself was built from — used
-	// below to find which configured instances isolate, for the single_process
-	// checks (both the ahead-of-time hard error and the late-discovery
-	// per-instance refusal).
-	refs := cfg.PluginRefs()
 	var registered []string
 	rollback := func() {
 		for _, t := range registered {
 			connector.UnregisterExternalType(t)
 		}
+		connector.ResetInstanceGroups()
 		mgr.Close()
 	}
+	// A fresh boot attempt (this call) must not see a PRIOR attempt's
+	// instance->group bindings — stale entries for instances that moved
+	// groups, or don't exist in this config at all, would route Build to
+	// the wrong (or a now-gone) declaration.
+	connector.ResetInstanceGroups()
 
-	if err := checkIsolateAgainstKnownSingleProcess(mgr, refs); err != nil {
+	if err := checkIsolateAgainstKnownSingleProcess(mgr); err != nil {
 		mgr.Close()
 		return nil, err
 	}
 
 	for _, spec := range mgr.ConnectorSpecs() {
+		// Side-by-side versions: every instance this spec (GROUP) serves is
+		// bound to it NOW, before Build ever runs, whether the group is
+		// healthy, not-yet-installed, or failed to start — declFor's
+		// fallback to the type's plain registration only applies to an
+		// instance nothing bound, which should never happen for an external
+		// type once this loop has run.
+		for name := range spec.Instances {
+			connector.BindInstanceGroup(name, spec.GroupKey)
+		}
 		if !spec.Installed() {
 			// PLUGINS FIRST, NEVER BOOT-FATAL: a connector plugin the config
 			// references but that is not installed yet (its fetch failed — no
@@ -198,7 +266,7 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			// only its own connectors, loudly, while the daemon retries the
 			// fetch and restarts into it once it lands (pendingPluginRetry).
 			reason := spec.NotInstalledError().Error() + " — the daemon retries and restarts into it once it lands"
-			connector.RegisterUnavailableType(spec.Provides, reason)
+			connector.RegisterUnavailableType(spec.Provides, spec.GroupKey, spec.Key(), reason)
 			registered = append(registered, spec.Provides)
 			pendingPlugins = append(pendingPlugins, spec.Name)
 			logf("plugin %s: NOT INSTALLED — its connectors are disabled until it is fetched", spec.Name)
@@ -219,7 +287,7 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 		if !spec.Shared {
 			describe = mgr.ProbeDescribe
 		}
-		decl, err := describe(ctx, spec.Key())
+		decl, err := describe(ctx, spec.GroupKey)
 		if err != nil {
 			// An INSTALLED plugin whose verify/spawn/describe fails — a corrupt
 			// binary, a noexec mount, a sandbox preflight that can't run, a sha
@@ -238,7 +306,7 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			// timer — retrying it on a schedule would just repeat the same
 			// failure forever.
 			reason := fmt.Sprintf("failed to start: %v — reinstall with `conductor plugin update %s` or check the daemon log", err, spec.Name)
-			connector.RegisterUnavailableType(spec.Provides, reason)
+			connector.RegisterUnavailableType(spec.Provides, spec.GroupKey, spec.Key(), reason)
 			registered = append(registered, spec.Provides)
 			logf("plugin %s: FAILED TO START (%v) — its connectors are disabled; every other connector, trigger and run proceeds", spec.Name, err)
 			continue
@@ -253,8 +321,7 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 		// into the shared process (if any) or start one for them that
 		// nothing in the config asked for.
 		if decl.Capabilities.SingleProcess {
-			ref := refs[spec.Key()]
-			isolated := ref.IsolatedInstanceNames()
+			isolated := isolatedInstanceNames(spec)
 			if len(isolated) == 0 {
 				// Visibility only: nothing to refuse, since no instance asked
 				// for isolate: true, but the operator should still see WHY one
@@ -263,7 +330,7 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			}
 			for _, name := range isolated {
 				reason := fmt.Sprintf("plugin %s declares single_process (discovered at describe) — isolate: true is not possible for it; every configured instance must share one process", spec.Name)
-				mgr.ForbidIsolated(spec.Key(), name, reason)
+				mgr.ForbidIsolated(spec.GroupKey, name, reason)
 				logf("connector %s: will be disabled (%s)", name, reason)
 			}
 		}
@@ -277,9 +344,13 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 		}
 		// CAN'T-EXCEED-DECLARATION: every instance's `network:` must be covered
 		// by what the plugin says it needs. A config that widens a plugin's
-		// declared egress is a config error, not a silent grant.
-		for cname, cref := range cfg.ConnectorsMap {
-			if cref.TypeName() != spec.Name || len(cref.Network) == 0 {
+		// declared egress is a config error, not a silent grant. Scoped to
+		// THIS group's own instances (spec.Instances) — never a sibling
+		// group's (a different resolved version, checked against ITS OWN
+		// decl.Capabilities when its own turn through this loop comes).
+		for cname := range spec.Instances {
+			cref := cfg.ConnectorsMap[cname]
+			if len(cref.Network) == 0 {
 				continue
 			}
 			if err := plugin.CheckNetworkWithinManifest(cname, decl.Capabilities.Egress, cref.Network); err != nil {
@@ -288,10 +359,8 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			}
 		}
 		// allow_env likewise grants only what the plugin declares it reads.
-		for cname, cref := range cfg.ConnectorsMap {
-			if cref.TypeName() != spec.Name {
-				continue
-			}
+		for cname := range spec.Instances {
+			cref := cfg.ConnectorsMap[cname]
 			for _, n := range cref.AllowEnv {
 				if !slices.Contains(decl.Capabilities.Env, n) {
 					rollback()
@@ -300,7 +369,7 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 				}
 			}
 		}
-		if _, err := connector.RegisterExternalConnector(mgr.InstanceClientFactory(spec.Key()), spec, decl); err != nil {
+		if _, err := connector.RegisterExternalConnector(mgr.InstanceClientFactory(spec.GroupKey), spec, decl); err != nil {
 			rollback()
 			return nil, fmt.Errorf("plugin %s: %w", spec.Name, err)
 		}
@@ -1010,7 +1079,32 @@ func reconcilePlugins(cfg *config.Config, opts plugin.Options) ([]plugin.Resolut
 	}
 	opts.Prune = cfg.PluginRefsComplete()
 	state := plugin.LoadInstallState(plugin.InstallDir())
-	return plugin.Reconcile(cfg.PluginRefs(), state, cfg.PluginTrust, plugin.GitDist{}, opts)
+	// Side-by-side versions: explode the name-grouped refs into one entry
+	// per distinct resolved version BEFORE reconciling, so two connectors
+	// pinning different versions of the same plugin each get their own
+	// fetch/install, never one silently standing in for the other
+	// (docs/wiki/Plugins.md "Side-by-side versions").
+	//
+	// A local reference is filtered out first: Reconcile has always treated
+	// it specially (ActionLocal, no install-state read or write at all), so
+	// there is nothing to gain from exploding it — and this runs on
+	// pendingPluginRetry's timer (via bootGapFill), where snapshotting a
+	// local plugin on every tick would grow its snapshot directory forever
+	// for a reference this function was never going to touch anyway.
+	raw := cfg.PluginRefs()
+	toExplode := make(map[string]config.PluginRef, len(raw))
+	for k, ref := range raw {
+		if ref.Use.Origin != config.OriginLocal {
+			toExplode[k] = ref
+		}
+	}
+	exploded := plugin.ExplodeRefs(toExplode, cfg.BaseDir(), state)
+	for k, ref := range raw {
+		if ref.Use.Origin == config.OriginLocal {
+			exploded[k] = ref
+		}
+	}
+	return plugin.Reconcile(exploded, state, cfg.PluginTrust, plugin.GitDist{}, opts)
 }
 
 // describeForInstall spawns a freshly-installed plugin ONCE to record its
@@ -1259,11 +1353,29 @@ func nextPendingPluginWait(cur time.Duration) time.Duration {
 // retrying; resolving it here would be pure overhead.
 func pendingPluginsStillMissing(cfg *config.Config, state *plugin.InstallState) int {
 	missing := 0
-	for key, ref := range cfg.PluginRefs() {
-		if ref.Kind() != config.PluginKindConnector || ref.Use.Origin == config.OriginLocal {
+	// Exploded (one entry per resolved-version GROUP): a name with two
+	// configured versions, one installed and one not, must still count as
+	// missing for the one that isn't — state.Get(key) alone would find the
+	// INSTALLED sibling version and wrongly call the whole name satisfied,
+	// stopping the retry before the actually-pending group ever lands
+	// (docs/wiki/Plugins.md "Side-by-side versions").
+	//
+	// A local reference is filtered out BEFORE exploding, never just
+	// skipped after: ExplodeRefs resolves every reference it is handed,
+	// including snapshotting a local one by content hash (groupRef/
+	// discriminatorFor) — exactly the per-tick snapshot growth this loop
+	// must never cause (see the doc above).
+	remote := map[string]config.PluginRef{}
+	for k, ref := range cfg.PluginRefs() {
+		if ref.Use.Origin != config.OriginLocal {
+			remote[k] = ref
+		}
+	}
+	for _, ref := range plugin.ExplodeRefs(remote, cfg.BaseDir(), state) {
+		if ref.Kind() != config.PluginKindConnector {
 			continue
 		}
-		inst, ok := state.Get(key)
+		inst, ok := state.GetForConstraint(ref.Use.InstallKey(), ref.Use)
 		if !ok || inst.Path == "" {
 			missing++
 		}

@@ -93,8 +93,15 @@ func CheckFetchable(rs RemoteSource, constraint string, api ReleaseAPI) (tag str
 // pinned sha256), and caches it. Returns the cached path, the resolved tag, and
 // the verified sha.
 func FetchRemote(rs RemoteSource, constraint, pinnedSha, cacheDir string, api ReleaseAPI) (binPath, tag, sha string, err error) {
-	binPath, tag, sha, _, err = FetchRemoteVerified(rs, constraint, pinnedSha, cacheDir, api)
+	binPath, tag, sha, _, err = FetchRemoteVerified(rs, constraint, pinnedSha, fixedCacheDir(cacheDir), api)
 	return binPath, tag, sha, err
+}
+
+// fixedCacheDir adapts a plain cache directory (every existing test, and any
+// caller that does not need a version-specific destination) to the
+// tag-dependent cacheDirFor shape FetchRemoteVerified now takes.
+func fixedCacheDir(dir string) func(tag string) string {
+	return func(string) string { return dir }
 }
 
 // FetchRemoteVerified is FetchRemote that also reports whether the download
@@ -104,11 +111,19 @@ func FetchRemote(rs RemoteSource, constraint, pinnedSha, cacheDir string, api Re
 // installs — the sha is recorded and checked before every exec — but it is
 // not verified, and nothing that is granted on the strength of a verified
 // release (an official source's default event trust) is granted to it.
-func FetchRemoteVerified(rs RemoteSource, constraint, pinnedSha, cacheDir string, api ReleaseAPI) (binPath, tag, sha string, verified bool, err error) {
+//
+// cacheDirFor receives the RESOLVED tag (known only after CheckFetchable
+// resolves the constraint, before anything is downloaded) and returns where
+// that version's binary belongs — side-by-side versions need their own
+// directory each (BinDirForVersion), since two versions of a plugin publish
+// the identical per-platform asset filename and would otherwise silently
+// overwrite one another on disk.
+func FetchRemoteVerified(rs RemoteSource, constraint, pinnedSha string, cacheDirFor func(tag string) string, api ReleaseAPI) (binPath, tag, sha string, verified bool, err error) {
 	tag, err = CheckFetchable(rs, constraint, api)
 	if err != nil {
 		return "", "", "", false, err
 	}
+	cacheDir := cacheDirFor(tag)
 	tmp, err := os.MkdirTemp("", "conductor-plugin-dl-*")
 	if err != nil {
 		return "", "", "", false, err
