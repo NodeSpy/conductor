@@ -1148,32 +1148,16 @@ func reconcilePlugins(cfg *config.Config, opts plugin.Options) ([]plugin.Resolut
 	}
 	opts.Prune = cfg.PluginRefsComplete()
 	state := plugin.LoadInstallState(plugin.InstallDir())
-	// Side-by-side versions: explode the name-grouped refs into one entry
-	// per distinct resolved version BEFORE reconciling, so two connectors
-	// pinning different versions of the same plugin each get their own
-	// fetch/install, never one silently standing in for the other
-	// (docs/wiki/Plugins.md "Side-by-side versions").
-	//
-	// A local reference is filtered out first: Reconcile has always treated
-	// it specially (ActionLocal, no install-state read or write at all), so
-	// there is nothing to gain from exploding it — and this runs on
-	// pendingPluginRetry's timer (via bootGapFill), where snapshotting a
-	// local plugin on every tick would grow its snapshot directory forever
-	// for a reference this function was never going to touch anyway.
-	raw := cfg.PluginRefs()
-	toExplode := make(map[string]config.PluginRef, len(raw))
-	for k, ref := range raw {
-		if ref.Use.Origin != config.OriginLocal {
-			toExplode[k] = ref
-		}
-	}
-	exploded := plugin.ExplodeRefs(toExplode, cfg.BaseDir(), state)
-	for k, ref := range raw {
-		if ref.Use.Origin == config.OriginLocal {
-			exploded[k] = ref
-		}
-	}
-	return plugin.Reconcile(exploded, state, cfg.PluginTrust, plugin.GitDist{}, opts)
+	// Side-by-side versions, finding 1: Reconcile now does its OWN
+	// per-instance explode internally (reconcileInstances) — resolving each
+	// configured instance against its OWN `use:` constraint, never a
+	// representative's, and grouping by RESOLVED version only after
+	// resolving. Pre-exploding here (as this used to) drove reconcile off a
+	// representative instance's constraint, picked by the PRIOR pass's
+	// install state — an unpinned sibling's move onto a new release would
+	// drag a pinned instance's install along with it, and then GC the
+	// version the pinned instance still needed out from under it.
+	return plugin.Reconcile(cfg.PluginRefs(), state, cfg.PluginTrust, plugin.GitDist{}, opts)
 }
 
 // describeForInstall spawns a freshly-installed plugin ONCE to record its

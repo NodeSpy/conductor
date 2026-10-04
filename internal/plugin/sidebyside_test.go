@@ -128,17 +128,14 @@ func TestSideBySideVersionsTwoProcessesOwnDecl(t *testing.T) {
 	key := ref.Key()
 	state := LoadInstallState(t.TempDir())
 
-	// Exploded FIRST, exactly like cmd/conductor's reconcilePlugins: before
-	// anything is installed, "a" (pinned =1.0.0) and "b" (pinned =2.0.0)
-	// resolve to two distinct "pending:<use>" buckets — two groups, so
-	// Reconcile fetches each one under its OWN constraint, never folding
-	// them into one fetch that only one instance's Use would have named.
+	// Reconcile is handed the RAW, name-grouped ref (exactly what
+	// cfg.PluginRefs() produces — no pre-exploding): finding 1, it resolves
+	// "a" (pinned =1.0.0) and "b" (pinned =2.0.0) each against its OWN
+	// constraint internally, fetching each one under its own `use:`, never
+	// folding them into one fetch that only one instance's Use would have
+	// named.
 	refs := map[string]config.PluginRef{key: ref}
-	pending := ExplodeRefs(refs, "", state)
-	if len(pending) != 2 {
-		t.Fatalf("expected 2 pending groups before anything installs, got %d: %v", len(pending), keysOf(pending))
-	}
-	if _, err := Reconcile(pending, state, nil, api, Options{AllowUnlisted: true}); err != nil {
+	if _, err := Reconcile(refs, state, nil, api, Options{AllowUnlisted: true}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 
@@ -282,7 +279,7 @@ func TestManagerReloadTouchesOnlyItsOwnGroup(t *testing.T) {
 	key := ref.Key()
 	state := LoadInstallState(t.TempDir())
 	refs := map[string]config.PluginRef{key: ref}
-	if _, err := Reconcile(ExplodeRefs(refs, "", state), state, nil, api, Options{AllowUnlisted: true}); err != nil {
+	if _, err := Reconcile(refs, state, nil, api, Options{AllowUnlisted: true}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 
