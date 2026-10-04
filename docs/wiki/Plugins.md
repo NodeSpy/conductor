@@ -153,6 +153,25 @@ plugin was keyed by name alone, so the first connector `conductor` happened
 to resolve decided the version *every* connector of that name got, no matter
 what the others asked for.
 
+**Reconcile resolves EACH configured instance against its OWN `use:`
+constraint, always — never a representative instance's.** This matters past
+the first install, too: picture `gh-stable` pinned at `@v1.0.0` and
+`gh-canary` left unpinned (stay-current), both presently sitting on
+`v1.0.0` — they share one process (below). When `v2.0.0` is published,
+`gh-canary` moves to it; `gh-stable`'s own pin is unaffected and **stays
+on `v1.0.0`, still installed, still running** — never uninstalled out from
+under it just because a sibling instance that happened to share its process
+moved on. The two are now two independent groups, each with its own
+process, exactly as if they had been pinned to different versions from the
+start. The set of installed versions garbage-collected at the end of a pass
+is *every version some currently-configured instance resolves to*, computed
+after every instance's own resolution — never a version a pinned instance
+still needs, and never driven by whichever instance a stale, pre-resolution
+grouping happened to treat as representative. Resolving every instance on
+its own never means a duplicate fetch: two instances whose constraint TEXT
+differs but who land on the identical release are downloaded and described
+exactly once per pass, not once per instance.
+
 **The split is by resolved version, not by the `use:` text you wrote.** Two
 instances whose constraints resolve to the *same* concrete build still share
 one process, exactly like two non-isolated instances of a single-version
@@ -160,27 +179,34 @@ plugin always have (see [Multi-instance isolation](#multi-instance-isolation)
 below) — `use: github` (stay current) on one connector and `use: github@^1`
 on another land in the same process the moment they both resolve to, say,
 `v1.4.0`. `isolate: true` still applies *within* whichever group an instance
-lands in.
+lands in, and so does isolation-compatibility: two non-isolated instances
+landing on the identical version but declaring `isolation:` blocks that
+can't combine (see "Two non-isolated instances' `isolation:` blocks must
+actually combine" below) split into separate processes for that version too
+— resolved-version equality is necessary to share a process, not sufficient.
 
 A local `use: ./path` build is split by its content-addressed snapshot sha
 (see "Local builds are snapshotted" below): two connectors pointed at the
 same bytes share a process; different bytes — even under the same declared
 name — never do.
 
-**`single_process` plugins are the one exception.** A plugin that declares
-`capabilities.single_process` keeps some box-global resource only one
-process can hold (the running example throughout this doc is a tailscale
-funnel lease) — running two resolved versions of it side by side would mean
-two processes each believing they alone own that resource. conductor refuses
-this outright, as a config validation error naming the plugin and every
-connector involved, rather than silently starting a second process that
-would fight the first for it:
+**`single_process` plugins are the one exception, and conductor never
+refuses BOOT over it.** A plugin that declares `capabilities.single_process`
+keeps some box-global resource only one process can hold (the running
+example throughout this doc is a tailscale funnel lease) — running two
+resolved versions of it side by side would mean two processes each
+believing they alone own that resource. Since which versions are currently
+resolved can change with no config edit (an unpinned instance's own
+auto-update), this is caught and refused at `validate`/pre-update-apply
+time (see "Multi-instance isolation" below for the full write-up), and
+degrades — disables every connector using either version, never the rest of
+the daemon — if it is ever discovered only at boot:
 
 ```
-config: connector(s) gh-stable, gh-canary: plugin tailscale declares single_process — it keeps
+plugin tailscale: connector(s) gh-stable, gh-canary: plugin tailscale declares single_process — it keeps
 one box-global resource that only ONE process can own, so two different resolved versions of it
 cannot run side by side; pin every connector using it to the SAME version, or see
-docs/wiki/Plugins.md "Side-by-side versions"
+docs/wiki/Plugins.md "Side-by-side versions" — its connectors are disabled
 ```
 
 The fix is always the same: pin every connector that uses a `single_process`
@@ -226,6 +252,12 @@ What follows from that:
   of a plugin off `v1.4.0` onto `v2.0.0`, the next `conductor init` /
   `plugin update` uninstalls `v1.4.0`'s binary once nothing resolves to it,
   while a version still in use (by this plugin or any other) is left running.
+- **A cross-process advisory lock** (an flock on a lockfile next to
+  `installed.yaml`, best-effort — a no-op on a platform without flock)
+  guards the whole load-mutate-save cycle, so a `conductor plugin update`
+  you run by hand and the daemon's own auto-update cycle — two separate OS
+  processes, each otherwise unaware of the other — never race a write and
+  silently lose one side's change.
 
 ### Local builds are snapshotted
 
@@ -285,6 +317,13 @@ conductor connectors ls            # each instance's resolved use:/origin
 `plugin list` never executes anything: it shows install state plus a
 verify-before-execute health check. `plugin show` spawns and describes a
 connector plugin to print its real contract.
+
+`conductor schema <type>` for a bare, unconfigured type name shows every
+resolved-version group's declaration when more than one is configured side
+by side — each under its own `--- <type>: version N of M (<group>) ---`
+header — rather than silently whichever one happened to register first.
+For a specific, configured connector instance it always resolves that
+instance's own bound group, never an arbitrary sibling's.
 
 `plugin add` deliberately **prints** the config stub rather than editing your
 config. The config is your file; a tool that silently rewrites it is a tool you
@@ -439,15 +478,38 @@ ONE block the shared process can run under. Advisory `network: {egress: …}`
 lists union, the same way `network:`/`allow_secrets:`/`allow_env:` do. A
 `deny: true` is a promise of no network beyond that instance's own allowlist,
 so a sibling can share its process only with the identical promise (deny,
-same egress). Anything else is a config error rather than a merge: a merge
+same egress). Anything else is a conflict rather than a merge: a merge
 would either open a path the denying instance never asked for, or cut the
 sibling's network. Every other field (`mode`, `container`,
 `limits`, `privileged`, `allow_root`) is a choice of WHICH sandbox shape to
 run, not a point on a shared strictness scale: `mode: namespace` and `mode:
-container` are different, not comparable. Two non-isolated instances
-declaring incompatible blocks there is a config validation error naming both
-connectors and the plugin — make the blocks match, or `isolate: true` one of
-them to give it (and the difference) its own process.
+container` are different, not comparable.
+
+When conductor can tell two instances conflict OFFLINE, from the config
+alone (byte-identical `use:` text — provably the same build, no install
+state needed to know it), it is a **config validation error** naming both
+connectors and the plugin, at load time, before anything spawns.
+
+But two instances can also conflict only once RESOLVED — different `use:`
+text (a pin and a range, say) that happens to land on the identical release
+at this point in time. That can never be a load-time error (resolving a
+range needs install state, which validation never consults), so it is caught
+where resolution actually happens, and handled by **splitting them**: a
+version bucket that would otherwise have been one process, with
+isolation-incompatible non-isolated instances in it, divides into as many
+processes as it needs to — one per mutually-compatible cluster — so every
+instance still runs under **exactly its own declared isolation**, never a
+neighbor's and never silently dropped. This is never a config error and
+never refuses anything: instances that can't share simply don't, the same
+"degrade, don't refuse" posture `single_process` conflicts now follow (just
+below). `conductor plugin show`/`plugin list` names each such sub-group
+distinctly so which instances ended up sharing which process is always
+visible.
+
+Either way, the fix available to the operator is the same: make the blocks
+match, or `isolate: true` one of the conflicting instances to give it (and
+the difference) its own process on purpose instead of by the automatic
+split.
 
 **The one process-level resource conductor always isolates**: the
 type-level `plugin.describe` probe. When a connector key has a shared
@@ -464,16 +526,35 @@ so.** A plugin that keeps a BOX-GLOBAL resource every configured instance
 must agree on — a lease refcount on a shared OS-level mapping, a listener
 bound to one fixed port — declares `capabilities.single_process: true` in
 its `plugin.describe` response. `isolate: true` on any instance of such a
-plugin is refused, never silently folded back into the shared process:
+plugin is refused, never silently folded back into the shared process — and
+neither is two DIFFERENT resolved versions of it ever run side by side (see
+"Side-by-side versions" above), since each would believe it alone owns that
+resource.
 
-- if the capability is already known (a previous install's manifest
-  recorded it), `isolate: true` anywhere is a **config validation error**
-  naming the connector and the plugin, refusing boot before anything spawns;
-- if the capability is discovered only at THIS describe (a freshly-added or
-  locally-built plugin, with no recorded manifest yet to check ahead of
-  time), that one isolated connector is **disabled**, loudly, with the
-  reason — every other connector, including every non-isolated instance of
-  the SAME plugin, proceeds normally.
+Both conflicts are properties of the RESOLVED set (which version each
+instance currently lands on, and what that version's manifest says), not
+the written config — an auto-update that moves an unpinned instance onto a
+release that newly declares `single_process`, colliding with a pinned
+sibling or an `isolate: true` instance, can create either shape with no
+config edit at all. That means boot itself never refuses outright over
+one — doing so would mean a single plugin's auto-update, days after the
+config was last touched, could take the ENTIRE daemon down:
+
+- `conductor validate` and the auto-update pre-restart gate (the daemon
+  checks this again right before deciding to apply a self-refreshed set of
+  dependencies) both check it against what is **currently installed**,
+  offline — a statically knowable problem given the box's present state —
+  and refuse: `validate` fails, and an update that would newly CREATE the
+  conflict is logged and simply not applied, so the daemon never restarts
+  into a boot it would then have to degrade;
+- the running daemon's own boot path never refuses over it. `isolate: true`
+  colliding with its own group's `single_process` plugin disables just that
+  one connector, loudly, with the reason — every other connector, including
+  every non-isolated instance of the SAME plugin, proceeds normally. Two
+  different resolved versions configured side by side has no such partial
+  fix (the resource can't run twice no matter who shares which process), so
+  every connector using either version is disabled instead — still never the
+  rest of the daemon.
 
 `conductor plugin show`/`plugin list --caps` label this explicitly
 (`single_process: the plugin declares every instance must share one process
