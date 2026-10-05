@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"os"
 	"sync"
 	"testing"
 
@@ -145,6 +146,14 @@ func TestReconcileDedupesFetchAndDescribeAcrossInstances(t *testing.T) {
 	if counting.dlCalls != 2 { // the binary + checksums.txt — one of EACH, not two of each
 		t.Fatalf("expected exactly one Download of the binary and one of checksums.txt (2 total), got %d: %+v", counting.dlCalls, counting.dlCallsByAssetFile)
 	}
+	// TEST GAP (resolve.go ~330): the ListTags memo (pinnedTagCache) must
+	// cover BOTH instances in this one pass — x's own CheckFetchable call
+	// warms it, and FetchRemoteVerified's internal re-check, plus y's own
+	// CheckFetchable call, must all hit the memo rather than each costing a
+	// real ListTags round trip.
+	if counting.listCalls != 1 {
+		t.Fatalf("expected exactly 1 ListTags call across both instances resolving one source in one pass, got %d", counting.listCalls)
+	}
 	if describeCalls != 1 {
 		t.Fatalf("expected exactly 1 describe call across both instances sharing jira/v1.0.0, got %d", describeCalls)
 	}
@@ -217,5 +226,133 @@ func TestReconcileTwoPinnedSiblingsNoRepeatedDownload(t *testing.T) {
 	all := st.AllVersions(ref.Key())
 	if len(all) != 1 || all[0].Resolved != "jira/v1.0.0" {
 		t.Fatalf("expected exactly one installed version jira/v1.0.0, got %+v", all)
+	}
+}
+
+// TestReconcilePinnedInstanceRefetchesWhenBinaryDeleted is a TEST GAP at
+// resolve.go ~442: the pin-satisfied check is binaryPresent(prev.Path), not
+// just "is there a record" — a pinned instance whose installed binary was
+// deleted out from under it (an operator's `rm`, a wiped /tmp, a botched
+// upgrade script) must be detected as unsatisfied and re-fetched, never
+// left believing it is "pinned" and permanently running nothing.
+func TestReconcilePinnedInstanceRefetchesWhenBinaryDeleted(t *testing.T) {
+	st := stateAt(t)
+	trust := &config.PackTrustConfig{Allow: []string{"github.com/acme/*"}}
+
+	p, err := config.ParseUse(config.UseKindConnector, "acme/plugins/jira@1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.IsPinned() {
+		t.Fatalf("reference must be a true pin for this test: %q", p.Version)
+	}
+	ref := config.PluginRef{
+		Name: "jira", Instance: "p", Use: p,
+		Instances: map[string]config.ConnectorGrant{"p": {Use: p}},
+	}
+	refs := map[string]config.PluginRef{ref.Key(): ref}
+	counting := &countingAPI{inner: stubFor("jira", "jira/v1.0.0")}
+
+	if _, err := Reconcile(refs, st, trust, counting, Options{}); err != nil {
+		t.Fatalf("initial install: %v", err)
+	}
+	installedAfterFirst := counting.dlCalls
+	if installedAfterFirst == 0 {
+		t.Fatal("expected the first pass to actually install the binary")
+	}
+
+	// Satisfied, binary present: a second pass must change nothing and
+	// fetch nothing — the ordinary pinned-and-satisfied path.
+	if _, err := Reconcile(refs, st, trust, counting, Options{}); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if counting.dlCalls != installedAfterFirst {
+		t.Fatalf("a satisfied pin with its binary present must not re-fetch, got %d more download(s)", counting.dlCalls-installedAfterFirst)
+	}
+
+	// Delete the installed binary out from under the pin.
+	rec, ok := st.GetVersion(ref.Key(), "jira/v1.0.0")
+	if !ok {
+		t.Fatal("expected an installed record for jira/v1.0.0")
+	}
+	if err := os.Remove(rec.Path); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Reconcile(refs, st, trust, counting, Options{}); err != nil {
+		t.Fatalf("third pass (binary deleted): %v", err)
+	}
+	if counting.dlCalls == installedAfterFirst {
+		t.Fatal("a pinned instance whose binary was deleted must be re-fetched, not left believing it is still satisfied")
+	}
+	if _, err := os.Stat(rec.Path); err != nil {
+		t.Fatalf("the binary must be restored to disk after the re-fetch: %v", err)
+	}
+}
+
+// TestReconcileRetaggedReleaseIsReVerifiedNotSilentlyCurrent is a TEST GAP
+// at resolve.go ~485: the "current" classification compares the fetched
+// sha against what was already installed for that TAG, not just the tag
+// text — a release that gets RETAGGED upstream (the same tag, "jira/v1.0.0"
+// say, now pointing at different bytes — a forge mistake, or a forced
+// push) must be detected as a real change and re-verified/re-recorded,
+// never silently called "up to date" just because the tag string the
+// instance resolved to didn't move.
+func TestReconcileRetaggedReleaseIsReVerifiedNotSilentlyCurrent(t *testing.T) {
+	st := stateAt(t)
+	trust := &config.PackTrustConfig{Allow: []string{"github.com/acme/*"}}
+	u, err := config.ParseUse(config.UseKindConnector, "acme/plugins/jira")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := config.PluginRef{
+		Name: "jira", Instance: "x", Use: u,
+		Instances: map[string]config.ConnectorGrant{"x": {Use: u}},
+	}
+	refs := map[string]config.PluginRef{ref.Key(): ref}
+
+	apiV1 := stubAPI{tags: []string{"jira/v1.0.0"}, bin: []byte("original release bytes"), assetName: RemoteSource{Component: "jira"}.AssetName()}
+	res, err := Reconcile(refs, st, trust, apiV1, Options{})
+	if err != nil {
+		t.Fatalf("initial install: %v", err)
+	}
+	if len(res) != 1 || res[0].Action != ActionInstalled {
+		t.Fatalf("expected the first pass to install, got %+v", res)
+	}
+	firstSha := res[0].Sha
+
+	// The SAME tag gets retagged upstream, pointing at DIFFERENT bytes —
+	// the tag string never changes, only what it resolves to.
+	apiV2 := stubAPI{tags: []string{"jira/v1.0.0"}, bin: []byte("retagged, completely different bytes"), assetName: RemoteSource{Component: "jira"}.AssetName()}
+	res2, err := Reconcile(refs, st, trust, apiV2, Options{})
+	if err != nil {
+		t.Fatalf("retag pass: %v", err)
+	}
+	if len(res2) != 1 {
+		t.Fatalf("expected one resolution, got %+v", res2)
+	}
+	if res2[0].Tag != "jira/v1.0.0" {
+		t.Fatalf("the tag itself must not have changed: %q", res2[0].Tag)
+	}
+	if res2[0].Sha == firstSha {
+		t.Fatalf("a retagged release must be re-verified (new sha), got the same sha %q as before", firstSha)
+	}
+	if res2[0].Action != ActionUpdated {
+		t.Fatalf("a retagged release under an unchanged tag must classify as %q, not %q — silently calling it current hides that the bytes actually running changed", ActionUpdated, res2[0].Action)
+	}
+
+	rec, ok := st.GetVersion(ref.Key(), "jira/v1.0.0")
+	if !ok {
+		t.Fatal("expected an installed record for jira/v1.0.0")
+	}
+	if rec.Sha256 != res2[0].Sha {
+		t.Fatalf("install state must record the NEW sha %q, got %q", res2[0].Sha, rec.Sha256)
+	}
+	got, err := os.ReadFile(rec.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "retagged, completely different bytes" {
+		t.Fatalf("the binary on disk must be the retagged bytes, got %q", got)
 	}
 }
