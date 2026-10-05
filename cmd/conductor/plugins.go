@@ -1330,31 +1330,42 @@ func loadConfigRest(args []string) (*config.Config, []string, error) {
 	return cfg, positional(rest), nil
 }
 
-// publishConnectorVersions hands config the resolved release of every
-// installed PLUGIN connector, so a pack's `requires.connectors:
-// { jira: ">=2.0" }` can be gated at instantiate (design §D).
+// publishConnectorVersions hands config every resolved release CURRENTLY
+// installed for each plugin connector, so a pack's `requires.connectors:
+// { jira: ">=2.0" }` can be gated at instantiate against each configured
+// instance's OWN version (design §D; docs/wiki/Plugins.md "Side-by-side
+// versions").
 //
 // It reads local install state only — never the network. Install state is
 // owned by internal/plugin, which imports internal/config, so the values are
-// injected downward rather than config reaching up for them. A connector
-// with no install record is builtin (or a dev binary): config falls back to
-// the daemon version, or skips the gate when neither is known.
+// injected downward rather than config reaching up for them. This runs
+// before any config is loaded (main(), before the config path is even
+// known), so it has no configured instance names to key by — keying by
+// plugin KEY and publishing EVERY installed version under it (not just a
+// "representative" one) lets config.resolvedConnectorVersion pick the
+// version a SPECIFIC instance's own `use:` constraint resolves to later,
+// once that instance is known. A connector with no install record is
+// builtin (or a dev binary): config falls back to the daemon version, or
+// skips the gate when neither is known.
 func publishConnectorVersions() {
 	state := plugin.LoadInstallState(plugin.InstallDir())
 	if state == nil {
 		return
 	}
-	vers := map[string]string{}
+	vers := map[string][]string{}
 	for _, key := range state.Keys() {
-		in, ok := state.Get(key)
-		if !ok {
+		all := state.AllVersions(key)
+		if len(all) == 0 || all[0].Kind != config.PluginKindConnector {
 			continue
 		}
-		if in.Kind != config.PluginKindConnector {
-			continue
+		var tags []string
+		for _, in := range all {
+			if v := strings.TrimSpace(in.Resolved); v != "" {
+				tags = append(tags, v)
+			}
 		}
-		if v := strings.TrimSpace(in.Resolved); v != "" {
-			vers[in.Name] = v
+		if len(tags) > 0 {
+			vers[key] = tags
 		}
 	}
 	config.SetConnectorVersions(vers)

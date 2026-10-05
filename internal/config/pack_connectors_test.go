@@ -117,7 +117,7 @@ pack:
 
 // A plugin connector below the constraint fails the load, naming both sides.
 func TestRequiresConnectorVersionGateRejectsOldPlugin(t *testing.T) {
-	SetConnectorVersions(map[string]string{"tickets": "v1.4.0"})
+	SetConnectorVersions(map[string][]string{"connectors/jira": {"v1.4.0"}})
 	t.Cleanup(func() { SetConnectorVersions(nil) })
 
 	dir := t.TempDir()
@@ -142,7 +142,7 @@ packs:
 
 // A plugin at or above the constraint passes.
 func TestRequiresConnectorVersionGateAcceptsCurrentPlugin(t *testing.T) {
-	SetConnectorVersions(map[string]string{"tickets": "v2.3.1"})
+	SetConnectorVersions(map[string][]string{"connectors/jira": {"v2.3.1"}})
 	t.Cleanup(func() { SetConnectorVersions(nil) })
 
 	dir := t.TempDir()
@@ -202,7 +202,7 @@ packs:
 
 // The bare-list form gates nothing — it is "any version" by definition.
 func TestRequiresConnectorListFormGatesNothing(t *testing.T) {
-	SetConnectorVersions(map[string]string{"tickets": "v0.0.1"})
+	SetConnectorVersions(map[string][]string{"connectors/jira": {"v0.0.1"}})
 	t.Cleanup(func() { SetConnectorVersions(nil) })
 
 	dir := t.TempDir()
@@ -344,5 +344,78 @@ func TestConnectorReqBlockRejectsUnknownKeys(t *testing.T) {
 	err := strictUnmarshal([]byte("connectors:\n  github: { requred: false }\n"), &req)
 	if err == nil || !strings.Contains(err.Error(), "requred") {
 		t.Fatalf("a typo in the block must be a load error, got %v", err)
+	}
+}
+
+// TestRequiresConnectorVersionGateIsPerInstanceNotPerType is finding 3
+// (MEDIUM): publishConnectorVersions used to key its published map by the
+// plugin TYPE name (Installed.Name), while resolvedConnectorVersion looked
+// it up by the connector INSTANCE name — the two agree only when an
+// instance happens to be named after its type, so with side-by-side
+// versions (docs/wiki/Plugins.md), where two instances of ONE type sit on
+// TWO different resolved versions, there was no single "the" version to
+// publish under the type name at all: one instance's gate silently used
+// whichever version happened to be picked as install state's
+// "representative" — possibly the OTHER instance's.
+//
+// Two connector instances of the same "jira" plugin type, pinned to
+// different versions (1.0.0 and 2.5.0), each bound to its own instantiation
+// of a pack requiring jira >=2.0: the new-version instance must pass and
+// the old-version instance must be refused, gated on ITS OWN resolved
+// version — never the sibling's.
+func TestRequiresConnectorVersionGateIsPerInstanceNotPerType(t *testing.T) {
+	SetConnectorVersions(map[string][]string{
+		// Tags carry the monorepo component prefix a real jira/ release tag
+		// would (BestMatch tolerates it via Use.TagPrefix()) — a bare version
+		// with no @ at all exercises the single-candidate shortcut and would
+		// not touch BestMatch's prefix handling at all.
+		"connectors/jira": {"jira/v1.0.0", "jira/v2.5.0"},
+	})
+	t.Cleanup(func() { SetConnectorVersions(nil) })
+
+	dir := t.TempDir()
+	writePackSource(t, dir, "src/nj", versionedPack)
+
+	// The OLD pin (1.0.0) must be refused. Written with an explicit "="
+	// (rather than the bare-version pin form) so its resolution is an exact
+	// match regardless of a higher sibling version also being published —
+	// a bare version constraint means ">=" in this resolver (shared with
+	// requires.conductor's own "a bare version is a floor" convention), so
+	// an UNQUALIFIED "1.0.0" against a published set that also contains
+	// 2.5.0 would itself resolve to the higher one; that is a property of
+	// the shared constraint matcher, not what finding 3 is about, and
+	// "=1.0.0" sidesteps it to isolate the per-INSTANCE-vs-per-TYPE keying
+	// bug this test exists to catch.
+	_, err := resolveAndLoad(t, writeDoc(t, dir, `
+connectors:
+  jira_old: { use: acme/plugins/jira@=1.0.0 }
+packs:
+  needs-jira:
+    source: ./src/nj
+    connectors: { jira: jira_old }
+`))
+	if err == nil {
+		t.Fatal("the instance pinned to 1.0.0 must fail the >=2.0 gate")
+	}
+	for _, want := range []string{"jira_old", "1.0.0", ">=2.0"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should name %q: %v", want, err)
+		}
+	}
+
+	// The NEW pin (2.5.0), configured ALONGSIDE the old one (so BOTH
+	// versions are "installed" from install state's point of view, exactly
+	// like the side-by-side shape), must pass — on its OWN version, never
+	// dragged down by its sibling's.
+	if _, err := resolveAndLoad(t, writeDoc(t, dir, `
+connectors:
+  jira_old: { use: acme/plugins/jira@=1.0.0 }
+  jira_new: { use: acme/plugins/jira@2.5.0 }
+packs:
+  needs-jira:
+    source: ./src/nj
+    connectors: { jira: jira_new }
+`)); err != nil {
+		t.Fatalf("the instance pinned to 2.5.0 must pass the >=2.0 gate on its OWN version: %v", err)
 	}
 }
