@@ -21,6 +21,7 @@ func TestClientCloseDuringStuckReloadReturnsPromptly(t *testing.T) {
 	fc := newFakeConn()
 	fc.describe = &Decl{ProtocolVersion: ProtocolVersion, Type: "jira"}
 	fc.hang = true // every call (Invoke, and later Stop) blocks on ctx.Done()
+	fc.entered = make(chan struct{})
 	c := NewClient(reloadableSpec(t), Deps{dial: fakeDial(fc)})
 
 	// Put a bounded call in flight that never returns (bounded only by its
@@ -36,14 +37,14 @@ func TestClientCloseDuringStuckReloadReturnsPromptly(t *testing.T) {
 		_, _ = c.Invoke(callCtx, InvokeRequest{Instance: "x", Verb: "go"})
 	}()
 	<-started
-	time.Sleep(20 * time.Millisecond) // let the call enter conn.Call (inflight++, served)
+	<-fc.entered // the call is now genuinely in flight (inflight++, served)
 
 	reloadDone := make(chan struct{})
 	go func() {
 		defer close(reloadDone)
 		_ = c.Reload(reloadableSpec(t)) // sets reloading=true, then parks on the undrainable inflight call
 	}()
-	time.Sleep(20 * time.Millisecond) // let Reload observe reloading and enter its drain wait
+	waitUntilReloading(t, c) // Reload has observed reloading and entered its drain wait
 
 	done := make(chan error, 1)
 	start := time.Now()
@@ -105,6 +106,7 @@ func TestClientCloseWakesCallParkedBehindStuckReloadNoDeadline(t *testing.T) {
 	fc := newFakeConn()
 	fc.describe = &Decl{ProtocolVersion: ProtocolVersion, Type: "jira"}
 	fc.hang = true // every call (Invoke, and later Stop) blocks on ctx.Done()
+	fc.entered = make(chan struct{})
 	c := NewClient(reloadableSpec(t), Deps{dial: fakeDial(fc)})
 
 	// First call: bounded by its own cancellable ctx, never returns until
@@ -118,18 +120,24 @@ func TestClientCloseWakesCallParkedBehindStuckReloadNoDeadline(t *testing.T) {
 		_, _ = c.Invoke(callCtx, InvokeRequest{Instance: "x", Verb: "go"})
 	}()
 	<-firstStarted
-	time.Sleep(20 * time.Millisecond) // let it enter conn.Call (inflight++, served)
+	<-fc.entered // the call is now genuinely in flight (inflight++, served)
 
 	reloadDone := make(chan struct{})
 	go func() {
 		defer close(reloadDone)
 		_ = c.Reload(reloadableSpec(t)) // sets reloading=true, then parks undrainable
 	}()
-	time.Sleep(20 * time.Millisecond) // let Reload observe reloading and enter its drain wait
+	waitUntilReloading(t, c) // Reload has observed reloading and entered its drain wait
 
 	// Second call: NO ctx deadline at all — context.Background(). It parks in
 	// callFor's reloading-wait loop with no watcher goroutine and no way to
-	// observe ctx ending, since there is nothing to end.
+	// observe ctx ending, since there is nothing to end. No further
+	// synchronization is needed before starting it: c.reloading is already
+	// observably true (waitUntilReloading above only returns once a lock
+	// acquisition has seen it), and callFor re-reads it under the SAME c.mu
+	// on every iteration of its wait loop — there is no window in which this
+	// call could race past a reloading check that is already true by the
+	// time it starts.
 	secondErr := make(chan error, 1)
 	secondStarted := make(chan struct{})
 	go func() {
@@ -138,7 +146,6 @@ func TestClientCloseWakesCallParkedBehindStuckReloadNoDeadline(t *testing.T) {
 		secondErr <- err
 	}()
 	<-secondStarted
-	time.Sleep(20 * time.Millisecond) // let it enter callFor and park on reloadCond
 
 	start := time.Now()
 	closeDone := make(chan error, 1)

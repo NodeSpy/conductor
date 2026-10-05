@@ -18,6 +18,30 @@ func reloadableSpec(t *testing.T) Spec {
 	return sp
 }
 
+// waitUntilReloading polls c.reloading under its own lock until it is true,
+// deterministically replacing a fixed time.Sleep("let Reload observe
+// reloading and enter its drain wait") — the flag flips almost instantly (a
+// bool write under c.mu, nothing blocking before it), so this loop just
+// waits for that specific, observable transition instead of guessing how
+// long it takes, and fails loudly (rather than silently racing) if it never
+// happens within the deadline.
+func waitUntilReloading(t *testing.T, c *Client) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c.mu.Lock()
+		reloading := c.reloading
+		c.mu.Unlock()
+		if reloading {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Reload never set c.reloading")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // TestClientReloadSwapsProcessInPlace: after Reload, the SAME *Client re-dials
 // the new binary transparently — the next call lands on the second connection.
 func TestClientReloadSwapsProcessInPlace(t *testing.T) {
@@ -65,6 +89,7 @@ func TestClientReloadDrainsInFlight(t *testing.T) {
 	fc := newFakeConn()
 	fc.describe = &Decl{ProtocolVersion: ProtocolVersion, Type: "jira"}
 	fc.hang = true // Call blocks on ctx.Done()
+	fc.entered = make(chan struct{})
 	c := NewClient(reloadableSpec(t), Deps{dial: fakeDial(fc)})
 
 	callCtx, cancelCall := context.WithCancel(context.Background())
@@ -74,7 +99,7 @@ func TestClientReloadDrainsInFlight(t *testing.T) {
 		_, _ = c.Invoke(callCtx, InvokeRequest{Verb: "x"}) // hangs until callCtx cancelled
 	}()
 	<-started
-	time.Sleep(20 * time.Millisecond) // let the call enter conn.Call (inflight++)
+	<-fc.entered // the call is now genuinely in flight (inflight++, parked in Call)
 
 	reloadErr := make(chan error, 1)
 	go func() { reloadErr <- c.Reload(reloadableSpec(t)) }()
@@ -103,6 +128,7 @@ func TestClientReloadAfterCloseReturnsErrorWithoutMutating(t *testing.T) {
 	fc := newFakeConn()
 	fc.describe = &Decl{ProtocolVersion: ProtocolVersion, Type: "jira"}
 	fc.hang = true // every call blocks on ctx.Done()
+	fc.entered = make(chan struct{})
 	origSpec := reloadableSpec(t)
 	c := NewClient(origSpec, Deps{dial: fakeDial(fc)})
 
@@ -113,11 +139,11 @@ func TestClientReloadAfterCloseReturnsErrorWithoutMutating(t *testing.T) {
 		_, _ = c.Invoke(callCtx, InvokeRequest{Instance: "x", Verb: "go"}) // hangs until cancelCall
 	}()
 	<-started
-	time.Sleep(20 * time.Millisecond) // let it enter conn.Call (inflight++, served)
+	<-fc.entered // the call is now genuinely in flight (inflight++, served)
 
 	reloadErr := make(chan error, 1)
 	go func() { reloadErr <- c.Reload(reloadableSpec(t)) }() // new BinPath, would overwrite if applied
-	time.Sleep(20 * time.Millisecond)                        // let Reload observe reloading and enter its drain wait
+	waitUntilReloading(t, c)                                 // Reload has observed reloading and entered its drain wait
 
 	if err := c.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -158,11 +184,12 @@ func TestClientReloadTimesOutBusy(t *testing.T) {
 	fc := newFakeConn()
 	fc.describe = &Decl{ProtocolVersion: ProtocolVersion, Type: "jira"}
 	fc.hang = true
+	fc.entered = make(chan struct{})
 	c := NewClient(reloadableSpec(t), Deps{dial: fakeDial(fc)})
 	callCtx, cancelCall := context.WithCancel(context.Background())
 	defer cancelCall()
 	go func() { _, _ = c.Invoke(callCtx, InvokeRequest{Verb: "x"}) }()
-	time.Sleep(20 * time.Millisecond)
+	<-fc.entered // the call is now genuinely in flight
 
 	if err := c.Reload(reloadableSpec(t)); !errors.Is(err, ErrReloadBusy) {
 		t.Fatalf("want ErrReloadBusy on undrainable call, got %v", err)

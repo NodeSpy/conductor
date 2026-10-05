@@ -169,6 +169,16 @@ type fakeConn struct {
 	hang        bool
 	done        chan struct{}
 	calls       int
+	// entered, when non-nil, is closed the moment a hang=true Call parks on
+	// ctx.Done() — i.e. the instant Client.callFor's inflight.Add(1) has
+	// already happened (it runs BEFORE conn.Call), so a test can block on
+	// this instead of a fixed time.Sleep to know "the call is now genuinely
+	// in flight" deterministically, the same way
+	// TestManagerReloadRaceNewInstanceGetsNewBuild's `entered` channel does
+	// for the Manager-level race. Closed at most once (enterOnce) even if
+	// Call is somehow invoked more than once with hang still true.
+	entered   chan struct{}
+	enterOnce sync.Once
 }
 
 func newFakeConn() *fakeConn { return &fakeConn{done: make(chan struct{})} }
@@ -179,6 +189,9 @@ func (f *fakeConn) Call(ctx context.Context, method string, params, result any) 
 	hang := f.hang
 	f.mu.Unlock()
 	if hang {
+		if f.entered != nil {
+			f.enterOnce.Do(func() { close(f.entered) })
+		}
 		<-ctx.Done()
 		return ctx.Err()
 	}
