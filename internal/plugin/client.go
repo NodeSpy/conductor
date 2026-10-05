@@ -938,6 +938,20 @@ func (c *Client) callFor(ctx context.Context, timeout time.Duration, method stri
 			c.teardownLocked()
 		}
 		c.mu.Unlock()
+		// Finding 9 (LOW): conn.Call's own transport-layer errors come
+		// straight from the acp package this client reuses as its wire
+		// protocol — an operator sees "acp: connection closed" with no clue
+		// what "acp" even is, or which plugin. Only wrap a genuine
+		// transport failure (the connection actually died), never a plain
+		// call-scoped cancellation/deadline (cctx.Err() != nil — the call's
+		// OWN timeout or the caller giving up), which already reads fine on
+		// its own and did not necessarily mean the process is gone. The
+		// cause stays reachable via %w for anything (tests, errors.Is/As)
+		// that needs the original acp-level error, without ever changing
+		// what the acp package itself reports for its own runtime messages.
+		if cctx.Err() == nil {
+			return fmt.Errorf("plugin %s process exited or closed its connection: %w", c.spec.Name, err)
+		}
 	}
 	return err
 }
