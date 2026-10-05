@@ -303,8 +303,12 @@ func (s *InstallState) GetForConstraint(key string, u config.Use) (Installed, bo
 }
 
 // AllVersions returns every installed record for key, sorted by Resolved
-// (ascending — lexical, which agrees with semver order for the tag shapes
-// BestMatch understands). Empty when nothing is installed under key.
+// ascending using the SAME semver comparison config.BestMatch resolves
+// constraints with (config.CompareVersions) — never a plain lexical byte
+// compare, which puts "v1.10.0" BEFORE "v1.9.0" (lexically "1.1" < "1.9")
+// and silently handed Get() the wrong "highest" record the moment a
+// plugin's installed versions crossed a double-digit component. Empty when
+// nothing is installed under key.
 func (s *InstallState) AllVersions(key string) []Installed {
 	if s == nil {
 		return nil
@@ -315,7 +319,7 @@ func (s *InstallState) AllVersions(key string) []Installed {
 			out = append(out, p)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Resolved < out[j].Resolved })
+	sort.Slice(out, func(i, j int) bool { return config.CompareVersions(out[i].Resolved, out[j].Resolved) < 0 })
 	return out
 }
 

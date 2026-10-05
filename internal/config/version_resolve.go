@@ -13,6 +13,42 @@ func SatisfiesConstraint(version, constraint string) bool {
 	return satisfiesConstraint(version, constraint)
 }
 
+// CompareVersions orders two resolved release tags the same way BestMatch
+// picks the highest among several — numerically, so "v1.9.0" sorts BELOW
+// "v1.10.0" rather than after it the way a plain lexical byte compare would
+// (install state's own Get/AllVersions used to sort this way, silently
+// handing "the highest installed version" callers v1.9.0 the moment a
+// v1.10.0 existed alongside it). A monorepo's component-path tag prefix
+// ("connectors/widget/v1.2.3") is tolerated exactly like BestMatch tolerates
+// it, via the same trailing-segment trim checkConductorConstraint already
+// uses for a plugin's own version gate.
+//
+// Pre-release/build metadata is not ordered relative to the release it
+// precedes: parseSemver drops a "-"/"+" suffix entirely (by design, see
+// checkConductorConstraint), so "v1.2.3" and "v1.2.3-rc1" parse identically
+// and compare EQUAL here. Rather than leave that tie to whatever order the
+// caller's sort happened to visit them in (nondeterministic for an
+// unstable sort, and an easy-to-miss footgun even for a stable one), the
+// tie is broken by a plain byte-wise compare of the two FULL tag strings —
+// deterministic and documented, but deliberately not a claim that either
+// side is semantically newer.
+//
+// A tag either side cannot parse as semver at all (a hand-written local
+// snapshot key, a corrupt record) falls back to the identical byte-wise
+// compare, so a mixed set of parseable and unparseable tags still sorts
+// into one stable, repeatable order rather than panicking or silently
+// depending on map/slice iteration order.
+func CompareVersions(a, b string) int {
+	av, aerr := parseSemver(trimVersionPrefix(a))
+	bv, berr := parseSemver(trimVersionPrefix(b))
+	if aerr == nil && berr == nil {
+		if c := compareSemver(av, bv); c != 0 {
+			return c
+		}
+	}
+	return strings.Compare(a, b)
+}
+
 // Shared version-constraint resolution for sourced dependencies (packs and
 // plugins). A `version:` constraint is Terraform/gems style — comma- or
 // space-separated parts, AND-ed — and drives which git tag a dependency
