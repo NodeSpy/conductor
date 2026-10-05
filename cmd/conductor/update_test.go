@@ -159,3 +159,36 @@ func TestPreflightValidateForcedSkipsThePluginRequirement(t *testing.T) {
 		t.Fatal("an unforced preflight must require them")
 	}
 }
+
+// TestRefreshDepsRefusesOnConfigLoadError is a TEST GAP: refreshDeps had no
+// direct coverage at all. A config whose `packs:` block resolves cleanly
+// (ResolvePacks' own loose, packs-only unmarshal tolerates a stray
+// top-level key its strict schema has since removed) but which config.Load
+// itself refuses (the full strict schema) must make refreshDeps report "no
+// change, nothing applied" — never a partial or crashed state — since the
+// auto-update cycle must never let one malformed read anywhere in the
+// pipeline propagate into applying something it can't actually re-load.
+func TestRefreshDepsRefusesOnConfigLoadError(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	// `integrations:` was removed with the legacy config schema (see
+	// TestCmdValidate in cmd_more_test.go) — config.Load's strict
+	// unmarshal refuses it, but it carries no `packs:` key at all, so
+	// ResolvePacks' own loose, packs-only struct unmarshal ignores it
+	// and returns an empty lockfile with no error.
+	doc := "integrations:\n  - type: cron\n    name: chores\n"
+	if err := os.WriteFile(cfgPath, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	packMoved, pluginRes, applied := refreshDeps(cfgPath)
+	if applied {
+		t.Fatal("a config.Load failure must never report applied=true")
+	}
+	if packMoved {
+		t.Fatal("a config.Load failure must report packMoved=false")
+	}
+	if pluginRes != nil {
+		t.Fatalf("a config.Load failure must return no plugin resolutions, got %+v", pluginRes)
+	}
+}
