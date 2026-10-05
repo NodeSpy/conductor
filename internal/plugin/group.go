@@ -76,7 +76,7 @@ func ExplodeRefs(refs map[string]config.PluginRef, configDir string, state *Inst
 // GroupFailure is one plugin whose configured instances groupRef could not
 // split into process groups — see ExplodeRefs' doc comment.
 type GroupFailure struct {
-	// Key is the plugin's install-state identity ("connectors/github").
+	// Key is the plugin's install-state identity ("connectors/widget").
 	Key, Name, Reason string
 }
 
