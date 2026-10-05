@@ -99,6 +99,157 @@ func TestGCVersionsReviewerCaseDotDotDoesNotEscape(t *testing.T) {
 	}
 }
 
+// TestSanitizeVersionDirInjectiveForReviewerCase is the reviewer's exact
+// reproduction: before the fix, sanitizeVersionDir replaced "/" and "\\"
+// with "_" and nothing else, so "a/b/widget/v1.0.0" and "a_b/widget/v1.0.0"
+// both collapsed to the literal string "a_b_widget_v1.0.0" — two distinct
+// component paths sharing ONE on-disk directory. The fix must give them
+// distinct directories.
+func TestSanitizeVersionDirInjectiveForReviewerCase(t *testing.T) {
+	a := "a/b/widget/v1.0.0"
+	b := "a_b/widget/v1.0.0"
+	gotA, gotB := sanitizeVersionDir(a), sanitizeVersionDir(b)
+	if gotA == gotB {
+		t.Fatalf("sanitizeVersionDir(%q) and sanitizeVersionDir(%q) must not collide, both got %q", a, b, gotA)
+	}
+	// Also prove it end to end through BinDirForVersion, which is what
+	// actually matters: two instances resolving to these two component
+	// paths under the SAME plugin key must land in two different
+	// directories.
+	dir := t.TempDir()
+	dirA := BinDirForVersion(dir, "connectors/widget", a)
+	dirB := BinDirForVersion(dir, "connectors/widget", b)
+	if dirA == dirB {
+		t.Fatalf("BinDirForVersion must not alias %q and %q onto the same directory, both got %q", a, b, dirA)
+	}
+}
+
+// TestSanitizeVersionDirSequentialMigrationLeavesNewBinaryInstalled is the
+// reviewer's "config migration between those two sources" scenario: a
+// config is first resolved with the plugin sourced such that its resolved
+// tag text is "a/b/widget/v1.0.0", then the config is changed to a
+// DIFFERENT source whose resolved tag text is "a_b/widget/v1.0.0" — the
+// exact pair the old "/" "\\" -> "_" replacer aliased onto one directory.
+// Before the fix, installing pass 2's version into "the same" directory as
+// pass 1's, then pruning pass 1's (now unreferenced) version, would
+// RemoveAll the directory pass 2's binary was JUST installed into — since
+// they were, bug-for-bug, the same directory. After the fix the two
+// versions occupy distinct directories, so a prune of the first never
+// touches the second.
+func TestSanitizeVersionDirSequentialMigrationLeavesNewBinaryInstalled(t *testing.T) {
+	dir := t.TempDir()
+	s := LoadInstallState(dir)
+
+	const key = "connectors/widget"
+	oldTag := "a/b/widget/v1.0.0"
+	newTag := "a_b/widget/v1.0.0"
+
+	// Pass 1: install from the first source.
+	oldRec := Installed{Key: key, Kind: "connector", Name: "widget", Resolved: oldTag,
+		Sha256: "old-sha", Path: filepath.Join(BinDirForVersion(dir, key, oldTag), "conductor-widget")}
+	if err := os.MkdirAll(filepath.Dir(oldRec.Path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(oldRec.Path, []byte("old binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.Put(oldRec)
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pass 2: the config migrates to the second source, which resolves to
+	// the OTHER half of the reviewer's colliding pair. Install it, then
+	// prune — the first source's version is no longer referenced.
+	newRec := Installed{Key: key, Kind: "connector", Name: "widget", Resolved: newTag,
+		Sha256: "new-sha", Path: filepath.Join(BinDirForVersion(dir, key, newTag), "conductor-widget")}
+	if err := os.MkdirAll(filepath.Dir(newRec.Path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newRec.Path, []byte("new binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.Put(newRec)
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	keep := map[VersionKey]bool{{Key: key, Resolved: newTag}: true}
+	dropped, err := s.GCVersions(keep)
+	if err != nil {
+		t.Fatalf("GCVersions: %v", err)
+	}
+	if len(dropped) != 1 || dropped[0].Resolved != oldTag {
+		t.Fatalf("expected exactly the old version dropped, got %+v", dropped)
+	}
+
+	if _, err := os.Stat(newRec.Path); err != nil {
+		t.Fatalf("the newly-installed binary must survive pruning the old source's version: %v", err)
+	}
+	got, err := os.ReadFile(newRec.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new binary" {
+		t.Fatalf("the surviving binary must be the NEW one, got %q", got)
+	}
+	if _, ok := s.GetVersion(key, oldTag); ok {
+		t.Fatal("the old, unreferenced version must be gone from install state")
+	}
+	if v, ok := s.GetVersion(key, newTag); !ok || v.Sha256 != "new-sha" {
+		t.Fatalf("the new version must still be installed and untouched: %+v, ok=%v", v, ok)
+	}
+}
+
+// TestSanitizeVersionDirPropertyDistinctInputsGiveDistinctOutputs is
+// property-style coverage: over a varied set of inputs — ordinary tags,
+// component-prefixed tags, inputs that collide under the OLD "/" "\\" -> "_"
+// scheme, percent signs, dots, dot-dot, empty, control characters, and
+// mixed separators — every pair of DISTINCT inputs must map to DISTINCT
+// outputs.
+func TestSanitizeVersionDirPropertyDistinctInputsGiveDistinctOutputs(t *testing.T) {
+	inputs := []string{
+		"v1.0.0",
+		"v1.2.3",
+		"widget/v1.0.0",
+		"a/b/widget/v1.0.0",
+		"a_b/widget/v1.0.0",
+		"a_b_widget_v1.0.0",
+		"a\\b\\widget\\v1.0.0",
+		"a/b_widget/v1.0.0",
+		".",
+		"..",
+		"...",
+		"",
+		"%2E",
+		"%2E%2E",
+		"%",
+		"%%",
+		"100%",
+		"connectors/widget/v1.0.0",
+		"connectors_widget_v1.0.0",
+		"v1.0.0-alpha",
+		"v1.0.0-alpha/beta",
+		"weird\x00byte",
+		"weird\x01byte",
+		"a b/c",
+		"a/b/c",
+		"a/b//c",
+		"UPPER/lower",
+	}
+	seen := make(map[string]string, len(inputs))
+	for _, in := range inputs {
+		out := sanitizeVersionDir(in)
+		if out == "." || out == ".." {
+			t.Fatalf("sanitizeVersionDir(%q) = %q must never be a bare %q", in, out, out)
+		}
+		if prevIn, ok := seen[out]; ok && prevIn != in {
+			t.Fatalf("collision: sanitizeVersionDir(%q) and sanitizeVersionDir(%q) both produced %q", prevIn, in, out)
+		}
+		seen[out] = in
+	}
+}
+
 // TestIsStrictlyWithin is a focused unit test of GCVersions' own
 // defense-in-depth guard, independent of sanitizeVersionDir — the LAST line
 // of defense before RemoveAll, so it must correctly refuse a parent-equal

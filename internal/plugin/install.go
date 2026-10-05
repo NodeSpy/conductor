@@ -171,31 +171,80 @@ func BinDirForVersion(dir, key, resolved string) string {
 	return filepath.Join(BinDirFor(dir, key), sanitizeVersionDir(resolved))
 }
 
-// sanitizeVersionDir maps a resolved version/tag to a safe single path
-// segment.
+// sanitizeVersionDir maps a resolved version/tag to an INJECTIVE,
+// filesystem-safe single path segment: two DISTINCT inputs always produce
+// two DISTINCT outputs.
 //
-// Finding 5 (security): mapping "/" and "\\" is not enough on its own — a
-// value that IS (or, after that mapping, cleans to) "." or ".." is still a
-// single "segment" with no separator in it, so the replacer above leaves it
-// untouched, and BinDirForVersion would then resolve to the plugin's OWN
-// key directory (".") or its PARENT (".."). A tampered installed.yaml
-// record with Resolved: ".." makes GCVersions RemoveAll the ENTIRE
-// connectors/ or runtimes/ directory, every version of every plugin, since
-// BinDirForVersion(key, "..") IS that parent. A real release tag is never
-// exactly "." or "..", so reaching this is already evidence of a corrupt or
-// tampered record; map it to a safe, unambiguous literal rather than ever
-// letting a path operation resolve outside this one version's own
-// directory. Mirrors the same "reject the special entries, not just
-// separators" rule Client.StagingDir applies to a leading dot.
+// Finding (HIGH, security/correctness): an earlier version of this function
+// just replaced "/" and "\\" with "_", which is not injective — "a/b/widget/
+// v1.0.0" and "a_b/widget/v1.0.0" both collapse to "a_b_widget_v1.0.0". Two
+// configured instances resolving against those two component paths would
+// then share ONE on-disk directory: a config migration moving one off an
+// old source onto the other makes GCVersions RemoveAll the very directory
+// the other version was just installed into (its sibling's binary vanishes
+// as collateral damage of an unrelated prune).
+//
+// The fix is percent-encoding (RFC 3986 "unreserved" alphabet kept literal,
+// everything else escaped as upper-case "%XX"), which IS injective by
+// construction: '%' is itself always escaped (to "%25"), so '%' can never
+// appear in the output except as the first byte of a 3-byte escape — the
+// output is therefore uniquely decodable left-to-right (and unique
+// decodability implies two different inputs can never produce the same
+// output). This is a straightforward per-byte scan, so there is no
+// "percent-encode '%' first, then …" ORDERING to get wrong the way
+// sequential strings.ReplaceAll calls would (each pass risks re-escaping a
+// '%' introduced by an earlier one); scanning once and classifying each
+// byte as safe/unsafe sidesteps that class of bug entirely.
+//
+// '.' is kept literal (safe) for readability — "v1.0.0" passes straight
+// through — EXCEPT when the ENTIRE value is exactly "." or ".." (never a
+// real release tag; already evidence of a corrupt or tampered record), in
+// which case it is escaped to "%2E"/"%2E%2E" so BinDirForVersion can never
+// resolve to the plugin's own key directory or its parent. No other input's
+// generic encoding can ever produce "%2E...": a literal '%' in any OTHER
+// input is always escaped to "%25" by the per-byte scan below, so "%2E" is
+// never ambiguous with it.
+//
+// Mirrors the same "reject the special entries, not just separators" rule
+// Client.StagingDir applies to a leading dot. The directory LAYOUT itself is
+// new on this unreleased branch, so no on-disk migration of old
+// underscore-joined directories is needed — but the two encodings must
+// never be mistaken for one another, and in practice they never collide:
+// the old encoding only ever produced plain "_"-joined text, while this one
+// emits "%XX" escapes for every byte the old encoding passed through
+// unexamined (any '/', '\\', or '%' in the original value).
 func sanitizeVersionDir(v string) string {
-	v = strings.NewReplacer("/", "_", "\\", "_").Replace(v)
-	// filepath.Clean on a separator-free string only ever produces "." or
-	// ".." from an input that already WAS "", ".", or ".." — there is no
-	// other way a slash-free segment cleans to either.
-	if cleaned := filepath.Clean(v); cleaned == "." || cleaned == ".." {
-		return "_" + cleaned + "_"
+	if v == "." || v == ".." {
+		return strings.ReplaceAll(v, ".", "%2E")
 	}
-	return v
+	var b strings.Builder
+	b.Grow(len(v))
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if isSafeVersionDirByte(c) {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
+}
+
+// isSafeVersionDirByte is RFC 3986's "unreserved" set: letters, digits, and
+// "-_.~" — the characters percent-encoding never needs to touch, kept
+// literal purely for short, readable directory names ("v1.0.0" stays
+// "v1.0.0"). Every other byte — '/', '\\', '%', control characters, and
+// anything else a filesystem (or a Windows reserved/ambiguous name) might
+// treat specially — is percent-encoded by the caller.
+func isSafeVersionDirByte(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	case c == '-' || c == '_' || c == '.' || c == '~':
+		return true
+	default:
+		return false
+	}
 }
 
 // LoadInstallState reads the install state under dir. A missing, empty, or
