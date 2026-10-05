@@ -177,7 +177,7 @@ usage:
   conductor run [--config PATH]         start the daemon
   conductor run <name> [--input k=v ...] [--json '{…}']  fire a manual trigger via the running daemon
   conductor once <trigger> [--event PATH] [--event-name NAME]  run ONE event through ONE trigger, no daemon, exit = outcome
-  conductor validate [--config PATH]    load & validate config, then exit
+  conductor validate [--config PATH] [--strict]  load & validate config, then exit (--strict: fail if any connector is disabled)
   conductor replay <event.json> [--config PATH]  run a saved webhook through the pipeline (dry-run)
   conductor sweep [--config PATH]       one catch-up sweep (dry-run print)
   conductor sweep --now [--config PATH] signal the running daemon to sweep now
@@ -283,7 +283,16 @@ func cmdValidate(args []string) error {
 	// file behind an "ok" for a different one. Honor the positional; refuse an
 	// ambiguous invocation rather than pick one silently.
 	requirePlugins := slices.Contains(args, "--require-plugins")
-	args = slices.DeleteFunc(slices.Clone(args), func(a string) bool { return a == "--require-plugins" })
+	// Finding 6 (HIGH, UX): degrade-not-fail is intentional default
+	// behavior (a connector disabled by a bad credential or an unfetchable
+	// plugin must never take the whole box down), so validate keeps
+	// exiting 0 by default even when every connector ended up disabled —
+	// --require-plugins already covers the self-update preflight's own
+	// narrower "plugins must be fetchable" gate. --strict is the opt-in
+	// for an operator (or a stricter CI check) who wants validate to
+	// refuse a config where something it accepted is not actually running.
+	strict := slices.Contains(args, "--strict")
+	args = slices.DeleteFunc(slices.Clone(args), func(a string) bool { return a == "--require-plugins" || a == "--strict" })
 	path, rest := configPath(args)
 	switch len(rest) {
 	case 0:
@@ -370,9 +379,51 @@ func cmdValidate(args []string) error {
 		}
 		return fmt.Errorf("%d plugin(s) have a single_process/isolation conflict against what is currently installed (see docs/wiki/Plugins.md \"Multi-instance isolation\")", len(conflicts))
 	}
-	fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s)\n",
-		len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows))
+	// Finding 6 (HIGH, UX): the summary used to say "ok" regardless of how
+	// many of those connectors are actually disabled — a credential
+	// failure, or (new on this release) a plugin that never got fetched,
+	// left every connector dark while validate still reported success with
+	// nothing to suggest otherwise. disabledConnectorNames is exactly
+	// stack.ConnectorErrs' own set (a credential/build/fetch failure, never
+	// an operator's own `enabled: false` — that is a deliberate choice, not
+	// a problem to flag), and every one of them was already logged above
+	// (connector.Build's own logf call), hence "see above" rather than
+	// repeating the reason here.
+	disabled := disabledConnectorNames(cfg, stack)
+	if len(disabled) == 0 {
+		fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s)\n",
+			len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows))
+	} else {
+		fmt.Printf("ok: %d connector(s) (%d disabled: %s — see above), %d trigger(s), %d workflow(s)\n",
+			len(cfg.ConnectorsMap), len(disabled), strings.Join(disabled, ", "), len(cfg.Triggers), len(cfg.Workflows))
+	}
+	if strict && len(disabled) > 0 {
+		return fmt.Errorf("%d connector(s) disabled (--strict): %s", len(disabled), strings.Join(disabled, ", "))
+	}
 	return nil
+}
+
+// disabledConnectorNames lists every CONFIGURED connector (cfg.ConnectorsMap)
+// that built but ended up disabled by a credential/build/fetch failure —
+// never one an operator turned off with `enabled: false` (that is a
+// deliberate choice validate has no business flagging). Sorted for a stable
+// message. Empty when stack is nil (no connectors: block at all).
+func disabledConnectorNames(cfg *config.Config, stack *flowStack) []string {
+	if stack == nil {
+		return nil
+	}
+	names := make([]string, 0, len(cfg.ConnectorsMap))
+	for name := range cfg.ConnectorsMap {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var disabled []string
+	for _, name := range names {
+		if in, ok := stack.Registry.Get(name); ok && in.Enabled && in.DisabledReason != "" {
+			disabled = append(disabled, name)
+		}
+	}
+	return disabled
 }
 
 // validateReleaseAPI is the remote lookup `conductor validate` uses to check

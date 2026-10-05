@@ -138,3 +138,55 @@ func TestRequirePluginsChecksTheInstalledVersionAgainstThePin(t *testing.T) {
 		t.Fatal("a pin past the installed build, with nothing fetchable, passed --require-plugins")
 	}
 }
+
+// TestCmdValidateReportsDisabledConnectorsHonestly is finding 6 (HIGH, UX):
+// `conductor validate` used to print a flat "ok: N connector(s)…" even when
+// one of those N never actually came up (a credential failure here, an
+// unfetchable official plugin on this release) — exit 0 is the right
+// default (degrade-not-fail), but the summary line itself must say so.
+// writeCLIConfig's "broken" connector fails to build on unresolvable
+// secrets (a real DisabledReason, not an authored enabled: false, which
+// "timer" is and must NOT be counted).
+func TestCmdValidateReportsDisabledConnectorsHonestly(t *testing.T) {
+	path := writeCLIConfig(t)
+	out, err := captureStdout(t, func() error { return cmdValidate([]string{"--config", path}) })
+	if err != nil {
+		t.Fatalf("validate must still exit 0 by default (degrade-not-fail), got: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "ok: 3 connector(s) (1 disabled: broken — see above)") {
+		t.Fatalf("want an honest summary naming the disabled connector, got:\n%s", out)
+	}
+	if strings.Contains(out, "disabled: timer") || strings.Contains(out, "disabled: box") {
+		t.Fatalf("an authored enabled:false connector (timer) and a healthy one (box) must never be counted as disabled, got:\n%s", out)
+	}
+}
+
+// TestCmdValidateStrictFailsOnDisabledConnector is finding 6's --strict
+// half: the same config that exits 0 by default must fail under --strict,
+// naming the disabled connector, while a config with nothing disabled still
+// passes --strict cleanly.
+func TestCmdValidateStrictFailsOnDisabledConnector(t *testing.T) {
+	path := writeCLIConfig(t)
+	out, err := captureStdout(t, func() error { return cmdValidate([]string{"--config", path, "--strict"}) })
+	if err == nil {
+		t.Fatalf("--strict must fail when a connector is disabled, got exit 0:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "broken") {
+		t.Fatalf("the --strict failure must name the disabled connector, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "timer") {
+		t.Fatalf("--strict must never flag an authored enabled:false connector, got: %v", err)
+	}
+
+	// A config with nothing disabled passes --strict cleanly.
+	dir := t.TempDir()
+	clean := filepath.Join(dir, "clean.yaml")
+	if err := os.WriteFile(clean, []byte("connectors:\n  box:\n    use: command\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := captureStdout(t, func() error { return cmdValidate([]string{"--config", clean, "--strict"}) }); err != nil {
+		t.Fatalf("--strict must pass when nothing is disabled: %v\n%s", err, out)
+	} else if strings.Contains(out, "disabled") {
+		t.Fatalf("a fully healthy config must not mention \"disabled\" at all, got:\n%s", out)
+	}
+}

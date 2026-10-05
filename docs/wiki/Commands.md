@@ -5,7 +5,7 @@ conductor run [--config PATH]              start the daemon
 conductor run <name> [--input k=v ...] [--json '{…}']  fire a manual trigger via the running daemon
 conductor once <trigger> [--event PATH] [--event-name NAME] [--fail-on LIST] [--require-match]
                                            run ONE event through ONE trigger, for real, no daemon; exit = outcome
-conductor validate [--config PATH]         load & validate config, then exit
+conductor validate [--config PATH] [--strict]  load & validate config, then exit (--strict: fail if any connector ended up disabled)
 conductor replay <event.json>              run a saved webhook through the pipeline, verbs stubbed
 conductor sweep [--now]                    one catch-up sweep (dry-run print / signal the daemon)
 conductor force <kind> <owner/repo>#<n>    force an action for a target now (via the daemon)

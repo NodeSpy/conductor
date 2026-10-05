@@ -108,6 +108,18 @@ template reference against these declarations at load time.
   **disabled with the reason recorded** — the daemon boots and runs the rest
   (`connectors ls` and `secrets check` show why). A bad connector never
   crash-loops the box.
+- `conductor validate` keeps exiting 0 even when a connector ends up
+  disabled this way (degrade-not-fail is deliberate — the same posture the
+  daemon's own boot takes), but its summary says so honestly: `ok: 2
+  connector(s) (1 disabled: slack — see above)` names every one, pointing
+  back at the reason already logged above it. Pass `--strict` to make
+  validate fail instead when any connector is disabled — useful in CI or
+  before a deploy, where "it loads" isn't the same question as "it's
+  actually going to work". `--strict` never flags a connector turned off on
+  purpose with `enabled: false`; only a credential/build/fetch failure
+  counts. `--require-plugins` is the narrower, existing check self-update
+  itself uses (a referenced plugin must be installed or fetchable) and is
+  independent of `--strict`.
 
 ## Option merging and identity
 
