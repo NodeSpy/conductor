@@ -2,7 +2,10 @@ package plugin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -440,5 +443,69 @@ func TestReconcileNeverSeedsManifestFromADifferentSource(t *testing.T) {
 	recA2, ok := st.GetVersion(refAB.Key(), "widget/v1.0.0", useA.Source())
 	if !ok || len(recA2.Manifest.Egress) != 1 || recA2.Manifest.Egress[0] != "api.repo-a.example:443" {
 		t.Fatalf("A's manifest must survive unchanged, got %+v, ok=%v", recA2.Manifest, ok)
+	}
+}
+
+// TestReconcileInstancesCurrentRemovesDuplicateFetchAtOldRecordedPath is the
+// same finding 2 (LOW-MEDIUM) regression as
+// TestReconcileCurrentRemovesDuplicateFetchAtOldRecordedPath (resolve_test.go),
+// exercised through reconcileInstances (the per-instance path a configured
+// connector with Instances set takes) rather than reconcileOne (runtimes/
+// engines, or any ref with no Instances) — the duplicate-fetch cleanup on an
+// ActionCurrent classification must hold on both paths.
+func TestReconcileInstancesCurrentRemovesDuplicateFetchAtOldRecordedPath(t *testing.T) {
+	st := stateAt(t)
+	trust := &config.PackTrustConfig{Allow: []string{"github.com/acme/*"}}
+	u, err := config.ParseUse(config.UseKindConnector, "acme/plugins/widget")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := config.PluginRef{
+		Name: "widget", Instance: "x", Use: u,
+		Instances: map[string]config.ConnectorGrant{"x": {Use: u}},
+	}
+	bin := []byte("#!/bin/sh\necho plugin\n")
+	api := stubFor("widget", "widget/v1.0.0")
+	api.bin = bin
+
+	sum := sha256.Sum256(bin)
+	sha := hex.EncodeToString(sum[:])
+
+	key := ref.Key()
+	source := u.Source()
+	if source == "" {
+		t.Fatal("test setup bug: need a non-empty source")
+	}
+
+	oldDir := filepath.Join(BinDirFor(st.Dir(), key), sanitizeVersionDir("widget/v1.0.0"))
+	if err := os.MkdirAll(oldDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := filepath.Join(oldDir, api.assetName)
+	if err := os.WriteFile(oldPath, bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st.Put(Installed{Key: key, Kind: ref.Kind(), Name: ref.Name, Use: u.String(), Source: source, Resolved: "widget/v1.0.0", Sha256: sha, Path: oldPath, ReleaseVerified: true})
+
+	newDir := BinDirForVersion(st.Dir(), key, "widget/v1.0.0", source)
+	if newDir == oldDir {
+		t.Fatal("test setup bug: old and new dirs must differ")
+	}
+
+	res, err := Reconcile(map[string]config.PluginRef{key: ref}, st, trust, api, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0].Action != ActionCurrent {
+		t.Fatalf("expected a single ActionCurrent resolution, got %+v", res)
+	}
+	if res[0].Path != oldPath {
+		t.Fatalf("resolution must keep reporting the RECORDED path %q, got %q", oldPath, res[0].Path)
+	}
+	if _, err := os.Stat(newDir); !os.IsNotExist(err) {
+		t.Fatalf("the freshly fetched duplicate directory %s must be removed, stat err = %v", newDir, err)
+	}
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("the RECORDED path must survive untouched: %v", err)
 	}
 }

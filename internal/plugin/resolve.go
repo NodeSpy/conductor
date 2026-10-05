@@ -273,6 +273,28 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 	switch {
 	case installed && prev.Sha256 == sha && prev.Resolved == tag:
 		res.Action, res.Manifest = ActionCurrent, prev.Manifest
+		// Report (and keep using) the RECORDED path, not wherever this fetch
+		// just landed a byte-identical copy — see the duplicate-fetch
+		// cleanup below. A running daemon may be executing the recorded
+		// path right now; nothing must ever treat the fresh fetch as having
+		// replaced it.
+		res.Path = prev.Path
+		// Finding 2 (LOW-MEDIUM): an older record can point at the
+		// pre-source-fingerprint flat "<key>/<version>" directory
+		// (BinDirForVersion folded source into the dir name after such a
+		// record was written). A full reconcile re-fetches into the
+		// CURRENT (now source-fingerprinted) directory regardless, landing
+		// a byte-identical copy — same sha — at a path nothing refers to
+		// and GCVersions, which only prunes DROPPED versions, never
+		// reclaims: this version is very much kept. Remove the pure
+		// duplicate now, scoped to inside the plugin's own key directory
+		// only (removeVersionDir's isStrictlyWithin guard), and never the
+		// recorded path itself.
+		if binPath != prev.Path {
+			if err := removeVersionDir(BinDirFor(state.Dir(), key), filepath.Dir(binPath)); err != nil {
+				opts.logf("plugin %s: could not remove duplicate fetch at %s: %v", ref.Name, binPath, err)
+			}
+		}
 		// Nothing moved, but the reference text may have changed (a widened
 		// constraint), or this fetch verified a build an older record did not
 		// mark verified; keep the record honest.
@@ -521,6 +543,30 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 		base.Sha, base.Path = b.sha, b.binPath
 		if prevForTag, had := prevByKey[u.Source()+"\x00"+tag]; had && prevForTag.Sha256 == b.sha {
 			base.Action, base.Manifest = ActionCurrent, prevForTag.Manifest
+			// Report (and keep using) the RECORDED path, not wherever this
+			// pass just fetched a byte-identical copy to — see the
+			// duplicate-fetch cleanup below. A running daemon may be
+			// executing the recorded path right now; nothing must ever
+			// treat the fresh fetch as having replaced it.
+			base.Path = prevForTag.Path
+			// Finding 2 (LOW-MEDIUM): an older record can point at the
+			// pre-source-fingerprint flat "<key>/<version>" directory
+			// (BinDirForVersion folded source into the dir name after
+			// such a record was written). A full reconcile re-fetches
+			// into the CURRENT (now source-fingerprinted) directory
+			// regardless, landing a byte-identical copy — same sha — at a
+			// path nothing refers to and GCVersions, which only prunes
+			// DROPPED (key, version, source) triples, never reclaims: this
+			// version is very much kept. Since the content is identical to
+			// what's already installed and in use, the fresh copy is a
+			// pure duplicate — remove it now, scoped to inside the
+			// plugin's own key directory only (removeVersionDir's
+			// isStrictlyWithin guard), and never the recorded path itself.
+			if b.binPath != prevForTag.Path {
+				if err := removeVersionDir(BinDirFor(state.Dir(), key), filepath.Dir(b.binPath)); err != nil {
+					opts.logf("plugin %s: could not remove duplicate fetch at %s: %v", ref.Name, b.binPath, err)
+				}
+			}
 			// Never rewrite the shared (Key, Resolved, Source) record's Use
 			// just because THIS instance's constraint text differs from
 			// whatever is already stored there — that text belongs to
