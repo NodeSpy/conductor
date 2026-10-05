@@ -277,3 +277,69 @@ func TestIsStrictlyWithin(t *testing.T) {
 		})
 	}
 }
+
+// TestRemoveVersionDirRefusesEscapingPath closes finding 5's test gap:
+// sanitizeVersionDir is now injective and refuses "." / ".." (finding 1),
+// so a REAL GCVersions pass can no longer actually hand removeVersionDir a
+// dir that escapes keyDir — which is exactly why a test that only ever
+// drives this through GCVersions (sanitizeVersionDir always runs first)
+// could have the isStrictlyWithin guard deleted from GCVersions entirely
+// and still pass. Calling removeVersionDir DIRECTLY with a hand-built
+// (keyDir, dir) pair that bypasses sanitization altogether proves the
+// guard still does real, independent work as defense in depth — not work
+// that upstream sanitization has already made redundant.
+func TestRemoveVersionDirRefusesEscapingPath(t *testing.T) {
+	base := t.TempDir()
+	keyDir := filepath.Join(base, "connectors", "widget")
+	if err := os.MkdirAll(keyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A sibling plugin's directory — stands in for "everything outside this
+	// one plugin version's own directory" — populated with a file so a
+	// wrongful RemoveAll is detectable.
+	sentinel := filepath.Join(base, "connectors", "other", "v1.0.0")
+	if err := os.MkdirAll(sentinel, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sentinel, "conductor-other"), []byte("bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// dir escapes keyDir entirely — exactly the shape sanitizeVersionDir is
+	// now relied upon to never produce (finding 1), reconstructed by hand
+	// here so removeVersionDir is tested on its OWN, independent of that
+	// upstream guarantee ever holding.
+	escaping := filepath.Join(keyDir, "..", "other", "v1.0.0")
+
+	if err := removeVersionDir(keyDir, escaping); err == nil {
+		t.Fatal("removeVersionDir must refuse a path outside keyDir, not silently remove it")
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("a target outside keyDir must survive a refused removeVersionDir call: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sentinel, "conductor-other")); err != nil {
+		t.Fatalf("its contents must survive too: %v", err)
+	}
+}
+
+// TestRemoveVersionDirRemovesARealChild is removeVersionDir's happy path:
+// a genuine child of keyDir is removed, so the guard above is a REFUSAL of
+// an escape, never a refusal of ordinary GC.
+func TestRemoveVersionDirRemovesARealChild(t *testing.T) {
+	base := t.TempDir()
+	keyDir := filepath.Join(base, "connectors", "widget")
+	child := filepath.Join(keyDir, "v1.0.0")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(child, "conductor-widget"), []byte("bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeVersionDir(keyDir, child); err != nil {
+		t.Fatalf("removeVersionDir: %v", err)
+	}
+	if _, err := os.Stat(child); !os.IsNotExist(err) {
+		t.Fatalf("a genuine child must actually be removed, stat err = %v", err)
+	}
+}

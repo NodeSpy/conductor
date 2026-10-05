@@ -589,23 +589,37 @@ func (s *InstallState) GCVersions(keep map[VersionKey]bool) ([]VersionKey, error
 	s.Plugins = kept
 	for _, vk := range dropped {
 		dir := BinDirForVersion(s.dir, vk.Key, vk.Resolved, vk.Source)
-		// Finding 5 (security, defense in depth): sanitizeVersionDir already
-		// refuses a Resolved that is (or cleans to) "." or "..", but this is
-		// the LAST line of defense before an actual RemoveAll — a corrupt or
-		// tampered Key, or a future change to either helper, must not be
-		// able to turn this into "remove something outside this one
-		// version's own directory" ever again. keyDir is the plugin's own
-		// install directory (BinDirFor); dir must be strictly INSIDE it, a
-		// claim no sanitization bug anywhere upstream can quietly violate.
 		keyDir := BinDirFor(s.dir, vk.Key)
-		if !isStrictlyWithin(keyDir, dir) {
-			return dropped, fmt.Errorf("plugin %s@%s: refusing to remove %s — it is not strictly inside %s (corrupt or tampered install state?)", vk.Key, vk.Resolved, dir, keyDir)
-		}
-		if err := os.RemoveAll(dir); err != nil {
-			return dropped, fmt.Errorf("plugin %s@%s: remove install dir: %w", vk.Key, vk.Resolved, err)
+		if err := removeVersionDir(keyDir, dir); err != nil {
+			return dropped, fmt.Errorf("plugin %s@%s: %w", vk.Key, vk.Resolved, err)
 		}
 	}
 	return dropped, nil
+}
+
+// removeVersionDir is GCVersions' actual removal step for ONE installed
+// version's directory, pulled out as its own function so the guard below is
+// independently testable (finding 5, test gap): sanitizeVersionDir is now
+// injective and refuses "." / ".." (finding 1), so a REAL GCVersions pass
+// can no longer hand this a dir that escapes keyDir — which means a test
+// that only ever drives this through GCVersions itself can delete the
+// isStrictlyWithin check entirely and still pass every test, the exact gap
+// the reviewer flagged. Testing removeVersionDir directly, with a
+// hand-built (keyDir, dir) pair that escapes, proves the guard still does
+// real work as defense in depth — independent of whichever upstream
+// sanitization currently (and may not always) prevent reaching it.
+//
+// Finding 5 (security, defense in depth): a corrupt or tampered Key, or a
+// future change to sanitizeVersionDir or BinDirForVersion, must not be able
+// to turn this into "remove something outside this one version's own
+// directory" ever again. dir must be strictly INSIDE keyDir (the plugin's
+// own install directory, BinDirFor) — a claim no sanitization bug anywhere
+// upstream can quietly violate.
+func removeVersionDir(keyDir, dir string) error {
+	if !isStrictlyWithin(keyDir, dir) {
+		return fmt.Errorf("refusing to remove %s — it is not strictly inside %s (corrupt or tampered install state?)", dir, keyDir)
+	}
+	return os.RemoveAll(dir)
 }
 
 // isStrictlyWithin reports whether child is a (possibly multi-level) child
