@@ -324,6 +324,24 @@ func applySingleProcessConflicts(mgr *plugin.Manager) map[string]string {
 	return disabledGroups
 }
 
+// startFailureHint is the actionable suggestion appended to a plugin's
+// failed-to-start reason. Finding 7 (LOW): `conductor plugin update <name>`
+// only ever operates on a REMOTE, fetched plugin — it has nothing to
+// reinstall for a LOCAL development binary (`use: ./bin/conductor-widget`),
+// which the operator builds and points `use:` at directly. Suggesting it
+// there anyway (the old, one-size-fits-all message) sent a local-plugin
+// operator toward a command that does not apply to their reference at all
+// — most commonly hit via the identity-forgery refusal (Client.Describe,
+// "describe claims type X but is configured to provide Y"), which fires
+// just as readily for a local binary whose file name disagrees with its
+// own declared Type as for a remote one.
+func startFailureHint(spec plugin.Spec) string {
+	if spec.Local {
+		return "for a local plugin, rename the binary to the type it declares, or point use: at a file already named after its type; check the daemon log"
+	}
+	return fmt.Sprintf("reinstall with `conductor plugin update %s` or check the daemon log", spec.Name)
+}
+
 func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(map[string]any), auth plugin.AuthProvider) (*plugin.Manager, error) {
 	mgr := pluginManagerForStack(cfg, sec, audit, auth)
 	// Bound the boot phase: verify+spawn+describe must not hang forever (a
@@ -414,7 +432,7 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 			// operator action (reinstall, fix the mount, fix the sandbox), not a
 			// timer — retrying it on a schedule would just repeat the same
 			// failure forever.
-			reason := fmt.Sprintf("failed to start: %v — reinstall with `conductor plugin update %s` or check the daemon log", err, spec.Name)
+			reason := fmt.Sprintf("failed to start: %v — %s", err, startFailureHint(spec))
 			connector.RegisterUnavailableType(spec.Provides, spec.GroupKey, spec.Key(), reason)
 			registered = append(registered, spec.Provides)
 			logf("plugin %s: FAILED TO START (%v) — its connectors are disabled; every other connector, trigger and run proceeds", spec.Name, err)
