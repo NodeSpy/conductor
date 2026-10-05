@@ -22,6 +22,17 @@ import (
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
+// explodeRefs is plugin.ExplodeRefs, indirected so a test can inject a
+// synthetic GroupFailure without needing to organically trigger one through
+// real input — groupRef's isolation pre-split provably makes that
+// unreachable in practice (see internal/plugin's
+// TestExplodeRefsPropagatesGroupFailure) — to cover finding 4 end to end:
+// `plugin list`, `plugin show`, and the pending-plugin retry log must each
+// actually SURFACE a GroupFailure handed back here, never just silently
+// drop it on the floor the way discarding ExplodeRefs' second return value
+// did before.
+var explodeRefs = plugin.ExplodeRefs
+
 // pluginDeps assembles the shared plugin.Deps: the redactor, the audit sink,
 // and the sandbox wiring. The sandbox wiring is only consumed when a connector
 // carries an OPTIONAL isolation: block — the default path is the permission
@@ -764,7 +775,15 @@ func cmdPluginList(args []string) error {
 	// "Side-by-side versions"): a plugin name pinned at two versions side by
 	// side gets two rows, each its own VERSION and its own connector(s) —
 	// never one row silently speaking for both.
-	refs, _ := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state) // see pluginManagerForStack for the handled case
+	refs, failures := explodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
+	// Finding 4 (LOW): a GroupFailure here is the same "must never happen"
+	// isolation-fold invariant pluginManagerForStack handles for the live
+	// daemon — but a THROWAWAY stack like this one never calls that choke
+	// point, so without this, `plugin list` would silently just omit the
+	// affected plugin's rows instead of saying why it under-reports.
+	for _, f := range failures {
+		fmt.Printf("warning: plugin %s: cannot be split into process groups safely (%s) — omitted from this listing; this should never happen, please report it\n", f.Name, f.Reason)
+	}
 	keys := make([]string, 0, len(refs))
 	for k := range refs {
 		keys = append(keys, k)
@@ -1050,7 +1069,7 @@ func cmdPluginShow(args []string) error {
 	// group — show each, so `plugin show` never speaks for just whichever
 	// one happened to be found first.
 	state := plugin.LoadInstallState(plugin.InstallDir())
-	refs, _ := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state) // see pluginManagerForStack for the handled case
+	refs, failures := explodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
 	var matches []string
 	for _, base := range []string{"connectors/" + name, "runtimes/" + name} {
 		for gk := range refs {
@@ -1095,6 +1114,17 @@ func cmdPluginShow(args []string) error {
 		fmt.Printf("%s (builtin runtime, conductor %s)\n", name, version)
 		fmt.Println("  in-binary runtime; select it with `use:` under runtimes: and an agent's runtime: field")
 		return nil
+	}
+	// Finding 4 (LOW): name genuinely has no entry in refs because ExplodeRefs
+	// could not split its instances into process groups safely (the "must
+	// never happen" isolation-fold invariant, see group.go's narrowRef) —
+	// report THAT, not the generic "no plugin named" a silently-dropped
+	// GroupFailure would otherwise produce, which reads as "you misspelled
+	// it" rather than "this is broken and should be reported".
+	for _, f := range failures {
+		if f.Name == name {
+			return fmt.Errorf("plugin %s: cannot be split into process groups safely (%s) — this should never happen, please report it", f.Name, f.Reason)
+		}
 	}
 	return fmt.Errorf("no plugin, connector type, or runtime named %q (see `conductor plugin list`)", name)
 }
@@ -1588,7 +1618,17 @@ func pendingPluginsStillMissing(cfg *config.Config, state *plugin.InstallState) 
 			remote[k] = ref
 		}
 	}
-	exploded, _ := plugin.ExplodeRefs(remote, cfg.BaseDir(), state) // see pluginManagerForStack for the handled case
+	exploded, failures := explodeRefs(remote, cfg.BaseDir(), state)
+	// Finding 4 (LOW): a GroupFailure here was silently dropped before — the
+	// retry loop would just never see the affected plugin in exploded at
+	// all, so it could not count toward "still missing" either, and the
+	// operator watching the log would see retries quietly succeed while that
+	// one plugin's connectors stayed disabled for a reason retrying a fetch
+	// can never fix (this is "must never happen" territory, see group.go's
+	// narrowRef — not a network problem).
+	for _, f := range failures {
+		logf("plugins: %s: cannot be split into process groups safely (%s) — retrying will not fix this; this should never happen, please report it", f.Name, f.Reason)
+	}
 	for _, ref := range exploded {
 		if ref.Kind() != config.PluginKindConnector {
 			continue

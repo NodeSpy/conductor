@@ -404,13 +404,21 @@ func checkPluginFetchability(cfg *config.Config) []string {
 			remote[k] = ref
 		}
 	}
-	refs, _ := plugin.ExplodeRefs(remote, cfg.BaseDir(), state) // a GroupFailure here also surfaces at boot/reload, which actually drives connectors
+	refs, failures := explodeRefs(remote, cfg.BaseDir(), state)
 	keys := make([]string, 0, len(refs))
 	for k := range refs {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	var lines []string
+	// Finding 4 (LOW): a GroupFailure (the "must never happen" isolation-fold
+	// invariant failing anyway, see group.go's narrowRef) also surfaces at
+	// boot/reload, which actually drives connectors — but validate must name
+	// it too, not silently drop it from its report, since the whole point of
+	// `validate` is to catch a config problem before it reaches boot.
+	for _, f := range failures {
+		lines = append(lines, fmt.Sprintf("warning: plugin %s: cannot be split into process groups safely (%s) — every connector using it would be disabled; this should never happen, please report it", f.Name, f.Reason))
+	}
 	for _, key := range keys {
 		ref := refs[key]
 		if _, ok := state.GetForConstraint(ref.Use.InstallKey(), ref.Use); ok {
