@@ -373,7 +373,7 @@ func runOnce(ctx context.Context, cfg *config.Config, o onceOptions) error {
 	}
 	defer stack.Close()
 	if stack == nil {
-		return fmt.Errorf("once: this config has no `connectors:` block — one-shot mode runs connectors-model triggers (a legacy config migrates with the release before the plugin contract)")
+		return fmt.Errorf("once: this config has no `connectors:` block — one-shot mode runs connectors-model triggers (a legacy config migrates with v0.60.0, the last release before the plugin contract)")
 	}
 	if stack.Secrets != nil {
 		notifier.SetSecrets(stack.Secrets)

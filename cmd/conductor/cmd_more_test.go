@@ -64,18 +64,24 @@ func TestCmdConfigMigrateRemoved(t *testing.T) {
 }
 
 // TestMigrateHintForExe (finding 8, see 5b): every "run `conductor config
-// migrate` with the release before the plugin contract" hint in this
-// codebase is only actionable if the operator still HAS that release's
-// binary — which an unattended auto-update used to make untrue (it replaces
-// the executable in place with nothing kept behind). Once doUpdate's
-// rollback copy (<exe>.prev) exists, the hint must name it directly instead
-// of sending the operator to re-fetch a release they already have on disk.
+// migrate` with v0.60.0 (the last release before the plugin contract)" hint
+// in this codebase is only actionable if the operator still HAS that
+// release's binary — which an unattended auto-update used to make untrue
+// (it replaces the executable in place with nothing kept behind). Once
+// doUpdate's rollback copy (<exe>.prev) exists, the hint must name it
+// directly instead of sending the operator to re-fetch a release they
+// already have on disk. Finding 8 (LOW) also requires the hint to name the
+// release explicitly ("v0.60.0") rather than only describe it relative to
+// the plugin contract.
 func TestMigrateHintForExe(t *testing.T) {
 	exe := filepath.Join(t.TempDir(), "conductor")
 
 	t.Run("no rollback copy on disk", func(t *testing.T) {
 		got := migrateHintForExe(exe)
-		if !strings.Contains(got, "run it with the release before the plugin contract") {
+		if !strings.Contains(got, "v0.60.0") {
+			t.Fatalf("want the hint to name v0.60.0 explicitly, got: %q", got)
+		}
+		if !strings.Contains(got, "run it with v0.60.0") {
 			t.Fatalf("want the generic fetch-it-yourself hint, got: %q", got)
 		}
 		if strings.Contains(got, "config migrate`") {
@@ -91,6 +97,9 @@ func TestMigrateHintForExe(t *testing.T) {
 		got := migrateHintForExe(exe)
 		if !strings.Contains(got, prev) || !strings.Contains(got, "config migrate`") {
 			t.Fatalf("want the hint to name the actual rollback binary %q, got: %q", prev, got)
+		}
+		if !strings.Contains(got, "v0.60.0") {
+			t.Fatalf("want the hint to also name v0.60.0 explicitly, got: %q", got)
 		}
 	})
 }

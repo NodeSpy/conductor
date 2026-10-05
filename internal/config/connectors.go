@@ -604,7 +604,7 @@ var errLegacyFiltersKey = errors.New("`filters:` was removed — state the whole
 	"(`filters: {repos: [o/r]}` → `filter: {repo: [o/r]}`, `exclude: {branches: [x]}` → `not_branch: [x]`, " +
 	"`ignore_users:` → `not_comment_author:`, `gates: {not_draft: true}` → `not_draft: true`, " +
 	"`labels_any:` → `label_any:`; `ignore_checks:` moved to `options:`). " +
-	"Run `conductor config migrate` with the release before the plugin contract, or see docs/design/unified-filter-phase2.md")
+	"Run `conductor config migrate` with v0.60.0 (the last release before the plugin contract), or see docs/design/unified-filter-phase2.md")
 
 // rejectLegacyFilters fails a mapping node that still carries `filters:`.
 // yaml.v3's KnownFields does not reach into a custom unmarshaler, and even
@@ -1767,7 +1767,7 @@ func (c *Config) validateConnectors() error {
 		return err
 	}
 	if len(c.SecretRefs) > 0 {
-		return fmt.Errorf("config: the secrets: block was replaced by vaults: entries and {{ vault \"<name>\" \"<key>\" }} references — run `conductor config migrate` with the release before the plugin contract, or rewrite it by hand")
+		return fmt.Errorf("config: the secrets: block was replaced by vaults: entries and {{ vault \"<name>\" \"<key>\" }} references — run `conductor config migrate` with v0.60.0 (the last release before the plugin contract), or rewrite it by hand")
 	}
 	for name, ref := range c.ConnectorsMap {
 		if name == "" {

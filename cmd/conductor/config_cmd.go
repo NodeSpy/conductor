@@ -13,8 +13,9 @@ import (
 
 // cmdConfig handles `conductor config`. Its one subcommand, `migrate`, went
 // with the legacy schema (plugin-contract.md Q4): a legacy config is migrated
-// by the release before the plugin contract, and this binary's `validate`
-// names any legacy block still present.
+// by v0.60.0 — the last release before the plugin contract, and the last one
+// with `config migrate` at all — and this binary's `validate` names any
+// legacy block still present.
 func cmdConfig(args []string) error {
 	rest := positional(args)
 	if len(rest) > 0 && rest[0] == "migrate" {
@@ -24,8 +25,9 @@ func cmdConfig(args []string) error {
 }
 
 // migrateHint is the actionable half of every "run `conductor config
-// migrate` with the release before the plugin contract" message in this
-// codebase (internal/config, internal/secrets, this file): the ONE place
+// migrate` with v0.60.0 (the last release before the plugin contract)"
+// message in this codebase (internal/config, internal/secrets, this file):
+// the ONE place
 // that knows whether a usable previous-release binary actually exists on
 // this box. Before 5b, that advice pointed at a binary the operator usually
 // no longer had — an unattended auto-update replaces the executable in
@@ -36,7 +38,7 @@ func cmdConfig(args []string) error {
 func migrateHint() string {
 	exe, err := os.Executable()
 	if err != nil {
-		return "run it with the release before the plugin contract, then upgrade"
+		return "run it with v0.60.0 (the last release before the plugin contract), then upgrade"
 	}
 	if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
 		exe = resolved
@@ -46,13 +48,16 @@ func migrateHint() string {
 
 // migrateHintForExe is migrateHint's testable half: given the daemon's own
 // executable path, decide whether <exe>.prev — the rollback copy doUpdate
-// saves (5b) — is there to run the old migrate command against.
+// saves (5b) — is there to run the old migrate command against. v0.60.0 is
+// named explicitly (finding 8, LOW) — a release an operator can go find and
+// install, rather than a description ("the release before the plugin
+// contract") they'd first have to resolve into one.
 func migrateHintForExe(exe string) string {
 	prev := exe + prevBinarySuffix
 	if info, serr := os.Stat(prev); serr == nil && !info.IsDir() {
-		return fmt.Sprintf("run `%s config migrate` (the release this box auto-updated from, saved alongside this binary), then upgrade", prev)
+		return fmt.Sprintf("run `%s config migrate` (the release this box auto-updated from, saved alongside this binary — v0.60.0 is the last release that still has `config migrate`), then upgrade", prev)
 	}
-	return "run it with the release before the plugin contract, then upgrade (no " + prev + " was found on this box — fetch that release if you no longer have it)"
+	return "run it with v0.60.0 (the last release before the plugin contract), then upgrade (no " + prev + " was found on this box — fetch that release if you no longer have it)"
 }
 
 // validateAt runs the full load+validate pipeline (the connectors-model

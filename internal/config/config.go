@@ -1227,10 +1227,13 @@ func (c *Config) checkLegacyBlocks() error {
 
 // removedLegacyBlockErr is the one helper every removed-legacy-block error
 // goes through, so the wording is uniform regardless of which key triggered
-// it.
+// it. v0.60.0 is named explicitly (finding 8, LOW) rather than described
+// relative to "the plugin contract" — a release name an operator can
+// actually go find and install, not a description they'd have to look up
+// to resolve into one.
 func removedLegacyBlockErr(key string) error {
 	return fmt.Errorf("config: `%s:` was removed with the legacy config schema — "+
-		"migrate it with `conductor config migrate` on the release before the plugin contract, then upgrade", key)
+		"migrate it with `conductor config migrate` on v0.60.0 (the last release that has it), then upgrade", key)
 }
 
 // Validate checks required fields and cross-field consistency.

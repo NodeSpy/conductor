@@ -85,6 +85,13 @@ func TestLoadRejectsEachLegacyBlock(t *testing.T) {
 			if !strings.Contains(err.Error(), "conductor config migrate") {
 				t.Fatalf("%s: error should point at `conductor config migrate`, got %q", c.key, err.Error())
 			}
+			// Finding 8 (LOW): the hint must name the actual release
+			// ("v0.60.0") rather than only describe it relative to "the
+			// plugin contract" — a release an operator can go find and
+			// install, not a description they'd have to resolve into one.
+			if !strings.Contains(err.Error(), "v0.60.0") {
+				t.Fatalf("%s: error should name v0.60.0 explicitly, got %q", c.key, err.Error())
+			}
 		})
 	}
 }
