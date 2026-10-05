@@ -2,10 +2,13 @@
 
 conductor has one idea for extending its capabilities: **there is no "built-in"
 vs "plugin" — there are only plugins.** Some are **bundled** (they ship in the
-binary and run in-process — github, slack, rest, cron, …; paseo, acp, opencode,
-agent-deck) and some are **external** (a subprocess binary the daemon fetches
-and runs out-of-process). One registry, one config surface, one
-`conductor plugin list` / `show`.
+binary and run in-process — blob, command, conductor, cron, graphql, handoff,
+kv, lan, memory, rest, rss, sql, step, tunnel, web, webhook, workflow; paseo,
+acp, opencode, agent-deck) and some are **external** (a subprocess binary the
+daemon fetches and runs out-of-process — github, slack, sentry, and anything
+else in the official or a third-party plugin repo; see `conductor plugin
+list` for the exact, current bundled set). One registry, one config surface,
+one `conductor plugin list` / `show`.
 
 And there is one field: **`use:`**. It names what implements a connector, a
 runtime, or a **code-step engine**, and it is the *only* thing you write.
@@ -22,7 +25,7 @@ arrives, it stays current.
 
 ```yaml
 connectors:
-  gh:      { use: github, app_id: "${GH_APP_ID}" }   # bundled
+  gh:      { use: github, app_id: "${GH_APP_ID}" }   # official plugin repo
   alerts:  { use: sentry, listen: ":9099" }          # official plugin repo
   tickets:
     use: acme/plugins/jira                            # an explicit repo
@@ -78,16 +81,20 @@ One search path, shared by `connectors:`, `runtimes:` and a step's engine
 
 | You write | It resolves to |
 |---|---|
-| `use: github` | a **builtin** — compiled into the daemon |
-| `use: sentry` | not builtin → the **official repo**, `NodeSpy/conductor-plugins`, at `connectors/sentry` (an engine reference looks in `engines/<name>` instead) |
+| `use: rest` | a **builtin** — compiled into the daemon |
+| `use: github` / `use: sentry` | not builtin → the **official repo**, `NodeSpy/conductor-plugins`, at `connectors/github` / `connectors/sentry` (an engine reference looks in `engines/<name>` instead) |
 | `use: acme/plugins/jira` | an explicit **github** repo (github.com is implied) |
 | `use: git.corp.example/team/p//jira` | an explicit **non-github** host |
 | `use: ./bin/conductor-jira` | a **local** binary, for developing one |
 
 Two rules make this unambiguous:
 
-- **Builtin beats official.** `use: github` is always the in-binary connector;
-  it never reaches for the plugin repo.
+- **Builtin beats official.** `use: rest` is always the in-binary connector;
+  it never reaches for the plugin repo — a name that is actually compiled in
+  always wins over a same-named official plugin. `github` and `slack` are
+  **not** builtin (vendor connectors never shipped in the binary; see
+  [Not yet implemented](#not-yet-implemented)) — `use: github` always
+  resolves to the official plugin.
 - **A first path segment containing a `.` is a hostname.** That is what
   separates `git.corp.example/team/repo//jira` from `acme/repo/jira`.
 
@@ -136,6 +143,22 @@ A builtin has no version to pin, and a local binary is whatever is on disk —
 both **refuse** an `@version` rather than ignoring it.
 
 ### Side-by-side versions
+
+Side-by-side versions are for **released versions from one remote source** —
+two connectors pinning different git tags of the SAME repo/component, each
+fetched, verified, and run independently. A **local** `use: ./path` build is
+not eligible for this: `config.validatePluginRefs` refuses two connectors
+naming the same plugin identity from two DIFFERENT sources (remote or
+local) in one config, and for a local reference its "source" is the path
+itself — two local binaries at two different paths, even built from the
+same code, can never be told apart from two genuinely different
+implementations the way two tags of one remote repo can. A local build is
+therefore **one path per plugin name**: there is no "pin local build A
+alongside local build B" the way there is for a remote plugin's versions.
+What you get instead is time, not space — rebuild the binary at that one
+path and the NEW bytes are picked up on the next reload or restart (see
+"Local builds are snapshotted" below), never mid-life, and never two builds
+running at once.
 
 Two connectors can pin **different** versions of the same plugin:
 
@@ -282,6 +305,17 @@ anything already running: the new build is picked up only the NEXT time the
 reference is resolved (a reload or a restart), never mid-life. A snapshot
 nothing currently resolved still needs is garbage-collected on the daemon's
 next boot.
+
+**The binary's file name must equal its declared type.** `use:
+./bin/conductor-widget` registers as `widget` (the `conductor-` prefix is
+stripped) — not whatever the binary's own `describe` claims to be. If the
+plugin describes itself as a *different* type than the name the path implies,
+it is refused as identity forgery, the same refusal a remote plugin gets for
+claiming a type other than the one it was fetched to provide: the type a
+connector serves is the operator's configured name, never whatever the
+binary says about itself. There is no `conductor plugin update` for a local
+reference to fall back on here — fix it by renaming the binary to the type
+it declares, or by pointing `use:` at a file already named after its type.
 
 ### Trust
 

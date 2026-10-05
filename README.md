@@ -50,9 +50,11 @@ conductor is a self-hosted daemon — a single static binary — that turns even
 into agent work. You describe, in YAML:
 
 - **Connectors** — one connection per service, each exposing event **sources**
-  (`on:`) and callable **verbs** (`uses:`). Built in: GitHub, Slack, Sentry,
-  PagerDuty, RSS, cron, generic webhook, durable stores, and secret vaults —
-  plus generic **REST** and **GraphQL** connectors for any other API.
+  (`on:`) and callable **verbs** (`uses:`). GitHub, Slack, Sentry, PagerDuty
+  and more are official plugins — fetched and verified automatically, never
+  compiled into the binary. Built in: RSS, cron, generic webhook, durable
+  stores, and secret vaults — plus generic **REST** and **GraphQL**
+  connectors for any other API.
 - **Triggers** — `on:` a source, an optional `filter:`, then `steps:` and lifecycle
   `hooks:`. Steps run **agents**, host or SSH **commands**, inline **code**
   (js / lua / risor / go, sandboxed), or any connector verb — mixing services in

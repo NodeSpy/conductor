@@ -401,13 +401,17 @@ dies — a known gap), a poll cursor. It is bounded per instance. The run-scoped
 Scoping was always per-call (`Client.isActive`: refused for an instance this
 specific `*Client` was never handed real traffic for — see below). With
 multi-instance isolation (§1.1), that check now ALSO lines up with a process
-boundary for the default (non-`shared_process`) case: instance A's process is
-a different OS process than instance B's, wired to a different `*Client`
-whose own `active` set can structurally never contain B, so A cannot even
-ADDRESS B's state or token, let alone have the per-call check answer it. A
-`shared_process: true` plugin is back to call-scoping only — the per-call
-check is what carried this guarantee before isolation existed, and still does
-for anyone who opts out.
+boundary for an instance that opts into its OWN process (`isolate: true`):
+its process is a different OS process than any other instance's, wired to a
+different `*Client` whose own `active` set can structurally never contain a
+sibling instance, so it cannot even ADDRESS that sibling's state or token,
+let alone have the per-call check answer it. The DEFAULT — every non-isolated
+instance of a plugin sharing ONE process — is back to call-scoping only, the
+same as a plugin that declares `capabilities.single_process` (which refuses
+`isolate: true` on any of its instances outright, since the box-global
+resource it holds can't be split across processes): the per-call check is
+what carries this guarantee there, exactly as it did before isolation
+existed.
 
 ```text
 host.auth {instance, refresh?} → {ok, token?, error?}
