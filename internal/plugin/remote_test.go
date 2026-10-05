@@ -119,6 +119,57 @@ func TestCheckFetchableIsReadOnly(t *testing.T) {
 	}
 }
 
+// TestCheckFetchableZeroTagsWordingIsHonestAboutTheAmbiguity is finding 10
+// (LOW): a `git ls-remote` that answers successfully with NO matching refs
+// at all is genuinely ambiguous — a real repository with no release tagged
+// yet, or some auth/proxy/firewall setup that answers an unreachable or
+// inaccessible repo with an empty ref list instead of a non-zero exit. The
+// old message ("no release tag satisfies version ... among 0 tags") read as
+// a confident "this plugin has no releases", which is wrong exactly when
+// the real cause is "offline" or "blocked". A REAL ListTags error (the
+// unambiguous case) must keep its own raw cause untouched.
+func TestCheckFetchableZeroTagsWordingIsHonestAboutTheAmbiguity(t *testing.T) {
+	rs := RemoteSource{URL: "https://github.com/NodeSpy/conductor-plugins", Component: "widget"}
+
+	// Zero tags (ListTags succeeded, found nothing): the new, honest,
+	// both-possibilities wording.
+	_, err := CheckFetchable(rs, "~> 1.0", stubAPI{tags: nil})
+	if err == nil {
+		t.Fatal("zero tags must still error")
+	}
+	if !strings.Contains(err.Error(), "no published release found for") ||
+		!strings.Contains(err.Error(), "none tagged yet, or the repository is unreachable") {
+		t.Fatalf("want the honest ambiguous-cause wording, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "among 0 tags") {
+		t.Fatalf("must not keep the old confident \"among 0 tags\" phrasing, got: %v", err)
+	}
+
+	// Tags EXIST but none satisfy the constraint: unambiguous — the specific
+	// original wording (naming the constraint and the tag count) is kept.
+	_, err = CheckFetchable(rs, "~> 9.0", stubAPI{tags: []string{"widget/v1.0.0", "widget/v2.0.0"}})
+	if err == nil {
+		t.Fatal("an unsatisfiable constraint against real tags must still error")
+	}
+	if !strings.Contains(err.Error(), "no release tag satisfies version") || !strings.Contains(err.Error(), "among 2 tags") {
+		t.Fatalf("want the specific unmatched-constraint wording when tags DO exist, got: %v", err)
+	}
+
+	// A real ListTags error keeps its own raw cause, never the zero-tags
+	// wording (the branches are mutually exclusive by construction, but
+	// assert it explicitly as the contract this message split depends on).
+	_, err = CheckFetchable(rs, "~> 1.0", stubAPI{tagsErr: true})
+	if err == nil {
+		t.Fatal("a ListTags failure must surface as an error")
+	}
+	if strings.Contains(err.Error(), "no published release found for") {
+		t.Fatalf("a real ListTags error must keep its own cause, not the zero-tags wording: %v", err)
+	}
+	if !strings.Contains(err.Error(), "network unreachable") {
+		t.Fatalf("a real ListTags error must keep its raw cause, got: %v", err)
+	}
+}
+
 // downloadSpyAPI wraps stubAPI to record whether Download was ever called —
 // the thing CheckFetchable must never do.
 type downloadSpyAPI struct {

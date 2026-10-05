@@ -79,10 +79,27 @@ type ReleaseAPI interface {
 func CheckFetchable(rs RemoteSource, constraint string, api ReleaseAPI) (tag string, err error) {
 	tags, err := api.ListTags(rs)
 	if err != nil {
+		// A real transport/git failure keeps its own raw cause (finding 10)
+		// — never collapsed into the "zero tags" wording below, which is
+		// for exactly the opposite situation: ListTags returned SUCCESSFULLY
+		// with nothing in it.
 		return "", fmt.Errorf("list releases for %s: %w", rs.Display(), err)
 	}
 	tag, ok := config.BestMatch(tags, rs.tagPrefix(), constraint)
 	if !ok {
+		if len(tags) == 0 {
+			// Finding 10 (LOW): `git ls-remote` can return a clean, empty
+			// success for more than one reason — a repository that really
+			// has no release tagged yet, but also some auth/proxy/firewall
+			// setups that answer an inaccessible or unreachable repo with
+			// an empty ref list instead of a non-zero exit (which the
+			// branch above would have already caught and kept the raw
+			// cause for). "no release tag satisfies ... among 0 tags" reads
+			// as a confident "this plugin has no releases" when the box
+			// may simply be offline or blocked — say both are possible
+			// instead of asserting the wrong one.
+			return "", fmt.Errorf("no published release found for %s (none tagged yet, or the repository is unreachable)", rs.Display())
+		}
 		return "", fmt.Errorf("no release tag satisfies version %q for %s (looked for %q<semver> among %d tags)", constraint, rs.Display(), rs.tagPrefix(), len(tags))
 	}
 	return tag, nil
