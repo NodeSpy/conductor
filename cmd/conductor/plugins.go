@@ -816,6 +816,20 @@ func cmdPluginList(args []string) error {
 		}
 		spec := plugin.SpecFromRef(ref, cfg.BaseDir(), inst, ok)
 		spec.GroupKey = key
+		var localDescribeErr error
+		// Finding 7 (MEDIUM): same gap as showPlugin — a LOCAL plugin's Spec
+		// never carries a Manifest. Only probe when --caps actually asked to
+		// see permissions (never in the bare `plugin list`, which must stay
+		// cheap and spawn nothing): a local build that fails to describe
+		// degrades to an empty manifest with the reason noted, never a
+		// failed listing.
+		if caps && spec.Local && spec.Installed() {
+			if decl, err := probeDecl(cfg, ref, state); err == nil {
+				spec.Manifest = plugin.ManifestFromDecl(decl)
+			} else {
+				localDescribeErr = err
+			}
+		}
 		ver := inst.Resolved
 		if spec.Local {
 			ver = "local"
@@ -840,6 +854,9 @@ func cmdPluginList(args []string) error {
 			fmt.Printf("%-18s   permissions:\n", "")
 			for _, line := range permissionLines(ref, spec) {
 				fmt.Printf("%-18s     %s\n", "", line)
+			}
+			if localDescribeErr != nil {
+				fmt.Printf("%-18s     (could not describe the local build to confirm its real declared capabilities: %v)\n", "", localDescribeErr)
 			}
 		}
 	}
@@ -1147,6 +1164,23 @@ func cmdPluginShow(args []string) error {
 	return fmt.Errorf("no plugin, connector type, or runtime named %q (see `conductor plugin list`)", name)
 }
 
+// probeDecl spawns a throwaway single-ref Manager for ref and describes it —
+// exactly the install-time probe `plugin add` already runs right after a
+// fresh install (NewManager with a one-entry refs map, StartAndDescribe,
+// Close). showPlugin uses it for two things that both need an actual
+// describe: recovering a LOCAL plugin's real Manifest (finding 7 — see
+// SpecFromRef's doc comment: it never resolves one for OriginLocal, since
+// there is no install-state record to source one from the way a remote
+// plugin's Reconcile-time Describe leaves behind) and, for a connector,
+// printing its declared verb/connection schema. One describe serves both
+// needs when it already has to run, rather than spawning the binary twice.
+func probeDecl(cfg *config.Config, ref config.PluginRef, state *plugin.InstallState) (*plugin.Decl, error) {
+	sec := secrets.New()
+	mgr := plugin.NewManager(map[string]config.PluginRef{ref.Key(): ref}, cfg.BaseDir(), state, pluginDeps(sec, func(map[string]any) {}, nil))
+	defer mgr.Close()
+	return mgr.StartAndDescribe(context.Background(), ref.Key())
+}
+
 func showPlugin(cfg *config.Config, ref config.PluginRef) error {
 	state := plugin.LoadInstallState(plugin.InstallDir())
 	var inst plugin.Installed
@@ -1159,6 +1193,23 @@ func showPlugin(cfg *config.Config, ref config.PluginRef) error {
 		inst, ok = state.GetForConstraint(ref.Use.InstallKey(), ref.Use)
 	}
 	spec := plugin.SpecFromRef(ref, cfg.BaseDir(), inst, ok)
+
+	// Finding 7 (MEDIUM): a LOCAL plugin's Spec never carries a Manifest —
+	// probe it now, for ANY plugin kind (connector, runtime, or engine all
+	// declare capabilities), so its real declared capabilities show below
+	// instead of always reading "no declared capabilities". Best-effort: a
+	// local build that currently fails to start/describe (mid-rebuild, a
+	// broken binary) degrades to an empty manifest with the reason noted
+	// after PERMISSIONS, never a failed command — `plugin show` must still
+	// say everything else it knows.
+	var localDecl *plugin.Decl
+	var localDescribeErr error
+	if spec.Local && spec.Installed() {
+		localDecl, localDescribeErr = probeDecl(cfg, ref, state)
+		if localDescribeErr == nil {
+			spec.Manifest = plugin.ManifestFromDecl(localDecl)
+		}
+	}
 
 	fmt.Printf("%s (%s plugin)\n", ref.Name, ref.Kind())
 	fmt.Printf("  use:    %s\n", ref.Use.String())
@@ -1178,6 +1229,9 @@ func showPlugin(cfg *config.Config, ref config.PluginRef) error {
 	fmt.Println("\n  PERMISSIONS (declared by the plugin, enforced by conductor):")
 	for _, line := range permissionLines(ref, spec) {
 		fmt.Printf("    %s\n", line)
+	}
+	if spec.Local && localDescribeErr != nil {
+		fmt.Printf("    (could not describe the local build to confirm its real declared capabilities: %v)\n", localDescribeErr)
 	}
 	if ref.Isolation != nil {
 		fmt.Printf("    plus OPT-IN OS isolation: mode %s\n", ref.Isolation.Mode)
@@ -1202,12 +1256,16 @@ func showPlugin(cfg *config.Config, ref config.PluginRef) error {
 		return nil
 	}
 
-	sec := secrets.New()
-	mgr := plugin.NewManager(map[string]config.PluginRef{ref.Key(): ref}, cfg.BaseDir(), state, pluginDeps(sec, func(map[string]any) {}, nil))
-	defer mgr.Close()
-	decl, err := mgr.StartAndDescribe(context.Background(), ref.Key())
-	if err != nil {
-		return err
+	// Reuse the describe already run above for a local plugin instead of
+	// spawning it a second time; a remote/installed one still needs its
+	// own first (and only) describe here.
+	decl := localDecl
+	if decl == nil {
+		d, err := probeDecl(cfg, ref, state)
+		if err != nil {
+			return err
+		}
+		decl = d
 	}
 	fmt.Printf("\n  declared type: %s", decl.Type)
 	if decl.Desc != "" {

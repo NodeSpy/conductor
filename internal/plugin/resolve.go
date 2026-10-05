@@ -760,6 +760,14 @@ func sameEvents(a, b []Event) bool {
 	return true
 }
 
+// ManifestFromDecl is manifestFromDecl, exported for a caller outside this
+// package that needs to turn a freshly probed Decl into the same Manifest
+// shape Reconcile records — cmd/conductor's `plugin show`/`plugin list
+// --caps` probing a LOCAL plugin's declared capabilities directly (finding
+// 7), since SpecFromRef never resolves one for OriginLocal itself (there is
+// no install-state record to source one from).
+func ManifestFromDecl(decl *Decl) Manifest { return manifestFromDecl(decl) }
+
 func manifestFromDecl(decl *Decl) Manifest {
 	if decl == nil {
 		return Manifest{}
