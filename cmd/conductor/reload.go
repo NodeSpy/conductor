@@ -79,7 +79,7 @@ func reloadMoved(cfg *config.Config, mgr *plugin.Manager, reg *connector.Registr
 			logf("reload: %s has no recorded boot surface — restarting to apply", r.Name)
 			return false
 		}
-		inst, ok := state.GetVersion(r.Key, r.Tag)
+		inst, ok := state.GetVersion(r.Key, r.Tag, r.Source)
 		if !ok {
 			logf("reload: %s not in install state after reconcile — restarting to apply", r.Name)
 			return false

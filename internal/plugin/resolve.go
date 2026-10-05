@@ -59,6 +59,13 @@ type Resolution struct {
 	Origin   string
 	Action   string
 	Tag      string // resolved release tag
+	// Source is this reference's canonical fetch source (ref.Source()/
+	// config.Use.Source()) — recorded here (finding 2) so a caller holding
+	// only a Resolution, not the original ref, can still look up ITS OWN
+	// install-state record by (Key, Tag, Source) rather than an ambiguous
+	// (Key, Tag) that a DIFFERENT source sharing the same tag text could
+	// also match (cmd/conductor/reload.go's moved-plugin lookup).
+	Source   string
 	Sha      string // verified binary sha
 	PrevSha  string // the sha this replaced, when it changed
 	Path     string // installed binary path
@@ -158,7 +165,7 @@ func Reconcile(refs map[string]config.PluginRef, state *InstallState, trust *con
 	keep := map[VersionKey]bool{}
 	addKeep := func(res Resolution) {
 		if res.Tag != "" {
-			keep[VersionKey{Key: res.Key, Resolved: res.Tag}] = true
+			keep[VersionKey{Key: res.Key, Resolved: res.Tag, Source: res.Source}] = true
 		}
 	}
 	for _, key := range keys {
@@ -215,7 +222,7 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 	key := ref.Use.InstallKey()
 	res := Resolution{
 		Key: key, GroupKey: groupKey, Name: ref.Name, Kind: ref.Kind(),
-		Use: ref.Use.String(), Origin: string(ref.Use.Origin),
+		Use: ref.Use.String(), Origin: string(ref.Use.Origin), Source: ref.Source(),
 	}
 
 	// A local development binary is not fetched, verified against a release, or
@@ -250,7 +257,7 @@ func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, tr
 	}
 
 	rs := RemoteSource{URL: ref.Use.GitURL(), Component: ref.Use.Component}
-	cacheDirFor := func(tag string) string { return BinDirForVersion(state.Dir(), key, tag) }
+	cacheDirFor := func(tag string) string { return BinDirForVersion(state.Dir(), key, tag, ref.Source()) }
 	binPath, tag, sha, verified, err := FetchRemoteVerified(rs, ref.Use.Version, "", cacheDirFor, api)
 	if err != nil {
 		res.Action, res.Err = ActionFailed, fmt.Errorf("plugin %s: %w", ref.Name, err)
@@ -395,13 +402,21 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 	// Installed/Updated/Current consistently (never one instance "updated"
 	// and an identically-resolving sibling "current" just because of
 	// iteration order).
+	//
+	// Finding 2 (HIGH): scoped by SOURCE as well as tag — two different
+	// sources under one key can tag the identical version text, and a
+	// previous record from a DIFFERENT source must never be mistaken for
+	// "this instance's own previous build" just because the tag string
+	// matches (it would misclassify Current/Updated against the wrong sha,
+	// and misreport a cross-source sha in a log line).
 	prevVersions := state.AllVersions(key)
-	hadAnyPrev := len(prevVersions) > 0
-	prevByTag := make(map[string]Installed, len(prevVersions))
-	var prevRepSha string
+	hadAnyPrevBySource := make(map[string]bool, len(prevVersions))
+	prevRepShaBySource := make(map[string]string, len(prevVersions))
+	prevByKey := make(map[string]Installed, len(prevVersions))
 	for _, p := range prevVersions {
-		prevByTag[p.Resolved] = p
-		prevRepSha = p.Sha256 // AllVersions is sorted ascending; last wins
+		prevByKey[p.Source+"\x00"+p.Resolved] = p
+		hadAnyPrevBySource[p.Source] = true
+		prevRepShaBySource[p.Source] = p.Sha256 // AllVersions is sorted ascending; last wins, per source
 	}
 
 	type bucketResult struct {
@@ -409,6 +424,13 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 		verified     bool
 		err          error
 	}
+	// buckets is keyed by (source, tag) — never tag alone (finding 2, HIGH):
+	// two instances resolving to the identical tag TEXT from DIFFERENT
+	// sources (repos) must each fetch and verify their OWN binary. Keying by
+	// tag alone let the second instance silently reuse the first repo's
+	// already-fetched bytes and sha — a correctness and security bug (the
+	// second instance's install-state record would claim ITS source fetched
+	// a binary it never actually downloaded or verified).
 	buckets := map[string]*bucketResult{}
 
 	for _, n := range names {
@@ -417,7 +439,7 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 		instRef := ref
 		instRef.Use = u
 		instRef.Instance = n
-		base := Resolution{Key: key, Name: ref.Name, Kind: ref.Kind(), Use: u.String(), Origin: string(u.Origin)}
+		base := Resolution{Key: key, Name: ref.Name, Kind: ref.Kind(), Use: u.String(), Origin: string(u.Origin), Source: u.Source()}
 
 		if u.Origin == config.OriginLocal {
 			base.Action, base.Path = ActionLocal, u.Path
@@ -473,11 +495,12 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 		}
 		base.Tag = tag
 
-		b, ok := buckets[tag]
+		bucketKey := u.Source() + "\x00" + tag
+		b, ok := buckets[bucketKey]
 		if !ok {
 			b = &bucketResult{}
-			buckets[tag] = b
-			cacheDirFor := func(t string) string { return BinDirForVersion(state.Dir(), key, t) }
+			buckets[bucketKey] = b
+			cacheDirFor := func(t string) string { return BinDirForVersion(state.Dir(), key, t, u.Source()) }
 			binPath, _, sha, verified, ferr := FetchRemoteVerified(rs, u.Version, "", cacheDirFor, api)
 			if ferr != nil {
 				b.err = fmt.Errorf("plugin %s: %w", ref.Name, ferr)
@@ -496,10 +519,10 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 		}
 
 		base.Sha, base.Path = b.sha, b.binPath
-		if prevForTag, had := prevByTag[tag]; had && prevForTag.Sha256 == b.sha {
+		if prevForTag, had := prevByKey[u.Source()+"\x00"+tag]; had && prevForTag.Sha256 == b.sha {
 			base.Action, base.Manifest = ActionCurrent, prevForTag.Manifest
-			// Never rewrite the shared (Key, Resolved) record's Use just
-			// because THIS instance's constraint text differs from
+			// Never rewrite the shared (Key, Resolved, Source) record's Use
+			// just because THIS instance's constraint text differs from
 			// whatever is already stored there — that text belongs to
 			// whichever instance's fetch originally installed or last
 			// moved this version (the ActionInstalled/ActionUpdated branch
@@ -513,14 +536,14 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 				state.Put(prevForTag)
 				dirty = true
 			}
-		} else if hadAnyPrev {
-			base.Action, base.PrevSha = ActionUpdated, prevRepSha
+		} else if hadAnyPrevBySource[u.Source()] {
+			base.Action, base.PrevSha = ActionUpdated, prevRepShaBySource[u.Source()]
 		} else {
 			base.Action = ActionInstalled
 		}
 		if base.Action == ActionInstalled || base.Action == ActionUpdated {
 			rec := Installed{Key: key, Kind: ref.Kind(), Name: ref.Name, Use: u.String(), Source: instRef.Source(), Resolved: tag, Sha256: b.sha, Path: b.binPath, ReleaseVerified: b.verified}
-			if existing, ok := state.GetVersion(key, tag); ok {
+			if existing, ok := state.GetVersion(key, tag, u.Source()); ok {
 				rec.Manifest = existing.Manifest
 			}
 			state.Put(rec)
@@ -564,13 +587,19 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 		res.GroupKey = gkey
 
 		if res.Changed() {
-			if cached, ok := describeCache[res.Tag]; ok {
+			// describeCache, like buckets above, is keyed by (source, tag) —
+			// never tag alone (finding 2): two groups sharing tag text from
+			// DIFFERENT sources must each be described against their OWN
+			// fetched build, never a cached manifest that actually belongs
+			// to a different source's binary.
+			describeKey := res.Source + "\x00" + res.Tag
+			if cached, ok := describeCache[describeKey]; ok {
 				res.Manifest = cached.manifest
 				if cached.err != nil {
 					res.Action, res.Err = ActionFailed, cached.err
 				}
 			} else if opts.Describe != nil {
-				rec, _ := state.GetVersion(key, res.Tag)
+				rec, _ := state.GetVersion(key, res.Tag, res.Source)
 				spec := SpecFromRef(g.ref, "", rec, true)
 				decl, derr := opts.Describe(context.Background(), spec)
 				cb := &described{}
@@ -588,7 +617,7 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 					res.Manifest = rec.Manifest
 					cb.manifest = rec.Manifest
 				}
-				describeCache[res.Tag] = cb
+				describeCache[describeKey] = cb
 			}
 			if res.Action == ActionUpdated {
 				opts.logf("plugin %s: updated %s -> %s (sha %s -> %s); permissions: %s",

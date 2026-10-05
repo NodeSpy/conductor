@@ -49,7 +49,7 @@ func TestGCVersionsReviewerCaseDotDotDoesNotEscape(t *testing.T) {
 	// A sibling plugin, installed normally, living in the SAME parent
 	// (connectors/) the ".." record would otherwise have RemoveAll'd.
 	sibling := Installed{Key: "connectors/other", Kind: "connector", Name: "other", Resolved: "other/v1.0.0",
-		Path: filepath.Join(BinDirForVersion(dir, "connectors/other", "other/v1.0.0"), "conductor-other")}
+		Path: filepath.Join(BinDirForVersion(dir, "connectors/other", "other/v1.0.0", ""), "conductor-other")}
 	// The tampered record: Resolved is literally "..".
 	tampered := Installed{Key: "connectors/widget", Kind: "connector", Name: "widget", Resolved: "..",
 		Path: filepath.Join(BinDirFor(dir, "connectors/widget"), "conductor-widget")}
@@ -117,8 +117,8 @@ func TestSanitizeVersionDirInjectiveForReviewerCase(t *testing.T) {
 	// paths under the SAME plugin key must land in two different
 	// directories.
 	dir := t.TempDir()
-	dirA := BinDirForVersion(dir, "connectors/widget", a)
-	dirB := BinDirForVersion(dir, "connectors/widget", b)
+	dirA := BinDirForVersion(dir, "connectors/widget", a, "")
+	dirB := BinDirForVersion(dir, "connectors/widget", b, "")
 	if dirA == dirB {
 		t.Fatalf("BinDirForVersion must not alias %q and %q onto the same directory, both got %q", a, b, dirA)
 	}
@@ -146,7 +146,7 @@ func TestSanitizeVersionDirSequentialMigrationLeavesNewBinaryInstalled(t *testin
 
 	// Pass 1: install from the first source.
 	oldRec := Installed{Key: key, Kind: "connector", Name: "widget", Resolved: oldTag,
-		Sha256: "old-sha", Path: filepath.Join(BinDirForVersion(dir, key, oldTag), "conductor-widget")}
+		Sha256: "old-sha", Path: filepath.Join(BinDirForVersion(dir, key, oldTag, ""), "conductor-widget")}
 	if err := os.MkdirAll(filepath.Dir(oldRec.Path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestSanitizeVersionDirSequentialMigrationLeavesNewBinaryInstalled(t *testin
 	// the OTHER half of the reviewer's colliding pair. Install it, then
 	// prune — the first source's version is no longer referenced.
 	newRec := Installed{Key: key, Kind: "connector", Name: "widget", Resolved: newTag,
-		Sha256: "new-sha", Path: filepath.Join(BinDirForVersion(dir, key, newTag), "conductor-widget")}
+		Sha256: "new-sha", Path: filepath.Join(BinDirForVersion(dir, key, newTag, ""), "conductor-widget")}
 	if err := os.MkdirAll(filepath.Dir(newRec.Path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -193,10 +193,10 @@ func TestSanitizeVersionDirSequentialMigrationLeavesNewBinaryInstalled(t *testin
 	if string(got) != "new binary" {
 		t.Fatalf("the surviving binary must be the NEW one, got %q", got)
 	}
-	if _, ok := s.GetVersion(key, oldTag); ok {
+	if _, ok := s.GetVersion(key, oldTag, ""); ok {
 		t.Fatal("the old, unreferenced version must be gone from install state")
 	}
-	if v, ok := s.GetVersion(key, newTag); !ok || v.Sha256 != "new-sha" {
+	if v, ok := s.GetVersion(key, newTag, ""); !ok || v.Sha256 != "new-sha" {
 		t.Fatalf("the new version must still be installed and untouched: %+v, ok=%v", v, ok)
 	}
 }

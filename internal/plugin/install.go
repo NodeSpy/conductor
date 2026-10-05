@@ -1,6 +1,8 @@
 package plugin
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -158,17 +160,58 @@ func InstallDir() string {
 // remove` removes it wholesale, taking every installed version with it.
 func BinDirFor(dir, key string) string { return filepath.Join(dir, filepath.FromSlash(key)) }
 
-// BinDirForVersion is where ONE resolved version of a plugin is installed:
-// <install-dir>/<key>/<version>. Side by side versions need their own
-// directory each — two versions of a plugin publish the SAME per-platform
-// asset filename (RemoteSource.AssetName), so fetching a second version into
-// the bare key directory would silently overwrite the first version's binary
-// on disk out from under any instance still pinned to it. resolved is
-// sanitized to a single path segment (no separators) so a monorepo's
+// BinDirForVersion is where ONE resolved version of a plugin, from ONE
+// source, is installed: <install-dir>/<key>/<version>[@<source-fingerprint>].
+// Side by side versions need their own directory each — two versions of a
+// plugin publish the SAME per-platform asset filename (RemoteSource.AssetName),
+// so fetching a second version into the bare key directory would silently
+// overwrite the first version's binary on disk out from under any instance
+// still pinned to it. resolved is sanitized to a single path segment (no
+// separators, injective — see sanitizeVersionDir) so a monorepo's
 // component-prefixed tag ("connectors/widget/v1.2.3") can't escape the key's
 // own directory.
-func BinDirForVersion(dir, key, resolved string) string {
-	return filepath.Join(BinDirFor(dir, key), sanitizeVersionDir(resolved))
+//
+// source is folded in too (finding 2, HIGH): nothing in this package itself
+// stops two DIFFERENT sources (repos) under one install key from resolving
+// to the identical tag TEXT — config.validatePluginRefs refuses that within
+// one config, but that check does not survive a sequential config change,
+// and install state persists across those. Without source in the directory
+// name, two such sources would race to write the SAME file at the SAME
+// path, and whichever fetch ran last would silently overwrite the other's
+// binary out from under its own, still-accurate install-state record (same
+// Key+Resolved, different Sha256). source may be "" for a caller that does
+// not distinguish by source (every existing single-source call site, and
+// every pre-existing on-disk layout, since "" contributes no suffix at
+// all) — that is deliberately indistinguishable from "source not part of
+// this lookup", never a wildcard that could alias a real source onto it.
+func BinDirForVersion(dir, key, resolved, source string) string {
+	return filepath.Join(BinDirFor(dir, key), versionDirSegment(resolved, source))
+}
+
+// versionDirSegment is BinDirForVersion's own directory name: the sanitized
+// tag, plus — when source is known — a short stable fingerprint of it, so
+// two sources that happen to tag the identical release text under one key
+// never share a directory. The fingerprint is a prefix of sha256(source)
+// rather than a sanitized form of source itself: source is an operator- and
+// forge-controlled string (host/repo/component) with no length limit and no
+// guarantee against separators or other unsafe bytes, and hashing sidesteps
+// needing a second injective filesystem encoding for it.
+func versionDirSegment(resolved, source string) string {
+	seg := sanitizeVersionDir(resolved)
+	if source == "" {
+		return seg
+	}
+	return seg + "@" + sourceFingerprint(source)
+}
+
+// sourceFingerprint is a short, stable, collision-resistant identifier for a
+// plugin source string, used only to keep two different sources' version
+// directories apart (versionDirSegment) — never compared for security
+// purposes, so a short sha256 prefix is a deliberate, ample margin against
+// accidental collision without the directory name needing to be long.
+func sourceFingerprint(source string) string {
+	sum := sha256.Sum256([]byte(source))
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 // sanitizeVersionDir maps a resolved version/tag to an INJECTIVE,
@@ -315,29 +358,72 @@ func (s *InstallState) Get(key string) (Installed, bool) {
 }
 
 // GetVersion returns the record for key whose Resolved is EXACTLY version —
-// an exact-pin or already-resolved lookup, no constraint matching.
-func (s *InstallState) GetVersion(key, version string) (Installed, bool) {
+// an exact-pin or already-resolved lookup, no constraint matching. source
+// disambiguates the increasingly real case (finding 2) of two DIFFERENT
+// sources under one key having tagged the identical version text: when
+// source is non-empty, a record whose own Source matches it is preferred;
+// a record with no recorded Source (written before this field existed, or
+// by a caller that does not track it) still matches ANY source, since it
+// cannot possibly be a different source's record — there is no second
+// source to confuse it with in a state file that predates multi-source
+// records. source == "" keeps the old, unqualified "first match" behavior
+// for a caller that does not know or care which source wrote it.
+func (s *InstallState) GetVersion(key, version, source string) (Installed, bool) {
 	if s == nil {
 		return Installed{}, false
 	}
+	var fallback Installed
+	found := false
 	for _, p := range s.Plugins {
-		if p.Key == key && p.Resolved == version {
+		if p.Key != key || p.Resolved != version {
+			continue
+		}
+		if source == "" || p.Source == "" || p.Source == source {
 			return p, true
 		}
+		if !found {
+			fallback, found = p, true
+		}
 	}
-	return Installed{}, false
+	return fallback, found
+}
+
+// versionsForSource filters all to the records matching source: a record
+// whose own Source is empty (pre-dates this field, or was written by a
+// caller that does not track it) still matches — it cannot be a DIFFERENT
+// source's record if nothing ever recorded one. source == "" matches
+// everything (a caller, like the old single-source world, that does not
+// distinguish).
+func versionsForSource(all []Installed, source string) []Installed {
+	if source == "" {
+		return all
+	}
+	out := make([]Installed, 0, len(all))
+	for _, in := range all {
+		if in.Source == "" || in.Source == source {
+			out = append(out, in)
+		}
+	}
+	return out
 }
 
 // GetForConstraint resolves ONE instance's own `use:` reference against every
-// version of key currently installed, returning the best (highest) match —
-// the install-state half of the version split a Manager builds its process
-// groups from (see groupInstances). An exact pin matches only that literal
-// Resolved tag (via BestMatch's semver compare — see config.SatisfiesConstraint);
-// an unpinned/ranged reference tracks the highest installed version the range
-// accepts, exactly like a fresh resolve would, but OFFLINE, against whatever
-// Reconcile has already fetched.
+// version of key currently installed FROM ITS OWN SOURCE, returning the best
+// (highest) match — the install-state half of the version split a Manager
+// builds its process groups from (see groupInstances). An exact pin matches
+// only that literal Resolved tag (via BestMatch's semver compare — see
+// config.SatisfiesConstraint); an unpinned/ranged reference tracks the
+// highest installed version the range accepts, exactly like a fresh resolve
+// would, but OFFLINE, against whatever Reconcile has already fetched.
+//
+// Finding 2 (HIGH): filtering by u.Source() matters the moment two DIFFERENT
+// sources under one key have both tagged the same (or an overlapping) range
+// of version text — without it, BestMatch could return a tag that exists
+// only under the OTHER source, and the lookup below would hand this
+// instance a record (sha, path) that was never fetched from ITS source at
+// all.
 func (s *InstallState) GetForConstraint(key string, u config.Use) (Installed, bool) {
-	all := s.AllVersions(key)
+	all := versionsForSource(s.AllVersions(key), u.Source())
 	if len(all) == 0 {
 		return Installed{}, false
 	}
@@ -407,16 +493,26 @@ func (s *InstallState) Keys() []string {
 	return out
 }
 
-// Put inserts or replaces the record for in's (Key, Resolved) pair — the two
-// together are the identity now, so installing a second version under an
-// already-installed key ADDS a record rather than overwriting the existing
-// one.
+// Put inserts or replaces the record for in's (Key, Resolved, Source)
+// triple — together the identity now, so installing a second version under
+// an already-installed key ADDS a record rather than overwriting the
+// existing one.
+//
+// Finding 2 (HIGH): Source joined the identity alongside (Key, Resolved)
+// because nothing in this package stops two DIFFERENT sources under one key
+// from resolving to the identical tag TEXT — config.validatePluginRefs
+// refuses that within a single config, but not across a sequential config
+// change, and install state persists across those. Matching on (Key,
+// Resolved) alone would let the SECOND source's Put silently overwrite the
+// first source's record — same map slot, different sha/path — discarding
+// it rather than recording both, even though reconcileInstances' bucket
+// dedup (resolve.go) now fetches each source's own build independently.
 func (s *InstallState) Put(in Installed) {
 	if s == nil {
 		return
 	}
 	for i, p := range s.Plugins {
-		if p.Key == in.Key && p.Resolved == in.Resolved {
+		if p.Key == in.Key && p.Resolved == in.Resolved && p.Source == in.Source {
 			s.Plugins[i] = in
 			return
 		}
@@ -480,7 +576,7 @@ func (s *InstallState) GCVersions(keep map[VersionKey]bool) ([]VersionKey, error
 		kept    []Installed
 	)
 	for _, p := range s.Plugins {
-		vk := VersionKey{Key: p.Key, Resolved: p.Resolved}
+		vk := VersionKey{Key: p.Key, Resolved: p.Resolved, Source: p.Source}
 		if keep[vk] {
 			kept = append(kept, p)
 			continue
@@ -492,7 +588,7 @@ func (s *InstallState) GCVersions(keep map[VersionKey]bool) ([]VersionKey, error
 	}
 	s.Plugins = kept
 	for _, vk := range dropped {
-		dir := BinDirForVersion(s.dir, vk.Key, vk.Resolved)
+		dir := BinDirForVersion(s.dir, vk.Key, vk.Resolved, vk.Source)
 		// Finding 5 (security, defense in depth): sanitizeVersionDir already
 		// refuses a Resolved that is (or cleans to) "." or "..", but this is
 		// the LAST line of defense before an actual RemoveAll — a corrupt or
@@ -531,11 +627,20 @@ func isStrictlyWithin(parent, child string) bool {
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// VersionKey identifies one installed (plugin key, resolved version) pair —
-// GCVersions' keep-set element and ReconcileVersions' result key.
+// VersionKey identifies one installed (plugin key, resolved version, source)
+// triple — GCVersions' keep-set element and ReconcileVersions' result key.
+//
+// Finding 2 (HIGH): Source joined Key+Resolved for the same reason it joined
+// Put's identity (see Put's doc comment) — two different sources under one
+// key can both tag the identical version text, and the GC keep-set exists
+// precisely to tell "still referenced" apart from "no longer referenced"
+// per INSTALLED RECORD; collapsing two different sources' records onto one
+// VersionKey would let keeping one silently keep (or dropping one silently
+// drop) a record that actually belongs to an unrelated source.
 type VersionKey struct {
 	Key      string
 	Resolved string
+	Source   string
 }
 
 // Save writes the state back, sorted by key so the file is stable across

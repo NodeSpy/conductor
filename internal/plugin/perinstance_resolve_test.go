@@ -271,7 +271,7 @@ func TestReconcilePinnedInstanceRefetchesWhenBinaryDeleted(t *testing.T) {
 	}
 
 	// Delete the installed binary out from under the pin.
-	rec, ok := st.GetVersion(ref.Key(), "jira/v1.0.0")
+	rec, ok := st.GetVersion(ref.Key(), "jira/v1.0.0", ref.Use.Source())
 	if !ok {
 		t.Fatal("expected an installed record for jira/v1.0.0")
 	}
@@ -341,7 +341,7 @@ func TestReconcileRetaggedReleaseIsReVerifiedNotSilentlyCurrent(t *testing.T) {
 		t.Fatalf("a retagged release under an unchanged tag must classify as %q, not %q — silently calling it current hides that the bytes actually running changed", ActionUpdated, res2[0].Action)
 	}
 
-	rec, ok := st.GetVersion(ref.Key(), "jira/v1.0.0")
+	rec, ok := st.GetVersion(ref.Key(), "jira/v1.0.0", ref.Use.Source())
 	if !ok {
 		t.Fatal("expected an installed record for jira/v1.0.0")
 	}

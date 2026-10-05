@@ -99,10 +99,10 @@ plugins:
 	if len(all) != 2 {
 		t.Fatalf("expected both the old and new version to coexist, got %d: %+v", len(all), all)
 	}
-	if v1, ok := reloaded.GetVersion("connectors/widget", "widget/v1.2.3"); !ok || v1.Sha256 != "deadbeef" {
+	if v1, ok := reloaded.GetVersion("connectors/widget", "widget/v1.2.3", ""); !ok || v1.Sha256 != "deadbeef" {
 		t.Fatalf("the OLD version must survive unchanged: %+v, ok=%v", v1, ok)
 	}
-	if v2, ok := reloaded.GetVersion("connectors/widget", "widget/v2.0.0"); !ok || v2.Sha256 != "f00d" {
+	if v2, ok := reloaded.GetVersion("connectors/widget", "widget/v2.0.0", ""); !ok || v2.Sha256 != "f00d" {
 		t.Fatalf("the NEW version must be recorded: %+v, ok=%v", v2, ok)
 	}
 }
@@ -114,9 +114,9 @@ plugins:
 func TestGCVersionsKeepsReferencedDropsUnreferenced(t *testing.T) {
 	dir := t.TempDir()
 	s := LoadInstallState(dir)
-	keep := Installed{Key: "connectors/widget", Kind: "connector", Name: "widget", Resolved: "widget/v2.0.0", Path: filepath.Join(BinDirForVersion(dir, "connectors/widget", "widget/v2.0.0"), "conductor-widget")}
-	drop := Installed{Key: "connectors/widget", Kind: "connector", Name: "widget", Resolved: "widget/v1.0.0", Path: filepath.Join(BinDirForVersion(dir, "connectors/widget", "widget/v1.0.0"), "conductor-widget")}
-	unrelated := Installed{Key: "runtimes/paseo", Kind: "runtime", Name: "paseo", Resolved: "paseo/v1.0.0", Path: filepath.Join(BinDirForVersion(dir, "runtimes/paseo", "paseo/v1.0.0"), "conductor-paseo")}
+	keep := Installed{Key: "connectors/widget", Kind: "connector", Name: "widget", Resolved: "widget/v2.0.0", Path: filepath.Join(BinDirForVersion(dir, "connectors/widget", "widget/v2.0.0", ""), "conductor-widget")}
+	drop := Installed{Key: "connectors/widget", Kind: "connector", Name: "widget", Resolved: "widget/v1.0.0", Path: filepath.Join(BinDirForVersion(dir, "connectors/widget", "widget/v1.0.0", ""), "conductor-widget")}
+	unrelated := Installed{Key: "runtimes/paseo", Kind: "runtime", Name: "paseo", Resolved: "paseo/v1.0.0", Path: filepath.Join(BinDirForVersion(dir, "runtimes/paseo", "paseo/v1.0.0", ""), "conductor-paseo")}
 	for _, in := range []Installed{keep, drop, unrelated} {
 		if err := os.MkdirAll(filepath.Dir(in.Path), 0o755); err != nil {
 			t.Fatal(err)
@@ -142,13 +142,13 @@ func TestGCVersionsKeepsReferencedDropsUnreferenced(t *testing.T) {
 		t.Fatalf("expected exactly the unreferenced version dropped, got %+v", dropped)
 	}
 
-	if _, ok := s.GetVersion(keep.Key, keep.Resolved); !ok {
+	if _, ok := s.GetVersion(keep.Key, keep.Resolved, ""); !ok {
 		t.Fatal("the referenced version must still be in install state")
 	}
-	if _, ok := s.GetVersion(drop.Key, drop.Resolved); ok {
+	if _, ok := s.GetVersion(drop.Key, drop.Resolved, ""); ok {
 		t.Fatal("the unreferenced version must be gone from install state")
 	}
-	if _, ok := s.GetVersion(unrelated.Key, unrelated.Resolved); !ok {
+	if _, ok := s.GetVersion(unrelated.Key, unrelated.Resolved, ""); !ok {
 		t.Fatal("an unrelated key must be untouched")
 	}
 

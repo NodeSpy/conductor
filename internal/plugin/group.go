@@ -222,6 +222,16 @@ func splitByIsolation(names []string, instances map[string]config.ConnectorGrant
 // distinct unmet constraints get distinct buckets so each is tracked (and
 // retried, and reported as not-installed) on its own rather than colliding
 // into one.
+//
+// Finding 2 (HIGH): the resolved record's Source is folded in alongside
+// Resolved, not Resolved alone — two instances under one key can resolve to
+// records from DIFFERENT sources that happen to share tag TEXT (see
+// resolve.go's reconcileInstances), and grouping by tag text alone would
+// fold them into one "process group" sharing one binary even though they
+// are two entirely different fetched builds. A record with no recorded
+// Source (a fixture or a pre-existing state file that predates this field)
+// falls back to Resolved alone, unchanged from before — there being no
+// second source on record to confuse it with.
 func discriminatorFor(u config.Use, name, configDir string, state *InstallState) string {
 	if u.Origin == config.OriginLocal {
 		bin := u.Path
@@ -234,6 +244,9 @@ func discriminatorFor(u config.Use, name, configDir string, state *InstallState)
 		return "local-err:" + bin
 	}
 	if inst, ok := state.GetForConstraint(u.InstallKey(), u); ok {
+		if inst.Source != "" {
+			return inst.Source + "\x00" + inst.Resolved
+		}
 		return inst.Resolved
 	}
 	return "pending:" + u.String()
