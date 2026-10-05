@@ -353,3 +353,106 @@ func TestPermissionLinesShowsSingleProcessReason(t *testing.T) {
 		t.Fatalf("a plugin that does not declare single_process must show no such line:\n%s", plainLines)
 	}
 }
+
+// TestLoadConnectorPluginsRegistersBothSideBySideSingleProcessGroupsUnavailable
+// is a TEST GAP at internal/connector/external.go ~919
+// (RegisterUnavailableType, and the RegisterExternalTypeGroup groupKey/
+// installKey collision logic it drives): this is
+// TestSingleProcessConflictDisablesBothSideBySideVersions driven all the
+// way through loadConnectorPlugins and the real connector registry, not
+// just applySingleProcessConflicts' returned map.
+//
+// Both disabled groups call connector.RegisterUnavailableType with the SAME
+// installKey (one plugin) but DIFFERENT groupKey (two resolved versions) —
+// RegisterExternalTypeGroup's own collision guard ("two plugins cannot
+// provide the same type") must recognize them as sibling groups of ONE
+// plugin and allow BOTH registrations, never let the second one refuse
+// because the first already claimed the type name. If the groupKey/
+// installKey arguments were ever swapped, or RegisterExternalTypeGroup's
+// installKey comparison broke, the second RegisterUnavailableType call
+// would be refused, and reg.Get would show that instance not registered as
+// disabled at all — an un-degraded hole where a connector should have come
+// up loudly disabled.
+func TestLoadConnectorPluginsRegistersBothSideBySideSingleProcessGroupsUnavailable(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Cleanup(func() { connector.UnregisterExternalType("tailscale") })
+
+	key := "connectors/tailscale"
+	state := plugin.LoadInstallState(plugin.InstallDir())
+	state.Put(plugin.Installed{
+		Key: key, Kind: config.PluginKindConnector, Name: "tailscale", Resolved: "v1.0.0",
+		Path: "/bin/true", Manifest: plugin.Manifest{SingleProcess: true},
+	})
+	state.Put(plugin.Installed{
+		Key: key, Kind: config.PluginKindConnector, Name: "tailscale", Resolved: "v2.0.0",
+		Path: "/bin/true", Manifest: plugin.Manifest{SingleProcess: true},
+	})
+	if err := state.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{ConnectorsMap: map[string]config.ConnectorRef{
+		// A single-plugin repo (no monorepo component subpath), so its
+		// release tags carry no prefix — matching the bare "v1.0.0"/
+		// "v2.0.0" Resolved values recorded above.
+		"a": {Use: "acme/tailscale@=1.0.0"},
+		"b": {Use: "acme/tailscale@=2.0.0"},
+	}}
+
+	sec := secrets.New()
+	var mgr *plugin.Manager
+	var err error
+	logged := captureLogf(t, func() {
+		mgr, err = loadConnectorPlugins(cfg, sec, func(map[string]any) {}, nil)
+	})
+	if err != nil {
+		t.Fatalf("loadConnectorPlugins: %v", err)
+	}
+	t.Cleanup(func() { mgr.Close() })
+	if !strings.Contains(logged, "single_process") {
+		t.Fatalf("expected a log line naming single_process, got:\n%s", logged)
+	}
+
+	// Both groups must have ACTUALLY registered under their OWN group key —
+	// not just "some instance shows a disabled-looking reason", which a
+	// groupKey/installKey argument swap can still produce by accident (the
+	// second, refused registration leaves declFor's unbound-instance
+	// fallback reusing the FIRST group's representative TypeDecl, which
+	// also happens to be an unavailable one here and would otherwise make
+	// this assertion pass for the wrong reason).
+	groups := connector.TypeDeclsFor("tailscale")
+	for _, gk := range []string{key + "@v1.0.0", key + "@v2.0.0"} {
+		if _, ok := groups[gk]; !ok {
+			t.Fatalf("expected group %q registered under its OWN key, got groups: %v", gk, keysOfTypeDecls(groups))
+		}
+	}
+	if len(groups) != 2 {
+		t.Fatalf("expected exactly 2 distinct registered groups, got %d: %v", len(groups), keysOfTypeDecls(groups))
+	}
+
+	deps := connector.Deps{Secrets: sec, Log: func(string, ...any) {}, Config: cfg, Auth: connector.NewAuthRegistry()}
+	reg, err := connector.Build(cfg, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"a", "b"} {
+		in, ok := reg.Get(n)
+		if !ok {
+			t.Fatalf("instance %s: not registered at all — the second side-by-side group's RegisterUnavailableType call was likely refused as a type collision", n)
+		}
+		if in.DisabledReason == "" {
+			t.Fatalf("instance %s must be disabled (side-by-side single_process conflict), got no reason", n)
+		}
+		if !strings.Contains(in.DisabledReason, "single_process") {
+			t.Fatalf("instance %s disabled reason must mention single_process, got %q", n, in.DisabledReason)
+		}
+	}
+}
+
+func keysOfTypeDecls(m map[string]*connector.TypeDecl) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
