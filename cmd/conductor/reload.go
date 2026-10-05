@@ -53,7 +53,7 @@ func reloadMoved(cfg *config.Config, mgr *plugin.Manager, reg *connector.Registr
 	// pinned to a different version (docs/wiki/Plugins.md "Side-by-side
 	// versions").
 	state := plugin.LoadInstallState(plugin.InstallDir())
-	refs := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
+	refs, _ := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state) // see pluginManagerForStack for the handled case
 	describe := describeForInstall(cfg)
 
 	type pending struct {

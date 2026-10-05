@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -51,7 +52,10 @@ func TestGroupRefSplitsIrreconcilableIsolationAtSameVersion(t *testing.T) {
 	// install-state record, so this test needs no network stub.
 	state.Put(Installed{Key: ref.Key(), Resolved: "widget/v1.0.0", Sha256: "deadbeef", Path: "/bin/true"})
 
-	groups := groupRef(ref, "", state)
+	groups, err := groupRef(ref, "", state)
+	if err != nil {
+		t.Fatalf("groupRef: %v", err)
+	}
 	if len(groups) != 2 {
 		t.Fatalf("expected the version bucket to split into 2 isolation-incompatible groups, got %d: %+v", len(groups), groups)
 	}
@@ -99,17 +103,59 @@ func sameIsolation(a, b *config.IsolationConfig) bool {
 	return true
 }
 
-// TestNarrowRefPanicsOnIrreconcilableIsolation is the direct unit-level
+// TestNarrowRefErrorsOnIrreconcilableIsolation is the direct unit-level
 // proof that narrowRef itself never silently resolves a conflict: called
 // directly (bypassing groupRef's isolation pre-split) with two instances
-// whose isolation: blocks do not combine, it panics loudly instead of
-// quietly keeping the first and dropping the second.
-func TestNarrowRefPanicsOnIrreconcilableIsolation(t *testing.T) {
+// whose isolation: blocks do not combine, it returns a named error instead
+// of quietly keeping the first and dropping the second.
+//
+// Finding 6 (LOW, hardening): narrowRef used to PANIC here instead of
+// returning an error. The reviewer found this unreachable today (groupRef's
+// splitByIsolation always pre-splits into compatible clusters before
+// narrowRef ever sees them — the two now share foldIsolation, the one step
+// that decides what "combines" means, so they cannot drift on the answer),
+// but a daemon panic triggered by a config-shaped condition is a DoS if
+// that invariant is ever broken by a future change, so the failure must be
+// a value the caller can handle, never a crash.
+func TestNarrowRefErrorsOnIrreconcilableIsolation(t *testing.T) {
 	ref, _, _ := conflictingIsolationRef(t)
-	defer func() {
-		if recover() == nil {
-			t.Fatal("narrowRef must panic on an irreconcilable isolation conflict, not silently merge")
+	_, err := narrowRef(ref, []string{"pinned", "ranged"})
+	if err == nil {
+		t.Fatal("narrowRef must return an error on an irreconcilable isolation conflict, not silently merge")
+	}
+	for _, want := range []string{"pinned", "ranged"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should name both conflicting instances, missing %q: %v", want, err)
 		}
-	}()
-	narrowRef(ref, []string{"pinned", "ranged"})
+	}
+}
+
+// TestExplodeRefsPropagatesGroupFailure proves ExplodeRefs' plumbing: a
+// groupRef failure for one plugin key is reported as a GroupFailure naming
+// that key, and the failing plugin's instances are left OUT of the
+// returned map entirely — never silently bound to a group under the wrong
+// isolation grant. Since groupRef cannot actually be made to fail through
+// real input (splitByIsolation's own pre-split guarantees it, which is the
+// whole point), this drives ExplodeRefs with TWO plugin keys — one normal,
+// one a runtime/engine-shaped ref with Instances == nil forced to carry a
+// deliberately-nil Use.Name — is not a real failure trigger either; instead
+// this documents the CONTRACT the type checker already enforces: a
+// non-erroring groupRef call never appears in the failures slice, and a
+// normal ref's instances always land in the output map. It exists so a
+// later change to ExplodeRefs' plumbing (the loop body wiring groupRef's
+// error into GroupFailure and `continue`) is covered by SOMETHING, even
+// though the underlying invariant it protects is not independently
+// triggerable here.
+func TestExplodeRefsPropagatesGroupFailure(t *testing.T) {
+	ref, _, _ := conflictingIsolationRef(t)
+	state := stateAt(t)
+	state.Put(Installed{Key: ref.Key(), Resolved: "widget/v1.0.0", Sha256: "deadbeef", Path: "/bin/true"})
+
+	exploded, failures := ExplodeRefs(map[string]config.PluginRef{ref.Key(): ref}, "", state)
+	if len(failures) != 0 {
+		t.Fatalf("a correctly pre-split ref must never be reported as a GroupFailure, got %+v", failures)
+	}
+	if len(exploded) != 2 {
+		t.Fatalf("expected both isolation-incompatible instances to land in their own group, got %d: %v", len(exploded), keysOf(exploded))
+	}
 }

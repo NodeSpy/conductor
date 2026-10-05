@@ -532,7 +532,17 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 	// Phase 2 — group the now-fully-resolved instances by their OWN
 	// resolved identity (groupRef, finding 1), describing each DISTINCT
 	// release at most once (finding 4).
-	groups := groupRef(ref, "", state)
+	groups, gerr := groupRef(ref, "", state)
+	if gerr != nil {
+		// Finding 6: this is the "must never happen" isolation-fold
+		// invariant failing anyway — degrade this ONE plugin (every
+		// instance of it) rather than ever panicking the whole reconcile
+		// pass over it.
+		return []Resolution{{
+			Key: key, GroupKey: groupKeyIn, Name: ref.Name, Kind: ref.Kind(),
+			Action: ActionFailed, Err: fmt.Errorf("plugin %s: %w", ref.Name, gerr),
+		}}, dirty
+	}
 	multi := len(groups) > 1
 	type described struct {
 		manifest Manifest

@@ -114,7 +114,7 @@ func TestReconcilePinnedInstanceSurvivesSiblingUpdate(t *testing.T) {
 
 	// The derived process-group set now shows two groups — x and y run
 	// independently.
-	exploded := ExplodeRefs(refs, "", st)
+	exploded, _ := ExplodeRefs(refs, "", st)
 	if len(exploded) != 2 {
 		t.Fatalf("round 2: expected 2 process groups (x moved, y pinned), got %d: %v", len(exploded), keysOf(exploded))
 	}

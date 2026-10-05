@@ -33,8 +33,22 @@ import (
 // reload, update) sees N independent plugins instead of one that
 // mysteriously serves N different binaries — no caller past this point ever
 // needs to know "same name, different version" is even possible.
-func ExplodeRefs(refs map[string]config.PluginRef, configDir string, state *InstallState) map[string]config.PluginRef {
+//
+// The second return names every plugin whose instances could NOT be safely
+// split (finding 6) — see groupRef/narrowRef's doc comments. This is
+// expected to always be empty: splitByIsolation and narrowRef share the one
+// fold helper (foldIsolation) that decides what "combines" means, so
+// narrowRef can only ever be handed a cluster splitByIsolation already
+// proved compatible. It exists so that if that invariant is ever broken by
+// a future change anyway, the failure is a named, handleable return value
+// instead of a daemon panic over a config-shaped condition — every instance
+// of the affected plugin is simply left OUT of the returned map (never
+// silently folded under a mismatched isolation grant, and never left
+// unbound to fall through to the type's arbitrary "representative"
+// registration) for the caller to disable loudly.
+func ExplodeRefs(refs map[string]config.PluginRef, configDir string, state *InstallState) (map[string]config.PluginRef, []GroupFailure) {
 	out := make(map[string]config.PluginRef, len(refs))
+	var failures []GroupFailure
 	keys := make([]string, 0, len(refs))
 	for k := range refs {
 		keys = append(keys, k)
@@ -42,7 +56,11 @@ func ExplodeRefs(refs map[string]config.PluginRef, configDir string, state *Inst
 	sort.Strings(keys)
 	for _, key := range keys {
 		ref := refs[key]
-		groups := groupRef(ref, configDir, state)
+		groups, err := groupRef(ref, configDir, state)
+		if err != nil {
+			failures = append(failures, GroupFailure{Key: key, Name: ref.Name, Reason: err.Error()})
+			continue
+		}
 		multi := len(groups) > 1
 		for _, g := range groups {
 			gkey := key
@@ -52,7 +70,14 @@ func ExplodeRefs(refs map[string]config.PluginRef, configDir string, state *Inst
 			out[gkey] = g.ref
 		}
 	}
-	return out
+	return out, failures
+}
+
+// GroupFailure is one plugin whose configured instances groupRef could not
+// split into process groups — see ExplodeRefs' doc comment.
+type GroupFailure struct {
+	// Key is the plugin's install-state identity ("connectors/github").
+	Key, Name, Reason string
 }
 
 // resolvedGroup is one process group: ref narrowed to exactly the configured
@@ -73,9 +98,9 @@ type resolvedGroup struct {
 // runtime/engine's OWN constraint authoritative rather than "whatever
 // happens to be the newest installed under this key" if a sibling config
 // context ever installed a second version under the same name.
-func groupRef(ref config.PluginRef, configDir string, state *InstallState) []resolvedGroup {
+func groupRef(ref config.PluginRef, configDir string, state *InstallState) ([]resolvedGroup, error) {
 	if ref.Instances == nil {
-		return []resolvedGroup{{ref: ref, discriminator: discriminatorFor(ref.Use, ref.Name, configDir, state)}}
+		return []resolvedGroup{{ref: ref, discriminator: discriminatorFor(ref.Use, ref.Name, configDir, state)}}, nil
 	}
 
 	names := make([]string, 0, len(ref.Instances))
@@ -120,10 +145,19 @@ func groupRef(ref config.PluginRef, configDir string, state *InstallState) []res
 			if multiIso {
 				disc = fmt.Sprintf("%s~iso%d", d, i+1)
 			}
-			out = append(out, resolvedGroup{ref: narrowRef(ref, names), discriminator: disc})
+			narrowed, err := narrowRef(ref, names)
+			if err != nil {
+				// See narrowRef's doc comment: splitByIsolation is supposed
+				// to make this unreachable (the two share foldIsolation, the
+				// one step that decides what "combines" means), so this is
+				// a bug if it ever fires, not a config error — but it must
+				// still degrade the WHOLE ref's groups rather than panic.
+				return nil, fmt.Errorf("plugin %s: %w", ref.Name, err)
+			}
+			out = append(out, resolvedGroup{ref: narrowed, discriminator: disc})
 		}
 	}
-	return out
+	return out, nil
 }
 
 // splitByIsolation partitions one resolved-version bucket's instance names
@@ -150,7 +184,13 @@ func splitByIsolation(names []string, instances map[string]config.ConnectorGrant
 		}
 		placed := false
 		for _, c := range clusters {
-			if merged, ok := config.CombineIsolation(c.iso, g.Isolation); ok {
+			// An existing cluster already has at least one name folded in
+			// (haveAny is unconditionally true here), even when c.iso is
+			// nil because that one instance wrote no isolation: block of
+			// its own — foldIsolation is the SAME step narrowRef re-runs
+			// over a cluster this function already approved, so the two can
+			// never disagree about what "combines".
+			if merged, ok := foldIsolation(c.iso, true, g); ok {
 				c.iso = merged
 				c.names = append(c.names, n)
 				placed = true
@@ -210,12 +250,16 @@ func discriminatorFor(u config.Use, name, configDir string, state *InstallState)
 // Finding 2 (security): names is REQUIRED to already be isolation-compatible
 // — groupRef's splitByIsolation is narrowRef's ONLY caller, and it never
 // hands this function a set whose non-isolated instances' isolation: blocks
-// fail to combine. If CombineIsolation ever disagrees here anyway, that is a
-// bug in that pre-split, not a condition this function may paper over by
-// silently keeping one side and dropping the other — it panics, loudly,
-// naming both instances, rather than ever running one of them under
-// isolation it did not declare (the vulnerability this fix closes).
-func narrowRef(ref config.PluginRef, names []string) config.PluginRef {
+// fail to combine (the two share foldIsolation, the one step that decides
+// what "combines" means, so they cannot drift apart on the answer). If
+// foldIsolation ever disagrees here anyway, that is a bug in that pre-split,
+// not a condition this function may paper over by silently keeping one side
+// and dropping the other — it is never silently folded into a mismatched
+// grant, and never run unisolated: it returns a named error identifying
+// both instances (finding 6), which groupRef turns into a failure the
+// caller disables the WHOLE plugin over, loudly — never a daemon panic
+// triggered by a config-shaped condition, and never a wrong grant either.
+func narrowRef(ref config.PluginRef, names []string) (config.PluginRef, error) {
 	out := ref
 	out.Instances = make(map[string]config.ConnectorGrant, len(names))
 	out.Network, out.AllowSecrets, out.AllowEnv, out.Isolation = nil, nil, nil, nil
@@ -232,15 +276,30 @@ func narrowRef(ref config.PluginRef, names []string) config.PluginRef {
 		out.Network = config.AppendUnique(out.Network, g.Network...)
 		out.AllowSecrets = config.AppendUnique(out.AllowSecrets, g.AllowSecrets...)
 		out.AllowEnv = config.AppendUnique(out.AllowEnv, g.AllowEnv...)
-		if out.Isolation == nil && isoFrom == "" {
-			out.Isolation, isoFrom = g.Isolation, n
-			continue
-		}
-		merged, ok := config.CombineIsolation(out.Isolation, g.Isolation)
+		merged, ok := foldIsolation(out.Isolation, isoFrom != "", g)
 		if !ok {
-			panic(fmt.Sprintf("plugin %s: instances %s and %s resolved to the same process group with isolation: blocks that do not combine — this must never happen (groupRef's isolation split is supposed to prevent it); this is a bug, not a config error", ref.Name, isoFrom, n))
+			return config.PluginRef{}, fmt.Errorf("instances %s and %s resolved to the same process group with isolation: blocks that do not combine — this must never happen (groupRef's isolation split is supposed to prevent it); this is a bug, not a config error", isoFrom, n)
 		}
 		out.Isolation = merged
+		if isoFrom == "" {
+			isoFrom = n
+		}
 	}
-	return out
+	return out, nil
+}
+
+// foldIsolation folds g's (non-isolated) isolation: block into the running
+// fold acc — the SINGLE step both splitByIsolation (deciding whether a name
+// fits an existing cluster, or needs a new one) and narrowRef (re-folding a
+// cluster splitByIsolation already approved, to build the group's actual
+// union) perform, so the two can never drift apart on what "combines"
+// means. haveAny is false only for the very first instance folded into an
+// as-yet-empty accumulator — ANY isolation: block (including none at all,
+// nil) stands unconditionally there; every instance after it must actually
+// combine with what came before via config.CombineIsolation.
+func foldIsolation(acc *config.IsolationConfig, haveAny bool, g config.ConnectorGrant) (merged *config.IsolationConfig, ok bool) {
+	if !haveAny {
+		return g.Isolation, true
+	}
+	return config.CombineIsolation(acc, g.Isolation)
 }

@@ -147,7 +147,7 @@ func TestSideBySideVersionsTwoProcessesOwnDecl(t *testing.T) {
 
 	// Re-exploded now that install state actually holds both versions —
 	// this is what a real boot's Manager construction sees.
-	exploded := ExplodeRefs(refs, "", state)
+	exploded, _ := ExplodeRefs(refs, "", state)
 	if len(exploded) != 2 {
 		t.Fatalf("expected ExplodeRefs to split into 2 groups, got %d: %v", len(exploded), keysOf(exploded))
 	}
@@ -239,7 +239,7 @@ func TestSideBySideVersionsSameResolvedVersionShareOneProcess(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 
-	exploded := ExplodeRefs(refs, "", state)
+	exploded, _ := ExplodeRefs(refs, "", state)
 	if len(exploded) != 1 {
 		t.Fatalf("two instances resolving to the SAME version must land in ONE group, got %d: %v", len(exploded), keysOf(exploded))
 	}
@@ -283,7 +283,7 @@ func TestManagerReloadTouchesOnlyItsOwnGroup(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 
-	exploded := ExplodeRefs(refs, "", state)
+	exploded, _ := ExplodeRefs(refs, "", state)
 	mgr := NewManager(exploded, "", state, Deps{})
 	defer mgr.Close()
 

@@ -119,9 +119,25 @@ func pluginManagerFor(cfg *config.Config, sec *secrets.Resolver, audit func(map[
 // pluginManagerForStack is pluginManagerFor with an explicit per-stack
 // host.auth provider (finding 4) — nil falls back to
 // connector.HostAuthProvider, same as pluginManagerFor.
+//
+// Finding 6: a GroupFailure from ExplodeRefs (the "must never happen"
+// isolation-fold invariant failing anyway — see group.go's narrowRef) is
+// handled HERE, at the one choke point every live Manager construction
+// goes through (loadConnectorPlugins' boot path, and every CLI command
+// that builds its own throwaway stack to describe a connector), by
+// registering the affected plugin TYPE Unavailable with a clear reason —
+// the exact mechanism an as-yet-not-installed plugin already degrades
+// through — rather than ever leaving its instances unbound to fall through
+// to declFor's arbitrary "representative" registration, or panicking the
+// process over a config-shaped condition.
 func pluginManagerForStack(cfg *config.Config, sec *secrets.Resolver, audit func(map[string]any), auth plugin.AuthProvider) *plugin.Manager {
 	state := plugin.LoadInstallState(plugin.InstallDir())
-	exploded := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
+	exploded, failures := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
+	for _, f := range failures {
+		reason := fmt.Sprintf("plugin %s: cannot be split into process groups safely (%s) — every connector using it is disabled; this should never happen, please report it", f.Name, f.Reason)
+		connector.RegisterUnavailableType(f.Name, "", f.Key, reason)
+		logf("plugin %s: %s", f.Name, reason)
+	}
 	return plugin.NewManager(exploded, cfg.BaseDir(), state, pluginDeps(sec, audit, auth))
 }
 
@@ -748,7 +764,7 @@ func cmdPluginList(args []string) error {
 	// "Side-by-side versions"): a plugin name pinned at two versions side by
 	// side gets two rows, each its own VERSION and its own connector(s) —
 	// never one row silently speaking for both.
-	refs := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
+	refs, _ := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state) // see pluginManagerForStack for the handled case
 	keys := make([]string, 0, len(refs))
 	for k := range refs {
 		keys = append(keys, k)
@@ -1034,7 +1050,7 @@ func cmdPluginShow(args []string) error {
 	// group — show each, so `plugin show` never speaks for just whichever
 	// one happened to be found first.
 	state := plugin.LoadInstallState(plugin.InstallDir())
-	refs := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
+	refs, _ := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state) // see pluginManagerForStack for the handled case
 	var matches []string
 	for _, base := range []string{"connectors/" + name, "runtimes/" + name} {
 		for gk := range refs {
@@ -1572,7 +1588,8 @@ func pendingPluginsStillMissing(cfg *config.Config, state *plugin.InstallState) 
 			remote[k] = ref
 		}
 	}
-	for _, ref := range plugin.ExplodeRefs(remote, cfg.BaseDir(), state) {
+	exploded, _ := plugin.ExplodeRefs(remote, cfg.BaseDir(), state) // see pluginManagerForStack for the handled case
+	for _, ref := range exploded {
 		if ref.Kind() != config.PluginKindConnector {
 			continue
 		}

@@ -404,7 +404,7 @@ func checkPluginFetchability(cfg *config.Config) []string {
 			remote[k] = ref
 		}
 	}
-	refs := plugin.ExplodeRefs(remote, cfg.BaseDir(), state)
+	refs, _ := plugin.ExplodeRefs(remote, cfg.BaseDir(), state) // a GroupFailure here also surfaces at boot/reload, which actually drives connectors
 	keys := make([]string, 0, len(refs))
 	for k := range refs {
 		keys = append(keys, k)
