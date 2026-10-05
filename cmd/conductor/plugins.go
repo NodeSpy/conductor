@@ -908,7 +908,7 @@ func cmdPluginUpdate(args []string) error {
 	if len(only) == 1 {
 		opts.Only = only[0]
 	}
-	results, err := reconcilePlugins(cfg, opts)
+	results, err := reconcilePlugins(cfg, opts, true)
 	if err != nil {
 		return err
 	}
@@ -965,7 +965,7 @@ func cmdPluginAdd(args []string) error {
 	pr := config.PluginRef{Name: u.Name, Instance: instance, Use: u}
 	// Finding 6: cross-process advisory lock, held across this whole
 	// load-mutate-save cycle — see reconcilePlugins' identical comment.
-	lock, err := plugin.LockInstallState(plugin.InstallDir())
+	lock, err := plugin.LockInstallStateCLI(plugin.InstallDir(), pluginLockCLITimeout, lockWaitNotice)
 	if err != nil {
 		return err
 	}
@@ -1184,7 +1184,7 @@ func cmdPluginRemove(args []string) error {
 	name := rest[0]
 	// Finding 6: cross-process advisory lock, held across this whole
 	// load-mutate-save cycle — see reconcilePlugins' identical comment.
-	lock, err := plugin.LockInstallState(plugin.InstallDir())
+	lock, err := plugin.LockInstallStateCLI(plugin.InstallDir(), pluginLockCLITimeout, lockWaitNotice)
 	if err != nil {
 		return err
 	}
@@ -1224,6 +1224,15 @@ func cmdPluginRemove(args []string) error {
 // that may authorize a prune — and only once the config confirms its packs were
 // instantiated, because a pack's internal `run: <engine>` is part of that set
 // and is invisible until then (see config.PluginRefsComplete).
+//
+// cli distinguishes an interactive CLI command (which gets
+// LockInstallStateCLI's non-blocking-then-notify-then-bounded-wait
+// treatment, finding 6) from the daemon's own unattended background passes
+// (autoUpdateLoop's refreshPlugins, the boot gap-fill's own already-bounded
+// goroutine) — which block on plugin.LockInstallState with NO timeout, since
+// a bound there would just turn a slow-but-eventually-finishing peer into a
+// spurious failure with nobody watching to retry it.
+//
 // reconcileMu serializes every reconcile/install pass in this process. The
 // daemon runs more than one of these concurrently on its own — pendingPluginRetry's
 // ticker and autoUpdateLoop's dependency refresh both call this function from
@@ -1236,7 +1245,21 @@ func cmdPluginRemove(args []string) error {
 // goroutines, not across separate `conductor` invocations.
 var reconcileMu sync.Mutex
 
-func reconcilePlugins(cfg *config.Config, opts plugin.Options) ([]plugin.Resolution, error) {
+// pluginLockCLITimeout bounds how long an interactive CLI command
+// (`conductor init`, `plugin update`/`add`/`remove`) waits for the
+// install-state lock before giving up with a clear error (finding 6). It is
+// generous: a concurrent reconcile pass (the daemon's own auto-update cycle,
+// or another `conductor plugin` invocation) legitimately fetching several
+// plugins can take a while, and the point is never to time out a peer that
+// is actually making progress — only to stop an operator from staring at a
+// silent, indefinite hang.
+const pluginLockCLITimeout = 10 * time.Minute
+
+// lockWaitNotice adapts logf to the plain func(string) LockInstallStateCLI
+// notifies through.
+func lockWaitNotice(msg string) { logf("plugin: %s", msg) }
+
+func reconcilePlugins(cfg *config.Config, opts plugin.Options, cli bool) ([]plugin.Resolution, error) {
 	reconcileMu.Lock()
 	defer reconcileMu.Unlock()
 	// Finding 6: reconcileMu only serializes THIS process's own goroutines.
@@ -1244,7 +1267,15 @@ func reconcilePlugins(cfg *config.Config, opts plugin.Options) ([]plugin.Resolut
 	// this daemon's own auto-update cycle each have their own, unrelated
 	// reconcileMu — the cross-process advisory lock closes that gap, held
 	// across the whole load-mutate-save cycle below.
-	lock, err := plugin.LockInstallState(plugin.InstallDir())
+	var (
+		lock *plugin.FileLock
+		err  error
+	)
+	if cli {
+		lock, err = plugin.LockInstallStateCLI(plugin.InstallDir(), pluginLockCLITimeout, lockWaitNotice)
+	} else {
+		lock, err = plugin.LockInstallState(plugin.InstallDir())
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1381,7 +1412,7 @@ func bootGapFill(cfg *config.Config) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		res, err := reconcilePlugins(cfg, plugin.Options{GapsOnly: true, Log: logf})
+		res, err := reconcilePlugins(cfg, plugin.Options{GapsOnly: true, Log: logf}, false)
 		if err != nil {
 			logf("plugins: boot fetch: %v", err)
 		}

@@ -316,7 +316,7 @@ func TestReconcilePluginsSerializesConcurrentPasses(t *testing.T) {
 	cfg := &config.Config{} // no plugin refs: Reconcile returns instantly once unblocked
 	done := make(chan error, 1)
 	go func() {
-		_, err := reconcilePlugins(cfg, plugin.Options{})
+		_, err := reconcilePlugins(cfg, plugin.Options{}, false)
 		done <- err
 	}()
 
@@ -389,5 +389,86 @@ func TestAllowEnvBeyondTheDeclarationIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `allow_env "SOME_SECRET"`) {
 		t.Fatalf("unhelpful refusal: %v", err)
+	}
+}
+
+// TestCmdPluginCommandsTakeInstallStateLock is a TEST GAP for finding 6: a
+// held install-state lock (the daemon's own auto-update cycle, or a
+// concurrent `conductor plugin` invocation) must actually block
+// cmdPluginAdd/Update/Remove — not because they must wait forever, but
+// because if they did NOT take the lock at all, two of these could race a
+// load-mutate-save cycle and silently lose a write (exactly what
+// LockInstallState/LockInstallStateCLI exist to prevent). Each command is
+// driven far enough to reach its own plugin.LockInstallStateCLI call with a
+// config/args shape that fails FAST once the lock is free (an untrusted
+// plugin source for add, a config with nothing referenced for update, a
+// name nothing has installed for remove) — the assertion is purely about
+// WHEN each command's goroutine completes relative to the external lock
+// being released, never about what it ultimately returns.
+func TestCmdPluginCommandsTakeInstallStateLock(t *testing.T) {
+	cases := []struct {
+		name string
+		run  func(cfgPath string) error
+	}{
+		{
+			name: "add",
+			run: func(cfgPath string) error {
+				return cmdPluginAdd([]string{"--config", cfgPath, "acme/plugins/widget"})
+			},
+		},
+		{
+			name: "update",
+			run: func(cfgPath string) error {
+				return cmdPluginUpdate([]string{"--config", cfgPath})
+			},
+		},
+		{
+			name: "remove",
+			run: func(cfgPath string) error {
+				return cmdPluginRemove([]string{"--config", cfgPath, "nothing-installed"})
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+			// A builtin-only connector: config.Load requires at least one
+			// connector, and this test cares about the install-state lock,
+			// not plugin resolution — a builtin references nothing to fetch.
+			doc := "connectors:\n  timer: { use: cron, schedules: { tick: { every: 1h } } }\n"
+			if err := os.WriteFile(cfgPath, []byte(doc), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			holder, err := plugin.LockInstallState(plugin.InstallDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			done := make(chan error, 1)
+			go func() { done <- tc.run(cfgPath) }()
+
+			select {
+			case err := <-done:
+				holder.Unlock()
+				t.Fatalf("cmdPlugin%s returned (%v) WITHOUT waiting for the held install-state lock", strings.Title(tc.name), err)
+			case <-time.After(150 * time.Millisecond):
+				// still blocked, as expected
+			}
+
+			if err := holder.Unlock(); err != nil {
+				t.Fatal(err)
+			}
+
+			select {
+			case <-done:
+				// proceeded once the lock freed up — correct, regardless of
+				// what it returned.
+			case <-time.After(5 * time.Second):
+				t.Fatalf("cmdPlugin%s never proceeded after the lock was released", strings.Title(tc.name))
+			}
+		})
 	}
 }

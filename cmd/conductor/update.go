@@ -398,7 +398,7 @@ func logDepChanges(before, after *config.Lockfile) bool {
 // error: Reconcile keeps the installed build and records the failure, so one
 // unreachable plugin never blocks the update or the daemon.
 func refreshPlugins(cfg *config.Config) (bool, []plugin.Resolution, error) {
-	results, err := reconcilePlugins(cfg, plugin.Options{Log: logf})
+	results, err := reconcilePlugins(cfg, plugin.Options{Log: logf}, false)
 	if err != nil {
 		return false, nil, err
 	}
