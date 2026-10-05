@@ -3,6 +3,7 @@ package plugin
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -236,6 +237,14 @@ func TestSanitizeVersionDirPropertyDistinctInputsGiveDistinctOutputs(t *testing.
 		"a/b/c",
 		"a/b//c",
 		"UPPER/lower",
+		"con",
+		"CON",
+		"nul",
+		"com1",
+		"lpt9",
+		"con.txt",
+		strings.Repeat("a", 300),
+		strings.Repeat("a", 300) + "-tail",
 	}
 	seen := make(map[string]string, len(inputs))
 	for _, in := range inputs {
@@ -247,6 +256,89 @@ func TestSanitizeVersionDirPropertyDistinctInputsGiveDistinctOutputs(t *testing.
 			t.Fatalf("collision: sanitizeVersionDir(%q) and sanitizeVersionDir(%q) both produced %q", prevIn, in, out)
 		}
 		seen[out] = in
+	}
+}
+
+// TestSanitizeVersionDirEscapesWindowsReservedNames is finding 4 (LOW): the
+// function's own doc comment claimed to guard "a Windows reserved/ambiguous
+// name", but every letter passed straight through isSafeVersionDirByte — a
+// release literally tagged "con", "NUL", "com1", or "lpt9" (or a monorepo
+// component path leading with one) produced that EXACT directory name,
+// which Windows refuses to create as a file or directory at all (with or
+// without an extension). Plugins do ship Windows binaries, so this is
+// escaped rather than merely documented as a gap.
+func TestSanitizeVersionDirEscapesWindowsReservedNames(t *testing.T) {
+	reserved := []string{"con", "CON", "Con", "prn", "aux", "nul", "com1", "COM9", "lpt1", "lpt9", "com0", "lpt0"}
+	for _, name := range reserved {
+		got := sanitizeVersionDir(name)
+		if strings.EqualFold(got, name) {
+			t.Fatalf("sanitizeVersionDir(%q) = %q — still an exact (case-insensitive) match for a Windows-reserved device name", name, got)
+		}
+		// An extension doesn't save it either — Windows refuses "con.txt" just
+		// as it refuses "con".
+		withExt := name + ".txt"
+		gotExt := sanitizeVersionDir(withExt)
+		stem := gotExt
+		if i := strings.IndexByte(gotExt, '.'); i >= 0 {
+			stem = gotExt[:i]
+		}
+		if strings.EqualFold(stem, name) {
+			t.Fatalf("sanitizeVersionDir(%q) = %q — its stem is still an exact match for a Windows-reserved device name", withExt, gotExt)
+		}
+	}
+	// A non-reserved tag that merely CONTAINS one of these words is untouched
+	// — only an exact stem match is special-cased.
+	if got := sanitizeVersionDir("iconic"); got != "iconic" {
+		t.Fatalf(`"iconic" (contains "con" but isn't it) must pass through unchanged, got %q`, got)
+	}
+	if got := sanitizeVersionDir("economy"); got != "economy" {
+		t.Fatalf(`"economy" must pass through unchanged, got %q`, got)
+	}
+	// Distinct inputs (including distinct CASINGS of the same reserved word,
+	// and the reserved word with vs. without a trailing extension) must still
+	// map to distinct outputs — escaping must never collapse them together.
+	seen := map[string]string{}
+	for _, in := range append(append([]string{}, reserved...), "con.txt", "CON.TXT", "nul.tar.gz", "iconic", "economy") {
+		out := sanitizeVersionDir(in)
+		if prev, ok := seen[out]; ok && prev != in {
+			t.Fatalf("collision: sanitizeVersionDir(%q) and sanitizeVersionDir(%q) both produced %q", prev, in, out)
+		}
+		seen[out] = in
+	}
+}
+
+// TestSanitizeVersionDirCapsLength is finding 4 (LOW): an arbitrarily long
+// release tag (or monorepo component path abused as one) produced an
+// arbitrarily long, fully percent-encoded directory NAME — most filesystems
+// cap a single path component at 255 bytes, and percent-encoding can triple
+// the length of every unsafe byte, so a long-but-plausible tag could already
+// exceed that. Past maxVersionDirSegment, the output is a short, readable
+// prefix plus a hash of the FULL original value — never just a bare
+// truncation, which would silently alias two long tags sharing a prefix
+// onto the same directory.
+func TestSanitizeVersionDirCapsLength(t *testing.T) {
+	long1 := "v1.0.0-" + strings.Repeat("a", 300)
+	long2 := "v1.0.0-" + strings.Repeat("a", 300) + "-DIFFERENT-TAIL"
+
+	out1 := sanitizeVersionDir(long1)
+	out2 := sanitizeVersionDir(long2)
+
+	if len(out1) > maxVersionDirSegment {
+		t.Fatalf("sanitizeVersionDir output length = %d, want <= %d", len(out1), maxVersionDirSegment)
+	}
+	if len(out2) > maxVersionDirSegment {
+		t.Fatalf("sanitizeVersionDir output length = %d, want <= %d", len(out2), maxVersionDirSegment)
+	}
+	if out1 == out2 {
+		t.Fatalf("two distinct long inputs sharing a long common prefix must not collide after truncation, both produced %q", out1)
+	}
+	// A short tag well under the cap is completely unaffected.
+	if got := sanitizeVersionDir("v1.2.3"); got != "v1.2.3" {
+		t.Fatalf("a short tag must pass through unchanged, got %q", got)
+	}
+	// Calling it again with the SAME long input is still deterministic.
+	if again := sanitizeVersionDir(long1); again != out1 {
+		t.Fatalf("sanitizeVersionDir must be deterministic for the same input: %q vs %q", out1, again)
 	}
 }
 

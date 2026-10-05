@@ -256,29 +256,114 @@ func sourceFingerprint(source string) string {
 // the old encoding only ever produced plain "_"-joined text, while this one
 // emits "%XX" escapes for every byte the old encoding passed through
 // unexamined (any '/', '\\', or '%' in the original value).
+// maxVersionDirSegment caps sanitizeVersionDir's output length (finding 4,
+// LOW): an arbitrarily long release tag (a monorepo path abused as a tag,
+// or simply a very long one) would otherwise produce an arbitrarily long
+// directory name — most filesystems cap a single path component around 255
+// bytes, and percent-encoding can triple the length of every unsafe byte.
+// Past this, the segment is replaced with a short, still-readable prefix
+// plus a hash of the FULL ORIGINAL value (truncateWithHash) — never just a
+// truncated prefix on its own, which would collapse two distinct long tags
+// sharing one onto the same directory.
+const maxVersionDirSegment = 150
+
 func sanitizeVersionDir(v string) string {
+	var out string
 	if v == "." || v == ".." {
-		return strings.ReplaceAll(v, ".", "%2E")
-	}
-	var b strings.Builder
-	b.Grow(len(v))
-	for i := 0; i < len(v); i++ {
-		c := v[i]
-		if isSafeVersionDirByte(c) {
-			b.WriteByte(c)
-		} else {
-			fmt.Fprintf(&b, "%%%02X", c)
+		out = strings.ReplaceAll(v, ".", "%2E")
+	} else {
+		var b strings.Builder
+		b.Grow(len(v))
+		for i := 0; i < len(v); i++ {
+			c := v[i]
+			if isSafeVersionDirByte(c) {
+				b.WriteByte(c)
+			} else {
+				fmt.Fprintf(&b, "%%%02X", c)
+			}
+		}
+		out = b.String()
+		if len(out) > maxVersionDirSegment {
+			out = truncateWithHash(out, v)
 		}
 	}
-	return b.String()
+	return escapeWindowsReservedStem(out)
+}
+
+// truncateWithHash shortens encoded (already over maxVersionDirSegment) to a
+// readable prefix of itself plus a short hash of original — the UNTRUNCATED
+// source value, not the encoded prefix — so two distinct long inputs that
+// happen to share their first bytes (a common case: two tags differing only
+// near the end) still get distinct directory names. Collision-resistant,
+// not collision-proof, the same trade-off sourceFingerprint already makes
+// for exactly the same reason (never compared for security purposes — only
+// to keep two unrelated directories apart).
+func truncateWithHash(encoded, original string) string {
+	const hashLen = 12 // matches sourceFingerprint's own length
+	sum := sha256.Sum256([]byte(original))
+	prefixLen := maxVersionDirSegment - 1 - hashLen // 1 for the "~" separator
+	if prefixLen > len(encoded) {
+		prefixLen = len(encoded)
+	}
+	if prefixLen < 0 {
+		prefixLen = 0
+	}
+	return encoded[:prefixLen] + "~" + hex.EncodeToString(sum[:])[:hashLen]
+}
+
+// windowsReservedStems are the MS-DOS device names Windows refuses to let
+// ANY file or directory be named — exactly, or with any extension ("con",
+// "con.txt", and "con.tar.gz" are all refused alike; the check is against
+// the name's STEM, everything before its first '.', case-insensitively).
+var windowsReservedStems = map[string]bool{
+	"con": true, "prn": true, "aux": true, "nul": true,
+	"com0": true, "com1": true, "com2": true, "com3": true, "com4": true,
+	"com5": true, "com6": true, "com7": true, "com8": true, "com9": true,
+	"lpt0": true, "lpt1": true, "lpt2": true, "lpt3": true, "lpt4": true,
+	"lpt5": true, "lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
+}
+
+// escapeWindowsReservedStem percent-encodes seg's first byte when seg's stem
+// (everything before its first '.', or all of seg when there is none)
+// case-insensitively names an MS-DOS reserved device (finding 4, LOW): the
+// earlier version of this function left every letter untouched, so a
+// release tagged exactly "con" (or a monorepo component path leading with
+// one) produced a literal "con" directory — one Windows refuses to create
+// at all, silently taking every connector pinned to it down on that
+// platform. Plugins do ship Windows binaries, and the daemon itself may run
+// there one day, so this is escaped rather than merely documented as a gap.
+//
+// Escaping only the FIRST byte is enough to break the match (the stem is no
+// longer one of the fixed reserved strings) while staying injective: the
+// base percent-encoding scheme above always escapes a literal '%' as
+// "%25", so no OTHER input can ever naturally produce a bare "%XX" escape
+// of an otherwise-SAFE byte at this position the way this deliberately
+// introduces here — seg[0] is always a plain, unescaped letter (C/P/A/N/L,
+// upper or lower case) whenever this branch fires, so the result can never
+// collide with anything the base scheme or truncateWithHash produces on
+// their own.
+func escapeWindowsReservedStem(seg string) string {
+	if seg == "" {
+		return seg
+	}
+	stem := seg
+	if i := strings.IndexByte(seg, '.'); i >= 0 {
+		stem = seg[:i]
+	}
+	if !windowsReservedStems[strings.ToLower(stem)] {
+		return seg
+	}
+	return fmt.Sprintf("%%%02X", seg[0]) + seg[1:]
 }
 
 // isSafeVersionDirByte is RFC 3986's "unreserved" set: letters, digits, and
 // "-_.~" — the characters percent-encoding never needs to touch, kept
 // literal purely for short, readable directory names ("v1.0.0" stays
 // "v1.0.0"). Every other byte — '/', '\\', '%', control characters, and
-// anything else a filesystem (or a Windows reserved/ambiguous name) might
-// treat specially — is percent-encoded by the caller.
+// anything else a filesystem might treat specially — is percent-encoded by
+// the caller; a Windows-reserved device name among the safe bytes is caught
+// separately by escapeWindowsReservedStem, since it is a property of the
+// WHOLE segment, not any one byte.
 func isSafeVersionDirByte(c byte) bool {
 	switch {
 	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
