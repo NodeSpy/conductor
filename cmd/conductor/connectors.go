@@ -411,6 +411,35 @@ func schemaTypesHint() []string {
 	return out
 }
 
+// printTypeSchema prints every registered group's declaration for a bare
+// type name (no specific configured instance in mind) and reports whether
+// anything was registered for it. Finding 5 (side-by-side versions,
+// docs/wiki/Plugins.md): several resolved versions of the SAME type can be
+// configured side by side, each with its own declaration — print every one
+// of them, under a version header, rather than silently showing whichever
+// group happened to register first.
+func printTypeSchema(name string) bool {
+	decls := connector.TypeDeclsFor(name)
+	if len(decls) == 0 {
+		return false
+	}
+	gks := make([]string, 0, len(decls))
+	for gk := range decls {
+		gks = append(gks, gk)
+	}
+	sort.Strings(gks)
+	for i, gk := range gks {
+		if len(gks) > 1 {
+			if i > 0 {
+				fmt.Println()
+			}
+			fmt.Printf("--- %s: version %d of %d (%s) ---\n", name, i+1, len(gks), gk)
+		}
+		printTypeDecl(decls[gk], nil)
+	}
+	return true
+}
+
 // cmdSchema implements `conductor schema <connector>`: the full published
 // event/filter/context/option/output schemas for one connector.
 func cmdSchema(args []string) error {
@@ -424,45 +453,50 @@ func cmdSchema(args []string) error {
 	}
 	name := rest[0]
 
-	// Build FIRST, unconditionally — before deciding whether name is a
-	// configured instance or a bare type name (finding 6, HIGH). An
-	// external plugin TYPE is registered into the connector package's type
-	// registry (connector.TypeDeclsFor/Types) only once its plugin has
-	// actually been loaded by building the stack; looking up a bare type
-	// name BEFORE that made `conductor schema acme-echo` fail with "no
-	// connector configured (and no such type)" for every real external
-	// plugin, even though a CONFIGURED INSTANCE of the identical plugin
-	// (the branch below) already built the stack first and found it fine.
-	// A config with no connectors: block at all (buildErr == nil, stack ==
-	// nil — flowStack.Close is nil-safe) still falls through to the
-	// builtin-only bare-type lookup exactly as before.
-	stack, _ := buildFlowStack(cfg, nil, nil, true)
-	defer stack.Close()
+	ref, hasInstance := cfg.ConnectorsMap[name]
 
-	ref, ok := cfg.ConnectorsMap[name]
-	if !ok {
+	// Finding 3 (MEDIUM): a BARE type query (no configured instance in
+	// mind) can always be answered from the type registry alone when the
+	// type is already known there — every builtin/init-registered type
+	// (connector.go's RegisterType calls) is in it from process start, with
+	// no config even loaded yet. `schema webhook` must never spawn a
+	// single plugin process just to repeat back a declaration that was
+	// sitting in memory from startup. An EXTERNAL plugin type registers
+	// into this same registry only once a build has actually spawned and
+	// described its plugin (TypeDeclFor/TypeDeclsFor stay empty for it
+	// until then), so an unknown bare name still needs the build below.
+	//
+	// A CONFIGURED instance always builds, even when its type is already
+	// known: build is also where a real disabled/failure reason — beyond
+	// the static `enabled: false` this function can read off the config
+	// directly — comes from (rest/graphql/webhook's Q6 per-instance
+	// declaration is the sharpest example, but any builtin's instance can
+	// fail to build on bad config/secrets same as a plugin's can), and
+	// that must never be silently skipped just because the type name
+	// happens to already be registered.
+	if !hasInstance {
+		if _, known := connector.TypeDeclFor(name); known {
+			printTypeSchema(name)
+			return nil
+		}
+	}
+
+	// Building is the only way to answer from here — an external plugin
+	// type (configured or bare), a configured instance of any type, or a
+	// genuinely unknown bare name. It happens here, and ONLY here. Its
+	// error is reported as a warning, never swallowed (finding 3): a
+	// broken OTHER connector's plugin must not silently hide why this
+	// query came back empty or stale.
+	stack, buildErr := buildFlowStack(cfg, nil, nil, true)
+	defer stack.Close()
+	if buildErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: building the plugin stack failed: %v\n", buildErr)
+	}
+
+	if !hasInstance {
 		// Allow a bare type name too (schema for an unconfigured type, or
 		// an external plugin type with no configured instance at all).
-		// Finding 5 (side-by-side versions, docs/wiki/Plugins.md): several
-		// resolved versions of the SAME type can be configured side by
-		// side, each with its own declaration — print every one of them,
-		// under a version header, rather than silently showing whichever
-		// group happened to register first.
-		if decls := connector.TypeDeclsFor(name); len(decls) > 0 {
-			gks := make([]string, 0, len(decls))
-			for gk := range decls {
-				gks = append(gks, gk)
-			}
-			sort.Strings(gks)
-			for i, gk := range gks {
-				if len(gks) > 1 {
-					if i > 0 {
-						fmt.Println()
-					}
-					fmt.Printf("--- %s: version %d of %d (%s) ---\n", name, i+1, len(gks), gk)
-				}
-				printTypeDecl(decls[gk], nil)
-			}
+		if printTypeSchema(name) {
 			return nil
 		}
 		return fmt.Errorf("no connector %q configured (and no such type); types: %s", name, strings.Join(schemaTypesHint(), ", "))
