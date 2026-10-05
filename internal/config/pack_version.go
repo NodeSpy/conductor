@@ -81,13 +81,32 @@ func trimVersionPrefix(v string) string {
 	return v
 }
 
-type semver struct{ major, minor, patch int }
+// semver is major.minor.patch plus the raw pre-release identifier string
+// (pre), when present — "" for a release. pre is kept ONLY for precedence
+// ordering (compareVersionPrecedence, below): matchOp/satisfiesConstraint's
+// range matching (>=, <, ~>, …) still compares major.minor.patch alone via
+// compareSemver, exactly as before this field existed — a `version:
+// >=1.2.3` constraint does not newly start rejecting "1.2.3-rc1" just
+// because precedence ordering elsewhere now knows releases beat
+// pre-releases of the same core. Build metadata ("+…") carries no
+// precedence under semver at all and is dropped entirely, never retained
+// anywhere.
+type semver struct {
+	major, minor, patch int
+	pre                 string
+}
 
 func parseSemver(s string) (semver, error) {
 	s = strings.TrimSpace(s)
 	s = strings.TrimPrefix(s, "v")
-	// Drop any pre-release/build metadata.
-	if i := strings.IndexAny(s, "-+"); i >= 0 {
+	// Build metadata ("+…") is dropped first and unconditionally — it carries
+	// no precedence under semver, unlike a pre-release ("-…"), which does.
+	if i := strings.Index(s, "+"); i >= 0 {
+		s = s[:i]
+	}
+	var pre string
+	if i := strings.Index(s, "-"); i >= 0 {
+		pre = s[i+1:]
 		s = s[:i]
 	}
 	if s == "" {
@@ -109,9 +128,16 @@ func parseSemver(s string) (semver, error) {
 			return v, err
 		}
 	}
+	v.pre = pre
 	return v, nil
 }
 
+// compareSemver orders by major.minor.patch ALONE — pre-release is not
+// considered, by design: this is what matchOp's range operators (>=, <,
+// ~>, ^, …) compare with, and a constraint must keep matching a
+// pre-release of a satisfying core exactly as it always has. Ordering that
+// DOES care which of two same-core versions is "newer" (one a release, one
+// a pre-release) uses compareVersionPrecedence instead.
 func compareSemver(a, b semver) int {
 	if a.major != b.major {
 		return sign(a.major - b.major)
@@ -120,6 +146,76 @@ func compareSemver(a, b semver) int {
 		return sign(a.minor - b.minor)
 	}
 	return sign(a.patch - b.patch)
+}
+
+// compareVersionPrecedence orders two parsed versions by full semver
+// precedence (semver.org §11), the ONE comparator config.CompareVersions
+// and bestMatch both order by (finding 3, MEDIUM): major.minor.patch first
+// (compareSemver); when those tie, a release (no pre-release suffix)
+// always beats a pre-release of the identical core version — "v1.2.3" >
+// "v1.2.3-alpha" — never a coin flip decided by iteration order or byte
+// comparison of the tag text, which is what let bestMatch and
+// CompareVersions disagree on this exact case before; when BOTH are
+// pre-releases of the identical core, their dot-separated identifiers are
+// compared per semver's own rules where feasible (comparePrerelease).
+// Equal precedence (0) is not a claim the two tags are interchangeable —
+// the caller breaks a genuine tie by the full tag text as a last resort
+// (CompareVersions, and bestMatch via it).
+func compareVersionPrecedence(a, b semver) int {
+	if c := compareSemver(a, b); c != 0 {
+		return c
+	}
+	switch {
+	case a.pre == "" && b.pre == "":
+		return 0
+	case a.pre == "": // release beats pre-release of the same core
+		return 1
+	case b.pre == "":
+		return -1
+	default:
+		return comparePrerelease(a.pre, b.pre)
+	}
+}
+
+// comparePrerelease orders two pre-release identifier strings ("alpha",
+// "rc.1", "beta.11") per semver precedence where feasible: split on ".",
+// compare each pair of identifiers left to right (comparePrereleaseIdent),
+// and when every compared pair ties, the LONGER identifier list has higher
+// precedence ("1.0.0-alpha" < "1.0.0-alpha.1" — more fields narrows a
+// pre-release further along toward the release it precedes).
+func comparePrerelease(a, b string) int {
+	if a == b {
+		return 0
+	}
+	as := strings.Split(a, ".")
+	bs := strings.Split(b, ".")
+	for i := 0; i < len(as) && i < len(bs); i++ {
+		if c := comparePrereleaseIdent(as[i], bs[i]); c != 0 {
+			return c
+		}
+	}
+	return sign(len(as) - len(bs))
+}
+
+// comparePrereleaseIdent orders one pair of dot-separated pre-release
+// identifiers per semver precedence: numeric identifiers compare
+// numerically; a numeric identifier always has LOWER precedence than an
+// alphanumeric one (semver.org §11.4.3); two alphanumeric identifiers
+// compare by plain ASCII byte order (semver's own "ASCII sort order" rule,
+// the feasible approximation of full Unicode collation).
+func comparePrereleaseIdent(a, b string) int {
+	an, aerr := strconv.Atoi(a)
+	bn, berr := strconv.Atoi(b)
+	switch {
+	case aerr == nil && berr == nil:
+		return sign(an - bn)
+	case aerr == nil:
+		return -1
+	case berr == nil:
+		return 1
+	default:
+		return strings.Compare(a, b)
+	}
 }
 
 func sign(n int) int {

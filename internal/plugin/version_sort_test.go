@@ -33,12 +33,14 @@ func TestAllVersionsSortsNumericallyNotLexically(t *testing.T) {
 }
 
 // TestAllVersionsOrdersPreReleaseDeterministically covers the pre-release
-// edge of finding 2: parseSemver deliberately drops "-"/"+" metadata (the
-// same rule requires.conductor's own gate uses), so "v1.2.3" and
-// "v1.2.3-rc1" compare numerically EQUAL. The sort must still be total and
-// repeatable rather than depending on insertion order — config.CompareVersions
-// documents the tiebreak as a plain byte-wise compare of the full tag, which
-// this pins down and locks in.
+// edge of finding 2/finding 3: major.minor.patch alone ties between
+// "v1.2.3" and "v1.2.3-rc1", but config.CompareVersions' ONE comparator
+// (shared with bestMatch, finding 3) now breaks that tie by semver
+// precedence — a release always beats a pre-release of the identical core
+// — rather than the byte-wise tag-text compare this pinned down before
+// that fix (which happened to rank "v1.2.3" < "v1.2.3-rc1" for the
+// unrelated reason that it is a strict text prefix of it). The sort must
+// still be total and repeatable rather than depending on insertion order.
 func TestAllVersionsOrdersPreReleaseDeterministically(t *testing.T) {
 	s := LoadInstallState(t.TempDir())
 	s.Put(Installed{Key: "connectors/widget", Resolved: "v1.2.3-rc1"})
@@ -49,11 +51,11 @@ func TestAllVersionsOrdersPreReleaseDeterministically(t *testing.T) {
 		if len(all) != 2 {
 			t.Fatalf("round %d: AllVersions = %+v, want 2 records", i, all)
 		}
-		// "v1.2.3" < "v1.2.3-rc1" byte-wise (shorter string, common prefix) —
-		// the documented, deterministic tiebreak, exercised repeatedly to
-		// prove it never flips.
-		if all[0].Resolved != "v1.2.3" || all[1].Resolved != "v1.2.3-rc1" {
-			t.Fatalf("round %d: order = [%s, %s], want a stable [v1.2.3, v1.2.3-rc1]", i, all[0].Resolved, all[1].Resolved)
+		// Ascending: the pre-release sorts BELOW the release it precedes —
+		// "v1.2.3" (release) is the highest, exercised repeatedly to prove
+		// the order never flips.
+		if all[0].Resolved != "v1.2.3-rc1" || all[1].Resolved != "v1.2.3" {
+			t.Fatalf("round %d: order = [%s, %s], want a stable [v1.2.3-rc1, v1.2.3] (release ranks highest)", i, all[0].Resolved, all[1].Resolved)
 		}
 	}
 }

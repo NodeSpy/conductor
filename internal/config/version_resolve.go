@@ -13,36 +13,35 @@ func SatisfiesConstraint(version, constraint string) bool {
 	return satisfiesConstraint(version, constraint)
 }
 
-// CompareVersions orders two resolved release tags the same way BestMatch
-// picks the highest among several — numerically, so "v1.9.0" sorts BELOW
-// "v1.10.0" rather than after it the way a plain lexical byte compare would
-// (install state's own Get/AllVersions used to sort this way, silently
-// handing "the highest installed version" callers v1.9.0 the moment a
-// v1.10.0 existed alongside it). A monorepo's component-path tag prefix
+// CompareVersions orders two resolved release tags by the SAME comparator
+// BestMatch picks the highest among several with (compareVersionPrecedence,
+// finding 3, MEDIUM — before the fix, the two disagreed: BestMatch kept
+// whichever of a tied pair it saw FIRST, order-dependent, while
+// CompareVersions tie-broke by raw tag text, so "v1.2.3" vs "v1.2.3-alpha"
+// could rank opposite ways depending on which function and which input
+// order was asked). Numeric first, so "v1.9.0" sorts BELOW "v1.10.0" rather
+// than after it the way a plain lexical byte compare would (install
+// state's own Get/AllVersions used to sort this way, silently handing "the
+// highest installed version" callers v1.9.0 the moment a v1.10.0 existed
+// alongside it). A monorepo's component-path tag prefix
 // ("connectors/widget/v1.2.3") is tolerated exactly like BestMatch tolerates
 // it, via the same trailing-segment trim checkConductorConstraint already
 // uses for a plugin's own version gate.
 //
-// Pre-release/build metadata is not ordered relative to the release it
-// precedes: parseSemver drops a "-"/"+" suffix entirely (by design, see
-// checkConductorConstraint), so "v1.2.3" and "v1.2.3-rc1" parse identically
-// and compare EQUAL here. Rather than leave that tie to whatever order the
-// caller's sort happened to visit them in (nondeterministic for an
-// unstable sort, and an easy-to-miss footgun even for a stable one), the
-// tie is broken by a plain byte-wise compare of the two FULL tag strings —
-// deterministic and documented, but deliberately not a claim that either
-// side is semantically newer.
-//
-// A tag either side cannot parse as semver at all (a hand-written local
-// snapshot key, a corrupt record) falls back to the identical byte-wise
-// compare, so a mixed set of parseable and unparseable tags still sorts
-// into one stable, repeatable order rather than panicking or silently
-// depending on map/slice iteration order.
+// Same core, release vs. pre-release: a release always beats a pre-release
+// of the identical major.minor.patch ("v1.2.3" > "v1.2.3-alpha"), never a
+// coin flip. Same core, two pre-releases: their identifiers are compared
+// per semver precedence where feasible (comparePrerelease). Beyond that —
+// a genuine tie, or either side failing to parse as semver at all (a
+// hand-written local snapshot key, a corrupt record) — the tie is broken by
+// a plain byte-wise compare of the two FULL tag strings: deterministic and
+// documented, but deliberately not a claim that either side is
+// semantically newer.
 func CompareVersions(a, b string) int {
 	av, aerr := parseSemver(trimVersionPrefix(a))
 	bv, berr := parseSemver(trimVersionPrefix(b))
 	if aerr == nil && berr == nil {
-		if c := compareSemver(av, bv); c != 0 {
+		if c := compareVersionPrecedence(av, bv); c != 0 {
 			return c
 		}
 	}
@@ -165,26 +164,29 @@ func satisfiesConstraint(version, constraint string) bool {
 	return true
 }
 
-// bestMatch returns the highest tag that satisfies the constraint. Tags may
-// carry a prefix (e.g. "sentry/") stripped before the semver parse; tags that
-// don't parse as semver are skipped. ok=false when nothing matches.
+// bestMatch returns the highest tag that satisfies the constraint, ordered
+// by the exact same comparator CompareVersions sorts with (finding 3,
+// MEDIUM) — so the result never depends on what order tags happened to be
+// listed in: a genuine tie (including a release vs. a pre-release of the
+// same core) resolves identically here and in CompareVersions, never a
+// "whichever was seen first" artifact of a running max. Tags may carry a
+// prefix (e.g. "sentry/") stripped before the semver parse; tags that don't
+// parse as semver are skipped. ok=false when nothing matches.
 func bestMatch(tags []string, prefix, constraint string) (string, bool) {
 	var bestTag string
-	var best semver
 	for _, t := range tags {
 		if prefix != "" && !strings.HasPrefix(t, prefix) {
 			continue // a component-prefixed query ignores other components' tags
 		}
 		raw := strings.TrimPrefix(t, prefix)
-		sv, err := parseSemver(raw)
-		if err != nil {
+		if _, err := parseSemver(raw); err != nil {
 			continue
 		}
 		if !satisfiesConstraint(raw, constraint) {
 			continue
 		}
-		if bestTag == "" || compareSemver(sv, best) > 0 {
-			bestTag, best = t, sv
+		if bestTag == "" || CompareVersions(t, bestTag) > 0 {
+			bestTag = t
 		}
 	}
 	return bestTag, bestTag != ""
