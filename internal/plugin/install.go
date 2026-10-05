@@ -173,10 +173,27 @@ func BinDirForVersion(dir, key, resolved string) string {
 
 // sanitizeVersionDir maps a resolved version/tag to a safe single path
 // segment.
+//
+// Finding 5 (security): mapping "/" and "\\" is not enough on its own — a
+// value that IS (or, after that mapping, cleans to) "." or ".." is still a
+// single "segment" with no separator in it, so the replacer above leaves it
+// untouched, and BinDirForVersion would then resolve to the plugin's OWN
+// key directory (".") or its PARENT (".."). A tampered installed.yaml
+// record with Resolved: ".." makes GCVersions RemoveAll the ENTIRE
+// connectors/ or runtimes/ directory, every version of every plugin, since
+// BinDirForVersion(key, "..") IS that parent. A real release tag is never
+// exactly "." or "..", so reaching this is already evidence of a corrupt or
+// tampered record; map it to a safe, unambiguous literal rather than ever
+// letting a path operation resolve outside this one version's own
+// directory. Mirrors the same "reject the special entries, not just
+// separators" rule Client.StagingDir applies to a leading dot.
 func sanitizeVersionDir(v string) string {
 	v = strings.NewReplacer("/", "_", "\\", "_").Replace(v)
-	if v == "" {
-		v = "_"
+	// filepath.Clean on a separator-free string only ever produces "." or
+	// ".." from an input that already WAS "", ".", or ".." — there is no
+	// other way a slash-free segment cleans to either.
+	if cleaned := filepath.Clean(v); cleaned == "." || cleaned == ".." {
+		return "_" + cleaned + "_"
 	}
 	return v
 }
@@ -427,11 +444,42 @@ func (s *InstallState) GCVersions(keep map[VersionKey]bool) ([]VersionKey, error
 	s.Plugins = kept
 	for _, vk := range dropped {
 		dir := BinDirForVersion(s.dir, vk.Key, vk.Resolved)
+		// Finding 5 (security, defense in depth): sanitizeVersionDir already
+		// refuses a Resolved that is (or cleans to) "." or "..", but this is
+		// the LAST line of defense before an actual RemoveAll — a corrupt or
+		// tampered Key, or a future change to either helper, must not be
+		// able to turn this into "remove something outside this one
+		// version's own directory" ever again. keyDir is the plugin's own
+		// install directory (BinDirFor); dir must be strictly INSIDE it, a
+		// claim no sanitization bug anywhere upstream can quietly violate.
+		keyDir := BinDirFor(s.dir, vk.Key)
+		if !isStrictlyWithin(keyDir, dir) {
+			return dropped, fmt.Errorf("plugin %s@%s: refusing to remove %s — it is not strictly inside %s (corrupt or tampered install state?)", vk.Key, vk.Resolved, dir, keyDir)
+		}
 		if err := os.RemoveAll(dir); err != nil {
 			return dropped, fmt.Errorf("plugin %s@%s: remove install dir: %w", vk.Key, vk.Resolved, err)
 		}
 	}
 	return dropped, nil
+}
+
+// isStrictlyWithin reports whether child is a (possibly multi-level) child
+// of parent — never parent itself, and never an escape above it (a ".."
+// component that resolves outside parent). GCVersions' last line of defense
+// before RemoveAll: even if sanitizeVersionDir or a Key ever let something
+// slip through, this refuses to touch anything outside the specific
+// plugin's own install directory.
+func isStrictlyWithin(parent, child string) bool {
+	parent = filepath.Clean(parent)
+	child = filepath.Clean(child)
+	if parent == child {
+		return false
+	}
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // VersionKey identifies one installed (plugin key, resolved version) pair —
