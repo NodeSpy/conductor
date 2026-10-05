@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/NodeSpy/conductor/internal/confdir"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -85,10 +86,10 @@ func serviceName() string {
 	return "conductor"
 }
 
-// configDir returns the config directory to use: ~/.config/conductor.
-func configDir() string {
-	return filepath.Join(home(), ".config/conductor")
-}
+// configDir returns the config directory to use when no --config names one:
+// $CONDUCTOR_CONFIG's directory, else $XDG_CONFIG_HOME/conductor, else
+// ~/.config/conductor (internal/confdir).
+func configDir() string { return confdir.Dir() }
 
 func isDir(p string) bool {
 	fi, err := os.Stat(p)
@@ -125,14 +126,28 @@ func servicePATH() string {
 
 // unitPathAndContent returns the install path and rendered content of the
 // service unit for the current OS, for THIS install: exe=selfExe(),
-// cfg=configDir(), name=serviceName(). Empty path => unsupported OS.
+// cfg=configDir(), name=serviceName(). Empty path => unsupported OS. When the
+// environment moved the config (CONDUCTOR_CONFIG or XDG_CONFIG_HOME), the unit
+// pins the resolved file with CONDUCTOR_CONFIG, since the service does not
+// inherit the shell that installed it. An unmoved config renders exactly as
+// before, so an existing unit is left untouched.
 func unitPathAndContent() (path, content string) {
-	return renderUnit(selfExe(), configDir(), serviceName())
+	override := ""
+	if !confdir.IsDefault() {
+		override = confdir.File()
+	}
+	return renderUnit(selfExe(), configDir(), serviceName(), override)
 }
 
 // renderUnit renders the service unit for the current OS for an explicit
-// exe/cfg/name. Empty path => unsupported OS.
-func renderUnit(exe, cfg, name string) (path, content string) {
+// exe/cfg/name, and the config file to pin via CONDUCTOR_CONFIG ("" = none).
+// Empty path => unsupported OS.
+func renderUnit(exe, cfg, name, configOverride string) (path, content string) {
+	sdEnv, ldEnv := "", ""
+	if configOverride != "" {
+		sdEnv = fmt.Sprintf("Environment=%s=%s\n", confdir.Env, configOverride)
+		ldEnv = fmt.Sprintf("<key>%s</key><string>%s</string>", confdir.Env, configOverride)
+	}
 	switch serviceKind() {
 	case "systemd":
 		path = filepath.Join(home(), ".config/systemd/user", name+".service")
@@ -146,11 +161,11 @@ ExecStart=%s run
 Restart=always
 RestartSec=5
 Environment=PATH=%s
-EnvironmentFile=-%s/conductor.env
+%sEnvironmentFile=-%s/conductor.env
 
 [Install]
 WantedBy=default.target
-`, exe, servicePATH(), cfg)
+`, exe, servicePATH(), sdEnv, cfg)
 	case "launchd":
 		path = filepath.Join(home(), "Library/LaunchAgents", "sh."+name+".plist")
 		log := launchdLog()
@@ -165,14 +180,14 @@ WantedBy=default.target
         <string>run</string>
     </array>
     <key>EnvironmentVariables</key>
-    <dict><key>PATH</key><string>%s</string></dict>
+    <dict><key>PATH</key><string>%s</string>%s</dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>StandardOutPath</key><string>%s</string>
     <key>StandardErrorPath</key><string>%s</string>
 </dict>
 </plist>
-`, name, exe, servicePATH(), log, log)
+`, name, exe, servicePATH(), ldEnv, log, log)
 	}
 	return path, content
 }

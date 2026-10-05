@@ -56,14 +56,36 @@ case ":$PATH:" in
 esac
 
 # Seed a valid starter config + secrets if missing; drop the full example as reference.
-CFG_DIR="${CONDUCTOR_CFG_DIR:-$HOME/.config/$NAME}"
-mkdir -p "$CFG_DIR" "$HOME/.local/state/$NAME"
+# Resolve the config file exactly as the binary does (internal/confdir):
+# $CONDUCTOR_CONFIG (a file, or a directory holding config.yaml), else
+# $XDG_CONFIG_HOME/conductor/config.yaml (absolute paths only), else
+# ~/.config/conductor/config.yaml.
+resolve_cfg_file() {
+  local v="${CONDUCTOR_CONFIG:-}"
+  if [ -n "$v" ]; then
+    case "$v" in
+      */) echo "${v%/}/config.yaml" ;;
+      *) if [ -d "$v" ]; then echo "$v/config.yaml"; else echo "$v"; fi ;;
+    esac
+  elif [ -n "${XDG_CONFIG_HOME:-}" ] && [ "${XDG_CONFIG_HOME#/}" != "$XDG_CONFIG_HOME" ]; then
+    echo "$XDG_CONFIG_HOME/conductor/config.yaml"
+  else
+    echo "$HOME/.config/conductor/config.yaml"
+  fi
+}
+# CONDUCTOR_CFG_DIR is this script's older name for a config directory.
+if [ -z "${CONDUCTOR_CONFIG:-}" ] && [ -n "${CONDUCTOR_CFG_DIR:-}" ]; then
+  CONDUCTOR_CONFIG="${CONDUCTOR_CFG_DIR%/}/"
+fi
+CFG_FILE="$(resolve_cfg_file)"
+CFG_DIR="$(dirname "$CFG_FILE")"
+mkdir -p "$CFG_DIR" "${XDG_STATE_HOME:-$HOME/.local/state}/$NAME"
 # The default split layout: each section imports from its conf.d/ folder.
 mkdir -p "$CFG_DIR"/conf.d/{connectors,runtimes,hosts,agents,workflows,triggers}
 curl -fsSL "$RAW/config.example.yaml" -o "$CFG_DIR/config.example.yaml" 2>/dev/null || true
-if [ ! -f "$CFG_DIR/config.yaml" ]; then
-  curl -fsSL "$RAW/config.starter.yaml" -o "$CFG_DIR/config.yaml" 2>/dev/null \
-    && echo "==> wrote starter config to $CFG_DIR/config.yaml (github integration is disabled until you configure it)" || true
+if [ ! -f "$CFG_FILE" ]; then
+  curl -fsSL "$RAW/config.starter.yaml" -o "$CFG_FILE" 2>/dev/null \
+    && echo "==> wrote starter config to $CFG_FILE (github integration is disabled until you configure it)" || true
 fi
 if [ ! -f "$CFG_DIR/conductor.env" ]; then
   printf '%s\n' '# Secrets referenced by config.yaml via ${...}. Keep private (chmod 600).' \
@@ -72,7 +94,12 @@ if [ ! -f "$CFG_DIR/conductor.env" ]; then
   echo "==> wrote $CFG_DIR/conductor.env (fill in the secrets)"
 fi
 
-echo "Edit $CFG_DIR/config.yaml + conductor.env, then optionally install the service:"
+echo "Edit $CFG_FILE + $CFG_DIR/conductor.env, then optionally install the service:"
+# A moved config is exported so the unit pins it (the service doesn't inherit
+# this shell).
+if [ "$CFG_FILE" != "$HOME/.config/$NAME/config.yaml" ]; then
+  export CONDUCTOR_CONFIG="$CFG_FILE"
+fi
 # Offer to install the background service (systemd/launchd), prompting first.
 curl -fsSL "$RAW/scripts/service.sh" 2>/dev/null | bash -s -- "$dest" "$CFG_DIR" \
   || echo "(run the service step later: scripts/service.sh)"

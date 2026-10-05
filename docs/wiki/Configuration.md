@@ -1,8 +1,25 @@
 # Configuration
 
-`~/.config/conductor/config.yaml`, secrets in the sibling chmod-600
-`conductor.env` (`${VAR}` expands at load; a referenced-but-unset variable is
-a load error naming it). `conductor validate` checks everything below —
+`~/.config/conductor/config.yaml` by default, secrets in the sibling
+chmod-600 `conductor.env` (`${VAR}` expands at load; a referenced-but-unset
+variable is a load error naming it).
+
+**Where the config lives.** Without `--config`, conductor reads the first of:
+
+1. `$CONDUCTOR_CONFIG`: the config file, or an existing directory holding
+   `config.yaml` (a trailing `/` also means a directory). `~/` expands; a
+   relative path resolves against the working directory.
+2. `$XDG_CONFIG_HOME/conductor/config.yaml`, when `XDG_CONFIG_HOME` is an
+   absolute path (the XDG spec ignores a relative one).
+3. `~/.config/conductor/config.yaml`.
+
+`--config PATH` overrides all three. The config's directory is where
+`conductor.env`, `conf.d/`, packs, the lockfile and the default vault
+(`vault.json`) live. `conductor service install` pins a moved config in the
+unit (`CONDUCTOR_CONFIG=…`), because the service doesn't inherit the shell
+that installed it; an unmoved config leaves the unit exactly as before. State
+lives separately, under `$XDG_STATE_HOME/conductor` or
+`~/.local/state/conductor` (`--state-dir` overrides it). `conductor validate` checks everything below —
 including every template reference against the scope at its position — before
 the daemon runs. The full annotated example ships as `config.example.yaml`.
 

@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/NodeSpy/conductor/internal/confdir"
 	"net"
 	"os"
 	"os/exec"
@@ -214,8 +215,9 @@ usage:
 `)
 }
 
-// configPath extracts --config from args (default configDir()/config.yaml —
-// ~/.config/conductor). It also consumes --state-dir, which redirects the
+// configPath extracts --config from args (default confdir.File():
+// $CONDUCTOR_CONFIG, else $XDG_CONFIG_HOME/conductor/config.yaml, else
+// ~/.config/conductor/config.yaml). It also consumes --state-dir, which redirects the
 // install-state directory for this process: the same isolation
 // XDG_STATE_HOME gives, reachable from a single command without exporting
 // anything.
@@ -232,7 +234,7 @@ func usedConfigFlag(args []string) bool {
 }
 
 func configPath(args []string) (string, []string) {
-	def := filepath.Join(configDir(), "config.yaml")
+	def := confdir.File()
 	rest := []string{}
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--config" && i+1 < len(args) {

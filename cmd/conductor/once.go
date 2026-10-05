@@ -129,7 +129,7 @@ flags:
   --event-name NAME   the event name, e.g. pull_request (likewise)
   --fixture PATH      a replay fixture {"event": "...", "body": {...}} instead
                       of --event/--event-name (for local testing)
-  --config PATH       config file (default ~/.config/conductor/config.yaml)
+  --config PATH       config file (default $CONDUCTOR_CONFIG, else $XDG_CONFIG_HOME/conductor/config.yaml, else ~/.config/conductor/config.yaml)
   --state-dir PATH    keep state here instead of a throwaway directory
   --fail-on LIST      comma-separated outcomes that fail the job
                       (default step-error,gate-reject; "none" never fails)
