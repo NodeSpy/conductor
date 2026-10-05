@@ -439,7 +439,21 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 				perInstance[n] = base
 				continue
 			}
-			if u.IsPinned() && !opts.Force && prev.Use == u.String() && binaryPresent(prev.Path) {
+			// A pin is satisfied by the RESOLVED record, not by matching Use
+			// TEXT: GetForConstraint already only returns a record whose
+			// Resolved version satisfies u's own constraint (an exact pin
+			// matches only that literal tag), so once such a record exists
+			// and its binary is on disk, this instance's pin is met —
+			// full stop. The record's Use field is per-(Key,Resolved), not
+			// per-instance: when a pinned instance shares a resolved version
+			// with an unpinned (or differently-worded) sibling, whichever
+			// instance last wrote the record leaves ITS OWN text there, which
+			// need not equal this instance's. Requiring text equality here
+			// (as before) made a pinned instance's "already satisfied" check
+			// flap based on sibling iteration order, forcing it through a
+			// full network re-fetch on every single reconcile pass forever —
+			// the HIGH-severity finding this comment replaces.
+			if u.IsPinned() && !opts.Force && binaryPresent(prev.Path) {
 				base.Action, base.Tag, base.Sha, base.Path, base.Manifest = ActionPinned, prev.Resolved, prev.Sha256, prev.Path, prev.Manifest
 				perInstance[n] = base
 				continue
@@ -484,8 +498,18 @@ func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallS
 		base.Sha, base.Path = b.sha, b.binPath
 		if prevForTag, had := prevByTag[tag]; had && prevForTag.Sha256 == b.sha {
 			base.Action, base.Manifest = ActionCurrent, prevForTag.Manifest
-			if prevForTag.Use != u.String() || prevForTag.ReleaseVerified != b.verified {
-				prevForTag.Use, prevForTag.ReleaseVerified = u.String(), b.verified
+			// Never rewrite the shared (Key, Resolved) record's Use just
+			// because THIS instance's constraint text differs from
+			// whatever is already stored there — that text belongs to
+			// whichever instance's fetch originally installed or last
+			// moved this version (the ActionInstalled/ActionUpdated branch
+			// below), and rewriting it here on every pass a sibling with
+			// different wording happens to be processed is exactly the
+			// flip-flop the pinned-instance bug above depended on. Only
+			// ReleaseVerified is honest to update here: this fetch may have
+			// verified a build an older record did not mark verified.
+			if prevForTag.ReleaseVerified != b.verified {
+				prevForTag.ReleaseVerified = b.verified
 				state.Put(prevForTag)
 				dirty = true
 			}

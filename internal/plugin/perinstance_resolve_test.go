@@ -149,3 +149,73 @@ func TestReconcileDedupesFetchAndDescribeAcrossInstances(t *testing.T) {
 		t.Fatalf("expected exactly 1 describe call across both instances sharing jira/v1.0.0, got %d", describeCalls)
 	}
 }
+
+// TestReconcileTwoPinnedSiblingsNoRepeatedDownload is the reviewer's
+// reproduction for finding 1 (HIGH): two configured instances PINNED to the
+// identical resolved version, but written with different literal text
+// (@1.0.0 vs @v1.0.0), must fetch that version exactly once, ever — never
+// again once both are installed and the binary is present on disk, no
+// matter how many more times reconcile runs with nothing upstream changed.
+//
+// Before the fix, "this pin is satisfied" compared the shared (Key,
+// Resolved) install record's single Use field against THIS instance's own
+// text. Use holds only one instance's text at a time, so whichever instance
+// processed last each pass (alphabetically) left ITS text there; the OTHER
+// pinned instance's check then failed on the very next pass, forcing a full
+// CheckFetchable+Download even though nothing needed to change. With no
+// always-refetching unpinned sibling around to prime the shared per-pass
+// fetch bucket for free, this repeated every single pass after the first,
+// forever, alternating which of the two instances paid for it — never
+// settling. (A single pinned instance alongside an unpinned one does not
+// show up in a raw call count here: the unpinned sibling already primes the
+// bucket/tag-cache every pass regardless of this bug, so the pinned
+// instance's own wasted re-checks are free-riding on a call that would have
+// happened anyway. Two pinned instances disagreeing on text is the shape
+// that makes the extra cost actually bill.)
+func TestReconcileTwoPinnedSiblingsNoRepeatedDownload(t *testing.T) {
+	st := stateAt(t)
+	trust := &config.PackTrustConfig{Allow: []string{"github.com/acme/*"}}
+
+	p1, err := config.ParseUse(config.UseKindConnector, "acme/plugins/jira@1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := config.ParseUse(config.UseKindConnector, "acme/plugins/jira@v1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p1.IsPinned() || !p2.IsPinned() {
+		t.Fatalf("both references must be TRUE pins for this test to exercise the bug: p1.IsPinned=%v p2.IsPinned=%v", p1.IsPinned(), p2.IsPinned())
+	}
+	if p1.String() == p2.String() {
+		t.Fatalf("the two pins must be written with DIFFERENT text (that is what triggers the bug): %q", p1.String())
+	}
+
+	ref := config.PluginRef{
+		Name: "jira", Instance: "p1", Use: p1,
+		Instances: map[string]config.ConnectorGrant{
+			"p1": {Use: p1},
+			"p2": {Use: p2},
+		},
+	}
+	refs := map[string]config.PluginRef{ref.Key(): ref}
+
+	counting := &countingAPI{inner: stubFor("jira", "jira/v1.0.0")}
+	for round := 1; round <= 4; round++ {
+		if _, err := Reconcile(refs, st, trust, counting, Options{}); err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+	}
+
+	if counting.dlCalls != 2 { // one asset + one checksums.txt, from round 1's genuine install — never again
+		t.Fatalf("four reconcile rounds over two pinned siblings on the same version downloaded %d times total (dlCallsByAssetFile=%+v), want exactly 2 (downloaded once, ever)", counting.dlCalls, counting.dlCallsByAssetFile)
+	}
+	if counting.listCalls != 1 {
+		t.Fatalf("four reconcile rounds listed release tags %d times total, want exactly 1 — both pinned instances must skip CheckFetchable entirely once satisfied", counting.listCalls)
+	}
+
+	all := st.AllVersions(ref.Key())
+	if len(all) != 1 || all[0].Resolved != "jira/v1.0.0" {
+		t.Fatalf("expected exactly one installed version jira/v1.0.0, got %+v", all)
+	}
+}
