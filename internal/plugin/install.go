@@ -361,19 +361,22 @@ func (s *InstallState) Get(key string) (Installed, bool) {
 // an exact-pin or already-resolved lookup, no constraint matching. source
 // disambiguates the increasingly real case (finding 2) of two DIFFERENT
 // sources under one key having tagged the identical version text: when
-// source is non-empty, a record whose own Source matches it is preferred;
-// a record with no recorded Source (written before this field existed, or
-// by a caller that does not track it) still matches ANY source, since it
-// cannot possibly be a different source's record — there is no second
-// source to confuse it with in a state file that predates multi-source
-// records. source == "" keeps the old, unqualified "first match" behavior
-// for a caller that does not know or care which source wrote it.
+// source is non-empty, only a record whose own Source matches it — or a
+// legacy record with no recorded Source (written before this field existed,
+// or by a caller that does not track it), which still matches ANY source
+// since it cannot possibly be a different source's record — is returned.
+// A record belonging to a DIFFERENT non-empty source is never returned as a
+// fallback: finding 1 (HIGH) was exactly this — a query for one source's
+// (key, tag) silently handing back another source's record (and its
+// manifest) when nothing from the queried source existed yet, so a freshly
+// added instance inherited a stranger's permission manifest. When no
+// qualifying record exists, GetVersion reports not found rather than
+// substituting one. source == "" keeps the old, unqualified "first match"
+// behavior for a caller that does not know or care which source wrote it.
 func (s *InstallState) GetVersion(key, version, source string) (Installed, bool) {
 	if s == nil {
 		return Installed{}, false
 	}
-	var fallback Installed
-	found := false
 	for _, p := range s.Plugins {
 		if p.Key != key || p.Resolved != version {
 			continue
@@ -381,11 +384,8 @@ func (s *InstallState) GetVersion(key, version, source string) (Installed, bool)
 		if source == "" || p.Source == "" || p.Source == source {
 			return p, true
 		}
-		if !found {
-			fallback, found = p, true
-		}
 	}
-	return fallback, found
+	return Installed{}, false
 }
 
 // versionsForSource filters all to the records matching source: a record

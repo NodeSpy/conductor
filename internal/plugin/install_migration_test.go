@@ -162,3 +162,38 @@ func TestGCVersionsKeepsReferencedDropsUnreferenced(t *testing.T) {
 		t.Fatalf("the unrelated key's binary must survive: %v", err)
 	}
 }
+
+// TestGetVersionNeverFallsBackToADifferentSource is finding 1 (HIGH): two
+// DIFFERENT sources under one key can tag the identical version text (two
+// repos both releasing "v1.0.0"). Querying GetVersion for one source's
+// record when only the OTHER source's record exists under that (key,
+// version) must report not found — never silently hand back the other
+// source's record (and, upstream in reconcileInstances, its Manifest), or a
+// freshly added plugin instance from a different repo inherits a stranger's
+// permission manifest. A record with no recorded Source at all (a legacy,
+// pre-source-keying entry) is the one and only case that still matches any
+// query source, since it cannot possibly belong to a different source.
+func TestGetVersionNeverFallsBackToADifferentSource(t *testing.T) {
+	s := &InstallState{}
+	s.Put(Installed{Key: "connectors/acme", Resolved: "v1.0.0", Source: "github.com/acme/plugins-a//acme", Sha256: "aaa", Manifest: Manifest{Egress: []string{"api.a.example"}}})
+
+	// Querying under a DIFFERENT, non-empty source for the same (key,
+	// version) must find nothing — not the other source's record.
+	if rec, ok := s.GetVersion("connectors/acme", "v1.0.0", "github.com/acme/plugins-b//acme"); ok {
+		t.Fatalf("GetVersion must not fall back to a different source's record, got %+v", rec)
+	}
+
+	// The querying source's own record is still found normally.
+	if rec, ok := s.GetVersion("connectors/acme", "v1.0.0", "github.com/acme/plugins-a//acme"); !ok || rec.Sha256 != "aaa" {
+		t.Fatalf("GetVersion must find the matching source's own record, got %+v, ok=%v", rec, ok)
+	}
+
+	// A legacy record with no recorded Source still matches any query
+	// source — it predates source-keying and cannot be a different
+	// source's record.
+	s2 := &InstallState{}
+	s2.Put(Installed{Key: "connectors/legacy", Resolved: "v1.0.0", Source: "", Sha256: "legacy-sha"})
+	if rec, ok := s2.GetVersion("connectors/legacy", "v1.0.0", "github.com/acme/plugins-a//legacy"); !ok || rec.Sha256 != "legacy-sha" {
+		t.Fatalf("GetVersion must match a legacy empty-Source record regardless of query source, got %+v, ok=%v", rec, ok)
+	}
+}

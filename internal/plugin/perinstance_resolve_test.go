@@ -356,3 +356,89 @@ func TestReconcileRetaggedReleaseIsReVerifiedNotSilentlyCurrent(t *testing.T) {
 		t.Fatalf("the binary on disk must be the retagged bytes, got %q", got)
 	}
 }
+
+// TestReconcileNeverSeedsManifestFromADifferentSource is the reviewer's
+// reproduction for finding 1 (HIGH): plugin "widget" is pre-installed from
+// repo-a with a recorded permission manifest (egress X). A second instance
+// of the SAME connector name is then added pointing at repo-b, whose
+// release happens to tag the identical version text ("widget/v1.0.0"). A
+// `conductor plugin update` style reconcile pass (no DescribeFunc — opts.
+// Describe is nil) must install repo-b's own record with NO manifest
+// inherited from repo-a's — the install-state identity is (Key, Resolved,
+// Source), and GetVersion must never fall back to a different source's
+// record just because the tag text collides (internal/plugin/install.go
+// GetVersion, finding 1).
+func TestReconcileNeverSeedsManifestFromADifferentSource(t *testing.T) {
+	st := stateAt(t)
+	trust := &config.PackTrustConfig{Allow: []string{"github.com/acme/*"}}
+
+	useA := config.Use{Kind: config.UseKindConnector, Name: "widget", Origin: config.OriginGitHub, Host: "github.com", Repo: "acme/plugins-a", Component: "widget", Raw: "acme/plugins-a/widget"}
+	useB := config.Use{Kind: config.UseKindConnector, Name: "widget", Origin: config.OriginGitHub, Host: "github.com", Repo: "acme/plugins-b", Component: "widget", Raw: "acme/plugins-b/widget"}
+	if useA.Source() == useB.Source() {
+		t.Fatalf("the two sources must differ for this test: %q", useA.Source())
+	}
+
+	refA := config.PluginRef{
+		Name: "widget", Instance: "a", Use: useA,
+		Instances: map[string]config.ConnectorGrant{"a": {Use: useA}},
+	}
+	api := stubFor("widget", "widget/v1.0.0")
+
+	// Install A (repo-a), then simulate a prior Describe having recorded a
+	// real permission manifest for it — exactly what a successful
+	// `conductor init`/`plugin add` with a DescribeFunc would have left
+	// behind.
+	resA, err := Reconcile(map[string]config.PluginRef{refA.Key(): refA}, st, trust, api, Options{})
+	if err != nil {
+		t.Fatalf("installing A: %v", err)
+	}
+	if len(resA) != 1 || resA[0].Action != ActionInstalled {
+		t.Fatalf("expected A installed, got %+v", resA)
+	}
+	recA, ok := st.GetVersion(refA.Key(), "widget/v1.0.0", useA.Source())
+	if !ok {
+		t.Fatal("expected A's record in install state")
+	}
+	recA.Manifest = Manifest{Egress: []string{"api.repo-a.example:443"}}
+	st.Put(recA)
+
+	// Now B (repo-b) is added alongside A under the SAME connector name —
+	// same install key, different source, same tag text. Reconcile WITHOUT
+	// a DescribeFunc, exactly `conductor plugin update` with no Describe
+	// wired (the reviewer's trigger).
+	refAB := config.PluginRef{
+		Name: "widget", Instance: "a", Use: useA,
+		Instances: map[string]config.ConnectorGrant{"a": {Use: useA}, "b": {Use: useB}},
+	}
+	resAB, err := Reconcile(map[string]config.PluginRef{refAB.Key(): refAB}, st, trust, api, Options{})
+	if err != nil {
+		t.Fatalf("adding B: %v", err)
+	}
+
+	var sawBInstalled bool
+	for _, r := range resAB {
+		if r.Source == useB.Source() {
+			sawBInstalled = true
+			if r.Action != ActionInstalled {
+				t.Fatalf("expected B freshly installed, got action %q (%+v)", r.Action, r)
+			}
+		}
+	}
+	if !sawBInstalled {
+		t.Fatalf("expected a resolution for B's source among %+v", resAB)
+	}
+
+	recB, ok := st.GetVersion(refAB.Key(), "widget/v1.0.0", useB.Source())
+	if !ok {
+		t.Fatal("expected B's own record in install state")
+	}
+	if len(recB.Manifest.Egress) != 0 {
+		t.Fatalf("B's record must NOT inherit A's manifest just because the tag text matches, got egress %+v (A's was %+v)", recB.Manifest.Egress, recA.Manifest.Egress)
+	}
+
+	// A's own record must be untouched by B's arrival.
+	recA2, ok := st.GetVersion(refAB.Key(), "widget/v1.0.0", useA.Source())
+	if !ok || len(recA2.Manifest.Egress) != 1 || recA2.Manifest.Egress[0] != "api.repo-a.example:443" {
+		t.Fatalf("A's manifest must survive unchanged, got %+v, ok=%v", recA2.Manifest, ok)
+	}
+}
