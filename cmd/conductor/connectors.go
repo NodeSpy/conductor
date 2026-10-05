@@ -393,6 +393,24 @@ func cmdConnectors(args []string) error {
 	return nil
 }
 
+// schemaTypesHint lists every registered connector type for cmdSchema's "no
+// such type" error, naming which ones are external (plugin-backed) so the
+// hint reads as a real inventory of what IS available — not just the
+// builtins — once an external type's plugin has actually been built
+// (finding 6).
+func schemaTypesHint() []string {
+	types := connector.Types()
+	out := make([]string, 0, len(types))
+	for _, t := range types {
+		if connector.IsExternalType(t) {
+			out = append(out, t+" (external)")
+		} else {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // cmdSchema implements `conductor schema <connector>`: the full published
 // event/filter/context/option/output schemas for one connector.
 func cmdSchema(args []string) error {
@@ -405,9 +423,26 @@ func cmdSchema(args []string) error {
 		return fmt.Errorf("usage: conductor schema <connector>")
 	}
 	name := rest[0]
+
+	// Build FIRST, unconditionally — before deciding whether name is a
+	// configured instance or a bare type name (finding 6, HIGH). An
+	// external plugin TYPE is registered into the connector package's type
+	// registry (connector.TypeDeclsFor/Types) only once its plugin has
+	// actually been loaded by building the stack; looking up a bare type
+	// name BEFORE that made `conductor schema acme-echo` fail with "no
+	// connector configured (and no such type)" for every real external
+	// plugin, even though a CONFIGURED INSTANCE of the identical plugin
+	// (the branch below) already built the stack first and found it fine.
+	// A config with no connectors: block at all (buildErr == nil, stack ==
+	// nil — flowStack.Close is nil-safe) still falls through to the
+	// builtin-only bare-type lookup exactly as before.
+	stack, _ := buildFlowStack(cfg, nil, nil, true)
+	defer stack.Close()
+
 	ref, ok := cfg.ConnectorsMap[name]
 	if !ok {
-		// Allow a bare type name too (schema for an unconfigured type).
+		// Allow a bare type name too (schema for an unconfigured type, or
+		// an external plugin type with no configured instance at all).
 		// Finding 5 (side-by-side versions, docs/wiki/Plugins.md): several
 		// resolved versions of the SAME type can be configured side by
 		// side, each with its own declaration — print every one of them,
@@ -430,17 +465,14 @@ func cmdSchema(args []string) error {
 			}
 			return nil
 		}
-		return fmt.Errorf("no connector %q configured (and no such type); types: %s", name, strings.Join(connector.Types(), ", "))
+		return fmt.Errorf("no connector %q configured (and no such type); types: %s", name, strings.Join(schemaTypesHint(), ", "))
 	}
-	// Build first: a plugin-backed type is registered only once its plugin
-	// is loaded, and rest/graphql materialize their user-declared
-	// verbs/events into a per-instance declaration — print that contract,
-	// not the shell.
+	// rest/graphql materialize their user-declared verbs/events into a
+	// per-instance declaration — print that contract, not the shell.
 	var decl *connector.TypeDecl
 	var disabledReason string
 	var enabled = true
-	if stack, err := buildFlowStack(cfg, nil, nil, true); err == nil {
-		defer stack.Close()
+	if stack != nil {
 		if in, ok := stack.Registry.Get(name); ok {
 			decl = in.Decl
 			enabled, disabledReason = in.Enabled, in.DisabledReason
