@@ -177,6 +177,7 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 			Number:        req.Trigger.Target.Number,
 			Policy:        policy,
 			Context:       req.Trigger.Context,
+			Sem:           req.Trigger.Semantics(),
 			TargetTrusted: req.Trigger.TargetTrusted,
 			// The daemon's anchor for this dispatch, on the SKILL path too.
 			// The argv path passes --dispatch; without the same value here a
@@ -236,6 +237,7 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 		Number:        req.Trigger.Target.Number,
 		Policy:        envPolicy,
 		Context:       req.Trigger.Context,
+		Sem:           req.Trigger.Semantics(),
 		TargetTrusted: req.Trigger.TargetTrusted,
 		Dispatch:      req.DispatchID, // as above: both paths carry the anchor
 	}, uint32(os.Getuid()), sessTTL)

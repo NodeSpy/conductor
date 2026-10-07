@@ -7,20 +7,18 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 )
 
-// eventPromptExcludedContext are the Trigger.Context keys that are credential or
-// internal plumbing channels, never event data — kept out of the event an agent
-// sees. Mirrors the credential channels templateData() refuses to redact/expose
-// (see dispatch.go): the dispatch tokens, the deprecated secrets/vaults scopes,
-// and the github installation id.
-var eventPromptExcludedContext = map[string]bool{
-	"app_token":       true,
-	"gh_token":        true,
-	"installation_id": true,
-	// reaction_subjects is the run-progress plumbing (which comment/review
-	// the run reacts on) — ids, not something for the agent to act on.
-	"reaction_subjects": true,
-	"secrets":           true,
-	"vaults":            true,
+// hiddenFacts are the context keys kept out of the event an agent sees: the
+// facts the event declares private (plumbing: ids, reaction subjects) or
+// secret (credentials), and the deprecated secrets/vaults template scopes.
+func hiddenFacts(t core.Trigger) map[string]bool {
+	h := map[string]bool{"secrets": true, "vaults": true}
+	for _, k := range t.PrivateFacts() {
+		h[k] = true
+	}
+	for _, k := range t.SecretFacts() {
+		h[k] = true
+	}
+	return h
 }
 
 // EventPrompt is the task handed to a `type: agent` step that sets no prompt of
@@ -40,7 +38,7 @@ var eventPromptExcludedContext = map[string]bool{
 // deterministic for a given trigger.
 func EventPrompt(t core.Trigger, group map[string]any) string {
 	ev := eventObject(t)
-	if g := groupEvents(group); g != nil {
+	if g := groupEvents(group, hiddenFacts(t)); g != nil {
 		ev["group"] = g
 	}
 	body, err := json.MarshalIndent(ev, "", "  ")
@@ -80,7 +78,7 @@ func eventObject(t core.Trigger) map[string]any {
 	if tgt := eventTarget(t.Target); len(tgt) > 0 {
 		ev["target"] = tgt
 	}
-	if ctx := stripCredentials(t.Context); len(ctx) > 0 {
+	if ctx := stripCredentials(t.Context, hiddenFacts(t)); len(ctx) > 0 {
 		ev["context"] = ctx
 	}
 	return ev
@@ -91,7 +89,7 @@ func eventObject(t core.Trigger) map[string]any {
 // is no real batch (no group:, or a single event the top-level already is), so
 // an ungrouped run's prompt is unchanged. Each grouped event is the flow's flat
 // per-event data with the credential/plumbing keys stripped.
-func groupEvents(group map[string]any) map[string]any {
+func groupEvents(group map[string]any, hidden map[string]bool) map[string]any {
 	if group == nil {
 		return nil
 	}
@@ -105,7 +103,7 @@ func groupEvents(group map[string]any) map[string]any {
 		if !ok {
 			continue
 		}
-		events = append(events, stripCredentials(m))
+		events = append(events, stripCredentials(m, hidden))
 	}
 	if len(events) <= 1 {
 		return nil
@@ -115,10 +113,10 @@ func groupEvents(group map[string]any) map[string]any {
 
 // stripCredentials copies a flat event map minus credential/plumbing keys and
 // empty values.
-func stripCredentials(m map[string]any) map[string]any {
+func stripCredentials(m map[string]any, hidden map[string]bool) map[string]any {
 	out := make(map[string]any, len(m))
 	for k, v := range m {
-		if eventPromptExcludedContext[k] {
+		if hidden[k] {
 			continue
 		}
 		if v == nil || v == "" {

@@ -120,9 +120,7 @@ func (c *Config) validateSteps() error {
 			return
 		}
 		if s.Runtime != "" {
-			_, isRuntime := c.Runtimes[s.Runtime]
-			_, isController := c.Controllers[s.Runtime]
-			if !isRuntime && !isController {
+			if _, isRuntime := c.Runtimes[s.Runtime]; !isRuntime {
 				fail(fmt.Errorf("config: %s: unknown runtime %q (defined: %s)", where, s.Runtime, c.runtimeNames()))
 				return
 			}

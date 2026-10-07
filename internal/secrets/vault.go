@@ -31,6 +31,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/NodeSpy/conductor/internal/confdir"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -91,13 +92,11 @@ func KDFProfile(name string) (VaultKDF, error) {
 	return VaultKDF{}, fmt.Errorf("vault: unknown KDF profile %q (interactive|sensitive)", name)
 }
 
-// DefaultVaultPath returns the default vault location: ~/.config/conductor/vault.json.
+// DefaultVaultPath returns the default vault location: vault.json in the
+// config directory (internal/confdir: $CONDUCTOR_CONFIG's directory, else
+// $XDG_CONFIG_HOME/conductor, else ~/.config/conductor).
 func DefaultVaultPath() string {
-	h, err := os.UserHomeDir()
-	if err != nil {
-		return "vault.json"
-	}
-	return filepath.Join(h, ".config/conductor/vault.json")
+	return filepath.Join(confdir.Dir(), "vault.json")
 }
 
 // EnvVaultKey is the environment variable KeyChain checks first.

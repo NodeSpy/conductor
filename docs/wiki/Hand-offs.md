@@ -2,9 +2,13 @@
 
 A hand-off presents work to a human and returns their answer into the
 workflow. In the connectors model it is a request-response verb — `uses:
-<conn>.ask` — on the ask-capable connector types: `web`, `slack`, `discord`.
-The channel machinery (draft pages, tunnels, TTLs, reply capture) is the
-implementation of those verbs.
+<conn>.ask` — on any ask-capable connector: the builtin `web`, or a plugin
+whose ask verb declares `opens_conversation` (the official `slack` and
+`discord` plugins). Conductor waits for the answer the same way for all of
+them: the plugin posts the question in its own medium and returns the
+conversation's id, and the reply arrives as the plugin's `conversation_reply`
+event, which conductor matches to the waiting ask (enforcing `approvers:`)
+before any trigger sees it.
 
 ```yaml
 steps:
@@ -25,23 +29,35 @@ presented. `timeout:` (default 1h) bounds an unanswered ask.
 - **`web`** — an approve / revise / discard page with an editable draft,
   served on the inbound listener. The default `listen:` binds loopback only
   (`127.0.0.1:8099`) — draft pages carry approve/deny actions and are meant
-  to be reached through the tunnel or a same-box reverse proxy; bind wider
-  explicitly if you mean to. `base_url:` for a fixed origin, or a `tunnel:`
-  provider (`static`, `lan`, `cloudflared`, `ngrok`, `tailscale`, `ssh`,
-  `localxpose`, `command`) for a fresh public URL per ask. Links carry a 192-bit token and
-  expire (`ttl:`, default 30m). The `tailscale` provider leaves a serve
-  mapping that existed before the draft in place at close (it tears down
-  only its own).
-- **`slack`** — `to: dm` (a user id) or `to: thread` (a channel); the reply is
-  captured over the connector's Socket Mode connection. Replies parse as
+  to be reached through an exposure or a same-box reverse proxy; bind wider
+  explicitly if you mean to. `base_url:` for a fixed origin, or `expose:
+  <connector>` for a fresh public URL per ask: it names an **exposure
+  connector** — any connector declaring an `exposes` verb. Builtins: `lan`
+  (this machine's LAN address, or `host:`) and `tunnel` (runs any tunnelling
+  `command:` — `{{.port}}` / `{{.addr}}` expand — and reads the public URL
+  from its output, `url_pattern:` to pick it). Named tunnel services
+  (cloudflared, ngrok, tailscale, …) are plugins; conductor ships none. Each
+  ask opens its own exposure and releases it when the ask resolves or
+  expires. Links carry a 192-bit token and expire (`ttl:`, default 30m).
+
+  ```yaml
+  connectors:
+    review: { use: web, expose: tun }
+    tun:
+      use: tunnel
+      command: [cloudflared, tunnel, --url, "http://{{.addr}}"]
+      url_pattern: 'https://\S+\.trycloudflare\.com'
+  ```
+- **`slack`** (plugin) — `to: dm` (a user id) or `to: thread` (a channel);
+  the plugin captures the reply over its Socket Mode connection. Replies parse as
   approve (`approve`, `lgtm`, `+1`, …), discard (`discard`, `cancel`, …), or
   anything else = a revision. For `to: thread`, an optional `approvers:`
   list of user ids restricts WHO may resolve the ask — without it, anyone
   in the channel can approve an agent's draft; with it, replies from anyone
   else are ignored and the ask keeps waiting. (Also an `options.approvers`
   on the ask verb itself.)
-- **`discord`** — same shape (including `approvers:` for `to: thread`);
-  conductor runs the bot gateway itself.
+- **`discord`** (plugin) — same shape (including `approvers:` for `to:
+  thread`); the plugin runs the bot gateway that captures replies.
 
 ## Background review steps
 
@@ -99,7 +115,7 @@ The action steps:
   it for `pr.merged`, `pr.state == "closed"`, or approved-elsewhere.
 - **`uses: step.rerun`** — re-running *this step* is enough. **Supersedes**:
   tears down, then re-dispatches the same step on the current state (surface-
-  agnostic — agent, Slack, Discord). Optional `options.prompt` is appended to the
+  agnostic — agent, web, any chat plugin). Optional `options.prompt` is appended to the
   step's prompt ("here's what changed"). Use when the hand-off step is itself the
   producer.
 - **`workflow: <name>` + `with:`** — the review must be **done again**. Supersedes:
@@ -146,12 +162,9 @@ workspace rather than sit held until you archive it by hand. Two paths:
   idle_timeout: 12h   # step.done is auto-granted; the agent releases early
 ```
 
-## Legacy `handoffs:`
-
-The legacy named `handoffs:` block still loads and resolves exactly as
-before. [[Migration]] converts each entry into a connector of the matching
-type (its dm/thread target becomes the connector's default `options:`) and
-stamps the default entry's name onto background steps that named none.
+The legacy named `handoffs:` block (and the singular `handoff:` block before
+it) was removed with the legacy config schema — see [[Migration]]. A step's
+`handoff:` now always names an ask-capable connector directly, as above.
 
 Related: [[Verbs]] · [[Connectors]] · [[Runtimes]] · [[Workflows]]
 

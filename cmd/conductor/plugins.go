@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/acp"
 	"github.com/NodeSpy/conductor/internal/code"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
@@ -19,12 +22,34 @@ import (
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
+// explodeRefs is plugin.ExplodeRefs, indirected so a test can inject a
+// synthetic GroupFailure without needing to organically trigger one through
+// real input — groupRef's isolation pre-split provably makes that
+// unreachable in practice (see internal/plugin's
+// TestExplodeRefsPropagatesGroupFailure) — to cover finding 4 end to end:
+// `plugin list`, `plugin show`, and the pending-plugin retry log must each
+// actually SURFACE a GroupFailure handed back here, never just silently
+// drop it on the floor the way discarding ExplodeRefs' second return value
+// did before.
+var explodeRefs = plugin.ExplodeRefs
+
 // pluginDeps assembles the shared plugin.Deps: the redactor, the audit sink,
 // and the sandbox wiring. The sandbox wiring is only consumed when a connector
 // carries an OPTIONAL isolation: block — the default path is the permission
 // manifest, not OS confinement — but the egress proxy is also what enforces a
 // plugin's declared network, so it is wired either way.
-func pluginDeps(sec *secrets.Resolver, audit func(map[string]any)) plugin.Deps {
+//
+// auth is the host.auth provider a spawned plugin's Deps.Auth is wired to. A
+// connector stack (buildFlowStack) passes THIS STACK's own
+// *connector.AuthRegistry (via AuthRegistry.AuthProvider()) — spawned
+// plugins get a fresh *plugin.Client per stack, so they can be wired
+// directly to the right registry with no indirection needed (finding 4). A
+// caller with no stack of its own (a one-off `plugin show`/install-time
+// describe, or the connector-less runtime-plugin fallback) passes nil, which
+// falls back to connector.HostAuthProvider — the in-process-builtins'
+// live-stack indirection — matching every caller's behavior before finding
+// 4 existed.
+func pluginDeps(sec *secrets.Resolver, audit func(map[string]any), auth plugin.AuthProvider) plugin.Deps {
 	exe, _ := os.Executable()
 	egressUnix, egressAddr := controller.EgressProxyUnix, controller.EgressProxyFor
 	if egressUnix == nil || egressAddr == nil {
@@ -37,18 +62,33 @@ func pluginDeps(sec *secrets.Resolver, audit func(map[string]any)) plugin.Deps {
 	if len(masks) == 0 {
 		masks = []string{config.StateDir(), configDir()}
 	}
+	if auth == nil {
+		auth = connector.HostAuthProvider
+	}
 	return plugin.Deps{
-		Log:    logf,
-		Redact: sec.Redact,
-		Audit:  audit,
+		Log:         logf,
+		Redact:      sec.Redact,
+		Audit:       audit,
+		State:       pluginStateStore(),
+		Auth:        auth,
+		HostVersion: acp.ClientVersion,
 		Sandbox: plugin.SandboxDeps{
-			Self:       exe,
-			MaskPaths:  masks,
-			EgressUnix: egressUnix,
-			EgressAddr: egressAddr,
+			Self:      exe,
+			MaskPaths: masks,
+			// Each plugin instance's staging directory (plugin-contract.md Q7).
+			StagingRoot: config.PluginStagingDir(),
+			EgressUnix:  egressUnix,
+			EgressAddr:  egressAddr,
 		},
 	}
 }
+
+// pluginStateStore is the daemon's one host.state store, shared by every
+// plugin client (opened lazily, on the first host.state call).
+var pluginStateStore = sync.OnceValue(func() *plugin.StateStore { return plugin.NewStateStore(config.StateDir()) })
+
+// In-process builtins share it (connector.InProcessState).
+func init() { connector.InProcessState = pluginStateStore() }
 
 // codeSandboxDeps builds the sandbox.LocalWrapDeps a code step's OWN
 // `isolation:` block wraps through (internal/code's execCLILocal/
@@ -84,16 +124,226 @@ func codeSandboxDeps() sandbox.LocalWrapDeps {
 // config's DERIVED plugin set (non-builtin `use:` references) with local install
 // state. It touches no network: install state is read offline.
 func pluginManagerFor(cfg *config.Config, sec *secrets.Resolver, audit func(map[string]any)) *plugin.Manager {
-	state := plugin.LoadInstallState(plugin.InstallDir())
-	return plugin.NewManager(cfg.PluginRefs(), cfg.BaseDir(), state, pluginDeps(sec, audit))
+	return pluginManagerForStack(cfg, sec, audit, nil)
 }
+
+// pluginManagerForStack is pluginManagerFor with an explicit per-stack
+// host.auth provider (finding 4) — nil falls back to
+// connector.HostAuthProvider, same as pluginManagerFor.
+//
+// Finding 6: a GroupFailure from ExplodeRefs (the "must never happen"
+// isolation-fold invariant failing anyway — see group.go's narrowRef) is
+// handled HERE, at the one choke point every live Manager construction
+// goes through (loadConnectorPlugins' boot path, and every CLI command
+// that builds its own throwaway stack to describe a connector), by
+// registering the affected plugin TYPE Unavailable with a clear reason —
+// the exact mechanism an as-yet-not-installed plugin already degrades
+// through — rather than ever leaving its instances unbound to fall through
+// to declFor's arbitrary "representative" registration, or panicking the
+// process over a config-shaped condition.
+func pluginManagerForStack(cfg *config.Config, sec *secrets.Resolver, audit func(map[string]any), auth plugin.AuthProvider) *plugin.Manager {
+	state := plugin.LoadInstallState(plugin.InstallDir())
+	exploded, failures := plugin.ExplodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
+	for _, f := range failures {
+		reason := fmt.Sprintf("plugin %s: cannot be split into process groups safely (%s) — every connector using it is disabled; this should never happen, please report it", f.Name, f.Reason)
+		connector.RegisterUnavailableType(f.Name, "", f.Key, reason)
+		logf("plugin %s: %s", f.Name, reason)
+	}
+	return plugin.NewManager(exploded, cfg.BaseDir(), state, pluginDeps(sec, audit, auth))
+}
+
+// pendingPlugins are connector plugins this boot found referenced but not
+// installed (their connectors run disabled); the daemon retries their fetch.
+var pendingPlugins []string
 
 // loadConnectorPlugins builds the plugin manager for the config and registers
 // every connector-kind plugin's type into the connector registry (verify →
-// spawn → describe → register). Fail-closed: any load failure returns an error.
-// Returns a manager the caller must Close.
-func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(map[string]any)) (*plugin.Manager, error) {
-	mgr := pluginManagerFor(cfg, sec, audit)
+// spawn → describe → register). A plugin that is not installed, or one that
+// IS installed but fails to verify/spawn/describe, degrades: that type alone
+// is registered Unavailable and every instance of it is disabled, loudly
+// (Q12) — see the loop body. What still stops boot outright is a CONFIG
+// error against a plugin that DID describe itself correctly (a kind the
+// config didn't expect, a network: block wider than the plugin declares):
+// that is the operator's file disagreeing with a plugin that is working
+// fine, not a plugin health problem, and retrying or disabling won't fix it.
+// Returns a manager the caller must Close. auth is this stack's own
+// host.auth provider (finding 4) — see pluginDeps.
+// isolatedInstanceNames lists a GROUP's own configured instances that opted
+// into isolate: true, sorted — the group-scoped equivalent of
+// config.PluginRef.IsolatedInstanceNames, read directly off the Spec
+// (spec.Instances is already narrowed to exactly this group's instances by
+// ExplodeRefs/SpecFromRef) so neither single_process check below needs the
+// name-grouped refs map at all.
+func isolatedInstanceNames(spec plugin.Spec) []string {
+	var out []string
+	for name, g := range spec.Instances {
+		if g.Isolate {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// singleProcessConflict is one installKey's isolate/single_process or
+// side-by-side-single_process conflict (docs/wiki/Plugins.md "Multi-instance
+// isolation", "Side-by-side versions").
+//
+// Finding 3: this is RESOLUTION-dependent, not statically knowable from the
+// written config alone — it needs mgr.ConnectorSpecs' Spec.Manifest, which
+// comes from whichever version each instance is CURRENTLY resolved to. An
+// auto-update that moves an unpinned instance onto a release that newly
+// declares single_process, while a pinned sibling (or an isolate: true
+// instance) conflicts, can make this conflict appear with NO config edit at
+// all. That means it can never be a hard boot-refusal the way a plugin
+// disagreeing with the written config (kind mismatch, a network: block wider
+// than declared) is — Q12's "a plugin problem degrades only that plugin's
+// connectors" posture applies here too.
+type singleProcessConflict struct {
+	// groupKeys are every resolved-version group this conflict touches —
+	// more than one only for the side-by-side shape (two different versions
+	// of one single_process plugin configured at once, which must ALL be
+	// disabled: single_process cannot run twice no matter who shares which
+	// process). Exactly one for the isolate-vs-single_process shape.
+	groupKeys []string
+	// isolatedOnly, when non-empty, names just the isolate: true instances
+	// of groupKeys[0] that conflict — the shared (non-isolated) instances of
+	// that SAME group are unaffected and keep running normally. Empty means
+	// every instance of every named group is disabled.
+	isolatedOnly []string
+	reason       string
+}
+
+// singleProcessConflicts finds every single_process + isolate/versions
+// conflict in mgr's CURRENTLY RESOLVED connector specs:
+//
+//   - a plugin's RECORDED manifest (from a previous install's describe)
+//     already says Capabilities.SingleProcess, and some configured instance
+//     of its OWN resolved-version group declares isolate: true — a
+//     box-global resource only one process can own, so isolate: true cannot
+//     be honored for it;
+//   - two DIFFERENT resolved versions of a single_process plugin are
+//     configured side by side — each would try to run its own process and
+//     its own copy of that box-global resource (the design doc's running
+//     example is a tailscale funnel).
+//
+// Callers choose what a conflict MEANS: loadConnectorPlugins degrades (see
+// applySingleProcessConflicts), while `conductor validate` and the
+// auto-update pre-restart gate (refreshDeps, update.go) report it and refuse
+// to proceed — an update that would newly CREATE one is caught before the
+// daemon ever restarts into it, never discovered only after, mid-boot.
+func singleProcessConflicts(mgr *plugin.Manager) []singleProcessConflict {
+	byInstallKey := map[string][]plugin.Spec{}
+	var installKeys []string
+	for _, spec := range mgr.ConnectorSpecs() {
+		if _, seen := byInstallKey[spec.Key()]; !seen {
+			installKeys = append(installKeys, spec.Key())
+		}
+		byInstallKey[spec.Key()] = append(byInstallKey[spec.Key()], spec)
+	}
+	sort.Strings(installKeys)
+	var out []singleProcessConflict
+	for _, installKey := range installKeys {
+		specs := byInstallKey[installKey]
+		anySingle := false
+		for _, s := range specs {
+			if s.Manifest.SingleProcess {
+				anySingle = true
+			}
+		}
+		if !anySingle {
+			continue
+		}
+		name := strings.TrimPrefix(installKey, config.UseKindConnector.Dir()+"/")
+		if len(specs) > 1 {
+			var all, groupKeys []string
+			for _, s := range specs {
+				groupKeys = append(groupKeys, s.GroupKey)
+				all = append(all, isolatedInstanceNames(s)...)
+				for n := range s.Instances {
+					all = append(all, n)
+				}
+			}
+			sort.Strings(all)
+			all = slices.Compact(all)
+			out = append(out, singleProcessConflict{
+				groupKeys: groupKeys,
+				reason: fmt.Sprintf("connector(s) %s: plugin %s declares single_process — it keeps one box-global resource that only ONE process can own, so two different resolved versions of it cannot run side by side; pin every connector using it to the SAME version, or see docs/wiki/Plugins.md \"Side-by-side versions\"",
+					strings.Join(all, ", "), name),
+			})
+			continue
+		}
+		isolated := isolatedInstanceNames(specs[0])
+		if len(isolated) == 0 {
+			continue
+		}
+		out = append(out, singleProcessConflict{
+			groupKeys: []string{specs[0].GroupKey}, isolatedOnly: isolated,
+			reason: fmt.Sprintf("connector(s) %s: isolate: true is not possible — plugin %s declares single_process (every configured instance must share one process); remove isolate: true, or see docs/wiki/Plugins.md \"Multi-instance isolation\"",
+				strings.Join(isolated, ", "), specs[0].Name),
+		})
+	}
+	return out
+}
+
+// applySingleProcessConflicts is the DEGRADE half of singleProcessConflicts,
+// for loadConnectorPlugins' boot path (finding 3): never boot-fatal. An
+// isolate: true instance colliding with its own group's single_process
+// plugin is refused via the SAME mechanism the late-discovery path
+// (ForbidIsolated, below) uses — only that instance is disabled, loudly; its
+// non-isolated siblings keep sharing the plugin's one process normally. A
+// side-by-side single_process version conflict has no such partial fix (the
+// resource can't run twice no matter who shares which process), so every
+// group it names is returned for the caller to register Unavailable instead
+// of starting.
+// singleProcessConflictsFor builds the (no-network, offline) plugin manager
+// for cfg and reports its single_process conflicts — the shared call used by
+// both `conductor validate` (main.go) and the auto-update pre-restart gate
+// (refreshDeps, update.go), so both see exactly the same conflicts
+// loadConnectorPlugins would at boot.
+func singleProcessConflictsFor(cfg *config.Config) []singleProcessConflict {
+	mgr := pluginManagerFor(cfg, secrets.New(), func(map[string]any) {})
+	defer mgr.Close()
+	return singleProcessConflicts(mgr)
+}
+
+func applySingleProcessConflicts(mgr *plugin.Manager) map[string]string {
+	disabledGroups := map[string]string{}
+	for _, c := range singleProcessConflicts(mgr) {
+		if len(c.isolatedOnly) > 0 {
+			for _, name := range c.isolatedOnly {
+				mgr.ForbidIsolated(c.groupKeys[0], name, c.reason)
+			}
+			logf("%s — will be disabled", c.reason)
+			continue
+		}
+		for _, gk := range c.groupKeys {
+			disabledGroups[gk] = c.reason
+		}
+	}
+	return disabledGroups
+}
+
+// startFailureHint is the actionable suggestion appended to a plugin's
+// failed-to-start reason. Finding 7 (LOW): `conductor plugin update <name>`
+// only ever operates on a REMOTE, fetched plugin — it has nothing to
+// reinstall for a LOCAL development binary (`use: ./bin/conductor-widget`),
+// which the operator builds and points `use:` at directly. Suggesting it
+// there anyway (the old, one-size-fits-all message) sent a local-plugin
+// operator toward a command that does not apply to their reference at all
+// — most commonly hit via the identity-forgery refusal (Client.Describe,
+// "describe claims type X but is configured to provide Y"), which fires
+// just as readily for a local binary whose file name disagrees with its
+// own declared Type as for a remote one.
+func startFailureHint(spec plugin.Spec) string {
+	if spec.Local {
+		return "for a local plugin, rename the binary to the type it declares, or point use: at a file already named after its type; check the daemon log"
+	}
+	return fmt.Sprintf("reinstall with `conductor plugin update %s` or check the daemon log", spec.Name)
+}
+
+func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(map[string]any), auth plugin.AuthProvider) (*plugin.Manager, error) {
+	mgr := pluginManagerForStack(cfg, sec, audit, auth)
 	// Bound the boot phase: verify+spawn+describe must not hang forever (a
 	// stalled binary read or sandbox preflight) with no deadline.
 	ctx, cancel := context.WithTimeout(context.Background(), pluginBootTimeout)
@@ -103,13 +353,113 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 		for _, t := range registered {
 			connector.UnregisterExternalType(t)
 		}
+		connector.ResetInstanceGroups()
 		mgr.Close()
 	}
+	// A fresh boot attempt (this call) must not see a PRIOR attempt's
+	// instance->group bindings — stale entries for instances that moved
+	// groups, or don't exist in this config at all, would route Build to
+	// the wrong (or a now-gone) declaration.
+	connector.ResetInstanceGroups()
+
+	// Finding 3: a single_process conflict discovered against the CURRENTLY
+	// RESOLVED set (not the written config) never refuses boot outright —
+	// see applySingleProcessConflicts. disabledGroups names every
+	// resolved-version group a side-by-side single_process conflict
+	// disables wholesale; an isolate:true-vs-single_process conflict is
+	// applied directly to mgr (ForbidIsolated) and never appears here.
+	disabledGroups := applySingleProcessConflicts(mgr)
+
 	for _, spec := range mgr.ConnectorSpecs() {
-		decl, err := mgr.StartAndDescribe(ctx, spec.Key())
+		// Side-by-side versions: every instance this spec (GROUP) serves is
+		// bound to it NOW, before Build ever runs, whether the group is
+		// healthy, not-yet-installed, or failed to start — declFor's
+		// fallback to the type's plain registration only applies to an
+		// instance nothing bound, which should never happen for an external
+		// type once this loop has run.
+		for name := range spec.Instances {
+			connector.BindInstanceGroup(name, spec.GroupKey)
+		}
+		if reason, ok := disabledGroups[spec.GroupKey]; ok {
+			connector.RegisterUnavailableType(spec.Provides, spec.GroupKey, spec.Key(), reason)
+			registered = append(registered, spec.Provides)
+			logf("plugin %s: %s — its connectors are disabled", spec.Name, reason)
+			continue
+		}
+		if !spec.Installed() {
+			// PLUGINS FIRST, NEVER BOOT-FATAL: a connector plugin the config
+			// references but that is not installed yet (its fetch failed — no
+			// network at this boot, a release not published yet) takes down
+			// only its own connectors, loudly, while the daemon retries the
+			// fetch and restarts into it once it lands (pendingPluginRetry).
+			reason := spec.NotInstalledError().Error() + " — the daemon retries and restarts into it once it lands"
+			connector.RegisterUnavailableType(spec.Provides, spec.GroupKey, spec.Key(), reason)
+			registered = append(registered, spec.Provides)
+			pendingPlugins = append(pendingPlugins, spec.Name)
+			logf("plugin %s: NOT INSTALLED — its connectors are disabled until it is fetched", spec.Name)
+			continue
+		}
+		// The type-level describe comes from the plugin's own SHARED process
+		// (StartAndDescribe) when it has one — the default, since every
+		// configured instance that did not set isolate: true shares it, so
+		// describing it IS describing the type. Only a connector whose EVERY
+		// instance isolates has no shared process to ask; ProbeDescribe
+		// spins up a throwaway, minimal-grant process to learn its Decl
+		// instead (docs/wiki/Plugins.md "Multi-instance isolation"). Each
+		// isolated instance's own real, kept-running process is started
+		// separately, lazily, by InstanceClient as connector.Build constructs
+		// it below (through the clientFor factory RegisterExternalConnector
+		// is handed).
+		describe := mgr.StartAndDescribe
+		if !spec.Shared {
+			describe = mgr.ProbeDescribe
+		}
+		decl, err := describe(ctx, spec.GroupKey)
 		if err != nil {
-			rollback()
-			return nil, fmt.Errorf("plugin %s: %w", spec.Name, err)
+			// An INSTALLED plugin whose verify/spawn/describe fails — a corrupt
+			// binary, a noexec mount, a sandbox preflight that can't run, a sha
+			// that no longer matches what's on disk — is a problem with THIS
+			// plugin, not grounds to crash-loop the whole daemon (Q12: "a failed
+			// fetch keeps only that connector down"; the same posture applies to
+			// a failed START). Fail CLOSED for the plugin — it is never run
+			// unverified or half-started — but only for the plugin: register its
+			// type Unavailable (the same path the not-installed branch above
+			// takes) so every OTHER connector, trigger and run proceeds, and log
+			// loudly so the operator notices and fixes/reinstalls it.
+			// NOT added to pendingPlugins: that retry loop (pendingPluginRetry)
+			// exists for an install GAP, which a background fetch can close. A
+			// binary that is already installed but fails to start needs an
+			// operator action (reinstall, fix the mount, fix the sandbox), not a
+			// timer — retrying it on a schedule would just repeat the same
+			// failure forever.
+			reason := fmt.Sprintf("failed to start: %v — %s", err, startFailureHint(spec))
+			connector.RegisterUnavailableType(spec.Provides, spec.GroupKey, spec.Key(), reason)
+			registered = append(registered, spec.Provides)
+			logf("plugin %s: FAILED TO START (%v) — its connectors are disabled; every other connector, trigger and run proceeds", spec.Name, err)
+			continue
+		}
+		// single_process discovered only NOW, at this live describe (no
+		// recorded manifest said so ahead of time — the hard pre-pass above
+		// would already have refused boot if it had): any instance of this
+		// plugin that set isolate: true cannot be honored after all. "Never
+		// silently share": refuse each of those instances specifically
+		// (ForbidIsolated — connector.Build disables just that one instance,
+		// loudly, the moment its builder asks for a client), never fold them
+		// into the shared process (if any) or start one for them that
+		// nothing in the config asked for.
+		if decl.Capabilities.SingleProcess {
+			isolated := isolatedInstanceNames(spec)
+			if len(isolated) == 0 {
+				// Visibility only: nothing to refuse, since no instance asked
+				// for isolate: true, but the operator should still see WHY one
+				// would be refused if they added it later.
+				logf("plugin %s: declares single_process — isolate: true would be refused for any instance of it; every configured instance shares its one process", spec.Name)
+			}
+			for _, name := range isolated {
+				reason := fmt.Sprintf("plugin %s declares single_process (discovered at describe) — isolate: true is not possible for it; every configured instance must share one process", spec.Name)
+				mgr.ForbidIsolated(spec.GroupKey, name, reason)
+				logf("connector %s: will be disabled (%s)", name, reason)
+			}
 		}
 		// KIND ENFORCEMENT at the point of use: whatever install state recorded,
 		// the running binary must still describe itself as a connector. A
@@ -121,9 +471,13 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 		}
 		// CAN'T-EXCEED-DECLARATION: every instance's `network:` must be covered
 		// by what the plugin says it needs. A config that widens a plugin's
-		// declared egress is a config error, not a silent grant.
-		for cname, cref := range cfg.ConnectorsMap {
-			if cref.TypeName() != spec.Name || len(cref.Network) == 0 {
+		// declared egress is a config error, not a silent grant. Scoped to
+		// THIS group's own instances (spec.Instances) — never a sibling
+		// group's (a different resolved version, checked against ITS OWN
+		// decl.Capabilities when its own turn through this loop comes).
+		for cname := range spec.Instances {
+			cref := cfg.ConnectorsMap[cname]
+			if len(cref.Network) == 0 {
 				continue
 			}
 			if err := plugin.CheckNetworkWithinManifest(cname, decl.Capabilities.Egress, cref.Network); err != nil {
@@ -131,14 +485,34 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 				return nil, err
 			}
 		}
-		cl, _ := mgr.Client(spec.Key())
-		if _, err := connector.RegisterExternalConnector(cl, spec, decl); err != nil {
+		// allow_env likewise grants only what the plugin declares it reads.
+		for cname := range spec.Instances {
+			cref := cfg.ConnectorsMap[cname]
+			for _, n := range cref.AllowEnv {
+				if !slices.Contains(decl.Capabilities.Env, n) {
+					rollback()
+					return nil, fmt.Errorf("connector %q: allow_env %q is not a variable the %s plugin declares it reads (%s)",
+						cname, n, spec.Name, strings.Join(decl.Capabilities.Env, ", "))
+				}
+			}
+		}
+		if _, err := connector.RegisterExternalConnector(mgr.InstanceClientFactory(spec.GroupKey), spec, decl); err != nil {
 			rollback()
 			return nil, fmt.Errorf("plugin %s: %w", spec.Name, err)
 		}
 		registered = append(registered, spec.Provides)
+		// spec.Manifest (the plugin's own DECLARED capabilities), not
+		// spec.EffectiveManifest(): when EVERY configured instance isolates
+		// (no shared process at all), spec here is the type-level Probe Spec
+		// — its EffectiveManifest is deliberately "nothing", not what any
+		// isolated instance actually runs with (that is shown per instance by
+		// `plugin show`/`plugin list --caps`). A spec WITH a shared process's
+		// EffectiveManifest, by contrast, IS what its one real process runs
+		// with — but spec.Manifest here still answers the simpler,
+		// always-true question this log line asks: what does the installed
+		// BINARY declare.
 		logf("plugin %s: registered connector type %q (%d verb(s)); permissions: %s",
-			spec.Ref(), spec.Provides, len(decl.Verbs), spec.EffectiveManifest().Summary())
+			spec.Ref(), spec.Provides, len(decl.Verbs), spec.Manifest.Summary())
 	}
 	return mgr, nil
 }
@@ -149,10 +523,16 @@ func loadConnectorPlugins(cfg *config.Config, sec *secrets.Resolver, audit func(
 // through.
 //
 // It is deliberately the connector path with a different kind word: the same
-// manager, the same verify-before-execute, the same sandbox/manifest spawn,
-// the same fail-closed boot. What it adds is the two questions only an engine
-// has an answer to — is this really an engine, and does it speak an ABI this
-// daemon drives — asked once here rather than on every step.
+// manager, the same verify-before-execute, the same sandbox/manifest spawn —
+// but it DEGRADES, rather than fails closed, exactly like the connector path
+// now does (Q12's posture generalizes: an engine problem should take down
+// only the code steps that use it). The blast radius is naturally scoped
+// already: code.EngineLookup's false return ("no such engine is loaded") is
+// documented as reading like a config/install problem
+// (internal/code/engineplugin.go's execPluginEngine already spells out
+// "...or failed to start" in the step-level error), so a step using a broken
+// engine fails on its own, in place, instead of every connector and every
+// OTHER engine going down with it.
 func loadEnginePlugins(mgr *plugin.Manager) (code.EngineLookup, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), pluginBootTimeout)
 	defer cancel()
@@ -160,23 +540,29 @@ func loadEnginePlugins(mgr *plugin.Manager) (code.EngineLookup, error) {
 	for _, spec := range mgr.EngineSpecs() {
 		decl, err := mgr.StartAndDescribe(ctx, spec.Key())
 		if err != nil {
-			return nil, fmt.Errorf("engine plugin %s: %w", spec.Name, err)
+			logf("plugin %s: FAILED TO START (%v) — code steps using it will fail at run time until it is fixed", spec.Name, err)
+			continue
 		}
 		// KIND ENFORCEMENT at the point of use, as for connectors: whatever
 		// install state recorded, the running binary must still describe
 		// itself as an engine. A runtime or connector accepted here would be
-		// handed a step's ctx data plane it was never granted.
-		if decl.Kind != plugin.KindStep {
+		// handed a step's ctx data plane it was never granted. Same degrade as
+		// above: this engine is refused, nothing else is.
+		if !decl.IsStepEngine() {
 			kind := string(decl.Kind)
 			if kind == "" {
 				kind = "an unspecified kind"
 			}
-			return nil, fmt.Errorf("engine plugin %s: referenced as a code-step engine but it describes itself as %s — refusing", spec.Name, kind)
+			logf("plugin %s: FAILED TO START (referenced as a code-step engine but describes itself as %s) — code steps using it will fail at run time until it is fixed", spec.Name, kind)
+			if cl, ok := mgr.Client(spec.Key()); ok {
+				_ = cl.Close()
+			}
+			continue
 		}
 		cl, _ := mgr.Client(spec.Key())
 		engines[spec.Name] = cl
-		logf("plugin %s: registered code-step engine %q (ABI %d); permissions: %s",
-			spec.Ref(), spec.Name, decl.ABI, spec.EffectiveManifest().Summary())
+		logf("plugin %s: registered code-step engine %q; permissions: %s",
+			spec.Ref(), spec.Name, spec.EffectiveManifest().Summary())
 	}
 	if len(engines) == 0 {
 		return nil, nil
@@ -403,7 +789,19 @@ func cmdPluginList(args []string) error {
 		fmt.Printf("%-18s %-10s %-9s %-14s %s\n", e, "engine", "builtin", version, "bundled")
 	}
 
-	refs := cfg.PluginRefs()
+	// Exploded (one row per resolved-version GROUP, docs/wiki/Plugins.md
+	// "Side-by-side versions"): a plugin name pinned at two versions side by
+	// side gets two rows, each its own VERSION and its own connector(s) —
+	// never one row silently speaking for both.
+	refs, failures := explodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
+	// Finding 4 (LOW): a GroupFailure here is the same "must never happen"
+	// isolation-fold invariant pluginManagerForStack handles for the live
+	// daemon — but a THROWAWAY stack like this one never calls that choke
+	// point, so without this, `plugin list` would silently just omit the
+	// affected plugin's rows instead of saying why it under-reports.
+	for _, f := range failures {
+		fmt.Printf("warning: plugin %s: cannot be split into process groups safely (%s) — omitted from this listing; this should never happen, please report it\n", f.Name, f.Reason)
+	}
 	keys := make([]string, 0, len(refs))
 	for k := range refs {
 		keys = append(keys, k)
@@ -411,25 +809,125 @@ func cmdPluginList(args []string) error {
 	sort.Strings(keys)
 	for _, key := range keys {
 		ref := refs[key]
-		inst, ok := state.Get(key)
+		var inst plugin.Installed
+		var ok bool
+		if ref.Use.Origin != config.OriginLocal {
+			inst, ok = state.GetForConstraint(ref.Use.InstallKey(), ref.Use)
+		}
 		spec := plugin.SpecFromRef(ref, cfg.BaseDir(), inst, ok)
+		spec.GroupKey = key
+		var localDescribeErr error
+		// Finding 7 (MEDIUM): same gap as showPlugin — a LOCAL plugin's Spec
+		// never carries a Manifest. Only probe when --caps actually asked to
+		// see permissions (never in the bare `plugin list`, which must stay
+		// cheap and spawn nothing): a local build that fails to describe
+		// degrades to an empty manifest with the reason noted, never a
+		// failed listing.
+		if caps && spec.Local && spec.Installed() {
+			if decl, err := probeDecl(cfg, ref, state); err == nil {
+				spec.Manifest = plugin.ManifestFromDecl(decl)
+			} else {
+				localDescribeErr = err
+			}
+		}
 		ver := inst.Resolved
 		if spec.Local {
 			ver = "local"
 		} else if ver == "" {
 			ver = "-"
 		}
-		fmt.Printf("%-18s %-10s %-9s %-14s %s\n", ref.Name, ref.Kind(), ref.Use.Origin, ver, pluginStatus(spec))
+		name := ref.Name
+		if strings.Contains(key, "@") {
+			// More than one group shares this name — name which configured
+			// instance(s) this particular row/version serves, so two rows
+			// for the same plugin are tellable apart at a glance.
+			var insts []string
+			for i := range ref.Instances {
+				insts = append(insts, i)
+			}
+			sort.Strings(insts)
+			name = fmt.Sprintf("%s (%s)", ref.Name, strings.Join(insts, ","))
+		}
+		fmt.Printf("%-18s %-10s %-9s %-14s %s\n", name, ref.Kind(), ref.Use.Origin, ver, pluginStatus(spec))
 		if caps {
 			fmt.Printf("%-18s   use: %s\n", "", ref.Use.String())
-			fmt.Printf("%-18s   permissions: %s\n", "", spec.EffectiveManifest().Summary())
+			fmt.Printf("%-18s   permissions:\n", "")
+			for _, line := range permissionLines(ref, spec) {
+				fmt.Printf("%-18s     %s\n", "", line)
+			}
+			if localDescribeErr != nil {
+				fmt.Printf("%-18s     (could not describe the local build to confirm its real declared capabilities: %v)\n", "", localDescribeErr)
+			}
 		}
 	}
 	return nil
 }
 
+// permissionLines renders the TRUTHFUL permission picture for a derived
+// plugin ref: the plugin's own DECLARED capabilities (spec.Manifest — what
+// the binary says it needs, independent of any narrowing), plus what
+// actually confines each process this plugin runs as — PER PROCESS, since
+// that is what multi-instance isolation now means: by default one shared
+// process (the union of every non-isolated instance's grant, labelled with
+// which instances it serves), plus one line per instance that set
+// isolate: true (its own, un-unioned grant).
+//
+// ref.Network/AllowSecrets/AllowEnv/Isolation are already the union across
+// NON-ISOLATED instances only (config.PluginRefs) — exactly the shared
+// process's real grant, for a connector or for a runtime/engine (which never
+// has more than one process to begin with, so it is always "shared"). An
+// isolated instance's OWN grant lives in ref.Instances instead (exactly what
+// plugin.InstanceSpec would apply to its own process) and is never folded
+// into the shared line.
+func permissionLines(ref config.PluginRef, spec plugin.Spec) []string {
+	lines := []string{"declared capabilities: " + spec.Manifest.Summary()}
+	if ref.Kind() == config.PluginKindConnector && spec.Manifest.SingleProcess {
+		lines = append(lines, "single_process: the plugin declares every instance must share one process — isolate: true is refused for it")
+	}
+	if ref.Kind() != config.PluginKindConnector || spec.Shared {
+		shared := ref.SharedInstanceNames()
+		label := "shared process (default)"
+		if ref.Kind() == config.PluginKindConnector {
+			label = fmt.Sprintf("shared process (instances: %s)", strings.Join(shared, ", "))
+		}
+		lines = append(lines, label+": "+grantSummary(ref.Network, ref.AllowSecrets, ref.AllowEnv))
+	}
+	for _, n := range ref.IsolatedInstanceNames() {
+		g := ref.Instances[n]
+		lines = append(lines, fmt.Sprintf("instance %s (isolate: true, own process): %s", n, grantSummary(g.Network, g.AllowSecrets, g.AllowEnv)))
+	}
+	return lines
+}
+
+// grantSummary renders one process's actual confinement grant: the egress
+// it's narrowed to (or, with no `network:` set, the full declared egress —
+// spelled out explicitly rather than left looking like "no network at all"),
+// plus any allow_secrets/allow_env tightening.
+func grantSummary(network, allowSecrets, allowEnv []string) string {
+	net := "network: full declared egress (no network: narrowing set)"
+	if len(network) > 0 {
+		net = "network: " + strings.Join(network, ", ")
+	}
+	parts := []string{net}
+	if len(allowSecrets) > 0 {
+		parts = append(parts, "allow_secrets: "+strings.Join(allowSecrets, ", "))
+	}
+	if len(allowEnv) > 0 {
+		parts = append(parts, "allow_env: "+strings.Join(allowEnv, ", "))
+	}
+	return strings.Join(parts, "; ")
+}
+
 // pluginStatus reports a plugin's readiness WITHOUT executing it: is it
 // installed, and does the binary still verify against its recorded sha?
+//
+// This is distinct from spec.ReleaseVerified below: VerifyOnly checks the
+// binary ON DISK NOW against the sha RECORDED at install (did it change
+// since, or is it corrupt?) — this always runs, for every plugin, and a
+// failure here is fatal at load (plugins.go's loadConnectorPlugins). Whether
+// that RECORDED sha was itself confirmed against the release's own
+// checksums.txt at install time is a separate, informational question,
+// answered below.
 func pluginStatus(spec plugin.Spec) string {
 	if !spec.Installed() {
 		return "not installed — run `conductor init`"
@@ -439,6 +937,15 @@ func pluginStatus(spec plugin.Spec) string {
 	}
 	if spec.Local {
 		return "ok (local build)"
+	}
+	// A release with no checksums.txt, or one that doesn't list this
+	// platform's asset, still installs (internal/plugin/remote.go
+	// FetchRemoteVerified) — the sha is recorded and checked on every exec
+	// either way, so this is not a safety gap, but an operator deciding
+	// whether to trust a third-party source should be able to see it, not
+	// have it silently blend in with a release whose checksum WAS confirmed.
+	if !spec.ReleaseVerified {
+		return "ok (unverified release — no checksums.txt matched this build at install)"
 	}
 	return "ok"
 }
@@ -471,7 +978,7 @@ func cmdPluginUpdate(args []string) error {
 	if len(only) == 1 {
 		opts.Only = only[0]
 	}
-	results, err := reconcilePlugins(cfg, opts)
+	results, err := reconcilePlugins(cfg, opts, true)
 	if err != nil {
 		return err
 	}
@@ -526,6 +1033,13 @@ func cmdPluginAdd(args []string) error {
 	}
 
 	pr := config.PluginRef{Name: u.Name, Instance: instance, Use: u}
+	// Finding 6: cross-process advisory lock, held across this whole
+	// load-mutate-save cycle — see reconcilePlugins' identical comment.
+	lock, err := plugin.LockInstallStateCLI(plugin.InstallDir(), pluginLockCLITimeout, lockWaitNotice)
+	if err != nil {
+		return err
+	}
+	defer lock.Unlock()
 	state := plugin.LoadInstallState(plugin.InstallDir())
 	// ADD ONE, TOUCH NOTHING ELSE. The refs map here names a single reference —
 	// the one being added — and says nothing about the rest of the config, so it
@@ -534,7 +1048,7 @@ func cmdPluginAdd(args []string) error {
 	// so even the plugin being added is not referenced anywhere.
 	results, err := plugin.Reconcile(
 		map[string]config.PluginRef{u.InstallKey(): pr}, state, cfg.PluginTrust,
-		plugin.GHReleaseAPI{},
+		plugin.GitDist{},
 		plugin.Options{AllowUnlisted: allowUnlisted, Describe: describeForInstall(cfg), Log: logf},
 	)
 	if err != nil {
@@ -543,15 +1057,20 @@ func cmdPluginAdd(args []string) error {
 	if err := printResolutions(results); err != nil {
 		return err
 	}
-	inst, ok := state.Get(u.InstallKey())
-	if !ok {
-		return fmt.Errorf("plugin %s was not installed", u.Name)
+	// The manifest THIS add just resolved — not state.Get(u.InstallKey()),
+	// which answers "the highest version installed under this name" and
+	// would silently report a DIFFERENT (newer, already-installed) sibling
+	// version's permissions if this add pinned something older than what is
+	// already on disk (docs/wiki/Plugins.md "Side-by-side versions").
+	if len(results) != 1 {
+		return fmt.Errorf("plugin %s: expected exactly one resolution, got %d", u.Name, len(results))
 	}
-	fmt.Printf("\n%s declares these permissions:\n  %s\n", u.Name, inst.Manifest.Summary())
+	manifest := results[0].Manifest
+	fmt.Printf("\n%s declares these permissions:\n  %s\n", u.Name, manifest.Summary())
 	fmt.Println("\nAdd it to your config:")
 	fmt.Print("\n" + useSnippet(kind, instance, ref))
-	if kind == config.UseKindConnector && len(inst.Manifest.Egress) > 0 {
-		fmt.Printf("    network: [%s]\n", strings.Join(inst.Manifest.Egress, ", "))
+	if kind == config.UseKindConnector && len(manifest.Egress) > 0 {
+		fmt.Printf("    network: [%s]\n", strings.Join(manifest.Egress, ", "))
 	}
 	return nil
 }
@@ -580,11 +1099,46 @@ func cmdPluginShow(args []string) error {
 	}
 	name := rest[0]
 
-	refs := cfg.PluginRefs()
-	for _, key := range []string{"connectors/" + name, "runtimes/" + name} {
-		if ref, ok := refs[key]; ok {
-			return showPlugin(cfg, ref)
+	// Exploded: a name pinned at more than one version side by side
+	// (docs/wiki/Plugins.md "Side-by-side versions") has more than one
+	// group — show each, so `plugin show` never speaks for just whichever
+	// one happened to be found first.
+	state := plugin.LoadInstallState(plugin.InstallDir())
+	refs, failures := explodeRefs(cfg.PluginRefs(), cfg.BaseDir(), state)
+	var matches []string
+	for _, base := range []string{"connectors/" + name, "runtimes/" + name} {
+		for gk := range refs {
+			if gk == base {
+				matches = append(matches, gk)
+				continue
+			}
+			if before, _, cut := strings.Cut(gk, "@"); cut && before == base {
+				matches = append(matches, gk)
+			}
 		}
+	}
+	sort.Strings(matches)
+	if len(matches) > 0 {
+		// A failure describing ONE version group (a broken/missing binary)
+		// must not hide what `plugin show` can still say about a sibling
+		// group that's fine — printed, not swallowed, then surfaced via the
+		// final returned error so the command still exits non-zero.
+		var firstErr error
+		for i, gk := range matches {
+			if len(matches) > 1 {
+				if i > 0 {
+					fmt.Println()
+				}
+				fmt.Printf("--- %s: version %d of %d ---\n", name, i+1, len(matches))
+			}
+			if err := showPlugin(cfg, refs[gk]); err != nil {
+				fmt.Printf("  error: %v\n", err)
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+		return firstErr
 	}
 	if decl, ok := connector.TypeDeclFor(name); ok {
 		fmt.Printf("%s (builtin connector, conductor %s)\n", name, version)
@@ -596,13 +1150,66 @@ func cmdPluginShow(args []string) error {
 		fmt.Println("  in-binary runtime; select it with `use:` under runtimes: and an agent's runtime: field")
 		return nil
 	}
+	// Finding 4 (LOW): name genuinely has no entry in refs because ExplodeRefs
+	// could not split its instances into process groups safely (the "must
+	// never happen" isolation-fold invariant, see group.go's narrowRef) —
+	// report THAT, not the generic "no plugin named" a silently-dropped
+	// GroupFailure would otherwise produce, which reads as "you misspelled
+	// it" rather than "this is broken and should be reported".
+	for _, f := range failures {
+		if f.Name == name {
+			return fmt.Errorf("plugin %s: cannot be split into process groups safely (%s) — this should never happen, please report it", f.Name, f.Reason)
+		}
+	}
 	return fmt.Errorf("no plugin, connector type, or runtime named %q (see `conductor plugin list`)", name)
+}
+
+// probeDecl spawns a throwaway single-ref Manager for ref and describes it —
+// exactly the install-time probe `plugin add` already runs right after a
+// fresh install (NewManager with a one-entry refs map, StartAndDescribe,
+// Close). showPlugin uses it for two things that both need an actual
+// describe: recovering a LOCAL plugin's real Manifest (finding 7 — see
+// SpecFromRef's doc comment: it never resolves one for OriginLocal, since
+// there is no install-state record to source one from the way a remote
+// plugin's Reconcile-time Describe leaves behind) and, for a connector,
+// printing its declared verb/connection schema. One describe serves both
+// needs when it already has to run, rather than spawning the binary twice.
+func probeDecl(cfg *config.Config, ref config.PluginRef, state *plugin.InstallState) (*plugin.Decl, error) {
+	sec := secrets.New()
+	mgr := plugin.NewManager(map[string]config.PluginRef{ref.Key(): ref}, cfg.BaseDir(), state, pluginDeps(sec, func(map[string]any) {}, nil))
+	defer mgr.Close()
+	return mgr.StartAndDescribe(context.Background(), ref.Key())
 }
 
 func showPlugin(cfg *config.Config, ref config.PluginRef) error {
 	state := plugin.LoadInstallState(plugin.InstallDir())
-	inst, ok := state.Get(ref.Key())
+	var inst plugin.Installed
+	var ok bool
+	if ref.Use.Origin != config.OriginLocal {
+		// GetForConstraint, not Get: ref may be ONE of several
+		// resolved-version groups of this name (side by side) — resolve
+		// exactly the version THIS group's own `use:` constraint names,
+		// never an arbitrary sibling's.
+		inst, ok = state.GetForConstraint(ref.Use.InstallKey(), ref.Use)
+	}
 	spec := plugin.SpecFromRef(ref, cfg.BaseDir(), inst, ok)
+
+	// Finding 7 (MEDIUM): a LOCAL plugin's Spec never carries a Manifest —
+	// probe it now, for ANY plugin kind (connector, runtime, or engine all
+	// declare capabilities), so its real declared capabilities show below
+	// instead of always reading "no declared capabilities". Best-effort: a
+	// local build that currently fails to start/describe (mid-rebuild, a
+	// broken binary) degrades to an empty manifest with the reason noted
+	// after PERMISSIONS, never a failed command — `plugin show` must still
+	// say everything else it knows.
+	var localDecl *plugin.Decl
+	var localDescribeErr error
+	if spec.Local && spec.Installed() {
+		localDecl, localDescribeErr = probeDecl(cfg, ref, state)
+		if localDescribeErr == nil {
+			spec.Manifest = plugin.ManifestFromDecl(localDecl)
+		}
+	}
 
 	fmt.Printf("%s (%s plugin)\n", ref.Name, ref.Kind())
 	fmt.Printf("  use:    %s\n", ref.Use.String())
@@ -619,9 +1226,12 @@ func showPlugin(cfg *config.Config, ref config.PluginRef) error {
 	} else {
 		fmt.Printf("  binary: NOT INSTALLED — run `conductor init`\n")
 	}
-	fmt.Printf("\n  PERMISSIONS (declared by the plugin, enforced by conductor):\n    %s\n", spec.EffectiveManifest().Summary())
-	if len(ref.Network) > 0 {
-		fmt.Printf("    narrowed by this config's network: %s\n", strings.Join(ref.Network, ", "))
+	fmt.Println("\n  PERMISSIONS (declared by the plugin, enforced by conductor):")
+	for _, line := range permissionLines(ref, spec) {
+		fmt.Printf("    %s\n", line)
+	}
+	if spec.Local && localDescribeErr != nil {
+		fmt.Printf("    (could not describe the local build to confirm its real declared capabilities: %v)\n", localDescribeErr)
 	}
 	if ref.Isolation != nil {
 		fmt.Printf("    plus OPT-IN OS isolation: mode %s\n", ref.Isolation.Mode)
@@ -646,12 +1256,16 @@ func showPlugin(cfg *config.Config, ref config.PluginRef) error {
 		return nil
 	}
 
-	sec := secrets.New()
-	mgr := plugin.NewManager(map[string]config.PluginRef{ref.Key(): ref}, cfg.BaseDir(), state, pluginDeps(sec, func(map[string]any) {}))
-	defer mgr.Close()
-	decl, err := mgr.StartAndDescribe(context.Background(), ref.Key())
-	if err != nil {
-		return err
+	// Reuse the describe already run above for a local plugin instead of
+	// spawning it a second time; a remote/installed one still needs its
+	// own first (and only) describe here.
+	decl := localDecl
+	if decl == nil {
+		d, err := probeDecl(cfg, ref, state)
+		if err != nil {
+			return err
+		}
+		decl = d
 	}
 	fmt.Printf("\n  declared type: %s", decl.Type)
 	if decl.Desc != "" {
@@ -690,6 +1304,13 @@ func cmdPluginRemove(args []string) error {
 		return fmt.Errorf("usage: conductor plugin remove <name>")
 	}
 	name := rest[0]
+	// Finding 6: cross-process advisory lock, held across this whole
+	// load-mutate-save cycle — see reconcilePlugins' identical comment.
+	lock, err := plugin.LockInstallStateCLI(plugin.InstallDir(), pluginLockCLITimeout, lockWaitNotice)
+	if err != nil {
+		return err
+	}
+	defer lock.Unlock()
 	state := plugin.LoadInstallState(plugin.InstallDir())
 	removed := false
 	for _, key := range []string{"connectors/" + name, "runtimes/" + name} {
@@ -725,13 +1346,77 @@ func cmdPluginRemove(args []string) error {
 // that may authorize a prune — and only once the config confirms its packs were
 // instantiated, because a pack's internal `run: <engine>` is part of that set
 // and is invisible until then (see config.PluginRefsComplete).
-func reconcilePlugins(cfg *config.Config, opts plugin.Options) ([]plugin.Resolution, error) {
+//
+// cli distinguishes an interactive CLI command (which gets
+// LockInstallStateCLI's non-blocking-then-notify-then-bounded-wait
+// treatment, finding 6) from the daemon's own unattended background passes
+// (autoUpdateLoop's refreshPlugins, the boot gap-fill's own already-bounded
+// goroutine) — which block on plugin.LockInstallState with NO timeout, since
+// a bound there would just turn a slow-but-eventually-finishing peer into a
+// spurious failure with nobody watching to retry it.
+//
+// reconcileMu serializes every reconcile/install pass in this process. The
+// daemon runs more than one of these concurrently on its own — pendingPluginRetry's
+// ticker and autoUpdateLoop's dependency refresh both call this function from
+// their own goroutine — and each pass reads the install state file, mutates
+// it in memory, and writes it back. Two overlapping passes race on that
+// read-modify-write (the loser's changes are silently dropped) and, without
+// this lock, nothing stops a slow pass (a git fetch) from still being in
+// flight when the next ticker fires. A process-wide mutex is sufficient here
+// (not a file lock): the race this closes is BETWEEN THIS PROCESS'S OWN
+// goroutines, not across separate `conductor` invocations.
+var reconcileMu sync.Mutex
+
+// pluginLockCLITimeout bounds how long an interactive CLI command
+// (`conductor init`, `plugin update`/`add`/`remove`) waits for the
+// install-state lock before giving up with a clear error (finding 6). It is
+// generous: a concurrent reconcile pass (the daemon's own auto-update cycle,
+// or another `conductor plugin` invocation) legitimately fetching several
+// plugins can take a while, and the point is never to time out a peer that
+// is actually making progress — only to stop an operator from staring at a
+// silent, indefinite hang.
+const pluginLockCLITimeout = 10 * time.Minute
+
+// lockWaitNotice adapts logf to the plain func(string) LockInstallStateCLI
+// notifies through.
+func lockWaitNotice(msg string) { logf("plugin: %s", msg) }
+
+func reconcilePlugins(cfg *config.Config, opts plugin.Options, cli bool) ([]plugin.Resolution, error) {
+	reconcileMu.Lock()
+	defer reconcileMu.Unlock()
+	// Finding 6: reconcileMu only serializes THIS process's own goroutines.
+	// A concurrent `conductor plugin update` (a separate OS process) and
+	// this daemon's own auto-update cycle each have their own, unrelated
+	// reconcileMu — the cross-process advisory lock closes that gap, held
+	// across the whole load-mutate-save cycle below.
+	var (
+		lock *plugin.FileLock
+		err  error
+	)
+	if cli {
+		lock, err = plugin.LockInstallStateCLI(plugin.InstallDir(), pluginLockCLITimeout, lockWaitNotice)
+	} else {
+		lock, err = plugin.LockInstallState(plugin.InstallDir())
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Unlock()
 	if opts.Describe == nil {
 		opts.Describe = describeForInstall(cfg)
 	}
 	opts.Prune = cfg.PluginRefsComplete()
 	state := plugin.LoadInstallState(plugin.InstallDir())
-	return plugin.Reconcile(cfg.PluginRefs(), state, cfg.PluginTrust, plugin.GHReleaseAPI{}, opts)
+	// Side-by-side versions, finding 1: Reconcile now does its OWN
+	// per-instance explode internally (reconcileInstances) — resolving each
+	// configured instance against its OWN `use:` constraint, never a
+	// representative's, and grouping by RESOLVED version only after
+	// resolving. Pre-exploding here (as this used to) drove reconcile off a
+	// representative instance's constraint, picked by the PRIOR pass's
+	// install state — an unpinned sibling's move onto a new release would
+	// drag a pinned instance's install along with it, and then GC the
+	// version the pinned instance still needed out from under it.
+	return plugin.Reconcile(cfg.PluginRefs(), state, cfg.PluginTrust, plugin.GitDist{}, opts)
 }
 
 // describeForInstall spawns a freshly-installed plugin ONCE to record its
@@ -741,7 +1426,7 @@ func reconcilePlugins(cfg *config.Config, opts plugin.Options) ([]plugin.Resolut
 func describeForInstall(cfg *config.Config) plugin.DescribeFunc {
 	return func(ctx context.Context, spec plugin.Spec) (*plugin.Decl, error) {
 		sec := secrets.New()
-		deps := pluginDeps(sec, func(map[string]any) {})
+		deps := pluginDeps(sec, func(map[string]any) {}, nil)
 		cl := plugin.NewClient(spec, deps)
 		defer cl.Close()
 		if err := cl.Start(ctx); err != nil {
@@ -798,32 +1483,290 @@ func loadConfigRest(args []string) (*config.Config, []string, error) {
 	return cfg, positional(rest), nil
 }
 
-// publishConnectorVersions hands config the resolved release of every
-// installed PLUGIN connector, so a pack's `requires.connectors:
-// { jira: ">=2.0" }` can be gated at instantiate (design §D).
+// publishConnectorVersions hands config every resolved release CURRENTLY
+// installed for each plugin connector, so a pack's `requires.connectors:
+// { jira: ">=2.0" }` can be gated at instantiate against each configured
+// instance's OWN version (design §D; docs/wiki/Plugins.md "Side-by-side
+// versions").
 //
 // It reads local install state only — never the network. Install state is
 // owned by internal/plugin, which imports internal/config, so the values are
-// injected downward rather than config reaching up for them. A connector
-// with no install record is builtin (or a dev binary): config falls back to
-// the daemon version, or skips the gate when neither is known.
+// injected downward rather than config reaching up for them. This runs
+// before any config is loaded (main(), before the config path is even
+// known), so it has no configured instance names to key by — keying by
+// plugin KEY and publishing EVERY installed version under it (not just a
+// "representative" one) lets config.resolvedConnectorVersion pick the
+// version a SPECIFIC instance's own `use:` constraint resolves to later,
+// once that instance is known. A connector with no install record is
+// builtin (or a dev binary): config falls back to the daemon version, or
+// skips the gate when neither is known.
 func publishConnectorVersions() {
 	state := plugin.LoadInstallState(plugin.InstallDir())
 	if state == nil {
 		return
 	}
-	vers := map[string]string{}
+	vers := map[string][]string{}
 	for _, key := range state.Keys() {
-		in, ok := state.Get(key)
-		if !ok {
+		all := state.AllVersions(key)
+		if len(all) == 0 || all[0].Kind != config.PluginKindConnector {
 			continue
 		}
-		if in.Kind != config.PluginKindConnector {
-			continue
+		var tags []string
+		for _, in := range all {
+			if v := strings.TrimSpace(in.Resolved); v != "" {
+				tags = append(tags, v)
+			}
 		}
-		if v := strings.TrimSpace(in.Resolved); v != "" {
-			vers[in.Name] = v
+		if len(tags) > 0 {
+			vers[key] = tags
 		}
 	}
 	config.SetConnectorVersions(vers)
+}
+
+// bootGapFillTimeout bounds the boot-time fetch of missing plugins.
+var bootGapFillTimeout = 2 * time.Minute
+
+// bootGapFill installs referenced plugins that are not installed yet, and
+// nothing else (an installed build stays as it is: updating is update's
+// job). Failures are logged, never fatal.
+func bootGapFill(cfg *config.Config) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		res, err := reconcilePlugins(cfg, plugin.Options{GapsOnly: true, Log: logf}, false)
+		if err != nil {
+			logf("plugins: boot fetch: %v", err)
+		}
+		for _, r := range res {
+			if r.Err != nil {
+				logf("plugins: %s: %v", r.Name, r.Err)
+			}
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(bootGapFillTimeout):
+		logf("plugins: boot fetch still running after %s — continuing; missing plugins' connectors start disabled", bootGapFillTimeout)
+	}
+}
+
+// gcLocalPluginSnapshots garbage-collects local-build snapshots
+// (internal/plugin's snapshotLocal, the local-build TOCTOU fix) that no
+// Manager in this boot depends on. stack may be nil (no connectors: block);
+// rtMgr may be the SAME *plugin.Manager as stack.Plugins (runtimePluginManager
+// reuses it when there is one) or a standalone one — either way its shas are
+// unioned in, and a shared Manager's shas are simply counted once. Logged,
+// never fatal: a GC failure wastes disk, nothing more (an already-running
+// process keeps its own open executable text regardless of what happens to
+// the path that used to name it).
+func gcLocalPluginSnapshots(stack *flowStack, rtMgr *plugin.Manager) {
+	keep := map[string]bool{}
+	if stack != nil && stack.Plugins != nil {
+		for sha := range stack.Plugins.LocalSnapshotShas() {
+			keep[sha] = true
+		}
+	}
+	if rtMgr != nil {
+		for sha := range rtMgr.LocalSnapshotShas() {
+			keep[sha] = true
+		}
+	}
+	// GCLocalSnapshotsSafely, not the bare keep-set GCLocalSnapshots: two
+	// daemons can share a state dir (docs/wiki/Plugins.md "Local builds are
+	// snapshotted"), and `keep` only ever reflects what THIS process's own
+	// Managers resolved — a sibling daemon's live snapshot (or one about to
+	// be respawned into) is invisible to it. The grace period catches that;
+	// touchSnapshotUsed refreshes it on every resolve and every spawn.
+	removed, errs := plugin.GCLocalSnapshotsSafely(plugin.LocalSnapshotRoot(), keep, plugin.DefaultLocalSnapshotGrace)
+	for _, sha := range removed {
+		logf("plugins: GC'd stale local-build snapshot %s", shortSha(sha))
+	}
+	for _, err := range errs {
+		logf("plugins: local-build snapshot GC: %v", err)
+	}
+}
+
+// localSnapshotRetouchInterval is how often a long-running daemon re-touches
+// every local-build snapshot it currently depends on (finding 5d) — see
+// retouchLocalPluginSnapshots. A var so a test can shrink it.
+var localSnapshotRetouchInterval = 24 * time.Hour
+
+// retouchLocalPluginSnapshotsLoop periodically re-touches this boot's live
+// local-build snapshots (finding 5d: resolve-time and spawn-time touches
+// alone go quiet for a plugin that simply never crashes or reloads across
+// many days, which a SIBLING daemon's grace-period GC does not assume).
+// ctx-aware, same shape as autoUpdateLoop: exits on shutdown. The tick→action
+// split (a plain func()) keeps the ticker logic itself testable with a short
+// interval and a fake action, with no real Manager or filesystem involved.
+func retouchLocalPluginSnapshotsLoop(ctx context.Context, interval time.Duration, retouch func()) {
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			retouch()
+		}
+	}
+}
+
+// retouchLocalPluginSnapshots is retouchLocalPluginSnapshotsLoop's one-shot
+// action: every Manager this boot built gets its live local-build snapshots'
+// mtimes refreshed right now (Manager.RetouchLocalSnapshots) — the same
+// stack/rtMgr union gcLocalPluginSnapshots computes its keep set from.
+func retouchLocalPluginSnapshots(stack *flowStack, rtMgr *plugin.Manager) {
+	var stackMgr *plugin.Manager
+	if stack != nil {
+		stackMgr = stack.Plugins
+	}
+	if stackMgr != nil {
+		stackMgr.RetouchLocalSnapshots()
+	}
+	if rtMgr != nil && rtMgr != stackMgr {
+		rtMgr.RetouchLocalSnapshots()
+	}
+}
+
+// pendingPluginInterval is the initial (and minimum) delay between retries of
+// a missing plugin's fetch.
+var pendingPluginInterval = 5 * time.Minute
+
+// pendingPluginBackoffCap is the longest a still-missing plugin waits between
+// retries, once backoff has grown (finding: retrying every 5m forever is
+// needless load on a box that is genuinely offline or whose release just
+// isn't published yet).
+var pendingPluginBackoffCap = time.Hour
+
+// nextPendingPluginWait doubles a still-missing plugin's retry wait, capped at
+// pendingPluginBackoffCap — a pure function so the backoff schedule is
+// testable without driving the real ticker loop.
+func nextPendingPluginWait(cur time.Duration) time.Duration {
+	next := cur * 2
+	if next > pendingPluginBackoffCap {
+		next = pendingPluginBackoffCap
+	}
+	return next
+}
+
+// pendingPluginsStillMissing reports how many currently-referenced CONNECTOR
+// plugins are still not installed, reading install state DIRECTLY rather
+// than through a full plugin.Manager (what this used to do, via
+// plugin.NewManager(cfg.PluginRefs(), …)). A Manager resolves — and, for a
+// LOCAL `use: ./path` reference, SNAPSHOTS — every plugin the config
+// references at construction (SpecFromRef), including every plugin that is
+// NOT the one this retry loop is waiting on. pendingPluginRetry ticks
+// (backing off from pendingPluginInterval to pendingPluginBackoffCap) for as
+// long as something stays missing, so building a Manager on every tick kept
+// re-snapshotting every local plugin's current build on a timer that has
+// nothing to do with it, growing the local snapshot directory with a copy
+// per tick for however long the unrelated remote fetch keeps failing — a
+// local reference is never "missing" in the sense this loop cares about (see
+// below), so there is nothing for it to even check there.
+//
+// A LOCAL reference is skipped outright: loadConnectorPlugins never adds one
+// to pendingPlugins in the first place (SpecFromRef gives it a non-empty
+// BinPath — the snapshot path, or the raw source on a snapshot failure —
+// regardless of whether the snapshot itself succeeded, so spec.Installed()
+// is always true for it), so it can never be one of the plugins THIS loop is
+// retrying; resolving it here would be pure overhead.
+func pendingPluginsStillMissing(cfg *config.Config, state *plugin.InstallState) int {
+	missing := 0
+	// Exploded (one entry per resolved-version GROUP): a name with two
+	// configured versions, one installed and one not, must still count as
+	// missing for the one that isn't — state.Get(key) alone would find the
+	// INSTALLED sibling version and wrongly call the whole name satisfied,
+	// stopping the retry before the actually-pending group ever lands
+	// (docs/wiki/Plugins.md "Side-by-side versions").
+	//
+	// A local reference is filtered out BEFORE exploding, never just
+	// skipped after: ExplodeRefs resolves every reference it is handed,
+	// including snapshotting a local one by content hash (groupRef/
+	// discriminatorFor) — exactly the per-tick snapshot growth this loop
+	// must never cause (see the doc above).
+	remote := map[string]config.PluginRef{}
+	for k, ref := range cfg.PluginRefs() {
+		if ref.Use.Origin != config.OriginLocal {
+			remote[k] = ref
+		}
+	}
+	exploded, failures := explodeRefs(remote, cfg.BaseDir(), state)
+	// Finding 4 (LOW): a GroupFailure here was silently dropped before — the
+	// retry loop would just never see the affected plugin in exploded at
+	// all, so it could not count toward "still missing" either, and the
+	// operator watching the log would see retries quietly succeed while that
+	// one plugin's connectors stayed disabled for a reason retrying a fetch
+	// can never fix (this is "must never happen" territory, see group.go's
+	// narrowRef — not a network problem).
+	for _, f := range failures {
+		logf("plugins: %s: cannot be split into process groups safely (%s) — retrying will not fix this; this should never happen, please report it", f.Name, f.Reason)
+	}
+	for _, ref := range exploded {
+		if ref.Kind() != config.PluginKindConnector {
+			continue
+		}
+		inst, ok := state.GetForConstraint(ref.Use.InstallKey(), ref.Use)
+		if !ok || inst.Path == "" {
+			missing++
+		}
+	}
+	return missing
+}
+
+// pendingPluginRetry retries fetching the plugins this boot found missing,
+// backing off from pendingPluginInterval to pendingPluginBackoffCap while
+// they stay missing. Once every one of them is installed, it validates the
+// config against what they actually declare — through the SAME pipeline
+// `conductor validate` runs — before asking the daemon to restart into them
+// (stop): their connectors were disabled, and so UNCHECKED (an Unavailable
+// type accepts any verb/event/filter), until now. A restart that then failed
+// flow.Validate would crash-loop the daemon on every boot from here on, which
+// is exactly the failure this whole mechanism exists to avoid. If validation
+// fails, the daemon does NOT restart: it logs loudly, keeps running with the
+// connector(s) disabled, and gives up retrying — nothing changes until the
+// operator edits the config (or the plugin) and restarts by hand.
+func pendingPluginRetry(ctx context.Context, cfg *config.Config, cfgFile string, stop func()) {
+	if len(pendingPlugins) == 0 {
+		return
+	}
+	logf("plugins: %s not installed — retrying every %s, backing off to %s while still missing",
+		strings.Join(pendingPlugins, ", "), pendingPluginInterval, pendingPluginBackoffCap)
+	wait := pendingPluginInterval
+	for {
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		bootGapFill(cfg)
+		state := plugin.LoadInstallState(plugin.InstallDir())
+		missing := pendingPluginsStillMissing(cfg, state)
+		if missing > 0 {
+			wait = nextPendingPluginWait(wait)
+			logf("plugins: still missing %s — next retry in %s", strings.Join(pendingPlugins, ", "), wait)
+			continue
+		}
+		// Every missing plugin is installed now, but install state only proves
+		// the binary exists — not that this config's triggers/options are
+		// legal against what it actually declares. They were never checked
+		// while the type was Unavailable (which accepts any verb/event name
+		// unchecked, by design, so the boot above could proceed with no
+		// Decl). validateConfigFile runs the exact pipeline `conductor
+		// validate` does: load, build the flow stack (which now starts the
+		// real plugin and reads its real Decl), flow.Validate.
+		if err := validateConfigFile(cfgFile); err != nil {
+			logf("plugins: %s installed, but the config does not validate against it: %v", strings.Join(pendingPlugins, ", "), err)
+			logf("plugins: NOT restarting — the affected connector(s) stay disabled; fix the config and restart the daemon yourself; giving up on retrying %s", strings.Join(pendingPlugins, ", "))
+			return
+		}
+		logf("plugins: every missing plugin is installed now — restarting into them")
+		stop()
+		return
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +16,30 @@ func reloadableSpec(t *testing.T) Spec {
 	sp := connectorSpec()
 	sp.BinPath = writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
 	return sp
+}
+
+// waitUntilReloading polls c.reloading under its own lock until it is true,
+// deterministically replacing a fixed time.Sleep("let Reload observe
+// reloading and enter its drain wait") — the flag flips almost instantly (a
+// bool write under c.mu, nothing blocking before it), so this loop just
+// waits for that specific, observable transition instead of guessing how
+// long it takes, and fails loudly (rather than silently racing) if it never
+// happens within the deadline.
+func waitUntilReloading(t *testing.T, c *Client) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c.mu.Lock()
+		reloading := c.reloading
+		c.mu.Unlock()
+		if reloading {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Reload never set c.reloading")
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // TestClientReloadSwapsProcessInPlace: after Reload, the SAME *Client re-dials
@@ -64,6 +89,7 @@ func TestClientReloadDrainsInFlight(t *testing.T) {
 	fc := newFakeConn()
 	fc.describe = &Decl{ProtocolVersion: ProtocolVersion, Type: "jira"}
 	fc.hang = true // Call blocks on ctx.Done()
+	fc.entered = make(chan struct{})
 	c := NewClient(reloadableSpec(t), Deps{dial: fakeDial(fc)})
 
 	callCtx, cancelCall := context.WithCancel(context.Background())
@@ -73,7 +99,7 @@ func TestClientReloadDrainsInFlight(t *testing.T) {
 		_, _ = c.Invoke(callCtx, InvokeRequest{Verb: "x"}) // hangs until callCtx cancelled
 	}()
 	<-started
-	time.Sleep(20 * time.Millisecond) // let the call enter conn.Call (inflight++)
+	<-fc.entered // the call is now genuinely in flight (inflight++, parked in Call)
 
 	reloadErr := make(chan error, 1)
 	go func() { reloadErr <- c.Reload(reloadableSpec(t)) }()
@@ -88,6 +114,66 @@ func TestClientReloadDrainsInFlight(t *testing.T) {
 	}
 }
 
+// TestClientReloadAfterCloseReturnsErrorWithoutMutating is the finding-4
+// corollary (the `if c.closed` guard Reload rechecks AFTER its drain wait,
+// client.go ~1054-1058): a Close() that lands WHILE Reload is draining a
+// stuck in-flight call must make Reload refuse the swap once it resumes —
+// even if the drain itself then succeeds — rather than mutate the client's
+// spec on top of a torn-down process. Without this second check (only the
+// first, pre-drain `if c.closed` survived), a Reload that started just
+// before Close landed would drain successfully and go on to overwrite
+// BinPath/Sha256/Resolved and reset the restart bookkeeping of a Client
+// Close() already tore down.
+func TestClientReloadAfterCloseReturnsErrorWithoutMutating(t *testing.T) {
+	fc := newFakeConn()
+	fc.describe = &Decl{ProtocolVersion: ProtocolVersion, Type: "jira"}
+	fc.hang = true // every call blocks on ctx.Done()
+	fc.entered = make(chan struct{})
+	origSpec := reloadableSpec(t)
+	c := NewClient(origSpec, Deps{dial: fakeDial(fc)})
+
+	callCtx, cancelCall := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		_, _ = c.Invoke(callCtx, InvokeRequest{Instance: "x", Verb: "go"}) // hangs until cancelCall
+	}()
+	<-started
+	<-fc.entered // the call is now genuinely in flight (inflight++, served)
+
+	reloadErr := make(chan error, 1)
+	go func() { reloadErr <- c.Reload(reloadableSpec(t)) }() // new BinPath, would overwrite if applied
+	waitUntilReloading(t, c)                                 // Reload has observed reloading and entered its drain wait
+
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Let the hung call finish so Reload's select resolves via <-done
+	// (drained=true) rather than reloadDrainTimeout — proving the closed
+	// check wins even when the drain itself succeeded.
+	cancelCall()
+
+	select {
+	case err := <-reloadErr:
+		if err == nil || !strings.Contains(err.Error(), "closed") {
+			t.Fatalf("Reload racing a concurrent Close must return a \"closed\" error, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Reload never returned after Close + cancelCall")
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.spec.BinPath != origSpec.BinPath || c.spec.Sha256 != origSpec.Sha256 {
+		t.Fatalf("Reload must not mutate the spec after losing the race to Close: got BinPath=%q Sha256=%q, want the original %q/%q",
+			c.spec.BinPath, c.spec.Sha256, origSpec.BinPath, origSpec.Sha256)
+	}
+	if c.reloading {
+		t.Fatal("reloading must be cleared even when Reload bails out on closed")
+	}
+}
+
 // TestClientReloadTimesOutBusy: a call that never drains makes Reload give up
 // with ErrReloadBusy (caller restarts) rather than killing it mid-flight.
 func TestClientReloadTimesOutBusy(t *testing.T) {
@@ -98,11 +184,12 @@ func TestClientReloadTimesOutBusy(t *testing.T) {
 	fc := newFakeConn()
 	fc.describe = &Decl{ProtocolVersion: ProtocolVersion, Type: "jira"}
 	fc.hang = true
+	fc.entered = make(chan struct{})
 	c := NewClient(reloadableSpec(t), Deps{dial: fakeDial(fc)})
 	callCtx, cancelCall := context.WithCancel(context.Background())
 	defer cancelCall()
 	go func() { _, _ = c.Invoke(callCtx, InvokeRequest{Verb: "x"}) }()
-	time.Sleep(20 * time.Millisecond)
+	<-fc.entered // the call is now genuinely in flight
 
 	if err := c.Reload(reloadableSpec(t)); !errors.Is(err, ErrReloadBusy) {
 		t.Fatalf("want ErrReloadBusy on undrainable call, got %v", err)
@@ -153,6 +240,26 @@ func TestSameReloadSurface(t *testing.T) {
 	if SameReloadSurface(base, &eg) {
 		t.Fatal("a widened egress must NOT be reloadable")
 	}
+	// single_process is part of the recorded manifest (manifestFromDecl)
+	// exactly like egress/commands/fs/env: a build that newly declares it
+	// (or drops it) changes the Manager's SHAPE for this key (one process
+	// vs one per instance) — never something a live in-place swap may do
+	// silently — so it must force a restart just like a widened egress.
+	sp := cp()
+	sp.Capabilities = Capabilities{SingleProcess: true}
+	if SameReloadSurface(base, &sp) {
+		t.Fatal("a newly-declared single_process must NOT be reloadable")
+	}
+	spBoth := cp()
+	spBoth.Capabilities = Capabilities{SingleProcess: true}
+	baseSP := cp()
+	baseSP.Capabilities = Capabilities{SingleProcess: true}
+	if !SameReloadSurface(&baseSP, &spBoth) {
+		t.Fatal("single_process unchanged on both sides must still be reloadable")
+	}
+	if SameReloadSurface(&baseSP, base) {
+		t.Fatal("DROPPING single_process must NOT be reloadable either")
+	}
 	if SameReloadSurface(nil, base) || SameReloadSurface(base, nil) {
 		t.Fatal("nil decl must not be reloadable")
 	}
@@ -166,11 +273,13 @@ func TestManagerReload(t *testing.T) {
 	sp := reloadableSpec(t)
 	c := NewClient(sp, Deps{dial: fakeDial(fc)})
 	m := &Manager{
-		clients: map[string]*Client{"connectors/jira": c},
-		specs:   map[string]Spec{"connectors/jira": sp},
-		decls:   map[string]*Decl{},
-		order:   []string{"connectors/jira"},
+		clients:   map[string]*Client{"connectors/jira": c},
+		specs:     map[string]Spec{"connectors/jira": sp},
+		decls:     map[string]*Decl{},
+		order:     []string{"connectors/jira"},
+		reloading: map[string]bool{},
 	}
+	m.instCond = sync.NewCond(&m.instMu)
 	newSpec := reloadableSpec(t)
 	newSpec.Sha256 = "deadbeef"
 	newSpec.Resolved = "v2"

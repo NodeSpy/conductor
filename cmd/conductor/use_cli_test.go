@@ -66,6 +66,109 @@ func TestCmdPluginListCaps(t *testing.T) {
 	}
 }
 
+// TestCmdPluginListCapsDefaultSharesUnionAsOneProcess is the NEW default:
+// `plugin list --caps` on a connector plugin configured as two instances with
+// DIFFERENT `network:`, neither isolate: true, must show ONE shared-process
+// line carrying the UNION of both — that one process is what actually runs
+// for both of them (docs/wiki/Plugins.md "Multi-instance isolation") — never
+// split per instance, since there is no separate process to split per
+// instance in the first place.
+func TestCmdPluginListCapsDefaultSharesUnionAsOneProcess(t *testing.T) {
+	args := writeCfg(t, `
+connectors:
+  a: { use: acme/plugins/jira, network: ["one.example:443"] }
+  b: { use: acme/plugins/jira, network: ["two.example:443"] }
+`)
+	out, err := captureStdout(t, func() error {
+		return cmdPluginList(append(args, "--caps"))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "declared capabilities:") {
+		t.Fatalf("--caps did not surface the plugin's declared capabilities:\n%s", out)
+	}
+	if !strings.Contains(out, "shared process") {
+		t.Fatalf("--caps did not label the default shared-process grant:\n%s", out)
+	}
+	if !strings.Contains(out, "one.example:443") || !strings.Contains(out, "two.example:443") {
+		t.Fatalf("--caps lost one instance's network from the union:\n%s", out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "shared process") {
+			if !strings.Contains(line, "one.example:443") || !strings.Contains(line, "two.example:443") {
+				t.Fatalf("the shared-process grant line did not carry the union of both instances' network:\n%s", out)
+			}
+			if !strings.Contains(line, "a") || !strings.Contains(line, "b") {
+				t.Fatalf("the shared-process grant line did not label which instances it serves:\n%s", out)
+			}
+		}
+	}
+	if strings.Contains(out, "own process") {
+		t.Fatalf("neither instance isolates; --caps must show no own-process line:\n%s", out)
+	}
+}
+
+// TestCmdPluginListCapsIsolateShowsOwnProcessGrant is the isolate: true half:
+// one isolated instance's grant must show on its OWN line, narrowed to
+// exactly what it declared, separate from the shared process the other
+// (non-isolated) instance still uses — never unioned together onto one line.
+func TestCmdPluginListCapsIsolateShowsOwnProcessGrant(t *testing.T) {
+	args := writeCfg(t, `
+connectors:
+  a: { use: acme/plugins/jira, network: ["one.example:443"], isolate: true }
+  b: { use: acme/plugins/jira, network: ["two.example:443"] }
+`)
+	out, err := captureStdout(t, func() error {
+		return cmdPluginList(append(args, "--caps"))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "instance a (isolate: true, own process): ") {
+		t.Fatalf("--caps did not label instance a's own isolated process:\n%s", out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "instance a") {
+			if !strings.Contains(line, "one.example:443") || strings.Contains(line, "two.example:443") {
+				t.Fatalf("instance a's own grant must carry only its own network, not b's:\n%s", out)
+			}
+		}
+		if strings.Contains(line, "shared process") {
+			if !strings.Contains(line, "two.example:443") || strings.Contains(line, "one.example:443") {
+				t.Fatalf("the shared process must carry only non-isolated instance b's network, not a's:\n%s", out)
+			}
+		}
+	}
+}
+
+// TestCmdPluginShowDefaultSharesUnionAsOneProcess is `plugin show`'s half of
+// the same default-sharing behavior.
+func TestCmdPluginShowDefaultSharesUnionAsOneProcess(t *testing.T) {
+	args := writeCfg(t, `
+connectors:
+  a: { use: acme/plugins/jira, network: ["one.example:443"] }
+  b: { use: acme/plugins/jira, network: ["two.example:443"] }
+`)
+	out, err := captureStdout(t, func() error { return cmdPluginShow(append(args, "jira")) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "shared process") {
+		t.Fatalf("plugin show did not label the default shared-process grant:\n%s", out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "shared process") {
+			if !strings.Contains(line, "one.example:443") || !strings.Contains(line, "two.example:443") {
+				t.Fatalf("shared-process grant line did not carry the union of both instances' network:\n%s", out)
+			}
+		}
+	}
+	if strings.Contains(out, "own process") {
+		t.Fatalf("neither instance isolates; plugin show must show no own-process line:\n%s", out)
+	}
+}
+
 // `plugin add` on a builtin installs nothing and just prints the stub — adding
 // `github` should never reach for the plugin repo.
 func TestCmdPluginAddBuiltinInstallsNothing(t *testing.T) {
@@ -114,6 +217,33 @@ func TestCmdPluginShowBuiltin(t *testing.T) {
 	}
 	if !strings.Contains(out, "builtin runtime") {
 		t.Fatalf("plugin show did not identify a builtin runtime:\n%s", out)
+	}
+}
+
+// TestCmdPluginShowPerInstanceGrantsNotUnion is `plugin show`'s half of the
+// finding-3 regression (cmdPluginListCapsShowsPerInstanceGrantsNotUnion
+// above covers `plugin list --caps`): two instances of a non-shared-process
+// plugin with different `network:` must each show their OWN grant.
+func TestCmdPluginShowPerInstanceGrantsNotUnion(t *testing.T) {
+	args := writeCfg(t, `
+connectors:
+  a: { use: acme/plugins/jira, network: ["one.example:443"], isolate: true }
+  b: { use: acme/plugins/jira, network: ["two.example:443"], isolate: true }
+`)
+	out, err := captureStdout(t, func() error { return cmdPluginShow(append(args, "jira")) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "instance a") || !strings.Contains(out, "instance b") {
+		t.Fatalf("plugin show did not label each isolated instance's own grant:\n%s", out)
+	}
+	if !strings.Contains(out, "one.example:443") || !strings.Contains(out, "two.example:443") {
+		t.Fatalf("plugin show lost one instance's own narrowed network:\n%s", out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "one.example:443") && strings.Contains(line, "two.example:443") {
+			t.Fatalf("instance grants were unioned onto one line:\n%s", out)
+		}
 	}
 }
 

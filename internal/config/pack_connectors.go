@@ -173,44 +173,86 @@ func (c ConnectorReqs) Names() []string {
 // its version IS the daemon version.
 
 var (
-	connVerMu       sync.RWMutex
-	connectorVers   = map[string]string{}
-	connVersionsSet bool
+	connVerMu        sync.RWMutex
+	connectorVerTags = map[string][]string{}
+	connVersionsSet  bool
 )
 
-// SetConnectorVersions records the resolved release version of each
-// PLUGIN-backed connector instance, keyed by the connectors: map key. Called
-// once at boot from the plugin install state. A connector absent from the
-// map is treated as builtin (daemon-versioned).
-func SetConnectorVersions(v map[string]string) {
+// SetConnectorVersions records, per installed PLUGIN KEY ("connectors/jira"
+// — Use.InstallKey()), every resolved release tag CURRENTLY installed for
+// it — one entry for the common case, several side by side when two
+// connector instances pin different versions of the same plugin
+// (docs/wiki/Plugins.md "Side-by-side versions"). Called once at boot from
+// the plugin install state, which has no configured instance names to key
+// by at that point (publishConnectorVersions runs before any config is
+// loaded) — keying by plugin identity instead and leaving the per-INSTANCE
+// match to resolvedConnectorVersion (below) is what lets each instance gate
+// on its own resolved version rather than on whichever version install
+// state happened to consider "representative".
+//
+// A connector absent from the map is treated as builtin (daemon-versioned)
+// or not yet installed.
+func SetConnectorVersions(v map[string][]string) {
 	connVerMu.Lock()
 	defer connVerMu.Unlock()
-	connectorVers = make(map[string]string, len(v))
-	for k, ver := range v {
-		connectorVers[k] = ver
+	connectorVerTags = make(map[string][]string, len(v))
+	for k, tags := range v {
+		connectorVerTags[k] = append([]string(nil), tags...)
 	}
 	connVersionsSet = true
 }
 
 // resolvedConnectorVersion is the version to gate a constraint against: the
-// installed plugin release for a plugin connector, else the daemon version.
-// The second result is false when the version is genuinely unknown, in which
-// case the gate is skipped rather than guessed at.
-func resolvedConnectorVersion(instance string, ref ConnectorRef) (string, bool) {
+// installed plugin release THIS INSTANCE'S OWN `use:` constraint resolves
+// to, else the daemon version for a builtin. The second result is false
+// when the version is genuinely unknown, in which case the gate is skipped
+// rather than guessed at.
+//
+// Finding 3: this used to be looked up by a flat instance/type -> version
+// map that SetConnectorVersions' caller populated by plugin TYPE name
+// (Installed.Name), while this function read it by connector INSTANCE name
+// — the two agree only when an instance happens to be named after its
+// type, so `requires.connectors` version gating silently no-op'd otherwise.
+// With side-by-side versions, two instances of the SAME type can be on
+// DIFFERENT resolved versions, so there is no single "the" version for a
+// type to begin with: each instance resolves its OWN constraint (u.Version)
+// against the full set of tags published for its plugin KEY, exactly the
+// way internal/plugin.InstallState.GetForConstraint picks a specific
+// installed version for a specific configured instance.
+func resolvedConnectorVersion(ref ConnectorRef) (string, bool) {
 	u, err := ref.Resolved()
-	if err == nil && u.IsBuiltin() {
+	if err != nil {
+		return "", false
+	}
+	if u.IsBuiltin() {
 		// A builtin ships in the daemon, so its version is the daemon's.
 		return runtimeVersion, true
 	}
 	connVerMu.RLock()
-	v, ok := connectorVers[instance]
+	tags := connectorVerTags[u.InstallKey()]
 	connVerMu.RUnlock()
-	if ok && strings.TrimSpace(v) != "" {
-		return v, true
+	if len(tags) == 0 {
+		// A plugin whose install state we have not been given (a dev build,
+		// an as-yet-uninstalled plugin, a test): unknown, so do not gate.
+		return "", false
 	}
-	// A plugin whose install state we have not been given (a dev build, an
-	// as-yet-uninstalled plugin, a test): unknown, so do not gate.
-	return "", false
+	// Mirrors internal/plugin.InstallState.GetForConstraint: a genuinely
+	// UNCONSTRAINED instance (no @version at all) with only one candidate
+	// published under this key IS that instance's build, whether or not it
+	// happens to parse as semver (a non-semver snapshot tag, a monorepo
+	// prefix bestMatch can't place) — only a REAL constraint (a pin or a
+	// range) needs to pick among several via semver comparison, and doing
+	// that unconditionally would turn an unparseable tag into a silent
+	// "unknown, don't gate" instead of the ungatable-version WARNING
+	// checkConductorConstraint already reports for exactly this case.
+	if u.Version == "" && len(tags) == 1 {
+		return tags[0], true
+	}
+	tag, ok := bestMatch(tags, u.TagPrefix(), u.Version)
+	if !ok {
+		return "", false
+	}
+	return tag, true
 }
 
 // checkConnectorVersions gates every declared constraint against the
@@ -230,7 +272,7 @@ func (st *packInstantiation) checkConnectorVersions(ns string, reqs ConnectorReq
 		if !ok {
 			continue // likewise
 		}
-		have, known := resolvedConnectorVersion(bound, ref)
+		have, known := resolvedConnectorVersion(ref)
 		if !known {
 			// Nothing resolved to gate against (a local dev plugin, an
 			// unversioned build). Say so rather than failing a box that may
@@ -327,7 +369,7 @@ func (st *packInstantiation) autoBindConnectors(ns string, reqs ConnectorReqs, e
 			sole := candidates[0]
 			// Never silently bind something the pack said it cannot use.
 			if constraint := strings.TrimSpace(reqs[name].Version); constraint != "" && constraint != AnyVersion {
-				if have, known := resolvedConnectorVersion(sole, st.cfg.ConnectorsMap[sole]); known {
+				if have, known := resolvedConnectorVersion(st.cfg.ConnectorsMap[sole]); known {
 					if err := checkConductorConstraint(constraint, have); err != nil && !Ungatable(err) {
 						return fmt.Errorf("pack %q: requires connector %q %s and your only %s connector (%q) is at %s — upgrade it, or bind a compatible one explicitly: connectors: { %s: <your-connector> }",
 							ns, name, constraint, name, sole, have, name)

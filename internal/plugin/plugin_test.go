@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -161,10 +162,23 @@ func TestBoundedReader(t *testing.T) {
 type fakeConn struct {
 	mu       sync.Mutex
 	describe *Decl
-	invoke   func(InvokeRequest) (map[string]any, error)
-	hang     bool
-	done     chan struct{}
-	calls    int
+	// rawDescribe, when set, is the describe result verbatim (fields Decl
+	// does not model, such as an unknown semantic, survive).
+	rawDescribe string
+	invoke      func(InvokeRequest) (map[string]any, error)
+	hang        bool
+	done        chan struct{}
+	calls       int
+	// entered, when non-nil, is closed the moment a hang=true Call parks on
+	// ctx.Done() — i.e. the instant Client.callFor's inflight.Add(1) has
+	// already happened (it runs BEFORE conn.Call), so a test can block on
+	// this instead of a fixed time.Sleep to know "the call is now genuinely
+	// in flight" deterministically, the same way
+	// TestManagerReloadRaceNewInstanceGetsNewBuild's `entered` channel does
+	// for the Manager-level race. Closed at most once (enterOnce) even if
+	// Call is somehow invoked more than once with hang still true.
+	entered   chan struct{}
+	enterOnce sync.Once
 }
 
 func newFakeConn() *fakeConn { return &fakeConn{done: make(chan struct{})} }
@@ -175,13 +189,21 @@ func (f *fakeConn) Call(ctx context.Context, method string, params, result any) 
 	hang := f.hang
 	f.mu.Unlock()
 	if hang {
+		if f.entered != nil {
+			f.enterOnce.Do(func() { close(f.entered) })
+		}
 		<-ctx.Done()
 		return ctx.Err()
 	}
 	switch method {
 	case MethodDescribe:
-		*result.(*Decl) = *f.describe
-		return nil
+		// Through JSON, as a real transport does: the client decodes the
+		// raw result itself (it checks the declarations on the raw form).
+		b, _ := json.Marshal(f.describe)
+		if f.rawDescribe != "" {
+			b = []byte(f.rawDescribe)
+		}
+		return json.Unmarshal(b, result)
 	case MethodInvoke:
 		req := params.(InvokeRequest)
 		out, err := f.invoke(req)
@@ -359,6 +381,79 @@ func TestManifestConfinesCommands(t *testing.T) {
 	}
 }
 
+// TestProbeSpecConfinesToNoEgressEvenWithDeclaredManifest is the finding-2
+// regression: the type-level probe (Spec.Probe) must be routed through the
+// egress proxy with an EMPTY allowlist — confined to no network — even though
+// confineToManifest's ordinary rule for a connector is "an empty allowlist
+// means unconfined" (allow==nil normally skips the proxy entirely). Without
+// Probe forcing confine=true, a probe spec's empty Spec.Network reads as
+// "unconfigured" and EffectiveManifest falls back to the plugin's WHOLE
+// declared egress — this spec declares api.github.com:443, so a stray proxy
+// call recording ANY non-empty allowlist, or no call at all while one was
+// expected, would both be the bug this guards.
+func TestProbeSpecConfinesToNoEgressEvenWithDeclaredManifest(t *testing.T) {
+	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	var gotAllow []string
+	called := false
+	egressAddr := func(allow []string) (addr, cred string, revoke func(), err error) {
+		called = true
+		gotAllow = allow
+		return "127.0.0.1:9", "tok", func() {}, nil
+	}
+	s := Spec{
+		Name: "p", Kind: KindConnector, Provides: "acme-github", BinPath: bin, Local: true,
+		Probe:    true,
+		Manifest: Manifest{Egress: []string{"api.github.com:443"}},
+	}
+	cmd, cleanup, _, err := buildCommand(s, SandboxDeps{EgressAddr: egressAddr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if !called {
+		t.Fatal("a probe spec must be routed through the egress proxy (confined to no network), not left unconfined")
+	}
+	if len(gotAllow) != 0 {
+		t.Fatalf("a probe spec's allowlist must be empty (deny all), got %v", gotAllow)
+	}
+	var sawProxy bool
+	for _, kv := range cmd.Env {
+		if strings.HasPrefix(kv, "HTTP_PROXY=") || strings.HasPrefix(kv, "HTTPS_PROXY=") {
+			sawProxy = true
+		}
+	}
+	if !sawProxy {
+		t.Fatalf("probe spec env does not carry the egress proxy, so nothing would actually enforce the deny-all: %v", cmd.Env)
+	}
+}
+
+// TestNonProbeEmptyManifestStaysUnconfined is the control for the above: an
+// ORDINARY connector spec (Probe: false) that declares no egress at all keeps
+// the existing "empty allowlist means unconfined" behavior — Probe-forced
+// confinement must not leak onto every connector.
+func TestNonProbeEmptyManifestStaysUnconfined(t *testing.T) {
+	bin := writeBin(t, t.TempDir(), "b", []byte("x"), 0o755)
+	called := false
+	egressAddr := func(allow []string) (addr, cred string, revoke func(), err error) {
+		called = true
+		return "127.0.0.1:9", "tok", func() {}, nil
+	}
+	s := Spec{Name: "p", Kind: KindConnector, Provides: "acme-echo", BinPath: bin, Local: true}
+	cmd, cleanup, _, err := buildCommand(s, SandboxDeps{EgressAddr: egressAddr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if called {
+		t.Fatal("a non-probe connector that declares no egress must stay unconfined (the manifest predates this plugin, or declares nothing) — Probe-only confinement leaked")
+	}
+	for _, kv := range cmd.Env {
+		if strings.HasPrefix(kv, "HTTP_PROXY=") || strings.HasPrefix(kv, "HTTPS_PROXY=") {
+			t.Fatalf("unconfined connector env should carry no proxy: %v", cmd.Env)
+		}
+	}
+}
+
 // A plugin that declares NOTHING gets no PATH rewrite: it declared no needs, so
 // there is no allowlist to build, and inventing one would break plugins that
 // predate the manifest.
@@ -400,4 +495,28 @@ func TestClientLifetimeCap(t *testing.T) {
 	if !dfg {
 		t.Fatal("expected downForGood after lifetime cap")
 	}
+}
+
+// REGRESSION: the process outlives the call that started it. A describe made
+// under a boot timeout (cancelled as soon as boot moves on) used to bind the
+// plugin process to that context, so every connector plugin was killed right
+// after boot — the next call raced the kill ("connection closed") and every
+// source stream it served went down with it.
+func TestPluginProcessOutlivesTheStartingCall(t *testing.T) {
+	fc := newFakeConn()
+	fc.describe = &Decl{ProtocolVersion: ProtocolVersion, Type: "jira"}
+	var lifetime context.Context
+	c := NewClient(connectorSpec(), Deps{dial: func(ctx context.Context, s Spec, d Deps) (transport, func(), error) {
+		lifetime = ctx
+		return fakeDial(fc)(ctx, s, d)
+	}})
+	boot, cancel := context.WithCancel(context.Background())
+	if _, err := c.Describe(boot); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if lifetime == nil || lifetime.Err() != nil {
+		t.Fatalf("the plugin process is bound to the starting call's context (err=%v)", lifetime.Err())
+	}
+	_ = c.Close()
 }

@@ -8,8 +8,8 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 )
 
-func paseoCC(home, host string, def bool) config.ControllerConfig {
-	return config.ControllerConfig{Type: "paseo", Home: home, Host: host, Default: def}
+func paseoRT(home, host string, def bool) config.RuntimeConfig {
+	return config.RuntimeConfig{Use: "paseo", Home: home, Host: host, Default: def}
 }
 
 // The rungs that depend on this box's env and filesystem are unit-tested with
@@ -20,8 +20,8 @@ func TestResolvePaseoEndpoint(t *testing.T) {
 	// Explicit home: on the default paseo runtime wins over the ambient env.
 	t.Run("explicit home", func(t *testing.T) {
 		t.Setenv("PASEO_HOME", "/env/home")
-		cfg := &config.Config{Controllers: map[string]config.ControllerConfig{
-			"paseo": paseoCC("/srv/paseo", "", true),
+		cfg := &config.Config{Runtimes: map[string]config.RuntimeConfig{
+			"paseo": paseoRT("/srv/paseo", "", true),
 		}}
 		if got := resolvePaseoEndpoint(cfg).Home(); got != "/srv/paseo" {
 			t.Fatalf("got %q, want /srv/paseo", got)
@@ -31,9 +31,9 @@ func TestResolvePaseoEndpoint(t *testing.T) {
 	// An explicit server: wins over an explicit home: — it is the same choice,
 	// made directly instead of through a config.json lookup.
 	t.Run("server beats home", func(t *testing.T) {
-		cc := paseoCC("/srv/paseo", "", true)
+		cc := paseoRT("/srv/paseo", "", true)
 		cc.Server = "127.0.0.1:6767"
-		cfg := &config.Config{Controllers: map[string]config.ControllerConfig{"paseo": cc}}
+		cfg := &config.Config{Runtimes: map[string]config.RuntimeConfig{"paseo": cc}}
 		ep := resolvePaseoEndpoint(cfg)
 		if ep.Server() != "127.0.0.1:6767" {
 			t.Fatalf("server = %q, want 127.0.0.1:6767", ep.Server())
@@ -46,8 +46,8 @@ func TestResolvePaseoEndpoint(t *testing.T) {
 	// No config home, PASEO_HOME set → falls back to the env.
 	t.Run("env fallback", func(t *testing.T) {
 		t.Setenv("PASEO_HOME", "/env/home")
-		cfg := &config.Config{Controllers: map[string]config.ControllerConfig{
-			"paseo": paseoCC("", "", true),
+		cfg := &config.Config{Runtimes: map[string]config.RuntimeConfig{
+			"paseo": paseoRT("", "", true),
 		}}
 		if got := resolvePaseoEndpoint(cfg).Home(); got != "/env/home" {
 			t.Fatalf("got %q, want /env/home", got)
@@ -62,8 +62,8 @@ func TestResolvePaseoEndpoint(t *testing.T) {
 	// internal/paseover with injected probes.
 	t.Run("nothing declared still names its rung", func(t *testing.T) {
 		os.Unsetenv("PASEO_HOME")
-		cfg := &config.Config{Controllers: map[string]config.ControllerConfig{
-			"paseo": paseoCC("", "", true),
+		cfg := &config.Config{Runtimes: map[string]config.RuntimeConfig{
+			"paseo": paseoRT("", "", true),
 		}}
 		if got := resolvePaseoEndpoint(cfg).Source; got == "" {
 			t.Error("endpoint carries no source; the boot log needs to name the rung")

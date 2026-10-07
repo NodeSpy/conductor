@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -19,7 +17,40 @@ import (
 	"github.com/NodeSpy/conductor/internal/plugin"
 )
 
-const updateRepo = "NodeSpy/conductor"
+// selfUpdatePreflightTimeout bounds the downloaded binary's `validate` dry
+// run (below) — a hang in validate (a stuck network check, say) must not
+// hang the whole update.
+var selfUpdatePreflightTimeout = 60 * time.Second
+
+// prevBinarySuffix names the rollback copy doUpdate leaves next to the
+// executable (<exe>.prev) — best effort, so an operator can run the previous
+// release by hand (`mv <exe>.prev <exe>`) without needing to re-fetch it,
+// which matters most for `conductor config migrate`-style hints below: those
+// ask the operator to run the PREVIOUS release's binary, and after an
+// unattended auto-update there is otherwise no previous binary left on disk
+// to run.
+const prevBinarySuffix = ".prev"
+
+// updateSource is the git repository conductor updates itself from. Releases
+// are tags; each platform's binary is published on refs/dist/<tag>/<platform>
+// (internal/plugin/gitdist.go), fetched over plain git — no forge CLI.
+const updateSource = "https://github.com/NodeSpy/conductor"
+
+func updateRemote() plugin.RemoteSource { return plugin.RemoteSource{URL: updateSource} }
+
+// latestRelease is the newest stable release tag published for this
+// platform.
+func latestRelease() (string, error) {
+	tags, err := plugin.GitDist{}.ListTags(updateRemote())
+	if err != nil {
+		return "", err
+	}
+	tag, ok := config.BestMatch(tags, "", "")
+	if !ok {
+		return "", fmt.Errorf("no release published for %s in %s", plugin.Platform(), updateSource)
+	}
+	return tag, nil
+}
 
 // cmdUpdate is the manual `update` subcommand.
 func cmdUpdate(args []string) error {
@@ -47,7 +78,10 @@ func cmdUpdate(args []string) error {
 			}
 		}
 	}
-	updated, tag, err := doUpdate(force, pinTag)
+	// The daemon's config path, resolved the same way it finds it at boot —
+	// the preflight below validates THIS file against the downloaded binary.
+	cfgFile, _ := configPath(args)
+	updated, tag, err := doUpdate(force, pinTag, cfgFile, nil)
 	if err != nil {
 		return err
 	}
@@ -73,23 +107,21 @@ func cmdUpdate(args []string) error {
 
 // doUpdate installs the latest (or pinned) release binary for this OS/arch,
 // replacing the running executable in place. Returns updated=false when already
-// current (and not forced). The repo is private, so it uses the `gh` CLI.
-func doUpdate(force bool, pinTag string) (updated bool, tag string, err error) {
-	if _, err := exec.LookPath("gh"); err != nil {
-		return false, "", fmt.Errorf("update needs the GitHub CLI (gh), authenticated — this repo is private")
-	}
-
+// current (and not forced). It fetches over git with the daemon user's own git
+// credentials, and verifies the binary against the release's checksums.txt.
+//
+// cfgFile is the daemon's config path, resolved the same way the daemon
+// itself finds it (configPath); "" skips the preflight below (nothing to
+// validate against — a fresh install with no config yet must not be blocked
+// from updating). notifier, if non-nil, is used to escalate a preflight
+// failure through whatever attention route the operator already configured;
+// nil is fine for a one-off manual `conductor update`.
+func doUpdate(force bool, pinTag, cfgFile string, notifier *notify.Notifier) (updated bool, tag string, err error) {
 	tag = pinTag
 	if tag == "" {
-		out, err := exec.Command("gh", "release", "view", "--repo", updateRepo,
-			"--json", "tagName", "--jq", ".tagName").Output()
-		if err != nil {
-			return false, "", fmt.Errorf("look up latest release (any published yet?): %w", err)
+		if tag, err = latestRelease(); err != nil {
+			return false, "", fmt.Errorf("look up latest release: %w", err)
 		}
-		tag = strings.TrimSpace(string(out))
-	}
-	if tag == "" {
-		return false, "", fmt.Errorf("no release found in %s", updateRepo)
 	}
 	if tag == version && !force {
 		return false, tag, nil
@@ -103,28 +135,112 @@ func doUpdate(force bool, pinTag string) (updated bool, tag string, err error) {
 		exe = resolved
 	}
 
-	tmp := exe + ".new"
-	_ = os.Remove(tmp)
-
 	asset := fmt.Sprintf("conductor_%s_%s", runtime.GOOS, runtime.GOARCH)
-	logf("update: downloading %s %s", asset, tag)
-	dl := exec.Command("gh", "release", "download", tag,
-		"--repo", updateRepo, "--pattern", asset, "--output", tmp, "--clobber")
-	dl.Stderr = os.Stderr
-	if err := dl.Run(); err != nil {
-		_ = os.Remove(tmp)
-		return false, tag, fmt.Errorf("download conductor binary from %s %s: %w", updateRepo, tag, err)
+	logf("update: fetching %s %s", asset, tag)
+	dl, err := os.MkdirTemp(filepath.Dir(exe), ".conductor-update-*")
+	if err != nil {
+		return false, tag, fmt.Errorf("stage update next to %s (need write access to its directory): %w", exe, err)
 	}
-	if err := os.Chmod(tmp, 0o755); err != nil {
+	defer os.RemoveAll(dl)
+	g := plugin.GitDist{}
+	bin, err := g.Download(updateRemote(), tag, asset, dl)
+	if err != nil {
+		return false, tag, fmt.Errorf("fetch conductor binary %s: %w", tag, err)
+	}
+	sums, err := g.Download(updateRemote(), tag, "checksums.txt", dl)
+	if err != nil {
+		return false, tag, fmt.Errorf("fetch checksums for %s: %w", tag, err)
+	}
+	if err := plugin.VerifyChecksum(bin, sums, asset); err != nil {
 		return false, tag, err
 	}
+	if err := os.Chmod(bin, 0o755); err != nil {
+		return false, tag, err
+	}
+	// PREFLIGHT: a release that cannot load THIS box's config (a removed
+	// legacy block, a schema change) must never be swapped in — on an
+	// unattended auto-updating box that is a silent crash-loop with no
+	// operator watching. Run the DOWNLOADED binary's own `validate` against
+	// the daemon's config, read-only, bounded — never the running binary's.
+	if cfgFile != "" {
+		if _, statErr := os.Stat(cfgFile); statErr == nil {
+			// A forced update still proves the config loads, but does not
+			// require the release's plugins to be fetchable from here: that
+			// is the operator's escape hatch when a plugin source is
+			// unreachable for a reason they know about.
+			if perr := preflightValidate(bin, cfgFile, !force); perr != nil {
+				msg := fmt.Sprintf("update: %s failed its own config preflight — NOT applying: %v", tag, perr)
+				if !force {
+					msg += " (if a plugin source is unreachable for a reason you know about, `conductor update --force` applies it anyway)"
+				}
+				logf("%s", msg)
+				if notifier != nil {
+					notifier.Emit(context.Background(), notify.EventEscalate,
+						core.Trigger{Source: "updater", Kind: "update_preflight_failed"}, msg)
+				}
+				return false, tag, fmt.Errorf("%s does not load this config (staying on %s): %w", tag, version, perr)
+			}
+		}
+	}
+	// Best-effort rollback copy, BEFORE the swap: an operator who hits a
+	// problem the preflight above didn't catch (it only proves the config
+	// loads, not that every workflow still behaves) can restore it by hand
+	// with no re-fetch — `mv <exe>.prev <exe>`. A failure here (read-only
+	// filesystem, out of space) must not block an update that already passed
+	// preflight.
+	saveRollbackCopy(exe, version)
 	// Atomic replace: rename over the running executable (same dir/FS). The
 	// running process keeps its old inode; the next launch is the new binary.
-	if err := os.Rename(tmp, exe); err != nil {
-		_ = os.Remove(tmp)
+	if err := os.Rename(bin, exe); err != nil {
 		return false, tag, fmt.Errorf("replace %s (need write access to its directory): %w", exe, err)
 	}
 	return true, tag, nil
+}
+
+// preflightValidate runs the DOWNLOADED (not yet installed) binary's
+// `validate --config <cfgFile>` — read-only, bounded by
+// selfUpdatePreflightTimeout — and returns a trimmed error combining the
+// failure with the tail of its output when it refuses the config.
+func preflightValidate(bin, cfgFile string, requirePlugins bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), selfUpdatePreflightTimeout)
+	defer cancel()
+	// --require-plugins: a release whose plugins this box can neither find
+	// installed nor fetch is not applied (it would boot with them dark).
+	args := []string{"validate", "--config", cfgFile}
+	if requirePlugins {
+		args = append(args, "--require-plugins")
+	}
+	cmd := exec.CommandContext(ctx, bin, args...)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("validate timed out after %s", selfUpdatePreflightTimeout)
+	}
+	t := tail(out, 2000)
+	if t == "" {
+		return err
+	}
+	return fmt.Errorf("%w — %s", err, t)
+}
+
+// saveRollbackCopy best-effort copies exe to exe+prevBinarySuffix, so a
+// manual `mv <exe>.prev <exe>` can restore the previous release with no
+// re-fetch (5b). A failure (read-only filesystem, out of space) is logged,
+// never returned: it must not block an update that already passed preflight.
+func saveRollbackCopy(exe, fromVersion string) {
+	prev := exe + prevBinarySuffix
+	data, rerr := os.ReadFile(exe)
+	if rerr != nil {
+		logf("update: could not save a rollback copy of %s (best effort, continuing): %v", exe, rerr)
+		return
+	}
+	if werr := os.WriteFile(prev, data, 0o755); werr != nil {
+		logf("update: could not save a rollback copy at %s (best effort, continuing): %v", prev, werr)
+		return
+	}
+	logf("update: previous binary (%s) saved to %s for manual rollback", fromVersion, prev)
 }
 
 // autoUpdateLoop watches the release repo for a newer version and installs it,
@@ -132,14 +248,10 @@ func doUpdate(force bool, pinTag string) (updated bool, tag string, err error) {
 // context to trigger a graceful shutdown when the restart is handed to the service
 // manager.
 //
-// Detection is decoupled from install: each tick is a cheap CONDITIONAL request
-// (see releaseChecker) that returns 304 Not Modified — a tiny reply GitHub does
-// not bill against the rate limit — whenever nothing has been published since the
-// last check. That makes a tight interval effectively free, so a newly-published
-// release is picked up within one interval (minutes) rather than hours, for anyone
-// running conductor, with no webhook or per-operator setup. GitHub exposes no
-// release push a non-admin consumer can subscribe to, so a near-free conditional
-// poll is the portable stand-in.
+// Detection is decoupled from install: each tick is one `git ls-remote` of the
+// release refs (see releaseChecker) — a small reply from any git host — so a
+// tight interval is cheap and a newly-published release is picked up within one
+// interval, with no webhook or per-operator setup.
 // reloadFunc attempts to apply the moved plugins IN PLACE (no daemon restart)
 // and returns true only if it handled ALL of them. nil disables in-place reload
 // (always restart on a dep change). Built in cmdRun so it can reach the live
@@ -191,7 +303,7 @@ func autoUpdateLoop(ctx context.Context, u config.Update, cfgFile string, notifi
 				continue // 304 (nothing new), or the latest is what we already run
 			}
 			var applied bool
-			announced, applied = handleNewerRelease(ctx, u, tag, announced, notifier, stop)
+			announced, applied = handleNewerRelease(ctx, u, tag, announced, notifier, stop, cfgFile)
 			if applied {
 				return // shutting down for a manager restart, or re-exec'd
 			}
@@ -236,8 +348,22 @@ func refreshDeps(cfgFile string) (packMoved bool, pluginRes []plugin.Resolution,
 		return false, nil, false // nothing moved
 	}
 	// A dependency moved — only apply if the new graph still loads.
-	if _, err := config.Load(cfgFile); err != nil {
+	newCfg, err := config.Load(cfgFile)
+	if err != nil {
 		logf("auto-update: dependency update does NOT validate — NOT applying: %v", err)
+		return false, nil, false
+	}
+	// Finding 3: a single_process conflict is a property of the RESOLVED
+	// set, so an update that just moved an unpinned instance onto a release
+	// that newly declares single_process (colliding with a pinned sibling,
+	// or an isolate: true instance) must be caught HERE, before the daemon
+	// restarts into it — loadConnectorPlugins' boot-time check degrades
+	// rather than refuses, which is right for a conflict already running,
+	// but an update is free to simply not create one yet.
+	if conflicts := singleProcessConflictsFor(newCfg); len(conflicts) > 0 {
+		for _, c := range conflicts {
+			logf("auto-update: dependency update would create a single_process conflict — NOT applying: %s", c.reason)
+		}
 		return false, nil, false
 	}
 	return packMoved, results, true
@@ -272,7 +398,7 @@ func logDepChanges(before, after *config.Lockfile) bool {
 // error: Reconcile keeps the installed build and records the failure, so one
 // unreachable plugin never blocks the update or the daemon.
 func refreshPlugins(cfg *config.Config) (bool, []plugin.Resolution, error) {
-	results, err := reconcilePlugins(cfg, plugin.Options{Log: logf})
+	results, err := reconcilePlugins(cfg, plugin.Options{Log: logf}, false)
 	if err != nil {
 		return false, nil, err
 	}
@@ -301,7 +427,7 @@ var (
 // an unattended box self-updates. apply: false installs and stages.
 // apply: workflow installs NOTHING — it emits conductor.update_available
 // (once per tag) so a trigger drives the update as a workflow.
-func handleNewerRelease(ctx context.Context, u config.Update, tag, announced string, notifier *notify.Notifier, stop func()) (newAnnounced string, applied bool) {
+func handleNewerRelease(ctx context.Context, u config.Update, tag, announced string, notifier *notify.Notifier, stop func(), cfgFile string) (newAnnounced string, applied bool) {
 	if u.ApplyWorkflow() {
 		if tag == announced {
 			return announced, false // one announcement per release
@@ -315,7 +441,7 @@ func handleNewerRelease(ctx context.Context, u config.Update, tag, announced str
 		}
 		return tag, false
 	}
-	updated, installed, err := installRelease(false, tag)
+	updated, installed, err := installRelease(false, tag, cfgFile, notifier)
 	if err != nil {
 		logf("auto-update: install %s failed: %v", tag, err)
 		return announced, false
@@ -343,75 +469,29 @@ func newerRelease(tag string, changed bool, running string) bool {
 	return changed && tag != "" && tag != running
 }
 
-// releaseChecker performs cheap conditional polling of the release repo's latest
-// release, remembering the last ETag so an unchanged repo answers 304 Not Modified.
-// A 304 is tiny and un-billed against the rate limit, so a tight poll costs almost
-// nothing — the whole point of decoupling detection from the (heavy) download.
+// releaseChecker polls the release refs, remembering the last tag it saw so
+// an unchanged repository reports changed=false.
 type releaseChecker struct {
-	etag string
+	last   string
+	latest func() (string, error)
 }
 
-// check does one conditional GET for the latest release tag via the operator's
-// authenticated `gh` (the same credential the manual update path uses, so it works
-// for the private repo). changed=false means a 304 — nothing new since last check.
+// check lists the published releases once. changed=false means the newest
+// tag is the one the previous check saw.
 func (rc *releaseChecker) check() (tag string, changed bool, err error) {
-	args := []string{"api", "repos/" + updateRepo + "/releases/latest", "-i"}
-	if rc.etag != "" {
-		args = append(args, "-H", "If-None-Match: "+rc.etag)
+	latest := rc.latest
+	if latest == nil {
+		latest = latestRelease
 	}
-	// gh exits non-zero on a 304 (and other non-2xx), so ignore the exit code and
-	// read the HTTP status line from the -i output instead.
-	out, _ := exec.Command("gh", args...).CombinedOutput()
-	status, etag, body := parseHTTPResponse(string(out))
-	switch status {
-	case 304:
-		return "", false, nil
-	case 200:
-		if etag != "" {
-			rc.etag = etag
-		}
-		var rel struct {
-			TagName string `json:"tag_name"`
-		}
-		if err := json.Unmarshal([]byte(body), &rel); err != nil {
-			return "", false, fmt.Errorf("parse release json: %w", err)
-		}
-		if rel.TagName == "" {
-			return "", false, fmt.Errorf("release lookup: empty tag (any published yet?)")
-		}
-		return rel.TagName, true, nil
-	case 0:
-		return "", false, fmt.Errorf("release check: no HTTP response from gh (auth/network?): %s", tail(out, 200))
-	default:
-		return "", false, fmt.Errorf("release check: gh api returned HTTP %d", status)
+	tag, err = latest()
+	if err != nil {
+		return "", false, fmt.Errorf("release check: %w", err)
 	}
-}
-
-// parseHTTPResponse splits `gh api -i` output into the HTTP status code, the ETag
-// header value, and the JSON body (everything past the first blank line).
-func parseHTTPResponse(out string) (status int, etag, body string) {
-	lines := strings.Split(out, "\n")
-	i := 0
-	for ; i < len(lines); i++ {
-		t := strings.TrimRight(lines[i], "\r")
-		if t == "" { // blank line: headers end, body begins
-			i++
-			break
-		}
-		if strings.HasPrefix(t, "HTTP/") {
-			if f := strings.Fields(t); len(f) >= 2 {
-				if n, e := strconv.Atoi(f[1]); e == nil {
-					status = n
-				}
-			}
-		} else if strings.HasPrefix(strings.ToLower(t), "etag:") {
-			etag = strings.TrimSpace(t[len("etag:"):])
-		}
+	if tag == rc.last {
+		return tag, false, nil
 	}
-	if i < len(lines) {
-		body = strings.Join(lines[i:], "\n")
-	}
-	return status, etag, body
+	rc.last = tag
+	return tag, true, nil
 }
 
 // tail returns the last n bytes of b, for compact error context.

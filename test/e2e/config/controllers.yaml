@@ -23,7 +23,8 @@ connectors:
     base_url: http://localhost:8099
     listen: 0.0.0.0:8099
   github:
-    use: github
+    use: /usr/local/bin/conductor-github
+    api_base: http://mock-github:8080
     app:
       app_id: 123456
       private_key_path: /etc/conductor/github-app.pem

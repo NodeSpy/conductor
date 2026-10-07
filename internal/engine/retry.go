@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/store"
@@ -60,6 +61,9 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 	if !ok {
 		return "", fmt.Errorf("run %s: its trigger is no longer in the config", rec.ID)
 	}
+	if extra := connector.OptionHooks(t, spec.Options); len(extra) > 0 {
+		spec.Hooks = append(append([]config.Hook{}, spec.Hooks...), extra...)
+	}
 
 	// Resolve the starting step: an explicit id, else the recorded failure,
 	// else the top.
@@ -105,12 +109,8 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 		}
 	}
 
-	// Re-mint tokens like crash resume — the recorded ones were stripped.
-	if e.refreshTok != nil && t.Context != nil {
-		if appTok, err := e.refreshTok(t); err == nil && appTok != "" {
-			t.Context["app_token"] = appTok
-		}
-	}
+	// Credentials are minted at dispatch, as on crash resume — the recorded
+	// ones were never persisted.
 	t.Action = act
 
 	run := store.WorkflowRun{
@@ -118,6 +118,13 @@ func (e *Engine) retryRun(ctx context.Context, rec store.RunHistory, fromStep st
 		Kind: rec.Kind, Repo: rec.Repo, Number: rec.Number,
 		Trigger: rec.Trigger, Action: rec.Action,
 		Outputs: outputs, StepIndex: startIdx,
+		// A retry starting from step 0 is a fresh attempt — its start
+		// hooks fire, same as a brand new run (StartHooksFired false, the
+		// zero value). A retry continuing from a LATER step is the same
+		// attempt resuming partway through: its start hooks already fired
+		// the first time, so this record says so up front (finding 4a) —
+		// flow.Runner.Run never gets the chance to double-fire them.
+		StartHooksFired: startIdx > 0,
 	}
 	if run.ID == "" {
 		run.ID = t.Kind + ":" + t.Key()

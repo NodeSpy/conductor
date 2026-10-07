@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/core/coretest"
 )
 
 // The declaration side of resource scoping: what a connector says about its
@@ -33,7 +34,6 @@ func TestBuiltinConnectorsTagTheirDestinations(t *testing.T) {
 		{"slack", "post", "channel", "channel"},
 		{"slack", "react", "channel", "channel"},
 		{"slack", "post", "user", "user"},
-		{"discord", "post", "channel", "channel"},
 		{"github", "submit_review", "repo", "repo"},
 		{"github", "put_file", "repo", "repo"},
 		{"kv", "set", "store", "store"},
@@ -64,24 +64,38 @@ func TestBuiltinConnectorsTagTheirDestinations(t *testing.T) {
 }
 
 func TestContextScopeResolutionOrder(t *testing.T) {
+	slackDecl, _ := TypeDeclFor("slack")
 	trig := core.Trigger{
+		Kind:          "app_mention",
+		Sem:           coretest.DeclaredSemantics(core.Trigger{Kind: "app_mention"}),
 		TargetTrusted: true, // a platform-assigned target
 		Target:        core.Target{Repo: "acme/app"},
 		Context:       map[string]any{"slack": map[string]any{"channel": "#from-event"}},
 	}
 
-	// 1. the implementation's hook.
-	sl := &Instance{Name: "slack", Decl: slackDecl, Impl: &slackImpl{name: "slack"}}
+	// 1. the event's declared target scope.
+	sl := &Instance{Name: "slack", Decl: slackDecl}
 	if got := sl.ContextScope("channel", trig); got != "#from-event" {
-		t.Errorf("the connector's own hook must win: %q", got)
+		t.Errorf("the declared target scope must win: %q", got)
 	}
-	// 2. the repo dimension, for every connector (core models the target).
-	if got := sl.ContextScope("repo", trig); got != "acme/app" {
+	// …which, once declared, is the whole story: no repo from the target.
+	if got := sl.ContextScope("repo", trig); got != "" {
+		t.Errorf("an event declaring its scope implies no undeclared repo: %q", got)
+	}
+	// …and only for a target the platform assigned.
+	forged := trig
+	forged.TargetTrusted = false
+	if got := sl.ContextScope("channel", forged); got != "" {
+		t.Errorf("a sender-chosen target implies no scope: %q", got)
+	}
+	// 2. the repo dimension, for an event declaring no target scope.
+	plain := core.Trigger{Kind: "tick", TargetTrusted: true, Target: core.Target{Repo: "acme/app"}}
+	if got := sl.ContextScope("repo", plain); got != "acme/app" {
 		t.Errorf("the dispatch's target repo must answer the repo dimension: %q", got)
 	}
 	// 3. the operator's configured default for an option in the dimension.
 	def := &Instance{
-		Name: "slack", Decl: slackDecl, Impl: &slackImpl{name: "slack"},
+		Name: "slack", Decl: slackDecl,
 		DefaultOptions: map[string]any{"channel": "#configured-default"},
 	}
 	if got := def.ContextScope("channel", core.Trigger{}); got != "#configured-default" {

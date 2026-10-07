@@ -5,7 +5,7 @@ conductor run [--config PATH]              start the daemon
 conductor run <name> [--input k=v ...] [--json '{…}']  fire a manual trigger via the running daemon
 conductor once <trigger> [--event PATH] [--event-name NAME] [--fail-on LIST] [--require-match]
                                            run ONE event through ONE trigger, for real, no daemon; exit = outcome
-conductor validate [--config PATH]         load & validate config (both schemas), then exit
+conductor validate [--config PATH] [--strict]  load & validate config, then exit (--strict: fail if any connector ended up disabled)
 conductor replay <event.json>              run a saved webhook through the pipeline, verbs stubbed
 conductor sweep [--now]                    one catch-up sweep (dry-run print / signal the daemon)
 conductor force <kind> <owner/repo>#<n>    force an action for a target now (via the daemon)
@@ -31,7 +31,7 @@ conductor connector auth <name> [--revoke] one-time OAuth2 login (or clear store
 conductor secrets check                    unlock every vault, resolve every reference, report (no values)
 conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
 conductor unlock                           seed the default vault key for non-interactive restarts
-conductor config migrate [--dry-run]       transform a legacy config to the connectors schema
+conductor config migrate                   removed with the legacy config schema — run it on the release before the plugin contract, then upgrade
 conductor mcp memory --socket <path>       stdio MCP server for the live agent tools (memory + run_step; launched by runtimes, not by hand)
 conductor workflows [ls]                   config + saved (agent-promoted) workflows with review state and health
 conductor workflows review <name>          print the workflow's provenance + FULL steps, then clear it for reuse (dry-run it first; runs stay policy-guarded)
@@ -41,10 +41,9 @@ conductor version
 
 ## Notes
 
-- **validate** — runs each connector/integration's own checks, the cross-config
-  agent-profile checks, and the connectors-model semantic pass
-  (position-scoped references, verb options, workflow inputs/outputs, cycles).
-  Service start gates on it.
+- **validate** — runs each connector's own checks and the connectors-model
+  semantic pass (position-scoped references, verb options, workflow
+  inputs/outputs, cycles). Service start gates on it.
 - **run `<name>`** — fires the `on: manual` trigger with that name through the
   running daemon's control socket: same validation, policy, quiet-hours, and
   audit as any firing. `--input k=v` (repeatable, string values) and `--json`
@@ -91,9 +90,8 @@ conductor version
 - **vault / unlock** — `vault <name> …` targets a `vaults:` entry (write ops
   only on writable backends); see [[Secrets]] for the unlock chain and why
   it is non-interactive in steady state.
-- **config migrate** — the manual face of the automatic on-boot migration;
-  `--dry-run` prints the transformed YAML plus a mapping summary. See
-  [[Migration]].
+- **config migrate** — removed with the legacy config schema; run it on the
+  release before the plugin contract, then upgrade. See [[Migration]].
 - **pause / resume** — the runtime kill switch (a control file, no restart);
   in config, disable one connector or trigger in place with its own
   `enabled: false` (there is no policy-level kill switch — see [[Policy]]).

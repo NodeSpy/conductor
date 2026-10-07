@@ -6,7 +6,7 @@ import (
 )
 
 // extends.go implements Docker-Compose-style `extends:` inheritance for the
-// map-of-named-entries config sections (runtimes, workflows, handoffs) and for
+// map-of-named-entries config sections (runtimes, workflows) and for
 // triggers. A child entry names one parent in the SAME section and inherits
 // every field it leaves unset. Resolution runs once in Load, after imports
 // merge and before validation, so downstream only ever sees fully-resolved
@@ -49,9 +49,6 @@ func (c *Config) resolveExtends() error {
 		return err
 	}
 	if err := resolveExtendsSection(c.Workflows, "workflow", func(w WorkflowDef) string { return w.Extends }); err != nil {
-		return err
-	}
-	if err := resolveExtendsSection(c.Handoffs, "handoff", func(h HandoffConfig) string { return h.Extends }); err != nil {
 		return err
 	}
 	return nil

@@ -1,110 +1,87 @@
 # Migration (legacy schema → connectors)
 
-The legacy schema (`integrations:` / `notify:` / `handoffs:` / `controllers:`
-/ `control:` / `paseo_bin`) still loads and runs unchanged — both schemas
-coexist. Migration converts a legacy file to the connectors model, and it is
-**automatic, total, and fail-safe**.
+## Upgrading to the plugin contract
 
-## Automatic on boot
+On this release the vendor connectors — `github`, `slack`, `discord`,
+`ntfy`, `pushover`, and `notifiarr` — are no longer compiled into the
+`conductor` binary. Each is now an **official plugin**, fetched from
+[`NodeSpy/conductor-plugins`](https://github.com/NodeSpy/conductor-plugins)'s
+`refs/dist/*` refs over plain git — the same mechanism any third-party
+connector plugin already used (see [[Plugins]]). `use: github`, `use: slack`,
+and so on resolve exactly as they always have; **no config change is
+needed**. What changes is that the first boot (or `conductor init`) after
+upgrading needs **git access to the plugins repo** to actually fetch them.
 
-Deployed boxes auto-update; a schema change requiring a manual edit would
-crash-loop them. So on boot the daemon:
+### What happens on a box with network access
 
-1. detects legacy constructs (per file — `imports:` are walked too),
-2. transforms each legacy file,
-3. backs the original up alongside it (`<file>.pre-connectors`, first backup
-   wins),
-4. swaps the file in and **re-validates the whole config** — on any failure
-   the original is restored, the daemon keeps running on it, and a
-   `config needs manual migration: …` notification names what failed,
-5. logs a mapping summary.
+`conductor init` (or the daemon's own boot-time gap-fill, `bootGapFill`)
+fetches any referenced plugin that isn't installed yet, verifies its
+checksum, and registers it — the same install path a third-party plugin
+always went through. Nothing about this is specific to the vendor
+connectors; they simply used to skip it by being compiled in.
 
-Idempotent: a migrated file has no legacy constructs, so the next boot is a
-no-op. Because both schemas coexist, every intermediate state (some files
-migrated, some not) still loads.
+### What happens on a box WITHOUT network access (offline/airgapped)
 
-Manual: `conductor config migrate` (same flow), `--dry-run` prints the
-transformed YAML and the mapping summary, then runs the transform through
-the SAME full validation as the real path — without writing anything.
+Fetching degrades, it never crash-loops the daemon:
 
-## Noted drops, not refusals
+- **Boot**: `bootGapFill` tries once per boot (bounded to 2 minutes) to fetch
+  whatever is missing. A plugin it can't reach is logged and left for later;
+  every connector that needed it is **disabled with the reason** (`connectors
+  ls` and `conductor validate`'s summary both name it) while the rest of the
+  config boots normally.
+- **Retry**: if anything is still missing after boot, `pendingPluginRetry`
+  keeps trying in the background — every 5 minutes at first, backing off to
+  once an hour while it stays missing. The moment every pending plugin is
+  installed, it re-validates the config against what they actually declare
+  (their real verbs/events were never checked while disabled) and only THEN
+  restarts the daemon into them. If that validation fails, the daemon does
+  **not** restart — it logs loudly, leaves the connector(s) disabled, and
+  gives up retrying until you fix the config (or the plugin) and restart by
+  hand.
+- **Fix**: run `conductor init` from somewhere with network access to the
+  plugins repo (or once connectivity is restored on the box itself) — that's
+  the one step an offline box needs before any of `github`/`slack`/etc. will
+  ever come up.
 
-The transform maps **every** legacy construct; a construct it cannot map (an
-unknown integration type, `control.enabled: false`, a mixed-schema file) is
-a hard error that names it and refuses to commit. Legacy **keys** the schema
-no longer knows — retired options, inert fields, blocks from configs that
-predate the schema — are **dropped with a summary note** instead: the
-migration is one-time and must produce a loadable config from any legacy
-file (the strict runtime loader would otherwise crash-loop the box on
-auto-update). The output is checked against the strict runtime decode before
-it is written. Fields the legacy engine never read (rule `workspace:`,
-action `project:`/`method:`, `match.project`/`match.status`) and notify
-events with no delivery sink drop with notes the same way. `${VAR}`
-references survive verbatim (the transform masks them around parsing;
-secrets are never inlined). Carried blocks (`store:`, `update:`, …) keep
-their original YAML, comments included; `agents:` is not carried — it is
-converted (see the table below).
+### Self-update won't make this worse
 
-If the migration still cannot produce a loadable config, boot **holds
-degraded** instead of crash-looping: the process stays alive, logs the
-blocker, and retries migrate+load every minute until an edit (or a newer
-binary) unblocks it.
+`conductor update` downloads the new release and runs ITS OWN `conductor
+validate --require-plugins` against your config, read-only, before swapping
+the binary in. `--require-plugins` fails validate if any referenced plugin is
+neither already installed nor fetchable from this box — so an unattended
+auto-update refuses to move you onto a release whose connectors would go
+dark, rather than applying it and discovering the gap after the fact.
+`conductor update --force` skips this one check (the config itself still has
+to load) for an operator who already knows a plugin source is unreachable
+for a reason they accept.
 
-## What maps where
+## Migrating off the legacy schema
 
-| legacy | connectors model |
-|---|---|
-| `integrations: - type: github` (app/webhook/sweep/identity/retry/project_map/project_rewrite/me) | a `connectors:` entry, fields carried |
-| github `app.webhook_secret` / `app.verify_signature` | `webhook.secret` / `webhook.verify_signature` — verification describes the RECEIVER, not App auth, and an App-less config parked them under `app:` with nothing else in it. The old keys are **refused at load** with a message naming the new ones; `app:` keeps only `app_id`/`private_key_path`, and disappears entirely when it held nothing else |
-| github `rules:`/`defaults:` (most-specific repo wins) | a per-trigger `filter: {repo: …}` + computed `not_repo:`, the same winner per repo; the defaults merge is flattened into each trigger |
-| every github kind + its action filters (`labels_any/labels_all/authors/assignee/sole_assignee/reviewer/from_users/ignore_users/ignore_checks/require_label/include_prereleases/gates/exclude`) and variants | `on: <conn>.<kind>` triggers, `name:` = variant; the predicate keys map into one `filter:` under their unified names (`label_any`, `author`, `comment_author`/`not_comment_author`, `not_branch`/`not_label_any`/`not_title`, `not_draft`), and `reviewer`/`assignee`/`ignore_checks`/`include_prereleases` into `options:` |
-| `flaky_rerun` / `stuck_after` / `poll_interval` / `max_attempts_per_head` | trigger `options:` |
-| action `steps:` (id/if/type/agent/prompt/checkout/workdir/env/output_schema/background/handoff/retry/backend) | `steps:` carried field-for-field (the legacy `rerequest_review:` field is retired — use a `uses: <conn>.rerequest_review` step) |
-| slack `triggers:` (on/reaction/command) | `on: <conn>.<event>` + a `filter:`; a multi-variant rule merges into ONE trigger whose step is parallel branches (ids variant-prefixed, intra-variant references rewritten), so the feedback aggregation point is the join |
-| slack `ack` / `on_done` / `on_fail` | hooks `at: start/done/fail` using `<conn>.react` / `<conn>.post` — `on_done` fires once after ALL variants complete and `on_fail` once when any failed, identical to the legacy aggregation |
-| cron `schedules:` | connection `schedules:` + one trigger per schedule |
-| webhook `sources:` (path/sign/match/title/dedup/repo) | connection `sources:` + one trigger per source (`repo:` on the trigger) |
-| sentry / pagerduty `rules:` (match, repo) | one trigger per rule; later triggers carry `exclude:` maps of every earlier rule's match, so the legacy first-match winner is preserved under independent triggers (a rule behind a catch-all was unreachable and is skipped with a note) |
-| rss `feeds:` (url/interval/match/repo) | connection `feeds:` + one trigger per feed (`match` as its filter) |
-| `handoffs:` (web + tunnels, slack/discord dm/thread) | ask-capable connectors; the default entry's name is stamped onto background steps that named none |
-| `controllers:` | `runtimes:` (same fields; agent `controller:` refs stay valid) |
-| `paseo_bin` | the paseo runtime's `bin:` |
-| `control:` (shadow/pause_label/max_concurrent_agents/max_agents_per_hour) | the global `policy:`; an explicit `enabled: false` refuses to migrate (the kill switch is now only the runtime `conductor pause`) |
-| `notify:` (on/via/sinks/digest/push) | triggers on the `conductor.*` lifecycle events, one per enabled event (legacy `escalate` → `conductor.escalate` + `conductor.failed`), whose steps are the sink verbs — generated connectors (`notify-slack`, `notify-ntfy`, …) with byte-identical wire payloads; `digest` → a grouped `conductor.complete` trigger (`group: { window }`); the inert `push` is dropped with a note. The block itself is retired (a standalone pass also rewrites it on already-migrated files) |
-| `agents:` | **removed** — the block no longer exists. Each of the five jobs `agents.<name>` was doing moves to a home that is not an agent: `provider`+`model` → `model:` on the step (an exact pin; the migration never invents a fleet), `budget` → the runtime the agent ran on, and the behavior/memory/session/outcome fields → **onto each step that referenced the profile**. There is no registry to move a profile into, so the behavior is INLINED at every site that named it; sites in one file share a YAML anchor parked under `x-migrated:`, sites in different files each get a copy (anchors do not cross `imports:`). The profile table is gathered from the whole import tree first, so a `conf.d/*.yaml` file with references but no `agents:` block of its own still gets them inlined. **Track record survives**: the template is emitted under the OLD agent name, and every step extending it inherits that name as its identity — so outcome stats, engagements and `agent:<name>` memory scopes keep matching what is already on disk |
-| `store:`, `update:`, `imports:`, `dry_run`, `adopt_open_workspaces` | carried through unchanged |
-| `agent_guidance` | folded into `policy.guidance` (the global scope of the guidance cascade) by a standalone pass — see [[Reuse]]; the top-level alias stays accepted |
+The legacy config schema — `integrations:`, `notify:`, `handoff:`/`handoffs:`,
+`controllers:`, `control:`, and `paseo_bin` — was removed in this release
+(see the plugin-contract design doc, decision Q4).
 
-## The vaults pass
+If you are still on the legacy schema:
 
-Secret references migrate too — on legacy files AND on connectors-schema
-files that still carry the pre-vaults model (the pass runs standalone at
-boot, and is idempotent):
+1. Run `conductor config migrate` with **v0.60.0** — the last release before
+   the plugin contract, and the last one that still carries the automatic,
+   fail-safe transform (back up first; `--dry-run` previews it without
+   writing anything).
+2. Upgrade to this release once the migrated config loads and validates.
 
-| pre-vaults | vaults model |
-|---|---|
-| `vault:entry` | `{{ vault "local" "entry" }}` + `vaults: local (conductor)` — the existing vault.json keeps working at its default path |
-| `op://Item/field` | `{{ vault "op" "Item/field" }}` + an `onepassword` entry |
-| `pass:name` | `{{ vault "pass" "name" }}` + a `pass` entry |
-| `file:/dir/name` | `{{ vault "files" "name" }}` + one `file` entry per directory |
-| `secrets: {x: <ref>}` | block removed; every `{{.secrets.x}}` usage rewritten inline (vault call / `${VAR}` / the literal); an unrewritable usage is a hard error |
-| oauth2 `refresh_token: vault:x` | kept as the `{{ vault … }}` seed + `token_vault:` added, so rotation keeps persisting |
+This binary no longer reads any of the retired blocks. `conductor validate`
+(and the daemon's own boot-time load) names the exact block if one is still
+present, with the same message regardless of which one it is:
 
-Existing `vaults:` entries are reused when they match; fresh names dodge
-collisions with a numeric suffix. After migration the old forms are
-rejected: an unmigrated scheme ref or `secrets:` block fails loudly with a
-pointer at `conductor config migrate` — never silently treated as a literal.
+```
+config: `<key>:` was removed with the legacy config schema — migrate it with
+`conductor config migrate` on v0.60.0 (the last release that has it), then upgrade
+```
 
-## Proof
+If an unattended auto-update already carried you past v0.60.0 without
+migrating first, `conductor config migrate`'s own removal error names the
+box's actual rollback copy (`<executable>.prev`, saved alongside the current
+binary by the update that replaced it) when one is present, so you don't
+need to go re-fetch v0.60.0 by hand unless that file is gone too.
 
-Behavioral-equivalence golden tests feed identical webhook payloads through
-the legacy integration and the migrated-then-lowered one and assert the same
-triggers fire the same work (kind, variant, dedup signature, step content).
-The shipped legacy example transforms and passes full semantic validation;
-the e2e suite boots a daemon on a legacy config and asserts the backup, the
-swap, and that the same fixture still produces the same commit — plus the
-fail-safe refusal on an unmappable file.
-
-Legacy removal is a later release, after deployed boxes have auto-migrated.
-
-Related: [[Configuration]] · [[Connectors]] · [[Commands]]
+Related: [[Configuration]] · [[Connectors]] · [[Plugins]] · [[Commands]]

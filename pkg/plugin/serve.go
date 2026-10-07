@@ -24,8 +24,9 @@ const (
 // response instead of a result. Any other (plain) error a handler returns is
 // wrapped as CodeInternalError.
 type Error struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int            `json:"code"`
+	Message string         `json:"message"`
+	Data    map[string]any `json:"data,omitempty"`
 }
 
 func (e *Error) Error() string { return e.Message }
@@ -145,6 +146,9 @@ func serve(in io.Reader, out io.Writer, h Handler) error {
 	// connector and runtime plugin.
 	calls := newCallTable(write)
 	defer calls.shutdown()
+	if ha, ok := h.(HostAware); ok {
+		ha.SetHost(&HostConn{calls: calls})
+	}
 	// ctx bounds any background source stream: cancelled when the loop exits (the
 	// daemon closed stdin), so a StartSource goroutine unwinds.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -385,11 +389,81 @@ func dispatch(ctx context.Context, h Handler, method string, params json.RawMess
 	}()
 	switch method {
 	case MethodDescribe:
-		d := h.Describe()
+		var req DescribeRequest
+		if err := decodeParams(params, &req); err != nil {
+			return nil, err
+		}
+		var d Decl
+		if req.Instance != "" {
+			// Q6: a per-instance describe. A plugin that does not implement
+			// InstanceDescriber has nothing instance-specific to say — the
+			// caller falls back to the type-level Describe().
+			id, ok := h.(InstanceDescriber)
+			if !ok {
+				return nil, Errorf(CodeMethodNotFound, "this plugin has no per-instance declaration")
+			}
+			var err error
+			d, err = id.DescribeInstance(ctx, req.Instance, req.Config)
+			if err != nil {
+				var re *Error
+				if errors.As(err, &re) {
+					return nil, re
+				}
+				return nil, Errorf(CodeInternalError, err.Error())
+			}
+		} else {
+			d = h.Describe()
+		}
 		if d.ProtocolVersion == 0 {
 			d.ProtocolVersion = ProtocolVersion
 		}
+		if req.Host != nil {
+			StripUnknownOptional(&d, req.Host.Semantics)
+		}
 		return d, nil
+	case MethodPoll:
+		ph, ok := h.(PollHandler)
+		if !ok {
+			return nil, Errorf(CodeMethodNotFound, "this plugin does not poll")
+		}
+		var req PollRequest
+		if err := decodeParams(params, &req); err != nil {
+			return nil, err
+		}
+		return wrapResult(ph.Poll(ctx, req))
+	case MethodTranslate:
+		th, ok := h.(TranslateHandler)
+		if !ok {
+			return nil, Errorf(CodeMethodNotFound, "this plugin does not translate deliveries")
+		}
+		var req TranslateRequest
+		if err := decodeParams(params, &req); err != nil {
+			return nil, err
+		}
+		return wrapResult(th.Translate(ctx, req))
+	case MethodValidate:
+		vh, ok := h.(ValidateHandler)
+		if !ok {
+			return nil, Errorf(CodeMethodNotFound, "this plugin has no validation of its own")
+		}
+		var req ValidateRequest
+		if err := decodeParams(params, &req); err != nil {
+			return nil, err
+		}
+		return wrapResult(vh.Validate(ctx, req))
+	case MethodStop:
+		sh, ok := h.(StopHandler)
+		if !ok {
+			return nil, Errorf(CodeMethodNotFound, "this plugin has nothing to stop per instance")
+		}
+		var req StopRequest
+		if err := decodeParams(params, &req); err != nil {
+			return nil, err
+		}
+		if err := sh.Stop(ctx, req); err != nil {
+			return wrapResult(struct{}{}, err)
+		}
+		return struct{}{}, nil
 	case MethodInvoke:
 		var req InvokeRequest
 		if len(params) > 0 {
@@ -443,7 +517,42 @@ func dispatch(ctx context.Context, h Handler, method string, params json.RawMess
 		// Ack immediately; stream events in the background until ctx cancels.
 		go func() { _ = sh.StartSource(ctx, req, emit) }()
 		return struct{}{}, nil
+	case MethodAppToken:
+		h, ok := h.(AppTokenHandler)
+		if !ok {
+			return nil, Errorf(CodeMethodNotFound, "this plugin mints no app tokens")
+		}
+		var req AppTokenRequest
+		if err := decodeParams(params, &req); err != nil {
+			return nil, err
+		}
+		return wrapResult(h.AppToken(req))
 	default:
 		return nil, Errorf(CodeMethodNotFound, "unknown method "+method)
 	}
+}
+
+// decodeParams unmarshals a request's params, as a structured invalid-params
+// error when they do not decode. Absent params leave v zero.
+func decodeParams(params json.RawMessage, v any) *Error {
+	if len(params) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(params, v); err != nil {
+		return Errorf(CodeInvalidParams, err.Error())
+	}
+	return nil
+}
+
+// wrapResult maps a handler's (result, error) onto the dispatch return,
+// keeping a handler's own *Error and wrapping anything else as internal.
+func wrapResult[T any](res T, err error) (any, *Error) {
+	if err != nil {
+		var re *Error
+		if errors.As(err, &re) {
+			return nil, re
+		}
+		return nil, Errorf(CodeInternalError, err.Error())
+	}
+	return res, nil
 }

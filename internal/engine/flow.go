@@ -33,6 +33,15 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 	if !spec.IsEnabled() {
 		return
 	}
+	// A connector's declared option_hooks (plugin-contract.md §2.2): the
+	// trigger's own options.<option> become extra start/done/fail hooks,
+	// exactly as if the operator had written them under hooks: — the generic
+	// successor to a connector's own dispatch-time/completion feedback. A
+	// copy of spec is mutated (not e.flow's own compiled one, which every
+	// other firing of this trigger shares) so this never leaks across runs.
+	if extra := connector.OptionHooks(t, spec.Options); len(extra) > 0 {
+		spec.Hooks = append(append([]config.Hook{}, spec.Hooks...), extra...)
+	}
 	// Flow-side filters (synthetic sources): a non-matching event is dropped
 	// before any dedup state is consumed.
 	if ok, err := e.flow.FilterMatch(t, spec); err != nil {
@@ -52,7 +61,7 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 		return
 	}
 	if ig := pol.Ignore; ig != nil && len(ig.Users) > 0 {
-		if author, _ := t.Context["author"].(string); author != "" {
+		if author := t.AuthorLogin(); author != "" {
 			for _, u := range ig.Users {
 				if strings.EqualFold(u, author) {
 					e.log("%s skipped — author %q is ignored by policy", tag(t), author)
@@ -75,7 +84,7 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 		}
 	}
 
-	shadow := e.cfg.Control.Shadow || (pol.Shadow != nil && *pol.Shadow) || (act.Shadow != nil && *act.Shadow)
+	shadow := (pol.Shadow != nil && *pol.Shadow) || (act.Shadow != nil && *act.Shadow)
 
 	// Consume dedup state now (mirrors the legacy multi-step branch): the
 	// event is committed to a run. NOT for grouped triggers: their events
@@ -87,14 +96,14 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 		// Committed to the waiting run: consume a dedup signature so a
 		// redelivery stays suppressed, but don't count a live-gated attempt —
 		// it hasn't run.
-		if !livenessGated(t.Kind) && !t.Force {
+		if !t.LevelTriggered() && !t.Force {
 			_ = e.store.Record(key, dkind, t.Dedup, head)
 		}
 		e.log("%s already waiting for an agent slot — coalesced (newest event kept)", tag(t))
 		return
 	}
 	if !shadow && !grouped {
-		if livenessGated(t.Kind) || t.Force {
+		if t.LevelTriggered() || t.Force {
 			_ = e.store.RecordAttempt(key, dkind, head)
 		} else {
 			_ = e.store.Record(key, dkind, t.Dedup, head)
@@ -102,10 +111,8 @@ func (e *Engine) processFlow(ctx context.Context, t core.Trigger, act config.Act
 	}
 	// A comment was accepted for handling — raise the high-water mark
 	// (grouped comments raise it at flush, with the same reasoning).
-	if commentMarked(t.Kind) && !grouped {
-		if id := commentID(t); id > 0 {
-			_ = e.store.AdvanceCommentID(key, commentMarkKind(t), id)
-		}
+	if id, _, ok := t.Cursor(); ok && !grouped {
+		_ = e.store.AdvanceCommentID(key, cursorMarkKey(t), id)
 	}
 
 	if grouped {
@@ -157,7 +164,7 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 		e.log("%s waiting for an agent slot (all %d busy)", tag(t), e.cfg.AgentCap())
 	}
 	go func() {
-		ok := e.acquireFor(ctx, t.Kind)
+		ok := e.acquireFor(ctx, t.Interactive())
 		// The newest trigger that coalesced into this wait is the one that runs.
 		e.queuedMu.Lock()
 		if nt, found := e.queued[qk]; found {
@@ -169,10 +176,10 @@ func (e *Engine) startFlowRun(ctx context.Context, t core.Trigger, spec config.T
 			return // shutdown while waiting — the sweep re-derives on restart
 		}
 		defer e.release()
-		if core.BranchFixKind(t.Kind) && e.closedSince(t.Key(), queuedAt) {
-			// The PR merged or closed while this fixer waited for a slot:
-			// there's no branch left to push to.
-			e.log("%s dropped — PR closed while waiting for an agent slot", tag(t))
+		if t.BoundToTarget() && e.closedSince(t.Key(), queuedAt) {
+			// The target closed while this run waited for a slot: the work
+			// it was bound to is gone.
+			e.log("%s dropped — its target closed while waiting for an agent slot", tag(t))
 			return
 		}
 		run := e.newFlowRun(t, spec, false)
@@ -290,6 +297,13 @@ func (e *Engine) runBatch(fullKey string, events []core.Trigger) {
 		return
 	}
 	t = events[len(events)-1]
+	// Same option_hooks lowering processFlow does for an ungrouped trigger
+	// (see its comment): the batch's own spec is a fresh copy from SpecFor,
+	// so it needs the same treatment here, keyed off the representative
+	// (last) event's own options/facts.
+	if extra := connector.OptionHooks(t, spec.Options); len(extra) > 0 {
+		spec.Hooks = append(append([]config.Hook{}, spec.Hooks...), extra...)
+	}
 
 	// The grouper's fire callback carries no ctx of its own; tie the run to
 	// the engine's shutdown so a SATURATED acquire() can be interrupted
@@ -325,15 +339,13 @@ func (e *Engine) recordBatch(events []core.Trigger) []core.Trigger {
 		}
 		seen[sig] = true
 		kept = append(kept, ev)
-		if livenessGated(ev.Kind) || ev.Force {
+		if ev.LevelTriggered() || ev.Force {
 			_ = e.store.RecordAttempt(key, dkind, head)
 		} else {
 			_ = e.store.Record(key, dkind, ev.Dedup, head)
 		}
-		if commentMarked(ev.Kind) {
-			if cid := commentID(ev); cid > 0 {
-				_ = e.store.AdvanceCommentID(key, commentMarkKind(ev), cid)
-			}
+		if cid, _, ok := ev.Cursor(); ok {
+			_ = e.store.AdvanceCommentID(key, cursorMarkKey(ev), cid)
 		}
 	}
 	return kept
@@ -399,7 +411,7 @@ func (e *Engine) newFlowRun(t core.Trigger, spec config.TriggerSpec, shadow bool
 	tp := t
 	act, _ := tp.Action.(config.Action)
 	tp.Action = nil
-	tp.Context = sanitizeContext(t.Context)
+	tp.Context = sanitizeContext(t)
 	run.Trigger, _ = json.Marshal(tp)
 	run.Action, _ = json.Marshal(act)
 	if shadow || e.store == nil {
@@ -421,13 +433,16 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 		return
 	}
 	t.Action = act
+	if extra := connector.OptionHooks(t, spec.Options); len(extra) > 0 {
+		spec.Hooks = append(append([]config.Hook{}, spec.Hooks...), extra...)
+	}
 	e.log("%s resuming flow from step %d", tag(t), r.StepIndex)
 	e.store.Audit(map[string]any{"event": "resume", "repo": t.Target.Repo,
 		"number": t.Target.Number, "kind": t.Kind, "step_index": r.StepIndex})
 	go func() {
 		// Wait for the slot here, not on the caller: resume runs at startup,
 		// and more persisted runs than slots must not stall it.
-		if !e.acquireFor(ctx, t.Kind) {
+		if !e.acquireFor(ctx, t.Interactive()) {
 			return
 		}
 		defer e.release()
@@ -437,8 +452,8 @@ func (e *Engine) resumeFlowRun(ctx context.Context, r store.WorkflowRun, t core.
 }
 
 // askChannelFor resolves the hand-off channel a background step presents on:
-// an ask-capable connector by name, then the legacy handoffs: registry, then
-// nil (runtime-native — the notify-to-open-paseo fallback).
+// an ask-capable connector by name, else nil (runtime-native — the
+// notify-to-open-paseo fallback).
 func (e *Engine) askChannelFor(name string) handoff.Channel {
 	if name != "" && e.connectors != nil {
 		if in, ok := e.connectors.Get(name); ok && in.Impl != nil {
@@ -451,14 +466,6 @@ func (e *Engine) askChannelFor(name string) handoff.Channel {
 				return ch
 			}
 		}
-	}
-	if e.handoffs != nil {
-		ch, err := e.handoffs.Resolve(name)
-		if err != nil {
-			e.log("handoff %q: %v", name, err)
-			return nil
-		}
-		return ch
 	}
 	return nil
 }
@@ -485,23 +492,26 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 					return dispatch.RunRef{}, dispatch.Unrecoverable(err)
 				}
 				runner = r
+				if dispatch.UsesLaunchFields(req) {
+					// detach:/repo:/images: are carried out by the paseo
+					// dispatcher only. A runner that would silently ignore
+					// them is refused: an ignored detach: would launch an
+					// owned, credentialed agent instead of a forgotten one.
+					if lf, ok := runner.(interface{ HonorsLaunchFields() bool }); !ok || !lf.HonorsLaunchFields() {
+						return dispatch.RunRef{}, dispatch.Unrecoverable(fmt.Errorf(
+							"runtime %q cannot carry detach:/repo:/images: — they need the builtin paseo runtime", req.Step.Runtime))
+					}
+				}
 			}
 			req.Author = e.author
 			return e.dispatchAgent(ctx, runner, req)
 		},
-		Tokens: func(t core.Trigger) dispatch.Tokens {
-			appTok, _ := t.Context["app_token"].(string)
-			if e.readTok != nil {
-				if tok, err := e.readTok(); err == nil && tok != "" {
-					appTok = tok
-				}
-			}
-			userTok := ""
-			if e.userTok != nil {
-				userTok, _ = e.userTok()
-			}
-			return dispatch.Tokens{App: appTok, User: userTok}
-		},
+		// Flow steps and flow resume run in their own per-run goroutine, not
+		// on the engine's single shared dispatch loop, so they use the
+		// retrying mode: a rate_limited/not_ready mint is worth a bounded
+		// wait here instead of failing the step outright (plugin-contract.md
+		// §1.11, internal/engine/credentials.go credentialsForFlow).
+		Credentials: e.credentialsForFlow,
 		Guidance: func(identity string, p config.Step, pol config.Policy) string {
 			return e.agentGuidance(p, pol) + e.outcomeGuidance(identity, p)
 		},

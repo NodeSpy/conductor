@@ -10,7 +10,7 @@ import (
 // unparseable branch returned nil SILENTLY — so an incompatible connector
 // loaded clean with no warning.
 func TestConnectorVersionGateHandlesPrefixedTags(t *testing.T) {
-	SetConnectorVersions(map[string]string{"tickets": "jira-connector/v1.0.0"})
+	SetConnectorVersions(map[string][]string{"connectors/jira": {"jira-connector/v1.0.0"}})
 	t.Cleanup(func() { SetConnectorVersions(nil) })
 
 	dir := t.TempDir()
@@ -36,7 +36,7 @@ packs:
 // The other half: a version we genuinely cannot parse is now surfaced,
 // not swallowed. Only "" and "dev" stay silent.
 func TestUnparseableConnectorVersionWarns(t *testing.T) {
-	SetConnectorVersions(map[string]string{"tickets": "release-candidate"})
+	SetConnectorVersions(map[string][]string{"connectors/jira": {"release-candidate"}})
 	t.Cleanup(func() { SetConnectorVersions(nil) })
 
 	dir := t.TempDir()

@@ -40,13 +40,32 @@ const (
 
 // Resolution is one reference's reconcile outcome, for logging and the CLI.
 type Resolution struct {
-	Key      string // "<kind-dir>/<name>"
+	// Key is the plugin's plain install-state identity, "<kind-dir>/<name>"
+	// — shared by EVERY group of this plugin regardless of resolved version
+	// (install state keys its records by Key+Resolved, never GroupKey).
+	Key string
+	// GroupKey is the key this resolution was reconciled UNDER in the refs
+	// map Reconcile was called with — the plain Key when the plugin has only
+	// one resolved-version group (the common case, and every runtime/
+	// engine), or "<Key>@<resolved>" when more than one group is configured
+	// side by side (docs/wiki/Plugins.md "Side-by-side versions"). A caller
+	// that drives the Manager/registry for this specific group (reload,
+	// loadConnectorPlugins) keys off GroupKey; one that means "the plugin,
+	// regardless of version" (GC, `plugin list`) keys off Key.
+	GroupKey string
 	Name     string
 	Kind     string
 	Use      string // the reference as written
 	Origin   string
 	Action   string
 	Tag      string // resolved release tag
+	// Source is this reference's canonical fetch source (ref.Source()/
+	// config.Use.Source()) — recorded here (finding 2) so a caller holding
+	// only a Resolution, not the original ref, can still look up ITS OWN
+	// install-state record by (Key, Tag, Source) rather than an ambiguous
+	// (Key, Tag) that a DIFFERENT source sharing the same tag text could
+	// also match (cmd/conductor/reload.go's moved-plugin lookup).
+	Source   string
 	Sha      string // verified binary sha
 	PrevSha  string // the sha this replaced, when it changed
 	Path     string // installed binary path
@@ -101,7 +120,29 @@ func (o Options) logf(format string, args ...any) {
 	}
 }
 
-// Reconcile brings install state in line with the config's referenced plugins.
+// Reconcile brings install state in line with the config's referenced
+// plugins. refs is the NAME-grouped map (config.PluginRefs' output, or an
+// ExplodeRefs'd map when a caller already has one — see below): Reconcile
+// does its OWN per-instance exploding internally now, so it is no longer the
+// caller's job to pre-group by resolved version before calling this.
+//
+// Side-by-side versions, finding 1: a ref with Instances populated (a
+// connector referenced by more than one connectors: entry) is resolved ONE
+// CONFIGURED INSTANCE AT A TIME, each against its OWN `use:` constraint —
+// never a single representative's, which is what let a pinned instance
+// silently get dragged onto whatever version an unpinned sibling moved to,
+// and then get GC'd out from under itself the moment that sibling advanced
+// (see reconcileInstances). Two instances whose constraint TEXT is
+// byte-identical trivially resolve identically; two instances whose
+// constraints merely happen to resolve to the same release are also fetched
+// and described only ONCE (finding 4) — see reconcileInstances' bucket
+// cache. A ref with Instances == nil (a runtime/engine, or a single ad-hoc
+// entry like `plugin add`'s) has no such multiplicity and is resolved
+// exactly as before, via reconcileOne.
+//
+// ListTags is memoized per RemoteSource for the span of this one pass
+// (pinnedTagCache): every instance resolving its own constraint needs the
+// same tag list again and again, and it cannot change mid-pass.
 //
 // It is DEGRADE-SAFE: a reference that cannot be fetched (network down, release
 // missing) is recorded as failed and reconcile CONTINUES, so one unreachable
@@ -115,36 +156,58 @@ func Reconcile(refs map[string]config.PluginRef, state *InstallState, trust *con
 	}
 	sort.Strings(keys)
 
+	api = &pinnedTagCache{api: api, tags: map[string][]string{}}
+
 	var (
 		results []Resolution
 		dirty   bool
 	)
+	keep := map[VersionKey]bool{}
+	addKeep := func(res Resolution) {
+		if res.Tag != "" {
+			keep[VersionKey{Key: res.Key, Resolved: res.Tag, Source: res.Source}] = true
+		}
+	}
 	for _, key := range keys {
 		ref := refs[key]
 		if opts.Only != "" && opts.Only != ref.Name && opts.Only != key {
 			continue
 		}
-		res, changed := reconcileOne(key, ref, state, trust, api, opts)
+		if ref.Instances == nil {
+			res, changed := reconcileOne(key, ref, state, trust, api, opts)
+			dirty = dirty || changed
+			results = append(results, res)
+			addKeep(res)
+			continue
+		}
+		sub, changed := reconcileInstances(key, ref, state, trust, api, opts)
 		dirty = dirty || changed
-		results = append(results, res)
+		for _, res := range sub {
+			results = append(results, res)
+			addKeep(res)
+		}
 	}
 
-	// Drop records for plugins the config no longer references, so install
-	// state does not accumulate forever. The BINARY is left on disk: removing
-	// it is `plugin remove`'s job, and a reference removed by mistake should be
-	// cheap to restore.
+	// Drop install-state records no group in refs resolves to any more, so
+	// install state does not accumulate forever. The BINARY is left on disk
+	// for a plain whole-key removal only when `plugin remove` asks for it;
+	// GCVersions here removes a SPECIFIC version's own directory, since that
+	// version itself is genuinely gone from the desired set (a config change
+	// moved every instance of it off that version) rather than merely
+	// unmentioned.
 	//
 	// Only ever prune what we can PROVE is unreferenced: the caller must opt in
 	// (see Options.Prune), the pass must not be scoped to one plugin, and a
 	// gaps-only pass touches nothing. A partial refs map is a subset of the
 	// desired set, and "absent from a subset" is not evidence of "unused".
 	if opts.Prune && opts.Only == "" && !opts.GapsOnly {
-		for _, k := range state.Keys() {
-			if _, still := refs[k]; !still {
-				state.Delete(k)
-				dirty = true
-				opts.logf("plugin %s: no longer referenced by the config — dropped from install state", k)
-			}
+		dropped, err := state.GCVersions(keep)
+		if err != nil {
+			opts.logf("plugin install state: GC: %v", err)
+		}
+		for _, vk := range dropped {
+			dirty = true
+			opts.logf("plugin %s@%s: no longer referenced by the config — dropped from install state", vk.Key, vk.Resolved)
 		}
 	}
 	if dirty {
@@ -155,12 +218,12 @@ func Reconcile(refs map[string]config.PluginRef, state *InstallState, trust *con
 	return results, nil
 }
 
-func reconcileOne(key string, ref config.PluginRef, state *InstallState, trust *config.PackTrustConfig, api ReleaseAPI, opts Options) (Resolution, bool) {
+func reconcileOne(groupKey string, ref config.PluginRef, state *InstallState, trust *config.PackTrustConfig, api ReleaseAPI, opts Options) (Resolution, bool) {
+	key := ref.Use.InstallKey()
 	res := Resolution{
-		Key: key, Name: ref.Name, Kind: ref.Kind(),
-		Use: ref.Use.String(), Origin: string(ref.Use.Origin),
+		Key: key, GroupKey: groupKey, Name: ref.Name, Kind: ref.Kind(),
+		Use: ref.Use.String(), Origin: string(ref.Use.Origin), Source: ref.Source(),
 	}
-	prev, installed := state.Get(key)
 
 	// A local development binary is not fetched, verified against a release, or
 	// pinned — it is whatever the operator built. Record it so `plugin list`
@@ -169,6 +232,8 @@ func reconcileOne(key string, ref config.PluginRef, state *InstallState, trust *
 		res.Action, res.Path = ActionLocal, ref.Use.Path
 		return res, false
 	}
+
+	prev, installed := state.GetForConstraint(key, ref.Use)
 
 	if !opts.AllowUnlisted && !trust.PluginSourceAllowed(ref.Source()) {
 		res.Action = ActionFailed
@@ -191,9 +256,9 @@ func reconcileOne(key string, ref config.PluginRef, state *InstallState, trust *
 		}
 	}
 
-	rs := RemoteSource{Repo: ref.Use.Repo, Component: ref.Use.Component}
-	dir := BinDirFor(state.Dir(), key)
-	binPath, tag, sha, err := FetchRemote(rs, ref.Use.Version, "", dir, api)
+	rs := RemoteSource{URL: ref.Use.GitURL(), Component: ref.Use.Component}
+	cacheDirFor := func(tag string) string { return BinDirForVersion(state.Dir(), key, tag, ref.Source()) }
+	binPath, tag, sha, verified, err := FetchRemoteVerified(rs, ref.Use.Version, "", cacheDirFor, api)
 	if err != nil {
 		res.Action, res.Err = ActionFailed, fmt.Errorf("plugin %s: %w", ref.Name, err)
 		if installed {
@@ -208,10 +273,34 @@ func reconcileOne(key string, ref config.PluginRef, state *InstallState, trust *
 	switch {
 	case installed && prev.Sha256 == sha && prev.Resolved == tag:
 		res.Action, res.Manifest = ActionCurrent, prev.Manifest
+		// Report (and keep using) the RECORDED path, not wherever this fetch
+		// just landed a byte-identical copy — see the duplicate-fetch
+		// cleanup below. A running daemon may be executing the recorded
+		// path right now; nothing must ever treat the fresh fetch as having
+		// replaced it.
+		res.Path = prev.Path
+		// Finding 2 (LOW-MEDIUM): an older record can point at the
+		// pre-source-fingerprint flat "<key>/<version>" directory
+		// (BinDirForVersion folded source into the dir name after such a
+		// record was written). A full reconcile re-fetches into the
+		// CURRENT (now source-fingerprinted) directory regardless, landing
+		// a byte-identical copy — same sha — at a path nothing refers to
+		// and GCVersions, which only prunes DROPPED versions, never
+		// reclaims: this version is very much kept. Remove the pure
+		// duplicate now, scoped to inside the plugin's own key directory
+		// only (removeVersionDir's isStrictlyWithin guard), and never the
+		// recorded path itself.
+		if binPath != prev.Path {
+			if err := removeVersionDir(BinDirFor(state.Dir(), key), filepath.Dir(binPath)); err != nil {
+				opts.logf("plugin %s: could not remove duplicate fetch at %s: %v", ref.Name, binPath, err)
+			}
+		}
 		// Nothing moved, but the reference text may have changed (a widened
-		// constraint); keep the record honest.
-		if prev.Use != ref.Use.String() {
+		// constraint), or this fetch verified a build an older record did not
+		// mark verified; keep the record honest.
+		if prev.Use != ref.Use.String() || prev.ReleaseVerified != verified {
 			prev.Use = ref.Use.String()
+			prev.ReleaseVerified = verified
 			state.Put(prev)
 			return res, true
 		}
@@ -228,7 +317,7 @@ func reconcileOne(key string, ref config.PluginRef, state *InstallState, trust *
 	rec := Installed{
 		Key: key, Kind: ref.Kind(), Name: ref.Name,
 		Use: ref.Use.String(), Source: ref.Source(),
-		Resolved: tag, Sha256: sha, Path: binPath,
+		Resolved: tag, Sha256: sha, Path: binPath, ReleaseVerified: verified,
 	}
 	if opts.Describe != nil {
 		spec := SpecFromRef(ref, "", rec, true)
@@ -254,6 +343,345 @@ func reconcileOne(key string, ref config.PluginRef, state *InstallState, trust *
 			ref.Name, tag, ref.Source(), shortSha(sha), rec.Manifest.Summary())
 	}
 	return res, true
+}
+
+// pinnedTagCache memoizes ReleaseAPI.ListTags by RemoteSource for the span of
+// one Reconcile pass. The tag list cannot change mid-pass, so when several
+// configured instances of one plugin each resolve their own constraint
+// (finding 1), listing it once per source — not once per instance — is
+// simply correct, and saves the repeat network round trip finding 4 flags.
+type pinnedTagCache struct {
+	api  ReleaseAPI
+	tags map[string][]string
+}
+
+func (c *pinnedTagCache) ListTags(rs RemoteSource) ([]string, error) {
+	k := rs.URL + "\x00" + rs.Component
+	if tags, ok := c.tags[k]; ok {
+		return tags, nil
+	}
+	tags, err := c.api.ListTags(rs)
+	if err != nil {
+		return nil, err
+	}
+	c.tags[k] = tags
+	return tags, nil
+}
+
+func (c *pinnedTagCache) Download(rs RemoteSource, tag, file, destDir string) (string, error) {
+	return c.api.Download(rs, tag, file, destDir)
+}
+
+// sortedInstanceNames lists m's keys, sorted.
+func sortedInstanceNames(m map[string]config.ConnectorGrant) []string {
+	out := make([]string, 0, len(m))
+	for n := range m {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// reconcileInstances is Reconcile's per-instance explode for a ref with
+// Instances populated (finding 1) — see Reconcile's doc comment. Two phases:
+//
+//  1. Resolve + fetch: every configured instance resolves its OWN `use:`
+//     constraint to a release tag; every DISTINCT tag among them is fetched
+//     (downloaded, checksum-verified) at most ONCE this pass (finding 4) —
+//     two instances whose constraint TEXT differs but who land on the
+//     identical release never download it twice. The fetched build is
+//     recorded into state immediately (sha/path, manifest still empty) so
+//     phase 2's grouping sees it as installed.
+//
+//  2. Group + describe: groupRef — the SAME function ExplodeRefs uses to
+//     build the Manager's process groups — is run against the now-updated
+//     state, so the groups (and GroupKeys) this function reports agree with
+//     what a LATER, fresh ExplodeRefs over the same state independently
+//     computes (reload.go's moved-plugin lookup depends on that agreement).
+//     groupRef also applies the isolation-conflict split (finding 2), so an
+//     update that newly collides two instances' isolation: blocks at one
+//     resolved version is reported as two groups here too. Each DISTINCT
+//     resolved tag is described at most once (finding 4) — reused verbatim
+//     across an isolation-split sibling group at the identical tag, since a
+//     plugin's declared capabilities do not depend on which sandbox wraps
+//     the describe-time probe.
+func reconcileInstances(groupKeyIn string, ref config.PluginRef, state *InstallState, trust *config.PackTrustConfig, api ReleaseAPI, opts Options) ([]Resolution, bool) {
+	// key is the plugin's install-state identity — ALWAYS ref.Use.InstallKey(),
+	// never the map key this function was called under. The two happen to be
+	// identical for the common, un-exploded caller (cfg.PluginRefs()'s plain
+	// "<kind-dir>/<name>" keys), but a caller that already exploded before
+	// calling Reconcile (a legacy/defensive shape, since Reconcile no longer
+	// needs that) hands in a SUFFIXED map key ("<key>@<discriminator>") —
+	// using that for install-state reads/writes would silently install under
+	// a key nothing else looks up records by.
+	key := ref.Use.InstallKey()
+	names := sortedInstanceNames(ref.Instances)
+	perInstance := make(map[string]Resolution, len(names))
+	dirty := false
+
+	// Snapshot what this key had installed BEFORE this pass touches
+	// anything, so every instance landing on the same tag classifies
+	// Installed/Updated/Current consistently (never one instance "updated"
+	// and an identically-resolving sibling "current" just because of
+	// iteration order).
+	//
+	// Finding 2 (HIGH): scoped by SOURCE as well as tag — two different
+	// sources under one key can tag the identical version text, and a
+	// previous record from a DIFFERENT source must never be mistaken for
+	// "this instance's own previous build" just because the tag string
+	// matches (it would misclassify Current/Updated against the wrong sha,
+	// and misreport a cross-source sha in a log line).
+	prevVersions := state.AllVersions(key)
+	hadAnyPrevBySource := make(map[string]bool, len(prevVersions))
+	prevRepShaBySource := make(map[string]string, len(prevVersions))
+	prevByKey := make(map[string]Installed, len(prevVersions))
+	for _, p := range prevVersions {
+		prevByKey[p.Source+"\x00"+p.Resolved] = p
+		hadAnyPrevBySource[p.Source] = true
+		prevRepShaBySource[p.Source] = p.Sha256 // AllVersions is sorted ascending; last wins, per source
+	}
+
+	type bucketResult struct {
+		binPath, sha string
+		verified     bool
+		err          error
+	}
+	// buckets is keyed by (source, tag) — never tag alone (finding 2, HIGH):
+	// two instances resolving to the identical tag TEXT from DIFFERENT
+	// sources (repos) must each fetch and verify their OWN binary. Keying by
+	// tag alone let the second instance silently reuse the first repo's
+	// already-fetched bytes and sha — a correctness and security bug (the
+	// second instance's install-state record would claim ITS source fetched
+	// a binary it never actually downloaded or verified).
+	buckets := map[string]*bucketResult{}
+
+	for _, n := range names {
+		g := ref.Instances[n]
+		u := g.Use
+		instRef := ref
+		instRef.Use = u
+		instRef.Instance = n
+		base := Resolution{Key: key, Name: ref.Name, Kind: ref.Kind(), Use: u.String(), Origin: string(u.Origin), Source: u.Source()}
+
+		if u.Origin == config.OriginLocal {
+			base.Action, base.Path = ActionLocal, u.Path
+			perInstance[n] = base
+			continue
+		}
+
+		if !opts.AllowUnlisted && !trust.PluginSourceAllowed(instRef.Source()) {
+			base.Action = ActionFailed
+			base.Err = fmt.Errorf("plugin %s: source %q is not trusted — add it to plugin_trust.allow, or re-run with --allow-unlisted (the official repo %s needs no entry)", ref.Name, instRef.Source(), config.OfficialSource)
+			perInstance[n] = base
+			continue
+		}
+
+		prev, installed := state.GetForConstraint(key, u)
+		if installed {
+			if opts.GapsOnly {
+				base.Action, base.Tag, base.Sha, base.Path, base.Manifest = ActionSkipped, prev.Resolved, prev.Sha256, prev.Path, prev.Manifest
+				perInstance[n] = base
+				continue
+			}
+			// A pin is satisfied by the RESOLVED record, not by matching Use
+			// TEXT: GetForConstraint already only returns a record whose
+			// Resolved version satisfies u's own constraint (an exact pin
+			// matches only that literal tag), so once such a record exists
+			// and its binary is on disk, this instance's pin is met —
+			// full stop. The record's Use field is per-(Key,Resolved), not
+			// per-instance: when a pinned instance shares a resolved version
+			// with an unpinned (or differently-worded) sibling, whichever
+			// instance last wrote the record leaves ITS OWN text there, which
+			// need not equal this instance's. Requiring text equality here
+			// (as before) made a pinned instance's "already satisfied" check
+			// flap based on sibling iteration order, forcing it through a
+			// full network re-fetch on every single reconcile pass forever —
+			// the HIGH-severity finding this comment replaces.
+			if u.IsPinned() && !opts.Force && binaryPresent(prev.Path) {
+				base.Action, base.Tag, base.Sha, base.Path, base.Manifest = ActionPinned, prev.Resolved, prev.Sha256, prev.Path, prev.Manifest
+				perInstance[n] = base
+				continue
+			}
+		}
+
+		rs := RemoteSource{URL: u.GitURL(), Component: u.Component}
+		tag, tagErr := CheckFetchable(rs, u.Version, api)
+		if tagErr != nil {
+			base.Action, base.Err = ActionFailed, fmt.Errorf("plugin %s: %w", ref.Name, tagErr)
+			if installed {
+				base.Tag, base.Sha, base.Path, base.Manifest = prev.Resolved, prev.Sha256, prev.Path, prev.Manifest
+				opts.logf("plugin %s: could not reach %s (%v) — keeping the installed build %s (%s)", ref.Name, instRef.Source(), tagErr, prev.Resolved, shortSha(prev.Sha256))
+			}
+			perInstance[n] = base
+			continue
+		}
+		base.Tag = tag
+
+		bucketKey := u.Source() + "\x00" + tag
+		b, ok := buckets[bucketKey]
+		if !ok {
+			b = &bucketResult{}
+			buckets[bucketKey] = b
+			cacheDirFor := func(t string) string { return BinDirForVersion(state.Dir(), key, t, u.Source()) }
+			binPath, _, sha, verified, ferr := FetchRemoteVerified(rs, u.Version, "", cacheDirFor, api)
+			if ferr != nil {
+				b.err = fmt.Errorf("plugin %s: %w", ref.Name, ferr)
+			} else {
+				b.binPath, b.sha, b.verified = binPath, sha, verified
+			}
+		}
+		if b.err != nil {
+			base.Action, base.Err = ActionFailed, b.err
+			if installed {
+				base.Tag, base.Sha, base.Path, base.Manifest = prev.Resolved, prev.Sha256, prev.Path, prev.Manifest
+				opts.logf("plugin %s: could not reach %s (%v) — keeping the installed build %s (%s)", ref.Name, instRef.Source(), b.err, prev.Resolved, shortSha(prev.Sha256))
+			}
+			perInstance[n] = base
+			continue
+		}
+
+		base.Sha, base.Path = b.sha, b.binPath
+		if prevForTag, had := prevByKey[u.Source()+"\x00"+tag]; had && prevForTag.Sha256 == b.sha {
+			base.Action, base.Manifest = ActionCurrent, prevForTag.Manifest
+			// Report (and keep using) the RECORDED path, not wherever this
+			// pass just fetched a byte-identical copy to — see the
+			// duplicate-fetch cleanup below. A running daemon may be
+			// executing the recorded path right now; nothing must ever
+			// treat the fresh fetch as having replaced it.
+			base.Path = prevForTag.Path
+			// Finding 2 (LOW-MEDIUM): an older record can point at the
+			// pre-source-fingerprint flat "<key>/<version>" directory
+			// (BinDirForVersion folded source into the dir name after
+			// such a record was written). A full reconcile re-fetches
+			// into the CURRENT (now source-fingerprinted) directory
+			// regardless, landing a byte-identical copy — same sha — at a
+			// path nothing refers to and GCVersions, which only prunes
+			// DROPPED (key, version, source) triples, never reclaims: this
+			// version is very much kept. Since the content is identical to
+			// what's already installed and in use, the fresh copy is a
+			// pure duplicate — remove it now, scoped to inside the
+			// plugin's own key directory only (removeVersionDir's
+			// isStrictlyWithin guard), and never the recorded path itself.
+			if b.binPath != prevForTag.Path {
+				if err := removeVersionDir(BinDirFor(state.Dir(), key), filepath.Dir(b.binPath)); err != nil {
+					opts.logf("plugin %s: could not remove duplicate fetch at %s: %v", ref.Name, b.binPath, err)
+				}
+			}
+			// Never rewrite the shared (Key, Resolved, Source) record's Use
+			// just because THIS instance's constraint text differs from
+			// whatever is already stored there — that text belongs to
+			// whichever instance's fetch originally installed or last
+			// moved this version (the ActionInstalled/ActionUpdated branch
+			// below), and rewriting it here on every pass a sibling with
+			// different wording happens to be processed is exactly the
+			// flip-flop the pinned-instance bug above depended on. Only
+			// ReleaseVerified is honest to update here: this fetch may have
+			// verified a build an older record did not mark verified.
+			if prevForTag.ReleaseVerified != b.verified {
+				prevForTag.ReleaseVerified = b.verified
+				state.Put(prevForTag)
+				dirty = true
+			}
+		} else if hadAnyPrevBySource[u.Source()] {
+			base.Action, base.PrevSha = ActionUpdated, prevRepShaBySource[u.Source()]
+		} else {
+			base.Action = ActionInstalled
+		}
+		if base.Action == ActionInstalled || base.Action == ActionUpdated {
+			rec := Installed{Key: key, Kind: ref.Kind(), Name: ref.Name, Use: u.String(), Source: instRef.Source(), Resolved: tag, Sha256: b.sha, Path: b.binPath, ReleaseVerified: b.verified}
+			if existing, ok := state.GetVersion(key, tag, u.Source()); ok {
+				rec.Manifest = existing.Manifest
+			}
+			state.Put(rec)
+			dirty = true
+		}
+		perInstance[n] = base
+	}
+
+	// Phase 2 — group the now-fully-resolved instances by their OWN
+	// resolved identity (groupRef, finding 1), describing each DISTINCT
+	// release at most once (finding 4).
+	groups, gerr := groupRef(ref, "", state)
+	if gerr != nil {
+		// Finding 6: this is the "must never happen" isolation-fold
+		// invariant failing anyway — degrade this ONE plugin (every
+		// instance of it) rather than ever panicking the whole reconcile
+		// pass over it.
+		return []Resolution{{
+			Key: key, GroupKey: groupKeyIn, Name: ref.Name, Kind: ref.Kind(),
+			Action: ActionFailed, Err: fmt.Errorf("plugin %s: %w", ref.Name, gerr),
+		}}, dirty
+	}
+	multi := len(groups) > 1
+	type described struct {
+		manifest Manifest
+		err      error
+	}
+	describeCache := map[string]*described{}
+
+	out := make([]Resolution, 0, len(groups))
+	for _, g := range groups {
+		gkey := groupKeyIn
+		if multi {
+			gkey = groupKeyIn + "@" + g.discriminator
+		}
+		groupNames := sortedInstanceNames(g.ref.Instances)
+		if len(groupNames) == 0 {
+			continue
+		}
+		res := perInstance[groupNames[0]]
+		res.GroupKey = gkey
+
+		if res.Changed() {
+			// describeCache, like buckets above, is keyed by (source, tag) —
+			// never tag alone (finding 2): two groups sharing tag text from
+			// DIFFERENT sources must each be described against their OWN
+			// fetched build, never a cached manifest that actually belongs
+			// to a different source's binary.
+			describeKey := res.Source + "\x00" + res.Tag
+			if cached, ok := describeCache[describeKey]; ok {
+				res.Manifest = cached.manifest
+				if cached.err != nil {
+					res.Action, res.Err = ActionFailed, cached.err
+				}
+			} else if opts.Describe != nil {
+				rec, _ := state.GetVersion(key, res.Tag, res.Source)
+				spec := SpecFromRef(g.ref, "", rec, true)
+				decl, derr := opts.Describe(context.Background(), spec)
+				cb := &described{}
+				switch {
+				case derr != nil:
+					res.Action, res.Err = ActionFailed, fmt.Errorf("plugin %s: installed %s but it could not describe itself: %w", ref.Name, res.Tag, derr)
+					cb.err = res.Err
+				case checkDeclKind(ref, decl) != nil:
+					res.Action, res.Err = ActionFailed, checkDeclKind(ref, decl)
+					cb.err = res.Err
+				default:
+					rec.Manifest = manifestFromDecl(decl)
+					state.Put(rec)
+					dirty = true
+					res.Manifest = rec.Manifest
+					cb.manifest = rec.Manifest
+				}
+				describeCache[describeKey] = cb
+			}
+			if res.Action == ActionUpdated {
+				opts.logf("plugin %s: updated %s -> %s (sha %s -> %s); permissions: %s",
+					ref.Name, "", res.Tag, shortSha(res.PrevSha), shortSha(res.Sha), res.Manifest.Summary())
+			} else if res.Action == ActionInstalled {
+				opts.logf("plugin %s: installed %s from %s (sha %s); permissions: %s",
+					ref.Name, res.Tag, instanceSource(g.ref), shortSha(res.Sha), res.Manifest.Summary())
+			}
+		}
+		out = append(out, res)
+	}
+	return out, dirty
+}
+
+// instanceSource is ref.Source() for whichever instance narrowRef picked as
+// the group's representative — used only for a log line.
+func instanceSource(ref config.PluginRef) string {
+	return ref.Use.Source()
 }
 
 // checkDeclKind enforces the kind the reference was declared with against the
@@ -332,6 +760,14 @@ func sameEvents(a, b []Event) bool {
 	return true
 }
 
+// ManifestFromDecl is manifestFromDecl, exported for a caller outside this
+// package that needs to turn a freshly probed Decl into the same Manifest
+// shape Reconcile records — cmd/conductor's `plugin show`/`plugin list
+// --caps` probing a LOCAL plugin's declared capabilities directly (finding
+// 7), since SpecFromRef never resolves one for OriginLocal itself (there is
+// no install-state record to source one from).
+func ManifestFromDecl(decl *Decl) Manifest { return manifestFromDecl(decl) }
+
 func manifestFromDecl(decl *Decl) Manifest {
 	if decl == nil {
 		return Manifest{}
@@ -342,10 +778,20 @@ func manifestFromDecl(decl *Decl) Manifest {
 		Commands: append([]string(nil), c.Commands...),
 		FS:       append([]string(nil), c.FS...),
 		Spawns:   c.Spawns || len(c.Commands) > 0,
+		Env:      append([]string(nil), c.Env...),
 		// Auth (the plugin's declared OAuth2 endpoints) is recorded so
 		// `conductor connector auth <name>` can run the interactive login
 		// WITHOUT respawning the plugin to re-Describe it.
 		Auth: decl.Auth,
+		// SingleProcess (the plugin's shared-process requirement) is part of
+		// the recorded manifest for the same reason every other capability
+		// is: SameReloadSurface compares manifests field for field, so a
+		// build that ADDS or DROPS this capability differs from the running
+		// one and forces a full restart (never a live in-place swap) — the
+		// Manager's shape for this key (one process vs one per instance) is
+		// decided once, at construction, and cannot change under a running
+		// daemon.
+		SingleProcess: c.SingleProcess,
 	}
 }
 

@@ -31,9 +31,27 @@ type runtimePluginBackend struct {
 // client closed here and is left for pluginRuntimeControllers to wrap as an ACP
 // subprocess — the two paths are disjoint, so a name is claimed by exactly one.
 //
-// Fail-closed, same posture as loadConnectorPlugins/loadEnginePlugins: a start,
-// describe, or kind mismatch stops boot rather than degrading (a bad plugin is
-// an operator/security condition, not a transient).
+// Fail-closed — DELIBERATELY NOT the same posture as loadConnectorPlugins and
+// loadEnginePlugins, which degrade a failed plugin to "disabled, logged
+// loudly" so unrelated connectors/steps keep working (Q12). A runtime plugin
+// does not get the same treatment:
+//
+//   - It is the highest-trust plugin kind (§1.8): it EXECUTES agents, and an
+//     ACP-dialect one runs with no OS sandbox by default (see
+//     pluginRuntimeControllers). A start/describe failure here is exactly the
+//     corruption/tamper scenario the per-spawn re-verify wrapper exists to
+//     catch, and it deserves the operator's immediate attention, not a quiet
+//     "disabled" log line.
+//   - Unlike a connector (independent instances; a dead github connector
+//     doesn't touch slack) or an engine (a step just fails if its engine is
+//     missing), a runtime has no smaller unit to disable: every agent bound
+//     to it depends on it, and most configs have only one or two runtimes.
+//     Degrading it would leave the daemon LOOKING healthy — triggers firing,
+//     connectors polling — while every dispatch assigned to the broken
+//     runtime fails one at a time, deep inside a run instead of at boot.
+//
+// So a start, describe, or kind mismatch here still stops boot (a bad
+// runtime plugin is an operator/security condition, not a transient).
 func loadRuntimePlugins(mgr *plugin.Manager, cfg *config.Config, retry config.Retry, sec *secrets.Resolver) (map[string]runtimePluginBackend, decider.Set, error) {
 	return loadRuntimePluginsFor(mgr, cfg, retry, sec, true)
 }

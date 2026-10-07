@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,10 +22,32 @@ import (
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
-// Tokens carries the two credentials dispatched work may need.
-type Tokens struct {
-	App  string // GitHub App installation token (reads)
-	User string // your `gh auth token` (writes/posts)
+// Credentials are what dispatched work receives from the connector whose
+// event it handles — whatever that connector DECLARES (plugin-contract.md
+// §2.4): environment variables, template keys, and prompt guidance. The
+// engine resolves them; dispatch only applies them.
+type Credentials struct {
+	// Env are environment variables for the agent or command process.
+	Env map[string]string
+	// Templates are template keys ({{.<key>}}) carrying credential values;
+	// they are explicit credential channels, never redacted as leaks.
+	Templates map[string]string
+	// Guidance is appended to an agent's prompt.
+	Guidance string
+}
+
+// EnvList is Env as KEY=VALUE pairs, sorted for a stable argv.
+func (c Credentials) EnvList() []string {
+	keys := make([]string, 0, len(c.Env))
+	for k := range c.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, k+"="+c.Env[k])
+	}
+	return out
 }
 
 // Author is the git identity to attribute commits to (you).
@@ -53,9 +76,9 @@ type Request struct {
 	// Provider), passed to `paseo run --provider`. Empty means bare launch or
 	// an unconfirmed pass-through pin — paseo/the runtime falls back to its
 	// own default provider resolution in that case.
-	Provider string
-	Tokens   Tokens
-	Author   Author
+	Provider    string
+	Credentials Credentials
+	Author      Author
 	// Workspace PINS this dispatch to an existing runtime workspace by id or
 	// name: the base workspace to worktree from under checkout-pr/branch-off,
 	// and under checkout:none the workspace the agent runs in directly. A pinned
@@ -103,6 +126,16 @@ type RunRef struct {
 	// checkout-less runs, and queued/adopted dispatches.
 	Workdir string `json:"workdir,omitempty"`
 	Output  string `json:"-"`
+	// Detached marks a `detach: true` step's launch: a fresh workspace this
+	// dispatcher deliberately never recorded in the ownership ledger. See
+	// Step.Detach and Dispatcher.paseoDetached.
+	Detached bool `json:"detached,omitempty"`
+	// WorkspaceID is the new worktree workspace a detach launch created
+	// ("" for every other dispatch kind — their workspace id, when they have
+	// one, is tracked only in the ownership ledger).
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	// Branch is the branch a detach launch's worktree was created on.
+	Branch string `json:"branch,omitempty"`
 }
 
 // HandoffActions are the generalized "supersede this hand-off" operations a
@@ -111,7 +144,7 @@ type RunRef struct {
 // automatically if the target produces one.
 //
 //   - RerunStep re-dispatches the SAME step on the current state — surface-
-//     agnostic (agent, Slack, Discord, …), since it just redoes what the step
+//     agnostic (agent, chat, web, …), since it just redoes what the step
 //     does. extraPrompt (may be "") is appended to the step's prompt.
 //   - RunWorkflow runs a NAMED workflow with `with` inputs (rendered against the
 //     trigger scope) — "run whatever you want," including a different workflow
@@ -383,19 +416,20 @@ func SetScrubber(r *secrets.Resolver) { scrubber.Store(r) }
 func templateData(req Request) map[string]any {
 	t := req.Trigger.Target
 	data := map[string]any{
-		"repo":      t.Repo,
-		"owner":     t.Owner,
-		"name":      t.Name,
-		"pr":        t.PR,
-		"issue":     t.Issue,
-		"number":    t.Number,
-		"head":      t.HeadSHA,
-		"base":      t.BaseRef,
-		"url":       t.HTMLURL,
-		"kind":      req.Trigger.Kind,
-		"title":     req.Trigger.Title,
-		"app_token": req.Tokens.App,
-		"gh_token":  req.Tokens.User,
+		"repo":   t.Repo,
+		"owner":  t.Owner,
+		"name":   t.Name,
+		"pr":     t.PR,
+		"issue":  t.Issue,
+		"number": t.Number,
+		"head":   t.HeadSHA,
+		"base":   t.BaseRef,
+		"url":    t.HTMLURL,
+		"kind":   req.Trigger.Kind,
+		"title":  req.Trigger.Title,
+	}
+	for k, v := range req.Credentials.Templates {
+		data[k] = v
 	}
 	for k, v := range req.Trigger.Context {
 		if _, exists := data[k]; !exists {
@@ -407,11 +441,11 @@ func templateData(req Request) map[string]any {
 	}
 	if r := scrubber.Load(); r != nil {
 		for k, v := range data {
-			switch k {
-			case "secrets", "vaults", "app_token", "gh_token":
+			if _, cred := req.Credentials.Templates[k]; cred || k == "secrets" || k == "vaults" {
 				// The explicit credential channels: {{.secrets.x}} /
 				// {{.vaults.v.k}} (deprecated env templating, still
-				// supported) and the dispatch tokens ({{.gh_token}}).
+				// supported) and the dispatch credentials the connector
+				// declares.
 				continue
 			}
 			data[k] = r.RedactValue(v)

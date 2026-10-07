@@ -42,9 +42,8 @@ func TestEngineRedactsDispatchAuditAndOutputTails(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	e := New(Options{
 		Config: baseCfg(), Store: st, Dispatch: d, Notifier: n,
-		Author:    dispatch.Author{Name: "Me"},
-		UserToken: func() (string, error) { return "utok", nil },
-		Secrets:   res, Log: logSpy,
+		Author:  dispatch.Author{Name: "Me"},
+		Secrets: res, Log: logSpy,
 	})
 	act := config.Action{Type: "command", Command: []string{"true"}}
 	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 1, "h1", "s1", act))
@@ -82,9 +81,8 @@ func TestEngineRedactsDispatchAuditAndOutputTails(t *testing.T) {
 	d2 := &fakeDispatcher{ref: dispatch.RunRef{Backend: "command", Output: "line1\ntoken=" + secret + "\n"}}
 	e2 := New(Options{
 		Config: baseCfg(), Store: tempStore(t), Dispatch: d2, Notifier: n,
-		Author:    dispatch.Author{Name: "Me"},
-		UserToken: func() (string, error) { return "utok", nil },
-		Secrets:   res, Log: logSpy,
+		Author:  dispatch.Author{Name: "Me"},
+		Secrets: res, Log: logSpy,
 	})
 	e2.process(context.Background(), agentTrigger("merge_conflict", "a/w", 2, "h2", "s2", act))
 	var sawTail bool

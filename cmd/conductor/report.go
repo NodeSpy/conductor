@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,9 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"time"
-
-	"github.com/NodeSpy/conductor/internal/config"
-	"github.com/NodeSpy/conductor/internal/notify"
 )
 
 // cmdReport summarizes conductor activity over a window from the audit log:
@@ -208,52 +204,6 @@ func printQuality(q map[string]*qualityCell) {
 			k, c.Merged, c.Closed, c.Reverted, c.Rejected,
 			c.GatePassed, c.GateEscalated, c.acceptRate()*100, c.revertRate()*100, perMerged)
 	}
-}
-
-// digestLoop periodically emits an activity summary via the notifier (opt-in via
-// notify.digest). Reuses tallyAudit over the elapsed window.
-func digestLoop(ctx context.Context, cfg *config.Config, n *notify.Notifier) {
-	iv := cfg.Notify.Digest.D()
-	if iv <= 0 {
-		return
-	}
-	logf("digest: enabled, every %s", iv)
-	t := time.NewTicker(iv)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			emitDigest(ctx, cfg, n, iv)
-		}
-	}
-}
-
-func emitDigest(ctx context.Context, cfg *config.Config, n *notify.Notifier, window time.Duration) {
-	f, err := os.Open(cfg.Store.AuditLog)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	dispatch, attention, err := tallyAudit(f, time.Now().Add(-window))
-	if err != nil {
-		return
-	}
-	total, ok, failed := 0, 0, 0
-	for _, m := range dispatch {
-		for oc, c := range m {
-			total += c
-			switch oc {
-			case "ok":
-				ok += c
-			case "failed":
-				failed += c
-			}
-		}
-	}
-	n.Digest(ctx, fmt.Sprintf("last %s — dispatched %d (ok %d, failed %d); escalate %d, needs_input %d, complete %d",
-		window, total, ok, failed, attention["escalate"], attention["needs_input"], attention["complete"]))
 }
 
 // tallyAudit streams a JSONL audit log and tallies dispatch outcomes (kind →

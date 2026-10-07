@@ -9,6 +9,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/inbound"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // The conductor connector makes conductor ITSELF a first-class connector:
@@ -91,12 +92,12 @@ type ConductorOps struct {
 	Run     func(ctx context.Context, name string, inputs map[string]any) (string, error)
 }
 
-// SweepHook runs the github catch-up sweep now (all github connectors),
-// wired by the daemon; the gh.sweep verb calls it.
+// sweepHook polls sources now (instance "" = every source), wired by the
+// daemon; a connector's declared poll verb calls it for its own instance.
 var (
 	opsMu     sync.Mutex
 	ops       *ConductorOps
-	sweepHook func(ctx context.Context) (int, error)
+	sweepHook func(ctx context.Context, instance string) (int, error)
 )
 
 // SetConductorOps wires the daemon facilities (nil clears; tests inject
@@ -107,8 +108,8 @@ func SetConductorOps(o *ConductorOps) {
 	opsMu.Unlock()
 }
 
-// SetSweepHook wires the on-demand github sweep the gh.sweep verb runs.
-func SetSweepHook(fn func(ctx context.Context) (int, error)) {
+// SetSweepHook wires the on-demand poll a connector's declared poll verb runs.
+func SetSweepHook(fn func(ctx context.Context, instance string) (int, error)) {
 	opsMu.Lock()
 	sweepHook = fn
 	opsMu.Unlock()
@@ -120,14 +121,37 @@ func conductorOps() *ConductorOps {
 	return ops
 }
 
-func runSweepHook(ctx context.Context) (int, error) {
+func runSweepHook(ctx context.Context, instance string) (int, error) {
 	opsMu.Lock()
 	fn := sweepHook
 	opsMu.Unlock()
 	if fn == nil {
-		return 0, fmt.Errorf("gh.sweep: the sweep runs inside the daemon — not available in this context")
+		return 0, fmt.Errorf("%s: polling runs inside the daemon — not available in this context", instance)
 	}
-	return fn(ctx)
+	return fn(ctx, instance)
+}
+
+// PollVerb is the verb name a connector's poll semantic gives the
+// engine-provided "poll this instance now" verb ("" when it declares none).
+func (d *TypeDecl) PollVerb() string {
+	if d == nil || d.Semantics == nil || d.Semantics.Poll == nil {
+		return ""
+	}
+	if n := d.Semantics.Poll.VerbName; n != "" {
+		return n
+	}
+	return "poll"
+}
+
+// pollNow answers a connector's poll verb: the engine polls this instance's
+// source now (plugin.poll, mode now) — the verb is the engine's, never
+// forwarded.
+func pollNow(ctx context.Context, instance string) (map[string]any, error) {
+	n, err := runSweepHook(ctx, instance)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"nudged": n}, nil
 }
 
 func init() { RegisterType(conductorDecl, newConductorImpl) }
@@ -265,19 +289,50 @@ func EmitLifecycle(ctx context.Context, event string, t core.Trigger, line strin
 		if ct.Spec.Event() != event || !ct.Spec.IsEnabled() {
 			continue
 		}
-		trigCtx := map[string]any{
-			"message": line, "event": event,
-			"ref":  fmt.Sprintf("%s#%d", t.Target.Repo, t.Target.Number),
-			"repo": t.Target.Repo, "number": t.Target.Number,
-			"origin_kind": t.Kind, "title": t.Title,
+		// The origin's own facts first (minus those it declares private or
+		// secret), then event-specific context, so the host's own keys below
+		// always win: origin_instance decides whose credentials the work gets.
+		trigCtx := map[string]any{}
+		real := t.Target.Repo != ""
+		var sem *sdk.EventSemantics
+		if real && t.HasSemantics() {
+			o := t.Semantics()
+			hidden := map[string]bool{}
+			for _, f := range append(append([]string(nil), o.Private...), o.Secret...) {
+				hidden[f] = true
+			}
+			for k, v := range t.Context {
+				if !hidden[k] {
+					trigCtx[k] = v
+				}
+			}
+			// What the work is about, as the origin declared it: its target,
+			// revision and checkout — so a run about a real target checks it
+			// out the way the origin's own runs do. Nothing else carries over
+			// (no dedupe, closing or remediation semantics of the origin).
+			sem = &sdk.EventSemantics{Target: o.Target, Revision: o.Revision, Checkout: o.Checkout}
 		}
 		for k, v := range extra {
 			trigCtx[k] = v
 		}
+		for k, v := range map[string]any{
+			"message": line, "event": event,
+			"ref":  fmt.Sprintf("%s#%d", t.Target.Repo, t.Target.Number),
+			"repo": t.Target.Repo, "number": t.Target.Number,
+			"origin_kind": t.Kind, "title": t.Title,
+			// The connector the originating trigger came from: work for this
+			// event gets that connector's declared credentials.
+			"origin_instance": t.Instance,
+		} {
+			trigCtx[k] = v
+		}
 		act := config.Action{Name: ct.Spec.Name, Enabled: ct.Spec.Enabled, Shadow: ct.Spec.Shadow, FlowRef: ct.Ref()}
-		act = inbound.ForceNoCheckout(act)
-		target := t.Target
+		target, trusted := t.Target, t.TargetTrusted
 		if target.Repo == "" {
+			trusted = false
+			// Only a synthetic target has nothing to clone; a lifecycle event
+			// about a real repo keeps the normal checkout derivation.
+			act = inbound.ForceNoCheckout(act)
 			target = inbound.SyntheticTarget("conductor:"+event, fmt.Sprintf("%d", time.Now().UnixNano()))
 		}
 		emit(ctx, core.Trigger{
@@ -290,6 +345,9 @@ func EmitLifecycle(ctx context.Context, event string, t core.Trigger, line strin
 			Context:  trigCtx,
 			Force:    true, // lifecycle notifications always fire (no dedup gate)
 			Action:   act,
+			// The origin's target, as the platform assigned it (or not).
+			TargetTrusted: trusted,
+			Sem:           sem,
 		})
 	}
 }

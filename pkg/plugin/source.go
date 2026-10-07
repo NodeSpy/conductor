@@ -1,0 +1,117 @@
+package plugin
+
+import "encoding/json"
+
+// Source surface of the one contract (docs/design/plugin-contract.md §1.5).
+// Every source is handed its triggers on start_source and may route each
+// event to one of them; plugin.poll and plugin.translate are in contract.go.
+// The method below is transitional: credential minting becomes a declared
+// verb (mints_credential).
+
+// Methods (daemon → plugin requests).
+const (
+	MethodAppToken = "plugin.app_token"
+)
+
+// SourceTrigger is one configured trigger on a source instance, as the daemon
+// hands it to a plugin in StartSourceRequest.Triggers.
+//
+// The plugin evaluates it — routing, identity gates, its declared match keys,
+// the trigger's `filter:` — and names it by ID on every event it fires for it.
+// The daemon still owns what a trigger DOES (its workflow, its engine options):
+// none of that crosses the wire.
+type SourceTrigger struct {
+	// ID is the daemon's stable handle for the trigger, unique per config.
+	// Echo it in SourceEvent.Trigger; it means nothing else.
+	ID string `json:"id"`
+	// Name is the trigger's configured name ("" when unnamed) — the variant a
+	// run is labelled with.
+	Name string `json:"name,omitempty"`
+	// Event is the declared event the trigger is `on:` (acme.alert →
+	// "alert").
+	Event string `json:"event"`
+	// Enabled is the trigger's enabled switch (nil = enabled).
+	Enabled *bool `json:"enabled,omitempty"`
+	// Options are the trigger's event `options:` as the operator wrote them.
+	Options map[string]any `json:"options,omitempty"`
+	// Filter is the trigger's `filter:` in the STRUCTURAL form — decode it
+	// with github.com/NodeSpy/conductor/pkg/sourcekit.Filter. Absent means no
+	// filter (the event's intrinsic default applies).
+	Filter json.RawMessage `json:"filter,omitempty"`
+}
+
+// Target is the object an event concerns. The legacy fields encode under Go
+// field names (no tags) — the shape source plugins have always emitted under
+// "target"; the daemon derives a key from them when Key is empty. Key, URL
+// and Assigned are the generic form (plugin-contract.md §1.5): a target is
+// identified by its key within an instance, and an event's
+// semantics.target can build Key from its facts instead.
+type Target struct {
+	Key      string `json:"key,omitempty"`
+	URL      string `json:"url,omitempty"`
+	Assigned bool   `json:"assigned,omitempty"`
+
+	Repo    string
+	Owner   string
+	Name    string
+	PR      int
+	Issue   int
+	Number  int
+	HeadSHA string
+	BaseRef string
+	HTMLURL string
+	Project string
+}
+
+// SourceEvent is one plugin.event payload. The first block is what every
+// source plugin has always sent; the second, routing and catch-up.
+type SourceEvent struct {
+	// Event is the declared event name this is (the `on:` suffix).
+	Event string `json:"event"`
+	// Kind is the trigger kind the engine sees; empty means Event.
+	Kind    string            `json:"kind,omitempty"`
+	Title   string            `json:"title,omitempty"`
+	Target  Target            `json:"target,omitempty"`
+	Context map[string]any    `json:"context,omitempty"`
+	Dedup   string            `json:"dedup,omitempty"`
+	Labels  map[string]string `json:"labels,omitempty"`
+
+	// Instance is the source instance this event belongs to (the
+	// StartSourceRequest.Instance it came from). Set it when one plugin
+	// process serves several instances; empty routes to the instance that
+	// started last, as before.
+	Instance string `json:"instance,omitempty"`
+	// Trigger routes the event to exactly ONE trigger — the SourceTrigger.ID
+	// the plugin evaluated it for. The daemon fires that trigger and no
+	// other, and does not re-evaluate its filter: the plugin owns its match
+	// keys. An event must name a trigger on its own Event. Empty falls back to
+	// the daemon matching every trigger on `on:` with its generic evaluator.
+	Trigger string `json:"trigger,omitempty"`
+	// CatchUp marks an event the plugin's sweep re-derived rather than a
+	// fresh delivery: when an agent already works the target, the engine
+	// skips it instead of queueing it.
+	CatchUp bool `json:"catch_up,omitempty"`
+	// TargetTrusted is the older spelling of Target.Assigned: the platform
+	// assigned Target (a signature-verified delivery, or a read with the
+	// plugin's own credentials). Either one makes the claim.
+	TargetTrusted bool `json:"target_trusted,omitempty"`
+}
+
+// AppTokenRequest asks for a fresh installation-scoped token for a
+// source — what a persisted run resumed after a restart re-mints, from the
+// installation_id its trigger context carried.
+type AppTokenRequest struct {
+	Instance       string `json:"instance"`
+	InstallationID int64  `json:"installation_id"`
+}
+
+// AppTokenResult carries the token. The daemon tracks it as a secret.
+type AppTokenResult struct {
+	Token string `json:"token"`
+}
+
+// AppTokenHandler is implemented by a source that mints App
+// installation tokens.
+type AppTokenHandler interface {
+	AppToken(AppTokenRequest) (AppTokenResult, error)
+}

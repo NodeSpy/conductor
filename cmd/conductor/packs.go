@@ -74,7 +74,7 @@ func resolvePluginsForInit(path string, allowUnlisted bool) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	results, err := reconcilePlugins(cfg, plugin.Options{AllowUnlisted: allowUnlisted, Log: logf})
+	results, err := reconcilePlugins(cfg, plugin.Options{AllowUnlisted: allowUnlisted, Log: logf}, true)
 	if err != nil {
 		return 0, err
 	}

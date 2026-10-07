@@ -13,9 +13,37 @@ import (
 var universalKeys = []string{
 	"repo", "owner", "name", "pr", "issue", "number", "head", "base", "url",
 	"kind", "title", "labels", "steps",
-	// dispatch injects the resolved tokens into every step's template data
-	// (legacy prompts reference them, e.g. env: {GH_TOKEN: "{{.gh_token}}"}).
-	"gh_token", "app_token",
+}
+
+// credentialKeys are the template keys connectors declare for the
+// credentials their events' work receives (e.g. env: {X: "{{.<key>}}"}):
+// addressable wherever such work runs.
+func credentialKeys() []string {
+	var out []string
+	for _, typ := range connector.Types() {
+		// TypeDeclsFor, not TypeDeclFor (finding 5): several resolved
+		// versions of the SAME type can be configured side by side, and a
+		// later release may declare a credential template an earlier one
+		// didn't — sweeping only the first-registered group's declaration
+		// would silently reject a {{.cred}} reference that a connector
+		// instance pinned to the OTHER version genuinely provides. Union
+		// across every group.
+		for _, d := range connector.TypeDeclsFor(typ) {
+			if d.Semantics == nil {
+				continue
+			}
+			for _, c := range d.Semantics.Credentials {
+				if c.Template != "" {
+					out = append(out, c.Template)
+				}
+			}
+		}
+	}
+	return out
+}
+
+func universalOrCredential() []string {
+	return append(append([]string(nil), universalKeys...), credentialKeys()...)
 }
 
 // Validate is the load-time semantic pass over the connectors-model config:
@@ -38,59 +66,8 @@ func Validate(cfg *config.Config, reg *connector.Registry) error {
 			return err
 		}
 	}
-	if err := validateNotifyVia(cfg, reg); err != nil {
-		return err
-	}
 	if err := validateSkillProfiles(cfg, reg); err != nil {
 		return err
-	}
-	return nil
-}
-
-// validateNotifyVia checks the notify.via routes: known connector verbs,
-// valid options (required keys may come from connector defaults), and every
-// template reference resolvable in the notify scope.
-func validateNotifyVia(cfg *config.Config, reg *connector.Registry) error {
-	if len(cfg.Notify.Via) == 0 {
-		return nil
-	}
-	sc := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}}
-	for _, k := range []string{"message", "event", "ref", "repo", "number", "kind", "title"} {
-		sc.top[k] = true
-	}
-	for i, r := range cfg.Notify.Via {
-		w := fmt.Sprintf("notify.via[%d]", i)
-		connName, verb, ok := strings.Cut(r.Uses, ".")
-		if !ok || connName == "" || verb == "" {
-			return fmt.Errorf("%s: `uses: %s` must be <connector>.<verb>", w, r.Uses)
-		}
-		in, found := reg.Get(connName)
-		if !found {
-			return fmt.Errorf("%s: unknown connector %q", w, connName)
-		}
-		vd, found := in.Decl.Verb(verb)
-		if !found {
-			return fmt.Errorf("%s: connector %q (%s) has no verb %q (verbs: %s)",
-				w, connName, in.Decl.Type, verb, strings.Join(in.Decl.VerbNames(), ", "))
-		}
-		if err := checkStoreSelector(cfg, w, connName, r.Options); err != nil {
-			return err
-		}
-		if !vd.Open {
-			if err := connector.ValidateCallOptions(w+" options", vd.Options, r.Options, in.DefaultOptions); err != nil {
-				return err
-			}
-		}
-		if err := checkMapRefs(w+" options", r.Options, sc); err != nil {
-			return err
-		}
-		for _, ev := range r.On {
-			switch ev {
-			case "dispatch", "complete", "escalate", "needs_input", "digest":
-			default:
-				return fmt.Errorf("%s: unknown event %q in on: (dispatch|complete|escalate|needs_input|digest)", w, ev)
-			}
-		}
 	}
 	return nil
 }
@@ -110,13 +87,18 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 	}
 	if ev.Dynamic && in.Impl != nil {
 		// Enforce the configured name against the declared set ONLY when the impl
-		// can enumerate it. Builtin sources enumerate their config-named events
-		// (cron schedules, fswatch watches) and stay strict — a typo'd name is
-		// rejected. An EXTERNAL source plugin cannot enumerate its per-instance
-		// names at config-validate time (its connection config lives out in the
-		// plugin), so it returns none; there the Dynamic event's template already
-		// matched, and the plugin validates the name itself at StartSource, so we
-		// accept it rather than reject every out-of-process source's trigger.
+		// can enumerate it. In THIS codebase that never actually happens today:
+		// every contract connector (externalImpl — a spawned plugin, or an
+		// in-process builtin: cron, rss, webhook, rest, graphql) always returns
+		// nil from DeclaredEvents, even cron, whose own schedule names it could
+		// in principle enumerate — nothing wraps a builtin in any other Impl.
+		// The enumerate-and-stay-strict path below exists for a hypothetical
+		// Go-native Impl that CAN see its own dynamic names (see
+		// internal/flow/dynamic_event_validate_test.go's dynStrictImpl for the
+		// shape); for everything that exists today, the Dynamic event's
+		// template already matched and the connector/plugin validates the name
+		// itself at StartSource, so we accept it rather than reject every
+		// dynamic-event trigger.
 		if declared := in.Impl.DeclaredEvents(); len(declared) > 0 {
 			found := false
 			for _, d := range declared {
@@ -134,13 +116,16 @@ func validateTrigger(cfg *config.Config, reg *connector.Registry, where string, 
 	if err := connector.ValidateFilter(where, in.Name, ev, spec.Filter); err != nil {
 		return err
 	}
-	if len(spec.Options) > 0 {
+	if len(spec.Options) > 0 && !ev.Unchecked {
 		if err := connector.ValidateSchema(where+" options", ev.Options, spec.Options); err != nil {
 			return err
 		}
 	}
 
 	sc := newScope(ev, cfg, spec.Group != nil)
+	if in.Decl.Unavailable != "" {
+		sc = openScope(cfg) // nothing to check its facts against yet
+	}
 	// A fan-in trigger's steps are shared across every listed source, so
 	// their references check against the UNION of the sources' contexts
 	// (heterogeneous fields are read defensively — {{.x | default ""}}).
@@ -347,11 +332,17 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 	}
 	for _, tf := range []struct{ label, s string }{
 		{"prompt", step.Prompt}, {"workdir", step.WorkDir},
+		{"repo", step.Repo}, {"branch", step.Branch}, {"mode", step.Mode},
 	} {
 		if tf.s == "" {
 			continue
 		}
 		if err := checkRefs(w+" "+tf.label, tf.s, stepScope); err != nil {
+			return err
+		}
+	}
+	for _, s := range step.Images {
+		if err := checkRefs(w+" images", s, stepScope); err != nil {
 			return err
 		}
 	}
@@ -390,7 +381,7 @@ func validateOneStep(cfg *config.Config, reg *connector.Registry, w string, step
 		if !ok {
 			return fmt.Errorf("%s: `uses: %s` — unknown connector %q", w, step.Uses, connName)
 		}
-		vd, ok := in.Decl.Verb(verb)
+		vd, ok := in.Decl.FlowVerb(verb)
 		if !ok {
 			return fmt.Errorf("%s: connector %q (%s) has no verb %q (verbs: %s)",
 				w, connName, in.Decl.Type, verb, strings.Join(in.Decl.VerbNames(), ", "))
@@ -503,7 +494,7 @@ func validateHookRefs(cfg *config.Config, reg *connector.Registry, where string,
 		if !ok {
 			return fmt.Errorf("%s: unknown connector %q", w, connName)
 		}
-		vd, ok := in.Decl.Verb(verb)
+		vd, ok := in.Decl.FlowVerb(verb)
 		if !ok {
 			return fmt.Errorf("%s: connector %q (%s) has no verb %q (verbs: %s)",
 				w, connName, in.Decl.Type, verb, strings.Join(in.Decl.VerbNames(), ", "))
@@ -535,8 +526,8 @@ func checkAskCapable(reg *connector.Registry, w, name string) error {
 	if !ok {
 		return fmt.Errorf("%s: handoff %q is not a configured connector", w, name)
 	}
-	if v, ok := in.Decl.Verb("ask"); !ok || !v.Ask {
-		return fmt.Errorf("%s: connector %q (%s) has no ask verb — hand-offs need slack/discord/web", w, name, in.Decl.Type)
+	if v, ok := in.Decl.FlowVerb("ask"); !ok || !v.Ask {
+		return fmt.Errorf("%s: connector %q (%s) has no ask verb — a hand-off needs a connector with one (web, or a chat plugin's)", w, name, in.Decl.Type)
 	}
 	return nil
 }
@@ -579,7 +570,7 @@ func vaultNameSet(cfg *config.Config) map[string]bool {
 
 func newScope(ev connector.EventDecl, cfg *config.Config, grouped bool) *scope {
 	sc := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}, vaults: vaultNameSet(cfg), secrets: secretNameSet(cfg)}
-	for _, k := range universalKeys {
+	for _, k := range universalOrCredential() {
 		sc.top[k] = true
 	}
 	for k := range ev.Context {
@@ -599,7 +590,7 @@ func newScope(ev connector.EventDecl, cfg *config.Config, grouped bool) *scope {
 
 func openScope(cfg *config.Config) *scope {
 	sc := &scope{top: map[string]bool{}, steps: map[string]connector.Schema{}, vaults: vaultNameSet(cfg), secrets: secretNameSet(cfg), open: true}
-	for _, k := range universalKeys {
+	for _, k := range universalOrCredential() {
 		sc.top[k] = true
 	}
 	if len(cfg.SecretRefs) > 0 {
@@ -774,7 +765,7 @@ func stepOutputSchema(reg *connector.Registry, step config.Step) connector.Schem
 	if !ok {
 		return nil
 	}
-	if vd, ok := in.Decl.Verb(verb); ok && len(vd.Outputs) > 0 {
+	if vd, ok := in.Decl.FlowVerb(verb); ok && len(vd.Outputs) > 0 {
 		s := connector.Schema{}
 		for k, v := range vd.Outputs {
 			s[k] = v
@@ -851,7 +842,7 @@ func sortedIDs(ids map[string]bool) string {
 }
 
 func isUniversal(k string) bool {
-	for _, u := range universalKeys {
+	for _, u := range universalOrCredential() {
 		if u == k {
 			return true
 		}

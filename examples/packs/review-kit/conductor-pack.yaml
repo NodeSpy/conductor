@@ -133,11 +133,12 @@ workflows:
         prompt: "Post this review on {{.repo}}#{{.pr}}:\n\n{{.review.output}}"
 
 checks:
-  # A trivial, dependency-free gate: the proposed change must not add TODO/FIXME.
+  # A trivial, dependency-free gate (a host shell, no engine plugin to fetch):
+  # replace it with a real check, e.g. that the change adds no TODO/FIXME.
   no-todos:
-    run: js
+    run: sh
     code: |
-      return { pass: true, reason: "review-kit sample gate" }
+      echo '{"pass": true, "reason": "review-kit sample gate"}'
 
 # The pack SHIPS this trigger so the consumer never rebuilds the event mapping,
 # but it arrives DISARMED — no `enabled`, no repos. Arming it (enabled + repos)

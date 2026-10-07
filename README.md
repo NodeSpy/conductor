@@ -50,9 +50,11 @@ conductor is a self-hosted daemon — a single static binary — that turns even
 into agent work. You describe, in YAML:
 
 - **Connectors** — one connection per service, each exposing event **sources**
-  (`on:`) and callable **verbs** (`uses:`). Built in: GitHub, Slack, Sentry,
-  PagerDuty, RSS, cron, generic webhook, durable stores, and secret vaults —
-  plus generic **REST** and **GraphQL** connectors for any other API.
+  (`on:`) and callable **verbs** (`uses:`). GitHub, Slack, Sentry, PagerDuty
+  and more are official plugins — fetched and verified automatically, never
+  compiled into the binary. Built in: RSS, cron, generic webhook, durable
+  stores, and secret vaults — plus generic **REST** and **GraphQL**
+  connectors for any other API.
 - **Triggers** — `on:` a source, an optional `filter:`, then `steps:` and lifecycle
   `hooks:`. Steps run **agents**, host or SSH **commands**, inline **code**
   (js / lua / risor / go, sandboxed), or any connector verb — mixing services in
@@ -127,9 +129,7 @@ like) can call conductor's authenticated `/invoke` API for the agent work it doe
   with run facts (`{{.run.pushed}}`, `{{.run.start_sha}}`, a public-safe
   `{{.run.reason}}`) — 👀 when a run takes a comment, 🚀 / 👍 / 😕 and a status
   row for how it went, every word yours — [Configuration](https://github.com/NodeSpy/conductor/wiki/Configuration#showing-progress-on-the-pr-github)
-- Introspection and dry-run; self-update; and a config that **auto-migrates**
-  itself across schema changes (backup + validate-before-commit, never a restart
-  loop) — [Migration](https://github.com/NodeSpy/conductor/wiki/Migration)
+- Introspection, dry-run, and self-update — [Migration](https://github.com/NodeSpy/conductor/wiki/Migration)
 
 ## Quick start
 

@@ -16,15 +16,43 @@ import (
 // returns its path + SHA-256. Skips if the go toolchain isn't available.
 func buildExamplePlugin(t *testing.T) (string, string) {
 	t.Helper()
+	return buildExamplePluginVariant(t, "acme-echo", "")
+}
+
+// buildExamplePluginSingleProcess is buildExamplePlugin, but built with
+// Capabilities.SingleProcess declared true (test/plugins/acme-echo's
+// singleProcess build flag) — the single_process capability's fixture for
+// the Manager-level promotion tests (manager_single_process_test.go).
+func buildExamplePluginSingleProcess(t *testing.T) (string, string) {
+	t.Helper()
+	// Same binary NAME as the plain build — each build lives in its own
+	// t.TempDir(), and the fixture's Decl.Type ("acme-echo") is hardcoded
+	// regardless of filename, so a differently-named binary would trip the
+	// daemon's identity anti-forgery check (describe's claimed type must
+	// equal the configured Provides name, which a local `use:` reference
+	// derives from the binary's filename).
+	return buildExamplePluginVariant(t, "acme-echo", "-X main.singleProcess=true")
+}
+
+// buildExamplePluginVariant compiles test/plugins/acme-echo into a temp dir
+// under name, with ldflags (empty for the plain build), and returns its path
+// + SHA-256. Skips if the go toolchain isn't available.
+func buildExamplePluginVariant(t *testing.T, name, ldflags string) (string, string) {
+	t.Helper()
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go toolchain not available")
 	}
 	dir := t.TempDir()
-	bin := filepath.Join(dir, "acme-echo")
-	cmd := exec.Command("go", "build", "-o", bin, "github.com/NodeSpy/conductor/test/plugins/acme-echo")
+	bin := filepath.Join(dir, name)
+	args := []string{"build"}
+	if ldflags != "" {
+		args = append(args, "-ldflags", ldflags)
+	}
+	args = append(args, "-o", bin, "github.com/NodeSpy/conductor/test/plugins/acme-echo")
+	cmd := exec.Command("go", args...)
 	cmd.Env = os.Environ()
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build example plugin: %v\n%s", err, out)
+		t.Fatalf("build example plugin (%s): %v\n%s", name, err, out)
 	}
 	data, err := os.ReadFile(bin)
 	if err != nil {

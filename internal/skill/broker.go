@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 const (
@@ -36,7 +37,7 @@ const (
 	// hand-off and still bounds a scraped token.
 	HandoffSessionTTL = 7 * 24 * time.Hour
 	// SessionTTL bounds a dispatch token's life — roughly a dispatch's
-	// lifetime (typical wait_timeouts are minutes; 2h leaves slack for slow
+	// lifetime (typical wait_timeouts are minutes; 2h leaves room for slow
 	// runs). A long-lived affinity session whose token ages out simply loses
 	// its skill tools; it never gets a stale identity. The table is
 	// in-memory, so tokens also die with the daemon.
@@ -98,12 +99,16 @@ type Identity struct {
 	// trigger is confined to when the target itself cannot be trusted.
 	Dispatch string
 	// Context is the originating trigger's context, held daemon-side for the
-	// session's lifetime. It exists for RESOURCE SCOPING: a connector's
-	// ContextScope hook reads it to decide which channel (repo, …) this
-	// dispatch may address with no explicit grant. It is never handed to the
+	// session's lifetime. It exists for RESOURCE SCOPING: the trigger's
+	// declared target scope (Sem) reads its facts to decide which channel
+	// (repo, …) this dispatch may address with no explicit grant. It is never handed to the
 	// agent and never leaves the daemon — the agent's own context comes from
 	// the prompt, not from here.
 	Context map[string]any
+	// Sem is the originating trigger's declared semantics, held daemon-side
+	// with Context: its target scope is what the dispatch may address with
+	// no explicit grant (the channel a chat event came from).
+	Sem *sdk.EventSemantics
 }
 
 type session struct {

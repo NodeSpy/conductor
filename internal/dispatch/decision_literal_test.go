@@ -21,9 +21,9 @@ func decisionRequest() Request {
 		Wait:    true,
 		Action: config.Action{Type: "agent", Prompt: plantedDiff, Checkout: "none",
 			OutputSchema: map[string]any{"type": "object"}},
-		Step:      config.Step{Type: "agent", DecisionLaunch: &config.DecisionLaunch{Document: plantedDiff}},
-		Tokens:    Tokens{User: "ghp_SECRET_USER_TOKEN", App: "ghs_SECRET_APP_TOKEN"},
-		Workspace: "wks1",
+		Step:        config.Step{Type: "agent", DecisionLaunch: &config.DecisionLaunch{Document: plantedDiff}},
+		Credentials: ghCreds("ghp_SECRET_USER_TOKEN", "ghs_SECRET_APP_TOKEN"),
+		Workspace:   "wks1",
 	}
 }
 

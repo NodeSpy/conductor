@@ -102,7 +102,20 @@ type Config struct {
 	// resolving relative paths (e.g. a plugin's local source). Set by Load.
 	baseDir string
 
-	Integrations []IntegrationRef `yaml:"integrations"`
+	// Legacy* fields are top-level keys removed with the legacy config schema
+	// (docs/design/plugin-contract.md Q4, §3 rows V3/G17/G18). They decode (so
+	// a config that still carries one of these keys gets the uniform
+	// migration error from Validate's checkLegacyBlocks rather than a raw
+	// "field not found in type" decode failure) but carry no data a live
+	// config can read. An operator migrates with the PREVIOUS release's
+	// `conductor config migrate`, then upgrades.
+	LegacyIntegrations legacyBlock `yaml:"integrations"`
+	LegacyNotify       legacyBlock `yaml:"notify"`
+	LegacyHandoff      legacyBlock `yaml:"handoff"`
+	LegacyHandoffs     legacyBlock `yaml:"handoffs"`
+	LegacyControllers  legacyBlock `yaml:"controllers"`
+	LegacyControl      legacyBlock `yaml:"control"`
+	LegacyPaseoBin     legacyBlock `yaml:"paseo_bin"`
 
 	// ConnectorsMap, Runtimes, Hosts, Workflows, Triggers, Policy, and
 	// SecretRefs are the connectors-model schema (see connectors.go). They
@@ -164,28 +177,9 @@ type Config struct {
 	// CallableConfig and internal/callable.
 	Callable CallableConfig `yaml:"callable"`
 
-	Control Control `yaml:"control"`
-	Notify  Notify  `yaml:"notify"`
-	// Handoff is the LEGACY singular hand-off block (a web-link page on the inbound
-	// listener). Deprecated in favor of `handoffs:` (below); still parsed for
-	// back-compat and folded into Handoffs["default"] by applyDefaults when
-	// `handoffs:` is empty. New configs should use `handoffs:` directly.
-	Handoff Handoff `yaml:"handoff"`
-	// Handoffs is an OPTIONAL named map of interactive-review hand-off channels
-	// (web-link, Slack, Discord) a `background: true` workflow step can present its
-	// draft on. Entirely optional: with no `handoffs:` block (and no legacy
-	// `handoff:` block), an interactive review stays paseo-native (you drive the
-	// agent in paseo), unchanged. See HandoffConfig and internal/handoff.
-	Handoffs map[string]HandoffConfig `yaml:"handoffs"`
-	// Controllers is an OPTIONAL map of named agent runtimes conductor can
-	// dispatch through (paseo, an ACP agent, opencode, …). Entirely optional: with
-	// no `controllers:` block, every agent uses the built-in paseo controller and
-	// behavior is unchanged. See ControllerConfig and internal/controller.
-	Controllers map[string]ControllerConfig `yaml:"controllers"`
-	PaseoBin    string                      `yaml:"paseo_bin"` // path to the paseo CLI (default "paseo")
-	Store       Store                       `yaml:"store"`
-	Update      Update                      `yaml:"update"`
-	DryRun      bool                        `yaml:"dry_run"`
+	Store  Store  `yaml:"store"`
+	Update Update `yaml:"update"`
+	DryRun bool   `yaml:"dry_run"`
 	// AdoptOpenWorkspaces routes PR feedback (new_comment/changes_requested) to an
 	// agent whose checkout is already on the PR's head branch — e.g. a workspace you
 	// opened by hand — instead of spawning a fresh worktree. Opt-in.
@@ -343,84 +337,46 @@ func (m *ApplyMode) UnmarshalYAML(n *yaml.Node) error {
 	return fmt.Errorf("config: update.apply must be true, false, or workflow")
 }
 
-// IntegrationRef is one entry in the `integrations:` list. It captures the
-// common header and retains the raw node so the concrete integration can decode
-// its own fields.
-type IntegrationRef struct {
-	Type    string    `yaml:"type"`
-	Name    string    `yaml:"name"`
-	Enabled *bool     `yaml:"enabled"`
-	raw     yaml.Node `yaml:"-"`
-}
-
-// UnmarshalYAML captures the header fields and the raw node.
-func (r *IntegrationRef) UnmarshalYAML(n *yaml.Node) error {
-	type hdr struct {
-		Type    string `yaml:"type"`
-		Name    string `yaml:"name"`
-		Enabled *bool  `yaml:"enabled"`
-	}
-	var h hdr
-	if err := n.Decode(&h); err != nil {
-		return err
-	}
-	r.Type, r.Name, r.Enabled, r.raw = h.Type, h.Name, h.Enabled, *n
-	return nil
-}
-
-// Decode unmarshals the raw integration node into a type-specific struct.
-func (r IntegrationRef) Decode(v any) error { return r.raw.Decode(v) }
-
-// IsEnabled reports whether the instance is enabled (default true).
-func (r IntegrationRef) IsEnabled() bool { return r.Enabled == nil || *r.Enabled }
-
-// Control is the kill switch + shadow settings.
-type Control struct {
-	Enabled    *bool  `yaml:"enabled"`     // default true
-	PauseLabel string `yaml:"pause_label"` // e.g. "conductor:off"
-	Shadow     bool   `yaml:"shadow"`      // global shadow mode
-	// MaxConcurrentAgents caps how many conductor coding agents run at once
-	// (protects the machine and avoids git-lock contention on a shared repo when
-	// a sweep fans out). Absent → default 3; explicit 0 (or negative) → unlimited.
-	MaxConcurrentAgents *int `yaml:"max_concurrent_agents"`
-	// MaxAgentsPerHour caps agent dispatches in a rolling hour (runaway guard — a
-	// webhook flood or sweep misfire can't spin up unbounded agents). 0 = unlimited.
-	MaxAgentsPerHour int `yaml:"max_agents_per_hour"`
-}
-
-// AgentsPerHour returns the rolling-hour agent-dispatch cap (0 = unlimited).
-func (c Control) AgentsPerHour() int { return c.MaxAgentsPerHour }
-
-// IsEnabled reports the master on/off (default true).
-func (c Control) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }
-
-// AgentCap returns the concurrent-agent cap: default 3 when unset, or the
-// configured value (<=0 means unlimited).
-func (c Control) AgentCap() int {
-	if c.MaxConcurrentAgents == nil {
-		return 3
-	}
-	return *c.MaxConcurrentAgents
-}
-
-// AgentCap returns the effective concurrent-agent cap: the global
-// `policy.concurrency.max_agents` when set, else the legacy
-// `control.max_concurrent_agents` (default 3). <=0 means unlimited.
+// AgentCap returns the effective concurrent-agent cap: the
+// `policy.concurrency.max_agents` when set, else a default of 3. <=0 means
+// unlimited. (The legacy `control.max_concurrent_agents` fallback was removed
+// with the legacy config schema; set `policy.concurrency.max_agents` instead.)
 func (c *Config) AgentCap() int {
 	if c.Policy != nil && c.Policy.Concurrency != nil && c.Policy.Concurrency.MaxAgents != nil {
 		return *c.Policy.Concurrency.MaxAgents
 	}
-	return c.Control.AgentCap()
+	return 3
 }
 
-// AgentsPerHour returns the effective rolling-hour dispatch cap: the global
-// `policy.concurrency.max_agents_per_hour` when set, else the legacy
-// `control.max_agents_per_hour`. 0 = unlimited.
+// AgentsPerHour returns the effective rolling-hour dispatch cap: the
+// `policy.concurrency.max_agents_per_hour` when set, else 0 (unlimited).
+// (The legacy `control.max_agents_per_hour` fallback was removed with the
+// legacy config schema; set `policy.concurrency.max_agents_per_hour` instead.)
 func (c *Config) AgentsPerHour() int {
 	if c.Policy != nil && c.Policy.Concurrency != nil && c.Policy.Concurrency.MaxAgentsPerHour != nil {
 		return *c.Policy.Concurrency.MaxAgentsPerHour
 	}
-	return c.Control.AgentsPerHour()
+	return 0
+}
+
+// GlobalPauseLabel returns the fleet-wide pause label set at the top-level
+// `policy:` scope ("" when unset). Mirrors the retired `control.pause_label`;
+// a connector/trigger-scoped pause label is resolved through the normal
+// policy cascade instead (see (*Engine).policyFor).
+func (c *Config) GlobalPauseLabel() string {
+	if c.Policy != nil && c.Policy.PauseLabel != nil {
+		return *c.Policy.PauseLabel
+	}
+	return ""
+}
+
+// GlobalShadow reports the fleet-wide shadow-mode default set at the
+// top-level `policy:` scope (false when unset). Mirrors the retired
+// `control.shadow`; a connector/trigger-scoped override is resolved through
+// the normal policy cascade instead (see (*Engine).policyFor), and a
+// per-action `shadow:` always wins over either.
+func (c *Config) GlobalShadow() bool {
+	return c.Policy != nil && c.Policy.Shadow != nil && *c.Policy.Shadow
 }
 
 // DefaultFlowMaxFanOut bounds a config-authored for_each / parallel fan-out
@@ -438,182 +394,6 @@ func (c *Config) FlowMaxFanOut() int {
 		return *c.Policy.MaxFanOut
 	}
 	return DefaultFlowMaxFanOut
-}
-
-// Handoff is the legacy singular hand-off block. Deprecated — see Config.Handoff.
-type Handoff struct {
-	Web HandoffWeb `yaml:"web"` // web-link channel served on the inbound HTTP listener
-}
-
-// HandoffConfig is one entry in the `handoffs:` named map (mirrors
-// ControllerConfig/`controllers:`). Exactly one of Web/Slack/Discord must be set;
-// Default flags the entry a step's `handoff:` resolves to when it names none
-// explicitly. See internal/handoff.Registry for resolution order.
-type HandoffConfig struct {
-	// Extends names another handoffs: entry this one inherits unset fields from
-	// (see resolveExtends).
-	Extends string `yaml:"extends,omitempty"`
-	// Web configures a web-link draft page served on conductor's inbound HTTP
-	// listener. Mutually exclusive with Slack/Discord.
-	Web *HandoffWeb `yaml:"web"`
-	// Slack configures a Slack DM/thread hand-off (see internal/handoff.SlackChannel).
-	// Posting the draft uses BotToken; capturing the reply also needs a `slack:`
-	// integration (Socket Mode) configured and running — see the Hand-offs section
-	// of README.md.
-	Slack *HandoffChat `yaml:"slack"`
-	// Discord configures a Discord DM/thread hand-off (see
-	// internal/handoff.DiscordChannel). Posting the draft and capturing the
-	// reply both go through a Discord bot gateway conductor runs itself (see
-	// internal/handoff.RunDiscordGateway) — no separate integration needed, and
-	// no tunnel/URL.
-	Discord *HandoffChat `yaml:"discord"`
-	// Default flags this hand-off as the fleet default, used when a step sets no
-	// explicit `handoff:`. At most one entry may set it.
-	Default bool `yaml:"default"`
-}
-
-// HandoffWeb configures the web-link hand-off channel: a draft page (approve /
-// revise / discard + a text box) served on conductor's inbound HTTP listener.
-type HandoffWeb struct {
-	// BaseURL is the public origin the draft links point at (e.g.
-	// https://conductor.example.com). Empty disables the web channel.
-	BaseURL string `yaml:"base_url"`
-	// Listen is the inbound HTTP address the draft pages are served on (e.g.
-	// :8099). Shared with other inbound integrations on the same address; defaults
-	// to :8099 when a BaseURL is set but no address is given.
-	Listen string `yaml:"listen"`
-	// TTL is how long a presented draft's link stays valid before the server-side
-	// pending entry expires (default 30m when unset).
-	TTL Duration `yaml:"ttl"`
-	// Tunnel configures a per-hand-off ephemeral public URL (cloudflared, ngrok,
-	// tailscale, ssh, …), opened fresh for each draft instead of using a fixed
-	// BaseURL. Unset (or provider: static/"") keeps today's BaseURL-as-is
-	// behavior.
-	Tunnel TunnelConfig `yaml:"tunnel"`
-}
-
-// TunnelConfig is the schema for a pluggable tunnel that gives the web hand-off
-// channel a fresh public URL per draft, instead of a persistent `base_url` you
-// host yourself. See handoff.NewTunnel for the provider implementations
-// (lan/static/cloudflared/ngrok/tailscale/ssh/localxpose/command).
-type TunnelConfig struct {
-	Provider   string   `yaml:"provider"`
-	Host       string   `yaml:"host"`
-	Mode       string   `yaml:"mode"`
-	SSHHost    string   `yaml:"ssh_host"`
-	Authtoken  string   `yaml:"authtoken"`
-	URLPattern string   `yaml:"url_pattern"`
-	Command    []string `yaml:"command"`
-	Account    bool     `yaml:"account"`
-}
-
-// HandoffChat is the schema for a chat-based (Slack/Discord) hand-off channel:
-// post the draft to a DM or a thread, capture the reply. Shared by
-// HandoffConfig.Slack and HandoffConfig.Discord.
-type HandoffChat struct {
-	To      string `yaml:"to"`      // dm | thread
-	Channel string `yaml:"channel"` // to: thread — channel to post in (required)
-	// User is the target user id for a `to: dm` channel (a Slack user id, e.g.
-	// U0123ABCD, or a Discord user id — required for dm). There is no
-	// GitHub->Slack/Discord identity mapping, so this is never
-	// inferred/defaulted; you must look up the id yourself (Slack profile ->
-	// "Copy member ID"; Discord: enable Developer Mode, right-click the user ->
-	// "Copy User ID").
-	User string `yaml:"user"`
-	// BotToken authenticates posting (and, for Discord, the gateway connection
-	// that captures replies). Slack: a bot token, xoxb-… (chat:write, +im:write
-	// for to: dm). Discord: a bot token from the Discord developer portal; the
-	// bot needs the privileged MESSAGE CONTENT intent enabled and must be
-	// invited to the server/channel (or share a DM with `user`).
-	BotToken string `yaml:"bot_token"`
-	// Approvers optionally restricts who may resolve a `to: thread` hand-off:
-	// only replies from these user ids (same id form as `user`) count —
-	// without it, ANYONE in the channel can approve an agent's draft. Ignored
-	// for `to: dm` (the DM already pins one user).
-	Approvers []string `yaml:"approvers"`
-}
-
-// Notify configures notifications. All channels are private to you (the daemon
-// journal today; a push endpoint later) — the conductor never comments on PRs.
-type Notify struct {
-	Push              bool            `yaml:"push"`
-	On                []string        `yaml:"on"`                  // subset of: dispatch, complete, escalate, needs_input
-	SlackWebhookURL   string          `yaml:"slack_webhook_url"`   // optional Slack incoming-webhook URL to post enabled events to
-	DiscordWebhookURL string          `yaml:"discord_webhook_url"` // optional Discord incoming-webhook URL to post enabled events to
-	Ntfy              NotifyNtfy      `yaml:"ntfy"`                // optional ntfy.sh (or self-hosted) topic to publish to
-	Pushover          NotifyPushover  `yaml:"pushover"`            // optional Pushover application/user to notify
-	Notifiarr         NotifyNotifiarr `yaml:"notifiarr"`           // optional Notifiarr passthrough integration
-	Digest            Duration        `yaml:"digest"`              // periodic activity summary (e.g. 24h); 0 = off
-
-	// Via routes lifecycle notifications through connector VERBS — the
-	// connectors-model delivery. Each route is an action unit invoked for the
-	// enabled events (its own on: overriding the block's), with the composed
-	// notification line addressable as {{.message}} (plus event/repo/number/
-	// kind/title/ref). The sink fields above remain the legacy delivery; the
-	// migration maps each configured sink onto a connector + a via route.
-	Via []NotifyRoute `yaml:"via,omitempty"`
-}
-
-// Configured reports whether the notify block carries anything — the
-// retired-model check: on a connectors-model config the block is rejected
-// (alerting is conductor.* triggers), while legacy configs keep the legacy
-// delivery until they migrate.
-func (n Notify) Configured() bool {
-	return len(n.On) > 0 || len(n.Via) > 0 || n.Digest != 0 || n.Push ||
-		n.SlackWebhookURL != "" || n.DiscordWebhookURL != "" || n.Ntfy.Topic != "" ||
-		(n.Pushover.Token != "" && n.Pushover.User != "") || n.Notifiarr.APIKey != ""
-}
-
-// NotifyRoute is one notify delivery through a connector verb.
-type NotifyRoute struct {
-	// On restricts this route to a subset of events (empty = the block's on:).
-	On      []string       `yaml:"on,omitempty"`
-	Uses    string         `yaml:"uses"`
-	Options map[string]any `yaml:"options,omitempty"`
-}
-
-// WantsRoute reports whether a route fires for an event: its own on: list
-// when set, else the block's policy.
-func (n Notify) WantsRoute(r NotifyRoute, event string) bool {
-	if len(r.On) == 0 {
-		return true // the caller already gated on n.Wants(event)
-	}
-	for _, e := range r.On {
-		if e == event {
-			return true
-		}
-	}
-	return false
-}
-
-// NotifyNtfy configures publishing to an ntfy (https://ntfy.sh or self-hosted)
-// topic. Server defaults to https://ntfy.sh when unset.
-type NotifyNtfy struct {
-	Server string `yaml:"server"`
-	Topic  string `yaml:"topic"`
-}
-
-// NotifyPushover configures posting to the Pushover message API.
-type NotifyPushover struct {
-	Token string `yaml:"token"` // application token
-	User  string `yaml:"user"`  // user/group key
-}
-
-// NotifyNotifiarr configures posting to a Notifiarr passthrough integration,
-// which relays to Discord on Notifiarr's side.
-type NotifyNotifiarr struct {
-	APIKey    string `yaml:"api_key"`
-	ChannelID string `yaml:"channel_id"` // optional: Discord channel ID override
-}
-
-// Wants reports whether the given notify event is enabled.
-func (n Notify) Wants(event string) bool {
-	for _, e := range n.On {
-		if e == event {
-			return true
-		}
-	}
-	return false
 }
 
 // Retry controls re-attempts of a `paseo run` that fails with a transient error
@@ -656,10 +436,12 @@ type Store struct {
 	HistoryMaxRuns   int      `yaml:"history_max_runs"`
 }
 
-// ControllerConfig is one entry in the optional top-level `controllers:` block —
-// a named agent runtime conductor can dispatch through. All fields are optional;
-// the block itself is optional. With no `controllers:` block every agent uses the
-// built-in paseo controller (no migration, no behavior change).
+// ControllerConfig is the internal shape the controller registry consumes for
+// one named agent runtime. It used to also be decoded directly from a
+// top-level `controllers:` block; that block was removed with the legacy
+// config schema (`runtimes:` is the only way to declare one now), but the
+// type stays — every `runtimes:` entry still converts to one via
+// RuntimeConfig.Controller.
 type ControllerConfig struct {
 	// Type is a built-in controller kind (M1 ships "paseo"). Mutually exclusive
 	// with Agent. Reserved kinds parse and validate but aren't runnable until their
@@ -727,52 +509,24 @@ func (c ControllerConfig) EffectiveTransport() string {
 	return "native"
 }
 
-// DefaultControllerName returns the name of the controller flagged default:true,
-// or "" when none is (resolution then falls back to the built-in paseo).
-func (c *Config) DefaultControllerName() string {
-	for name, cc := range c.Controllers {
-		if cc.Default {
-			return name
-		}
-	}
-	return ""
-}
-
-// MergedControllers unions the connectors-model `runtimes:` block into the
-// legacy `controllers:` shape the controller registry consumes (each
-// RuntimeConfig converted via its Controller() method). Both schemas name the
-// same registry, and validateRuntimeDefaults already rejects a name defined
-// under both — so this is a plain union, no precedence to resolve.
+// MergedControllers converts every `runtimes:` entry to the ControllerConfig
+// shape the controller registry consumes (via RuntimeConfig.Controller).
+// Named "Merged" for its callers (it used to also merge in a legacy
+// `controllers:` block, removed with the legacy config schema).
 func (c *Config) MergedControllers() map[string]ControllerConfig {
-	merged := make(map[string]ControllerConfig, len(c.Controllers)+len(c.Runtimes))
-	for name, cc := range c.Controllers {
-		merged[name] = cc
-	}
+	merged := make(map[string]ControllerConfig, len(c.Runtimes))
 	for name, rt := range c.Runtimes {
 		merged[name] = rt.Controller()
 	}
 	return merged
 }
 
-// DefaultRuntimeName returns the name of the runtime or controller flagged
-// default:true (runtimes: checked first), or "" when none is (resolution
-// then falls back to the built-in paseo). At most one across both maps may
-// set it — see validateRuntimeDefaults.
+// DefaultRuntimeName returns the name of the runtime flagged default:true, or
+// "" when none is (resolution then falls back to the built-in paseo). At most
+// one `runtimes:` entry may set it — see validateRuntimeDefaults.
 func (c *Config) DefaultRuntimeName() string {
 	for name, rt := range c.Runtimes {
 		if rt.Default {
-			return name
-		}
-	}
-	return c.DefaultControllerName()
-}
-
-// DefaultHandoffName returns the name of the `handoffs:` entry flagged
-// default:true, or "" when none is (resolution then falls back to the sole
-// configured entry, or no hand-off channel at all — see internal/handoff.Registry).
-func (c *Config) DefaultHandoffName() string {
-	for name, hc := range c.Handoffs {
-		if hc.Default {
 			return name
 		}
 	}
@@ -887,14 +641,16 @@ type Action struct {
 	// an ordered workflow; each step is itself an Action plus ID/If/OutputSchema.
 	Steps        []Action       `yaml:"steps"`
 	ID           string         `yaml:"id"`            // step id (for steps.<id>.outputs.*)
-	If           string         `yaml:"if"`            // step condition (see internal/expr)
+	If           string         `yaml:"if"`            // step condition (see pkg/expr)
 	OutputSchema map[string]any `yaml:"output_schema"` // agent step: JSON schema for structured output
 	Background   bool           `yaml:"background"`    // workflow step: dispatch `paseo run --background` and don't
 	//                                                    wait/capture — launch a live agent to drive interactively
-	// Handoff names a `handoffs:` entry (see Config.Handoffs) a background step
-	// presents its interactive review draft on. Empty resolves to the entry
-	// flagged default:true, then the sole configured entry, then no hand-off
-	// channel (paseo-native). Only meaningful on a background step.
+	// Handoff names an ask-capable connector (one with an `ask` verb — slack,
+	// discord, web) a background step presents its interactive review draft
+	// on, the same way a connectors-model step's `handoff:` does (see
+	// connectors.go Step.Handoff and internal/flow/validate.go
+	// checkAskCapable). Empty = no hand-off channel (paseo-native). Only
+	// meaningful on a background step.
 	Handoff string `yaml:"handoff"`
 
 	// gating actors (live on the check they gate)
@@ -1009,7 +765,7 @@ func (s *ActionSet) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-// Refs labels each action in the set with where it lives, for CheckAgentRefs.
+// Refs labels each action in the set with where it lives (see ActionRef).
 // Named variants get a `[name]` suffix so a bad reference in one variant of a
 // kind is distinguishable from its siblings.
 func (s ActionSet) Refs(where string) []ActionRef {
@@ -1390,9 +1146,6 @@ func splitYAMLComment(line string) (code, comment string) {
 }
 
 func (c *Config) applyDefaults() {
-	if c.PaseoBin == "" {
-		c.PaseoBin = "paseo"
-	}
 	// A runtime's name implies its `use:` when it names no implementation.
 	// After resolveExtends, so an inherited use: still wins.
 	c.applyRuntimeUseDefaults()
@@ -1425,40 +1178,71 @@ func (c *Config) applyDefaults() {
 	if c.Store.AuditMaxSize == 0 {
 		c.Store.AuditMaxSize = 50 * 1024 * 1024
 	}
-	// The notify block (and its escalate default) is legacy-only — the
-	// connectors model alerts through conductor.* triggers instead.
-	if len(c.Integrations) > 0 && len(c.Notify.On) == 0 {
-		c.Notify.On = []string{"escalate"}
-	}
 	if c.Update.Auto && c.Update.Interval == 0 {
 		c.Update.Interval = Duration(10 * time.Minute)
 	}
-	c.applyHandoffCompat()
 }
 
-// applyHandoffCompat folds the LEGACY singular `handoff: { web: … }` block into
-// `handoffs: { default: { web: …, default: true } }` when the new named map is
-// empty, so a config still on the old field keeps loading and resolving exactly
-// as before (a step naming no explicit `handoff:` gets this synthesized default
-// entry). A no-op once `handoffs:` is set — the new map always wins. `handoff:`
-// shipped with no known users on it yet, but the shim is cheap to keep.
-func (c *Config) applyHandoffCompat() {
-	if len(c.Handoffs) > 0 {
-		return
+// legacyBlock is a placeholder for a top-level key removed with the legacy
+// config schema (docs/design/plugin-contract.md decision Q4, §3 rows
+// V3/G17/G18). It decodes successfully for ANY YAML shape under the key — so
+// a config that still carries the key gets the uniform migration error from
+// checkLegacyBlocks (below) instead of a raw "field not found in type"
+// strict-decode failure — but records nothing: there is nothing left to read.
+type legacyBlock struct{ present bool }
+
+// UnmarshalYAML only runs when the key is present in the document at all
+// (yaml.v3 never calls it for an absent key), so present==true is exactly
+// "the config still has this key", regardless of what it holds (`{}`, `[]`,
+// `null`, a populated block — all count).
+func (b *legacyBlock) UnmarshalYAML(n *yaml.Node) error {
+	b.present = true
+	return nil
+}
+
+// checkLegacyBlocks is the first check Validate runs: it names the first
+// still-present legacy top-level key (checked in a fixed order, for a
+// deterministic error when more than one lingers) with the uniform migration
+// message. An operator migrates with the PREVIOUS release's `conductor config
+// migrate`, then upgrades — this binary never reads these blocks.
+func (c *Config) checkLegacyBlocks() error {
+	for _, k := range []struct {
+		name    string
+		present bool
+	}{
+		{"integrations", c.LegacyIntegrations.present},
+		{"notify", c.LegacyNotify.present},
+		{"handoff", c.LegacyHandoff.present},
+		{"handoffs", c.LegacyHandoffs.present},
+		{"controllers", c.LegacyControllers.present},
+		{"control", c.LegacyControl.present},
+		{"paseo_bin", c.LegacyPaseoBin.present},
+	} {
+		if k.present {
+			return removedLegacyBlockErr(k.name)
+		}
 	}
-	if c.Handoff.Web.BaseURL == "" && c.Handoff.Web.Listen == "" {
-		return
-	}
-	web := c.Handoff.Web
-	c.Handoffs = map[string]HandoffConfig{
-		"default": {Web: &web, Default: true},
-	}
+	return nil
+}
+
+// removedLegacyBlockErr is the one helper every removed-legacy-block error
+// goes through, so the wording is uniform regardless of which key triggered
+// it. v0.60.0 is named explicitly (finding 8, LOW) rather than described
+// relative to "the plugin contract" — a release name an operator can
+// actually go find and install, not a description they'd have to look up
+// to resolve into one.
+func removedLegacyBlockErr(key string) error {
+	return fmt.Errorf("config: `%s:` was removed with the legacy config schema — "+
+		"migrate it with `conductor config migrate` on v0.60.0 (the last release that has it), then upgrade", key)
 }
 
 // Validate checks required fields and cross-field consistency.
 func (c *Config) Validate() error {
-	if len(c.Integrations) == 0 && !c.HasConnectors() {
-		return fmt.Errorf("config: no integrations or connectors configured")
+	if err := c.checkLegacyBlocks(); err != nil {
+		return err
+	}
+	if !c.HasConnectors() {
+		return fmt.Errorf("config: no connectors configured")
 	}
 	if err := c.validateConnectors(); err != nil {
 		return err
@@ -1490,25 +1274,6 @@ func (c *Config) Validate() error {
 		}
 	}
 	if err := c.validatePricing(); err != nil {
-		return err
-	}
-	names := map[string]bool{}
-	for i, ig := range c.Integrations {
-		if ig.Type == "" {
-			return fmt.Errorf("config: integrations[%d]: missing type", i)
-		}
-		if ig.Name == "" {
-			return fmt.Errorf("config: integrations[%d]: missing name", i)
-		}
-		if names[ig.Name] {
-			return fmt.Errorf("config: duplicate integration name %q", ig.Name)
-		}
-		names[ig.Name] = true
-	}
-	if err := c.validateControllers(); err != nil {
-		return err
-	}
-	if err := c.validateHandoffs(); err != nil {
 		return err
 	}
 	if err := c.validateSteps(); err != nil {
@@ -1590,17 +1355,39 @@ func (c *Config) SkillToolsSupported(p Step) (runtime string, ok bool) {
 	return rn, mode != SkillModeNone
 }
 
+// runtimeSupportsLaunchFields reports whether a step's resolved runtime is a
+// paseo-type runtime — the only kind that carries Step.Detach/Repo/Images
+// (`paseo run -d`, its checkout, `--image`). known is false when the runtime
+// can't be resolved statically (an unconfigured Config, or a named runtime
+// this Config doesn't define — a different validator already rejects that),
+// in which case the caller should not fail the step on this check alone; the
+// engine re-checks at dispatch.
+func (c *Config) runtimeSupportsLaunchFields(s Step) (supported, known bool) {
+	if c == nil {
+		return true, false
+	}
+	rn := s.Runtime
+	if rn == "" {
+		rn = c.DefaultRuntimeName()
+	}
+	if rn == "" || rn == BuiltinPaseoRuntime {
+		return true, true
+	}
+	cc, found := c.MergedControllers()[rn]
+	if !found {
+		return true, false
+	}
+	return cc.Type == "paseo" || (cc.Type == "" && cc.Agent == ""), true
+}
+
 // BuiltinPaseoRuntime is the implicit default runtime's name (mirrors
 // controller.BuiltinPaseo without the import).
 const BuiltinPaseoRuntime = "paseo"
 
-// runtimeNames lists runtimes and legacy controllers, sorted, for errors.
+// runtimeNames lists defined runtime names, sorted, for errors.
 func (c *Config) runtimeNames() string {
-	names := make([]string, 0, len(c.Runtimes)+len(c.Controllers))
+	names := make([]string, 0, len(c.Runtimes))
 	for n := range c.Runtimes {
-		names = append(names, n)
-	}
-	for n := range c.Controllers {
 		names = append(names, n)
 	}
 	if len(names) == 0 {
@@ -1608,39 +1395,6 @@ func (c *Config) runtimeNames() string {
 	}
 	sort.Strings(names)
 	return strings.Join(names, ", ")
-}
-
-// validateControllers checks the optional `controllers:` block: each entry sets
-// exactly one of type/agent, transport and session_model (when set) are known
-// values, and at most one controller is flagged default:true.
-func (c *Config) validateControllers() error {
-	validTransport := map[string]bool{"acp": true, "native": true, "cli": true}
-	validModel := map[string]bool{"native": true, "resumable": true, "oneshot": true}
-	defaults := 0
-	for name, cc := range c.Controllers {
-		if name == "" {
-			return fmt.Errorf("config: controllers: empty controller name")
-		}
-		if (cc.Type == "") == (cc.Agent == "") {
-			return fmt.Errorf("config: controller %q: set exactly one of `type` or `agent`", name)
-		}
-		if cc.Transport != "" && !validTransport[cc.Transport] {
-			return fmt.Errorf("config: controller %q: transport must be acp|native|cli, got %q", name, cc.Transport)
-		}
-		if cc.SessionModel != "" && !validModel[cc.SessionModel] {
-			return fmt.Errorf("config: controller %q: session_model must be native|resumable|oneshot, got %q", name, cc.SessionModel)
-		}
-		if err := c.checkRemoteHostSupport("controller", name, cc.Host, cc.Type, cc.Agent, cc.EffectiveTransport()); err != nil {
-			return err
-		}
-		if cc.Default {
-			defaults++
-		}
-	}
-	if defaults > 1 {
-		return fmt.Errorf("config: at most one controller may set `default: true` (%d do)", defaults)
-	}
-	return nil
 }
 
 // checkRemoteHostSupport validates a runtime/controller's `host:` reference:
@@ -1661,213 +1415,17 @@ func (c *Config) checkRemoteHostSupport(kind, name, host, typ, agent, transport 
 	return nil
 }
 
-// controllerNames lists the defined controller names, sorted, for error messages.
-func (c *Config) controllerNames() string {
-	if len(c.Controllers) == 0 {
-		return "none"
-	}
-	names := make([]string, 0, len(c.Controllers))
-	for n := range c.Controllers {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return strings.Join(names, ", ")
-}
-
-// validTunnelProviders are the recognized `handoffs.*.web.tunnel.provider`
-// values (empty == "static": no process, base_url used as-is). See
-// internal/handoff/tunnel.go for what each spawns.
-var validTunnelProviders = map[string]bool{
-	"":            true,
-	"static":      true,
-	"lan":         true,
-	"cloudflared": true,
-	"ngrok":       true,
-	"tailscale":   true,
-	"ssh":         true,
-	"localxpose":  true,
-	"command":     true,
-}
-
-// validateHandoffs checks the optional `handoffs:` block: each entry sets
-// exactly one channel sub-block (web/slack/discord), and at most one entry is
-// flagged default:true. A `web` entry's `tunnel:` block (if any) is checked for
-// a known provider, a sane `mode` for tailscale, a non-empty `command:` and
-// compilable `url_pattern:` for the `command` provider, and a non-empty
-// `ssh_host` for the `ssh` provider — so a typo/missing field is a config-load
-// error, not a failure the first time a step tries to present a draft. (A
-// workflow step's `handoff:` reference is checked alongside its `agent:`
-// reference — see CheckAgentRefs/checkAgentRef, which runs after the
-// step-owning integrations are built.)
-func (c *Config) validateHandoffs() error {
-	defaults := 0
-	for name, hc := range c.Handoffs {
-		if name == "" {
-			return fmt.Errorf("config: handoffs: empty handoff name")
-		}
-		set := 0
-		if hc.Web != nil {
-			set++
-			if err := validateTunnel(name, hc.Web.Tunnel); err != nil {
-				return err
-			}
-		}
-		if hc.Slack != nil {
-			set++
-			if err := validateSlackChat(name, hc.Slack); err != nil {
-				return err
-			}
-		}
-		if hc.Discord != nil {
-			set++
-			if err := validateDiscordChat(name, hc.Discord); err != nil {
-				return err
-			}
-		}
-		if set != 1 {
-			return fmt.Errorf("config: handoff %q: set exactly one of `web`, `slack`, or `discord` (got %d)", name, set)
-		}
-		if hc.Default {
-			defaults++
-		}
-	}
-	if defaults > 1 {
-		return fmt.Errorf("config: at most one handoff may set `default: true` (%d do)", defaults)
-	}
-	return nil
-}
-
-// validateSlackChat checks one `handoffs.<name>.slack:` block: `to` must be
-// dm|thread, thread requires channel, dm requires user, and bot_token is always
-// required (there's no way to post without it). Checked at config-load time so
-// a missing field is a startup error, not a failure the first time a step tries
-// to present a draft.
-func validateSlackChat(handoffName string, hc *HandoffChat) error {
-	switch hc.To {
-	case "dm", "thread":
-	default:
-		return fmt.Errorf("config: handoff %q: slack.to must be dm|thread, got %q", handoffName, hc.To)
-	}
-	if hc.To == "thread" && hc.Channel == "" {
-		return fmt.Errorf("config: handoff %q: slack.to: thread requires channel", handoffName)
-	}
-	if hc.To == "dm" && hc.User == "" {
-		return fmt.Errorf("config: handoff %q: slack.to: dm requires user (a Slack user id, e.g. U0123ABCD)", handoffName)
-	}
-	if hc.BotToken == "" {
-		return fmt.Errorf("config: handoff %q: slack.bot_token is required", handoffName)
-	}
-	return nil
-}
-
-// validateDiscordChat checks one `handoffs.<name>.discord:` block: `to` must
-// be dm|thread, thread requires channel, dm requires user, and bot_token is
-// always required. Mirrors validateSlackChat.
-func validateDiscordChat(handoffName string, hc *HandoffChat) error {
-	switch hc.To {
-	case "dm", "thread":
-	default:
-		return fmt.Errorf("config: handoff %q: discord.to must be dm|thread, got %q", handoffName, hc.To)
-	}
-	if hc.To == "thread" && hc.Channel == "" {
-		return fmt.Errorf("config: handoff %q: discord.to: thread requires channel", handoffName)
-	}
-	if hc.To == "dm" && hc.User == "" {
-		return fmt.Errorf("config: handoff %q: discord.to: dm requires user (a Discord user id)", handoffName)
-	}
-	if hc.BotToken == "" {
-		return fmt.Errorf("config: handoff %q: discord.bot_token is required", handoffName)
-	}
-	return nil
-}
-
-// validateTunnel checks one `handoffs.<name>.web.tunnel:` block. An empty
-// Provider ("") is valid — it means "static" (no process, base_url used as-is).
-func validateTunnel(handoffName string, t TunnelConfig) error {
-	if !validTunnelProviders[t.Provider] {
-		names := make([]string, 0, len(validTunnelProviders))
-		for p := range validTunnelProviders {
-			if p != "" {
-				names = append(names, p)
-			}
-		}
-		sort.Strings(names)
-		return fmt.Errorf("config: handoff %q: tunnel provider must be one of %s, got %q", handoffName, strings.Join(names, "|"), t.Provider)
-	}
-	switch t.Provider {
-	case "tailscale":
-		if t.Mode != "" && t.Mode != "serve" && t.Mode != "funnel" {
-			return fmt.Errorf("config: handoff %q: tunnel mode must be serve|funnel, got %q", handoffName, t.Mode)
-		}
-	case "ssh":
-		if t.SSHHost == "" {
-			return fmt.Errorf("config: handoff %q: tunnel provider \"ssh\" requires ssh_host (e.g. localhost.run, serveo.net, a.pinggy.io)", handoffName)
-		}
-	case "command":
-		if len(t.Command) == 0 {
-			return fmt.Errorf("config: handoff %q: tunnel provider \"command\" requires a non-empty command:", handoffName)
-		}
-	}
-	if t.URLPattern != "" {
-		if _, err := regexp.Compile(t.URLPattern); err != nil {
-			return fmt.Errorf("config: handoff %q: invalid tunnel url_pattern %q: %w", handoffName, t.URLPattern, err)
-		}
-	}
-	return nil
-}
-
-// handoffNames lists the defined `handoffs:` names, sorted, for error messages.
-func (c *Config) handoffNames() string {
-	if len(c.Handoffs) == 0 {
-		return "none"
-	}
-	names := make([]string, 0, len(c.Handoffs))
-	for n := range c.Handoffs {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return strings.Join(names, ", ")
-}
-
 // ActionRef is one configured action together with a human-readable location
 // (e.g. `github[acme] rules[0].actions.review_requested`), so a cross-config
-// check can say exactly where a bad reference lives. Integrations enumerate these
-// for the CLI's validate/startup pass; see CheckAgentRefs.
+// check can say exactly where a bad reference lives. An integration built from
+// the connectors-model lowering (internal/connector/convert.go) can still
+// enumerate these (see ActionSet.Refs) — no caller resolves them against
+// anything anymore (there is no top-level `agents:` profile registry in the
+// connectors model), but the shape stays so those lowered integrations keep
+// compiling.
 type ActionRef struct {
 	Where  string
 	Action Action
-}
-
-// CheckAgentRefs verifies every agent-type action (and every agent-type workflow
-// step) names a profile that exists under top-level `agents:`. The engine looks a
-// profile up with a bare map index, so an unknown name would otherwise resolve to
-// an empty profile at dispatch time — no --provider — and paseo rejects the run
-// with MISSING_PROVIDER only once a live trigger reaches that step. Catch it here.
-func (c *Config) CheckAgentRefs(refs []ActionRef) error {
-	for _, r := range refs {
-		if err := c.checkAgentRef(r.Where, r.Action); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *Config) checkAgentRef(where string, a Action) error {
-	if a.Handoff != "" {
-		if _, ok := c.Handoffs[a.Handoff]; !ok {
-			return fmt.Errorf("config: %s: unknown handoff %q (defined: %s)", where, a.Handoff, c.handoffNames())
-		}
-	}
-	for i, s := range a.Steps {
-		id := s.ID
-		if id == "" {
-			id = fmt.Sprintf("step%d", i+1) // mirrors the engine's default step id
-		}
-		if err := c.checkAgentRef(where+" step "+id, s); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func expandHome(p string) string {
@@ -1887,6 +1445,20 @@ func expandHome(p string) string {
 // BaseDir returns the directory the config was loaded from (empty for a config
 // built in memory rather than loaded from disk).
 func (c *Config) BaseDir() string { return c.baseDir }
+
+// PluginStagingDir is the root under which each plugin instance gets the
+// staging directory its file-returning verbs write to (plugin-contract.md Q7).
+// A templated path a step hands to a launch (`images:`) must resolve under it.
+func PluginStagingDir() string { return filepath.Join(StateDir(), "plugins", "staging") }
+
+// PluginLocalSnapshotDir is the root under which a LOCAL plugin build
+// (`use: ./path`) is snapshotted by content hash before it is ever run — see
+// internal/plugin's local-build TOCTOU fix. Content-addressed and private
+// (the directory is 0700, each snapshotted binary 0500): a local build is an
+// operator's own development binary, rebuilt freely, so it is pinned once per
+// resolution rather than re-read from the mutable source path on every probe
+// and respawn.
+func PluginLocalSnapshotDir() string { return filepath.Join(StateDir(), "plugins", "local") }
 
 // stateDirOverride is set by --state-dir, for a CLI invocation or a test
 // that must not touch the real install state.

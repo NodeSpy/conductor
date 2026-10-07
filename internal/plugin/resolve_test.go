@@ -2,6 +2,8 @@ package plugin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -448,5 +450,116 @@ func TestSpecFromRefUsesInstallState(t *testing.T) {
 	ls := SpecFromRef(local, "/cfg", Installed{}, false)
 	if !ls.Local || ls.BinPath != filepath.Join("/cfg", "bin/conductor-jira") {
 		t.Fatalf("local spec = %+v", ls)
+	}
+}
+
+// The install records whether the release verified the binary, the record
+// survives a reload, and the Spec built from it carries the bit — the
+// integrity half of an official plugin's default event trust. A release with
+// no checksums installs unverified; a later fetch that DOES verify the same
+// build upgrades the record.
+func TestReconcileRecordsReleaseVerification(t *testing.T) {
+	ref := refFor(t, config.UseKindConnector, "NodeSpy/conductor-plugins/connectors/github")
+
+	st := stateAt(t)
+	api := stubFor("connectors/github", "connectors/github/v1.0.0")
+	if _, err := Reconcile(map[string]config.PluginRef{ref.Key(): ref}, st, nil, api, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	inst, _ := LoadInstallState(st.Dir()).Get(ref.Key())
+	if !inst.ReleaseVerified {
+		t.Fatalf("a checksum-verified install must record it: %+v", inst)
+	}
+	if spec := SpecFromRef(ref, "", inst, true); !spec.ReleaseVerified {
+		t.Fatal("the spec must carry release verification")
+	}
+
+	st2 := stateAt(t)
+	unverified := api
+	unverified.noSums = true
+	if _, err := Reconcile(map[string]config.PluginRef{ref.Key(): ref}, st2, nil, unverified, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	inst2, _ := st2.Get(ref.Key())
+	if inst2.ReleaseVerified || inst2.Sha256 == "" {
+		t.Fatalf("a release with no checksums installs, unverified: %+v", inst2)
+	}
+	if spec := SpecFromRef(ref, "", inst2, true); spec.ReleaseVerified {
+		t.Fatal("an unverified install must not produce a verified spec")
+	}
+	if _, err := Reconcile(map[string]config.PluginRef{ref.Key(): ref}, st2, nil, api, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if inst3, _ := st2.Get(ref.Key()); !inst3.ReleaseVerified {
+		t.Fatalf("re-fetching the same build with checksums must upgrade the record: %+v", inst3)
+	}
+}
+
+// TestReconcileCurrentRemovesDuplicateFetchAtOldRecordedPath is finding 2
+// (LOW-MEDIUM): an installed record written before source joined the
+// version directory name (BinDirForVersion) points at the old, flat
+// "<key>/<version>" path. A later full reconcile fetches into the CURRENT,
+// source-fingerprinted directory regardless — landing a byte-identical copy
+// (same sha, so the resolution classifies ActionCurrent) at a path the
+// record never adopts. That fresh copy must not be left behind as a
+// duplicate nothing ever references or GCs: it is removed, and the
+// resolution keeps reporting (and the install-state record keeps pointing
+// at) the ORIGINAL recorded path — never the duplicate — since a running
+// daemon may still be executing it.
+func TestReconcileCurrentRemovesDuplicateFetchAtOldRecordedPath(t *testing.T) {
+	st := stateAt(t)
+	trust := &config.PackTrustConfig{Allow: []string{"github.com/acme/*"}}
+	ref := refFor(t, config.UseKindConnector, "acme/plugins/widget")
+	bin := []byte("#!/bin/sh\necho plugin\n")
+	api := stubAPI{tags: []string{"widget/v1.0.0"}, bin: bin, assetName: RemoteSource{Component: "widget"}.AssetName()}
+
+	sum := sha256.Sum256(bin)
+	sha := hex.EncodeToString(sum[:])
+
+	key := ref.Key()
+	source := ref.Use.Source()
+	if source == "" {
+		t.Fatal("test setup bug: need a non-empty source for the old/new dirs to actually differ")
+	}
+
+	// Pre-seed install state exactly as an old, pre-fingerprint record would
+	// look: Source recorded, but Path at the FLAT (no "@fingerprint")
+	// directory.
+	oldDir := filepath.Join(BinDirFor(st.Dir(), key), sanitizeVersionDir("widget/v1.0.0"))
+	if err := os.MkdirAll(oldDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := filepath.Join(oldDir, api.assetName)
+	if err := os.WriteFile(oldPath, bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st.Put(Installed{Key: key, Kind: ref.Kind(), Name: ref.Name, Use: ref.Use.String(), Source: source, Resolved: "widget/v1.0.0", Sha256: sha, Path: oldPath, ReleaseVerified: true})
+
+	newDir := BinDirForVersion(st.Dir(), key, "widget/v1.0.0", source)
+	if newDir == oldDir {
+		t.Fatal("test setup bug: the new (fingerprinted) and old (flat) dirs must differ for this test to be meaningful")
+	}
+
+	res, err := Reconcile(map[string]config.PluginRef{key: ref}, st, trust, api, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0].Action != ActionCurrent {
+		t.Fatalf("expected a single ActionCurrent resolution (identical sha, pre-existing record), got %+v", res)
+	}
+	if res[0].Path != oldPath {
+		t.Fatalf("the resolution must keep reporting the RECORDED path %q, got %q", oldPath, res[0].Path)
+	}
+
+	if _, err := os.Stat(newDir); !os.IsNotExist(err) {
+		t.Fatalf("the freshly fetched duplicate directory %s must be removed, stat err = %v", newDir, err)
+	}
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("the RECORDED path must survive untouched — a running daemon may be executing it: %v", err)
+	}
+
+	rec, ok := st.GetVersion(key, "widget/v1.0.0", source)
+	if !ok || rec.Path != oldPath {
+		t.Fatalf("install state must still point at the recorded path, got %+v, ok=%v", rec, ok)
 	}
 }
