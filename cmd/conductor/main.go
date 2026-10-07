@@ -1050,6 +1050,13 @@ func cmdRun(args []string) error {
 	if d := envDuration("PC_GIT_WORKTREE_MIN_AGE"); d > 0 {
 		gitProv.MinAge = d
 	}
+	// Each `claude -p` run in a worktree leaves a transcript dir under
+	// ~/.claude/projects keyed on the worktree's path; the reaper clears those
+	// once the worktree is gone and the retention window has passed.
+	gitProv.TranscriptsDir = gitwt.ClaudeProjectsDir()
+	if d := envDuration("PC_AGENT_TRANSCRIPT_RETENTION"); d > 0 {
+		gitProv.TranscriptRetention = d
+	}
 	go gitProv.Run(ctx)
 
 	// Periodic self-update. `stop` lets it trigger a graceful shutdown so the
