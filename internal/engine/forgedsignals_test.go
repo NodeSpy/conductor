@@ -24,13 +24,13 @@ import (
 func TestForgedSignalsCannotTouchATrustedEngagement(t *testing.T) {
 	eng, st, _, _ := buildFlowEngine(t, gateCfg2())
 	// A real dispatch acted on a real PR.
-	real := core.Trigger{Source: "github", Instance: "i", Kind: core.KindClosed,
+	real := core.Trigger{Source: "github", Instance: "i", Kind: "_closed",
 		TargetTrusted: true, Target: core.Target{Repo: "o/r", PR: 5, Number: 5}}
 	st.RecordEngagement(real.Key(), store.Engagement{Key: "fixer", Workflow: "eg.ping", CostUSD: 1.5})
 
 	// The forgery: same repo and number, but the target came off a plugin's
 	// wire event, so TargetTrusted is false.
-	forged := core.Trigger{Source: "acme", Instance: "plug", Kind: core.KindClosed,
+	forged := core.Trigger{Source: "acme", Instance: "plug", Kind: "_closed",
 		Target: core.Target{Repo: "o/r", PR: 5, Number: 5},
 		Context: map[string]any{
 			"merged": true, "reverts": []int{9}, "reverts_corroborated": true,
@@ -58,7 +58,7 @@ func TestForgedSignalsCannotTouchATrustedEngagement(t *testing.T) {
 
 	// The real signal still works — the fix is a gate, not a wall.
 	eng.process(context.Background(), core.Trigger{Source: "github", Instance: "i",
-		Kind: core.KindClosed, TargetTrusted: true,
+		Kind: "_closed", TargetTrusted: true,
 		Target:  core.Target{Repo: "o/r", PR: 5, Number: 5},
 		Context: map[string]any{"merged": true}})
 	if got := outcomesFrom(st); len(got) != 1 || got[0] != "merged:fixer" {
@@ -78,17 +78,24 @@ func TestForgedAndTrustedEngagementKeysDiffer(t *testing.T) {
 	}
 }
 
-// ROUND-13, found by the enforcement sweep: rerunFailed spends the OPERATOR'S
-// token on `gh run rerun --repo <raw target>`. A forged target would have
-// conductor re-run CI in a repo of the attacker's choosing.
-func TestRerunFailedRefusesAnUntrustedTarget(t *testing.T) {
-	eng, _, _, _ := buildFlowEngine(t, gateCfg2())
-	err := eng.rerunFailed(context.Background(), core.Trigger{
-		Source: "acme", Instance: "plug", Kind: "failing_checks",
-		Target: core.Target{Repo: "victim/repo", Number: 1},
-	}, 42)
-	if err == nil || !strings.Contains(err.Error(), "not conductor's to act on") {
-		t.Fatalf("a forged target must not spend the operator's token: %v", err)
+// ROUND-13, found by the enforcement sweep: a remedy spends the instance's
+// credentials on a write to the named repo. A target the sender chose would
+// have conductor re-run CI in a repo of the attacker's choosing — so a
+// declared remediation runs only for a target the platform assigned.
+func TestRemediationRefusesAnUnassignedTarget(t *testing.T) {
+	d := &fakeDispatcher{}
+	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
+	ran := false
+	e.invokeVerb = func(context.Context, string, string, map[string]any) (map[string]any, error) {
+		ran = true
+		return map[string]any{"status": "completed"}, nil
+	}
+	tr := agentTrigger("failing_checks", "victim/repo", 1, "h", "s", config.Action{Type: "agent", Agent: "w/fixer", FlakyRerun: config.FlakyRerun{Enabled: true}})
+	tr.TargetTrusted = false
+	tr.Context["run_id"] = int64(42)
+	e.process(context.Background(), tr)
+	if ran {
+		t.Fatal("a forged target must not spend the instance's credentials on a remedy")
 	}
 }
 

@@ -6,9 +6,7 @@
 # named templates in steps: — there is no `agents:` block. A trigger
 # is four keys — on / filters / steps / hooks — and a step can run an agent,
 # run a command, run inline code, call any connector's verb, or call a
-# reusable workflow. Everything here is optional except at least one trigger
-# (or a legacy integrations: block — the previous schema still loads, and
-# `conductor config migrate` converts it; see config.example.legacy.yaml).
+# reusable workflow. Everything here is optional except at least one trigger.
 #
 # Secrets: ${VAR} / env:VAR reads the environment / the sibling conductor.env
 # — the implicit baseline, nothing to declare. Everything beyond env is a
@@ -119,7 +117,16 @@ connectors:
     base_url: https://conductor.example.com
     listen: ":8099"
     ttl: 30m
-    # tunnel: { provider: cloudflared }   # or lan|ngrok|tailscale|ssh|command
+    # expose: tun   # instead of base_url: each draft gets a public URL from an
+    #               # exposure connector (one declaring an exposes verb)
+
+  # Exposure connectors make a local address reachable. Builtins: `lan` (this
+  # machine's LAN address) and `tunnel` (any tunnelling command; the public
+  # URL is read from its output). Named services are plugins.
+  # tun:
+  #   use: tunnel
+  #   command: [cloudflared, tunnel, --url, "http://{{.addr}}"]
+  #   url_pattern: 'https://\S+\.trycloudflare\.com'
 
   # discord-ops:
   #   type: discord
@@ -157,6 +164,10 @@ connectors:
         sign: { header: X-Signature-256, secret: ${CW_SECRET}, scheme: sha256 }
         match: '{{if eq .body.detail.state "ALARM"}}true{{end}}'
         title: "{{.body.detail.alarmName}}"
+        # dedup: is replay protection, nothing more — without it, EVERY
+        # delivery fires (a heartbeat/status webhook that legitimately
+        # re-POSTs an identical payload is never silently suppressed). Set it
+        # only when a retried/re-delivered body should collapse to one event.
         dedup: "{{.body.detail.alarmName}}-{{.body.time}}"
 
   # sentry and pagerduty are NOT bundled — they are plugins from the official
@@ -712,6 +723,10 @@ models:
 #
 # plugin_trust: { allow: [github.com/acme/*] }   # third-party sources need an
 #                                                # entry; the official repo does not
+#
+# Trust is decided ONCE, at install (plugin_trust above): after that every
+# plugin is equal, and what the engine does with its events comes from the
+# semantics it declares — there is nothing per plugin to grant.
 #
 # SECURITY. A plugin declares the hosts it calls and the commands it spawns.
 # Conductor records that manifest when it installs the plugin, SHOWS it to you

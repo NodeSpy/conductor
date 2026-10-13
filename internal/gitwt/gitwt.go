@@ -158,7 +158,7 @@ func (p *Provisioner) provision(ctx context.Context, repo, strategy string, req 
 	mu.Lock()
 	defer mu.Unlock()
 
-	base, err = p.baseCloneLocked(ctx, repo)
+	base, err = p.baseCloneLocked(ctx, repo, declaredRemote(req, repo))
 	if err != nil {
 		return "", "", fmt.Errorf("gitwt: base checkout for %s: %w", repo, err)
 	}
@@ -296,13 +296,13 @@ func (p *Provisioner) Reap(ctx context.Context) {
 // every fetch in the base clone rewrites. The private ref is deleted once the
 // worktree holds the commit. Called with the repo lock held (see provision).
 func (p *Provisioner) addPR(ctx context.Context, base, wt string, req dispatch.Request) error {
-	pr := req.Trigger.Target.PR
-	if pr <= 0 {
-		return fmt.Errorf("checkout-pr with no PR number")
+	ref := fetchRef(req)
+	if ref == "" {
+		return fmt.Errorf("checkout of the target's code with no ref to fetch")
 	}
 	tmp := prFetchRefPrefix + filepath.Base(wt)
 	if _, err := p.git(ctx, base, "fetch", "--no-tags", "--force", "origin",
-		"+refs/pull/"+strconv.Itoa(pr)+"/head:"+tmp); err != nil {
+		"+"+ref+":"+tmp); err != nil {
 		return err
 	}
 	defer func() {
@@ -321,7 +321,7 @@ func (p *Provisioner) addPR(ctx context.Context, base, wt string, req dispatch.R
 		branch = p.remoteBranchAt(ctx, base, sha)
 	}
 	if branch == "" {
-		p.logf("gitwt: %s#%d: PR head branch unknown — checking out detached", req.Trigger.Target.Repo, pr)
+		p.logf("gitwt: %s: the target's branch is unknown — checking out detached", req.Trigger.Key())
 		_, err := p.git(ctx, base, "worktree", "add", "--detach", wt, sha)
 		return err
 	}
@@ -383,11 +383,11 @@ func (p *Provisioner) baseClone(ctx context.Context, repo string) (string, error
 	mu := p.repoLock(repo)
 	mu.Lock()
 	defer mu.Unlock()
-	return p.baseCloneLocked(ctx, repo)
+	return p.baseCloneLocked(ctx, repo, "")
 }
 
 // baseCloneLocked is baseClone for a caller already holding the repo lock.
-func (p *Provisioner) baseCloneLocked(ctx context.Context, repo string) (string, error) {
+func (p *Provisioner) baseCloneLocked(ctx context.Context, repo, declared string) (string, error) {
 	dir := filepath.Join(p.CheckoutsDir(), repoSlug(repo))
 	if isGitDir(dir) {
 		if _, err := p.git(ctx, dir, "fetch", "--prune", "origin"); err != nil {
@@ -399,7 +399,7 @@ func (p *Provisioner) baseCloneLocked(ctx context.Context, repo string) (string,
 		return "", err
 	}
 	_ = os.RemoveAll(dir) // a previous clone that died half-written
-	url := p.remoteURL(repo)
+	url := p.remoteURL(repo, declared)
 	if _, err := p.git(ctx, "", "clone", "--filter=blob:none", url, dir); err != nil {
 		// A server with uploadpack.allowFilter off rejects a partial clone
 		// outright; a full clone is slower but always works.
@@ -432,14 +432,37 @@ func DefaultRemoteURL(repo string) string {
 		}
 		return base + repo + ".git"
 	}
-	return "git@github.com:" + repo + ".git"
+	return "git@" + config.DefaultGitHost + ":" + repo + ".git"
 }
 
-func (p *Provisioner) remoteURL(repo string) string {
+// remoteURL is where repo is cloned from: the injected resolver, else the
+// harness override (CONDUCTOR_GIT_REMOTE_BASE), else the remote the event's
+// connector declared for its target (checkout.remote — a forge other than
+// the default host), else the default host.
+func (p *Provisioner) remoteURL(repo, declared string) string {
 	if p.RemoteURL != nil {
 		return p.RemoteURL(repo)
 	}
+	if os.Getenv("CONDUCTOR_GIT_REMOTE_BASE") == "" && declared != "" {
+		return declared
+	}
 	return DefaultRemoteURL(repo)
+}
+
+// declaredRemote is the event's declared checkout remote — only when the
+// checkout is the event's own target (a step's `repo:` names another repo,
+// whose remote the declaration does not describe), and only for a target the
+// platform assigned: the remote renders over the event's facts, so a
+// sender-chosen target must not pick the host conductor clones from.
+func declaredRemote(req dispatch.Request, repo string) string {
+	if repo != req.Trigger.Target.Repo || !req.Trigger.TargetTrusted {
+		return ""
+	}
+	co, ok := req.Trigger.Checkout()
+	if !ok || !config.SafeGitTransport(co.Remote) || strings.HasPrefix(co.Remote, "-") {
+		return ""
+	}
+	return co.Remote
 }
 
 // ---- paths ---------------------------------------------------------------
@@ -529,8 +552,31 @@ func pathSlug(s string) string {
 // head ref when the trigger carried a usable one (so `git push origin HEAD`
 // targets the PR branch), else "".
 func prBranch(req dispatch.Request) string {
-	if ref, _ := req.Trigger.Context["head_ref"].(string); safeBranch(ref) {
+	ref := ""
+	if req.Trigger.HasSemantics() {
+		co, _ := req.Trigger.Checkout()
+		ref = co.PushBranch
+	} else {
+		ref, _ = req.Trigger.Context["head_ref"].(string) // legacy shape
+	}
+	if safeBranch(ref) {
 		return ref
+	}
+	return ""
+}
+
+// fetchRef is the ref holding the target's code: the declared checkout's
+// fetch_ref; an event declaring no semantics keeps the legacy pull ref.
+func fetchRef(req dispatch.Request) string {
+	if req.Trigger.HasSemantics() {
+		co, _ := req.Trigger.Checkout()
+		if co.FetchRef == "" || strings.HasPrefix(co.FetchRef, "-") || strings.ContainsAny(co.FetchRef, " :~^") {
+			return ""
+		}
+		return co.FetchRef
+	}
+	if pr := req.Trigger.Target.PR; pr > 0 {
+		return "refs/pull/" + strconv.Itoa(pr) + "/head"
 	}
 	return ""
 }

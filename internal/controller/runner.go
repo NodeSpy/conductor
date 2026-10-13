@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/models"
 )
@@ -72,6 +71,9 @@ type controllerRunner struct {
 	// stopped marks sessions StopTarget killed because their PR closed; their
 	// Dispatch returns dispatch.ErrTargetClosed instead of the partial turn.
 	stopped map[string]bool
+	// bound marks sessions whose work dies with their target (the trigger's
+	// declared bound_to_target): the only ones StopTarget stops.
+	bound map[string]bool
 }
 
 func newControllerRunner(c Controller, prov Provisioner, h Handler) *controllerRunner {
@@ -83,6 +85,7 @@ func newControllerRunner(c Controller, prov Provisioner, h Handler) *controllerR
 		byPR:    map[string]int{},
 		bucket:  map[string]string{},
 		stopped: map[string]bool{},
+		bound:   map[string]bool{},
 	}
 }
 
@@ -139,6 +142,9 @@ func (r *controllerRunner) Dispatch(ctx context.Context, req dispatch.Request) (
 	r.live[id] = sess
 	r.bucket[id] = bucket
 	r.byPR[bucket]++
+	if req.Trigger.BoundToTarget() {
+		r.bound[id] = true
+	}
 	r.mu.Unlock()
 
 	ref.AgentID = id
@@ -268,8 +274,8 @@ func (r *controllerRunner) HasLiveAgent(_ context.Context, prKeyStr, kind string
 	return r.byPR[prKeyStr+"\x00"+kind] > 0
 }
 
-// StopTarget kills the running turn of every PR-fixer session (core.BranchFixKind)
-// working on the target keyed key — its PR merged or closed, so the work is moot
+// StopTarget kills the running turn of every session bound to the target keyed
+// key (its trigger declared bound_to_target) — the target closed, so the work is moot
 // and any push it makes from here lands on a dead or wrong branch. Sessions are
 // cancelled, not closed: the dispatch returns and the normal archive releases
 // the worktree. Returns how many sessions it stopped.
@@ -277,8 +283,8 @@ func (r *controllerRunner) StopTarget(ctx context.Context, key string) int {
 	r.mu.Lock()
 	var hit []Session
 	for id, b := range r.bucket {
-		k, kind, _ := strings.Cut(b, "\x00")
-		if k != key || !core.BranchFixKind(kind) || r.stopped[id] {
+		k, _, _ := strings.Cut(b, "\x00")
+		if k != key || !r.bound[id] || r.stopped[id] {
 			continue
 		}
 		if sess := r.live[id]; sess != nil {
@@ -337,6 +343,7 @@ func (r *controllerRunner) forget(id string) {
 	}
 	delete(r.live, id)
 	delete(r.stopped, id)
+	delete(r.bound, id)
 	bucket := r.bucket[id]
 	delete(r.bucket, id)
 	if n := r.byPR[bucket]; n <= 1 {

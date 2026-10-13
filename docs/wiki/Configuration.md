@@ -1,14 +1,32 @@
 # Configuration
 
-`~/.config/conductor/config.yaml`, secrets in the sibling chmod-600
-`conductor.env` (`${VAR}` expands at load; a referenced-but-unset variable is
-a load error naming it). `conductor validate` checks everything below —
+`~/.config/conductor/config.yaml` by default, secrets in the sibling
+chmod-600 `conductor.env` (`${VAR}` expands at load; a referenced-but-unset
+variable is a load error naming it).
+
+**Where the config lives.** Without `--config`, conductor reads the first of:
+
+1. `$CONDUCTOR_CONFIG`: the config file, or an existing directory holding
+   `config.yaml` (a trailing `/` also means a directory). `~/` expands; a
+   relative path resolves against the working directory.
+2. `$XDG_CONFIG_HOME/conductor/config.yaml`, when `XDG_CONFIG_HOME` is an
+   absolute path (the XDG spec ignores a relative one).
+3. `~/.config/conductor/config.yaml`.
+
+`--config PATH` overrides all three. The config's directory is where
+`conductor.env`, `conf.d/`, packs, the lockfile and the default vault
+(`vault.json`) live. `conductor service install` pins a moved config in the
+unit (`CONDUCTOR_CONFIG=…`), because the service doesn't inherit the shell
+that installed it; an unmoved config leaves the unit exactly as before. State
+lives separately, under `$XDG_STATE_HOME/conductor` or
+`~/.local/state/conductor` (`--state-dir` overrides it). `conductor validate` checks everything below —
 including every template reference against the scope at its position — before
 the daemon runs. The full annotated example ships as `config.example.yaml`.
 
-The LEGACY schema (`integrations:`/`notify:`/`handoffs:`/`controllers:`/
-`control:`/`paseo_bin`) still loads and runs unchanged, and auto-migrates on
-boot — see [[Migration]] and `config.example.legacy.yaml`.
+The LEGACY schema (`integrations:`/`notify:`/`handoff:`/`handoffs:`/
+`controllers:`/`control:`/`paseo_bin`) was removed in this release — see
+[[Migration]]. `conductor validate` names any of those blocks still present
+in a config.
 
 ## Top level
 
@@ -143,8 +161,10 @@ filter: "!is_draft && !( (head_branch == 'staging' || head_branch == 'prod') && 
 Prefer `startswith(title, 'Release ')` to the substring `title:` match key when
 you mean a prefix.
 
-**Migrating from `filters:`.** `conductor config migrate` rewrites a legacy
-config; by hand, the mapping is `repos`→`repo`, `exclude_repos`→`not_repo`,
+**Migrating from `filters:`.** `conductor config migrate` on the release
+before the plugin contract rewrites a legacy config (the command itself was
+removed with the legacy schema — see [[Migration]]); by hand, the mapping is
+`repos`→`repo`, `exclude_repos`→`not_repo`,
 `exclude: {branches, labels, title}`→`not_branch`/`not_label_any`/`not_title`,
 `gates: {not_draft: true}`→`not_draft: true`, `labels_any`→`label_any`,
 `labels_all`→`label_all`, `authors`→`author`, `from_users`→`comment_author`,
@@ -625,8 +645,8 @@ before anything runs. The full model: [[Workflows]]; the guardrails:
 ## Conductor itself (`conductor.*`) — events and verbs
 
 Conductor is a built-in connector (always available; the name is reserved).
-Its lifecycle events are a source — alerting is an ordinary trigger, and the
-retired `notify:` block auto-migrates onto it (see [[Notifications]] for the
+Its lifecycle events are a source — alerting is an ordinary trigger, the
+replacement for the retired `notify:` block (see [[Notifications]] for the
 event list, context, and examples):
 
 ```yaml
@@ -719,10 +739,9 @@ once. Validation runs over the merged config, so cross-file
 A workflow can also be pulled in per step, without a section import — see
 `workflow:`/`import:` in [[Workflows]].
 
-The legacy TOP-level `imports:` (whole-document deep merge: maps merge
-recursively, lists concatenate, the importing file's keys win) is unchanged,
-and auto-migration still walks it, transforming each legacy file with its own
-backup.
+The top-level `imports:` (whole-document deep merge: maps merge
+recursively, lists concatenate, the importing file's keys win) works the same
+way on a connectors-model config.
 
 ## Validation and fleet safety
 

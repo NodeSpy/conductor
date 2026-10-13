@@ -15,26 +15,6 @@ import (
 	"time"
 )
 
-func TestParseRemoteSource(t *testing.T) {
-	cases := []struct {
-		src            string
-		wantRepo, comp string
-		ok             bool
-	}{
-		{"github.com/NodeSpy/conductor-plugins//sentry", "NodeSpy/conductor-plugins", "sentry", true},
-		{"https://github.com/acme/conductor-jira", "acme/conductor-jira", "", true},
-		{"./plugins/local", "", "", false},
-		{"/abs/path", "", "", false},
-		{"github.com/onlyowner", "", "", false},
-	}
-	for _, c := range cases {
-		rs, ok := ParseRemoteSource(c.src)
-		if ok != c.ok || rs.Repo != c.wantRepo || rs.Component != c.comp {
-			t.Errorf("ParseRemoteSource(%q) = {%q %q} ok=%v, want {%q %q} ok=%v", c.src, rs.Repo, rs.Component, ok, c.wantRepo, c.comp, c.ok)
-		}
-	}
-}
-
 // stubAPI serves tags and a fixed binary; checksums.txt carries the real sha.
 type stubAPI struct {
 	tags      []string
@@ -42,17 +22,25 @@ type stubAPI struct {
 	assetName string
 	badSum    bool // publish a wrong checksum to force a mismatch
 	tagsErr   bool // fail the tag listing, to exercise the degraded path
+	noSums    bool // publish no checksums.txt at all
+	otherSum  bool // publish a checksums.txt that does not list this asset
 }
 
-func (s stubAPI) ListTags(string) ([]string, error) {
+func (s stubAPI) ListTags(RemoteSource) ([]string, error) {
 	if s.tagsErr {
 		return nil, errors.New("network unreachable")
 	}
 	return s.tags, nil
 }
-func (s stubAPI) Download(_, _, asset, destDir string) (string, error) {
+func (s stubAPI) Download(_ RemoteSource, _, asset, destDir string) (string, error) {
 	p := filepath.Join(destDir, asset)
 	if asset == "checksums.txt" {
+		if s.noSums {
+			return "", errors.New("404: no checksums.txt in this release")
+		}
+		if s.otherSum {
+			return p, os.WriteFile(p, []byte("abc123  some-other-asset\n"), 0o644)
+		}
 		sum := sha256.Sum256(s.bin)
 		hexsum := hex.EncodeToString(sum[:])
 		if s.badSum {
@@ -64,7 +52,7 @@ func (s stubAPI) Download(_, _, asset, destDir string) (string, error) {
 }
 
 func TestFetchRemoteResolvesVerifiesCaches(t *testing.T) {
-	rs := RemoteSource{Repo: "NodeSpy/conductor-plugins", Component: "sentry"}
+	rs := RemoteSource{URL: "https://github.com/NodeSpy/conductor-plugins", Component: "sentry"}
 	bin := []byte("#!/bin/sh\necho conductor-sentry\n")
 	api := stubAPI{
 		tags:      []string{"sentry/v1.0.0", "sentry/v1.1.0", "sentry/v2.0.0", "sentry/nightly"},
@@ -95,6 +83,105 @@ func TestFetchRemoteResolvesVerifiesCaches(t *testing.T) {
 	if _, _, _, err := FetchRemote(rs, "~> 1.0", "0000", cache, api); err == nil {
 		t.Fatal("sha256 pin mismatch must fail the fetch")
 	}
+}
+
+// TestCheckFetchableIsReadOnly: CheckFetchable resolves a release tag off
+// ListTags + the version constraint WITHOUT ever calling Download — the
+// read-only half `conductor validate` needs (plugin-contract.md §5.2 step 1).
+func TestCheckFetchableIsReadOnly(t *testing.T) {
+	rs := RemoteSource{URL: "https://github.com/NodeSpy/conductor-plugins", Component: "widget"}
+	calledDownload := false
+	api := downloadSpyAPI{
+		stubAPI:    stubAPI{tags: []string{"widget/v1.0.0", "widget/v1.1.0", "widget/v2.0.0"}},
+		onDownload: func() { calledDownload = true },
+	}
+	tag, err := CheckFetchable(rs, "~> 1.0", api)
+	if err != nil {
+		t.Fatalf("CheckFetchable: %v", err)
+	}
+	if tag != "widget/v1.1.0" {
+		t.Fatalf("resolved tag %q, want widget/v1.1.0 (highest 1.x, not 2.0.0)", tag)
+	}
+	if calledDownload {
+		t.Fatal("CheckFetchable must not download or install anything")
+	}
+
+	// No tag satisfies an impossible constraint: a clear error, not a panic
+	// or a silent empty tag.
+	if _, err := CheckFetchable(rs, "~> 9.0", api); err == nil {
+		t.Fatal("an unsatisfiable constraint must error")
+	}
+
+	// A ListTags failure (network down, host unreachable) surfaces as the
+	// exact error `conductor validate` reports, not a crash.
+	if _, err := CheckFetchable(rs, "~> 1.0", downloadSpyAPI{stubAPI: stubAPI{tagsErr: true}}); err == nil {
+		t.Fatal("a ListTags failure must surface as an error")
+	}
+}
+
+// TestCheckFetchableZeroTagsWordingIsHonestAboutTheAmbiguity is finding 10
+// (LOW): a `git ls-remote` that answers successfully with NO matching refs
+// at all is genuinely ambiguous — a real repository with no release tagged
+// yet, or some auth/proxy/firewall setup that answers an unreachable or
+// inaccessible repo with an empty ref list instead of a non-zero exit. The
+// old message ("no release tag satisfies version ... among 0 tags") read as
+// a confident "this plugin has no releases", which is wrong exactly when
+// the real cause is "offline" or "blocked". A REAL ListTags error (the
+// unambiguous case) must keep its own raw cause untouched.
+func TestCheckFetchableZeroTagsWordingIsHonestAboutTheAmbiguity(t *testing.T) {
+	rs := RemoteSource{URL: "https://github.com/NodeSpy/conductor-plugins", Component: "widget"}
+
+	// Zero tags (ListTags succeeded, found nothing): the new, honest,
+	// both-possibilities wording.
+	_, err := CheckFetchable(rs, "~> 1.0", stubAPI{tags: nil})
+	if err == nil {
+		t.Fatal("zero tags must still error")
+	}
+	if !strings.Contains(err.Error(), "no published release found for") ||
+		!strings.Contains(err.Error(), "none tagged yet, or the repository is unreachable") {
+		t.Fatalf("want the honest ambiguous-cause wording, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "among 0 tags") {
+		t.Fatalf("must not keep the old confident \"among 0 tags\" phrasing, got: %v", err)
+	}
+
+	// Tags EXIST but none satisfy the constraint: unambiguous — the specific
+	// original wording (naming the constraint and the tag count) is kept.
+	_, err = CheckFetchable(rs, "~> 9.0", stubAPI{tags: []string{"widget/v1.0.0", "widget/v2.0.0"}})
+	if err == nil {
+		t.Fatal("an unsatisfiable constraint against real tags must still error")
+	}
+	if !strings.Contains(err.Error(), "no release tag satisfies version") || !strings.Contains(err.Error(), "among 2 tags") {
+		t.Fatalf("want the specific unmatched-constraint wording when tags DO exist, got: %v", err)
+	}
+
+	// A real ListTags error keeps its own raw cause, never the zero-tags
+	// wording (the branches are mutually exclusive by construction, but
+	// assert it explicitly as the contract this message split depends on).
+	_, err = CheckFetchable(rs, "~> 1.0", stubAPI{tagsErr: true})
+	if err == nil {
+		t.Fatal("a ListTags failure must surface as an error")
+	}
+	if strings.Contains(err.Error(), "no published release found for") {
+		t.Fatalf("a real ListTags error must keep its own cause, not the zero-tags wording: %v", err)
+	}
+	if !strings.Contains(err.Error(), "network unreachable") {
+		t.Fatalf("a real ListTags error must keep its raw cause, got: %v", err)
+	}
+}
+
+// downloadSpyAPI wraps stubAPI to record whether Download was ever called —
+// the thing CheckFetchable must never do.
+type downloadSpyAPI struct {
+	stubAPI
+	onDownload func()
+}
+
+func (d downloadSpyAPI) Download(rs RemoteSource, tag, asset, destDir string) (string, error) {
+	if d.onDownload != nil {
+		d.onDownload()
+	}
+	return d.stubAPI.Download(rs, tag, asset, destDir)
 }
 
 // TestCopyExecutableReplacesRunningBinary reproduces the box condition that made
@@ -168,6 +255,38 @@ func TestCopyExecutableReplacesRunningBinary(t *testing.T) {
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), ".conductor-engine") {
 			t.Fatalf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
+// A fetch is VERIFIED only when the release's own checksums.txt lists the
+// asset with the downloaded sha (or a config pin matches). A release that
+// publishes no checksums, or one that omits the asset, still installs — the
+// sha is recorded and checked before every exec — but it is not verified,
+// and an official source's default event trust is not granted on it.
+func TestFetchRemoteReportsReleaseVerification(t *testing.T) {
+	rs := RemoteSource{URL: "https://github.com/NodeSpy/conductor-plugins", Component: "github"}
+	bin := []byte("#!/bin/sh\necho conductor-github\n")
+	tags := []string{"connectors/github/v1.0.0"}
+	rs = RemoteSource{URL: "https://github.com/NodeSpy/conductor-plugins", Component: "connectors/github"}
+	for _, c := range []struct {
+		name string
+		api  stubAPI
+		pin  string
+		want bool
+	}{
+		{"checksums list the asset", stubAPI{tags: tags, bin: bin, assetName: rs.AssetName()}, "", true},
+		{"no checksums.txt", stubAPI{tags: tags, bin: bin, assetName: rs.AssetName(), noSums: true}, "", false},
+		{"checksums omit the asset", stubAPI{tags: tags, bin: bin, assetName: rs.AssetName(), otherSum: true}, "", false},
+		{"no checksums but a matching pin", stubAPI{tags: tags, bin: bin, assetName: rs.AssetName(), noSums: true},
+			func() string { s := sha256.Sum256(bin); return hex.EncodeToString(s[:]) }(), true},
+	} {
+		_, _, sha, verified, err := FetchRemoteVerified(rs, "", c.pin, fixedCacheDir(t.TempDir()), c.api)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if sha == "" || verified != c.want {
+			t.Errorf("%s: verified=%v want %v (sha %q)", c.name, verified, c.want, sha)
 		}
 	}
 }

@@ -16,7 +16,7 @@ var webDecl = &TypeDecl{
 		"base_url": {Type: TString, Desc: "public origin draft links point at, e.g. https://conductor.example.com"},
 		"listen":   {Type: TString, Desc: "inbound HTTP address draft pages are served on (default 127.0.0.1:8099 — loopback only)"},
 		"ttl":      {Type: TDuration, Desc: "how long a presented draft's link stays valid (default 30m)"},
-		"tunnel":   {Type: TMap, Desc: "pluggable per-draft tunnel: provider, host, mode, ssh_host, authtoken, url_pattern, command"},
+		"expose":   {Type: TString, Desc: "an exposure connector (one declaring an exposes verb: lan, tunnel, or a plugin) that gives each draft a public URL, instead of a fixed base_url"},
 	},
 	Verbs: []VerbDecl{
 		{
@@ -29,13 +29,14 @@ var webDecl = &TypeDecl{
 
 func init() { RegisterType(webDecl, newWebImpl) }
 
-// webConn mirrors config.HandoffWeb — the connectors-model connection schema
-// for the web hand-off channel.
+// webConn is the connectors-model connection schema for the web hand-off
+// channel (the legacy `handoffs: { web: ... }` shape this mirrors was
+// removed with the legacy config schema).
 type webConn struct {
-	BaseURL string              `yaml:"base_url"`
-	Listen  string              `yaml:"listen"`
-	TTL     config.Duration     `yaml:"ttl"`
-	Tunnel  config.TunnelConfig `yaml:"tunnel"`
+	BaseURL string          `yaml:"base_url"`
+	Listen  string          `yaml:"listen"`
+	TTL     config.Duration `yaml:"ttl"`
+	Expose  string          `yaml:"expose"`
 }
 
 type webImpl struct {
@@ -56,16 +57,11 @@ func newWebImpl(name string, ref config.ConnectorRef, deps Deps) (Impl, error) {
 		logf = func(string, ...any) {}
 	}
 	ch := handoff.NewWebChannel(conn.BaseURL, conn.TTL.D(), logf)
-	// Unlike handoff/registry.go's buildChannel (which logs and silently
-	// falls back to no tunnel on a bad tunnel config), a construction failure
-	// here is a hard build error — the connectors-model's registry turns that
-	// into this connector's DisabledReason rather than degrading the channel
-	// quietly.
-	t, err := handoff.NewTunnel(conn.Tunnel, conn.BaseURL, logf)
-	if err != nil {
-		return nil, fmt.Errorf("tunnel: %w", err)
+	if conn.Expose != "" {
+		// Each draft gets its URL from the named exposure connector's
+		// exposes verb, resolved when the draft is presented.
+		ch.SetTunnel(exposureTunnel{lookup: deps.Lookup, name: conn.Expose, from: name}, webListenDefault(conn.Listen))
 	}
-	ch.SetTunnel(t, webListenDefault(conn.Listen))
 	return &webImpl{name: name, conn: conn, deps: deps, ch: ch}, nil
 }
 
@@ -80,10 +76,36 @@ func webListenDefault(listen string) string {
 }
 
 func (w *webImpl) Validate() error {
-	if w.conn.BaseURL == "" && w.conn.Tunnel.Provider == "" {
-		return fmt.Errorf("connector %q: set base_url and/or tunnel to present links", w.name)
+	if w.conn.BaseURL == "" && w.conn.Expose == "" {
+		return fmt.Errorf("connector %q: set base_url or expose to present links", w.name)
 	}
 	return nil
+}
+
+// ExposeTarget names the exposure connector this one uses (checked once the
+// registry is built).
+func (w *webImpl) ExposeTarget() string { return w.conn.Expose }
+
+// exposeUser is a connector that names an exposure connector.
+type exposeUser interface{ ExposeTarget() string }
+
+// checkExposures disables any instance whose `expose:` names a connector
+// that does not exist or cannot expose — a config mistake surfaced at boot
+// and by `conductor validate`, not at the first hand-off.
+func (r *Registry) checkExposures(log func(string, ...any)) {
+	for _, name := range r.order {
+		in := r.byName[name]
+		eu, ok := in.Impl.(exposeUser)
+		if !ok || eu.ExposeTarget() == "" || in.DisabledReason != "" {
+			continue
+		}
+		if _, _, err := exposureVerb(r.Get, eu.ExposeTarget()); err != nil {
+			in.DisabledReason = err.Error()
+			if log != nil {
+				log("connector %q disabled: %v", name, err)
+			}
+		}
+	}
 }
 
 func (w *webImpl) DeclaredEvents() []string { return nil }

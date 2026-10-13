@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 	"strings"
 	"sync"
 	"testing"
@@ -389,7 +390,11 @@ func TestFlowPolicyIgnoreUsers(t *testing.T) {
 	cfg := strings.Replace(gateCfg, "use: enginegate }", "use: enginegate, policy: { ignore: { users: [spammer] } } }", 1)
 	eng, st, _, _ := buildFlowEngine(t, cfg)
 	before := gateCalls()
-	eng.process(context.Background(), flowTrigger("d2"))
+	tr := flowTrigger("d2")
+	// The source declares which fact is the event's author: that is what
+	// policy.ignore.users reads.
+	tr.Sem = &sdk.EventSemantics{Author: &sdk.AuthorSemantics{Login: "author"}}
+	eng.process(context.Background(), tr)
 	time.Sleep(50 * time.Millisecond)
 	if gateCalls() != before {
 		t.Fatal("ignored author still ran the flow")

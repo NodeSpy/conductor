@@ -38,8 +38,8 @@ func (f *fakeInvoker) Invoke(_ context.Context, req plugin.InvokeRequest) (map[s
 }
 
 func TestRegisterExternalTypeRefusesBundledOverride(t *testing.T) {
-	// github is a bundled type registered via init().
-	err := RegisterExternalType(&TypeDecl{Type: "github"}, nil)
+	// cron is a bundled type registered via init().
+	err := RegisterExternalType(&TypeDecl{Type: "cron"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "bundled") {
 		t.Fatalf("want bundled-override refusal, got %v", err)
 	}
@@ -58,9 +58,9 @@ func TestRegisterExternalTypeRefusesBundledOverride(t *testing.T) {
 		t.Fatal("expected type removed")
 	}
 	// Unregister must never drop a bundled type.
-	UnregisterExternalType("github")
-	if _, ok := TypeDeclFor("github"); !ok {
-		t.Fatal("bundled github must survive UnregisterExternalType")
+	UnregisterExternalType("cron")
+	if _, ok := TypeDeclFor("cron"); !ok {
+		t.Fatal("bundled cron must survive UnregisterExternalType")
 	}
 
 	// Two plugins providing the same type must not silently clobber each other
@@ -186,4 +186,107 @@ func flatten(m map[string]any) []string {
 		}
 	}
 	return out
+}
+
+// Host-owned header keys never cross to the plugin as connection fields.
+func TestResolveConnectionStripsHostOwnedKeys(t *testing.T) {
+	conn, _, err := resolveConnection(refWith(t, map[string]any{
+		"use": "./conductor-jira", "type": "jira", "enabled": true, "network": []any{"x:443"},
+		"isolation": map[string]any{"mode": "none"}, "allow_secrets": []any{"env:A"},
+		"policy": map[string]any{}, "options": map[string]any{}, "auth": map[string]any{},
+		"base_url": "https://acme.example",
+	}), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conn) != 1 || conn["base_url"] != "https://acme.example" {
+		t.Fatalf("host-owned keys leaked to the plugin: %+v", conn)
+	}
+}
+
+// Secret references resolve at any depth in a connection — tracked for
+// redaction and checked against allow_secrets like a top-level one.
+func TestResolveConnectionResolvesNestedSecrets(t *testing.T) {
+	sec := secrets.New()
+	sec.LookupEnv = func(k string) (string, bool) { return "secret-value-" + k, true }
+	conn, refs, err := resolveConnection(refWith(t, map[string]any{
+		"sources": map[string]any{"a": map[string]any{"sign": map[string]any{"secret": "env:A"}}},
+		"keys":    []any{"env:B", "plain"},
+	}), sec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign := conn["sources"].(map[string]any)["a"].(map[string]any)["sign"].(map[string]any)
+	if sign["secret"] != "secret-value-A" || conn["keys"].([]any)[0] != "secret-value-B" || conn["keys"].([]any)[1] != "plain" || len(refs) != 2 {
+		t.Fatalf("conn=%v refs=%v", conn, refs)
+	}
+	if got := sec.Redact("leak secret-value-A"); strings.Contains(got, "secret-value-A") {
+		t.Fatal("a nested secret was not tracked for redaction")
+	}
+	if _, _, err := resolveConnection(refWith(t, map[string]any{"x": map[string]any{"y": "env:C"}}), sec, map[string]bool{"env:A": true}); err == nil {
+		t.Fatal("a nested secret outside allow_secrets must be refused")
+	}
+}
+
+// TestTypeDeclsForReturnsEveryGroupSideBySide is finding 5: a bare
+// type-name caller with no specific instance in mind (`conductor schema
+// <type>`, credentialKeys()'s type sweep) must see EVERY resolved-version
+// group's declaration, not silently just the first one registered
+// (TypeDeclFor's "representative"). DeclFor, by contrast, resolves exactly
+// the ONE group a specific bound instance belongs to.
+func TestTypeDeclsForReturnsEveryGroupSideBySide(t *testing.T) {
+	const typ = "zz-multi-version"
+	t.Cleanup(func() {
+		UnregisterExternalType(typ)
+		ResetInstanceGroups()
+	})
+	gk1, gk2 := "connectors/"+typ+"@v1.0.0", "connectors/"+typ+"@v2.0.0"
+	d1 := &TypeDecl{Type: typ, Desc: "v1 declaration"}
+	d2 := &TypeDecl{Type: typ, Desc: "v2 declaration"}
+	if err := RegisterExternalTypeGroup(d1, nil, gk1, "connectors/"+typ); err != nil {
+		t.Fatalf("register group 1: %v", err)
+	}
+	if err := RegisterExternalTypeGroup(d2, nil, gk2, "connectors/"+typ); err != nil {
+		t.Fatalf("register group 2: %v", err)
+	}
+	BindInstanceGroup("a", gk1)
+	BindInstanceGroup("b", gk2)
+
+	decls := TypeDeclsFor(typ)
+	if len(decls) != 2 {
+		t.Fatalf("expected 2 groups, got %d: %+v", len(decls), decls)
+	}
+	if decls[gk1] != d1 || decls[gk2] != d2 {
+		t.Fatalf("TypeDeclsFor did not return both groups' own decls: %+v", decls)
+	}
+
+	// DeclFor resolves each bound instance to its OWN group, never the
+	// other's.
+	da, ok := DeclFor(typ, "a")
+	if !ok || da != d1 {
+		t.Fatalf("DeclFor(a) = %+v, want d1", da)
+	}
+	db, ok := DeclFor(typ, "b")
+	if !ok || db != d2 {
+		t.Fatalf("DeclFor(b) = %+v, want d2", db)
+	}
+	// An instance with no binding at all falls back to the representative
+	// (the first-registered group) — unchanged, single-version behavior.
+	rep, ok := DeclFor(typ, "unbound")
+	if !ok || rep != d1 {
+		t.Fatalf("DeclFor(unbound) = %+v, want the representative d1", rep)
+	}
+
+	// A single-group (the overwhelmingly common) type still returns exactly
+	// one entry, keyed by the type name itself.
+	const single = "zz-single-version"
+	t.Cleanup(func() { UnregisterExternalType(single) })
+	ds := &TypeDecl{Type: single}
+	if err := RegisterExternalType(ds, nil); err != nil {
+		t.Fatalf("register single: %v", err)
+	}
+	only := TypeDeclsFor(single)
+	if len(only) != 1 || only[single] != ds {
+		t.Fatalf("single-group TypeDeclsFor = %+v, want exactly one entry keyed by the type name", only)
+	}
 }

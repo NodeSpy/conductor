@@ -157,7 +157,7 @@ func (r *Resolver) resolve(ctx context.Context, ref string) (string, error) {
 		// The scheme URIs were replaced by the vaults: model. They are still
 		// RECOGNIZED so an unmigrated reference fails loudly here instead of
 		// passing through as a literal credential.
-		return "", fmt.Errorf("secret %q: the op://, pass:, vault:, and file: schemes were replaced by vaults: entries and {{ vault \"<name>\" \"<key>\" }} references — auto-migration rewrites this at boot, or run `conductor config migrate`", ref)
+		return "", fmt.Errorf("secret %q: the op://, pass:, vault:, and file: schemes were replaced by vaults: entries and {{ vault \"<name>\" \"<key>\" }} references — run `conductor config migrate` with v0.60.0 (the last release before the plugin contract), or rewrite this by hand", ref)
 	}
 	return "", fmt.Errorf("secret %q: unknown scheme", ref)
 }

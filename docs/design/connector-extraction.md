@@ -65,7 +65,23 @@ one) means teaching the plugin-source layer to nest context under the connector
 type and to evaluate a generic `exclude:` key. That is a separate change with
 its own tests, not a side effect of deleting two integrations.
 
-## github — NOT extractable
+## github — now extractable (update)
+
+> **Superseded in part by docs/design/plugin-source-abi.md.** The four blockers
+> below were real for the protocol as it stood. The source extension (connector
+> ABI 1) gives each a protocol answer — `plugin.app_token` (1), dispatch
+> identity read from the instance's own `identity:`/`retry:` (2), the sweep run
+> inside the plugin and nudged by `plugin.nudge` with `sweep` a
+> conductor-defined verb (3), and triggers delivered to the plugin, which
+> evaluates them with the shared github source — `me` identity, polling,
+> cross-referenced reads and all (4). The github logic itself moved to
+> `pkg/githubkit/ghsource` with its tests; the bundled integration is an
+> adapter over it, and the conductor-github plugin runs the same code. A
+> shared conformance suite proves the two fire the same triggers. The builtin
+> has NOT been removed — that is a separate step. The original analysis
+> follows, for the record.
+
+## github — NOT extractable (original analysis)
 
 The daemon does not merely *route* github events; its own autopilot is built on
 the bundled integration. Four independent blockers, each a Go interface the

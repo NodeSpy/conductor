@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"runtime/debug"
 	"strings"
@@ -23,12 +22,13 @@ import (
 	"github.com/NodeSpy/conductor/internal/decider"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/flow"
-	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
+	"github.com/NodeSpy/conductor/pkg/expr"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // *store.Store persists the broker's PR→session map; assert it here (engine
@@ -116,14 +116,9 @@ type Engine struct {
 	owner       map[string]Dispatcher
 	controllers *controller.Registry // resolves which controller runs each agent
 	broker      *controller.Broker   // owns one live session per PR (interactive hand-off); nil = disabled
-	handoffs    *handoff.Registry    // resolves a step's hand-off channel by name; nil = paseo-native hand-off
 	notif       Notifier
 	author      dispatch.Author
-	userTok     func() (string, error)
-	readTok     func() (string, error) // read-token override (nil = use the per-trigger App token)
-	rerun       func(context.Context, core.Trigger, int64) error
-	runStatus   func(context.Context, core.Trigger, int64) (string, error) // workflow run status (completed|in_progress|queued|…)
-	refreshTok  func(core.Trigger) (string, error)                         // re-mint the App token on resume
+	invokeVerb  func(ctx context.Context, instance, verb string, opts map[string]any) (map[string]any, error)
 	log         func(string, ...any)
 	hold        *dispatch.HoldSet       // agent ids handed off to the user; the reaper never touches these
 	liveHOMu    sync.Mutex              // guards liveHO
@@ -164,6 +159,13 @@ type Engine struct {
 	// unsupported remembers models a provider refused at run time; dispatchAgent
 	// marks + re-resolves through it (the resolver's Excluded hook reads it).
 	unsupported *models.UnsupportedCache
+
+	// deferMu guards deferCounts: how many times process() has re-scheduled
+	// ONE (target, kind#variant, reason) after a rate_limited/not_ready
+	// credential mint or remediation call, so the bound (maxDeferredReemits)
+	// applies per occurrence rather than globally. See deferAndReemit.
+	deferMu     sync.Mutex
+	deferCounts map[string]int
 }
 
 // hasLiveAgentFor asks the controller that would actually RUN this work
@@ -231,29 +233,14 @@ type Options struct {
 	// a conductor restart and follow-ups funnel to the live session instead of a
 	// duplicate agent. nil disables it — the interactive hand-off then stays
 	// paseo-native (you drive the agent in paseo, as before).
-	Broker *controller.Broker
-	// Handoffs resolves the portable human↔agent channel an interactive review is
-	// presented on (a step's `handoff:` name → the handoffs: entry flagged
-	// default:true → the sole configured entry). nil, or resolving to nil, → the
-	// review hand-off keeps today's behavior (notify you to open the live agent
-	// in paseo).
-	Handoffs  *handoff.Registry
-	Notifier  Notifier
-	Author    dispatch.Author
-	UserToken func() (string, error)
-	// ReadToken, if set, overrides the token used for API reads (GH_TOKEN) instead
-	// of the per-trigger App installation token — for identity.read_token != "app".
-	ReadToken func() (string, error)
-	// Rerun, if set, overrides the flaky-CI rerun step (tests inject a spy). A
-	// returned error means the rerun was NOT requested; the attempt isn't counted.
-	Rerun func(context.Context, core.Trigger, int64) error
-	// RunStatus, if set, overrides the workflow-run status lookup the flaky-CI step
-	// uses to wait for a run to finish before rerunning it (tests inject a stub).
-	RunStatus func(context.Context, core.Trigger, int64) (string, error)
-	// RefreshAppToken re-mints the App installation token for a persisted trigger
-	// on resume (the persisted one is expired). Given the trigger's instance +
-	// installation_id. nil disables workflow resume.
-	RefreshAppToken func(core.Trigger) (string, error)
+	Broker   *controller.Broker
+	Notifier Notifier
+	Author   dispatch.Author
+	// InvokeVerb invokes a verb on a configured connector instance with that
+	// instance's credentials: how the engine carries out what an event's
+	// semantics DECLARE (a remediation's status check and action). nil: no
+	// declared remediation runs, and the fixer is dispatched straight away.
+	InvokeVerb func(ctx context.Context, instance, verb string, opts map[string]any) (map[string]any, error)
 	// Hold is the shared "never reap" set for interactive hand-off agents; the
 	// engine registers a background step's agent id here at launch and the reaper
 	// skips it. nil disables the explicit hold (falls back to label/marker signals).
@@ -298,27 +285,31 @@ func New(o Options) *Engine {
 	e := &Engine{
 		cfg: o.Config, store: o.Store, disp: o.Dispatch, controllers: reg, notif: o.Notifier,
 		owner:  map[string]Dispatcher{},
-		broker: o.Broker, handoffs: o.Handoffs,
-		author: o.Author, userTok: o.UserToken, readTok: o.ReadToken, log: log,
-		hold:      o.Hold,
-		affinity:  o.Affinity,
-		pausePath: o.PausePath,
-		secrets:   o.Secrets,
-		ch:        make(chan core.Trigger, 256),
-		meter:     cost.NewMeter(),
+		broker: o.Broker,
+		author: o.Author, log: log,
+		hold:        o.Hold,
+		affinity:    o.Affinity,
+		pausePath:   o.PausePath,
+		secrets:     o.Secrets,
+		ch:          make(chan core.Trigger, 256),
+		meter:       cost.NewMeter(),
+		deferCounts: map[string]int{},
 	}
 	if cap := o.Config.AgentCap(); cap > 0 {
 		e.sem = newSlots(cap)
 	}
-	e.rerun = o.Rerun
-	if e.rerun == nil {
-		e.rerun = e.rerunFailed
+	e.invokeVerb = o.InvokeVerb
+	if e.invokeVerb == nil && o.Connectors != nil {
+		// The configured instances, with their own credentials and limits.
+		reg := o.Connectors
+		e.invokeVerb = func(ctx context.Context, instance, verb string, opts map[string]any) (map[string]any, error) {
+			in, ok := reg.Get(instance)
+			if !ok {
+				return nil, fmt.Errorf("no connector instance %q", instance)
+			}
+			return in.Invoke(ctx, verb, opts)
+		}
 	}
-	e.runStatus = o.RunStatus
-	if e.runStatus == nil {
-		e.runStatus = e.workflowRunStatus
-	}
-	e.refreshTok = o.RefreshAppToken
 	e.connectors = o.Connectors
 	if o.Flow != nil {
 		e.flow = o.Flow
@@ -517,7 +508,10 @@ func (e *Engine) capabilityCard(sk *config.SkillPolicy) string {
 // including for session: profiles on runtimes without session persistence
 // (one-shot/cli), which stay fresh-per-event and lean on shared memory.
 func (e *Engine) dispatchAgent(ctx context.Context, runner Dispatcher, req dispatch.Request) (dispatch.RunRef, error) {
-	if e.affinity != nil {
+	// A detach launch is always a fresh, unbound agent: it never joins a
+	// runtime's session pool (that would deliver its prompt to a live
+	// conductor-held session, or bind the new agent to one).
+	if e.affinity != nil && !req.Step.Detach {
 		if ref, handled, err := e.affinity.Dispatch(ctx, runner, req); handled {
 			e.rememberDispatcher(ref.AgentID, runner)
 			return ref, err
@@ -738,25 +732,10 @@ func (e *Engine) isPaused() bool {
 	return err == nil
 }
 
-// triggerHasLabel reports whether the object's labels (stamped into Context by the
-// integration where available) include label, case-insensitively.
+// triggerHasLabel reports whether the target's labels (the fact its event
+// declares as labels) include label, case-insensitively.
 func triggerHasLabel(t core.Trigger, label string) bool {
-	raw, ok := t.Context["labels"]
-	if !ok {
-		return false
-	}
-	var labels []string
-	switch v := raw.(type) {
-	case []string:
-		labels = v
-	case []any:
-		for _, e := range v {
-			if s, ok := e.(string); ok {
-				labels = append(labels, s)
-			}
-		}
-	}
-	for _, l := range labels {
+	for _, l := range t.TargetLabels() {
 		if strings.EqualFold(l, label) {
 			return true
 		}
@@ -775,26 +754,31 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// trigger before any gate can drop it.
 	e.observeOutcomeSignals(ctx, t)
 
-	// Terminal state: drop dedup record, no dispatch.
-	if t.Kind == core.KindClosed {
+	// Terminal state (the event declares closes_target): drop dedup record,
+	// stop the runs bound to the target. The event itself dispatches nothing
+	// — unless the plugin routed it to a trigger explicitly `on:` it, which
+	// then runs like any other (after the housekeeping, so it is not stopped).
+	if t.ClosesTarget() {
 		_ = e.store.Delete(key)
 		e.markClosed(key)
 		e.log("%s closed; dropped state", tag(t))
 		e.stopFixers(ctx, t)
-		return
+		if t.Action == nil {
+			return
+		}
 	}
 
-	// Kill switch (config) + runtime pause (a control file toggled by `pause`/
-	// `resume` without a restart).
-	if !e.cfg.Control.IsEnabled() {
-		return
-	}
+	// Runtime pause (a control file toggled by `pause`/`resume` without a
+	// restart) is the fleet-wide kill switch — there is deliberately no
+	// config-level `enabled` (see Policy.Shadow's doc comment).
 	if e.isPaused() {
 		e.log("%s skipped — conductor is paused", tag(t))
 		return
 	}
-	// Per-PR/issue opt-out: a label on the object (e.g. `conductor:off`) parks it.
-	if pl := e.cfg.Control.PauseLabel; pl != "" && triggerHasLabel(t, pl) {
+	// Per-PR/issue opt-out: a label on the object (e.g. `conductor:off`) parks
+	// it. The fleet-wide default lives at `policy.pause_label`; a connector/
+	// trigger-scoped one is checked again, more specifically, in processFlow.
+	if pl := e.cfg.GlobalPauseLabel(); pl != "" && triggerHasLabel(t, pl) {
 		e.log("%s skipped — carries pause label %q", tag(t), pl)
 		return
 	}
@@ -825,8 +809,8 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// review ONCE — a later sweep still seeing its threads unresolved (or a
 	// reviewer editing the review) re-derives the same comments, at or below
 	// the mark, while a new review's comments are above it.
-	if !t.Force && commentMarked(t.Kind) {
-		if id := commentID(t); id > 0 && id <= e.store.LastCommentID(key, commentMarkKind(t)) {
+	if !t.Force {
+		if id, _, ok := t.Cursor(); ok && id <= e.store.LastCommentID(key, cursorMarkKey(t)) {
 			return
 		}
 	}
@@ -842,36 +826,15 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 		dkind = t.Kind + "#" + t.Variant
 	}
 
-	// Flaky-CI: rerun the failed run once before spawning a fix agent. run_id is 0
-	// for a non-Actions check (nothing to rerun) — straight to the fixer.
-	if runID := toInt64(t.Context["run_id"]); t.Kind == "failing_checks" && act.FlakyRerun.Enabled && runID > 0 {
-		// One failed job cancels its siblings, so failing check_run events land while
-		// the run is still finishing — GitHub refuses to rerun a run in progress, and
-		// the same holds for a stale failure event arriving after we've already kicked
-		// off the rerun. Either way: wait; the run's completion re-triggers us.
-		waitKey := fmt.Sprintf("%s|%d", key, runID)
-		if status, err := e.runStatus(ctx, t, runID); err == nil && status != "completed" {
-			// Every cancelled sibling job lands here as its own event; say it
-			// once per run and status, not once per event.
-			if prev, _ := e.runWait.Swap(waitKey, status); prev != status {
-				e.log("%s run %d still %s — waiting for it to finish", tag(t), runID, status)
-			}
-			return
-		}
-		e.runWait.Delete(waitKey)
-		maxRerun := act.FlakyRerun.Max
-		if maxRerun <= 0 {
-			maxRerun = 1
-		}
-		if e.store.Attempts(key, "failing_checks_rerun", head) < maxRerun {
-			if err := e.rerun(ctx, t, runID); err != nil {
-				// Not requested, so don't burn the attempt; fall through to the fixer.
-				e.log("%s flaky rerun run %d: %v — dispatching the fixer instead", tag(t), runID, err)
-			} else {
-				_ = e.store.Record(key, "failing_checks_rerun", head, head)
-				e.store.Audit(map[string]any{"event": "flaky_rerun", "repo": t.Target.Repo,
-					"number": t.Target.Number, "run_id": runID})
-				return // wait for the rerun; a fresh failure will re-trigger
+	// A declared remediation (the event's `remediate` semantic, enabled per
+	// trigger by the option it names): before dispatching a fixer, wait for
+	// the event's run to finish, then try the plugin's own remedy (a CI
+	// rerun) up to its budget per revision. Only for a target the platform
+	// assigned: the remedy spends the instance's credentials.
+	if rem := t.Semantics().Remediate; rem != nil && act.FlakyRerun.Enabled && t.OwnRepo() != "" && e.invokeVerb != nil {
+		if run := t.Context[rem.Run]; run != nil && toInt64(run) != 0 {
+			if handled := e.remediate(ctx, t, rem, act, key, head, run); handled {
+				return
 			}
 		}
 	}
@@ -881,7 +844,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	// reviewer — not "we launched something once." For those, gate on whether a
 	// conductor agent for this PR is already working/parked instead of a permanent
 	// dedup flag, so a still-pending review keeps coming back until you do it.
-	liveGate := livenessGated(t.Kind)
+	liveGate := t.LevelTriggered()
 	if t.Force {
 		// Forced: skip the dedup / liveness gates entirely and dispatch below.
 	} else if liveGate {
@@ -898,8 +861,8 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			// it. A same-head re-request (or a duplicate webhook delivery) has a recorded
 			// attempt at this head, so it's suppressed here: no double-fire, no re-review
 			// of identical code.
-			if t.Kind == "review_requested" && head != "" && e.store.Attempts(key, dkind, head) == 0 {
-				e.log("%s re-engaging — review re-requested on a new head %s (agent parked on older code)", tag(t), short(head))
+			if t.RearmOnRevision() && head != "" && e.store.Attempts(key, dkind, head) == 0 {
+				e.log("%s re-engaging — the target moved to a new revision %s (agent parked on an older one)", tag(t), short(head))
 			} else {
 				e.log("%s skipped — an agent is already working/parked for it", tag(t))
 				return
@@ -923,7 +886,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	if soft == 0 && pol.MaxAttemptsPerHead != nil {
 		soft = *pol.MaxAttemptsPerHead
 	}
-	if soft == 0 && t.Kind != "new_comment" {
+	if soft == 0 && !t.NoAttemptCap() {
 		soft = defaultMaxAttempts
 	}
 	base, max := retryBackoffBase, retryBackoffMax
@@ -995,6 +958,35 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	if modelRuntime != "" && profile.Runtime == "" {
 		profile.Runtime = modelRuntime
 	}
+	creds, err := e.credentialsFor(ctx, t)
+	if err != nil {
+		if errors.Is(err, dispatch.ErrTargetClosed) {
+			// target_gone (§1.11): its target is gone before this ever
+			// became a run — a stop, not a failure, so it is audited as one
+			// rather than as a dispatch failure.
+			e.log("%s not dispatched — target gone", tag(t))
+			e.store.Audit(map[string]any{"event": "workflow_stopped", "repo": t.Target.Repo,
+				"number": t.Target.Number, "kind": t.Kind, "reason": "target closed"})
+			return
+		}
+		// rate_limited/not_ready (§1.11): mint() never blocks this (the
+		// engine's single dispatch) loop in a sleep. Re-emit t after the
+		// error's own wait instead of treating it as a dispatch failure, so
+		// every OTHER queued trigger keeps dispatching in the meantime.
+		if e.deferAndReemit(ctx, t, "credential mint", err) {
+			return
+		}
+		// Past the deferral point with a non-deferrable (or exhausted)
+		// error: a later, unrelated rate_limited/not_ready answer for this
+		// same (target, kind) gets its own full re-emit budget rather than
+		// inheriting this one's count.
+		e.clearDeferredFor(t, "credential mint")
+		e.log("%s not dispatched — %v", tag(t), err)
+		e.store.Audit(map[string]any{"event": "dispatch_failed", "repo": t.Target.Repo, "number": t.Target.Number,
+			"kind": t.Kind, "error": e.redact(err.Error())})
+		return
+	}
+	e.clearDeferredFor(t, "credential mint")
 	if act.Type == "agent" {
 		// No prompt of its own → act on the event itself (connector-neutral
 		// event object), synthesized before the guidance stack. This legacy
@@ -1004,7 +996,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			act.Prompt = dispatch.EventPrompt(t, nil)
 		}
 		if act.Prompt != "" {
-			act.Prompt += dispatch.WriteWrapperGuidance
+			act.Prompt += creds.Guidance
 			act.Prompt += e.agentGuidance(profile, e.retryPolicyFor(act))
 			act.Prompt += e.memoryPrompt(identity, profile, t, "")
 			// NOTE: no HoldGuidance here. A top-level single-action agent is an
@@ -1016,17 +1008,7 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			// via the sweep.
 		}
 	}
-	appTok, _ := t.Context["app_token"].(string)
-	if e.readTok != nil { // identity.read_token override → reads use it, not the App token
-		if tok, err := e.readTok(); err == nil && tok != "" {
-			appTok = tok
-		}
-	}
-	userTok := ""
-	if e.userTok != nil {
-		userTok, _ = e.userTok()
-	}
-	shadow := e.cfg.Control.Shadow || (act.Shadow != nil && *act.Shadow)
+	shadow := e.cfg.GlobalShadow() || (act.Shadow != nil && *act.Shadow)
 
 	// Multi-step workflow: record now (so it doesn't re-fire), take a slot as
 	// backpressure, and run the steps in their own goroutine (releasing the slot
@@ -1054,15 +1036,15 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			if !shadow {
 				defer e.release()
 			}
-			e.runSteps(ctx, run, t, act, appTok, userTok, shadow)
+			e.runSteps(ctx, run, t, act, creds, shadow)
 		}()
 		return
 	}
 
 	req := dispatch.Request{
 		Trigger: t, Action: act, Step: profile, Identity: identity, Model: model, Provider: modelProvider,
-		Tokens: dispatch.Tokens{App: appTok, User: userTok},
-		Author: e.author, Shadow: shadow, CatchUp: t.CatchUp,
+		Credentials: creds,
+		Author:      e.author, Shadow: shadow, CatchUp: t.CatchUp,
 	}
 
 	// Resolve which controller runs this agent before taking a slot. Commands
@@ -1191,10 +1173,8 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 	}
 	// A comment was handled (fresh agent, queued, or adopted) — raise the high-water
 	// mark so the sweep's re-listing of recent comments won't re-dispatch this one.
-	if commentMarked(t.Kind) {
-		if id := commentID(t); id > 0 {
-			_ = e.store.AdvanceCommentID(key, commentKind(t), id)
-		}
+	if id, _, ok := t.Cursor(); ok {
+		_ = e.store.AdvanceCommentID(key, cursorMarkKey(t), id)
 	}
 
 	// A finished agent's captured output may carry the memory output contract.
@@ -1245,7 +1225,7 @@ func (e *Engine) newRun(t core.Trigger, act config.Action, shadow bool) store.Wo
 	}
 	tp := t
 	tp.Action = nil
-	tp.Context = sanitizeContext(t.Context)
+	tp.Context = sanitizeContext(t)
 	run.Trigger, _ = json.Marshal(tp)
 	run.Action, _ = json.Marshal(act)
 	if shadow || e.store == nil {
@@ -1294,14 +1274,19 @@ func (e *Engine) recoverDispatch(ctx context.Context, t core.Trigger, run store.
 	e.finishRun(run)
 }
 
-// sanitizeContext copies a trigger context minus secrets (re-minted on resume).
-func sanitizeContext(in map[string]any) map[string]any {
-	if in == nil {
+// sanitizeContext copies a trigger's context minus the facts its event
+// declares secret (credentials are minted afresh on resume, never persisted).
+func sanitizeContext(t core.Trigger) map[string]any {
+	if t.Context == nil {
 		return nil
 	}
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		if k == "app_token" || k == "gh_token" {
+	secret := map[string]bool{}
+	for _, k := range t.SecretFacts() {
+		secret[k] = true
+	}
+	out := make(map[string]any, len(t.Context))
+	for k, v := range t.Context {
+		if secret[k] {
 			continue
 		}
 		out[k] = v
@@ -1311,11 +1296,9 @@ func sanitizeContext(in map[string]any) map[string]any {
 
 // ResumeWorkflows re-runs any workflow that was in-flight when the conductor last
 // stopped. Prior steps' outputs are restored; the interrupted step re-runs
-// (at-least-once). Tokens are re-minted. Disabled if RefreshAppToken is unset.
+// (at-least-once). Declared credentials are minted afresh (they were never
+// persisted).
 func (e *Engine) ResumeWorkflows(ctx context.Context) {
-	if e.refreshTok == nil {
-		return
-	}
 	for _, r := range e.store.PendingRuns() {
 		var t core.Trigger
 		var act config.Action
@@ -1331,50 +1314,18 @@ func (e *Engine) ResumeWorkflows(ctx context.Context) {
 				e.log("engine: resume %s: flow run but no flow runner — leaving for next start", r.ID)
 				continue
 			}
-			if t.Context != nil {
-				if appTok, err := e.refreshTok(t); err == nil && appTok != "" {
-					t.Context["app_token"] = appTok
-				}
-			}
 			e.resumeFlowRun(ctx, r, t, act)
 			continue
 		}
 		t.Action = act
-		appTok, err := e.refreshTok(t)
-		if err != nil {
-			e.log("engine: resume %s: app token: %v (leaving for next start)", r.ID, err)
-			continue
-		}
-		if e.readTok != nil { // identity.read_token override
-			if tok, terr := e.readTok(); terr == nil && tok != "" {
-				appTok = tok
-			}
-		}
-		userTok := ""
-		if e.userTok != nil {
-			userTok, _ = e.userTok()
-		}
-		if t.Context == nil {
-			t.Context = map[string]any{}
-		}
-		t.Context["app_token"] = appTok
-		run := r
-		if run.Outputs == nil {
-			run.Outputs = map[string]map[string]any{}
-		}
-		e.log("%s resuming workflow from step %d", tag(t), r.StepIndex)
-		e.store.Audit(map[string]any{"event": "resume", "repo": t.Target.Repo,
-			"number": t.Target.Number, "kind": t.Kind, "step_index": r.StepIndex})
-		go func() {
-			// Wait for the slot here so resuming more runs than slots doesn't
-			// stall startup.
-			if !e.acquireFor(ctx, t.Kind) {
-				return
-			}
-			defer e.release()
-			defer e.recoverDispatch(ctx, t, run, "workflow resume")
-			e.runSteps(ctx, run, t, act, appTok, userTok, false)
-		}()
+		// Credentials are minted afresh for the resumed run (the recorded
+		// ones were never persisted). One that cannot be minted yet (its
+		// plugin is still starting) schedules a bounded per-run recheck
+		// (recheckResumeRun/scheduleResumeRecheck, finding 2) rather than
+		// leaving the run pending with nothing revisiting it until the next
+		// daemon restart — ctx-aware, and never blocking this sequential
+		// loop over every OTHER pending run.
+		e.recheckResumeRun(ctx, r, t, act)
 	}
 }
 
@@ -1439,22 +1390,6 @@ func interruptedByShutdown(ctx context.Context, err error) bool {
 		strings.Contains(s, "context canceled")
 }
 
-// livenessGated reports whether a kind's completion is EXTERNAL state the sweep
-// re-derives each run (review still pending? PR still dirty? threads still
-// unresolved?) rather than a one-shot "we dispatched once" flag. For these we
-// never record "done" on dispatch — a culled/failed/incomplete agent would
-// otherwise mark the work done and it'd be abandoned. Instead we gate on whether
-// an agent is already working/parked for it, and let the sweep retry until the
-// underlying condition clears. new_comment stays dedup-gated (keyed per comment
-// id — each distinct comment must be handled, not collapsed to "an agent ran").
-func livenessGated(kind string) bool {
-	switch kind {
-	case "review_requested", "merge_conflict", "changes_requested":
-		return true
-	}
-	return false
-}
-
 // runnerFor resolves the controller that runs an agent (from the profile's
 // `controller:`, then the default:true controller, then the built-in paseo) and
 // returns its dispatch surface. An error means the controller is unknown or its
@@ -1507,15 +1442,15 @@ func (e *Engine) controllerFor(profile config.Step) (controller.Controller, erro
 // free (backpressure). Returns false if the context is cancelled first. No-op
 // (true) when uncapped.
 func (e *Engine) acquire(ctx context.Context) bool {
-	return e.acquireFor(ctx, "")
+	return e.acquireFor(ctx, false)
 }
 
-// acquireFor is acquire at the trigger kind's slot priority (slotPriority).
-func (e *Engine) acquireFor(ctx context.Context, kind string) bool {
+// acquireFor is acquire at a trigger's slot priority (slotPriority).
+func (e *Engine) acquireFor(ctx context.Context, interactive bool) bool {
 	if e.sem == nil {
 		return true
 	}
-	return e.sem.acquire(ctx, slotPriority(kind))
+	return e.sem.acquire(ctx, slotPriority(interactive))
 }
 
 // release returns a concurrency slot.
@@ -1572,9 +1507,6 @@ func (e *Engine) auditDispatch(t core.Trigger, ref dispatch.RunRef, err error) {
 		e.log("%s dispatched (backend=%s shadow=%v)", tag(t), ref.Backend, ref.Shadowed)
 	}
 	e.store.Audit(entry)
-	if core.CompletionHook != nil {
-		core.CompletionHook(t, outcome)
-	}
 }
 
 // agentWaitTimeout bounds how long a slot is held waiting for an agent to idle,
@@ -1587,47 +1519,90 @@ func agentWaitTimeout(p config.Step) time.Duration {
 	return time.Hour
 }
 
-// rerunFailed re-runs the failed jobs of a workflow run, as you. Returns the gh
-// error (with its output) when the rerun could not be requested.
-func (e *Engine) rerunFailed(ctx context.Context, t core.Trigger, runID int64) error {
-	// OwnRepo: this spends the OPERATOR'S token on a write to a named repo.
-	// The run id and repo are platform facts that arrive with a verified
-	// payload; a trigger whose target the sender chose would be asking
-	// conductor to re-run CI in a repo of the attacker's choosing, with the
-	// operator's credential (found by the round-13 enforcement sweep).
-	repo := t.OwnRepo()
-	if repo == "" {
-		return fmt.Errorf("refusing to re-run checks for %s: the dispatch's target was not assigned by its source, so the repo is not conductor's to act on", t.Key())
+// remediate runs one step of a declared remediation. handled=true means the
+// trigger is done for now: the run is still in flight (its completion
+// re-triggers), or the remedy was requested (a fresh failure re-triggers).
+// false falls through to dispatching the fixer.
+func (e *Engine) remediate(ctx context.Context, t core.Trigger, rem *sdk.RemediateSemantics, act config.Action, key, head string, run any) bool {
+	waitKey := fmt.Sprintf("%s|%v", key, run)
+	// This call runs synchronously in process(), fed by Run's single
+	// dispatch loop: unlike most invoke call sites it deliberately does NOT
+	// go through connector.RetryContract (which sleeps). On rate_limited/
+	// not_ready it defers a re-emit of t instead (deferAndReemit) so one
+	// slow remediation status check cannot stall every other queued
+	// trigger; only once that is exhausted (or the error is some other
+	// code) does it fall through to today's handling.
+	out, err := e.invokeVerb(ctx, t.Instance, rem.Status.Verb, core.DeclaredArgs(rem.Status.Args, t.Facts()))
+	if ce, ok := connector.AsContractError(err); ok && ce.IsTargetGone() {
+		// Honored as a stop ONLY when it names THIS run's own target
+		// (finding 11): the status verb addresses the run's own target by
+		// construction (rem.Status.Args is templated from t.Facts()), but a
+		// generic check still guards against a plugin naming the wrong one.
+		if ce.TargetGoneMatchesKey(t.DeclaredKey()) {
+			// The target this remediation (and the fixer it would otherwise
+			// dispatch) acts on is gone: stop — handled, not a failure, and no
+			// fixer dispatch for a target that no longer exists.
+			e.log("%s remediation %s: target gone — dropping", tag(t), rem.Status.Verb)
+			e.runWait.Delete(waitKey)
+			return true
+		}
+		e.log("%s remediation %s: target_gone for a different target than this run's own — not stopping", tag(t), rem.Status.Verb)
 	}
-	c := exec.CommandContext(ctx, "gh", "run", "rerun", fmt.Sprintf("%d", runID),
-		"--failed", "--repo", repo)
-	c.Env = append(os.Environ(), "GH_TOKEN="+e.userToken())
-	if out, err := c.CombinedOutput(); err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	if e.deferAndReemit(ctx, t, "remediation status "+rem.Status.Verb, err) {
+		return true // handled for now: re-emit scheduled, no fixer dispatch yet
 	}
-	e.log("%s flaky rerun triggered (run %d)", tag(t), runID)
-	return nil
-}
-
-// workflowRunStatus reads a workflow run's status (queued|in_progress|completed|…), as you.
-func (e *Engine) workflowRunStatus(ctx context.Context, t core.Trigger, runID int64) (string, error) {
-	c := exec.CommandContext(ctx, "gh", "api", fmt.Sprintf("repos/%s/actions/runs/%d", t.Target.Repo, runID),
-		"--jq", ".status")
-	c.Env = append(os.Environ(), "GH_TOKEN="+e.userToken())
-	out, err := c.Output()
-	if err != nil {
-		return "", err
+	// Past the deferral point (success, or a non-deferrable/exhausted
+	// error): a later, unrelated rate_limited/not_ready answer for this
+	// status verb gets its own full re-emit budget.
+	e.clearDeferredFor(t, "remediation status "+rem.Status.Verb)
+	if err == nil {
+		done, eerr := expr.Eval(rem.Status.DoneWhen, out)
+		if eerr == nil && !done {
+			// Every sibling event of a still-running run lands here; say it
+			// once per run and state, not once per event.
+			state := fmt.Sprint(out["status"])
+			if prev, _ := e.runWait.Swap(waitKey, state); prev != state {
+				e.log("%s run %v still %s — waiting for it to finish", tag(t), run, state)
+			}
+			return true
+		}
 	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// userToken returns your GitHub token ("" when unavailable).
-func (e *Engine) userToken() string {
-	if e.userTok == nil {
-		return ""
+	e.runWait.Delete(waitKey)
+	budget := act.FlakyRerun.Max
+	if budget <= 0 {
+		budget = rem.Budget
 	}
-	tok, _ := e.userTok()
-	return tok
+	if budget <= 0 {
+		budget = 1
+	}
+	rkey := t.Kind + "_rerun"
+	if e.store.Attempts(key, rkey, head) >= budget {
+		return false
+	}
+	if _, err := e.invokeVerb(ctx, t.Instance, rem.Action.Verb, core.DeclaredArgs(rem.Action.Args, t.Facts())); err != nil {
+		if ce, ok := connector.AsContractError(err); ok && ce.IsTargetGone() {
+			// Honored as a stop ONLY when it names THIS run's own target
+			// (finding 11) — see the matching comment on the status verb above.
+			if ce.TargetGoneMatchesKey(t.DeclaredKey()) {
+				e.log("%s remediation %s: target gone — dropping (no fixer dispatch)", tag(t), rem.Action.Verb)
+				return true
+			}
+			e.log("%s remediation %s: target_gone for a different target than this run's own — not stopping", tag(t), rem.Action.Verb)
+		}
+		if e.deferAndReemit(ctx, t, "remediation action "+rem.Action.Verb, err) {
+			return true // handled for now: re-emit scheduled, no fixer dispatch yet
+		}
+		e.clearDeferredFor(t, "remediation action "+rem.Action.Verb)
+		// Not requested, so the attempt is not counted; dispatch the fixer.
+		e.log("%s remediation %s for run %v: %v — dispatching the fixer instead", tag(t), rem.Action.Verb, run, err)
+		return false
+	}
+	e.clearDeferredFor(t, "remediation action "+rem.Action.Verb)
+	_ = e.store.Record(key, rkey, head, head)
+	e.store.Audit(map[string]any{"event": "remediation", "verb": rem.Action.Verb, "repo": t.Target.Repo,
+		"number": t.Target.Number, "run": run})
+	e.log("%s remediation %s requested (run %v)", tag(t), rem.Action.Verb, run)
+	return true
 }
 
 func toInt64(v any) int64 {
@@ -1642,51 +1617,15 @@ func toInt64(v any) int64 {
 	return 0
 }
 
-// commentID reads a new_comment trigger's source comment id from Context (0 if
-// absent — e.g. an older trigger without the field, which then can't be gated).
-func commentID(t core.Trigger) int64 {
-	if t.Context == nil {
-		return 0
-	}
-	return toInt64(t.Context["comment_id"])
-}
-
-// commentMarkKind returns the high-water-mark key for a comment trigger:
-// the comment kind, suffixed per variant for connectors-model triggers so
-// sibling triggers on the same event keep independent marks.
-func commentMarkKind(t core.Trigger) string {
-	ck := commentKind(t)
+// cursorMarkKey is the high-water-mark key for a trigger's declared cursor:
+// its stream, suffixed per variant for connectors-model triggers so sibling
+// triggers on the same event keep independent marks.
+func cursorMarkKey(t core.Trigger) string {
+	_, stream, _ := t.Cursor()
 	if act, ok := t.Action.(config.Action); ok && act.FlowRef != "" && t.Variant != "" {
-		ck += "#" + t.Variant
+		stream += "#" + t.Variant
 	}
-	return ck
-}
-
-// commentKind reads a new_comment trigger's comment kind (store.CommentKindIssue /
-// store.CommentKindReview) from Context, selecting which high-water mark applies.
-// Absent (an older trigger) → issue, matching the pre-per-kind single mark.
-//
-// changes_requested keeps marks of its own ("changes_requested:review"), apart
-// from new_comment's: the two kinds are dispatched for different comments, and a
-// shared mark would let one starve the other.
-func commentKind(t core.Trigger) string {
-	k := store.CommentKindIssue
-	if t.Context != nil {
-		if ck, _ := t.Context["comment_kind"].(string); ck != "" {
-			k = ck
-		}
-	}
-	if t.Kind == "changes_requested" {
-		return "changes_requested:" + k
-	}
-	return k
-}
-
-// commentMarked reports whether a kind is gated by (and advances) the comment
-// high-water mark: new_comment, and changes_requested when it carries a
-// comment_id.
-func commentMarked(kind string) bool {
-	return kind == "new_comment" || kind == "changes_requested"
+	return stream
 }
 
 func shadowNote(shadow bool) string {

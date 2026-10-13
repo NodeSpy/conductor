@@ -26,8 +26,11 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 // exampleDecl declares the "authoring-example" type: one event, two verbs.
@@ -219,4 +222,17 @@ func TestAuthoringExampleSchemas(t *testing.T) {
 	if match, _ := decl.Filter("waved", map[string]any{"from": "ada"}, map[string]any{"sender": "bob"}); match {
 		t.Fatal("filter must reject a different sender")
 	}
+}
+
+func buildSinkRegistry(t *testing.T, y string) *Registry {
+	t.Helper()
+	var cfg config.Config
+	if err := yaml.Unmarshal([]byte(y), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := Build(&cfg, Deps{Secrets: secrets.New(), Config: &cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reg
 }

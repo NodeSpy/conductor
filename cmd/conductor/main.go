@@ -14,15 +14,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/NodeSpy/conductor/internal/confdir"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -37,10 +38,8 @@ import (
 	"github.com/NodeSpy/conductor/internal/engine"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/gitwt"
-	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/hosts"
 	"github.com/NodeSpy/conductor/internal/inbound"
-	"github.com/NodeSpy/conductor/internal/integrations/slack" // registers "slack"; also feeds hand-off replies (see wireSlackHandoffInbox)
 	"github.com/NodeSpy/conductor/internal/memory"
 	agentmodels "github.com/NodeSpy/conductor/internal/models"
 	"github.com/NodeSpy/conductor/internal/notify"
@@ -50,11 +49,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/skill"
 	"github.com/NodeSpy/conductor/internal/store"
 	"github.com/NodeSpy/conductor/internal/vaults"
-
-	_ "github.com/NodeSpy/conductor/internal/integrations/cron"    // register "cron"
-	_ "github.com/NodeSpy/conductor/internal/integrations/github"  // register "github"
-	_ "github.com/NodeSpy/conductor/internal/integrations/rss"     // register "rss"
-	_ "github.com/NodeSpy/conductor/internal/integrations/webhook" // register "webhook"
 )
 
 var version = "dev"
@@ -184,7 +178,7 @@ usage:
   conductor run [--config PATH]         start the daemon
   conductor run <name> [--input k=v ...] [--json '{…}']  fire a manual trigger via the running daemon
   conductor once <trigger> [--event PATH] [--event-name NAME]  run ONE event through ONE trigger, no daemon, exit = outcome
-  conductor validate [--config PATH]    load & validate config, then exit
+  conductor validate [--config PATH] [--strict]  load & validate config, then exit (--strict: fail if any connector is disabled)
   conductor replay <event.json> [--config PATH]  run a saved webhook through the pipeline (dry-run)
   conductor sweep [--config PATH]       one catch-up sweep (dry-run print)
   conductor sweep --now [--config PATH] signal the running daemon to sweep now
@@ -208,7 +202,6 @@ usage:
   conductor connector auth <name> [--revoke]  oauth2 login (or clear stored tokens)
   conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
   conductor unlock                      seed the default vault key for non-interactive restarts
-  conductor config migrate [--dry-run]  transform a legacy config to the connectors schema
   conductor mcp memory --socket <path>  stdio MCP server: memory + skill broker (agent-facing)
   conductor mcp callable --token <name> [--config PATH]  stdio MCP server: invoke callable workflows (external MCP clients)
   conductor workflows ls|review|rm      manage saved (agent-promoted) workflows
@@ -222,8 +215,9 @@ usage:
 `)
 }
 
-// configPath extracts --config from args (default configDir()/config.yaml —
-// ~/.config/conductor). It also consumes --state-dir, which redirects the
+// configPath extracts --config from args (default confdir.File():
+// $CONDUCTOR_CONFIG, else $XDG_CONFIG_HOME/conductor/config.yaml, else
+// ~/.config/conductor/config.yaml). It also consumes --state-dir, which redirects the
 // install-state directory for this process: the same isolation
 // XDG_STATE_HOME gives, reachable from a single command without exporting
 // anything.
@@ -240,7 +234,7 @@ func usedConfigFlag(args []string) bool {
 }
 
 func configPath(args []string) (string, []string) {
-	def := filepath.Join(configDir(), "config.yaml")
+	def := confdir.File()
 	rest := []string{}
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--config" && i+1 < len(args) {
@@ -268,64 +262,20 @@ func loadConfig(args []string) (*config.Config, []string, error) {
 	return cfg, rest, err
 }
 
-// resolveBootConfig runs the daemon's boot config pipeline: migrate-on-boot,
-// then load, and on ANY load failure holds degraded until the config becomes
-// loadable rather than returning an error that exits cmdRun into a
-// service-manager crash-loop (H1). The failure that must hold is not only a
-// failed migration — a connectors-schema config the strict loader rejects (a
-// stray key, an env ref that didn't resolve) reaches here with migrateWarning
-// == "", just as much a restart-loop trap. Returns the loaded config and any
-// escalate warning to surface. This is the testable boot seam: the gate lives
-// here, not inline in cmdRun.
+// resolveBootConfig runs the daemon's boot config pipeline: load, and on ANY
+// load failure hold degraded until the config becomes loadable rather than
+// returning an error that exits cmdRun into a service-manager crash-loop (H1).
+// Returns the loaded config and any escalate warning to surface. This is the
+// testable boot seam: the gate lives here, not inline in cmdRun.
 func resolveBootConfig(args []string) (*config.Config, string, error) {
-	migrateWarning := autoMigrateOnBoot(args)
 	// loadConfig loads the sibling conductor.env first, so ${...} refs resolve
 	// (this is also how launchd — which has no EnvironmentFile — gets secrets).
 	cfg, _, err := loadConfig(args)
+	warning := ""
 	if err != nil {
-		cfg, migrateWarning, err = holdDegradedUntilLoadable(args, migrateWarning, err)
+		cfg, warning, err = holdDegradedUntilLoadable(args, "", err)
 	}
-	return cfg, migrateWarning, err
-}
-
-// buildIntegrations instantiates every configured integration via the registry.
-func buildIntegrations(cfg *config.Config) ([]core.Integration, error) {
-	var out []core.Integration
-	for _, ref := range cfg.Integrations {
-		if !ref.IsEnabled() {
-			continue
-		}
-		ig, err := core.Build(ref.Type, ref.Name, ref.Decode)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, ig)
-	}
-	return out, nil
-}
-
-// actionLister is implemented by an integration that can enumerate its configured
-// actions, so checks spanning the integration's sub-config and the top-level
-// config (agent profile references) can run up front rather than at dispatch.
-type actionLister interface {
-	Actions() []config.ActionRef
-}
-
-// validateAll runs each integration's own Validate, then the cross-config
-// checks: every `agent:` an action or workflow step names must be a profile
-// defined under `agents:` — otherwise the engine dispatches an empty profile and
-// paseo fails with MISSING_PROVIDER only once a live trigger reaches that step.
-func validateAll(cfg *config.Config, igs []core.Integration) error {
-	var refs []config.ActionRef
-	for _, ig := range igs {
-		if err := ig.Validate(); err != nil {
-			return err
-		}
-		if l, ok := ig.(actionLister); ok {
-			refs = append(refs, l.Actions()...)
-		}
-	}
-	return cfg.CheckAgentRefs(refs)
+	return cfg, warning, err
 }
 
 func cmdValidate(args []string) error {
@@ -334,6 +284,17 @@ func cmdValidate(args []string) error {
 	// command validated the DEFAULT config instead — a footgun that hid a bad
 	// file behind an "ok" for a different one. Honor the positional; refuse an
 	// ambiguous invocation rather than pick one silently.
+	requirePlugins := slices.Contains(args, "--require-plugins")
+	// Finding 6 (HIGH, UX): degrade-not-fail is intentional default
+	// behavior (a connector disabled by a bad credential or an unfetchable
+	// plugin must never take the whole box down), so validate keeps
+	// exiting 0 by default even when every connector ended up disabled —
+	// --require-plugins already covers the self-update preflight's own
+	// narrower "plugins must be fetchable" gate. --strict is the opt-in
+	// for an operator (or a stricter CI check) who wants validate to
+	// refuse a config where something it accepted is not actually running.
+	strict := slices.Contains(args, "--strict")
+	args = slices.DeleteFunc(slices.Clone(args), func(a string) bool { return a == "--require-plugins" || a == "--strict" })
 	path, rest := configPath(args)
 	switch len(rest) {
 	case 0:
@@ -351,15 +312,8 @@ func cmdValidate(args []string) error {
 	if err != nil {
 		return err
 	}
-	igs, err := buildIntegrations(cfg)
-	if err != nil {
-		return err
-	}
-	if err := validateAll(cfg, igs); err != nil {
-		return err
-	}
 	// The connectors-model semantic pass: schemas, verbs, position-scoped
-	// references, workflow inputs/outputs. No-op for legacy-only configs.
+	// references, workflow inputs/outputs.
 	stack, err := buildFlowStack(cfg, nil, nil, true)
 	if err != nil {
 		return err
@@ -392,18 +346,150 @@ func cmdValidate(args []string) error {
 			fmt.Printf("warning: %s\n", w)
 		}
 	}
-	if stack != nil {
-		fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s)",
-			len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows))
-		if len(cfg.Integrations) > 0 {
-			fmt.Printf(" — plus %d legacy integration(s)", len(cfg.Integrations))
+	// plugin-contract.md §5.2 step 1 / Q12 / Q13: before switching to a
+	// release, an operator is told whether every plugin it references but
+	// does not yet have installed can actually be fetched from this box (a
+	// read-only git ls-remote — nothing is installed). A plugin that can't be
+	// fetched is reported as a WARNING, not a failure: Q12's whole point is
+	// that the daemon still boots with just that connector/engine/runtime
+	// disabled, so a config that is otherwise good must still pass validate.
+	//
+	// --require-plugins makes it a failure: the self-update preflight passes
+	// it, so a box never auto-updates into a release whose plugins it can
+	// neither find installed nor fetch (it would boot with those connectors
+	// dark — for a one-connector box, all of its automation).
+	missing := 0
+	for _, line := range checkPluginFetchability(cfg) {
+		fmt.Println(line)
+		if strings.HasPrefix(line, "warning: plugin ") {
+			missing++
 		}
-		fmt.Println()
+	}
+	if missing > 0 && requirePlugins {
+		return fmt.Errorf("%d referenced plugin(s) neither installed nor fetchable (--require-plugins)", missing)
+	}
+	// Finding 3: a single_process conflict against what is CURRENTLY
+	// installed (no new network resolution — install state is read offline,
+	// same as checkPluginFetchability above) is a statically knowable
+	// config problem and stays a validate-time failure, unlike the same
+	// check at boot (loadConnectorPlugins), which degrades instead of
+	// refusing, because there the conflict can also arise from an update
+	// `validate` was never asked about.
+	if conflicts := singleProcessConflictsFor(cfg); len(conflicts) > 0 {
+		for _, c := range conflicts {
+			fmt.Printf("error: %s\n", c.reason)
+		}
+		return fmt.Errorf("%d plugin(s) have a single_process/isolation conflict against what is currently installed (see docs/wiki/Plugins.md \"Multi-instance isolation\")", len(conflicts))
+	}
+	// Finding 6 (HIGH, UX): the summary used to say "ok" regardless of how
+	// many of those connectors are actually disabled — a credential
+	// failure, or (new on this release) a plugin that never got fetched,
+	// left every connector dark while validate still reported success with
+	// nothing to suggest otherwise. disabledConnectorNames is exactly
+	// stack.ConnectorErrs' own set (a credential/build/fetch failure, never
+	// an operator's own `enabled: false` — that is a deliberate choice, not
+	// a problem to flag), and every one of them was already logged above
+	// (connector.Build's own logf call), hence "see above" rather than
+	// repeating the reason here.
+	disabled := disabledConnectorNames(cfg, stack)
+	if len(disabled) == 0 {
+		fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s)\n",
+			len(cfg.ConnectorsMap), len(cfg.Triggers), len(cfg.Workflows))
+	} else {
+		fmt.Printf("ok: %d connector(s) (%d disabled: %s — see above), %d trigger(s), %d workflow(s)\n",
+			len(cfg.ConnectorsMap), len(disabled), strings.Join(disabled, ", "), len(cfg.Triggers), len(cfg.Workflows))
+	}
+	if strict && len(disabled) > 0 {
+		return fmt.Errorf("%d connector(s) disabled (--strict): %s", len(disabled), strings.Join(disabled, ", "))
+	}
+	return nil
+}
+
+// disabledConnectorNames lists every CONFIGURED connector (cfg.ConnectorsMap)
+// that built but ended up disabled by a credential/build/fetch failure —
+// never one an operator turned off with `enabled: false` (that is a
+// deliberate choice validate has no business flagging). Sorted for a stable
+// message. Empty when stack is nil (no connectors: block at all).
+func disabledConnectorNames(cfg *config.Config, stack *flowStack) []string {
+	if stack == nil {
 		return nil
 	}
-	fmt.Printf("ok: %d integration(s) configured (%d enabled)\n",
-		len(cfg.Integrations), len(igs))
-	return nil
+	names := make([]string, 0, len(cfg.ConnectorsMap))
+	for name := range cfg.ConnectorsMap {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var disabled []string
+	for _, name := range names {
+		if in, ok := stack.Registry.Get(name); ok && in.Enabled && in.DisabledReason != "" {
+			disabled = append(disabled, name)
+		}
+	}
+	return disabled
+}
+
+// validateReleaseAPI is the remote lookup `conductor validate` uses to check
+// whether a referenced-but-not-installed plugin can be fetched. A test
+// overrides it with a stub, so validate's unit tests need no real network.
+var validateReleaseAPI plugin.ReleaseAPI = plugin.GitDist{}
+
+// checkPluginFetchability reports, for every plugin cfg.PluginRefs() names
+// that is NOT already installed, whether it can be fetched from this
+// machine: a read-only `git ls-remote` plus the version-constraint match
+// (plugin.CheckFetchable) — no download, nothing written to install state.
+// A local dev binary (`use: ./...`) and an already-installed plugin are
+// skipped: there is nothing to fetch for the first, and validate does not
+// re-check an update for the second (that is `plugin update`'s job).
+func checkPluginFetchability(cfg *config.Config) []string {
+	state := plugin.LoadInstallState(plugin.InstallDir())
+	// Exploded (one entry per resolved-version GROUP): per pinned version,
+	// not per name — two connectors pinning different versions of the same
+	// plugin must each be checked against THEIR OWN constraint
+	// (docs/wiki/Plugins.md "Side-by-side versions"), never a sibling
+	// version's install satisfying the check for both.
+	//
+	// Local references are filtered out BEFORE exploding — there is
+	// nothing to fetch for one, and ExplodeRefs resolving it would
+	// snapshot it by content hash for no reason this read-only check needs.
+	remote := map[string]config.PluginRef{}
+	for k, ref := range cfg.PluginRefs() {
+		if ref.Use.Origin != config.OriginLocal {
+			remote[k] = ref
+		}
+	}
+	refs, failures := explodeRefs(remote, cfg.BaseDir(), state)
+	keys := make([]string, 0, len(refs))
+	for k := range refs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var lines []string
+	// Finding 4 (LOW): a GroupFailure (the "must never happen" isolation-fold
+	// invariant failing anyway, see group.go's narrowRef) also surfaces at
+	// boot/reload, which actually drives connectors — but validate must name
+	// it too, not silently drop it from its report, since the whole point of
+	// `validate` is to catch a config problem before it reaches boot.
+	for _, f := range failures {
+		lines = append(lines, fmt.Sprintf("warning: plugin %s: cannot be split into process groups safely (%s) — every connector using it would be disabled; this should never happen, please report it", f.Name, f.Reason))
+	}
+	for _, key := range keys {
+		ref := refs[key]
+		if _, ok := state.GetForConstraint(ref.Use.InstallKey(), ref.Use); ok {
+			// Installed at a version THIS group's own constraint accepts
+			// (GetForConstraint already resolved it that way) — a pin raised
+			// past what is installed must still be fetchable, so only an
+			// unsatisfied constraint falls through to the live check below.
+			continue
+		}
+		rs := plugin.RemoteSource{URL: ref.Use.GitURL(), Component: ref.Use.Component}
+		tag, err := plugin.CheckFetchable(rs, ref.Use.Version, validateReleaseAPI)
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("warning: plugin %s (%s) is not installed and not fetchable: %v — the daemon boots with it disabled (only its connector/engine/runtime, per Q12) until this is fixed", ref.Name, ref.Use.String(), err))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("fetchable: %s -> %s", ref.Use.String(), tag))
+	}
+	return lines
 }
 
 func cmdRun(args []string) error {
@@ -412,19 +498,8 @@ func cmdRun(args []string) error {
 	if hasPositional(args) {
 		return cmdRunTrigger(args)
 	}
-	// Automatic in-place migration: a legacy config is transformed to the
-	// connectors schema (backed up, validated, swapped) BEFORE the strict
-	// runtime load; on any failure the daemon keeps running on the legacy
-	// config and notifies.
-	cfg, migrateWarning, err := resolveBootConfig(args)
+	cfg, bootWarning, err := resolveBootConfig(args)
 	if err != nil {
-		return err
-	}
-	igs, err := buildIntegrations(cfg)
-	if err != nil {
-		return err
-	}
-	if err := validateAll(cfg, igs); err != nil {
 		return err
 	}
 
@@ -442,7 +517,7 @@ func cmdRun(args []string) error {
 	}
 	defer st.Close()
 
-	notifier := notify.New(cfg.Notify, logf, st.Audit)
+	notifier := notify.New(logf, st.Audit)
 	// Every lifecycle event feeds the conductor.* source (ordinary triggers
 	// alert on them); the source's loop guard keeps a notification
 	// workflow's own events from re-feeding.
@@ -451,19 +526,19 @@ func cmdRun(args []string) error {
 	// The connectors-model stack: secret resolution, the connector registry,
 	// the flow runner, and the lowered source integrations. nil when the
 	// config has no connectors: block — everything below then behaves exactly
-	// as before. Built BEFORE dispatchTuning so a connectors-model github
-	// connector's identity.write_token/read_token is discoverable: dispatchTuning
-	// only sees dispatchTuner integrations that are already in `igs`, and a
-	// pure connectors-model config (no legacy integrations: block) has none
-	// until this stack's lowered integrations are appended (#60 — otherwise the
-	// acts-as-the-user write silently fell back to a bare `gh auth token`).
+	// as before.
+	// Plugins first: fetch any referenced plugin that is not installed yet
+	// (bounded; never fatal — a connector whose plugin is still missing runs
+	// disabled and pendingPluginRetry restarts into it once it lands).
+	bootGapFill(cfg)
 	stack, err := buildFlowStack(cfg, st, notifier, cfg.DryRun)
 	if err != nil {
 		return err
 	}
 	defer stack.Close() // stop plugin subprocesses on daemon shutdown (#54)
 
-	igs, retry, writeTok, readTok := resolveDispatchIdentity(igs, stack)
+	igs := stackIntegrations(stack)
+	retry := cfg.DispatchRetry()
 	paseoBin, err := resolvePaseoBin(cfg)
 	if err != nil {
 		return err
@@ -570,6 +645,17 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Local-build snapshot GC (the local-build TOCTOU fix, internal/plugin's
+	// snapshotLocal): drop any content-addressed snapshot under
+	// PluginLocalSnapshotDir that no local plugin THIS boot resolved still
+	// depends on — a stale copy of a local plugin's binary from before the
+	// operator's last rebuild. Keep is the union of every Manager this
+	// process built (the connectors/engines stack plus, when distinct, the
+	// standalone runtime manager), so a snapshot in use by either is never
+	// removed. Best-effort and never fatal: an already-running process keeps
+	// its open executable text regardless (Linux/BSD semantics), so at worst
+	// a failed GC wastes some disk, never breaks a live plugin.
+	gcLocalPluginSnapshots(stack, rtMgr)
 	// External runtime plugins (#54) are verified (fail-closed) and merged into
 	// the controller set as sandboxed ACP subprocesses, selectable via a
 	// profile's runtime:.
@@ -613,15 +699,9 @@ func cmdRun(args []string) error {
 		logf("runtime %s: dedicated paseo dispatcher (backend-rpc plugin)", name)
 	}
 	broker := controller.NewBroker(reg, st, logf)
-	// Hand-off registry: resolves the named `handoffs:` map (config.Load already
-	// folded a legacy singular `handoff:` block into Handoffs["default"], so this
-	// is the only path needed here). Empty map → Resolve always yields nil → the
-	// review hand-off keeps today's paseo-native behavior.
-	handoffs := handoff.NewRegistry(cfg.Handoffs, cfg.DefaultHandoffName(), logf)
 
 	// The connectors-model stack (secret resolution, connector registry, flow
-	// runner, lowered source integrations) was already built above, before
-	// dispatchTuning, so its identity tokens are discoverable.
+	// runner, lowered source integrations) was already built above.
 	// A legacy config (no connectors: block) can still carry a memory:
 	// section — buildFlowStack didn't run, so wire it here.
 	if stack == nil {
@@ -630,46 +710,16 @@ func cmdRun(args []string) error {
 		}
 	}
 	// Redaction reaches every outbound surface once the resolver exists: the
-	// notifier's webhooks/via routes, the shared logf choke point, and the
-	// audit writer's value backstop.
+	// shared logf choke point and the audit writer's value backstop.
 	if stack != nil {
 		notifier.SetSecrets(stack.Secrets)
 		setLogRedactor(stack.Secrets)
 		st.SetAuditRedactor(stack.Secrets.Redact)
 	}
 	notifyStackFailures(stack, notifier)
-	if migrateWarning != "" {
-		notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "config", Kind: "migration"}, migrateWarning)
+	if bootWarning != "" {
+		notifier.Emit(context.Background(), notify.EventEscalate, core.Trigger{Source: "config", Kind: "boot"}, bootWarning)
 	}
-	// notify.via routes deliver through connector verbs — wire the router when
-	// a connectors: block exists (via with no connectors logs a warning).
-	if stack != nil {
-		notifier.SetRouter(func(ctx context.Context, r config.NotifyRoute, data map[string]any) error {
-			connName, verb, _ := strings.Cut(r.Uses, ".")
-			in, ok := stack.Registry.Get(connName)
-			if !ok {
-				return fmt.Errorf("unknown connector %q", connName)
-			}
-			merged := connector.MergeOptions(in.DefaultOptions, r.Options)
-			rendered, err := flow.RenderOptions(merged, data)
-			if err != nil {
-				return err
-			}
-			_, err = in.InvokeFinal(ctx, verb, rendered)
-			return err
-		})
-	}
-	// Wire the engine's dispatch-completion seam to every configured slack
-	// instance's on_done/on_fail handling (see core.SetCompletionHook and
-	// slack.Integration.HandleCompletion). A no-op when no slack integration is
-	// configured. Sibling seam to slack.SetReplyHook (hand-off thread replies).
-	wireSlackCompletion(igs)
-	// Discord hand-off gateway(s): unlike Slack this needs no separate
-	// `integrations:` entry — conductor runs the bot gateway itself, one
-	// goroutine per distinct configured bot_token (entries sharing a token
-	// share a connection). A no-op when no `discord:` hand-off is configured.
-	// Governed by ctx below so it shuts down with the daemon; started after ctx
-	// exists, alongside the web hand-off listeners.
 	// Shared "never reap" set for interactive hand-off agents: the engine registers
 	// a background step's agent at launch; the reaper skips anything in it.
 	hold := dispatch.NewHoldSet(filepath.Join(filepath.Dir(cfg.Store.StateFile), "holds.json"))
@@ -678,9 +728,9 @@ func cmdRun(args []string) error {
 	// affinity.json, resumed after restart, held from the reaper while bound.
 	affinity := controller.NewAffinity(reg, st, cfg, hold.Add, hold.Remove, logf)
 	engOpts := engine.Options{
-		Config: cfg, Store: st, Dispatch: disp, Controllers: reg, Broker: broker, Handoffs: handoffs,
-		Notifier: notifier, Author: gitAuthor(), UserToken: writeTok, ReadToken: readTok, Log: logf,
-		RefreshAppToken: refreshAppToken(igs), Hold: hold, Affinity: affinity, PausePath: pausePath(cfg),
+		Config: cfg, Store: st, Dispatch: disp, Controllers: reg, Broker: broker,
+		Notifier: notifier, Author: gitAuthor(), Log: logf,
+		Hold: hold, Affinity: affinity, PausePath: pausePath(cfg),
 	}
 	if stack != nil {
 		engOpts.Flow = stack.Runner
@@ -845,7 +895,7 @@ func cmdRun(args []string) error {
 						return runner.RunSkillVerb(vctx, flow.SkillIdentity{
 							Agent: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
 							Number: id.Number, Verbs: id.Policy.Verbs,
-							Scopes: id.Policy.VerbScopes, Context: id.Context,
+							Scopes: id.Policy.VerbScopes, Context: id.Context, Sem: id.Sem,
 							TargetTrusted: id.TargetTrusted, Dispatch: id.Dispatch,
 						}, uses, options)
 					}
@@ -867,27 +917,8 @@ func cmdRun(args []string) error {
 	}
 
 	// Mount connector ask surfaces (web pages, discord gateways) and fan
-	// Socket Mode replies into every slack inbox — legacy handoffs included.
-	wireConnectorSurfaces(ctx, stack, handoffs, cfg)
-
-	// Serve each configured web hand-off's draft pages on the shared inbound
-	// listener (once ctx exists to govern its shutdown). No-op when no web
-	// hand-off is configured.
-	for _, we := range handoffs.WebEntries() {
-		inbound.Register(ctx, we.Listen, "/handoff", we.Chan, logf)
-		logf("handoff %s: web draft pages on %s/handoff", we.Name, we.Listen)
-	}
-
-	// Start one Discord gateway per distinct bot token configured across
-	// `discord:` hand-off entries. No-op when none are configured
-	// (DiscordBotTokens is empty).
-	for _, tok := range handoffs.DiscordBotTokens() {
-		tok := tok
-		go handoff.RunDiscordGateway(ctx, tok, handoffs.DiscordInbox(), logf)
-	}
-	if n := len(handoffs.DiscordBotTokens()); n > 0 {
-		logf("handoff: %d discord bot gateway(s) starting", n)
-	}
+	// Socket Mode replies into every slack inbox.
+	wireConnectorSurfaces(ctx, stack)
 
 	// Write a pidfile so the `sweep` CLI can signal us; clean it up on exit.
 	pidFile := pidPath(cfg)
@@ -993,7 +1024,7 @@ func cmdRun(args []string) error {
 	}()
 	connector.SetConductorOps(&connector.ConductorOps{
 		Update: func(context.Context) (bool, string, error) {
-			updated, tag, err := doUpdate(false, "")
+			updated, tag, err := doUpdate(false, "", cfgFile, notifier)
 			if err != nil {
 				return false, "", err
 			}
@@ -1020,15 +1051,19 @@ func cmdRun(args []string) error {
 	// resolved through the engine's live-hand-off registry.
 	connector.SetStepOps(func() *connector.StepOps { return eng.StepOps() })
 	defer connector.SetStepOps(nil)
-	// gh.sweep: the same nudge the SIGUSR1 handler runs.
-	connector.SetSweepHook(func(context.Context) (int, error) {
+	// A connector's declared poll verb: the same nudge the SIGUSR1 handler
+	// runs, for that instance.
+	connector.SetSweepHook(func(_ context.Context, instance string) (int, error) {
 		n := 0
 		for _, ig := range igs {
+			if instance != "" && ig.Name() != instance {
+				continue
+			}
 			if sn, ok := ig.(sweepNower); ok && sn.SweepNow() {
 				n++
 			}
 		}
-		logf("sweep requested (gh.sweep verb) — nudged %d integration(s)", n)
+		logf("poll requested (%s) — nudged %d source(s)", instance, n)
 		return n, nil
 	})
 	defer connector.SetSweepHook(nil)
@@ -1065,17 +1100,26 @@ func cmdRun(args []string) error {
 		// In-place plugin hot-reload: a dep refresh tries to swap a moved
 		// plugin's process (rtMgr holds every live plugin client + its boot
 		// Decl) without restarting the daemon; unhandled cases fall back to a
-		// restart inside autoUpdateLoop.
-		reload := func(moved []plugin.Resolution) bool { return reloadMoved(cfg, rtMgr, moved) }
+		// restart inside autoUpdateLoop. connReg is nil when the config has no
+		// connectors: block (stack itself is then nil) — reloadMoved treats
+		// that as "no live connector instances to re-check" rather than
+		// dereferencing a nil stack.
+		var connReg *connector.Registry
+		if stack != nil {
+			connReg = stack.Registry
+		}
+		reload := func(moved []plugin.Resolution) bool { return reloadMoved(cfg, rtMgr, connReg, moved) }
 		go autoUpdateLoop(ctx, cfg.Update, cfgFile, notifier, stop, reload)
 	}
 	// conductor.updated fires on the first boot of a new release.
 	go emitUpdatedOnBoot(cfg, notifier)
-
-	// Periodic activity digest (opt-in via notify.digest).
-	if cfg.Notify.Digest.D() > 0 {
-		go digestLoop(ctx, cfg, notifier)
-	}
+	go pendingPluginRetry(ctx, cfg, cfgFile, stop)
+	// Daily keep-alive for this boot's local-build snapshots (finding 5d):
+	// gcLocalPluginSnapshots' touch happens once, at boot, via SpecFromRef —
+	// a long-running daemon whose local plugin never crashes or reloads
+	// across many days would otherwise never touch its snapshot again,
+	// which a SIBLING daemon's grace-period GC does not assume.
+	go retouchLocalPluginSnapshotsLoop(ctx, localSnapshotRetouchInterval, func() { retouchLocalPluginSnapshots(stack, rtMgr) })
 
 	// Start integrations.
 	for _, ig := range igs {
@@ -1097,159 +1141,20 @@ func cmdRun(args []string) error {
 	return nil
 }
 
-// appTokener is implemented by integrations that can mint an App installation
-// token (the github integration), used to re-mint on workflow resume.
-type appTokener interface {
-	AppToken(context.Context, int64) (string, error)
-}
-
-// refreshAppToken builds the engine's token-refresh provider: given a persisted
-// trigger, find its integration and re-mint the App token from installation_id.
-func refreshAppToken(igs []core.Integration) func(core.Trigger) (string, error) {
-	return func(t core.Trigger) (string, error) {
-		for _, ig := range igs {
-			if ig.Name() != t.Instance {
-				continue
-			}
-			at, ok := ig.(appTokener)
-			if !ok {
-				return "", fmt.Errorf("integration %q cannot mint app tokens", t.Instance)
-			}
-			instID := toInt64Any(t.Context["installation_id"])
-			if instID == 0 {
-				return "", fmt.Errorf("resume %s: no installation_id", t.Key())
-			}
-			return at.AppToken(context.Background(), instID)
-		}
-		return "", fmt.Errorf("no integration named %q", t.Instance)
+// stackIntegrations is the connectors-model stack's lowered source
+// integrations (none without a stack).
+func stackIntegrations(stack *flowStack) []core.Integration {
+	if stack == nil {
+		return nil
 	}
-}
-
-// completionHandler is implemented by an integration that wants to hear a
-// dispatch's final outcome for triggers it emitted (the slack integration, for
-// on_done/on_fail feedback).
-type completionHandler interface {
-	HandleCompletion(t core.Trigger, outcome string)
-}
-
-// wireSlackCompletion installs the single global core.CompletionHook, routing
-// each call to whichever configured integration instance emitted the trigger
-// (matched by name). A no-op when no configured integration implements
-// completionHandler.
-func wireSlackCompletion(igs []core.Integration) {
-	core.SetCompletionHook(func(t core.Trigger, outcome string) {
-		for _, ig := range igs {
-			if ig.Name() != t.Instance {
-				continue
-			}
-			if ch, ok := ig.(completionHandler); ok {
-				ch.HandleCompletion(t, outcome)
-			}
-			return
-		}
-	})
-}
-
-// wireSlackHandoffInbox connects any configured `slack:` hand-off entries'
-// shared Inbox to the slack integration's reply hook, so a Socket Mode
-// "message" event (thread reply or DM) resolves the pending Await instead of
-// being treated as ordinary chatter. A no-op when no slack hand-off is
-// configured. If one is configured but no enabled `slack` integration exists
-// in `integrations:`, nothing will ever call the hook — warn loudly at
-// startup rather than leaving the hand-off silently stuck waiting for a
-// reply that can never arrive.
-func wireSlackHandoffInbox(cfg *config.Config, handoffs *handoff.Registry) {
-	inbox := handoffs.SlackInbox()
-	if inbox == nil {
-		return
-	}
-	slack.SetReplyHook(func(channel, threadTS, user, text string) bool {
-		return inbox.DeliverFrom(channel, threadTS, user, text)
-	})
-	if !anySlackIntegration(cfg) {
-		logf("handoff: a slack hand-off is configured but no enabled `slack` integration is present in integrations: — replies will never be captured (add one, see README Hand-offs)")
-	}
-}
-
-// anySlackIntegration reports whether integrations: configures at least one
-// enabled slack instance (the Socket Mode connection that must be running for
-// slack hand-off replies to be captured).
-func anySlackIntegration(cfg *config.Config) bool {
-	for _, ig := range cfg.Integrations {
-		if ig.Type == "slack" && ig.IsEnabled() {
-			return true
-		}
-	}
-	return false
-}
-
-// resolveDispatchIdentity assembles the FULL integration set — the legacy
-// `integrations:` block plus the connectors-model stack's lowered source
-// integrations — and derives the dispatch retry/write/read token resolvers
-// from it. The connectors-model integrations MUST be folded in before
-// dispatchTuning runs: dispatchTuning only inspects dispatchTuner integrations
-// already present in the slice it's given, and a pure connectors-model config
-// (no legacy integrations: block — every test/e2e config and most real ones)
-// has NONE until stack.Integrations is appended. Call this exactly once, right
-// after building both `igs` and `stack`, rather than calling dispatchTuning
-// directly: getting the order backwards is how a connectors-model github
-// connector's identity.write_token/read_token silently stopped being seen at
-// all, and every acts-as-the-user write fell back to a bare `gh auth token`
-// (#60) — a security-relevant identity regression with no error, no log line,
-// just the wrong token on the wire.
-func resolveDispatchIdentity(igs []core.Integration, stack *flowStack) (all []core.Integration, retry config.Retry, write, read func() (string, error)) {
-	if stack != nil {
-		igs = append(igs, stack.Integrations...)
-	}
-	retry, write, read = dispatchTuning(igs)
-	return igs, retry, write, read
-}
-
-// dispatchTuner is implemented by an integration that carries dispatch-level
-// credential + retry policy (the github integration). The first one found tunes
-// the shared Dispatcher and the engine's read/write token resolvers.
-type dispatchTuner interface {
-	RetryPolicy() config.Retry
-	IdentityTokens() (read, write, commitAuthor string)
-}
-
-// dispatchTuning derives the shared dispatch settings from the first integration
-// that provides them. Token keyword resolution (values are already ${ENV}-expanded):
-// write "gh_auth" (default) → `gh auth token`, else a literal token (a PAT); read
-// "app" (default) → nil so reads use the per-trigger App token, "gh_auth" → `gh
-// auth token`, else a literal token.
-func dispatchTuning(igs []core.Integration) (retry config.Retry, write, read func() (string, error)) {
-	write = userToken // default: `gh auth token`
-	for _, ig := range igs {
-		t, ok := ig.(dispatchTuner)
-		if !ok {
-			continue
-		}
-		retry = t.RetryPolicy()
-		rd, wr, _ := t.IdentityTokens()
-		if wr != "" && wr != "gh_auth" {
-			lit := wr
-			write = func() (string, error) { return lit, nil }
-		}
-		switch {
-		case rd == "" || rd == "app":
-			read = nil
-		case rd == "gh_auth":
-			read = userToken
-		default:
-			lit := rd
-			read = func() (string, error) { return lit, nil }
-		}
-		break
-	}
-	return
+	return stack.Integrations
 }
 
 // preflightPATH warns loudly if the tools dispatch needs aren't on PATH — a
-// missing `paseo`/`gh` otherwise fails every dispatch silently (the common
+// missing `paseo` otherwise fails every dispatch silently (the common
 // systemd --user "minimal PATH" trap). Non-fatal: the daemon still runs.
 func preflightPATH(paseoBin string) {
-	for _, bin := range []string{paseoBin, "gh"} {
+	for _, bin := range []string{paseoBin} {
 		if _, err := exec.LookPath(bin); err != nil {
 			logf("WARNING: %q not found on PATH — dispatches will fail until it's resolvable "+
 				"(PATH=%s). If running as a service, reinstall/update the unit so PATH includes "+
@@ -1290,25 +1195,15 @@ func cmdReplay(args []string) error {
 	if err := json.Unmarshal(raw, &fx); err != nil {
 		return fmt.Errorf("fixture must be {\"event\":..., \"body\":{...}}: %w", err)
 	}
-	igs, err := buildIntegrations(cfg)
-	if err != nil {
-		return err
-	}
 	type translator interface {
 		Translate(context.Context, string, []byte) []core.Trigger
 	}
-	disp := dispatch.New(cfg.PaseoBin, config.Retry{}, true) // dry-run
-	found := 0
-	for _, ig := range igs {
-		tr, ok := ig.(translator)
-		if !ok {
-			continue
-		}
-		for _, t := range tr.Translate(context.Background(), fx.Event, fx.Body) {
-			found++
-			printTrigger(cfg, disp, t)
-		}
+	paseoBin, err := resolvePaseoBin(cfg)
+	if err != nil {
+		return err
 	}
+	disp := dispatch.New(paseoBin, config.Retry{}, true) // dry-run
+	found := 0
 
 	// Connectors-model triggers: translate through the lowered sources, then
 	// run each matching trigger through the flow runner with DryRun stubbing
@@ -1369,16 +1264,21 @@ func cmdSweep(args []string) error {
 			return signalSweepNow(cfg)
 		}
 	}
-	igs, err := buildIntegrations(cfg)
+	stack, err := buildFlowStack(cfg, nil, nil, true) // dry-run
 	if err != nil {
 		return err
 	}
+	defer stack.Close()
 	type sweeper interface {
 		SweepOnce(context.Context, core.EmitFunc) error
 	}
-	disp := dispatch.New(cfg.PaseoBin, config.Retry{}, true) // dry-run print
+	paseoBin, err := resolvePaseoBin(cfg)
+	if err != nil {
+		return err
+	}
+	disp := dispatch.New(paseoBin, config.Retry{}, true) // dry-run print
 	ctx := context.Background()
-	for _, ig := range igs {
+	for _, ig := range stack.Integrations {
 		sw, ok := ig.(sweeper)
 		if !ok {
 			continue
@@ -1917,25 +1817,6 @@ func printOneDispatch(cfg *config.Config, disp *dispatch.Dispatcher, t core.Trig
 		return
 	}
 	fmt.Printf("%s%s\n", indent, strings.Join(ref.Argv, " "))
-}
-
-// userToken returns your `gh auth token`, memoized.
-var (
-	tokOnce sync.Once
-	tokVal  string
-	tokErr  error
-)
-
-func userToken() (string, error) {
-	tokOnce.Do(func() {
-		out, err := exec.Command("gh", "auth", "token").Output()
-		if err != nil {
-			tokErr = fmt.Errorf("gh auth token: %w", err)
-			return
-		}
-		tokVal = strings.TrimSpace(string(out))
-	})
-	return tokVal, tokErr
 }
 
 // gitAuthor reads your git identity for commit attribution.

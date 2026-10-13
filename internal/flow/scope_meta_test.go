@@ -30,21 +30,13 @@ func everyConnectorYAML(t *testing.T) string {
 	var b strings.Builder
 	b.WriteString("connectors:\n")
 	for _, typ := range connector.Types() {
-		if reservedConnectorName[typ] {
+		if _, reserved := config.ReservedNamespaces[typ]; reserved {
 			continue // always in the registry; naming one is a config error
 		}
 		fmt.Fprintf(&b, "  %s: { use: %s }\n", typ, typ)
 	}
 	fmt.Fprintf(&b, "vaults:\n  housevault: { type: file, dir: %s }\n", t.TempDir())
 	return b.String()
-}
-
-// reservedConnectorName are the built-ins the registry always adds and the
-// loader refuses to see in `connectors:` — they are enumerated all the same,
-// because they are in the registry either way.
-var reservedConnectorName = map[string]bool{
-	"kv": true, "sql": true, "memory": true, "blob": true,
-	"workflow": true, "conductor": true, "manual": true,
 }
 
 // everyScopeDim is every dimension any registered connector declares.
@@ -423,12 +415,21 @@ policy:
 		Context: map[string]any{"slack": map[string]any{"channel": "#trigger-channel"}},
 	}
 	pol := cfg.Policy.AgentAuthored
+	// A forge dispatch: its declared target scope is the repo it fired for.
+	forge := core.Trigger{
+		TargetTrusted: true, Source: "github", Instance: "gh", Kind: "new_comment",
+		Target: core.Target{Repo: "trigger/repo", Number: 1},
+	}
 
-	for _, tc := range []struct{ uses, opt, value string }{
-		{"svc.post", "repo", "trigger/repo"},           // the dispatch's own target
-		{"slack.post", "channel", "#trigger-channel"},  // the channel it came from
-		{"slack.react", "channel", "#trigger-channel"}, // …on every verb, not just post
+	for _, tc := range []struct {
+		trig             core.Trigger
+		uses, opt, value string
+	}{
+		{forge, "svc.post", "repo", "trigger/repo"},          // the dispatch's own target
+		{trig, "slack.post", "channel", "#trigger-channel"},  // the channel it came from
+		{trig, "slack.react", "channel", "#trigger-channel"}, // …on every verb, not just post
 	} {
+		trig := tc.trig
 		opts := map[string]any{tc.opt: tc.value}
 		if err := r.checkVerbResources(pol, trig, tc.uses, opts, nil); err != nil {
 			t.Errorf("PLAN surface refused the dispatch's own %s: %v", tc.opt, err)
@@ -436,7 +437,7 @@ policy:
 		id := SkillIdentity{
 			TargetTrusted: true,
 			Agent:         "probe", Verbs: []string{"svc.*", "slack.*"},
-			Repo: "trigger/repo", Context: trig.Context,
+			Repo: "trigger/repo", Trigger: trig.Kind, Context: trig.Context,
 		}
 		if _, err := r.RunSkillVerb(context.Background(), id, tc.uses, opts); err != nil &&
 			strings.Contains(err.Error(), "allow_scopes") {

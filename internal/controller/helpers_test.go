@@ -23,9 +23,9 @@ func makeReq(kind, prompt string) dispatch.Request {
 		Step:   config.Step{Model: config.ModelSpecOf("claude")},
 		// The RESOLVED model: opencode's "provider/model" spelling, which
 		// splits into its providerID/modelID fields.
-		Model:  "anthropic/claude",
-		Tokens: dispatch.Tokens{User: "utok", App: "atok"},
-		Author: dispatch.Author{Name: "Me", Email: "me@example.com"},
+		Model:       "anthropic/claude",
+		Credentials: ghCreds("utok", "atok"),
+		Author:      dispatch.Author{Name: "Me", Email: "me@example.com"},
 	}
 }
 

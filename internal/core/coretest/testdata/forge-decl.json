@@ -1,0 +1,3736 @@
+{
+  "protocol_version": 0,
+  "kind": "connector",
+  "type": "github",
+  "desc": "GitHub: PR/issue/check/release events in; comments, reviews, and review requests out.",
+  "connection": {
+    "api_base": {
+      "type": "string",
+      "desc": "GitHub API base URL (GitHub Enterprise Server); default https://api.github.com, or PC_GITHUB_API_BASE for the bundled connector"
+    },
+    "app": {
+      "type": "map",
+      "desc": "GitHub App credentials: app_id, private_key_path"
+    },
+    "identity": {
+      "type": "map",
+      "desc": "credential policy: read_token, write_token, commit_author"
+    },
+    "me": {
+      "type": "map",
+      "desc": "your GitHub login(s): { logins: [...] } — defines \"you\""
+    },
+    "project_map": {
+      "type": "map",
+      "desc": "repo -\u003e paseo project checkout remap"
+    },
+    "project_rewrite": {
+      "type": "map",
+      "desc": "blanket owner/org rewrite for checkouts"
+    },
+    "repos": {
+      "type": "list",
+      "desc": "default repo globs for triggers whose filter names no repo"
+    },
+    "retry": {
+      "type": "map",
+      "desc": "transient dispatch retry: max, backoff"
+    },
+    "sweep": {
+      "type": "map",
+      "desc": "catch-up sweep: enabled, interval, min_interval, repos"
+    },
+    "token": {
+      "type": "string",
+      "desc": "PAT used when no App is configured (chain: app → token → gh auth token)",
+      "secret": true
+    },
+    "webhook": {
+      "type": "map",
+      "desc": "event transport and delivery auth: smee_url and/or listen (+ path), expose, public_url, secret, verify_signature"
+    }
+  },
+  "verbs": [
+    {
+      "name": "comment",
+      "desc": "post an issue/PR conversation comment",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ],
+          "desc": "identity (default me)"
+        },
+        "body": {
+          "type": "string",
+          "required": true
+        },
+        "number": {
+          "type": "integer",
+          "desc": "issue or PR number (alias: pr)"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "id": {
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "semantics": {
+        "conversation_post": true
+      }
+    },
+    {
+      "name": "reply",
+      "desc": "reply to a PR review comment thread",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "body": {
+          "type": "string",
+          "required": true
+        },
+        "in_reply_to": {
+          "type": "integer",
+          "required": true,
+          "desc": "review comment id to reply to"
+        },
+        "pr": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "id": {
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "semantics": {
+        "conversation_post": true
+      }
+    },
+    {
+      "name": "request_review",
+      "desc": "request review from users/teams on a PR (also re-requests one who already reviewed)",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "pr": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "reviewers": {
+          "type": "list",
+          "desc": "user logins"
+        },
+        "team_reviewers": {
+          "type": "list",
+          "desc": "team slugs"
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "name": "rerequest_review",
+      "desc": "re-request review from reviewers whose latest review requested changes on an older commit (skips approvers, pending requests, closed PRs)",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "only_outstanding": {
+          "type": "boolean",
+          "desc": "default true: ping only reviewers whose latest review is CHANGES_REQUESTED on an older commit and who aren't already requested, on an open PR; false re-requests unconditionally"
+        },
+        "pr": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "reviewers": {
+          "type": "list",
+          "desc": "logins"
+        },
+        "team_reviewers": {
+          "type": "list",
+          "desc": "team slugs"
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        },
+        "skipped": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "remove_reviewer",
+      "desc": "cancel a pending review request (remove requested users/teams)",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "pr": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "reviewers": {
+          "type": "list",
+          "desc": "user logins to un-request"
+        },
+        "team_reviewers": {
+          "type": "list",
+          "desc": "team slugs to un-request"
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "name": "submit_review",
+      "desc": "submit a PR review: a summary + verdict, with optional inline file:line comments",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "body": {
+          "type": "string",
+          "desc": "the review summary (top-level comment)"
+        },
+        "comments": {
+          "type": "list",
+          "desc": "inline comments posted with the review: a list of {path, line, body, side?, start_line?, start_side?}. line is the file's line number; side defaults to RIGHT (the new version). start_line/start_side make a multi-line range. Every commented line MUST fall within the PR's diff, or GitHub rejects the whole review."
+        },
+        "event": {
+          "type": "string",
+          "required": true,
+          "enum": [
+            "APPROVE",
+            "REQUEST_CHANGES",
+            "COMMENT"
+          ]
+        },
+        "pr": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "comments": {
+          "type": "integer",
+          "desc": "inline comments posted"
+        },
+        "id": {
+          "type": "integer"
+        }
+      }
+    },
+    {
+      "name": "pr_diff",
+      "desc": "the PR's unified diff (cached; GitHub caps the .diff media type around 300 files)",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "pr": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "diff": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "read_token",
+      "desc": "the read credential agents receive (identity.read_token: the App's installation token by default)",
+      "options": {
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "token": {
+          "type": "string"
+        }
+      },
+      "semantics": {
+        "mints_credential": {
+          "credential": "read"
+        },
+        "host_only": true
+      }
+    },
+    {
+      "name": "write_token",
+      "desc": "the write credential agents receive (identity.write_token: your gh login by default)",
+      "options": {
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "token": {
+          "type": "string"
+        }
+      },
+      "semantics": {
+        "mints_credential": {
+          "credential": "write"
+        },
+        "host_only": true
+      }
+    },
+    {
+      "name": "pr_head",
+      "desc": "a PR's current head commit and state (open | closed | merged), read fresh — what the engine's run facts read",
+      "options": {
+        "pr": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "sha": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "semantics": {
+        "reads_revision": {
+          "args": {
+            "pr": "{{.number}}",
+            "repo": "{{.repo}}"
+          },
+          "revision": "sha",
+          "state": "state",
+          "states": {
+            "accepted": [
+              "merged"
+            ],
+            "closed": [
+              "closed"
+            ],
+            "open": [
+              "open"
+            ]
+          },
+          "reasons": {
+            "accepted": "the PR merged",
+            "closed": "the PR closed"
+          }
+        },
+        "host_only": true
+      }
+    },
+    {
+      "name": "pr_get",
+      "desc": "PR metadata + review status: state, merged, base/head, line counts, labels, and the current review decision/approvals",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "pr": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "additions": {
+          "type": "integer"
+        },
+        "approvals": {
+          "type": "integer",
+          "desc": "count of reviewers whose latest review is APPROVED"
+        },
+        "approvers": {
+          "type": "list",
+          "desc": "logins of reviewers whose latest review is APPROVED"
+        },
+        "author": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "changed_files": {
+          "type": "integer"
+        },
+        "deletions": {
+          "type": "integer"
+        },
+        "draft": {
+          "type": "boolean"
+        },
+        "head": {
+          "type": "string"
+        },
+        "head_sha": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "mergeable": {
+          "type": "boolean"
+        },
+        "merged": {
+          "type": "boolean"
+        },
+        "review_decision": {
+          "type": "string",
+          "desc": "APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED, derived from the latest review per reviewer"
+        },
+        "state": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "pr_files",
+      "desc": "changed files: [{path, status, additions, deletions, changes}] (100/page; pass page for more)",
+      "options": {
+        "all": {
+          "type": "boolean",
+          "desc": "fetch every page (default: first 100)"
+        },
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "pr": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "files": {
+          "type": "list"
+        }
+      }
+    },
+    {
+      "name": "review_comments",
+      "desc": "existing inline review comments on the PR: [{path, line, body, user, id}] (100/page)",
+      "options": {
+        "all": {
+          "type": "boolean",
+          "desc": "fetch every page (default: first 100)"
+        },
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "pr": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "comments": {
+          "type": "list"
+        }
+      }
+    },
+    {
+      "name": "file",
+      "desc": "a repo file's raw contents at a ref (cached; GitHub's raw media type caps at ~1 MiB)",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "optional": {
+          "type": "boolean",
+          "desc": "return empty text instead of erroring when the file is missing (404) — for optional convention files"
+        },
+        "path": {
+          "type": "string",
+          "required": true,
+          "desc": "repo-relative file path"
+        },
+        "ref": {
+          "type": "string",
+          "desc": "branch / tag / sha (default: the repo's default branch)"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "create_pr",
+      "desc": "open a pull request",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "base": {
+          "type": "string",
+          "required": true,
+          "desc": "the branch to merge into"
+        },
+        "body": {
+          "type": "string"
+        },
+        "draft": {
+          "type": "boolean"
+        },
+        "head": {
+          "type": "string",
+          "required": true,
+          "desc": "the branch with your changes (owner:branch for a fork)"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "title": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "outputs": {
+        "number": {
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "merge_pr",
+      "desc": "merge a pull request",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "commit_message": {
+          "type": "string"
+        },
+        "commit_title": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "merge",
+            "squash",
+            "rebase"
+          ],
+          "desc": "default merge"
+        },
+        "pr": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "sha": {
+          "type": "string",
+          "desc": "require the PR head to match this sha (safety)"
+        }
+      },
+      "outputs": {
+        "merged": {
+          "type": "boolean"
+        },
+        "sha": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "update_pr",
+      "desc": "edit a PR: state (open|closed → close/reopen), title, body, base",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "base": {
+          "type": "string",
+          "desc": "retarget the PR onto this branch"
+        },
+        "body": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "closed"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "outputs": {
+        "number": {
+          "type": "integer"
+        },
+        "state": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "create_issue",
+      "desc": "open an issue",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "assignees": {
+          "type": "list",
+          "desc": "logins to assign"
+        },
+        "body": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "title": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "outputs": {
+        "number": {
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "update_issue",
+      "desc": "edit an issue: state (open|closed → close/reopen), state_reason, title, body",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "body": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "closed"
+          ]
+        },
+        "state_reason": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "not_planned",
+            "reopened"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "outputs": {
+        "number": {
+          "type": "integer"
+        },
+        "state": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "assign",
+      "desc": "add and/or remove issue/PR assignees",
+      "options": {
+        "add": {
+          "type": "list",
+          "desc": "logins to assign"
+        },
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "number": {
+          "type": "integer",
+          "desc": "issue or PR number (alias: pr)"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "remove": {
+          "type": "list",
+          "desc": "logins to unassign"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "assignees": {
+          "type": "list"
+        }
+      }
+    },
+    {
+      "name": "remove_label",
+      "desc": "remove one label from an issue or PR",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "required": true
+        },
+        "number": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "name": "get_issue",
+      "desc": "read an issue: title, body, state, labels, assignees, author, url",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "number": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "assignees": {
+          "type": "list"
+        },
+        "author": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "state": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "put_file",
+      "desc": "create or update a file in one commit",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "branch": {
+          "type": "string",
+          "desc": "branch to commit on (default: the repo's default branch)"
+        },
+        "content": {
+          "type": "string",
+          "required": true,
+          "desc": "the new file content (UTF-8 text; base64-encoded for the API automatically)"
+        },
+        "message": {
+          "type": "string",
+          "required": true,
+          "desc": "commit message"
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "sha": {
+          "type": "string",
+          "desc": "blob sha of the file being replaced (required to UPDATE an existing file; get it from `file`)"
+        }
+      },
+      "outputs": {
+        "commit": {
+          "type": "string"
+        },
+        "sha": {
+          "type": "string",
+          "desc": "the new blob sha"
+        }
+      }
+    },
+    {
+      "name": "delete_file",
+      "desc": "delete a file in one commit",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "branch": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "sha": {
+          "type": "string",
+          "required": true,
+          "desc": "blob sha of the file to delete"
+        }
+      },
+      "outputs": {
+        "commit": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "get_ref",
+      "desc": "the commit sha a branch/tag/ref points at",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "ref": {
+          "type": "string",
+          "required": true,
+          "desc": "branch, tag, or sha"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "sha": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "create_branch",
+      "desc": "create a branch from another ref",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "branch": {
+          "type": "string",
+          "required": true,
+          "desc": "new branch name"
+        },
+        "from": {
+          "type": "string",
+          "desc": "source branch/tag/sha (default: the default branch's HEAD)"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "sha": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "dispatch_workflow",
+      "desc": "trigger a workflow_dispatch run",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "inputs": {
+          "type": "map",
+          "desc": "workflow_dispatch inputs"
+        },
+        "ref": {
+          "type": "string",
+          "required": true,
+          "desc": "branch or tag to run on"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "workflow": {
+          "type": "string",
+          "required": true,
+          "desc": "workflow file name (ci.yml) or numeric id"
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "name": "rerun_run",
+      "desc": "re-run a workflow run (optionally only its failed jobs)",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "failed_only": {
+          "type": "boolean",
+          "desc": "re-run only failed jobs"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "run_id": {
+          "type": "integer",
+          "required": true
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "name": "cancel_run",
+      "desc": "cancel a workflow run",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "run_id": {
+          "type": "integer",
+          "required": true
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "name": "list_runs",
+      "desc": "recent workflow runs: [{id, name, status, conclusion, head_branch, head_sha, url}]",
+      "options": {
+        "all": {
+          "type": "boolean",
+          "desc": "fetch every page"
+        },
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "branch": {
+          "type": "string",
+          "desc": "filter to a branch"
+        },
+        "per_page": {
+          "type": "integer",
+          "desc": "default 20, max 100"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "status": {
+          "type": "string",
+          "desc": "queued|in_progress|completed|success|failure|…"
+        }
+      },
+      "outputs": {
+        "runs": {
+          "type": "list"
+        }
+      }
+    },
+    {
+      "name": "get_run",
+      "desc": "one workflow run by id: {run_id, name, status, conclusion, head_branch, head_sha, url}",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "run_id": {
+          "type": "integer",
+          "required": true
+        }
+      },
+      "outputs": {
+        "conclusion": {
+          "type": "string"
+        },
+        "head_branch": {
+          "type": "string"
+        },
+        "head_sha": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "create_release",
+      "desc": "publish a release for a tag",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "body": {
+          "type": "string",
+          "desc": "release notes"
+        },
+        "draft": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string",
+          "desc": "release title"
+        },
+        "prerelease": {
+          "type": "boolean"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "tag": {
+          "type": "string",
+          "required": true,
+          "desc": "the tag to release (created if it doesn't exist, on target)"
+        },
+        "target": {
+          "type": "string",
+          "desc": "commitish the tag points at when created (default: default branch)"
+        }
+      },
+      "outputs": {
+        "id": {
+          "type": "integer"
+        },
+        "upload_url": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "upload_asset",
+      "desc": "attach a file to a release",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "content": {
+          "type": "string",
+          "desc": "inline asset bytes (mutually exclusive with path)"
+        },
+        "content_type": {
+          "type": "string",
+          "desc": "MIME type (default application/octet-stream)"
+        },
+        "name": {
+          "type": "string",
+          "required": true,
+          "desc": "asset file name"
+        },
+        "path": {
+          "type": "string",
+          "desc": "local file to upload"
+        },
+        "release_id": {
+          "type": "integer",
+          "required": true,
+          "desc": "id from create_release"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "id": {
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "list_issues",
+      "desc": "list issues (PRs excluded): [{number, title, state, labels, author, url}]",
+      "options": {
+        "all": {
+          "type": "boolean",
+          "desc": "fetch every page"
+        },
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "assignee": {
+          "type": "string",
+          "desc": "filter to this assignee (or * / none)"
+        },
+        "labels": {
+          "type": "list",
+          "desc": "filter to issues with all these labels"
+        },
+        "per_page": {
+          "type": "integer",
+          "desc": "default 30, max 100"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "state": {
+          "type": "string",
+          "desc": "open|closed|all (default open)"
+        }
+      },
+      "outputs": {
+        "issues": {
+          "type": "list"
+        }
+      }
+    },
+    {
+      "name": "search_issues",
+      "desc": "search issues/PRs in this repo: [{number, title, state, is_pr, url}]",
+      "options": {
+        "all": {
+          "type": "boolean",
+          "desc": "fetch every page"
+        },
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "per_page": {
+          "type": "integer",
+          "desc": "default 30, max 100"
+        },
+        "q": {
+          "type": "string",
+          "required": true,
+          "desc": "GitHub search query (scoped to this repo automatically)"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "items": {
+          "type": "list"
+        },
+        "total": {
+          "type": "integer"
+        }
+      }
+    },
+    {
+      "name": "checks",
+      "desc": "check-run status for a ref: [{name, status, conclusion, url}]",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "ref": {
+          "type": "string",
+          "required": true,
+          "desc": "branch, tag, or sha"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "checks": {
+          "type": "list"
+        }
+      }
+    },
+    {
+      "name": "ready_for_review",
+      "desc": "mark a draft PR ready for review",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "pr": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "name": "convert_to_draft",
+      "desc": "convert a PR back to a draft",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "pr": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "name": "create_gist",
+      "desc": "create a gist (user-scoped, no repo)",
+      "options": {
+        "description": {
+          "type": "string"
+        },
+        "files": {
+          "type": "map",
+          "required": true,
+          "desc": "{filename: content} — the gist's files"
+        },
+        "public": {
+          "type": "boolean",
+          "desc": "default false (secret gist)"
+        }
+      },
+      "outputs": {
+        "id": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "get_gist",
+      "desc": "read a gist: its files, description, visibility",
+      "options": {
+        "id": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "outputs": {
+        "description": {
+          "type": "string"
+        },
+        "files": {
+          "type": "map",
+          "desc": "{filename: content}"
+        },
+        "public": {
+          "type": "boolean"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "update_gist",
+      "desc": "edit a gist's files and/or description",
+      "options": {
+        "description": {
+          "type": "string"
+        },
+        "files": {
+          "type": "map",
+          "desc": "{filename: content}; a null/empty content deletes that file"
+        },
+        "id": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "outputs": {
+        "id": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "delete_gist",
+      "desc": "delete a gist",
+      "options": {
+        "id": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "name": "list_gists",
+      "desc": "list gists: [{id, description, public, url}]",
+      "options": {
+        "all": {
+          "type": "boolean",
+          "desc": "fetch every page, not just the first"
+        },
+        "per_page": {
+          "type": "integer",
+          "desc": "default 30, max 100"
+        },
+        "user": {
+          "type": "string",
+          "desc": "whose public gists (default: your own, incl. secret)"
+        }
+      },
+      "outputs": {
+        "gists": {
+          "type": "list"
+        }
+      }
+    },
+    {
+      "name": "add_labels",
+      "desc": "add labels to an issue or PR",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "labels": {
+          "type": "list",
+          "required": true
+        },
+        "number": {
+          "type": "integer",
+          "required": true
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "name": "react",
+      "desc": "add (or, remove: true, take away) your reaction on comments/reviews — idempotent both ways",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "content": {
+          "type": "string",
+          "required": true,
+          "enum": [
+            "+1",
+            "-1",
+            "laugh",
+            "confused",
+            "heart",
+            "hooray",
+            "rocket",
+            "eyes"
+          ]
+        },
+        "id": {
+          "type": "integer",
+          "desc": "single-subject shorthand (with kind)"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "issue_comment",
+            "review_comment",
+            "review"
+          ],
+          "desc": "single-subject shorthand (with id)"
+        },
+        "pr": {
+          "type": "integer",
+          "desc": "the PR (required for a review subject)"
+        },
+        "remove": {
+          "type": "boolean",
+          "desc": "take the reaction away instead: only the acting user's reaction of this content; a no-op where there is none"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "subjects": {
+          "type": "list",
+          "desc": "[{kind, id}] — kind is issue_comment | review_comment | review; an event's reaction_subjects is this shape"
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        },
+        "reacted": {
+          "type": "integer",
+          "desc": "subjects reacted to"
+        },
+        "removed": {
+          "type": "integer",
+          "desc": "reactions removed (remove: true)"
+        }
+      }
+    },
+    {
+      "name": "set_status",
+      "desc": "post a commit status on a sha, or on a PR's head as it is at call time (shown on any PR whose head it is)",
+      "options": {
+        "as": {
+          "type": "string",
+          "enum": [
+            "me",
+            "bot"
+          ]
+        },
+        "context": {
+          "type": "string",
+          "desc": "the status's name on the PR, entirely yours (templates allowed); default only when unset: the login the call acts as"
+        },
+        "description": {
+          "type": "string",
+          "desc": "clipped to GitHub's 140 characters"
+        },
+        "pr": {
+          "type": "integer",
+          "desc": "a PR whose CURRENT head gets the status, read at call time (one of sha / pr; sha wins when both are set)"
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "scope": "repo"
+        },
+        "sha": {
+          "type": "string",
+          "desc": "the commit (one of sha / pr)"
+        },
+        "state": {
+          "type": "string",
+          "required": true,
+          "enum": [
+            "pending",
+            "success",
+            "failure",
+            "error"
+          ]
+        },
+        "target_url": {
+          "type": "string"
+        }
+      },
+      "outputs": {
+        "context": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "sha": {
+          "type": "string",
+          "desc": "the commit the status went on"
+        }
+      }
+    },
+    {
+      "name": "sweep",
+      "desc": "run the catch-up sweep now (daemon-global; same as `conductor sweep --now`)",
+      "outputs": {
+        "nudged": {
+          "type": "integer",
+          "desc": "integrations whose sweep was nudged"
+        }
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "review_requested",
+      "desc": "your review was requested on a PR",
+      "context": {
+        "base": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "issue": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "me": {
+          "type": "map",
+          "desc": "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""
+        },
+        "name": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "options": {
+        "max_attempts_per_head": {
+          "type": "integer",
+          "desc": "soft attempt threshold before backoff"
+        },
+        "reviewer": {
+          "type": "map",
+          "desc": "whose requested review triggers: { logins: [...], teams: [...] } (default: the connector's me:) — an identity gate, not a fact predicate"
+        }
+      },
+      "facts": {
+        "author": {
+          "type": "string"
+        },
+        "base_branch": {
+          "type": "string"
+        },
+        "head_branch": {
+          "type": "string"
+        },
+        "is_draft": {
+          "type": "boolean"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "match_keys": {
+        "author": {
+          "type": "list"
+        },
+        "base_branch": {
+          "type": "list"
+        },
+        "branch": {
+          "type": "list"
+        },
+        "draft": {
+          "type": "boolean"
+        },
+        "label_all": {
+          "type": "list"
+        },
+        "label_any": {
+          "type": "list"
+        },
+        "repo": {
+          "type": "list"
+        },
+        "require_label": {
+          "type": "string"
+        },
+        "title": {
+          "type": "list"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "{{.repo}}#{{.number}}",
+          "url": "url",
+          "label": "pull request",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "repo",
+              "fact": "repo"
+            }
+          ]
+        },
+        "revision": {
+          "fact": "head",
+          "branch": "head_ref",
+          "base": "base"
+        },
+        "checkout": {
+          "remote": "git@github.com:{{.repo}}.git",
+          "fetch_ref": "refs/pull/{{.number}}/head",
+          "push_branch": "head_ref",
+          "runtime_hints": {
+            "forge": "github",
+            "pr_number": "{{.number}}"
+          }
+        },
+        "completion": {
+          "level": {
+            "rearm_on": "revision"
+          }
+        },
+        "priority": "interactive",
+        "author": {
+          "login": "author",
+          "automated": "author_is_bot"
+        },
+        "labels": "labels",
+        "private": [
+          "installation_id",
+          "reaction_subjects"
+        ],
+        "secret": [
+          "app_token",
+          "gh_token"
+        ]
+      }
+    },
+    {
+      "name": "changes_requested",
+      "desc": "a review requested changes, or left inline comments without approving, on your PR (or threads went unresolved) — one event per review",
+      "context": {
+        "author": {
+          "type": "string"
+        },
+        "author_is_bot": {
+          "type": "boolean",
+          "desc": "the reviewer is an automated bot (account type Bot, or a [bot] login)"
+        },
+        "base": {
+          "type": "string"
+        },
+        "comment_id": {
+          "type": "integer",
+          "desc": "the highest inline comment id the run covers; the engine dispatches a review once on it"
+        },
+        "comment_kind": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "head_ref": {
+          "type": "string"
+        },
+        "issue": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "me": {
+          "type": "map",
+          "desc": "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""
+        },
+        "name": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "reaction_subjects": {
+          "type": "list",
+          "desc": "what a run handling this event reacts on, as [{kind, id}] for github.react: the review (kind review), the standalone comment (issue_comment | review_comment), or — sweep-recovered — each unresolved thread's opening comment (capped)"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "review_body": {
+          "type": "string",
+          "desc": "the review's summary comment"
+        },
+        "review_comments": {
+          "type": "list",
+          "desc": "the feedback to address: the review's inline comments (or, sweep-recovered, each unresolved thread's opening comment) as {author, path, line, body, url}. A review is ONE event — its inline comments never also fire new_comment"
+        },
+        "review_comments_omitted": {
+          "type": "integer",
+          "desc": "how many comments the size cap left out of review_comments (absent when none) — read them on the PR"
+        },
+        "review_id": {
+          "type": "integer",
+          "desc": "the submitted review's id (absent for a sweep-recovered run over unresolved threads)"
+        },
+        "review_state": {
+          "type": "string",
+          "desc": "the review's state: changes_requested or commented (absent for a sweep-recovered run)"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "options": {
+        "max_attempts_per_head": {
+          "type": "integer",
+          "desc": "soft attempt threshold before backoff"
+        }
+      },
+      "facts": {
+        "author": {
+          "type": "string"
+        },
+        "author_is_bot": {
+          "type": "boolean"
+        },
+        "base_branch": {
+          "type": "string"
+        },
+        "head_branch": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "reviewer": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "match_keys": {
+        "author": {
+          "type": "list"
+        },
+        "author_bot": {
+          "type": "boolean"
+        },
+        "base_branch": {
+          "type": "list"
+        },
+        "branch": {
+          "type": "list"
+        },
+        "label_all": {
+          "type": "list"
+        },
+        "label_any": {
+          "type": "list"
+        },
+        "repo": {
+          "type": "list"
+        },
+        "require_label": {
+          "type": "string"
+        },
+        "title": {
+          "type": "list"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "{{.repo}}#{{.number}}",
+          "url": "url",
+          "label": "pull request",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "repo",
+              "fact": "repo"
+            }
+          ]
+        },
+        "revision": {
+          "fact": "head",
+          "branch": "head_ref",
+          "base": "base"
+        },
+        "checkout": {
+          "remote": "git@github.com:{{.repo}}.git",
+          "fetch_ref": "refs/pull/{{.number}}/head",
+          "push_branch": "head_ref",
+          "runtime_hints": {
+            "forge": "github",
+            "pr_number": "{{.number}}"
+          }
+        },
+        "bound_to_target": true,
+        "completion": {
+          "level": {}
+        },
+        "cursor": {
+          "id": "comment_id",
+          "stream": "changes_requested:{{.comment_kind}}"
+        },
+        "feedback": true,
+        "author": {
+          "login": "author",
+          "automated": "author_is_bot"
+        },
+        "labels": "labels",
+        "private": [
+          "installation_id",
+          "reaction_subjects"
+        ],
+        "secret": [
+          "app_token",
+          "gh_token"
+        ]
+      }
+    },
+    {
+      "name": "new_comment",
+      "desc": "a new comment on your PR — a standalone comment, or ONE submitted review no changes_requested trigger takes (always so for an approval) with all its inline comments",
+      "context": {
+        "author": {
+          "type": "string"
+        },
+        "author_is_bot": {
+          "type": "boolean",
+          "desc": "the commenter (or reviewer) is an automated bot (account type Bot, or a [bot] login)"
+        },
+        "base": {
+          "type": "string"
+        },
+        "comment_body": {
+          "type": "string",
+          "desc": "the comment; for a review, its body then each inline comment as \"path:line: body\""
+        },
+        "comment_id": {
+          "type": "integer",
+          "desc": "the comment's id; for a review, its highest inline comment's"
+        },
+        "comment_kind": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "head_ref": {
+          "type": "string"
+        },
+        "issue": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "me": {
+          "type": "map",
+          "desc": "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""
+        },
+        "name": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "reaction_subjects": {
+          "type": "list",
+          "desc": "what a run handling this event reacts on, as [{kind, id}] for github.react: the review (kind review), the standalone comment (issue_comment | review_comment), or — sweep-recovered — each unresolved thread's opening comment (capped)"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "review_body": {
+          "type": "string",
+          "desc": "the review's summary comment (review events)"
+        },
+        "review_comments": {
+          "type": "list",
+          "desc": "the review's inline comments as {author, path, line, body, url} (review events)"
+        },
+        "review_comments_omitted": {
+          "type": "integer",
+          "desc": "how many comments the size cap left out of review_comments (absent when none)"
+        },
+        "review_id": {
+          "type": "integer",
+          "desc": "set when the event is a submitted review"
+        },
+        "review_state": {
+          "type": "string",
+          "desc": "the review's state: commented, approved, changes_requested (review events)"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "options": {
+        "max_attempts_per_head": {
+          "type": "integer",
+          "desc": "soft attempt threshold before backoff"
+        }
+      },
+      "facts": {
+        "author_is_bot": {
+          "type": "boolean"
+        },
+        "comment_author": {
+          "type": "string"
+        },
+        "comment_body": {
+          "type": "string"
+        }
+      },
+      "match_keys": {
+        "author_bot": {
+          "type": "boolean"
+        },
+        "comment_author": {
+          "type": "list"
+        },
+        "repo": {
+          "type": "list"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "{{.repo}}#{{.number}}",
+          "url": "url",
+          "label": "pull request",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "repo",
+              "fact": "repo"
+            }
+          ]
+        },
+        "revision": {
+          "fact": "head",
+          "branch": "head_ref",
+          "base": "base"
+        },
+        "checkout": {
+          "remote": "git@github.com:{{.repo}}.git",
+          "fetch_ref": "refs/pull/{{.number}}/head",
+          "push_branch": "head_ref",
+          "runtime_hints": {
+            "forge": "github",
+            "pr_number": "{{.number}}"
+          }
+        },
+        "bound_to_target": true,
+        "cursor": {
+          "id": "comment_id",
+          "stream": "{{.comment_kind}}"
+        },
+        "attempts": {
+          "cap": "none"
+        },
+        "feedback": true,
+        "author": {
+          "login": "author",
+          "automated": "author_is_bot"
+        },
+        "labels": "labels",
+        "private": [
+          "installation_id",
+          "reaction_subjects"
+        ],
+        "secret": [
+          "app_token",
+          "gh_token"
+        ]
+      }
+    },
+    {
+      "name": "merge_conflict",
+      "desc": "your PR became unmergeable",
+      "context": {
+        "base": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "issue": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "me": {
+          "type": "map",
+          "desc": "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""
+        },
+        "name": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "options": {
+        "max_attempts_per_head": {
+          "type": "integer",
+          "desc": "soft attempt threshold before backoff"
+        }
+      },
+      "match_keys": {
+        "repo": {
+          "type": "list"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "{{.repo}}#{{.number}}",
+          "url": "url",
+          "label": "pull request",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "repo",
+              "fact": "repo"
+            }
+          ]
+        },
+        "revision": {
+          "fact": "head",
+          "branch": "head_ref",
+          "base": "base"
+        },
+        "checkout": {
+          "remote": "git@github.com:{{.repo}}.git",
+          "fetch_ref": "refs/pull/{{.number}}/head",
+          "push_branch": "head_ref",
+          "runtime_hints": {
+            "forge": "github",
+            "pr_number": "{{.number}}"
+          }
+        },
+        "bound_to_target": true,
+        "completion": {
+          "level": {}
+        },
+        "author": {
+          "login": "author",
+          "automated": "author_is_bot"
+        },
+        "labels": "labels",
+        "private": [
+          "installation_id",
+          "reaction_subjects"
+        ],
+        "secret": [
+          "app_token",
+          "gh_token"
+        ]
+      }
+    },
+    {
+      "name": "pr_behind",
+      "desc": "your PR fell behind its base",
+      "context": {
+        "base": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "issue": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "me": {
+          "type": "map",
+          "desc": "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""
+        },
+        "name": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "options": {
+        "max_attempts_per_head": {
+          "type": "integer",
+          "desc": "soft attempt threshold before backoff"
+        }
+      },
+      "match_keys": {
+        "repo": {
+          "type": "list"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "{{.repo}}#{{.number}}",
+          "url": "url",
+          "label": "pull request",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "repo",
+              "fact": "repo"
+            }
+          ]
+        },
+        "revision": {
+          "fact": "head",
+          "branch": "head_ref",
+          "base": "base"
+        },
+        "checkout": {
+          "remote": "git@github.com:{{.repo}}.git",
+          "fetch_ref": "refs/pull/{{.number}}/head",
+          "push_branch": "head_ref",
+          "runtime_hints": {
+            "forge": "github",
+            "pr_number": "{{.number}}"
+          }
+        },
+        "bound_to_target": true,
+        "author": {
+          "login": "author",
+          "automated": "author_is_bot"
+        },
+        "labels": "labels",
+        "private": [
+          "installation_id",
+          "reaction_subjects"
+        ],
+        "secret": [
+          "app_token",
+          "gh_token"
+        ]
+      }
+    },
+    {
+      "name": "failing_checks",
+      "desc": "CI concluded failing on your PR",
+      "context": {
+        "base": {
+          "type": "string"
+        },
+        "failing_check": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "issue": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "me": {
+          "type": "map",
+          "desc": "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""
+        },
+        "name": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "options": {
+        "flaky_rerun": {
+          "type": "map",
+          "desc": "rerun failed jobs once before dispatching: { enabled, max }"
+        },
+        "ignore_checks": {
+          "type": "list",
+          "desc": "check names that never trigger"
+        },
+        "max_attempts_per_head": {
+          "type": "integer",
+          "desc": "soft attempt threshold before backoff"
+        }
+      },
+      "match_keys": {
+        "repo": {
+          "type": "list"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "{{.repo}}#{{.number}}",
+          "url": "url",
+          "label": "pull request",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "repo",
+              "fact": "repo"
+            }
+          ]
+        },
+        "revision": {
+          "fact": "head",
+          "branch": "head_ref",
+          "base": "base"
+        },
+        "checkout": {
+          "remote": "git@github.com:{{.repo}}.git",
+          "fetch_ref": "refs/pull/{{.number}}/head",
+          "push_branch": "head_ref",
+          "runtime_hints": {
+            "forge": "github",
+            "pr_number": "{{.number}}"
+          }
+        },
+        "bound_to_target": true,
+        "verification_failed": true,
+        "remediate": {
+          "option": "flaky_rerun",
+          "run": "run_id",
+          "status": {
+            "verb": "get_run",
+            "args": {
+              "repo": "{{.repo}}",
+              "run_id": "{{.run_id}}"
+            },
+            "done_when": "status == 'completed'"
+          },
+          "action": {
+            "verb": "rerun_run",
+            "args": {
+              "failed_only": "true",
+              "repo": "{{.repo}}",
+              "run_id": "{{.run_id}}"
+            }
+          },
+          "budget": 1
+        },
+        "author": {
+          "login": "author",
+          "automated": "author_is_bot"
+        },
+        "labels": "labels",
+        "private": [
+          "installation_id",
+          "reaction_subjects"
+        ],
+        "secret": [
+          "app_token",
+          "gh_token"
+        ]
+      }
+    },
+    {
+      "name": "stuck_checks",
+      "desc": "a CI run has been running too long on your PR",
+      "context": {
+        "base": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "issue": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "me": {
+          "type": "map",
+          "desc": "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""
+        },
+        "name": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "integer"
+        },
+        "run_name": {
+          "type": "string"
+        },
+        "run_status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "options": {
+        "max_attempts_per_head": {
+          "type": "integer",
+          "desc": "soft attempt threshold before backoff"
+        },
+        "poll_interval": {
+          "type": "duration",
+          "desc": "poller cadence (default 15m)"
+        },
+        "stuck_after": {
+          "type": "duration",
+          "desc": "how long a run may take before it is stuck (default 30m)"
+        }
+      },
+      "match_keys": {
+        "repo": {
+          "type": "list"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "{{.repo}}#{{.number}}",
+          "url": "url",
+          "label": "pull request",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "repo",
+              "fact": "repo"
+            }
+          ]
+        },
+        "revision": {
+          "fact": "head",
+          "branch": "head_ref",
+          "base": "base"
+        },
+        "checkout": {
+          "remote": "git@github.com:{{.repo}}.git",
+          "fetch_ref": "refs/pull/{{.number}}/head",
+          "push_branch": "head_ref",
+          "runtime_hints": {
+            "forge": "github",
+            "pr_number": "{{.number}}"
+          }
+        },
+        "author": {
+          "login": "author",
+          "automated": "author_is_bot"
+        },
+        "labels": "labels",
+        "private": [
+          "installation_id",
+          "reaction_subjects"
+        ],
+        "secret": [
+          "app_token",
+          "gh_token"
+        ]
+      }
+    },
+    {
+      "name": "merge_ready",
+      "desc": "your PR turned all-green",
+      "context": {
+        "base": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "issue": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "me": {
+          "type": "map",
+          "desc": "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""
+        },
+        "name": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "options": {
+        "max_attempts_per_head": {
+          "type": "integer",
+          "desc": "soft attempt threshold before backoff"
+        }
+      },
+      "facts": {
+        "author": {
+          "type": "string"
+        },
+        "is_draft": {
+          "type": "boolean"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "merge_state": {
+          "type": "string"
+        },
+        "non_author_approval": {
+          "type": "boolean"
+        },
+        "review_decision": {
+          "type": "string"
+        },
+        "threads_resolved": {
+          "type": "boolean"
+        }
+      },
+      "match_keys": {
+        "author": {
+          "type": "list"
+        },
+        "draft": {
+          "type": "boolean"
+        },
+        "label_all": {
+          "type": "list"
+        },
+        "label_any": {
+          "type": "list"
+        },
+        "merge_state": {
+          "type": "boolean"
+        },
+        "non_author_approval": {
+          "type": "boolean"
+        },
+        "repo": {
+          "type": "list"
+        },
+        "require_label": {
+          "type": "string"
+        },
+        "review_decision": {
+          "type": "boolean"
+        },
+        "threads_resolved": {
+          "type": "boolean"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "{{.repo}}#{{.number}}",
+          "url": "url",
+          "label": "pull request",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "repo",
+              "fact": "repo"
+            }
+          ]
+        },
+        "revision": {
+          "fact": "head",
+          "branch": "head_ref",
+          "base": "base"
+        },
+        "checkout": {
+          "remote": "git@github.com:{{.repo}}.git",
+          "fetch_ref": "refs/pull/{{.number}}/head",
+          "push_branch": "head_ref",
+          "runtime_hints": {
+            "forge": "github",
+            "pr_number": "{{.number}}"
+          }
+        },
+        "author": {
+          "login": "author",
+          "automated": "author_is_bot"
+        },
+        "labels": "labels",
+        "private": [
+          "installation_id",
+          "reaction_subjects"
+        ],
+        "secret": [
+          "app_token",
+          "gh_token"
+        ]
+      }
+    },
+    {
+      "name": "self_review",
+      "desc": "you opened/updated your own PR",
+      "context": {
+        "base": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "issue": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "me": {
+          "type": "map",
+          "desc": "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""
+        },
+        "name": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "options": {
+        "max_attempts_per_head": {
+          "type": "integer",
+          "desc": "soft attempt threshold before backoff"
+        }
+      },
+      "match_keys": {
+        "repo": {
+          "type": "list"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "{{.repo}}#{{.number}}",
+          "url": "url",
+          "label": "pull request",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "repo",
+              "fact": "repo"
+            }
+          ]
+        },
+        "revision": {
+          "fact": "head",
+          "branch": "head_ref",
+          "base": "base"
+        },
+        "checkout": {
+          "remote": "git@github.com:{{.repo}}.git",
+          "fetch_ref": "refs/pull/{{.number}}/head",
+          "push_branch": "head_ref",
+          "runtime_hints": {
+            "forge": "github",
+            "pr_number": "{{.number}}"
+          }
+        },
+        "author": {
+          "login": "author",
+          "automated": "author_is_bot"
+        },
+        "labels": "labels",
+        "private": [
+          "installation_id",
+          "reaction_subjects"
+        ],
+        "secret": [
+          "app_token",
+          "gh_token"
+        ]
+      }
+    },
+    {
+      "name": "issue_matched",
+      "desc": "an issue matches your criteria",
+      "context": {
+        "base": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "issue": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "me": {
+          "type": "map",
+          "desc": "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""
+        },
+        "name": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "options": {
+        "assignee": {
+          "type": "map",
+          "desc": "whose assignment triggers: { logins: [...] } (default: the connector's me:) — an identity gate, not a fact predicate"
+        },
+        "max_attempts_per_head": {
+          "type": "integer",
+          "desc": "soft attempt threshold before backoff"
+        }
+      },
+      "facts": {
+        "author": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "sole_assignee": {
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "match_keys": {
+        "author": {
+          "type": "list"
+        },
+        "label_all": {
+          "type": "list"
+        },
+        "label_any": {
+          "type": "list"
+        },
+        "repo": {
+          "type": "list"
+        },
+        "require_label": {
+          "type": "string"
+        },
+        "sole_assignee": {
+          "type": "boolean"
+        },
+        "title": {
+          "type": "list"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "{{.repo}}#{{.number}}",
+          "url": "url",
+          "label": "issue",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "repo",
+              "fact": "repo"
+            }
+          ]
+        },
+        "checkout": {
+          "remote": "git@github.com:{{.repo}}.git"
+        },
+        "author": {
+          "login": "author",
+          "automated": "author_is_bot"
+        },
+        "labels": "labels",
+        "private": [
+          "installation_id",
+          "reaction_subjects"
+        ],
+        "secret": [
+          "app_token",
+          "gh_token"
+        ]
+      }
+    },
+    {
+      "name": "release",
+      "desc": "a release was published",
+      "context": {
+        "base": {
+          "type": "string"
+        },
+        "draft": {
+          "type": "boolean"
+        },
+        "head": {
+          "type": "string"
+        },
+        "issue": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "me": {
+          "type": "map",
+          "desc": "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""
+        },
+        "name": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "prerelease": {
+          "type": "boolean"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "tag_name": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "options": {
+        "include_prereleases": {
+          "type": "boolean",
+          "desc": "also fire on prereleases (default: skip them)"
+        },
+        "max_attempts_per_head": {
+          "type": "integer",
+          "desc": "soft attempt threshold before backoff"
+        }
+      },
+      "match_keys": {
+        "repo": {
+          "type": "list"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "{{.repo}}",
+          "url": "url",
+          "label": "repository",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "repo",
+              "fact": "repo"
+            }
+          ]
+        },
+        "checkout": {
+          "remote": "git@github.com:{{.repo}}.git"
+        },
+        "author": {
+          "login": "author",
+          "automated": "author_is_bot"
+        },
+        "labels": "labels",
+        "private": [
+          "installation_id",
+          "reaction_subjects"
+        ],
+        "secret": [
+          "app_token",
+          "gh_token"
+        ]
+      }
+    },
+    {
+      "name": "deployment_status",
+      "desc": "a deployment failed or errored",
+      "context": {
+        "base": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "environment": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "issue": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "me": {
+          "type": "map",
+          "desc": "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""
+        },
+        "name": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "options": {
+        "max_attempts_per_head": {
+          "type": "integer",
+          "desc": "soft attempt threshold before backoff"
+        }
+      },
+      "match_keys": {
+        "repo": {
+          "type": "list"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "{{.repo}}",
+          "url": "url",
+          "label": "repository",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "repo",
+              "fact": "repo"
+            }
+          ]
+        },
+        "checkout": {
+          "remote": "git@github.com:{{.repo}}.git"
+        },
+        "author": {
+          "login": "author",
+          "automated": "author_is_bot"
+        },
+        "labels": "labels",
+        "private": [
+          "installation_id",
+          "reaction_subjects"
+        ],
+        "secret": [
+          "app_token",
+          "gh_token"
+        ]
+      }
+    },
+    {
+      "name": "dependabot_alert",
+      "desc": "a new Dependabot alert",
+      "context": {
+        "base": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "issue": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "me": {
+          "type": "map",
+          "desc": "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""
+        },
+        "name": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "package": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "options": {
+        "max_attempts_per_head": {
+          "type": "integer",
+          "desc": "soft attempt threshold before backoff"
+        }
+      },
+      "match_keys": {
+        "repo": {
+          "type": "list"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "{{.repo}}",
+          "url": "url",
+          "label": "repository",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "repo",
+              "fact": "repo"
+            }
+          ]
+        },
+        "checkout": {
+          "remote": "git@github.com:{{.repo}}.git"
+        },
+        "author": {
+          "login": "author",
+          "automated": "author_is_bot"
+        },
+        "labels": "labels",
+        "private": [
+          "installation_id",
+          "reaction_subjects"
+        ],
+        "secret": [
+          "app_token",
+          "gh_token"
+        ]
+      }
+    },
+    {
+      "name": "secret_scanning_alert",
+      "desc": "a new secret-scanning alert",
+      "context": {
+        "base": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "issue": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "me": {
+          "type": "map",
+          "desc": "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""
+        },
+        "name": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "secret_type": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "options": {
+        "max_attempts_per_head": {
+          "type": "integer",
+          "desc": "soft attempt threshold before backoff"
+        }
+      },
+      "match_keys": {
+        "repo": {
+          "type": "list"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "{{.repo}}",
+          "url": "url",
+          "label": "repository",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "repo",
+              "fact": "repo"
+            }
+          ]
+        },
+        "checkout": {
+          "remote": "git@github.com:{{.repo}}.git"
+        },
+        "author": {
+          "login": "author",
+          "automated": "author_is_bot"
+        },
+        "labels": "labels",
+        "private": [
+          "installation_id",
+          "reaction_subjects"
+        ],
+        "secret": [
+          "app_token",
+          "gh_token"
+        ]
+      }
+    },
+    {
+      "name": "_closed",
+      "desc": "a PR closed (merged or not) — terminal for the PR: runs on it stop, and the outcome is recorded",
+      "context": {
+        "base": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "issue": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "list"
+        },
+        "me": {
+          "type": "map",
+          "desc": "you, as your writes act: { login } — the login discovered from the write identity (else your first me: login); e.g. a set_status context \"{{.me.login}} / review\""
+        },
+        "merged": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "pr": {
+          "type": "integer"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "reverts": {
+          "type": "list",
+          "desc": "PR numbers this one reverts"
+        },
+        "reverts_corroborated": {
+          "type": "boolean",
+          "desc": "the revert claim is backed by the commit messages"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "options": {
+        "max_attempts_per_head": {
+          "type": "integer",
+          "desc": "soft attempt threshold before backoff"
+        }
+      },
+      "match_keys": {
+        "repo": {
+          "type": "list"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "{{.repo}}#{{.number}}",
+          "url": "url",
+          "label": "pull request",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "repo",
+              "fact": "repo"
+            }
+          ]
+        },
+        "revision": {
+          "fact": "head",
+          "branch": "head_ref",
+          "base": "base"
+        },
+        "checkout": {
+          "remote": "git@github.com:{{.repo}}.git",
+          "fetch_ref": "refs/pull/{{.number}}/head",
+          "push_branch": "head_ref",
+          "runtime_hints": {
+            "forge": "github",
+            "pr_number": "{{.number}}"
+          }
+        },
+        "closes_target": {
+          "outcome": {
+            "fact": "merged",
+            "true": "accepted",
+            "false": "rejected"
+          },
+          "reverts": {
+            "fact": "reverts",
+            "corroborated": "reverts_corroborated"
+          }
+        },
+        "author": {
+          "login": "author",
+          "automated": "author_is_bot"
+        },
+        "labels": "labels",
+        "private": [
+          "installation_id",
+          "reaction_subjects"
+        ],
+        "secret": [
+          "app_token",
+          "gh_token"
+        ]
+      }
+    }
+  ],
+  "capabilities": {
+    "egress": [
+      "api.github.com:443",
+      "*.ghe.com:443",
+      "smee.io:443"
+    ],
+    "commands": [
+      "gh"
+    ],
+    "env": [
+      "GH_TOKEN",
+      "GITHUB_TOKEN",
+      "GH_ENTERPRISE_TOKEN",
+      "GITHUB_ENTERPRISE_TOKEN",
+      "GH_HOST",
+      "GH_CONFIG_DIR"
+    ]
+  },
+  "semantics": {
+    "credentials": [
+      {
+        "name": "read",
+        "role": "read",
+        "mint": {
+          "verb": "read_token",
+          "args": {
+            "repo": "{{.repo}}"
+          }
+        },
+        "env": [
+          "PC_GH_APP_TOKEN"
+        ],
+        "template": "app_token",
+        "refresh": "resume"
+      },
+      {
+        "name": "write",
+        "role": "write",
+        "mint": {
+          "verb": "write_token",
+          "args": {
+            "repo": "{{.repo}}"
+          }
+        },
+        "env": [
+          "GH_TOKEN",
+          "GITHUB_TOKEN",
+          "PC_GH_WRITE_TOKEN"
+        ],
+        "template": "gh_token",
+        "refresh": "resume",
+        "guidance": "\n\n---\nIDENTITY: you act as ME. GH_TOKEN/GITHUB_TOKEN are MY token, so every comment, review, reply, and `gh`/API write is attributed to me — and commits and `git push` go over SSH as me. NEVER post, submit, approve, or otherwise write anything with the App/bot token. If a large read would burn my rate limit you MAY read (only) with the App token via `GH_TOKEN=$PC_GH_APP_TOKEN gh ...`, but never write with it."
+      }
+    ],
+    "scope": {
+      "dimension": "repo",
+      "option": "repos",
+      "consent": true
+    },
+    "poll": {
+      "verb_name": "sweep"
+    },
+    "translate": {
+      "env": {
+        "event_name": "GITHUB_EVENT_NAME",
+        "event_path": "GITHUB_EVENT_PATH"
+      }
+    },
+    "listeners": [
+      {
+        "listen": "webhook.listen",
+        "expose": "webhook.expose",
+        "url_to": "webhook.public_url",
+        "path": "webhook.path"
+      }
+    ]
+  }
+}

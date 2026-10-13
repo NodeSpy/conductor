@@ -1,6 +1,8 @@
 package config
 
-import "testing"
+import (
+	"testing"
+)
 
 // A pack_trust/plugin_trust allow entry for one exact repo must not admit a
 // different, attacker-registered repo whose name merely CONTINUES the trusted
@@ -245,5 +247,31 @@ func TestANonGithubForgeIsGovernedByTheAllowlist(t *testing.T) {
 	ok := PackTrustConfig{Allow: []string{"gitlab.com/team/*"}}
 	if !ok.SourceAllowed("gitlab.com/team/pack") {
 		t.Error("a listed gitlab source must resolve")
+	}
+}
+
+// IsOfficialSource is THE official classifier (PluginSourceAllowed and a
+// plugin source's default event trust both key on it): the official repos and
+// paths under them, delimiter-anchored, on the canonical host — and nothing
+// that merely looks like them.
+func TestIsOfficialSource(t *testing.T) {
+	for src, want := range map[string]bool{
+		"github.com/NodeSpy/conductor-plugins":                         true,
+		"github.com/NodeSpy/conductor-plugins//connectors/github":      true,
+		"github.com/NodeSpy/conductor-packs//pr-autopilot":             true,
+		"git::github.com/NodeSpy/conductor-plugins//connectors/github": true,
+		"github.com/NodeSpy/conductor-plugins-evil//connectors/github": false,
+		"github.com/NodeSpy/conductor-plugin//connectors/github":       false,
+		"github.com/NodeSpy-evil/conductor-plugins//connectors/github": false,
+		"gitlab.com/NodeSpy/conductor-plugins//connectors/github":      false,
+		"github.com.evil.example/NodeSpy/conductor-plugins":            false,
+		"evil.example/github.com/NodeSpy/conductor-plugins":            false,
+		"./conductor-plugins/connectors/github":                        false,
+		"/opt/NodeSpy/conductor-plugins":                               false,
+		"":                                                             false,
+	} {
+		if got := IsOfficialSource(src); got != want {
+			t.Errorf("IsOfficialSource(%q) = %v, want %v", src, got, want)
+		}
 	}
 }

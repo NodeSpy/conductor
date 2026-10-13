@@ -2,14 +2,10 @@ package flow
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -17,99 +13,84 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/core/coretest"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/secrets"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // The pr-autopilot pack's progress hooks, end to end: testdata/packs/
 // pr-autopilot is a copy of the published pack (conductor-packs, keep in
 // sync), instantiated through the real pack loader (settings substitution,
-// connector binding, namespacing) and run against the real github connector
-// over a fake GitHub API. What it pins is the pack's contract with the PR:
+// connector binding, namespacing) and run against the fixture forge
+// connector, whose verbs a fake answers. What it pins is the pack's contract
+// with the PR:
 //
 //   - start: 👀 on the subject, `pending` on the commit the run starts on;
 //   - done: 🚀/👍, and `success` ONLY on that start commit — never the new
 //     head, so after a push the PR shows no row of the context at all;
 //   - fail: 😕, and `failure` on the PR's current head.
 
-// ghAPI is a fake GitHub API recording reactions and statuses.
+// ghAPI is a fake forge answering the pack's verbs (and the engine's head
+// read), recording reactions and statuses.
 type ghAPI struct {
 	mu       sync.Mutex
 	head     string
 	merged   bool     // the PR merged (state closed)
 	statuses []string // "<sha> <state> <context> | <description>"
 	reacts   []string // "<kind> <id> <content>"; a removal is "<kind> <id> -<content>"
-	// on is what each comment carries now: reaction id -> content (all as
-	// octo-me) — so a test can assert what is LEFT, not just what was called.
-	on     map[string]map[int64]string
-	nextID int64
+	// on is what each subject carries now: "<kind> <id>" -> contents — so a
+	// test can assert what is LEFT, not just what was called.
+	on map[string]map[string]bool
 	// rows is each (sha, context)'s latest state — what the PR shows.
 	rows map[string]string
 }
 
-var (
-	reIssueReact = regexp.MustCompile(`^/repos/org/repo/issues/comments/(\d+)/reactions$`)
-	reIssueUnrx  = regexp.MustCompile(`^/repos/org/repo/issues/comments/(\d+)/reactions/(\d+)$`)
-	reStatus     = regexp.MustCompile(`^/repos/org/repo/statuses/(\w+)$`)
-)
-
 func newGHAPI(t *testing.T, head string) *ghAPI {
-	api := &ghAPI{head: head, on: map[string]map[int64]string{}, rows: map[string]string{}}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	api := &ghAPI{head: head, on: map[string]map[string]bool{}, rows: map[string]string{}}
+	coretest.Forge.Respond(func(req sdk.InvokeRequest) (sdk.InvokeResult, error) {
 		api.mu.Lock()
 		defer api.mu.Unlock()
-		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		switch p := r.URL.Path; {
-		case r.Method == http.MethodGet && p == "/repos/org/repo/pulls/7":
+		o := req.Options
+		switch req.Verb {
+		case "pr_head":
 			state := "open"
 			if api.merged {
-				state = "closed"
+				state = "merged"
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"state": state, "merged": api.merged, "head": map[string]any{"sha": api.head}})
-		case r.Method == http.MethodGet && p == "/user":
-			_ = json.NewEncoder(w).Encode(map[string]any{"login": "octo-me"})
-		case r.Method == http.MethodPost && reIssueReact.MatchString(p):
-			id := reIssueReact.FindStringSubmatch(p)[1]
-			api.reacts = append(api.reacts, fmt.Sprintf("issue_comment %s %v", id, body["content"]))
-			if api.on[id] == nil {
-				api.on[id] = map[int64]string{}
+			return sdk.InvokeResult{Outputs: map[string]any{"sha": api.head, "state": state}}, nil
+		case "set_status":
+			// pr: resolves the PR's current head, as the plugin does.
+			sha := fmt.Sprint(o["sha"])
+			if o["sha"] == nil || sha == "" {
+				sha = api.head
 			}
-			api.nextID++
-			api.on[id][api.nextID] = fmt.Sprint(body["content"])
-			w.WriteHeader(201)
-			_, _ = w.Write([]byte(`{}`))
-		case r.Method == http.MethodGet && reIssueReact.MatchString(p):
-			var out []map[string]any
-			for rid, c := range api.on[reIssueReact.FindStringSubmatch(p)[1]] {
-				if c == r.URL.Query().Get("content") {
-					out = append(out, map[string]any{"id": rid, "content": c, "user": map[string]any{"login": "octo-me"}})
+			api.statuses = append(api.statuses, fmt.Sprintf("%s %v %v | %v", sha, o["state"], o["context"], o["description"]))
+			api.rows[sha+" "+fmt.Sprint(o["context"])] = fmt.Sprint(o["state"])
+			return sdk.InvokeResult{Outputs: map[string]any{"ok": true, "sha": sha}}, nil
+		case "react":
+			subjects, _ := o["subjects"].([]any)
+			for _, sub := range subjects {
+				m, _ := sub.(map[string]any)
+				key := fmt.Sprintf("%v %v", m["kind"], m["id"])
+				content := fmt.Sprint(o["content"])
+				if o["remove"] == true {
+					api.reacts = append(api.reacts, key+" -"+content)
+					delete(api.on[key], content)
+					continue
 				}
+				api.reacts = append(api.reacts, key+" "+content)
+				if api.on[key] == nil {
+					api.on[key] = map[string]bool{}
+				}
+				api.on[key][content] = true
 			}
-			if out == nil {
-				out = []map[string]any{}
-			}
-			_ = json.NewEncoder(w).Encode(out)
-		case r.Method == http.MethodDelete && reIssueUnrx.MatchString(p):
-			m := reIssueUnrx.FindStringSubmatch(p)
-			var rid int64
-			fmt.Sscan(m[2], &rid)
-			api.reacts = append(api.reacts, fmt.Sprintf("issue_comment %s -%s", m[1], api.on[m[1]][rid]))
-			delete(api.on[m[1]], rid)
-			w.WriteHeader(204)
-		case r.Method == http.MethodPost && reStatus.MatchString(p):
-			sha := reStatus.FindStringSubmatch(p)[1]
-			api.statuses = append(api.statuses, fmt.Sprintf("%s %v %v | %v", sha, body["state"], body["context"], body["description"]))
-			api.rows[sha+" "+fmt.Sprint(body["context"])] = fmt.Sprint(body["state"])
-			w.WriteHeader(201)
-			_, _ = w.Write([]byte(`{}`))
-		default:
-			t.Errorf("unexpected API call %s %s", r.Method, p)
-			w.WriteHeader(404)
+			return sdk.InvokeResult{Outputs: map[string]any{"ok": true}}, nil
 		}
-	}))
-	t.Cleanup(srv.Close)
-	t.Setenv("PC_GITHUB_API_BASE", srv.URL)
+		t.Errorf("unexpected verb %s %v", req.Verb, o)
+		return sdk.InvokeResult{}, sdk.Fail(sdk.CodeInvalid, "unexpected verb "+req.Verb, nil)
+	})
+	t.Cleanup(func() { coretest.Forge.Respond(nil) })
 	return api
 }
 
@@ -193,6 +174,11 @@ func autopilotTrigger(kind string, ctx map[string]any) core.Trigger {
 		ctx = map[string]any{}
 	}
 	ctx["me"] = map[string]any{"login": "octo-me"} // the source stamps it on every event
+	for k, v := range map[string]any{"repo": "org/repo", "number": 7, "pr": 7} {
+		if _, ok := ctx[k]; !ok {
+			ctx[k] = v // …and its base facts, which its declared reads use
+		}
+	}
 	return core.Trigger{Source: "github", Instance: "gh", Kind: kind, TargetTrusted: true,
 		// The event saw an older head; the run must use the one it starts on.
 		Target:  core.Target{Repo: "org/repo", Owner: "org", Name: "repo", Number: 7, PR: 7, HeadSHA: "event0000000"},
@@ -316,7 +302,7 @@ func TestAutopilotPackClosedMidRunLeavesNothing(t *testing.T) {
 			t.Fatalf("row %q left pending on the closed PR", row)
 		}
 	}
-	if n := len(api.on["5"]); n != 0 {
-		t.Fatalf("%d reaction(s) left on the comment: %v", n, api.on["5"])
+	if n := len(api.on["issue_comment 5"]); n != 0 {
+		t.Fatalf("%d reaction(s) left on the comment: %v", n, api.on["issue_comment 5"])
 	}
 }

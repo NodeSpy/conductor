@@ -16,12 +16,24 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/hosts"
+	"strconv"
 )
 
 // paseo runs an agent action via `paseo run`. Reads use the App token
 // (GH_TOKEN); commits/pushes are attributed to you (git author env + SSH); a
 // separate write token is exposed for posting as you (see ghwrite.go).
 func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
+	// detach: true is a COMPLETE, self-contained launch mode (Step.Detach) —
+	// it bypasses queueing, the ownership ledger, skill creds, and every
+	// guidance/hold/watch mechanism below, so it is handled by its own
+	// function rather than threaded through this one as one more branch.
+	if req.Step.Detach {
+		return d.paseoDetached(ctx, req)
+	}
+	req, repoOverride, err := withStepRepo(req)
+	if err != nil {
+		return RunRef{}, err
+	}
 	// Mark the dispatch in flight for its whole run. A step.done arriving while
 	// conductor is still blocked on this dispatch (an eager agent calling it as
 	// its last action) must NOT archive mid-capture — the done handler sees the
@@ -63,9 +75,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	if p.Thinking != "" {
 		argv = append(argv, "--thinking", p.Thinking)
 	}
-	if p.Mode != "" {
-		argv = append(argv, "--mode", p.Mode)
-	}
+	argv = append(argv, launchFieldArgs(p)...)
 	strat := effectiveStrategy(req)
 
 	// Before creating a fresh worktree, decide whether this dispatch should
@@ -86,7 +96,9 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// "foreground, Wait" request (the #60 foreground-wait fix), so excluding
 	// Wait here would silently stop deduping the exact one-worker-per-PR
 	// burst-of-feedback case this exists for (D1).
-	if !req.Interactive && !d.DryRun && !req.Shadow && len(req.Action.OutputSchema) == 0 {
+	// A step `repo:` naming a different repo than the trigger's never queues
+	// onto (or adopts) the trigger's PR agent — that agent works elsewhere.
+	if !req.Interactive && !d.DryRun && !req.Shadow && len(req.Action.OutputSchema) == 0 && !repoOverride {
 		if ref, handled, err := d.queueOrAdopt(ctx, req, prompt); handled || err != nil {
 			return ref, err
 		}
@@ -194,17 +206,12 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		argv = append(argv, checkoutArgs(ctx, req)...)
 	}
 
-	// Identity: the agent acts as YOU. GH_TOKEN is your write token, so every
-	// GitHub write (comment/review/API) is attributed to you — never the App bot
-	// (commits/pushes already go over SSH as you). The App token is exposed only as
-	// PC_GH_APP_TOKEN for optional rate-limited reads; PC_GH_WRITE_TOKEN is kept as
-	// an alias of your token for backward compatibility.
-	argv = append(argv,
-		"--env", "GH_TOKEN="+req.Tokens.User,
-		"--env", "GITHUB_TOKEN="+req.Tokens.User,
-		"--env", envGHWriteToken+"="+req.Tokens.User,
-		"--env", envGHAppToken+"="+req.Tokens.App,
-	)
+	// The credentials the event's connector declares for its agents (its
+	// identity model is its own: which variable is a write token, which a
+	// read-only one, is in its declaration and guidance).
+	for _, kv := range req.Credentials.EnvList() {
+		argv = append(argv, "--env", kv)
+	}
 	if req.Author.Name != "" {
 		argv = append(argv,
 			"--env", "GIT_AUTHOR_NAME="+req.Author.Name,
@@ -450,8 +457,24 @@ func effectiveStrategy(req Request) string {
 	return repoStrategy(req)
 }
 
-// repoStrategy picks the worktree strategy from the trigger's repo/PR context.
+// repoStrategy picks the worktree strategy from the trigger's DECLARED
+// checkout (plugin-contract.md §2.2): a fetch ref (or a runtime PR hint)
+// checks the target's own code out, a bare remote branches off the base, and
+// no checkout runs in the base workspace (a synthetic target). An event that
+// declares no semantics at all keeps the target-shaped rule older plugins
+// were built against.
 func repoStrategy(req Request) string {
+	if req.Trigger.HasSemantics() {
+		co, ok := req.Trigger.Checkout()
+		switch {
+		case !ok:
+			return "none"
+		case co.FetchRef != "" || co.Hints["pr_number"] != "":
+			return "checkout-pr"
+		default:
+			return "branch-off"
+		}
+	}
 	switch {
 	case req.Trigger.Target.PR > 0:
 		return "checkout-pr"
@@ -544,8 +567,14 @@ func agentTitle(req Request) string {
 func checkoutArgs(ctx context.Context, req Request) []string {
 	switch effectiveStrategy(req) {
 	case "checkout-pr":
-		return []string{"--new-workspace", workspaceMode(req), "--worktree-mode", "checkout-pr",
-			"--pr-number", itoa(req.Trigger.Target.PR), "--forge", "github"}
+		args := []string{"--new-workspace", workspaceMode(req), "--worktree-mode", "checkout-pr"}
+		if n, forge := prHints(req); n != "" {
+			args = append(args, "--pr-number", n)
+			if forge != "" {
+				args = append(args, "--forge", forge)
+			}
+		}
+		return args
 	case "branch-off":
 		args := []string{"--new-workspace", workspaceMode(req), "--worktree-mode", "branch-off",
 			"--new-branch", branchSlug(ctx, req.Trigger)}
@@ -585,8 +614,15 @@ func (d *Dispatcher) createWorktree(ctx context.Context, req Request, baseDir st
 	opts := CreateWorktreeOptions{Isolation: workspaceMode(req), Path: baseDir, Strategy: strat}
 	switch strat {
 	case "checkout-pr":
-		opts.PRNumber = req.Trigger.Target.PR
-		opts.Forge = "github"
+		n, forge := prHints(req)
+		pr, perr := strconv.Atoi(n)
+		if perr != nil || pr <= 0 {
+			// Never ask the runtime for PR 0: a checkout-pr needs the number
+			// the event's declaration hints.
+			return "", "", Unrecoverable(fmt.Errorf("checkout-pr: no PR number in the event's checkout hints (pr_number=%q)", n))
+		}
+		opts.PRNumber = pr
+		opts.Forge = forge
 	case "branch-off":
 		opts.NewBranch = branchSlug(ctx, req.Trigger)
 		opts.BaseRef = req.Trigger.Target.BaseRef
@@ -1194,7 +1230,7 @@ func (d *Dispatcher) queueOrAdopt(ctx context.Context, req Request, prompt strin
 		ref.AgentID, ref.Queued, ref.Output = id, true, "queued to live agent "+id
 		return ref, true, nil
 	}
-	if d.AdoptOpenWorkspaces && isFeedbackKind(req.Trigger.Kind) {
+	if d.AdoptOpenWorkspaces && req.Trigger.Feedback() {
 		if id := d.adoptAgentForBranch(ctx, req); !d.remote() && id != "" {
 			if req.CatchUp {
 				ref.Skipped = true
@@ -1227,10 +1263,6 @@ func (d *Dispatcher) liveAgentForPR(ctx context.Context, prKey string) string {
 	return ""
 }
 
-// isFeedbackKind reports whether a kind is PR feedback eligible for open-workspace
-// adoption (mirrors the github integration's feedbackKind).
-func isFeedbackKind(k string) bool { return k == "new_comment" || k == "changes_requested" }
-
 // adoptCand is a candidate open agent whose checkout is on the PR's head branch.
 type adoptCand struct {
 	id     string
@@ -1243,7 +1275,7 @@ type adoptCand struct {
 func (d *Dispatcher) adoptAgentForBranch(ctx context.Context, req Request) string {
 	headRef, _ := req.Trigger.Context["head_ref"].(string)
 	if headRef == "" {
-		return "" // no branch to match on (dispatch stays repo-agnostic; the github side supplies it)
+		return "" // no branch to match on (dispatch stays repo-agnostic; the source declares it)
 	}
 	repo := req.Trigger.Target.Repo
 	var cands []adoptCand
@@ -1366,4 +1398,12 @@ func normCwd(p string) string {
 		}
 	}
 	return filepath.Clean(p)
+}
+
+// prHints are the PR number and forge the runtime's PR-aware workspace takes:
+// the declared checkout's runtime hints, passed through unread. An event
+// declaring no checkout gives none.
+func prHints(req Request) (number, forge string) {
+	co, _ := req.Trigger.Checkout()
+	return co.Hints["pr_number"], co.Hints["forge"]
 }

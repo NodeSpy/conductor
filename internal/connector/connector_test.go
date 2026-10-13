@@ -259,7 +259,7 @@ func TestRegistryBuildDisablesOnSecretFailure(t *testing.T) {
 	cfg := mustDecodeConfig(t, `
 connectors:
   disc:
-    use: discord
+    use: slack
     bot_token: env:PC_TEST_MISSING_VAR_XYZ
 `)
 	sec := secrets.New()
@@ -315,13 +315,13 @@ connectors:
 }
 
 func TestRegistryBuildDisablesOnValidateFailure(t *testing.T) {
-	// slack requires bot_token; omitting it passes decode (empty string) but
+	// web requires base_url or expose; omitting both passes decode but
 	// fails Validate().
 	cfg := mustDecodeConfig(t, `
 connectors:
   sl:
-    use: slack
-    app_token: xapp-literal
+    use: web
+    listen: "127.0.0.1:0"
 `)
 	reg, err := Build(cfg, Deps{Secrets: secrets.New()})
 	if err != nil {

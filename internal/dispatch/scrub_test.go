@@ -24,7 +24,7 @@ func TestTemplateDataScrubsTrackedSecrets(t *testing.T) {
 			Target:  core.Target{Repo: "o/r", Number: 7},
 			Context: map[string]any{"note": "ctx s3kr1t-value here"},
 		},
-		Tokens: Tokens{User: "utok", App: "atok"},
+		Credentials: ghCreds("utok", "atok"),
 		Data: map[string]any{
 			"build":   map[string]any{"log": "curl -H 'Authorization: s3kr1t-value'", "ok": true},
 			"plain":   "keep me",

@@ -98,12 +98,7 @@ func BranchSlug(ctx context.Context, t core.Trigger) string { return branchSlug(
 // same identity without re-deriving it.
 func AgentEnv(req Request) ([]string, error) {
 	data := templateData(req)
-	env := []string{
-		"GH_TOKEN=" + req.Tokens.User,
-		"GITHUB_TOKEN=" + req.Tokens.User,
-		envGHWriteToken + "=" + req.Tokens.User,
-		envGHAppToken + "=" + req.Tokens.App,
-	}
+	env := req.Credentials.EnvList()
 	if req.Author.Name != "" {
 		env = append(env,
 			"GIT_AUTHOR_NAME="+req.Author.Name,

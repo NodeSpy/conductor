@@ -13,10 +13,11 @@ import (
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
-// A connector with a head face (connector.HeadReader) whose head a test
-// scripts, and a recording verb — enough to watch workflow-level hooks and
+// A connector declaring a reads_revision verb whose answers a test scripts,
+// and a recording verb — enough to watch workflow-level hooks and
 // their {{.run.*}} facts without any one connector's API.
 var headDecl = &connector.TypeDecl{
 	Type: "fakehead",
@@ -31,6 +32,13 @@ var headDecl = &connector.TypeDecl{
 			Options: connector.Schema{"text": {Type: connector.TString}},
 			Outputs: connector.Schema{"id": {Type: connector.TInt}}},
 		{Name: "fail", Desc: "always errors", Options: connector.Schema{}, Outputs: connector.Schema{}},
+		{Name: "head", Desc: "the target's revision",
+			Outputs: connector.Schema{"sha": {Type: connector.TString}, "state": {Type: connector.TString}},
+			Semantics: &sdk.VerbSemantics{HostOnly: true, ReadsRevision: &sdk.ReadsRevision{
+				Revision: "sha", State: "state",
+				States:  map[string][]string{"open": {"open"}, "closed": {"closed"}, "accepted": {"merged"}},
+				Reasons: map[string]string{"accepted": "the PR merged", "closed": "the PR closed"},
+			}}},
 	},
 }
 
@@ -96,6 +104,9 @@ func (h *headImpl) Source([]connector.CompiledTrigger) (core.Integration, error)
 }
 func (h *headImpl) Invoke(_ context.Context, verb string, opts map[string]any) (map[string]any, error) {
 	l := headLogFor(h.name)
+	if verb == "head" {
+		return h.head(), nil
+	}
 	if verb == "fail" {
 		l.add("fail")
 		return nil, errors.New("the hook's API said no")
@@ -103,7 +114,7 @@ func (h *headImpl) Invoke(_ context.Context, verb string, opts map[string]any) (
 	l.add(fmt.Sprintf("post:%v", opts["text"]))
 	return map[string]any{"id": 1}, nil
 }
-func (h *headImpl) TargetHead(context.Context, core.Trigger) (connector.TargetHead, error) {
+func (h *headImpl) head() map[string]any {
 	l := headLogFor(h.name)
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -111,12 +122,12 @@ func (h *headImpl) TargetHead(context.Context, core.Trigger) (connector.TargetHe
 	i := l.reads
 	l.reads++
 	if len(l.heads) == 0 {
-		return connector.TargetHead{}, nil
+		return map[string]any{}
 	}
 	if i >= len(l.heads) {
 		i = len(l.heads) - 1
 	}
-	return connector.TargetHead{SHA: l.heads[i], State: l.state}, nil
+	return map[string]any{"sha": l.heads[i], "state": l.state}
 }
 
 // headRig builds a runner over one fakehead connector named name, whose head

@@ -32,7 +32,7 @@ func TestHandoffDoneInCLICapabilityCard(t *testing.T) {
 	e := New(Options{
 		Config: &cfg, Store: tempStore(t), Dispatch: &fakeDispatcher{}, Notifier: &fakeNotifier{},
 		Flow: runner, Connectors: reg,
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil },
+		Author: dispatch.Author{},
 	})
 
 	// A background hand-off with NO skill: block of its own still advertises

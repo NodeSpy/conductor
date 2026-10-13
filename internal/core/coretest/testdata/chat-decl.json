@@ -1,0 +1,975 @@
+{
+  "protocol_version": 0,
+  "kind": "connector",
+  "type": "slack",
+  "desc": "Slack: mentions/reactions/slash commands/shortcuts/forms in (Socket Mode); messages, reactions, asks, thread reads and file downloads out.",
+  "connection": {
+    "api_base": {
+      "type": "string",
+      "desc": "override the Slack Web API base URL (tests); default https://slack.com/api"
+    },
+    "app_token": {
+      "type": "string",
+      "desc": "Socket Mode app token (xapp-…) — needed for events and ask replies",
+      "secret": true
+    },
+    "bot_token": {
+      "type": "string",
+      "desc": "bot token (xoxb-…) for the Web API verbs",
+      "secret": true
+    },
+    "webhook_url": {
+      "type": "string",
+      "desc": "an incoming-webhook URL — post-only alternative to a bot token",
+      "secret": true
+    }
+  },
+  "verbs": [
+    {
+      "name": "post",
+      "desc": "post a message",
+      "options": {
+        "channel": {
+          "type": "string",
+          "desc": "channel id (or set user: for a DM)",
+          "scope": "channel"
+        },
+        "ephemeral": {
+          "type": "boolean",
+          "desc": "visible only to user: (requires channel: and user:)"
+        },
+        "text": {
+          "type": "string",
+          "required": true
+        },
+        "thread_ts": {
+          "type": "string",
+          "desc": "post into this thread"
+        },
+        "user": {
+          "type": "string",
+          "desc": "user id to DM",
+          "scope": "user"
+        }
+      },
+      "outputs": {
+        "channel": {
+          "type": "string"
+        },
+        "ts": {
+          "type": "string"
+        }
+      },
+      "semantics": {
+        "conversation_post": true
+      }
+    },
+    {
+      "name": "react",
+      "desc": "add a reaction to a message",
+      "options": {
+        "channel": {
+          "type": "string",
+          "required": true,
+          "scope": "channel"
+        },
+        "emoji": {
+          "type": "string",
+          "required": true,
+          "desc": "emoji name, no colons"
+        },
+        "ts": {
+          "type": "string",
+          "required": true,
+          "desc": "message timestamp to react to"
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "name": "feedback",
+      "desc": "react to and/or reply on a message — the generic ack/on_done/on_fail block",
+      "options": {
+        "channel": {
+          "type": "string",
+          "desc": "the message's channel",
+          "scope": "channel"
+        },
+        "ephemeral": {
+          "type": "boolean",
+          "desc": "say is visible only to user: via chat.postEphemeral"
+        },
+        "in_thread": {
+          "type": "boolean",
+          "desc": "say posts into the message's thread (default true)"
+        },
+        "react": {
+          "type": "string",
+          "desc": "reactions.add emoji name, no colons; \"\" = no reaction"
+        },
+        "say": {
+          "type": "string",
+          "desc": "chat.postMessage/postEphemeral text; \"\" = no message"
+        },
+        "thread_ts": {
+          "type": "string",
+          "desc": "the message's thread, for say's in_thread"
+        },
+        "ts": {
+          "type": "string",
+          "desc": "the message's timestamp, for react"
+        },
+        "user": {
+          "type": "string",
+          "desc": "the message's user, for an ephemeral say",
+          "scope": "user"
+        }
+      },
+      "outputs": {
+        "ok": {
+          "type": "boolean"
+        }
+      },
+      "semantics": {
+        "host_only": true
+      }
+    },
+    {
+      "name": "ask",
+      "desc": "present a question/draft and wait for the reply",
+      "options": {
+        "approvers": {
+          "type": "list",
+          "desc": "to: thread — only these user ids may resolve the ask (default: anyone in the channel)"
+        },
+        "channel": {
+          "type": "string",
+          "desc": "channel id (to: thread)",
+          "scope": "channel"
+        },
+        "draft": {
+          "type": "string",
+          "desc": "editable draft text presented with the question"
+        },
+        "prompt": {
+          "type": "string",
+          "required": true,
+          "desc": "the question to present"
+        },
+        "timeout": {
+          "type": "string",
+          "desc": "how long to wait for an answer (default 1h) — enforced by the host"
+        },
+        "title": {
+          "type": "string",
+          "desc": "presentation title (default: the prompt's first line)"
+        },
+        "to": {
+          "type": "string",
+          "required": true,
+          "enum": [
+            "dm",
+            "thread"
+          ]
+        },
+        "user": {
+          "type": "string",
+          "desc": "user id (to: dm)",
+          "scope": "user"
+        }
+      },
+      "outputs": {
+        "channel": {
+          "type": "string"
+        },
+        "conversation_id": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "ts": {
+          "type": "string"
+        }
+      },
+      "ask": true,
+      "semantics": {
+        "opens_conversation": {
+          "id": "conversation_id",
+          "approvers": "approvers"
+        }
+      }
+    },
+    {
+      "name": "thread",
+      "desc": "read a message's thread: ordered messages with author names, file metadata, and a permalink",
+      "options": {
+        "channel": {
+          "type": "string",
+          "required": true,
+          "scope": "channel"
+        },
+        "limit": {
+          "type": "integer",
+          "desc": "max messages (default 200, at most 1000)"
+        },
+        "ts": {
+          "type": "string",
+          "required": true,
+          "desc": "the thread's root ts (or any message in it)"
+        }
+      },
+      "outputs": {
+        "count": {
+          "type": "integer"
+        },
+        "messages": {
+          "type": "list",
+          "desc": "[{user, user_name, text, ts, files: [{id, name, mimetype, size}]}], oldest first"
+        },
+        "permalink": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string",
+          "desc": "the thread as plain text, one message per block"
+        },
+        "thread_ts": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean",
+          "desc": "the thread had more messages than limit"
+        }
+      }
+    },
+    {
+      "name": "download",
+      "desc": "download a message's (or its whole thread's) files into the plugin's staging directory",
+      "options": {
+        "channel": {
+          "type": "string",
+          "required": true,
+          "scope": "channel"
+        },
+        "max_file_bytes": {
+          "type": "integer",
+          "desc": "default 20971520, at most 52428800"
+        },
+        "max_files": {
+          "type": "integer",
+          "desc": "default 10, at most 50"
+        },
+        "max_total_bytes": {
+          "type": "integer",
+          "desc": "default 52428800, at most 209715200"
+        },
+        "thread": {
+          "type": "boolean",
+          "desc": "every file in the thread (default true); false: only the message at ts"
+        },
+        "ts": {
+          "type": "string",
+          "required": true,
+          "desc": "the thread's root ts (or the message's own ts with thread: false)"
+        }
+      },
+      "outputs": {
+        "count": {
+          "type": "integer"
+        },
+        "dir": {
+          "type": "string",
+          "desc": "the staging directory"
+        },
+        "files": {
+          "type": "list",
+          "desc": "[{name, path, mimetype, size}]"
+        },
+        "images": {
+          "type": "list",
+          "desc": "paths of the image/* files (for an agent step's images:)"
+        },
+        "paths": {
+          "type": "list"
+        },
+        "skipped": {
+          "type": "list",
+          "desc": "[{name, reason}] files not downloaded"
+        }
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "app_mention",
+      "desc": "the bot was @-mentioned (with options.form: the mentioning user gets a private button that opens the form; the trigger fires on submission)",
+      "filters": {
+        "channel": {
+          "type": "string",
+          "desc": "only this channel id"
+        },
+        "users": {
+          "type": "list",
+          "desc": "only these user ids"
+        }
+      },
+      "context": {
+        "slack.callback_id": {
+          "type": "string",
+          "desc": "message_shortcut: the shortcut's callback id"
+        },
+        "slack.channel": {
+          "type": "string"
+        },
+        "slack.command": {
+          "type": "string"
+        },
+        "slack.files": {
+          "type": "list",
+          "desc": "files on the triggering message: {id, name, mimetype}"
+        },
+        "slack.form": {
+          "type": "map",
+          "desc": "submitted form values by field name"
+        },
+        "slack.is_bot": {
+          "type": "boolean",
+          "desc": "the acting user is a bot (bot_id was set)"
+        },
+        "slack.reaction": {
+          "type": "string"
+        },
+        "slack.text": {
+          "type": "string"
+        },
+        "slack.thread_ts": {
+          "type": "string"
+        },
+        "slack.trigger_id": {
+          "type": "string",
+          "desc": "slash_command: the invocation's unique trigger id (Slack mints no message ts for a command, so this is its target discriminator instead)"
+        },
+        "slack.ts": {
+          "type": "string"
+        },
+        "slack.user": {
+          "type": "string"
+        },
+        "slack.via": {
+          "type": "string",
+          "desc": "shortcut | mention (how a form trigger fired)"
+        },
+        "slack_bot_token": {
+          "type": "string",
+          "desc": "the connection's bot token"
+        }
+      },
+      "options": {
+        "ack": {
+          "type": "map",
+          "desc": "fired when the trigger dispatches — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        },
+        "any_user": {
+          "type": "boolean",
+          "desc": "allow a form/shortcut trigger with no users: filter (anyone in the workspace)"
+        },
+        "form": {
+          "type": "map",
+          "desc": "a modal to collect before firing: {title, submit, fields: [{name, label, type: select|text|textarea, options, default, optional}]}"
+        },
+        "on_done": {
+          "type": "map",
+          "desc": "fired when the dispatched work finishes successfully — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        },
+        "on_fail": {
+          "type": "map",
+          "desc": "fired when the dispatched work fails — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "slack:{{.slack.channel}}:{{.slack.ts}}",
+          "label": "message",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "channel",
+              "fact": "slack.channel"
+            },
+            {
+              "dimension": "user",
+              "fact": "slack.user"
+            }
+          ]
+        },
+        "author": {
+          "login": "slack.user",
+          "automated": "slack.is_bot"
+        },
+        "secret": [
+          "slack_bot_token"
+        ],
+        "option_hooks": [
+          {
+            "option": "ack",
+            "at": "start",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          },
+          {
+            "option": "on_done",
+            "at": "done",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          },
+          {
+            "option": "on_fail",
+            "at": "fail",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "message_shortcut",
+      "desc": "a message shortcut was used on a message (with options.form: opens the form first; the trigger fires on submission)",
+      "filters": {
+        "callback_id": {
+          "type": "string",
+          "desc": "only this shortcut callback id"
+        },
+        "channel": {
+          "type": "string",
+          "desc": "only this channel id"
+        },
+        "users": {
+          "type": "list",
+          "desc": "only these user ids (required unless options.any_user)"
+        }
+      },
+      "context": {
+        "slack.callback_id": {
+          "type": "string",
+          "desc": "message_shortcut: the shortcut's callback id"
+        },
+        "slack.channel": {
+          "type": "string"
+        },
+        "slack.command": {
+          "type": "string"
+        },
+        "slack.files": {
+          "type": "list",
+          "desc": "files on the triggering message: {id, name, mimetype}"
+        },
+        "slack.form": {
+          "type": "map",
+          "desc": "submitted form values by field name"
+        },
+        "slack.is_bot": {
+          "type": "boolean",
+          "desc": "the acting user is a bot (bot_id was set)"
+        },
+        "slack.reaction": {
+          "type": "string"
+        },
+        "slack.text": {
+          "type": "string"
+        },
+        "slack.thread_ts": {
+          "type": "string"
+        },
+        "slack.trigger_id": {
+          "type": "string",
+          "desc": "slash_command: the invocation's unique trigger id (Slack mints no message ts for a command, so this is its target discriminator instead)"
+        },
+        "slack.ts": {
+          "type": "string"
+        },
+        "slack.user": {
+          "type": "string"
+        },
+        "slack.via": {
+          "type": "string",
+          "desc": "shortcut | mention (how a form trigger fired)"
+        },
+        "slack_bot_token": {
+          "type": "string",
+          "desc": "the connection's bot token"
+        }
+      },
+      "options": {
+        "ack": {
+          "type": "map",
+          "desc": "fired when the trigger dispatches — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        },
+        "any_user": {
+          "type": "boolean",
+          "desc": "allow a form/shortcut trigger with no users: filter (anyone in the workspace)"
+        },
+        "form": {
+          "type": "map",
+          "desc": "a modal to collect before firing: {title, submit, fields: [{name, label, type: select|text|textarea, options, default, optional}]}"
+        },
+        "on_done": {
+          "type": "map",
+          "desc": "fired when the dispatched work finishes successfully — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        },
+        "on_fail": {
+          "type": "map",
+          "desc": "fired when the dispatched work fails — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "slack:{{.slack.channel}}:{{.slack.ts}}",
+          "label": "message",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "channel",
+              "fact": "slack.channel"
+            },
+            {
+              "dimension": "user",
+              "fact": "slack.user"
+            }
+          ]
+        },
+        "author": {
+          "login": "slack.user",
+          "automated": "slack.is_bot"
+        },
+        "secret": [
+          "slack_bot_token"
+        ],
+        "option_hooks": [
+          {
+            "option": "ack",
+            "at": "start",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          },
+          {
+            "option": "on_done",
+            "at": "done",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          },
+          {
+            "option": "on_fail",
+            "at": "fail",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "reaction_added",
+      "desc": "a reaction was added",
+      "filters": {
+        "channel": {
+          "type": "string"
+        },
+        "reaction": {
+          "type": "string",
+          "desc": "only this emoji name (no colons)"
+        },
+        "users": {
+          "type": "list"
+        }
+      },
+      "context": {
+        "slack.callback_id": {
+          "type": "string",
+          "desc": "message_shortcut: the shortcut's callback id"
+        },
+        "slack.channel": {
+          "type": "string"
+        },
+        "slack.command": {
+          "type": "string"
+        },
+        "slack.files": {
+          "type": "list",
+          "desc": "files on the triggering message: {id, name, mimetype}"
+        },
+        "slack.form": {
+          "type": "map",
+          "desc": "submitted form values by field name"
+        },
+        "slack.is_bot": {
+          "type": "boolean",
+          "desc": "the acting user is a bot (bot_id was set)"
+        },
+        "slack.reaction": {
+          "type": "string"
+        },
+        "slack.text": {
+          "type": "string"
+        },
+        "slack.thread_ts": {
+          "type": "string"
+        },
+        "slack.trigger_id": {
+          "type": "string",
+          "desc": "slash_command: the invocation's unique trigger id (Slack mints no message ts for a command, so this is its target discriminator instead)"
+        },
+        "slack.ts": {
+          "type": "string"
+        },
+        "slack.user": {
+          "type": "string"
+        },
+        "slack.via": {
+          "type": "string",
+          "desc": "shortcut | mention (how a form trigger fired)"
+        },
+        "slack_bot_token": {
+          "type": "string",
+          "desc": "the connection's bot token"
+        }
+      },
+      "options": {
+        "ack": {
+          "type": "map",
+          "desc": "fired when the trigger dispatches — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        },
+        "on_done": {
+          "type": "map",
+          "desc": "fired when the dispatched work finishes successfully — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        },
+        "on_fail": {
+          "type": "map",
+          "desc": "fired when the dispatched work fails — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "slack:{{.slack.channel}}:{{.slack.ts}}",
+          "label": "message",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "channel",
+              "fact": "slack.channel"
+            },
+            {
+              "dimension": "user",
+              "fact": "slack.user"
+            }
+          ]
+        },
+        "author": {
+          "login": "slack.user",
+          "automated": "slack.is_bot"
+        },
+        "secret": [
+          "slack_bot_token"
+        ],
+        "option_hooks": [
+          {
+            "option": "ack",
+            "at": "start",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          },
+          {
+            "option": "on_done",
+            "at": "done",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          },
+          {
+            "option": "on_fail",
+            "at": "fail",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "slash_command",
+      "desc": "a slash command was invoked",
+      "filters": {
+        "channel": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string",
+          "desc": "only this command (e.g. /fix)"
+        },
+        "users": {
+          "type": "list"
+        }
+      },
+      "context": {
+        "slack.callback_id": {
+          "type": "string",
+          "desc": "message_shortcut: the shortcut's callback id"
+        },
+        "slack.channel": {
+          "type": "string"
+        },
+        "slack.command": {
+          "type": "string"
+        },
+        "slack.files": {
+          "type": "list",
+          "desc": "files on the triggering message: {id, name, mimetype}"
+        },
+        "slack.form": {
+          "type": "map",
+          "desc": "submitted form values by field name"
+        },
+        "slack.is_bot": {
+          "type": "boolean",
+          "desc": "the acting user is a bot (bot_id was set)"
+        },
+        "slack.reaction": {
+          "type": "string"
+        },
+        "slack.text": {
+          "type": "string"
+        },
+        "slack.thread_ts": {
+          "type": "string"
+        },
+        "slack.trigger_id": {
+          "type": "string",
+          "desc": "slash_command: the invocation's unique trigger id (Slack mints no message ts for a command, so this is its target discriminator instead)"
+        },
+        "slack.ts": {
+          "type": "string"
+        },
+        "slack.user": {
+          "type": "string"
+        },
+        "slack.via": {
+          "type": "string",
+          "desc": "shortcut | mention (how a form trigger fired)"
+        },
+        "slack_bot_token": {
+          "type": "string",
+          "desc": "the connection's bot token"
+        }
+      },
+      "options": {
+        "ack": {
+          "type": "map",
+          "desc": "fired when the trigger dispatches — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        },
+        "on_done": {
+          "type": "map",
+          "desc": "fired when the dispatched work finishes successfully — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        },
+        "on_fail": {
+          "type": "map",
+          "desc": "fired when the dispatched work fails — {react, say, ephemeral, in_thread}: an optional reaction and/or message on the triggering message"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "slack:{{.slack.channel}}:{{.slack.trigger_id}}",
+          "label": "message",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "channel",
+              "fact": "slack.channel"
+            },
+            {
+              "dimension": "user",
+              "fact": "slack.user"
+            }
+          ]
+        },
+        "author": {
+          "login": "slack.user",
+          "automated": "slack.is_bot"
+        },
+        "secret": [
+          "slack_bot_token"
+        ],
+        "option_hooks": [
+          {
+            "option": "ack",
+            "at": "start",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          },
+          {
+            "option": "on_done",
+            "at": "done",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          },
+          {
+            "option": "on_fail",
+            "at": "fail",
+            "verb": "feedback",
+            "args": {
+              "channel": "{{.slack.channel}}",
+              "thread_ts": "{{.slack.thread_ts}}",
+              "ts": "{{.slack.ts}}",
+              "user": "{{.slack.user}}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "reply",
+      "desc": "a thread reply or a DM, as Socket Mode delivers them — consumed by a pending ask/hand-off when one is waiting on it, otherwise an ordinary event a trigger may match with `on: slack.reply`",
+      "context": {
+        "slack.callback_id": {
+          "type": "string",
+          "desc": "message_shortcut: the shortcut's callback id"
+        },
+        "slack.channel": {
+          "type": "string"
+        },
+        "slack.command": {
+          "type": "string"
+        },
+        "slack.files": {
+          "type": "list",
+          "desc": "files on the triggering message: {id, name, mimetype}"
+        },
+        "slack.form": {
+          "type": "map",
+          "desc": "submitted form values by field name"
+        },
+        "slack.is_bot": {
+          "type": "boolean",
+          "desc": "the acting user is a bot (bot_id was set)"
+        },
+        "slack.reaction": {
+          "type": "string"
+        },
+        "slack.text": {
+          "type": "string"
+        },
+        "slack.thread_ts": {
+          "type": "string"
+        },
+        "slack.trigger_id": {
+          "type": "string",
+          "desc": "slash_command: the invocation's unique trigger id (Slack mints no message ts for a command, so this is its target discriminator instead)"
+        },
+        "slack.ts": {
+          "type": "string"
+        },
+        "slack.user": {
+          "type": "string"
+        },
+        "slack.via": {
+          "type": "string",
+          "desc": "shortcut | mention (how a form trigger fired)"
+        },
+        "slack_bot_token": {
+          "type": "string",
+          "desc": "the connection's bot token"
+        }
+      },
+      "semantics": {
+        "target": {
+          "key": "slack:{{.slack.channel}}:{{.slack.ts}}",
+          "label": "message",
+          "assigned": true,
+          "scope": [
+            {
+              "dimension": "channel",
+              "fact": "slack.channel"
+            },
+            {
+              "dimension": "user",
+              "fact": "slack.user"
+            }
+          ]
+        },
+        "author": {
+          "login": "slack.user",
+          "automated": "slack.is_bot"
+        },
+        "secret": [
+          "slack_bot_token"
+        ],
+        "conversation_reply": {
+          "id": "{{.slack.channel}}:{{.slack.thread_ts}}",
+          "author": "slack.user",
+          "text": "slack.text"
+        }
+      }
+    }
+  ],
+  "capabilities": {
+    "egress": [
+      "slack.com:443",
+      "*.slack.com:443"
+    ]
+  }
+}

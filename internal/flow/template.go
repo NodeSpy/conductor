@@ -63,7 +63,7 @@ var templateFuncs = template.FuncMap{
 		return v, nil
 	},
 	// vault reads a defined vaults: entry inline:
-	// {{ vault "op" "Private/GitHub/token" }}. The value is tainted
+	// {{ vault "op" "Private/forge/token" }}. The value is tainted
 	// sensitive (redacted from logs/audit) by the vaults read path.
 	// Read-only — writes go through the <vault>.write verb.
 	"vault": func(args ...any) (string, error) {

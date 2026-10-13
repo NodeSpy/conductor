@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -20,7 +21,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/cost"
 	"github.com/NodeSpy/conductor/internal/dispatch"
-	"github.com/NodeSpy/conductor/internal/expr"
 	"github.com/NodeSpy/conductor/internal/gitdiff"
 	"github.com/NodeSpy/conductor/internal/hosts"
 	"github.com/NodeSpy/conductor/internal/memory"
@@ -28,6 +28,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
 	"github.com/NodeSpy/conductor/internal/systemone"
+	"github.com/NodeSpy/conductor/pkg/expr"
 
 	"gopkg.in/yaml.v3"
 )
@@ -60,7 +61,9 @@ type AgentServices struct {
 	// (explicit runtime → default → built-in paseo).
 	Dispatch func(ctx context.Context, req dispatch.Request) (dispatch.RunRef, error)
 	// Tokens resolves the acts-as-you / App tokens for a trigger.
-	Tokens func(t core.Trigger) dispatch.Tokens
+	// Credentials are what an agent dispatched for t receives (the
+	// connector's declared credentials, resolved by the engine).
+	Credentials func(ctx context.Context, t core.Trigger) (dispatch.Credentials, error)
 	// Guidance is the house prompt guidance for a step (its IDENTITY keys the
 	// optional outcome-feedback tuning — #36 §18). pol is the trigger's
 	// resolved policy cascade — its Guidance is the scoped layer-0 baseline
@@ -371,9 +374,7 @@ func (r *Runner) resolvePolicy(spec config.TriggerSpec) config.Policy {
 // trigger's author facts.
 func (r *Runner) resolveBotReply(t core.Trigger, spec config.TriggerSpec) botReplyState {
 	pol := r.resolvePolicy(spec)
-	isBot, _ := t.Context["author_is_bot"].(bool)
-	login, _ := t.Context["author"].(string)
-	return botReplyState{mode: pol.ReplyToBotsMode(), authorIsBot: isBot, login: login}
+	return botReplyState{mode: pol.ReplyToBotsMode(), authorIsBot: t.AuthorAutomated(), login: t.AuthorLogin()}
 }
 
 // Run executes one fired trigger. triggerIndex is the spec's position in
@@ -386,6 +387,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	// The caller's context ends only when the daemon shuts down; remember it,
 	// so an interruption is told apart from a run that failed (shutdown.go).
 	ctx = withShutdownSignal(ctx, ctx)
+	ctx = withRunInstances(ctx)
 	ctx = withIdentityScope(ctx, config.ScopeForTrigger(spec, triggerIndex))
 	ctx = context.WithValue(ctx, policyKey{}, r.resolvePolicy(spec))
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
@@ -426,14 +428,14 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	// its start hooks.
 	var facts runFacts
 	if len(spec.Hooks) > 0 {
-		facts.startSHA, facts.state = r.readHead(ctx, t)
+		facts.startSHA, facts.state, facts.stopWords = r.readHead(ctx, t)
 		facts.headSHA = facts.startSHA
 	}
 	endFacts := func(phase, reason string) runFacts {
 		f := facts
-		f.headSHA, f.state, f.reason = "", "", reason
+		f.headSHA, f.state, f.stopWords, f.reason = "", "", "", reason
 		if hasPhase(spec.Hooks, phase) {
-			f.headSHA, f.state = r.readHead(ctx, t)
+			f.headSHA, f.state, f.stopWords = r.readHead(ctx, t)
 		}
 		return f
 	}
@@ -447,8 +449,43 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 			panic(rec)
 		}
 	}()
-	if hasPhase(spec.Hooks, "start") {
-		r.fireHooks(ctx, t, spec.Hooks, "start", "running", run.ID, "", withRun(data, facts), nil, "workflow")
+	// Start-phase hooks fire AT MOST once per run — the first time Run
+	// reaches this point for it, never again on a later resume/retry-
+	// continuation of the SAME attempt (finding 4a/6): a workflow-level
+	// `ack`-style option hook posted at `start` must not double-post after a
+	// daemon restart resumes a run that had already passed this point, or a
+	// retry continues one from a later step. A deliberate retry-from-the-top
+	// (engine.retryRun with startIdx 0) is a fresh attempt, not a
+	// continuation: it persists a new record with StartHooksFired false, so
+	// it fires again there, same as a brand new run.
+	//
+	// run.StartHooksFired is set and PERSISTED BEFORE firing — not after, as
+	// this once was. Firing first and persisting after (with the persist
+	// error silently discarded) could double-fire: a crash between the fire
+	// and the persist landing left StartHooksFired still false on disk, so
+	// the next resume reached this point again and fired a SECOND time —
+	// the exact thing this guard exists to prevent, despite this comment, in
+	// the old wording, claiming the guarantee outright. Persisting first
+	// instead means the failure mode flips to at-most-once, never
+	// exactly-once: if PutRun itself fails, firing is skipped for this pass
+	// rather than risking a double-post with nothing durable backing it —
+	// logged, and left for a later resume (which sees StartHooksFired still
+	// false and tries the persist-then-fire sequence again) rather than
+	// firing on a wing and a prayer.
+	if !run.StartHooksFired {
+		run.StartHooksFired = true
+		persisted := run.ID == "" // nothing to persist against (no run identity) is not a failure
+		if run.ID != "" {
+			if err := r.Store.PutRun(run); err != nil {
+				run.StartHooksFired = false // keep in-memory state honest: NOT durably recorded
+				r.Log("%s workflow: could not persist StartHooksFired before firing start hooks (%v) — skipping start hooks this pass; a later resume retries", flowTag(t), err)
+			} else {
+				persisted = true
+			}
+		}
+		if persisted && hasPhase(spec.Hooks, "start") {
+			r.fireHooks(ctx, t, spec.Hooks, "start", "running", run.ID, "", withRun(data, facts), nil, "workflow")
+		}
 	}
 
 	err := r.runSteps(ctx, &run, t, spec.Steps, data, shadow, true)
@@ -474,7 +511,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 		r.Log("%s workflow stopped — the PR closed while step %s was running", flowTag(t), failedStepID(err))
 		if hasPhase(spec.Hooks, "stop") {
 			f := endFacts("stop", "")
-			f.reason = stopReason(f.state)
+			f.reason = stopReason(f.stopWords)
 			r.fireHooks(ctx, t, spec.Hooks, "stop", "stopped", run.ID, "", withRun(data, f), nil, "workflow")
 		}
 		r.audit(map[string]any{"event": "workflow_stopped", "repo": t.Target.Repo,
@@ -725,6 +762,16 @@ func (r *Runner) scrubOutputs(step config.Step, outputs map[string]any) map[stri
 // re-resolve marker re-runs the step's verb (a vault read) against the
 // restored scope; anything else restores as persisted.
 func (r *Runner) restoreOutputs(ctx context.Context, t core.Trigger, steps []config.Step, id string, out map[string]any, data map[string]any) map[string]any {
+	// A restored verb step was run by this run before the restart: its
+	// connector's staged files stay reachable to the steps after it.
+	for i, s := range steps {
+		if stepID(s, i) == id && s.Uses != "" {
+			connName, _, _ := strings.Cut(s.Uses, ".")
+			if in, ok := r.Conns.Get(connName); ok {
+				recordRunStaging(ctx, in)
+			}
+		}
+	}
 	if out == nil || out[reresolveMarker] != true {
 		return anyMap(out)
 	}
@@ -958,7 +1005,7 @@ func (r *Runner) execWithRetry(ctx context.Context, t core.Trigger, step config.
 	var err error
 	for attempt := 0; ; attempt++ {
 		out, raw, err = r.execStep(ctx, t, step, id, slot, data, shadow)
-		if err == nil || attempt >= max || ctx.Err() != nil || errors.Is(err, dispatch.ErrTargetClosed) {
+		if err == nil || attempt >= max || ctx.Err() != nil || errors.Is(err, dispatch.ErrTargetClosed) || noStepRetry(err) {
 			break
 		}
 		r.Log("%s step %s attempt %d failed: %v — retrying in %s", flowTag(t), id, attempt+1, err, backoff)
@@ -1036,19 +1083,35 @@ func (r *Runner) execStep(ctx context.Context, t core.Trigger, step config.Step,
 
 // execVerb invokes uses: <connector>.<verb> with rendered, merged options.
 // skipBotReply reports whether a verb call is a conversational reply back to
-// the bot that authored the triggering event, under reply_to_bots=off: a
-// comment/reply verb on a github connector. The substantive work (fixes,
+// the automated author of the triggering event, under reply_to_bots=off: a
+// verb its connector declares conversation_post. The substantive work (fixes,
 // labels, thread resolution) is never gated here.
-func (r *Runner) skipBotReply(ctx context.Context, in *connector.Instance, verb string) (string, bool) {
+func (r *Runner) skipBotReply(ctx context.Context, in *connector.Instance, verb string, t core.Trigger, opts map[string]any) (string, bool) {
 	st, ok := botReply(ctx)
-	if !ok || !st.authorIsBot || st.mode != config.ReplyToBotsOff {
+	if !ok || !st.authorIsBot || st.mode != config.ReplyToBotsOff || in.Decl == nil {
 		return "", false
 	}
-	if in.Decl == nil || in.Decl.Type != "github" {
+	v, ok := in.Decl.Verb(verb)
+	if !ok || v.Semantics == nil || !v.Semantics.ConversationPost {
 		return "", false
 	}
-	if verb != "comment" && verb != "reply" {
+	// A reply goes back into the bot's conversation: on the platform the
+	// event came from (the connector TYPE — any instance of it, so a second
+	// instance pointed at the same place is no way around this), to the
+	// event's own destination. A post on another platform (an ops alert in
+	// chat about a bot's PR comment), or to a destination it names that
+	// differs from the event's own, is not one.
+	if in.Decl.Type != t.Source {
 		return "", false
+	}
+	for _, so := range v.ScopedOptions() {
+		val, named := opts[so.Name]
+		if !named || val == nil || fmt.Sprint(val) == "" {
+			continue
+		}
+		if own := in.ContextScope(so.Dim, t); own != "" && own != fmt.Sprint(val) {
+			return "", false
+		}
 	}
 	return st.login, true
 }
@@ -1059,15 +1122,18 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 	if !ok {
 		return nil, fmt.Errorf("unknown connector %q", connName)
 	}
-	if login, skip := r.skipBotReply(ctx, in, verb); skip {
-		r.Log("%s reply_to_bots=off: skipped %s.%s to bot %s", flowTag(t), connName, verb, login)
-		r.auditVerb(t, connName, verb, nil, "skipped_reply_to_bots", nil)
-		return map[string]any{"skipped": true}, nil
-	}
+	// This run used the instance: a file it staged may be handed to a
+	// launch later in the run (renderLaunchFields).
+	recordRunStaging(ctx, in)
 	merged := connector.MergeOptions(in.DefaultOptions, step.Options)
 	rendered, err := renderOptions(merged, data)
 	if err != nil {
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
+	}
+	if login, skip := r.skipBotReply(ctx, in, verb, t, rendered); skip {
+		r.Log("%s reply_to_bots=off: skipped %s.%s to bot %s", flowTag(t), connName, verb, login)
+		r.auditVerb(t, connName, verb, nil, "skipped_reply_to_bots", nil)
+		return map[string]any{"skipped": true}, nil
 	}
 	// The run history records the step's RENDERED inputs (#36 §20) — the
 	// handle-form options, scrubbed of tracked secret values like the audit.
@@ -1143,15 +1209,27 @@ func (r *Runner) execVerb(ctx context.Context, t core.Trigger, step config.Step,
 	// Verb-level binary IO (#36 §21): declared binary-in options resolve
 	// from blob handles to local paths; declared binary-out outputs come
 	// back as bytes and leave as run-scoped handles.
-	decl, _ := in.Decl.Verb(verb)
+	decl, ok := in.Decl.Verb(verb)
+	if ok && decl.HostOnly() {
+		err := fmt.Errorf("verb %s.%s is host-only — the engine uses it through a declared semantic; a flow may not call it", connName, verb)
+		r.auditVerb(t, connName, verb, rendered, "refused", err)
+		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
+	}
 	if final, err = r.stageBlobInputs(ctx, decl, final); err != nil {
 		r.auditVerb(t, connName, verb, rendered, "failed", err)
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
 	}
 	start := time.Now()
-	out, err := in.InvokeFinal(ctx, verb, final)
+	// rate_limited/not_ready (§1.11) are retried here, inside the one call,
+	// independently of the step's own retry: policy; target_gone/invalid/
+	// upstream come back untouched for the checks below and execWithRetry's
+	// loop to act on.
+	out, err := connector.RetryContract(ctx, func() (map[string]any, error) {
+		return in.InvokeFinal(ctx, verb, final)
+	})
 	took := time.Since(start).Round(time.Millisecond)
 	if err != nil {
+		err = stopAsTargetGone(err, t.DeclaredKey())
 		r.auditVerb(t, connName, verb, rendered, "failed", err)
 		return nil, fmt.Errorf("uses %s: %w", step.Uses, err)
 	}
@@ -1493,6 +1571,181 @@ func (r *Runner) runtimeOf(step config.Step) string {
 	return config.BuiltinPaseoRuntime
 }
 
+// execDetached dispatches a `detach: true` agent step: launch once, forget
+// it. It calls the SAME Agents.Dispatch seam every other agent step uses
+// (dispatch.Dispatcher routes it to paseoDetached because req.Step.Detach is
+// set), but skips every bit of bookkeeping that assumes conductor keeps a
+// relationship with the agent afterward: no budget reservation, no memory
+// harvest, no gate, no ArchiveWhenDone, no hand-off. The agents/hour rate cap
+// still applies — it is flood protection, not a relationship. act.Prompt here
+// is the bare templated prompt — execAgent returns before the
+// guidance/memory/wrapper block for a detach step, so nothing is appended to
+// it.
+func (r *Runner) execDetached(ctx context.Context, t core.Trigger, step config.Step, act config.Action, id, identity, model, provider string, data map[string]any, shadow bool) (map[string]any, string, error) {
+	if !shadow && r.Agents.CheckRate != nil {
+		if err := r.Agents.CheckRate(); err != nil {
+			r.auditDispatchDeferred(t, id, "rate", err)
+			return nil, "", err
+		}
+	}
+	req := dispatch.Request{
+		Trigger: t, Action: act, Step: step, Identity: identity,
+		Model: model, Provider: provider, Shadow: shadow, Wait: true, Data: data,
+		DispatchID: r.dispatchID(ctx, id),
+	}
+	ref, err := r.Agents.Dispatch(ctx, req)
+	r.auditDispatch(t, id, ref, err)
+	if err != nil {
+		return nil, ref.Output, err
+	}
+	outputs := map[string]any{
+		"agent_id":     ref.AgentID,
+		"workspace_id": ref.WorkspaceID,
+		"branch":       ref.Branch,
+		"path":         ref.Workdir,
+		"detached":     true,
+	}
+	return outputs, ref.Output, nil
+}
+
+// renderLaunchFields resolves an agent step's launch-shaping fields —
+// repo:, branch:, mode:, images: — ONCE, here, with the flow template
+// engine, so dispatch receives literal values. Dispatch must not render them
+// again: a rendered value can carry event-supplied text (a form field, a
+// file name), and a second render would evaluate any {{…}} inside it.
+// images: items that are a sole field reference to a list (a prior step's
+// `images` output) are flattened in place.
+func renderLaunchFields(ctx context.Context, step *config.Step, data map[string]any) error {
+	for _, f := range []struct {
+		name string
+		v    *string
+	}{{"repo", &step.Repo}, {"branch", &step.Branch}, {"mode", &step.Mode}} {
+		if !strings.Contains(*f.v, "{{") {
+			continue
+		}
+		out, err := render(*f.v, data)
+		if err != nil {
+			return fmt.Errorf("%s: %w", f.name, err)
+		}
+		*f.v = strings.TrimSpace(out)
+	}
+	if len(step.Images) == 0 {
+		return nil
+	}
+	var images []string
+	add := func(item, path string) error {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return nil
+		}
+		if strings.Contains(item, "{{") {
+			// A templated path came from a step's output or the event: only a
+			// file a connector staged (plugin-contract.md Q7) is accepted, so
+			// event text cannot attach an arbitrary file from this machine.
+			if err := stagedFile(ctx, path); err != nil {
+				return fmt.Errorf("images: %w", err)
+			}
+		}
+		images = append(images, path)
+		return nil
+	}
+	for _, item := range step.Images {
+		if path, ok := soleFieldRef(item); ok {
+			if v, found := lookupPath(data, path); found {
+				if _, isStr := v.(string); !isStr {
+					vals, err := resolveList(item, data)
+					if err != nil {
+						return fmt.Errorf("images: %w", err)
+					}
+					for _, v := range vals {
+						if s, ok := v.(string); ok {
+							if err := add(item, s); err != nil {
+								return err
+							}
+						}
+					}
+					continue
+				}
+			}
+		}
+		out, err := render(item, data)
+		if err != nil {
+			return fmt.Errorf("images: %w", err)
+		}
+		if err := add(item, out); err != nil {
+			return err
+		}
+	}
+	step.Images = images
+	return nil
+}
+
+// stagedFile reports whether path is a file in the staging directory of a
+// connector instance THIS run invoked — the exact directory that instance's
+// connector reports for it now — symlinks resolved on both sides. Another
+// instance's files, or a stale directory from an instance's former plugin,
+// are out of reach however the path is spelled.
+func stagedFile(ctx context.Context, path string) error {
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("%q is not a file a connector staged: %v", path, err)
+	}
+	for _, dir := range runStagingDirs(ctx) {
+		if d, err := filepath.EvalSymlinks(dir); err == nil && strings.HasPrefix(real, d+string(filepath.Separator)) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%q is not a file a connector this run invoked staged", path)
+}
+
+type runInstancesKey struct{}
+
+// runInstances is the set of staging directories of the connector instances
+// a run invoked.
+type runInstances struct {
+	mu   sync.Mutex
+	dirs map[string]bool
+}
+
+func withRunInstances(ctx context.Context) context.Context {
+	return context.WithValue(ctx, runInstancesKey{}, &runInstances{dirs: map[string]bool{}})
+}
+
+// stagingDirer is a connector that gives its instance a staging directory.
+type stagingDirer interface {
+	StagingDir() (string, error)
+}
+
+func recordRunStaging(ctx context.Context, in *connector.Instance) {
+	ri, ok := ctx.Value(runInstancesKey{}).(*runInstances)
+	if !ok || in == nil {
+		return
+	}
+	sd, ok := in.Impl.(stagingDirer)
+	if !ok {
+		return
+	}
+	if dir, err := sd.StagingDir(); err == nil && dir != "" {
+		ri.mu.Lock()
+		ri.dirs[dir] = true
+		ri.mu.Unlock()
+	}
+}
+
+func runStagingDirs(ctx context.Context) []string {
+	ri, ok := ctx.Value(runInstancesKey{}).(*runInstances)
+	if !ok {
+		return nil
+	}
+	ri.mu.Lock()
+	defer ri.mu.Unlock()
+	out := make([]string, 0, len(ri.dirs))
+	for d := range ri.dirs {
+		out = append(out, d)
+	}
+	return out
+}
+
 // execAgent dispatches a type: agent step through the engine-provided
 // services (runtime resolution, tokens, guidance, background hand-off).
 func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step, id, slot string, data map[string]any, shadow bool) (map[string]any, string, error) {
@@ -1538,12 +1791,35 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 			return outputs, "", nil
 		}
 	}
+	if err := renderLaunchFields(ctx, &step, data); err != nil {
+		return nil, "", err
+	}
+	// A step's own `checkout:` always wins; absent one, fall back to the
+	// TRIGGER's action checkout. This is what makes a source's
+	// ForceNoCheckout (every synthetic-target integration forces its
+	// trigger-level action to Checkout: "none" — there is no real repo to
+	// clone for e.g. "chat:C123") actually reach dispatch: without this
+	// fallback, a trigger-level ForceNoCheckout had no effect on an agent
+	// step at all, because this Action is built fresh from the STEP, never
+	// reading t.Action.Checkout — so an agent step with no explicit
+	// `checkout:` under a chat/RSS/webhook trigger silently defaulted to
+	// branch-off against the synthetic target instead of staying checkout-less.
+	//
+	// A step `repo:` names a real checkout of its own, so the trigger's
+	// forced "none" (which only says the TRIGGER's target is not clonable)
+	// does not apply to it; dispatch defaults such a step to branch-off.
+	checkout := step.Checkout
+	if checkout == "" && step.Repo == "" {
+		if ta, ok := t.Action.(config.Action); ok {
+			checkout = ta.Checkout
+		}
+	}
 	act := config.Action{
 		// Agent is the human ATTRIBUTION LABEL the operator wrote (it selects
 		// nothing — design §6). The stable key everything else uses travels
 		// as Request.Identity.
 		Type: "agent", ID: id, Agent: step.Agent,
-		Prompt: step.Prompt, Checkout: step.Checkout, WorkDir: step.WorkDir,
+		Prompt: step.Prompt, Checkout: checkout, WorkDir: step.WorkDir,
 		Env: step.Env, OutputSchema: step.OutputSchema, Background: step.Background,
 		Backend: step.Backend,
 	}
@@ -1563,11 +1839,34 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		// reaper must never archive it — regardless of what the step says.
 		step.ArchiveWhenDone = false
 	}
+	// detach: true is a complete, self-contained launch (config.validateDetach
+	// already rejected it alongside background/handoff/output_schema/watch/
+	// idle_timeout/archive_when_done/session/skill/team/gate at config load,
+	// and agentauthored_fields.go refuses it on an agent-authored step) — it
+	// runs the prompt EXACTLY as templated, with none of the guidance/memory/
+	// budget/background machinery below, and returns before any of it runs.
+	if step.Detach {
+		if agentAuthored(ctx) {
+			// Plan admission already refuses detach: on an agent-authored
+			// step; this catches one merged in afterwards (a team role
+			// reference) before it can launch anything.
+			return nil, "", fmt.Errorf("detach: refused on an agent-authored step")
+		}
+		return r.execDetached(ctx, t, step, act, id, identity, model, provider, data, shadow)
+	}
 	// A decide step's session is the adapter prompt and nothing else: no
 	// write-wrapper, guidance, memory, or done instructions (its reply is the
 	// schema'd JSON, delivered the output_schema way).
+	var creds dispatch.Credentials
+	if r.Agents.Credentials != nil {
+		c, err := r.Agents.Credentials(ctx, t)
+		if err != nil {
+			return nil, "", err
+		}
+		creds = c
+	}
 	if act.Prompt != "" && step.DecisionLaunch == nil {
-		act.Prompt += dispatch.WriteWrapperGuidance
+		act.Prompt += creds.Guidance
 		if r.Agents.Guidance != nil {
 			act.Prompt += r.Agents.Guidance(identity, step, policyFrom(ctx))
 		}
@@ -1589,10 +1888,6 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 			// directive instead — never both (see DoneGuidance).
 			act.Prompt += dispatch.DoneGuidance
 		}
-	}
-	var tokens dispatch.Tokens
-	if r.Agents.Tokens != nil {
-		tokens = r.Agents.Tokens(t)
 	}
 	// Spend budget (#36 §14): an over-cap dispatch sheds — the step fails
 	// with the budget error (the workflow's fail path notifies, and the
@@ -1629,7 +1924,7 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		sanitizeAgentAuthoredStep(&step)
 	}
 	req := dispatch.Request{
-		Trigger: t, Action: act, Step: step, Identity: identity, Model: model, Provider: provider, Tokens: tokens,
+		Trigger: t, Action: act, Step: step, Identity: identity, Model: model, Provider: provider, Credentials: creds,
 		Shadow: shadow, Wait: !step.Background, Interactive: step.Background, Data: data,
 		AgentAuthored: authored,
 		// The daemon's own id for THIS dispatch — what a live tool's
@@ -1815,12 +2110,16 @@ func (r *Runner) execCommand(ctx context.Context, t core.Trigger, step config.St
 		Type: "command", ID: id, Command: step.Command,
 		WorkDir: step.WorkDir, Env: step.Env, Backend: step.Backend,
 	}
-	var tokens dispatch.Tokens
-	if r.Agents.Tokens != nil {
-		tokens = r.Agents.Tokens(t)
+	var creds dispatch.Credentials
+	if r.Agents.Credentials != nil {
+		c, err := r.Agents.Credentials(ctx, t)
+		if err != nil {
+			return nil, "", err
+		}
+		creds = c
 	}
 	req := dispatch.Request{
-		Trigger: t, Action: act, Tokens: tokens,
+		Trigger: t, Action: act, Credentials: creds,
 		Shadow: shadow, Wait: true, Data: data,
 	}
 	ref, err := r.Agents.Dispatch(ctx, req)
@@ -1914,7 +2213,7 @@ func extractOutputs(out string) map[string]any {
 
 // runHooks fires the hooks of one phase, in order, best-effort: a failing
 // hook is logged and audited but never fails the workflow (matching the
-// legacy slack-feedback semantics).
+// legacy chat-feedback semantics).
 // hookData layers the uniform `hook` lifecycle contract (docs/wiki/Workflows.md) onto a
 // COPY of the run scope for a hook phase, leaving the shared scope untouched. EVERY phase
 // gets `hook.{phase,status,run_id,step}`; the `fail` phase adds `hook.failure`. The flat
@@ -1985,6 +2284,17 @@ func (r *Runner) fireHooks(ctx context.Context, t core.Trigger, hooks []config.H
 	r.runHooks(ctx, t, hooks, phase, hookData(base, phase, status, runID, stepID, failure), where)
 }
 
+// runHooks fires every hook at phase. Hooks are best-effort (log and move
+// on; they never fail the run, which has already decided its own fate by
+// the time a hook fires): a plugin contract error (§1.11) gets the SAME
+// bounded, self-correcting retry as a verb step's own invoke (rate_limited/
+// not_ready via connector.RetryContract), because those are worth a short
+// wait regardless of context. target_gone and invalid get no special
+// treatment beyond that: a hook has no retry: policy to suppress, and by
+// construction (start/done/fail/stop phases) the run's own stop-vs-fail
+// decision was already made before the hook ran — a hook that fails here
+// because its own target is gone, or its request can never succeed, is
+// logged like any other best-effort hook failure, not escalated.
 func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Hook, phase string, data map[string]any, where string) {
 	for i, h := range hooks {
 		if h.At != phase {
@@ -2006,16 +2316,16 @@ func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Ho
 			r.Log("%s %s hook[%d]: unknown connector %q", flowTag(t), where, i, connName)
 			continue
 		}
-		if login, skip := r.skipBotReply(ctx, in, verb); skip {
-			r.Log("%s reply_to_bots=off: skipped %s.%s to bot %s", flowTag(t), connName, verb, login)
-			r.auditVerb(t, connName, verb, nil, "skipped_reply_to_bots", nil)
-			continue
-		}
 		merged := connector.MergeOptions(in.DefaultOptions, h.Options)
 		rendered, err := renderOptions(merged, data)
 		if err != nil {
 			r.Log("%s %s hook[%d] render: %v", flowTag(t), where, i, err)
 			r.auditVerb(t, connName, verb, nil, "hook_render_failed", err)
+			continue
+		}
+		if login, skip := r.skipBotReply(ctx, in, verb, t, rendered); skip {
+			r.Log("%s reply_to_bots=off: skipped %s.%s to bot %s", flowTag(t), connName, verb, login)
+			r.auditVerb(t, connName, verb, nil, "skipped_reply_to_bots", nil)
 			continue
 		}
 		if connName == "workflow" {
@@ -2070,7 +2380,9 @@ func (r *Runner) runHooks(ctx context.Context, t core.Trigger, hooks []config.Ho
 			}
 			final = rv.(map[string]any)
 		}
-		if _, err := in.InvokeFinal(hctx, verb, final); err != nil {
+		if _, err := connector.RetryContract(hctx, func() (map[string]any, error) {
+			return in.InvokeFinal(hctx, verb, final)
+		}); err != nil {
 			r.Log("%s %s hook %s.%s failed (best-effort): %v", flowTag(t), where, connName, verb, err)
 			r.auditVerb(t, connName, verb, rendered, "hook_failed", err)
 			continue

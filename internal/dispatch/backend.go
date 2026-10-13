@@ -143,6 +143,10 @@ type CreateWorktreeOptions struct {
 	Forge     string
 	NewBranch string
 	BaseRef   string
+	// Fresh forbids adopting an existing workspace already on NewBranch: the
+	// create must produce a new worktree or fail. Set by detach launches,
+	// which must never land in a workspace someone else is using.
+	Fresh bool
 }
 
 // CreateWorktreeResult is the output of a successful CreateWorktree call.
