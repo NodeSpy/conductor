@@ -63,6 +63,13 @@ type Provisioner struct {
 	// MinAge / Interval tune the orphan reaper (0 → the Default* above).
 	MinAge   time.Duration
 	Interval time.Duration
+	// TranscriptsDir, when set, is where an agent CLI files per-cwd session
+	// state keyed on the working directory's path (Claude Code's
+	// ~/.claude/projects — see ClaudeProjectsDir). The reaper removes the
+	// entries left by worktrees that are gone, once TranscriptRetention (0 →
+	// DefaultTranscriptRetention) has passed. "" leaves them alone.
+	TranscriptsDir      string
+	TranscriptRetention time.Duration
 	// Now is the reaper's clock, injectable for tests. nil → time.Now.
 	Now func() time.Time
 
@@ -234,8 +241,11 @@ func (p *Provisioner) Run(ctx context.Context) {
 // Reap prunes stale worktree bookkeeping from every base clone and removes any
 // <state>/worktrees child that no live session claims and that has sat
 // untouched for MinAge. Deliberately conservative: a live worktree is skipped
-// whatever its age, and nothing outside <state>/worktrees is ever considered.
+// whatever its age, and nothing outside <state>/worktrees is ever considered —
+// apart from the agent transcripts recorded in those worktrees
+// (reapTranscripts), when TranscriptsDir is set.
 func (p *Provisioner) Reap(ctx context.Context) {
+	defer p.reapTranscripts()
 	if ents, err := os.ReadDir(p.CheckoutsDir()); err == nil {
 		for _, e := range ents {
 			if e.IsDir() {
