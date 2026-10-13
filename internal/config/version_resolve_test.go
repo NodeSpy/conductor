@@ -127,7 +127,7 @@ func TestBestMatchOrdersPrereleasesByIdentifier(t *testing.T) {
 	// alpha < beta (alphanumeric, ASCII order); alpha < alpha.1 (a longer
 	// identifier list outranks being a strict prefix of it, semver §11).
 	tags := []string{"v1.2.3-alpha", "v1.2.3-alpha.1", "v1.2.3-beta"}
-	got, ok := bestMatch(tags, "", "")
+	got, ok := bestMatch(tags, "", anyIncludingPrerelease)
 	if !ok || got != "v1.2.3-beta" {
 		t.Fatalf("got %q ok=%v, want v1.2.3-beta (highest pre-release by identifier precedence)", got, ok)
 	}
@@ -138,7 +138,7 @@ func TestBestMatchOrdersPrereleasesByIdentifier(t *testing.T) {
 	if rev[0] != tags[2] || rev[2] != tags[0] {
 		t.Fatal("test setup: rev must be tags reversed")
 	}
-	if got, ok := bestMatch(rev, "", ""); !ok || got != "v1.2.3-beta" {
+	if got, ok := bestMatch(rev, "", anyIncludingPrerelease); !ok || got != "v1.2.3-beta" {
 		t.Fatalf("reversed order: got %q ok=%v, want v1.2.3-beta", got, ok)
 	}
 }
@@ -147,7 +147,8 @@ func TestBestMatchOrdersPrereleasesByIdentifier(t *testing.T) {
 // requirement: Get/AllVersions (config.CompareVersions-sorted) and
 // BestMatch must agree on which tag is "highest" — the whole point of
 // defining one shared comparator. AllVersions-ascending's LAST element
-// must always equal bestMatch's unconstrained pick over the identical set.
+// must always equal bestMatch's pick over the identical set, once that pick
+// admits pre-releases (anyIncludingPrerelease).
 func TestGetAllVersionsConsistentWithBestMatch(t *testing.T) {
 	sets := [][]string{
 		{"v1.0.0", "v1.2.3-alpha", "v1.2.3"},
@@ -160,12 +161,42 @@ func TestGetAllVersionsConsistentWithBestMatch(t *testing.T) {
 		sort.Slice(sorted, func(i, j int) bool { return CompareVersions(sorted[i], sorted[j]) < 0 })
 		highestBySort := sorted[len(sorted)-1]
 
-		highestByMatch, ok := bestMatch(tags, "", "")
+		highestByMatch, ok := bestMatch(tags, "", anyIncludingPrerelease)
 		if !ok {
 			t.Fatalf("%v: expected a match", tags)
 		}
 		if highestByMatch != highestBySort {
 			t.Fatalf("%v: CompareVersions-sort picks %q as highest, bestMatch picks %q — must agree", tags, highestBySort, highestByMatch)
 		}
+	}
+}
+
+// anyIncludingPrerelease is a constraint that admits every version,
+// pre-releases included (it names one, which is what opts them in).
+const anyIncludingPrerelease = ">=0.0.0-0"
+
+// A pre-release is selected only by a constraint that names one. An
+// unpinned or ranged reference, and the daemon's self-update, never move
+// onto a release candidate published ahead of the stable release.
+func TestBestMatchSkipsPrereleasesUnlessNamed(t *testing.T) {
+	tags := []string{"v0.61.0", "v0.62.0-rc.1", "v0.61.1-beta"}
+	for _, c := range []struct {
+		constraint, want string
+		ok               bool
+	}{
+		{"", "v0.61.0", true},
+		{">=0.61", "v0.61.0", true},
+		{"^0.61.0", "v0.61.0", true},
+		{"=0.62.0-rc.1", "v0.62.0-rc.1", true},
+		{"0.62.0-rc.1", "v0.62.0-rc.1", true},
+		{anyIncludingPrerelease, "v0.62.0-rc.1", true},
+	} {
+		got, ok := bestMatch(tags, "", c.constraint)
+		if ok != c.ok || got != c.want {
+			t.Fatalf("constraint %q: got %q ok=%v, want %q ok=%v", c.constraint, got, ok, c.want, c.ok)
+		}
+	}
+	if got, ok := bestMatch([]string{"v0.61.0-rc.1"}, "", ""); ok {
+		t.Fatalf("only a release candidate published: an unconstrained pick must find nothing, got %q", got)
 	}
 }

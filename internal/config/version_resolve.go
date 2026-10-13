@@ -179,7 +179,15 @@ func bestMatch(tags []string, prefix, constraint string) (string, bool) {
 			continue // a component-prefixed query ignores other components' tags
 		}
 		raw := strings.TrimPrefix(t, prefix)
-		if _, err := parseSemver(raw); err != nil {
+		sv, err := parseSemver(raw)
+		if err != nil {
+			continue
+		}
+		// A pre-release is opt-in: only a constraint that names one
+		// (an exact @1.2.3-rc.1 pin) selects it. An unpinned or ranged
+		// reference — and the daemon's own self-update — never moves onto
+		// a release candidate.
+		if sv.pre != "" && !namesPrerelease(constraint) {
 			continue
 		}
 		if !satisfiesConstraint(raw, constraint) {
@@ -190,4 +198,27 @@ func bestMatch(tags []string, prefix, constraint string) (string, bool) {
 		}
 	}
 	return bestTag, bestTag != ""
+}
+
+// namesPrerelease reports whether a constraint mentions a pre-release
+// version (a "-" inside one of its version operands), which is what opts a
+// resolution into pre-release tags.
+func namesPrerelease(constraint string) bool {
+	for _, f := range strings.FieldsFunc(constraint, func(r rune) bool { return r == ',' || r == ' ' }) {
+		v := strings.TrimLeft(f, "=<>~^!")
+		if i := strings.Index(v, "+"); i >= 0 {
+			v = v[:i]
+		}
+		if strings.Contains(v, "-") {
+			return true
+		}
+	}
+	return false
+}
+
+// IsVersionTag reports whether s parses as a semver release tag ("v1.2.3",
+// "1.2", "v1.2.3-rc.1").
+func IsVersionTag(s string) bool {
+	_, err := parseSemver(s)
+	return err == nil
 }

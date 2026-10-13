@@ -464,9 +464,18 @@ func handleNewerRelease(ctx context.Context, u config.Update, tag, announced str
 }
 
 // newerRelease reports whether a check result warrants an install: something
-// changed (a 200, not a 304) and the latest tag differs from the running version.
+// changed and the latest tag is strictly NEWER than the running version. A box
+// never moves to an older tag (a release candidate running ahead of the newest
+// stable release stays put until a newer stable one lands). A running version
+// that isn't a release tag (a dev build) takes any published release.
 func newerRelease(tag string, changed bool, running string) bool {
-	return changed && tag != "" && tag != running
+	if !changed || tag == "" || tag == running {
+		return false
+	}
+	if !config.IsVersionTag(running) || !config.IsVersionTag(tag) {
+		return true
+	}
+	return config.CompareVersions(tag, running) > 0
 }
 
 // releaseChecker polls the release refs, remembering the last tag it saw so

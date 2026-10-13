@@ -129,6 +129,10 @@ func TestNewerRelease(t *testing.T) {
 		{"changed but same tag", "v0.5.23", true, "v0.5.23", false},
 		{"changed and newer", "v0.5.24", true, "v0.5.23", true},
 		{"changed but empty tag", "", true, "v0.5.23", false},
+		{"never an older tag", "v0.60.0", true, "v0.61.0", false},
+		{"a release candidate stays ahead of an older stable", "v0.60.0", true, "v0.61.0-rc.1", false},
+		{"a release candidate moves to its release", "v0.61.0", true, "v0.61.0-rc.1", true},
+		{"a dev build takes a published release", "v0.61.0", true, "dev", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
