@@ -142,10 +142,14 @@ tracks, using the same resolver packs use.
 A builtin has no version to pin, and a local binary is whatever is on disk —
 both **refuse** an `@version` rather than ignoring it.
 
+**Pre-releases are opt-in.** A pre-release tag (`v1.2.3-rc.1`) is selected
+only by a reference that names one, e.g. `use: github@1.2.3-rc.1`. An
+unpinned or ranged reference never resolves to a pre-release, and neither
+does the daemon's own self-update. A box moves only to a strictly newer
+stable release, never to an older tag.
+
 **Ordering:** among tags of the identical `major.minor.patch`, a release
-always outranks a pre-release (`v1.2.3` beats `v1.2.3-alpha`) — an unpinned
-or ranged reference never silently tracks onto a pre-release once its real
-release ships. Two pre-releases of the same core are ordered by semver
+always outranks a pre-release (`v1.2.3` beats `v1.2.3-alpha`). Two pre-releases of the same core are ordered by semver
 precedence (`v1.2.3-alpha` < `v1.2.3-beta`); beyond that — a genuine tie, or
 a tag that doesn't parse as semver at all — the comparison falls back to a
 plain byte-wise compare of the full tag text: deterministic, but not a claim
