@@ -516,3 +516,12 @@ func TestHostPathsLayersNarrowByContainment(t *testing.T) {
 		t.Fatalf("narrowed to nothing shows nothing: %v full=%v", paths, full)
 	}
 }
+
+// Containment works whichever layer is the narrower one.
+func TestIntersectPathsEitherOrder(t *testing.T) {
+	for _, layers := range [][][]string{{{".aws"}, {".aws/orgA"}}, {{".aws/orgA"}, {".aws"}}} {
+		if got := intersectPaths(layers); len(got) != 1 || got[0] != ".aws/orgA" {
+			t.Errorf("%v → %v, want [.aws/orgA]", layers, got)
+		}
+	}
+}

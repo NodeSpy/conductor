@@ -225,3 +225,16 @@ func TestVopPinnedAndReadOnlyByDefault(t *testing.T) {
 		t.Fatalf("a write the operator names runs: %s", d.Reason)
 	}
 }
+
+// Only aws, terraform and kubectl run under vop, by that rule itself — not
+// just because a later check (the read-only default) would also refuse a
+// shell or an interpreter.
+func TestVopInnerToolSetIsItsOwnRule(t *testing.T) {
+	orgA := Rule{Tool: "vop", Profiled: true, Allow: [][]string{{"exec orgA *"}}, OperatorAllow: []string{"exec orgA *"}}
+	for _, inner := range [][]string{{"bash", "-c", "true"}, {"env"}, {"python3", "-c", "1"}, {"vop", "ls"}} {
+		d := decideVop(orgA, nil, append([]string{"exec", "orgA", "--"}, inner...)...)
+		if d.Allow || !strings.Contains(d.Reason, "may only run aws, terraform, or kubectl") {
+			t.Errorf("%v: refused by the inner-tool rule, got allow=%v %q", inner, d.Allow, d.Reason)
+		}
+	}
+}
