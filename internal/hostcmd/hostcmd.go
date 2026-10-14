@@ -128,7 +128,13 @@ type Rule struct {
 	Deny          []string
 	Env           map[string]string
 	Persist       []string
-	Network       *config.IsolationNetwork
+	// Paths, when set, NARROWS the binary's home view to exactly these
+	// home-relative entries (see HomeView) — the global/runtime layers'
+	// isolation.host.<tool>.paths, intersected when more than one sets it.
+	// Empty = no narrowing (the profile's own view, or the whole home for
+	// an unprofiled tool).
+	Paths   []string
+	Network *config.IsolationNetwork
 	// Profiled reports a built-in profile (parsed matching) vs argv matching.
 	Profiled bool
 }
@@ -484,6 +490,7 @@ func forbiddenPath(abs string, ctx Context) string {
 // cannot set env/persist (validate refuses those).
 func Resolve(tool string, layers []*config.IsolationConfig, step bool) Rule {
 	r := Rule{Tool: tool, Profiled: profileFor(tool) != nil}
+	var pathLayers [][]string
 	for i, l := range layers {
 		if l == nil || l.Host == nil {
 			continue
@@ -512,12 +519,51 @@ func Resolve(tool string, layers []*config.IsolationConfig, step bool) Rule {
 				r.Env[k] = v
 			}
 			r.Persist = append(r.Persist, h.Persist...)
+			if len(h.Paths) > 0 {
+				pathLayers = append(pathLayers, homeRelative(h.Paths))
+			}
 		}
 		if h.Network != nil {
 			r.Network = stricterNetwork(r.Network, h.Network)
 		}
 	}
+	r.Paths = intersectPaths(pathLayers)
 	return r
+}
+
+// homeRelative strips the "~/" every isolation.host.*.paths entry carries
+// (enforced by config validation).
+func homeRelative(paths []string) []string {
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		out[i] = strings.TrimPrefix(p, "~/")
+	}
+	return out
+}
+
+// intersectPaths folds the global and runtime layers' `paths:` into the
+// final narrowed set: a layer that does not set it does not narrow further;
+// two that do keep only what both name (narrow only, never wider than
+// either).
+func intersectPaths(layers [][]string) []string {
+	if len(layers) == 0 {
+		return nil
+	}
+	cur := layers[0]
+	for _, next := range layers[1:] {
+		want := map[string]bool{}
+		for _, p := range next {
+			want[p] = true
+		}
+		var keep []string
+		for _, p := range cur {
+			if want[p] {
+				keep = append(keep, p)
+			}
+		}
+		cur = keep
+	}
+	return cur
 }
 
 // netRank orders network modes by restrictiveness.

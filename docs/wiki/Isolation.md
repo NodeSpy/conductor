@@ -153,7 +153,7 @@ and granting a verb does not unlock the binary.
 | | **Binaries** — `gh`, `git`, `aws`, `kubectl`, `terraform`, `docker`, … | **Conductor verbs** — `conductor call <connector>.<verb>` |
 |---|---|---|
 | what it is | the real tool, run on your machine through conductor with *your* setup (your gh login, your git identity) | something conductor itself does, with the connector's own credentials |
-| governed by | the binary's profile + `isolation.host.<bin>` (`allow`/`deny`/`env`/`persist`/`network`) | the verb grant (`skill.verbs`) + the connector's declared scopes |
+| governed by | the binary's profile + `isolation.host.<bin>` (`allow`/`deny`/`env`/`persist`/`paths`/`network`) | the verb grant (`skill.verbs`) + the connector's declared scopes |
 | target binding | the **gh profile**: writes on the dispatch's own PR/issue; the **git profile**: pushes to the dispatch's own branch | the **github plugin's** declared scope dimensions: `repo`, `number` (the PR/issue), `branch` — the dispatch's own values are in context |
 | opening a PR | refused, unless `isolation.host.gh.allow` names `pr create` | refused, unless the grant lists the verb |
 | review steps | gh and git write nothing | whatever the step's `skill:` lists (by default, no write verbs) |

@@ -41,6 +41,15 @@ type HostCommand struct {
 	// copy-on-write home (beyond the built-in profile's own, e.g.
 	// ~/.aws/sso/cache). Runtime/global level only.
 	Persist []string `yaml:"persist,omitempty"`
+	// Paths NARROWS what of $HOME the binary's host-side process sees: a
+	// profiled tool (gh, aws, …) may only list paths inside its own built-in
+	// view (commonHome + the profile's own paths) — listing anything else is
+	// a config error, since paths can only narrow, never widen, what the
+	// binary already sees; an unprofiled tool sees the whole home by
+	// default, so its paths list becomes the home-relative set it may see
+	// instead. Runtime/global level only (like env/persist, a step cannot
+	// set it).
+	Paths []string `yaml:"paths,omitempty"`
 }
 
 // UnmarshalYAML accepts `false`/`true` as well as the mapping form.
@@ -93,6 +102,40 @@ type IntentRules struct {
 	DenyTools []string `yaml:"deny_tools,omitempty"`
 }
 
+// ValidateHostPaths reports whether tool's own built-in view (hostcmd's
+// profile registry) covers every one of paths (home-relative, "~/" already
+// stripped) — a profiled tool's `paths:` narrowing can only pick from what
+// its profile already sees. The hostcmd package sets this at init (config
+// cannot import it: hostcmd imports config for the isolation types); nil —
+// as in a binary that links no profile registry — skips the check (an
+// unprofiled tool has no view to narrow FROM, so any list is a valid
+// replacement for "the whole home").
+var ValidateHostPaths func(tool string, paths []string) error
+
+// stripHomePrefixes trims the "~/" every isolation.host.*.paths/persist entry
+// carries (enforced by validateAgentJail) down to the home-relative form
+// hostcmd and the jail work in.
+func stripHomePrefixes(paths []string) []string {
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		out[i] = strings.TrimPrefix(p, "~/")
+	}
+	return out
+}
+
+// pathWithinAny reports whether p (home-relative) is one of roots or sits
+// under one of them.
+func pathWithinAny(p string, roots []string) bool {
+	p = filepath.Clean(p)
+	for _, r := range roots {
+		r = filepath.Clean(r)
+		if p == r || strings.HasPrefix(p, r+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
 // hostCommandNameOK is the shape a host-command key must have: a bare binary
 // name, never a path.
 func hostCommandNameOK(name string) bool {
@@ -128,6 +171,9 @@ func validateAgentJail(where string, iso *IsolationConfig, step bool) error {
 		if step && len(h.Persist) > 0 {
 			return fmt.Errorf("config: %s: isolation.host.%s.persist: persist paths belong on the runtime (or top-level) isolation block — a step can only narrow host commands", where, name)
 		}
+		if step && len(h.Paths) > 0 {
+			return fmt.Errorf("config: %s: isolation.host.%s.paths: home-narrowing paths belong on the runtime (or top-level) isolation block — a step can only narrow host commands", where, name)
+		}
 		for _, r := range append(append([]string(nil), h.Allow...), h.Deny...) {
 			if strings.TrimSpace(r) == "" {
 				return fmt.Errorf("config: %s: isolation.host.%s: empty rule", where, name)
@@ -144,6 +190,27 @@ func validateAgentJail(where string, iso *IsolationConfig, step bool) error {
 			}
 			if strings.Contains(p, "..") {
 				return fmt.Errorf("config: %s: isolation.host.%s.persist: %q must not contain ..", where, name, p)
+			}
+		}
+		for _, p := range h.Paths {
+			if !strings.HasPrefix(p, "~/") {
+				return fmt.Errorf("config: %s: isolation.host.%s.paths: %q must be a path under ~/", where, name, p)
+			}
+			if strings.Contains(p, "..") {
+				return fmt.Errorf("config: %s: isolation.host.%s.paths: %q must not contain ..", where, name, p)
+			}
+		}
+		if len(h.Paths) > 0 {
+			narrow := stripHomePrefixes(h.Paths)
+			for _, p := range h.Persist {
+				if !pathWithinAny(strings.TrimPrefix(p, "~/"), narrow) {
+					return fmt.Errorf("config: %s: isolation.host.%s.persist: %q is outside the narrowed paths %v", where, name, p, h.Paths)
+				}
+			}
+			if ValidateHostPaths != nil {
+				if err := ValidateHostPaths(name, narrow); err != nil {
+					return fmt.Errorf("config: %s: isolation.host.%s.paths: %w", where, name, err)
+				}
 			}
 		}
 		if n := h.Network; n != nil {

@@ -85,6 +85,7 @@ isolation:
       allow: ["s3 ls *", "s3 cp * s3://build-artifacts/*"]   # an allow list ⇒ ONLY these
       persist: ["~/.aws/sso/cache"]          # (the built-in profile already persists this one)
       network: { egress: [s3.amazonaws.com, sts.amazonaws.com] }
+      paths: ["~/.aws/config"]               # narrows aws's own view further still (no ~/.aws/credentials)
     kubectl:
       deny: ["delete *", "rollout undo *"]
       env:  { KUBECONFIG: ~/.kube/staging }  # fix-up for when the machine's default isn't right for agents
@@ -101,6 +102,15 @@ isolation:
 - `env` are fix-ups for the host process, never where credentials go. Runtime
   (or top-level) blocks only.
 - `persist` are extra home paths whose writes survive. Runtime/top-level only.
+- `paths` **narrows** the home-relative entries the binary's host-side process
+  may see (copy-on-write). A profiled tool (`gh`, `aws`, …) may only list
+  paths inside its own built-in view (its own paths plus `~/.gitconfig` and
+  `~/.config/git`) — anything else is a config error, since this can only
+  narrow what the binary already sees, never widen it. A binary with no
+  profile sees the whole home by default; `paths` replaces that with exactly
+  the list. A `persist` path must lie inside the narrowed view (a built-in
+  profile's own persist default that falls outside it is just dropped).
+  Runtime/top-level only.
 - `network` runs that binary's host process behind the same enforced egress
   proxy as the jail (Linux: an empty network namespace; macOS: Seatbelt).
   Absent, host commands keep the host's network.
@@ -123,7 +133,7 @@ without a profile matches its raw argv.
 2. **The step's `isolation.host`** — may narrow (`aws: false`, a stricter
    `allow`, more `deny`s), never widen: its `allow` must match *in addition to*
    the runtime's, it cannot name a binary the layers above don't make a host
-   command, and it cannot set `env`/`persist`.
+   command, and it cannot set `env`/`persist`/`paths`.
 3. **The runtime's `isolation.host`**, then the top-level `isolation.host`.
 4. **Defaults** — installed built-ins are host commands; anything else is
    native.

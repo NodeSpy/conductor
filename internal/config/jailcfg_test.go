@@ -82,6 +82,14 @@ host:
 	if err := validateAgentJail("step s", &iso, true); err == nil || !strings.Contains(err.Error(), "only narrow") {
 		t.Fatalf("step-level env/persist must be refused: %v", err)
 	}
+	// paths: is operator-level only too — a step cannot narrow $HOME itself.
+	stepPaths := IsolationConfig{Host: map[string]*HostCommand{"gh": {Paths: []string{"~/.config/gh"}}}}
+	if err := validateAgentJail("step s", &stepPaths, true); err == nil || !strings.Contains(err.Error(), "only narrow") {
+		t.Fatalf("step-level paths must be refused: %v", err)
+	}
+	if err := validateAgentJail("runtime r", &stepPaths, false); err != nil {
+		t.Fatalf("runtime-level paths (within gh's own view) must validate: %v", err)
+	}
 	// Host rules are meaningless outside an agent launch.
 	if err := validateIsolationFor("engine e", &iso, false, false); err == nil || !strings.Contains(err.Error(), "silent no-op") {
 		t.Fatalf("host: on a non-agent block must be refused: %v", err)
@@ -98,6 +106,14 @@ func TestHostCommandValidation(t *testing.T) {
 		{"empty rule", IsolationConfig{Host: map[string]*HostCommand{"gh": {Deny: []string{" "}}}}, "empty rule"},
 		{"persist outside home", IsolationConfig{Host: map[string]*HostCommand{"aws": {Persist: []string{"/etc/x"}}}}, "under ~/"},
 		{"persist dotdot", IsolationConfig{Host: map[string]*HostCommand{"aws": {Persist: []string{"~/../x"}}}}, ".."},
+		{"paths outside home", IsolationConfig{Host: map[string]*HostCommand{"aws": {Paths: []string{"/etc/x"}}}}, "under ~/"},
+		{"paths dotdot", IsolationConfig{Host: map[string]*HostCommand{"aws": {Paths: []string{"~/../x"}}}}, ".."},
+		{"persist outside narrowed paths", IsolationConfig{Host: map[string]*HostCommand{"gh": {
+			Paths: []string{"~/.config/gh"}, Persist: []string{"~/.ssh/known_hosts"},
+		}}}, "outside the narrowed paths"},
+		{"paths outside the profile's own view", IsolationConfig{Host: map[string]*HostCommand{"gh": {
+			Paths: []string{"~/.ssh"},
+		}}}, "can only narrow"},
 		{"scalar net with egress", IsolationConfig{Network: &IsolationNetwork{Mode: NetAudit, Egress: []string{"x"}}}, "scalar mode"},
 		{"audit under user", IsolationConfig{Mode: "user", User: "u", Network: &IsolationNetwork{Mode: NetAudit}}, "needs mode namespace"},
 		{"neg intent", IsolationConfig{Intent: &IntentRules{MaxDeleteLines: -1}}, "max_delete_lines"},

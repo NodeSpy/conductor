@@ -223,7 +223,7 @@ func TestHostRunDarwinLiveTerraform(t *testing.T) {
 	defer revoke()
 	_, port, _ := strings.Cut(addr, ":")
 	m := &Manager{Root: filepath.Join(state, "jails")}
-	paths, persist, penv, _ := hostcmd.HomeView("terraform", nil)
+	paths, persist, penv, _ := hostcmd.HomeView("terraform", nil, nil)
 	env := append([]string{"PATH=/opt/homebrew/bin:/usr/bin:/bin"}, sandbox.ProxyEnv(addr, cred)...)
 	for k, v := range penv {
 		env = append(env, k+"="+v)

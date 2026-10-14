@@ -164,6 +164,7 @@ func newFixture(t *testing.T) *fixture {
 	gh := "#!/bin/sh\necho \"fake-gh args=$* repo=$GH_REPO\"\n" +
 		"test -e \"$HOME/.ssh/id_secret\" && echo \"gh-sees-ssh\"\n" +
 		"test -e \"$HOME/.config/gh/hosts.yml\" && echo \"gh-sees-login\"\n" +
+		"test -e \"$HOME/.gitconfig\" && echo \"gh-sees-gitconfig\"\n" +
 		"echo tampered >> \"$HOME/.config/gh/hosts.yml\"\n"
 	os.WriteFile(f.bin+"/gh", []byte(gh), 0o755)
 	return f
@@ -198,13 +199,27 @@ func (f *fixture) runJailed(t *testing.T, m *Manager, script string) (string, er
 	return string(out), err
 }
 
+// runJailedLayers is runJailed with the dispatch's isolation layers set (for
+// host-command narrowing: isolation.host.<tool>.paths and the like).
+func (f *fixture) runJailedLayers(t *testing.T, m *Manager, layers []*config.IsolationConfig, script string) (string, error) {
+	cmd, done := f.startJailedLayers(t, m, "d1", f.ws, 42, "fix/42", layers, script)
+	defer done()
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
 // startJailed prepares a jailed launch of script for one dispatch and
 // returns the (unstarted) command and its teardown.
 func (f *fixture) startJailed(t *testing.T, m *Manager, id, ws string, pr int, branch, script string) (*exec.Cmd, func()) {
+	return f.startJailedLayers(t, m, id, ws, pr, branch, nil, script)
+}
+
+// startJailedLayers is startJailed with the dispatch's isolation layers set.
+func (f *fixture) startJailedLayers(t *testing.T, m *Manager, id, ws string, pr int, branch string, layers []*config.IsolationConfig, script string) (*exec.Cmd, func()) {
 	t.Helper()
 	l, err := m.Prepare(context.Background(), LaunchSpec{
 		DispatchID: id, Tool: "claude-code", Workspace: ws, Repo: "acme/app", Number: pr, IsPR: true,
-		HeadBranch: branch, Label: "fix acme/app#" + itoa(pr),
+		HeadBranch: branch, Label: "fix acme/app#" + itoa(pr), Layers: layers,
 	})
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
@@ -678,5 +693,39 @@ test -e .terraform && echo WS-HAS-DOT-TERRAFORM || echo ws-has-no-dot-terraform`
 		if e.Type == "host_command" || e.Type == "egress" {
 			t.Logf("event: %s %s %s %q %v", e.Type, e.Status, e.Detail, e.Reason, e.Fields)
 		}
+	}
+}
+
+// TestJailHostCommandPathsNarrowHome proves isolation.host.<tool>.paths
+// (#paseo-hostcmd feature 1): by default the host-side gh sees its whole
+// profile view, commonHome (~/.gitconfig) included; narrowed to just its own
+// config dir, the same sibling (~/.gitconfig) it could see before goes dark —
+// the narrowing is enforced in the home view the real binary gets, not just
+// in config.
+func TestJailHostCommandPathsNarrowHome(t *testing.T) {
+	needJailKernel(t)
+	f := newFixture(t)
+	m := f.manager(t)
+
+	out, err := f.runJailed(t, m, `gh pr view 42; echo done`)
+	if err != nil {
+		t.Fatalf("unnarrowed jailed script: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "gh-sees-gitconfig") {
+		t.Fatalf("by default gh sees commonHome's .gitconfig: %s", out)
+	}
+
+	narrow := []*config.IsolationConfig{{Host: map[string]*config.HostCommand{
+		"gh": {Paths: []string{"~/.config/gh"}},
+	}}}
+	out, err = f.runJailedLayers(t, m, narrow, `gh pr view 42; echo done`)
+	if err != nil {
+		t.Fatalf("narrowed jailed script: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "gh-sees-gitconfig") {
+		t.Fatal("isolation.host.gh.paths: [\"~/.config/gh\"] must hide the sibling .gitconfig gh could see before")
+	}
+	if !strings.Contains(out, "gh-sees-login") {
+		t.Fatal("the narrowed path itself (.config/gh) must still be visible")
 	}
 }

@@ -1,6 +1,11 @@
 package hostcmd
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/NodeSpy/conductor/internal/config"
+)
 
 // flagSpec describes one tool's flags well enough to separate flag values
 // from positional arguments — the part that makes rule matching independent
@@ -175,16 +180,84 @@ var commonHome = []string{".gitconfig", ".config/git"}
 // HomeView returns the home paths tool's host-side process may see (nil =
 // all of home, for a binary without a profile), its persist paths, and its
 // fixed env. extraPersist are the operator's configured persist paths
-// (`~/…`).
-func HomeView(tool string, extraPersist []string) (paths, persist []string, env map[string]string, full bool) {
+// (`~/…`). narrow is the resolved isolation.host.<tool>.paths (Rule.Paths,
+// already validated to lie within the profile's own view): when set, it
+// REPLACES the default view with exactly those entries — a profiled tool
+// that otherwise saw commonHome+its own paths now sees only what narrow
+// names, an unprofiled tool (otherwise the whole home) sees only that —
+// and any persist path narrow does not cover is dropped (a narrower view
+// cannot write back what it cannot see).
+func HomeView(tool string, extraPersist []string, narrow []string) (paths, persist []string, env map[string]string, full bool) {
 	v, ok := views[tool]
 	for _, p := range extraPersist {
 		persist = append(persist, strings.TrimPrefix(p, "~/"))
 	}
 	if !ok {
+		if len(narrow) > 0 {
+			return append([]string(nil), narrow...), dropOutside(persist, narrow), nil, false
+		}
 		return nil, persist, nil, true
 	}
-	paths = append(append([]string(nil), commonHome...), v.Paths...)
 	persist = append(append([]string(nil), v.Persist...), persist...)
+	if len(narrow) > 0 {
+		return append([]string(nil), narrow...), dropOutside(persist, narrow), v.Env, false
+	}
+	paths = append(append([]string(nil), commonHome...), v.Paths...)
 	return paths, persist, v.Env, false
+}
+
+// dropOutside keeps only the persist paths a narrowed view still shows —
+// the built-in profile's own persist default (e.g. .aws/sso/cache) is
+// silently dropped when narrow doesn't cover it; an operator-configured
+// persist path outside narrow is a config validation error instead (caught
+// before this ever runs — see config.HostCommand.Paths).
+func dropOutside(persist, narrow []string) []string {
+	var out []string
+	for _, p := range persist {
+		if withinAny(p, narrow) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// withinAny reports whether home-relative path p is one of roots or sits
+// under one of them.
+func withinAny(p string, roots []string) bool {
+	p = cleanRel(p)
+	for _, r := range roots {
+		r = cleanRel(r)
+		if p == r || strings.HasPrefix(p, r+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// cleanRel normalizes a home-relative path for comparison (no "/"-cleaning
+// edge cases: these are config-supplied, short, already dotdot-free).
+func cleanRel(p string) string {
+	return strings.TrimSuffix(p, "/")
+}
+
+// validateHostPaths is hostcmd's answer to config.ValidateHostPaths (wired
+// in init, below): a profiled tool's narrowing can only pick from inside its
+// own built-in view; an unprofiled tool has no view to narrow from, so any
+// list is a valid replacement for "the whole home".
+func validateHostPaths(tool string, paths []string) error {
+	v, ok := views[tool]
+	if !ok {
+		return nil
+	}
+	view := append(append([]string(nil), commonHome...), v.Paths...)
+	for _, p := range paths {
+		if !withinAny(p, view) {
+			return fmt.Errorf("%q is outside %s's own view %v — paths can only narrow", p, tool, view)
+		}
+	}
+	return nil
+}
+
+func init() {
+	config.ValidateHostPaths = validateHostPaths
 }

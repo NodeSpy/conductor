@@ -265,7 +265,7 @@ func itoa(i int) string {
 
 // homeViewFor is hostcmd.HomeView with its env as a list (tests).
 func homeViewFor(tool string) ([]string, []string, []string, bool) {
-	p, per, env, full := hostcmd.HomeView(tool, nil)
+	p, per, env, full := hostcmd.HomeView(tool, nil, nil)
 	var e []string
 	for k, v := range env {
 		e = append(e, k+"="+v)

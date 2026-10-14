@@ -231,7 +231,7 @@ func (m *Manager) handleExec(ctx context.Context, d *Dispatch, req Request, fw *
 		refuse(tool + " is not installed on the host")
 		return
 	}
-	paths, persist, penv, full := hostcmd.HomeView(tool, rule.Persist)
+	paths, persist, penv, full := hostcmd.HomeView(tool, rule.Persist, rule.Paths)
 	hr := hostRun{
 		Tool: tool, Bin: bin, Args: append(append([]string(nil), req.Args...), dec.Parsed.ExtraArgs...),
 		Cwd: cwd, Stdin: req.Stdin, Home: m.Home, HomePaths: paths, FullHome: full, Persist: persist,

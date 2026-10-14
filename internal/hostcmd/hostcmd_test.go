@@ -399,7 +399,7 @@ func TestMatchRule(t *testing.T) {
 }
 
 func TestHomeView(t *testing.T) {
-	paths, persist, env, full := HomeView("aws", []string{"~/.aws/extra"})
+	paths, persist, env, full := HomeView("aws", []string{"~/.aws/extra"}, nil)
 	if full || !contains(paths, ".aws") || contains(paths, ".ssh") {
 		t.Fatalf("aws sees only its own config: %v", paths)
 	}
@@ -409,11 +409,70 @@ func TestHomeView(t *testing.T) {
 	if env["AWS_PAGER"] != "" {
 		t.Fatalf("env: %v", env)
 	}
-	if _, _, _, full := HomeView("mytool", nil); !full {
+	if _, _, _, full := HomeView("mytool", nil, nil); !full {
 		t.Fatal("an unprofiled binary sees the full (copy-on-write) home")
 	}
-	if p, _, _, _ := HomeView("gh", nil); contains(p, ".ssh") || !contains(p, ".config/gh") {
+	if p, _, _, _ := HomeView("gh", nil, nil); contains(p, ".ssh") || !contains(p, ".config/gh") {
 		t.Fatalf("gh: %v", p)
+	}
+}
+
+func TestHomeViewNarrowed(t *testing.T) {
+	// A profiled tool narrowed to one of its own paths: only that path, not
+	// the rest of its default view (commonHome included).
+	paths, persist, _, full := HomeView("aws", []string{"~/.aws/extra"}, []string{".aws/config"})
+	if full || len(paths) != 1 || paths[0] != ".aws/config" {
+		t.Fatalf("narrowed aws paths: %v", paths)
+	}
+	// The built-in persist default (.aws/sso/cache) and the operator's own
+	// (.aws/extra) both sit outside the narrowed view and are dropped —
+	// only entries the narrowed view covers survive.
+	if contains(persist, ".aws/sso/cache") || contains(persist, ".aws/extra") {
+		t.Fatalf("persist outside narrowed view must be dropped: %v", persist)
+	}
+	// An unprofiled tool narrowed: FullHome goes off, exactly the list shows.
+	paths, _, _, full = HomeView("mytool", nil, []string{".config/mytool"})
+	if full || len(paths) != 1 || paths[0] != ".config/mytool" {
+		t.Fatalf("narrowed unprofiled paths: %v, full=%v", paths, full)
+	}
+}
+
+func TestValidateHostPaths(t *testing.T) {
+	if err := validateHostPaths("gh", []string{".config/gh"}); err != nil {
+		t.Fatalf("gh's own config dir must validate: %v", err)
+	}
+	if err := validateHostPaths("gh", []string{".gitconfig"}); err != nil {
+		t.Fatalf("commonHome entries must validate: %v", err)
+	}
+	if err := validateHostPaths("gh", []string{".ssh"}); err == nil {
+		t.Fatal("a path outside gh's view must be refused")
+	}
+	// An unprofiled tool has no view to narrow from: anything validates.
+	if err := validateHostPaths("mytool", []string{".ssh", "anything"}); err != nil {
+		t.Fatalf("unprofiled: %v", err)
+	}
+}
+
+func TestResolvePathsIntersectsLayers(t *testing.T) {
+	global := &config.IsolationConfig{Host: map[string]*config.HostCommand{
+		"gh": {Paths: []string{"~/.config/gh", "~/.gitconfig"}},
+	}}
+	runtime := &config.IsolationConfig{Host: map[string]*config.HostCommand{
+		"gh": {Paths: []string{"~/.config/gh"}},
+	}}
+	r := Resolve("gh", []*config.IsolationConfig{global, runtime}, false)
+	if len(r.Paths) != 1 || r.Paths[0] != ".config/gh" {
+		t.Fatalf("intersected paths: %v", r.Paths)
+	}
+	// A step layer's paths never apply — Resolve only folds env/persist/paths
+	// from non-step layers (config validation refuses a step from setting it
+	// at all; Resolve must not depend on that to stay narrow-only).
+	step := &config.IsolationConfig{Host: map[string]*config.HostCommand{
+		"gh": {Paths: []string{"~/.ssh"}},
+	}}
+	r = Resolve("gh", []*config.IsolationConfig{global, step}, true)
+	if len(r.Paths) != 2 || !contains(r.Paths, ".config/gh") || !contains(r.Paths, ".gitconfig") || contains(r.Paths, ".ssh") {
+		t.Fatalf("a step's paths must not apply (only global's survive): %v", r.Paths)
 	}
 }
 

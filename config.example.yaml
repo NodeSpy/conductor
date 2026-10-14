@@ -320,7 +320,7 @@ engines:
 #   host:
 #     gh: { allow: ["*", "pr create *"], deny: ["pr merge *"] }   # the gh BINARY: "*" = as before, plus opening PRs
 #     git: { allow: ["*", "push release/*"] }                    # git's push binding: also release/* branches
-#     aws: { allow: ["s3 ls *", "s3 cp * s3://build-artifacts/*"] }   # an allow list ⇒ ONLY these
+#     aws: { allow: ["s3 ls *", "s3 cp * s3://build-artifacts/*"], paths: ["~/.aws/config"] }   # an allow list ⇒ ONLY these; paths narrows its home view further
 #     kubectl: { deny: ["delete *"], env: { KUBECONFIG: ~/.kube/staging } }
 #     docker: false                  # out of reach entirely
 # runtimes:
