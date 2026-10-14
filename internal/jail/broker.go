@@ -120,8 +120,12 @@ func (d *Dispatch) hostPath(p string) string {
 func (m *Manager) hostContext(ctx context.Context, d *Dispatch, cwd string) hostcmd.Context {
 	hc := hostcmd.Context{
 		Repo: d.Repo, Number: d.Number, IsPR: d.IsPR, HeadBranch: d.HeadBranch,
-		Workspace: d.Workspace, TmpDir: d.jailTmp(), Home: m.Home, Sensitive: m.Sensitive,
+		Workspace: d.Workspace, TmpDir: d.jailTmp(), Home: m.Home, Sensitive: m.Sensitive, Cwd: cwd,
 	}
+	// RuleFor lets a credential-injecting launcher's profile (vop) judge the
+	// command it is about to run as its own child with THAT tool's own
+	// configured rule — the same layers, resolved for a different tool.
+	hc.RuleFor = func(tool string) hostcmd.Rule { return hostcmd.Resolve(tool, d.Layers, d.StepLayer) }
 	hc.ReadFile = func(p string) ([]byte, error) {
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(cwd, p)
@@ -232,13 +236,45 @@ func (m *Manager) handleExec(ctx context.Context, d *Dispatch, req Request, fw *
 		return
 	}
 	paths, persist, penv, full := hostcmd.HomeView(tool, rule.Persist, rule.Paths)
+	envTools := []string{tool}
+	binRoots := binaryRoots(bin, m.LookPath)
+	if inner := dec.Parsed.InnerTool; inner != "" {
+		// A credential-injecting launcher (vop) runs the inner tool as its
+		// own child: the inner tool's own view (e.g. aws's ~/.aws) must be
+		// visible too, unioned with the launcher's — never narrower than
+		// either, since both processes share the one copy-on-write home this
+		// run gets.
+		innerRule := hostcmd.Resolve(inner, d.Layers, d.StepLayer)
+		ip, iper, ienv, ifull := hostcmd.HomeView(inner, innerRule.Persist, innerRule.Paths)
+		paths = unionStrings(paths, ip)
+		persist = unionStrings(persist, iper)
+		full = full || ifull
+		if penv == nil {
+			penv = map[string]string{}
+		}
+		for k, v := range ienv {
+			if _, ok := penv[k]; !ok {
+				penv[k] = v
+			}
+		}
+		// The inner tool's own operator env (isolation.host.<inner>.env — an
+		// org's AWS_CONFIG_FILE, say) applies to it under vop as it would
+		// run alone; the launcher's own rule env (applied after) still wins.
+		for k, v := range innerRule.Env {
+			penv[k] = config.ExpandHome(v)
+		}
+		envTools = append(envTools, inner)
+		if ibin, err := m.LookPath(inner); err == nil {
+			binRoots = append(binRoots, binaryRoots(ibin, m.LookPath)...)
+		}
+	}
 	hr := hostRun{
 		Tool: tool, Bin: bin, Args: append(append([]string(nil), req.Args...), dec.Parsed.ExtraArgs...),
 		Cwd: cwd, Stdin: req.Stdin, Home: m.Home, HomePaths: paths, FullHome: full, Persist: persist,
 		Workspace: d.Workspace, TmpDir: d.TmpDir, Sensitive: m.Sensitive,
-		BinRoots: binaryRoots(bin, m.LookPath),
+		BinRoots: binRoots,
 	}
-	hr.Env = m.hostEnv(d, tool, req.Env, penv, rule, full)
+	hr.Env = m.hostEnv(d, envTools, req.Env, penv, rule, full)
 	restrict, allow := rule.Network != nil && rule.Network.Mode != config.NetOpen, networkAllow(rule.Network, nil)
 	if dec.Confine {
 		// A content-executing command (hostcmd/content.go): the host-side
@@ -345,9 +381,17 @@ var hostEnvPrefixes = map[string][]string{
 	"pnpm":      {"NPM_", "NODE_AUTH_TOKEN", "PNPM_"},
 	"ssh":       {"SSH_AUTH_SOCK"},
 	"scp":       {"SSH_AUTH_SOCK"},
+	// vop deliberately carries none: VOP_PROFILE and AGENT_DECK_VOP_PROFILE
+	// must never reach a host run of it — the profile `vop exec` uses comes
+	// only from its explicit argument (hostcmd's vop profile refuses a bare
+	// `vop exec -- …` that would fall back to env/.vop resolution), not from
+	// whatever the daemon's own environment happens to have pinned.
 }
 
-func (m *Manager) hostEnv(d *Dispatch, tool string, agent map[string]string, profileEnv map[string]string, rule hostcmd.Rule, full bool) []string {
+// hostEnv builds a host command's environment. tools is the outer tool, plus
+// the inner tool when a launcher like vop runs one as its own child — each
+// tool's own hostEnvPrefixes (the machine's setup for it) is folded in.
+func (m *Manager) hostEnv(d *Dispatch, tools []string, agent map[string]string, profileEnv map[string]string, rule hostcmd.Rule, full bool) []string {
 	env := map[string]string{}
 	for _, kv := range sandbox.MinimalEnv() {
 		k, v, _ := strings.Cut(kv, "=")
@@ -368,9 +412,11 @@ func (m *Manager) hostEnv(d *Dispatch, tool string, agent map[string]string, pro
 	}
 	for _, kv := range os.Environ() {
 		k, v, _ := strings.Cut(kv, "=")
-		for _, pre := range hostEnvPrefixes[tool] {
-			if strings.HasPrefix(k, pre) {
-				env[k] = v
+		for _, t := range tools {
+			for _, pre := range hostEnvPrefixes[t] {
+				if strings.HasPrefix(k, pre) {
+					env[k] = v
+				}
 			}
 		}
 	}
@@ -385,7 +431,7 @@ func (m *Manager) hostEnv(d *Dispatch, tool string, agent map[string]string, pro
 	for k, v := range rule.Env {
 		env[k] = config.ExpandHome(v)
 	}
-	if tool == "gh" {
+	if tools[0] == "gh" {
 		// The dispatch's repository for commands that infer one. No token:
 		// the host gh uses the machine's own login, in place (#154 §2).
 		env["GH_REPO"] = d.Repo
@@ -420,4 +466,26 @@ func contains(xs []string, x string) bool {
 		}
 	}
 	return false
+}
+
+// unionStrings is a ∪ b, deduplicated, a's order first.
+func unionStrings(a, b []string) []string {
+	if len(b) == 0 {
+		return a
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(a)+len(b))
+	for _, s := range a {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	for _, s := range b {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }

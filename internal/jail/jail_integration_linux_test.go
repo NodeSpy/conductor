@@ -729,3 +729,106 @@ func TestJailHostCommandPathsNarrowHome(t *testing.T) {
 		t.Fatal("the narrowed path itself (.config/gh) must still be visible")
 	}
 }
+
+// TestJailVopDelegatesToInnerToolWithNarrowedView proves #paseo-hostcmd
+// feature 2 (the vop profile) and its interaction with feature 1 (paths
+// narrowing) on a real kernel: a fake `vop` on the host PATH, standing in
+// for the real credential-injecting launcher (never invoked in tests), execs
+// a fake `aws` as its child; the broker runs the whole thing with vop's own
+// view UNIONED with aws's (so the inner tool's config is visible too), and
+// isolation.host.vop.paths narrows vop's own slice of that view.
+func TestJailVopDelegatesToInnerToolWithNarrowedView(t *testing.T) {
+	needJailKernel(t)
+	f := newFixture(t)
+
+	for _, d := range []string{".config/vop", ".config/op", ".aws"} {
+		if err := os.MkdirAll(filepath.Join(f.home, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(f.home, ".config/vop/marker"), []byte("vop\n"), 0o600)
+	os.WriteFile(filepath.Join(f.home, ".config/op/marker"), []byte("op\n"), 0o600)
+	os.WriteFile(filepath.Join(f.home, ".aws/marker"), []byte("aws\n"), 0o600)
+
+	// A fake vop: records what it saw, then execs the inner command exactly
+	// as the real `vop exec <profile> -- <command>` would (minus the actual
+	// credential injection) — the broker, not this script, is what's under
+	// test.
+	vop := "#!/bin/sh\n" +
+		"echo \"fake-vop args=$*\"\n" +
+		"test -e \"$HOME/.config/vop/marker\" && echo vop-sees-own-config\n" +
+		"test -e \"$HOME/.config/op/marker\" && echo vop-sees-op-config\n" +
+		"shift\n" + // drop "exec"
+		"profile=$1; shift\n" +
+		"echo \"fake-vop profile=$profile\"\n" +
+		"if [ \"$1\" = \"--\" ]; then shift; fi\n" +
+		"exec \"$@\"\n"
+	os.WriteFile(f.bin+"/vop", []byte(vop), 0o755)
+	aws := "#!/bin/sh\n" +
+		"echo \"fake-aws args=$*\"\n" +
+		"test -e \"$HOME/.aws/marker\" && echo aws-sees-own-config\n" +
+		"test -e \"$HOME/.config/vop/marker\" && echo aws-sees-vop-config\n"
+	os.WriteFile(f.bin+"/aws", []byte(aws), 0o755)
+	t.Setenv("PATH", f.bin+":"+os.Getenv("PATH"))
+
+	m := f.manager(t)
+	m.LookPath = func(n string) (string, error) {
+		switch n {
+		case "gh":
+			return f.bin + "/gh", nil
+		case "vop":
+			return f.bin + "/vop", nil
+		case "aws":
+			return f.bin + "/aws", nil
+		}
+		return "", exec.ErrNotFound
+	}
+
+	layers := []*config.IsolationConfig{{Host: map[string]*config.HostCommand{
+		"vop": {Allow: []string{"exec tap *"}},
+	}}}
+	out, err := f.runJailedLayers(t, m, layers, `vop exec tap -- aws s3 ls; echo "exit=$?"`)
+	if err != nil {
+		t.Fatalf("jailed script: %v\n%s", err, out)
+	}
+	t.Logf("output:\n%s", out)
+	for _, want := range []string{
+		"fake-vop profile=tap", "fake-aws args=s3 ls",
+		"vop-sees-own-config", "vop-sees-op-config",
+		"aws-sees-own-config", "aws-sees-vop-config", // the inner tool's view is UNIONED with vop's
+		"exit=0",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Narrowed to just vop's own config dir: the sibling ~/.config/op goes
+	// dark for vop (aws's own view is unaffected — it is unioned in, not
+	// narrowed by vop's paths).
+	narrow := []*config.IsolationConfig{{Host: map[string]*config.HostCommand{
+		"vop": {Allow: []string{"exec tap *"}, Paths: []string{"~/.config/vop"}},
+	}}}
+	out, err = f.runJailedLayers(t, m, narrow, `vop exec tap -- aws s3 ls; echo "exit=$?"`)
+	if err != nil {
+		t.Fatalf("narrowed jailed script: %v\n%s", err, out)
+	}
+	t.Logf("narrowed output:\n%s", out)
+	if strings.Contains(out, "vop-sees-op-config") {
+		t.Error("isolation.host.vop.paths: [\"~/.config/vop\"] must hide the sibling ~/.config/op")
+	}
+	for _, want := range []string{"vop-sees-own-config", "aws-sees-own-config", "exit=0"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in narrowed output:\n%s", want, out)
+		}
+	}
+
+	// Without naming the profile in isolation.host.vop.allow, exec is refused.
+	out, err = f.runJailedLayers(t, m, nil, `vop exec tap -- aws s3 ls; echo "exit=$?"`)
+	if err != nil {
+		t.Fatalf("jailed script: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "exit=126") || strings.Contains(out, "fake-vop") {
+		t.Errorf("vop exec with no naming allow must be refused before it ever runs: %s", out)
+	}
+}

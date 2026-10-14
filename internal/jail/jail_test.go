@@ -298,3 +298,43 @@ func TestHostContextCarriesTheWriteBinding(t *testing.T) {
 		t.Fatal("no dispatch target: no gh write")
 	}
 }
+
+// TestVopEnvNeverCarriesProfilePin locks down #paseo-hostcmd feature 2's
+// safety property: nothing forwards VOP_PROFILE or AGENT_DECK_VOP_PROFILE
+// into a host run of vop — the profile it uses must come only from its
+// explicit argv, never the environment (vop's own precedence: explicit arg >
+// AGENT_DECK_VOP_PROFILE > VOP_PROFILE > .vop — so a stray env var could
+// otherwise silently redirect a bare, resolver-based invocation, and even
+// with an explicit arg there is no reason to carry it through).
+func TestVopEnvNeverCarriesProfilePin(t *testing.T) {
+	for _, k := range []string{"VOP_PROFILE", "AGENT_DECK_VOP_PROFILE"} {
+		if AgentEnvAllowed(k) {
+			t.Errorf("the shim must not forward agent-set %s", k)
+		}
+		for _, pre := range hostEnvPrefixes["vop"] {
+			if strings.HasPrefix(k, pre) {
+				t.Errorf("hostEnvPrefixes[vop] must not match %s (prefix %q)", k, pre)
+			}
+		}
+	}
+}
+
+// TestHostContextRuleForResolvesTheInnerTool proves the broker wires
+// hostcmd.Context.RuleFor to the SAME layers the outer tool resolves
+// through, for a different tool — what vop's profile uses to judge the
+// inner command with its own configured rule, not the launcher's.
+func TestHostContextRuleForResolvesTheInnerTool(t *testing.T) {
+	m := &Manager{}
+	layers := []*config.IsolationConfig{{Host: map[string]*config.HostCommand{
+		"aws": {Deny: []string{"configure *"}},
+	}}}
+	d := &Dispatch{LaunchSpec: LaunchSpec{Layers: layers}}
+	hc := m.hostContext(t.Context(), d, d.Workspace)
+	if hc.RuleFor == nil {
+		t.Fatal("hostContext must set RuleFor")
+	}
+	r := hc.RuleFor("aws")
+	if len(r.Deny) != 1 || r.Deny[0] != "configure *" {
+		t.Fatalf("RuleFor(aws) did not resolve the dispatch's own aws rule: %+v", r)
+	}
+}

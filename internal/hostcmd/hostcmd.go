@@ -81,6 +81,15 @@ type Parsed struct {
 	// ExtraArgs are appended to the host invocation (e.g. npm publish
 	// --ignore-scripts, so a lifecycle script cannot run on the host).
 	ExtraArgs []string
+	// InnerTool and InnerArgs name a command a credential-injecting launcher
+	// (vop) runs as its own child: "" InnerTool = no inner command to judge.
+	// A binder's bind (see binding.go) resolves InnerTool's own rule through
+	// Context.RuleFor and runs it through Decide recursively, so the inner
+	// command gets its own full guardrails, path guard, content-exec check,
+	// and rules — never a pass-through just because the outer launcher is
+	// allowed.
+	InnerTool string
+	InnerArgs []string
 }
 
 // Context is what Decide knows about the dispatch.
@@ -92,6 +101,7 @@ type Context struct {
 	Workspace  string // the worktree, as seen at the same path on the host
 	TmpDir     string // the dispatch's scratch /tmp, as seen on the host
 	Home       string // the operator's home
+	Cwd        string // the command's working directory, as seen on the host
 	// Sensitive are extra paths no host command may be pointed at (the
 	// daemon's state and config dirs), whether or not they are under Home.
 	Sensitive []string
@@ -112,6 +122,12 @@ type Context struct {
 	// writes ("" = it's open; nil = unknown): the gh and git profiles refuse
 	// every write for a closed target.
 	TargetClosed func() string
+	// RuleFor resolves another tool's own configured rule (the same
+	// isolation.host.<tool> layers, via Resolve) — a credential-injecting
+	// launcher (vop) uses it to judge the inner command it is about to run
+	// with ITS OWN rule, not the launcher's; nil → an inner command cannot be
+	// evaluated (refused).
+	RuleFor func(tool string) Rule
 }
 
 // Rule is one binary's effective configured rule, after Resolve.
@@ -623,7 +639,7 @@ func stricterNetwork(a, b *config.IsolationNetwork) *config.IsolationNetwork {
 // host command when installed on the machine (#154 §2). git is not a shim:
 // its network and signing side reach conductor through the remote helper
 // and the signing shim instead (§4).
-var Builtins = []string{"gh", "aws", "kubectl", "docker", "terraform", "gcloud", "az", "ssh", "scp", "npm", "pnpm"}
+var Builtins = []string{"gh", "aws", "kubectl", "docker", "terraform", "gcloud", "az", "ssh", "scp", "npm", "pnpm", "vop"}
 
 // HostSet is the dispatch's host set: the built-ins installed on the machine
 // plus any binary an operator layer names, minus any set to false. It
