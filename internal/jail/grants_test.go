@@ -37,7 +37,7 @@ func TestStageGrantFiles(t *testing.T) {
 	planSum := write("plans/plan.tfplan", "plan")
 	varSum := write("prod.tfvars", "vars")
 	use, err := m.stageGrantFiles(d, spec(map[string]string{"plans/plan.tfplan": planSum, "prod.tfvars": varSum}),
-		[]string{"apply", "--var-file=prod.tfvars", "plans/plan.tfplan"}, ws)
+		[]string{"apply", "--var-file=prod.tfvars", "plans/plan.tfplan"}, ws, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestStageGrantFiles(t *testing.T) {
 		t.Fatalf("the scratch dir is private: %v", fi.Mode())
 	}
 
-	if _, err := m.stageGrantFiles(d, spec(map[string]string{"plans/plan.tfplan": varSum}), []string{"apply", "plans/plan.tfplan"}, ws); !errors.Is(err, grant.ErrDigest) {
+	if _, err := m.stageGrantFiles(d, spec(map[string]string{"plans/plan.tfplan": varSum}), []string{"apply", "plans/plan.tfplan"}, ws, ""); !errors.Is(err, grant.ErrDigest) {
 		t.Fatalf("other content: ErrDigest, got %v", err)
 	}
 	outside := filepath.Join(t.TempDir(), "plan")
@@ -64,12 +64,34 @@ func TestStageGrantFiles(t *testing.T) {
 	os.Symlink(filepath.Join(ws, "plans"), filepath.Join(ws, "link"))
 	os.Symlink(outside, filepath.Join(ws, "plan-link"))
 	for _, p := range []string{outside, "../" + filepath.Base(outside), "link/plan.tfplan", "plan-link"} {
-		if _, err := m.stageGrantFiles(d, spec(map[string]string{p: planSum}), []string{"apply", p}, ws); !errors.Is(err, grant.ErrDigest) {
+		if _, err := m.stageGrantFiles(d, spec(map[string]string{p: planSum}), []string{"apply", p}, ws, ""); !errors.Is(err, grant.ErrDigest) {
 			t.Errorf("%s: refused (outside the workspace, or through a symlink), got %v", p, err)
 		}
 	}
 	entries, _ := os.ReadDir(m.GrantScratch)
 	if len(entries) != 1 {
 		t.Fatalf("a refused staging leaves nothing behind: %d dirs", len(entries))
+	}
+}
+
+// A confined command reads the workspace through its tool's copy-on-write
+// layer: a planfile an earlier confined `terraform plan -out` wrote is there,
+// not in the workspace, and that copy is the one checked and run.
+func TestStageGrantFilesReadsTheConfinedLayer(t *testing.T) {
+	ws := t.TempDir()
+	m := &Manager{GrantScratch: filepath.Join(t.TempDir(), "scratch")}
+	d := &Dispatch{LaunchSpec: LaunchSpec{Workspace: ws}, TmpDir: t.TempDir(), Dir: t.TempDir()}
+	upper := filepath.Join(d.Dir, "cow-ws", "terraform", "up")
+	os.MkdirAll(upper, 0o700)
+	os.WriteFile(filepath.Join(upper, "plan.tfplan"), []byte("the plan terraform wrote"), 0o644)
+	sum, _ := grant.FileSHA256(filepath.Join(upper, "plan.tfplan"))
+	g := grant.GrantSpec{ID: "g1", FileDigests: []grant.FileDigest{{Path: "plan.tfplan", SHA256: sum}}}
+	use, err := m.stageGrantFiles(d, g, []string{"apply", "plan.tfplan"}, ws, "terraform")
+	if err != nil {
+		t.Fatalf("the layer's planfile is the one a confined apply reads: %v", err)
+	}
+	use.cleanup()
+	if _, err := m.stageGrantFiles(d, g, []string{"apply", "plan.tfplan"}, ws, ""); err == nil {
+		t.Fatal("an unconfined command reads the workspace, which has no planfile")
 	}
 }

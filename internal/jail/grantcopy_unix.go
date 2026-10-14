@@ -79,3 +79,11 @@ func ownPrivateDir(dir string) error {
 	}
 	return nil
 }
+
+// layerHas reports whether a copy-on-write upper dir holds rel — a file the
+// confined run wrote, or a whiteout (the run deleted it; copying it then
+// fails as not a regular file, as it should).
+func layerHas(upper, rel string) bool {
+	_, err := os.Lstat(filepath.Join(upper, rel))
+	return err == nil
+}

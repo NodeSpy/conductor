@@ -91,7 +91,11 @@ func (m *Manager) useGrant(ctx context.Context, d *Dispatch, tool string, args [
 	if !dec.Allow || dec.Native {
 		return dec, nil, ""
 	}
-	use, err := m.stageGrantFiles(d, g, args, cwd)
+	layer := ""
+	if dec.Confine {
+		layer = tool // it reads the workspace through tool's copy-on-write layer
+	}
+	use, err := m.stageGrantFiles(d, g, args, cwd, layer)
 	if err != nil {
 		return hostcmd.Decision{}, nil, fmt.Sprintf("%v (grant %s)", err, g.ID)
 	}
@@ -108,7 +112,12 @@ func (m *Manager) useGrant(ctx context.Context, d *Dispatch, tool string, args [
 
 // stageGrantFiles copies the files g pins into a private scratch dir,
 // verifies them against g's digests, and rewrites args to name the copies.
-func (m *Manager) stageGrantFiles(d *Dispatch, g grant.GrantSpec, args []string, cwd string) (*grantUse, error) {
+//
+// layer names the tool whose copy-on-write layer a confined run reads the
+// workspace through ("" = unconfined): there a file is the layer's copy when
+// the tool wrote one (a `terraform plan -out=plan.tfplan` in an earlier
+// confined run lands there, never in the workspace), else the workspace's.
+func (m *Manager) stageGrantFiles(d *Dispatch, g grant.GrantSpec, args []string, cwd, layer string) (*grantUse, error) {
 	use := &grantUse{args: append([]string(nil), args...), cleanup: func() {}}
 	if len(g.FileDigests) == 0 {
 		return use, nil
@@ -143,6 +152,11 @@ func (m *Manager) stageGrantFiles(d *Dispatch, g grant.GrantSpec, args []string,
 		}
 		rel, _ := filepath.Rel(root, abs)
 		dst := filepath.Join(dir, fmt.Sprintf("%d-%s", i, filepath.Base(abs)))
+		if layer != "" && root == d.Workspace {
+			if upper := filepath.Join(d.Dir, "cow-ws", layer, "up"); layerHas(upper, rel) {
+				root = upper
+			}
+		}
 		sum, err := copyNoFollow(root, rel, dst)
 		if err != nil {
 			use.cleanup()

@@ -9,3 +9,5 @@ func copyNoFollow(root, rel, dst string) (string, error) {
 }
 
 func ownPrivateDir(dir string) error { return errors.New("not supported on this platform") }
+
+func layerHas(upper, rel string) bool { return false }
