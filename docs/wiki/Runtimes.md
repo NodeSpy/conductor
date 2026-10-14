@@ -106,7 +106,10 @@ workspace) is archived the moment the step finishes; a hand-off's when it calls
 `step.done` (or its `idle_timeout` fires); any other agent when it calls the
 auto-granted `step.done` — every agent is instructed to do so as its final
 action. A dispatch that failed before the agent came up tears its own workspace
-down immediately. The trade is deliberate: a conductor-launched agent that dies
+down immediately. Reclaiming a `checkout: none` run's workspace also
+deletes its per-run directory (`~/.conductor/runs/<slug>`) — paseo archives a
+directory workspace but leaves the folder, so conductor removes it, and only
+ever a direct child of that runs root. The trade is deliberate: a conductor-launched agent that dies
 without signalling leaves its own workspace behind (archive it by hand), and in
 exchange conductor can never touch anything it didn't launch. A retry that
 finds a prior run's `conductor/<kind>-<n>` worktree still present **reuses** it

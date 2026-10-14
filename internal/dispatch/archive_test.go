@@ -140,6 +140,51 @@ func TestCheckoutNoneDispatchThenArchiveLeavesNothingBehind(t *testing.T) {
 	if !strings.Contains(string(calls), "workspace archive wks_new") {
 		t.Fatalf("the dispatch's own workspace must be reclaimed, got:\n%s", calls)
 	}
+	// ...and its directory: archiving a local-directory workspace leaves the
+	// folder on disk, so without removing it every run left one behind.
+	if _, err := os.Stat(runDir); !os.IsNotExist(err) {
+		t.Fatalf("the run's directory must be removed on archive, stat err = %v", err)
+	}
+}
+
+// removeRunDir only ever deletes a DIRECT child of ~/.conductor/runs: an owned
+// worktree, the runs root itself, or a path that merely ends in a run-like name
+// elsewhere is left alone, whatever cwd the agent reported.
+func TestArchiveRemovesOnlyRunDirs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, ".conductor", runWorkspaceDirs)
+	sibling := filepath.Join(root, "cron-1-keep")
+	for _, d := range []string{sibling, filepath.Join(home, "work", "wt"), filepath.Join(home, "other", "runs", "x")} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct{ name, cwd string }{
+		{"owned worktree outside the runs root", filepath.Join(home, "work", "wt")},
+		{"the runs root itself", root},
+		{"a runs/ directory somewhere else", filepath.Join(home, "other", "runs", "x")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin, dir := fakePaseoDir(t)
+			os.WriteFile(filepath.Join(dir, "ls.json"),
+				[]byte(`[{"id":"a1","status":"idle","cwd":"`+tc.cwd+`"}]`), 0o644)
+			os.WriteFile(filepath.Join(dir, "workspaces.json"),
+				[]byte(`[{"workspaceId":"wks_x","name":"`+runWorkspacePrefix+`x","isolation":"worktree","cwd":"`+tc.cwd+`"}]`), 0o644)
+			d := &Dispatcher{PaseoBin: bin, Owned: NewOwnedSet("")}
+			d.Owned.AddAgent("a1")
+			d.Owned.AddWorkspace("wks_x")
+			if err := d.Archive(context.Background(), "a1"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(tc.cwd); err != nil {
+				t.Fatalf("%s was removed: %v", tc.cwd, err)
+			}
+		})
+	}
+	if _, err := os.Stat(sibling); err != nil {
+		t.Fatalf("another run's directory was removed: %v", err)
+	}
 }
 
 // A blank id is a no-op — no paseo calls at all.
