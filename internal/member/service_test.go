@@ -23,6 +23,8 @@ type fakeHome struct {
 	state       map[string]string
 	retired     []string
 	retiredCwds []string
+	attempts    int
+	failLaunch  error
 	// onSend lets a test act as the agent (e.g. write a handoff).
 	onSend func(agentID, text string)
 }
@@ -30,6 +32,10 @@ type fakeHome struct {
 func (f *fakeHome) Launch(_ context.Context, spec HomeSpec) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.attempts++
+	if f.failLaunch != nil {
+		return "", f.failLaunch
+	}
 	f.n++
 	id := fmt.Sprintf("agent-%d", f.n)
 	f.launched = append(f.launched, spec)
@@ -576,5 +582,29 @@ func TestCommandGrantBindsToJailIdentity(t *testing.T) {
 	}
 	if pw.AgentID != "" || pw.Dispatch != w.Dispatch {
 		t.Fatalf("cli worker grant binding: agent %q dispatch %q", pw.AgentID, pw.Dispatch)
+	}
+}
+
+// A failing home launch is retried after LaunchBackoff, not on every tick —
+// and a failed attempt leaves no session worktree behind.
+func TestFailedLaunchBacksOff(t *testing.T) {
+	f := newSvc(t)
+	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	f.svc.Now = func() time.Time { return now }
+	f.home.failLaunch = fmt.Errorf("no model")
+	ctx := context.Background()
+	f.svc.Tick(ctx, "sre")
+	f.svc.Tick(ctx, "sre")
+	if f.home.attempts != 1 {
+		t.Fatalf("launch attempts within the backoff = %d, want 1", f.home.attempts)
+	}
+	if wts := f.svc.Repo("sre").Worktrees(ctx); len(wts) != 0 {
+		t.Fatalf("failed launch left worktrees: %v", wts)
+	}
+	now = now.Add(LaunchBackoff)
+	f.home.failLaunch = nil
+	f.svc.Tick(ctx, "sre")
+	if f.home.attempts != 2 || f.st.Member("sre").Home == nil {
+		t.Fatalf("no retry after the backoff: attempts %d", f.home.attempts)
 	}
 }

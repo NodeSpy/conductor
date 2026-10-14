@@ -97,10 +97,11 @@ type MemberHome struct {
 	// Runtime is a paseo runtime ("" = the built-in/default paseo). The home
 	// is what the operator talks to, so it is always on paseo.
 	Runtime string `yaml:"runtime,omitempty"`
-	// Provider/Model pin the home agent's model (paseo --provider/--model).
-	// Both or neither; neither is a bare launch.
-	Provider string `yaml:"provider,omitempty"`
-	Model    string `yaml:"model,omitempty"`
+	// Model is the home agent's model — a fleet, id, wildcard or list, as on
+	// a step — resolved through the same fleet ladder and discovered roster
+	// (which also supplies paseo's --provider). Unset: the runtime's
+	// models.default, else a bare launch.
+	Model ModelSpec `yaml:"model,omitempty"`
 	// Rotate bounds one home session; a fresh session resumes from the
 	// handoff note and the ledger.
 	Rotate MemberRotate `yaml:"rotate,omitempty"`
@@ -435,9 +436,6 @@ func (c *Config) validateMember(name string, m MemberConfig) error {
 		if _, ok := c.Operators[op]; !ok {
 			return fmt.Errorf("operators: %q is not in the top-level operators: section", op)
 		}
-	}
-	if (m.Home.Provider == "") != (m.Home.Model == "") {
-		return fmt.Errorf("home: set provider and model together (paseo needs --provider with --model), or neither")
 	}
 	if hr := m.Home.Runtime; hr != "" {
 		rt, ok := c.Runtimes[hr]

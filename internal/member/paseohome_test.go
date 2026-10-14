@@ -2,6 +2,7 @@ package member
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -11,10 +12,15 @@ import (
 type fakePaseo struct {
 	reqs     []dispatch.Request
 	archived []string
+	released []string
+	fail     error
 }
 
 func (f *fakePaseo) Dispatch(_ context.Context, r dispatch.Request) (dispatch.RunRef, error) {
 	f.reqs = append(f.reqs, r)
+	if f.fail != nil {
+		return dispatch.RunRef{}, f.fail
+	}
 	return dispatch.RunRef{AgentID: "pa-1"}, nil
 }
 func (f *fakePaseo) CreateLocalWorkspace(context.Context, string, string) (string, error) {
@@ -22,6 +28,10 @@ func (f *fakePaseo) CreateLocalWorkspace(context.Context, string, string) (strin
 }
 func (f *fakePaseo) AgentStatus(context.Context, string) (string, error) { return "idle", nil }
 func (f *fakePaseo) Send(context.Context, string, string) error          { return nil }
+func (f *fakePaseo) ReleaseWorkspace(_ context.Context, id string) error {
+	f.released = append(f.released, id)
+	return nil
+}
 func (f *fakePaseo) Archive(_ context.Context, id string) error {
 	f.archived = append(f.archived, id)
 	return nil
@@ -41,12 +51,17 @@ func (j *recJail) ArchiveCwd(cwd string) int {
 func TestPaseoHomeLaunchAndJailSwitch(t *testing.T) {
 	cfg := &config.Config{Members: map[string]config.MemberConfig{"sre": {
 		Skill: &config.SkillPolicy{Verbs: []string{"gh.comment"}},
-		Home:  config.MemberHome{Provider: "claude", Model: "opus"},
+		Home:  config.MemberHome{},
 	}}}
 	fp := &fakePaseo{}
 	jail := &recJail{}
 	var held []string
+	var resolved config.Step
 	h := &PaseoHome{Cfg: func() *config.Config { return cfg }, For: func(string) (PaseoDispatcher, error) { return fp, nil },
+		Resolve: func(_ context.Context, s config.Step) (string, string, string) {
+			resolved = s
+			return "opus", "paseo", "claude"
+		},
 		Hold: func(id string) { held = append(held, id) }, Jail: jail}
 	id, err := h.Launch(context.Background(), HomeSpec{Member: "sre", Session: "s1", Dispatch: "d1", Cwd: "/x/s1", Prompt: "{{.secrets}} literal"})
 	if err != nil || id != "pa-1" || len(held) != 1 {
@@ -59,8 +74,8 @@ func TestPaseoHomeLaunchAndJailSwitch(t *testing.T) {
 	if r.Step.BoundMember != "sre" || r.Step.BoundMemberRole != config.MemberRoleHome || r.Action.Checkout != "none" {
 		t.Fatalf("binding: %+v", r.Step)
 	}
-	if r.Provider != "claude" || r.Model != "opus" {
-		t.Fatalf("unjailed launch must keep the configured provider: %q %q", r.Provider, r.Model)
+	if r.Provider != "claude" || r.Model != "opus" || resolved.BoundMember != "sre" {
+		t.Fatalf("home model must come from the resolver: %q %q (resolved %+v)", r.Provider, r.Model, resolved)
 	}
 	jail.active = true
 	_, _ = h.Launch(context.Background(), HomeSpec{Member: "sre", Session: "s2", Dispatch: "d2", Cwd: "/x/s2"})
@@ -72,5 +87,18 @@ func TestPaseoHomeLaunchAndJailSwitch(t *testing.T) {
 	}
 	if len(jail.archived) != 1 || jail.archived[0] != "/x/s1" || len(fp.archived) != 1 {
 		t.Fatalf("retire: jail %v paseo %v", jail.archived, fp.archived)
+	}
+}
+
+// A failed launch leaves no workspace behind.
+func TestPaseoHomeFailedLaunchReleasesWorkspace(t *testing.T) {
+	cfg := &config.Config{Members: map[string]config.MemberConfig{"sre": {}}}
+	fp := &fakePaseo{fail: errors.New("no model")}
+	h := &PaseoHome{Cfg: func() *config.Config { return cfg }, For: func(string) (PaseoDispatcher, error) { return fp, nil }}
+	if _, err := h.Launch(context.Background(), HomeSpec{Member: "sre", Session: "s1", Dispatch: "d1", Cwd: "/x"}); err == nil {
+		t.Fatal("launch error swallowed")
+	}
+	if len(fp.released) != 1 || fp.released[0] != "ws-1" {
+		t.Fatalf("workspace not released: %v", fp.released)
 	}
 }

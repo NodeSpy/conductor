@@ -62,7 +62,7 @@ func buildMembers(cfg *config.Config, st *store.Store, runner *flow.Runner, reg 
 			}
 			return d, nil
 		},
-		Hold: hold.Add, Unhold: hold.Remove, Jail: jail,
+		Hold: hold.Add, Unhold: hold.Remove, Jail: jail, Resolve: eng.ResolveModel,
 		Revoke: func(d string) {
 			if b := skill.Active(); b != nil {
 				b.RevokeDispatch(d)

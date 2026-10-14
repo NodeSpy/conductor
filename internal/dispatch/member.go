@@ -68,3 +68,17 @@ func (d *Dispatcher) AgentStatus(ctx context.Context, id string) (string, error)
 	}
 	return "gone", nil
 }
+
+// ReleaseWorkspace archives a workspace conductor created whose launch then
+// failed, and forgets it. It refuses a workspace the ownership ledger does
+// not hold, like every archive.
+func (d *Dispatcher) ReleaseWorkspace(ctx context.Context, id string) error {
+	if id == "" || !d.Owned.HasWorkspace(id) {
+		return fmt.Errorf("workspace %q is not conductor-owned", id)
+	}
+	if err := d.backend().ArchiveWorkspace(ctx, id); err != nil {
+		return err
+	}
+	d.Owned.forget(id, "")
+	return nil
+}

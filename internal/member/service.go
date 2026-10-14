@@ -87,10 +87,11 @@ type Service struct {
 	// handoff turn at rotation (default 10m).
 	PollEvery, SendTimeout, HandoffTimeout time.Duration
 
-	mu    sync.Mutex
-	repos map[string]*Repo
-	locks map[string]*sync.Mutex
-	wake  map[string]chan struct{}
+	mu       sync.Mutex
+	failedAt map[string]time.Time // last failed home launch, per member (backoff)
+	repos    map[string]*Repo
+	locks    map[string]*sync.Mutex
+	wake     map[string]chan struct{}
 }
 
 func (s *Service) now() time.Time {
@@ -246,8 +247,12 @@ func (s *Service) Tick(ctx context.Context, name string) {
 	rec := s.Ledger.Member(name)
 	switch {
 	case rec.Home == nil:
+		if !s.launchDue(name) {
+			return
+		}
 		if err := s.Rotate(ctx, name, "first session"); err != nil {
-			s.logf("%s: start home session: %v", name, err)
+			s.launchFailed(name)
+			s.logf("%s: start home session: %v (retrying in %s)", name, err, LaunchBackoff)
 			return
 		}
 	default:
@@ -265,14 +270,35 @@ func (s *Service) Tick(ctx context.Context, name string) {
 		case rec.Home.Turns >= m.Home.RotateTurns():
 			due = "session turn limit"
 		}
-		if due != "" && (st == "gone" || st != "running") {
+		if due != "" && (st == "gone" || st != "running") && s.launchDue(name) {
 			if err := s.Rotate(ctx, name, due); err != nil {
-				s.logf("%s: rotate (%s): %v", name, due, err)
+				s.launchFailed(name)
+				s.logf("%s: rotate (%s): %v (retrying in %s)", name, due, err, LaunchBackoff)
 				return
 			}
 		}
 	}
 	s.deliver(ctx, name)
+}
+
+// LaunchBackoff spaces out home-session launch attempts after a failure, so
+// a misconfiguration does not become a launch every tick.
+const LaunchBackoff = time.Minute
+
+func (s *Service) launchDue(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.failedAt[name]
+	return !ok || s.now().Sub(t) >= LaunchBackoff
+}
+
+func (s *Service) launchFailed(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failedAt == nil {
+		s.failedAt = map[string]time.Time{}
+	}
+	s.failedAt[name] = s.now()
 }
 
 // enqueue adds a message to the home inbox (durable) and wakes delivery.

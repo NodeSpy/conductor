@@ -19,6 +19,7 @@ type PaseoDispatcher interface {
 	AgentStatus(ctx context.Context, id string) (string, error)
 	Send(ctx context.Context, id, prompt string) error
 	Archive(ctx context.Context, agentID string) error
+	ReleaseWorkspace(ctx context.Context, id string) error
 }
 
 var _ PaseoDispatcher = (*dispatch.Dispatcher)(nil)
@@ -40,6 +41,10 @@ type PaseoHome struct {
 	Revoke func(dispatchID string)
 	// Credentials resolves the acts-as-you env for the session (optional).
 	Credentials func(ctx context.Context, t core.Trigger) (dispatch.Credentials, error)
+	// Resolve picks the home step's model and provider through the engine's
+	// fleet ladder (Engine.ResolveModel). nil: an exact pin passes through,
+	// anything else bare-launches.
+	Resolve func(ctx context.Context, step config.Step) (model, runtime, provider string)
 	// Jail is the agent jail seam. While it is active a home session
 	// launches on paseo's `conductor` provider (installed by `conductor
 	// paseo install-plugin`), which jails it keyed by its cwd, and retiring
@@ -81,15 +86,20 @@ func (h *PaseoHome) Launch(ctx context.Context, spec HomeSpec) (string, error) {
 		Title:  "member " + spec.Member,
 		Action: act,
 	}
+	step := config.Step{Type: "agent", Runtime: cfg.MemberHomeRuntime(spec.Member), Model: m.Home.Model, Skill: sk, Checkout: "none",
+		Labels:      map[string]string{"member": spec.Member, "member_role": config.MemberRoleHome, "member_session": spec.Session},
+		BoundMember: spec.Member, BoundMemberRole: config.MemberRoleHome}
+	model, provider := "", ""
+	if h.Resolve != nil {
+		model, _, provider = h.Resolve(ctx, step)
+	}
 	req := dispatch.Request{
-		Trigger: t,
-		Action:  act,
-		Step: config.Step{Type: "agent", Runtime: cfg.MemberHomeRuntime(spec.Member), Skill: sk, Checkout: "none",
-			Labels:      map[string]string{"member": spec.Member, "member_role": config.MemberRoleHome, "member_session": spec.Session},
-			BoundMember: spec.Member, BoundMemberRole: config.MemberRoleHome},
+		Trigger:       t,
+		Action:        act,
+		Step:          step,
 		Identity:      "member:" + spec.Member,
-		Provider:      m.Home.Provider,
-		Model:         m.Home.Model,
+		Provider:      provider,
+		Model:         model,
 		Workspace:     wsID,
 		DispatchID:    spec.Dispatch,
 		LiteralPrompt: true,
@@ -105,11 +115,16 @@ func (h *PaseoHome) Launch(ctx context.Context, spec HomeSpec) (string, error) {
 		}
 	}
 	ref, err := d.Dispatch(ctx, req)
-	if err != nil {
-		return "", err
+	if err == nil && ref.AgentID == "" {
+		err = fmt.Errorf("paseo returned no agent id")
 	}
-	if ref.AgentID == "" {
-		return "", fmt.Errorf("paseo returned no agent id")
+	if err != nil {
+		// The workspace was created for this launch alone: release it rather
+		// than leave an agent-less workspace behind for every failed attempt.
+		if rerr := d.ReleaseWorkspace(context.WithoutCancel(ctx), wsID); rerr != nil {
+			err = fmt.Errorf("%w (and releasing its workspace %s: %v)", err, wsID, rerr)
+		}
+		return "", err
 	}
 	if h.Hold != nil {
 		h.Hold(ref.AgentID)

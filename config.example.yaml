@@ -1366,8 +1366,7 @@ members:
     home:
       rotate: { max_age: 24h, max_turns: 100 }   # a fresh session resumes from the handoff note + ledger
       # runtime: paseo                           # the paseo runtime (default: the default paseo)
-      # provider: claude                         # pin the home model (both or neither)
-      # model: claude-opus-5
+      # model: claude-opus-5                     # a fleet / id / list, resolved like a step's
     worker:
       runtime: claude-cli                        # default: the one `use: cli` runtime
       timeout: 2h

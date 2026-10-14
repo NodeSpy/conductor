@@ -113,9 +113,6 @@ members:
 		"unknown operator": `
 members:
   sre: { operators: [mallory] }`,
-		"provider without model": `
-members:
-  sre: { home: { provider: claude } }`,
 		"home not paseo": `
 members:
   sre: { home: { runtime: claude-cli } }`,
