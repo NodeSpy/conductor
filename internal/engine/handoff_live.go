@@ -10,6 +10,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/handoff"
+	"github.com/NodeSpy/conductor/internal/skill"
 )
 
 // liveHandoff is a currently-open interactive hand-off the daemon can act on out
@@ -85,11 +86,27 @@ func (e *Engine) releaseHandoff(ctx context.Context, agentID, prKey, stepID stri
 	}
 	e.hold.Remove(agentID)
 	e.deregisterLiveHandoff(agentID)
+	e.revokeHandoffSession(agentID)
 	if agentID == "" || e.affinityOwns(agentID) || e.disp == nil {
 		return
 	}
 	if err := e.archiveAgent(context.WithoutCancel(ctx), agentID); err != nil {
 		e.log("hand-off %q (agent %s): reclaim failed: %v", stepID, agentID, err)
+	}
+}
+
+// revokeHandoffSession kills the released hand-off's conductor session token
+// now, rather than leaving it valid (and persisted) until its sliding expiry.
+// Runs before the archive, which forgets the agent's dispatch bindings.
+func (e *Engine) revokeHandoffSession(agentID string) {
+	b := skill.Active()
+	if b == nil || agentID == "" {
+		return
+	}
+	if dl, ok := e.disp.(interface{ DispatchesForAgent(string) []string }); ok {
+		for _, d := range dl.DispatchesForAgent(agentID) {
+			b.RevokeDispatch(d)
+		}
 	}
 }
 

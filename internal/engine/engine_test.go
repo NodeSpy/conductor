@@ -28,6 +28,7 @@ type fakeDispatcher struct {
 	archived       chan string                                     // agent ids passed to Archive (if set)
 	dispatchAgents map[string]string                               // AgentForDispatch fixture
 	inflightIDs    map[string]bool                                 // DispatchInFlight fixture
+	agentDisps     map[string][]string                             // DispatchesForAgent fixture
 	liveIDs        []string                                        // LiveAgents fixture
 }
 
@@ -41,6 +42,7 @@ func (f *fakeDispatcher) Dispatch(_ context.Context, r dispatch.Request) (dispat
 
 func (f *fakeDispatcher) WaitForAgent(context.Context, string, time.Duration) {}
 func (f *fakeDispatcher) HasLiveAgent(context.Context, string, string) bool   { return f.liveAgent }
+func (f *fakeDispatcher) DispatchesForAgent(id string) []string               { return f.agentDisps[id] }
 func (f *fakeDispatcher) LiveAgents(context.Context, string, string) []string { return f.liveIDs }
 func (f *fakeDispatcher) Archive(_ context.Context, id string) error {
 	if f.archived != nil {

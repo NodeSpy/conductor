@@ -1149,6 +1149,11 @@ func (d *Dispatcher) AgentForDispatch(dispatchID string) string {
 	return d.Owned.AgentForDispatch(dispatchID)
 }
 
+// DispatchesForAgent lists the dispatch ids that launched an agent.
+func (d *Dispatcher) DispatchesForAgent(agentID string) []string {
+	return d.Owned.DispatchesForAgent(agentID)
+}
+
 // DispatchInFlight reports whether the dispatch is still running (conductor is
 // blocked on its output). A done call for an in-flight dispatch defers to the
 // step-boundary archive rather than interrupting the capture.

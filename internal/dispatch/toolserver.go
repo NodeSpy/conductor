@@ -226,11 +226,9 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 	// An interactive hand-off waits on a human and is held (never culled), so
 	// its creds must outlive the 2h dispatch window — else the agent's
 	// `conductor call …` is dead by the time the human gets to it.
-	sessTTL := skill.SessionTTL
-	if req.Interactive {
-		sessTTL = skill.HandoffSessionTTL
-	}
-	tok, err := b.MintSession(skill.Identity{
+	// It is also durable: persisted across daemon restarts (every auto-update
+	// is one) and sliding on use, since the token in its env can't be rewritten.
+	id := skill.Identity{
 		Agent:         req.Action.Agent,
 		Repo:          req.Trigger.Target.Repo,
 		Trigger:       req.Trigger.Kind,
@@ -240,7 +238,14 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 		Sem:           req.Trigger.Semantics(),
 		TargetTrusted: req.Trigger.TargetTrusted,
 		Dispatch:      req.DispatchID, // as above: both paths carry the anchor
-	}, uint32(os.Getuid()), sessTTL)
+	}
+	var tok string
+	var err error
+	if req.Interactive {
+		tok, err = b.MintHandoffSession(id, uint32(os.Getuid()))
+	} else {
+		tok, err = b.MintSession(id, uint32(os.Getuid()), skill.SessionTTL)
+	}
 	if err != nil {
 		return nil
 	}
