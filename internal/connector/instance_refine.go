@@ -151,6 +151,13 @@ func validateInstanceRefinement(typeDecl, instanceDecl *sdk.Decl) error {
 				problems = append(problems, fmt.Sprintf(
 					"event %q: a brand-new event (absent from the type-level declaration) declares option_hooks — not permitted", ev.Name))
 			}
+			// Nor reopens_target: it lifts the closed-target refusal on
+			// both write surfaces for whatever repo#number its facts name,
+			// so an event install-time review never saw must not carry it.
+			if ev.Semantics != nil && ev.Semantics.ReopensTarget {
+				problems = append(problems, fmt.Sprintf(
+					"event %q: a brand-new event (absent from the type-level declaration) declares reopens_target — not permitted", ev.Name))
+			}
 			continue
 		}
 		if msg, ok := eventSemanticsRefine(te.Semantics, ev.Semantics); !ok {
@@ -194,6 +201,17 @@ func eventSemanticsRefine(t, i *sdk.EventSemantics) (string, bool) {
 	}
 	if !reflect.DeepEqual(tCT, iCT) {
 		return "closes_target differs from the type-level declaration's same-named event", false
+	}
+
+	var tRO, iRO bool
+	if t != nil {
+		tRO = t.ReopensTarget
+	}
+	if i != nil {
+		iRO = i.ReopensTarget
+	}
+	if tRO != iRO {
+		return "reopens_target differs from the type-level declaration's same-named event", false
 	}
 
 	var tScope, iScope []sdk.ScopeFact
@@ -264,7 +282,9 @@ func optionHooksEqual(a, b []sdk.OptionHook) bool {
 }
 
 // scopeFactsEqual compares two ScopeFact lists as sets (order-independent —
-// the wire gives no ordering guarantee), by Dimension+Fact+Bound.
+// the wire gives no ordering guarantee), by Dimension+Fact+Bound — an
+// instance decl that unbinds a dimension would keep a closed target's
+// number or branch in context.
 func scopeFactsEqual(a, b []sdk.ScopeFact) bool {
 	if len(a) != len(b) {
 		return false

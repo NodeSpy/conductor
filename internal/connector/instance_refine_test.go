@@ -473,3 +473,43 @@ func TestInstanceDeclIdenticalOptionHooksOnExistingEventPasses(t *testing.T) {
 		t.Fatalf("identical option_hooks (modulo map order) must not disable the connector: %s", in.DisabledReason)
 	}
 }
+
+// A per-instance decl must not lift the closed-target refusal: unbinding a
+// target's own number (it would stay in context after the PR closed),
+// adding reopens_target to an event the type decl already declares, or
+// declaring it on a brand-new event all disable the connector.
+func TestInstanceDeclCannotLiftTheClosedTargetBinding(t *testing.T) {
+	bound := []sdk.ScopeFact{{Dimension: "repo", Fact: "repo"}, {Dimension: "number", Fact: "number", Bound: true}}
+	typeDecl := sdk.Decl{Events: []sdk.Event{{Name: "comment", Semantics: &sdk.EventSemantics{
+		Target: &sdk.TargetSemantics{Scope: bound},
+	}}}}
+	for _, c := range []struct {
+		name, want string
+		ev         sdk.Event
+	}{
+		{"unbind", "scope", sdk.Event{Name: "comment", Semantics: &sdk.EventSemantics{
+			Target: &sdk.TargetSemantics{Scope: []sdk.ScopeFact{{Dimension: "repo", Fact: "repo"}, {Dimension: "number", Fact: "number"}}},
+		}}},
+		{"reopen-existing", "reopens_target", sdk.Event{Name: "comment", Semantics: &sdk.EventSemantics{
+			Target: &sdk.TargetSemantics{Scope: bound}, ReopensTarget: true,
+		}}},
+		{"reopen-new", "reopens_target", sdk.Event{Name: "brand_new", Semantics: &sdk.EventSemantics{
+			Target: &sdk.TargetSemantics{Key: "{{.repo}}#{{.number}}", Assigned: []byte("true")}, ReopensTarget: true,
+		}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ev := c.ev
+			events := []sdk.Event{ev} // the same-named event, refined
+			if ev.Name != "comment" {
+				events = []sdk.Event{typeDecl.Events[0], ev} // a brand-new event alongside it
+			}
+			h := &fakeInstanceHandler{typeDecl: typeDecl, instance: func(string, map[string]any) sdk.Decl {
+				return sdk.Decl{Events: events}
+			}}
+			in := buildFakeInstanceConnector(t, "fakeclosed"+strings.ReplaceAll(c.name, "-", ""), h)
+			if in.DisabledReason == "" || !strings.Contains(in.DisabledReason, c.want) {
+				t.Fatalf("DisabledReason = %q, want the connector disabled naming %q", in.DisabledReason, c.want)
+			}
+		})
+	}
+}
