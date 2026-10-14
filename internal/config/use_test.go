@@ -1,7 +1,9 @@
 package config
 
 import (
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -10,8 +12,7 @@ func TestParseUseBuiltin(t *testing.T) {
 		kind UseKind
 		ref  string
 	}{
-		{UseKindConnector, "github"},
-		{UseKindConnector, "slack"},
+		{UseKindConnector, "webhook"},
 		{UseKindConnector, "kv"},
 		{UseKindRuntime, "paseo"},
 		{UseKindRuntime, "acp"},
@@ -73,12 +74,26 @@ func TestParseUseOfficialFallthrough(t *testing.T) {
 
 // Builtin beats official: a name that IS builtin never reaches the plugin repo.
 func TestParseUseBuiltinBeatsOfficial(t *testing.T) {
-	u, err := ParseUse(UseKindConnector, "github")
+	u, err := ParseUse(UseKindConnector, "webhook")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if u.Origin != OriginBuiltin {
-		t.Fatalf("github resolved to %s, want builtin", u.Origin)
+		t.Fatalf("webhook resolved to %s, want builtin", u.Origin)
+	}
+}
+
+// A vendor connector is never builtin: `use: github` (or slack, …) is the
+// official plugin.
+func TestParseUseVendorConnectorIsThePlugin(t *testing.T) {
+	for _, name := range []string{"github", "slack", "discord", "ntfy", "pushover", "notifiarr"} {
+		u, err := ParseUse(UseKindConnector, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u.Origin != OriginOfficial || u.Component != "connectors/"+name {
+			t.Errorf("%s resolved to %s %q, want the official plugin", name, u.Origin, u.Component)
+		}
 	}
 }
 
@@ -186,7 +201,7 @@ func TestParseUseVersionSuffix(t *testing.T) {
 // A builtin has no version to pin, and a local binary is whatever is on disk —
 // both refuse an @version rather than silently ignoring it.
 func TestParseUseVersionRefused(t *testing.T) {
-	if _, err := ParseUse(UseKindConnector, "github@v1.0.0"); err == nil {
+	if _, err := ParseUse(UseKindConnector, "webhook@v1.0.0"); err == nil {
 		t.Fatal("builtin accepted an @version")
 	}
 	if _, err := ParseUse(UseKindConnector, "./p/conductor-jira@v1.0.0"); err == nil {
@@ -204,8 +219,8 @@ func TestParseUseKindMismatchRefused(t *testing.T) {
 	if !strings.Contains(err.Error(), "can never be wired as a connector") {
 		t.Fatalf("unhelpful error: %v", err)
 	}
-	if _, err := ParseUse(UseKindRuntime, "github"); err == nil {
-		t.Fatal("runtimes: use: github was accepted")
+	if _, err := ParseUse(UseKindRuntime, "webhook"); err == nil {
+		t.Fatal("runtimes: use: webhook was accepted")
 	}
 }
 
@@ -230,8 +245,17 @@ func TestUseKindDir(t *testing.T) {
 	}
 }
 
+// registerBuiltinConnectorTestSeq makes each TestRegisterBuiltinConnector run
+// register a FRESH type name: RegisterBuiltinConnector mutates the package-
+// global builtinConnectors map with no unregister API (production has no
+// reason to offer one — a bundled type never un-bundles at runtime), so a
+// fixed name's registration from one run leaks into the next under
+// `-count>1` (same process, same map) and trips this test's own precondition
+// check.
+var registerBuiltinConnectorTestSeq int32
+
 func TestRegisterBuiltinConnector(t *testing.T) {
-	const name = "use-test-fake-type"
+	name := fmt.Sprintf("use-test-fake-type-%d", atomic.AddInt32(&registerBuiltinConnectorTestSeq, 1))
 	if BuiltinConnector(name) {
 		t.Fatal("precondition")
 	}
@@ -259,5 +283,24 @@ func TestRegisterBuiltinConnector(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("BuiltinNames omits a registered type")
+	}
+}
+
+// Remote references resolve to a git URL on any host, over https or ssh.
+func TestUseGitURL(t *testing.T) {
+	for ref, want := range map[string][2]string{
+		"github.com/acme/conductor-jira":                  {"https://github.com/acme/conductor-jira", ""},
+		"acme/conductor-plugins//connectors/jira":         {"https://github.com/acme/conductor-plugins", "connectors/jira"},
+		"gitlab.com/group/sub/plugins//connectors/jira":   {"https://gitlab.com/group/sub/plugins", "connectors/jira"},
+		"ssh://git@git.corp.example/team/plugins//x":      {"ssh://git@git.corp.example/team/plugins", "x"},
+		"git@git.corp.example:team/plugins//connectors/x": {"ssh://git@git.corp.example/team/plugins", "connectors/x"},
+	} {
+		u, err := ParseUse(UseKindConnector, ref)
+		if err != nil {
+			t.Fatalf("%s: %v", ref, err)
+		}
+		if u.GitURL() != want[0] || u.Component != want[1] {
+			t.Fatalf("%s: url=%q component=%q, want %q %q", ref, u.GitURL(), u.Component, want[0], want[1])
+		}
 	}
 }

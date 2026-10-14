@@ -25,6 +25,26 @@ echo "== build =="
 ( cd "$REPO" && go build -o "$BIN" ./cmd/conductor )
 echo "built $("$BIN" version)"
 
+# The github connector is a plugin: GITHUB_PLUGIN_BIN names a local build, else
+# it is built from conductor-plugins at the version the Docker e2e pins (one
+# pin, test/e2e/Dockerfile). Go uses its normal caches; everything conductor
+# writes goes under $WORK.
+GH_PLUGIN="$WORK/conductor-github"
+if [ -n "${GITHUB_PLUGIN_BIN:-}" ]; then
+  cp "$GITHUB_PLUGIN_BIN" "$GH_PLUGIN"
+else
+  pin="$(sed -n 's/^ARG GITHUB_PLUGIN_VERSION=//p' "$REPO/test/e2e/Dockerfile")"
+  ( cd "$WORK" && GOBIN="$WORK/gobin" CGO_ENABLED=0 go install "github.com/NodeSpy/conductor-plugins/connectors/github@$pin" )
+  mv "$WORK/gobin/github" "$GH_PLUGIN"
+fi
+chmod 0755 "$GH_PLUGIN"
+
+# Isolate every conductor state/config/cache path: `init` installs plugins
+# and writes state, and must never touch the operator's own dirs.
+export GOMODCACHE="$(go env GOMODCACHE)" GOCACHE="$(go env GOCACHE)" GOPATH="$(go env GOPATH)"
+export HOME="$WORK/home" XDG_STATE_HOME="$WORK/state" XDG_CONFIG_HOME="$WORK/xdgconfig" XDG_CACHE_HOME="$WORK/cache"
+mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
+
 # Dummy env so the demo github connector resolves (hermetic, no real secrets).
 export GH_TOKEN=dummy
 mkdir -p "$WORK/vault"
@@ -35,21 +55,18 @@ write_config() {
   cat > "$WORK/config.yaml" <<EOF
 connectors:
   gh:
-    type: github
+    use: $GH_PLUGIN
     identity: { read_token: env:GH_TOKEN, write_token: env:GH_TOKEN }
     webhook: { listen: "127.0.0.1:8787", path: /webhook, secret: env:GH_TOKEN, verify_signature: false }
     me: { logins: [conductor-bot] }
 vaults:
   house: { type: file, dir: $WORK/vault }
-agents:
-  my-opus: { provider: claude }
 packs:
   review:
     source: $src
     preset: claude
     connectors: { github: gh }
     secrets:    { review_token: house/review }
-    agents:     { reviewer: my-opus }
     triggers:
       on_review_request:
         enabled: true
@@ -69,7 +86,7 @@ run_lifecycle() {
 
   echo "== [$label] assertions =="
   have "$WORK/init.out"     "review-kit"                 "$label: init resolved review-kit"
-  have "$WORK/init.out"     "grants skill: gh.submit_review" "$label: plan surfaces the skill grant (namespaced/rebound)"
+  have "$WORK/init.out"     "grants skill: gh.comment, gh.submit_review" "$label: plan surfaces the skill grant (namespaced/rebound)"
   have "$WORK/init.out"     "ARMED"                      "$label: plan shows the trigger armed"
   have "$WORK/init.out"     "acme/app"                   "$label: plan shows the repo scope (consent)"
   have "$WORK/lock.out"     "name: review-kit"           "$label: lockfile pins the pack by canonical name"

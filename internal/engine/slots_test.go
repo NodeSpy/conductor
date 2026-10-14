@@ -11,7 +11,6 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
-	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
@@ -110,7 +109,7 @@ func TestSlotsCancelledWaiterDoesNotLeakTheSlot(t *testing.T) {
 // wait belongs to the run's goroutine, not the engine loop — and the run starts
 // as soon as a slot frees.
 func TestFlowWaitForSlotDoesNotBlockTheLoop(t *testing.T) {
-	cfg := "control: { max_concurrent_agents: 1 }\n" + gateCfg
+	cfg := "policy: { concurrency: { max_agents: 1 } }\n" + gateCfg
 	eng, _, _, _ := buildFlowEngine(t, cfg)
 	if !eng.acquire(context.Background()) { // a long fixer holds the only slot
 		t.Fatal("acquire")
@@ -137,7 +136,7 @@ func TestFlowWaitForSlotDoesNotBlockTheLoop(t *testing.T) {
 // A second trigger for a flow+target that is already waiting folds into it:
 // one run, carrying the newest event.
 func TestFlowWaitingRunCoalescesNewestEvent(t *testing.T) {
-	cfg := "control: { max_concurrent_agents: 1 }\n" + gateCfg
+	cfg := "policy: { concurrency: { max_agents: 1 } }\n" + gateCfg
 	eng, _, _, _ := buildFlowEngine(t, cfg)
 	eng.acquire(context.Background())
 	gateConnMu.Lock()
@@ -169,7 +168,7 @@ func TestFlowWaitingRunCoalescesNewestEvent(t *testing.T) {
 // a follow-up PR nobody asked for). A trigger queued after the close — a
 // reopened PR — still runs.
 func TestFlowWaitingFixerDroppedWhenPRCloses(t *testing.T) {
-	cfg := "control: { max_concurrent_agents: 1 }\n" + gateCfg
+	cfg := "policy: { concurrency: { max_agents: 1 } }\n" + gateCfg
 	eng, _, _, _ := buildFlowEngine(t, cfg)
 	eng.acquire(context.Background())
 	before := gateCalls()
@@ -178,7 +177,8 @@ func TestFlowWaitingFixerDroppedWhenPRCloses(t *testing.T) {
 	fix.Kind = "new_comment"
 	eng.process(context.Background(), fix)
 	closed := flowTrigger("")
-	closed.Kind = core.KindClosed
+	closed.Kind = "_closed"
+	closed.Action = nil // an unrouted closing event carries no trigger's work
 	eng.process(context.Background(), closed)
 	eng.release()
 
@@ -229,7 +229,8 @@ func TestClosedPRStopsRunningFixers(t *testing.T) {
 		Flow: flow.New(flow.Runner{Cfg: &cfg, Conns: reg, Secrets: secrets.New(), Store: st}), Connectors: reg})
 
 	closed := flowTrigger("")
-	closed.Kind = core.KindClosed
+	closed.Kind = "_closed"
+	closed.Action = nil // an unrouted closing event carries no trigger's work
 	eng.process(context.Background(), closed)
 
 	d.mu.Lock()

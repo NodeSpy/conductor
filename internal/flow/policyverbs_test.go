@@ -169,15 +169,15 @@ stores:
 }
 
 // An entry may be keyed by the option's own NAME or by the scope DIMENSION the
-// connector declares on it. They are not always the same word — slack's
-// `channel_id` option carries dimension `channel`, a vault's `key` carries
+// connector declares on it. They are not always the same word — a chat
+// connector's `channel_id` option carries dimension `channel`, a vault's `key` carries
 // `secret` — and an `allow_scopes: {channel: […]}` line that stopped applying
 // to `channel_id` after the rename would be a scope silently switching off.
 func TestVerbScopeKeyMayBeOptionNameOrDimension(t *testing.T) {
-	// notifiarr.notify's option is `channel_id`, carrying dimension `channel`.
+	// fake.notify's option is `channel_id`, carrying dimension `channel`.
 	r := scopeRig(t, `
 connectors:
-  nf: { use: notifiarr, api_key: k }
+  nf: { use: fake }
 policy:
   agent_authored:
     verbs:

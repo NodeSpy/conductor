@@ -17,7 +17,7 @@ import (
 func capturePublisher() (*notify.Notifier, func() []string) {
 	var mu sync.Mutex
 	var events []string
-	n := notify.New(config.Notify{}, func(string, ...any) {}, nil)
+	n := notify.New(func(string, ...any) {}, nil)
 	n.SetPublisher(func(_ context.Context, event string, _ core.Trigger, line string, extra map[string]any) {
 		mu.Lock()
 		v, _ := extra["version"].(string)
@@ -67,7 +67,7 @@ func TestApplyModeParsing(t *testing.T) {
 func TestHandleNewerReleaseModes(t *testing.T) {
 	installs, applies := 0, 0
 	origInstall, origApply := installRelease, applyRelease
-	installRelease = func(force bool, tag string) (bool, string, error) {
+	installRelease = func(force bool, tag, cfgFile string, notifier *notify.Notifier) (bool, string, error) {
 		installs++
 		return true, tag, nil
 	}
@@ -76,7 +76,7 @@ func TestHandleNewerReleaseModes(t *testing.T) {
 
 	// Default (apply unset = true): install + apply, no emission.
 	n, got := capturePublisher()
-	_, applied := handleNewerRelease(context.Background(), config.Update{Auto: true}, "v9.9.9", "", n, nil)
+	_, applied := handleNewerRelease(context.Background(), config.Update{Auto: true}, "v9.9.9", "", n, nil, "")
 	if !applied || installs != 1 || applies != 1 {
 		t.Fatalf("default mode: applied=%v installs=%d applies=%d", applied, installs, applies)
 	}
@@ -89,7 +89,7 @@ func TestHandleNewerReleaseModes(t *testing.T) {
 	if err := yaml.Unmarshal([]byte("auto: true\napply: workflow"), &wu); err != nil {
 		t.Fatal(err)
 	}
-	announced, applied := handleNewerRelease(context.Background(), wu, "v9.9.9", "", n, nil)
+	announced, applied := handleNewerRelease(context.Background(), wu, "v9.9.9", "", n, nil, "")
 	if applied || announced != "v9.9.9" {
 		t.Fatalf("workflow mode: applied=%v announced=%q", applied, announced)
 	}
@@ -102,14 +102,14 @@ func TestHandleNewerReleaseModes(t *testing.T) {
 		t.Fatalf("emission: %v", evs)
 	}
 	// The same tag announces once.
-	if a2, _ := handleNewerRelease(context.Background(), wu, "v9.9.9", announced, n, nil); a2 != "v9.9.9" {
+	if a2, _ := handleNewerRelease(context.Background(), wu, "v9.9.9", announced, n, nil, ""); a2 != "v9.9.9" {
 		t.Fatalf("re-announce: %q", a2)
 	}
 	if evs := got(); len(evs) != 1 {
 		t.Fatalf("same tag re-emitted: %v", evs)
 	}
 	// A NEWER tag announces again.
-	if _, _ = handleNewerRelease(context.Background(), wu, "v9.9.10", "v9.9.9", n, nil); len(got()) != 2 {
+	if _, _ = handleNewerRelease(context.Background(), wu, "v9.9.10", "v9.9.9", n, nil, ""); len(got()) != 2 {
 		t.Fatalf("new tag not announced: %v", got())
 	}
 }

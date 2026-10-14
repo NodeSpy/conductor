@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 func TestServicePATHAndUnit(t *testing.T) {
@@ -182,5 +184,64 @@ func TestWriteUnitRefusesTestBinaryExecStart(t *testing.T) {
 	}
 	if isTestBinary("/usr/local/bin/conductor") {
 		t.Fatal("isTestBinary must NOT flag a normal install path")
+	}
+}
+
+// A config the environment didn't move renders no CONDUCTOR_CONFIG line, so an
+// existing unit's content (and an auto-update's unit rewrite check) is
+// unchanged. A moved one pins the resolved file: the service doesn't inherit
+// the shell that installed it, so without the pin the daemon would read
+// ~/.config/conductor instead.
+func TestUnitPinsAMovedConfig(t *testing.T) {
+	if serviceKind() == "" {
+		t.Skip("no service manager on this OS")
+	}
+	h := t.TempDir()
+	t.Setenv("HOME", h)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("CONDUCTOR_CONFIG", "")
+	_, plain := unitPathAndContent()
+	if strings.Contains(plain, "CONDUCTOR_CONFIG") {
+		t.Fatalf("an unmoved config must not pin CONDUCTOR_CONFIG:\n%s", plain)
+	}
+	if !strings.Contains(plain, filepath.Join(h, ".config", "conductor")+"/conductor.env") && serviceKind() == "systemd" {
+		t.Fatalf("default unit must keep ~/.config/conductor/conductor.env:\n%s", plain)
+	}
+
+	x := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", x)
+	want := filepath.Join(x, "conductor", "config.yaml")
+	_, moved := unitPathAndContent()
+	if !strings.Contains(moved, "CONDUCTOR_CONFIG") || !strings.Contains(moved, want) {
+		t.Fatalf("a moved config must pin CONDUCTOR_CONFIG=%s:\n%s", want, moved)
+	}
+	if serviceKind() == "systemd" && !strings.Contains(moved, "EnvironmentFile=-"+filepath.Join(x, "conductor")+"/conductor.env") {
+		t.Fatalf("conductor.env must follow the moved config dir:\n%s", moved)
+	}
+
+	f := filepath.Join(t.TempDir(), "box.yaml")
+	t.Setenv("CONDUCTOR_CONFIG", f)
+	_, override := unitPathAndContent()
+	if !strings.Contains(override, "CONDUCTOR_CONFIG="+f) && !strings.Contains(override, "<string>"+f+"</string>") {
+		t.Fatalf("CONDUCTOR_CONFIG must win and be pinned:\n%s", override)
+	}
+}
+
+// The CLI's default config file and the vault default follow the same
+// resolution, so a moved config never leaves the vault behind.
+func TestDefaultConfigAndVaultFollowTheResolvedDir(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "")
+	d := t.TempDir()
+	t.Setenv("CONDUCTOR_CONFIG", d)
+	got, _ := configPath(nil)
+	if got != filepath.Join(d, "config.yaml") {
+		t.Fatalf("configPath default = %q, want %q", got, filepath.Join(d, "config.yaml"))
+	}
+	if v := secrets.DefaultVaultPath(); v != filepath.Join(d, "vault.json") {
+		t.Fatalf("vault default = %q, want it beside the config", v)
+	}
+	if got, _ := configPath([]string{"--config", "/x/y.yaml"}); got != "/x/y.yaml" {
+		t.Fatalf("--config must still win, got %q", got)
 	}
 }

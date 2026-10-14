@@ -55,6 +55,24 @@ func withSkillSurface(t *testing.T) {
 	t.Cleanup(func() { skill.SetActive(nil) })
 }
 
+// declaredIdentity is a connector's declared credential guidance, as the
+// github plugin declares it: the agent's GH_TOKEN is the operator's, and
+// pushes go over SSH.
+const declaredIdentity = "\n\n---\n" +
+	"IDENTITY: you act as ME. GH_TOKEN/GITHUB_TOKEN are MY token, so every comment, " +
+	"review, reply, and `gh`/API write is attributed to me — and commits and `git push` " +
+	"go over SSH as me. NEVER post, submit, approve, or otherwise write anything with the " +
+	"App/bot token. If a large read would burn my rate limit you MAY read (only) with the " +
+	"App token via `GH_TOKEN=$PC_GH_APP_TOKEN gh ...`, but never write with it."
+
+// withDeclaredIdentity is a request whose prompt carries the declared
+// credential guidance, as the engine appends it.
+func withDeclaredIdentity(req dispatch.Request, task string) dispatch.Request {
+	req.Action.Prompt = task + declaredIdentity
+	req.Credentials.Guidance = declaredIdentity
+	return req
+}
+
 func jailedCLILaunch(t *testing.T, up bool) launchCall {
 	t.Helper()
 	withTestJail(t, up)
@@ -62,7 +80,7 @@ func jailedCLILaunch(t *testing.T, up bool) launchCall {
 	l := &fakeLauncher{out: func([]string) (string, error) { return `{"session_id":"s-1","result":"ok"}`, nil }}
 	c := newCLIController("r", config.ControllerConfig{Transport: "cli", Tool: "claude-code"}, nil)
 	c.launch = l.launch
-	req := makeReq("merge_conflict", "fix the conflict"+dispatch.WriteWrapperGuidance)
+	req := withDeclaredIdentity(makeReq("merge_conflict", ""), "fix the conflict")
 	req.DispatchID = "d-jail-1"
 	req.Trigger.TargetTrusted = true
 	sess, err := c.NewSession(context.Background(), Spec{Request: req, Cwd: t.TempDir()}, nil)
@@ -97,10 +115,10 @@ func TestJailedPromptCarriesNoTokenOrSSHInstructions(t *testing.T) {
 }
 
 // Unjailed — including a default jail that degraded on this box — the
-// prompt keeps today's identity text, byte for byte.
+// prompt keeps the connector's declared identity text, byte for byte.
 func TestUnjailedPromptIsUnchanged(t *testing.T) {
 	call := jailedCLILaunch(t, false)
-	want := "fix the conflict" + dispatch.WriteWrapperGuidance
+	want := "fix the conflict" + declaredIdentity
 	if !strings.Contains(call.stdin, want) {
 		t.Fatalf("the unjailed prompt changed:\n%s", call.stdin)
 	}
@@ -171,7 +189,7 @@ func TestJailedArgvPromptCarriesTheJailedIdentity(t *testing.T) {
 	l := &fakeLauncher{}
 	c := newCLIController("x", config.ControllerConfig{Transport: "cli", Tool: "claude-code", Command: []string{"mytool", "--flag"}}, nil)
 	c.launch = l.launch
-	req := makeReq("merge_conflict", "go"+dispatch.WriteWrapperGuidance)
+	req := withDeclaredIdentity(makeReq("merge_conflict", ""), "go")
 	req.Trigger.TargetTrusted = true
 	sess, err := c.NewSession(context.Background(), Spec{Request: req, Cwd: t.TempDir()}, nil)
 	if err != nil {
@@ -221,7 +239,7 @@ func TestACPJailedPromptCarriesTheJailedIdentity(t *testing.T) {
 		c := newACPController("gem", config.ControllerConfig{Command: []string{"fake"}}, nil)
 		c.dial = dialFake(agent)
 		c.dialJailed = jailed
-		sess, err := c.NewSession(context.Background(), Spec{Request: makeReq("merge_conflict", "fix it"+dispatch.WriteWrapperGuidance), Cwd: "/wt"}, nil)
+		sess, err := c.NewSession(context.Background(), Spec{Request: withDeclaredIdentity(makeReq("merge_conflict", ""), "fix it"), Cwd: "/wt"}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -232,7 +250,7 @@ func TestACPJailedPromptCarriesTheJailedIdentity(t *testing.T) {
 		agent.mu.Lock()
 		got := agent.gotPrompt
 		agent.mu.Unlock()
-		want, not := dispatch.JailedIdentityGuidance, dispatch.WriteWrapperGuidance
+		want, not := dispatch.JailedIdentityGuidance, declaredIdentity
 		if !jailed {
 			want, not = not, want
 		}

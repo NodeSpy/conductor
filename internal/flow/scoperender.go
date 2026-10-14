@@ -10,7 +10,7 @@ import (
 
 // Rendering a SCOPE ALLOWLIST entry (docs/design/scope-templating.md).
 //
-// `verbs: {slack.post: {channel: ["#pr-{{.number}}"]}}` is a security check that
+// `verbs: {chat.post: {channel: ["#pr-{{.number}}"]}}` is a security check that
 // happens to be a template, which makes it a different job from rendering a
 // step's options — and the differences all point the same way: a check must
 // not be steerable by what it is checking, must not read anything it could
@@ -78,7 +78,7 @@ func renderScopePattern(pattern string, data map[string]any) (string, error) {
 // So: only facts the PLATFORM assigns, which the person who opened the PR
 // cannot choose.
 //
-//	number  the issue/PR number GitHub allocated
+//	number  the issue/PR number the forge allocated
 //	owner   the repo's owner, from the repo the event fired for
 //	name    that repo's name
 //	repo    owner/name

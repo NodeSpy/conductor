@@ -138,6 +138,7 @@ func (b *rpcBackend) CreateWorktree(ctx context.Context, opts CreateWorktreeOpti
 	out, err := b.invoke(ctx, "create_worktree", map[string]any{
 		"isolation": opts.Isolation, "path": opts.Path, "strategy": opts.Strategy,
 		"prNumber": opts.PRNumber, "forge": opts.Forge, "newBranch": opts.NewBranch, "baseRef": opts.BaseRef,
+		"fresh": opts.Fresh,
 	})
 	if err != nil {
 		return CreateWorktreeResult{}, err
@@ -165,6 +166,23 @@ func (b *rpcBackend) ListWorkspaces(ctx context.Context) ([]WorkspaceInfo, error
 		return nil, err
 	}
 	return wl, nil
+}
+
+func (b *rpcBackend) ListProjects(ctx context.Context) ([]ProjectInfo, error) {
+	out, err := b.invoke(ctx, "list_projects", nil)
+	if err != nil {
+		return nil, err
+	}
+	var pl []ProjectInfo
+	if err := decodeInto(out["projects"], &pl); err != nil {
+		return nil, err
+	}
+	return pl, nil
+}
+
+func (b *rpcBackend) RemoveProject(ctx context.Context, id string) error {
+	_, err := b.invoke(ctx, "remove_project", map[string]any{"id": id})
+	return err
 }
 
 func (b *rpcBackend) Clone(ctx context.Context, opts CloneOptions) error {

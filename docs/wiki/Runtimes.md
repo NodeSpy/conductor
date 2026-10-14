@@ -113,6 +113,22 @@ finds a prior run's `conductor/<kind>-<n>` worktree still present **reuses** it
 (launching another agent into it) rather than colliding on the deterministic
 branch name.
 
+A PR or branch worktree is cut from a base checkout of the repo. Conductor uses
+the paseo project you registered for it — found by the checkout's `origin`
+remote, so its name needn't match the repo slug, and it needn't have a
+workspace open — and only clones its own copy into
+`~/.conductor/checkouts/<repo>` when no project matches.
+
+The one sweep is for paseo **projects**, which paseo registers for every
+directory a workspace is created from and keeps after the workspaces are gone.
+Conductor creates workspaces from two directories of its own — its base
+checkouts (`~/.conductor/checkouts/<repo>`) and per-run directories
+(`~/.conductor/runs/<slug>`) — so every few minutes each paseo dispatcher
+unregisters a project under those directories once it has had no active
+workspace on two consecutive sweeps. Only paseo's registry entry goes (the
+checkout stays on disk, and the next worktree cut from it registers the project
+again); a project anywhere else is never considered.
+
 Everything else — session models, the session broker, capability
 degradation, interactive hand-offs — carries over from the controllers
 design unchanged; a runtime that owns an interactive surface is the default

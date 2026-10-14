@@ -33,7 +33,8 @@ connectors:
     base_url: http://localhost:8099
     listen: 0.0.0.0:8099
   github:
-    use: github
+    use: /usr/local/bin/conductor-github
+    api_base: http://mock-github:8080
     app:
       app_id: 123456
       private_key_path: /etc/conductor/github-app.pem
@@ -52,22 +53,25 @@ connectors:
       secret: e2e-webhook-secret
       verify_signature: true
   notify-discord:
-    use: discord
+    use: /usr/local/bin/conductor-discord
     webhook_url: http://sink-catcher:8080/discord
   notify-notifiarr:
-    use: notifiarr
+    use: /usr/local/bin/conductor-notifiarr
+    api_base: http://sink-catcher:8080/notifiarr/api/v1
     api_key: e2e-notifiarr-key
     channel_id: "42"
   notify-ntfy:
-    use: ntfy
+    use: /usr/local/bin/conductor-ntfy
     server: http://sink-catcher:8080/ntfy
     topic: conductor
   notify-pushover:
-    use: pushover
+    use: /usr/local/bin/conductor-pushover
+    api_base: http://sink-catcher:8080/pushover
     token: e2e-pushover-token
     user: e2e-pushover-user
   notify-slack:
-    use: slack
+    use: /usr/local/bin/conductor-slack
+    api_base: http://sink-catcher:8080/slackapi
     webhook_url: http://sink-catcher:8080/slack
 runtimes:
   paseo:
@@ -109,6 +113,27 @@ triggers:
       repo:
         - acme/*
         - grpe/*
+    # Progress as plain hooks (the pr-autopilot pack's shape): 👀 + pending on
+    # the commit the run starts on; 🚀/👍 + success on that same commit; 😕 +
+    # failure on the PR's current head; on a stop (PR closed mid-run) the 👀
+    # comes off and the pending resolves. Group H4 asserts what they post.
+    hooks:
+      - { at: start, if: reaction_subjects, uses: github.react,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", subjects: "{{.reaction_subjects}}", content: eyes } }
+      - { at: start, uses: github.set_status,
+          options: { repo: "{{.repo}}", sha: "{{.run.start_sha}}", state: pending, context: "{{.me.login}} / comment", description: "replying to {{.author}}'s comment" } }
+      - { at: done, if: reaction_subjects, uses: github.react,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", subjects: "{{.reaction_subjects}}", content: "{{if .run.pushed}}rocket{{else}}+1{{end}}" } }
+      - { at: done, uses: github.set_status,
+          options: { repo: "{{.repo}}", sha: "{{.run.start_sha}}", state: success, context: "{{.me.login}} / comment", description: "{{if .run.pushed}}pushed {{.run.head_short}}{{else}}done — no changes pushed{{end}}" } }
+      - { at: fail, if: reaction_subjects, uses: github.react,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", subjects: "{{.reaction_subjects}}", content: confused } }
+      - { at: fail, uses: github.set_status,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", state: failure, context: "{{.me.login}} / comment", description: "gave up: {{.run.reason}}" } }
+      - { at: stop, if: reaction_subjects, uses: github.react,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", subjects: "{{.reaction_subjects}}", content: eyes, remove: true } }
+      - { at: stop, uses: github.set_status,
+          options: { repo: "{{.repo}}", sha: "{{.run.start_sha}}", state: success, context: "{{.me.login}} / comment", description: "stopped — {{.run.reason}}" } }
     steps:
       - !!merge <<: *fixer
         type: agent

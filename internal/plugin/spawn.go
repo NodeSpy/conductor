@@ -52,6 +52,38 @@ func spawnBaseEnv() []string {
 	return sandbox.MinimalEnv()
 }
 
+// grantedEnv is what a plugin may read from the daemon's environment: the
+// variables it declares (Capabilities.Env) AND the operator granted
+// (allow_env). A declaration alone grants nothing — the daemon's environment
+// carries the operator's secrets under names of their choosing.
+func grantedEnv(s Spec) []string {
+	declared := map[string]bool{}
+	for _, n := range s.EffectiveManifest().Env {
+		declared[n] = true
+	}
+	var out []string
+	for _, n := range s.AllowEnv {
+		if declared[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// withDeclaredEnv passes the daemon's values of the named variables through
+// to a plugin. Conductor's own control variables are never passed.
+func withDeclaredEnv(env, names []string) []string {
+	for _, n := range names {
+		if n == "" || strings.HasPrefix(n, "CONDUCTOR_") || strings.ContainsAny(n, "= ") {
+			continue
+		}
+		if v, ok := os.LookupEnv(n); ok {
+			env = replaceEnv(env, n, v)
+		}
+	}
+	return env
+}
+
 // EgressUnixFunc mints an OS-enforced egress proxy endpoint for an allowlist,
 // returning the daemon-side unix socket, a per-launch credential, and a revoke
 // closure. Wired from main (sandbox.ProxyManager.UnixEndpoint); nil in contexts
@@ -75,10 +107,13 @@ type EgressAddrFunc func(allow []string) (addr, cred string, revoke func(), err 
 // isolation: block still gets process/mount/pid isolation and structural
 // no-network (network.deny), just not the allowlist egress proxy.
 type SandboxDeps struct {
-	Self       string         // conductor's own executable (os.Executable()) — the in-sandbox forwarder
-	MaskPaths  []string       // daemon paths hidden inside the plugin's mount namespace
-	EgressUnix EgressUnixFunc // enforced-egress endpoint minter (namespaced launch)
-	EgressAddr EgressAddrFunc // enforced-egress endpoint minter (default launch)
+	Self      string   // conductor's own executable (os.Executable()) — the in-sandbox forwarder
+	MaskPaths []string // daemon paths hidden inside the plugin's mount namespace
+	// StagingRoot holds each plugin's staging directories (StagingDir); the
+	// plugin's own subtree is writable inside its sandbox. "" gives none.
+	StagingRoot string
+	EgressUnix  EgressUnixFunc // enforced-egress endpoint minter (namespaced launch)
+	EgressAddr  EgressAddrFunc // enforced-egress endpoint minter (default launch)
 }
 
 // buildCommand prepares the (possibly sandbox-wrapped) *exec.Cmd for a plugin,
@@ -88,7 +123,7 @@ type SandboxDeps struct {
 // warn — env scrubbing and all transport guards still apply.
 func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandboxed bool, err error) {
 	argv := append([]string{s.BinPath}, s.Args...)
-	env := spawnBaseEnv()
+	env := withDeclaredEnv(spawnBaseEnv(), grantedEnv(s))
 	cleanup = func() {}
 
 	spec := sandbox.FromConfig(s.Isolation)
@@ -118,10 +153,20 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandbo
 	// the OS sandbox can't be applied it degrades to the manifest-only path with a
 	// loud warning, so an engine that would run today keeps running rather than
 	// the daemon refusing to start it.
+	stage := ""
+	if sd.StagingRoot != "" {
+		// The plugin's staging subtree must exist to be bound, and is the one
+		// path under the daemon's state it may write.
+		stage = filepath.Join(sd.StagingRoot, s.Name)
+		if err := os.MkdirAll(stage, 0o700); err != nil {
+			return nil, nil, false, fmt.Errorf("plugin %s: staging dir: %w", s.Name, err)
+		}
+		spec.FS = append(spec.FS, stage)
+	}
 	if err := spec.Check(spawnGOOS, os.Geteuid(), spawnLookPath); err != nil {
 		if s.IsolationDefaulted {
 			log.Printf("plugin %s: default sandbox unavailable (%v) — running WITHOUT OS confinement; install util-linux (unshare) + enable unprivileged user namespaces to sandbox it", s.Name, err)
-			env, cleanup, cerr := confineToManifest(s, spawnBaseEnv(), sd)
+			env, cleanup, cerr := confineToManifest(s, withDeclaredEnv(spawnBaseEnv(), grantedEnv(s)), sd)
 			if cerr != nil {
 				return nil, nil, false, cerr
 			}
@@ -160,6 +205,12 @@ func buildCommand(s Spec, sd SandboxDeps) (cmd *exec.Cmd, cleanup func(), sandbo
 		// (inherited fds), so no socket needs binding.
 		if s.BinPath != "" {
 			nf = &sandbox.NetForward{Binds: []sandbox.BindMount{{Path: filepath.Dir(s.BinPath), RO: true}}}
+		}
+		if stage != "" {
+			if nf == nil {
+				nf = &sandbox.NetForward{}
+			}
+			nf.Binds = append(nf.Binds, sandbox.BindMount{Path: stage})
 		}
 	case len(masks) > 0 || spec.EnforcedEgress():
 		nf = &sandbox.NetForward{Self: sd.Self, Masks: masks}
@@ -219,8 +270,21 @@ func confineToManifest(s Spec, env []string, sd SandboxDeps) ([]string, func(), 
 	// it confines a cooperating client, which is the same manifest-level
 	// confinement every non-isolation: plugin gets (see the package doc). An
 	// `isolation:` block is what turns it into an OS-enforced wall.
+	//
+	// A Probe Spec (finding 2) ALSO confines even though its allowlist is
+	// empty — the opposite of a connector's normal "empty allow means
+	// unconfined" default (the rule right above this comment). It is never a
+	// real connector that merely declared no egress; it is the type-level
+	// `plugin.describe` probe, which must get NO network at all. Routed
+	// through the same enforced proxy path as a step engine's deny-by-default
+	// case, with an allowlist of nothing: every host is refused. Where
+	// sd.EgressAddr is nil (no proxy manager wired — this default,
+	// non-isolation: path has no OTHER enforcement mechanism) the probe runs
+	// with no confinement at all, same as every other plugin on this path
+	// without a wired proxy; realDial's "running WITHOUT OS sandbox" log
+	// already says so.
 	allow := m.Egress
-	confine := len(allow) > 0 || s.Kind == KindStep
+	confine := len(allow) > 0 || s.Kind == KindStep || s.Probe
 	if confine && sd.EgressAddr != nil {
 		addr, cred, revoke, err := sd.EgressAddr(allow)
 		if err != nil {

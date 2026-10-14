@@ -21,7 +21,9 @@ What it does:
 1. Downloads the binary to `~/.local/bin/conductor` and runs `conductor version` to
    confirm it works.
 2. Warns if `~/.local/bin` isn't on `PATH`.
-3. Seeds `~/.config/conductor/` if it doesn't already have a `config.yaml`:
+3. Seeds the config directory if it doesn't already have a config file:
+   `~/.config/conductor/` by default, or wherever `CONDUCTOR_CONFIG` /
+   `XDG_CONFIG_HOME` point (see [[Configuration]], "Where the config lives"):
    - `config.yaml` — a starter config with the github integration present but
      `enabled: false`.
    - `conductor.env` — placeholder secrets (`GH_WEBHOOK_SECRET=`,

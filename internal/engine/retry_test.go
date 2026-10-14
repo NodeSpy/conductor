@@ -130,6 +130,78 @@ func TestRetryFromFailedStepPinsRecordedInputs(t *testing.T) {
 	t.Fatal("no backlinked retry record appeared")
 }
 
+// retryCfgWithStartHook is retryCfg plus a workflow-level `at: start` hook
+// (the generic option_hooks successor to a chat connector's own `ack`
+// feedback) — for finding 4(a): a retry continuing from a LATER step is the
+// same attempt resuming partway through, so it must not re-fire; a retry
+// from the very top is a fresh attempt and should.
+const retryCfgWithStartHook = `
+connectors:
+  eg: { use: enginegate }
+triggers:
+  - on: eg.ping
+    hooks:
+      - at: start
+        uses: eg.post
+        options: { text: "ack" }
+    steps:
+      - { id: first,  uses: eg.post, options: { text: "one" } }
+      - { id: second, uses: eg.post, options: { text: "got {{.first.token}}" } }
+`
+
+// countAcks counts the ack-text posts among the gate connector's calls so
+// far — distinguishing the start hook firing from the steps' own calls
+// (which never render literally to "ack").
+func countAcks(calls []map[string]any) int {
+	n := 0
+	for _, c := range calls {
+		if c["text"] == "ack" {
+			n++
+		}
+	}
+	return n
+}
+
+// TestRetryFromLaterStepDoesNotRefireStartHook is finding 4(a)'s retry half:
+// retrying a recorded run from its FAILED (later) step must not re-post the
+// workflow's `at: start` option hook — that already fired on the ORIGINAL
+// attempt; this retry is a continuation of it, not a new one.
+func TestRetryFromLaterStepDoesNotRefireStartHook(t *testing.T) {
+	eng, st, _, _ := buildFlowEngine(t, retryCfgWithStartHook)
+	resetGateCalls()
+	rec := recordedRun(t)
+	_ = st.PutHistory(rec)
+
+	if _, err := eng.RetryRunByID(context.Background(), "rprev", "", false); err != nil {
+		t.Fatal(err)
+	}
+	calls := waitGateCalls(t, 1) // the retried step itself
+	if countAcks(calls) != 0 {
+		t.Fatalf("retry from a later step must NOT re-fire the start hook: %+v", calls)
+	}
+}
+
+// TestRetryFromTopFiresStartHookAsAFreshAttempt is the other half: a retry
+// explicitly from the first step (fromStep names it) is a deliberate full
+// re-run — a fresh attempt, not a continuation — so its start hook fires,
+// the same as a brand new run.
+func TestRetryFromTopFiresStartHookAsAFreshAttempt(t *testing.T) {
+	eng, st, _, _ := buildFlowEngine(t, retryCfgWithStartHook)
+	resetGateCalls()
+	rec := recordedRun(t)
+	_ = st.PutHistory(rec)
+
+	if _, err := eng.RetryRunByID(context.Background(), "rprev", "first", true); err != nil {
+		t.Fatal(err)
+	}
+	// Both steps re-run (from "first", force-replay) plus the start hook —
+	// three gate calls in total.
+	calls := waitGateCalls(t, 3)
+	if countAcks(calls) != 1 {
+		t.Fatalf("retry from the top must fire the start hook exactly once: %+v", calls)
+	}
+}
+
 func TestRetryFromExplicitStepAndErrors(t *testing.T) {
 	eng, st, _, _ := buildFlowEngine(t, retryCfg)
 	resetGateCalls()
@@ -195,7 +267,7 @@ func TestAgentFollowUpRoutes(t *testing.T) {
 	// Build the engine ON the capture-capable dispatcher: runnerFor resolves
 	// the default profile to the built-in paseo runner, which is exactly it.
 	e := New(Options{Config: baseCfg(), Store: tempStore(t), Dispatch: d,
-		Notifier: &fakeNotifier{}, UserToken: func() (string, error) { return "u", nil }})
+		Notifier: &fakeNotifier{}})
 
 	tr := agentTrigger("fix", "o/r", 1, "h", "s", config.Action{Type: "agent", Agent: "fixer"})
 	out, ok, err := e.agentFollowUp(context.Background(), "agent-9", "fixer", tr, "please fix the tests")

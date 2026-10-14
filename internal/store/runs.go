@@ -21,6 +21,18 @@ type WorkflowRun struct {
 	Outputs   map[string]map[string]any `json:"outputs"` // completed step id -> outputs
 	StepIndex int                       `json:"step_index"`
 	UpdatedAt time.Time                 `json:"updated_at"`
+	// StartHooksFired marks that this run has already passed its
+	// workflow-level `start`-phase option/operator hooks (flow.Runner.Run)
+	// — set and persisted the first time Run reaches that point, BEFORE any
+	// step executes, so a later resume of the SAME run (a crash before step
+	// 0 ever checkpointed included) never re-fires them. A retry that
+	// deliberately restarts a run from its very first step sets this false
+	// on the fresh record it persists (a new attempt, not a continuation);
+	// one that continues from a later step sets it true (engine.retryRun).
+	// An in-flight run persisted before this field existed decodes it as
+	// false — a one-time re-fire on its next resume across the upgrade,
+	// never again after.
+	StartHooksFired bool `json:"start_hooks_fired,omitempty"`
 	// Tokens / CostUSD tally the run's agent spend so far (#36 §14);
 	// ApproxCost marks any contributing figure as estimated.
 	Tokens     int     `json:"tokens,omitempty"`

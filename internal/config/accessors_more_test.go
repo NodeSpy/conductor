@@ -5,17 +5,6 @@ import (
 	"time"
 )
 
-func TestNotifyWantsRoute(t *testing.T) {
-	n := Notify{}
-	if !n.WantsRoute(NotifyRoute{}, "escalate") {
-		t.Fatal("empty route on: defers to the block policy")
-	}
-	r := NotifyRoute{On: []string{"escalate", "digest"}}
-	if !n.WantsRoute(r, "digest") || n.WantsRoute(r, "dispatch") {
-		t.Fatal("route on: restricts events")
-	}
-}
-
 func TestRetryDefaults(t *testing.T) {
 	if (Retry{}).Attempts() != 3 || (Retry{Max: -1}).Attempts() != 0 || (Retry{Max: 5}).Attempts() != 5 {
 		t.Fatal("Attempts table")
@@ -30,20 +19,14 @@ func TestRetryDefaults(t *testing.T) {
 
 func TestMergedControllersAndDefaultRuntime(t *testing.T) {
 	c := &Config{
-		Controllers: map[string]ControllerConfig{"legacy": {Type: "cli", Tool: "codex"}},
-		Runtimes:    map[string]RuntimeConfig{"rt": {Use: "paseo", Bin: "/x", Default: true}},
+		Runtimes: map[string]RuntimeConfig{"rt": {Use: "paseo", Bin: "/x", Default: true}},
 	}
 	merged := c.MergedControllers()
-	if len(merged) != 2 || merged["rt"].Bin != "/x" || merged["legacy"].Tool != "codex" {
+	if len(merged) != 1 || merged["rt"].Bin != "/x" {
 		t.Fatalf("merged: %+v", merged)
 	}
 	if c.DefaultRuntimeName() != "rt" {
 		t.Fatalf("default runtime: %q", c.DefaultRuntimeName())
-	}
-	// Falls back to a default:true controller when no runtime claims it.
-	c2 := &Config{Controllers: map[string]ControllerConfig{"lc": {Type: "paseo", Default: true}}}
-	if c2.DefaultRuntimeName() != "lc" {
-		t.Fatalf("controller fallback: %q", c2.DefaultRuntimeName())
 	}
 	if (&Config{}).DefaultRuntimeName() != "" {
 		t.Fatal("no default")

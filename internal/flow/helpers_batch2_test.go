@@ -316,10 +316,11 @@ steps:
 	if elapsed > 3*time.Second {
 		t.Fatalf("cancel took %s to interrupt a 30s-timeout wait — not ctx-aware", elapsed)
 	}
-	failed, errStr := rig.workflowFailed()
-	if !failed {
-		t.Fatal("a cancelled wait_for should fail its step")
-	}
+	// A cancelled run context is a daemon shutdown: the step errors with the
+	// context's error, and the run is INTERRUPTED (kept for resume) — neither
+	// ok nor failed.
+	assertInterrupted(t, rig)
+	errStr := stepErrorText(rig)
 	if strings.Contains(errStr, "timed out") {
 		t.Fatalf("error = %q, want the context's error, not our timeout", errStr)
 	}

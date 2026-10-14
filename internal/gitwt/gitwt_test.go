@@ -2,6 +2,7 @@ package gitwt
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 // These tests drive the REAL git binary against real repositories in t.TempDir():
@@ -459,6 +461,77 @@ func TestWorktreePathsAreUniquePerDispatch(t *testing.T) {
 	}
 }
 
+// Concurrent dispatches on one repo share its base clone. A checkout-pr used
+// to fetch the PR head into the shared FETCH_HEAD and then `worktree add` from
+// it outside the repo lock, so a sibling dispatch's fetch (its own PR's, or the
+// base clone refresh) rewrote FETCH_HEAD in between: the add failed with
+// "invalid reference: FETCH_HEAD", or quietly checked out ANOTHER PR's head.
+// Every dispatch here must succeed and land on its own PR's head.
+func TestConcurrentCheckoutPRsOnOneRepoEachLandTheirOwnHead(t *testing.T) {
+	origin := originRepo(t)
+	// A second PR on the same repo with a different head, so a clobbered
+	// FETCH_HEAD shows up as the wrong commit, not just as an error.
+	tmp := filepath.Join(t.TempDir(), "pr8")
+	run(t, "", "git", "clone", "-b", "main", origin, tmp)
+	gitIdentity(t, tmp)
+	writeFile(t, filepath.Join(tmp, "OTHER.md"), "other pr\n")
+	run(t, tmp, "git", "add", "-A")
+	run(t, tmp, "git", "commit", "-m", "other pr")
+	run(t, tmp, "git", "push", "origin", "HEAD:refs/heads/other")
+	run(t, tmp, "git", "push", "origin", "HEAD:refs/pull/8/head")
+	want := map[int]string{
+		7: strings.TrimSpace(out(t, origin, "git", "rev-parse", "refs/pull/7/head")),
+		8: strings.TrimSpace(out(t, origin, "git", "rev-parse", "refs/pull/8/head")),
+	}
+
+	p := newProv(t, origin)
+	ctx := context.Background()
+	// Seed the base clone so every dispatch takes the fetch-an-existing-clone
+	// path (the one the incident hit), not N racing first clones.
+	if _, err := p.baseClone(ctx, "acme/web"); err != nil {
+		t.Fatalf("seed base clone: %v", err)
+	}
+
+	const n = 12
+	type result struct {
+		pr  int
+		wt  string
+		err error
+	}
+	results := make(chan result, n)
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		pr := 7 + i%2
+		req := prReq()
+		req.DispatchID = fmt.Sprintf("disp-%d", i)
+		req.Trigger.Target.PR, req.Trigger.Target.Number = pr, pr
+		if pr == 8 {
+			req.Trigger.Context = map[string]any{"head_ref": "other"}
+		}
+		go func() {
+			<-start
+			wt, _, err := p.ProvisionWorktree(ctx, req)
+			results <- result{pr, wt, err}
+		}()
+	}
+	close(start)
+	for i := 0; i < n; i++ {
+		r := <-results
+		if r.err != nil {
+			t.Errorf("PR %d: ProvisionWorktree: %v", r.pr, r.err)
+			continue
+		}
+		if got := strings.TrimSpace(out(t, r.wt, "git", "rev-parse", "HEAD")); got != want[r.pr] {
+			t.Errorf("PR %d worktree %s is at %s, want its own head %s", r.pr, r.wt, got, want[r.pr])
+		}
+	}
+	// The per-dispatch fetch refs are scaffolding: none may outlive the add.
+	base := filepath.Join(p.CheckoutsDir(), "acme__web")
+	if left := strings.TrimSpace(out(t, base, "git", "for-each-ref", prFetchRefPrefix)); left != "" {
+		t.Errorf("temporary fetch refs left behind:\n%s", left)
+	}
+}
+
 // New("") falls back to the state dir the store uses, so the checkouts and
 // worktrees land where the reaper (and an operator) expect them.
 func TestNewDefaultsToTheStateDir(t *testing.T) {
@@ -561,4 +634,46 @@ func pushExtraCommit(t *testing.T, bare, branch, file string) {
 	run(t, tmp, "git", "add", "-A")
 	run(t, tmp, "git", "commit", "-m", "more")
 	run(t, tmp, "git", "push", "origin", branch)
+}
+
+// A connector that declares where its targets' code lives (checkout.remote)
+// is cloned from there — not the default host — for its own target only;
+// an unsafe transport is never used, and the harness override still wins.
+func TestDeclaredRemote(t *testing.T) {
+	req := func(remote, project string) dispatch.Request {
+		return dispatch.Request{Trigger: core.Trigger{
+			Sem:           &sdk.EventSemantics{Checkout: &sdk.CheckoutSemantics{Remote: remote}},
+			Target:        core.Target{Repo: "o/r", Number: 1, Project: project},
+			TargetTrusted: true,
+		}}
+	}
+	if got := declaredRemote(req("ssh://git.example.org/{{.repo}}.git", ""), "o/r"); got != "ssh://git.example.org/o/r.git" {
+		t.Fatalf("declared remote = %q", got)
+	}
+	if got := declaredRemote(req("ssh://git.example.org/{{.repo}}.git", "other/repo"), "other/repo"); got != "" {
+		t.Fatalf("a step repo: override used the event's remote: %q", got)
+	}
+	if got := declaredRemote(req("ext::sh -c touch% /tmp/pwned", ""), "o/r"); got != "" {
+		t.Fatalf("an unsafe transport was used: %q", got)
+	}
+	// A sender-chosen target never picks the host: the remote renders over
+	// the event's facts.
+	forged := req("https://{{.clone_host}}/{{.repo}}.git", "")
+	forged.Trigger.TargetTrusted = false
+	forged.Trigger.Context = map[string]any{"clone_host": "evil.example"}
+	if got := declaredRemote(forged, "o/r"); got != "" {
+		t.Fatalf("a sender-chosen target picked the remote: %q", got)
+	}
+	p := &Provisioner{}
+	t.Setenv("CONDUCTOR_GIT_REMOTE_BASE", "")
+	if got := p.remoteURL("o/r", "ssh://git.example.org/o/r.git"); got != "ssh://git.example.org/o/r.git" {
+		t.Fatalf("remoteURL = %q", got)
+	}
+	if got := p.remoteURL("o/r", ""); got != DefaultRemoteURL("o/r") {
+		t.Fatalf("no declaration: %q", got)
+	}
+	t.Setenv("CONDUCTOR_GIT_REMOTE_BASE", "git://forge/")
+	if got := p.remoteURL("o/r", "ssh://git.example.org/o/r.git"); got != "git://forge/o/r.git" {
+		t.Fatalf("the harness override must win: %q", got)
+	}
 }

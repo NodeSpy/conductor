@@ -3,7 +3,8 @@
 # agent's `[[sh …]]` lines are what it tries from inside.
 connectors:
   github:
-    use: github
+    use: /usr/local/bin/conductor-github
+    api_base: http://mock-github:8080
     app:
       app_id: 123456
       private_key_path: /etc/conductor/github-app.pem
@@ -185,10 +186,13 @@ triggers:
         skill:
           verbs:
             github.create_pr: {}
+            github.comment: {}
         prompt: |
           [[nofix]]
           [[sh gh pr create -t "from the agent" -b "x"; echo "bin-exit=$?"]]
           [[sh conductor call github.create_pr --repo grpx/jailverb --title "from the agent" --head pr-1 --base main; echo "verb-exit=$?"]]
+          [[sh conductor call github.comment --repo grpx/jailverb --pr 1 --body "on my own PR"; echo "own-comment-exit=$?"]]
+          [[sh conductor call github.comment --repo grpx/jailverb --pr 2 --body "on another PR"; echo "other-comment-exit=$?"]]
 policy:
   concurrency:
     max_agents: 8

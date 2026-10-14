@@ -25,7 +25,7 @@ import (
 // where names the config location for the error; connName is the configured
 // connector instance, for an error an operator can act on.
 func ValidateFilter(where, connName string, ev EventDecl, f *config.Filter) error {
-	if f == nil {
+	if f == nil || ev.Unchecked {
 		return nil
 	}
 	keys, facts := ev.FilterKeys(), ev.FilterFacts()

@@ -142,7 +142,8 @@ func TestEngineKindLeavesOtherKindsAlone(t *testing.T) {
 		origin UseOrigin
 		source string
 	}{
-		{UseKindConnector, "github", OriginBuiltin, ""},
+		{UseKindConnector, "webhook", OriginBuiltin, ""},
+		{UseKindConnector, "github", OriginOfficial, "github.com/" + OfficialRepo + "//connectors/github"},
 		{UseKindConnector, "command", OriginBuiltin, ""},
 		{UseKindRuntime, "cli", OriginBuiltin, ""},
 		{UseKindRuntime, "paseo", OriginBuiltin, ""},

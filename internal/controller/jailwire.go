@@ -217,6 +217,7 @@ func agentLaunchOpts(eligible bool, tool string, runtimeIso *config.IsolationCon
 	spec := jailSpec(tool, runtimeIso, req)
 	opt.jail = &spec
 	opt.jailState = &jailState{}
+	opt.credGuidance = req.Credentials.Guidance
 	return opt
 }
 
@@ -287,8 +288,19 @@ func jailSpec(tool string, runtimeIso *config.IsolationConfig, req dispatch.Requ
 		DispatchID: req.DispatchID, Tool: tool, Repo: repo, Number: num, IsPR: isPR,
 		HeadBranch: head, BaseRef: t.BaseRef, Step: firstNonEmpty(step.ID, step.Name), Label: label,
 		ReadOnly: readOnly, Layers: layers, StepLayer: step.Isolation != nil,
-		Intent: intent, UserToken: req.Tokens.User, Keychain: keychain,
+		Intent: intent, UserToken: ghToken(req.Credentials), Keychain: keychain,
 	}
+}
+
+// ghToken is the token the gh binary would read from the dispatch's declared
+// credentials (GH_TOKEN, else GITHUB_TOKEN — gh's own variables): conductor's
+// lookups for the gh profile (is the PR still open, which PR is this review
+// thread on) use it, host-side. It never reaches the jail.
+func ghToken(c dispatch.Credentials) string {
+	if v := c.Env["GH_TOKEN"]; v != "" {
+		return v
+	}
+	return c.Env["GITHUB_TOKEN"]
 }
 
 // credentialEnv reports an environment variable that is (or carries) a
@@ -505,7 +517,7 @@ func prepareJail(dir string, env, argv []string, opt launchOpts) (wrapped []stri
 	// unjailed token/SSH setup (a copy — a degraded launch keeps argv as is).
 	jargv := make([]string, len(argv))
 	for i, a := range argv {
-		jargv[i] = dispatch.ForJail(a)
+		jargv[i] = dispatch.ForJail(a, opt.credGuidance)
 	}
 	w, wenv, wclean, werr := sandbox.WrapLocalCommand(ss, jargv, dir, base, deps)
 	if werr != nil {

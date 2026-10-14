@@ -1,8 +1,8 @@
 # Notifications — the `conductor.*` lifecycle source
 
 Conductor emits its own operational events as a built-in source, so alerting
-is an ordinary trigger — the retired `notify:` block auto-migrates to these
-(see [[Migration]]). Every attention event is written to the audit log
+is an ordinary trigger — the replacement for the legacy `notify:` block,
+removed in this release (see [[Migration]]). Every attention event is written to the audit log
 regardless of configuration (`status` / `report` see escalations with no
 trigger at all); a trigger selects which events *also* deliver externally.
 Nothing here is ever posted as a PR/issue comment — it is private, addressed

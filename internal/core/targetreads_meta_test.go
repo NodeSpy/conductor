@@ -62,6 +62,9 @@ type rawTargetException struct {
 // cloned/templated" is the only acceptable answer.
 var rawTargetExceptions = map[string][]rawTargetException{
 	// ---- core itself: the accessors and the key are where the rule LIVES.
+	"internal/core/semantics.go": {
+		{"Facts", "the template view a declaration renders over — what dispatch templateData has always exposed; the reads it feeds that spend credentials (mint, remediate, reads_revision) are gated on an assigned target"},
+	},
 	"internal/core/event.go": {
 		{"OwnRepo", "the accessor that IS the rule"},
 		{"Key", "builds the key; consults OwnRepo first and namespaces an untrusted target"},
@@ -104,13 +107,11 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"auditSkillVerb", "an audit row"},
 		{"RunSkillVerb", "rebuilds the trigger it then passes to the checks, which call OwnRepo themselves; the Caller it builds goes through NewAgentCaller"},
 	},
-	"internal/connector/github.go": {
-		{"ContextScope", "returns nothing unless OwnRepo() does (a trusted, platform-assigned target): the PR/issue number read after it is the dispatch's own, never a sender's"},
-	},
 	"internal/flow/group.go": {
 		{"groupKeyFor", "delegates to Trigger.Key, which is trust-aware"},
 	},
 	"internal/engine/engine.go": {
+		{"remediate", "the remediation audit row names the target the remedy ran for; remediation itself runs only behind the OwnRepo gate (an assigned target)"},
 		{"logf", "a log prefix"},
 		{"tag", "a log prefix"},
 		{"auditDispatch", "an audit row"},
@@ -123,6 +124,13 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"ResumeWorkflows", "a resume audit row"},
 		{"workflowRunStatus", "the gh status query for the run the trigger already named"},
 		{"memoryPrompt", "recall now goes through OwnRepo(); the remaining read is the workflow/identity key convention"},
+	},
+	"internal/engine/defer_reemit.go": {
+		{"deferAndReemit", "an audit row for a deferred re-emit; the re-emit itself just re-sends the SAME trigger value back through e.Emit, and the per-occurrence defer-count bucket key uses Trigger.Key()"},
+	},
+	"internal/engine/resume_recheck.go": {
+		{"scheduleResumeRecheck", "audit/log rows for a deferred resume recheck (finding 2), the same treatment as ResumeWorkflows/deferAndReemit; the recheck itself just re-runs credentialsFor/dispatch for the SAME persisted run, and its attempt-count bucket key uses the run ID, not the target"},
+		{"recheckResumeRun", "audit/log rows (resume, workflow_stopped); the credential mint it re-attempts is gated on TargetTrusted inside credentialsFor, same as ResumeWorkflows' own inlined version of this before finding 2"},
 	},
 	"internal/engine/outcome.go": {
 		{"observeOutcomeSignals", "the gate is the first line (TargetTrusted); the keys go through Trigger.Key()"},
@@ -137,9 +145,6 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	"internal/dispatch/toolserver.go": {
 		{"BuildToolServer", "argv provenance for the tool subprocess; the trust bit travels beside it and the socket resolves authorization from the credential, not from these"},
 		{"SkillEnv", "as above"},
-	},
-	"internal/dispatch/ghwrite.go": {
-		{"Comment", "the github API call's own target — the write goes where the dispatch says, which is what a forged target's OWN repo is"},
 	},
 	"internal/controller/runner.go": {
 		{"runKey", "delegates to Trigger.Key"},
@@ -156,6 +161,16 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	// guard, which is the shape we want, not the one we are hunting.
 	"internal/connector/scope.go": {
 		{"ContextScope", "reads Target.Repo only on the !TargetTrusted-checked branch"},
+	},
+	"pkg/plugintest/plugintest.go": {
+		{"record", "the conformance harness's comparison key for a fixture plugin's own events (the legacy Repo#Number when a target names no key): nothing is authorized, keyed or scoped by it"},
+	},
+	"internal/connector/external.go": {
+		{"TargetHead", "a plugin source's head read: reads Target.Number beside OwnRepo(), only for a target " +
+			"this instance emitted, and reads nothing when OwnRepo() is empty"},
+	},
+	"internal/flow/runfacts.go": {
+		{"readHead", "a log line + an audit row for a head read that failed; it records, it authorizes nothing"},
 	},
 	"internal/flow/scoperender.go": {
 		{"scopeRenderData", "derives owner/name/number only when OwnRepo() is non-empty"},
@@ -237,9 +252,6 @@ var rawTargetExceptions = map[string][]rawTargetException{
 	"internal/controller/opencode.go": {
 		{"opencodeTitle", "a session title"},
 	},
-	"internal/integrations/github/events.go": {
-		{"triggersFor", "CONSTRUCTS the trigger from the verified payload"},
-	},
 
 	// ---- The checkout. paseo is told which repo to clone and which PR to
 	// check out; a forged target clones the attacker's own repo into the
@@ -252,11 +264,16 @@ var rawTargetExceptions = map[string][]rawTargetException{
 		{"labelArgs", "display labels; the PR label goes through Trigger.Key()"},
 		{"adoptAgentForBranch", "matches the branch label written above"},
 	},
+	"internal/dispatch/detach.go": {
+		{"withStepRepo", "clears the trigger's PR number for a step repo: override's checkout; it only narrows which checkout the agent gets, and authority stays on Target.Repo"},
+	},
 	// The git-native checkout path, doing exactly what paseo.go's entries above
 	// do for the paseo one: a sender-chosen repo/PR only decides WHICH checkout
 	// the agent gets, inside conductor's own state dir. Nothing authorizes off
 	// it, and the branch name it derives is validated before it reaches git.
 	"internal/gitwt/gitwt.go": {
+		{"declaredRemote", "whether the checkout is the event's own target, so its declared remote applies: it only picks where the checkout is cloned from, and a sender-chosen target clones into the agent's sandbox as any checkout does"},
+		{"fetchRef", "the legacy pull ref for an event declaring no semantics: it checks out"},
 		{"addPR", "the PR ref to fetch for that checkout"},
 		{"prBranch", "a branch name for the work (safeBranch validates it first)"},
 	},
@@ -387,7 +404,11 @@ func allowed(file, fn string) bool {
 
 // Every exception carries a reason, so the list cannot rot into a silencer.
 func TestEveryRawTargetExceptionHasAReason(t *testing.T) {
+	root := repoRootFor(t)
 	for file, es := range rawTargetExceptions {
+		if _, err := os.Stat(filepath.Join(root, file)); err != nil {
+			t.Errorf("%s has raw-target exceptions but no longer exists — drop its entry", file)
+		}
 		for _, e := range es {
 			if strings.TrimSpace(e.reason) == "" {
 				t.Errorf("%s: %s() is excepted with no reason", file, e.fn)

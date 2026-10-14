@@ -24,6 +24,13 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Setenv("XDG_STATE_HOME", tmp)
+	// The same for the config directory: confdir resolves CONDUCTOR_CONFIG →
+	// XDG_CONFIG_HOME → ~/.config. A CI runner sets XDG_CONFIG_HOME (GitHub's
+	// does), so a test that points HOME at a temp dir would otherwise still
+	// resolve the runner's real config dir. Clearing both makes HOME decide,
+	// as every such test expects; tests that set them still win.
+	os.Unsetenv("CONDUCTOR_CONFIG")
+	os.Unsetenv("XDG_CONFIG_HOME")
 	code := m.Run()
 	os.RemoveAll(tmp)
 	os.Exit(code)

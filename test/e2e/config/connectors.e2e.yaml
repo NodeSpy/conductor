@@ -6,7 +6,8 @@
 
 connectors:
   gh:
-    use: github
+    use: /usr/local/bin/conductor-github
+    api_base: http://mock-github:8080
     app:
       app_id: 123456
       private_key_path: /etc/conductor/github-app.pem
@@ -21,12 +22,31 @@ connectors:
       read_token: app
       write_token: e2e-user-write-token # literal token; no gh binary in the image
 
+  # ghshare: a second, verb-only (no webhook/triggers) instance of the SAME
+  # github plugin binary as `gh`, neither isolate: true — K4-pid
+  # (test/e2e/run.sh) proves the process-model default with it: `gh` and
+  # `ghshare` must run as the SAME daemon subprocess (one pid), not two,
+  # since multi-instance isolation now shares one process per plugin by
+  # default (docs/wiki/Plugins.md "Multi-instance isolation") rather than
+  # isolating every configured instance.
+  ghshare:
+    use: /usr/local/bin/conductor-github
+    api_base: http://mock-github:8080
+    app:
+      app_id: 123456
+      private_key_path: /etc/conductor/github-app.pem
+    sweep: { enabled: false }
+    me: { logins: [conductor-user] }
+
   slack:
-    use: slack
-    # Verbs only (no slack triggers), so no Socket Mode connection is opened;
-    # bot_token is all the verb face needs. The API base comes from
-    # PC_SLACK_API_URL (the sink-catcher's slack-shaped endpoint).
+    use: /usr/local/bin/conductor-slack
+    api_base: http://sink-catcher:8080/slackapi
+    # bot_token is all the verb-only face needs; app_token additionally opens
+    # Socket Mode (group K10 below) against the sink-catcher's Socket Mode
+    # stand-in (apps.connections.open + /slackapi/socket, fired on demand by
+    # a harness POST to /_fire_slack_event).
     bot_token: xoxb-e2e-dummy
+    app_token: xapp-e2e-dummy
     options: { channel: CDEFAULT }
 
   # K7: an ask-capable web connector — its draft pages serve on :8095 inside
@@ -36,6 +56,89 @@ connectors:
     base_url: "http://localhost:8095"
     listen: ":8095"
     ttl: 5m
+
+  # Group X (listeners, plugin-contract.md §2.4): the builtin `tunnel`
+  # exposure, driven by a fake script that just prints a URL (no real
+  # forwarding — see test/e2e's README on the listeners group for why that's
+  # enough in a hermetic, egress-free stack). aclisten's `expose: tun` names
+  # it.
+  tun:
+    use: tunnel
+    command: [sh, -c, "echo serving at https://hook.example/{{.port}}; sleep 600"]
+
+  # aclisten is the reference acme-listener plugin (test/plugins/acme-listener):
+  # it declares the SAME listeners shape (listen/expose/url_to/path) the
+  # github plugin declares for webhook.*, just with flat connection fields.
+  # At instance start the engine opens `tun` for `listen`, resolves `path`
+  # (declared below, non-default), and fills in public_url WITH that path
+  # appended — tun's exposes verb declares no path option of its own, so
+  # this is the "host appends it" half of the listeners path semantic
+  # (ghlisten/ghsmee below prove the other half, "the exposure takes it as
+  # an option"). The plugin echoes public_url straight back out on its first
+  # event ("ready"), and fires "delivery" on every HTTP POST the listener
+  # receives.
+  aclisten:
+    use: /usr/local/bin/conductor-acme-listener
+    listen: "0.0.0.0:18877"
+    path: /acme-hook
+    expose: tun
+
+  # Group Y — the SAME `listeners` semantic as group X, but with the REAL
+  # github and smee plugins instead of the reference/fake pair: ghlisten's
+  # `webhook.expose: ghsmee` has the engine open an exposure on ghsmee for
+  # webhook.listen at instance start, resolve webhook.path (below) through
+  # the github plugin's declared listeners.path, and fill webhook.public_url
+  # with whatever ghsmee's `open` verb returns (its smee channel URL,
+  # UNCHANGED — ghsmee declares an `exposes.path` option, so the engine
+  # passes the resolved path there instead of appending it) — the github
+  # plugin logs that URL on boot (ghsource/http.go), which is this group's
+  # observable proof that url_to reached the plugin. ghsmee itself gets NO
+  # `path:` of its own below: the whole point of this group is proving the
+  # path flows from the listener, not from an operator keeping a second
+  # `path:` in sync by hand. App-less (no verb is ever invoked on this
+  # instance, only its webhook source): a review_requested delivery is
+  # entirely payload-driven, no GitHub API calls needed to decide whether it
+  # fires.
+  ghlisten:
+    use: /usr/local/bin/conductor-github
+    api_base: http://mock-github:8080
+    # isolate: true — K4-pid (test/e2e/run.sh) proves the opt-in half of the
+    # process model alongside ghshare's proof of the default: ghlisten must
+    # run as its OWN daemon subprocess, distinct from the pid gh and ghshare
+    # share.
+    isolate: true
+    # App-less: a literal static token, never actually used (no verb is ever
+    # invoked on this instance) — but Source.Start's ensureClients resolves
+    # SOME credential unconditionally, even for a pure webhook listener, and
+    # falls back to `gh auth token` when neither app: nor token: is set,
+    # which fails hard in this image (no gh binary).
+    token: e2e-ghlisten-static-token
+    webhook:
+      # 127.0.0.1, not 0.0.0.0: unlike ghlisten's plain-webhook sibling `gh`
+      # (never dialed FROM inside this container), ghsmee's relay actually
+      # HTTP-POSTs to this address from the same container — a real
+      # destination, not just a bind address.
+      listen: "127.0.0.1:8788"
+      path: /webhook
+      secret: e2e-webhook-secret
+      verify_signature: true
+      expose: ghsmee
+    sweep: { enabled: false }
+    me: { logins: [conductor-user] }
+
+  # ghsmee is the real conductor-plugins smee connector: `channel:` is
+  # pinned straight at the mock smee service (test/e2e/services/mocksmee)
+  # instead of smee.io's own /new channel-creation redirect. No `path:` here
+  # on purpose (it used to mirror ghlisten's webhook.path by hand) — ghsmee
+  # declares `exposes.path`, so the engine passes ghlisten's OWN resolved
+  # webhook.path straight into this instance's `open` call every time it
+  # opens the exposure; the connection-level `path:` field stays only as
+  # this connector's fallback default for an operator using it as a plain
+  # web exposure with no listener involved at all (see docs/connectors/
+  # smee.md's precedence note in the conductor-plugins repo).
+  ghsmee:
+    use: /usr/local/bin/conductor-smee
+    channel: "http://mock-smee:8080/e2e-gh-channel"
 
 hosts:
   selfbox:
@@ -88,6 +191,22 @@ triggers:
       - { at: start, uses: slack.post, options: { channel: C1, text: "K1-start {{.repo}}#{{.pr}}" } }
       - { at: done, uses: slack.post, options: { channel: C1, text: "K1-done {{.repo}}#{{.pr}}" } }
       - { at: fail, uses: slack.post, options: { channel: C1, text: "K1-fail {{.error}}" } }
+
+  # K10: option_hooks (plugin-contract.md §2.2) — a slack-SOURCED trigger
+  # (Socket Mode, via the sink-catcher's mock) whose own options.ack/
+  # on_done/on_fail fire the slack plugin's `feedback` verb at the matching
+  # run phase, with no explicit hooks: of its own — the generic engine
+  # mechanism restoring the old bundled connector's per-trigger feedback.
+  - on: slack.app_mention
+    filter: { channel: CACK }
+    options:
+      ack: { react: "eyes" }
+      on_done: { react: "white_check_mark" }
+      on_fail: { react: "x" }
+    steps:
+      - id: note
+        uses: slack.post
+        options: { channel: C1, text: "K10 mention handled: {{.slack.text}}" }
 
   # K5: remote execution — a host-interpreter code step runs over SSH on
   # selfbox (this container's sshd), its output flowing into a slack post.
@@ -535,6 +654,43 @@ triggers:
       - id: tell
         uses: slack.post
         options: { channel: CFILTER, text: "U-FILTER fired {{.repo}}#{{.pr}}" }
+
+  # Group X — the `listeners` connection semantic (plugin-contract.md §2.4):
+  # aclisten's `ready` event fires once, the moment start_source runs
+  # (daemon boot), carrying whatever public_url the engine filled in from
+  # the `tun` exposure. It's real and useful (see run.sh's note on why the
+  # e2e assertion doesn't key off it directly: every later group's sink
+  # reset would have wiped a boot-time capture by the time run.sh gets to
+  # group X). `delivery` fires on every HTTP POST the listener itself
+  # receives — independent of the (fake, non-forwarding) tunnel — and
+  # carries the SAME public_url, so a POST sent on demand during group X
+  # proves both the listener is live and that url_to reached the plugin.
+  - on: aclisten.ready
+    name: listeners-ready
+    steps:
+      - id: tell
+        uses: slack.post
+        options: { channel: CLISTEN, text: "X-LISTENERS-READY {{.public_url}}" }
+  - on: aclisten.delivery
+    name: listeners-delivery
+    steps:
+      - id: tell
+        uses: slack.post
+        options: { channel: CLISTEN, text: "X-LISTENERS-DELIVERY seq={{.seq}} url={{.public_url}}" }
+
+  # Group Y — the SAME semantic, proven with the REAL github+smee plugins
+  # (ghlisten/ghsmee above): a signed GitHub delivery posted to the mock
+  # smee channel relays, over a real SSE connection, to ghlisten's actual
+  # webhook listener — an ordinary review_requested trigger firing is the
+  # proof the whole relay (mock smee -> smee plugin -> HTTP POST -> github
+  # plugin's HMAC-verified webhook handler -> trigger evaluation) held
+  # together end to end, not just that a config was accepted.
+  - on: ghlisten.review_requested
+    name: listeners-github-smee
+    steps:
+      - id: tell
+        uses: slack.post
+        options: { channel: CLISTENGH, text: "Y-LISTENERS-GITHUB fired {{.repo}}#{{.pr}}" }
 
 checks:
   # A code check that always passes / always fails — a crisp pass/fail verdict

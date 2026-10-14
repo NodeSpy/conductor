@@ -104,7 +104,11 @@ connectors:
 	if !ok || len(invoices) != 2 {
 		t.Fatalf("invoices output kept its type: %T %v", out["invoices"], out["invoices"])
 	}
-	if out["first_id"] != "inv-1" || out["status"] != 200 {
+	// status crosses the plugin wire like any other output value, so it comes
+	// back float64 (JSON numbers) even though the handler computed an int —
+	// the same as any spawned plugin's output, which is the point of the
+	// contract builtin: the engine cannot tell it from one.
+	if out["first_id"] != "inv-1" || out["status"] != float64(200) {
 		t.Fatalf("outputs: %+v", out)
 	}
 
@@ -407,7 +411,10 @@ connectors:
 }
 
 // TestPolledEventsDedup: the first poll seeds silently; later polls emit each
-// new id exactly once, with the declared context extracted.
+// new id exactly once, with the declared context extracted. Driven through
+// the real connector.Impl.Source → core.Integration path (the contract
+// builtin's StartSource, not a white-box httpPoller — internal/builtins/rest
+// owns the poll loop now).
 func TestPolledEventsDedup(t *testing.T) {
 	var page atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -428,7 +435,7 @@ connectors:
       noop: { method: GET, path: / }
     events:
       new_invoice:
-        poll: 1h
+        poll: 50ms
         request: { path: /Invoices }
         list: "{{.response.body.Invoices}}"
         id: "{{.item.InvoiceID}}"
@@ -448,26 +455,30 @@ connectors:
 	if err != nil || src == nil {
 		t.Fatalf("source: %v %v", src, err)
 	}
-	poller := src.(*httpPoller)
-
-	var got []core.Trigger
-	emit := func(_ context.Context, tr core.Trigger) { got = append(got, tr) }
-	seen := map[string]bool{}
-	primed := false
-	ev := poller.events[0]
-
-	// First poll: seeds "a", emits nothing.
-	poller.pollOnce(context.Background(), emit, ev, seen, &primed)
-	if len(got) != 0 || !seen["a"] {
-		t.Fatalf("first poll must seed silently: got=%d seen=%v", len(got), seen)
+	if err := src.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
 	}
-	// Second poll: "b" is new → one trigger; "a" stays deduped.
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	trigCh := make(chan core.Trigger, 4)
+	go func() { _ = src.Start(ctx, func(_ context.Context, tr core.Trigger) { trigCh <- tr }) }()
+
+	// First poll (page 0) seeds "a" silently.
+	select {
+	case tr := <-trigCh:
+		t.Fatalf("the first poll must seed silently, got %+v", tr)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// Later polls see "b" too: exactly one new trigger.
 	page.Add(1)
-	poller.pollOnce(context.Background(), emit, ev, seen, &primed)
-	if len(got) != 1 {
-		t.Fatalf("second poll: %d triggers", len(got))
+	var tr core.Trigger
+	select {
+	case tr = <-trigCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no trigger for the new item")
 	}
-	tr := got[0]
 	if tr.Kind != "new_invoice" || tr.Dedup != "new_invoice\x00b" || tr.Source != "rest" {
 		t.Fatalf("trigger: %+v", tr)
 	}
@@ -477,17 +488,39 @@ connectors:
 	if item, ok := tr.Context["item"].(map[string]any); !ok || item["InvoiceID"] != "b" {
 		t.Fatalf("raw item: %v", tr.Context["item"])
 	}
-	// Third poll: nothing new.
-	poller.pollOnce(context.Background(), emit, ev, seen, &primed)
-	if len(got) != 1 {
-		t.Fatalf("dedup across polls: %d triggers", len(got))
+	// Dedup holds across further polls: no second trigger for "b".
+	select {
+	case tr := <-trigCh:
+		t.Fatalf("dedup across polls: unexpected second trigger %+v", tr)
+	case <-time.After(300 * time.Millisecond):
 	}
+}
 
-	// An unknown event in a trigger is a lowering error.
+// TestUnknownEventRefusesValidate: a trigger naming an event the rest
+// instance never declared fails plugin.validate — the generic path EVERY
+// contract connector's config/trigger checks run through (no connector-
+// specific Source()-time lowering error any more).
+func TestUnknownEventRefusesValidate(t *testing.T) {
+	reg := buildAPIRegistry(t, `
+connectors:
+  api:
+    use: rest
+    base_url: http://example.invalid
+    events:
+      new_invoice: { request: { path: /x }, list: "{{.response.body.X}}", id: "{{.item.id}}" }
+`, secrets.New())
+	in, _ := reg.Get("api")
+	if in.DisabledReason != "" {
+		t.Fatalf("disabled: %s", in.DisabledReason)
+	}
 	var bad config.TriggerSpec
 	_ = yaml.Unmarshal([]byte("on: api.nope"), &bad)
-	if _, err := in.Impl.Source([]CompiledTrigger{{Spec: bad}}); err == nil || !strings.Contains(err.Error(), `unknown rest event "nope"`) {
-		t.Fatalf("unknown event: %v", err)
+	src, err := in.Impl.Source([]CompiledTrigger{{Spec: bad}})
+	if err != nil {
+		t.Fatalf("Source itself no longer lowers event names: %v", err)
+	}
+	if err := src.Validate(); err == nil || !strings.Contains(err.Error(), `unknown rest event "nope"`) {
+		t.Fatalf("validate: %v, want an unknown-event refusal", err)
 	}
 }
 

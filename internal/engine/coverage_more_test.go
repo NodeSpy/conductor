@@ -3,8 +3,6 @@ package engine
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +17,7 @@ func TestEmitRunLoop(t *testing.T) {
 	g := &gateFake{waitCh: make(chan struct{})}
 	close(g.waitCh) // agents complete instantly
 	e := New(Options{Config: baseCfg(), Store: tempStore(t), Dispatch: g, Notifier: &fakeNotifier{},
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- e.Run(ctx) }()
@@ -47,7 +45,7 @@ func TestEmitRunLoop(t *testing.T) {
 func TestAcquireCancelled(t *testing.T) {
 	cfg := baseCfg()
 	one := 1
-	cfg.Control.MaxConcurrentAgents = &one
+	cfg.Policy = &config.Policy{Concurrency: &config.Concurrency{MaxAgents: &one}}
 	d := &fakeDispatcher{}
 	e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
 	if !e.acquire(context.Background()) {
@@ -73,28 +71,44 @@ func TestToInt64AndWaitTimeout(t *testing.T) {
 	}
 }
 
-// TestRerunFailed shells the flaky rerun through a stubbed gh.
-func TestRerunFailed(t *testing.T) {
-	dir := t.TempDir()
-	argvFile := filepath.Join(dir, "argv")
-	script := "#!/usr/bin/env bash\necho \"$@\" > " + argvFile + "\n"
-	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
+// A declared remediation carries the event's facts into the plugin's verbs:
+// the status read and the remedy get the args the declaration names, typed
+// (the run id stays an integer), and the remedy is the plugin's — conductor
+// shells out to nothing.
+func TestRemediationInvokesTheDeclaredVerbs(t *testing.T) {
 	d := &fakeDispatcher{}
 	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
-	tr := agentTrigger("failing_checks", "a/w", 2, "h", "s", config.Action{})
-	e.rerunFailed(context.Background(), tr, 991)
-	argv, _ := os.ReadFile(argvFile)
-	if !strings.Contains(string(argv), "run rerun 991 --failed --repo a/w") {
-		t.Fatalf("gh argv: %s", argv)
+	var calls []string
+	var rerunOpts map[string]any
+	e.invokeVerb = func(_ context.Context, inst, verb string, opts map[string]any) (map[string]any, error) {
+		if isMintVerb(verb) {
+			return map[string]any{"token": "t"}, nil // the dispatch's declared credentials
+		}
+		calls = append(calls, inst+"."+verb)
+		if verb == "rerun_run" {
+			rerunOpts = opts
+		}
+		return map[string]any{"status": "completed"}, nil
 	}
-
-	// A failing gh logs, never panics.
-	os.WriteFile(filepath.Join(dir, "gh"), []byte("#!/usr/bin/env bash\nexit 1\n"), 0o755)
-	e.rerunFailed(context.Background(), tr, 992)
+	tr := agentTrigger("failing_checks", "a/w", 2, "h", "s", config.Action{Type: "agent", Agent: "w/fixer", FlakyRerun: config.FlakyRerun{Enabled: true}})
+	tr.Instance = "gh"
+	tr.Context["repo"] = "a/w" // the event's own facts, as the source publishes them
+	tr.Context["run_id"] = int64(991)
+	e.process(context.Background(), tr)
+	if strings.Join(calls, ",") != "gh.get_run,gh.rerun_run" || len(d.reqs) != 0 {
+		t.Fatalf("calls=%v dispatched=%d", calls, len(d.reqs))
+	}
+	if rerunOpts["repo"] != "a/w" || rerunOpts["run_id"] != int64(991) || rerunOpts["failed_only"] != true {
+		t.Fatalf("remedy args = %#v", rerunOpts)
+	}
+	// An event that declares no remediation dispatches the fixer straight away.
+	calls = nil
+	other := agentTrigger("merge_conflict", "a/w", 3, "h", "s", config.Action{Type: "agent", Agent: "w/fixer", FlakyRerun: config.FlakyRerun{Enabled: true}})
+	other.Context["run_id"] = int64(5)
+	e.process(context.Background(), other)
+	if len(calls) != 0 || len(d.reqs) != 1 {
+		t.Fatalf("undeclared remediation ran: calls=%v dispatched=%d", calls, len(d.reqs))
+	}
 }
 
 func TestControllerFor(t *testing.T) {
@@ -124,9 +138,11 @@ func TestFlowAgentServices(t *testing.T) {
 	eng, _, notif, _ := buildFlowEngine(t, gateCfg)
 	svcs := eng.flowAgentServices()
 
-	// Tokens: user token minted via the engine's token funcs (nil here → zero).
-	toks := svcs.Tokens(flowTrigger("d-svc"))
-	_ = toks
+	// Credentials: resolved through the engine (the event's connector here
+	// declares none).
+	if c, err := svcs.Credentials(context.Background(), flowTrigger("d-svc")); err != nil || len(c.Env) != 0 {
+		t.Fatalf("a connector declaring no credentials gave some: %+v", c)
+	}
 
 	// Command dispatch goes through the engine's dispatcher.
 	ref, err := svcs.Dispatch(context.Background(), dispatch.Request{

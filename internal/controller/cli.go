@@ -256,7 +256,7 @@ func (c *cliController) launchOn(ctx context.Context, host, dir string, env []st
 	if opt.res.jailed {
 		// The argv's prompt was rewritten inside prepareJail; a prompt fed on
 		// stdin is rewritten here.
-		cmd.stdin = dispatch.ForJail(cmd.stdin)
+		cmd.stdin = dispatch.ForJail(cmd.stdin, opt.credGuidance)
 	}
 	proc, err := c.start(ctx, localDir, localEnv, wrapped, cmd.stdin, opt.res)
 	if err != nil {

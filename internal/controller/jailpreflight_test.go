@@ -19,9 +19,9 @@ func TestJailPreflight(t *testing.T) {
 		return "", errors.New("absent")
 	}}
 	cfg := func(iso *config.IsolationConfig) *config.Config {
-		return &config.Config{Controllers: map[string]config.ControllerConfig{
-			"claude": {Type: "cli", Tool: "claude-code", Isolation: iso},
-			"deck":   {Type: "agent-deck"},
+		return &config.Config{Runtimes: config.RuntimeSet{
+			"claude": {Use: "cli", Tool: "claude-code", Isolation: iso},
+			"deck":   {Use: "agent-deck"},
 		}}
 	}
 	jailProbe = func() string { return "" }

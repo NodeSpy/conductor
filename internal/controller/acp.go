@@ -184,7 +184,7 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 		return nil, err
 	}
 	if opt.res.jailed {
-		prompt = dispatch.ForJail(prompt)
+		prompt = dispatch.ForJail(prompt, spec.Request.Credentials.Guidance)
 	}
 
 	if _, err := client.Initialize(sctx, acp.DefaultInitializeParams(acp.Implementation{

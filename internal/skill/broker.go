@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
 const (
@@ -36,7 +37,7 @@ const (
 	// hand-off and still bounds a scraped token.
 	HandoffSessionTTL = 7 * 24 * time.Hour
 	// SessionTTL bounds a dispatch token's life — roughly a dispatch's
-	// lifetime (typical wait_timeouts are minutes; 2h leaves slack for slow
+	// lifetime (typical wait_timeouts are minutes; 2h leaves room for slow
 	// runs). A long-lived affinity session whose token ages out simply loses
 	// its skill tools; it never gets a stale identity. The table is
 	// in-memory, so tokens also die with the daemon.
@@ -98,12 +99,16 @@ type Identity struct {
 	// trigger is confined to when the target itself cannot be trusted.
 	Dispatch string
 	// Context is the originating trigger's context, held daemon-side for the
-	// session's lifetime. It exists for RESOURCE SCOPING: a connector's
-	// ContextScope hook reads it to decide which channel (repo, …) this
-	// dispatch may address with no explicit grant. It is never handed to the
+	// session's lifetime. It exists for RESOURCE SCOPING: the trigger's
+	// declared target scope (Sem) reads its facts to decide which channel
+	// (repo, …) this dispatch may address with no explicit grant. It is never handed to the
 	// agent and never leaves the daemon — the agent's own context comes from
 	// the prompt, not from here.
 	Context map[string]any
+	// Sem is the originating trigger's declared semantics, held daemon-side
+	// with Context: its target scope is what the dispatch may address with
+	// no explicit grant (the channel a chat event came from).
+	Sem *sdk.EventSemantics
 }
 
 type session struct {
@@ -122,6 +127,10 @@ type session struct {
 	boundUID uint32
 	// verbCalls counts executed verbs against the session's cap.
 	verbCalls int
+	// durable marks an interactive hand-off session (MintHandoffSession): it
+	// is persisted so it survives a daemon restart, and each authorized use
+	// slides its expiry forward by HandoffSessionTTL.
+	durable bool
 }
 
 // pendingClaim is a minted-but-unclaimed session: the one-shot code the
@@ -153,6 +162,13 @@ type Broker struct {
 	sessions map[string]session
 	claims   map[string]pendingClaim
 	grants   map[string]*grant
+	// restored holds durable sessions loaded from disk at boot, keyed by the
+	// token's hash (the raw token is never written). A restored session moves
+	// into sessions the first time its token is presented.
+	restored map[string]session
+	// persistPath is where durable sessions are saved; "" = in-memory only.
+	persistPath string
+	log         func(string, ...any)
 }
 
 // NewBroker builds a broker over a named-secret lookup and an audit sink.
@@ -165,7 +181,16 @@ func NewBroker(lookup func(string) (string, bool), audit func(map[string]any)) *
 		sessions: map[string]session{},
 		claims:   map[string]pendingClaim{},
 		grants:   map[string]*grant{},
+		restored: map[string]session{},
 	}
+}
+
+// SetLog installs a daemon log sink for broker events worth an operator's
+// eye (a rejected session token). nil = silent.
+func (b *Broker) SetLog(f func(string, ...any)) {
+	b.mu.Lock()
+	b.log = f
+	b.mu.Unlock()
 }
 
 // active is the daemon-wide broker the dispatch path (controller) reads to
@@ -219,6 +244,26 @@ func (b *Broker) MintSession(id Identity, uid uint32, ttl time.Duration) (string
 	return tok, nil
 }
 
+// MintHandoffSession is MintSession for an INTERACTIVE hand-off: the agent
+// waits on a human for hours or days, across daemon restarts (every
+// auto-update is one), and its token lives in an env conductor cannot
+// rewrite. So the session is durable — persisted (by token hash) and
+// reloaded at boot — and sliding: each authorized use pushes its expiry to
+// HandoffSessionTTL from now. An abandoned hand-off's token still dies
+// HandoffSessionTTL after its last use; releasing the hand-off revokes it
+// at once (RevokeDispatch).
+func (b *Broker) MintHandoffSession(id Identity, uid uint32) (string, error) {
+	tok, err := b.randomID(32)
+	if err != nil {
+		return "", fmt.Errorf("skill: mint session token: %w", err)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sessions[tok] = session{id: id, expires: b.now().Add(HandoffSessionTTL), uidBound: true, boundUID: uid, durable: true}
+	b.saveLocked()
+	return tok, nil
+}
+
 // ClaimSession exchanges a claim code for the real session token, exactly
 // once, binding the session to the CLAIMING process (its socket peer
 // credentials) — from then on every token-authorized call must come from
@@ -262,8 +307,38 @@ func (b *Broker) Authorize(token string, peer Peer) (Identity, error) {
 // authorizeLocked is Authorize's body; callers hold b.mu.
 func (b *Broker) authorizeLocked(token string, peer Peer) (session, error) {
 	s, ok := b.sessions[token]
+	if !ok {
+		// A durable session restored from disk: promote it on first use.
+		if r, rok := b.restored[tokenHash(token)]; rok {
+			delete(b.restored, tokenHash(token))
+			b.sessions[token] = r
+			s, ok = r, true
+		}
+	}
 	if !ok || b.now().After(s.expires) {
+		reason := "unknown session token"
+		if ok {
+			reason = "expired session token"
+		}
+		b.auditLocked("deny", s.id.Agent, s.id.Repo, "", "", reason)
+		if b.log != nil {
+			if ok {
+				b.log("skill: rejected an expired session token (agent %q, %s#%d)", s.id.Agent, s.id.Repo, s.id.Number)
+			} else {
+				b.log("skill: rejected an unknown session token — minted by an earlier daemon, revoked, or never issued")
+			}
+		}
 		return session{}, fmt.Errorf("skill: unknown or expired session token")
+	}
+	if s.durable {
+		// Sliding expiry. Persist only when it moved materially, so a busy
+		// hand-off doesn't rewrite the file on every call.
+		next := b.now().Add(HandoffSessionTTL)
+		if next.Sub(s.expires) >= durableSaveSlack {
+			s.expires = next
+			b.sessions[token] = s
+			b.saveLocked()
+		}
 	}
 	if s.uidBound {
 		// CLI/remote path: authorize any process running as the bound uid
@@ -307,6 +382,9 @@ func (b *Broker) ChargeVerbCall(token string, peer Peer) error {
 	}
 	s.verbCalls++
 	b.sessions[token] = s
+	if s.durable {
+		b.saveLocked()
+	}
 	return nil
 }
 
@@ -405,10 +483,21 @@ func (b *Broker) Sweep() {
 			delete(b.grants, id)
 		}
 	}
+	dropped := false
 	for tok, s := range b.sessions {
 		if now.After(s.expires) {
 			delete(b.sessions, tok)
+			dropped = dropped || s.durable
 		}
+	}
+	for h, s := range b.restored {
+		if now.After(s.expires) {
+			delete(b.restored, h)
+			dropped = true
+		}
+	}
+	if dropped {
+		b.saveLocked()
 	}
 	for code, c := range b.claims {
 		if now.After(c.expires) {

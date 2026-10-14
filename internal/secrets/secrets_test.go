@@ -525,6 +525,10 @@ func TestInitVaultErrors(t *testing.T) {
 func TestSeedKeyFileDefaultPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// The default follows the config dir; clear what would move it (a CI
+	// runner sets XDG_CONFIG_HOME) so HOME decides.
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("CONDUCTOR_CONFIG", "")
 	kf, err := SeedKeyFile("", "material")
 	if err != nil {
 		t.Fatal(err)

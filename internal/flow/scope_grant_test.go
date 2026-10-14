@@ -67,7 +67,7 @@ func TestSkillGrantScopesSlackChannel(t *testing.T) {
 	// that one. This is what makes the strong default usable.
 	own := SkillIdentity{
 		TargetTrusted: true,
-		Agent:         "responder", Verbs: []string{"slack.*"},
+		Agent:         "responder", Verbs: []string{"slack.*"}, Trigger: "app_mention",
 		Context: map[string]any{"slack": map[string]any{"channel": "#ops"}},
 	}
 	if err := post(own, "#ops"); err != nil {
@@ -85,7 +85,7 @@ func TestSkillGrantPinsRepoToTheDispatch(t *testing.T) {
 	r := scopeRig(t, scopeBaseCfg)
 	id := SkillIdentity{
 		TargetTrusted: true,
-		Agent:         "reviewer", Repo: "acme/app", Number: 42,
+		Agent:         "reviewer", Repo: "acme/app", Number: 42, Trigger: "review_requested",
 		Verbs:  []string{"gh.submit_review"},
 		Scopes: map[string]map[string][]string{"gh.submit_review": {}},
 	}

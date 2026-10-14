@@ -39,8 +39,8 @@ import (
 // baseCloneGoGit is baseClone's go-git implementation: PlainClone on first
 // use (always full — see the package doc), Fetch (pruned) otherwise. Callers
 // hold the per-repo lock, exactly as baseClone's git path requires.
-func (p *Provisioner) baseCloneGoGit(ctx context.Context, repo, dir string) (string, error) {
-	url := p.remoteURL(repo)
+func (p *Provisioner) baseCloneGoGit(ctx context.Context, repo, dir, declared string) (string, error) {
+	url := p.remoteURL(repo, declared)
 	if isGitDir(dir) {
 		r, err := gogit.PlainOpen(dir)
 		if err != nil {
@@ -85,7 +85,7 @@ func (p *Provisioner) addPRGoGit(ctx context.Context, base, wt string, req dispa
 	if err != nil {
 		return fmt.Errorf("gitwt: open base clone (go-git): %w", err)
 	}
-	url := p.remoteURL(req.Trigger.Target.CheckoutRepo())
+	url := p.remoteURL(req.Trigger.Target.CheckoutRepo(), declaredRemote(req, req.Trigger.Target.CheckoutRepo()))
 	auth, err := sshAuthFor(url)
 	if err != nil {
 		return err
@@ -184,7 +184,7 @@ func (p *Provisioner) repointOrigin(wt string, req dispatch.Request) error {
 		return err
 	}
 	_ = repo.DeleteRemote("origin")
-	realURL := p.remoteURL(req.Trigger.Target.CheckoutRepo())
+	realURL := p.remoteURL(req.Trigger.Target.CheckoutRepo(), declaredRemote(req, req.Trigger.Target.CheckoutRepo()))
 	_, err = repo.CreateRemote(&gogitcfg.RemoteConfig{Name: "origin", URLs: []string{realURL}})
 	return err
 }

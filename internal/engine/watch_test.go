@@ -11,6 +11,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/skill"
 )
 
 func TestMatchWatch(t *testing.T) {
@@ -105,11 +106,13 @@ func TestHandoffWatchBails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build registry: %v", err)
 	}
+	disp := &fakeDispatcher{archived: make(chan string, 1)}
 	e := &Engine{
 		log:        func(string, ...any) {},
 		hold:       dispatch.NewHoldSet(""),
 		broker:     controller.NewBroker(nil, nil, func(string, ...any) {}),
 		connectors: reg,
+		disp:       disp,
 	}
 	trig := core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "o/r", Number: 7}}
 	profile := config.Step{Watch: &config.WatchSpec{
@@ -130,6 +133,50 @@ func TestHandoffWatchBails(t *testing.T) {
 	default:
 		t.Fatal("bail did not cancel the review ctx")
 	}
+	// bail must reclaim the agent itself: dropping the hold alone strands the
+	// workspace (nothing sweeps released hand-offs).
+	select {
+	case id := <-disp.archived:
+		if id != "agent-1" {
+			t.Fatalf("bail archived %q, want agent-1", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("bail did not archive the agent")
+	}
+}
+
+// TestNativeHandoffLifecycle: a background step with no ask channel (the agent
+// is left live in paseo) still gets its watch:/idle_timeout: and a live-registry
+// entry. Before, the no-channel path only emitted needs_input — watch rules
+// never ran and idle_timeout never fired, so the hand-off lingered forever.
+func TestNativeHandoffLifecycle(t *testing.T) {
+	disp := &fakeDispatcher{archived: make(chan string, 1)}
+	e := &Engine{
+		log:   func(string, ...any) {},
+		notif: &fakeNotif{},
+		hold:  dispatch.NewHoldSet(""),
+		disp:  disp,
+	}
+	trig := core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "o/r", Number: 9}}
+	profile := config.Step{Background: true, IdleTimeout: config.Duration(20 * time.Millisecond)}
+	e.flowAgentServices().Background(context.Background(), trig, "handoff", "rev", profile,
+		dispatch.RunRef{AgentID: "n1"}, "", dispatch.HandoffActions{})
+
+	if lh := e.lookupLiveHandoff("n1"); lh == nil || lh.prKey != trig.Key() || lh.kind != "review_requested" {
+		t.Fatalf("no-channel hand-off was not registered live: %+v", lh)
+	}
+	if !e.hold.Has("n1") {
+		t.Fatal("no-channel hand-off was not held")
+	}
+	select {
+	case id := <-disp.archived:
+		if id != "n1" {
+			t.Fatalf("idle timeout archived %q, want n1", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("idle_timeout never released the no-channel hand-off")
+	}
+	waitFor(t, func() bool { return e.lookupLiveHandoff("n1") == nil && !e.hold.Has("n1") })
 }
 
 func TestHandoffDoneReleases(t *testing.T) {
@@ -142,7 +189,7 @@ func TestHandoffDoneReleases(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	e.hold.Add("a1")
-	e.registerLiveHandoff("a1", cancel, "o/r#1", "review")
+	e.registerLiveHandoff("a1", cancel, "o/r#1", "", "review")
 
 	if err := e.handoffDone(context.Background(), "a1", "test"); err != nil {
 		t.Fatalf("handoffDone: %v", err)
@@ -179,7 +226,7 @@ func TestIdleTimerReleases(t *testing.T) {
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	e.hold.Add("a2")
-	e.registerLiveHandoff("a2", cancel, "o/r#2", "review")
+	e.registerLiveHandoff("a2", cancel, "o/r#2", "", "review")
 	e.startIdleTimer(context.Background(), runCtx, core.Trigger{}, "review", "a2", 5*time.Millisecond)
 
 	// idle elapses → the hand-off is released (hold dropped).
@@ -246,7 +293,7 @@ func TestHandoffWatchSupersede(t *testing.T) {
 			e.hold.Add("old")
 			var hit int32
 			runCtx, cancel := context.WithCancel(context.Background())
-			e.registerLiveHandoff("old", cancel, trig.Key(), "review")
+			e.registerLiveHandoff("old", cancel, trig.Key(), "", "review")
 			e.startHandoffWatch(context.Background(), runCtx, cancel, trig, "review", "rev", "old", trig.Key(), profile, nil, tc.actions(&hit))
 
 			// head moved → supersede fires: tears the stale hand-off down (hold
@@ -254,5 +301,33 @@ func TestHandoffWatchSupersede(t *testing.T) {
 			waitFor(t, func() bool { return atomic.LoadInt32(&hit) > 0 })
 			waitFor(t, func() bool { return !e.hold.Has("old") })
 		})
+	}
+}
+
+// TestReleaseRevokesHandoffSession: a released hand-off's conductor session
+// token dies with it — it is durable (persisted, sliding) only while the
+// hand-off is open.
+func TestReleaseRevokesHandoffSession(t *testing.T) {
+	b := skill.NewBroker(nil, nil)
+	prev := skill.Active()
+	skill.SetActive(b)
+	defer skill.SetActive(prev)
+	tok, err := b.MintHandoffSession(skill.Identity{Dispatch: "d-9"}, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := skill.Peer{UID: 1000, Valid: true}
+	if _, err := b.Authorize(tok, peer); err != nil {
+		t.Fatal(err)
+	}
+	disp := &fakeDispatcher{archived: make(chan string, 1), agentDisps: map[string][]string{"a9": {"d-9"}}}
+	e := &Engine{log: func(string, ...any) {}, hold: dispatch.NewHoldSet(""), disp: disp}
+	_, cancel := context.WithCancel(context.Background())
+	e.registerLiveHandoff("a9", cancel, "o/r#9", "review_requested", "handoff")
+	if err := e.handoffDone(context.Background(), "a9", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Authorize(tok, peer); err == nil {
+		t.Fatal("a released hand-off's session token still authorizes")
 	}
 }

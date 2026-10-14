@@ -15,9 +15,9 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
-	"github.com/NodeSpy/conductor/internal/expr"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/store"
+	"github.com/NodeSpy/conductor/pkg/expr"
 )
 
 // Agent-driven workflows (#36 §11): an agent programs conductor. Its final
@@ -263,9 +263,9 @@ func ValidatePlanSteps(cfg *config.Config, reg *connector.Registry, steps []conf
 			for hi, h := range step.Hooks {
 				hw := fmt.Sprintf("%s hook[%d]", w, hi)
 				switch h.At {
-				case "start", "done", "fail":
+				case "start", "done", "fail", "stop":
 				default:
-					return fmt.Errorf("%s: at must be start|done|fail, got %q", hw, h.At)
+					return fmt.Errorf("%s: at must be start|done|fail|stop, got %q", hw, h.At)
 				}
 				connName, verb, okCut := strings.Cut(h.Uses, ".")
 				if !okCut || connName == "" || verb == "" {

@@ -172,7 +172,33 @@ dimension that denies every call rather than scoping it:
 
 `ContextScope` for the repo dimension is answered in core for every connector
 (`core.Trigger.Target.Repo`) rather than by a github-specific hook, so a
-`repo:` option on any connector gets the same treatment. Below the hook, a
+`repo:` option on any connector gets the same treatment.
+
+### The target's own number and branch (#154)
+
+A forge plugin binds its WRITE verbs to the dispatch's own target with two
+more dimensions, declared like any other: the github plugin tags the
+`pr`/`number` option of every write that addresses a PR or issue
+(`comment`, `reply`, `submit_review`, `merge_pr`, `update_pr`,
+`add_labels`, …) with `scope: number`, and the `branch` option of
+`put_file`/`delete_file`/`create_branch` with `scope: branch`. Its events'
+`target.scope` names where the dispatch's own values come from —
+`{dimension: number, fact: number, bound: true}` and `{dimension: branch,
+fact: head_ref, bound: true}` — so a fixer comments on and commits to its own
+PR with nothing listed, and anything else needs the grant to name it.
+
+- **`scope_absent`** on an option says what LEAVING IT OUT names: a file
+  write without a branch lands on the default branch, so put_file's branch
+  declares `scope_absent: "@default-branch"` and the host checks the absent
+  option as that value — refused unless a grant lists `@default-branch`.
+- **`bound`** on a target scope fact says the value names the target itself:
+  once the target is known merged or closed (`closes_target`, recorded in
+  `internal/targets`) the dimension has no implicit value, so a straggling
+  agent's write to its dead PR is refused; a `reopens_target` event
+  restores it. The repo dimension is unbound: reads of the repo stay open.
+
+Reads (`pr_get`, `pr_files`, `pr_diff`, …) carry no number scope: reading
+another PR of the same repo stays allowed. Below the hook, a
 connector's own configured default option value is implicitly in scope — that
 is what makes "the configured default channel" work without per-connector code.
 

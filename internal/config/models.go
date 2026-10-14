@@ -440,9 +440,7 @@ func (c *Config) validateModels() error {
 		if ref.Runtime == "" {
 			continue
 		}
-		_, isRuntime := c.Runtimes[ref.Runtime]
-		_, isController := c.Controllers[ref.Runtime]
-		if !isRuntime && !isController {
+		if _, isRuntime := c.Runtimes[ref.Runtime]; !isRuntime {
 			return fmt.Errorf("config: %s: unknown runtime %q (defined: %s)", ref.Where, ref.Runtime, c.runtimeNames())
 		}
 	}

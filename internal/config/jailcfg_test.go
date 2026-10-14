@@ -142,7 +142,7 @@ func TestAgentJailEligible(t *testing.T) {
 }
 
 func TestPolicyOnlyStepIsolationOnPaseo(t *testing.T) {
-	c := &Config{Controllers: map[string]ControllerConfig{"p": {Type: "paseo", Default: true}, "cli": {Type: "cli", Tool: "claude-code"}}}
+	c := &Config{Runtimes: RuntimeSet{"p": {Use: "paseo", Default: true}, "cli": {Use: "cli", Tool: "claude-code"}}}
 	host := Step{Type: "agent", Runtime: "p", Isolation: &IsolationConfig{Host: map[string]*HostCommand{"gh": {Deny: []string{"pr merge *"}}}}}
 	if err := c.validateStepIsolation("s", host); err == nil {
 		t.Fatal("host: rules on a paseo step have no jail to apply to")

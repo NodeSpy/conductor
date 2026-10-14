@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -10,10 +11,11 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
-	"github.com/NodeSpy/conductor/internal/handoff"
 	"github.com/NodeSpy/conductor/internal/notify"
+	"github.com/NodeSpy/conductor/internal/secrets"
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
@@ -94,9 +96,8 @@ func stepEngine(t *testing.T, d *stepFake) *Engine {
 		{ID: "planner", Model: config.ModelSpecOf("claude-haiku")}, // cheap model to plan
 		{ID: "worker", Model: config.ModelSpecOf("claude-opus")},   // strong model to do the work
 	}}}}
-	cfg.Control.Enabled = ptrBool(true)
 	return New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: &fakeNotifier{},
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 }
 
 func issueTrigger() core.Trigger {
@@ -109,7 +110,7 @@ func TestWorkflowBranchHasContext(t *testing.T) {
 	d.outputs["evaluate"] = `{"has_context": true, "summary": "clear repro"}`
 	e := stepEngine(t, d)
 
-	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), triageAction(), "app", "usr", false)
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), triageAction(), ghCreds("usr", "app"), false)
 
 	if got := d.ran; len(got) != 2 || got[0] != "evaluate" || got[1] != "work" {
 		t.Fatalf("expected evaluate→work, got %v", got)
@@ -133,7 +134,7 @@ func TestWorkflowBranchNoContext(t *testing.T) {
 	d.outputs["evaluate"] = `{"has_context": false}`
 	e := stepEngine(t, d)
 
-	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), triageAction(), "app", "usr", false)
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), triageAction(), ghCreds("usr", "app"), false)
 
 	if got := d.ran; len(got) != 2 || got[0] != "evaluate" || got[1] != "ask" {
 		t.Fatalf("expected evaluate→ask, got %v", got)
@@ -146,15 +147,14 @@ func TestWorkflowBackgroundStepHandsOff(t *testing.T) {
 	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
 		{ID: "interactive"},
 	}}}}
-	cfg.Control.Enabled = ptrBool(true)
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n,
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 
 	act := config.Action{Steps: []config.Action{
 		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true,
 			Prompt: "draft and hand off {{.issue}}"},
 	}}
-	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, "app", "usr", false)
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, ghCreds("usr", "app"), false)
 
 	if got := d.ran; len(got) != 1 || got[0] != "handoff" {
 		t.Fatalf("expected handoff to run, got %v", got)
@@ -184,14 +184,13 @@ func TestWorkflowBackgroundStepNotReapable(t *testing.T) {
 		// Profile mistakenly (or staleley) opts into archiving.
 		{ID: "interactive", ArchiveWhenDone: true},
 	}}}}
-	cfg.Control.Enabled = ptrBool(true)
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: &fakeNotifier{},
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 
 	act := config.Action{Steps: []config.Action{
 		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true, Prompt: "hand off {{.issue}}"},
 	}}
-	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, "app", "usr", false)
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, ghCreds("usr", "app"), false)
 
 	if d.archive["handoff"] {
 		t.Fatal("background hand-off must dispatch with ArchiveWhenDone=false so the reaper can't cull it")
@@ -199,25 +198,26 @@ func TestWorkflowBackgroundStepNotReapable(t *testing.T) {
 }
 
 // TestWorkflowBackgroundStepUnknownHandoffEscalates covers a step naming a
-// `handoff:` the registry doesn't have (config validation should normally catch
-// this before a live trigger reaches here — see config.CheckAgentRefs — but the
-// engine must still fail loudly rather than silently, if it somehow does).
+// `handoff:` connector that doesn't exist (config validation should normally
+// catch this before a live trigger reaches here — see
+// internal/flow/validate.go's checkAskCapable — but the engine must still
+// fail loudly rather than silently, if it somehow does).
 func TestWorkflowBackgroundStepUnknownHandoffEscalates(t *testing.T) {
 	d := newStepFake()
 	n := &fakeNotifier{}
 	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
 		{ID: "interactive"},
 	}}}}
-	cfg.Control.Enabled = ptrBool(true)
-	reg := handoff.NewRegistry(nil, "", nil) // no entries at all
-	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n, Handoffs: reg,
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+	// No connectors: block at all — e.connectors is nil, so any handoff: name
+	// fails to resolve.
+	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n,
+		Author: dispatch.Author{}})
 
 	act := config.Action{Steps: []config.Action{
 		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true,
 			Handoff: "does-not-exist", Prompt: "draft and hand off {{.issue}}"},
 	}}
-	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, "app", "usr", false)
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, ghCreds("usr", "app"), false)
 
 	if !n.has(notify.EventEscalate) {
 		t.Fatalf("an unresolvable handoff name should escalate, got %v", n.events)
@@ -230,26 +230,32 @@ func TestWorkflowBackgroundStepUnknownHandoffEscalates(t *testing.T) {
 }
 
 // TestWorkflowBackgroundStepHandoffResolvesButNoBrokerFallsBack: a real handoff
-// resolves cleanly, but with no session broker configured the engine can't rewire
-// the review loop, so it must keep today's plain fallback (no escalate).
+// — an ask-capable `web` connector — resolves cleanly, but with no session
+// broker configured the engine can't rewire the review loop, so it must keep
+// today's plain fallback (no escalate).
 func TestWorkflowBackgroundStepHandoffResolvesButNoBrokerFallsBack(t *testing.T) {
 	d := newStepFake()
 	n := &fakeNotifier{}
-	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
-		{ID: "interactive"},
-	}}}}
-	cfg.Control.Enabled = ptrBool(true)
-	reg := handoff.NewRegistry(map[string]config.HandoffConfig{
-		"page": {Web: &config.HandoffWeb{BaseURL: "https://conductor.example.com"}},
-	}, "", nil)
-	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n, Handoffs: reg,
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+	cfg := &config.Config{
+		ConnectorsMap: map[string]config.ConnectorRef{
+			"page": {Use: "web", Options: map[string]any{"base_url": "https://conductor.example.com"}},
+		},
+		Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
+			{ID: "interactive"},
+		}}},
+	}
+	reg, err := connector.Build(cfg, connector.Deps{Secrets: secrets.New(), Config: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: d, Notifier: n, Connectors: reg,
+		Author: dispatch.Author{}})
 
 	act := config.Action{Steps: []config.Action{
 		{ID: "handoff", Type: "agent", Agent: "interactive", Background: true,
 			Handoff: "page", Prompt: "draft and hand off {{.issue}}"},
 	}}
-	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, "app", "usr", false)
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, ghCreds("usr", "app"), false)
 
 	if n.has(notify.EventEscalate) {
 		t.Fatalf("a resolvable handoff with no broker should not escalate, got %v", n.events)
@@ -274,10 +280,8 @@ func TestWorkflowResumesFromCheckpoint(t *testing.T) {
 	st := tempStore(t)
 	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
 		{ID: "planner"}, {ID: "worker"}}}}}
-	cfg.Control.Enabled = ptrBool(true)
 	e := New(Options{Config: cfg, Store: st, Dispatch: d, Notifier: &fakeNotifier{},
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil },
-		RefreshAppToken: func(core.Trigger) (string, error) { return "app", nil }})
+		Author: dispatch.Author{}})
 
 	// Persist a run checkpointed AFTER step 0 (evaluate) with has_context=true.
 	tr := issueTrigger()
@@ -339,3 +343,35 @@ func (*stepFake) AgentForDispatch(string) string { return "" }
 func (*stepFake) DispatchInFlight(string) bool   { return false }
 
 func (*stepFake) DeliverOutput(string, any) (bool, error) { return false, nil }
+
+// A run whose declared credential cannot be minted yet (its plugin is still
+// starting) is not resumed without it: it stays pending for the next start.
+func TestResumeDeferredWhenACredentialCannotBeMinted(t *testing.T) {
+	d := newStepFake()
+	st := tempStore(t)
+	cfg := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
+		{ID: "planner"}, {ID: "worker"}}}}}
+	e := New(Options{Config: cfg, Store: st, Dispatch: d, Notifier: &fakeNotifier{},
+		Author: dispatch.Author{}, Connectors: forgeRegistry(t),
+		InvokeVerb: func(context.Context, string, string, map[string]any) (map[string]any, error) {
+			return nil, errors.New("plugin not running yet")
+		}})
+	tr := issueTrigger()
+	tr.Instance, tr.TargetTrusted = "i", true
+	tp := tr
+	tp.Action = nil
+	trigJSON, _ := json.Marshal(tp)
+	actJSON, _ := json.Marshal(triageAction())
+	_ = st.PutRun(store.WorkflowRun{ID: "run1", Instance: "i",
+		Trigger: trigJSON, Action: actJSON, StepIndex: 1,
+		Outputs: map[string]map[string]any{"evaluate": {"has_context": true}}})
+
+	e.ResumeWorkflows(context.Background())
+	time.Sleep(100 * time.Millisecond)
+	if d.count() != 0 {
+		t.Fatalf("a run was resumed without its credential (%d dispatches)", d.count())
+	}
+	if len(st.PendingRuns()) != 1 {
+		t.Fatal("the deferred run must stay pending for the next start")
+	}
+}

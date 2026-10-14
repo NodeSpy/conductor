@@ -31,7 +31,8 @@ import (
 //
 // A step's `use:` is an engine and NOTHING else. The workflow call is
 // `call:` (see Step.Call) — a step-level `use:` that names a workflow is the
-// pre-engines spelling and `conductor config migrate` rewrites it.
+// pre-engines spelling (the previous release's `conductor config migrate`
+// rewrote it).
 
 // EngineClass is what a resolved engine selection turns out to be —
 // the one question the step dispatcher asks.
@@ -167,7 +168,7 @@ func (s Step) StepEngine() (string, EngineClass) {
 // anything else, so the operator is told what they actually wrote rather than
 // sent to a plugin repo for a workflow that is right there in the file.
 func engineIsWorkflowErr(w, sel string) error {
-	return fmt.Errorf("config: %s: `use: %s` selects a code ENGINE, but %q is a workflow — write `call: %s` (a step-level `use:` used to mean the workflow call; `conductor config migrate` rewrites it)", w, sel, sel, sel)
+	return fmt.Errorf("config: %s: `use: %s` selects a code ENGINE, but %q is a workflow — write `call: %s` (a step-level `use:` used to mean the workflow call; the previous release's `conductor config migrate` rewrites it)", w, sel, sel, sel)
 }
 
 // engineUnknownErr is the message for a step `use:` that names no engine

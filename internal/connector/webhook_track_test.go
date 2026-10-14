@@ -7,22 +7,23 @@ import (
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
-// TestChatWebhookURLTracked proves the incoming-webhook URL — which embeds a
-// bearer token in its path — is registered for redaction when the slack and
-// discord connectors are built. It is a credential, not a public endpoint, so
-// it must never survive into logs or audit records in cleartext.
+// TestChatWebhookURLTracked proves a connection field the plugin declares
+// `secret` — an incoming-webhook URL, which embeds a bearer token in its path
+// — is registered for redaction even when written literally. It is a
+// credential, not a public endpoint, so it must never survive into logs or
+// audit records in cleartext.
 func TestChatWebhookURLTracked(t *testing.T) {
-	const slackHook = "https://hooks.slack.com/services/T0000/B0000/xoxbSECRETpath"
-	const discordHook = "https://discord.com/api/webhooks/12345/dscSECRETpath"
+	const slackHook = "https://hooks.example.com/services/T0000/B0000/xoxbSECRETpath"
+	const botToken = "xoxb-literal-SECRET"
 
 	cfg := mustDecodeConfig(t, `
 connectors:
   sl:
     use: slack
     webhook_url: `+slackHook+`
-  dc:
-    use: discord
-    webhook_url: `+discordHook+`
+  sl2:
+    use: slack
+    bot_token: `+botToken+`
 `)
 	sec := secrets.New()
 	if _, err := Build(cfg, Deps{Secrets: sec}); err != nil {
@@ -31,7 +32,7 @@ connectors:
 
 	for _, tc := range []struct {
 		name, hook string
-	}{{"slack", slackHook}, {"discord", discordHook}} {
+	}{{"webhook_url", slackHook}, {"bot_token", botToken}} {
 		line := "posting via " + tc.hook + " now"
 		if red := sec.Redact(line); strings.Contains(red, tc.hook) {
 			t.Fatalf("%s webhook URL leaked through Redact: %q", tc.name, red)

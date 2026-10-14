@@ -143,10 +143,10 @@ and granting a verb does not unlock the binary.
 |---|---|---|
 | what it is | the real tool, run on your machine through conductor with *your* setup (your gh login, your git identity) | something conductor itself does, with the connector's own credentials |
 | governed by | the binary's profile + `isolation.host.<bin>` (`allow`/`deny`/`env`/`persist`/`network`) | the verb grant (`skill.verbs`) + the connector's declared scopes |
-| target binding | the **gh profile**: writes on the dispatch's own PR/issue; the **git profile**: pushes to the dispatch's own branch | the **github connector's** scope dimensions: `repo`, `number` (the PR/issue), `branch` — the dispatch's own values are in context |
+| target binding | the **gh profile**: writes on the dispatch's own PR/issue; the **git profile**: pushes to the dispatch's own branch | the **github plugin's** declared scope dimensions: `repo`, `number` (the PR/issue), `branch` — the dispatch's own values are in context |
 | opening a PR | refused, unless `isolation.host.gh.allow` names `pr create` | refused, unless the grant lists the verb |
 | review steps | gh and git write nothing | whatever the step's `skill:` lists (by default, no write verbs) |
-| closed target | the gh and git profiles refuse every write | the github connector drops the target from context, so every write to it is refused |
+| closed target | the gh and git profiles refuse every write | the target's own number and branch leave the context (the plugin declares them `bound`), so every write to it is refused; a reopened PR gets them back |
 
 **Binaries.** With no configuration, a fixer's `gh` may comment on, review,
 edit and reply on its own PR, and resolve its threads; `git push` reaches its
@@ -173,9 +173,10 @@ but never widen. `deny` narrows as always (`git: { deny: ["push main"] }`).
 See [[Host-Commands#gh]] and [[Host-Commands#git]].
 
 **Conductor verbs.** A step's agent may call only the verbs its `skill:`
-block grants. The github connector's write verbs then act only on the
+block grants. The github plugin's write verbs then act only on the
 dispatch's own repository, PR/issue and head branch unless the grant names
-more:
+more (a file write with no branch names the default branch, listed as
+`@default-branch`):
 
 ```yaml
 connectors:
@@ -203,13 +204,15 @@ not this dispatch's own number …`) and fails for the agent like any failed
 command, with the reason on stderr.
 
 **Work stops when its target goes away.** When a dispatch's PR merges or
-closes, conductor stops the fixers running for it (see
-[[Policy#fixers-stop-when-their-pr-closes]]): their runs end `stopped`,
+closes, conductor stops the runs its plugin declares bound to it
+(`bound_to_target` — the github plugin's fixers; see
+[[Policy#fixers-stop-when-their-pr-closes]]), on the cli/acp runtimes and on
+paseo alike: their runs end `stopped`,
 audited as `fixers_stopped` with `reason: target merged|closed`, and a
 `cancelled` notification goes out. Independently — for every agent, fixer or
 not — both surfaces refuse every write for a closed target (the gh and git
-profiles also check the PR's live state before a write; the github connector
-drops the target from its scope context), so a session that is
+profiles also check the PR's live state before a write; the verb scopes
+drop the target's own number and branch from context), so a session that is
 mid-command when the event lands, or one that was never stopped, still cannot
 act. Agents are also told the rule, so a well-behaved one reports instead of
 trying — but the policy is what holds.

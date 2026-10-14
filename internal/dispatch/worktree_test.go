@@ -171,6 +171,7 @@ func TestEffectiveStrategyInteractive(t *testing.T) {
 	pr := core.Target{Repo: "a/w", PR: 7, Number: 7}
 	repoOnly := core.Target{Repo: "a/w"}
 	bare := core.Target{}
+	synth := core.Target{Repo: "manual:review-calibration", Number: 42}
 	cases := []struct {
 		name string
 		req  Request
@@ -182,6 +183,12 @@ func TestEffectiveStrategyInteractive(t *testing.T) {
 		{"interactive+no-repo+none → none", Request{Interactive: true, Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{Target: bare}}, "none"},
 		{"non-interactive+none stays none", Request{Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{Target: pr}}, "none"},
 		{"interactive+explicit checkout-pr unchanged", Request{Interactive: true, Action: config.Action{Checkout: "checkout-pr"}, Trigger: core.Trigger{Target: pr}}, "checkout-pr"},
+		// A manual/RSS/webhook trigger's synthetic target ("manual:<name>") is not a
+		// repo: its action is forced to checkout none, and an interactive step
+		// must not branch off it (paseo clone "manual:…" → CLONE_FAILED).
+		{"interactive+synthetic target → none", Request{Interactive: true, Action: config.Action{Checkout: "none"}, Trigger: core.Trigger{Target: synth, Action: config.Action{Checkout: "none"}}}, "none"},
+		{"interactive+synthetic target+unset → none", Request{Interactive: true, Trigger: core.Trigger{Target: synth, Action: config.Action{Checkout: "none"}}}, "none"},
+		{"interactive+synthetic target+step repo: → branch-off", Request{Interactive: true, Step: config.Step{Repo: "a/w"}, Trigger: core.Trigger{Target: core.Target{Repo: "manual:x", Project: "a/w"}, Action: config.Action{Checkout: "none"}}}, "branch-off"},
 	}
 	for _, c := range cases {
 		if got := effectiveStrategy(c.req); got != c.want {

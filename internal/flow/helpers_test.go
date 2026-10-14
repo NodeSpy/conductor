@@ -72,6 +72,14 @@ var fakeDecl = &connector.TypeDecl{
 			},
 		},
 		{
+			// An option whose NAME differs from its scope dimension.
+			Name: "notify", Desc: "records an invocation",
+			Options: connector.Schema{
+				"text":       {Type: connector.TString},
+				"channel_id": {Type: connector.TString, Scope: "channel"},
+			},
+		},
+		{
 			Name:    "fail",
 			Desc:    "always errors",
 			Options: connector.Schema{},
@@ -169,6 +177,15 @@ type fakeState struct {
 	// across polls (a run's status: in_progress → completed) for wait_for.
 	// Takes precedence over outputs[verb].
 	outputsFn map[string]func(callIndex int, opts map[string]any) map[string]any
+	// errFn[verb], when set, computes the error (nil for success) for each
+	// call from its 0-based per-verb call index — how a test scripts a
+	// plugin contract error (plugin-contract.md §1.11), including a
+	// *connector.ContractError directly (no plugin wire round trip needed:
+	// AsContractError works on any error in the chain, not just one that
+	// crossed a real transport), or a sequence of codes ending in success.
+	// Checked before failTimes/failIf, which only ever produce a generic
+	// "fake: ... failed" error.
+	errFn map[string]func(callIndex int, opts map[string]any) error
 	// slowMS[verb] sleeps that long (bounded by ctx) before returning.
 	slowMS map[string]time.Duration
 }
@@ -184,6 +201,7 @@ func newFakeStateEmpty() *fakeState {
 		failIf:    map[string]func(map[string]any) bool{},
 		outputs:   map[string]map[string]any{},
 		outputsFn: map[string]func(int, map[string]any) map[string]any{},
+		errFn:     map[string]func(int, map[string]any) error{},
 		slowMS:    map[string]time.Duration{},
 	}
 }
@@ -242,7 +260,13 @@ func newFakeImpl(name string, ref config.ConnectorRef, deps connector.Deps) (con
 	return &fakeImpl{name: name}, nil
 }
 
-func (f *fakeImpl) Validate() error          { return nil }
+func (f *fakeImpl) Validate() error { return nil }
+
+// StagingDir is where the fake's file-returning verbs would write (the
+// layout stagedFiles writes test files into).
+func (f *fakeImpl) StagingDir() (string, error) {
+	return filepath.Join(config.PluginStagingDir(), "chat", f.name), nil
+}
 func (f *fakeImpl) DeclaredEvents() []string { return nil }
 func (f *fakeImpl) Source(triggers []connector.CompiledTrigger) (core.Integration, error) {
 	return nil, nil
@@ -266,9 +290,15 @@ func (f *fakeImpl) Invoke(ctx context.Context, verb string, opts map[string]any)
 	pred := st.failIf[verb]
 	slow := st.slowMS[verb]
 	outFn := st.outputsFn[verb]
+	errFn := st.errFn[verb]
 	out, hasOut := st.outputs[verb]
 	st.mu.Unlock()
 
+	if errFn != nil {
+		if err := errFn(callIdx, opts); err != nil {
+			return nil, err
+		}
+	}
 	if verb == "fail" {
 		return nil, fmt.Errorf("fake: verb %q always fails", verb)
 	}
@@ -482,6 +512,11 @@ type fakeStore struct {
 	history []store.RunHistory
 	delLog  []string
 	plans   map[string]store.PlanRecord
+	// putRunErr, when set, makes PutRun fail with this error WITHOUT
+	// recording anything (runs/putLog untouched) — a test's stand-in for a
+	// lost/failed write (finding 6: StartHooksFired persisted before firing
+	// must skip firing rather than risk a double-post when this happens).
+	putRunErr error
 }
 
 func newFakeStore() *fakeStore {
@@ -545,6 +580,9 @@ func (s *fakeStore) allHistory() []store.RunHistory {
 func (s *fakeStore) PutRun(r store.WorkflowRun) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.putRunErr != nil {
+		return s.putRunErr
+	}
 	s.runs[r.ID] = r
 	s.putLog = append(s.putLog, r)
 	return nil
@@ -691,11 +729,11 @@ func newTestRunner(t *testing.T, cfg *config.Config, reg *connector.Registry) *t
 		Cfg:   cfg,
 		Conns: reg,
 		Agents: AgentServices{
-			Dispatch:   ag.dispatch,
-			Tokens:     func(t core.Trigger) dispatch.Tokens { return dispatch.Tokens{} },
-			Guidance:   func(agentName string, p config.Step, pol config.Policy) string { return "|G|" },
-			Background: ag.background,
-			Archive:    ag.archive,
+			Dispatch:    ag.dispatch,
+			Credentials: func(context.Context, core.Trigger) (dispatch.Credentials, error) { return dispatch.Credentials{}, nil },
+			Guidance:    func(agentName string, p config.Step, pol config.Policy) string { return "|G|" },
+			Background:  ag.background,
+			Archive:     ag.archive,
 		},
 		Secrets:    secrets.New(),
 		SecretVals: map[string]string{"tok": "s3kr1t-value"},

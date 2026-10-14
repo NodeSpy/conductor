@@ -48,15 +48,17 @@ triggers:
 
 ## Fixers stop when their PR closes
 
-A fixer (`new_comment`, `changes_requested`, `failing_checks`,
-`merge_conflict`, `pr_behind`) works on one PR. When that PR merges or
+A fixer works on one PR — the events its plugin declares
+`bound_to_target` (github's `new_comment`, `changes_requested`,
+`failing_checks`, `merge_conflict`, `pr_behind`). When that PR merges or
 closes, conductor kills the fixers still running on it, and a fixer still
 waiting for a slot doesn't start. The run ends `stopped`, not failed: no
 retry, no failure hooks, no `failed` notification; the stop itself is
 audited (`fixers_stopped`, with `reason: target merged|closed`) and sent as a
 `cancelled` notification. This covers controller runtimes whose sessions can
 be cancelled (`cli`, `acp`, `opencode`) and the paseo runtime, whose fixer
-agents for the PR are archived (only agents conductor launched). Review and
+agents for the PR are archived (only agents conductor launched, found by the
+`bound=1` label conductor gives them at launch). Review and
 other agents on the PR are not stopped — but no agent can write to a closed
 PR: see [[Isolation#writes-are-bound-to-the-dispatchs-own-target]].
 

@@ -27,7 +27,7 @@ import (
 // process(_closed) → stopFixers → every runner's StopTarget.
 type fakeCancelDispatcher struct {
 	mu      sync.Mutex
-	agents  map[string]map[string][]string // pr key -> kind -> agent ids
+	agents  map[string]map[string][]string // pr key -> "bound"|"unbound" -> agent ids
 	stopped []string
 }
 
@@ -44,8 +44,8 @@ func (d *fakeCancelDispatcher) StopTarget(_ context.Context, key string) int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	n := 0
-	for kind, ids := range d.agents[key] {
-		if core.BranchFixKind(kind) {
+	for group, ids := range d.agents[key] {
+		if group == "bound" {
 			d.stopped = append(d.stopped, ids...)
 			n += len(ids)
 		}
@@ -100,8 +100,8 @@ func TestClosedTriggerCancelsLiveAgentsAndRefusesFurtherWrites(t *testing.T) {
 			number := 100
 			prKey := repo + "#" + strconv.Itoa(number)
 			d := &fakeCancelDispatcher{agents: map[string]map[string][]string{
-				prKey:            {"merge_conflict": {"fixer-1"}, "review_requested": {"review-1"}},
-				"acme/other#100": {"merge_conflict": {"elsewhere"}},
+				prKey:            {"bound": {"fixer-1"}, "unbound": {"review-1"}},
+				"acme/other#100": {"bound": {"elsewhere"}},
 			}}
 			eng, st, notif := buildCancelEngine(t, gateCfg2(), d)
 			st.RecordEngagement(prKey, store.Engagement{Key: "fixer"})
@@ -154,5 +154,36 @@ func TestClosedTriggerCancelsLiveAgentsAndRefusesFurtherWrites(t *testing.T) {
 			}
 			t.Cleanup(func() { targets.Default.Reopen(repo, number) })
 		})
+	}
+}
+
+// A trusted `_reopened` (the event declares reopens_target) clears the
+// closed mark a `_closed` recorded, so writes bound to the live-again target
+// are its dispatches' own once more. One whose target the sender chose
+// clears nothing: it could otherwise reopen someone else's closed PR for
+// writing.
+func TestReopenedTargetClearsTheClosedMark(t *testing.T) {
+	repo, number := "acme/reopen", 9
+	eng, _, _ := buildCancelEngine(t, gateCfg2(), &fakeCancelDispatcher{})
+	t.Cleanup(func() { targets.Default.Reopen(repo, number) })
+	reopened := func(trusted bool) core.Trigger {
+		return core.Trigger{Source: "github", Instance: "i", Kind: "_reopened", TargetTrusted: trusted,
+			Target: core.Target{Repo: repo, PR: number, Number: number}}
+	}
+	if !reopened(true).ReopensTarget() {
+		t.Fatal("setup: the forge declaration must mark _reopened reopens_target")
+	}
+
+	eng.process(context.Background(), closedTrigger(repo, number, false, nil))
+	if _, ok := targets.Default.Closed(repo, number); !ok {
+		t.Fatal("setup: the close must be recorded")
+	}
+	eng.process(context.Background(), reopened(false))
+	if _, ok := targets.Default.Closed(repo, number); !ok {
+		t.Fatal("an untrusted reopen must not clear the closed mark")
+	}
+	eng.process(context.Background(), reopened(true))
+	if _, ok := targets.Default.Closed(repo, number); ok {
+		t.Fatal("a trusted reopen must clear the closed mark")
 	}
 }

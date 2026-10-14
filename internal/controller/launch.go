@@ -57,6 +57,10 @@ type launchOpts struct {
 	jail        *jail.LaunchSpec
 	jailDefault bool
 	jailState   *jailState
+	// credGuidance is the credential guidance the dispatch's connector
+	// declared (appended to its prompt): a jailed launch swaps it for
+	// dispatch.JailedIdentityGuidance.
+	credGuidance string
 	// claudeHooks appends claude-code's tool-call hook settings.
 	claudeHooks bool
 	// res receives what prepareLaunch decided (nil = not collected).

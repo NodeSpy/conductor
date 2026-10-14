@@ -10,7 +10,8 @@ import (
 	"github.com/NodeSpy/conductor/internal/targets"
 )
 
-// A github connector instance named "gh" — deliberately the same word as the
+// A github connector instance (the forge plugin's declaration, see
+// forge_fixture_test.go) named "gh" — deliberately the same word as the
 // gh binary, which is unrelated: `conductor call gh.<verb>` is conductor's own
 // verb on this instance; the `gh` binary is a host command with its own
 // profile.
@@ -86,6 +87,15 @@ func TestGithubVerbsAreBoundToTheDispatchTargetByScope(t *testing.T) {
 	}
 	if err := verbErr(r, fixer, "gh.put_file", put("fix/42")); err == nil {
 		t.Fatal("a commit to a merged PR's branch must be refused")
+	}
+	// The repo is not bound to the target: reading it stays allowed.
+	if err := verbErr(r, ghFixer([]string{"gh.pr_get"}, nil), "gh.pr_get", map[string]any{"repo": "acme/app", "pr": 42}); err != nil {
+		t.Fatalf("a read of the closed PR's repo stays allowed: %v", err)
+	}
+	// Reopened (the engine's reopens_target handling): its own again.
+	targets.Default.Reopen("acme/app", 42)
+	if err := verbErr(r, fixer, "gh.comment", comment(42)); err != nil {
+		t.Fatalf("a comment on its own reopened PR: %v", err)
 	}
 }
 

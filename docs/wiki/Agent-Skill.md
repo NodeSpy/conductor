@@ -196,7 +196,8 @@ flags the memory tools carry — is never consulted for authorization, so an
 agent (or any same-user process that reaches the socket) cannot claim another
 profile's policy. Sessions expire after **2 hours** (roughly a dispatch's
 lifetime — a session that ages out loses its skill tools, never gains a
-stale identity) and die with the daemon (the table is in-memory).
+stale identity) and die with the daemon (the table is in-memory) — except an
+interactive hand-off's, below.
 
 Two binding shapes, matching the two delivery paths:
 
@@ -205,10 +206,21 @@ Two binding shapes, matching the two delivery paths:
   socket the daemon reads the caller's kernel uid (`SO_PEERCRED`) and refuses
   a token presented from a **different uid** — a token scraped from one
   agent's env is useless to a process running as someone else. The token
-  lasts a dispatch window (2h) for an ordinary step; an **interactive
-  hand-off** — held for a human who may not engage it for hours or days —
-  gets a longer life (7 days) so its `conductor call …` still authenticates
-  when the human finally drives it.
+  lasts a dispatch window (2h) for an ordinary step. An **interactive
+  hand-off** is held for a human who may not engage it for hours or days, and
+  the token in its env can't be rewritten, so its session is **durable**:
+  - it survives daemon restarts (every auto-update is one): it is persisted to
+    `handoff-sessions.json` in the state directory (mode 0600, keyed by the
+    token's SHA-256 — the token itself is never written) and reloaded at boot
+    with its identity, policy, uid binding, and verb-call count;
+  - its expiry **slides**: each authorized call pushes it to 7 days from
+    now, so a hand-off in use never ages out, and an idle one expires 7 days
+    after its last call;
+  - releasing the hand-off (`step.done`, `idle_timeout`, a watch bail or
+    supersede, or a re-engage on a new revision) revokes it at once.
+
+  A rejected session token (unknown or expired) is logged and audited
+  (`secret_broker` / `deny`).
 - **MCP face (one-shot claim, process-bound).** The injected MCP server
   receives a single-use **claim code** (env, ~2-minute TTL) and exchanges it
   over the socket for the session token; the exchange binds the session to

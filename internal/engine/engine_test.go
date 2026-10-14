@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +28,8 @@ type fakeDispatcher struct {
 	archived       chan string                                     // agent ids passed to Archive (if set)
 	dispatchAgents map[string]string                               // AgentForDispatch fixture
 	inflightIDs    map[string]bool                                 // DispatchInFlight fixture
+	agentDisps     map[string][]string                             // DispatchesForAgent fixture
+	liveIDs        []string                                        // LiveAgents fixture
 }
 
 func (f *fakeDispatcher) Dispatch(_ context.Context, r dispatch.Request) (dispatch.RunRef, error) {
@@ -38,6 +42,8 @@ func (f *fakeDispatcher) Dispatch(_ context.Context, r dispatch.Request) (dispat
 
 func (f *fakeDispatcher) WaitForAgent(context.Context, string, time.Duration) {}
 func (f *fakeDispatcher) HasLiveAgent(context.Context, string, string) bool   { return f.liveAgent }
+func (f *fakeDispatcher) DispatchesForAgent(id string) []string               { return f.agentDisps[id] }
+func (f *fakeDispatcher) LiveAgents(context.Context, string, string) []string { return f.liveIDs }
 func (f *fakeDispatcher) Archive(_ context.Context, id string) error {
 	if f.archived != nil {
 		f.archived <- id
@@ -94,7 +100,6 @@ func tempStore(t *testing.T) *store.Store {
 
 func baseCfg() *config.Config {
 	c := &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{{ID: "fixer"}}}}}
-	c.Control.Enabled = ptrBool(true)
 	return c
 }
 
@@ -102,11 +107,11 @@ func newEng(t *testing.T, cfg *config.Config, d *fakeDispatcher, n *fakeNotifier
 	st := tempStore(t)
 	e := New(Options{
 		Config: cfg, Store: st, Dispatch: d, Notifier: n,
-		Author:    dispatch.Author{Name: "Me"},
-		UserToken: func() (string, error) { return "utok", nil },
-		Rerun:     rerun,
-		// Runs are finished unless a test says otherwise (never shell out to gh).
-		RunStatus: func(context.Context, core.Trigger, int64) (string, error) { return "completed", nil },
+		Author: dispatch.Author{Name: "Me"},
+		// The declared remediation's verbs: the status read reports runs
+		// finished, and the remedy goes to the test's spy.
+		InvokeVerb: remediationVerbs(rerun, func() string { return "completed" }),
+		Connectors: forgeRegistry(t),
 	})
 	return e, st
 }
@@ -130,8 +135,7 @@ func TestRuntimePauseSkips(t *testing.T) {
 		t.Fatal(err)
 	}
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
-	e := New(Options{Config: baseCfg(), Store: tempStore(t), Dispatch: d, Notifier: n,
-		UserToken: func() (string, error) { return "u", nil }, PausePath: pauseFile})
+	e := New(Options{Config: baseCfg(), Store: tempStore(t), Dispatch: d, Notifier: n, PausePath: pauseFile})
 	tr := agentTrigger("merge_conflict", "a/w", 1, "h", "sig", config.Action{Type: "agent", Agent: "w/fixer"})
 
 	e.process(context.Background(), tr)
@@ -149,7 +153,8 @@ func TestRuntimePauseSkips(t *testing.T) {
 
 func TestPauseLabelSkips(t *testing.T) {
 	cfg := baseCfg()
-	cfg.Control.PauseLabel = "conductor:off"
+	label := "conductor:off"
+	cfg.Policy = &config.Policy{PauseLabel: &label}
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, cfg, d, n, nil)
 
@@ -170,7 +175,8 @@ func TestPauseLabelSkips(t *testing.T) {
 
 func TestAgentBudgetShedsOverCap(t *testing.T) {
 	cfg := baseCfg()
-	cfg.Control.MaxAgentsPerHour = 2
+	maxPerHour := 2
+	cfg.Policy = &config.Policy{Concurrency: &config.Concurrency{MaxAgentsPerHour: &maxPerHour}}
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, cfg, d, n, nil)
 	act := config.Action{Type: "agent", Agent: "w/fixer"}
@@ -207,9 +213,9 @@ func TestDispatchAndRecord(t *testing.T) {
 	if !n.has("dispatch") || !n.has("complete") {
 		t.Fatalf("missing notifications: %v", n.events)
 	}
-	// Tokens threaded through.
-	if d.reqs[0].Tokens.App != "atok" || d.reqs[0].Tokens.User != "utok" {
-		t.Fatalf("tokens not threaded: %+v", d.reqs[0].Tokens)
+	// Credentials threaded through.
+	if c := d.reqs[0].Credentials; c.Env["PC_GH_APP_TOKEN"] != "atok" || c.Env["GH_TOKEN"] != "utok" {
+		t.Fatalf("credentials not threaded: %+v", c)
 	}
 }
 
@@ -313,18 +319,31 @@ func TestCommentHWMIsPerKind(t *testing.T) {
 
 // A trigger without comment_kind (persisted/emitted before kinds existed) gates
 // against the issue mark, matching the old single-mark behavior.
-func TestCommentHWMKindDefaultsToIssue(t *testing.T) {
+// The cursor's stream is what the event declares, rendered over its facts:
+// a source that declares its own namespace gets marks of its own, and the
+// engine supplies no vendor default for a missing fact.
+func TestCursorStreamIsDeclared(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, baseCfg(), d, n, nil)
 	act := config.Action{Type: "agent", Agent: "w/fixer"}
-	if err := st.AdvanceCommentID("a/w#1", store.CommentKindIssue, 200); err != nil {
+	if err := st.AdvanceCommentID("a/w#1", "inbox:mail", 200); err != nil {
 		t.Fatal(err)
 	}
-	tr := commentTrigger("a/w", 1, 150, "c150", act)
-	delete(tr.Context, "comment_kind")
-	e.process(context.Background(), tr)
+	sem := &sdk.EventSemantics{Cursor: &sdk.CursorSemantics{ID: "msg_id", Stream: "inbox:{{.box}}"}}
+	mk := func(id int, box string) core.Trigger {
+		return core.Trigger{Source: "mail", Kind: "message", Target: core.Target{Repo: "a/w", Number: 1}, TargetTrusted: true,
+			Dedup: fmt.Sprint("m", id), Context: map[string]any{"msg_id": id, "box": box}, Action: act, Sem: sem}
+	}
+	e.process(context.Background(), mk(150, "mail"))
 	if len(d.reqs) != 0 {
-		t.Fatalf("kind-less comment under the issue mark should be skipped, got %d dispatches", len(d.reqs))
+		t.Fatalf("a cursor at or below its stream's mark must be skipped, got %d dispatches", len(d.reqs))
+	}
+	e.process(context.Background(), mk(150, "spam"))
+	if len(d.reqs) != 1 {
+		t.Fatalf("another stream has its own mark: want 1 dispatch, got %d", len(d.reqs))
+	}
+	if got := st.LastCommentID("a/w#1", "inbox:spam"); got != 150 {
+		t.Fatalf("the spam stream's mark = %d, want 150", got)
 	}
 }
 
@@ -334,7 +353,7 @@ func TestBackoffThenRetry(t *testing.T) {
 	clock := time.Unix(1_700_000_000, 0)
 	st.SetNow(func() time.Time { return clock })
 	e := New(Options{Config: baseCfg(), Store: st, Dispatch: d, Notifier: n,
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 
 	act := config.Action{Type: "agent", Agent: "w/fixer", MaxAttemptsPerHead: 1}
 	// 1st: below soft → dispatches, records an attempt (attemptAt = clock).
@@ -377,7 +396,7 @@ func TestPolicyBackoffOverridesCadence(t *testing.T) {
 		MaxAttemptsPerHead: &one, // soft threshold from policy, not the action
 	}
 	e := New(Options{Config: cfg, Store: st, Dispatch: d, Notifier: n,
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 
 	act := config.Action{Type: "agent", Agent: "w/fixer"} // no per-action threshold
 	// 1st: below the policy's soft threshold → dispatches, records the attempt.
@@ -443,6 +462,70 @@ func TestReviewRequestReengagesOnNewHead(t *testing.T) {
 	waitRunsDrained(t, st)
 }
 
+// TestReengageRetiresStaleHandoff: re-engaging a review on a new revision
+// retires the hand-off parked on the old one, so the two drafts never coexist
+// (the bug: every push + re-request left one more stale hand-off workspace).
+// It retires by target+kind only — a hand-off of another kind on the same PR,
+// or a live agent that isn't a parked hand-off (no hold), is left alone — and a
+// same-revision duplicate retires nothing.
+func TestReengageRetiresStaleHandoff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dLive := &fakeDispatcher{
+		liveAgent: true,
+		archived:  make(chan string, 8),
+		// The backend's labelled agents for the PR+kind: a hand-off armed
+		// before a restart (held, not in the in-memory registry) and a still-
+		// running step of an older run (not held).
+		liveIDs: []string{"old-ho", "restarted-ho", "running-step"},
+	}
+	e, st := newEng(t, baseCfg(), dLive, &fakeNotifier{}, nil)
+	e.hold = dispatch.NewHoldSet("")
+	_ = st.RecordAttempt("a/w#12", "review_requested", "h1")
+
+	hoCtx, hoCancel := context.WithCancel(context.Background())
+	defer hoCancel()
+	e.hold.Add("old-ho")
+	e.registerLiveHandoff("old-ho", hoCancel, "a/w#12", "review_requested", "handoff")
+	e.hold.Add("restarted-ho")
+	_, fixCancel := context.WithCancel(context.Background())
+	defer fixCancel()
+	e.hold.Add("fixer-ho")
+	e.registerLiveHandoff("fixer-ho", fixCancel, "a/w#12", "merge_conflict", "handoff")
+
+	wf := config.Action{Steps: []config.Action{{ID: "assess", Type: "agent", Agent: "w/fixer", Prompt: "x"}}}
+	e.process(ctx, agentTrigger("review_requested", "a/w", 12, "h2", "reviewreq@h2", wf))
+	waitRunsDrained(t, st)
+
+	got := map[string]bool{}
+	for len(dLive.archived) > 0 {
+		got[<-dLive.archived] = true
+	}
+	if !got["old-ho"] || !got["restarted-ho"] {
+		t.Fatalf("re-engage must archive the stale hand-offs (registry + held backend agent), archived=%v", got)
+	}
+	if got["running-step"] || got["fixer-ho"] {
+		t.Fatalf("re-engage archived an agent that is not a stale review hand-off, archived=%v", got)
+	}
+	if hoCtx.Err() == nil {
+		t.Fatal("the stale hand-off's watch/idle ctx was not cancelled")
+	}
+	if e.lookupLiveHandoff("old-ho") != nil || e.hold.Has("old-ho") || e.hold.Has("restarted-ho") {
+		t.Fatal("the stale hand-off was not deregistered/unheld")
+	}
+	if e.lookupLiveHandoff("fixer-ho") == nil || !e.hold.Has("fixer-ho") {
+		t.Fatal("a hand-off of another kind on the same PR must survive")
+	}
+
+	// A same-revision duplicate is suppressed before any retire.
+	e.hold.Add("new-ho")
+	e.registerLiveHandoff("new-ho", func() {}, "a/w#12", "review_requested", "handoff")
+	e.process(ctx, agentTrigger("review_requested", "a/w", 12, "h2", "reviewreq@h2", wf))
+	if e.lookupLiveHandoff("new-ho") == nil {
+		t.Fatal("a same-revision duplicate must not retire the current hand-off")
+	}
+}
+
 // waitRunsDrained blocks until the store has no in-flight workflow runs, so an
 // async workflow goroutine's store writes complete before the test's t.TempDir
 // cleanup deletes the state dir. finishRun deletes the run last, so an empty
@@ -500,39 +583,6 @@ func TestFailedDispatchRetriesUntilCap(t *testing.T) {
 	}
 }
 
-// TestCompletionHookInvokedAfterOutcome proves the engine calls
-// core.CompletionHook exactly once per dispatch, right after it stamps the
-// dispatch's outcome, with that outcome — the seam an integration (e.g. slack)
-// uses to correlate a completed dispatch back to the trigger it emitted.
-func TestCompletionHookInvokedAfterOutcome(t *testing.T) {
-	type call struct {
-		dedup, outcome string
-	}
-	var calls []call
-	core.SetCompletionHook(func(tr core.Trigger, outcome string) {
-		calls = append(calls, call{tr.Dedup, outcome})
-	})
-	t.Cleanup(func() { core.SetCompletionHook(nil) })
-
-	d, n := &fakeDispatcher{}, &fakeNotifier{}
-	e, _ := newEng(t, baseCfg(), d, n, nil)
-	act := config.Action{Type: "agent", Agent: "w/fixer"}
-	e.process(context.Background(), agentTrigger("new_comment", "a/w", 50, "h", "sig-ok", act))
-
-	fd, _ := newEng(t, baseCfg(), &fakeDispatcher{err: fmt.Errorf("boom")}, &fakeNotifier{}, nil)
-	fd.process(context.Background(), agentTrigger("new_comment", "a/w", 51, "h", "sig-fail", act))
-
-	if len(calls) != 2 {
-		t.Fatalf("want 2 completion calls, got %d: %+v", len(calls), calls)
-	}
-	if calls[0].dedup != "sig-ok" || calls[0].outcome != "ok" {
-		t.Fatalf("want (sig-ok, ok), got %+v", calls[0])
-	}
-	if calls[1].dedup != "sig-fail" || calls[1].outcome != "failed" {
-		t.Fatalf("want (sig-fail, failed), got %+v", calls[1])
-	}
-}
-
 // A type: agent step with no prompt of its own is dispatched against the event
 // itself — conductor synthesizes the connector-neutral event prompt.
 func TestEmptyPromptGetsEventPrompt(t *testing.T) {
@@ -565,7 +615,6 @@ func TestFixersDoNotGetAskGuidance(t *testing.T) {
 		{ID: "archived", ArchiveWhenDone: true},
 		{ID: "kept"},
 	}}}}
-	cfg.Control.Enabled = ptrBool(true)
 
 	for _, agent := range []string{"archived", "kept"} {
 		d := &fakeDispatcher{}
@@ -583,7 +632,6 @@ func TestFixersDoNotGetAskGuidance(t *testing.T) {
 
 func TestAgentGuidanceConfigOverride(t *testing.T) {
 	run := func(cfg *config.Config) string {
-		cfg.Control.Enabled = ptrBool(true)
 		d := &fakeDispatcher{}
 		e, _ := newEng(t, cfg, d, &fakeNotifier{}, nil)
 		e.process(context.Background(), agentTrigger("new_comment", "a/w", 1, "h", "s",
@@ -733,7 +781,6 @@ func TestAdditiveGuidanceLayering(t *testing.T) {
 	// is no registry left to borrow them from.
 	run := func(profile config.Step, globalGuidance *string) string {
 		cfg := &config.Config{AgentGuidance: globalGuidance}
-		cfg.Control.Enabled = ptrBool(true)
 		e, _ := newEng(t, cfg, &fakeDispatcher{}, &fakeNotifier{}, nil)
 		return e.agentGuidance(profile, config.Policy{})
 	}
@@ -777,7 +824,6 @@ func TestAdditiveGuidanceLayering(t *testing.T) {
 	// on top of it, exactly like the top-level agent_guidance alias does.
 	runPol := func(profile config.Step, base *config.GuidanceSpec) string {
 		cfg := &config.Config{Policy: &config.Policy{Guidance: base}}
-		cfg.Control.Enabled = ptrBool(true)
 		e, _ := newEng(t, cfg, &fakeDispatcher{}, &fakeNotifier{}, nil)
 		return e.agentGuidance(profile, config.Policy{Guidance: base})
 	}
@@ -819,20 +865,9 @@ func TestLiveGatedKindNotAbandonedOnDispatch(t *testing.T) {
 	}
 }
 
-func TestKillSwitch(t *testing.T) {
-	cfg := baseCfg()
-	cfg.Control.Enabled = ptrBool(false)
-	d, n := &fakeDispatcher{}, &fakeNotifier{}
-	e, _ := newEng(t, cfg, d, n, nil)
-	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 4, "h", "s", config.Action{Type: "agent", Agent: "w/fixer"}))
-	if len(d.reqs) != 0 {
-		t.Fatal("kill switch should block dispatch")
-	}
-}
-
 func TestShadowPropagates(t *testing.T) {
 	cfg := baseCfg()
-	cfg.Control.Shadow = true
+	cfg.Policy = &config.Policy{Shadow: ptrBool(true)}
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, st := newEng(t, cfg, d, n, nil)
 	e.process(context.Background(), agentTrigger("merge_conflict", "a/w", 5, "h", "s", config.Action{Type: "agent", Agent: "w/fixer"}))
@@ -853,10 +888,33 @@ func TestClosedDeletesState(t *testing.T) {
 	if st.LastSignature("a/w#6", "new_comment") == "" {
 		t.Fatal("precondition: expected recorded state")
 	}
-	e.process(context.Background(), core.Trigger{Source: "github", Kind: core.KindClosed,
+	e.process(context.Background(), core.Trigger{Source: "github", Kind: "_closed",
 		TargetTrusted: true, Target: core.Target{Repo: "a/w", PR: 6, Number: 6}})
 	if st.LastSignature("a/w#6", "new_comment") != "" {
 		t.Fatal("closed trigger should delete state")
+	}
+}
+
+// A closing event dispatches nothing by itself — but one the plugin routed to
+// a trigger explicitly `on:` it (on: gh._closed) runs that trigger's work,
+// after the target's state is dropped.
+func TestClosingEventRunsOnlyARoutedTrigger(t *testing.T) {
+	d, n := &fakeDispatcher{}, &fakeNotifier{}
+	e, st := newEng(t, baseCfg(), d, n, nil)
+	e.process(context.Background(), agentTrigger("new_comment", "a/w", 6, "h", "s", config.Action{Type: "agent", Agent: "w/fixer"}))
+	before := len(d.reqs)
+	e.process(context.Background(), core.Trigger{Source: "github", Instance: "i", Kind: "_closed",
+		TargetTrusted: true, Target: core.Target{Repo: "a/w", PR: 6, Number: 6}})
+	if len(d.reqs) != before {
+		t.Fatal("an unrouted closing event dispatched")
+	}
+	routed := agentTrigger("_closed", "a/w", 6, "h", "closed@6", config.Action{Type: "agent", Agent: "w/fixer", Prompt: "write the release note"})
+	e.process(context.Background(), routed)
+	if len(d.reqs) != before+1 || !strings.Contains(d.reqs[len(d.reqs)-1].Action.Prompt, "write the release note") {
+		t.Fatalf("a routed on: _closed trigger did not run (%d dispatches)", len(d.reqs)-before)
+	}
+	if st.LastSignature("a/w#6", "new_comment") != "" {
+		t.Fatal("the closing housekeeping did not run for the routed event")
 	}
 }
 
@@ -904,10 +962,10 @@ func (g *gateFake) count() int {
 func TestConcurrencyCapBlocksSecondAgent(t *testing.T) {
 	cfg := baseCfg()
 	one := 1
-	cfg.Control.MaxConcurrentAgents = &one // only one agent at a time
+	cfg.Policy = &config.Policy{Concurrency: &config.Concurrency{MaxAgents: &one}} // only one agent at a time
 	g := &gateFake{waitCh: make(chan struct{})}
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: g, Notifier: &fakeNotifier{},
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 	act := config.Action{Type: "agent", Agent: "w/fixer", Prompt: "fix"}
 
 	// First agent takes the only slot; its WaitForAgent blocks, holding it.
@@ -943,7 +1001,7 @@ func TestPolicyConcurrencyCapsAgents(t *testing.T) {
 	cfg.Policy = &config.Policy{Concurrency: &config.Concurrency{MaxAgents: &one}}
 	g := &gateFake{waitCh: make(chan struct{})}
 	e := New(Options{Config: cfg, Store: tempStore(t), Dispatch: g, Notifier: &fakeNotifier{},
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 	act := config.Action{Type: "agent", Agent: "w/fixer", Prompt: "fix"}
 
 	// First agent takes the only slot; its WaitForAgent blocks, holding it.
@@ -1032,9 +1090,10 @@ func TestFlakyRerunWaitsForRunToFinish(t *testing.T) {
 	// (no rerun, no fixer) until it completes.
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	var reran int
-	e, _ := newEng(t, baseCfg(), d, n, func(context.Context, core.Trigger, int64) error { reran++; return nil })
+	rerun := func(context.Context, core.Trigger, int64) error { reran++; return nil }
+	e, _ := newEng(t, baseCfg(), d, n, rerun)
 	status := "in_progress"
-	e.runStatus = func(context.Context, core.Trigger, int64) (string, error) { return status, nil }
+	e.invokeVerb = remediationVerbs(rerun, func() string { return status })
 	act := config.Action{Type: "agent", Agent: "w/fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
 	tr := agentTrigger("failing_checks", "a/w", 8, "h", "fail@h", act)
 	tr.Context["run_id"] = int64(555)
@@ -1072,9 +1131,12 @@ func TestFlakyRerunSkippedWithoutRunID(t *testing.T) {
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	var reran int
 	e, _ := newEng(t, baseCfg(), d, n, func(context.Context, core.Trigger, int64) error { reran++; return nil })
-	e.runStatus = func(context.Context, core.Trigger, int64) (string, error) {
-		t.Fatal("run status should not be looked up without a run id")
-		return "", nil
+	e.invokeVerb = func(_ context.Context, _, verb string, _ map[string]any) (map[string]any, error) {
+		if isMintVerb(verb) {
+			return map[string]any{"token": "t"}, nil // the dispatch's declared credentials
+		}
+		t.Fatal("no remediation verb should run without a run id")
+		return nil, nil
 	}
 	act := config.Action{Type: "agent", Agent: "w/fixer", FlakyRerun: config.FlakyRerun{Enabled: true, Max: 1}}
 	tr := agentTrigger("failing_checks", "a/w", 8, "h", "fail@h", act)
@@ -1136,7 +1198,7 @@ func TestLogTag(t *testing.T) {
 // this build escalates and never dispatches (rather than silently running paseo).
 func TestAgentWithUnrunnableControllerEscalates(t *testing.T) {
 	cfg := baseCfg()
-	cfg.Controllers = map[string]config.ControllerConfig{"ocode": {Agent: "opencode"}}
+	cfg.Runtimes = map[string]config.RuntimeConfig{"ocode": {Use: "acp", Agent: "opencode"}}
 	d, n := &fakeDispatcher{}, &fakeNotifier{}
 	e, _ := newEng(t, cfg, d, n, nil)
 
@@ -1218,7 +1280,7 @@ func TestParkAfterAttempts(t *testing.T) {
 	clock := time.Unix(1_700_000_000, 0)
 	st.SetNow(func() time.Time { return clock })
 	e := New(Options{Config: baseCfg(), Store: st, Dispatch: d, Notifier: n,
-		Author: dispatch.Author{}, UserToken: func() (string, error) { return "u", nil }})
+		Author: dispatch.Author{}})
 	act := config.Action{Type: "agent", Agent: "w/fixer", MaxAttemptsPerHead: 1} // soft=1 → parkAfter=2
 	adv := func() { clock = clock.Add(2 * time.Hour) }                           // clear any backoff cooldown
 
@@ -1260,3 +1322,29 @@ func (*gateFake) DispatchInFlight(string) bool   { return false }
 func (*fakeDispatcher) DeliverOutput(string, any) (bool, error) { return false, nil }
 
 func (*gateFake) DeliverOutput(string, any) (bool, error) { return false, nil }
+
+// remediationVerbs fakes the instance verbs a declared remediation invokes:
+// the status read answers status(), and the remedy calls rerun with the run
+// id (nil rerun: the remedy fails, as an unconfigured one would).
+func remediationVerbs(rerun func(context.Context, core.Trigger, int64) error, status func() string) func(context.Context, string, string, map[string]any) (map[string]any, error) {
+	return func(ctx context.Context, instance, verb string, opts map[string]any) (map[string]any, error) {
+		switch verb {
+		case "read_token":
+			return map[string]any{"token": "atok"}, nil
+		case "write_token":
+			return map[string]any{"token": "utok"}, nil
+		case "get_run":
+			return map[string]any{"status": status()}, nil
+		case "rerun_run":
+			if rerun == nil {
+				return nil, errors.New("no remedy configured")
+			}
+			return nil, rerun(ctx, core.Trigger{Instance: instance, Target: core.Target{Repo: fmt.Sprint(opts["repo"])}}, toInt64(opts["run_id"]))
+		}
+		return nil, fmt.Errorf("unexpected verb %s", verb)
+	}
+}
+
+// isMintVerb is one of the fixture forge's credential mint verbs, which every
+// dispatch for its targets calls.
+func isMintVerb(verb string) bool { return verb == "read_token" || verb == "write_token" }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
+	"github.com/NodeSpy/conductor/internal/core/coretest"
 	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
@@ -122,6 +123,17 @@ func TestEmitLifecycleRoutesToTriggers(t *testing.T) {
 		tr.Context["ref"] != "o/r#7" || tr.Context["origin_kind"] != "merge_conflict" {
 		t.Fatalf("context: %+v", tr.Context)
 	}
+	// The origin's connector and its target-trust bit ride along: they decide
+	// whose credentials the work gets, and whether any are minted.
+	if tr.Context["origin_instance"] != "gh" || tr.TargetTrusted {
+		t.Fatalf("origin: instance=%v trusted=%v (an untrusted origin stays untrusted)", tr.Context["origin_instance"], tr.TargetTrusted)
+	}
+	trusted := orig
+	trusted.TargetTrusted = true
+	EmitLifecycle(context.Background(), "escalate", trusted, "line", map[string]any{"origin_instance": "someone-else"})
+	if got := capture(); len(got) != 2 || !got[1].TargetTrusted || got[1].Context["origin_instance"] != "gh" {
+		t.Fatalf("an assigned origin's bit is carried, and extra context cannot rename the origin: %+v", got[len(got)-1])
+	}
 	act, isAct := tr.Action.(config.Action)
 	if !isAct || act.FlowRef == "" || !strings.Contains(act.FlowRef, "conductor.escalate") {
 		t.Fatalf("flow ref: %+v", tr.Action)
@@ -129,13 +141,13 @@ func TestEmitLifecycleRoutesToTriggers(t *testing.T) {
 
 	// The fan-in list's other event fires the same trigger.
 	EmitLifecycle(context.Background(), "needs_input", orig, "line", nil)
-	if got := capture(); len(got) != 2 || got[1].Kind != "needs_input" {
+	if got := capture(); len(got) != 3 || got[2].Kind != "needs_input" {
 		t.Fatalf("needs_input: %+v", got)
 	}
 
 	// An event nothing listens for is a no-op.
 	EmitLifecycle(context.Background(), "complete", orig, "line", nil)
-	if got := capture(); len(got) != 2 {
+	if got := capture(); len(got) != 3 {
 		t.Fatalf("complete must not fire: %+v", got)
 	}
 
@@ -143,14 +155,23 @@ func TestEmitLifecycleRoutesToTriggers(t *testing.T) {
 	EmitLifecycle(context.Background(), "update_available", core.Trigger{Source: "updater", Kind: "update"},
 		"release v1.2.3 available", map[string]any{"version": "v1.2.3"})
 	got = capture()
-	if len(got) != 3 {
+	if len(got) != 4 {
 		t.Fatalf("update_available: %+v", got)
 	}
-	if got[2].Context["version"] != "v1.2.3" || got[2].Variant != "on-update" {
-		t.Fatalf("update context: %+v", got[2].Context)
+	if got[3].Context["version"] != "v1.2.3" || got[3].Variant != "on-update" {
+		t.Fatalf("update context: %+v", got[3].Context)
 	}
-	if got[2].Target.Repo == "" {
-		t.Fatalf("synthetic target: %+v", got[2].Target)
+	if got[3].Target.Repo == "" {
+		t.Fatalf("synthetic target: %+v", got[3].Target)
+	}
+
+	// Checkout: an event about a real repo leaves checkout to normal
+	// derivation; only a synthetic target is forced to "none".
+	if a, _ := got[0].Action.(config.Action); a.Checkout != "" {
+		t.Fatalf("real-target lifecycle checkout = %q, want empty (derived)", a.Checkout)
+	}
+	if a, _ := got[3].Action.(config.Action); a.Checkout != "none" {
+		t.Fatalf("synthetic-target lifecycle checkout = %q, want none", a.Checkout)
 	}
 }
 
@@ -209,7 +230,7 @@ func TestConductorVerbsWithoutDaemon(t *testing.T) {
 			t.Errorf("%s: %v", verb, err)
 		}
 	}
-	if _, err := runSweepHook(context.Background()); err == nil || !strings.Contains(err.Error(), "not available") {
+	if _, err := runSweepHook(context.Background(), "gh"); err == nil || !strings.Contains(err.Error(), "not available") {
 		t.Errorf("sweep hook: %v", err)
 	}
 }
@@ -263,7 +284,7 @@ func TestConductorVerbsWithOps(t *testing.T) {
 
 // TestGHSweepVerb: gh.sweep runs the injected daemon-global catch-up nudge.
 func TestGHSweepVerb(t *testing.T) {
-	SetSweepHook(func(context.Context) (int, error) { return 3, nil })
+	SetSweepHook(func(context.Context, string) (int, error) { return 3, nil })
 	t.Cleanup(func() { SetSweepHook(nil) })
 	reg := buildAPIRegistry(t, `
 connectors:
@@ -273,5 +294,43 @@ connectors:
 	out, err := in.Invoke(context.Background(), "sweep", nil)
 	if err != nil || out["nudged"] != 3 {
 		t.Fatalf("gh.sweep: %v %v", out, err)
+	}
+}
+
+// A lifecycle event about a real target checks it out the way the origin's
+// own runs do — by the origin's DECLARED checkout, not a vendor-shaped
+// fallback — and carries the origin's facts minus the private and secret
+// ones; none of the origin's other semantics (closing, dedupe) carry over.
+func TestEmitLifecycleCarriesTheOriginsCheckout(t *testing.T) {
+	capture, stop := startConductorSource(t, conductorTriggerYAML)
+	defer stop()
+	orig := core.Trigger{
+		Source: "github", Instance: "gh", Kind: "failing_checks", TargetTrusted: true,
+		Sem:    coretest.DeclaredSemantics(core.Trigger{Kind: "failing_checks"}),
+		Target: core.Target{Repo: "o/r", Number: 7, PR: 7},
+		Context: map[string]any{"head_ref": "fix-it", "app_token": "SECRET", "installation_id": 9,
+			"failing_check": "build"},
+	}
+	EmitLifecycle(context.Background(), "escalate", orig, "line", nil)
+	got := capture()
+	if len(got) != 1 {
+		t.Fatalf("emitted %d", len(got))
+	}
+	lt := got[0]
+	co, ok := lt.Checkout()
+	if !ok || co.Remote != "git@github.com:o/r.git" || co.FetchRef != "refs/pull/7/head" || co.PushBranch != "fix-it" {
+		t.Fatalf("checkout = %+v ok=%v, want the origin's declared checkout", co, ok)
+	}
+	if _, leaked := lt.Context["app_token"]; leaked {
+		t.Fatal("the origin's secret fact was carried into the lifecycle run")
+	}
+	if _, leaked := lt.Context["installation_id"]; leaked {
+		t.Fatal("the origin's private fact was carried into the lifecycle run")
+	}
+	if lt.Context["failing_check"] != "build" || lt.Context["message"] != "line" {
+		t.Fatalf("facts: %+v", lt.Context)
+	}
+	if lt.ClosesTarget() || lt.LevelTriggered() {
+		t.Fatal("the origin's other semantics carried over")
 	}
 }

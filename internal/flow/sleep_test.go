@@ -111,10 +111,10 @@ steps:
 	if elapsed > 3*time.Second {
 		t.Fatalf("cancel took %s to interrupt a 10s sleep — the wait is not ctx-aware", elapsed)
 	}
-	failed, errStr := rig.workflowFailed()
-	if !failed {
-		t.Fatal("a cancelled sleep should fail its step, not report success")
-	}
+	// A cancelled run context is a daemon shutdown: interrupted (kept for
+	// resume), never reported as success.
+	assertInterrupted(t, rig)
+	errStr := stepErrorText(rig)
 	if !strings.Contains(errStr, "context canceled") {
 		t.Fatalf("error = %q, want the context's own error", errStr)
 	}

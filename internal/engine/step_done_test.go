@@ -69,7 +69,7 @@ func TestStepDoneRoutesLiveHandoffThroughTeardown(t *testing.T) {
 	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
 	e.hold.Add("ag-h")
 	_, cancel := context.WithCancel(context.Background())
-	e.registerLiveHandoff("ag-h", cancel, "o/r#1", "review")
+	e.registerLiveHandoff("ag-h", cancel, "o/r#1", "", "review")
 
 	if err := e.StepDone(context.Background(), "disp-h", "", "review concluded"); err != nil {
 		t.Fatal(err)

@@ -13,13 +13,13 @@ const (
 	numPrios
 )
 
-// slotPriority ranks a trigger kind for the concurrency cap. A review request is
-// someone waiting on you; fixers (merge_conflict, changes_requested,
-// failing_checks, …) are background maintenance that can wait. Without this a
-// burst of fixers — a sweep fan-out or a batch `conductor force` — holds every
-// slot and a fresh review request sits behind all of them.
-func slotPriority(kind string) int {
-	if kind == "review_requested" {
+// slotPriority ranks a trigger for the concurrency cap. An interactive event
+// (its declared priority — someone is waiting on you) goes first; the rest is
+// background maintenance that can wait. Without this a burst of fixers — a
+// sweep fan-out or a batch `conductor force` — holds every slot and a fresh
+// interactive event sits behind all of them.
+func slotPriority(interactive bool) int {
+	if interactive {
 		return prioHigh
 	}
 	return prioNormal

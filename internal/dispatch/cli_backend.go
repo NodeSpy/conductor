@@ -181,7 +181,7 @@ func (b *cliBackend) CreateWorktree(ctx context.Context, opts CreateWorktreeOpti
 	// paseo-specific knowledge that belongs in this backend: the orchestration
 	// just asks for a worktree on this branch, and gets the existing one when
 	// there is one (launching another agent into it), or a fresh one otherwise.
-	if opts.Strategy == "branch-off" {
+	if opts.Strategy == "branch-off" && !opts.Fresh {
 		if w, ok := b.worktreeOnBranch(ctx, opts.NewBranch); ok {
 			return CreateWorktreeResult{WorkspaceID: w.WorkspaceID, Cwd: w.Cwd}, nil
 		}
@@ -275,6 +275,31 @@ func (b *cliBackend) ListWorkspaces(ctx context.Context) ([]WorkspaceInfo, error
 		return nil, err
 	}
 	return wl, nil
+}
+
+// ListProjects runs `paseo project ls --json`.
+func (b *cliBackend) ListProjects(ctx context.Context) ([]ProjectInfo, error) {
+	cmd := b.exec.paseoCmd(ctx, "project", "ls", "--json")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("paseo project ls: %w%s", err, stderrTail(&stderr))
+	}
+	var pl []ProjectInfo
+	if err := json.Unmarshal(out, &pl); err != nil {
+		return nil, fmt.Errorf("paseo project ls: %w", err)
+	}
+	return pl, nil
+}
+
+// RemoveProject runs `paseo project delete <id> --json`.
+func (b *cliBackend) RemoveProject(ctx context.Context, id string) error {
+	out, err := b.exec.paseoCmd(ctx, "project", "delete", id, "--json").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("paseo project delete %s: %w: %s", id, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // Clone runs `paseo clone <repo> --dir <dir> --protocol <protocol> --json`.

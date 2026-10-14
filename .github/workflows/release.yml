@@ -42,7 +42,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A tag with a pre-release suffix (v1.2.3-rc.1) publishes as a GitHub
+          # prerelease, which is never "latest": a box's update check only takes
+          # "latest", so a release candidate reaches only a box updated to it
+          # explicitly (conductor update --tag <tag>).
+          pre=()
+          case "${GITHUB_REF_NAME}" in *-*) pre=(--prerelease --latest=false) ;; esac
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --repo "${{ github.repository }}" \
             --title "${GITHUB_REF_NAME}" \
-            --generate-notes
+            --generate-notes "${pre[@]}"
+
+      # conductor fetches releases from git refs (refs/dist/<tag>/<os>_<arch>,
+      # internal/plugin/gitdist.go), not from the release assets, so a box can
+      # self-update from any git host with no API token.
+      - name: Publish binaries as git refs (refs/dist/<tag>/<platform>)
+        run: |
+          git config user.name "release"
+          git config user.email "release@users.noreply.github.com"
+          scripts/publish-dist.sh "${GITHUB_REF_NAME}" dist conductor

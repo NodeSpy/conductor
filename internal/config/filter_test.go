@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/NodeSpy/conductor/pkg/sourcekit"
 	"gopkg.in/yaml.v3"
 )
 
@@ -438,5 +439,67 @@ func TestFilterMatchKeysAndFactRefs(t *testing.T) {
 	gotRefs := strings.Join(f.FactRefs(), ",")
 	if want := "head_branch,is_draft"; gotRefs != want {
 		t.Errorf("FactRefs = %q, want %q", gotRefs, want)
+	}
+}
+
+// The YAML face and the public IR are one tree: Kit converts node for node,
+// FilterFromKit converts back, and a filter that crossed to a source plugin's
+// wire form and back is the same filter — same string, same YAML.
+func TestFilterKitRoundTrip(t *testing.T) {
+	var f Filter
+	src := "{not_branch: [wip/*], label_any: [urgent], expr: \"!is_draft\"}"
+	if err := yaml.Unmarshal([]byte(src), &f); err != nil {
+		t.Fatal(err)
+	}
+	k := f.Kit()
+	if k.String() != f.String() {
+		t.Fatalf("Kit changed the tree:\n got %s\nwant %s", k.String(), f.String())
+	}
+	back := FilterFromKit(k)
+	if back.String() != f.String() {
+		t.Fatalf("FilterFromKit changed the tree:\n got %s\nwant %s", back.String(), f.String())
+	}
+	out, err := yaml.Marshal(back)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var again Filter
+	if err := yaml.Unmarshal(out, &again); err != nil {
+		t.Fatalf("structural form does not reparse: %v\n%s", err, out)
+	}
+	if again.String() != f.String() {
+		t.Fatalf("YAML round trip changed the tree:\n got %s\nwant %s", again.String(), f.String())
+	}
+	if (*Filter)(nil).Kit() != nil || FilterFromKit(nil) != nil {
+		t.Fatal("nil must stay nil in both directions")
+	}
+}
+
+// The daemon decodes `filter:` from YAML nodes (for its error messages);
+// sourcekit.ParseFilter decodes the same grammar from a value, for a source
+// plugin's own config and for the kit's tests. They must build the same tree.
+func TestFilterGrammarAgreesWithSourcekitParse(t *testing.T) {
+	for _, src := range []string{
+		`"!is_draft"`,
+		`{not_draft: true, author: [dependabot]}`,
+		`[ {label_any: [urgent]}, "!is_draft" ]`,
+		`{expr: "a && b", not_expr: "c", not_branch: [wip/*]}`,
+		`[ [ {repo: [a/b]} ], {not_repo: c/d, title: [x]} ]`,
+	} {
+		var f Filter
+		if err := yaml.Unmarshal([]byte(src), &f); err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		var v any
+		if err := yaml.Unmarshal([]byte(src), &v); err != nil {
+			t.Fatal(err)
+		}
+		k, err := sourcekit.ParseFilter(v)
+		if err != nil {
+			t.Fatalf("%s: sourcekit: %v", src, err)
+		}
+		if k.String() != f.String() {
+			t.Errorf("%s:\n config    %s\n sourcekit %s", src, f.String(), k.String())
+		}
 	}
 }

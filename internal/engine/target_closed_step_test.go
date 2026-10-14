@@ -52,16 +52,14 @@ func TestRunStepsStopsOnErrTargetClosed(t *testing.T) {
 		Config: &config.Config{Workflows: map[string]config.WorkflowDef{"w": {Steps: []config.Step{
 			{ID: "planner"}, {ID: "worker"},
 		}}}},
-		Store: tempStore(t), Dispatch: d, Notifier: n,
-		UserToken: func() (string, error) { return "u", nil },
+		Store: tempStore(t), Dispatch: d, Notifier: n, Author: dispatch.Author{},
 	})
-	e.cfg.Control.Enabled = ptrBool(true)
 
 	act := config.Action{Steps: []config.Action{
 		{ID: "first", Type: "agent", Agent: "w/planner", Prompt: "x"},
 		{ID: "second", Type: "agent", Agent: "w/worker", Prompt: "y"},
 	}}
-	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, "app", "usr", false)
+	e.runSteps(context.Background(), store.WorkflowRun{Outputs: map[string]map[string]any{}}, issueTrigger(), act, ghCreds("usr", "app"), false)
 
 	if got := d.ran; len(got) != 1 || got[0] != "first" {
 		t.Fatalf("expected only the cancelled step to run, got %v", got)

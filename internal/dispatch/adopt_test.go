@@ -6,18 +6,25 @@ import (
 	"testing"
 
 	"github.com/NodeSpy/conductor/internal/core"
+	sdk "github.com/NodeSpy/conductor/pkg/plugin"
 )
 
-func TestIsFeedbackKind(t *testing.T) {
+// Feedback is the event's declaration (feedback: true), not its name: a
+// trigger of ANY kind that declares it is eligible for open-workspace
+// adoption, and one that does not is not.
+func TestFeedbackIsDeclared(t *testing.T) {
 	for _, k := range []string{"new_comment", "changes_requested"} {
-		if !isFeedbackKind(k) {
-			t.Fatalf("%q should be a feedback kind", k)
+		if !(core.Trigger{Kind: k}).Feedback() {
+			t.Fatalf("%q declares feedback", k)
 		}
 	}
 	for _, k := range []string{"merge_conflict", "issue_matched", "release", "review_requested"} {
-		if isFeedbackKind(k) {
-			t.Fatalf("%q should NOT be a feedback kind", k)
+		if (core.Trigger{Kind: k}).Feedback() {
+			t.Fatalf("%q declares no feedback", k)
 		}
+	}
+	if !(core.Trigger{Kind: "anything", Sem: &sdk.EventSemantics{Feedback: true}}).Feedback() {
+		t.Fatal("any event declaring feedback is feedback")
 	}
 }
 
@@ -80,5 +87,29 @@ func TestGitBranchAndRepoMatch(t *testing.T) {
 	}
 	if gitRepoMatches(ctx, dir, "SomeoneElse/Other") {
 		t.Fatal("a different repo must not match")
+	}
+}
+
+// Checkout is the event's declaration: a fetch ref checks the target's code
+// out (with the runtime hints passed through unread), a bare remote branches
+// off, and no checkout runs in the base workspace — whatever forge it is.
+func TestCheckoutIsDeclared(t *testing.T) {
+	mk := func(co *sdk.CheckoutSemantics) Request {
+		return Request{Trigger: core.Trigger{Kind: "mr_opened", Context: map[string]any{"project": "grp/app", "iid": 12},
+			Sem: &sdk.EventSemantics{Checkout: co, Labels: "labels"}}}
+	}
+	pr := mk(&sdk.CheckoutSemantics{Remote: "git@forge.example:{{.project}}.git", FetchRef: "refs/merge-requests/{{.iid}}/head",
+		RuntimeHints: map[string]string{"forge": "forgeworks", "pr_number": "{{.iid}}"}})
+	if s := repoStrategy(pr); s != "checkout-pr" {
+		t.Fatalf("strategy = %s", s)
+	}
+	if n, forge := prHints(pr); n != "12" || forge != "forgeworks" {
+		t.Fatalf("hints = %q %q", n, forge)
+	}
+	if s := repoStrategy(mk(&sdk.CheckoutSemantics{Remote: "git@forge.example:grp/app.git"})); s != "branch-off" {
+		t.Fatalf("bare remote: %s", s)
+	}
+	if s := repoStrategy(mk(nil)); s != "none" {
+		t.Fatalf("no checkout declared: %s", s)
 	}
 }

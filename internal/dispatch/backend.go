@@ -67,6 +67,17 @@ type Backend interface {
 	// ListWorkspaces lists every workspace (`paseo workspace ls --json`).
 	ListWorkspaces(ctx context.Context) ([]WorkspaceInfo, error)
 
+	// ListProjects lists the projects paseo has registered (`paseo project ls
+	// --json`). paseo registers one for every directory a workspace is created
+	// from, and keeps it after its workspaces are archived.
+	ListProjects(ctx context.Context) ([]ProjectInfo, error)
+
+	// RemoveProject unregisters a project (`paseo project delete <id>`). Only
+	// the registry entry goes — the directory is untouched — but paseo ARCHIVES
+	// every still-active workspace in the project first, so callers must have
+	// established there are none (see PruneProjects).
+	RemoveProject(ctx context.Context, id string) error
+
 	// Clone clones a repo and registers it with paseo (`paseo clone`).
 	Clone(ctx context.Context, opts CloneOptions) error
 
@@ -119,6 +130,14 @@ type WorkspaceInfo struct {
 	Name        string `json:"name"`
 }
 
+// ProjectInfo is the subset of `paseo project ls --json` the dispatcher needs:
+// identity, display name (what a workspace's Project names), and directory.
+type ProjectInfo struct {
+	ProjectID string `json:"projectId"`
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+}
+
 // RunAgentOptions is the input to Backend.RunAgent. See the interface doc for
 // why Args stays a flat argument list.
 type RunAgentOptions struct {
@@ -143,6 +162,10 @@ type CreateWorktreeOptions struct {
 	Forge     string
 	NewBranch string
 	BaseRef   string
+	// Fresh forbids adopting an existing workspace already on NewBranch: the
+	// create must produce a new worktree or fail. Set by detach launches,
+	// which must never land in a workspace someone else is using.
+	Fresh bool
 }
 
 // CreateWorktreeResult is the output of a successful CreateWorktree call.

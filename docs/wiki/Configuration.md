@@ -1,14 +1,32 @@
 # Configuration
 
-`~/.config/conductor/config.yaml`, secrets in the sibling chmod-600
-`conductor.env` (`${VAR}` expands at load; a referenced-but-unset variable is
-a load error naming it). `conductor validate` checks everything below —
+`~/.config/conductor/config.yaml` by default, secrets in the sibling
+chmod-600 `conductor.env` (`${VAR}` expands at load; a referenced-but-unset
+variable is a load error naming it).
+
+**Where the config lives.** Without `--config`, conductor reads the first of:
+
+1. `$CONDUCTOR_CONFIG`: the config file, or an existing directory holding
+   `config.yaml` (a trailing `/` also means a directory). `~/` expands; a
+   relative path resolves against the working directory.
+2. `$XDG_CONFIG_HOME/conductor/config.yaml`, when `XDG_CONFIG_HOME` is an
+   absolute path (the XDG spec ignores a relative one).
+3. `~/.config/conductor/config.yaml`.
+
+`--config PATH` overrides all three. The config's directory is where
+`conductor.env`, `conf.d/`, packs, the lockfile and the default vault
+(`vault.json`) live. `conductor service install` pins a moved config in the
+unit (`CONDUCTOR_CONFIG=…`), because the service doesn't inherit the shell
+that installed it; an unmoved config leaves the unit exactly as before. State
+lives separately, under `$XDG_STATE_HOME/conductor` or
+`~/.local/state/conductor` (`--state-dir` overrides it). `conductor validate` checks everything below —
 including every template reference against the scope at its position — before
 the daemon runs. The full annotated example ships as `config.example.yaml`.
 
-The LEGACY schema (`integrations:`/`notify:`/`handoffs:`/`controllers:`/
-`control:`/`paseo_bin`) still loads and runs unchanged, and auto-migrates on
-boot — see [[Migration]] and `config.example.legacy.yaml`.
+The LEGACY schema (`integrations:`/`notify:`/`handoff:`/`handoffs:`/
+`controllers:`/`control:`/`paseo_bin`) was removed in this release — see
+[[Migration]]. `conductor validate` names any of those blocks still present
+in a config.
 
 ## Top level
 
@@ -143,8 +161,10 @@ filter: "!is_draft && !( (head_branch == 'staging' || head_branch == 'prod') && 
 Prefer `startswith(title, 'Release ')` to the substring `title:` match key when
 you mean a prefix.
 
-**Migrating from `filters:`.** `conductor config migrate` rewrites a legacy
-config; by hand, the mapping is `repos`→`repo`, `exclude_repos`→`not_repo`,
+**Migrating from `filters:`.** `conductor config migrate` on the release
+before the plugin contract rewrites a legacy config (the command itself was
+removed with the legacy schema — see [[Migration]]); by hand, the mapping is
+`repos`→`repo`, `exclude_repos`→`not_repo`,
 `exclude: {branches, labels, title}`→`not_branch`/`not_label_any`/`not_title`,
 `gates: {not_draft: true}`→`not_draft: true`, `labels_any`→`label_any`,
 `labels_all`→`label_all`, `authors`→`author`, `from_users`→`comment_author`,
@@ -234,6 +254,139 @@ triggers:
 ```
 
 Full semantics (chains, cycles, the merge rules, and layered guidance) are in [[Reuse]].
+
+## Review feedback (github)
+
+**One review submission is one event; a standalone comment is its own event.**
+A submitted review reaches conductor as a review webhook plus one webhook per
+inline comment, in no fixed order. However they arrive, the review becomes
+exactly ONE trigger. Which trigger depends on the review and on which triggers
+take it, never on its state alone:
+
+| the review | its one event |
+|---|---|
+| requested changes, **or** left inline comments without approving (how a review bot like Cursor Bugbot reviews: COMMENTED with inline findings), **and** a `changes_requested` trigger takes it (its `filter:` / repo scope) | `changes_requested` |
+| an approval with inline comments ("optional suggestions; nothing blocks"), or any review no `changes_requested` trigger takes | `new_comment` |
+
+An approval is never a `changes_requested`, so an approver is never
+re-requested; the re-request step's `only_outstanding` guard also skips
+anyone whose latest review isn't an outstanding changes-request. To keep, for
+example, bot reviews out of `changes_requested`, filter its trigger:
+`filter: "!author_is_bot"` sends them to `new_comment` instead.
+
+None of a review's inline comments fires a `new_comment` of its own. A
+conversation comment, or a review comment that names no review, is one
+`new_comment` each, as always. If a review or its comments can't be read
+(a GitHub API error), its comments fall back to one `new_comment` each, so
+nothing is lost. A review with no inline comments fires `changes_requested`
+when it requests changes, and otherwise nothing, as before.
+
+**A review is dispatched once, on submission.**
+- The first delivery handled for a review emits its event and claims the
+  review id, so later deliveries emit nothing.
+- An `edited` review or comment is not an event. That includes a review bot
+  rewriting an old review as stale ("Stale Bugbot comment from a previous
+  run.").
+- Both events carry `comment_id`: the review's highest inline comment id. The
+  engine's comment high-water mark (kept separately for `changes_requested`
+  and `new_comment`) drops any later re-derivation of the same review. That
+  covers a webhook redelivery, the sweep finding the review's threads still
+  unresolved after a push, or the sweep's missed-comment recovery, and it
+  holds across restarts.
+- A new review's comments have higher ids, so it dispatches.
+- Consequence: a run that fails after it was accepted isn't retried by the
+  sweep for the same review. The failure escalates, and a new review or
+  thread re-engages.
+
+Both events carry the review:
+
+| field | value |
+|---|---|
+| `review_id`, `review_body`, `review_state` | the submitted review, its summary comment, and its state |
+| `review_comments` | each inline comment as `{author, path, line, body, url}` — the review's own comments, or (a sweep-recovered `changes_requested`) each unresolved thread's opening comment, approvers' threads excluded; bodies capped at 2000 bytes, the list at 100 comments / 48KB |
+| `review_comments_omitted` | how many the cap left out (absent when none) — the agent reads those on the PR |
+| `comment_id`, `comment_kind` | the highest inline comment id covered, and `review` |
+
+A review's `new_comment` keeps the single-comment fields, so existing triggers
+read it sensibly. `author` and `comment_author` are the reviewer, so
+`not_comment_author` still filters bots. `comment_body` is the review body
+followed by each inline comment as `path:line: body`, capped at 8KB.
+
+## Showing progress on the PR (github)
+
+**Progress is ordinary hooks.** Nothing posts on its own. A trigger that wants
+the PR to show "taken" and "how it went" says so in its `hooks:`, with two
+github verbs, and controls every word. The [pr-autopilot pack](https://github.com/NodeSpy/conductor-packs/tree/main/pr-autopilot)
+ships exactly this for its flows. The same hooks work on any trigger of your
+own:
+
+```yaml
+triggers:
+  - on: gh.new_comment
+    filter: { repo: [your-org/app] }
+    hooks:
+      # start fires before any worktree is provisioned or agent launched
+      - { at: start, if: reaction_subjects, uses: gh.react,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", subjects: "{{.reaction_subjects}}", content: eyes } }
+      - { at: start, uses: gh.set_status,
+          options: { repo: "{{.repo}}", sha: "{{.run.start_sha}}", state: pending,
+                     context: "{{.me.login}} / comment", description: "replying to {{.author}}" } }
+      - { at: done, if: reaction_subjects, uses: gh.react,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", subjects: "{{.reaction_subjects}}",
+                     content: "{{if .run.pushed}}rocket{{else}}+1{{end}}" } }
+      # success on the commit the run STARTED on: after a push the PR's new
+      # head has no row of this context, so the row disappears from the PR
+      - { at: done, uses: gh.set_status,
+          options: { repo: "{{.repo}}", sha: "{{.run.start_sha}}", state: success,
+                     context: "{{.me.login}} / comment", description: "done" } }
+      - { at: fail, if: reaction_subjects, uses: gh.react,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", subjects: "{{.reaction_subjects}}", content: confused } }
+      - { at: fail, uses: gh.set_status,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", state: failure,
+                     context: "{{.me.login}} / comment", description: "gave up: {{.run.reason}}" } }
+      # the PR merged/closed under the run: take down what start put up
+      - { at: stop, if: reaction_subjects, uses: gh.react,
+          options: { repo: "{{.repo}}", pr: "{{.pr}}", subjects: "{{.reaction_subjects}}", content: eyes, remove: true } }
+      - { at: stop, uses: gh.set_status,
+          options: { repo: "{{.repo}}", sha: "{{.run.start_sha}}", state: success,
+                     context: "{{.me.login}} / comment", description: "stopped — {{.run.reason}}" } }
+    steps: [ … ]
+```
+
+The pieces:
+
+| | what |
+|---|---|
+| `github.react` | `{repo, pr, subjects: [{kind, id}] \| kind + id, content, remove}` adds a reaction, as you. With `remove: true` it takes yours of that content away instead; other people's are never touched. `kind` is `issue_comment`, `review_comment`, or `review` (over GraphQL, since REST has none for a review, so it needs `pr`). `content` is `+1` `-1` `laugh` `confused` `heart` `hooray` `rocket` `eyes`. Idempotent both ways: GitHub keeps one reaction per person and content, and removing one that isn't there (or is already gone) is a no-op. → `ok`, `reacted` / `removed` |
+| `github.set_status` | `{repo, sha \| pr, state, context, description, target_url}` posts a commit status, as you. `pr:` puts it on the PR's head **as it is at call time** (read fresh); `sha:` wins when both are set. `state` is `pending` \| `success` \| `failure` \| `error`. `context` (the row's name on the PR) is entirely yours, templates included; only when unset does it default to the login the call acts as. `description` is clipped to GitHub's 140 characters. → `ok`, `context`, `sha` |
+| `reaction_subjects` | on `changes_requested` / `new_comment`: what the run handles, in `react`'s `subjects` shape. That's the review for a review event, the comment for a standalone comment, and for a sweep-recovered run over unresolved threads, each thread's opening comment (at most 10). Absent when there's nothing to react to, so `if: reaction_subjects` skips the hook. |
+| `me` | on every github event: `{login}`, the login your writes act as (discovered from the write identity, else your first `me:` login). Name rows after yourself without hardcoding a username: `"{{.me.login}} / review"`. |
+| `run.*` | [run facts](Workflows#run-facts) in workflow-level hooks: `start_sha` (the head the run started on, read as it starts, not the event's), `head_sha` / `head_short` (the head now), `pushed`, and at `fail` / `stop` a public-safe `reason`. |
+
+**Statuses are GitHub's, unmodified.** A status is one row per (commit,
+context), and the last write wins. Conductor adds no ownership or ordering of
+its own, so two flows with two contexts sit side by side, and two runs of one
+flow on one commit write the same row in turn. Since a status belongs to a
+commit, the commit you write decides what the PR shows. Writing the success on
+`run.start_sha` makes the row vanish from the PR after a push (GitHub has no
+way to delete a status; this is how it goes). Writing it on the PR (`pr:`)
+keeps it on the new head.
+
+**Never a CI signal.** The github source ignores a commit status under any
+context `set_status` has posted, noted at call time, custom names included,
+or under one of your logins. That check runs at the webhook router before any
+handler, so a `failure` a hook posted can't come back as a failing check and
+launch the next fixer. (Today `failing_checks` comes only from check runs,
+check suites and workflow runs, and the sweep doesn't read commit statuses at
+all. The guard keeps it that way.)
+
+**Best-effort.** Hooks never fail a run: a reaction or status that fails to
+post is logged and audited (`event: verb`, `outcome: hook_failed`).
+
+Note one side effect: GitHub counts a pending or failing status as
+non-passing, so while a pending row is up, and after a `failure`, the PR's
+merge state reads `UNSTABLE` rather than `CLEAN`, and `merge_ready` (which
+needs `CLEAN`) waits.
 
 ## Bot-authored comments (github)
 
@@ -492,8 +645,8 @@ before anything runs. The full model: [[Workflows]]; the guardrails:
 ## Conductor itself (`conductor.*`) — events and verbs
 
 Conductor is a built-in connector (always available; the name is reserved).
-Its lifecycle events are a source — alerting is an ordinary trigger, and the
-retired `notify:` block auto-migrates onto it (see [[Notifications]] for the
+Its lifecycle events are a source — alerting is an ordinary trigger, the
+replacement for the retired `notify:` block (see [[Notifications]] for the
 event list, context, and examples):
 
 ```yaml
@@ -586,10 +739,9 @@ once. Validation runs over the merged config, so cross-file
 A workflow can also be pulled in per step, without a section import — see
 `workflow:`/`import:` in [[Workflows]].
 
-The legacy TOP-level `imports:` (whole-document deep merge: maps merge
-recursively, lists concatenate, the importing file's keys win) is unchanged,
-and auto-migration still walks it, transforming each legacy file with its own
-backup.
+The top-level `imports:` (whole-document deep merge: maps merge
+recursively, lists concatenate, the importing file's keys win) works the same
+way on a connectors-model config.
 
 ## Validation and fleet safety
 

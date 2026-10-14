@@ -7,7 +7,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/NodeSpy/conductor/internal/expr"
+	"github.com/NodeSpy/conductor/pkg/expr"
+	"github.com/NodeSpy/conductor/pkg/sourcekit"
 )
 
 // Filter is one composable trigger filter — the IR the polymorphic `filter:`
@@ -34,7 +35,7 @@ type Filter struct {
 	Op FilterOp
 	// Kids are the operands of And/Or (any number) and Not (exactly one).
 	Kids []*Filter
-	// Expr is the condition source of an Expr node (internal/expr syntax).
+	// Expr is the condition source of an Expr node (pkg/expr syntax).
 	Expr string
 	// Key/Val are one structured match key and its configured value.
 	Key string
@@ -48,15 +49,16 @@ type Filter struct {
 	raw any
 }
 
-// FilterOp names a Filter node's kind.
-type FilterOp string
+// FilterOp names a Filter node's kind. It IS sourcekit's: the node kinds are
+// the wire vocabulary a source plugin evaluates, so there is one list of them.
+type FilterOp = sourcekit.FilterOp
 
 const (
-	FilterOpAnd   FilterOp = "and"
-	FilterOpOr    FilterOp = "or"
-	FilterOpNot   FilterOp = "not"
-	FilterOpExpr  FilterOp = "expr"
-	FilterOpMatch FilterOp = "match"
+	FilterOpAnd   = sourcekit.FilterOpAnd
+	FilterOpOr    = sourcekit.FilterOpOr
+	FilterOpNot   = sourcekit.FilterOpNot
+	FilterOpExpr  = sourcekit.FilterOpExpr
+	FilterOpMatch = sourcekit.FilterOpMatch
 )
 
 // FilterExprKey is the one reserved object key: an `expr` string AND-ed with
@@ -92,7 +94,7 @@ const (
 // maxFilterDepth bounds how deeply a `filter:` may nest. Real filters are two
 // or three levels; a deeper one is pathological input, and refusing it at
 // decode keeps evaluation from recursing far enough to overflow the stack.
-const maxFilterDepth = 32
+const maxFilterDepth = sourcekit.MaxFilterDepth
 
 // FilterAnd builds an And node, dropping nil operands so a lowering can emit
 // conditionally without branching at every call site. And of nothing is true.
@@ -124,56 +126,51 @@ func FilterMatch(key string, val any) *Filter {
 
 // FilterMatcher evaluates one connector match key against the event's facts.
 // It is the only connector-aware part of evaluation.
-type FilterMatcher func(key string, val any, facts map[string]any) (bool, error)
+type FilterMatcher = sourcekit.Matcher
 
 // Eval reports whether the filter holds for facts. An absent (nil) filter is
 // true — a trigger with no filter fires.
+//
+// Evaluation is sourcekit's: this node type is the YAML face (it keeps the
+// source value and the decode errors), and Kit is the IR every evaluator runs
+// — the daemon's flow runner, the bundled github source, and a source plugin
+// handed the same filter over the wire.
 func (f *Filter) Eval(facts map[string]any, match FilterMatcher) (bool, error) {
-	return f.eval(facts, match, 0)
+	return f.Kit().Eval(facts, match)
 }
 
-func (f *Filter) eval(facts map[string]any, match FilterMatcher, depth int) (bool, error) {
+// Kit converts the filter to the public IR (pkg/sourcekit), structurally:
+// node for node, with the configured values shared rather than copied. nil
+// stays nil, so "no filter" means the same thing on both sides.
+func (f *Filter) Kit() *sourcekit.Filter {
 	if f == nil {
-		return true, nil
+		return nil
 	}
-	if depth > maxFilterDepth {
-		return false, fmt.Errorf("filter nests more than %d deep", maxFilterDepth)
+	out := &sourcekit.Filter{Op: f.Op, Expr: f.Expr, Key: f.Key, Val: f.Val}
+	if len(f.Kids) > 0 {
+		out.Kids = make([]*sourcekit.Filter, len(f.Kids))
+		for i, k := range f.Kids {
+			out.Kids[i] = k.Kit()
+		}
 	}
-	switch f.Op {
-	case FilterOpAnd:
-		for _, k := range f.Kids {
-			ok, err := k.eval(facts, match, depth+1)
-			if err != nil || !ok {
-				return false, err
-			}
-		}
-		return true, nil
-	case FilterOpOr:
-		for _, k := range f.Kids {
-			ok, err := k.eval(facts, match, depth+1)
-			if err != nil {
-				return false, err
-			}
-			if ok {
-				return true, nil
-			}
-		}
-		return false, nil
-	case FilterOpNot:
-		if len(f.Kids) != 1 {
-			return false, fmt.Errorf("filter: not takes exactly one operand, got %d", len(f.Kids))
-		}
-		ok, err := f.Kids[0].eval(facts, match, depth+1)
-		return !ok, err
-	case FilterOpExpr:
-		return expr.Eval(f.Expr, facts)
-	case FilterOpMatch:
-		if match == nil {
-			return false, fmt.Errorf("filter: no matcher for match key %q", f.Key)
-		}
-		return match(f.Key, f.Val, facts)
+	return out
+}
+
+// FilterFromKit is Kit's inverse, for a filter that arrives as IR (a lowering
+// built in a kit). The result has no surface spelling and marshals through the
+// structural x_filter_* form, like any node composed in code.
+func FilterFromKit(k *sourcekit.Filter) *Filter {
+	if k == nil {
+		return nil
 	}
-	return false, fmt.Errorf("filter: unknown operator %q", f.Op)
+	out := &Filter{Op: k.Op, Expr: k.Expr, Key: k.Key, Val: k.Val}
+	if len(k.Kids) > 0 {
+		out.Kids = make([]*Filter, len(k.Kids))
+		for i, c := range k.Kids {
+			out.Kids[i] = FilterFromKit(c)
+		}
+	}
+	return out
 }
 
 // Walk calls fn on this node and every descendant, parents first. A nil filter
@@ -419,7 +416,7 @@ func (f *Filter) MarshalYAML() (any, error) {
 // FilterFromValue builds a Filter from an in-memory value in the same shapes
 // the YAML accepts (a condition string, a list to OR, a map of keys to AND) —
 // for the producers that SYNTHESISE a filter rather than parse one, notably
-// `conductor config migrate` rewriting a legacy `filters:` block. Going through
+// a pack instance's repo scope. Going through
 // the decoder rather than assembling nodes keeps one grammar (and one set of
 // error messages), and leaves the result marshallable as what was passed in.
 func FilterFromValue(v any) (*Filter, error) {
@@ -451,32 +448,7 @@ func FilterFromValue(v any) (*Filter, error) {
 // `repo` counts even though its siblings may never hold), which is the safe
 // direction for the two things it feeds — a routing pre-gate and the sweep's
 // repo scope — because the full filter is still evaluated precisely afterwards.
-func (f *Filter) MatchUnion(key string) []string {
-	var out []string
-	seen := map[string]bool{}
-	var walk func(n *Filter)
-	walk = func(n *Filter) {
-		if n == nil || n.Op == FilterOpNot {
-			return
-		}
-		if n.Op == FilterOpMatch {
-			if n.Key == key {
-				for _, s := range FilterValueStrings(n.Val) {
-					if !seen[s] {
-						seen[s] = true
-						out = append(out, s)
-					}
-				}
-			}
-			return
-		}
-		for _, k := range n.Kids {
-			walk(k)
-		}
-	}
-	walk(f)
-	return out
-}
+func (f *Filter) MatchUnion(key string) []string { return f.Kit().MatchUnion(key) }
 
 // TopLevelNegated returns the values of every top-level `not_<key>` — a
 // Not(Match(key,…)) that is a direct conjunct of the filter's root.
@@ -486,52 +458,11 @@ func (f *Filter) MatchUnion(key string) []string {
 // sound. The same key under an Or arm is conditional, and hoisting it would
 // suppress events the filter says should fire — so it stays inside the filter
 // and is evaluated there.
-func (f *Filter) TopLevelNegated(key string) []string {
-	if f == nil {
-		return nil
-	}
-	kids := f.Kids
-	if f.Op != FilterOpAnd {
-		kids = []*Filter{f}
-	}
-	var out []string
-	seen := map[string]bool{}
-	for _, k := range kids {
-		if k == nil || k.Op != FilterOpNot || len(k.Kids) != 1 {
-			continue
-		}
-		if m := k.Kids[0]; m != nil && m.Op == FilterOpMatch && m.Key == key {
-			for _, s := range FilterValueStrings(m.Val) {
-				if !seen[s] {
-					seen[s] = true
-					out = append(out, s)
-				}
-			}
-		}
-	}
-	return out
-}
+func (f *Filter) TopLevelNegated(key string) []string { return f.Kit().TopLevelNegated(key) }
 
 // OnlyKeys reports whether the filter constrains nothing beyond the named
 // match keys: no expr condition anywhere, and every Match key among them.
-func (f *Filter) OnlyKeys(keys ...string) bool {
-	allow := make(map[string]bool, len(keys))
-	for _, k := range keys {
-		allow[k] = true
-	}
-	only := true
-	f.Walk(func(n *Filter) {
-		switch n.Op {
-		case FilterOpExpr:
-			only = false
-		case FilterOpMatch:
-			if !allow[n.Key] {
-				only = false
-			}
-		}
-	})
-	return only
-}
+func (f *Filter) OnlyKeys(keys ...string) bool { return f.Kit().OnlyKeys(keys...) }
 
 // FlatConjunctionOf reports whether the filter is nothing but a top-level AND
 // of the named match keys and their `not_` twins — no Or, no nesting, no expr.
@@ -543,62 +474,14 @@ func (f *Filter) OnlyKeys(keys ...string) bool {
 // replaced. Anything else — an Or over repo sets, a negation under an Or, a
 // predicate key, an expr — is a claim the pre-gate can only approximate, so
 // the filter stays and is evaluated precisely instead.
-func (f *Filter) FlatConjunctionOf(keys ...string) bool {
-	if f == nil {
-		return true
-	}
-	allow := make(map[string]bool, len(keys))
-	for _, k := range keys {
-		allow[k] = true
-	}
-	conjunct := func(n *Filter) bool {
-		if n == nil {
-			return false
-		}
-		if n.Op == FilterOpNot {
-			if len(n.Kids) != 1 {
-				return false
-			}
-			n = n.Kids[0]
-		}
-		return n != nil && n.Op == FilterOpMatch && allow[n.Key]
-	}
-	if f.Op != FilterOpAnd {
-		return conjunct(f)
-	}
-	for _, k := range f.Kids {
-		if !conjunct(k) {
-			return false
-		}
-	}
-	return true
-}
+func (f *Filter) FlatConjunctionOf(keys ...string) bool { return f.Kit().FlatConjunctionOf(keys...) }
 
 // FilterValueStrings coerces a match key's configured value to a string list,
 // accepting the single-scalar shorthand (`repo: owner/name`) YAML authors
 // expect. A value that is neither yields nothing rather than an error: the
 // callers are structural queries over an already-validated filter, and the
 // connector's own matcher is where a bad value is reported.
-func FilterValueStrings(val any) []string {
-	switch x := val.(type) {
-	case string:
-		if x == "" {
-			return nil
-		}
-		return []string{x}
-	case []string:
-		return x
-	case []any:
-		out := make([]string, 0, len(x))
-		for _, e := range x {
-			if s, ok := e.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	}
-	return nil
-}
+func FilterValueStrings(val any) []string { return sourcekit.FilterValueStrings(val) }
 
 // String renders the filter in a compact prefix form, for error messages and
 // test failures: and(not(or(match(branch,…))),not(match(draft,true))).

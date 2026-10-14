@@ -5,7 +5,7 @@
 // A scope is either GLOBAL — no key, the shared set everything can see — or
 // an arbitrary OPAQUE STRING this package never interprets
 // (docs/design/agents-removal.md §2). There are no privileged scope TYPES:
-// `repo:` would bake a GitHub concept into the memory core and `agent:` would
+// `repo:` would bake a forge concept into the memory core and `agent:` would
 // bake in an identity that no longer exists. The engine supplies concrete
 // keys from run context as a CONVENTION — the repo string, the workflow name,
 // the step identity — and they are just keys.
