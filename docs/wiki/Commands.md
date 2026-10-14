@@ -36,6 +36,9 @@ conductor mcp memory --socket <path>       stdio MCP server for the live agent t
 conductor workflows [ls]                   config + saved (agent-promoted) workflows with review state and health
 conductor workflows review <name>          print the workflow's provenance + FULL steps, then clear it for reuse (dry-run it first; runs stay policy-guarded)
 conductor workflows rm <name>              remove a saved workflow
+conductor member ls|show|cases|workers|proposals …  members: state, open work, proposals (operator)
+conductor member approve|deny <member> <id>  decide a member proposal — SSH-signed with your operator key ([[Members]])
+conductor member rotate|say|deliver|consolidate <member> …  drive a member from the operator side
 conductor version
 ```
 

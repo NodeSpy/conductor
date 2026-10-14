@@ -44,6 +44,8 @@ in a config.
 | `workflows:` | reusable step lists with `inputs:` / `outputs:` (+ a default `gate:` for their agent steps) | [[Workflows]], [[Gates]] |
 | `policy:` | global controls incl. the `budget:` spend cap; also valid on connectors and triggers (most specific wins) | [[Policy]], [[Cost-Accounting]] |
 | `vaults:` | named secret stores (`conductor`/`onepassword`/`pass`/`file`/`hashicorp`), read as `{{ vault "<name>" "<key>" }}` with per-vault read/write verbs | [[Secrets]] |
+| `operators:` | the humans who approve member proposals: `ssh_key` (approvals are SSH-signed), `aliases` (chat ids that are this operator) | [[Members]] |
+| `members:` | persistent conversational agents: charter, memory repo, home session (paseo), workers (cli), skill grant, `autonomy:` tiers / promotion / shadow / spend cap | [[Members]] |
 | `checks:` | named quality-gate checks (command / code / verb / critic agent) that `gate: run:` lists reference | [[Gates]] |
 | `pricing:` | model→$ overrides for cost estimation (`models:` glob patterns, `default:`) | [[Cost-Accounting]] |
 | `imports:` | split the config across files (globs, deep-merged) | below |
