@@ -71,6 +71,10 @@ func (b *fakeDetachBackend) ListWorkspaces(context.Context) ([]WorkspaceInfo, er
 	panic("not used")
 }
 func (b *fakeDetachBackend) Clone(context.Context, CloneOptions) error { panic("not used") }
+func (b *fakeDetachBackend) ListProjects(context.Context) ([]ProjectInfo, error) {
+	panic("not used")
+}
+func (b *fakeDetachBackend) RemoveProject(context.Context, string) error { panic("not used") }
 func (b *fakeDetachBackend) Send(context.Context, SendOptions) (SendResult, error) {
 	panic("not used")
 }

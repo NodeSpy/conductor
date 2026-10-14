@@ -1099,6 +1099,18 @@ func cmdRun(args []string) error {
 	}
 	go gitProv.Run(ctx)
 
+	// Paseo keeps a project for every directory a workspace was created from —
+	// including conductor's own base checkouts and per-run directories under
+	// ~/.conductor — long after those workspaces are archived. Each paseo
+	// dispatcher unregisters the ones it left idle. The default dispatcher is
+	// skipped when paseo isn't installed (preflightPATH already warned).
+	if _, err := exec.LookPath(disp.PaseoBin); err == nil {
+		go disp.RunProjectPrune(ctx, dispatch.ProjectPruneInterval, logf)
+	}
+	for _, pd := range paseoOverrides {
+		go pd.RunProjectPrune(ctx, dispatch.ProjectPruneInterval, logf)
+	}
+
 	// Periodic self-update. `stop` lets it trigger a graceful shutdown so the
 	// service manager relaunches into the new binary.
 	if cfg.Update.Auto {
