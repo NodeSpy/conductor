@@ -148,6 +148,7 @@ connectors:
       nightly-tidy: { cron: "0 4 * * *" }
       weekly-audit: { cron: "0 5 * * 0" }
       rate-check: { every: 6h, run_on_start: true }
+      sre-weekly: { cron: "0 9 * * 1" }   # the sre member's weekly spend review (members: below)
 
   # Local-event SOURCES are official plugins (fetched by `conductor init`), not
   # builtins — `use: fswatch` fires on a matching file settling, `use: logwatch`
@@ -633,6 +634,9 @@ runtimes:
     #   prefer:  [claude-opus-5, gpt-5.6-sol]   # ranking when a fleet offers a choice
     #   allow:   ["claude-opus-*", "gpt-5.6-*"] # a hard ceiling on what may run
   gpu-paseo: { use: paseo, bin: /usr/local/bin/paseo, host: build-box }
+  # A local cli runtime: background agent work (member workers) runs directly
+  # on the tool, with no paseo workspace. Only what you talk to lives in paseo.
+  claude-cli: { use: cli, tool: claude-code }
   # deck:   { use: agent-deck }
   # gemini: { use: acp, agent: gemini }              # ACP transport
   # jev:                                            # a DECISION runtime plugin: answers
@@ -1204,6 +1208,24 @@ triggers:
         uses: slack-ops.post
         options: { text: "alarm {{.shape.name}} ({{.shape.sev}})" }
 
+  # Route events into a MEMBER (members: below): the `member:` helper opens a
+  # case, queues the event into the member's home conversation as DATA, and —
+  # urgent — starts a worker at once instead of waiting on the conversation.
+  - on: timer.sre-weekly
+    steps:
+      - member:
+          name: sre
+          title: "weekly cloud spend and reservation review"
+          text: "Review last week's spend against reservations and savings plans; propose purchases within the spend cap."
+  # - on: pd.incident_triggered          # a PagerDuty connector (conductor-plugins)
+  #   steps:
+  #     - member: { name: sre, title: "{{.title}}", text: "{{.summary}}", urgent: true }
+  # - on: slack-ops.mention              # a chat request; requester decides what the gate lets run
+  #   steps:
+  #     - member: { name: sre, title: "chat request", text: "{{.text}}", requester: "slack:{{.user}}" }
+  # - on: timer.sre-weekly               # action: rotate | consolidate instead of a delivery
+  #   steps: [ { member: { name: sre, action: consolidate } } ]
+
   # Scheduled work; a command step's stdout becomes its outputs.
   - on: timer.nightly-tidy
     steps:
@@ -1300,6 +1322,71 @@ policy:
 #           - { at: start, uses: slack-ops.post, options: { text: "updating conductor → {{.version}}" } }
 #           - { at: fail,  uses: slack-ops.post, options: { text: "conductor update FAILED: {{.error}}" } }
 #       - { uses: build-box.run, options: { command: "smoke-test.sh" } }
+
+# ---------------------------------------------------------------------------
+# operators: + members: — persistent conversational agents (wiki: Members).
+#
+# A MEMBER is a named teammate with a charter (here, never writable by it), a
+# git MEMORY REPO (knowledge + episodic log + handoff notes; every write is a
+# reviewable commit), a durable CASE LEDGER (open events, proposals awaiting
+# approval, running workers), a pinned HOME session in paseo you talk to, and
+# WORKERS it delegates to on the cli runtime. Every mutating verb its sessions
+# call passes its AUTONOMY GATE:
+#
+#   observe       runs autonomously
+#   reversible    a proposal until promoted (promote:), and only while jailed
+#   propose       always a proposal; runs when an operator approves it
+#   commit_money  a proposal with a typed amount under the hard spend_cap
+#   never         refused
+#
+# An unclassified verb is `propose`. New members start in SHADOW mode (nothing
+# above observe executes; proposals are a calibration record). Approvals are
+# SSH-signed by an operator — `conductor member approve <member> <id>` signs
+# the proposal's digest with your key (an ssh-agent key works) and the daemon
+# verifies it against ssh_key below. A member session can never approve.
+#
+# Member sessions are not jailed until #154 lands; promotion beyond
+# observe/propose is refused without the jail.
+# ---------------------------------------------------------------------------
+operators:
+  ops:
+    ssh_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample operator@laptop"
+    aliases: ["slack:U0EXAMPLE"] # chat ids that ARE this operator when an event names them
+members:
+  sre:
+    description: "SRE for acme"
+    charter: |
+      You are acme's first-line SRE. Triage pages, investigate with read-only
+      tools, propose fixes, and escalate per the policy below. Keep runbooks
+      and the infra map in your memory current.
+    # charter_file: members/sre-charter.md      # or keep the charter in a file
+    escalation: "Page the operator if a sev1 is not mitigated in 15 minutes or you are unsure."
+    # memory_repo: ~/members/sre-memory          # default <state dir>/members/sre/memory
+    # operators: [ops]                           # default: every operator
+    home:
+      rotate: { max_age: 24h, max_turns: 100 }   # a fresh session resumes from the handoff note + ledger
+      # runtime: paseo                           # the paseo runtime (default: the default paseo)
+      # provider: claude                         # pin the home model (both or neither)
+      # model: claude-opus-5
+    worker:
+      runtime: claude-cli                        # default: the one `use: cli` runtime
+      timeout: 2h
+      max_concurrent: 4
+    skill:
+      verbs: [slack-ops.post, gh.comment]        # the member's grant; workers carry exactly this
+    autonomy:
+      shadow: true                               # the default; false allows approved execution
+      tiers:
+        observe: [gh.get_*]
+        reversible: [slack-ops.post]
+        propose: [gh.comment]
+        never: [gh.delete_*]
+      # promote: [slack-ops.post]                # reversible classes that may run unapproved (needs the jail)
+      # commit_money: a typed amount option per verb, under a hard cap:
+      #   tiers: { commit_money: [aws.purchase_savings_plan] }
+      #   amounts: { aws.purchase_savings_plan: commitment_usd }
+      #   spend_cap: { per_action: 2000, per_period: 5000, period: 720h, currency: USD }
+      approval_ttl: 24h
 
 update: { auto: true } # self-update (auto-applies by default); auto-migration runs on the new binary's first boot.
 #                      # deps follows auto: packs: and `use:` plugins are kept current on the same cycle — a changed

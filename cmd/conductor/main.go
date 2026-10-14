@@ -326,6 +326,9 @@ func cmdValidate(args []string) error {
 	for _, w := range flow.DeprecationWarnings(cfg) {
 		fmt.Printf("warning: %s\n", w)
 	}
+	for _, w := range cfg.MemberWarnings() {
+		fmt.Printf("warning: %s\n", w)
+	}
 	for _, w := range flow.IsolationWarnings(cfg) {
 		fmt.Printf("warning: %s\n", w)
 	}
