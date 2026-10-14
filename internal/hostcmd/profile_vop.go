@@ -151,6 +151,9 @@ func (vopProfile) bind(p Parsed, rule Rule, ctx Context) string {
 		return fmt.Sprintf("vop: exec %s -- %s cannot be evaluated here (no inner-rule resolver wired)", profile, p.InnerTool)
 	}
 	innerRule := ctx.RuleFor(p.InnerTool)
+	// A grant for the whole `vop exec <profile> -- <cmd>` is the operator
+	// naming that exact command, inner write included.
+	innerRule.Granted = rule.Granted
 	innerDec := Decide(Request{Tool: p.InnerTool, Args: p.InnerArgs, Cwd: ctx.Cwd}, innerRule, ctx)
 	switch {
 	case innerDec.Native:

@@ -90,7 +90,10 @@ func wireJail(w jailWiring) *jail.Manager {
 			}
 			return ""
 		},
-		ThreadTarget:  threadTarget,
+		ThreadTarget: threadTarget,
+		// Approvals of exact host commands (internal/grant): the member
+		// gate mints, the broker consumes.
+		Grants:        grantStore,
 		HostEgress:    w.egress.UnixEndpointLabeled,
 		HostEgressTCP: w.egress.EndpointLabeled,
 	}

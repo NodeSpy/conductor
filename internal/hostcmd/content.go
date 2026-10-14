@@ -99,6 +99,9 @@ func contentExec(tool string, p Parsed, ctx Context) (why, knob string) {
 // command: an allow pattern that matches it and whose first word is literal,
 // so a blanket `*` does not count.
 func explicitlyAllowed(rule Rule, p Parsed) bool {
+	if rule.Granted {
+		return true
+	}
 	for _, pat := range rule.OperatorAllow {
 		f := strings.Fields(pat)
 		if len(f) == 0 || strings.ContainsAny(f[0], "*?[") || strings.HasPrefix(f[0], "-") {

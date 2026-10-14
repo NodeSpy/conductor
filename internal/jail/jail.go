@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/grant"
 	"github.com/NodeSpy/conductor/internal/hostcmd"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
@@ -113,6 +114,14 @@ type Manager struct {
 	// Signer overrides how a commit payload is signed (tests); nil → the
 	// operator's configured git signing (see sign.go).
 	Signer func(ctx context.Context, d *Dispatch, format string, payload []byte) (sig, status []byte, err error)
+
+	// Grants are the operator's approvals of exact host commands
+	// (internal/grant; grants.go): nil = none are consumed. GrantScratch is
+	// where a grant's pinned files are copied ("" = a per-uid dir under the
+	// host's /tmp).
+	Grants       grant.Store
+	GrantScratch string
+	grantsUsed   grantMemo
 
 	mu   sync.Mutex
 	live map[string]*Dispatch // broker token → dispatch

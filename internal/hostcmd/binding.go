@@ -129,6 +129,9 @@ func GitPush(rule Rule, ctx Context, branch string, force, del bool) string {
 // has no glob at all). gh: `pr create *` names `pr create`, `pr *` doesn't;
 // git: `push release/*` and `push *` name a push destination.
 func namesCommand(rule Rule, cmd []string, flags map[string][]string, literal, words int) bool {
+	if rule.Granted {
+		return true
+	}
 	for _, pat := range rule.OperatorAllow {
 		var lead []string
 		for _, f := range strings.Fields(pat) {

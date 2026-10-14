@@ -153,6 +153,18 @@ type Rule struct {
 	Network *config.IsolationNetwork
 	// Profiled reports a built-in profile (parsed matching) vs argv matching.
 	Profiled bool
+	// StepAllow is the step layer's own allow list (nil = the step sets
+	// none): what still narrows a Granted command.
+	StepAllow []string
+	// Granted: an approval grant (internal/grant) names this exact command,
+	// and the broker found, verified and is about to consume it. It stands in
+	// for an operator allow entry naming the command literally — the
+	// operator's allow layers, the keyword guard's naming, an explicitly
+	// allowed content-executing command (which still runs confined), the
+	// gh/git/vop write binding's naming. It never lifts a built-in
+	// guardrail, a deny rule, the path guard, a disabled tool, a closed
+	// target, or a step's own narrowing (StepAllow).
+	Granted bool
 }
 
 // Decision is Decide's verdict.
@@ -238,7 +250,16 @@ func matchRules(rule Rule, p Parsed, argv []string) string {
 			return fmt.Sprintf("denied by %s.deny %q", rule.Tool, pat)
 		}
 	}
-	for _, layer := range rule.Allow {
+	layers := rule.Allow
+	if rule.Granted {
+		// The grant names the command for the operator; a step's own allow
+		// list still narrows it.
+		layers = nil
+		if len(rule.StepAllow) > 0 {
+			layers = [][]string{rule.StepAllow}
+		}
+	}
+	for _, layer := range layers {
 		if len(layer) == 0 {
 			continue
 		}
@@ -259,6 +280,9 @@ func matchRules(rule Rule, p Parsed, argv []string) string {
 // allowNames reports whether an allow rule explicitly matches the command —
 // the override for a keyword-guard false positive.
 func allowNames(rule Rule, p Parsed, argv []string) bool {
+	if rule.Granted {
+		return true
+	}
 	words, flags := argvWords(argv)
 	any := false
 	for _, layer := range rule.Allow {
@@ -524,6 +548,8 @@ func Resolve(tool string, layers []*config.IsolationConfig, step bool) Rule {
 			r.Allow = append(r.Allow, append([]string(nil), h.Allow...))
 			if !isStep {
 				r.OperatorAllow = append(r.OperatorAllow, h.Allow...)
+			} else {
+				r.StepAllow = append([]string(nil), h.Allow...)
 			}
 		}
 		r.Deny = append(r.Deny, h.Deny...)

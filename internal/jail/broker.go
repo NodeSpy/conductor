@@ -217,7 +217,24 @@ func (m *Manager) handleExec(ctx context.Context, d *Dispatch, req Request, fw *
 		cwd = d.Workspace
 	}
 	rule := hostcmd.Resolve(tool, d.Layers, d.StepLayer)
-	dec := hostcmd.Decide(hostcmd.Request{Tool: tool, Args: req.Args, Cwd: cwd}, rule, m.hostContext(ctx, d, cwd))
+	hc := m.hostContext(ctx, d, cwd)
+	dec := hostcmd.Decide(hostcmd.Request{Tool: tool, Args: req.Args, Cwd: cwd}, rule, hc)
+	var granted *grantUse
+	if !dec.Allow && !dec.Native && m.Grants != nil {
+		// An operator's approval of this exact command (grants.go).
+		gdec, use, why := m.useGrant(ctx, d, tool, req.Args, cwd, rule, hc)
+		switch {
+		case use != nil:
+			dec, granted = gdec, use
+			defer use.cleanup()
+		case why != "":
+			refuse(dec.Reason + " — " + why)
+			return
+		case gdec.Reason != "":
+			refuse(gdec.Reason) // a grant matched, but it cannot lift this
+			return
+		}
+	}
 	if dec.Native {
 		if !dec.Allow {
 			refuse(dec.Reason)
@@ -269,10 +286,10 @@ func (m *Manager) handleExec(ctx context.Context, d *Dispatch, req Request, fw *
 		}
 	}
 	hr := hostRun{
-		Tool: tool, Bin: bin, Args: append(append([]string(nil), req.Args...), dec.Parsed.ExtraArgs...),
+		Tool: tool, Bin: bin, Args: append(append([]string(nil), runArgs(req.Args, granted)...), dec.Parsed.ExtraArgs...),
 		Cwd: cwd, Stdin: req.Stdin, Home: m.Home, HomePaths: paths, FullHome: full, Persist: persist,
 		Workspace: d.Workspace, TmpDir: d.TmpDir, Sensitive: m.Sensitive,
-		BinRoots: binRoots,
+		BinRoots: append(binRoots, grantFiles(granted)...),
 	}
 	hr.Env = m.hostEnv(d, envTools, req.Env, penv, rule, full)
 	restrict, allow := rule.Network != nil && rule.Network.Mode != config.NetOpen, networkAllow(rule.Network, nil)
@@ -341,8 +358,15 @@ func (m *Manager) handleExec(ctx context.Context, d *Dispatch, req Request, fw *
 	}
 	status := fmt.Sprintf("exit %d", res.Exit)
 	ev := Event{Type: "host_command", Status: status, Detail: cmdline}
-	if len(res.Discarded) > 0 || hr.Confine {
+	if len(res.Discarded) > 0 || hr.Confine || granted != nil {
 		ev.Fields = map[string]any{}
+		if granted != nil {
+			ev.Fields["grant"] = granted.spec.ID
+			ev.Fields["approved_by"] = granted.spec.ApprovedBy
+			if granted.spec.CaseID != "" {
+				ev.Fields["case_id"] = granted.spec.CaseID
+			}
+		}
 		if len(res.Discarded) > 0 {
 			ev.Fields["discarded"] = res.Discarded
 		}
@@ -488,4 +512,21 @@ func unionStrings(a, b []string) []string {
 		}
 	}
 	return out
+}
+
+// runArgs is the argv a host command runs with: a grant's, whose pinned
+// files name their private copies, or the agent's own.
+func runArgs(args []string, g *grantUse) []string {
+	if g != nil {
+		return g.args
+	}
+	return args
+}
+
+// grantFiles are the private copies a granted run reads (bound read-only).
+func grantFiles(g *grantUse) []string {
+	if g == nil {
+		return nil
+	}
+	return g.files
 }
