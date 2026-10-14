@@ -42,16 +42,50 @@ const (
 	ReqOperator = "operator" // a configured operator (by name or alias)
 )
 
-// Jail reports whether member sessions run inside the agent jail (#154).
-// Until the jail lands, NoJail: promotion to autonomous write tiers is
-// refused without it.
-type Jail interface{ Active() bool }
+// Jail is the agent jail (#154: #160 + #175) as members see it. Until those
+// land on main it is NoJail: sessions are unjailed, promotion to autonomous
+// write tiers is refused, and home sessions launch on plain paseo.
+//
+// Once they are on main the switch is a few lines in cmd/conductor
+// (jailSeam): register Service.IdentityForCwd with
+// controller.SetPaseoIdentity, and return JailFuncs wired to the jail's
+// enabled state and controller.ArchivePaseoCwd.
+type Jail interface {
+	// Active reports whether member sessions run jailed: the gate's
+	// precondition for promotion, and the home launcher's cue to launch on
+	// paseo's `conductor` provider.
+	Active() bool
+	// ArchiveCwd ends every jailed session opened in cwd (and refuses a
+	// later session/load there), returning how many — called when a home
+	// session is rotated out or a hand-off worker is retired.
+	ArchiveCwd(cwd string) int
+}
 
-// NoJail is the jail seam's value before #154 lands.
+// NoJail is the jail seam's value before #160/#175 land.
 type NoJail struct{}
 
 // Active implements Jail.
 func (NoJail) Active() bool { return false }
+
+// ArchiveCwd implements Jail.
+func (NoJail) ArchiveCwd(string) int { return 0 }
+
+// JailFuncs adapts the jail's functions to the seam.
+type JailFuncs struct {
+	IsActive func() bool
+	Archive  func(cwd string) int
+}
+
+// Active implements Jail.
+func (j JailFuncs) Active() bool { return j.IsActive != nil && j.IsActive() }
+
+// ArchiveCwd implements Jail.
+func (j JailFuncs) ArchiveCwd(cwd string) int {
+	if j.Archive == nil {
+		return 0
+	}
+	return j.Archive(cwd)
+}
 
 // Ledger is the slice of internal/store the member package uses.
 type Ledger interface {

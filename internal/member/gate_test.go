@@ -18,7 +18,8 @@ import (
 
 type fixedJail bool
 
-func (j fixedJail) Active() bool { return bool(j) }
+func (j fixedJail) Active() bool          { return bool(j) }
+func (j fixedJail) ArchiveCwd(string) int { return 0 }
 
 var gateNow = time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 

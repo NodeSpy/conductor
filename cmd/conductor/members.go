@@ -45,7 +45,8 @@ func buildMembers(cfg *config.Config, st *store.Store, runner *flow.Runner, reg 
 		return nil
 	}
 	cfgFn := func() *config.Config { return cfg }
-	gate := &member.Gate{Cfg: cfgFn, Ledger: st, Jail: member.NoJail{}}
+	jail := jailSeam()
+	gate := &member.Gate{Cfg: cfgFn, Ledger: st, Jail: jail}
 	audit := func(e map[string]any) { st.Audit(e) }
 	exec := &member.Executor{Cfg: cfgFn, Ledger: st, Gate: gate, Grants: grantStore, RunVerb: runner.RunSkillVerb, Audit: audit}
 	home := &member.PaseoHome{
@@ -61,7 +62,7 @@ func buildMembers(cfg *config.Config, st *store.Store, runner *flow.Runner, reg 
 			}
 			return d, nil
 		},
-		Hold: hold.Add, Unhold: hold.Remove,
+		Hold: hold.Add, Unhold: hold.Remove, Jail: jail,
 		Revoke: func(d string) {
 			if b := skill.Active(); b != nil {
 				b.RevokeDispatch(d)
@@ -77,6 +78,7 @@ func buildMembers(cfg *config.Config, st *store.Store, runner *flow.Runner, reg 
 		}),
 		Log: logf, Audit: audit,
 	}
+	registerJailIdentity(svc)
 	gate.OnProposal = svc.OnProposal
 	exec.Notify = svc.OnDecision
 	runner.Members = gate
@@ -86,6 +88,23 @@ func buildMembers(cfg *config.Config, st *store.Store, runner *flow.Runner, reg 
 	}
 	return &memberStack{svc: svc, gate: gate, grants: grantStore}
 }
+
+// jailSeam is the agent jail as members see it. Until #160 (agent jail) and
+// #175 (its paseo integration) are on main it is NoJail — member sessions run
+// unjailed and promotion past observe/propose is refused. The switch, once
+// they land:
+//
+//	return member.JailFuncs{
+//		IsActive: func() bool { return <the jail is enabled for paseo sessions> },
+//		Archive:  controller.ArchivePaseoCwd,
+//	}
+func jailSeam() member.Jail { return member.NoJail{} }
+
+// registerJailIdentity hands the jail members' cwd→identity lookup. A no-op
+// until #175 is on main; then:
+//
+//	controller.SetPaseoIdentity(svc.IdentityForCwd)
+func registerJailIdentity(svc *member.Service) { _ = svc.IdentityForCwd }
 
 type workerFirer func(ctx context.Context, trig, hid string, inputs map[string]any) error
 

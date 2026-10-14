@@ -40,7 +40,15 @@ type PaseoHome struct {
 	Revoke func(dispatchID string)
 	// Credentials resolves the acts-as-you env for the session (optional).
 	Credentials func(ctx context.Context, t core.Trigger) (dispatch.Credentials, error)
+	// Jail is the agent jail seam. While it is active a home session
+	// launches on paseo's `conductor` provider (installed by `conductor
+	// paseo install-plugin`), which jails it keyed by its cwd, and retiring
+	// a session also ends its jailed ACP sessions.
+	Jail Jail
 }
+
+// JailedProvider is the paseo provider a jailed home session launches on.
+const JailedProvider = "conductor"
 
 var _ HomeLauncher = (*PaseoHome)(nil)
 
@@ -86,6 +94,11 @@ func (h *PaseoHome) Launch(ctx context.Context, spec HomeSpec) (string, error) {
 		DispatchID:    spec.Dispatch,
 		LiteralPrompt: true,
 	}
+	if h.Jail != nil && h.Jail.Active() {
+		// The conductor provider relays to the configured model; the model
+		// pin, if any, rides along unchanged.
+		req.Provider = JailedProvider
+	}
 	if h.Credentials != nil {
 		if c, err := h.Credentials(ctx, t); err == nil {
 			req.Credentials = c
@@ -123,12 +136,17 @@ func (h *PaseoHome) State(ctx context.Context, member, agentID string) (string, 
 }
 
 // Retire implements HomeLauncher.
-func (h *PaseoHome) Retire(ctx context.Context, member, agentID, dispatchID string) error {
+func (h *PaseoHome) Retire(ctx context.Context, member, agentID, dispatchID, cwd string) error {
 	if h.Unhold != nil {
 		h.Unhold(agentID)
 	}
 	if h.Revoke != nil && dispatchID != "" {
 		h.Revoke(dispatchID)
+	}
+	if h.Jail != nil {
+		if cwd != "" {
+			h.Jail.ArchiveCwd(cwd)
+		}
 	}
 	d, err := h.disp(member)
 	if err != nil {

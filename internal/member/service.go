@@ -37,8 +37,9 @@ type HomeLauncher interface {
 	Send(ctx context.Context, member, agentID, text string) error
 	// State is "running", "idle", … or "gone".
 	State(ctx context.Context, member, agentID string) (string, error)
-	// Retire archives an agent conductor launched and revokes its session.
-	Retire(ctx context.Context, member, agentID, dispatchID string) error
+	// Retire archives an agent conductor launched, revokes its session, and
+	// (jailed) ends every ACP session opened in its cwd.
+	Retire(ctx context.Context, member, agentID, dispatchID, cwd string) error
 }
 
 // HomeSpec is one home launch.
@@ -420,7 +421,7 @@ func (s *Service) Rotate(ctx context.Context, name, reason string) error {
 	s.audit(map[string]any{"event": "member_session", "member": name, "session": sid, "agent": agentID, "reason": reason, "handoff": hPath})
 	s.logf("%s: home session %s started (agent %s): %s", name, sid, agentID, reason)
 	if old != nil {
-		if err := s.Home.Retire(ctx, name, old.AgentID, old.Dispatch); err != nil {
+		if err := s.Home.Retire(ctx, name, old.AgentID, old.Dispatch, old.Cwd); err != nil {
 			s.logf("%s: retire session %s: %v", name, old.ID, err)
 		}
 		if err := repo.RemoveWorktree(ctx, old.Cwd); err != nil {
@@ -649,6 +650,37 @@ func (s *Service) findWorker(dispatchID, historyID string) (string, store.Worker
 	}
 	return "", store.Worker{}, false
 }
+
+// IdentityForCwd is the cwd→identity lookup the jail consults once per paseo
+// (ACP) session at creation (controller.SetPaseoIdentity, #175): a member's
+// live home session, or a live hand-off worker, is identified by the session
+// it is — "member-<name>-<session or worker id>" — which keys its tool state
+// and is its jail's AgentID, and therefore what a grant minted for it binds
+// to. ok=false for any cwd that is not a live member session's, so a stale or
+// foreign cwd never inherits a member identity. Every live member session has
+// its own cwd, so the answer is unambiguous.
+func (s *Service) IdentityForCwd(cwd string) (string, bool) {
+	clean := filepath.Clean(cwd)
+	if clean == "" || clean == "." {
+		return "", false
+	}
+	for _, name := range s.Cfg().MemberNames() {
+		rec := s.Ledger.Member(name)
+		if h := rec.Home; h != nil && filepath.Clean(h.Cwd) == clean {
+			return SessionIdentity(name, h.ID), true
+		}
+		for _, w := range rec.Workers {
+			if w.Handoff && (w.Status == "starting" || w.Status == "running") && filepath.Clean(w.Cwd) == clean {
+				return SessionIdentity(name, w.ID), true
+			}
+		}
+	}
+	return "", false
+}
+
+// SessionIdentity is a member session's jail identity (path-safe: member
+// names and ids are [a-z0-9_-]).
+func SessionIdentity(member, id string) string { return "member-" + member + "-" + id }
 
 // IsMemberDispatch reports whether a dispatch id belongs to a member
 // session, and which role.
@@ -948,14 +980,21 @@ func (s *Service) ProposeCommand(c Actor, tool string, argv, files []string, sum
 	cwd := ""
 	agentID := ""
 	switch c.Role {
+	// A grant binds to the identity the BROKER will present: for a paseo
+	// session (the home, a hand-off worker) that is the jail identity the
+	// cwd lookup gives it — paseo's own agent id never crosses ACP — and for
+	// a cli worker its dispatch id (Dispatch, below).
 	case config.MemberRoleHome:
-		if rec.Home != nil {
-			cwd, agentID = rec.Home.Cwd, rec.Home.AgentID
+		if rec.Home != nil && rec.Home.Dispatch == c.Dispatch {
+			cwd, agentID = rec.Home.Cwd, SessionIdentity(c.Member, rec.Home.ID)
 		}
 	case config.MemberRoleWorker:
 		for _, w := range rec.Workers {
 			if w.Dispatch == c.Dispatch {
 				cwd = w.Cwd
+				if w.Handoff {
+					agentID = SessionIdentity(c.Member, w.ID)
+				}
 			}
 		}
 	}

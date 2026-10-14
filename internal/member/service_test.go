@@ -16,12 +16,13 @@ import (
 )
 
 type fakeHome struct {
-	mu       sync.Mutex
-	n        int
-	launched []HomeSpec
-	sent     map[string][]string
-	state    map[string]string
-	retired  []string
+	mu          sync.Mutex
+	n           int
+	launched    []HomeSpec
+	sent        map[string][]string
+	state       map[string]string
+	retired     []string
+	retiredCwds []string
 	// onSend lets a test act as the agent (e.g. write a handoff).
 	onSend func(agentID, text string)
 }
@@ -62,7 +63,8 @@ func (f *fakeHome) State(_ context.Context, _, id string) (string, error) {
 	return "gone", nil
 }
 
-func (f *fakeHome) Retire(_ context.Context, _, id, _ string) error {
+func (f *fakeHome) Retire(_ context.Context, _, id, _, cwd string) error {
+	f.retiredCwds = append(f.retiredCwds, cwd)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.retired = append(f.retired, id)
@@ -507,5 +509,72 @@ func TestRecoverInterruptedWorkers(t *testing.T) {
 	}
 	if rec.Workers[h.ID].Status != "starting" {
 		t.Fatal("a paseo hand-off worker survives a daemon restart and must not be marked interrupted")
+	}
+}
+
+// The jail's cwd→identity lookup: a live home session and a live hand-off
+// worker each get their own identity; a cli worker's cwd, a retired
+// session's, and any foreign cwd get none.
+func TestIdentityForCwd(t *testing.T) {
+	f := newSvc(t)
+	ctx := context.Background()
+	f.svc.Tick(ctx, "sre")
+	home := f.st.Member("sre").Home
+	id, ok := f.svc.IdentityForCwd(home.Cwd + "/")
+	if !ok || id != SessionIdentity("sre", home.ID) {
+		t.Fatalf("home identity = %q %v", id, ok)
+	}
+	h, _ := f.svc.Spawn(ctx, homeCaller(f), SpawnRequest{Brief: "take over", Handoff: true})
+	if id, ok := f.svc.IdentityForCwd(h.Cwd); !ok || id != SessionIdentity("sre", h.ID) {
+		t.Fatalf("hand-off worker identity = %q %v", id, ok)
+	}
+	w, _ := f.svc.Spawn(ctx, homeCaller(f), SpawnRequest{Brief: "cli work"})
+	if _, ok := f.svc.IdentityForCwd(w.Cwd); ok {
+		t.Fatal("a cli worker is not a paseo session and gets no paseo identity")
+	}
+	for _, c := range []string{"", "/", "/tmp", f.root} {
+		if _, ok := f.svc.IdentityForCwd(c); ok {
+			t.Fatalf("foreign cwd %q got an identity", c)
+		}
+	}
+	if err := f.svc.Rotate(ctx, "sre", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.svc.IdentityForCwd(home.Cwd); ok {
+		t.Fatal("a retired session's cwd kept its identity")
+	}
+	if len(f.home.retiredCwds) != 1 || f.home.retiredCwds[0] != home.Cwd {
+		t.Fatalf("retire did not pass the session cwd (the jail archives by it): %v", f.home.retiredCwds)
+	}
+}
+
+// A home session's command grant binds to its JAIL identity, never to
+// paseo's agent id; a cli worker's binds to its dispatch.
+func TestCommandGrantBindsToJailIdentity(t *testing.T) {
+	f := newSvc(t)
+	ctx := context.Background()
+	f.svc.Tick(ctx, "sre")
+	home := f.st.Member("sre").Home
+	if err := os.WriteFile(filepath.Join(home.Cwd, "plan.tfplan"), []byte("P"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.svc.ProposeCommand(Actor{Member: "sre", Role: config.MemberRoleHome, Dispatch: home.Dispatch}, "terraform", []string{"apply", "plan.tfplan"}, []string{"plan.tfplan"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.AgentID != SessionIdentity("sre", home.ID) || p.AgentID == home.AgentID {
+		t.Fatalf("home grant identity = %q (paseo id %q)", p.AgentID, home.AgentID)
+	}
+	// A home caller whose dispatch is not the live session's resolves nothing.
+	if _, err := f.svc.ProposeCommand(Actor{Member: "sre", Role: config.MemberRoleHome, Dispatch: "stale"}, "terraform", nil, nil, ""); err == nil {
+		t.Fatal("a stale home session proposed a command")
+	}
+	w, _ := f.svc.Spawn(ctx, homeCaller(f), SpawnRequest{Brief: "cli"})
+	pw, err := f.svc.ProposeCommand(Actor{Member: "sre", Role: config.MemberRoleWorker, Dispatch: w.Dispatch, CaseID: w.CaseID}, "terraform", []string{"plan"}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pw.AgentID != "" || pw.Dispatch != w.Dispatch {
+		t.Fatalf("cli worker grant binding: agent %q dispatch %q", pw.AgentID, pw.Dispatch)
 	}
 }

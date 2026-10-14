@@ -109,10 +109,14 @@ type FileDigest struct {
 type GrantSpec struct {
 	// ID is the store-assigned handle (random, unguessable).
 	ID string `json:"id"`
-	// AgentID is the agent the grant is for — the identity the jail resolves
-	// from a command's cwd. Dispatch is conductor's dispatch/session id for
-	// the same agent. At least one is required; every one that is set must
-	// match what the broker presents.
+	// AgentID is the JAIL IDENTITY of the agent the grant is for: what the
+	// jail keys the agent's tool state by and presents as Presented.AgentID.
+	// For a paseo (ACP) session that is the identity the cwd→identity lookup
+	// registered with the jail returned at session creation — for a member's
+	// home session "member-<member>-<session>" — and NEVER paseo's own agent
+	// id, which does not cross ACP. Dispatch is conductor's dispatch id (what
+	// a cli launch is bound by). At least one is required; every one that is
+	// set must match what the broker presents.
 	AgentID  string `json:"agent_id,omitempty"`
 	Dispatch string `json:"dispatch,omitempty"`
 	// Tool is the binary's base name ("terraform").
