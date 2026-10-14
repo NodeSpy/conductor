@@ -46,6 +46,11 @@ case "$1" in
   send)
     [ -f "$dir/send-fail" ] && { echo "send boom" >&2; exit 1; }
     exit 0 ;;
+  project)
+    case "$2" in
+      ls)     cat "$dir/projects.json" 2>/dev/null || echo '[]' ;;
+      delete) [ -f "$dir/project-delete-fail" ] && { echo "boom" >&2; exit 1; }; echo '{}' ;;
+    esac ;;
   archive) exit 0 ;;
   clone)   [ -f "$dir/clone-fail" ] && { echo "no forge" >&2; exit 1; }; echo '{}' ;;
   run)     cat "$dir/run.json" 2>/dev/null || echo '{"agentId":"a-new"}' ;;

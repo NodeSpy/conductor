@@ -277,6 +277,31 @@ func (b *cliBackend) ListWorkspaces(ctx context.Context) ([]WorkspaceInfo, error
 	return wl, nil
 }
 
+// ListProjects runs `paseo project ls --json`.
+func (b *cliBackend) ListProjects(ctx context.Context) ([]ProjectInfo, error) {
+	cmd := b.exec.paseoCmd(ctx, "project", "ls", "--json")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("paseo project ls: %w%s", err, stderrTail(&stderr))
+	}
+	var pl []ProjectInfo
+	if err := json.Unmarshal(out, &pl); err != nil {
+		return nil, fmt.Errorf("paseo project ls: %w", err)
+	}
+	return pl, nil
+}
+
+// RemoveProject runs `paseo project delete <id> --json`.
+func (b *cliBackend) RemoveProject(ctx context.Context, id string) error {
+	out, err := b.exec.paseoCmd(ctx, "project", "delete", id, "--json").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("paseo project delete %s: %w: %s", id, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // Clone runs `paseo clone <repo> --dir <dir> --protocol <protocol> --json`.
 func (b *cliBackend) Clone(ctx context.Context, opts CloneOptions) error {
 	out, err := b.exec.paseoCmd(ctx, "clone", opts.Repo, "--dir", opts.Dir, "--protocol", opts.Protocol, "--json").CombinedOutput()

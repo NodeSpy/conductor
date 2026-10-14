@@ -230,10 +230,12 @@ func (d *Dispatcher) paseoDetached(ctx context.Context, req Request) (RunRef, er
 	if err != nil {
 		return RunRef{}, Unrecoverable(fmt.Errorf("detach: resolve checkout dir for %s: %w", repo, err))
 	}
+	release := holdProjects()
 	res, err := d.backend().CreateWorktree(ctx, CreateWorktreeOptions{
 		Isolation: "worktree", Path: dir, Strategy: "branch-off",
 		NewBranch: branch, BaseRef: baseRef, Fresh: true,
 	})
+	release()
 	if err != nil {
 		return RunRef{}, Unrecoverable(fmt.Errorf("detach: create worktree for %s: %w", repo, err))
 	}

@@ -168,6 +168,23 @@ func (b *rpcBackend) ListWorkspaces(ctx context.Context) ([]WorkspaceInfo, error
 	return wl, nil
 }
 
+func (b *rpcBackend) ListProjects(ctx context.Context) ([]ProjectInfo, error) {
+	out, err := b.invoke(ctx, "list_projects", nil)
+	if err != nil {
+		return nil, err
+	}
+	var pl []ProjectInfo
+	if err := decodeInto(out["projects"], &pl); err != nil {
+		return nil, err
+	}
+	return pl, nil
+}
+
+func (b *rpcBackend) RemoveProject(ctx context.Context, id string) error {
+	_, err := b.invoke(ctx, "remove_project", map[string]any{"id": id})
+	return err
+}
+
 func (b *rpcBackend) Clone(ctx context.Context, opts CloneOptions) error {
 	_, err := b.invoke(ctx, "clone", map[string]any{"repo": opts.Repo, "dir": opts.Dir, "protocol": opts.Protocol})
 	return err

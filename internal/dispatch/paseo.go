@@ -627,6 +627,7 @@ func (d *Dispatcher) createWorktree(ctx context.Context, req Request, baseDir st
 		opts.NewBranch = branchSlug(ctx, req.Trigger)
 		opts.BaseRef = req.Trigger.Target.BaseRef
 	}
+	defer holdProjects()()
 	res, err := d.backend().CreateWorktree(ctx, opts)
 	if err != nil {
 		return "", "", err
@@ -685,7 +686,10 @@ func (d *Dispatcher) resolveCheckoutDir(ctx context.Context, repo string) (strin
 	}
 	d.mu.Unlock()
 
-	dir := d.findWorkspaceDir(ctx, repo)
+	dir := d.findProjectDir(ctx, repo)
+	if dir == "" {
+		dir = d.findWorkspaceDir(ctx, repo)
+	}
 	if dir == "" {
 		// No existing paseo workspace for this repo. Conductor keeps its own base
 		// checkout under ~/.conductor/checkouts/<name> (see cloneParentDir) and uses
@@ -712,6 +716,78 @@ func (d *Dispatcher) resolveCheckoutDir(ctx context.Context, repo string) (strin
 	d.repoDirs[repo] = dir
 	d.mu.Unlock()
 	return dir, nil
+}
+
+// findProjectDir returns the checkout of the paseo project registered for repo,
+// or "". Unlike findWorkspaceDir it sees every project — not just those with a
+// workspace open right now — and it matches a project by its git remote, not
+// only its name, so a project you named "acme/widget" for a repo
+// "AcmeCorp/Widget" is still found. A project you registered is preferred over
+// conductor's own clone under ~/.conductor/checkouts; with neither, the caller
+// falls back to findWorkspaceDir (a paseo without `project ls`) and then a
+// clone.
+func (d *Dispatcher) findProjectDir(ctx context.Context, repo string) string {
+	projects, err := d.backend().ListProjects(ctx)
+	if err != nil {
+		return ""
+	}
+	fallback := ""
+	for _, p := range projects {
+		if p.Path == "" || !d.projectMatchesRepo(ctx, p, repo) {
+			continue
+		}
+		base := p.Path
+		if !d.remote() {
+			if !isGitRepo(ctx, p.Path) {
+				continue
+			}
+			base = mainWorkTree(ctx, p.Path)
+		}
+		if !d.isConductorProjectPath(p.Path) {
+			return base
+		}
+		if fallback == "" {
+			fallback = base
+		}
+	}
+	return fallback
+}
+
+// projectMatchesRepo reports whether a paseo project is a checkout of repo
+// (owner/name, or a remapped project name — see core.Target.CheckoutRepo): by
+// its name, by the remote paseo keyed it on (a "remote:<host>/<owner>/<name>"
+// id), or — locally — by its checkout's origin remote. All case-insensitive,
+// since GitHub slugs are and paseo lowercases its keys.
+func (d *Dispatcher) projectMatchesRepo(ctx context.Context, p ProjectInfo, repo string) bool {
+	if strings.EqualFold(p.Name, repo) {
+		return true
+	}
+	if key, ok := strings.CutPrefix(p.ProjectID, "remote:"); ok && strings.EqualFold(repoSlug(key), repo) {
+		return true
+	}
+	if d.remote() {
+		return false // the checkout is on the other box; its name and id are all we have
+	}
+	out, err := exec.CommandContext(ctx, "git", "-C", p.Path, "config", "--get", "remote.origin.url").Output()
+	return err == nil && strings.EqualFold(repoSlug(string(out)), repo)
+}
+
+// repoSlug extracts "owner/name" from a git remote URL (scp-like
+// git@host:owner/name.git, or a URL form) or a "host/owner/name" key: the last
+// two path segments, minus any .git suffix. "" when there aren't two.
+func repoSlug(remote string) string {
+	r := strings.TrimSpace(remote)
+	if i := strings.Index(r, "://"); i >= 0 {
+		r = r[i+3:]
+	} else if i := strings.Index(r, ":"); i >= 0 {
+		r = r[:i] + "/" + r[i+1:] // git@host:owner/name -> git@host/owner/name
+	}
+	r = strings.TrimSuffix(strings.TrimRight(r, "/"), ".git")
+	parts := strings.Split(r, "/")
+	if len(parts) < 2 || parts[len(parts)-2] == "" || parts[len(parts)-1] == "" {
+		return ""
+	}
+	return parts[len(parts)-2] + "/" + parts[len(parts)-1]
 }
 
 // findWorkspaceDir returns a stable local checkout dir for repo — the repo's
@@ -919,6 +995,7 @@ func (d *Dispatcher) runWorkspace(ctx context.Context, req Request) (string, err
 	if err != nil {
 		return "", err
 	}
+	defer holdProjects()()
 	res, err := d.backend().CreateWorkspace(ctx, CreateWorkspaceOptions{
 		Isolation: "local", Path: dir, Title: runWorkspacePrefix + slug})
 	if err != nil {

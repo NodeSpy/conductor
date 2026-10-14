@@ -262,6 +262,11 @@ type Dispatcher struct {
 	mu       sync.Mutex
 	repoDirs map[string]string // repo -> resolved checkout cwd (memoized)
 
+	// idleProjects is the set of conductor-owned project ids the previous
+	// PruneProjects sweep found idle; a project is removed only when it is in
+	// this set AND idle again. Guarded by mu. See projects.go.
+	idleProjects map[string]bool
+
 	// nativeSchemaUnsupported is the output_schema capability cache (v0.9.2):
 	// keyed by "runtime|provider|model", present+true means a prior dispatch
 	// already learned paseo's native --output-schema fails for that triple, so

@@ -71,6 +71,10 @@ func (b *scriptedRunAgentBackend) ListWorkspaces(context.Context) ([]WorkspaceIn
 	panic("not used")
 }
 func (b *scriptedRunAgentBackend) Clone(context.Context, CloneOptions) error { panic("not used") }
+func (b *scriptedRunAgentBackend) ListProjects(context.Context) ([]ProjectInfo, error) {
+	panic("not used")
+}
+func (b *scriptedRunAgentBackend) RemoveProject(context.Context, string) error { panic("not used") }
 func (b *scriptedRunAgentBackend) Send(context.Context, SendOptions) (SendResult, error) {
 	panic("not used")
 }
