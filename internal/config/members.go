@@ -102,6 +102,12 @@ type MemberHome struct {
 	// (which also supplies paseo's --provider). Unset: the runtime's
 	// models.default, else a bare launch.
 	Model ModelSpec `yaml:"model,omitempty"`
+	// Mode is the paseo session mode the home agent launches in (paseo
+	// --mode, as a step's mode:). Unset: the provider's default. A mode that
+	// skips tool-permission prompts lets the home agent run shell commands
+	// unprompted AS YOU until the jail lands — the gate covers conductor
+	// verbs, not raw shell.
+	Mode string `yaml:"mode,omitempty"`
 	// Rotate bounds one home session; a fresh session resumes from the
 	// handoff note and the ledger.
 	Rotate MemberRotate `yaml:"rotate,omitempty"`
@@ -522,6 +528,9 @@ func (c *Config) MemberWarnings() []string {
 		m := c.Members[name]
 		if len(c.MemberOperators(name)) == 0 {
 			out = append(out, fmt.Sprintf("members.%s: no operators are configured — its proposals can never be approved", name))
+		}
+		if strings.Contains(strings.ToLower(m.Home.Mode), "bypass") {
+			out = append(out, fmt.Sprintf("members.%s: home.mode %q skips tool-permission prompts; until member sessions are jailed (#154) the home agent's shell runs unprompted as you — the gate covers conductor verbs, not raw shell", name, m.Home.Mode))
 		}
 		if len(m.Autonomy.Promote) > 0 {
 			out = append(out, fmt.Sprintf("members.%s: autonomy.promote takes effect only while member sessions are jailed (#154); until then promoted verbs stay proposals", name))

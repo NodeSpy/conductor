@@ -608,3 +608,33 @@ func TestFailedLaunchBacksOff(t *testing.T) {
 		t.Fatalf("no retry after the backoff: attempts %d", f.home.attempts)
 	}
 }
+
+// paseo send returns when the agent stops — a permission prompt included —
+// not when the turn is over. Rotation must wait for the old session to
+// settle and use the handoff it writes, not race it with a mechanical note.
+func TestRotationWaitsForTheHandoffTurnToSettle(t *testing.T) {
+	f := newSvc(t)
+	f.svc.PollEvery = 10 * time.Millisecond
+	f.svc.HandoffTimeout = 5 * time.Second
+	ctx := context.Background()
+	f.svc.Tick(ctx, "sre")
+	first := f.st.Member("sre").Home
+	f.home.onSend = func(id, text string) {
+		if !strings.Contains(text, "being rotated") {
+			return
+		}
+		f.home.set(id, "permission") // stopped mid-turn on a prompt
+		go func() {
+			time.Sleep(150 * time.Millisecond) // the human allows; the turn finishes
+			_, _ = f.svc.Handoff(ctx, Actor{Member: "sre", Role: config.MemberRoleHome, Dispatch: first.Dispatch}, "agent-written handoff: watch the queue")
+			f.home.set(id, "idle")
+		}()
+	}
+	if err := f.svc.Rotate(ctx, "sre", "test"); err != nil {
+		t.Fatal(err)
+	}
+	p := f.home.launched[1].Prompt
+	if !strings.Contains(p, "agent-written handoff: watch the queue") || strings.Contains(p, "written by conductor") {
+		t.Fatalf("rotation did not wait for the session's own handoff:\n%s", p)
+	}
+}

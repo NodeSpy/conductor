@@ -470,11 +470,15 @@ func (s *Service) collectHandoff(ctx context.Context, name string, old *store.Ho
 			to = 10 * time.Minute
 		}
 		hctx, cancel := context.WithTimeout(ctx, to)
+		defer cancel()
 		msg := fmt.Sprintf("[conductor] Your session is being rotated (%s). Write your handoff NOW so a fresh session can continue with no lost context: what you are in the middle of, what you promised whom, what to watch for, and anything you learned that is not yet in knowledge/. Run:\n  conductor member handoff --text \"…\"\nThen reply \"handoff written\".", reason)
 		if err := s.Home.Send(hctx, name, old.AgentID, msg); err != nil {
 			s.logf("%s: handoff request: %v", name, err)
 		}
-		cancel()
+		// A send returns when the agent STOPS — which includes stopping on a
+		// permission prompt mid-turn, not only finishing. Wait for the turn
+		// to actually settle before deciding whether a note was written.
+		s.waitSettled(hctx, name, old.AgentID)
 	}
 	if after, _ := repo.LatestHandoff(); after != "" && after != before {
 		return
@@ -482,6 +486,26 @@ func (s *Service) collectHandoff(ctx context.Context, name string, old *store.Ho
 	note := MechanicalHandoff(s.Ledger.Member(name), reason)
 	if _, err := repo.Write(ctx, repo.HandoffPath(old.ID), note, "replace", "handoff: session "+old.ID+" (written by conductor)", map[string]string{"Member-Session": old.ID}); err != nil {
 		s.logf("%s: mechanical handoff: %v", name, err)
+	}
+}
+
+// waitSettled blocks until an agent is idle (or gone, or errored) or ctx
+// ends.
+func (s *Service) waitSettled(ctx context.Context, name, agentID string) {
+	every := s.PollEvery
+	if every <= 0 || every > 2*time.Second {
+		every = 2 * time.Second
+	}
+	for {
+		st, err := s.Home.State(ctx, name, agentID)
+		if err == nil && (st == "idle" || st == "gone" || st == "error" || st == "closed") {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(every):
+		}
 	}
 }
 

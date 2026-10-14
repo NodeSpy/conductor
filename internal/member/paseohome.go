@@ -86,7 +86,7 @@ func (h *PaseoHome) Launch(ctx context.Context, spec HomeSpec) (string, error) {
 		Title:  "member " + spec.Member,
 		Action: act,
 	}
-	step := config.Step{Type: "agent", Runtime: cfg.MemberHomeRuntime(spec.Member), Model: m.Home.Model, Skill: sk, Checkout: "none",
+	step := config.Step{Type: "agent", Runtime: cfg.MemberHomeRuntime(spec.Member), Model: m.Home.Model, Mode: m.Home.Mode, Skill: sk, Checkout: "none",
 		Labels:      map[string]string{"member": spec.Member, "member_role": config.MemberRoleHome, "member_session": spec.Session},
 		BoundMember: spec.Member, BoundMemberRole: config.MemberRoleHome}
 	model, provider := "", ""

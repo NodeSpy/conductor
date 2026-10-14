@@ -51,7 +51,7 @@ func (j *recJail) ArchiveCwd(cwd string) int {
 func TestPaseoHomeLaunchAndJailSwitch(t *testing.T) {
 	cfg := &config.Config{Members: map[string]config.MemberConfig{"sre": {
 		Skill: &config.SkillPolicy{Verbs: []string{"gh.comment"}},
-		Home:  config.MemberHome{},
+		Home:  config.MemberHome{Mode: "plan"},
 	}}}
 	fp := &fakePaseo{}
 	jail := &recJail{}
@@ -70,6 +70,9 @@ func TestPaseoHomeLaunchAndJailSwitch(t *testing.T) {
 	r := fp.reqs[0]
 	if !r.LiteralPrompt || r.Action.Prompt != "{{.secrets}} literal" || r.Workspace != "ws-1" || r.DispatchID != "d1" {
 		t.Fatalf("request: %+v", r)
+	}
+	if r.Step.Mode != "plan" {
+		t.Fatalf("home.mode not passed: %q", r.Step.Mode)
 	}
 	if r.Step.BoundMember != "sre" || r.Step.BoundMemberRole != config.MemberRoleHome || r.Action.Checkout != "none" {
 		t.Fatalf("binding: %+v", r.Step)
