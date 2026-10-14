@@ -14,7 +14,7 @@ import (
 // ordinary background step.
 
 // MemberBinding is the member a dispatch's grant is bound to: read from the
-// synthesized step (config.Step.Member, never decoded from YAML) and, for a
+// synthesized step (config.Step.BoundMember, never decoded from YAML) and, for a
 // worker, the case the member service fired the run for. Zero for every
 // other dispatch.
 type MemberBinding struct {
@@ -27,10 +27,10 @@ const MemberContextCase = "member_case"
 
 // memberBinding reads a request's member binding.
 func memberBinding(req Request) MemberBinding {
-	if req.Step.Member == "" {
+	if req.Step.BoundMember == "" {
 		return MemberBinding{}
 	}
-	b := MemberBinding{Name: req.Step.Member, Role: req.Step.MemberRole}
+	b := MemberBinding{Name: req.Step.BoundMember, Role: req.Step.BoundMemberRole}
 	if c, ok := req.Trigger.Context[MemberContextCase].(string); ok {
 		b.CaseID = c
 	}

@@ -101,6 +101,12 @@ type LiveOps struct {
 	// run's identity. nil → those ops fall back to the body Source (the MCP
 	// path, where the daemon baked Source into the tool command's flags).
 	Identify func(token string, peer Peer) (src Source, number int, ok bool)
+	// Member serves `conductor member <sub>` from a member session (op
+	// "member": Uses carries the sub-command, Options its arguments),
+	// authorized by token + peer to the member and role the token is bound
+	// to. Approvals are deliberately NOT here: they arrive only on the
+	// operator control socket, signed. nil → unavailable.
+	Member func(ctx context.Context, token, sub string, args map[string]any, peer Peer) (map[string]any, error)
 }
 
 // Peer is the socket-peer identity of the calling process (Linux
@@ -378,6 +384,16 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 			return IPCResponse{Error: "verb: the skill verb surface is not available on this daemon"}
 		}
 		out, err := ops.RunVerb(context.Background(), req.Token, req.Uses, req.Options, peer)
+		if err != nil {
+			return IPCResponse{Error: err.Error()}
+		}
+		return IPCResponse{OK: true, Result: out}
+	case "member":
+		ops := getLiveOps()
+		if ops.Member == nil {
+			return IPCResponse{Error: "member: no member service on this daemon"}
+		}
+		out, err := ops.Member(context.Background(), req.Token, req.Uses, req.Options, peer)
 		if err != nil {
 			return IPCResponse{Error: err.Error()}
 		}

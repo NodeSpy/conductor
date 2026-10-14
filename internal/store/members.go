@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -219,8 +220,11 @@ func (s *Store) MemberNames() []string {
 // UpdateMember applies fn to a copy of the member's ledger and, when fn
 // succeeds, installs and persists it. fn's error aborts with nothing changed.
 func (s *Store) UpdateMember(name string, fn func(*MemberRecord) error) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
+	// The member's own lock serializes read-modify-write per member (fn may
+	// read what a concurrent update just wrote); persist orders the saves.
+	ml := s.memberLock(name)
+	ml.Lock()
+	defer ml.Unlock()
 	s.mu.Lock()
 	cur := s.members[name]
 	var work *MemberRecord
@@ -237,20 +241,30 @@ func (s *Store) UpdateMember(name string, fn func(*MemberRecord) error) error {
 		s.members = map[string]*MemberRecord{}
 	}
 	s.members[name] = work
-	b, err := json.MarshalIndent(s.members, "", " ")
 	s.mu.Unlock()
-	if err != nil {
-		return err
+	return s.saveMembers()
+}
+
+// saveMembers persists the ledger through the store's one write chokepoint.
+func (s *Store) saveMembers() error {
+	return s.persist(func() ([]byte, string, error) {
+		b, err := json.MarshalIndent(s.members, "", " ")
+		return b, s.membersPath(), err
+	})
+}
+
+func (s *Store) memberLock(name string) *sync.Mutex {
+	s.memberLocksMu.Lock()
+	defer s.memberLocksMu.Unlock()
+	if s.memberLocks == nil {
+		s.memberLocks = map[string]*sync.Mutex{}
 	}
-	p := s.membersPath()
-	if p == "" {
-		return nil
+	l := s.memberLocks[name]
+	if l == nil {
+		l = &sync.Mutex{}
+		s.memberLocks[name] = l
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, p)
+	return l
 }
 
 // cloneMember deep-copies via JSON: the ledger is plain data, and a copy that

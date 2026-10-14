@@ -193,8 +193,11 @@ type Runner struct {
 	// Members is the member autonomy gate (nil when no member is configured;
 	// a member-bound skill grant then fails closed).
 	Members MemberGate
-	Code    *code.Executor
-	Secrets *secrets.Resolver
+	// MemberRouter serves the `member:` helper step (nil = no member service:
+	// the step fails, naming why).
+	MemberRouter MemberRouter
+	Code         *code.Executor
+	Secrets      *secrets.Resolver
 	// SecretVals are the resolved named secrets: values ({{.secrets.<name>}}).
 	SecretVals map[string]string
 	// VaultVals are the preloaded listable-vault entries

@@ -51,8 +51,8 @@ type WorkerLauncher interface {
 	Fire(ctx context.Context, trigger, historyID string, inputs map[string]any) error
 }
 
-// Caller is the token-bound identity of an agent calling a member op.
-type Caller struct {
+// Actor is the token-bound identity of an agent calling a member op.
+type Actor struct {
 	Member, Role, CaseID, Dispatch, Agent string
 }
 
@@ -519,7 +519,7 @@ func (s *Service) Deliver(ctx context.Context, ev Event) (string, error) {
 	note := ""
 	if ev.Urgent {
 		brief := "URGENT event — triage it now. Investigate, act within your autonomy, propose anything beyond it, and escalate per your charter if needed. Report what you found and did.\n\n" + EventMessage(c, ev.Text, "")
-		w, err := s.Spawn(ctx, Caller{Member: ev.Member, Role: config.MemberRoleHome}, SpawnRequest{CaseID: c.ID, Brief: brief})
+		w, err := s.Spawn(ctx, Actor{Member: ev.Member, Role: config.MemberRoleHome}, SpawnRequest{CaseID: c.ID, Brief: brief})
 		if err != nil {
 			note = "(conductor could not start a worker for this urgent event: " + err.Error() + " — handle it yourself.)"
 		} else {
@@ -542,7 +542,7 @@ type SpawnRequest struct {
 
 // Spawn starts a worker for a case. Only a home session (or conductor
 // itself) spawns; a worker cannot start more workers.
-func (s *Service) Spawn(ctx context.Context, c Caller, req SpawnRequest) (store.Worker, error) {
+func (s *Service) Spawn(ctx context.Context, c Actor, req SpawnRequest) (store.Worker, error) {
 	m, err := s.member(c.Member)
 	if err != nil {
 		return store.Worker{}, err
@@ -787,8 +787,8 @@ func summarizeOutput(reason string, output any) string {
 
 // ---- agent ops ----
 
-// Remember writes a memory file for a member session.
-func (s *Service) Remember(ctx context.Context, c Caller, path, text string, appendMode bool, caseID string) (string, error) {
+// WriteMemory writes a memory-repo file for a member session.
+func (s *Service) WriteMemory(ctx context.Context, c Actor, path, text string, appendMode bool, caseID string) (string, error) {
 	if _, err := s.member(c.Member); err != nil {
 		return "", err
 	}
@@ -811,7 +811,7 @@ func (s *Service) Remember(ctx context.Context, c Caller, path, text string, app
 }
 
 // Episode appends to a case's episode.
-func (s *Service) Episode(ctx context.Context, c Caller, caseID, text string) (string, error) {
+func (s *Service) Episode(ctx context.Context, c Actor, caseID, text string) (string, error) {
 	if caseID == "" {
 		caseID = c.CaseID
 	}
@@ -826,7 +826,7 @@ func (s *Service) Episode(ctx context.Context, c Caller, caseID, text string) (s
 }
 
 // Handoff records the home session's handoff note.
-func (s *Service) Handoff(ctx context.Context, c Caller, text string) (string, error) {
+func (s *Service) Handoff(ctx context.Context, c Actor, text string) (string, error) {
 	if c.Role != config.MemberRoleHome {
 		return "", errors.New("only the home session writes handoff notes")
 	}
@@ -844,7 +844,7 @@ func (s *Service) Handoff(ctx context.Context, c Caller, text string) (string, e
 
 // CaseOpen opens a case from the home session (the operator asked for
 // something in conversation, or the member noticed something).
-func (s *Service) CaseOpen(c Caller, title, summary string) (store.Case, error) {
+func (s *Service) CaseOpen(c Actor, title, summary string) (store.Case, error) {
 	if c.Role != config.MemberRoleHome {
 		return store.Case{}, errors.New("only the home session opens cases")
 	}
@@ -868,7 +868,7 @@ func (s *Service) CaseOpen(c Caller, title, summary string) (store.Case, error) 
 }
 
 // CaseNote appends to a case's running summary.
-func (s *Service) CaseNote(c Caller, caseID, text string) error {
+func (s *Service) CaseNote(c Actor, caseID, text string) error {
 	if c.Role == config.MemberRoleWorker && caseID != c.CaseID {
 		return errors.New("a worker notes only its own case")
 	}
@@ -887,7 +887,7 @@ func (s *Service) CaseNote(c Caller, caseID, text string) error {
 }
 
 // CaseClose closes a case and writes its outcome to the episodic log.
-func (s *Service) CaseClose(ctx context.Context, c Caller, caseID, outcome string) error {
+func (s *Service) CaseClose(ctx context.Context, c Actor, caseID, outcome string) error {
 	if c.Role != config.MemberRoleHome {
 		return errors.New("only the home session closes cases")
 	}
@@ -932,7 +932,7 @@ func (s *Service) Cases(member string, all bool) []store.Case {
 // terraform apply). The files it names are hashed NOW, from the caller's own
 // working directory, so the operator approves exactly those bytes; the
 // grant minted on approval pins them for the jail's broker to re-check.
-func (s *Service) ProposeCommand(c Caller, tool string, argv, files []string, summary string) (store.Proposal, error) {
+func (s *Service) ProposeCommand(c Actor, tool string, argv, files []string, summary string) (store.Proposal, error) {
 	m, err := s.member(c.Member)
 	if err != nil {
 		return store.Proposal{}, err

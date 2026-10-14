@@ -369,18 +369,18 @@ func (c *Config) expandMembers() error {
 			sk = &cp
 		}
 		worker := Step{
-			ID:          MemberWorkerStepID,
-			Name:        MemberWorkerTrigger(name),
-			Type:        "agent",
-			Runtime:     wrt,
-			Model:       m.Worker.Model,
-			Prompt:      "{{.inputs.prompt}}",
-			WorkDir:     "{{.inputs.workdir}}",
-			Checkout:    "none",
-			Skill:       sk,
-			WaitTimeout: Duration(m.Worker.TimeoutD()),
-			Member:      name,
-			MemberRole:  MemberRoleWorker,
+			ID:              MemberWorkerStepID,
+			Name:            MemberWorkerTrigger(name),
+			Type:            "agent",
+			Runtime:         wrt,
+			Model:           m.Worker.Model,
+			Prompt:          "{{.inputs.prompt}}",
+			WorkDir:         "{{.inputs.workdir}}",
+			Checkout:        "none",
+			Skill:           sk,
+			WaitTimeout:     Duration(m.Worker.TimeoutD()),
+			BoundMember:     name,
+			BoundMemberRole: MemberRoleWorker,
 		}
 		handoff := worker
 		handoff.Name = MemberHandoffTrigger(name)
@@ -399,6 +399,9 @@ func (c *Config) expandMembers() error {
 // validateMembers checks operators: and members:. Nil-safe and a no-op for
 // a config with neither.
 func (c *Config) validateMembers() error {
+	if err := c.validateMemberSteps(); err != nil {
+		return err
+	}
 	for name, op := range c.Operators {
 		if !validMemberName(name) {
 			return fmt.Errorf("config: operators.%s: name must be lowercase letters, digits, - or _", name)
@@ -542,4 +545,68 @@ func validMemberName(s string) bool {
 		}
 	}
 	return true
+}
+
+// MemberStep is the `member:` helper step: how a trigger routes an event
+// into a member. Every string is templated against the run's scope.
+//
+//   - member:
+//     name: sre-acme
+//     title: "{{.title}}"
+//     text: "{{.summary}}"       # the payload — data, never instructions
+//     requester: "{{.user}}"     # who asked; "" = no human (an alert)
+//     urgent: true               # start a worker now, don't wait on the conversation
+//
+// action: rotate | consolidate runs those instead of a delivery (a cron
+// trigger's weekly consolidation, say).
+type MemberStep struct {
+	Name      string `yaml:"name"`
+	Action    string `yaml:"action,omitempty"` // deliver (default) | rotate | consolidate
+	Title     string `yaml:"title,omitempty"`
+	Text      string `yaml:"text,omitempty"`
+	Requester string `yaml:"requester,omitempty"`
+	Urgent    bool   `yaml:"urgent,omitempty"`
+}
+
+func (m *MemberStep) validate() error {
+	if strings.TrimSpace(m.Name) == "" {
+		return fmt.Errorf("name: is required (the member to route to)")
+	}
+	switch m.Action {
+	case "", "deliver", "rotate", "consolidate":
+	default:
+		return fmt.Errorf("action must be deliver, rotate or consolidate, got %q", m.Action)
+	}
+	if (m.Action == "rotate" || m.Action == "consolidate") && (m.Text != "" || m.Urgent || m.Requester != "") {
+		return fmt.Errorf("action %s takes no text/requester/urgent", m.Action)
+	}
+	return nil
+}
+
+// validateMemberSteps checks that every `member:` step a trigger or workflow
+// names a configured member (statically named ones; a templated name is
+// checked when it renders).
+func (c *Config) validateMemberSteps() error {
+	check := func(where string, steps []Step) error {
+		for i, st := range steps {
+			if st.Member == nil || strings.Contains(st.Member.Name, "{{") {
+				continue
+			}
+			if _, ok := c.Members[st.Member.Name]; !ok {
+				return fmt.Errorf("config: %s.steps[%d]: member: %q is not a configured member", where, i, st.Member.Name)
+			}
+		}
+		return nil
+	}
+	for i, t := range c.Triggers {
+		if err := check(fmt.Sprintf("triggers[%d]", i), t.Steps); err != nil {
+			return err
+		}
+	}
+	for n, w := range c.Workflows {
+		if err := check("workflows."+n, w.Steps); err != nil {
+			return err
+		}
+	}
+	return nil
 }

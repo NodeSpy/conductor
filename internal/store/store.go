@@ -79,6 +79,8 @@ type Store struct {
 	// Member case ledger (members.go).
 	members         map[string]*MemberRecord
 	membersDegraded bool
+	memberLocksMu   sync.Mutex
+	memberLocks     map[string]*sync.Mutex
 }
 
 // Options configure a Store.

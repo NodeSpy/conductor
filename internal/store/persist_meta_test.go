@@ -25,6 +25,9 @@ import (
 var persistExceptions = map[string]string{
 	// persist() IS the chokepoint; the write it performs is the point.
 	"persist": "the chokepoint itself",
+	// A members.json that does not parse is moved aside ONCE, at Open, before
+	// any writer exists — a rename of the bad file, not a snapshot save.
+	"loadMembers": "boot-time move-aside of a corrupt ledger, before any writer",
 	// A history record's path is derived from its OWN run id
 	// (historyFile(dir, rec.ID)), so there is no concurrent save of the same
 	// file to lose an update to — the condition persist() exists to prevent

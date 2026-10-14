@@ -101,7 +101,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// onto (or adopts) the trigger's PR agent — that agent works elsewhere.
 	// A member session never queues onto another agent: its binding (and the
 	// one-cwd-per-agent rule) is the whole point of launching it.
-	if !req.Interactive && !d.DryRun && !req.Shadow && len(req.Action.OutputSchema) == 0 && !repoOverride && req.Step.Member == "" {
+	if !req.Interactive && !d.DryRun && !req.Shadow && len(req.Action.OutputSchema) == 0 && !repoOverride && req.Step.BoundMember == "" {
 		if ref, handled, err := d.queueOrAdopt(ctx, req, prompt); handled || err != nil {
 			return ref, err
 		}

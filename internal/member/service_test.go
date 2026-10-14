@@ -127,9 +127,9 @@ func newSvc(t *testing.T) *svcFixture {
 	return f
 }
 
-func homeCaller(f *svcFixture) Caller {
+func homeCaller(f *svcFixture) Actor {
 	h := f.st.Member("sre").Home
-	return Caller{Member: "sre", Role: config.MemberRoleHome, Dispatch: h.Dispatch}
+	return Actor{Member: "sre", Role: config.MemberRoleHome, Dispatch: h.Dispatch}
 }
 
 func TestHomeSessionLifecycle(t *testing.T) {
@@ -314,7 +314,7 @@ func TestSpawnRules(t *testing.T) {
 	f := newSvc(t)
 	ctx := context.Background()
 	f.svc.Tick(ctx, "sre")
-	if _, err := f.svc.Spawn(ctx, Caller{Member: "sre", Role: config.MemberRoleWorker}, SpawnRequest{Brief: "x"}); err == nil {
+	if _, err := f.svc.Spawn(ctx, Actor{Member: "sre", Role: config.MemberRoleWorker}, SpawnRequest{Brief: "x"}); err == nil {
 		t.Fatal("a worker spawned a worker")
 	}
 	if _, err := f.svc.Spawn(ctx, homeCaller(f), SpawnRequest{}); err == nil {
@@ -363,7 +363,7 @@ func TestRotationKeepsContext(t *testing.T) {
 	// The old session answers the rotation request by writing its handoff.
 	f.home.onSend = func(id, text string) {
 		if strings.Contains(text, "being rotated") {
-			if _, err := f.svc.Handoff(ctx, Caller{Member: "sre", Role: config.MemberRoleHome, Dispatch: first.Dispatch}, "Halfway through the queue migration; promised op a status by 5pm."); err != nil {
+			if _, err := f.svc.Handoff(ctx, Actor{Member: "sre", Role: config.MemberRoleHome, Dispatch: first.Dispatch}, "Halfway through the queue migration; promised op a status by 5pm."); err != nil {
 				t.Error(err)
 			}
 		}
@@ -423,11 +423,11 @@ func TestMemoryWritesAreCommitsAndConfined(t *testing.T) {
 	ctx := context.Background()
 	f.svc.Tick(ctx, "sre")
 	hc := homeCaller(f)
-	sha, err := f.svc.Remember(ctx, hc, "knowledge/db.md", "primary is in us-east-1", false, "")
+	sha, err := f.svc.WriteMemory(ctx, hc, "knowledge/db.md", "primary is in us-east-1", false, "")
 	if err != nil || sha == "" {
 		t.Fatalf("remember: %v", err)
 	}
-	if _, err := f.svc.Remember(ctx, hc, "knowledge/db.md", "replica lag alarm at 30s", true, ""); err != nil {
+	if _, err := f.svc.WriteMemory(ctx, hc, "knowledge/db.md", "replica lag alarm at 30s", true, ""); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := f.svc.Repo("sre").Read("knowledge/db.md")
@@ -443,7 +443,7 @@ func TestMemoryWritesAreCommitsAndConfined(t *testing.T) {
 		t.Fatalf("session worktree not refreshed: %v", err)
 	}
 	for _, bad := range []string{"../escape.md", "/etc/x.md", "knowledge/../../x.md", "README.md", ".git/config", "knowledge/.hidden.md", "knowledge/x.sh", "handoff/x.md", "knowledge"} {
-		if _, err := f.svc.Remember(ctx, hc, bad, "x", false, ""); err == nil {
+		if _, err := f.svc.WriteMemory(ctx, hc, bad, "x", false, ""); err == nil {
 			t.Errorf("wrote %q", bad)
 		}
 	}
@@ -467,7 +467,7 @@ func TestProposeCommandHashesFromOwnCwd(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(w.Cwd, "plan.tfplan"), []byte("PLAN"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	wc := Caller{Member: "sre", Role: config.MemberRoleWorker, Dispatch: w.Dispatch, CaseID: w.CaseID}
+	wc := Actor{Member: "sre", Role: config.MemberRoleWorker, Dispatch: w.Dispatch, CaseID: w.CaseID}
 	p, err := f.svc.ProposeCommand(wc, "terraform", []string{"apply", "plan.tfplan"}, []string{"plan.tfplan"}, "apply")
 	if err != nil {
 		t.Fatal(err)

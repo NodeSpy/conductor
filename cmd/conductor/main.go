@@ -140,6 +140,8 @@ func main() {
 		err = cmdSkillMemory(args)
 	case "secret":
 		err = cmdSecret(args)
+	case "member", "members":
+		err = cmdMember(args)
 	case "workflows":
 		err = cmdWorkflows(args)
 	case "init":
@@ -203,6 +205,7 @@ usage:
   conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
   conductor unlock                      seed the default vault key for non-interactive restarts
   conductor mcp memory --socket <path>  stdio MCP server: memory + skill broker (agent-facing)
+  conductor member <cmd> …             members: ls/show/cases/proposals/approve/deny/rotate/say/deliver (conductor member help)
   conductor mcp callable --token <name> [--config PATH]  stdio MCP server: invoke callable workflows (external MCP clients)
   conductor workflows ls|review|rm      manage saved (agent-promoted) workflows
   conductor init [--config PATH] [--allow-unlisted]  fetch the packs: block, write the lockfile, preview
@@ -776,6 +779,14 @@ func cmdRun(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Members (docs/design/members.md): the gate on the skill chokepoint, the
+	// member: routing step, home sessions on paseo, cli workers through the
+	// manual-trigger path. nil without a members: section.
+	var members *memberStack
+	if stack != nil {
+		members = buildMembers(cfg, st, stack.Runner, reg, hold, eng, logf)
+	}
+
 	// The live agent-tool socket: with a memory: section configured — or any
 	// profile opted into the conductor skill (#36 §12) — serve the tool
 	// socket beside the state file and publish the launch command runtimes
@@ -887,6 +898,9 @@ func cmdRun(args []string) error {
 						}
 						return runner.SkillVerbCatalog(id.Policy.Verbs), nil
 					}
+					if members != nil {
+						ops.Member = members.agentOp(sb)
+					}
 					ops.RunVerb = func(vctx context.Context, token, uses string, options map[string]any, peer memory.Peer) (map[string]any, error) {
 						id, err := sb.Authorize(token, asPeer(peer))
 						if err != nil {
@@ -902,6 +916,7 @@ func cmdRun(args []string) error {
 							Number: id.Number, Verbs: id.Policy.Verbs,
 							Scopes: id.Policy.VerbScopes, Context: id.Context, Sem: id.Sem,
 							TargetTrusted: id.TargetTrusted, Dispatch: id.Dispatch,
+							Member: id.Member, MemberRole: id.MemberRole, CaseID: id.CaseID,
 						}, uses, options)
 					}
 				}
@@ -1054,10 +1069,18 @@ func cmdRun(args []string) error {
 	defer connector.SetConductorOps(nil)
 	// handoff.done: the agent releasing its own live hand-off (skill surface),
 	// resolved through the engine's live-hand-off registry.
-	connector.SetStepOps(func() *connector.StepOps { return eng.StepOps() })
+	connector.SetStepOps(members.wrapStepOps(func() *connector.StepOps { return eng.StepOps() }))
 	defer connector.SetStepOps(nil)
 	// A connector's declared poll verb: the same nudge the SIGUSR1 handler
 	// runs, for that instance.
+	if members != nil {
+		var hub *flow.EventHub
+		if stack != nil {
+			hub = stack.Runner.Events
+		}
+		members.start(ctx, hub)
+		memberCtl = members.svc
+	}
 	connector.SetSweepHook(func(_ context.Context, instance string) (int, error) {
 		n := 0
 		for _, ig := range igs {
@@ -1325,11 +1348,15 @@ func controlSockPath(cfg *config.Config) string {
 }
 
 type controlRequest struct {
-	Cmd         string `json:"cmd"`
-	Integration string `json:"integration,omitempty"`
-	Kind        string `json:"kind,omitempty"`
-	Repo        string `json:"repo,omitempty"`
-	Number      int    `json:"number,omitempty"`
+	Cmd string `json:"cmd"`
+	// member: the sub-command (Sub) and its arguments (Args) — the operator
+	// face of members (`conductor member …`). Approvals arrive here, signed.
+	Sub         string         `json:"sub,omitempty"`
+	Args        map[string]any `json:"args,omitempty"`
+	Integration string         `json:"integration,omitempty"`
+	Kind        string         `json:"kind,omitempty"`
+	Repo        string         `json:"repo,omitempty"`
+	Number      int            `json:"number,omitempty"`
 	// run: the manual trigger's name and its CLI-provided inputs.
 	Name   string         `json:"name,omitempty"`
 	Inputs map[string]any `json:"inputs,omitempty"`
@@ -1361,6 +1388,8 @@ type controlResponse struct {
 	Dispatched int    `json:"dispatched,omitempty"`
 	Msg        string `json:"msg,omitempty"`
 	Error      string `json:"error,omitempty"`
+	// Result is a member command's structured answer.
+	Result map[string]any `json:"result,omitempty"`
 }
 
 // callableGate authorizes + audits a control-socket `run` that the MCP callable
@@ -1443,6 +1472,8 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 		return
 	}
 	switch req.Cmd {
+	case "member":
+		handleMemberControl(ctx, conn, req, log)
 	case "force":
 		n, err := forceOnIntegrations(ctx, igs, req, emit)
 		if err != nil {
