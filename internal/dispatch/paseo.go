@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/hosts"
 	"strconv"
@@ -449,12 +450,30 @@ func effectiveStrategy(req Request) string {
 	// With no repo context there is nothing to check out and it falls through to the
 	// ordinary checkout:none workspace choice.
 	if req.Interactive && (req.Action.Checkout == "" || req.Action.Checkout == "none") {
+		if syntheticTarget(req) {
+			return "none"
+		}
 		return repoStrategy(req)
 	}
 	if s := req.Action.Checkout; s != "" {
 		return s
 	}
 	return repoStrategy(req)
+}
+
+// syntheticTarget reports a trigger whose target is not a clonable repo — a
+// manual run, RSS item, webhook, or lifecycle event ("manual:<name>",
+// "rss:<feed>", …). Such a source declares no checkout semantics and forces its
+// trigger-level action to checkout "none" (inbound.ForceNoCheckout); the
+// interactive rule above must honor that rather than treat the synthetic
+// Target.Repo as a repo to branch off. A step `repo:` names a real checkout,
+// so it is never synthetic.
+func syntheticTarget(req Request) bool {
+	if req.Trigger.HasSemantics() || strings.TrimSpace(req.Step.Repo) != "" {
+		return false
+	}
+	ta, ok := req.Trigger.Action.(config.Action)
+	return ok && ta.Checkout == "none"
 }
 
 // repoStrategy picks the worktree strategy from the trigger's DECLARED
@@ -757,7 +776,7 @@ func (d *Dispatcher) findProjectDir(ctx context.Context, repo string) string {
 // (owner/name, or a remapped project name — see core.Target.CheckoutRepo): by
 // its name, by the remote paseo keyed it on (a "remote:<host>/<owner>/<name>"
 // id), or — locally — by its checkout's origin remote. All case-insensitive,
-// since GitHub slugs are and paseo lowercases its keys.
+// since forge slugs are and paseo lowercases its keys.
 func (d *Dispatcher) projectMatchesRepo(ctx context.Context, p ProjectInfo, repo string) bool {
 	if strings.EqualFold(p.Name, repo) {
 		return true
