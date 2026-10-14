@@ -99,7 +99,9 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// burst-of-feedback case this exists for (D1).
 	// A step `repo:` naming a different repo than the trigger's never queues
 	// onto (or adopts) the trigger's PR agent — that agent works elsewhere.
-	if !req.Interactive && !d.DryRun && !req.Shadow && len(req.Action.OutputSchema) == 0 && !repoOverride {
+	// A member session never queues onto another agent: its binding (and the
+	// one-cwd-per-agent rule) is the whole point of launching it.
+	if !req.Interactive && !d.DryRun && !req.Shadow && len(req.Action.OutputSchema) == 0 && !repoOverride && req.Step.Member == "" {
 		if ref, handled, err := d.queueOrAdopt(ctx, req, prompt); handled || err != nil {
 			return ref, err
 		}
@@ -575,6 +577,9 @@ func checkPromptSize(prompt string) error {
 // review is identifiable by its PR). The number is omitted for targets without
 // one; a PR's branch name can be misleading, so the number is the anchor.
 func agentTitle(req Request) string {
+	if mb := memberBinding(req); mb.Name != "" {
+		return fmt.Sprintf("member %s (%s)", mb.Name, mb.Role)
+	}
 	tgt := req.Trigger.Target
 	if tgt.Number > 0 {
 		return fmt.Sprintf("conductor: %s#%d %s", tgt.Repo, tgt.Number, req.Trigger.Kind)

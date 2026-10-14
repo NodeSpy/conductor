@@ -98,6 +98,12 @@ type Identity struct {
 	// dispatch.Request.DispatchID): the anchor a live tool's reconstructed
 	// trigger is confined to when the target itself cannot be trusted.
 	Dispatch string
+	// Member / MemberRole / CaseID bind the session to a member (home or
+	// worker) and, for a worker, its case: what the member autonomy gate
+	// decides against. Minted daemon-side from config and the ledger.
+	Member     string
+	MemberRole string
+	CaseID     string
 	// Context is the originating trigger's context, held daemon-side for the
 	// session's lifetime. It exists for RESOURCE SCOPING: the trigger's
 	// declared target scope (Sem) reads its facts to decide which channel

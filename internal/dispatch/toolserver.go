@@ -239,9 +239,14 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 		TargetTrusted: req.Trigger.TargetTrusted,
 		Dispatch:      req.DispatchID, // as above: both paths carry the anchor
 	}
+	mb := memberBinding(req)
+	id.Member, id.MemberRole, id.CaseID = mb.Name, mb.Role, mb.CaseID
 	var tok string
 	var err error
-	if req.Interactive {
+	// A member session (home or worker) is durable like a hand-off: a home
+	// lives for days and a worker may wait hours on an approval, across
+	// daemon restarts, and neither env can be rewritten.
+	if req.Interactive || mb.Name != "" {
 		tok, err = b.MintHandoffSession(id, uint32(os.Getuid()))
 	} else {
 		tok, err = b.MintSession(id, uint32(os.Getuid()), skill.SessionTTL)
