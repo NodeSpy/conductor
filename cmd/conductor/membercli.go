@@ -342,8 +342,8 @@ func memberDecide(cfg *config.Config, decision, name, id string, fl map[string]s
 		return fmt.Errorf("operator %q is not configured", op)
 	}
 	digest, _ := p["digest"].(string)
-	fmt.Printf("%s %s proposal %s (member %s, case %v, tier %v):\n  %v\n  requested by %v (%v); status %v\n",
-		map[string]string{"approve": "Approving", "deny": "Denying"}[decision], "", id, name, p["case_id"], p["tier"], p["action"], p["requester"], p["requester_class"], p["status"])
+	fmt.Printf("%s proposal %s (member %s, case %v, tier %v):\n  %v\n  requested by %v (%v); status %v\n",
+		map[string]string{"approve": "Approving", "deny": "Denying"}[decision], id, name, p["case_id"], p["tier"], p["action"], p["requester"], p["requester_class"], p["status"])
 	key := fl["key"]
 	if key == "" {
 		// Sign through the ssh-agent with the configured public key.
