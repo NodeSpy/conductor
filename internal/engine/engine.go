@@ -863,6 +863,11 @@ func (e *Engine) process(ctx context.Context, t core.Trigger) {
 			// of identical code.
 			if t.RearmOnRevision() && head != "" && e.store.Attempts(key, dkind, head) == 0 {
 				e.log("%s re-engaging — the target moved to a new revision %s (agent parked on an older one)", tag(t), short(head))
+				// Retire the parked hand-off(s) first: re-engaging dispatches a
+				// fresh review, and the old revision's draft must not sit beside it.
+				if n := e.retireStaleHandoffs(ctx, t, key, "superseded by a review of "+short(head)); n > 0 {
+					e.log("%s retired %d stale hand-off(s) parked on an older revision", tag(t), n)
+				}
 			} else {
 				e.log("%s skipped — an agent is already working/parked for it", tag(t))
 				return

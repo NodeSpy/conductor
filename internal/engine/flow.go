@@ -544,6 +544,9 @@ func (e *Engine) flowAgentServices() flow.AgentServices {
 			}
 			e.notif.Emit(ctx, notify.EventNeedsInput, t,
 				fmt.Sprintf("interactive agent for %q is live (agent %s) — open it to review/refine", stepID, ref.AgentID))
+			// No ask channel: the agent is yours to drive in paseo, but the
+			// step's watch:/idle_timeout: still govern its lifetime.
+			e.startNativeHandoff(ctx, t, stepID, identity, p, ref.AgentID, actions)
 		},
 		Archive: func(agentID string) {
 			if e.affinityOwns(agentID) {

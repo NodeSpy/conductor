@@ -111,7 +111,8 @@ A broken condition is skipped, never fired. A fact step's read target
 The action steps:
 
 - **`uses: step.bail`** — the reason is gone. Tears the hand-off down (cancel
-  the agent, close the draft, release the hold) and stops watching. Use
+  the agent, close the draft, release the hold, archive the agent and its
+  workspace) and stops watching. Use
   it for `pr.merged`, `pr.state == "closed"`, or approved-elsewhere.
 - **`uses: step.rerun`** — re-running *this step* is enough. **Supersedes**:
   tears down, then re-dispatches the same step on the current state (surface-
@@ -132,6 +133,15 @@ signal, not a watch action (see below).
 
 `watch:` is subject-agnostic (the fact step names whatever read verb fits) and
 operator-owned: an agent-authored step may not set it.
+
+`watch:` and `idle_timeout:` apply whether or not the step names a `handoff:`
+channel — a hand-off with no channel (the agent is left live in paseo for you to
+drive) is watched and timed out the same way.
+
+A level-triggered review re-requested on a **new revision** while a hand-off
+for the same target and kind is still open re-engages: the open hand-off is
+released (closed, archived) before the new review dispatches. This also covers a
+hand-off armed before a daemon restart — the persisted hold identifies it.
 
 ## Cleaning up a finished hand-off (`step.done` / `idle_timeout`)
 
