@@ -59,7 +59,7 @@ That is `conductor watch`. The audit trail has the same rows.
 The **host set** of a dispatch:
 
 - **Built in**, each only if installed: `gh`, `aws`, `kubectl`, `docker`,
-  `terraform`, `gcloud`, `az`, `ssh`, `scp`, `npm`, `pnpm` (npm/pnpm only for
+  `terraform`, `gcloud`, `az`, `ssh`, `scp`, `npm`, `pnpm`, `vop` (npm/pnpm only for
   their publish/auth verbs; `npm install`, `npm test`, … run natively in the
   jail). `git` is not a shim: its network and signing side reach conductor
   through the remote helper and the signing shim (see [git](#git)).
@@ -110,7 +110,30 @@ isolation:
   profile sees the whole home by default; `paths` replaces that with exactly
   the list. A `persist` path must lie inside the narrowed view (a built-in
   profile's own persist default that falls outside it is just dropped).
-  Runtime/top-level only.
+  Runtime/top-level only. When more than one operator block sets it, the view
+  is what all of them allow: `~/.aws` and `~/.aws/orgA` give `~/.aws/orgA`,
+  and two that share nothing give nothing.
+
+  One member per org, each seeing only its own org's AWS files:
+
+  ```yaml
+  runtimes:
+    member_org_a:
+      use: acp
+      agent: claude-code
+      isolation:
+        host:
+          aws:
+            paths: ["~/.aws/orgA"]
+            env: { AWS_CONFIG_FILE: "~/.aws/orgA/config", AWS_SHARED_CREDENTIALS_FILE: "~/.aws/orgA/credentials" }
+          terraform:
+            paths: ["~/.aws/orgA", "~/.terraform.d"]
+            env: { AWS_CONFIG_FILE: "~/.aws/orgA/config", AWS_SHARED_CREDENTIALS_FILE: "~/.aws/orgA/credentials" }
+  ```
+
+  Org B's `~/.aws/orgB` isn't there for that member's `aws` or `terraform`.
+  `aws --profile orgB-…` fails because no file names that profile, not
+  because a rule caught the word.
 - `network` runs that binary's host process behind the same enforced egress
   proxy as the jail (Linux: an empty network namespace; macOS: Seatbelt).
   Absent, host commands keep the host's network.
@@ -287,6 +310,75 @@ granted separately (see [[Isolation#writes-are-bound-to-the-dispatchs-own-target
   checkout's `.git` is agent-writable and never trusted; the dispatch's
   objects reach conductor's git only as a conductor-owned copy, made without
   following symlinks.
+
+## vop {#vop}
+
+`vop exec <profile> -- <command>` runs a command with AWS credentials fetched
+from 1Password, so the profile judges two commands.
+
+- **vop's own subcommand.**
+  - Refused: the ones that reveal or change credentials or config, or open a
+    shell: `dump`, `cred-process`, `cat`, `add`, `edit`, `rm`, `rotate`,
+    `migrate`, `auth`, `serve`, `shell`, `unlock`, `refresh`.
+  - Run: `ls`, `profile`, `show`, `version`, `check`, `skill`, `test`.
+  - Anything unknown is refused.
+- **Pinned per member.** `exec` needs an explicit profile, and your config
+  must name it literally:
+
+  ```yaml
+  isolation:
+    host:
+      vop:
+        allow: ["exec orgA *"]   # this member's runtime may use profile orgA, and no other
+  ```
+
+  - A blanket `*` (or `exec *`) opens no profile.
+  - A bare `vop exec -- …` is refused: it would pick the profile from the
+    environment or a `.vop` file. `VOP_PROFILE` never reaches the host run.
+- **The inner command** must be `aws`, `terraform` or `kubectl`. It is
+  decided as that tool on its own: its guardrails, its
+  `isolation.host.<tool>` rules, `paths` and `env`, and its path guard.
+  - A content-executing one (`terraform plan`/`apply`) is refused under vop;
+    confined runs under vop aren't supported.
+- **Read-only by default.** Under vop the inner command may read
+  (`aws … describe-*`/`list-*`/`get-*`, `aws s3 ls`, `terraform state list`,
+  `kubectl get`, …). A write runs only if your allow list for that tool names
+  it literally: `isolation.host.aws.allow: ["*", "s3 cp *"]`. `*` alone
+  opens no write.
+
+## Approval grants {#grants}
+
+A command the broker would refuse because your allow list doesn't name it
+can run once you approve that exact command. The member gate mints a grant
+(`internal/grant`):
+- for one agent: its [[Paseo-Provider|provider identity]], or a cli worker's
+  dispatch;
+- for one tool and one argv;
+- pinned to the content of the files it names, short-lived, usually single-use.
+
+When the command comes:
+1. **The broker finds the grant.** It decides the command again as if your
+   allow list named it. A built-in guardrail, a `deny`, the path guard, a
+   closed target, and a step's own allow list still refuse it, and a
+   content-executing command still runs confined.
+2. **It copies each pinned file into private scratch**: a per-user `0700` dir
+   the jail never shows. It never follows a symlink and never reads outside
+   the workspace or the dispatch's `/tmp`. It hashes what it copied and checks
+   the approved digest. A mismatch is refused (`grant.ErrDigest`) and the
+   grant isn't used up.
+3. **It consumes the grant and runs the command** with those files named by
+   their private copies, read-only. The bytes it checked are the bytes the
+   tool reads.
+
+A second use of a single-use grant is refused (`grant.ErrConsumed`), and so
+is an expired grant. The audit row carries the grant id, approver and case.
+
+What counts as "the same command" is `grant.ParseArgv`:
+- words, and a bare flag's value (`-var-file prod.tfvars`), keep their order;
+- an extra or different word, flag or value is a different command;
+- self-contained `-k=v` / `--k=v` flags are compared as a set: across
+  different names their order doesn't matter, as it doesn't to the tool,
+  while values of one repeated flag keep their order.
 
 ## Tool-call hooks
 
