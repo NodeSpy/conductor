@@ -29,7 +29,7 @@ var builtConductor string
 func conductorBinary(t *testing.T) string {
 	t.Helper()
 	buildOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "conductor-jailtest-bin")
+		dir, err := newTestDir("conductor-jailtest-bin")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -108,11 +108,7 @@ func (f *fixture) provision(t *testing.T, id string, pr int, branch string) stri
 // whose history holds a blob only the remote has (OLD.txt), the dispatch
 // checkout for #42 provisioned by gitwt, and a fake `gh` on a host PATH dir.
 func newFixture(t *testing.T) *fixture {
-	// Outside /tmp: a host command's view replaces /tmp with the dispatch's
-	// own, and a real operator home is never under it.
-	base := filepath.Join(os.Getenv("HOME"), ".cache")
-	_ = os.MkdirAll(base, 0o700)
-	root, err := os.MkdirTemp(base, "conductor-jailtest-")
+	root, err := newTestDir("conductor-jailtest-")
 	if err != nil {
 		t.Fatal(err)
 	}
