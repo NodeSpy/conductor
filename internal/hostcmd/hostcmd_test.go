@@ -496,3 +496,23 @@ func TestPathGuardKernelInterfaces(t *testing.T) {
 		t.Fatalf("/dev/stdin: %q", d.Reason)
 	}
 }
+
+// Layered paths narrow by containment: a global ~/.aws and a runtime
+// ~/.aws/orgA leave ~/.aws/orgA; layers that share nothing leave nothing —
+// never the full view back.
+func TestHostPathsLayersNarrowByContainment(t *testing.T) {
+	global := &config.IsolationConfig{Host: map[string]*config.HostCommand{"aws": {Paths: []string{"~/.aws"}}}}
+	runtime := &config.IsolationConfig{Host: map[string]*config.HostCommand{"aws": {Paths: []string{"~/.aws/orgA"}}}}
+	if got := Resolve("aws", []*config.IsolationConfig{global, runtime}, false).Paths; len(got) != 1 || got[0] != ".aws/orgA" {
+		t.Fatalf("~/.aws ∩ ~/.aws/orgA = %v, want [.aws/orgA]", got)
+	}
+	other := &config.IsolationConfig{Host: map[string]*config.HostCommand{"aws": {Paths: []string{"~/.aws/orgB"}}}}
+	got := Resolve("aws", []*config.IsolationConfig{runtime, other}, false).Paths
+	if got == nil || len(got) != 0 {
+		t.Fatalf("disjoint layers narrow to nothing (non-nil, empty), got %#v", got)
+	}
+	paths, _, _, full := HomeView("aws", nil, got)
+	if full || len(paths) != 0 {
+		t.Fatalf("narrowed to nothing shows nothing: %v full=%v", paths, full)
+	}
+}

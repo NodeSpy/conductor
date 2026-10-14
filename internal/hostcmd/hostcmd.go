@@ -551,14 +551,27 @@ func intersectPaths(layers [][]string) []string {
 	}
 	cur := layers[0]
 	for _, next := range layers[1:] {
-		want := map[string]bool{}
-		for _, p := range next {
-			want[p] = true
+		// By containment, not string equality: a global ~/.aws and a
+		// runtime ~/.aws/orgA narrow to ~/.aws/orgA. Two layers that share
+		// nothing narrow to NOTHING — a non-nil empty list — never back to
+		// the full view.
+		keep := []string{}
+		add := func(p string) {
+			for _, k := range keep {
+				if k == p {
+					return
+				}
+			}
+			keep = append(keep, p)
 		}
-		var keep []string
-		for _, p := range cur {
-			if want[p] {
-				keep = append(keep, p)
+		for _, a := range cur {
+			for _, b := range next {
+				switch {
+				case withinAny(a, []string{b}):
+					add(a)
+				case withinAny(b, []string{a}):
+					add(b)
+				}
 			}
 		}
 		cur = keep

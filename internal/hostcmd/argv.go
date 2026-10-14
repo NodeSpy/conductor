@@ -181,7 +181,8 @@ var commonHome = []string{".gitconfig", ".config/git"}
 // all of home, for a binary without a profile), its persist paths, and its
 // fixed env. extraPersist are the operator's configured persist paths
 // (`~/…`). narrow is the resolved isolation.host.<tool>.paths (Rule.Paths,
-// already validated to lie within the profile's own view): when set, it
+// already validated to lie within the profile's own view): when set (non-nil
+// — an empty list narrows to nothing), it
 // REPLACES the default view with exactly those entries — a profiled tool
 // that otherwise saw commonHome+its own paths now sees only what narrow
 // names, an unprofiled tool (otherwise the whole home) sees only that —
@@ -193,13 +194,13 @@ func HomeView(tool string, extraPersist []string, narrow []string) (paths, persi
 		persist = append(persist, strings.TrimPrefix(p, "~/"))
 	}
 	if !ok {
-		if len(narrow) > 0 {
+		if narrow != nil {
 			return append([]string(nil), narrow...), dropOutside(persist, narrow), nil, false
 		}
 		return nil, persist, nil, true
 	}
 	persist = append(append([]string(nil), v.Persist...), persist...)
-	if len(narrow) > 0 {
+	if narrow != nil {
 		return append([]string(nil), narrow...), dropOutside(persist, narrow), v.Env, false
 	}
 	paths = append(append([]string(nil), commonHome...), v.Paths...)
