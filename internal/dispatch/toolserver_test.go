@@ -1,6 +1,8 @@
 package dispatch
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -58,6 +60,36 @@ func TestSkillEnv(t *testing.T) {
 	memory.SetToolCommand(nil)
 	if LocalSkillEndpoint() != "" {
 		t.Errorf("no tool command published → empty local endpoint")
+	}
+}
+
+// TestSkillEnvHandoffTokenSurvivesRestart: an interactive (hand-off) dispatch
+// gets a durable session — persisted, so the token in the waiting agent's env
+// still authorizes after the daemon restarts — and an ordinary dispatch's
+// token still dies with the daemon.
+func TestSkillEnvHandoffTokenSurvivesRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "handoff-sessions.json")
+	b := skill.NewBroker(nil, nil)
+	b.SetPersistPath(path)
+	skill.SetActive(b)
+	t.Cleanup(func() { skill.SetActive(nil) })
+
+	req := Request{
+		Action:  config.Action{Agent: "handoff"},
+		Trigger: core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "o/r", Number: 7}},
+	}
+	plain := SkillEnv(req, "unix:///run/c.sock")["CONDUCTOR_SKILL_TOKEN"]
+	req.Interactive = true
+	ho := SkillEnv(req, "unix:///run/c.sock")["CONDUCTOR_SKILL_TOKEN"]
+
+	restarted := skill.NewBroker(nil, nil)
+	restarted.SetPersistPath(path)
+	peer := skill.Peer{UID: uint32(os.Getuid()), Valid: true}
+	if _, err := restarted.Authorize(ho, peer); err != nil {
+		t.Fatalf("hand-off token rejected after a restart: %v", err)
+	}
+	if _, err := restarted.Authorize(plain, peer); err == nil {
+		t.Fatal("an ordinary dispatch token survived the restart")
 	}
 }
 

@@ -833,6 +833,11 @@ func cmdRun(args []string) error {
 					return "", false
 				}
 				sb := skill.NewBroker(lookup, st.Audit)
+				sb.SetLog(logf)
+				// Hand-off sessions persist across restarts (every auto-update
+				// is one): the token sits in a waiting agent's env, which
+				// conductor cannot rewrite.
+				sb.SetPersistPath(filepath.Join(filepath.Dir(cfg.Store.StateFile), "handoff-sessions.json"))
 				skill.SetActive(sb)
 				go sb.SweepLoop(ctx, 30*time.Second)
 				// Peer credentials come off each socket connection (kernel

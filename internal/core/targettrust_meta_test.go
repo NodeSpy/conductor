@@ -50,6 +50,8 @@ func TestOnlyAuditedSourcesClaimTargetTrust(t *testing.T) {
 		"internal/memory/scopeguard.go": "memory.Caller applies the rule at construction so no face holds a raw repo",
 		"internal/memory/harvest.go":    "the output-contract face applies the rule through NewAgentCaller",
 		"internal/skill/broker.go":      "skill.Identity declares the field it carries for a minted session",
+		"internal/skill/persist.go": "a durable hand-off session round-trips the bit the daemon minted it " +
+			"with (0600 state file, keyed by token hash); it never derives it",
 	}
 	root := repoRootFor(t)
 	claims := map[string]bool{}

@@ -11,6 +11,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/skill"
 )
 
 func TestMatchWatch(t *testing.T) {
@@ -300,5 +301,33 @@ func TestHandoffWatchSupersede(t *testing.T) {
 			waitFor(t, func() bool { return atomic.LoadInt32(&hit) > 0 })
 			waitFor(t, func() bool { return !e.hold.Has("old") })
 		})
+	}
+}
+
+// TestReleaseRevokesHandoffSession: a released hand-off's conductor session
+// token dies with it — it is durable (persisted, sliding) only while the
+// hand-off is open.
+func TestReleaseRevokesHandoffSession(t *testing.T) {
+	b := skill.NewBroker(nil, nil)
+	prev := skill.Active()
+	skill.SetActive(b)
+	defer skill.SetActive(prev)
+	tok, err := b.MintHandoffSession(skill.Identity{Dispatch: "d-9"}, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := skill.Peer{UID: 1000, Valid: true}
+	if _, err := b.Authorize(tok, peer); err != nil {
+		t.Fatal(err)
+	}
+	disp := &fakeDispatcher{archived: make(chan string, 1), agentDisps: map[string][]string{"a9": {"d-9"}}}
+	e := &Engine{log: func(string, ...any) {}, hold: dispatch.NewHoldSet(""), disp: disp}
+	_, cancel := context.WithCancel(context.Background())
+	e.registerLiveHandoff("a9", cancel, "o/r#9", "review_requested", "handoff")
+	if err := e.handoffDone(context.Background(), "a9", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Authorize(tok, peer); err == nil {
+		t.Fatal("a released hand-off's session token still authorizes")
 	}
 }

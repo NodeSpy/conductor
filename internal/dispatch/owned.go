@@ -102,6 +102,23 @@ func (o *OwnedSet) AgentForDispatch(dispatchID string) string {
 	return o.dispatches[dispatchID]
 }
 
+// DispatchesForAgent lists the dispatch ids bound to an agent — the reverse of
+// AgentForDispatch, used to revoke a released hand-off's session token.
+func (o *OwnedSet) DispatchesForAgent(agentID string) []string {
+	if o == nil || agentID == "" {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var ids []string
+	for d, a := range o.dispatches {
+		if a == agentID {
+			ids = append(ids, d)
+		}
+	}
+	return ids
+}
+
 // HasWorkspace reports whether conductor created this workspace.
 func (o *OwnedSet) HasWorkspace(id string) bool {
 	if o == nil {
