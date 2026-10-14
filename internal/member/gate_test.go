@@ -169,6 +169,30 @@ func TestGateReversiblePromotion(t *testing.T) {
 	if v, _ := check(t, f, homeID(), "pd.snooze", nil); v.Allow {
 		t.Fatal("unpromoted reversible verb ran")
 	}
+	// The HOME session: while a third party's case is open, its calls run on
+	// that third party's trust — so the promoted verb becomes a proposal,
+	// attributed to that requester and case.
+	v, _ := check(t, f, homeID(), "pd.ack", nil)
+	if v.Allow {
+		t.Fatal("home ran a promoted verb while a third party's request was open")
+	}
+	p := f.st.Member("sre").Proposals[v.Output["proposal"].(string)]
+	if p.RequesterClass != ReqUser || p.Requester != "user-x" || p.CaseID != c {
+		t.Fatalf("home proposal attribution: %+v", p)
+	}
+	// Close the third party's cases: the home session is back on its own
+	// (and the operator's/event's) trust.
+	_ = f.st.UpdateMember("sre", func(r *store.MemberRecord) error {
+		for _, cc := range r.Cases {
+			if cc.RequesterClass == ReqUser {
+				cc.Status = "closed"
+			}
+		}
+		return nil
+	})
+	if v, _ := check(t, f, homeID(), "pd.ack", nil); !v.Allow {
+		t.Fatal("home stayed capped after the third party's case closed")
+	}
 }
 
 func TestGatePromotionRequiresJail(t *testing.T) {

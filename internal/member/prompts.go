@@ -111,6 +111,9 @@ const homeRules = `
     conductor member case open --title "…" [--summary "…"]
     conductor member case note <case> --text "…"
     conductor member case close <case> --outcome "…"
+  While a case from someone other than your operator is open, everything
+  you do runs on THAT requester's trust (the gate attributes it so) — close
+  cases when they are done.
 - Delegate real work to a WORKER (a background agent with your same
   permissions — never more), with a written brief and done criteria:
     conductor member spawn --case <id> --brief "…"

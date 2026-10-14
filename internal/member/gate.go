@@ -194,7 +194,7 @@ func (g *Gate) CheckVerb(ctx context.Context, id flow.SkillIdentity, uses string
 		return flow.MemberVerdict{Allow: true}, nil
 	}
 
-	class := g.requesterClass(id)
+	class, _, _ := g.requester(id)
 	switch tier {
 	case config.TierObserve:
 		return flow.MemberVerdict{Allow: true}, nil
@@ -231,23 +231,46 @@ func (g *Gate) autonomous(m config.MemberConfig, uses, class string) bool {
 	return class != ReqUser
 }
 
-// requesterClass is what the ledger says about who asked for the caller's
-// case. A worker's case is bound at launch; a home-session call names no
-// case and counts as the member's own.
-func (g *Gate) requesterClass(id flow.SkillIdentity) string {
-	if id.CaseID == "" {
-		if id.MemberRole == config.MemberRoleWorker {
-			// A worker with no case binding is an anomaly: least trust.
-			return ReqUser
-		}
-		return ReqMember
-	}
+// requesterRank orders requester classes by trust (least first).
+var requesterRank = map[string]int{ReqUser: 0, ReqEvent: 1, ReqMember: 2, ReqOperator: 3}
+
+// requester is who the gate holds responsible for a call: its class (what
+// caps autonomy), the requester's name, and the case it comes from.
+//
+// A WORKER is bound to its case at launch, so its case's requester is it. A
+// HOME session's call names no case — it acts on a conversation that mixes
+// the operator, events and third parties — so it is attributed to the
+// LEAST-TRUSTED requester among the member's open cases: while a third
+// party's request is open, nothing the home session does runs on more trust
+// than that third party's. No open case: the member's own initiative.
+func (g *Gate) requester(id flow.SkillIdentity) (class, who, caseID string) {
 	rec := g.Ledger.Member(id.Member)
-	c := rec.Cases[id.CaseID]
-	if c == nil || c.RequesterClass == "" {
-		return ReqUser
+	if id.MemberRole == config.MemberRoleWorker {
+		c := rec.Cases[id.CaseID]
+		if id.CaseID == "" || c == nil || c.RequesterClass == "" {
+			// A worker with no (or an unknown) case binding is an anomaly:
+			// least trust.
+			return ReqUser, "", id.CaseID
+		}
+		return c.RequesterClass, c.Requester, c.ID
 	}
-	return c.RequesterClass
+	class = ReqMember
+	for _, c := range rec.Cases {
+		if c.Status != "open" {
+			continue
+		}
+		r, ok := requesterRank[c.RequesterClass]
+		if !ok {
+			r = 0
+		}
+		if r < requesterRank[class] || r == requesterRank[class] && caseID != "" && c.ID < caseID {
+			class, who, caseID = c.RequesterClass, c.Requester, c.ID
+			if !ok {
+				class = ReqUser
+			}
+		}
+	}
+	return class, who, caseID
 }
 
 // amountOf reads a commit-money verb's typed amount.
@@ -329,6 +352,7 @@ func (g *Gate) propose(id flow.SkillIdentity, m config.MemberConfig, tier, uses 
 	if err != nil {
 		return flow.MemberVerdict{}, err
 	}
+	class, who, caseID := g.requester(id)
 	now := g.now()
 	status := "pending"
 	if m.Autonomy.ShadowMode() {
@@ -342,12 +366,12 @@ func (g *Gate) propose(id flow.SkillIdentity, m config.MemberConfig, tier, uses 
 			Role: id.MemberRole, Agent: id.Agent, Dispatch: id.Dispatch, Identity: idJSON,
 			Status: status, Created: now, Expires: now.Add(m.Autonomy.TTL()),
 		}
-		if c := r.Cases[id.CaseID]; c != nil {
-			p.Requester, p.RequesterClass = c.Requester, c.RequesterClass
+		p.RequesterClass = class
+		p.Requester = who
+		if c := r.Cases[caseID]; c != nil {
+			p.CaseID = caseID
 			c.Proposals = append(c.Proposals, p.ID)
 			c.Updated = now
-		} else {
-			p.RequesterClass = ReqMember
 		}
 		if r.Proposals == nil {
 			r.Proposals = map[string]*store.Proposal{}
