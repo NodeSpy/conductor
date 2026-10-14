@@ -151,6 +151,10 @@ type Config struct {
 	// with provenance and scope, written by verbs/agents and injected into
 	// opted-in agent prompts. Nil = memory not configured (no default).
 	Memory    *MemoryConfig          `yaml:"memory"`
+	// Operators are the humans who may approve member proposals, and Members
+	// the persistent conversational agents (members.go). Both optional.
+	Operators map[string]OperatorConfig `yaml:"operators"`
+	Members   map[string]MemberConfig   `yaml:"members"`
 	Workflows map[string]WorkflowDef `yaml:"workflows"`
 	// Triggers is the `triggers:` section. It decodes from the list form or
 	// the named/qualified MAP form, where the key is the trigger's stable
@@ -932,6 +936,12 @@ func Load(path string) (*Config, error) {
 	// Trigger `extends:` resolves + abstract bases are stripped BEFORE
 	// normalization, so a child can inherit a base's `on:` and bases (which may
 	// carry no `on:`) never reach the on:-required / manual-name checks.
+	// Each member expands into its two synthesized worker triggers (`on:
+	// manual`), here so they pass through normalization and validation like
+	// any trigger the operator wrote. No-op without `members:`.
+	if err := c.expandMembers(); err != nil {
+		return nil, err
+	}
 	if err := c.resolveTriggerExtends(); err != nil {
 		return nil, err
 	}
@@ -1263,6 +1273,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateSessions(); err != nil {
+		return err
+	}
+	if err := c.validateMembers(); err != nil {
 		return err
 	}
 	if c.Policy != nil {

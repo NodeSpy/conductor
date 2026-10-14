@@ -190,6 +190,9 @@ type Runner struct {
 	Cfg     *config.Config
 	Conns   *connector.Registry
 	Agents  AgentServices
+	// Members is the member autonomy gate (nil when no member is configured;
+	// a member-bound skill grant then fails closed).
+	Members MemberGate
 	Code    *code.Executor
 	Secrets *secrets.Resolver
 	// SecretVals are the resolved named secrets: values ({{.secrets.<name>}}).

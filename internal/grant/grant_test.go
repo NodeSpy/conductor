@@ -281,3 +281,20 @@ func TestMemStoreConsumeIsAtomic(t *testing.T) {
 		t.Fatalf("%d concurrent uses succeeded, want 1", wins.Load())
 	}
 }
+
+func TestParseArgv(t *testing.T) {
+	a := ParseArgv([]string{"apply", "-input=false", "--var=x=1", "plan.tfplan"})
+	if !a.Equal(Argv{Words: []string{"apply", "plan.tfplan"}, Flags: map[string][]string{"-input": {"false"}, "--var": {"x=1"}}}) {
+		t.Fatalf("parse = %+v", a)
+	}
+	// A bare flag and its value stay positional, so reordering them is a
+	// different command.
+	x := ParseArgv([]string{"apply", "-var-file", "a.tfvars", "plan"})
+	y := ParseArgv([]string{"apply", "a.tfvars", "-var-file", "plan"})
+	if x.Equal(y) {
+		t.Fatal("reordered bare flag parsed equal")
+	}
+	if z := ParseArgv([]string{"-", "--", "-="}); len(z.Flags) != 0 || len(z.Words) != 3 {
+		t.Fatalf("edge tokens: %+v", z)
+	}
+}

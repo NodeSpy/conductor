@@ -75,6 +75,10 @@ type Store struct {
 	engagements  map[string][]Engagement
 	outcomeStats map[string]map[string]int
 	ciFailed     map[string]ciFailMark
+
+	// Member case ledger (members.go).
+	members         map[string]*MemberRecord
+	membersDegraded bool
 }
 
 // Options configure a Store.
@@ -160,6 +164,7 @@ func Open(o Options) (*Store, error) {
 		return nil, err
 	}
 	s.loadOutcomeState()
+	s.loadMembers()
 	a, err := openAudit(o.AuditPath, o.AuditMaxSize)
 	if err != nil {
 		return nil, err

@@ -963,6 +963,13 @@ type Step struct {
 	// detach is a capability the operator grants, never one an agent can take
 	// for itself. Needs a paseo runtime.
 	Detach bool `yaml:"detach,omitempty"`
+	// Member / MemberRole mark a step SYNTHESIZED for a member's workers
+	// (members.go expandMembers): the session token minted for it carries the
+	// member binding, which is what puts every verb it calls through that
+	// member's autonomy gate. Never decoded from YAML — an operator cannot
+	// write it and an agent-authored plan cannot claim it.
+	Member     string `yaml:"-"`
+	MemberRole string `yaml:"-"`
 
 	// command form (also carries workdir/env for agent/code forms), and the
 	// argv the `cli` engine runs. A list of words, or one string (see Argv).

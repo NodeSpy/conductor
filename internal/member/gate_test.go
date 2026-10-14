@@ -1,0 +1,499 @@
+package member
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/flow"
+	"github.com/NodeSpy/conductor/internal/grant"
+	"github.com/NodeSpy/conductor/internal/store"
+)
+
+type fixedJail bool
+
+func (j fixedJail) Active() bool { return bool(j) }
+
+var gateNow = time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+
+func boolp(b bool) *bool { return &b }
+
+func testMember() config.MemberConfig {
+	return config.MemberConfig{
+		Skill: &config.SkillPolicy{Verbs: []string{"*"}},
+		Autonomy: config.MemberAutonomy{
+			Shadow: boolp(false),
+			Tiers: map[string][]string{
+				config.TierObserve:     {"pd.get_*", "aws.describe_*"},
+				config.TierReversible:  {"pd.ack", "pd.snooze"},
+				config.TierCommitMoney: {"aws.purchase_*"},
+				config.TierNever:       {"aws.iam_*", "pd.get_secret"},
+			},
+			Promote:  []string{"pd.ack"},
+			Amounts:  map[string]string{"aws.purchase_*": "total_usd"},
+			SpendCap: &config.SpendCap{PerAction: 100, PerPeriod: 150},
+		},
+	}
+}
+
+type gateFixture struct {
+	cfg  *config.Config
+	st   *store.Store
+	gate *Gate
+	now  time.Time
+}
+
+func newGateFixture(t *testing.T, m config.MemberConfig, jailed bool) *gateFixture {
+	t.Helper()
+	st, err := store.Open(store.Options{StatePath: filepath.Join(t.TempDir(), "state.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &gateFixture{
+		cfg: &config.Config{Members: map[string]config.MemberConfig{"sre": m},
+			Operators: map[string]config.OperatorConfig{"op": {SSHKey: "ssh-ed25519 AAAA"}}},
+		st: st, now: gateNow,
+	}
+	f.gate = &Gate{Cfg: func() *config.Config { return f.cfg }, Ledger: st, Jail: fixedJail(jailed), Now: func() time.Time { return f.now }}
+	return f
+}
+
+func (f *gateFixture) openCase(t *testing.T, class string) string {
+	t.Helper()
+	var id string
+	if err := f.st.UpdateMember("sre", func(r *store.MemberRecord) error {
+		id = r.NextID("c")
+		if r.Cases == nil {
+			r.Cases = map[string]*store.Case{}
+		}
+		r.Cases[id] = &store.Case{ID: id, Status: "open", RequesterClass: class, Requester: class + "-x"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func homeID() flow.SkillIdentity {
+	return flow.SkillIdentity{Member: "sre", MemberRole: config.MemberRoleHome, Agent: "member:sre", Dispatch: "d-home", Verbs: []string{"*"}}
+}
+
+func workerID(caseID string) flow.SkillIdentity {
+	return flow.SkillIdentity{Member: "sre", MemberRole: config.MemberRoleWorker, Agent: "member:sre:worker", Dispatch: "d-w", CaseID: caseID, Verbs: []string{"*"}}
+}
+
+func TestClassify(t *testing.T) {
+	m := testMember()
+	for uses, want := range map[string]string{
+		"pd.get_incident":       config.TierObserve,
+		"pd.ack":                config.TierReversible,
+		"aws.purchase_sp":       config.TierCommitMoney,
+		"aws.iam_attach":        config.TierNever,
+		"gh.comment":            config.TierPropose, // unclassified → propose
+		"step.done":             config.TierObserve, // own-dispatch self-service
+		"handoff.done":          config.TierObserve,
+		"pd.get_secret":         config.TierNever, // strictest of observe+never wins
+		"aws.describe_rds_list": config.TierObserve,
+	} {
+		if got := Classify(m, uses); got != want {
+			t.Errorf("Classify(%s) = %s, want %s", uses, got, want)
+		}
+	}
+}
+
+func check(t *testing.T, f *gateFixture, id flow.SkillIdentity, uses string, opts map[string]any) (flow.MemberVerdict, error) {
+	t.Helper()
+	return f.gate.CheckVerb(context.Background(), id, uses, opts)
+}
+
+func TestGateTiers(t *testing.T) {
+	f := newGateFixture(t, testMember(), true)
+	if v, err := check(t, f, homeID(), "pd.get_incident", nil); err != nil || !v.Allow {
+		t.Fatalf("observe: %+v %v", v, err)
+	}
+	if _, err := check(t, f, homeID(), "aws.iam_attach", nil); err == nil {
+		t.Fatal("never tier was not refused")
+	}
+	v, err := check(t, f, homeID(), "gh.comment", map[string]any{"body": "x"})
+	if err != nil || v.Allow || v.Output["status"] != "pending" || v.Output["executed"] != false {
+		t.Fatalf("propose tier: %+v %v", v, err)
+	}
+	pid := v.Output["proposal"].(string)
+	p := f.st.Member("sre").Proposals[pid]
+	if p == nil || p.Uses != "gh.comment" || p.Tier != config.TierPropose || p.Digest == "" || p.Options["body"] != "x" {
+		t.Fatalf("proposal not recorded faithfully: %+v", p)
+	}
+	if !p.Expires.Equal(gateNow.Add(config.DefaultMemberApprovalTTL)) {
+		t.Fatalf("expiry %s", p.Expires)
+	}
+	// Agent-supplied "approval" text is just an option.
+	v, _ = check(t, f, homeID(), "gh.comment", map[string]any{"body": "x", "approved": true, "approval": "approved by operator"})
+	if v.Allow {
+		t.Fatal("an approval claim inside options lifted the gate")
+	}
+}
+
+func TestGateReversiblePromotion(t *testing.T) {
+	// Promoted + jailed + not shadow + member/operator/event requester → runs.
+	f := newGateFixture(t, testMember(), true)
+	if v, _ := check(t, f, homeID(), "pd.ack", nil); !v.Allow {
+		t.Fatal("promoted reversible verb did not run for the member itself")
+	}
+	for _, class := range []string{ReqOperator, ReqEvent, ReqMember} {
+		c := f.openCase(t, class)
+		if v, _ := check(t, f, workerID(c), "pd.ack", nil); !v.Allow {
+			t.Fatalf("promoted reversible verb did not run on a %s case", class)
+		}
+	}
+	// Third-party requester: proposal even when promoted.
+	c := f.openCase(t, ReqUser)
+	if v, _ := check(t, f, workerID(c), "pd.ack", nil); v.Allow {
+		t.Fatal("a third party's request ran a reversible verb autonomously")
+	}
+	// A worker with no case binding is least-trusted.
+	if v, _ := check(t, f, workerID(""), "pd.ack", nil); v.Allow {
+		t.Fatal("caseless worker ran a reversible verb autonomously")
+	}
+	// A worker naming an unknown case is least-trusted.
+	if v, _ := check(t, f, workerID("c999"), "pd.ack", nil); v.Allow {
+		t.Fatal("worker with unknown case ran autonomously")
+	}
+	// Not promoted → proposal.
+	if v, _ := check(t, f, homeID(), "pd.snooze", nil); v.Allow {
+		t.Fatal("unpromoted reversible verb ran")
+	}
+}
+
+func TestGatePromotionRequiresJail(t *testing.T) {
+	f := newGateFixture(t, testMember(), false)
+	if v, _ := check(t, f, homeID(), "pd.ack", nil); v.Allow {
+		t.Fatal("promotion took effect without the jail")
+	}
+}
+
+func TestGateShadowMode(t *testing.T) {
+	m := testMember()
+	m.Autonomy.Shadow = nil // unset = shadow (new members start in shadow)
+	f := newGateFixture(t, m, true)
+	v, _ := check(t, f, homeID(), "pd.ack", nil)
+	if v.Allow || v.Output["status"] != "shadow" {
+		t.Fatalf("shadow mode ran a promoted verb or recorded a non-shadow proposal: %+v", v)
+	}
+	if v, _ := check(t, f, homeID(), "pd.get_incident", nil); !v.Allow {
+		t.Fatal("shadow mode blocked observe")
+	}
+	if v, _ := check(t, f, homeID(), "gh.comment", nil); v.Output["status"] != "shadow" {
+		t.Fatalf("shadow proposal status = %v", v.Output["status"])
+	}
+}
+
+func TestGateSpendCap(t *testing.T) {
+	f := newGateFixture(t, testMember(), true)
+	if _, err := check(t, f, homeID(), "aws.purchase_sp", map[string]any{}); err == nil {
+		t.Fatal("commit_money without amount accepted")
+	}
+	for _, bad := range []any{"50", -1.0, 0.0, true} {
+		if _, err := check(t, f, homeID(), "aws.purchase_sp", map[string]any{"total_usd": bad}); err == nil {
+			t.Fatalf("amount %v accepted", bad)
+		}
+	}
+	if _, err := check(t, f, homeID(), "aws.purchase_sp", map[string]any{"total_usd": 100.01}); err == nil {
+		t.Fatal("amount over per_action accepted")
+	}
+	v, err := check(t, f, homeID(), "aws.purchase_sp", map[string]any{"total_usd": 100.0})
+	if err != nil || v.Allow {
+		t.Fatalf("at-cap amount: %+v %v (want a proposal, never autonomous)", v, err)
+	}
+	p := f.st.Member("sre").Proposals[v.Output["proposal"].(string)]
+	if p.Amount != 100 || p.Tier != config.TierCommitMoney {
+		t.Fatalf("proposal amount/tier: %+v", p)
+	}
+	// Period cap: 100 already spent inside the window.
+	_ = f.st.UpdateMember("sre", func(r *store.MemberRecord) error {
+		r.Spend = append(r.Spend, store.SpendEntry{At: gateNow.Add(-time.Hour), Amount: 100}, store.SpendEntry{At: gateNow.Add(-800 * time.Hour), Amount: 1000})
+		return nil
+	})
+	if _, err := check(t, f, homeID(), "aws.purchase_sp", map[string]any{"total_usd": 51}); err == nil {
+		t.Fatal("period cap not enforced")
+	}
+	if _, err := check(t, f, homeID(), "aws.purchase_sp", map[string]any{"total_usd": 50}); err != nil {
+		t.Fatalf("spend outside the window counted: %v", err)
+	}
+}
+
+// ---- approvals ----
+
+type opKey struct{ priv, pub string }
+
+func genKey(t *testing.T, name string) opKey {
+	t.Helper()
+	if _, err := exec.LookPath("ssh-keygen"); err != nil {
+		t.Skip("ssh-keygen not installed")
+	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, name)
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", name, "-f", p).CombinedOutput(); err != nil {
+		t.Fatalf("keygen: %v %s", err, out)
+	}
+	pub, err := os.ReadFile(p + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return opKey{priv: p, pub: strings.TrimSpace(string(pub))}
+}
+
+type execFixture struct {
+	*gateFixture
+	x      *Executor
+	grants *grant.MemStore
+	ran    []string
+	op     opKey
+}
+
+func newExecFixture(t *testing.T, m config.MemberConfig) *execFixture {
+	f := &execFixture{gateFixture: newGateFixture(t, m, true), op: genKey(t, "op")}
+	f.cfg.Operators = map[string]config.OperatorConfig{"op": {SSHKey: f.op.pub}}
+	f.grants = grant.NewMemStoreClock(func() time.Time { return f.now })
+	f.x = &Executor{
+		Cfg: func() *config.Config { return f.cfg }, Ledger: f.st, Gate: f.gate, Grants: f.grants,
+		Now: func() time.Time { return f.now },
+		// The real chokepoint's member step: the gate decides, then "run".
+		RunVerb: func(ctx context.Context, id flow.SkillIdentity, uses string, opts map[string]any) (map[string]any, error) {
+			v, err := f.gate.CheckVerb(ctx, id, uses, opts)
+			if err != nil {
+				return nil, err
+			}
+			if !v.Allow {
+				return nil, errors.New("gate did not admit the approved call")
+			}
+			f.ran = append(f.ran, uses)
+			return map[string]any{"ok": true}, nil
+		},
+	}
+	return f
+}
+
+func (f *execFixture) sign(t *testing.T, key opKey, pid, decision string) string {
+	t.Helper()
+	p := f.st.Member("sre").Proposals[pid]
+	sig, err := SignApproval(context.Background(), key.priv, ApprovalPayload("sre", pid, p.Digest, decision))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sig
+}
+
+func (f *execFixture) propose(t *testing.T, uses string, opts map[string]any) string {
+	t.Helper()
+	v, err := check(t, f.gateFixture, homeID(), uses, opts)
+	if err != nil || v.Allow {
+		t.Fatalf("expected proposal: %+v %v", v, err)
+	}
+	return v.Output["proposal"].(string)
+}
+
+func TestApproveRunsExactlyTheSignedAction(t *testing.T) {
+	f := newExecFixture(t, testMember())
+	pid := f.propose(t, "gh.comment", map[string]any{"body": "hi"})
+	out, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, pid, "approve")})
+	if err != nil || out.Status != "executed" || out.Approver != "op" {
+		t.Fatalf("approve: %+v %v", out, err)
+	}
+	if len(f.ran) != 1 || f.ran[0] != "gh.comment" {
+		t.Fatalf("ran %v", f.ran)
+	}
+	// Replaying the same approval does nothing.
+	if _, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, pid, "approve")}); err == nil {
+		t.Fatal("approved twice")
+	}
+	if len(f.ran) != 1 {
+		t.Fatal("double execution")
+	}
+}
+
+func TestApproveRefusesSelfApprovalAndForgery(t *testing.T) {
+	f := newExecFixture(t, testMember())
+	pid := f.propose(t, "gh.comment", map[string]any{"body": "hi"})
+	mallory := genKey(t, "mallory")
+	cases := map[string]Decision{
+		// The agent "approving" by echoing text: no signature at all.
+		"no signature": {Operator: "op", Signature: ""},
+		"echoed text":  {Operator: "op", Signature: "approved"},
+		// A key the agent controls, claiming to be the operator.
+		"wrong key": {Operator: "op", Signature: f.sign(t, mallory, pid, "approve")},
+		// The operator's signature over a DENY, presented as an approve.
+		"decision swap": {Operator: "op", Signature: f.sign(t, f.op, pid, "deny")},
+		// Not an operator of this member.
+		"non-operator": {Operator: "mallory", Signature: f.sign(t, mallory, pid, "approve")},
+	}
+	for name, d := range cases {
+		d.Member, d.Proposal, d.Decision = "sre", pid, "approve"
+		if _, err := f.x.Decide(context.Background(), d); err == nil {
+			t.Errorf("%s: approval accepted", name)
+		}
+	}
+	// A signature for proposal A does not approve proposal B.
+	pid2 := f.propose(t, "gh.comment", map[string]any{"body": "other"})
+	if _, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid2, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, pid, "approve")}); err == nil {
+		t.Error("signature replayed across proposals")
+	}
+	if len(f.ran) != 0 {
+		t.Fatalf("something ran: %v", f.ran)
+	}
+	if st := f.st.Member("sre").Proposals[pid].Status; st != "pending" {
+		t.Fatalf("refused approvals changed status to %s", st)
+	}
+}
+
+func TestApproveRefusesTamperedAction(t *testing.T) {
+	f := newExecFixture(t, testMember())
+	pid := f.propose(t, "gh.comment", map[string]any{"body": "hi"})
+	sig := f.sign(t, f.op, pid, "approve")
+	// The stored action changes after signing (ledger tamper): the signed
+	// digest no longer matches what would run.
+	_ = f.st.UpdateMember("sre", func(r *store.MemberRecord) error {
+		r.Proposals[pid].Options = map[string]any{"body": "something else"}
+		return nil
+	})
+	out, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: sig})
+	if err == nil && out.Status == "executed" {
+		t.Fatal("tampered action executed")
+	}
+	if len(f.ran) != 0 {
+		t.Fatal("tampered action ran")
+	}
+}
+
+func TestApproveShadowExpiryDeny(t *testing.T) {
+	m := testMember()
+	m.Autonomy.Shadow = nil
+	f := newExecFixture(t, m)
+	pid := f.propose(t, "gh.comment", nil)
+	if _, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, pid, "approve")}); err == nil {
+		t.Fatal("shadow proposal approved")
+	}
+	f.cfg.Members["sre"] = testMember()
+	pid = f.propose(t, "gh.comment", nil)
+	f.now = f.now.Add(config.DefaultMemberApprovalTTL)
+	if _, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, pid, "approve")}); err == nil {
+		t.Fatal("expired proposal approved")
+	}
+	if st := f.st.Member("sre").Proposals[pid].Status; st != "expired" {
+		t.Fatalf("status %s", st)
+	}
+	f.now = gateNow
+	pid = f.propose(t, "gh.comment", nil)
+	out, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "deny", Signature: f.sign(t, f.op, pid, "deny")})
+	if err != nil || out.Status != "denied" || len(f.ran) != 0 {
+		t.Fatalf("deny: %+v %v ran=%v", out, err, f.ran)
+	}
+}
+
+func TestApproveSpendRecordedAndRechecked(t *testing.T) {
+	f := newExecFixture(t, testMember())
+	a := f.propose(t, "aws.purchase_sp", map[string]any{"total_usd": 100.0})
+	b := f.propose(t, "aws.purchase_sp", map[string]any{"total_usd": 100.0})
+	if out, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: a, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, a, "approve")}); err != nil || out.Status != "executed" {
+		t.Fatalf("first purchase: %+v %v", out, err)
+	}
+	if sp := f.st.Member("sre").Spend; len(sp) != 1 || sp[0].Amount != 100 || sp[0].Proposal != a {
+		t.Fatalf("spend not recorded: %+v", sp)
+	}
+	// Both were under the cap when proposed; together they exceed per_period.
+	out, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: b, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, b, "approve")})
+	if err == nil || out.Status == "executed" {
+		t.Fatalf("second purchase overshot the period cap: %+v %v", out, err)
+	}
+	if len(f.ran) != 1 {
+		t.Fatalf("ran %v", f.ran)
+	}
+}
+
+func TestApproveCommandMintsGrant(t *testing.T) {
+	f := newExecFixture(t, testMember())
+	var pid string
+	_ = f.st.UpdateMember("sre", func(r *store.MemberRecord) error {
+		pid = r.NextID("p")
+		r.Proposals = map[string]*store.Proposal{pid: {
+			ID: pid, Kind: "command", Tier: config.TierPropose, Tool: "terraform",
+			Argv: []string{"apply", "-input=false", "plan.tfplan"}, Files: map[string]string{"plan.tfplan": strings.Repeat("a", 64)},
+			Digest: "d1", Dispatch: "d-w", AgentID: "agent-w", CaseID: "c1", Status: "pending", Created: gateNow, Expires: gateNow.Add(time.Hour),
+		}}
+		return nil
+	})
+	out, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, pid, "approve")})
+	if err != nil || out.Status != "executed" || out.Grant == "" {
+		t.Fatalf("command approve: %+v %v", out, err)
+	}
+	g, err := f.grants.Get(context.Background(), out.Grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Tool != "terraform" || g.Dispatch != "d-w" || g.AgentID != "agent-w" || !g.SingleUse || g.ApprovedBy != "op" || g.CaseID != "c1" {
+		t.Fatalf("grant: %+v", g)
+	}
+	if !g.Argv.Equal(grant.ParseArgv([]string{"apply", "-input=false", "plan.tfplan"})) || len(g.FileDigests) != 1 {
+		t.Fatalf("grant argv/digests: %+v", g)
+	}
+	if !g.Expiry.Equal(gateNow.Add(time.Hour)) {
+		t.Fatalf("grant expiry %s", g.Expiry)
+	}
+	found, _ := f.grants.Find(context.Background(), grant.Presented{AgentID: "agent-w", Dispatch: "d-w", Tool: "terraform", Argv: grant.ParseArgv([]string{"apply", "-input=false", "plan.tfplan"})})
+	if len(found) != 1 {
+		t.Fatal("broker would not find the minted grant")
+	}
+}
+
+func TestApprovedContextAdmitsOnlyItsAction(t *testing.T) {
+	f := newExecFixture(t, testMember())
+	pid := f.propose(t, "gh.comment", map[string]any{"body": "hi"})
+	p := f.st.Member("sre").Proposals[pid]
+	// Even with the proposal approved in the ledger, an approval context for
+	// it does not admit a different action.
+	_ = f.st.UpdateMember("sre", func(r *store.MemberRecord) error { r.Proposals[pid].Status = "approved"; return nil })
+	ctx := withApproved(context.Background(), "sre", pid, p.Digest)
+	if _, err := f.gate.CheckVerb(ctx, homeID(), "gh.comment", map[string]any{"body": "bye"}); err == nil {
+		t.Fatal("approval context admitted a different action")
+	}
+	if v, err := f.gate.CheckVerb(ctx, homeID(), "gh.comment", map[string]any{"body": "hi"}); err != nil || !v.Allow {
+		t.Fatalf("approval context refused its own action: %v", err)
+	}
+	// Pending (not approved) → refused even with a matching context.
+	_ = f.st.UpdateMember("sre", func(r *store.MemberRecord) error { r.Proposals[pid].Status = "pending"; return nil })
+	if _, err := f.gate.CheckVerb(ctx, homeID(), "gh.comment", map[string]any{"body": "hi"}); err == nil {
+		t.Fatal("approval context admitted a pending proposal")
+	}
+	// never stays never even inside an approval context.
+	if _, err := f.gate.CheckVerb(ctx, homeID(), "aws.iam_attach", nil); err == nil {
+		t.Fatal("never tier admitted")
+	}
+}
+
+func TestDegradedLedgerRefusesMoney(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "members.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(store.Options{StatePath: filepath.Join(dir, "state.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.MembersDegraded() {
+		t.Fatal("corrupt ledger not flagged")
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "members.json.corrupt-*"))
+	if len(matches) != 1 {
+		t.Fatal("corrupt ledger not preserved")
+	}
+	cfg := &config.Config{Members: map[string]config.MemberConfig{"sre": testMember()}}
+	g := &Gate{Cfg: func() *config.Config { return cfg }, Ledger: st, Jail: fixedJail(true), Now: func() time.Time { return gateNow }}
+	if _, err := g.CheckVerb(context.Background(), homeID(), "aws.purchase_sp", map[string]any{"total_usd": 1.0}); err == nil {
+		t.Fatal("commit_money allowed on a degraded ledger")
+	}
+}
