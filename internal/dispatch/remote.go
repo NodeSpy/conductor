@@ -55,6 +55,27 @@ func (d *Dispatcher) paseoCmd(ctx context.Context, args ...string) *exec.Cmd {
 // exist) can be pointed at it. dir is interpreted on the remote side — a
 // relative path resolves against the host's `cwd:`, the same way the workspace
 // path always has for a remote runtime.
+// remoteRemoveAll deletes a directory on the remote host (rm -rf), relative to
+// the host's cwd: the teardown counterpart of remoteMkdirAll.
+func (d *Dispatcher) remoteRemoveAll(ctx context.Context, dir string) error {
+	if d.Remote == nil || dir == "" {
+		return fmt.Errorf("remote rm %q: no remote host", dir)
+	}
+	client := d.HostClient
+	if client == nil {
+		client = &hosts.Client{}
+	}
+	script := "rm -rf -- " + hosts.ShellJoin([]string{dir})
+	res, err := client.Script(ctx, *d.Remote, script, nil, nil, d.Remote.Cfg.Cwd)
+	if err != nil {
+		return fmt.Errorf("remote rm %s: %w", dir, err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("remote rm %s: exit %d", dir, res.ExitCode)
+	}
+	return nil
+}
+
 func (d *Dispatcher) remoteMkdirAll(ctx context.Context, dir string) error {
 	if d.Remote == nil || dir == "" {
 		return fmt.Errorf("remote mkdir %q: no remote host", dir)

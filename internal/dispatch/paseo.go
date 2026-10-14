@@ -1225,11 +1225,15 @@ func (d *Dispatcher) Archive(ctx context.Context, agentID string) error {
 	if !d.Owned.HasAgent(agentID) {
 		return fmt.Errorf("refusing to archive agent %s: not launched by conductor (ownership ledger)", agentID)
 	}
-	if wksID := d.agentOwnedWorkspace(ctx, agentID); wksID != "" && d.Owned.HasWorkspace(wksID) {
+	if wksID, cwd := d.agentOwnedWorkspace(ctx, agentID); wksID != "" && d.Owned.HasWorkspace(wksID) {
 		if err := d.backend().ArchiveWorkspace(ctx, wksID); err != nil {
 			return err
 		}
 		d.Owned.forget(wksID, agentID)
+		// Archiving a local-directory workspace leaves its folder on disk, so a
+		// per-run directory (makeRunDir) would outlive its run forever. Remove
+		// it — only ever a direct child of the runs root, nothing else.
+		d.removeRunDir(ctx, cwd)
 		return nil
 	}
 	if err := d.backend().ArchiveAgent(ctx, agentID); err != nil {
@@ -1265,16 +1269,58 @@ func (d *Dispatcher) DispatchInFlight(dispatchID string) bool {
 // agent lives in, or "" when it isn't in one (a pinned or base checkout, or
 // it's already gone). It reads the agent's cwd from `paseo ls` and maps it via
 // `paseo workspace ls` — the same map the reaper reclaims by.
-func (d *Dispatcher) agentOwnedWorkspace(ctx context.Context, agentID string) string {
-	cwd := d.agentCwd(ctx, agentID)
+func (d *Dispatcher) agentOwnedWorkspace(ctx context.Context, agentID string) (id, cwd string) {
+	cwd = d.agentCwd(ctx, agentID)
 	if cwd == "" {
-		return ""
+		return "", ""
 	}
 	wl, err := d.backend().ListWorkspaces(ctx)
 	if err != nil {
-		return ""
+		return "", ""
 	}
-	return reclaimableWorkspaceMap(wl)[normCwd(cwd)]
+	return reclaimableWorkspaceMap(wl)[normCwd(cwd)], cwd
+}
+
+// removeRunDir deletes a reclaimed run's working directory. It acts only on a
+// path that is a DIRECT child of the runs root (~/.conductor/runs locally, the
+// host-relative .conductor/runs remotely) — a worktree, a pinned workspace, or
+// anything of yours is never a candidate, whatever cwd the agent reported.
+// Best-effort: a failure leaves the directory, as before.
+func (d *Dispatcher) removeRunDir(ctx context.Context, cwd string) {
+	if cwd == "" {
+		return
+	}
+	if d.remote() {
+		// The host reports the cwd absolute (its cwd: + the relative path
+		// makeRunDir created) or as created; either way the parent must be
+		// .conductor/runs.
+		dir := filepath.Clean(cwd)
+		parent := filepath.Dir(dir)
+		if filepath.Base(parent) != runWorkspaceDirs || filepath.Base(filepath.Dir(parent)) != ".conductor" ||
+			filepath.Base(dir) == "." || filepath.Base(dir) == ".." || filepath.Base(dir) == runWorkspaceDirs {
+			return
+		}
+		_ = d.remoteRemoveAll(ctx, dir)
+		return
+	}
+	root, ok := localRunsRoot()
+	if !ok {
+		return
+	}
+	dir := filepath.Clean(cwd)
+	if filepath.Dir(dir) != root || filepath.Base(dir) == "." || filepath.Base(dir) == ".." {
+		return
+	}
+	_ = os.RemoveAll(dir)
+}
+
+// localRunsRoot is ~/.conductor/runs, the parent of every local run directory.
+func localRunsRoot() (string, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", false
+	}
+	return filepath.Join(home, ".conductor", runWorkspaceDirs), true
 }
 
 // reclaimableWorkspaceMap builds the cwd->id map of workspaces conductor
