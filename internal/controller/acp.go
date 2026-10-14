@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -308,8 +309,35 @@ func (c *acpController) connect(ctx context.Context, cwd string, env []string, d
 // remote execution via prepareLaunch (see its doc for what changes locally in
 // that case: no cwd, no local env — both travel inside the wrapped command).
 func spawnACP(_ context.Context, command []string, cwd string, env []string, del acp.ClientDelegate, host string, opt launchOpts, scrubEnv bool) (*acp.Client, func() error, error) {
+	p, err := startACPProcess(command, cwd, env, host, opt, scrubEnv)
+	if err != nil {
+		return nil, nil, err
+	}
+	client := acp.NewClient(p.stdout, p.stdin, del)
+	cleanup := func() error {
+		client.Close()
+		return p.cleanup()
+	}
+	return client, cleanup, nil
+}
+
+// acpProcess is a started ACP agent: its stdio, and the cleanup that ends it.
+type acpProcess struct {
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+	// cleanup kills the agent, reaps it, and retires the launch's egress
+	// credentials and jail (prepareJail's teardown rides on them). Idempotent.
+	cleanup func() error
+	// exited is closed when the agent process has exited.
+	exited <-chan struct{}
+}
+
+// startACPProcess starts an ACP agent with its raw stdio — spawnACP wraps a
+// typed client around it; the paseo provider relay (paseorelay.go) pumps
+// paseo's own ACP stream through it instead.
+func startACPProcess(command []string, cwd string, env []string, host string, opt launchOpts, scrubEnv bool) (*acpProcess, error) {
 	if len(command) == 0 {
-		return nil, nil, errors.New("acp: no launch command configured")
+		return nil, errors.New("acp: no launch command configured")
 	}
 	opt, revoke := withEgressRevoke(opt)
 	if opt.res == nil {
@@ -318,7 +346,7 @@ func spawnACP(_ context.Context, command []string, cwd string, env []string, del
 	argv, dir, localEnv, _, err := prepareLaunch(host, cwd, env, command, opt)
 	if err != nil {
 		revoke()
-		return nil, nil, err
+		return nil, err
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	if dir != "" {
@@ -338,33 +366,43 @@ func spawnACP(_ context.Context, command []string, cwd string, env []string, del
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		revoke()
-		return nil, nil, err
+		return nil, err
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		revoke()
-		return nil, nil, err
+		return nil, err
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		revoke()
-		return nil, nil, fmt.Errorf("acp: start %s: %w", argv[0], err)
+		return nil, fmt.Errorf("acp: start %s: %w", argv[0], err)
 	}
-	client := acp.NewClient(stdout, stdin, del)
-	// This ACP agent is a background session owned by cleanup, not ctx (see the
-	// doc above) — so the egress credential is retired in cleanup, at session
-	// end, rather than when the dispatch call returns (#36 iso-review round 2,
+	exited := make(chan struct{})
+	go func() {
+		// The process, not cmd.Wait: Wait closes stdout as soon as the agent
+		// exits, losing what it wrote last before a reader drained it.
+		_, _ = cmd.Process.Wait()
+		close(exited)
+	}()
+	// The agent is a background session owned by cleanup, not a ctx (see
+	// spawnACP) — so the egress credential is retired in cleanup, at session
+	// end, rather than when a dispatch call returns (#36 iso-review round 2,
 	// item 4).
+	var once sync.Once
 	cleanup := func() error {
-		client.Close()
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		_ = cmd.Wait()
-		revoke()
+		once.Do(func() {
+			_ = stdin.Close()
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			<-exited
+			_ = stdout.Close()
+			revoke()
+		})
 		return nil
 	}
-	return client, cleanup, nil
+	return &acpProcess{stdin: stdin, stdout: stdout, cleanup: cleanup, exited: exited}, nil
 }
 
 // acpCommand resolves the launch argv for an ACP agent: an explicit `command:`

@@ -35,8 +35,37 @@ func (m *Manager) layoutDarwin(d *Dispatch, self string) ([]sandbox.BindMount, *
 		_ = os.Symlink(real, dst)
 		return real
 	}
+	idRoot, err := m.prepareIdentity(d)
+	if err != nil {
+		return nil, nil, "", err
+	}
 	for _, rel := range toolState[d.Tool] {
+		if idRoot != "" {
+			// The identity's own copy (identity.go), never the real one.
+			own := filepath.Join(idRoot, rel)
+			dst := filepath.Join(home, rel)
+			_ = os.MkdirAll(filepath.Dir(dst), 0o700)
+			_ = os.Symlink(own, dst)
+			prof.ReadWrite = append(prof.ReadWrite, own)
+			continue
+		}
 		if real := link(rel); real != "" {
+			prof.ReadWrite = append(prof.ReadWrite, real)
+		}
+	}
+	if idRoot != "" {
+		// The sign-in, shared from the real home: the identity's copy links
+		// to the real file, and only that file is opened up.
+		for _, rel := range toolLogin[d.Tool] {
+			real := filepath.Join(m.Home, rel)
+			if _, err := os.Lstat(real); err != nil {
+				continue
+			}
+			own := filepath.Join(idRoot, rel)
+			_ = os.Remove(own)
+			if err := os.Symlink(real, own); err != nil {
+				return nil, nil, "", err
+			}
 			prof.ReadWrite = append(prof.ReadWrite, real)
 		}
 	}

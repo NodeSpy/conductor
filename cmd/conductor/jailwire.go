@@ -66,13 +66,17 @@ func wireJail(w jailWiring) *jail.Manager {
 		}
 	}
 	m := &jail.Manager{
-		Root:      filepath.Join(w.stateDir, "jails"),
-		SelfExe:   os.Executable,
-		LookPath:  exec.LookPath,
-		Home:      home,
-		Sensitive: []string{w.stateDir, w.cfgDir},
-		Sockets:   []string{filepath.Join(w.stateDir, "memory.sock")},
-		Emit:      emit,
+		Root:     filepath.Join(w.stateDir, "jails"),
+		SelfExe:  os.Executable,
+		LookPath: exec.LookPath,
+		Home:     home,
+		// Per-identity tool state (paseo provider sessions): outside Root,
+		// which is cleared at every boot — an agent's transcripts must
+		// survive a restart for its session to resume.
+		IdentityStateDir: filepath.Join(w.stateDir, "agent-state"),
+		Sensitive:        []string{w.stateDir, w.cfgDir},
+		Sockets:          []string{filepath.Join(w.stateDir, "memory.sock")},
+		Emit:             emit,
 		// The dispatch's target is closed: the close registry (fed by the
 		// close event), and — for a close conductor has not heard about yet —
 		// the PR's live state. The gh and git profiles refuse every write

@@ -142,6 +142,8 @@ func main() {
 		err = cmdUnlock(args)
 	case "config":
 		err = cmdConfig(args)
+	case "paseo":
+		err = cmdPaseo(args)
 	case "mcp":
 		err = cmdMCP(args)
 	case "plugin", "plugins":
@@ -853,6 +855,7 @@ func cmdRun(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	startPaseoProvider(ctx, cfg, st.Audit)
 
 	// The live agent-tool socket: with a memory: section configured — or any
 	// profile opted into the conductor skill (#36 §12) — serve the tool

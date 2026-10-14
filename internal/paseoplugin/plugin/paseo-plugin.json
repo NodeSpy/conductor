@@ -1,0 +1,5 @@
+{
+  "id": "conductor",
+  "description": "Agents on conductor: each session's agent runs in conductor's workspace jail, launched and held by the conductor daemon.",
+  "requirements": { "paseo": ">=0.10.1" }
+}

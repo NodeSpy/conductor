@@ -167,6 +167,11 @@ type Config struct {
 	// refines. Typically only `host:` rules and `network:` live here. Unset →
 	// the synthesized workspace jail.
 	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// PaseoProvider serves paseo's `conductor` provider (the paseo plugin
+	// `conductor paseo install-plugin` installs): paseo agents created on it
+	// run on one of conductor's acp runtimes, in the workspace jail, with
+	// conductor holding the agent process. See paseoprovider.go.
+	PaseoProvider *PaseoProviderConfig `yaml:"paseo_provider,omitempty"`
 	// Pricing overrides the built-in model→$ table cost estimation uses
 	// (#36 §14). Model prices drift; the built-ins are coarse defaults and
 	// every estimated figure is marked approximate.
@@ -1256,6 +1261,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateGlobalIsolation(); err != nil {
+		return err
+	}
+	if err := c.validatePaseoProvider(); err != nil {
 		return err
 	}
 	if err := c.validateModels(); err != nil {

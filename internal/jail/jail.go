@@ -85,6 +85,11 @@ type Manager struct {
 	LookPath func(string) (string, error)
 	// Home is the operator's home (os.UserHomeDir).
 	Home string
+	// IdentityStateDir holds per-identity tool state (identity.go): a launch
+	// with a StateKey sees its agent CLI's state dirs from
+	// <IdentityStateDir>/<key>/ instead of the real home. "" = always the
+	// shared, real state.
+	IdentityStateDir string
 	// Sensitive are the daemon's own state/config dirs — never visible to a
 	// jail or a host command, never a valid host-command argument.
 	Sensitive []string
@@ -143,6 +148,13 @@ type LaunchSpec struct {
 	// Git is the worktree's git layout resolved on a previous turn (resume
 	// turns must not re-read the agent-writable .git pointer).
 	Git *GitLayout
+	// StateKey gives the launch a tool state of its own (identity.go): the
+	// agent CLI's ~/.claude (etc.) comes from a per-key directory, with only
+	// its login shared from the real home. "" = the real, shared state.
+	StateKey string
+	// AgentID is the paseo agent a provider session's launch serves ("" for
+	// a dispatch): who the jail is, for grants and the audit.
+	AgentID string
 }
 
 // GitLayout is a checkout's git layout, resolved on the host when the
@@ -381,8 +393,23 @@ func (m *Manager) layout(d *Dispatch, self string) ([]sandbox.BindMount, error) 
 
 	if home != "" {
 		add(sandbox.BindMount{Path: home, Tmpfs: true})
+		idRoot, err := m.prepareIdentity(d)
+		if err != nil {
+			return nil, err
+		}
 		for _, rel := range toolState[d.Tool] {
+			if idRoot != "" {
+				add(sandbox.BindMount{Path: filepath.Join(home, rel), Src: filepath.Join(idRoot, rel)})
+				continue
+			}
 			add(sandbox.BindMount{Path: filepath.Join(home, rel), Optional: true})
+		}
+		if idRoot != "" {
+			// The sign-in, shared from the real home on top of the identity's
+			// own state (prepareIdentity left a file for it to sit on).
+			for _, rel := range toolLogin[d.Tool] {
+				add(sandbox.BindMount{Path: filepath.Join(home, rel), Optional: true})
+			}
 		}
 		for _, rel := range readOnlyHome {
 			add(sandbox.BindMount{Path: filepath.Join(home, rel), RO: true, Optional: true})
