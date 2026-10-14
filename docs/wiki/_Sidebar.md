@@ -36,6 +36,7 @@ The model
 - [[Hosts]]
 - [[Isolation]]
 - [[Host-Commands]]
+- [[Paseo-Provider]]
 - [[Trust-and-Isolation]]
 
 Connectors

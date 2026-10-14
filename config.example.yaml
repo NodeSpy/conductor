@@ -673,6 +673,17 @@ runtimes:
   #   connection: { api_key: env:JEV_API_KEY }      # decide: steps only, never an agent
   # remote: { use: cli, tool: claude-code, host: build-box }
 
+# paseo_provider: — paseo's `conductor` provider (docs/wiki/Paseo-Provider.md).
+# Agents created on it in paseo are launched by conductor, on the acp runtime
+# named here, always in the workspace jail. `conductor paseo install-plugin`
+# installs the (embedded) paseo plugin; re-run it on every deploy.
+# paseo_provider:
+#   runtime: acp_claude          # a `use: acp` runtime on this box
+#   mcp_servers: []              # paseo's MCP servers the agent keeps, by name (default none;
+#                                # ["*"] keeps paseo's own too — it can start unjailed agents)
+#   detached_ttl: 1h             # an agent with no paseo stream ends after this (a load relaunches it)
+
+
 # ---------------------------------------------------------------------------
 # models: — named FLEETS (the spot-fleet model). A fleet is a ranked list of
 # ACCEPTABLE models plus a fallback posture, so a step (or a pack you install)

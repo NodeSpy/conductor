@@ -96,6 +96,17 @@ addresses. `audit` is how an allowlist gets built: run with it, read the
 `egress:`. The default stays `open` because the enforced modes break tools
 that do not honor `HTTPS_PROXY`; `audit` shows exactly which.
 
+### Per-identity tool state {#per-identity-tool-state}
+
+The jail shows the agent CLI's own state read-write (`~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini`, …): its settings, its session transcripts and its history. For conductor's own dispatches that is the operator's real state, shared by every jail, so a dispatch's agent could read another's transcripts. That's how a session resumes across dispatches (session affinity, resumable sessions).
+
+A launch with an **identity** gets that state from a directory of its own instead: `<state>/agent-state/<key>/`. Today that's every [[Paseo-Provider|paseo provider]] session, keyed by its identity: a member, or the session itself for a cwd conductor doesn't know.
+- **Seeded once from the operator's settings**: `~/.claude/settings.json`, and `~/.claude.json` minus its `projects` (other projects' history), `~/.codex/config.toml`, … Never their transcripts.
+- **Only the sign-in is shared** from the real home (`~/.claude/.credentials.json`, `~/.codex/auth.json`, `~/.gemini/oauth_creds.json`, …), bound in place, so a token refresh lands in the operator's own file.
+- **Kept across launches**, so an identity's next launch, or a relaunch that loads its session, finds its own transcripts.
+
+Two identities never see each other's transcripts, or the operator's. On Linux the identity's directory is bound at `~/.claude`; on macOS the jail's scratch home links to it and Seatbelt opens only that directory (and the sign-in file).
+
 ### Git: one clone per dispatch {#git-one-clone-per-dispatch}
 
 Each dispatch gets its **own clone** of the repository (`<state>/worktrees/<id>`),

@@ -214,6 +214,7 @@ usage:
   conductor plugin list                 list plugins: bundled connectors/runtimes + external
   conductor plugin show <name>          a plugin's surface (Decl + capability/credential disclosure)
   conductor plugin remove <name>        how to remove an external plugin from your plugins: block
+  conductor paseo install-plugin [--paseo-home DIR]  install paseo's "conductor" provider (paseo_provider:)
   conductor schema <connector>          print a connector's event/filter/verb/option schemas
   conductor secrets check               resolve every secret reference and report
   conductor connector auth ls           each oauth2 connector's login state + token expiry
