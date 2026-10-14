@@ -187,9 +187,9 @@ func savedWFFrom(ctx context.Context) string {
 
 // Runner executes fired triggers through the trigger grammar.
 type Runner struct {
-	Cfg     *config.Config
-	Conns   *connector.Registry
-	Agents  AgentServices
+	Cfg    *config.Config
+	Conns  *connector.Registry
+	Agents AgentServices
 	// Members is the member autonomy gate (nil when no member is configured;
 	// a member-bound skill grant then fails closed).
 	Members MemberGate

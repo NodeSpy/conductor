@@ -49,7 +49,7 @@ type Decision struct {
 	Member    string `json:"member"`
 	Proposal  string `json:"proposal"`
 	Operator  string `json:"operator"`
-	Decision  string `json:"decision"` // approve | deny
+	Decision  string `json:"decision"`  // approve | deny
 	Signature string `json:"signature"` // armored SSHSIG
 	Reason    string `json:"reason,omitempty"`
 }

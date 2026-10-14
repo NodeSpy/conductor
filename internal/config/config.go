@@ -150,12 +150,12 @@ type Config struct {
 	// Memory is the shared agent memory (`memory:` section): durable notes
 	// with provenance and scope, written by verbs/agents and injected into
 	// opted-in agent prompts. Nil = memory not configured (no default).
-	Memory    *MemoryConfig          `yaml:"memory"`
+	Memory *MemoryConfig `yaml:"memory"`
 	// Operators are the humans who may approve member proposals, and Members
 	// the persistent conversational agents (members.go). Both optional.
 	Operators map[string]OperatorConfig `yaml:"operators"`
 	Members   map[string]MemberConfig   `yaml:"members"`
-	Workflows map[string]WorkflowDef `yaml:"workflows"`
+	Workflows map[string]WorkflowDef    `yaml:"workflows"`
 	// Triggers is the `triggers:` section. It decodes from the list form or
 	// the named/qualified MAP form, where the key is the trigger's stable
 	// address and a `source.event` key implies `on:` — see TriggerList and
