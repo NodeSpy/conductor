@@ -757,7 +757,7 @@ func (d *Dispatcher) findProjectDir(ctx context.Context, repo string) string {
 // (owner/name, or a remapped project name — see core.Target.CheckoutRepo): by
 // its name, by the remote paseo keyed it on (a "remote:<host>/<owner>/<name>"
 // id), or — locally — by its checkout's origin remote. All case-insensitive,
-// since GitHub slugs are and paseo lowercases its keys.
+// since forge slugs are and paseo lowercases its keys.
 func (d *Dispatcher) projectMatchesRepo(ctx context.Context, p ProjectInfo, repo string) bool {
 	if strings.EqualFold(p.Name, repo) {
 		return true
