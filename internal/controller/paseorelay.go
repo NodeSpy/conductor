@@ -3,12 +3,12 @@ package controller
 import (
 	"bufio"
 	"context"
-	"encoding/base64"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,26 +21,36 @@ import (
 	"github.com/NodeSpy/conductor/internal/jail"
 )
 
-// The paseo provider relay. paseo's `conductor` provider (the plugin in
-// internal/paseoplugin) is an ACP provider whose stream is this socket: one
-// connection per paseo session, plus paseo's own short ones — a capability
-// probe (initialize only) and a model listing (session/new with no
-// identity). For a session, conductor launches the agent itself on the
-// configured acp runtime, in the workspace jail, and relays ACP both ways.
+// The paseo provider relay. paseo's `conductor` provider (internal/
+// paseoplugin: public plugin API only) is an ACP provider whose stream is
+// this socket. conductor launches each session's agent itself, on the
+// paseo_provider runtime, in the workspace jail, and relays ACP both ways.
 //
-// The jailed agent is keyed by the paseo agent's id (the plugin passes it in
-// session/new|load `_meta._paseo.providerOptions._conductor`) and outlives
-// the stream: a paseo restart or an unloaded agent drops the stream, and the
-// next session/load re-attaches it to the same live agent. Only archiving
-// the paseo agent — the plugin's `_conductor/archive`, from the provider's
-// session.archive or the agent.archived hook — or DetachedTTL with no stream
-// tears the jail down.
+// It speaks only the ACP spec — nothing of paseo's internals, so a paseo
+// release needs no change here:
+//   - A session is keyed by the session id conductor mints in its
+//     session/new answer; paseo stores it and echoes it on session/load.
+//     The record (cwd, identity, the agent's own session id) is kept in
+//     conductor's state, so a load after the agent was ended — detached
+//     past detached_ttl, or across a conductor restart — relaunches it and
+//     has it load its own session.
+//   - Its identity is the cwd it is opened in: conductor created the
+//     member and worker workspaces, so SetPaseoIdentity's lookup names whose
+//     they are. An unknown cwd gets an identity of its own (the session's).
+//   - The agent is launched lazily, on the first request that needs it (a
+//     prompt, a mode or model change): paseo's model listing (session/new
+//     then session/close) is indistinguishable from a real session/new over
+//     ACP, and is answered from the one capability probe without a launch.
+//   - Every MCP server paseo passes is dropped unless named in
+//     paseo_provider.mcp_servers (paseo's own server carries its credential
+//     and a way to start unjailed agents; ACP cannot tell it apart).
+//   - Lifecycle is conductor's: a stream ending or session/close only
+//     detaches; ArchivePaseoCwd (conductor archiving the agent it created)
+//     ends the jail; detached_ttl ends a jail nothing re-attached.
 //
-// What crosses: messages pass through as they are, except the request ids
-// paseo picks (renumbered, so a re-attached stream's ids never meet a dead
-// one's late answers), the session id (conductor's own, encoding the paseo
-// agent's id, see relaySessionID), and paseo's own MCP server in
-// session/new|load, which is stripped unless paseo_provider.paseo_tools.
+// What crosses is otherwise untouched, except paseo's request ids
+// (renumbered, so a dead stream's late answers never reach a new one) and
+// the session id (conductor's toward paseo, the agent's own toward it).
 
 // PaseoRelay serves the paseo provider socket.
 type PaseoRelay struct {
@@ -48,55 +58,94 @@ type PaseoRelay struct {
 	Tool       string   // its tool (the jail's per-tool rules)
 	Iso        *config.IsolationConfig
 	ScrubEnv   bool
-	PaseoTools bool
+	MCPServers []string // kept by name; "*" = all
 	Detached   time.Duration
-	// ProbeDir is an empty directory the capability probe's session runs in.
-	ProbeDir string
+	// StateDir holds the session records and the capability probe's
+	// workspace (<state>/paseo-provider).
+	StateDir string
 	Logf     func(string, ...any)
 	Audit    func(map[string]any)
 
-	// launch starts the agent for one paseo agent id in cwd; tests replace it.
-	launch func(agentID, cwd string) (*acpProcess, error)
+	// launch starts the agent for a session; tests replace it.
+	launch func(s *relaySession) (*acpProcess, error)
 	now    func() time.Time
 
-	mu     sync.Mutex
-	agents map[string]*relayAgent
-	probe  *relayProbe
-	probed chan struct{}
-	closed bool
+	mu       sync.Mutex
+	sessions map[string]*relaySession
+	probe    *relayProbe
+	probed   chan struct{}
+	closed   bool
+}
+
+var (
+	paseoMu       sync.Mutex
+	paseoIdentity func(cwd string) (identity string, ok bool)
+	paseoRelay    *PaseoRelay
+)
+
+// SetPaseoIdentity installs the lookup that names the identity a paseo
+// provider session's cwd belongs to — the member or worker conductor created
+// that workspace for. ok=false: not one of conductor's; the session gets an
+// identity of its own. The identity keys the agent's tool state
+// (<state>/agent-state/paseo-<identity>) and is the jail's AgentID; it is
+// read once, when the session is created.
+func SetPaseoIdentity(lookup func(cwd string) (identity string, ok bool)) {
+	paseoMu.Lock()
+	paseoIdentity = lookup
+	paseoMu.Unlock()
+}
+
+// ArchivePaseoCwd ends the jail of every paseo provider session opened in cwd
+// and forgets them (a later session/load of one is refused), returning how
+// many. conductor calls it when it archives an agent it created; each live
+// agent has a cwd of its own (the relay audits `cwd_shared` otherwise).
+func ArchivePaseoCwd(cwd string) int {
+	paseoMu.Lock()
+	r := paseoRelay
+	paseoMu.Unlock()
+	if r == nil {
+		return 0
+	}
+	return r.ArchiveCwd(cwd)
 }
 
 // relayProbe is the agent's own answers to initialize and to a session/new,
-// captured once: what paseo's capability probe and model listing are told.
+// captured once: what paseo's capability probe and model listing are told,
+// and every session/new.
 type relayProbe struct {
-	init json.RawMessage // initialize result
-	sess json.RawMessage // session/new result (modes, config options, models)
+	init json.RawMessage
+	sess json.RawMessage
 	err  error
 }
 
-// relayAgent is one paseo agent's jailed agent process.
-type relayAgent struct {
-	id   string
-	proc *acpProcess
-	r    *PaseoRelay
+// relaySession is one paseo session.
+type relaySession struct {
+	r *PaseoRelay
 
-	wmu sync.Mutex // agent stdin writes
+	// The record, persisted.
+	ID       string `json:"-"`
+	Cwd      string `json:"cwd"`
+	Identity string `json:"identity"`
+	StateKey string `json:"state_key"`
+	Native   string `json:"native,omitempty"` // the agent's own session id ("" = never launched)
 
-	mu       sync.Mutex
-	conn     *relayConn // the attached paseo stream (nil = detached)
-	detached time.Time
-	native   string // the agent's own session id
-	nextID   int64
-	pending  map[string]pendingCall // relay id → the paseo request it stands for
-	initDone bool
-	gone     bool
+	mu        sync.Mutex
+	conn      *relayConn
+	detached  time.Time
+	proc      *acpProcess
+	launching chan struct{}
+	initRaw   json.RawMessage // paseo's initialize params, for a lazy launch
+	openRaw   json.RawMessage // the session/new|load params to open with
+	nextID    int64
+	pending   map[string]pendingCall
+	wmu       sync.Mutex
 }
 
 type pendingCall struct {
 	conn   *relayConn
 	id     json.RawMessage // paseo's id
 	method string
-	waiter chan relayMsg // relay-internal calls (initialize) wait here
+	waiter chan relayMsg // relay-internal calls wait here
 }
 
 // relayConn is one paseo stream.
@@ -136,44 +185,27 @@ func rpcErr(id json.RawMessage, code int, msg string) relayMsg {
 }
 
 func rpcResult(id json.RawMessage, v any) relayMsg {
-	b, _ := json.Marshal(v)
 	if raw, ok := v.(json.RawMessage); ok {
-		b = raw
+		return relayMsg{JSONRPC: "2.0", ID: id, Result: raw}
 	}
+	b, _ := json.Marshal(v)
 	return relayMsg{JSONRPC: "2.0", ID: id, Result: b}
 }
 
-// relaySessionPrefix marks conductor's session ids: "cj1.<base64url agent
-// id>.<the agent's own session id>". paseo stores it as the session's
-// persistence and hands it back on session/load — so a resume names the
-// jail it belongs to.
-const relaySessionPrefix = "cj1."
+// relaySessionPrefix marks conductor's session ids.
+const relaySessionPrefix = "cj2."
 
-func relaySessionID(agentID, native string) string {
-	return relaySessionPrefix + base64.RawURLEncoding.EncodeToString([]byte(agentID)) + "." + native
-}
-
-func parseRelaySessionID(s string) (agentID, native string, ok bool) {
-	rest, ok := strings.CutPrefix(s, relaySessionPrefix)
-	if !ok {
-		return "", "", false
-	}
-	enc, native, ok := strings.Cut(rest, ".")
-	if !ok || native == "" {
-		return "", "", false
-	}
-	b, err := base64.RawURLEncoding.DecodeString(enc)
-	if err != nil || len(b) == 0 {
-		return "", "", false
-	}
-	return string(b), native, true
+func newRelaySessionID() string {
+	var b [12]byte
+	_, _ = rand.Read(b[:])
+	return relaySessionPrefix + hex.EncodeToString(b[:])
 }
 
 // NewPaseoRelay builds the relay for the runtime cc.
-func NewPaseoRelay(cc config.ControllerConfig, p *config.PaseoProviderConfig, probeDir string, logf func(string, ...any), audit func(map[string]any)) *PaseoRelay {
+func NewPaseoRelay(cc config.ControllerConfig, p *config.PaseoProviderConfig, stateDir string, logf func(string, ...any), audit func(map[string]any)) *PaseoRelay {
 	r := &PaseoRelay{
 		Command: acpCommand(cc), Tool: firstNonEmpty(cc.Tool, cc.Agent), Iso: cc.Isolation, ScrubEnv: cc.ScrubEnv,
-		PaseoTools: p.PaseoTools, Detached: p.Detached(), ProbeDir: probeDir, Logf: logf, Audit: audit,
+		MCPServers: p.MCPServers, Detached: p.Detached(), StateDir: stateDir, Logf: logf, Audit: audit,
 	}
 	r.launch = r.launchJailed
 	return r
@@ -199,38 +231,104 @@ func (r *PaseoRelay) clock() time.Time {
 	return time.Now()
 }
 
-// launchJailed starts the agent for a paseo session: the runtime's command,
-// always in the workspace jail (a jail that cannot be built fails the
-// session — it never degrades to an unconfined agent), as a launch with no
-// dispatch target, and with tool state of its own (keyed by the paseo agent).
-func (r *PaseoRelay) launchJailed(agentID, cwd string) (*acpProcess, error) {
+// launchJailed starts a session's agent: the runtime's command, always in
+// the workspace jail (one that cannot be built fails the session — it never
+// degrades to an unconfined agent), as a launch with no dispatch target,
+// with the tool state of the session's identity.
+func (r *PaseoRelay) launchJailed(s *relaySession) (*acpProcess, error) {
 	if JailManager == nil {
-		return nil, errors.New("paseo provider: the workspace jail is not available on this box")
+		return nil, errors.New("the workspace jail is not available on this box")
 	}
-	req := dispatch.Request{DispatchID: "paseo-" + agentID}
-	opt := agentLaunchOpts(true, r.Tool, r.Iso, req)
+	opt := agentLaunchOpts(true, r.Tool, r.Iso, dispatch.Request{DispatchID: "paseo-" + s.ID})
 	if opt.jail == nil {
-		return nil, errors.New("paseo provider: the runtime's isolation opts out of the workspace jail")
+		return nil, errors.New("the runtime's isolation opts out of the workspace jail")
 	}
 	opt.jailDefault = false
-	opt.jail.Label = "paseo " + agentID
-	opt.jail.AgentID = agentID
-	opt.jail.StateKey = "paseo-" + agentID
-	return startACPProcess(r.Command, cwd, nil, "", opt, r.ScrubEnv)
+	opt.jail.Label = "paseo " + s.Identity
+	opt.jail.AgentID = s.Identity
+	opt.jail.StateKey = s.StateKey
+	return startACPProcess(r.Command, s.Cwd, nil, "", opt, r.ScrubEnv)
 }
+
+// ---- records -------------------------------------------------------------
+
+func (r *PaseoRelay) recordsPath() string { return filepath.Join(r.StateDir, "sessions.json") }
+
+// loadRecords reads the persisted session records (Serve, once).
+func (r *PaseoRelay) loadRecords() {
+	b, err := os.ReadFile(r.recordsPath())
+	if err != nil {
+		return
+	}
+	var recs map[string]*relaySession
+	if err := json.Unmarshal(b, &recs); err != nil {
+		r.logf("paseo provider: %s: %v — starting without session records", r.recordsPath(), err)
+		return
+	}
+	for id, s := range recs {
+		if s == nil || !strings.HasPrefix(id, relaySessionPrefix) {
+			continue
+		}
+		s.ID, s.r, s.pending = id, r, map[string]pendingCall{}
+		r.sessions[id] = s
+	}
+}
+
+// saveRecordsLocked persists every session record. Called with r.mu held
+// (lock order: r.mu, then a session's mu — never the other way).
+func (r *PaseoRelay) saveRecordsLocked() {
+	if r.StateDir == "" {
+		return
+	}
+	type record struct {
+		Cwd      string `json:"cwd"`
+		Identity string `json:"identity"`
+		StateKey string `json:"state_key"`
+		Native   string `json:"native,omitempty"`
+	}
+	recs := map[string]record{}
+	for id, s := range r.sessions {
+		s.mu.Lock()
+		recs[id] = record{Cwd: s.Cwd, Identity: s.Identity, StateKey: s.StateKey, Native: s.Native}
+		s.mu.Unlock()
+	}
+	b, err := json.MarshalIndent(recs, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(r.StateDir, 0o700); err != nil {
+		return
+	}
+	tmp := r.recordsPath() + ".tmp"
+	if os.WriteFile(tmp, b, 0o600) == nil {
+		_ = os.Rename(tmp, r.recordsPath())
+	}
+}
+
+func (r *PaseoRelay) save() {
+	r.mu.Lock()
+	r.saveRecordsLocked()
+	r.mu.Unlock()
+}
+
+// ---- serving -------------------------------------------------------------
 
 // Serve accepts paseo streams on l until ctx ends. Each connection must come
 // from this uid (checkPeer).
 func (r *PaseoRelay) Serve(ctx context.Context, l net.Listener) error {
 	r.mu.Lock()
-	if r.agents == nil {
-		r.agents = map[string]*relayAgent{}
+	if r.sessions == nil {
+		r.sessions = map[string]*relaySession{}
+		r.loadRecords()
 	}
 	if r.probed == nil {
 		r.probed = make(chan struct{})
 		go r.runProbe()
 	}
 	r.mu.Unlock()
+	paseoMu.Lock()
+	paseoRelay = r
+	paseoMu.Unlock()
 	go func() {
 		<-ctx.Done()
 		_ = l.Close()
@@ -254,20 +352,28 @@ func (r *PaseoRelay) Serve(ctx context.Context, l net.Listener) error {
 	}
 }
 
-// Close tears down every live agent.
+// Close ends every live agent (the records stay: a session/load after a
+// restart relaunches).
 func (r *PaseoRelay) Close() {
 	r.mu.Lock()
 	r.closed = true
-	agents := r.agents
-	r.agents = map[string]*relayAgent{}
+	var live []*relaySession
+	for _, s := range r.sessions {
+		live = append(live, s)
+	}
 	r.mu.Unlock()
-	for _, a := range agents {
-		a.stop()
+	paseoMu.Lock()
+	if paseoRelay == r {
+		paseoRelay = nil
+	}
+	paseoMu.Unlock()
+	for _, s := range live {
+		s.stop()
 	}
 }
 
-// runProbe launches the agent once in ProbeDir and records its answers to
-// initialize and session/new.
+// runProbe launches the agent once in the probe workspace and records its
+// answers to initialize and session/new.
 func (r *PaseoRelay) runProbe() {
 	p := &relayProbe{}
 	defer func() {
@@ -279,13 +385,12 @@ func (r *PaseoRelay) runProbe() {
 			r.logf("paseo provider: capability probe failed: %v", p.err)
 		}
 	}()
-	if r.ProbeDir != "" {
-		if err := os.MkdirAll(r.ProbeDir, 0o700); err != nil {
-			p.err = err
-			return
-		}
+	dir := filepath.Join(r.StateDir, "probe")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		p.err = err
+		return
 	}
-	proc, err := r.launch("probe", r.ProbeDir)
+	proc, err := r.launch(&relaySession{ID: "probe", Cwd: dir, Identity: "probe", StateKey: "paseo-probe"})
 	if err != nil {
 		p.err = err
 		return
@@ -323,7 +428,7 @@ func (r *PaseoRelay) runProbe() {
 			return
 		}
 		p.init = probeInit(res)
-		p.sess, p.err = call(2, "session/new", map[string]any{"cwd": r.ProbeDir, "mcpServers": []any{}})
+		p.sess, p.err = call(2, "session/new", map[string]any{"cwd": dir, "mcpServers": []any{}})
 	}()
 	select {
 	case <-done:
@@ -362,6 +467,23 @@ func (r *PaseoRelay) probeResult(ctx context.Context) (*relayProbe, error) {
 	return r.probe, nil
 }
 
+// sessionAnswer is the probe's session/new answer under conductor's id (the
+// answer to every session/new, and to a load of a never-launched session).
+func (p *relayProbe) sessionAnswer(id string) json.RawMessage {
+	var res map[string]json.RawMessage
+	_ = json.Unmarshal(p.sess, &res)
+	if res == nil {
+		res = map[string]json.RawMessage{}
+	}
+	if id == "" {
+		delete(res, "sessionId")
+	} else {
+		res["sessionId"], _ = json.Marshal(id)
+	}
+	b, _ := json.Marshal(res)
+	return b
+}
+
 func readLine(rd *bufio.Reader) ([]byte, error) {
 	for {
 		line, err := rd.ReadBytes('\n')
@@ -374,7 +496,8 @@ func readLine(rd *bufio.Reader) ([]byte, error) {
 	}
 }
 
-// serveConn handles one paseo stream.
+// serveConn handles one paseo stream (paseo opens one per session, plus a
+// capability probe that only initializes).
 func (r *PaseoRelay) serveConn(c net.Conn) {
 	conn := &relayConn{c: c}
 	defer c.Close()
@@ -394,15 +517,11 @@ func (r *PaseoRelay) serveConn(c net.Conn) {
 	if err != nil {
 		return
 	}
-	if m.Method == "_conductor/archive" {
-		r.handleArchive(conn, m)
-		return
-	}
 	if m.Method != "initialize" || !m.isRequest() {
 		_ = conn.send(rpcErr(m.ID, -32600, "the first message must be initialize"))
 		return
 	}
-	init := m
+	initRaw := m.Params
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	p, err := r.probeResult(ctx)
 	cancel()
@@ -412,90 +531,111 @@ func (r *PaseoRelay) serveConn(c net.Conn) {
 	}
 	_ = conn.send(rpcResult(m.ID, p.init))
 
-	m, err = next()
-	if err != nil {
-		return // paseo's capability probe: initialize only
-	}
-	if m.Method != "session/new" && m.Method != "session/load" {
-		_ = conn.send(rpcErr(m.ID, -32601, "conductor: "+m.Method+" before a session"))
-		return
-	}
-	agentID, cwd := sessionIdentity(m.Params)
-	if agentID == "" {
-		if m.Method == "session/new" {
-			r.serveCatalog(conn, m, p, next)
-			return
+	var s *relaySession
+	defer func() {
+		if s != nil {
+			s.detach(conn)
 		}
-		_ = conn.send(rpcErr(m.ID, -32602, "conductor: session/load without the paseo agent's identity"))
-		return
-	}
-	if m.Method == "session/load" {
-		sid := jsonString(m.Params, "sessionId")
-		owner, _, ok := parseRelaySessionID(sid)
-		if !ok || owner != agentID {
-			_ = conn.send(rpcErr(m.ID, -32602, "conductor: session "+sid+" is not this agent's"))
-			return
-		}
-	}
-	a, err := r.attach(agentID, cwd, conn, init)
-	if err != nil {
-		r.logf("paseo provider: agent %s: %v", agentID, err)
-		_ = conn.send(rpcErr(m.ID, -32603, "conductor: "+err.Error()))
-		return
-	}
-	defer a.detach(conn)
+	}()
 	for {
-		a.fromPaseo(conn, m)
 		if m, err = next(); err != nil {
 			return
 		}
+		switch {
+		case m.Method == "session/new" && s == nil:
+			s = r.newSession(conn, m, initRaw, p)
+		case m.Method == "session/load" && s == nil:
+			s = r.loadSession(conn, m, initRaw, p)
+		case s == nil:
+			if m.isRequest() {
+				_ = conn.send(rpcErr(m.ID, -32601, "conductor: "+m.Method+" before a session"))
+			}
+		case m.Method == "session/new" || m.Method == "session/load":
+			_ = conn.send(rpcErr(m.ID, -32600, "conductor: one session per stream"))
+		default:
+			s.fromPaseo(conn, m)
+		}
 	}
 }
 
-// serveCatalog answers paseo's model listing — a session/new with no paseo
-// agent behind it — from the probe, without launching anything.
-func (r *PaseoRelay) serveCatalog(conn *relayConn, m relayMsg, p *relayProbe, next func() (relayMsg, error)) {
-	var res map[string]json.RawMessage
-	_ = json.Unmarshal(p.sess, &res)
-	if res == nil {
-		res = map[string]json.RawMessage{}
+// newSession answers session/new at once — conductor's id, the probe's
+// modes and options — and launches nothing yet.
+func (r *PaseoRelay) newSession(conn *relayConn, m relayMsg, initRaw json.RawMessage, p *relayProbe) *relaySession {
+	cwd := jsonString(m.Params, "cwd")
+	if cwd == "" || !filepath.IsAbs(cwd) {
+		_ = conn.send(rpcErr(m.ID, -32602, fmt.Sprintf("conductor: session cwd %q is not an absolute path", cwd)))
+		return nil
 	}
-	res["sessionId"] = json.RawMessage(`"cj-catalog"`)
-	_ = conn.send(rpcResult(m.ID, res))
-	for {
-		m, err := next()
-		if err != nil {
-			return
+	cwd = filepath.Clean(cwd)
+	s := &relaySession{r: r, ID: newRelaySessionID(), Cwd: cwd, pending: map[string]pendingCall{}, conn: conn, initRaw: initRaw}
+	paseoMu.Lock()
+	lookup := paseoIdentity
+	paseoMu.Unlock()
+	if lookup != nil {
+		if id, ok := lookup(cwd); ok && id != "" {
+			s.Identity = id
 		}
-		if !m.isRequest() {
-			continue
-		}
-		if m.Method == "session/close" {
-			_ = conn.send(rpcResult(m.ID, map[string]any{}))
-			continue
-		}
-		_ = conn.send(rpcErr(m.ID, -32601, "conductor: "+m.Method+" is not served on a model listing"))
 	}
+	if s.Identity == "" {
+		s.Identity = s.ID
+	}
+	s.StateKey = "paseo-" + s.Identity
+	s.openRaw = r.filterMCP(s, "session/new", m.Params)
+	r.mu.Lock()
+	r.sessions[s.ID] = s
+	r.saveRecordsLocked()
+	r.mu.Unlock()
+	_ = conn.send(rpcResult(m.ID, p.sessionAnswer(s.ID)))
+	return s
 }
 
-// sessionIdentity reads the paseo agent's id (the plugin's
-// `_meta._paseo.providerOptions._conductor.agentId`) and the cwd from a
-// session/new|load's params.
-func sessionIdentity(params json.RawMessage) (agentID, cwd string) {
-	var p struct {
-		Cwd  string `json:"cwd"`
-		Meta struct {
-			Paseo struct {
-				ProviderOptions struct {
-					Conductor struct {
-						AgentID string `json:"agentId"`
-					} `json:"_conductor"`
-				} `json:"providerOptions"`
-			} `json:"_paseo"`
-		} `json:"_meta"`
+// loadSession re-attaches paseo to a session: its live agent, else a
+// relaunched one that loads its own session.
+func (r *PaseoRelay) loadSession(conn *relayConn, m relayMsg, initRaw json.RawMessage, p *relayProbe) *relaySession {
+	id := jsonString(m.Params, "sessionId")
+	r.mu.Lock()
+	s := r.sessions[id]
+	r.mu.Unlock()
+	if s == nil {
+		_ = conn.send(rpcErr(m.ID, -32602, "conductor: no session "+id+" (archived, or not conductor's)"))
+		return nil
 	}
-	_ = json.Unmarshal(params, &p)
-	return p.Meta.Paseo.ProviderOptions.Conductor.AgentID, p.Cwd
+	s.mu.Lock()
+	old := s.conn
+	s.conn, s.detached, s.initRaw = conn, time.Time{}, initRaw
+	native, live := s.Native, s.proc != nil
+	if native == "" {
+		// Never launched: it opens with a session/new when it is first used.
+		s.openRaw = r.filterMCP(s, "session/new", withoutKey(m.Params, "sessionId"))
+	}
+	s.mu.Unlock()
+	if old != nil && old != conn {
+		_ = old.c.Close() // one stream per session: the newest wins
+	}
+	r.audit(map[string]any{"status": "attached", "session": s.ID, "identity": s.Identity, "live": live})
+	if native == "" {
+		_ = conn.send(rpcResult(m.ID, p.sessionAnswer("")))
+		return s
+	}
+	if err := s.ensureLaunched(); err != nil {
+		_ = conn.send(rpcErr(m.ID, -32603, "conductor: "+err.Error()))
+		return s
+	}
+	// The agent loads its own session (replaying it to paseo); a live one
+	// that already has it loaded does the same.
+	s.forward(conn, m.ID, "session/load", r.filterMCP(s, "session/load", m.Params))
+	r.audit(map[string]any{"status": "resumed", "session": s.ID, "identity": s.Identity, "relaunched": !live})
+	return s
+}
+
+func withoutKey(raw json.RawMessage, key string) json.RawMessage {
+	var p map[string]json.RawMessage
+	if json.Unmarshal(raw, &p) != nil || p == nil {
+		return raw
+	}
+	delete(p, key)
+	b, _ := json.Marshal(p)
+	return b
 }
 
 func jsonString(raw json.RawMessage, key string) string {
@@ -508,80 +648,152 @@ func jsonString(raw json.RawMessage, key string) string {
 	return s
 }
 
-// attach binds conn to agentID's live agent, launching it (and handing it
-// paseo's initialize) when there is none.
-func (r *PaseoRelay) attach(agentID, cwd string, conn *relayConn, init relayMsg) (*relayAgent, error) {
+// filterMCP drops the MCP servers paseo passes (ACP's mcpServers) that
+// paseo_provider.mcp_servers does not name, auditing what went.
+func (r *PaseoRelay) filterMCP(s *relaySession, method string, raw json.RawMessage) json.RawMessage {
+	var p map[string]json.RawMessage
+	if json.Unmarshal(raw, &p) != nil || p == nil {
+		return raw
+	}
+	var servers []map[string]json.RawMessage
+	if json.Unmarshal(p["mcpServers"], &servers) != nil {
+		return raw
+	}
+	keep := map[string]bool{}
+	for _, n := range r.MCPServers {
+		keep[n] = true
+	}
+	kept := []map[string]json.RawMessage{}
+	var dropped []string
+	for _, srv := range servers {
+		var name string
+		_ = json.Unmarshal(srv["name"], &name)
+		if keep["*"] || keep[name] {
+			kept = append(kept, srv)
+			continue
+		}
+		dropped = append(dropped, name)
+	}
+	if len(dropped) > 0 {
+		r.audit(map[string]any{"status": "mcp_dropped", "session": s.ID, "method": method, "servers": dropped})
+	}
+	p["mcpServers"], _ = json.Marshal(kept)
+	b, err := json.Marshal(p)
+	if err != nil {
+		return raw
+	}
+	return b
+}
+
+// ---- one session ---------------------------------------------------------
+
+// ensureLaunched starts the session's agent if it is not running: the
+// launch, paseo's initialize, and its session opened — a session/new (whose
+// answer names the agent's own id) for a never-launched session.
+func (s *relaySession) ensureLaunched() error {
+	s.mu.Lock()
+	for s.launching != nil {
+		ch := s.launching
+		s.mu.Unlock()
+		<-ch
+		s.mu.Lock()
+	}
+	if s.proc != nil {
+		s.mu.Unlock()
+		return nil
+	}
+	ch := make(chan struct{})
+	s.launching = ch
+	initRaw, openRaw, native := s.initRaw, s.openRaw, s.Native
+	s.mu.Unlock()
+	err := s.launchNow(initRaw, openRaw, native)
+	s.mu.Lock()
+	s.launching = nil
+	close(ch)
+	s.mu.Unlock()
+	return err
+}
+
+func (s *relaySession) launchNow(initRaw, openRaw json.RawMessage, native string) error {
+	r := s.r
 	r.mu.Lock()
-	if r.closed {
-		r.mu.Unlock()
-		return nil, errors.New("conductor is shutting down")
+	closed := r.closed
+	r.mu.Unlock()
+	if closed {
+		return errors.New("conductor is shutting down")
 	}
-	a := r.agents[agentID]
-	if a == nil {
-		if cwd == "" || !filepath.IsAbs(cwd) {
-			r.mu.Unlock()
-			return nil, fmt.Errorf("session cwd %q is not an absolute path", cwd)
+	proc, err := r.launch(s)
+	if err != nil {
+		r.audit(map[string]any{"status": "launch_failed", "session": s.ID, "identity": s.Identity, "reason": err.Error()})
+		return fmt.Errorf("launch: %w", err)
+	}
+	s.mu.Lock()
+	s.proc = proc
+	s.mu.Unlock()
+	go s.pump(proc)
+	r.audit(map[string]any{"status": "launched", "session": s.ID, "identity": s.Identity, "cwd": s.Cwd})
+	r.auditSharedCwd(s)
+	if res, err := s.call("initialize", initRaw); err != nil || len(res.Error) > 0 {
+		s.stop()
+		return fmt.Errorf("initialize: %v%s", err, res.Error)
+	}
+	if native != "" {
+		return nil // loadSession forwards the session/load itself
+	}
+	res, err := s.call("session/new", openRaw)
+	if err == nil && len(res.Error) > 0 {
+		err = fmt.Errorf("%s", res.Error)
+	}
+	got := jsonString(res.Result, "sessionId")
+	if err == nil && got == "" {
+		err = errors.New("no sessionId in its answer")
+	}
+	if err != nil {
+		s.stop()
+		return fmt.Errorf("session/new: %w", err)
+	}
+	s.mu.Lock()
+	s.Native = got
+	s.mu.Unlock()
+	r.save()
+	return nil
+}
+
+// auditSharedCwd records two live sessions in one cwd: conductor archives by
+// cwd, and each live agent is meant to have its own.
+func (r *PaseoRelay) auditSharedCwd(s *relaySession) {
+	r.mu.Lock()
+	var others []string
+	for id, o := range r.sessions {
+		if o == s {
+			continue
 		}
-		a = &relayAgent{id: agentID, r: r, pending: map[string]pendingCall{}}
-		r.agents[agentID] = a
-		r.mu.Unlock()
-		proc, err := r.launch(agentID, cwd)
-		if err != nil {
-			r.mu.Lock()
-			delete(r.agents, agentID)
-			r.mu.Unlock()
-			return nil, fmt.Errorf("launch: %w", err)
+		o.mu.Lock()
+		if o.Cwd == s.Cwd && o.proc != nil {
+			others = append(others, id)
 		}
-		a.mu.Lock()
-		a.proc = proc
-		a.mu.Unlock()
-		go a.pump()
-		r.audit(map[string]any{"status": "launched", "agent": agentID, "cwd": cwd})
-	} else {
-		r.mu.Unlock()
+		o.mu.Unlock()
 	}
-	a.mu.Lock()
-	for a.proc == nil && !a.gone { // a concurrent attach is still launching it
-		a.mu.Unlock()
-		time.Sleep(20 * time.Millisecond)
-		a.mu.Lock()
+	r.mu.Unlock()
+	if len(others) > 0 {
+		r.audit(map[string]any{"status": "cwd_shared", "session": s.ID, "cwd": s.Cwd, "others": others})
+		r.logf("paseo provider: session %s shares cwd %s with live session(s) %s — archiving by cwd ends them all", s.ID, s.Cwd, strings.Join(others, ", "))
 	}
-	if a.gone {
-		a.mu.Unlock()
-		return nil, errors.New("the agent exited")
-	}
-	old := a.conn
-	a.conn, a.detached = conn, time.Time{}
-	needInit := !a.initDone
-	a.mu.Unlock()
-	if old != nil && old != conn {
-		_ = old.c.Close() // one paseo stream per agent: the newest wins
-	}
-	if needInit {
-		res, err := a.call("initialize", init.Params)
-		if err != nil {
-			return nil, fmt.Errorf("initialize: %w", err)
-		}
-		if len(res.Error) > 0 {
-			return nil, fmt.Errorf("initialize: %s", res.Error)
-		}
-		a.mu.Lock()
-		a.initDone = true
-		a.mu.Unlock()
-	}
-	r.audit(map[string]any{"status": "attached", "agent": agentID})
-	return a, nil
 }
 
 // call sends a relay-internal request to the agent and waits for its answer.
-func (a *relayAgent) call(method string, params json.RawMessage) (relayMsg, error) {
+func (s *relaySession) call(method string, params json.RawMessage) (relayMsg, error) {
 	w := make(chan relayMsg, 1)
-	a.mu.Lock()
-	a.nextID++
-	rid := json.RawMessage(strconv.FormatInt(a.nextID, 10))
-	a.pending[string(rid)] = pendingCall{method: method, waiter: w}
-	a.mu.Unlock()
-	if err := a.write(relayMsg{JSONRPC: "2.0", ID: rid, Method: method, Params: params}); err != nil {
+	s.mu.Lock()
+	proc := s.proc
+	s.nextID++
+	rid := json.RawMessage(strconv.FormatInt(s.nextID, 10))
+	s.pending[string(rid)] = pendingCall{method: method, waiter: w}
+	s.mu.Unlock()
+	if proc == nil {
+		return relayMsg{}, errors.New("the agent is not running")
+	}
+	if err := s.write(proc, relayMsg{JSONRPC: "2.0", ID: rid, Method: method, Params: params}); err != nil {
 		return relayMsg{}, err
 	}
 	select {
@@ -590,70 +802,99 @@ func (a *relayAgent) call(method string, params json.RawMessage) (relayMsg, erro
 			return relayMsg{}, errors.New("the agent exited")
 		}
 		return m, nil
-	case <-a.proc.exited:
-		return relayMsg{}, errors.New("the agent exited")
 	case <-time.After(2 * time.Minute):
 		return relayMsg{}, errors.New("no answer within 2m")
 	}
 }
 
-func (a *relayAgent) write(m relayMsg) error {
+func (s *relaySession) write(proc *acpProcess, m relayMsg) error {
 	b, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
-	a.wmu.Lock()
-	defer a.wmu.Unlock()
-	_, err = a.proc.stdin.Write(append(b, '\n'))
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	_, err = proc.stdin.Write(append(b, '\n'))
 	return err
 }
 
-// fromPaseo forwards one message from conn to the agent.
-func (a *relayAgent) fromPaseo(conn *relayConn, m relayMsg) {
-	switch {
-	case m.isRequest():
-		params := a.toAgentParams(m.Method, m.Params)
-		a.mu.Lock()
-		a.nextID++
-		rid := json.RawMessage(strconv.FormatInt(a.nextID, 10))
-		a.pending[string(rid)] = pendingCall{conn: conn, id: m.ID, method: m.Method}
-		a.mu.Unlock()
-		if err := a.write(relayMsg{JSONRPC: "2.0", ID: rid, Method: m.Method, Params: params}); err != nil {
-			_ = conn.send(rpcErr(m.ID, -32603, "conductor: the agent is gone"))
-		}
-	case m.isNotification():
-		_ = a.write(relayMsg{JSONRPC: "2.0", Method: m.Method, Params: a.toAgentParams(m.Method, m.Params)})
-	default:
-		// paseo's answer to the agent's own request (a permission prompt):
-		// the agent's id space, passed through.
-		_ = a.write(m)
+// forward sends a paseo request (id) to the agent under a fresh id.
+func (s *relaySession) forward(conn *relayConn, id json.RawMessage, method string, params json.RawMessage) {
+	s.mu.Lock()
+	proc := s.proc
+	s.nextID++
+	rid := json.RawMessage(strconv.FormatInt(s.nextID, 10))
+	s.pending[string(rid)] = pendingCall{conn: conn, id: id, method: method}
+	s.mu.Unlock()
+	if proc == nil || s.write(proc, relayMsg{JSONRPC: "2.0", ID: rid, Method: method, Params: s.toAgent(params)}) != nil {
+		_ = conn.send(rpcErr(id, -32603, "conductor: the agent is gone"))
 	}
 }
 
-// toAgentParams rewrites a paseo message's params for the agent: the
-// session id back to the agent's own, and for session/new|load, the
-// identity removed and paseo's own MCP server stripped (unless
-// paseo_tools).
-func (a *relayAgent) toAgentParams(method string, raw json.RawMessage) json.RawMessage {
-	var p map[string]json.RawMessage
-	if json.Unmarshal(raw, &p) != nil || p == nil {
-		return raw
-	}
-	if sid := jsonString(raw, "sessionId"); sid != "" {
-		if _, native, ok := parseRelaySessionID(sid); ok {
-			p["sessionId"], _ = json.Marshal(native)
+// fromPaseo handles one message on an open session.
+func (s *relaySession) fromPaseo(conn *relayConn, m relayMsg) {
+	s.mu.Lock()
+	proc := s.proc
+	s.mu.Unlock()
+	switch {
+	case m.Method == "session/close":
+		if proc == nil {
+			// Never launched — paseo's model listing, or a session closed
+			// before it was used: nothing to keep.
+			if s.native() == "" {
+				s.r.forget(s)
+			}
+			if m.isRequest() {
+				_ = conn.send(rpcResult(m.ID, map[string]any{}))
+			}
+			return
 		}
-	}
-	if method == "session/new" || method == "session/load" {
-		p["_meta"] = dropConductorMeta(p["_meta"])
-		if !a.r.PaseoTools {
-			var stripped []string
-			p["mcpServers"], stripped = stripPaseoMCP(p["mcpServers"])
-			if len(stripped) > 0 {
-				a.r.audit(map[string]any{"status": "mcp_stripped", "agent": a.id, "servers": stripped})
+		if m.isRequest() {
+			s.forward(conn, m.ID, m.Method, m.Params)
+		}
+	case m.isRequest():
+		if proc == nil {
+			if err := s.ensureLaunched(); err != nil {
+				_ = conn.send(rpcErr(m.ID, -32603, "conductor: "+err.Error()))
+				return
 			}
 		}
+		s.forward(conn, m.ID, m.Method, m.Params)
+	case m.isNotification():
+		if proc != nil {
+			_ = s.write(proc, relayMsg{JSONRPC: "2.0", Method: m.Method, Params: s.toAgent(m.Params)})
+		}
+	default:
+		// paseo's answer to the agent's own request (a permission prompt):
+		// the agent's id space, passed through.
+		if proc != nil {
+			_ = s.write(proc, m)
+		}
 	}
+}
+
+// toAgent rewrites params for the agent: conductor's session id to the
+// agent's own.
+func (s *relaySession) toAgent(raw json.RawMessage) json.RawMessage {
+	return swapSessionID(raw, s.ID, s.native())
+}
+
+func (s *relaySession) native() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Native
+}
+
+// swapSessionID replaces params.sessionId == from with to.
+func swapSessionID(raw json.RawMessage, from, to string) json.RawMessage {
+	if to == "" || jsonString(raw, "sessionId") != from {
+		return raw
+	}
+	var p map[string]json.RawMessage
+	if json.Unmarshal(raw, &p) != nil {
+		return raw
+	}
+	p["sessionId"], _ = json.Marshal(to)
 	b, err := json.Marshal(p)
 	if err != nil {
 		return raw
@@ -661,64 +902,10 @@ func (a *relayAgent) toAgentParams(method string, raw json.RawMessage) json.RawM
 	return b
 }
 
-// dropConductorMeta removes `_paseo.providerOptions._conductor` (the plugin's
-// note to conductor, not the agent's business) from a session's _meta.
-func dropConductorMeta(raw json.RawMessage) json.RawMessage {
-	var meta map[string]map[string]json.RawMessage
-	if len(raw) == 0 || json.Unmarshal(raw, &meta) != nil || meta["_paseo"] == nil {
-		return raw
-	}
-	var opts map[string]json.RawMessage
-	if json.Unmarshal(meta["_paseo"]["providerOptions"], &opts) == nil && opts != nil {
-		delete(opts, "_conductor")
-		meta["_paseo"]["providerOptions"], _ = json.Marshal(opts)
-	}
-	b, err := json.Marshal(meta)
-	if err != nil {
-		return raw
-	}
-	return b
-}
-
-// stripPaseoMCP removes paseo's own MCP server from an ACP mcpServers list:
-// an http/sse server at paseo's agent-tools path (/mcp/agents), or one named
-// "paseo". It carries a paseo bearer token, and its tools create and drive
-// agents on any provider — an unjailed one included.
-func stripPaseoMCP(raw json.RawMessage) (json.RawMessage, []string) {
-	var servers []map[string]json.RawMessage
-	if len(raw) == 0 || json.Unmarshal(raw, &servers) != nil {
-		return raw, nil
-	}
-	var kept []map[string]json.RawMessage
-	var stripped []string
-	for _, s := range servers {
-		var name, u string
-		_ = json.Unmarshal(s["name"], &name)
-		_ = json.Unmarshal(s["url"], &u)
-		paseo := name == "paseo"
-		if pu, err := url.Parse(u); err == nil && u != "" && pu.Path == "/mcp/agents" {
-			paseo = true
-		}
-		if paseo {
-			stripped = append(stripped, name)
-			continue
-		}
-		kept = append(kept, s)
-	}
-	if kept == nil {
-		kept = []map[string]json.RawMessage{}
-	}
-	b, err := json.Marshal(kept)
-	if err != nil {
-		return raw, nil
-	}
-	return b, stripped
-}
-
 // pump reads the agent's stdout for its whole life and delivers each
 // message to the attached paseo stream.
-func (a *relayAgent) pump() {
-	rd := bufio.NewReaderSize(a.proc.stdout, 1<<16)
+func (s *relaySession) pump(proc *acpProcess) {
+	rd := bufio.NewReaderSize(proc.stdout, 1<<16)
 	for {
 		line, err := readLine(rd)
 		if err != nil {
@@ -728,18 +915,18 @@ func (a *relayAgent) pump() {
 		if json.Unmarshal(line, &m) != nil {
 			continue
 		}
-		a.fromAgent(m)
+		s.fromAgent(proc, m)
 	}
-	a.exited()
+	s.exited(proc)
 }
 
-func (a *relayAgent) fromAgent(m relayMsg) {
+func (s *relaySession) fromAgent(proc *acpProcess, m relayMsg) {
 	if m.Method == "" { // an answer to a request the relay forwarded
-		a.mu.Lock()
-		pc, ok := a.pending[string(m.ID)]
-		delete(a.pending, string(m.ID))
-		cur := a.conn
-		a.mu.Unlock()
+		s.mu.Lock()
+		pc, ok := s.pending[string(m.ID)]
+		delete(s.pending, string(m.ID))
+		cur := s.conn
+		s.mu.Unlock()
 		if !ok {
 			return
 		}
@@ -750,160 +937,113 @@ func (a *relayAgent) fromAgent(m relayMsg) {
 		if pc.conn == nil || pc.conn != cur {
 			return // its stream is gone
 		}
-		if pc.method == "session/new" && len(m.Result) > 0 {
-			m.Result = a.rewriteNewSession(m.Result)
-		}
-		if pc.method == "session/load" && len(m.Error) == 0 {
-			a.r.audit(map[string]any{"status": "resumed", "agent": a.id})
-		}
 		m.ID = pc.id
 		_ = pc.conn.send(m)
 		return
 	}
-	// The agent's own notification or request: its session id becomes
-	// conductor's.
-	m.Params = a.toPaseoParams(m.Params)
-	a.mu.Lock()
-	cur := a.conn
-	a.mu.Unlock()
+	// The agent's own notification or request, under conductor's session id.
+	m.Params = swapSessionID(m.Params, s.native(), s.ID)
+	s.mu.Lock()
+	cur := s.conn
+	s.mu.Unlock()
 	if cur == nil {
 		if m.isRequest() {
-			_ = a.write(rpcErr(m.ID, -32603, "conductor: no paseo client is attached to this agent"))
+			_ = s.write(proc, rpcErr(m.ID, -32603, "conductor: no paseo client is attached to this session"))
 		}
 		return
 	}
 	_ = cur.send(m)
 }
 
-// rewriteNewSession records the agent's own session id and answers paseo
-// with conductor's.
-func (a *relayAgent) rewriteNewSession(res json.RawMessage) json.RawMessage {
-	var p map[string]json.RawMessage
-	if json.Unmarshal(res, &p) != nil {
-		return res
-	}
-	var native string
-	_ = json.Unmarshal(p["sessionId"], &native)
-	if native == "" {
-		return res
-	}
-	a.mu.Lock()
-	a.native = native
-	a.mu.Unlock()
-	p["sessionId"], _ = json.Marshal(relaySessionID(a.id, native))
-	b, err := json.Marshal(p)
-	if err != nil {
-		return res
-	}
-	return b
-}
-
-func (a *relayAgent) toPaseoParams(raw json.RawMessage) json.RawMessage {
-	var p map[string]json.RawMessage
-	if json.Unmarshal(raw, &p) != nil || p == nil {
-		return raw
-	}
-	var sid string
-	if json.Unmarshal(p["sessionId"], &sid) != nil || sid == "" {
-		return raw
-	}
-	p["sessionId"], _ = json.Marshal(relaySessionID(a.id, sid))
-	b, err := json.Marshal(p)
-	if err != nil {
-		return raw
-	}
-	return b
-}
-
 // detach marks conn gone; the agent stays up, waiting for a session/load.
-func (a *relayAgent) detach(conn *relayConn) {
-	a.mu.Lock()
-	if a.conn != conn {
-		a.mu.Unlock()
+func (s *relaySession) detach(conn *relayConn) {
+	s.mu.Lock()
+	if s.conn != conn {
+		s.mu.Unlock()
 		return
 	}
-	a.conn, a.detached = nil, a.r.clock()
-	a.mu.Unlock()
-	a.r.audit(map[string]any{"status": "detached", "agent": a.id})
+	s.conn, s.detached = nil, s.r.clock()
+	live := s.proc != nil
+	s.mu.Unlock()
+	if live {
+		s.r.audit(map[string]any{"status": "detached", "session": s.ID, "identity": s.Identity})
+	}
 }
 
-// exited is the agent process ending on its own: forget it, and close its
-// stream (paseo reports the session's runtime failed).
-func (a *relayAgent) exited() {
-	a.mu.Lock()
-	a.gone = true
-	conn := a.conn
-	a.conn = nil
-	waiters := a.pending
-	a.pending = map[string]pendingCall{}
-	a.mu.Unlock()
+// exited is the agent process ending (on its own, or stopped): the session
+// keeps its record — a session/load relaunches it — and its stream closes.
+func (s *relaySession) exited(proc *acpProcess) {
+	s.mu.Lock()
+	if s.proc != proc {
+		s.mu.Unlock()
+		return
+	}
+	s.proc = nil
+	conn := s.conn
+	waiters := s.pending
+	s.pending = map[string]pendingCall{}
+	s.mu.Unlock()
 	for _, pc := range waiters {
 		if pc.waiter != nil {
 			close(pc.waiter)
 		}
 	}
-	r := a.r
-	r.mu.Lock()
-	if r.agents[a.id] == a {
-		delete(r.agents, a.id)
-	}
-	r.mu.Unlock()
 	if conn != nil {
 		_ = conn.c.Close()
 	}
-	_ = a.proc.cleanup()
-	r.audit(map[string]any{"status": "exited", "agent": a.id})
+	_ = proc.cleanup()
+	s.r.audit(map[string]any{"status": "exited", "session": s.ID, "identity": s.Identity})
 }
 
 // stop ends the agent and its jail.
-func (a *relayAgent) stop() {
-	a.mu.Lock()
-	proc, conn := a.proc, a.conn
-	a.mu.Unlock()
-	if conn != nil {
-		_ = conn.c.Close()
-	}
+func (s *relaySession) stop() {
+	s.mu.Lock()
+	proc := s.proc
+	s.mu.Unlock()
 	if proc != nil {
 		_ = proc.cleanup()
 	}
 }
 
-// Archive tears down the paseo agent's jail (idempotent).
-func (r *PaseoRelay) Archive(agentID, why string) bool {
+// forget drops a session's record.
+func (r *PaseoRelay) forget(s *relaySession) {
 	r.mu.Lock()
-	a := r.agents[agentID]
-	delete(r.agents, agentID)
+	if r.sessions[s.ID] == s {
+		delete(r.sessions, s.ID)
+		r.saveRecordsLocked()
+	}
 	r.mu.Unlock()
-	if a == nil {
-		return false
-	}
-	a.stop()
-	r.audit(map[string]any{"status": "archived", "agent": agentID, "reason": why})
-	return true
 }
 
-// handleArchive serves the plugin's `_conductor/archive` control call:
-// {agentId} (the agent.archived hook) or {sessionId} (the provider's
-// session.archive, with the persisted conductor session id).
-func (r *PaseoRelay) handleArchive(conn *relayConn, m relayMsg) {
-	var p struct {
-		AgentID   string `json:"agentId"`
-		SessionID string `json:"sessionId"`
+// ArchiveCwd ends and forgets every session opened in cwd.
+func (r *PaseoRelay) ArchiveCwd(cwd string) int {
+	cwd = filepath.Clean(cwd)
+	r.mu.Lock()
+	var gone []*relaySession
+	for id, s := range r.sessions {
+		if s.Cwd == cwd {
+			gone = append(gone, s)
+			delete(r.sessions, id)
+		}
 	}
-	_ = json.Unmarshal(m.Params, &p)
-	id := p.AgentID
-	if id == "" {
-		id, _, _ = parseRelaySessionID(p.SessionID)
+	if len(gone) > 0 {
+		r.saveRecordsLocked()
 	}
-	if id == "" {
-		_ = conn.send(rpcErr(m.ID, -32602, "conductor: archive names no agent"))
-		return
+	r.mu.Unlock()
+	for _, s := range gone {
+		s.mu.Lock()
+		conn := s.conn
+		s.mu.Unlock()
+		if conn != nil {
+			_ = conn.c.Close()
+		}
+		s.stop()
+		r.audit(map[string]any{"status": "archived", "session": s.ID, "identity": s.Identity, "cwd": cwd})
 	}
-	stopped := r.Archive(id, "paseo archived the agent")
-	_ = conn.send(rpcResult(m.ID, map[string]any{"stopped": stopped}))
+	return len(gone)
 }
 
-// reapLoop ends agents that sat detached past Detached.
+// reapLoop ends agents nothing re-attached within Detached.
 func (r *PaseoRelay) reapLoop(ctx context.Context) {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
@@ -920,19 +1060,18 @@ func (r *PaseoRelay) reapLoop(ctx context.Context) {
 func (r *PaseoRelay) reap() {
 	now := r.clock()
 	r.mu.Lock()
-	var stale []*relayAgent
-	for id, a := range r.agents {
-		a.mu.Lock()
-		if a.conn == nil && !a.detached.IsZero() && now.Sub(a.detached) > r.Detached {
-			stale = append(stale, a)
-			delete(r.agents, id)
+	var stale []*relaySession
+	for _, s := range r.sessions {
+		s.mu.Lock()
+		if s.proc != nil && s.conn == nil && !s.detached.IsZero() && now.Sub(s.detached) > r.Detached {
+			stale = append(stale, s)
 		}
-		a.mu.Unlock()
+		s.mu.Unlock()
 	}
 	r.mu.Unlock()
-	for _, a := range stale {
-		a.stop()
-		r.audit(map[string]any{"status": "expired", "agent": a.id, "reason": "detached past paseo_provider.detached_ttl"})
+	for _, s := range stale {
+		s.stop()
+		r.audit(map[string]any{"status": "expired", "session": s.ID, "identity": s.Identity, "reason": "detached past paseo_provider.detached_ttl"})
 	}
 }
 

@@ -1,0 +1,46 @@
+# The paseo provider canary: the LATEST published paseo, conductor's embedded
+# plugin, and one relay round-trip with a fake ACP agent in the workspace
+# jail (test/paseo-canary/run.sh). Scheduled, so a paseo release that breaks
+# the surface the plugin depends on (docs/wiki/Paseo-Provider.md) turns this
+# red rather than a box; also run on changes to the provider itself. No
+# model, no secrets, about a minute.
+name: paseo-canary
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "internal/paseoplugin/**"
+      - "internal/controller/paseorelay*.go"
+      - "internal/controller/acp.go"
+      - "cmd/conductor/paseoprovider.go"
+      - "test/paseo-canary/**"
+      - ".github/workflows/paseo-canary.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: latest published paseo
+        run: |
+          npm install -g @getpaseo/cli@latest
+          paseo --version
+      - name: allow unprivileged user namespaces (the workspace jail)
+        # Ubuntu 23.10+ restricts them by AppArmor; the provider never runs an
+        # agent unjailed, so the canary needs them.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: relay round-trip
+        run: bash test/paseo-canary/run.sh

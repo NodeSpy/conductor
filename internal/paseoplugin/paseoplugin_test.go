@@ -53,13 +53,46 @@ func TestContentsCarryTheSocket(t *testing.T) {
 	if !strings.Contains(string(a["server/endpoint.json"]), "/s/one.sock") {
 		t.Fatalf("endpoint: %s", a["server/endpoint.json"])
 	}
-	if !strings.Contains(string(a["index.server.ts"]), `id: PROVIDER_ID`) || !strings.Contains(string(a["index.server.ts"]), `"session.archive"`) {
-		t.Fatal("the plugin registers the provider and serves archive")
+	if !strings.Contains(string(a["index.server.ts"]), `runAcpProvider({ id: "conductor"`) {
+		t.Fatal("the plugin registers the conductor provider")
 	}
 	b, _ := Contents("/s/one.sock")
 	c, _ := Contents("/s/two.sock")
 	if Version(a) != Version(b) || Version(a) == Version(c) {
 		t.Fatal("the version is the content")
+	}
+}
+
+// The plugin depends on paseo's public plugin API and nothing else — every
+// paseo release must not need a plugin change (docs/wiki/Paseo-Provider.md
+// lists the surface). This pins the imports to that surface and keeps
+// paseo's internals (session config, env, _meta) out of it.
+func TestPluginUsesOnlyPaseosPublicSurface(t *testing.T) {
+	c, err := Contents("/s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(c["index.server.ts"])
+	allowed := map[string]bool{
+		`"@getpaseo/plugin/server"`: true, `"@getpaseo/plugin/server/acp"`: true,
+		`"node:net"`: true, `"./server/endpoint.json"`: true,
+	}
+	for _, line := range strings.Split(src, "\n") {
+		if !strings.HasPrefix(line, "import ") {
+			continue
+		}
+		from := line[strings.LastIndex(line, " ")+1:]
+		if !allowed[strings.TrimSuffix(from, ";")] {
+			t.Errorf("import outside the declared surface: %s", line)
+		}
+	}
+	for _, internal := range []string{"_meta", "_paseo", "providerOptions", "PASEO_", "callerAgentId", "session.open", ".connect(", "server.on(", "server.before("} {
+		if strings.Contains(src, internal) {
+			t.Errorf("the plugin reaches into paseo internals: %q", internal)
+		}
+	}
+	if !strings.Contains(string(c["paseo-plugin.json"]), `">=0.10.1"`) {
+		t.Error("the declared paseo range is the one it is tested on")
 	}
 }
 

@@ -56,7 +56,7 @@ func startPaseoProvider(ctx context.Context, cfg *config.Config, audit func(map[
 		return
 	}
 	_ = os.Chmod(sock, 0o600)
-	relay := controller.NewPaseoRelay(cc, p, filepath.Join(paseoStateDir(cfg), "paseo-provider", "probe"), logf, audit)
+	relay := controller.NewPaseoRelay(cc, p, filepath.Join(paseoStateDir(cfg), "paseo-provider"), logf, audit)
 	logf("paseo provider: serving on %s (runtime %s) — `conductor paseo install-plugin` makes paseo use it", sock, p.Runtime)
 	go func() {
 		if err := relay.Serve(ctx, l); err != nil {

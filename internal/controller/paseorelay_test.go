@@ -16,18 +16,16 @@ import (
 )
 
 // relayFakeAgent is an in-process ACP agent on a pipe pair: it answers
-// initialize, session/new|load|prompt|close, sends a session/update
-// notification per prompt, and records every message it got.
+// initialize, session/new|load|prompt|close, sends a session/update per
+// prompt (and per load, as a replay), and records every message it got.
 type relayFakeAgent struct {
 	mu       sync.Mutex
 	got      []relayMsg
 	sessions int
 	in       *io.PipeReader // what the relay writes
 	out      *io.PipeWriter // what the relay reads
-	exited   chan struct{}
 	stopped  bool
-	// requestWhenPrompted makes a prompt send the client a request first.
-	requestWhenPrompted bool
+	launch   *relaySession
 }
 
 func (f *relayFakeAgent) received(method string) []relayMsg {
@@ -40,6 +38,18 @@ func (f *relayFakeAgent) received(method string) []relayMsg {
 		}
 	}
 	return out
+}
+
+func (f *relayFakeAgent) messages() []relayMsg {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]relayMsg(nil), f.got...)
+}
+
+func (f *relayFakeAgent) isStopped() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stopped
 }
 
 func (f *relayFakeAgent) send(m any) {
@@ -75,14 +85,14 @@ func (f *relayFakeAgent) run() {
 			n := f.sessions
 			f.mu.Unlock()
 			reply(map[string]any{"sessionId": fmt.Sprintf("nat-%d", n), "modes": map[string]any{"currentModeId": "default"}})
-		case "session/load", "session/close":
+		case "session/load":
+			f.send(map[string]any{"jsonrpc": "2.0", "method": "session/update",
+				"params": map[string]any{"sessionId": jsonString(m.Params, "sessionId"), "update": map[string]any{"sessionUpdate": "user_message_chunk"}}})
+			reply(map[string]any{})
+		case "session/close", "session/set_mode":
 			reply(map[string]any{})
 		case "session/prompt":
 			sid := jsonString(m.Params, "sessionId")
-			if f.requestWhenPrompted {
-				f.send(map[string]any{"jsonrpc": "2.0", "id": 900, "method": "session/request_permission",
-					"params": map[string]any{"sessionId": sid}})
-			}
 			f.send(map[string]any{"jsonrpc": "2.0", "method": "session/update",
 				"params": map[string]any{"sessionId": sid, "update": map[string]any{"sessionUpdate": "agent_message_chunk"}}})
 			reply(map[string]any{"stopReason": "end_turn"})
@@ -97,41 +107,60 @@ type relayRig struct {
 	t      *testing.T
 	r      *PaseoRelay
 	sock   string
+	dir    string
+	cancel context.CancelFunc
 	mu     sync.Mutex
-	agents map[string][]*relayFakeAgent // by paseo agent id ("probe" too)
+	agents []*relayFakeAgent
 	audits []map[string]any
 	now    time.Time
+	starts int
 }
 
 func newRelayRig(t *testing.T) *relayRig {
 	t.Helper()
-	rig := &relayRig{t: t, agents: map[string][]*relayFakeAgent{}, now: time.Unix(1_700_000_000, 0)}
-	dir, err := tempShortDir()
+	dir, err := os.MkdirTemp("/tmp", "cjr") // a unix socket path is capped near 104 bytes
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { removeAll(dir) })
-	rig.sock = filepath.Join(dir, "p.sock")
-	rig.r = &PaseoRelay{Detached: time.Hour, ProbeDir: dir,
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	rig := &relayRig{t: t, dir: dir, now: time.Unix(1_700_000_000, 0)}
+	rig.start()
+	return rig
+}
+
+// start (re)starts the relay on the rig's state dir — a second start is a
+// conductor restart.
+func (rig *relayRig) start() {
+	t := rig.t
+	var allow []string
+	if rig.cancel != nil {
+		allow = rig.r.MCPServers
+		rig.cancel()
+		time.Sleep(50 * time.Millisecond)
+	}
+	rig.starts++
+	rig.sock = filepath.Join(rig.dir, fmt.Sprintf("p%d.sock", rig.starts))
+	r := &PaseoRelay{Detached: time.Hour, StateDir: filepath.Join(rig.dir, "state"), MCPServers: allow,
 		Audit: func(row map[string]any) { rig.mu.Lock(); rig.audits = append(rig.audits, row); rig.mu.Unlock() }}
-	rig.r.now = func() time.Time { rig.mu.Lock(); defer rig.mu.Unlock(); return rig.now }
-	rig.r.launch = func(agentID, cwd string) (*acpProcess, error) {
+	r.now = func() time.Time { rig.mu.Lock(); defer rig.mu.Unlock(); return rig.now }
+	r.launch = func(s *relaySession) (*acpProcess, error) {
 		toAgentR, toAgentW := io.Pipe()
 		fromAgentR, fromAgentW := io.Pipe()
-		f := &relayFakeAgent{in: toAgentR, out: fromAgentW, exited: make(chan struct{})}
+		f := &relayFakeAgent{in: toAgentR, out: fromAgentW, launch: s}
 		rig.mu.Lock()
-		rig.agents[agentID] = append(rig.agents[agentID], f)
+		rig.agents = append(rig.agents, f)
 		rig.mu.Unlock()
 		go f.run()
+		exited := make(chan struct{})
 		var once sync.Once
-		return &acpProcess{stdin: toAgentW, stdout: fromAgentR, exited: f.exited, cleanup: func() error {
+		return &acpProcess{stdin: toAgentW, stdout: fromAgentR, exited: exited, cleanup: func() error {
 			once.Do(func() {
 				f.mu.Lock()
 				f.stopped = true
 				f.mu.Unlock()
 				_ = toAgentW.Close()
 				_ = fromAgentW.Close()
-				close(f.exited)
+				close(exited)
 			})
 			return nil
 		}}, nil
@@ -141,15 +170,23 @@ func newRelayRig(t *testing.T) *relayRig {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	rig.cancel = cancel
 	t.Cleanup(cancel)
-	go func() { _ = rig.r.Serve(ctx, l) }()
-	return rig
+	rig.r = r
+	go func() { _ = r.Serve(ctx, l) }()
 }
 
-func (rig *relayRig) launched(agentID string) []*relayFakeAgent {
+// sessionAgents are the agents launched for sessions (not the probe).
+func (rig *relayRig) sessionAgents() []*relayFakeAgent {
 	rig.mu.Lock()
 	defer rig.mu.Unlock()
-	return append([]*relayFakeAgent(nil), rig.agents[agentID]...)
+	var out []*relayFakeAgent
+	for _, f := range rig.agents {
+		if f.launch.ID != "probe" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func (rig *relayRig) audited(status string) []map[string]any {
@@ -164,7 +201,16 @@ func (rig *relayRig) audited(status string) []map[string]any {
 	return out
 }
 
-// paseoSide is one paseo stream to the relay.
+func (rig *relayRig) probeInit(t *testing.T) string {
+	t.Helper()
+	p, err := rig.r.probeResult(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(p.init)
+}
+
+// paseoSide is one paseo stream to the relay, initialized.
 type paseoSide struct {
 	t   *testing.T
 	c   net.Conn
@@ -180,15 +226,9 @@ func (rig *relayRig) dial() *paseoSide {
 		rig.t.Fatal(err)
 	}
 	rig.t.Cleanup(func() { c.Close() })
-	return &paseoSide{t: rig.t, c: c, rd: bufio.NewReader(c)}
-}
-
-func (p *paseoSide) write(m any) {
-	p.t.Helper()
-	b, _ := json.Marshal(m)
-	if _, err := p.c.Write(append(b, '\n')); err != nil {
-		p.t.Fatal(err)
-	}
+	p := &paseoSide{t: rig.t, c: c, rd: bufio.NewReader(c)}
+	mustOK(rig.t, p.call("initialize", map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{}}))
+	return p
 }
 
 // call sends a request and returns its answer (collecting what else comes).
@@ -196,7 +236,10 @@ func (p *paseoSide) call(method string, params any) relayMsg {
 	p.t.Helper()
 	p.id++
 	id := p.id
-	p.write(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+	if _, err := p.c.Write(append(b, '\n')); err != nil {
+		p.t.Fatal(err)
+	}
 	_ = p.c.SetReadDeadline(time.Now().Add(10 * time.Second))
 	for {
 		line, err := readLine(p.rd)
@@ -214,145 +257,173 @@ func (p *paseoSide) call(method string, params any) relayMsg {
 	}
 }
 
-func identity(agentID, cwd string, mcp []any) map[string]any {
-	if mcp == nil {
-		mcp = []any{}
-	}
-	return map[string]any{"cwd": cwd, "mcpServers": mcp, "_meta": map[string]any{"_paseo": map[string]any{
-		"systemPrompt":    "sp",
-		"providerOptions": map[string]any{"member": "m", "_conductor": map[string]any{"agentId": agentID, "paseoSession": "ps-1"}},
-	}}}
-}
-
-func resultField(t *testing.T, m relayMsg, key string) string {
+func mustOK(t *testing.T, m relayMsg) relayMsg {
 	t.Helper()
 	if len(m.Error) > 0 {
 		t.Fatalf("error answer: %s", m.Error)
 	}
-	return jsonString(m.Result, key)
+	return m
 }
 
-const paseoMCP = `{"type":"http","name":"paseo","url":"http://127.0.0.1:6767/mcp/agents?callerAgentId=a1","headers":[{"name":"Authorization","value":"Bearer secret-paseo-token"}]}`
+func newParams(cwd string, mcp ...string) map[string]any {
+	servers := []any{}
+	for _, s := range mcp {
+		var v any
+		_ = json.Unmarshal([]byte(s), &v)
+		servers = append(servers, v)
+	}
+	return map[string]any{"cwd": cwd, "mcpServers": servers, "_meta": map[string]any{"anything": "passes through"}}
+}
+
+// open is a session opened and used (so its agent is launched).
+func (rig *relayRig) open(t *testing.T, cwd string) (*paseoSide, string) {
+	t.Helper()
+	p := rig.dial()
+	sid := jsonString(mustOK(t, p.call("session/new", newParams(cwd))).Result, "sessionId")
+	mustOK(t, p.call("session/prompt", map[string]any{"sessionId": sid, "prompt": []any{}}))
+	return p, sid
+}
+
+func (rig *relayRig) load(t *testing.T, sid, cwd string) (*paseoSide, relayMsg) {
+	t.Helper()
+	q := rig.dial()
+	params := newParams(cwd)
+	params["sessionId"] = sid
+	return q, q.call("session/load", params)
+}
+
+const (
+	paseoMCP = `{"type":"http","name":"paseo","url":"http://127.0.0.1:6767/mcp/agents","headers":[{"name":"Authorization","value":"Bearer secret-paseo-token"}]}`
+	docsMCP  = `{"name":"docs","command":"docs-mcp","args":[],"env":[]}`
+)
+
+func waitUntil(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met within 10s")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
 
 // paseo's capability probe (initialize only) and model listing (session/new
-// with no agent behind it) are answered from the one probe launch — and the
-// probe hides session listing, which the relay does not serve.
+// then session/close) launch nothing but the one probe, and leave no record.
 func TestPaseoRelayProbeAndCatalogLaunchNothing(t *testing.T) {
 	rig := newRelayRig(t)
-	p := rig.dial()
-	init := p.call("initialize", map[string]any{"protocolVersion": 1})
-	if !strings.Contains(string(init.Result), `"loadSession":true`) || strings.Contains(string(init.Result), `"list"`) {
-		t.Fatalf("initialize from the probe, without session listing: %s", init.Result)
-	}
+	_ = rig.dial().c.Close()
 	c := rig.dial()
-	c.call("initialize", map[string]any{"protocolVersion": 1})
-	cat := c.call("session/new", map[string]any{"cwd": "/somewhere", "mcpServers": []any{}})
-	if resultField(t, cat, "sessionId") != "cj-catalog" || !strings.Contains(string(cat.Result), `"currentModeId":"default"`) {
-		t.Fatalf("the catalog is the probe's session/new: %s", cat.Result)
+	cat := mustOK(t, c.call("session/new", newParams("/work/a")))
+	sid := jsonString(cat.Result, "sessionId")
+	if !strings.HasPrefix(sid, relaySessionPrefix) || !strings.Contains(string(cat.Result), `"currentModeId":"default"`) {
+		t.Fatalf("session/new is answered from the probe, under conductor's id: %s", cat.Result)
 	}
-	if got := c.call("session/close", map[string]any{"sessionId": "cj-catalog"}); len(got.Error) > 0 {
-		t.Fatalf("closing the catalog session: %s", got.Error)
+	mustOK(t, c.call("session/close", map[string]any{"sessionId": sid}))
+	if n := len(rig.sessionAgents()); n != 0 {
+		t.Fatalf("a model listing launches nothing, got %d", n)
 	}
-	rig.mu.Lock()
-	defer rig.mu.Unlock()
-	if len(rig.agents) != 1 || len(rig.agents["probe"]) != 1 {
-		t.Fatalf("only the one probe launch, got %v", rig.agents)
+	rig.r.mu.Lock()
+	n := len(rig.r.sessions)
+	rig.r.mu.Unlock()
+	if n != 0 {
+		t.Fatal("a closed, never-used session leaves no record")
+	}
+	if init := rig.probeInit(t); strings.Contains(init, `"list"`) || !strings.Contains(init, `"loadSession":true`) {
+		t.Fatalf("paseo is told the agent's capabilities, minus session listing: %s", init)
 	}
 }
 
-// A session: conductor launches the agent for the paseo agent, answers with
-// its own session id (encoding the agent), translates it both ways, keeps
-// its note and paseo's MCP server away from the agent, and passes the rest
-// through.
-func TestPaseoRelaySessionTranslatesAndStrips(t *testing.T) {
+// The first prompt launches the agent: paseo's initialize, a session/new
+// with paseo's params (its MCP servers dropped), then the prompt — the
+// session id translated both ways.
+func TestPaseoRelayLaunchesLazilyAndTranslates(t *testing.T) {
 	rig := newRelayRig(t)
 	p := rig.dial()
-	p.call("initialize", map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{}})
-	other := `{"type":"stdio","name":"docs","command":"docs-mcp","args":[],"env":[]}`
-	var mcp []any
-	_ = json.Unmarshal([]byte("["+paseoMCP+","+other+"]"), &mcp)
-	res := p.call("session/new", identity("agent-1", "/work/a", mcp))
-	sid := resultField(t, res, "sessionId")
-	owner, native, ok := parseRelaySessionID(sid)
-	if !ok || owner != "agent-1" || native != "nat-1" {
-		t.Fatalf("conductor's session id encodes the agent: %q", sid)
+	sid := jsonString(mustOK(t, p.call("session/new", newParams("/work/a", paseoMCP, docsMCP))).Result, "sessionId")
+	if len(rig.sessionAgents()) != 0 {
+		t.Fatal("nothing launched before the session is used")
 	}
-	agents := rig.launched("agent-1")
+	pr := mustOK(t, p.call("session/prompt", map[string]any{"sessionId": sid, "prompt": []any{}}))
+	if jsonString(pr.Result, "stopReason") != "end_turn" {
+		t.Fatalf("prompt answer: %s", pr.Result)
+	}
+	agents := rig.sessionAgents()
 	if len(agents) != 1 {
-		t.Fatalf("one launch for agent-1, got %d", len(agents))
+		t.Fatalf("one launch, got %d", len(agents))
 	}
 	f := agents[0]
-	if len(f.received("initialize")) != 1 {
-		t.Fatal("the agent gets paseo's initialize")
+	if len(f.received("initialize")) != 1 || len(f.received("session/new")) != 1 {
+		t.Fatal("the launch initializes and opens the session")
 	}
-	nw := f.received("session/new")[0]
-	if strings.Contains(string(nw.Params), "_conductor") || strings.Contains(string(nw.Params), "secret-paseo-token") ||
-		strings.Contains(string(nw.Params), "/mcp/agents") {
-		t.Fatalf("the agent must not see conductor's note or paseo's MCP server: %s", nw.Params)
+	nw := string(f.received("session/new")[0].Params)
+	if strings.Contains(nw, "secret-paseo-token") || strings.Contains(nw, "docs-mcp") {
+		t.Fatalf("every MCP server paseo passes is dropped by default: %s", nw)
 	}
-	if !strings.Contains(string(nw.Params), `"docs-mcp"`) || !strings.Contains(string(nw.Params), `"member":"m"`) || !strings.Contains(string(nw.Params), `"systemPrompt":"sp"`) {
-		t.Fatalf("everything else passes through: %s", nw.Params)
+	if !strings.Contains(nw, `"anything":"passes through"`) || !strings.Contains(nw, `"/work/a"`) {
+		t.Fatalf("the rest passes through: %s", nw)
 	}
-	if len(rig.audited("mcp_stripped")) != 1 {
-		t.Fatal("the strip is audited")
-	}
-	pr := p.call("session/prompt", map[string]any{"sessionId": sid, "prompt": []any{}})
-	if resultField(t, pr, "stopReason") != "end_turn" {
-		t.Fatalf("prompt answer: %s", pr.Result)
+	if got := rig.audited("mcp_dropped"); len(got) != 1 || fmt.Sprint(got[0]["servers"]) != "[paseo docs]" {
+		t.Fatalf("the drop is audited, by name: %v", got)
 	}
 	if got := jsonString(f.received("session/prompt")[0].Params, "sessionId"); got != "nat-1" {
 		t.Fatalf("the agent sees its own session id, got %q", got)
 	}
 	if len(p.got) != 1 || jsonString(p.got[0].Params, "sessionId") != sid {
-		t.Fatalf("the agent's update reaches paseo under conductor's session id: %+v", p.got)
+		t.Fatalf("the agent's update reaches paseo under conductor's id: %+v", p.got)
 	}
 }
 
-// paseo_tools: true keeps paseo's MCP server (the documented footgun).
-func TestPaseoRelayPaseoToolsKeepsTheServer(t *testing.T) {
-	rig := newRelayRig(t)
-	rig.r.PaseoTools = true
-	p := rig.dial()
-	p.call("initialize", map[string]any{})
-	var mcp []any
-	_ = json.Unmarshal([]byte("["+paseoMCP+"]"), &mcp)
-	p.call("session/new", identity("agent-1", "/work/a", mcp))
-	if nw := rig.launched("agent-1")[0].received("session/new")[0]; !strings.Contains(string(nw.Params), "/mcp/agents") {
-		t.Fatalf("paseo_tools keeps the server: %s", nw.Params)
+// paseo_provider.mcp_servers keeps the servers it names; "*" keeps all.
+func TestPaseoRelayMCPAllowList(t *testing.T) {
+	for _, tc := range []struct {
+		allow      []string
+		keep, drop []string
+	}{
+		{[]string{"docs"}, []string{"docs-mcp"}, []string{"secret-paseo-token"}},
+		{[]string{"*"}, []string{"docs-mcp", "secret-paseo-token"}, nil},
+	} {
+		rig := newRelayRig(t)
+		rig.r.MCPServers = tc.allow
+		p := rig.dial()
+		sid := jsonString(mustOK(t, p.call("session/new", newParams("/work/a", paseoMCP, docsMCP))).Result, "sessionId")
+		mustOK(t, p.call("session/prompt", map[string]any{"sessionId": sid, "prompt": []any{}}))
+		nw := string(rig.sessionAgents()[0].received("session/new")[0].Params)
+		for _, k := range tc.keep {
+			if !strings.Contains(nw, k) {
+				t.Errorf("%v keeps %s: %s", tc.allow, k, nw)
+			}
+		}
+		for _, d := range tc.drop {
+			if strings.Contains(nw, d) {
+				t.Errorf("%v drops %s: %s", tc.allow, d, nw)
+			}
+		}
 	}
 }
 
-// A paseo restart drops the stream; the jailed agent stays up, and the next
-// stream's session/load re-attaches to the same process, under fresh request
-// ids — a late answer meant for the dead stream never reaches the new one.
-func TestPaseoRelayReattachesOnLoad(t *testing.T) {
+// A dropped stream leaves the agent up; session/load on a new stream
+// re-attaches to the same process (no second launch, no second initialize)
+// under fresh request ids, and the agent replays its own session.
+func TestPaseoRelayReattachesALiveAgent(t *testing.T) {
 	rig := newRelayRig(t)
-	p := rig.dial()
-	p.call("initialize", map[string]any{})
-	sid := resultField(t, p.call("session/new", identity("agent-1", "/work/a", nil)), "sessionId")
-	p.c.Close()
-	relayWait(t, func() bool { return len(rig.audited("detached")) == 1 })
-
-	q := rig.dial()
-	q.call("initialize", map[string]any{})
-	load := q.call("session/load", map[string]any{"sessionId": sid, "cwd": "/work/a", "mcpServers": []any{},
-		"_meta": identity("agent-1", "/work/a", nil)["_meta"]})
-	if len(load.Error) > 0 {
-		t.Fatalf("session/load re-attaches: %s", load.Error)
+	p, sid := rig.open(t, "/work/a")
+	_ = p.c.Close()
+	waitUntil(t, func() bool { return len(rig.audited("detached")) == 1 })
+	q, load := rig.load(t, sid, "/work/a")
+	mustOK(t, load)
+	agents := rig.sessionAgents()
+	if len(agents) != 1 || len(agents[0].received("initialize")) != 1 {
+		t.Fatalf("re-attach reuses the live, initialized agent: %d launches", len(agents))
 	}
-	agents := rig.launched("agent-1")
-	if len(agents) != 1 {
-		t.Fatalf("re-attach reuses the live agent, got %d launches", len(agents))
+	if got := jsonString(agents[0].received("session/load")[0].Params, "sessionId"); got != "nat-1" {
+		t.Fatalf("the agent loads its own session, got %q", got)
 	}
-	f := agents[0]
-	if len(f.received("initialize")) != 1 {
-		t.Fatal("the live agent is not initialized twice")
-	}
-	if got := jsonString(f.received("session/load")[0].Params, "sessionId"); got != "nat-1" {
-		t.Fatalf("the agent loads its own session id, got %q", got)
+	if len(q.got) == 0 || jsonString(q.got[0].Params, "sessionId") != sid {
+		t.Fatalf("the replay reaches paseo under conductor's id: %+v", q.got)
 	}
 	ids := map[string]bool{}
-	for _, m := range f.messages() {
+	for _, m := range agents[0].messages() {
 		if m.isRequest() {
 			if ids[string(m.ID)] {
 				t.Fatalf("request id %s reused across streams", m.ID)
@@ -360,80 +431,115 @@ func TestPaseoRelayReattachesOnLoad(t *testing.T) {
 			ids[string(m.ID)] = true
 		}
 	}
-	if len(rig.audited("resumed")) != 1 {
-		t.Fatal("the resume is audited")
+}
+
+// session/close only detaches: the agent keeps running for a load.
+func TestPaseoRelayCloseOnlyDetaches(t *testing.T) {
+	rig := newRelayRig(t)
+	p, sid := rig.open(t, "/work/a")
+	mustOK(t, p.call("session/close", map[string]any{"sessionId": sid}))
+	_ = p.c.Close()
+	waitUntil(t, func() bool { return len(rig.audited("detached")) == 1 })
+	if rig.sessionAgents()[0].isStopped() {
+		t.Fatal("session/close must not end the agent")
+	}
+	_, load := rig.load(t, sid, "/work/a")
+	mustOK(t, load)
+	if len(rig.sessionAgents()) != 1 {
+		t.Fatal("the closed session's agent is re-attached, not relaunched")
 	}
 }
 
-// A session/load naming another agent's session, or with no identity, is
-// refused — a stream cannot attach to someone else's jail.
-func TestPaseoRelayLoadMustBeTheAgentsOwn(t *testing.T) {
+// detached_ttl ends a detached agent; its session survives: a later
+// session/load relaunches the agent and has it load its own session — as
+// does one after conductor itself restarted (the records are kept in state).
+func TestPaseoRelayRelaunchesAfterTTLAndRestart(t *testing.T) {
 	rig := newRelayRig(t)
-	p := rig.dial()
-	p.call("initialize", map[string]any{})
-	sid := resultField(t, p.call("session/new", identity("agent-1", "/work/a", nil)), "sessionId")
-	q := rig.dial()
-	q.call("initialize", map[string]any{})
-	params := identity("agent-2", "/work/a", nil)
-	params["sessionId"] = sid
-	if got := q.call("session/load", params); len(got.Error) == 0 {
-		t.Fatal("agent-2 must not load agent-1's session")
-	}
-	r := rig.dial()
-	r.call("initialize", map[string]any{})
-	if got := r.call("session/load", map[string]any{"sessionId": sid, "cwd": "/work/a"}); len(got.Error) == 0 {
-		t.Fatal("a load with no identity is refused")
-	}
-}
-
-// Archive — by the persisted session id (the provider's session.archive) or
-// by the agent id (the agent.archived hook) — ends the jailed agent; nothing
-// else does, short of detached_ttl.
-func TestPaseoRelayArchiveAndTTL(t *testing.T) {
-	rig := newRelayRig(t)
-	for _, by := range []string{"session", "agent"} {
-		t.Run(by, func(t *testing.T) {
-			p := rig.dial()
-			p.call("initialize", map[string]any{})
-			id := "agent-" + by
-			sid := resultField(t, p.call("session/new", identity(id, "/work/a", nil)), "sessionId")
-			p.c.Close()
-			relayWait(t, func() bool { return rig.live() > 0 })
-			c := rig.dial()
-			params := map[string]any{"agentId": id}
-			if by == "session" {
-				params = map[string]any{"sessionId": sid}
-			}
-			if got := c.call("_conductor/archive", params); jsonString(got.Result, "stopped") != "" || !strings.Contains(string(got.Result), "true") {
-				t.Fatalf("archive stops the agent: %s", got.Result)
-			}
-			if !rig.launched(id)[0].isStopped() {
-				t.Fatal("the archived agent's process is ended")
-			}
-		})
-	}
-	p := rig.dial()
-	p.call("initialize", map[string]any{})
-	p.call("session/new", identity("agent-ttl", "/work/a", nil))
-	p.c.Close()
-	relayWait(t, func() bool {
-		for _, a := range rig.audited("detached") {
-			if a["agent"] == "agent-ttl" {
-				return true
-			}
-		}
-		return false
-	})
+	p, sid := rig.open(t, "/work/a")
+	_ = p.c.Close()
+	waitUntil(t, func() bool { return len(rig.audited("detached")) == 1 })
 	rig.r.reap()
-	if rig.launched("agent-ttl")[0].isStopped() {
+	if rig.sessionAgents()[0].isStopped() {
 		t.Fatal("a freshly detached agent is kept")
 	}
 	rig.mu.Lock()
 	rig.now = rig.now.Add(2 * time.Hour)
 	rig.mu.Unlock()
 	rig.r.reap()
-	if !rig.launched("agent-ttl")[0].isStopped() || len(rig.audited("expired")) != 1 {
+	if !rig.sessionAgents()[0].isStopped() || len(rig.audited("expired")) != 1 {
 		t.Fatal("an agent detached past detached_ttl is ended, and audited")
+	}
+	relaunch := func(want int) {
+		t.Helper()
+		_, load := rig.load(t, sid, "/work/a")
+		mustOK(t, load)
+		agents := rig.sessionAgents()
+		if len(agents) != want {
+			t.Fatalf("%d launches, want %d", len(agents), want)
+		}
+		f := agents[want-1]
+		if len(f.received("initialize")) != 1 || len(f.received("session/new")) != 0 {
+			t.Fatal("the relaunch initializes and loads — it opens no new session")
+		}
+		if got := jsonString(f.received("session/load")[0].Params, "sessionId"); got != "nat-1" {
+			t.Fatalf("the relaunched agent loads its own session, got %q", got)
+		}
+	}
+	relaunch(2)
+	if len(rig.audited("resumed")) != 1 {
+		t.Fatal("the resume is audited")
+	}
+	rig.start() // conductor restarts
+	relaunch(3)
+}
+
+// ArchivePaseoCwd ends every session opened in that cwd and forgets it — a
+// later load is refused — and leaves other cwds alone. Two live sessions in
+// one cwd are audited.
+func TestPaseoRelayArchiveByCwd(t *testing.T) {
+	rig := newRelayRig(t)
+	_, a1 := rig.open(t, "/work/a")
+	if len(rig.audited("cwd_shared")) != 0 {
+		t.Fatal("one session is not shared")
+	}
+	rig.open(t, "/work/a/") // the same cwd
+	if got := rig.audited("cwd_shared"); len(got) != 1 {
+		t.Fatalf("two live sessions in one cwd are audited: %v", got)
+	}
+	_, b := rig.open(t, "/work/b")
+	if n := ArchivePaseoCwd("/work/a"); n != 2 {
+		t.Fatalf("archived %d, want both sessions of /work/a", n)
+	}
+	agents := rig.sessionAgents()
+	if !agents[0].isStopped() || !agents[1].isStopped() || agents[2].isStopped() {
+		t.Fatal("only /work/a's agents are ended")
+	}
+	if _, load := rig.load(t, a1, "/work/a"); len(load.Error) == 0 {
+		t.Fatal("an archived session cannot be loaded")
+	}
+	_, load := rig.load(t, b, "/work/b")
+	mustOK(t, load)
+}
+
+// The cwd → identity lookup names the session's identity: its agent's tool
+// state and its jail's AgentID. An unknown cwd gets an identity of its own.
+func TestPaseoRelayIdentityFromCwd(t *testing.T) {
+	SetPaseoIdentity(func(cwd string) (string, bool) {
+		if strings.HasPrefix(cwd, "/members/ada/") {
+			return "ada", true
+		}
+		return "", false
+	})
+	t.Cleanup(func() { SetPaseoIdentity(nil) })
+	rig := newRelayRig(t)
+	rig.open(t, "/members/ada/s1")
+	rig.open(t, "/elsewhere")
+	agents := rig.sessionAgents()
+	if s := agents[0].launch; s.Identity != "ada" || s.StateKey != "paseo-ada" {
+		t.Fatalf("a member's workspace: %+v", s)
+	}
+	if s := agents[1].launch; s.Identity != s.ID || s.StateKey != "paseo-"+s.ID {
+		t.Fatalf("an unknown cwd is its own identity: %+v", s)
 	}
 }
 
@@ -441,14 +547,12 @@ func TestPaseoRelayArchiveAndTTL(t *testing.T) {
 // prompt) are answered with an error rather than left hanging.
 func TestPaseoRelayDetachedAgentRequestIsRefused(t *testing.T) {
 	rig := newRelayRig(t)
-	p := rig.dial()
-	p.call("initialize", map[string]any{})
-	p.call("session/new", identity("agent-1", "/work/a", nil))
-	f := rig.launched("agent-1")[0]
-	p.c.Close()
-	relayWait(t, func() bool { return len(rig.audited("detached")) == 1 })
+	p, _ := rig.open(t, "/work/a")
+	f := rig.sessionAgents()[0]
+	_ = p.c.Close()
+	waitUntil(t, func() bool { return len(rig.audited("detached")) == 1 })
 	f.send(map[string]any{"jsonrpc": "2.0", "id": 77, "method": "session/request_permission", "params": map[string]any{"sessionId": "nat-1"}})
-	relayWait(t, func() bool {
+	waitUntil(t, func() bool {
 		for _, m := range f.messages() {
 			if string(m.ID) == "77" && len(m.Error) > 0 {
 				return true
@@ -458,35 +562,20 @@ func TestPaseoRelayDetachedAgentRequestIsRefused(t *testing.T) {
 	})
 }
 
-func TestRelaySessionIDRoundTrip(t *testing.T) {
-	for _, id := range []string{"a1", "6f1c-…-uuid", "with.dots.in.it"} {
-		sid := relaySessionID(id, "native.with.dots")
-		if a, n, ok := parseRelaySessionID(sid); !ok || a != id || n != "native.with.dots" {
-			t.Fatalf("%q → %q → %q %q %v", id, sid, a, n, ok)
-		}
-	}
-	for _, bad := range []string{"", "nat-1", "cj1.", "cj1.!!.x", "cj1.YQ"} {
-		if _, _, ok := parseRelaySessionID(bad); ok {
-			t.Fatalf("%q must not parse", bad)
-		}
-	}
-}
-
 // Only conductor's own uid may use the socket.
 func TestPaseoRelayPeerIsConductorsUID(t *testing.T) {
-	dir, err := tempShortDir()
+	dir, err := os.MkdirTemp("/tmp", "cjr")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer removeAll(dir)
+	defer os.RemoveAll(dir)
 	l, err := net.Listen("unix", filepath.Join(dir, "s"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer l.Close()
 	go func() {
-		c, err := net.Dial("unix", filepath.Join(dir, "s"))
-		if err == nil {
+		if c, err := net.Dial("unix", filepath.Join(dir, "s")); err == nil {
 			defer c.Close()
 			time.Sleep(200 * time.Millisecond)
 		}
@@ -504,37 +593,5 @@ func TestPaseoRelayPeerIsConductorsUID(t *testing.T) {
 	defer b.Close()
 	if checkPeer(a) == "" {
 		t.Fatal("a connection with no peer credentials is refused")
-	}
-}
-
-func tempShortDir() (string, error) { return os.MkdirTemp("/tmp", "cjr") } // a unix socket path is capped near 104 bytes
-func removeAll(dir string)            { _ = os.RemoveAll(dir) }
-
-func (rig *relayRig) live() int {
-	rig.r.mu.Lock()
-	defer rig.r.mu.Unlock()
-	return len(rig.r.agents)
-}
-
-func (f *relayFakeAgent) isStopped() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.stopped
-}
-
-func (f *relayFakeAgent) messages() []relayMsg {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]relayMsg(nil), f.got...)
-}
-
-func relayWait(t *testing.T, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatal("condition not met within 10s")
-		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }

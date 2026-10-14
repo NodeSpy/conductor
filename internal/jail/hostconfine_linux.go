@@ -85,4 +85,3 @@ func buildConfined(hr hostRun) (string, error) {
 	}
 	return fdPath(efd, filepath.Base(hr.EgressSock)), nil
 }
-

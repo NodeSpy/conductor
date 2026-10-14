@@ -9,8 +9,9 @@ import (
 // plugin conductor ships (internal/paseoplugin) registers a provider whose
 // ACP stream is conductor's socket: for every paseo session on it, conductor
 // launches the agent itself — on Runtime, an acp runtime on this box — in
-// the workspace jail, keyed by the paseo agent's id, and relays ACP both
-// ways. paseo never holds the agent process; conductor owns the jail's
+// the workspace jail, and relays ACP both ways. It speaks only the ACP spec:
+// a session is keyed by the session id conductor mints, and its identity
+// is the cwd paseo opens it in. paseo never holds the agent process; conductor owns the jail's
 // lifetime, its host commands, grants and environment.
 type PaseoProviderConfig struct {
 	// Runtime names the acp runtime (`use: acp`, local, jail-eligible) each
@@ -19,23 +20,28 @@ type PaseoProviderConfig struct {
 	// Socket is the unix socket the plugin dials. Default
 	// <state>/paseo-provider.sock.
 	Socket string `yaml:"socket,omitempty"`
-	// PaseoTools keeps paseo's own MCP server (the `paseo` http server paseo
-	// adds to every session) in the agent's session. FOOTGUN: that server
-	// carries a paseo bearer token and its tools create and drive agents —
-	// on any provider, including ones conductor does not jail — so an agent
-	// holding it can start an unconfined agent and hand it work. Off by
-	// default: conductor strips the server from session/new and
-	// session/load.
-	PaseoTools bool `yaml:"paseo_tools,omitempty"`
+	// MCPServers are the MCP servers paseo passes in a session (ACP's
+	// session/new|load mcpServers) the agent keeps, by name. Default none:
+	// every one is dropped. paseo adds its own server to every session — a
+	// paseo bearer token, and tools that create and drive agents on any
+	// provider, unjailed ones included — and conductor cannot tell it from
+	// the operator's servers without reading paseo's internals, so the rule
+	// is deny-by-default. ["*"] keeps them all: a FOOTGUN, it hands the
+	// jailed agent paseo's credential and a way out of the jail.
+	MCPServers []string `yaml:"mcp_servers,omitempty"`
 	// DetachedTTL is how long a session's jailed agent stays alive with no
-	// paseo stream attached (a paseo restart, an unloaded agent) waiting for
-	// session/load to re-attach it. Archiving the paseo agent tears it down
-	// at once. Default 24h.
+	// paseo stream attached — paseo restarted, unloaded the agent, or (by
+	// hand) archived it; over ACP all three are the same detach — waiting
+	// for session/load to re-attach it. Past it the agent and its jail are
+	// ended; a later session/load relaunches the agent and has it load its
+	// own session, so the TTL bounds resources, never loses a session.
+	// conductor's own archive (ArchivePaseoCwd) ends a jail at once.
+	// Default 1h.
 	DetachedTTL Duration `yaml:"detached_ttl,omitempty"`
 }
 
 // DefaultPaseoDetachedTTL is PaseoProviderConfig.DetachedTTL's default.
-const DefaultPaseoDetachedTTL = 24 * time.Hour
+const DefaultPaseoDetachedTTL = time.Hour
 
 // Detached is the effective DetachedTTL.
 func (p *PaseoProviderConfig) Detached() time.Duration {
