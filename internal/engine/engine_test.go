@@ -28,6 +28,7 @@ type fakeDispatcher struct {
 	archived       chan string                                     // agent ids passed to Archive (if set)
 	dispatchAgents map[string]string                               // AgentForDispatch fixture
 	inflightIDs    map[string]bool                                 // DispatchInFlight fixture
+	liveIDs        []string                                        // LiveAgents fixture
 }
 
 func (f *fakeDispatcher) Dispatch(_ context.Context, r dispatch.Request) (dispatch.RunRef, error) {
@@ -40,6 +41,7 @@ func (f *fakeDispatcher) Dispatch(_ context.Context, r dispatch.Request) (dispat
 
 func (f *fakeDispatcher) WaitForAgent(context.Context, string, time.Duration) {}
 func (f *fakeDispatcher) HasLiveAgent(context.Context, string, string) bool   { return f.liveAgent }
+func (f *fakeDispatcher) LiveAgents(context.Context, string, string) []string { return f.liveIDs }
 func (f *fakeDispatcher) Archive(_ context.Context, id string) error {
 	if f.archived != nil {
 		f.archived <- id
@@ -456,6 +458,70 @@ func TestReviewRequestReengagesOnNewHead(t *testing.T) {
 	// (saveRun/finishRun). Drain it before returning so those writes don't race
 	// t.TempDir's RemoveAll cleanup (a flaky "directory not empty" failure).
 	waitRunsDrained(t, st)
+}
+
+// TestReengageRetiresStaleHandoff: re-engaging a review on a new revision
+// retires the hand-off parked on the old one, so the two drafts never coexist
+// (the bug: every push + re-request left one more stale hand-off workspace).
+// It retires by target+kind only — a hand-off of another kind on the same PR,
+// or a live agent that isn't a parked hand-off (no hold), is left alone — and a
+// same-revision duplicate retires nothing.
+func TestReengageRetiresStaleHandoff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dLive := &fakeDispatcher{
+		liveAgent: true,
+		archived:  make(chan string, 8),
+		// The backend's labelled agents for the PR+kind: a hand-off armed
+		// before a restart (held, not in the in-memory registry) and a still-
+		// running step of an older run (not held).
+		liveIDs: []string{"old-ho", "restarted-ho", "running-step"},
+	}
+	e, st := newEng(t, baseCfg(), dLive, &fakeNotifier{}, nil)
+	e.hold = dispatch.NewHoldSet("")
+	_ = st.RecordAttempt("a/w#12", "review_requested", "h1")
+
+	hoCtx, hoCancel := context.WithCancel(context.Background())
+	defer hoCancel()
+	e.hold.Add("old-ho")
+	e.registerLiveHandoff("old-ho", hoCancel, "a/w#12", "review_requested", "handoff")
+	e.hold.Add("restarted-ho")
+	_, fixCancel := context.WithCancel(context.Background())
+	defer fixCancel()
+	e.hold.Add("fixer-ho")
+	e.registerLiveHandoff("fixer-ho", fixCancel, "a/w#12", "merge_conflict", "handoff")
+
+	wf := config.Action{Steps: []config.Action{{ID: "assess", Type: "agent", Agent: "w/fixer", Prompt: "x"}}}
+	e.process(ctx, agentTrigger("review_requested", "a/w", 12, "h2", "reviewreq@h2", wf))
+	waitRunsDrained(t, st)
+
+	got := map[string]bool{}
+	for len(dLive.archived) > 0 {
+		got[<-dLive.archived] = true
+	}
+	if !got["old-ho"] || !got["restarted-ho"] {
+		t.Fatalf("re-engage must archive the stale hand-offs (registry + held backend agent), archived=%v", got)
+	}
+	if got["running-step"] || got["fixer-ho"] {
+		t.Fatalf("re-engage archived an agent that is not a stale review hand-off, archived=%v", got)
+	}
+	if hoCtx.Err() == nil {
+		t.Fatal("the stale hand-off's watch/idle ctx was not cancelled")
+	}
+	if e.lookupLiveHandoff("old-ho") != nil || e.hold.Has("old-ho") || e.hold.Has("restarted-ho") {
+		t.Fatal("the stale hand-off was not deregistered/unheld")
+	}
+	if e.lookupLiveHandoff("fixer-ho") == nil || !e.hold.Has("fixer-ho") {
+		t.Fatal("a hand-off of another kind on the same PR must survive")
+	}
+
+	// A same-revision duplicate is suppressed before any retire.
+	e.hold.Add("new-ho")
+	e.registerLiveHandoff("new-ho", func() {}, "a/w#12", "review_requested", "handoff")
+	e.process(ctx, agentTrigger("review_requested", "a/w", 12, "h2", "reviewreq@h2", wf))
+	if e.lookupLiveHandoff("new-ho") == nil {
+		t.Fatal("a same-revision duplicate must not retire the current hand-off")
+	}
 }
 
 // waitRunsDrained blocks until the store has no in-flight workflow runs, so an

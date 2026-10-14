@@ -1087,6 +1087,23 @@ func (d *Dispatcher) HasLiveAgent(ctx context.Context, prKey, kind string) bool 
 	return len(agents) > 0
 }
 
+// LiveAgents lists the ids of the non-archived conductor agents for this
+// PR+kind — the agents HasLiveAgent counts. The engine retires the parked
+// hand-offs among them when a review re-engages on a new revision. A list
+// failure reports none: retiring is best-effort, never a reason to block.
+func (d *Dispatcher) LiveAgents(ctx context.Context, prKey, kind string) []string {
+	agents, err := d.backend().ListAgents(ctx, map[string]string{
+		"conductor": "1", "pr": prKey, "kind": kind})
+	if err != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(agents))
+	for _, a := range agents {
+		ids = append(ids, a.ID)
+	}
+	return ids
+}
+
 // Archive soft-deletes a finished agent (paseo archive), used to clean up a
 // step's agent when it finishes (step boundary, step.done, hand-off done). A
 // blank id is a no-op.

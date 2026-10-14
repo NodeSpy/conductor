@@ -235,39 +235,45 @@ func (e *Engine) runSteps(ctx context.Context, run store.WorkflowRun, t core.Tri
 			}
 			// With a hand-off channel resolved, rewire the review over the session
 			// broker + channel (present → await → revise/submit), controller-agnostic.
-			// Without one (none configured, or resolution came up empty), keep today's
-			// behavior: tell you to drive the agent in paseo.
-			if handoffCh != nil && e.broker != nil && ref.AgentID != "" {
-				// The RESOLVED identity, not the raw `agent:` label: the
-				// hand-off records its decision under OutcomeKeyFor(identity),
-				// so passing s.Agent filed the outcome under a key nothing
-				// else uses — the step's track record silently never
-				// accumulated, and the memory/session machinery looked for it
-				// under the identity this step actually has.
-				// The legacy path can rerun_step (re-dispatch this step +
-				// re-hand-off, self-referential so the replacement is itself
-				// watchable); it has no workflow surface, so RunWorkflow is nil.
-				var actions dispatch.HandoffActions
-				actions = dispatch.HandoffActions{
-					RerunStep: func(c context.Context, extraPrompt string) error {
-						r2 := req
-						if strings.TrimSpace(extraPrompt) != "" {
-							r2.Action.Prompt = strings.TrimRight(r2.Action.Prompt, "\n") + "\n\n" + extraPrompt
-						}
-						nref, derr := e.dispatchAgent(c, runner, r2)
-						if derr != nil {
-							return derr
-						}
-						e.hold.Add(nref.AgentID)
-						e.startReviewHandoff(c, t, id, identity, profile, nref, handoffCh, actions)
-						return nil
-					},
-				}
-				e.startReviewHandoff(ctx, t, id, identity, profile, ref, handoffCh, actions)
-			} else {
-				e.notif.Emit(ctx, notify.EventNeedsInput, t,
-					fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))
+			// Without one (none configured, or resolution came up empty), tell you to
+			// drive the agent in paseo — its watch:/idle_timeout: still apply.
+			//
+			// The RESOLVED identity, not the raw `agent:` label: the hand-off
+			// records its decision under OutcomeKeyFor(identity), so passing
+			// s.Agent filed the outcome under a key nothing else uses — the
+			// step's track record silently never accumulated, and the
+			// memory/session machinery looked for it under the identity this
+			// step actually has.
+			// The legacy path can rerun_step (re-dispatch this step +
+			// re-hand-off, self-referential so the replacement is itself
+			// watchable); it has no workflow surface, so RunWorkflow is nil.
+			var present func(c context.Context, ref dispatch.RunRef)
+			var actions dispatch.HandoffActions
+			actions = dispatch.HandoffActions{
+				RerunStep: func(c context.Context, extraPrompt string) error {
+					r2 := req
+					if strings.TrimSpace(extraPrompt) != "" {
+						r2.Action.Prompt = strings.TrimRight(r2.Action.Prompt, "\n") + "\n\n" + extraPrompt
+					}
+					nref, derr := e.dispatchAgent(c, runner, r2)
+					if derr != nil {
+						return derr
+					}
+					e.hold.Add(nref.AgentID)
+					present(c, nref)
+					return nil
+				},
 			}
+			present = func(c context.Context, ref dispatch.RunRef) {
+				if handoffCh != nil && e.broker != nil && ref.AgentID != "" {
+					e.startReviewHandoff(c, t, id, identity, profile, ref, handoffCh, actions)
+					return
+				}
+				e.notif.Emit(c, notify.EventNeedsInput, t,
+					fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", id, ref.AgentID))
+				e.startNativeHandoff(c, t, id, identity, profile, ref.AgentID, actions)
+			}
+			present(ctx, ref)
 			continue
 		}
 		// Agent steps log their structured decision; command steps get a tail of their
@@ -309,6 +315,7 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID,
 		}
 		e.notif.Emit(ctx, notify.EventNeedsInput, t,
 			fmt.Sprintf("interactive agent for %q is live in paseo (agent %s) — open it to review/refine", stepID, agentID))
+		e.startNativeHandoff(ctx, t, stepID, identity, profile, agentID, actions)
 	}
 	c, err := e.controllerFor(profile)
 	if err != nil {
@@ -355,14 +362,7 @@ func (e *Engine) startReviewHandoff(ctx context.Context, t core.Trigger, stepID,
 	// of band: a watch rule (bail/refresh), the agent calling handoff.done, or the
 	// idle timeout — each cancels → Review's Await returns → the loop ends. The
 	// live-hand-off registry lets handoff.done and the idle timer find THIS one.
-	runCtx, cancel := context.WithCancel(ctx)
-	e.registerLiveHandoff(agentID, cancel, prKey, stepID)
-	if profile.Watch != nil {
-		e.startHandoffWatch(ctx, runCtx, cancel, t, stepID, identity, agentID, prKey, profile, ch, actions)
-	}
-	if d := time.Duration(profile.IdleTimeout); d > 0 {
-		e.startIdleTimer(ctx, runCtx, t, stepID, agentID, d)
-	}
+	runCtx, cancel := e.armHandoff(ctx, t, stepID, identity, profile, agentID, prKey, ch, actions)
 	go func() {
 		defer e.recoverDispatch(ctx, t, store.WorkflowRun{}, "review hand-off")
 		// On ANY exit (resolved, bailed, refreshed, done, idle) stop the watch/
@@ -411,9 +411,7 @@ func (e *Engine) startHandoffWatch(parent, runCtx context.Context, cancel contex
 	}
 	bail := func(reason string) {
 		e.log("%s hand-off %q bailing: %s", tag(t), stepID, reason)
-		cancel()                      // ends Review's Await → the loop goroutine returns
-		e.broker.Close(parent, prKey) // close the draft/presentation
-		e.hold.Remove(agentID)        // release the reaper hold → workspace reclaimed
+		e.releaseHandoff(parent, agentID, prKey, stepID, cancel, "bail: "+reason)
 	}
 	go func() {
 		defer e.recoverDispatch(parent, t, store.WorkflowRun{}, "hand-off watch")
@@ -491,15 +489,7 @@ func (e *Engine) supersedeHandoff(parent context.Context, cancel context.CancelF
 	e.log("%s hand-off %q superseding on new state", tag(t), stepID)
 	// Tear the current cycle down before running the replacement: end the review
 	// loop, close the draft, release + archive the stale agent/workspace.
-	cancel()
-	if e.broker != nil {
-		e.broker.Close(parent, prKey)
-	}
-	e.hold.Remove(oldAgentID)
-	e.deregisterLiveHandoff(oldAgentID)
-	if oldAgentID != "" && !e.affinityOwns(oldAgentID) {
-		go func(id string) { _ = e.archiveAgent(context.Background(), id) }(oldAgentID)
-	}
+	e.releaseHandoff(parent, oldAgentID, prKey, stepID, cancel, "superseded")
 	// Run the replacement on the current state — lands a fresh hand-off.
 	if err := run(parent); err != nil {
 		e.log("%s hand-off %q supersede failed: %v", tag(t), stepID, e.redact(err.Error()))
