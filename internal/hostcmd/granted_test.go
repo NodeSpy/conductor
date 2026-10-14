@@ -60,3 +60,18 @@ func TestGrantedLiftsOnlyWhatAnAllowEntryWould(t *testing.T) {
 		t.Fatalf("a grant stands in for the operator's allow list: %s", d.Reason)
 	}
 }
+
+// A grant for a whole `vop exec <profile> -- <cmd>` is the operator naming
+// that exact command, its inner write included; without it the write stays
+// refused.
+func TestGrantedVopCoversTheInnerWrite(t *testing.T) {
+	orgA := Rule{Tool: "vop", Profiled: true, Allow: [][]string{{"exec orgA *"}}, OperatorAllow: []string{"exec orgA *"}}
+	args := []string{"exec", "orgA", "--", "aws", "s3", "cp", "a", "s3://b/a"}
+	if d := decideVop(orgA, nil, args...); d.Allow {
+		t.Fatal("setup: the inner write is refused without a grant")
+	}
+	orgA.Granted = true
+	if d := decideVop(orgA, nil, args...); !d.Allow {
+		t.Fatalf("the granted vop command runs its inner write: %s", d.Reason)
+	}
+}

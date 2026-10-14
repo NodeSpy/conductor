@@ -95,3 +95,18 @@ func TestStageGrantFilesReadsTheConfinedLayer(t *testing.T) {
 		t.Fatal("an unconfined command reads the workspace, which has no planfile")
 	}
 }
+
+// The scratch dir is this user's and nobody else's: one someone else made
+// first in a shared /tmp, or left open, is refused rather than used.
+func TestGrantScratchMustBePrivate(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "scratch")
+	os.Mkdir(base, 0o755)
+	m := &Manager{GrantScratch: base}
+	if _, err := m.grantScratch(); err == nil {
+		t.Fatal("an open scratch dir is refused")
+	}
+	os.Chmod(base, 0o700)
+	if _, err := m.grantScratch(); err != nil {
+		t.Fatalf("a private one is used: %v", err)
+	}
+}
