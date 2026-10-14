@@ -442,6 +442,13 @@ func prepareJail(dir string, env, argv []string, opt launchOpts) (wrapped []stri
 	}
 	spec.Workspace = dir
 	if len(argv) > 0 {
+		// The jail shows the binary's install, not the operator's PATH dirs
+		// (~/.local/bin): exec it by the path it resolves to on the host.
+		if !filepath.IsAbs(argv[0]) {
+			if p, err := exec.LookPath(argv[0]); err == nil {
+				argv = append([]string{p}, argv[1:]...)
+			}
+		}
 		spec.Argv0 = argv[0]
 	}
 	st := opt.jailState

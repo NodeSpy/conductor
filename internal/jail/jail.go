@@ -426,6 +426,16 @@ func (m *Manager) layout(d *Dispatch, self string) ([]sandbox.BindMount, error) 
 				add(sandbox.BindMount{Path: p, RO: true, Optional: true})
 			}
 		}
+		// The symlinks on the way to it (~/.local/bin/x → ../lib/…): the
+		// scratch home has none of the operator's, and a bind would follow
+		// the link, so they are recreated.
+		bin := d.Argv0
+		if !filepath.IsAbs(bin) {
+			bin, _ = m.LookPath(bin)
+		}
+		for _, l := range symlinkHops(bin) {
+			add(l)
+		}
 	}
 	// The per-dispatch /tmp, visible to host commands at the same host path.
 	add(sandbox.BindMount{Path: "/tmp", Src: d.TmpDir})
@@ -545,6 +555,22 @@ func realPaths(tool string, lookPath func(string) (string, error)) []string {
 // binaryRoots are the host paths that must be readable for bin to run: the
 // PATH hit, each symlink hop, the resolved file's directory, and (for a
 // script) its interpreter's, recursively and bounded.
+// packageRoot is the npm package dir holding dir (the nearest ancestor with
+// a package.json, a few levels up at most), or "".
+func packageRoot(dir string) string {
+	for i := 0; i < 5 && dir != "/" && dir != "."; i++ {
+		if fi, err := os.Stat(filepath.Join(dir, "package.json")); err == nil && fi.Mode().IsRegular() {
+			// Never a whole tree of packages: the package's own dir only.
+			if filepath.Base(filepath.Dir(dir)) == "node_modules" || filepath.Base(filepath.Dir(filepath.Dir(dir))) == "node_modules" {
+				return dir
+			}
+			return ""
+		}
+		dir = filepath.Dir(dir)
+	}
+	return ""
+}
+
 func binaryRoots(bin string, lookPath func(string) (string, error)) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -585,11 +611,20 @@ func binaryRoots(bin string, lookPath func(string) (string, error)) []string {
 		}
 		if interp := shebang(p); interp != "" {
 			fields := strings.Fields(interp)
+			run := fields[0]
 			if filepath.Base(fields[0]) == "env" && len(fields) > 1 {
-				walk(fields[len(fields)-1], depth+1)
-			} else {
-				walk(fields[0], depth+1)
+				run = fields[len(fields)-1]
 			}
+			// A node script (an npm-installed CLI — an ACP adapter like
+			// claude-agent-acp) loads its dependencies from its package's
+			// node_modules: the whole package, not just the script's dir.
+			if filepath.Base(run) == "node" {
+				if root := packageRoot(dir); root != "" && !seen[root] {
+					seen[root] = true
+					out = append(out, root)
+				}
+			}
+			walk(run, depth+1)
 		}
 	}
 	walk(bin, 0)
@@ -650,6 +685,31 @@ func shebang(p string) string {
 	}
 	line, _, _ := strings.Cut(s[2:], "\n")
 	return strings.TrimSpace(line)
+}
+
+// symlinkHops are the symlinks on the way from bin to its real file, as
+// jail entries that recreate them (outside the base system).
+func symlinkHops(bin string) []sandbox.BindMount {
+	var out []sandbox.BindMount
+	p := bin
+	for hop := 0; hop < 8; hop++ {
+		fi, err := os.Lstat(p)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			break
+		}
+		t, err := os.Readlink(p)
+		if err != nil {
+			break
+		}
+		if !visibleInBase(p) {
+			out = append(out, sandbox.BindMount{Path: p, Link: t})
+		}
+		if !filepath.IsAbs(t) {
+			t = filepath.Join(filepath.Dir(p), t)
+		}
+		p = filepath.Clean(t)
+	}
+	return out
 }
 
 // visibleInBase reports a path the jail's base system already shows.

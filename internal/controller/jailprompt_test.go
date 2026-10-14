@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -257,5 +258,41 @@ func TestACPJailedPromptCarriesTheJailedIdentity(t *testing.T) {
 		if !strings.Contains(got, want) || strings.Contains(got, not) {
 			t.Errorf("jailed=%v: wrong identity guidance in the ACP prompt:\n%s", jailed, got)
 		}
+	}
+}
+
+// A jailed launch execs its binary by the path it resolves to on the host:
+// the jail shows the binary's install, not the operator's PATH dirs
+// (~/.local/bin, where npm and native installers put agent CLIs).
+func TestJailedLaunchExecsTheResolvedBinary(t *testing.T) {
+	withTestJail(t, true)
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "mytool")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	l := &fakeLauncher{}
+	c := newCLIController("x", config.ControllerConfig{Transport: "cli", Tool: "claude-code", Command: []string{"mytool", "--flag"}}, nil)
+	c.launch = l.launch
+	req := withDeclaredIdentity(makeReq("merge_conflict", ""), "go")
+	req.Trigger.TargetTrusted = true
+	sess, err := c.NewSession(context.Background(), Spec{Request: req, Cwd: t.TempDir()}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitSession(t, sess)
+	argv := l.call(0).argv
+	found := false
+	for _, a := range argv {
+		if a == "mytool" {
+			t.Fatalf("the jail execs the bare name: %q", argv)
+		}
+		if a == tool {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the jail execs %s: %q", tool, argv)
 	}
 }
