@@ -285,3 +285,27 @@ func validHexSHA256(s string) bool {
 	}
 	return true
 }
+
+// ParseArgv is THE argv parse both sides of a grant use, so the gate and the
+// broker can never disagree about what a command is. It is deliberately
+// profile-free and conservative: only self-contained `-k=v` / `--k=v` tokens
+// become Flags; every other token — including a bare `-flag` and whatever
+// follows it — stays in Words, IN ORDER. So `-var-file a b` and `b -var-file a`
+// are different commands (they are, to the tool), where a parse that lifted
+// `-var-file` into the map would have made them equal.
+func ParseArgv(args []string) Argv {
+	a := Argv{Words: []string{}}
+	for _, t := range args {
+		if strings.HasPrefix(t, "-") && t != "-" && t != "--" {
+			if k, v, ok := strings.Cut(t, "="); ok && strings.TrimLeft(k, "-") != "" {
+				if a.Flags == nil {
+					a.Flags = map[string][]string{}
+				}
+				a.Flags[k] = append(a.Flags[k], v)
+				continue
+			}
+		}
+		a.Words = append(a.Words, t)
+	}
+	return a
+}
