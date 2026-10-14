@@ -595,3 +595,19 @@ func TestPaseoRelayPeerIsConductorsUID(t *testing.T) {
 		t.Fatal("a connection with no peer credentials is refused")
 	}
 }
+
+// A paseo provider session never runs unjailed: where the jail cannot be
+// built the launch fails — it does not degrade the way a dispatch's
+// synthesized default jail does.
+func TestPaseoRelayNeverLaunchesUnjailed(t *testing.T) {
+	withTestJail(t, false) // the jail is unavailable on this "box"
+	r := &PaseoRelay{Command: []string{"/bin/true"}, Tool: "claude-code"}
+	proc, err := r.launchJailed(&relaySession{ID: "cj2.x", Cwd: t.TempDir(), Identity: "i", StateKey: "paseo-i"})
+	if err == nil {
+		_ = proc.cleanup()
+		t.Fatal("a provider session must fail rather than launch unjailed")
+	}
+	if !strings.Contains(err.Error(), "cannot be built") {
+		t.Fatalf("the refusal says why: %v", err)
+	}
+}
