@@ -1295,6 +1295,30 @@ sandbox:
     # sign: false                             # push unsigned (default: refuse to push without a key)
     # at_step_end: false                      # only an explicit git.push pushes
 #
+# A browser for agents (docs/wiki/Browser.md): every sandboxed agent can drive
+# a headless Chromium through `conductor browser …`. Conductor runs it,
+# sandboxed, reaching only `allow:`, with an anonymous profile. A logged-in
+# site gives that identity's agent YOUR session's power on it, for your own
+# requests only. Credentials are filled by conductor from your vaults, and the
+# agent never sees a value.
+#
+# browser:
+#   allow: [docs.example.com, app.example.com]   # "*" (the whole web) is refused
+#   # evaluate: off                               # off | read-only (V8's side-effect check)
+#   logins:                                        # opt in per site AND per identity
+#     - site: app.example.com
+#       identities: ["agent:triage@acme/app"]      # then: conductor browser seed --identity … --site …
+#   credentials:
+#     - name: app
+#       origin: https://app.example.com           # exact; a lookalike or a frame is refused
+#       identities: ["agent:triage@acme/app"]
+#       login_url: https://app.example.com/login
+#       username: { vault: op, key: "Agents/App/username" }
+#       password: { vault: op, key: "Agents/App/password" }
+#       otp: { vault: op, key: "Agents/App/one-time password?attribute=otp" }
+#       # passkey: { vault: house, key: passkeys/app }   # conductor browser passkey register app
+#       # approval: true                               # a push approval: you're notified (needs_input)
+#
 # Hand-offs (background: true agent steps on paseo) are sandboxed too: they
 # launch through <provider>-sandboxed, titled "[sandboxed]". The EXPLICIT,
 # LOOSENING knob is `isolation: { mode: none }` — on a step, a workflow or a

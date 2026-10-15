@@ -262,6 +262,18 @@ review rounds to harden is gone rather than hardened.
   writable (its config, hooks and alternates read-only, sibling worktrees
   hidden). conductor's per-dispatch clones (`cli`) do not have this.
 
+### A browser for agents
+
+A sandboxed agent can drive a real browser through `conductor browser …`
+(`browser:` in the config). Conductor runs that browser in a sandbox of its
+own:
+- its only network is the egress proxy with `browser.allow`;
+- its profile is anonymous;
+- a logged-in site or a credential is used only for your own requests;
+- files cross only through the workspace.
+
+The agent never holds the browser. See [[Browser]].
+
 ## Where it applies
 
 `isolation:` can be set at three scopes:

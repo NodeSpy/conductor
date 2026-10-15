@@ -189,6 +189,11 @@ conductor browser login --credential app --passkey --ref e7       # sign in with
 conductor browser await-approval --credential app        # waiting on your phone
 ```
 
+A usable credential's host counts as a logged-in site: its pages always open
+in the separate, narrowed browser, so whatever conductor signs the agent in to
+never shares a browser with an untrusted page. `login` starts at
+`login_url` when the current page has nothing to fill.
+
 Every fill checks, before any value is fetched:
 1. **The credential.** It is bound to this identity, and the request is the
    operator's own.
@@ -220,6 +225,11 @@ After a fill, in that browser:
 
 Page JavaScript **on the credential's own origin** can read a field it is
 given; that is how browsers work, and why the origin binding matters.
+
+A credential on `localhost` (a development site): its browser also reaches the
+loopback address for that port, because the proxy dials `localhost` by
+address. The same server under `127.0.0.1` is another origin, so a fill there
+is still refused.
 
 ### Two-factor codes
 

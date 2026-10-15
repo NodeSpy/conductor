@@ -36,6 +36,13 @@ conductor mcp memory --socket <path>       stdio MCP server for the live agent t
 conductor workflows [ls]                   config + saved (agent-promoted) workflows with review state and health
 conductor workflows review <name>          print the workflow's provenance + FULL steps, then clear it for reuse (dry-run it first; runs stay policy-guarded)
 conductor workflows rm <name>              remove a saved workflow
+conductor browser logins                   saved browser sessions, login sites, credentials (never values) — [[Browser]]
+conductor browser seed --identity ID --site SITE [--url U]   log in yourself in a window; only SITE's session is kept
+conductor browser cookies import --identity ID --site SITE FILE   import one domain's cookies as a saved session
+conductor browser logout --identity ID --site SITE  drop a saved session
+conductor browser sessions | peek <session> [--out F.png]   live agent browsers; a screenshot of one
+conductor browser passkey register <credential> [--url U]   register a dedicated passkey for a credential (a takeover)
+conductor browser <action> …               (inside an agent) open, snapshot, click, fill, login --credential, … — conductor browser --help
 conductor version
 ```
 
