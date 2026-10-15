@@ -887,6 +887,18 @@ func cmdRun(args []string) error {
 					return memory.Source{Step: id.Agent, Repo: id.Repo, Trigger: id.Trigger,
 						TargetTrusted: id.TargetTrusted, Dispatch: id.Dispatch}, id.Number, true
 				}
+				// run_step's capability gate: keep the orchestration surface off
+				// an authentication-only token (an ad-hoc sandbox session), while
+				// leaving it governed by policy.agent_authored for real dispatches.
+				if ops.RunStep != nil {
+					ops.CanRunStep = func(token string, peer memory.Peer) (bool, string) {
+						id, err := sb.Authorize(token, asPeer(peer))
+						if err != nil {
+							return false, err.Error()
+						}
+						return mayRunStep(id)
+					}
+				}
 				// The verb-tool surface: catalog + execution, both bound to
 				// the token's real dispatch identity and its skill.verbs.
 				// Skill-gated: an empty grant serves nothing anyway, but the

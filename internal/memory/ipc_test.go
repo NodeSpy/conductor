@@ -254,6 +254,43 @@ func TestMCPServerLoop(t *testing.T) {
 	}
 }
 
+// TestRunStepCapabilityGate: handleIPC's run_step consults CanRunStep and
+// refuses an authentication-only identity without ever calling the runner,
+// while a permitted identity runs. This is the F1 fix — an ad-hoc sandbox
+// session must not drive agent-authored steps through the shared socket.
+func TestRunStepCapabilityGate(t *testing.T) {
+	ran := false
+	SetLiveOps(LiveOps{
+		RunStep: func(context.Context, Source, int, map[string]any) (map[string]any, error) {
+			ran = true
+			return map[string]any{"ok": 1}, nil
+		},
+		Identify: func(token string, _ Peer) (Source, int, bool) {
+			return Source{Step: "a"}, 0, token != ""
+		},
+		CanRunStep: func(token string, _ Peer) (bool, string) {
+			return token == "granted", "run_step: refused for an authentication-only identity"
+		},
+	})
+	t.Cleanup(func() { SetLiveOps(LiveOps{}) })
+
+	resp := handleIPC(nil, IPCRequest{Op: "run_step", Token: "authonly", Step: map[string]any{"uses": "svc.post"}}, Peer{}, nil, nil)
+	if resp.Error == "" || !strings.Contains(resp.Error, "authentication-only") {
+		t.Fatalf("auth-only run_step must be refused by the gate: %+v", resp)
+	}
+	if ran {
+		t.Fatal("the runner must not run when the gate refuses")
+	}
+
+	resp = handleIPC(nil, IPCRequest{Op: "run_step", Token: "granted", Step: map[string]any{"uses": "svc.post"}}, Peer{}, nil, nil)
+	if resp.Error != "" || !resp.OK {
+		t.Fatalf("a permitted run_step must execute: %+v", resp)
+	}
+	if !ran {
+		t.Fatal("the runner must run when the gate allows")
+	}
+}
+
 // The broker ops (#36 §12) ride the same socket surface. A daemon without a
 // memory: section still serves them (m == nil); the memory ops refuse.
 func TestIPCSecretBrokerOps(t *testing.T) {
