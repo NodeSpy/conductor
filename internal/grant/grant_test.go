@@ -389,3 +389,89 @@ func TestArgvSemanticsAsDocumented(t *testing.T) {
 		}
 	}
 }
+
+// The working directory is part of the command.
+func TestCwdIsPartOfTheCommand(t *testing.T) {
+	g := applySpec()
+	g.Cwd = "envs/prod"
+	g.FileDigests = []FileDigest{{Path: "envs/prod/plan.tfplan", SHA256: digestA}}
+	if err := g.Validate(t0); err != nil {
+		t.Fatal(err)
+	}
+	p := applyPresented()
+	for cwd, want := range map[string]bool{
+		"envs/prod": true, "envs/prod/": true, "./envs/prod": true, "envs/x/../prod": true,
+		"envs/staging": false, "": false, ".": false, "envs": false, "envs/prod/sub": false,
+		"../envs/prod": false, "/abs/envs/prod": false,
+	} {
+		p.Cwd = cwd
+		if got := g.Matches(p); got != want {
+			t.Errorf("grant for envs/prod presented from %q: match=%v, want %v", cwd, got, want)
+		}
+	}
+	// Root: "" and "." are the same directory.
+	root := applySpec()
+	p.Cwd = "."
+	if !root.Matches(p) {
+		t.Error("a root grant must match a command run at the root")
+	}
+	p.Cwd = "envs/prod"
+	if root.Matches(p) {
+		t.Error("a root grant matched a subdirectory command")
+	}
+}
+
+func TestCwdValidationAndCanonicalForm(t *testing.T) {
+	for _, bad := range []string{"/etc", "..", "../x", "a/../../x", "a\\b", "a\x00b", "./envs/prod", "envs/prod/"} {
+		g := applySpec()
+		g.Cwd = bad
+		if err := g.Validate(t0); !errors.Is(err, ErrInvalid) {
+			t.Errorf("Validate accepted cwd %q", bad)
+		}
+	}
+	for in, want := range map[string]string{"": ".", ".": ".", "envs/prod/": "envs/prod", "./a/./b": "a/b", "a/b/../c": "a/c"} {
+		if got, err := CleanCwd(in); err != nil || got != want {
+			t.Errorf("CleanCwd(%q) = %q %v, want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"/x", "..", "../a", "a/../.."} {
+		if _, err := CleanCwd(bad); err == nil {
+			t.Errorf("CleanCwd accepted %q", bad)
+		}
+	}
+	// Mint stores the canonical form.
+	s := NewMemStoreClock(func() time.Time { return t0 })
+	g := applySpec()
+	g.Cwd = ""
+	out, err := s.Mint(context.Background(), g)
+	if err != nil || out.Cwd != "." {
+		t.Fatalf("minted cwd %q %v", out.Cwd, err)
+	}
+	// A file digest path must be a clean workspace-relative path.
+	for _, bad := range []string{"/abs/plan", "../plan", "./plan", "envs/../../plan", "."} {
+		g := applySpec()
+		g.FileDigests = []FileDigest{{Path: bad, SHA256: digestA}}
+		if err := g.Validate(t0); !errors.Is(err, ErrInvalid) {
+			t.Errorf("Validate accepted file path %q", bad)
+		}
+	}
+}
+
+func TestResolvePath(t *testing.T) {
+	for in, want := range map[[2]string]string{
+		{"envs/prod", "tfplan"}:         "envs/prod/tfplan",
+		{"envs/prod", "./out/tfplan"}:   "envs/prod/out/tfplan",
+		{"envs/prod", "../shared/plan"}: "envs/shared/plan",
+		{"", "tfplan"}:                  "tfplan",
+		{".", "a/b"}:                    "a/b",
+	} {
+		if got, err := ResolvePath(in[0], in[1]); err != nil || got != want {
+			t.Errorf("ResolvePath(%q, %q) = %q %v, want %q", in[0], in[1], got, err, want)
+		}
+	}
+	for _, in := range [][2]string{{"envs/prod", "../../../etc/passwd"}, {"envs", "/etc/passwd"}, {"..", "x"}, {"", ""}, {"a", ".."}, {"a", "b\\c"}} {
+		if got, err := ResolvePath(in[0], in[1]); err == nil {
+			t.Errorf("ResolvePath(%q, %q) = %q, want an error", in[0], in[1], got)
+		}
+	}
+}

@@ -353,7 +353,9 @@ can run once you approve that exact command. The member gate mints a grant
 (`internal/grant`):
 - for one agent: its [[Paseo-Provider|provider identity]], or a cli worker's
   dispatch;
-- for one tool and one argv;
+- for one tool and one argv, run in one directory: `cd envs/prod && terraform
+  apply tfplan` is a different command from the same argv in `envs/staging`
+  (another root module, another state);
 - pinned to the content of the files it names, short-lived, usually single-use.
 
 When the command comes:
@@ -363,7 +365,7 @@ When the command comes:
    content-executing command still runs confined.
 2. **It copies each pinned file into private scratch**: a per-user `0700` dir
    the jail never shows. It never follows a symlink and never reads outside
-   the workspace or the dispatch's `/tmp`. It hashes what it copied and checks
+   the workspace. It hashes what it copied and checks
    the approved digest. A mismatch is refused (`grant.ErrDigest`) and the
    grant isn't used up.
 3. **It consumes the grant and runs the command** with those files named by
@@ -374,8 +376,8 @@ When no grant lifts a refusal, the refusal says why, from this agent's grants
 for the tool (`grant.Store.Near`):
 - the newest approval of this exact command is used (`grant.ErrConsumed`),
   expired (`grant.ErrExpired`) or revoked (`grant.ErrRevoked`);
-- otherwise, a live grant approves another command (`grant.ErrMismatch`,
-  naming what it approves);
+- otherwise, a live grant approves another command, or the same one in
+  another directory (`grant.ErrMismatch`, naming what it approves and where);
 - otherwise, the refusal stands as it is.
 
 The audit row of a granted run carries the grant id, approver and case.
@@ -383,16 +385,16 @@ The audit row of a granted run carries the grant id, approver and case.
 **Which bytes a pinned file is.** The gate hashes a proposal's files with the
 jail's `DigestFile(identity, path)`, through the same read the broker makes
 at use, so you approve exactly the bytes the command will run on:
-- `path` is as the agent names it, relative to its workspace; a file in the
-  jail's `/tmp` is the dispatch's own, never the host's;
+- `path` is the file's workspace path: the token the command names, resolved
+  from the directory it runs in (`grant.ResolvePath`; `tfplan` in `envs/prod`
+  is `envs/prod/tfplan`). The broker resolves each token it sees the same way,
+  and a token naming a pinned file is replaced by its private copy. A file
+  outside the workspace (or the jail's `/tmp`) can't be pinned;
 - a file a confined run wrote is read from the dispatch's copy-on-write layer
   it went to: a confined `terraform plan -out=plan.tfplan` leaves the plan
   there, never in the workspace. Any other file is the workspace's;
 - the layers are per tool, and neither the gate nor the broker picks one by
   the command. A path two tools' layers both hold is refused as ambiguous;
-- a command run from a subdirectory resolves a relative path from there,
-  while the gate resolves it from the workspace. If they name different
-  files, the digest doesn't match and the grant is refused, not used.
 
 What counts as "the same command" is `grant.ParseArgv` and `Argv.Equal`:
 - words must be equal and in order. A word is every token that isn't a

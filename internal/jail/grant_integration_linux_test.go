@@ -148,6 +148,29 @@ func TestJailGrantRunsTheApprovedCommandOnce(t *testing.T) {
 	if out := run(apply); !strings.Contains(out, "exit=126") || !strings.Contains(out, grant.ErrExpired.Error()) || strings.Contains(out, "tf-args=") {
 		t.Fatalf("an expired grant is refused (ErrExpired):\n%s", out)
 	}
+
+	// From a subdirectory (`cd envs/prod && terraform apply tfplan`): the
+	// grant is for that directory, its planfile pinned by its workspace path.
+	for _, env := range []string{"prod", "staging"} {
+		os.MkdirAll(filepath.Join(f.ws, "envs", env), 0o755)
+		os.WriteFile(filepath.Join(f.ws, "envs", env, "tfplan"), []byte(env+" plan\n"), 0o644)
+	}
+	prodSum, _ := grant.FileSHA256(filepath.Join(f.ws, "envs", "prod", "tfplan"))
+	now = now.Add(time.Second)
+	if _, err := store.Mint(context.Background(), grant.GrantSpec{
+		Dispatch: "d1", Tool: "terraform", Cwd: "envs/prod", Argv: grant.ParseArgv([]string{"apply", "tfplan"}),
+		FileDigests: []grant.FileDigest{{Path: "envs/prod/tfplan", SHA256: prodSum}},
+		Expiry:      now.Add(10 * time.Minute), SingleUse: true, ApprovedBy: "op@example.test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if out := run(`cd envs/staging && terraform apply tfplan; echo "exit=$?"`); !strings.Contains(out, "exit=126") ||
+		!strings.Contains(out, grant.ErrMismatch.Error()) || !strings.Contains(out, "in envs/prod") || strings.Contains(out, "tf-args=") {
+		t.Fatalf("the same argv from envs/staging is another command:\n%s", out)
+	}
+	if out := run(`cd envs/prod && terraform apply tfplan; echo "exit=$?"`); !strings.Contains(out, "exit=0") || !strings.Contains(out, "tf-plan-sha="+prodSum) {
+		t.Fatalf("the approved apply runs in envs/prod, on its planfile:\n%s", out)
+	}
 }
 
 // audited reports an event of type typ that names the grant id.
@@ -162,11 +185,14 @@ func (f *fixture) audited(typ, grantID string) bool {
 	return false
 }
 
-// Live (real terraform; CONDUCTOR_LIVE_TERRAFORM=1): the agent plans
+// Live (real terraform; CONDUCTOR_LIVE_TERRAFORM=1), the way SRE terraform
+// runs — from a root module's directory: the agent plans in envs/prod
 // (confined; the planfile lands in the dispatch's copy-on-write layer), the
-// operator approves the apply of exactly that planfile, and the apply runs
-// once — the real `terraform apply` of the approved plan — and never again,
-// nor for a re-planned (swapped) planfile, another argv, or after expiry.
+// operator approves the apply of exactly that planfile in envs/prod, and the
+// apply runs there once — the real `terraform apply` of the approved plan.
+// The same argv from envs/staging is another command (ErrMismatch), and the
+// prod apply never runs again, nor for a re-planned (swapped) planfile,
+// another argv, or after expiry.
 func TestJailLiveTerraformGrant(t *testing.T) {
 	if os.Getenv("CONDUCTOR_LIVE_TERRAFORM") == "" {
 		t.Skip("live: CONDUCTOR_LIVE_TERRAFORM=1")
@@ -178,19 +204,23 @@ func TestJailLiveTerraformGrant(t *testing.T) {
 	}
 	f := newFixture(t)
 	m := f.manager(t)
-	os.WriteFile(filepath.Join(f.ws, "main.tf"), []byte(`terraform {
+	for _, env := range []string{"prod", "staging"} {
+		dir := filepath.Join(f.ws, "envs", env)
+		os.MkdirAll(dir, 0o755)
+		os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`terraform {
   required_providers {
     local = { source = "hashicorp/local" }
   }
 }
 variable "msg" {
-  default = "approved"
+  default = "approved `+env+`"
 }
 resource "local_file" "out" {
   filename = "${path.module}/applied.txt"
   content  = var.msg
 }
 `), 0o644)
+	}
 	look := m.LookPath
 	m.LookPath = func(n string) (string, error) {
 		if n == "terraform" {
@@ -228,12 +258,13 @@ resource "local_file" "out" {
 		t.Logf("$ %s\n%s", script, out)
 		return string(out)
 	}
-	layerPlan := filepath.Join(l.Dispatch.Dir, "cow-ws", "terraform", "up", "plan.tfplan")
+	layer := filepath.Join(l.Dispatch.Dir, "cow-ws", "terraform", "up")
+	argv := []string{"apply", "-input=false", "-no-color", "plan.tfplan"}
 	mint := func(sum string, ttl time.Duration) grant.GrantSpec {
 		now = now.Add(time.Second) // each approval newer than the last
 		g, err := store.Mint(context.Background(), grant.GrantSpec{
-			Dispatch: "d1", Tool: "terraform", Argv: grant.ParseArgv([]string{"apply", "-input=false", "-no-color", "plan.tfplan"}),
-			FileDigests: []grant.FileDigest{{Path: "plan.tfplan", SHA256: sum}},
+			Dispatch: "d1", Tool: "terraform", Cwd: "envs/prod", Argv: grant.ParseArgv(argv),
+			FileDigests: []grant.FileDigest{{Path: "envs/prod/plan.tfplan", SHA256: sum}},
 			Expiry:      now.Add(ttl), SingleUse: true, ApprovedBy: "op@example.test", CaseID: "case-live",
 		})
 		if err != nil {
@@ -241,55 +272,77 @@ resource "local_file" "out" {
 		}
 		return g
 	}
-	apply := `terraform apply -input=false -no-color plan.tfplan; echo "exit=$?"`
+	apply := func(env string) string {
+		return `cd envs/` + env + ` && terraform apply -input=false -no-color plan.tfplan; echo "exit=$?"`
+	}
+	plan := func(env, vars string) string {
+		return `cd envs/` + env + ` && terraform init -input=false -no-color >/dev/null; echo "init=$?"; terraform plan -input=false -no-color ` + vars + ` -out=plan.tfplan | tail -2; echo "plan=$?"`
+	}
 
-	if out := run(`terraform init -input=false -no-color >/dev/null; echo "init=$?"; terraform plan -input=false -no-color -out=plan.tfplan | tail -2; echo "plan=$?"`); !strings.Contains(out, "init=0") || !strings.Contains(out, "plan=0") {
-		t.Fatalf("init + plan:\n%s", out)
+	for _, env := range []string{"prod", "staging"} {
+		if out := run(plan(env, "")); !strings.Contains(out, "init=0") || !strings.Contains(out, "plan=0") {
+			t.Fatalf("%s: init + plan:\n%s", env, out)
+		}
+		if _, err := os.Stat(filepath.Join(f.ws, "envs", env, "plan.tfplan")); err == nil {
+			t.Fatalf("%s: the planfile stays in the copy-on-write layer, not the workspace", env)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(f.ws, "plan.tfplan")); err == nil {
-		t.Fatal("the planfile stays in the copy-on-write layer, not the workspace")
+	// The gate's hash at mint (DigestFile, through the live jail): the prod
+	// plan in the layer, by its workspace path — the bytes the broker reads.
+	approvedSum, err := m.DigestFile("d1", "envs/prod/plan.tfplan")
+	if want, _ := grant.FileSHA256(filepath.Join(layer, "envs", "prod", "plan.tfplan")); err != nil || approvedSum != want {
+		t.Fatalf("the prod plan in the layer: %q %v (want %s)", approvedSum, err, want)
 	}
-	// The gate's hash at mint (DigestFile, through the live jail): the plan
-	// in the layer, the bytes the broker will read.
-	approvedSum, err := m.DigestFile("d1", "plan.tfplan")
-	if want, _ := grant.FileSHA256(layerPlan); err != nil || approvedSum != want {
-		t.Fatalf("the plan in the layer: %q %v (want %s)", approvedSum, err, want)
+	if staging, _ := m.DigestFile("d1", "envs/staging/plan.tfplan"); staging == approvedSum {
+		t.Fatal("the staging plan is another plan")
 	}
-	if out := run(apply); !strings.Contains(out, "exit=126") {
+	if out := run(apply("prod")); !strings.Contains(out, "exit=126") {
 		t.Fatalf("no grant: refused:\n%s", out)
 	}
 	g := mint(approvedSum, 10*time.Minute)
-	out := run(apply + `; cat applied.txt; echo`)
+	// The approval is for envs/prod: the same argv from envs/staging is
+	// another command, and does not burn it.
+	if out := run(apply("staging")); !strings.Contains(out, "exit=126") || !strings.Contains(out, grant.ErrMismatch.Error()) ||
+		!strings.Contains(out, "in envs/prod") || strings.Contains(out, "Apply complete") {
+		t.Fatalf("the same apply from envs/staging: ErrMismatch:\n%s", out)
+	}
+	out := run(apply("prod"))
 	if !strings.Contains(out, "Apply complete! Resources: 1 added") || !strings.Contains(out, "exit=0") {
-		t.Fatalf("the approved apply runs:\n%s", out)
+		t.Fatalf("the approved apply runs in envs/prod:\n%s", out)
+	}
+	if b, err := os.ReadFile(filepath.Join(layer, "envs", "prod", "applied.txt")); err != nil || string(b) != "approved prod" {
+		t.Fatalf("the prod plan is what was applied (in the layer): %q %v", b, err)
 	}
 	if !f.audited("host_command", g.ID) {
 		t.Fatal("audited with its grant")
 	}
-	if _, err := os.Stat(filepath.Join(f.ws, "applied.txt")); err == nil {
+	if _, err := os.Stat(filepath.Join(layer, "envs", "staging", "applied.txt")); err == nil {
+		t.Fatal("staging was never applied")
+	}
+	if _, err := os.Stat(filepath.Join(f.ws, "envs", "prod", "applied.txt")); err == nil {
 		t.Fatal("the confined apply's file lands in the layer, not the workspace")
 	}
-	if out := run(apply); !strings.Contains(out, "exit=126") || !strings.Contains(out, grant.ErrConsumed.Error()) {
+	if out := run(apply("prod")); !strings.Contains(out, "exit=126") || !strings.Contains(out, grant.ErrConsumed.Error()) {
 		t.Fatalf("second use: ErrConsumed:\n%s", out)
 	}
 	// Re-planned (a different plan, same name): the approval does not cover it.
-	run(`terraform plan -input=false -no-color -var msg=swapped -out=plan.tfplan >/dev/null; echo "replan=$?"`)
+	run(plan("prod", "-var msg=swapped"))
 	mint(approvedSum, 10*time.Minute)
-	if out := run(apply); !strings.Contains(out, "exit=126") || !strings.Contains(out, grant.ErrDigest.Error()) {
+	if out := run(apply("prod")); !strings.Contains(out, "exit=126") || !strings.Contains(out, grant.ErrDigest.Error()) {
 		t.Fatalf("a swapped planfile: ErrDigest:\n%s", out)
 	}
-	swappedSum, _ := m.DigestFile("d1", "plan.tfplan")
+	swappedSum, _ := m.DigestFile("d1", "envs/prod/plan.tfplan")
 	mint(swappedSum, 10*time.Minute)
 	for _, other := range []string{
-		`terraform apply -input=false plan.tfplan -no-color; echo "exit=$?"`,             // words reordered
-		`terraform apply -input=false -no-color -lock=false plan.tfplan; echo "exit=$?"`, // an extra flag
+		`cd envs/prod && terraform apply -input=false plan.tfplan -no-color; echo "exit=$?"`,             // words reordered
+		`cd envs/prod && terraform apply -input=false -no-color -lock=false plan.tfplan; echo "exit=$?"`, // an extra flag
 	} {
 		if out := run(other); !strings.Contains(out, "exit=126") || !strings.Contains(out, grant.ErrMismatch.Error()) || strings.Contains(out, "Apply complete") {
 			t.Fatalf("another argv is not the approved command (ErrMismatch):\n%s", out)
 		}
 	}
 	now = now.Add(11 * time.Minute)
-	if out := run(apply); !strings.Contains(out, "exit=126") || !strings.Contains(out, grant.ErrExpired.Error()) || strings.Contains(out, "Apply complete") {
+	if out := run(apply("prod")); !strings.Contains(out, "exit=126") || !strings.Contains(out, grant.ErrExpired.Error()) || strings.Contains(out, "Apply complete") {
 		t.Fatalf("an expired grant is refused (ErrExpired):\n%s", out)
 	}
 }

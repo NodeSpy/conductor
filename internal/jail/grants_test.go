@@ -14,9 +14,11 @@ import (
 	"github.com/NodeSpy/conductor/internal/grant"
 )
 
-// The files a grant pins are copied into private scratch, hashing what is
-// copied, never through a symlink and never from outside the workspace; the
-// argv names the copy, in a bare token and in a --flag=path token alike.
+// The files a grant pins (workspace-relative) are copied into private
+// scratch, hashing what is copied, never through a symlink and never from
+// outside the workspace; the argv names the copy, in a bare token and in a
+// --flag=path token alike, wherever the token resolves to the pin from the
+// command's cwd.
 func TestStageGrantFiles(t *testing.T) {
 	ws := t.TempDir()
 	m := &Manager{GrantScratch: filepath.Join(t.TempDir(), "scratch")}
@@ -38,7 +40,7 @@ func TestStageGrantFiles(t *testing.T) {
 	planSum := write("plans/plan.tfplan", "plan")
 	varSum := write("prod.tfvars", "vars")
 	use, err := m.stageGrantFiles(d, spec(map[string]string{"plans/plan.tfplan": planSum, "prod.tfvars": varSum}),
-		[]string{"apply", "--var-file=prod.tfvars", "plans/plan.tfplan"}, ws)
+		[]string{"apply", "--var-file=prod.tfvars", "plans/plan.tfplan"}, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,28 +59,32 @@ func TestStageGrantFiles(t *testing.T) {
 		t.Fatalf("the scratch dir is private: %v", fi.Mode())
 	}
 
-	if _, err := m.stageGrantFiles(d, spec(map[string]string{"plans/plan.tfplan": varSum}), []string{"apply", "plans/plan.tfplan"}, ws); !errors.Is(err, grant.ErrDigest) {
+	if _, err := m.stageGrantFiles(d, spec(map[string]string{"plans/plan.tfplan": varSum}), []string{"apply", "plans/plan.tfplan"}, "."); !errors.Is(err, grant.ErrDigest) {
 		t.Fatalf("other content: ErrDigest, got %v", err)
 	}
 	outside := filepath.Join(t.TempDir(), "plan")
 	os.WriteFile(outside, []byte("plan"), 0o644)
 	os.Symlink(filepath.Join(ws, "plans"), filepath.Join(ws, "link"))
 	os.Symlink(outside, filepath.Join(ws, "plan-link"))
-	for _, p := range []string{outside, "../" + filepath.Base(outside), "link/plan.tfplan", "plan-link"} {
-		if _, err := m.stageGrantFiles(d, spec(map[string]string{p: planSum}), []string{"apply", p}, ws); !errors.Is(err, grant.ErrDigest) {
-			t.Errorf("%s: refused (outside the workspace, or through a symlink), got %v", p, err)
+	for _, p := range []string{outside, "../" + filepath.Base(outside), "./plans/plan.tfplan", "link/plan.tfplan", "plan-link"} {
+		if _, err := m.stageGrantFiles(d, spec(map[string]string{p: planSum}), []string{"apply", p}, "."); !errors.Is(err, grant.ErrDigest) {
+			t.Errorf("%s: refused (not a clean workspace path, or through a symlink), got %v", p, err)
 		}
 	}
 	// A command run from a subdirectory names the file from there, as the
-	// tool will open it.
+	// tool will open it; the pin is its workspace path.
 	subSum := write("plans/sub.tfplan", "sub plan")
-	if use, err := m.stageGrantFiles(d, spec(map[string]string{"sub.tfplan": subSum}), []string{"apply", "sub.tfplan"}, filepath.Join(ws, "plans")); err != nil {
+	if use, err := m.stageGrantFiles(d, spec(map[string]string{"plans/sub.tfplan": subSum}),
+		[]string{"apply", "sub.tfplan", "-state=../sub.tfplan", "plans/sub.tfplan"}, "plans"); err != nil {
 		t.Fatalf("from the command's cwd: %v", err)
 	} else {
-		use.cleanup()
+		defer use.cleanup()
+		if !strings.HasPrefix(use.args[1], m.GrantScratch) || use.args[2] != "-state=../sub.tfplan" || use.args[3] != "plans/sub.tfplan" {
+			t.Fatalf("only the tokens that resolve to the pin from plans/ name the copy: %q", use.args)
+		}
 	}
 	entries, _ := os.ReadDir(m.GrantScratch)
-	if len(entries) != 1 {
+	if len(entries) != 2 {
 		t.Fatalf("a refused staging leaves nothing behind: %d dirs", len(entries))
 	}
 }
@@ -103,7 +109,7 @@ func TestStageGrantFilesReadsTheConfinedLayer(t *testing.T) {
 	os.WriteFile(filepath.Join(upper, "plan.tfplan"), []byte("the plan terraform wrote"), 0o644)
 	sum, _ := grant.FileSHA256(filepath.Join(upper, "plan.tfplan"))
 	g := grant.GrantSpec{ID: "g1", FileDigests: []grant.FileDigest{{Path: "plan.tfplan", SHA256: sum}}}
-	use, err := m.stageGrantFiles(d, g, []string{"apply", "plan.tfplan"}, ws)
+	use, err := m.stageGrantFiles(d, g, []string{"apply", "plan.tfplan"}, ".")
 	if err != nil {
 		t.Fatalf("the layer's planfile is the one checked: %v", err)
 	}
@@ -112,14 +118,14 @@ func TestStageGrantFilesReadsTheConfinedLayer(t *testing.T) {
 	os.WriteFile(filepath.Join(ws, "prod.tfvars"), []byte("vars"), 0o644)
 	vsum, _ := grant.FileSHA256(filepath.Join(ws, "prod.tfvars"))
 	g2 := grant.GrantSpec{ID: "g2", FileDigests: []grant.FileDigest{{Path: "prod.tfvars", SHA256: vsum}}}
-	if use, err := m.stageGrantFiles(d, g2, []string{"apply", "-var-file=prod.tfvars"}, ws); err != nil {
+	if use, err := m.stageGrantFiles(d, g2, []string{"apply", "-var-file=prod.tfvars"}, "."); err != nil {
 		t.Fatalf("a workspace file: %v", err)
 	} else {
 		use.cleanup()
 	}
 	// Two tools' layers holding the same path: which one is meant is unknown.
 	os.WriteFile(filepath.Join(layer("tflint"), "plan.tfplan"), []byte("another"), 0o644)
-	if _, err := m.stageGrantFiles(d, g, []string{"apply", "plan.tfplan"}, ws); !errors.Is(err, grant.ErrDigest) || !strings.Contains(err.Error(), "ambiguous") {
+	if _, err := m.stageGrantFiles(d, g, []string{"apply", "plan.tfplan"}, "."); !errors.Is(err, grant.ErrDigest) || !strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("two layers: refused as ambiguous, got %v", err)
 	}
 }
@@ -147,30 +153,38 @@ func TestDigestFileIsWhatTheBrokerReads(t *testing.T) {
 		t.Fatalf("by agent identity, through the layer: %q %v (want %s)", sum, err, want)
 	}
 	g := grant.GrantSpec{ID: "g1", AgentID: "member-ops-h1", FileDigests: []grant.FileDigest{{Path: "plan.tfplan", SHA256: sum}}}
-	use, err := m.stageGrantFiles(paseo, g, []string{"apply", "plan.tfplan"}, ws)
+	use, err := m.stageGrantFiles(paseo, g, []string{"apply", "plan.tfplan"}, ".")
 	if err != nil {
 		t.Fatalf("a grant minted with DigestFile stages: %v", err)
 	}
 	use.cleanup()
 
-	// A cli worker binds by its dispatch; its /tmp is its own.
-	os.WriteFile(filepath.Join(worker.TmpDir, "p.bin"), []byte("tmp plan"), 0o644)
-	tsum, _ := grant.FileSHA256(filepath.Join(worker.TmpDir, "p.bin"))
-	if got, err := m.DigestFile("run-9:fix", filepath.Join(worker.jailTmp(), "p.bin")); err != nil || got != tsum {
-		t.Fatalf("by dispatch, in the jail's /tmp: %q %v", got, err)
+	// A planfile from a subdirectory's plan: pinned by its workspace path.
+	os.MkdirAll(filepath.Join(upper, "envs", "prod"), 0o700)
+	os.WriteFile(filepath.Join(upper, "envs", "prod", "tfplan"), []byte("the prod plan"), 0o644)
+	psum, _ := grant.FileSHA256(filepath.Join(upper, "envs", "prod", "tfplan"))
+	if got, err := m.DigestFile("member-ops-h1", "envs/prod/tfplan"); err != nil || got != psum {
+		t.Fatalf("a subdirectory's planfile, through the layer: %q %v", got, err)
+	}
+
+	// A cli worker binds by its dispatch.
+	os.WriteFile(filepath.Join(wws, "p.bin"), []byte("worker plan"), 0o644)
+	tsum, _ := grant.FileSHA256(filepath.Join(wws, "p.bin"))
+	if got, err := m.DigestFile("run-9:fix", "p.bin"); err != nil || got != tsum {
+		t.Fatalf("by dispatch: %q %v", got, err)
 	}
 	if _, err := m.DigestFile("run-9:fix", "plan.tfplan"); err == nil {
 		t.Fatal("another agent's file is not this one's")
 	}
 	// "" is no identity, though a cli worker's jail has no AgentID.
 	for _, bad := range []string{"", "member-ops-h2"} {
-		if _, err := m.DigestFile(bad, filepath.Join(worker.jailTmp(), "p.bin")); err == nil {
+		if _, err := m.DigestFile(bad, "p.bin"); err == nil {
 			t.Fatalf("%q: no live jail, refused", bad)
 		}
 	}
-	for _, p := range []string{"../x", "/etc/hostname"} {
+	for _, p := range []string{"../x", "/etc/hostname", filepath.Join(ws, "plan.tfplan"), "./plan.tfplan", "envs//prod/tfplan", "."} {
 		if _, err := m.DigestFile("member-ops-h1", p); err == nil {
-			t.Fatalf("%s: outside the workspace, refused", p)
+			t.Fatalf("%s: not a clean workspace-relative path, refused", p)
 		}
 	}
 	os.Symlink(filepath.Join(ws, "plan.tfplan"), filepath.Join(ws, "link.tfplan"))
@@ -273,4 +287,44 @@ func TestWhyNoGrant(t *testing.T) {
 	revoked := mint("member-ops-h1", apply, time.Hour)
 	store.Revoke(ctx, revoked.ID)
 	want("the newest approval of this command revoked", grant.ErrRevoked, revoked.ID)
+}
+
+// A grant is for the directory the command runs in: the broker presents the
+// command's cwd relative to the workspace, the same argv from another
+// directory is another command (ErrMismatch, naming where the approval is
+// for), and a command run outside the workspace matches no grant.
+func TestGrantBindsTheCommandsDirectory(t *testing.T) {
+	ctx := context.Background()
+	ws := t.TempDir()
+	d := &Dispatch{LaunchSpec: LaunchSpec{Workspace: ws, AgentID: "member-ops-h1"}}
+	argv := []string{"apply", "tfplan"}
+	for dir, want := range map[string]string{
+		ws: ".", filepath.Join(ws, "envs", "prod"): "envs/prod", filepath.Join(ws, "envs", "prod") + "/": "envs/prod",
+	} {
+		if got := presented(d, "terraform", argv, dir).Cwd; got != want {
+			t.Fatalf("%s: presented cwd %q, want %q", dir, got, want)
+		}
+	}
+	store := grant.NewMemStore()
+	m := &Manager{Grants: store}
+	g, err := store.Mint(ctx, grant.GrantSpec{AgentID: "member-ops-h1", Tool: "terraform", Cwd: "envs/prod",
+		Argv: grant.ParseArgv(argv), Expiry: time.Now().Add(time.Hour), SingleUse: true, ApprovedBy: "op@example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found, _ := store.Find(ctx, presented(d, "terraform", argv, filepath.Join(ws, "envs", "prod"))); len(found) != 1 {
+		t.Fatal("the approved directory matches")
+	}
+	for _, dir := range []string{filepath.Join(ws, "envs", "staging"), ws, "/tmp", filepath.Join(ws, "envs", "prod", "sub")} {
+		p := presented(d, "terraform", argv, dir)
+		if found, _ := store.Find(ctx, p); len(found) != 0 {
+			t.Fatalf("%s: another directory is another command", dir)
+		}
+		if why := m.whyNoGrant(ctx, p); !strings.Contains(why, grant.ErrMismatch.Error()) || !strings.Contains(why, g.ID) || !strings.Contains(why, "in envs/prod") {
+			t.Fatalf("%s: ErrMismatch naming where the approval is for, got %q", dir, why)
+		}
+	}
+	if (&Dispatch{}).wsRel("/x") != ".." {
+		t.Fatal("no workspace: nothing is inside it")
+	}
 }

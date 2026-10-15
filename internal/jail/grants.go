@@ -18,7 +18,7 @@ import (
 // because the operator's allow list does not name it — `terraform apply
 // plan.tfplan` from an agent, say — runs when the operator approved that
 // exact command: a live grant for this agent (its identity, or its dispatch),
-// this tool and this parsed argv. The broker:
+// this tool, this parsed argv, run in this directory. The broker:
 //
 //  1. finds the grant (grant.Store.Find), and decides the command again as
 //     if the operator's allow list named it (hostcmd.Rule.Granted) — so a
@@ -41,9 +41,22 @@ type grantUse struct {
 	cleanup func()
 }
 
-// presented is what the broker knows about a host command, for grant matching.
-func presented(d *Dispatch, tool string, args []string) grant.Presented {
-	return grant.Presented{AgentID: d.AgentID, Dispatch: d.DispatchID, Tool: tool, Argv: grant.ParseArgv(args)}
+// presented is what the broker knows about a host command, for grant
+// matching: its agent, its tool and argv, and the directory it runs in,
+// relative to the workspace. A command run outside the workspace (from the
+// jail's /tmp) gets a cwd that escapes it, which no grant matches.
+func presented(d *Dispatch, tool string, args []string, cwd string) grant.Presented {
+	return grant.Presented{AgentID: d.AgentID, Dispatch: d.DispatchID, Tool: tool, Argv: grant.ParseArgv(args), Cwd: d.wsRel(cwd)}
+}
+
+// wsRel is dir relative to d's workspace, "/"-separated ("." for the
+// workspace itself; ".."-led when dir is outside it).
+func (d *Dispatch) wsRel(dir string) string {
+	rel, err := filepath.Rel(d.Workspace, dir)
+	if err != nil || d.Workspace == "" {
+		return ".."
+	}
+	return filepath.ToSlash(rel)
 }
 
 // useGrant looks for a grant that lifts a refusal of tool args. It returns
@@ -51,7 +64,7 @@ func presented(d *Dispatch, tool string, args []string) grant.Presented {
 // applies, "" with nil (the original refusal stands) or a reason naming why a
 // grant did not hold.
 func (m *Manager) useGrant(ctx context.Context, d *Dispatch, tool string, args []string, cwd string, rule hostcmd.Rule, hc hostcmd.Context) (hostcmd.Decision, *grantUse, string) {
-	p := presented(d, tool, args)
+	p := presented(d, tool, args, cwd)
 	cands, err := m.Grants.Find(ctx, p)
 	if err != nil {
 		return hostcmd.Decision{}, nil, "grant lookup: " + err.Error()
@@ -65,7 +78,7 @@ func (m *Manager) useGrant(ctx context.Context, d *Dispatch, tool string, args [
 	if !dec.Allow || dec.Native {
 		return dec, nil, ""
 	}
-	use, err := m.stageGrantFiles(d, g, args, cwd)
+	use, err := m.stageGrantFiles(d, g, args, p.Cwd)
 	if err != nil {
 		return hostcmd.Decision{}, nil, fmt.Sprintf("%v (grant %s)", err, g.ID)
 	}
@@ -108,14 +121,18 @@ func (m *Manager) whyNoGrant(ctx context.Context, p grant.Presented) string {
 		return fmt.Sprintf("%v (grant %s, approved by %s)", grant.Explain(g, p, now), g.ID, g.ApprovedBy)
 	case other >= 0:
 		g := near[other]
-		return fmt.Sprintf("%v (grant %s approves `%s %s`)", grant.ErrMismatch, g.ID, g.Tool, g.Argv)
+		dir, _ := grant.CleanCwd(g.Cwd)
+		return fmt.Sprintf("%v (grant %s approves `%s %s` in %s)", grant.ErrMismatch, g.ID, g.Tool, g.Argv, dir)
 	}
 	return ""
 }
 
 // stageGrantFiles copies the files g pins into a private scratch dir,
 // verifies them against g's digests, and rewrites args to name the copies.
-// Each is read by pinnedFile, as the gate hashed it at mint (DigestFile).
+// Each is read by pinnedFile, as the gate hashed it at mint (DigestFile). An
+// argv token names a pinned file when it resolves to the pin's path from the
+// command's cwd (grant.ResolvePath, as the gate resolved it): a bare token,
+// or the value of a `-k=v` flag.
 func (m *Manager) stageGrantFiles(d *Dispatch, g grant.GrantSpec, args []string, cwd string) (*grantUse, error) {
 	use := &grantUse{args: append([]string(nil), args...), cleanup: func() {}}
 	if len(g.FileDigests) == 0 {
@@ -129,7 +146,7 @@ func (m *Manager) stageGrantFiles(d *Dispatch, g grant.GrantSpec, args []string,
 	actual := map[string]string{}
 	for i, fd := range g.FileDigests {
 		dst := filepath.Join(dir, fmt.Sprintf("%d-%s", i, filepath.Base(fd.Path)))
-		sum, err := d.copyPinned(fd.Path, cwd, dst)
+		sum, err := d.copyPinned(fd.Path, dst)
 		if err != nil {
 			use.cleanup()
 			return nil, fmt.Errorf("%w: %s: %v", grant.ErrDigest, fd.Path, err)
@@ -137,11 +154,12 @@ func (m *Manager) stageGrantFiles(d *Dispatch, g grant.GrantSpec, args []string,
 		actual[fd.Path] = sum
 		use.files = append(use.files, dst)
 		for j, a := range use.args {
-			switch {
-			case a == fd.Path:
-				use.args[j] = dst
-			case strings.HasPrefix(a, "-") && strings.HasSuffix(a, "="+fd.Path):
-				use.args[j] = strings.TrimSuffix(a, fd.Path) + dst
+			tok, prefix := a, ""
+			if k, v, ok := strings.Cut(a, "="); ok && strings.HasPrefix(a, "-") {
+				tok, prefix = v, k+"="
+			}
+			if r, err := grant.ResolvePath(cwd, tok); err == nil && r == fd.Path {
+				use.args[j] = prefix + dst
 			}
 		}
 	}
@@ -154,65 +172,50 @@ func (m *Manager) stageGrantFiles(d *Dispatch, g grant.GrantSpec, args []string,
 
 // copyPinned is pinnedFile into a new file dst (read-only, never an
 // existing one).
-func (d *Dispatch) copyPinned(path, cwd, dst string) (string, error) {
+func (d *Dispatch) copyPinned(path, dst string) (string, error) {
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o400)
 	if err != nil {
 		return "", err
 	}
-	sum, err := d.pinnedFile(path, cwd, out)
+	sum, err := d.pinnedFile(path, out)
 	if cerr := out.Close(); err == nil {
 		err = cerr
 	}
 	return sum, err
 }
 
-// pinnedFile reads the file a grant pins — path, as the command names it,
-// resolved against cwd — from where it is for d, into w, and returns the
+// pinnedFile reads the file a grant pins — path, workspace-relative and
+// clean: the argv token resolved against the command's cwd
+// (grant.ResolvePath) — from where it is for d, into w, and returns the
 // sha256 of its bytes. It is the one read both ends of a grant use: the
 // gate's hash at mint (DigestFile) and the broker's copy at use
 // (stageGrantFiles), so the bytes approved are the bytes checked.
 //
-//   - It is the dispatch's own file: under its workspace, or under its /tmp —
-//     the jail's /tmp is the dispatch's tmp dir on the host, never the host's.
-//   - A workspace file a confined run wrote is read from the copy-on-write
-//     layer it went to (a `terraform plan -out` lands in the dispatch's
-//     layer for terraform, never in the workspace); any other, from the
-//     workspace. Which tool's layer does not depend on the command — the
-//     gate does not know it at mint — so a file two tools' layers both hold
-//     is refused as ambiguous.
+//   - A file a confined run wrote is read from the copy-on-write layer it
+//     went to (a `terraform plan -out` in envs/prod lands in the dispatch's
+//     layer for terraform, at envs/prod/…, never in the workspace); any
+//     other, from the workspace. Which tool's layer does not depend on the
+//     command — the gate does not know it at mint — so a file two tools'
+//     layers both hold is refused as ambiguous.
 //   - Every path component is opened without following a symlink, and only a
 //     regular file is read (a layer's whiteout — the confined run deleted
 //     it — is not one).
-func (d *Dispatch) pinnedFile(path, cwd string, w io.Writer) (string, error) {
-	abs := path
-	if !filepath.IsAbs(abs) {
-		abs = filepath.Join(cwd, abs)
+func (d *Dispatch) pinnedFile(path string, w io.Writer) (string, error) {
+	if p, err := grant.ResolvePath(".", path); err != nil || p != path {
+		return "", fmt.Errorf("%q is not a clean workspace-relative path", path)
 	}
-	abs = filepath.Clean(abs)
-	if jt := d.jailTmp(); jt != d.TmpDir && within(abs, jt) && !within(abs, d.Workspace) {
-		rel, _ := filepath.Rel(jt, abs)
-		abs = filepath.Join(d.TmpDir, rel)
+	if d.Workspace == "" {
+		return "", errors.New("no workspace")
 	}
-	root := ""
-	for _, r := range []string{d.TmpDir, d.Workspace} { // the workspace wins
-		if r != "" && within(abs, r) {
-			root = r
-		}
+	root := d.Workspace
+	upper, err := d.layerHolding(path)
+	if err != nil {
+		return "", err
 	}
-	if root == "" {
-		return "", fmt.Errorf("%s is outside the workspace", path)
+	if upper != "" {
+		root = upper
 	}
-	rel, _ := filepath.Rel(root, abs)
-	if root == d.Workspace {
-		upper, err := d.layerHolding(rel)
-		if err != nil {
-			return "", err
-		}
-		if upper != "" {
-			root = upper
-		}
-	}
-	return readNoFollow(root, rel, w)
+	return readNoFollow(root, path, w)
 }
 
 // layerHolding is the copy-on-write upper dir among d's confined layers
@@ -243,9 +246,10 @@ func (d *Dispatch) layerHolding(rel string) (string, error) {
 // run on.
 //
 // identity is a live jail's AgentID (a paseo provider session's identity) or
-// its DispatchID (a cli worker) — what the grant binds to; path is as the
-// agent names it, relative to its workspace. It is an error when identity
-// has no live jail, or its live jails read different bytes.
+// its DispatchID (a cli worker) — what the grant binds to; path is the file's
+// workspace-relative path, as the grant pins it (grant.ResolvePath of the
+// argv token from the command's cwd). It is an error when identity has no
+// live jail, or its live jails read different bytes.
 func (m *Manager) DigestFile(identity, path string) (string, error) {
 	if identity == "" {
 		return "", errors.New("no identity")
@@ -263,7 +267,7 @@ func (m *Manager) DigestFile(identity, path string) (string, error) {
 	}
 	sum := ""
 	for _, d := range ds {
-		s, err := d.pinnedFile(path, d.Workspace, io.Discard)
+		s, err := d.pinnedFile(path, io.Discard)
 		if err != nil {
 			return "", err
 		}
