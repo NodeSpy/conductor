@@ -33,9 +33,11 @@ e2e-live:
 e2e-packs:
 	bash test/e2e/packs.sh
 
-# Tear down a leftover e2e stack (e.g. after a KEEP=1 run).
+# Tear down a leftover e2e stack (e.g. after a KEEP=1 run) — this checkout's
+# (test/e2e/run.sh names the project after it).
+E2E_PROJECT ?= pc-e2e-$(shell basename "$(CURDIR)" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9_\n' '-')
 e2e-down:
-	docker compose -f test/e2e/docker-compose.yml -p pc-e2e down -v --remove-orphans
+	docker compose -f test/e2e/docker-compose.yml -p $(E2E_PROJECT) down -v --remove-orphans
 
 # The M6 ship gate: static checks + race tests + the hermetic e2e suite.
 ship-gate: fmt vet test e2e
