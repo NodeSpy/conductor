@@ -74,12 +74,12 @@ jobs:
           if [ "$RUNNER_OS" = macOS ]; then ls -d "/Applications/Google Chrome.app" "/Applications/Chromium.app" 2>/dev/null || true
           else command -v google-chrome google-chrome-stable chromium chromium-browser || true; fi
       - name: browser packages, real browser and sandbox required
+        shell: bash
         env:
           CONDUCTOR_REQUIRE_BROWSER: "1"
           CONDUCTOR_REQUIRE_SANDBOX: "1"
         run: |
-          go test -race -count=1 -v ./internal/browser/... 2>&1 | tee browser.log | grep -E '^(=== RUN|--- |PASS|FAIL|ok)' || true
-          grep -q '^ok' browser.log && ! grep -q -- '--- FAIL' browser.log
+          go test -race -count=1 -v ./internal/browser/...
           go test -race -count=1 -run 'TestBrowser|TestSplitBrowser|TestValidateBrowser|TestReadFresh' ./cmd/conductor/ ./internal/config/ ./internal/vaults/
 
   paseo:
