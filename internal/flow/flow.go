@@ -398,6 +398,7 @@ func (r *Runner) Run(ctx context.Context, run store.WorkflowRun, t core.Trigger,
 	ctx = context.WithValue(ctx, policyKey{}, r.resolvePolicy(spec))
 	ctx = context.WithValue(ctx, botReplyKey{}, r.resolveBotReply(t, spec))
 	ctx = withDefaultGate(ctx, spec.Gate)
+	ctx = withDefaultIsolation(ctx, spec.Isolation)
 	ctx = r.withRunBudget(ctx, t, spec)
 	ctx, runCost := withCostAcc(ctx)
 	ctx, hist := r.beginHistory(ctx, run, t, spec, shadow || r.DryRun || (spec.Shadow != nil && *spec.Shadow))
@@ -1412,7 +1413,7 @@ func (r *Runner) execWorkflowCall(ctx context.Context, t core.Trigger, step conf
 	// so its sessions bound under keys the sweep looks for under another
 	// name. Same root cause as the trigger-index bug; this is the call
 	// path that fix missed.
-	stepCtx := withIdentityScope(withDefaultGate(ctx, wf.Gate), config.WorkflowScope(name))
+	stepCtx := withIdentityScope(withDefaultIsolation(withDefaultGate(ctx, wf.Gate), wf.Isolation), config.WorkflowScope(name))
 	if saved != nil {
 		stepCtx = context.WithValue(stepCtx, savedWFKey{}, name)
 	}
@@ -1919,6 +1920,10 @@ func (r *Runner) execAgent(ctx context.Context, t core.Trigger, step config.Step
 		spendRes = res
 	}
 	historySetInputs(ctx, id, map[string]any{"agent": identity, "prompt": clipText(act.Prompt, 4000)})
+	// The isolation: the dispatch carries (a step's own, else its
+	// trigger's / workflow's) — before the agent-authored strip below, which
+	// then removes an inherited opt-out as well.
+	step.Isolation = r.effectiveIsolation(ctx, step)
 	authored := agentAuthored(ctx)
 	if authored {
 		// Strip the inheritable grants at the point the dispatch is BUILT.

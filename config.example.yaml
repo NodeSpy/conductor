@@ -1294,6 +1294,25 @@ sandbox:
     # email: you@example.com                  #   (default: git's user.email)
     # sign: false                             # push unsigned (default: refuse to push without a key)
     # at_step_end: false                      # only an explicit git.push pushes
+#
+# Hand-offs (background: true agent steps on paseo) are sandboxed too: they
+# launch through <provider>-sandboxed, titled "[sandboxed]". The EXPLICIT,
+# LOOSENING knob is `isolation: { mode: none }` — on a step, a workflow or a
+# trigger of YOUR config (or a pack's, from your packs: overrides; a pack can
+# never set it on itself) — which launches the agent unsandboxed, as you,
+# through paseo's plain provider ("[UNSANDBOXED]", logged). E.g. one workflow
+# whose hand-off you want to drive with your own credentials:
+#
+#   triggers:
+#     - on: gh.review_requested
+#       isolation: { mode: none }        # this workflow's hand-off runs as you
+#       steps:
+#         - { id: review, type: agent, background: true, prompt: "Review {{.repo}}#{{.pr}} with me" }
+#   packs:
+#     review:
+#       use: conductor-packs/review
+#       triggers:
+#         <trigger>: { enabled: true, repos: [acme/app], isolation: { mode: none } }   # a pack trigger, by name
 
 
 # trigger on conductor.* — dispatch, escalate (gave up after retries),

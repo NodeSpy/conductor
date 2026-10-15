@@ -37,6 +37,8 @@ runtimes:
     agent: claude-code
     transport: cli
     default: true
+  pz:
+    use: paseo
   oc:
     use: opencode
   deck:
@@ -80,6 +82,32 @@ triggers:
         workspace: worktree
         archive_when_done: true
         prompt: "Resolve {{.repo}}#{{.pr}} (agent-deck, sandboxed) [[sandbox-probe]]"
+  # Paseo hand-offs: sandboxed by default (the conductor-owned
+  # <provider>-sandboxed entry) — and the operator's explicit opt-out,
+  # `isolation: {mode: none}` on the workflow, launches the plain provider.
+  - "on": github.review_requested
+    filter:
+      repo:
+        - grpz/hoff
+    steps:
+      - type: agent
+        name: hoff_default
+        runtime: pz
+        workspace: worktree
+        background: true
+        prompt: "Review {{.repo}}#{{.pr}} with me"
+  - "on": github.review_requested
+    isolation: { mode: none }
+    filter:
+      repo:
+        - grpz/hoffout
+    steps:
+      - type: agent
+        name: hoff_optout
+        runtime: pz
+        workspace: worktree
+        background: true
+        prompt: "Review {{.repo}}#{{.pr}} with me"
   # A review: sandboxed too, and conductor pushes nothing from it.
   - "on": github.review_requested
     filter:

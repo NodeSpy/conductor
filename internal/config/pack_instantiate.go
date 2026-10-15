@@ -261,6 +261,11 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	if packPinErr != nil {
 		return packPinErr
 	}
+	// …and a pack may not loosen its own sandbox (`isolation: {mode:
+	// none}` and the like) — the operator does, from the overlay below.
+	if p := checkPackSandboxLoosening(man); len(p) > 0 {
+		return fmt.Errorf("%s", p[0])
+	}
 
 	// ---- Mirrored-section overlay (§5.3): the consumer's steps:/models:
 	// blocks deep-merge onto the pack's members BY NAME before anything is
@@ -930,6 +935,9 @@ func applyTriggerArm(tr *TriggerSpec, arm TriggerArm) error {
 	}
 	if arm.Gate != nil {
 		tr.Gate = arm.Gate
+	}
+	if arm.Isolation != nil {
+		tr.Isolation = arm.Isolation
 	}
 	return nil
 }

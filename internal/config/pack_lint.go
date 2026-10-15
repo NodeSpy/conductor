@@ -75,6 +75,7 @@ func LintPackManifest(man *PackManifest) []string {
 	problems = append(problems, checkPackConnectorRefs(man)...)
 	problems = append(problems, checkPackStoreRefs(man)...)
 
+	problems = append(problems, checkPackSandboxLoosening(man)...)
 	problems = append(problems, lintSettingsRefs(man)...)
 	sort.Strings(problems)
 	return problems

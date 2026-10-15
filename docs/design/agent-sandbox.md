@@ -414,3 +414,29 @@ start for each paseo home it can name, pointing the entries at its control
 socket. It never follows the endpoint ladder's address guess to a config.
 
 **Not changed.** Interactive hand-offs: still the operator's decision.
+
+---
+
+## 14. Hand-offs: sandboxed by default, an operator-only opt-out
+
+Daniel's decision: an interactive hand-off (a `background: true` paseo step)
+launches through the sandboxed entry like every paseo dispatch; the explicit
+opt-out is `isolation: {mode: none}` — on a step, or (new) on a workflow or
+trigger as the default for its agent steps — which launches the plain
+provider. flow resolves the dispatch's isolation onto the step (step →
+workflow/trigger → a paseo runtime's own), before the agent-authored strip;
+the paseo dispatcher reads only `OptsOut()`. Validation allows exactly
+`{mode: none}` on a paseo step or runtime.
+
+Only the operator loosens it: a pack's step, workflow or trigger may narrow
+(`network: {deny: true}`, `limits:`), and is refused at load and by `pack
+lint` for `mode: none` — and, for agents, `user`/`container`, `privileged`,
+`network.egress`, `fs:` — checked on the pristine manifest like the
+runtime/host and `trust:` bans, with the message naming the operator's
+override: the `packs:` `steps:` overlay, or a trigger arm's new `isolation:`
+(mirroring its `gate:`). The verdict is visible: `[sandboxed]` /
+`[UNSANDBOXED]` in a hand-off's title, `sandbox=on|off` on every paseo
+agent, and a log line per dispatch.
+
+Not changed: `detach: true` launches (handed to the user and forgotten) stay
+on the plain provider.

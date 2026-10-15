@@ -161,12 +161,64 @@ sandbox:
     # at_step_end: false # only git.push pushes
 ```
 
-Per runtime or step, an `isolation:` block keeps working: `mode: none` runs
-that launch unwrapped (the explicit opt-out); `mode: user` / `container`, or
+Per runtime, workflow, trigger or step, an `isolation:` block keeps working
+(most specific wins: step → workflow/trigger → runtime): `mode: none` runs that
+launch unwrapped (the explicit opt-out, below); `mode: user` / `container`, or
 `namespace` with `privileged: true`, keep their own wrappers; a plain
 `namespace` block shapes the agent sandbox (its `network.egress` joins the
 allowlist, its `fs:` paths are shown read-write). A remote (`host:`) launch
 runs under that box's own isolation.
+
+### Hand-offs, and opting a workflow out
+
+**Hand-offs are sandboxed.** An interactive hand-off (a `background: true`
+agent step on paseo) launches through the provider's conductor-owned
+`<provider>-sandboxed` entry, like every other paseo dispatch: the agent you
+drive has its workspace, its identity's tool state and its model — not your
+keys, your other projects, or a credentialed `gh`. Its paseo title says so
+— `conductor: acme/app#7 review_requested [sandboxed]` — the agent carries
+the label `sandbox=on`, and the daemon logs each verdict:
+
+```
+paseo hand-off conductor: acme/app#7 review_requested: sandboxed (provider claude-sandboxed)
+```
+
+**`isolation: {mode: none}` is the explicit, loosening knob.** On a step, a
+workflow, or a trigger (its default for every agent step it runs, the
+workflows it calls included, unless a step sets its own), it launches the
+agent **unsandboxed, as you**: on paseo through the *plain* provider, titled
+`[UNSANDBOXED]`, labelled `sandbox=off`, and logged:
+
+```
+paseo hand-off conductor: acme/app#7 review_requested: UNSANDBOXED — isolation: {mode: none} (the operator's opt-out); plain provider claude
+```
+
+On a paseo step or runtime, `{mode: none}` is the only isolation that applies
+(conductor does not wrap a paseo agent itself; it names the entry paseo
+launches it with) — anything else is a `conductor validate` error.
+`sandbox.agents: off` turns the sandbox off for everything.
+
+**Only your own config can loosen it.** Your runtimes, your workflows and
+triggers, and the overrides you write for a pack in your `packs:` block. **A
+pack cannot opt its own steps out** — it can narrow its sandbox (`network:
+{deny: true}`, `limits:`), never loosen it: a pack's step, workflow or
+trigger carrying `mode: none` — or, for its agents, `mode: user`/`container`,
+`privileged: true`, `network.egress` or `fs:` — is refused at load and by
+`conductor pack lint`, naming the override to write instead:
+
+```yaml
+packs:
+  review:
+    use: conductor-packs/review
+    steps:
+      <workflow>/<step>: { isolation: { mode: none } }   # this step only (its ref in the pack)
+    triggers:
+      <trigger>: { enabled: true, repos: [acme/app], isolation: { mode: none } }  # the whole workflow it runs
+```
+
+These are the same overlays that route a pack step to your runtime or set
+its gate. An agent-authored dispatch never carries an opt-out (it is
+stripped with the rest of its inheritable grants).
 
 ### What the sandbox no longer does, and why
 
@@ -191,6 +243,9 @@ review rounds to harden is gone rather than hardened.
   provider, or an agent-deck session you start from agent-deck's own UI, is
   that tool's, not conductor's. A remote (`host:`) launch runs under that
   box's isolation.
+- **`detach: true` launches** (an agent handed over to you and forgotten:
+  no conductor token, never archived) run on paseo's plain provider, as
+  before — they are not routed through the sandboxed entry.
 - **Registrations live in the daemon.** After conductor restarts, a
   workspace it registered is no longer known: an agent-deck session that
   agent-deck restarts then is refused (`--agent-cwd`), and a paseo session
@@ -221,9 +276,10 @@ It only applies to launches conductor performs itself: **acp**, **cli**,
 **opencode**, and **agent-deck** runtimes, and `hosts:` scripts (code steps,
 remote commands). A **paseo** runtime's agents are children of the paseo
 daemon — conductor never holds that process, so `conductor validate` rejects
-`isolation:` on paseo runtimes and on profiles that resolve to one, rather
-than silently not isolating. Use paseo's own sandboxing there, or move the
-profile to a runtime conductor launches.
+`isolation:` on paseo runtimes and on steps that resolve to one, rather
+than silently not isolating — except `{mode: none}`, which launches through
+paseo's plain provider instead of the sandboxed entry ([above](#hand-offs-and-opting-a-workflow-out)).
+For another sandbox, move the step to a runtime conductor launches.
 
 ## Code-step engines (sandboxed by default)
 

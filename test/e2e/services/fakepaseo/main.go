@@ -116,6 +116,7 @@ type agent struct {
 	Cwd       string            `json:"cwd"`
 	Status    string            `json:"status"` // idle when finished
 	Title     string            `json:"title"`
+	Provider  string            `json:"provider,omitempty"` // --provider (the agent sandbox: <p>-sandboxed)
 	Labels    map[string]string `json:"labels"`
 	Archived  bool              `json:"archived"`
 	CreatedAt time.Time         `json:"created_at"`
@@ -393,7 +394,7 @@ func cmdRun(args []string) {
 		id = fmt.Sprintf("agent-%d", s.Seq)
 		now := time.Now()
 		s.Agents[id] = &agent{
-			ID: id, Cwd: cwd, Status: "idle", Title: p.title,
+			ID: id, Cwd: cwd, Status: "idle", Title: p.title, Provider: p.provider,
 			Labels: p.labels, CreatedAt: now, LastUsage: now,
 			Prompt: prompt, Reply: string(replyRaw), Env: p.env,
 		}

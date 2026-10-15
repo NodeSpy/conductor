@@ -18,6 +18,73 @@ import (
 // when sandbox.agents is on (the default).
 var PaseoSandboxed bool
 
+// PaseoSandboxLog reports each local paseo dispatch's sandbox verdict
+// (nil: not logged). Wired at boot with the daemon's log.
+var PaseoSandboxLog func(format string, a ...any)
+
+// paseoSandboxDecision says whether a paseo dispatch launches through the
+// conductor-owned sandboxed entry: with the sandbox on, every local one —
+// a hand-off included — unless its isolation: is `{mode: none}`, the
+// operator's explicit opt-out (a step's own, or its trigger's / workflow's /
+// paseo runtime's, resolved onto the step by flow; validation keeps a pack
+// from setting it). optedOut: the sandbox is on and this dispatch opted out.
+func paseoSandboxDecision(req Request, remote bool) (sandboxed, optedOut bool) {
+	if !PaseoSandboxed || remote {
+		return false, false
+	}
+	if req.Step.Isolation.OptsOut() {
+		return false, true
+	}
+	return true, false
+}
+
+// sandboxTitleMark tells a hand-off's driver, in paseo's sidebar, whether
+// it runs sandboxed ("" when the sandbox is off or this is no hand-off).
+func sandboxTitleMark(req Request, sandboxed, optedOut bool) string {
+	switch {
+	case !req.Interactive:
+		return ""
+	case sandboxed:
+		return " [sandboxed]"
+	case optedOut:
+		return " [UNSANDBOXED]"
+	}
+	return ""
+}
+
+// sandboxLabel records the verdict on the paseo agent (sandbox=on|off)
+// when the sandbox decides it (nothing when off, or for a remote paseo).
+func sandboxLabel(sandboxed, optedOut bool) []string {
+	switch {
+	case sandboxed:
+		return []string{"sandbox=on"}
+	case optedOut:
+		return []string{"sandbox=off"}
+	}
+	return nil
+}
+
+// logPaseoSandbox logs a dispatch's verdict.
+func logPaseoSandbox(req Request, sandboxed, optedOut bool, provider string) {
+	if PaseoSandboxLog == nil || req.Shadow {
+		return
+	}
+	what := "dispatch"
+	if req.Interactive {
+		what = "hand-off"
+	}
+	switch {
+	case sandboxed:
+		PaseoSandboxLog("paseo %s %s: sandboxed (provider %s)", what, agentTitle(req), provider)
+	case optedOut:
+		p := provider
+		if p == "" {
+			p = "paseo's default"
+		}
+		PaseoSandboxLog("paseo %s %s: UNSANDBOXED — isolation: {mode: none} (the operator's opt-out); plain provider %s", what, agentTitle(req), p)
+	}
+}
+
 // PaseoDefaultProvider is the provider a sandboxed paseo dispatch uses when
 // its model resolution named none (paseo's own default would launch it
 // unsandboxed).

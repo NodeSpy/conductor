@@ -117,6 +117,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	// conductor's paseo dispatches launch through the sandboxed provider
 	// entries (`conductor paseo setup`).
 	dispatch.PaseoSandboxed = true
+	dispatch.PaseoSandboxLog = logf
 	if why := agentsandbox.Probe(); why != "" {
 		logf("WARNING: the agent sandbox cannot be built on this box (%s) — every agent launch will be REFUSED until it can (or set sandbox.agents: off)", why)
 	} else {
@@ -127,6 +128,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		controller.AgentSandbox = nil
 		gitdiff.Confine = nil
 		dispatch.PaseoSandboxed = false
+		dispatch.PaseoSandboxLog = nil
 		rel.Close()
 	}, nil
 }

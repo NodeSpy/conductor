@@ -1917,6 +1917,19 @@ z_fixer() {
   fi
 }
 
+# z_hoff_agent <repo#n> — "<provider>|<title>|sandbox=<label>" of the fake
+# paseo agent launched for that PR on the sandbox daemon (fails if none).
+z_hoff_agent() {
+  cexec conductor-sandbox cat /home/conductor/data/fakepaseo/state.json 2>/dev/null | python3 -c '
+import json, sys
+want = sys.argv[1]
+for a in json.load(sys.stdin).get("agents", {}).values():
+    if want in a.get("title", ""):
+        print("%s|%s|sandbox=%s" % (a.get("provider", ""), a.get("title", ""), (a.get("labels") or {}).get("sandbox", "")))
+        sys.exit(0)
+sys.exit(1)' "$1"
+}
+
 group_Z_sandbox() {
   banner "Group Z — the agent sandbox: a read-only agent, conductor pushes (signed)"
   local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml
@@ -1930,6 +1943,29 @@ group_Z_sandbox() {
     ok "Z the push is audited (git_push, signed)" Z audit
   else
     bad "Z push audited" Z audit "no signed git_push audit row"
+  fi
+
+  # Paseo hand-offs: sandboxed by default; the operator's isolation: {mode:
+  # none} on the workflow launches the plain provider. The verdict is in the
+  # hand-off's title, on its labels, and in the daemon's log.
+  force "$C" review_requested grpz/hoff#1 "$CFG" >/dev/null
+  force "$C" review_requested grpz/hoffout#1 "$CFG" >/dev/null
+  if wait_for 60 z_hoff_agent 'grpz/hoff#1' && wait_for 60 z_hoff_agent 'grpz/hoffout#1'; then
+    local hd ho
+    hd="$(z_hoff_agent 'grpz/hoff#1')"; ho="$(z_hoff_agent 'grpz/hoffout#1')"
+    echo "      default: $hd"; echo "      opted out: $ho"
+    case "$hd" in *"-sandboxed|"*"[sandboxed]|sandbox=on") ok "Z a hand-off launches sandboxed by default (the -sandboxed entry, marked in its title)" Z hoff-default ;;
+      *) bad "Z default hand-off sandboxed" Z hoff-default "got '$hd'" ;; esac
+    case "$ho" in *"-sandboxed|"*) bad "Z opted-out hand-off plain" Z hoff-optout "got '$ho'" ;;
+      *"[UNSANDBOXED]|sandbox=off") ok "Z isolation: {mode: none} launches the hand-off through the plain provider (marked UNSANDBOXED)" Z hoff-optout ;;
+      *) bad "Z opted-out hand-off plain" Z hoff-optout "got '$ho'" ;; esac
+  else
+    bad "Z hand-offs launched" Z hoff "no paseo agent for grpz/hoff / grpz/hoffout"
+  fi
+  if dc logs "$C" 2>&1 | grep -q 'paseo hand-off conductor: grpz/hoffout#1 review_requested: UNSANDBOXED'; then
+    ok "Z the opt-out is logged" Z hoff-log
+  else
+    bad "Z opt-out logged" Z hoff-log "no UNSANDBOXED line for grpz/hoffout"
   fi
 
   # The reviewer: sandboxed too, and conductor pushes nothing from a review.

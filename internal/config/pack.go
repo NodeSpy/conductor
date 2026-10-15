@@ -285,6 +285,11 @@ type TriggerArm struct {
 	// Gate replaces the shipped trigger's gate. The OPERATOR setting a gate is
 	// the point — it is their check that runs before the pack's steps land.
 	Gate *GateSpec `yaml:"gate,omitempty"`
+	// Isolation replaces the shipped trigger's isolation: — the default for
+	// its agent steps. The operator's knob: `{mode: none}` here opts the
+	// pack's workflow (a hand-off's included) out of the agent sandbox, which
+	// the pack itself may not do.
+	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
 }
 
 // UnmarshalYAML decodes an arming block, naming the retired `filters:` key
@@ -374,6 +379,9 @@ func mergeArm(star, named TriggerArm) TriggerArm {
 	}
 	if named.Gate != nil {
 		out.Gate = named.Gate
+	}
+	if named.Isolation != nil {
+		out.Isolation = named.Isolation
 	}
 	return out
 }

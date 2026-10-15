@@ -127,14 +127,15 @@ func (c *Config) validateStepIsolation(where string, p Step) error {
 		rn = c.DefaultRuntimeName()
 	}
 	if rn == "" {
-		return fmt.Errorf("config: %s: isolation requires a runtime conductor launches itself (acp/cli/opencode/agent-deck) — the built-in paseo runtime's agents are the paseo daemon's children and cannot be wrapped", where)
+		// The built-in paseo runtime.
+		return validatePaseoIsolation(where+" (the built-in paseo runtime)", p.Isolation)
 	}
 	cc, ok := c.MergedControllers()[rn]
 	if !ok {
 		return nil // the unknown-runtime error is reported by the step's own validation
 	}
 	if cc.Type == "paseo" {
-		return fmt.Errorf("config: %s: isolation cannot apply to paseo runtime %q (its agents are the paseo daemon's children) — use an acp/cli/opencode/agent-deck runtime, or paseo's own sandboxing", where, rn)
+		return validatePaseoIsolation(fmt.Sprintf("%s (paseo runtime %q)", where, rn), p.Isolation)
 	}
 	remote := p.Host != "" || cc.Host != ""
 	if err := validateIsolation(where, p.Isolation, remote); err != nil {
@@ -219,4 +220,109 @@ func validateIsolationControlChannel(where string, iso *IsolationConfig, cc Cont
 		return fmt.Errorf("config: %s: isolation network `deny: true` would sever conductor's HTTP control channel to the opencode server — use an `egress: []` proxy deny instead", where)
 	}
 	return nil
+}
+
+// OptsOut reports the explicit opt-out of the agent sandbox: `mode: none`.
+func (iso *IsolationConfig) OptsOut() bool { return iso != nil && iso.Mode == "none" }
+
+// validatePaseoIsolation checks isolation: on a paseo step or runtime. A
+// paseo agent is the paseo daemon's child: conductor does not wrap it, it
+// names the provider entry paseo launches it with. The only isolation that
+// says something there is `{mode: none}` — the plain provider, not the
+// conductor-owned sandboxed one; anything else would be a silent no-op.
+func validatePaseoIsolation(where string, iso *IsolationConfig) error {
+	if iso.OptsOut() {
+		return validateIsolation(where, iso, false)
+	}
+	return fmt.Errorf("config: %s: on a paseo runtime only `isolation: {mode: none}` applies (it launches the agent through paseo's plain provider instead of conductor's sandboxed entry) — conductor does not wrap a paseo agent itself; for another sandbox use an acp/cli/opencode/agent-deck runtime", where)
+}
+
+// validateScopeIsolation checks a trigger's or workflow's isolation: — the
+// default for its agent steps — as if written on each of its own agent
+// steps that carries none: it must make sense for the runtime that runs
+// them.
+func (c *Config) validateScopeIsolation(where string, iso *IsolationConfig, steps []Step) error {
+	if iso == nil {
+		return nil
+	}
+	if err := validateIsolation(where, iso, false); err != nil {
+		return err
+	}
+	for i, s := range steps {
+		if s.Isolation != nil || !isAgentStep(s) {
+			continue
+		}
+		s.Isolation = iso
+		if err := c.validateStepIsolation(fmt.Sprintf("%s (its isolation: on step %s)", where, s.slotLabel(i)), s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// isAgentStep reports an agent step: what a scope's default isolation:
+// applies to.
+func isAgentStep(s Step) bool {
+	if _, class := s.StepEngine(); class != EngineNone {
+		return false
+	}
+	return s.Type == "agent" || (s.Type == "" && s.Agent != "")
+}
+
+// checkPackSandboxLoosening reports every isolation: a pack ships that would
+// loosen the agent sandbox — a pack can narrow, never widen. `mode: none`
+// (anywhere: a step, a trigger, a workflow) opts its own agents or code out
+// of their sandbox; on an agent step (or the trigger/workflow default for
+// them) another wrapper (user, container, a privileged namespace) replaces
+// the agent sandbox, and egress / fs: paths add to what it shows. The
+// operator decides that, from the packs: block. Checked on the PRISTINE
+// manifest (before the consumer's overlay), like the runtime/host ban.
+func checkPackSandboxLoosening(man *PackManifest) []string {
+	var problems []string
+	ns := man.Pack.Name
+	check := func(where string, iso *IsolationConfig, agent bool, override string) {
+		why := isolationLoosens(iso, agent)
+		if why == "" {
+			return
+		}
+		problems = append(problems, fmt.Sprintf("pack %q: %s sets isolation: %s — a pack can narrow its sandbox, never loosen it. That is the operator's decision: set it from your config's packs: block, %s", ns, where, why, override))
+	}
+	man.WalkPackSteps(func(where string, s *Step) {
+		check("step "+where, s.Isolation, isAgentStep(*s),
+			fmt.Sprintf("e.g. `packs: { <instance>: { steps: { %s: { isolation: { mode: none } } } } }`", where))
+	})
+	for _, name := range sortedNames(man.Workflows) {
+		wf := man.Workflows[name]
+		check("workflow "+name, wf.Isolation, true, "on the trigger that runs it (`packs: { <instance>: { triggers: { <trigger>: { isolation: { mode: none } } } } }`) or per step (`steps: { <step>: { isolation: … } }`)")
+	}
+	for i, tr := range man.Triggers {
+		label := tr.Name
+		if label == "" {
+			label = fmt.Sprintf("triggers[%d]", i)
+		}
+		check("trigger "+label, tr.Isolation, true, fmt.Sprintf("e.g. `packs: { <instance>: { triggers: { %s: { isolation: { mode: none } } } } }`", label))
+	}
+	return problems
+}
+
+// isolationLoosens says how iso loosens the sandbox ("" = it does not).
+// agent: it applies to agent launches (the agent sandbox), not only code.
+func isolationLoosens(iso *IsolationConfig, agent bool) string {
+	switch {
+	case iso == nil:
+		return ""
+	case iso.Mode == "none":
+		return "{mode: none} (no sandbox at all)"
+	case !agent:
+		return "" // a code step's own wrapper choice: its synthesized jail is the default, not a floor
+	case iso.Mode == "user" || iso.Mode == "container":
+		return fmt.Sprintf("{mode: %s} (another wrapper in place of the agent sandbox)", iso.Mode)
+	case iso.Privileged:
+		return "{privileged: true} (the daemon's own filesystem view)"
+	case iso.Network != nil && len(iso.Network.Egress) > 0:
+		return fmt.Sprintf("network.egress %v (hosts beyond the model endpoints)", iso.Network.Egress)
+	case len(iso.FS) > 0:
+		return fmt.Sprintf("fs: %v (host paths shown read-write)", iso.FS)
+	}
+	return ""
 }

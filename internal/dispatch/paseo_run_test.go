@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -294,5 +295,93 @@ func TestPaseoSandboxedProvider(t *testing.T) {
 	}
 	if SandboxIdentity(Request{DispatchID: "x", Action: config.Action{Agent: "fixer"}, Trigger: core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "a/w"}}}, "codex") != "agent:fixer@a/w" {
 		t.Fatal("identity")
+	}
+}
+
+// A hand-off is sandboxed by default like every paseo dispatch; the
+// operator's `isolation: {mode: none}` (resolved onto the step) launches it
+// through the plain provider. The verdict is in a hand-off's title, on the
+// agent's labels, and in the log.
+func TestPaseoHandoffSandboxDefaultAndOptOut(t *testing.T) {
+	oldS, oldL := PaseoSandboxed, PaseoSandboxLog
+	t.Cleanup(func() { PaseoSandboxed, PaseoSandboxLog = oldS, oldL })
+	var logs []string
+	PaseoSandboxLog = func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+	d := &Dispatcher{PaseoBin: "paseo", DryRun: true, repoDirs: map[string]string{}}
+	base := Request{
+		Interactive: true, Provider: "claude",
+		Trigger: core.Trigger{Kind: "review_requested", Target: core.Target{Repo: "a/w", PR: 1, Number: 1}},
+		Action:  config.Action{Type: "agent", Prompt: "review it", Checkout: "none"},
+	}
+	run := func(r Request) string {
+		t.Helper()
+		ref, err := d.paseo(context.Background(), r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(ref.Argv, "\x00") + "\x00"
+	}
+	PaseoSandboxed = true
+	argv := run(base)
+	for _, want := range []string{"--provider\x00claude-sandboxed\x00", "--title\x00conductor: a/w#1 review_requested [sandboxed]\x00", "--label\x00sandbox=on\x00"} {
+		if !strings.Contains(argv, want) {
+			t.Errorf("default hand-off lacks %q: %q", want, argv)
+		}
+	}
+	opt := base
+	opt.Step.Isolation = &config.IsolationConfig{Mode: "none"}
+	argv = run(opt)
+	for _, want := range []string{"--provider\x00claude\x00", "[UNSANDBOXED]\x00", "--label\x00sandbox=off\x00"} {
+		if !strings.Contains(argv, want) {
+			t.Errorf("opted-out hand-off lacks %q: %q", want, argv)
+		}
+	}
+	if strings.Contains(argv, "-sandboxed") {
+		t.Fatalf("opted out, no sandboxed entry: %q", argv)
+	}
+	// Another isolation is no opt-out (validation refuses it on paseo; the
+	// dispatcher never reads it as one).
+	ns := base
+	ns.Step.Isolation = &config.IsolationConfig{Mode: "namespace"}
+	if argv := run(ns); !strings.Contains(argv, "claude-sandboxed") {
+		t.Fatalf("mode namespace is not an opt-out: %q", argv)
+	}
+	if len(logs) != 3 || !strings.Contains(logs[0], "paseo hand-off conductor: a/w#1 review_requested: sandboxed (provider claude-sandboxed)") ||
+		!strings.Contains(logs[1], "UNSANDBOXED — isolation: {mode: none}") || !strings.Contains(logs[1], "plain provider claude") {
+		t.Fatalf("logs: %q", logs)
+	}
+	// A non-hand-off is not retitled; its label still says.
+	bg := base
+	bg.Interactive, bg.Wait = false, true
+	if argv := run(bg); strings.Contains(argv, "[sandboxed]") || !strings.Contains(argv, "sandbox=on") || !strings.Contains(logs[3], "paseo dispatch ") {
+		t.Fatalf("non-hand-off: %q %q", argv, logs)
+	}
+	// Opted out with no provider: paseo's own default, said so.
+	np := opt
+	np.Provider = ""
+	if argv := run(np); strings.Contains(argv, "--provider") || !strings.Contains(logs[4], "plain provider paseo's default") {
+		t.Fatalf("no provider: %q %q", argv, logs[4])
+	}
+	// The sandbox off: no mark, no label, no log — as before.
+	PaseoSandboxed = false
+	n := len(logs)
+	if argv := run(base); strings.Contains(argv, "sandboxed]") || strings.Contains(argv, "sandbox=") || len(logs) != n {
+		t.Fatalf("sandbox off: %q", argv)
+	}
+	// A remote paseo: its box's business.
+	PaseoSandboxed = true
+	if s, o := paseoSandboxDecision(opt, true); s || o {
+		t.Fatal("remote: no verdict")
+	}
+	if s, o := paseoSandboxDecision(base, true); s || o {
+		t.Fatal("remote: no verdict")
+	}
+	// A shadowed dispatch is not logged.
+	sh := base
+	sh.Shadow = true
+	n = len(logs)
+	run(sh)
+	if len(logs) != n {
+		t.Fatal("shadow logged")
 	}
 }

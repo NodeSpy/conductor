@@ -62,7 +62,12 @@ provider's name.
 
 Then pick **Claude (sandboxed)** (or `--provider claude-sandboxed`) for a
 session. conductor's own paseo dispatches use the sandboxed entries
-automatically when the sandbox is on. (The daemon's start-up merge and a
+automatically when the sandbox is on — **hand-offs included**: a hand-off's
+title ends `[sandboxed]` and the agent carries `sandbox=on`. A workflow,
+trigger or step of **your own config** with `isolation: {mode: none}` (or a
+pack's, through your `packs:` overrides — a pack cannot set it itself)
+launches through the plain provider instead: titled `[UNSANDBOXED]`, labelled
+`sandbox=off`, logged. See [[Isolation#hand-offs-and-opting-a-workflow-out]]. (The daemon's start-up merge and a
 `paseo setup` without `--socket` write the same entries but name the daemon
 differently, so the one that ran last reports `updated`; both work.)
 

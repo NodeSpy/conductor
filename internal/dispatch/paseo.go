@@ -54,8 +54,9 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		return RunRef{}, err
 	}
 
+	sandboxed, optedOut := paseoSandboxDecision(req, d.remote())
 	argv := []string{"run", prompt,
-		"--title", agentTitle(req),
+		"--title", agentTitle(req) + sandboxTitleMark(req, sandboxed, optedOut),
 	}
 	p := req.Step
 	// req.Model is the RESOLVED model (models.Resolver, design §2.3). Empty
@@ -69,7 +70,6 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// it independently is equivalent to gating on "confirmed pin" and keeps
 	// the bare-launch path (both empty) untouched.
 	provider := req.Provider
-	sandboxed := PaseoSandboxed && !d.remote()
 	if sandboxed {
 		// The agent sandbox: the provider's conductor-owned entry runs the
 		// agent through `conductor sandbox exec`. Always named — paseo's own
@@ -80,6 +80,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		}
 		provider = sandboxedProvider(provider)
 	}
+	logPaseoSandbox(req, sandboxed, optedOut, provider)
 	if provider != "" {
 		argv = append(argv, "--provider", provider)
 	}
@@ -244,7 +245,7 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		argv = append(argv, "--env", k+"="+rv)
 	}
 
-	for _, l := range labelArgs(req) {
+	for _, l := range append(labelArgs(req), sandboxLabel(sandboxed, optedOut)...) {
 		argv = append(argv, "--label", l)
 	}
 	if p.WaitTimeout > 0 {
