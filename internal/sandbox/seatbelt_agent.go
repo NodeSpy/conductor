@@ -217,6 +217,16 @@ func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string
 		for _, p := range a.ListenPorts {
 			b.WriteString(fmt.Sprintf("(allow network-bind network-inbound (local ip \"localhost:%d\"))\n", p))
 		}
+		if a.Browser {
+			// Chromium's own unix sockets (its process singleton), in its
+			// own directories only.
+			for _, m := range resolveBinds(binds) {
+				if m.Path != "" && !m.RO {
+					b.WriteString("(allow network-bind network-inbound (local unix-socket (subpath " + sbplString(m.Path) + ")))\n")
+					b.WriteString("(allow network-outbound (remote unix-socket (subpath " + sbplString(m.Path) + ")))\n")
+				}
+			}
+		}
 	}
 	return b.String()
 }

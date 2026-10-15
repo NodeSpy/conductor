@@ -176,11 +176,21 @@ func launch(spec LaunchSpec, goos string) (*Process, error) {
 		err       error
 	)
 	deps := sandbox.LocalWrapDeps{SelfExe: spec.SelfExe, Confine: true, PassFDs: 2}
+	var shortTmp string
 	if goos == "darwin" {
-		proxyAddr, closeFn, err = spec.Proxy.TrustedEndpoint(spec.Allow)
-		if err != nil {
+		// Chromium's temp dir holds its singleton socket: short (sun_path is
+		// ~104 bytes here), private, and the browser's own.
+		if shortTmp, err = os.MkdirTemp("/tmp", "cbt"); err != nil {
 			return nil, err
 		}
+		proxyAddr, closeFn, err = spec.Proxy.TrustedEndpoint(spec.Allow)
+		if err != nil {
+			os.RemoveAll(shortTmp)
+			return nil, err
+		}
+		closeProxy := closeFn
+		closeFn = func() { closeProxy(); os.RemoveAll(shortTmp) }
+		deps.ExtraBinds = append(deps.ExtraBinds, sandbox.BindMount{Path: shortTmp})
 		deps.EgressAddr = func([]string) (string, string, func(), error) { return proxyAddr, "", nil, nil }
 		deps.Agent = &sandbox.AgentProfile{Browser: true, Home: spec.RealHome}
 	} else {
@@ -202,7 +212,7 @@ func launch(spec LaunchSpec, goos string) (*Process, error) {
 	for _, p := range spec.Show {
 		deps.ExtraBinds = append(deps.ExtraBinds, sandbox.BindMount{Path: p, RO: true})
 	}
-	env := browserEnv(spec, goos)
+	env := browserEnv(spec, goos, shortTmp)
 	flags := ChromeArgs(spec.Dir, proxyAddr, spec.Headed)
 	argv := append(append([]string{spec.Chrome}, flags[:len(flags)-1]...), spec.Args...)
 	argv = append(argv, flags[len(flags)-1])
@@ -267,7 +277,7 @@ func launch(spec LaunchSpec, goos string) (*Process, error) {
 }
 
 // browserEnv is the browser's whole environment: none of the daemon's.
-func browserEnv(spec LaunchSpec, goos string) []string {
+func browserEnv(spec LaunchSpec, goos, chromiumTmp string) []string {
 	home := filepath.Join(spec.Dir, "home")
 	env := []string{
 		"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
@@ -285,7 +295,10 @@ func browserEnv(spec LaunchSpec, goos string) []string {
 		// process-singleton socket among them — out of the per-user temp
 		// dir, where the operator's own Chrome keeps its singleton socket.
 		tmp := filepath.Join(spec.Dir, "tmp")
-		env = append(env, "TMPDIR="+tmp, "MAC_CHROMIUM_TMPDIR="+tmp, "CFFIXED_USER_HOME="+home)
+		if chromiumTmp == "" {
+			chromiumTmp = tmp
+		}
+		env = append(env, "TMPDIR="+tmp, "MAC_CHROMIUM_TMPDIR="+chromiumTmp, "CFFIXED_USER_HOME="+home)
 	} else {
 		env = append(env, "TMPDIR=/tmp")
 	}

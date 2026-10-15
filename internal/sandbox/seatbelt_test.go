@@ -89,6 +89,7 @@ func TestSeatbeltBrowserProfile(t *testing.T) {
 		"(allow mach-lookup)\n", `(deny mach-lookup`, `(global-name "com.apple.SecurityServer")`,
 		`(allow file-issue-extension (subpath "/b/run"))`, `(allow file-issue-extension (subpath "/Applications/Google Chrome.app"))`,
 		"(deny network*)", `(allow network-outbound (remote ip "localhost:4242"))`,
+		`(allow network-bind network-inbound (local unix-socket (subpath "/b/run")))`,
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("missing %s", want)
@@ -96,6 +97,9 @@ func TestSeatbeltBrowserProfile(t *testing.T) {
 	}
 	if strings.Index(p, "(deny mach-lookup") < strings.Index(p, "(allow mach-lookup)") {
 		t.Fatal("the Keychain denial must come after the broad allow (later rules win)")
+	}
+	if strings.Index(p, "(local unix-socket") < strings.Index(p, "(deny network*)") || strings.Contains(p, `unix-socket (subpath "/Applications`) {
+		t.Fatal("unix sockets only in the browser's own read-write dirs, after the deny")
 	}
 	if strings.Contains(p, "(allow network*)") || strings.Count(p, "file-issue-extension") != 2 {
 		t.Fatalf("profile:\n%s", p)
