@@ -157,6 +157,17 @@ The value is then set through the isolated world's own `value` setter, and
 `input`/`change` are dispatched. Page scripts on the bound origin can read the
 field, as browsers work; nothing else can.
 
+**A usable credential's host is a logged-in site.** Found live: the first cut
+signed the agent in inside the anonymous browser, beside every other
+allowlisted page. Now:
+- `grant()` adds each credential host whose identity binding and provenance
+  hold;
+- that host's pages always open in the separate, narrowed browser;
+- a provenance change closes that browser at the next action.
+
+`login` opens `login_url` when the current page has nothing to fill (found by
+the e2e).
+
 What happens after a fill, in that browser:
 - **Replies are scrubbed.** Every filled password and code is replaced in
   every reply (snapshots, titles, URLs, tab lists, downloads, dialogs) and in
@@ -232,7 +243,19 @@ Fills and evaluate record a length only. The other audited events are
 downloads (path, source URL), proxy refusals (`egress`), and the operator's
 session saves, deletes, takeovers, passkey saves and peeks.
 
-## 7. Paseo, members, and the container backend
+## 7. The token stands for its sandbox
+
+The browser keys on the token's `skill.Identity.Sandbox` binding: the
+identity, the workspace, its egress, and its carve-outs.
+- **Paseo / `sandbox exec`.** The resolver stamps the binding at mint.
+- **cli/acp launches.** The controller mints with it too (`SkillEnvFor`).
+
+Found live: looking the workspace up by dispatch id failed for a second
+dispatch into a resumed workspace, because the registry keeps the first
+dispatch's entry so a resume finds its own state. A token with no binding gets
+no browser.
+
+## 8. Paseo, members, and the container backend
 
 - **Paseo.** It works through the `<provider>-sandboxed` entries:
   `conductor sandbox exec` mints a token bound (`skill.Identity.Sandbox`) to
@@ -247,7 +270,7 @@ session saves, deletes, takeovers, passkey saves and peeks.
 - **Container backend.** Nothing changes: the agent keeps its socket and
   token, and the browser stays conductor's.
 
-## 8. What the red team should attack (browser mode)
+## 9. What the red team should attack (browser mode)
 
 1. **Allowlist escape.**
    - DNS rebinding of an allowlisted name onto loopback or metadata.
@@ -302,7 +325,19 @@ session saves, deletes, takeovers, passkey saves and peeks.
 8. **Resource abuse.** Unbounded tabs, downloads, or wait loops; the
    `max_browsers` cap; idle reaping during a held action.
 
-## 9. Not in this PR (follow-ups)
+## 10. Found on the way (outside the browser)
+
+- **`agentsandbox`**: a fresh identity home's `~/.claude.json` was created
+  empty when the operator has none, and current Claude Code exits on an empty
+  one ("corrupted"). It is now seeded as `{}`. This is #179's code, fixed
+  here because the live proof needed it.
+- **Chrome's background services** (search preconnect, GCM, password leak
+  detection, field trials) are switched off. None would pass the proxy, but
+  leak detection would try to send a filled credential's hash prefix out, and
+  the refusals flooded the audit. Each refused target is now audited once per
+  browser.
+
+## 11. Not in this PR (follow-ups)
 
 - **A live takeover view**: watch and drive an agent's browser interactively.
   This is the dashboard follow-on; here, `peek` (a screenshot) and the
