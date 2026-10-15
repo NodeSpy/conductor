@@ -44,7 +44,7 @@ func cmdSandbox(args []string) int {
 	}
 }
 
-const sandboxUsage = `usage: conductor sandbox exec [--tool NAME] [--config PATH | --socket PATH] -- COMMAND [ARGS...]
+const sandboxUsage = `usage: conductor sandbox exec [--tool NAME] [--bin NAME]... [--config PATH | --socket PATH] -- COMMAND [ARGS...]
 
 Runs COMMAND — an agent CLI — under conductor's agent sandbox, with the
 policy the running conductor daemon gives this directory: the workspace
@@ -57,16 +57,25 @@ It refuses to launch — exit 125, the agent never runs — when the daemon is
 unreachable or has no policy for this directory. Never unsandboxed.
 
   --tool NAME      the agent CLI (claude, codex, pi, …); default: COMMAND's name
+  --bin NAME       a program COMMAND runs by name (the agent CLI a shell command
+                   starts): shown in the sandbox like COMMAND itself; repeatable
+  --agent-cwd      this directory is the agent's own workspace: refuse it rather
+                   than substitute a scratch workspace when it may not be one
   --config PATH    the conductor config whose daemon to ask (default: the usual one)
   --socket PATH    the daemon's control socket, directly
   --state-dir DIR  conductor's state dir, when it is not the default
 
-Wired into paseo by 'conductor paseo setup'.
+Wired into paseo by 'conductor paseo setup' (and by the daemon itself at
+start), and into agent-deck sessions by conductor's agent-deck runtime.
 `
 
 // sandboxExecOpts are `conductor sandbox exec`'s flags.
 type sandboxExecOpts struct {
 	tool, config, socket, stateDir string
+	bins                           []string
+	// agentCwd: the working directory is the agent's own workspace (an
+	// agent-deck session's) — refused, never replaced by a scratch one.
+	agentCwd bool
 }
 
 // parseSandboxExec splits flags from the command after "--".
@@ -91,6 +100,13 @@ func parseSandboxExec(args []string) (sandboxExecOpts, []string, error) {
 		switch a {
 		case "--tool":
 			o.tool, err = val()
+		case "--agent-cwd":
+			o.agentCwd = true
+		case "--bin":
+			var b string
+			if b, err = val(); err == nil {
+				o.bins = append(o.bins, b)
+			}
 		case "--config":
 			o.config, err = val()
 		case "--socket":
@@ -121,6 +137,7 @@ func cmdSandboxExec(args []string) int {
 	if err != nil {
 		return refuse("no working directory: %v", err)
 	}
+	agentCwd = agentCwd || o.agentCwd
 	tool := o.tool
 	if tool == "" {
 		tool = argv[0]
@@ -133,7 +150,7 @@ func cmdSandboxExec(args []string) int {
 	if pol.Note != "" {
 		fmt.Fprintf(os.Stderr, "conductor sandbox exec: %s\n", pol.Note)
 	}
-	launch, cleanup, err := wrapSandboxExec(pol, argv)
+	launch, cleanup, err := wrapSandboxExec(pol, argv, o.bins)
 	if err != nil {
 		return refuse("%v", err)
 	}
@@ -162,7 +179,7 @@ func sandboxExecCwd() (cwd string, agent bool, err error) {
 
 // wrapSandboxExec realizes pol around argv with this process as the host
 // side: its own allowlist proxy and model relays live as long as the agent.
-func wrapSandboxExec(pol agentsandbox.Policy, argv []string) (*agentsandbox.Launch, func(), error) {
+func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string) (*agentsandbox.Launch, func(), error) {
 	pm := sandbox.NewProxyManager(func(_, hostport string) {
 		fmt.Fprintf(os.Stderr, "conductor sandbox: egress to %s denied (not in this agent's allowlist)\n", hostport)
 	})
@@ -180,6 +197,7 @@ func wrapSandboxExec(pol agentsandbox.Policy, argv []string) (*agentsandbox.Laun
 		LookPath:   exec.LookPath,
 		RealHome:   home,
 		Inherited:  os.Environ(),
+		Bins:       bins,
 	})
 	if err != nil {
 		rel.Close()

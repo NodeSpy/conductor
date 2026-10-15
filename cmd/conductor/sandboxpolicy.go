@@ -100,8 +100,17 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	if err != nil {
 		return nil, err
 	}
+	self, err := os.Executable()
+	if err != nil {
+		rel.Close()
+		return nil, fmt.Errorf("agent sandbox: resolve conductor's own binary: %w", err)
+	}
 	sandboxResolver.Store(r)
-	controller.AgentSandbox = &controller.SandboxWiring{Resolver: r, Relay: rel.Relay}
+	controller.AgentSandbox = &controller.SandboxWiring{
+		Resolver: r, Relay: rel.Relay,
+		// What an agent-deck session's wrapper runs: this daemon's policy.
+		Exec: []string{self, "sandbox", "exec", "--socket", controlSockPath(cfg)},
+	}
 	// conductor's own reads of a sandboxed workspace (the diff preview) run
 	// sandboxed too: the agent wrote that checkout's git config.
 	gitdiff.Confine = controller.ConfinedGit

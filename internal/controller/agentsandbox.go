@@ -22,6 +22,10 @@ type SandboxWiring struct {
 	Resolver *agentsandbox.Resolver
 	// Relay pipes a host-loopback model endpoint into the sandbox.
 	Relay func(target string) (string, func(), error)
+	// Exec is the argv that runs a command under this daemon's sandbox from
+	// a process conductor does not start itself (agent-deck's tmux
+	// session): `conductor sandbox exec --socket <control socket>`.
+	Exec []string
 }
 
 // AgentSandbox is the wiring (nil = off).

@@ -134,6 +134,22 @@ func TestSandboxExecAsksForItsDirectory(t *testing.T) {
 	if r := (*reqs)[2]; r.Cwd != ws || !r.Scratch {
 		t.Fatalf("a relative PASEO_AGENT_CWD is ignored: %+v", r)
 	}
+	// An agent-deck session's wrapper: its directory is the agent's own.
+	t.Setenv("PASEO_AGENT_CWD", "")
+	cmdSandboxExec([]string{"--socket", sock, "--tool", "claude-code", "--agent-cwd", "--bin", "claude", "--", "/bin/bash", "-c", "claude"})
+	if r := (*reqs)[3]; r.Cwd != ws || r.Scratch || r.Tool != "claude-code" {
+		t.Fatalf("--agent-cwd is no scratch launch: %+v", r)
+	}
+}
+
+func TestParseSandboxExecBins(t *testing.T) {
+	o, argv, err := parseSandboxExec([]string{"--bin", "claude", "--agent-cwd", "--bin", "node", "--", "/bin/bash", "-c", "x"})
+	if err != nil || strings.Join(o.bins, ",") != "claude,node" || !o.agentCwd || strings.Join(argv, " ") != "/bin/bash -c x" {
+		t.Fatalf("%+v %q %v", o, argv, err)
+	}
+	if _, _, err := parseSandboxExec([]string{"--bin"}); err == nil {
+		t.Fatal("--bin needs a value")
+	}
 }
 
 func TestSandboxControlSocket(t *testing.T) {

@@ -64,6 +64,9 @@ func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string, scratchOK b
 		p, err := r.PolicyForEntry(e, tool, launcherEnv)
 		// The agent starts where it was started, inside its workspace.
 		p.Cwd = canon(cwd)
+		if err == nil && p.Tool == "claude-code" && e.Dispatch != "" && p.Cwd != p.Workspace {
+			err = trustClaudeWorkspace(p.Home, p.Cwd)
+		}
 		return p, err
 	}
 	ws := canon(cwd)
@@ -153,6 +156,12 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 	for _, list := range [][]string{r.Egress, e.Egress} {
 		for _, h := range list {
 			egress = appendUnique(egress, h)
+		}
+	}
+	if tool == "claude-code" && e.Dispatch != "" {
+		// A dispatch's workspace, conductor's own: trusted in this home.
+		if err := trustClaudeWorkspace(home, canon(e.Workspace)); err != nil {
+			return Policy{}, fmt.Errorf("agentsandbox: trust the workspace in %s: %w", home, err)
 		}
 	}
 	p := Policy{

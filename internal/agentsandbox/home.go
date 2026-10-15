@@ -1,6 +1,7 @@
 package agentsandbox
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 // Per-identity tool state. A sandboxed agent's HOME is a directory of its
@@ -227,4 +229,68 @@ func seedFile(src, dst string, filter func([]byte) ([]byte, error)) error {
 		return err
 	}
 	return os.WriteFile(dst, b, 0o600)
+}
+
+// trustClaudeWorkspace records in a claude-code identity home that dir is
+// trusted, as the operator's own ~/.claude.json does for their projects
+// (the seed drops "projects": another identity's, as far as this one is
+// concerned). A workspace conductor created for this identity's dispatch is
+// trusted by construction; without it, claude-code's interactive UI (an
+// agent-deck session) stops at its folder-trust question, which no one is
+// there to answer. The agent may have replaced the file: it is read without
+// following a symlink and replaced by rename, never written through.
+func trustClaudeWorkspace(home, dir string) error {
+	p := filepath.Join(home, ".claude.json")
+	m := map[string]json.RawMessage{}
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	switch {
+	case err == nil:
+		b, rerr := io.ReadAll(io.LimitReader(f, 16<<20))
+		f.Close()
+		if rerr != nil {
+			return rerr
+		}
+		if len(bytes.TrimSpace(b)) > 0 && json.Unmarshal(b, &m) != nil {
+			return nil // not a state file claude-code could read either
+		}
+	case os.IsNotExist(err):
+	default:
+		return nil // a symlink, or not a file: not conductor's to rewrite
+	}
+	projects := map[string]map[string]any{}
+	if raw, ok := m["projects"]; ok && json.Unmarshal(raw, &projects) != nil {
+		return nil
+	}
+	e := projects[dir]
+	if e == nil {
+		e = map[string]any{}
+	}
+	if v, _ := e["hasTrustDialogAccepted"].(bool); v {
+		return nil
+	}
+	e["hasTrustDialogAccepted"] = true
+	projects[dir] = e
+	raw, err := json.Marshal(projects)
+	if err != nil {
+		return err
+	}
+	m["projects"] = raw
+	b, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(home, ".claude.json.conductor-*")
+	if err != nil {
+		return err
+	}
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return os.Rename(tmp.Name(), p)
 }
