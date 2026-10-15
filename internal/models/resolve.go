@@ -107,10 +107,25 @@ type Resolver struct {
 // (the roster is stable within a process); only the failure expires.
 const FailureTTL = 10 * time.Minute
 
-// failure is a remembered discovery error and when it was recorded.
+// EmptyRosterTTL is how long an EMPTY roster is remembered before the
+// runtime is asked again. An empty answer is not a stable roster: a runtime
+// that is still starting (paseo discovering its providers) answers "no
+// models" for a while. Cached forever, as a positive result is, it left every
+// dispatch on that runtime bare-launching — which paseo refuses — until
+// conductor restarted. A member's home session, launched the moment the
+// daemon boots, hit exactly that.
+const EmptyRosterTTL = time.Minute
+
+// ErrEmptyRoster is the remembered "failure" for a runtime that enumerated
+// no models.
+var ErrEmptyRoster = errors.New("runtime enumerated no models")
+
+// failure is a remembered discovery error and when it was recorded. ttl
+// overrides FailureTTL when set.
 type failure struct {
 	err error
 	at  time.Time
+	ttl time.Duration
 }
 
 // NewResolver builds a resolver over a loaded config. cat may be nil, which
@@ -608,7 +623,11 @@ func (r *Resolver) roster(ctx context.Context, name string) Roster {
 			return cached
 		}
 		if f, bad := r.failed[name]; bad {
-			if r.clock().Sub(f.at) < FailureTTL {
+			ttl := FailureTTL
+			if f.ttl > 0 {
+				ttl = f.ttl
+			}
+			if r.clock().Sub(f.at) < ttl {
 				r.mu.Unlock()
 				return nil
 			}
@@ -665,6 +684,10 @@ func (r *Resolver) roster(ctx context.Context, name string) Roster {
 			return nil
 		}
 		r.failed[name] = failure{err: err, at: r.clock()}
+		return nil
+	}
+	if len(roster) == 0 {
+		r.failed[name] = failure{err: ErrEmptyRoster, at: r.clock(), ttl: EmptyRosterTTL}
 		return nil
 	}
 	r.rosters[name] = roster
