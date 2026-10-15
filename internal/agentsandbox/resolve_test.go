@@ -160,7 +160,7 @@ func TestResolverDefaultPolicy(t *testing.T) {
 	// workspace — never the refused directory itself.
 	for _, bad := range []string{"/", real} {
 		p, err := r.PolicyFor(bad, "codex", nil, true)
-		if err != nil || p.Identity != "scratch:codex" || !within(p.Workspace, r.StateRoot) || p.Workspace == canon(bad) {
+		if err != nil || p.Identity != "scratch:codex" || !within(p.Workspace, canon(r.StateRoot)) || p.Workspace == canon(bad) {
 			t.Fatalf("scratch for %s: %+v %v", bad, p, err)
 		}
 	}
@@ -433,5 +433,15 @@ func TestPrepareHomeSeedsNothingWithoutARealHome(t *testing.T) {
 	}
 	if len(logins) != 0 {
 		t.Fatalf("logins without a home: %v", logins)
+	}
+}
+
+func TestCanonResolvesThroughAMissingTail(t *testing.T) {
+	dir := t.TempDir()
+	real, _ := filepath.EvalSymlinks(dir)
+	link := filepath.Join(t.TempDir(), "link")
+	os.Symlink(dir, link)
+	if got := canon(filepath.Join(link, "not", "yet")); got != filepath.Join(real, "not", "yet") {
+		t.Fatalf("canon = %s", got)
 	}
 }

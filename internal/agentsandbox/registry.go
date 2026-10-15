@@ -141,8 +141,19 @@ func canon(p string) string {
 	if abs, err := filepath.Abs(p); err == nil {
 		p = abs
 	}
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		return r
+	p = filepath.Clean(p)
+	// Resolve the longest prefix that exists: a path not created yet under
+	// a symlinked dir (macOS /var) still matches its workspace.
+	rest := ""
+	for dir := p; ; {
+		if r, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(r, rest)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
 	}
-	return filepath.Clean(p)
 }

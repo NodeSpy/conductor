@@ -75,7 +75,9 @@ var agentMachKeychain = []string{
 
 // seatbeltAgentBase is the fixed head of an agent profile: the plain
 // base's essentials (see seatbeltBase for why `(literal "/")` is required)
-// without its blanket mach-lookup.
+// without its blanket mach-lookup. /usr/bin/git, python3 and cc are xcrun
+// shims that load from the active developer directory: any Xcode in
+// /Applications (Xcode_26.6.app, Xcode-beta.app), read-only.
 const seatbeltAgentBase = `(version 1)
 (deny default)
 (allow process-fork)
@@ -92,7 +94,7 @@ const seatbeltAgentBase = `(version 1)
   (subpath "/sbin")
   (subpath "/System")
   (subpath "/Library")
-  (subpath "/Applications/Xcode.app")
+  (regex #"^/Applications/Xcode[^/]*\.app(/|$)")
   (subpath "/private/var/db/dyld")
   (subpath "/private/var/db/timezone")
   (subpath "/private/var/select")
