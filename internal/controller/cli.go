@@ -137,6 +137,9 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 	host := resolveHost(c.host, spec.Request.Step.Host)
 	req := spec.Request
 	opt := withAgent(launchOptsFor(c.iso, req), c.recipe.tool, &req, true)
+	if sandboxApplies(host, opt) {
+		prompt += sandboxNote(req)
+	}
 	id := c.recipe.tool + "-" + strconv.FormatInt(c.seq.Add(1), 10)
 	cwd, cmd := spec.Cwd, c.recipe.cmd(spec.Request.Model, prompt)
 	var dec *decisionRun

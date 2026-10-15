@@ -59,6 +59,9 @@ type PushTarget struct {
 	// Remote is the URL pushed to, read from trusted config when the
 	// workspace was provisioned.
 	Remote string
+	// HeadDir is a linked worktree's own git dir, recorded when the
+	// workspace was registered ("" for a per-dispatch clone).
+	HeadDir string
 }
 
 // Registry maps workspaces to entries. The zero value is ready to use.

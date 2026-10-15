@@ -941,6 +941,9 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer stopSandbox()
+	if stack != nil {
+		defer wireWorkPusher(cfg, stack.Runner, st.Audit, logf)()
+	}
 
 	// Mount connector ask surfaces (web pages, discord gateways) and fan
 	// Socket Mode replies into every slack inbox.

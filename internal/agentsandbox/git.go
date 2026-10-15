@@ -33,6 +33,9 @@ type GitLayout struct {
 	// Clone reports a per-dispatch clone (its objects are borrowed by
 	// snapshot, never through the clone's own alternates).
 	Clone bool
+	// HeadDir is a linked worktree's own git dir (where its HEAD is); ""
+	// for a clone.
+	HeadDir string
 }
 
 // ResolveGitLayout reads ws's git layout (see GitLayout).
@@ -90,6 +93,7 @@ func ResolveGitLayout(ws string) (GitLayout, error) {
 		if gitdir != common {
 			l.Hide = append(l.Hide, filepath.Join(common, "worktrees"))
 			l.ReadWrite = append(l.ReadWrite, gitdir)
+			l.HeadDir = gitdir
 		}
 		return l, nil
 	}

@@ -217,7 +217,7 @@ func pushTarget(dir string, l agentsandbox.GitLayout, repo string) *agentsandbox
 	if err != nil || remote == "" {
 		return nil
 	}
-	return &agentsandbox.PushTarget{Repo: repo, Branch: branch, GitDir: l.GitDir, Remote: remote}
+	return &agentsandbox.PushTarget{Repo: repo, Branch: branch, GitDir: l.GitDir, Remote: remote, HeadDir: l.HeadDir}
 }
 
 // forgetWorkspace drops dir from the sandbox registry (its session ended).
@@ -283,4 +283,14 @@ func credentialName(k string) bool {
 		}
 	}
 	return false
+}
+
+// sandboxNote is what a sandboxed agent is told about its sandbox, appended
+// to its task: what it can reach, and that conductor — not it — pushes.
+func sandboxNote(req dispatch.Request) string {
+	b := "\n\n## Your sandbox\n\nYou run in conductor's agent sandbox: your workspace is writable; the network is limited to your model; no git, cloud or forge credential is available here, so `git push` and `gh` writes will fail — do not retry them or look for credentials."
+	if dispatch.ReviewRole(req) {
+		return b + " This is a review: conductor does not push anything from this workspace.\n"
+	}
+	return b + " Commit your work; conductor pushes your committed HEAD to this dispatch's branch (signed, fast-forward only) when your step ends. To push earlier, run `conductor call git.push`.\n"
 }

@@ -33,6 +33,12 @@ const HandoffSelfServiceVerb = "handoff.done"
 // did not launch hold no token and cannot reach the verb at all.
 const StepSelfServiceVerb = "step.done"
 
+// GitPushVerb is how a sandboxed agent's committed work is pushed: by
+// conductor, to the dispatch's own branch (internal/gitpush). Auto-granted
+// with step.done; it refuses for a workspace conductor has no push target
+// for (an unsandboxed agent, a review step).
+const GitPushVerb = "git.push"
+
 // EffectiveSkillPolicy is the grant a dispatch actually carries: the step's own
 // skill: block (nil means no block — an empty grant), plus handoff.done
 // auto-granted when the dispatch is an interactive hand-off. It copies the verb
@@ -54,7 +60,7 @@ func EffectiveSkillPolicy(sk *config.SkillPolicy, interactive bool) config.Skill
 	// reclaimed when conductor isn't already blocked on it. handoff.done is
 	// additionally granted to interactive hand-offs (same handler; it also
 	// tears down the hand-off state).
-	want := []string{StepSelfServiceVerb}
+	want := []string{StepSelfServiceVerb, GitPushVerb}
 	if interactive {
 		want = append(want, HandoffSelfServiceVerb)
 	}

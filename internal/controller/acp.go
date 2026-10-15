@@ -176,7 +176,11 @@ func (c *acpController) NewSession(ctx context.Context, spec Spec, h Handler) (S
 	sctx, scancel := context.WithCancel(context.Background())
 	del := &acpDelegate{handler: h}
 	req := spec.Request
-	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del, spec.Request.Step.Host, withAgent(launchOptsFor(c.iso, req), c.tool(), &req, false))
+	opt := withAgent(launchOptsFor(c.iso, req), c.tool(), &req, false)
+	if sandboxApplies(resolveHost(c.host, spec.Request.Step.Host), opt) {
+		prompt += sandboxNote(req)
+	}
+	client, cleanup, err := c.connect(sctx, spec.Cwd, env, del, spec.Request.Step.Host, opt)
 	if err != nil {
 		scancel()
 		return nil, err
