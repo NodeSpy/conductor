@@ -262,12 +262,7 @@ func (c *Config) validateScopeIsolation(where string, iso *IsolationConfig, step
 
 // isAgentStep reports an agent step: what a scope's default isolation:
 // applies to.
-func isAgentStep(s Step) bool {
-	if _, class := s.StepEngine(); class != EngineNone {
-		return false
-	}
-	return s.Type == "agent" || (s.Type == "" && s.Agent != "")
-}
+func isAgentStep(s Step) bool { return s.Form() == "agent" }
 
 // checkPackSandboxLoosening reports every isolation: a pack ships that would
 // loosen the agent sandbox — a pack can narrow, never widen. `mode: none`
