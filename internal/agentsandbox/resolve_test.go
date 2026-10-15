@@ -244,7 +244,7 @@ func git(t *testing.T, dir string, args ...string) {
 }
 
 func TestResolveGitLayout(t *testing.T) {
-	root := t.TempDir()
+	root, _ := filepath.EvalSymlinks(t.TempDir()) // git writes resolved paths (macOS /var -> /private/var)
 	base := filepath.Join(root, "base")
 	git(t, root, "init", "-q", "-b", "main", base)
 	git(t, base, "commit", "-q", "--allow-empty", "-m", "x")
@@ -388,6 +388,13 @@ func TestRegistryUnregisterIsItsOwn(t *testing.T) {
 	first()
 	if e, ok := reg.Lookup(ws); !ok || e.Identity != "b" {
 		t.Fatalf("the later registration survives: %+v %v", e, ok)
+	}
+	// Same identity, another dispatch: still not its registration.
+	fourth := reg.Register(Entry{Workspace: ws, Identity: "b", Dispatch: "d4"})
+	reg.Register(Entry{Workspace: ws, Identity: "b", Dispatch: "d5"})
+	fourth()
+	if e, ok := reg.Lookup(ws); !ok || e.Dispatch != "d5" {
+		t.Fatalf("a same-identity re-registration survives: %+v %v", e, ok)
 	}
 	third := reg.Register(Entry{Workspace: ws, Identity: "b", Dispatch: "d3"})
 	third()

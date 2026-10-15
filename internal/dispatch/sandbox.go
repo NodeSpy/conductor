@@ -49,8 +49,14 @@ func SandboxIdentity(req Request, tool string) string {
 // checkout. req nil: a profile-less relaunch, registered under identity.
 func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsandbox.Entry, error) {
 	reg := agentsandbox.Default
-	if e, ok := reg.Lookup(dir); ok && e.Identity == identity && e.Workspace == canonPath(dir) {
-		return e, nil
+	if e, ok := reg.Lookup(dir); ok && e.Workspace == canonPath(dir) {
+		// This launch's own earlier registration (a resume), or the
+		// workspace's owner's — a member registers its workspace under its
+		// own identity before launching workers into it: that identity
+		// stands, a dispatch never re-keys it.
+		if e.Identity == identity || e.Dispatch == "" {
+			return e, nil
+		}
 	}
 	layout, err := agentsandbox.ResolveGitLayout(dir)
 	if err != nil {
