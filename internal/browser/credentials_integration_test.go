@@ -87,7 +87,7 @@ func newCredRig(t *testing.T) *credRig {
 }
 
 // out records every reply, for the leak check.
-func (r *credRig) do(c Caller, action string, args map[string]any) map[string]any {
+func (r *credRig) do(c Principal, action string, args map[string]any) map[string]any {
 	r.t.Helper()
 	out := r.rig.do(c, action, args)
 	b, _ := json.Marshal(out)
@@ -127,7 +127,7 @@ func (r *credRig) noLeak() {
 	}
 }
 
-func (r *credRig) refused(c Caller, action string, args map[string]any, want string) {
+func (r *credRig) refused(c Principal, action string, args map[string]any, want string) {
 	r.t.Helper()
 	before := r.vault.count()
 	err := r.fail(c, action, args)
@@ -252,7 +252,7 @@ func TestCredentialOriginBinding(t *testing.T) {
 // the operator's own request.
 func TestCredentialProvenanceAndIdentity(t *testing.T) {
 	r := newCredRig(t)
-	for _, c := range []Caller{r.caller("ev", RequesterEvent), r.caller("unk", ""), r.caller("mem", RequesterMember), r.caller("usr", RequesterUser)} {
+	for _, c := range []Principal{r.caller("ev", RequesterEvent), r.caller("unk", ""), r.caller("mem", RequesterMember), r.caller("usr", RequesterUser)} {
 		r.do(c, "open", map[string]any{"url": r.bound + "/login"})
 		snap := r.do(c, "snapshot", nil)["snapshot"].(string)
 		r.refused(c, "login", map[string]any{"credential": "site"}, "not the operator")
@@ -385,10 +385,14 @@ func TestCredentialPasskey(t *testing.T) {
 		t.Fatal(err)
 	}
 	pk, err := k.TakePasskey(ctx, auth, host, nil)
-	k.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The site records it once its page has posted it.
+	for i := 0; i < 50 && r.site.Passkeys() == 0; i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
+	k.Close()
 	if r.site.Passkeys() != 1 || pk.RPID != "localhost" || pk.PrivateKey == "" {
 		t.Fatalf("registration: %d passkeys, rp %q", r.site.Passkeys(), pk.RPID)
 	}

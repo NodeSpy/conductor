@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
+	"github.com/NodeSpy/conductor/internal/browser"
 	"github.com/NodeSpy/conductor/internal/confdir"
 	"net"
 	"os"
@@ -74,6 +75,10 @@ func main() {
 		// Launched by conductor itself inside a namespace/container; not a
 		// user-facing command.
 		os.Exit(runSandboxNet(args))
+	case "browser":
+		// `conductor browser …`: an agent's browser (over its skill
+		// socket), or the operator's browser commands (the control socket).
+		os.Exit(cmdBrowser(args))
 	case "sandbox":
 		// `conductor sandbox exec -- <agent>`: run an agent CLI under the
 		// agent sandbox with the daemon's policy for this directory (paseo's
@@ -941,6 +946,8 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer stopSandbox()
+	// The browser (after the sandbox, whose identities it serves).
+	defer wireBrowser(ctx, cfg, notifier, st.Audit, logf)()
 	if cfg.AgentSandboxOn() && !cfg.DryRun {
 		// The sandboxed paseo provider entries this daemon's paseo
 		// dispatches name: written (merged, conductor's own only) at every
@@ -1396,6 +1403,16 @@ type controlRequest struct {
 	// spawn of a provider): a cwd that may not be a workspace gets the
 	// tool's scratch workspace instead of a refusal.
 	Scratch bool `json:"scratch,omitempty"`
+	// browser-* (the operator's browser commands): the identity and site
+	// of a saved session, a credential, cookies or a passkey to save, a
+	// live session to peek at.
+	Identity   string           `json:"identity,omitempty"`
+	Site       string           `json:"site,omitempty"`
+	Credential string           `json:"credential,omitempty"`
+	Session    string           `json:"session,omitempty"`
+	Source     string           `json:"source,omitempty"`
+	Cookies    []browser.Cookie `json:"cookies,omitempty"`
+	Passkey    *browser.Passkey `json:"passkey,omitempty"`
 }
 
 type controlResponse struct {
@@ -1406,6 +1423,8 @@ type controlResponse struct {
 	// Policy answers sandbox-policy: the launch's sandbox, with a token
 	// minted for this launch alone.
 	Policy *agentsandbox.Policy `json:"policy,omitempty"`
+	// Data answers a browser-* command.
+	Data json.RawMessage `json:"data,omitempty"`
 }
 
 // callableGate authorizes + audits a control-socket `run` that the MCP callable
@@ -1533,6 +1552,8 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 		streamRunEvents(ctx, conn, events, req.RunID, log)
 	case "sandbox-policy":
 		writeControlResp(conn, sandboxPolicyResponse(conn, req, log))
+	case "browser-logins", "browser-cookies-save", "browser-logout", "browser-sessions", "browser-peek", "browser-takeover", "browser-passkey-save":
+		writeControlResp(conn, browserControl(conn, req))
 	case "retry":
 		if retry == nil {
 			writeControlResp(conn, controlResponse{Error: "retry is not available (no flow runner configured)"})

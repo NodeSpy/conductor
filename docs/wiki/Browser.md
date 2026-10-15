@@ -1,0 +1,306 @@
+# Browser
+
+Any agent conductor launches sandboxed (a `cli`/`acp` worker, an opencode or
+agent-deck session, a paseo session on a `<provider>-sandboxed` entry, a
+hand-off, a member's worker) can drive a real browser to do work on websites:
+`conductor browser …`. Conductor runs the browser. The agent asks; conductor
+decides, acts, and audits.
+
+**A browser is a write channel.** One click in a logged-in session can delete
+or buy something. So the browser is anonymous unless you opt a site in, it
+reaches only the sites you list, and a logged-in site is used only for your
+own requests.
+
+## Turn it on
+
+```yaml
+browser:
+  allow:                      # the sites an agent's browser may reach (sandbox.egress joins them)
+    - docs.example.com        # a bare host is :443
+    - "*.example.org"
+    - "127.0.0.1:8080"        # a local site: host:port
+  # chrome: /usr/bin/chromium # default: the first Chrome/Chromium installed
+  # evaluate: off             # off (default) | read-only
+  # idle_timeout: 10m
+  # max_browsers: 4
+  # max_download_mb: 100
+  # max_upload_mb: 25
+```
+
+It needs Chrome or Chromium: on Linux `google-chrome`/`chromium` on `PATH`, on
+macOS Google Chrome or Chromium in `/Applications`. The agent sandbox must be on
+(`sandbox.agents`): the browser serves sandboxed agents only. `"*"` (the whole web)
+is refused: list the sites.
+
+## What an agent does
+
+```sh
+conductor browser open https://docs.example.com/
+conductor browser snapshot                 # the page as text; each control has a ref
+#   - heading "Install" [level=1]
+#   - textbox "Search" [ref=e41]
+#   - link "Download" [ref=e57]
+conductor browser fill e41 "proxy settings" --submit
+conductor browser click e57
+conductor browser downloads                # → .browser/downloads/<name> in the workspace
+conductor browser screenshot --path shots/page.png
+conductor browser upload e63 report.pdf    # a file from the workspace
+```
+
+The other actions are `type`, `select`, `press KEY`, `scroll`,
+`wait --text|--gone|--url`, `back`, `forward`, `reload`, `tabs`,
+`tab new|select|close`, `evaluate` (if enabled), `status` and `close`. See
+`conductor browser --help`.
+
+Each launch's token gets its own browser, and an idle one closes after
+`idle_timeout`.
+
+## The boundary
+
+- **Where it runs.** Conductor launches a headless Chromium per agent session,
+  sandboxed like an agent:
+  - Linux: user, mount, pid and network namespaces with `pivot_root`.
+  - macOS: Seatbelt.
+
+  It sees only its own throwaway profile directory and Chromium's install, and
+  never your home, your real browser profiles, conductor's state, or the
+  workspace. Conductor drives it over the DevTools protocol on a **pipe**, so
+  there is no debugging port for anything else to reach. The agent never holds
+  the browser.
+- **Network.** The browser has no network of its own. Its only way out is
+  conductor's egress proxy with `browser.allow` (plus `sandbox.egress` and the
+  identity's own allowlist), loopback included. A URL off the list is refused
+  up front, and a redirect or a page's own request off it dies at the proxy and
+  is audited. The agent's own process gets nothing from `browser.allow`: it
+  cannot `curl` those sites past the audit.
+- **Profile.** It is ephemeral and anonymous: no cookies, no saved passwords,
+  nothing from your browser, gone when the browser closes.
+- **Files.**
+  - Downloads land in the workspace's `.browser/downloads/` and screenshots
+    where the agent says, inside the workspace. Uploads come only from the
+    workspace.
+  - Conductor moves the files, not the browser, through a confined path walk:
+    no absolute path, no `..`, no symlink out, nothing under `.git`, nothing in
+    a read-only or hidden part of the workspace, and never an overwrite.
+- **Scripts.** `evaluate` is **off** by default. With `evaluate: read-only`,
+  an expression runs only when V8 can rule out every side effect: no DOM write,
+  no network, no storage.
+- **Audit.** Every action is audited with:
+  - the identity, the agent, repo and dispatch;
+  - who asked (`requester`);
+  - the page URL (its query and fragment dropped), the action and element ref;
+  - whether it was logged in, and the outcome.
+
+  A fill records the text's length, never the text.
+
+## Logged-in sites (opt in, per identity and per site)
+
+**Opting a site in gives that identity's agent your session's power on that
+site** whenever the work is your own request. Prefer an agent-specific account
+where the site allows one.
+
+```yaml
+browser:
+  allow: [app.example.com, static.example-cdn.net]
+  logins:
+    - site: app.example.com              # a host, or *.domain
+      identities: ["dir:/home/me/projects/app", "agent:triage@acme/app"]
+      also: [static.example-cdn.net]     # further hosts the logged-in browser may reach
+```
+
+Then seed a session for an identity, in one of two ways:
+
+```sh
+# 1. Log in yourself, in a browser window conductor opens (sandboxed,
+#    allowlisted, throwaway); press Enter when done. Only app.example.com's
+#    cookies are kept.
+conductor browser seed --identity agent:triage@acme/app --site app.example.com
+# 2. Import cookies for that one domain (a JSON / Playwright storage state /
+#    cookies.txt export). Everything for other domains is dropped.
+conductor browser cookies import --identity agent:triage@acme/app --site app.example.com cookies.json
+
+conductor browser logins     # what is saved (never values)
+conductor browser logout --identity agent:triage@acme/app --site app.example.com
+```
+
+A whole browser profile is never imported. Saved sessions live in
+`<state>/browser/logins/` (0700, each 0600), outside every sandbox.
+
+How it is enforced:
+- **A separate browser.** A logged-in session goes into a separate browser
+  that reaches only the logged-in sites (and their `also:` hosts). An untrusted
+  page never shares a browser with your session, so it cannot forge a request
+  into it.
+- **Routing.** A navigation to a logged-in site goes to that browser, anything
+  else to the anonymous one.
+- **What the agent can change.** As the site rotates the session, conductor
+  updates the cookies it saved, and only those: an agent cannot add a cookie to
+  your saved session or clear one from it.
+- **Provenance, checked at every action.** A logged-in site is used **only for
+  the operator's own request**:
+  - an agent you started in a directory of your own (a paseo session on a
+    sandboxed entry);
+  - a local `conductor run` of a manual trigger;
+  - for members, an operator-requested case.
+
+  An event, a third party's request, a member's own initiative (proactive
+  work), a case spawned from a non-operator case, or an unknown requester gets
+  the **anonymous** profile, with a note saying why. If a session's provenance
+  changes (a member's home session takes on a third party's case), its
+  logged-in browser closes at the next action.
+
+## Credentials: sign-ins the agent never sees
+
+Conductor can sign an agent in from your vaults: 1Password, the conductor
+vault, `pass`, a file, HashiCorp. **The agent never sees a value.** It asks,
+and conductor fills the field from outside the sandbox. The value never enters
+the agent's process, context, transcript, workspace, screenshots, snapshots or
+logs.
+
+```yaml
+vaults:
+  op: { type: onepassword }
+  house: { type: conductor }            # writable: where passkeys are kept
+browser:
+  allow: [app.example.com]
+  credentials:
+    - name: app
+      origin: https://app.example.com    # EXACT scheme://host[:port], optional /path prefix
+      identities: ["agent:triage@acme/app"]
+      login_url: https://app.example.com/login
+      username: { vault: op, key: "Agents/App/username" }
+      password: { vault: op, key: "Agents/App/password" }
+      otp:      { vault: op, key: "Agents/App/one-time password?attribute=otp" }
+      passkey:  { vault: house, key: "passkeys/app-triage" }
+      # approval: true                   # the site asks you to approve on your phone
+```
+
+Values are always `{vault, key}` references, never values. Nothing is shared
+by default: a credential is usable only by the identities it names, on its
+origin, and only for the operator's own request (the same provenance rule as
+logged-in sites).
+
+The agent's side:
+
+```sh
+conductor browser login --credential app                 # fills what the page asks for, submits each step
+conductor browser fill-credential e12 password --credential app   # one field, by ref
+conductor browser login --credential app --passkey --ref e7       # sign in with the passkey
+conductor browser await-approval --credential app        # waiting on your phone
+```
+
+Every fill checks, before any value is fetched:
+1. **The credential.** It is bound to this identity, and the request is the
+   operator's own.
+2. **The origin.** The page's origin is exactly the credential's origin
+   (scheme, host and port), as the browser reports it for the main frame. A
+   lookalike host, the page a redirect lands on, or an origin outside the bound
+   path is refused.
+3. **The field.** It is in the page's own document, never an embedded frame,
+   checked from an isolated JavaScript world the page's scripts cannot reach.
+   It fits the value: a password only into a password field, a code or a
+   username never into one.
+4. **The allowlist.** The page is on it.
+
+Then conductor fetches the value **fresh** (uncached, for this one fill), sets
+it from the isolated world, and audits the identity, origin, credential name,
+field and outcome, never the value. Vault reads are tainted, so a value that
+somehow reached a log line is redacted there too.
+
+After a fill, in that browser:
+- password and one-time-code values are scrubbed from snapshots, page text,
+  titles and URLs;
+- screenshots black out every field and text showing one;
+- `wait --text` matches only the scrubbed text, so it is never a guessing
+  oracle;
+- a download containing a filled value is refused;
+- **`evaluate` is off for the rest of that browser's life**, even read-only:
+  a side-effect-free expression could read a filled field and transform it
+  past any scrub.
+
+Page JavaScript **on the credential's own origin** can read a field it is
+given; that is how browsers work, and why the origin binding matters.
+
+### Two-factor codes
+
+- **TOTP.** Conductor computes the current code outside the sandbox.
+  - 1Password: point `otp` at `"<vault>/<item>/one-time password?attribute=otp"`.
+    `op` returns the code, and the seed never leaves 1Password.
+  - Other vaults: store an `otpauth://` URI or the base32 seed.
+
+  Neither the seed nor the code reaches the agent.
+- **Push approvals.** With `approval: true`, conductor notifies you after it
+  submits. This is a `needs_input` event, so your configured `conductor.*`
+  triggers alert you (ntfy, Pushover, Slack, …). The agent then waits, and
+  `login` returns once the page moves on, or with "still waiting"; the agent
+  continues with `await-approval`.
+- **SMS and email codes** are not supported (a follow-up: an opt-in connector
+  that reads the code server-side).
+
+### Passkeys
+
+Conductor uses Chromium's WebAuthn **virtual authenticator**. 1Password does
+not export passkey private keys, so your own passkeys are never used. Instead:
+
+1. Name one identity on the credential (a passkey is dedicated to one identity
+   and one site) and a writable vault for `passkey:`.
+2. Register it once, yourself:
+
+   ```sh
+   conductor browser passkey register app --url https://app.example.com/settings/security
+   ```
+
+   A browser window opens with an empty virtual authenticator (sign in first,
+   or seed a session for the identity), and you add a passkey on the site.
+   Conductor keeps exactly that credential's private key in the vault. On the
+   site it is an **additional, separately revocable** passkey; yours are
+   untouched.
+3. The agent signs in with `login --credential app --passkey --ref <button>`.
+   For that one sign-in, conductor attaches a virtual authenticator holding
+   only that passkey to that tab, only while the page is on the bound origin
+   (WebAuthn's own RP-ID binding applies too), and removes it after.
+
+This works headless on Linux and macOS (the DevTools WebAuthn domain).
+
+**Prefer agent-specific credentials**: a separate passkey, or a separate
+account where the site allows one. They are revocable without touching yours.
+
+## Watching and taking over
+
+- `conductor browser sessions`: the live agent browsers.
+- `conductor browser peek <session> --out shot.png`: a screenshot of one
+  (audited).
+- `conductor browser seed …` / `passkey register …`: your own window
+  (`--headless --wait-url` for a scripted site).
+
+A live, interactive view of an agent's browser belongs to the planned
+dashboard.
+
+## Paseo, members
+
+**Paseo.** A paseo session started on a `<provider>-sandboxed` entry already
+has `conductor` and its token. Tell the agent to use `conductor browser …`.
+Paseo's own browser tools are in paseo's MCP server, which the sandbox blocks by
+design, so conductor's browser is the supported path. A session you start in a
+directory of your own is your own request: logged-in sites and credentials
+opted in for its identity (`dir:<the directory>`) are available to it.
+
+**Members** use it from their home session and workers like any agent. A
+logged-in site or a credential counts as a mutating capability, so it follows
+the case's requester: an operator-requested case may sign in, while a third
+party's, an event's, or the member's own initiative gets the anonymous
+profile.
+
+## Identities
+
+A login or credential names agent sandbox identities:
+
+| who | identity |
+|---|---|
+| a dispatch on a configured repo | `agent:<profile>@<owner/repo>` |
+| a dispatch whose target the sender chose | `agent:<profile>@dispatch-<id>` (never opt one in) |
+| an agent you started in a directory | `dir:<the directory>` |
+| a member | the member's registered identity |
+
+A trailing `*` matches a prefix (`agent:triage@*`). A passkey credential names
+exactly one identity.

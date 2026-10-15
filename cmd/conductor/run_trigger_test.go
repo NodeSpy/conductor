@@ -64,6 +64,14 @@ func TestRunManualTrigger(t *testing.T) {
 	if got.Source != "manual" || got.Kind != "manual" || got.Variant != "deploy" || !got.Force {
 		t.Fatalf("trigger identity: %+v", got)
 	}
+	if !got.Operator {
+		t.Fatal("a local conductor run is the operator's own request")
+	}
+	var remote core.Trigger
+	if _, err := runManualTrigger(context.Background(), manual,
+		controlRequest{Cmd: "run", Name: "deploy", Callable: true, Caller: "mcp"}, func(_ context.Context, tr core.Trigger) { remote = tr }); err != nil || remote.Operator {
+		t.Fatalf("a callable (remote) invocation is not the operator's own request: %v %v", err, remote.Operator)
+	}
 	act, ok := got.Action.(config.Action)
 	if !ok || act.FlowRef != "0:manual" || act.Name != "deploy" {
 		t.Fatalf("action: %+v", got.Action)

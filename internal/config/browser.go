@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -38,6 +40,45 @@ type BrowserConfig struct {
 	// work is your own request. A saved session is seeded separately
 	// (`conductor browser login` / `conductor browser cookies import`).
 	Logins []BrowserLogin `yaml:"logins,omitempty"`
+	// Credentials are sign-ins conductor performs FOR an agent, from your
+	// vaults: the agent names one, conductor fills it on the bound origin
+	// and the agent never sees a value. Nothing is shared by default.
+	Credentials []BrowserCredential `yaml:"credentials,omitempty"`
+}
+
+// BrowserCredential binds one sign-in to identities and an origin.
+type BrowserCredential struct {
+	// Name is what an agent asks for (`conductor browser login --credential`).
+	Name string `yaml:"name"`
+	// Origin is the exact scheme://host[:port] — and optional path prefix —
+	// a fill may happen on. A lookalike host, an embedded frame, or a page a
+	// redirect lands on elsewhere is refused.
+	Origin string `yaml:"origin"`
+	// Identities are the agent sandbox identities that may use it (exact,
+	// or a prefix ending in "*"); only for your own requests.
+	Identities []string `yaml:"identities"`
+	// LoginURL is where `login` starts when the page is elsewhere (on the
+	// origin).
+	LoginURL string `yaml:"login_url,omitempty"`
+	// Username / Password / OTP / Passkey name where each value lives:
+	// {vault: <a vaults: entry>, key: <its key>} — never a value. OTP holds
+	// a code (1Password: "<item>/one-time password?attribute=otp"), an
+	// otpauth:// URI, or a base32 seed; conductor computes the code. Passkey
+	// is where `conductor browser passkey register` keeps the credential's
+	// dedicated passkey (a writable vault).
+	Username *BrowserSecretRef `yaml:"username,omitempty"`
+	Password *BrowserSecretRef `yaml:"password,omitempty"`
+	OTP      *BrowserSecretRef `yaml:"otp,omitempty"`
+	Passkey  *BrowserSecretRef `yaml:"passkey,omitempty"`
+	// Approval: the site asks for an approval on your phone after sign-in;
+	// conductor notifies you (a needs_input event) and the agent waits.
+	Approval bool `yaml:"approval,omitempty"`
+}
+
+// BrowserSecretRef names a value in one of the operator's vaults.
+type BrowserSecretRef struct {
+	Vault string `yaml:"vault"`
+	Key   string `yaml:"key"`
 }
 
 // BrowserLogin opts one site in for logged-in use.
@@ -135,7 +176,80 @@ func (c *Config) validateBrowser() error {
 			return fmt.Errorf("config: browser.logins[%d]: %s is not reachable through browser.allow — add it there (the logged-in browser reaches only its sites)", i, l.Site)
 		}
 	}
+	names := map[string]bool{}
+	for i, cr := range b.Credentials {
+		where := fmt.Sprintf("config: browser.credentials[%d] (%s)", i, cr.Name)
+		if cr.Name == "" || strings.ContainsAny(cr.Name, " /\t") {
+			return fmt.Errorf("config: browser.credentials[%d]: a name (no spaces or slashes) is required", i)
+		}
+		if names[cr.Name] {
+			return fmt.Errorf("config: browser.credentials: %s is defined twice", cr.Name)
+		}
+		names[cr.Name] = true
+		u, err := url.Parse(cr.Origin)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || strings.Contains(u.Hostname(), "*") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("%s: origin %q must be exactly scheme://host[:port][/path] (no wildcard)", where, cr.Origin)
+		}
+		if len(cr.Identities) == 0 {
+			return fmt.Errorf("%s names no identities — a credential is shared with named identities only", where)
+		}
+		for _, id := range cr.Identities {
+			if id == "" || id == "*" {
+				return fmt.Errorf("%s: identity %q — name each identity (or a prefix ending in *)", where, id)
+			}
+		}
+		if cr.Passkey != nil && (len(cr.Identities) != 1 || strings.HasSuffix(cr.Identities[0], "*")) {
+			return fmt.Errorf("%s: a passkey is dedicated to one identity and one site — name exactly one identity (no prefix)", where)
+		}
+		refs := 0
+		for _, r := range []*BrowserSecretRef{cr.Username, cr.Password, cr.OTP, cr.Passkey} {
+			if r == nil {
+				continue
+			}
+			refs++
+			if r.Vault == "" || r.Key == "" {
+				return fmt.Errorf("%s: every value is {vault, key} — a reference to your vaults, never the value", where)
+			}
+			if _, ok := c.Vaults[r.Vault]; !ok {
+				return fmt.Errorf("%s: no vault named %q (vaults:)", where, r.Vault)
+			}
+		}
+		if refs == 0 {
+			return fmt.Errorf("%s has nothing to fill", where)
+		}
+		if cr.LoginURL != "" {
+			lu, err := url.Parse(cr.LoginURL)
+			if err != nil || lu.Scheme != u.Scheme || !strings.EqualFold(lu.Host, u.Host) {
+				return fmt.Errorf("%s: login_url %q is not on the origin %s", where, cr.LoginURL, cr.Origin)
+			}
+		}
+		port := u.Port()
+		if port == "" {
+			port = map[string]string{"https": "443", "http": "80"}[u.Scheme]
+		}
+		if !browserHostAllowed(b.Allow, u.Hostname(), port) {
+			return fmt.Errorf("%s: %s is not reachable through browser.allow", where, cr.Origin)
+		}
+	}
 	return nil
+}
+
+// browserHostAllowed reports whether some allow pattern reaches host:port
+// (the proxy's own rule: a bare host means :443).
+func browserHostAllowed(allow []string, host, port string) bool {
+	for _, a := range allow {
+		h, p := splitHostPortPattern(strings.ToLower(strings.TrimSpace(a)))
+		if p == "" {
+			p = "443"
+		}
+		if p != "*" && p != port {
+			continue
+		}
+		if ok, _ := path.Match(h, strings.ToLower(host)); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // browserSiteReachable reports whether some allow pattern names the site's

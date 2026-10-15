@@ -462,3 +462,11 @@ func needsProvenance(op string) bool {
 	}
 	return false
 }
+
+// SetBrowserOp installs the browser handler alone (boot wires the browser
+// after the rest of the live ops).
+func SetBrowserOp(fn func(ctx context.Context, token, action string, args map[string]any, peer Peer) (map[string]any, error)) {
+	liveMu.Lock()
+	liveOps.Browser = fn
+	liveMu.Unlock()
+}

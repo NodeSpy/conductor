@@ -254,3 +254,26 @@ func (f *FileVault) List(ctx context.Context) ([]string, error) {
 	sort.Strings(out)
 	return out, nil
 }
+
+// freshRead reads key past c and leaves it out of c.
+func freshRead(ctx context.Context, c *cache, key string, read func(context.Context, string) (string, error)) (string, error) {
+	c.drop(key)
+	v, err := read(ctx, key)
+	c.drop(key)
+	return v, err
+}
+
+// ReadFresh implements FreshReader.
+func (o *OnePasswordVault) ReadFresh(ctx context.Context, key string) (string, error) {
+	return freshRead(ctx, &o.c, key, o.Read)
+}
+
+// ReadFresh implements FreshReader.
+func (p *PassVault) ReadFresh(ctx context.Context, key string) (string, error) {
+	return freshRead(ctx, &p.c, key, p.Read)
+}
+
+// ReadFresh implements FreshReader.
+func (f *FileVault) ReadFresh(ctx context.Context, key string) (string, error) {
+	return freshRead(ctx, &f.c, key, f.Read)
+}

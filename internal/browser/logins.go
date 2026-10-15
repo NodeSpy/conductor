@@ -23,9 +23,9 @@ const (
 	RequesterOperator = "operator"
 )
 
-// Caller is who a browser action is for: what the agent's conductor token
+// Principal is who a browser action is for: what the agent's conductor token
 // stands for, resolved by the daemon — never asserted by the agent.
-type Caller struct {
+type Principal struct {
 	// Key is the session the browser belongs to (a hash of the token: each
 	// launch's token gets its own browser).
 	Key string
@@ -51,13 +51,13 @@ type Caller struct {
 // site: ok, or why not. It runs at every action — a member's home session
 // whose open cases change gets the answer for now, not for when its
 // browser started.
-type Provenance func(c Caller, site string) (ok bool, why string)
+type Provenance func(c Principal, site string) (ok bool, why string)
 
 // OperatorOnly is the default provenance rule: a logged-in site is used
 // only for the operator's own request. An event, a third party, a member's
 // own initiative, or a session whose requester is unknown gets the
 // anonymous profile.
-func OperatorOnly(c Caller, _ string) (bool, string) {
+func OperatorOnly(c Principal, _ string) (bool, string) {
 	if c.Requester == RequesterOperator {
 		return true, ""
 	}
@@ -356,3 +356,6 @@ func ParseCookies(b []byte) ([]Cookie, error) {
 	}
 	return out, nil
 }
+
+// SiteCovers reports whether a host (or a cookie's domain) belongs to site.
+func SiteCovers(site, host string) bool { return siteCovers(site, host) }

@@ -138,11 +138,11 @@ func newRig(t *testing.T) *rig {
 	return &rig{t: t, m: m, site: site, url: srv.URL, host: host, ws: ws, audit: a, st: st}
 }
 
-func (r *rig) caller(key, requester string) Caller {
-	return Caller{Key: key, Identity: "agent:test@acme/app", Workspace: r.ws, Requester: requester, Agent: "test"}
+func (r *rig) caller(key, requester string) Principal {
+	return Principal{Key: key, Identity: "agent:test@acme/app", Workspace: r.ws, Requester: requester, Agent: "test"}
 }
 
-func (r *rig) do(c Caller, action string, args map[string]any) map[string]any {
+func (r *rig) do(c Principal, action string, args map[string]any) map[string]any {
 	r.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -153,7 +153,7 @@ func (r *rig) do(c Caller, action string, args map[string]any) map[string]any {
 	return out
 }
 
-func (r *rig) fail(c Caller, action string, args map[string]any) error {
+func (r *rig) fail(c Principal, action string, args map[string]any) error {
 	r.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

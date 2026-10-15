@@ -76,6 +76,8 @@ type LaunchSpec struct {
 	Headed  bool
 	Display []string
 	Show    []string
+	// Args are further browser flags (a headed window's platform).
+	Args []string
 	// SelfExe is conductor's binary (the Linux in-sandbox forwarder).
 	SelfExe func() (string, error)
 	// Proxy serves the allowlist.
@@ -201,7 +203,9 @@ func launch(spec LaunchSpec, goos string) (*Process, error) {
 		deps.ExtraBinds = append(deps.ExtraBinds, sandbox.BindMount{Path: p, RO: true})
 	}
 	env := browserEnv(spec, goos)
-	argv := append([]string{spec.Chrome}, ChromeArgs(spec.Dir, proxyAddr, spec.Headed)...)
+	flags := ChromeArgs(spec.Dir, proxyAddr, spec.Headed)
+	argv := append(append([]string{spec.Chrome}, flags[:len(flags)-1]...), spec.Args...)
+	argv = append(argv, flags[len(flags)-1])
 	sb := &sandbox.Spec{Mode: "namespace", Deny: true, HasEgress: true, Egress: append([]string(nil), spec.Allow...)}
 	wrapped, outEnv, wclean, err := sandbox.WrapLocalCommand(sb, argv, spec.Dir, env, deps)
 	if err != nil {

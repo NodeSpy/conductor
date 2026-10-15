@@ -222,7 +222,7 @@ const findFields = `function(){
 
 // credentialFor resolves a credential the caller may use now: bound to its
 // identity, and its provenance the operator's.
-func (m *Manager) credentialFor(c Caller, st Settings, name string) (Credential, origin, error) {
+func (m *Manager) credentialFor(c Principal, st Settings, name string) (Credential, origin, error) {
 	for _, cr := range st.Credentials {
 		if cr.Name != name {
 			continue
@@ -379,7 +379,7 @@ func (in *Instance) submitFrom(ctx context.Context, t *tab, ctxID int, nodeID in
 // asks for — username and password, then a one-time code — submits each,
 // waits for an approval when the site asks for one, and uses the passkey
 // when asked to (or when there is no password to give).
-func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c Caller, st Settings, cred Credential, o origin, allow []string, passkey bool, ref string, entry map[string]any) (map[string]any, error) {
+func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c Principal, st Settings, cred Credential, o origin, allow []string, passkey bool, ref string, entry map[string]any) (map[string]any, error) {
 	var steps []string
 	fr, err := in.mainFrame(ctx, t)
 	if err != nil {
@@ -494,7 +494,7 @@ func errorsIsRefused(err error) bool {
 
 // awaitApproval tells the operator a sign-in waits on their phone and waits
 // for the page to move on (bounded): "approved", or "still waiting".
-func (m *Manager) awaitApproval(ctx context.Context, in *Instance, t *tab, c Caller, cred Credential, d time.Duration, entry map[string]any) string {
+func (m *Manager) awaitApproval(ctx context.Context, in *Instance, t *tab, c Principal, cred Credential, d time.Duration, entry map[string]any) string {
 	start, _ := in.pageInfo(ctx, t)
 	if m.Notify != nil {
 		m.Notify(fmt.Sprintf("approve the sign-in to %s (credential %s) for %s — on your phone", cred.Origin, cred.Name, c.Identity))

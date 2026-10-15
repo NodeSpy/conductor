@@ -108,7 +108,7 @@ type session struct {
 	sites       []string // the sites the login browser holds
 	last        time.Time
 	saved       time.Time
-	caller      Caller
+	caller      Principal
 }
 
 // Logins is the saved-session store.
@@ -151,7 +151,7 @@ func knownAction(a string) bool {
 }
 
 // Do runs one action for a caller.
-func (m *Manager) Do(ctx context.Context, c Caller, action string, args map[string]any) (map[string]any, error) {
+func (m *Manager) Do(ctx context.Context, c Principal, action string, args map[string]any) (map[string]any, error) {
 	if !knownAction(action) {
 		return nil, fmt.Errorf("browser: unknown action %q (%s)", action, strings.Join(Actions, ", "))
 	}
@@ -241,7 +241,7 @@ func profileName(s *session) string {
 // grant is the logged-in sites this caller may use now: opted in for its
 // identity, a saved session present, and its provenance allowing. why says
 // why none were granted when one was opted in.
-func (m *Manager) grant(c Caller, st Settings) (sites []string, why string) {
+func (m *Manager) grant(c Principal, st Settings) (sites []string, why string) {
 	prov := m.Provenance
 	if prov == nil {
 		prov = OperatorOnly
@@ -282,7 +282,7 @@ func sameSites(a, b []string) bool {
 }
 
 // session finds or makes the caller's session.
-func (m *Manager) session(c Caller) (*session, error) {
+func (m *Manager) session(c Principal) (*session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
@@ -325,7 +325,7 @@ func isDone(in *Instance) bool {
 }
 
 // allowFor is the allowlist of a session's anonymous browser.
-func allowFor(c Caller, st Settings) []string {
+func allowFor(c Principal, st Settings) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, list := range [][]string{st.Allow, c.Egress} {
@@ -380,7 +380,7 @@ func splitHost(pat string) (host, port string) {
 }
 
 // instance returns the session's browser of one kind, starting it if need be.
-func (m *Manager) instance(ctx context.Context, s *session, c Caller, st Settings, sites []string) (*Instance, error) {
+func (m *Manager) instance(ctx context.Context, s *session, c Principal, st Settings, sites []string) (*Instance, error) {
 	slot := &s.anon
 	allow := allowFor(c, st)
 	if len(sites) > 0 {
@@ -461,7 +461,7 @@ func (m *Manager) instance(ctx context.Context, s *session, c Caller, st Setting
 // pick is the browser an action goes to: a navigation to a granted site's
 // host goes to the logged-in browser, any other to the anonymous one; every
 // other action to the browser the session last navigated.
-func (m *Manager) pick(ctx context.Context, s *session, c Caller, st Settings, granted []string, target string) (*Instance, error) {
+func (m *Manager) pick(ctx context.Context, s *session, c Principal, st Settings, granted []string, target string) (*Instance, error) {
 	if target != "" {
 		host := ""
 		if u, err := url.Parse(target); err == nil {
@@ -589,7 +589,7 @@ func (m *Manager) landDownload(in *Instance, s *session, d *Download) {
 }
 
 // act performs one action.
-func (m *Manager) act(ctx context.Context, s *session, c Caller, st Settings, granted []string, action string, args map[string]any, entry map[string]any) (map[string]any, error) {
+func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings, granted []string, action string, args map[string]any, entry map[string]any) (map[string]any, error) {
 	str := func(k string) string { v, _ := args[k].(string); return v }
 	num := func(k string, def float64) float64 {
 		switch v := args[k].(type) {
@@ -913,7 +913,7 @@ func (m *Manager) act(ctx context.Context, s *session, c Caller, st Settings, gr
 }
 
 // deny are the workspace paths the browser's files may not touch.
-func (c Caller) deny() []string { return c.Deny }
+func (c Principal) deny() []string { return c.Deny }
 
 func evalMode(st Settings) string {
 	if st.Evaluate == EvaluateReadOnly {
@@ -1118,3 +1118,6 @@ func refuseSecretFile(path string, secrets []string) error {
 	}
 	return nil
 }
+
+// LoginAllow is the allowlist of a browser logged in to sites.
+func LoginAllow(st Settings, sites []string) []string { return loginAllow(st.Allow, sites, st) }
