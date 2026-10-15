@@ -115,6 +115,7 @@ func TestStripJSONC(t *testing.T) {
 		`[1, 2, ]`:                                            `[1, 2 ]`,
 		`{"q": "a \"quoted\" // b"}`:                          `{"q": "a \"quoted\" // b"}`,
 		`{"a":1}// end`:                                       `{"a":1}`,
+		`,]`:                                                  `]`, ` ]`: ` ]`, `{"a":1} /* unterminated`: `{"a":1} `, `{"a":1} /* x*`: `{"a":1} `, `{"a":1} /* x */`: `{"a":1} `,
 	} {
 		if got := string(stripJSONC([]byte(in))); got != want {
 			t.Errorf("stripJSONC(%q) = %q, want %q", in, got, want)
@@ -187,6 +188,35 @@ func TestWrapExpose(t *testing.T) {
 	if _, err := os.Stat(filepath.Dir(sock)); !os.IsNotExist(err) {
 		t.Fatal("cleanup removes the expose dir")
 	}
+
+	// The highest port is a port.
+	f = newPolicyFixture(t)
+	f.pol.Expose = []string{"127.0.0.1:65535"}
+	if l, err := Wrap(f.pol, []string{"claude"}, f.deps); err != nil {
+		t.Fatalf("port 65535: %v", err)
+	} else {
+		l.Cleanup()
+	}
+	// Nothing exposed: no socket dir is made.
+	// (A short dir: SocketDir passes over a long TMPDIR for /tmp.)
+	tmp, err := os.MkdirTemp("/tmp", "cx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	f = newPolicyFixture(t)
+	t.Setenv("TMPDIR", tmp)
+	l, err = Wrap(f.pol, []string{"claude"}, f.deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(l.Exposed) != 0 {
+		t.Fatalf("exposed %v", l.Exposed)
+	}
+	if ents, _ := os.ReadDir(tmp); len(ents) != 0 {
+		t.Fatalf("a launch exposing nothing made %v", ents)
+	}
+	l.Cleanup()
 
 	withPlatform(t, "darwin")
 	f = newPolicyFixture(t)
