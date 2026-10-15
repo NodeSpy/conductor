@@ -56,7 +56,7 @@ const memberUsage = `usage:
     conductor member spawn [--case <id>] [--title "…"] --brief "…" [--group <label>] [--verbs a,b] [--read-only] [--handoff]
     conductor member tell <worker|group> "<instructions>"     # to your own workers (home session)
     conductor member report "<progress>"                      # to your parent (a worker)
-    conductor member instructions                             # any new instructions from your parent (a worker)
+    conductor member instructions [--wait 5m]                 # new instructions from your parent (a worker); --wait blocks for them
     conductor member join (<group> | --case <id> --group <label>) [--timeout 30m]
     conductor member ask <member> [--case <id>] "<text>"     # a linked peer member
     conductor member peers
@@ -144,7 +144,33 @@ func memberAgent(sub string, args []string) error {
 	}
 	call := sub
 	switch sub {
-	case "whoami", "remember", "episode", "handoff", "proposals", "cases", "peers", "instructions":
+	case "whoami", "remember", "episode", "handoff", "proposals", "cases", "peers":
+	case "instructions":
+		// --wait blocks until the parent sends something (or the timeout):
+		// how a child waits on its parent, like wait/join.
+		if fl["wait"] == "" {
+			break
+		}
+		d, err := time.ParseDuration(fl["wait"])
+		if err != nil {
+			return err
+		}
+		deadline := time.Now().Add(d)
+		for {
+			out, err := memberAgentCall("instructions", map[string]any{})
+			if err != nil {
+				return err
+			}
+			if ins, ok := out["instructions_from_parent"].(string); ok {
+				fmt.Println(ins)
+				return nil
+			}
+			if time.Now().After(deadline) {
+				fmt.Println("no new instructions from your parent")
+				return nil
+			}
+			time.Sleep(2 * time.Second)
+		}
 	case "spawn":
 		if fl["read-only"] != "" {
 			a["read_only"] = true

@@ -149,8 +149,9 @@ const workerRules = `
 - You are a WORKER on one case, started by your member's home session (your
   PARENT). Your brief, and any follow-up your parent sends, are your
   instructions. Follow-ups arrive with your next ` + "`conductor member …`" + ` call
-  (check between steps with ` + "`conductor member instructions`" + `), and you cannot
-  report done before reading them.
+  (check between steps with ` + "`conductor member instructions`" + `; to wait for
+  them, ` + "`conductor member instructions --wait 5m`" + `), and you cannot report
+  done before reading them.
 - You run with your parent's permissions or fewer, on behalf of whoever
   asked for this case — a write above your autonomy becomes a proposal. You
   cannot approve anything, start workers, or message other members.
