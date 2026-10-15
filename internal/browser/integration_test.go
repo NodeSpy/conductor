@@ -352,6 +352,10 @@ func TestBrowserLoginGatedByProvenance(t *testing.T) {
 	// Provenance is read at every action: the same session, now an event's,
 	// loses the logged-in browser.
 	op.Requester = RequesterEvent
+	// A non-navigating action first: it must not reach the logged-in browser.
+	if snap := r.do(op, "snapshot", nil)["snapshot"].(string); strings.Contains(snap, "Signed in as") || strings.Contains(snap, "Place order") {
+		t.Fatalf("after provenance changed, an action still ran logged in:\n%s", snap)
+	}
 	out = r.do(op, "open", map[string]any{"url": r.url + "/account"})
 	if out["profile"] != "anonymous" {
 		t.Fatalf("after provenance changed: %v", out)
