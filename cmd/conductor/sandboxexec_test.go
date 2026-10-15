@@ -196,3 +196,26 @@ func TestModelRouteEnvCarriesNoCredential(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// --bin reaches the wrap: the program is shown in the sandbox.
+func TestWrapSandboxExecShowsBins(t *testing.T) {
+	if why := agentsandbox.Probe(); why != "" {
+		t.Skipf("no sandbox here: %s", why)
+	}
+	ws, home, tools := t.TempDir(), t.TempDir(), t.TempDir()
+	tool := filepath.Join(tools, "deck-tool")
+	os.WriteFile(tool, []byte("#!/bin/sh\n"), 0o755)
+	t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
+	pol := agentsandbox.Policy{Identity: "x", Workspace: ws, Home: home}
+	for _, bins := range [][]string{nil, {"deck-tool"}} {
+		l, cleanup, err := wrapSandboxExec(pol, []string{"/bin/sh", "-c", "deck-tool"}, bins)
+		if err != nil {
+			t.Fatal(err)
+		}
+		shown := strings.Contains(strings.Join(l.Argv, " "), tools)
+		cleanup()
+		if shown != (bins != nil) {
+			t.Fatalf("bins %v: the tool's dir shown = %v", bins, shown)
+		}
+	}
+}

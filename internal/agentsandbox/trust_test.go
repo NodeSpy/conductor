@@ -47,9 +47,14 @@ func TestTrustClaudeWorkspace(t *testing.T) {
 	if fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %v", fi.Mode())
 	}
-	// Idempotent; an empty or missing file starts fresh.
+	// Idempotent: already trusted, the file is not rewritten (claude-code may
+	// be writing it); an empty or missing file starts fresh.
+	before, _ := os.Stat(filepath.Join(home, ".claude.json"))
 	if err := trustClaudeWorkspace(home, "/ws"); err != nil || !trusted(readClaudeJSON(t, home), "/ws") {
 		t.Fatal(err)
+	}
+	if after, _ := os.Stat(filepath.Join(home, ".claude.json")); !os.SameFile(before, after) {
+		t.Fatal("an already-trusted workspace rewrote the file")
 	}
 	empty := t.TempDir()
 	if err := trustClaudeWorkspace(empty, "/ws"); err != nil || !trusted(readClaudeJSON(t, empty), "/ws") {

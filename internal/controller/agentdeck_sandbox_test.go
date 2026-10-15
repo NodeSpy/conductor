@@ -149,12 +149,19 @@ func TestAgentDeckSandboxedRefusals(t *testing.T) {
 			return deckAddOK("d-1", func(w string) string { return w })(args)
 		}, want: "send the task", calls: "add,session start,session send,remove"},
 	}
+	cases["an unregistrable workspace"] = tc{exec: []string{"c", "sandbox", "exec"}, byArgs: deckAddOK("d-1", func(w string) string { return w }),
+		want: "register the sandbox workspace", calls: ""}
 	for name, k := range cases {
 		t.Run(name, func(t *testing.T) {
 			withDeckSandbox(t, k.exec)
 			deck := &fakeDeck{byArgs: k.byArgs}
 			c := newDeckFor(&fakeProv{}, deck)
 			ws := t.TempDir()
+			if name == "an unregistrable workspace" {
+				// A linked worktree whose git dir is gone: its layout cannot
+				// be read, so it cannot be shown safely.
+				os.WriteFile(filepath.Join(ws, ".git"), []byte("gitdir: "+filepath.Join(ws, "missing")+"\n"), 0o600)
+			}
 			_, err := c.NewSession(context.Background(), Spec{Request: makeReq("merge_conflict", "fix"), Cwd: ws}, nil)
 			if err == nil || !strings.Contains(err.Error(), k.want) {
 				t.Fatalf("want a refusal containing %q, got %v", k.want, err)
@@ -286,5 +293,27 @@ func TestAgentDeckErrorStatusEndsTheWait(t *testing.T) {
 	deck.byArgs = func(args []string) ([]byte, error) { return []byte(`{"status":"running"}`), nil }
 	if s.idle(context.Background()) {
 		t.Fatal("running is not")
+	}
+}
+
+// agent-deck versions name the new session "sessionId": that id is used.
+func TestAgentDeckSandboxedIDFromOtherKeys(t *testing.T) {
+	withDeckSandbox(t, []string{"c", "sandbox", "exec"})
+	deck := &fakeDeck{byArgs: func(args []string) ([]byte, error) {
+		if args[0] == "add" {
+			b, _ := json.Marshal(map[string]any{"sessionId": "s-9", "wrapper": args[argIndex(args, "--wrapper")+1]})
+			return b, nil
+		}
+		return nil, nil
+	}}
+	c := newDeckFor(&fakeProv{}, deck)
+	ws := t.TempDir()
+	sess, err := c.NewSession(context.Background(), Spec{Request: makeReq("merge_conflict", "fix"), Cwd: ws}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer forgetWorkspace(ws)
+	if sess.ID() != "s-9" || deck.call(1).args[2] != "s-9" {
+		t.Fatalf("id %q, start %q", sess.ID(), deck.call(1).args)
 	}
 }

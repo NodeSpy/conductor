@@ -27,9 +27,10 @@ import (
 )
 
 var (
-	seq  int64
-	mu   sync.Mutex
-	dirs = map[string]string{} // session id → working directory
+	seq        int64
+	mu         sync.Mutex
+	dirs       = map[string]string{} // session id → working directory
+	lastPrompt string                // the last turn's prompt (/x-probe)
 )
 
 func main() {
@@ -124,6 +125,7 @@ func handleSessionSub(w http.ResponseWriter, r *http.Request) {
 		}
 		mu.Lock()
 		dir := dirs[id]
+		lastPrompt = prompt
 		mu.Unlock()
 		if dir == "" {
 			dir, _ = os.Getwd()
@@ -150,7 +152,10 @@ func handleProbe(w http.ResponseWriter, r *http.Request) {
 			reads[p] = "denied"
 		}
 	}
-	writeJSON(w, map[string]any{"home": os.Getenv("HOME"), "read": reads,
+	mu.Lock()
+	prompt := lastPrompt
+	mu.Unlock()
+	writeJSON(w, map[string]any{"home": os.Getenv("HOME"), "read": reads, "prompt": prompt,
 		"conductor": os.Getenv("CONDUCTOR_ENDPOINT") != "" && os.Getenv("CONDUCTOR_SKILL_TOKEN") != "",
 		"creds":     os.Getenv("GH_TOKEN") != "" || os.Getenv("GITHUB_TOKEN") != "" || os.Getenv("SSH_AUTH_SOCK") != ""})
 }

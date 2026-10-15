@@ -92,6 +92,7 @@ type ocProbe struct {
 	Read      map[string]string `json:"read"`
 	Conductor bool              `json:"conductor"`
 	Creds     bool              `json:"creds"`
+	Prompt    string            `json:"prompt"`
 }
 
 func probeOpencode(t *testing.T, s *opencodeSession, paths ...string) ocProbe {
@@ -181,6 +182,9 @@ func TestOpencodeSandboxedServerPerDispatch(t *testing.T) {
 	if pa.Creds {
 		t.Fatal("a forge credential reached the sandboxed server's env")
 	}
+	if !strings.Contains(pb.Prompt, "Your sandbox") {
+		t.Fatalf("the sandboxed agent is told about its sandbox: %q", pb.Prompt)
+	}
 	// A resume restarts the server sandboxed, under the identity the
 	// workspace was registered with: the same tool state, where the
 	// session is.
@@ -228,4 +232,94 @@ func TestOpencodeSandboxedRefusesWhenTheSandboxCannotBeBuilt(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not launched unsandboxed") {
 		t.Fatalf("an unbuildable sandbox must refuse the launch, got %v", err)
 	}
+}
+
+// Off, the server is launched as before: a port of its own choosing on the
+// host, reached by the controller's own client, no password.
+func TestOpencodeUnsandboxedSpawnIsUnchanged(t *testing.T) {
+	r := newSandboxRig(t)
+	r.build(t, "opencode", "github.com/NodeSpy/conductor/test/e2e/services/fakeopencode")
+	AgentSandbox = nil
+	u, hc, cleanup, err := spawnOpencode(context.Background(), "", r.workspace(t, "ws"), nil, withAgent(launchOpts{}, "opencode", nil, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if hc != nil {
+		t.Fatal("an unsandboxed server is reached by the controller's own client")
+	}
+	if strings.HasSuffix(u, ":4096") {
+		t.Fatalf("an unsandboxed server picks its own port: %s", u)
+	}
+	resp, err := http.Get(u + "/x-probe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("no password when unsandboxed: %s", resp.Status)
+	}
+}
+
+// Inside a Linux sandbox the server's port is fixed — its network namespace
+// is its own; on macOS it takes a free host port.
+func TestOpencodeServePort(t *testing.T) {
+	old := sandbox.CheckGOOS
+	t.Cleanup(func() { sandbox.CheckGOOS = old })
+	sandbox.CheckGOOS = "linux"
+	if p, err := opencodeServePort(); err != nil || p != 4096 {
+		t.Fatalf("linux: %d %v", p, err)
+	}
+	sandbox.CheckGOOS = "darwin"
+	p, err := opencodeServePort()
+	if err != nil || p == 4096 || p <= 0 {
+		t.Fatalf("darwin: a free port, got %d %v", p, err)
+	}
+}
+
+// What an agent launch adds for its launcher reaches the wrap: files shown
+// read-only, its own variables (past the credential filter), the exposed
+// address — and how that address is reached comes back.
+func TestPrepareAgentSandboxCarriesTheLaunchersAdditions(t *testing.T) {
+	oldGOOS, oldLook, oldEuid := sandbox.CheckGOOS, sandbox.CheckLookPath, sandbox.CheckGeteuid
+	oldSB, oldSelf, oldU := AgentSandbox, launchSelfExe, EgressProxyUnix
+	t.Cleanup(func() {
+		sandbox.CheckGOOS, sandbox.CheckLookPath, sandbox.CheckGeteuid = oldGOOS, oldLook, oldEuid
+		AgentSandbox, launchSelfExe, EgressProxyUnix = oldSB, oldSelf, oldU
+	})
+	sandbox.CheckGOOS = "linux"
+	sandbox.CheckLookPath = func(n string) (string, error) { return "/usr/bin/" + n, nil }
+	sandbox.CheckGeteuid = func() int { return 1000 }
+	launchSelfExe = func() (string, error) { return "/opt/conductor/conductor", nil }
+	EgressProxyUnix = func([]string) (string, string, func(), error) { return "/tmp/eg/e.sock", "c", func() {}, nil }
+	root := t.TempDir()
+	AgentSandbox = &SandboxWiring{Resolver: &agentsandbox.Resolver{StateRoot: filepath.Join(root, "st"), GOOS: "linux"}}
+	os.MkdirAll(AgentSandbox.Resolver.StateRoot, 0o700)
+	ws := filepath.Join(root, "ws")
+	os.MkdirAll(ws, 0o700)
+	t.Cleanup(func() { forgetWorkspace(ws) })
+	cfg := filepath.Join(t.TempDir(), "tool.json")
+	os.WriteFile(cfg, []byte("{}"), 0o600)
+	req := makeReq("merge_conflict", "x")
+	req.DispatchID = "d1"
+	opt := withAgent(launchOpts{}, "opencode", &req, false)
+	opt.agent.files = []string{cfg}
+	opt.agent.env = []string{"OPENCODE_SERVER_PASSWORD=pw"}
+	opt.agent.expose = []string{"127.0.0.1:4096"}
+	argv, _, env, _, err := prepareLaunch("", ws, nil, []string{"/bin/true"}, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(argv, " ")
+	if !strings.Contains(joined, "--bind-ro "+cfg+" ") && !strings.Contains(joined, `{"path":"`+cfg+`","ro":true}`) {
+		t.Fatalf("the launcher's file is shown read-only:\n%s", joined)
+	}
+	if !envHas(env, "OPENCODE_SERVER_PASSWORD", "pw") {
+		t.Fatalf("the launcher's own variable reaches the agent: %v", env)
+	}
+	sock := opt.agent.exposed["127.0.0.1:4096"]
+	if sock == "" || !strings.Contains(joined, "--expose "+sock+"=127.0.0.1:4096") {
+		t.Fatalf("exposed %v, argv:\n%s", opt.agent.exposed, joined)
+	}
+	os.RemoveAll(filepath.Dir(sock))
 }
