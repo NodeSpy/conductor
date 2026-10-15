@@ -206,8 +206,7 @@ func launch(spec LaunchSpec, goos string) (*Process, error) {
 	flags := ChromeArgs(spec.Dir, proxyAddr, spec.Headed)
 	argv := append(append([]string{spec.Chrome}, flags[:len(flags)-1]...), spec.Args...)
 	argv = append(argv, flags[len(flags)-1])
-	sb := &sandbox.Spec{Mode: "namespace", Deny: true, HasEgress: true, Egress: append([]string(nil), spec.Allow...)}
-	wrapped, outEnv, wclean, err := sandbox.WrapLocalCommand(sb, argv, spec.Dir, env, deps)
+	wrapped, outEnv, wclean, err := sandbox.WrapLocalCommand(browserSpec(spec.Allow), argv, spec.Dir, env, deps)
 	if err != nil {
 		return fail(err)
 	}
@@ -250,8 +249,8 @@ func launch(spec LaunchSpec, goos string) (*Process, error) {
 		stop()
 		close(p.done)
 	}()
-	// The browser is up when it answers.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// The browser is up when it answers (a cold start on a loaded box is slow).
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	if err := p.Conn.Call(ctx, "", "Browser.getVersion", nil, nil); err != nil {
 		p.Close()
@@ -282,7 +281,11 @@ func browserEnv(spec LaunchSpec, goos string) []string {
 		// CoreFoundation finds the home by the user database, not $HOME:
 		// this points it (Application Support, preferences) into the
 		// browser's own directory, never the operator's.
-		env = append(env, "TMPDIR="+filepath.Join(spec.Dir, "tmp"), "CFFIXED_USER_HOME="+home)
+		// MAC_CHROMIUM_TMPDIR keeps Chromium's own temp files — its
+		// process-singleton socket among them — out of the per-user temp
+		// dir, where the operator's own Chrome keeps its singleton socket.
+		tmp := filepath.Join(spec.Dir, "tmp")
+		env = append(env, "TMPDIR="+tmp, "MAC_CHROMIUM_TMPDIR="+tmp, "CFFIXED_USER_HOME="+home)
 	} else {
 		env = append(env, "TMPDIR=/tmp")
 	}
@@ -338,4 +341,11 @@ func (r *Ring) String() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return string(r.buf)
+}
+
+// browserSpec is the browser's sandbox: no network of its own (a network
+// namespace on Linux, a Seatbelt deny on macOS), the allowlist proxy the
+// only way out, and the pivot_root jail.
+func browserSpec(allow []string) *sandbox.Spec {
+	return &sandbox.Spec{Mode: "namespace", Deny: true, HasEgress: true, Egress: append([]string(nil), allow...)}
 }

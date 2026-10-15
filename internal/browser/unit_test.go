@@ -527,3 +527,10 @@ func TestChromeArgs(t *testing.T) {
 		t.Fatal("headed")
 	}
 }
+
+func TestBrowserSpecHasNoNetwork(t *testing.T) {
+	sp := browserSpec([]string{"a.test"})
+	if !sp.Deny || !sp.EnforcedEgress() || sp.Mode != "namespace" || sp.Privileged || len(sp.Egress) != 1 {
+		t.Fatalf("%+v", sp)
+	}
+}

@@ -437,7 +437,10 @@ func (m *Manager) instance(ctx context.Context, s *session, c Principal, st Sett
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	in.onDownload = func(d *Download) { m.landDownload(in, s, d) }
+	// A download belongs to the session that started this browser: its
+	// workspace, fixed now (the session's own fields move under its lock).
+	loggedIn := len(sites) > 0
+	in.onDownload = func(d *Download) { m.landDownload(in, c, loggedIn, d) }
 	if len(sites) > 0 {
 		var cookies []Cookie
 		for _, site := range sites {
@@ -558,13 +561,12 @@ func refreshCookies(saved, live []Cookie) ([]Cookie, bool) {
 
 // landDownload moves a completed download from the browser's transfer
 // directory into the workspace's .browser/downloads, by conductor.
-func (m *Manager) landDownload(in *Instance, s *session, d *Download) {
+func (m *Manager) landDownload(in *Instance, c Principal, loggedIn bool, d *Download) {
 	st := m.Settings()
-	c := s.caller
 	src := filepath.Join(in.downloadDir(), d.GUID)
 	defer os.Remove(src)
 	entry := map[string]any{"action": "download", "identity": c.Identity, "agent": c.Agent, "repo": c.Repo,
-		"url": d.URL, "logged_in": in == s.login, "requester": c.Requester}
+		"url": d.URL, "logged_in": loggedIn, "requester": c.Requester}
 	if err := refuseSecretFile(src, in.secretValues()); err != nil {
 		in.setDownload(d, func(d *Download) { d.State, d.Err = "refused", err.Error() })
 		entry["outcome"], entry["reason"] = "refused", err.Error()

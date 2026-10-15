@@ -167,6 +167,23 @@ func TestCredentialLoginPasswordAndTOTP(t *testing.T) {
 		t.Fatalf("login audit: %v", es)
 	}
 	r.do(c, "screenshot", map[string]any{"path": "after-login.png"})
+	// A page offering the filled password back as a download: refused.
+	r.do(c, "open", map[string]any{"url": r.bound + "/login"})
+	snap = r.do(c, "snapshot", nil)["snapshot"].(string)
+	r.do(c, "fill-credential", map[string]any{"credential": "site", "field": "password", "ref": refOf(t, snap, "textbox", "Password")})
+	r.rig.do(c, "open", map[string]any{"url": r.bound + "/files/echo?v=" + browsertest.Password})
+	var state string
+	for i := 0; i < 50 && state == ""; i++ {
+		for _, d := range r.do(c, "downloads", nil)["downloads"].([]Download) {
+			if d.Name == "echo.txt" && d.State != "inProgress" {
+				state = d.State
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if state != "refused" {
+		t.Fatalf("a download holding the password: %q", state)
+	}
 	r.noLeak()
 }
 
@@ -421,6 +438,25 @@ func TestCredentialPasskey(t *testing.T) {
 			t.Fatal("the passkey's private key reached a reply")
 		}
 	}
+	// The authenticator went with the sign-in: the site's button alone
+	// signs no one in.
+	r.do(c, "open", map[string]any{"url": r.bound + "/passkey/login"})
+	snap = r.do(c, "snapshot", nil)["snapshot"].(string)
+	r.do(c, "click", map[string]any{"ref": refOf(t, snap, "button", "passkey")})
+	time.Sleep(time.Second)
+	if got := r.site.SignIns(); len(got) != 1 {
+		t.Fatalf("the virtual authenticator outlived its sign-in: %v", got)
+	}
+	// A passkey for another relying party is refused by conductor, not
+	// only by WebAuthn.
+	r.st.Credentials[0].Origin = r.alike
+	r.do(c, "open", map[string]any{"url": r.alike + "/passkey/login"})
+	// (The stored passkey is read to learn its RP — after every binding
+	// check — and never leaves conductor.)
+	if err := r.fail(c, "login", map[string]any{"credential": "site", "passkey": true}); !strings.Contains(err.Error(), "the passkey is for localhost") {
+		t.Fatalf("a passkey for another RP: %v", err)
+	}
+	r.st.Credentials[0].Origin = r.bound
 	ev := r.caller("ev", RequesterEvent)
 	r.do(ev, "open", map[string]any{"url": r.bound + "/passkey/login"})
 	r.refused(ev, "login", map[string]any{"credential": "site", "passkey": true}, "not the operator")

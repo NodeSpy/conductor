@@ -105,6 +105,11 @@ func (in *Instance) navigate(ctx context.Context, t *tab, url string) error {
 	if err := in.conn().Call(ctx, t.session, "Page.navigate", map[string]any{"url": url}, &r); err != nil {
 		return err
 	}
+	if r.ErrorText == "net::ERR_ABORTED" {
+		// The response became a download (conductor browser downloads), or
+		// the page stopped the load itself: the tab stays where it was.
+		return nil
+	}
 	if r.ErrorText != "" {
 		return fmt.Errorf("navigation failed: %s", r.ErrorText)
 	}

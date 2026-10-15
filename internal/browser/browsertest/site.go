@@ -163,6 +163,11 @@ func (s *Site) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/csv")
 		w.Header().Set("Content-Disposition", `attachment; filename="report.csv"`)
 		io.WriteString(w, ReportCSV)
+	case "/files/echo":
+		// A download of whatever the URL says (a page offering a value back
+		// as a file).
+		w.Header().Set("Content-Disposition", `attachment; filename="echo.txt"`)
+		io.WriteString(w, r.URL.Query().Get("v"))
 	case "/out":
 		// A redirect off the allowlist: the browser follows it, the proxy
 		// refuses it.

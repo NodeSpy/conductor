@@ -336,6 +336,18 @@ func TestBrowserLoginGatedByProvenance(t *testing.T) {
 	if snap := r.do(ev, "snapshot", nil)["snapshot"].(string); strings.Contains(snap, "Signed in") {
 		t.Fatal("the event session became signed in")
 	}
+	// Routing: another allowlisted host goes to the anonymous browser — and a
+	// redirect from the logged-in site to it dies at the logged-in browser's
+	// proxy (it reaches only its sites).
+	_, port, _ := net.SplitHostPort(r.host)
+	r.st.Allow = append(r.st.Allow, "localhost:"+port)
+	out = r.do(op, "open", map[string]any{"url": "http://localhost:" + port + "/account"})
+	if out["profile"] != "anonymous" {
+		t.Fatalf("another host in the logged-in browser: %v", out)
+	}
+	if err := r.fail(op, "open", map[string]any{"url": r.url + "/out?to=http://localhost:" + port + "/account"}); !strings.Contains(err.Error(), "allowlist") {
+		t.Fatalf("the logged-in browser followed a redirect off its sites: %v", err)
+	}
 	// Provenance is read at every action: the same session, now an event's,
 	// loses the logged-in browser.
 	op.Requester = RequesterEvent
@@ -404,6 +416,17 @@ func TestBrowserFilesStayInTheWorkspace(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(filepath.Dir(r.ws), "x.png")); err == nil {
 		t.Fatal("a screenshot was written outside the workspace")
 	}
+	// The workspace's carve-outs (read-only, hidden) are closed too.
+	os.MkdirAll(filepath.Join(r.ws, "ro"), 0o755)
+	os.WriteFile(filepath.Join(r.ws, "ro", "f.txt"), []byte("x"), 0o644)
+	c.Deny = []string{filepath.Join(r.ws, "ro")}
+	if err := r.fail(c, "upload", map[string]any{"ref": file, "paths": []any{"ro/f.txt"}}); !strings.Contains(err.Error(), "not open") {
+		t.Fatalf("upload from a carve-out: %v", err)
+	}
+	if err := r.fail(c, "screenshot", map[string]any{"path": "ro/x.png"}); !strings.Contains(err.Error(), "not open") {
+		t.Fatalf("screenshot into a carve-out: %v", err)
+	}
+	c.Deny = nil
 	// A taken name is never overwritten.
 	os.WriteFile(filepath.Join(r.ws, "a.png"), []byte("mine"), 0o644)
 	if got := r.do(c, "screenshot", map[string]any{"path": "a.png"})["path"]; got != "a-1.png" {
