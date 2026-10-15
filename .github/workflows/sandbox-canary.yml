@@ -47,6 +47,41 @@ jobs:
       - name: canary — conductor sandbox exec around a fake agent
         run: bash test/sandbox-canary/run.sh
 
+  # conductor's browser for agents (docs/wiki/Browser.md): a real Chrome in
+  # the real sandbox against a local test site (no external network) — the
+  # multi-step task, the proxy-enforced allowlist, logged-in sessions gated
+  # by provenance, workspace confinement, evaluate gating, and credentials
+  # (password, TOTP, push approval, a passkey through the virtual
+  # authenticator) with origin binding and redaction.
+  browser:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: allow unprivileged user namespaces (Ubuntu's AppArmor restricts them)
+        if: runner.os == 'Linux'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+      - name: which browser
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then ls -d "/Applications/Google Chrome.app" "/Applications/Chromium.app" 2>/dev/null || true
+          else command -v google-chrome google-chrome-stable chromium chromium-browser || true; fi
+      - name: browser packages, real browser and sandbox required
+        env:
+          CONDUCTOR_REQUIRE_BROWSER: "1"
+          CONDUCTOR_REQUIRE_SANDBOX: "1"
+        run: |
+          go test -race -count=1 -v ./internal/browser/... 2>&1 | tee browser.log | grep -E '^(=== RUN|--- |PASS|FAIL|ok)' || true
+          grep -q '^ok' browser.log && ! grep -q -- '--- FAIL' browser.log
+          go test -race -count=1 -run 'TestBrowser|TestSplitBrowser|TestValidateBrowser|TestReadFresh' ./cmd/conductor/ ./internal/config/ ./internal/vaults/
+
   paseo:
     runs-on: ubuntu-latest
     steps:
