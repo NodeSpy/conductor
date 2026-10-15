@@ -89,3 +89,44 @@ func TestStepDoneRoutesLiveHandoffThroughTeardown(t *testing.T) {
 		t.Fatal("done on a live hand-off must archive its agent")
 	}
 }
+
+// A cli/acp dispatch's step.done resolves on the runner that launched it,
+// not the paseo dispatcher: deferred while that runner is still blocked on
+// it, archived through that runner after.
+func TestStepDoneResolvesOnTheLaunchingRunner(t *testing.T) {
+	paseo := &fakeDispatcher{archived: make(chan string, 1)}
+	cli := &fakeDispatcher{
+		archived:       make(chan string, 1),
+		dispatchAgents: map[string]string{"disp-c": "claude-code-1"},
+		inflightIDs:    map[string]bool{"disp-c": true},
+	}
+	e, _ := newEng(t, baseCfg(), paseo, &fakeNotifier{}, nil)
+	e.rememberDispatch("disp-c", cli)
+	e.rememberDispatcher("claude-code-1", cli)
+
+	if err := e.StepDone(context.Background(), "disp-c", "", "done mid-turn"); err != nil {
+		t.Fatalf("an in-flight cli dispatch's done is accepted: %v", err)
+	}
+	if len(cli.archived)+len(paseo.archived) != 0 {
+		t.Fatal("in flight: the step boundary archives, not the done call")
+	}
+	cli.inflightIDs = nil
+	if err := e.StepDone(context.Background(), "disp-c", "", "done"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-cli.archived:
+		if got != "claude-code-1" {
+			t.Fatalf("archived %q", got)
+		}
+	default:
+		t.Fatal("archived through the cli runner that launched it")
+	}
+	if len(paseo.archived) != 0 {
+		t.Fatal("never through the paseo dispatcher")
+	}
+	// An unknown dispatch still resolves (or not) on paseo, as before.
+	if err := e.StepDone(context.Background(), "nope", "", "x"); err == nil {
+		t.Fatal("unresolvable")
+	}
+}

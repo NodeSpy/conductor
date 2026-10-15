@@ -386,3 +386,23 @@ func (c *cancelCtl) ResumeSession(context.Context, string, bool, Handler) (Sessi
 	return c.sess, nil
 }
 func (c *cancelCtl) Runner() (Runner, error) { return nil, nil }
+
+// A controller runner binds each dispatch to the session it opened, and
+// reports it in flight while Dispatch is blocked on its turn — how the
+// agent's own step.done (its token names only the dispatch) resolves.
+func TestControllerRunnerBindsDispatchToSession(t *testing.T) {
+	c := &cliController{name: "c", recipe: cliRecipe{tool: "sh"}, live: map[string]*cliSession{}}
+	r := newControllerRunner(c, nil, nil)
+	r.mu.Lock()
+	r.inflight["d1"] = true
+	r.live["s1"] = nil
+	r.byDispatch["d1"] = "s1"
+	r.mu.Unlock()
+	if r.AgentForDispatch("d1") != "s1" || !r.DispatchInFlight("d1") || r.AgentForDispatch("d2") != "" {
+		t.Fatal("binding")
+	}
+	r.forget("s1")
+	if r.AgentForDispatch("d1") != "" {
+		t.Fatal("forgetting the session drops its dispatch binding")
+	}
+}
