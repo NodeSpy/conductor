@@ -101,6 +101,10 @@ type LiveOps struct {
 	// run's identity. nil → those ops fall back to the body Source (the MCP
 	// path, where the daemon baked Source into the tool command's flags).
 	Identify func(token string, peer Peer) (src Source, number int, ok bool)
+	// Browser runs one browser action (internal/browser) for the token's
+	// session: Uses is the action, Options its arguments. Authorized by
+	// token + peer; nil → no browser on this daemon.
+	Browser func(ctx context.Context, token, action string, args map[string]any, peer Peer) (map[string]any, error)
 }
 
 // Peer is the socket-peer identity of the calling process (Linux
@@ -169,6 +173,10 @@ func serveConn(conn net.Conn, m *Manager, audit func(map[string]any), log func(s
 	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&req); err != nil {
 		writeResp(conn, IPCResponse{Error: "memory: bad tool request: " + err.Error()})
 		return
+	}
+	if req.Op == "browser" {
+		// A browser action (a page load, a wait) may take longer.
+		_ = conn.SetDeadline(time.Now().Add(BrowserOpTimeout + 15*time.Second))
 	}
 	// The peer credentials come from the KERNEL, not the request — the skill
 	// ops bind and verify sessions against them.
@@ -372,6 +380,18 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 			list[i] = tl
 		}
 		return IPCResponse{OK: true, Result: map[string]any{"tools": list}}
+	case "browser":
+		ops := getLiveOps()
+		if ops.Browser == nil {
+			return IPCResponse{Error: "browser: conductor's browser is not configured on this daemon (no browser: section)"}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), BrowserOpTimeout)
+		defer cancel()
+		out, err := ops.Browser(ctx, req.Token, req.Uses, req.Options, peer)
+		if err != nil {
+			return IPCResponse{Error: err.Error()}
+		}
+		return IPCResponse{OK: true, Result: out}
 	case "verb":
 		ops := getLiveOps()
 		if ops.RunVerb == nil {
@@ -386,6 +406,9 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 	return IPCResponse{Error: fmt.Sprintf("memory: unknown tool op %q", req.Op)}
 }
 
+// BrowserOpTimeout bounds one browser action on the daemon.
+const BrowserOpTimeout = 120 * time.Second
+
 // IPCCall dials the daemon socket for one tool call (the subprocess side).
 func IPCCall(socket string, req IPCRequest) (IPCResponse, error) {
 	conn, err := net.DialTimeout("unix", socket, 5*time.Second)
@@ -393,7 +416,11 @@ func IPCCall(socket string, req IPCRequest) (IPCResponse, error) {
 		return IPCResponse{}, fmt.Errorf("memory: daemon socket %s: %w", socket, err)
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	d := 30 * time.Second
+	if req.Op == "browser" {
+		d = BrowserOpTimeout + 20*time.Second
+	}
+	_ = conn.SetDeadline(time.Now().Add(d))
 	b, err := json.Marshal(req)
 	if err != nil {
 		return IPCResponse{}, err

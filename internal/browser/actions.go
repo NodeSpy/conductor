@@ -336,21 +336,25 @@ func (in *Instance) scroll(ctx context.Context, t *tab, ref string, dy float64) 
 
 // waitFor polls until the page shows text (or stops showing gone), or its
 // URL contains url — at most d.
+//
+// The comparison runs here, on the page as scrubbed of filled values — a
+// wait is never an oracle for a secret.
 func (in *Instance) waitFor(ctx context.Context, t *tab, text, gone, url string, d time.Duration) error {
 	deadline := time.Now().Add(d)
-	textJS, _ := json.Marshal(text)
-	goneJS, _ := json.Marshal(gone)
 	for {
 		ok := true
 		if url != "" {
 			u, _ := in.pageInfo(ctx, t)
-			ok = strings.Contains(u, url)
+			ok = strings.Contains(in.scrub(u), url)
 		}
 		if ok && (text != "" || gone != "") {
 			c, cancel := context.WithTimeout(ctx, 2*time.Second)
-			v, err := in.eval(c, t, fmt.Sprintf(`(() => { const b = (document.body && document.body.innerText) || ""; return (%s === "" || b.includes(%s)) && (%s === "" || !b.includes(%s)); })()`, textJS, textJS, goneJS, goneJS))
+			v, err := in.eval(c, t, `(document.body && document.body.innerText) || ""`)
 			cancel()
-			ok = err == nil && string(v) == "true"
+			var body string
+			ok = err == nil && json.Unmarshal(v, &body) == nil
+			body = in.scrub(body)
+			ok = ok && (text == "" || strings.Contains(body, text)) && (gone == "" || !strings.Contains(body, gone))
 		}
 		if ok {
 			return nil

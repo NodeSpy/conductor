@@ -96,17 +96,20 @@ func (r *Resolver) scratchEntry(tool string) (Entry, error) {
 	if err := os.MkdirAll(ws, 0o700); err != nil {
 		return Entry{}, err
 	}
+	// A scratch launch is a launcher's own utility process: no requester.
 	return Entry{Workspace: canon(ws), Identity: id, Skill: &skill.Identity{Agent: "sandbox:scratch"}}, nil
 }
 
 // DefaultEntry is the entry for a directory conductor did not create: the
 // directory is the identity, its own tool state, and a token that
-// authenticates it to conductor without granting any verb.
+// authenticates it to conductor without granting any verb. Its requester
+// is the operator: an agent started in a directory of the operator's own,
+// not by any trigger (conductor's own launches register their workspaces).
 func DefaultEntry(ws string) Entry {
 	return Entry{
 		Workspace: ws,
 		Identity:  "dir:" + ws,
-		Skill:     &skill.Identity{Agent: "sandbox:" + filepath.Base(ws)},
+		Skill:     &skill.Identity{Agent: "sandbox:" + filepath.Base(ws), Requester: skill.RequesterOperator},
 	}
 }
 
@@ -170,7 +173,15 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 		ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env,
 	}
 	if r.Socket != "" && e.Skill != nil && r.Mint != nil {
-		tok, err := r.Mint(*e.Skill)
+		id := *e.Skill
+		if id.Sandbox == nil {
+			// The token stands for this sandbox too: the browser keys on it.
+			id.Sandbox = &skill.SandboxBinding{
+				Identity: e.Identity, Workspace: e.Workspace, Egress: e.Egress,
+				Deny: append(append([]string(nil), e.ReadOnly...), e.Hide...),
+			}
+		}
+		tok, err := r.Mint(id)
 		if err != nil {
 			return Policy{}, fmt.Errorf("agentsandbox: mint token: %w", err)
 		}

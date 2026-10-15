@@ -1590,6 +1590,7 @@ func runManualTrigger(ctx context.Context, manual map[string]connector.CompiledT
 		Title:     "manual run: " + ct.Spec.Name,
 		Context:   trigCtx,
 		Force:     true, // bypass dedup gates — an on-demand run always runs
+		Operator:  !req.Callable,
 		Action:    act,
 		HistoryID: req.HistoryID, // "" unless a caller (the §13 invoke surface) pinned it
 	})

@@ -32,6 +32,18 @@ type Site struct {
 	// Actions are the signed-in actions taken ("order") — what a logged-in
 	// session can do that an anonymous one cannot.
 	Actions []string
+	// TOTPSeed (base32) turns on a one-time-code step after the password;
+	// NeedApproval an approval "on the phone" after that (Approve).
+	TOTPSeed     string
+	NeedApproval bool
+	// Codes are the one-time codes the site accepted (a test checks none
+	// reached the agent).
+	Codes []string
+
+	pending    map[string]*pending
+	challenges map[string]bool
+	passkeys   map[string][]byte // credential id (base64url) → SPKI public key
+	signIns    []string          // how each session was made: password | passkey
 }
 
 // Submission is one form post.
@@ -43,7 +55,9 @@ type Submission struct {
 }
 
 // New makes the site.
-func New() *Site { return &Site{sessions: map[string]bool{}} }
+func New() *Site {
+	return &Site{sessions: map[string]bool{}, pending: map[string]*pending{}, challenges: map[string]bool{}, passkeys: map[string][]byte{}}
+}
 
 // Session mints a signed-in session id (what a login sets as the "sid"
 // cookie) — for seeding a saved session without driving the login form.
@@ -88,9 +102,7 @@ func (s *Site) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			_ = r.ParseForm()
 			if r.Form.Get("username") == User && r.Form.Get("password") == Password {
-				id := s.Session()
-				http.SetCookie(w, &http.Cookie{Name: "sid", Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode})
-				http.Redirect(w, r, "/account", http.StatusSeeOther)
+				s.passwordOK(w, r)
 				return
 			}
 			page(w, "Sign in", `<h1>Sign in</h1><p role="alert">Wrong username or password</p>`)
@@ -156,6 +168,11 @@ func (s *Site) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// refuses it.
 		to := r.URL.Query().Get("to")
 		http.Redirect(w, r, to, http.StatusFound)
+	case "/codefield":
+		// A code field whose value the page echoes as text.
+		page(w, "Code", `<h1>Code</h1><label>Code <input name="otp" autocomplete="one-time-code" oninput="document.getElementById('echo').textContent = 'You typed ' + this.value"></label><p id="echo"></p>`)
+	case "/login/otp", "/login/approve", "/login/approve/status", "/passkey/register", "/passkey/login", "/passkey/challenge", "/framed":
+		s.auth(w, r)
 	case "/evil":
 		// A page that tries to make the visitor's browser act elsewhere.
 		page(w, "Evil", `<h1>Evil</h1><img src="http://127.0.0.2:9/x.png"><a href="http://example.invalid/">away</a>`)

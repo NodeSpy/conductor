@@ -59,6 +59,8 @@ type Settings struct {
 	MaxBrowsers int
 	// MaxDownload / MaxUpload bound one file, in bytes.
 	MaxDownload, MaxUpload int64
+	// Credentials are the sign-ins the operator shares (by vault reference).
+	Credentials []Credential
 }
 
 // LoginSiteConfig is one opted-in site: who may use it, and what further
@@ -83,6 +85,13 @@ type Manager struct {
 	Log        func(string, ...any)
 	// Launch starts a browser (nil = the sandboxed Launch; tests replace it).
 	Launch func(LaunchSpec) (*Process, error)
+	// Secrets reads one credential value fresh from a vault (never cached,
+	// tainted for the logs' redaction); PutSecret writes one (a passkey's
+	// sign count). Notify tells the operator something needs them now (a
+	// sign-in to approve on their phone).
+	Secrets   func(ctx context.Context, vault, key string) (string, error)
+	PutSecret func(ctx context.Context, vault, key, value string) error
+	Notify    func(msg string)
 
 	mu       sync.Mutex
 	sessions map[string]*session
@@ -129,6 +138,7 @@ var Actions = []string{
 	"open", "snapshot", "click", "fill", "type", "select", "press", "scroll", "wait",
 	"screenshot", "evaluate", "back", "forward", "reload", "tabs", "tab-new", "tab-select",
 	"tab-close", "downloads", "upload", "status", "close",
+	"login", "fill-credential", "await-approval",
 }
 
 func knownAction(a string) bool {
@@ -194,6 +204,13 @@ func (m *Manager) Do(ctx context.Context, c Caller, action string, args map[stri
 	if res == nil {
 		res = map[string]any{}
 	}
+	if inst != nil {
+		for _, k := range []string{"url", "target"} {
+			if v, ok := entry[k].(string); ok {
+				entry[k] = inst.scrub(v)
+			}
+		}
+	}
 	res["profile"] = profileName(s)
 	if len(granted) == 0 && why != "" {
 		res["logged_in_note"] = why
@@ -202,6 +219,8 @@ func (m *Manager) Do(ctx context.Context, c Caller, action string, args map[stri
 		if d := inst.takeDialogs(); len(d) > 0 {
 			res["dialogs"] = d
 		}
+		// Nothing filled from a credential leaves in a reply.
+		inst.scrubAny(res)
 	}
 	return res, nil
 }
@@ -546,6 +565,12 @@ func (m *Manager) landDownload(in *Instance, s *session, d *Download) {
 	defer os.Remove(src)
 	entry := map[string]any{"action": "download", "identity": c.Identity, "agent": c.Agent, "repo": c.Repo,
 		"url": d.URL, "logged_in": in == s.login, "requester": c.Requester}
+	if err := refuseSecretFile(src, in.secretValues()); err != nil {
+		in.setDownload(d, func(d *Download) { d.State, d.Err = "refused", err.Error() })
+		entry["outcome"], entry["reason"] = "refused", err.Error()
+		m.audit(entry)
+		return
+	}
 	f, err := os.Open(src)
 	if err == nil {
 		defer f.Close()
@@ -737,6 +762,9 @@ func (m *Manager) act(ctx context.Context, s *session, c Caller, st Settings, gr
 		if err != nil {
 			return nil, err
 		}
+		if png, err = in.maskSecrets(ctx, t, png, args["full"] == true); err != nil {
+			return nil, err
+		}
 		rel := str("path")
 		if rel == "" {
 			rel = filepath.Join(OutDir, "screenshots", "screenshot-"+time.Now().UTC().Format("20060102-150405")+".png")
@@ -753,6 +781,11 @@ func (m *Manager) act(ctx context.Context, s *session, c Caller, st Settings, gr
 	case "evaluate":
 		if evalMode(st) != EvaluateReadOnly {
 			return nil, refuse("evaluate is off (browser.evaluate: off) — read the page with snapshot")
+		}
+		if in.filled() {
+			// Even a side-effect-free expression can read a filled field
+			// and transform it past any scrub.
+			return nil, refuse("evaluate is off in a browser where a credential was filled")
 		}
 		expr := str("expr")
 		entry["chars"] = len(expr)
@@ -779,6 +812,55 @@ func (m *Manager) act(ctx context.Context, s *session, c Caller, st Settings, gr
 		if err := in.reload(ctx, t); err != nil {
 			return nil, err
 		}
+	case "login", "fill-credential":
+		name := str("credential")
+		entry["credential"] = name
+		cred, o, err := m.credentialFor(c, st, name)
+		if err != nil {
+			return nil, err
+		}
+		entry["origin"] = o.String()
+		allow := allowFor(c, st)
+		if in == s.login {
+			allow = loginAllow(allow, s.sites, st)
+		}
+		if action == "login" {
+			res, err := m.login(ctx, s, in, t, c, st, cred, o, allow, args["passkey"] == true, ref, entry)
+			if err != nil {
+				return nil, err
+			}
+			for k, v := range res {
+				out[k] = v
+			}
+			entry["steps"] = res["steps"]
+			break
+		}
+		field := str("field")
+		entry["field"] = field
+		fr, err := m.checkPage(ctx, in, t, o, allow)
+		if err != nil {
+			return nil, err
+		}
+		id, err := in.node(t, ref)
+		if err != nil {
+			return nil, err
+		}
+		if err := m.fillField(ctx, in, t, fr, id, cred, field); err != nil {
+			return nil, err
+		}
+		out["filled"] = field
+	case "await-approval":
+		name := str("credential")
+		entry["credential"] = name
+		cred, _, err := m.credentialFor(c, st, name)
+		if err != nil {
+			return nil, err
+		}
+		d := time.Duration(num("timeout", 90) * float64(time.Second))
+		if d <= 0 || d > 100*time.Second {
+			d = 100 * time.Second
+		}
+		out["approval"] = m.awaitApproval(ctx, in, t, c, cred, d, entry)
 	case "tabs":
 	case "downloads":
 		out["downloads"] = in.downloadList()
@@ -1017,4 +1099,22 @@ func (m *Manager) Peek(ctx context.Context, id string) ([]byte, string, error) {
 	u, _ := in.pageInfo(ctx, t)
 	m.audit(map[string]any{"action": "peek", "identity": s.caller.Identity, "url": redactURL(u), "outcome": "ok", "by": "operator"})
 	return png, redactURL(u), err
+}
+
+// refuseSecretFile refuses a downloaded file holding a value filled from a
+// credential (a page offering the password back as a file).
+func refuseSecretFile(path string, secrets []string) error {
+	if len(secrets) == 0 {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	for _, v := range secrets {
+		if len(v) >= 4 && strings.Contains(string(b), v) {
+			return fmt.Errorf("the file contains a value filled from a credential — not written to the workspace")
+		}
+	}
+	return nil
 }

@@ -30,6 +30,10 @@ type Instance struct {
 	byGUID    map[string]*Download
 	dialogs   []string
 	stopEv    func()
+	// secretNodes / secrets are the fields conductor filled from a
+	// credential and the values it filled (scrubbed from every reply).
+	secretNodes map[int64]bool
+	secrets     []string
 
 	// onDownload is told when a download completes (the manager moves it
 	// into the workspace); it runs on its own goroutine.

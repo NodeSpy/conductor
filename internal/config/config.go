@@ -180,6 +180,10 @@ type Config struct {
 	// Sandbox is the agent sandbox (SandboxConfig): on by default.
 	Sandbox *SandboxConfig `yaml:"sandbox,omitempty"`
 
+	// Browser is conductor's browser for agents (BrowserConfig): off unless
+	// configured.
+	Browser *BrowserConfig `yaml:"browser,omitempty"`
+
 	Store  Store  `yaml:"store"`
 	Update Update `yaml:"update"`
 	DryRun bool   `yaml:"dry_run"`
@@ -1266,6 +1270,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateSandbox(); err != nil {
+		return err
+	}
+	if err := c.validateBrowser(); err != nil {
 		return err
 	}
 	if err := c.validateSessions(); err != nil {

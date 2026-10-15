@@ -190,7 +190,8 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 			// skill-enabled dispatch with an untrusted target loses the
 			// cross-dispatch confinement run_step relies on and falls back to
 			// the shared literal namespace (round-12 #4).
-			Dispatch: req.DispatchID,
+			Dispatch:  req.DispatchID,
+			Requester: requesterOf(req),
 		})
 		if err == nil {
 			out.Env = map[string]string{"CONDUCTOR_SKILL_CLAIM": claim}
@@ -263,7 +264,17 @@ func SkillIdentityFor(req Request) (skill.Identity, bool) {
 		Sem:           req.Trigger.Semantics(),
 		TargetTrusted: req.Trigger.TargetTrusted,
 		Dispatch:      req.DispatchID,
+		Requester:     requesterOf(req),
 	}, true
+}
+
+// requesterOf is who asked for a dispatch's work: the operator for a
+// trigger they fired themselves, else the event.
+func requesterOf(req Request) string {
+	if req.Trigger.Operator {
+		return skill.RequesterOperator
+	}
+	return skill.RequesterEvent
 }
 
 // LocalSkillEndpoint is the `unix://` endpoint for a LOCAL dispatched agent —
