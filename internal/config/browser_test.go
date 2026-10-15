@@ -57,8 +57,12 @@ func TestValidateBrowser(t *testing.T) {
 		{"nothing to fill", func(b *BrowserConfig) { b.Credentials[0].Password, b.Credentials[0].Passkey = nil, nil }, "nothing to fill"},
 		{"login url elsewhere", func(b *BrowserConfig) { b.Credentials[0].LoginURL = "https://evil.example.com/login" }, "not on the origin"},
 		{"login url other scheme", func(b *BrowserConfig) { b.Credentials[0].LoginURL = "http://app.example.com/login" }, "not on the origin"},
-		{"cred unreachable", func(b *BrowserConfig) { b.Credentials[0].Origin, b.Credentials[0].LoginURL = "https://other.example.com", "" }, "not reachable"},
-		{"cred port unreachable", func(b *BrowserConfig) { b.Credentials[0].Origin, b.Credentials[0].LoginURL = "http://app.example.com", "" }, "not reachable"},
+		{"cred unreachable", func(b *BrowserConfig) {
+			b.Credentials[0].Origin, b.Credentials[0].LoginURL = "https://other.example.com", ""
+		}, "not reachable"},
+		{"cred port unreachable", func(b *BrowserConfig) {
+			b.Credentials[0].Origin, b.Credentials[0].LoginURL = "http://app.example.com", ""
+		}, "not reachable"},
 		{"cred loopback port", func(b *BrowserConfig) {
 			b.Credentials[0].Origin, b.Credentials[0].LoginURL = "http://127.0.0.1:8080", ""
 		}, ""},
