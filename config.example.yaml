@@ -1362,6 +1362,7 @@ members:
     # charter_file: members/sre-charter.md      # or keep the charter in a file
     escalation: "Page the operator if a sev1 is not mitigated in 15 minutes or you are unsure."
     # memory_repo: ~/members/sre-memory          # default <state dir>/members/sre/memory
+    # seed_dir: .conductor/packs/sre             # seed a NEW memory repo with a pack's knowledge/ + runbooks/
     # operators: [ops]                           # default: every operator
     home:
       rotate: { max_age: 24h, max_turns: 100 }   # a fresh session resumes from the handoff note + ledger

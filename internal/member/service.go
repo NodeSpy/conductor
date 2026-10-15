@@ -122,7 +122,7 @@ func (s *Service) Repo(name string) *Repo {
 	}
 	r := s.repos[name]
 	if r == nil {
-		r = &Repo{Dir: s.Cfg().MemberRepoDir(name), Member: name, Now: s.Now}
+		r = &Repo{Dir: s.Cfg().MemberRepoDir(name), Member: name, Now: s.Now, Seed: s.Cfg().MemberSeedDir(name)}
 		s.repos[name] = r
 	}
 	return r

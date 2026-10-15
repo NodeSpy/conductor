@@ -40,6 +40,7 @@ members:
     charter_file: members/sre-acme.md            # or charter: | …
     escalation: "Page the operator if a sev1 is not mitigated in 15 minutes."
     # memory_repo: ~/members/sre-acme            # default <state dir>/members/<name>/memory
+    # seed_dir: .conductor/packs/sre-acme        # a NEW repo's first commit gets its knowledge/ + runbooks/
     # operators: [ops]                           # default: every operator
     home:
       model: claude-opus-5                       # a fleet / id / list, resolved like a step's
@@ -156,7 +157,8 @@ restart is marked interrupted and reported.
 over: it runs on paseo through the ordinary background hand-off path.
 
 `member: { action: consolidate }` (or `conductor member consolidate`) starts a
-worker that distils recent episodes into knowledge.
+worker that distils the episodes since the last consolidation into knowledge;
+with nothing new it is a no-op.
 
 ## The autonomy gate
 

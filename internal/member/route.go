@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/flow"
@@ -32,6 +31,9 @@ func (s *Service) RouteMember(ctx context.Context, r flow.MemberRoute) (map[stri
 		if err != nil {
 			return nil, err
 		}
+		if w.ID == "" {
+			return map[string]any{"skipped": "no new episodes since the last consolidation"}, nil
+		}
 		return map[string]any{"worker": w.ID, "case": w.CaseID}, nil
 	}
 	return nil, fmt.Errorf("unknown member action %q", r.Action)
@@ -48,7 +50,9 @@ func (s *Service) Consolidate(ctx context.Context, name string) (store.Worker, e
 	rec := s.Ledger.Member(name)
 	eps := s.Repo(name).EpisodesSince(ctx, rec.Consolidated)
 	if len(eps) == 0 {
-		return store.Worker{}, fmt.Errorf("nothing to consolidate: no episodes since %s", rec.Consolidated.Format(time.RFC3339))
+		// A scheduled consolidation with nothing new is a no-op, not a
+		// failed run: the zero Worker says nothing was started.
+		return store.Worker{}, nil
 	}
 	if len(eps) > 60 {
 		eps = eps[len(eps)-60:]

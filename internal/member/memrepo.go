@@ -43,6 +43,9 @@ type Repo struct {
 	Dir    string
 	Member string
 	Now    func() time.Time
+	// Seed is copied into a NEW repo's first commit (knowledge/ and
+	// runbooks/ Markdown only); "" seeds nothing.
+	Seed string
 
 	mu sync.Mutex
 }
@@ -109,11 +112,60 @@ Correct anything by committing over it — the member reads what is here.
 			return err
 		}
 	}
+	if err := r.seed(); err != nil {
+		return fmt.Errorf("seed %s: %w", r.Seed, err)
+	}
 	if _, err := r.git(ctx, r.Dir, "add", "-A"); err != nil {
 		return err
 	}
 	_, err := r.git(ctx, r.Dir, "commit", "-q", "-m", "memory: initialize")
 	return err
+}
+
+// seed copies the seed directory's knowledge/ and runbooks/ Markdown into a
+// new repo. Regular files only (no symlinks — a seed cannot point the repo at
+// files outside it), .md/.txt only, each under the write-size cap.
+func (r *Repo) seed() error {
+	if r.Seed == "" {
+		return nil
+	}
+	for _, top := range []string{DirKnowledge, DirRunbooks} {
+		root := filepath.Join(r.Seed, top)
+		if _, err := os.Stat(root); os.IsNotExist(err) {
+			continue
+		}
+		err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() || !d.Type().IsRegular() {
+				return nil
+			}
+			rel, err := filepath.Rel(r.Seed, p)
+			if err != nil {
+				return err
+			}
+			if _, err := CleanPath(filepath.ToSlash(rel)); err != nil {
+				return nil // not a memory file (wrong extension, hidden): skip
+			}
+			b, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			if len(b) > 256<<10 {
+				return fmt.Errorf("%s is larger than 256KiB", rel)
+			}
+			dst := filepath.Join(r.Dir, rel)
+			if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+				return err
+			}
+			return os.WriteFile(dst, b, 0o600)
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CleanPath validates a memory path an agent names: relative, inside one of

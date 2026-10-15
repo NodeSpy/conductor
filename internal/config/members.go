@@ -78,6 +78,11 @@ type MemberConfig struct {
 	// MemoryRepo is the member's memory git repo. Default:
 	// <state dir>/members/<name>/memory. Created on first start.
 	MemoryRepo string `yaml:"memory_repo,omitempty"`
+	// SeedDir seeds a NEW memory repo: its knowledge/ and runbooks/ Markdown
+	// (a pack's, say) are copied into the first commit. Read once, at
+	// creation; an existing repo is never touched. Relative to the config's
+	// directory.
+	SeedDir string `yaml:"seed_dir,omitempty"`
 	// Home is the conversational session (paseo).
 	Home MemberHome `yaml:"home,omitempty"`
 	// Worker is the background worker profile (cli runtime by default).
@@ -263,6 +268,19 @@ func (c *Config) MemberRepoDir(name string) string {
 	return filepath.Join(StateDir(), "members", name, "memory")
 }
 
+// MemberSeedDir is the member's seed directory, resolved ("" when unset).
+func (c *Config) MemberSeedDir(name string) string {
+	m := c.Members[name]
+	if m.SeedDir == "" {
+		return ""
+	}
+	p := expandHome(m.SeedDir)
+	if !filepath.IsAbs(p) && c.baseDir != "" {
+		p = filepath.Join(c.baseDir, p)
+	}
+	return p
+}
+
 // MemberCharter is the member's charter text: inline, from its file, or "".
 func (c *Config) MemberCharter(name string) (string, error) {
 	m := c.Members[name]
@@ -436,6 +454,11 @@ func (c *Config) validateMember(name string, m MemberConfig) error {
 	if m.CharterFile != "" {
 		if _, err := c.MemberCharter(name); err != nil {
 			return err
+		}
+	}
+	if d := c.MemberSeedDir(name); d != "" {
+		if fi, err := os.Stat(d); err != nil || !fi.IsDir() {
+			return fmt.Errorf("seed_dir: %s is not a directory", d)
 		}
 	}
 	for _, op := range m.Operators {

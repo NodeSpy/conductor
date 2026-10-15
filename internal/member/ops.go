@@ -269,6 +269,9 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 		if err != nil {
 			return nil, err
 		}
+		if w.ID == "" {
+			return map[string]any{"skipped": "no new episodes since the last consolidation"}, nil
+		}
 		return map[string]any{"worker": w.ID, "case": w.CaseID}, nil
 	}
 	return nil, fmt.Errorf("unknown member command %q", sub)

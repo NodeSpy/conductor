@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
@@ -638,5 +640,70 @@ func TestRotationWaitsForTheHandoffTurnToSettle(t *testing.T) {
 	p := f.home.launched[1].Prompt
 	if !strings.Contains(p, "agent-written handoff: watch the queue") || strings.Contains(p, "written by conductor") {
 		t.Fatalf("rotation did not wait for the session's own handoff:\n%s", p)
+	}
+}
+
+// A seed directory (a pack's knowledge/ and runbooks/) lands in a NEW memory
+// repo's first commit — Markdown only, no symlinks — and never touches an
+// existing repo.
+func TestMemoryRepoSeed(t *testing.T) {
+	seed := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(seed, "runbooks"), 0o700)
+	_ = os.MkdirAll(filepath.Join(seed, "knowledge"), 0o700)
+	_ = os.WriteFile(filepath.Join(seed, "runbooks", "page-triage.md"), []byte("# triage"), 0o600)
+	_ = os.WriteFile(filepath.Join(seed, "runbooks", "evil.sh"), []byte("rm -rf /"), 0o600)
+	_ = os.WriteFile(filepath.Join(seed, "README.md"), []byte("not copied"), 0o600)
+	secret := filepath.Join(t.TempDir(), "secret.md")
+	_ = os.WriteFile(secret, []byte("SECRET"), 0o600)
+	_ = os.Symlink(secret, filepath.Join(seed, "knowledge", "link.md"))
+	r := &Repo{Dir: filepath.Join(t.TempDir(), "mem"), Member: "sre", Seed: seed}
+	if err := r.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := r.Read("runbooks/page-triage.md"); err != nil || b != "# triage" {
+		t.Fatalf("seed runbook: %q %v", b, err)
+	}
+	for _, p := range []string{"runbooks/evil.sh", "knowledge/link.md"} {
+		if _, err := os.Stat(filepath.Join(r.Dir, p)); err == nil {
+			t.Errorf("%s was seeded", p)
+		}
+	}
+	if readme, _ := r.Read("README.md"); strings.Contains(readme, "not copied") {
+		t.Error("the seed's README overwrote the repo's")
+	}
+	if out, _ := exec.Command("git", "-C", r.Dir, "status", "--porcelain").Output(); len(out) != 0 {
+		t.Fatalf("seed not committed: %s", out)
+	}
+	// An existing repo is never re-seeded.
+	_ = os.WriteFile(filepath.Join(seed, "runbooks", "new.md"), []byte("later"), 0o600)
+	if err := r.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(r.Dir, "runbooks", "new.md")); err == nil {
+		t.Fatal("an existing repo was re-seeded")
+	}
+}
+
+func TestConsolidateWithNothingNewIsANoOp(t *testing.T) {
+	f := newSvc(t)
+	ctx := context.Background()
+	f.svc.Tick(ctx, "sre")
+	out, err := f.svc.RouteMember(ctx, flow.MemberRoute{Member: "sre", Action: "consolidate", Source: "timer.weekly"})
+	if err != nil || out["skipped"] == nil {
+		t.Fatalf("empty consolidation: %v %v", out, err)
+	}
+	if len(f.workers.fired) != 0 {
+		t.Fatal("a worker was started with nothing to consolidate")
+	}
+	c, _ := f.svc.CaseOpen(homeCaller(f), "x", "")
+	if _, err := f.svc.Episode(ctx, homeCaller(f), c.ID, "something happened"); err != nil {
+		t.Fatal(err)
+	}
+	out, err = f.svc.RouteMember(ctx, flow.MemberRoute{Member: "sre", Action: "consolidate", Source: "timer.weekly"})
+	if err != nil || out["worker"] == nil || len(f.workers.fired) != 1 {
+		t.Fatalf("consolidation with an episode: %v %v", out, err)
+	}
+	if !strings.Contains(f.workers.fired[0].inputs["prompt"].(string), "CONSOLIDATION") {
+		t.Fatal("consolidation brief missing")
 	}
 }
