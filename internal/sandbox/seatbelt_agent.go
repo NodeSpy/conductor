@@ -142,11 +142,21 @@ func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string
 	if a.Keychain {
 		mach = append(mach, agentMachKeychain...)
 	}
-	b.WriteString("(allow mach-lookup")
-	for _, s := range mach {
-		b.WriteString("\n  (global-name " + sbplString(s) + ")")
+	if a.Browser {
+		// Later rules win: every service, then the Keychain's denied.
+		b.WriteString("(allow mach-lookup)\n(allow mach-register)\n(allow iokit-open)\n(allow ipc-posix-shm)\n(allow process-info*)\n(allow user-preference-read)\n")
+		b.WriteString("(deny mach-lookup")
+		for _, s := range agentMachKeychain {
+			b.WriteString("\n  (global-name " + sbplString(s) + ")")
+		}
+		b.WriteString(")\n")
+	} else {
+		b.WriteString("(allow mach-lookup")
+		for _, s := range mach {
+			b.WriteString("\n  (global-name " + sbplString(s) + ")")
+		}
+		b.WriteString(")\n")
 	}
-	b.WriteString(")\n")
 	for _, m := range resolveBinds(binds) {
 		if m.Path == "" {
 			continue

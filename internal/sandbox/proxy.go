@@ -280,6 +280,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !p.requireAuth(w, r) {
 		return
 	}
+	p.forward(w, r)
+}
+
+// forward serves one authorized request: the allowlist decides the rest.
+func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodConnect {
 		p.connect(w, r)
 		return
@@ -515,4 +520,79 @@ func allowKey(allow []string) string {
 	}
 	sort.Strings(c)
 	return strings.Join(c, "\x00")
+}
+
+// trustedHandler serves a proxy listener whose reachability is its
+// credential: the allowlist still decides every request.
+type trustedHandler struct{ p *Proxy }
+
+func (h trustedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r.Header.Del("Proxy-Authorization")
+	h.p.forward(w, r)
+}
+
+// serveTrusted serves ln with no proxy credential, until the returned func
+// closes it.
+func (p *Proxy) serveTrusted(ln net.Listener) func() {
+	srv := &http.Server{Handler: trustedHandler{p}, ReadHeaderTimeout: 30 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(ctx)
+			_ = srv.Close()
+		})
+	}
+}
+
+// TrustedUnixEndpoint opens a unix socket of its own, in a fresh 0700
+// directory, serving exactly this allowlist with NO proxy credential — for
+// a client that cannot send one (Chrome takes no credential in
+// --proxy-server). Reaching the socket is the credential: its directory is
+// shown to that one sandbox and nothing else. closeFn removes it.
+func (m *ProxyManager) TrustedUnixEndpoint(allow []string) (sock string, closeFn func(), err error) {
+	p, _, err := m.proxyFor(allow)
+	if err != nil {
+		return "", nil, err
+	}
+	base := os.TempDir()
+	if len(base) > 32 {
+		base = "/tmp" // macOS: sun_path is ~104 bytes
+	}
+	dir, err := os.MkdirTemp(base, "cbp")
+	if err != nil {
+		return "", nil, fmt.Errorf("sandbox: proxy socket dir: %w", err)
+	}
+	sock = filepath.Join(dir, "p.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		os.RemoveAll(dir)
+		return "", nil, fmt.Errorf("sandbox: proxy socket: %w", err)
+	}
+	if err := os.Chmod(sock, 0o600); err != nil {
+		ln.Close()
+		os.RemoveAll(dir)
+		return "", nil, err
+	}
+	stop := p.serveTrusted(ln)
+	return sock, func() { stop(); os.RemoveAll(dir) }, nil
+}
+
+// TrustedEndpoint is TrustedUnixEndpoint on a loopback port of its own (a
+// macOS sandbox has no network namespace to forward a socket into; its
+// profile allows exactly this port). Any local process can connect to a
+// loopback port: what it reaches is the allowlist — the same hosts the
+// operator chose, nothing behind them (the SSRF checks apply).
+func (m *ProxyManager) TrustedEndpoint(allow []string) (addr string, closeFn func(), err error) {
+	p, _, err := m.proxyFor(allow)
+	if err != nil {
+		return "", nil, err
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", nil, fmt.Errorf("sandbox: proxy listen: %w", err)
+	}
+	return ln.Addr().String(), p.serveTrusted(ln), nil
 }

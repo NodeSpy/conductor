@@ -283,6 +283,9 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 			for _, e := range nf.Exposes {
 				prefix = append(prefix, "--expose", e.Unix+"="+e.Dial)
 			}
+			if nf.PassFDs > 0 {
+				prefix = append(prefix, "--pass-fds", strconv.Itoa(nf.PassFDs))
+			}
 			prefix = append(prefix, "--")
 		}
 		return append(prefix, argv...), nil
