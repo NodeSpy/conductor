@@ -40,7 +40,9 @@ jobs:
           if [ $vet_rc -eq 0 ]; then echo "vet=clean" >> "$GITHUB_OUTPUT"; else
             echo "vet=FAILED" >> "$GITHUB_OUTPUT"; echo "$vet_out"; fi
 
-          go test -race -coverprofile=cover.out ./... > test.log 2>&1
+          # Under a sentinel HOME: a test that writes into the home dir fails the
+          # run (scripts/test-home-guard.sh), so none can reach a developer's real one.
+          bash scripts/test-home-guard.sh go test -race -coverprofile=cover.out ./... > test.log 2>&1
           test_rc=$?
           okpkgs=$(grep -c '^ok ' test.log || true)
           failpkgs=$(grep -c '^FAIL' test.log || true)
