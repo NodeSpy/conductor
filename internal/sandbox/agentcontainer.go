@@ -23,8 +23,9 @@ const (
 	// ContainerHelperDir is where conductor's binary appears in an agent
 	// container (bound read-only from the host).
 	ContainerHelperDir = "/run/conductor/bin"
-	// ContainerSockDir is the container's private socket dir (a tmpfs the
-	// agent's user owns): the conductor socket's in-container end.
+	// ContainerSockDir is the container's socket dir (a sticky tmpfs —
+	// the agent's is the container's only user): the conductor socket's
+	// in-container end, and the launches' pid files.
 	ContainerSockDir = "/run/conductor/s"
 	// ContainerHome is the agent's HOME inside its container.
 	ContainerHome = "/home/agent"
@@ -99,8 +100,7 @@ func (c AgentContainer) CreateArgs() ([]string, error) {
 	if c.Engine == "" || c.Name == "" || c.Image == "" {
 		return nil, fmt.Errorf("sandbox: an agent container needs an engine, a name and an image")
 	}
-	uid, gid, err := c.uidGid()
-	if err != nil {
+	if _, _, err := c.uidGid(); err != nil {
 		return nil, err
 	}
 	if c.HelperPath() == "" {
@@ -131,7 +131,7 @@ func (c AgentContainer) CreateArgs() ([]string, error) {
 	}
 	args = append(args,
 		"--tmpfs", "/tmp:rw,nosuid,nodev,mode=1777",
-		"--tmpfs", fmt.Sprintf("%s:rw,nosuid,nodev,noexec,mode=0700,uid=%d,gid=%d", ContainerSockDir, uid, gid))
+		"--tmpfs", ContainerSockDir+":rw,nosuid,nodev,noexec,mode=1777")
 	if c.Pids > 0 {
 		args = append(args, "--pids-limit", strconv.Itoa(c.Pids))
 	}

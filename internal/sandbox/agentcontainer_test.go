@@ -83,7 +83,7 @@ func TestAgentContainerCreateArgs(t *testing.T) {
 		t.Errorf("helper mount %q", mounts[2])
 	}
 	tmpfs := argValue(args, "--tmpfs")
-	if len(tmpfs) != 2 || !strings.HasPrefix(tmpfs[1], ContainerSockDir+":") || !strings.Contains(tmpfs[1], "uid=1000,gid=1000") || !strings.Contains(tmpfs[1], "noexec") {
+	if len(tmpfs) != 2 || tmpfs[0] != "/tmp:rw,nosuid,nodev,mode=1777" || tmpfs[1] != ContainerSockDir+":rw,nosuid,nodev,noexec,mode=1777" {
 		t.Errorf("tmpfs %v", tmpfs)
 	}
 	if got := argValue(args, "--label"); len(got) != 2 || got[0] != "conductor.daemon=d" || got[1] != "conductor.sandbox=agent" {

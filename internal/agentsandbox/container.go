@@ -99,6 +99,8 @@ const (
 	// LabelIdentityName is the identity as named (LabelIdentity is its
 	// key, safe in a filter).
 	LabelIdentityName = "conductor.identity-name"
+	// LabelRole marks a one-shot helper container (the HOME seed).
+	LabelRole = "conductor.role"
 )
 
 // Containers is the daemon's container backend: the engine, and every
@@ -447,27 +449,38 @@ type engineContainer struct {
 
 // list returns this daemon's containers (optionally for one identity key).
 func (c *Containers) list(ctx context.Context, key string) ([]engineContainer, error) {
-	args := []string{"ps", "-a", "--filter", "label=" + LabelSandbox + "=agent", "--filter", "label=" + LabelDaemon + "=" + c.DaemonID}
+	// The ids by label, then their details by `inspect`: the one template
+	// docker and podman render alike (their `ps --format` fields differ).
+	args := []string{"ps", "-a", "-q", "--no-trunc", "--filter", "label=" + LabelSandbox + "=agent", "--filter", "label=" + LabelDaemon + "=" + c.DaemonID}
 	if key != "" {
 		args = append(args, "--filter", "label="+LabelIdentity+"="+key)
 	}
 	for k, v := range c.Labels {
 		args = append(args, "--filter", "label="+k+"="+v)
 	}
-	args = append(args, "--format", `{{.Names}}	{{.State}}	{{.Label "`+LabelSpec+`"}}	{{.Label "`+LabelIdentity+`"}}	{{.Label "`+LabelPersistent+`"}}	{{.Label "`+LabelIdentityName+`"}}`)
 	out, err := c.Engine.Output(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	ids := strings.Fields(string(out))
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	label := func(k string) string { return `{{index .Config.Labels "` + k + `"}}` }
+	format := strings.Join([]string{"{{.Name}}", "{{.State.Status}}", label(LabelSpec), label(LabelIdentity), label(LabelPersistent), label(LabelIdentityName)}, "\t")
+	out, err = c.Engine.Output(ctx, append([]string{"inspect", "--type", "container", "--format", format}, ids...)...)
 	if err != nil {
 		return nil, err
 	}
 	var rows []engineContainer
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		f := strings.Split(line, "\t")
-		if len(f) < 5 || f[0] == "" {
+		if len(f) < 6 || f[0] == "" {
 			continue
 		}
-		r := engineContainer{Name: f[0], State: strings.ToLower(f[1]), Spec: f[2], Identity: f[3], Persistent: f[4] == "true", IdentityName: f[3]}
-		if len(f) > 5 && f[5] != "" {
-			r.IdentityName = f[5]
+		r := engineContainer{Name: strings.TrimPrefix(f[0], "/"), State: strings.ToLower(f[1]), Spec: f[2], Identity: f[3], Persistent: f[4] == "true", IdentityName: f[5]}
+		if r.IdentityName == "" {
+			r.IdentityName = r.Identity
 		}
 		rows = append(rows, r)
 	}
@@ -643,38 +656,51 @@ func (c *Containers) forget(name string) {
 	}
 }
 
-// ensureVolume creates identity's HOME volume and seeds it from the
-// prepared identity home, once.
+// ensureVolume creates identity's HOME volume if it has none, and seeds
+// it from the prepared identity home — on every container creation, not
+// only the volume's: the seed copies only what the volume lacks and gives
+// it to the agent's user, so a seed a dead daemon left half done is
+// finished here.
 func (c *Containers) ensureVolume(ctx context.Context, identity string, spec sandbox.AgentContainer, seed string) error {
 	vol := spec.HomeVolume
-	if _, err := c.Engine.Output(ctx, "volume", "inspect", vol); err == nil {
-		return nil
-	}
-	args := []string{"volume", "create"}
-	keys := make([]string, 0, len(spec.Labels))
-	for k := range spec.Labels {
-		if k != LabelSpec {
-			keys = append(keys, k)
+	created := false
+	if _, err := c.Engine.Output(ctx, "volume", "inspect", vol); err != nil {
+		args := []string{"volume", "create"}
+		keys := make([]string, 0, len(spec.Labels))
+		for k := range spec.Labels {
+			if k != LabelSpec {
+				keys = append(keys, k)
+			}
 		}
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		args = append(args, "--label", k+"="+spec.Labels[k])
-	}
-	if _, err := c.Engine.Output(ctx, append(args, vol)...); err != nil {
-		return fmt.Errorf("agentsandbox: create HOME volume: %w", err)
+		sort.Strings(keys)
+		for _, k := range keys {
+			args = append(args, "--label", k+"="+spec.Labels[k])
+		}
+		if _, err := c.Engine.Output(ctx, append(args, vol)...); err != nil {
+			return fmt.Errorf("agentsandbox: create HOME volume: %w", err)
+		}
+		created = true
+		c.logf("agent container: HOME volume %s created for %s", vol, identity)
 	}
 	seedSpec := spec
 	seedSpec.Name = c.containerPrefix() + IdentityKey(identity)
+	// A one-shot: one a dead daemon left behind (created, never run) is
+	// removed by the next one's Reconcile, as a per-launch container is.
+	seedSpec.Labels = map[string]string{}
+	for k, v := range spec.Labels {
+		seedSpec.Labels[k] = v
+	}
+	seedSpec.Labels[LabelPersistent], seedSpec.Labels[LabelRole] = "false", "seed"
 	sargs, err := seedSpec.SeedArgs(seed)
 	if err == nil {
 		_, err = c.Engine.Output(ctx, sargs[1:]...)
 	}
 	if err != nil {
-		_, _ = c.Engine.Output(ctx, "volume", "rm", vol)
+		if created {
+			_, _ = c.Engine.Output(ctx, "volume", "rm", vol)
+		}
 		return fmt.Errorf("agentsandbox: seed HOME volume %s: %w", vol, err)
 	}
-	c.logf("agent container: HOME volume %s created for %s", vol, identity)
 	return nil
 }
 

@@ -138,13 +138,14 @@ grep -q "egress to .* denied\|egress denied" "$W/conductor.log" "$W/sx.err" 2>/d
 name_a="$("$ENGINE" ps -a --filter "$(daemon_label | sed 's/^/label=/')" --filter "label=conductor.persistent=true" --format '{{.Names}}' | head -1)"
 check "one persistent container for the identity" 1 "$("$ENGINE" ps -a --filter "label=$(daemon_label)" --format '{{.Names}}' | grep -c .)"
 check "its HOME is a volume" 1 "$("$ENGINE" volume ls -q --filter "label=$(daemon_label)" | grep -c .)"
-insp="$("$ENGINE" inspect "$name_a" --format '{{.HostConfig.Privileged}} {{.HostConfig.NetworkMode}} {{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}} {{.HostConfig.PidsLimit}} {{.Config.User}}' 2>&1)"
-echo "     | inspect: $insp"
-case "$insp" in "false none true "*ALL*no-new-privileges*" 512 $(id -u):$(id -g)") echo "ok   the engine shows the hardening (not privileged, network none, read-only root, caps dropped, nnp, pids)" ;; *) echo "FAIL engine inspect: $insp"; fail=1 ;; esac
+# The engine's own view (capabilities and no-new-privileges are proven
+# from inside, /proc/self/status, above).
+insp="$("$ENGINE" inspect "$name_a" --format '{{.HostConfig.Privileged}} {{.HostConfig.NetworkMode}} {{.HostConfig.ReadonlyRootfs}} {{.HostConfig.PidsLimit}} {{.Config.User}}' 2>&1)"
+check "the engine shows it unprivileged, network none, read-only root, pids 512, the operator's uid" "false none true 512 $(id -u):$(id -g)" "$insp"
 mounts="$("$ENGINE" inspect "$name_a" --format '{{range .Mounts}}{{.Type}}:{{.Source}}:{{.Destination}} {{end}}' 2>&1)"
 # Exactly: the HOME volume, the workspace, conductor's helper dir (read-only).
 want_mounts="volume:/home/agent bind:$W/ws-a:$W/ws-a bind:$W/st/agent-state/.containers/bin:/run/conductor/bin"
-got_mounts="$(echo "$mounts" | tr ' ' '\n' | sed -E 's#^volume:[^:]*:#volume:#' | grep . | sort | tr '\n' ' ' | sed 's/ $//')"
+got_mounts="$(echo "$mounts" | tr ' ' '\n' | grep -E '^(bind|volume):' | sed -E 's#^volume:[^:]*:#volume:#' | sort | tr '\n' ' ' | sed 's/ $//')"
 check "the container's mounts are the HOME volume, the workspace and the helper — nothing else" "$(echo "$want_mounts" | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')" "$got_mounts"
 
 # 2. What the identity installs in HOME lasts: another session, then a

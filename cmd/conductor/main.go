@@ -1549,6 +1549,8 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 			holdContainerLease(conn, release)
 		}
 	case "sandbox-containers", "sandbox-archive":
+		// Removing an identity's containers waits on the engine.
+		_ = conn.SetDeadline(time.Now().Add(sandboxPolicyDeadline))
 		writeControlResp(conn, sandboxContainersResponse(ctx, conn, req, log))
 	case "retry":
 		if retry == nil {

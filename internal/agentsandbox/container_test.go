@@ -141,7 +141,19 @@ func (f *fakeEngine) Output(_ context.Context, args ...string) ([]byte, error) {
 				match = match && c.labels[k] == v
 			}
 			if match {
-				fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%s\n", name, c.state, c.labels[LabelSpec], c.labels[LabelIdentity], c.labels[LabelPersistent], c.labels[LabelIdentityName])
+				fmt.Fprintln(&b, "id-"+name)
+			}
+		}
+		return []byte(b.String()), nil
+	case "inspect":
+		var b strings.Builder
+		for _, a := range args {
+			name, ok := strings.CutPrefix(a, "id-")
+			if !ok {
+				continue
+			}
+			if c := f.containers[name]; c != nil {
+				fmt.Fprintf(&b, "/%s\t%s\t%s\t%s\t%s\t%s\n", name, c.state, c.labels[LabelSpec], c.labels[LabelIdentity], c.labels[LabelPersistent], c.labels[LabelIdentityName])
 			}
 		}
 		return []byte(b.String()), nil
@@ -293,6 +305,9 @@ func TestContainersPersistentReuse(t *testing.T) {
 	if err := checkSeed(seed); err != nil {
 		t.Error(err)
 	}
+	if l := labelsOf(seed); l[LabelPersistent] != "false" || l[LabelRole] != "seed" || l[LabelDaemon] != "d1" || l["conductor.test"] != "unit" {
+		t.Errorf("seed labels %v: a seed a dead daemon leaves must be reconciled away", l)
+	}
 	if got := flagVals(e.ran("create")[0], "--mount"); got[0] != "type=volume,src="+vol+",dst="+sandbox.ContainerHome {
 		t.Errorf("HOME mount %v", got)
 	}
@@ -325,6 +340,9 @@ func TestContainersPersistentReuse(t *testing.T) {
 	defer rel3()
 	if p3.Container.Session.Name != name || e.stateOf(name) != "running" || len(e.ran("create")) != 1 {
 		t.Error("a stopped container was not restarted")
+	}
+	if len(e.ran("run")) != 1 {
+		t.Error("a restart re-seeded (only a container's creation seeds)")
 	}
 }
 
@@ -387,6 +405,9 @@ func TestContainersSpecChange(t *testing.T) {
 	}
 	if len(e.ran("volume", "create")) != 1 {
 		t.Error("the HOME volume was recreated")
+	}
+	if len(e.ran("run")) != 2 {
+		t.Errorf("a new container's HOME was not seeded (%d seeds for 2 creations)", len(e.ran("run")))
 	}
 }
 
