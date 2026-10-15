@@ -44,10 +44,12 @@ func (s *MemStore) Mint(_ context.Context, g GrantSpec) (GrantSpec, error) {
 	}
 	g.ID = NewID()
 	g.Issued = now
+	g.State = ""
 	g = clone(g)
-	s.grants[g.ID] = &entry{spec: g}
+	e := &entry{spec: g}
+	s.grants[g.ID] = e
 	s.sweepLocked(now)
-	return clone(g), nil
+	return e.out(now), nil
 }
 
 // Get implements Store.
@@ -58,7 +60,7 @@ func (s *MemStore) Get(_ context.Context, id string) (GrantSpec, error) {
 	if !ok {
 		return GrantSpec{}, ErrNotFound
 	}
-	return clone(e.spec), nil
+	return e.out(s.now()), nil
 }
 
 // Find implements Store.
@@ -69,7 +71,7 @@ func (s *MemStore) Find(_ context.Context, p Presented) ([]GrantSpec, error) {
 	var out []GrantSpec
 	for _, e := range s.grants {
 		if e.liveErr(now) == nil && e.spec.Matches(p) {
-			out = append(out, clone(e.spec))
+			out = append(out, e.out(now))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -98,7 +100,7 @@ func (s *MemStore) Consume(_ context.Context, id string, p Presented) (GrantSpec
 	if e.spec.SingleUse {
 		e.used = true
 	}
-	return clone(e.spec), nil
+	return e.out(s.now()), nil
 }
 
 // Revoke implements Store.
@@ -120,13 +122,57 @@ func (s *MemStore) ByCase(_ context.Context, caseID string) ([]GrantSpec, error)
 	var out []GrantSpec
 	for _, e := range s.grants {
 		if caseID != "" && e.spec.CaseID == caseID {
-			out = append(out, clone(e.spec))
+			out = append(out, e.out(s.now()))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Issued.Before(out[j].Issued) || out[i].Issued.Equal(out[j].Issued) && out[i].ID < out[j].ID
 	})
 	return out, nil
+}
+
+// out is the caller's copy of a stored grant, with State filled in.
+// Near implements Store.
+func (s *MemStore) Near(_ context.Context, p Presented) ([]GrantSpec, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	var out []GrantSpec
+	for _, e := range s.grants {
+		g := e.spec
+		if g.Tool != p.Tool {
+			continue
+		}
+		if g.AgentID != "" && g.AgentID != p.AgentID {
+			continue
+		}
+		if g.Dispatch != "" && g.Dispatch != p.Dispatch {
+			continue
+		}
+		out = append(out, e.out(now))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].Expiry.Equal(out[j].Expiry) {
+			return out[i].Expiry.Before(out[j].Expiry)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
+}
+
+func (e *entry) out(now time.Time) GrantSpec {
+	g := clone(e.spec)
+	switch {
+	case e.revoked:
+		g.State = StateRevoked
+	case e.used:
+		g.State = StateUsed
+	case !now.Before(e.spec.Expiry):
+		g.State = StateExpired
+	default:
+		g.State = StateLive
+	}
+	return g
 }
 
 func (e *entry) liveErr(now time.Time) error {

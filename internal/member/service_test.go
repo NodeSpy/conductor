@@ -2,6 +2,7 @@ package member
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -468,40 +469,98 @@ func TestMemoryWritesAreCommitsAndConfined(t *testing.T) {
 	}
 }
 
-func TestProposeCommandHashesFromOwnCwd(t *testing.T) {
+// digestJail is a jail seam whose DigestFile answers from a table keyed by
+// identity and path — the bytes the BROKER sees, which need not exist in the
+// session's workspace at all (a confined plan writes into the copy-on-write
+// layer).
+type digestJail struct {
+	sums  map[string]string // identity + "\x00" + path → sha256
+	asked []string
+}
+
+func (j *digestJail) Active() bool          { return true }
+func (j *digestJail) ArchiveCwd(string) int { return 0 }
+func (j *digestJail) DigestFile(identity, path string) (string, error) {
+	j.asked = append(j.asked, identity+" "+path)
+	if s, ok := j.sums[identity+"\x00"+path]; ok {
+		return s, nil
+	}
+	return "", fmt.Errorf("no such file in %s's view: %s", identity, path)
+}
+
+// Without the jail a host-command proposal is refused: no broker would ever
+// consume its grant.
+func TestProposeCommandNeedsTheJail(t *testing.T) {
 	f := newSvc(t)
 	ctx := context.Background()
 	f.svc.Tick(ctx, "sre")
-	w, err := f.svc.Spawn(ctx, homeCaller(f), SpawnRequest{Brief: "apply the plan"})
-	if err != nil {
-		t.Fatal(err)
+	w, _ := f.svc.Spawn(ctx, homeCaller(f), SpawnRequest{Brief: "apply"})
+	wc := Actor{Member: "sre", Role: config.MemberRoleWorker, Dispatch: w.Dispatch, CaseID: w.CaseID}
+	_ = os.WriteFile(filepath.Join(w.Cwd, "plan.tfplan"), []byte("PLAN"), 0o600) // present in the workspace — irrelevant
+	for _, files := range [][]string{{"plan.tfplan"}, nil} {
+		if _, err := f.svc.ProposeCommand(wc, "terraform", []string{"apply", "plan.tfplan"}, files, ""); !errors.Is(err, ErrNoJail) {
+			t.Fatalf("files %v: want ErrNoJail, got %v", files, err)
+		}
 	}
-	if err := os.WriteFile(filepath.Join(w.Cwd, "plan.tfplan"), []byte("PLAN"), 0o600); err != nil {
-		t.Fatal(err)
+	if len(f.st.Member("sre").Proposals) != 0 {
+		t.Fatal("a proposal was recorded without the jail")
 	}
+}
+
+// With the jail, files are hashed THROUGH it, for the identity the grant
+// will bind to: a cli worker by its dispatch, the home session by its jail
+// identity — never a workspace read, never paseo's agent id.
+func TestProposeCommandHashesThroughTheJail(t *testing.T) {
+	f := newSvc(t)
+	ctx := context.Background()
+	f.svc.Tick(ctx, "sre")
+	j := &digestJail{sums: map[string]string{}}
+	f.svc.Jail = j
+	home := f.st.Member("sre").Home
+	w, _ := f.svc.Spawn(ctx, homeCaller(f), SpawnRequest{Brief: "apply the plan"})
+	sumW := strings.Repeat("a", 64)
+	sumH := strings.Repeat("b", 64)
+	j.sums[w.Dispatch+"\x00plan.tfplan"] = sumW
+	j.sums[SessionIdentity("sre", home.ID)+"\x00plan.tfplan"] = sumH
+
 	wc := Actor{Member: "sre", Role: config.MemberRoleWorker, Dispatch: w.Dispatch, CaseID: w.CaseID}
 	p, err := f.svc.ProposeCommand(wc, "terraform", []string{"apply", "plan.tfplan"}, []string{"plan.tfplan"}, "apply")
 	if err != nil {
 		t.Fatal(err)
 	}
-	sum, _ := fileSHA(filepath.Join(w.Cwd, "plan.tfplan"))
-	if p.Files["plan.tfplan"] != sum || p.Kind != "command" || p.Status != "pending" || p.Dispatch != w.Dispatch {
-		t.Fatalf("proposal: %+v", p)
+	if p.Files["plan.tfplan"] != sumW || p.AgentID != "" || p.Dispatch != w.Dispatch || p.Kind != "command" || p.Status != "pending" {
+		t.Fatalf("worker proposal: %+v", p)
 	}
-	outside := filepath.Join(t.TempDir(), "secret")
-	_ = os.WriteFile(outside, []byte("x"), 0o600)
-	_ = os.Symlink(outside, filepath.Join(w.Cwd, "link"))
-	for _, bad := range [][]string{{"../../etc/passwd"}, {outside}, {"link"}} {
-		if _, err := f.svc.ProposeCommand(wc, "terraform", []string{"apply"}, bad, ""); err == nil {
-			t.Errorf("hashed a file outside the cwd: %v", bad)
-		}
+	ph, err := f.svc.ProposeCommand(Actor{Member: "sre", Role: config.MemberRoleHome, Dispatch: home.Dispatch}, "terraform", []string{"apply", "plan.tfplan"}, []string{"plan.tfplan"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ph.Files["plan.tfplan"] != sumH || ph.AgentID != SessionIdentity("sre", home.ID) || ph.AgentID == home.AgentID {
+		t.Fatalf("home proposal: %+v", ph)
+	}
+	// A file the broker cannot see, a bad digest, a stale session: refused.
+	if _, err := f.svc.ProposeCommand(wc, "terraform", []string{"apply"}, []string{"missing.tfplan"}, ""); err == nil {
+		t.Error("a file the broker cannot see was pinned")
+	}
+	j.sums[w.Dispatch+"\x00weird"] = "NOT-A-SHA"
+	if _, err := f.svc.ProposeCommand(wc, "terraform", []string{"apply"}, []string{"weird"}, ""); err == nil {
+		t.Error("a non-SHA-256 digest was accepted")
+	}
+	if _, err := f.svc.ProposeCommand(Actor{Member: "sre", Role: config.MemberRoleHome, Dispatch: "stale"}, "terraform", nil, nil, ""); err == nil {
+		t.Error("a stale home session proposed a command")
 	}
 	if _, err := f.svc.ProposeCommand(wc, "/bin/sh", nil, nil, ""); err == nil {
 		t.Error("tool path accepted")
 	}
 	// The home session heard about the worker's proposal.
-	last := f.st.Member("sre").Inbox
-	if !strings.Contains(last[len(last)-1].Text, p.ID) {
+	inbox := f.st.Member("sre").Inbox
+	found := false
+	for _, m := range inbox {
+		if strings.Contains(m.Text, p.ID) {
+			found = true
+		}
+	}
+	if !found {
 		t.Fatal("home not told about the worker's proposal")
 	}
 }
@@ -555,37 +614,6 @@ func TestIdentityForCwd(t *testing.T) {
 	}
 	if len(f.home.retiredCwds) != 1 || f.home.retiredCwds[0] != home.Cwd {
 		t.Fatalf("retire did not pass the session cwd (the jail archives by it): %v", f.home.retiredCwds)
-	}
-}
-
-// A home session's command grant binds to its JAIL identity, never to
-// paseo's agent id; a cli worker's binds to its dispatch.
-func TestCommandGrantBindsToJailIdentity(t *testing.T) {
-	f := newSvc(t)
-	ctx := context.Background()
-	f.svc.Tick(ctx, "sre")
-	home := f.st.Member("sre").Home
-	if err := os.WriteFile(filepath.Join(home.Cwd, "plan.tfplan"), []byte("P"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	p, err := f.svc.ProposeCommand(Actor{Member: "sre", Role: config.MemberRoleHome, Dispatch: home.Dispatch}, "terraform", []string{"apply", "plan.tfplan"}, []string{"plan.tfplan"}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.AgentID != SessionIdentity("sre", home.ID) || p.AgentID == home.AgentID {
-		t.Fatalf("home grant identity = %q (paseo id %q)", p.AgentID, home.AgentID)
-	}
-	// A home caller whose dispatch is not the live session's resolves nothing.
-	if _, err := f.svc.ProposeCommand(Actor{Member: "sre", Role: config.MemberRoleHome, Dispatch: "stale"}, "terraform", nil, nil, ""); err == nil {
-		t.Fatal("a stale home session proposed a command")
-	}
-	w, _ := f.svc.Spawn(ctx, homeCaller(f), SpawnRequest{Brief: "cli"})
-	pw, err := f.svc.ProposeCommand(Actor{Member: "sre", Role: config.MemberRoleWorker, Dispatch: w.Dispatch, CaseID: w.CaseID}, "terraform", []string{"plan"}, nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pw.AgentID != "" || pw.Dispatch != w.Dispatch {
-		t.Fatalf("cli worker grant binding: agent %q dispatch %q", pw.AgentID, pw.Dispatch)
 	}
 }
 

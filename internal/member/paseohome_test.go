@@ -42,7 +42,8 @@ type recJail struct {
 	archived []string
 }
 
-func (j *recJail) Active() bool { return j.active }
+func (j *recJail) Active() bool                              { return j.active }
+func (j *recJail) DigestFile(string, string) (string, error) { return "", ErrNoJail }
 func (j *recJail) ArchiveCwd(cwd string) int {
 	j.archived = append(j.archived, cwd)
 	return 1

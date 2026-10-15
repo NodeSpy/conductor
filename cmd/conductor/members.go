@@ -48,7 +48,7 @@ func buildMembers(cfg *config.Config, st *store.Store, runner *flow.Runner, reg 
 	jail := jailSeam()
 	gate := &member.Gate{Cfg: cfgFn, Ledger: st, Jail: jail}
 	audit := func(e map[string]any) { st.Audit(e) }
-	exec := &member.Executor{Cfg: cfgFn, Ledger: st, Gate: gate, Grants: grantStore, RunVerb: runner.RunSkillVerb, Audit: audit}
+	exec := &member.Executor{Cfg: cfgFn, Ledger: st, Gate: gate, Grants: grantStore, RunVerb: runner.RunSkillVerb, Audit: audit, Jail: jail}
 	home := &member.PaseoHome{
 		Cfg: cfgFn,
 		For: func(rt string) (member.PaseoDispatcher, error) {
@@ -76,7 +76,7 @@ func buildMembers(cfg *config.Config, st *store.Store, runner *flow.Runner, reg 
 			_, err := runManualTrigger(ctx, manual, controlRequest{Name: trig, Inputs: inputs, HistoryID: hid}, eng.Emit)
 			return err
 		}),
-		Log: logf, Audit: audit,
+		Log: logf, Audit: audit, Jail: jail,
 	}
 	registerJailIdentity(svc)
 	gate.OnProposal = svc.OnProposal
@@ -97,6 +97,7 @@ func buildMembers(cfg *config.Config, st *store.Store, runner *flow.Runner, reg 
 //	return member.JailFuncs{
 //		IsActive: func() bool { return <the jail is enabled for paseo sessions> },
 //		Archive:  controller.ArchivePaseoCwd,
+//		Digest:   <the jail's "sha256 of path as the broker reads it, for identity">,
 //	}
 func jailSeam() member.Jail { return member.NoJail{} }
 

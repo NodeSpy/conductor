@@ -16,6 +16,31 @@
 // file is the broker's business, and a path the gate chose would be a path an
 // agent could race.
 //
+// # What "the same command" means
+//
+// Both sides parse argv with ParseArgv and compare with Argv.Equal. Exactly:
+//
+//   - Words — every token that is not a self-contained `-k=v` / `--k=v` flag,
+//     INCLUDING a bare `-flag` and the token after it — must be equal, in
+//     order. So reordering words, or a bare `-var-file a.tfvars` pair, is a
+//     different command.
+//   - `-k=v` flags are compared as a SET of names: their position among the
+//     words and relative to each other does not matter (terraform reads them
+//     that way too). Per name, the VALUES must be equal in order, so a
+//     repeated flag's value order matters.
+//   - Any extra, missing or changed token — word, flag name or flag value —
+//     is a mismatch.
+//
+// So it is NOT true that "flag order can't change": `-a=1 -b=2` and
+// `-b=2 -a=1` are the same command; `-a=1 -a=2` and `-a=2 -a=1` are not.
+//
+// # Telling a broker refusal apart
+//
+// Find returns only live, matching grants. Near returns every grant for the
+// presenting agent and tool regardless of argv or liveness, with State set,
+// and Explain says why one of them does not apply (ErrMismatch, ErrExpired,
+// ErrRevoked, ErrConsumed) — so a refusal can name its reason.
+//
 // This package has no dependencies inside conductor, so both sides can import
 // it without a cycle.
 package grant
@@ -140,6 +165,36 @@ type GrantSpec struct {
 	CaseID string `json:"case_id,omitempty"`
 	// Issued is when the store accepted the grant.
 	Issued time.Time `json:"issued"`
+	// State is the grant's lifecycle state as the store last saw it — "live",
+	// "used", "revoked" or "expired" — filled on the copies a store RETURNS
+	// (Get, Near, Find, ByCase, Consume). Read-only: Mint ignores it.
+	State string `json:"state,omitempty"`
+}
+
+// Grant states (GrantSpec.State).
+const (
+	StateLive    = "live"
+	StateUsed    = "used"
+	StateRevoked = "revoked"
+	StateExpired = "expired"
+)
+
+// Explain reports why grant g does not apply to presented command p at time
+// now: ErrRevoked, ErrConsumed or ErrExpired (from its State, and its Expiry),
+// ErrMismatch when it is not this command for this agent, or nil when it
+// applies. It reads only g and p — call it on Near's results.
+func Explain(g GrantSpec, p Presented, now time.Time) error {
+	switch {
+	case g.State == StateRevoked:
+		return ErrRevoked
+	case g.State == StateUsed:
+		return ErrConsumed
+	case g.State == StateExpired || !now.Before(g.Expiry):
+		return ErrExpired
+	case !g.Matches(p):
+		return ErrMismatch
+	}
+	return nil
 }
 
 // Presented is what the broker knows about a command it is deciding on.
@@ -267,6 +322,11 @@ type Store interface {
 	Revoke(ctx context.Context, id string) error
 	// ByCase lists every grant minted for a case, live or not.
 	ByCase(ctx context.Context, caseID string) ([]GrantSpec, error)
+	// Near lists the grants for p's AGENT and TOOL — every binding that is set
+	// on a grant must match p — regardless of argv match or liveness, with
+	// State set, soonest expiry first. It is how the broker says WHY nothing
+	// applied (Explain), where Find only answers whether something did.
+	Near(ctx context.Context, p Presented) ([]GrantSpec, error)
 }
 
 // NewID returns a random grant id.

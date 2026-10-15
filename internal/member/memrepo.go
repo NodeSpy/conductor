@@ -486,27 +486,3 @@ func (r *Repo) refreshLocked(ctx context.Context) {
 		_, _ = r.git(ctx, wt, "checkout", "-q", "--detach", "main")
 	}
 }
-
-// resolveWithin resolves a path an agent names against its cwd and refuses
-// anything that escapes it (symlinks included).
-func resolveWithin(cwd, p string) (string, error) {
-	if strings.TrimSpace(p) == "" {
-		return "", fmt.Errorf("empty path")
-	}
-	abs := p
-	if !filepath.IsAbs(abs) {
-		abs = filepath.Join(cwd, p)
-	}
-	real, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return "", err
-	}
-	root, err := filepath.EvalSymlinks(cwd)
-	if err != nil {
-		return "", err
-	}
-	if real != root && !strings.HasPrefix(real, root+string(filepath.Separator)) {
-		return "", fmt.Errorf("%s is outside the session's working directory", p)
-	}
-	return real, nil
-}

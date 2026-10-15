@@ -56,15 +56,19 @@ Nothing an agent sends can set them.
 
 ## Agent jail integration (#160 + #175)
 
-Behind `member.Jail` until both are on main. The switch, in
+Behind `member.Jail` (`Active`, `ArchiveCwd`, `DigestFile`) until both are on main. The switch, in
 `cmd/conductor/members.go`:
 
 ```go
 func jailSeam() member.Jail {
-	return member.JailFuncs{IsActive: <jail enabled for paseo sessions>, Archive: controller.ArchivePaseoCwd}
+	return member.JailFuncs{IsActive: <jail enabled for paseo sessions>, Archive: controller.ArchivePaseoCwd, Digest: <broker-view sha256>}
 }
 func registerJailIdentity(svc *member.Service) { controller.SetPaseoIdentity(svc.IdentityForCwd) }
 ```
+
+`JailFuncs` also takes `Digest` (the jail's "SHA-256 of this path as the broker
+reads it, for this identity"): command proposals and grant minting hash through
+it, and `NoJail.DigestFile` refuses, so no infra grant exists before the jail.
 
 With it: promotion takes effect; the home session launches on paseo's
 `conductor` provider (`conductor paseo install-plugin`); retiring a session

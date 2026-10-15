@@ -86,6 +86,9 @@ type Service struct {
 	// delivered turn (default 30m); HandoffTimeout bounds the old session's
 	// handoff turn at rotation (default 10m).
 	PollEvery, SendTimeout, HandoffTimeout time.Duration
+	// Jail is the agent jail seam (NoJail until #154 lands): command
+	// proposals hash their files through it.
+	Jail Jail
 
 	mu       sync.Mutex
 	failedAt map[string]time.Time // last failed home launch, per member (backoff)
@@ -1029,8 +1032,8 @@ func (s *Service) ProposeCommand(c Actor, tool string, argv, files []string, sum
 		return store.Proposal{}, fmt.Errorf("command.%s is classified never for member %s", tool, c.Member)
 	}
 	rec := s.Ledger.Member(c.Member)
-	cwd := ""
 	agentID := ""
+	known := false
 	switch c.Role {
 	// A grant binds to the identity the BROKER will present: for a paseo
 	// session (the home, a hand-off worker) that is the jail identity the
@@ -1038,32 +1041,53 @@ func (s *Service) ProposeCommand(c Actor, tool string, argv, files []string, sum
 	// a cli worker its dispatch id (Dispatch, below).
 	case config.MemberRoleHome:
 		if rec.Home != nil && rec.Home.Dispatch == c.Dispatch {
-			cwd, agentID = rec.Home.Cwd, SessionIdentity(c.Member, rec.Home.ID)
+			known, agentID = true, SessionIdentity(c.Member, rec.Home.ID)
 		}
 	case config.MemberRoleWorker:
 		for _, w := range rec.Workers {
 			if w.Dispatch == c.Dispatch {
-				cwd = w.Cwd
+				known = true
 				if w.Handoff {
 					agentID = SessionIdentity(c.Member, w.ID)
 				}
 			}
 		}
 	}
-	if cwd == "" {
-		return store.Proposal{}, errors.New("cannot resolve the caller's working directory")
+	if !known {
+		return store.Proposal{}, errors.New("cannot resolve the calling session")
+	}
+	// The files are hashed AS THE BROKER WILL READ THEM — through the jail,
+	// for the identity the grant will bind to — so the operator approves the
+	// bytes that will actually run. Without the jail there is no broker, and
+	// the proposal is refused (ErrNoJail): an infra grant never gets minted
+	// against bytes nothing checks.
+	jail := s.Jail
+	if jail == nil {
+		jail = NoJail{}
+	}
+	ident := agentID
+	if ident == "" {
+		ident = c.Dispatch
 	}
 	sums := map[string]string{}
 	for _, f := range files {
-		abs, err := resolveWithin(cwd, f)
-		if err != nil {
-			return store.Proposal{}, err
+		if strings.TrimSpace(f) == "" || strings.ContainsRune(f, 0) {
+			return store.Proposal{}, fmt.Errorf("bad file path %q", f)
 		}
-		sum, err := fileSHA(abs)
+		sum, err := jail.DigestFile(ident, f)
 		if err != nil {
 			return store.Proposal{}, fmt.Errorf("hash %s: %w", f, err)
 		}
+		if !validSHA256(sum) {
+			return store.Proposal{}, fmt.Errorf("hash %s: the jail returned %q, not a SHA-256", f, sum)
+		}
 		sums[f] = sum
+	}
+	if len(files) == 0 {
+		// Even with nothing to pin, a command grant needs a broker to consume it.
+		if !jail.Active() {
+			return store.Proposal{}, ErrNoJail
+		}
 	}
 	opts := map[string]any{"tool": tool, "argv": argv, "files": sums}
 	digest, err := ActionDigest(c.Member, "command", "command."+tool, opts)

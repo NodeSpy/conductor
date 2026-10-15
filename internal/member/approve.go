@@ -134,6 +134,9 @@ type Executor struct {
 	Audit func(entry map[string]any)
 	// GrantTTL bounds a minted grant (default 1h).
 	GrantTTL time.Duration
+	// Jail re-hashes a command proposal's files at mint time, as the broker
+	// will read them (nil = NoJail: no grant is minted).
+	Jail Jail
 }
 
 func (x *Executor) now() time.Time {
@@ -303,6 +306,28 @@ func (x *Executor) mintGrant(ctx context.Context, d Decision, p store.Proposal) 
 		_ = x.setStatus(d.Member, p.ID, "failed", "no grant store", nil)
 		return p, errors.New("no grant store on this daemon")
 	}
+	// Re-hash every pinned file through the jail, as the broker will read it:
+	// the operator approved the bytes recorded at proposal, so a file that
+	// changed since — or no jail to ask — mints nothing.
+	jail := x.Jail
+	if jail == nil {
+		jail = NoJail{}
+	}
+	ident := p.AgentID
+	if ident == "" {
+		ident = p.Dispatch
+	}
+	for path, sum := range p.Files {
+		now, err := jail.DigestFile(ident, path)
+		if err == nil && now != sum {
+			err = fmt.Errorf("%s changed since it was proposed (approved %s…, now %s…)", path, sum[:12], short(now))
+		}
+		if err != nil {
+			_ = x.setStatus(d.Member, p.ID, "failed", "no grant minted: "+err.Error(), nil)
+			p.Status, p.Reason = "failed", "no grant minted: "+err.Error()
+			return p, fmt.Errorf("proposal %s: no grant minted: %w", p.ID, err)
+		}
+	}
 	ttl := x.GrantTTL
 	if ttl <= 0 {
 		ttl = time.Hour
@@ -348,4 +373,11 @@ func (x *Executor) ExpireProposals(member string) {
 		}
 		return nil
 	})
+}
+
+func short(s string) string {
+	if len(s) > 12 {
+		return s[:12]
+	}
+	return s
 }

@@ -21,6 +21,9 @@ type fixedJail bool
 
 func (j fixedJail) Active() bool          { return bool(j) }
 func (j fixedJail) ArchiveCwd(string) int { return 0 }
+func (j fixedJail) DigestFile(string, string) (string, error) {
+	return "", ErrNoJail
+}
 
 var gateNow = time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 
@@ -453,9 +456,16 @@ func TestApproveCommandMintsGrant(t *testing.T) {
 		}}
 		return nil
 	})
+	j := &digestJail{sums: map[string]string{"d-w\x00plan.tfplan": strings.Repeat("a", 64)}}
+	// "agent-w" is the identity the proposal binds to; the jail answers for it.
+	j.sums["agent-w\x00plan.tfplan"] = strings.Repeat("a", 64)
+	f.x.Jail = j
 	out, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, pid, "approve")})
 	if err != nil || out.Status != "executed" || out.Grant == "" {
 		t.Fatalf("command approve: %+v %v", out, err)
+	}
+	if len(j.asked) != 1 || j.asked[0] != "agent-w plan.tfplan" {
+		t.Fatalf("mint did not re-hash through the jail for the bound identity: %v", j.asked)
 	}
 	g, err := f.grants.Get(context.Background(), out.Grant)
 	if err != nil {
@@ -616,5 +626,41 @@ func TestSignatureNamespaceIsBound(t *testing.T) {
 	sig, _ := os.ReadFile(msg + ".sig")
 	if _, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: string(sig)}); err == nil {
 		t.Fatal("a git-namespace signature approved a member proposal")
+	}
+}
+
+// A command grant is minted only through the jail, and only for the bytes
+// that were approved.
+func TestCommandGrantMintRechecksThroughTheJail(t *testing.T) {
+	newCmd := func(f *execFixture) string {
+		var pid string
+		_ = f.st.UpdateMember("sre", func(r *store.MemberRecord) error {
+			pid = r.NextID("p")
+			if r.Proposals == nil {
+				r.Proposals = map[string]*store.Proposal{}
+			}
+			r.Proposals[pid] = &store.Proposal{ID: pid, Kind: "command", Tier: config.TierPropose, Tool: "terraform",
+				Argv: []string{"apply", "plan.tfplan"}, Files: map[string]string{"plan.tfplan": strings.Repeat("a", 64)},
+				Digest: "d-" + pid, Dispatch: "d-w", Status: "pending", Created: gateNow, Expires: gateNow.Add(time.Hour)}
+			return nil
+		})
+		return pid
+	}
+	f := newExecFixture(t, testMember())
+	// No jail: nothing minted, and the proposal says why.
+	pid := newCmd(f)
+	out, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, pid, "approve")})
+	if err == nil || out.Grant != "" || out.Status != "failed" {
+		t.Fatalf("minted without the jail: %+v %v", out, err)
+	}
+	// The plan changed after it was proposed: nothing minted.
+	f.x.Jail = &digestJail{sums: map[string]string{"d-w\x00plan.tfplan": strings.Repeat("c", 64)}}
+	pid = newCmd(f)
+	out, err = f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, pid, "approve")})
+	if err == nil || out.Grant != "" || !strings.Contains(out.Reason, "changed since it was proposed") {
+		t.Fatalf("minted for changed bytes: %+v %v", out, err)
+	}
+	if g, _ := f.grants.ByCase(context.Background(), ""); len(g) != 0 {
+		t.Fatal("a grant exists")
 	}
 }

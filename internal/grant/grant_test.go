@@ -298,3 +298,94 @@ func TestParseArgv(t *testing.T) {
 		t.Fatalf("edge tokens: %+v", z)
 	}
 }
+
+// Near returns this agent's and tool's grants whatever their argv or state,
+// so the broker can say WHY none applied.
+func TestNearAndExplain(t *testing.T) {
+	now := t0
+	s := NewMemStoreClock(clock(&now))
+	ctx := context.Background()
+	mint := func(mut func(*GrantSpec)) GrantSpec {
+		g := applySpec()
+		if mut != nil {
+			mut(&g)
+		}
+		out, err := s.Mint(ctx, g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.State != StateLive {
+			t.Fatalf("minted state %q", out.State)
+		}
+		return out
+	}
+	live := mint(nil)
+	other := mint(func(g *GrantSpec) { g.Argv = Argv{Words: []string{"apply", "other.tfplan"}} })
+	revoked := mint(nil)
+	_ = s.Revoke(ctx, revoked.ID)
+	used := mint(nil)
+	if _, err := s.Consume(ctx, used.ID, applyPresented()); err != nil {
+		t.Fatal(err)
+	}
+	expiring := mint(func(g *GrantSpec) { g.Expiry = t0.Add(time.Minute) })
+	mint(func(g *GrantSpec) { g.AgentID = "agent-2" })  // another agent: never near
+	mint(func(g *GrantSpec) { g.Tool = "tofu" })        // another tool: never near
+	mint(func(g *GrantSpec) { g.Dispatch = "d-other" }) // a dispatch binding that does not match
+	now = t0.Add(2 * time.Minute)
+
+	near, err := s.Near(ctx, applyPresented())
+	if err != nil {
+		t.Fatal(err)
+	}
+	why := map[string]error{}
+	for _, g := range near {
+		why[g.ID] = Explain(g, applyPresented(), now)
+	}
+	want := map[string]error{live.ID: nil, other.ID: ErrMismatch, revoked.ID: ErrRevoked, used.ID: ErrConsumed, expiring.ID: ErrExpired}
+	if len(near) != len(want) {
+		t.Fatalf("Near returned %d grants, want %d: %+v", len(near), len(want), near)
+	}
+	for id, w := range want {
+		if got, ok := why[id]; !ok || got != w {
+			t.Errorf("Explain(%s) = %v, want %v", id, got, w)
+		}
+	}
+	if near[0].ID != expiring.ID {
+		t.Fatalf("Near not soonest-expiry first: %s", near[0].ID)
+	}
+	// Find agrees with Explain == nil.
+	found, _ := s.Find(ctx, applyPresented())
+	if len(found) != 1 || found[0].ID != live.ID || found[0].State != StateLive {
+		t.Fatalf("Find: %+v", found)
+	}
+	if g, _ := s.Get(ctx, revoked.ID); g.State != StateRevoked {
+		t.Fatalf("Get state %q", g.State)
+	}
+}
+
+// The argv comparison exactly as the package doc states it.
+func TestArgvSemanticsAsDocumented(t *testing.T) {
+	eq := func(a, b []string) bool { return ParseArgv(a).Equal(ParseArgv(b)) }
+	same := [][2][]string{
+		{{"apply", "-a=1", "-b=2", "p"}, {"apply", "-b=2", "-a=1", "p"}}, // -k=v flags: a set
+		{{"-a=1", "apply", "p"}, {"apply", "p", "-a=1"}},                 // …wherever they sit
+	}
+	differ := [][2][]string{
+		{{"apply", "p", "q"}, {"apply", "q", "p"}},                           // word order
+		{{"apply", "-var-file", "a", "p"}, {"apply", "p", "-var-file", "a"}}, // a bare -flag value pair is words
+		{{"apply", "-a=1", "-a=2"}, {"apply", "-a=2", "-a=1"}},               // repeated-flag value order
+		{{"apply", "p"}, {"apply", "p", "-auto-approve"}},                    // an extra token
+		{{"apply", "-a=1"}, {"apply", "-a=2"}},                               // a changed value
+		{{"apply", "-a=1"}, {"apply", "-b=1"}},                               // a changed name
+	}
+	for _, c := range same {
+		if !eq(c[0], c[1]) {
+			t.Errorf("%v and %v should be the same command", c[0], c[1])
+		}
+	}
+	for _, c := range differ {
+		if eq(c[0], c[1]) {
+			t.Errorf("%v and %v should differ", c[0], c[1])
+		}
+	}
+}

@@ -200,12 +200,17 @@ session proposes the exact command:
 conductor member propose-command --file plan.tfplan -- terraform apply plan.tfplan
 ```
 
-Conductor hashes the named files **from the session's own working directory**
-(paths outside it are refused) and records the proposal. On approval it mints a
-**grant** (`internal/grant`): that tool and argv, bound to the session's jail
-identity (or a cli worker's dispatch), pinned to the files' SHA-256, single-use,
-short-lived. The agent jail's host-command broker consumes it — checking the
-file digests itself at use time — and nothing else lifts a broker refusal.
+Conductor hashes the named files **as the jail's broker will read them** —
+through the jail, for the identity the grant will bind to (a confined
+`terraform plan -out` writes its planfile into the dispatch's copy-on-write
+layer, not the workspace) — and records the proposal. On approval it hashes
+them again; if they changed it mints nothing. Otherwise it mints a **grant**
+(`internal/grant`): that tool and argv, bound to the session's jail identity
+(or a cli worker's dispatch), pinned to the files' SHA-256, single-use,
+short-lived. The broker consumes it — checking the file digests itself at use
+time — and nothing else lifts a broker refusal. **Without the jail, a
+host-command proposal is refused outright**: there is no broker to consume a
+grant, so none is ever minted.
 
 ### Approvals — how they are authenticated
 

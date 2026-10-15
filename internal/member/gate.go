@@ -59,7 +59,19 @@ type Jail interface {
 	// later session/load there), returning how many — called when a home
 	// session is rotated out or a hand-off worker is retired.
 	ArchiveCwd(cwd string) int
+	// DigestFile is the SHA-256 (lowercase hex) of the file at path AS THE
+	// BROKER WILL READ IT for the agent with jail identity `identity` — a
+	// confined `terraform plan -out` writes into the dispatch's copy-on-write
+	// layer, not the workspace, so hashing a workspace path would pin bytes
+	// the broker never sees. path is as the agent names it (relative to its
+	// cwd). An error refuses the proposal.
+	DigestFile(identity, path string) (string, error)
 }
+
+// ErrNoJail is NoJail.DigestFile's answer: without the jail there is no
+// broker to consume a grant, so a host-command proposal is refused rather
+// than recorded against bytes nothing will check.
+var ErrNoJail = errors.New("host-command proposals need the agent jail (#154): without it no broker consumes a grant, so none is minted")
 
 // NoJail is the jail seam's value before #160/#175 land.
 type NoJail struct{}
@@ -70,10 +82,22 @@ func (NoJail) Active() bool { return false }
 // ArchiveCwd implements Jail.
 func (NoJail) ArchiveCwd(string) int { return 0 }
 
+// DigestFile implements Jail: refused — see ErrNoJail.
+func (NoJail) DigestFile(string, string) (string, error) { return "", ErrNoJail }
+
 // JailFuncs adapts the jail's functions to the seam.
 type JailFuncs struct {
 	IsActive func() bool
 	Archive  func(cwd string) int
+	Digest   func(identity, path string) (string, error)
+}
+
+// DigestFile implements Jail.
+func (j JailFuncs) DigestFile(identity, path string) (string, error) {
+	if j.Digest == nil {
+		return "", ErrNoJail
+	}
+	return j.Digest(identity, path)
 }
 
 // Active implements Jail.
