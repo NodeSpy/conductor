@@ -46,7 +46,7 @@ func browserSettings(cfg *config.Config) browser.Settings {
 		return browser.Settings{}
 	}
 	st := browser.Settings{
-		Chrome: b.Chrome, Evaluate: b.Evaluate, IdleTimeout: b.BrowserIdle(), MaxBrowsers: b.MaxBrowsers,
+		Chrome: b.Chrome, Evaluate: []string(b.Evaluate), IdleTimeout: b.BrowserIdle(), MaxBrowsers: b.MaxBrowsers,
 		MaxDownload: int64(b.MaxDownloadMB) << 20, MaxUpload: int64(b.MaxUploadMB) << 20,
 	}
 	if st.MaxBrowsers == 0 {
@@ -137,8 +137,8 @@ func wireBrowser(ctx context.Context, cfg *config.Config, notifier *notify.Notif
 	if _, err := browser.FindChrome(cfg.Browser.Chrome); err != nil {
 		logf("WARNING: browser: %v — every browser action will fail until one is installed", err)
 	}
-	logf("browser: on (%d allowed site pattern(s), %d login site(s), %d credential(s), evaluate %s)",
-		len(cfg.Browser.Allow), len(cfg.Browser.Logins), len(cfg.Browser.Credentials), map[bool]string{true: "read-only", false: "off"}[cfg.Browser.Evaluate == "read-only"])
+	logf("browser: on (%d allowed site pattern(s), %d login site(s), %d credential(s), read-only evaluate for %d identity pattern(s))",
+		len(cfg.Browser.Allow), len(cfg.Browser.Logins), len(cfg.Browser.Credentials), len(cfg.Browser.Evaluate))
 	return func() {
 		memory.SetBrowserOp(nil)
 		browserMgr.Store(nil)

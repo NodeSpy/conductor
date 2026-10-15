@@ -625,3 +625,20 @@ func TestBoundaries(t *testing.T) {
 		}
 	}
 }
+
+// TestEvaluatePerIdentity: read-only evaluate only for an identity the
+// operator listed.
+func TestEvaluatePerIdentity(t *testing.T) {
+	st := Settings{Evaluate: []string{"agent:triage@acme/app", "dir:/w*"}}
+	for id, want := range map[string]string{
+		"agent:triage@acme/app": EvaluateReadOnly, "agent:triage@acme/other": EvaluateOff,
+		"dir:/w/sub": EvaluateReadOnly, "dir:/x": EvaluateOff, "": EvaluateOff,
+	} {
+		if got := evalMode(st, Principal{Identity: id}); got != want {
+			t.Errorf("%q: %s", id, got)
+		}
+	}
+	if evalMode(Settings{}, Principal{Identity: "agent:triage@acme/app"}) != EvaluateOff {
+		t.Fatal("nothing opted in, nothing evaluates")
+	}
+}

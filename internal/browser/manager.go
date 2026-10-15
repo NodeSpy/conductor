@@ -37,7 +37,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
-// Evaluate modes.
+// Evaluate modes (what status reports).
 const (
 	EvaluateOff      = "off"
 	EvaluateReadOnly = "read-only"
@@ -51,8 +51,9 @@ type Settings struct {
 	Allow []string
 	// Logins are the logged-in sites and the identities each is opted in for.
 	Logins []LoginSiteConfig
-	// Evaluate is EvaluateOff (the default) or EvaluateReadOnly.
-	Evaluate string
+	// Evaluate are the identities opted in to read-only evaluate (exact, or
+	// a prefix ending in "*"); none by default.
+	Evaluate []string
 	// IdleTimeout closes a session's browsers unused this long.
 	IdleTimeout time.Duration
 	// MaxBrowsers bounds the browsers running at once.
@@ -647,7 +648,7 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 	}
 	switch action {
 	case "status":
-		out := map[string]any{"session": s.id, "identity": c.Identity, "requester": c.Requester, "evaluate": evalMode(st)}
+		out := map[string]any{"session": s.id, "identity": c.Identity, "requester": c.Requester, "evaluate": evalMode(st, c)}
 		var opted []string
 		for _, l := range st.Logins {
 			if l.For(c.Identity) {
@@ -817,8 +818,9 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 		out["path"], out["bytes"] = got, len(png)
 		entry["path"] = got
 	case "evaluate":
-		if evalMode(st) != EvaluateReadOnly {
-			return nil, refuse("evaluate is off (browser.evaluate: off) — read the page with snapshot")
+		entry["evaluate_opt_in"] = evalMode(st, c) == EvaluateReadOnly
+		if evalMode(st, c) != EvaluateReadOnly {
+			return nil, refuse("evaluate is off for this identity (browser.evaluate does not list it) — read the page with snapshot")
 		}
 		if in.filled() {
 			// Even a side-effect-free expression can read a filled field
@@ -953,8 +955,10 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 // deny are the workspace paths the browser's files may not touch.
 func (c Principal) deny() []string { return c.Deny }
 
-func evalMode(st Settings) string {
-	if st.Evaluate == EvaluateReadOnly {
+// evalMode is the caller's evaluate: read-only only for an identity the
+// operator opted in.
+func evalMode(st Settings, c Principal) string {
+	if (LoginSite{Identities: st.Evaluate}).For(c.Identity) {
 		return EvaluateReadOnly
 	}
 	return EvaluateOff

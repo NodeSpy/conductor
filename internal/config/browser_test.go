@@ -1,6 +1,9 @@
 package config
 
 import (
+	"fmt"
+
+	"gopkg.in/yaml.v3"
 	"strings"
 	"testing"
 )
@@ -24,8 +27,10 @@ func TestValidateBrowser(t *testing.T) {
 		{"empty allow", func(b *BrowserConfig) { b.Allow = nil; b.Logins = nil; b.Credentials = nil }, "browser.allow is empty"},
 		{"whole web", func(b *BrowserConfig) { b.Allow = append(b.Allow, "*") }, "whole web"},
 		{"whole web any port", func(b *BrowserConfig) { b.Allow = append(b.Allow, "*:*") }, "whole web"},
-		{"evaluate", func(b *BrowserConfig) { b.Evaluate = "on" }, "off|read-only"},
-		{"evaluate read-only", func(b *BrowserConfig) { b.Evaluate = "read-only" }, ""},
+		{"evaluate one identity", func(b *BrowserConfig) { b.Evaluate = BrowserEvaluate{"agent:triage@acme/app"} }, ""},
+		{"evaluate a prefix", func(b *BrowserConfig) { b.Evaluate = BrowserEvaluate{"agent:triage@*"} }, ""},
+		{"evaluate everyone", func(b *BrowserConfig) { b.Evaluate = BrowserEvaluate{"*"} }, "name each identity"},
+		{"evaluate empty", func(b *BrowserConfig) { b.Evaluate = BrowserEvaluate{""} }, "name each identity"},
 		{"idle", func(b *BrowserConfig) { b.IdleTimeout = "soon" }, "not a duration"},
 		{"negative", func(b *BrowserConfig) { b.MaxBrowsers = -1 }, "negative"},
 		{"relative chrome", func(b *BrowserConfig) { b.Chrome = "bin/chrome" }, "absolute"},
@@ -77,6 +82,25 @@ func TestValidateBrowser(t *testing.T) {
 			t.Errorf("%s: %v", tc.name, err)
 		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
 			t.Errorf("%s: want %q, got %v", tc.name, tc.want, err)
+		}
+	}
+}
+
+func TestBrowserEvaluateYAML(t *testing.T) {
+	for in, want := range map[string]string{
+		"evaluate: off": "[]",
+		"evaluate: [\"agent:a@o/r\", \"dir:/w\"]": "[agent:a@o/r dir:/w]",
+		"evaluate: read-only":                     "opted in per identity",
+		"evaluate: on":                            "must be a list",
+	} {
+		var b BrowserConfig
+		err := yaml.Unmarshal([]byte(in), &b)
+		got := fmt.Sprint([]string(b.Evaluate))
+		if err != nil {
+			got = err.Error()
+		}
+		if !strings.Contains(got, want) {
+			t.Errorf("%s: %s", in, got)
 		}
 	}
 }

@@ -311,7 +311,7 @@ func TestCredentialProvenanceAndIdentity(t *testing.T) {
 // evaluate is off, and a screenshot masks both boxes.
 func TestCredentialRedaction(t *testing.T) {
 	r := newCredRig(t)
-	r.st.Evaluate = EvaluateReadOnly
+	r.st.Evaluate = []string{"agent:test@*"}
 	c := r.caller("op", RequesterOperator)
 	r.do(c, "open", map[string]any{"url": r.bound + "/codefield"})
 	snap := r.do(c, "snapshot", nil)["snapshot"].(string)

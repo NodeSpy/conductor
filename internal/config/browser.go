@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+
+	"gopkg.in/yaml.v3"
 	"net"
 	"net/url"
 	"path"
@@ -23,10 +25,12 @@ type BrowserConfig struct {
 	// Chrome is the browser binary (default: the first Chrome or Chromium
 	// installed in the usual places).
 	Chrome string `yaml:"chrome,omitempty"`
-	// Evaluate is `off` (the default: no agent JavaScript in a page) or
-	// `read-only` (an expression runs only if V8 can rule out every side
-	// effect — no DOM write, no network, no storage).
-	Evaluate string `yaml:"evaluate,omitempty"`
+	// Evaluate opts identities in to read-only JavaScript (`conductor
+	// browser evaluate`): an expression runs only if V8 can rule out every
+	// side effect — no DOM write, no network, no storage. Exact identities,
+	// or a prefix ending in "*". Default: none. Still off in any browser
+	// where a credential was filled.
+	Evaluate BrowserEvaluate `yaml:"evaluate,omitempty"`
 	// IdleTimeout closes a session's browsers unused this long (default 10m).
 	IdleTimeout string `yaml:"idle_timeout,omitempty"`
 	// MaxBrowsers bounds the browsers running at once (default 4).
@@ -81,6 +85,31 @@ type BrowserSecretRef struct {
 	Key   string `yaml:"key"`
 }
 
+// BrowserEvaluate is the identities opted in to read-only evaluate. `off`
+// (or nothing) is none; the retired global `read-only` is refused with the
+// way to say it now.
+type BrowserEvaluate []string
+
+// UnmarshalYAML accepts a list of identities, or `off`.
+func (e *BrowserEvaluate) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		switch n.Value {
+		case "", "off":
+			*e = nil
+			return nil
+		case "read-only":
+			return fmt.Errorf("config: browser.evaluate is opted in per identity now — list them: evaluate: [\"agent:triage@acme/app\"]")
+		}
+		return fmt.Errorf("config: browser.evaluate must be a list of identities (or off), got %q", n.Value)
+	}
+	var ids []string
+	if err := n.Decode(&ids); err != nil {
+		return fmt.Errorf("config: browser.evaluate: %w", err)
+	}
+	*e = ids
+	return nil
+}
+
 // BrowserLogin opts one site in for logged-in use.
 type BrowserLogin struct {
 	// Site is a host ("app.example.com") or a domain and its subdomains
@@ -133,10 +162,10 @@ func (c *Config) validateBrowser() error {
 			return fmt.Errorf("config: browser.allow: %q would open the whole web to an agent's browser — list the sites", a)
 		}
 	}
-	switch b.Evaluate {
-	case "", "off", "read-only":
-	default:
-		return fmt.Errorf("config: browser.evaluate must be off|read-only, got %q", b.Evaluate)
+	for _, id := range b.Evaluate {
+		if id == "" || id == "*" || strings.TrimSuffix(id, "*") == "" {
+			return fmt.Errorf("config: browser.evaluate: identity %q — name each identity (or a prefix ending in *)", id)
+		}
 	}
 	if b.IdleTimeout != "" {
 		if d, err := time.ParseDuration(b.IdleTimeout); err != nil || d <= 0 {

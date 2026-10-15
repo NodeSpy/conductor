@@ -125,7 +125,7 @@ func newRig(t *testing.T) *rig {
 	}
 	ws := filepath.Join(state, "ws")
 	os.MkdirAll(ws, 0o755)
-	st := &Settings{Chrome: chrome, Allow: []string{host}, Evaluate: EvaluateOff, MaxDownload: 1 << 20, MaxUpload: 1 << 20, MaxBrowsers: 6}
+	st := &Settings{Chrome: chrome, Allow: []string{host}, MaxDownload: 1 << 20, MaxUpload: 1 << 20, MaxBrowsers: 6}
 	a := &auditLog{}
 	m := &Manager{
 		Settings: func() Settings { return *st },
@@ -375,7 +375,12 @@ func TestBrowserEvaluateGated(t *testing.T) {
 	if !strings.Contains(err.Error(), "evaluate is off") {
 		t.Fatalf("off: %v", err)
 	}
-	r.st.Evaluate = EvaluateReadOnly
+	// Opted in for another identity only: still off for this one.
+	r.st.Evaluate = []string{"agent:other@*", "dir:/elsewhere"}
+	if err := r.fail(c, "evaluate", map[string]any{"expr": "document.title"}); !strings.Contains(err.Error(), "off for this identity") {
+		t.Fatalf("another identity's opt-in: %v", err)
+	}
+	r.st.Evaluate = []string{"agent:test@*"}
 	if v := r.do(c, "evaluate", map[string]any{"expr": "document.title"})["value"]; v != `"Test Site"` {
 		t.Fatalf("read: %v", v)
 	}
@@ -394,8 +399,9 @@ func TestBrowserEvaluateGated(t *testing.T) {
 	if v := r.do(c, "evaluate", map[string]any{"expr": "document.title"})["value"]; v != `"Test Site"` {
 		t.Fatalf("the page changed: %v", v)
 	}
-	if es := r.audit.find("evaluate"); len(es) < 6 || es[0]["outcome"] != "refused" {
-		t.Fatalf("evaluate audit: %v", es)
+	es := r.audit.find("evaluate")
+	if len(es) < 7 || es[0]["outcome"] != "refused" || es[0]["evaluate_opt_in"] != false || es[len(es)-1]["evaluate_opt_in"] != true {
+		t.Fatalf("evaluate audit (with the opt-in): %v", es)
 	}
 }
 
