@@ -79,6 +79,10 @@ func main() {
 		// agent sandbox with the daemon's policy for this directory (paseo's
 		// provider entries, `conductor paseo setup`).
 		os.Exit(cmdSandbox(args))
+	case "paseo":
+		// `conductor paseo setup`: write conductor's sandboxed provider
+		// entries into a paseo daemon's config (and reload it).
+		os.Exit(cmdPaseo(args))
 	case "ctx":
 		// The ctx data-plane client for `use: cli` steps (ctxcmd.go). Reached
 		// through $CONDUCTOR_CTX_HELPER from inside a step, not typed by
