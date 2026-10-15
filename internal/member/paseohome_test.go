@@ -38,15 +38,15 @@ func (f *fakePaseo) Archive(_ context.Context, id string) error {
 }
 
 type recJail struct {
-	active   bool
-	archived []string
+	active bool
 }
 
-func (j *recJail) Active() bool                              { return j.active }
-func (j *recJail) DigestFile(string, string) (string, error) { return "", ErrNoJail }
-func (j *recJail) ArchiveCwd(cwd string) int {
-	j.archived = append(j.archived, cwd)
-	return 1
+func (j *recJail) Active() bool { return j.active }
+func (j *recJail) PaseoProvider(base string) (string, bool) {
+	if base == "" {
+		return "", false
+	}
+	return base + "-sandboxed", true
 }
 
 func TestPaseoHomeLaunchAndJailSwitch(t *testing.T) {
@@ -63,7 +63,7 @@ func TestPaseoHomeLaunchAndJailSwitch(t *testing.T) {
 			resolved = s
 			return "opus", "paseo", "claude"
 		},
-		Hold: func(id string) { held = append(held, id) }, Jail: jail}
+		Hold: func(id string) { held = append(held, id) }, Sandbox: jail}
 	id, err := h.Launch(context.Background(), HomeSpec{Member: "sre", Session: "s1", Dispatch: "d1", Cwd: "/x/s1", Prompt: "{{.secrets}} literal"})
 	if err != nil || id != "pa-1" || len(held) != 1 {
 		t.Fatalf("launch: %v %q held=%v", err, id, held)
@@ -81,16 +81,19 @@ func TestPaseoHomeLaunchAndJailSwitch(t *testing.T) {
 	if r.Provider != "claude" || r.Model != "opus" || resolved.BoundMember != "sre" {
 		t.Fatalf("home model must come from the resolver: %q %q (resolved %+v)", r.Provider, r.Model, resolved)
 	}
+	// With the sandbox active, the home session launches on the sandboxed
+	// provider entry for its base provider (claude → claude-sandboxed), the
+	// model pin unchanged.
 	jail.active = true
 	_, _ = h.Launch(context.Background(), HomeSpec{Member: "sre", Session: "s2", Dispatch: "d2", Cwd: "/x/s2"})
-	if p := fp.reqs[1].Provider; p != JailedProvider {
-		t.Fatalf("jailed launch provider = %q, want %q", p, JailedProvider)
+	if r := fp.reqs[1]; r.Provider != "claude-sandboxed" || r.Model != "opus" {
+		t.Fatalf("sandboxed launch: provider %q model %q", r.Provider, r.Model)
 	}
 	if err := h.Retire(context.Background(), "sre", "pa-1", "d1", "/x/s1"); err != nil {
 		t.Fatal(err)
 	}
-	if len(jail.archived) != 1 || jail.archived[0] != "/x/s1" || len(fp.archived) != 1 {
-		t.Fatalf("retire: jail %v paseo %v", jail.archived, fp.archived)
+	if len(fp.archived) != 1 {
+		t.Fatalf("retire: paseo %v", fp.archived)
 	}
 }
 

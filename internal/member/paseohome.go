@@ -49,15 +49,10 @@ type PaseoHome struct {
 	// starts (e.g. writing a .claude/settings.json that confines it). An
 	// error aborts the launch before anything is created.
 	BeforeLaunch func(ctx context.Context, spec HomeSpec) error
-	// Jail is the agent jail seam. While it is active a home session
-	// launches on paseo's `conductor` provider (installed by `conductor
-	// paseo install-plugin`), which jails it keyed by its cwd, and retiring
-	// a session also ends its jailed ACP sessions.
-	Jail Jail
+	// Sandbox, while active, launches the home session on the sandboxed
+	// paseo provider entry (`conductor paseo setup`) for its base provider.
+	Sandbox Sandbox
 }
-
-// JailedProvider is the paseo provider a jailed home session launches on.
-const JailedProvider = "conductor"
 
 var _ HomeLauncher = (*PaseoHome)(nil)
 
@@ -113,10 +108,14 @@ func (h *PaseoHome) Launch(ctx context.Context, spec HomeSpec) (string, error) {
 		DispatchID:    spec.Dispatch,
 		LiteralPrompt: true,
 	}
-	if h.Jail != nil && h.Jail.Active() {
-		// The conductor provider relays to the configured model; the model
-		// pin, if any, rides along unchanged.
-		req.Provider = JailedProvider
+	if h.Sandbox != nil && h.Sandbox.Active() {
+		// The sandboxed provider entry extends the base one (claude →
+		// claude-sandboxed) with conductor's wrapper as its command; the
+		// model pin rides along unchanged. Its identity and per-launch token
+		// come from the daemon's cwd lookup (Service.SessionForCwd).
+		if sb, ok := h.Sandbox.PaseoProvider(req.Provider); ok {
+			req.Provider = sb
+		}
 	}
 	if h.Credentials != nil {
 		if c, err := h.Credentials(ctx, t); err == nil {
@@ -166,11 +165,6 @@ func (h *PaseoHome) Retire(ctx context.Context, member, agentID, dispatchID, cwd
 	}
 	if h.Revoke != nil && dispatchID != "" {
 		h.Revoke(dispatchID)
-	}
-	if h.Jail != nil {
-		if cwd != "" {
-			h.Jail.ArchiveCwd(cwd)
-		}
 	}
 	d, err := h.disp(member)
 	if err != nil {

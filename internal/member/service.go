@@ -14,7 +14,6 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
-	"github.com/NodeSpy/conductor/internal/grant"
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
@@ -87,9 +86,9 @@ type Service struct {
 	// delivered turn (default 30m); HandoffTimeout bounds the old session's
 	// handoff turn at rotation (default 10m).
 	PollEvery, SendTimeout, HandoffTimeout time.Duration
-	// Jail is the agent jail seam (NoJail until #154 lands): command
-	// proposals hash their files through it.
-	Jail Jail
+	// Terraform is the member terraform runner (nil when no member has a
+	// terraform: block).
+	Terraform *Terraform
 	// RevokeToken kills a finished session's conductor token at once (the
 	// broker's RevokeDispatch). Member tokens are durable — they would
 	// otherwise outlive a finished worker by days.
@@ -201,6 +200,9 @@ func (s *Service) Start(ctx context.Context) {
 			continue
 		}
 		s.recoverWorkers(name)
+		if s.Terraform != nil {
+			s.Terraform.Recover(name)
+		}
 		go s.loop(ctx, name)
 	}
 }
@@ -718,34 +720,49 @@ func (s *Service) findWorker(dispatchID, historyID string) (string, store.Worker
 	return "", store.Worker{}, false
 }
 
-// IdentityForCwd is the cwd→identity lookup the jail consults once per paseo
-// (ACP) session at creation (controller.SetPaseoIdentity, #175): a member's
-// live home session, or a live hand-off worker, is identified by the session
-// it is — "member-<name>-<session or worker id>" — which keys its tool state
-// and is its jail's AgentID, and therefore what a grant minted for it binds
-// to. ok=false for any cwd that is not a live member session's, so a stale or
-// foreign cwd never inherits a member identity. Every live member session has
-// its own cwd, so the answer is unambiguous.
-func (s *Service) IdentityForCwd(cwd string) (string, bool) {
+// SessionBinding is what the sandbox needs to start a member session's agent
+// in a cwd: who it is (Identity, keying its sandbox state), and the binding
+// the conductor token it mints for this launch must carry — member, role,
+// case, and the DISPATCH, which is what a rotation or a finish revokes by.
+type SessionBinding struct {
+	Identity, Member, Role, Session, Dispatch, CaseID string
+}
+
+// SessionForCwd is the cwd → session lookup conductor's sandbox endpoint
+// consults per launch (`conductor sandbox exec` resolves its cwd here and
+// mints a fresh token bound to the answer): a member's LIVE home session, or
+// a live hand-off worker. ok=false for any other cwd — a retired session's
+// included — so a stale or foreign cwd never inherits a member binding, and
+// a token minted for a retired session cannot be minted again. Every live
+// member session has its own cwd, so the answer is unambiguous.
+func (s *Service) SessionForCwd(cwd string) (SessionBinding, bool) {
 	clean := filepath.Clean(cwd)
 	if clean == "" || clean == "." {
-		return "", false
+		return SessionBinding{}, false
 	}
 	for _, name := range s.Cfg().MemberNames() {
 		rec := s.Ledger.Member(name)
 		if h := rec.Home; h != nil && filepath.Clean(h.Cwd) == clean {
-			return SessionIdentity(name, h.ID), true
+			return SessionBinding{Identity: SessionIdentity(name, h.ID), Member: name, Role: config.MemberRoleHome,
+				Session: h.ID, Dispatch: h.Dispatch}, true
 		}
 		for _, w := range rec.Workers {
 			if w.Handoff && (w.Status == "starting" || w.Status == "running") && filepath.Clean(w.Cwd) == clean {
-				return SessionIdentity(name, w.ID), true
+				return SessionBinding{Identity: SessionIdentity(name, w.ID), Member: name, Role: config.MemberRoleWorker,
+					Session: w.ID, Dispatch: w.Dispatch, CaseID: w.CaseID}, true
 			}
 		}
 	}
-	return "", false
+	return SessionBinding{}, false
 }
 
-// SessionIdentity is a member session's jail identity (path-safe: member
+// IdentityForCwd is SessionForCwd's identity alone.
+func (s *Service) IdentityForCwd(cwd string) (string, bool) {
+	b, ok := s.SessionForCwd(cwd)
+	return b.Identity, ok
+}
+
+// SessionIdentity is a member session's sandbox identity (path-safe: member
 // names and ids are [a-z0-9_-]).
 func SessionIdentity(member, id string) string { return "member-" + member + "-" + id }
 
@@ -1029,121 +1046,10 @@ func (s *Service) Cases(member string, all bool) []store.Case {
 	return out
 }
 
-// ProposeCommand records a host-command proposal (e.g. a saved-plan
-// terraform apply). The files it names are hashed NOW, from the caller's own
-// working directory, so the operator approves exactly those bytes; the
-// grant minted on approval pins them for the jail's broker to re-check.
-// cwd is the directory the command will run in, workspace-relative (see
-// grant.CleanCwd): `cd envs/prod && terraform apply tfplan` is a different
-// action from the same argv at the root.
-func (s *Service) ProposeCommand(c Actor, tool string, argv, files []string, cwd, summary string) (store.Proposal, error) {
-	m, err := s.member(c.Member)
-	if err != nil {
-		return store.Proposal{}, err
-	}
-	tool = strings.TrimSpace(tool)
-	if tool == "" || strings.ContainsAny(tool, "/\\ ") {
-		return store.Proposal{}, errors.New("tool must be a bare binary name")
-	}
-	if Classify(m, "command."+tool) == config.TierNever {
-		return store.Proposal{}, fmt.Errorf("command.%s is classified never for member %s", tool, c.Member)
-	}
-	rec := s.Ledger.Member(c.Member)
-	agentID := ""
-	known := false
-	switch c.Role {
-	// A grant binds to the identity the BROKER will present: for a paseo
-	// session (the home, a hand-off worker) that is the jail identity the
-	// cwd lookup gives it — paseo's own agent id never crosses ACP — and for
-	// a cli worker its dispatch id (Dispatch, below).
-	case config.MemberRoleHome:
-		if rec.Home != nil && rec.Home.Dispatch == c.Dispatch {
-			known, agentID = true, SessionIdentity(c.Member, rec.Home.ID)
-		}
-	case config.MemberRoleWorker:
-		for _, w := range rec.Workers {
-			if w.Dispatch == c.Dispatch {
-				known = true
-				if w.Handoff {
-					agentID = SessionIdentity(c.Member, w.ID)
-				}
-			}
-		}
-	}
-	if !known {
-		return store.Proposal{}, errors.New("cannot resolve the calling session")
-	}
-	dir, err := grant.CleanCwd(cwd)
-	if err != nil {
-		return store.Proposal{}, err
-	}
-	// The files are hashed AS THE BROKER WILL READ THEM — through the jail,
-	// for the identity the grant will bind to — so the operator approves the
-	// bytes that will actually run. Without the jail there is no broker, and
-	// the proposal is refused (ErrNoJail): an infra grant never gets minted
-	// against bytes nothing checks.
-	jail := s.Jail
-	if jail == nil {
-		jail = NoJail{}
-	}
-	ident := agentID
-	if ident == "" {
-		ident = c.Dispatch
-	}
-	sums := map[string]string{}
-	for _, f := range files {
-		// Resolved against the command's cwd exactly as the broker will
-		// resolve the token it sees, and pinned by that workspace path.
-		rel, err := grant.ResolvePath(dir, f)
-		if err != nil {
-			return store.Proposal{}, err
-		}
-		sum, err := jail.DigestFile(ident, rel)
-		if err != nil {
-			return store.Proposal{}, fmt.Errorf("hash %s: %w", rel, err)
-		}
-		if !validSHA256(sum) {
-			return store.Proposal{}, fmt.Errorf("hash %s: the jail returned %q, not a SHA-256", rel, sum)
-		}
-		sums[rel] = sum
-	}
-	if len(files) == 0 {
-		// Even with nothing to pin, a command grant needs a broker to consume it.
-		if !jail.Active() {
-			return store.Proposal{}, ErrNoJail
-		}
-	}
-	opts := map[string]any{"tool": tool, "argv": argv, "files": sums, "cwd": dir}
-	digest, err := ActionDigest(c.Member, "command", "command."+tool, opts)
-	if err != nil {
-		return store.Proposal{}, err
-	}
-	now := s.now()
-	status := "pending"
-	if m.Autonomy.ShadowMode() {
-		status = "shadow"
-	}
-	var out store.Proposal
-	err = s.Ledger.UpdateMember(c.Member, func(r *store.MemberRecord) error {
-		p := &store.Proposal{ID: r.NextID("p"), CaseID: c.CaseID, Kind: "command", Tier: config.TierPropose,
-			Tool: tool, Argv: append([]string(nil), argv...), Files: sums, Cwd: dir, Summary: summary, Digest: digest,
-			Role: c.Role, Agent: c.Agent, Dispatch: c.Dispatch, AgentID: agentID,
-			Status: status, Created: now, Expires: now.Add(m.Autonomy.TTL()), RequesterClass: ReqMember}
-		if cc := r.Cases[c.CaseID]; cc != nil {
-			p.Requester, p.RequesterClass = cc.Requester, cc.RequesterClass
-			cc.Proposals = append(cc.Proposals, p.ID)
-		}
-		if r.Proposals == nil {
-			r.Proposals = map[string]*store.Proposal{}
-		}
-		r.Proposals[p.ID] = p
-		out = *p
-		return nil
-	})
-	if err == nil && s.Gate != nil && s.Gate.OnProposal != nil {
-		s.Gate.OnProposal(c.Member, out)
-	}
-	return out, err
+// Unsettled reports a proposal state that will still change on its own:
+// being planned, awaiting a decision, or approved and being applied.
+func Unsettled(status string) bool {
+	return status == "planning" || status == "pending" || status == "approved"
 }
 
 // Wait blocks until a proposal is decided (or timeout).
@@ -1157,7 +1063,7 @@ func (s *Service) Wait(ctx context.Context, member, id string, timeout time.Dura
 		if p == nil {
 			return store.Proposal{}, fmt.Errorf("no proposal %s", id)
 		}
-		if p.Status != "pending" || time.Now().After(deadline) {
+		if !Unsettled(p.Status) || time.Now().After(deadline) {
 			return *p, nil
 		}
 		select {
@@ -1171,13 +1077,20 @@ func (s *Service) Wait(ctx context.Context, member, id string, timeout time.Dura
 // OnProposal is wired as Gate.OnProposal: the home session hears about every
 // proposal (a worker's included), so it can tell the operator.
 func (s *Service) OnProposal(member string, p store.Proposal) {
-	s.audit(map[string]any{"event": "member_proposal", "member": member, "proposal": p.ID, "tier": p.Tier, "status": p.Status, "uses": p.Uses, "tool": p.Tool, "role": p.Role})
-	if p.Role == config.MemberRoleHome {
-		return // the home session just made it; it already has the answer
+	s.audit(map[string]any{"event": "member_proposal", "member": member, "proposal": p.ID, "tier": p.Tier, "status": p.Status, "uses": p.Uses, "role": p.Role, "kind": p.Kind})
+	// A verb proposal's maker already has the answer; a terraform plan
+	// finishes later, so everyone hears how it came out.
+	if p.Role == config.MemberRoleHome && p.Kind != KindTerraform {
+		return
 	}
 	verb := "is awaiting operator approval"
-	if p.Status == "shadow" {
+	switch p.Status {
+	case "shadow":
 		verb = "was recorded as a shadow proposal"
+	case "refused":
+		verb = "was REFUSED (" + p.Reason + ")"
+	case "failed":
+		verb = "could not be planned (" + p.Reason + ")"
 	}
 	s.enqueue(member, p.CaseID, fmt.Sprintf("[conductor] proposal %s (case %s, requested by %s/%s) %s: %s",
 		p.ID, orDash(p.CaseID), orDash(p.Requester), p.RequesterClass, verb, ProposalAction(p)))
@@ -1189,8 +1102,20 @@ func (s *Service) OnDecision(member string, p store.Proposal) {
 	if p.Reason != "" {
 		res = " — " + p.Reason
 	}
-	if p.Grant != "" {
-		res += " — grant " + p.Grant + " (run the exact approved command now; it is single-use)"
+	if p.Kind == KindTerraform {
+		switch p.Status {
+		case "approved":
+			res += " — conductor is applying the approved plan now"
+		case "executed":
+			res += " — conductor applied the approved plan"
+		}
+		if out, ok := p.Result["output"].(string); ok && out != "" && p.Status != "approved" {
+			res += "\n" + fence("APPLY OUTPUT", out)
+		}
+		if p.CaseID != "" && p.Status != "approved" {
+			_, _ = s.Episode(context.Background(), Actor{Member: member, Role: "conductor"}, p.CaseID,
+				fmt.Sprintf("terraform proposal %s %s (approved by %s): %s%s", p.ID, p.Status, orDash(p.Approver), TerraformAction(p), res))
+		}
 	}
 	s.enqueue(member, p.CaseID, fmt.Sprintf("[conductor] proposal %s was %s by operator %s%s", p.ID, p.Status, orDash(p.Approver), res))
 }

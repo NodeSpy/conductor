@@ -14,7 +14,6 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/flow"
-	"github.com/NodeSpy/conductor/internal/grant"
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
@@ -119,7 +118,8 @@ type Executor struct {
 	Cfg    func() *config.Config
 	Ledger Ledger
 	Gate   *Gate
-	Grants grant.Store
+	// Terraform applies an approved terraform proposal (nil: refused).
+	Terraform *Terraform
 	// RunVerb is flow.Runner.RunSkillVerb: an approved verb runs through the
 	// same chokepoint every agent call does (access, scope, then the gate,
 	// which admits it because ctx carries this approval).
@@ -132,11 +132,9 @@ type Executor struct {
 	Notify func(member string, p store.Proposal)
 	// Audit records every decision. Optional.
 	Audit func(entry map[string]any)
-	// GrantTTL bounds a minted grant (default 1h).
-	GrantTTL time.Duration
-	// Jail re-hashes a command proposal's files at mint time, as the broker
-	// will read them (nil = NoJail: no grant is minted).
-	Jail Jail
+	// Background runs a long execution (a terraform apply) off the
+	// decision's own call; nil = `go fn()`. Tests run it inline.
+	Background func(fn func())
 }
 
 func (x *Executor) now() time.Time {
@@ -205,20 +203,40 @@ func (x *Executor) Decide(ctx context.Context, d Decision) (store.Proposal, erro
 	if d.Decision == "deny" {
 		out, err := x.transition(d, "denied", nil, "")
 		x.audit(map[string]any{"member": d.Member, "proposal": p.ID, "operator": d.Operator, "decision": "deny", "outcome": "ok"})
+		if p.Kind == KindTerraform && x.Terraform != nil {
+			x.Terraform.Discard(d.Member, p.ID)
+		}
 		x.notify(d.Member, out)
 		return out, err
 	}
 	if _, err := x.transition(d, "approved", nil, ""); err != nil {
 		return refuse(err)
 	}
-	x.audit(map[string]any{"member": d.Member, "proposal": p.ID, "operator": d.Operator, "decision": "approve", "outcome": "ok", "uses": p.Uses, "tool": p.Tool})
+	x.audit(map[string]any{"member": d.Member, "proposal": p.ID, "operator": d.Operator, "decision": "approve", "outcome": "ok", "uses": p.Uses})
 	var out store.Proposal
 	var err error
 	switch p.Kind {
 	case "verb":
 		out, err = x.execVerb(ctx, d, *p)
-	case "command":
-		out, err = x.mintGrant(ctx, d, *p)
+	case KindTerraform:
+		if x.Terraform == nil {
+			_ = x.setStatus(d.Member, p.ID, "failed", "no terraform runner on this daemon", nil)
+			return *p, errors.New("no terraform runner on this daemon")
+		}
+		// An apply can take minutes: it runs off the decision's call, and its
+		// result reaches the ledger, the episode log and the home inbox.
+		approved := *p
+		approved.Status = "approved"
+		run := func() {
+			res := x.Terraform.Apply(context.WithoutCancel(ctx), d.Member, approved)
+			x.notify(d.Member, res)
+		}
+		if x.Background != nil {
+			x.Background(run)
+		} else {
+			go run()
+		}
+		return approved, nil
 	default:
 		err = fmt.Errorf("unknown proposal kind %q", p.Kind)
 	}
@@ -301,78 +319,27 @@ func (x *Executor) execVerb(ctx context.Context, d Decision, p store.Proposal) (
 	return out, uerr
 }
 
-func (x *Executor) mintGrant(ctx context.Context, d Decision, p store.Proposal) (store.Proposal, error) {
-	if x.Grants == nil {
-		_ = x.setStatus(d.Member, p.ID, "failed", "no grant store", nil)
-		return p, errors.New("no grant store on this daemon")
-	}
-	// Re-hash every pinned file through the jail, as the broker will read it:
-	// the operator approved the bytes recorded at proposal, so a file that
-	// changed since — or no jail to ask — mints nothing.
-	jail := x.Jail
-	if jail == nil {
-		jail = NoJail{}
-	}
-	ident := p.AgentID
-	if ident == "" {
-		ident = p.Dispatch
-	}
-	for path, sum := range p.Files {
-		now, err := jail.DigestFile(ident, path)
-		if err == nil && now != sum {
-			err = fmt.Errorf("%s changed since it was proposed (approved %s…, now %s…)", path, sum[:12], short(now))
-		}
-		if err != nil {
-			_ = x.setStatus(d.Member, p.ID, "failed", "no grant minted: "+err.Error(), nil)
-			p.Status, p.Reason = "failed", "no grant minted: "+err.Error()
-			return p, fmt.Errorf("proposal %s: no grant minted: %w", p.ID, err)
-		}
-	}
-	ttl := x.GrantTTL
-	if ttl <= 0 {
-		ttl = time.Hour
-	}
-	var digests []grant.FileDigest
-	for path, sum := range p.Files {
-		digests = append(digests, grant.FileDigest{Path: path, SHA256: sum})
-	}
-	g, err := x.Grants.Mint(ctx, grant.GrantSpec{
-		AgentID: p.AgentID, Dispatch: p.Dispatch, Tool: p.Tool, Argv: grant.ParseArgv(p.Argv), Cwd: p.Cwd,
-		FileDigests: digests, Expiry: x.now().Add(ttl), SingleUse: true,
-		ApprovedBy: d.Operator, CaseID: p.CaseID,
-	})
-	var out store.Proposal
-	uerr := x.Ledger.UpdateMember(d.Member, func(r *store.MemberRecord) error {
-		q := r.Proposals[p.ID]
-		if q == nil {
-			return nil
-		}
-		if err != nil {
-			q.Status, q.Reason = "failed", err.Error()
-		} else {
-			q.Status, q.Grant = "executed", g.ID
-			q.Result = map[string]any{"grant": g.ID, "expires": g.Expiry.Format(time.RFC3339)}
-		}
-		out = *q
-		return nil
-	})
-	if err != nil {
-		return out, err
-	}
-	return out, uerr
-}
-
-// ExpireProposals marks pending proposals past their window expired.
+// ExpireProposals marks pending proposals past their window expired — and
+// deletes an expired terraform proposal's plan and checkout.
 func (x *Executor) ExpireProposals(member string) {
 	now := x.now()
+	var gone []string
 	_ = x.Ledger.UpdateMember(member, func(r *store.MemberRecord) error {
 		for _, p := range r.Proposals {
 			if p.Status == "pending" && !now.Before(p.Expires) {
 				p.Status = "expired"
+				if p.Kind == KindTerraform {
+					gone = append(gone, p.ID)
+				}
 			}
 		}
 		return nil
 	})
+	for _, id := range gone {
+		if x.Terraform != nil {
+			x.Terraform.Discard(member, id)
+		}
+	}
 }
 
 func short(s string) string {

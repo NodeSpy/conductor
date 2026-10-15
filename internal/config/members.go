@@ -95,6 +95,108 @@ type MemberConfig struct {
 	Autonomy MemberAutonomy `yaml:"autonomy,omitempty"`
 	// Disabled keeps the member configured but not started.
 	Disabled bool `yaml:"disabled,omitempty"`
+	// Terraform lets the member propose infrastructure changes that
+	// CONDUCTOR plans and, on a signed approval, applies. Nil: no terraform
+	// proposals.
+	Terraform *MemberTerraform `yaml:"terraform,omitempty"`
+}
+
+// MemberTerraform configures conductor-executed Terraform for a member. The
+// member pins a change (repo, pushed commit, root module, workspace); conductor
+// checks that commit out in its own private directory, plans it with the READ
+// role, shows the plan, and after a signed approval applies exactly that saved
+// plan with the WRITE role — which only conductor's own process ever holds.
+type MemberTerraform struct {
+	// PlanConnector / ApplyConnector name `use: terraform` connectors whose
+	// engine, binary and env are the read and write roles. The apply
+	// connector is conductor's alone: no member grant may reach its verbs.
+	PlanConnector  string `yaml:"plan_connector"`
+	ApplyConnector string `yaml:"apply_connector"`
+	// Repos are the repositories the member may propose changes in: name →
+	// the git URL (or path) conductor fetches the pinned commit from.
+	Repos map[string]string `yaml:"repos"`
+	// Stateful lists resource TYPES (globs) whose destruction or replacement
+	// loses data. A plan that destroys or replaces one is REFUSED — not
+	// offered for approval. Unset: DefaultStatefulTypes.
+	Stateful []string `yaml:"stateful,omitempty"`
+	// AllowDestroy lists resource ADDRESSES (globs) explicitly allowed to be
+	// destroyed or replaced even when stateful — the knob that loosens the
+	// default, one address pattern at a time.
+	AllowDestroy []string `yaml:"allow_destroy,omitempty"`
+	// Timeout bounds one plan or apply (default 30m).
+	Timeout Duration `yaml:"timeout,omitempty"`
+}
+
+// DefaultStatefulTypes are the resource types a plan may not destroy or
+// replace unless allow_destroy names the address: databases, storage,
+// volumes, keys, secrets, queues and streams that hold state of their own.
+var DefaultStatefulTypes = []string{
+	"aws_db_instance", "aws_rds_cluster*", "aws_dynamodb_table", "aws_s3_bucket",
+	"aws_efs_file_system", "aws_ebs_volume", "aws_elasticache_*", "aws_elasticsearch_domain",
+	"aws_opensearch_domain", "aws_kms_key", "aws_secretsmanager_secret", "aws_redshift_cluster",
+	"aws_docdb_cluster*", "aws_neptune_cluster*", "aws_msk_cluster", "aws_sqs_queue", "aws_kinesis_stream",
+	"aws_backup_vault", "aws_route53_zone",
+	"google_sql_database_instance", "google_storage_bucket", "google_bigquery_dataset", "google_spanner_*",
+	"google_kms_*", "google_compute_disk",
+	"azurerm_*database*", "azurerm_storage_account", "azurerm_key_vault", "azurerm_cosmosdb_*", "azurerm_managed_disk",
+	"kubernetes_persistent_volume*",
+}
+
+// StatefulTypes is the effective stateful list.
+func (t MemberTerraform) StatefulTypes() []string {
+	if len(t.Stateful) > 0 {
+		return t.Stateful
+	}
+	return DefaultStatefulTypes
+}
+
+// TimeoutD is the effective plan/apply bound.
+func (t MemberTerraform) TimeoutD() time.Duration {
+	if t.Timeout > 0 {
+		return t.Timeout.D()
+	}
+	return 30 * time.Minute
+}
+
+// TerraformRole is a terraform connector's engine, binary and env — what
+// conductor runs a plan (read) or an apply (write) with.
+type TerraformRole struct {
+	Engine string            `yaml:"engine"`
+	Binary string            `yaml:"binary"`
+	Env    map[string]string `yaml:"env"`
+}
+
+// Bin is the CLI to run (binary, else the engine name, else terraform).
+func (r TerraformRole) Bin() string {
+	switch {
+	case r.Binary != "":
+		return r.Binary
+	case r.Engine != "":
+		return r.Engine
+	}
+	return "terraform"
+}
+
+// MemberTerraformRole decodes a terraform connector's role from its config.
+func (c *Config) MemberTerraformRole(connector string) (TerraformRole, error) {
+	ref, ok := c.ConnectorsMap[connector]
+	if !ok {
+		return TerraformRole{}, fmt.Errorf("no connector %q", connector)
+	}
+	if t := ref.TypeName(); t != "terraform" {
+		return TerraformRole{}, fmt.Errorf("connector %q is %q, not a terraform connector", connector, t)
+	}
+	var raw struct {
+		TerraformRole `yaml:",inline"`
+		Rest          map[string]any `yaml:",inline"`
+	}
+	if err := ref.Decode(&raw); err != nil {
+		return TerraformRole{}, fmt.Errorf("connector %q: %w", connector, err)
+	}
+	if raw.Engine == "terragrunt" {
+		return TerraformRole{}, fmt.Errorf("connector %q: member terraform needs terraform or tofu, not terragrunt", connector)
+	}
+	return raw.TerraformRole, nil
 }
 
 // MemberHome configures the home session.
@@ -512,6 +614,11 @@ func (c *Config) validateMember(name string, m MemberConfig) error {
 	if m.Home.Rotate.MaxAge < 0 {
 		return fmt.Errorf("home.rotate.max_age must not be negative")
 	}
+	if t := m.Terraform; t != nil {
+		if err := c.validateMemberTerraform(m, t); err != nil {
+			return fmt.Errorf("terraform: %w", err)
+		}
+	}
 	if m.Worker.MaxConcurrent < 0 || m.Home.Rotate.MaxTurns < 0 {
 		return fmt.Errorf("max_concurrent / rotate.max_turns must not be negative")
 	}
@@ -654,6 +761,46 @@ func (c *Config) validateMemberSteps() error {
 	for n, w := range c.Workflows {
 		if err := check("workflows."+n, w.Steps); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateMemberTerraform(m MemberConfig, t *MemberTerraform) error {
+	if t.PlanConnector == "" || t.ApplyConnector == "" {
+		return fmt.Errorf("plan_connector and apply_connector are required (the read and write roles)")
+	}
+	for _, n := range []string{t.PlanConnector, t.ApplyConnector} {
+		if _, err := c.MemberTerraformRole(n); err != nil {
+			return err
+		}
+	}
+	if len(t.Repos) == 0 {
+		return fmt.Errorf("repos: name at least one repository the member may propose changes in")
+	}
+	for name, url := range t.Repos {
+		if !validMemberName(name) || strings.TrimSpace(url) == "" || strings.HasPrefix(url, "-") {
+			return fmt.Errorf("repos.%s: want a name of lowercase letters/digits and a git URL or path", name)
+		}
+	}
+	for _, list := range [][]string{t.Stateful, t.AllowDestroy} {
+		for _, p := range list {
+			if _, err := filepath.Match(p, "x"); err != nil || strings.TrimSpace(p) == "" {
+				return fmt.Errorf("bad pattern %q", p)
+			}
+		}
+	}
+	// The write role is conductor's alone: a member grant that could call
+	// the apply connector's verbs would hand the agent the write role.
+	if m.Skill != nil {
+		for _, v := range m.Skill.Verbs {
+			conn := strings.SplitN(v, ".", 2)[0]
+			if v == "*" || conn == "*" {
+				return fmt.Errorf("skill.verbs %q would reach the apply connector %q — the write role is conductor's alone; name the verbs you grant", v, t.ApplyConnector)
+			}
+			if ok, _ := filepath.Match(conn, t.ApplyConnector); ok {
+				return fmt.Errorf("skill.verbs %q reaches the apply connector %q — the write role is conductor's alone", v, t.ApplyConnector)
+			}
 		}
 	}
 	return nil

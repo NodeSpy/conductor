@@ -26,7 +26,7 @@ import (
 //	deny     refuse
 //
 // The decision is a pure function of config (the member's tiers, promotion
-// list, shadow flag, spend cap), the jail's state, and the ledger (who asked
+// list, shadow flag, spend cap), the sandbox's state, and the ledger (who asked
 // for the case, what has been spent). Nothing the agent says — no option, no
 // text — can lift it: an "approved: true" option is just an option, and the
 // only thing that turns a proposal into a run is approve.go's verified
@@ -42,73 +42,49 @@ const (
 	ReqOperator = "operator" // a configured operator (by name or alias)
 )
 
-// Jail is the agent jail (#154: #160 + #175) as members see it. Until those
-// land on main it is NoJail: sessions are unjailed, promotion to autonomous
-// write tiers is refused, and home sessions launch on plain paseo.
+// Sandbox is conductor's agent sandbox as members see it. Until it is on
+// main, NoSandbox: member sessions run unconfined, promotion to autonomous
+// write tiers is refused, and the home session launches on paseo's plain
+// provider.
 //
-// Once they are on main the switch is a few lines in cmd/conductor
-// (jailSeam): register Service.IdentityForCwd with
-// controller.SetPaseoIdentity, and return JailFuncs wired to the jail's
-// enabled state and controller.ArchivePaseoCwd.
-type Jail interface {
-	// Active reports whether member sessions run jailed: the gate's
-	// precondition for promotion, and the home launcher's cue to launch on
-	// paseo's `conductor` provider.
+// Once it lands, the switch is a few lines in cmd/conductor (sandboxSeam):
+// SandboxFuncs wired to "is the sandbox enforcing" and to the name of the
+// conductor-owned paseo provider entry `conductor paseo setup` created for a
+// base provider (claude → claude-sandboxed).
+type Sandbox interface {
+	// Active reports whether agent launches are sandboxed — the gate's
+	// precondition for promotion.
 	Active() bool
-	// ArchiveCwd ends every jailed session opened in cwd (and refuses a
-	// later session/load there), returning how many — called when a home
-	// session is rotated out or a hand-off worker is retired.
-	ArchiveCwd(cwd string) int
-	// DigestFile is the SHA-256 (lowercase hex) of the file at path AS THE
-	// BROKER WILL READ IT for the agent with jail identity `identity` — a
-	// confined `terraform plan -out` writes into the dispatch's copy-on-write
-	// layer, not the workspace, so hashing a workspace path would pin bytes
-	// the broker never sees. path is as the agent names it (relative to its
-	// cwd). An error refuses the proposal.
-	DigestFile(identity, path string) (string, error)
+	// PaseoProvider names the sandboxed paseo provider entry to launch a
+	// home session on in place of base ("" base = paseo's default), and
+	// whether one exists.
+	PaseoProvider(base string) (string, bool)
 }
 
-// ErrNoJail is NoJail.DigestFile's answer: without the jail there is no
-// broker to consume a grant, so a host-command proposal is refused rather
-// than recorded against bytes nothing will check.
-var ErrNoJail = errors.New("host-command proposals need the agent jail (#154): without it no broker consumes a grant, so none is minted")
+// NoSandbox is the seam's value before the sandbox is on main.
+type NoSandbox struct{}
 
-// NoJail is the jail seam's value before #160/#175 land.
-type NoJail struct{}
+// Active implements Sandbox.
+func (NoSandbox) Active() bool { return false }
 
-// Active implements Jail.
-func (NoJail) Active() bool { return false }
+// PaseoProvider implements Sandbox.
+func (NoSandbox) PaseoProvider(string) (string, bool) { return "", false }
 
-// ArchiveCwd implements Jail.
-func (NoJail) ArchiveCwd(string) int { return 0 }
-
-// DigestFile implements Jail: refused — see ErrNoJail.
-func (NoJail) DigestFile(string, string) (string, error) { return "", ErrNoJail }
-
-// JailFuncs adapts the jail's functions to the seam.
-type JailFuncs struct {
+// SandboxFuncs adapts the sandbox's functions to the seam.
+type SandboxFuncs struct {
 	IsActive func() bool
-	Archive  func(cwd string) int
-	Digest   func(identity, path string) (string, error)
+	Provider func(base string) (string, bool)
 }
 
-// DigestFile implements Jail.
-func (j JailFuncs) DigestFile(identity, path string) (string, error) {
-	if j.Digest == nil {
-		return "", ErrNoJail
-	}
-	return j.Digest(identity, path)
-}
+// Active implements Sandbox.
+func (s SandboxFuncs) Active() bool { return s.IsActive != nil && s.IsActive() }
 
-// Active implements Jail.
-func (j JailFuncs) Active() bool { return j.IsActive != nil && j.IsActive() }
-
-// ArchiveCwd implements Jail.
-func (j JailFuncs) ArchiveCwd(cwd string) int {
-	if j.Archive == nil {
-		return 0
+// PaseoProvider implements Sandbox.
+func (s SandboxFuncs) PaseoProvider(base string) (string, bool) {
+	if s.Provider == nil {
+		return "", false
 	}
-	return j.Archive(cwd)
+	return s.Provider(base)
 }
 
 // Ledger is the slice of internal/store the member package uses.
@@ -120,10 +96,10 @@ type Ledger interface {
 
 // Gate classifies and decides member verb calls.
 type Gate struct {
-	Cfg    func() *config.Config
-	Ledger Ledger
-	Jail   Jail
-	Now    func() time.Time
+	Cfg     func() *config.Config
+	Ledger  Ledger
+	Sandbox Sandbox
+	Now     func() time.Time
 	// OnProposal is told about every new proposal (notify the operator,
 	// queue a message to the home agent). Optional.
 	OnProposal func(member string, p store.Proposal)
@@ -138,7 +114,7 @@ func (g *Gate) now() time.Time {
 	return time.Now()
 }
 
-func (g *Gate) jailed() bool { return g.Jail != nil && g.Jail.Active() }
+func (g *Gate) sandboxed() bool { return g.Sandbox != nil && g.Sandbox.Active() }
 
 // approvedKey marks a context as executing one approved proposal.
 type approvedKey struct{}
@@ -240,8 +216,8 @@ func (g *Gate) CheckVerb(ctx context.Context, id flow.SkillIdentity, uses string
 }
 
 // autonomous reports whether a reversible-tier verb runs without approval:
-// never in shadow mode, only when promoted, only while jailed, and never on
-// a third party's request.
+// never in shadow mode, only when promoted, only while sandboxed, and never
+// on a third party's request.
 func (g *Gate) autonomous(m config.MemberConfig, uses, class string) bool {
 	if m.Autonomy.ShadowMode() {
 		return false
@@ -249,7 +225,7 @@ func (g *Gate) autonomous(m config.MemberConfig, uses, class string) bool {
 	if !flow.MatchVerbPattern(m.Autonomy.Promote, uses) {
 		return false
 	}
-	if !g.jailed() {
+	if !g.sandboxed() {
 		return false
 	}
 	return class != ReqUser

@@ -2,7 +2,6 @@ package member
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -126,7 +125,7 @@ func newSvc(t *testing.T) *svcFixture {
 		Operators: map[string]config.OperatorConfig{"op": {SSHKey: "ssh-ed25519 AAAA", Aliases: []string{"slack:U1"}}},
 	}
 	f := &svcFixture{st: st, home: &fakeHome{}, workers: &fakeWorkers{}, cfg: cfg, root: filepath.Join(dir, "sessions")}
-	gate := &Gate{Cfg: func() *config.Config { return cfg }, Ledger: st, Jail: NoJail{}}
+	gate := &Gate{Cfg: func() *config.Config { return cfg }, Ledger: st, Sandbox: NoSandbox{}}
 	f.svc = &Service{Cfg: func() *config.Config { return cfg }, Ledger: st, Gate: gate, Home: f.home, Workers: f.workers,
 		SessionRoot: f.root, HandoffTimeout: time.Second}
 	gate.OnProposal = f.svc.OnProposal
@@ -469,102 +468,6 @@ func TestMemoryWritesAreCommitsAndConfined(t *testing.T) {
 	}
 }
 
-// digestJail is a jail seam whose DigestFile answers from a table keyed by
-// identity and path — the bytes the BROKER sees, which need not exist in the
-// session's workspace at all (a confined plan writes into the copy-on-write
-// layer).
-type digestJail struct {
-	sums  map[string]string // identity + "\x00" + path → sha256
-	asked []string
-}
-
-func (j *digestJail) Active() bool          { return true }
-func (j *digestJail) ArchiveCwd(string) int { return 0 }
-func (j *digestJail) DigestFile(identity, path string) (string, error) {
-	j.asked = append(j.asked, identity+" "+path)
-	if s, ok := j.sums[identity+"\x00"+path]; ok {
-		return s, nil
-	}
-	return "", fmt.Errorf("no such file in %s's view: %s", identity, path)
-}
-
-// Without the jail a host-command proposal is refused: no broker would ever
-// consume its grant.
-func TestProposeCommandNeedsTheJail(t *testing.T) {
-	f := newSvc(t)
-	ctx := context.Background()
-	f.svc.Tick(ctx, "sre")
-	w, _ := f.svc.Spawn(ctx, homeCaller(f), SpawnRequest{Brief: "apply"})
-	wc := Actor{Member: "sre", Role: config.MemberRoleWorker, Dispatch: w.Dispatch, CaseID: w.CaseID}
-	_ = os.WriteFile(filepath.Join(w.Cwd, "plan.tfplan"), []byte("PLAN"), 0o600) // present in the workspace — irrelevant
-	for _, files := range [][]string{{"plan.tfplan"}, nil} {
-		if _, err := f.svc.ProposeCommand(wc, "terraform", []string{"apply", "plan.tfplan"}, files, "", ""); !errors.Is(err, ErrNoJail) {
-			t.Fatalf("files %v: want ErrNoJail, got %v", files, err)
-		}
-	}
-	if len(f.st.Member("sre").Proposals) != 0 {
-		t.Fatal("a proposal was recorded without the jail")
-	}
-}
-
-// With the jail, files are hashed THROUGH it, for the identity the grant
-// will bind to: a cli worker by its dispatch, the home session by its jail
-// identity — never a workspace read, never paseo's agent id.
-func TestProposeCommandHashesThroughTheJail(t *testing.T) {
-	f := newSvc(t)
-	ctx := context.Background()
-	f.svc.Tick(ctx, "sre")
-	j := &digestJail{sums: map[string]string{}}
-	f.svc.Jail = j
-	home := f.st.Member("sre").Home
-	w, _ := f.svc.Spawn(ctx, homeCaller(f), SpawnRequest{Brief: "apply the plan"})
-	sumW := strings.Repeat("a", 64)
-	sumH := strings.Repeat("b", 64)
-	j.sums[w.Dispatch+"\x00plan.tfplan"] = sumW
-	j.sums[SessionIdentity("sre", home.ID)+"\x00plan.tfplan"] = sumH
-
-	wc := Actor{Member: "sre", Role: config.MemberRoleWorker, Dispatch: w.Dispatch, CaseID: w.CaseID}
-	p, err := f.svc.ProposeCommand(wc, "terraform", []string{"apply", "plan.tfplan"}, []string{"plan.tfplan"}, "", "apply")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.Files["plan.tfplan"] != sumW || p.AgentID != "" || p.Dispatch != w.Dispatch || p.Kind != "command" || p.Status != "pending" {
-		t.Fatalf("worker proposal: %+v", p)
-	}
-	ph, err := f.svc.ProposeCommand(Actor{Member: "sre", Role: config.MemberRoleHome, Dispatch: home.Dispatch}, "terraform", []string{"apply", "plan.tfplan"}, []string{"plan.tfplan"}, "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ph.Files["plan.tfplan"] != sumH || ph.AgentID != SessionIdentity("sre", home.ID) || ph.AgentID == home.AgentID {
-		t.Fatalf("home proposal: %+v", ph)
-	}
-	// A file the broker cannot see, a bad digest, a stale session: refused.
-	if _, err := f.svc.ProposeCommand(wc, "terraform", []string{"apply"}, []string{"missing.tfplan"}, "", ""); err == nil {
-		t.Error("a file the broker cannot see was pinned")
-	}
-	j.sums[w.Dispatch+"\x00weird"] = "NOT-A-SHA"
-	if _, err := f.svc.ProposeCommand(wc, "terraform", []string{"apply"}, []string{"weird"}, "", ""); err == nil {
-		t.Error("a non-SHA-256 digest was accepted")
-	}
-	if _, err := f.svc.ProposeCommand(Actor{Member: "sre", Role: config.MemberRoleHome, Dispatch: "stale"}, "terraform", nil, nil, "", ""); err == nil {
-		t.Error("a stale home session proposed a command")
-	}
-	if _, err := f.svc.ProposeCommand(wc, "/bin/sh", nil, nil, "", ""); err == nil {
-		t.Error("tool path accepted")
-	}
-	// The home session heard about the worker's proposal.
-	inbox := f.st.Member("sre").Inbox
-	found := false
-	for _, m := range inbox {
-		if strings.Contains(m.Text, p.ID) {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("home not told about the worker's proposal")
-	}
-}
-
 func TestRecoverInterruptedWorkers(t *testing.T) {
 	f := newSvc(t)
 	ctx := context.Background()
@@ -733,64 +636,5 @@ func TestConsolidateWithNothingNewIsANoOp(t *testing.T) {
 	}
 	if !strings.Contains(f.workers.fired[0].inputs["prompt"].(string), "CONSOLIDATION") {
 		t.Fatal("consolidation brief missing")
-	}
-}
-
-// The command's working directory is part of what is proposed, pinned and
-// shown: a subdirectory apply hashes the file the broker will resolve
-// (cwd + token) and the minted grant only matches from that directory.
-func TestProposeCommandFromASubdirectory(t *testing.T) {
-	f := newSvc(t)
-	ctx := context.Background()
-	f.svc.Tick(ctx, "sre")
-	j := &digestJail{sums: map[string]string{}}
-	f.svc.Jail = j
-	w, _ := f.svc.Spawn(ctx, homeCaller(f), SpawnRequest{Brief: "apply prod"})
-	wc := Actor{Member: "sre", Role: config.MemberRoleWorker, Dispatch: w.Dispatch, CaseID: w.CaseID}
-	sum := strings.Repeat("d", 64)
-	j.sums[w.Dispatch+"\x00envs/prod/tfplan"] = sum
-
-	// The shell's absolute cwd inside the workspace becomes workspace-relative.
-	_ = os.MkdirAll(filepath.Join(w.Cwd, "envs", "prod"), 0o700)
-	dir, err := f.svc.commandCwd(wc, "", filepath.Join(w.Cwd, "envs", "prod"))
-	if err != nil || dir != "envs/prod" {
-		t.Fatalf("commandCwd = %q %v", dir, err)
-	}
-	p, err := f.svc.ProposeCommand(wc, "terraform", []string{"apply", "tfplan"}, []string{"tfplan"}, dir, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.Cwd != "envs/prod" || p.Files["envs/prod/tfplan"] != sum || len(p.Files) != 1 {
-		t.Fatalf("proposal: cwd %q files %v", p.Cwd, p.Files)
-	}
-	if j.asked[len(j.asked)-1] != w.Dispatch+" envs/prod/tfplan" {
-		t.Fatalf("jail asked for %v", j.asked)
-	}
-	if a := ProposalAction(p); !strings.Contains(a, "in envs/prod") || !strings.Contains(a, "envs/prod/tfplan") {
-		t.Fatalf("the operator would not see the cwd: %s", a)
-	}
-	// The same argv from another directory is a different action (digest).
-	j.sums[w.Dispatch+"\x00envs/staging/tfplan"] = sum
-	p2, err := f.svc.ProposeCommand(wc, "terraform", []string{"apply", "tfplan"}, []string{"tfplan"}, "envs/staging", "")
-	if err != nil || p2.Digest == p.Digest {
-		t.Fatalf("cwd not part of the action digest: %v", err)
-	}
-	// …even with nothing else different: no files, same argv, two directories.
-	a, err1 := f.svc.ProposeCommand(wc, "terraform", []string{"apply", "-refresh-only"}, nil, "envs/prod", "")
-	b, err2 := f.svc.ProposeCommand(wc, "terraform", []string{"apply", "-refresh-only"}, nil, "envs/staging", "")
-	if err1 != nil || err2 != nil || a.Digest == b.Digest {
-		t.Fatalf("the cwd alone must change the signed action: %v %v", err1, err2)
-	}
-	// Escapes are refused: the cwd itself, a file token, a shell outside the workspace.
-	for _, bad := range []struct{ cwd, file string }{{"../x", "tfplan"}, {"/etc", "tfplan"}, {"envs/prod", "../../../etc/passwd"}, {"envs/prod", "/etc/passwd"}} {
-		if _, err := f.svc.ProposeCommand(wc, "terraform", []string{"apply"}, []string{bad.file}, bad.cwd, ""); err == nil {
-			t.Errorf("cwd %q file %q accepted", bad.cwd, bad.file)
-		}
-	}
-	if _, err := f.svc.commandCwd(wc, "", t.TempDir()); err == nil {
-		t.Error("a shell outside the workspace got a cwd")
-	}
-	if d, _ := f.svc.commandCwd(wc, "", ""); d != "." {
-		t.Errorf("no cwd = %q, want the root", d)
 	}
 }

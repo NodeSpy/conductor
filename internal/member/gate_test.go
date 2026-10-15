@@ -13,17 +13,13 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/flow"
-	"github.com/NodeSpy/conductor/internal/grant"
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
 type fixedJail bool
 
-func (j fixedJail) Active() bool          { return bool(j) }
-func (j fixedJail) ArchiveCwd(string) int { return 0 }
-func (j fixedJail) DigestFile(string, string) (string, error) {
-	return "", ErrNoJail
-}
+func (j fixedJail) Active() bool                        { return bool(j) }
+func (j fixedJail) PaseoProvider(string) (string, bool) { return "", false }
 
 var gateNow = time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 
@@ -65,7 +61,7 @@ func newGateFixture(t *testing.T, m config.MemberConfig, jailed bool) *gateFixtu
 			Operators: map[string]config.OperatorConfig{"op": {SSHKey: "ssh-ed25519 AAAA"}}},
 		st: st, now: gateNow,
 	}
-	f.gate = &Gate{Cfg: func() *config.Config { return f.cfg }, Ledger: st, Jail: fixedJail(jailed), Now: func() time.Time { return f.now }}
+	f.gate = &Gate{Cfg: func() *config.Config { return f.cfg }, Ledger: st, Sandbox: fixedJail(jailed), Now: func() time.Time { return f.now }}
 	return f
 }
 
@@ -279,18 +275,16 @@ func genKey(t *testing.T, name string) opKey {
 
 type execFixture struct {
 	*gateFixture
-	x      *Executor
-	grants *grant.MemStore
-	ran    []string
-	op     opKey
+	x   *Executor
+	ran []string
+	op  opKey
 }
 
 func newExecFixture(t *testing.T, m config.MemberConfig) *execFixture {
 	f := &execFixture{gateFixture: newGateFixture(t, m, true), op: genKey(t, "op")}
 	f.cfg.Operators = map[string]config.OperatorConfig{"op": {SSHKey: f.op.pub}}
-	f.grants = grant.NewMemStoreClock(func() time.Time { return f.now })
 	f.x = &Executor{
-		Cfg: func() *config.Config { return f.cfg }, Ledger: f.st, Gate: f.gate, Grants: f.grants,
+		Cfg: func() *config.Config { return f.cfg }, Ledger: f.st, Gate: f.gate,
 		Now: func() time.Time { return f.now },
 		// The real chokepoint's member step: the gate decides, then "run".
 		RunVerb: func(ctx context.Context, id flow.SkillIdentity, uses string, opts map[string]any) (map[string]any, error) {
@@ -444,48 +438,6 @@ func TestApproveSpendRecordedAndRechecked(t *testing.T) {
 	}
 }
 
-func TestApproveCommandMintsGrant(t *testing.T) {
-	f := newExecFixture(t, testMember())
-	var pid string
-	_ = f.st.UpdateMember("sre", func(r *store.MemberRecord) error {
-		pid = r.NextID("p")
-		r.Proposals = map[string]*store.Proposal{pid: {
-			ID: pid, Kind: "command", Tier: config.TierPropose, Tool: "terraform",
-			Argv: []string{"apply", "-input=false", "plan.tfplan"}, Files: map[string]string{"plan.tfplan": strings.Repeat("a", 64)},
-			Digest: "d1", Dispatch: "d-w", AgentID: "agent-w", CaseID: "c1", Status: "pending", Created: gateNow, Expires: gateNow.Add(time.Hour),
-		}}
-		return nil
-	})
-	j := &digestJail{sums: map[string]string{"d-w\x00plan.tfplan": strings.Repeat("a", 64)}}
-	// "agent-w" is the identity the proposal binds to; the jail answers for it.
-	j.sums["agent-w\x00plan.tfplan"] = strings.Repeat("a", 64)
-	f.x.Jail = j
-	out, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, pid, "approve")})
-	if err != nil || out.Status != "executed" || out.Grant == "" {
-		t.Fatalf("command approve: %+v %v", out, err)
-	}
-	if len(j.asked) != 1 || j.asked[0] != "agent-w plan.tfplan" {
-		t.Fatalf("mint did not re-hash through the jail for the bound identity: %v", j.asked)
-	}
-	g, err := f.grants.Get(context.Background(), out.Grant)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if g.Tool != "terraform" || g.Dispatch != "d-w" || g.AgentID != "agent-w" || !g.SingleUse || g.ApprovedBy != "op" || g.CaseID != "c1" {
-		t.Fatalf("grant: %+v", g)
-	}
-	if !g.Argv.Equal(grant.ParseArgv([]string{"apply", "-input=false", "plan.tfplan"})) || len(g.FileDigests) != 1 {
-		t.Fatalf("grant argv/digests: %+v", g)
-	}
-	if !g.Expiry.Equal(gateNow.Add(time.Hour)) {
-		t.Fatalf("grant expiry %s", g.Expiry)
-	}
-	found, _ := f.grants.Find(context.Background(), grant.Presented{AgentID: "agent-w", Dispatch: "d-w", Tool: "terraform", Argv: grant.ParseArgv([]string{"apply", "-input=false", "plan.tfplan"})})
-	if len(found) != 1 {
-		t.Fatal("broker would not find the minted grant")
-	}
-}
-
 func TestApprovedContextAdmitsOnlyItsAction(t *testing.T) {
 	f := newExecFixture(t, testMember())
 	pid := f.propose(t, "gh.comment", map[string]any{"body": "hi"})
@@ -528,7 +480,7 @@ func TestDegradedLedgerRefusesMoney(t *testing.T) {
 		t.Fatal("corrupt ledger not preserved")
 	}
 	cfg := &config.Config{Members: map[string]config.MemberConfig{"sre": testMember()}}
-	g := &Gate{Cfg: func() *config.Config { return cfg }, Ledger: st, Jail: fixedJail(true), Now: func() time.Time { return gateNow }}
+	g := &Gate{Cfg: func() *config.Config { return cfg }, Ledger: st, Sandbox: fixedJail(true), Now: func() time.Time { return gateNow }}
 	if _, err := g.CheckVerb(context.Background(), homeID(), "aws.purchase_sp", map[string]any{"total_usd": 1.0}); err == nil {
 		t.Fatal("commit_money allowed on a degraded ledger")
 	}
@@ -626,71 +578,5 @@ func TestSignatureNamespaceIsBound(t *testing.T) {
 	sig, _ := os.ReadFile(msg + ".sig")
 	if _, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: string(sig)}); err == nil {
 		t.Fatal("a git-namespace signature approved a member proposal")
-	}
-}
-
-// A command grant is minted only through the jail, and only for the bytes
-// that were approved.
-func TestCommandGrantMintRechecksThroughTheJail(t *testing.T) {
-	newCmd := func(f *execFixture) string {
-		var pid string
-		_ = f.st.UpdateMember("sre", func(r *store.MemberRecord) error {
-			pid = r.NextID("p")
-			if r.Proposals == nil {
-				r.Proposals = map[string]*store.Proposal{}
-			}
-			r.Proposals[pid] = &store.Proposal{ID: pid, Kind: "command", Tier: config.TierPropose, Tool: "terraform",
-				Argv: []string{"apply", "plan.tfplan"}, Files: map[string]string{"plan.tfplan": strings.Repeat("a", 64)},
-				Digest: "d-" + pid, Dispatch: "d-w", Status: "pending", Created: gateNow, Expires: gateNow.Add(time.Hour)}
-			return nil
-		})
-		return pid
-	}
-	f := newExecFixture(t, testMember())
-	// No jail: nothing minted, and the proposal says why.
-	pid := newCmd(f)
-	out, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, pid, "approve")})
-	if err == nil || out.Grant != "" || out.Status != "failed" {
-		t.Fatalf("minted without the jail: %+v %v", out, err)
-	}
-	// The plan changed after it was proposed: nothing minted.
-	f.x.Jail = &digestJail{sums: map[string]string{"d-w\x00plan.tfplan": strings.Repeat("c", 64)}}
-	pid = newCmd(f)
-	out, err = f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, pid, "approve")})
-	if err == nil || out.Grant != "" || !strings.Contains(out.Reason, "changed since it was proposed") {
-		t.Fatalf("minted for changed bytes: %+v %v", out, err)
-	}
-	if g, _ := f.grants.ByCase(context.Background(), ""); len(g) != 0 {
-		t.Fatal("a grant exists")
-	}
-}
-
-// The minted grant carries the proposal's cwd: it matches the approved
-// command only from that directory.
-func TestMintedGrantIsBoundToTheCwd(t *testing.T) {
-	f := newExecFixture(t, testMember())
-	var pid string
-	_ = f.st.UpdateMember("sre", func(r *store.MemberRecord) error {
-		pid = r.NextID("p")
-		r.Proposals = map[string]*store.Proposal{pid: {ID: pid, Kind: "command", Tier: config.TierPropose, Tool: "terraform",
-			Argv: []string{"apply", "tfplan"}, Cwd: "envs/prod", Files: map[string]string{"envs/prod/tfplan": strings.Repeat("a", 64)},
-			Digest: "dg", Dispatch: "d-w", Status: "pending", Created: gateNow, Expires: gateNow.Add(time.Hour)}}
-		return nil
-	})
-	f.x.Jail = &digestJail{sums: map[string]string{"d-w\x00envs/prod/tfplan": strings.Repeat("a", 64)}}
-	out, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, pid, "approve")})
-	if err != nil || out.Grant == "" {
-		t.Fatalf("approve: %+v %v", out, err)
-	}
-	g, _ := f.grants.Get(context.Background(), out.Grant)
-	if g.Cwd != "envs/prod" || g.FileDigests[0].Path != "envs/prod/tfplan" {
-		t.Fatalf("grant cwd/path: %q %+v", g.Cwd, g.FileDigests)
-	}
-	pres := grant.Presented{Dispatch: "d-w", Tool: "terraform", Argv: grant.ParseArgv([]string{"apply", "tfplan"})}
-	for cwd, want := range map[string]bool{"envs/prod": true, "envs/staging": false, ".": false} {
-		pres.Cwd = cwd
-		if got, _ := f.grants.Find(context.Background(), pres); (len(got) == 1) != want {
-			t.Errorf("Find from %q: %d grants, want match=%v", cwd, len(got), want)
-		}
 	}
 }

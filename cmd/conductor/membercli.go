@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -41,6 +40,7 @@ const memberUsage = `usage:
     conductor member say <member> <text…>
     conductor member deliver <member> --title "…" [--text "…"] [--requester who] [--urgent]
     conductor member consolidate <member>
+    conductor member replan <member> <id>          # re-plan a stale terraform proposal
   from a member session:
     conductor member whoami
     conductor member remember --path knowledge/<f>.md --text "…" [--append]
@@ -53,7 +53,8 @@ const memberUsage = `usage:
     conductor member case close <case> --outcome "…"
     conductor member spawn [--case <id>] [--title "…"] --brief "…" [--handoff]
     conductor member handoff --text "…"
-    conductor member propose-command [--file <f>]… [--cwd <dir>] [--summary "…"] -- <tool> <args…>
+    conductor member propose-terraform --repo <name> --commit <full sha> [--dir <root module>] [--workspace <ws>] [--var-file <f>]… [--target <addr>]… [--summary "…"]
+    conductor member replan <proposal>
     conductor member proposals [--all]
     conductor member wait <proposal> [--timeout 30m]`
 
@@ -127,7 +128,7 @@ func memberAgentCall(sub string, a map[string]any) (map[string]any, error) {
 }
 
 func memberAgent(sub string, args []string) error {
-	pos, fl, files, rest := memberFlags(args)
+	pos, fl, _, _ := memberFlags(args)
 	a := map[string]any{}
 	for k, v := range fl {
 		a[k] = v
@@ -158,27 +159,28 @@ func memberAgent(sub string, args []string) error {
 		default:
 			return fmt.Errorf("unknown case action %q", pos[0])
 		}
-	case "propose-command":
-		if len(rest) == 0 {
-			return fmt.Errorf("usage: conductor member propose-command [--file f]… -- <tool> <args…>")
+	case "propose-terraform":
+		call = "propose_terraform"
+		// Repeatable flags: --var-file / --target.
+		var vfs, tgts []any
+		for k := 0; k < len(args); k++ {
+			if (args[k] == "--var-file" || args[k] == "--target") && k+1 < len(args) {
+				if args[k] == "--var-file" {
+					vfs = append(vfs, args[k+1])
+				} else {
+					tgts = append(tgts, args[k+1])
+				}
+				k++
+			}
 		}
-		call = "propose_command"
-		a["tool"] = filepath.Base(rest[0])
-		argv := make([]any, 0, len(rest)-1)
-		for _, x := range rest[1:] {
-			argv = append(argv, x)
+		delete(a, "var-file")
+		delete(a, "target")
+		a["var_files"], a["targets"] = vfs, tgts
+	case "replan":
+		if len(pos) != 1 {
+			return fmt.Errorf("usage: conductor member replan <proposal>")
 		}
-		a["argv"] = argv
-		fs := make([]any, 0, len(files))
-		for _, f := range files {
-			fs = append(fs, f)
-		}
-		a["files"] = fs
-		// The command runs where this shell is: the daemon makes it
-		// workspace-relative (or --cwd <dir> says so explicitly).
-		if wd, err := os.Getwd(); err == nil {
-			a["cwd_abs"] = wd
-		}
+		a["proposal"] = pos[0]
 	case "wait":
 		if len(pos) != 1 {
 			return fmt.Errorf("usage: conductor member wait <proposal> [--timeout 30m]")
@@ -197,7 +199,7 @@ func memberAgent(sub string, args []string) error {
 			if err != nil {
 				return err
 			}
-			if out["status"] != "pending" || time.Now().After(deadline) {
+			if st, _ := out["status"].(string); !member.Unsettled(st) || time.Now().After(deadline) {
 				return printJSON(out)
 			}
 		}
@@ -265,6 +267,11 @@ func memberOperator(sub string, args []string) error {
 		if err := needMember(1); err != nil {
 			return err
 		}
+	case "replan":
+		if err := needMember(2); err != nil {
+			return err
+		}
+		a["id"] = pos[1]
 	case "proposal":
 		if err := needMember(2); err != nil {
 			return err

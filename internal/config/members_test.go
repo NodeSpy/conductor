@@ -239,3 +239,57 @@ func TestRotateAgeCappedByTheTokenLifetime(t *testing.T) {
 		t.Fatal("the default rotation age must sit well inside the token lifetime")
 	}
 }
+
+func TestMemberTerraformValidation(t *testing.T) {
+	base := `
+connectors:
+  gh: { use: github, token: x, repos: ["acme/*"] }
+  tf-read:  { use: terraform, env: { AWS_PROFILE: acme-read } }
+  tf-write: { use: terraform, env: { AWS_PROFILE: acme-write }, binary: /usr/bin/tofu }
+runtimes:
+  paseo: { use: paseo, default: true }
+  claude-cli: { use: cli, tool: claude-code }
+`
+	load := func(body string) (*Config, error) {
+		dir := t.TempDir()
+		SetStateDir(filepath.Join(dir, "state"))
+		t.Cleanup(func() { SetStateDir("") })
+		p := filepath.Join(dir, "config.yaml")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load(p)
+	}
+	good := base + `
+members:
+  sre:
+    skill: { verbs: [tf-read.plan, gh.comment] }
+    terraform: { plan_connector: tf-read, apply_connector: tf-write, repos: { infra: git@example.com:acme/infra.git } }
+`
+	c, err := load(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := c.MemberTerraformRole("tf-write")
+	if err != nil || r.Bin() != "/usr/bin/tofu" || r.Env["AWS_PROFILE"] != "acme-write" {
+		t.Fatalf("write role: %+v %v", r, err)
+	}
+	if got := c.Members["sre"].Terraform.StatefulTypes(); len(got) == 0 || got[0] != DefaultStatefulTypes[0] {
+		t.Fatal("default stateful list not applied")
+	}
+	for name, body := range map[string]string{
+		"no connectors":       "\nmembers:\n  sre:\n    terraform: { repos: { infra: x } }\n",
+		"unknown connector":   "\nmembers:\n  sre:\n    terraform: { plan_connector: nope, apply_connector: tf-write, repos: { infra: x } }\n",
+		"not terraform":       "\nmembers:\n  sre:\n    terraform: { plan_connector: gh, apply_connector: tf-write, repos: { infra: x } }\n",
+		"no repos":            "\nmembers:\n  sre:\n    terraform: { plan_connector: tf-read, apply_connector: tf-write }\n",
+		"grant reaches apply": "\nmembers:\n  sre:\n    skill: { verbs: [tf-write.apply] }\n    terraform: { plan_connector: tf-read, apply_connector: tf-write, repos: { infra: x } }\n",
+		"apply by pattern":    "\nmembers:\n  sre:\n    skill: { verbs: [\"tf-*.plan\"] }\n    terraform: { plan_connector: tf-read, apply_connector: tf-write, repos: { infra: x } }\n",
+		"wildcard grant":      "\nmembers:\n  sre:\n    skill: { verbs: [\"*\"] }\n    terraform: { plan_connector: tf-read, apply_connector: tf-write, repos: { infra: x } }\n",
+		"bad repo name":       "\nmembers:\n  sre:\n    terraform: { plan_connector: tf-read, apply_connector: tf-write, repos: { Infra!: x } }\n",
+		"bad pattern":         "\nmembers:\n  sre:\n    terraform: { plan_connector: tf-read, apply_connector: tf-write, repos: { infra: x }, stateful: [\"[\"] }\n",
+	} {
+		if _, err := load(base + body); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

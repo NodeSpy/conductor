@@ -71,16 +71,13 @@ type Case struct {
 type Proposal struct {
 	ID     string `json:"id"`
 	CaseID string `json:"case_id,omitempty"`
-	// Kind is "verb" (conductor executes the verb on approval) or "command"
-	// (approval mints a grant the jail's broker consumes).
-	Kind  string            `json:"kind"`
-	Tier  string            `json:"tier"`
-	Uses  string            `json:"uses,omitempty"`
-	Tool  string            `json:"tool,omitempty"`
-	Argv  []string          `json:"argv,omitempty"`
-	Files map[string]string `json:"files,omitempty"` // command: workspace-relative path → sha256 at proposal
-	// Cwd is a command's working directory, workspace-relative ("." = root).
-	Cwd string `json:"cwd,omitempty"`
+	// Kind is "verb" (conductor executes the verb on approval) or
+	// "terraform" (conductor applies the saved plan it made, on approval).
+	Kind string `json:"kind"`
+	Tier string `json:"tier"`
+	Uses string `json:"uses,omitempty"`
+	// Terraform is a terraform proposal's pins and the plan conductor made.
+	Terraform *TerraformPlan `json:"terraform,omitempty"`
 	// Options are the verb's options exactly as proposed (secrets redacted
 	// before they land here — see member.Gate).
 	Options map[string]any `json:"options,omitempty"`
@@ -94,23 +91,45 @@ type Proposal struct {
 	Role     string `json:"role"`
 	Agent    string `json:"agent,omitempty"`
 	Dispatch string `json:"dispatch,omitempty"`
-	AgentID  string `json:"agent_id,omitempty"`
 	// Identity is the token-bound caller identity, kept daemon-side so the
 	// approved verb executes under exactly the grant it was proposed under.
 	Identity json.RawMessage `json:"identity,omitempty"`
 	// Requester/RequesterClass are copied from the case at proposal time.
 	Requester      string `json:"requester,omitempty"`
 	RequesterClass string `json:"requester_class"`
-	// Status: pending | shadow | approved | denied | executed | failed | expired.
+	// Status: planning | pending | shadow | refused | approved | denied |
+	// executed | failed | expired.
 	Status   string    `json:"status"`
 	Reason   string    `json:"reason,omitempty"`
 	Created  time.Time `json:"created"`
 	Expires  time.Time `json:"expires"`
 	Decided  time.Time `json:"decided,omitempty"`
 	Approver string    `json:"approver,omitempty"`
-	// Result is the executed verb's output, or the minted grant id.
+	// Result is the executed verb's output, or the apply's.
 	Result map[string]any `json:"result,omitempty"`
-	Grant  string         `json:"grant,omitempty"`
+}
+
+// TerraformPlan is a terraform proposal: what the member pinned, and what
+// conductor's own plan of it showed. The signed digest covers PlanSHA256.
+type TerraformPlan struct {
+	// Pinned by the proposer.
+	Repo      string   `json:"repo"`                // a member terraform.repos name
+	Commit    string   `json:"commit"`              // the full commit id
+	Dir       string   `json:"dir"`                 // root module, repo-relative ("." = root)
+	Workspace string   `json:"workspace"`           // terraform workspace
+	VarFiles  []string `json:"var_files,omitempty"` // relative to Dir
+	Targets   []string `json:"targets,omitempty"`
+	// Filled by conductor's plan.
+	PlanSHA256 string    `json:"plan_sha256,omitempty"`
+	Add        int       `json:"add"`
+	Change     int       `json:"change"`
+	Destroy    int       `json:"destroy"`
+	Replaced   []string  `json:"replaced,omitempty"`  // addresses replaced (delete+create)
+	Destroyed  []string  `json:"destroyed,omitempty"` // addresses deleted outright
+	PlanText   string    `json:"plan_text,omitempty"` // `terraform show` of the plan, capped
+	PlannedAt  time.Time `json:"planned_at,omitempty"`
+	// ReplanOf names the proposal this one re-plans (a stale plan's).
+	ReplanOf string `json:"replan_of,omitempty"`
 }
 
 // Worker is one worker launched for a case.
@@ -282,4 +301,12 @@ func cloneMember(r *MemberRecord) *MemberRecord {
 		return &MemberRecord{Name: r.Name}
 	}
 	return &out
+}
+
+// Clone deep-copies a proposal.
+func (p *Proposal) Clone() Proposal {
+	b, _ := json.Marshal(p)
+	var out Proposal
+	_ = json.Unmarshal(b, &out)
+	return out
 }

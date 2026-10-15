@@ -4,12 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
-	"github.com/NodeSpy/conductor/internal/grant"
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
@@ -134,16 +132,26 @@ func (s *Service) AgentOp(ctx context.Context, c Actor, sub string, args map[str
 			return nil, err
 		}
 		return map[string]any{"commit": sha}, nil
-	case "propose_command":
-		cwd, err := s.commandCwd(c, str(args, "cwd"), str(args, "cwd_abs"))
+	case "propose_terraform":
+		if s.Terraform == nil {
+			return nil, fmt.Errorf("no member has terraform: configured on this daemon")
+		}
+		p, err := s.Terraform.Propose(ctx, c, TerraformRequest{Repo: str(args, "repo"), Commit: str(args, "commit"), Dir: str(args, "dir"),
+			Workspace: str(args, "workspace"), VarFiles: strs(args, "var_files"), Targets: strs(args, "targets"), Summary: str(args, "summary")})
 		if err != nil {
 			return nil, err
 		}
-		p, err := s.ProposeCommand(c, str(args, "tool"), strs(args, "argv"), strs(args, "files"), cwd, str(args, "summary"))
+		return map[string]any{"proposal": p.ID, "status": p.Status, "executed": false,
+			"message": fmt.Sprintf("Conductor is planning %s@%s (%s) in its own checkout. When the plan is ready you and your operator will see its summary; an operator approves it with `conductor member approve %s %s`, and conductor applies exactly that plan. `conductor member wait %s` blocks until it is decided.", p.Terraform.Repo, short(p.Terraform.Commit), p.Terraform.Dir, c.Member, p.ID, p.ID)}, nil
+	case "replan":
+		if s.Terraform == nil {
+			return nil, fmt.Errorf("no member has terraform: configured on this daemon")
+		}
+		p, err := s.Terraform.Replan(ctx, c, str(args, "proposal"))
 		if err != nil {
 			return nil, err
 		}
-		return proposalAnswer(p, s.Cfg().Members[c.Member]), nil
+		return map[string]any{"proposal": p.ID, "status": p.Status, "replan_of": str(args, "proposal")}, nil
 	case "proposals":
 		return map[string]any{"proposals": toList(s.Proposals(c.Member, boolArg(args, "all")))}, nil
 	case "wait":
@@ -270,6 +278,18 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 			return nil, err
 		}
 		return map[string]any{"case": id}, nil
+	case "replan":
+		if err := need(); err != nil {
+			return nil, err
+		}
+		if s.Terraform == nil {
+			return nil, fmt.Errorf("no terraform runner on this daemon")
+		}
+		p, err := s.Terraform.Replan(ctx, Actor{Member: name, Role: config.MemberRoleHome}, str(args, "id"))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"proposal": p.ID, "status": p.Status, "replan_of": str(args, "id")}, nil
 	case "consolidate":
 		w, err := s.Consolidate(ctx, name)
 		if err != nil {
@@ -305,7 +325,7 @@ func (s *Service) statusOf(name string) map[string]any {
 	}
 	out := map[string]any{
 		"member": name, "description": m.Description, "shadow": m.Autonomy.ShadowMode(),
-		"jailed": s.Gate != nil && s.Gate.jailed(), "memory_repo": cfg.MemberRepoDir(name),
+		"sandboxed": s.Gate != nil && s.Gate.sandboxed(), "memory_repo": cfg.MemberRepoDir(name),
 		"open_cases": open, "pending_proposals": pending, "live_workers": workers,
 		"home_runtime": cfg.MemberHomeRuntime(name), "worker_role": config.MemberRoleWorker,
 	}
@@ -315,50 +335,4 @@ func (s *Service) statusOf(name string) map[string]any {
 	}
 	delete(out, "worker_role")
 	return out
-}
-
-// commandCwd is the workspace-relative directory a proposed command runs in:
-// an explicit `cwd` (workspace-relative), else the calling shell's absolute
-// working directory made relative to the session's workspace — which must
-// not climb out of it. Neither: the workspace root.
-func (s *Service) commandCwd(c Actor, rel, abs string) (string, error) {
-	if rel != "" {
-		return grant.CleanCwd(rel)
-	}
-	if abs == "" {
-		return ".", nil
-	}
-	rec := s.Ledger.Member(c.Member)
-	root := ""
-	switch c.Role {
-	case config.MemberRoleHome:
-		if rec.Home != nil {
-			root = rec.Home.Cwd
-		}
-	case config.MemberRoleWorker:
-		for _, w := range rec.Workers {
-			if w.Dispatch == c.Dispatch {
-				root = w.Cwd
-			}
-		}
-	}
-	if root == "" {
-		return "", fmt.Errorf("cannot resolve the calling session's workspace")
-	}
-	r, err := filepath.Rel(evalOr(root), evalOr(abs))
-	if err != nil {
-		return "", fmt.Errorf("working directory %s is not inside the session workspace", abs)
-	}
-	out, err := grant.CleanCwd(filepath.ToSlash(r))
-	if err != nil {
-		return "", fmt.Errorf("working directory %s is not inside the session workspace — pass --cwd <workspace-relative dir>", abs)
-	}
-	return out, nil
-}
-
-func evalOr(p string) string {
-	if e, err := filepath.EvalSymlinks(p); err == nil {
-		return e
-	}
-	return filepath.Clean(p)
 }

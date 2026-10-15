@@ -13,7 +13,6 @@ import (
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/engine"
 	"github.com/NodeSpy/conductor/internal/flow"
-	"github.com/NodeSpy/conductor/internal/grant"
 	"github.com/NodeSpy/conductor/internal/member"
 	"github.com/NodeSpy/conductor/internal/memory"
 	"github.com/NodeSpy/conductor/internal/skill"
@@ -22,22 +21,15 @@ import (
 
 // memberStack is the daemon's member wiring (docs/design/members.md).
 type memberStack struct {
-	svc    *member.Service
-	gate   *member.Gate
-	grants grant.Store
+	svc  *member.Service
+	gate *member.Gate
 }
-
-// grantStore is the daemon's one grant store, shared by the member gate
-// (which mints on approval) and — once #154 lands — the jail's broker
-// (which consumes). In-memory by design: a grant is a short-lived approval,
-// and a restart dropping it is the safe failure (the case keeps the approval
-// record; an operator re-approves).
-var grantStore grant.Store = grant.NewMemStore()
 
 // buildMembers assembles the member service from the daemon's existing
 // parts: the ledger (store), the flow runner's skill chokepoint (gate +
 // approved execution), the paseo dispatcher of the home runtime (home
-// sessions), and the engine's manual-trigger path (workers). nil when no
+// sessions), the engine's manual-trigger path (workers), and — for members
+// with a terraform: block — conductor's own terraform runner. nil when no
 // member is configured.
 func buildMembers(cfg *config.Config, st *store.Store, runner *flow.Runner, reg *controller.Registry,
 	hold *dispatch.HoldSet, eng *engine.Engine, logf func(string, ...any)) *memberStack {
@@ -45,10 +37,17 @@ func buildMembers(cfg *config.Config, st *store.Store, runner *flow.Runner, reg 
 		return nil
 	}
 	cfgFn := func() *config.Config { return cfg }
-	jail := jailSeam()
-	gate := &member.Gate{Cfg: cfgFn, Ledger: st, Jail: jail}
+	sandbox := sandboxSeam()
+	gate := &member.Gate{Cfg: cfgFn, Ledger: st, Sandbox: sandbox}
 	audit := func(e map[string]any) { st.Audit(e) }
-	exec := &member.Executor{Cfg: cfgFn, Ledger: st, Gate: gate, Grants: grantStore, RunVerb: runner.RunSkillVerb, Audit: audit, Jail: jail}
+	var tf *member.Terraform
+	for _, n := range cfg.MemberNames() {
+		if cfg.Members[n].Terraform != nil {
+			tf = &member.Terraform{Cfg: cfgFn, Ledger: st, Gate: gate, Log: logf}
+			break
+		}
+	}
+	exec := &member.Executor{Cfg: cfgFn, Ledger: st, Gate: gate, RunVerb: runner.RunSkillVerb, Audit: audit, Terraform: tf}
 	home := &member.PaseoHome{
 		Cfg: cfgFn,
 		For: func(rt string) (member.PaseoDispatcher, error) {
@@ -62,46 +61,49 @@ func buildMembers(cfg *config.Config, st *store.Store, runner *flow.Runner, reg 
 			}
 			return d, nil
 		},
-		Hold: hold.Add, Unhold: hold.Remove, Jail: jail, Resolve: eng.ResolveModel,
+		Hold: hold.Add, Unhold: hold.Remove, Sandbox: sandbox, Resolve: eng.ResolveModel,
 		Revoke: revokeDispatch,
 	}
 	manual := manualTriggersByName(cfg)
 	svc := &member.Service{
-		Cfg: cfgFn, Ledger: st, Gate: gate, Exec: exec, Home: home,
+		Cfg: cfgFn, Ledger: st, Gate: gate, Exec: exec, Home: home, Terraform: tf,
 		Workers: workerFirer(func(ctx context.Context, trig, hid string, inputs map[string]any) error {
 			_, err := runManualTrigger(ctx, manual, controlRequest{Name: trig, Inputs: inputs, HistoryID: hid}, eng.Emit)
 			return err
 		}),
-		Log: logf, Audit: audit, Jail: jail, RevokeToken: revokeDispatch,
+		Log: logf, Audit: audit, RevokeToken: revokeDispatch,
 	}
-	registerJailIdentity(svc)
+	registerSandboxSessions(svc)
 	gate.OnProposal = svc.OnProposal
 	exec.Notify = svc.OnDecision
+	if tf != nil {
+		tf.OnPlanned = svc.OnProposal
+	}
 	runner.Members = gate
 	runner.MemberRouter = svc
-	if len(cfg.MemberNames()) > 0 {
-		logf("members: %s — sessions are NOT jailed until #154 lands; promotion beyond observe/propose is refused without the jail", strings.Join(cfg.MemberNames(), ", "))
+	if !sandbox.Active() {
+		logf("members: %s — sessions are NOT sandboxed until conductor's agent sandbox is on this daemon; promotion beyond observe/propose is refused without it", strings.Join(cfg.MemberNames(), ", "))
 	}
-	return &memberStack{svc: svc, gate: gate, grants: grantStore}
+	return &memberStack{svc: svc, gate: gate}
 }
 
-// jailSeam is the agent jail as members see it. Until #160 (agent jail) and
-// #175 (its paseo integration) are on main it is NoJail — member sessions run
-// unjailed and promotion past observe/propose is refused. The switch, once
-// they land:
+// sandboxSeam is conductor's agent sandbox as members see it. Until it is on
+// main this is NoSandbox — member sessions run unconfined and promotion past
+// observe/propose is refused. The switch, once it lands:
 //
-//	return member.JailFuncs{
-//		IsActive: func() bool { return <the jail is enabled for paseo sessions> },
-//		Archive:  controller.ArchivePaseoCwd,
-//		Digest:   <the jail's "sha256 of path as the broker reads it, for identity">,
+//	return member.SandboxFuncs{
+//		IsActive: func() bool { return <the sandbox is enforcing agent launches> },
+//		Provider: func(base string) (string, bool) { return <the conductor-owned paseo provider entry `conductor paseo setup` made for base, e.g. claude-sandboxed> },
 //	}
-func jailSeam() member.Jail { return member.NoJail{} }
+func sandboxSeam() member.Sandbox { return member.NoSandbox{} }
 
-// registerJailIdentity hands the jail members' cwd→identity lookup. A no-op
-// until #175 is on main; then:
+// registerSandboxSessions hands the sandbox endpoint members' cwd → session
+// lookup, so `conductor sandbox exec` launching a member's home agent (or a
+// hand-off worker) mints that launch's token with the member binding and
+// dispatch. A no-op until the sandbox is on main; then, roughly:
 //
-//	controller.SetPaseoIdentity(svc.IdentityForCwd)
-func registerJailIdentity(svc *member.Service) { _ = svc.IdentityForCwd }
+//	sandbox.SetSessionLookup(func(cwd string) (sandbox.Session, bool) { b, ok := svc.SessionForCwd(cwd); … })
+func registerSandboxSessions(svc *member.Service) { _ = svc.SessionForCwd }
 
 // revokeDispatch kills every conductor session token minted for a dispatch
 // (the broker's hand-off release path), durable ones included.
