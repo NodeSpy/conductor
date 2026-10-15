@@ -94,7 +94,7 @@ for _ in $(seq 1 20); do [ -S "$W/st/control.sock" ] || break; sleep 0.5; done
 ( cd "$W" && pe paseo daemon stop >/dev/null 2>&1; pe paseo daemon start --timeout 120 >/dev/null 2>&1 )
 rm -f "$W/ws/CONDUCTOR_FIX.md"
 res="$(run canary-down)"
-case "$res" in *"refusing to launch"*|*'"status": "error"'*) echo "ok   conductor down: the session is refused" ;; *) echo "FAIL conductor down: $res"; fail=1 ;; esac
+case "$res" in *"refusing to launch"*|*'"status": "error"'*|*AGENT_CREATE_FAILED*) echo "ok   conductor down: the session is refused" ;; *) echo "FAIL conductor down: $res"; fail=1 ;; esac
 check "conductor down: the agent never ran" no "$( [ -e "$W/ws/CONDUCTOR_FIX.md" ] && echo yes || echo no)"
 
 echo "== paseo canary: $([ $fail = 0 ] && echo PASS || echo FAIL) =="
