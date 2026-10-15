@@ -29,15 +29,15 @@ func (v *axValue) str() string {
 }
 
 type axNode struct {
-	NodeID     string    `json:"nodeId"`
-	Ignored    bool      `json:"ignored"`
-	Role       *axValue  `json:"role"`
-	Name       *axValue  `json:"name"`
-	Value      *axValue  `json:"value"`
-	ParentID   string    `json:"parentId"`
-	ChildIDs   []string  `json:"childIds"`
-	BackendID  int64     `json:"backendDOMNodeId"`
-	Properties []axProp  `json:"properties"`
+	NodeID     string   `json:"nodeId"`
+	Ignored    bool     `json:"ignored"`
+	Role       *axValue `json:"role"`
+	Name       *axValue `json:"name"`
+	Value      *axValue `json:"value"`
+	ParentID   string   `json:"parentId"`
+	ChildIDs   []string `json:"childIds"`
+	BackendID  int64    `json:"backendDOMNodeId"`
+	Properties []axProp `json:"properties"`
 }
 
 type axProp struct {
