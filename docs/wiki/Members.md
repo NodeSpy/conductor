@@ -104,6 +104,13 @@ then archives the old agent and removes its worktree. A failed launch leaves the
 old session in place. No two live sessions ever share a working directory. A
 daemon restart keeps the live session.
 
+**Tokens.** A member session's conductor token is durable like a hand-off's:
+it survives daemon restarts and lives 7 days from its last use. So
+`rotate.max_age` must stay at least a day inside that (validation rejects
+more than 6 days), and a retired home session's token — and a finished
+worker's, however it finished — is revoked the moment it is retired, not left
+to age out.
+
 **Delivery.** Events and worker reports land in the member's durable inbox and
 are delivered as one turn when the home agent is idle — never into a turn you
 are in the middle of.

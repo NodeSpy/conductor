@@ -63,11 +63,7 @@ func buildMembers(cfg *config.Config, st *store.Store, runner *flow.Runner, reg 
 			return d, nil
 		},
 		Hold: hold.Add, Unhold: hold.Remove, Jail: jail, Resolve: eng.ResolveModel,
-		Revoke: func(d string) {
-			if b := skill.Active(); b != nil {
-				b.RevokeDispatch(d)
-			}
-		},
+		Revoke: revokeDispatch,
 	}
 	manual := manualTriggersByName(cfg)
 	svc := &member.Service{
@@ -76,7 +72,7 @@ func buildMembers(cfg *config.Config, st *store.Store, runner *flow.Runner, reg 
 			_, err := runManualTrigger(ctx, manual, controlRequest{Name: trig, Inputs: inputs, HistoryID: hid}, eng.Emit)
 			return err
 		}),
-		Log: logf, Audit: audit, Jail: jail,
+		Log: logf, Audit: audit, Jail: jail, RevokeToken: revokeDispatch,
 	}
 	registerJailIdentity(svc)
 	gate.OnProposal = svc.OnProposal
@@ -106,6 +102,14 @@ func jailSeam() member.Jail { return member.NoJail{} }
 //
 //	controller.SetPaseoIdentity(svc.IdentityForCwd)
 func registerJailIdentity(svc *member.Service) { _ = svc.IdentityForCwd }
+
+// revokeDispatch kills every conductor session token minted for a dispatch
+// (the broker's hand-off release path), durable ones included.
+func revokeDispatch(d string) {
+	if b := skill.Active(); b != nil {
+		b.RevokeDispatch(d)
+	}
+}
 
 type workerFirer func(ctx context.Context, trig, hid string, inputs map[string]any) error
 

@@ -174,6 +174,17 @@ type SpendCap struct {
 	Currency  string   `yaml:"currency,omitempty"` // default USD
 }
 
+// HandoffSessionTTL is the life of a durable conductor session token — an
+// interactive hand-off's, and every member session's — sliding on each use
+// (internal/skill aliases this constant). A home session idle longer than
+// this loses its connection to conductor, so rotation must come first.
+const HandoffSessionTTL = 7 * 24 * time.Hour
+
+// MemberRotateMargin is how far inside HandoffSessionTTL home.rotate.max_age
+// must stay: a session rotates at least this long before an idle token could
+// expire under it.
+const MemberRotateMargin = 24 * time.Hour
+
 // Member defaults.
 const (
 	DefaultMemberRotateAge     = 24 * time.Hour
@@ -493,6 +504,13 @@ func (c *Config) validateMember(name string, m MemberConfig) error {
 		if rt.BuiltinType() == "paseo" {
 			return fmt.Errorf("worker.runtime: %q is a paseo runtime — background workers must not create paseo workspaces; use a cli runtime (a hand-off worker is the explicit paseo opt-in)", wr)
 		}
+	}
+	if age := m.Home.Rotate.MaxAge.D(); age > HandoffSessionTTL-MemberRotateMargin {
+		return fmt.Errorf("home.rotate.max_age %s is too long: a member session's conductor token lives %s from its last use, so a home agent idle that long would lose its connection mid-session — rotation must come at least %s sooner (max_age <= %s)",
+			age, HandoffSessionTTL, MemberRotateMargin, HandoffSessionTTL-MemberRotateMargin)
+	}
+	if m.Home.Rotate.MaxAge < 0 {
+		return fmt.Errorf("home.rotate.max_age must not be negative")
 	}
 	if m.Worker.MaxConcurrent < 0 || m.Home.Rotate.MaxTurns < 0 {
 		return fmt.Errorf("max_concurrent / rotate.max_turns must not be negative")

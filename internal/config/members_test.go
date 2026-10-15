@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const membersBase = `
@@ -219,5 +220,22 @@ triggers:
 func TestClassifyTierRank(t *testing.T) {
 	if TierRank(TierNever) <= TierRank(TierCommitMoney) || TierRank(TierObserve) != 0 || TierRank("x") != -1 {
 		t.Fatal("tier order")
+	}
+}
+
+// A home session must rotate before its idle conductor token can expire.
+func TestRotateAgeCappedByTheTokenLifetime(t *testing.T) {
+	limit := HandoffSessionTTL - MemberRotateMargin
+	for age, ok := range map[string]bool{"24h": true, limit.String(): true, (limit + time.Second).String(): false, HandoffSessionTTL.String(): false, "336h": false} {
+		_, err := loadMembers(t, "\nmembers:\n  sre:\n    home: { rotate: { max_age: "+age+" } }\n")
+		if ok && err != nil {
+			t.Errorf("max_age %s rejected: %v", age, err)
+		}
+		if !ok && (err == nil || !strings.Contains(err.Error(), "token")) {
+			t.Errorf("max_age %s: want a rejection explaining the token lifetime, got %v", age, err)
+		}
+	}
+	if MemberRotateMargin < time.Hour || HandoffSessionTTL-MemberRotateMargin < DefaultMemberRotateAge {
+		t.Fatal("the default rotation age must sit well inside the token lifetime")
 	}
 }

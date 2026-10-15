@@ -34,8 +34,10 @@ const (
 	// a human who may not get to it for hours or days, so a 2h dispatch window
 	// leaves its conductor creds (how it auths `conductor call …` to the broker)
 	// dead by the time the human engages it. A week is plenty for a real
-	// hand-off and still bounds a scraped token.
-	HandoffSessionTTL = 7 * 24 * time.Hour
+	// hand-off and still bounds a scraped token. Member sessions use the same
+	// durable token, so the constant lives in config, where a member's
+	// rotation age is validated against it.
+	HandoffSessionTTL = config.HandoffSessionTTL
 	// SessionTTL bounds a dispatch token's life — roughly a dispatch's
 	// lifetime (typical wait_timeouts are minutes; 2h leaves room for slow
 	// runs). A long-lived affinity session whose token ages out simply loses

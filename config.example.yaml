@@ -1365,7 +1365,8 @@ members:
     # seed_dir: .conductor/packs/sre             # seed a NEW memory repo with a pack's knowledge/ + runbooks/
     # operators: [ops]                           # default: every operator
     home:
-      rotate: { max_age: 24h, max_turns: 100 }   # a fresh session resumes from the handoff note + ledger
+      rotate: { max_age: 24h, max_turns: 100 }   # a fresh session resumes from the handoff note + ledger;
+                                                 # max_age <= 144h (its conductor token lives 7d from last use)
       # runtime: paseo                           # the paseo runtime (default: the default paseo)
       # model: claude-opus-5                     # a fleet / id / list, resolved like a step's
     worker:

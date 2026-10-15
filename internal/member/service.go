@@ -90,6 +90,10 @@ type Service struct {
 	// Jail is the agent jail seam (NoJail until #154 lands): command
 	// proposals hash their files through it.
 	Jail Jail
+	// RevokeToken kills a finished session's conductor token at once (the
+	// broker's RevokeDispatch). Member tokens are durable — they would
+	// otherwise outlive a finished worker by days.
+	RevokeToken func(dispatchID string)
 
 	mu       sync.Mutex
 	failedAt map[string]time.Time // last failed home launch, per member (backoff)
@@ -215,6 +219,7 @@ func (s *Service) recoverWorkers(name string) {
 		return nil
 	})
 	for _, w := range lost {
+		s.revoke(w.Dispatch)
 		_ = s.Repo(name).RemoveWorktree(context.Background(), w.Cwd)
 		s.enqueue(name, w.CaseID, fmt.Sprintf("[conductor] worker %s (case %s) was interrupted by a daemon restart before it reported. Respawn it if the work is still needed.", w.ID, w.CaseID))
 	}
@@ -303,6 +308,12 @@ func (s *Service) launchFailed(name string) {
 		s.failedAt = map[string]time.Time{}
 	}
 	s.failedAt[name] = s.now()
+}
+
+func (s *Service) revoke(dispatchID string) {
+	if s.RevokeToken != nil && dispatchID != "" {
+		s.RevokeToken(dispatchID)
+	}
 }
 
 // enqueue adds a message to the home inbox (durable) and wakes delivery.
@@ -829,6 +840,8 @@ func (s *Service) finishWorker(ctx context.Context, name string, w store.Worker,
 	if already {
 		return
 	}
+	// The worker is finished: its token goes now, not when it ages out.
+	s.revoke(w.Dispatch)
 	repo := s.Repo(name)
 	created := cs.Created
 	if created.IsZero() {

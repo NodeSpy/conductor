@@ -45,6 +45,10 @@ type PaseoHome struct {
 	// fleet ladder (Engine.ResolveModel). nil: an exact pin passes through,
 	// anything else bare-launches.
 	Resolve func(ctx context.Context, step config.Step) (model, runtime, provider string)
+	// BeforeLaunch, when set, prepares a session's cwd before its agent
+	// starts (e.g. writing a .claude/settings.json that confines it). An
+	// error aborts the launch before anything is created.
+	BeforeLaunch func(ctx context.Context, spec HomeSpec) error
 	// Jail is the agent jail seam. While it is active a home session
 	// launches on paseo's `conductor` provider (installed by `conductor
 	// paseo install-plugin`), which jails it keyed by its cwd, and retiring
@@ -69,6 +73,11 @@ func (h *PaseoHome) Launch(ctx context.Context, spec HomeSpec) (string, error) {
 	d, err := h.disp(spec.Member)
 	if err != nil {
 		return "", err
+	}
+	if h.BeforeLaunch != nil {
+		if err := h.BeforeLaunch(ctx, spec); err != nil {
+			return "", fmt.Errorf("prepare session %s: %w", spec.Session, err)
+		}
 	}
 	wsID, err := d.CreateLocalWorkspace(ctx, spec.Cwd, "member "+spec.Member+" ("+spec.Session+")")
 	if err != nil {
