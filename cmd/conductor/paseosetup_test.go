@@ -170,3 +170,20 @@ func TestPaseoSetupWaitsOutAProviderProbe(t *testing.T) {
 		t.Fatalf("waited %d probes", n)
 	}
 }
+
+func TestPaseoSetupNoReload(t *testing.T) {
+	calls := stubPaseo(t, `[]`)
+	home := t.TempDir()
+	out := setupOut(t, "--home", home, "--no-reload", "--providers", "claude")
+	if !strings.Contains(out, "not reloaded") {
+		t.Fatalf("out:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(home, "config.json")); err != nil {
+		t.Fatal("--no-reload still writes")
+	}
+	for _, c := range *calls {
+		if c[0] == "reload" {
+			t.Fatal("--no-reload must not reload")
+		}
+	}
+}
