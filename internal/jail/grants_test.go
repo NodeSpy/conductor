@@ -153,8 +153,9 @@ func TestDigestFileIsWhatTheBrokerReads(t *testing.T) {
 	if _, err := m.DigestFile("run-9:fix", "plan.tfplan"); err == nil {
 		t.Fatal("another agent's file is not this one's")
 	}
+	// "" is no identity, though a cli worker's jail has no AgentID.
 	for _, bad := range []string{"", "member-ops-h2"} {
-		if _, err := m.DigestFile(bad, "plan.tfplan"); err == nil {
+		if _, err := m.DigestFile(bad, filepath.Join(worker.jailTmp(), "p.bin")); err == nil {
 			t.Fatalf("%q: no live jail, refused", bad)
 		}
 	}
