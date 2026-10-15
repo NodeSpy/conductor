@@ -223,9 +223,12 @@ func browserControl(conn net.Conn, req controlRequest) controlResponse {
 		var creds []credInfo
 		for _, c := range st.Credentials {
 			ci := credInfo{Name: c.Name, Origin: c.Origin, Identities: c.Identities}
-			for k, r := range map[string]*browser.SecretRef{"username": c.Username, "password": c.Password, "otp": c.OTP, "passkey": c.Passkey} {
-				if r != nil {
-					ci.Fields = append(ci.Fields, k)
+			for _, f := range []struct {
+				name string
+				ref  *browser.SecretRef
+			}{{"username", c.Username}, {"password", c.Password}, {"otp", c.OTP}, {"passkey", c.Passkey}} {
+				if f.ref != nil {
+					ci.Fields = append(ci.Fields, f.name)
 				}
 			}
 			creds = append(creds, ci)
@@ -286,6 +289,7 @@ func browserControl(conn net.Conn, req controlRequest) controlResponse {
 			}
 			plan["host"], plan["origin"], plan["allow"] = host, c.Origin, st.Allow
 			plan["identity"] = c.Identities[0]
+			req.Identity, req.Site = c.Identities[0], host
 			// Continue from the identity's saved session on the site, if any.
 			for _, l := range st.Logins {
 				if !l.For(c.Identities[0]) || !browser.SiteCovers(l.Site, host) {

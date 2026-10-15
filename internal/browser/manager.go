@@ -447,9 +447,19 @@ func (m *Manager) instance(ctx context.Context, s *session, c Principal, st Sett
 	if err != nil {
 		return nil, err
 	}
+	// Each refused target is audited once per browser (a page or Chrome
+	// retrying cannot flood the audit); the log counts the rest.
+	var refusedMu sync.Mutex
+	refused := map[string]int{}
 	pm := sandbox.NewProxyManager(func(_, hostport string) {
-		m.audit(map[string]any{"action": "egress", "outcome": "refused", "identity": c.Identity, "agent": c.Agent,
-			"target": hostport, "logged_in": len(sites) > 0, "reason": "not in the browser's allowlist"})
+		refusedMu.Lock()
+		refused[hostport]++
+		n := refused[hostport]
+		refusedMu.Unlock()
+		if n == 1 {
+			m.audit(map[string]any{"action": "egress", "outcome": "refused", "identity": c.Identity, "agent": c.Agent,
+				"target": hostport, "logged_in": len(sites) > 0, "reason": "not in the browser's allowlist"})
+		}
 	})
 	launch := m.Launch
 	if launch == nil {

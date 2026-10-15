@@ -138,7 +138,12 @@ func ChromeArgs(dir, proxy string, headed bool) []string {
 		"--disable-domain-reliability", "--disable-client-side-phishing-detection",
 		"--disable-breakpad", "--disable-crash-reporter", "--metrics-recording-only",
 		"--password-store=basic", "--use-mock-keychain",
-		"--disable-features=Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider,AutofillServerCommunication,CertificateTransparencyComponentUpdater,InterestFeedContentSuggestions,PrivacySandboxSettings4,ChromeWhatsNewUI",
+		"--disable-field-trial-config", "--no-pings", "--safebrowsing-disable-auto-update",
+		"--disable-search-engine-choice-screen",
+		// No background service of Chrome's own: none would get past the
+		// proxy anyway, and password leak detection would send a filled
+		// credential's hash prefix out.
+		"--disable-features=Translate,OptimizationHints,OptimizationGuideModelDownloading,MediaRouter,DialMediaRouteProvider,AutofillServerCommunication,CertificateTransparencyComponentUpdater,InterestFeedContentSuggestions,PrivacySandboxSettings4,ChromeWhatsNewUI,PasswordLeakDetection,PushMessaging,NetworkTimeServiceQuerying,SafeBrowsingEnhancedProtectionMessageInInterstitials,LensOverlay,GlobalMediaControls,PreconnectToSearch,SearchPrefetchServicePrefetching,OmniboxSearchPrefetch,GCMUseDedicatedNetworkThread",
 		"--disable-dev-shm-usage",
 		"--window-size=1280,800",
 		"--mute-audio",
