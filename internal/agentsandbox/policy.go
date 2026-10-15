@@ -51,6 +51,9 @@ type Policy struct {
 	Hide []string `json:"hide,omitempty"`
 	// Env are extra KEY=VALUE variables for the agent (its git identity).
 	Env []string `json:"env,omitempty"`
+	// Note is something the launcher should tell its operator about this
+	// policy (a scratch workspace in place of a refused directory).
+	Note string `json:"note,omitempty"`
 }
 
 // Validate refuses a policy that cannot be realized as a boundary.

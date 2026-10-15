@@ -130,6 +130,9 @@ func cmdSandboxExec(args []string) int {
 	if err != nil {
 		return refuse("%v — an agent is never launched unsandboxed", err)
 	}
+	if pol.Note != "" {
+		fmt.Fprintf(os.Stderr, "conductor sandbox exec: %s\n", pol.Note)
+	}
 	launch, cleanup, err := wrapSandboxExec(pol, argv)
 	if err != nil {
 		return refuse("%v", err)

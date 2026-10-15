@@ -75,7 +75,9 @@ func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string, scratchOK b
 		if serr != nil {
 			return Policy{}, serr
 		}
-		return r.PolicyForEntry(e, tool, launcherEnv)
+		p, perr := r.PolicyForEntry(e, tool, launcherEnv)
+		p.Note = fmt.Sprintf("%v — running in the %s scratch workspace %s instead", err, e.Identity, e.Workspace)
+		return p, perr
 	}
 	return r.PolicyForEntry(DefaultEntry(ws), tool, launcherEnv)
 }

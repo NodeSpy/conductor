@@ -37,7 +37,10 @@ cd "$DIR"
 source "$DIR/lib/assert.sh"
 
 MODE="${MODE:-stub}"
-PROJECT="${PROJECT:-pc-e2e}"
+# One stack per checkout: runs from two worktrees must not share a compose
+# project, nor the image each builds (a build would swap another's binary).
+PROJECT="${PROJECT:-pc-e2e-$(basename "$(cd "$DIR/../.." && pwd)" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9_\n' '-')}"
+export E2E_IMAGE_TAG="$PROJECT"
 KEEP="${KEEP:-0}"
 COMPOSE=(docker compose -f "$DIR/docker-compose.yml")
 # Live mode layers an override that swaps the stub controllers for real agents and
@@ -168,7 +171,7 @@ setup() {
   # root) and the config dir is mounted read-only, so a 0600 root-owned pem would be
   # unreadable and the github integration would fail to start.
   if [ ! -f "$DIR/config/github-app.pem" ]; then
-    docker run --rm -v "$DIR/config:/c" conductor-e2e:latest \
+    docker run --rm -v "$DIR/config:/c" "conductor-e2e:$E2E_IMAGE_TAG" \
       sh -c 'openssl genrsa -out /c/github-app.pem 2048' >/dev/null 2>&1
   fi
   # ALWAYS re-assert the mode — a pem left 0600 by an older run is root-owned (a host
@@ -176,7 +179,7 @@ setup() {
   # above, wedging the github integration ("read app key: permission denied") so
   # nothing dispatches. A root container is the only way to fix a root-owned file's
   # mode from here.
-  docker run --rm -v "$DIR/config:/c" conductor-e2e:latest \
+  docker run --rm -v "$DIR/config:/c" "conductor-e2e:$E2E_IMAGE_TAG" \
     chmod 644 /c/github-app.pem >/dev/null 2>&1
 
   dc up -d || { echo "up failed"; dc logs; exit 1; }

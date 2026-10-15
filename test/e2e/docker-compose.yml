@@ -18,7 +18,7 @@ x-image: &image
   build:
     context: ../..
     dockerfile: test/e2e/Dockerfile
-  image: conductor-e2e:latest
+  image: conductor-e2e:${E2E_IMAGE_TAG:-latest}
 
 services:
   forge:

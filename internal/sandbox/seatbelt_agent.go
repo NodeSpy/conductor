@@ -178,7 +178,7 @@ func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string
 	if a.Keychain {
 		b.WriteString("(allow file-read* file-write* (subpath " + sbplString(a.Home+"/Library/Keychains") + "))\n")
 	}
-	for _, s := range resolvePaths(a.UnixSockets) {
+	for _, s := range socketPaths(a.UnixSockets) {
 		b.WriteString("(allow network-outbound (remote unix-socket (path-literal " + sbplString(s) + ")))\n")
 	}
 	switch {
@@ -186,7 +186,7 @@ func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string
 		b.WriteString("(allow network*)\n")
 	default:
 		b.WriteString("(deny network*)\n")
-		for _, s := range resolvePaths(a.UnixSockets) {
+		for _, s := range socketPaths(a.UnixSockets) {
 			b.WriteString("(allow network-outbound (remote unix-socket (path-literal " + sbplString(s) + ")))\n")
 		}
 		ports := append([]int(nil), n.LoopbackPorts...)
@@ -216,6 +216,20 @@ func resolvePaths(ps []string) []string {
 	var out []string
 	for _, b := range resolveBinds(bs) {
 		out = append(out, b.Path)
+	}
+	return out
+}
+
+// socketPaths are the unix sockets' paths both as named and symlink-resolved
+// (macOS /tmp → /private/tmp): the agent connects by the name it was given.
+func socketPaths(ps []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range append(append([]string(nil), ps...), resolvePaths(ps)...) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
 	}
 	return out
 }
