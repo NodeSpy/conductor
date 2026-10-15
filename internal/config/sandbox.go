@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
+	"time"
 )
 
 // SandboxConfig is the top-level `sandbox:` block: conductor's agent sandbox
@@ -31,6 +33,39 @@ type SandboxConfig struct {
 	// Push configures conductor's pushes of agents' work (git.push and the
 	// end-of-step push).
 	Push *SandboxPush `yaml:"push,omitempty"`
+	// Backend is the sandbox for an agent launch whose isolation: names
+	// none — a `conductor sandbox exec` session in a directory conductor did
+	// not create included: namespace (the default: Linux namespaces, macOS
+	// Seatbelt) or container (sandbox.container).
+	Backend string `yaml:"backend,omitempty"`
+	// Container configures the container backend: the defaults every
+	// `mode: container` agent launch starts from.
+	Container *SandboxContainer `yaml:"container,omitempty"`
+}
+
+// SandboxContainer is the `sandbox.container:` block.
+type SandboxContainer struct {
+	// Engine is docker | podman (default: rootless podman on Linux, Docker
+	// Desktop on macOS — whichever is installed).
+	Engine string `yaml:"engine,omitempty"`
+	// Image is the default agent image (default: conductor's own,
+	// conductor-agent:latest, built by `make agent-image`).
+	Image string `yaml:"image,omitempty"`
+	// Persistent is the backend's default for `sandbox.backend: container`
+	// sessions (default false).
+	Persistent bool `yaml:"persistent,omitempty"`
+	// ReadOnly mounts every agent image read-only.
+	ReadOnly bool `yaml:"read_only,omitempty"`
+	// IdleStop stops a persistent container this long after its last
+	// launch (default 30m).
+	IdleStop string `yaml:"idle_stop,omitempty"`
+	// Limits are every agent container's pids/memory/cpu caps.
+	Limits *IsolationLimits `yaml:"limits,omitempty"`
+	// Helper is a Linux build of this conductor (static; CGO_ENABLED=0) to
+	// run inside the containers — needed where conductor itself is not a
+	// Linux binary (macOS) and the image carries none at
+	// /usr/local/bin/conductor.
+	Helper string `yaml:"helper,omitempty"`
 }
 
 // SandboxPush configures how conductor pushes and signs agents' commits.
@@ -83,6 +118,32 @@ func (c *Config) validateSandbox() error {
 	}
 	if s.StateDir != "" && !filepath.IsAbs(expandHome(s.StateDir)) {
 		return fmt.Errorf("config: sandbox.state_dir %q must be an absolute path", s.StateDir)
+	}
+	switch s.Backend {
+	case "", "namespace", "container":
+	default:
+		return fmt.Errorf("config: sandbox.backend must be namespace|container, got %q", s.Backend)
+	}
+	if c := s.Container; c != nil {
+		switch c.Engine {
+		case "", "docker", "podman":
+		default:
+			return fmt.Errorf("config: sandbox.container.engine must be docker|podman, got %q", c.Engine)
+		}
+		if c.IdleStop != "" {
+			if d, err := time.ParseDuration(c.IdleStop); err != nil || d <= 0 {
+				return fmt.Errorf("config: sandbox.container.idle_stop %q is not a positive duration (e.g. 30m)", c.IdleStop)
+			}
+		}
+		if c.Helper != "" && !filepath.IsAbs(expandHome(c.Helper)) {
+			return fmt.Errorf("config: sandbox.container.helper %q must be an absolute path", c.Helper)
+		}
+		if l := c.Limits; l != nil && l.Pids < 0 {
+			return fmt.Errorf("config: sandbox.container.limits.pids must be >= 0")
+		}
+		if strings.ContainsAny(c.Image, " \t\n") || strings.HasPrefix(c.Image, "-") {
+			return fmt.Errorf("config: sandbox.container.image %q is not an image reference", c.Image)
+		}
 	}
 	if p := s.Push; p != nil && p.SigningKey != "" && !filepath.IsAbs(expandHome(p.SigningKey)) {
 		return fmt.Errorf("config: sandbox.push.signing_key %q must be an absolute path", p.SigningKey)

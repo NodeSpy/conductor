@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -38,6 +39,8 @@ func cmdSandbox(args []string) int {
 	switch args[0] {
 	case "exec":
 		return cmdSandboxExec(args[1:])
+	case "ls", "archive":
+		return cmdSandboxContainers(args[0], args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "conductor sandbox: unknown subcommand %q\n%s", args[0], sandboxUsage)
 		return 2
@@ -45,6 +48,8 @@ func cmdSandbox(args []string) int {
 }
 
 const sandboxUsage = `usage: conductor sandbox exec [--tool NAME] [--bin NAME]... [--config PATH | --socket PATH] -- COMMAND [ARGS...]
+       conductor sandbox ls [--config PATH | --socket PATH]
+       conductor sandbox archive IDENTITY [--config PATH | --socket PATH]
 
 Runs COMMAND — an agent CLI — under conductor's agent sandbox, with the
 policy the running conductor daemon gives this directory: the workspace
@@ -67,6 +72,13 @@ unreachable or has no policy for this directory. Never unsandboxed.
 
 Wired into paseo by 'conductor paseo setup' (and by the daemon itself at
 start), and into agent-deck sessions by conductor's agent-deck runtime.
+
+When the directory's policy is a container (isolation mode: container, or
+sandbox.backend: container), COMMAND runs in the identity's container: the
+daemon creates or starts it and wires this launch into it.
+
+'ls' lists the daemon's agent containers; 'archive IDENTITY' removes an
+identity's containers and its persistent HOME volume (what it installed).
 `
 
 // sandboxExecOpts are `conductor sandbox exec`'s flags.
@@ -143,10 +155,13 @@ func cmdSandboxExec(args []string) int {
 		tool = argv[0]
 	}
 	sock := sandboxControlSocket(o)
-	pol, err := fetchSandboxPolicy(sock, controlRequest{Cmd: "sandbox-policy", Cwd: cwd, Tool: tool, Env: modelRouteEnv(os.Environ()), Scratch: !agentCwd})
+	pol, lease, err := fetchSandboxPolicy(sock, controlRequest{Cmd: "sandbox-policy", Cwd: cwd, Tool: tool, Env: modelRouteEnv(os.Environ()), Scratch: !agentCwd})
 	if err != nil {
 		return refuse("%v — an agent is never launched unsandboxed", err)
 	}
+	// A container launch's share of its container lasts as long as this
+	// connection (the daemon releases it when it closes).
+	defer lease.Close()
 	if pol.Note != "" {
 		fmt.Fprintf(os.Stderr, "conductor sandbox exec: %s\n", pol.Note)
 	}
@@ -180,6 +195,17 @@ func sandboxExecCwd() (cwd string, agent bool, err error) {
 // wrapSandboxExec realizes pol around argv with this process as the host
 // side: its own allowlist proxy and model relays live as long as the agent.
 func wrapSandboxExec(pol agentsandbox.Policy, argv, bins []string) (*agentsandbox.Launch, func(), error) {
+	if pol.Container != nil {
+		// The daemon wired this launch into its container (proxy, relays,
+		// socket): here it is only the engine's exec.
+		launch, err := agentsandbox.Wrap(pol, argv, agentsandbox.Deps{
+			SelfExe: os.Executable, LookPath: exec.LookPath, Inherited: os.Environ(), Bins: bins,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return launch, launch.Cleanup, nil
+	}
 	pm := sandbox.NewProxyManager(func(_, hostport string) {
 		fmt.Fprintf(os.Stderr, "conductor sandbox: egress to %s denied (not in this agent's allowlist)\n", hostport)
 	})
@@ -224,6 +250,11 @@ func runSandboxed(l *agentsandbox.Launch) int {
 	}
 	go func() {
 		for s := range sigs {
+			if l.Signal != nil {
+				// A container launch: the engine client forwards no signal.
+				go l.Signal(signalName(s))
+				continue
+			}
 			_ = cmd.Process.Signal(s)
 		}
 	}()
@@ -240,6 +271,19 @@ func runSandboxed(l *agentsandbox.Launch) int {
 	}
 	fmt.Fprintf(os.Stderr, "conductor sandbox exec: %v\n", err)
 	return 1
+}
+
+// signalName is a signal's name as `sandbox-net --signal` takes it.
+func signalName(s os.Signal) string {
+	switch s {
+	case syscall.SIGINT:
+		return "INT"
+	case syscall.SIGHUP:
+		return "HUP"
+	case syscall.SIGQUIT:
+		return "QUIT"
+	}
+	return "TERM"
 }
 
 // modelRouteEnv is the part of the launcher's environment the daemon needs
@@ -291,26 +335,42 @@ func sandboxControlSocket(o sandboxExecOpts) string {
 }
 
 // fetchSandboxPolicy asks the daemon for this launch's policy and a fresh
-// token. Any failure is a refusal.
-func fetchSandboxPolicy(sock string, req controlRequest) (agentsandbox.Policy, error) {
+// token. Any failure is a refusal. lease is the connection, kept open for a
+// container launch (its share of the container ends when it closes); close
+// it when the launch ends.
+func fetchSandboxPolicy(sock string, req controlRequest) (pol agentsandbox.Policy, lease io.Closer, err error) {
 	conn, err := net.DialTimeout("unix", sock, 10*time.Second)
 	if err != nil {
-		return agentsandbox.Policy{}, fmt.Errorf("the conductor daemon is unreachable at %s (%v)", sock, err)
+		return agentsandbox.Policy{}, nil, fmt.Errorf("the conductor daemon is unreachable at %s (%v)", sock, err)
 	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(60 * time.Second))
+	keep := false
+	defer func() {
+		if !keep {
+			conn.Close()
+		}
+	}()
+	// A container is created (its image pulled) before the answer.
+	_ = conn.SetDeadline(time.Now().Add(6 * time.Minute))
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
-		return agentsandbox.Policy{}, fmt.Errorf("the conductor daemon at %s: %v", sock, err)
+		return agentsandbox.Policy{}, nil, fmt.Errorf("the conductor daemon at %s: %v", sock, err)
 	}
 	var resp controlResponse
 	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
-		return agentsandbox.Policy{}, fmt.Errorf("the conductor daemon at %s gave no policy: %v", sock, err)
+		return agentsandbox.Policy{}, nil, fmt.Errorf("the conductor daemon at %s gave no policy: %v", sock, err)
 	}
 	if resp.Error != "" {
-		return agentsandbox.Policy{}, fmt.Errorf("the conductor daemon has no sandbox policy for %s: %s", req.Cwd, resp.Error)
+		return agentsandbox.Policy{}, nil, fmt.Errorf("the conductor daemon has no sandbox policy for %s: %s", req.Cwd, resp.Error)
 	}
 	if resp.Policy == nil {
-		return agentsandbox.Policy{}, fmt.Errorf("the conductor daemon at %s returned no policy (an older conductor?)", sock)
+		return agentsandbox.Policy{}, nil, fmt.Errorf("the conductor daemon at %s returned no policy (an older conductor?)", sock)
 	}
-	return *resp.Policy, nil
+	if resp.Policy.Container != nil {
+		if resp.Policy.Container.Session == nil {
+			return agentsandbox.Policy{}, nil, fmt.Errorf("the conductor daemon at %s did not prepare the container", sock)
+		}
+		keep = true
+		_ = conn.SetDeadline(time.Time{})
+		return *resp.Policy, conn, nil
+	}
+	return *resp.Policy, io.NopCloser(nil), nil
 }

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"time"
 )
 
 // isolationGOOS is runtime.GOOS, a var so tests can validate the Linux-only
@@ -23,7 +25,7 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 	case "none":
 		// The explicit opt-out of the agent sandbox for one runtime/step:
 		// the launch runs unwrapped. Nothing else in the block applies.
-		if iso.User != "" || iso.Container != nil || iso.Limits != nil || iso.Network != nil || len(iso.FS) > 0 || iso.Privileged || iso.AllowRoot {
+		if iso.User != "" || iso.Container != nil || iso.Image != "" || iso.Persistent != nil || iso.Limits != nil || iso.Network != nil || len(iso.FS) > 0 || iso.Privileged || iso.AllowRoot {
 			return fmt.Errorf("config: %s: isolation mode none runs the launch unwrapped — it takes no other isolation settings", where)
 		}
 		return nil
@@ -42,18 +44,16 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 		if remote {
 			return fmt.Errorf("config: %s: isolation mode container is not supported with a remote host — configure it on that box's own conductor, or use mode user/namespace", where)
 		}
-		if iso.Container == nil || iso.Container.Image == "" {
-			return fmt.Errorf("config: %s: isolation mode container needs `container.image:`", where)
-		}
-		switch iso.Container.Engine {
-		case "", "docker", "podman":
-		default:
-			return fmt.Errorf("config: %s: isolation container.engine must be docker|podman, got %q", where, iso.Container.Engine)
+		if err := validateContainerIsolation(where, iso); err != nil {
+			return err
 		}
 	case "":
 		return fmt.Errorf("config: %s: isolation needs `mode: user|namespace|container|none`", where)
 	default:
 		return fmt.Errorf("config: %s: unknown isolation mode %q (want user|namespace|container|none)", where, iso.Mode)
+	}
+	if iso.Mode != "container" && (iso.Image != "" || iso.Persistent != nil || iso.Container != nil) {
+		return fmt.Errorf("config: %s: isolation image:/persistent:/container: apply to mode container only — on %s they would be a silent no-op", where, iso.Mode)
 	}
 	if iso.Privileged && iso.Mode != "namespace" {
 		return fmt.Errorf("config: %s: isolation `privileged: true` only applies to mode namespace (it opts out of the default filesystem masking there) — on %s it would be a silent no-op", where, iso.Mode)
@@ -103,6 +103,34 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 		if !filepath.IsAbs(p) {
 			return fmt.Errorf("config: %s: isolation fs: %q must be an absolute path", where, p)
 		}
+	}
+	return nil
+}
+
+// validateContainerIsolation checks a mode: container block. The image is
+// required for a code step (validateCodeStepIsolation); an agent defaults
+// to sandbox.container.image, else conductor's own agent image.
+func validateContainerIsolation(where string, iso *IsolationConfig) error {
+	if iso.Image != "" && iso.Container != nil && iso.Container.Image != "" && iso.Container.Image != iso.Image {
+		return fmt.Errorf("config: %s: isolation image: %q and container.image: %q disagree — set one", where, iso.Image, iso.Container.Image)
+	}
+	if c := iso.Container; c != nil {
+		switch c.Engine {
+		case "", "docker", "podman":
+		default:
+			return fmt.Errorf("config: %s: isolation container.engine must be docker|podman, got %q", where, c.Engine)
+		}
+		if c.IdleStop != "" {
+			if d, err := time.ParseDuration(c.IdleStop); err != nil || d <= 0 {
+				return fmt.Errorf("config: %s: isolation container.idle_stop %q is not a positive duration (e.g. 30m)", where, c.IdleStop)
+			}
+		}
+		if c.Attach != "" && iso.IsPersistent() {
+			return fmt.Errorf("config: %s: isolation container.attach runs in another identity's container — persistent: is that identity's, not this one's", where)
+		}
+	}
+	if img := iso.ImageName(); strings.ContainsAny(img, " \t\n") || strings.HasPrefix(img, "-") {
+		return fmt.Errorf("config: %s: isolation image %q is not an image reference", where, img)
 	}
 	return nil
 }
@@ -169,6 +197,12 @@ func validateCodeStepIsolation(where string, p Step, class EngineClass) error {
 	if class == EnginePlugin {
 		return fmt.Errorf("config: %s: isolation: cannot wrap engine %q — it runs as a plugin subprocess sandboxed by its own `engines: %s: { isolation: … }` block, not a step's; set it there instead", where, p.EngineSelector(), p.EngineSelector())
 	}
+	if p.Isolation.Mode == "container" && p.Isolation.ImageName() == "" {
+		return fmt.Errorf("config: %s: isolation mode container needs `container.image:` (or `image:`) on a code step", where)
+	}
+	if p.Isolation.Persistent != nil || (p.Isolation.Container != nil && (p.Isolation.Container.Attach != "" || p.Isolation.Container.IdleStop != "" || p.Isolation.Container.ReadOnly)) {
+		return fmt.Errorf("config: %s: isolation persistent:/read_only:/idle_stop:/attach: are the agent container's — a code step's container runs once", where)
+	}
 	if p.Host != "" || p.SSH != nil {
 		return fmt.Errorf("config: %s: isolation: is not enforced for a remote code step (host:/ssh:) — conductor only wraps LOCAL `use: cli`/`command:`/`run: <interpreter>` code steps today; drop isolation: here, or run this step locally", where)
 	}
@@ -227,14 +261,22 @@ func (iso *IsolationConfig) OptsOut() bool { return iso != nil && iso.Mode == "n
 
 // validatePaseoIsolation checks isolation: on a paseo step or runtime. A
 // paseo agent is the paseo daemon's child: conductor does not wrap it, it
-// names the provider entry paseo launches it with. The only isolation that
-// says something there is `{mode: none}` — the plain provider, not the
-// conductor-owned sandboxed one; anything else would be a silent no-op.
+// names the provider entry paseo launches it with. Two isolations say
+// something there: `{mode: none}` — the plain provider, not the
+// conductor-owned sandboxed one — and `{mode: container, …}`, which the
+// sandboxed entry's `conductor sandbox exec` honours (it runs the agent in
+// its identity's container). Anything else would be a silent no-op.
 func validatePaseoIsolation(where string, iso *IsolationConfig) error {
 	if iso.OptsOut() {
 		return validateIsolation(where, iso, false)
 	}
-	return fmt.Errorf("config: %s: on a paseo runtime only `isolation: {mode: none}` applies (it launches the agent through paseo's plain provider instead of conductor's sandboxed entry) — conductor does not wrap a paseo agent itself; for another sandbox use an acp/cli/opencode/agent-deck runtime", where)
+	if iso.Mode == "container" {
+		if iso.User != "" || iso.Network != nil || len(iso.FS) > 0 {
+			return fmt.Errorf("config: %s: a paseo agent's container takes image:, persistent:, container: and limits: — network:/fs:/user: are not applied to a paseo agent (use sandbox.egress)", where)
+		}
+		return validateIsolation(where, iso, false)
+	}
+	return fmt.Errorf("config: %s: on a paseo runtime only `isolation: {mode: none}` or `{mode: container, …}` applies (the plain provider, or the sandboxed entry in a container) — conductor does not wrap a paseo agent itself; for another sandbox use an acp/cli/opencode/agent-deck runtime", where)
 }
 
 // validateScopeIsolation checks a trigger's or workflow's isolation: — the

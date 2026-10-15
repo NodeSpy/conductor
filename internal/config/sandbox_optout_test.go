@@ -13,15 +13,17 @@ runtimes:
   acpr: { use: acp, agent: claude-code, transport: acp }
 `
 
-// On a paseo step or runtime only `isolation: {mode: none}` applies: it
-// launches through paseo's plain provider. Anything else is refused, not a
-// silent no-op.
+// On a paseo step or runtime only `isolation: {mode: none}` (paseo's plain
+// provider) or `{mode: container, …}` (the sandboxed entry, in a container)
+// applies. Anything else is refused, not a silent no-op.
 func TestPaseoIsolationOnlyOptOut(t *testing.T) {
 	ok := []string{
 		optoutBase + "triggers:\n  - on: svc.x\n    steps: [ { id: a, type: agent, prompt: p, background: true, isolation: { mode: none } } ]\n",
 		optoutBase + "triggers:\n  - on: svc.x\n    steps: [ { id: a, type: agent, prompt: p, runtime: pz, isolation: { mode: none } } ]\n",
 		strings.Replace(optoutBase, "pz: { use: paseo, default: true }", "pz: { use: paseo, default: true, isolation: { mode: none } }", 1),
 		"connectors:\n  svc: { use: web }\ntriggers:\n  - on: svc.x\n    steps: [ { id: a, type: agent, prompt: p, isolation: { mode: none } } ]\n", // the built-in paseo runtime
+		optoutBase + "triggers:\n  - on: svc.x\n    steps: [ { id: a, type: agent, prompt: p, isolation: { mode: container, persistent: true, image: 'img:1', limits: { pids: 100 } } } ]\n",
+		strings.Replace(optoutBase, "pz: { use: paseo, default: true }", "pz: { use: paseo, default: true, isolation: { mode: container } }", 1),
 	}
 	for i, doc := range ok {
 		if _, err := loadDoc(t, doc); err != nil {
@@ -33,6 +35,8 @@ func TestPaseoIsolationOnlyOptOut(t *testing.T) {
 		"user on a paseo runtime":   strings.Replace(optoutBase, "pz: { use: paseo, default: true }", "pz: { use: paseo, default: true, isolation: { mode: user, user: x } }", 1),
 		"none with extras":          optoutBase + "triggers:\n  - on: svc.x\n    steps: [ { id: a, type: agent, prompt: p, isolation: { mode: none, privileged: true } } ]\n",
 		"built-in, namespace":       "connectors:\n  svc: { use: web }\ntriggers:\n  - on: svc.x\n    steps: [ { id: a, type: agent, prompt: p, isolation: { mode: namespace } } ]\n",
+		"container with fs":         optoutBase + "triggers:\n  - on: svc.x\n    steps: [ { id: a, type: agent, prompt: p, isolation: { mode: container, fs: [/x] } } ]\n",
+		"container with network":    optoutBase + "triggers:\n  - on: svc.x\n    steps: [ { id: a, type: agent, prompt: p, isolation: { mode: container, network: { egress: [a.com] } } } ]\n",
 	}
 	for name, doc := range bad {
 		_, err := loadDoc(t, doc)
@@ -40,7 +44,11 @@ func TestPaseoIsolationOnlyOptOut(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 			continue
 		}
-		if name != "none with extras" && !strings.Contains(err.Error(), "only `isolation: {mode: none}` applies") {
+		want := "only `isolation: {mode: none}` or `{mode: container, …}` applies"
+		if strings.HasPrefix(name, "container with") {
+			want = "are not applied to a paseo agent"
+		}
+		if name != "none with extras" && !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}

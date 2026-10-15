@@ -426,6 +426,16 @@ type IsolationConfig struct {
 	User string `yaml:"user,omitempty"`
 	// Container configures mode: container.
 	Container *ContainerIsolation `yaml:"container,omitempty"`
+	// Image (mode: container) is the agent's image — the same as
+	// container.image, the agent-facing spelling. Default for an agent:
+	// sandbox.container.image, else conductor's own agent image.
+	Image string `yaml:"image,omitempty"`
+	// Persistent (mode: container, agents) keeps ONE long-lived container
+	// per identity — its computer — with a persistent HOME volume for what
+	// it installs: reused by every launch of that identity, stopped when
+	// idle, removed when the identity is archived. false (the default): a
+	// container per launch, removed when it ends.
+	Persistent *bool `yaml:"persistent,omitempty"`
 	// Limits are cgroup/engine resource caps (namespace mode applies them via
 	// systemd-run --user --scope; container mode via engine flags).
 	Limits *IsolationLimits `yaml:"limits,omitempty"`
@@ -468,8 +478,40 @@ type ContainerIsolation struct {
 	// Image is the container image the runtime launches in (required). The
 	// image must carry the runtime binary the launch expects.
 	Image string `yaml:"image"`
-	// Engine is docker (default) or podman.
+	// Engine is docker or podman. Default: docker for a code step; for an
+	// agent, rootless podman on Linux and Docker Desktop on macOS,
+	// whichever is installed.
 	Engine string `yaml:"engine,omitempty"`
+	// ReadOnly (agents) mounts the image's root filesystem read-only: HOME,
+	// /tmp and the workspace stay writable.
+	ReadOnly bool `yaml:"read_only,omitempty"`
+	// IdleStop (agents, persistent) stops the container this long after
+	// its last launch ends (a Go duration; default
+	// sandbox.container.idle_stop, else 30m). It starts again on the next.
+	IdleStop string `yaml:"idle_stop,omitempty"`
+	// Attach (agents) runs the launch in another identity's persistent
+	// container — a member's — instead of one of its own. That container
+	// must exist and show the launch's workspace.
+	Attach string `yaml:"attach,omitempty"`
+}
+
+// ImageName is the configured image (image:, else container.image).
+func (iso *IsolationConfig) ImageName() string {
+	if iso == nil {
+		return ""
+	}
+	if iso.Image != "" {
+		return iso.Image
+	}
+	if iso.Container != nil {
+		return iso.Container.Image
+	}
+	return ""
+}
+
+// IsPersistent reports persistent: true.
+func (iso *IsolationConfig) IsPersistent() bool {
+	return iso != nil && iso.Persistent != nil && *iso.Persistent
 }
 
 // IsolationLimits are the resource caps.

@@ -1532,7 +1532,13 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 		}
 		streamRunEvents(ctx, conn, events, req.RunID, log)
 	case "sandbox-policy":
-		writeControlResp(conn, sandboxPolicyResponse(conn, req, log))
+		resp, release := sandboxPolicyResponse(ctx, conn, req, log)
+		writeControlResp(conn, resp)
+		if release != nil {
+			holdContainerLease(conn, release)
+		}
+	case "sandbox-containers", "sandbox-archive":
+		writeControlResp(conn, sandboxContainersResponse(ctx, conn, req, log))
 	case "retry":
 		if retry == nil {
 			writeControlResp(conn, controlResponse{Error: "retry is not available (no flow runner configured)"})
@@ -1775,6 +1781,24 @@ func parsePRRef(s string) (repo string, number int, err error) {
 		return "", 0, fmt.Errorf("bad number in %q (want owner/repo#N)", s)
 	}
 	return repo, number, nil
+}
+
+// controlCall does one request/response on the control socket at sock.
+func controlCall(sock string, req controlRequest) (controlResponse, error) {
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		return controlResponse{}, fmt.Errorf("connect to daemon control socket %s — is it running? %w", sock, err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Minute))
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		return controlResponse{}, err
+	}
+	var resp controlResponse
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return controlResponse{}, err
+	}
+	return resp, nil
 }
 
 // sendControl dials the daemon control socket and does one request/response.

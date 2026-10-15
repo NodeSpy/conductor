@@ -305,7 +305,7 @@ func spawnOpencode(_ context.Context, host, cwd string, env []string, opt launch
 	var password string
 	sandboxed := sandboxApplies(host, opt)
 	if sandboxed {
-		p, err := opencodeServePort()
+		p, err := opencodeServePort(opt.iso != nil && opt.iso.Mode == "container")
 		if err != nil {
 			return "", nil, nil, fmt.Errorf("opencode: %w", err)
 		}
@@ -367,9 +367,11 @@ func spawnOpencode(_ context.Context, host, cwd string, env []string, opt launch
 
 // opencodeServePort is the port a sandboxed `opencode serve` listens on:
 // fixed inside a Linux sandbox's own network namespace (nothing else is
-// there), a free host loopback port on macOS (no namespace).
-func opencodeServePort() (int, error) {
-	if sandboxGOOS() != "darwin" {
+// there), a free host loopback port on macOS (no namespace) — and in a
+// container, whose network a persistent identity's other launches share, a
+// port free here (likely free there; the server fails to start otherwise).
+func opencodeServePort(container bool) (int, error) {
+	if sandboxGOOS() != "darwin" && !container {
 		return 4096, nil
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

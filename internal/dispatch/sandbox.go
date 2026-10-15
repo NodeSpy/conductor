@@ -137,6 +137,10 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 	if req != nil {
 		e.Dispatch = req.DispatchID
 		e.Model = sandboxModel(*req)
+		// mode: container (the step's, or its workflow's/trigger's/runtime's,
+		// resolved onto it): `conductor sandbox exec` runs the agent in its
+		// identity's container.
+		e.Container = agentsandbox.ContainerFor(req.Step.Isolation)
 		if id, ok := SkillIdentityFor(*req); ok {
 			e.Skill = &id
 		}

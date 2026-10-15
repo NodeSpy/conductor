@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
@@ -100,7 +101,11 @@ const (
 // Containers is the daemon's container backend: the engine, and every
 // container it runs for agents.
 type Containers struct {
+	// Engine is the container engine; nil until Resolve finds it (on the
+	// first launch, or Start).
 	Engine Engine
+	// Resolve finds the engine (and fills Helper/KeepID) when Engine is nil.
+	Resolve func() (Engine, error)
 	// Root holds the backend's host state (the helper binary dir).
 	Root string
 	// DaemonID labels this daemon's containers: it lists, reuses and
@@ -127,6 +132,29 @@ type Containers struct {
 	mu    sync.Mutex
 	boxes map[string]*box
 	locks map[string]*sync.Mutex
+
+	startOnce sync.Once
+	startErr  error
+}
+
+// Start finds the engine and reconciles this daemon's containers, once.
+func (c *Containers) Start(ctx context.Context) error {
+	c.startOnce.Do(func() {
+		if c.Engine == nil {
+			if c.Resolve == nil {
+				c.startErr = errors.New("agentsandbox: no container engine")
+				return
+			}
+			e, err := c.Resolve()
+			if err != nil {
+				c.startErr = err
+				return
+			}
+			c.Engine = e
+		}
+		c.startErr = c.Reconcile(ctx)
+	})
+	return c.startErr
 }
 
 // box is one container this daemon runs.
@@ -230,8 +258,11 @@ func (c *Containers) Prepare(ctx context.Context, p *Policy) (release func(), er
 	if p.Container == nil {
 		return nil, errors.New("agentsandbox: not a container policy")
 	}
-	if c == nil || c.Engine == nil {
-		return nil, errors.New("agentsandbox: the container backend is not available in this conductor (no container engine) — the agent is not launched")
+	if c == nil {
+		return nil, errors.New("agentsandbox: the container backend is not available in this conductor — the agent is not launched")
+	}
+	if err := c.Start(ctx); err != nil || c.Engine == nil {
+		return nil, fmt.Errorf("agentsandbox: the agent's container backend is unavailable (%v) — the agent is not launched", err)
 	}
 	if c.UID == 0 {
 		return nil, errors.New("agentsandbox: an agent container runs as this daemon's user, and it is root — run conductor as a non-root user")
@@ -864,8 +895,11 @@ func (c *Containers) signal(s *ContainerSession, sig string) {
 // Archive removes identity's containers and HOME volume: the identity (a
 // member) is gone. Its running launches end with it.
 func (c *Containers) Archive(ctx context.Context, identity string) (removed []string, err error) {
-	if c == nil || c.Engine == nil {
+	if c == nil {
 		return nil, errors.New("agentsandbox: no container backend")
+	}
+	if err := c.Start(ctx); err != nil {
+		return nil, err
 	}
 	key := IdentityKey(identity)
 	lock := c.keyLock(key)
@@ -904,8 +938,11 @@ type ContainerInfo struct {
 
 // List reports this daemon's agent containers.
 func (c *Containers) List(ctx context.Context) ([]ContainerInfo, error) {
-	if c == nil || c.Engine == nil {
+	if c == nil {
 		return nil, errors.New("agentsandbox: no container backend")
+	}
+	if err := c.Start(ctx); err != nil {
+		return nil, err
 	}
 	rows, err := c.list(ctx, "")
 	if err != nil {
@@ -980,4 +1017,20 @@ func (c *Containers) Close() {
 			b.mux.Close()
 		}
 	}
+}
+
+// ContainerFor is an isolation block's container backend (nil unless mode:
+// container).
+func ContainerFor(iso *config.IsolationConfig) *Container {
+	if iso == nil || iso.Mode != "container" {
+		return nil
+	}
+	c := &Container{Image: iso.ImageName(), Persistent: iso.IsPersistent()}
+	if ci := iso.Container; ci != nil {
+		c.Engine, c.ReadOnlyRoot, c.IdleStop, c.Attach = ci.Engine, ci.ReadOnly, ci.IdleStop, ci.Attach
+	}
+	if l := iso.Limits; l != nil {
+		c.Memory, c.CPU, c.Pids = l.Memory, l.CPU, l.Pids
+	}
+	return c
 }
