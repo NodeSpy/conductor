@@ -167,10 +167,8 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	}
 	prof := &sandbox.AgentProfile{Home: d.RealHome}
 	for _, l := range p.Logins {
-		if goos == "darwin" {
-			prof.ReadWrite = append(prof.ReadWrite, l.Src)
-			continue
-		}
+		// Linux binds the operator's file over the placeholder; on macOS the
+		// identity home links to it, and seatbeltBinds allows its source.
 		binds = append(binds, sandbox.BindMount{Path: l.Path, Src: l.Src})
 	}
 	binds = append(binds, launchBinds(argv[0], d.LookPath, d.RealHome)...)

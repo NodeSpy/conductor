@@ -88,15 +88,15 @@ func PrepareHome(s HomeSpec) (string, []Login, error) {
 			}
 		}
 	}
-	// Every state path exists, shaped like the operator's (a dir stays a
-	// dir), so the CLI writes into the identity home, never a missing one.
+	// Every state path exists, so the CLI writes into the identity home,
+	// never a missing one: a file (~/.claude.json) as an empty file, a dir
+	// as a dir.
 	for _, rel := range t.state {
 		dst := filepath.Join(home, rel)
 		if _, err := os.Lstat(dst); err == nil {
 			continue
 		}
-		fi, err := os.Stat(filepath.Join(s.RealHome, rel))
-		if s.RealHome != "" && err == nil && !fi.IsDir() {
+		if stateIsFile(rel) {
 			if err := writeIfAbsent(dst, nil); err != nil {
 				return "", nil, err
 			}
@@ -143,6 +143,13 @@ func PrepareHome(s HomeSpec) (string, []Login, error) {
 		return "", nil, err
 	}
 	return home, logins, nil
+}
+
+// stateIsFile reports a tool-state path that is a file (~/.claude.json)
+// rather than a directory (~/.claude, ~/.codex): a name with an extension
+// past its leading dot.
+func stateIsFile(rel string) bool {
+	return strings.Contains(strings.TrimPrefix(filepath.Base(rel), "."), ".")
 }
 
 // writeGitconfig gives the agent's own git the operator's identity and no

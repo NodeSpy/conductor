@@ -163,3 +163,26 @@ func TestWriteFileKeepsMode(t *testing.T) {
 		t.Fatal("no temp file left behind")
 	}
 }
+
+// Nothing to change: the operator's file comes back byte for byte — never
+// reformatted — however it was formatted.
+func TestMergeUnchangedKeepsTheBytes(t *testing.T) {
+	w, names := want()
+	out, _, err := Merge([]byte(operatorConfig), w, names[:1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v any
+	json.Unmarshal(out, &v)
+	for _, style := range []func(any) []byte{
+		func(v any) []byte { b, _ := json.Marshal(v); return b },
+		func(v any) []byte { b, _ := json.MarshalIndent(v, "", "    "); return b },
+		func(v any) []byte { b, _ := json.MarshalIndent(v, "", "\t"); return append(b, "\n\n"...) },
+	} {
+		doc := style(v)
+		got, rep, err := Merge(doc, w, names[:1])
+		if err != nil || rep.Changed() || string(got) != string(doc) {
+			t.Fatalf("an unchanged merge rewrote the file (%+v %v):\n%s", rep, err, got)
+		}
+	}
+}

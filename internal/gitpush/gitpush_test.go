@@ -262,3 +262,51 @@ func TestRewriteCommitMapsParentsAndDropsOldSignature(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestPushRefusesAnOddRemote(t *testing.T) {
+	f := newFixture(t)
+	f.commit(t, "b.txt", "b\n")
+	for _, remote := range []string{"-uhoh", "--upload-pack=touch /tmp/x", "ext::sh -c touch% /tmp/pwned", "EXT::sh"} {
+		r := f.req()
+		r.Remote = remote
+		if _, err := Push(context.Background(), r); err == nil || !strings.Contains(err.Error(), "refusing remote") {
+			t.Errorf("remote %q must be refused up front: %v", remote, err)
+		}
+	}
+}
+
+func TestPushCapsTheRange(t *testing.T) {
+	f := newFixture(t)
+	f.commit(t, "b.txt", "b\n")
+	f.commit(t, "c.txt", "c\n")
+	r := f.req()
+	r.MaxCommits = 1
+	if _, err := Push(context.Background(), r); err == nil || !strings.Contains(err.Error(), "more than the 1") {
+		t.Fatalf("a range over the cap is refused: %v", err)
+	}
+	before := run(t, f.remote, "git", "rev-parse", "fix/1")
+	r.MaxCommits = 2
+	if res, err := Push(context.Background(), r); err != nil || res.Commits != 2 || res.Old != before {
+		t.Fatalf("at the cap it pushes: %+v %v", res, err)
+	}
+}
+
+// HEAD naming a branch conductor would not push to (an illegal name) is
+// refused before any ref file is read.
+func TestPushRefusesAHeadOnAnIllegalBranch(t *testing.T) {
+	f := newFixture(t)
+	f.commit(t, "b.txt", "b\n")
+	head := run(t, f.ws, "git", "rev-parse", "HEAD")
+	for _, ref := range []string{"refs/heads/-x", "refs/heads/a..b", "refs/heads/../../config", "refs/tags/v1"} {
+		// The ref file itself holds a real commit: only the name is wrong.
+		p := filepath.Join(f.ws, ".git", filepath.FromSlash(ref))
+		if !strings.Contains(ref, "..") {
+			os.MkdirAll(filepath.Dir(p), 0o755)
+			os.WriteFile(p, []byte(head+"\n"), 0o644)
+		}
+		os.WriteFile(filepath.Join(f.ws, ".git", "HEAD"), []byte("ref: "+ref+"\n"), 0o644)
+		if _, err := Push(context.Background(), f.req()); err == nil {
+			t.Errorf("HEAD -> %s must be refused", ref)
+		}
+	}
+}

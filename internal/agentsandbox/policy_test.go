@@ -397,3 +397,112 @@ func TestCanonicalTool(t *testing.T) {
 		}
 	}
 }
+
+// A relative workspace or home is refused even when a directory of that
+// name exists where the launcher runs.
+func TestWrapRefusesRelativePathsThatExist(t *testing.T) {
+	withPlatform(t, "linux")
+	f := newPolicyFixture(t)
+	t.Chdir(filepath.Dir(f.pol.Workspace))
+	for _, mut := range []func(*Policy){
+		func(p *Policy) { p.Workspace = filepath.Base(p.Workspace) },
+		func(p *Policy) { p.Home = filepath.Base(p.Home) },
+	} {
+		p := f.pol
+		mut(&p)
+		if _, err := Wrap(p, []string{"claude"}, f.deps); err == nil || !strings.Contains(err.Error(), "not an absolute path") {
+			t.Errorf("relative path accepted: %v", err)
+		}
+	}
+}
+
+// conductor itself (for `conductor call` inside) is bound read-only at its
+// own path when it lives outside the base system — a ~/.local/bin install.
+func TestWrapBindsConductorOutsideTheBase(t *testing.T) {
+	withPlatform(t, "linux")
+	f := newPolicyFixture(t)
+	self := filepath.Join(t.TempDir(), "bin", "conductor")
+	os.MkdirAll(filepath.Dir(self), 0o755)
+	os.WriteFile(self, []byte("x"), 0o755)
+	f.deps.SelfExe = func() (string, error) { return self, nil }
+	l, err := Wrap(f.pol, []string{"claude"}, f.deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	real, _ := filepath.EvalSymlinks(self)
+	if !hasBind(jailOf(t, l.Argv), sandbox.BindMount{Path: self, Src: real, RO: true}) {
+		t.Fatalf("conductor not bound: %+v", jailOf(t, l.Argv))
+	}
+}
+
+// Cleanup releases everything the launch took: the proxy credential and
+// every relay.
+func TestWrapCleanupReleasesEverything(t *testing.T) {
+	withPlatform(t, "linux")
+	f := newPolicyFixture(t)
+	revoked, closed := 0, 0
+	f.deps.EgressUnix = func([]string) (string, string, func(), error) {
+		return "/tmp/egress-x/egress-0.sock", "c", func() { revoked++ }, nil
+	}
+	f.deps.Relay = func(string) (string, func(), error) { return "/tmp/csr1/r1.sock", func() { closed++ }, nil }
+	f.pol.Loopback = []string{"127.0.0.1:3456", "127.0.0.1:4000"}
+	l, err := Wrap(f.pol, []string{"claude"}, f.deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Cleanup()
+	if revoked != 1 || closed != 2 {
+		t.Fatalf("revoked %d (want 1), relays closed %d (want 2)", revoked, closed)
+	}
+	// A relay that fails closes the ones already open.
+	closed = 0
+	n := 0
+	f.deps.Relay = func(string) (string, func(), error) {
+		n++
+		if n == 2 {
+			return "", nil, os.ErrPermission
+		}
+		return "/tmp/csr1/r1.sock", func() { closed++ }, nil
+	}
+	if _, err := Wrap(f.pol, []string{"claude"}, f.deps); err == nil || closed != 1 {
+		t.Fatalf("relay failure: err %v, closed %d", err, closed)
+	}
+}
+
+// conductor run through a symlink is bound as the file it resolves to.
+func TestWrapBindsConductorsRealFile(t *testing.T) {
+	withPlatform(t, "linux")
+	f := newPolicyFixture(t)
+	dir := t.TempDir()
+	real := filepath.Join(dir, "conductor-v2")
+	os.WriteFile(real, []byte("x"), 0o755)
+	link := filepath.Join(dir, "conductor")
+	os.Symlink(real, link)
+	f.deps.SelfExe = func() (string, error) { return link, nil }
+	l, err := Wrap(f.pol, []string{"claude"}, f.deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ := filepath.EvalSymlinks(real)
+	if !hasBind(jailOf(t, l.Argv), sandbox.BindMount{Path: link, Src: r, RO: true}) {
+		t.Fatalf("binds: %+v", jailOf(t, l.Argv))
+	}
+}
+
+func TestAgentEnvDropsMalformedEntries(t *testing.T) {
+	env := AgentEnv([]string{"TERM", "=x", "PATH=/usr/bin"}, Policy{Home: "/h"})
+	for _, kv := range env {
+		if kv == "TERM" || kv == "=x" {
+			t.Fatalf("malformed entry kept: %v", env)
+		}
+	}
+}
+
+func TestModelRouteIgnoresAnOverrideWithNoHost(t *testing.T) {
+	for _, o := range []string{"garbage", "http://", "://x", "/just/a/path"} {
+		hosts, lb := ModelRoute("claude-code", "", []string{"ANTHROPIC_BASE_URL=" + o})
+		if len(lb) != 0 || len(hosts) != len(anthropicHosts) {
+			t.Errorf("%q added a route: %v %v", o, hosts, lb)
+		}
+	}
+}

@@ -369,3 +369,62 @@ func TestLauncherFilesAreTempFilesOnly(t *testing.T) {
 		t.Fatalf("only the launcher's own temp file, once: %v (home %s)", got, home)
 	}
 }
+
+// / is never a workspace — with or without a home configured.
+func TestResolverRefusesRootWithoutAHome(t *testing.T) {
+	r := &Resolver{Registry: &Registry{}, StateRoot: t.TempDir()}
+	if _, err := r.PolicyFor("/", "claude", nil, false); err == nil || !strings.Contains(err.Error(), "with / as its workspace") {
+		t.Fatalf("/ must be refused: %v", err)
+	}
+}
+
+// An unregister func from an earlier registration never removes a later
+// one of the same workspace.
+func TestRegistryUnregisterIsItsOwn(t *testing.T) {
+	reg := &Registry{}
+	ws := t.TempDir()
+	first := reg.Register(Entry{Workspace: ws, Identity: "a", Dispatch: "d1"})
+	reg.Register(Entry{Workspace: ws, Identity: "b", Dispatch: "d2"})
+	first()
+	if e, ok := reg.Lookup(ws); !ok || e.Identity != "b" {
+		t.Fatalf("the later registration survives: %+v %v", e, ok)
+	}
+	third := reg.Register(Entry{Workspace: ws, Identity: "b", Dispatch: "d3"})
+	third()
+	if _, ok := reg.Lookup(ws); ok {
+		t.Fatal("its own unregister removes it")
+	}
+}
+
+func TestIdentityKeyLengthBoundaries(t *testing.T) {
+	for n := 47; n <= 66; n++ {
+		name := strings.Repeat("a", n)
+		k := IdentityKey(name)
+		if n <= 64 && k != name {
+			t.Errorf("a clean %d-char name is its own key: %q", n, k)
+		}
+		if n > 64 && (len(k) > 64 || !strings.HasPrefix(k, strings.Repeat("a", 48)+"-")) {
+			t.Errorf("a %d-char name is shortened and hashed: %q", n, k)
+		}
+	}
+}
+
+// With no real home known, nothing is seeded — never from the cwd.
+func TestPrepareHomeSeedsNothingWithoutARealHome(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	os.WriteFile(".claude.json", []byte(`{"stray":1}`), 0o600)
+	home, logins, err := PrepareHome(HomeSpec{Root: t.TempDir(), Key: "k", Tool: "claude-code"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(home, ".claude.json")); err != nil || len(b) != 0 {
+		t.Fatalf("~/.claude.json is an empty file of its own, never the cwd's: %q %v", b, err)
+	}
+	if fi, err := os.Stat(filepath.Join(home, ".claude")); err != nil || !fi.IsDir() {
+		t.Fatal("~/.claude is a dir")
+	}
+	if len(logins) != 0 {
+		t.Fatalf("logins without a home: %v", logins)
+	}
+}

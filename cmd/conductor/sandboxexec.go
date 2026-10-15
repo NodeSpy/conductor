@@ -230,8 +230,8 @@ func runSandboxed(l *agentsandbox.Launch) int {
 func modelRouteEnv(env []string) []string {
 	var out []string
 	for _, kv := range env {
-		k, _, _ := strings.Cut(kv, "=")
-		if strings.HasSuffix(k, "_BASE_URL") {
+		k, v, _ := strings.Cut(kv, "=")
+		if strings.HasSuffix(k, "_BASE_URL") && (strings.HasPrefix(v, "http://") || strings.HasPrefix(v, "https://")) {
 			out = append(out, kv)
 		}
 	}
