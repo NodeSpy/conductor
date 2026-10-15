@@ -62,6 +62,8 @@ type Settings struct {
 	MaxDownload, MaxUpload int64
 	// Credentials are the sign-ins the operator shares (by vault reference).
 	Credentials []Credential
+	// Mailboxes are where emailed codes are read, by name.
+	Mailboxes map[string]Mailbox
 }
 
 // LoginSiteConfig is one opted-in site: who may use it, and what further
@@ -93,6 +95,10 @@ type Manager struct {
 	Secrets   func(ctx context.Context, vault, key string) (string, error)
 	PutSecret func(ctx context.Context, vault, key, value string) error
 	Notify    func(msg string)
+
+	// usedMail are the messages whose codes were filled: never twice.
+	mailMu   sync.Mutex
+	usedMail map[string]bool
 
 	mu       sync.Mutex
 	sessions map[string]*session
@@ -885,7 +891,8 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 		if err != nil {
 			return nil, err
 		}
-		if err := m.fillField(ctx, in, t, fr, id, cred, field); err != nil {
+		// A code mailed for this step: recent, never one filled before.
+		if err := m.fillField(ctx, in, t, fr, id, cred, field, time.Now().Add(-5*time.Minute)); err != nil {
 			return nil, err
 		}
 		out["filled"] = field

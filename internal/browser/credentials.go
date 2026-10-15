@@ -42,6 +42,9 @@ type Credential struct {
 	// Approval: the site asks for an approval on the operator's phone after
 	// sign-in; conductor tells the operator and waits.
 	Approval bool
+	// Email is where an emailed one-time code comes from (when OTP is
+	// not set).
+	Email *EmailCode
 }
 
 // For reports whether the credential is bound to identity.
@@ -280,7 +283,7 @@ func (m *Manager) checkPage(ctx context.Context, in *Instance, t *tab, o origin,
 }
 
 // fillField fills one field of the main frame's document with a fresh value.
-func (m *Manager) fillField(ctx context.Context, in *Instance, t *tab, fr frame, nodeID int64, cred Credential, field string) error {
+func (m *Manager) fillField(ctx context.Context, in *Instance, t *tab, fr frame, nodeID int64, cred Credential, field string, after time.Time) error {
 	var ref *SecretRef
 	switch field {
 	case "username":
@@ -292,7 +295,8 @@ func (m *Manager) fillField(ctx context.Context, in *Instance, t *tab, fr frame,
 	default:
 		return refuse("field is username, password or otp, not %q", field)
 	}
-	if ref == nil {
+	emailed := field == "otp" && ref == nil && cred.Email != nil
+	if ref == nil && !emailed {
 		return refuse("credential %q has no %s", cred.Name, field)
 	}
 	w, err := in.world(ctx, t, fr.ID)
@@ -310,13 +314,19 @@ func (m *Manager) fillField(ctx context.Context, in *Instance, t *tab, fr frame,
 	if why := strings.Trim(string(v), `"`); why != "" {
 		return refuse("cannot fill the %s there: %s", field, why)
 	}
-	val, err := m.secret(ctx, ref)
-	if err != nil {
-		return err
-	}
-	if field == "otp" {
-		if val, err = OTPCode(val, time.Now()); err != nil {
+	var val string
+	if emailed {
+		if val, err = m.emailCode(ctx, cred, after); err != nil {
 			return err
+		}
+	} else {
+		if val, err = m.secret(ctx, ref); err != nil {
+			return err
+		}
+		if field == "otp" {
+			if val, err = OTPCode(val, time.Now()); err != nil {
+				return err
+			}
 		}
 	}
 	if field != "username" {
@@ -381,6 +391,8 @@ func (in *Instance) submitFrom(ctx context.Context, t *tab, ctxID int, nodeID in
 // when asked to (or when there is no password to give).
 func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c Principal, st Settings, cred Credential, o origin, allow []string, passkey bool, ref string, entry map[string]any) (map[string]any, error) {
 	var steps []string
+	// An emailed code must arrive after the step that asked for it.
+	since := time.Now().Add(-codeSkew)
 	fr, err := in.mainFrame(ctx, t)
 	if err != nil {
 		return nil, err
@@ -425,7 +437,7 @@ func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c
 		var found struct{ Password, OTP, Username bool }
 		_ = json.Unmarshal(raw, &found)
 		var submit int64
-		if !found.Password && !(found.OTP && cred.OTP != nil) && !(found.Username && cred.Username != nil) && len(steps) == 0 && cred.LoginURL != "" && !navigated {
+		if !found.Password && !(found.OTP && (cred.OTP != nil || cred.Email != nil)) && !(found.Username && cred.Username != nil) && len(steps) == 0 && cred.LoginURL != "" && !navigated {
 			// Nothing to fill here: start from the credential's sign-in page.
 			if err := checkURL(cred.LoginURL, allow); err != nil {
 				return nil, err
@@ -443,7 +455,7 @@ func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c
 			if found.Username && cred.Username != nil {
 				id, err := in.markedNode(ctx, t, w, "username")
 				if err == nil {
-					if err := m.fillField(ctx, in, t, fr, id, cred, "username"); err != nil {
+					if err := m.fillField(ctx, in, t, fr, id, cred, "username", since); err != nil {
 						return nil, err
 					}
 					steps = append(steps, "username")
@@ -453,16 +465,16 @@ func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c
 			if err != nil {
 				return nil, err
 			}
-			if err := m.fillField(ctx, in, t, fr, id, cred, "password"); err != nil {
+			if err := m.fillField(ctx, in, t, fr, id, cred, "password", since); err != nil {
 				return nil, err
 			}
 			steps, submit = append(steps, "password"), id
-		case found.OTP && cred.OTP != nil:
+		case found.OTP && (cred.OTP != nil || cred.Email != nil):
 			id, err := in.markedNode(ctx, t, w, "otp")
 			if err != nil {
 				return nil, err
 			}
-			if err := m.fillField(ctx, in, t, fr, id, cred, "otp"); err != nil {
+			if err := m.fillField(ctx, in, t, fr, id, cred, "otp", since); err != nil {
 				return nil, err
 			}
 			steps, submit = append(steps, "one-time code"), id
@@ -472,7 +484,7 @@ func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c
 			if err != nil {
 				return nil, err
 			}
-			if err := m.fillField(ctx, in, t, fr, id, cred, "username"); err != nil {
+			if err := m.fillField(ctx, in, t, fr, id, cred, "username", since); err != nil {
 				return nil, err
 			}
 			steps, submit = append(steps, "username"), id
@@ -484,6 +496,7 @@ func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c
 		if err != nil {
 			return nil, err
 		}
+		since = time.Now().Add(-codeSkew)
 		if err := in.submitFrom(ctx, t, w2, submit); err != nil {
 			return nil, err
 		}
@@ -731,4 +744,46 @@ func (in *Instance) maskSecrets(ctx context.Context, t *tab, shot []byte, full b
 		return shot, nil
 	}
 	return maskPNG(shot, r.Rects, r.Width)
+}
+
+// codeSkew is how much earlier than the sign-in step an emailed code may be
+// stamped (the mail server's clock).
+const codeSkew = 30 * time.Second
+
+// emailCode reads the credential's emailed code: the mailbox login fresh
+// from its vault, one message, never one used before.
+func (m *Manager) emailCode(ctx context.Context, cred Credential, after time.Time) (string, error) {
+	ec := cred.Email
+	mb, ok := m.Settings().Mailboxes[ec.Mailbox]
+	if !ok {
+		return "", fmt.Errorf("browser: credential %q: no mailbox %q (browser.mailboxes)", cred.Name, ec.Mailbox)
+	}
+	if mb.Username == nil || mb.Password == nil {
+		return "", fmt.Errorf("browser: mailbox %s has no login", mb.Name)
+	}
+	user, err := m.secret(ctx, mb.Username)
+	if err != nil {
+		return "", err
+	}
+	pass, err := m.secret(ctx, mb.Password)
+	if err != nil {
+		return "", err
+	}
+	m.mailMu.Lock()
+	if m.usedMail == nil {
+		m.usedMail = map[string]bool{}
+	}
+	used := make(map[string]bool, len(m.usedMail))
+	for k := range m.usedMail {
+		used[k] = true
+	}
+	m.mailMu.Unlock()
+	code, id, err := fetchEmailCode(ctx, mb, *ec, user, pass, after, used)
+	if err != nil {
+		return "", fmt.Errorf("browser: credential %q: emailed code: %v", cred.Name, err)
+	}
+	m.mailMu.Lock()
+	m.usedMail[id] = true
+	m.mailMu.Unlock()
+	return code, nil
 }

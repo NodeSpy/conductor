@@ -79,17 +79,27 @@ func (s *Site) signIn(w http.ResponseWriter, how string) {
 
 // passwordOK continues a sign-in whose password was right.
 func (s *Site) passwordOK(w http.ResponseWriter, r *http.Request) {
-	if s.TOTPSeed == "" && !s.NeedApproval {
+	if s.EmailCodes != nil {
+		b := make([]byte, 4)
+		_, _ = rand.Read(b)
+		code := fmt.Sprintf("%06d", (int(b[0])<<16|int(b[1])<<8|int(b[2]))%1000000)
+		s.mu.Lock()
+		s.emailed = code
+		s.mu.Unlock()
+		s.EmailCodes.Deliver("Test Site <no-reply@testsite.example>", "Your sign-in code",
+			"Hello test-user,\r\n\r\nYour sign-in code is "+code+".\r\nIt expires in 10 minutes.\r\n", time.Now())
+	}
+	if s.TOTPSeed == "" && !s.NeedApproval && s.EmailCodes == nil {
 		s.signIn(w, "password")
 		http.Redirect(w, r, "/account", http.StatusSeeOther)
 		return
 	}
 	id := token()
 	s.mu.Lock()
-	s.pending[id] = &pending{otpDone: s.TOTPSeed == ""}
+	s.pending[id] = &pending{otpDone: s.TOTPSeed == "" && s.EmailCodes == nil}
 	s.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: "pending", Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode})
-	if s.TOTPSeed != "" {
+	if s.TOTPSeed != "" || s.EmailCodes != nil {
 		http.Redirect(w, r, "/login/otp", http.StatusSeeOther)
 		return
 	}
@@ -156,7 +166,12 @@ func (s *Site) auth(w http.ResponseWriter, r *http.Request) {
 			_ = r.ParseForm()
 			code := r.Form.Get("otp")
 			now := time.Now()
-			if code == Code(s.TOTPSeed, now) || code == Code(s.TOTPSeed, now.Add(-30*time.Second)) {
+			s.mu.Lock()
+			emailed := s.emailed
+			s.mu.Unlock()
+			okCode := code != "" && ((s.TOTPSeed != "" && (code == Code(s.TOTPSeed, now) || code == Code(s.TOTPSeed, now.Add(-30*time.Second)))) ||
+				(s.EmailCodes != nil && code == emailed))
+			if okCode {
 				s.mu.Lock()
 				p.otpDone = true
 				s.Codes = append(s.Codes, code)
@@ -169,7 +184,11 @@ func (s *Site) auth(w http.ResponseWriter, r *http.Request) {
 				s.mu.Lock()
 				delete(s.pending, id)
 				s.mu.Unlock()
-				s.signIn(w, "password+otp")
+				how := "password+otp"
+				if s.EmailCodes != nil {
+					how = "password+email-code"
+				}
+				s.signIn(w, how)
 				http.Redirect(w, r, "/account", http.StatusSeeOther)
 				return
 			}

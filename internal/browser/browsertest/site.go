@@ -36,6 +36,10 @@ type Site struct {
 	// NeedApproval an approval "on the phone" after that (Approve).
 	TOTPSeed     string
 	NeedApproval bool
+	// EmailCodes mails a one-time code to this mailbox after the password
+	// (instead of a TOTP step).
+	EmailCodes *Mailbox
+	emailed    string
 	// Codes are the one-time codes the site accepted (a test checks none
 	// reached the agent).
 	Codes []string

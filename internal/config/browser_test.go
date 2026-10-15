@@ -72,6 +72,39 @@ func TestValidateBrowser(t *testing.T) {
 			b.Credentials[0].Origin, b.Credentials[0].LoginURL = "http://127.0.0.1:8080", ""
 		}, ""},
 	}
+	mbox := func(b *BrowserConfig) {
+		b.Mailboxes = map[string]BrowserMailbox{"inbox": {IMAP: "imap.example.com:993", Username: ref, Password: ref}}
+		b.Credentials[0].EmailCode = &BrowserEmailCode{Mailbox: "inbox", From: "no-reply@app.example.com", Subject: "sign-in code", Code: `code is ([0-9]{6})`}
+	}
+	with := func(f func(b *BrowserConfig)) func(b *BrowserConfig) { return func(b *BrowserConfig) { mbox(b); f(b) } }
+	cases = append(cases, []struct {
+		name string
+		mod  func(b *BrowserConfig)
+		want string
+	}{
+		{"email code", mbox, ""},
+		{"email code @domain", with(func(b *BrowserConfig) { b.Credentials[0].EmailCode.From = "@app.example.com" }), ""},
+		{"email code and otp", with(func(b *BrowserConfig) { b.Credentials[0].OTP = ref }), "keep one"},
+		{"email code no mailbox", with(func(b *BrowserConfig) { b.Credentials[0].EmailCode.Mailbox = "nope" }), "not in browser.mailboxes"},
+		{"email code any sender", with(func(b *BrowserConfig) { b.Credentials[0].EmailCode.From = "" }), "exact address"},
+		{"email code wildcard sender", with(func(b *BrowserConfig) { b.Credentials[0].EmailCode.From = "*@app.example.com" }), "exact address"},
+		{"email code no subject", with(func(b *BrowserConfig) { b.Credentials[0].EmailCode.Subject = "" }), "subject is required"},
+		{"email code bad pattern", with(func(b *BrowserConfig) { b.Credentials[0].EmailCode.Code = "(" }), "regular expression"},
+		{"email code two groups", with(func(b *BrowserConfig) { b.Credentials[0].EmailCode.Code = "(a)(b)" }), "at most one"},
+		{"email code long wait", with(func(b *BrowserConfig) { b.Credentials[0].EmailCode.Wait = "5m" }), "up to 90s"},
+		{"mailbox no port", with(func(b *BrowserConfig) {
+			b.Mailboxes["inbox"] = BrowserMailbox{IMAP: "imap.example.com", Username: ref, Password: ref}
+		}), "host:port"},
+		{"mailbox plaintext remote", with(func(b *BrowserConfig) {
+			b.Mailboxes["inbox"] = BrowserMailbox{IMAP: "imap.example.com:143", PlaintextLoopback: true, Username: ref, Password: ref}
+		}), "loopback address only"},
+		{"mailbox plaintext loopback", with(func(b *BrowserConfig) {
+			b.Mailboxes["inbox"] = BrowserMailbox{IMAP: "127.0.0.1:1143", PlaintextLoopback: true, Username: ref, Password: ref}
+		}), ""},
+		{"mailbox literal password", with(func(b *BrowserConfig) {
+			b.Mailboxes["inbox"] = BrowserMailbox{IMAP: "imap.example.com:993", Username: ref, Password: &BrowserSecretRef{Key: "hunter2"}}
+		}), "never the value"},
+	}...)
 	for _, tc := range cases {
 		b := good()
 		tc.mod(b)

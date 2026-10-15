@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -72,10 +73,25 @@ func browserSettings(cfg *config.Config) browser.Settings {
 		return &browser.SecretRef{Vault: r.Vault, Key: r.Key}
 	}
 	for _, c := range b.Credentials {
-		st.Credentials = append(st.Credentials, browser.Credential{
+		cr := browser.Credential{
 			Name: c.Name, Origin: c.Origin, Identities: c.Identities, LoginURL: c.LoginURL, Approval: c.Approval,
 			Username: ref(c.Username), Password: ref(c.Password), OTP: ref(c.OTP), Passkey: ref(c.Passkey),
-		})
+		}
+		if ec := c.EmailCode; ec != nil {
+			re, err := regexp.Compile(ec.Code)
+			if err == nil {
+				wait, _ := time.ParseDuration(ec.Wait)
+				cr.Email = &browser.EmailCode{Mailbox: ec.Mailbox, From: ec.From, Subject: ec.Subject, Code: re, Wait: wait}
+			}
+		}
+		st.Credentials = append(st.Credentials, cr)
+	}
+	for name, mb := range b.Mailboxes {
+		if st.Mailboxes == nil {
+			st.Mailboxes = map[string]browser.Mailbox{}
+		}
+		st.Mailboxes[name] = browser.Mailbox{Name: name, Addr: mb.IMAP, StartTLS: mb.StartTLS, PlainLoopback: mb.PlaintextLoopback,
+			CAFile: mb.CAFile, Username: ref(mb.Username), Password: ref(mb.Password), Folder: mb.Folder}
 	}
 	return st
 }
@@ -230,6 +246,9 @@ func browserControl(conn net.Conn, req controlRequest) controlResponse {
 				if f.ref != nil {
 					ci.Fields = append(ci.Fields, f.name)
 				}
+			}
+			if c.Email != nil {
+				ci.Fields = append(ci.Fields, "email code ("+c.Email.Mailbox+")")
 			}
 			creds = append(creds, ci)
 		}

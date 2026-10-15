@@ -10,6 +10,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -263,7 +264,7 @@ func TestCredentialOriginBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := r.vault.count()
-	if err := r.m.fillField(ctx, in, tb, fr, pw, cr, "password"); err == nil || !strings.Contains(err.Error(), "own document") {
+	if err := r.m.fillField(ctx, in, tb, fr, pw, cr, "password", time.Now()); err == nil || !strings.Contains(err.Error(), "own document") {
 		t.Fatalf("a frame's field: %v", err)
 	}
 	if r.vault.count() != before {
@@ -509,4 +510,79 @@ func findPasswordNode(raw json.RawMessage) int64 {
 		}
 	}
 	return 0
+}
+
+// TestCredentialEmailCode: a site that mails a one-time code — conductor
+// reads only the matching message from the opted-in mailbox, fills the code,
+// and nothing of the mailbox, message or code reaches the agent.
+func TestCredentialEmailCode(t *testing.T) {
+	r := newCredRig(t)
+	r.site.TOTPSeed = ""
+	mb := &browsertest.Mailbox{User: "agent-inbox@example.test", Pass: "imap-app-password-not-secret"}
+	if err := mb.Serve("127.0.0.1:0", nil); err != nil {
+		t.Fatal(err)
+	}
+	defer mb.Close()
+	// Someone else's mail, and an older code, in the same mailbox.
+	mb.Deliver("Bank <alerts@bank.example>", "Your sign-in code", "Your code is 999999", time.Now())
+	mb.Deliver("Test Site <no-reply@testsite.example>", "Your sign-in code", "Your sign-in code is 111111", time.Now().Add(-time.Hour))
+	r.site.EmailCodes = mb
+	r.vault.m["mail/user"], r.vault.m["mail/pass"] = mb.User, mb.Pass
+	r.st.Mailboxes = map[string]Mailbox{"inbox": {Name: "inbox", Addr: mb.Addr(), PlainLoopback: true,
+		Username: &SecretRef{Vault: "testvault", Key: "mail/user"}, Password: &SecretRef{Vault: "testvault", Key: "mail/pass"}}}
+	r.st.Credentials[0].OTP = nil
+	r.st.Credentials[0].Email = &EmailCode{Mailbox: "inbox", From: "no-reply@testsite.example", Subject: "sign-in code",
+		Code: regexp.MustCompile(`code is ([0-9]{6})`), Wait: 20 * time.Second}
+	c := r.caller("op", RequesterOperator)
+	r.do(c, "open", map[string]any{"url": r.bound + "/login"})
+	out := r.do(c, "login", map[string]any{"credential": "site"})
+	if fmt.Sprint(out["steps"]) != "[username password submitted one-time code submitted]" {
+		t.Fatalf("steps: %v", out)
+	}
+	if got := r.site.SignIns(); len(got) != 1 || got[0] != "password+email-code" {
+		t.Fatalf("sign-ins: %v", got)
+	}
+	if snap := r.do(c, "snapshot", nil)["snapshot"].(string); !strings.Contains(snap, "Signed in as") {
+		t.Fatalf("not signed in:\n%s", snap)
+	}
+	bodies := 0
+	for _, cmd := range mb.Log() {
+		if strings.Contains(cmd, "BODY.PEEK[])") {
+			bodies++
+		}
+		if strings.HasPrefix(strings.Fields(cmd+" x x")[1], "SELECT") {
+			t.Fatal("the mailbox was opened read-write")
+		}
+	}
+	if bodies != 1 {
+		t.Fatalf("message bodies read: %d (only the match)", bodies)
+	}
+	if r.vault.fetches["mail/user"] != 1 || r.vault.fetches["mail/pass"] != 1 {
+		t.Fatalf("the mailbox login is fetched fresh, once: %v", r.vault.fetches)
+	}
+	// Nothing of the mailbox reaches a reply or the audit: the code, the
+	// app password, the other mail.
+	for _, h := range r.shared {
+		for _, s := range append(r.site.Codes, mb.Pass, "999999", "Bank") {
+			if strings.Contains(h, s) {
+				t.Fatalf("%q reached a reply: %.200s", s, h)
+			}
+		}
+	}
+	es := r.audit.find("login")
+	if len(es) != 1 || es[0]["outcome"] != "ok" {
+		t.Fatalf("audit: %v", es)
+	}
+	r.noLeak()
+	// A second sign-in waits for a new message: the used one is never
+	// filled again (a site that does not send one fails, rather than reuse).
+	r.site.EmailCodes = nil
+	r.site.TOTPSeed = ""
+	r.st.Credentials[0].Email.Wait = 2 * time.Second
+	ev := r.caller("op2", RequesterOperator)
+	r.do(ev, "open", map[string]any{"url": r.bound + "/codefield"})
+	snap := r.do(ev, "snapshot", nil)["snapshot"].(string)
+	if err := r.fail(ev, "fill-credential", map[string]any{"credential": "site", "field": "otp", "ref": refOf(t, snap, "textbox", "Code")}); !strings.Contains(err.Error(), "no message") {
+		t.Fatalf("the used message again: %v", err)
+	}
 }

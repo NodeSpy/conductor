@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -48,6 +49,44 @@ type BrowserConfig struct {
 	// vaults: the agent names one, conductor fills it on the bound origin
 	// and the agent never sees a value. Nothing is shared by default.
 	Credentials []BrowserCredential `yaml:"credentials,omitempty"`
+	// Mailboxes are where emailed sign-in codes are read (IMAP, read-only),
+	// by name: a credential's email_code names one. Opt-in: none by default.
+	Mailboxes map[string]BrowserMailbox `yaml:"mailboxes,omitempty"`
+}
+
+// BrowserMailbox is one IMAP mailbox: its login comes from a vault (an app
+// password), never from the config.
+type BrowserMailbox struct {
+	// IMAP is host:port — 993 is implicit TLS.
+	IMAP string `yaml:"imap"`
+	// StartTLS upgrades a plain connection (port 143) before login.
+	StartTLS bool `yaml:"starttls,omitempty"`
+	// PlaintextLoopback allows no TLS, to a loopback address only (a local
+	// mail bridge).
+	PlaintextLoopback bool `yaml:"plaintext_loopback,omitempty"`
+	// CAFile trusts this PEM bundle instead of the system's.
+	CAFile   string            `yaml:"ca_file,omitempty"`
+	Username *BrowserSecretRef `yaml:"username"`
+	Password *BrowserSecretRef `yaml:"password"`
+	// Folder is the folder searched (default INBOX).
+	Folder string `yaml:"folder,omitempty"`
+}
+
+// BrowserEmailCode is where a credential's emailed one-time code comes
+// from: conductor reads only the newest message from From with Subject in
+// its subject that arrived after the sign-in step, and extracts Code.
+type BrowserEmailCode struct {
+	Mailbox string `yaml:"mailbox"`
+	// From is an exact sender address, or "@domain" for any sender at
+	// exactly that domain.
+	From string `yaml:"from"`
+	// Subject must appear in the subject (case-insensitive).
+	Subject string `yaml:"subject"`
+	// Code is a regular expression: its first group, or the whole match, is
+	// the code.
+	Code string `yaml:"code"`
+	// Wait bounds the wait for the message (default 60s, at most 90s).
+	Wait string `yaml:"wait,omitempty"`
 }
 
 // BrowserCredential binds one sign-in to identities and an origin.
@@ -77,6 +116,9 @@ type BrowserCredential struct {
 	// Approval: the site asks for an approval on your phone after sign-in;
 	// conductor notifies you (a needs_input event) and the agent waits.
 	Approval bool `yaml:"approval,omitempty"`
+	// EmailCode is where an emailed one-time code comes from (instead of
+	// otp:).
+	EmailCode *BrowserEmailCode `yaml:"email_code,omitempty"`
 }
 
 // BrowserSecretRef names a value in one of the operator's vaults.
@@ -243,6 +285,34 @@ func (c *Config) validateBrowser() error {
 				return fmt.Errorf("%s: no vault named %q (vaults:)", where, r.Vault)
 			}
 		}
+		if ec := cr.EmailCode; ec != nil {
+			if cr.OTP != nil {
+				return fmt.Errorf("%s: otp and email_code both name the one-time code — keep one", where)
+			}
+			if _, ok := b.Mailboxes[ec.Mailbox]; !ok {
+				return fmt.Errorf("%s: email_code.mailbox %q is not in browser.mailboxes", where, ec.Mailbox)
+			}
+			from := strings.TrimSpace(ec.From)
+			if from == "" || from == "@" || !strings.Contains(from, "@") || strings.ContainsAny(from, " <>\"\r\n*") {
+				return fmt.Errorf("%s: email_code.from must be an exact address or @domain, got %q", where, ec.From)
+			}
+			if strings.TrimSpace(ec.Subject) == "" || strings.ContainsAny(ec.Subject, "\r\n\"") {
+				return fmt.Errorf("%s: email_code.subject is required (text the subject contains)", where)
+			}
+			re, err := regexp.Compile(ec.Code)
+			if ec.Code == "" || err != nil {
+				return fmt.Errorf("%s: email_code.code must be a regular expression for the code: %v", where, err)
+			}
+			if re.NumSubexp() > 1 {
+				return fmt.Errorf("%s: email_code.code has %d groups — at most one (the code)", where, re.NumSubexp())
+			}
+			if ec.Wait != "" {
+				if d, err := time.ParseDuration(ec.Wait); err != nil || d <= 0 || d > 90*time.Second {
+					return fmt.Errorf("%s: email_code.wait %q must be a duration up to 90s", where, ec.Wait)
+				}
+			}
+			refs++
+		}
 		if refs == 0 {
 			return fmt.Errorf("%s has nothing to fill", where)
 		}
@@ -258,6 +328,32 @@ func (c *Config) validateBrowser() error {
 		}
 		if !browserHostAllowed(b.Allow, u.Hostname(), port) {
 			return fmt.Errorf("%s: %s is not reachable through browser.allow", where, cr.Origin)
+		}
+	}
+	for name, mb := range b.Mailboxes {
+		where := fmt.Sprintf("config: browser.mailboxes.%s", name)
+		host, port, err := net.SplitHostPort(mb.IMAP)
+		if err != nil || host == "" || port == "" {
+			return fmt.Errorf("%s: imap %q must be host:port", where, mb.IMAP)
+		}
+		if mb.PlaintextLoopback {
+			if ip := net.ParseIP(host); (ip == nil || !ip.IsLoopback()) && host != "localhost" {
+				return fmt.Errorf("%s: plaintext_loopback is for a loopback address only (%s is not)", where, host)
+			}
+			if mb.StartTLS {
+				return fmt.Errorf("%s: plaintext_loopback and starttls contradict", where)
+			}
+		}
+		if mb.CAFile != "" && !filepath.IsAbs(expandHome(mb.CAFile)) {
+			return fmt.Errorf("%s: ca_file must be an absolute path", where)
+		}
+		for _, r := range []*BrowserSecretRef{mb.Username, mb.Password} {
+			if r == nil || r.Vault == "" || r.Key == "" {
+				return fmt.Errorf("%s: username and password are {vault, key} — an app password from your vaults, never the value", where)
+			}
+			if _, ok := c.Vaults[r.Vault]; !ok {
+				return fmt.Errorf("%s: no vault named %q (vaults:)", where, r.Vault)
+			}
 		}
 	}
 	return nil
