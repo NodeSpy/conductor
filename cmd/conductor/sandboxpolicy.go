@@ -56,6 +56,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	if !cfg.AgentSandboxOn() {
 		sandboxResolver.Store(nil)
 		controller.AgentSandbox = nil
+		dispatch.PaseoSandboxed = false
 		logf("WARNING: sandbox.agents: off — agents run UNSANDBOXED, with this daemon's view of the machine and your credentials")
 		return func() {}, nil
 	}
@@ -94,6 +95,9 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	// conductor's own reads of a sandboxed workspace (the diff preview) run
 	// sandboxed too: the agent wrote that checkout's git config.
 	gitdiff.Confine = controller.ConfinedGit
+	// conductor's paseo dispatches launch through the sandboxed provider
+	// entries (`conductor paseo setup`).
+	dispatch.PaseoSandboxed = true
 	if why := agentsandbox.Probe(); why != "" {
 		logf("WARNING: the agent sandbox cannot be built on this box (%s) — every agent launch will be REFUSED until it can (or set sandbox.agents: off)", why)
 	} else {
@@ -103,6 +107,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		sandboxResolver.Store(nil)
 		controller.AgentSandbox = nil
 		gitdiff.Confine = nil
+		dispatch.PaseoSandboxed = false
 		rel.Close()
 	}, nil
 }

@@ -260,3 +260,39 @@ func TestDispatchBackendRouting(t *testing.T) {
 		t.Fatalf("local routing: %v %+v", err, ref)
 	}
 }
+
+// With the agent sandbox on, a paseo dispatch launches through the
+// provider's conductor-owned entry (<provider>-sandboxed: `conductor sandbox
+// exec` around the real agent) — always named, since paseo's own default
+// would launch the agent bare.
+func TestPaseoSandboxedProvider(t *testing.T) {
+	old := PaseoSandboxed
+	PaseoSandboxed = true
+	t.Cleanup(func() { PaseoSandboxed = old })
+	d := &Dispatcher{PaseoBin: "paseo", DryRun: true, repoDirs: map[string]string{}}
+	req := Request{
+		Wait:    true,
+		Trigger: core.Trigger{Kind: "merge_conflict", Target: core.Target{Repo: "a/w", PR: 1, Number: 1}},
+		Action:  config.Action{Type: "agent", Prompt: "fix it", Checkout: "none"},
+	}
+	for _, c := range []struct{ provider, want string }{
+		{"codex", "--provider codex-sandboxed"},
+		{"claude", "--provider claude-sandboxed"},
+		{"claude-sandboxed", "--provider claude-sandboxed "},
+		{"", "--provider claude-sandboxed"},
+	} {
+		r := req
+		r.Provider = c.provider
+		ref, err := d.paseo(context.Background(), r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		argv := strings.Join(ref.Argv, " ") + " "
+		if !strings.Contains(argv, c.want) || strings.Contains(argv, "-sandboxed-sandboxed") {
+			t.Errorf("provider %q: %s", c.provider, argv)
+		}
+	}
+	if SandboxIdentity(Request{DispatchID: "x", Action: config.Action{Agent: "fixer"}, Trigger: core.Trigger{TargetTrusted: true, Target: core.Target{Repo: "a/w"}}}, "codex") != "agent:fixer@a/w" {
+		t.Fatal("identity")
+	}
+}

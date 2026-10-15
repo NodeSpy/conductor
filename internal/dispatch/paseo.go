@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NodeSpy/conductor/internal/agentsandbox"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/hosts"
@@ -67,8 +68,20 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	// alongside a roster-confirmed Model (see models.Resolver), so gating on
 	// it independently is equivalent to gating on "confirmed pin" and keeps
 	// the bare-launch path (both empty) untouched.
-	if req.Provider != "" {
-		argv = append(argv, "--provider", req.Provider)
+	provider := req.Provider
+	sandboxed := PaseoSandboxed && !d.remote()
+	if sandboxed {
+		// The agent sandbox: the provider's conductor-owned entry runs the
+		// agent through `conductor sandbox exec`. Always named — paseo's own
+		// default would launch it unsandboxed. Missing (no `conductor paseo
+		// setup`): paseo refuses the launch, never runs it bare.
+		if provider == "" {
+			provider = PaseoDefaultProvider
+		}
+		provider = sandboxedProvider(provider)
+	}
+	if provider != "" {
+		argv = append(argv, "--provider", provider)
 	}
 	if req.Model != "" {
 		argv = append(argv, "--model", req.Model)
@@ -249,6 +262,14 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		argv = append(argv, "--background", "--json")
 	}
 
+	if sandboxed && worktreeCwd != "" && !d.DryRun && !req.Shadow {
+		// Register the worktree before the agent starts: `conductor sandbox
+		// exec` finds this dispatch's identity, token and push target by it.
+		if _, err := RegisterSandboxWorkspace(worktreeCwd, SandboxIdentity(req, providerTool(provider)), providerTool(provider), &req); err != nil {
+			return RunRef{}, Unrecoverable(fmt.Errorf("agent sandbox: register %s: %w", worktreeCwd, err))
+		}
+	}
+
 	ref := RunRef{Backend: "paseo", Kind: req.Trigger.Kind, Argv: append([]string{d.PaseoBin}, argv...)}
 	// The agent's local working directory, for gate checks and diff capture
 	// (#36 §16/§17). A REMOTE paseo's paths live on the other box — leave
@@ -333,6 +354,19 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 		return ref, verr
 	}
 	return ref, nil
+}
+
+// sandboxedProvider is provider's conductor-owned entry (paseosetup.Suffix).
+func sandboxedProvider(provider string) string {
+	if strings.HasSuffix(provider, "-sandboxed") {
+		return provider
+	}
+	return provider + "-sandboxed"
+}
+
+// providerTool is the agent CLI behind a paseo provider name.
+func providerTool(provider string) string {
+	return strings.TrimSuffix(provider, "-sandboxed")
 }
 
 // isTransientPaseoErr reports whether a failed paseo run is worth retrying: a git
@@ -1230,6 +1264,9 @@ func (d *Dispatcher) Archive(ctx context.Context, agentID string) error {
 			return err
 		}
 		d.Owned.forget(wksID, agentID)
+		if cwd != "" {
+			agentsandbox.Default.Forget(cwd)
+		}
 		// Archiving a local-directory workspace leaves its folder on disk, so a
 		// per-run directory (makeRunDir) would outlive its run forever. Remove
 		// it — only ever a direct child of the runs root, nothing else.
