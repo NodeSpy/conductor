@@ -35,6 +35,7 @@ func setupOut(t *testing.T, args ...string) string {
 }
 
 func TestPaseoSetupWritesWrapsAndReloads(t *testing.T) {
+	isolatePaseo(t)
 	calls := stubPaseo(t, `[{"provider":"claude","status":"available"},{"provider":"pi","status":"available"}]`)
 	home := t.TempDir()
 	cfg := filepath.Join(home, "config.json")
@@ -78,6 +79,7 @@ func TestPaseoSetupWritesWrapsAndReloads(t *testing.T) {
 }
 
 func TestPaseoSetupSkipsPiWhenAbsentAndHonorsDryRun(t *testing.T) {
+	isolatePaseo(t)
 	calls := stubPaseo(t, `[{"provider":"claude","status":"available"},{"provider":"pi","status":"unavailable"}]`)
 	home := t.TempDir()
 	out := setupOut(t, "--home", home, "--dry-run")
@@ -98,6 +100,7 @@ func TestPaseoSetupSkipsPiWhenAbsentAndHonorsDryRun(t *testing.T) {
 // test): conductor's entries are added and every operator provider is kept
 // value for value.
 func TestPaseoSetupOnACopyOfARealConfig(t *testing.T) {
+	isolatePaseo(t)
 	stubPaseo(t, `[]`)
 	src := os.Getenv("CONDUCTOR_TEST_PASEO_CONFIG")
 	if src == "" {
@@ -141,6 +144,7 @@ func TestPaseoSetupOnACopyOfARealConfig(t *testing.T) {
 }
 
 func TestPaseoSetupFlags(t *testing.T) {
+	isolatePaseo(t)
 	if _, err := parsePaseoSetup([]string{"--config", "a", "--socket", "b"}); err == nil {
 		t.Fatal("--config and --socket are exclusive")
 	}
@@ -154,6 +158,7 @@ func TestPaseoSetupFlags(t *testing.T) {
 }
 
 func TestPaseoSetupWaitsOutAProviderProbe(t *testing.T) {
+	isolatePaseo(t)
 	n := 0
 	old := paseoRun
 	paseoRun = func(_ string, args ...string) ([]byte, error) {
@@ -172,6 +177,7 @@ func TestPaseoSetupWaitsOutAProviderProbe(t *testing.T) {
 }
 
 func TestPaseoSetupNoReload(t *testing.T) {
+	isolatePaseo(t)
 	calls := stubPaseo(t, `[]`)
 	home := t.TempDir()
 	out := setupOut(t, "--home", home, "--no-reload", "--providers", "claude")

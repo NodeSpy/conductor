@@ -12,6 +12,16 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 )
 
+// isolatePaseo points HOME and PASEO_HOME at a fresh temp dir: whatever a
+// test (or a mutant of the code under test) falls back to, it is never a
+// live paseo config.
+func isolatePaseo(t *testing.T) {
+	t.Helper()
+	h := t.TempDir()
+	t.Setenv("HOME", h)
+	t.Setenv("PASEO_HOME", filepath.Join(h, "ambient-paseo"))
+}
+
 func env(m map[string]string) func(string) string {
 	return func(k string) string { return m[k] }
 }
@@ -20,6 +30,7 @@ func env(m map[string]string) func(string) string {
 // $PASEO_HOME, else an existing ~/.paseo — never a server: endpoint, a
 // host: box, or a home guessed from an address.
 func TestPaseoSetupTargets(t *testing.T) {
+	isolatePaseo(t)
 	user := t.TempDir()
 	noPaseo := t.TempDir()
 	os.MkdirAll(filepath.Join(user, ".paseo"), 0o700)
@@ -68,6 +79,7 @@ func TestPaseoSetupTargets(t *testing.T) {
 // pointed at its own control socket, the operator's entries untouched — and
 // reloads paseo; a restart with nothing to change writes and reloads nothing.
 func TestStartupPaseoSetup(t *testing.T) {
+	isolatePaseo(t)
 	home := t.TempDir()
 	file := filepath.Join(home, "config.json")
 	os.WriteFile(file, []byte(`{"daemon":{"listen":"127.0.0.1:7777"},"agents":{"providers":{"codex-sandboxed":{"extends":"codex","command":["mine"]}}}}`), 0o600)
@@ -143,6 +155,7 @@ func TestStartupPaseoSetup(t *testing.T) {
 // paseo down at boot: the entries are written anyway (paseo reads them when
 // it starts) and the failed reload is logged, not fatal.
 func TestStartupPaseoSetupReloadFails(t *testing.T) {
+	isolatePaseo(t)
 	home := t.TempDir()
 	old := paseoRun
 	paseoRun = func(_ string, args ...string) ([]byte, error) {
