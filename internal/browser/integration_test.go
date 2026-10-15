@@ -468,6 +468,14 @@ func TestBrowserSeesNothingOfTheHost(t *testing.T) {
 			// The base system is read-only visible, like every sandbox's.
 			continue
 		}
+		if p == r.ws && runtime.GOOS == "darwin" {
+			// Seatbelt counts a directory's listing as metadata, which every
+			// sandboxed process may read (path resolution needs it): names,
+			// never contents — the decoy above stays unread. (No agent or
+			// page can navigate here: conductor refuses file:, and Chrome
+			// refuses it from a web page.)
+			continue
+		}
 		if err == nil {
 			v, _ := in.eval(ctx, tb, "document.body ? document.body.innerText : ''")
 			if strings.Contains(string(v), "DECOY") || p == r.ws {

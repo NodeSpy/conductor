@@ -48,6 +48,11 @@ What (B) looks like as built:
     - Consequence: on macOS a renderer exploit holds what the browser process
       holds inside the jail (its profile, including a logged-in browser's
       cookies, and its proxy), and nothing beyond.
+    - Seatbelt classes a directory listing as metadata, which every
+      sandboxed process may read: names anywhere, contents only on the
+      allow-list. A `file://` listing would show them, but no agent or page
+      can navigate there (conductor refuses `file:`; Chrome refuses it from
+      a web page).
     - Chromium's temp dir (its process-singleton socket) is redirected
       (`MAC_CHROMIUM_TMPDIR`) to a private short dir, so it never touches the
       per-user temp dir where the operator's own Chrome keeps its singleton
@@ -292,7 +297,8 @@ session saves, deletes, takeovers, passkey saves and peeks.
      fds 3/4?
    - The macOS Seatbelt browser variant: broad Mach lookups (which services
      beyond the Keychain matter?), IOKit, and no per-process Chromium sandbox
-     (a renderer holds the jail's reach).
+     (a renderer holds the jail's reach). Directory names are readable
+     (metadata): find any way to make the browser load a `file:` URL.
 8. **Resource abuse.** Unbounded tabs, downloads, or wait loops; the
    `max_browsers` cap; idle reaping during a held action.
 
