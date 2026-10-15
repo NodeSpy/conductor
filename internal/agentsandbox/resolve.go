@@ -36,6 +36,9 @@ type Resolver struct {
 	Env []string
 	// GOOS is the platform the launch runs on.
 	GOOS string
+	// Container is the default backend for a launch whose workspace names
+	// none (sandbox.backend: container); nil = the namespace/Seatbelt jail.
+	Container *Container
 }
 
 func (r *Resolver) registry() *Registry {
@@ -168,6 +171,10 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 		Identity: e.Identity, Tool: tool, Workspace: e.Workspace, Home: home, Logins: logins,
 		Egress: egress, Loopback: loopback,
 		ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide, Env: e.Env,
+		Container: e.Container.clone(),
+	}
+	if p.Container == nil {
+		p.Container = r.Container.clone()
 	}
 	if r.Socket != "" && e.Skill != nil && r.Mint != nil {
 		tok, err := r.Mint(*e.Skill)

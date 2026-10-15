@@ -46,6 +46,9 @@ type Entry struct {
 	Env []string
 	// Push is where conductor pushes this workspace's work (nil: nowhere).
 	Push *PushTarget
+	// Container runs this workspace's agents in a container (nil: the
+	// resolver's default backend).
+	Container *Container
 }
 
 // PushTarget is where conductor — never the agent — pushes a workspace.
