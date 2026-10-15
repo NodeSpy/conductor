@@ -103,11 +103,13 @@ The integration point for whatever creates conductor's paseo agents (members):
 // internal/controller
 func SetPaseoIdentity(lookup func(cwd string) (identity string, ok bool))
 func ArchivePaseoCwd(cwd string) int
+func JailDigestFile(identity, path string) (string, error)
 ```
 
 - `SetPaseoIdentity` installs the cwd → identity lookup. It is called once per session, when the session is created; `ok=false` means "not one of ours".
 - The identity names the agent's tool state (`<state>/agent-state/paseo-<identity>`, see [[Isolation#per-identity-tool-state]]) and is its jail's `AgentID`.
 - `ArchivePaseoCwd` ends and forgets every session opened in cwd, returning how many.
+- `JailDigestFile` is the sha256 of `path` as the jail's broker will read it for `identity`, through a confined run's copy-on-write layer (see [[Host-Commands#grants]]). The member gate hashes a host-command proposal's files with it, so a grant pins the bytes the broker checks.
 
 ## What it depends on in paseo
 

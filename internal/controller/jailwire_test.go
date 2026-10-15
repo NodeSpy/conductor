@@ -214,3 +214,18 @@ func TestPolicyOnlyBlocksDoNotShapeTheSandbox(t *testing.T) {
 		t.Fatalf("policy-only step must not wrap a non-jail runtime: %+v", o.iso)
 	}
 }
+
+// JailDigestFile is the daemon jail's DigestFile — the members adapter's
+// Digest — and an error, never a digest, when no jail is wired.
+func TestJailDigestFileIsTheJails(t *testing.T) {
+	old := JailManager
+	defer func() { JailManager = old }()
+	JailManager = nil
+	if _, err := JailDigestFile("member-ops-h1", "plan.tfplan"); err == nil {
+		t.Fatal("no jail: refused")
+	}
+	JailManager = &jail.Manager{}
+	if _, err := JailDigestFile("member-ops-h1", "plan.tfplan"); err == nil || !strings.Contains(err.Error(), "no live jail") {
+		t.Fatalf("delegates to the jail: %v", err)
+	}
+}

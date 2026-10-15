@@ -247,9 +247,11 @@ resource "local_file" "out" {
 	if _, err := os.Stat(filepath.Join(f.ws, "plan.tfplan")); err == nil {
 		t.Fatal("the planfile stays in the copy-on-write layer, not the workspace")
 	}
-	approvedSum, err := grant.FileSHA256(layerPlan)
-	if err != nil {
-		t.Fatalf("the plan in the layer: %v", err)
+	// The gate's hash at mint (DigestFile, through the live jail): the plan
+	// in the layer, the bytes the broker will read.
+	approvedSum, err := m.DigestFile("d1", "plan.tfplan")
+	if want, _ := grant.FileSHA256(layerPlan); err != nil || approvedSum != want {
+		t.Fatalf("the plan in the layer: %q %v (want %s)", approvedSum, err, want)
 	}
 	if out := run(apply); !strings.Contains(out, "exit=126") {
 		t.Fatalf("no grant: refused:\n%s", out)
@@ -274,7 +276,7 @@ resource "local_file" "out" {
 	if out := run(apply); !strings.Contains(out, "exit=126") || !strings.Contains(out, grant.ErrDigest.Error()) {
 		t.Fatalf("a swapped planfile: ErrDigest:\n%s", out)
 	}
-	swappedSum, _ := grant.FileSHA256(layerPlan)
+	swappedSum, _ := m.DigestFile("d1", "plan.tfplan")
 	mint(swappedSum, 10*time.Minute)
 	for _, other := range []string{
 		`terraform apply -input=false plan.tfplan -no-color; echo "exit=$?"`,             // words reordered

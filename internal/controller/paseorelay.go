@@ -109,6 +109,19 @@ func ArchivePaseoCwd(cwd string) int {
 	return r.ArchiveCwd(cwd)
 }
 
+// JailDigestFile is the sha256 of the file path, as the jail's broker will
+// read it for the agent with jail identity `identity` (a paseo session's
+// identity, or a cli worker's dispatch id) — through a confined run's
+// copy-on-write layer when the file is there. It is jail.Manager.DigestFile
+// on the daemon's jail: what the member gate hashes a host-command proposal's
+// files with, so the grant it mints pins the bytes the broker checks.
+func JailDigestFile(identity, path string) (string, error) {
+	if JailManager == nil {
+		return "", errors.New("the agent jail is not wired on this daemon")
+	}
+	return JailManager.DigestFile(identity, path)
+}
+
 // relayProbe is the agent's own answers to initialize and to a session/new,
 // captured once: what paseo's capability probe and model listing are told,
 // and every session/new.

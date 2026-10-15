@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,11 +92,7 @@ func (m *Manager) useGrant(ctx context.Context, d *Dispatch, tool string, args [
 	if !dec.Allow || dec.Native {
 		return dec, nil, ""
 	}
-	layer := ""
-	if dec.Confine {
-		layer = tool // it reads the workspace through tool's copy-on-write layer
-	}
-	use, err := m.stageGrantFiles(d, g, args, cwd, layer)
+	use, err := m.stageGrantFiles(d, g, args, cwd)
 	if err != nil {
 		return hostcmd.Decision{}, nil, fmt.Sprintf("%v (grant %s)", err, g.ID)
 	}
@@ -112,12 +109,8 @@ func (m *Manager) useGrant(ctx context.Context, d *Dispatch, tool string, args [
 
 // stageGrantFiles copies the files g pins into a private scratch dir,
 // verifies them against g's digests, and rewrites args to name the copies.
-//
-// layer names the tool whose copy-on-write layer a confined run reads the
-// workspace through ("" = unconfined): there a file is the layer's copy when
-// the tool wrote one (a `terraform plan -out=plan.tfplan` in an earlier
-// confined run lands there, never in the workspace), else the workspace's.
-func (m *Manager) stageGrantFiles(d *Dispatch, g grant.GrantSpec, args []string, cwd, layer string) (*grantUse, error) {
+// Each is read by pinnedFile, as the gate hashed it at mint (DigestFile).
+func (m *Manager) stageGrantFiles(d *Dispatch, g grant.GrantSpec, args []string, cwd string) (*grantUse, error) {
 	use := &grantUse{args: append([]string(nil), args...), cleanup: func() {}}
 	if len(g.FileDigests) == 0 {
 		return use, nil
@@ -129,35 +122,8 @@ func (m *Manager) stageGrantFiles(d *Dispatch, g grant.GrantSpec, args []string,
 	use.cleanup = func() { _ = os.RemoveAll(dir) }
 	actual := map[string]string{}
 	for i, fd := range g.FileDigests {
-		abs := fd.Path
-		if !filepath.IsAbs(abs) {
-			abs = filepath.Join(cwd, abs)
-		}
-		abs = filepath.Clean(abs)
-		// The jail's /tmp is the dispatch's own dir on the host, never the
-		// host's /tmp.
-		if jt := d.jailTmp(); jt != d.TmpDir && within(abs, jt) && !within(abs, d.Workspace) {
-			rel, _ := filepath.Rel(jt, abs)
-			abs = filepath.Join(d.TmpDir, rel)
-		}
-		root := ""
-		for _, r := range []string{d.TmpDir, d.Workspace} { // the workspace wins
-			if r != "" && within(abs, r) {
-				root = r
-			}
-		}
-		if root == "" {
-			use.cleanup()
-			return nil, fmt.Errorf("%w: %s is outside the workspace", grant.ErrDigest, fd.Path)
-		}
-		rel, _ := filepath.Rel(root, abs)
-		dst := filepath.Join(dir, fmt.Sprintf("%d-%s", i, filepath.Base(abs)))
-		if layer != "" && root == d.Workspace {
-			if upper := filepath.Join(d.Dir, "cow-ws", layer, "up"); layerHas(upper, rel) {
-				root = upper
-			}
-		}
-		sum, err := copyNoFollow(root, rel, dst)
+		dst := filepath.Join(dir, fmt.Sprintf("%d-%s", i, filepath.Base(fd.Path)))
+		sum, err := d.copyPinned(fd.Path, cwd, dst)
 		if err != nil {
 			use.cleanup()
 			return nil, fmt.Errorf("%w: %s: %v", grant.ErrDigest, fd.Path, err)
@@ -178,6 +144,129 @@ func (m *Manager) stageGrantFiles(d *Dispatch, g grant.GrantSpec, args []string,
 		return nil, err
 	}
 	return use, nil
+}
+
+// copyPinned is pinnedFile into a new file dst (read-only, never an
+// existing one).
+func (d *Dispatch) copyPinned(path, cwd, dst string) (string, error) {
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o400)
+	if err != nil {
+		return "", err
+	}
+	sum, err := d.pinnedFile(path, cwd, out)
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	return sum, err
+}
+
+// pinnedFile reads the file a grant pins — path, as the command names it,
+// resolved against cwd — from where it is for d, into w, and returns the
+// sha256 of its bytes. It is the one read both ends of a grant use: the
+// gate's hash at mint (DigestFile) and the broker's copy at use
+// (stageGrantFiles), so the bytes approved are the bytes checked.
+//
+//   - It is the dispatch's own file: under its workspace, or under its /tmp —
+//     the jail's /tmp is the dispatch's tmp dir on the host, never the host's.
+//   - A workspace file a confined run wrote is read from the copy-on-write
+//     layer it went to (a `terraform plan -out` lands in the dispatch's
+//     layer for terraform, never in the workspace); any other, from the
+//     workspace. Which tool's layer does not depend on the command — the
+//     gate does not know it at mint — so a file two tools' layers both hold
+//     is refused as ambiguous.
+//   - Every path component is opened without following a symlink, and only a
+//     regular file is read (a layer's whiteout — the confined run deleted
+//     it — is not one).
+func (d *Dispatch) pinnedFile(path, cwd string, w io.Writer) (string, error) {
+	abs := path
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(cwd, abs)
+	}
+	abs = filepath.Clean(abs)
+	if jt := d.jailTmp(); jt != d.TmpDir && within(abs, jt) && !within(abs, d.Workspace) {
+		rel, _ := filepath.Rel(jt, abs)
+		abs = filepath.Join(d.TmpDir, rel)
+	}
+	root := ""
+	for _, r := range []string{d.TmpDir, d.Workspace} { // the workspace wins
+		if r != "" && within(abs, r) {
+			root = r
+		}
+	}
+	if root == "" {
+		return "", fmt.Errorf("%s is outside the workspace", path)
+	}
+	rel, _ := filepath.Rel(root, abs)
+	if root == d.Workspace {
+		upper, err := d.layerHolding(rel)
+		if err != nil {
+			return "", err
+		}
+		if upper != "" {
+			root = upper
+		}
+	}
+	return readNoFollow(root, rel, w)
+}
+
+// layerHolding is the copy-on-write upper dir among d's confined layers
+// (cow-ws/<tool>/up) that holds workspace path rel, "" when none does.
+func (d *Dispatch) layerHolding(rel string) (string, error) {
+	base := filepath.Join(d.Dir, "cow-ws")
+	ents, err := os.ReadDir(base)
+	if err != nil {
+		return "", nil // no confined run yet
+	}
+	var tools []string
+	upper := ""
+	for _, e := range ents {
+		if up := filepath.Join(base, e.Name(), "up"); e.IsDir() && layerHas(up, rel) {
+			tools, upper = append(tools, e.Name()), up
+		}
+	}
+	if len(tools) > 1 {
+		return "", fmt.Errorf("%s is in the copy-on-write layers of %s: ambiguous", rel, strings.Join(tools, " and "))
+	}
+	return upper, nil
+}
+
+// DigestFile is the sha256 (lowercase hex) of the file a grant for identity
+// would pin as path, read exactly as the broker reads it when the grant is
+// used (pinnedFile). The member gate hashes with it when it records a
+// host-command proposal, so the operator approves the bytes the command will
+// run on.
+//
+// identity is a live jail's AgentID (a paseo provider session's identity) or
+// its DispatchID (a cli worker) — what the grant binds to; path is as the
+// agent names it, relative to its workspace. It is an error when identity
+// has no live jail, or its live jails read different bytes.
+func (m *Manager) DigestFile(identity, path string) (string, error) {
+	if identity == "" {
+		return "", errors.New("no identity")
+	}
+	m.mu.Lock()
+	var ds []*Dispatch
+	for _, d := range m.live {
+		if d.AgentID == identity || d.DispatchID == identity {
+			ds = append(ds, d)
+		}
+	}
+	m.mu.Unlock()
+	if len(ds) == 0 {
+		return "", fmt.Errorf("no live jail for %s", identity)
+	}
+	sum := ""
+	for _, d := range ds {
+		s, err := d.pinnedFile(path, d.Workspace, io.Discard)
+		if err != nil {
+			return "", err
+		}
+		if sum != "" && s != sum {
+			return "", fmt.Errorf("%s reads differently in %s's jails", path, identity)
+		}
+		sum = s
+	}
+	return sum, nil
 }
 
 // grantScratch makes a fresh private dir for one grant's file copies. It

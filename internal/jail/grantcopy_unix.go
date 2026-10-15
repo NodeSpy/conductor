@@ -15,10 +15,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// copyNoFollow copies root/rel to dst — every component of rel opened
+// readNoFollow reads root/rel into w — every component of rel opened
 // without following a symlink, a regular file only — hashing the bytes as
 // they are written, and returns their sha256 (lowercase hex).
-func copyNoFollow(root, rel, dst string) (string, error) {
+func readNoFollow(root, rel string, w io.Writer) (string, error) {
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	for _, p := range parts {
 		if p == "" || p == "." || p == ".." {
@@ -51,16 +51,8 @@ func copyNoFollow(root, rel, dst string) (string, error) {
 	if !fi.Mode().IsRegular() {
 		return "", fmt.Errorf("not a regular file")
 	}
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o400)
-	if err != nil {
-		return "", err
-	}
 	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(out, h), src); err != nil {
-		out.Close()
-		return "", err
-	}
-	if err := out.Close(); err != nil {
+	if _, err := io.Copy(io.MultiWriter(w, h), src); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil

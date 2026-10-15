@@ -2,9 +2,12 @@
 
 package jail
 
-import "errors"
+import (
+	"errors"
+	"io"
+)
 
-func copyNoFollow(root, rel, dst string) (string, error) {
+func readNoFollow(root, rel string, w io.Writer) (string, error) {
 	return "", errors.New("grant file pinning is not supported on this platform")
 }
 

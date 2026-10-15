@@ -161,8 +161,9 @@ type LaunchSpec struct {
 	// agent CLI's ~/.claude (etc.) comes from a per-key directory, with only
 	// its login shared from the real home. "" = the real, shared state.
 	StateKey string
-	// AgentID is the paseo agent a provider session's launch serves ("" for
-	// a dispatch): who the jail is, for grants and the audit.
+	// AgentID is the identity of the agent a paseo provider session's launch
+	// serves — the cwd lookup's answer, never paseo's own agent id ("" for a
+	// dispatch): who the jail is, for grants, DigestFile and the audit.
 	AgentID string
 }
 

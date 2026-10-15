@@ -373,6 +373,20 @@ When the command comes:
 A second use of a single-use grant is refused (`grant.ErrConsumed`), and so
 is an expired grant. The audit row carries the grant id, approver and case.
 
+**Which bytes a pinned file is.** The gate hashes a proposal's files with the
+jail's `DigestFile(identity, path)`, through the same read the broker makes
+at use, so you approve exactly the bytes the command will run on:
+- `path` is as the agent names it, relative to its workspace; a file in the
+  jail's `/tmp` is the dispatch's own, never the host's;
+- a file a confined run wrote is read from the dispatch's copy-on-write layer
+  it went to: a confined `terraform plan -out=plan.tfplan` leaves the plan
+  there, never in the workspace. Any other file is the workspace's;
+- the layers are per tool, and neither the gate nor the broker picks one by
+  the command. A path two tools' layers both hold is refused as ambiguous;
+- a command run from a subdirectory resolves a relative path from there,
+  while the gate resolves it from the workspace. If they name different
+  files, the digest doesn't match and the grant is refused, not used.
+
 What counts as "the same command" is `grant.ParseArgv`:
 - words, and a bare flag's value (`-var-file prod.tfvars`), keep their order;
 - an extra or different word, flag or value is a different command;
