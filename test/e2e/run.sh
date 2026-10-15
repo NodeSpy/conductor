@@ -1769,6 +1769,14 @@ main() {
     [ "$FAIL" -eq 0 ]
     return
   fi
+  if [ -n "${E2E_GROUPS:-}" ]; then
+    # E2E_GROUPS="Z BR": run only those groups (a quicker loop on one).
+    local g
+    for g in $E2E_GROUPS; do "$(declare -F | awk -v g="group_${g}_" '$3 ~ "^"g {print $3; exit}')"; done
+    print_matrix
+    [ "$FAIL" -eq 0 ]
+    return
+  fi
   group_A_resolution
   group_B_fixer
   group_I_identity

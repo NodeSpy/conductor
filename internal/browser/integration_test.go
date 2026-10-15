@@ -295,7 +295,10 @@ func TestBrowserAllowlistEnforcedByTheProxy(t *testing.T) {
 // the anonymous profile and cannot act.
 func TestBrowserLoginGatedByProvenance(t *testing.T) {
 	r := newRig(t)
-	h, _, _ := net.SplitHostPort(r.host)
+	h, port, _ := net.SplitHostPort(r.host)
+	// Another allowed host (the same site under another name): the anonymous
+	// browser reaches it, the logged-in one must not.
+	r.st.Allow = append(r.st.Allow, "localhost:"+port)
 	r.st.Logins = []LoginSiteConfig{{LoginSite: LoginSite{Site: h, Identities: []string{"agent:test@*"}}}}
 	if err := r.m.Logins().Save(Jar{Identity: "agent:test@acme/app", Site: h, Source: "import",
 		Cookies: []Cookie{{Name: "sid", Value: r.site.Session(), Domain: h, Path: "/", HTTPOnly: true}, {Name: "x", Value: "other-site", Domain: "evil.test"}}}); err != nil {
@@ -339,8 +342,6 @@ func TestBrowserLoginGatedByProvenance(t *testing.T) {
 	// Routing: another allowlisted host goes to the anonymous browser — and a
 	// redirect from the logged-in site to it dies at the logged-in browser's
 	// proxy (it reaches only its sites).
-	_, port, _ := net.SplitHostPort(r.host)
-	r.st.Allow = append(r.st.Allow, "localhost:"+port)
 	out = r.do(op, "open", map[string]any{"url": "http://localhost:" + port + "/account"})
 	if out["profile"] != "anonymous" {
 		t.Fatalf("another host in the logged-in browser: %v", out)
