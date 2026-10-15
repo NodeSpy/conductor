@@ -67,6 +67,9 @@ func TestLoginAllowOnlyTheSites(t *testing.T) {
 	if got := loginAllow([]string{"127.0.0.1:8080"}, []string{"127.0.0.1"}, Settings{}); !reflect.DeepEqual(got, []string{"127.0.0.1:8080"}) {
 		t.Fatalf("a host with a port: %v", got)
 	}
+	if got := loginAllow([]string{"localhost:8080", "127.0.0.1:9090", "localhost"}, []string{"localhost"}, Settings{}); !reflect.DeepEqual(got, []string{"localhost:8080", "127.0.0.1:8080", "localhost", "127.0.0.1"}) {
+		t.Fatalf("localhost and its loopback address, port for port: %v", got)
+	}
 }
 
 func TestAllowFor(t *testing.T) {
@@ -445,6 +448,15 @@ func TestGrantNeedsOptInJarAndProvenance(t *testing.T) {
 	ev.Requester = RequesterEvent
 	if s, why := m.grant(ev, st); len(s) != 0 || !strings.Contains(why, "not the operator") {
 		t.Fatalf("event: %v %q", s, why)
+	}
+	// A usable credential's host is a logged-in site (its sign-in lives in
+	// the separate browser) — for the operator's request, its identity only.
+	st.Credentials = []Credential{{Name: "c", Origin: "https://c.test:8443/login", Identities: []string{"id"}}, {Name: "o", Origin: "https://o.test", Identities: []string{"other"}}}
+	if s, _ := m.grant(op, st); !reflect.DeepEqual(s, []string{"a.test", "c.test"}) {
+		t.Fatalf("operator with a credential: %v", s)
+	}
+	if s, _ := m.grant(ev, st); len(s) != 0 {
+		t.Fatalf("event with a credential: %v", s)
 	}
 	m.Provenance = func(Principal, string) (bool, string) { return false, "member gate says no" }
 	if s, why := m.grant(op, st); len(s) != 0 || why != "member gate says no" {

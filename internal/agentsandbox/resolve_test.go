@@ -434,8 +434,10 @@ func TestPrepareHomeSeedsNothingWithoutARealHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b, err := os.ReadFile(filepath.Join(home, ".claude.json")); err != nil || len(b) != 0 {
-		t.Fatalf("~/.claude.json is an empty file of its own, never the cwd's: %q %v", b, err)
+	// An empty JSON object, not zero bytes: Claude Code reads an empty
+	// .claude.json as corrupt and exits (found live, a fresh home).
+	if b, err := os.ReadFile(filepath.Join(home, ".claude.json")); err != nil || string(b) != "{}\n" {
+		t.Fatalf("~/.claude.json is an empty object of its own, never the cwd's: %q %v", b, err)
 	}
 	if fi, err := os.Stat(filepath.Join(home, ".claude")); err != nil || !fi.IsDir() {
 		t.Fatal("~/.claude is a dir")

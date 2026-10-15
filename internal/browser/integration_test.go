@@ -319,7 +319,7 @@ func TestBrowserLoginGatedByProvenance(t *testing.T) {
 
 	op := r.caller("operator-session", RequesterOperator)
 	out = r.do(op, "open", map[string]any{"url": r.url + "/account"})
-	if !strings.HasPrefix(out["profile"].(string), "logged in") {
+	if !strings.HasPrefix(out["profile"].(string), "the logged-in browser") {
 		t.Fatalf("operator: %v", out)
 	}
 	snap := r.do(op, "snapshot", nil)["snapshot"].(string)

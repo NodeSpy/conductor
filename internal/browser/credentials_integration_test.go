@@ -200,10 +200,21 @@ func TestCredentialOriginBinding(t *testing.T) {
 	r.refused(c, "fill-credential", map[string]any{"credential": "site", "field": "password", "ref": refOf(t, snap, "textbox", "Password")}, "origin")
 	r.refused(c, "login", map[string]any{"credential": "site"}, "origin")
 
-	// A redirect from the bound origin lands on the lookalike.
+	// A redirect from the bound origin to the lookalike. (The bound host is
+	// localhost here, whose browser also reaches 127.0.0.1 — the proxy dials
+	// localhost by address — so the redirect lands; on a real site it dies
+	// at the proxy.) The fill there is refused by the origin check.
 	r.do(c, "open", map[string]any{"url": r.bound + "/out?to=" + r.alike + "/login"})
 	snap = r.do(c, "snapshot", nil)["snapshot"].(string)
 	r.refused(c, "fill-credential", map[string]any{"credential": "site", "field": "password", "ref": refOf(t, snap, "textbox", "Password")}, "origin")
+	// The bound origin's pages live in the separate browser, the lookalike
+	// in the anonymous one.
+	if p := r.do(c, "open", map[string]any{"url": r.bound + "/"})["profile"].(string); !strings.Contains(p, "logged-in") {
+		t.Fatalf("the credential's origin: %s", p)
+	}
+	if p := r.do(c, "open", map[string]any{"url": r.alike + "/"})["profile"]; p != "anonymous" {
+		t.Fatalf("the lookalike: %v", p)
+	}
 
 	// Frames: the bound page embedding a sign-in form — same origin or not.
 	for _, src := range []string{r.bound + "/login", r.alike + "/login"} {

@@ -233,7 +233,7 @@ func refuse(format string, a ...any) error {
 
 func profileName(s *session) string {
 	if s.active != nil && s.active == s.login {
-		return "logged in (" + strings.Join(s.sites, ", ") + ")"
+		return "the logged-in browser (" + strings.Join(s.sites, ", ") + ")"
 	}
 	return "anonymous"
 }
@@ -252,7 +252,7 @@ func (m *Manager) grant(c Principal, st Settings) (sites []string, why string) {
 		}
 		if _, ok, err := m.Logins().Load(c.Identity, l.Site); err != nil || !ok {
 			if why == "" {
-				why = fmt.Sprintf("%s is opted in for this identity but has no saved session (conductor browser login)", l.Site)
+				why = fmt.Sprintf("%s is opted in for this identity but has no saved session (conductor browser seed)", l.Site)
 			}
 			continue
 		}
@@ -260,13 +260,39 @@ func (m *Manager) grant(c Principal, st Settings) (sites []string, why string) {
 			why = w
 			continue
 		}
-		sites = append(sites, l.Site)
+		sites = appendSite(sites, l.Site)
+	}
+	// A credential's host is a logged-in site too, while the credential is
+	// usable: whatever conductor signs the agent in to lives in the
+	// separate, narrowed browser — never beside an untrusted page.
+	for _, cr := range st.Credentials {
+		if !cr.For(c.Identity) {
+			continue
+		}
+		o, err := parseOrigin(cr.Origin)
+		if err != nil {
+			continue
+		}
+		if ok, w := prov(c, o.host); !ok {
+			why = w
+			continue
+		}
+		sites = appendSite(sites, o.host)
 	}
 	sort.Strings(sites)
 	if len(sites) > 0 {
 		why = ""
 	}
 	return sites, why
+}
+
+func appendSite(sites []string, s string) []string {
+	for _, x := range sites {
+		if x == s {
+			return sites
+		}
+	}
+	return append(sites, s)
 }
 
 func sameSites(a, b []string) bool {
@@ -359,6 +385,12 @@ func loginAllow(allow []string, sites []string, st Settings) []string {
 			}
 			if hostCovered(site, h) || (strings.HasPrefix(site, "*.") && h == site) {
 				add(a)
+				if h == "localhost" {
+					// localhost is loopback: the proxy dials it by address,
+					// which its SSRF guard allows only when listed literally.
+					_, p := splitHost(a)
+					add(strings.TrimSuffix("127.0.0.1:"+p, ":"))
+				}
 			}
 		}
 		for _, l := range st.Logins {
