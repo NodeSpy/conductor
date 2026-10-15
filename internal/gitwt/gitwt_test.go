@@ -243,8 +243,9 @@ func TestRemoveWorktreeLeavesNothingBehind(t *testing.T) {
 		t.Fatalf("ProvisionWorktree: %v", err)
 	}
 	base := filepath.Join(p.CheckoutsDir(), "acme__web")
-	if !strings.Contains(out(t, base, "git", "worktree", "list"), cwd) {
-		t.Fatalf("git does not list the worktree %s it just created", cwd)
+	liveRefs := func() string { return out(t, base, "git", "for-each-ref", "--format=%(refname)", "refs/conductor/live/") }
+	if !strings.Contains(liveRefs(), "refs/conductor/live/"+filepath.Base(cwd)) {
+		t.Fatalf("the base does not hold a keep-alive ref for the clone %s it just made", cwd)
 	}
 
 	if err := p.RemoveWorktree(ctx, id); err != nil {
@@ -253,8 +254,8 @@ func TestRemoveWorktreeLeavesNothingBehind(t *testing.T) {
 	if _, err := os.Stat(cwd); !os.IsNotExist(err) {
 		t.Fatalf("worktree dir %s still present after removal (stat err: %v)", cwd, err)
 	}
-	if listing := out(t, base, "git", "worktree", "list"); strings.Contains(listing, cwd) {
-		t.Fatalf("git still lists the removed worktree:\n%s", listing)
+	if refs := liveRefs(); strings.Contains(refs, filepath.Base(cwd)) {
+		t.Fatalf("the base still holds the removed clone's keep-alive ref:\n%s", refs)
 	}
 	// And the provisioner no longer claims it, so the reaper isn't blocked.
 	p.mu.Lock()
@@ -270,8 +271,9 @@ func TestRemoveWorktreeLeavesNothingBehind(t *testing.T) {
 	}
 }
 
-// A worktree left by a PREVIOUS daemon life has no entry in the live map; it
-// must still be removed through git (via its .git pointer), not just unlinked.
+// A checkout left by a PREVIOUS daemon life has no entry in the live map; it
+// must still be released through git (its base found from its alternates —
+// the base's keep-alive ref dropped), not just unlinked.
 func TestRemoveWorktreeRecoversTheBaseCloneAfterRestart(t *testing.T) {
 	p := newProv(t, originRepo(t))
 	ctx := context.Background()
@@ -279,7 +281,7 @@ func TestRemoveWorktreeRecoversTheBaseCloneAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProvisionWorktree: %v", err)
 	}
-	if got := baseOf(cwd); got != filepath.Join(p.CheckoutsDir(), "acme__web") {
+	if got := p.baseOf(cwd); got != filepath.Join(p.CheckoutsDir(), "acme__web") {
 		t.Fatalf("baseOf(%s) = %q", cwd, got)
 	}
 
@@ -289,8 +291,8 @@ func TestRemoveWorktreeRecoversTheBaseCloneAfterRestart(t *testing.T) {
 		t.Fatalf("RemoveWorktree after restart: %v", err)
 	}
 	base := filepath.Join(p.CheckoutsDir(), "acme__web")
-	if listing := out(t, base, "git", "worktree", "list"); strings.Contains(listing, cwd) {
-		t.Fatalf("git still lists the worktree after a post-restart removal:\n%s", listing)
+	if refs := out(t, base, "git", "for-each-ref", "refs/conductor/live/"); strings.Contains(refs, filepath.Base(cwd)) {
+		t.Fatalf("the base still holds the removed clone's keep-alive ref:\n%s", refs)
 	}
 }
 
@@ -360,12 +362,12 @@ func TestReapRemovesOrphansButNeverALiveWorktree(t *testing.T) {
 		t.Fatalf("reaper removed a LIVE worktree %s: %v", liveCwd, err)
 	}
 	base := filepath.Join(p.CheckoutsDir(), "acme__web")
-	listing := out(t, base, "git", "worktree", "list")
-	if strings.Contains(listing, orphanCwd) {
-		t.Fatalf("reaper did not prune git's record of the orphan:\n%s", listing)
+	listing := out(t, base, "git", "for-each-ref", "--format=%(refname)", "refs/conductor/live/")
+	if strings.Contains(listing, filepath.Base(orphanCwd)) {
+		t.Fatalf("reaper did not drop the orphan's keep-alive ref:\n%s", listing)
 	}
-	if !strings.Contains(listing, liveCwd) {
-		t.Fatalf("reaper pruned git's record of the LIVE worktree:\n%s", listing)
+	if !strings.Contains(listing, filepath.Base(liveCwd)) {
+		t.Fatalf("reaper dropped the LIVE clone's keep-alive ref:\n%s", listing)
 	}
 }
 
@@ -526,7 +528,7 @@ func TestConcurrentCheckoutPRsOnOneRepoEachLandTheirOwnHead(t *testing.T) {
 	}
 	// The per-dispatch fetch refs are scaffolding: none may outlive the add.
 	base := filepath.Join(p.CheckoutsDir(), "acme__web")
-	if left := strings.TrimSpace(out(t, base, "git", "for-each-ref", "refs/conductor/")); left != "" {
+	if left := strings.TrimSpace(out(t, base, "git", "for-each-ref", prFetchRefPrefix)); left != "" {
 		t.Errorf("temporary fetch refs left behind:\n%s", left)
 	}
 }
