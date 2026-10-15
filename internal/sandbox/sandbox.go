@@ -69,9 +69,10 @@ type Spec struct {
 	FS []string
 }
 
-// FromConfig flattens an IsolationConfig. nil in, nil out.
+// FromConfig flattens an IsolationConfig. nil in, nil out — and `mode:
+// none`, the explicit opt-out, is no wrapper too.
 func FromConfig(c *config.IsolationConfig) *Spec {
-	if c == nil {
+	if c == nil || c.Mode == "none" {
 		return nil
 	}
 	s := &Spec{Mode: c.Mode, User: c.User, Privileged: c.Privileged, AllowRoot: c.AllowRoot, FS: c.FS}

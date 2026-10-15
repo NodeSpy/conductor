@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/NodeSpy/conductor/internal/agentsandbox"
 	"github.com/NodeSpy/conductor/internal/confdir"
 	"net"
 	"os"
@@ -73,6 +74,11 @@ func main() {
 		// Launched by conductor itself inside a namespace/container; not a
 		// user-facing command.
 		os.Exit(runSandboxNet(args))
+	case "sandbox":
+		// `conductor sandbox exec -- <agent>`: run an agent CLI under the
+		// agent sandbox with the daemon's policy for this directory (paseo's
+		// provider entries, `conductor paseo setup`).
+		os.Exit(cmdSandbox(args))
 	case "ctx":
 		// The ctx data-plane client for `use: cli` steps (ctxcmd.go). Reached
 		// through $CONDUCTOR_CTX_HELPER from inside a step, not typed by
@@ -782,7 +788,10 @@ func cmdRun(args []string) error {
 	// with live-tool injection (ACP mcpServers) attach to agent sessions. A
 	// socket failure only loses the LIVE surface — the verbs, output
 	// contract, and injection still work — so log, don't die.
-	if mgr := memory.Active(); mgr != nil || cfg.SkillEnabled() {
+	// The agent sandbox needs it too: it is how a sandboxed agent reaches
+	// conductor (step.done, git.push) — the socket file is bound into the
+	// sandbox, never the state dir around it.
+	if mgr := memory.Active(); mgr != nil || cfg.SkillEnabled() || cfg.AgentSandboxOn() {
 		sock := filepath.Join(filepath.Dir(cfg.Store.StateFile), "memory.sock")
 		if l, lerr := memory.ListenSocket(sock); lerr != nil {
 			logf("memory: %v — live agent tools disabled (verbs/output contract unaffected)", lerr)
@@ -920,6 +929,14 @@ func cmdRun(args []string) error {
 			dispatch.InitSkillTunnels(ctx, logf)
 		}
 	}
+
+	// The agent sandbox (docs/design/agent-sandbox.md): after the tool
+	// socket, which it binds into every sandboxed agent.
+	stopSandbox, err := wireAgentSandbox(cfg, cfgFile, logf)
+	if err != nil {
+		return err
+	}
+	defer stopSandbox()
 
 	// Mount connector ask surfaces (web pages, discord gateways) and fan
 	// Socket Mode replies into every slack inbox.
@@ -1354,6 +1371,12 @@ type controlRequest struct {
 	RunID       string `json:"run_id,omitempty"`
 	FromStep    string `json:"from_step,omitempty"`
 	ForceReplay bool   `json:"force_replay,omitempty"`
+	// sandbox-policy (`conductor sandbox exec`): the launch's working
+	// directory, its agent CLI, and the launcher's model-endpoint variables
+	// (*_BASE_URL — routing, never a credential).
+	Cwd  string   `json:"cwd,omitempty"`
+	Tool string   `json:"tool,omitempty"`
+	Env  []string `json:"env,omitempty"`
 }
 
 type controlResponse struct {
@@ -1361,6 +1384,9 @@ type controlResponse struct {
 	Dispatched int    `json:"dispatched,omitempty"`
 	Msg        string `json:"msg,omitempty"`
 	Error      string `json:"error,omitempty"`
+	// Policy answers sandbox-policy: the launch's sandbox, with a token
+	// minted for this launch alone.
+	Policy *agentsandbox.Policy `json:"policy,omitempty"`
 }
 
 // callableGate authorizes + audits a control-socket `run` that the MCP callable
@@ -1486,6 +1512,8 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 			return
 		}
 		streamRunEvents(ctx, conn, events, req.RunID, log)
+	case "sandbox-policy":
+		writeControlResp(conn, sandboxPolicyResponse(conn, req, log))
 	case "retry":
 		if retry == nil {
 			writeControlResp(conn, controlResponse{Error: "retry is not available (no flow runner configured)"})

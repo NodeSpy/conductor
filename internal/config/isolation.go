@@ -20,6 +20,13 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 		return nil
 	}
 	switch iso.Mode {
+	case "none":
+		// The explicit opt-out of the agent sandbox for one runtime/step:
+		// the launch runs unwrapped. Nothing else in the block applies.
+		if iso.User != "" || iso.Container != nil || iso.Limits != nil || iso.Network != nil || len(iso.FS) > 0 || iso.Privileged || iso.AllowRoot {
+			return fmt.Errorf("config: %s: isolation mode none runs the launch unwrapped — it takes no other isolation settings", where)
+		}
+		return nil
 	case "user":
 		if iso.User == "" {
 			return fmt.Errorf("config: %s: isolation mode user needs `user:` (the low-privilege account)", where)
@@ -44,9 +51,9 @@ func validateIsolation(where string, iso *IsolationConfig, remote bool) error {
 			return fmt.Errorf("config: %s: isolation container.engine must be docker|podman, got %q", where, iso.Container.Engine)
 		}
 	case "":
-		return fmt.Errorf("config: %s: isolation needs `mode: user|namespace|container`", where)
+		return fmt.Errorf("config: %s: isolation needs `mode: user|namespace|container|none`", where)
 	default:
-		return fmt.Errorf("config: %s: unknown isolation mode %q (want user|namespace|container)", where, iso.Mode)
+		return fmt.Errorf("config: %s: unknown isolation mode %q (want user|namespace|container|none)", where, iso.Mode)
 	}
 	if iso.Privileged && iso.Mode != "namespace" {
 		return fmt.Errorf("config: %s: isolation `privileged: true` only applies to mode namespace (it opts out of the default filesystem masking there) — on %s it would be a silent no-op", where, iso.Mode)

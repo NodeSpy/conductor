@@ -173,13 +173,18 @@ func WrapLocalCommand(spec *Spec, argv []string, dir string, env []string, deps 
 			nf = &NetForward{Self: self}
 		}
 		nf.UnixSocket = sock
-		nf.Relays = deps.Relays
 		if jail {
 			// The forwarder dials this unix socket AFTER pivot_root, so its dir
 			// must be inside the jail (bound read-write at its own path).
 			nf.Binds = append(nf.Binds, BindMount{Path: filepath.Dir(sock)})
 		}
 		outEnv = append(outEnv, ProxyEnv(ForwardAddr, cred)...)
+	}
+	if jail && nf != nil {
+		// Host-loopback endpoints piped in over unix sockets: in a jail with
+		// no network of its own (deny, with or without an allowlist), the
+		// only way the agent reaches its local model router.
+		nf.Relays = deps.Relays
 	}
 	if err := spec.Check(CheckGOOS, CheckGeteuid(), CheckLookPath); err != nil {
 		return nil, nil, cleanup, err

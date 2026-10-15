@@ -222,23 +222,7 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 	// SSH-forwarded socket the peer is the ssh relay running as the daemon's own
 	// uid, so the uid check passes and provenance rests on the token — which is
 	// exactly why memory/run_step ops derive Source from the token, not the peer.
-	envPolicy := effectiveSkillPolicy(req) // step's grant + auto handoff.done for a hand-off
-	// An interactive hand-off waits on a human and is held (never culled), so
-	// its creds must outlive the 2h dispatch window — else the agent's
-	// `conductor call …` is dead by the time the human gets to it.
-	// It is also durable: persisted across daemon restarts (every auto-update
-	// is one) and sliding on use, since the token in its env can't be rewritten.
-	id := skill.Identity{
-		Agent:         req.Action.Agent,
-		Repo:          req.Trigger.Target.Repo,
-		Trigger:       req.Trigger.Kind,
-		Number:        req.Trigger.Target.Number,
-		Policy:        envPolicy,
-		Context:       req.Trigger.Context,
-		Sem:           req.Trigger.Semantics(),
-		TargetTrusted: req.Trigger.TargetTrusted,
-		Dispatch:      req.DispatchID, // as above: both paths carry the anchor
-	}
+	id, _ := SkillIdentityFor(req)
 	var tok string
 	var err error
 	if req.Interactive {
@@ -253,6 +237,27 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 		"CONDUCTOR_ENDPOINT":    endpoint,
 		"CONDUCTOR_SKILL_TOKEN": tok,
 	}
+}
+
+// SkillIdentityFor is the identity a dispatch's conductor token stands for:
+// its real provenance and its effective skill policy (step.done always, the
+// step's skill.verbs). ok=false for an agent-authored dispatch, which is
+// never handed one.
+func SkillIdentityFor(req Request) (skill.Identity, bool) {
+	if req.AgentAuthored {
+		return skill.Identity{}, false
+	}
+	return skill.Identity{
+		Agent:         req.Action.Agent,
+		Repo:          req.Trigger.Target.Repo,
+		Trigger:       req.Trigger.Kind,
+		Number:        req.Trigger.Target.Number,
+		Policy:        effectiveSkillPolicy(req), // step's grant + auto handoff.done for a hand-off
+		Context:       req.Trigger.Context,
+		Sem:           req.Trigger.Semantics(),
+		TargetTrusted: req.Trigger.TargetTrusted,
+		Dispatch:      req.DispatchID,
+	}, true
 }
 
 // LocalSkillEndpoint is the `unix://` endpoint for a LOCAL dispatched agent —
