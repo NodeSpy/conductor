@@ -2025,12 +2025,12 @@ group_BR_browser() {
     br_expect "$probe" event download ".browser/downloads/report.csv"
     br_expect "$probe" event download-content "ok"
     br_expect "$probe" event screenshot "ok"
-    br_expect "$probe" event offlist "refused:*allowlist*"
+    br_expect "$probe" event offlist "refused:*not in this browser's allowlist*"
     br_expect "$probe" event evaluate "refused:*evaluate is off*"
     br_expect "$probe" event profile "anonymous"
     br_expect "$probe" event logged-in-note "*not the operator*"
     br_expect "$probe" event account "anonymous"
-    br_expect "$probe" event login "refused:*not the operator*"
+    br_expect "$probe" event login 'refused:*credential "testsite": this session*not the operator*'
     br_expect "$probe" event after-login "anonymous"
   else
     bad "BR the event's browser probe ran" BR event "no BROWSER_PROBE.md (kind event)"

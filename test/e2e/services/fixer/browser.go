@@ -35,7 +35,7 @@ func BrowserProbe(dir, prompt string) {
 		if err == nil {
 			return "ok"
 		}
-		return "refused: " + firstLine(strings.TrimSpace(out))
+		return "refused: " + probeLine(strings.TrimSpace(out))
 	}
 	snap := func() string { _, out, _ := br("snapshot"); return out }
 	ref := func(s string, want ...string) string {
@@ -123,4 +123,15 @@ func BrowserProbe(dir, prompt string) {
 		line("lookalike", verdict(out, err))
 	}
 	_ = os.WriteFile(filepath.Join(dir, "BROWSER_PROBE.md"), []byte(b.String()), 0o644)
+}
+
+// probeLine is the first line of a reply, long enough to hold the reason.
+func probeLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 300 {
+		s = s[:300]
+	}
+	return strings.TrimSpace(s)
 }

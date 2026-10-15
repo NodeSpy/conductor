@@ -150,20 +150,28 @@ func TestCredentialLoginPasswordAndTOTP(t *testing.T) {
 	if fmt.Sprint(out["steps"]) != "[username password submitted one-time code submitted]" {
 		t.Fatalf("steps: %v", out)
 	}
+	// From a page with nothing to fill, login starts at the credential's
+	// sign-in page.
+	r.st.Credentials[0].LoginURL = r.bound + "/login"
+	r.do(c, "open", map[string]any{"url": r.bound + "/"})
+	if out := r.do(c, "login", map[string]any{"credential": "site"}); fmt.Sprint(out["steps"]) != "[opened the sign-in page username password submitted one-time code submitted]" {
+		t.Fatalf("steps from another page: %v", out)
+	}
+	r.st.Credentials[0].LoginURL = ""
 	snap := r.do(c, "snapshot", nil)["snapshot"].(string)
 	if !strings.Contains(snap, "Signed in as") {
 		t.Fatalf("not signed in:\n%s", snap)
 	}
-	if got := r.site.SignIns(); len(got) != 1 || got[0] != "password+otp" {
+	if got := r.site.SignIns(); len(got) != 2 || got[0] != "password+otp" {
 		t.Fatalf("sign-ins: %v", got)
 	}
 	for k, n := range r.vault.fetches {
-		if n != 1 {
-			t.Fatalf("%s fetched %d times (one fill, one fetch)", k, n)
+		if n != 2 {
+			t.Fatalf("%s fetched %d times in two sign-ins (one fill, one fetch)", k, n)
 		}
 	}
 	es := r.audit.find("login")
-	if len(es) != 1 || es[0]["credential"] != "site" || es[0]["origin"] != r.bound+"" || es[0]["outcome"] != "ok" {
+	if len(es) != 2 || es[0]["credential"] != "site" || es[0]["origin"] != r.bound+"" || es[0]["outcome"] != "ok" {
 		t.Fatalf("login audit: %v", es)
 	}
 	r.do(c, "screenshot", map[string]any{"path": "after-login.png"})

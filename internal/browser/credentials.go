@@ -385,6 +385,7 @@ func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c
 	if err != nil {
 		return nil, err
 	}
+	navigated := false
 	if o.check(fr.SecurityOrigin, fr.URL) != nil && cred.LoginURL != "" {
 		if err := checkURL(cred.LoginURL, allow); err != nil {
 			return nil, err
@@ -392,6 +393,7 @@ func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c
 		if err := in.navigate(ctx, t, cred.LoginURL); err != nil {
 			return nil, err
 		}
+		navigated = true
 		steps = append(steps, "opened the sign-in page")
 	}
 	if fr, err = m.checkPage(ctx, in, t, o, allow); err != nil {
@@ -423,6 +425,19 @@ func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c
 		var found struct{ Password, OTP, Username bool }
 		_ = json.Unmarshal(raw, &found)
 		var submit int64
+		if !found.Password && !(found.OTP && cred.OTP != nil) && !(found.Username && cred.Username != nil) && len(steps) == 0 && cred.LoginURL != "" && !navigated {
+			// Nothing to fill here: start from the credential's sign-in page.
+			if err := checkURL(cred.LoginURL, allow); err != nil {
+				return nil, err
+			}
+			if err := in.navigate(ctx, t, cred.LoginURL); err != nil {
+				return nil, err
+			}
+			navigated = true
+			steps = append(steps, "opened the sign-in page")
+			round--
+			continue
+		}
 		switch {
 		case found.Password && cred.Password != nil:
 			if found.Username && cred.Username != nil {
@@ -474,7 +489,7 @@ func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c
 		}
 		steps = append(steps, "submitted")
 	}
-	if len(steps) == 0 {
+	if len(steps) == 0 || (len(steps) == 1 && steps[0] == "opened the sign-in page") {
 		hint := ""
 		if cred.Passkey != nil {
 			hint = " (for the passkey: login --passkey --ref <the site's passkey button>)"
