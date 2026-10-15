@@ -50,6 +50,10 @@ type LocalWrapDeps struct {
 	// agent's model endpoint on the host's loopback) when the sandbox has no
 	// network of its own.
 	Relays []Relay
+	// Exposes serve in-sandbox loopback ports (a server the agent runs) on
+	// host-side unix sockets, for the launcher to connect to (Linux; macOS
+	// has no network namespace and reaches the port directly).
+	Exposes []Expose
 	// Agent carries the macOS agent-jail extras (scratch home, shim dir,
 	// exec denials, narrowed Mach services, the proxy port); ignored on Linux,
 	// where the same intent is expressed as ExtraBinds.
@@ -185,6 +189,7 @@ func WrapLocalCommand(spec *Spec, argv []string, dir string, env []string, deps 
 		// no network of its own (deny, with or without an allowlist), the
 		// only way the agent reaches its local model router.
 		nf.Relays = deps.Relays
+		nf.Exposes = deps.Exposes
 	}
 	if err := spec.Check(CheckGOOS, CheckGeteuid(), CheckLookPath); err != nil {
 		return nil, nil, cleanup, err

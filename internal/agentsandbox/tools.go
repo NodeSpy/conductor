@@ -89,6 +89,15 @@ var tools = map[string]toolInfo{
 		baseEnv:   []string{"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"},
 		creds:     []string{"ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY"},
 	},
+	// opencode is multi-provider: its endpoints come from the configured
+	// provider/model (opencodeRoute), not this table. Its state follows the
+	// XDG layout under HOME.
+	"opencode": {
+		state: []string{".local/share/opencode", ".config/opencode", ".local/state/opencode", ".cache/opencode"},
+		login: []string{".local/share/opencode/auth.json"},
+		seed:  []string{".config/opencode/opencode.json", ".config/opencode/opencode.jsonc", ".config/opencode/config.json"},
+		creds: opencodeProviderKeys,
+	},
 	"qwen": {
 		state:     []string{".qwen"},
 		login:     []string{".qwen/oauth_creds.json"},

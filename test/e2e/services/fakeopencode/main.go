@@ -12,6 +12,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -39,9 +40,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Bind an ephemeral port ourselves so we can print the real URL the controller
+	// Bind the port asked for (`--port 0`: an ephemeral one; a sandboxed
+	// server is given a fixed one) and print the real URL the controller
 	// scrapes from stdout (it waits for a token containing "http://").
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	port := "0"
+	for i := 2; i+1 < len(os.Args); i++ {
+		if os.Args[i] == "--port" {
+			port = os.Args[i+1]
+		}
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:"+port)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "fakeopencode: listen:", err)
 		os.Exit(1)
@@ -52,7 +60,19 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/session", handleSession) // POST /session → create
 	mux.HandleFunc("/session/", handleSessionSub)
-	_ = http.Serve(ln, mux)
+	mux.HandleFunc("/x-probe", handleProbe)
+	var h http.Handler = mux
+	if pw := os.Getenv("OPENCODE_SERVER_PASSWORD"); pw != "" {
+		// Like the real server: with a password set, every request needs it.
+		h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if u, p, ok := r.BasicAuth(); !ok || u != "opencode" || p != pw {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			mux.ServeHTTP(w, r)
+		})
+	}
+	_ = http.Serve(ln, h)
 }
 
 // handleSession creates a session, remembering the worktree from `directory`.
@@ -63,7 +83,11 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 	}
 	raw, _ := io.ReadAll(r.Body)
 	_ = json.Unmarshal(raw, &body)
-	id := fmt.Sprintf("ses_%d", atomic.AddInt64(&seq, 1))
+	// Unique across servers, like opencode's own ids: each dispatch runs its
+	// own server, and conductor keys sessions by id.
+	var rnd [6]byte
+	_, _ = rand.Read(rnd[:])
+	id := fmt.Sprintf("ses_%x_%d", rnd, atomic.AddInt64(&seq, 1))
 	mu.Lock()
 	dirs[id] = body.Directory
 	mu.Unlock()
@@ -110,6 +134,25 @@ func handleSessionSub(w http.ResponseWriter, r *http.Request) {
 			"parts": []any{map[string]any{"type": "text", "text": "opencode: done"}},
 		})
 	}
+}
+
+// handleProbe reports what the server process can see from where it runs
+// (the agent sandbox, under conductor's tests): its HOME, and for each
+// ?read= path whether it can be read.
+func handleProbe(w http.ResponseWriter, r *http.Request) {
+	reads := map[string]string{}
+	for _, p := range r.URL.Query()["read"] {
+		if _, err := os.ReadFile(p); err == nil {
+			reads[p] = "ok"
+		} else if _, err := os.ReadDir(p); err == nil {
+			reads[p] = "ok"
+		} else {
+			reads[p] = "denied"
+		}
+	}
+	writeJSON(w, map[string]any{"home": os.Getenv("HOME"), "read": reads,
+		"conductor": os.Getenv("CONDUCTOR_ENDPOINT") != "" && os.Getenv("CONDUCTOR_SKILL_TOKEN") != "",
+		"creds":     os.Getenv("GH_TOKEN") != "" || os.Getenv("GITHUB_TOKEN") != "" || os.Getenv("SSH_AUTH_SOCK") != ""})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

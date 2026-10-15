@@ -50,6 +50,14 @@ func runSandboxNet(args []string) int {
 			}
 			opt.Relays = append(opt.Relays, sandbox.Relay{Listen: l, Unix: u})
 			i++
+		case args[i] == "--expose" && i+1 < len(args):
+			u, d, ok := strings.Cut(args[i+1], "=")
+			if !ok {
+				fmt.Fprintf(os.Stderr, "sandbox-net: --expose wants SOCKET=ADDR\n")
+				return 2
+			}
+			opt.Exposes = append(opt.Exposes, sandbox.Expose{Unix: u, Dial: d})
+			i++
 		case args[i] == "--chdir" && i+1 < len(args):
 			opt.Chdir = args[i+1]
 			i++

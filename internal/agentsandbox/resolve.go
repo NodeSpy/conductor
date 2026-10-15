@@ -148,7 +148,7 @@ func (r *Resolver) PolicyForEntry(e Entry, tool string, launcherEnv []string) (P
 		return Policy{}, err
 	}
 	env := append(append([]string(nil), r.Env...), launcherEnv...)
-	hosts, loopback := ModelRoute(tool, r.RealHome, env)
+	hosts, loopback := ModelRouteFor(tool, e.Model, r.RealHome, env)
 	egress := append([]string(nil), hosts...)
 	for _, list := range [][]string{r.Egress, e.Egress} {
 		for _, h := range list {

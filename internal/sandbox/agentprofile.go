@@ -27,6 +27,10 @@ type AgentProfile struct {
 	// LoopbackPorts are host loopback ports the agent may reach when the
 	// network is restricted (its own model endpoint on a local router).
 	LoopbackPorts []int
+	// ListenPorts are localhost ports the agent may listen on and accept
+	// connections at when the network is restricted (a server it runs for
+	// conductor: opencode's `opencode serve`).
+	ListenPorts []int
 	// Keychain allows the Security framework services a Keychain-held login
 	// needs (see seatbelt_agent.go). Off by default: see docs/wiki/Isolation.md.
 	Keychain bool

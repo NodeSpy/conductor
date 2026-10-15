@@ -201,3 +201,130 @@ func selfConductor(t *testing.T) func() (string, error) {
 	}
 	return func() (string, error) { return bin, nil }
 }
+
+// TestSandboxServerChild is the server a sandboxed agent runs (opencode's
+// `opencode serve`): it listens on its own loopback and answers one line.
+func TestSandboxServerChild(t *testing.T) {
+	if os.Getenv("AGENTSANDBOX_SERVE") == "" {
+		t.Skip("runs only inside the sandbox")
+	}
+	ln, err := net.Listen("tcp", os.Getenv("AGENTSANDBOX_SERVE"))
+	if err != nil {
+		fmt.Println("FAIL listen: " + err.Error())
+		os.Exit(1)
+	}
+	fmt.Println("listening")
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		line, _ := bufio.NewReader(c).ReadString('\n')
+		c.Write([]byte("SERVER-OK " + strings.TrimSpace(line) + "\n"))
+		c.Close()
+	}
+}
+
+// TestSandboxExposesAServer: a server the agent runs inside the sandbox is
+// reached from the host only the way Launch.Exposed says — a unix socket on
+// Linux (the sandbox's loopback is its own), the port itself on macOS.
+func TestSandboxExposesAServer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short")
+	}
+	if why := Probe(); why != "" {
+		if os.Getenv("CONDUCTOR_REQUIRE_SANDBOX") == "1" {
+			t.Fatalf("the agent sandbox cannot be built here: %s", why)
+		}
+		t.Skipf("no sandbox here: %s", why)
+	}
+	root, err := SocketDir("csx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	ws, state := filepath.Join(root, "ws"), filepath.Join(root, "st")
+	for _, d := range []string{ws, state} {
+		os.MkdirAll(d, 0o700)
+	}
+	home, _, err := PrepareHome(HomeSpec{Root: state, Key: "agent:serve", Tool: "opencode", GOOS: runtime.GOOS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := "127.0.0.1:4096"
+	if runtime.GOOS == "darwin" {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr = ln.Addr().String()
+		ln.Close()
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, err := filepath.EvalSymlinks(self); err == nil {
+		self = r
+	}
+	pm := sandbox.NewProxyManager(nil)
+	defer pm.Close()
+	pol := Policy{Identity: "agent:serve", Tool: "opencode", Workspace: ws, Home: home,
+		Egress: []string{"example.org"}, Expose: []string{addr}, ReadOnly: []string{filepath.Dir(self)}}
+	l, err := Wrap(pol, []string{self, "-test.run=^TestSandboxServerChild$", "-test.v=false"}, Deps{
+		SelfExe: selfConductor(t), EgressUnix: pm.UnixEndpoint, EgressAddr: pm.Endpoint,
+		LookPath: exec.LookPath, Inherited: os.Environ(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Cleanup()
+	sock, ok := l.Exposed[addr]
+	if !ok {
+		t.Fatalf("Exposed has no entry for %s: %v", addr, l.Exposed)
+	}
+	if (runtime.GOOS == "linux") != (sock != "") {
+		t.Fatalf("Exposed[%s] = %q on %s", addr, sock, runtime.GOOS)
+	}
+	cmd := exec.Command(l.Argv[0], l.Argv[1:]...)
+	cmd.Dir, cmd.Env = l.Dir, append(l.Env, "AGENTSANDBOX_SERVE="+addr)
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { cmd.Process.Kill(); cmd.Wait() }()
+	first, _ := bufio.NewReader(out).ReadString('\n')
+	if strings.TrimSpace(first) != "listening" {
+		t.Fatalf("the sandboxed server did not start: %q", first)
+	}
+	network, target := "tcp", addr
+	if sock != "" {
+		network, target = "unix", sock
+		if fi, err := os.Stat(filepath.Dir(sock)); err != nil || !fi.IsDir() {
+			t.Fatalf("expose dir: %v", err)
+		}
+	}
+	c, err := net.DialTimeout(network, target, 3*time.Second)
+	if err != nil {
+		t.Fatalf("reach the sandboxed server at %s %s: %v", network, target, err)
+	}
+	c.Write([]byte("ping\n"))
+	line, _ := bufio.NewReader(c).ReadString('\n')
+	c.Close()
+	if strings.TrimSpace(line) != "SERVER-OK ping" {
+		t.Fatalf("sandboxed server answered %q", line)
+	}
+	l.Cleanup()
+	if sock != "" {
+		if _, err := os.Stat(filepath.Dir(sock)); !os.IsNotExist(err) {
+			t.Fatalf("cleanup left the expose dir %s", filepath.Dir(sock))
+		}
+	}
+}

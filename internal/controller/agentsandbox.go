@@ -10,6 +10,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/sandbox"
 )
 
 // SandboxWiring is the daemon's agent sandbox (docs/design/agent-sandbox.md),
@@ -37,7 +38,20 @@ type agentLaunch struct {
 	// cli worker's `conductor call step.done`); an acp agent gets its tools
 	// through the injected MCP server instead.
 	skillEnv bool
+	// files are launcher-written files the agent reads (a tool config),
+	// shown read-only; env are the launcher's own variables for it (set
+	// after the credential filter: a server password it is meant to have).
+	files []string
+	env   []string
+	// expose are in-sandbox loopback addresses the agent serves on for
+	// conductor (opencode's server); prepareAgentSandbox fills exposed with
+	// how each is reached (agentsandbox.Launch.Exposed).
+	expose  []string
+	exposed map[string]string
 }
+
+// sandboxGOOS is the platform the agent sandbox builds for.
+func sandboxGOOS() string { return sandbox.CheckGOOS }
 
 // withAgent marks opt as an agent launch of tool for req.
 func withAgent(opt launchOpts, tool string, req *dispatch.Request, skillEnv bool) launchOpts {
@@ -138,6 +152,9 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 		}
 	}
 	pol.Env = append(pol.Env, nonCredentialEnv(env)...)
+	pol.Env = append(pol.Env, a.env...)
+	pol.ReadOnly = append(pol.ReadOnly, a.files...)
+	pol.Expose = append(pol.Expose, a.expose...)
 	launch, err := agentsandbox.Wrap(pol, argv, agentsandbox.Deps{
 		SelfExe:    launchSelfExe,
 		EgressUnix: EgressProxyUnix,
@@ -152,6 +169,7 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	if err != nil {
 		return nil, "", nil, nil, fmt.Errorf("agent sandbox: %w — the agent is not launched unsandboxed", err)
 	}
+	a.exposed = launch.Exposed
 	return launch.Argv, launch.Dir, launch.Env, launch.Cleanup, nil
 }
 

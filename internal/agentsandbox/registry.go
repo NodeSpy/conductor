@@ -26,6 +26,9 @@ type Entry struct {
 	// Tool is the canonical agent CLI when the registrant knows it ("" =
 	// whatever the launch says).
 	Tool string
+	// Model is the model the launch runs ("provider/model" for opencode;
+	// "" = the tool's default): a multi-provider tool's allowlist follows it.
+	Model string
 	// Dispatch is the dispatch id the workspace serves ("" for a member).
 	Dispatch string
 	// Skill is what a fresh token for a launch here stands for — the

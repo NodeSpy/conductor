@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
@@ -68,6 +69,7 @@ func RegisterSandboxWorkspace(dir, identity, tool string, req *Request) (agentsa
 	}
 	if req != nil {
 		e.Dispatch = req.DispatchID
+		e.Model = sandboxModel(*req)
 		if id, ok := SkillIdentityFor(*req); ok {
 			e.Skill = &id
 		}
@@ -105,4 +107,13 @@ func canonPath(p string) string {
 		return r
 	}
 	return filepath.Clean(p)
+}
+
+// sandboxModel is the model a dispatch's agent runs, as a multi-provider
+// tool names it ("provider/model"): its allowlist follows the provider.
+func sandboxModel(req Request) string {
+	if req.Model == "" || strings.Contains(req.Model, "/") || req.Provider == "" {
+		return req.Model
+	}
+	return req.Provider + "/" + req.Model
 }

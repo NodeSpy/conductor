@@ -280,6 +280,9 @@ func (s *Spec) WrapLocal(argv []string, dir string, envKeys []string, nf *NetFor
 			for _, r := range nf.Relays {
 				prefix = append(prefix, "--relay", r.Listen+"="+r.Unix)
 			}
+			for _, e := range nf.Exposes {
+				prefix = append(prefix, "--expose", e.Unix+"="+e.Dial)
+			}
 			prefix = append(prefix, "--")
 		}
 		return append(prefix, argv...), nil

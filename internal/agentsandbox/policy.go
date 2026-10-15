@@ -36,6 +36,10 @@ type Policy struct {
 	// Loopback are host-loopback model endpoints ("127.0.0.1:3456") relayed
 	// into the sandbox at the same address.
 	Loopback []string `json:"loopback,omitempty"`
+	// Expose are in-sandbox loopback addresses ("127.0.0.1:4096") a server
+	// the agent runs listens on, which the launcher connects to (opencode's
+	// `opencode serve`): Launch.Exposed says how.
+	Expose []string `json:"expose,omitempty"`
 	// Socket is the conductor skill socket (the file, bound alone — never
 	// its directory, which is conductor's state) and Token this launch's
 	// freshly minted session token for it.
@@ -91,6 +95,12 @@ func (p Policy) Validate() error {
 			return fmt.Errorf("agentsandbox: relay %q is not a loopback host:port", lb)
 		}
 	}
+	for _, x := range p.Expose {
+		h, port, err := net.SplitHostPort(x)
+		if n, perr := strconv.Atoi(port); err != nil || !isLoopbackHost(h) || perr != nil || n <= 0 || n > 65535 {
+			return fmt.Errorf("agentsandbox: exposed address %q is not a loopback host:port", x)
+		}
+	}
 	for _, list := range [][]string{p.ReadOnly, p.ReadWrite, p.Hide} {
 		for _, q := range list {
 			if !filepath.IsAbs(q) {
@@ -121,6 +131,10 @@ type Deps struct {
 	// Inherited is the environment the agent's is built from — the
 	// launcher's own; AgentEnv keeps only what an agent needs.
 	Inherited []string
+	// Bins are further programs the launch runs by name — the agent CLI a
+	// shell command starts (agent-deck's): each is shown in the sandbox
+	// like the launch binary itself, and must resolve here.
+	Bins []string
 }
 
 // Launch is a wrapped launch: run Argv in Dir with exactly Env (not appended
@@ -130,6 +144,10 @@ type Launch struct {
 	Env     []string
 	Dir     string
 	Cleanup func()
+	// Exposed maps each Policy.Expose address to the host unix socket that
+	// reaches it (Linux: the sandbox has its own network), or to "" where
+	// the address itself is reachable from the host (macOS).
+	Exposed map[string]string
 }
 
 // Wrap realizes p around argv. Fail-closed: any error means no launch.
@@ -172,6 +190,13 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		binds = append(binds, sandbox.BindMount{Path: l.Path, Src: l.Src})
 	}
 	binds = append(binds, launchBinds(argv[0], d.LookPath, d.RealHome)...)
+	for _, b := range d.Bins {
+		bin, err := d.LookPath(b)
+		if err != nil {
+			return nil, fmt.Errorf("agentsandbox: %s: %w", b, err)
+		}
+		binds = append(binds, launchBinds(bin, d.LookPath, d.RealHome)...)
+	}
 	for _, f := range launcherFiles(argv[1:]) {
 		binds = append(binds, sandbox.BindMount{Path: f, RO: true})
 	}
@@ -245,13 +270,21 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 			closers[i]()
 		}
 	}
+	exposed := map[string]string{}
 	if goos == "darwin" {
 		// No network namespace: the model's loopback port is reached
-		// directly, the profile allowing exactly it.
+		// directly, the profile allowing exactly it — and a server the agent
+		// runs listens on the host's loopback, at exactly its port.
 		for _, lb := range p.Loopback {
 			_, port, _ := net.SplitHostPort(lb)
 			n, _ := strconv.Atoi(port)
 			prof.LoopbackPorts = append(prof.LoopbackPorts, n)
+		}
+		for _, x := range p.Expose {
+			_, port, _ := net.SplitHostPort(x)
+			n, _ := strconv.Atoi(port)
+			prof.ListenPorts = append(prof.ListenPorts, n)
+			exposed[x] = ""
 		}
 		deps.Agent = prof
 		deps.ExtraBinds = seatbeltBinds(binds)
@@ -269,6 +302,21 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 			binds = append(binds, sandbox.BindMount{Path: sock})
 			deps.Relays = append(deps.Relays, sandbox.Relay{Listen: lb, Unix: sock})
 		}
+		if len(p.Expose) > 0 {
+			// The forwarder creates these sockets before the jail is built,
+			// so their directory is never shown to the agent.
+			dir, err := SocketDir("cse")
+			if err != nil {
+				cleanupAll()
+				return nil, fmt.Errorf("agentsandbox: expose dir: %w", err)
+			}
+			closers = append(closers, func() { _ = os.RemoveAll(dir) })
+			for i, x := range p.Expose {
+				sock := filepath.Join(dir, fmt.Sprintf("e%d.sock", i))
+				deps.Exposes = append(deps.Exposes, sandbox.Expose{Unix: sock, Dial: x})
+				exposed[x] = sock
+			}
+		}
 		deps.ExtraBinds = binds
 	}
 	wrapped, outEnv, wclean, err := sandbox.WrapLocalCommand(spec, argv, dir, env, deps)
@@ -277,7 +325,7 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		return nil, err
 	}
 	closers = append([]func(){wclean}, closers...)
-	return &Launch{Argv: wrapped, Env: outEnv, Dir: dir, Cleanup: cleanupAll}, nil
+	return &Launch{Argv: wrapped, Env: outEnv, Dir: dir, Cleanup: cleanupAll, Exposed: exposed}, nil
 }
 
 // seatbeltBinds turns the Linux allow-list into what a Seatbelt profile can

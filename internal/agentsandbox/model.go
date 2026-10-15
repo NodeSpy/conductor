@@ -21,9 +21,24 @@ var lookupIP = net.LookupIP
 // claude-code's `env` in <home>/.claude/settings.json, where an operator
 // routes claude-code through a local router.
 func ModelRoute(tool, home string, env []string) (hosts, loopback []string) {
+	return ModelRouteFor(tool, "", home, env)
+}
+
+// ModelRouteFor is ModelRoute for a launch whose model is known ("" = the
+// tool's own default): a multi-provider tool (opencode) reaches the
+// provider the model names.
+func ModelRouteFor(tool, model, home string, env []string) (hosts, loopback []string) {
 	t := tools[tool]
 	hosts = append(hosts, t.endpoints...)
-	for _, o := range modelOverrides(tool, home, env) {
+	overrides := modelOverrides(tool, home, env)
+	if tool == "opencode" {
+		urls, h := opencodeRoute(model, home, env)
+		for _, x := range h {
+			hosts = appendUnique(hosts, x)
+		}
+		overrides = append(overrides, urls...)
+	}
+	for _, o := range overrides {
 		u, err := url.Parse(o)
 		if err != nil || u.Hostname() == "" {
 			continue

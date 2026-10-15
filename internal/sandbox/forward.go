@@ -75,6 +75,7 @@ type NetForward struct {
 	Binds      []BindMount // fs-jail allow-list to pivot_root into ("" = no jail)
 	Chdir      string      // working directory inside the jail (the launch's own dir)
 	Relays     []Relay     // extra in-sandbox loopback ports piped to host-side unix sockets
+	Exposes    []Expose    // in-sandbox loopback ports served on host-side unix sockets
 	// Agent (macOS) is the agent jail's Seatbelt extras; ProxyPort the
 	// loopback egress proxy port its restricted network may reach.
 	Agent     *AgentProfile
@@ -89,15 +90,26 @@ type Relay struct {
 	Unix   string `json:"unix"`   // the socket to pipe to, as seen inside the sandbox
 }
 
+// Expose is a Relay run the other way: a server the sandboxed process runs
+// on its own loopback (opencode's `opencode serve`) reached from the host.
+// The forwarder listens on Unix — a host path, created before the jail is
+// built so the jail need not show its directory — and pipes each connection
+// to Dial inside the sandbox's network namespace.
+type Expose struct {
+	Unix string `json:"unix"` // host-side socket the launcher connects to
+	Dial string `json:"dial"` // in-sandbox TCP address (127.0.0.1:PORT)
+}
+
 // EnterOpts is the `conductor sandbox-net` helper's configuration.
 type EnterOpts struct {
-	Listen string      // TCP address to serve inside the sandbox ("" = none)
-	Unix   string      // the egress proxy's unix socket path
-	Masks  []string    // legacy: paths to overmount away before exec (#36 iso-review H7)
-	Binds  []BindMount // fs-jail allow-list; non-empty ⇒ pivot_root jail instead of masks
-	Chdir  string      // working directory to re-enter after the pivot ("" = stay)
-	Relays []Relay     // extra loopback ports to pipe to unix sockets
-	Argv   []string    // the real launch to exec once the plumbing is up
+	Listen  string      // TCP address to serve inside the sandbox ("" = none)
+	Unix    string      // the egress proxy's unix socket path
+	Masks   []string    // legacy: paths to overmount away before exec (#36 iso-review H7)
+	Binds   []BindMount // fs-jail allow-list; non-empty ⇒ pivot_root jail instead of masks
+	Chdir   string      // working directory to re-enter after the pivot ("" = stay)
+	Relays  []Relay     // extra loopback ports to pipe to unix sockets
+	Exposes []Expose    // in-sandbox loopback ports to serve on host unix sockets
+	Argv    []string    // the real launch to exec once the plumbing is up
 }
 
 // RunEnter is the `conductor sandbox-net` entry point: bring the sandbox
@@ -118,6 +130,24 @@ func RunEnter(opt EnterOpts) int {
 	// hides everything not declared, used for code steps) OR the legacy
 	// deny-list Masks (overmount specific daemon dirs, used by the plugin path).
 	// They are mutually exclusive; Binds wins when both are somehow present.
+	// Exposed ports listen first: their sockets are host paths the jail
+	// below does not show (a listening socket keeps working once its
+	// directory is out of view).
+	var exposed []net.Listener
+	defer func() {
+		for _, ln := range exposed {
+			ln.Close()
+		}
+	}()
+	for _, e := range opt.Exposes {
+		ln, err := net.Listen("unix", e.Unix)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-net: expose %s: %v\n", e.Dial, err)
+			return 1
+		}
+		_ = os.Chmod(e.Unix, 0o600)
+		exposed = append(exposed, ln)
+	}
 	jailed := len(opt.Binds) > 0
 	if jailed {
 		if err := buildJail(opt.Binds); err != nil {
@@ -172,6 +202,15 @@ func RunEnter(opt EnterOpts) int {
 		defer ln.Close()
 		go serveForward(ln, r.Unix)
 	}
+	if len(exposed) > 0 {
+		if err := loopbackUp(); err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-net: loopback up: %v\n", err)
+			return 1
+		}
+		for i, ln := range exposed {
+			go serveExpose(ln, opt.Exposes[i].Dial)
+		}
+	}
 	// Privilege drop before exec (#36 iso-review round 2, item 1): the jail /
 	// masks above were applied in THIS mount namespace, whose owning user
 	// namespace still grants the process CAP_SYS_ADMIN — so a plain exec would
@@ -196,6 +235,33 @@ func RunEnter(opt EnterOpts) int {
 		return 1
 	}
 	return 0
+}
+
+// serveExpose pipes each connection from the host into the sandboxed
+// server at addr (in this network namespace). A server not listening yet
+// drops the connection; the launcher retries.
+func serveExpose(ln net.Listener, addr string) {
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go func(c net.Conn) {
+			defer c.Close()
+			u, err := net.Dial("tcp", addr)
+			if err != nil {
+				return
+			}
+			defer u.Close()
+			go func() {
+				_, _ = io.Copy(u, c)
+				if cw, ok := u.(interface{ CloseWrite() error }); ok {
+					_ = cw.CloseWrite()
+				}
+			}()
+			_, _ = io.Copy(c, u)
+		}(c)
+	}
 }
 
 // serveForward pipes each accepted in-sandbox connection into the proxy's

@@ -295,6 +295,21 @@ func TestWrapRefusesWhatItCannotConfine(t *testing.T) {
 		"no lookpath":         func(f *fixture) { f.deps.LookPath = nil },
 		"unknown binary":      func(f *fixture) { f.deps.LookPath = func(string) (string, error) { return "", os.ErrNotExist } },
 		"no proxy wired":      func(f *fixture) { f.deps.EgressUnix = nil },
+		"non-loopback expose": func(f *fixture) { f.pol.Expose = []string{"0.0.0.0:4096"} },
+		"expose without port": func(f *fixture) { f.pol.Expose = []string{"127.0.0.1"} },
+		"expose port zero":    func(f *fixture) { f.pol.Expose = []string{"127.0.0.1:0"} },
+		"expose port too big": func(f *fixture) { f.pol.Expose = []string{"127.0.0.1:65536"} },
+		"expose not a port":   func(f *fixture) { f.pol.Expose = []string{"127.0.0.1:http"} },
+		"bin not found": func(f *fixture) {
+			look := f.deps.LookPath
+			f.deps.Bins = []string{"nope"}
+			f.deps.LookPath = func(n string) (string, error) {
+				if n == "nope" {
+					return "", os.ErrNotExist
+				}
+				return look(n)
+			}
+		},
 	}
 	for name, mut := range cases {
 		t.Run(name, func(t *testing.T) {

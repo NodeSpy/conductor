@@ -198,6 +198,9 @@ func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string
 		for _, p := range ports {
 			b.WriteString(fmt.Sprintf("(allow network-outbound (remote ip \"localhost:%d\"))\n", p))
 		}
+		for _, p := range a.ListenPorts {
+			b.WriteString(fmt.Sprintf("(allow network-bind network-inbound (local ip \"localhost:%d\"))\n", p))
+		}
 	}
 	return b.String()
 }
