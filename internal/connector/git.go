@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -83,6 +84,13 @@ func (gitImpl) Invoke(ctx context.Context, verb string, opts map[string]any) (ma
 	ops := gitOps()
 	if ops == nil || ops.Push == nil {
 		return nil, fmt.Errorf("git.push: only runs inside a live daemon with the agent sandbox on")
+	}
+	// git.push takes no options: the branch is the dispatch's, never the
+	// agent's to name. Refuse rather than ignore one.
+	for k := range opts {
+		if !strings.HasPrefix(k, "__") {
+			return nil, fmt.Errorf("git.push takes no options (got %q): conductor pushes to this dispatch's own branch only", k)
+		}
 	}
 	// Injected by the skill path from the caller's token; an agent cannot
 	// set a leading-underscore option.

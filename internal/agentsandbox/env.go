@@ -19,6 +19,9 @@ var envModelKnobs = map[string]bool{
 	"ANTHROPIC_DEFAULT_OPUS_MODEL": true, "ANTHROPIC_DEFAULT_SONNET_MODEL": true, "ANTHROPIC_DEFAULT_HAIKU_MODEL": true,
 	"CLAUDE_CODE_SUBAGENT_MODEL": true, "CLAUDE_CODE_ENTRYPOINT": true, "CLAUDE_CODE_MAX_OUTPUT_TOKENS": true,
 	"MAX_THINKING_TOKENS": true, "OPENAI_MODEL": true,
+	// The identity the agent's commits carry (the operator's own; the
+	// launcher — a dispatch, paseo's --env — sets it). Not a credential.
+	"GIT_AUTHOR_NAME": true, "GIT_AUTHOR_EMAIL": true, "GIT_COMMITTER_NAME": true, "GIT_COMMITTER_EMAIL": true,
 }
 
 // envKnobPrefixes are switch families passed through (DISABLE_TELEMETRY,

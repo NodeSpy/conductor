@@ -249,15 +249,20 @@ func (e *Engine) StepDone(ctx context.Context, dispatchID, agentID, reason strin
 	if resolved := runner.AgentForDispatch(dispatchID); resolved != "" {
 		agentID = resolved
 	}
+	if agentID != "" {
+		if lh := e.lookupLiveHandoff(agentID); lh != nil {
+			return e.handoffDone(ctx, agentID, reason)
+		}
+	}
+	// A dispatch conductor is still blocked on defers to the step boundary —
+	// before its agent is even bound (paseo binds it when its run returns),
+	// so an eager done mid-run is accepted, not refused.
+	if dispatchID != "" && runner.DispatchInFlight(dispatchID) {
+		e.log("step.done from dispatch %s (%s) — still in flight; reclaiming at step boundary", dispatchID, reason)
+		return nil
+	}
 	if agentID == "" {
 		return fmt.Errorf("step.done: no conductor-launched agent for this session")
-	}
-	if lh := e.lookupLiveHandoff(agentID); lh != nil {
-		return e.handoffDone(ctx, agentID, reason)
-	}
-	if dispatchID != "" && runner.DispatchInFlight(dispatchID) {
-		e.log("step.done from agent %s (%s) — dispatch still in flight; reclaiming at step boundary", agentID, reason)
-		return nil
 	}
 	e.log("step.done from agent %s: %s — reclaiming", agentID, reason)
 	if runner != e.disp {

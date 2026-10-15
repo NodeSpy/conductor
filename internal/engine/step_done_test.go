@@ -130,3 +130,16 @@ func TestStepDoneResolvesOnTheLaunchingRunner(t *testing.T) {
 		t.Fatal("unresolvable")
 	}
 }
+
+// paseo binds a dispatch to its agent only when its run returns: a done
+// sent mid-run, before that binding, is deferred — not refused.
+func TestStepDoneInFlightBeforeTheAgentIsBound(t *testing.T) {
+	d := &fakeDispatcher{archived: make(chan string, 1), inflightIDs: map[string]bool{"disp-1": true}}
+	e, _ := newEng(t, baseCfg(), d, &fakeNotifier{}, nil)
+	if err := e.StepDone(context.Background(), "disp-1", "", "eager"); err != nil {
+		t.Fatalf("mid-run done before binding: %v", err)
+	}
+	if len(d.archived) != 0 {
+		t.Fatal("nothing archived mid-run")
+	}
+}

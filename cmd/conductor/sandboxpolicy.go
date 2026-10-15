@@ -66,6 +66,16 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		egress = cfg.Sandbox.Egress
 	}
 	name, email := gitGlobalIdentity()
+	if p := cfg.Sandbox; p != nil && p.Push != nil {
+		// No global git identity on this box: the identity conductor signs
+		// as is the one the agent commits as.
+		if name == "" {
+			name = p.Push.Name
+		}
+		if email == "" {
+			email = p.Push.Email
+		}
+	}
 	r := &agentsandbox.Resolver{
 		StateRoot: cfg.SandboxStateDir(),
 		RealHome:  home,
