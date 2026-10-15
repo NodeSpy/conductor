@@ -45,6 +45,7 @@ func (s *MemStore) Mint(_ context.Context, g GrantSpec) (GrantSpec, error) {
 	g.ID = NewID()
 	g.Issued = now
 	g.State = ""
+	g.Cwd, _ = CleanCwd(g.Cwd) // Validate accepted it; store the canonical form
 	g = clone(g)
 	e := &entry{spec: g}
 	s.grants[g.ID] = e

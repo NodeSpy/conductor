@@ -194,20 +194,29 @@ the member's gate:
 ### Host commands and grants
 
 Some actions are host commands, not verbs — applying a saved Terraform plan. A
-session proposes the exact command:
+session proposes the exact command, from the directory it will run in:
 
 ```
-conductor member propose-command --file plan.tfplan -- terraform apply plan.tfplan
+cd envs/prod
+conductor member propose-command --file tfplan -- terraform apply tfplan
 ```
+
+The **working directory is part of the command**: the proposal records it
+(workspace-relative — the shell's own directory, or `--cwd <dir>`; anything
+outside the workspace is refused), the operator sees it in the approval text
+(`run \`terraform apply tfplan\` in envs/prod …`), and the grant only matches
+the same argv run from that directory — the same apply from `envs/staging` is a
+different action. Files are resolved against it (`envs/prod/tfplan`) the way
+the broker resolves them.
 
 Conductor hashes the named files **as the jail's broker will read them** —
 through the jail, for the identity the grant will bind to (a confined
 `terraform plan -out` writes its planfile into the dispatch's copy-on-write
 layer, not the workspace) — and records the proposal. On approval it hashes
 them again; if they changed it mints nothing. Otherwise it mints a **grant**
-(`internal/grant`): that tool and argv, bound to the session's jail identity
-(or a cli worker's dispatch), pinned to the files' SHA-256, single-use,
-short-lived. The broker consumes it — checking the file digests itself at use
+(`internal/grant`): that tool, argv and working directory, bound to the
+session's jail identity (or a cli worker's dispatch), pinned to the files'
+SHA-256, single-use, short-lived. The broker consumes it — checking the file digests itself at use
 time — and nothing else lifts a broker refusal. **Without the jail, a
 host-command proposal is refused outright**: there is no broker to consume a
 grant, so none is ever minted.

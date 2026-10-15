@@ -78,7 +78,9 @@ type Proposal struct {
 	Uses  string            `json:"uses,omitempty"`
 	Tool  string            `json:"tool,omitempty"`
 	Argv  []string          `json:"argv,omitempty"`
-	Files map[string]string `json:"files,omitempty"` // command: argv path → sha256 at proposal
+	Files map[string]string `json:"files,omitempty"` // command: workspace-relative path → sha256 at proposal
+	// Cwd is a command's working directory, workspace-relative ("." = root).
+	Cwd string `json:"cwd,omitempty"`
 	// Options are the verb's options exactly as proposed (secrets redacted
 	// before they land here — see member.Gate).
 	Options map[string]any `json:"options,omitempty"`

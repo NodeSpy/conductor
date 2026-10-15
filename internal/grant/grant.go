@@ -34,6 +34,16 @@
 // So it is NOT true that "flag order can't change": `-a=1 -b=2` and
 // `-b=2 -a=1` are the same command; `-a=1 -a=2` and `-a=2 -a=1` are not.
 //
+// # The working directory is part of the command
+//
+// `cd envs/prod && terraform apply tfplan` and the same argv run from
+// envs/staging are different actions (a different root module, different
+// state). A grant names its Cwd — workspace-relative, cleaned, never escaping
+// the workspace ("." is the root) — and Matches requires the presented
+// command's Cwd to be the same directory. A file the command names is pinned
+// by its WORKSPACE-RELATIVE path: the argv token resolved against Cwd
+// (ResolvePath), which is how the broker resolves it too.
+//
 // # Telling a broker refusal apart
 //
 // Find returns only live, matching grants. Near returns every grant for the
@@ -54,6 +64,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"slices"
 	"sort"
 	"strings"
@@ -122,8 +133,10 @@ func (a Argv) String() string {
 // FileDigest pins one file the command names to the content the operator
 // approved.
 type FileDigest struct {
-	// Path is the file as the command names it — the exact argv token
-	// ("plan.tfplan"), resolved by the broker against the command's cwd.
+	// Path is the file's WORKSPACE-RELATIVE path: the argv token resolved
+	// against the grant's Cwd with ResolvePath ("envs/prod/tfplan" for
+	// `tfplan` run in envs/prod). The broker resolves the token it sees the
+	// same way and keys its digests by the result.
 	Path string `json:"path"`
 	// SHA256 is the lowercase hex SHA-256 of the approved content.
 	SHA256 string `json:"sha256"`
@@ -146,6 +159,10 @@ type GrantSpec struct {
 	Dispatch string `json:"dispatch,omitempty"`
 	// Tool is the binary's base name ("terraform").
 	Tool string `json:"tool"`
+	// Cwd is the directory the command runs in, workspace-relative and
+	// cleaned ("." = the workspace root; see CleanCwd). It is part of the
+	// command: the same argv from another directory does not match.
+	Cwd string `json:"cwd"`
 	// Argv is the exact command approved.
 	Argv Argv `json:"argv"`
 	// FileDigests pins each file the command reads that the approval was
@@ -198,11 +215,54 @@ func Explain(g GrantSpec, p Presented, now time.Time) error {
 }
 
 // Presented is what the broker knows about a command it is deciding on.
+// Cwd is the command's working directory relative to the workspace (any form
+// CleanCwd accepts; one that escapes the workspace matches nothing).
 type Presented struct {
 	AgentID  string
 	Dispatch string
 	Tool     string
 	Argv     Argv
+	Cwd      string
+}
+
+// CleanCwd canonicalizes a workspace-relative directory: "" and "." are the
+// root ("."), separators are "/", trailing slashes and "." segments drop. An
+// absolute path, a backslash, a NUL, or anything that climbs out of the
+// workspace ("..", "../x", "a/../../x") is an error.
+func CleanCwd(dir string) (string, error) {
+	if strings.ContainsAny(dir, "\\\x00") {
+		return "", fmt.Errorf("%w: directory %q has a backslash or NUL", ErrInvalid, dir)
+	}
+	if strings.HasPrefix(dir, "/") {
+		return "", fmt.Errorf("%w: directory %q must be workspace-relative, not absolute", ErrInvalid, dir)
+	}
+	if dir == "" {
+		return ".", nil
+	}
+	c := path.Clean(dir)
+	if c == ".." || strings.HasPrefix(c, "../") {
+		return "", fmt.Errorf("%w: directory %q escapes the workspace", ErrInvalid, dir)
+	}
+	return c, nil
+}
+
+// ResolvePath is the workspace-relative path of a file a command names: the
+// argv token joined to the command's cwd and cleaned. An absolute token, or
+// one that resolves outside the workspace, is an error. The gate pins files
+// by this path and the broker resolves the token it sees the same way.
+func ResolvePath(cwd, token string) (string, error) {
+	c, err := CleanCwd(cwd)
+	if err != nil {
+		return "", err
+	}
+	if token == "" || strings.HasPrefix(token, "/") || strings.ContainsAny(token, "\\\x00") {
+		return "", fmt.Errorf("%w: file %q must be a relative path", ErrInvalid, token)
+	}
+	p := path.Clean(path.Join(c, token))
+	if p == "." || p == ".." || strings.HasPrefix(p, "../") {
+		return "", fmt.Errorf("%w: file %q (from %s) escapes the workspace", ErrInvalid, token, c)
+	}
+	return p, nil
 }
 
 // Errors. Use errors.Is: stores may wrap them with detail.
@@ -233,6 +293,11 @@ func (g GrantSpec) Validate(now time.Time) error {
 	if strings.TrimSpace(g.ApprovedBy) == "" {
 		return bad("approved_by is required")
 	}
+	if c, err := CleanCwd(g.Cwd); err != nil {
+		return err
+	} else if g.Cwd != "" && c != g.Cwd {
+		return bad("cwd %q is not clean (want %q)", g.Cwd, c)
+	}
 	if g.Expiry.IsZero() {
 		return bad("expiry is required")
 	}
@@ -246,6 +311,9 @@ func (g GrantSpec) Validate(now time.Time) error {
 	for _, d := range g.FileDigests {
 		if strings.TrimSpace(d.Path) == "" {
 			return bad("file digest with an empty path")
+		}
+		if c, err := CleanCwd(d.Path); err != nil || c != d.Path || c == "." {
+			return bad("file %q must be a clean workspace-relative path (see ResolvePath)", d.Path)
 		}
 		if seen[d.Path] {
 			return bad("file %q pinned twice", d.Path)
@@ -266,6 +334,14 @@ func (g GrantSpec) Matches(p Presented) bool {
 		return false
 	}
 	if g.Dispatch != "" && g.Dispatch != p.Dispatch {
+		return false
+	}
+	gc, err := CleanCwd(g.Cwd)
+	if err != nil {
+		return false
+	}
+	pc, err := CleanCwd(p.Cwd)
+	if err != nil || pc != gc {
 		return false
 	}
 	return g.Tool == p.Tool && g.Argv.Equal(p.Argv)

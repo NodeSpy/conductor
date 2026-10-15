@@ -252,7 +252,24 @@ func LedgerSummary(rec store.MemberRecord) string {
 // ProposalAction is a one-line description of what a proposal would do.
 func ProposalAction(p store.Proposal) string {
 	if p.Kind == "command" {
-		return fmt.Sprintf("run `%s %s`", p.Tool, strings.Join(p.Argv, " "))
+		dir := p.Cwd
+		if dir == "" {
+			dir = "."
+		}
+		s := fmt.Sprintf("run `%s %s` in %s (workspace-relative)", p.Tool, strings.Join(p.Argv, " "), dir)
+		if len(p.Files) > 0 {
+			keys := make([]string, 0, len(p.Files))
+			for k := range p.Files {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			var pins []string
+			for _, k := range keys {
+				pins = append(pins, k+" sha256:"+p.Files[k][:min(12, len(p.Files[k]))])
+			}
+			s += "; pinned " + strings.Join(pins, ", ")
+		}
+		return s
 	}
 	opts, _ := json.Marshal(p.Options)
 	s := fmt.Sprintf("%s %s", p.Uses, opts)

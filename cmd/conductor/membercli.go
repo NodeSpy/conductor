@@ -53,7 +53,7 @@ const memberUsage = `usage:
     conductor member case close <case> --outcome "…"
     conductor member spawn [--case <id>] [--title "…"] --brief "…" [--handoff]
     conductor member handoff --text "…"
-    conductor member propose-command [--file <f>]… [--summary "…"] -- <tool> <args…>
+    conductor member propose-command [--file <f>]… [--cwd <dir>] [--summary "…"] -- <tool> <args…>
     conductor member proposals [--all]
     conductor member wait <proposal> [--timeout 30m]`
 
@@ -174,6 +174,11 @@ func memberAgent(sub string, args []string) error {
 			fs = append(fs, f)
 		}
 		a["files"] = fs
+		// The command runs where this shell is: the daemon makes it
+		// workspace-relative (or --cwd <dir> says so explicitly).
+		if wd, err := os.Getwd(); err == nil {
+			a["cwd_abs"] = wd
+		}
 	case "wait":
 		if len(pos) != 1 {
 			return fmt.Errorf("usage: conductor member wait <proposal> [--timeout 30m]")

@@ -337,7 +337,7 @@ func (x *Executor) mintGrant(ctx context.Context, d Decision, p store.Proposal) 
 		digests = append(digests, grant.FileDigest{Path: path, SHA256: sum})
 	}
 	g, err := x.Grants.Mint(ctx, grant.GrantSpec{
-		AgentID: p.AgentID, Dispatch: p.Dispatch, Tool: p.Tool, Argv: grant.ParseArgv(p.Argv),
+		AgentID: p.AgentID, Dispatch: p.Dispatch, Tool: p.Tool, Argv: grant.ParseArgv(p.Argv), Cwd: p.Cwd,
 		FileDigests: digests, Expiry: x.now().Add(ttl), SingleUse: true,
 		ApprovedBy: d.Operator, CaseID: p.CaseID,
 	})

@@ -664,3 +664,33 @@ func TestCommandGrantMintRechecksThroughTheJail(t *testing.T) {
 		t.Fatal("a grant exists")
 	}
 }
+
+// The minted grant carries the proposal's cwd: it matches the approved
+// command only from that directory.
+func TestMintedGrantIsBoundToTheCwd(t *testing.T) {
+	f := newExecFixture(t, testMember())
+	var pid string
+	_ = f.st.UpdateMember("sre", func(r *store.MemberRecord) error {
+		pid = r.NextID("p")
+		r.Proposals = map[string]*store.Proposal{pid: {ID: pid, Kind: "command", Tier: config.TierPropose, Tool: "terraform",
+			Argv: []string{"apply", "tfplan"}, Cwd: "envs/prod", Files: map[string]string{"envs/prod/tfplan": strings.Repeat("a", 64)},
+			Digest: "dg", Dispatch: "d-w", Status: "pending", Created: gateNow, Expires: gateNow.Add(time.Hour)}}
+		return nil
+	})
+	f.x.Jail = &digestJail{sums: map[string]string{"d-w\x00envs/prod/tfplan": strings.Repeat("a", 64)}}
+	out, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, pid, "approve")})
+	if err != nil || out.Grant == "" {
+		t.Fatalf("approve: %+v %v", out, err)
+	}
+	g, _ := f.grants.Get(context.Background(), out.Grant)
+	if g.Cwd != "envs/prod" || g.FileDigests[0].Path != "envs/prod/tfplan" {
+		t.Fatalf("grant cwd/path: %q %+v", g.Cwd, g.FileDigests)
+	}
+	pres := grant.Presented{Dispatch: "d-w", Tool: "terraform", Argv: grant.ParseArgv([]string{"apply", "tfplan"})}
+	for cwd, want := range map[string]bool{"envs/prod": true, "envs/staging": false, ".": false} {
+		pres.Cwd = cwd
+		if got, _ := f.grants.Find(context.Background(), pres); (len(got) == 1) != want {
+			t.Errorf("Find from %q: %d grants, want match=%v", cwd, len(got), want)
+		}
+	}
+}

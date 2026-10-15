@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/grant"
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
@@ -133,7 +135,11 @@ func (s *Service) AgentOp(ctx context.Context, c Actor, sub string, args map[str
 		}
 		return map[string]any{"commit": sha}, nil
 	case "propose_command":
-		p, err := s.ProposeCommand(c, str(args, "tool"), strs(args, "argv"), strs(args, "files"), str(args, "summary"))
+		cwd, err := s.commandCwd(c, str(args, "cwd"), str(args, "cwd_abs"))
+		if err != nil {
+			return nil, err
+		}
+		p, err := s.ProposeCommand(c, str(args, "tool"), strs(args, "argv"), strs(args, "files"), cwd, str(args, "summary"))
 		if err != nil {
 			return nil, err
 		}
@@ -309,4 +315,50 @@ func (s *Service) statusOf(name string) map[string]any {
 	}
 	delete(out, "worker_role")
 	return out
+}
+
+// commandCwd is the workspace-relative directory a proposed command runs in:
+// an explicit `cwd` (workspace-relative), else the calling shell's absolute
+// working directory made relative to the session's workspace — which must
+// not climb out of it. Neither: the workspace root.
+func (s *Service) commandCwd(c Actor, rel, abs string) (string, error) {
+	if rel != "" {
+		return grant.CleanCwd(rel)
+	}
+	if abs == "" {
+		return ".", nil
+	}
+	rec := s.Ledger.Member(c.Member)
+	root := ""
+	switch c.Role {
+	case config.MemberRoleHome:
+		if rec.Home != nil {
+			root = rec.Home.Cwd
+		}
+	case config.MemberRoleWorker:
+		for _, w := range rec.Workers {
+			if w.Dispatch == c.Dispatch {
+				root = w.Cwd
+			}
+		}
+	}
+	if root == "" {
+		return "", fmt.Errorf("cannot resolve the calling session's workspace")
+	}
+	r, err := filepath.Rel(evalOr(root), evalOr(abs))
+	if err != nil {
+		return "", fmt.Errorf("working directory %s is not inside the session workspace", abs)
+	}
+	out, err := grant.CleanCwd(filepath.ToSlash(r))
+	if err != nil {
+		return "", fmt.Errorf("working directory %s is not inside the session workspace — pass --cwd <workspace-relative dir>", abs)
+	}
+	return out, nil
+}
+
+func evalOr(p string) string {
+	if e, err := filepath.EvalSymlinks(p); err == nil {
+		return e
+	}
+	return filepath.Clean(p)
 }

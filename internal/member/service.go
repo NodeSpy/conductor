@@ -14,6 +14,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/grant"
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
@@ -1019,7 +1020,10 @@ func (s *Service) Cases(member string, all bool) []store.Case {
 // terraform apply). The files it names are hashed NOW, from the caller's own
 // working directory, so the operator approves exactly those bytes; the
 // grant minted on approval pins them for the jail's broker to re-check.
-func (s *Service) ProposeCommand(c Actor, tool string, argv, files []string, summary string) (store.Proposal, error) {
+// cwd is the directory the command will run in, workspace-relative (see
+// grant.CleanCwd): `cd envs/prod && terraform apply tfplan` is a different
+// action from the same argv at the root.
+func (s *Service) ProposeCommand(c Actor, tool string, argv, files []string, cwd, summary string) (store.Proposal, error) {
 	m, err := s.member(c.Member)
 	if err != nil {
 		return store.Proposal{}, err
@@ -1056,6 +1060,10 @@ func (s *Service) ProposeCommand(c Actor, tool string, argv, files []string, sum
 	if !known {
 		return store.Proposal{}, errors.New("cannot resolve the calling session")
 	}
+	dir, err := grant.CleanCwd(cwd)
+	if err != nil {
+		return store.Proposal{}, err
+	}
 	// The files are hashed AS THE BROKER WILL READ THEM — through the jail,
 	// for the identity the grant will bind to — so the operator approves the
 	// bytes that will actually run. Without the jail there is no broker, and
@@ -1071,17 +1079,20 @@ func (s *Service) ProposeCommand(c Actor, tool string, argv, files []string, sum
 	}
 	sums := map[string]string{}
 	for _, f := range files {
-		if strings.TrimSpace(f) == "" || strings.ContainsRune(f, 0) {
-			return store.Proposal{}, fmt.Errorf("bad file path %q", f)
-		}
-		sum, err := jail.DigestFile(ident, f)
+		// Resolved against the command's cwd exactly as the broker will
+		// resolve the token it sees, and pinned by that workspace path.
+		rel, err := grant.ResolvePath(dir, f)
 		if err != nil {
-			return store.Proposal{}, fmt.Errorf("hash %s: %w", f, err)
+			return store.Proposal{}, err
+		}
+		sum, err := jail.DigestFile(ident, rel)
+		if err != nil {
+			return store.Proposal{}, fmt.Errorf("hash %s: %w", rel, err)
 		}
 		if !validSHA256(sum) {
-			return store.Proposal{}, fmt.Errorf("hash %s: the jail returned %q, not a SHA-256", f, sum)
+			return store.Proposal{}, fmt.Errorf("hash %s: the jail returned %q, not a SHA-256", rel, sum)
 		}
-		sums[f] = sum
+		sums[rel] = sum
 	}
 	if len(files) == 0 {
 		// Even with nothing to pin, a command grant needs a broker to consume it.
@@ -1089,7 +1100,7 @@ func (s *Service) ProposeCommand(c Actor, tool string, argv, files []string, sum
 			return store.Proposal{}, ErrNoJail
 		}
 	}
-	opts := map[string]any{"tool": tool, "argv": argv, "files": sums}
+	opts := map[string]any{"tool": tool, "argv": argv, "files": sums, "cwd": dir}
 	digest, err := ActionDigest(c.Member, "command", "command."+tool, opts)
 	if err != nil {
 		return store.Proposal{}, err
@@ -1102,7 +1113,7 @@ func (s *Service) ProposeCommand(c Actor, tool string, argv, files []string, sum
 	var out store.Proposal
 	err = s.Ledger.UpdateMember(c.Member, func(r *store.MemberRecord) error {
 		p := &store.Proposal{ID: r.NextID("p"), CaseID: c.CaseID, Kind: "command", Tier: config.TierPropose,
-			Tool: tool, Argv: append([]string(nil), argv...), Files: sums, Summary: summary, Digest: digest,
+			Tool: tool, Argv: append([]string(nil), argv...), Files: sums, Cwd: dir, Summary: summary, Digest: digest,
 			Role: c.Role, Agent: c.Agent, Dispatch: c.Dispatch, AgentID: agentID,
 			Status: status, Created: now, Expires: now.Add(m.Autonomy.TTL()), RequesterClass: ReqMember}
 		if cc := r.Cases[c.CaseID]; cc != nil {
