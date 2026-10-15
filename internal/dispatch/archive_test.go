@@ -147,6 +147,83 @@ func TestCheckoutNoneDispatchThenArchiveLeavesNothingBehind(t *testing.T) {
 	}
 }
 
+// A checkout:none launch that FAILS records no agent, so neither a done call
+// nor the step-boundary archive will ever reach its run workspace. The dispatch
+// must reclaim it itself: an expired-auth outage once failed every launch and
+// stranded a workspace (with its agents and directory) per attempt.
+func TestFailedCheckoutNoneDispatchReclaimsItsRunWorkspace(t *testing.T) {
+	bin, dir := fakePaseoDir(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	put(t, dir, "run-fail", "")
+
+	d := &Dispatcher{PaseoBin: bin, Owned: NewOwnedSet(""), repoDirs: map[string]string{}}
+	req := Request{
+		Trigger: core.Trigger{Kind: "cron", Target: core.Target{Repo: "acme/w", Number: 7}},
+		Action:  config.Action{Type: "agent", Agent: "triage", Checkout: "none", Prompt: "triage"},
+	}
+	if _, err := d.Dispatch(context.Background(), req); err == nil {
+		t.Fatal("dispatch should fail when paseo run fails")
+	}
+	if calls := callsLog(t, dir); !strings.Contains(calls, "workspace archive wks_new") {
+		t.Fatalf("a failed launch must archive its run workspace, got:\n%s", calls)
+	}
+	if d.Owned.HasWorkspace("wks_new") {
+		t.Fatal("the reclaimed run workspace must leave the ownership ledger")
+	}
+	if runs, _ := os.ReadDir(filepath.Join(home, ".conductor", runWorkspaceDirs)); len(runs) != 0 {
+		t.Fatalf("a failed launch must remove its run directory, found %v", runs)
+	}
+}
+
+// A run directory whose `paseo workspace create` failed has no workspace for
+// anything to archive later, so runWorkspace removes it on the spot.
+func TestRunWorkspaceCreateFailureRemovesItsDir(t *testing.T) {
+	bin, dir := fakePaseoDir(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	put(t, dir, "wscreate-fail", "")
+
+	d := &Dispatcher{PaseoBin: bin, repoDirs: map[string]string{}}
+	req := Request{Trigger: core.Trigger{Kind: "cron", Target: core.Target{Repo: "acme/w", Number: 7}}}
+	if _, _, err := d.runWorkspace(context.Background(), req); err == nil {
+		t.Fatal("runWorkspace should fail when workspace create fails")
+	}
+	if runs, _ := os.ReadDir(filepath.Join(home, ".conductor", runWorkspaceDirs)); len(runs) != 0 {
+		t.Fatalf("a failed create must not leave its run directory, found %v", runs)
+	}
+}
+
+// `paseo ls` reports an agent's cwd under $HOME as "~/…". The run directory is
+// still removed on archive: comparing the raw "~" path against the absolute
+// runs root never matched, so every run left its directory behind.
+func TestArchiveRemovesRunDirReportedWithTilde(t *testing.T) {
+	bin, dir := fakePaseoDir(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	runDir := filepath.Join(home, ".conductor", runWorkspaceDirs, "cron-7-a1b2c3")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "ls.json"),
+		[]byte(`[{"id":"a1","status":"idle","cwd":"~/.conductor/runs/cron-7-a1b2c3"}]`), 0o644)
+	os.WriteFile(filepath.Join(dir, "workspaces.json"),
+		[]byte(`[{"workspaceId":"wks_run","name":"conductor-run-cron-7-a1b2c3","isolation":"local","cwd":"`+runDir+`"}]`), 0o644)
+
+	d := &Dispatcher{PaseoBin: bin, Owned: NewOwnedSet("")}
+	d.Owned.AddAgent("a1")
+	d.Owned.AddWorkspace("wks_run")
+	if err := d.Archive(context.Background(), "a1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(callsLog(t, dir), "workspace archive wks_run") {
+		t.Fatalf("expected `workspace archive wks_run`, got:\n%s", callsLog(t, dir))
+	}
+	if _, err := os.Stat(runDir); !os.IsNotExist(err) {
+		t.Fatalf("the run's directory must be removed on archive, stat err = %v", err)
+	}
+}
+
 // removeRunDir only ever deletes a DIRECT child of ~/.conductor/runs: an owned
 // worktree, the runs root itself, or a path that merely ends in a run-like name
 // elsewhere is left alone, whatever cwd the agent reported.
