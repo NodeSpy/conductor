@@ -6,7 +6,33 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/NodeSpy/conductor/internal/skill"
 )
+
+// TestForgetRevokesSkillToken: when a dispatch is forgotten (its workspace
+// reclaimed), its skill session token is revoked too — otherwise every verb the
+// profile granted stays callable for the token's whole TTL after teardown.
+func TestForgetRevokesSkillToken(t *testing.T) {
+	b := skill.NewBroker(func(string) (string, bool) { return "", false }, nil)
+	skill.SetActive(b)
+	t.Cleanup(func() { skill.SetActive(nil) })
+	tok, err := b.MintSession(skill.Identity{Agent: "a", Dispatch: "d-1"}, 1000, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Authorize(tok, skill.Peer{}); err != nil {
+		t.Fatalf("token should authorize before forget: %v", err)
+	}
+	o := NewOwnedSet(filepath.Join(t.TempDir(), "owned.json"))
+	o.AddAgent("ag-1")
+	o.BindDispatch("d-1", "ag-1")
+	o.forget("", "ag-1")
+	if _, err := b.Authorize(tok, skill.Peer{}); err == nil {
+		t.Fatal("forget must revoke the forgotten dispatch's skill token")
+	}
+}
 
 func TestOwnedSetRecordsAndPersists(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "owned.json")
