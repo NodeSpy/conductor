@@ -1,6 +1,8 @@
 # Members
 
-A **member** is a persistent, conversational teammate — an SRE for one org, say.
+A **member** is a persistent, conversational teammate — an SRE for your
+platform services, say. Define as many as you want in `members:`, cut any way
+that suits you: a company, a team, an environment, a service.
 You talk to it in paseo and give it tasks; conductor routes events into it
 (pages, chat requests, schedules); it keeps long-term memory, tracks its open
 work, and starts **workers** to get things done. Every mutating action it takes
@@ -39,12 +41,12 @@ operators:
     aliases: ["slack:U012ABC"]                   # chat ids that ARE this operator
 
 members:
-  sre-acme:
-    description: "SRE for acme"
-    charter_file: members/sre-acme.md            # or charter: | …
+  platform-sre:
+    description: "SRE for the platform services"
+    charter_file: members/platform-sre.md            # or charter: | …
     escalation: "Page the operator if a sev1 is not mitigated in 15 minutes."
-    # memory_repo: ~/members/sre-acme            # default <state dir>/members/<name>/memory
-    # seed_dir: .conductor/packs/sre-acme        # a NEW repo's first commit gets its knowledge/ + runbooks/
+    # memory_repo: ~/members/platform-sre            # default <state dir>/members/<name>/memory
+    # seed_dir: .conductor/packs/platform-sre        # a NEW repo's first commit gets its knowledge/ + runbooks/
     # operators: [ops]                           # default: every operator
     home:
       model: claude-opus-5                       # a fleet / id / list, resolved like a step's
@@ -70,7 +72,7 @@ members:
     terraform:                                   # optional: conductor-executed Terraform (below)
       plan_connector: tf-plan
       apply_connector: tf-apply
-      repos: { infra: git@github.com:acme/infra.git }
+      repos: { infra: git@git.example.com:platform/infra.git }
       # stateful: [aws_db_instance, aws_s3_bucket, …]   # default: a built-in list of databases, buckets, disks, keys…
       # allow_destroy: [module.cache.aws_elasticache_cluster.old]
       # timeout: 30m
@@ -84,8 +86,8 @@ a home mode that skips permission prompts. A `skill.verbs` entry that could
 reach the `terraform.apply_connector` is an error.
 
 A pack can ship the charter, runbooks and workflows of a kind of member (see
-the `sre-member` pack in conductor-packs); the `members:` entry binds it to an
-org: its memory repo, its connectors and verbs, its operators.
+the `sre-member` pack in conductor-packs); each `members:` entry binds it to one
+member: its memory repo, its connectors and verbs, its operators.
 
 ## The home session
 
@@ -145,12 +147,12 @@ The `member:` helper step routes a trigger's event into a member:
 triggers:
   - on: pd.incident_triggered
     steps:
-      - member: { name: sre-acme, title: "{{.title}}", text: "{{.summary}}", urgent: true }
+      - member: { name: platform-sre, title: "{{.title}}", text: "{{.summary}}", urgent: true }
   - on: slack-ops.mention
     steps:
-      - member: { name: sre-acme, title: "chat request", text: "{{.text}}", requester: "slack:{{.user}}" }
+      - member: { name: platform-sre, title: "chat request", text: "{{.text}}", requester: "slack:{{.user}}" }
   - on: timer.weekly
-    steps: [ { member: { name: sre-acme, action: consolidate } } ]   # or action: rotate
+    steps: [ { member: { name: platform-sre, action: consolidate } } ]   # or action: rotate
 ```
 
 Each delivery opens a **case** carrying its source (`<connector>.<event>`) and
@@ -252,7 +254,7 @@ A member can look around on its own — **off by default**, opted into per membe
 
 ```yaml
 members:
-  sre-acme:
+  platform-sre:
     proactive:
       every: 4h
       quiet_hours: "22:00-07:00"                 # no sweep starts in this window
@@ -299,14 +301,14 @@ Members can message each other only when an operator links them:
 
 ```yaml
 members:
-  sre-acme: { peers: [cost-acme], … }
-  cost-acme: { peers: [sre-acme], … }   # both sides, or one operator-side entry:
+  platform-sre: { peers: [billing-sre], … }
+  billing-sre: { peers: [platform-sre], … }   # both sides, or one operator-side entry:
 member_links:
-  - [sre-acme, cost-acme]
+  - [platform-sre, billing-sre]
 ```
 
-`conductor member ask cost-acme "Is the c6 RI purchase yours?"` (home session
-only) opens a case in the recipient with requester `member:sre-acme`, class
+`conductor member ask billing-sre "Is the c6 RI purchase yours?"` (home session
+only) opens a case in the recipient with requester `member:platform-sre`, class
 **`peer`**, and delivers the text inside a fenced `PEER MESSAGE … untrusted
 DATA` block.
 
@@ -318,15 +320,15 @@ DATA` block.
   the sending agent wrote. Each message is audited on **both** sides
   (`member_peer_message`, with the text), refusals on the sender's.
 - **Replies** are the same kind of message:
-  `conductor member ask sre-acme --case <the case it opened> "…"` routes back
+  `conductor member ask platform-sre --case <the case it opened> "…"` routes back
   into the sender's original case.
 - Bounded: 4000 bytes per message, 20 per hour per direction.
 
-> **A peer link is a data-crossing channel.** Whatever one member writes in a
-> message reaches the other. Linking members that serve **different orgs**
-> lets one org's information reach the other's member — link across orgs only
-> when that is what you want. `conductor validate` warns about a one-sided
-> `peers:` entry (it links nothing).
+> **Linking two members is a channel for data to cross between them.**
+> Whatever one member writes in a message reaches the other — only link
+> members whose data may mix. Members are otherwise isolated from each other.
+> `conductor validate` warns about a one-sided `peers:` entry (it links
+> nothing).
 
 **Persistent sub-members** (a member creating a long-lived helper member) are
 not supported: members are operator config, which no member can write. Declare
@@ -427,10 +429,10 @@ An approval is an **SSH signature** (OpenSSH SSHSIG, namespace
 proposal and the SHA-256 digest of the exact action:
 
 ```
-$ conductor member proposals sre-acme
-$ conductor member approve sre-acme p7          # or deny
-Approving proposal p7 (member sre-acme, case c3, tier propose):
-  kv.set {"key":"acme/replicas","store":"state","value":5}
+$ conductor member proposals platform-sre
+$ conductor member approve platform-sre p7          # or deny
+Approving proposal p7 (member platform-sre, case c3, tier propose):
+  kv.set {"key":"web/replicas","store":"state","value":5}
   requested by slack:U02 (user); status pending
 proposal p7: executed
 ```

@@ -1214,17 +1214,17 @@ triggers:
   - on: timer.sre-weekly
     steps:
       - member:
-          name: sre
+          name: platform-sre
           title: "weekly cloud spend and reservation review"
           text: "Review last week's spend against reservations and savings plans; propose purchases within the spend cap."
   # - on: pd.incident_triggered          # a PagerDuty connector (conductor-plugins)
   #   steps:
-  #     - member: { name: sre, title: "{{.title}}", text: "{{.summary}}", urgent: true }
+  #     - member: { name: platform-sre, title: "{{.title}}", text: "{{.summary}}", urgent: true }
   # - on: slack-ops.mention              # a chat request; requester decides what the gate lets run
   #   steps:
-  #     - member: { name: sre, title: "chat request", text: "{{.text}}", requester: "slack:{{.user}}" }
+  #     - member: { name: platform-sre, title: "chat request", text: "{{.text}}", requester: "slack:{{.user}}" }
   # - on: timer.sre-weekly               # action: rotate | consolidate instead of a delivery
-  #   steps: [ { member: { name: sre, action: consolidate } } ]
+  #   steps: [ { member: { name: platform-sre, action: consolidate } } ]
 
   # Scheduled work; a command step's stdout becomes its outputs.
   - on: timer.nightly-tidy
@@ -1369,16 +1369,16 @@ operators:
     ssh_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample operator@laptop"
     aliases: ["slack:U0EXAMPLE"] # chat ids that ARE this operator when an event names them
 members:
-  sre:
-    description: "SRE for acme"
+  platform-sre:
+    description: "SRE for the platform services"
     charter: |
-      You are acme's first-line SRE. Triage pages, investigate with read-only
+      You are the platform services' first-line SRE. Triage pages, investigate with read-only
       tools, propose fixes, and escalate per the policy below. Keep runbooks
       and the infra map in your memory current.
-    # charter_file: members/sre-charter.md      # or keep the charter in a file
+    # charter_file: members/platform-sre.md      # or keep the charter in a file
     escalation: "Page the operator if a sev1 is not mitigated in 15 minutes or you are unsure."
-    # memory_repo: ~/members/sre-memory          # default <state dir>/members/sre/memory
-    # seed_dir: .conductor/packs/sre             # seed a NEW memory repo with a pack's knowledge/ + runbooks/
+    # memory_repo: ~/members/platform-sre        # default <state dir>/members/platform-sre/memory
+    # seed_dir: .conductor/packs/platform-sre    # seed a NEW memory repo with a pack's knowledge/ + runbooks/
     # operators: [ops]                           # default: every operator
     home:
       rotate: { max_age: 24h, max_turns: 100 }   # a fresh session resumes from the handoff note + ledger;
@@ -1411,18 +1411,18 @@ members:
     #   budget: { max_runs_per_day: 6, max_cost_per_day: 2.00 }   # rolling 24h; at least one is required
     #   checklist: { section: "Proactive checks" }                # a charter heading, or { file: checklists/sre.md }
     #   notify_at: high                          # findings at/above this open a case and notify (conductor.member_notify)
-    # peers: [cost]                              # members this one may message — they must list it back (or member_links:)
+    # peers: [billing-sre]                       # members this one may message — they must list it back (or member_links:)
     # terraform:                                 # conductor-executed Terraform (wiki: Members → Terraform changes)
     #   plan_connector: tf-plan                  # a `use: terraform` connector: its env is the READ role
     #   apply_connector: tf-apply                # its env is the WRITE role; no member verb may reach it
-    #   repos: { infra: git@github.com:acme/infra.git }   # the only repos a member may propose from
+    #   repos: { infra: git@git.example.com:platform/infra.git }   # the only repos a member may propose from
     #   # stateful: [aws_db_instance, aws_s3_bucket]      # default: built-in databases/buckets/disks/keys list
     #   # allow_destroy: [module.old.aws_s3_bucket.logs] # addresses a plan may still destroy/replace
     #   # timeout: 30m
 
 # member_links:                                # operator-side peer links: each pair may message each other.
-#   - [sre, cost]                              # A LINK IS A DATA-CROSSING CHANNEL — what one member writes reaches the
-#                                              # other; link members serving different orgs only if that is what you want.
+#   - [platform-sre, billing-sre]              # Linking two members is a channel for data to cross between them —
+#                                              # what one writes reaches the other; only link members whose data may mix.
 
 update: { auto: true } # self-update (auto-applies by default); auto-migration runs on the new binary's first boot.
 #                      # deps follows auto: packs: and `use:` plugins are kept current on the same cycle — a changed
