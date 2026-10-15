@@ -49,6 +49,7 @@ func TestJailGrantRunsTheApprovedCommandOnce(t *testing.T) {
 	os.WriteFile(plan, []byte(approved), 0o644)
 	sum, _ := grant.FileSHA256(plan)
 	mint := func(argv []string, ttl time.Duration) grant.GrantSpec {
+		now = now.Add(time.Second) // each approval newer than the last
 		g, err := store.Mint(context.Background(), grant.GrantSpec{
 			Dispatch: "d1", Tool: "terraform", Argv: grant.ParseArgv(argv),
 			FileDigests: []grant.FileDigest{{Path: "plan.tfplan", SHA256: sum}},
@@ -128,8 +129,8 @@ func TestJailGrantRunsTheApprovedCommandOnce(t *testing.T) {
 		`terraform apply -input=true -var=a=1 -var=b=2 -var-file prod.tfvars plan.tfplan; echo "exit=$?"`,              // another value
 		`terraform apply -input false -var=a=1 -var=b=2 -var-file prod.tfvars plan.tfplan; echo "exit=$?"`,             // a bare flag and a word
 	} {
-		if out := run(other); !strings.Contains(out, "exit=126") || strings.Contains(out, "tf-args=") {
-			t.Fatalf("a different argv is not the approved command:\n%s\n%s", other, out)
+		if out := run(other); !strings.Contains(out, "exit=126") || !strings.Contains(out, grant.ErrMismatch.Error()) || strings.Contains(out, "tf-args=") {
+			t.Fatalf("a different argv is not the approved command (ErrMismatch):\n%s\n%s", other, out)
 		}
 	}
 	// Distinct -k=v flags in another order are the same command (to the
@@ -144,8 +145,8 @@ func TestJailGrantRunsTheApprovedCommandOnce(t *testing.T) {
 
 	mint(approvedArgv, time.Minute)
 	now = now.Add(2 * time.Minute)
-	if out := run(apply); !strings.Contains(out, "exit=126") || strings.Contains(out, "tf-args=") {
-		t.Fatalf("an expired grant is refused:\n%s", out)
+	if out := run(apply); !strings.Contains(out, "exit=126") || !strings.Contains(out, grant.ErrExpired.Error()) || strings.Contains(out, "tf-args=") {
+		t.Fatalf("an expired grant is refused (ErrExpired):\n%s", out)
 	}
 }
 
@@ -229,6 +230,7 @@ resource "local_file" "out" {
 	}
 	layerPlan := filepath.Join(l.Dispatch.Dir, "cow-ws", "terraform", "up", "plan.tfplan")
 	mint := func(sum string, ttl time.Duration) grant.GrantSpec {
+		now = now.Add(time.Second) // each approval newer than the last
 		g, err := store.Mint(context.Background(), grant.GrantSpec{
 			Dispatch: "d1", Tool: "terraform", Argv: grant.ParseArgv([]string{"apply", "-input=false", "-no-color", "plan.tfplan"}),
 			FileDigests: []grant.FileDigest{{Path: "plan.tfplan", SHA256: sum}},
@@ -282,12 +284,12 @@ resource "local_file" "out" {
 		`terraform apply -input=false plan.tfplan -no-color; echo "exit=$?"`,             // words reordered
 		`terraform apply -input=false -no-color -lock=false plan.tfplan; echo "exit=$?"`, // an extra flag
 	} {
-		if out := run(other); !strings.Contains(out, "exit=126") || strings.Contains(out, "Apply complete") {
-			t.Fatalf("another argv is not the approved command:\n%s", out)
+		if out := run(other); !strings.Contains(out, "exit=126") || !strings.Contains(out, grant.ErrMismatch.Error()) || strings.Contains(out, "Apply complete") {
+			t.Fatalf("another argv is not the approved command (ErrMismatch):\n%s", out)
 		}
 	}
 	now = now.Add(11 * time.Minute)
-	if out := run(apply); !strings.Contains(out, "exit=126") || strings.Contains(out, "Apply complete") {
-		t.Fatalf("an expired grant is refused:\n%s", out)
+	if out := run(apply); !strings.Contains(out, "exit=126") || !strings.Contains(out, grant.ErrExpired.Error()) || strings.Contains(out, "Apply complete") {
+		t.Fatalf("an expired grant is refused (ErrExpired):\n%s", out)
 	}
 }

@@ -370,8 +370,15 @@ When the command comes:
    their private copies, read-only. The bytes it checked are the bytes the
    tool reads.
 
-A second use of a single-use grant is refused (`grant.ErrConsumed`), and so
-is an expired grant. The audit row carries the grant id, approver and case.
+When no grant lifts a refusal, the refusal says why, from this agent's grants
+for the tool (`grant.Store.Near`):
+- the newest approval of this exact command is used (`grant.ErrConsumed`),
+  expired (`grant.ErrExpired`) or revoked (`grant.ErrRevoked`);
+- otherwise, a live grant approves another command (`grant.ErrMismatch`,
+  naming what it approves);
+- otherwise, the refusal stands as it is.
+
+The audit row of a granted run carries the grant id, approver and case.
 
 **Which bytes a pinned file is.** The gate hashes a proposal's files with the
 jail's `DigestFile(identity, path)`, through the same read the broker makes
@@ -387,12 +394,16 @@ at use, so you approve exactly the bytes the command will run on:
   while the gate resolves it from the workspace. If they name different
   files, the digest doesn't match and the grant is refused, not used.
 
-What counts as "the same command" is `grant.ParseArgv`:
-- words, and a bare flag's value (`-var-file prod.tfvars`), keep their order;
-- an extra or different word, flag or value is a different command;
-- self-contained `-k=v` / `--k=v` flags are compared as a set: across
-  different names their order doesn't matter, as it doesn't to the tool,
-  while values of one repeated flag keep their order.
+What counts as "the same command" is `grant.ParseArgv` and `Argv.Equal`:
+- words must be equal and in order. A word is every token that isn't a
+  self-contained `-k=v` / `--k=v` flag, so a bare flag and the token after it
+  (`-var-file prod.tfvars`) are words too;
+- `-k=v` flags are compared as a set of names: where they sit among the
+  words, and their order relative to each other, doesn't matter, as it
+  doesn't to terraform. One name's values must be equal in order, so
+  `-a=1 -b=2` equals `-b=2 -a=1`, but `-a=1 -a=2` does not equal `-a=2 -a=1`;
+- any extra, missing or changed token (word, flag name or flag value) is a
+  different command.
 
 ## Tool-call hooks
 

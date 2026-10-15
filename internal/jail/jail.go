@@ -121,7 +121,6 @@ type Manager struct {
 	// host's /tmp).
 	Grants       grant.Store
 	GrantScratch string
-	grantsUsed   grantMemo
 
 	mu   sync.Mutex
 	live map[string]*Dispatch // broker token → dispatch

@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/grant"
 	"github.com/NodeSpy/conductor/internal/hostcmd"
@@ -23,7 +23,10 @@ import (
 //  1. finds the grant (grant.Store.Find), and decides the command again as
 //     if the operator's allow list named it (hostcmd.Rule.Granted) — so a
 //     guardrail, a deny rule, the path guard or a closed target still
-//     refuses it, and a content-executing command still runs confined;
+//     refuses it, and a content-executing command still runs confined. When
+//     none applies, the refusal names why from the grants near it
+//     (grant.Store.Near, grant.Explain): used, expired, revoked, or another
+//     command;
 //  2. copies every file the grant pins into a private scratch dir only
 //     conductor can write, opening each path component without following a
 //     symlink and hashing the bytes as they are copied, and checks them
@@ -36,33 +39,6 @@ type grantUse struct {
 	args    []string // argv with pinned files rewritten to their private copies
 	files   []string // the private copies (bound read-only into the run)
 	cleanup func()
-}
-
-// grantMemo remembers the grants this broker consumed, to name ErrConsumed
-// on a second use (the store's Find returns live grants only).
-type grantMemo struct {
-	mu   sync.Mutex
-	used []grant.GrantSpec
-}
-
-func (g *grantMemo) add(s grant.GrantSpec) {
-	g.mu.Lock()
-	g.used = append(g.used, s)
-	if len(g.used) > 256 {
-		g.used = g.used[len(g.used)-256:]
-	}
-	g.mu.Unlock()
-}
-
-func (g *grantMemo) matching(p grant.Presented) (grant.GrantSpec, bool) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	for i := len(g.used) - 1; i >= 0; i-- {
-		if g.used[i].SingleUse && g.used[i].Matches(p) {
-			return g.used[i], true
-		}
-	}
-	return grant.GrantSpec{}, false
 }
 
 // presented is what the broker knows about a host command, for grant matching.
@@ -81,10 +57,7 @@ func (m *Manager) useGrant(ctx context.Context, d *Dispatch, tool string, args [
 		return hostcmd.Decision{}, nil, "grant lookup: " + err.Error()
 	}
 	if len(cands) == 0 {
-		if g, ok := m.grantsUsed.matching(p); ok {
-			return hostcmd.Decision{}, nil, fmt.Sprintf("%v (grant %s, approved by %s)", grant.ErrConsumed, g.ID, g.ApprovedBy)
-		}
-		return hostcmd.Decision{}, nil, ""
+		return hostcmd.Decision{}, nil, m.whyNoGrant(ctx, p)
 	}
 	g := cands[0]
 	rule.Granted = true
@@ -100,11 +73,44 @@ func (m *Manager) useGrant(ctx context.Context, d *Dispatch, tool string, args [
 		use.cleanup()
 		return hostcmd.Decision{}, nil, err.Error()
 	}
-	if g.SingleUse {
-		m.grantsUsed.add(g)
-	}
 	use.spec = g
 	return dec, use, ""
+}
+
+// whyNoGrant names why no grant lifted a refusal, from this agent's grants
+// for this tool whatever their argv or state (grant.Store.Near):
+//   - a grant for this exact command is used, expired or revoked
+//     (grant.Explain) — the newest such approval's, the operator's latest
+//     word on it;
+//   - else a live one approves another command (grant.ErrMismatch).
+//
+// "" when none is near: the refusal stands as it is.
+func (m *Manager) whyNoGrant(ctx context.Context, p grant.Presented) string {
+	near, err := m.Grants.Near(ctx, p)
+	if err != nil {
+		return "grant lookup: " + err.Error()
+	}
+	now := time.Now()
+	same, other := -1, -1
+	for i, g := range near {
+		switch {
+		case g.Matches(p):
+			if grant.Explain(g, p, now) != nil && (same < 0 || !g.Issued.Before(near[same].Issued)) {
+				same = i
+			}
+		case other < 0 && g.State == grant.StateLive:
+			other = i
+		}
+	}
+	switch {
+	case same >= 0:
+		g := near[same]
+		return fmt.Sprintf("%v (grant %s, approved by %s)", grant.Explain(g, p, now), g.ID, g.ApprovedBy)
+	case other >= 0:
+		g := near[other]
+		return fmt.Sprintf("%v (grant %s approves `%s %s`)", grant.ErrMismatch, g.ID, g.Tool, g.Argv)
+	}
+	return ""
 }
 
 // stageGrantFiles copies the files g pins into a private scratch dir,

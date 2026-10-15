@@ -3,6 +3,7 @@
 package jail
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -209,4 +210,67 @@ func TestGrantScratchMustBePrivate(t *testing.T) {
 	if _, err := m.grantScratch(); err != nil {
 		t.Fatalf("a private one is used: %v", err)
 	}
+}
+
+// When no grant lifts a refusal, the refusal says why from the grants near
+// it (grant.Store.Near): this command's grant is used, expired or revoked —
+// the newest approval's state — or a live grant approves another command.
+// Another agent's grants, or none, say nothing.
+func TestWhyNoGrant(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	store := grant.NewMemStoreClock(func() time.Time { return now })
+	m := &Manager{Grants: store}
+	apply := []string{"apply", "-input=false", "plan.tfplan"}
+	p := grant.Presented{AgentID: "member-ops-h1", Tool: "terraform", Argv: grant.ParseArgv(apply)}
+	mint := func(agent string, argv []string, ttl time.Duration) grant.GrantSpec {
+		now = now.Add(time.Second) // each approval newer than the last
+		g, err := store.Mint(ctx, grant.GrantSpec{AgentID: agent, Tool: "terraform", Argv: grant.ParseArgv(argv),
+			Expiry: now.Add(ttl), SingleUse: true, ApprovedBy: "op@example.test"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return g
+	}
+	want := func(step string, err error, id string) {
+		t.Helper()
+		got := m.whyNoGrant(ctx, p)
+		if err == nil {
+			if got != "" {
+				t.Fatalf("%s: nothing to say, got %q", step, got)
+			}
+			return
+		}
+		if !strings.Contains(got, err.Error()) || !strings.Contains(got, id) {
+			t.Fatalf("%s: want %v naming %s, got %q", step, err, id, got)
+		}
+	}
+
+	want("no grants", nil, "")
+	mint("member-ops-h2", apply, time.Hour)
+	want("another agent's grant", nil, "")
+
+	other := mint("member-ops-h1", []string{"apply", "plan.tfplan"}, time.Hour)
+	want("a live grant for another command", grant.ErrMismatch, other.ID)
+	if got := m.whyNoGrant(ctx, p); !strings.Contains(got, "`terraform apply plan.tfplan`") {
+		t.Fatalf("the mismatch shows what was approved: %q", got)
+	}
+	store.Revoke(ctx, other.ID)
+	want("another command's grant, not live", nil, "")
+
+	used := mint("member-ops-h1", apply, time.Hour)
+	if _, err := store.Consume(ctx, used.ID, p); err != nil {
+		t.Fatal(err)
+	}
+	live := mint("member-ops-h1", []string{"apply", "other.tfplan"}, time.Hour)
+	want("this command's grant, used — over another command's live one", grant.ErrConsumed, used.ID)
+	_ = live
+
+	expired := mint("member-ops-h1", apply, time.Minute)
+	now = now.Add(2 * time.Minute)
+	want("the newest approval of this command expired", grant.ErrExpired, expired.ID)
+
+	revoked := mint("member-ops-h1", apply, time.Hour)
+	store.Revoke(ctx, revoked.ID)
+	want("the newest approval of this command revoked", grant.ErrRevoked, revoked.ID)
 }
