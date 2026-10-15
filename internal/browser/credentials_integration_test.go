@@ -550,7 +550,7 @@ func TestCredentialEmailCode(t *testing.T) {
 		if strings.Contains(cmd, "BODY.PEEK[])") {
 			bodies++
 		}
-		if strings.HasPrefix(strings.Fields(cmd+" x x")[1], "SELECT") {
+		if strings.HasPrefix(strings.Fields(cmd + " x x")[1], "SELECT") {
 			t.Fatal("the mailbox was opened read-write")
 		}
 	}
