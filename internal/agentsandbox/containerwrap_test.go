@@ -19,7 +19,7 @@ func wrapPolicy(t *testing.T) Policy {
 	p.Container.Session = &ContainerSession{
 		Engine: "/usr/bin/docker", Name: "conductor-d-agent_a-1", User: "1000:1000", LaunchID: "L1",
 		Helper: sandbox.ContainerHelperDir + "/conductor",
-		Env:    []string{"HTTPS_PROXY=http://conductor:PCRED@127.0.0.1:40000", "CONDUCTOR_ENDPOINT=unix:///run/conductor/s/conductor.sock", "CONDUCTOR_SKILL_TOKEN=tok-SECRET"},
+		Env:    []string{"HTTPS_PROXY=http://conductor:PCRED@127.0.0.1:40000", "NO_PROXY=127.0.0.1,localhost,::1", "CONDUCTOR_ENDPOINT=unix:///run/conductor/s/conductor.sock", "CONDUCTOR_SKILL_TOKEN=tok-SECRET"},
 	}
 	return p
 }
@@ -73,6 +73,14 @@ func TestWrapContainer(t *testing.T) {
 	}
 	if env["HOME"] != "/home/op" || env["DOCKER_HOST"] != "unix:///var/run/docker.sock" {
 		t.Errorf("the engine client lost its own HOME/DOCKER_HOST: %v", env)
+	}
+	// The engine CLI never goes through the agent's proxy (a tcp:// engine):
+	// its own exemption is everything; the agent's is on the command line.
+	if env["NO_PROXY"] != "*" || env["no_proxy"] != "*" {
+		t.Errorf("the client would send its engine traffic through the agent's proxy: NO_PROXY=%q", env["NO_PROXY"])
+	}
+	if !strings.Contains(argv, "--env NO_PROXY=127.0.0.1,localhost,::1") {
+		t.Errorf("the agent's NO_PROXY is not its own: %s", argv)
 	}
 	if _, ok := env["GH_TOKEN"]; ok {
 		t.Error("GH_TOKEN reached the client env (and so could be passed)")

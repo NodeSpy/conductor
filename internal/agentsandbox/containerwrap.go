@@ -14,7 +14,11 @@ import (
 // line rather than passed through from the client's environment: the
 // client needs its own value of each (its HOME holds its config), and none
 // is a secret.
-var containerExplicit = map[string]bool{"HOME": true, "PATH": true, "TMPDIR": true, "USER": true, "LOGNAME": true, "SHELL": true, "PWD": true}
+var containerExplicit = map[string]bool{"HOME": true, "PATH": true, "TMPDIR": true, "USER": true, "LOGNAME": true, "SHELL": true, "PWD": true,
+	// The agent's proxy exemptions: the client's own say "everything" —
+	// the agent's HTTP(S)_PROXY rides the client's environment (it carries
+	// a credential), and an engine CLI honours it for a tcp:// engine.
+	"NO_PROXY": true, "no_proxy": true}
 
 // WrapContainer realizes p — prepared by the daemon (Containers.Prepare:
 // p.Container.Session) — around argv: a `<engine> exec` into the identity's
@@ -66,7 +70,7 @@ func WrapContainer(p Policy, argv []string, d Deps) (*Launch, error) {
 	if err != nil {
 		return nil, err
 	}
-	env := append(EngineClientEnv(d.Inherited), client...)
+	env := append(append(EngineClientEnv(d.Inherited), client...), "NO_PROXY=*", "no_proxy=*")
 	signal := func(sig string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()

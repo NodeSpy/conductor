@@ -44,6 +44,7 @@ services:
         func/cost func/budget1 func/budget2 func/budget3
         func/gatepass func/gatefail func/blob func/hist func/watch
         grpz/sandbox grpz/review grpz/opencode grpz/deck grpz/hoff grpz/hoffout
+        grpzc/box
     volumes:
       - ./seed:/seed:ro
     # git daemon (started by the seed script) serves git://forge:9418/<owner>/<repo>.git
@@ -171,3 +172,39 @@ services:
     volumes:
       - ./config:/etc/conductor:ro
     command: ["bash", "/etc/conductor/entrypoint.sh", "/etc/conductor/conductor.yaml"]
+
+  # The container-backend daemon (group ZC): its agents run in containers
+  # (isolation mode: container) on a Docker engine of the stack's own — a
+  # docker-in-docker sidecar, never the host's engine. The state volume is
+  # mounted at the SAME path in both, so the agent containers' bind mounts
+  # (the workspace, conductor's helper) resolve inside the engine.
+  dind:
+    image: docker:27-dind
+    privileged: true
+    # On a loaded host dockerd can give up waiting for its containerd.
+    restart: on-failure
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    entrypoint: ["sh", "-c", "mkdir -p /home/conductor/cdata && chown 1000:1000 /home/conductor/cdata && exec dockerd-entrypoint.sh"]
+    volumes:
+      - cdata:/home/conductor/cdata
+      - dind-lib:/var/lib/docker
+  conductor-container:
+    <<: *image
+    depends_on: [forge, mock-github, sink-catcher, dind]
+    user: "1000:1000"
+    environment:
+      HOME: /home/conductor
+      XDG_STATE_HOME: /home/conductor/cdata/xdg
+      DOCKER_HOST: tcp://dind:2375
+      PC_GITHUB_API_BASE: "http://mock-github:8080"
+      CONDUCTOR_GIT_REMOTE_BASE: "git://forge/"
+      FORGE_BASE: "git://forge/"
+    volumes:
+      - ./config:/etc/conductor:ro
+      - cdata:/home/conductor/cdata
+    command: ["bash", "/etc/conductor/entrypoint-container.sh", "/etc/conductor/container.yaml"]
+
+volumes:
+  cdata:
+  dind-lib:

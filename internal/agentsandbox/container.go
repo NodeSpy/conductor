@@ -138,28 +138,47 @@ type Containers struct {
 	boxes map[string]*box
 	locks map[string]*sync.Mutex
 
-	startOnce sync.Once
-	startErr  error
+	startMu  sync.Mutex
+	started  bool
+	startErr error
+	startAt  time.Time
 }
 
-// Start finds the engine and reconciles this daemon's containers, once.
+// startRetry is how soon a failed Start is tried again: an engine not up
+// yet (Docker Desktop starting after the daemon at login) refuses launches
+// until it is, never for the daemon's lifetime.
+const startRetry = 5 * time.Second
+
+// Start finds the engine and reconciles this daemon's containers. Success
+// is kept; a failure is retried by a later call (at most every startRetry).
 func (c *Containers) Start(ctx context.Context) error {
-	c.startOnce.Do(func() {
-		if c.Engine == nil {
-			if c.Resolve == nil {
-				c.startErr = errors.New("agentsandbox: no container engine")
-				return
-			}
-			e, err := c.Resolve()
-			if err != nil {
-				c.startErr = err
-				return
-			}
-			c.Engine = e
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+	if c.started {
+		return nil
+	}
+	if c.startErr != nil && time.Since(c.startAt) < startRetry {
+		return c.startErr
+	}
+	c.startAt = time.Now()
+	if c.Engine == nil {
+		if c.Resolve == nil {
+			c.startErr = errors.New("agentsandbox: no container engine")
+			return c.startErr
 		}
-		c.startErr = c.Reconcile(ctx)
-	})
-	return c.startErr
+		e, err := c.Resolve()
+		if err != nil {
+			c.startErr = err
+			return err
+		}
+		c.Engine = e
+	}
+	if err := c.Reconcile(ctx); err != nil {
+		c.startErr = err
+		return err
+	}
+	c.started, c.startErr = true, nil
+	return nil
 }
 
 // box is one container this daemon runs.

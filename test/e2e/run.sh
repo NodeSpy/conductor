@@ -203,6 +203,7 @@ setup() {
   done
   if [ "$MODE" != "live" ]; then
     wait_for 60 cexec conductor-sandbox test -S /home/conductor/data/control.sock || fatal "conductor-sandbox daemon not ready (control socket)"
+    zc_setup
   fi
   echo "stack ready"
 }
@@ -1769,6 +1770,14 @@ main() {
     [ "$FAIL" -eq 0 ]
     return
   fi
+  if [ -n "${E2E_ONLY:-}" ]; then
+    # Iterating on some groups (E2E_ONLY="group_ZC_container …"): the
+    # evidence run is always the whole suite.
+    for g in $E2E_ONLY; do "$g"; done
+    print_matrix
+    [ "$FAIL" -eq 0 ]
+    return
+  fi
   group_A_resolution
   group_B_fixer
   group_I_identity
@@ -1794,6 +1803,7 @@ main() {
   group_Y_listeners_github_smee
   group_W_stepdone
   group_Z_sandbox
+  group_ZC_container
   print_matrix
   [ "$FAIL" -eq 0 ]
 }
@@ -1983,4 +1993,94 @@ group_Z_sandbox() {
   fi
 }
 
+# ---- group ZC: the agent sandbox's container backend -------------------------
+# zc_setup readies the stack's own engine (the dind sidecar — never the
+# host's): conductor's e2e image, loaded into it, minus the decoy key, is the
+# agent image (an agent image carries the agent CLI — here the fake one).
+zc_setup() {
+  wait_for 240 cexec dind docker info >/dev/null || fatal "dind not ready"
+  docker save "conductor-e2e:$E2E_IMAGE_TAG" | dc exec -T dind docker load >/dev/null || fatal "load the e2e image into dind"
+  printf 'FROM conductor-e2e:%s\nUSER root\nRUN rm -rf /home/conductor/.ssh\n' "$E2E_IMAGE_TAG" \
+    | dc exec -T dind docker build -q -t conductor-e2e-agent:latest - >/dev/null || fatal "build the agent image in dind"
+  wait_for 60 cexec conductor-container test -S /home/conductor/cdata/control.sock || fatal "conductor-container daemon not ready (control socket)"
+}
+zc_audit() {
+  local out p line all
+  out="$(cexec conductor-container cat /home/conductor/cdata/audit.jsonl 2>/dev/null)" || return 1
+  while IFS= read -r line; do
+    all=1
+    for p in "$@"; do case "$line" in *"$p"*) ;; *) all=0; break ;; esac; done
+    [ "$all" = 1 ] && return 0
+  done <<<"$out"
+  return 1
+}
+zc_engine() { cexec dind docker "$@"; }
+
+group_ZC_container() {
+  banner "Group ZC — the agent sandbox's container backend: an agent in its identity's container"
+  local C=conductor-container CFG=/etc/conductor/container.yaml repo=grpzc/box
+  local G="/srv/git/$repo.git" main_before probe kv k want got sigs name
+  main_before="$(cexec forge git --git-dir="$G" rev-parse main 2>/dev/null | tr -d '\r')"
+  force "$C" merge_conflict "$repo#1" "$CFG" >/dev/null
+  if wait_for 180 z_probe_landed "$repo"; then
+    ok "ZC the containerized agent's work reached the forge — pushed by conductor" ZC pushed
+  else
+    bad "ZC containerized work pushed" ZC pushed "no SANDBOX_PROBE.md on $repo pr-1"
+    dc logs --tail 60 "$C"
+    return
+  fi
+  probe="$(cexec forge git --git-dir="$G" show pr-1:SANDBOX_PROBE.md | tr -d '\r')"
+  printf '%s\n' "$probe" | sed 's/^/      /'
+  for kv in "secret=denied" "conductor-state=denied" "credentials-env=none" "own-push=refused" \
+            "network=unreachable" "git.push=ok" "step.done=ok" "home=/home/agent" "hostname=conductor-agent" "engine-socket=absent"; do
+    k="${kv%%=*}"; want="${kv#*=}"; got="$(probe_line "$probe" "$k")"
+    if [ "$got" = "$want" ]; then
+      ok "ZC containerized agent: $k → $want" ZC "$k"
+    else
+      bad "ZC containerized agent: $k" ZC "$k" "want $want, got '$got'"
+    fi
+  done
+  got="$(probe_line "$probe" git.push-other-ref)"
+  case "$got" in refused:*) ok "ZC git.push refuses to name another ref" ZC other-ref ;;
+    *) bad "ZC git.push other ref" ZC other-ref "got '$got'" ;; esac
+  cexec "$C" cat /home/conductor/cdata/keys/allowed_signers | dc exec -T forge sh -c 'cat > /tmp/allowed_signers_zc'
+  sigs="$(cexec forge git --git-dir="$G" -c gpg.ssh.allowedSignersFile=/tmp/allowed_signers_zc \
+    log --format='%G?' refs/pull/1/head..pr-1 | tr -d '\r' | sort -u | tr '\n' ' ')"
+  if [ "$sigs" = "G " ]; then ok "ZC every pushed commit is signed (G) by conductor's key" ZC signed
+  else bad "ZC pushed commits signed" ZC signed "signature verdicts: '$sigs'"; fi
+  if [ "$(cexec forge git --git-dir="$G" rev-parse main | tr -d '\r')" = "$main_before" ]; then
+    ok "ZC no other ref moved (main untouched)" ZC refs
+  else bad "ZC main untouched" ZC refs "main moved"; fi
+  if wait_for 15 zc_audit '"event":"git_push"' '"signed":true' '"outcome":"ok"'; then
+    ok "ZC the push is audited (git_push, signed)" ZC audit
+  else bad "ZC push audited" ZC audit "no signed git_push audit row"; fi
+
+  # The engine's own view: one persistent container for the identity, which
+  # outlives the dispatch, hardened as configured; its HOME a volume.
+  name="$(zc_engine ps -a --filter label=conductor.sandbox=agent --filter label=conductor.persistent=true --format '{{.Names}}' | tr -d '\r' | head -1)"
+  if [ -n "$name" ]; then ok "ZC the identity's persistent container outlives its dispatch ($name)" ZC persistent
+  else bad "ZC persistent container" ZC persistent "none in the engine"; return; fi
+  got="$(zc_engine inspect "$name" --format '{{.HostConfig.Privileged}} {{.HostConfig.NetworkMode}} {{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}} {{.HostConfig.PidsLimit}} {{.Config.User}}' | tr -d '\r')"
+  case "$got" in "false none true [ALL] [no-new-privileges] 512 1000:1000") ok "ZC hardened: not privileged, network none, read-only root, caps dropped, nnp, pids, non-root" ZC hardened ;;
+    *) bad "ZC hardened" ZC hardened "inspect: $got" ;; esac
+  got="$(zc_engine inspect "$name" --format '{{range .Mounts}}{{.Type}}:{{.Destination}} {{end}}' | tr -d '\r')"
+  case "$got" in *docker.sock*|*/home/conductor/cdata/keys*|*"/home/conductor/cdata/state"*) bad "ZC mounts" ZC mounts "a forbidden mount: $got" ;;
+    *volume:/home/agent*/run/conductor/bin*|*/run/conductor/bin*volume:/home/agent*) ok "ZC mounts: the HOME volume, the workspace and its git paths, conductor's helper — no engine socket, no keys" ZC mounts ;;
+    *) bad "ZC mounts" ZC mounts "got: $got" ;; esac
+
+  # Archive the identity: its container and HOME volume go.
+  local ident
+  ident="$(cexec "$C" conductor sandbox ls --config "$CFG" 2>/dev/null | tr -d '\r' | awk -F'\t' -v n="$name" '$1==n {print $3}')"
+  if [ -z "$ident" ]; then bad "ZC sandbox ls names the identity" ZC ls "no row for $name"; return; fi
+  ok "ZC conductor sandbox ls lists it ($ident)" ZC ls
+  cexec "$C" conductor sandbox archive "$ident" --config "$CFG" >/dev/null 2>&1
+  if [ -z "$(zc_engine ps -a -q --filter label=conductor.sandbox=agent | tr -d '\r')" ] && [ -z "$(zc_engine volume ls -q --filter label=conductor.sandbox=agent | tr -d '\r')" ]; then
+    ok "ZC archiving the identity removes its container and HOME volume" ZC archive
+  else
+    bad "ZC archive" ZC archive "left: $(zc_engine ps -a --format '{{.Names}}' | tr '\n' ' ') / $(zc_engine volume ls -q | tr '\n' ' ')"
+  fi
+}
+
+
 main "$@"
+

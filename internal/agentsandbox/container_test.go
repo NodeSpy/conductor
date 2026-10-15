@@ -728,3 +728,45 @@ func TestContainerFor(t *testing.T) {
 		t.Errorf("%+v", *got)
 	}
 }
+
+// An engine that is not up yet refuses launches until it is — then they
+// run; the failure is not kept for the daemon's lifetime.
+func TestContainersStartRecovers(t *testing.T) {
+	e := newFakeEngine(t)
+	e.fail["ps"] = errors.New("cannot connect to the engine")
+	c := fakeContainers(t, e)
+	p := fakePolicy(t, "agent:late", false)
+	if _, err := c.Prepare(context.Background(), &p); err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("engine down: %v", err)
+	}
+	// Retried at most every startRetry, not on every launch.
+	if _, err := c.Prepare(context.Background(), &p); err == nil {
+		t.Fatal("prepared while the engine was down")
+	}
+	if n := len(e.ran("ps")); n != 1 {
+		t.Errorf("the engine was asked %d times within startRetry", n)
+	}
+	e.mu.Lock()
+	delete(e.fail, "ps")
+	e.mu.Unlock()
+	c.startMu.Lock()
+	c.startAt = time.Now().Add(-startRetry)
+	c.startMu.Unlock()
+	p = fakePolicy(t, "agent:late", false)
+	rel, err := c.Prepare(context.Background(), &p)
+	if err != nil {
+		t.Fatalf("the engine is up: %v", err)
+	}
+	rel()
+	// Started: not reconciled again.
+	before := len(e.ran("ps"))
+	p = fakePolicy(t, "agent:late", false)
+	rel, err = c.Prepare(context.Background(), &p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel()
+	if len(e.ran("ps"))-before != 1 { // the launch's own list, no second reconcile
+		t.Errorf("reconciled again after a successful start (%d lists)", len(e.ran("ps"))-before)
+	}
+}
