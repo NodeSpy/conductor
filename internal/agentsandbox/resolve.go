@@ -2,6 +2,7 @@ package agentsandbox
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/NodeSpy/conductor/internal/skill"
@@ -49,7 +50,13 @@ func (r *Resolver) registry() *Registry {
 // ANTHROPIC_BASE_URL, joins the allowlist or the relays). A cwd conductor
 // registered gets its entry's identity; any other directory a default
 // policy: identity = the directory, the model endpoints only.
-func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string) (Policy, error) {
+//
+// scratchOK: the launch is not an agent session in a directory of the
+// operator's choosing (a launcher's own utility process — paseo listing a
+// provider's models from its daemon's cwd). A cwd that may not be a
+// workspace (the home, /, conductor's state) then gets the tool's scratch
+// workspace instead of a refusal.
+func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string, scratchOK bool) (Policy, error) {
 	if !filepath.IsAbs(cwd) {
 		return Policy{}, fmt.Errorf("agentsandbox: cwd %q is not absolute", cwd)
 	}
@@ -61,9 +68,30 @@ func (r *Resolver) PolicyFor(cwd, tool string, launcherEnv []string) (Policy, er
 	}
 	ws := canon(cwd)
 	if err := r.defaultAllowed(ws); err != nil {
-		return Policy{}, err
+		if !scratchOK {
+			return Policy{}, err
+		}
+		e, serr := r.scratchEntry(CanonicalTool(tool))
+		if serr != nil {
+			return Policy{}, serr
+		}
+		return r.PolicyForEntry(e, tool, launcherEnv)
 	}
 	return r.PolicyForEntry(DefaultEntry(ws), tool, launcherEnv)
+}
+
+// scratchEntry is a tool's scratch workspace: an empty directory of its
+// own under the identity homes, for a launch with no workspace to show.
+func (r *Resolver) scratchEntry(tool string) (Entry, error) {
+	if tool == "" {
+		tool = "agent"
+	}
+	id := "scratch:" + tool
+	ws := filepath.Join(r.StateRoot, IdentityKey(id), "work")
+	if err := os.MkdirAll(ws, 0o700); err != nil {
+		return Entry{}, err
+	}
+	return Entry{Workspace: canon(ws), Identity: id, Skill: &skill.Identity{Agent: "sandbox:scratch"}}, nil
 }
 
 // DefaultEntry is the entry for a directory conductor did not create: the

@@ -255,9 +255,9 @@ func piAvailable(home string) bool {
 		return false
 	}
 	for _, p := range list {
-		id, _ := p["id"].(string)
+		id, _ := p["provider"].(string)
 		if id == "" {
-			id, _ = p["name"].(string)
+			id, _ = p["id"].(string)
 		}
 		if id != "pi" {
 			continue

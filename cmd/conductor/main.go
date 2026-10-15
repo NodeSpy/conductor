@@ -1384,6 +1384,10 @@ type controlRequest struct {
 	Cwd  string   `json:"cwd,omitempty"`
 	Tool string   `json:"tool,omitempty"`
 	Env  []string `json:"env,omitempty"`
+	// Scratch: the launcher named no agent workspace (paseo's own utility
+	// spawn of a provider): a cwd that may not be a workspace gets the
+	// tool's scratch workspace instead of a refusal.
+	Scratch bool `json:"scratch,omitempty"`
 }
 
 type controlResponse struct {

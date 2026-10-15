@@ -66,7 +66,9 @@ func sandboxApplies(host string, opt launchOpts) bool {
 }
 
 // DispatchIdentity is dispatch.SandboxIdentity (kept for callers here).
-func DispatchIdentity(req dispatch.Request, tool string) string { return dispatch.SandboxIdentity(req, tool) }
+func DispatchIdentity(req dispatch.Request, tool string) string {
+	return dispatch.SandboxIdentity(req, tool)
+}
 
 // prepareAgentSandbox builds a cli/acp launch's sandbox and wraps argv in
 // it. The returned env is COMPLETE: the caller runs the launch with exactly

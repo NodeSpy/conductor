@@ -35,7 +35,7 @@ func sandboxPolicyResponse(conn net.Conn, req controlRequest, log func(string, .
 	if r == nil {
 		return controlResponse{Error: "the agent sandbox is off in this conductor (sandbox.agents: off)"}
 	}
-	pol, err := r.PolicyFor(req.Cwd, req.Tool, req.Env)
+	pol, err := r.PolicyFor(req.Cwd, req.Tool, req.Env, req.Scratch)
 	if err != nil {
 		log("sandbox-policy for %s refused: %v", req.Cwd, err)
 		return controlResponse{Error: err.Error()}

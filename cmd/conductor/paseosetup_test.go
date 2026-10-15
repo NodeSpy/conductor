@@ -35,7 +35,7 @@ func setupOut(t *testing.T, args ...string) string {
 }
 
 func TestPaseoSetupWritesWrapsAndReloads(t *testing.T) {
-	calls := stubPaseo(t, `[{"id":"claude","available":true},{"id":"pi","available":true}]`)
+	calls := stubPaseo(t, `[{"provider":"claude","status":"available"},{"provider":"pi","status":"available"}]`)
 	home := t.TempDir()
 	cfg := filepath.Join(home, "config.json")
 	os.WriteFile(cfg, []byte(`{"agents":{"providers":{"claude":{"command":["/opt/claude-wrap"]},"pi":{"enabled":true}}}}`), 0o600)
@@ -78,7 +78,7 @@ func TestPaseoSetupWritesWrapsAndReloads(t *testing.T) {
 }
 
 func TestPaseoSetupSkipsPiWhenAbsentAndHonorsDryRun(t *testing.T) {
-	calls := stubPaseo(t, `[{"id":"claude","available":true},{"id":"pi","available":false}]`)
+	calls := stubPaseo(t, `[{"provider":"claude","status":"available"},{"provider":"pi","status":"unavailable"}]`)
 	home := t.TempDir()
 	out := setupOut(t, "--home", home, "--dry-run")
 	if strings.Contains(out, "added     pi-sandboxed") || !strings.Contains(out, "pi: not offered") || !strings.Contains(out, "added=2") {

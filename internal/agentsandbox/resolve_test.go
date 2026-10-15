@@ -130,7 +130,7 @@ func TestResolverDefaultPolicy(t *testing.T) {
 		Mint: func(id skill.Identity) (string, error) { minted = append(minted, id); return "fresh", nil },
 		GOOS: "linux",
 	}
-	p, err := r.PolicyFor(ws, "claude", []string{"ANTHROPIC_BASE_URL=http://127.0.0.1:3456"})
+	p, err := r.PolicyFor(ws, "claude", []string{"ANTHROPIC_BASE_URL=http://127.0.0.1:3456"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestResolverDefaultPolicy(t *testing.T) {
 	if p.Token != "fresh" || p.Socket != "/s/memory.sock" || len(minted) != 1 || len(minted[0].Policy.Verbs) != 0 {
 		t.Fatalf("a fresh token that grants no verb: %+v %+v", p, minted)
 	}
-	if _, err := r.PolicyFor(ws, "claude", nil); err != nil || len(minted) != 2 {
+	if _, err := r.PolicyFor(ws, "claude", nil, false); err != nil || len(minted) != 2 {
 		t.Fatal("every launch mints its own token")
 	}
 	if !within(p.Home, r.StateRoot) {
@@ -151,13 +151,25 @@ func TestResolverDefaultPolicy(t *testing.T) {
 	}
 	for _, bad := range []string{"/", real, filepath.Dir(real), state, filepath.Join(state, "worktrees", "x"), "relative"} {
 		os.MkdirAll(filepath.Join(state, "worktrees", "x"), 0o700)
-		if _, err := r.PolicyFor(bad, "claude", nil); err == nil {
+		if _, err := r.PolicyFor(bad, "claude", nil, false); err == nil {
 			t.Errorf("default workspace %q must be refused", bad)
 		}
 	}
+	// A launcher's utility process with no agent workspace (paseo listing a
+	// provider's models from its own cwd): the tool's empty scratch
+	// workspace — never the refused directory itself.
+	for _, bad := range []string{"/", real} {
+		p, err := r.PolicyFor(bad, "codex", nil, true)
+		if err != nil || p.Identity != "scratch:codex" || !within(p.Workspace, r.StateRoot) || p.Workspace == canon(bad) {
+			t.Fatalf("scratch for %s: %+v %v", bad, p, err)
+		}
+	}
+	if p, _ := r.PolicyFor(ws, "codex", nil, true); p.Identity != "dir:"+canon(ws) {
+		t.Fatalf("an acceptable directory is still its own workspace: %+v", p)
+	}
 	// No socket or no mint: no token, still a policy.
 	r.Socket = ""
-	if p, err := r.PolicyFor(ws, "codex", nil); err != nil || p.Token != "" || p.Socket != "" {
+	if p, err := r.PolicyFor(ws, "codex", nil, false); err != nil || p.Token != "" || p.Socket != "" {
 		t.Fatalf("%+v %v", p, err)
 	}
 }
@@ -176,7 +188,7 @@ func TestResolverRegisteredWorkspace(t *testing.T) {
 		}
 		return "tok", nil
 	}}
-	p, err := r.PolicyFor(sub, "claude", nil)
+	p, err := r.PolicyFor(sub, "claude", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

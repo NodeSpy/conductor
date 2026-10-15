@@ -117,7 +117,7 @@ func cmdSandboxExec(args []string) int {
 		fmt.Fprintf(os.Stderr, "conductor sandbox exec: %v\n%s", err, sandboxUsage)
 		return 2
 	}
-	cwd, err := os.Getwd()
+	cwd, agentCwd, err := sandboxExecCwd()
 	if err != nil {
 		return refuse("no working directory: %v", err)
 	}
@@ -126,7 +126,7 @@ func cmdSandboxExec(args []string) int {
 		tool = argv[0]
 	}
 	sock := sandboxControlSocket(o)
-	pol, err := fetchSandboxPolicy(sock, cwd, tool, modelRouteEnv(os.Environ()))
+	pol, err := fetchSandboxPolicy(sock, controlRequest{Cmd: "sandbox-policy", Cwd: cwd, Tool: tool, Env: modelRouteEnv(os.Environ()), Scratch: !agentCwd})
 	if err != nil {
 		return refuse("%v — an agent is never launched unsandboxed", err)
 	}
@@ -136,6 +136,25 @@ func cmdSandboxExec(args []string) int {
 	}
 	defer cleanup()
 	return runSandboxed(launch)
+}
+
+// sandboxExecCwd is the agent's working directory: paseo names it in
+// PASEO_AGENT_CWD — for a provider whose process serves its sessions from
+// another directory (codex app-server inherits paseo's own cwd and gets the
+// session's over its protocol) that, not our own cwd, is the workspace. The
+// launcher sets it outside any sandbox; it is the operator's paseo speaking.
+//
+// agent reports that the launcher named the agent's directory; without it
+// (paseo spawning a provider for a utility call: listing its models) the
+// daemon may answer with a scratch workspace.
+func sandboxExecCwd() (cwd string, agent bool, err error) {
+	if v := os.Getenv("PASEO_AGENT_CWD"); v != "" && filepath.IsAbs(v) {
+		if fi, err := os.Stat(v); err == nil && fi.IsDir() {
+			return filepath.Clean(v), true, nil
+		}
+	}
+	cwd, err = os.Getwd()
+	return cwd, false, err
 }
 
 // wrapSandboxExec realizes pol around argv with this process as the host
@@ -252,14 +271,14 @@ func sandboxControlSocket(o sandboxExecOpts) string {
 
 // fetchSandboxPolicy asks the daemon for this launch's policy and a fresh
 // token. Any failure is a refusal.
-func fetchSandboxPolicy(sock, cwd, tool string, env []string) (agentsandbox.Policy, error) {
+func fetchSandboxPolicy(sock string, req controlRequest) (agentsandbox.Policy, error) {
 	conn, err := net.DialTimeout("unix", sock, 10*time.Second)
 	if err != nil {
 		return agentsandbox.Policy{}, fmt.Errorf("the conductor daemon is unreachable at %s (%v)", sock, err)
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(60 * time.Second))
-	if err := json.NewEncoder(conn).Encode(controlRequest{Cmd: "sandbox-policy", Cwd: cwd, Tool: tool, Env: env}); err != nil {
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return agentsandbox.Policy{}, fmt.Errorf("the conductor daemon at %s: %v", sock, err)
 	}
 	var resp controlResponse
@@ -267,7 +286,7 @@ func fetchSandboxPolicy(sock, cwd, tool string, env []string) (agentsandbox.Poli
 		return agentsandbox.Policy{}, fmt.Errorf("the conductor daemon at %s gave no policy: %v", sock, err)
 	}
 	if resp.Error != "" {
-		return agentsandbox.Policy{}, fmt.Errorf("the conductor daemon has no sandbox policy for %s: %s", cwd, resp.Error)
+		return agentsandbox.Policy{}, fmt.Errorf("the conductor daemon has no sandbox policy for %s: %s", req.Cwd, resp.Error)
 	}
 	if resp.Policy == nil {
 		return agentsandbox.Policy{}, fmt.Errorf("the conductor daemon at %s returned no policy (an older conductor?)", sock)
