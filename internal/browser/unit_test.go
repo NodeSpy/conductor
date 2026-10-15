@@ -555,3 +555,69 @@ func TestPlatformArgs(t *testing.T) {
 		t.Fatal(a)
 	}
 }
+
+// TestBoundaries pins every limit at its exact edge.
+func TestBoundaries(t *testing.T) {
+	root := t.TempDir()
+	ws := filepath.Join(root, "ws")
+	os.MkdirAll(ws, 0o755)
+	os.WriteFile(filepath.Join(ws, "ten"), []byte("0123456789"), 0o600)
+	if _, err := readWorkspace(ws, "ten", nil, 10, filepath.Join(root, "d1")); err != nil {
+		t.Fatalf("a file exactly at the upload limit: %v", err)
+	}
+	if _, err := readWorkspace(ws, "ten", nil, 9, filepath.Join(root, "d2")); err == nil {
+		t.Fatal("a file one byte over the upload limit")
+	}
+	if _, err := writeWorkspace(ws, "w/at", nil, strings.NewReader("0123456789"), 10); err != nil {
+		t.Fatalf("a write exactly at the limit: %v", err)
+	}
+	if _, err := writeWorkspace(ws, "w/over", nil, strings.NewReader("0123456789"), 9); err == nil {
+		t.Fatal("a write one byte over the limit")
+	}
+	for i, want := range []string{"n/x.png", "n/x-1.png", "n/x-2.png"} {
+		if got, _ := writeWorkspace(ws, "n/x.png", nil, strings.NewReader("p"), 10); got != want {
+			t.Fatalf("write %d: %q", i, got)
+		}
+	}
+	seed := "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+	for q, ok := range map[string]bool{"digits=6": true, "digits=8": true, "digits=5": false, "digits=9": false,
+		"period=1": true, "period=600": true, "period=0": false, "period=601": false} {
+		if _, err := OTPCode("otpauth://totp/x?secret="+seed+"&"+q, time.Unix(59, 0)); (err == nil) != ok {
+			t.Errorf("%s: %v", q, err)
+		}
+	}
+	now := time.Unix(1_800_000_000, 0)
+	if got := FilterCookies("a.test", []Cookie{{Name: "n", Value: "v", Domain: "a.test", Expires: float64(now.Unix())}, {Name: "z", Value: "v", Domain: "a.test", Expires: 0}}, now); len(got) != 2 {
+		t.Fatalf("a cookie expiring this second, and a session cookie, are kept: %v", got)
+	}
+	f := filepath.Join(root, "dl")
+	os.WriteFile(f, []byte("xx abcd yy"), 0o600)
+	if refuseSecretFile(f, []string{"abcd"}) == nil {
+		t.Fatal("a 4-character filled value in a download")
+	}
+	if refuseSecretFile(f, []string{"abc"}) != nil {
+		t.Fatal("a value under 4 characters is too short to match safely")
+	}
+	if got := safeName(strings.Repeat("a", 116) + ".txt"); len(got) != 120 || got != strings.Repeat("a", 116)+".txt" {
+		t.Fatalf("a name of exactly 120 stays: %d", len(got))
+	}
+	if got := safeName(strings.Repeat("a", 117) + ".txt"); len(got) != 120 || !strings.HasSuffix(got, ".txt") {
+		t.Fatalf("121 is cut to 120, the extension kept: %q", got)
+	}
+	ext16 := "." + strings.Repeat("e", 15)
+	if got := safeName(strings.Repeat("a", 130) + ext16); !strings.HasSuffix(got, ext16) {
+		t.Fatalf("a 16-byte extension is kept: %q", got)
+	}
+	if got := safeName(strings.Repeat("a", 130) + "." + strings.Repeat("e", 16)); len(got) != 120 || strings.HasSuffix(got, "."+strings.Repeat("e", 16)) {
+		t.Fatalf("a longer extension is not: %q", got)
+	}
+	for k, ok := range map[string]bool{"0": true, "9": true, "F1": true, "F12": true, "F0": false, "F13": false, "f5": true} {
+		d, _, err := parseKey(k)
+		if (err == nil) != ok {
+			t.Errorf("key %s: %v", k, err)
+		}
+		if ok && (k == "0" || k == "9") && d.code != "Digit"+k {
+			t.Errorf("key %s: code %s", k, d.code)
+		}
+	}
+}
