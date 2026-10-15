@@ -11,6 +11,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/sandbox"
+	"github.com/NodeSpy/conductor/internal/skill"
 )
 
 // SandboxWiring is the daemon's agent sandbox (docs/design/agent-sandbox.md),
@@ -151,7 +152,9 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	}
 	pol.Socket = w.Resolver.Socket
 	if a.skillEnv && a.req != nil && pol.Socket != "" {
-		if se := dispatch.SkillEnv(*a.req, "unix://"+pol.Socket); se != nil {
+		sb := &skill.SandboxBinding{Identity: pol.Identity, Workspace: pol.Workspace, Egress: entry.Egress,
+			Deny: append(append([]string(nil), entry.ReadOnly...), entry.Hide...)}
+		if se := dispatch.SkillEnvFor(*a.req, "unix://"+pol.Socket, sb); se != nil {
 			pol.Token = se["CONDUCTOR_SKILL_TOKEN"]
 		}
 	}

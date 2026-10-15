@@ -209,6 +209,12 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 // there is nothing to offer: no skill: on the profile, or no endpoint. This is
 // the paseo/cli counterpart to BuildToolServer's MCP injection (ACP/opencode).
 func SkillEnv(req Request, endpoint string) map[string]string {
+	return SkillEnvFor(req, endpoint, nil)
+}
+
+// SkillEnvFor is SkillEnv for an agent launched sandboxed: its token also
+// stands for that sandbox (sb) — what the browser keys on.
+func SkillEnvFor(req Request, endpoint string, sb *skill.SandboxBinding) map[string]string {
 	if endpoint == "" {
 		return nil
 	}
@@ -230,6 +236,7 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 	// uid, so the uid check passes and provenance rests on the token — which is
 	// exactly why memory/run_step ops derive Source from the token, not the peer.
 	id, _ := SkillIdentityFor(req)
+	id.Sandbox = sb
 	var tok string
 	var err error
 	if req.Interactive {

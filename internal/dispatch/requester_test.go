@@ -23,3 +23,22 @@ func TestSkillIdentityRequester(t *testing.T) {
 		t.Fatalf("an event: %q", id.Requester)
 	}
 }
+
+// TestSkillEnvForBindsTheSandbox: a sandboxed launch's token stands for its
+// sandbox — the browser finds the workspace there, never by a lookup that a
+// resumed registration could answer for another dispatch.
+func TestSkillEnvForBindsTheSandbox(t *testing.T) {
+	b := skill.NewBroker(nil, nil)
+	skill.SetActive(b)
+	defer skill.SetActive(nil)
+	sb := &skill.SandboxBinding{Identity: "agent:x@o/r", Workspace: "/w"}
+	env := SkillEnvFor(Request{DispatchID: "d2"}, "unix:///s", sb)
+	id, err := b.Authorize(env["CONDUCTOR_SKILL_TOKEN"], skill.Peer{})
+	if err != nil || id.Sandbox == nil || id.Sandbox.Workspace != "/w" || id.Dispatch != "d2" {
+		t.Fatalf("%+v %v", id, err)
+	}
+	env = SkillEnv(Request{DispatchID: "d3"}, "unix:///s")
+	if id, _ := b.Authorize(env["CONDUCTOR_SKILL_TOKEN"], skill.Peer{}); id.Sandbox != nil {
+		t.Fatal("an unsandboxed launch's token claims a sandbox")
+	}
+}
