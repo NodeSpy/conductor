@@ -67,8 +67,9 @@ func TestLoginAllowOnlyTheSites(t *testing.T) {
 	if got := loginAllow([]string{"127.0.0.1:8080"}, []string{"127.0.0.1"}, Settings{}); !reflect.DeepEqual(got, []string{"127.0.0.1:8080"}) {
 		t.Fatalf("a host with a port: %v", got)
 	}
-	if got := loginAllow([]string{"localhost:8080", "127.0.0.1:9090", "localhost"}, []string{"localhost"}, Settings{}); !reflect.DeepEqual(got, []string{"localhost:8080", "127.0.0.1:8080", "localhost", "127.0.0.1"}) {
-		t.Fatalf("localhost and its loopback address, port for port: %v", got)
+	// Hosts exactly as bound: localhost never brings 127.0.0.1 (or [::1]) along.
+	if got := loginAllow([]string{"localhost:8080", "127.0.0.1:8080", "[::1]:8080", "localhost"}, []string{"localhost"}, Settings{}); !reflect.DeepEqual(got, []string{"localhost:8080", "localhost"}) {
+		t.Fatalf("localhost alone: %v", got)
 	}
 }
 

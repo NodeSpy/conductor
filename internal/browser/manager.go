@@ -385,12 +385,6 @@ func loginAllow(allow []string, sites []string, st Settings) []string {
 			}
 			if hostCovered(site, h) || (strings.HasPrefix(site, "*.") && h == site) {
 				add(a)
-				if h == "localhost" {
-					// localhost is loopback: the proxy dials it by address,
-					// which its SSRF guard allows only when listed literally.
-					_, p := splitHost(a)
-					add(strings.TrimSuffix("127.0.0.1:"+p, ":"))
-				}
 			}
 		}
 		for _, l := range st.Logins {

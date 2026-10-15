@@ -70,26 +70,40 @@ var errEgressBlockedIP = errors.New("resolved address is in a blocked range")
 // the exact same set of ranges.
 func specialIP(ip net.IP) bool { return netguard.Blocked(ip) }
 
-// explicitIPAllow returns the exact IPs the operator listed literally in the
-// allowlist (the host half parses as an IP). ONLY these opt a special-range
-// address back in — a hostname or glob never can, which is what closes the
-// DNS-rebinding path: the name may be allowlisted, but the internal address it
-// resolves to is not, so the connection is refused. A deliberately-internal
-// target (a metadata endpoint, an RFC1918 host) is reachable only by listing
-// its IP outright.
-func explicitIPAllow(allow []string) map[string]bool {
-	out := map[string]bool{}
+// specialAllowed reports whether the operator bound this exact special-range
+// address for this exact target — the only way past the SSRF guard. Hosts
+// are taken exactly as bound:
+//
+//   - a target that IS an IP literal reaches that address when an allowlist
+//     entry lists the same literal (not a glob) for its port;
+//   - the target `localhost` reaches loopback when an entry names
+//     `localhost` itself for its port.
+//
+// Nothing else crosses: a name never inherits a listed literal (an
+// allowlisted name that resolves — or rebinds — to 127.0.0.1 is refused even
+// with 127.0.0.1 listed), and `localhost:3000`, `127.0.0.1:3000` and
+// `[::1]:3000` are three bindings, none implying another.
+func specialAllowed(allow []string, host, port string, ip net.IP) bool {
+	tip := net.ParseIP(host)
 	for _, pat := range allow {
-		pat = strings.TrimSpace(pat)
-		if pat == "" || pat == "*" {
+		ph, pp := splitHostPort(strings.TrimSpace(pat))
+		if pp == "" {
+			pp = "443" // a bare host is :443 (EgressAllowed's rule)
+		}
+		if pp != "*" && pp != port {
 			continue
 		}
-		host, _ := splitHostPort(pat)
-		if ip := net.ParseIP(host); ip != nil {
-			out[ip.String()] = true
+		if pip := net.ParseIP(ph); pip != nil {
+			if tip != nil && tip.Equal(pip) && ip.Equal(pip) {
+				return true
+			}
+			continue
+		}
+		if strings.EqualFold(ph, "localhost") && strings.EqualFold(host, "localhost") && ip.IsLoopback() {
+			return true
 		}
 	}
-	return out
+	return false
 }
 
 // lookup resolves host through the injected resolver (tests) or the system one.
@@ -102,24 +116,30 @@ func (p *Proxy) lookup(ctx context.Context, host string) ([]net.IPAddr, error) {
 
 // dialAllowed resolves hostport ITSELF and dials the resolved IP directly, so
 // the address checked is the address connected to — no re-resolve TOCTOU. Any
-// resolved IP in a special range is skipped unless the operator allowlisted
-// that exact IP literally; if every candidate is blocked that way, it returns
+// resolved IP in a special range is skipped unless the operator bound it for
+// exactly this target (specialAllowed); if every candidate is blocked, it returns
 // errEgressBlockedIP so the caller can 403 + audit.
 func (p *Proxy) dialAllowed(ctx context.Context, hostport string, timeout time.Duration) (net.Conn, error) {
 	host, port := splitHostPort(hostport)
 	if port == "" {
 		return nil, fmt.Errorf("dial %s: missing port", hostport)
 	}
-	explicit := explicitIPAllow(p.Allow)
-	ips, err := p.lookup(ctx, host)
-	if err != nil {
-		return nil, err
+	var ips []net.IPAddr
+	if strings.EqualFold(host, "localhost") {
+		// localhost is loopback by definition (RFC 6761), never whatever a
+		// hosts file says.
+		ips = []net.IPAddr{{IP: net.IPv4(127, 0, 0, 1)}, {IP: net.IPv6loopback}}
+	} else {
+		var err error
+		if ips, err = p.lookup(ctx, host); err != nil {
+			return nil, err
+		}
 	}
 	var blocked bool
 	var d net.Dialer
 	var lastErr error
 	for _, ipa := range ips {
-		if specialIP(ipa.IP) && !explicit[ipa.IP.String()] {
+		if specialIP(ipa.IP) && !specialAllowed(p.Allow, host, port, ipa.IP) {
 			blocked = true
 			continue
 		}
