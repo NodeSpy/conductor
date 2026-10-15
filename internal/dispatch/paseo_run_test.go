@@ -385,3 +385,17 @@ func TestPaseoHandoffSandboxDefaultAndOptOut(t *testing.T) {
 		t.Fatal("shadow logged")
 	}
 }
+
+// The model a multi-provider tool's allowlist follows: "provider/model".
+func TestSandboxModel(t *testing.T) {
+	for _, c := range []struct{ model, provider, want string }{
+		{"", "anthropic", ""},
+		{"openrouter/qwen", "openrouter", "openrouter/qwen"},
+		{"claude-haiku", "anthropic", "anthropic/claude-haiku"},
+		{"claude-haiku", "", "claude-haiku"},
+	} {
+		if got := sandboxModel(Request{Model: c.model, Provider: c.provider}); got != c.want {
+			t.Errorf("sandboxModel(%q, %q) = %q, want %q", c.model, c.provider, got, c.want)
+		}
+	}
+}
