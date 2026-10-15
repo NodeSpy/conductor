@@ -1294,6 +1294,37 @@ sandbox:
     # email: you@example.com                  #   (default: git's user.email)
     # sign: false                             # push unsigned (default: refuse to push without a key)
     # at_step_end: false                      # only an explicit git.push pushes
+  # backend: container      # run EVERY agent launch with no isolation: of its own in a container —
+  #                         #   `conductor sandbox exec` sessions in any directory too (default: namespace)
+  # container:              # the container backend's defaults (wiki: Isolation#container-backend)
+  #   engine: podman        # default: rootless podman on Linux, Docker Desktop on macOS
+  #   image: conductor-agent:latest   # default; built by `make agent-image`, never pulled
+  #   persistent: true      # for backend: container — one container + HOME volume per identity
+  #   read_only: true       # the image read-only (HOME, /tmp, the workspace stay writable)
+  #   idle_stop: 30m        # stop a persistent container this long after its last launch
+  #   limits: { memory: 4g, cpu: "2", pids: 1024 }
+  #   helper: /opt/conductor-linux/conductor   # macOS: a Linux build to run inside the containers
+#
+# An agent's own computer: `isolation: { mode: container, persistent: true }` on
+# a runtime (or a workflow/trigger/step, paseo's included) runs its agents in one
+# long-lived container per identity — no network but the allowlist proxy, no
+# capabilities, non-root, no engine socket, your secrets absent — whose HOME
+# volume keeps what the agent installs (npm -g, pip, go install, ~/.local/bin):
+#
+#   runtimes:
+#     claude-box:
+#       use: acp
+#       agent: claude-code
+#       transport: cli
+#       isolation:
+#         mode: container
+#         image: conductor-agent:latest
+#         persistent: true
+#         container: { read_only: true, idle_stop: 30m }
+#         limits: { memory: 4g, pids: 1024 }
+#
+#   conductor sandbox ls                  # this daemon's agent containers
+#   conductor sandbox archive IDENTITY    # remove an identity's containers and HOME volume
 #
 # Hand-offs (background: true agent steps on paseo) are sandboxed too: they
 # launch through <provider>-sandboxed, titled "[sandboxed]". The EXPLICIT,

@@ -97,6 +97,18 @@ refused as a workspace. (A launch paseo makes with no session — listing a
 provider's models from its own cwd — gets the tool's empty scratch workspace
 instead.)
 
+**In a container.** When the directory's policy is a container — the
+dispatch's step or paseo runtime has `isolation: {mode: container, …}`, or
+the daemon has `sandbox.backend: container` — the daemon creates or starts
+the identity's container before it answers, wires this launch into it
+(proxy, relays, the conductor socket, a fresh token), and `conductor sandbox
+exec` runs the agent there with the engine's `exec`; the image's own agent
+CLI runs, by name. The launch holds its share of the container for as long
+as `sandbox exec` holds its connection to the daemon. With `persistent: true`
+every session of the identity shares one container and its HOME volume:
+what one session installs, the next has. See
+[[Isolation#container-backend]].
+
 **Fail-closed.** If the conductor daemon is unreachable, or has no policy for
 the directory, `conductor sandbox exec` refuses to launch (exit 125) and paseo
 reports the session's error. An agent is never launched unsandboxed.

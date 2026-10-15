@@ -116,6 +116,152 @@ unstarted, and a sandbox that cannot be built ends the session (`sandbox
 exec` exits 125). The agent-deck CLI itself runs unsandboxed and gets no forge
 credential.
 
+### The container backend: an agent's own computer {#container-backend}
+
+`isolation: {mode: container}` runs the agent in a **container** instead of
+the namespace/Seatbelt jail. With `persistent: true` an identity gets **one
+long-lived container — its computer**: every launch of that identity runs in
+it, and its `HOME` is a volume that keeps what the agent installs. The default
+stays the jail; the container is opt-in.
+
+```yaml
+runtimes:
+  claude-box:
+    use: acp
+    agent: claude-code
+    transport: cli
+    isolation:
+      mode: container
+      image: conductor-agent:latest   # default: sandbox.container.image, else conductor's own
+      persistent: true                # one container + HOME volume per identity
+      container:
+        engine: podman                # default: rootless podman on Linux, Docker Desktop on macOS
+        read_only: true               # the image read-only; HOME, /tmp, the workspace stay writable
+        idle_stop: 30m                # stop it this long after its last launch
+        # attach: member:alice        # run in that identity's container instead (a member's worker)
+      limits: { memory: 4g, cpu: "2", pids: 1024 }
+sandbox:
+  # backend: container    # every agent launch with no isolation: of its own — a
+  #                       # `conductor sandbox exec` session in any directory too
+  container:              # the container backend's defaults
+    image: conductor-agent:latest
+    # persistent: true    # for sandbox.backend: container
+    # helper: /path/to/linux/conductor   # macOS: a Linux build to run inside
+```
+
+It works for every runtime the sandbox covers: `cli`/`acp`, `opencode` (its
+`opencode serve` in the container, reached through the expose relay),
+`agent-deck` (the session's command, through conductor's wrapper), and
+**paseo** — the `<provider>-sandboxed` entry's `conductor sandbox exec` asks
+the daemon for the directory's policy and, when it is a container, execs into
+the identity's container (`isolation: {mode: container}` on a paseo step or
+runtime, or `sandbox.backend: container`).
+
+The guarantees are the jail's:
+
+| | in the container |
+|---|---|
+| its workspace | bind-mounted read-write **at its own path** (and the clone's borrowed object store, read-only) |
+| `HOME` | `/home/agent`: with `persistent: true` the identity's named volume (seeded from your settings for the tool, never your history), else the identity's tool-state dir; the tool's login file bound in |
+| the conductor socket | at `/run/conductor/s/conductor.sock`, with a token minted for this launch |
+| the network | **`--network none`.** The only way out is conductor's allowlist proxy (the model endpoints + `sandbox.egress`); a host-loopback model endpoint is relayed in at its own address |
+| the environment | the same minimal one; secrets (the model key, the token, the proxy credential) travel in the engine client's environment by name — never on a command line |
+| the engine's socket | **never** — no `docker.sock`/`podman.sock`, no socket of any kind, no directory holding one |
+| everything else | absent: only those mounts and conductor's own (static, Linux) binary, read-only, at `/run/conductor/bin` |
+
+Hardening, on every agent container: `--cap-drop ALL`, `--security-opt
+no-new-privileges`, the engine's default seccomp profile, a non-root user
+(**your uid** — `--userns keep-id` on rootless podman), an init of its own, a
+`/tmp` tmpfs, `limits:` as `--pids-limit/--memory/--cpus`, `read_only:` as
+`--read-only`. Never `--privileged`, a capability added back, a host
+namespace, a device, or `-v`: conductor writes every `--mount` itself and
+checks the whole argv against that list before it reaches the engine. A
+daemon running as root refuses (the container would run as root).
+
+**How it connects.** A container with no network still reaches conductor's
+proxy, the model relay and the conductor socket — and conductor reaches an
+`opencode serve` inside — through one channel: the stdio of `conductor
+sandbox-net --mux`, which the daemon runs in the container with `docker exec
+-i`. Each connection is a flow-controlled stream over it. The container side
+can only ask for a stream to a listener the daemon opened (the daemon chooses
+every target); nothing is bind-mounted for it, so it works with Docker
+Desktop, whose file sharing does not carry a host unix socket.
+
+**Lifecycle — conductor owns it.** On first use the identity's container is
+created (its volume created and seeded), started, and its mux attached; later
+launches reuse it. A persistent container stops `idle_stop` after its last
+launch (default 30m) and starts again on the next; its volume stays. A
+changed configuration (another image — a rebuilt tag included — mounts or
+limits) gets a new container once the old one is idle; the volume carries
+over. A non-persistent container is removed with its launch. At start a
+daemon removes the per-launch containers a dead daemon left and gives its
+running persistent ones an idle timer. Every container and volume carries
+`conductor.sandbox=agent` and `conductor.daemon=<this daemon>`; a daemon
+lists, reuses and removes only its own.
+
+```sh
+conductor sandbox ls                     # this daemon's agent containers and their launches
+conductor sandbox archive IDENTITY       # remove an identity's containers and HOME volume
+```
+
+Archiving is what an identity's end does: a member's archive calls the same
+`Containers.Archive` (its running launches end with it).
+
+**What an agent can install, and what lasts.** The agent runs as a non-root
+user with no capabilities, so it cannot `apt-get` into the image. It installs
+into `HOME`, which is on its `PATH`: `npm i -g` (`NPM_CONFIG_PREFIX` is
+`~/.npm-global`), `pip install` (user installs, `~/.local`), `go install`
+(`~/go/bin`), `cargo install` (`~/.cargo/bin`), a binary in `~/.local/bin` or
+`~/bin`. With `persistent: true` that is the identity's volume: it is there in
+the next session, after a conductor restart, and after the container is
+replaced — until the identity is archived. Anything written outside `HOME`
+and the workspace is lost with the container. Egress for an install
+(`registry.npmjs.org`, `pypi.org`, …) goes through the allowlist like
+everything else.
+
+**The image.** `conductor-agent:latest` is conductor's own: the agent CLIs
+(Claude Code, Codex, opencode), git, bash, curl, jq, ripgrep, python3, make,
+… and a static Linux conductor. It is built on the box, never pulled:
+
+```sh
+make agent-image                              # conductor-agent:<version> and :latest
+make agent-image AGENT_IMAGE_ARGS='--build-arg CLAUDE_CODE_VERSION=2.1.281 --build-arg BASE=node:24-bookworm-slim@sha256:…'
+```
+
+Every CLI version and the base are build arguments, so it pins. Any other
+image works (`image: registry/your-agent@sha256:…`, pulled when missing) if it
+carries the agent CLI on its `PATH` — the host's path to the CLI is not the
+container's; conductor runs the command by name. On Linux conductor binds its
+own binary in (it must be a static build, as releases are); on macOS, where
+conductor is not a Linux binary, it uses the image's `/usr/local/bin/conductor`
+or `sandbox.container.helper`.
+
+**Engines.** Rootless podman is preferred on Linux (a container escape lands
+in your user, not root); rootful Docker works too. On macOS, Docker Desktop
+(or any engine on `DOCKER_HOST`). No engine: every launch configured for a
+container is refused (`conductor sandbox exec` exits 125), and the daemon logs
+it at start; an engine that comes up later is picked up.
+
+**Limits of the container backend.**
+
+- **Bind mounts are fixed when a container is created.** A persistent
+  identity's container shows the workspace it was created for; a launch in
+  another workspace gets the identity a new container (same volume) once the
+  old one is idle. `attach:` refuses a workspace the target's container does
+  not show.
+- **paseo's utility spawns** (listing a provider's models, from paseo's own
+  directory) run in a scratch identity's container per tool
+  (`scratch:claude-code`), stopped when idle.
+- **Launcher temp files** (paseo hands pi an `--extension` in the host's temp
+  dir) are not in the container: such a launch is refused, not run without
+  them.
+- **macOS logins.** A login kept in the macOS Keychain (Claude Code's) is not
+  a file to share into a Linux container — give the container an API key or a
+  token in the environment.
+- An **image's own conductor** runs the mux on macOS; it must be a release
+  that speaks this conductor's mux (`conductor-mux/1`).
+- A remote (`host:`) launch runs under that box's own isolation, as before.
+
 ### Pushing: conductor, not the agent
 
 The agent commits; conductor pushes:
@@ -163,11 +309,13 @@ sandbox:
 
 Per runtime, workflow, trigger or step, an `isolation:` block keeps working
 (most specific wins: step → workflow/trigger → runtime): `mode: none` runs that
-launch unwrapped (the explicit opt-out, below); `mode: user` / `container`, or
+launch unwrapped (the explicit opt-out, below); `mode: container` runs it in
+a container ([the container backend](#container-backend)); `mode: user`, or
 `namespace` with `privileged: true`, keep their own wrappers; a plain
 `namespace` block shapes the agent sandbox (its `network.egress` joins the
-allowlist, its `fs:` paths are shown read-write). A remote (`host:`) launch
-runs under that box's own isolation.
+allowlist, its `fs:` paths are shown read-write) — and names the jail even
+when `sandbox.backend: container`. A remote (`host:`) launch runs under that
+box's own isolation.
 
 ### Hand-offs, and opting a workflow out
 
@@ -465,7 +613,10 @@ caveat does not apply on macOS.
 
 ### `mode: container` — docker / podman
 
-The launch becomes `docker run --rm -i -v <worktree>:<worktree> -w <worktree> …`
+For an **agent** launch, `mode: container` is the agent sandbox's
+[container backend](#container-backend). For a **code step**, it is a
+one-shot wrapper:
+the launch becomes `docker run --rm -i -v <worktree>:<worktree> -w <worktree> …`
 (engine `podman` selectable). The image must carry the runtime binary the
 launch expects (e.g. `claude`, `gemini`). `deny: true` becomes
 `--network=none`; `limits:` map to `--memory/--cpus/--pids-limit`. The

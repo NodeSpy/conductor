@@ -440,3 +440,139 @@ agent, and a log line per dispatch.
 
 Not changed: `detach: true` launches (handed to the user and forgotten) stay
 on the plain provider.
+
+---
+
+## 15. The container backend: an identity's own computer
+
+`isolation: {mode: container, image: …, persistent: true|false}` runs an
+agent in a container instead of the namespace/Seatbelt jail. With
+`persistent: true` an identity — a member, a dispatch's profile per
+repository, a directory — gets one long-lived container whose HOME is a named
+volume: what the agent installs there is there next session. It is opt-in:
+`mode: container` on a runtime/step/workflow/trigger (paseo's included), or
+`sandbox.backend: container` for every launch with no isolation of its own.
+The default stays namespace/Seatbelt. Operator docs:
+`docs/wiki/Isolation.md#container-backend`.
+
+Where it lives: `internal/sandbox/agentcontainer.go` (the `create`/`exec`/seed
+argv and its invariant check), `internal/sandbox/mux.go` (the stdio mux),
+`internal/sandbox/containerhelper.go` (the in-container verbs:
+`sandbox-net --init | --mux | --seed | --run | --signal`),
+`internal/agentsandbox/container.go` (`Containers`: the lifecycle, a launch's
+wiring), `containerwrap.go` (a prepared launch → `<engine> exec`),
+`engine.go` (the engine CLI), `cmd/conductor/sandboxcontainer.go` (the daemon
+wiring, `sandbox ls|archive`), `images/agent` (conductor's agent image).
+
+**Same guarantees, different mechanism.**
+
+| | the jail | the container |
+|---|---|---|
+| filesystem | pivot_root: only the binds | only conductor's `--mount`s: the workspace (same path), HOME, the helper binary (ro) |
+| HOME | `<state>/agent-state/<identity>/` | that dir (per launch), or the identity's volume (persistent), seeded from it |
+| network | empty netns + `sandbox-net` forwarder | `--network none` + the mux |
+| privilege | user ns, privilege-dropped exec | non-root uid, `--cap-drop ALL`, `no-new-privileges`, default seccomp |
+| the engine | — | its socket is never mounted (nor any socket, nor a dir holding one) |
+
+**Decisions.**
+
+- **One channel in: the stdio mux, not bind-mounted sockets.** The jail binds
+  host unix sockets (the proxy, the relays, the conductor socket). Docker
+  Desktop's file sharing does not carry `connect(2)` on a bind-mounted host
+  socket (docker/for-mac#483, won't fix; colima's virtiofs neither), and
+  macOS is required. So the daemon runs `conductor sandbox-net --mux` in the
+  container with `<engine> exec -i` and multiplexes every connection over its
+  stdio: container→host streams to listeners the daemon opened (the egress
+  proxy per launch, the model relays and the conductor socket per container),
+  host→container streams to a server the agent runs (opencode's). The
+  container side names only a listener id — the daemon chooses every host
+  target. Each stream has a 256 KiB window granted back as it is read, so a
+  stalled reader holds up nothing else; a peer that overruns it loses the
+  stream, a malformed frame ends the mux. Nothing of the host's state dir is
+  mounted.
+- **The daemon owns the lifecycle.** A `conductor sandbox exec` (paseo,
+  agent-deck) runs in its own process, but a persistent container outlives
+  any one launch — so the daemon prepares it when it answers
+  `sandbox-policy` (create/start, the mux, this launch's listeners and token)
+  and holds the launch's lease for as long as the exec holds its control
+  connection: the exec dying closes it and releases the lease. cli/acp,
+  opencode and agent-deck launches the controller starts call the same
+  `Containers.Prepare`.
+- **Identity → container.** Persistent: `conductor-<daemon>-<identity>-<spec>`
+  with the volume `conductor-<daemon>-home-<identity>`; the spec hash covers
+  the image id (a rebuilt tag is a new spec), mounts, user and limits, and a
+  changed spec gets a new container once the old one is idle — same volume.
+  Non-persistent: a container per launch, removed with it. `attach:` runs a
+  launch in another identity's persistent container (a member's), refused
+  unless it shows the launch's workspace.
+- **Labels scope everything.** `conductor.sandbox=agent`,
+  `conductor.daemon=<hash of the state root>`, the identity's key and name,
+  `persistent`, the spec. A daemon lists, reuses, stops and removes only its
+  own; Reconcile at start removes a dead daemon's per-launch containers and
+  seeds, and gives its running persistent ones an idle timer.
+- **The user is the operator's uid** (keep-id on rootless podman) so the
+  workspace's files stay theirs; a root daemon is refused. The HOME volume is
+  seeded by a one-shot run as root with only CHOWN/DAC_OVERRIDE/FOWNER,
+  network none, nothing mounted but the volume, the seed (ro) and the helper
+  — on every container creation, so a seed a dead daemon left half done is
+  finished.
+- **The argv is checked, not just built.** `CheckContainerArgs` scans the
+  final argv: no `--privileged`, `--cap-add`, `-v`, `--device`, host
+  namespaces, `--volumes-from`, unconfined security options, root user, or a
+  bind of a socket, an engine socket's directory or a host system directory;
+  `--network none`, `--cap-drop ALL` and `no-new-privileges` required.
+- **Secrets never on a command line.** The token, the model key and the proxy
+  credential ride the engine client's environment and are passed by name
+  (`--env KEY`); only non-secret values (HOME, TMPDIR, NO_PROXY) are explicit.
+- **The helper** is conductor itself, static, copied into
+  `<state>/agent-state/.containers/bin` and bound read-only (a conductor update
+  reaches a running container's next mux); macOS uses the image's
+  `/usr/local/bin/conductor` or `sandbox.container.helper`.
+- **`docker exec` forwards no signal**, so a launch runs under
+  `sandbox-net --run ID` (its own process group, a pid file in the
+  container's tmpfs) and the host signals it with `sandbox-net --signal ID
+  SIG`; its group is killed when the launch ends.
+
+**Found while proving it** (each fixed, with a test):
+
+- An engine under load (60 containers on this box) took longer to create a
+  container than the control socket's 30 s deadline: the policy answer could
+  not be written and `sandbox exec` waited on it. `sandbox-policy`,
+  `sandbox ls` and `archive` have their own deadline; an undelivered answer
+  releases its launch.
+- The agent's `HTTP(S)_PROXY` rides the engine client's environment, and an
+  engine CLI honours it for a `tcp://` engine (docker-in-docker, a remote
+  engine): the client's own `NO_PROXY` is now `*`, the agent's explicit.
+  (Invisible against a unix-socket engine; e2e group ZC's dind found it.)
+- A failed engine start at boot (the engine not up yet) was kept for the
+  daemon's lifetime; it is retried (at most every 5 s), success kept.
+- A daemon killed mid-seed left a seed container created-never-run and
+  labelled persistent, and a volume no later daemon would seed: seeds are
+  labelled one-shots Reconcile removes, and seeding runs on every creation.
+- `ps --format` fields differ between docker and podman: containers are
+  listed by id and read with `inspect` (`index .Config.Labels`), which both
+  render alike; the socket tmpfs is `mode=1777` rather than `uid=`/`gid=`
+  options podman may refuse.
+
+**CI.** The container legs run on `ubuntu-latest` against Docker and rootless
+podman (preinstalled there): the real-engine tests and
+`test/sandbox-canary/container.sh` (the boundary from inside, the engine's
+inspect, an identity's tool across sessions and a conductor restart, two
+identities apart, archive, a paseo session through a sandboxed entry in the
+container, no engine refused). `agent-image` builds `images/agent` and runs
+its CLIs as a non-root uid with no network or capabilities. **macOS:**
+GitHub's macOS runners are Apple-silicon VMs without nested virtualization
+(actions/runner-images#13505, closed not planned, Jan 2026): neither Docker
+Desktop nor colima/lima can start their VM there, and the last Intel image
+(`macos-15-intel`) is unverified for it and retires in 2027. The macOS leg
+proves the darwin build and unit tests and that a container launch with no
+engine is refused; the backend itself is proven on Linux, and the darwin
+paths that differ (the helper from the image, Docker Desktop's
+`DOCKER_HOST`/context in the client env) are unit-tested.
+
+**e2e group ZC.** A docker-in-docker sidecar — the stack's own engine, never
+the host's — with the state volume at the same path in both, so bind sources
+resolve. The cli runtime's probing fixer runs in its identity's persistent
+container (the e2e image minus the decoy key is the agent image); the same
+probe record as group Z reaches the forge only through conductor's signed
+push, and the engine's inspect, `sandbox ls` and `archive` are checked.
