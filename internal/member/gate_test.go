@@ -361,6 +361,16 @@ func TestApproveRefusesSelfApprovalAndForgery(t *testing.T) {
 			t.Errorf("%s: approval accepted", name)
 		}
 	}
+	// A configured operator who is not one of THIS member's operators, with
+	// a valid signature from their own key.
+	other := genKey(t, "other")
+	f.cfg.Operators["other"] = config.OperatorConfig{SSHKey: other.pub}
+	m := f.cfg.Members["sre"]
+	m.Operators = []string{"op"}
+	f.cfg.Members["sre"] = m
+	if _, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "other", Decision: "approve", Signature: f.sign(t, other, pid, "approve")}); err == nil {
+		t.Error("another member's operator approved")
+	}
 	// A signature for proposal A does not approve proposal B.
 	pid2 := f.propose(t, "gh.comment", map[string]any{"body": "other"})
 	if _, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid2, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, pid, "approve")}); err == nil {
