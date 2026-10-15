@@ -152,3 +152,21 @@ func TestPaseoSetupFlags(t *testing.T) {
 		t.Fatalf("%+v %v", o, err)
 	}
 }
+
+func TestPaseoSetupWaitsOutAProviderProbe(t *testing.T) {
+	n := 0
+	old := paseoRun
+	paseoRun = func(args ...string) ([]byte, error) {
+		n++
+		if n < 3 {
+			return []byte(`[{"provider":"pi","status":"loading"}]`), nil
+		}
+		return []byte(`[{"provider":"pi","status":"available"}]`), nil
+	}
+	oldWait := paseoProbeWait
+	paseoProbeWait = 0
+	t.Cleanup(func() { paseoRun, paseoProbeWait = old, oldWait })
+	if !piAvailable(t.TempDir()) || n != 3 {
+		t.Fatalf("waited %d probes", n)
+	}
+}

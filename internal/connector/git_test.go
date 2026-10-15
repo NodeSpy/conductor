@@ -11,7 +11,10 @@ import (
 func TestGitPushTakesNoOptions(t *testing.T) {
 	var got string
 	SetGitOps(func() *GitOps {
-		return &GitOps{Push: func(_ context.Context, d string) (map[string]any, error) { got = d; return map[string]any{"pushed": true}, nil }}
+		return &GitOps{Push: func(_ context.Context, d string) (map[string]any, error) {
+			got = d
+			return map[string]any{"pushed": true}, nil
+		}}
 	})
 	defer SetGitOps(nil)
 	for _, opts := range []map[string]any{{"branch": "main", "__dispatch": "d"}, {"ref": "refs/heads/x", "__dispatch": "d"}, {"force": true, "__dispatch": "d"}} {

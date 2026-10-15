@@ -351,3 +351,21 @@ func TestLaunchBindsShowAnInstallNotTheHome(t *testing.T) {
 }
 
 func exectLook(b string) (string, error) { return exec.LookPath(b) }
+
+func TestLauncherFilesAreTempFilesOnly(t *testing.T) {
+	dir, err := os.MkdirTemp("", "paseo-pi-extension-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	ext := filepath.Join(dir, "paseo-integration.mjs")
+	os.WriteFile(ext, []byte("x"), 0o600)
+	link := filepath.Join(dir, "link.mjs")
+	os.Symlink("/etc/passwd", link)
+	home := t.TempDir()
+	notTemp := "/etc/hostname"
+	got := launcherFiles([]string{"--mode", "rpc", "--extension", ext, "--mcp-config=" + ext, dir, link, notTemp, "relative.mjs", filepath.Join(dir, "missing")})
+	if len(got) != 1 || got[0] != ext {
+		t.Fatalf("only the launcher's own temp file, once: %v (home %s)", got, home)
+	}
+}

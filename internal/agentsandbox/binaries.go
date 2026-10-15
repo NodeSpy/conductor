@@ -220,3 +220,37 @@ func within(p, root string) bool {
 	}
 	return p == root || strings.HasPrefix(p, root+string(filepath.Separator))
 }
+
+// launcherFiles are files the launcher wrote for this launch and named on
+// its command line — paseo hands pi an --extension and an --mcp-config it
+// writes to the system temp dir — which the sandbox's own private /tmp does
+// not have. Only an absolute path to an existing regular file under the
+// temp dir qualifies; it is shown read-only, alone.
+func launcherFiles(args []string) []string {
+	roots := []string{"/tmp", os.TempDir()}
+	if r, err := filepath.EvalSymlinks(os.TempDir()); err == nil {
+		roots = append(roots, r)
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, a := range args {
+		if _, v, ok := strings.Cut(a, "="); ok && strings.HasPrefix(a, "-") {
+			a = v
+		}
+		if !filepath.IsAbs(a) || seen[a] {
+			continue
+		}
+		fi, err := os.Lstat(a)
+		if err != nil || !fi.Mode().IsRegular() {
+			continue
+		}
+		for _, r := range roots {
+			if within(a, r) && filepath.Clean(a) != filepath.Clean(r) {
+				seen[a] = true
+				out = append(out, filepath.Clean(a))
+				break
+			}
+		}
+	}
+	return out
+}

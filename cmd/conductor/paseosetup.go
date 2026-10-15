@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/paseosetup"
 )
@@ -244,15 +245,34 @@ func paseoEntries(doc []byte, o paseoSetupOpts, providers []string) (map[string]
 	return want, names, nil
 }
 
-// piAvailable asks the paseo daemon whether it offers the pi provider.
+// piAvailable asks the paseo daemon whether it offers the pi provider,
+// waiting out paseo's "loading" while it probes providers after a start.
 func piAvailable(home string) bool {
+	for try := 0; ; try++ {
+		avail, loading := piStatus(home)
+		if !loading || try >= paseoProbeTries {
+			return avail
+		}
+		time.Sleep(paseoProbeWait)
+	}
+}
+
+// paseoProbeTries / paseoProbeWait bound the wait for a provider probe.
+var (
+	paseoProbeTries = 15
+	paseoProbeWait  = 2 * time.Second
+)
+
+// piStatus reads `paseo provider ls`: whether pi is available, and whether
+// paseo is still probing it.
+func piStatus(home string) (available, loading bool) {
 	b, err := paseoRun("provider", "ls", "--home", home, "--json")
 	if err != nil {
-		return false
+		return false, false
 	}
 	var list []map[string]any
 	if json.Unmarshal(b, &list) != nil {
-		return false
+		return false, false
 	}
 	for _, p := range list {
 		id, _ := p["provider"].(string)
@@ -263,14 +283,11 @@ func piAvailable(home string) bool {
 			continue
 		}
 		if v, ok := p["available"].(bool); ok {
-			return v
+			return v, false
 		}
 		if s, ok := p["status"].(string); ok {
-			return s == "available" || s == "ready"
-		}
-		if v, ok := p["enabled"].(bool); ok {
-			return v
+			return s == "available" || s == "ready", s == "loading"
 		}
 	}
-	return false
+	return false, false
 }

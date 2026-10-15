@@ -171,6 +171,9 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 		binds = append(binds, sandbox.BindMount{Path: l.Path, Src: l.Src})
 	}
 	binds = append(binds, launchBinds(argv[0], d.LookPath, d.RealHome)...)
+	for _, f := range launcherFiles(argv[1:]) {
+		binds = append(binds, sandbox.BindMount{Path: f, RO: true})
+	}
 	if !visibleInBase(self) {
 		// `conductor call` inside the sandbox, at the path the tool server
 		// and the skill CLI name it by.
