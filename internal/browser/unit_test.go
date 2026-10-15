@@ -562,8 +562,11 @@ func TestBoundaries(t *testing.T) {
 	ws := filepath.Join(root, "ws")
 	os.MkdirAll(ws, 0o755)
 	os.WriteFile(filepath.Join(ws, "ten"), []byte("0123456789"), 0o600)
-	if _, err := readWorkspace(ws, "ten", nil, 10, filepath.Join(root, "d1")); err != nil {
-		t.Fatalf("a file exactly at the upload limit: %v", err)
+	if n, err := readWorkspace(ws, "ten", nil, 10, filepath.Join(root, "d1")); err != nil || n != 10 {
+		t.Fatalf("a file exactly at the upload limit, whole: %d %v", n, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "d1")); string(b) != "0123456789" {
+		t.Fatalf("the upload copy: %q", b)
 	}
 	if _, err := readWorkspace(ws, "ten", nil, 9, filepath.Join(root, "d2")); err == nil {
 		t.Fatal("a file one byte over the upload limit")
