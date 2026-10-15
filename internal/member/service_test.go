@@ -214,7 +214,9 @@ func TestDeliveryWaitsForIdle(t *testing.T) {
 
 func TestRequesterClassification(t *testing.T) {
 	f := newSvc(t)
-	for req, want := range map[string]string{"": ReqEvent, "op": ReqOperator, "slack:U1": ReqOperator, "slack:U2": ReqUser, "operator:op": ReqOperator} {
+	for req, want := range map[string]string{"": ReqEvent, "op": ReqOperator, "slack:U1": ReqOperator, "slack:U2": ReqUser, "operator:op": ReqOperator,
+		// near-misses of an operator's name or alias are third parties
+		"slack:U10": ReqUser, "xslack:U1": ReqUser, "OP": ReqUser, "op ": ReqUser, "operator:opx": ReqUser} {
 		if _, got := RequesterClass(f.cfg, "sre", req); got != want {
 			t.Errorf("RequesterClass(%q) = %s, want %s", req, got, want)
 		}

@@ -513,8 +513,10 @@ func (s *Service) waitSettled(ctx context.Context, name, agentID string) {
 
 // RequesterClass classifies who asked.
 func RequesterClass(cfg *config.Config, member, requester string) (string, string) {
-	r := strings.TrimSpace(requester)
-	if r == "" {
+	// Matching is EXACT: a requester string that only resembles an operator's
+	// name or alias (padding, case, a prefix) is a third party.
+	r := requester
+	if strings.TrimSpace(r) == "" {
 		return "", ReqEvent
 	}
 	for _, op := range cfg.MemberOperators(member) {

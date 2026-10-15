@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -520,5 +521,100 @@ func TestDegradedLedgerRefusesMoney(t *testing.T) {
 	g := &Gate{Cfg: func() *config.Config { return cfg }, Ledger: st, Jail: fixedJail(true), Now: func() time.Time { return gateNow }}
 	if _, err := g.CheckVerb(context.Background(), homeID(), "aws.purchase_sp", map[string]any{"total_usd": 1.0}); err == nil {
 		t.Fatal("commit_money allowed on a degraded ledger")
+	}
+}
+
+// Shadow is refused on two independent grounds, each tested alone: a SHADOW
+// proposal stays unapprovable after the member leaves shadow mode, and a
+// PENDING proposal is unapprovable once the member is put back in shadow.
+func TestShadowRefusalsAreIndependent(t *testing.T) {
+	m := testMember()
+	m.Autonomy.Shadow = nil
+	f := newExecFixture(t, m)
+	shadowP := f.propose(t, "gh.comment", map[string]any{"body": "a"})
+	f.cfg.Members["sre"] = testMember() // shadow: false now
+	if _, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: shadowP, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, shadowP, "approve")}); err == nil {
+		t.Fatal("a shadow proposal became approvable when the member left shadow mode")
+	}
+	pending := f.propose(t, "gh.comment", map[string]any{"body": "b"})
+	back := testMember()
+	back.Autonomy.Shadow = boolp(true)
+	f.cfg.Members["sre"] = back
+	if _, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pending, Operator: "op", Decision: "approve", Signature: f.sign(t, f.op, pending, "approve")}); err == nil {
+		t.Fatal("a pending proposal was approved while the member is in shadow mode")
+	}
+	if len(f.ran) != 0 {
+		t.Fatalf("ran %v", f.ran)
+	}
+}
+
+// With no third-party case open, an UNPROMOTED reversible verb is still a
+// proposal — promotion, not the requester, is what lets it run.
+func TestUnpromotedReversibleIsAProposal(t *testing.T) {
+	f := newGateFixture(t, testMember(), true)
+	if v, _ := check(t, f, homeID(), "pd.snooze", nil); v.Allow {
+		t.Fatal("unpromoted reversible verb ran")
+	}
+	c := f.openCase(t, ReqOperator)
+	if v, _ := check(t, f, workerID(c), "pd.snooze", nil); v.Allow {
+		t.Fatal("unpromoted reversible verb ran on an operator's case")
+	}
+}
+
+// Two operators approving the same proposal at once: exactly one execution.
+// The verifier is held until both decisions have passed every pre-check, so
+// only the atomic pending→approved transition can stop the second.
+func TestConcurrentApprovalsExecuteOnce(t *testing.T) {
+	f := newExecFixture(t, testMember())
+	pid := f.propose(t, "gh.comment", map[string]any{"body": "once"})
+	sig := f.sign(t, f.op, pid, "approve")
+	var wg sync.WaitGroup
+	barrier := make(chan struct{})
+	var arrived sync.WaitGroup
+	arrived.Add(2)
+	f.x.Verify = func(ctx context.Context, op, key string, payload []byte, s string) error {
+		arrived.Done()
+		<-barrier
+		return VerifyApproval(ctx, op, key, payload, s)
+	}
+	var mu sync.Mutex
+	ok := 0
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: sig}); err == nil {
+				mu.Lock()
+				ok++
+				mu.Unlock()
+			}
+		}()
+	}
+	arrived.Wait()
+	close(barrier)
+	wg.Wait()
+	if ok != 1 || len(f.ran) != 1 {
+		t.Fatalf("concurrent approvals: %d succeeded, %d executions", ok, len(f.ran))
+	}
+	if st := f.st.Member("sre").Proposals[pid].Status; st != "executed" {
+		t.Fatalf("the losing approval clobbered the proposal's state: %s", st)
+	}
+}
+
+// A signature made in another SSHSIG namespace (git's, say) over the same
+// payload never approves.
+func TestSignatureNamespaceIsBound(t *testing.T) {
+	f := newExecFixture(t, testMember())
+	pid := f.propose(t, "gh.comment", map[string]any{"body": "ns"})
+	p := f.st.Member("sre").Proposals[pid]
+	dir := t.TempDir()
+	msg := filepath.Join(dir, "payload")
+	_ = os.WriteFile(msg, ApprovalPayload("sre", pid, p.Digest, "approve"), 0o600)
+	if out, err := exec.Command("ssh-keygen", "-Y", "sign", "-q", "-f", f.op.priv, "-n", "git", msg).CombinedOutput(); err != nil {
+		t.Fatalf("sign: %v %s", err, out)
+	}
+	sig, _ := os.ReadFile(msg + ".sig")
+	if _, err := f.x.Decide(context.Background(), Decision{Member: "sre", Proposal: pid, Operator: "op", Decision: "approve", Signature: string(sig)}); err == nil {
+		t.Fatal("a git-namespace signature approved a member proposal")
 	}
 }
