@@ -1,14 +1,15 @@
 # Agent sandbox — design & build handoff
 
-Status: approved, in build on `feat/agent-sandbox`. This is the handoff for the
-builder. It supersedes #160 (agent jail) and #175 (paseo plugin/relay), which
-will be closed as superseded once this PR is green.
+Status: **built** on `feat/agent-sandbox`. It supersedes #160 (agent jail)
+and #175 (paseo plugin/relay). Operator docs: `docs/wiki/Isolation.md` (the
+agent sandbox), `docs/wiki/Paseo-Sandbox.md`. §12 records what the build
+found and where it departs from the handoff below.
 
-This document is the spec. It records the approved design, every integration
-point on current `main`, the exact carry-over list from #160/#175/#177, the
-proven policy and prototypes, the known gotchas, and the evidence bar. Working
-prototypes are committed under `.scratch/prototypes/` (force-added past the
-`.scratch/` ignore) — start from them, not from scratch.
+This document was the spec handed to the builder: the approved design, every
+integration point on `main` at the time, the carry-over list from
+#160/#175/#177, the proven policy and prototypes, the gotchas, and the
+evidence bar. (The prototypes it names lived under `.scratch/prototypes/` on
+the branch and were removed once reimplemented.)
 
 ---
 
@@ -316,3 +317,47 @@ github plugin scope tags) should become — keep / trim / close.
 
 These are spike artifacts to start from, not product code — reimplement in Go in
 the proper packages, keep the proven behavior.
+
+---
+
+## 12. As built — what the build found
+
+Where the code lives: `internal/agentsandbox` (policy, identity homes, model
+routes, env, registry, relays), `internal/gitpush` (conductor's push),
+`internal/paseosetup` + `cmd/conductor/paseosetup.go`, `cmd/conductor/
+sandboxexec.go` + `sandboxpolicy.go` (the wrapper and the control-socket
+`sandbox-policy` command), `internal/controller/agentsandbox.go` (cli/acp
+launches), the built-in `git` connector (`git.push`).
+
+Departures from §1–§11, each found in a live run or a mutation run:
+
+- **The session's directory is `PASEO_AGENT_CWD`, not the wrapper's cwd.**
+  paseo starts `codex app-server` in its own daemon's cwd and sends the
+  session's directory over the protocol; it names it in `PASEO_AGENT_CWD`
+  for every provider launch. A launch with none (paseo listing a provider's
+  models) whose cwd may not be a workspace gets the tool's **scratch
+  workspace** — an unknown cwd in the home, `/`, or conductor's state is
+  otherwise refused, a narrowing of §5's "only hard refusal is
+  daemon-unreachable" (showing the home read-write would bind the very
+  secrets §4 keeps out).
+- **Launcher temp files on argv are shown read-only.** paseo hands pi an
+  `--extension` and `--mcp-config` it writes to the system temp dir.
+- **Per-dispatch clones** (ported from #160 `ca3f6d4`): with linked
+  worktrees one sandboxed agent could move a sibling dispatch's branch,
+  which conductor would then push and sign.
+- **conductor's diff read of a sandboxed workspace runs sandboxed**: the
+  agent writes the checkout's `.git/config` and `.gitattributes`, whose
+  filter/textconv/fsmonitor commands host-side git would run as conductor.
+- **`step.done` resolves on the runner that launched the dispatch**, and an
+  in-flight dispatch defers before its agent is bound — both were bugs on
+  `main` that blocked a sandboxed cli worker's (and an eager paseo agent's)
+  done call.
+- **The agent's git identity** reaches it through the env (`GIT_AUTHOR_*`
+  are not credentials) and its identity home's `.gitconfig`, which falls
+  back to `sandbox.push`'s name/email.
+- **`git.push` refuses any option** instead of ignoring one.
+- **Identity** is a dispatch's profile per TRUSTED repository (a
+  sender-chosen target gets a per-dispatch identity), never the raw target.
+- **Fail-closed has one explicit opt-out**: `sandbox.agents: off` (logged at
+  boot), or `isolation: {mode: none}` per runtime/step. The e2e's root
+  daemons use it; the sandbox group runs non-root.
