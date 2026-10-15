@@ -99,6 +99,137 @@ type MemberConfig struct {
 	// CONDUCTOR plans and, on a signed approval, applies. Nil: no terraform
 	// proposals.
 	Terraform *MemberTerraform `yaml:"terraform,omitempty"`
+	// Proactive makes the member look around on its own, read-only, on a
+	// schedule (a SWEEP: one cli worker per run). Nil: never — a member opts
+	// in.
+	Proactive *MemberProactive `yaml:"proactive,omitempty"`
+	// Peers are the members this one may exchange messages with (`conductor
+	// member ask`). A link needs BOTH sides to list each other, or an
+	// operator-side member_links: entry. Empty: no peers.
+	Peers []string `yaml:"peers,omitempty"`
+}
+
+// MemberProactive configures proactive sweeps. A sweep is a cli worker that
+// works through the checklist (and what the member's memory says is worth
+// watching) with the gate holding it to observe-tier verbs: any other call
+// becomes a proposal, as for a third party's request. Findings at or above
+// NotifyAt open a case (deduplicated against open cases by key) and notify
+// the operator; anything below is recorded and stays quiet.
+type MemberProactive struct {
+	// Every is the interval between sweep starts (required).
+	Every Duration `yaml:"every"`
+	// QuietHours is a local-time window, "22:00-07:00", in which no sweep
+	// starts (wraps midnight). Timezone is an IANA zone (default: the
+	// daemon's local zone).
+	QuietHours string `yaml:"quiet_hours,omitempty"`
+	Timezone   string `yaml:"timezone,omitempty"`
+	// Budget caps sweeps over a rolling 24 hours. A sweep that would exceed
+	// it does not start (logged and audited).
+	Budget ProactiveBudget `yaml:"budget,omitempty"`
+	// Checklist is what every sweep works through: a section of the charter
+	// (its heading text) or a file (config-relative). Exactly one.
+	Checklist ProactiveChecklist `yaml:"checklist"`
+	// NotifyAt is the lowest finding severity that opens a case and notifies
+	// the operator: low | medium | high | critical (default high).
+	NotifyAt string `yaml:"notify_at,omitempty"`
+	// Timeout bounds one sweep (default 20m).
+	Timeout Duration `yaml:"timeout,omitempty"`
+}
+
+// ProactiveBudget bounds sweeps per rolling 24 hours.
+type ProactiveBudget struct {
+	MaxRunsPerDay int     `yaml:"max_runs_per_day,omitempty"`
+	MaxCostPerDay float64 `yaml:"max_cost_per_day,omitempty"` // USD
+}
+
+// ProactiveChecklist names the sweep checklist's source.
+type ProactiveChecklist struct {
+	Section string `yaml:"section,omitempty"`
+	File    string `yaml:"file,omitempty"`
+}
+
+// Finding severities, least first.
+var FindingSeverities = []string{"low", "medium", "high", "critical"}
+
+// SeverityRank orders finding severities (-1 for an unknown one).
+func SeverityRank(s string) int {
+	for i, x := range FindingSeverities {
+		if x == s {
+			return i
+		}
+	}
+	return -1
+}
+
+// DefaultProactiveTimeout bounds one sweep.
+const DefaultProactiveTimeout = 20 * time.Minute
+
+// NotifyLevel is the effective notify threshold.
+func (p MemberProactive) NotifyLevel() string {
+	if p.NotifyAt != "" {
+		return p.NotifyAt
+	}
+	return "high"
+}
+
+// TimeoutD is the effective sweep bound.
+func (p MemberProactive) TimeoutD() time.Duration {
+	if p.Timeout > 0 {
+		return p.Timeout.D()
+	}
+	return DefaultProactiveTimeout
+}
+
+// Location is the zone quiet hours are read in.
+func (p MemberProactive) Location() *time.Location {
+	if p.Timezone != "" {
+		if l, err := time.LoadLocation(p.Timezone); err == nil {
+			return l
+		}
+	}
+	return time.Local
+}
+
+// parseQuietHours reads "HH:MM-HH:MM" into minutes after midnight.
+func parseQuietHours(s string) (from, to int, err error) {
+	a, b, ok := strings.Cut(strings.TrimSpace(s), "-")
+	if !ok {
+		return 0, 0, fmt.Errorf("quiet_hours %q: want \"HH:MM-HH:MM\"", s)
+	}
+	parse := func(x string) (int, error) {
+		t, err := time.Parse("15:04", strings.TrimSpace(x))
+		if err != nil {
+			return 0, fmt.Errorf("quiet_hours %q: want \"HH:MM-HH:MM\"", s)
+		}
+		return t.Hour()*60 + t.Minute(), nil
+	}
+	if from, err = parse(a); err != nil {
+		return 0, 0, err
+	}
+	if to, err = parse(b); err != nil {
+		return 0, 0, err
+	}
+	if from == to {
+		return 0, 0, fmt.Errorf("quiet_hours %q: an empty window", s)
+	}
+	return from, to, nil
+}
+
+// Quiet reports whether t falls inside the quiet hours (false when unset).
+func (p MemberProactive) Quiet(t time.Time) bool {
+	if p.QuietHours == "" {
+		return false
+	}
+	from, to, err := parseQuietHours(p.QuietHours)
+	if err != nil {
+		return false
+	}
+	lt := t.In(p.Location())
+	m := lt.Hour()*60 + lt.Minute()
+	if from < to {
+		return m >= from && m < to
+	}
+	return m >= from || m < to // wraps midnight
 }
 
 // MemberTerraform configures conductor-executed Terraform for a member. The
@@ -241,6 +372,9 @@ type MemberWorker struct {
 	Timeout Duration `yaml:"timeout,omitempty"`
 	// MaxConcurrent caps live workers per member (default 4).
 	MaxConcurrent int `yaml:"max_concurrent,omitempty"`
+	// MaxPerCase caps live workers on one case — a fan-out's width
+	// (default 3).
+	MaxPerCase int `yaml:"max_per_case,omitempty"`
 }
 
 // MemberAutonomy is the member's gate configuration.
@@ -293,6 +427,7 @@ const (
 	DefaultMemberRotateTurns   = 100
 	DefaultMemberWorkerTimeout = 2 * time.Hour
 	DefaultMemberMaxWorkers    = 4
+	DefaultMemberMaxPerCase    = 3
 	DefaultMemberApprovalTTL   = 24 * time.Hour
 	DefaultSpendPeriod         = 720 * time.Hour
 )
@@ -355,12 +490,26 @@ func (w MemberWorker) MaxWorkers() int {
 	return DefaultMemberMaxWorkers
 }
 
+// PerCase is the effective per-case worker cap.
+func (w MemberWorker) PerCase() int {
+	if w.MaxPerCase > 0 {
+		return w.MaxPerCase
+	}
+	return DefaultMemberMaxPerCase
+}
+
 // Synthesized trigger names: each member expands into two `on: manual`
 // triggers the member service fires to start a worker — through the same
 // engine path `conductor run` takes, so a worker is an ordinary run (history,
 // watch, budget, model resolution, guidance) and not a parallel launcher.
 func MemberWorkerTrigger(member string) string  { return "member:" + member + ":worker" }
 func MemberHandoffTrigger(member string) string { return "member:" + member + ":handoff" }
+
+// MemberSweepTrigger is the third synthesized trigger, for a member with
+// proactive: — the worker step with the sweep's timeout and, when the budget
+// sets a cost, a 24h workflow budget the engine enforces on top of the
+// member service's own check.
+func MemberSweepTrigger(member string) string { return "member:" + member + ":sweep" }
 
 // MemberWorkerStepID is the id of the agent step in both synthesized
 // triggers; a worker's dispatch id is "<history id>:<this>".
@@ -530,8 +679,108 @@ func (c *Config) expandMembers() error {
 			TriggerSpec{On: ManualSource, Name: MemberWorkerTrigger(name), Enabled: &enabled, Steps: []Step{worker}},
 			TriggerSpec{On: ManualSource, Name: MemberHandoffTrigger(name), Enabled: &enabled, Steps: []Step{handoff}},
 		)
+		if p := m.Proactive; p != nil {
+			sweep := worker
+			sweep.Name = MemberSweepTrigger(name)
+			sweep.WaitTimeout = Duration(p.TimeoutD())
+			ts := TriggerSpec{On: ManualSource, Name: MemberSweepTrigger(name), Enabled: &enabled, Steps: []Step{sweep}}
+			if p.Budget.MaxCostPerDay > 0 {
+				ts.Policy = &Policy{Budget: &BudgetPolicy{Window: Duration(24 * time.Hour), MaxCostUSD: p.Budget.MaxCostPerDay}}
+			}
+			c.Triggers = append(c.Triggers, ts)
+		}
 	}
 	return nil
+}
+
+// MemberLinked reports whether two members may message each other: both
+// list the other under peers:, or an operator-side member_links: entry
+// pairs them. A member is never its own peer.
+func (c *Config) MemberLinked(a, b string) bool {
+	if a == b || a == "" || b == "" {
+		return false
+	}
+	ma, oka := c.Members[a]
+	mb, okb := c.Members[b]
+	if !oka || !okb || ma.Disabled || mb.Disabled {
+		return false
+	}
+	for _, l := range c.MemberLinks {
+		if len(l) == 2 && (l[0] == a && l[1] == b || l[0] == b && l[1] == a) {
+			return true
+		}
+	}
+	return hasString(ma.Peers, b) && hasString(mb.Peers, a)
+}
+
+func hasString(xs []string, x string) bool {
+	for _, y := range xs {
+		if y == x {
+			return true
+		}
+	}
+	return false
+}
+
+// MemberChecklist is the text a member's sweeps work through: the named
+// charter section, or the checklist file.
+func (c *Config) MemberChecklist(name string) (string, error) {
+	m := c.Members[name]
+	if m.Proactive == nil {
+		return "", fmt.Errorf("member %q has no proactive: block", name)
+	}
+	cl := m.Proactive.Checklist
+	if cl.File != "" {
+		p := expandHome(cl.File)
+		if !filepath.IsAbs(p) && c.baseDir != "" {
+			p = filepath.Join(c.baseDir, p)
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return "", fmt.Errorf("member %q: proactive.checklist.file: %w", name, err)
+		}
+		return strings.TrimSpace(string(b)), nil
+	}
+	ch, err := c.MemberCharter(name)
+	if err != nil {
+		return "", err
+	}
+	text, ok := MarkdownSection(ch, cl.Section)
+	if !ok {
+		return "", fmt.Errorf("member %q: proactive.checklist.section: the charter has no heading %q", name, cl.Section)
+	}
+	return text, nil
+}
+
+// MarkdownSection returns the body under the heading whose text is title
+// (case-insensitive), up to the next heading of the same or a higher level.
+func MarkdownSection(doc, title string) (string, bool) {
+	want := strings.ToLower(strings.TrimSpace(title))
+	lines := strings.Split(doc, "\n")
+	level := 0
+	var out []string
+	for _, l := range lines {
+		t := strings.TrimSpace(l)
+		lv := 0
+		for lv < len(t) && t[lv] == '#' {
+			lv++
+		}
+		isHeading := lv > 0 && lv <= 6 && len(t) > lv && t[lv] == ' '
+		if level == 0 {
+			if isHeading && strings.ToLower(strings.TrimSpace(t[lv:])) == want {
+				level = lv
+			}
+			continue
+		}
+		if isHeading && lv <= level {
+			break
+		}
+		out = append(out, l)
+	}
+	if level == 0 {
+		return "", false
+	}
+	return strings.TrimSpace(strings.Join(out, "\n")), true
 }
 
 // validateMembers checks operators: and members:. Nil-safe and a no-op for
@@ -553,6 +802,51 @@ func (c *Config) validateMembers() error {
 		if err := c.validateMember(name, m); err != nil {
 			return fmt.Errorf("config: members.%s: %w", name, err)
 		}
+	}
+	for i, l := range c.MemberLinks {
+		if len(l) != 2 || l[0] == l[1] {
+			return fmt.Errorf("config: member_links[%d]: want a pair of two different members", i)
+		}
+		for _, n := range l {
+			if _, ok := c.Members[n]; !ok {
+				return fmt.Errorf("config: member_links[%d]: %q is not a configured member", i, n)
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateMemberProactive(name string, p *MemberProactive) error {
+	if p.Every.D() < 5*time.Minute {
+		return fmt.Errorf("every: set an interval of at least 5m between sweeps")
+	}
+	if p.QuietHours != "" {
+		if _, _, err := parseQuietHours(p.QuietHours); err != nil {
+			return err
+		}
+	}
+	if p.Timezone != "" {
+		if _, err := time.LoadLocation(p.Timezone); err != nil {
+			return fmt.Errorf("timezone: %w", err)
+		}
+	}
+	if p.Budget.MaxRunsPerDay < 0 || p.Budget.MaxCostPerDay < 0 {
+		return fmt.Errorf("budget: max_runs_per_day and max_cost_per_day must not be negative")
+	}
+	if p.Budget.MaxRunsPerDay == 0 && p.Budget.MaxCostPerDay == 0 {
+		return fmt.Errorf("budget: set max_runs_per_day and/or max_cost_per_day — an unbudgeted sweep schedule is refused")
+	}
+	if (p.Checklist.Section == "") == (p.Checklist.File == "") {
+		return fmt.Errorf("checklist: name exactly one of section (a charter heading) or file")
+	}
+	if _, err := c.MemberChecklist(name); err != nil {
+		return err
+	}
+	if p.NotifyAt != "" && SeverityRank(p.NotifyAt) < 0 {
+		return fmt.Errorf("notify_at: %q is not one of %s", p.NotifyAt, strings.Join(FindingSeverities, ", "))
+	}
+	if p.Timeout < 0 {
+		return fmt.Errorf("timeout must not be negative")
 	}
 	return nil
 }
@@ -619,8 +913,21 @@ func (c *Config) validateMember(name string, m MemberConfig) error {
 			return fmt.Errorf("terraform: %w", err)
 		}
 	}
-	if m.Worker.MaxConcurrent < 0 || m.Home.Rotate.MaxTurns < 0 {
-		return fmt.Errorf("max_concurrent / rotate.max_turns must not be negative")
+	if p := m.Proactive; p != nil {
+		if err := c.validateMemberProactive(name, p); err != nil {
+			return fmt.Errorf("proactive: %w", err)
+		}
+	}
+	for _, peer := range m.Peers {
+		if peer == name {
+			return fmt.Errorf("peers: a member is not its own peer")
+		}
+		if _, ok := c.Members[peer]; !ok {
+			return fmt.Errorf("peers: %q is not a configured member", peer)
+		}
+	}
+	if m.Worker.MaxConcurrent < 0 || m.Home.Rotate.MaxTurns < 0 || m.Worker.MaxPerCase < 0 {
+		return fmt.Errorf("max_concurrent / max_per_case / rotate.max_turns must not be negative")
 	}
 	a := m.Autonomy
 	hasMoney := false
@@ -685,6 +992,11 @@ func (c *Config) MemberWarnings() []string {
 		}
 		if m.Skill == nil || len(m.Skill.Verbs) == 0 {
 			out = append(out, fmt.Sprintf("members.%s: no skill.verbs — the member can only observe through memory and its ledger", name))
+		}
+		for _, peer := range m.Peers {
+			if !c.MemberLinked(name, peer) {
+				out = append(out, fmt.Sprintf("members.%s: peers lists %q, but %s does not list %s back (and no member_links: entry pairs them) — no messages pass until both sides do", name, peer, peer, name))
+			}
 		}
 	}
 	return out

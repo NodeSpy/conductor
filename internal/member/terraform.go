@@ -182,9 +182,13 @@ func (t *Terraform) Propose(ctx context.Context, c Actor, req TerraformRequest) 
 			return store.Proposal{}, fmt.Errorf("target %q is not a resource address", tg)
 		}
 	}
-	class, who, caseID := ReqMember, "", c.CaseID
+	class, who, caseID, worker := ReqMember, "", c.CaseID, ""
 	if t.Gate != nil {
-		class, who, caseID = t.Gate.requester(flow.SkillIdentity{Member: c.Member, MemberRole: c.Role, CaseID: c.CaseID})
+		cl := t.Gate.caller(flow.SkillIdentity{Member: c.Member, MemberRole: c.Role, CaseID: c.CaseID, Dispatch: c.Dispatch})
+		class, who, caseID = cl.class, cl.who, cl.caseID
+		if cl.worker != nil {
+			worker = cl.worker.ID
+		}
 	}
 	now := t.now()
 	var out store.Proposal
@@ -193,7 +197,7 @@ func (t *Terraform) Propose(ctx context.Context, c Actor, req TerraformRequest) 
 			ID: r.NextID("p"), CaseID: caseID, Kind: KindTerraform, Tier: config.TierPropose, Uses: "terraform.apply",
 			Terraform: &store.TerraformPlan{Repo: req.Repo, Commit: req.Commit, Dir: req.Dir, Workspace: req.Workspace,
 				VarFiles: append([]string(nil), req.VarFiles...), Targets: append([]string(nil), req.Targets...), ReplanOf: req.ReplanOf},
-			Summary: req.Summary, Role: c.Role, Agent: c.Agent, Dispatch: c.Dispatch,
+			Summary: req.Summary, Role: c.Role, Agent: c.Agent, Dispatch: c.Dispatch, Worker: worker,
 			Requester: who, RequesterClass: class, Status: "planning", Created: now, Expires: now.Add(m.Autonomy.TTL()),
 		}
 		if cc := r.Cases[caseID]; cc != nil {

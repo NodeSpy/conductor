@@ -36,11 +36,16 @@ import (
 // class only ever LOWERS what runs autonomously; approvals need an operator
 // signature whoever asked.
 const (
-	ReqUser     = "user"     // a third party (a chat user who is not an operator)
-	ReqEvent    = "event"    // an alert / schedule / webhook with no human requester
-	ReqMember   = "member"   // the member's own initiative, or the home conversation
-	ReqOperator = "operator" // a configured operator (by name or alias)
+	ReqUser      = "user"      // a third party (a chat user who is not an operator)
+	ReqPeer      = "peer"      // another member's message (requester "member:<name>")
+	ReqProactive = "proactive" // a proactive sweep, or a case one of its findings opened
+	ReqEvent     = "event"     // an alert / schedule / webhook with no human requester
+	ReqMember    = "member"    // the member's own initiative, or the home conversation
+	ReqOperator  = "operator"  // a configured operator (by name or alias)
 )
+
+// PeerRequester is how a peer member is named as a requester.
+func PeerRequester(member string) string { return "member:" + member }
 
 // Sandbox is conductor's agent sandbox as members see it. Until it is on
 // main, NoSandbox: member sessions run unconfined, promotion to autonomous
@@ -194,12 +199,17 @@ func (g *Gate) CheckVerb(ctx context.Context, id flow.SkillIdentity, uses string
 		return flow.MemberVerdict{Allow: true}, nil
 	}
 
-	class, _, _ := g.requester(id)
+	cl := g.caller(id)
+	// A child's ceiling: a parent may have narrowed its verbs. The member's
+	// own policy already admitted the call; this only ever refuses more.
+	if w := cl.worker; w != nil && len(w.Verbs) > 0 && !selfService(uses) && !flow.MatchVerbPattern(w.Verbs, uses) {
+		return flow.MemberVerdict{}, fmt.Errorf("%s is outside the verbs worker %s was given (%s)", uses, w.ID, strings.Join(w.Verbs, ", "))
+	}
 	switch tier {
 	case config.TierObserve:
 		return flow.MemberVerdict{Allow: true}, nil
 	case config.TierReversible:
-		if g.autonomous(m, uses, class) {
+		if !cl.readOnly() && g.autonomous(m, uses, cl.class) {
 			return flow.MemberVerdict{Allow: true}, nil
 		}
 	case config.TierCommitMoney:
@@ -216,8 +226,10 @@ func (g *Gate) CheckVerb(ctx context.Context, id flow.SkillIdentity, uses string
 }
 
 // autonomous reports whether a reversible-tier verb runs without approval:
-// never in shadow mode, only when promoted, only while sandboxed, and never
-// on a third party's request.
+// never in shadow mode, only when promoted, only while sandboxed, and only
+// for an event's, the member's own or an operator's request — never a third
+// party's, a peer member's, or a proactive sweep's (a sweep is read-only:
+// everything above observe becomes a proposal).
 func (g *Gate) autonomous(m config.MemberConfig, uses, class string) bool {
 	if m.Autonomy.ShadowMode() {
 		return false
@@ -228,32 +240,82 @@ func (g *Gate) autonomous(m config.MemberConfig, uses, class string) bool {
 	if !g.sandboxed() {
 		return false
 	}
-	return class != ReqUser
+	return autonomyClass[class]
 }
 
-// requesterRank orders requester classes by trust (least first).
-var requesterRank = map[string]int{ReqUser: 0, ReqEvent: 1, ReqMember: 2, ReqOperator: 3}
+// autonomyClass is the allowlist of requester classes a promoted verb may
+// run unapproved for. A class missing here (an unknown one included) never
+// runs anything above observe without an operator's signature.
+var autonomyClass = map[string]bool{ReqEvent: true, ReqMember: true, ReqOperator: true}
 
-// requester is who the gate holds responsible for a call: its class (what
-// caps autonomy), the requester's name, and the case it comes from.
+// requesterRank orders requester classes by trust (least first).
+var requesterRank = map[string]int{ReqUser: 0, ReqPeer: 0, ReqProactive: 1, ReqEvent: 2, ReqMember: 3, ReqOperator: 4}
+
+// selfService verbs act only on the caller's own dispatch.
+func selfService(uses string) bool {
+	return strings.HasPrefix(uses, "step.") || strings.HasPrefix(uses, "handoff.")
+}
+
+// callerInfo is who the gate holds responsible for a call.
+type callerInfo struct {
+	class, who, caseID string
+	worker             *store.Worker // the calling worker's record (a child)
+}
+
+func (c callerInfo) readOnly() bool { return c.worker != nil && c.worker.ReadOnly }
+
+// caller resolves a call's provenance.
 //
-// A WORKER is bound to its case at launch, so its case's requester is it. A
-// HOME session's call names no case — it acts on a conversation that mixes
-// the operator, events and third parties — so it is attributed to the
-// LEAST-TRUSTED requester among the member's open cases: while a third
-// party's request is open, nothing the home session does runs on more trust
-// than that third party's. No open case: the member's own initiative.
+// A WORKER (a child) carries the provenance recorded when it was spawned:
+// the least trusted of its case's requester and its parent's own trust at
+// that moment. So a parent acting on a third party's request — or one
+// talked into something by a prompt injection — cannot launder an action
+// through a child: the child is gated as that requester. A worker with no
+// ledger record is an anomaly and gets the least trust.
+func (g *Gate) caller(id flow.SkillIdentity) callerInfo {
+	if id.MemberRole == config.MemberRoleWorker {
+		rec := g.Ledger.Member(id.Member)
+		w := workerByDispatch(rec, id.Dispatch)
+		if w == nil || w.RequesterClass == "" {
+			return callerInfo{class: ReqUser, worker: w}
+		}
+		ci := callerInfo{class: w.RequesterClass, who: w.Requester, worker: w}
+		if c := rec.Cases[w.CaseID]; c != nil {
+			ci.caseID = c.ID
+		}
+		return ci
+	}
+	class, who, caseID := g.requester(id)
+	return callerInfo{class: class, who: who, caseID: caseID}
+}
+
+func workerByDispatch(rec store.MemberRecord, dispatchID string) *store.Worker {
+	if dispatchID == "" {
+		return nil
+	}
+	for _, w := range rec.Workers {
+		if w.Dispatch == dispatchID {
+			return w
+		}
+	}
+	return nil
+}
+
+// requester is the HOME session's attribution. A home call names no case —
+// it acts on a conversation that mixes the operator, events and third
+// parties — so it is attributed to the LEAST-TRUSTED requester among the
+// member's open cases: while a third party's request is open, nothing the
+// home session does runs on more trust than that third party's. No open
+// case: the member's own initiative.
 func (g *Gate) requester(id flow.SkillIdentity) (class, who, caseID string) {
 	rec := g.Ledger.Member(id.Member)
-	if id.MemberRole == config.MemberRoleWorker {
-		c := rec.Cases[id.CaseID]
-		if id.CaseID == "" || c == nil || c.RequesterClass == "" {
-			// A worker with no (or an unknown) case binding is an anomaly:
-			// least trust.
-			return ReqUser, "", id.CaseID
-		}
-		return c.RequesterClass, c.Requester, c.ID
-	}
+	return homeAttribution(&rec)
+}
+
+// homeAttribution is the least-trusted requester among a member's open
+// cases (ties: the lowest case id); the member itself when none is open. An
+// unknown class ranks as a third party.
+func homeAttribution(rec *store.MemberRecord) (class, who, caseID string) {
 	class = ReqMember
 	for _, c := range rec.Cases {
 		if c.Status != "open" {
@@ -271,6 +333,23 @@ func (g *Gate) requester(id flow.SkillIdentity) (class, who, caseID string) {
 		}
 	}
 	return class, who, caseID
+}
+
+// lessTrusted picks the less trusted of two (class, requester) pairs; on a
+// tie, the first — the case's own requester, the originating one.
+func lessTrusted(aClass, aWho, bClass, bWho string) (string, string) {
+	ra, ok := requesterRank[aClass]
+	if !ok {
+		aClass, ra = ReqUser, 0
+	}
+	rb, ok := requesterRank[bClass]
+	if !ok {
+		bClass, rb = ReqUser, 0
+	}
+	if rb < ra {
+		return bClass, bWho
+	}
+	return aClass, aWho
 }
 
 // amountOf reads a commit-money verb's typed amount.
@@ -352,7 +431,8 @@ func (g *Gate) propose(id flow.SkillIdentity, m config.MemberConfig, tier, uses 
 	if err != nil {
 		return flow.MemberVerdict{}, err
 	}
-	class, who, caseID := g.requester(id)
+	cl := g.caller(id)
+	class, who, caseID := cl.class, cl.who, cl.caseID
 	now := g.now()
 	status := "pending"
 	if m.Autonomy.ShadowMode() {
@@ -361,13 +441,16 @@ func (g *Gate) propose(id flow.SkillIdentity, m config.MemberConfig, tier, uses 
 	var created store.Proposal
 	err = g.Ledger.UpdateMember(id.Member, func(r *store.MemberRecord) error {
 		p := &store.Proposal{
-			ID: r.NextID("p"), CaseID: id.CaseID, Kind: "verb", Tier: tier, Uses: uses,
+			ID: r.NextID("p"), Kind: "verb", Tier: tier, Uses: uses,
 			Options: options, Amount: amount, Digest: digest,
 			Role: id.MemberRole, Agent: id.Agent, Dispatch: id.Dispatch, Identity: idJSON,
 			Status: status, Created: now, Expires: now.Add(m.Autonomy.TTL()),
 		}
 		p.RequesterClass = class
 		p.Requester = who
+		if cl.worker != nil {
+			p.Worker = cl.worker.ID
+		}
 		if c := r.Cases[caseID]; c != nil {
 			p.CaseID = caseID
 			c.Proposals = append(c.Proposals, p.ID)

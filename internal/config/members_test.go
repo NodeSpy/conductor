@@ -293,3 +293,116 @@ members:
 		}
 	}
 }
+
+func TestMemberProactiveConfig(t *testing.T) {
+	const ok = `
+members:
+  sre:
+    charter: |
+      Keep it up.
+      ## Proactive checks
+      - cost anomalies
+      ### detail
+      - nested stays
+      ## Never
+      - nothing
+    proactive:
+      every: 4h
+      quiet_hours: "22:00-07:00"
+      timezone: UTC
+      budget: { max_runs_per_day: 6, max_cost_per_day: 2.5 }
+      checklist: { section: "Proactive checks" }
+`
+	c, err := loadMembers(t, ok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sweep *TriggerSpec
+	for i := range c.Triggers {
+		if c.Triggers[i].Name == MemberSweepTrigger("sre") {
+			sweep = &c.Triggers[i]
+		}
+	}
+	if sweep == nil || sweep.Steps[0].BoundMember != "sre" || sweep.Steps[0].WaitTimeout.D() != DefaultProactiveTimeout {
+		t.Fatalf("sweep trigger: %+v", sweep)
+	}
+	if sweep.Policy == nil || sweep.Policy.Budget == nil || sweep.Policy.Budget.MaxCostUSD != 2.5 || sweep.Policy.Budget.WindowOrDefault() != 24*time.Hour {
+		t.Fatalf("the sweep trigger must carry the daily cost budget: %+v", sweep.Policy)
+	}
+	cl, err := c.MemberChecklist("sre")
+	if err != nil || cl != "- cost anomalies\n### detail\n- nested stays" {
+		t.Fatalf("checklist section: %q %v", cl, err)
+	}
+	p := c.Members["sre"].Proactive
+	for at, want := range map[string]bool{"23:30": true, "03:00": true, "07:00": false, "12:00": false, "22:00": true} {
+		tm, _ := time.Parse("15:04", at)
+		tm = time.Date(2026, 10, 14, tm.Hour(), tm.Minute(), 0, 0, time.UTC)
+		if p.Quiet(tm) != want {
+			t.Errorf("quiet at %s = %v", at, !want)
+		}
+	}
+	if p.NotifyLevel() != "high" {
+		t.Fatal("default notify_at must be high")
+	}
+	// A member without proactive: gets no sweep trigger.
+	c2, _ := loadMembers(t, "members:\n  sre: {}\n")
+	for _, tr := range c2.Triggers {
+		if tr.Name == MemberSweepTrigger("sre") {
+			t.Fatal("a member that did not opt in got a sweep trigger")
+		}
+	}
+	for name, body := range map[string]string{
+		"no budget":       "every: 4h\n      checklist: { section: Proactive checks }",
+		"too frequent":    "every: 1m\n      budget: { max_runs_per_day: 1 }\n      checklist: { section: Proactive checks }",
+		"no checklist":    "every: 4h\n      budget: { max_runs_per_day: 1 }",
+		"both checklists": "every: 4h\n      budget: { max_runs_per_day: 1 }\n      checklist: { section: Proactive checks, file: x.md }",
+		"missing section": "every: 4h\n      budget: { max_runs_per_day: 1 }\n      checklist: { section: Nope }",
+		"missing file":    "every: 4h\n      budget: { max_runs_per_day: 1 }\n      checklist: { file: nope.md }",
+		"bad quiet":       "every: 4h\n      quiet_hours: 25-7\n      budget: { max_runs_per_day: 1 }\n      checklist: { section: Proactive checks }",
+		"bad notify":      "every: 4h\n      notify_at: loud\n      budget: { max_runs_per_day: 1 }\n      checklist: { section: Proactive checks }",
+		"bad zone":        "every: 4h\n      timezone: Mars/Base\n      budget: { max_runs_per_day: 1 }\n      checklist: { section: Proactive checks }",
+	} {
+		_, err := loadMembers(t, "members:\n  sre:\n    charter: \"## Proactive checks\\n- x\"\n    proactive:\n      "+body+"\n")
+		if err == nil || !strings.Contains(err.Error(), "proactive") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestMemberPeerLinks(t *testing.T) {
+	c, err := loadMembers(t, `
+members:
+  a: { peers: [b] }
+  b: { peers: [a] }
+  c: { peers: [a] }
+  d: {}
+member_links:
+  - [d, c]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range []struct {
+		a, b string
+		want bool
+	}{{"a", "b", true}, {"b", "a", true}, {"a", "c", false}, {"c", "a", false}, {"c", "d", true}, {"d", "c", true}, {"a", "a", false}, {"a", "zz", false}} {
+		if got := c.MemberLinked(x.a, x.b); got != x.want {
+			t.Errorf("linked(%s,%s) = %v", x.a, x.b, got)
+		}
+	}
+	w := strings.Join(c.MemberWarnings(), "\n")
+	if !strings.Contains(w, `members.c: peers lists "a", but a does not list c back`) {
+		t.Fatalf("one-sided peers not warned: %s", w)
+	}
+	for name, body := range map[string]string{
+		"self peer":    "members:\n  a: { peers: [a] }\n",
+		"unknown peer": "members:\n  a: { peers: [zz] }\n",
+		"bad link":     "members:\n  a: {}\nmember_links: [[a]]\n",
+		"self link":    "members:\n  a: {}\nmember_links: [[a, a]]\n",
+		"unknown link": "members:\n  a: {}\nmember_links: [[a, zz]]\n",
+	} {
+		if _, err := loadMembers(t, body); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}

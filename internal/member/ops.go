@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -54,6 +55,19 @@ func strs(args map[string]any, k string) []string {
 	return nil
 }
 
+// verbList reads --verbs as a comma-separated list or a list.
+func verbList(args map[string]any) []string {
+	var out []string
+	for _, v := range strs(args, "verbs") {
+		for _, p := range strings.Split(v, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
 func toMap(v any) map[string]any {
 	b, _ := json.Marshal(v)
 	var m map[string]any
@@ -70,6 +84,7 @@ func toList[T any](xs []T) []any {
 }
 
 // AgentOp serves one `conductor member <sub>` call from a member session.
+// A worker's call also hands it any unread instructions from its parent.
 func (s *Service) AgentOp(ctx context.Context, c Actor, sub string, args map[string]any) (map[string]any, error) {
 	if c.Member == "" {
 		return nil, fmt.Errorf("this session is not a member session")
@@ -77,6 +92,19 @@ func (s *Service) AgentOp(ctx context.Context, c Actor, sub string, args map[str
 	if _, err := s.member(c.Member); err != nil {
 		return nil, err
 	}
+	out, err := s.agentOp(ctx, c, sub, args)
+	if c.Role == config.MemberRoleWorker {
+		if texts := s.takeInstructions(c.Member, c.Dispatch); len(texts) > 0 {
+			if out == nil {
+				out = map[string]any{}
+			}
+			out["instructions_from_parent"] = InstructionsText(c.Member, texts)
+		}
+	}
+	return out, err
+}
+
+func (s *Service) agentOp(ctx context.Context, c Actor, sub string, args map[string]any) (map[string]any, error) {
 	switch sub {
 	case "whoami":
 		rec := s.Ledger.Member(c.Member)
@@ -120,12 +148,36 @@ func (s *Service) AgentOp(ctx context.Context, c Actor, sub string, args map[str
 	case "case_close":
 		return map[string]any{"ok": true}, s.CaseClose(ctx, c, str(args, "case"), str(args, "outcome"))
 	case "spawn":
-		w, err := s.Spawn(ctx, c, SpawnRequest{CaseID: str(args, "case"), Title: str(args, "title"), Brief: str(args, "brief"), Handoff: boolArg(args, "handoff")})
+		w, err := s.Spawn(ctx, c, SpawnRequest{CaseID: str(args, "case"), Title: str(args, "title"), Brief: str(args, "brief"),
+			Handoff: boolArg(args, "handoff"), Group: str(args, "group"), Verbs: verbList(args), ReadOnly: boolArg(args, "read_only")})
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"worker": w.ID, "case": w.CaseID, "status": w.Status,
-			"message": "worker started; it reports back into your conversation when it finishes"}, nil
+		out := map[string]any{"worker": w.ID, "case": w.CaseID, "status": w.Status,
+			"message": "worker started; it reports back into your conversation when it finishes"}
+		if w.Group != "" {
+			out["group"] = w.Group
+			out["message"] = fmt.Sprintf("worker started in group %s; `conductor member join --case %s --group %s` waits for the whole group and returns every result together (the group also reports here once, when its last worker finishes)", w.Group, w.CaseID, str(args, "group"))
+		}
+		return out, nil
+	case "join":
+		// Bounded per call like wait; the CLI loops.
+		res, err := s.Join(ctx, c, str(args, "id"), str(args, "case"), str(args, "group"), 20*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		return toMap(res), nil
+	case "ask":
+		return s.Ask(ctx, c, str(args, "to"), str(args, "text"), str(args, "case"))
+	case "tell":
+		return s.Tell(ctx, c, str(args, "to"), str(args, "text"))
+	case "report":
+		return map[string]any{"ok": true}, s.Report(c, str(args, "text"))
+	case "instructions":
+		// The delivery itself happens in AgentOp; this op only asks.
+		return map[string]any{"ok": true}, nil
+	case "peers":
+		return map[string]any{"peers": s.Peers(c.Member)}, nil
 	case "handoff":
 		sha, err := s.Handoff(ctx, c, str(args, "text"))
 		if err != nil {
@@ -290,6 +342,20 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 			return nil, err
 		}
 		return map[string]any{"proposal": p.ID, "status": p.Status, "replan_of": str(args, "id")}, nil
+	case "sweep":
+		if err := need(); err != nil {
+			return nil, err
+		}
+		sw, err := s.StartSweep(ctx, name, true)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"sweep": sw.ID, "worker": sw.Worker, "status": sw.Status}, nil
+	case "sweeps":
+		if err := need(); err != nil {
+			return nil, err
+		}
+		return map[string]any{"sweeps": toList(s.Sweeps(name, 20))}, nil
 	case "consolidate":
 		w, err := s.Consolidate(ctx, name)
 		if err != nil {
@@ -332,6 +398,16 @@ func (s *Service) statusOf(name string) map[string]any {
 	if h := rec.Home; h != nil {
 		out["home"] = map[string]any{"session": h.ID, "agent": h.AgentID, "cwd": h.Cwd,
 			"started": h.Started.Format(time.RFC3339), "turns": h.Turns}
+	}
+	if p := m.Proactive; p != nil {
+		pr := map[string]any{"every": p.Every.D().String(), "notify_at": p.NotifyLevel()}
+		if sw := s.Sweeps(name, 1); len(sw) > 0 {
+			pr["last_sweep"] = map[string]any{"id": sw[0].ID, "status": sw[0].Status, "started": sw[0].Started.Format(time.RFC3339), "summary": sw[0].Summary}
+		}
+		out["proactive"] = pr
+	}
+	if peers := s.Peers(name); len(peers) > 0 {
+		out["peers"] = peers
 	}
 	delete(out, "worker_role")
 	return out

@@ -10,11 +10,13 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/controller"
+	"github.com/NodeSpy/conductor/internal/core"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/engine"
 	"github.com/NodeSpy/conductor/internal/flow"
 	"github.com/NodeSpy/conductor/internal/member"
 	"github.com/NodeSpy/conductor/internal/memory"
+	"github.com/NodeSpy/conductor/internal/notify"
 	"github.com/NodeSpy/conductor/internal/skill"
 	"github.com/NodeSpy/conductor/internal/store"
 )
@@ -32,7 +34,7 @@ type memberStack struct {
 // with a terraform: block — conductor's own terraform runner. nil when no
 // member is configured.
 func buildMembers(cfg *config.Config, st *store.Store, runner *flow.Runner, reg *controller.Registry,
-	hold *dispatch.HoldSet, eng *engine.Engine, logf func(string, ...any)) *memberStack {
+	hold *dispatch.HoldSet, eng *engine.Engine, notifier *notify.Notifier, logf func(string, ...any)) *memberStack {
 	if len(cfg.MemberNames()) == 0 || runner == nil {
 		return nil
 	}
@@ -72,6 +74,19 @@ func buildMembers(cfg *config.Config, st *store.Store, runner *flow.Runner, reg 
 			return err
 		}),
 		Log: logf, Audit: audit, RevokeToken: revokeDispatch,
+		RunCost: func(hid string) (float64, bool) {
+			h, ok := st.GetHistory(hid)
+			return h.CostUSD, ok
+		},
+	}
+	if notifier != nil {
+		// A proactive finding over the threshold is also a conductor.*
+		// lifecycle event, so a trigger can alert through any connector.
+		svc.Notify = func(ctx context.Context, n member.Notice) {
+			notifier.Publish(ctx, member.NotifyEvent, core.Trigger{Title: n.Title},
+				fmt.Sprintf("member %s: proactive sweep %s found %s — %s (%s)", n.Member, n.Sweep, strings.ToUpper(n.Severity), n.Title, n.Text),
+				map[string]any{"member": n.Member, "sweep": n.Sweep, "case": n.CaseID, "severity": n.Severity, "key": n.Key})
+		}
 	}
 	registerSandboxSessions(svc)
 	gate.OnProposal = svc.OnProposal
@@ -161,6 +176,10 @@ func (m *memberStack) wrapStepOps(base func() *connector.StepOps) func() *connec
 			if mem, role := m.svc.IsMemberDispatch(dispatchID); mem != "" {
 				if role == config.MemberRoleHome {
 					return fmt.Errorf("step.done: the home session of member %s does not finish — it is rotated (`conductor member rotate %s`)", mem, mem)
+				}
+				// A child cannot finish past instructions it has not read.
+				if err := m.svc.CheckDone(dispatchID); err != nil {
+					return err
 				}
 				var out any
 				if hasOutput {

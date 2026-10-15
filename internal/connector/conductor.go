@@ -41,6 +41,20 @@ func versionContext() Schema {
 	return s
 }
 
+// memberNotifyContext extends the lifecycle context for member_notify.
+func memberNotifyContext() Schema {
+	s := Schema{}
+	for k, v := range lifecycleContext {
+		s[k] = v
+	}
+	s["member"] = Field{Type: TString, Desc: "the member whose sweep found it"}
+	s["sweep"] = Field{Type: TString, Desc: "the sweep id"}
+	s["case"] = Field{Type: TString, Desc: "the member case it opened or escalated"}
+	s["severity"] = Field{Type: TString, Desc: "low | medium | high | critical"}
+	s["key"] = Field{Type: TString, Desc: "the finding's dedupe key"}
+	return s
+}
+
 var conductorDecl = &TypeDecl{
 	Type: "conductor",
 	Desc: "Conductor itself — lifecycle events as a source, daemon operations as verbs; always available, no configuration.",
@@ -52,6 +66,7 @@ var conductorDecl = &TypeDecl{
 		{Name: "failed", Desc: "a run errored", Context: lifecycleContext},
 		{Name: "updated", Desc: "conductor self-updated (emitted on the first boot of the new release)", Context: versionContext()},
 		{Name: "update_available", Desc: "a newer release was detected (update.apply: workflow)", Context: versionContext()},
+		{Name: "member_notify", Desc: "a member's proactive sweep found something at or above its notify_at threshold", Context: memberNotifyContext()},
 	},
 	Verbs: []VerbDecl{
 		{

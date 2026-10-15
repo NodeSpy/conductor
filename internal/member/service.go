@@ -2,6 +2,7 @@ package member
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -93,8 +94,14 @@ type Service struct {
 	// broker's RevokeDispatch). Member tokens are durable — they would
 	// otherwise outlive a finished worker by days.
 	RevokeToken func(dispatchID string)
+	// RunCost is a finished run's total cost (the run history's), for the
+	// proactive budget. Notify publishes a proactive finding to the
+	// conductor.member_notify lifecycle event. Both optional.
+	RunCost func(historyID string) (float64, bool)
+	Notify  func(ctx context.Context, n Notice)
 
 	mu       sync.Mutex
+	skipped  map[string]string    // last sweep-skip reason, per member (logged once)
 	failedAt map[string]time.Time // last failed home launch, per member (backoff)
 	repos    map[string]*Repo
 	locks    map[string]*sync.Mutex
@@ -211,11 +218,29 @@ func (s *Service) Start(ctx context.Context) {
 // it. Say so in the ledger and the inbox rather than leave it "running".
 func (s *Service) recoverWorkers(name string) {
 	var lost []store.Worker
+	type report struct{ caseID, text string }
+	var reports []report
 	_ = s.Ledger.UpdateMember(name, func(r *store.MemberRecord) error {
 		for _, w := range r.Workers {
-			if (w.Status == "starting" || w.Status == "running") && !w.Handoff {
+			if liveWorker(w) && !w.Handoff {
 				w.Status, w.Ended, w.Result = "interrupted", s.now(), "the daemon restarted while this worker ran"
 				lost = append(lost, *w)
+				if sw := r.Sweeps[w.Sweep]; sw != nil && sw.Status == "running" {
+					sw.Status, sw.Ended, sw.Summary = "interrupted", s.now(), "the daemon restarted while this sweep ran"
+				}
+			}
+		}
+		// A group whose last live worker was just interrupted reports now.
+		for _, g := range r.Groups {
+			if !g.Reported && groupDone(r, g) {
+				g.Reported = true
+				var ws []store.Worker
+				for _, id := range g.Workers {
+					if w := r.Workers[id]; w != nil {
+						ws = append(ws, *w)
+					}
+				}
+				reports = append(reports, report{g.CaseID, GroupReport(*g, ws)})
 			}
 		}
 		return nil
@@ -223,7 +248,15 @@ func (s *Service) recoverWorkers(name string) {
 	for _, w := range lost {
 		s.revoke(w.Dispatch)
 		_ = s.Repo(name).RemoveWorktree(context.Background(), w.Cwd)
-		s.enqueue(name, w.CaseID, fmt.Sprintf("[conductor] worker %s (case %s) was interrupted by a daemon restart before it reported. Respawn it if the work is still needed.", w.ID, w.CaseID))
+		switch {
+		case w.Sweep != "":
+			s.logf("%s: proactive sweep %s was interrupted by a daemon restart", name, w.Sweep)
+		case w.Group == "":
+			s.enqueue(name, w.CaseID, fmt.Sprintf("[conductor] worker %s (case %s) was interrupted by a daemon restart before it reported. Respawn it if the work is still needed.", w.ID, w.CaseID))
+		}
+	}
+	for _, rp := range reports {
+		s.enqueue(name, rp.caseID, rp.text)
 	}
 }
 
@@ -249,7 +282,11 @@ func (s *Service) loop(ctx context.Context, name string) {
 // fresh, expire stale proposals, deliver the inbox.
 func (s *Service) Tick(ctx context.Context, name string) {
 	m, err := s.member(name)
-	if err != nil || s.Home == nil {
+	if err != nil {
+		return
+	}
+	s.maybeSweep(ctx, name, m)
+	if s.Home == nil {
 		return
 	}
 	if s.Exec != nil {
@@ -589,7 +626,7 @@ func (s *Service) Deliver(ctx context.Context, ev Event) (string, error) {
 	note := ""
 	if ev.Urgent {
 		brief := "URGENT event — triage it now. Investigate, act within your autonomy, propose anything beyond it, and escalate per your charter if needed. Report what you found and did.\n\n" + EventMessage(c, ev.Text, "")
-		w, err := s.Spawn(ctx, Actor{Member: ev.Member, Role: config.MemberRoleHome}, SpawnRequest{CaseID: c.ID, Brief: brief})
+		w, err := s.Spawn(ctx, Actor{Member: ev.Member, Role: config.MemberRoleHome}, SpawnRequest{CaseID: c.ID, Brief: brief, byConductor: true})
 		if err != nil {
 			note = "(conductor could not start a worker for this urgent event: " + err.Error() + " — handle it yourself.)"
 		} else {
@@ -608,6 +645,20 @@ type SpawnRequest struct {
 	Title   string // for a new case when CaseID is empty
 	Brief   string
 	Handoff bool // a paseo hand-off worker (explicit opt-in)
+	// Group is a fan-out label: workers spawned on the same case under the
+	// same label form one group, which `conductor member join` waits on and
+	// which reports back as one combined result.
+	Group string
+	// Verbs narrows the child's verbs (patterns; the member's own policy
+	// still applies — this can only take away). ReadOnly holds it to
+	// observe: anything else it calls becomes a proposal.
+	Verbs    []string
+	ReadOnly bool
+	// byConductor marks a worker conductor starts itself (an urgent
+	// event's, a consolidation's): its parent is conductor, not a possibly
+	// tainted home session, so it takes its case's provenance alone. Not
+	// settable from an agent op.
+	byConductor bool
 }
 
 // Spawn starts a worker for a case. Only a home session (or conductor
@@ -626,18 +677,36 @@ func (s *Service) Spawn(ctx context.Context, c Actor, req SpawnRequest) (store.W
 	if s.Workers == nil {
 		return store.Worker{}, errors.New("no worker launcher on this daemon")
 	}
+	if req.Group != "" && !validLabel(req.Group) {
+		return store.Worker{}, fmt.Errorf("group %q: use a short label of lowercase letters, digits, - or _", req.Group)
+	}
+	for _, v := range req.Verbs {
+		if _, err := filepath.Match(v, "x"); err != nil || strings.TrimSpace(v) == "" {
+			return store.Worker{}, fmt.Errorf("--verbs: bad pattern %q", v)
+		}
+	}
+	if req.Group != "" && req.Handoff {
+		return store.Worker{}, errors.New("a hand-off worker is not part of a fan-out group")
+	}
 	now := s.now()
 	var w store.Worker
 	var cs store.Case
 	err = s.Ledger.UpdateMember(c.Member, func(r *store.MemberRecord) error {
 		live := 0
 		for _, x := range r.Workers {
-			if x.Status == "starting" || x.Status == "running" {
+			if liveWorker(x) {
 				live++
 			}
 		}
 		if live >= m.Worker.MaxWorkers() {
 			return fmt.Errorf("member %s already has %d live workers (worker.max_concurrent)", c.Member, live)
+		}
+		// The parent's own trust right now: a home session acts on the
+		// least-trusted open request (homeAttribution). The child inherits
+		// the less trusted of that and its case's requester — never more.
+		pClass, pWho, _ := homeAttribution(r)
+		if req.byConductor {
+			pClass, pWho = ReqMember, ""
 		}
 		caseID := req.CaseID
 		if caseID == "" {
@@ -650,7 +719,7 @@ func (s *Service) Spawn(ctx context.Context, c Actor, req SpawnRequest) (store.W
 				r.Cases = map[string]*store.Case{}
 			}
 			r.Cases[caseID] = &store.Case{ID: caseID, Title: title, Status: "open", Source: "member",
-				RequesterClass: ReqMember, Created: now, Updated: now}
+				Requester: pWho, RequesterClass: pClass, Created: now, Updated: now}
 		}
 		cc := r.Cases[caseID]
 		if cc == nil {
@@ -659,12 +728,42 @@ func (s *Service) Spawn(ctx context.Context, c Actor, req SpawnRequest) (store.W
 		if cc.Status != "open" {
 			return fmt.Errorf("case %s is closed", caseID)
 		}
+		onCase := 0
+		for _, x := range r.Workers {
+			if x.CaseID == caseID && liveWorker(x) {
+				onCase++
+			}
+		}
+		if onCase >= m.Worker.PerCase() {
+			return fmt.Errorf("case %s already has %d live workers (worker.max_per_case)", caseID, onCase)
+		}
 		wid := r.NextID("w")
 		hid := fmt.Sprintf("m-%s-%s-%s", c.Member, wid, strconv.FormatInt(now.UnixNano(), 36))
+		tClass, tWho := lessTrusted(cc.RequesterClass, cc.Requester, pClass, pWho)
+		parent := "conductor"
+		if !req.byConductor {
+			parent = "home"
+			if r.Home != nil && r.Home.Dispatch == c.Dispatch {
+				parent = "home:" + r.Home.ID
+			}
+		}
 		w = store.Worker{ID: wid, CaseID: caseID, Brief: req.Brief, Handoff: req.Handoff, HistoryID: hid,
-			Dispatch: hid + ":" + config.MemberWorkerStepID, Cwd: s.sessionDir(c.Member, wid), Status: "starting", Started: now}
+			Dispatch: hid + ":" + config.MemberWorkerStepID, Cwd: s.sessionDir(c.Member, wid), Status: "starting", Started: now,
+			Parent: parent, Requester: tWho, RequesterClass: tClass, Verbs: req.Verbs, ReadOnly: req.ReadOnly}
 		if r.Workers == nil {
 			r.Workers = map[string]*store.Worker{}
+		}
+		if req.Group != "" {
+			g := openGroup(r, caseID, req.Group)
+			if g == nil {
+				g = &store.Group{ID: r.NextID("g"), CaseID: caseID, Label: req.Group, Created: now}
+				if r.Groups == nil {
+					r.Groups = map[string]*store.Group{}
+				}
+				r.Groups[g.ID] = g
+			}
+			g.Workers = append(g.Workers, wid)
+			w.Group = g.ID
 		}
 		r.Workers[wid] = &w
 		cc.Workers = append(cc.Workers, wid)
@@ -702,7 +801,8 @@ func (s *Service) Spawn(ctx context.Context, c Actor, req SpawnRequest) (store.W
 		_ = repo.RemoveWorktree(ctx, w.Cwd)
 		return fail(fmt.Errorf("start worker: %w", err))
 	}
-	s.audit(map[string]any{"event": "member_worker", "member": c.Member, "worker": w.ID, "case": w.CaseID, "handoff": req.Handoff, "action": "spawn"})
+	s.audit(map[string]any{"event": "member_worker", "member": c.Member, "worker": w.ID, "case": w.CaseID, "handoff": req.Handoff, "group": w.Group,
+		"parent": w.Parent, "requester": w.Requester, "requester_class": w.RequesterClass, "verbs": w.Verbs, "read_only": w.ReadOnly, "action": "spawn"})
 	s.logf("%s: worker %s started on case %s", c.Member, w.ID, w.CaseID)
 	return w, nil
 }
@@ -795,7 +895,7 @@ func (s *Service) WorkerDone(ctx context.Context, dispatchID, reason string, out
 		return false
 	}
 	summary := summarizeOutput(reason, output)
-	s.finishWorker(ctx, name, w, "done", summary)
+	s.finishWorker(ctx, name, w, "done", summary, boundedOutput(output))
 	return true
 }
 
@@ -826,31 +926,47 @@ func (s *Service) OnRunEvent(ctx context.Context, typ, historyID, status, detail
 			if status == "failed" {
 				st = "failed"
 			}
-			s.finishWorker(ctx, name, w, st, oneLine("the run ended ("+status+") without the worker reporting step.done. "+detail, 600))
+			s.finishWorker(ctx, name, w, st, oneLine("the run ended ("+status+") without the worker reporting step.done. "+detail, 600), nil)
+			s.recordSweepCost(name, w, historyID)
 			return
 		}
+		s.recordSweepCost(name, w, historyID)
 		if !w.Handoff {
 			_ = s.Repo(name).RemoveWorktree(ctx, w.Cwd)
 		}
 	}
 }
 
-func (s *Service) finishWorker(ctx context.Context, name string, w store.Worker, status, summary string) {
+func (s *Service) finishWorker(ctx context.Context, name string, w store.Worker, status, summary string, output json.RawMessage) {
 	var cs store.Case
 	already := false
+	var group *store.Group // set when this finish completes its group
+	var members []store.Worker
 	_ = s.Ledger.UpdateMember(name, func(r *store.MemberRecord) error {
 		x := r.Workers[w.ID]
 		if x == nil {
 			return nil
 		}
-		if x.Status != "starting" && x.Status != "running" {
+		if !liveWorker(x) {
 			already = true
 			return nil
 		}
-		x.Status, x.Ended, x.Result = status, s.now(), summary
+		x.Status, x.Ended, x.Result, x.Output = status, s.now(), summary, output
 		if c := r.Cases[x.CaseID]; c != nil {
 			c.Updated = s.now()
 			cs = *c
+		}
+		// The last of a group to finish reports for all of them — decided
+		// inside this transaction, so exactly one finish does.
+		if g := r.Groups[x.Group]; g != nil && !g.Reported && groupDone(r, g) {
+			g.Reported = true
+			cp := *g
+			group = &cp
+			for _, id := range g.Workers {
+				if gw := r.Workers[id]; gw != nil {
+					members = append(members, *gw)
+				}
+			}
 		}
 		return nil
 	})
@@ -859,6 +975,11 @@ func (s *Service) finishWorker(ctx context.Context, name string, w store.Worker,
 	}
 	// The worker is finished: its token goes now, not when it ages out.
 	s.revoke(w.Dispatch)
+	if w.Sweep != "" {
+		s.finishSweep(ctx, name, w, status, summary, output)
+		_ = s.Repo(name).RemoveWorktree(ctx, w.Cwd)
+		return
+	}
 	repo := s.Repo(name)
 	created := cs.Created
 	if created.IsZero() {
@@ -869,8 +990,13 @@ func (s *Service) finishWorker(ctx context.Context, name string, w store.Worker,
 		fmt.Sprintf("episode: case %s worker %s %s", w.CaseID, w.ID, status), map[string]string{"Member-Case": w.CaseID, "Member-Worker": w.ID}); err != nil {
 		s.logf("%s: episode for worker %s: %v", name, w.ID, err)
 	}
-	s.audit(map[string]any{"event": "member_worker", "member": name, "worker": w.ID, "case": w.CaseID, "action": status})
-	s.enqueue(name, w.CaseID, fmt.Sprintf("[conductor] worker %s on case %s finished (%s):\n%s", w.ID, w.CaseID, status, fence("WORKER REPORT", summary)))
+	s.audit(map[string]any{"event": "member_worker", "member": name, "worker": w.ID, "case": w.CaseID, "group": w.Group, "action": status})
+	switch {
+	case w.Group == "":
+		s.enqueue(name, w.CaseID, fmt.Sprintf("[conductor] worker %s on case %s finished (%s):\n%s", w.ID, w.CaseID, status, fence("WORKER REPORT", summary)))
+	case group != nil:
+		s.enqueue(name, w.CaseID, GroupReport(*group, members))
+	}
 	if !w.Handoff {
 		_ = repo.RemoveWorktree(ctx, w.Cwd)
 	}

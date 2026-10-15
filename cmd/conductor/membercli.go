@@ -41,6 +41,8 @@ const memberUsage = `usage:
     conductor member deliver <member> --title "…" [--text "…"] [--requester who] [--urgent]
     conductor member consolidate <member>
     conductor member replan <member> <id>          # re-plan a stale terraform proposal
+    conductor member sweep <member>                # run a proactive sweep now (budget still applies)
+    conductor member sweeps <member>
   from a member session:
     conductor member whoami
     conductor member remember --path knowledge/<f>.md --text "…" [--append]
@@ -51,14 +53,20 @@ const memberUsage = `usage:
     conductor member case open --title "…" [--summary "…"]
     conductor member case note <case> --text "…"
     conductor member case close <case> --outcome "…"
-    conductor member spawn [--case <id>] [--title "…"] --brief "…" [--handoff]
+    conductor member spawn [--case <id>] [--title "…"] --brief "…" [--group <label>] [--verbs a,b] [--read-only] [--handoff]
+    conductor member tell <worker|group> "<instructions>"     # to your own workers (home session)
+    conductor member report "<progress>"                      # to your parent (a worker)
+    conductor member instructions                             # any new instructions from your parent (a worker)
+    conductor member join (<group> | --case <id> --group <label>) [--timeout 30m]
+    conductor member ask <member> [--case <id>] "<text>"     # a linked peer member
+    conductor member peers
     conductor member handoff --text "…"
     conductor member propose-terraform --repo <name> --commit <full sha> [--dir <root module>] [--workspace <ws>] [--var-file <f>]… [--target <addr>]… [--summary "…"]
     conductor member replan <proposal>
     conductor member proposals [--all]
     conductor member wait <proposal> [--timeout 30m]`
 
-var memberBoolFlags = map[string]bool{"all": true, "append": true, "handoff": true, "urgent": true}
+var memberBoolFlags = map[string]bool{"all": true, "append": true, "handoff": true, "urgent": true, "read-only": true}
 
 // memberFlags parses --k v / --k=v, boolean flags, repeated --file, and a
 // `--` that ends flag parsing (everything after is positional).
@@ -94,7 +102,8 @@ func memberFlags(args []string) (pos []string, flags map[string]string, files []
 }
 
 var operatorOnly = map[string]bool{"ls": true, "list": true, "show": true, "workers": true, "proposal": true,
-	"approve": true, "deny": true, "rotate": true, "say": true, "deliver": true, "consolidate": true}
+	"approve": true, "deny": true, "rotate": true, "say": true, "deliver": true, "consolidate": true,
+	"sweep": true, "sweeps": true}
 
 func cmdMember(args []string) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
@@ -135,7 +144,49 @@ func memberAgent(sub string, args []string) error {
 	}
 	call := sub
 	switch sub {
-	case "whoami", "remember", "episode", "spawn", "handoff", "proposals", "cases":
+	case "whoami", "remember", "episode", "handoff", "proposals", "cases", "peers", "instructions":
+	case "spawn":
+		if fl["read-only"] != "" {
+			a["read_only"] = true
+			delete(a, "read-only")
+		}
+	case "tell":
+		if len(pos) < 2 {
+			return fmt.Errorf("usage: conductor member tell <worker|group> \"<instructions>\"")
+		}
+		a["to"], a["text"] = pos[0], strings.Join(pos[1:], " ")
+	case "report":
+		if t := strings.Join(pos, " "); t != "" {
+			a["text"] = t
+		}
+	case "ask":
+		if len(pos) < 2 {
+			return fmt.Errorf("usage: conductor member ask <member> [--case <id>] \"<text>\"")
+		}
+		a["to"], a["text"] = pos[0], strings.Join(pos[1:], " ")
+	case "join":
+		if len(pos) == 1 {
+			a["id"] = pos[0]
+		}
+		to := 30 * time.Minute
+		if s := fl["timeout"]; s != "" {
+			d, err := time.ParseDuration(s)
+			if err != nil {
+				return err
+			}
+			to = d
+		}
+		delete(a, "timeout")
+		deadline := time.Now().Add(to)
+		for {
+			out, err := memberAgentCall("join", a)
+			if err != nil {
+				return err
+			}
+			if done, _ := out["done"].(bool); done || time.Now().After(deadline) {
+				return printJSON(out)
+			}
+		}
 	case "recall":
 		a["query"] = strings.Join(pos, " ")
 	case "read":
@@ -199,6 +250,7 @@ func memberAgent(sub string, args []string) error {
 			if err != nil {
 				return err
 			}
+			showInstructions(out)
 			if st, _ := out["status"].(string); !member.Unsettled(st) || time.Now().After(deadline) {
 				return printJSON(out)
 			}
@@ -210,10 +262,20 @@ func memberAgent(sub string, args []string) error {
 	if err != nil {
 		return err
 	}
+	showInstructions(out)
 	if msg, ok := out["message"].(string); ok && len(out) <= 7 {
 		fmt.Println(msg)
 	}
 	return printJSON(out)
+}
+
+// showInstructions prints instructions from a worker's parent first and
+// plainly, so the agent cannot miss them inside the JSON.
+func showInstructions(out map[string]any) {
+	if ins, ok := out["instructions_from_parent"].(string); ok {
+		fmt.Println(ins)
+		delete(out, "instructions_from_parent")
+	}
 }
 
 // ---- operator face ----
@@ -263,7 +325,7 @@ func memberOperator(sub string, args []string) error {
 			return err
 		}
 		return printMemberList(out)
-	case "show", "cases", "workers", "proposals", "rotate", "consolidate":
+	case "show", "cases", "workers", "proposals", "rotate", "consolidate", "sweep", "sweeps":
 		if err := needMember(1); err != nil {
 			return err
 		}

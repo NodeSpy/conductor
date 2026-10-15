@@ -35,6 +35,12 @@ type MemberRecord struct {
 	Past  []*HomeSession `json:"past,omitempty"`
 	Inbox []*InboxMsg    `json:"inbox,omitempty"`
 	Spend []SpendEntry   `json:"spend,omitempty"`
+	// Sweeps are proactive sweeps (bounded, newest kept); Groups are worker
+	// fan-outs a join waits on; Peer is the member-to-member message log
+	// (metadata only — the text lives in the audit and the receiving case).
+	Sweeps map[string]*Sweep `json:"sweeps,omitempty"`
+	Groups map[string]*Group `json:"groups,omitempty"`
+	Peer   []PeerMsg         `json:"peer,omitempty"`
 	// Consolidated is when episodes were last distilled into knowledge.
 	Consolidated time.Time `json:"consolidated,omitempty"`
 	// Seq numbers ids within this member so they stay short and readable.
@@ -65,6 +71,15 @@ type Case struct {
 	Proposals      []string  `json:"proposals,omitempty"`
 	Created        time.Time `json:"created"`
 	Updated        time.Time `json:"updated"`
+	// Key and Severity are set on a case a proactive finding opened: the
+	// finding's dedupe key (a later sweep's finding with the same key notes
+	// this case instead of opening another) and its highest severity.
+	Key      string `json:"key,omitempty"`
+	Severity string `json:"severity,omitempty"`
+	// Peer is the member whose message opened this case, and PeerCase the
+	// sender's case — where a reply is routed.
+	Peer     string `json:"peer,omitempty"`
+	PeerCase string `json:"peer_case,omitempty"`
 }
 
 // Proposal is an action the gate held for operator approval.
@@ -91,6 +106,9 @@ type Proposal struct {
 	Role     string `json:"role"`
 	Agent    string `json:"agent,omitempty"`
 	Dispatch string `json:"dispatch,omitempty"`
+	// Worker is the proposing worker (a child), when one proposed it — with
+	// CaseID and Requester, the trace back to the originating request.
+	Worker string `json:"worker,omitempty"`
 	// Identity is the token-bound caller identity, kept daemon-side so the
 	// approved verb executes under exactly the skill policy it was proposed
 	// under.
@@ -147,6 +165,81 @@ type Worker struct {
 	Result    string    `json:"result,omitempty"`
 	Started   time.Time `json:"started"`
 	Ended     time.Time `json:"ended,omitempty"`
+	// Output is the worker's step.done output as reported (bounded), what a
+	// join hands back. Group is the fan-out it belongs to; Sweep the
+	// proactive sweep it runs (then CaseID is empty).
+	Output json.RawMessage `json:"output,omitempty"`
+	Group  string          `json:"group,omitempty"`
+	Sweep  string          `json:"sweep,omitempty"`
+	// The parent → child tree and the child's authority ceiling.
+	// Parent is who started it ("home:<session>", or "conductor" for an
+	// urgent event's, a consolidation's or a sweep's worker).
+	// Requester/RequesterClass are its INHERITED provenance: the least
+	// trusted of its case's requester and its parent's own trust when it was
+	// spawned — what the gate holds every call it makes to. Verbs (when set)
+	// and ReadOnly only ever narrow what the member's policy allows.
+	Parent         string        `json:"parent,omitempty"`
+	Requester      string        `json:"requester,omitempty"`
+	RequesterClass string        `json:"requester_class,omitempty"`
+	Verbs          []string      `json:"verbs,omitempty"`
+	ReadOnly       bool          `json:"read_only,omitempty"`
+	Instructions   []Instruction `json:"instructions,omitempty"`
+}
+
+// Instruction is a follow-up from a worker's parent: an instruction, not
+// data. Read is when the worker received it.
+type Instruction struct {
+	ID   string    `json:"id"`
+	Text string    `json:"text"`
+	At   time.Time `json:"at"`
+	Read time.Time `json:"read,omitempty"`
+}
+
+// Group is a fan-out: workers started on one case under one label, joined
+// together.
+type Group struct {
+	ID      string    `json:"id"`
+	CaseID  string    `json:"case_id"`
+	Label   string    `json:"label"`
+	Workers []string  `json:"workers"`
+	Created time.Time `json:"created"`
+	// Reported is set once the combined report reached the home inbox.
+	Reported bool `json:"reported,omitempty"`
+}
+
+// Sweep is one proactive sweep.
+type Sweep struct {
+	ID        string    `json:"id"`
+	Worker    string    `json:"worker"`
+	HistoryID string    `json:"history_id"`
+	Status    string    `json:"status"` // running | quiet | findings | failed | exited | interrupted
+	Summary   string    `json:"summary,omitempty"`
+	Findings  []Finding `json:"findings,omitempty"`
+	CostUSD   float64   `json:"cost_usd,omitempty"`
+	Started   time.Time `json:"started"`
+	Ended     time.Time `json:"ended,omitempty"`
+}
+
+// Finding is one thing a sweep reported.
+type Finding struct {
+	Key      string `json:"key"`
+	Title    string `json:"title"`
+	Severity string `json:"severity"`
+	Detail   string `json:"detail,omitempty"`
+	// CaseID is the case it opened or matched (""= below the notify
+	// threshold and new: recorded only). Notified: the operator was told.
+	CaseID   string `json:"case_id,omitempty"`
+	Notified bool   `json:"notified,omitempty"`
+}
+
+// PeerMsg is one member-to-member message, as one side recorded it.
+type PeerMsg struct {
+	ID     string    `json:"id"`
+	Dir    string    `json:"dir"` // out | in
+	Peer   string    `json:"peer"`
+	CaseID string    `json:"case_id,omitempty"` // this side's case
+	Bytes  int       `json:"bytes"`
+	At     time.Time `json:"at"`
 }
 
 // HomeSession is one home agent session.

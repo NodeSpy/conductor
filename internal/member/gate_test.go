@@ -85,6 +85,25 @@ func homeID() flow.SkillIdentity {
 	return flow.SkillIdentity{Member: "sre", MemberRole: config.MemberRoleHome, Agent: "member:sre", Dispatch: "d-home", Verbs: []string{"*"}}
 }
 
+// worker registers a worker on a case the way a conductor-started spawn
+// records it (the case's own provenance) and returns its identity.
+func (f *gateFixture) worker(t *testing.T, caseID string) flow.SkillIdentity {
+	t.Helper()
+	id := workerID(caseID)
+	_ = f.st.UpdateMember("sre", func(r *store.MemberRecord) error {
+		c := r.Cases[caseID]
+		wid := r.NextID("w")
+		id.Dispatch = "d-" + wid
+		if r.Workers == nil {
+			r.Workers = map[string]*store.Worker{}
+		}
+		r.Workers[wid] = &store.Worker{ID: wid, CaseID: caseID, Dispatch: id.Dispatch, Status: "running", Parent: "conductor",
+			Requester: c.Requester, RequesterClass: c.RequesterClass}
+		return nil
+	})
+	return id
+}
+
 func workerID(caseID string) flow.SkillIdentity {
 	return flow.SkillIdentity{Member: "sre", MemberRole: config.MemberRoleWorker, Agent: "member:sre:worker", Dispatch: "d-w", CaseID: caseID, Verbs: []string{"*"}}
 }
@@ -148,13 +167,13 @@ func TestGateReversiblePromotion(t *testing.T) {
 	}
 	for _, class := range []string{ReqOperator, ReqEvent, ReqMember} {
 		c := f.openCase(t, class)
-		if v, _ := check(t, f, workerID(c), "pd.ack", nil); !v.Allow {
+		if v, _ := check(t, f, f.worker(t, c), "pd.ack", nil); !v.Allow {
 			t.Fatalf("promoted reversible verb did not run on a %s case", class)
 		}
 	}
 	// Third-party requester: proposal even when promoted.
 	c := f.openCase(t, ReqUser)
-	if v, _ := check(t, f, workerID(c), "pd.ack", nil); v.Allow {
+	if v, _ := check(t, f, f.worker(t, c), "pd.ack", nil); v.Allow {
 		t.Fatal("a third party's request ran a reversible verb autonomously")
 	}
 	// A worker with no case binding is least-trusted.
@@ -528,7 +547,7 @@ func TestUnpromotedReversibleIsAProposal(t *testing.T) {
 		t.Fatal("unpromoted reversible verb ran")
 	}
 	c := f.openCase(t, ReqOperator)
-	if v, _ := check(t, f, workerID(c), "pd.snooze", nil); v.Allow {
+	if v, _ := check(t, f, f.worker(t, c), "pd.snooze", nil); v.Allow {
 		t.Fatal("unpromoted reversible verb ran on an operator's case")
 	}
 }

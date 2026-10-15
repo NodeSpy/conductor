@@ -787,7 +787,7 @@ func cmdRun(args []string) error {
 	// manual-trigger path. nil without a members: section.
 	var members *memberStack
 	if stack != nil {
-		members = buildMembers(cfg, st, stack.Runner, reg, hold, eng, logf)
+		members = buildMembers(cfg, st, stack.Runner, reg, hold, eng, notifier, logf)
 	}
 
 	// The live agent-tool socket: with a memory: section configured — or any

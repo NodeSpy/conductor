@@ -58,7 +58,7 @@ func (s *Service) Consolidate(ctx context.Context, name string) (store.Worker, e
 		eps = eps[len(eps)-60:]
 	}
 	brief := "CONSOLIDATION. Distil these episodes into durable knowledge: read each, then update knowledge/ (and runbooks/ where a procedure emerged) with what will matter next time — facts about the systems, recurring causes, what worked, what did not. Prefer editing an existing knowledge file over adding a new one; keep files focused; never copy secrets. Write with `conductor member remember` (one call per file). Do not rewrite the episodes themselves. Finish with step.done summarizing which knowledge files changed and why.\n\nEpisodes:\n- " + strings.Join(eps, "\n- ")
-	w, err := s.Spawn(ctx, Actor{Member: name, Role: config.MemberRoleHome}, SpawnRequest{Title: "memory consolidation", Brief: brief})
+	w, err := s.Spawn(ctx, Actor{Member: name, Role: config.MemberRoleHome}, SpawnRequest{Title: "memory consolidation", Brief: brief, byConductor: true})
 	if err != nil {
 		return store.Worker{}, err
 	}

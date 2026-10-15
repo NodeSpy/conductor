@@ -155,7 +155,11 @@ type Config struct {
 	// the persistent conversational agents (members.go). Both optional.
 	Operators map[string]OperatorConfig `yaml:"operators"`
 	Members   map[string]MemberConfig   `yaml:"members"`
-	Workflows map[string]WorkflowDef    `yaml:"workflows"`
+	// MemberLinks are operator-side peer links: each pair of members may
+	// message each other (`conductor member ask`), as if both listed the
+	// other under peers:. No link, no messages.
+	MemberLinks [][]string             `yaml:"member_links,omitempty"`
+	Workflows   map[string]WorkflowDef `yaml:"workflows"`
 	// Triggers is the `triggers:` section. It decodes from the list form or
 	// the named/qualified MAP form, where the key is the trigger's stable
 	// address and a `source.event` key implies `on:` — see TriggerList and
