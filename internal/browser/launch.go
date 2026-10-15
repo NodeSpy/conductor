@@ -214,7 +214,8 @@ func launch(spec LaunchSpec, goos string) (*Process, error) {
 	}
 	env := browserEnv(spec, goos, shortTmp)
 	flags := ChromeArgs(spec.Dir, proxyAddr, spec.Headed)
-	argv := append(append([]string{spec.Chrome}, flags[:len(flags)-1]...), spec.Args...)
+	argv := append(append([]string{spec.Chrome}, flags[:len(flags)-1]...), platformArgs(goos)...)
+	argv = append(argv, spec.Args...)
 	argv = append(argv, flags[len(flags)-1])
 	wrapped, outEnv, wclean, err := sandbox.WrapLocalCommand(browserSpec(spec.Allow), argv, spec.Dir, env, deps)
 	if err != nil {
@@ -361,4 +362,16 @@ func (r *Ring) String() string {
 // only way out, and the pivot_root jail.
 func browserSpec(allow []string) *sandbox.Spec {
 	return &sandbox.Spec{Mode: "namespace", Deny: true, HasEgress: true, Egress: append([]string(nil), allow...)}
+}
+
+// platformArgs are the flags one platform's sandbox needs. macOS refuses a
+// second Seatbelt sandbox inside a first (forbidden-sandbox-reinit), so
+// Chromium's own per-process sandbox cannot nest in conductor's there: the
+// outer profile confines every Chromium process alike. On Linux Chromium's
+// namespace sandbox nests inside conductor's, and stays on.
+func platformArgs(goos string) []string {
+	if goos == "darwin" {
+		return []string{"--no-sandbox"}
+	}
+	return nil
 }

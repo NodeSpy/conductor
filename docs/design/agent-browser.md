@@ -41,6 +41,17 @@ What (B) looks like as built:
     to one proxy port. Mach rules are broad, which Chromium's child-process
     rendezvous needs, but the Keychain's services are denied by name; `--use-mock-keychain`
     and `--password-store=basic` too.
+    - macOS refuses a Seatbelt sandbox inside another
+      (`forbidden-sandbox-reinit`), so Chromium's own per-process sandbox
+      cannot nest there. It runs with `--no-sandbox`, and the outer profile
+      confines every Chromium process alike.
+    - Consequence: on macOS a renderer exploit holds what the browser process
+      holds inside the jail (its profile, including a logged-in browser's
+      cookies, and its proxy), and nothing beyond.
+    - Chromium's temp dir (its process-singleton socket) is redirected
+      (`MAC_CHROMIUM_TMPDIR`) to a private short dir, so it never touches the
+      per-user temp dir where the operator's own Chrome keeps its singleton
+      socket. CoreFoundation's home (`CFFIXED_USER_HOME`) is the browser's own.
 - **The protocol.** CDP runs over `--remote-debugging-pipe` (fds 3/4, passed
   through the in-sandbox forwarder by a new `--pass-fds`). There is **no
   debugging port**: nothing but conductor can drive it, not even another local
@@ -280,7 +291,8 @@ session saves, deletes, takeovers, passkey saves and peeks.
    - The `--pass-fds` path in `sandbox-net`: can a payload inherit more than
      fds 3/4?
    - The macOS Seatbelt browser variant: broad Mach lookups (which services
-     beyond the Keychain matter?), IOKit.
+     beyond the Keychain matter?), IOKit, and no per-process Chromium sandbox
+     (a renderer holds the jail's reach).
 8. **Resource abuse.** Unbounded tabs, downloads, or wait loops; the
    `max_browsers` cap; idle reaping during a held action.
 

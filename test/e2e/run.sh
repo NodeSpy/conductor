@@ -1984,8 +1984,6 @@ group_Z_sandbox() {
   fi
 }
 
-main "$@"
-
 # br_probe <kind> — the BROWSER_PROBE.md a browser-probing agent of that kind
 # (event | operator) left in its workspace on the sandbox daemon.
 br_probe() {
@@ -2072,3 +2070,5 @@ group_BR_browser() {
     ok "BR an off-list site is refused and audited" BR audit/offlist
   else bad "BR audit off-list" BR audit/offlist "no such audit line"; fi
 }
+
+main "$@"

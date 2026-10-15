@@ -534,3 +534,12 @@ func TestBrowserSpecHasNoNetwork(t *testing.T) {
 		t.Fatalf("%+v", sp)
 	}
 }
+
+func TestPlatformArgs(t *testing.T) {
+	if len(platformArgs("linux")) != 0 {
+		t.Fatal("Chromium's own sandbox stays on on Linux")
+	}
+	if a := platformArgs("darwin"); len(a) != 1 || a[0] != "--no-sandbox" {
+		t.Fatal(a)
+	}
+}
