@@ -68,6 +68,14 @@ func TestStageGrantFiles(t *testing.T) {
 			t.Errorf("%s: refused (outside the workspace, or through a symlink), got %v", p, err)
 		}
 	}
+	// A command run from a subdirectory names the file from there, as the
+	// tool will open it.
+	subSum := write("plans/sub.tfplan", "sub plan")
+	if use, err := m.stageGrantFiles(d, spec(map[string]string{"sub.tfplan": subSum}), []string{"apply", "sub.tfplan"}, filepath.Join(ws, "plans")); err != nil {
+		t.Fatalf("from the command's cwd: %v", err)
+	} else {
+		use.cleanup()
+	}
 	entries, _ := os.ReadDir(m.GrantScratch)
 	if len(entries) != 1 {
 		t.Fatalf("a refused staging leaves nothing behind: %d dirs", len(entries))
