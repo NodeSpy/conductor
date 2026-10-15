@@ -1,0 +1,69 @@
+# The agent-sandbox canary (docs/design/agent-sandbox.md §9). conductor's
+# built-in sandbox — Linux user namespaces + pivot_root, macOS Seatbelt — must
+# hold on BOTH platforms: a fake agent (no model, no secrets) is launched
+# through the real path (`conductor sandbox exec` against a throwaway daemon)
+# and probed from inside, and the sandbox packages' tests run with the real
+# backend REQUIRED (they fail, not skip, where it cannot be built).
+#
+# The paseo leg runs the provider-entry + sandbox exec path against the
+# LATEST published paseo, so a paseo release that changes the CLI or config
+# shape conductor depends on fails here first — on a schedule, and on demand.
+name: sandbox-canary
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: allow unprivileged user namespaces (Ubuntu's AppArmor restricts them)
+        if: runner.os == 'Linux'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+      - name: sandbox packages, real backend required
+        env:
+          CONDUCTOR_REQUIRE_SANDBOX: "1"
+        run: |
+          go test -race -count=1 ./internal/sandbox/... ./internal/agentsandbox/... ./internal/gitpush/... ./internal/paseosetup/...
+          go test -race -count=1 -run 'TestConfinedGit|TestSandboxApplies|TestDispatchIdentity|TestNonCredentialEnv|TestControllerRunnerBinds' ./internal/controller/
+      - name: canary — conductor sandbox exec around a fake agent
+        run: bash test/sandbox-canary/run.sh
+
+  paseo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: allow unprivileged user namespaces
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+      - name: install the latest published paseo
+        run: |
+          npm install -g @getpaseo/cli@latest
+          paseo --version
+      - name: canary — paseo provider entries + conductor sandbox exec
+        run: bash test/sandbox-canary/paseo.sh

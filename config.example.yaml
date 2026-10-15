@@ -1262,7 +1262,35 @@ policy:
   #  `conductor pause` / `resume`; disable one connector or trigger in place
   #  with its own `enabled: false`)
 
-# Conductor's own lifecycle is a built-in source: alerting is an ordinary
+# ---------------------------------------------------------------------------
+# sandbox: — the agent sandbox (on by default; wiki: Isolation, Paseo-Sandbox).
+# Agents are read-only and conductor performs every write. Every local cli/acp
+# agent launch — and every paseo session started with a sandboxed provider
+# entry (`conductor paseo setup`) — runs in conductor's built-in sandbox
+# (Linux namespaces + pivot_root, macOS Seatbelt): its workspace read-write,
+# its identity's own tool state as HOME, the conductor socket, no network but
+# its model endpoints (+ egress below), none of your credentials. The agent
+# commits; conductor pushes HEAD to the dispatch's own branch, fast-forward
+# only, re-signed with your SSH signing key (`conductor call git.push`, and at
+# the end of the step). It fails closed: a launch whose sandbox can't be
+# built does not run.
+# ---------------------------------------------------------------------------
+sandbox:
+  # agents: on              # `off` = the explicit opt-out (agents run as before; logged at boot).
+  #                         #   Per runtime/step: isolation: { mode: none }.
+  egress: []                # hosts every sandboxed agent may reach beyond its model endpoints,
+  #                         #   e.g. [registry.npmjs.org, proxy.golang.org, "*.pypi.org"]
+  # state_dir: ~/.local/state/conductor/agent-state   # the per-identity HOMEs
+  push:
+    # signing_key: ~/.ssh/conductor_signing   # default: git's user.signingkey (gpg.format ssh).
+    #                                         # GitHub shows "Verified" when this key is registered
+    #                                         # on your account as an SSH *signing* key.
+    # name: Your Name                         # the committer of signed commits (default: git's user.name)
+    # email: you@example.com                  #   (default: git's user.email)
+    # sign: false                             # push unsigned (default: refuse to push without a key)
+    # at_step_end: false                      # only an explicit git.push pushes
+
+
 # trigger on conductor.* — dispatch, escalate (gave up after retries),
 # needs_input, complete, failed (a run errored), updated, update_available.
 # Context: {{.message}} (the composed line) + event/ref/repo/number/

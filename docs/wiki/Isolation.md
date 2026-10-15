@@ -2,9 +2,132 @@
 
 Locally-dispatched agents historically ran as the same OS user as the
 daemon — a sibling agent could read another's process table, files, and fds.
-The `isolation:` block closes that: per-dispatch isolation for the runtimes
-conductor launches itself, plus a conductor-enforced network egress
-allowlist. (#36 §15.)
+Two layers close that:
+
+- **The agent sandbox** (on by default): every agent conductor launches runs
+  read-only with respect to everything but its own workspace, and conductor
+  performs every write — the push, the forge write, the cloud call. Covered
+  first below.
+- **The `isolation:` block**: per-dispatch isolation for any launch conductor
+  performs itself (code-step engines, `hosts:` scripts, and runtimes you
+  configure explicitly), plus a conductor-enforced network egress allowlist.
+  (#36 §15.)
+
+## The agent sandbox
+
+**Agents are read-only; conductor writes.** An agent holds no push, forge or
+cloud credential. It edits and commits in its workspace; conductor pushes the
+commits (signed) and performs every forge or cloud write as a verb. Every
+agent conductor launches — a `cli` or `acp` runtime's worker, a paseo session
+started with a sandboxed provider entry ([[Paseo-Sandbox]]), a member worker —
+runs under conductor's built-in sandbox: Linux user + mount + pid + network
+namespaces with a `pivot_root` filesystem, or macOS Seatbelt. Design and
+rationale: `docs/design/agent-sandbox.md`.
+
+What the agent sees:
+
+| | |
+|---|---|
+| its workspace | read-write (the dispatch's own clone, `.git` included) |
+| `HOME` | its **identity's** tool state, read-write: `<state>/agent-state/<identity>/` — `~/.claude`, `~/.codex`, … — created before the launch and seeded once from your settings for the tool (never your history: `~/.claude.json`'s per-project history is dropped). The tool's login file is shared from your real home, so it is signed in as you. |
+| the conductor socket | the socket file only (never the state dir it lives in), with a token minted for this launch — so `conductor call step.done` / `git.push` work |
+| the base system | `/usr`, `/etc`, `/opt` (Linux) / the system paths (macOS), read-only; the agent CLI's own install, wherever it is |
+| the network | **none of its own.** The only way out is conductor's allowlist proxy: the tool's model endpoints, plus `sandbox.egress`. A model endpoint on your host's loopback (a local router at `127.0.0.1:3456`) is relayed in at the same address. |
+| the environment | a minimal one: `PATH`, locale, terminal, the tool's model key and endpoint, your git name/email. No `GH_TOKEN`, `SSH_AUTH_SOCK`, cloud keys, or a launcher's own tokens. |
+| everything else | **absent** — your `~/.ssh`, `~/.aws`, `~/.config/gh`, other projects, conductor's state and config. Nothing is denied by a list: what is not shown is not there. |
+
+An **identity** is who the agent is: for a dispatch, its profile per (trusted)
+repository — `agent:fixer@acme/app`; for a member, the member; for a directory
+conductor did not create, the directory itself. Every launch of an identity —
+a resume included — sees the same tool state, so a resumed session finds its
+memory; no identity sees another's transcripts.
+
+**It fails closed.** A launch whose sandbox cannot be built does not run: the
+dispatch fails with the reason. conductor checks at boot and logs it when this
+box cannot build one (root daemon; no unprivileged user namespaces — Ubuntu
+23.10+ restricts them through AppArmor: `sysctl
+kernel.apparmor_restrict_unprivileged_userns=0`; no `sandbox-exec`).
+
+### Pushing: conductor, not the agent
+
+The agent commits; conductor pushes:
+
+- **at the end of the step** — after its gate passes, before the diff preview
+  and `expect_push` read what is unpushed — and
+- whenever the agent runs **`conductor call git.push`** (auto-granted with
+  `step.done`).
+
+Either way conductor pushes **the workspace's `HEAD` to the dispatch's own
+branch only** — the agent names no ref (`git.push` refuses any option) —
+**fast-forward only, never forced** (a diverged remote is a refusal), and
+**re-signs every new commit** with your SSH signing key on the way out. A
+review (a decide step, an output-schema step, a checkout-less step, a review
+trigger — unless `expect_push:`) is never pushed. Every push is audited
+(`git_push`).
+
+conductor never runs git in the agent's checkout with the agent's config: it
+reads `HEAD` and the clone's own objects by path with `O_NOFOLLOW`, and pushes
+from the base clone's trusted git dir with hooks, fsmonitor and the ext
+transport off. Its diff read of a sandboxed workspace (the diff preview) runs
+inside the sandbox too — the checkout's `.git/config` and `.gitattributes` are
+the agent's. Each dispatch gets **its own clone** (objects borrowed from the
+base clone through `alternates`), so one agent cannot move another's branch.
+
+**The Verified badge.** Signatures verify `G` with your key locally. GitHub
+shows "Verified" on a pushed commit only when the signing key is registered on
+your account as an **SSH signing key** (Settings → SSH and GPG keys → New SSH
+key → Key type: Signing Key) and the committer email is one of your verified
+emails. conductor does not touch your account settings.
+
+### Configuration
+
+```yaml
+sandbox:
+  agents: on                       # default; `off` is the explicit opt-out (logged at boot)
+  egress: [registry.npmjs.org, proxy.golang.org]   # beyond the model endpoints
+  # state_dir: ~/.local/state/conductor/agent-state   # the identity homes
+  push:
+    signing_key: ~/.ssh/conductor_signing   # default: git's user.signingkey (gpg.format ssh)
+    # name / email: default git's user.name / user.email
+    # sign: false        # push unsigned (default: refuse to push without a key)
+    # at_step_end: false # only git.push pushes
+```
+
+Per runtime or step, an `isolation:` block keeps working: `mode: none` runs
+that launch unwrapped (the explicit opt-out); `mode: user` / `container`, or
+`namespace` with `privileged: true`, keep their own wrappers; a plain
+`namespace` block shapes the agent sandbox (its `network.egress` joins the
+allowlist, its `fs:` paths are shown read-write). A remote (`host:`) launch
+runs under that box's own isolation.
+
+### What the sandbox no longer does, and why
+
+The agent jail this replaces (#160, #175) brokered credentialed work: a
+host-command broker (profiles for `gh`, `aws`, `vop`, `terraform` …, with
+per-org home narrowing), approval **grants** for exact commands, brokered git
+through a remote helper, a **signing shim** that signed the agent's own
+commits, and a copy-on-write home. None of it is carried over. With agents
+read-only there is nothing for an agent to broker: it never runs a
+credentialed command, so no profile has to decide which ones are safe, no
+grant has to approve one, and no shim has to sign on its behalf — conductor
+signs what it pushes, once, outside the sandbox. A credentialed write an agent
+needs is a conductor verb (`git.push`, a connector's forge or cloud verbs),
+authorized by the dispatch's token and audited. The surface that took six
+review rounds to harden is gone rather than hardened.
+
+### Limits
+
+- **cli and acp runtimes, and paseo through its provider entries.** An
+  `opencode` or `agent-deck` runtime's agents are not wrapped by the agent
+  sandbox (configure `isolation:` for them); a paseo session started with
+  paseo's own (unsandboxed) provider is paseo's.
+- A **blob:none** base clone fetches lazily; the sandbox has no network for
+  that, so a blob the base never fetched (an old file version for `git blame`)
+  is unavailable inside it.
+- **Linked worktrees** (paseo's own worktrees for paseo dispatches) share their
+  base checkout's refs: the sandbox shows the common dir's objects and refs
+  writable (its config, hooks and alternates read-only, sibling worktrees
+  hidden). conductor's per-dispatch clones (`cli`) do not have this.
 
 ## Where it applies
 
@@ -309,6 +432,10 @@ that lifts the allow/approve/host gates lifts this requirement.
 | enforced egress with no unix endpoint wired | launch fails closed |
 | a default filesystem mask can't be applied | launch fails, never runs unmasked |
 | isolation on a paseo runtime | rejected by `validate` |
+| agent sandbox can't be built (root, no user namespaces, no `sandbox-exec`) | every agent launch refused with the reason; logged at boot |
+| `conductor sandbox exec` with the daemon unreachable | refused (exit 125); the agent never runs |
+| `conductor sandbox exec` in your home, `/`, or conductor's state | refused (a paseo utility launch with no agent directory gets a scratch workspace instead) |
+| a push with signing on and no signing key | refused with the reason |
 | `skill:` + `mode: user` isolation | rejected by `validate` (claim theft under a shared uid) |
 | `agent_authored.host` without `isolation:` | rejected by `validate` (`trust: full` opts out) |
 

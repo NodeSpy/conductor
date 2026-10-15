@@ -35,6 +35,7 @@ The model
 - [[Secrets]]
 - [[Hosts]]
 - [[Isolation]]
+- [[Paseo-Sandbox]]
 - [[Trust-and-Isolation]]
 
 Connectors
