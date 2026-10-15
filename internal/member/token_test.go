@@ -150,3 +150,53 @@ func TestBeforeLaunchHook(t *testing.T) {
 		t.Fatal("a launch went ahead (or created a workspace) after its hook failed")
 	}
 }
+
+// Under the sandbox wrapper, each launch's token is minted from the daemon's
+// cwd lookup. Across a rotation: the retired session's cwd resolves to
+// nothing (no new token can be minted for it), a token minted for it is
+// revoked, and the new session's cwd resolves to the NEW dispatch, whose
+// freshly minted token works.
+func TestWrapperTokensAcrossRotation(t *testing.T) {
+	f := newSvc(t)
+	b := skill.NewBroker(nil, nil)
+	mp := &mintingPaseo{b: b, tokens: map[string]string{}}
+	f.svc.Home = &PaseoHome{Cfg: f.svc.Cfg, For: func(string) (PaseoDispatcher, error) { return mp, nil }, Revoke: b.RevokeDispatch}
+	ctx := context.Background()
+	if err := f.svc.Rotate(ctx, "sre", "first"); err != nil {
+		t.Fatal(err)
+	}
+	old := f.st.Member("sre").Home
+	// What the wrapper's endpoint does for a launch in the session's cwd.
+	wrapperMint := func(cwd string) (string, SessionBinding, bool) {
+		sb, ok := f.svc.SessionForCwd(cwd)
+		if !ok {
+			return "", sb, false
+		}
+		tok, err := b.MintHandoffSession(skill.Identity{Dispatch: sb.Dispatch, Member: sb.Member, MemberRole: sb.Role, CaseID: sb.CaseID}, uint32(os.Getuid()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok, sb, true
+	}
+	oldTok, sb, ok := wrapperMint(old.Cwd)
+	if !ok || sb.Dispatch != old.Dispatch || sb.Role != config.MemberRoleHome || sb.Identity != SessionIdentity("sre", old.ID) {
+		t.Fatalf("live session binding: %+v %v", sb, ok)
+	}
+	if err := f.svc.Rotate(ctx, "sre", "test"); err != nil {
+		t.Fatal(err)
+	}
+	cur := f.st.Member("sre").Home
+	if _, err := b.Authorize(oldTok, peer()); err == nil {
+		t.Fatal("a wrapper-minted token for the retired session still works")
+	}
+	if _, _, ok := wrapperMint(old.Cwd); ok {
+		t.Fatal("the retired session's cwd still resolves — a new token could be minted for it")
+	}
+	newTok, sb2, ok := wrapperMint(cur.Cwd)
+	if !ok || sb2.Dispatch != cur.Dispatch || sb2.Dispatch == old.Dispatch {
+		t.Fatalf("new session binding: %+v %v", sb2, ok)
+	}
+	if id, err := b.Authorize(newTok, peer()); err != nil || id.Dispatch != cur.Dispatch {
+		t.Fatalf("the new session's fresh token: %+v %v", id, err)
+	}
+}
