@@ -18,11 +18,12 @@ Two layers close that:
 **Agents are read-only; conductor writes.** An agent holds no push, forge or
 cloud credential. It edits and commits in its workspace; conductor pushes the
 commits (signed) and performs every forge or cloud write as a verb. Every
-agent conductor launches — a `cli` or `acp` runtime's worker, a paseo session
-started with a sandboxed provider entry ([[Paseo-Sandbox]]), a member worker —
-runs under conductor's built-in sandbox: Linux user + mount + pid + network
-namespaces with a `pivot_root` filesystem, or macOS Seatbelt. Design and
-rationale: `docs/design/agent-sandbox.md`.
+agent conductor launches — a `cli` or `acp` runtime's worker, an `opencode`
+runtime's per-dispatch server, an `agent-deck` session's agent, a paseo
+session started with a sandboxed provider entry ([[Paseo-Sandbox]]), a member
+worker — runs under conductor's built-in sandbox: Linux user + mount + pid +
+network namespaces with a `pivot_root` filesystem, or macOS Seatbelt. Design
+and rationale: `docs/design/agent-sandbox.md`.
 
 What the agent sees:
 
@@ -32,7 +33,7 @@ What the agent sees:
 | `HOME` | its **identity's** tool state, read-write: `<state>/agent-state/<identity>/` — `~/.claude`, `~/.codex`, … — created before the launch and seeded once from your settings for the tool (never your history: `~/.claude.json`'s per-project history is dropped). The tool's login file is shared from your real home, so it is signed in as you. |
 | the conductor socket | the socket file only (never the state dir it lives in), with a token minted for this launch — so `conductor call step.done` / `git.push` work |
 | the base system | `/usr`, `/etc`, `/opt` (Linux) / the system paths (macOS), read-only; the agent CLI's own install, wherever it is |
-| the network | **none of its own.** The only way out is conductor's allowlist proxy: the tool's model endpoints, plus `sandbox.egress`. A model endpoint on your host's loopback (a local router at `127.0.0.1:3456`) is relayed in at the same address. |
+| the network | **none of its own.** The only way out is conductor's allowlist proxy: the tool's model endpoints, plus `sandbox.egress`. A model endpoint on your host's loopback (a local router at `127.0.0.1:3456`, a local Ollama) is relayed in at the same address. |
 | the environment | a minimal one: `PATH`, locale, terminal, the tool's model key and endpoint, your git name/email. No `GH_TOKEN`, `SSH_AUTH_SOCK`, cloud keys, or a launcher's own tokens. |
 | everything else | **absent** — your `~/.ssh`, `~/.aws`, `~/.config/gh`, other projects, conductor's state and config. Nothing is denied by a list: what is not shown is not there. |
 
@@ -47,6 +48,73 @@ dispatch fails with the reason. conductor checks at boot and logs it when this
 box cannot build one (root daemon; no unprivileged user namespaces — Ubuntu
 23.10+ restricts them through AppArmor: `sysctl
 kernel.apparmor_restrict_unprivileged_userns=0`; no `sandbox-exec`).
+
+### opencode and agent-deck
+
+**opencode.** conductor's opencode runtime drives opencode over its HTTP
+server, one `opencode serve` per session. That server is the agent — its
+tools run inside it — so it is launched in the sandbox under the dispatch's
+identity, like a cli worker:
+
+- it listens on the sandbox's own loopback. On Linux the sandbox has its own
+  network namespace, so the port is fixed and the in-sandbox forwarder serves
+  it to conductor over a unix socket it opens before the jail is built (the
+  agent never sees that socket's directory). On macOS it listens on a free
+  host port, the only one its Seatbelt profile lets it bind;
+- it answers only with a per-session password (`OPENCODE_SERVER_PASSWORD`);
+- its `HOME` holds opencode's state (`~/.local/share/opencode`, `~/.config/opencode`,
+  `~/.local/state/opencode`, `~/.cache/opencode`): your `auth.json` is shared,
+  your `opencode.json(c)` seeded once, never your sessions;
+- opencode is multi-provider, so its allowlist follows what is configured:
+  the provider the dispatch's model names (`anthropic/claude-…` → Anthropic's
+  endpoints, `openrouter/…` → `openrouter.ai`, …), your opencode config's
+  `model` / `small_model`, and a provider's `options.baseURL` — a local model
+  server (`http://127.0.0.1:11434/v1`) is relayed in like a local router.
+  With no model named anywhere, the providers you are signed in to (`auth.json`,
+  a provider key in the environment) and those your config defines. Plus its
+  model catalog (`models.dev`, `models.opencode.ai`). A provider opencode
+  knows but conductor's table does not needs its host in `sandbox.egress`;
+- the agent's shell gets the dispatch's conductor token, so `conductor call
+  step.done` / `git.push` work from its bash tool, as well as through the
+  conductor MCP server.
+
+opencode also tries to install npm packages (plugins) and download language
+servers at start; the sandbox denies both (logged, not fatal) —
+`OPENCODE_DISABLE_LSP_DOWNLOAD` and `OPENCODE_DISABLE_AUTOUPDATE` are set. Its
+own permission prompts still apply: a path outside the project
+(`external_directory`) is an `ask` by default, which a headless dispatch has
+no one to answer — set it in your opencode config's `permission:` (the sandbox,
+not opencode's prompt, is the boundary).
+
+**agent-deck.** agent-deck runs the agent in a tmux session of its own,
+typing a shell command it builds — exports, its flags, then `exec … claude …`
+— so conductor never holds the agent's process, and confining agent-deck
+itself would confine the session manager, not the agent. The seam is
+agent-deck's `--wrapper`: conductor's runs that whole command, as one
+argument, through a shell inside `conductor sandbox exec`:
+
+```
+conductor sandbox exec --socket <control.sock> --tool claude-code --agent-cwd --bin claude -- \
+  /bin/bash -c "$(cat <<'__CONDUCTOR_<random>__'
+{command}
+__CONDUCTOR_<random>__
+)"
+```
+
+so every part of it runs sandboxed (a plain `sandbox exec -- {command}` would
+confine only the first word of agent-deck's command and run the agent bare).
+The session's workspace is registered with the daemon first, so `sandbox exec`
+finds the dispatch's identity and token for it; `--bin` shows the tool the
+inner shell runs; `--agent-cwd` refuses a directory that is not a workspace
+instead of substituting a scratch one. A claude-code identity's home records
+that workspace as trusted (claude's interactive UI otherwise stops at its
+folder-trust question). It fails closed: the session is created stopped
+(`agent-deck add`), its stored wrapper checked to be exactly conductor's, and
+only then started and sent the task — an agent-deck without `--wrapper`
+refuses `add`, one that keeps another wrapper is removed
+unstarted, and a sandbox that cannot be built ends the session (`sandbox
+exec` exits 125). The agent-deck CLI itself runs unsandboxed and gets no forge
+credential.
 
 ### Pushing: conductor, not the agent
 
@@ -117,10 +185,20 @@ review rounds to harden is gone rather than hardened.
 
 ### Limits
 
-- **cli and acp runtimes, and paseo through its provider entries.** An
-  `opencode` or `agent-deck` runtime's agents are not wrapped by the agent
-  sandbox (configure `isolation:` for them); a paseo session started with
-  paseo's own (unsandboxed) provider is paseo's.
+- **What conductor launches, or names.** Every runtime conductor launches
+  locally is covered (cli, acp, opencode, agent-deck), and paseo through its
+  sandboxed provider entries. A paseo session you start with paseo's own
+  provider, or an agent-deck session you start from agent-deck's own UI, is
+  that tool's, not conductor's. A remote (`host:`) launch runs under that
+  box's isolation.
+- **Registrations live in the daemon.** After conductor restarts, a
+  workspace it registered is no longer known: an agent-deck session that
+  agent-deck restarts then is refused (`--agent-cwd`), and a paseo session
+  resumed there runs under that directory's own identity.
+- **agent-deck's `waiting`.** When claude finishes a turn in agent-deck its
+  status is `waiting` — also its status just before a turn starts — so
+  conductor ends the step at `step.done`'s step boundary or the step's
+  timeout, not on that status.
 - A **blob:none** base clone fetches lazily; the sandbox has no network for
   that, so a blob the base never fetched (an old file version for `git blame`)
   is unavailable inside it.

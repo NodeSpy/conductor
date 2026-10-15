@@ -10,6 +10,27 @@ talks to the real agent CLI; conductor only wraps the command paseo runs.
 
 ## Setup
 
+The conductor daemon writes the entries itself: at every start, with the
+sandbox on, it merges them into the config of each paseo daemon its paseo
+runtimes dispatch to, then runs `paseo reload`, and logs what it did:
+
+```
+paseo setup (start): runtime paseo: added=2 updated=0 unchanged=0 skipped=0 (~/paseo-home/config.json); paseo reloaded
+paseo setup (start): runtime paseo: added=0 updated=0 unchanged=2 skipped=0, nothing to write (~/paseo-home/config.json)
+```
+
+So a box that updates into the sandbox never refuses its paseo dispatches for
+want of a manual step. It writes only a config it can name as that daemon's —
+a local paseo runtime's `home:`, else `$PASEO_HOME`, else an existing
+`~/.paseo` — and its entries ask this daemon's control socket (`--socket`). A
+runtime with only `server:` (an address whose home conductor cannot know), or
+a `host:` one, is skipped with a log line: run `conductor paseo setup` there.
+If paseo is down at conductor's start, the entries are written and the failed
+reload is logged; paseo reads them when it starts.
+
+By hand — for another daemon, a dry run, or a paseo you start sessions in
+yourself:
+
 ```sh
 conductor paseo setup            # writes the entries, then `paseo reload`
 ```
@@ -41,7 +62,9 @@ provider's name.
 
 Then pick **Claude (sandboxed)** (or `--provider claude-sandboxed`) for a
 session. conductor's own paseo dispatches use the sandboxed entries
-automatically when the sandbox is on.
+automatically when the sandbox is on. (The daemon's start-up merge and a
+`paseo setup` without `--socket` write the same entries but name the daemon
+differently, so the one that ran last reports `updated`; both work.)
 
 ## How a session runs
 
@@ -88,7 +111,8 @@ this path against the latest published paseo (`test/sandbox-canary/paseo.sh`).
 
 | You see | Because |
 |---|---|
-| `refusing to launch: the conductor daemon is unreachable` | conductor is not running, or the entry names another daemon (`--config`) |
+| `refusing to launch: the conductor daemon is unreachable` | conductor is not running, or the entry names another daemon (`--config`/`--socket`) |
+| a paseo dispatch fails with an unknown `claude-sandboxed` provider | the daemon could not write the entries — its log says why (`paseo setup (start): …`); run `conductor paseo setup` |
 | `refusing … it contains your home directory` | the session was started in your home; start it in a project directory |
 | `egress to X denied` in the session's stderr | X is not a model endpoint or in `sandbox.egress` |
 | `git push` fails inside the session | by design: commit, and conductor pushes (a dispatch), or push from outside the sandbox (your own session) |

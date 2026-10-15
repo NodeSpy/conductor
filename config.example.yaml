@@ -633,7 +633,8 @@ runtimes:
     #   prefer:  [claude-opus-5, gpt-5.6-sol]   # ranking when a fleet offers a choice
     #   allow:   ["claude-opus-*", "gpt-5.6-*"] # a hard ceiling on what may run
   gpu-paseo: { use: paseo, bin: /usr/local/bin/paseo, host: build-box }
-  # deck:   { use: agent-deck }
+  # deck:   { use: agent-deck }                     # sandboxed through agent-deck's --wrapper
+  # oc:     { use: opencode }                       # one sandboxed `opencode serve` per dispatch
   # gemini: { use: acp, agent: gemini }              # ACP transport
   # jev:                                            # a DECISION runtime plugin: answers
   #   connection: { api_key: env:JEV_API_KEY }      # decide: steps only, never an agent
@@ -1264,16 +1265,20 @@ policy:
 
 # ---------------------------------------------------------------------------
 # sandbox: — the agent sandbox (on by default; wiki: Isolation, Paseo-Sandbox).
-# Agents are read-only and conductor performs every write. Every local cli/acp
-# agent launch — and every paseo session started with a sandboxed provider
-# entry (`conductor paseo setup`) — runs in conductor's built-in sandbox
+# Agents are read-only and conductor performs every write. Every local cli,
+# acp, opencode (its per-dispatch `opencode serve`) and agent-deck (the
+# session's agent, through agent-deck's --wrapper) launch — and every paseo
+# session started with a sandboxed provider entry, which the daemon writes into
+# its paseo runtime's config at every start (`conductor paseo setup` by
+# hand) — runs in conductor's built-in sandbox
 # (Linux namespaces + pivot_root, macOS Seatbelt): its workspace read-write,
 # its identity's own tool state as HOME, the conductor socket, no network but
 # its model endpoints (+ egress below), none of your credentials. The agent
 # commits; conductor pushes HEAD to the dispatch's own branch, fast-forward
 # only, re-signed with your SSH signing key (`conductor call git.push`, and at
 # the end of the step). It fails closed: a launch whose sandbox can't be
-# built does not run.
+# built does not run. opencode's allowlist follows its configured
+# provider/model (wiki: Isolation#opencode-and-agent-deck).
 # ---------------------------------------------------------------------------
 sandbox:
   # agents: on              # `off` = the explicit opt-out (agents run as before; logged at boot).

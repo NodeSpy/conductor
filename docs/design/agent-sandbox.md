@@ -3,7 +3,8 @@
 Status: **built** on `feat/agent-sandbox`. It supersedes #160 (agent jail)
 and #175 (paseo plugin/relay). Operator docs: `docs/wiki/Isolation.md` (the
 agent sandbox), `docs/wiki/Paseo-Sandbox.md`. §12 records what the build
-found and where it departs from the handoff below.
+found and where it departs from the handoff below; §13 the extension to the
+opencode and agent-deck runtimes and the daemon's own paseo setup.
 
 This document was the spec handed to the builder: the approved design, every
 integration point on `main` at the time, the carry-over list from
@@ -361,3 +362,55 @@ Departures from §1–§11, each found in a live run or a mutation run:
 - **Fail-closed has one explicit opt-out**: `sandbox.agents: off` (logged at
   boot), or `isolation: {mode: none}` per runtime/step. The e2e's root
   daemons use it; the sandbox group runs non-root.
+
+---
+
+## 13. Extension: opencode, agent-deck, the daemon's paseo setup
+
+**opencode — a per-dispatch `opencode serve`, launched sandboxed, its port
+exposed to conductor.** The controller already ran one `opencode serve` per
+session (not a shared server), over its HTTP API: a create, a blocking
+message turn, abort, resume by session id, remote boxes through `ssh -W`.
+Switching to `opencode run` (one process per turn, JSON events on stdout) or
+`opencode acp` (the acp controller) would each have replaced that transport
+— resume, abort and the remote path with it — to avoid one thing: reaching a
+port inside a sandbox with no network. That is a small, generic addition to
+the sandbox instead: an **expose** relay, the reverse of the model relay
+(`sandbox.Expose`, `sandbox-net --expose SOCK=ADDR`). The in-sandbox forwarder
+listens on a host unix socket — opened before the jail is built, so its
+directory is never shown — and pipes each connection to the server's port in
+the sandbox's own network namespace (fixed: nothing else is there). macOS has
+no network namespace: the server takes a free host port, the only one its
+Seatbelt profile lets it bind (`AgentProfile.ListenPorts`). Either way the
+server needs a per-session password. Everything above the transport is
+unchanged; the agent is the server, so its tools are confined.
+
+The allowlist follows the configured provider (`opencodeRoute`): the
+dispatch's model (`Entry.Model`, "provider/model"), the operator's opencode
+config (`model`, `small_model`, a provider's `options.baseURL` — loopback is
+relayed), else the providers it is signed in to; plus the model catalog
+(1.x reads `models.opencode.ai`). Found live: opencode 1.x routes a turn by a
+`model: {providerID, modelID}` object and ignored the top-level pair the
+controller sent — it ran its default model; both are sent now.
+
+**agent-deck — its `--wrapper`, around the whole command.** agent-deck types
+a compound command (`export …; … exec env … claude …`) into a shell in its
+own tmux session; conductor holds neither that shell nor the agent. The
+wrapper template conductor gives `agent-deck add` runs `{command}` — whole,
+via a quoted heredoc with a fresh delimiter — as `/bin/bash -c` inside
+`conductor sandbox exec` (`--bin` shows the tool, `--agent-cwd` refuses
+rather than substitutes a scratch workspace). Found live: a wrapper of
+`sandbox exec -- {command}` confines only `export` and runs the agent bare;
+claude's interactive UI stops at its folder-trust question in a fresh
+identity home (conductor now records a dispatch's workspace as trusted there,
+read with `O_NOFOLLOW`, replaced by rename); and against the real agent-deck
+CLI the controller's `--prompt` does not exist (`--message`), and a session
+added without a path lands in its group's existing one — another dispatch's
+workspace.
+
+**The daemon's paseo setup.** `conductor paseo setup` is split into a plan
+(resolve, merge) and a write (+ `paseo reload`); the daemon runs both at every
+start for each paseo home it can name, pointing the entries at its control
+socket. It never follows the endpoint ladder's address guess to a config.
+
+**Not changed.** Interactive hand-offs: still the operator's decision.

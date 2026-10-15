@@ -3,7 +3,10 @@
 # privileged container, so unprivileged user namespaces work inside it. Its
 # cli runtime drives the fake agent (fakecli) inside the sandbox: the agent
 # commits, cannot push or reach anything, and conductor pushes its work —
-# signed with the throwaway key entrypoint-sandbox.sh generates.
+# signed with the throwaway key entrypoint-sandbox.sh generates. The
+# opencode runtime's fake `opencode serve` and the agent-deck runtime's fake
+# session tool (deck-agent, run through conductor's --wrapper) are the same
+# probing agent, sandboxed the way each runtime is.
 connectors:
   default:
     use: web
@@ -34,6 +37,11 @@ runtimes:
     agent: claude-code
     transport: cli
     default: true
+  oc:
+    use: opencode
+  deck:
+    use: agent-deck
+    command: [agent-deck, -c, deck-agent]
 triggers:
   # A fixer: sandboxed, its work pushed by conductor (end-of-step + git.push).
   - "on": github.merge_conflict
@@ -47,6 +55,31 @@ triggers:
         workspace: worktree
         archive_when_done: true
         prompt: "Resolve {{.repo}}#{{.pr}} (cli:claude-code, sandboxed) [[sandbox-probe]]"
+  # The same fixer on the opencode runtime: its own `opencode serve`,
+  # sandboxed, reached over the port the sandbox exposes.
+  - "on": github.merge_conflict
+    filter:
+      repo:
+        - grpz/opencode
+    steps:
+      - type: agent
+        name: fx_oc_sandbox
+        runtime: oc
+        workspace: worktree
+        archive_when_done: true
+        prompt: "Resolve {{.repo}}#{{.pr}} (opencode, sandboxed) [[sandbox-probe]]"
+  # And on agent-deck: the session's tool runs through conductor's wrapper.
+  - "on": github.merge_conflict
+    filter:
+      repo:
+        - grpz/deck
+    steps:
+      - type: agent
+        name: fx_deck_sandbox
+        runtime: deck
+        workspace: worktree
+        archive_when_done: true
+        prompt: "Resolve {{.repo}}#{{.pr}} (agent-deck, sandboxed) [[sandbox-probe]]"
   # A review: sandboxed too, and conductor pushes nothing from it.
   - "on": github.review_requested
     filter:

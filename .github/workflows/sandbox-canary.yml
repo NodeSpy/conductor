@@ -43,7 +43,7 @@ jobs:
           CONDUCTOR_REQUIRE_SANDBOX: "1"
         run: |
           go test -race -count=1 ./internal/sandbox/... ./internal/agentsandbox/... ./internal/gitpush/... ./internal/paseosetup/...
-          go test -race -count=1 -run 'TestConfinedGit|TestSandboxApplies|TestDispatchIdentity|TestNonCredentialEnv|TestControllerRunnerBinds' ./internal/controller/
+          go test -race -count=1 -run 'TestConfinedGit|TestSandboxApplies|TestDispatchIdentity|TestNonCredentialEnv|TestControllerRunnerBinds|TestOpencodeSandboxed|TestAgentDeckSandboxed|TestDeckWrapper' ./internal/controller/
       - name: canary — conductor sandbox exec around a fake agent
         run: bash test/sandbox-canary/run.sh
 

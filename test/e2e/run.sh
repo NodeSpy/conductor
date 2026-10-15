@@ -1855,8 +1855,8 @@ group_W_stepdone() {
 
 # probe_line <file-content> <key> — the value recorded for key in SANDBOX_PROBE.md.
 probe_line() { printf '%s\n' "$1" | sed -n "s/^$2: //p" | head -1; }
-# z_probe_landed — the sandboxed fixer's probe record is on the forge's pr-1.
-z_probe_landed() { cexec forge git --git-dir=/srv/git/grpz/sandbox.git cat-file -e pr-1:SANDBOX_PROBE.md 2>/dev/null; }
+# z_probe_landed <repo> — the sandboxed fixer's probe record is on the forge's pr-1.
+z_probe_landed() { cexec forge git --git-dir="/srv/git/$1.git" cat-file -e pr-1:SANDBOX_PROBE.md 2>/dev/null; }
 # z_audit <pattern...> — one conductor-sandbox audit line carries every pattern.
 z_audit() {
   local out p line all
@@ -1869,60 +1869,63 @@ z_audit() {
   return 1
 }
 
-group_Z_sandbox() {
-  banner "Group Z — the agent sandbox: a read-only agent, conductor pushes (signed)"
-  local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml
-  local G=/srv/git/grpz/sandbox.git
-  local main_before other_tip
+# z_fixer <repo> <label> — a sandboxed fixer on one runtime: the agent
+# commits, tries to push for itself, calls git.push and step.done, and records
+# each verdict in SANDBOX_PROBE.md — which reaches the forge only through
+# conductor's push. Every commit conductor pushed is signed (G); main stays.
+z_fixer() {
+  local repo="$1" L="$2" C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml
+  local G="/srv/git/$repo.git" main_before probe k want got sigs
   main_before="$(cexec forge git --git-dir="$G" rev-parse main 2>/dev/null | tr -d '\r')"
-
-  # The fixer: a sandboxed cli worker (the fake agent) commits, tries to push
-  # for itself, calls git.push and step.done, and records each verdict in
-  # SANDBOX_PROBE.md — which reaches the forge only through conductor's push.
-  force "$C" merge_conflict grpz/sandbox#1 "$CFG" >/dev/null
-  if wait_for 90 z_probe_landed; then
-    ok "Z the sandboxed agent's work reached the forge — pushed by conductor" Z pushed
+  force "$C" merge_conflict "$repo#1" "$CFG" >/dev/null
+  if wait_for 90 z_probe_landed "$repo"; then
+    ok "Z $L: the sandboxed agent's work reached the forge — pushed by conductor" Z "$L/pushed"
   else
-    bad "Z sandboxed work pushed" Z pushed "no SANDBOX_PROBE.md on grpz/sandbox pr-1"
+    bad "Z $L: sandboxed work pushed" Z "$L/pushed" "no SANDBOX_PROBE.md on $repo pr-1"
     dc logs --tail 40 "$C"
     return
   fi
-  local probe
   probe="$(cexec forge git --git-dir="$G" show pr-1:SANDBOX_PROBE.md | tr -d '\r')"
   printf '%s\n' "$probe" | sed 's/^/      /'
-  local k want got
   for kv in "secret=denied" "conductor-state=denied" "credentials-env=none" "own-push=refused" \
             "network=unreachable" "git.push=ok" "step.done=ok"; do
     k="${kv%%=*}"; want="${kv#*=}"; got="$(probe_line "$probe" "$k")"
     if [ "$got" = "$want" ]; then
-      ok "Z sandboxed agent: $k → $want" Z "$k"
+      ok "Z $L: sandboxed agent: $k → $want" Z "$L/$k"
     else
-      bad "Z sandboxed agent: $k" Z "$k" "want $want, got '$got'"
+      bad "Z $L: sandboxed agent: $k" Z "$L/$k" "want $want, got '$got'"
     fi
   done
   got="$(probe_line "$probe" git.push-other-ref)"
-  case "$got" in refused:*"takes no options"*) ok "Z git.push refuses to name another ref" Z other-ref ;;
-    *) bad "Z git.push other ref" Z other-ref "got '$got'" ;; esac
+  case "$got" in refused:*"takes no options"*) ok "Z $L: git.push refuses to name another ref" Z "$L/other-ref" ;;
+    *) bad "Z $L: git.push other ref" Z "$L/other-ref" "got '$got'" ;; esac
   got="$(probe_line "$probe" home)"
-  case "$got" in /home/conductor/data/agent-state/*) ok "Z HOME is the identity's own tool state" Z home ;;
-    *) bad "Z identity HOME" Z home "got '$got'" ;; esac
-
-  # Every commit conductor pushed is signed by conductor's key (G); nothing
-  # else on the remote moved.
+  case "$got" in /home/conductor/data/agent-state/*) ok "Z $L: HOME is the identity's own tool state" Z "$L/home" ;;
+    *) bad "Z $L: identity HOME" Z "$L/home" "got '$got'" ;; esac
   cexec "$C" cat /home/conductor/data/keys/allowed_signers | dc exec -T forge sh -c 'cat > /tmp/allowed_signers'
-  local sigs
   sigs="$(cexec forge git --git-dir="$G" -c gpg.ssh.allowedSignersFile=/tmp/allowed_signers \
     log --format='%G?' refs/pull/1/head..pr-1 | tr -d '\r' | sort -u | tr '\n' ' ')"
   if [ "$sigs" = "G " ]; then
-    ok "Z every pushed commit is signed (G) by conductor's key" Z signed
+    ok "Z $L: every pushed commit is signed (G) by conductor's key" Z "$L/signed"
   else
-    bad "Z pushed commits signed" Z signed "signature verdicts: '$sigs'"
+    bad "Z $L: pushed commits signed" Z "$L/signed" "signature verdicts: '$sigs'"
   fi
   if [ "$(cexec forge git --git-dir="$G" rev-parse main | tr -d '\r')" = "$main_before" ]; then
-    ok "Z no other ref moved (main untouched)" Z refs
+    ok "Z $L: no other ref moved (main untouched)" Z "$L/refs"
   else
-    bad "Z main untouched" Z refs "main moved"
+    bad "Z $L: main untouched" Z "$L/refs" "main moved"
   fi
+}
+
+group_Z_sandbox() {
+  banner "Group Z — the agent sandbox: a read-only agent, conductor pushes (signed)"
+  local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml
+
+  # The fixer on each runtime the sandbox covers: a cli worker, opencode's
+  # per-dispatch `opencode serve`, an agent-deck session's tool.
+  z_fixer grpz/sandbox cli
+  z_fixer grpz/opencode opencode
+  z_fixer grpz/deck agent-deck
   if wait_for 15 z_audit '"event":"git_push"' '"signed":true' '"outcome":"ok"'; then
     ok "Z the push is audited (git_push, signed)" Z audit
   else

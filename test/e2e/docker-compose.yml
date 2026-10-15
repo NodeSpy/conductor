@@ -43,7 +43,7 @@ services:
         conn/cweb conn/csvc conn/rweb conn/cengine
         func/cost func/budget1 func/budget2 func/budget3
         func/gatepass func/gatefail func/blob func/hist func/watch
-        grpz/sandbox grpz/review
+        grpz/sandbox grpz/review grpz/opencode grpz/deck
     volumes:
       - ./seed:/seed:ro
     # git daemon (started by the seed script) serves git://forge:9418/<owner>/<repo>.git
@@ -124,6 +124,13 @@ services:
       HOME: /home/conductor
       PC_GITHUB_API_BASE: "http://mock-github:8080"
       CONDUCTOR_GIT_REMOTE_BASE: "git://forge/"
+      FORGE_BASE: "git://forge/"
+      # The opencode / agent-deck runtimes provision their worktree through
+      # paseo's workspaces (the fake one here), and agent-deck keeps its
+      # sessions: both under the non-root daemon's own data dir.
+      FAKE_PASEO_STATE: /home/conductor/data/fakepaseo
+      FAKE_PASEO_LINKED_WORKTREES: "1"       # paseo's real shape: conductor pushes from the common dir
+      AGENTDECK_STATE: /home/conductor/data/agentdeck
     volumes:
       - ./config:/etc/conductor:ro
     command: ["bash", "/etc/conductor/entrypoint-sandbox.sh", "/etc/conductor/sandbox.yaml"]

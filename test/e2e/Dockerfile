@@ -80,12 +80,14 @@ RUN if [ -f /opt/plugin-bin/conductor-github ]; then cp /opt/plugin-bin/conducto
 # paseo_bin: still resolves it on PATH. The fake tool runtimes are installed under
 # the exact names conductor's controllers exec on PATH (stub mode): the cli
 # controller runs `claude`/`codex`, the opencode-native controller runs `opencode
-# serve`, the agent-deck controller runs `agent-deck`. fakeacp is referenced by an
+# serve`, the agent-deck controller runs `agent-deck` (whose sessions run the
+# fake `deck-agent` tool). fakeacp is referenced by an
 # explicit `command:` in the stub controllers config. In live mode the real CLIs are
 # mounted ahead of these on PATH (see docker-compose.live.yml).
 RUN ln -sf /usr/local/bin/fakepaseo     /usr/local/bin/paseo \
  && ln -sf /usr/local/bin/fakecli       /usr/local/bin/claude \
  && ln -sf /usr/local/bin/fakecli       /usr/local/bin/codex \
  && ln -sf /usr/local/bin/fakeopencode  /usr/local/bin/opencode \
- && ln -sf /usr/local/bin/fakeagentdeck /usr/local/bin/agent-deck
+ && ln -sf /usr/local/bin/fakeagentdeck /usr/local/bin/agent-deck \
+ && ln -sf /usr/local/bin/fakeagentdeck /usr/local/bin/deck-agent
 WORKDIR /home/conductor
