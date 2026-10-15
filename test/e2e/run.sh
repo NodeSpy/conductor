@@ -159,6 +159,16 @@ stage_github_plugin() {
 
 setup() {
   banner "build & up ($MODE mode, project $PROJECT)"
+  # Group Z runs the agent sandbox, which needs unprivileged user namespaces.
+  # GitHub's Ubuntu 23.10+ runners restrict them through AppArmor
+  # (kernel.apparmor_restrict_unprivileged_userns=1) — even inside a
+  # privileged container — so on CI ONLY the harness lifts that for the run.
+  # It never touches a developer's host sysctls.
+  if [ -n "${GITHUB_ACTIONS:-}" ] && [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
+    sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 \
+      && echo "CI: allowed unprivileged user namespaces for the agent-sandbox group" \
+      || echo "CI: could not lift the AppArmor user-namespace restriction; group Z will fail"
+  fi
   dc down -v --remove-orphans >/dev/null 2>&1 || true
   stage_github_plugin
   dc build || { echo "build failed"; exit 1; }
@@ -191,6 +201,9 @@ setup() {
   for c in conductor conductor-ctrl conductor-fail conductor-conn; do
     wait_for 60 cexec "$c" test -S /data/control.sock || fatal "$c daemon not ready (control socket)"
   done
+  if [ "$MODE" != "live" ]; then
+    wait_for 60 cexec conductor-sandbox test -S /home/conductor/data/control.sock || fatal "conductor-sandbox daemon not ready (control socket)"
+  fi
   echo "stack ready"
 }
 
@@ -1780,6 +1793,7 @@ main() {
   group_X_listeners
   group_Y_listeners_github_smee
   group_W_stepdone
+  group_Z_sandbox
   print_matrix
   [ "$FAIL" -eq 0 ]
 }
@@ -1836,6 +1850,97 @@ group_W_stepdone() {
     bad "W user workspace untouched" W foreign "conductor archived a workspace it did not create"
   else
     ok "W user workspace untouched (ownership ledger)" W foreign
+  fi
+}
+
+# probe_line <file-content> <key> — the value recorded for key in SANDBOX_PROBE.md.
+probe_line() { printf '%s\n' "$1" | sed -n "s/^$2: //p" | head -1; }
+# z_probe_landed — the sandboxed fixer's probe record is on the forge's pr-1.
+z_probe_landed() { cexec forge git --git-dir=/srv/git/grpz/sandbox.git cat-file -e pr-1:SANDBOX_PROBE.md 2>/dev/null; }
+# z_audit <pattern...> — one conductor-sandbox audit line carries every pattern.
+z_audit() {
+  local out p line all
+  out="$(cexec conductor-sandbox cat /home/conductor/data/audit.jsonl 2>/dev/null)" || return 1
+  while IFS= read -r line; do
+    all=1
+    for p in "$@"; do case "$line" in *"$p"*) ;; *) all=0; break ;; esac; done
+    [ "$all" = 1 ] && return 0
+  done <<<"$out"
+  return 1
+}
+
+group_Z_sandbox() {
+  banner "Group Z — the agent sandbox: a read-only agent, conductor pushes (signed)"
+  local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml
+  local G=/srv/git/grpz/sandbox.git
+  local main_before other_tip
+  main_before="$(cexec forge git --git-dir="$G" rev-parse main 2>/dev/null | tr -d '\r')"
+
+  # The fixer: a sandboxed cli worker (the fake agent) commits, tries to push
+  # for itself, calls git.push and step.done, and records each verdict in
+  # SANDBOX_PROBE.md — which reaches the forge only through conductor's push.
+  force "$C" merge_conflict grpz/sandbox#1 "$CFG" >/dev/null
+  if wait_for 90 z_probe_landed; then
+    ok "Z the sandboxed agent's work reached the forge — pushed by conductor" Z pushed
+  else
+    bad "Z sandboxed work pushed" Z pushed "no SANDBOX_PROBE.md on grpz/sandbox pr-1"
+    dc logs --tail 40 "$C"
+    return
+  fi
+  local probe
+  probe="$(cexec forge git --git-dir="$G" show pr-1:SANDBOX_PROBE.md | tr -d '\r')"
+  printf '%s\n' "$probe" | sed 's/^/      /'
+  local k want got
+  for kv in "secret=denied" "conductor-state=denied" "credentials-env=none" "own-push=refused" \
+            "network=unreachable" "git.push=ok" "step.done=ok"; do
+    k="${kv%%=*}"; want="${kv#*=}"; got="$(probe_line "$probe" "$k")"
+    if [ "$got" = "$want" ]; then
+      ok "Z sandboxed agent: $k → $want" Z "$k"
+    else
+      bad "Z sandboxed agent: $k" Z "$k" "want $want, got '$got'"
+    fi
+  done
+  got="$(probe_line "$probe" git.push-other-ref)"
+  case "$got" in refused:*"takes no options"*) ok "Z git.push refuses to name another ref" Z other-ref ;;
+    *) bad "Z git.push other ref" Z other-ref "got '$got'" ;; esac
+  got="$(probe_line "$probe" home)"
+  case "$got" in /home/conductor/data/agent-state/*) ok "Z HOME is the identity's own tool state" Z home ;;
+    *) bad "Z identity HOME" Z home "got '$got'" ;; esac
+
+  # Every commit conductor pushed is signed by conductor's key (G); nothing
+  # else on the remote moved.
+  cexec "$C" cat /home/conductor/data/keys/allowed_signers | dc exec -T forge sh -c 'cat > /tmp/allowed_signers'
+  local sigs
+  sigs="$(cexec forge git --git-dir="$G" -c gpg.ssh.allowedSignersFile=/tmp/allowed_signers \
+    log --format='%G?' refs/pull/1/head..pr-1 | tr -d '\r' | sort -u | tr '\n' ' ')"
+  if [ "$sigs" = "G " ]; then
+    ok "Z every pushed commit is signed (G) by conductor's key" Z signed
+  else
+    bad "Z pushed commits signed" Z signed "signature verdicts: '$sigs'"
+  fi
+  if [ "$(cexec forge git --git-dir="$G" rev-parse main | tr -d '\r')" = "$main_before" ]; then
+    ok "Z no other ref moved (main untouched)" Z refs
+  else
+    bad "Z main untouched" Z refs "main moved"
+  fi
+  if wait_for 15 z_audit '"event":"git_push"' '"signed":true' '"outcome":"ok"'; then
+    ok "Z the push is audited (git_push, signed)" Z audit
+  else
+    bad "Z push audited" Z audit "no signed git_push audit row"
+  fi
+
+  # The reviewer: sandboxed too, and conductor pushes nothing from a review.
+  local review_tip
+  review_tip="$(cexec forge git --git-dir=/srv/git/grpz/review.git rev-parse pr-1 | tr -d '\r')"
+  force "$C" review_requested grpz/review#1 "$CFG" >/dev/null
+  if wait_for 60 z_audit '"uses":"git.push"' '"outcome":"failed"' 'grpz/review'; then
+    if [ "$(cexec forge git --git-dir=/srv/git/grpz/review.git rev-parse pr-1 | tr -d '\r')" = "$review_tip" ]; then
+      ok "Z a sandboxed review pushes nothing (its git.push is refused)" Z review
+    else
+      bad "Z review pushes nothing" Z review "grpz/review pr-1 moved"
+    fi
+  else
+    bad "Z sandboxed review ran" Z review "no git.push call recorded for grpz/review"
   fi
 }
 

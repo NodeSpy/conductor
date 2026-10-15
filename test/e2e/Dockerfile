@@ -48,8 +48,14 @@ RUN set -e; for p in github slack discord ntfy pushover notifiarr smee; do \
 
 # ---- runtime stage ----
 FROM alpine:3.20
-RUN apk add --no-cache git git-daemon curl bash coreutils openssl openssh \
+RUN apk add --no-cache git git-daemon curl bash coreutils openssl openssh util-linux \
  && adduser -D -h /home/conductor conductor
+# The agent-sandbox daemon (group Z) runs as this user: a "secret" ssh key in
+# its home the sandboxed agent must not be able to read.
+RUN mkdir -p /home/conductor/.ssh \
+ && echo "NOT-A-REAL-KEY-e2e-secret" > /home/conductor/.ssh/id_fake \
+ && chmod 700 /home/conductor/.ssh && chmod 600 /home/conductor/.ssh/id_fake \
+ && chown -R conductor:conductor /home/conductor
 COPY --from=build /out/ /usr/local/bin/
 COPY --from=github-plugin /out/ /usr/local/bin/
 # The reference ENGINE plugin (test/plugins/acme-engine) is a real out-of-process
