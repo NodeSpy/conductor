@@ -160,6 +160,12 @@ func TestFanOutInterruptedGroupReports(t *testing.T) {
 	if len(msgs) != 1 || !strings.Contains(msgs[0], "interrupted") || !strings.Contains(msgs[0], "a done") {
 		t.Fatalf("interrupted group report: %q", msgs)
 	}
+	// A group that already reported does not report again on a restart.
+	before = len(f.unread("sre"))
+	f.svc.recoverWorkers("sre")
+	if n := len(f.unread("sre")) - before; n != 0 {
+		t.Fatalf("a reported group reported again after a restart (%d)", n)
+	}
 }
 
 // ---- peer messages ----

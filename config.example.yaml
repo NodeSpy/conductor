@@ -1354,6 +1354,15 @@ policy:
 # conductor applies the saved plan with the apply connector's role. Plans that
 # destroy or replace stateful resources are refused unless allow_destroy names
 # them; plan files are deleted once the proposal is settled.
+#
+# Coordination: instructions flow down, authority never grows. A worker the
+# home session starts is its CHILD — the brief and `conductor member tell`
+# follow-ups are instructions; what the child sends back is data. A child runs
+# with the member's verbs or fewer (spawn --verbs / --read-only) and inherits
+# the provenance of the request behind it, so a third party's (or a peer's, or
+# a proactive sweep's) request can never be laundered through a child into an
+# unapproved write. Members that an operator LINKS (peers: on both sides, or
+# member_links:) can message each other — data only, never instructions.
 # ---------------------------------------------------------------------------
 operators:
   ops:
@@ -1380,8 +1389,9 @@ members:
       runtime: claude-cli                        # default: the one `use: cli` runtime
       timeout: 2h
       max_concurrent: 4
+      # max_per_case: 3                          # live workers on one case (a fan-out's width)
     skill:
-      verbs: [slack-ops.post, gh.comment]        # the member's verbs; workers carry exactly these
+      verbs: [slack-ops.post, gh.comment]        # the member's verbs; workers carry these or fewer
     autonomy:
       shadow: true                               # the default; false allows approved execution
       tiers:
@@ -1395,6 +1405,13 @@ members:
       #   amounts: { aws.purchase_savings_plan: commitment_usd }
       #   spend_cap: { per_action: 2000, per_period: 5000, period: 720h, currency: USD }
       approval_ttl: 24h
+    # proactive:                                 # OFF unless set: read-only sweeps on a schedule (wiki: Members → Proactive sweeps)
+    #   every: 4h
+    #   quiet_hours: "22:00-07:00"               # no sweep starts in this window (local time; timezone: to pin a zone)
+    #   budget: { max_runs_per_day: 6, max_cost_per_day: 2.00 }   # rolling 24h; at least one is required
+    #   checklist: { section: "Proactive checks" }                # a charter heading, or { file: checklists/sre.md }
+    #   notify_at: high                          # findings at/above this open a case and notify (conductor.member_notify)
+    # peers: [cost]                              # members this one may message — they must list it back (or member_links:)
     # terraform:                                 # conductor-executed Terraform (wiki: Members → Terraform changes)
     #   plan_connector: tf-plan                  # a `use: terraform` connector: its env is the READ role
     #   apply_connector: tf-apply                # its env is the WRITE role; no member verb may reach it
@@ -1402,6 +1419,10 @@ members:
     #   # stateful: [aws_db_instance, aws_s3_bucket]      # default: built-in databases/buckets/disks/keys list
     #   # allow_destroy: [module.old.aws_s3_bucket.logs] # addresses a plan may still destroy/replace
     #   # timeout: 30m
+
+# member_links:                                # operator-side peer links: each pair may message each other.
+#   - [sre, cost]                              # A LINK IS A DATA-CROSSING CHANNEL — what one member writes reaches the
+#                                              # other; link members serving different orgs only if that is what you want.
 
 update: { auto: true } # self-update (auto-applies by default); auto-migration runs on the new binary's first boot.
 #                      # deps follows auto: packs: and `use:` plugins are kept current on the same cycle — a changed

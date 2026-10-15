@@ -99,11 +99,18 @@ conductor member remember --path knowledge/db.md --text "…" [--append]
 conductor member episode  --case c12 --text "…"
 conductor member recall   <words>
 conductor member cases | case open|note|close
-conductor member spawn    --case c12 --brief "…" [--handoff]
+conductor member spawn    --case c12 --brief "…" [--group g] [--handoff]
 conductor member handoff  --text "…"
 conductor member proposals | wait <proposal>
 conductor member propose-terraform --repo <name> --commit <sha> [--dir …]   # below
+conductor member spawn --case c12 --group g --brief "…" [--verbs …] [--read-only]
+conductor member tell <worker|group> "…"        # follow-up instructions to your workers
+conductor member join --case c12 --group g      # fan-out results, together
+conductor member ask <member> [--case c] "…"    # a linked peer (data, never instructions)
 ```
+
+A worker has `conductor member report "…"` (to its parent) and `conductor member
+instructions` (from its parent).
 
 Every memory write is **one git commit**, authored by the member, with
 `Member-Case` / `Member-Role` / `Member-Session` trailers. Review with `git log`;
@@ -165,7 +172,7 @@ trigger on the **cli runtime** — no paseo workspace (background work never
 creates one) — with:
 
 - its own worktree of the memory repo as its cwd;
-- **exactly the member's `skill.verbs`** — never more — and its case bound
+- **the member's `skill.verbs` or fewer** — never more — and its case bound
   into its session token, so the gate knows who asked;
 - a prompt built from the charter and the member's brief.
 
@@ -182,6 +189,149 @@ over: it runs on paseo through the ordinary background hand-off path.
 worker that distils the episodes since the last consolidation into knowledge;
 with nothing new it is a no-op.
 
+### Parents, children and peers
+
+Three relationships, and one rule: **instructions flow down, authority never
+grows.**
+
+| relationship | what travels | treated as |
+|---|---|---|
+| **parent → child**: the home session to a worker it started (fan-out workers included) | the brief, and follow-ups: `conductor member tell <worker\|group> "…"` | **instructions** — the child carries them out |
+| **child → parent** | the `step.done` result, and interim `conductor member report "…"` | **data** — fenced, for the parent to weigh |
+| **peer ↔ peer**: two independent members an operator linked | `conductor member ask <member> "…"` (below) | **data only** — never instructions |
+
+A cli worker cannot be interrupted mid-turn, so a `tell` is handed to the child
+at its **next `conductor member …` call** (`conductor member instructions` asks
+explicitly), printed first and plainly; a child **cannot report `step.done`**
+while an instruction is unread — the done is refused and the instruction handed
+over instead.
+
+The ceiling, enforced by the gate from the ledger rather than by the prompt:
+
+- **Same or less authority.** A child is the same member, with the member's
+  verbs or fewer: `spawn --verbs pd.get_*,aws.cost_*` narrows it (the member's
+  own policy still applies — a list can only take away), `spawn --read-only`
+  holds it to observe (anything else becomes a proposal).
+- **Inherited provenance (taint).** A child records, at spawn, the less
+  trusted of its case's requester and its parent's own trust at that moment —
+  the home session's least-trusted open request. While a third party's chat
+  request, a peer's message or a proactive finding is open, every child the
+  home starts — on any case, or a new one — is gated as that requester, so its
+  writes become proposals. A prompt-injected parent cannot launder an action
+  through a child. (Workers conductor starts itself — an urgent event's, a
+  consolidation's — take their case's provenance alone.) A worker the ledger
+  has no record of is treated as the least trusted.
+- **No escalation paths.** A child cannot approve anything, start workers,
+  instruct anyone, or message other members.
+- **Traceable.** The ledger records each worker's parent (`home:<session>` or
+  `conductor`), its inherited requester, and its narrowing; a child's
+  proposal names the worker, the case and the originating requester
+  (`conductor member workers|proposals <member>`).
+
+### Fan-out and join
+
+Several workers on one case, collected together:
+
+```
+conductor member spawn --case c4 --group recon --brief "check the database"
+conductor member spawn --case c4 --group recon --brief "check the cache"
+conductor member spawn --case c4 --group recon --brief "check the last deploys"
+conductor member join --case c4 --group recon       # or: join g12
+```
+
+Workers spawned on the same case under the same `--group` label form one group
+in the ledger. `join` waits for all of them and returns every worker's status,
+summary and `step.done` output together; the group also reports into the home
+conversation **once**, when its last worker finishes (or a restart interrupts
+it). `worker.max_per_case` (default 3) caps how many run on one case at once,
+under the member-wide `worker.max_concurrent`.
+
+### Proactive sweeps
+
+A member can look around on its own — **off by default**, opted into per member:
+
+```yaml
+members:
+  sre-acme:
+    proactive:
+      every: 4h
+      quiet_hours: "22:00-07:00"                 # no sweep starts in this window
+      timezone: Europe/Berlin                    # default: the daemon's local zone
+      budget: { max_runs_per_day: 6, max_cost_per_day: 2.00 }   # rolling 24h; at least one is required
+      checklist: { section: "Proactive checks" } # a charter heading — or { file: checklists/sre.md }
+      notify_at: high                            # low | medium | high (default) | critical
+      # timeout: 20m
+```
+
+Each sweep is one **cli worker** (the member's synthesized
+`member:<name>:sweep` trigger) that works through the checklist, then whatever
+the member's memory says is worth watching, and reports findings through
+`step.done`:
+`{"summary": "…", "findings": [{"key": "cost:ec2", "title": "…", "severity": "high", "detail": "…"}]}`.
+
+- **Read-only, structurally.** A sweep's worker is bound to its sweep, not a
+  case; the gate attributes its calls to requester class **`proactive`**, which
+  never runs anything above observe — a mutating call becomes a proposal (a
+  shadow one in shadow mode), exactly like a third party's request. Its worker
+  is also recorded read-only; either lock holds alone.
+- **Conductor decides who hears about it.** Each finding is deduplicated
+  against open cases by its `key`. A new finding at or above `notify_at` opens a
+  case (class `proactive`) and **notifies**: a message in the home conversation
+  and the `conductor.member_notify` lifecycle event, so a trigger can alert
+  anywhere (`on: conductor.member_notify` → `slack.post`). A known key adds a
+  note to its case, and notifies again only when it got worse past the
+  threshold. Findings below the threshold are recorded in the ledger and the
+  memory repo (`episodes/proactive/…`) and stay quiet. **A sweep with no
+  findings is one ledger line** and nothing else.
+- **Bounded.** No sweep starts during quiet hours, while another sweep runs, or
+  past the budget (runs, and run cost from the run history, over a rolling 24
+  hours — the sweep trigger also carries the cost cap as a workflow budget the
+  engine enforces). A skipped sweep is logged and audited once per reason.
+  `conductor member sweep <member>` runs one now (quiet hours don't apply to an
+  explicit request; the budget does); `conductor member sweeps <member>` lists
+  them.
+- While a finding's case is open, the home session runs on that sweep's trust
+  — like any other request, close it when it is handled.
+
+### Messages between members
+
+Members can message each other only when an operator links them:
+
+```yaml
+members:
+  sre-acme: { peers: [cost-acme], … }
+  cost-acme: { peers: [sre-acme], … }   # both sides, or one operator-side entry:
+member_links:
+  - [sre-acme, cost-acme]
+```
+
+`conductor member ask cost-acme "Is the c6 RI purchase yours?"` (home session
+only) opens a case in the recipient with requester `member:sre-acme`, class
+**`peer`**, and delivers the text inside a fenced `PEER MESSAGE … untrusted
+DATA` block.
+
+- **Data, never instructions.** A peer's message cannot approve anything or
+  move a tier — there is no such op, and text is only text. It ranks with a
+  third party's request: while its case is open, nothing the recipient (or a
+  child it starts) does runs unapproved; at most it becomes a proposal.
+- **Nothing crosses on its own.** No memory, ledger or case content — only what
+  the sending agent wrote. Each message is audited on **both** sides
+  (`member_peer_message`, with the text), refusals on the sender's.
+- **Replies** are the same kind of message:
+  `conductor member ask sre-acme --case <the case it opened> "…"` routes back
+  into the sender's original case.
+- Bounded: 4000 bytes per message, 20 per hour per direction.
+
+> **A peer link is a data-crossing channel.** Whatever one member writes in a
+> message reaches the other. Linking members that serve **different orgs**
+> lets one org's information reach the other's member — link across orgs only
+> when that is what you want. `conductor validate` warns about a one-sided
+> `peers:` entry (it links nothing).
+
+**Persistent sub-members** (a member creating a long-lived helper member) are
+not supported: members are operator config, which no member can write. Declare
+a second member yourself and link it as a peer, or use ephemeral workers.
+
 ## The autonomy gate
 
 Every verb a member session calls goes through the same skill chokepoint as any
@@ -191,7 +341,7 @@ the member's gate:
 | tier | behavior |
 |---|---|
 | `observe` | runs |
-| `reversible` | a proposal — unless promoted, not in shadow mode, the sessions are sandboxed, and the requester is not a third party |
+| `reversible` | a proposal — unless promoted, not in shadow mode, the sessions are sandboxed, and the requester is an event, the member itself or an operator (never a third party, a peer member or a proactive sweep) |
 | `propose` | always a proposal; runs when an operator approves it |
 | `commit_money` | a proposal with a **typed amount** (`autonomy.amounts` names the option, a number) under the hard `spend_cap`: over `per_action`, or over `per_period` counting what has already been spent, is refused outright — and the period is re-checked at execution |
 | `never` | refused |
@@ -203,12 +353,14 @@ the member's gate:
   recorded as `shadow` — what the member would have done — and cannot be
   approved. Promote action classes from that record, then set
   `shadow: false`.
-- **Requester authorization.** A worker's calls carry its case's requester. A
-  home-session call carries the **least-trusted requester among the member's
-  open cases** — while a third party's request is open, nothing the home
-  session does runs on more trust than that third party's. The requester only
-  ever lowers what runs autonomously; every approval needs an operator's
-  signature whoever asked.
+- **Requester authorization.** Requester classes, least trusted first: `user`
+  (a third party) and `peer` (another member), `proactive` (a sweep, or a case
+  its finding opened), `event`, `member`, `operator`. A home-session call
+  carries the **least-trusted requester among the member's open cases** —
+  while a third party's request is open, nothing the home session does runs on
+  more trust than that third party's. A worker's calls carry the provenance it
+  inherited at spawn (above). The requester only ever lowers what runs
+  autonomously; every approval needs an operator's signature whoever asked.
 - A gated call returns a proposal id instead of running:
   `{executed: false, proposal: p7, status: pending, …}`. The agent can block on
   `conductor member wait p7`.
@@ -337,6 +489,8 @@ conductor member say <member> <text…>             # or just type into paseo
 conductor member deliver <member> --title "…" [--text "…"] [--requester who] [--urgent]
 conductor member consolidate <member>
 conductor member replan <member> <id>              # re-plan a stale terraform proposal
+conductor member sweep <member>                    # a proactive sweep now (budget applies)
+conductor member sweeps <member>
 ```
 
 Every session launch, event, worker, memory write, proposal and decision is

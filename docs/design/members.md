@@ -129,3 +129,74 @@ retired one — to mint that session's token with the member binding. Tokens
 under rotation: the retiring session's are revoked at once, the new session
 gets fresh ones (`TestWrapperTokensAcrossRotation`). cli workers are launched by
 the engine and sandboxed like any cli step; nothing member-specific is needed.
+
+## Proactive sweeps
+
+- **A sweep is a cli worker**, not a new launcher: the member's third
+  synthesized `on: manual` trigger (`member:<name>:sweep`, only with
+  `proactive:`), the worker step with the sweep's timeout and — when the budget
+  sets a cost — a 24h workflow `policy.budget` the engine enforces.
+- **Read-only is the gate's, not the prompt's.** The sweep's token is bound to
+  the sweep id (the case slot), its worker record carries class `proactive`
+  and `read_only`, and `Gate.caller` resolves both from the ledger.
+  `proactive` is outside the autonomy allowlist (`event`, `member`,
+  `operator`), and read-only refuses autonomy on its own: either lock holds
+  alone.
+- **The notify decision is conductor's.** The agent reports findings with a
+  severity and a stable key; `finishSweep` dedupes by key against open cases,
+  opens a case (class `proactive`) only at or above `notify_at`, notifies on a
+  new case or an escalation past the threshold (the home inbox + the
+  `conductor.member_notify` lifecycle event, via `notify.Publish`), and records
+  the rest quietly (ledger + `episodes/proactive/YYYY/MM/<date>.md`). A quiet
+  sweep writes one ledger record and one journal line.
+- **Budget** counts the ledger's sweeps over a rolling 24h: starts, and cost
+  from the run history (`RunCost`, recorded at `run_done`). One running sweep
+  at a time (checked inside the ledger transaction that creates the next).
+  Quiet hours are local time with an optional IANA zone; an operator's
+  explicit `conductor member sweep` ignores them, never the budget.
+
+## Coordination: parents, children, peers
+
+The rule: **instructions flow down, authority never grows.**
+
+- **Parent → child.** A worker's record names its parent (`home:<session>`, or
+  `conductor` for workers conductor starts itself). Follow-ups
+  (`member tell`) are stored on the worker and handed over at its next member
+  op — the cli runtime has no mid-turn injection — and `CheckDone` refuses a
+  child's `step.done` while one is unread. They are rendered as instructions,
+  not fenced.
+- **Child → parent** is data: `step.done` output and `member report` are fenced
+  `WORKER REPORT` blocks in the home inbox. A fan-out group (`spawn --group`)
+  reports once, decided inside the ledger transaction of its last finish.
+- **Provenance is inherited.** At spawn the worker records the less trusted of
+  its case's requester and the parent's `homeAttribution` (the least-trusted
+  open case) — computed inside the same ledger transaction. The gate reads a
+  worker's class from its record (by dispatch), not from the case, and fails
+  closed (`user`) without one. Conductor-started workers (urgent events,
+  consolidation) take the case's provenance alone: their parent is not a
+  conversation that could have been steered.
+- **The ceiling.** `--verbs` patterns are checked by the gate after the
+  member's own policy admitted the call, so they can only narrow; `--read-only`
+  holds the child to observe. Children cannot spawn, join, tell, approve or ask.
+- **Peers** (`member ask`) need an operator link (both sides' `peers:`, or a
+  `member_links:` pair), arrive as a case of class `peer` (requester
+  `member:<name>`, ranked with a third party), carry only the message text
+  (fenced), are audited on both sides, and are capped at 4000 bytes and 20 per
+  hour per direction. A reply (`ask --case <peer case>`) is routed into the
+  sender's original case.
+
+### Persistent sub-members: left out
+
+A member creating a long-lived helper member does not fit cleanly:
+
+- members are operator config, and nothing on the agent-facing surface writes
+  config — a runtime-created member would need conductor to rewrite the config
+  file, or a second, state-held member registry beside it;
+- "a charter scope that is a subset of the parent's" is free text and cannot be
+  checked mechanically;
+- there is no member archive operation to cascade (a member is removed by
+  editing config).
+
+The clean equivalent today is operator-side: declare the helper as its own
+member and link it as a peer (data only), or use ephemeral workers (instructions
+down, same authority or less).

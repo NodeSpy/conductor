@@ -70,6 +70,11 @@ func TestSweepIsReadOnlyAtTheGate(t *testing.T) {
 	if _, err := check(t, f, sweepID(x), "aws.iam_attach", nil); err == nil {
 		t.Fatal("never tier ran for a sweep")
 	}
+	// Each lock holds alone: the proactive class without the read-only flag.
+	_ = f.st.UpdateMember("sre", func(r *store.MemberRecord) error { r.Workers["w-"+x].ReadOnly = false; return nil })
+	if v, _ := check(t, f, sweepID(x), "pd.ack", nil); v.Allow {
+		t.Fatal("the proactive class alone did not hold a sweep to observe")
+	}
 	// In shadow mode the sweep's write is a shadow proposal.
 	m := testMember()
 	m.Autonomy.Shadow = boolp(true)
@@ -185,6 +190,22 @@ func TestSweepScheduleQuietSweepAndRunBudget(t *testing.T) {
 	if sw == nil || sw.Status != "running" {
 		t.Fatalf("the sweep binding is not a running sweep: %q %+v", sid, sw)
 	}
+	var sweepWorker *store.Worker
+	for _, w := range f.st.Member("sre").Workers {
+		if w.Sweep == sid {
+			sweepWorker = w
+		}
+	}
+	if sweepWorker == nil || sweepWorker.RequesterClass != ReqProactive || !sweepWorker.ReadOnly || sweepWorker.Parent != "conductor" || sweepWorker.CaseID != "" {
+		t.Fatalf("sweep worker record: %+v", sweepWorker)
+	}
+	f.svc.Gate.Sandbox = fixedJail(true)
+	if v, _ := f.svc.Gate.CheckVerb(ctx, childID("sre", *sweepWorker), "pd.ack", nil); v.Allow {
+		t.Fatal("a real sweep worker ran a promoted write")
+	}
+	if _, err := f.svc.Tell(ctx, homeCaller(f.svcFixture), sweepWorker.ID, "fix it"); err == nil {
+		t.Fatal("the home instructed a sweep")
+	}
 	prompt, _ := x.inputs["prompt"].(string)
 	for _, want := range []string{"cost anomalies in the bill", "READ-ONLY", "Notify threshold: high", "step.done"} {
 		if !strings.Contains(prompt, want) {
@@ -255,11 +276,16 @@ func TestSweepScheduleQuietSweepAndRunBudget(t *testing.T) {
 func TestSweepCostBudget(t *testing.T) {
 	f := newSweepFixture(t, config.MemberProactive{Every: config.Duration(time.Hour), Budget: config.ProactiveBudget{MaxCostPerDay: 2}})
 	ctx := context.Background()
-	f.cost = 1.5
+	f.cost = 1.0 // two sweeps reach the $2 cap exactly
 	f.svc.Tick(ctx, "sre")
 	f.finish(t, f.sweepFired()[0], map[string]any{"summary": "ok"})
-	if c := f.svc.Sweeps("sre", 1)[0].CostUSD; c != 1.5 {
+	if c := f.svc.Sweeps("sre", 1)[0].CostUSD; c != 1.0 {
 		t.Fatalf("sweep cost not recorded: %v", c)
+	}
+	// Finished, but not due: nothing starts before `every` has passed.
+	f.svc.Tick(ctx, "sre")
+	if n := len(f.sweepFired()); n != 1 {
+		t.Fatalf("a sweep started before it was due (%d)", n)
 	}
 	f.clk.add(time.Hour)
 	f.svc.Tick(ctx, "sre")
