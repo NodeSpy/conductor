@@ -794,10 +794,9 @@ func (c *Config) validateMemberTerraform(m MemberConfig, t *MemberTerraform) err
 	// the apply connector's verbs would hand the agent the write role.
 	if m.Skill != nil {
 		for _, v := range m.Skill.Verbs {
+			// The connector half as a pattern: "tf-write", "tf-*" and "*" all
+			// reach tf-write.
 			conn := strings.SplitN(v, ".", 2)[0]
-			if v == "*" || conn == "*" {
-				return fmt.Errorf("skill.verbs %q would reach the apply connector %q — the write role is conductor's alone; name the verbs you grant", v, t.ApplyConnector)
-			}
 			if ok, _ := filepath.Match(conn, t.ApplyConnector); ok {
 				return fmt.Errorf("skill.verbs %q reaches the apply connector %q — the write role is conductor's alone", v, t.ApplyConnector)
 			}
