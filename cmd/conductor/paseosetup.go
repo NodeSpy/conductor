@@ -58,15 +58,20 @@ func cmdPaseo(args []string) int {
 	}
 }
 
-// paseoRun runs the paseo CLI (a var for tests).
-var paseoRun = func(args ...string) ([]byte, error) {
-	return exec.Command("paseo", args...).CombinedOutput()
+// paseoRun runs the paseo CLI bin ("" = paseo on PATH) — a var for tests.
+var paseoRun = func(bin string, args ...string) ([]byte, error) {
+	if bin == "" {
+		bin = "paseo"
+	}
+	return exec.Command(bin, args...).CombinedOutput()
 }
 
 type paseoSetupOpts struct {
 	home, file, conductor, config, socket string
 	providers                             []string
 	dryRun, noReload                      bool
+	// bin is the paseo CLI that reloads the daemon ("" = paseo on PATH).
+	bin string
 }
 
 func parsePaseoSetup(args []string) (paseoSetupOpts, error) {
@@ -123,13 +128,60 @@ func cmdPaseoSetup(args []string, out *os.File) error {
 	if err != nil {
 		return err
 	}
+	plan, err := planPaseoSetup(o, func(note string) { fmt.Fprintln(out, note) })
+	if err != nil {
+		return err
+	}
+	rep := plan.report
+	for _, n := range rep.Order {
+		line := fmt.Sprintf("%-9s %s", rep.Results[n], n)
+		if rep.Results[n] == paseosetup.Skipped {
+			line += " (your own entry of that name, without the x-conductor marker: not touched)"
+		}
+		fmt.Fprintln(out, line)
+	}
+	fmt.Fprintf(out, "== %s (%s)\n", paseoCounts(rep), plan.o.file)
+	if plan.o.dryRun || !rep.Changed() {
+		return nil
+	}
+	reloaded, err := writePaseoSetup(plan)
+	if err != nil {
+		return err
+	}
+	if !reloaded {
+		fmt.Fprintln(out, "not reloaded (--no-reload): run 'paseo reload' to pick the entries up")
+		return nil
+	}
+	fmt.Fprintln(out, "paseo reloaded")
+	return nil
+}
+
+// paseoCounts renders a merge report's tally.
+func paseoCounts(rep paseosetup.Report) string {
+	return fmt.Sprintf("added=%d updated=%d unchanged=%d skipped=%d",
+		rep.Count(paseosetup.Added), rep.Count(paseosetup.Updated), rep.Count(paseosetup.Unchanged), rep.Count(paseosetup.Skipped))
+}
+
+// paseoSetupPlan is a computed merge: the options it was resolved with, the
+// merged file and what changed.
+type paseoSetupPlan struct {
+	o      paseoSetupOpts
+	merged []byte
+	report paseosetup.Report
+}
+
+// planPaseoSetup resolves o's defaults, reads paseo's config and merges
+// conductor's entries into it — writing nothing. note receives what the
+// operator should know (pi not offered).
+func planPaseoSetup(o paseoSetupOpts, note func(string)) (paseoSetupPlan, error) {
+	var err error
 	if o.home == "" {
 		o.home = os.Getenv("PASEO_HOME")
 	}
 	if o.home == "" {
 		h, err := os.UserHomeDir()
 		if err != nil {
-			return err
+			return paseoSetupPlan{}, err
 		}
 		o.home = filepath.Join(h, ".paseo")
 	}
@@ -138,7 +190,7 @@ func cmdPaseoSetup(args []string, out *os.File) error {
 	}
 	if o.conductor == "" {
 		if o.conductor, err = os.Executable(); err != nil {
-			return err
+			return paseoSetupPlan{}, err
 		}
 	}
 	for _, p := range []*string{&o.conductor, &o.config, &o.socket} {
@@ -150,52 +202,44 @@ func cmdPaseoSetup(args []string, out *os.File) error {
 	}
 	doc, err := os.ReadFile(o.file)
 	if err != nil && !os.IsNotExist(err) {
-		return err
+		return paseoSetupPlan{}, err
 	}
 	providers := o.providers
 	if len(providers) == 0 {
 		providers = []string{"claude", "codex"}
-		if piAvailable(o.home) {
+		if piAvailable(o.bin, o.home) {
 			providers = append(providers, "pi")
 		} else {
-			fmt.Fprintln(out, "pi: not offered by this paseo — no pi-sandboxed entry (pass --providers to force one)")
+			note("pi: not offered by this paseo — no pi-sandboxed entry (pass --providers to force one)")
 		}
 	}
 	want, names, err := paseoEntries(doc, o, providers)
 	if err != nil {
-		return err
+		return paseoSetupPlan{}, err
 	}
 	merged, rep, err := paseosetup.Merge(doc, want, names)
 	if err != nil {
-		return err
+		return paseoSetupPlan{}, err
 	}
-	for _, n := range rep.Order {
-		line := fmt.Sprintf("%-9s %s", rep.Results[n], n)
-		if rep.Results[n] == paseosetup.Skipped {
-			line += " (your own entry of that name, without the x-conductor marker: not touched)"
-		}
-		fmt.Fprintln(out, line)
+	return paseoSetupPlan{o: o, merged: merged, report: rep}, nil
+}
+
+// writePaseoSetup writes a changed plan and reloads paseo (unless
+// --no-reload: reloaded false).
+func writePaseoSetup(p paseoSetupPlan) (reloaded bool, err error) {
+	if err := os.MkdirAll(filepath.Dir(p.o.file), 0o700); err != nil {
+		return false, err
 	}
-	fmt.Fprintf(out, "== added=%d updated=%d unchanged=%d skipped=%d (%s)\n",
-		rep.Count(paseosetup.Added), rep.Count(paseosetup.Updated), rep.Count(paseosetup.Unchanged), rep.Count(paseosetup.Skipped), o.file)
-	if o.dryRun || !rep.Changed() {
-		return nil
+	if err := paseosetup.WriteFile(p.o.file, p.merged); err != nil {
+		return false, err
 	}
-	if err := os.MkdirAll(filepath.Dir(o.file), 0o700); err != nil {
-		return err
+	if p.o.noReload {
+		return false, nil
 	}
-	if err := paseosetup.WriteFile(o.file, merged); err != nil {
-		return err
+	if b, err := paseoRun(p.o.bin, "reload", "--home", p.o.home); err != nil {
+		return false, fmt.Errorf("wrote %s, but 'paseo reload' failed (%v): %s — run it once the daemon is up", p.o.file, err, strings.TrimSpace(string(b)))
 	}
-	if o.noReload {
-		fmt.Fprintln(out, "not reloaded (--no-reload): run 'paseo reload' to pick the entries up")
-		return nil
-	}
-	if b, err := paseoRun("reload", "--home", o.home); err != nil {
-		return fmt.Errorf("wrote %s, but 'paseo reload' failed (%v): %s — run it once the daemon is up", o.file, err, strings.TrimSpace(string(b)))
-	}
-	fmt.Fprintln(out, "paseo reloaded")
-	return nil
+	return true, nil
 }
 
 // paseoEntries builds conductor's entry per provider. The agent command an
@@ -247,9 +291,9 @@ func paseoEntries(doc []byte, o paseoSetupOpts, providers []string) (map[string]
 
 // piAvailable asks the paseo daemon whether it offers the pi provider,
 // waiting out paseo's "loading" while it probes providers after a start.
-func piAvailable(home string) bool {
+func piAvailable(bin, home string) bool {
 	for try := 0; ; try++ {
-		avail, loading := piStatus(home)
+		avail, loading := piStatus(bin, home)
 		if !loading || try >= paseoProbeTries {
 			return avail
 		}
@@ -265,8 +309,8 @@ var (
 
 // piStatus reads `paseo provider ls`: whether pi is available, and whether
 // paseo is still probing it.
-func piStatus(home string) (available, loading bool) {
-	b, err := paseoRun("provider", "ls", "--home", home, "--json")
+func piStatus(bin, home string) (available, loading bool) {
+	b, err := paseoRun(bin, "provider", "ls", "--home", home, "--json")
 	if err != nil {
 		return false, false
 	}

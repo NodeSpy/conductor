@@ -12,7 +12,7 @@ func stubPaseo(t *testing.T, providerLS string) *[][]string {
 	t.Helper()
 	var calls [][]string
 	old := paseoRun
-	paseoRun = func(args ...string) ([]byte, error) {
+	paseoRun = func(_ string, args ...string) ([]byte, error) {
 		calls = append(calls, args)
 		if len(args) > 1 && args[0] == "provider" {
 			return []byte(providerLS), nil
@@ -156,7 +156,7 @@ func TestPaseoSetupFlags(t *testing.T) {
 func TestPaseoSetupWaitsOutAProviderProbe(t *testing.T) {
 	n := 0
 	old := paseoRun
-	paseoRun = func(args ...string) ([]byte, error) {
+	paseoRun = func(_ string, args ...string) ([]byte, error) {
 		n++
 		if n < 3 {
 			return []byte(`[{"provider":"pi","status":"loading"}]`), nil
@@ -166,7 +166,7 @@ func TestPaseoSetupWaitsOutAProviderProbe(t *testing.T) {
 	oldWait := paseoProbeWait
 	paseoProbeWait = 0
 	t.Cleanup(func() { paseoRun, paseoProbeWait = old, oldWait })
-	if !piAvailable(t.TempDir()) || n != 3 {
+	if !piAvailable("", t.TempDir()) || n != 3 {
 		t.Fatalf("waited %d probes", n)
 	}
 }

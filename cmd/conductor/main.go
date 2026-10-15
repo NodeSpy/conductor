@@ -941,6 +941,14 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer stopSandbox()
+	if cfg.AgentSandboxOn() && !cfg.DryRun {
+		// The sandboxed paseo provider entries this daemon's paseo
+		// dispatches name: written (merged, conductor's own only) at every
+		// start, so an updated box never refuses them for want of a manual
+		// `conductor paseo setup`. In the background: paseo may still be
+		// probing its providers.
+		go startupPaseoSetup(cfg, controlSockPath(cfg), logf)
+	}
 	if stack != nil {
 		defer wireWorkPusher(cfg, stack.Runner, st.Audit, logf)()
 	}
