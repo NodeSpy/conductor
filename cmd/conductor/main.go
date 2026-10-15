@@ -1532,8 +1532,19 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 		}
 		streamRunEvents(ctx, conn, events, req.RunID, log)
 	case "sandbox-policy":
+		// A container policy creates (or starts) the identity's container
+		// before it answers: an engine under load takes longer than the
+		// usual deadline, which must not leave the caller waiting on an
+		// answer that can no longer be written.
+		_ = conn.SetDeadline(time.Now().Add(sandboxPolicyDeadline))
 		resp, release := sandboxPolicyResponse(ctx, conn, req, log)
-		writeControlResp(conn, resp)
+		if err := json.NewEncoder(conn).Encode(resp); err != nil {
+			if release != nil {
+				release()
+			}
+			log("sandbox-policy for %s: reply not delivered: %v", req.Cwd, err)
+			return
+		}
 		if release != nil {
 			holdContainerLease(conn, release)
 		}

@@ -141,7 +141,7 @@ func (f *fakeEngine) Output(_ context.Context, args ...string) ([]byte, error) {
 				match = match && c.labels[k] == v
 			}
 			if match {
-				fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\n", name, c.state, c.labels[LabelSpec], c.labels[LabelIdentity], c.labels[LabelPersistent])
+				fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%s\n", name, c.state, c.labels[LabelSpec], c.labels[LabelIdentity], c.labels[LabelPersistent], c.labels[LabelIdentityName])
 			}
 		}
 		return []byte(b.String()), nil

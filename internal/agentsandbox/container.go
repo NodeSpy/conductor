@@ -96,6 +96,9 @@ const (
 	LabelIdentity   = "conductor.identity"
 	LabelPersistent = "conductor.persistent"
 	LabelSpec       = "conductor.spec"
+	// LabelIdentityName is the identity as named (LabelIdentity is its
+	// key, safe in a filter).
+	LabelIdentityName = "conductor.identity-name"
 )
 
 // Containers is the daemon's container backend: the engine, and every
@@ -199,7 +202,7 @@ func (c *Containers) keyLock(key string) *sync.Mutex {
 // labels for one identity's container or volume.
 func (c *Containers) labels(identity, key string, persistent bool) map[string]string {
 	l := map[string]string{
-		LabelSandbox: "agent", LabelDaemon: c.DaemonID, LabelIdentity: key,
+		LabelSandbox: "agent", LabelDaemon: c.DaemonID, LabelIdentity: key, LabelIdentityName: identity,
 		LabelPersistent: fmt.Sprint(persistent),
 	}
 	for k, v := range c.Labels {
@@ -327,6 +330,11 @@ func (c *Containers) spec(ctx context.Context, identity string, persistent bool,
 	if envPath == "" {
 		envPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 	}
+	if c.Helper != "" {
+		// `conductor call` inside, by name (after the image's own: an image's
+		// conductor, if it has one, is what its tools expect).
+		envPath += ":" + sandbox.ContainerHelperDir
+	}
 	spec := sandbox.AgentContainer{
 		Engine: c.Engine.Bin(), Image: want.Image, User: fmt.Sprintf("%d:%d", c.UID, c.GID), KeepID: c.KeepID,
 		Helper: c.Helper, HelperInImage: c.HelperInImage, ReadOnlyRoot: want.ReadOnlyRoot,
@@ -433,8 +441,8 @@ func (c *Containers) inspectImage(ctx context.Context, image string) (path, id s
 
 // engineContainer is one row of the engine's container list.
 type engineContainer struct {
-	Name, State, Spec, Identity string
-	Persistent                  bool
+	Name, State, Spec, Identity, IdentityName string
+	Persistent                                bool
 }
 
 // list returns this daemon's containers (optionally for one identity key).
@@ -446,7 +454,7 @@ func (c *Containers) list(ctx context.Context, key string) ([]engineContainer, e
 	for k, v := range c.Labels {
 		args = append(args, "--filter", "label="+k+"="+v)
 	}
-	args = append(args, "--format", `{{.Names}}	{{.State}}	{{.Label "`+LabelSpec+`"}}	{{.Label "`+LabelIdentity+`"}}	{{.Label "`+LabelPersistent+`"}}`)
+	args = append(args, "--format", `{{.Names}}	{{.State}}	{{.Label "`+LabelSpec+`"}}	{{.Label "`+LabelIdentity+`"}}	{{.Label "`+LabelPersistent+`"}}	{{.Label "`+LabelIdentityName+`"}}`)
 	out, err := c.Engine.Output(ctx, args...)
 	if err != nil {
 		return nil, err
@@ -457,7 +465,11 @@ func (c *Containers) list(ctx context.Context, key string) ([]engineContainer, e
 		if len(f) < 5 || f[0] == "" {
 			continue
 		}
-		rows = append(rows, engineContainer{Name: f[0], State: strings.ToLower(f[1]), Spec: f[2], Identity: f[3], Persistent: f[4] == "true"})
+		r := engineContainer{Name: f[0], State: strings.ToLower(f[1]), Spec: f[2], Identity: f[3], Persistent: f[4] == "true", IdentityName: f[3]}
+		if len(f) > 5 && f[5] != "" {
+			r.IdentityName = f[5]
+		}
+		rows = append(rows, r)
 	}
 	return rows, nil
 }
@@ -952,7 +964,7 @@ func (c *Containers) List(ctx context.Context) ([]ContainerInfo, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, r := range rows {
-		ci := ContainerInfo{Name: r.Name, Identity: r.Identity, State: r.State, Persistent: r.Persistent}
+		ci := ContainerInfo{Name: r.Name, Identity: r.IdentityName, State: r.State, Persistent: r.Persistent}
 		if b := c.boxes[r.Name]; b != nil {
 			ci.Launches = b.leases
 			ci.Identity = b.identity
@@ -979,7 +991,7 @@ func (c *Containers) Reconcile(ctx context.Context) error {
 			c.logf("agent container %s: left by an earlier daemon; removing it", r.Name)
 			_, _ = c.Engine.Output(ctx, "rm", "-f", r.Name)
 		case r.State == "running":
-			b := &box{name: r.Name, key: r.Identity, identity: r.Identity, persistent: true, idleFor: c.IdleStop}
+			b := &box{name: r.Name, key: r.Identity, identity: r.IdentityName, persistent: true, idleFor: c.IdleStop}
 			c.mu.Lock()
 			if c.boxes == nil {
 				c.boxes = map[string]*box{}

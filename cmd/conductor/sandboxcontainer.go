@@ -195,6 +195,11 @@ func sandboxContainersResponse(ctx context.Context, conn net.Conn, req controlRe
 	}
 }
 
+// sandboxPolicyDeadline bounds a sandbox-policy exchange: a container's
+// creation (its image inspected, its volume seeded) included. `sandbox exec`
+// waits a little longer for the answer.
+const sandboxPolicyDeadline = 5*time.Minute + 30*time.Second
+
 // holdContainerLease keeps a container launch's share for as long as the
 // `conductor sandbox exec` that asked for it holds the control connection:
 // it closes it when the agent ends — or dies, and the kernel closes it.
