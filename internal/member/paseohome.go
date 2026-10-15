@@ -149,13 +149,20 @@ func (h *PaseoHome) Send(ctx context.Context, member, agentID, text string) erro
 	return d.Send(ctx, agentID, text)
 }
 
-// State implements HomeLauncher.
+// State implements HomeLauncher. A "closed" agent (its process ended, e.g.
+// across a paseo daemon restart) counts as gone: a send would resume it
+// without the launch env, so without its conductor endpoint and token, and
+// the member rotates to a fresh session instead.
 func (h *PaseoHome) State(ctx context.Context, member, agentID string) (string, error) {
 	d, err := h.disp(member)
 	if err != nil {
 		return "", err
 	}
-	return d.AgentStatus(ctx, agentID)
+	st, err := d.AgentStatus(ctx, agentID)
+	if st == "closed" {
+		st = "gone"
+	}
+	return st, err
 }
 
 // Retire implements HomeLauncher.

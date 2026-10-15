@@ -14,6 +14,7 @@ type fakePaseo struct {
 	archived []string
 	released []string
 	fail     error
+	status   string
 }
 
 func (f *fakePaseo) Dispatch(_ context.Context, r dispatch.Request) (dispatch.RunRef, error) {
@@ -26,8 +27,13 @@ func (f *fakePaseo) Dispatch(_ context.Context, r dispatch.Request) (dispatch.Ru
 func (f *fakePaseo) CreateLocalWorkspace(context.Context, string, string) (string, error) {
 	return "ws-1", nil
 }
-func (f *fakePaseo) AgentStatus(context.Context, string) (string, error) { return "idle", nil }
-func (f *fakePaseo) Send(context.Context, string, string) error          { return nil }
+func (f *fakePaseo) AgentStatus(context.Context, string) (string, error) {
+	if f.status != "" {
+		return f.status, nil
+	}
+	return "idle", nil
+}
+func (f *fakePaseo) Send(context.Context, string, string) error { return nil }
 func (f *fakePaseo) ReleaseWorkspace(_ context.Context, id string) error {
 	f.released = append(f.released, id)
 	return nil
@@ -107,5 +113,21 @@ func TestPaseoHomeFailedLaunchReleasesWorkspace(t *testing.T) {
 	}
 	if len(fp.released) != 1 || fp.released[0] != "ws-1" {
 		t.Fatalf("workspace not released: %v", fp.released)
+	}
+}
+
+// A closed paseo agent (its process ended, e.g. across a paseo daemon
+// restart) would resume on send without its launch env — so without its
+// conductor endpoint and token. The home reports it gone, and the member
+// rotates to a fresh session.
+func TestPaseoHomeClosedAgentIsGone(t *testing.T) {
+	cfg := &config.Config{Members: map[string]config.MemberConfig{"sre": {}}}
+	fp := &fakePaseo{}
+	h := &PaseoHome{Cfg: func() *config.Config { return cfg }, For: func(string) (PaseoDispatcher, error) { return fp, nil }}
+	for _, c := range []struct{ paseo, want string }{{"idle", "idle"}, {"running", "running"}, {"closed", "gone"}} {
+		fp.status = c.paseo
+		if st, err := h.State(context.Background(), "sre", "pa-1"); err != nil || st != c.want {
+			t.Fatalf("paseo %q: state %q %v, want %q", c.paseo, st, err, c.want)
+		}
 	}
 }
