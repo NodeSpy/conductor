@@ -24,15 +24,17 @@ func TestReadFreshBypassesTheCache(t *testing.T) {
 	}
 	ctx := context.Background()
 	k := "Private/Site/one-time password?attribute=otp"
-	a, _ := ReadFresh(ctx, "op", k)
-	b, _ := ReadFresh(ctx, "op", k)
-	if a != "111111" || b != "222222" || n != 2 {
-		t.Fatalf("fresh reads: %q %q after %d op calls", a, b, n)
+	// A plain read caches; a fresh read never answers from that cache…
+	if a, _ := Read(ctx, "op", k); a != "111111" {
+		t.Fatalf("plain read: %q", a)
 	}
+	b, _ := ReadFresh(ctx, "op", k)
+	c, _ := ReadFresh(ctx, "op", k)
+	if b != "222222" || c != "333333" || n != 3 {
+		t.Fatalf("fresh reads: %q %q after %d op calls", b, c, n)
+	}
+	// …and leaves nothing in it.
 	if _, ok := o.c.get(k); ok {
 		t.Fatal("a fresh read left the value cached")
-	}
-	if c, _ := Read(ctx, "op", k); c != "333333" || n != 3 {
-		t.Fatalf("a plain read after: %q", c)
 	}
 }
