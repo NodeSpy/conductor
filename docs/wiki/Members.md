@@ -17,7 +17,7 @@ replaceable at any time; continuity lives on disk:
 | episodic log | past cases, actions, outcomes | the memory repo |
 | case ledger | open events, proposals awaiting approval, running workers, the home session, the inbox, spend | `members.json` in conductor's state dir |
 
-Each member is isolated: its own memory repo, ledger, home session, grant,
+Each member is isolated: its own memory repo, ledger, home session, verb policy,
 operators and pack instance. A session token is bound to exactly one member,
 so nothing one member does can reach another's memory, cases or workers — and
 an agent-authored plan cannot route work into any member at all.
@@ -28,6 +28,10 @@ an agent-authored plan cannot route work into any member at all.
 runtimes:
   paseo:      { use: paseo, default: true }
   claude-cli: { use: cli, tool: claude-code }   # workers run here
+
+connectors:
+  tf-plan:  { use: terraform, env: { AWS_PROFILE: infra-read } }    # conductor plans with this
+  tf-apply: { use: terraform, env: { AWS_PROFILE: infra-deploy } }  # and applies with this — no member verb may reach it
 
 operators:
   ops:
@@ -59,21 +63,29 @@ members:
         reversible:   [pd.ack]
         commit_money: [aws.purchase_savings_plan]
         never:        [aws.iam_*]
-      promote: [pd.ack]                          # takes effect only while jailed (below)
+      promote: [pd.ack]                          # takes effect only while sandboxed (below)
       amounts: { aws.purchase_savings_plan: commitment_usd }
       spend_cap: { per_action: 2000, per_period: 5000, period: 720h, currency: USD }
       approval_ttl: 24h
+    terraform:                                   # optional: conductor-executed Terraform (below)
+      plan_connector: tf-plan
+      apply_connector: tf-apply
+      repos: { infra: git@github.com:acme/infra.git }
+      # stateful: [aws_db_instance, aws_s3_bucket, …]   # default: a built-in list of databases, buckets, disks, keys…
+      # allow_destroy: [module.cache.aws_elasticache_cluster.old]
+      # timeout: 30m
 ```
 
 Both sections are optional; a config without them behaves exactly as before.
 `conductor validate` checks them (unknown operators, a home runtime that is not
 paseo, a worker runtime that is, tiers, the spend cap) and warns about a member
-with no operators, an empty grant, a promotion that cannot take effect yet, or
-a home mode that skips permission prompts.
+with no operators, no verbs, a promotion that cannot take effect yet, or
+a home mode that skips permission prompts. A `skill.verbs` entry that could
+reach the `terraform.apply_connector` is an error.
 
 A pack can ship the charter, runbooks and workflows of a kind of member (see
 the `sre-member` pack in conductor-packs); the `members:` entry binds it to an
-org: its memory repo, its connectors' grant, its operators.
+org: its memory repo, its connectors and verbs, its operators.
 
 ## The home session
 
@@ -89,6 +101,8 @@ conductor member recall   <words>
 conductor member cases | case open|note|close
 conductor member spawn    --case c12 --brief "…" [--handoff]
 conductor member handoff  --text "…"
+conductor member proposals | wait <proposal>
+conductor member propose-terraform --repo <name> --commit <sha> [--dir …]   # below
 ```
 
 Every memory write is **one git commit**, authored by the member, with
@@ -96,7 +110,8 @@ Every memory write is **one git commit**, authored by the member, with
 correct by committing over it or reverting.
 
 **Rotation.** When a session reaches `rotate.max_age` or `rotate.max_turns`, its
-agent disappears, or you run `conductor member rotate <member>`, conductor asks
+agent disappears (or its process ended — a paseo daemon restart leaves it
+`closed`, and resuming it would drop its conductor endpoint), or you run `conductor member rotate <member>`, conductor asks
 the session to write a handoff note, waits for that turn to finish, writes one
 itself from the ledger if it did not, starts a fresh session **in a new
 worktree** from the charter + latest handoff + the ledger's open work, and only
@@ -150,8 +165,8 @@ trigger on the **cli runtime** — no paseo workspace (background work never
 creates one) — with:
 
 - its own worktree of the memory repo as its cwd;
-- **exactly the member's grant** — never more — and its case bound into its
-  session token, so the gate knows who asked;
+- **exactly the member's `skill.verbs`** — never more — and its case bound
+  into its session token, so the gate knows who asked;
 - a prompt built from the charter and the member's brief.
 
 A worker finishes with `conductor call step.done --output '{"summary": …}'`.
@@ -170,13 +185,13 @@ with nothing new it is a no-op.
 ## The autonomy gate
 
 Every verb a member session calls goes through the same skill chokepoint as any
-agent's (`RunSkillVerb`: the grant's access and resource checks), then through
+agent's (`RunSkillVerb`: the skill policy's access and resource checks), then through
 the member's gate:
 
 | tier | behavior |
 |---|---|
 | `observe` | runs |
-| `reversible` | a proposal — unless promoted, not in shadow mode, the sessions are jailed, and the requester is not a third party |
+| `reversible` | a proposal — unless promoted, not in shadow mode, the sessions are sandboxed, and the requester is not a third party |
 | `propose` | always a proposal; runs when an operator approves it |
 | `commit_money` | a proposal with a **typed amount** (`autonomy.amounts` names the option, a number) under the hard `spend_cap`: over `per_action`, or over `per_period` counting what has already been spent, is refused outright — and the period is re-checked at execution |
 | `never` | refused |
@@ -198,35 +213,60 @@ the member's gate:
   `{executed: false, proposal: p7, status: pending, …}`. The agent can block on
   `conductor member wait p7`.
 
-### Host commands and grants
+### Terraform changes
 
-Some actions are host commands, not verbs — applying a saved Terraform plan. A
-session proposes the exact command, from the directory it will run in:
+Members never hold a write role and never run `terraform apply`. A member
+changes infrastructure by **proposing a commit**; conductor plans it, shows the
+plan, and after a signed approval applies **exactly that saved plan** itself.
 
-```
-cd envs/prod
-conductor member propose-command --file tfplan -- terraform apply tfplan
-```
+1. The session makes the change in its working copy, commits it and pushes it
+   (`conductor call git.push`), then proposes the pushed commit:
 
-The **working directory is part of the command**: the proposal records it
-(workspace-relative — the shell's own directory, or `--cwd <dir>`; anything
-outside the workspace is refused), the operator sees it in the approval text
-(`run \`terraform apply tfplan\` in envs/prod …`), and the grant only matches
-the same argv run from that directory — the same apply from `envs/staging` is a
-different action. Files are resolved against it (`envs/prod/tfplan`) the way
-the broker resolves them.
+   ```
+   conductor member propose-terraform --repo infra --commit 3f2a…(full sha) \
+       --dir envs/prod [--workspace prod] [--var-file prod.tfvars]… [--target <addr>]…
+   ```
 
-Conductor hashes the named files **as the jail's broker will read them** —
-through the jail, for the identity the grant will bind to (a confined
-`terraform plan -out` writes its planfile into the dispatch's copy-on-write
-layer, not the workspace) — and records the proposal. On approval it hashes
-them again; if they changed it mints nothing. Otherwise it mints a **grant**
-(`internal/grant`): that tool, argv and working directory, bound to the
-session's jail identity (or a cli worker's dispatch), pinned to the files'
-SHA-256, single-use, short-lived. The broker consumes it — checking the file digests itself at use
-time — and nothing else lifts a broker refusal. **Without the jail, a
-host-command proposal is refused outright**: there is no broker to consume a
-grant, so none is ever minted.
+   `--repo` names an entry of `terraform.repos` (the agent never supplies a
+   URL); the commit is a full SHA, never a branch; `--dir` is the root module,
+   repo-relative; workspace, var files and targets are part of the proposal and
+   cannot change later. The gate tiers it as `terraform.apply` (`propose` unless
+   your tiers say `never`).
+2. **Conductor plans it** in its own private directory
+   (`<state>/members/<name>/tf/<proposal>/`, mode 0700, plan file 0600, outside
+   every session's view): a fresh clone checked out detached at the commit,
+   `init`, `workspace select`, `plan -out`, `show -json`. The plan runs with the
+   **`plan_connector`'s** environment — its read role; inherited `TF_*`, `AWS_*`,
+   `GOOGLE_*` and `ARM_*` variables are dropped so only the role decides.
+3. The proposal records the plan's SHA-256, `+add ~change -destroy`, every
+   replaced and destroyed address, and the plan text. It is **refused** if the
+   plan destroys or replaces a **stateful** resource — `terraform.stateful`
+   (default: a built-in list of databases, buckets, disks, file systems, keys
+   and similar across AWS, GCP and Azure) — unless that address matches
+   `terraform.allow_destroy`; also if the plan has no changes. The operator and
+   the home session see:
+
+   ```
+   terraform apply of infra@3f2a9c1d07e4, dir envs/prod, workspace prod: +1 ~2 -0; REPLACES aws_instance.web; plan sha256 9b1e…
+   ```
+
+4. The approval signs a digest that **covers the plan's SHA-256**. On approval
+   conductor re-hashes the saved plan (a changed file is not applied), checks
+   the checkout is still at the commit and clean (only `init`'s own
+   artifacts are allowed), and runs `apply` of the saved plan with the
+   **`apply_connector`'s** environment — its write role, which no member verb
+   can reach. A plan made stale by a later state change fails with
+   `conductor member replan <member> <id>` as the next step (the session can
+   `conductor member replan <id>` too): it plans the same commit again as a new
+   proposal.
+5. The plan directory — checkout and plan file — is **deleted** when the
+   proposal is applied (or fails), denied, refused or expires, and at daemon
+   start for anything left behind. The apply output goes to the ledger, the
+   case's episode and the home conversation.
+
+The terraform connectors are ordinary `terraform` connectors (`engine:
+terraform` or `tofu`, `binary`, `env`); conductor reads their config and runs
+the CLI directly.
 
 ### Approvals — how they are authenticated
 
@@ -249,7 +289,8 @@ over the **operator control socket**. The daemon verifies the signature
 against `operators.<name>.ssh_key`, checks the operator is one of the member's,
 that the proposal is still pending and unexpired, and that the member is not in
 shadow mode — then executes **exactly** the signed action (re-checked against
-the digest at execution, through the same chokepoint) or mints its grant.
+the digest at execution, through the same chokepoint) — or, for a Terraform
+proposal, applies its saved plan.
 
 What makes it operator-authenticated *outside the agent*:
 
@@ -258,26 +299,30 @@ What makes it operator-authenticated *outside the agent*:
   changes nothing;
 - a signature binds one decision on one proposal's exact digest: it cannot be
   replayed onto another proposal, a changed action, or the other decision;
-- the signing key is yours. **Until member sessions are jailed (#154), they run
-  as your OS user**, so the guarantee is exactly as strong as that key's
-  protection: keep it in an agent that confirms each signature (a hardware
-  key, 1Password's SSH agent, `ssh-add -c`), not in an unencrypted file a
-  session could read. Once jailed, the key, the ssh-agent socket and the
-  control socket are all outside the jail.
+- the signing key is yours. **Without conductor's agent sandbox, member
+  sessions run as your OS user**, so the guarantee is exactly as strong as
+  that key's protection: keep it in an agent that confirms each signature (a
+  hardware key, 1Password's SSH agent, `ssh-add -c`), not in an unencrypted
+  file a session could read. With the sandbox on, the key, the ssh-agent
+  socket and the control socket are all outside every session.
 
 This needs only paseo and the conductor CLI — no chat integration.
 
-## Jail status
+## Sandbox status
 
-Member sessions are **not jailed** until the agent jail (#154: #160, #175)
-lands. Until then:
+Member sessions are **sandboxed** only when conductor's agent sandbox is on for
+the daemon (`conductor member show` reports `sandboxed`). Without it:
 
 - promotion has no effect: a promoted reversible verb is still a proposal;
-- the home session launches on plain paseo; with the jail it launches on paseo's
-  `conductor` provider, keyed by its (per-session) working directory;
+- the home session launches on the plain paseo provider; with the sandbox it
+  launches on the sandboxed provider entry for the same base provider
+  (`conductor paseo setup`: `claude` → `claude-sandboxed`), and the sandbox
+  resolves its per-session working directory to the member's identity;
+- workers run on the cli runtime either way, sandboxed by the engine when the
+  sandbox is on;
 - the gate covers conductor verbs, not an agent's raw shell — keep write
   credentials out of the environment members run in, and give them access to
-  systems only through connector verbs.
+  systems only through connector verbs and the Terraform flow above.
 
 ## Operator commands
 
@@ -291,6 +336,7 @@ conductor member rotate <member>
 conductor member say <member> <text…>             # or just type into paseo
 conductor member deliver <member> --title "…" [--text "…"] [--requester who] [--urgent]
 conductor member consolidate <member>
+conductor member replan <member> <id>              # re-plan a stale terraform proposal
 ```
 
 Every session launch, event, worker, memory write, proposal and decision is

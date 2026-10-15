@@ -73,7 +73,7 @@ func AutonomySummary(cfg *config.Config, name string) string {
 	}
 	b.WriteString("- anything unlisted: propose (held for operator approval)\n")
 	if len(a.Promote) > 0 {
-		fmt.Fprintf(&b, "- promoted to run without approval (only while your sessions are jailed): %s\n", strings.Join(a.Promote, ", "))
+		fmt.Fprintf(&b, "- promoted to run without approval (only while your sessions are sandboxed): %s\n", strings.Join(a.Promote, ", "))
 	}
 	if sc := a.SpendCap; sc != nil {
 		fmt.Fprintf(&b, "- spend cap: %.2f %s per action, %.2f %s per %s; every purchase needs approval\n", sc.PerAction, sc.CurrencyOr(), sc.PerPeriod, sc.CurrencyOr(), sc.PeriodD())

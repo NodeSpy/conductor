@@ -197,7 +197,7 @@ var memberCtl *member.Service
 
 // handleMemberControl serves `conductor member …` on the operator control
 // socket. This socket is the operator's: it is 0600 in a 0700 state dir,
-// and once #154 lands it is outside every jail. A decide (approve/deny)
+// and with the agent sandbox on it is outside every session. A decide (approve/deny)
 // additionally carries the operator's SSH signature, verified against the
 // configured key — the socket alone never approves anything.
 func handleMemberControl(ctx context.Context, conn net.Conn, req controlRequest, log func(string, ...any)) {

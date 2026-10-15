@@ -86,13 +86,14 @@ type Proposal struct {
 	// Digest is the SHA-256 of the canonical action; approvals sign it, so an
 	// approval can never be replayed onto a different action.
 	Digest string `json:"digest"`
-	// Proposer is the session that made the call: its role, agent profile,
-	// dispatch id and (for a command) the agent id a grant binds to.
+	// Proposer is the session that made the call: its role, agent profile
+	// and dispatch id.
 	Role     string `json:"role"`
 	Agent    string `json:"agent,omitempty"`
 	Dispatch string `json:"dispatch,omitempty"`
 	// Identity is the token-bound caller identity, kept daemon-side so the
-	// approved verb executes under exactly the grant it was proposed under.
+	// approved verb executes under exactly the skill policy it was proposed
+	// under.
 	Identity json.RawMessage `json:"identity,omitempty"`
 	// Requester/RequesterClass are copied from the case at proposal time.
 	Requester      string `json:"requester,omitempty"`

@@ -1334,7 +1334,7 @@ policy:
 # call passes its AUTONOMY GATE:
 #
 #   observe       runs autonomously
-#   reversible    a proposal until promoted (promote:), and only while jailed
+#   reversible    a proposal until promoted (promote:), and only while sandboxed
 #   propose       always a proposal; runs when an operator approves it
 #   commit_money  a proposal with a typed amount under the hard spend_cap
 #   never         refused
@@ -1345,8 +1345,15 @@ policy:
 # the proposal's digest with your key (an ssh-agent key works) and the daemon
 # verifies it against ssh_key below. A member session can never approve.
 #
-# Member sessions are not jailed until #154 lands; promotion beyond
-# observe/propose is refused without the jail.
+# Promotion beyond observe/propose takes effect only while member sessions are
+# sandboxed (conductor's agent sandbox; `conductor member show` says which).
+#
+# Members never apply infrastructure themselves: with terraform: below, a
+# session proposes a pushed COMMIT, conductor plans it in its own private dir
+# with the plan connector's role, the operator signs that exact plan hash, and
+# conductor applies the saved plan with the apply connector's role. Plans that
+# destroy or replace stateful resources are refused unless allow_destroy names
+# them; plan files are deleted once the proposal is settled.
 # ---------------------------------------------------------------------------
 operators:
   ops:
@@ -1374,7 +1381,7 @@ members:
       timeout: 2h
       max_concurrent: 4
     skill:
-      verbs: [slack-ops.post, gh.comment]        # the member's grant; workers carry exactly this
+      verbs: [slack-ops.post, gh.comment]        # the member's verbs; workers carry exactly these
     autonomy:
       shadow: true                               # the default; false allows approved execution
       tiers:
@@ -1382,12 +1389,19 @@ members:
         reversible: [slack-ops.post]
         propose: [gh.comment]
         never: [gh.delete_*]
-      # promote: [slack-ops.post]                # reversible classes that may run unapproved (needs the jail)
+      # promote: [slack-ops.post]                # reversible classes that may run unapproved (needs the sandbox)
       # commit_money: a typed amount option per verb, under a hard cap:
       #   tiers: { commit_money: [aws.purchase_savings_plan] }
       #   amounts: { aws.purchase_savings_plan: commitment_usd }
       #   spend_cap: { per_action: 2000, per_period: 5000, period: 720h, currency: USD }
       approval_ttl: 24h
+    # terraform:                                 # conductor-executed Terraform (wiki: Members → Terraform changes)
+    #   plan_connector: tf-plan                  # a `use: terraform` connector: its env is the READ role
+    #   apply_connector: tf-apply                # its env is the WRITE role; no member verb may reach it
+    #   repos: { infra: git@github.com:acme/infra.git }   # the only repos a member may propose from
+    #   # stateful: [aws_db_instance, aws_s3_bucket]      # default: built-in databases/buckets/disks/keys list
+    #   # allow_destroy: [module.old.aws_s3_bucket.logs] # addresses a plan may still destroy/replace
+    #   # timeout: 30m
 
 update: { auto: true } # self-update (auto-applies by default); auto-migration runs on the new binary's first boot.
 #                      # deps follows auto: packs: and `use:` plugins are kept current on the same cycle — a changed

@@ -203,7 +203,7 @@ triggers:
 		t.Fatal("shadow: false ignored")
 	}
 	w := strings.Join(c.MemberWarnings(), "\n")
-	if !strings.Contains(w, "jailed") || !strings.Contains(w, "no skill.verbs") {
+	if !strings.Contains(w, "sandbox") || !strings.Contains(w, "no skill.verbs") {
 		t.Fatalf("warnings: %s", w)
 	}
 	var step Step

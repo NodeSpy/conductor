@@ -26,8 +26,8 @@ import (
 // option or message text that approves anything.
 //
 // What that buys, honestly: the agent cannot approve its own proposal unless
-// it can make the operator's key sign. Once sessions are jailed (#154) the
-// key, the ssh-agent socket and the control socket are all outside the jail.
+// it can make the operator's key sign. Once sessions are sandboxed the key,
+// the ssh-agent socket and the control socket are all outside the sandbox.
 // Until then a member session runs as the operator's uid, so the guarantee is
 // exactly as strong as the key's protection — keep the key in an agent that
 // confirms each signature (a hardware key, 1Password's agent, `ssh-add -c`).
@@ -201,7 +201,7 @@ func (x *Executor) Decide(ctx context.Context, d Decision) (store.Proposal, erro
 		return refuse(fmt.Errorf("member %s is in shadow mode; set autonomy.shadow: false to allow approved execution", d.Member))
 	}
 	if d.Decision == "deny" {
-		out, err := x.transition(d, "denied", nil, "")
+		out, err := x.transition(d, "denied")
 		x.audit(map[string]any{"member": d.Member, "proposal": p.ID, "operator": d.Operator, "decision": "deny", "outcome": "ok"})
 		if p.Kind == KindTerraform && x.Terraform != nil {
 			x.Terraform.Discard(d.Member, p.ID)
@@ -209,7 +209,7 @@ func (x *Executor) Decide(ctx context.Context, d Decision) (store.Proposal, erro
 		x.notify(d.Member, out)
 		return out, err
 	}
-	if _, err := x.transition(d, "approved", nil, ""); err != nil {
+	if _, err := x.transition(d, "approved"); err != nil {
 		return refuse(err)
 	}
 	x.audit(map[string]any{"member": d.Member, "proposal": p.ID, "operator": d.Operator, "decision": "approve", "outcome": "ok", "uses": p.Uses})
@@ -252,7 +252,7 @@ func (x *Executor) notify(member string, p store.Proposal) {
 
 // transition moves a pending proposal to a decided state atomically (the
 // re-check inside the transaction is what makes a double approval run once).
-func (x *Executor) transition(d Decision, status string, result map[string]any, grantID string) (store.Proposal, error) {
+func (x *Executor) transition(d Decision, status string) (store.Proposal, error) {
 	var out store.Proposal
 	err := x.Ledger.UpdateMember(d.Member, func(r *store.MemberRecord) error {
 		p := r.Proposals[d.Proposal]

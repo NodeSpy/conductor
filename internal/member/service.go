@@ -24,8 +24,8 @@ import (
 // (`conductor member …` from a member session) and the operator ones.
 //
 // Launch seams: the HOME session goes through HomeLauncher (the paseo
-// dispatcher today; `--provider conductor` with the jail's cwd→identity
-// lookup once #154 lands). WORKERS go through WorkerLauncher, which fires the
+// dispatcher, on the sandboxed provider entry when the sandbox is active).
+// WORKERS go through WorkerLauncher, which fires the
 // member's synthesized `on: manual` trigger — the ordinary engine path to the
 // cli runtime. Neither is a parallel launcher.
 
@@ -38,7 +38,7 @@ type HomeLauncher interface {
 	// State is "running", "idle", … or "gone".
 	State(ctx context.Context, member, agentID string) (string, error)
 	// Retire archives an agent conductor launched, revokes its session, and
-	// (jailed) ends every ACP session opened in its cwd.
+	// (sandboxed) ends every ACP session opened in its cwd.
 	Retire(ctx context.Context, member, agentID, dispatchID, cwd string) error
 }
 

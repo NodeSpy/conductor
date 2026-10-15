@@ -22,7 +22,7 @@ import (
 // member session calls into exactly one.
 const (
 	TierObserve     = "observe"      // runs autonomously
-	TierReversible  = "reversible"   // proposal until promoted (and jailed)
+	TierReversible  = "reversible"   // proposal until promoted (and sandboxed)
 	TierPropose     = "propose"      // always a proposal; runs on operator approval
 	TierCommitMoney = "commit_money" // proposal + typed amount under the spend cap
 	TierNever       = "never"        // refused structurally
@@ -212,8 +212,8 @@ type MemberHome struct {
 	// Mode is the paseo session mode the home agent launches in (paseo
 	// --mode, as a step's mode:). Unset: the provider's default. A mode that
 	// skips tool-permission prompts lets the home agent run shell commands
-	// unprompted AS YOU until the jail lands — the gate covers conductor
-	// verbs, not raw shell.
+	// unprompted AS YOU unless conductor's agent sandbox is on — the gate
+	// covers conductor verbs, not raw shell.
 	Mode string `yaml:"mode,omitempty"`
 	// Rotate bounds one home session; a fresh session resumes from the
 	// handoff note and the ledger.
@@ -255,7 +255,7 @@ type MemberAutonomy struct {
 	Tiers map[string][]string `yaml:"tiers,omitempty"`
 	// Promote lists reversible-tier verb patterns the member may run
 	// autonomously. Promotion is per action class and only takes effect
-	// while the member's sessions are jailed (#154) — without the jail a
+	// while the member's sessions are sandboxed — without the sandbox a
 	// promoted verb is still a proposal.
 	Promote []string `yaml:"promote,omitempty"`
 	// Amounts names, per commit_money verb pattern, the verb option that
@@ -678,10 +678,10 @@ func (c *Config) MemberWarnings() []string {
 			out = append(out, fmt.Sprintf("members.%s: no operators are configured — its proposals can never be approved", name))
 		}
 		if strings.Contains(strings.ToLower(m.Home.Mode), "bypass") {
-			out = append(out, fmt.Sprintf("members.%s: home.mode %q skips tool-permission prompts; until member sessions are jailed (#154) the home agent's shell runs unprompted as you — the gate covers conductor verbs, not raw shell", name, m.Home.Mode))
+			out = append(out, fmt.Sprintf("members.%s: home.mode %q skips tool-permission prompts; unless conductor's agent sandbox is on, the home agent's shell runs unprompted as you — the gate covers conductor verbs, not raw shell", name, m.Home.Mode))
 		}
 		if len(m.Autonomy.Promote) > 0 {
-			out = append(out, fmt.Sprintf("members.%s: autonomy.promote takes effect only while member sessions are jailed (#154); until then promoted verbs stay proposals", name))
+			out = append(out, fmt.Sprintf("members.%s: autonomy.promote takes effect only while member sessions are sandboxed; until then promoted verbs stay proposals", name))
 		}
 		if m.Skill == nil || len(m.Skill.Verbs) == 0 {
 			out = append(out, fmt.Sprintf("members.%s: no skill.verbs — the member can only observe through memory and its ledger", name))

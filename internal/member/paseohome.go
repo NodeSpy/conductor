@@ -26,11 +26,12 @@ var _ PaseoDispatcher = (*dispatch.Dispatcher)(nil)
 
 // PaseoHome launches home sessions on paseo.
 //
-// Before #154 lands, a home session is NOT jailed: it is an ordinary paseo
-// agent running as the operator. When the jail's `conductor` paseo provider
-// and its cwd→identity lookup land, this is the one place that changes — the
-// launch passes `--provider conductor` and the session's cwd (already unique
-// per session) is what the jail keys it by.
+// Without conductor's agent sandbox a home session is an ordinary paseo agent
+// running as the operator. With it (Sandbox active), the launch names the
+// sandboxed paseo provider entry for its base provider (`conductor paseo
+// setup`: claude → claude-sandboxed), and the session's cwd — unique per
+// session — is what the sandbox resolves to the member's identity
+// (Service.SessionForCwd).
 type PaseoHome struct {
 	Cfg func() *config.Config
 	// For resolves the paseo dispatcher of a runtime name ("" = default).

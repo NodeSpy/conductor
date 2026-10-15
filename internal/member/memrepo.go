@@ -25,7 +25,7 @@ import (
 //
 // Sessions read memory through their own working directory: every live
 // session (home or worker) gets a DETACHED worktree of this repo at its own
-// path, so no two live agents ever share a cwd (the jail keys and archives by
+// path, so no two live agents ever share a cwd (the sandbox keys and archives by
 // cwd). Conductor fast-forwards clean session worktrees after each commit.
 
 // Layout of a memory repo.
