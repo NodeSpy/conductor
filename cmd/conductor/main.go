@@ -1479,9 +1479,12 @@ func serveControl(ctx context.Context, path string, igs []core.Integration, emit
 // engine's RetryRunByID.
 type retryFunc func(ctx context.Context, runID, fromStep string, forceReplay bool) (string, error)
 
+// controlConnDeadline bounds a control-socket exchange (a test shortens it).
+var controlConnDeadline = 30 * time.Second
+
 func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integration, emit core.EmitFunc, manual map[string]connector.CompiledTrigger, retry retryFunc, events *flow.EventHub, gate *callableGate, log func(string, ...any)) {
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(controlConnDeadline))
 	var req controlRequest
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
 		writeControlResp(conn, controlResponse{Error: "bad request: " + err.Error()})
