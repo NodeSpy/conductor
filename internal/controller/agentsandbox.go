@@ -294,3 +294,46 @@ func sandboxNote(req dispatch.Request) string {
 	}
 	return b + " Commit your work; conductor pushes your committed HEAD to this dispatch's branch (signed, fast-forward only) when your step ends. To push earlier, run `conductor call git.push`.\n"
 }
+
+// ConfinedGit runs conductor's own read of a sandboxed workspace — the diff
+// preview's `git diff` — inside the agent sandbox: the workspace is the
+// agent's, and so are its .git/config, .gitattributes and hooks, whose
+// filter, textconv or fsmonitor commands git would otherwise run as
+// conductor. No network, a scratch home, the workspace and its git paths
+// only. ok=false for a directory that is not a registered sandbox workspace.
+func ConfinedGit(ctx context.Context, dir string, args []string) (string, bool, error) {
+	w := AgentSandbox
+	if w == nil || w.Resolver == nil {
+		return "", false, nil
+	}
+	e, ok := agentsandbox.Default.Lookup(dir)
+	if !ok {
+		return "", false, nil
+	}
+	home, err := os.MkdirTemp(w.Resolver.StateRoot, "git-read-")
+	if err != nil {
+		return "", true, err
+	}
+	defer os.RemoveAll(home)
+	pol := agentsandbox.Policy{
+		Identity: "conductor:git-read", Workspace: e.Workspace, Cwd: canonDir(dir), Home: home,
+		ReadOnly: e.ReadOnly, ReadWrite: e.ReadWrite, Hide: e.Hide,
+	}
+	argv := append([]string{"git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}, args...)
+	l, err := agentsandbox.Wrap(pol, argv, agentsandbox.Deps{
+		SelfExe: launchSelfExe, LookPath: exec.LookPath, RealHome: w.Resolver.RealHome,
+		Inherited: os.Environ(),
+	})
+	if err != nil {
+		return "", true, fmt.Errorf("confined git: %w", err)
+	}
+	defer l.Cleanup()
+	cmd := exec.CommandContext(ctx, l.Argv[0], l.Argv[1:]...)
+	cmd.Dir, cmd.Env = l.Dir, append(l.Env, "GIT_TERMINAL_PROMPT=0", "GIT_NO_REPLACE_OBJECTS=1")
+	var out, errb strings.Builder
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		return "", true, fmt.Errorf("git %s (confined): %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
+	}
+	return out.String(), true, nil
+}

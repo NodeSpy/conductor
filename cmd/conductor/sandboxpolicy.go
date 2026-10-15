@@ -15,6 +15,7 @@ import (
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/controller"
 	"github.com/NodeSpy/conductor/internal/dispatch"
+	"github.com/NodeSpy/conductor/internal/gitdiff"
 	"github.com/NodeSpy/conductor/internal/skill"
 )
 
@@ -90,6 +91,9 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	}
 	sandboxResolver.Store(r)
 	controller.AgentSandbox = &controller.SandboxWiring{Resolver: r, Relay: rel.Relay}
+	// conductor's own reads of a sandboxed workspace (the diff preview) run
+	// sandboxed too: the agent wrote that checkout's git config.
+	gitdiff.Confine = controller.ConfinedGit
 	if why := agentsandbox.Probe(); why != "" {
 		logf("WARNING: the agent sandbox cannot be built on this box (%s) — every agent launch will be REFUSED until it can (or set sandbox.agents: off)", why)
 	} else {
@@ -98,6 +102,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 	return func() {
 		sandboxResolver.Store(nil)
 		controller.AgentSandbox = nil
+		gitdiff.Confine = nil
 		rel.Close()
 	}, nil
 }

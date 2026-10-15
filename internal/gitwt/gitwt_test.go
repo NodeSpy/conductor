@@ -243,7 +243,9 @@ func TestRemoveWorktreeLeavesNothingBehind(t *testing.T) {
 		t.Fatalf("ProvisionWorktree: %v", err)
 	}
 	base := filepath.Join(p.CheckoutsDir(), "acme__web")
-	liveRefs := func() string { return out(t, base, "git", "for-each-ref", "--format=%(refname)", "refs/conductor/live/") }
+	liveRefs := func() string {
+		return out(t, base, "git", "for-each-ref", "--format=%(refname)", "refs/conductor/live/")
+	}
 	if !strings.Contains(liveRefs(), "refs/conductor/live/"+filepath.Base(cwd)) {
 		t.Fatalf("the base does not hold a keep-alive ref for the clone %s it just made", cwd)
 	}
