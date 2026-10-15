@@ -79,3 +79,28 @@ func TestWrapLocalNamespaceSeatbeltOnDarwin(t *testing.T) {
 		t.Fatalf("darwin wrap must not use unshare/sandbox-net: %v", wrapped)
 	}
 }
+
+// TestSeatbeltBrowserProfile: the browser variant opens Mach broadly but
+// keeps the Keychain's services denied, issues extensions only for its own
+// paths, and keeps the network to the proxy port.
+func TestSeatbeltBrowserProfile(t *testing.T) {
+	p := seatbeltAgentProfile([]BindMount{{Path: "/b/run"}, {Path: "/Applications/Google Chrome.app", RO: true}}, &AgentProfile{Browser: true}, AgentNet{ProxyPort: 4242})
+	for _, want := range []string{
+		"(allow mach-lookup)\n", `(deny mach-lookup`, `(global-name "com.apple.SecurityServer")`,
+		`(allow file-issue-extension (subpath "/b/run"))`, `(allow file-issue-extension (subpath "/Applications/Google Chrome.app"))`,
+		"(deny network*)", `(allow network-outbound (remote ip "localhost:4242"))`,
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	if strings.Index(p, "(deny mach-lookup") < strings.Index(p, "(allow mach-lookup)") {
+		t.Fatal("the Keychain denial must come after the broad allow (later rules win)")
+	}
+	if strings.Contains(p, "(allow network*)") || strings.Count(p, "file-issue-extension") != 2 {
+		t.Fatalf("profile:\n%s", p)
+	}
+	if strings.Contains(seatbeltAgentProfile(nil, &AgentProfile{}, AgentNet{}), "file-issue-extension") {
+		t.Fatal("an agent profile issues no extensions")
+	}
+}

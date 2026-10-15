@@ -279,7 +279,10 @@ func browserEnv(spec LaunchSpec, goos string) []string {
 		"LANG=en_US.UTF-8",
 	}
 	if goos == "darwin" {
-		env = append(env, "TMPDIR="+filepath.Join(spec.Dir, "tmp"))
+		// CoreFoundation finds the home by the user database, not $HOME:
+		// this points it (Application Support, preferences) into the
+		// browser's own directory, never the operator's.
+		env = append(env, "TMPDIR="+filepath.Join(spec.Dir, "tmp"), "CFFIXED_USER_HOME="+home)
 	} else {
 		env = append(env, "TMPDIR=/tmp")
 	}

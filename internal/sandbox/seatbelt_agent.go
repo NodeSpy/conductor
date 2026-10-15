@@ -166,6 +166,12 @@ func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string
 		} else {
 			b.WriteString("(allow file-read* file-write* (subpath " + sbplString(m.Path) + "))\n")
 		}
+		if a.Browser {
+			// Chromium hands its child processes sandbox extensions for
+			// what it may read itself (its bundle, its profile) — nothing
+			// beyond the allow-list.
+			b.WriteString("(allow file-issue-extension (subpath " + sbplString(m.Path) + "))\n")
+		}
 	}
 	for _, p := range resolvePaths(a.ReadOnly) {
 		b.WriteString("(allow file-read* (subpath " + sbplString(p) + "))\n")
