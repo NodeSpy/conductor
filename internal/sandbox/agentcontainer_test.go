@@ -394,3 +394,81 @@ func TestWithin(t *testing.T) {
 		}
 	}
 }
+
+// The survivors of the first mutation run, each pinned.
+func TestAgentContainerUserGroup(t *testing.T) {
+	for user, ok := range map[string]bool{"1000:1000": true, "1000:0": true, "1000:abc": false, "1000:-1": false, "abc:5": false, ":5": false} {
+		c := testContainer(t)
+		c.User = user
+		if _, err := c.CreateArgs(); (err == nil) != ok {
+			t.Errorf("user %q: err %v, want ok=%v", user, err, ok)
+		}
+	}
+}
+
+func TestAgentContainerNoPidsLimitWhenUnset(t *testing.T) {
+	c := testContainer(t)
+	c.Pids = 0
+	if args, _ := c.CreateArgs(); hasArg(args, "--pids-limit") {
+		t.Error("pids 0 became a limit")
+	}
+}
+
+func TestCheckContainerArgsSpellings(t *testing.T) {
+	good, err := testContainer(t).CreateArgs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	replace := func(from, to []string) []string {
+		var out []string
+		for i := 0; i < len(good); i++ {
+			if i+1 < len(good) && good[i] == from[0] && good[i+1] == from[1] {
+				out = append(out, to...)
+				i++
+				continue
+			}
+			out = append(out, good[i])
+		}
+		return out
+	}
+	for name, c := range map[string]struct {
+		args []string
+		ok   bool
+	}{
+		"--network=none inline":  {replace([]string{"--network", "none"}, []string{"--network=none"}), true},
+		"nnp:true":               {replace([]string{"--security-opt", "no-new-privileges"}, []string{"--security-opt", "no-new-privileges:true"}), true},
+		"nnp=true":               {replace([]string{"--security-opt", "no-new-privileges"}, []string{"--security-opt", "no-new-privileges=true"}), true},
+		"another opt, no nnp":    {replace([]string{"--security-opt", "no-new-privileges"}, []string{"--security-opt", "apparmor=docker-default"}), false},
+		"a relative bind source": {replace([]string{"--hostname", "conductor-agent"}, []string{"--hostname", "conductor-agent", "--mount", "type=bind,src=rel/dir,dst=/x"}), false},
+		"--cap-drop=ALL inline":  {replace([]string{"--cap-drop", "ALL"}, []string{"--cap-drop=ALL"}), true},
+	} {
+		if err := CheckContainerArgs(c.args); (err == nil) != c.ok {
+			t.Errorf("%s: %v, want ok=%v", name, err, c.ok)
+		}
+	}
+}
+
+// An engine socket under the operator's home (Docker Desktop's, colima's),
+// and a symlink whose target is a host system directory, are refused.
+func TestAgentContainerHomeSocketsAndSymlinkedSystemDirs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	run := filepath.Join(home, ".docker", "run")
+	if err := os.MkdirAll(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c := testContainer(t)
+	c.Mounts = append(c.Mounts, ContainerMount{Src: filepath.Join(home, ".docker")})
+	if _, err := c.CreateArgs(); err == nil || !strings.Contains(err.Error(), "engine") {
+		t.Errorf("~/.docker (Docker Desktop's socket dir) bound in: %v", err)
+	}
+	link := filepath.Join(t.TempDir(), "etc-link")
+	if err := os.Symlink("/etc", link); err != nil {
+		t.Fatal(err)
+	}
+	c = testContainer(t)
+	c.Mounts = append(c.Mounts, ContainerMount{Src: link, Dst: "/data"})
+	if _, err := c.CreateArgs(); err == nil || !strings.Contains(err.Error(), "system directory") {
+		t.Errorf("a symlink to /etc bound in: %v", err)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -411,4 +412,147 @@ func TestMuxReadDeadline(t *testing.T) {
 	if time.Since(start) > 2*time.Second {
 		t.Fatal("the deadline fired late")
 	}
+}
+
+// A frame of exactly the largest size is a frame; one byte more is not.
+func TestMuxFrameSizeBoundary(t *testing.T) {
+	m := newMux(true, strings.NewReader(""), io.Discard, nil)
+	if err := m.writeFrame(frData, 1, make([]byte, muxMaxFrame)); err != nil {
+		t.Errorf("a max-size frame refused: %v", err)
+	}
+	if err := m.writeFrame(frData, 1, make([]byte, muxMaxFrame+1)); err == nil {
+		t.Error("an oversized frame written")
+	}
+	// Reading: a max-size frame is taken, the mux lives on.
+	var buf bytes.Buffer
+	hdr := make([]byte, muxHeader)
+	hdr[0] = frData
+	binary.BigEndian.PutUint32(hdr[1:5], 2)
+	binary.BigEndian.PutUint32(hdr[5:9], muxMaxFrame)
+	buf.Write(hdr)
+	buf.Write(make([]byte, muxMaxFrame))
+	r := newMux(true, &buf, io.Discard, nil)
+	s := r.newStream(2)
+	r.readLoop() // ends at EOF after the frame
+	s.mu.Lock()
+	got := len(s.buf)
+	s.mu.Unlock()
+	if got != muxMaxFrame {
+		t.Errorf("a max-size frame was not delivered (%d bytes)", got)
+	}
+	if r.Err() == nil || !errors.Is(r.Err(), io.EOF) {
+		t.Errorf("the mux ended on %v, not the input's end", r.Err())
+	}
+}
+
+// An open refused with no reason says "refused".
+func TestMuxOpenFailWithoutReason(t *testing.T) {
+	m := newMux(true, strings.NewReader(""), io.Discard, nil)
+	ch := make(chan string, 1)
+	m.opening[5] = ch
+	if err := m.handle(frOpenFail, 5, nil); err != nil {
+		t.Fatal(err)
+	}
+	if why := <-ch; why != "refused" {
+		t.Errorf("reason %q", why)
+	}
+}
+
+// The container side keeps its own rules even against a confused host: no
+// container-numbered open from the host, no non-loopback dial.
+func TestMuxContainerRefusesBadOpens(t *testing.T) {
+	var out bytes.Buffer
+	var mu sync.Mutex
+	w := writerFunc(func(p []byte) (int, error) { mu.Lock(); defer mu.Unlock(); return out.Write(p) })
+	m := newMux(false, strings.NewReader(""), w, nil)
+	srv := echoServer(t)
+	for _, c := range []struct {
+		id   uint32
+		addr string
+	}{{2, srv}, {3, "10.0.0.1:80"}, {5, "example.com:443"}} {
+		m.containerDial(c.id, c.addr)
+		if m.stream(c.id) != nil {
+			t.Errorf("open %d to %s made a stream", c.id, c.addr)
+		}
+	}
+	mu.Lock()
+	n := bytes.Count(out.Bytes(), []byte("not a loopback address"))
+	mu.Unlock()
+	if n != 3 {
+		t.Errorf("%d refusals, want 3", n)
+	}
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+// Credit beyond twice the window, or none, is ignored (a peer cannot make
+// a stream send without bound).
+func TestMuxCreditBounds(t *testing.T) {
+	m := newMux(true, strings.NewReader(""), io.Discard, nil)
+	s := m.newStream(1)
+	s.credit(0)
+	s.credit(-5)
+	s.credit(muxWindow + 1)
+	s.mu.Lock()
+	got := s.sendCredit
+	s.mu.Unlock()
+	if got != muxWindow {
+		t.Errorf("credit %d after out-of-bounds grants, want %d", got, muxWindow)
+	}
+	s.credit(muxWindow)
+	s.mu.Lock()
+	got = s.sendCredit
+	s.mu.Unlock()
+	if got != 2*muxWindow {
+		t.Errorf("credit %d, want %d (the bound itself is allowed)", got, 2*muxWindow)
+	}
+}
+
+// Data after a stream's Close is dropped, not buffered or counted against
+// the window.
+func TestMuxReceiveAfterClose(t *testing.T) {
+	m := newMux(true, strings.NewReader(""), io.Discard, nil)
+	s := m.newStream(2)
+	s.Close()
+	if !s.receive(make([]byte, muxWindow+10)) {
+		t.Error("data after close counted as an overrun")
+	}
+	if len(s.buf) != 0 {
+		t.Error("data after close buffered")
+	}
+}
+
+func TestLoopbackAddr(t *testing.T) {
+	for a, want := range map[string]bool{"127.0.0.1:1": true, "[::1]:2": true, "localhost:3": true, "127.0.0.1:": false, "127.0.0.1": false, "10.0.0.1:80": false, "0.0.0.0:1": false} {
+		if loopbackAddr(a) != want {
+			t.Errorf("loopbackAddr(%q) != %v", a, want)
+		}
+	}
+}
+
+// A fixed port an earlier mux still holds is waited for; a free-port
+// request is not retried.
+func TestListenRetry(t *testing.T) {
+	blocker, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := blocker.Addr().String()
+	go func() { time.Sleep(300 * time.Millisecond); blocker.Close() }()
+	start := time.Now()
+	ln, err := listenRetry("tcp", addr)
+	if err != nil {
+		t.Fatalf("not retried until the port was free: %v", err)
+	}
+	ln.Close()
+	if time.Since(start) < 250*time.Millisecond {
+		t.Error("listened while the port was still held")
+	}
+	ln, err = listenRetry("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.Close()
 }

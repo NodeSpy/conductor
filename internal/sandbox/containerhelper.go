@@ -118,11 +118,15 @@ func copyRegular(from, to string, mode fs.FileMode) error {
 
 var launchIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
+// launchDir holds the launches' pid files (the container's socket tmpfs; a
+// test points it elsewhere).
+var launchDir = ContainerSockDir
+
 func launchPidFile(id string) (string, error) {
 	if !launchIDRe.MatchString(id) {
 		return "", fmt.Errorf("launch id %q", id)
 	}
-	return filepath.Join(ContainerSockDir, "run-"+id+".pid"), nil
+	return filepath.Join(launchDir, "run-"+id+".pid"), nil
 }
 
 // RunContainerLaunch runs argv as one launch in the container: its own
