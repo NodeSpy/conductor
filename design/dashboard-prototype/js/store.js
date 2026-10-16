@@ -142,14 +142,14 @@
       const L = D().members; if (n == null) return drop(L, k);
       let m = byName(L, k);
       if (!m) { m = { name: k, color: ['#ff6a2b', '#4fb8e8', '#3fbf7f', '#e6b33c', '#a59fc4'][L.length % 5], home: 'idle', session: 's1', turns: 0, open: 0, pending: 0, workers: 0, spend: 0 }; L.push(m); D().chats[k] = D().chats[k] || []; }
-      Object.assign(m, { cfg: n, desc: n.description || '', shadow: !!(n.autonomy && n.autonomy.shadow), mode: (n.isolation && n.isolation.mode) || 'namespace', operators: n.operators || [], peers: n.peers || [], maxTurns: S.getPath(n, 'home.rotate.max_turns') || 100, maxAge: S.getPath(n, 'home.rotate.max_age') || '24h', age: m.age || '0m', sandboxed: true,
+      Object.assign(m, { cfg: n, team: n.team || null, desc: n.description || '', shadow: !!(n.autonomy && n.autonomy.shadow), mode: (n.isolation && n.isolation.mode) || 'namespace', operators: n.operators || [], peers: n.peers || [], maxTurns: S.getPath(n, 'home.rotate.max_turns') || 100, maxAge: S.getPath(n, 'home.rotate.max_age') || '24h', age: m.age || '0m', sandboxed: true,
         proactive: n.proactive ? { every: n.proactive.every, next: (m.proactive && m.proactive.next) || n.proactive.every, quiet: n.proactive.quiet_hours, budget: `0/${S.getPath(n, 'proactive.budget.max_runs_per_day') || '∞'} runs` } : null });
     },
     path: (k) => `members.${k}`,
     validate(k, n, all) {
       const e = [];
       if (!/^[a-z][a-z0-9-]*$/.test(k)) e.push(`member name "${k}": lowercase letters, digits and dashes`);
-      if (!n.operators || !n.operators.length) e.push(`members.${k}.operators: at least one operator must be able to approve`);
+      if ((!n.operators || !n.operators.length) && !(n.team && S.getPath((byName(all.teams, n.team) || {}).cfg || {}, 'defaults.operators'))) e.push(`members.${k}.operators: at least one operator must be able to approve (or inherit them from a team)`);
       (n.operators || []).forEach((o) => { if (!all.operatorsCfg[o]) e.push(`members.${k}.operators: "${o}" is not in operators:`); });
       (n.peers || []).forEach((p) => { if (p === k) e.push(`members.${k}.peers: a member can't peer with itself`); else if (!byName(all.members, p)) e.push(`members.${k}.peers: no member named "${p}"`); });
       const tiers = S.getPath(n, 'autonomy.tiers') || {}; const seen = {};
@@ -157,9 +157,10 @@
       (S.getPath(n, 'autonomy.promote') || []).forEach((v) => { if (seen[v] !== 'reversible') e.push(`members.${k}.autonomy.promote: ${v} must be a reversible-tier verb to be promoted`); });
       if (n.isolation && n.isolation.mode === 'none') e.push(`members.${k}.isolation: mode none is set on a runtime, workflow or trigger, never on a member`);
       if (n.worker && n.worker.runtime && !byName(all.runtimes, n.worker.runtime)) e.push(`members.${k}.worker.runtime: no runtime "${n.worker.runtime}"`);
+      e.push(...S.narrowErrors(k, n, all));
       return e;
     },
-    warn(k, n, all) { const w = []; (n.peers || []).forEach((p) => { const o = byName(all.members, p); if (o && !((o.cfg && o.cfg.peers) || []).includes(k)) w.push(`members.${k}.peers: ${p} doesn't list ${k} back, so the link stays closed until it does`); }); if (!S.getPath(n, 'autonomy.shadow') && !all.members.find((m) => m.name === k)) w.push(`members.${k}: a new member normally starts in shadow mode`); return w; },
+    warn(k, n, all) { const w = []; (n.peers || []).forEach((p) => { const o = byName(all.members, p); if (o && o.cfg && n.team && o.cfg.team === n.team) { w.push(`members.${k}.peers: ${p} is in the same team, so they are already peers`); return; } if (o && !((o.cfg && o.cfg.peers) || []).includes(k)) w.push(`members.${k}.peers: ${p} doesn't list ${k} back, so the link stays closed until it does`); }); if (!S.getPath(n, 'autonomy.shadow') && !all.members.find((m) => m.name === k)) w.push(`members.${k}: a new member normally starts in shadow mode`); return w; },
     widens(b, a) {
       const r = [], B = b || {}, A = a || {};
       const bv = new Set(S.getPath(B, 'skill.verbs') || []); (S.getPath(A, 'skill.verbs') || []).forEach((v) => { if (!bv.has(v)) r.push(`adds verb ${v}`); });
@@ -168,6 +169,7 @@
       (S.getPath(A, 'skill.verbs') || []).forEach((v) => { const tb = tierOf(B, v), ta = tierOf(A, v); const ib = order.indexOf(tb ? tb[0] : 'propose'), ia = order.indexOf(ta ? ta[0] : 'propose'); if (bv.has(v) && ia > ib) r.push(`loosens ${v}: ${tb ? tb[0] : 'propose'} → ${ta[0]}`); });
       const bp = new Set(S.getPath(B, 'autonomy.promote') || []); (S.getPath(A, 'autonomy.promote') || []).forEach((v) => { if (!bp.has(v)) r.push(`promotes ${v}`); });
       if (b && S.getPath(B, 'autonomy.shadow') && !S.getPath(A, 'autonomy.shadow')) r.push('leaves shadow mode: proposals become approvable');
+      if (b && A.team && A.team !== B.team) { const t = byName(window.D.teams, A.team); if (t) (S.getPath(t.cfg, 'defaults.operators') || []).forEach((o) => { if (!(B.operators || []).includes(o) && !A.operators) r.push(`inherits approver ${o} from team ${A.team}`); }); }
       return r;
     },
   };
@@ -212,10 +214,77 @@
   C.operators = { section: 'operators', file: 'config.yaml', label: 'operator', href: () => '#/security',
     keys: () => Object.keys(D().operatorsCfg), get: (k) => clone(D().operatorsCfg[k] || null), set: (k, n) => { if (n == null) delete D().operatorsCfg[k]; else D().operatorsCfg[k] = n; }, path: (k) => `operators.${k}` };
 
-  S.ORDER = ['settings', 'vaults', 'secrets', 'connectors', 'hosts', 'runtimes', 'sandbox', 'operators', 'members', 'identities', 'credentials', 'packs', 'update', 'workflows'];
+
+  /* ---------- teams ---------- */
+  const TIER_ORDER = ['never', 'propose', 'commit_money', 'reversible', 'observe']; // looser →
+  S.TIER_ORDER = TIER_ORDER;
+  S.teamOf = (member, st = window.D) => { const m = byName(st.members, member); const t = m && m.cfg && m.cfg.team; return t ? byName(st.teams, t) : null; };
+  /** What a member actually runs with: team defaults, narrowed by the member. */
+  S.effective = (m, st = window.D) => {
+    const n = m.cfg || {}, t = n.team && byName(st.teams, n.team), d = (t && t.cfg.defaults) || {};
+    const pick = (mine, theirs) => (mine !== undefined ? { v: mine, src: theirs !== undefined ? 'narrows' : 'own' } : theirs !== undefined ? { v: theirs, src: 'inherits' } : { v: undefined, src: 'unset' });
+    return {
+      team: t ? t.name : null,
+      operators: pick(n.operators, d.operators),
+      isolation: pick(n.isolation && n.isolation.mode, d.isolation && d.isolation.mode),
+      maxTier: { v: d.autonomy && d.autonomy.max_tier, src: d.autonomy ? 'inherits' : 'unset' },
+      promote: { v: (S.getPath(n, 'autonomy.promote') || []).length ? S.getPath(n, 'autonomy.promote') : [], src: d.autonomy && d.autonomy.promote === false ? 'blocked' : 'own' },
+      approvalTtl: pick(S.getPath(n, 'autonomy.approval_ttl'), S.getPath(d, 'autonomy.approval_ttl')),
+      proactive: pick(n.proactive && n.proactive.budget, S.getPath(d, 'budget.proactive_pool')),
+      credentials: { v: st.access.credentials.filter((c) => c.identity === 'member:' + m.name).map((c) => c.name), scope: S.getPath(d, 'browser.credentials') },
+      logins: { v: (st.identities.find((i) => i.id === 'member:' + m.name) || {}).logins || [], scope: S.getPath(d, 'browser.logins') },
+      peersIn: t ? st.members.filter((x) => x.name !== m.name && x.cfg && x.cfg.team === t.name).map((x) => x.name) : [],
+      peersOut: (n.peers || []).filter((p) => { const o = byName(st.members, p); return !t || !o || !o.cfg || o.cfg.team !== t.name; }),
+    };
+  };
+  S.narrowErrors = (k, n, all) => {
+    const e = []; if (!n.team) return e;
+    const t = byName(all.teams, n.team);
+    if (!t) return [`members.${k}.team: no team named "${n.team}"`];
+    const d = t.cfg.defaults || {};
+    if (n.operators && d.operators) n.operators.forEach((o) => { if (!d.operators.includes(o)) e.push(`members.${k}.operators: ${o} is not one of team ${t.name}'s operators (${d.operators.join(', ')}); a member can only narrow`); });
+    const max = S.getPath(d, 'autonomy.max_tier');
+    if (max) Object.entries(S.getPath(n, 'autonomy.tiers') || {}).forEach(([tier, vs]) => { if ((vs || []).length && TIER_ORDER.indexOf(tier) > TIER_ORDER.indexOf(max) && tier !== 'observe') e.push(`members.${k}.autonomy.tiers.${tier}: team ${t.name} caps autonomy at ${max}; ${vs.join(', ')} would be looser`); });
+    if (S.getPath(d, 'autonomy.promote') === false && (S.getPath(n, 'autonomy.promote') || []).length) e.push(`members.${k}.autonomy.promote: team ${t.name} allows no promotions`);
+    if (S.getPath(d, 'isolation.mode') === 'container' && n.isolation && n.isolation.mode && n.isolation.mode !== 'container') e.push(`members.${k}.isolation: team ${t.name} requires container; ${n.isolation.mode} would widen it`);
+    const pool = S.getPath(d, 'budget.proactive_pool'), mb = n.proactive && n.proactive.budget;
+    if (pool && mb) { if (mb.max_runs_per_day > pool.max_runs_per_day) e.push(`members.${k}.proactive.budget.max_runs_per_day: ${mb.max_runs_per_day} is over the team pool (${pool.max_runs_per_day})`); if (mb.max_cost_per_day > pool.max_cost_per_day) e.push(`members.${k}.proactive.budget.max_cost_per_day: ${mb.max_cost_per_day} is over the team pool (${pool.max_cost_per_day})`); }
+    const scope = S.getPath(d, 'browser.credentials'); if (scope) all.access.credentials.filter((c) => c.identity === 'member:' + k && !scope.includes(c.name)).forEach((c) => e.push(`browser.credentials.${c.name}: bound to member:${k}, outside team ${t.name}'s credential scope`));
+    const ls = S.getPath(d, 'browser.logins'); const idn = all.identities.find((i) => i.id === 'member:' + k); if (ls && idn) (idn.logins || []).filter((h) => !ls.includes(h)).forEach((h) => e.push(`browser.identities["member:${k}"].logins: ${h} is outside team ${t.name}'s login scope`));
+    (n.peers || []).forEach((p) => { const o = byName(all.members, p); const ot = o && o.cfg && o.cfg.team; if (ot && ot !== n.team && !((t.cfg.links || []).includes(ot))) e.push(`members.${k}.peers: ${p} is in team ${ot}; teams ${n.team} and ${ot} are isolated until linked (teams.${n.team}.links)`); });
+    return e;
+  };
+  C.teams = { section: 'teams', file: 'config.yaml', label: 'team', href: (k) => `#/teams/${k}`,
+    keys: () => D().teams.map((t) => t.name), get: (k) => { const t = byName(D().teams, k); return t ? clone(t.cfg) : null; },
+    set: (k, n) => { const L = D().teams; if (n == null) return drop(L, k); const t = byName(L, k); if (t) t.cfg = n; else L.push({ name: k, cfg: n }); },
+    path: (k) => `teams.${k}`,
+    validate(k, n, all) {
+      const e = [];
+      if (!/^[a-z][a-z0-9-]*$/.test(k)) e.push(`team name "${k}": lowercase letters, digits and dashes`);
+      const mem = all.members.filter((m) => m.cfg && m.cfg.team === k).map((m) => m.name);
+      if (n.lead && !mem.includes(n.lead)) e.push(`teams.${k}.lead: ${n.lead} is not a member of team ${k}`);
+      (n.routing || []).forEach((r, i) => { const nm = r.name || `routing[${i}]`; if (!r.when || !r.when.on) e.push(`teams.${k}.routing.${nm}: when.on is required`); if (r.to === 'lead' && !n.lead) e.push(`teams.${k}.routing.${nm}: routes to the lead, but the team has none`); else if (r.to && r.to !== 'lead' && !mem.includes(r.to)) e.push(`teams.${k}.routing.${nm}: ${r.to} is not in team ${k}`); });
+      (n.links || []).forEach((l) => { if (l === k) e.push(`teams.${k}.links: a team can't link to itself`); else if (!byName(all.teams, l)) e.push(`teams.${k}.links: no team "${l}"`); });
+      (S.getPath(n, 'defaults.operators') || []).forEach((o) => { if (!all.operatorsCfg[o]) e.push(`teams.${k}.defaults.operators: "${o}" is not in operators:`); });
+      all.members.filter((m) => m.cfg && m.cfg.team === k).forEach((m) => e.push(...S.narrowErrors(m.name, m.cfg, all)));
+      return e;
+    },
+    warn(k, n, all) { const w = []; (n.links || []).forEach((l) => { const o = byName(all.teams, l); if (o && !((o.cfg.links || []).includes(k))) w.push(`teams.${k}.links: ${l} doesn't link back, so the link stays closed until it does`); }); if (n.knowledge && n.knowledge.promote === 'auto') w.push(`teams.${k}.knowledge.promote: auto lets any member write shared knowledge without you`); return w; },
+    refs(k, all) { return all.members.filter((m) => m.cfg && m.cfg.team === k).map((m) => `members.${m.name}.team`); },
+    widens(b, a) {
+      const r = [], B = b || {}, A = a || {};
+      const bo = new Set(S.getPath(B, 'defaults.operators') || []); (S.getPath(A, 'defaults.operators') || []).forEach((o) => { if (b && !bo.has(o)) r.push(`adds approver ${o} for every member`); });
+      const bm = S.getPath(B, 'defaults.autonomy.max_tier'), am = S.getPath(A, 'defaults.autonomy.max_tier'); if (b && am && TIER_ORDER.indexOf(am) > TIER_ORDER.indexOf(bm || 'propose')) r.push(`raises the team autonomy ceiling to ${am}`);
+      if (S.getPath(B, 'defaults.isolation.mode') === 'container' && S.getPath(A, 'defaults.isolation.mode') !== 'container') r.push('drops the team container requirement');
+      (A.links || []).forEach((l) => { if (!(B.links || []).includes(l)) r.push(`links team ${l}: data can cross`); });
+      if (S.getPath(A, 'knowledge.promote') === 'auto' && S.getPath(B, 'knowledge.promote') !== 'auto') r.push('members promote shared knowledge without approval');
+      return r;
+    },
+  };
+  S.ORDER = ['settings', 'vaults', 'secrets', 'connectors', 'hosts', 'runtimes', 'sandbox', 'operators', 'teams', 'members', 'identities', 'credentials', 'packs', 'update', 'workflows'];
 
   /* ---------- config.yaml, generated from the state ---------- */
-  const HEAD = { settings: 'settings: — ${settings.NAME} anywhere below', vaults: 'vaults: — where secrets live; values never appear here', connectors: 'connectors: — use: names the plugin', hosts: 'hosts: — remote machines over SSH', runtimes: 'runtimes: — where agents run', sandbox: 'sandbox: — the agent sandbox', operators: 'operators: — who can approve', members: 'members: — persistent agents (#178)', browser: 'browser: — the agent browser (#182)', packs: 'packs: — your overrides; the pack files are vendored', update: 'update: — the auto-update policy', triggers: 'triggers: — on / filter / steps', workflows: 'workflows: — reusable, called with call:', secrets: 'secret references' };
+  const HEAD = { settings: 'settings: — ${settings.NAME} anywhere below', vaults: 'vaults: — where secrets live; values never appear here', connectors: 'connectors: — use: names the plugin', hosts: 'hosts: — remote machines over SSH', runtimes: 'runtimes: — where agents run', sandbox: 'sandbox: — the agent sandbox', operators: 'operators: — who can approve', members: 'members: — persistent agents (#178)', teams: 'teams: — members inherit team defaults and can only narrow them', browser: 'browser: — the agent browser (#182)', packs: 'packs: — your overrides; the pack files are vendored', update: 'update: — the auto-update policy', triggers: 'triggers: — on / filter / steps', workflows: 'workflows: — reusable, called with call:', secrets: 'secret references' };
   S.configText = (state) => {
     const st = state || window.D; const out = ['# conductor config — ops-box', '# managed by hand and by the dashboard; comments and unknown keys are kept', ''];
     const sec = (h, obj) => { if (obj == null || (typeof obj === 'object' && !Object.keys(obj).length)) return; out.push('# ' + HEAD[h]); out.push(Y.stringify({ [h]: obj })); out.push(''); };
@@ -226,6 +295,7 @@
     sec('runtimes', Object.fromEntries(st.runtimes.map((r) => [r.name, r.cfg])));
     sec('sandbox', st.sandboxCfg);
     sec('operators', st.operatorsCfg);
+    sec('teams', Object.fromEntries(st.teams.map((t) => [t.name, t.cfg])));
     sec('members', Object.fromEntries(st.members.map((m) => [m.name, m.cfg])));
     const br = {};
     if (st.identities.length) br.identities = Object.fromEntries(st.identities.map((i) => [i.id, { allow: i.allow, logins: i.logins, evaluate: i.evaluate }]));

@@ -546,4 +546,52 @@ steps:
   D.pending = [];
   D.audit.forEach((a) => (a.run = (a.who.match(/^r-/) ? a.who : '')));
 
+  /* Teams (draft #178 follow-up). A member is in at most one team. Team
+   * defaults are a ceiling members inherit and can only narrow; members in a
+   * team are peers by default; teams are isolated unless linked. */
+  D.teams = [
+    { name: 'platform', cfg: { description: 'Platform services: api, web, infra', lead: 'platform-sre',
+      defaults: { operators: ['ops', 'oncall'], autonomy: { max_tier: 'reversible', promote: true, approval_ttl: '24h' }, isolation: { mode: 'namespace' },
+        budget: { max_cost_per_day: 20.0, proactive_pool: { max_runs_per_day: 10, max_cost_per_day: 4.0 } },
+        browser: { logins: ['console.example.com'], credentials: ['grafana', 'statuspage'] } },
+      knowledge: { repo: 'team-knowledge/platform', promote: 'approval' },
+      routing: [
+        { name: 'pd-api', when: { on: 'pd.incident', service: ['api', 'web'] }, to: 'lead' },
+        { name: 'web-issues', when: { on: 'gh.issue_opened', repo: ['acme/web'] }, to: 'web-triage' },
+      ],
+      links: ['finance'] } },
+    { name: 'finance', cfg: { description: 'Cost, billing and forecasts',
+      defaults: { operators: ['ops'], autonomy: { max_tier: 'propose', promote: false, approval_ttl: '12h' }, isolation: { mode: 'container' }, budget: { max_cost_per_day: 10.0 } },
+      routing: [{ name: 'cost-anomaly', when: { on: 'aws-cost.anomaly' }, to: 'billing-sre' }],
+      links: ['platform'] } },
+  ];
+  D.members[0].cfg.team = 'platform'; D.members[2].cfg.team = 'platform'; D.members[1].cfg.team = 'finance';
+  // inside a team peers are implicit, so the explicit cross-team link is the only one written
+  D.members.push({ name: 'release-scribe', color: '#e6b33c', desc: 'Drafts release notes; no team', home: 'idle', session: 's1', turns: 0, maxTurns: 40, age: '1h', maxAge: '12h', shadow: true, sandboxed: true, mode: 'namespace', operators: ['ops'], open: 0, pending: 0, workers: 0, spend: 0, proactive: null, peers: [],
+    cfg: { description: 'Drafts release notes; no team', charter_file: 'members/release-scribe.md', operators: ['ops'], home: { rotate: { max_age: '12h', max_turns: 40 } }, skill: { verbs: ['gh.get_*', 'slack-ops.post'] }, autonomy: { shadow: true, tiers: { observe: ['gh.get_*'], propose: ['slack-ops.post'] }, promote: [], approval_ttl: '24h' }, peers: [], isolation: { mode: 'namespace' } } });
+  D.charters['release-scribe'] = 'Draft release notes from merged PRs. Never post without approval.\n';
+  D.chats['release-scribe'] = [];
+  D.cases.forEach((c) => (c.member = 'platform-sre'));
+  const R = (o) => Object.assign({ requester_kept: true }, o);
+  D.cases.find((c) => c.id === 'c29').routed = R({ by: 'rule', rule: 'pd-api', team: 'platform', via: 'lead', lead: 'platform-sre', to: 'platform-sre', note: 'the lead kept it' });
+  D.cases.find((c) => c.id === 'c24').routed = R({ by: 'direct', to: 'platform-sre' });
+  D.cases.find((c) => c.id === 'c31').routed = R({ by: 'direct', to: 'platform-sre' });
+  D.cases.find((c) => c.id === 'c27').routed = R({ by: 'proactive', to: 'platform-sre' });
+  D.cases.find((c) => c.id === 'c19').routed = R({ by: 'link', team: 'finance', to: 'platform-sre', note: 'peer ask over the platform↔finance link' });
+  D.cases.find((c) => c.id === 'c12').routed = R({ by: 'direct', to: 'platform-sre' });
+  D.cases.push(
+    { id: 'c33', member: 'web-triage', title: 'Checkout button misaligned on Safari', status: 'open', requester: 'event:gh.issue_opened', cls: 'event', opened: m(70), workers: 0, proposals: 0, routed: R({ by: 'rule', rule: 'web-issues', team: 'platform', to: 'web-triage' }) },
+    { id: 'c34', member: 'web-triage', title: 'pd: web 5xx elevated on /cart', status: 'open', requester: 'event:pd.incident', cls: 'event', opened: m(18), workers: 1, proposals: 0, urgent: true, routed: R({ by: 'rule', rule: 'pd-api', team: 'platform', via: 'lead', lead: 'platform-sre', to: 'web-triage', note: 'lead assigned: web owns /cart' }) },
+    { id: 'c7', member: 'billing-sre', title: 'Monthly forecast for October', status: 'open', requester: 'chat:U-THIRD', cls: 'user', opened: m(40), workers: 0, proposals: 1, routed: R({ by: 'direct', to: 'billing-sre' }) },
+  );
+  D.teamKnowledge = {
+    platform: { repo: 'team-knowledge/platform', files: { 'README.md': '# Platform team knowledge\n\nShared by every member of team platform. Members propose; the operator approves.\n', 'alb.md': '# ALB\n\nShared target groups; check deregistration delay before blaming the app.\n', 'oncall.md': '# On-call\n\nops is primary, oncall secondary, 22:00-07:00 quiet hours for sweeps.\n' },
+      proposals: [
+        { id: 'k4', member: 'platform-sre', from: 'knowledge/alb.md', to: 'alb.md', summary: 'ALB deregistration delay is 30s on every target group', status: 'pending', at: m(25), case: 'c29', diff: ' # ALB\n \n Shared target groups; check deregistration delay before blaming the app.\n+\n+`deregistration_delay` is **30s** on every target group (modules/web/alb.tf).\n' },
+        { id: 'k3', member: 'web-triage', from: 'knowledge/safari.md', to: 'browsers.md', summary: 'Safari 18 flex gap bug: use margin fallback in checkout', status: 'pending', at: m(55), case: 'c33', diff: '+# Browsers\n+\n+Safari 18 mis-sizes flex `gap` inside buttons; checkout uses a margin fallback.\n' },
+        { id: 'k2', member: 'platform-sre', from: 'runbooks/page-triage.md', to: 'oncall.md', summary: 'Ack within 5 minutes; one case per page', status: 'approved', at: m(3000), approver: 'ops (passkey · laptop)', diff: '' },
+      ] },
+    finance: null,
+  };
+
 })();
