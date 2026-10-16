@@ -208,6 +208,58 @@ members:
 	}
 }
 
+// Each half of ResolveTeams/validateTeams refuses a widening on its own: a
+// Config assembled in code reaches either one first.
+func TestTeamCeilingChecksStandAlone(t *testing.T) {
+	widen := func() *Config {
+		return &Config{
+			Operators: map[string]OperatorConfig{"ops": {}, "other": {}},
+			Teams:     map[string]TeamConfig{"t": {Operators: []string{"ops"}}},
+			Members:   map[string]MemberConfig{"m": {Team: "t", Operators: []string{"other"}}},
+		}
+	}
+	if err := widen().ResolveTeams(); err == nil || !strings.Contains(err.Error(), `"other" is not one of team t's operators [ops]`) {
+		t.Fatalf("ResolveTeams let a widening through: %v", err)
+	}
+	if err := widen().validateTeams(); err == nil || !strings.Contains(err.Error(), `"other" is not one of team t's operators [ops]`) {
+		t.Fatalf("validateTeams let a widening through: %v", err)
+	}
+	ok := widen()
+	ok.Members["m"] = MemberConfig{Team: "t"}
+	if err := ok.ResolveTeams(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ok.validateTeams(); err != nil || strings.Join(ok.Members["m"].Operators, ",") != "ops" {
+		t.Fatalf("an inheriting member: %v %v", err, ok.Members["m"].Operators)
+	}
+}
+
+// Inheritance copies: two members sharing one tier slice (a Config built in
+// code) do not write each other's team tiers into it.
+func TestTeamInheritanceDoesNotAlias(t *testing.T) {
+	shared := make([]string, 1, 8)
+	shared[0] = "kv.get"
+	c := &Config{
+		Teams: map[string]TeamConfig{
+			"x": {Autonomy: TeamAutonomy{Tiers: map[string][]string{TierObserve: {"x.only"}}}},
+			"y": {Autonomy: TeamAutonomy{Tiers: map[string][]string{TierObserve: {"y.only"}}}},
+		},
+		Members: map[string]MemberConfig{
+			"a": {Team: "x", Autonomy: MemberAutonomy{Tiers: map[string][]string{TierObserve: shared}}},
+			"b": {Team: "y", Autonomy: MemberAutonomy{Tiers: map[string][]string{TierObserve: shared}}},
+		},
+	}
+	if err := c.ResolveTeams(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(c.Members["a"].Autonomy.Tiers[TierObserve], ","); got != "kv.get,x.only" {
+		t.Errorf("a's tiers: %s", got)
+	}
+	if got := strings.Join(c.Members["b"].Autonomy.Tiers[TierObserve], ","); got != "kv.get,y.only" {
+		t.Errorf("b's tiers: %s", got)
+	}
+}
+
 func TestTeamPeering(t *testing.T) {
 	c, err := loadTeams(t, `
 teams:

@@ -280,10 +280,10 @@ func (c *Config) TeamSeedDir(team string) string {
 // sameTeamPeers reports whether two members are teammates whose team peers.
 func (c *Config) sameTeamPeers(a, b string) bool {
 	ta, tb := c.Members[a].Team, c.Members[b].Team
-	if ta == "" || ta != tb {
+	if ta != tb {
 		return false
 	}
-	t, ok := c.Teams[string(ta)]
+	t, ok := c.Teams[string(ta)] // a teamless pair: there is no team ""
 	return ok && t.Peers != "none"
 }
 

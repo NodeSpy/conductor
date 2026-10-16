@@ -2,6 +2,7 @@ package member
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,6 +155,10 @@ func TestTeamRoutesByRule(t *testing.T) {
 		ruleMatches(config.RoutingRule{}, TeamEvent{}) {
 		t.Fatal("field matching")
 	}
+	// A flat dotted key, as event data names its own fields.
+	if !ruleMatches(config.RoutingRule{Match: map[string]string{"pagerduty.service": "db-*"}}, TeamEvent{Fields: map[string]any{"pagerduty.service": "db-main"}}) {
+		t.Fatal("a flat dotted field did not match")
+	}
 }
 
 func TestTeamFallsBackWithoutALead(t *testing.T) {
@@ -228,6 +233,20 @@ func TestTeamLeadTriagesAndAssigns(t *testing.T) {
 	}
 	if _, err := f.svc.Assign(ctx, f.homeOf("lead"), other.ID, "b", ""); err == nil {
 		t.Fatal("assigned a case that is not a triage case")
+	}
+	// A routed case the lead itself works (not a triage case) is not
+	// re-assignable, even if it carries a routing record.
+	routed, err := f.svc.deliverRouted(ctx, Event{Member: "lead", Source: "pd.x", Title: "mine too"}, "", ReqEvent, store.Routing{Team: "platform", Via: "rule", Rule: "r"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Assign(ctx, f.homeOf("lead"), routed, "b", ""); err == nil || !strings.Contains(err.Error(), "is not a triage case") {
+		t.Fatalf("a rule-routed case was re-assigned: %v", err)
+	}
+	// One triage worker cannot assign ANOTHER triage case.
+	out2 := f.route(t, TeamEvent{Source: "pd.x", Title: "second"})
+	if _, err := f.svc.Assign(ctx, wa, out2["case"].(string), "b", ""); err == nil || !strings.Contains(err.Error(), "only the triage case it was started on") {
+		t.Fatalf("a triage worker assigned another triage case: %v", err)
 	}
 	res, err := f.svc.Assign(ctx, wa, lc, "b", "looks like the web tier")
 	if err != nil {
@@ -330,6 +349,21 @@ func TestTeamRoutingNeverUpgradesTrust(t *testing.T) {
 	if ev.RequesterClass != ReqUser || ev.Requester != "chat:U7" {
 		t.Fatalf("a tainted lead handed an event on untainted: %+v", ev)
 	}
+	// A worker the tainted lead spawned onto a triage case carries that taint
+	// into its assignment too.
+	out = f.route(t, TeamEvent{Source: "pd.incident", Title: "disk again"})
+	lc = out["case"].(string)
+	cw, err := f.svc.Spawn(ctx, f.homeOf("lead"), SpawnRequest{CaseID: lc, Brief: "help triage"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = f.svc.Assign(ctx, childActor("lead", cw), lc, "b", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := f.caseOf(t, "b", res["case"].(string)); c.RequesterClass != ReqUser || c.Requester != "chat:U7" {
+		t.Fatalf("a tainted lead's child handed an event on untainted: %+v", c)
+	}
 	// …and an untainted lead never raises one: an event stays an event.
 	g := newTeamFixture(t, nil)
 	if _, err := g.svc.Deliver(ctx, Event{Member: "lead", Source: "operator", Requester: "op", Title: "op asks"}); err != nil {
@@ -383,6 +417,24 @@ func TestTeamTriageFallsBack(t *testing.T) {
 	if ac.Routing.Via != "fallback" || ac.RequesterClass != ReqUser || ac.Requester != "chat:U9" {
 		t.Fatalf("fallback case: %+v %+v", ac, ac.Routing)
 	}
+	// An assigned case's worker finishing changes nothing and logs nothing.
+	var logs []string
+	f.svc.Log = func(s string, a ...any) { logs = append(logs, fmt.Sprintf(s, a...)) }
+	out = f.route(t, TeamEvent{Source: "pd.incident", Title: "one-b"})
+	lc = out["case"].(string)
+	w = f.triageWorker(t, lc)
+	if _, err := f.svc.Assign(ctx, childActor("lead", w), lc, "b", ""); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.WorkerDone(ctx, w.Dispatch, "", map[string]any{"summary": "assigned"})
+	for _, l := range logs {
+		if strings.Contains(l, "fallback for") {
+			t.Fatalf("an assigned case fell back: %s", l)
+		}
+	}
+	if r := f.caseOf(t, "lead", lc).Routing; r.Assignee != "b" || r.Via != "lead" && r.Reason != "" {
+		t.Fatalf("an assigned case was touched again: %+v", r)
+	}
 	// The lead sits on one past the timeout: the fallback gets it.
 	out = f.route(t, TeamEvent{Source: "pd.incident", Title: "two"})
 	lc = out["case"].(string)
@@ -396,8 +448,19 @@ func TestTeamTriageFallsBack(t *testing.T) {
 	if r := f.caseOf(t, "lead", lc).Routing; r.State != "assigned" || r.Assignee != "a" || !strings.Contains(r.Reason, "did not assign within 10m") {
 		t.Fatalf("no fallback after the timeout: %+v", r)
 	}
-	// A non-lead's tick never touches someone else's triage.
-	f.svc.expireTriage(ctx, "a")
+	// A former lead's open triage still falls back after a lead change.
+	out = f.route(t, TeamEvent{Source: "pd.incident", Title: "orphan"})
+	lc = out["case"].(string)
+	tc2 := f.cfg.Teams["platform"]
+	rt2 := *tc2.Routing
+	rt2.Lead = "b"
+	tc2.Routing = &rt2
+	f.cfg.Teams["platform"] = tc2
+	f.clk.add(config.DefaultTriageTimeout)
+	f.svc.Tick(ctx, "lead")
+	if r := f.caseOf(t, "lead", lc).Routing; r.State != "assigned" || r.Assignee != "a" {
+		t.Fatalf("a former lead's triage was stranded: %+v", r)
+	}
 
 	// The triage worker cannot start: straight to the fallback.
 	g := newTeamFixture(t, nil)
@@ -521,11 +584,14 @@ func TestTeamKnowledgePromotionIsAProposal(t *testing.T) {
 	}
 	// One commit, by the member, with the approval in its trailers.
 	repo := f.svc.TeamRepo("platform")
-	log, err := repo.git(ctx, repo.Dir, "log", "-1", "--format=%an%n%B")
+	log, err := repo.git(ctx, repo.Dir, "log", "-1", "--format=%an <%ae>%n%B")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"member a", "Approved-By: op2", "Member-Proposal: " + pid, "Promoted-From: knowledge/db.md@"} {
+	if first := strings.SplitN(log, "\n", 2)[0]; first != "member a <a@members.conductor.invalid>" {
+		t.Errorf("the promotion is not authored by the member: %q", first)
+	}
+	for _, want := range []string{"Approved-By: op2", "Member-Proposal: " + pid, "Promoted-From: knowledge/db.md@"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("commit lacks %q:\n%s", want, log)
 		}
@@ -605,9 +671,14 @@ func TestTeamKnowledgePromotionGating(t *testing.T) {
 	if _, err := k.svc.Episode(ctx, k.homeOf("a"), "", "x"); err == nil {
 		t.Fatal("fixture: episode without a case")
 	}
+	hsha, err := k.svc.Handoff(ctx, k.homeOf("a"), "where I left off")
+	if err != nil || hsha == "" {
+		t.Fatal(err)
+	}
+	hp, _ := k.svc.Repo("a").LatestHandoff()
 	for name, args := range map[string][2]string{
 		"an episode":   {"episodes/2026/x.md", ""},
-		"a handoff":    {"handoff/x.md", ""},
+		"a handoff":    {hp, ""},
 		"to episodes":  {"runbooks/r.md", "episodes/x.md"},
 		"traversal":    {"runbooks/../knowledge/x.md", ""},
 		"missing file": {"knowledge/nope.md", ""},
@@ -690,12 +761,17 @@ func TestTeamProactivePool(t *testing.T) {
 			}
 		}
 	}
+	// Another team's member sweeping first is not charged to this pool.
+	if _, err := f.svc.StartSweep(ctx, "c", true); err != nil {
+		t.Fatal(err)
+	}
+	finish("c")
 	if _, err := f.svc.StartSweep(ctx, "a", true); err != nil {
 		t.Fatal(err)
 	}
 	finish("a")
 	if _, err := f.svc.StartSweep(ctx, "b", true); err != nil {
-		t.Fatal(err)
+		t.Fatalf("another team's sweep counted against this pool: %v", err)
 	}
 	finish("b")
 	// a has used 1 of its own 2, but the team has used 2 of 2.
@@ -706,6 +782,7 @@ func TestTeamProactivePool(t *testing.T) {
 	if _, err := f.svc.StartSweep(ctx, "c", true); err != nil {
 		t.Fatalf("another team's member was charged to this pool: %v", err)
 	}
+	finish("c")
 	// The window rolls.
 	f.clk.add(SweepWindow)
 	if _, err := f.svc.StartSweep(ctx, "a", true); err != nil {
@@ -770,9 +847,17 @@ func TestTeamIsolationIsEnforced(t *testing.T) {
 	m.Isolation.Sandbox = "required"
 	k.cfg.Members["lead"] = m
 	_ = k.st.UpdateMember("lead", func(r *store.MemberRecord) error { r.Home = nil; return nil })
+	var logs []string
+	k.svc.Log = func(s string, a ...any) { logs = append(logs, fmt.Sprintf(s, a...)) }
+	k.svc.Tick(ctx, "lead")
+	k.clk.add(2 * LaunchBackoff)
 	k.svc.Tick(ctx, "lead")
 	if k.st.Member("lead").Home != nil {
 		t.Fatal("a tick launched a member that requires the sandbox")
+	}
+	// …and says so once, not every tick.
+	if len(logs) != 1 || !strings.Contains(logs[0], "requires conductor's agent sandbox") {
+		t.Fatalf("sandbox hold logged %d times: %q", len(logs), logs)
 	}
 }
 

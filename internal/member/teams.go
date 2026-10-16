@@ -97,9 +97,9 @@ func atMember(cfg *config.Config, member, who, class string) (string, string) {
 	if class != ReqOperator {
 		return who, class // event / user / peer / proactive: nothing here can raise them
 	}
-	w2, c2 := RequesterClass(cfg, member, who)
-	c, w := lessTrusted(class, who, c2, w2)
-	return w, c
+	// Re-classifying an operator here gives that operator or a third party:
+	// never more than it had.
+	return RequesterClass(cfg, member, who)
 }
 
 // RouteTeam routes an event to a team: the first matching rule, else the
@@ -182,6 +182,11 @@ func eventField(ev TeamEvent, k string) (string, bool) {
 	case "requester":
 		return ev.Requester, true
 	}
+	// A flat key first — event data often carries dotted names of its own
+	// ("pagerduty.service") — then a dotted path into nested maps.
+	if v, ok := ev.Fields[k]; ok {
+		return scalarField(v)
+	}
 	var cur any = ev.Fields
 	for _, seg := range strings.Split(k, ".") {
 		m, ok := cur.(map[string]any)
@@ -192,13 +197,18 @@ func eventField(ev TeamEvent, k string) (string, bool) {
 			return "", false
 		}
 	}
-	switch v := cur.(type) {
+	return scalarField(cur)
+}
+
+// scalarField renders a rule-matchable value; maps, lists and nil never match.
+func scalarField(v any) (string, bool) {
+	switch x := v.(type) {
 	case string:
-		return v, true
+		return x, true
 	case nil, map[string]any, []any:
 		return "", false
 	default:
-		return fmt.Sprint(v), true
+		return fmt.Sprint(x), true
 	}
 }
 
@@ -405,10 +415,11 @@ func (s *Service) triageFallback(ctx context.Context, lead, caseID, reason strin
 	}
 }
 
-// expireTriage falls back on triage cases the lead left past the timeout.
+// expireTriage falls back on triage cases left past the timeout — a former
+// lead's included, so a lead change in config strands nothing.
 func (s *Service) expireTriage(ctx context.Context, name string) {
 	_, t, ok := s.Cfg().TeamOf(name)
-	if !ok || t.Routing == nil || t.Routing.Lead != name {
+	if !ok || t.Routing == nil {
 		return
 	}
 	var due []string
