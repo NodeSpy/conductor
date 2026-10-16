@@ -2,6 +2,7 @@ package config
 
 import (
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -111,15 +112,38 @@ func TestPackFolderOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for got, want := range map[string]string{
-		c.WorkflowFolder("kit/tidy"):            "work/kit/tidy",
-		c.WorkflowFolder("kit/sweep"):           "work/kit",
-		c.TriggerFolder(trig(c, "kit/nightly")): "ops/nightly",
-		c.TriggerFolder(trig(c, "kit/weekly")):  "work/kit",
+	for _, tc := range [][3]string{
+		{"workflow tidy", c.WorkflowFolder("kit/tidy"), "work/kit/tidy"},
+		{"workflow sweep", c.WorkflowFolder("kit/sweep"), "work/kit"},
+		{"trigger nightly", c.TriggerFolder(trig(c, "kit/nightly")), "ops/nightly"},
+		{"trigger weekly", c.TriggerFolder(trig(c, "kit/weekly")), "work/kit"},
 	} {
-		if got != want {
-			t.Errorf("got %q, want %q", got, want)
+		if tc[1] != tc[2] {
+			t.Errorf("%s: %q, want %q", tc[0], tc[1], tc[2])
 		}
+	}
+	// "*" files every trigger; a named arm wins over it.
+	c, err = loadFolderPack(t, folderPack, "    triggers:\n      \"*\": { folder: star }\n      nightly: { folder: named }\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, w := c.TriggerFolder(trig(c, "kit/nightly")), c.TriggerFolder(trig(c, "kit/weekly")); n != "named" || w != "star" {
+		t.Errorf("star vs named: nightly %q, weekly %q", n, w)
+	}
+	// Two armed instances, each filed on its own.
+	c, err = loadFolderPack(t, folderPack, "    triggers:\n      nightly:\n        - { enabled: true, options: { a: 1 }, folder: one }\n        - { enabled: true, options: { a: 2 }, folder: two }\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fs []string
+	for _, tr := range c.Triggers {
+		if strings.HasPrefix(tr.Name, "kit/nightly") {
+			fs = append(fs, c.TriggerFolder(tr))
+		}
+	}
+	sort.Strings(fs)
+	if strings.Join(fs, ",") != "one,two" {
+		t.Errorf("per-instance folders: %v", fs)
 	}
 	for name, inst := range map[string]string{
 		"unknown workflow": "    workflows: { nope: { folder: x } }\n",
