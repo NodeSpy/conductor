@@ -19,7 +19,7 @@ test.describe('connectors, runtimes, hosts, isolation', () => {
     await page.fill('#f-name', 'slack-eng');
     await page.selectOption('#f-bot_token-pick', { index: 2 });
     await page.selectOption('#f-app_token-pick', { index: 3 });
-    await page.fill('#f-default_channel', '#eng');
+    await page.fill('#f-default_channel-in', '#eng');
     await submit(page);
     await expect(page.locator('.diff')).toContainText('slack-eng:');
     await applyStaged(page);
@@ -123,17 +123,12 @@ test.describe('bots', () => {
     await page.selectOption('#f-verb', 'gh.label'); await page.selectOption('#f-tier', 'propose');
     await submit(page);
     await page.locator('[data-act="cred-bind"]').first().click();
-    await page.fill('#f-name', 'pagerduty-ui'); await page.fill('#f-origin', 'https://acme.pagerduty.com');
-    await page.selectOption('#f-identity', 'bot:platform-sre');
-    await page.locator('[data-listk="fields"] select').selectOption('username');
-    await page.locator('[data-listk="fields"] select').selectOption('password');
-    await page.selectOption('#f-ref', 'store/conductor/pd');
+    await page.selectOption('#f-cred', 'app');
     await submit(page);
-    await expect(page.locator('.list .item')).toHaveCount(2);
-    // the team caps credential scope: a binding outside it is refused on validation
-    await expect(page.locator('.callout.danger')).toContainText("outside team platform's credential scope");
+    // the team caps credential scope: a login outside it is refused on validation
+    await expect(page.locator('.callout.danger').first()).toContainText("outside team platform's credential scope");
     await expect(page.locator('[data-act="apply-go"]')).toHaveAttribute('aria-disabled', 'true');
-    await page.locator('.list .item', { hasText: 'browser.credentials.pagerduty-ui' }).locator('[data-act="unstage"]').click();
+    await page.locator('.list .item', { hasText: 'let platform-sre use login app' }).locator('[data-act="unstage"]').click();
     await expect(page.locator('.tag', { hasText: 'loosens kv.set' })).toBeVisible();
     await applyStaged(page, { expectWidening: true });
     const m = await state(page, () => D.bots[0].cfg);
@@ -175,30 +170,32 @@ test.describe('bots', () => {
 });
 
 test.describe('secrets and vars', () => {
-  test('store a secret (write-only, step-up), replace it, change a ref, fix a vault, edit settings', async ({ page }) => {
+  test('store a secret (write-only, step-up), replace it, repoint its uses, fix a vault, edit settings', async ({ page }) => {
     await go(page, '#/secrets');
     await page.locator('[data-act="secret-add"]').click();
-    await page.fill('#f-name', 'SENTRY_DSN'); await page.fill('#f-value', 'https://abc@o0.ingest.example/1');
+    await page.fill('#f-key', 'sentry-dsn'); await page.fill('#f-alias', 'SENTRY_DSN'); await page.fill('#f-value', 'https://abc@o0.ingest.example/1');
     await submit(page);
     await page.locator('#su-go').click();
-    await expect(page.locator('#sec-body')).toContainText('SENTRY_DSN');
+    await expect(page.locator('#sec-body tr[data-secret="house/sentry-dsn"]')).toContainText('{{ vault "house" "sentry-dsn" }}');
+    await expect(page.locator('#sec-body tr[data-secret="house/sentry-dsn"]')).toContainText('dashboard only');
     expect(await state(page, () => JSON.stringify(D))).not.toContain('abc@o0.ingest');
-    await page.locator('[data-act="secret-set"][data-s="SENTRY_DSN"]').click();
+    await page.locator('[data-act="secret-set"][data-s="house/sentry-dsn"]').click();
     await page.fill('#f-value', 'rotated'); await submit(page); await page.locator('#su-go').click();
+    // no op:// anywhere: one reference syntax
+    expect(await page.locator('#sec-body').textContent()).not.toContain('op://');
     // filters
     await page.locator('[data-act="sec-f"][data-v="unused"]').click();
-    await expect(page.locator('#sec-body tr')).toHaveCount(3);
-    await page.locator('[data-act="sec-f"][data-v="referenced"]').click();
-    await expect(page.locator('#sec-body')).not.toContainText('GH_WEBHOOK_SECRET');
+    await expect(page.locator('#sec-body tr[data-secret="house/sentry-dsn"]')).toBeVisible();
+    await page.locator('[data-act="sec-f"][data-v="all"]').click();
     await page.fill('[data-on-input="sec-q"]', 'slack');
     await expect(page.locator('#sec-body tr')).toHaveCount(2);
-    await page.locator('[data-act="secret-ref"][data-s="SLACK_BOT_TOKEN"]').click();
-    await page.fill('#f-ref', 'op://Agents/Slack/bot-token-2'); await submit(page);
-    await expect(page.locator('.diff')).toContainText('bot-token-2');
+    await page.locator('[data-act="secret-ref"][data-s="op/Agents/Slack/bot-token"]').click();
+    await page.fill('#f-ref', 'op/Agents/Slack/bot-token-2'); await submit(page);
+    await expect(page.locator('.diff').first()).toContainText('{{ vault \\"op\\" \\"Agents/Slack/bot-token-2\\" }}');
     await page.locator('[data-act="discard-all"]').click(); await page.locator('#cf-ok').click();
     await go(page, '#/secrets');
     await page.locator('.callout.danger [data-act="vault-edit"]').click();
-    await page.fill('#f-hashicorp__token', 'env:VAULT_TOKEN_2026');
+    await page.fill('#f-hashicorp__unlock_token', 'env:VAULT_TOKEN_2026');
     await submit(page);
     await applyStaged(page);
     expect(await state(page, () => D.vaults.find((v) => v.name === 'hcv').status)).toBe('ok');
@@ -269,7 +266,7 @@ test.describe('packs and plugins', () => {
     await go(page, '#/extensions/browse');
     await page.locator('[data-act="reg-add"][data-n="conductor-plugins/aws-cost"]').click(); await page.locator('#su-go').click();
     await expect(page.locator('.modal h2')).toHaveText('Add a AWS Cost Explorer connector');
-    await page.fill('#f-name', 'aws'); await page.fill('#f-role_arn', 'arn:aws:iam::000000000000:role/cost-read'); await submit(page);
+    await page.fill('#f-name', 'aws'); await page.fill('#f-role_arn-in', 'arn:aws:iam::000000000000:role/cost-read'); await submit(page);
     await applyStaged(page);
     expect(await state(page, () => D.connectors.some((c) => c.name === 'aws' && c.use === 'aws-cost'))).toBe(true);
   });

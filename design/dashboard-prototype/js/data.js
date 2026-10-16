@@ -800,3 +800,26 @@ window.D.packMembers = {
   'sre-bot': { workflows: { sweep: ['check', 'report'] }, triggers: ['sweep', 'on_incident'], roles: ['pagerduty'] },
   kit: { workflows: { triage: ['classify', 'route'] }, triggers: ['on_incident'], roles: ['pagerduty'] },
 };
+
+/* One secret reference syntax ({{ vault "<vault>" "<key>" }}, Secrets.md):
+ * the op:// scheme and the named secrets: block are retired. A secret is
+ * known by <vault>/<key>; a name is at most a dashboard-only alias. Browser
+ * credentials name each value as { vault, key } (feat/agent-browser), and
+ * vaults use their real connection keys. */
+(function () {
+  const D = window.D;
+  const split = (ref) => { if (/^op:\/\//.test(ref)) return ['op', ref.slice(5)]; const i = ref.indexOf('/'); return [ref.slice(0, i), ref.slice(i + 1)]; };
+  D.secrets = D.secrets.filter((s) => !/^env:/.test(s.ref)).map((s) => { const [vault, key] = split(s.ref); return Object.assign({}, s, { alias: s.name, name: `${vault}/${key}`, ref: `${vault}/${key}`, vault, key }); });
+  const add = (vault, key, alias, used, set) => { if (!D.secrets.some((s) => s.ref === `${vault}/${key}`)) D.secrets.push({ name: `${vault}/${key}`, ref: `${vault}/${key}`, vault, key, alias, set: set || null, used: used || [] }); };
+  add('house', 'gh-app-key', 'GH_APP_KEY', ['connectors.gh.private_key'], new Date(Date.now() - 4e9).toISOString());
+  add('op', 'Agents/Grafana/username', '', ['browser.credentials.grafana.username']);
+  add('op', 'Agents/Grafana/password', '', ['browser.credentials.grafana.password']);
+  add('op', 'Agents/Grafana/one-time password?attribute=otp', '', ['browser.credentials.grafana.otp']);
+  add('op', 'Agents/App/username', '', ['browser.credentials.app.username']);
+  D.vaults.forEach((v) => { v.cfg = ({ conductor: { type: 'conductor', unlock: { key: 'creds:house' } }, onepassword: { type: 'onepassword', account: 'acme', service_account: 'env:OP_SA' }, pass: { type: 'pass', prefix: 'conductor' }, hashicorp: { type: 'hashicorp', addr: 'https://vault.acme.internal:8200', mount: 'secret', unlock: { token: 'env:VAULT_TOKEN' } } })[v.type] || v.cfg; });
+  const R = (vault, key) => ({ vault, key });
+  const cred = (name, cfg) => { const c = D.access.credentials.find((x) => x.name === name); if (c) { c.cfg = Object.assign({ name }, cfg); c.identities = cfg.identities; c.origin = cfg.origin; } };
+  cred('grafana', { origin: 'https://grafana.example.com', identities: ['bot:platform-sre'], username: R('op', 'Agents/Grafana/username'), password: R('op', 'Agents/Grafana/password'), otp: R('op', 'Agents/Grafana/one-time password?attribute=otp') });
+  cred('statuspage', { origin: 'https://manage.statuspage.example', identities: ['bot:platform-sre'], passkey: R('house', 'passkeys/statuspage') });
+  cred('app', { origin: 'https://app.example.com', identities: ['agent:triage@acme/app'], username: R('op', 'Agents/App/username'), password: R('op', 'Agents/App/password'), otp: R('op', 'Agents/App/one-time password?attribute=otp'), approval: true });
+})();

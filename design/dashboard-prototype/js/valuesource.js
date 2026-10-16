@@ -1,13 +1,13 @@
 /* The value-source field: one component for every configurable value.
  *
- * A field's value can be Typed (plain, or write-only when sensitive), an Env
- * var (${env.NAME}), a Secret (${secret.name}), a Vault reference
- * (op://Vault/Item/field[?attribute=otp], or {{ vault "store" "path" }}), or a
- * Setting (${settings.name}, never for a sensitive field). The field shows the
- * reference, never a value, with a resolve check the daemon performs without
- * returning the value (POST /api/v1/refs/resolve → ok | error). A typed
- * sensitive value is written to the vault behind a step-up when the form is
- * saved, and the field then holds its secret reference.
+ * A field's value is Typed (plain, or write-only when sensitive), an Env var
+ * (${env.NAME}), a Vault entry ({{ vault "<vault>" "<key>" }}, the one
+ * reference syntax; op:// URIs and the named secrets: block are retired), or
+ * a Setting (${settings.name}, never for a sensitive field). The field shows
+ * the reference, never a value, with a resolve check the daemon performs
+ * without returning the value (POST /api/v1/refs/resolve → ok | error). A
+ * typed sensitive value is written to conductor's vault (house) behind a
+ * step-up when the form is saved, and the field then holds its reference.
  *
  * Used by UI.fieldHTML for type 'value' (and 'secret', which is 'value' with
  * sensitive: true), so every form gets the same control. */
@@ -15,17 +15,16 @@
   const { icon, esc } = UI;
   const VS = (UI.VS = {});
   const V = () => S.view();
-  VS.SRC = { typed: 'Typed', env: 'Env var', secret: 'Secret', vault: 'Vault', setting: 'Setting' };
-  const ICON = { typed: 'edit', env: 'terminal', secret: 'key', vault: 'lock', setting: 'config' };
+  VS.SRC = { typed: 'Typed', env: 'Env var', vault: 'Vault', setting: 'Setting' };
+  const ICON = { typed: 'edit', env: 'terminal', vault: 'lock', setting: 'config' };
 
   VS.parse = (v) => {
     v = v == null ? '' : String(v); let m;
     if (!v) return { src: null, ref: '' };
     if ((m = v.match(/^\$\{env\.([A-Za-z_]\w*)\}$/))) return { src: 'env', name: m[1], ref: v, label: v };
     if ((m = v.match(/^\$\{settings\.([\w.-]+)\}$/))) return { src: 'setting', name: m[1], ref: v, label: v };
-    if ((m = v.match(/^\$\{secret\.([\w./-]+)\}$/))) return { src: 'secret', name: m[1], ref: v, label: 'secret: ' + m[1] };
-    if (/^op:\/\//.test(v)) return { src: 'vault', vault: 'op', path: v.slice(5), ref: v, label: v };
-    if ((m = v.match(/^\{\{\s*vault\s+"([^"]+)"\s+"([^"]+)"\s*\}\}$/))) return { src: 'vault', vault: m[1], path: m[2], ref: v, label: m[1] === 'op' ? 'op://' + m[2] : `${m[1]}: ${m[2]}` };
+    if (/^op:\/\//.test(v)) return { src: 'vault', vault: 'op', path: v.slice(5), ref: v, label: v, retired: true };
+    if ((m = v.match(/^\{\{\s*vault\s+"([^"]+)"\s+"([^"]+)"\s*\}\}$/))) return { src: 'vault', vault: m[1], path: m[2], ref: v, label: `${m[1]} · ${m[2]}` };
     return { src: 'typed', ref: v, label: v };
   };
   const envOf = (n) => (V().env || D.env || []).find((e) => e.name === n);
@@ -37,7 +36,8 @@
     if (p.src === 'typed') return { state: 'typed' };
     if (p.src === 'env') { const e = envOf(p.name); return e ? { state: 'ok', why: `set in ${scopeLabel(e.scope)}` } : { state: 'fail', why: `${p.name} isn't set in conductor.env or any scope this reaches` }; }
     if (p.src === 'setting') return V().settings.some((x) => x.name === p.name) ? { state: 'ok', why: 'setting exists' } : { state: 'fail', why: `no setting "${p.name}"` };
-    if (p.src === 'secret') { const s = V().secrets.find((x) => x.name === p.name); if (!s) return { state: 'fail', why: `no secret "${p.name}"` }; const vt = V().vaults.find((x) => x.name === s.vault); if (vt && vt.status === 'fail') return { state: 'fail', why: `vault ${vt.name}: ${vt.detail}` }; if (s.warn) return { state: 'fail', why: s.warn }; return { state: 'ok', why: `in vault ${s.vault}` }; }
+    if (p.retired) return { state: 'fail', why: 'op:// references were replaced by {{ vault "op" "…" }}; an unmigrated one fails loudly' };
+    if (p.vault === 'op' && V().secrets.some((x) => x.ref === `op/${p.path}`)) return { state: 'ok', why: `1Password · ${p.path}` };
     if (p.vault === 'op') {
       const [path, q] = p.path.split('?'); const [vault, item, ...f] = path.split('/'); const field = f.join('/');
       const it = D.opItems.find((x) => x.vault === vault && x.title === item);
@@ -47,8 +47,9 @@
       return { state: 'ok', why: `1Password · ${vault}/${item}` };
     }
     const vt = V().vaults.find((x) => x.name === p.vault);
-    if (!vt) return { state: 'fail', why: `no vault "${p.vault}"` };
+    if (!vt) return { state: 'fail', why: `no vault "${p.vault}" (a reference to an unknown vault fails conductor validate)` };
     if (vt.status === 'fail') return { state: 'fail', why: `vault ${vt.name}: ${vt.detail}` };
+    if (['conductor', 'file'].includes(vt.type) && !V().secrets.some((x) => x.ref === `${p.vault}/${p.path}`)) return { state: 'fail', why: `${vt.name} has no entry "${p.path}"` };
     return { state: 'ok', why: `vault ${vt.name}` };
   };
   /** A sensitive field may not come from plain config. */
@@ -57,24 +58,24 @@
 
   /* ---------- markup ---------- */
   const optsEnv = () => (V().env || D.env || []).map((e) => [e.name, `${e.name} · ${scopeLabel(e.scope)}`]);
-  const optsSecret = () => V().secrets.filter((s) => /^[\w./-]+$/.test(s.name)).map((s) => [s.name, `${s.name} · ${s.vault}`]);
+  const optsVault = () => V().secrets.map((s) => [s.ref, `${s.vault} · ${s.key}${s.alias ? '  (' + s.alias + ')' : ''}`]);
   const optsSetting = () => V().settings.map((s) => [s.name, `${s.name}${s.env ? ' · from env' : ''}`]);
   function body(fd, src, val, id) {
     const p = VS.parse(val), cur = p.src === src ? p : {};
-    const sel = (kind, opts, label, create) => `<select class="select mono vs-pick" id="${id}-pick" ${create ? `data-picker="${create}" data-ctx='${esc(JSON.stringify({ sensitive: !!fd.sensitive }))}' data-ret="name"` : ''} data-on-change="vs-pick" aria-label="${esc(label)}">${create ? `<option value="__new__">+ ${create === 'env' ? 'Add env var' : 'New secret'}…</option>` : ''}<option value="">pick…</option>${opts.map(([v, l]) => `<option value="${esc(v)}"${cur.name === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
-    if (src === 'typed') return fd.sensitive
-      ? `<input class="input mono vs-in" id="${id}-in" type="password" autocomplete="new-password" value="" placeholder="${p.src === 'typed' ? 'set · type to replace' : 'write-only: stored in the vault when you save'}" data-on-input="vs-typed" aria-label="${esc(fd.label || fd.k)} (typed, write-only)">`
+    const sel = (kind, opts, label, create) => `<select class="select mono vs-pick" id="${id}-pick" ${create ? `data-picker="${create}" data-ctx='${esc(JSON.stringify({ sensitive: !!fd.sensitive }))}' data-ret="name"` : ''} data-on-change="vs-pick" aria-label="${esc(label)}">${create ? `<option value="__new__">+ Add env var…</option>` : ''}<option value="">pick…</option>${opts.map(([v, l]) => `<option value="${esc(v)}"${cur.name === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+    if (src === 'typed') return fd.sensitive || fd.vaultOnly
+      ? `<input class="input mono vs-in" id="${id}-in" type="${fd.sensitive ? 'password' : 'text'}" autocomplete="${fd.sensitive ? 'new-password' : 'off'}" value="" placeholder="${p.src === 'typed' ? 'set · type to replace' : 'stored in the vault when you save; config keeps the reference'}" data-on-input="vs-typed" aria-label="${esc(fd.label || fd.k)} (typed, stored in the vault)">`
       : `<input class="input mono vs-in" id="${id}-in" value="${esc(cur.ref || '')}" placeholder="${esc(fd.ph || '')}" data-on-input="vs-typed" aria-label="${esc(fd.label || fd.k)} (typed)">`;
     if (src === 'env') return sel('env', optsEnv(), `${fd.label || fd.k}: env var`, 'env');
-    if (src === 'secret') return sel('secret', optsSecret(), `${fd.label || fd.k}: secret`, 'secret');
     if (src === 'setting') return sel('setting', optsSetting(), `${fd.label || fd.k}: setting`);
-    return `<div class="vs-vault"><span class="vs-ref mono${cur.ref ? '' : ' muted'}">${cur.ref ? esc(cur.label) : 'nothing picked yet'}</span><button type="button" class="btn sm" data-act="vs-vault">${icon('search')}Browse vault…</button></div><div class="vs-same"></div>`;
+    const curRef = cur.vault ? `${cur.vault}/${cur.path}` : '';
+    return `<div class="vs-vault"><select class="select mono vs-pick vs-vsel" id="${id}-pick" data-picker="secret" data-ctx='${esc(JSON.stringify({ sensitive: !!fd.sensitive }))}' data-ret="ref" data-on-change="vs-pick" aria-label="${esc(fd.label || fd.k)}: vault entry"><option value="__new__">+ New vault entry…</option><option value="">pick an entry…</option>${optsVault().map(([v, l]) => `<option value="${esc(v)}"${curRef === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}${curRef && !optsVault().some(([v]) => v === curRef) ? `<option value="${esc(curRef)}" selected>${esc(cur.label)}</option>` : ''}</select><button type="button" class="btn sm" data-act="vs-vault">${icon('search')}Browse…</button></div><div class="vs-ref mono tiny${cur.ref ? '' : ' muted'}">${cur.ref ? esc(cur.ref) : 'writes {{ vault "&lt;vault&gt;" "&lt;key&gt;" }}'}</div><div class="vs-same"></div>`;
   }
   VS.html = (fd, val, id) => {
     const p = VS.parse(val);
-    const sources = fd.sources || ['typed', 'env', 'secret', 'vault', 'setting'];
-    const src = p.src && sources.includes(p.src) ? p.src : fd.defaultSrc || (fd.sensitive ? 'secret' : 'typed');
-    const meta = esc(JSON.stringify({ k: fd.k, label: fd.label || fd.k, sensitive: !!fd.sensitive, otp: !!fd.otp, ph: fd.ph || '', sources }));
+    const sources = fd.sources || ['typed', 'env', 'vault', 'setting'];
+    const src = p.src && sources.includes(p.src) ? p.src : fd.defaultSrc || (fd.sensitive ? 'vault' : 'typed');
+    const meta = esc(JSON.stringify({ k: fd.k, label: fd.label || fd.k, sensitive: !!fd.sensitive, otp: !!fd.otp, ph: fd.ph || '', sources, vaultOnly: !!fd.vaultOnly }));
     return `<div class="vs" data-vs="${esc(fd.k)}" data-src="${src}" data-meta="${meta}" data-id="${id}"${fd.sensitive ? ' data-sensitive="1"' : ''}>
       <input type="hidden" id="${id}" data-k="${esc(fd.k)}" value="${esc(p.src === src ? (src === 'typed' && fd.sensitive ? '' : val) : '')}"${p.src === 'typed' && fd.sensitive ? ' data-set="1"' : ''}>
       <div class="vs-bar"><div class="vs-seg" role="group" aria-label="Where ${esc(fd.label || fd.k)} comes from">${sources.map((s) => `<button type="button" class="${s === src ? 'on' : ''}" aria-pressed="${s === src}" data-act="vs-src" data-v="${s}">${icon(ICON[s])}<span>${VS.SRC[s]}</span></button>`).join('')}</div>
@@ -89,8 +90,8 @@
   let seq = 0;
   VS.refresh = (el, quiet) => {
     const m = meta(el), v = hid(el).value, chk = el.querySelector('.vs-check'), msg = el.querySelector('.vs-msg');
-    const ref = el.querySelector('.vs-ref'); if (ref) { const p = VS.parse(v); ref.textContent = p.src === 'vault' ? p.label : 'nothing picked yet'; ref.classList.toggle('muted', p.src !== 'vault'); }
-    const blocked = VS.blocked(m.sensitive, v), warn = VS.warn(m.sensitive, v);
+    const ref = el.querySelector('.vs-ref'); if (ref) { const p = VS.parse(v); ref.textContent = p.src === 'vault' ? p.ref : 'writes {{ vault "<vault>" "<key>" }}'; ref.classList.toggle('muted', p.src !== 'vault'); }
+    const blocked = VS.blocked(m.sensitive, v), warn = VS.warn(m.sensitive, v) || (VS.parse(v).retired ? 'op:// references are retired: pick the entry again to write {{ vault "op" "…" }}' : '');
     msg.innerHTML = blocked ? `<div class="vs-err">${icon('x')}${esc(blocked)}</div>` : warn ? `<div class="vs-warn">${icon('warn')}${esc(warn)} <a class="link" href="#/secrets">Secrets</a></div>` : '';
     el.classList.toggle('blocked', !!blocked);
     const pending = el.dataset.pending === '1';
@@ -105,8 +106,8 @@
     const same = el.querySelector('.vs-same');
     if (same) {
       const form = el.closest('form, .vs-scope, .modal, .page') || document;
-      const items = [...new Set([...form.querySelectorAll('.vs')].filter((x) => x !== el).map((x) => VS.parse(hid(x).value)).filter((p) => p.vault === 'op').map((p) => p.path.split('?')[0].split('/').slice(0, 2).join('/')))];
-      same.innerHTML = items.map((vi) => { const it = D.opItems.find((x) => `${x.vault}/${x.title}` === vi); if (!it) return ''; return it.fields.filter(([, t]) => (m.otp ? t === 'otp' : m.sensitive ? t === 'concealed' : t === 'text' || t === 'email')).map(([l, t]) => { const r = `op://${vi}/${l}${t === 'otp' ? '?attribute=otp' : ''}`; return r === v ? '' : `<button type="button" class="vs-chip" data-act="vs-same" data-ref="${esc(r)}">${icon('link')}Use the same item: ${esc(it.title)} · ${esc(l)}</button>`; }).join(''); }).join('');
+      const items = [...new Set([...form.querySelectorAll('.vs')].filter((x) => x !== el).map((x) => VS.parse(hid(x).value)).filter((p) => p.vault === 'op' && !p.retired).map((p) => p.path.split('?')[0].split('/').slice(0, 2).join('/')))];
+      same.innerHTML = items.map((vi) => { const it = D.opItems.find((x) => `${x.vault}/${x.title}` === vi); if (!it) return ''; return it.fields.filter(([, t]) => (m.otp ? t === 'otp' : m.sensitive ? t === 'concealed' : t === 'text' || t === 'email')).map(([l, t]) => { const r = `{{ vault "op" "${vi}/${l}${t === 'otp' ? '?attribute=otp' : ''}" }}`; return r === v ? '' : `<button type="button" class="vs-chip" data-act="vs-same" data-ref="${esc(r)}">${icon('link')}Use the same item: ${esc(it.title)} · ${esc(l)}</button>`; }).join(''); }).join('');
     }
     if (!quiet) hid(el).dispatchEvent(new Event('input', { bubbles: true }));
   };
@@ -120,8 +121,8 @@
     VS.refresh(el);
     if (src === 'vault') { const nb = el.querySelector('[data-act="vs-vault"]'); if (nb) nb.focus(); }
   });
-  UI.act('vs-typed', (inp) => { const el = inp.closest('.vs'), m = meta(el); if (m.sensitive) { el.dataset.pending = inp.value ? '1' : ''; hid(el).value = ''; VS.refresh(el); } else setVal(el, inp.value); });
-  UI.act('vs-pick', (sel) => { if (sel.value === '__new__') return; const el = sel.closest('.vs'), src = el.dataset.src; setVal(el, !sel.value ? '' : src === 'env' ? `\${env.${sel.value}}` : src === 'secret' ? `\${secret.${sel.value}}` : `\${settings.${sel.value}}`); });
+  UI.act('vs-typed', (inp) => { const el = inp.closest('.vs'), m = meta(el); if (m.sensitive || m.vaultOnly) { el.dataset.pending = inp.value ? '1' : ''; hid(el).value = ''; VS.refresh(el); } else setVal(el, inp.value); });
+  UI.act('vs-pick', (sel) => { if (sel.value === '__new__') return; const el = sel.closest('.vs'), src = el.dataset.src; setVal(el, !sel.value ? '' : src === 'env' ? `\${env.${sel.value}}` : src === 'vault' ? S.vaultExpr(sel.value) : `\${settings.${sel.value}}`); });
   UI.act('vs-same', (b) => setVal(b.closest('.vs'), b.dataset.ref));
   // initial checks for fields as they appear
   new MutationObserver(() => document.querySelectorAll('.vs:not([data-init])').forEach((el) => { el.dataset.init = '1'; VS.refresh(el, true); })).observe(document.body, { childList: true, subtree: true });
@@ -136,9 +137,9 @@
       const vt = V().vaults.find((x) => x.name === st.vault) || { type: 'onepassword', status: 'ok' };
       let list = '';
       if (vt.status === 'fail') list = `<div class="callout danger small">${icon('x')} ${esc(vt.name)} is unreachable: ${esc(vt.detail)}. Nothing to browse until it unlocks.</div>`;
-      else if (st.vault === 'op') list = D.opItems.filter((i) => !st.q || `${i.title} ${i.website} ${i.vault}`.toLowerCase().includes(st.q.toLowerCase())).map((i) => `<div class="vb-item"><div class="vb-head"><span class="sc-ic sm">${icon('key')}</span><span class="grow"><b>${esc(i.title)}</b><span class="mono tiny muted">${esc(i.vault)} · ${esc(i.website.replace(/^https:\/\//, ''))}</span></span></div><div class="vb-fields">${i.fields.map(([l, t]) => `<button type="button" class="vs-chip" data-vb="op://${esc(i.vault)}/${esc(i.title)}/${esc(l)}${t === 'otp' ? '?attribute=otp' : ''}">${esc(l)} <span class="muted">${t === 'otp' ? 'one-time code' : t}</span></button>`).join('')}</div></div>`).join('') || '<div class="muted small">No item matches.</div>';
-      else list = V().secrets.filter((s) => s.vault === st.vault && (!st.q || s.ref.includes(st.q))).map((s) => { const path = s.ref.split('/').slice(1).join('/'); return `<button type="button" class="vb-path" data-vb='{{ vault "${esc(st.vault)}" "${esc(path)}" }}'>${icon('file')}<span class="mono">${esc(path)}</span></button>`; }).join('') || '<div class="muted small">No entries under this vault yet.</div>';
-      UI.$('#vb-body', d).innerHTML = `${UI.seg(V().vaults.filter((v) => v.type !== 'env').map((v) => [v.name, v.type === 'onepassword' ? '1Password' : v.name]), st.vault, 'vb-vault')}
+      else if (st.vault === 'op') list = D.opItems.filter((i) => !st.q || `${i.title} ${i.website} ${i.vault}`.toLowerCase().includes(st.q.toLowerCase())).map((i) => `<div class="vb-item"><div class="vb-head"><span class="sc-ic sm">${icon('key')}</span><span class="grow"><b>${esc(i.title)}</b><span class="mono tiny muted">${esc(i.vault)} · ${esc(i.website.replace(/^https:\/\//, ''))}</span></span></div><div class="vb-fields">${i.fields.map(([l, t]) => `<button type="button" class="vs-chip" data-vb='{{ vault "op" "${esc(i.vault)}/${esc(i.title)}/${esc(l)}${t === 'otp' ? '?attribute=otp' : ''}" }}'>${esc(l)} <span class="muted">${t === 'otp' ? 'one-time code' : t}</span></button>`).join('')}</div></div>`).join('') || '<div class="muted small">No item matches.</div>';
+      else list = V().secrets.filter((s) => s.vault === st.vault && (!st.q || s.ref.includes(st.q))).map((s) => { const path = s.key; return `<button type="button" class="vb-path" data-vb='{{ vault "${esc(st.vault)}" "${esc(path)}" }}'>${icon('file')}<span class="mono">${esc(path)}</span></button>`; }).join('') || '<div class="muted small">No entries under this vault yet.</div>';
+      UI.$('#vb-body', d).innerHTML = `${UI.seg(V().vaults.map((v) => [v.name, v.type === 'onepassword' ? `${v.name} · 1Password` : v.name]), st.vault, 'vb-vault')}
         <div class="input-icon">${icon('search')}<input class="input" id="vb-q" value="${esc(st.q)}" placeholder="search titles, websites, paths" aria-label="Search the vault"></div>
         <div class="vb-list">${list}</div><div class="muted tiny">Labels and references only: the dashboard never reads a value to show it here.</div>`;
       UI.$('#vb-q', d).addEventListener('input', (e) => { st.q = e.target.value; const pos = e.target.selectionStart; draw(); const q = UI.$('#vb-q', d); q.focus(); q.setSelectionRange(pos, pos); });
@@ -153,18 +154,19 @@
   VS.commit = (root, prefix) => {
     const els = VS.pending(root); if (!els.length) return Promise.resolve(true);
     const slug = (s) => String(s || 'value').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-    const items = els.map((el) => { const m = meta(el), inp = el.querySelector('.vs-in'); return { el, name: `${slug(prefix)}_${slug(m.k.split('.').pop())}`, len: inp.value.length, inp }; });
+    const items = els.map((el) => { const m = meta(el), inp = el.querySelector('.vs-in'); return { el, name: `${slug(prefix).replace(/_/g, '-')}-${slug(m.k.split('.').pop()).replace(/_/g, '-')}`, len: inp.value.length, inp }; });
     return UI.stepup({ title: `Store ${items.length} value${items.length > 1 ? 's' : ''} in the vault`, purpose: 'secret write', ok: 'Store with passkey', what: `{ purpose: <b>secret_write</b>, vault: <b>house</b>, keys: <b>${items.map((i) => esc(i.name) + ' (' + i.len + ' chars)').join(', ')}</b> }` }).then((ok) => {
       if (!ok) return false;
       items.forEach((i) => {
-        if (!D.secrets.some((s) => s.name === i.name)) D.secrets.unshift({ name: i.name, ref: `house/${i.name}`, vault: 'house', set: new Date().toISOString(), used: [] });
-        D.audit.unshift({ ts: new Date().toISOString(), event: 'secret_write', who: 'operator:ops', detail: `house/${i.name} · length ${i.len} · value not recorded`, run: '' });
+        const ref = `house/${i.name}`;
+        if (!D.secrets.some((s) => s.ref === ref)) D.secrets.unshift({ name: ref, ref, vault: 'house', key: i.name, alias: '', set: new Date().toISOString(), used: [] });
+        D.audit.unshift({ ts: new Date().toISOString(), event: 'secret_write', who: 'operator:ops', detail: `${ref} · length ${i.len} · value not recorded`, run: '' });
         i.inp.value = '';
-        const segBtn = i.el.querySelector('[data-act="vs-src"][data-v="secret"]');
-        i.el.dataset.pending = ''; i.el.dataset.src = 'secret';
+        const segBtn = i.el.querySelector('[data-act="vs-src"][data-v="vault"]');
+        i.el.dataset.pending = ''; i.el.dataset.src = 'vault';
         i.el.querySelectorAll('.vs-seg button').forEach((x) => { x.classList.toggle('on', x === segBtn); x.setAttribute('aria-pressed', x === segBtn); });
-        hid(i.el).value = `\${secret.${i.name}}`;
-        i.el.querySelector('.vs-body').innerHTML = body(meta(i.el), 'secret', hid(i.el).value, i.el.dataset.id);
+        hid(i.el).value = S.vaultExpr(ref);
+        i.el.querySelector('.vs-body').innerHTML = body(meta(i.el), 'vault', hid(i.el).value, i.el.dataset.id);
         VS.refresh(i.el, true);
       });
       S.save(); return true;
@@ -175,6 +177,6 @@
   UI.CREATE.env = (ctx, done) => UI.form({ drawer: true, caps: 'new env var · conductor.env', title: 'Add an env var', submit: 'Add', submitIcon: 'plus',
     intro: 'Daemon scope: written to <span class="mono">conductor.env</span> when you apply (with a backup), and the daemon restarts through the boot guard. Other scopes live on the runtime, bot, workflow or host.',
     fields: [{ k: 'name', type: 'string', req: true, ph: 'APP_USER', pattern: /^[A-Z_][A-Z0-9_]*$/, patternMsg: 'UPPER_SNAKE_CASE', validate: (v) => ((V().env || []).some((e) => e.name === v && e.scope === 'daemon') ? 'Already set in conductor.env' : '') },
-      { k: 'value', type: 'value', req: true, label: 'Value', sources: ['typed', 'secret', 'vault'], sensitive: !!ctx.sensitive, help: ctx.sensitive ? 'This feeds a sensitive field: pick a secret or a vault reference rather than plain text.' : '' }],
+      { k: 'value', type: 'value', req: true, label: 'Value', sources: ['typed', 'vault'], sensitive: !!ctx.sensitive, help: ctx.sensitive ? 'This feeds a sensitive field: reference a vault entry rather than plain text.' : '' }],
     onSubmit: (v) => { const p = VS.parse(v.value); S.stage('env', 'daemon:' + v.name, { scope: 'daemon', name: v.name, value: v.value, plain: p.src === 'typed' }); UI.refreshChrome(); done(v.name); } });
 })();

@@ -1,4 +1,4 @@
-// Add a login (#182): three methods, each ending in a binding and the diff;
+// Add a login: three methods, each ending in a binding and the diff;
 // Test login; the Logins tab; inline "+ Add a login" in credential pickers.
 // No secret value ever reaches the DOM or the saved state.
 const { test, expect, go, isPhone, applyStaged } = require('./fixtures');
@@ -10,11 +10,11 @@ async function leaked(page, ...values) {
 }
 async function bind(page, name, origin, who) {
   await page.fill('#f-name', name);
-  const origins = page.locator('#la-bind [data-listk="origins"]');
-  await origins.locator('input.list-add').fill(origin);
-  await origins.locator('input.list-add').press('Enter');
-  await page.locator('#la-bind [data-listk="allow"] select').selectOption(who);
-  await expect(page.locator('#f-operator_only')).toBeChecked(); // operator-started cases only, on by default
+  await page.fill('#f-origin', origin);
+  await page.locator('#la-bind [data-listk="identities"] select').selectOption(who);
+  // folders are never principals; the "work you started" rule is shown, not a toggle
+  expect(await page.locator('#la-bind [data-listk="identities"] select option').allTextContents()).not.toContain(expect.stringMatching(/^folder:/));
+  await expect(page.locator('#la-bind')).toContainText('work you started');
 }
 
 test('username & password: TOTP preview, password stored write-only behind a passkey, references in the diff', async ({ page }) => {
@@ -32,39 +32,42 @@ test('username & password: TOTP preview, password stored write-only behind a pas
   await bind(page, 'wiki', 'https://wiki.example.com', 'bot:platform-sre');
   await page.locator('[data-act="la-save"]').click();
   await page.locator('#su-go').click();
-  await expect(page.locator('.diff')).toContainText('wiki:');
-  await expect(page.locator('.diff')).toContainText('operator_only: true');
-  await expect(page.locator('.diff')).toContainText('${secret.login_wiki_password}');
-  expect(await leaked(page, PASSWORD, SEED)).toEqual([]);
+  await expect(page.locator('.diff')).toContainText('name: wiki');
+  await expect(page.locator('.diff')).toContainText('identities: [bot:platform-sre]');
+  await expect(page.locator('.diff')).toContainText('key: login-wiki-password');
+  expect(await leaked(page, PASSWORD, SEED, 'svc-wiki')).toEqual([]);
   await applyStaged(page);
   await go(page, '#/browser/logins');
   const row = page.locator('[data-login="wiki"]');
-  await expect(row).toContainText('secret: login_wiki_password');
-  await expect(row).toContainText('secret: login_wiki_otp');
-  expect(await page.evaluate(() => window.D.secrets.filter((s) => s.ref.startsWith('house/login/wiki/')).length)).toBe(2);
+  await expect(row).toContainText('house · login-wiki-password');
+  await expect(row).toContainText('house · login-wiki-otp');
+  expect(await page.evaluate(() => window.D.secrets.filter((s) => s.ref.startsWith('house/login-wiki-')).length)).toBe(3);
   expect(await leaked(page, PASSWORD, SEED)).toEqual([]);
 });
 
-test('from a vault: browse 1Password items (labels only); one item fills all three fields with op:// references', async ({ page }) => {
+test('from a vault: browse 1Password items (labels only); one item fills all three fields with vault references', async ({ page }) => {
   await go(page, '#/browser/add', { fresh: true });
   await page.locator('[data-act="la-method"][data-m="vault"]').click();
   await expect(page.locator('#la-items .item')).toHaveCount(5);
   await page.fill('#la-q', 'graf');
   await expect(page.locator('#la-items .item')).toHaveCount(1);
   await page.locator('#la-items [data-act="la-item"]').first().click();
-  await expect(page.locator('#la-username')).toHaveValue('op://Agents/Grafana/username');
-  await expect(page.locator('#la-password')).toHaveValue('op://Agents/Grafana/password');
-  await expect(page.locator('#la-otp')).toHaveValue('op://Agents/Grafana/one-time password?attribute=otp');
+  await expect(page.locator('#la-username')).toHaveValue('{{ vault "op" "Agents/Grafana/username" }}');
+  await expect(page.locator('#la-password')).toHaveValue('{{ vault "op" "Agents/Grafana/password" }}');
+  await expect(page.locator('#la-otp')).toHaveValue('{{ vault "op" "Agents/Grafana/one-time password?attribute=otp" }}');
   await page.locator('[data-act="la-creds"]').click();
   // the item's website becomes the suggested origin
-  await expect(page.locator('#la-bind [data-listk="origins"]')).toContainText('https://grafana.example.com');
+  await expect(page.locator('#f-origin')).toHaveValue('https://grafana.example.com');
   await page.fill('#f-name', 'grafana-ro');
-  await page.locator('#la-bind [data-listk="allow"] select').selectOption('team:platform');
+  // a team entry adds every bot on it now: access goes to bots
+  await page.locator('#la-bind [data-listk="identities"] select').selectOption('team:platform');
   await page.locator('[data-act="la-save"]').click();
-  await expect(page.locator('.diff')).toContainText('op://Agents/Grafana/password');
+  await expect(page.locator('.diff')).toContainText('key: Agents/Grafana/password');
+  await expect(page.locator('.diff')).toContainText('bot:platform-sre');
+  await expect(page.locator('.diff')).not.toContainText('team:platform');
   await applyStaged(page);
   await go(page, '#/browser/logins');
-  await expect(page.locator('[data-login="grafana-ro"]')).toContainText('op://Agents/Grafana/username');
+  await expect(page.locator('[data-login="grafana-ro"]')).toContainText('op · Agents/Grafana/username');
 });
 
 test('sign in yourself goes to the takeover on desktop; on the phone it is disabled with a reason', async ({ page }) => {
@@ -108,18 +111,19 @@ test('"+ Add a login" inside a credential picker: typed password stored, login s
   await page.locator('[data-listk="credentials"] select').selectOption('__new__');
   await expect(page.locator('.cdrawer')).toContainText('Add a login');
   await page.fill('#d-name', 'runbooks');
-  const o = page.locator('.cdrawer [data-listk="origins"] input.list-add'); await o.fill('https://runbooks.example.com'); await o.press('Enter');
+  await page.fill('#d-origin', 'https://runbooks.example.com');
+  await page.locator('.cdrawer .vs[data-vs="username"] [data-act="vs-src"][data-v="typed"]').click();
   await page.fill('#d-username-in', 'svc-runbooks');
   await page.locator('.cdrawer .vs[data-vs="password"] [data-act="vs-src"][data-v="typed"]').click();
   await page.fill('#d-password-in', PASSWORD);
-  await page.locator('.cdrawer [data-listk="allow"] select').selectOption('team:platform');
+  await page.locator('.cdrawer [data-listk="identities"] select').selectOption('team:platform');
   await page.locator('#dr-submit').click();
   await page.locator('#su-go').click();
   await expect(page.locator('.cdrawer')).toHaveCount(0);
   await expect(page.locator('[data-listk="credentials"]')).toContainText('runbooks');
   await page.locator('#gen-submit').click();
-  await expect(page.locator('.diff')).toContainText('runbooks:');
-  await expect(page.locator('.diff')).toContainText('${secret.login_runbooks_password}');
+  await expect(page.locator('.diff')).toContainText('name: runbooks');
+  await expect(page.locator('.diff')).toContainText('key: login-runbooks-password');
   expect(await leaked(page, PASSWORD)).toEqual([]);
   await applyStaged(page);
 });

@@ -58,19 +58,19 @@
     onSubmit: (v) => { const n = { type: v.type }; if (v.unlock) n[v.type === 'conductor' ? 'unlock' : 'token'] = v.unlock; stage('vaults', v.name, n, done); } });
   C.secret = (ctx, done) => {
     const writable = V().vaults.filter((x) => x.writable !== false && x.status !== 'fail' && x.type !== 'onepassword');
-    drawer({ caps: 'new secret · write-only', title: 'New secret', intro: 'A secret\'s value is never config: it goes straight to the vault (with your passkey) and only its reference is used here.',
+    drawer({ caps: 'new vault entry · write-only', title: 'New vault entry', intro: 'A value is never config: it goes straight to a writable vault (with your passkey), and config references it as {{ vault "&lt;vault&gt;" "&lt;key&gt;" }}.',
       values: { vault: ctx.vault && writable.some((x) => x.name === ctx.vault) ? ctx.vault : (writable[0] || {}).name },
-      fields: [{ k: 'name', type: 'string', req: true, ph: 'e.g. pagerduty-ui', pattern: /^[\w./-]+$/, patternMsg: 'letters, digits, . _ / -' }, { k: 'vault', type: 'enum', req: true, options: writable.map((x) => x.name), create: 'vault', createLabel: 'New vault' }, { k: 'value', type: 'text', req: true, label: 'Value · write-only' }],
+      fields: [{ k: 'vault', type: 'enum', req: true, options: writable.map((x) => x.name), create: 'vault', createLabel: 'New vault' }, { k: 'key', type: 'string', req: true, label: 'Key', ph: 'e.g. pagerduty-ui', pattern: /^[\w./-]+$/, patternMsg: 'letters, digits, . _ / -' }, { k: 'value', type: 'text', req: true, label: 'Value · write-only' }],
       submit: 'Store with passkey', submitIcon: 'passkey',
       onSubmit: (v, form) => {
         const len = v.value.length; form.querySelector('textarea').value = '';
-        UI.stepup({ title: `Store ${esc(v.name)}`, purpose: 'secret write', what: `{ purpose: <b>secret_write</b>, vault: <b>${esc(v.vault)}</b>, key: <b>${esc(v.name)}</b>, length: <b>${len}</b> }`, ok: 'Write with passkey' }).then((ok) => {
+        UI.stepup({ title: `Store ${esc(v.vault)}/${esc(v.key)}`, purpose: 'secret write', what: `{ purpose: <b>secret_write</b>, vault: <b>${esc(v.vault)}</b>, key: <b>${esc(v.key)}</b>, length: <b>${len}</b> }`, ok: 'Write with passkey' }).then((ok) => {
           if (!ok) return;
-          const ref = `${v.vault}/${v.name}`;
-          D.secrets.unshift({ name: v.name, ref, vault: v.vault, set: new Date().toISOString(), used: [] });
+          const ref = `${v.vault}/${v.key}`;
+          D.secrets.unshift({ name: ref, ref, vault: v.vault, key: v.key, alias: '', set: new Date().toISOString(), used: [] });
           D.audit.unshift({ ts: new Date().toISOString(), event: 'secret_write', who: 'operator:ops', detail: `${ref} · length ${len} · value not recorded`, run: '' });
           S.save(); form.closest('.drawer-scrim').remove();
-          done({ name: v.name, ref, expr: `{{ vault "${v.vault}" "${v.name}" }}`, key: v.name, vault: v.vault });
+          done({ name: ref, ref, expr: S.vaultExpr(ref), key: v.key, vault: v.vault });
         });
         return false;
       } });
@@ -80,20 +80,24 @@
    * to who may use it. Signing in yourself needs a desktop browser takeover,
    * so it stays on Browsers → Add a login. */
   C.credential = (ctx, done) => {
-    const allow = S.view().bots.map((b) => 'bot:' + b.name).concat(S.view().teams.map((t) => 'team:' + t.name), UI.allFolders(false).map((f) => 'folder:' + f));
     const who = ctx.identity && /^bot:/.test(ctx.identity) ? [ctx.identity] : ctx.bot ? ['bot:' + ctx.bot] : [];
-    drawer({ caps: 'add a login · browser.credentials', title: 'Add a login', wide: true, values: { allow: who, operator_only: true },
-      intro: 'Each field can be typed or come from an env var, a secret or a vault; only references are kept, and a typed password goes to the vault with your passkey. To sign in yourself, use <a class="link" href="#/browser/takeover">the sign-in takeover</a> on a desktop.',
+    drawer({ caps: 'add a login · browser.credentials', title: 'Add a login', wide: true, values: { identities: who },
+      intro: 'conductor signs in for the bot; the bot never sees a value. Each value is a vault entry: pick one, or type it and it goes to conductor\'s vault with your passkey. To sign in yourself, use <a class="link" href="#/browser/takeover">the sign-in takeover</a> on a desktop.',
       fields: [{ k: 'name', type: 'string', req: true, pattern: /^[a-z][\w-]*$/, patternMsg: 'letters, digits, - and _', validate: taken(() => V().access.credentials) },
-        { k: 'origins', type: 'list', req: true, label: 'Exact origins', ph: 'https://grafana.example.com', validate: (v) => ((v || []).find((o) => !/^https:\/\/[\w.-]+(:\d+)?$/.test(o)) ? 'Each origin is https:// plus a host, no path.' : '') },
-        { k: 'username', type: 'value', req: true, label: 'Username' },
-        { k: 'password', type: 'value', req: true, sensitive: true, label: 'Password' },
-        { k: 'otp', type: 'value', sensitive: true, otp: true, label: 'TOTP' },
-        { k: 'allow', type: 'select-multi', req: true, label: 'Who may use it', options: allow },
-        { k: 'operator_only', type: 'bool', on: 'Only in cases an operator started (recommended)' }],
-      note: note('login binding'), submit: 'Add login', submitIcon: 'plus', secretPrefix: (form) => 'login_' + ((form.querySelector('[data-k="name"]') || {}).value || 'new'),
-      onSubmit: (v) => { const n = { method: UI.VS.parse(v.password).src === 'vault' ? 'vault' : 'password', origin: v.origins[0], origins: v.origins, allow: v.allow, operator_only: !!v.operator_only, username: v.username, password: v.password }; if (v.otp) n.otp = v.otp; n.fields = ['username', 'password'].concat(v.otp ? ['otp'] : []); stage('credentials', v.name, n, done); } });
+        { k: 'origin', type: 'string', req: true, label: 'Exact origin', ph: 'https://grafana.example.com', validate: (v) => (/^https:\/\/[\w.-]+(:\d+)?(\/[\w./-]*)?$/.test(v || '') ? '' : 'https:// plus a host (and an optional path prefix)') },
+        { k: 'username', type: 'value', req: true, label: 'Username', sources: ['typed', 'vault'], vaultOnly: true },
+        { k: 'password', type: 'value', req: true, sensitive: true, label: 'Password', sources: ['typed', 'vault'] },
+        { k: 'otp', type: 'value', sensitive: true, otp: true, label: 'One-time code (TOTP)', sources: ['typed', 'vault'] },
+        { k: 'identities', type: 'select-multi', req: true, label: 'Which bots may use it', options: UI.identityOptions(), help: 'Bots by name. A team entry adds every bot on it now (later bots don\'t inherit it): access is granted to bots, never to a folder.' },
+        { k: 'approval', type: 'bool', label: 'Phone approval', on: 'the site asks for an approval on your phone after sign-in' }],
+      note: note('login binding') + ' It is used only on work you started (conductor\'s rule, not a setting).', submit: 'Add login', submitIcon: 'plus', secretPrefix: (form) => 'login-' + ((form.querySelector('[data-k="name"]') || {}).value || 'new'),
+      onSubmit: (v) => { stage('credentials', v.name, UI.credFromForm(v), done); } });
   };
+  /** Identities a login can name: bots, agent identities, and a team shortcut (expanded to its bots). */
+  UI.identityOptions = () => V().bots.map((b) => ['bot:' + b.name, `${b.name}${b.cfg && b.cfg.team ? ' · team ' + b.cfg.team : ' · solo'}`]).concat(V().teams.map((t) => ['team:' + t.name, `every bot on team ${t.name} (now)`]), V().identities.filter((i) => /^agent:/.test(i.id)).map((i) => [i.id, i.id]));
+  UI.expandIdentities = (ids) => [...new Set((ids || []).flatMap((id) => (/^team:/.test(id) ? V().bots.filter((b) => b.cfg && b.cfg.team === id.slice(5)).map((b) => 'bot:' + b.name) : [id])))];
+  const refOf = (expr) => { const p = UI.VS.parse(expr); return p.src === 'vault' && !p.retired ? { vault: p.vault, key: p.path } : null; };
+  UI.credFromForm = (v) => { const n = { origin: v.origin, identities: UI.expandIdentities(v.identities) }; ['username', 'password', 'otp'].forEach((f) => { const r = v[f] && refOf(v[f]); if (r) n[f] = r; }); if (v.approval) n.approval = true; if (v.login_url) n.login_url = v.login_url; return n; };
   C.host = (ctx, done) => drawer({ caps: 'new host', title: 'New host', fields: [Object.assign({ k: 'name', type: 'string', req: true, validate: taken(() => V().hosts) }, NAME), { k: 'addr', type: 'string', req: true, ph: 'box.tail0000.ts.net' }, { k: 'user', type: 'string', req: true, def: 'conductor' }], note: note('host'),
     onSubmit: (v) => stage('hosts', v.name, { addr: v.addr, user: v.user }, done) });
   C.workflow = (ctx, done) => drawer({ caps: 'new reusable workflow · workflows:', title: 'New workflow', intro: 'Starts with its inputs and no steps; open it in the builder to add them.',

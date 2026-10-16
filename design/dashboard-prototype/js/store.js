@@ -144,8 +144,8 @@
   });
   listColl('vaults', () => D().vaults, {
     label: 'vault', href: () => '#/secrets',
-    set(k, node) { const L = D().vaults; if (node == null) return drop(L, k); const it = byName(L, k); if (it) { it.cfg = node; it.type = node.type; if (it.name === 'hcv' && node.token && node.token !== 'env:VAULT_TOKEN') { it.status = 'ok'; it.detail = 'KV v2 · token from ' + node.token; } } else L.push({ name: k, type: node.type, status: 'ok', detail: `${node.type} · added from the dashboard`, writable: node.type !== 'onepassword', count: 0, cfg: node }); },
-    validate(k, n) { return /^[a-z][a-z0-9-]*$/.test(k) ? [] : [`vault name "${k}": lowercase letters, digits and dashes`]; },
+    set(k, node) { const L = D().vaults; if (node == null) return drop(L, k); const it = byName(L, k); if (it) { it.cfg = node; it.type = node.type; const tok = S.getPath(node, 'unlock.token'); if (it.name === 'hcv' && tok && tok !== 'env:VAULT_TOKEN') { it.status = 'ok'; it.detail = 'KV v2 · token from ' + tok; } } else L.push({ name: k, type: node.type, status: 'ok', detail: `${node.type} · added from the dashboard`, writable: node.type !== 'onepassword', count: 0, cfg: node }); },
+    validate(k, n) { const e = []; if (!/^[a-z][a-z0-9-]*$/.test(k)) e.push(`vault name "${k}": lowercase letters, digits and dashes`); const KEYS = { conductor: ['type', 'path', 'unlock'], onepassword: ['type', 'account', 'service_account'], pass: ['type', 'prefix'], file: ['type', 'dir'], hashicorp: ['type', 'addr', 'mount', 'namespace', 'unlock'] }[n.type]; if (!KEYS) e.push(`vaults.${k}.type: conductor, onepassword, pass, file or hashicorp`); else Object.keys(n).forEach((x) => { if (!KEYS.includes(x)) e.push(`vaults.${k}.${x}: not a ${n.type} vault key (${KEYS.slice(1).join(', ')})`); }); if (n.type === 'file' && !n.dir) e.push(`vaults.${k}.dir: required for a file vault`); if (n.type === 'hashicorp' && !n.addr) e.push(`vaults.${k}.addr: required`); return e; },
     refs(k, all) { return all.secrets.filter((s) => s.vault === k).map((s) => s.used[0] || s.name).filter(Boolean); },
   });
   C.settings = { section: 'settings', file: 'config.yaml', label: 'setting', href: () => '#/secrets',
@@ -155,24 +155,28 @@
     validate(k, v, all) { const e = []; if (!/^[a-z_][a-z0-9_]*$/.test(k)) e.push(`settings.${k}: names are lowercase snake_case`); const m = String(v).match(/\$\{settings\.(\w+)\}/g) || []; m.forEach((x) => { const n = x.slice(11, -1); if (!byName(all.settings, n)) e.push(`settings.${k}: \${settings.${n}} does not exist`); if (n === k) e.push(`settings.${k} refers to itself`); }); return e; },
     refs(k, all) { const s = byName(all.settings, k); return s && s.used ? [`${s.used} reference${s.used > 1 ? 's' : ''} in config`] : []; },
   };
+  /* secrets: an entry is <vault>/<key>; "repointing" one rewrites every place that uses it to another
+   * entry, in the one syntax: {{ vault "<vault>" "<key>" }} (browser credentials: { vault, key }). */
+  const splitRef = (ref) => { const i = String(ref).indexOf('/'); return [ref.slice(0, i), ref.slice(i + 1)]; };
+  S.vaultExpr = (ref) => { const [v, k] = splitRef(ref); return `{{ vault "${v}" "${k}" }}`; };
   C.secrets = { section: 'secrets', file: 'config.yaml', label: 'secret reference', href: () => '#/secrets',
-    keys: () => D().secrets.map((s) => s.name), get: (k) => { const s = byName(D().secrets, k); return s ? s.ref : null; },
+    keys: () => D().secrets.map((s) => s.ref), get: (k) => { const s = byName(D().secrets, k); return s ? s.ref : null; },
     set: (k, ref) => {
       if (ref == null) return drop(D().secrets, k);
-      const v = ref.startsWith('op://') ? 'op' : ref.startsWith('env:') ? 'env' : ref.split('/')[0];
-      const s = byName(D().secrets, k); if (s) { s.ref = ref; s.vault = v; } else D().secrets.push({ name: k, ref, vault: v, set: null, used: [] });
-      // a reference is written where it is used: {{ vault "<v>" "<key>" }}, or ${NAME} for env
-      const expr = v === 'env' ? '${' + ref.slice(4) + '}' : v === 'op' ? `{{ vault "op" "${ref.replace('op://', '')}" }}` : `{{ vault "${v}" "${ref.split('/').slice(1).join('/')}" }}`;
-      ((s && s.used) || []).forEach((u) => {
+      const [v, key] = splitRef(ref);
+      const s = byName(D().secrets, k);
+      if (!s) { D().secrets.push({ name: ref, ref, vault: v, key, alias: '', set: null, used: [] }); return; }
+      Object.assign(s, { ref, vault: v, key, name: ref });
+      (s.used || []).forEach((u) => {
         const [sec, name, ...rest] = u.split('.');
-        const coll = { connectors: D().connectors, packs: D().packs, vaults: D().vaults }[sec];
+        if (sec === 'browser') { const c = byName(D().access.credentials, name); if (c && c.cfg) c.cfg[rest[0]] = { vault: v, key }; return; }
+        const coll = { connectors: D().connectors, packs: D().packs }[sec];
         const it = coll && byName(coll, name); if (!it || !it.cfg) return;
-        if (sec === 'vaults') { if (v === 'env') it.cfg.token = ref; return; }
-        S.setPath(it.cfg, rest.join('.'), expr);
+        S.setPath(it.cfg, rest.join('.'), S.vaultExpr(ref));
       });
     },
-    path: (k) => { const s = byName(D().secrets, k); return (s && s.used[0]) || `secrets.${k}`; },
-    validate(k, ref, all) { const v = ref.startsWith('op://') ? 'op' : ref.startsWith('env:') ? 'env' : ref.split('/')[0]; if (v === 'env') return []; const vv = byName(all.vaults, v); return !vv ? [`${k}: ref "${ref}" names no vault`] : vv.status === 'fail' ? [`${k}: vault ${v} is unreachable, so ${ref} can't be checked`] : []; },
+    path: (k) => { const s = byName(D().secrets, k); return (s && s.used[0]) || `vaults.${k.split('/')[0]}`; },
+    validate(k, ref, all) { if (!/^[a-z][\w-]*\/.+/.test(ref || '')) return [`${k}: "${ref}" is not <vault>/<key>`]; const [v] = splitRef(ref); const vv = byName(all.vaults, v); return !vv ? [`${k}: no vault "${v}" (a reference to an unknown vault fails conductor validate)`] : vv.status === 'fail' ? [`${k}: vault ${v} is unreachable, so the reference can't be checked`] : []; },
     refs(k, all) { const s = byName(all.secrets, k); return s ? s.used : []; },
   };
   C.bots = { section: 'bots', file: 'config.yaml', label: 'bot', href: (k) => `#/bots/${k}/settings`,
@@ -220,17 +224,21 @@
     validate(k, n) { const e = []; (n.allow || []).forEach((h) => { if (h === '*' || h.startsWith('*.')) e.push(`browser.identities["${k}"].allow: a "${h}" allowlist is refused; name the sites`); }); (n.logins || []).forEach((h) => { if (!(n.allow || []).includes(h)) e.push(`browser.identities["${k}"].logins: ${h} must also be in allow`); }); return e; },
     widens(b, a) { const r = [], B = b || {}, A = a || {}; (A.allow || []).forEach((h) => { if (!(B.allow || []).includes(h)) r.push(`allows site ${h}`); }); (A.logins || []).forEach((h) => { if (!(B.logins || []).includes(h)) r.push(`adds login ${h}`); }); if (A.evaluate && A.evaluate !== 'off' && A.evaluate !== B.evaluate) r.push(`turns evaluate ${A.evaluate}`); return r; },
   };
-  C.credentials = { section: 'browser', file: 'config.yaml', label: 'credential binding', href: () => '#/bots/platform-sre/access',
+  /* browser.credentials (feat/agent-browser): a list of { name, origin, identities, login_url?, username/password/otp/passkey: { vault, key }, approval? } */
+  C.credentials = { section: 'browser', file: 'config.yaml', label: 'credential binding', href: () => '#/browser/logins',
     keys: () => D().access.credentials.map((c) => c.name), get: (k) => { const c = byName(D().access.credentials, k); return c ? clone(c.cfg) : null; },
-    set: (k, n) => { const L = D().access.credentials; if (n == null) return drop(L, k); const c = byName(L, k); const patch = { cfg: n, origin: n.origin, identity: n.identity, fields: (n.fields || []).join(', '), vault: n.vault, ref: n.ref }; if (c) Object.assign(c, patch); else L.push(Object.assign({ name: k }, patch)); },
-    path: (k) => `browser.credentials.${k}`,
-    validate(k, n, all) { const e = []; (n.origins || [n.origin]).forEach((o) => { if (!/^https:\/\/[\w.-]+(:\d+)?$/.test(o || '')) e.push(`browser.credentials.${k}: "${o || ''}" must be an exact https:// origin`); });
-      if (n.allow && !n.allow.length) e.push(`browser.credentials.${k}.allow: bind it to at least one bot, team or folder`);
-      if (n.method === 'session' || n.method === 'passkey') return e; // a saved session or a passkey lives in the browser profile, not a vault
-      if (n.password || n.username) { ['username', 'password', 'otp'].forEach((f) => { if (!n[f]) { if (f !== 'otp') e.push(`browser.credentials.${k}.${f} is required`); return; } if (UI.VS.blocked(f !== 'username', n[f])) e.push(`browser.credentials.${k}.${f}: a sensitive value can't come from a setting`); const r = UI.VS.resolve(n[f]); if (r.state === 'fail') e.push(`browser.credentials.${k}.${f}: doesn't resolve (${r.why})`); }); return e; }
-      const v = byName(all.vaults, n.vault); if (!v) e.push(`browser.credentials.${k}.vault: no vault "${n.vault}"`); else if (v.status === 'fail') e.push(`browser.credentials.${k}: vault ${n.vault} is unreachable`); if (!(n.fields || []).length) e.push(`browser.credentials.${k}.fields: pick at least one field`); return e; },
-    widens: (b, a) => (a && !b ? [`binds credential to ${a.identity}`] : a && b && a.identity !== b.identity ? [`rebinds credential to ${a.identity}`] : []),
-  };
+    set: (k, n) => { const L = D().access.credentials; if (n == null) return drop(L, k); const c = byName(L, k); const patch = { cfg: Object.assign({ name: k }, n), origin: n.origin, identities: n.identities || [] }; if (c) Object.assign(c, patch); else L.push(Object.assign({ name: k }, patch)); },
+    path: (k) => `browser.credentials[name=${k}]`,
+    validate(k, n, all) {
+      const e = [], P = `browser.credentials[${k}]`;
+      Object.keys(n).forEach((f) => { if (!['name', 'origin', 'identities', 'login_url', 'username', 'password', 'otp', 'passkey', 'approval', 'email_code'].includes(f)) e.push(`${P}.${f}: not a credential key (field ${f} not found in type config.BrowserCredential)`); });
+      if (!/^https:\/\/[\w.-]+(:\d+)?(\/[\w./-]*)?$/.test(n.origin || '')) e.push(`${P}.origin: "${n.origin || ''}" must be an exact https:// origin (scheme://host[:port], optional path prefix)`);
+      if (!(n.identities || []).length) e.push(`${P}.identities: name at least one identity that may use it (a bot: bot:<name>)`);
+      (n.identities || []).forEach((id) => { if (/^(folder|team):/.test(id)) e.push(`${P}.identities: "${id}" is not an identity; folders and teams don't hold access (name the bots)`); else if (/^bot:/.test(id) && !byName(all.bots, id.slice(4))) e.push(`${P}.identities: no bot "${id.slice(4)}"`); });
+      ['username', 'password', 'otp', 'passkey'].forEach((f) => { const r = n[f]; if (r == null) return; if (typeof r !== 'object' || !r.vault || !r.key) return e.push(`${P}.${f}: { vault, key } naming where the value lives, never a value`); const v = byName(all.vaults, r.vault); if (!v) e.push(`${P}.${f}: no vault "${r.vault}"`); else if (v.status === 'fail') e.push(`${P}.${f}: vault ${r.vault} is unreachable`); });
+      if (!n.passkey && !(n.username && n.password)) e.push(`${P}: needs username and password (or a passkey)`);
+      return e; },
+  };;
   C.packs = { section: 'packs', file: 'config.yaml', label: 'pack', href: () => '#/extensions/packs',
     keys: () => D().packs.map((p) => p.name), get: (k) => { const p = byName(D().packs, k); return p ? clone(p.cfg) : null; },
     set(k, n) { const L = D().packs; if (n == null) return drop(L, k); const p = byName(L, k); const ver = (n.use.split('@')[1] || '').replace('^', ''); const ov = Object.keys(n.steps || {}).length + Object.keys(n.triggers || {}).length; if (p) { const moved = ver && p.update && ver === p.update; Object.assign(p, { cfg: n, use: n.use.split('@')[0], hold: !!n.hold, overrides: ov, ver: moved ? ver : p.ver, update: moved ? null : p.update, sha: moved ? '0e47d12' : p.sha }); } else L.push({ name: k, use: n.use.split('@')[0], ver: ver || '1.0.0', sha: 'b51d0a2', status: 'ok', official: n.use.startsWith('conductor-packs/'), hold: !!n.hold, triggers: '0 armed / 1 · arm one to start', overrides: ov, cfg: n }); },
@@ -278,7 +286,7 @@
       promote: { v: (S.getPath(n, 'autonomy.promote') || []).length ? S.getPath(n, 'autonomy.promote') : [], src: d.autonomy && d.autonomy.promote === false ? 'blocked' : 'own' },
       approvalTtl: pick(S.getPath(n, 'autonomy.approval_ttl'), S.getPath(d, 'autonomy.approval_ttl')),
       proactive: pick(n.proactive && n.proactive.budget, S.getPath(d, 'budget.proactive_pool')),
-      credentials: { v: st.access.credentials.filter((c) => c.identity === 'bot:' + m.name).map((c) => c.name), scope: S.getPath(d, 'browser.credentials') },
+      credentials: { v: st.access.credentials.filter((c) => (c.identities || []).includes('bot:' + m.name)).map((c) => c.name), scope: S.getPath(d, 'browser.credentials') },
       logins: { v: (st.identities.find((i) => i.id === 'bot:' + m.name) || {}).logins || [], scope: S.getPath(d, 'browser.logins') },
       peersIn: t ? st.bots.filter((x) => x.name !== m.name && x.cfg && x.cfg.team === t.name).map((x) => x.name) : [],
       peersOut: (n.peers || []).filter((p) => { const o = byName(st.bots, p); return !t || !o || !o.cfg || o.cfg.team !== t.name; }),
@@ -296,7 +304,7 @@
     if (S.getPath(d, 'isolation.mode') === 'container' && n.isolation && n.isolation.mode && n.isolation.mode !== 'container') e.push(`bots.${k}.isolation: team ${t.name} requires container; ${n.isolation.mode} would widen it`);
     const pool = S.getPath(d, 'budget.proactive_pool'), mb = n.proactive && n.proactive.budget;
     if (pool && mb) { if (mb.max_runs_per_day > pool.max_runs_per_day) e.push(`bots.${k}.proactive.budget.max_runs_per_day: ${mb.max_runs_per_day} is over the team pool (${pool.max_runs_per_day})`); if (mb.max_cost_per_day > pool.max_cost_per_day) e.push(`bots.${k}.proactive.budget.max_cost_per_day: ${mb.max_cost_per_day} is over the team pool (${pool.max_cost_per_day})`); }
-    const scope = S.getPath(d, 'browser.credentials'); if (scope) all.access.credentials.filter((c) => c.identity === 'bot:' + k && !scope.includes(c.name)).forEach((c) => e.push(`browser.credentials.${c.name}: bound to bot:${k}, outside team ${t.name}'s credential scope`));
+    const scope = S.getPath(d, 'browser.credentials'); if (scope) all.access.credentials.filter((c) => (c.identities || []).includes('bot:' + k) && !scope.includes(c.name)).forEach((c) => e.push(`browser.credentials.${c.name}: bound to bot:${k}, outside team ${t.name}'s credential scope`));
     const ls = S.getPath(d, 'browser.logins'); const idn = all.identities.find((i) => i.id === 'bot:' + k); if (ls && idn) (idn.logins || []).filter((h) => !ls.includes(h)).forEach((h) => e.push(`browser.identities["bot:${k}"].logins: ${h} is outside team ${t.name}'s login scope`));
     (n.peers || []).forEach((p) => { const o = byName(all.bots, p); const ot = o && o.cfg && o.cfg.team; if (ot && ot !== n.team && !((t.cfg.links || []).includes(ot))) e.push(`bots.${k}.peers: ${p} is in team ${ot}; teams ${n.team} and ${ot} are isolated until linked (teams.${n.team}.links)`); });
     return e;
@@ -353,8 +361,15 @@
     sec('bots', Object.fromEntries(st.bots.map((m) => [m.name, m.cfg])));
     sec('collections', Object.fromEntries((st.collections || []).map((c) => [c.name, c.cfg])));
     const br = {};
-    if (st.identities.length) br.identities = Object.fromEntries(st.identities.map((i) => [i.id, { allow: i.allow, logins: i.logins, evaluate: i.evaluate }]));
-    if (st.access.credentials.length) br.credentials = Object.fromEntries(st.access.credentials.map((c) => [c.name, c.cfg]));
+    // the real shape: one allowlist, logins per site with the identities that may use them, evaluate per identity
+    if (st.identities.length) {
+      br.allow = [...new Set(st.identities.flatMap((i) => i.allow || []))];
+      const sites = [...new Set(st.identities.flatMap((i) => i.logins || []))];
+      if (sites.length) br.logins = sites.map((site) => ({ site, identities: st.identities.filter((i) => (i.logins || []).includes(site)).map((i) => i.id) }));
+      const ev = st.identities.filter((i) => i.evaluate && i.evaluate !== 'off').map((i) => i.id);
+      if (ev.length) br.evaluate = ev;
+    }
+    if (st.access.credentials.length) br.credentials = st.access.credentials.map((c) => Object.assign({ name: c.name }, c.cfg));
     sec('browser', br);
     sec('packs', Object.fromEntries(st.packs.map((p) => [p.name, p.cfg])));
     sec('usage', st.usageCfg);

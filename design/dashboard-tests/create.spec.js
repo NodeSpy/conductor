@@ -43,23 +43,26 @@ test('a connector instance created from inside a workflow step; one combined dif
   expect(await page.evaluate(() => D.connectors.some((c) => c.name === 'gh-bot'))).toBe(true);
 });
 
-test('a secret created from inside a credential binding (value to the vault, binding staged)', async ({ page }) => {
+test('a vault entry created from inside a login created from inside a binding (values to the vault, one diff)', async ({ page }) => {
   await go(page, '#/bots/platform-sre/access');
   await page.locator('[data-act="cred-bind"]').first().click();
-  await page.fill('#f-name', 'docs-admin'); await page.fill('#f-origin', 'https://docs.example.com');
-  await page.selectOption('#f-identity', 'agent:docs@acme/web');
-  await page.locator('[data-listk="fields"] select').selectOption('password');
-  await pickNew(page, '#f-ref');
-  await page.fill('#d-name', 'docs-admin-pw'); await page.fill('#d-value', 's3cret-value-xyz');
-  await page.locator('#dr-submit').click();
+  await pickNew(page, '#f-cred');
+  await page.fill('#d-name', 'docs-admin'); await page.fill('#d-origin', 'https://docs.example.com');
+  await page.fill('#d-username-in', 'svc-docs-91');
+  await page.locator('#d-password-pick').selectOption('__new__');
+  await page.fill('#d-key', 'docs-admin-pw'); await page.fill('#d-value', 's3cret-value-xyz');
+  await page.locator('#dr-submit').last().click();
   await page.locator('#su-go').click();
-  await expect(page.locator('#f-ref')).toHaveValue('house/docs-admin-pw');
-  await expect(page.locator('#f-name')).toHaveValue('docs-admin'); // the parent kept its unsaved state
+  await expect(page.locator('#d-password')).toHaveValue('{{ vault "house" "docs-admin-pw" }}');
+  await expect(page.locator('#d-name')).toHaveValue('docs-admin'); // the parent kept its unsaved state
+  await page.locator('#dr-submit').click();
+  await page.locator('#su-go').click(); // the typed username goes to the vault too
+  await expect(page.locator('#f-cred')).toHaveValue('docs-admin');
   await page.locator('#gen-submit').click();
-  await expect(page.locator('.diff')).toContainText('docs-admin:');
+  await expect(page.locator('.diff').first()).toContainText('name: docs-admin');
   await applyStaged(page);
-  const st = await page.evaluate(() => ({ cred: D.access.credentials.find((c) => c.name === 'docs-admin'), secret: D.secrets.some((s) => s.ref === 'house/docs-admin-pw'), leaked: JSON.stringify(D).includes('s3cret-value-xyz') }));
-  expect(st.cred.cfg).toMatchObject({ vault: 'house', ref: 'docs-admin-pw' });
+  const st = await page.evaluate(() => ({ cred: D.access.credentials.find((c) => c.name === 'docs-admin'), secret: D.secrets.some((s) => s.ref === 'house/docs-admin-pw'), leaked: JSON.stringify(D).includes('s3cret-value-xyz') || JSON.stringify(D).includes('svc-docs-91') }));
+  expect(st.cred.cfg).toMatchObject({ password: { vault: 'house', key: 'docs-admin-pw' }, identities: ['bot:platform-sre'] });
   expect(st.secret).toBe(true); expect(st.leaked).toBe(false);
 });
 

@@ -168,24 +168,33 @@ restyle them.
 
 #### The value-source field
 
-Every configurable value (login credentials, connector instance settings,
-plugin config, env vars, settings, workflow step inputs, bot and team
-settings that take secrets) uses one field, `type: 'value'` (`'secret'` is
+Every configurable value (connector instance settings, plugin config, env
+vars, settings, workflow step inputs, bot and team settings that take
+secrets, login credentials) uses one field, `type: 'value'` (`'secret'` is
 the same field with `sensitive: true`). A compact switcher on the field picks
 where the value comes from:
 
 | Source | Writes | Notes |
 |---|---|---|
-| **Typed** | the literal | For a sensitive field the input is write-only: on save the value goes to conductor's vault behind a step-up, and the field holds `${secret.<name>}`. |
-| **Env var** | `${env.NAME}` | Picker of known env vars across scopes; **+ Add env var** inline (staged; daemon scope goes to `conductor.env` in the same review). A sensitive field fed by a var that is plain text in `conductor.env` shows a warning suggesting a secret. |
-| **Secret** | `${secret.name}` | Picker of named secrets; **+ New secret** inline (value written to the vault at once, behind a step-up). |
-| **Vault** | `op://Vault/Item/field` (`?attribute=otp` for one-time passwords), or `{{ vault "store" "path" }}` | A browser of items showing titles, websites and field **labels** only. When another field in the form came from a 1Password item, the field offers **Use the same item: App · password** shortcuts. |
+| **Typed** | the literal | For a sensitive field the input is write-only: on save the value goes to conductor's vault (`house`) behind a step-up, and the field holds `{{ vault "house" "<key>" }}`. |
+| **Env var** | `${env.NAME}` | Picker of known env vars across scopes; **+ Add env var** inline (staged; daemon scope goes to `conductor.env` in the same review). A sensitive field fed by a var that is plain text in `conductor.env` shows a warning suggesting a vault entry. |
+| **Vault** | `{{ vault "<vault>" "<key>" }}` | **The one reference syntax** (Secrets.md). A picker of known entries (`<vault> · <key>`), a browser of vault items that shows titles, websites and field **labels** only (1Password one-time codes are `<item>/one-time password?attribute=otp`), and **+ New vault entry** inline (written to a writable vault at once, behind a step-up). When another field in the form came from a 1Password item, the field offers **Use the same item** shortcuts. The retired `op://` scheme and the named `secrets:` block are never written; an unmigrated `op://` reference shows as failing. |
 | **Setting** | `${settings.name}` | Non-sensitive fields only. A sensitive field set to a setting is **blocked** with the reason: settings are plain config, in `config.yaml`, every diff and every backup. |
+
+A **secret is a vault entry**, known by `<vault>/<key>`; the Secrets page
+lists entries with their canonical reference, where they're used, and an
+optional **alias that is dashboard-only** (config never sees it). Broker
+grants (`skill.allow_secrets`) take `<vault>/<key>` entries and need
+`skill.secrets_via: broker`, which the agent form shows beside them.
+**Browser credentials** name each value as `{ vault, key }` (the
+`browser.credentials` schema), so a login's username, password and one-time
+code offer only **Typed** (stored in `house`) and **Vault**; Env and Setting
+aren't offered there.
 
 Sources mix per field (username typed, password from 1Password, TOTP from the
 same item's OTP field). The field always shows the **reference**, never the
 value, with a check: *checking…*, *resolves ✓*, or *doesn't resolve ✗* with
-the reason (no such item, vault unreachable, token expired).
+the reason (no such item, vault unreachable, no such entry, retired syntax).
 
 API it implies (**NEW**):
 
