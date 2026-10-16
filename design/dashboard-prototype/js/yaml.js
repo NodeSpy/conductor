@@ -297,7 +297,9 @@
         return;
       }
       const empty = Array.isArray(v) ? !v.length : !Object.keys(v).length;
-      if (m.flow || empty || (m.val === undefined && wantsFlow(v))) {
+      // a flow collection that grew past a short one-liner is written as a block
+      const flowOk = m.flow && (same || wantsFlow(v));
+      if (flowOk || empty || (m.val === undefined && wantsFlow(v))) {
         const spaced = m.raw ? /^\{\s/.test(m.raw) : true;
         if (same && m.raw != null && m.flow) { const rl = m.raw.split('\n'); push(withC(head + ' ' + rl[0], rl.length > 1 ? null : m)); rl.slice(1).forEach((x, k) => push(k === rl.length - 2 ? withC(x, m) : x)); return; }
         push(withC(head + ' ' + (m.anchor ? '&' + m.anchor + ' ' : '') + fmtFlow(v, spaced), m));

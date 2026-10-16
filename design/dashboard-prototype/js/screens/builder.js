@@ -114,6 +114,7 @@
     redraw();
   }
   function mutate(fn, opts) {
+    flushPending();
     if (B.err) { UI.toast('Fix the YAML first', `line ${B.err.line}: ${esc(B.err.msg || B.err.message)}`, 'fail'); return false; }
     const v = Y.clone(B.value);
     const r = fn(v);
@@ -313,6 +314,7 @@
       return kids ? `<div class="dnode">${leaf}<div class="dkids">${tree(v, p, depth + 1, insertTarget)}</div></div>` : leaf; }).join('')}</div>`;
   }
 
+  function badges(id) { const iss = issuesFor(id), er = iss.filter((i) => i.level === 'error').length, wr = iss.length - er; return er ? `<span class="tpill fail" data-tip="${esc(iss.find((i) => i.level === 'error').msg)}">${icon('x')}${er}</span>` : wr ? `<span class="tpill warn" data-tip="${esc(iss[0].msg)}">${icon('warn')}${wr}</span>` : ''; }
   function stepCard(e, loc, num) {
     const s = e.step, k = e.kind, kc = KC(k), id = e.id, open = B.open.has(id), ro = readOnly();
     const iss = issuesFor(id), r = s && s.id && B.tests[s.id];
@@ -326,7 +328,7 @@
         <span class="sc-num serif">${num}</span>
         <span class="sc-ic">${icon(kc.icon)}</span>
         <div class="grow sc-text"><div class="sc-title"><b class="mono">${esc(s && s.id ? s.id : '(no id)')}</b><span class="caps">${kc.label}</span>${s && s.if ? `<span class="tag" data-tip="${esc(s.if)}">if</span>` : ''}${s && s.for_each ? '<span class="tag">for each</span>' : ''}</div><div class="sc-sum mono" id="sum-${esc(id)}">${esc(WF.summary(s))}</div></div>
-        ${er ? `<span class="tpill fail" data-tip="${esc(iss[0].msg)}">${icon('x')}${er}</span>` : wr ? `<span class="tpill warn" data-tip="${esc(iss[0].msg)}">${icon('warn')}${wr}</span>` : ''}${pill(r)}
+        <span class="sc-badges" id="badge-${esc(id)}">${badges(id)}</span>${pill(r)}
         <button type="button" class="icon-btn sc-more" data-act="wf-menu" data-id="${esc(id)}" aria-label="Step actions">${icon('more')}</button>
         <span class="chev">${icon(open ? 'chevd' : 'chev')}</span>
       </div>
@@ -407,7 +409,7 @@
     </div></div>`;
   }
   function drawBar() { const el = UI.$('#wfb-bar'); if (el) el.innerHTML = bar(); }
-  function drawList() { const el = UI.$('#wfb-list'); if (el) { const y = el.scrollTop; el.innerHTML = listHTML(); el.scrollTop = y; } }
+  function drawList() { flushPending(); const el = UI.$('#wfb-list'); if (el) { const y = el.scrollTop; el.innerHTML = listHTML(); el.scrollTop = y; } }
   function drawSide() { const el = UI.$('#wfb-side'); if (el) el.innerHTML = sideHTML(); }
   function drawIssues() { const el = UI.$('#wf-issues'); if (el) el.innerHTML = issuesHTML(); const ed = UI.$('#wf-yaml'); if (ed && B.side === 'yaml') UI.editorMark(ed, { err: B.issues.filter((i) => i.level === 'error').map((i) => i.line), hl: hlLines() }); }
   function redraw() { drawBar(); drawList(); drawSide(); }
@@ -417,7 +419,7 @@
     const ed = UI.$('#wf-yaml'); if (ed && B.side === 'yaml' && B.owner === 'config') UI.editorSet(ed, B.text, { err: B.issues.filter((i) => i.level === 'error').map((i) => i.line), hl: hlLines() });
     else if (B.side === 'yaml' && B.owner === 'pack') drawSide();
     drawIssues();
-    WF.walk(B.value || {}).forEach((e) => { const el = document.getElementById('sum-' + e.id); if (el) el.textContent = WF.summary(e.step); const card = document.getElementById('card-' + e.id); if (card) card.classList.toggle('has-err', issuesFor(e.id).some((i) => i.level === 'error')); });
+    WF.walk(B.value || {}).forEach((e) => { const el = document.getElementById('sum-' + e.id); if (el) el.textContent = WF.summary(e.step); const card = document.getElementById('card-' + e.id); if (card) card.classList.toggle('has-err', issuesFor(e.id).some((i) => i.level === 'error')); const bd = document.getElementById('badge-' + e.id); if (bd) bd.innerHTML = badges(e.id); });
     UI.$$('.wf-field').forEach((f) => { const inp = f.querySelector('[data-wf-loc]'); if (!inp) return; const loc = inp.dataset.wfLoc, path = inp.dataset.wfPath; const e = loc ? entryAt(loc) : null; const isu = loc ? B.issues.filter((i) => e && i.step === e.id && i.field && (i.field === path || i.field.startsWith(path + '.'))) : B.issues.filter((i) => i.trigger && i.field === path); f.classList.toggle('bad', isu.length > 0); f.querySelectorAll('.ferr').forEach((x) => x.remove()); isu.forEach((i) => { const d = document.createElement('div'); d.className = 'ferr'; d.textContent = i.msg; f.appendChild(d); }); });
   }
 
@@ -582,25 +584,30 @@
     drawBar(); drawList(); drawSide();
   }
   const fieldEl = (t) => t.closest && t.closest('[data-wf-loc]');
-  const debounced = {};
+  // Typing is debounced; any structural edit first flushes what's pending, so
+  // a keystroke is never lost to a re-render.
+  const debounced = {}, pendingFns = {};
+  let flushing = false;
+  function later(key, ms, fn) { clearTimeout(debounced[key]); pendingFns[key] = fn; debounced[key] = setTimeout(() => { delete pendingFns[key]; fn(); }, ms); }
+  function flushPending() { if (flushing) return; flushing = true; try { Object.keys(pendingFns).forEach((k) => { clearTimeout(debounced[k]); const f = pendingFns[k]; delete pendingFns[k]; f(); }); } finally { flushing = false; } }
   document.addEventListener('input', (e) => {
     if (!B || !e.target.closest('#wfb')) return;
     const el = fieldEl(e.target);
-    if (el && el.classList.contains('code-wrap')) { const key = el.id; clearTimeout(debounced[key]); debounced[key] = setTimeout(() => setField(el.dataset.wfLoc, el.dataset.wfPath, coerce('code', e.target.value), { soft: true, coalesce: true }), 300); return; }
-    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && el.type !== 'checkbox' && !el.closest('.listed') && !el.closest('.kvedit')) { autocomplete(el); const key = el.id; clearTimeout(debounced[key]); debounced[key] = setTimeout(() => { if (B.owner === 'pack') return; setField(el.dataset.wfLoc, el.dataset.wfPath, coerce(el.dataset.wfType, el.value), { soft: el.dataset.wfPath !== 'id', coalesce: true }); }, 350); return; }
+    if (el && el.classList.contains('code-wrap')) { later(el.id, 300, () => setField(el.dataset.wfLoc, el.dataset.wfPath, coerce('code', e.target.value), { soft: true, coalesce: true })); return; }
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && el.type !== 'checkbox' && !el.closest('.listed') && !el.closest('.kvedit')) { autocomplete(el); if (B.owner === 'pack') return; later(el.id, 350, () => setField(el.dataset.wfLoc, el.dataset.wfPath, coerce(el.dataset.wfType, el.value), { soft: el.dataset.wfPath !== 'id', coalesce: true })); return; }
     const flt = e.target.closest('[data-wf-filter]');
-    if (flt) { clearTimeout(debounced.flt); debounced.flt = setTimeout(() => mutate((v) => { const vals = flt.value.split(',').map((x) => x.trim()).filter(Boolean); v.filter[flt.dataset.wfFilter] = vals.length === 1 && !Array.isArray(v.filter[flt.dataset.wfFilter]) ? vals[0] : vals; }, { soft: true, coalesce: true }), 400); return; }
+    if (flt) { later('flt', 400, () => mutate((v) => { const vals = flt.value.split(',').map((x) => x.trim()).filter(Boolean); v.filter[flt.dataset.wfFilter] = vals.length === 1 && !Array.isArray(v.filter[flt.dataset.wfFilter]) ? vals[0] : vals; }, { soft: true, coalesce: true })); return; }
     const map = e.target.closest('.wf-map');
-    if (map) { clearTimeout(debounced.map); debounced.map = setTimeout(() => { const o = {}; UI.$$('.kvrow', map).forEach((r) => { const k = UI.$('[data-mk=k]', r).value.trim(), val = UI.$('[data-mk=v]', r).value; if (k) o[k] = /^-?\d+(\.\d+)?$/.test(val) ? Number(val) : val; }); setField(map.dataset.wfLoc, map.dataset.wfPath, Object.keys(o).length ? o : undefined, { soft: true, coalesce: true }); }, 400); return; }
+    if (map) { later('map', 400, () => { const o = {}; UI.$$('.kvrow', map).forEach((r) => { const k = UI.$('[data-mk=k]', r).value.trim(), val = UI.$('[data-mk=v]', r).value; if (k) o[k] = /^-?\d+(\.\d+)?$/.test(val) ? Number(val) : val; }); setField(map.dataset.wfLoc, map.dataset.wfPath, Object.keys(o).length ? o : undefined, { soft: true, coalesce: true }); }); return; }
     const q = e.target.closest('[data-q-name],[data-q-ins],[data-q-ch]');
-    if (q) { clearTimeout(debounced.q); debounced.q = setTimeout(() => writeQuestions(q.dataset.loc), 400); }
+    if (q) later('q', 400, () => writeQuestions(q.dataset.loc));
   });
   document.addEventListener('change', (e) => {
     if (!B || !e.target.closest('#wfb')) return;
     const t = e.target, el = fieldEl(t);
     if (el && el.tagName === 'SELECT') return setField(el.dataset.wfLoc, el.dataset.wfPath, el.value === '' ? undefined : el.value);
     if (el && t.type === 'checkbox') return setField(el.dataset.wfLoc, el.dataset.wfPath, t.checked ? true : undefined);
-    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && el.dataset.wfPath === 'id') { clearTimeout(debounced[el.id]); return setField(el.dataset.wfLoc, 'id', el.value.trim() || undefined); }
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && el.dataset.wfPath === 'id') { clearTimeout(debounced[el.id]); delete pendingFns[el.id]; return setField(el.dataset.wfLoc, 'id', el.value.trim() || undefined); }
     if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && B.owner === 'pack') return setField(el.dataset.wfLoc, el.dataset.wfPath, coerce(el.dataset.wfType, el.value));
     if (t.dataset.wfAcct) return mutate((v) => { const s = WF.at(v, locOf(t.dataset.wfAcct)); s.uses = t.value + '.' + s.uses.split('.')[1]; });
     if (t.dataset.wfVerb) return mutate((v) => { const s = WF.at(v, locOf(t.dataset.wfVerb)); s.uses = s.uses.split('.')[0] + '.' + t.value; const d = SCHEMA.verb(s.uses); if (s.options && d) Object.keys(s.options).forEach((k) => { if (!d.fields.find((f) => f.k === k)) delete s.options[k]; }); });
@@ -710,18 +717,18 @@
     redraw();
     if (t) UI.toast(t.status === 'ok' ? `Tested ${esc(target)}` : t.status === 'error' ? `${esc(target)} failed` : `${esc(target)} ${t.status}`, t.status === 'error' ? esc(t.error) : `${Object.values(r).filter((x) => x.status === 'ok').length} steps ran · outputs now in later steps' data`, t.status === 'ok' ? 'ok' : t.status === 'error' ? 'fail' : 'idle');
   }
-  UI.act('wf-test', (b) => runTest(b.dataset.id));
-  UI.act('wf-test-all', () => { const all = WF.walk(B.value || {}).filter((e) => !e.branch && e.step && (e.step.id || e.kind === 'parallel')); const last = all[all.length - 1]; if (!last) return; const id = last.kind === 'parallel' ? (last.step.parallel.flat().slice(-1)[0] || {}).id : last.step.id; if (id) runTest(id); WF.walk(B.value).forEach((e) => { if (e.step && e.step.id && B.tests[e.step.id]) B.open.add(e.step.id); }); drawList(); });
+  UI.act('wf-test', (b) => { flushPending(); runTest(b.dataset.id); });
+  UI.act('wf-test-all', () => { flushPending(); const all = WF.walk(B.value || {}).filter((e) => !e.branch && e.step && (e.step.id || e.kind === 'parallel')); const last = all[all.length - 1]; if (!last) return; const id = last.kind === 'parallel' ? (last.step.parallel.flat().slice(-1)[0] || {}).id : last.step.id; if (id) runTest(id); WF.walk(B.value).forEach((e) => { if (e.step && e.step.id && B.tests[e.step.id]) B.open.add(e.step.id); }); drawList(); });
 
   /* save and deploy */
-  UI.act('wf-save', () => {
+  UI.act('wf-save', () => { flushPending();
     if (B.owner === 'pack') { const ch = S.stage('packs', B.pack, B.ov); B.ovBase = Y.clone(B.ov); UI.toast(ch ? 'Saved as a pack override' : 'Override matches the live config', ch ? `packs.${B.pack}.steps · staged, deploy to apply` : '', ch ? 'run' : 'idle'); UI.refreshChrome(); drawBar(); return; }
     if (status() !== 'draft') return;
     S.stage('workflows', B.name, B.text); delete D.drafts[B.name]; S.save();
     UI.refreshChrome(); drawBar(); drawIssues();
     UI.toast('Saved', 'staged in config · Deploy reviews the diff and applies it', 'run');
   });
-  UI.act('wf-deploy', () => {
+  UI.act('wf-deploy', () => { flushPending();
     if (status() === 'draft') UI.acts['wf-save']();
     UI.go('#/config/apply');
   });

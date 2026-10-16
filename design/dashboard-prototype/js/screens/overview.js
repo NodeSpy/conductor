@@ -36,7 +36,8 @@
         const left = Math.max(0, ((SPAN - a) / SPAN) * 100), w = Math.max(((Math.min(a, SPAN) - b) / SPAN) * 100, 0.55);
         const run = id && D.runs.find((r) => r.id === id);
         const tip = `<b>${l.lane}</b> · ${s === 'run' ? 'running' : s}<br><span class='mono'>${id || 'run'} · ${a - b || '<1'}m${run && run.repo ? ' · ' + run.repo + '#' + run.number : ''}${run ? ' · ' + usd(run.cost) : ''}</span>`;
-        return `<a class="mark" data-s="${s}" style="left:${left}%;width:${w}%" href="#/runs/${id || 'r-7e52'}" data-tip="${tip}"></a>`;
+        // only marks with a recorded run open one; older marks are history without a record here
+        return id ? `<a class="mark" data-s="${s}" style="left:${left}%;width:${w}%" href="#/${s === 'run' ? 'live' : 'runs'}/${id}" data-tip="${tip}" aria-label="${l.lane} run ${id}"></a>` : `<span class="mark" data-s="${s}" style="left:${left}%;width:${w}%" data-tip="${tip}"></span>`;
       }).join('')}</div></div>`).join('');
     return `<div class="panel score">
       <div class="panel-head"><h3>The score</h3><span class="muted small">every run in the last ${Object.keys(SPANS).find((k) => SPANS[k] === SPAN)}, one staff per workflow</span>

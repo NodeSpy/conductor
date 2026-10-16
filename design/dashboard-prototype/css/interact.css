@@ -175,3 +175,4 @@ button.node { font: inherit; color: inherit; text-align: left; }
 @media (max-width: 720px) { .seed-grid { grid-template-columns: minmax(0, 1fr); } .pack-row { flex-wrap: wrap; } .pack-row .card-actions { width: 100%; justify-content: flex-start; } }
 /* toasts inform; they never block a click underneath */
 .toasts, .toast { pointer-events: none; }
+.score a.mark { z-index: 1; }

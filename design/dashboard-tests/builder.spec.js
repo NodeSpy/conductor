@@ -78,7 +78,7 @@ test('test a step against a past event; its output feeds the next step\'s picker
   await page.locator('[data-act="wf-test"][data-id="triage"]').click();
   await expect(card(page, 'triage').locator('.results .tpill.ok')).toBeVisible();
   await expect(card(page, 'triage').locator('.results')).toContainText('test_failure');
-  await expect(card(page, 'logs').locator('.tpill.ok')).toBeVisible();
+  await expect(card(page, 'logs').locator('.sc-head .tpill.ok')).toBeVisible();
   await open(page, 'fix');
   await page.locator('[data-act="wf-ref"][data-target="wf-steps_2-prompt"]').click();
   const g = page.locator('.dgroup[data-g="triage"]');
@@ -89,8 +89,8 @@ test('test a step against a past event; its output feeds the next step\'s picker
   await page.locator('[data-on-change="wf-ev"]').selectOption('ev-471');
   await open(page, 'test');
   await page.locator('[data-act="wf-test"][data-id="test"]').click();
-  await expect(card(page, 'test').locator('.callout.danger')).toContainText('exit status 1');
-  await expect(card(page, 'fix').locator('.tpill.skip')).toBeVisible();
+  await expect(card(page, 'test').locator('.callout.danger', { hasText: 'Test failed' })).toContainText('exit status 1');
+  await expect(card(page, 'fix').locator('.sc-head .tpill.skip')).toBeVisible();
 });
 
 test('add a parallel group and a branch', async ({ page }) => {
@@ -140,6 +140,7 @@ test('edit the YAML and see the list update; undo a delete; keyboard reorder', a
 test('drag a step to reorder it', async ({ page }) => {
   test.skip(isPhone(page), 'touch uses Move up/down and Alt+arrows; drag is a mouse affordance');
   await go(page, '#/workflows/ci-fixer');
+  await page.locator('[data-act="wf-expand"][data-v="0"]').click(); // all plates in view
   await card(page, 'comment').locator('.sc-head').dragTo(card(page, 'logs'), { targetPosition: { x: 40, y: 6 } });
   const y = await yaml(page);
   expect(y.indexOf('id: comment')).toBeLessThan(y.indexOf('id: logs'));
