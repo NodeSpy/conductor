@@ -6,9 +6,11 @@
 
   UI.attentionList = (limit) => {
     const f = UI.attnFilter || 'all';
-    const items = D.attention.filter((a) => f === 'all' || (f === 'approvals' ? a.kind === 'approval' : f === 'failures' ? a.kind === 'failed' : !['approval', 'failed'].includes(a.kind))).slice(0, limit || 99);
-    if (!items.length) return `<div class="empty"><span class="serif">Nothing ${f === 'all' ? '' : 'here '}needs you.</span>Approvals, failures and parked work land here.</div>`;
-    return `<div class="list">${items.map((a) => `
+    const byKind = D.attention.filter((a) => f === 'all' || (f === 'approvals' ? a.kind === 'approval' : f === 'failures' ? a.kind === 'failed' : !['approval', 'failed'].includes(a.kind)));
+    const items = byKind.filter((a) => UI.scopeKeeps(UI.botOfHref(a.href))).slice(0, limit || 99);
+    const note = UI.scopeNote(byKind.length - byKind.filter((a) => UI.scopeKeeps(UI.botOfHref(a.href))).length);
+    if (!items.length) return note + `<div class="empty"><span class="serif">Nothing ${f === 'all' ? '' : 'here '}needs you.</span>Approvals, failures and parked work land here.</div>`;
+    return note + `<div class="list">${items.map((a) => `
       <a class="item click att" href="${a.href}">
         ${st(a.s, '', false)}
         <div class="grow"><div class="ellipsis" style="font-weight:600">${esc(a.title)}</div><div class="muted small ellipsis mono" style="font-size:10.5px">${esc(a.sub)}</div></div>
@@ -102,7 +104,7 @@
         ${UI.head('Overview', { crumbs: `${D.daemon.host} · ${D.daemon.magicdns}`, actions: `<button class="btn" data-act="pause">${D.daemon.paused ? icon('play') + 'Resume dispatch' : icon('pause') + 'Pause dispatch'}</button><a class="btn" href="#/workflows">${icon('play')}Run a workflow</a>` })}
         <div class="grid ov-top">
           <div class="panel attn">
-            <div class="panel-head"><span class="attn-mark">${icon('diamond')}</span><h3>Needs you</h3><span class="muted small">${D.attention.length} items · approvals are signed with your passkey</span><div class="tools"><a class="btn sm ghost" href="#/attention">All ${icon('chev')}</a></div></div>
+            <div class="panel-head"><span class="attn-mark">${icon('diamond')}</span><h3>Needs you</h3><span class="muted small">${D.attention.length} items · approvals are signed with your passkey</span><div class="tools">${UI.folderChip()}<a class="btn sm ghost" href="#/attention">All ${icon('chev')}</a></div></div>
             ${UI.attentionList(6)}
           </div>
           <div class="grid g2 stats">

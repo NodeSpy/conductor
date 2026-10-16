@@ -51,28 +51,21 @@
         </div>
         <div class="row small muted"><span class="mono tiny">session ${m.session} · ${m.turns}/${m.maxTurns} turns</span><span style="margin-left:auto">${m.proactive ? icon('clock') + ' sweep in ' + m.proactive.next : ''}</span></div>
       </a>`;
-  UI.route('bots', () => `<div class="page">
-    ${UI.head('Teams &amp; bots', { sub: 'persistent bots, solo or on a team', actions: `<button class="btn" data-act="team-new">${icon('plus')}Define a team</button><a class="btn primary" href="#/bots/new/settings">${icon('plus')}Define a bot</a>` })}
-    <div class="panel"><div class="panel-head"><h3>Peers</h3><span class="muted small">inside a team bots are peers; across teams they're isolated unless linked</span></div><div class="panel-body tight">${peersGraph()}</div></div>
-    ${D.teams.map((t) => { const ms = botsOf(t.name); const c = t.cfg; return `<div class="team-band">
-      <div class="team-head"><a href="#/teams/${t.name}" class="grow"><span class="caps">team</span><h2>${esc(t.name)}</h2><span class="muted small">${esc(c.description || '')}</span></a>
-        <div class="row wrap small">${c.lead ? tag('lead ' + c.lead, 'ember') : tag('no lead')}${tag((c.routing || []).length + ' routing rule' + ((c.routing || []).length === 1 ? '' : 's'))}${(c.links || []).map((l) => tag('↔ ' + l)).join('')}${c.knowledge ? tag('knowledge repo') : ''}<a class="btn sm" href="#/teams/${t.name}">${icon('chev')}Open team</a></div></div>
-      <div class="grid g3">${ms.map(botCard).join('') || `<div class="panel inset add-card"><div class="empty small">No bots yet.<a class="btn sm" href="#/teams/${t.name}">Add one</a></div></div>`}</div></div>`; }).join('')}
-    ${D.bots.filter((m) => !teamOf(m)).length ? `<div class="team-band loose"><div class="team-head"><div class="grow"><span class="caps">no team</span><h2>Unassigned</h2><span class="muted small">a bot needn't be in a team</span></div></div><div class="grid g3">${D.bots.filter((m) => !teamOf(m)).map(botCard).join('')}</div></div>` : ''}
-  </div>`);
+  UI.peersGraph = peersGraph;
 
   /* ---------- team pages ---------- */
   const tierOpts = ['propose', 'commit_money', 'reversible'];
   function teamForm(t) {
     const isNew = !t, c = t ? staged('teams', t.name) : { defaults: { operators: ['ops'], autonomy: { max_tier: 'propose', promote: false }, isolation: { mode: 'namespace' } } };
     const others = D.teams.filter((x) => !t || x.name !== t.name).map((x) => x.name);
-    UI.form({ caps: isNew ? 'teams:' : `teams.${t.name}`, title: isNew ? 'Define a team' : `Edit team ${t.name}`, wide: true,
+    UI.form({ caps: isNew ? 'teams:' : `teams.${t.name}`, title: isNew ? 'New team' : `Edit team ${t.name}`, wide: true,
       intro: 'Cut teams any way you like. Bots inherit these defaults and can only narrow them.',
-      values: isNew ? {} : { description: c.description, lead: c.lead, operators: S.getPath(c, 'defaults.operators'), max_tier: S.getPath(c, 'defaults.autonomy.max_tier'), promote: S.getPath(c, 'defaults.autonomy.promote') !== false, approval_ttl: S.getPath(c, 'defaults.autonomy.approval_ttl'), isolation: S.getPath(c, 'defaults.isolation.mode'), budget: S.getPath(c, 'defaults.budget.max_cost_per_day'), pool_runs: S.getPath(c, 'defaults.budget.proactive_pool.max_runs_per_day'), pool_cost: S.getPath(c, 'defaults.budget.proactive_pool.max_cost_per_day'), logins: S.getPath(c, 'defaults.browser.logins'), credentials: S.getPath(c, 'defaults.browser.credentials'), repo: S.getPath(c, 'knowledge.repo'), promote_mode: S.getPath(c, 'knowledge.promote'), links: c.links, bots: [] }, edit: !isNew,
+      values: isNew ? {} : { description: c.description, lead: c.lead, operators: S.getPath(c, 'defaults.operators'), max_tier: S.getPath(c, 'defaults.autonomy.max_tier'), promote: S.getPath(c, 'defaults.autonomy.promote') !== false, approval_ttl: S.getPath(c, 'defaults.autonomy.approval_ttl'), isolation: S.getPath(c, 'defaults.isolation.mode'), budget: S.getPath(c, 'defaults.budget.max_cost_per_day'), pool_runs: S.getPath(c, 'defaults.budget.proactive_pool.max_runs_per_day'), pool_cost: S.getPath(c, 'defaults.budget.proactive_pool.max_cost_per_day'), logins: S.getPath(c, 'defaults.browser.logins'), credentials: S.getPath(c, 'defaults.browser.credentials'), repo: S.getPath(c, 'knowledge.repo'), promote_mode: S.getPath(c, 'knowledge.promote'), links: c.links, bots: [], folder: c.folder }, edit: !isNew,
       fields: [
         isNew ? { k: 'name', type: 'string', req: true, ph: 'e.g. data', pattern: /^[a-z][a-z0-9-]*$/, patternMsg: 'Lowercase letters, digits and dashes.', validate: (v) => (T(v) ? 'A team by that name exists.' : '') } : null,
         { k: 'description', type: 'string', mono: false },
-        isNew ? { k: 'bots', type: 'select-multi', label: 'Bots', options: D.bots.map((m) => m.name), help: 'A bot is in at most one team: adding one here moves it.' } : { k: 'lead', type: 'enum', label: 'Lead', options: botsOf(t.name).map((m) => m.name), help: 'Triages work routed to the team and assigns it. Requester provenance is kept.' },
+        isNew ? { k: 'bots', type: 'select-multi', label: 'Bots', options: S.view().bots.map((m) => m.name), create: 'bot', createLabel: 'New bot', help: 'A bot is in at most one team: adding one here moves it.' } : { k: 'lead', type: 'enum', label: 'Lead', options: botsOf(t.name).map((m) => m.name), create: 'bot', createCtx: { team: t.name }, createLabel: 'New bot on this team', help: 'Triages work routed to the team and assigns it. Requester provenance is kept.' },
+        { k: 'folder', type: 'enum', label: 'Folder', options: UI.allFolders(), create: 'folder', createLabel: 'New folder', help: 'Organization only: where the team shows on the Bots page.' },
         { section: 'Defaults bots inherit', k: 'operators', type: 'select-multi', label: 'Operators / approvers', options: Object.keys(D.operatorsCfg), req: true },
         { k: 'max_tier', type: 'enum', label: 'Autonomy ceiling', options: tierOpts, def: 'propose', req: true, help: 'The loosest tier any bot may give a write verb.' },
         { k: 'promote', type: 'bool', label: 'Promotions', on: 'bots may promote reversible verbs' },
@@ -82,10 +75,10 @@
         { k: 'pool_runs', type: 'number', label: 'Proactive pool · runs / day', help: 'Shared by every bot\'s sweeps.' },
         { k: 'pool_cost', type: 'number', label: 'Proactive pool · USD / day' },
         { k: 'logins', type: 'list', label: 'Browser login scope', ph: 'console.example.com' },
-        { k: 'credentials', type: 'select-multi', label: 'Credential scope', options: D.access.credentials.map((x) => x.name) },
+        { k: 'credentials', type: 'select-multi', label: 'Credential scope', options: S.view().access.credentials.map((x) => x.name), create: 'credential', createLabel: 'New credential binding' },
         { section: 'Knowledge and links', k: 'repo', type: 'string', label: 'Team knowledge repo', ph: 'team-knowledge/<team>', help: 'Optional. Bots propose promoting knowledge into it.' },
         { k: 'promote_mode', type: 'seg', label: 'Promotion', options: [['approval', 'needs approval'], ['auto', 'automatic'], ['off', 'off']], def: 'approval', show: (v) => !!v.repo },
-        { k: 'links', type: 'select-multi', label: 'Linked teams', options: others, help: 'Both sides must link. Linking is a channel for data to cross.' },
+        { k: 'links', type: 'select-multi', label: 'Linked teams', options: others, create: 'team', createLabel: 'New team', help: 'Both sides must link. Linking is a channel for data to cross.' },
       ].filter(Boolean),
       submit: 'Review change', submitIcon: 'check',
       onSubmit: (v) => {
@@ -105,6 +98,7 @@
         if (v.repo) n.knowledge = { repo: v.repo, promote: v.promote_mode || 'approval' };
         if (isNew ? false : c.routing) n.routing = c.routing;
         if (v.links) n.links = v.links;
+        if (v.folder) n.folder = v.folder;
         S.stage('teams', name, n);
         (v.bots || []).forEach((mn) => { const mc = Y_clone(staged('bots', mn)); mc.team = name; S.stage('bots', mn, mc); });
         if (isNew && !D.teamKnowledge[name] && v.repo) D.teamKnowledge[name] = { repo: v.repo, files: { 'README.md': `# ${name} team knowledge\n` }, proposals: [] };
@@ -131,7 +125,7 @@
   function teamShell(t, tab, body) {
     const c = staged('teams', t.name) || t.cfg, ms = botsOf(t.name), kn = D.teamKnowledge[t.name];
     const pend = kn ? kn.proposals.filter((p) => p.status === 'pending').length : 0;
-    return `<div class="page"><div class="bot-hero team-hero"><span class="sigil lg team-sigil">${esc(t.name[0])}</span><div class="grow"><div class="crumbs mono tiny muted"><a href="#/bots">Teams &amp; bots</a> › team</div><h1>${esc(t.name)}</h1>
+    return `<div class="page"><div class="bot-hero team-hero"><span class="sigil lg team-sigil">${esc(t.name[0])}</span><div class="grow"><div class="crumbs mono tiny muted">${UI.folderCrumbs(UI.folderOfTeam(t.name, false))} › team</div><h1>${esc(t.name)}</h1>
       <div class="facts">${tag(ms.length + ' bot' + (ms.length === 1 ? '' : 's'))}${c.lead ? tag('lead ' + c.lead, 'ember') : tag('no lead')}${tag(`operators: ${(S.getPath(c, 'defaults.operators') || []).join(', ') || '—'}`)}${tag(`ceiling ${S.getPath(c, 'defaults.autonomy.max_tier') || '—'}`)}${tag(icon('shield') + ' ' + (S.getPath(c, 'defaults.isolation.mode') || 'namespace'), 'ok')}${S.find('teams', t.name) ? tag('change staged', 'run') : ''}</div></div>
       <div class="row wrap"><button class="btn" data-act="team-deliver" data-t="${t.name}">${icon('send')}Route work here</button><button class="btn" data-act="team-edit" data-t="${t.name}">${icon('edit')}Edit team</button><button class="btn ghost" data-act="team-del" data-t="${t.name}" aria-label="Remove team">${icon('trash')}</button></div></div>
       ${UI.tabs([['overview', 'Overview', `#/teams/${t.name}`], ['routing', 'Routing', `#/teams/${t.name}/routing`, (c.routing || []).length], ['defaults', 'Defaults', `#/teams/${t.name}/defaults`], ['knowledge', 'Knowledge', `#/teams/${t.name}/knowledge`, pend || null, pend > 0]], tab)}
@@ -196,17 +190,17 @@
 
   function teamOverview(t) {
     const c = staged('teams', t.name) || t.cfg, ms = botsOf(t.name);
-    const others = D.bots.filter((m) => !ms.includes(m));
+    const others = S.view().bots.filter((m) => !ms.some((x) => x.name === m.name));
     const spend = ms.reduce((a, m) => a + (m.name === 'platform-sre' ? 3.75 : m.name === 'web-triage' ? 0.42 : m.name === 'billing-sre' ? 1.1 : 0), 0);
     const pool = S.getPath(c, 'defaults.budget.proactive_pool'), claimed = ms.reduce((a, m) => a + (S.getPath(m.cfg, 'proactive.budget.max_runs_per_day') || 0), 0);
     const cases = D.cases.filter((x) => x.routed && (x.routed.team === t.name || ms.some((m) => m.name === x.routed.to))).slice(0, 8);
     const linkedBack = (l) => ((T(l) || { cfg: {} }).cfg.links || []).includes(t.name);
     return teamShell(t, 'overview', `<div class="grid g-side">
       <div class="stack">
-        <div class="panel"><div class="panel-head"><h3>Bots</h3><span class="muted small">peers of each other by default</span></div><div class="list">
+        <div class="panel"><div class="panel-head"><h3>Bots on this team</h3><span class="muted small">peers of each other by default</span></div><div class="list">
           ${ms.map((m) => `<div class="item"><a href="#/bots/${m.name}" class="row grow" style="gap:10px">${UI.sigil(m)}<div><b>${m.name}</b> ${c.lead === m.name ? tag('lead', 'ember') : ''}<div class="muted tiny">${esc(m.desc)}</div></div></a>
             ${c.lead === m.name ? '' : `<button class="btn sm ghost" data-act="team-lead" data-t="${t.name}" data-m="${m.name}">Make lead</button>`}<button class="btn sm ghost" data-act="team-remove" data-t="${t.name}" data-m="${m.name}" aria-label="Remove ${m.name} from team">${icon('x')}Remove</button></div>`).join('') || '<div class="item muted small">No bots yet.</div>'}</div>
-          <div class="panel-foot"><label class="row small grow"><span class="muted">Add a bot</span><select class="select mono" id="team-add-sel" aria-label="Bot to add">${others.map((m) => `<option value="${m.name}">${m.name}${teamOf(m) ? ' (moves from ' + teamOf(m).name + ')' : ''}</option>`).join('')}</select></label><button class="btn sm" ${others.length ? `data-act="team-add" data-t="${t.name}"` : UI.off('Every bot is already in this team')}>${icon('plus')}Add to team</button></div></div>
+          <div class="panel-foot"><label class="row small grow"><span class="muted">Add a bot</span><select class="select mono" id="team-add-sel" aria-label="Bot to add" data-picker="bot" data-ctx='${esc(JSON.stringify({ page: `#/bots/new/settings?team=${t.name}&back=${encodeURIComponent('#/teams/' + t.name)}` }))}'><option value="__new__">+ Create a new bot in this team…</option>${others.map((m) => `<option value="${m.name}"${m === others[0] ? ' selected' : ''}>${m.name}${teamOf(m) ? ' (moves from ' + teamOf(m).name + ')' : ' (solo)'}</option>`).join('')}</select></label><button class="btn sm" ${others.length ? `data-act="team-add" data-t="${t.name}"` : UI.off('Every existing bot is already here: create a new one from the list')}>${icon('plus')}Add to team</button></div></div>
         <div class="panel"><div class="panel-head"><h3>Ask &amp; delegate activity</h3><span class="muted small">last 24h</span></div><div class="panel-body tight">${activityGraph(t)}</div></div>
         <div class="panel"><div class="panel-head"><h3>Delegations</h3><span class="muted small">teammates hand each other tasks; results report back</span></div><div class="list">${D.delegations.filter((d) => botsOf(t.name).some((b) => b.name === d.from || b.name === d.to)).map(edgeHTML).join('') || '<div class="item small muted">No delegations yet.</div>'}</div>
           <div class="panel-foot small muted">Across teams, delegation exists only where both teams link each other.</div></div>
@@ -269,7 +263,7 @@
   }
   UI.route('teams/:name/:tab?', ({ name, tab }) => {
     const t = T(name);
-    if (!t) return `<div class="page"><div class="empty"><span class="serif">No team named ${esc(name)}</span><a class="btn" href="#/bots">Teams &amp; bots</a></div></div>`;
+    if (!t) return `<div class="page"><div class="empty"><span class="serif">No team named ${esc(name)}</span><a class="btn" href="#/bots">Bots</a></div></div>`;
     return tab === 'routing' ? teamRouting(t) : tab === 'defaults' ? teamDefaults(t) : tab === 'knowledge' ? teamKnowledge(t) : teamOverview(t);
   }, { nav: 'bots' });
   UI.act('team-lead', (b) => { const c = Y_clone(staged('teams', b.dataset.t)); c.lead = b.dataset.m; UI.staged(S.stage('teams', b.dataset.t, c)); });
@@ -282,7 +276,7 @@
     const t = T(b.dataset.t), c = Y_clone(staged('teams', t.name)), i = +b.dataset.i, r = i >= 0 ? c.routing[i] : null;
     const conds = r ? Object.fromEntries(Object.entries(r.when || {}).filter(([k]) => k !== 'on').map(([k, v]) => [k, [].concat(v).join(', ')])) : {};
     UI.form({ caps: `teams.${t.name}.routing`, title: r ? `Edit rule ${r.name}` : 'Add a routing rule', values: r ? { name: r.name, on: r.when.on, conds, to: r.to } : {}, edit: !!r,
-      fields: [{ k: 'name', type: 'string', req: true, pattern: /^[a-z][\w-]*$/, patternMsg: 'letters, digits, - and _' }, { k: 'on', type: 'enum', label: 'When the event is', req: true, options: evOn() }, { k: 'conds', type: 'map', label: 'and its fields match', help: 'e.g. service → api, web. Comma-separate alternatives.' }, { k: 'to', type: 'enum', label: 'Route to', req: true, options: [['lead', `the lead (${c.lead || 'none set'})`]].concat(botsOf(t.name).map((m) => [m.name, m.name])) }],
+      fields: [{ k: 'name', type: 'string', req: true, pattern: /^[a-z][\w-]*$/, patternMsg: 'letters, digits, - and _' }, { k: 'on', type: 'enum', label: 'When the event is', req: true, options: evOn() }, { k: 'conds', type: 'map', label: 'and its fields match', help: 'e.g. service → api, web. Comma-separate alternatives.' }, { k: 'to', type: 'enum', label: 'Route to', req: true, options: [['lead', `the lead (${c.lead || 'none set'})`]].concat(botsOf(t.name).map((m) => [m.name, m.name])), create: 'bot', createCtx: { team: t.name }, createLabel: 'New bot on this team' }],
       submit: 'Stage rule', onSubmit: (v) => { const when = { on: v.on }; Object.entries(v.conds || {}).forEach(([k, x]) => { const vals = String(x).split(',').map((s) => s.trim()).filter(Boolean); when[k] = vals.length > 1 ? vals : vals[0]; }); const nr = { name: v.name, when, to: v.to }; c.routing = c.routing || []; if (r) c.routing[i] = nr; else c.routing.push(nr); UI.staged(S.stage('teams', t.name, c), { go: false }); UI.rerender(); } });
   });
   UI.act('rule-del', (b) => { const c = Y_clone(staged('teams', b.dataset.t)); c.routing.splice(+b.dataset.i, 1); if (!c.routing.length) delete c.routing; UI.staged(S.stage('teams', b.dataset.t, c), { go: false }); UI.rerender(); });
@@ -326,7 +320,7 @@
   /* ---------- bot shell ---------- */
   function hero(m) {
     const t = teamOf(m), lead = t && t.cfg.lead === m.name;
-    return `<div class="bot-hero">${UI.sigil(m, 'lg')}<div class="grow"><div class="crumbs mono tiny muted"><a href="#/bots">Teams &amp; bots</a> › ${t ? `<a href="#/teams/${t.name}">${t.name}</a> › ` : ''}${m.name}</div><h1>${m.name}</h1>
+    return `<div class="bot-hero">${UI.sigil(m, 'lg')}<div class="grow"><div class="crumbs mono tiny muted">${UI.folderCrumbs(UI.folderOfBot(m.name, false))} › ${t ? `<a href="#/teams/${t.name}">team ${t.name}</a> › ` : ''}${m.name}</div><h1>${m.name}</h1>
       <div class="facts">${m.home === 'live' ? st('run', `home ${m.session} live`, true) : st('idle', `home ${m.session} idle`, true)}
         ${t ? `<a href="#/teams/${t.name}">${tag('team ' + t.name + (lead ? ' · lead' : ''), 'ember')}</a>` : tag('no team')}${tag(`${m.turns}/${m.maxTurns} turns`)}${m.shadow ? tag('shadow mode', 'shadow') : tag('approved execution', 'ok')}
         ${tag(`${icon('shield')} ${m.mode}`, 'ok')}${tag(`operators: ${(S.effective(m).operators.v || []).join(', ')}`)}</div></div>
@@ -516,9 +510,9 @@
   UI.act('acc-addverb', (b) => { const c0 = staged('bots', b.dataset.m); UI.form({ caps: `bots.${b.dataset.m}.skill.verbs`, title: 'Grant a verb', fields: [{ k: 'verb', type: 'enum', req: true, options: verbList().filter((v) => !(c0.skill && c0.skill.verbs || []).includes(v)) }, { k: 'tier', type: 'enum', req: true, options: ['observe', 'reversible', 'propose', 'commit_money', 'never'], def: 'propose', help: 'Adding a verb widens what the bot can do.' }], submit: 'Stage grant', onSubmit: (v) => { editM(b.dataset.m, (c) => { c.skill = c.skill || {}; (c.skill.verbs = c.skill.verbs || []).push(v.verb); c.autonomy = c.autonomy || {}; const T2 = (c.autonomy.tiers = c.autonomy.tiers || {}); (T2[v.tier] = T2[v.tier] || []).push(v.verb); }); } }); });
   UI.act('cred-bind', (b) => {
     const cur = b.dataset.c && (S.staged('credentials', b.dataset.c) || D.access.credentials.find((x) => x.name === b.dataset.c).cfg);
-    UI.form({ caps: 'browser.credentials', title: cur ? `Edit ${b.dataset.c}` : 'Bind a credential', edit: !!cur, values: cur ? Object.assign({ name: b.dataset.c }, cur) : { identity: 'bot:' + b.dataset.m },
-      fields: [{ k: 'name', type: 'string', req: true, readonly: !!cur, pattern: /^[a-z][\w-]*$/, patternMsg: 'letters, digits, - and _' }, { k: 'origin', type: 'string', req: true, ph: 'https://grafana.example.com', pattern: /^https:\/\/[\w.-]+(:\d+)?$/, patternMsg: 'An https:// origin, no path.' }, { k: 'identity', type: 'enum', req: true, options: D.bots.map((m) => 'bot:' + m.name).concat(D.identities.map((i) => i.id).filter((i) => !i.startsWith('bot:'))) }, { k: 'fields', type: 'select-multi', req: true, options: ['username', 'password', 'otp', 'push', 'passkey'] }, { k: 'vault', type: 'enum', req: true, options: D.vaults.map((v) => v.name) }, { k: 'ref', type: 'string', req: true, ph: 'Agents/Grafana/*', help: 'The vault item; values are filled into the page by conductor, never shown to the agent.' }],
-      submit: 'Review change', submitIcon: 'check', onSubmit: (v) => { const n = { origin: v.origin, identity: v.identity, fields: v.fields, vault: v.vault, ref: v.ref }; if (!cur && D.access.credentials.find((x) => x.name === v.name)) return 'A binding by that name exists.'; UI.staged(S.stage('credentials', v.name, n)); } });
+    UI.form({ caps: 'browser.credentials', title: cur ? `Edit ${b.dataset.c}` : 'Bind a credential', edit: !!cur, values: cur ? Object.assign({ name: b.dataset.c }, cur, { ref: `${cur.vault}/${cur.ref}` }) : { identity: 'bot:' + b.dataset.m },
+      fields: [{ k: 'name', type: 'string', req: true, readonly: !!cur, pattern: /^[a-z][\w-]*$/, patternMsg: 'letters, digits, - and _' }, { k: 'origin', type: 'string', req: true, ph: 'https://grafana.example.com', pattern: /^https:\/\/[\w.-]+(:\d+)?$/, patternMsg: 'An https:// origin, no path.' }, { k: 'identity', type: 'enum', req: true, options: UI.identityList(), create: 'identity', createLabel: 'New browser identity' }, { k: 'fields', type: 'select-multi', req: true, options: ['username', 'password', 'otp', 'push', 'passkey'] }, { k: 'ref', type: 'enum', req: true, label: 'Secret (vault reference)', options: (cur && !UI.secretRefs().some(([r]) => r === `${cur.vault}/${cur.ref}`) ? [[`${cur.vault}/${cur.ref}`, `${cur.vault}/${cur.ref}`]] : []).concat(UI.secretRefs()), create: 'secret', createLabel: 'New secret', ret: 'ref', help: 'Values are filled into the page by conductor, never shown to the bot.' }],
+      submit: 'Review change', submitIcon: 'check', onSubmit: (v) => { const vault = v.ref.startsWith('op://') ? 'op' : v.ref.split('/')[0]; const n = { origin: v.origin, identity: v.identity, fields: v.fields, vault, ref: v.ref.replace(/^op:\/\//, '').replace(/^[^/]+\//, '') }; if (!cur && D.access.credentials.find((x) => x.name === v.name)) return 'A binding by that name exists.'; UI.staged(S.stage('credentials', v.name, n)); } });
   });
   UI.act('cred-unbind', (b) => UI.confirm({ title: `Unbind ${b.dataset.c}?`, body: 'Stages removing the binding. The vault item stays.', ok: 'Stage removal', danger: true }).then((ok) => ok && UI.staged(S.stage('credentials', b.dataset.c, null))));
   UI.act('login-revoke', (b) => UI.confirm({ title: `Log out of ${b.dataset.site}?`, body: 'Deletes the saved cookie jar now (browser logout). Immediate, audited.', ok: 'Revoke', danger: true }).then((ok) => { if (!ok) return; D.access.logins = D.access.logins.filter((l) => !(l.site === b.dataset.site && l.identity === b.dataset.id)); audit('browser_logout', `${b.dataset.id} · ${b.dataset.site}`); S.save(); UI.rerender(); UI.toast(`Logged out of ${b.dataset.site}`, 'saved jar deleted · audited', 'ok'); }));
@@ -526,7 +520,8 @@
   /* ---------- definition editor: a form over bots.<m>, live YAML beside it ---------- */
   const DF = [
     { k: 'description', type: 'string', mono: false, sec: 'Identity & charter' },
-    { k: 'team', type: 'enum', label: 'Team', options: () => D.teams.map((t) => t.name), help: 'At most one. Defaults come from the team; this bot can only narrow them.' },
+    { k: 'team', type: 'enum', label: 'Team', options: () => S.view().teams.map((t) => t.name), create: 'team', createLabel: 'New team', help: 'Empty for a solo bot. On a team, defaults come from the team and this bot can only narrow them.' },
+    { k: 'folder', type: 'enum', label: 'Folder', options: () => UI.allFolders(), create: 'folder', createLabel: 'New folder', help: 'Organization only. A bot on a team shows under its team instead.', solo: true },
     { k: 'operators', type: 'list', label: 'Operators (approvers)', help: 'Leave empty to inherit the team\'s.' },
     { k: 'escalation', type: 'string', mono: false },
     { k: 'autonomy.shadow', type: 'bool', label: 'Shadow mode', on: 'nothing above observe executes', sec: 'Autonomy' },
@@ -539,15 +534,16 @@
     { k: 'proactive.budget.max_cost_per_day', type: 'number', label: 'Max cost / day' },
     { k: 'home.rotate.max_age', type: 'duration', label: 'Rotate after', sec: 'Sessions, workers, isolation, peers' },
     { k: 'home.rotate.max_turns', type: 'number', label: '…or turns' },
-    { k: 'worker.runtime', type: 'enum', label: 'Worker runtime', options: () => D.runtimes.map((r) => r.name) },
+    { k: 'worker.runtime', type: 'enum', label: 'Worker runtime', options: () => S.view().runtimes.map((r) => r.name), create: 'runtime', createLabel: 'New runtime' },
     { k: 'worker.max_concurrent', type: 'number', label: 'Max concurrent workers' },
     { k: 'isolation.mode', type: 'seg', label: 'Sandbox', options: [['namespace', 'namespace'], ['container', 'container'], ['none', 'none', 'isolation: {mode: none} is set on a runtime, workflow or trigger, never on a bot']], def: 'namespace' },
-    { k: 'peers', type: 'list', label: 'Cross-team peers', help: 'Team-mates are already peers. A bot in another team needs both teams linked.' },
+    { k: 'peers', type: 'select-multi', label: 'Cross-team peers', options: () => S.view().bots.map((b) => b.name), create: 'bot', createLabel: 'New bot', help: 'Teammates are already peers. A bot in another team needs both teams linked.' },
   ];
   const dv = { name: null, draft: null, base: null, charter: null };
   function settings(m, isNew) {
     const key = isNew ? '$new' : m.name;
-    if (dv.name !== key) { dv.name = key; dv.base = isNew ? { description: '', operators: ['ops'], autonomy: { shadow: true, approval_ttl: '24h' }, skill: { verbs: ['gh.get_*'] }, isolation: { mode: 'namespace' } } : Y_clone(staged('bots', m.name)); dv.draft = Y_clone(dv.base); dv.newName = ''; dv.charter = isNew ? '' : D.charters[m.name] || ''; }
+    const q = new URLSearchParams((location.hash.split('?')[1] || ''));
+    if (dv.name !== key || (isNew && (q.get('team') || '') !== (dv.team || ''))) { dv.name = key; dv.team = isNew ? q.get('team') || '' : ''; dv.back = isNew ? q.get('back') || '' : ''; dv.base = isNew ? Object.assign({ description: '', autonomy: { shadow: true, approval_ttl: '24h' }, skill: { verbs: ['gh.get_*'] }, isolation: { mode: 'namespace' } }, dv.team ? { team: dv.team } : { operators: ['ops'] }) : Y_clone(staged('bots', m.name)); dv.draft = Y_clone(dv.base); dv.newName = ''; dv.charter = isNew ? '' : D.charters[m.name] || ''; }
     const name = isNew ? dv.newName || 'new-bot' : m.name;
     const errs = S.cfg.bots.validate(name, dv.draft, S.candidate(D.pending.filter((c) => !(c.coll === 'bots' && c.key === name)).concat([{ coll: 'bots', key: name, after: dv.draft }])));
     const warns = S.cfg.bots.warn ? S.cfg.bots.warn(name, dv.draft, D) : [];
@@ -556,7 +552,7 @@
     const inhMap = { operators: 'operators', 'autonomy.approval_ttl': 'autonomy.approval_ttl', 'isolation.mode': 'isolation.mode', 'proactive.budget.max_runs_per_day': 'budget.proactive_pool.max_runs_per_day', 'proactive.budget.max_cost_per_day': 'budget.proactive_pool.max_cost_per_day' };
     let sec = 'Identity & charter';
     const charter = `<div class="field"><label for="df-charter">Charter <span class="opt">bots/${esc(name)}.md · config only</span></label><textarea class="textarea" rows="6" id="df-charter" data-df-charter="1">${esc(dv.charter)}</textarea><div class="hint">Nothing on the agent-facing surface writes it.</div></div>`;
-    const fields = DF.map((f) => { const fd = Object.assign({}, f, { options: typeof f.options === 'function' ? f.options() : f.options }); const head = f.sec && f.sec !== sec ? (`${sec === 'Identity & charter' ? charter : ''}</div></div><div class="panel"><div class="panel-head"><h3>${(sec = f.sec)}</h3></div><div class="panel-body def-grid">`) : ''; const html = UI.fieldHTML(Object.assign({}, fd, { k: 'df.' + f.k }), S.getPath(dv.draft, f.k)); return head + html.replace('<div class="ferr"', (inhMap[f.k] && team ? inh(inhMap[f.k]) : '') + '<div class="ferr"'); }).join('');
+    const fields = DF.map((f) => { const fd = Object.assign({}, f, { options: typeof f.options === 'function' ? f.options() : f.options }); const head = f.sec && f.sec !== sec ? (`${sec === 'Identity & charter' ? charter : ''}</div></div><div class="panel"><div class="panel-head"><h3>${(sec = f.sec)}</h3></div><div class="panel-body def-grid">`) : ''; if (f.solo && dv.draft.team) return head + `<div class="field"><label>Folder</label><div class="hint inh-hint">${icon('folder')} shows under team ${esc(dv.draft.team)}${UI.folderOfTeam(dv.draft.team) ? ' in ' + esc(UI.folderOfTeam(dv.draft.team)) : ''}</div></div>`; const html = UI.fieldHTML(Object.assign({}, fd, { k: 'df.' + f.k }), S.getPath(dv.draft, f.k)); return head + html.replace('<div class="ferr"', (inhMap[f.k] && team ? inh(inhMap[f.k]) : '') + '<div class="ferr"'); }).join('');
     const yaml = YAML.stringify({ bots: { [name]: dv.draft } });
     const changed = !YAML.eq(dv.draft, dv.base) || (isNew ? !!dv.newName : dv.charter !== (D.charters[m.name] || ''));
     const body = `<div class="grid g2" style="align-items:start">
@@ -567,7 +563,7 @@
         <div class="stack def-yaml"><div class="panel"><div class="panel-head"><h3>As YAML</h3><span class="muted small">config.yaml · <span class="mono">bots.${esc(name)}</span></span><div class="tools">${errs.length ? st('fail', `${errs.length} error${errs.length > 1 ? 's' : ''}`) : st('ok', 'validates')}</div></div><div class="panel-body tight" id="df-yaml">${UI.yaml(yaml)}</div>
           ${errs.length || warns.length ? `<div class="panel-body" style="border-top:1px solid var(--line)">${errs.map((e) => `<div class="callout danger small" style="margin-bottom:6px">${esc(e)}</div>`).join('')}${warns.map((e) => `<div class="callout warn small" style="margin-bottom:6px">${esc(e)}</div>`).join('')}</div>` : ''}
           <div class="panel-foot"><button class="btn ghost" data-act="df-reset" ${changed ? '' : UI.off('No edits')}>${icon('undo')}Reset</button><button class="btn primary" style="margin-left:auto" data-act="df-review" ${!changed ? UI.off('Change something first') : errs.length ? UI.off('Fix the errors first') : ''}>${icon('check')}Review changes</button></div></div></div></div>`;
-    return isNew ? `<div class="page">${UI.head('Define a bot', { crumbs: '<a href="#/bots">Teams &amp; bots</a>', sub: 'starts in shadow mode' })}${body}</div>` : shell(m, 'settings', body);
+    return isNew ? `<div class="page">${UI.head('New bot', { crumbs: '<a href="#/bots">Bots</a>', sub: dv.team ? `on team ${esc(dv.team)} · starts in shadow mode` : 'solo or on a team · starts in shadow mode' })}${body}</div>` : shell(m, 'settings', body);
   }
   let dfT;
   document.addEventListener('input', (e) => { const f = e.target.closest('.def-form'); if (!f) return; clearTimeout(dfT); dfT = setTimeout(() => readDef(f), 350); });
@@ -592,6 +588,7 @@
     if (isNew && M(name)) { UI.toast('A bot by that name exists', '', 'fail'); return; }
     if (!dv.draft.charter_file) dv.draft.charter_file = `bots/${name}.md`;
     D.charters[name] = dv.charter; const ch = S.stage('bots', name, dv.draft);
+    if (dv.back) { D.prefs.returnTo = { href: dv.back, label: dv.team ? `team ${dv.team}` : 'where you were' }; S.save(); }
     dv.name = null; UI.staged(ch);
   });
 
@@ -600,7 +597,7 @@
   UI.route('bots/:name/:tab?/:sub?', ({ name, tab, sub }) => {
     if (name === 'new') return settings(null, true);
     const m = M(name);
-    if (!m) return `<div class="page"><div class="empty"><span class="serif">No bot named ${esc(name)}</span><a class="btn" href="#/bots">Teams &amp; bots</a></div></div>`;
+    if (!m) return `<div class="page"><div class="empty"><span class="serif">No bot named ${esc(name)}</span><a class="btn" href="#/bots">Bots</a></div></div>`;
     switch (tab || 'chat') {
       case 'cases': return cases(m, sub);
       case 'proposals': return proposals(m, sub);

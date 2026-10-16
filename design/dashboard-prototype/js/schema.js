@@ -172,7 +172,7 @@
   SCHEMA.verb = (uses) => {
     if (!uses || !uses.includes('.')) return null;
     const [inst, verb] = uses.split('.');
-    const c = (window.D.connectors || []).find((x) => x.name === inst);
+    const c = (((window.S && window.S.view) ? window.S.view() : window.D).connectors || []).find((x) => x.name === inst);
     const use = c ? c.use : inst;
     const decl = SCHEMA.connectors[use];
     return decl && decl.verbs[verb] ? Object.assign({ inst, verb, use, conn: decl }, decl.verbs[verb]) : null;
@@ -182,7 +182,7 @@
     if (on === 'manual') return Object.assign({ inst: 'manual', ev: 'manual' }, SCHEMA.sources.manual);
     if (on.startsWith('timer.') || on.startsWith('schedule')) return Object.assign({ inst: 'timer', ev: on.split('.')[1] || 'schedule', label: 'Schedule' }, SCHEMA.sources.timer);
     const [inst, ev] = on.split('.');
-    const c = (window.D.connectors || []).find((x) => x.name === inst);
+    const c = (((window.S && window.S.view) ? window.S.view() : window.D).connectors || []).find((x) => x.name === inst);
     const decl = c && SCHEMA.connectors[c.use];
     return decl && decl.events[ev] ? Object.assign({ inst, ev, use: c.use, conn: decl }, decl.events[ev]) : null;
   };

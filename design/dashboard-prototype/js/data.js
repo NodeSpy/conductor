@@ -635,4 +635,26 @@ steps:
     text: "{{.incident.service}} · {{.url}}"
 ` });
 
+  /* Folders: an optional `folder: "a/b"` on any bot or team. Organization only
+   * (display, filter, search): no permissions, defaults or behavior. A bot on
+   * a team shows under its team; the team sits in a folder. */
+  D.teams.find((t) => t.name === 'platform').cfg.folder = 'work/platform';
+  D.teams.find((t) => t.name === 'finance').cfg.folder = 'work/billing';
+  D.bots.find((b) => b.name === 'release-scribe').cfg.folder = 'work/platform';
+  D.bots.push({ name: 'homelab', color: '#3fbf7f', desc: 'Watches the home lab: backups, certificates, disks', home: 'live', session: 's4', turns: 18, maxTurns: 60, age: '5h', maxAge: '24h', shadow: false, sandboxed: true, mode: 'namespace', operators: ['ops'], open: 1, pending: 0, workers: 0, spend: 0, proactive: { every: '6h', next: '2h 40m', quiet: '23:00-08:00', budget: '1/3 runs' }, peers: [],
+    cfg: { description: 'Watches the home lab: backups, certificates, disks', folder: 'personal/home', charter_file: 'bots/homelab.md', operators: ['ops'], skill: { verbs: ['kv.get'] }, autonomy: { shadow: false, tiers: { observe: ['kv.get'] }, promote: [], approval_ttl: '24h' }, proactive: { every: '6h', quiet_hours: '23:00-08:00', budget: { max_runs_per_day: 3, max_cost_per_day: 0.5 } }, isolation: { mode: 'namespace' } } });
+  D.charters.homelab = 'Keep an eye on the home lab. Report missed backups and expiring certificates; never change anything.\n';
+  D.chats.homelab = [];
+  D.cases.push({ id: 'c38', bot: 'homelab', title: 'Nightly backup missed on nas-01', status: 'open', requester: 'proactive (sweep x2)', cls: 'proactive', opened: m(140), workers: 0, proposals: 0, routed: { by: 'proactive', to: 'homelab', requester_kept: true }, notes: [] });
+  D.folderDrafts = [];
+
+  /* models: fleets — ranked acceptable models a step names instead of a model id */
+  D.fleets = [
+    { name: 'fixer', cfg: { any: ['claude-sonnet-5', 'claude-opus-*'] } },
+    { name: 'reviewer', cfg: { any: ['claude-opus-*', 'gpt-5.6-*', 'gemini-3.*-pro'] } },
+    { name: 'summarizer', cfg: { any: ['claude-haiku-*', '*-mini'] } },
+    { name: 'light', cfg: { any: ['claude-haiku-4-5'] } },
+    { name: 'my-fleet', cfg: { any: ['claude-opus-5'], required: true } },
+  ];
+
 })();

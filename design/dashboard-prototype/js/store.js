@@ -18,7 +18,9 @@
   const SEED = clone(window.D);
 
   /* ---------- persistence ---------- */
-  S.save = () => { try { localStorage.setItem(KEY, JSON.stringify(window.D)); } catch (e) {} };
+  S.save = () => { S._ver = (S._ver || 0) + 1; try { localStorage.setItem(KEY, JSON.stringify(window.D)); } catch (e) {} };
+  /** The state as it will be once staged changes apply: what pickers offer and validation resolves against. */
+  S.view = () => { const k = (S._ver || 0) + ':' + window.D.pending.length; if (S._vk !== k || !S._v) { S._v = window.D.pending.length ? S.candidate() : window.D; S._vk = k; } return S._v; };
   S.load = () => {
     try {
       const raw = localStorage.getItem(KEY);
@@ -162,6 +164,7 @@
     validate(k, n, all) {
       const e = [];
       if (!/^[a-z][a-z0-9-]*$/.test(k)) e.push(`bot name "${k}": lowercase letters, digits and dashes`);
+      if (n.folder != null && !S.FOLDER_RE.test(n.folder)) e.push(`bots.${k}.folder: "${n.folder}" — segments of letters, digits, space, . _ -, joined by /`);
       if ((!n.operators || !n.operators.length) && !(n.team && S.getPath((byName(all.teams, n.team) || {}).cfg || {}, 'defaults.operators'))) e.push(`bots.${k}.operators: at least one operator must be able to approve (or inherit them from a team)`);
       (n.operators || []).forEach((o) => { if (!all.operatorsCfg[o]) e.push(`bots.${k}.operators: "${o}" is not in operators:`); });
       (n.peers || []).forEach((p) => { if (p === k) e.push(`bots.${k}.peers: a bot can't peer with itself`); else if (!byName(all.bots, p)) e.push(`bots.${k}.peers: no bot named "${p}"`); });
@@ -173,7 +176,7 @@
       e.push(...S.narrowErrors(k, n, all));
       return e;
     },
-    warn(k, n, all) { const w = []; (n.peers || []).forEach((p) => { const o = byName(all.bots, p); if (o && o.cfg && n.team && o.cfg.team === n.team) { w.push(`bots.${k}.peers: ${p} is in the same team, so they are already peers`); return; } if (o && !((o.cfg && o.cfg.peers) || []).includes(k)) w.push(`bots.${k}.peers: ${p} doesn't list ${k} back, so the link stays closed until it does`); }); if (!S.getPath(n, 'autonomy.shadow') && !all.bots.find((m) => m.name === k)) w.push(`bots.${k}: a new bot normally starts in shadow mode`); return w; },
+    warn(k, n, all) { const w = []; (n.peers || []).forEach((p) => { const o = byName(all.bots, p); if (o && o.cfg && n.team && o.cfg.team === n.team) { w.push(`bots.${k}.peers: ${p} is in the same team, so they are already peers`); return; } if (o && !((o.cfg && o.cfg.peers) || []).includes(k)) w.push(`bots.${k}.peers: ${p} doesn't list ${k} back, so the link stays closed until it does`); }); if (n.team && n.folder) w.push(`bots.${k}.folder: ${k} is on team ${n.team}, so it shows under the team; its own folder is ignored`); if (!S.getPath(n, 'autonomy.shadow') && !all.bots.find((m) => m.name === k)) w.push(`bots.${k}: a new bot normally starts in shadow mode`); return w; },
     widens(b, a) {
       const r = [], B = b || {}, A = a || {};
       const bv = new Set(S.getPath(B, 'skill.verbs') || []); (S.getPath(A, 'skill.verbs') || []).forEach((v) => { if (!bv.has(v)) r.push(`adds verb ${v}`); });
@@ -231,6 +234,7 @@
   /* ---------- teams ---------- */
   const TIER_ORDER = ['never', 'propose', 'commit_money', 'reversible', 'observe']; // looser →
   S.TIER_ORDER = TIER_ORDER;
+  S.FOLDER_RE = /^[\w][\w .-]*(\/[\w][\w .-]*)*$/;
   S.teamOf = (bot, st = window.D) => { const m = byName(st.bots, bot); const t = m && m.cfg && m.cfg.team; return t ? byName(st.teams, t) : null; };
   /** What a bot actually runs with: team defaults, narrowed by the bot. */
   S.effective = (m, st = window.D) => {
@@ -274,6 +278,7 @@
     validate(k, n, all) {
       const e = [];
       if (!/^[a-z][a-z0-9-]*$/.test(k)) e.push(`team name "${k}": lowercase letters, digits and dashes`);
+      if (n.folder != null && !S.FOLDER_RE.test(n.folder)) e.push(`teams.${k}.folder: "${n.folder}" — segments of letters, digits, space, . _ -, joined by /`);
       const mem = all.bots.filter((m) => m.cfg && m.cfg.team === k).map((m) => m.name);
       if (n.lead && !mem.includes(n.lead)) e.push(`teams.${k}.lead: ${n.lead} is not a bot of team ${k}`);
       (n.routing || []).forEach((r, i) => { const nm = r.name || `routing[${i}]`; if (!r.when || !r.when.on) e.push(`teams.${k}.routing.${nm}: when.on is required`); if (r.to === 'lead' && !n.lead) e.push(`teams.${k}.routing.${nm}: routes to the lead, but the team has none`); else if (r.to && r.to !== 'lead' && !mem.includes(r.to)) e.push(`teams.${k}.routing.${nm}: ${r.to} is not in team ${k}`); });
@@ -294,10 +299,15 @@
       return r;
     },
   };
+  C.models = { section: 'models', file: 'config.yaml', label: 'fleet', href: () => '#/connectors/runtimes',
+    keys: () => D().fleets.map((f) => f.name), get: (k) => { const f = byName(D().fleets, k); return f ? clone(f.cfg) : null; },
+    set: (k, n) => { if (n == null) return drop(D().fleets, k); const f = byName(D().fleets, k); if (f) f.cfg = n; else D().fleets.push({ name: k, cfg: n }); },
+    path: (k) => `models.${k}`,
+    validate: (k, n) => (/^[a-z][\w-]*$/.test(k) ? [] : [`fleet name "${k}": letters, digits, - and _`]).concat((n.any || []).length ? [] : [`models.${k}.any: list at least one model or wildcard`]) };
   S.ORDER = ['settings', 'vaults', 'secrets', 'connectors', 'hosts', 'runtimes', 'sandbox', 'operators', 'teams', 'bots', 'identities', 'credentials', 'packs', 'update', 'workflows'];
 
   /* ---------- config.yaml, generated from the state ---------- */
-  const HEAD = { settings: 'settings: — ${settings.NAME} anywhere below', vaults: 'vaults: — where secrets live; values never appear here', connectors: 'connectors: — use: names the plugin', hosts: 'hosts: — remote machines over SSH', runtimes: 'runtimes: — where agents run', sandbox: 'sandbox: — the agent sandbox', operators: 'operators: — who can approve', bots: 'bots: — persistent agents (#178)', teams: 'teams: — bots inherit team defaults and can only narrow them', browser: 'browser: — the agent browser (#182)', packs: 'packs: — your overrides; the pack files are vendored', update: 'update: — the auto-update policy', triggers: 'triggers: — on / filter / steps', workflows: 'workflows: — reusable, called with call:', secrets: 'secret references' };
+  const HEAD = { settings: 'settings: — ${settings.NAME} anywhere below', vaults: 'vaults: — where secrets live; values never appear here', connectors: 'connectors: — use: names the plugin', hosts: 'hosts: — remote machines over SSH', runtimes: 'runtimes: — where agents run', models: 'models: — fleets of acceptable models', sandbox: 'sandbox: — the agent sandbox', operators: 'operators: — who can approve', bots: 'bots: — persistent agents (#178)', teams: 'teams: — bots inherit team defaults and can only narrow them', browser: 'browser: — the agent browser (#182)', packs: 'packs: — your overrides; the pack files are vendored', update: 'update: — the auto-update policy', triggers: 'triggers: — on / filter / steps', workflows: 'workflows: — reusable, called with call:', secrets: 'secret references' };
   S.configText = (state) => {
     const st = state || window.D; const out = ['# conductor config — ops-box', '# managed by hand and by the dashboard; comments and unknown keys are kept', ''];
     const sec = (h, obj) => { if (obj == null || (typeof obj === 'object' && !Object.keys(obj).length)) return; out.push('# ' + HEAD[h]); out.push(Y.stringify({ [h]: obj })); out.push(''); };
@@ -306,6 +316,7 @@
     sec('connectors', Object.fromEntries(st.connectors.map((c) => [c.name, c.cfg])));
     sec('hosts', Object.fromEntries(st.hosts.map((h) => [h.name, h.cfg])));
     sec('runtimes', Object.fromEntries(st.runtimes.map((r) => [r.name, r.cfg])));
+    sec('models', Object.fromEntries((st.fleets || []).map((f) => [f.name, f.cfg])));
     sec('sandbox', st.sandboxCfg);
     sec('operators', st.operatorsCfg);
     sec('teams', Object.fromEntries(st.teams.map((t) => [t.name, t.cfg])));

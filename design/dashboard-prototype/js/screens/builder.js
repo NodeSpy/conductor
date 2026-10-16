@@ -217,8 +217,8 @@
       case 'text': input = `<textarea class="textarea mono" rows="${fd.rows || 3}" ${data} ${dis} placeholder="${esc(ph)}">${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</textarea>`; break;
       case 'code': input = `<div class="code-wrap" ${data}>${UI.editor({ id: id + '-ed', text: String(v), lang: { js: 'js', node: 'js', python3: 'python', sh: 'sh' }[fd.lang] || 'js', minRows: 7, label: 'code', readonly: !!ro })}</div>`; break;
       case 'bool': input = `<label class="row small" style="min-height:30px"><input type="checkbox" class="cbx" ${data} ${v ? 'checked' : ''} ${ro ? 'disabled' : ''}> ${fd.on || 'on'}</label>`; break;
-      case 'enum': input = `<select class="select mono" ${data} ${ro ? 'disabled' : ''}>${(fd.req ? [] : [['', fd.def != null ? `default (${fd.def})` : '— none —']]).concat((fd.options || []).map((o) => (Array.isArray(o) ? o : [o, o]))).map(([ov, ol]) => `<option value="${esc(ov)}"${String(ov) === String(v) ? ' selected' : ''}>${esc(ol)}</option>`).join('')}${v !== '' && !(fd.options || []).some((o) => String(Array.isArray(o) ? o[0] : o) === String(v)) ? `<option selected value="${esc(v)}">${esc(v)}</option>` : ''}</select>`; break;
-      case 'list': case 'multi': { const items = Array.isArray(v) ? v : v === '' ? [] : [v]; input = `<div class="listed" ${data}>${items.map((x) => `<span class="chip-x"><span class="mono">${esc(x)}</span>${ro ? '' : `<button type="button" data-act="wf-list-del" aria-label="Remove ${esc(x)}">${icon('x')}</button>`}</span>`).join('')}${ro ? '' : fd.type === 'multi' ? `<select class="select mono list-add-sel" data-wf-listadd="1" aria-label="Add ${esc(label)}"><option value="">+ add…</option>${(fd.options || []).filter((o) => !items.includes(o)).map((o) => `<option>${esc(o)}</option>`).join('')}</select>` : `<input class="input mono list-add" data-wf-listadd="1" placeholder="add, then Enter" aria-label="Add ${esc(label)}">`}</div>`; break; }
+      case 'enum': input = `<select class="select mono" ${data} ${ro ? 'disabled' : ''} ${ro ? '' : UI.pickerAttrs(fd)}>${ro ? '' : UI.createOpt(fd)}${(fd.req ? [] : [['', fd.def != null ? `default (${fd.def})` : '— none —']]).concat((fd.options || []).map((o) => (Array.isArray(o) ? o : [o, o]))).map(([ov, ol]) => `<option value="${esc(ov)}"${String(ov) === String(v) ? ' selected' : ''}>${esc(ol)}</option>`).join('')}${v !== '' && !(fd.options || []).some((o) => String(Array.isArray(o) ? o[0] : o) === String(v)) ? `<option selected value="${esc(v)}">${esc(v)}</option>` : ''}</select>`; break;
+      case 'list': case 'multi': { const items = Array.isArray(v) ? v : v === '' ? [] : [v]; input = `<div class="listed" ${data}>${items.map((x) => `<span class="chip-x"><span class="mono">${esc(x)}</span>${ro ? '' : `<button type="button" data-act="wf-list-del" aria-label="Remove ${esc(x)}">${icon('x')}</button>`}</span>`).join('')}${ro ? '' : fd.type === 'multi' ? `<select class="select mono list-add-sel" data-wf-listadd="1" aria-label="Add ${esc(label)}" ${UI.pickerAttrs(fd)}><option value="">+ add…</option>${UI.createOpt(fd)}${(fd.options || []).filter((o) => !items.includes(o)).map((o) => `<option>${esc(o)}</option>`).join('')}</select>` : `<input class="input mono list-add" data-wf-listadd="1" placeholder="add, then Enter" aria-label="Add ${esc(label)}">`}</div>`; break; }
       case 'map': { const ents = Object.entries(isObj(v) ? v : {}); input = `<div class="kvedit wf-map" ${data}>${ents.concat(ro ? [] : [['', '']]).map(([a, b]) => `<div class="kvrow"><input class="input mono" placeholder="key" value="${esc(a)}" data-mk="k" ${dis}><input class="input mono" placeholder="value" value="${esc(typeof b === 'object' ? JSON.stringify(b) : b)}" data-mk="v" ${dis}><span></span></div>`).join('')}</div>`; break; }
       case 'seg': input = `<div class="seg" role="group">${fd.options.map(([ov, ol]) => `<button type="button" ${ro ? UI.off(ro) : `data-act="wf-seg" data-loc="${loc}" data-path="${path}" data-v="${esc(ov)}"`} aria-pressed="${String(ov) === String(v || fd.def || '')}" class="${String(ov) === String(v || fd.def || '') ? 'on' : ''}">${ol}</button>`).join('')}</div>`; break;
       default: input = `<input class="input mono" value="${esc(typeof v === 'object' ? JSON.stringify(v) : v)}" ${data} ${dis} placeholder="${esc(ph)}" ${fd.list ? `list="${fd.list}"` : ''} autocomplete="off">`;
@@ -236,22 +236,24 @@
     if (k === 'verb' || k === 'ask') {
       const decl = SCHEMA.verb(s.uses);
       const [inst, verb] = String(s.uses).split('.');
-      const c = D.connectors.find((x) => x.name === inst);
-      const accts = c ? D.connectors.filter((x) => x.use === c.use) : [];
-      rows.push(`<div class="acct-row"><div class="field"><label>Account <span class="opt">connector instance</span></label><select class="select mono" ${ro ? 'disabled' : `data-wf-acct="${loc}"`} aria-label="Connected account">${accts.length ? accts.map((a) => `<option${a.name === inst ? ' selected' : ''} value="${a.name}">${a.name} · ${a.use}${a.status !== 'ok' ? ' (' + a.status + ')' : ''}</option>`).join('') : `<option>${esc(inst)} · not connected</option>`}</select>${accts.length > 1 ? `<div class="hint">${accts.length} ${c.use} connectors: pick which account acts.</div>` : !c && !['git', 'kv'].includes(inst) ? `<div class="hint"><a class="link" href="#/connectors/connectors">Add a ${esc(inst)} connector</a> to run this.</div>` : ''}</div>
+      const c = S.view().connectors.find((x) => x.name === inst);
+      const accts = c ? S.view().connectors.filter((x) => x.use === c.use) : [];
+      rows.push(`<div class="acct-row"><div class="field"><label>Account <span class="opt">connector instance</span></label><select class="select mono" ${ro ? 'disabled' : `data-wf-acct="${loc}" data-picker="connector" data-ctx='${esc(JSON.stringify({ use: c ? c.use : inst }))}' data-ret="name"`} aria-label="Connected account">${ro ? '' : `<option value="__new__">+ New ${esc((SCHEMA.connectors[c ? c.use : inst] || { label: inst }).label)} connector…</option>`}${accts.length ? accts.map((a) => `<option${a.name === inst ? ' selected' : ''} value="${a.name}">${a.name} · ${a.use}${a.status !== 'ok' ? ' (' + a.status + ')' : ''}</option>`).join('') : `<option>${esc(inst)} · not connected</option>`}</select>${accts.length > 1 ? `<div class="hint">${accts.length} ${c.use} connectors: pick which account acts.</div>` : !c && !['git', 'kv'].includes(inst) ? `<div class="hint"><a class="link" href="#/connectors/connectors">Add a ${esc(inst)} connector</a> to run this.</div>` : ''}</div>
         <div class="field"><label>Action</label><select class="select mono" ${ro ? 'disabled' : `data-wf-verb="${loc}"`} aria-label="Action">${decl ? Object.entries(decl.conn.verbs).map(([vn, vd]) => `<option value="${vn}"${vn === verb ? ' selected' : ''}>${vn} · ${esc(vd.label)}</option>`).join('') : `<option>${esc(verb)}</option>`}</select></div></div>`);
       if (decl) decl.fields.forEach((f) => G('options.' + f.k, Object.assign({}, f, { type: f.type === 'duration' ? 'string' : f.type === 'secret' ? 'string' : f.type })));
     } else if (k === 'agent') {
       if (packRo) rows.push(`<div class="field"><label>prompt</label><div class="prompt-ro mono small">${esc(s.prompt || s.prompt_file || '')}</div><div class="hint">The prompt is the pack's.</div></div>`);
       else F('prompt', { type: 'text', req: true, rows: 5, help: 'Say what to do. Insert references with the { } button or by typing {{.' });
-      G('runtime', { type: 'enum', options: D.runtimes.map((r) => r.name), def: (D.runtimes.find((r) => r.cfg && r.cfg.default) || {}).name });
-      G('model', { type: 'string', list: 'dl-models', help: 'A fleet (fixer, reviewer…), a model id, or a wildcard. Omit for a bare launch.' });
+      G('runtime', { type: 'enum', options: S.view().runtimes.map((r) => r.name), def: (D.runtimes.find((r) => r.cfg && r.cfg.default) || {}).name, create: 'runtime', createLabel: 'New runtime' });
+      G('model', { type: 'string', list: 'dl-models', help: `A fleet (fixer, reviewer…), a model id, or a wildcard. Omit for a bare launch. <button type="button" class="link" data-act="create-inline" data-create="fleet" data-picker="fleet" data-target="wf-${loc.replace(/\./g, '_')}-model">+ New fleet</button>` });
       G('isolation.mode', { type: 'seg', label: 'sandbox', options: [['', 'agent sandbox'], ['container', 'container'], ['none', 'none (widens)']] });
       if (!packRo) {
         F('workspace', { type: 'enum', options: ['local', 'worktree'] });
         F('checkout', { type: 'enum', options: ['none', 'checkout-pr', 'branch-off'] });
         F('skill.verbs', { type: 'multi', label: 'skill verbs (grant)', options: allVerbs(), help: 'Deny-by-default: the verbs this agent may call back into conductor.' });
-        F('handoff', { type: 'enum', options: D.connectors.filter((c) => SCHEMA.connectors[c.use] && Object.values(SCHEMA.connectors[c.use].verbs).some((x) => x.ask)).map((c) => c.name), help: 'Present a review loop on an ask-capable connector.' });
+        F('handoff', { type: 'enum', options: S.view().connectors.filter((c) => SCHEMA.connectors[c.use] && Object.values(SCHEMA.connectors[c.use].verbs).some((x) => x.ask)).map((c) => c.name), create: 'connector', createCtx: { uses: ['web', 'slack'] }, createLabel: 'New ask-capable connector', help: 'Present a review loop on an ask-capable connector.' });
+        F('browser.credentials', { type: 'multi', label: 'browser credentials', options: S.view().access.credentials.map((x) => x.name), create: 'credential', createLabel: 'New credential binding', help: 'Logins this step\'s browser may fill (values never reach the agent).' });
+        F('skill.allow_secrets', { type: 'multi', label: 'secrets (broker grants)', options: S.view().secrets.map((x) => x.ref), create: 'secret', ret: 'ref', createLabel: 'New secret', help: 'Exact vault entries the agent may request through the broker: single use, 60s, audited.' });
         F('gate.run', { type: 'multi', label: 'quality gate', options: SCHEMA.checks });
       }
     } else if (k === 'code') {
@@ -265,8 +267,8 @@
       F('decide.state', { type: 'text', label: 'state', rows: 3, help: 'What the decision looks at.' });
       rows.push(questionsEditor(s, loc, ro));
     } else if (k === 'call') {
-      const wfs = D.workflows.filter((w) => w.kind === 'workflow');
-      rows.push(`<div class="field"><label>Workflow</label><select class="select mono" ${ro ? 'disabled' : `data-wf-call="${loc}"`} aria-label="Workflow to call">${wfs.map((w) => `<option${w.name === s.call ? ' selected' : ''}>${w.name}</option>`).join('')}</select></div>`);
+      const wfs = S.view().workflows.filter((w) => w.kind === 'workflow');
+      rows.push(`<div class="field"><label>Workflow</label><select class="select mono" ${ro ? 'disabled' : `data-wf-call="${loc}" data-picker="workflow" data-ret="name"`} aria-label="Workflow to call">${ro ? '' : '<option value="__new__">+ New reusable workflow…</option>'}${wfs.map((w) => `<option${w.name === s.call ? ' selected' : ''}>${w.name}</option>`).join('')}</select></div>`);
       const w = wfs.find((x) => x.name === s.call); let ins = {};
       try { ins = (w && Y.parse(w.yaml).value.inputs) || {}; } catch (x) {}
       Object.entries(ins).forEach(([ik, d]) => F('with.' + ik, { type: d.type === 'integer' ? 'number' : 'string', req: !!d.required, def: d.default, label: ik + ' (input)' }));
@@ -278,8 +280,8 @@
     } else if (k === 'bot') {
       const toTeam = typeof s.bot === 'object';
       rows.push(`<div class="field"><label>Hand to</label>${UI.seg([['bot', 'a bot'], ['team', 'a team']], toTeam ? 'team' : 'bot', 'wf-bottarget').replace(/data-act="wf-bottarget"/g, ro ? UI.off(ro) : `data-act="wf-bottarget" data-loc="${loc}"`)}<div class="hint">${toTeam ? 'The team\'s routing rules pick the bot; with no match its lead triages. The requester is this trigger\'s event.' : 'Delivered to the bot directly, as conductor bot deliver.'}</div></div>`);
-      if (toTeam) F('bot.team', { type: 'enum', label: 'team', req: true, options: D.teams.map((x) => x.name) });
-      else F('bot', { type: 'enum', label: 'bot', req: true, options: D.bots.map((x) => x.name) });
+      if (toTeam) F('bot.team', { type: 'enum', label: 'team', req: true, options: S.view().teams.map((x) => x.name), create: 'team', createLabel: 'New team' });
+      else F('bot', { type: 'enum', label: 'bot', req: true, options: S.view().bots.map((x) => x.name), create: 'bot', createLabel: 'New bot' });
       F('title', { type: 'string', req: true, help: 'Becomes the case title.' });
       F('text', { type: 'text', rows: 3, help: 'Reaches the bot fenced as untrusted data.' });
     } else if (k === 'log') F('log', { type: 'text', rows: 2 });
@@ -473,7 +475,7 @@
     const items = [];
     SCHEMA.kinds.forEach((k) => items.push({ key: 'kind:' + k.k, group: 'Built-in', icon: k.icon, label: k.label, sub: k.desc, dis: inBranch && k.k === 'parallel' ? 'A parallel group can\'t nest inside a branch' : '' }));
     const seen = new Set();
-    D.connectors.forEach((c) => { const d = SCHEMA.connectors[c.use]; if (!d) return; seen.add(c.use); Object.entries(d.verbs).forEach(([vn, vd]) => items.push({ key: `verb:${c.name}.${vn}`, group: `${d.label} · ${c.name}`, icon: d.icon, label: vd.label, sub: `${c.name}.${vn}${vd.read ? ' · read' : ''}` })); });
+    S.view().connectors.forEach((c) => { const d = SCHEMA.connectors[c.use]; if (!d) return; seen.add(c.use); Object.entries(d.verbs).forEach(([vn, vd]) => items.push({ key: `verb:${c.name}.${vn}`, group: `${d.label} · ${c.name}`, icon: d.icon, label: vd.label, sub: `${c.name}.${vn}${vd.read ? ' · read' : ''}` })); });
     Object.entries(SCHEMA.connectors).forEach(([use, d]) => { if (seen.has(use) || d.registry) return; if (use === 'git') Object.entries(d.verbs).forEach(([vn, vd]) => items.push({ key: `verb:git.${vn}`, group: 'git · builtin', icon: d.icon, label: vd.label, sub: `git.${vn}` })); });
     Object.entries(SCHEMA.connectors).forEach(([use, d]) => { if (!d.registry) return; Object.entries(d.verbs).forEach(([vn, vd]) => items.push({ key: `verb:${use}.${vn}`, group: `${d.label} · not installed`, icon: d.icon, label: vd.label, sub: `${use}.${vn} · needs ${d.registry}`, notInstalled: true })); });
     return items;
@@ -482,7 +484,8 @@
     const items = opts.items || pickerItems(opts.inBranch);
     const recent = ((D.recentSteps || []).map((k) => items.find((x) => x.key === k)).filter(Boolean)).slice(0, 5);
     const s = UI.modal(`<div class="modal-head"><div><div class="caps">${opts.caps || 'add a step'}</div><h2>${opts.title || 'What should happen?'}</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
-      <div class="modal-body picker"><div class="input-icon">${icon('search')}<input class="input" id="pk-q" placeholder="${opts.ph || 'Search: comment, slack, agent, code, approval…'}" autocomplete="off" aria-label="Search steps"></div><div id="pk-list" class="pk-list" role="listbox"></div></div>`, { wide: true });
+      <div class="modal-body picker" data-picker="connector"><div class="row" style="gap:8px;margin-bottom:12px"><div class="input-icon grow" style="margin:0">${icon('search')}<input class="input" id="pk-q" placeholder="${opts.ph || 'Search: comment, slack, agent, code, approval…'}" autocomplete="off" aria-label="Search steps"></div><button type="button" class="btn sm" data-act="create-inline" data-create="connector">${icon('plus')}New connector</button></div><div id="pk-list" class="pk-list" role="listbox"></div></div>`, { wide: true });
+    UI.onCreated = (kind) => { if (kind === 'connector') { const cb = onPick; openPicker(cb, Object.assign({}, opts, { items: opts.items ? opts.rebuild && opts.rebuild() : undefined })); UI.toast('Connector staged', 'its verbs and events are in the list now; it applies with this workflow', 'ok'); } };
     const draw = (q) => {
       q = (q || '').toLowerCase().trim();
       const match = items.filter((x) => !q || (x.label + ' ' + x.sub + ' ' + x.group + ' ' + x.key).toLowerCase().includes(q));
@@ -650,8 +653,9 @@
   UI.act('wf-in-add', () => { const n = UI.$('#in-name').value.trim(); if (!/^[a-z_][\w]*$/.test(n)) { UI.$('#in-name').focus(); UI.$('#in-name').classList.add('shake'); return; } mutate((v) => { v.inputs = v.inputs || {}; v.inputs[n] = Object.assign({ type: UI.$('#in-type').value }, UI.$('#in-req').checked ? { required: true } : {}); }); });
   UI.act('wf-in-del', (b) => mutate((v) => { delete v.inputs[b.dataset.k]; }));
   UI.act('wf-trig-pick', (b) => {
-    const items = [{ key: 'on:manual', group: 'conductor', icon: 'play', label: 'Manual run', sub: 'manual · conductor run, or the Run button' }, { key: 'on:timer.schedule', group: 'conductor', icon: 'clock', label: 'Schedule', sub: 'timer.<name> · a cron in timers:' }, { key: 'on:conductor.failed', group: 'conductor', icon: 'warn', label: 'A run failed', sub: 'conductor.failed · lifecycle' }];
-    D.connectors.forEach((c) => { const d = SCHEMA.connectors[c.use]; if (d) Object.entries(d.events).forEach(([en, ed]) => items.push({ key: `on:${c.name}.${en}`, group: `${d.label} · ${c.name}`, icon: d.icon, label: ed.label, sub: `${c.name}.${en}` })); });
+    const trigItems = () => { const items = [{ key: 'on:manual', group: 'conductor', icon: 'play', label: 'Manual run', sub: 'manual · conductor run, or the Run button' }, { key: 'on:timer.schedule', group: 'conductor', icon: 'clock', label: 'Schedule', sub: 'timer.<name> · a cron in timers:' }, { key: 'on:conductor.failed', group: 'conductor', icon: 'warn', label: 'A run failed', sub: 'conductor.failed · lifecycle' }];
+    S.view().connectors.forEach((c) => { const d = SCHEMA.connectors[c.use]; if (d) Object.entries(d.events).forEach(([en, ed]) => items.push({ key: `on:${c.name}.${en}`, group: `${d.label} · ${c.name}`, icon: d.icon, label: ed.label, sub: `${c.name}.${en}` })); }); return items; };
+    const items = trigItems();
     openPicker((item) => mutate((v) => {
       const on = item.key.slice(3);
       const cur = WF.sources(v).map((x) => (x.block ? { [x.on]: x.block } : x.on));
@@ -660,7 +664,7 @@
       if ('on' in v) v.on = val;
       else { const rest = Object.assign({}, v); Object.keys(v).forEach((k) => delete v[k]); if ('name' in rest) { v.name = rest.name; delete rest.name; } v.on = val; Object.assign(v, rest); }
       if (!B.ev) { const e = SCHEMA.events.find((x) => x.on === on); if (e) B.ev = e.id; }
-    }), { items, caps: 'trigger', title: 'What starts this workflow?', ph: 'Search events: check failed, review, incident, schedule…' });
+    }), { items, rebuild: trigItems, caps: 'trigger', title: 'What starts this workflow?', ph: 'Search events: check failed, review, incident, schedule…' });
   });
 
   /* references: the data picker and autocomplete */

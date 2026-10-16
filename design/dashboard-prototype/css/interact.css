@@ -188,3 +188,51 @@ button.node { font: inherit; color: inherit; text-align: left; }
 .pg-node.outside { opacity: .75; }
 .deleg-result { margin-top: 3px; padding: 4px 8px; border-left: 2px solid var(--ok); background: var(--ok-wash); border-radius: 0 4px 4px 0; }
 .item.deleg.inbound { background: var(--run-wash); }
+/* create-in-place drawer: over the page or modal, which keeps its unsaved state */
+.drawer-scrim { position: fixed; inset: 0; z-index: 110; background: rgba(8, 8, 6, .35); display: flex; justify-content: flex-end; animation: fade .15s; }
+.drawer-scrim.layered { justify-content: center; align-items: center; }
+.cdrawer { width: min(520px, 100%); height: 100%; background: var(--bg-2); border-left: 1px solid var(--line-2); box-shadow: var(--elev-pop); display: flex; flex-direction: column; animation: slideIn .2s var(--ease); }
+.drawer-scrim.layered .cdrawer { height: auto; max-height: 90vh; border-radius: var(--r-lg); border: 1px solid var(--line-2); width: min(560px, 94vw); }
+.cdrawer .modal-body { flex: 1; overflow: auto; }
+.cdrawer .modal-head { border-bottom: 1px solid var(--line); }
+.cdrawer .create-note { font-size: 11.5px; color: var(--run); }
+@media (max-width: 720px) { .drawer-scrim { align-items: flex-end; } .cdrawer { height: 92vh; border-radius: 16px 16px 0 0; border-left: 0; } }
+/* bots: the folder tree */
+.ftree { padding: 4px 0; }
+.frow { display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 4px 12px 4px calc(12px + var(--d, 0) * 22px); border-bottom: 1px solid var(--line); position: relative; }
+.frow::before { content: ""; position: absolute; left: calc(20px + (var(--d, 0) - 1) * 22px); top: 0; bottom: 0; border-left: 1px dashed var(--line-2); display: var(--guide, block); }
+.frow[style*="--d:0"]::before { display: none; }
+.frow:hover { background: var(--bg-3); }
+.frow.folder { background: color-mix(in srgb, var(--bg-3) 60%, transparent); }
+.frow.folder .fname b { font-family: var(--font-mono); font-size: 12.5px; }
+.frow.rootdrop { min-height: 34px; background: transparent; }
+.frow .fname { display: flex; flex-direction: column; min-width: 0; flex: 1; color: inherit; }
+.frow .fname b { font-size: 13px; }
+.frow .fic { width: 26px; height: 26px; display: grid; place-items: center; color: var(--ink-3); flex: none; }
+.frow .fic svg { width: 16px; height: 16px; }
+.frow .team-ic, .drill .team-ic { color: var(--run); border-radius: 7px; background: var(--run-wash); }
+.frow .grip { color: var(--ink-4); cursor: grab; width: 14px; display: grid; place-items: center; }
+.frow .grip svg { width: 14px; height: 14px; transform: rotate(90deg); }
+.frow .grip.off { cursor: default; }
+.frow .fstat { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.frow .ftoggle svg { width: 13px; height: 13px; }
+.frow.drop-on { background: var(--accent-wash); box-shadow: inset 0 0 0 2px var(--accent); }
+.frow.dragging { opacity: .45; }
+.frow.moved { box-shadow: inset 3px 0 0 var(--run); }
+.roll { display: inline-flex; gap: 10px; align-items: center; font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
+.roll > span { display: inline-flex; gap: 3px; align-items: center; }
+.roll svg { width: 11px; height: 11px; }
+.roll .hot { color: var(--accent); font-weight: 600; }
+.roll .live { color: var(--run); }
+.roll .pulse { width: 6px; height: 6px; }
+.staged-moves { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; border-color: color-mix(in srgb, var(--run) 40%, var(--line)); }
+.staged-moves .btn { margin-left: auto; }
+.scope-note { display: flex; gap: 6px; align-items: center; padding: 6px 12px; color: var(--ink-2); background: var(--accent-wash); border-bottom: 1px solid var(--line); }
+.scope-note svg { width: 12px; height: 12px; }
+.peers-panel > summary { cursor: pointer; list-style: none; }
+.peers-panel > summary::-webkit-details-marker { display: none; }
+.drill .item .roll { display: flex; margin-top: 3px; }
+@media (max-width: 720px) {
+  .frow .roll { display: none; }
+  .filters .roll { display: none; }
+}

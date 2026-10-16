@@ -81,6 +81,7 @@
     upload: '<path d="M12 16V5M7 10l5-5 5 5M5 20h14"/>',
     expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   };
+  P.members = P.bots; P.team = P.bots;
   UI.icon = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || P.dot}</svg>`;
 
   /* ---------- status ---------- */
@@ -166,12 +167,12 @@
   UI.go = (h) => { if (location.hash === h) UI.render(); else location.hash = h; };
   /** Re-render the current route in place (after a state change), keeping scroll. */
   UI.rerender = () => { UI.refreshChrome(); UI.render({ keepScroll: true }); };
-  window.addEventListener('hashchange', () => { UI.closeModal(); UI.render(); });
+  window.addEventListener('hashchange', () => { document.querySelectorAll('.drawer-scrim').forEach((d) => d.remove()); UI.closeModal(); UI.render(); });
 
   /* ---------- nav ---------- */
   const navGroups = [
     ['Now', [['overview', 'Overview', 'overview'], ['live', 'Live', 'live', () => D.runs.filter((r) => r.status === 'run').length], ['attention', 'Needs you', 'attention', () => D.attention.length, true]]],
-    ['Work', [['runs', 'Run history', 'runs'], ['workflows', 'Workflows', 'workflows'], ['bots', 'Teams & bots', 'bots'], ['browser', 'Browsers', 'browser', () => D.browsers.length]]],
+    ['Work', [['runs', 'Run history', 'runs'], ['workflows', 'Workflows', 'workflows'], ['bots', 'Bots', 'bots'], ['browser', 'Browsers', 'browser', () => D.browsers.length]]],
     ['System', [['config', 'Config', 'config'], ['secrets', 'Secrets & vars', 'secrets'], ['extensions', 'Packs & plugins', 'extensions'], ['connectors', 'Connectors & hosts', 'connectors'], ['updates', 'Updates', 'updates', () => 1], ['logs', 'Logs & audit', 'logs'], ['security', 'Access', 'shield']]],
   ];
   UI.navHTML = () => navGroups.map(([g, items]) => `<div class="nav-group"><span class="caps">${g}</span><nav class="nav">${items.map(([k, l, ic, c, hot]) => {
@@ -194,6 +195,15 @@
     return s;
   };
   UI.closeModal = () => { const s = $('#scrim'); if (s) s.remove(); };
+  /** A create-in-place drawer: layered over the current page or modal, which keeps its unsaved state. */
+  UI.openDrawer = (html) => {
+    const d = document.createElement('div'); d.className = 'drawer-scrim';
+    d.innerHTML = `<aside class="cdrawer" role="dialog" aria-modal="true">${html}</aside>`;
+    document.body.appendChild(d);
+    d.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); d.remove(); }));
+    return d;
+  };
+  UI.closeDrawer = () => { const all = document.querySelectorAll('.drawer-scrim'); if (all.length) { all[all.length - 1].remove(); return true; } return false; };
   UI.toast = (title, sub, s = 'ember') => {
     let box = $('.toasts'); if (!box) { box = document.createElement('div'); box.className = 'toasts'; box.setAttribute('aria-live', 'polite'); document.body.appendChild(box); }
     const t = document.createElement('div'); t.className = 'toast'; t.dataset.s = s; t.style.setProperty('--sc', `var(--${s === 'ember' ? 'accent' : s})`);
@@ -255,6 +265,7 @@
       ...D.bots.map((mb) => [`Bot · ${mb.name}`, '#/bots/' + mb.name, 'bots']),
       ...D.runs.slice(0, 8).map((r) => [`Run ${r.id} · ${r.workflow} ${r.repo ? r.repo + '#' + r.number : ''}`, '#/runs/' + r.id, 'runs']),
       ...D.workflows.slice(0, 5).map((w) => [`Edit workflow · ${w.name}`, '#/workflows/' + w.name, 'canvas']),
+      ...(UI.paletteExtra ? UI.paletteExtra() : []),
       ['Pause dispatch', '#/overview', 'pause'], ['Apply update v0.72.0', '#/updates', 'updates'], ['Phone layouts', 'phone.html', 'phone'], ['Sign-in & enrollment', '#/signin', 'passkey'],
     ];
     const el = document.createElement('div');
@@ -273,7 +284,7 @@
     $('#pal-scrim', el).addEventListener('click', close); res.addEventListener('click', close);
     draw(); setTimeout(() => inp.focus(), 10);
   };
-  document.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); UI.palette(); } if (e.key === 'Escape') UI.closeModal(); });
+  document.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); UI.palette(); } if (e.key === 'Escape') { if (!UI.closeDrawer()) UI.closeModal(); } });
 
   /* ---------- theme ---------- */
   UI.theme = (t) => { document.documentElement.dataset.theme = t; try { localStorage.setItem('cd-theme', t); } catch (e) {} const b = $('#theme-btn'); if (b) b.innerHTML = UI.icon(t === 'dark' ? 'sun' : 'moon'); };
@@ -374,18 +385,20 @@
   UI.act('reset-demo', () => UI.confirm({ title: 'Reset demo data?', body: 'Puts the prototype\'s fake state back: staged and applied changes, chat, cases, workflows, everything you added or removed. Your theme stays.', ok: 'Reset', danger: true }).then((ok) => { if (!ok) return; S.reset(); UI.refreshChrome(); UI.render(); UI.toast('Demo data reset', 'fresh fake state', 'ok'); }));
 
   /* ---------- confirm / step-up ---------- */
+  // over an open modal or drawer, dialogs layer instead of replacing it (its unsaved state stays)
+  const layer = (html, opts) => { if (document.querySelector('#scrim, .drawer-scrim')) { const d = UI.openDrawer(html); d.classList.add('layered'); return [d, () => d.remove()]; } return [UI.modal(html, opts), UI.closeModal]; };
   UI.confirm = ({ title, body = '', ok = 'Confirm', danger = false, caps = '' }) => new Promise((res) => {
-    const s = UI.modal(`<div class="modal-head"><div>${caps ? `<div class="caps">${caps}</div>` : ''}<h2>${title}</h2></div><button class="icon-btn" data-close aria-label="Close">${UI.icon('x')}</button></div>
+    const [s, close] = layer(`<div class="modal-head"><div>${caps ? `<div class="caps">${caps}</div>` : ''}<h2>${title}</h2></div><button class="icon-btn" data-close aria-label="Close">${UI.icon('x')}</button></div>
       <div class="modal-body small dim">${body}</div>
-      <div class="modal-foot"><button class="btn ghost" data-close>Cancel</button><button class="btn ${danger ? 'danger' : 'primary'}" id="cf-ok">${ok}</button></div>`);
+      <div class="modal-foot"><button class="btn ghost" data-close>Cancel</button><button class="btn ${danger ? 'danger' : 'primary'}" id="cf-ok">${ok}</button></div>`, {});
     let done = false;
-    $('#cf-ok', s).addEventListener('click', () => { done = true; UI.closeModal(); res(true); });
+    $('#cf-ok', s).addEventListener('click', () => { done = true; close(); res(true); });
     const obs = new MutationObserver(() => { if (!document.body.contains(s)) { obs.disconnect(); if (!done) res(false); } });
     obs.observe(document.body, { childList: true });
   });
   /** A step-up passkey assertion over `what` (simulated authenticator). */
   UI.stepup = ({ title, what, purpose = 'step-up', ok = 'Confirm with passkey', danger = false }) => new Promise((res) => {
-    const s = UI.modal(`<div class="modal-head"><div><div class="caps">${purpose} · fresh passkey assertion</div><h2>${title}</h2></div><button class="icon-btn" data-close aria-label="Close">${UI.icon('x')}</button></div>
+    const [s, close] = layer(`<div class="modal-head"><div><div class="caps">${purpose} · fresh passkey assertion</div><h2>${title}</h2></div><button class="icon-btn" data-close aria-label="Close">${UI.icon('x')}</button></div>
       <div class="modal-body"><div class="panel inset" style="padding:10px 12px"><div class="caps" style="margin-bottom:4px">You are signing</div><div class="digest">${what}</div></div>
         <div class="seal" id="su-seal"><div class="ring">${UI.icon('passkey', 'key')}<svg class="arc" viewBox="0 0 108 108"><circle class="track" cx="54" cy="54" r="52"/><circle class="fill" cx="54" cy="54" r="53"/></svg></div>
         <div id="su-msg"><b>Confirm with your passkey</b><div class="muted small">User verification required · bound to this request's digest · single use, 2 min</div></div></div></div>
@@ -394,7 +407,7 @@
     $('#su-go', s).addEventListener('click', (e) => {
       e.currentTarget.disabled = true; const seal = $('#su-seal', s); seal.classList.add('signing');
       $('#su-msg', s).innerHTML = '<b>Touch your security key…</b><div class="muted small">navigator.credentials.get · rpId ops-box.tail0000.ts.net</div>';
-      setTimeout(() => { seal.classList.remove('signing'); seal.classList.add('done'); $('#su-msg', s).innerHTML = '<b>Verified</b><div class="muted small">operator ops · credential laptop</div>'; setTimeout(() => { done = true; UI.closeModal(); res(true); }, UI.fast ? 50 : 450); }, UI.fast ? 80 : 900);
+      setTimeout(() => { seal.classList.remove('signing'); seal.classList.add('done'); $('#su-msg', s).innerHTML = '<b>Verified</b><div class="muted small">operator ops · credential laptop</div>'; setTimeout(() => { done = true; close(); res(true); }, UI.fast ? 50 : 450); }, UI.fast ? 80 : 900);
     });
     const obs = new MutationObserver(() => { if (!document.body.contains(s)) { obs.disconnect(); if (!done) res(false); } });
     obs.observe(document.body, { childList: true });
@@ -421,9 +434,12 @@
    * fields: { k, label, type, req, options, help, ph, def, show(values), validate(v, values) }
    * types: string text number bool enum seg list secret duration map code host select-multi
    * onSubmit(values) returns false (keep open) or a string error to show. */
-  const fieldId = (k) => 'f-' + k.replace(/[^\w-]/g, '_');
-  UI.fieldHTML = (fd, v) => {
-    const id = fieldId(fd.k), lbl = fd.label || fd.k.split('.').pop().replace(/_/g, ' ');
+  const fieldId = (k, pre = 'f-') => pre + k.replace(/[^\w-]/g, '_');
+  /** Create-in-place: an entity picker's first option opens a drawer that stages the new thing. */
+  UI.createOpt = (fd) => (fd.create ? `<option value="__new__">+ ${UI.esc(fd.createLabel || 'New ' + fd.create)}…</option>` : '');
+  UI.pickerAttrs = (fd) => (fd.create ? `data-picker="${fd.create}" data-ctx='${UI.esc(JSON.stringify(fd.createCtx || {}))}' data-ret="${fd.ret || 'name'}"` : '');
+  UI.fieldHTML = (fd, v, pre = 'f-') => {
+    const id = fieldId(fd.k, pre), lbl = fd.label || fd.k.split('.').pop().replace(/_/g, ' ');
     const req = fd.req ? '<span class="req" aria-label="required">*</span>' : '<span class="opt">optional</span>';
     const help = fd.help ? `<div class="hint">${fd.help}</div>` : '';
     const val = v == null ? '' : v;
@@ -433,20 +449,21 @@
       case 'number': input = `<input class="input mono" id="${id}" data-k="${fd.k}" inputmode="decimal" value="${UI.esc(val)}" placeholder="${UI.esc(fd.ph || '')}">`; break;
       case 'bool': input = `<label class="row small" style="min-height:30px"><input type="checkbox" class="cbx" id="${id}" data-k="${fd.k}" ${val ? 'checked' : ''}> ${fd.on || 'on'}</label>`; break;
       case 'enum': case 'host': {
-        const opts = fd.type === 'host' ? [''].concat(D.hosts.map((h) => h.name)) : (fd.req ? [] : ['']).concat(fd.options || []);
-        input = `<select class="select mono" id="${id}" data-k="${fd.k}">${opts.map((o) => { const [ov, ol] = Array.isArray(o) ? o : [o, o === '' ? '— none —' : o]; return `<option value="${UI.esc(ov)}"${String(ov) === String(val === '' && fd.def != null && fd.type !== 'host' ? fd.def : val) ? ' selected' : ''}>${UI.esc(ol)}</option>`; }).join('')}</select>`; break;
+        if (fd.type === 'host') fd = Object.assign({ create: 'host', createLabel: 'New host' }, fd);
+        const opts = fd.type === 'host' ? [''].concat(S.view().hosts.map((h) => h.name)) : (fd.req ? [] : ['']).concat(fd.options || []);
+        input = `<select class="select mono" id="${id}" data-k="${fd.k}" ${UI.pickerAttrs(fd)}>${UI.createOpt(fd)}${opts.map((o) => { const [ov, ol] = Array.isArray(o) ? o : [o, o === '' ? '— none —' : o]; return `<option value="${UI.esc(ov)}"${String(ov) === String(val === '' && fd.def != null && fd.type !== 'host' ? fd.def : val) ? ' selected' : ''}>${UI.esc(ol)}</option>`; }).join('')}</select>`; break;
       }
       case 'seg': input = `<div class="seg" role="group" data-segk="${fd.k}">${fd.options.map((o) => { const [ov, ol, dis] = Array.isArray(o) ? o : [o, o]; const on = String(ov) === String(val === '' ? fd.def : val); return `<button type="button" data-v="${UI.esc(ov)}" ${dis ? UI.off(dis) : 'data-act="form-seg"'} aria-pressed="${on}" class="${on ? 'on' : ''}">${ol}</button>`; }).join('')}</div><input type="hidden" id="${id}" data-k="${fd.k}" value="${UI.esc(val === '' ? fd.def ?? '' : val)}">`; break;
       case 'list': case 'select-multi': {
         const items = Array.isArray(val) ? val : val ? String(val).split(/,\s*/) : [];
         input = `<div class="listed" data-listk="${fd.k}" id="${id}">${items.map((x) => `<span class="chip-x"><span class="mono">${UI.esc(x)}</span><button type="button" data-act="list-del" aria-label="Remove ${UI.esc(x)}">${UI.icon('x')}</button></span>`).join('')}
-          ${fd.type === 'select-multi' ? `<select class="select mono list-add-sel" data-on-change="list-add-sel"><option value="">+ add…</option>${(fd.options || []).filter((o) => !items.includes(o)).map((o) => `<option>${UI.esc(o)}</option>`).join('')}</select>` : `<input class="input mono list-add" placeholder="${UI.esc(fd.ph || 'add, then Enter')}" data-k-list="${fd.k}"><button type="button" class="btn sm" data-act="list-add">${UI.icon('plus')}Add</button>`}</div>`; break;
+          ${fd.type === 'select-multi' ? `<select class="select mono list-add-sel" data-on-change="list-add-sel" ${UI.pickerAttrs(fd)} aria-label="Add ${UI.esc(lbl)}"><option value="">+ add…</option>${UI.createOpt(fd)}${(fd.options || []).filter((o) => !items.includes(o)).map((o) => `<option>${UI.esc(o)}</option>`).join('')}</select>` : `<input class="input mono list-add" placeholder="${UI.esc(fd.ph || 'add, then Enter')}" data-k-list="${fd.k}"><button type="button" class="btn sm" data-act="list-add">${UI.icon('plus')}Add</button>`}</div>`; break;
       }
       case 'secret': {
-        const known = D.secrets.map((s) => [`{{ vault "${s.vault === 'op' ? 'op' : s.ref.split('/')[0]}" "${s.vault === 'op' ? s.ref.replace('op://', '') : s.ref.split('/').slice(1).join('/')}" }}`, `${s.name} · ${s.ref}`]);
+        const known = S.view().secrets.map((s) => [`{{ vault "${s.vault === 'op' ? 'op' : s.ref.split('/')[0]}" "${s.vault === 'op' ? s.ref.replace('op://', '') : s.ref.split('/').slice(1).join('/')}" }}`, `${s.name} · ${s.ref}`]);
         const cur = String(val);
         const inList = known.some(([k]) => k === cur);
-        input = `<select class="select mono" id="${id}" data-k="${fd.k}" data-secret="1">${fd.req ? '' : '<option value="">— none —</option>'}${cur && !inList ? `<option selected value="${UI.esc(cur)}">${UI.esc(cur)}</option>` : ''}${known.map(([k, l]) => `<option value="${UI.esc(k)}"${k === cur ? ' selected' : ''}>${UI.esc(l)}</option>`).join('')}</select><div class="hint">${UI.icon('lock')} A reference, never a value. <a href="#/secrets" class="link">Store a new secret</a> first if it isn't listed.</div>`; break;
+        input = `<select class="select mono" id="${id}" data-k="${fd.k}" data-secret="1" ${UI.pickerAttrs(Object.assign({ create: 'secret', ret: 'expr' }, fd))}>${UI.createOpt(Object.assign({ create: 'secret', createLabel: 'New secret' }, fd))}${fd.req ? '' : '<option value="">— none —</option>'}${cur && !inList ? `<option selected value="${UI.esc(cur)}">${UI.esc(cur)}</option>` : ''}${known.map(([k, l]) => `<option value="${UI.esc(k)}"${k === cur ? ' selected' : ''}>${UI.esc(l)}</option>`).join('')}</select><div class="hint">${UI.icon('lock')} A reference, never a value. <a href="#/secrets" class="link">Store a new secret</a> first if it isn't listed.</div>`; break;
       }
       case 'map': {
         const ents = Object.entries(val || {});
@@ -457,7 +474,7 @@
     return `<div class="field${fd.type === 'bool' ? ' boolf' : ''}" data-field="${fd.k}" ${fd.show ? 'data-cond="1"' : ''}><label for="${id}">${UI.esc(lbl)} ${req}</label>${input}${help}<div class="ferr" role="alert"></div></div>`;
   };
   UI.readField = (root, fd) => {
-    const id = fieldId(fd.k);
+    const id = fieldId(fd.k, (root.closest && root.closest('[data-pre]') ? root.closest('[data-pre]').dataset.pre : '') || 'f-');
     if (fd.type === 'list' || fd.type === 'select-multi') return $$(`[data-listk="${fd.k}"] .chip-x .mono`, root).map((x) => x.textContent);
     if (fd.type === 'map') { const o = {}; $$(`[data-mapk="${fd.k}"] .kvrow`, root).forEach((r) => { const k = $('[data-mk=k]', r).value.trim(), v = $('[data-mk=v]', r).value.trim(); if (k) o[k] = /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v === 'true' ? true : v === 'false' ? false : v; }); return o; }
     const el = root.querySelector('#' + id); if (!el) return undefined;
@@ -484,24 +501,27 @@
   UI.applyConds = (root, fields) => { const vals = UI.formValues(root, fields); fields.forEach((fd) => { if (!fd.show) return; const box = root.querySelector(`[data-field="${fd.k}"]`); if (box) box.classList.toggle('hide', !fd.show(vals)); }); };
   UI.form = (spec) => {
     const vals = spec.values || {};
-    const s = UI.modal(`<div class="modal-head"><div>${spec.caps ? `<div class="caps">${spec.caps}</div>` : ''}<h2>${spec.title}</h2></div><button class="icon-btn" data-close aria-label="Close">${UI.icon('x')}</button></div>
-      <form class="modal-body stack" novalidate id="gen-form">${spec.intro ? `<div class="small dim">${spec.intro}</div>` : ''}
-        ${spec.fields.map((fd) => (fd.section ? `<div class="caps form-sec">${fd.section}</div>` : '') + UI.fieldHTML(fd, vals[fd.k] !== undefined ? vals[fd.k] : fd.def != null && !spec.edit ? fd.def : '')).join('')}
+    const dr = !!spec.drawer, pre = dr ? 'd-' : 'f-', ids = dr ? { form: 'dr-form', submit: 'dr-submit' } : { form: 'gen-form', submit: 'gen-submit' };
+    const shell = (h) => (dr ? UI.openDrawer(h) : UI.modal(h, { wide: spec.wide, sticky: true }));
+    const s = shell(`<div class="modal-head"><div>${spec.caps ? `<div class="caps">${spec.caps}</div>` : ''}<h2>${spec.title}</h2></div><button class="icon-btn" data-close aria-label="Close">${UI.icon('x')}</button></div>
+      <form class="modal-body stack" novalidate id="${ids.form}" data-pre="${pre}">${spec.intro ? `<div class="small dim">${spec.intro}</div>` : ''}
+        ${spec.fields.map((fd) => (fd.section ? `<div class="caps form-sec">${fd.section}</div>` : '') + UI.fieldHTML(fd, vals[fd.k] !== undefined ? vals[fd.k] : fd.def != null && !spec.edit ? fd.def : '', pre)).join('')}
         <div class="form-err callout danger small hide" role="alert"></div>${spec.note ? `<div class="callout small">${spec.note}</div>` : ''}
       </form>
-      <div class="modal-foot">${spec.extra || ''}<button type="button" class="btn ghost" data-close>Cancel</button><button type="button" class="btn primary" id="gen-submit">${spec.submitIcon ? UI.icon(spec.submitIcon) : ''}${spec.submit || 'Save'}</button></div>`, { wide: spec.wide, sticky: true });
-    const form = $('#gen-form', s);
+      <div class="modal-foot">${spec.extra || ''}<button type="button" class="btn ghost" data-close>Cancel</button><button type="button" class="btn primary" id="${ids.submit}">${spec.submitIcon ? UI.icon(spec.submitIcon) : ''}${spec.submit || 'Save'}</button></div>`);
+    const close = dr ? () => s.remove() : UI.closeModal;
+    const form = $('#' + ids.form, s);
     UI.applyConds(form, spec.fields);
     form.addEventListener('input', () => UI.applyConds(form, spec.fields));
     form.addEventListener('change', () => UI.applyConds(form, spec.fields));
-    form.addEventListener('submit', (e) => { e.preventDefault(); $('#gen-submit', s).click(); });
-    $('#gen-submit', s).addEventListener('click', () => {
+    form.addEventListener('submit', (e) => { e.preventDefault(); $('#' + ids.submit, s).click(); });
+    $('#' + ids.submit, s).addEventListener('click', () => {
       const v = UI.formValues(form, spec.fields.filter((fd) => !form.querySelector(`[data-field="${fd.k}"]`).classList.contains('hide')));
       if (!UI.checkFields(form, spec.fields, v)) { const first = form.querySelector('.field.bad input, .field.bad select, .field.bad textarea'); if (first) first.focus(); return; }
       const r = spec.onSubmit(v, form);
       const box = $('.form-err', s);
       if (typeof r === 'string') { box.textContent = r; box.classList.remove('hide'); return; }
-      if (r !== false) UI.closeModal();
+      if (r !== false) close();
     });
     // autofocus the first field, unless the user is already in one (never steal keystrokes)
     setTimeout(() => { if (form.contains(document.activeElement)) return; const f = form.querySelector('input:not([type=hidden]):not([readonly]),select,textarea'); if (f && innerWidth > 720) f.focus(); }, 30);

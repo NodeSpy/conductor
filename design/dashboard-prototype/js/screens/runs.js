@@ -111,6 +111,7 @@
   const hv = { q: '', status: new Set(), wf: '', repo: '', since: '', cost: '' };
   const SL = { ok: 'ok', run: 'running', fail: 'failed', wait: 'waiting', idle: 'parked', stopped: 'stopped' };
   const histMatch = (r) => {
+    if (!UI.scopeKeeps(UI.botOfRun(r))) return false;
     if (hv.status.size && !hv.status.has(r.status === 'stopped' ? 'fail' : r.status)) return false;
     if (hv.wf && r.workflow !== hv.wf) return false;
     if (hv.repo && r.repo !== hv.repo) return false;
@@ -141,7 +142,7 @@
         ${chipSel('repo', 'Repo', 'branch', [['', 'repo: any']].concat([...new Set(D.runs.map((r) => r.repo).filter(Boolean))].map((w) => [w, w])))}
         ${chipSel('since', 'Time range', 'clock', [['', 'any time'], ['60', 'last 1h'], ['360', 'last 6h'], ['1440', 'last 24h']])}
         ${chipSel('cost', 'Minimum cost', 'dollar', [['', 'cost: any'], ['0.1', '≥ $0.10'], ['0.5', '≥ $0.50'], ['1', '≥ $1.00']])}
-        <span class="count-note" id="hist-n">${n} of ${D.runs.length}</span>
+        ${UI.folderChip()}<span class="count-note" id="hist-n">${n} of ${D.runs.length}</span>
       </div>
       <div class="panel"><table class="tbl responsive"><thead><tr><th>status</th><th>run</th><th>workflow</th><th>trigger</th><th>target</th><th>started</th><th class="num">took</th><th class="num">cost</th><th class="hide-phone">note</th></tr></thead><tbody id="hist-body">${histRows()}</tbody></table>
       <div class="panel-foot small muted"><span>Records are HMAC-signed in <span class="mono">${D.daemon.state_dir}/history/</span>; a record that fails its signature shows as tampered.</span></div></div>
@@ -192,7 +193,7 @@
 
   /* ---------- needs you ---------- */
   UI.route('attention', () => `<div class="page">
-    ${UI.head('Needs you', { sub: `${D.attention.length} items`, actions: UI.seg([['all', 'all'], ['approvals', 'approvals'], ['failures', 'failures'], ['waiting', 'waiting']], UI.attnFilter || 'all', 'attn-f') })}
+    ${UI.head('Needs you', { sub: `${D.attention.length} items`, actions: UI.folderChip() + UI.seg([['all', 'all'], ['approvals', 'approvals'], ['failures', 'failures'], ['waiting', 'waiting']], UI.attnFilter || 'all', 'attn-f') })}
     <div class="grid g-side">
       <div class="panel attn">${UI.attentionList()}</div>
       <div class="stack">

@@ -11,6 +11,8 @@
   const WF = (window.WF = {});
   const Y = window.YAML;
   const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+  const fleetNames = () => ((V().fleets || []).map((f) => f.name)).concat(window.SCHEMA.fleets);
+  const V = () => (window.S && window.S.view ? window.S.view() : window.D); // staged view: a just-created connector resolves
 
   /* ---------- kinds ---------- */
   WF.KINDS = {
@@ -107,7 +109,7 @@
     if (k === 'agent') { const o = { text: '(the agent\'s final message)', diff: '(its proposed change)', cost_usd: 0.4 }; const props = s.output_schema && s.output_schema.properties; if (props) Object.keys(props).forEach((p) => (o[p] = props[p].enum ? props[p].enum[0] : '…')); return o; }
     if (k === 'decide') { const o = { _by: 'light' }; Object.entries((s.decide && s.decide.questions) || {}).forEach(([q, d]) => (o[q] = (d && d.type) === 'choice' ? { choice: (d.choices || [])[0] || '' } : (d && d.type) === 'score' ? { score: 0.5 } : { noul: 0.5 })); Object.entries((s.decide && s.decide.questions) || {}).forEach(([q, d]) => { if ((d && d.type) === 'choice') o[q] = (d.choices || [])[0] || ''; }); return o; }
     if (k === 'set') return Y.clone(s.set);
-    if (k === 'call') { const w = (window.D.workflows || []).find((x) => x.name === s.call); if (!w || !w.yaml) return null; try { return Y.clone(Y.parse(w.yaml).value.outputs || {}); } catch (e) { return null; } }
+    if (k === 'call') { const w = (V().workflows || []).find((x) => x.name === s.call); if (!w || !w.yaml) return null; try { return Y.clone(Y.parse(w.yaml).value.outputs || {}); } catch (e) { return null; } }
     if (k === 'wait' && s.wait_for) { const v = window.SCHEMA.verb(s.wait_for.uses); return v ? Y.clone(v.outputs) : null; }
     if (k === 'code') return null; // known only after a Test
     if (k === 'bot') return { case: 'c41', routed_to: typeof s.bot === 'string' ? s.bot : 'lead', by: typeof s.bot === 'string' ? 'direct' : 'rule' };
@@ -139,7 +141,7 @@
       const on = s.on, path = Array.isArray(v.on) ? `on.${i}` : 'on';
       if (on === 'manual' || /^timer\.[\w-]+$/.test(on) || /^conductor\.[\w_]+$/.test(on)) return;
       const [inst, ev] = String(on).split('.');
-      const c = window.D.connectors.find((x) => x.name === inst);
+      const c = V().connectors.find((x) => x.name === inst);
       if (!c) { add('error', path, `on: ${on}: no connector named "${inst}"`, { trigger: true }); return; }
       const decl = window.SCHEMA.connectors[c.use];
       if (!decl || !decl.events[ev]) add('error', path, `on: ${on}: the ${c.use} plugin declares no "${ev}" event`, { trigger: true });
@@ -165,7 +167,7 @@
         case 'unknown': err('this step has no type: add uses:, type: agent, use:, decide:, call:, log:, sleep: …'); break;
         case 'verb': case 'ask': {
           const [inst, verb] = String(s.uses).split('.');
-          const c = window.D.connectors.find((x) => x.name === inst);
+          const c = V().connectors.find((x) => x.name === inst);
           const decl = window.SCHEMA.verb(s.uses);
           if (!c && !['git', 'kv'].includes(inst)) { const reg = window.SCHEMA.connectors[inst]; err(reg ? `uses: ${s.uses}: no "${inst}" connector yet — add one (${reg.registry ? 'installs ' + reg.registry : 'builtin'}) in Connectors` : `uses: ${s.uses}: no connector named "${inst}"`, 'uses'); break; }
           if (!decl) { err(`uses: ${s.uses}: ${c ? c.use : inst} declares no verb "${verb}"`, 'uses'); break; }
@@ -176,11 +178,11 @@
         }
         case 'agent': {
           if (!s.prompt && !s.prompt_file && !s['<<'] && !s.agent) err('prompt: is required: say what the agent should do', 'prompt');
-          if (s.model != null && typeof s.model === 'string') { const m = s.model; if (!(window.SCHEMA.fleets.includes(m) || window.SCHEMA.models.includes(m) || /[*]/.test(m))) err(`model "${m}": no fleet in models: and no provider offers it`, 'model'); }
-          if (s.runtime && !window.D.runtimes.find((r) => r.name === s.runtime)) err(`runtime "${s.runtime}": no runtime by that name`, 'runtime');
+          if (s.model != null && typeof s.model === 'string') { const m = s.model; if (!(fleetNames().includes(m) || window.SCHEMA.models.includes(m) || /[*]/.test(m))) err(`model "${m}": no fleet in models: and no provider offers it`, 'model'); }
+          if (s.runtime && !V().runtimes.find((r) => r.name === s.runtime)) err(`runtime "${s.runtime}": no runtime by that name`, 'runtime');
           if (s.isolation && s.isolation.mode === 'none') err('isolation: mode none runs this agent unsandboxed, as you (widening: applying asks for your passkey)', 'isolation.mode', 'warn');
           (S.getPath(s, 'skill.verbs') || []).forEach((vb) => { if (!/\*$/.test(vb) && !window.SCHEMA.verb(vb)) err(`skill.verbs: ${vb} is not a known verb`, 'skill.verbs'); });
-          if (s.handoff && !window.D.connectors.find((c) => c.name === s.handoff)) err(`handoff: no connector "${s.handoff}"`, 'handoff');
+          if (s.handoff && !V().connectors.find((c) => c.name === s.handoff)) err(`handoff: no connector "${s.handoff}"`, 'handoff');
           break;
         }
         case 'code': {
@@ -193,7 +195,7 @@
         }
         case 'decide': { const q = (s.decide && s.decide.questions) || {}; if (!Object.keys(q).length) err('decide.questions: ask at least one question', 'decide.questions'); Object.entries(q).forEach(([n, d]) => { if (d && d.type === 'choice' && !(d.choices || []).length) err(`decide.questions.${n}: a choice question needs choices`, 'decide.questions'); }); break; }
         case 'call': {
-          const w = window.D.workflows.find((x) => x.name === s.call && x.kind === 'workflow');
+          const w = V().workflows.find((x) => x.name === s.call && x.kind === 'workflow');
           if (!w) { err(`call: no reusable workflow "${s.call}"`, 'call'); break; }
           let ins = {}; try { ins = Y.parse(w.yaml).value.inputs || {}; } catch (x) {}
           Object.entries(ins).forEach(([k, d]) => { if (d && d.required && !(s.with && s.with[k] != null && s.with[k] !== '')) err(`with.${k} is required by ${s.call}`, `with.${k}`); });
@@ -201,7 +203,7 @@
           break;
         }
         case 'wait': if ('sleep' in s && !/^\d+(ms|s|m|h)$/.test(String(s.sleep))) err(`sleep: "${s.sleep}" is not a positive duration`, 'sleep'); break;
-        case 'bot': if (typeof s.bot === 'string') { if (!window.D.bots.find((b) => b.name === s.bot)) err(`bot: no bot named "${s.bot}"`, 'bot'); } else if (!s.bot.team || !window.D.teams.find((x) => x.name === s.bot.team)) err(`bot.team: no team named "${s.bot.team || ''}"`, 'bot.team'); if (!s.title) err('title: is required: it becomes the case title', 'title'); break;
+        case 'bot': if (typeof s.bot === 'string') { if (!V().bots.find((b) => b.name === s.bot)) err(`bot: no bot named "${s.bot}"`, 'bot'); } else if (!s.bot.team || !V().teams.find((x) => x.name === s.bot.team)) err(`bot.team: no team named "${s.bot.team || ''}"`, 'bot.team'); if (!s.title) err('title: is required: it becomes the case title', 'title'); break;
         case 'parallel': if (s.parallel.length < 2) err('parallel: needs at least two branches', 'parallel', 'warn'); s.parallel.forEach((br, b) => { if (!Array.isArray(br) || !br.length) err(`parallel branch ${b + 1} is empty`, 'parallel'); }); break;
         default:
       }
@@ -269,7 +271,7 @@
         return { output: out, inputs: opts, note: kind === 'ask' ? 'simulated reply: approve' : decl.read ? 'read verb · called for real in a test' : 'write verb · dry-run: not sent' };
       }
       case 'agent': {
-        if (s.model && typeof s.model === 'string' && !(window.SCHEMA.fleets.includes(s.model) || window.SCHEMA.models.includes(s.model) || s.model.includes('*'))) throw new Error(`model "${s.model}": no fleet in models: and no provider offers it`);
+        if (s.model && typeof s.model === 'string' && !(fleetNames().includes(s.model) || window.SCHEMA.models.includes(s.model) || s.model.includes('*'))) throw new Error(`model "${s.model}": no fleet in models: and no provider offers it`);
         const prompt = WF.render(s.prompt || '', scope, miss);
         if (miss.length) throw new Error(`prompt: {{.${miss[0]}}} has no value`);
         let text = `Done. ${String(prompt).split('\n')[0].slice(0, 90)}`;
@@ -302,7 +304,7 @@
         return { output: o, inputs: { state: String(st).slice(0, 200) }, note: 'answered by the decision runtime (simulated)' };
       }
       case 'call': {
-        const w = window.D.workflows.find((x) => x.name === s.call); if (!w) throw new Error(`no workflow ${s.call}`);
+        const w = V().workflows.find((x) => x.name === s.call); if (!w) throw new Error(`no workflow ${s.call}`);
         const withV = renderDeep(s.with || {}, scope, miss); if (miss.length) throw new Error(`with: {{.${miss[0]}}} has no value`);
         let outs = {}; try { outs = Y.parse(w.yaml).value.outputs || {}; } catch (x) {}
         return { output: Object.fromEntries(Object.keys(outs).map((k) => [k, k === 'decision' ? 'auto' : '…'])), inputs: withV, note: `ran ${s.call} as a dry-run` };
@@ -315,7 +317,7 @@
       case 'bot': {
         const title = WF.render(s.title || '', scope, miss); if (miss.length) throw new Error(`title: {{.${miss[0]}}} has no value`);
         if (typeof s.bot === 'string') return { output: { case: 'c41', routed_to: s.bot, by: 'direct' }, inputs: { title }, note: 'dry run: the case is not opened' };
-        const t = window.D.teams.find((x) => x.name === s.bot.team); if (!t) throw new Error(`no team ${s.bot.team}`);
+        const t = V().teams.find((x) => x.name === s.bot.team); if (!t) throw new Error(`no team ${s.bot.team}`);
         const on = ev && (ev.incident ? 'pd.incident' : ev.check_name ? 'gh.check_failed' : ev.labels ? 'gh.issue_opened' : '');
         const r = (t.cfg.routing || []).find((x) => x.when && x.when.on === on && Object.entries(x.when).every(([k, v]) => k === 'on' || [].concat(v).includes(String(ev[k] != null ? ev[k] : (ev.incident || {})[k]))));
         const to = r ? (r.to === 'lead' ? t.cfg.lead : r.to) : t.cfg.lead;
