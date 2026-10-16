@@ -16,72 +16,70 @@
   UI.addLoginPage = () => {
     const q = new URLSearchParams(location.hash.split('?')[1] || '');
     if (q.get('m') && la.method !== q.get('m') && la.step === 'method') { la.method = q.get('m'); la.step = la.method === 'takeover' ? 'method' : 'creds'; if (q.get('site')) la.d.origin = 'https://' + q.get('site'); if (la.method === 'session') la.step = 'bind'; }
-    const steps = ['Method', 'Credentials', 'Binding', 'Review'];
     const at = { method: 0, creds: 1, bind: 2 }[la.step];
     return `<div class="page">${UI.head('Add a login', { crumbs: '<a href="#/browser">Browsers</a> › <a href="#/browser/logins">Logins</a>', sub: 'a site a bot may sign in to, and who may use it' })}
-      <div class="apply-steps">${steps.map((x, i) => `<div class="as ${i < at ? 'done' : i === at ? 'cur' : ''}"><b>${i < at ? '✓' : i + 1}</b>${x}</div>`).join('')}</div>
-      ${la.step === 'method' ? methodHTML() : la.step === 'creds' ? credsHTML() : bindHTML()}</div>`;
+      <div class="wizard">${UI.stepper(['Method', 'Credentials', 'Binding', 'Review'], at)}
+      ${la.step === 'method' ? methodHTML() : la.step === 'creds' ? credsHTML() : bindHTML()}</div></div>`;
   };
+  const METHODS = {
+    password: { icon: 'key', title: 'Username &amp; password', desc: 'Type them once. They go to conductor\'s vault, write-only, with an optional TOTP secret.' },
+    vault: { icon: 'lock', title: 'From a vault', desc: '1Password, pass, HashiCorp or conductor\'s vault. Pick the item and map its fields; only the reference is stored.', kc: 'var(--run)' },
+    takeover: { icon: 'hand', title: 'Sign in yourself', desc: 'A live browser: you sign in, conductor keeps the session. Best for SSO, CAPTCHA, SMS or email codes.', kc: 'var(--ok)' },
+    session: { icon: 'cookie', title: 'Saved session (signed in yourself)', desc: '', kc: 'var(--ok)' },
+  };
+  const chosen = () => UI.chosen(Object.assign({ caps: 'method', act: 'la-change' }, METHODS[la.method]));
   function methodHTML() {
-    const card = (m, ic, title, body, off) => `<button class="panel login-method${la.method === m ? ' on' : ''}" ${off ? UI.off(off) : `data-act="la-method" data-m="${m}"`}><span class="sc-ic">${icon(ic)}</span><b>${title}</b><span class="small muted">${body}</span></button>`;
-    return `<div class="grid g3">${card('password', 'key', 'Username &amp; password', 'Type them once; they go to conductor\'s vault, write-only. Optional TOTP.')}
-      ${card('vault', 'lock', 'From a vault', '1Password, pass, HashiCorp or conductor\'s vault: pick the item and map its fields. Only the reference is stored.')}
-      ${card('takeover', 'hand', 'Sign in yourself', 'A live browser: you sign in, conductor saves the session. Best for SSO, CAPTCHA, SMS or email codes.', phone() ? 'Signing in yourself needs a desktop browser; add by vault reference on the phone' : '')}</div>`;
+    const c = (m, off) => UI.choice(Object.assign({ act: 'la-method', attrs: `data-m="${m}"`, on: la.method === m, off }, METHODS[m]));
+    return `<div class="wz-card"><h3>How will the bot sign in?</h3><p class="lede">Every method ends the same way: exact origins, who may use it, then the config diff.</p>
+      <div class="choice-grid">${c('password')}${c('vault')}${c('takeover', phone() ? 'Signing in yourself needs a desktop browser; on the phone, add it from a vault' : '')}</div>
+      <div class="wz-notes">${[['lock', 'Values never come back', 'After you save, the page shows set, never the value.'], ['play', 'Test before you trust it', 'Test login signs in once, in a throwaway browser.'], ['shield', 'Narrow by default', 'Exact origins, and operator-started cases only unless you widen it.']].map(([i, t, d]) => `<div class="wz-note">${icon(i)}<b>${t}</b><span>${d}</span></div>`).join('')}</div></div>
+      <div class="muted small">${D.access.credentials.length} logins already · <a class="link" href="#/browser/logins">manage them</a></div>`;
   }
+  const CF = [
+    { k: 'username', type: 'value', req: true, label: 'Username', ph: 'svc-wiki' },
+    { k: 'password', type: 'value', req: true, sensitive: true, label: 'Password' },
+    { k: 'otp', type: 'value', sensitive: true, otp: true, label: 'TOTP', help: 'Optional. A typed secret or otpauth:// URI is checked here locally; a 1Password one-time-password field works as op://…?attribute=otp.' },
+  ];
   function credsHTML() {
-    if (la.method === 'password') {
-      const ok = totpOk(la.d.totp);
-      return `<div class="panel"><div class="panel-body stack" id="la-form">
-        <div class="grid g2"><div class="field"><label for="la-user">Username</label><input class="input mono" id="la-user" autocomplete="off" value="${esc(la.d.user || '')}"></div><div class="field"><label for="la-pass">Password <span class="opt">write-only</span></label><input class="input mono" id="la-pass" type="password" autocomplete="new-password"></div></div>
-        <div class="field"><label for="la-totp">TOTP secret or otpauth:// URI <span class="opt">optional · write-only</span></label><input class="input mono" id="la-totp" type="password" autocomplete="off" data-on-input="la-totp"><div class="hint" id="la-totp-ok">${ok == null ? 'Conductor generates the codes; you never see the seed again.' : ok ? '<span class="totp-ok">••• ••• · code works ✓</span>' : '<span class="danger-text">not a valid TOTP secret</span>'}</div></div>
-        <div class="callout small">${icon('lock')} Stored in conductor's vault (<span class="mono">house</span>) when you apply, behind your passkey. Afterwards the page shows only <b>set</b>, with Replace and Remove.</div>
-        <div class="row"><button class="btn ghost" data-act="la-back">Back</button><button class="btn primary" style="margin-left:auto" data-act="la-creds">Next: binding</button></div></div></div>`;
-    }
-    if (la.method === 'vault') {
-      const v = la.d.vault || 'op', items = D.opItems.filter((i) => !la.d.q || (i.title + ' ' + i.website + ' ' + i.vault).toLowerCase().includes(la.d.q.toLowerCase()));
-      const it = la.d.item != null ? D.opItems[la.d.item] : null;
-      return `<div class="panel"><div class="panel-body stack">
-        <div class="field"><label>Vault</label>${UI.seg([['op', '1Password'], ['store', 'pass'], ['hcv', 'HashiCorp Vault'], ['house', 'conductor']], v, 'la-vault')}</div>
-        ${v === 'op' ? `<div class="input-icon">${icon('search')}<input class="input" id="la-q" placeholder="search items: title, website, vault" value="${esc(la.d.q || '')}" data-on-input="la-q" aria-label="Search 1Password items"></div>
-          <div class="list op-items" id="la-items">${items.map((i) => { const ix = D.opItems.indexOf(i); return `<button class="item click${la.d.item === ix ? ' on' : ''}" data-act="la-item" data-i="${ix}"><span class="sc-ic sm">${icon('key')}</span><div class="grow"><b>${esc(i.title)}</b> <span class="mono tiny muted">${esc(i.vault)}</span><div class="tiny muted">${esc(i.website)} · fields: ${i.fields.map(([l]) => esc(l)).join(', ')}</div></div></button>`; }).join('') || '<div class="item small muted">No item matches.</div>'}</div>
-          <div class="muted tiny">Titles, websites and field labels only: conductor never reads a value to show it here.</div>`
-          : `<div class="field"><label for="la-path">Item path</label><input class="input mono" id="la-path" value="${esc(la.d.path || '')}" placeholder="${v === 'hcv' ? 'kv/data/app' : 'conductor/app'}"></div>`}
-        ${it || v !== 'op' ? `<div class="caps">Map fields</div>${['username', 'password', 'otp'].map((role) => { const opts = it ? it.fields.map(([l]) => l) : ['username', 'password', 'otp']; const def = la.d.map && la.d.map[role] != null ? la.d.map[role] : it ? (it.fields.find(([, t]) => (role === 'username' ? /text|email/ : role === 'password' ? /concealed/ : /otp/).test(t)) || [''])[0] : role === 'otp' ? '' : role; return `<div class="flt-row"><span class="mono small" style="min-width:140px">${role === 'otp' ? 'one-time password' : role}</span><select class="select mono" id="la-map-${role}" aria-label="Map ${role}"><option value="">— none —</option>${opts.map((o) => `<option${o === def ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select><span class="mono tiny muted">${def ? esc(ref(v, it, def)) : ''}</span></div>`; }).join('')}` : ''}
-        <div class="row"><button class="btn ghost" data-act="la-back">Back</button><button class="btn primary" style="margin-left:auto" ${it || v !== 'op' ? 'data-act="la-creds"' : UI.off('Pick an item first')}>Next: binding</button></div></div></div>`;
-    }
-    return '';
+    const vault = la.method === 'vault', src = vault ? 'vault' : 'typed';
+    const items = D.opItems.filter((i) => !la.d.q || (i.title + ' ' + i.website + ' ' + i.vault).toLowerCase().includes(la.d.q.toLowerCase()));
+    const browser = vault ? `<div class="field"><label for="la-q">Fill all three from one 1Password item</label><div class="input-icon">${icon('search')}<input class="input" id="la-q" placeholder="search items: title, website, vault" value="${esc(la.d.q || '')}" data-on-input="la-q" aria-label="Search 1Password items"></div>
+      <div class="list op-items" id="la-items">${items.map((i) => { const ix = D.opItems.indexOf(i); return `<button type="button" class="item click${la.d.item === ix ? ' on' : ''}" data-act="la-item" data-i="${ix}"><span class="sc-ic sm">${icon('key')}</span><span class="grow"><b>${esc(i.title)}</b> <span class="mono tiny muted">${esc(i.vault)} · ${esc(i.website.replace(/^https:\/\//, ''))}</span><span class="muted tiny" style="display:block">${i.fields.map(([l]) => esc(l)).join(' · ')}</span></span></button>`; }).join('') || '<div class="item muted small">No item matches.</div>'}</div>
+      <div class="hint">Titles, websites and field labels only. Or set each field's source yourself below.</div></div>` : '';
+    return `${chosen()}<div class="wz-card" id="la-form" data-pre="la-"><h3>The credentials</h3><p class="lede">Each field can be typed, or come from an env var, a secret or a vault. Only references are kept; a typed password goes to the vault, write-only.</p>
+      ${browser}
+      ${CF.map((f) => UI.fieldHTML(Object.assign({ defaultSrc: src }, f), la.d[f.k] || '', 'la-')).join('')}
+      <div class="hint" id="la-totp-ok"></div>
+      <div class="wizard-foot"><button class="btn ghost" data-act="la-back">Back</button><span class="spacer"></span><button class="btn primary" data-act="la-creds">Next: binding ${icon('chev')}</button></div></div>`;
   }
-  const ref = (v, it, field) => (v === 'op' ? `op://${it.vault}/${it.title}/${field}` : `${v}/${la.d.path || 'item'}/${field}`);
   function bindHTML() {
     const name = la.d.name || (la.d.origin || '').replace(/^https:\/\//, '').split('.')[0] || '';
-    return `<div class="panel"><div class="panel-body stack" id="la-bind">
-      <div class="callout small">Method: <b>${{ password: 'username & password (conductor vault)', vault: 'vault reference', session: 'saved session (signed in yourself)' }[la.method]}</b>${la.method === 'vault' ? ` · <span class="mono">${esc(Object.values(la.d.refs || {}).join(', '))}</span>` : ''}</div>
+    return `${chosen()}<div class="wz-card" id="la-bind"><h3>Where, and for whom</h3><p class="lede">${la.d.password ? `Password from <span class="mono">${esc(UI.VS.parse(la.d.password).label)}</span>. ` : la.pending && la.pending.password ? 'The typed password is stored in the vault when you finish. ' : ''}The login is filled only on these origins, only for these bots.</p>
       ${UI.fieldHTML({ k: 'name', type: 'string', req: true, label: 'Login name', ph: 'grafana' }, name)}
       ${UI.fieldHTML({ k: 'origins', type: 'list', req: true, label: 'Origins (exact scheme + host)', ph: 'https://grafana.example.com', help: 'The login is filled only on these origins, checked atomically with the fill.' }, la.d.origin ? [la.d.origin] : [])}
       ${UI.fieldHTML({ k: 'allow', type: 'select-multi', req: true, label: 'Who may use it', options: allowOpts(), create: 'bot', createLabel: 'New bot', help: 'Bots, teams or folders. A team or folder covers the bots in it.' }, [])}
       ${UI.fieldHTML({ k: 'operator_only', type: 'bool', label: 'Provenance', on: 'only for cases an operator started (recommended, as in #182)' }, true)}
       <div class="form-err callout danger small hide" id="la-err"></div>
-      <div class="row"><button class="btn ghost" data-act="la-back">Back</button><button class="btn primary" style="margin-left:auto" data-act="la-save">${icon('check')}Review &amp; apply</button></div></div></div>`;
+      <div class="wizard-foot"><button class="btn ghost" data-act="la-back">Back</button><span class="spacer"></span><button class="btn primary" data-act="la-save">${icon('check')}Review &amp; apply</button></div></div>`;
   }
   UI.act('la-method', (b) => { la.method = b.dataset.m; la.d = {}; if (la.method === 'takeover') { UI.go('#/browser/takeover'); return; } la.step = 'creds'; UI.rerender(); });
+  UI.act('la-change', () => { la.step = 'method'; UI.rerender(); });
   UI.act('la-back', () => { la.step = la.step === 'bind' && la.method !== 'session' ? 'creds' : 'method'; UI.rerender(); });
-  UI.act('la-totp', (el) => { const ok = totpOk(el.value); UI.$('#la-totp-ok').innerHTML = ok == null ? 'Conductor generates the codes; you never see the seed again.' : ok ? '<span class="totp-ok">••• ••• · code works ✓</span>' : '<span class="danger-text">not a valid TOTP secret</span>'; });
-  UI.act('la-vault', (b) => { la.d.vault = b.dataset.v; la.d.item = null; UI.rerender(); });
-  UI.act('la-q', (el) => { la.d.q = el.value; const pos = el.selectionStart; UI.rerender(); const n = UI.$('#la-q'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } });
-  UI.act('la-item', (b) => { la.d.item = +b.dataset.i; la.d.map = null; UI.rerender(); });
+  document.addEventListener('input', (e) => { if (e.target.id !== 'la-otp-in') return; const ok = totpOk(e.target.value); const h = UI.$('#la-totp-ok'); if (h) h.innerHTML = ok == null ? '' : ok ? '<span class="totp-ok">TOTP ••• ••• · code works ✓</span>' : '<span class="danger-text">TOTP: not a valid secret</span>'; });
+  UI.act('la-q', (el) => { la.d.q = el.value; const pos = el.selectionStart; keep(); UI.rerender(); const n = UI.$('#la-q'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } });
+  UI.act('la-item', (b) => { const it = D.opItems[+b.dataset.i]; la.d.item = +b.dataset.i; const pick = (re) => (it.fields.find(([, t]) => re.test(t)) || [])[0];
+    const u = pick(/text|email/), p = pick(/concealed/), o = pick(/otp/);
+    la.d.username = u ? `op://${it.vault}/${it.title}/${u}` : ''; la.d.password = p ? `op://${it.vault}/${it.title}/${p}` : ''; la.d.otp = o ? `op://${it.vault}/${it.title}/${o}?attribute=otp` : ''; la.d.origin = it.website.replace(/\/$/, ''); UI.rerender(); });
+  /** keep the fields' references (never typed sensitive values) across a re-render */
+  const keep = () => { const f = UI.$('#la-form'); if (!f) return; CF.forEach((fd) => { const v = UI.readField(f, fd); if (v) la.d[fd.k] = v; }); };
   UI.act('la-creds', () => {
-    if (la.method === 'password') {
-      const u = UI.$('#la-user').value.trim(), p = UI.$('#la-pass').value, t = UI.$('#la-totp').value.trim();
-      if (!u) return UI.nudge(UI.$('#la-user'), 'a username'); if (!p) return UI.nudge(UI.$('#la-pass'), 'a password');
-      if (t && !totpOk(t)) return UI.nudge(UI.$('#la-totp'));
-      la.d.user = u; la.secret = { password: p, totp: t }; // held in memory only until the vault write
-      UI.$('#la-pass').value = ''; UI.$('#la-totp').value = '';
-    } else {
-      const v = la.d.vault || 'op', it = la.d.item != null ? D.opItems[la.d.item] : null;
-      la.d.refs = {}; ['username', 'password', 'otp'].forEach((r) => { const f = UI.$('#la-map-' + r).value; if (f) la.d.refs[r] = ref(v, it, f); });
-      if (!la.d.refs.password && !la.d.refs.username) return UI.toast('Map at least one field', '', 'fail');
-      if (it) la.d.origin = it.website.replace(/\/$/, '');
-    }
+    const f = UI.$('#la-form'), v = UI.formValues(f, CF);
+    if (!UI.checkFields(f, CF, v)) return;
+    const t = UI.$('#la-otp-in'); if (t && t.value && !totpOk(t.value)) return UI.nudge(t, 'not a valid TOTP secret');
+    // typed sensitive values stay in memory only, until the vault write at the end
+    la.pending = {}; UI.VS.pending(f).forEach((el) => { const k = el.dataset.vs, inp = el.querySelector('.vs-in'); la.pending[k] = inp.value; inp.value = ''; });
+    CF.forEach((fd) => { la.d[fd.k] = v[fd.k] || ''; });
+    if (!la.d.origin && la.d.item != null) la.d.origin = D.opItems[la.d.item].website.replace(/\/$/, '');
     la.step = 'bind'; UI.rerender();
   });
   UI.act('la-save', () => {
@@ -89,16 +87,17 @@
     const v = UI.formValues(f, fields); if (!UI.checkFields(f, fields, v)) return;
     const base = { method: la.method, origin: v.origins[0], origins: v.origins, allow: v.allow, operator_only: !!v.operator_only };
     const finish = (n) => { UI.staged(S.stage('credentials', v.name, Object.assign(base, n))); D.prefs.returnTo = { href: '#/browser/logins', label: 'Logins' }; la.step = 'method'; la.method = null; la.d = {}; S.save(); };
-    if (la.method === 'password') {
-      const sec = la.secret || {};
-      UI.stepup({ title: `Store the login for ${esc(v.origins[0])}`, purpose: 'secret write', ok: 'Store with passkey', what: `{ purpose: <b>secret_write</b>, vault: <b>house</b>, keys: <b>login/${esc(v.name)}/{username,password${sec.totp ? ',otp' : ''}}</b> }` }).then((ok) => {
-        if (!ok) return;
-        ['username', 'password'].concat(sec.totp ? ['otp'] : []).forEach((k) => D.secrets.unshift({ name: `login ${v.name} ${k}`, ref: `house/login/${v.name}/${k}`, vault: 'house', set: now(), used: [`browser.credentials.${v.name}.${k}`] }));
-        la.secret = null;
-        finish({ vault: 'house', ref: `login/${v.name}/*`, fields: ['username', 'password'].concat(sec.totp ? ['otp'] : []) });
-      });
-    } else if (la.method === 'vault') finish({ vault: (la.d.vault || 'op'), ref: Object.values(la.d.refs)[0], refs: la.d.refs, fields: Object.keys(la.d.refs) });
-    else finish({ fields: [] });
+    if (la.method === 'session') return finish({ fields: [] });
+    const refs = { username: la.d.username, password: la.d.password }; if (la.d.otp) refs.otp = la.d.otp;
+    const typed = Object.entries(la.pending || {}).filter(([, x]) => x);
+    const done = () => { la.pending = null; finish(Object.assign({ fields: Object.keys(refs).filter((k) => refs[k]) }, refs)); };
+    if (!typed.length) return done();
+    UI.stepup({ title: `Store the login for ${esc(v.origins[0])}`, purpose: 'secret write', ok: 'Store with passkey', what: `{ purpose: <b>secret_write</b>, vault: <b>house</b>, keys: <b>${typed.map(([k, x]) => `login_${esc(v.name)}_${k} (${x.length} chars)`).join(', ')}</b> }` }).then((ok) => {
+      if (!ok) return;
+      typed.forEach(([k]) => { const name = `login_${v.name}_${k}`; D.secrets.unshift({ name, ref: `house/login/${v.name}/${k}`, vault: 'house', set: now(), used: [`browser.credentials.${v.name}.${k}`] }); refs[k] = `\${secret.${name}}`; });
+      D.audit.unshift({ ts: now(), event: 'secret_write', who: 'operator:ops', detail: `house/login/${v.name}/* · values not recorded`, run: '' });
+      done();
+    });
   });
 
   /* ---------- the Logins tab ---------- */
@@ -111,7 +110,7 @@
       return `<div class="item login-row" style="align-items:flex-start" data-login="${c.name}"><span class="sc-ic sm">${icon(method === 'passkey' ? 'passkey' : method === 'password' ? 'key' : method === 'session' ? 'cookie' : 'lock')}</span>
         <div class="grow small"><div><b>${esc(c.name)}</b> ${tag(method === 'password' ? 'username & password' : method === 'vault' ? 'vault reference' : method)} ${S.find('credentials', c.name) ? tag('staged', 'run') : ''}</div>
           <div class="mono tiny muted">${esc((cf.origins || [cf.origin]).join(', '))} · ${esc((cf.allow || [cf.identity]).filter(Boolean).join(', '))}${cf.operator_only ? ' · operator-started only' : ''}</div>
-          <div class="tiny">${method === 'password' ? `username <b>set</b> · password <b>set</b>${(cf.fields || []).includes('otp') ? ' · TOTP <b>set</b>' : ''}` : method === 'vault' ? `<span class="mono">${esc(Object.values(cf.refs || { r: `${cf.vault}:${cf.ref}` }).join(' · '))}</span>` : method === 'passkey' ? `private key in <span class="mono">${esc(cf.vault)}</span>` : 'session cookies'} · last used ${m.lastUsed ? ago(m.lastUsed) + ' ago' : 'never'} · ${testTag(m.test)}</div>
+          <div class="tiny">${cf.password ? ['username', 'password', 'otp'].filter((k) => cf[k]).map((k) => `${k === 'otp' ? 'TOTP' : k} <span class="mono">${esc(UI.VS.parse(cf[k]).label)}</span>`).join(' · ') : method === 'password' ? 'username <b>set</b> · password <b>set</b>' : method === 'vault' ? `<span class="mono">${esc(Object.values(cf.refs || { r: `${cf.vault}:${cf.ref}` }).join(' · '))}</span>` : method === 'passkey' ? `private key in <span class="mono">${esc(cf.vault)}</span>` : 'session cookies'} · last used ${m.lastUsed ? ago(m.lastUsed) + ' ago' : 'never'} · ${testTag(m.test)}</div>
           ${lv.open === c.name ? `<div class="list uses">${(m.uses || []).map((u) => `<div class="item tiny"><span class="mono">${esc(u.bot)}</span><span class="grow">case ${esc(u.case)}</span><span class="muted mono">${ago(u.at)} ago</span></div>`).join('') || '<div class="item tiny muted">Not used yet.</div>'}<div class="tiny muted">which bot, which case, when — never a value</div></div>` : ''}</div>
         <div class="row wrap" style="gap:4px"><button class="btn sm" data-act="login-test" data-n="${c.name}">${icon('play')}Test</button><button class="btn sm ghost" data-act="login-uses" data-n="${c.name}" aria-expanded="${lv.open === c.name}">${icon('runs')}Usage</button><button class="btn sm ghost" data-act="login-bind" data-n="${c.name}">${icon('edit')}Edit binding</button>${method === 'password' ? `<button class="btn sm ghost" data-act="login-replace" data-n="${c.name}">${icon('updates')}Replace</button>` : ''}<button class="btn sm danger" data-act="login-revoke" data-n="${c.name}">Revoke</button></div></div>`; };
     return `<div class="page">${UI.head('Logins', { crumbs: '<a href="#/browser">Browsers</a>', sub: 'credentials, saved sessions and passkeys bots may use', actions: `<a class="btn primary" href="#/browser/add">${icon('key')}Add a login</a><a class="btn" href="#/browser/passkey">${icon('passkey')}Register a passkey</a>` })}

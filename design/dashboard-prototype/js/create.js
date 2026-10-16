@@ -82,33 +82,17 @@
   C.credential = (ctx, done) => {
     const allow = S.view().bots.map((b) => 'bot:' + b.name).concat(S.view().teams.map((t) => 'team:' + t.name), UI.allFolders(false).map((f) => 'folder:' + f));
     const who = ctx.identity && /^bot:/.test(ctx.identity) ? [ctx.identity] : ctx.bot ? ['bot:' + ctx.bot] : [];
-    drawer({ caps: 'add a login · browser.credentials', title: 'Add a login', wide: true, values: { method: 'password', allow: who, operator_only: true },
-      intro: 'Values never become config. A password goes straight to the vault (with your passkey); a vault reference names an item you already have. To sign in yourself, use <a class="link" href="#/browser/add?m=takeover">Browsers → Add a login</a> on a desktop.',
+    drawer({ caps: 'add a login · browser.credentials', title: 'Add a login', wide: true, values: { allow: who, operator_only: true },
+      intro: 'Each field can be typed or come from an env var, a secret or a vault; only references are kept, and a typed password goes to the vault with your passkey. To sign in yourself, use <a class="link" href="#/browser/takeover">the sign-in takeover</a> on a desktop.',
       fields: [{ k: 'name', type: 'string', req: true, pattern: /^[a-z][\w-]*$/, patternMsg: 'letters, digits, - and _', validate: taken(() => V().access.credentials) },
-        { k: 'method', type: 'seg', label: 'Method', options: [['password', 'username & password'], ['vault', 'from a vault']] },
         { k: 'origins', type: 'list', req: true, label: 'Exact origins', ph: 'https://grafana.example.com', validate: (v) => ((v || []).find((o) => !/^https:\/\/[\w.-]+(:\d+)?$/.test(o)) ? 'Each origin is https:// plus a host, no path.' : '') },
-        { k: 'username', type: 'string', label: 'Username · write-only', show: (v) => (v.method || 'password') === 'password' },
-        { k: 'password', type: 'password', label: 'Password · write-only', show: (v) => (v.method || 'password') === 'password' },
-        { k: 'totp', type: 'password', label: 'TOTP seed (optional) · write-only', show: (v) => (v.method || 'password') === 'password' },
-        { k: 'ref', type: 'enum', label: 'Vault reference', options: secretRefs(), create: 'secret', createLabel: 'New secret', ret: 'ref', show: (v) => v.method === 'vault' },
+        { k: 'username', type: 'value', req: true, label: 'Username' },
+        { k: 'password', type: 'value', req: true, sensitive: true, label: 'Password' },
+        { k: 'otp', type: 'value', sensitive: true, otp: true, label: 'TOTP' },
         { k: 'allow', type: 'select-multi', req: true, label: 'Who may use it', options: allow },
         { k: 'operator_only', type: 'bool', on: 'Only in cases an operator started (recommended)' }],
-      note: note('login binding'), submit: 'Add login', submitIcon: 'plus',
-      onSubmit: (v, form) => {
-        const method = v.method || 'password', base = { method, origin: v.origins[0], origins: v.origins, allow: v.allow, operator_only: !!v.operator_only };
-        if (method === 'vault') { if (!v.ref) return 'Pick a vault reference, or create one.'; const vault = v.ref.startsWith('op://') ? 'op' : v.ref.split('/')[0]; return stage('credentials', v.name, Object.assign(base, { vault, ref: v.ref.replace(/^op:\/\//, '').replace(/^[^/]+\//, ''), fields: ['username', 'password'] }), done); }
-        if (!v.username || !v.password) return 'A username and a password are needed.';
-        const keys = ['username', 'password'].concat(v.totp ? ['otp'] : []);
-        form.querySelectorAll('input[type=password], [data-k="username"]').forEach((i) => { i.value = ''; });
-        UI.stepup({ title: `Store the login for ${esc(v.origins[0])}`, purpose: 'secret write', ok: 'Store with passkey', what: `{ purpose: <b>secret_write</b>, vault: <b>house</b>, keys: <b>login/${esc(v.name)}/{${keys.join(',')}}</b> }` }).then((ok) => {
-          if (!ok) return;
-          keys.forEach((k) => D.secrets.unshift({ name: `login ${v.name} ${k}`, ref: `house/login/${v.name}/${k}`, vault: 'house', set: new Date().toISOString(), used: [`browser.credentials.${v.name}.${k}`] }));
-          D.audit.unshift({ ts: new Date().toISOString(), event: 'secret_write', who: 'operator:ops', detail: `house/login/${v.name}/* · values not recorded`, run: '' });
-          form.closest('.drawer-scrim').remove();
-          stage('credentials', v.name, Object.assign(base, { vault: 'house', ref: `login/${v.name}/*`, fields: keys }), done);
-        });
-        return false;
-      } });
+      note: note('login binding'), submit: 'Add login', submitIcon: 'plus', secretPrefix: (form) => 'login_' + ((form.querySelector('[data-k="name"]') || {}).value || 'new'),
+      onSubmit: (v) => { const n = { method: UI.VS.parse(v.password).src === 'vault' ? 'vault' : 'password', origin: v.origins[0], origins: v.origins, allow: v.allow, operator_only: !!v.operator_only, username: v.username, password: v.password }; if (v.otp) n.otp = v.otp; n.fields = ['username', 'password'].concat(v.otp ? ['otp'] : []); stage('credentials', v.name, n, done); } });
   };
   C.host = (ctx, done) => drawer({ caps: 'new host', title: 'New host', fields: [Object.assign({ k: 'name', type: 'string', req: true, validate: taken(() => V().hosts) }, NAME), { k: 'addr', type: 'string', req: true, ph: 'box.tail0000.ts.net' }, { k: 'user', type: 'string', req: true, def: 'conductor' }], note: note('host'),
     onSubmit: (v) => stage('hosts', v.name, { addr: v.addr, user: v.user }, done) });

@@ -126,7 +126,7 @@
   });
 
   UI.route('browser/:id', ({ id }) => {
-    if (id === 'seed') { setTimeout(() => UI.go('#/browser/add?m=takeover')); return ''; }
+    if (id === 'seed') { setTimeout(() => UI.go('#/browser/takeover')); return ''; }
     if (id === 'add') return UI.addLoginPage();
     if (id === 'logins') return UI.loginsPage();
     if (id === 'takeover') return seed(false);

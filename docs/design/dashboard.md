@@ -148,6 +148,58 @@ uses color for state and almost nothing else.
 - **Texture.** A faint dot grid on the page and a 3–5% grain overlay. The
   builder canvas has a denser dot grid.
 
+### 3.1 Shared components
+
+Repeated patterns are one component each (`css/components.css`, helpers in
+`ui.js`), restyled once and used everywhere; screens compose them and don't
+restyle them.
+
+- **Choice cards** (`UI.choice`): icon left, title over description, left
+  aligned; clear hover, focus and selected states; a disabled card says why.
+  The choice made carries into the next step as a compact **chosen** strip
+  with *Change*.
+- **Wizard and stepper** (`UI.stepper`, `.wizard`, `.wz-card`): a readable
+  column (max 880px), a light dotted stepper that never outweighs the
+  content, and a footer with *Back* on the left and the primary action on the
+  right.
+- **Catalog cards**, **drawers** (create-in-place, layered over modals),
+  **forms** (`UI.form`), **tables**, **empty states** and **badges** (`tag`,
+  `origin`), with one size and rhythm.
+
+#### The value-source field
+
+Every configurable value (login credentials, connector instance settings,
+plugin config, env vars, settings, workflow step inputs, bot and team
+settings that take secrets) uses one field, `type: 'value'` (`'secret'` is
+the same field with `sensitive: true`). A compact switcher on the field picks
+where the value comes from:
+
+| Source | Writes | Notes |
+|---|---|---|
+| **Typed** | the literal | For a sensitive field the input is write-only: on save the value goes to conductor's vault behind a step-up, and the field holds `${secret.<name>}`. |
+| **Env var** | `${env.NAME}` | Picker of known env vars across scopes; **+ Add env var** inline (staged; daemon scope goes to `conductor.env` in the same review). A sensitive field fed by a var that is plain text in `conductor.env` shows a warning suggesting a secret. |
+| **Secret** | `${secret.name}` | Picker of named secrets; **+ New secret** inline (value written to the vault at once, behind a step-up). |
+| **Vault** | `op://Vault/Item/field` (`?attribute=otp` for one-time passwords), or `{{ vault "store" "path" }}` | A browser of items showing titles, websites and field **labels** only. When another field in the form came from a 1Password item, the field offers **Use the same item: App · password** shortcuts. |
+| **Setting** | `${settings.name}` | Non-sensitive fields only. A sensitive field set to a setting is **blocked** with the reason: settings are plain config, in `config.yaml`, every diff and every backup. |
+
+Sources mix per field (username typed, password from 1Password, TOTP from the
+same item's OTP field). The field always shows the **reference**, never the
+value, with a check: *checking…*, *resolves ✓*, or *doesn't resolve ✗* with
+the reason (no such item, vault unreachable, token expired).
+
+API it implies (**NEW**):
+
+- `POST /api/v1/refs/resolve` `{ ref }` → `{ ok: true }` or
+  `{ ok: false, error }`. The daemon resolves the reference the way a run
+  would, then drops the value; nothing but ok/error comes back. Rate-limited
+  and audited (`ref_resolve`, the reference only).
+- Metadata-only pickers: `GET /api/v1/env?names=1` (names and scopes, plus
+  `plain: true` for a sensitive-looking plain var), `GET /api/v1/secrets`
+  (names, vaults, usage), `GET /api/v1/vaults/{v}/items?q=` (titles,
+  websites, field labels and types; never values).
+- Typed sensitive values are only ever accepted by the step-up-gated
+  `POST /api/v1/vaults/{v}/secrets` write, which returns the new reference.
+
 ## 4. Screens
 
 Each screen below lists its purpose, its data (with the API from

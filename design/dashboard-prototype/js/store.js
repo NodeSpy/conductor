@@ -112,6 +112,30 @@
     },
     widens: (b, a) => ((a && a.isolation && a.isolation.mode === 'none') && !(b && b.isolation && b.isolation.mode === 'none') ? ['runs agents unsandboxed (isolation: none)'] : []),
   });
+  /* env: environment variables by scope; daemon scope is conductor.env, not config.yaml */
+  const envKey = (e) => e.scope + ':' + e.name;
+  C.env = { section: 'env', file: 'conductor.env', label: 'env var', href: () => '#/secrets/env',
+    keys: () => (D().env || []).map(envKey),
+    get: (k) => { const e = (D().env || []).find((x) => envKey(x) === k); return e ? clone(e) : null; },
+    set: (k, n) => { const L = D().env = D().env || []; const i = L.findIndex((x) => envKey(x) === k); if (n == null) { if (i >= 0) L.splice(i, 1); return; } if (i >= 0) L[i] = Object.assign({}, n); else L.push(Object.assign({}, n)); },
+    path: (k) => (k.startsWith('daemon:') ? `conductor.env:${k.slice(7)}` : `${k.split(':')[0]}s.${k.split(':')[1]}.env.${k.split(':').slice(2).join(':')}`),
+    validate(k, n) { const e = []; if (!/^[A-Z_][A-Z0-9_]*$/.test(n.name || '')) e.push(`env ${n.name}: names are UPPER_SNAKE_CASE`); if (n.value == null || n.value === '') { if (!n.len) e.push(`env ${n.name}: no value`); } return e; } };
+  /** conductor.env as the daemon would write it (with a backup); values that look secret are never rendered. */
+  S.envText = (state) => ((state || window.D).env || []).filter((e) => e.scope === 'daemon').map((e) => `${e.name}=${e.looksSecret && e.plain ? '•'.repeat(Math.min(e.len || 8, 12)) + '  # plain text in this file' : e.value}`).join('\n') + '\n';
+  /* collections: custom knowledge collections (the escape hatch from the built-in kinds) */
+  S.RESERVED_DIRS = ['knowledge', 'runbooks', 'log', 'handoff', 'watch.md', 'proposals'];
+  S.FIELD_RE = /^([a-z][a-z0-9_]*):(string|text|list|enum\(([\w-]+(\|[\w-]+)*)\))$/;
+  listColl('collections', () => D().collections, {
+    label: 'knowledge collection', href: () => '#/config/collections',
+    set(k, node) { const L = D().collections; if (node == null) return drop(L, k); const it = byName(L, k); if (it) it.cfg = node; else L.push({ name: k, cfg: node }); },
+    validate(k, n) { const e = []; const dir = (n.dir || '').replace(/\/$/, '');
+      if (!/^[a-z][a-z0-9-]*(\/[a-z0-9-]+)*$/.test(dir)) e.push(`collections.${k}.dir: a relative folder such as postmortems or notes/vendors`);
+      else if (S.RESERVED_DIRS.includes(dir.split('/')[0])) e.push(`collections.${k}.dir: ${dir.split('/')[0]}/ belongs to a built-in kind; pick another folder`);
+      (n.fields || []).forEach((f) => { if (!S.FIELD_RE.test(f)) e.push(`collections.${k}.fields: "${f}" is not name:string|text|list|enum(a|b)`); });
+      if (!['team', 'bot', 'both'].includes(n.scope || 'team')) e.push(`collections.${k}.scope: team, bot or both`);
+      if (!(n.write || []).length) e.push(`collections.${k}.write: say who may write (operator, bots (proposal), bots (direct))`);
+      return e; },
+  });
   listColl('hosts', () => D().hosts, {
     label: 'host', href: () => '#/connectors/hosts',
     set(k, node) { const L = D().hosts; if (node == null) return drop(L, k); const it = byName(L, k); if (it) Object.assign(it, { cfg: node, addr: node.addr, user: node.user }); else L.push({ name: k, addr: node.addr, user: node.user, status: 'wait', rtt: '—', cfg: node }); },
@@ -203,6 +227,7 @@
     validate(k, n, all) { const e = []; (n.origins || [n.origin]).forEach((o) => { if (!/^https:\/\/[\w.-]+(:\d+)?$/.test(o || '')) e.push(`browser.credentials.${k}: "${o || ''}" must be an exact https:// origin`); });
       if (n.allow && !n.allow.length) e.push(`browser.credentials.${k}.allow: bind it to at least one bot, team or folder`);
       if (n.method === 'session' || n.method === 'passkey') return e; // a saved session or a passkey lives in the browser profile, not a vault
+      if (n.password || n.username) { ['username', 'password', 'otp'].forEach((f) => { if (!n[f]) { if (f !== 'otp') e.push(`browser.credentials.${k}.${f} is required`); return; } if (UI.VS.blocked(f !== 'username', n[f])) e.push(`browser.credentials.${k}.${f}: a sensitive value can't come from a setting`); const r = UI.VS.resolve(n[f]); if (r.state === 'fail') e.push(`browser.credentials.${k}.${f}: doesn't resolve (${r.why})`); }); return e; }
       const v = byName(all.vaults, n.vault); if (!v) e.push(`browser.credentials.${k}.vault: no vault "${n.vault}"`); else if (v.status === 'fail') e.push(`browser.credentials.${k}: vault ${n.vault} is unreachable`); if (!(n.fields || []).length) e.push(`browser.credentials.${k}.fields: pick at least one field`); return e; },
     widens: (b, a) => (a && !b ? [`binds credential to ${a.identity}`] : a && b && a.identity !== b.identity ? [`rebinds credential to ${a.identity}`] : []),
   };
@@ -309,10 +334,10 @@
     set: (k, n) => { if (n == null) return drop(D().fleets, k); const f = byName(D().fleets, k); if (f) f.cfg = n; else D().fleets.push({ name: k, cfg: n }); },
     path: (k) => `models.${k}`,
     validate: (k, n) => (/^[a-z][\w-]*$/.test(k) ? [] : [`fleet name "${k}": letters, digits, - and _`]).concat((n.any || []).length ? [] : [`models.${k}.any: list at least one model or wildcard`]) };
-  S.ORDER = ['settings', 'vaults', 'secrets', 'connectors', 'hosts', 'runtimes', 'sandbox', 'operators', 'teams', 'bots', 'identities', 'credentials', 'packs', 'update', 'workflows'];
+  S.ORDER = ['settings', 'vaults', 'secrets', 'connectors', 'hosts', 'runtimes', 'sandbox', 'operators', 'teams', 'bots', 'collections', 'env', 'identities', 'credentials', 'packs', 'update', 'workflows'];
 
   /* ---------- config.yaml, generated from the state ---------- */
-  const HEAD = { settings: 'settings: — ${settings.NAME} anywhere below', vaults: 'vaults: — where secrets live; values never appear here', connectors: 'connectors: — use: names the plugin', hosts: 'hosts: — remote machines over SSH', runtimes: 'runtimes: — where agents run', models: 'models: — fleets of acceptable models', sandbox: 'sandbox: — the agent sandbox', operators: 'operators: — who can approve', bots: 'bots: — persistent agents (#178)', teams: 'teams: — bots inherit team defaults and can only narrow them', browser: 'browser: — the agent browser (#182)', packs: 'packs: — your overrides; the pack files are vendored', update: 'update: — the auto-update policy', usage: 'usage: — off | subscription | api, per provider; limits only from source:', triggers: 'triggers: — on / filter / steps', workflows: 'workflows: — reusable, called with call:', secrets: 'secret references' };
+  const HEAD = { settings: 'settings: — ${settings.NAME} anywhere below', vaults: 'vaults: — where secrets live; values never appear here', connectors: 'connectors: — use: names the plugin', hosts: 'hosts: — remote machines over SSH', runtimes: 'runtimes: — where agents run', models: 'models: — fleets of acceptable models', sandbox: 'sandbox: — the agent sandbox', operators: 'operators: — who can approve', bots: 'bots: — persistent agents (#178)', teams: 'teams: — bots inherit team defaults and can only narrow them', browser: 'browser: — the agent browser (#182)', packs: 'packs: — your overrides; the pack files are vendored', update: 'update: — the auto-update policy', collections: 'collections: — custom knowledge collections (built-in kinds stay where they are)', usage: 'usage: — off | subscription | api, per provider; limits only from source:', triggers: 'triggers: — on / filter / steps', workflows: 'workflows: — reusable, called with call:', secrets: 'secret references' };
   S.configText = (state) => {
     const st = state || window.D; const out = ['# conductor config — ops-box', '# managed by hand and by the dashboard; comments and unknown keys are kept', ''];
     const sec = (h, obj) => { if (obj == null || (typeof obj === 'object' && !Object.keys(obj).length)) return; out.push('# ' + HEAD[h]); out.push(Y.stringify({ [h]: obj })); out.push(''); };
@@ -326,6 +351,7 @@
     sec('operators', st.operatorsCfg);
     sec('teams', Object.fromEntries(st.teams.map((t) => [t.name, t.cfg])));
     sec('bots', Object.fromEntries(st.bots.map((m) => [m.name, m.cfg])));
+    sec('collections', Object.fromEntries((st.collections || []).map((c) => [c.name, c.cfg])));
     const br = {};
     if (st.identities.length) br.identities = Object.fromEntries(st.identities.map((i) => [i.id, { allow: i.allow, logins: i.logins, evaluate: i.evaluate }]));
     if (st.access.credentials.length) br.credentials = Object.fromEntries(st.access.credentials.map((c) => [c.name, c.cfg]));

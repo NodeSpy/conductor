@@ -17,8 +17,8 @@ test.describe('connectors, runtimes, hosts, isolation', () => {
     await expect(page.locator('[data-field="name"].bad')).toBeVisible();
     await expect(page.locator('[data-field="bot_token"]')).toBeVisible();
     await page.fill('#f-name', 'slack-eng');
-    await page.selectOption('#f-bot_token', { index: 1 });
-    await page.selectOption('#f-app_token', { index: 2 });
+    await page.selectOption('#f-bot_token-pick', { index: 2 });
+    await page.selectOption('#f-app_token-pick', { index: 3 });
     await page.fill('#f-default_channel', '#eng');
     await submit(page);
     await expect(page.locator('.diff')).toContainText('slack-eng:');
@@ -222,7 +222,7 @@ test.describe('browser', () => {
     await submit(page);
     await expect(page.locator('.tag', { hasText: 'allows site status.example.com' })).toBeVisible();
     await applyStaged(page, { expectWidening: true });
-    await go(page, '#/browser/seed');
+    await go(page, '#/browser/takeover');
     await page.locator('[data-act="sd-next"]').click();
     await page.locator('[data-act="sd-next"]').click();
     await page.locator('[data-act="sd-save"]').click(); await page.locator('#su-go').click();

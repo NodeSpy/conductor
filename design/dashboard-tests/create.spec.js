@@ -29,8 +29,8 @@ test('a connector instance created from inside a workflow step; one combined dif
   await pickNew(page, '[data-card="comment"] select[data-picker="connector"]');
   await page.fill('#d-name', 'gh-bot');
   await page.fill('#d-github__app_id', '777001');
-  await page.locator('#d-github__private_key').selectOption({ index: 1 });
-  await page.locator('#d-github__webhook_secret').selectOption({ index: 1 });
+  await page.locator('#d-github__private_key-pick').selectOption({ index: 2 });
+  await page.locator('#d-github__webhook_secret-pick').selectOption({ index: 2 });
   await page.locator('#dr-submit').click();
   await expect(page.locator('.cdrawer')).toHaveCount(0);
   await expect(page.locator('[data-card="comment"] select[data-picker="connector"]')).toHaveValue('gh-bot');

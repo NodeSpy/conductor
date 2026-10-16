@@ -392,6 +392,13 @@
   };
   /** Attributes for a control that can't be used right now, and why. */
   UI.off = (reason) => `aria-disabled="true" data-reason="${UI.esc(reason)}" data-tip="${UI.esc(reason)}"`;
+  /* ---- shared components (css/components.css) ---- */
+  /** A selectable choice card: icon left, title over description. o: { act, attrs, icon, title, desc, on, off (reason), kc } */
+  UI.choice = (o) => `<button type="button" class="choice${o.on ? ' on' : ''}" aria-pressed="${!!o.on}" ${o.off ? UI.off(o.off) : `data-act="${o.act}" ${o.attrs || ''}`}${o.kc ? ` style="--kc:${o.kc}"` : ''}><span class="choice-ic">${UI.icon(o.icon)}</span><span class="choice-body"><span class="choice-title">${o.title}</span><span class="choice-desc">${o.desc}</span>${o.off ? `<span class="choice-note">${UI.esc(o.off)}</span>` : ''}</span><span class="choice-check" aria-hidden="true">${UI.icon('check')}</span></button>`;
+  /** The choice made in an earlier step, carried forward, with a way back. */
+  UI.chosen = (o) => `<div class="choice-chosen"${o.kc ? ` style="--kc:${o.kc}"` : ''}><span class="choice-ic">${UI.icon(o.icon)}</span><div class="grow"><span class="caps">${o.caps || 'method'}</span><b>${o.title}</b></div>${o.act ? `<button class="btn sm ghost" data-act="${o.act}">Change</button>` : ''}</div>`;
+  /** A wizard stepper: steps = labels, at = current index (done before it). */
+  UI.stepper = (steps, at, bad) => `<div class="stepper apply-steps" role="list">${steps.map((x, i) => `<div class="as ${i < at ? 'done' : i === at ? (bad ? 'cur bad' : 'cur') : ''}" role="listitem"${i === at ? ' aria-current="step"' : ''}><b>${i < at ? '✓' : i + 1}</b>${x}</div>`).join('')}</div>`;
   /** Segmented control: items [[value, label]]; act receives el.dataset.v. */
   UI.seg = (items, value, act, extra = '') => `<div class="seg" role="group" ${extra}>${items.map(([v, l, dis]) => `<button type="button" data-v="${UI.esc(v)}" ${dis ? UI.off(dis) : `data-act="${act}"`} aria-pressed="${String(v) === String(value)}" class="${String(v) === String(value) ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   UI.switchBtn = (on, act, attrs = '') => `<button type="button" role="switch" class="switch${on ? ' on' : ''}" aria-checked="${!!on}" data-act="${act}" ${attrs}></button>`;
@@ -475,16 +482,11 @@
         input = `<div class="listed" data-listk="${fd.k}" id="${id}">${items.map((x) => `<span class="chip-x"><span class="mono">${UI.esc(x)}</span><button type="button" data-act="list-del" aria-label="Remove ${UI.esc(x)}">${UI.icon('x')}</button></span>`).join('')}
           ${fd.type === 'select-multi' ? `<select class="select mono list-add-sel" data-on-change="list-add-sel" ${UI.pickerAttrs(fd)} aria-label="Add ${UI.esc(lbl)}"><option value="">+ add…</option>${UI.createOpt(fd)}${(fd.options || []).filter((o) => !items.includes(o)).map((o) => `<option>${UI.esc(o)}</option>`).join('')}</select>` : `<input class="input mono list-add" placeholder="${UI.esc(fd.ph || 'add, then Enter')}" data-k-list="${fd.k}"><button type="button" class="btn sm" data-act="list-add">${UI.icon('plus')}Add</button>`}</div>`; break;
       }
-      case 'secret': {
-        const known = S.view().secrets.map((s) => [`{{ vault "${s.vault === 'op' ? 'op' : s.ref.split('/')[0]}" "${s.vault === 'op' ? s.ref.replace('op://', '') : s.ref.split('/').slice(1).join('/')}" }}`, `${s.name} · ${s.ref}`]);
-        const cur = String(val);
-        const inList = known.some(([k]) => k === cur);
-        input = `<select class="select mono" id="${id}" data-k="${fd.k}" data-secret="1" ${UI.pickerAttrs(Object.assign({ create: 'secret', ret: 'expr' }, fd))}>${UI.createOpt(Object.assign({ create: 'secret', createLabel: 'New secret' }, fd))}${fd.req ? '' : '<option value="">— none —</option>'}${cur && !inList ? `<option selected value="${UI.esc(cur)}">${UI.esc(cur)}</option>` : ''}${known.map(([k, l]) => `<option value="${UI.esc(k)}"${k === cur ? ' selected' : ''}>${UI.esc(l)}</option>`).join('')}</select><div class="hint">${UI.icon('lock')} A reference, never a value. <a href="#/secrets" class="link">Store a new secret</a> first if it isn't listed.</div>`; break;
-      }
       case 'map': {
         const ents = Object.entries(val || {});
         input = `<div class="kvedit" data-mapk="${fd.k}" id="${id}">${ents.concat([['', '']]).map(([a, b], i) => `<div class="kvrow"><input class="input mono" placeholder="key" value="${UI.esc(a)}" data-mk="k"><input class="input mono" placeholder="value" value="${UI.esc(typeof b === 'object' ? JSON.stringify(b) : b)}" data-mk="v">${i < ents.length ? `<button type="button" class="icon-btn" data-act="map-del" aria-label="Remove row">${UI.icon('trash')}</button>` : '<span style="width:30px"></span>'}</div>`).join('')}</div>`; break;
       }
+      case 'value': case 'secret': input = UI.VS.html(fd.type === 'secret' ? Object.assign({ sensitive: true }, fd) : fd, val, id); break;
       case 'password': input = `<input class="input mono" type="password" autocomplete="new-password" id="${id}" data-k="${fd.k}" value="" placeholder="${UI.esc(fd.ph || '')}">`; break;
       default: input = `<input class="input${fd.mono === false ? '' : ' mono'}" id="${id}" data-k="${fd.k}" value="${UI.esc(val)}" placeholder="${UI.esc(fd.ph || (fd.type === 'duration' ? 'e.g. 30m' : ''))}" ${fd.readonly ? 'readonly' : ''}>`;
     }
@@ -506,7 +508,10 @@
     fields.forEach((fd) => {
       const box = root.querySelector(`[data-field="${fd.k}"]`); if (!box || box.classList.contains('hide')) return;
       const v = vals[fd.k]; let err = '';
-      if (fd.req && (v === undefined || v === '' || (Array.isArray(v) && !v.length))) err = 'Required.';
+      const vsEl = (fd.type === 'value' || fd.type === 'secret') && box.querySelector('.vs');
+      if (vsEl && UI.VS.blocked(fd.type === 'secret' || fd.sensitive, v)) err = 'A sensitive value can\'t come from a setting.';
+      else if (vsEl && fd.req && !v && (vsEl.dataset.pending === '1' || box.querySelector('input[type=hidden][data-set]'))) err = '';
+      else if (fd.req && (v === undefined || v === '' || (Array.isArray(v) && !v.length))) err = 'Required.';
       else if (v !== undefined && fd.type === 'number' && typeof v !== 'number' && !/^\{\{/.test(v)) err = 'A number, or a {{ reference }}.';
       else if (v && fd.type === 'duration' && !/^\d+(ms|s|m|h|d)$/.test(v)) err = 'A duration such as 30s, 10m or 2h.';
       else if (fd.pattern && v && !fd.pattern.test(v)) err = fd.patternMsg || 'Invalid value.';
@@ -535,6 +540,7 @@
     $('#' + ids.submit, s).addEventListener('click', () => {
       const v = UI.formValues(form, spec.fields.filter((fd) => !form.querySelector(`[data-field="${fd.k}"]`).classList.contains('hide')));
       if (!UI.checkFields(form, spec.fields, v)) { const first = form.querySelector('.field.bad input, .field.bad select, .field.bad textarea'); if (first) first.focus(); return; }
+      if (UI.VS.pending(form).length) { UI.VS.commit(form, typeof spec.secretPrefix === 'function' ? spec.secretPrefix(form) : spec.secretPrefix || ((form.querySelector('[data-k="name"]') || {}).value || vals.name || spec.title || 'value')).then((ok) => { if (ok) $('#' + ids.submit, s).click(); }); return; }
       const r = spec.onSubmit(v, form);
       const box = $('.form-err', s);
       if (typeof r === 'string') { box.textContent = r; box.classList.remove('hide'); return; }

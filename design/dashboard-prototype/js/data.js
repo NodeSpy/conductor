@@ -272,9 +272,9 @@ Primary Postgres for the platform services (acme/api, acme/web).
     { name: 'SLACK_APP_TOKEN', ref: 'op://Agents/Slack/app-token', vault: 'op', set: null, used: ['connectors.slack-ops.app_token'] },
     { name: 'review_token', ref: 'house/review', vault: 'house', set: m(9000), used: ['packs.review.secrets.review_token'] },
     { name: 'PD_TOKEN', ref: 'store/conductor/pd', vault: 'store', set: m(20000), used: ['connectors.pd.token'] },
-    { name: 'app password', ref: 'op://Agents/App/password', vault: 'op', set: null, used: ['browser.credentials.app.password'] },
-    { name: 'app otp', ref: 'op://Agents/App/one-time password?attribute=otp', vault: 'op', set: null, used: ['browser.credentials.app.otp'] },
-    { name: 'statuspage passkey', ref: 'house/passkeys/statuspage', vault: 'house', set: m(4300), used: ['browser.credentials.statuspage.passkey'] },
+    { name: 'app_password', ref: 'op://Agents/App/password', vault: 'op', set: null, used: ['browser.credentials.app.password'] },
+    { name: 'app_otp', ref: 'op://Agents/App/one-time password?attribute=otp', vault: 'op', set: null, used: ['browser.credentials.app.otp'] },
+    { name: 'statuspage_passkey', ref: 'house/passkeys/statuspage', vault: 'house', set: m(4300), used: ['browser.credentials.statuspage.passkey'] },
     { name: 'VAULT_TOKEN', ref: 'env:VAULT_TOKEN', vault: 'env', set: null, used: ['vaults.hcv.unlock.token'], warn: 'hcv reports the token expired' },
   ];
   D.settings = [
@@ -715,4 +715,63 @@ steps:
   };
   D.access.logins.forEach((l) => { l.expires = '23d'; });
 
+})();
+
+/* Typed knowledge (kinds, not free paths). Every entry is markdown with front
+ * matter; its kind decides its home and its fields: knowledge/, runbooks/,
+ * watch.md, log/ (bots only), handoff/ (system), and custom collections
+ * declared in config (collections:) or shipped by a pack. */
+(function () {
+  const D = window.D;
+  const fm = (o, body) => '---\n' + YAML.stringify(o) + '---\n' + (body || '');
+  D.memory.files = {
+    'knowledge/db-prod-1.md': fm({ kind: 'knowledge', title: 'db-prod-1', statement: 'Primary Postgres for the platform services (acme/api, acme/web): Postgres 16, Multi-AZ, db.r6g.2xlarge.', applies_to: ['db-prod-1', 'postgres', 'acme/api'], source: 'RDS console; failover drill 2026-10-16 (case c31)', confidence: 'high' },
+      '- **Failover drill:** 2026-10-16 — promoted standby in 48s; app reconnect\n  storm capped by pgbouncer `max_client_conn`. No data loss.\n\nSee [[runbooks/page-triage]] and [[runbooks/latency]].\n'),
+    'knowledge/infra-map.md': fm({ kind: 'knowledge', title: 'Infra map', statement: 'api runs on ECS in us-east-1 behind the shared ALB; web is an EC2 ASG on launch template web.', applies_to: ['acme/api', 'acme/web', 'nat'], source: 'terraform state, modules/web and modules/api', confidence: 'high' }, '- NAT gateways: api, web, data (owners: platform)\n'),
+    'knowledge/alb.md': fm({ kind: 'knowledge', title: 'ALB', statement: 'deregistration_delay is 30s on every target group.', applies_to: ['alb', 'acme/web'], source: 'modules/web/alb.tf', confidence: 'high' }, ''),
+    'runbooks/latency.md': fm({ kind: 'runbook', title: 'Latency', when: 'api p99 above 800ms for 5 minutes, or a latency page from pd service api', prerequisites: ['read access to the ALB and the deploy log'], steps: [{ do: 'Check p99 by route', verb: 'kv.get' }, { do: 'Compare against the deploy log', verb: 'gh.get_deployments' }, { do: 'Check the ALB deregistration delay (30s, see [[knowledge/alb]])' }], verification: 'p99 back under 500ms for 15 minutes', rollback: 'Nothing to roll back: read-only checks', owner: 'platform-sre', applies_to: ['acme/api', 'alb'] }, ''),
+    'runbooks/page-triage.md': fm({ kind: 'runbook', title: 'Page triage', when: 'Any page from pd', steps: [{ do: 'Acknowledge within 5 minutes', verb: 'pd.ack' }, { do: 'Open one case per page' }], verification: 'The incident shows acknowledged and a case is open', owner: 'platform-sre' }, ''),
+    'runbooks/nat-gateway.md': fm({ kind: 'runbook', title: 'NAT gateway cost', when: 'NAT spend up more than 30% week over week', steps: [{ do: 'List flows by AZ pair', run: 'aws ec2 describe-flow-logs --filter Name=resource-id,Values=nat-*' }, { do: 'Look for a new cross-AZ path (see [[knowledge/infra-map]])' }], verification: 'Daily NAT spend back within 10% of last week', rollback: 'Revert the route change that added the path', owner: 'platform-sre', applies_to: ['nat'] }, ''),
+    'watch.md': '# Watch\n\n## Replication lag on db-prod-1\n- signal: aws.rds ReplicaLag (db-prod-1)\n- threshold: > 5s for 2m\n- why: The failover drill showed reconnect storms when lag is high\n\n## NAT gateway cost\n- signal: aws-cost daily NAT spend\n- threshold: +30% week over week\n- why: A new cross-AZ path doubles transfer cost\n',
+    'log/2026-10-16-c29.md': fm({ kind: 'log', title: 'c29 · api p99', case: 'c29', at: '2026-10-16' }, 'Regression lines up with web on the old AMI after the 14:02 scale-out. Followed [[runbooks/latency]]; ALB facts from [[knowledge/alb]].\n'),
+    'log/2026-10-16-x4.md': fm({ kind: 'log', title: 'Sweep x4', case: 'x4', at: '2026-10-16' }, 'NAT gateway cost +44% week over week. Followed [[runbooks/nat-gateway]].\n'),
+    'handoff/s6.md': fm({ kind: 'handoff', title: 'Hand-off s6 → s7', session: 's6' }, 'Open: c24 (cache TTL), c27 (NAT cost).\n'),
+  };
+  D.memory.open = 'knowledge/db-prod-1.md';
+  const tk = D.teamKnowledge.platform;
+  tk.files = {
+    'knowledge/alb.md': fm({ kind: 'knowledge', title: 'ALB', statement: 'Shared target groups: check the deregistration delay before blaming the app.', applies_to: ['alb'], source: 'platform on-call notes', confidence: 'medium' }, ''),
+    'knowledge/oncall.md': fm({ kind: 'knowledge', title: 'On-call', statement: 'ops is primary, oncall secondary; sweeps keep 22:00-07:00 quiet hours.', applies_to: ['team:platform'], source: 'team charter', confidence: 'high' }, ''),
+    'runbooks/failover.md': fm({ kind: 'runbook', title: 'Failover', when: 'The db-prod-1 primary is unhealthy for 2 minutes', prerequisites: ['an approved commit_money-free change window'], steps: [{ do: 'Check replication lag', verb: 'kv.get' }, { do: 'Promote the standby', run: 'aws rds failover-db-cluster --db-cluster-identifier db-prod-1' }, { do: 'Watch the app reconnect' }], verification: 'Writes succeed on the new primary; p99 normal', rollback: 'Fail back after the old primary recovers', owner: 'platform' }, ''),
+    'watch.md': '# Watch\n\n## Error budget for api\n- signal: slo api availability (30d)\n- threshold: < 99.9%\n- why: Freeze deploys before the budget runs out\n',
+  };
+  tk.proposals = [
+    { id: 'k4', bot: 'platform-sre', kind: 'knowledge', to: 'knowledge/alb.md', summary: 'ALB deregistration delay is 30s on every target group', status: 'pending', at: new Date(Date.now() - 25 * 60000).toISOString(), case: 'c29',
+      content: fm({ kind: 'knowledge', title: 'ALB', statement: 'Shared target groups: deregistration_delay is 30s on every target group; check it before blaming the app.', applies_to: ['alb', 'acme/web'], source: 'modules/web/alb.tf (case c29)', confidence: 'high' }, '') },
+    { id: 'k3', bot: 'web-triage', kind: 'knowledge', to: 'knowledge/safari-18-flex-gap.md', summary: 'Safari 18 flex gap bug: use margin fallback in checkout', status: 'pending', at: new Date(Date.now() - 55 * 60000).toISOString(), case: 'c33',
+      content: fm({ kind: 'knowledge', title: 'Safari 18 flex gap', statement: 'Safari 18 mis-sizes flex gap inside buttons; checkout uses a margin fallback.', applies_to: ['acme/web', 'safari'], source: 'case c33 repro', confidence: 'medium' }, '') },
+    { id: 'k5', bot: 'web-triage', kind: 'runbook', to: 'runbooks/checkout-errors.md', summary: 'Runbook for checkout 5xx bursts', status: 'pending', at: new Date(Date.now() - 70 * 60000).toISOString(), case: 'c33',
+      content: fm({ kind: 'runbook', title: 'Checkout errors', when: 'checkout 5xx above 2% for 5 minutes', steps: [{ do: 'Check the canary' }, { run: 'kubectl rollout undo deploy/web' }, { do: 'Tell #incidents', verb: 'slack-ops.post', run: 'echo hi' }] }, '') },
+    { id: 'k2', bot: 'platform-sre', kind: 'runbook', to: 'runbooks/page-triage.md', summary: 'Ack within 5 minutes; one case per page', status: 'approved', at: new Date(Date.now() - 3000 * 60000).toISOString(), approver: 'ops (passkey · laptop)', content: '' },
+  ];
+  // collections: the operator's own (config, collections:) and those packs ship
+  D.collections = [];
+  D.packCollections = [{ name: 'postmortems', pack: 'sre-bot', cfg: { dir: 'postmortems', scope: 'team', fields: ['date:string', 'severity:enum(sev1|sev2|sev3)', 'impact:text'], template: '## Timeline\n\n## Root cause\n\n## Actions\n', free_paths: false, write: ['operator', 'bots (proposal)'] } }];
+})();
+
+/* Environment variables, by scope. Daemon scope is conductor.env (loaded by
+ * the daemon at startup); the rest live on the runtime, bot/team, workflow,
+ * plugin or host that exports them. Values of sensitive-looking plain vars
+ * are never shown, only their length. */
+(function () {
+  window.D.env = [
+    { scope: 'daemon', name: 'APP_USER', value: 'svc-app', plain: true },
+    { scope: 'daemon', name: 'BOT_CHANNEL', value: '#bots', plain: true },
+    { scope: 'daemon', name: 'GH_HOST', value: 'github.com', plain: true },
+    { scope: 'daemon', name: 'APP_PASSWORD', value: '', len: 24, plain: true, looksSecret: true },
+    { scope: 'daemon', name: 'VAULT_TOKEN', value: '${secret.VAULT_TOKEN}', plain: false },
+    { scope: 'runtime:paseo', name: 'AWS_PROFILE', value: 'ops', plain: true },
+    { scope: 'host:build-box', name: 'TZ', value: 'UTC', plain: true },
+    { scope: 'workflow:ci-fixer', name: 'NODE_OPTIONS', value: '--max-old-space-size=4096', plain: true },
+  ];
 })();

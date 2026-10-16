@@ -140,7 +140,7 @@
       <div class="panel"><div class="empty"><span class="serif">Nothing staged</span>Edit a connector, a bot, a secret reference or a workflow and its change waits here: validated on a copy, shown as a diff, applied with your passkey.<div class="row" style="justify-content:center;margin-top:10px"><a class="btn" href="#/config">Config</a><a class="btn" href="#/connectors">Connectors</a><a class="btn" href="#/workflows">Workflows</a></div></div></div></div>`;
     const key = JSON.stringify(P.map((c) => c.id));
     if (ap.checksFor !== key) { ap.checksFor = key; ap.phase = 'check'; ap.ack = false; }
-    const before = S.configText(D), cand = S.candidate(), after = S.configText(cand);
+    const before = S.configText(D), cand = S.candidate(), after = S.configText(cand), envB = S.envText(D), envA = S.envText(cand);
     const v = S.validate(), wid = S.widening();
     const dv = UI.diffView(before, after, ap.mode, { sections: true });
     const restoring = P.every((c) => /^restore /.test(c.summary));
@@ -166,6 +166,7 @@
               return `<div class="item" style="align-items:flex-start">${st(c.after == null ? 'fail' : c.before == null ? 'ok' : 'run', '')}<div class="grow"><div class="small"><b>${esc(c.summary)}</b></div><div class="mono tiny muted">${esc(C()[c.coll].path(c.key))} · ${c.after == null ? 'remove' : c.before == null ? 'add' : 'edit'} · staged ${ago(c.at)} ago</div>${w.map((x) => `<span class="tag" data-s="wait">${icon('warn')} widens: ${esc(x.text)}</span>`).join(' ')}</div>
                 <a class="btn sm ghost" href="${href}">${icon('edit')}Edit</a><button class="btn sm ghost" data-act="unstage" data-id="${c.id}" aria-label="Discard ${esc(c.summary)}">${icon('x')}Discard</button></div>`; }).join('')}</div></div>
             <div class="panel"><div class="panel-head"><h3>Diff</h3><span class="muted small">what will be written · +${dv.adds} −${dv.dels}</span><div class="tools">${UI.seg([['unified', 'unified'], ['split', 'split'], ['whole', 'whole file']], ap.mode, 'diff-mode')}</div></div><div class="panel-body tight">${dv.html}</div></div>
+            ${envB !== envA ? `<div class="panel"><div class="panel-head"><h3 class="mono">conductor.env</h3><span class="muted small">daemon environment · backed up before writing · restart through the boot guard</span></div><div class="panel-body tight">${UI.diffView(envB, envA, ap.mode === 'split' ? 'split' : 'unified', { file: 'conductor.env' }).html}</div></div>` : ''}
           </div>
           <div class="stack">
             <div class="panel"><div class="panel-head"><h3>Checks</h3><div class="tools" id="chk-state">${ap.phase === 'check' ? st('run', 'running') : v.errors.length ? st('fail', `${v.errors.length} failed`) : st('ok', `7 passed${v.warnings.length ? ` · ${v.warnings.length} warning${v.warnings.length > 1 ? 's' : ''}` : ''}`)}</div></div>
