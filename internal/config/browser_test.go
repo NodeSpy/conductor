@@ -27,6 +27,8 @@ func TestValidateBrowser(t *testing.T) {
 		{"empty allow", func(b *BrowserConfig) { b.Allow = nil; b.Logins = nil; b.Credentials = nil }, "browser.allow is empty"},
 		{"whole web", func(b *BrowserConfig) { b.Allow = append(b.Allow, "*") }, "whole web"},
 		{"whole web any port", func(b *BrowserConfig) { b.Allow = append(b.Allow, "*:*") }, "whole web"},
+		{"container on", func(b *BrowserConfig) { b.Container = "on" }, ""},
+		{"container bad", func(b *BrowserConfig) { b.Container = "yes" }, "auto|on|off"},
 		{"evaluate one identity", func(b *BrowserConfig) { b.Evaluate = BrowserEvaluate{"agent:triage@acme/app"} }, ""},
 		{"evaluate a prefix", func(b *BrowserConfig) { b.Evaluate = BrowserEvaluate{"agent:triage@*"} }, ""},
 		{"evaluate everyone", func(b *BrowserConfig) { b.Evaluate = BrowserEvaluate{"*"} }, "name each identity"},

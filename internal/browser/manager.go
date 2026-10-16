@@ -72,6 +72,9 @@ type Settings struct {
 	// IsolationNote is logged with every browser started without a
 	// container on macOS (why, and what that means).
 	IsolationNote string
+	// Unavailable refuses every launch, with why (a container still being
+	// prepared, or required and impossible).
+	Unavailable string
 }
 
 // LoginSiteConfig is one opted-in site: who may use it, and what further
@@ -446,6 +449,9 @@ func (m *Manager) instance(ctx context.Context, s *session, c Principal, st Sett
 	}
 	if max := st.MaxBrowsers; max > 0 && m.running() >= max {
 		return nil, fmt.Errorf("browser: %d browsers are running (browser.max_browsers); try again when one closes", max)
+	}
+	if st.Unavailable != "" {
+		return nil, fmt.Errorf("browser: %s", st.Unavailable)
 	}
 	var chrome string
 	var err error

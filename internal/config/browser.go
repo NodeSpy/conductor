@@ -49,6 +49,15 @@ type BrowserConfig struct {
 	// vaults: the agent names one, conductor fills it on the bound origin
 	// and the agent never sees a value. Nothing is shared by default.
 	Credentials []BrowserCredential `yaml:"credentials,omitempty"`
+	// Container runs the browser in a container (Linux Chromium with its
+	// own sandbox, inside a container with no network): `auto` (the
+	// default) does so on macOS whenever a container engine (Docker
+	// Desktop, colima, podman) is present — and keeps the host's
+	// namespaces on Linux; `on` requires it anywhere; `off` never.
+	Container string `yaml:"container,omitempty"`
+	// ContainerEngine picks the engine: docker | podman | a path (default:
+	// docker, then podman, on macOS).
+	ContainerEngine string `yaml:"container_engine,omitempty"`
 	// Mailboxes are where emailed sign-in codes are read (IMAP, read-only),
 	// by name: a credential's email_code names one. Opt-in: none by default.
 	Mailboxes map[string]BrowserMailbox `yaml:"mailboxes,omitempty"`
@@ -203,6 +212,11 @@ func (c *Config) validateBrowser() error {
 		if h, _ := splitHostPortPattern(a); h == "*" {
 			return fmt.Errorf("config: browser.allow: %q would open the whole web to an agent's browser — list the sites", a)
 		}
+	}
+	switch b.Container {
+	case "", "auto", "on", "off":
+	default:
+		return fmt.Errorf("config: browser.container must be auto|on|off, got %q", b.Container)
 	}
 	for _, id := range b.Evaluate {
 		if id == "" || id == "*" || strings.TrimSuffix(id, "*") == "" {

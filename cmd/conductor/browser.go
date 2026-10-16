@@ -111,7 +111,7 @@ func wireBrowser(ctx context.Context, cfg *config.Config, notifier *notify.Notif
 	}
 	home, _ := os.UserHomeDir()
 	m := &browser.Manager{
-		Settings: func() browser.Settings { return browserSettings(browserCfg.Load()) },
+		Settings: func() browser.Settings { return applyIso(browserSettings(browserCfg.Load())) },
 		StateDir: cfg.BrowserStateDir(),
 		SelfExe:  os.Executable,
 		RealHome: home,
@@ -150,8 +150,11 @@ func wireBrowser(ctx context.Context, cfg *config.Config, notifier *notify.Notif
 		}
 		return m.Do(ctx, c, action, args)
 	})
-	if _, err := browser.FindChrome(cfg.Browser.Chrome); err != nil {
-		logf("WARNING: browser: %v — every browser action will fail until one is installed", err)
+	decideBrowserIso(rctx, cfg.Browser, logf)
+	if iso := browserIsoState.Load(); iso != nil && iso.engine == nil && !strings.Contains(iso.unavailable, "container") {
+		if _, err := browser.FindChrome(cfg.Browser.Chrome); err != nil {
+			logf("WARNING: browser: %v — every browser action will fail until one is installed", err)
+		}
 	}
 	logf("browser: on (%d allowed site pattern(s), %d login site(s), %d credential(s), read-only evaluate for %d identity pattern(s))",
 		len(cfg.Browser.Allow), len(cfg.Browser.Logins), len(cfg.Browser.Credentials), len(cfg.Browser.Evaluate))

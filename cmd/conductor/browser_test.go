@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"path/filepath"
 	"reflect"
@@ -112,4 +113,38 @@ func TestBrowserControl(t *testing.T) {
 		}
 	}
 	_ = time.Now
+}
+
+func TestCountHumanUsers(t *testing.T) {
+	out := "_spotlight 89\nroot 0\ndaemon 1\nnobody -2\ndaniel 501\nguest 201\nalice 502\n_mbsetupuser 248\n"
+	if n := countHumanUsers(out); n != 2 {
+		t.Fatalf("%d", n)
+	}
+	if countHumanUsers("daniel 501\n") != 1 || countHumanUsers("") != 0 {
+		t.Fatal("one / none")
+	}
+}
+
+// TestBrowserIsoDecision: Linux stays on its namespaces unless asked; a
+// required container that cannot be had refuses every launch; macOS without
+// one warns plainly.
+func TestBrowserIsoDecision(t *testing.T) {
+	defer browserIsoState.Store(nil)
+	var logs []string
+	logf := func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+	fallbackIso("on", "linux", "no container engine", logf)
+	if st := applyIso(browser.Settings{}); !strings.Contains(st.Unavailable, "container: on") || st.Engine != nil {
+		t.Fatalf("required and impossible: %+v", st)
+	}
+	fallbackIso("auto", "darwin", "no container engine", logf)
+	st := applyIso(browser.Settings{})
+	if st.Unavailable != "" || !strings.Contains(st.IsolationNote, "single-user Mac only") || !strings.Contains(st.IsolationNote, "without its own sandbox") {
+		t.Fatalf("macOS fallback: %+v", st)
+	}
+	if !strings.Contains(logs[len(logs)-1], "WARNING") {
+		t.Fatalf("not logged as a warning: %v", logs)
+	}
+	if seatbeltNote("linux", "x") != "" {
+		t.Fatal("Linux has no Seatbelt note")
+	}
 }
