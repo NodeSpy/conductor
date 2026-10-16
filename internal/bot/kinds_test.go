@@ -189,9 +189,9 @@ func TestKindWriterRules(t *testing.T) {
 	// Through the service: the bot, the operator, conductor.
 	f := newTeamFixture(t, nil)
 	ctx := context.Background()
-	for _, p := range []string{"log/2026/10/x.md", "episodes/2026/x.md", "handoff/x.md"} {
-		if _, _, err := f.svc.WriteMemory(ctx, f.homeOf("a"), MemoryWrite{Path: p, Text: logDoc}); err == nil {
-			t.Errorf("a bot remembered into %s", p)
+	for p, hint := range map[string]string{"log/2026/10/x.md": "conductor bot episode", "episodes/2026/x.md": "conductor bot episode", "handoff/x.md": "conductor bot handoff"} {
+		if _, _, err := f.svc.WriteMemory(ctx, f.homeOf("a"), MemoryWrite{Path: p, Text: logDoc}); err == nil || !strings.Contains(err.Error(), hint) {
+			t.Errorf("a bot remembered into %s, or was not told how: %v", p, err)
 		}
 	}
 	cid := f.deliver(t, Event{Bot: "b", Source: "pd.incident", Title: "db down"})
@@ -226,13 +226,29 @@ func TestKindWriterRules(t *testing.T) {
 	if k, _ := f.svc.Repo("b").Kinds().Get(KindLog); k.Validate(text) != nil {
 		t.Fatalf("the annotated entry is no longer valid: %v", k.Validate(text))
 	}
-	if _, err := f.svc.OperatorEdit(ctx, "", "b", "op", "", Edit{Op: EditAnnotate, Path: "knowledge/x.md", Text: "x", Base: f.head(t, "", "b")}); err == nil {
-		t.Fatal("annotate on a document the operator can just edit")
+	if _, _, err := f.svc.WriteMemory(ctx, f.homeOf("b"), MemoryWrite{Kind: KindKnowledge, Title: "x", Text: kd("x")}); err != nil {
+		t.Fatal(err)
 	}
-	// A revert that would rewrite the log is refused too.
+	if _, err := f.svc.OperatorEdit(ctx, "", "b", "op", "", Edit{Op: EditAnnotate, Path: "knowledge/x.md", Text: "x", Base: f.head(t, "", "b")}); err == nil || !strings.Contains(err.Error(), "annotate and flag are for log documents") {
+		t.Fatalf("annotate on a document the operator can just edit: %v", err)
+	}
+	// A revert that would rewrite the log is refused too — even one that
+	// would only delete a fresh entry (the commit that created it).
 	hist, _ := f.svc.Repo("b").History(ctx, lp, 1)
 	if _, err := f.svc.OperatorEdit(ctx, "", "b", "op", "", Edit{Op: EditRevert, Commit: hist[0].Commit, Base: f.head(t, "", "b")}); err == nil {
 		t.Fatal("an operator reverted a log entry")
+	}
+	c2 := f.deliver(t, Event{Bot: "b", Source: "pd.incident", Title: "cache down"})
+	if _, err := f.svc.Episode(ctx, f.homeOf("b"), c2, "looked"); err != nil {
+		t.Fatal(err)
+	}
+	lp2 := f.svc.Repo("b").EpisodePath(c2, "cache down", f.caseOf(t, "b", c2).Created)
+	created, _ := f.svc.Repo("b").History(ctx, lp2, 1)
+	if _, err := f.svc.OperatorEdit(ctx, "", "b", "op", "", Edit{Op: EditRevert, Commit: created[0].Commit, Base: f.head(t, "", "b")}); err == nil || !strings.Contains(err.Error(), "conductor only") {
+		t.Fatalf("an operator deleted a log entry by reverting its creation: %v", err)
+	}
+	if _, err := f.svc.Repo("b").Read(lp2); err != nil {
+		t.Fatalf("the log entry is gone: %v", err)
 	}
 }
 
@@ -299,6 +315,13 @@ func TestOperatorNewAndCollections(t *testing.T) {
 	// A free-path collection takes a nested path through put.
 	if _, err := f.svc.OperatorEdit(ctx, "platform", "", "op", "", Edit{Op: EditPut, Path: "notes/2026/q4/retro.md", Text: "---\ntitle: Q4 retro\n---\nwhat went well", Base: f.head(t, "platform", "")}); err != nil {
 		t.Fatalf("a free path: %v", err)
+	}
+	// A move into another kind's home is checked against that kind.
+	if _, err := f.svc.OperatorEdit(ctx, "platform", "", "op", "", Edit{Op: EditMv, Path: "runbooks/db-failover.md", To: "knowledge/db-failover.md", Base: f.head(t, "platform", "")}); err == nil || !strings.Contains(err.Error(), "knowledge schema") {
+		t.Fatalf("a runbook moved into knowledge/: %v", err)
+	}
+	if _, err := f.svc.OperatorEdit(ctx, "platform", "", "op", "", Edit{Op: EditMv, Path: "runbooks/db-failover.md", To: "runbooks/sub/db-failover.md", Base: f.head(t, "platform", "")}); err == nil {
+		t.Fatal("a runbook moved to a free path")
 	}
 	// ls --kind.
 	ls, err := f.svc.RepoFile(ctx, "platform", "", "", KindRunbook)
