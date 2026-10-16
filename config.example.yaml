@@ -1363,6 +1363,15 @@ policy:
 # a proactive sweep's) request can never be laundered through a child into an
 # unapproved write. Members that an operator LINKS (peers: on both sides, or
 # member_links:) can message each other — data only, never instructions.
+#
+# TEAMS group members however you cut your work — by system, function,
+# environment (conductor has no notion of an org). A member names at most one
+# team; the team's settings are CEILINGS it inherits and can only narrow, never
+# widen (a member past its team's is a load error naming both values).
+# Teammates are peers by default; a team can share a knowledge repo (members
+# PROPOSE promotions from their own memory; an operator of the team approves);
+# and `member: { team: … }` routes an event to the team, whose rules, lead or
+# fallback pick the member — still the original requester's request at the gate.
 # ---------------------------------------------------------------------------
 operators:
   ops:
@@ -1379,7 +1388,8 @@ members:
     escalation: "Page the operator if a sev1 is not mitigated in 15 minutes or you are unsure."
     # memory_repo: ~/members/platform-sre        # default <state dir>/members/platform-sre/memory
     # seed_dir: .conductor/packs/platform-sre    # seed a NEW memory repo with a pack's knowledge/ + runbooks/
-    # operators: [ops]                           # default: every operator
+    # operators: [ops]                           # default: the team's operators, else every operator
+    team: platform                               # at most one team (teams: below); members without one are unaffected
     home:
       rotate: { max_age: 24h, max_turns: 100 }   # a fresh session resumes from the handoff note + ledger;
                                                  # max_age <= 144h (its conductor token lives 7d from last use)
@@ -1419,6 +1429,34 @@ members:
     #   # stateful: [aws_db_instance, aws_s3_bucket]      # default: built-in databases/buckets/disks/keys list
     #   # allow_destroy: [module.old.aws_s3_bucket.logs] # addresses a plan may still destroy/replace
     #   # timeout: 30m
+
+teams:
+  platform:
+    description: "Platform services: the shared runtime, its data stores and deploys"
+    knowledge: { promotion: proposal }           # a shared repo every member reads; promotions need an operator of the team
+    # operators: [ops]                           # who approves for the team; members' operators: must be a subset
+    # peers: none                                # default team: teammates may `ask` each other (data only)
+    # autonomy:
+    #   ceiling: observe                         # observe | reversible: the highest tier any member may be PROMOTED to
+    #   shadow: true                             # hold every member in shadow mode (none may set shadow: false)
+    #   tiers: { never: [gh.delete_*] }          # classified into every member (the strictest tier wins)
+    # budget:
+    #   spend_cap: { per_action: 500, per_period: 2000, period: 720h }   # each member's commit_money cap fits inside
+    #   proactive: { max_runs_per_day: 12, max_cost_per_day: 4.00 }      # a POOL: all members' sweeps together, rolling 24h
+    # isolation:
+    #   sandbox: required                        # members start only while conductor's agent sandbox is on
+    #   handoff_workers: false                   # no `spawn --handoff` paseo workers
+    #   skip_permission_prompts: false           # a home.mode that skips prompts is a load error
+    # credentials: { secrets_via: broker, allow_secrets: [house/pd-token] }   # members' skill.allow_secrets fit inside
+    # browser: { logins: [status.example.com], credentials: [statuspage] }   # saved logins members may use (agent browser)
+    # knowledge: { repo: ~/teams/platform, seed_dir: .conductor/packs/sre-member, promotion: direct }
+    # routing:                                   # `member: { team: platform, … }` in a trigger
+    #   rules:                                   # first match wins: event fields against globs, no model
+    #     - { name: data, match: { source: "pd.*", service: "db-*" }, to: platform-data }
+    #   lead: platform-sre                       # else the lead triages (a read-only worker) and runs `conductor member assign`
+    #   fallback: platform-sre                   # else, or unassigned after timeout:, the fallback (required)
+    #   # timeout: 10m
+  # billing: { description: "Billing and invoicing" }   # isolated from platform unless member_links: pairs members
 
 # member_links:                                # operator-side peer links: each pair may message each other.
 #   - [platform-sre, billing-sre]              # Linking two members is a channel for data to cross between them —
