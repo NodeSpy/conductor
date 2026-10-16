@@ -222,6 +222,38 @@ The clean equivalent today is operator-side: declare the helper as its own
 bot and link it as a peer (data only), or use ephemeral workers (instructions
 down, same authority or less).
 
+## Operator authoring
+
+`internal/bot/opedit.go`. The operator edits a team's knowledge repo or a
+bot's memory repo directly through three control-socket ops: `edit`
+(put/rm/mv/revert), `file` (read, with the head) and `history`. The dashboard
+wraps the same three.
+
+- **Operator-only by construction.** The ops exist only in `OperatorOp`.
+  `AgentOp` refuses them by name before its switch, so no token reaches them.
+  As with approvals, the boundary is the control socket (0600, same uid), and
+  until the agent sandbox is on a same-uid session process could in principle
+  dial it. Unlike approvals, edits are not signed: the brief makes the socket
+  the boundary, and the sandbox is what closes it.
+- **One primitive, `Repo.Commit`.** Under the repo lock it resolves `Base` (a
+  hex id only: a ref such as `HEAD` would always match) and refuses anything
+  but the head with a `StaleBaseError` carrying the current head. It then
+  stages exactly the named paths, commits them as `operator <name>`, and
+  refreshes clean session worktrees. Any failure resets to the old head.
+- **Revert** is `git revert --no-commit` plus a commit with a `Reverts:`
+  trailer. A conflict aborts and resets. A commit touching a path outside the
+  layout (the first commit's README), the first commit and merges are
+  refused.
+- **History** parses `git log` with trailers. The kind is read from the
+  author's email domain (`@operators…`, `@bots…`, `@teams…`), which only
+  conductor's own committers set.
+- **Approve with changes / reasons.** `ApprovalPayload` gained
+  `edit-sha256` and `reason-sha256` lines. `execKnowledge` checks the
+  original digest first (the proposal is what was approved), then lands the
+  operator's text: `landKnowledge` authors it as the operator, and the
+  proposal keeps `ProposedSHA256` and `EditedBy`. `OnDecision` fences an
+  operator's reason as `OPERATOR REASON`.
+
 ## Folders: display only
 
 `folder:` on a bot or a team (`internal/config/folders.go`) exists so an

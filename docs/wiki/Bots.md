@@ -542,7 +542,8 @@ conductor bot team recall <words>
 conductor bot team read knowledge/databases.md
 ```
 
-Nothing writes it directly. A bot **proposes** promoting one of its own
+No bot writes it directly (an operator can: [below](#editing-knowledge-and-memory-yourself)).
+A bot **proposes** promoting one of its own
 `knowledge/` or `runbooks/` files:
 
 ```
@@ -561,12 +562,73 @@ conductor bot team promote --path knowledge/db.md --to knowledge/databases.md --
 - **It lands exactly what was approved.** The digest covers the team, the
   source and destination paths, and the text's SHA-256. A changed text or path
   fails rather than lands.
-- **Each landing is one commit, authored by the promoting bot.** Its
-  trailers are `Bot-Team`, `Promoted-From: <path>@<memory commit>`,
+- **Each landing is one commit, authored by the promoting bot** (by the
+  operator, when it was [approved with changes](#approving-with-changes-denying-with-a-reason)).
+  Its trailers are `Bot-Team`, `Promoted-From: <path>@<memory commit>`,
   `Bot-Proposal` and `Approved-By`.
 
 **Bot memory stays private to the bot.** Only what a bot promotes
 reaches the team, and bots of other teams cannot read it.
+
+### Editing knowledge and memory yourself
+
+An operator writes a team's knowledge repo, or a bot's memory repo,
+**directly**: no proposal, one commit per change, authored by you.
+
+```
+conductor bot knowledge ls platform                      # its files, and the head to write against
+conductor bot knowledge cat platform knowledge/databases.md
+conductor bot knowledge put platform knowledge/databases.md --from-file db.md --base 3f2a9c1 -m "the primary moved"
+conductor bot knowledge mv  platform knowledge/databases.md knowledge/data/stores.md --base 7d1e0b4
+conductor bot knowledge rm  platform knowledge/old.md --base 9a4b691
+conductor bot knowledge log platform [knowledge/data/stores.md]   # per repo, or per file (following moves)
+conductor bot knowledge revert platform 9a4b691 --base c0ffee1    # undo one commit, as a new commit
+
+conductor bot memory put|rm|mv|revert|ls|cat|log platform-sre …   # the same for a bot's memory [--case <id>]
+```
+
+- **Only an operator does this.** The ops live on the operator control socket;
+  a bot session's token cannot reach them (the agent socket refuses them, and
+  the CLI refuses in a bot session's shell). Bots keep their own paths:
+  proposals into team knowledge, and writes to their own memory. An operator
+  of the **team** edits its knowledge, an operator of the **bot** its memory;
+  name yourself with `--as` when more than one could.
+- **Nothing is silently overwritten.** Every write names the commit you read
+  (`--base`, a commit id — `HEAD` or a branch name is not accepted). If the repo
+  moved on since, the write is refused with the current head; re-read and
+  retry against it.
+- **Provenance.** Each commit is authored `operator <name>` with `Operator:` and
+  `Operator-Edit: put|rm|mv|revert` trailers (and `Bot-Case:` when you link a
+  bot's case with `--case`). `log` shows, per commit, the author, its kind
+  (operator, bot, or the team repo's own first commit), and the case or
+  proposal it is linked to.
+- **A bot whose memory you change is told** (a short note naming the path and
+  commit, not the content) and re-reads it through conductor.
+- **Revert** makes a new commit that undoes one commit. A revert that
+  conflicts with later edits is refused (edit the file instead), as is
+  reverting the repo's first commit.
+
+### Approving with changes, denying with a reason
+
+A knowledge promotion can be approved **with your changes**: the final text
+is yours, the record keeps what the bot proposed.
+
+```
+conductor bot proposal platform-sre p15              # its proposed text; write your final version to a file
+conductor bot approve platform-sre p15 --edit-file final.md
+conductor bot deny platform-sre p16 --reason "db-prod-1 was renamed; promote the new name"
+```
+
+- **With changes,** the commit is authored by you, with trailers naming the
+  proposing bot (`Bot:`, `Bot-Proposal:`), your edit (`Edited-By:`) and the
+  hash of what the bot proposed (`Proposed-SHA256:`). The proposal records
+  both hashes. The bot is told its text was changed, and reads what landed.
+  Only a knowledge promotion can be approved with changes — its text is the
+  content; a verb or a Terraform plan is approved exactly or not at all.
+- **A reason** (on a denial, or an approval) reaches the proposing bot's
+  inbox fenced as `OPERATOR REASON`: data, like everything else it is told.
+- Your signature covers both: the signed payload includes the SHA-256 of the
+  edited text and of the reason, so neither can be swapped after you sign.
 
 ### Routing work to a team
 
@@ -800,6 +862,9 @@ conductor bot sweeps <bot>
 conductor bot teams              # every team: bots, routing, pool, knowledge
 conductor bot team <team>        # …and recent routed cases, delegations, knowledge log, pending promotions
 conductor bot delegations <bot> [--all]  # its delegation edges: handed out, and held
+conductor bot knowledge put|rm|mv|revert|ls|cat|log <team> …   # edit a team's knowledge (above)
+conductor bot memory put|rm|mv|revert|ls|cat|log <bot> …       # edit a bot's memory
+conductor bot approve <bot> <id> --edit-file <f>               # approve a promotion with your changes
 ```
 
 Every session launch, event, worker, memory write, proposal and decision is
