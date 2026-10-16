@@ -226,3 +226,16 @@ td > .owner { width: auto; }
 .wl-table td[data-l="on"] { max-width: 190px; } .wl-table th, .wl-table td { padding-left: 10px; padding-right: 10px; }
 .wl-acts { white-space: nowrap; }
 .wl-acts .btn { padding-left: 7px; padding-right: 7px; }
+
+/* ---------- builder: verb grants, locked list ---------- */
+.grants { display: flex; flex-direction: column; gap: 6px; }
+.grant { padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-1); }
+.grant-scopes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.scope-add { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.scope-add .input { width: 180px; }
+.chip-del { all: unset; cursor: pointer; padding: 0 2px; color: var(--ink-3); }
+.chip-del:hover { color: var(--fail); }
+.wfb-locked { opacity: .55; pointer-events: none; filter: grayscale(.4); }
+.validate-out { border-top: 1px solid var(--line); padding: 8px 16px; }
+.validate-out summary { cursor: pointer; }
+pre.code-out { margin: 8px 0 0; padding: 10px 12px; background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-sm); font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }

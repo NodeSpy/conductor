@@ -60,7 +60,7 @@ mapping every finding ID (Sam B1–B3, M1–M11, m1–m14, P1–P5, polish; Rile
 fixed / changed-differently / deferred. Finish with the line `AUDIT FIXES COMPLETE` in the final report.
 
 Plan (commit after each step):
-- **A. Strict validation and builder fixes** (in progress): real keys from `origin/main:internal/config`
+- **A. Strict validation and builder fixes** (DONE, see commit after 9be090d; `js/realschema.js`, `semantics.spec.js`): real keys from `origin/main:internal/config`
   (trigger keys on/name/extends/abstract/enabled/filter/group/steps/hooks/policy/options/repo/shadow/gate/callable;
   `policy.budget` = window/max_cost_usd/max_tokens; isolation modes user|namespace|container, container needs
   `image`, not on a paseo runtime; filter grammar string=expr, map=AND, list=OR, `expr:`/`not_<key>`, typed

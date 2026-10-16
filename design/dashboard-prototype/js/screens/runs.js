@@ -27,7 +27,7 @@
     const edges = L.edges.map((e) => { const a = stepStatus(run, e.from), b = stepStatus(run, e.to); return `<path class="${b === 'run' ? 'active' : a === 'ok' ? 'done' : ''}" d="${e.d}"/>`; }).join('');
     const nodes = steps.map((s) => {
       const r = run.steps.find((x) => x.id === s.id) || {}, stt = r.status || 'idle', p = L.pos[s.id];
-      const what = s.uses || (s.kind === 'agent' ? `${s.runtime || 'paseo'} · ${s.model || 'default'}` : s.kind === 'code' ? `run: ${s.run || 'cli'}` : s.kind);
+      const what = s.uses || (s.kind === 'agent' ? `${s.runtime || 'paseo'} · ${s.model || 'default'}` : s.kind === 'code' ? (s.command || !s.run ? `use: ${s.use || 'cli'}${s.command ? ' · ' + [].concat(s.command).join(' ') : ''}` : `run: ${s.run}`) : s.kind);
       return `<button type="button" class="node${s.id === sel ? ' sel' : ''}" data-s="${stt}" data-act="live-step" data-step="${s.id}" style="left:${p.x}px;top:${p.y}px;width:${L.W}px" aria-pressed="${s.id === sel}">
         <div class="nk"><span>${s.kind}</span><span>${stt === 'run' ? 'running' : stt === 'ok' ? dur(r.duration_ms) : ''}</span></div>
         <div class="nn">${s.id}</div><div class="nm"><span class="muted mono ellipsis" style="font-size:10px;max-width:110px">${esc(what)}</span>${st(stt === 'stopped' ? 'fail' : stt, '')}</div>

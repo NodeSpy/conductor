@@ -229,23 +229,23 @@
       </div>` : ''}
     </div>`;
   }
+  const fltValInput = (k, ro) => (RS.boolFilterKeys.has(RS.filterBase(k)) ? `<select class="select mono" id="flt-val" aria-label="New filter value" ${ro ? 'disabled' : ''}><option value="true">true</option><option value="false">false</option></select>` : `<input class="input mono" id="flt-val" placeholder="${/expr$/.test(k) ? "!is_draft && !contains(title, 'Release')" : 'value, value'}" aria-label="New filter value" ${ro ? 'readonly' : ''}>`);
   function sourcesEditor(v, srcs, ro) {
     const allowed = new Set(); srcs.forEach((s) => { const e = SCHEMA.event(s.on); (e && e.filters || []).forEach((k) => allowed.add(k)); });
     const dis = ro ? UI.off(ro) : '';
     return `<div class="caps">Sources</div>
       ${srcs.map((s, i) => { const e = SCHEMA.event(s.on); return `<div class="src-row"><span class="sc-ic sm">${icon(e && e.conn ? e.conn.icon : e ? e.icon : 'live')}</span><div class="grow"><b class="mono small">${esc(s.on)}</b><div class="muted tiny">${e ? esc(e.label) : 'conductor lifecycle event'}</div></div><button class="btn sm ghost" ${ro ? dis : `data-act="wf-src-del" data-i="${i}"`} aria-label="Remove source ${esc(s.on)}">${icon('trash')}</button></div>`; }).join('')}
       <button class="btn sm" ${ro ? dis : 'data-act="wf-trig-pick" data-add="1"'}>${icon('plus')}Add a source</button>
-      <div class="caps" style="margin-top:6px">Filters <span class="muted" style="text-transform:none;letter-spacing:0">· AND-ed; any key takes not_</span></div>
+      <div class="caps" style="margin-top:6px">Filters <span class="muted" style="text-transform:none;letter-spacing:0">· a map is AND; any key takes not_; expr: adds a condition</span></div>${typeof v.filter === 'string' || Array.isArray(v.filter) ? `<div class="callout info small">This filter is ${typeof v.filter === 'string' ? 'an expression' : 'a list (OR of alternatives)'}: edit it in the YAML pane or below.</div>` : ''}
       ${Object.entries(isObj(v.filter) ? v.filter : {}).map(([k, x]) => `<div class="flt-row"><span class="mono small">${esc(k)}</span><input class="input mono" value="${esc([].concat(x).join(', '))}" data-wf-filter="${esc(k)}" ${ro ? 'readonly' : ''} aria-label="Filter ${esc(k)}"><button class="btn sm ghost" ${ro ? dis : `data-act="wf-flt-del" data-k="${esc(k)}"`} aria-label="Remove filter ${esc(k)}">${icon('trash')}</button></div>`).join('')}
-      <div class="flt-row"><select class="select mono" id="flt-new" aria-label="New filter key" ${ro ? 'disabled' : ''}>${[...allowed].flatMap((k) => [k, 'not_' + k]).filter((k) => !(isObj(v.filter) && k in v.filter)).map((k) => `<option>${k}</option>`).join('')}</select><input class="input mono" id="flt-val" placeholder="value, value" aria-label="New filter value" ${ro ? 'readonly' : ''}><button class="btn sm" ${ro ? dis : allowed.size ? 'data-act="wf-flt-add"' : UI.off('This event declares no filters')}>${icon('plus')}Add</button></div>
+      <div class="flt-row"><select class="select mono" id="flt-new" aria-label="New filter key" ${ro ? 'disabled' : ''} data-on-change="wf-flt-key">${RS.filterKeysFor([...allowed]).filter((k) => !(isObj(v.filter) && k in v.filter)).map((k) => `<option>${k}</option>`).join('')}</select><span id="flt-val-box">${fltValInput(RS.filterKeysFor([...allowed]).find((k) => !(isObj(v.filter) && k in v.filter)) || '', ro)}</span><button class="btn sm" ${ro ? dis : allowed.size ? 'data-act="wf-flt-add"' : UI.off('This event declares no filters')}>${icon('plus')}Add</button></div>
       <details class="adv"${B.advOpen && B.advOpen.has('$trigger') ? ' open' : ''} data-adv="$trigger"><summary>More: name, grouping, budget</summary><div class="stack tight" style="margin-top:8px">
         ${fieldRow('', 'name', { k: 'name', type: 'string', help: 'A trigger reachable by conductor run needs a unique name.' }, v.name, ro)}
         ${fieldRow('', 'group.key', { k: 'group.key', type: 'string', ref: true, help: 'Batch a burst of events into one run, e.g. {{.repo}}#{{.pr}}.' }, S.getPath(v, 'group.key'), ro)}
         ${fieldRow('', 'group.window', { k: 'group.window', type: 'duration' }, S.getPath(v, 'group.window'), ro)}
-        ${fieldRow('', 'policy.budget.max_runs', { k: 'policy.budget.max_runs', type: 'number', label: 'budget · max runs / day', ref: false }, S.getPath(v, 'policy.budget.max_runs'), ro)}
-        ${fieldRow('', 'policy.budget.max_turns', { k: 'policy.budget.max_turns', type: 'number', label: 'budget · max turns / run', ref: false }, S.getPath(v, 'policy.budget.max_turns'), ro)}
-        ${fieldRow('', 'policy.budget.max_tokens', { k: 'policy.budget.max_tokens', type: 'number', label: 'budget · max tokens / run', ref: false }, S.getPath(v, 'policy.budget.max_tokens'), ro)}
-        ${UI.isApi() ? fieldRow('', 'policy.budget.max_cost_usd', { k: 'policy.budget.max_cost_usd', type: 'number', label: 'budget · max cost (USD)' }, S.getPath(v, 'policy.budget.max_cost_usd'), ro) : ''}
+        ${fieldRow('', 'policy.budget.window', { k: 'policy.budget.window', type: 'duration', label: 'budget · window', ph: '24h (default)', ref: false }, S.getPath(v, 'policy.budget.window'), ro)}
+        ${fieldRow('', 'policy.budget.max_tokens', { k: 'policy.budget.max_tokens', type: 'string', label: 'budget · max tokens in the window', ph: '500k or 2m', ref: false, help: 'A hard cap: over-cap runs shed and retry when the window frees.' }, S.getPath(v, 'policy.budget.max_tokens'), ro)}
+        ${UI.isApi() || S.getPath(v, 'policy.budget.max_cost_usd') != null ? fieldRow('', 'policy.budget.max_cost_usd', { k: 'policy.budget.max_cost_usd', type: 'number', label: 'budget · max cost (USD) in the window', ref: false }, S.getPath(v, 'policy.budget.max_cost_usd'), ro) : ''}
         ${fieldRow('', 'callable', { k: 'callable', type: 'bool', on: 'callable over the invoke API (widening)' }, v.callable, ro)}
       </div></details>`;
   }
@@ -286,7 +286,7 @@
     const F = (path, fd) => rows.push(fieldRow(loc, path, fd, S.getPath(s, path), ro));
     const packRo = B.owner === 'pack';
     const ovPath = packRo ? `${B.w.yaml.match(/^name: (.*)$/m)[1]}/${s.id}` : '';
-    const ovRo = (field) => (packRo && !['model', 'runtime', 'isolation.mode'].includes(field) && !field.startsWith('options.') ? 'Structure and prompts are the pack\'s; model, runtime, isolation and options can be overridden' : '');
+    const ovRo = (field) => (packRo && !['model', 'runtime'].includes(field) && !field.startsWith('isolation.') && !field.startsWith('options.') ? 'Structure and prompts are the pack\'s; model, runtime, isolation and options can be overridden' : '');
     const G = (path, fd) => { const r = packRo ? ovRo(path) : ro; const ovv = packRo ? S.getPath((B.ov.steps || {})[ovPath] || {}, path) : undefined; rows.push(fieldRow(loc, path, Object.assign({}, fd, packRo && !r ? { help: (fd.help ? fd.help + ' ' : '') + (ovv !== undefined ? `<b>Overridden</b> in packs.${B.pack}.steps["${ovPath}"]` : `An edit becomes an override in packs.${B.pack}.steps["${ovPath}"]`) } : {}), ovv !== undefined ? ovv : S.getPath(s, path), r)); };
     if (k === 'verb' || k === 'ask') {
       const decl = SCHEMA.verb(s.uses);
@@ -298,14 +298,27 @@
       if (decl) decl.fields.forEach((f) => G('options.' + f.k, Object.assign({}, f, { type: f.type === 'duration' ? 'string' : f.type === 'secret' ? 'string' : f.type })));
     } else if (k === 'agent') {
       if (packRo) rows.push(`<div class="field"><label>prompt</label><div class="prompt-ro mono small">${esc(s.prompt || s.prompt_file || '')}</div><div class="hint">The prompt is the pack's.</div></div>`);
-      else F('prompt', { type: 'text', req: true, rows: 5, help: 'Say what to do. Insert references with the { } button or by typing {{.' });
+      else F('prompt', { type: 'text', rows: 5, help: 'Optional: omit it and the agent gets the event. Insert data with “Insert from the event” or by typing {{.' });
       G('runtime', { type: 'enum', options: S.view().runtimes.map((r) => r.name), def: (D.runtimes.find((r) => r.cfg && r.cfg.default) || {}).name, create: 'runtime', createLabel: 'New runtime' });
       G('model', { type: 'string', list: 'dl-models', help: `A fleet (fixer, reviewer…), a model id, or a wildcard. Omit for a bare launch. <button type="button" class="link" data-act="create-inline" data-create="fleet" data-picker="fleet" data-target="wf-${loc.replace(/\./g, '_')}-model">+ New fleet</button>` });
-      G('isolation.mode', { type: 'seg', label: 'sandbox', options: [['', 'agent sandbox'], ['container', 'container'], ['none', 'none (widens)']] });
+      { const ovS = packRo ? (B.ov.steps || {})[ovPath] || {} : {}; const rtName = ovS.runtime || s.runtime || (D.runtimes.find((r) => r.cfg && r.cfg.default) || D.runtimes[0] || {}).name, rt = S.view().runtimes.find((r) => r.name === rtName), paseo = rt && rt.use === 'paseo', iso = isObj(ovS.isolation) ? Object.assign({}, s.isolation, ovS.isolation) : isObj(s.isolation) ? s.isolation : null;
+        if (paseo && !iso) rows.push(`<div class="field"><label>isolation</label><div class="hint">${icon('shield')} ${esc(rtName)} is a paseo runtime: its agents are children of the paseo daemon, which conductor can't wrap, so a step isolation block isn't available. The daemon's agent sandbox (Connectors → Isolation) still applies to paseo provider entries. Pick a cli, acp, opencode or agent-deck runtime to isolate this step.</div></div>`);
+        else {
+          G('isolation.mode', { type: 'seg', label: 'isolation', options: [['', 'none set'], ['user', 'user'], ['namespace', 'namespace'], ['container', 'container']], help: 'user: a low-privilege account · namespace: a mount/net namespace jail · container: an image. No block: the runtime\'s own isolation applies.' });
+          if (iso && iso.mode === 'user') G('isolation.user', { type: 'string', label: 'isolation · user', req: true, ph: 'conductor-agent' });
+          if (iso && iso.mode === 'container') { G('isolation.container.image', { type: 'string', label: 'isolation · container image', req: true, ph: 'ghcr.io/acme/agents:latest' }); G('isolation.container.engine', { type: 'enum', label: 'isolation · engine', options: ['docker', 'podman'] }); }
+          if (iso && iso.mode) {
+            G('isolation.network.egress', { type: 'list', label: 'isolation · egress allowlist', ph: 'api.github.com:443', help: 'Through conductor\'s egress proxy; an empty network block denies all. Adding a host widens.' });
+            G('isolation.network.deny', { type: 'bool', label: 'isolation · no network', on: 'cut the network structurally (exclusive with egress)' });
+            G('isolation.fs', { type: 'list', label: 'isolation · extra paths (fs allowlist)', ph: '/srv/media' });
+            G('isolation.limits.memory', { type: 'string', label: 'isolation · memory limit', ph: '2g' }); G('isolation.limits.cpu', { type: 'string', label: 'isolation · cpu limit', ph: '200%' }); G('isolation.limits.pids', { type: 'number', label: 'isolation · pids limit' });
+            if (iso.mode === 'namespace') G('isolation.privileged', { type: 'bool', label: 'isolation · privileged', on: 'see the daemon\'s own files (widening)' });
+          }
+        } }
       if (!packRo) {
         F('workspace', { type: 'enum', options: ['local', 'worktree'] });
         F('checkout', { type: 'enum', options: ['none', 'checkout-pr', 'branch-off'] });
-        F('skill.verbs', { type: 'multi', label: 'skill verbs (grant)', options: allVerbs(), help: 'Deny-by-default: the verbs this agent may call back into conductor.' });
+        rows.push(grantsHTML(loc, s, ro));
         F('handoff', { type: 'enum', options: S.view().connectors.filter((c) => SCHEMA.connectors[c.use] && Object.values(SCHEMA.connectors[c.use].verbs).some((x) => x.ask)).map((c) => c.name), create: 'connector', createCtx: { uses: ['web', 'slack'] }, createLabel: 'New ask-capable connector', help: 'Present a review loop on an ask-capable connector.' });
         F('browser.credentials', { type: 'multi', label: 'browser credentials', options: S.view().access.credentials.map((x) => x.name), create: 'credential', createLabel: 'Add a login', help: 'Logins this step\'s browser may fill (values never reach the agent).' });
         F('skill.allow_secrets', { type: 'multi', label: 'secrets (broker grants)', options: S.view().secrets.map((x) => x.ref), create: 'secret', ret: 'ref', createLabel: 'New secret', help: 'Exact vault entries the agent may request through the broker: single use, 60s, audited.' });
@@ -333,12 +346,14 @@
       if (mode === 'sleep') F('sleep', { type: 'string', req: true, help: 'e.g. 30s, 5m.' });
       else { F('wait_for.uses', { type: 'enum', label: 'read verb', options: allVerbs(true) }); F('wait_for.until', { type: 'string', label: 'until', help: 'Over the verb\'s outputs: status == \'completed\'.' }); F('wait_for.every', { type: 'string', label: 'every' }); F('wait_for.timeout', { type: 'string', label: 'timeout' }); }
     } else if (k === 'bot') {
-      const toTeam = typeof s.bot === 'object';
+      const toTeam = isObj(s.bot) && !!s.bot.team;
       rows.push(`<div class="field"><label>Hand to</label>${UI.seg([['bot', 'a bot'], ['team', 'a team']], toTeam ? 'team' : 'bot', 'wf-bottarget').replace(/data-act="wf-bottarget"/g, ro ? UI.off(ro) : `data-act="wf-bottarget" data-loc="${loc}"`)}<div class="hint">${toTeam ? 'The team\'s routing rules pick the bot; with no match its lead triages. The requester is this trigger\'s event.' : 'Delivered to the bot directly, as conductor bot deliver.'}</div></div>`);
       if (toTeam) F('bot.team', { type: 'enum', label: 'team', req: true, options: S.view().teams.map((x) => x.name), create: 'team', createLabel: 'New team' });
-      else F('bot', { type: 'enum', label: 'bot', req: true, options: S.view().bots.map((x) => x.name), create: 'bot', createLabel: 'New bot' });
-      F('title', { type: 'string', req: true, help: 'Becomes the case title.' });
-      F('text', { type: 'text', rows: 3, help: 'Reaches the bot fenced as untrusted data.' });
+      else F('bot.name', { type: 'enum', label: 'bot', req: true, options: S.view().bots.map((x) => x.name), create: 'bot', createLabel: 'New bot' });
+      F('bot.title', { type: 'string', label: 'title', help: 'Becomes the case title.' });
+      F('bot.text', { type: 'text', label: 'text', rows: 3, help: 'The payload. It reaches the bot fenced as untrusted data, never as instructions.' });
+      F('bot.requester', { type: 'string', label: 'requester', help: 'Who asked; leave empty for an alert with no human behind it.' });
+      F('bot.urgent', { type: 'bool', label: 'urgent', on: 'start a worker now, don\'t wait on the conversation' });
     } else if (k === 'log') F('log', { type: 'text', rows: 2 });
     else if (k === 'set') F('set', { type: 'map', label: 'values', help: 'Read later as {{.' + (s.id || 'this') + '.<key>}}.' });
     else if (k === 'assert') F('assert', { type: 'string', help: 'Same grammar as if:. The run fails unless it holds.' });
@@ -359,6 +374,25 @@
     const dis = ro ? UI.off(ro) : '';
     return `<div class="field"><label>Questions</label><div class="q-list">${Object.entries(q).map(([n, d]) => `<div class="q-row"><input class="input mono" value="${esc(n)}" data-q-name="${esc(n)}" data-loc="${loc}" aria-label="Question name" ${ro ? 'readonly' : ''}><select class="select mono" data-q-type="${esc(n)}" data-loc="${loc}" aria-label="Answer type" ${ro ? 'disabled' : ''}>${['noul', 'choice', 'score'].map((t) => `<option${t === ((d && d.type) || 'noul') ? ' selected' : ''}>${t}</option>`).join('')}</select><input class="input" value="${esc((d && d.instructions) || '')}" placeholder="instructions" data-q-ins="${esc(n)}" data-loc="${loc}" aria-label="Instructions" ${ro ? 'readonly' : ''}>${d && d.type === 'choice' ? `<input class="input mono q-ch" value="${esc((d.choices || []).join(', '))}" placeholder="choice, choice" data-q-ch="${esc(n)}" data-loc="${loc}" aria-label="Choices" ${ro ? 'readonly' : ''}>` : ''}<button type="button" class="icon-btn" ${ro ? dis : `data-act="wf-q-del" data-loc="${loc}" data-n="${esc(n)}"`} aria-label="Remove question">${icon('trash')}</button></div>`).join('')}</div><button type="button" class="btn sm" ${ro ? dis : `data-act="wf-q-add" data-loc="${loc}"`}>${icon('plus')}Add a question</button><div class="hint">noul = yes/no with a probability · choice = one of a list · score = 0..1. Answers are outputs by question name.</div></div>`;
   }
+  /* skill.verbs: the list form (patterns) or the map form (per verb, the resources each call may name) */
+  const RESOURCE_KEYS = ['channel', 'repo', 'store', 'namespace', 'project', 'service'];
+  const resourcesOf = (pattern) => { const d = SCHEMA.verb(pattern); return d ? d.fields.map((f) => f.k).filter((k) => RESOURCE_KEYS.includes(k)) : []; };
+  function grantsHTML(loc, s, ro) {
+    const v = S.getPath(s, 'skill.verbs'), isMap = isObj(v), entries = isMap ? Object.entries(v) : (Array.isArray(v) ? v : v ? [v] : []).map((x) => [x, null]);
+    const id = 'wf-' + loc.replace(/\./g, '_') + '-grants';
+    return `<div class="field wf-field" data-field="skill.verbs"><label>skill verbs (grant) <span class="opt">${isMap ? 'map form: scoped per verb' : 'list form'}</span></label>
+      <div class="grants" id="${id}">${entries.map(([pat, scope]) => { const res = resourcesOf(pat), sc = isObj(scope) ? scope : {}; return `<div class="grant"><div class="row"><span class="mono small grow">${esc(pat)}</span>${ro ? '' : `<button type="button" class="btn sm ghost" data-act="wf-grant-del" data-loc="${loc}" data-p="${esc(pat)}" aria-label="Remove grant ${esc(pat)}">${icon('trash')}</button>`}</div>
+        ${isMap ? `<div class="grant-scopes">${Object.entries(sc).map(([k, xs]) => `<span class="chip"><span class="mono">${esc(k)}: ${esc([].concat(xs).join(', '))}</span>${ro ? '' : `<button type="button" class="chip-del" data-act="wf-scope-del" data-loc="${loc}" data-p="${esc(pat)}" data-k="${esc(k)}" aria-label="Remove ${esc(k)} scope">×</button>`}</span>`).join('') || '<span class="muted tiny">no listed resources: limited to the dispatch\'s own context (its repo, the channel its event came from)</span>'}
+          ${ro || !res.length ? '' : `<span class="scope-add"><select class="select sm" data-scope-key="${esc(pat)}" aria-label="Resource for ${esc(pat)}">${res.map((k) => `<option>${k}</option>`).join('')}</select><input class="input mono sm" data-scope-val="${esc(pat)}" placeholder="#code-reviews, acme/api" aria-label="Allowed values for ${esc(pat)}"><button type="button" class="btn sm" data-act="wf-scope-add" data-loc="${loc}" data-p="${esc(pat)}">${icon('plus')}Scope</button></span>`}</div>` : ''}</div>`; }).join('') || '<div class="muted tiny">None: deny by default, the agent can call no verbs.</div>'}</div>
+      ${ro ? '' : `<div class="row" style="gap:6px;margin-top:6px"><select class="select mono sm" id="${id}-new" aria-label="Add a verb grant"><option value="">+ grant a verb…</option>${allVerbs().concat([...new Set(D.connectors.map((c) => c.name + '.*'))]).filter((x) => !entries.some(([p]) => p === x)).map((x) => `<option>${esc(x)}</option>`).join('')}</select><button type="button" class="btn sm" data-act="wf-grant-add" data-loc="${loc}" data-sel="${id}-new">${icon('plus')}Grant</button>${isMap ? `<button type="button" class="btn sm ghost" data-act="wf-grant-form" data-loc="${loc}" data-v="list" ${Object.values(v).some((x) => isObj(x) && Object.keys(x).length) ? UI.off('Some grants list resources: remove their scopes first') : ''}>Use the list form</button>` : `<button type="button" class="btn sm ghost" data-act="wf-grant-form" data-loc="${loc}" data-v="map">Scope per verb (map form)</button>`}</div>`}
+      <div class="hint">Deny by default: the verbs this agent may call back into conductor. In the map form, a resource you list widens what a call may name; one you don't list is limited to the dispatch's own context.</div></div>`;
+  }
+  const grantsOf = (s) => { const v = S.getPath(s, 'skill.verbs'); return isObj(v) ? Object.assign({}, v) : v; };
+  UI.act('wf-grant-add', (b) => { const sel = UI.$('#' + b.dataset.sel); if (!sel || !sel.value) return UI.nudge(sel); const pat = sel.value; mutate((v) => { const s = WF.at(v, locOf(b.dataset.loc)); const cur = grantsOf(s); if (isObj(cur)) { cur[pat] = {}; S.setPath(s, 'skill.verbs', cur); } else S.setPath(s, 'skill.verbs', [].concat(cur || []).concat([pat])); }); });
+  UI.act('wf-grant-del', (b) => mutate((v) => { const s = WF.at(v, locOf(b.dataset.loc)); const cur = grantsOf(s); if (isObj(cur)) { delete cur[b.dataset.p]; S.setPath(s, 'skill.verbs', Object.keys(cur).length ? cur : undefined); } else S.setPath(s, 'skill.verbs', [].concat(cur || []).filter((x) => x !== b.dataset.p)); }));
+  UI.act('wf-grant-form', (b) => mutate((v) => { const s = WF.at(v, locOf(b.dataset.loc)); const cur = grantsOf(s); if (b.dataset.v === 'map') S.setPath(s, 'skill.verbs', Object.fromEntries([].concat(cur || []).map((p) => [p, {}]))); else S.setPath(s, 'skill.verbs', Object.keys(cur || {})); }));
+  UI.act('wf-scope-add', (b) => { const p = b.dataset.p, key = UI.$(`[data-scope-key="${CSS.escape(p)}"]`).value, inp = UI.$(`[data-scope-val="${CSS.escape(p)}"]`); const vals = inp.value.split(',').map((x) => x.trim()).filter(Boolean); if (!vals.length) return UI.nudge(inp, 'one or more values'); mutate((v) => { const s = WF.at(v, locOf(b.dataset.loc)); const cur = grantsOf(s); const e = Object.assign({}, cur[p]); e[key] = [...new Set([].concat(e[key] || []).concat(vals))]; cur[p] = e; S.setPath(s, 'skill.verbs', cur); }); });
+  UI.act('wf-scope-del', (b) => mutate((v) => { const s = WF.at(v, locOf(b.dataset.loc)); const cur = grantsOf(s); const e = Object.assign({}, cur[b.dataset.p]); delete e[b.dataset.k]; cur[b.dataset.p] = e; S.setPath(s, 'skill.verbs', cur); }));
   const allVerbs = (readOnlyOnly) => { const out = []; D.connectors.forEach((c) => { const d = SCHEMA.connectors[c.use]; if (d) Object.entries(d.verbs).forEach(([vn, vd]) => { if (!readOnlyOnly || vd.read) out.push(`${c.name}.${vn}`); }); }); out.push('git.push'); return out; };
 
   function resultPanel(e) {
@@ -378,11 +412,11 @@
       return kids ? `<div class="dnode">${leaf}<div class="dkids">${tree(v, p, depth + 1, insertTarget)}</div></div>` : leaf; }).join('')}</div>`;
   }
 
-  function badges(id) { const iss = issuesFor(id), er = iss.filter((i) => i.level === 'error').length, wr = iss.length - er; return er ? `<span class="tpill fail" data-tip="${esc(iss.find((i) => i.level === 'error').msg)}">${icon('x')}${er}</span>` : wr ? `<span class="tpill warn" data-tip="${esc(iss[0].msg)}">${icon('warn')}${wr}</span>` : ''; }
+  function badges(id) { const iss = issuesFor(id), er = iss.filter((i) => i.level === 'error').length, wr = iss.filter((i) => i.level === 'warn').length; return er ? `<span class="tpill fail" data-tip="${esc(iss.find((i) => i.level === 'error').msg)}">${icon('x')}${er}</span>` : wr ? `<span class="tpill warn" data-tip="${esc(iss[0].msg)}">${icon('warn')}${wr}</span>` : ''; }
   function stepCard(e, loc, num) {
     const s = e.step, k = e.kind, kc = KC(k), id = e.id, open = B.open.has(id), ro = readOnly();
     const iss = issuesFor(id), r = s && s.id && B.tests[s.id];
-    const er = iss.filter((i) => i.level === 'error').length, wr = iss.length - er;
+    const er = iss.filter((i) => i.level === 'error').length, wr = iss.filter((i) => i.level === 'warn').length;
     const first = e.index === 0, last = e.index === WF.at(B.value, e.list).length - 1;
     if (k === 'parallel') return parallelCard(e, loc, num);
     const general = iss.filter((i) => !i.field || !open);
@@ -397,7 +431,7 @@
         <span class="chev">${icon(open ? 'chevd' : 'chev')}</span>
       </div>
       ${open ? `<div class="sc-body">
-        ${general.filter((i) => !i.field).map((i) => `<div class="callout ${i.level === 'error' ? 'danger' : 'warn'} small">${esc(i.msg)}</div>`).join('')}
+        ${general.filter((i) => !i.field).map((i) => `<div class="callout ${i.level === 'error' ? 'danger' : i.level === 'info' ? 'info' : 'warn'} small">${esc(i.msg)}</div>`).join('')}
         ${r && r.status === 'error' ? `<div class="callout danger small"><b>Test failed:</b> <span class="mono">${esc(r.error)}</span></div>` : ''}
         <div class="sc-form">${formFor(e, loc, ro && B.owner !== 'pack' ? ro : '')}</div>
         <div class="sc-test"><button class="btn sm" ${!s.id ? UI.off('Give this step an id to test it') : !B.ev ? UI.off('Pick a test event in the toolbar first') : B.err ? UI.off('Fix the YAML first') : `data-act="wf-test" data-id="${esc(s.id)}"`}>${icon('play')}Test${e.order ? ' up to here' : ''}</button><span class="muted tiny">runs earlier steps too, against the chosen event; writes are dry-runs</span></div>
@@ -421,7 +455,12 @@
     </div>`;
   }
 
+  /** The list never diverges from the YAML: if rendering the parsed value fails, show the last good list, locked, under the error. */
   function listHTML() {
+    try { const h = listInner(); B.lastGood = h; return h; }
+    catch (e) { console.warn('builder render', e); return `<div class="callout danger small sticky-err">${icon('warn')} The list can't show this YAML (${esc(e.message)}). The YAML pane is canonical; the list below is the last version it could show, locked until the YAML is something it can draw.</div>${B.lastGood ? `<div class="wfb-locked" inert>${B.lastGood}</div>` : ''}`; }
+  }
+  function listInner() {
     const v = B.value || {};
     if (B.err && !B.value) return `<div class="callout danger">${esc(B.err.message)}</div>`;
     const steps = Array.isArray(v.steps) ? v.steps : [];
@@ -629,15 +668,17 @@
   }
   function setField(loc, path, val, opts) {
     if (B.owner === 'pack') return setOverride(loc, path, val);
-    if (!loc) return mutate((v) => { S.setPath(v, path, val); }, opts);
+    if (!loc) return mutate((v) => { S.setPath(v, path, val); if (val === undefined) prune(v, path); }, opts);
     if (path === 'id') {
       const e = entryAt(loc); const old = e && e.step.id;
       if (!val || !/^[a-z][\w-]*$/i.test(val)) { return mutate((v) => { S.setPath(WF.at(v, locOf(loc)), 'id', val); }, opts); }
       if (old && old !== val) { rekey(old, val); if (B.open.has(old)) { B.open.delete(old); B.open.add(val); } if (B.sel === old) B.sel = val; if (B.tests[old]) { B.tests[val] = B.tests[old]; delete B.tests[old]; } }
       return mutate((v) => { WF.at(v, locOf(loc)).id = val; }, Object.assign({}, opts, { soft: false }));
     }
-    return mutate((v) => { const s = WF.at(v, locOf(loc)); if (!s) return false; S.setPath(s, path, val); }, opts);
+    return mutate((v) => { const s = WF.at(v, locOf(loc)); if (!s) return false; if (path === 'isolation.mode' && val === undefined) { delete s.isolation; return; } S.setPath(s, path, val); if (val === undefined) prune(s, path); }, opts);
   }
+  /** Drop maps a removal left empty, so the YAML never says isolation: {}. */
+  function prune(obj, path) { const parts = path.split('.'); for (let i = parts.length - 1; i > 0; i--) { const par = S.getPath(obj, parts.slice(0, i).join('.')); if (isObj(par) && !Object.keys(par).length) S.setPath(obj, parts.slice(0, i).join('.'), undefined); else break; } }
   function setOverride(loc, path, val) {
     const e = entryAt(loc); const wfName = B.w.yaml.match(/^name: (.*)$/m)[1]; const key = `${wfName}/${e.step.id}`;
     B.ov.steps = B.ov.steps || {}; const o = B.ov.steps[key] || {};
@@ -692,7 +733,7 @@
   });
   UI.act('wf-list-del', (b) => { const box = b.closest('[data-wf-loc]'); const txt = b.parentElement.querySelector('.mono').textContent; const cur = [].concat(S.getPath(WF.at(B.value, locOf(box.dataset.wfLoc)), box.dataset.wfPath) || []); setField(box.dataset.wfLoc, box.dataset.wfPath, cur.filter((x) => String(x) !== txt)); });
   UI.act('wf-seg', (b) => setField(b.dataset.loc, b.dataset.path, b.dataset.v === '' ? undefined : b.dataset.v));
-  UI.act('wf-bottarget', (b) => mutate((v) => { const s = WF.at(v, locOf(b.dataset.loc)); s.bot = b.dataset.v === 'team' ? { team: (D.teams[0] || {}).name } : (D.bots[0] || {}).name; }));
+  UI.act('wf-bottarget', (b) => mutate((v) => { const s = WF.at(v, locOf(b.dataset.loc)); const cur = isObj(s.bot) ? s.bot : {}; const nb = Object.assign({}, cur); delete nb.name; delete nb.team; if (b.dataset.v === 'team') nb.team = (D.teams[0] || {}).name; else nb.name = (D.bots[0] || {}).name; s.bot = nb; }));
   UI.act('wf-waitmode', (b) => mutate((v) => { const s = WF.at(v, locOf(b.dataset.loc)); if (b.dataset.v === 'sleep') { delete s.wait_for; s.sleep = s.sleep || '30s'; } else { delete s.sleep; s.wait_for = { uses: 'gh.get_run', options: { repo: '{{.repo}}', run_id: '{{.run_id}}' }, until: "status == 'completed'", every: '5s', timeout: '2m' }; } }));
   function writeQuestions(loc) {
     const rows = UI.$$(`.q-row`).filter((r) => r.querySelector(`[data-loc="${loc}"]`));
@@ -703,7 +744,8 @@
   }
   UI.act('wf-q-add', (b) => mutate((v) => { const s = WF.at(v, locOf(b.dataset.loc)); s.decide = s.decide || {}; s.decide.questions = s.decide.questions || {}; let n = 'question', i = 2; while (s.decide.questions[n]) n = 'question' + i++; s.decide.questions[n] = { type: 'noul', instructions: '' }; }));
   UI.act('wf-q-del', (b) => mutate((v) => { delete WF.at(v, locOf(b.dataset.loc)).decide.questions[b.dataset.n]; }));
-  UI.act('wf-flt-add', () => { const k = UI.$('#flt-new').value, val = UI.$('#flt-val').value.trim(); if (!k || !val) { UI.$('#flt-val').focus(); UI.$('#flt-val').classList.add('shake'); return; } mutate((v) => { v.filter = isObj(v.filter) ? v.filter : {}; const vals = val.split(',').map((x) => x.trim()).filter(Boolean); v.filter[k] = vals.length === 1 && !/any|all|repo|branch/.test(k) ? vals[0] : vals; }); });
+  UI.act('wf-flt-key', (sel) => { const box = UI.$('#flt-val-box'); if (box) box.innerHTML = fltValInput(sel.value, false); });
+  UI.act('wf-flt-add', () => { const k = UI.$('#flt-new').value, val = UI.$('#flt-val').value.trim(); if (!k || !val) { UI.$('#flt-val').focus(); UI.$('#flt-val').classList.add('shake'); return; } mutate((v) => { v.filter = isObj(v.filter) ? v.filter : {}; const base = RS.filterBase(k); if (RS.boolFilterKeys.has(base)) { v.filter[k] = val === 'true'; return; } if (/expr$/.test(k)) { v.filter[k] = val; return; } const vals = val.split(',').map((x) => x.trim()).filter(Boolean); v.filter[k] = vals.length === 1 && !/any|all|repo|branch|author/.test(base) ? vals[0] : vals; }); });
   UI.act('wf-flt-del', (b) => mutate((v) => { delete v.filter[b.dataset.k]; if (!Object.keys(v.filter).length) delete v.filter; }));
   UI.act('wf-src-del', (b) => mutate((v) => { const s = WF.sources(v); s.splice(+b.dataset.i, 1); const raw = s.map((x) => (x.block ? { [x.on]: x.block } : x.on)); if (!raw.length) delete v.on; else v.on = raw.length === 1 && typeof raw[0] === 'string' ? raw[0] : raw; }));
   UI.act('wf-in-add', () => { const n = UI.$('#in-name').value.trim(); if (!/^[a-z_][\w]*$/.test(n)) { UI.$('#in-name').focus(); UI.$('#in-name').classList.add('shake'); return; } mutate((v) => { v.inputs = v.inputs || {}; v.inputs[n] = Object.assign({ type: UI.$('#in-type').value }, UI.$('#in-req').checked ? { required: true } : {}); }); });

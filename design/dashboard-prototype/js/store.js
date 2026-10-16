@@ -235,7 +235,7 @@
     keys: () => D().packs.map((p) => p.name), get: (k) => { const p = byName(D().packs, k); return p ? clone(p.cfg) : null; },
     set(k, n) { const L = D().packs; if (n == null) return drop(L, k); const p = byName(L, k); const ver = (n.use.split('@')[1] || '').replace('^', ''); const ov = Object.keys(n.steps || {}).length + Object.keys(n.triggers || {}).length; if (p) { const moved = ver && p.update && ver === p.update; Object.assign(p, { cfg: n, use: n.use.split('@')[0], hold: !!n.hold, overrides: ov, ver: moved ? ver : p.ver, update: moved ? null : p.update, sha: moved ? '0e47d12' : p.sha }); } else L.push({ name: k, use: n.use.split('@')[0], ver: ver || '1.0.0', sha: 'b51d0a2', status: 'ok', official: n.use.startsWith('conductor-packs/'), hold: !!n.hold, triggers: '0 armed / 1 · arm one to start', overrides: ov, cfg: n }); },
     path: (k) => `packs.${k}`,
-    validate(k, n, all) { const e = []; if (!n.use) e.push(`packs.${k}.use is required`); else if (!/^(conductor-packs\/|\.\/|acme\/)/.test(n.use)) e.push(`packs.${k}.use: ${n.use.split('@')[0]} is not allowed by pack_trust (add a pack_trust source first)`); Object.values(n.steps || {}).forEach((o) => { if (o && o.isolation && o.isolation.mode === 'none') {} }); Object.entries(n.connectors || {}).forEach(([role, inst]) => { if (!byName(all.connectors, inst)) e.push(`packs.${k}.connectors.${role}: no connector "${inst}"`); }); return e; },
+    validate(k, n, all) { const e = []; if (!n.use) e.push(`packs.${k}.use is required`); else if (!/^(conductor-packs\/|\.\/|acme\/)/.test(n.use)) e.push(`packs.${k}.use: ${n.use.split('@')[0]} is not allowed by pack_trust (add a pack_trust source first)`); const mem = (D().packMembers || {})[k]; if (mem) { const addr = Object.entries(mem.workflows).flatMap(([w, ss]) => ss.map((x) => `${w}/${x}`)); Object.keys(n.steps || {}).forEach((key) => { if (!addr.includes(key)) e.push(`packs.${k}.steps["${key}"]: matches nothing in the pack (its steps: ${addr.join(', ')}); an overlay key that matches nothing is an error`); }); Object.keys(n.triggers || {}).forEach((t) => { if (!mem.triggers.includes(t)) e.push(`packs.${k}.triggers.${t}: the pack has no trigger "${t}" (it has ${mem.triggers.join(', ')})`); }); Object.keys(n.connectors || {}).forEach((role) => { if (!mem.roles.includes(role)) e.push(`packs.${k}.connectors.${role}: the pack declares no "${role}" role (requires: ${mem.roles.join(', ')})`); }); Object.keys(n).forEach((key) => { if (!['use', 'connectors', 'steps', 'triggers', 'hold', 'secrets', 'folders', 'settings'].includes(key)) e.push(`packs.${k}.${key}: not a pack instance key`); }); Object.entries(n.triggers || {}).forEach(([t, arm]) => { if (arm && arm.enabled && /github|gh/.test((mem.roles || []).join(',')) && !(arm.repos || []).length) e.push(`packs.${k}.triggers.${t}: arming a github trigger needs repos: (the repos are your consent)`); }); } Object.entries(n.connectors || {}).forEach(([role, inst]) => { if (!byName(all.connectors, inst)) e.push(`packs.${k}.connectors.${role}: no connector "${inst}"`); }); return e; },
     widens(b, a) { const r = []; Object.entries((a && a.steps) || {}).forEach(([s, o]) => { if (o && o.isolation && o.isolation.mode === 'none' && !S.getPath(b || {}, `steps`)?.[s]?.isolation) r.push(`runs pack step ${s} unsandboxed`); }); if (a && !b) r.push(`adds pack source ${a.use.split('@')[0]}`); return r; },
   };
   C.workflows = { section: 'triggers', file: 'config.yaml', label: 'workflow', href: (k) => `#/workflows/${k}`, text: true,
@@ -398,6 +398,15 @@
     return `${p}: ${ch.slice(0, 3).join(', ')}${ch.length > 3 ? ` +${ch.length - 3} more` : ''}`;
   };
   /** A copy of the state with the given changes applied. */
+  /** What `conductor validate` on the copy prints for this state: the loader's own messages, exit status. */
+  S.validateOutput = (v) => {
+    const st = S.view(), tmp = '/tmp/conductor-copy-' + (window.D.daemon.config_sha || '7f3a').slice(0, 4);
+    const lines = [`$ conductor validate --config ${tmp}/config.yaml`];
+    v.warnings.forEach((w) => lines.push('warning: ' + w));
+    if (v.errors.length) { v.errors.forEach((e) => lines.push('config: ' + e)); lines.push(`Error: ${v.errors.length} problem${v.errors.length > 1 ? 's' : ''} in config.yaml`, 'exit status 1'); }
+    else lines.push(`config.yaml: ${st.connectors.length} connectors, ${st.workflows.filter((w) => w.source === 'config' && w.kind !== 'workflow').length} triggers, ${st.workflows.filter((w) => w.kind === 'workflow').length} workflows, ${st.packs.length} packs, ${st.bots.length} bots, ${st.teams.length} teams`, 'ok');
+    return lines.join('\n');
+  };
   S.candidate = (changes = window.D.pending) => {
     const real = window.D; const copy = clone(real);
     window.D = copy;

@@ -164,7 +164,7 @@
   ];
 
   D.proposals = [
-    { id: 'p12', bot: 'platform-sre', kind: 'terraform', verb: 'terraform.apply', tier: 'propose', status: 'pending', case: 'c29', requester: 'event:pd.incident', cls: 'event', worker: null, at: m(8), expires: '23h 52m',
+    { id: 'p12', bot: 'platform-sre', kind: 'terraform', verb: 'tf-apply.apply', tier: 'propose', status: 'pending', case: 'c29', requester: 'event:pd.incident', cls: 'event', worker: null, at: m(8), expires: '23h 52m',
       summary: 'terraform apply of infra@3f2a9c1d07e4, dir envs/prod, workspace prod: +1 ~2 -0; REPLACES aws_instance.web',
       tf: { repo: 'infra', commit: '3f2a9c1d07e4b1c0a9d2e88f31c0b6a1d4e2f907', dir: 'envs/prod', workspace: 'prod', var_files: ['prod.tfvars'], targets: [], add: 1, change: 2, destroy: 0, replaces: ['aws_instance.web'], plan_sha: 'a4c1e09b7f22d81c5e6a03f9b2d47c18e5f0a6b3c9d2e1f4a7b8c0d3e6f9a2b5' },
       digest: 'sha256:9f2c47e1b0a3d58c6e7f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7' },
@@ -172,7 +172,7 @@
       summary: 'kv.set search/cache_ttl = "300s" (was "60s")', options: { key: 'search/cache_ttl', value: '300s' }, digest: 'sha256:1b7e0c9d2a4f6e8b0c1d3e5f7a9b2c4d6e8f0a1b3c5d7e9f1a2b4c6d8e0f2a4b' },
     { id: 'p9', bot: 'platform-sre', kind: 'verb', verb: 'slack-ops.post', tier: 'reversible', status: 'shadow', case: 'c27', requester: 'proactive (sweep x4)', cls: 'proactive', at: m(255), summary: 'post finding to #platform-costs', digest: 'sha256:—' },
     { id: 'p8', bot: 'platform-sre', kind: 'verb', verb: 'gh.comment', tier: 'propose', status: 'executed', approver: 'ops (passkey · laptop)', case: 'c22', at: m(1500), summary: 'comment on acme/api#455 with the RCA', digest: 'sha256:5d9a…' },
-    { id: 'p6', bot: 'platform-sre', kind: 'terraform', verb: 'terraform.apply', tier: 'propose', status: 'refused', case: 'c18', at: m(3100), summary: 'destroys stateful local_file.config — refused by default (allow_destroy)', digest: 'sha256:—' },
+    { id: 'p6', bot: 'platform-sre', kind: 'terraform', verb: 'tf-apply.apply', tier: 'propose', status: 'refused', case: 'c18', at: m(3100), summary: 'destroys stateful local_file.config — refused by default (allow_destroy)', digest: 'sha256:—' },
     { id: 'p4', bot: 'billing-sre', kind: 'verb', verb: 'slack-ops.post', tier: 'propose', status: 'pending', case: 'c7', requester: 'chat:U-THIRD', cls: 'user', at: m(22), expires: '23h 38m', summary: 'post the monthly forecast to #incidents', options: { channel: '#incidents' }, digest: 'sha256:c3e5a7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5' },
   ];
 
@@ -238,7 +238,7 @@ Primary Postgres for the platform services (acme/api, acme/web).
   D.access = {
     verbs: [
       { v: 'gh.get_*', tier: 'observe' }, { v: 'kv.get', tier: 'observe' }, { v: 'slack-ops.post', tier: 'reversible', promoted: true },
-      { v: 'kv.set', tier: 'propose' }, { v: 'gh.comment', tier: 'propose' }, { v: 'terraform.apply', tier: 'propose' }, { v: 'gh.delete_*', tier: 'never' },
+      { v: 'kv.set', tier: 'propose' }, { v: 'gh.comment', tier: 'propose' }, { v: 'tf-apply.apply', tier: 'propose' }, { v: 'gh.delete_*', tier: 'never' },
     ],
     credentials: [
       { name: 'grafana', origin: 'https://grafana.example.com', identity: 'bot:platform-sre', fields: 'username, password, otp', vault: 'op', ref: 'Agents/Grafana/*' },
@@ -308,7 +308,7 @@ Primary Postgres for the platform services (acme/api, acme/web).
     { ts: m(3), event: 'browser_action', who: 'agent:triage@acme/app', detail: 'await-approval · app.example.com/login/approve · logged_in: app.example.com' },
     { ts: m(3), event: 'browser_fill', who: 'agent:triage@acme/app', detail: 'credential app · origin https://app.example.com · field password · len 24' },
     { ts: m(5), event: 'dashboard_session', who: 'operator:ops', detail: 'passkey assertion · credential laptop · 127.0.0.1' },
-    { ts: m(7), event: 'bot_proposal', who: 'bot:platform-sre', detail: 'p12 terraform.apply · planned +1 ~2 -0 · plan sha a4c1e09b…' },
+    { ts: m(7), event: 'bot_proposal', who: 'bot:platform-sre', detail: 'p12 tf-apply.apply · planned +1 ~2 -0 · plan sha a4c1e09b…' },
     { ts: m(31), event: 'verb', who: 'r-7f11', detail: 'gh.review acme/api#480 · as bot' },
     { ts: m(52), event: 'workflow_failed', who: 'r-7ef0', detail: 'ci-fixer · step test · acme/web#1288' },
     { ts: m(70), event: 'egress_denied', who: 'agent:fixer@acme/web', detail: 'pastebin.com:443' },
@@ -362,8 +362,8 @@ Primary Postgres for the platform services (acme/api, acme/web).
     peers: [], isolation: { mode: 'namespace' },
   }, o);
   D.bots[0].cfg = BOT('platform-sre', { description: 'SRE for the platform services',
-    skill: { verbs: ['gh.get_*', 'kv.get', 'kv.set', 'gh.comment', 'slack-ops.post', 'terraform.apply', 'gh.delete_*'] },
-    autonomy: { shadow: false, tiers: { observe: ['gh.get_*', 'kv.get'], reversible: ['slack-ops.post'], propose: ['kv.set', 'gh.comment', 'terraform.apply'], never: ['gh.delete_*'] }, promote: ['slack-ops.post'], approval_ttl: '24h' },
+    skill: { verbs: ['gh.get_*', 'kv.get', 'kv.set', 'gh.comment', 'slack-ops.post', 'tf-apply.apply', 'gh.delete_*'] },
+    autonomy: { shadow: false, tiers: { observe: ['gh.get_*', 'kv.get'], reversible: ['slack-ops.post'], propose: ['kv.set', 'gh.comment', 'tf-apply.apply'], never: ['gh.delete_*'] }, promote: ['slack-ops.post'], approval_ttl: '24h' },
     proactive: { every: '4h', quiet_hours: '22:00-07:00', budget: { max_runs_per_day: 6, max_cost_per_day: 2.0 }, notify_at: 'high' },
     peers: ['billing-sre'] });
   D.bots[1].cfg = BOT('billing-sre', { description: 'Cost and billing operations', skill: { verbs: ['kv.get', 'slack-ops.post'] },
@@ -422,7 +422,7 @@ steps:
   - id: comment
     uses: gh.comment
     options: { repo: "{{.repo}}", number: "{{.number}}", body: "Fixed in {{.push.sha}}" }
-x-owner: platform                  # unknown key: kept as written
+# owner: platform (a trailing comment, kept as written)
 `,
     'issue-triage': `name: issue-triage
 on: gh.issue_opened
@@ -630,9 +630,10 @@ on: pd.incident
 filter: { urgency: high }
 steps:
   - id: page
-    bot: { team: platform }        # routing rules pick the bot; no match → the lead triages
-    title: "{{.title}}"
-    text: "{{.incident.service}} · {{.url}}"
+    bot:                           # routing rules pick the bot; no match → the lead triages
+      team: platform
+      title: "{{.title}}"
+      text: "{{.incident.service}} · {{.url}}"
 ` });
 
   /* Folders: an optional `folder: "a/b"` on any bot or team. Organization only
@@ -789,3 +790,13 @@ steps:
   const put = (name, folder) => { const w = D.workflows.find((x) => x.name === name); if (w && w.yaml && !/^folder:/m.test(w.yaml)) w.yaml = w.yaml.replace(/^(name: .*\n)/m, `$1folder: "${folder}"\n`); };
   put('ci-fixer', 'work/platform'); put('incident-intake', 'work/platform'); put('assess-and-post', 'work/platform'); put('issue-triage', 'work/web'); put('alert', 'personal/home');
 })();
+
+/* What each installed pack exposes to overrides (conductor pack plan): its
+ * workflows' step ids and its trigger names. An overlay key that matches
+ * nothing is an error (Packs.md). */
+window.D.packMembers = {
+  review: { workflows: { 'review-flow': ['fetch', 'lint', 'review', 'post', 'summarize'] }, triggers: ['on_review_request', 'on_push', 'on_label'], roles: ['github'] },
+  'house-style': { workflows: { 'release-notes': ['collect', 'draft', 'post'] }, triggers: ['on_release'], roles: ['github'] },
+  'sre-bot': { workflows: { sweep: ['check', 'report'] }, triggers: ['sweep', 'on_incident'], roles: ['pagerduty'] },
+  kit: { workflows: { triage: ['classify', 'route'] }, triggers: ['on_incident'], roles: ['pagerduty'] },
+};

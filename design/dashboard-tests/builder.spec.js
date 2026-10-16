@@ -167,11 +167,13 @@ test('pack-owned workflow: structure is read-only, field edits become overrides'
   await go(page, '#/workflows/pr-review');
   await expect(page.locator('.spine-add .plus').first()).toHaveAttribute('aria-disabled', 'true');
   await open(page, 'review');
-  await page.locator('[data-wf-path="isolation.mode"]').first().waitFor({ state: 'attached' }).catch(() => {});
-  await page.locator('[data-act="wf-seg"][data-path="isolation.mode"][data-v="container"]').click();
+  // the default runtime is paseo, which conductor can't wrap: isolation needs a runtime it launches itself
+  await expect(card(page, 'review')).toContainText('paseo runtime');
+  await card(page, 'review').locator('select[data-wf-path="runtime"]').selectOption('claude-cli');
+  await page.locator('[data-act="wf-seg"][data-path="isolation.mode"][data-v="namespace"]').click();
   await page.locator('[data-act="wf-save"]').click();
   await page.locator('[data-act="wf-deploy"]').click();
   await expect(page.locator('.diff')).toContainText('review-flow/review');
   await applyStaged(page);
-  expect(await page.evaluate(() => D.packs.find((p) => p.name === 'review').cfg.steps['review-flow/review'])).toMatchObject({ isolation: { mode: 'container' } });
+  expect(await page.evaluate(() => D.packs.find((p) => p.name === 'review').cfg.steps['review-flow/review'])).toMatchObject({ runtime: 'claude-cli', isolation: { mode: 'namespace' } });
 });

@@ -54,7 +54,7 @@
       case 'assert': return `assert ${t(s.assert, 50)}`;
       case 'fail': return `fail “${t(s.fail, 50)}”`;
       case 'parallel': return `${s.parallel.length} branches, joined before the next step`;
-      case 'bot': return typeof s.bot === 'string' ? `to bot ${s.bot}${s.title ? ' · “' + t(s.title, 40) + '”' : ''}` : `to team ${s.bot.team} · its rules, else the lead`;
+      case 'bot': { const b = isObj(s.bot) ? s.bot : { name: s.bot }; return b.team ? `to team ${b.team} · its rules, else the lead` : `to bot ${b.name}${b.title ? ' · “' + t(b.title, 40) + '”' : ''}`; }
       default: return 'no step type: add uses:, type: agent, use:, decide:, call: …';
     }
   };
@@ -112,7 +112,7 @@
     if (k === 'call') { const w = (V().workflows || []).find((x) => x.name === s.call); if (!w || !w.yaml) return null; try { return Y.clone(Y.parse(w.yaml).value.outputs || {}); } catch (e) { return null; } }
     if (k === 'wait' && s.wait_for) { const v = window.SCHEMA.verb(s.wait_for.uses); return v ? Y.clone(v.outputs) : null; }
     if (k === 'code') return null; // known only after a Test
-    if (k === 'bot') return { case: 'c41', routed_to: typeof s.bot === 'string' ? s.bot : 'lead', by: typeof s.bot === 'string' ? 'direct' : 'rule' };
+    if (k === 'bot') return { case: 'c41', routed_to: isObj(s.bot) && s.bot.name ? s.bot.name : 'lead', by: isObj(s.bot) && s.bot.name ? 'direct' : 'rule' };
     return {};
   };
 
@@ -136,6 +136,26 @@
     const add = (level, path, msg, extra = {}) => out.push(Object.assign({ level, line: lineOf(path), msg, path }, extra));
     if (!isObj(v)) { add('error', '', 'a workflow is a map with on: and steps:'); return out; }
     const reusable = !!v.inputs || opts.reusable;
+    const RSx = window.RS;
+    if (RSx) {
+      const top = RSx.unknown(v, reusable ? new Set([...RSx.workflow, 'callable']) : RSx.trigger, reusable ? RSx.NEW.workflow : RSx.NEW.trigger);
+      top.bad.forEach((k) => add('error', k, `${k}: not a ${reusable ? 'workflow' : 'trigger'} key (${RSx.notFound(lineOf(k), k, reusable ? 'WorkflowDef' : 'TriggerSpec')})`, { trigger: true }));
+      top.proposed.forEach((k) => add('info', k, `${k}: new with the dashboard (${(reusable ? RSx.NEW.workflow : RSx.NEW.trigger)[k]}); conductor's loader learns it with this feature`, { trigger: true }));
+      if (isObj(v.policy)) {
+        RSx.unknown(v.policy, RSx.policy).bad.forEach((k) => add('error', 'policy.' + k, `policy.${k}: not a policy key (${RSx.notFound(lineOf('policy.' + k), k, 'Policy')})`, { trigger: true, field: 'policy.' + k }));
+        const b = v.policy.budget;
+        if (b != null) {
+          if (!isObj(b)) add('error', 'policy.budget', 'policy.budget: a map of window, max_cost_usd and/or max_tokens', { trigger: true, field: 'policy.budget' });
+          else {
+            RSx.unknown(b, RSx.budget).bad.forEach((k) => add('error', 'policy.budget.' + k, `policy.budget.${k}: not a budget key; budgets are window, max_cost_usd and max_tokens (${RSx.notFound(lineOf('policy.budget.' + k), k, 'BudgetPolicy')})`, { trigger: true, field: 'policy.budget.' + k }));
+            if (b.max_cost_usd == null && b.max_tokens == null) add('error', 'policy.budget', 'policy.budget: needs max_cost_usd and/or max_tokens (an empty budget caps nothing)', { trigger: true, field: 'policy.budget' });
+            if (b.max_cost_usd != null && !(typeof b.max_cost_usd === 'number' && b.max_cost_usd >= 0)) add('error', 'policy.budget.max_cost_usd', 'policy.budget.max_cost_usd: a number of dollars, >= 0', { trigger: true, field: 'policy.budget.max_cost_usd' });
+            if (b.max_tokens != null && !(typeof b.max_tokens === 'number' || /^\d+(\.\d+)?[km]?$/i.test(String(b.max_tokens)))) add('error', 'policy.budget.max_tokens', 'policy.budget.max_tokens: a token count such as 500000, 500k or 2m', { trigger: true, field: 'policy.budget.max_tokens' });
+            if (b.window != null && !/^\d+(ms|s|m|h)$/.test(String(b.window))) add('error', 'policy.budget.window', 'policy.budget.window: a duration such as 24h', { trigger: true, field: 'policy.budget.window' });
+          }
+        }
+      }
+    }
     if (!v.on && !reusable) add('error', 'name', 'on: is missing: choose what starts this workflow', { field: 'on', trigger: true });
     WF.sources(v).forEach((s, i) => {
       const on = s.on, path = Array.isArray(v.on) ? `on.${i}` : 'on';
@@ -146,9 +166,17 @@
       const decl = window.SCHEMA.connectors[c.use];
       if (!decl || !decl.events[ev]) add('error', path, `on: ${on}: the ${c.use} plugin declares no "${ev}" event`, { trigger: true });
     });
-    if (v.filter && isObj(v.filter)) {
-      const allowed = new Set(); WF.sources(v).forEach((s) => { const e = window.SCHEMA.event(s.on); (e && e.filters || []).forEach((k) => allowed.add(k)); });
-      Object.keys(v.filter).forEach((k) => { const base = k.replace(/^not_/, ''); if (allowed.size && !allowed.has(k) && !allowed.has(base)) add('error', `filter.${k}`, `filter: "${k}" isn't in the event's schema (${[...allowed].join(', ')})`, { trigger: true, field: 'filter' }); });
+    if (v.filter != null) {
+      const declared = []; WF.sources(v).forEach((x) => { const e = window.SCHEMA.event(x.on); (e && e.filters || []).forEach((k) => declared.push(k)); });
+      const allowed = new Set(window.RS ? window.RS.filterKeysFor(declared) : declared);
+      const checkMap = (m, path) => Object.entries(m).forEach(([k, x]) => {
+        const base = window.RS ? window.RS.filterBase(k) : k;
+        if (k === 'expr' || k === 'not_expr') { if (typeof x !== 'string') add('error', `${path}.${k}`, `filter: ${k}: an expression string`, { trigger: true, field: 'filter' }); return; }
+        if (declared.length && !allowed.has(k)) add('error', `${path}.${k}`, `filter: "${k}" isn't a match key of this event (${[...new Set(declared.map((d) => d.replace(/^not_/, '')))].join(', ')}, each also not_…; or expr:)`, { trigger: true, field: 'filter' });
+        else if (window.RS && window.RS.boolFilterKeys.has(base) && typeof x !== 'boolean') add('error', `${path}.${k}`, `filter: ${k}: want true or false, got ${typeof x === 'string' ? 'the string "' + x + '"' : typeof x} (write ${k}: ${String(x) === 'false' ? 'false' : 'true'}${base === 'draft' ? ', or not_draft: true' : ''})`, { trigger: true, field: 'filter' });
+      });
+      const walkF = (f, path) => { if (typeof f === 'string') return; if (Array.isArray(f)) return f.forEach((x, i) => walkF(x, `${path}.${i}`)); if (isObj(f)) return checkMap(f, path); add('error', path, 'filter: an expression string, a map (AND) or a list (OR)', { trigger: true, field: 'filter' }); };
+      walkF(v.filter, 'filter');
     }
     if (!Array.isArray(v.steps)) { if (v.steps != null) add('error', 'steps', 'steps: must be a list'); else add('warn', 'name', 'no steps yet: add one with +'); return out; }
     if (!v.steps.length) add('warn', 'steps', 'no steps yet: add one with +');
@@ -163,6 +191,8 @@
         else ids[s.id] = e.order + 1;
       }
       const err = (msg, field, level = 'error') => add(level, field ? `${P}.${field}` : P, msg, { step: e.id, field });
+      if (window.RS && e.kind !== 'parallel') RS.unknown(s, RS.step).bad.forEach((k) => err(`${k}: not a step key (${RS.notFound(lineOf(P + '.' + k), k, 'Step')})`, k));
+      if (window.RS && Array.isArray(s.hooks)) s.hooks.forEach((h, i) => { if (!isObj(h)) return; RS.unknown(h, RS.hook).bad.forEach((k) => err(`hooks[${i}].${k}: not a hook key`, 'hooks')); if (h.at && !RS.hookAt.includes(h.at)) err(`hooks[${i}].at: one of start, done, fail, stop`, 'hooks'); });
       switch (e.kind) {
         case 'unknown': err('this step has no type: add uses:, type: agent, use:, decide:, call:, log:, sleep: …'); break;
         case 'verb': case 'ask': {
@@ -177,11 +207,31 @@
           break;
         }
         case 'agent': {
-          if (!s.prompt && !s.prompt_file && !s['<<'] && !s.agent) err('prompt: is required: say what the agent should do', 'prompt');
+          // prompt is optional: omit it and the agent gets the event
+          const rtName = s.runtime || (V().runtimes.find((r) => r.cfg && r.cfg.default) || V().runtimes[0] || {}).name, rt = V().runtimes.find((r) => r.name === rtName);
+          if (s.isolation != null && window.RS) {
+            const iso = s.isolation;
+            if (!isObj(iso)) err('isolation: a map with mode: user, namespace or container', 'isolation');
+            else {
+              RS.unknown(iso, RS.isolation).bad.forEach((k) => err(`isolation.${k}: not an isolation key (${RS.notFound(lineOf(P + '.isolation.' + k), k, 'IsolationConfig')})`, 'isolation.' + k));
+              if (!RS.isolationModes.includes(iso.mode)) err(`isolation.mode: "${iso.mode == null ? '' : iso.mode}" is not user, namespace or container${iso.mode === 'none' ? ' (no isolation is the absence of the block)' : ''}`, 'isolation.mode');
+              if (iso.mode === 'container' && !(isObj(iso.container) && iso.container.image)) err('isolation.container.image: required for mode container (the image must carry the runtime binary)', 'isolation.container.image');
+              if (iso.mode === 'user' && !iso.user) err('isolation.user: required for mode user (the low-privilege account)', 'isolation.user');
+              if (iso.privileged && iso.mode !== 'namespace') err('isolation.privileged: namespace mode only', 'isolation.privileged');
+              if (isObj(iso.network) && iso.network.deny && (iso.network.egress || []).length) err('isolation.network: egress and deny are mutually exclusive', 'isolation.network');
+              if (rt && rt.use === 'paseo') err(`isolation: needs a runtime conductor launches itself; ${rt.name} is a paseo runtime, whose agents are children of the paseo daemon (validate rejects the combination)`, 'isolation');
+            }
+          }
           if (s.model != null && typeof s.model === 'string') { const m = s.model; if (!(fleetNames().includes(m) || window.SCHEMA.models.includes(m) || /[*]/.test(m))) err(`model "${m}": no fleet in models: and no provider offers it`, 'model'); }
           if (s.runtime && !V().runtimes.find((r) => r.name === s.runtime)) err(`runtime "${s.runtime}": no runtime by that name`, 'runtime');
           if (s.isolation && s.isolation.mode === 'none') err('isolation: mode none runs this agent unsandboxed, as you (widening: applying asks for your passkey)', 'isolation.mode', 'warn');
-          (S.getPath(s, 'skill.verbs') || []).forEach((vb) => { if (!/\*$/.test(vb) && !window.SCHEMA.verb(vb)) err(`skill.verbs: ${vb} is not a known verb`, 'skill.verbs'); });
+          { const sv = S.getPath(s, 'skill.verbs'); const RESK = ['channel', 'repo', 'store', 'namespace', 'project', 'service'];
+            if (isObj(s.skill) && window.RS) RS.unknown(s.skill, RS.skill).bad.forEach((k) => err(`skill.${k}: not a skill key (${RS.notFound(lineOf(P + '.skill.' + k), k, 'SkillPolicy')})`, 'skill'));
+            if (isObj(s.skill) && s.skill.secrets_via && !['none', 'broker', 'env'].includes(s.skill.secrets_via)) err('skill.secrets_via: none, broker or env', 'skill.secrets_via');
+            if (isObj(s.skill) && (s.skill.allow_secrets || []).length) { if (s.skill.secrets_via !== 'broker') err('skill.allow_secrets needs secrets_via: broker', 'skill.secrets_via'); [].concat(s.skill.allow_secrets).forEach((x) => { if (!/^[\w-]+\/.+/.test(String(x))) err(`skill.allow_secrets: "${x}" is not <vault>/<key>`, 'skill.allow_secrets'); }); }
+            const pats = Array.isArray(sv) ? sv : isObj(sv) ? Object.keys(sv) : sv == null ? [] : (err('skill.verbs: a list of verb patterns, or a map of verb → resource scopes', 'skill.verbs'), []);
+            pats.forEach((vb) => { if (vb === '*' || /\.\*$/.test(vb)) { if (vb !== '*' && !V().connectors.find((c) => c.name === vb.split('.')[0]) && !['kv', 'git'].includes(vb.split('.')[0])) err(`skill.verbs: ${vb}: no connector instance "${vb.split('.')[0]}"`, 'skill.verbs'); return; } const inst = vb.split('.')[0]; if (!V().connectors.find((c) => c.name === inst) && !['kv', 'git'].includes(inst) && !V().vaults.find((x) => x.name === inst)) err(`skill.verbs: ${vb} is not <instance>.<verb>: no connector instance named "${inst}"${window.SCHEMA.connectors[inst] ? ` (${inst} is a plugin; name an instance of it, e.g. ${(V().connectors.find((c) => (c.cfg && c.cfg.use || c.use || '').split('@')[0] === inst) || { name: '<instance>' }).name}.${vb.split('.')[1]})` : ''}`, 'skill.verbs'); else if (!window.SCHEMA.verb(vb)) err(`skill.verbs: ${vb}: the connector declares no verb "${vb.split('.')[1]}"`, 'skill.verbs'); });
+            if (isObj(sv)) Object.entries(sv).forEach(([vb, sc]) => { if (sc == null) return; if (!isObj(sc)) return err(`skill.verbs.${vb}: a map of resource → allowed values`, 'skill.verbs'); const d = window.SCHEMA.verb(vb); Object.entries(sc).forEach(([k, xs]) => { if (!Array.isArray(xs)) err(`skill.verbs.${vb}.${k}: a list of allowed values`, 'skill.verbs'); if (d && !(d.fields.some((f) => f.k === k) && RESK.includes(k))) err(`skill.verbs.${vb}.${k}: ${vb} declares no resource "${k}" (a load error)`, 'skill.verbs'); }); }); }
           if (s.handoff && !V().connectors.find((c) => c.name === s.handoff)) err(`handoff: no connector "${s.handoff}"`, 'handoff');
           break;
         }
@@ -203,7 +253,7 @@
           break;
         }
         case 'wait': if ('sleep' in s && !/^\d+(ms|s|m|h)$/.test(String(s.sleep))) err(`sleep: "${s.sleep}" is not a positive duration`, 'sleep'); break;
-        case 'bot': if (typeof s.bot === 'string') { if (!V().bots.find((b) => b.name === s.bot)) err(`bot: no bot named "${s.bot}"`, 'bot'); } else if (!s.bot.team || !V().teams.find((x) => x.name === s.bot.team)) err(`bot.team: no team named "${s.bot.team || ''}"`, 'bot.team'); if (!s.title) err('title: is required: it becomes the case title', 'title'); break;
+        case 'bot': { const b = s.bot; if (!isObj(b)) { err('bot: a map with name: (a bot) or team: (a team), plus title/text', 'bot'); break; } if (window.RS) Object.keys(b).forEach((k) => { if (!['name', 'team', 'action', 'title', 'text', 'requester', 'urgent'].includes(k)) err(`bot.${k}: not a bot step key (field ${k} not found in type config.BotStep)`, 'bot'); }); if (!!b.name === !!b.team) err('bot: name exactly one of name: (the bot to route to) or team: (a team, whose routing picks the bot)', 'bot'); else if (b.name && !V().bots.find((x) => x.name === b.name)) err(`bot.name: no bot named "${b.name}"`, 'bot.name'); else if (b.team && !V().teams.find((x) => x.name === b.team)) err(`bot.team: no team named "${b.team}"`, 'bot.team'); if (b.action && !['deliver', 'rotate', 'consolidate'].includes(b.action)) err('bot.action: deliver, rotate or consolidate', 'bot.action'); break; }
         case 'parallel': if (s.parallel.length < 2) err('parallel: needs at least two branches', 'parallel', 'warn'); s.parallel.forEach((br, b) => { if (!Array.isArray(br) || !br.length) err(`parallel branch ${b + 1} is empty`, 'parallel'); }); break;
         default:
       }
@@ -315,9 +365,10 @@
       case 'assert': if (!WF.cond(s.assert, scope)) throw new Error(`assert failed: ${s.assert}`); return { output: {}, inputs: {}, note: 'held' };
       case 'fail': throw new Error(WF.render(s.fail, scope));
       case 'bot': {
-        const title = WF.render(s.title || '', scope, miss); if (miss.length) throw new Error(`title: {{.${miss[0]}}} has no value`);
-        if (typeof s.bot === 'string') return { output: { case: 'c41', routed_to: s.bot, by: 'direct' }, inputs: { title }, note: 'dry run: the case is not opened' };
-        const t = V().teams.find((x) => x.name === s.bot.team); if (!t) throw new Error(`no team ${s.bot.team}`);
+        const b = isObj(s.bot) ? s.bot : { name: s.bot };
+        const title = WF.render(b.title || '', scope, miss); if (miss.length) throw new Error(`bot.title: {{.${miss[0]}}} has no value`);
+        if (b.name) return { output: { case: 'c41', routed_to: b.name, by: 'direct' }, inputs: { title }, note: 'dry run: the case is not opened' };
+        const t = V().teams.find((x) => x.name === b.team); if (!t) throw new Error(`no team ${b.team}`);
         const on = ev && (ev.incident ? 'pd.incident' : ev.check_name ? 'gh.check_failed' : ev.labels ? 'gh.issue_opened' : '');
         const r = (t.cfg.routing || []).find((x) => x.when && x.when.on === on && Object.entries(x.when).every(([k, v]) => k === 'on' || [].concat(v).includes(String(ev[k] != null ? ev[k] : (ev.incident || {})[k]))));
         const to = r ? (r.to === 'lead' ? t.cfg.lead : r.to) : t.cfg.lead;

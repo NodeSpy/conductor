@@ -147,7 +147,7 @@
     { k: 'ask', label: 'Hand-off / approval', icon: 'hand', desc: 'Ask a human and wait: approve, revise or discard.', make: (id) => ({ id, uses: 'hoff.ask', options: { prompt: '', timeout: '1h' } }) },
     { k: 'wait', label: 'Wait', icon: 'clock', desc: 'sleep: a duration, or wait_for: a condition on a read verb.', make: () => ({ sleep: '30s' }) },
     { k: 'parallel', label: 'Parallel group', icon: 'workflows', desc: 'Branches run at once and join before the next step.', make: (id) => ({ parallel: [[{ id: id + '-a', log: 'branch a' }], [{ id: id + '-b', log: 'branch b' }]] }) },
-    { k: 'bot', label: 'Hand to a bot or team', icon: 'members', desc: 'Deliver to a bot, or to a team whose rules (or lead) route it.', make: (id) => ({ id, bot: { team: 'platform' }, title: '{{.title}}' }) },
+    { k: 'bot', label: 'Hand to a bot or team', icon: 'members', desc: 'Deliver to a bot, or to a team whose rules (or lead) route it.', make: (id) => ({ id, bot: { team: 'platform', title: '{{.title}}' } }) },
     { k: 'call', label: 'Call a workflow', icon: 'link', desc: 'Run a reusable workflow with inputs; its outputs come back.', make: (id) => ({ id, call: 'assess-and-post', with: {} }) },
     { k: 'log', label: 'Log', icon: 'logs', desc: 'A breadcrumb in the run log.', make: () => ({ log: '' }) },
     { k: 'set', label: 'Set values', icon: 'edit', desc: 'Publish computed values as outputs.', make: (id) => ({ id, set: { key: 'value' } }) },
