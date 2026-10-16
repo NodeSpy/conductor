@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>conductor · brand directions</title>
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/favicon-32.png" sizes="32x32">
+<link rel="stylesheet" href="page.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="kicker mono"><span>conductor</span><span>/</span><span>identity</span><span>/</span><span>proposal, Oct 2026</span><a href="BRAND.md">BRAND.md</a><a href="assets/">assets/</a></div>
+  <h1>A mark for the thing you let near&nbsp;production.</h1>
+  <div class="lede-row">
+    <p class="lede">These are four directions to replace the cartoon mascot and unify the README, the dashboard and the repository’s social card. Each mark is drawn on a 32-unit grid and has its own snapped 16px cut. Each holds up in one colour, and each is shown below in every place it has to live.</p>
+    <aside class="retiring">
+      <div class="retired-item"><img src="ref/mascot-retired.png" width="72" height="72" alt="The current cartoon mascot"><div><b>Retiring</b><span>README mascot: top hat, baton and Octocat pin. Too cute for infrastructure, and the pin is GitHub’s trademark.</span></div></div>
+      <div class="retired-item"><svg width="72" height="72" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 20L18.5 5.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="19.5" cy="4.5" r="2.3" fill="#cc4a0e"/><path d="M3 21l2.4-.7-1.7-1.7z" fill="currentColor"/></svg><div><b>Evolving</b><span>Prototype baton: the right instinct, but a hairline that disappears at 16px. Direction III rebuilds it.</span></div></div>
+    </aside>
+  </div>
+  <nav class="lineup" id="lineup" aria-label="Directions"></nav>
+</header>
+
+<main id="directions"></main>
+
+<section class="verdict" id="recommendation">
+  <div class="sec-head"><span class="num">→</span><h2>Recommendation: ship <em>Fermata</em></h2></div>
+  <div class="verdict-grid">
+    <div class="verdict-copy">
+      <p class="big">Fermata is the only direction where the mark says something true about the product: <em>nothing proceeds until the conductor releases it.</em> That is approvals, the “needs you” queue and bots acting behind your sign-off. It is also the reason anyone would trust conductor near production.</p>
+      <p>It does this without a top hat, a baton or a robot. Most engineers will see an arch over a point (a signal and its source, or a gate) and never need the musical reference. Those who know it get a second meaning that fits the name exactly.</p>
+      <p>On craft, it is symmetrical and calm, holds at 16px as two crisp shapes, and survives one colour with no knockouts. It also sits naturally beside the dashboard’s italic serif, so the dashboard keeps its typography and palette. Only the mark changes.</p>
+      <p>Conduit is the strong runner-up and the safer “infrastructure logo”. It is the most legible at tiny sizes, but a C with a dot is a crowded genre. Downbeat is the lowest-effort path, and Signature is the most elegant and the least ownable.</p>
+    </div>
+    <table class="score mono" id="scoretable"></table>
+  </div>
+</section>
+
+<section class="assets" id="assets">
+  <div class="sec-head"><span class="num">↓</span><h2>Ready-to-use set <span class="sub">Fermata, in <a class="mono" href="assets/">design/brand/assets/</a></span></h2></div>
+  <div class="asset-grid" id="assetgrid"></div>
+  <p class="note">All SVGs are generated from the hand-tuned geometry in <a class="mono" href="tools/directions.mjs">tools/directions.mjs</a> by <span class="mono">tools/build.mjs</span>, with the wordmarks outlined so no font is needed. PNGs come from <span class="mono">tools/render.mjs</span>. The usage rules, the colours and the exact README and dashboard changes are in <a class="mono" href="BRAND.md">BRAND.md</a>.</p>
+</section>
+
+<footer class="colophon mono">
+  <span>Type: Instrument Serif, Instrument Sans and Martian Mono, all SIL OFL 1.1</span>
+  <span>branch design/brand</span>
+</footer>
+
+<script type="module" src="page.js"></script>
+</body>
+</html>

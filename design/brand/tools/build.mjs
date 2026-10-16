@@ -119,13 +119,24 @@ function lockups(dir) {
   const S = { w: ww, h: mh2 + gap2 + asc + t.y2 };
 
   const out = {};
+  const wordVB = `${r2(t.x1)} ${r2(t.y1)} ${r2(wordX2 - t.x1)} ${r2(t.y2 - t.y1)}`;
+  const plainW = t.x2 - t.x1; // wordmark width without the full stop
   for (const [v, [ink, acc]] of Object.entries(VARIANTS(dir))) {
+    out[`wordmark-${v}`] = svg(wordVB, wordEls(ink, acc, 0, 0));
+    if (W.wordOnly) {
+      out[`logo-horizontal-${v}`] = out[`wordmark-${v}`];
+      out[`logo-stacked-${v}`] = svg(
+        `0 0 ${r2(plainW)} ${r2(S.h)}`,
+        markEls(ink, acc, (plainW - bw * s2) / 2, 0, s2) +
+          `<path fill="${ink}" transform="translate(${r2(-t.x1)} ${r2(mh2 + gap2 + asc)})" d="${t.d}"/>`,
+      );
+      continue;
+    }
     out[`logo-horizontal-${v}`] = svg(H.vb, markEls(ink, acc, 0, markTop, s) + wordEls(ink, acc, tx, 0));
     out[`logo-stacked-${v}`] = svg(
       `0 0 ${r2(S.w)} ${r2(S.h)}`,
       markEls(ink, acc, (ww - bw * s2) / 2, 0, s2) + wordEls(ink, acc, -t.x1, mh2 + gap2 + asc),
     );
-    out[`wordmark-${v}`] = svg(`${r2(t.x1)} ${r2(t.y1)} ${r2(wordX2 - t.x1)} ${r2(t.y2 - t.y1)}`, wordEls(ink, acc, 0, 0));
   }
   return out;
 }

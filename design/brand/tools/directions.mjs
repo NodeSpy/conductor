@@ -55,7 +55,7 @@ export const DIRS = [
       acc: '<circle cx="13" cy="8" r="2"/>',
     },
     word: { font: 'instrument-sans-latin-600-normal.woff', track: -0.025, label: 'Instrument Sans SemiBold' },
-    lock: { h: 1.02, align: 'center', dy: 0, gap: 0.3 },
+    lock: { h: 1.14, align: 'center', dy: 0, gap: 0.28 },
     stack: { markW: 0.24, gap: 0.3 },
     pal: {
       name: 'Copper',
@@ -111,7 +111,9 @@ export const DIRS = [
     ],
     mark: { glyph: { font: 'instrument-serif-latin-400-normal.woff', ch: 'c', size: 39, x: 4.95, base: 26 }, acc: '<circle cx="22.75" cy="22.9" r="3.4"/>', box: [5.85, 5.9, 20.3, 20.45] },
     fav: { glyph: { size: 22, x: 1.1, base: 13.4, bold: 0.9 }, acc: '<circle cx="12.9" cy="11.3" r="2.1"/>' },
-    word: { font: 'instrument-serif-latin-400-normal.woff', track: -0.005, label: 'Instrument Serif', period: true },
+    // Wordmark-led: the horizontal lockup is the wordmark alone; the stacked one drops the
+    // wordmark's full stop because the monogram above already carries it.
+    word: { font: 'instrument-serif-latin-400-normal.woff', track: -0.005, label: 'Instrument Serif', period: true, wordOnly: true },
     lock: { h: 0.82, align: 'baseline', dy: 0, gap: 0.3 },
     stack: { markW: 0.2, gap: 0.3 },
     pal: {
