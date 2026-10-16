@@ -462,3 +462,29 @@ func scratchDir(t *testing.T) string {
 	}
 	return d
 }
+
+// The seam a caller outside the agent path uses (the browser): a command in
+// a container of the backend's, its output back, its container gone after.
+func TestContainerLaunchSeamRealEngine(t *testing.T) {
+	c, _ := containerHarness(t)
+	ws := scratchDir(t)
+	l, err := c.Launch(context.Background(), LaunchSpec{
+		Identity: "browser:test", Workspace: ws,
+		Argv:      []string{"/bin/sh", "-c", "hostname; id -u; ls /var/run/docker.sock 2>&1 || true"},
+		Inherited: os.Environ(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(l.Argv[0], l.Argv[1:]...)
+	cmd.Dir, cmd.Env = l.Dir, l.Env
+	out, err := cmd.CombinedOutput()
+	l.Cleanup()
+	got := string(out)
+	if err != nil || !strings.HasPrefix(got, "conductor-agent\n") || strings.Contains(got, "\n0\n") || !strings.Contains(got, "No such file") {
+		t.Fatalf("launch: %v\n%s", err, got)
+	}
+	if rows, _ := c.list(context.Background(), ""); len(rows) != 0 {
+		t.Errorf("the launch's container outlived it: %v", rows)
+	}
+}

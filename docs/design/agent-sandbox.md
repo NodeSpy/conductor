@@ -576,3 +576,20 @@ resolve. The cli runtime's probing fixer runs in its identity's persistent
 container (the e2e image minus the decoy key is the agent image); the same
 probe record as group Z reaches the forge only through conductor's signed
 push, and the engine's inspect, `sandbox ls` and `archive` are checked.
+
+**A seam for other callers (the browser).** Running something in a container
+whenever an engine is present is not only the agents' need: the browser
+(#182) runs inside a container on macOS when there is one. The seam, in
+`internal/agentsandbox`:
+
+- `FindEngine(ctx, pref)` — the engine installed **and answering** (Docker
+  Desktop installed but not started is no engine), with the platform's
+  preference; `(*CLIEngine).Rootless`, `Ping`.
+- `DaemonContainers()` — the running daemon's backend (`nil` with the sandbox
+  off), so a browser's containers share the agents' labels, Reconcile and
+  Archive.
+- `(*Containers).Launch(ctx, LaunchSpec{Identity, Workspace, Container,
+  Egress, Loopback, Expose, Env, Argv, Inherited})` — the agent container's
+  guarantees and lifecycle without the agent policy: run `Launch.Argv` with
+  exactly `Launch.Env`, reach an exposed port (the browser's CDP) through
+  `Launch.Exposed[addr]`, call `Cleanup` when done.

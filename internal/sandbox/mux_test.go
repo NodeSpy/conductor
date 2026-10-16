@@ -126,7 +126,12 @@ func TestMuxDialRefused(t *testing.T) {
 // The container side refuses listeners the host should never ask for: a
 // non-loopback address, a unix socket outside its socket dir.
 func TestMuxContainerListenLimits(t *testing.T) {
-	dir := t.TempDir()
+	// A short dir: macOS caps a socket path at 104 bytes.
+	dir, err := os.MkdirTemp("/tmp", "cmx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
 	m, _ := muxPair(t, dir)
 	none := func() (net.Conn, error) { return nil, io.EOF }
 	if _, _, err := m.Listen("tcp", "0.0.0.0:0", none); err == nil {

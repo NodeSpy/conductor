@@ -481,7 +481,7 @@ func TestContainersReconcile(t *testing.T) {
 		t.Fatal(err)
 	}
 	if e.stateOf("stale") != "" {
-		t.Error("a dead daemon's per-launch container survived")
+		t.Errorf("a dead daemon's per-launch container survived (engine calls: %q)", e.cmds)
 	}
 	if e.stateOf("other-daemon") == "" || e.stateOf("member-stopped") != "exited" {
 		t.Error("reconcile touched what it should not")
@@ -768,5 +768,33 @@ func TestContainersStartRecovers(t *testing.T) {
 	rel()
 	if len(e.ran("ps"))-before != 1 { // the launch's own list, no second reconcile
 		t.Errorf("reconciled again after a successful start (%d lists)", len(e.ran("ps"))-before)
+	}
+}
+
+// cannedEngine answers ps/inspect with fixed output.
+type cannedEngine struct{ inspect string }
+
+func (cannedEngine) Bin() string  { return "canned" }
+func (cannedEngine) Kind() string { return "docker" }
+func (e cannedEngine) Output(_ context.Context, args ...string) ([]byte, error) {
+	if args[0] == "ps" {
+		return []byte("a\nb\n"), nil
+	}
+	return []byte(e.inspect), nil
+}
+func (cannedEngine) Start(...string) (io.Reader, io.WriteCloser, func() error, error) {
+	return nil, nil, nil, errors.New("no")
+}
+
+// A container whose last fields are empty labels is still listed — even
+// when it is the last line (the output is split, never trimmed whole).
+func TestContainersListKeepsEmptyTrailingFields(t *testing.T) {
+	c := &Containers{Engine: cannedEngine{inspect: "/a\trunning\ts1\tka\ttrue\tmember:a\n/b\texited\t\tkb\tfalse\t\n"}, DaemonID: "d"}
+	rows, err := c.list(context.Background(), "")
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("rows %+v %v", rows, err)
+	}
+	if rows[1].Name != "b" || rows[1].Persistent || rows[1].IdentityName != "kb" || rows[0].IdentityName != "member:a" || rows[0].Name != "a" {
+		t.Errorf("rows %+v", rows)
 	}
 }

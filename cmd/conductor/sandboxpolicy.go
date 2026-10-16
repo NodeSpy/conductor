@@ -136,6 +136,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		return nil, fmt.Errorf("agent sandbox: resolve conductor's own binary: %w", err)
 	}
 	containers := agentContainers(cfg, r.StateRoot, logf)
+	agentsandbox.SetDaemonContainers(containers)
 	sandboxResolver.Store(r)
 	controller.AgentSandbox = &controller.SandboxWiring{
 		Resolver: r, Relay: rel.Relay, Containers: containers,
@@ -155,6 +156,7 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		logf("agent sandbox: on (identity homes in %s; conductor socket %q)", r.StateRoot, r.Socket)
 	}
 	return func() {
+		agentsandbox.SetDaemonContainers(nil)
 		containers.Close()
 		sandboxResolver.Store(nil)
 		controller.AgentSandbox = nil

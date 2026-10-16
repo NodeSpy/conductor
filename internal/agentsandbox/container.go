@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
@@ -492,8 +493,10 @@ func (c *Containers) list(ctx context.Context, key string) ([]engineContainer, e
 		return nil, err
 	}
 	var rows []engineContainer
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		f := strings.Split(line, "\t")
+	// Per line, never the whole output: a trailing empty field (a label the
+	// last container lacks) is a field, not whitespace to trim.
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Split(strings.TrimRight(line, "\r"), "\t")
 		if len(f) < 6 || f[0] == "" {
 			continue
 		}
@@ -1090,4 +1093,90 @@ func ContainerFor(iso *config.IsolationConfig) *Container {
 		c.Memory, c.CPU, c.Pids = l.Memory, l.CPU, l.Pids
 	}
 	return c
+}
+
+// daemonContainers is the running daemon's container backend.
+var daemonContainers atomic.Pointer[Containers]
+
+// SetDaemonContainers records the daemon's container backend (nil: none).
+func SetDaemonContainers(c *Containers) { daemonContainers.Store(c) }
+
+// DaemonContainers is the running daemon's container backend, for callers
+// outside the agent path that run something in a container (the browser):
+// one backend, so its containers share this daemon's labels, Reconcile and
+// Archive. nil when the agent sandbox is off.
+func DaemonContainers() *Containers { return daemonContainers.Load() }
+
+// LaunchSpec is a container launch for a caller outside the agent path —
+// the browser's — with the agent container's guarantees: no network but
+// Egress through conductor's proxy, no capabilities, non-root, only its
+// mounts, a lease per launch.
+type LaunchSpec struct {
+	// Identity is whose container it is: with Container.Persistent one per
+	// identity, reused by its launches.
+	Identity string
+	// Workspace is shown read-write at its own path (it must exist).
+	Workspace string
+	// Home is a per-launch container's HOME source ("" = a fresh directory
+	// of the backend's); a persistent one's HOME is the identity's volume.
+	Home      string
+	Container Container
+	// Egress (allowlist patterns), Loopback (host-loopback endpoints relayed
+	// in at their address) and Expose (in-container addresses reached from
+	// the host: Launch.Exposed names each one's unix socket) — as Policy.
+	Egress, Loopback, Expose []string
+	// Env are the process's variables (never a secret: use Inherited).
+	Env []string
+	// Argv runs in the container, by name on the image's PATH.
+	Argv []string
+	// Inherited is the caller's environment: the engine client's (where
+	// the engine is) and any credential the process is given by name.
+	Inherited []string
+}
+
+// Launch prepares s's container and returns the engine command that runs
+// s.Argv in it. Run Launch.Argv with exactly Launch.Env; call Cleanup when
+// it ends (it ends the launch's share of the container). Fail-closed.
+func (c *Containers) Launch(ctx context.Context, s LaunchSpec) (*Launch, error) {
+	if c == nil {
+		return nil, errors.New("agentsandbox: no container backend")
+	}
+	if s.Identity == "" || len(s.Argv) == 0 {
+		return nil, errors.New("agentsandbox: a container launch needs an identity and a command")
+	}
+	home, made := s.Home, ""
+	if home == "" {
+		if err := os.MkdirAll(c.Root, 0o700); err != nil {
+			return nil, err
+		}
+		d, err := os.MkdirTemp(c.Root, "home-")
+		if err != nil {
+			return nil, err
+		}
+		home, made = d, d
+	}
+	drop := func() {
+		if made != "" {
+			_ = os.RemoveAll(made)
+		}
+	}
+	cont := s.Container
+	p := Policy{
+		Identity: s.Identity, Workspace: canon(s.Workspace), Home: canon(home),
+		Egress: s.Egress, Loopback: s.Loopback, Expose: s.Expose, Env: s.Env, Container: &cont,
+	}
+	release, err := c.Prepare(ctx, &p)
+	if err != nil {
+		drop()
+		return nil, err
+	}
+	l, err := WrapContainer(p, s.Argv, Deps{Inherited: s.Inherited})
+	if err != nil {
+		release()
+		drop()
+		return nil, err
+	}
+	kill := l.Cleanup
+	l.Cleanup = func() { kill(); release(); drop() }
+	return l, nil
 }

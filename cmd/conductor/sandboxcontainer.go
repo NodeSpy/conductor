@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -56,16 +55,13 @@ func agentContainers(cfg *config.Config, stateRoot string, logf func(string, ...
 	}
 	engine, helper := sc.Engine, sc.Helper
 	c.Resolve = func() (agentsandbox.Engine, error) {
-		e, err := agentsandbox.ResolveEngine(engine, runtime.GOOS, exec.LookPath, os.Environ())
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		e, err := agentsandbox.FindEngine(ctx, engine)
 		if err != nil {
 			return nil, err
 		}
-		if e.Kind() == "podman" {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			out, _ := e.Output(ctx, "info", "--format", "{{.Host.Security.Rootless}}")
-			cancel()
-			c.KeepID = strings.TrimSpace(string(out)) == "true"
-		}
+		c.KeepID = e.Rootless(ctx)
 		dir, inImage, err := containerHelper(c.Root, helper)
 		if err != nil {
 			return nil, err

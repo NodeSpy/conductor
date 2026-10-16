@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -86,6 +87,41 @@ func firstArg(a []string) string {
 		return ""
 	}
 	return a[0]
+}
+
+// FindEngine is this box's container engine — installed AND answering —
+// for any caller that runs something in a container when an engine is
+// present: the agent sandbox's container backend, and the browser on macOS.
+// pref is docker | podman | "" (the platform's preference: rootless podman
+// on Linux, Docker Desktop on macOS). An error means no usable engine.
+func FindEngine(ctx context.Context, pref string) (*CLIEngine, error) {
+	e, err := ResolveEngine(pref, runtime.GOOS, exec.LookPath, os.Environ())
+	if err != nil {
+		return nil, err
+	}
+	if err := e.Ping(ctx); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// Ping reports whether the engine answers (Docker Desktop installed but not
+// running does not).
+func (e *CLIEngine) Ping(ctx context.Context) error {
+	if _, err := e.Output(ctx, "version"); err != nil {
+		return fmt.Errorf("agentsandbox: container engine %s is installed but not answering: %w", e.bin, err)
+	}
+	return nil
+}
+
+// Rootless reports a rootless podman (its containers then map the host
+// user with --userns keep-id).
+func (e *CLIEngine) Rootless(ctx context.Context) bool {
+	if e.kind != "podman" {
+		return false
+	}
+	out, _ := e.Output(ctx, "info", "--format", "{{.Host.Security.Rootless}}")
+	return strings.TrimSpace(string(out)) == "true"
 }
 
 // ResolveEngine finds the container engine: pref (docker | podman | a
