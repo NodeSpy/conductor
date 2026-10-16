@@ -1259,26 +1259,24 @@ proceed in parallel.
    - the Isolation page links the unsandboxed-agent caveat;
    - Members and Browser get "in the dashboard" sections.
 
-## 12. Open questions
+## 12. Decisions (formerly open questions)
 
-1. **Loopback peer attribution.** Should the localhost listener refuse TCP
-   peers whose process is a conductor-launched agent (resolved through
-   `/proc`, with cgroup and env markers)? It's Linux-only and heuristic, but
-   it would close the stolen-cookie path for `mode: none` agents on Linux.
-2. **Enrollment without an operator SSH key.** `operators:` today always has
-   one, because members need it. A box without members could allow
-   localhost-link-only enrollment. Is that acceptable as a documented,
-   weaker mode?
-3. **The per-step log store's size.** A bounded ring persisted next to the
-   history record and pruned with `history_retention`. Is 1 MiB per step
-   enough?
-4. **Chat transcript source.** Is paseo's agent timeline API stable enough
-   to relay, or should conductor record the home conversation itself, from
-   the inbox it delivers plus the agent's turns?
-5. **Approvals from a phone on a synced passkey.** A synced passkey (iCloud
-   or Google) is convenient and still needs UV, but its private key leaves
-   the device. Should the Access screen offer an "approvals need a
-   device-bound key" policy per operator?
+1. **Loopback peer attribution: yes.** On Linux the localhost listener refuses
+   TCP peers whose process is a conductor-launched agent (resolved through
+   `/proc`, with cgroup and env markers). It's heuristic and Linux-only:
+   defense in depth for `mode: none` agents, not the primary boundary (that
+   remains the passkey requirement on every approval and sensitive write).
+2. **Enrollment always requires the operator's SSH signature.** No
+   localhost-link-only mode, including on boxes without members.
+3. **Per-step log store: configurable,** default 1 MiB per step, persisted
+   next to the history record and pruned with `history_retention`.
+4. **Chat transcript: conductor records it itself,** from the inbox it
+   delivers plus the agent's turns. No dependence on paseo's agent timeline
+   API (conductor's paseo integration stays on public surfaces only).
+5. **Device-bound approvals: offered as a per-operator policy, off by
+   default.** Synced passkeys (iCloud, Google) work for approvals out of the
+   box; an operator can require a device-bound key for approvals on the
+   Access screen.
 
 ## 13. The prototype
 
