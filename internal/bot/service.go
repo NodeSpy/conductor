@@ -105,7 +105,7 @@ type Service struct {
 	// proactive budget. Notify publishes a proactive finding to the
 	// conductor.bot_notify lifecycle event. Both optional.
 	RunUsage func(historyID string) (RunUsage, bool)
-	Notify  func(ctx context.Context, n Notice)
+	Notify   func(ctx context.Context, n Notice)
 
 	mu       sync.Mutex
 	skipped  map[string]string    // last sweep-skip reason, per bot (logged once)

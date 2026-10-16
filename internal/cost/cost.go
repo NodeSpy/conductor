@@ -88,8 +88,8 @@ type Usage struct {
 	CostUSD      float64 `json:"cost_usd"`
 	// Turns is the model turns the run took (claude-code's num_turns); at
 	// least 1 for any agent run, when the runtime reports none.
-	Turns int `json:"turns,omitempty"`
-	Model        string  `json:"model,omitempty"`
+	Turns int    `json:"turns,omitempty"`
+	Model string `json:"model,omitempty"`
 	// Approximate marks estimated (not runtime-reported) numbers.
 	Approximate bool `json:"approximate,omitempty"`
 }
