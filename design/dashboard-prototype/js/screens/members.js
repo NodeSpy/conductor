@@ -47,11 +47,13 @@
   });
 
   /* ---------- chat ---------- */
+  let chatName = 'platform-sre';
   const bubble = (c) => {
-    const who = c.who === 'op' ? 'you · ops' : c.who === 'member' ? 'platform-sre' : c.who === 'event' ? `event → case ${c.case}` : 'tool';
+    const who = c.who === 'op' ? 'you · ops' : c.who === 'member' ? chatName : c.who === 'event' ? `event → case ${c.case}` : 'tool';
     return `<div class="msg ${c.who}"><div class="meta"><span>${who}</span><span>${UI.clock(c.at)}</span></div><div class="bubble">${c.who === 'tool' ? '$ ' + esc(c.text) : md(c.text)}</div></div>`;
   };
   function chat(m) {
+    chatName = m.name;
     const pp = pending(m.name);
     return shell(m, 'chat', `<div class="grid g-side">
       <div class="panel chat"><div class="panel-head"><h3>Home session <span class="mono muted">${m.session}</span></h3><span class="muted small">via paseo · messages arrive when the agent is idle, never mid-turn</span><div class="tools"><button class="btn sm ghost">${icon('terminal')}Open in paseo</button></div></div>
@@ -69,7 +71,7 @@
     const send = () => {
       const ta = UI.$('#say', main), v = ta.value.trim(); if (!v) return;
       box.insertAdjacentHTML('beforeend', bubble({ who: 'op', at: new Date().toISOString(), text: v })); ta.value = '';
-      box.insertAdjacentHTML('beforeend', `<div class="msg member" id="typing"><div class="meta"><span>platform-sre</span><span>queued → delivered (idle)</span></div><div class="bubble typing"><i></i><i></i><i></i></div></div>`);
+      box.insertAdjacentHTML('beforeend', `<div class="msg member" id="typing"><div class="meta"><span>${chatName}</span><span>queued → delivered (idle)</span></div><div class="bubble typing"><i></i><i></i><i></i></div></div>`);
       box.scrollTop = box.scrollHeight;
       setTimeout(() => { const t = UI.$('#typing'); if (t) t.outerHTML = bubble({ who: 'member', at: new Date().toISOString(), text: 'Noted. I’ll keep **c29** open until p99 stays under 400ms for 30 minutes after the apply, then write the episode and close it.' }); box.scrollTop = box.scrollHeight; }, 1800);
     };

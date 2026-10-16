@@ -4,6 +4,8 @@
  * the design clickable. */
 (function () {
   const UI = (window.UI = {});
+  // Surface script errors visibly: a prototype should never fail silently.
+  window.addEventListener('error', (e) => { const b = document.createElement('div'); b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#ff00ff;color:#fff;font:12px monospace;padding:6px 10px'; b.textContent = 'prototype error: ' + e.message; document.body.appendChild(b); });
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   UI.$ = $; UI.$$ = $$;
