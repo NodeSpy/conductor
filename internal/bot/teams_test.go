@@ -533,10 +533,10 @@ func TestTeamPeersInsideNotAcross(t *testing.T) {
 func TestTeamKnowledgePromotionIsAProposal(t *testing.T) {
 	f := newTeamFixture(t, nil)
 	ctx := context.Background()
-	if _, err := f.svc.WriteMemory(ctx, f.homeOf("a"), "knowledge/db.md", "db-prod-1 is the primary", false, ""); err != nil {
+	if _, _, err := f.svc.WriteMemory(ctx, f.homeOf("a"), MemoryWrite{Path: "knowledge/db.md", Text: kd("db-prod-1 is the primary")}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.svc.WriteMemory(ctx, f.homeOf("a"), "knowledge/private.md", "a's own notes", false, ""); err != nil {
+	if _, _, err := f.svc.WriteMemory(ctx, f.homeOf("a"), MemoryWrite{Path: "knowledge/private.md", Text: kd("a's own notes")}); err != nil {
 		t.Fatal(err)
 	}
 	out, err := f.svc.Promote(ctx, f.homeOf("a"), "knowledge/db.md", "knowledge/databases.md", "the team keeps asking")
@@ -548,7 +548,7 @@ func TestTeamKnowledgePromotionIsAProposal(t *testing.T) {
 	}
 	pid := out["proposal"].(string)
 	p := f.st.Bot("a").Proposals[pid]
-	if p.Kind != KindKnowledge || p.Team != "platform" || strings.Join(p.Approvers, ",") != "op,op2" || p.Knowledge.Text != "db-prod-1 is the primary\n" {
+	if p.Kind != KindKnowledge || p.Team != "platform" || strings.Join(p.Approvers, ",") != "op,op2" || p.Knowledge.Text != kd("db-prod-1 is the primary")+"\n" {
 		t.Fatalf("knowledge proposal: %+v %+v", p, p.Knowledge)
 	}
 	if !strings.Contains(out["message"].(string), "An operator of team platform (op, op2)") {
@@ -614,7 +614,11 @@ func TestTeamKnowledgePromotionGating(t *testing.T) {
 	f := newTeamFixture(t, direct)
 	write := func(f *teamFixture, path, text string) {
 		t.Helper()
-		if _, err := f.svc.WriteMemory(ctx, f.homeOf("a"), path, text, false, ""); err != nil {
+		doc := kd(text)
+		if strings.HasPrefix(path, "runbooks/") {
+			doc = rd(text)
+		}
+		if _, _, err := f.svc.WriteMemory(ctx, f.homeOf("a"), MemoryWrite{Path: path, Text: doc}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -678,6 +682,9 @@ func TestTeamKnowledgePromotionGating(t *testing.T) {
 	hp, _ := k.svc.Repo("a").LatestHandoff()
 	for name, args := range map[string][2]string{
 		"an episode":   {"episodes/2026/x.md", ""},
+		"a log entry":  {"log/2026/x.md", ""},
+		"to the log":   {"runbooks/r.md", "log/x.md"},
+		"wrong kind":   {"runbooks/r.md", "knowledge/r.md"},
 		"a handoff":    {hp, "knowledge/leak.md"},
 		"to episodes":  {"runbooks/r.md", "episodes/x.md"},
 		"traversal":    {"runbooks/../knowledge/x.md", ""},

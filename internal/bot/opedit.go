@@ -7,8 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/NodeSpy/conductor/internal/config"
 )
@@ -39,6 +43,10 @@ const (
 	EditRm     = "rm"
 	EditMv     = "mv"
 	EditRevert = "revert"
+	// EditAnnotate / EditFlag add an operator's note to a document the
+	// operator may not rewrite (a log entry), or flag it wrong with a reason.
+	EditAnnotate = "annotate"
+	EditFlag     = "flag"
 )
 
 // Edit is one operator change to a repo.
@@ -46,7 +54,11 @@ type Edit struct {
 	Op   string // put | rm | mv | revert
 	Path string // put / rm / mv: the file; revert: unused
 	To   string // mv: the new path
-	Text string // put: the full new content
+	Text string // put: the full new content; annotate/flag: the note
+	// Kind, when set, is the kind a put means to write: a path of another
+	// kind is refused. Create refuses a put over an existing file.
+	Kind   string
+	Create bool
 	// Commit is a revert's target.
 	Commit string
 	// Base is the commit the operator read: it must be the head.
@@ -84,6 +96,7 @@ func (r *Repo) Commit(ctx context.Context, id Ident, e Edit) (head string, chang
 	}
 	var paths []string
 	subject := e.Subject
+	ks := r.Kinds()
 	switch e.Op {
 	case EditPut:
 		c, err := r.cleanPath(e.Path)
@@ -96,6 +109,12 @@ func (r *Repo) Commit(ctx context.Context, id Ident, e Edit) (head string, chang
 		text := e.Text
 		if !strings.HasSuffix(text, "\n") {
 			text += "\n"
+		}
+		if e.Create && r.trackedLocked(ctx, c) {
+			return "", false, fmt.Errorf("%s already exists — put it to change it", c)
+		}
+		if _, err := ks.CheckWrite(c, text, WriterOperator, e.Kind); err != nil {
+			return "", false, err
 		}
 		abs := filepath.Join(r.Dir, c)
 		if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
@@ -119,6 +138,9 @@ func (r *Repo) Commit(ctx context.Context, id Ident, e Edit) (head string, chang
 		if !r.trackedLocked(ctx, c) {
 			return "", false, fmt.Errorf("no file %s", c)
 		}
+		if err := ks.CheckRemove(c, WriterOperator); err != nil {
+			return "", false, err
+		}
 		if _, err := r.git(ctx, r.Dir, "rm", "-q", "--", c); err != nil {
 			return "", false, err
 		}
@@ -137,6 +159,16 @@ func (r *Repo) Commit(ctx context.Context, id Ident, e Edit) (head string, chang
 		}
 		if !r.trackedLocked(ctx, from) {
 			return "", false, fmt.Errorf("no file %s", from)
+		}
+		if err := ks.CheckRemove(from, WriterOperator); err != nil {
+			return "", false, err
+		}
+		content, err := os.ReadFile(filepath.Join(r.Dir, from))
+		if err != nil {
+			return "", false, err
+		}
+		if _, err := ks.CheckWrite(to, string(content), WriterOperator, ""); err != nil {
+			return "", false, err
 		}
 		// (git mv refuses an existing destination itself.)
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(r.Dir, to)), 0o700); err != nil {
@@ -158,10 +190,27 @@ func (r *Repo) Commit(ctx context.Context, id Ident, e Edit) (head string, chang
 		if err != nil {
 			return "", false, err
 		}
+		for _, f := range files {
+			if err := ks.CheckRemove(f, WriterOperator); err != nil {
+				return "", false, fmt.Errorf("commit %s: %w", short(target), err)
+			}
+		}
 		if _, err := r.gitIdent(ctx, OperatorIdent("-"), r.Dir, "revert", "--no-commit", target); err != nil {
 			_, _ = r.git(ctx, r.Dir, "revert", "--abort")
 			_, _ = r.git(ctx, r.Dir, "reset", "-q", "--hard", cur)
 			return "", false, fmt.Errorf("commit %s does not revert cleanly onto the head (a later commit changed the same lines) — edit the file instead: %v", short(target), err)
+		}
+		// What the revert leaves must be valid documents, like any write.
+		for _, f := range files {
+			b, err := os.ReadFile(filepath.Join(r.Dir, f))
+			if err != nil {
+				continue // the revert removes it
+			}
+			if _, err := ks.CheckWrite(f, string(b), WriterOperator, ""); err != nil {
+				_, _ = r.git(ctx, r.Dir, "revert", "--abort")
+				_, _ = r.git(ctx, r.Dir, "reset", "-q", "--hard", cur)
+				return "", false, fmt.Errorf("reverting %s would leave an invalid document: %w", short(target), err)
+			}
 		}
 		paths = files
 		if subject == "" {
@@ -172,8 +221,59 @@ func (r *Repo) Commit(ctx context.Context, id Ident, e Edit) (head string, chang
 			e.Trailers = map[string]string{}
 		}
 		e.Trailers["Reverts"] = target
+	case EditAnnotate, EditFlag:
+		c, err := r.cleanPath(e.Path)
+		if err != nil {
+			return "", false, err
+		}
+		k, _ := ks.Of(c)
+		if !k.Annotate {
+			return "", false, fmt.Errorf("%s: annotate and flag are for %s documents an operator may not rewrite (the log); edit a %s document directly", c, KindLog, k.Name)
+		}
+		if !r.trackedLocked(ctx, c) {
+			return "", false, fmt.Errorf("no file %s", c)
+		}
+		note := strings.TrimSpace(e.Text)
+		if note == "" {
+			return "", false, fmt.Errorf("%s needs the note's text", e.Op)
+		}
+		b, err := os.ReadFile(filepath.Join(r.Dir, c))
+		if err != nil {
+			return "", false, err
+		}
+		wasValid := k.Validate(string(b)) == nil
+		fm, body, hasFM, _ := SplitFrontmatter(string(b))
+		label := "Operator note"
+		if e.Op == EditFlag {
+			label = "Flagged WRONG by the operator"
+			if hasFM {
+				fm["flagged_wrong"] = oneLine(note, 500)
+			}
+		}
+		entry := fmt.Sprintf("\n## %s — %s, %s\n\n%s\n", label, id.Name, r.now().UTC().Format(time.RFC3339), note)
+		text := string(b)
+		if hasFM {
+			text = k.JoinFrontmatter(fm, strings.TrimRight(body, "\n")+"\n"+entry)
+		} else {
+			text = strings.TrimRight(text, "\n") + "\n" + entry
+		}
+		if wasValid {
+			if err := k.Validate(text); err != nil {
+				return "", false, fmt.Errorf("%s: %w", c, err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(r.Dir, c), []byte(text), 0o600); err != nil {
+			return "", false, err
+		}
+		if _, err := r.git(ctx, r.Dir, "add", "--", c); err != nil {
+			return "", false, err
+		}
+		paths = []string{c}
+		if subject == "" {
+			subject = map[string]string{EditAnnotate: "annotate ", EditFlag: "flag wrong: "}[e.Op] + c
+		}
 	default:
-		return "", false, fmt.Errorf("unknown edit %q (want put, rm, mv or revert)", e.Op)
+		return "", false, fmt.Errorf("unknown edit %q (want put, rm, mv, revert, annotate or flag)", e.Op)
 	}
 	if out, _ := r.git(ctx, r.Dir, append([]string{"diff", "--cached", "--name-only", "--"}, paths...)...); strings.TrimSpace(out) == "" {
 		return r.headLocked(ctx), false, nil // nothing changed
@@ -216,6 +316,64 @@ func (r *Repo) revertableLocked(ctx context.Context, sha string) ([]string, erro
 		return nil, fmt.Errorf("commit %s changes no files", short(sha))
 	}
 	return files, nil
+}
+
+// Document statuses (Repo.Inventory).
+const (
+	DocOK       = "ok"
+	DocInvalid  = "invalid"  // in a kind's home, but not a valid document of it
+	DocLegacy   = "legacy"   // in a kind's legacy home (read-only)
+	DocUnmapped = "unmapped" // in no kind's home
+)
+
+// DocStatus is one file of a repo, as the kinds see it.
+type DocStatus struct {
+	Path    string `json:"path"`
+	Kind    string `json:"kind,omitempty"`
+	Status  string `json:"status"`
+	Problem string `json:"problem,omitempty"`
+}
+
+// Inventory classifies every file in the repo (the README and .gitkeep
+// placeholders aside): which kind it is, and whether it is a valid
+// document of it. The migration report: nothing here is ever deleted.
+func (r *Repo) Inventory() []DocStatus {
+	ks := r.Kinds()
+	var out []DocStatus
+	_ = filepath.WalkDir(r.Dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(r.Dir, p)
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			if strings.HasPrefix(d.Name(), ".") && rel != "." {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if rel == "README.md" || d.Name() == ".gitkeep" {
+			return nil
+		}
+		k, ok := ks.Of(rel)
+		if !ok {
+			out = append(out, DocStatus{Path: rel, Status: DocUnmapped, Problem: "in no kind's home"})
+			return nil
+		}
+		ds := DocStatus{Path: rel, Kind: k.Name, Status: DocOK}
+		if !k.homeOf(rel) {
+			ds.Status = DocLegacy
+		} else if err := k.CheckPath(rel); err != nil {
+			ds.Status, ds.Problem = DocInvalid, err.Error()
+		} else if b, err := os.ReadFile(p); err != nil {
+			ds.Status, ds.Problem = DocInvalid, err.Error()
+		} else if err := k.Validate(string(b)); err != nil {
+			ds.Status, ds.Problem = DocInvalid, err.Error()
+		}
+		out = append(out, ds)
+		return nil
+	})
+	return out
 }
 
 // HistoryEntry is one commit, for the operator: who wrote it (an operator,
@@ -358,6 +516,9 @@ func (s *Service) OperatorEdit(ctx context.Context, team, bot, as, caseID string
 	if team != "" {
 		e.Trailers["Bot-Team"] = team
 	}
+	if e.Kind != "" {
+		e.Trailers["Bot-Kind"] = e.Kind
+	}
 	head, changed, err := repo.Commit(ctx, OperatorIdent(op), e)
 	ae := map[string]any{"event": "bot_operator_edit", "operator": op, "team": team, "bot": bot, "op": e.Op,
 		"path": e.Path, "to": e.To, "revert": e.Commit, "base": e.Base, "case": caseID}
@@ -389,7 +550,7 @@ func (s *Service) OperatorEdit(ctx context.Context, team, bot, as, caseID string
 
 // RepoFile is an operator's read of one file, with the head to write
 // against.
-func (s *Service) RepoFile(ctx context.Context, team, bot, path string) (map[string]any, error) {
+func (s *Service) RepoFile(ctx context.Context, team, bot, path, kind string) (map[string]any, error) {
 	repo, _, what, err := s.editTarget(team, bot)
 	if err != nil {
 		return nil, err
@@ -399,11 +560,18 @@ func (s *Service) RepoFile(ctx context.Context, team, bot, path string) (map[str
 	}
 	head := repo.Head(ctx)
 	if path == "" {
-		files := append(repo.List(DirKnowledge), repo.List(DirRunbooks)...)
-		if bot != "" {
-			files = append(files, append(repo.List(DirEpisodes), repo.List(DirHandoff)...)...)
+		var files []any
+		attention := 0
+		for _, d := range repo.Inventory() {
+			if kind != "" && d.Kind != kind {
+				continue
+			}
+			if d.Status == DocInvalid || d.Status == DocUnmapped {
+				attention++
+			}
+			files = append(files, toMap(d))
 		}
-		return map[string]any{"repo": what, "head": head, "files": files}, nil
+		return map[string]any{"repo": what, "head": head, "files": files, "not_valid_documents": attention}, nil
 	}
 	text, err := repo.Read(path)
 	if err != nil {
@@ -431,4 +599,75 @@ func (s *Service) RepoHistory(ctx context.Context, team, bot, path string, limit
 // operatorOnlyOps are the operator-authoring ops: never on the agent socket.
 // (The ops are generic — edit, file, history — so no spelling of them is
 // reachable from a bot session.)
-var operatorOnlyOps = map[string]bool{"edit": true, "file": true, "history": true}
+var operatorOnlyOps = map[string]bool{"edit": true, "new": true, "file": true, "history": true}
+
+// NewDoc is an operator's `knowledge|memory new`: a document of a kind,
+// built from the kind's skeleton, a title, fields (YAML values: lists as
+// [a, b]) and an optional body — or a whole document to start from.
+type NewDoc struct {
+	Kind, Title, Slug, Text, Base, Subject string
+	Fields                                 map[string]string
+}
+
+// OperatorNew creates a document (refusing one that exists) through the
+// same chokepoint as every operator write.
+func (s *Service) OperatorNew(ctx context.Context, team, bot, as, caseID string, nd NewDoc) (map[string]any, error) {
+	repo, _, _, err := s.editTarget(team, bot)
+	if err != nil {
+		return nil, err
+	}
+	text, path, err := buildDoc(repo.Kinds(), nd)
+	if err != nil {
+		return nil, err
+	}
+	out, err := s.OperatorEdit(ctx, team, bot, as, caseID, Edit{Op: EditPut, Kind: nd.Kind, Create: true, Path: path, Text: text, Base: nd.Base, Subject: nd.Subject})
+	if out != nil {
+		out["path"] = path
+	}
+	return out, err
+}
+
+// buildDoc renders a NewDoc and derives its path.
+func buildDoc(ks *Kinds, nd NewDoc) (string, string, error) {
+	k, err := ks.Get(nd.Kind)
+	if err != nil {
+		return "", "", err
+	}
+	fm, body, ok, err := SplitFrontmatter(nd.Text)
+	if err != nil {
+		return "", "", err
+	}
+	if !ok {
+		fm, body = map[string]any{}, nd.Text
+		if strings.TrimSpace(body) == "" {
+			body = k.Template
+		}
+	}
+	if nd.Title != "" && k.field("title") != nil {
+		fm["title"] = nd.Title
+	}
+	names := make([]string, 0, len(nd.Fields))
+	for n := range nd.Fields {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		var v any
+		if err := yaml.Unmarshal([]byte(nd.Fields[n]), &v); err != nil || v == nil {
+			v = nd.Fields[n]
+		}
+		if f := k.field(n); f != nil && (f.Type == "string" || f.Type == "text" || f.Type == "enum") {
+			v = nd.Fields[n] // a string field keeps its text as given
+		}
+		fm[n] = v
+	}
+	title, _ := fm["title"].(string)
+	if title == "" {
+		title, _ = fm["what"].(string)
+	}
+	path, err := resolveDocPath(ks, k.Name, "", nd.Slug, title, "")
+	if err != nil {
+		return "", "", err
+	}
+	return k.JoinFrontmatter(fm, body), path, nil
+}

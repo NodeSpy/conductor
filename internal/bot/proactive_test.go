@@ -361,7 +361,7 @@ func TestSweepFindingsThresholdDedupeAndEscalation(t *testing.T) {
 		t.Fatalf("sweep findings: %+v", sw)
 	}
 	day := f.clk.now()
-	mem, err := os.ReadFile(filepath.Join(f.cfg.BotRepoDir("sre"), "episodes", "proactive", day.Format("2006/01"), day.Format("2006-01-02")+".md"))
+	mem, err := os.ReadFile(filepath.Join(f.cfg.BotRepoDir("sre"), "log", "proactive", day.Format("2006/01"), day.Format("2006-01-02")+".md"))
 	if err != nil || !strings.Contains(string(mem), "db1 disk 71%") || !strings.Contains(string(mem), "cost:ec2") {
 		t.Fatalf("findings not in memory: %v %s", err, mem)
 	}

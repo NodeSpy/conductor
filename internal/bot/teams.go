@@ -65,7 +65,8 @@ func (s *Service) TeamRepo(team string) *Repo {
 	key := "team:" + team // bot names have no ':'
 	r := s.repos[key]
 	if r == nil {
-		r = &Repo{Dir: dir, Bot: team, Team: true, Now: s.Now, Seed: cfg.TeamSeedDir(team)}
+		r = &Repo{Dir: dir, Bot: team, Team: true, Now: s.Now, Seed: cfg.TeamSeedDir(team),
+			KindsFn: func() *Kinds { return NewKinds(true, s.Cfg().Teams[team].Collections) }}
 		s.repos[key] = r
 	}
 	return r
@@ -469,7 +470,7 @@ func (s *Service) TeamInfo(ctx context.Context, bot string) (map[string]any, err
 	}
 	if repo := s.TeamRepo(team); repo != nil {
 		out["knowledge"] = map[string]any{"promotion": t.Knowledge.PromotionMode(), "head": repo.Head(ctx),
-			"files": append(repo.List(DirKnowledge), repo.List(DirRunbooks)...)}
+			"files": teamFiles(repo)}
 	}
 	return out, nil
 }
@@ -537,20 +538,17 @@ func (s *Service) Promote(ctx context.Context, c Actor, from, to, note string) (
 	if err != nil {
 		return nil, err
 	}
-	src, err := CleanPath(from)
+	own := s.Repo(c.Bot)
+	src, err := own.cleanPath(from)
 	if err != nil {
 		return nil, err
 	}
-	if top := strings.SplitN(src, "/", 2)[0]; top != DirKnowledge && top != DirRunbooks {
-		return nil, fmt.Errorf("promote a knowledge/ or runbooks/ file of your memory, not %s", src)
+	if sk, _ := own.Kinds().Of(src); sk.Name == KindLog || sk.Name == KindHandoff {
+		return nil, fmt.Errorf("promote a document of your memory (knowledge, runbooks, watch, …), not your %s", sk.Name)
 	}
 	if strings.TrimSpace(to) == "" {
 		to = src
 	}
-	if _, err := repo.cleanPath(to); err != nil {
-		return nil, err
-	}
-	own := s.Repo(c.Bot)
 	text, err := own.Read(src)
 	if err != nil {
 		return nil, fmt.Errorf("read %s from your memory: %w", src, err)
@@ -563,6 +561,15 @@ func (s *Service) Promote(ctx context.Context, c Actor, from, to, note string) (
 	}
 	if len(note) > MaxPeerMessage {
 		return nil, fmt.Errorf("note too long (%d bytes, max %d)", len(note), MaxPeerMessage)
+	}
+	// The destination's kind, path and schema are checked now, as a
+	// promotion would land — a malformed document is refused here, with its
+	// schema errors, not at approval time.
+	if to, err = CleanPath(to); err != nil {
+		return nil, err
+	}
+	if _, err := repo.Kinds().CheckWrite(to, ensureNL(text), WriterProposal, ""); err != nil {
+		return nil, fmt.Errorf("team %s would not take it: %w", team, err)
 	}
 	k := store.KnowledgeChange{Team: team, From: src, To: to, SHA256: sha256Hex(text), Text: text, Source: own.Head(ctx), Note: strings.TrimSpace(note)}
 	if err := repo.Init(ctx); err != nil {
@@ -665,7 +672,7 @@ func (s *Service) landKnowledge(ctx context.Context, bot string, k store.Knowled
 		subject = fmt.Sprintf("knowledge: %s (promoted by bot %s, edited by operator %s)", k.To, bot, k.EditedBy)
 		tr["Edited-By"], tr["Proposed-SHA256"], tr["Operator"] = k.EditedBy, k.ProposedSHA256, k.EditedBy
 	}
-	sha, err := repo.WriteIdent(ctx, author, k.To, k.Text, "replace", subject, tr)
+	sha, err := repo.WriteIdent(ctx, author, WriterProposal, k.To, k.Text, "replace", subject, tr)
 	if err != nil {
 		return "", err
 	}
@@ -732,4 +739,20 @@ func teamSuffix(m config.BotConfig) string {
 		return ""
 	}
 	return ", team " + string(m.Team)
+}
+
+func ensureNL(s string) string {
+	if strings.HasSuffix(s, "\n") {
+		return s
+	}
+	return s + "\n"
+}
+
+// teamFiles lists a team repo's documents (every kind's home).
+func teamFiles(repo *Repo) []string {
+	var out []string
+	for _, k := range repo.Kinds().List() {
+		out = append(out, repo.List(k.Dir)...)
+	}
+	return out
 }

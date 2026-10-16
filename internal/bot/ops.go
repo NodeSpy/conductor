@@ -120,11 +120,14 @@ func (s *Service) agentOp(ctx context.Context, c Actor, sub string, args map[str
 		}
 		return out, nil
 	case "remember":
-		sha, err := s.WriteMemory(ctx, c, str(args, "path"), str(args, "text"), boolArg(args, "append"), str(args, "case"))
+		path, sha, err := s.WriteMemory(ctx, c, MemoryWrite{Kind: str(args, "kind"), Path: str(args, "path"), Slug: str(args, "slug"),
+			Title: str(args, "title"), Text: str(args, "text"), Append: boolArg(args, "append"), CaseID: str(args, "case")})
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"commit": sha, "path": str(args, "path")}, nil
+		return map[string]any{"commit": sha, "path": path}, nil
+	case "kinds":
+		return kindsInfo(s.Repo(c.Bot).Kinds(), str(args, "kind"))
 	case "episode":
 		sha, err := s.Episode(ctx, c, str(args, "case"), str(args, "text"))
 		if err != nil {
@@ -298,9 +301,20 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 		// (team:) or a bot's memory (bot:), one commit against base.
 		return s.OperatorEdit(ctx, str(args, "team"), name, str(args, "as"), str(args, "case"), Edit{
 			Op: str(args, "op"), Path: str(args, "path"), To: str(args, "to"), Text: str(args, "text"),
+			Kind: str(args, "kind"), Create: boolArg(args, "create"),
 			Commit: str(args, "commit"), Base: str(args, "base"), Subject: str(args, "message")})
+	case "new":
+		return s.OperatorNew(ctx, str(args, "team"), name, str(args, "as"), str(args, "case"), NewDoc{Kind: str(args, "kind"),
+			Title: str(args, "title"), Slug: str(args, "slug"), Text: str(args, "text"), Base: str(args, "base"),
+			Subject: str(args, "message"), Fields: fieldArgs(args)})
 	case "file":
-		return s.RepoFile(ctx, str(args, "team"), name, str(args, "path"))
+		return s.RepoFile(ctx, str(args, "team"), name, str(args, "path"), str(args, "kind"))
+	case "kinds":
+		repo, _, _, err := s.editTarget(str(args, "team"), name)
+		if err != nil {
+			return nil, err
+		}
+		return kindsInfo(repo.Kinds(), str(args, "kind"))
 	case "history":
 		n, _ := strconv.Atoi(str(args, "limit"))
 		return s.RepoHistory(ctx, str(args, "team"), name, str(args, "path"), n)
@@ -658,5 +672,39 @@ func poolForDisplay(pool config.ProactiveBudget, now time.Time, recs []store.Bot
 		ms = withoutDollars(ms)
 	}
 	out["observed_24h"] = map[string]any{"sweeps": runs, "by_model": toList(ms)}
+	return out
+}
+
+// kindsInfo describes a repo's kinds (or one), for a session or an operator.
+func kindsInfo(ks *Kinds, one string) (map[string]any, error) {
+	if one != "" {
+		k, err := ks.Get(one)
+		if err != nil {
+			return nil, err
+		}
+		return k.Describe(), nil
+	}
+	var out []any
+	for _, k := range ks.List() {
+		out = append(out, k.Describe())
+	}
+	return map[string]any{"kinds": out}, nil
+}
+
+// fieldArgs reads `fields` — a map, or k=v strings (the CLI's --field).
+func fieldArgs(args map[string]any) map[string]string {
+	out := map[string]string{}
+	switch v := args["fields"].(type) {
+	case map[string]any:
+		for k, x := range v {
+			out[k] = fmt.Sprint(x)
+		}
+	default:
+		for _, kv := range strs(args, "fields") {
+			if k, val, ok := strings.Cut(kv, "="); ok {
+				out[strings.TrimSpace(k)] = val
+			}
+		}
+	}
 	return out
 }

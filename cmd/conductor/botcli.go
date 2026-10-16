@@ -46,12 +46,13 @@ const botUsage = `usage:
     conductor bot sweeps <bot>
     conductor bot teams
     conductor bot team <team>                # bots, routing, routed cases, knowledge, pool
-    conductor bot knowledge put|rm|mv|revert|ls|cat|log <team> …   # edit a team's knowledge directly (as an operator)
-    conductor bot memory put|rm|mv|revert|ls|cat|log <bot> …       # edit a bot's memory directly (as an operator)
+    conductor bot knowledge new|put|rm|mv|revert|ls|cat|log|kinds <team> …   # a team's knowledge, typed documents (as an operator)
+    conductor bot memory new|put|rm|mv|revert|annotate|flag|ls|cat|log|kinds <bot> …   # a bot's memory (as an operator)
     conductor bot approve <bot> <id> --edit-file <f>              # approve a knowledge promotion with your changes
   from a bot session:
     conductor bot whoami
-    conductor bot remember --path knowledge/<f>.md --text "…" [--append]
+    conductor bot kinds [--kind <kind>]                    # the document kinds of your memory: homes, fields, skeletons
+    conductor bot remember --kind <kind> [--title "…" | --slug <s> | --path <p>] --text "<document>" [--append]
     conductor bot episode [--case <id>] --text "…"
     conductor bot recall <words…>
     conductor bot read <path>
@@ -109,6 +110,10 @@ func botFlags(args []string) (pos []string, flags map[string]string, files []str
 			files = append(files, v)
 			continue
 		}
+		if k == "field" && flags[k] != "" { // repeatable: --field k=v …
+			flags[k] += "\x00" + v
+			continue
+		}
 		flags[k] = v
 	}
 	return pos, flags, files, rest
@@ -160,7 +165,7 @@ func botAgent(sub string, args []string) error {
 	}
 	call := sub
 	switch sub {
-	case "whoami", "remember", "episode", "handoff", "proposals", "cases", "peers", "delegations":
+	case "whoami", "remember", "episode", "handoff", "proposals", "cases", "peers", "delegations", "kinds":
 	case "instructions":
 		// --wait blocks until the parent sends something (or the timeout):
 		// how a child waits on its parent, like wait/join.
@@ -458,22 +463,25 @@ func botOperator(sub string, args []string) error {
 }
 
 const botRepoUsage = `usage:
-  conductor bot %[1]s put <%[2]s> <path> (--from-file <f> | --text "…") --base <commit> [-m "…"] [--as <operator>]%[3]s
-  conductor bot %[1]s rm <%[2]s> <path> --base <commit> [-m "…"] [--as <operator>]%[3]s
-  conductor bot %[1]s mv <%[2]s> <path> <new path> --base <commit> [-m "…"] [--as <operator>]%[3]s
-  conductor bot %[1]s revert <%[2]s> <commit> --base <commit> [-m "…"] [--as <operator>]%[3]s
-  conductor bot %[1]s ls <%[2]s>               # files, and the head to write against
-  conductor bot %[1]s cat <%[2]s> <path>       # a file (the head on stderr)
-  conductor bot %[1]s log <%[2]s> [<path>] [--limit N]   # commits: author, kind, case, proposal`
+  conductor bot %[1]s new <%[2]s> --kind <kind> --title "…" [--slug <s>] [--field k=v]… [--from-file <f>] --base <commit> [-m "…"] [--as <op>]%[3]s
+  conductor bot %[1]s put <%[2]s> <path> (--from-file <f> | --text "…") [--kind <kind>] --base <commit> [-m "…"] [--as <op>]%[3]s
+  conductor bot %[1]s rm <%[2]s> <path> --base <commit> [-m "…"] [--as <op>]%[3]s
+  conductor bot %[1]s mv <%[2]s> <path> <new path> --base <commit> [-m "…"] [--as <op>]%[3]s
+  conductor bot %[1]s revert <%[2]s> <commit> --base <commit> [-m "…"] [--as <op>]%[3]s%[4]s
+  conductor bot %[1]s ls <%[2]s> [--kind <kind>]   # documents (kind, status), and the head to write against
+  conductor bot %[1]s cat <%[2]s> <path>           # a document (the head on stderr)
+  conductor bot %[1]s log <%[2]s> [<path>] [--limit N]   # commits: author, kind, case, proposal
+  conductor bot %[1]s kinds <%[2]s> [--kind <kind>]     # the kinds here: homes, fields, writers, skeletons`
 
 // botRepoEdit is `conductor bot knowledge|memory …`: an operator's direct
 // reads and writes of a team's knowledge repo or a bot's memory repo.
-func botRepoEdit(cfg *config.Config, kind string, pos []string, fl map[string]string) error {
-	who, extra := "team", ""
-	if kind == "memory" {
+func botRepoEdit(cfg *config.Config, repoKind string, pos []string, fl map[string]string) error {
+	who, extra, logOps := "team", "", ""
+	if repoKind == "memory" {
 		who, extra = "bot", " [--case <id>]"
+		logOps = "\n  conductor bot memory annotate|flag <bot> <log path> --text \"…\" --base <commit>   # note on (or flag wrong) a log entry"
 	}
-	usage := fmt.Errorf(botRepoUsage, kind, who, extra)
+	usage := fmt.Errorf(botRepoUsage, repoKind, who, extra, logOps)
 	if len(pos) < 2 {
 		return usage
 	}
@@ -486,16 +494,24 @@ func botRepoEdit(cfg *config.Config, kind string, pos []string, fl map[string]st
 		return nil
 	}
 	switch action {
-	case "ls", "cat":
-		if action == "cat" {
+	case "ls", "cat", "kinds":
+		op := "file"
+		switch action {
+		case "cat":
 			if err := need(3); err != nil {
 				return err
 			}
 			a["path"] = pos[2]
-		} else if err := need(2); err != nil {
-			return err
+		default:
+			if err := need(2); err != nil {
+				return err
+			}
+			if action == "kinds" {
+				op = "kinds"
+			}
 		}
-		out, _, err := botControl(cfg, "file", a)
+		a["kind"] = fl["kind"]
+		out, _, err := botControl(cfg, op, a)
 		if err != nil {
 			return err
 		}
@@ -530,20 +546,19 @@ func botRepoEdit(cfg *config.Config, kind string, pos []string, fl map[string]st
 			fmt.Printf("%v %-25.25v %-8v %-14v %v%s\n", c["short"], c["date"], c["kind"], c["who"], c["subject"], link)
 		}
 		return nil
-	case "put", "rm", "mv", "revert":
+	case "put", "rm", "mv", "revert", "new":
+	case "annotate", "flag":
+		if repoKind != "memory" {
+			return usage
+		}
 	default:
 		return usage
 	}
 	a["op"], a["base"], a["message"], a["as"], a["case"] = action, fl["base"], fl["message"], fl["as"], fl["case"]
 	if fl["base"] == "" {
-		return fmt.Errorf("--base <commit> is required: the commit you read (`conductor bot %s ls %s` shows the head) — a write against a stale base is refused", kind, target)
+		return fmt.Errorf("--base <commit> is required: the commit you read (`conductor bot %s ls %s` shows the head) — a write against a stale base is refused", repoKind, target)
 	}
-	switch action {
-	case "put":
-		if err := need(3); err != nil {
-			return err
-		}
-		a["path"] = pos[2]
+	content := func(required bool) error {
 		switch {
 		case fl["from-file"] != "" && fl["text"] != "":
 			return fmt.Errorf("--from-file or --text, not both")
@@ -555,8 +570,36 @@ func botRepoEdit(cfg *config.Config, kind string, pos []string, fl map[string]st
 			a["text"] = string(b)
 		case fl["text"] != "":
 			a["text"] = fl["text"]
-		default:
-			return fmt.Errorf("put needs the content: --from-file <f> or --text \"…\"")
+		case required:
+			return fmt.Errorf("%s needs the content: --from-file <f> or --text \"…\"", action)
+		}
+		return nil
+	}
+	op := "edit"
+	switch action {
+	case "new":
+		if err := need(2); err != nil {
+			return err
+		}
+		if fl["kind"] == "" {
+			return fmt.Errorf("new needs --kind (`conductor bot %s kinds %s` lists them)", repoKind, target)
+		}
+		if err := content(false); err != nil {
+			return err
+		}
+		op = "new"
+		a["kind"], a["title"], a["slug"] = fl["kind"], fl["title"], fl["slug"]
+		if f := fl["field"]; f != "" {
+			a["fields"] = strings.Split(f, "\x00")
+		}
+		delete(a, "op")
+	case "put":
+		if err := need(3); err != nil {
+			return err
+		}
+		a["path"], a["kind"] = pos[2], fl["kind"]
+		if err := content(true); err != nil {
+			return err
 		}
 	case "rm":
 		if err := need(3); err != nil {
@@ -573,8 +616,16 @@ func botRepoEdit(cfg *config.Config, kind string, pos []string, fl map[string]st
 			return err
 		}
 		a["commit"] = pos[2]
+	case "annotate", "flag":
+		if err := need(3); err != nil {
+			return err
+		}
+		a["path"] = pos[2]
+		if err := content(true); err != nil {
+			return err
+		}
 	}
-	out, _, err := botControl(cfg, "edit", a)
+	out, _, err := botControl(cfg, op, a)
 	if err != nil {
 		return err
 	}
@@ -582,7 +633,11 @@ func botRepoEdit(cfg *config.Config, kind string, pos []string, fl map[string]st
 		fmt.Printf("%v: unchanged (head %v)\n", out["repo"], out["commit"])
 		return nil
 	}
-	fmt.Printf("%v: %s committed %v as operator %v\n", out["repo"], action, out["commit"], out["operator"])
+	where := ""
+	if p, _ := out["path"].(string); p != "" {
+		where = " " + p
+	}
+	fmt.Printf("%v: %s%s committed %v as operator %v\n", out["repo"], action, where, out["commit"], out["operator"])
 	return nil
 }
 

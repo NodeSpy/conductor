@@ -63,7 +63,7 @@ func (s *Service) Consolidate(ctx context.Context, name string) (store.Worker, e
 	if len(eps) > 60 {
 		eps = eps[len(eps)-60:]
 	}
-	brief := "CONSOLIDATION. Distil these episodes into durable knowledge: read each, then update knowledge/ (and runbooks/ where a procedure emerged) with what will matter next time — facts about the systems, recurring causes, what worked, what did not. Prefer editing an existing knowledge file over adding a new one; keep files focused; never copy secrets. Write with `conductor bot remember` (one call per file). Do not rewrite the episodes themselves. Finish with step.done summarizing which knowledge files changed and why.\n\nEpisodes:\n- " + strings.Join(eps, "\n- ")
+	brief := "CONSOLIDATION. Distil these episodes into durable knowledge: read each, then update knowledge/ (and runbooks/ where a procedure emerged, watch/ where something needs watching) with what will matter next time — facts about the systems, recurring causes, what worked, what did not. Prefer editing an existing document over adding a new one; keep documents focused; never copy secrets. Each is a typed document (`conductor bot kinds` shows the frontmatter each kind needs); write it with `conductor bot remember --kind <kind> --title \"…\" --text \"<document>\"` (one call per document). Do not rewrite the log itself. Finish with step.done summarizing which knowledge files changed and why.\n\nEpisodes:\n- " + strings.Join(eps, "\n- ")
 	w, err := s.Spawn(ctx, Actor{Bot: name, Role: config.BotRoleHome}, SpawnRequest{Title: "memory consolidation", Brief: brief, byConductor: true})
 	if err != nil {
 		return store.Worker{}, err

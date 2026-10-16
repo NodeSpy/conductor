@@ -143,7 +143,8 @@ func (s *Service) Repo(name string) *Repo {
 	}
 	r := s.repos[name]
 	if r == nil {
-		r = &Repo{Dir: s.Cfg().BotRepoDir(name), Bot: name, Now: s.Now, Seed: s.Cfg().BotSeedDir(name)}
+		r = &Repo{Dir: s.Cfg().BotRepoDir(name), Bot: name, Now: s.Now, Seed: s.Cfg().BotSeedDir(name),
+			KindsFn: func() *Kinds { return NewKinds(false, s.Cfg().Bots[name].Collections) }}
 		s.repos[name] = r
 	}
 	return r
@@ -212,7 +213,9 @@ func (s *Service) Start(ctx context.Context) {
 		if repo := s.TeamRepo(team); repo != nil {
 			if err := repo.Init(ctx); err != nil {
 				s.logf("team %s: knowledge repo: %v", team, err)
+				continue
 			}
+			s.reportInventory("team "+team, repo)
 		}
 	}
 	for _, name := range s.Cfg().BotNames() {
@@ -220,12 +223,37 @@ func (s *Service) Start(ctx context.Context) {
 			s.logf("%s: memory repo: %v", name, err)
 			continue
 		}
+		s.reportInventory("bot "+name, s.Repo(name))
 		s.recoverWorkers(name)
 		if s.Terraform != nil {
 			s.Terraform.Recover(name)
 		}
 		go s.loop(ctx, name)
 	}
+}
+
+// reportInventory reports, once at start, what in a repo is not a valid
+// document of a kind — skipped seed files, files outside every kind's home,
+// files that fail their kind's schema. Nothing is deleted or moved: they stay
+// readable, and the next write to one must be valid.
+func (s *Service) reportInventory(what string, repo *Repo) {
+	for _, sk := range repo.SeedSkipped {
+		s.logf("%s: seed file not copied: %s", what, sk)
+	}
+	var issues []string
+	for _, d := range repo.Inventory() {
+		if d.Status == DocOK || d.Status == DocLegacy {
+			continue
+		}
+		issues = append(issues, d.Path+" ("+d.Status+": "+d.Problem+")")
+	}
+	if len(issues) == 0 && len(repo.SeedSkipped) == 0 {
+		return
+	}
+	for _, i := range issues {
+		s.logf("%s: memory file not a valid document: %s", what, i)
+	}
+	s.audit(map[string]any{"event": "bot_memory_inventory", "repo": what, "unmapped_or_invalid": issues, "seed_skipped": repo.SeedSkipped})
 }
 
 // recoverWorkers: a cli worker is a child of the daemon, so a restart ended
@@ -562,7 +590,7 @@ func (s *Service) collectHandoff(ctx context.Context, name string, old *store.Ho
 		return
 	}
 	note := MechanicalHandoff(s.Ledger.Bot(name), reason)
-	if _, err := repo.Write(ctx, repo.HandoffPath(old.ID), note, "replace", "handoff: session "+old.ID+" (written by conductor)", map[string]string{"Bot-Session": old.ID}); err != nil {
+	if _, err := repo.AppendLog(ctx, repo.HandoffPath(old.ID), map[string]any{"session": old.ID}, note, "handoff: session "+old.ID+" (written by conductor)", map[string]string{"Bot-Session": old.ID}); err != nil {
 		s.logf("%s: mechanical handoff: %v", name, err)
 	}
 }
@@ -1012,7 +1040,7 @@ func (s *Service) finishWorker(ctx context.Context, name string, w store.Worker,
 		created = s.now()
 	}
 	ep := fmt.Sprintf("## %s — worker %s %s\n\nBrief: %s\n\nResult: %s\n", s.now().UTC().Format(time.RFC3339), w.ID, status, oneLine(w.Brief, 600), summary)
-	if _, err := repo.Write(ctx, repo.EpisodePath(w.CaseID, cs.Title, created), ep, "append",
+	if _, err := repo.AppendLog(ctx, repo.EpisodePath(w.CaseID, cs.Title, created), logFM(cs), ep,
 		fmt.Sprintf("episode: case %s worker %s %s", w.CaseID, w.ID, status), map[string]string{"Bot-Case": w.CaseID, "Bot-Worker": w.ID}); err != nil {
 		s.logf("%s: episode for worker %s: %v", name, w.ID, err)
 	}
@@ -1063,27 +1091,106 @@ func summarizeOutput(reason string, output any) string {
 
 // ---- agent ops ----
 
-// WriteMemory writes a memory-repo file for a bot session.
-func (s *Service) WriteMemory(ctx context.Context, c Actor, path, text string, appendMode bool, caseID string) (string, error) {
+// logFM is a case's log entry frontmatter.
+func logFM(cs store.Case) map[string]any {
+	t := cs.Title
+	if t == "" {
+		t = "case " + cs.ID
+	}
+	return map[string]any{"title": oneLine(t, 200), "case": cs.ID}
+}
+
+// MemoryWrite is a bot session's `conductor bot remember`: a document of a
+// kind. Path, when empty, is derived from the kind and a slug (Slug, else
+// the title — the frontmatter's or Title).
+type MemoryWrite struct {
+	Kind, Path, Slug, Title, Text string
+	Append                        bool
+	CaseID                        string
+}
+
+// WriteMemory writes a memory document for a bot session, through the
+// kinds' chokepoint as WriterBot.
+func (s *Service) WriteMemory(ctx context.Context, c Actor, mw MemoryWrite) (string, string, error) {
 	if _, err := s.bot(c.Bot); err != nil {
-		return "", err
+		return "", "", err
+	}
+	repo := s.Repo(c.Bot)
+	path, err := resolveDocPath(repo.Kinds(), mw.Kind, mw.Path, mw.Slug, mw.Title, mw.Text)
+	if err != nil {
+		return "", "", err
 	}
 	if strings.HasPrefix(path, DirHandoff+"/") {
-		return "", errors.New("handoff notes are written with `conductor bot handoff`")
+		return "", "", errors.New("handoff notes are written with `conductor bot handoff`")
+	}
+	if strings.HasPrefix(path, DirLog+"/") || strings.HasPrefix(path, DirEpisodes+"/") {
+		return "", "", errors.New("the log is written with `conductor bot episode --case <id>`")
+	}
+	if _, err := repo.cleanPath(path); err != nil {
+		return "", "", err
+	}
+	if k, ok := repo.Kinds().Of(path); ok && mw.Kind != "" && k.Name != mw.Kind {
+		return "", "", fmt.Errorf("%s is a %s path (%s/); a %s document lives elsewhere", path, k.Name, k.Dir, mw.Kind)
 	}
 	mode := "replace"
-	if appendMode {
+	if mw.Append {
 		mode = "append"
 	}
+	caseID := mw.CaseID
 	if caseID == "" {
 		caseID = c.CaseID
 	}
-	sha, err := s.Repo(c.Bot).Write(ctx, path, text, mode, "memory: "+path,
+	sha, err := repo.Write(ctx, WriterBot, path, mw.Text, mode, "memory: "+path,
 		map[string]string{"Bot-Case": caseID, "Bot-Role": c.Role, "Bot-Dispatch": c.Dispatch})
 	if err == nil {
 		s.audit(map[string]any{"event": "bot_memory", "bot": c.Bot, "path": path, "commit": sha, "role": c.Role})
 	}
-	return sha, err
+	return path, sha, err
+}
+
+// resolveDocPath is where a document goes: the path given (checked against
+// the kind named, if any), or one derived from the kind and a slug — the
+// slug given, else the title (given, or the frontmatter's).
+func resolveDocPath(ks *Kinds, kind, path, slug, title, text string) (string, error) {
+	if path != "" {
+		c, err := CleanPath(path)
+		if err != nil {
+			return "", err
+		}
+		if kind != "" {
+			k, err := ks.Get(kind)
+			if err != nil {
+				return "", err
+			}
+			if err := k.CheckPath(c); err != nil {
+				return "", err
+			}
+		}
+		return c, nil
+	}
+	if kind == "" {
+		return "", errors.New("name the document: --kind <kind> (and a --title or --slug), or --path")
+	}
+	k, err := ks.Get(kind)
+	if err != nil {
+		return "", err
+	}
+	if slug == "" {
+		t := title
+		if t == "" {
+			if fm, _, ok, _ := SplitFrontmatter(text); ok {
+				t, _ = fm["title"].(string)
+				if t == "" {
+					t, _ = fm["what"].(string)
+				}
+			}
+		}
+		slug = Slug(t)
+	}
+	if slug == "" {
+		return "", fmt.Errorf("a %s document needs a --slug or a title to derive its path from", k.Name)
+	}
+	return k.Derive(slug)
 }
 
 // Episode appends to a case's episode.
@@ -1098,7 +1205,7 @@ func (s *Service) Episode(ctx context.Context, c Actor, caseID, text string) (st
 	}
 	repo := s.Repo(c.Bot)
 	entry := fmt.Sprintf("## %s — %s\n\n%s\n", s.now().UTC().Format(time.RFC3339), c.Role, strings.TrimSpace(text))
-	return repo.Write(ctx, repo.EpisodePath(cs.ID, cs.Title, cs.Created), entry, "append", "episode: case "+cs.ID, map[string]string{"Bot-Case": cs.ID, "Bot-Role": c.Role})
+	return repo.AppendLog(ctx, repo.EpisodePath(cs.ID, cs.Title, cs.Created), logFM(*cs), entry, "episode: case "+cs.ID, map[string]string{"Bot-Case": cs.ID, "Bot-Role": c.Role})
 }
 
 // Handoff records the home session's handoff note.
@@ -1115,7 +1222,7 @@ func (s *Service) Handoff(ctx context.Context, c Actor, text string) (string, er
 	if strings.TrimSpace(text) == "" {
 		return "", errors.New("empty handoff")
 	}
-	return repo.Write(ctx, repo.HandoffPath(sid), "# Handoff from session "+sid+"\n\n"+text, "replace", "handoff: session "+sid, map[string]string{"Bot-Session": sid})
+	return repo.AppendLog(ctx, repo.HandoffPath(sid), map[string]any{"session": sid}, "# Handoff from session "+sid+"\n\n"+text, "handoff: session "+sid, map[string]string{"Bot-Session": sid})
 }
 
 // CaseOpen opens a case from the home session (the operator asked for
@@ -1192,7 +1299,7 @@ func (s *Service) closeCase(ctx context.Context, bot, caseID, outcome string) (s
 	}
 	repo := s.Repo(bot)
 	entry := fmt.Sprintf("## %s — closed\n\nSource: %s · requester: %s (%s)\n\nOutcome: %s\n", s.now().UTC().Format(time.RFC3339), cs.Source, orDash(cs.Requester), cs.RequesterClass, strings.TrimSpace(outcome))
-	_, err = repo.Write(ctx, repo.EpisodePath(cs.ID, cs.Title, cs.Created), entry, "append", "episode: case "+cs.ID+" closed", map[string]string{"Bot-Case": cs.ID})
+	_, err = repo.AppendLog(ctx, repo.EpisodePath(cs.ID, cs.Title, cs.Created), logFM(cs), entry, "episode: case "+cs.ID+" closed", map[string]string{"Bot-Case": cs.ID})
 	return cs, err
 }
 

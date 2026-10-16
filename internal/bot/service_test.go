@@ -294,7 +294,7 @@ func TestWorkerDoneRecordsEverywhere(t *testing.T) {
 	if _, err := os.Stat(w.Cwd); !os.IsNotExist(err) {
 		t.Fatal("worker worktree not removed")
 	}
-	eps := f.svc.Repo("sre").List(DirEpisodes)
+	eps := f.svc.Repo("sre").List(DirLog)
 	found := false
 	for _, e := range eps {
 		if strings.Contains(e, c.ID) {
@@ -435,11 +435,11 @@ func TestMemoryWritesAreCommitsAndConfined(t *testing.T) {
 	ctx := context.Background()
 	f.svc.Tick(ctx, "sre")
 	hc := homeCaller(f)
-	sha, err := f.svc.WriteMemory(ctx, hc, "knowledge/db.md", "primary is in us-east-1", false, "")
+	_, sha, err := f.svc.WriteMemory(ctx, hc, MemoryWrite{Path: "knowledge/db.md", Text: kd("primary is in us-east-1")})
 	if err != nil || sha == "" {
 		t.Fatalf("remember: %v", err)
 	}
-	if _, err := f.svc.WriteMemory(ctx, hc, "knowledge/db.md", "replica lag alarm at 30s", true, ""); err != nil {
+	if _, _, err := f.svc.WriteMemory(ctx, hc, MemoryWrite{Path: "knowledge/db.md", Text: "replica lag alarm at 30s", Append: true}); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := f.svc.Repo("sre").Read("knowledge/db.md")
@@ -455,7 +455,7 @@ func TestMemoryWritesAreCommitsAndConfined(t *testing.T) {
 		t.Fatalf("session worktree not refreshed: %v", err)
 	}
 	for _, bad := range []string{"../escape.md", "/etc/x.md", "knowledge/../../x.md", "README.md", ".git/config", "knowledge/.hidden.md", "knowledge/x.sh", "handoff/x.md", "knowledge"} {
-		if _, err := f.svc.WriteMemory(ctx, hc, bad, "x", false, ""); err == nil {
+		if _, _, err := f.svc.WriteMemory(ctx, hc, MemoryWrite{Path: bad, Text: kd("x")}); err == nil {
 			t.Errorf("wrote %q", bad)
 		}
 	}
@@ -581,7 +581,9 @@ func TestMemoryRepoSeed(t *testing.T) {
 	seed := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(seed, "runbooks"), 0o700)
 	_ = os.MkdirAll(filepath.Join(seed, "knowledge"), 0o700)
-	_ = os.WriteFile(filepath.Join(seed, "runbooks", "page-triage.md"), []byte("# triage"), 0o600)
+	_ = os.WriteFile(filepath.Join(seed, "runbooks", "page-triage.md"), []byte(rd("# triage")), 0o600)
+	_ = os.WriteFile(filepath.Join(seed, "runbooks", "no-frontmatter.md"), []byte("# old style"), 0o600)
+	_ = os.WriteFile(filepath.Join(seed, "knowledge", "README.md"), []byte("what to seed"), 0o600)
 	_ = os.WriteFile(filepath.Join(seed, "runbooks", "evil.sh"), []byte("rm -rf /"), 0o600)
 	_ = os.WriteFile(filepath.Join(seed, "README.md"), []byte("not copied"), 0o600)
 	secret := filepath.Join(t.TempDir(), "secret.md")
@@ -591,10 +593,14 @@ func TestMemoryRepoSeed(t *testing.T) {
 	if err := r.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if b, err := r.Read("runbooks/page-triage.md"); err != nil || b != "# triage" {
+	if b, err := r.Read("runbooks/page-triage.md"); err != nil || b != rd("# triage") {
 		t.Fatalf("seed runbook: %q %v", b, err)
 	}
-	for _, p := range []string{"runbooks/evil.sh", "knowledge/link.md"} {
+	// Not valid documents: skipped and reported, never copied.
+	if sk := strings.Join(r.SeedSkipped, "\n"); !strings.Contains(sk, "runbooks/no-frontmatter.md") || !strings.Contains(sk, "knowledge/README.md") {
+		t.Fatalf("skipped seed files not reported: %v", r.SeedSkipped)
+	}
+	for _, p := range []string{"runbooks/evil.sh", "knowledge/link.md", "runbooks/no-frontmatter.md", "knowledge/README.md"} {
 		if _, err := os.Stat(filepath.Join(r.Dir, p)); err == nil {
 			t.Errorf("%s was seeded", p)
 		}

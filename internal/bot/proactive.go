@@ -411,8 +411,9 @@ func (s *Service) finishSweep(ctx context.Context, name string, w store.Worker, 
 			fmt.Fprintf(&b, "  %s\n", oneLine(f.Detail, 600))
 		}
 	}
-	path := fmt.Sprintf("%s/proactive/%s/%s.md", DirEpisodes, now.Format("2006/01"), now.Format("2006-01-02"))
-	if _, err := repo.Write(ctx, path, b.String(), "append", "episode: proactive sweep "+w.Sweep, map[string]string{"Bot-Sweep": w.Sweep}); err != nil {
+	path := fmt.Sprintf("%s/proactive/%s/%s.md", DirLog, now.Format("2006/01"), now.Format("2006-01-02"))
+	fm := map[string]any{"title": "proactive sweeps " + now.Format("2006-01-02"), "sweep": w.Sweep}
+	if _, err := repo.AppendLog(ctx, path, fm, b.String(), "episode: proactive sweep "+w.Sweep, map[string]string{"Bot-Sweep": w.Sweep}); err != nil {
 		s.logf("%s: sweep %s memory: %v", name, w.Sweep, err)
 	}
 	for _, n := range notices {

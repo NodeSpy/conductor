@@ -953,6 +953,9 @@ func Load(path string) (*Config, error) {
 	// Teams resolve first: each bot's team defaults are filled in (and a
 	// bot setting past its team's ceiling refused) before the bot's
 	// worker triggers copy its grant.
+	if err := c.resolveCollections(); err != nil {
+		return nil, err
+	}
 	if err := c.ResolveTeams(); err != nil {
 		return nil, err
 	}

@@ -35,6 +35,9 @@ type TeamConfig struct {
 	// Folder files the team, and the bots on it, for display only
 	// (folders.go): no behavior.
 	Folder string `yaml:"folder,omitempty"`
+	// Collections are custom content kinds in the team's knowledge repo
+	// (collections.go): written by an operator, or by approved promotion.
+	Collections map[string]Collection `yaml:"collections,omitempty"`
 	// Operators may approve the team's bots' proposals and its knowledge
 	// promotions. A bot's operators: must be a subset; a bot that sets
 	// none inherits these. Empty = every configured operator.
@@ -553,6 +556,9 @@ func (c *Config) validateBotTeam(name string, t TeamConfig) error {
 	}
 	if _, err := NormFolder(t.Folder); err != nil {
 		return fmt.Errorf("folder: %w", err)
+	}
+	if err := validateCollections(t.Collections, true); err != nil {
+		return err
 	}
 	for _, op := range t.Operators {
 		if _, ok := c.Operators[op]; !ok {

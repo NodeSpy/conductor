@@ -28,15 +28,16 @@ import (
 // path, so no two live agents ever share a cwd (the sandbox keys and archives by
 // cwd). Conductor fast-forwards clean session worktrees after each commit.
 
-// Layout of a memory repo.
+// Layout of a memory repo: each built-in kind's home (kinds.go), and
+// episodes/, the log kind's legacy home (read, never written).
 const (
 	DirKnowledge = "knowledge"
 	DirRunbooks  = "runbooks"
+	DirWatch     = "watch"
+	DirLog       = "log"
 	DirEpisodes  = "episodes"
 	DirHandoff   = "handoff"
 )
-
-var writableDirs = []string{DirKnowledge, DirRunbooks, DirEpisodes, DirHandoff}
 
 // Repo is one bot's memory repo.
 type Repo struct {
@@ -50,20 +51,35 @@ type Repo struct {
 	// knowledge/ and runbooks/, written only by promotion, each commit
 	// authored by the bot whose memory it came from.
 	Team bool
+	// KindsFn is the repo's content kinds (built-ins plus its collections);
+	// nil: the built-ins alone.
+	KindsFn func() *Kinds
+	// SeedSkipped lists seed files Init did not copy (not a valid document
+	// of any kind here), with why — reported, never silently dropped.
+	SeedSkipped []string
 
 	mu sync.Mutex
 }
 
-// dirs is the repo's layout.
-func (r *Repo) dirs() []string {
-	if r.Team {
-		return teamDirs
+// Kinds is the repo's content kinds.
+func (r *Repo) Kinds() *Kinds {
+	if r.KindsFn != nil {
+		if ks := r.KindsFn(); ks != nil {
+			return ks
+		}
 	}
-	return writableDirs
+	return NewKinds(r.Team, nil)
 }
 
-// teamDirs is a team knowledge repo's layout.
-var teamDirs = []string{DirKnowledge, DirRunbooks}
+// dirs is the repo's layout: every kind's home, then legacy homes.
+func (r *Repo) dirs() []string {
+	var out, legacy []string
+	for _, k := range r.Kinds().List() {
+		out = append(out, k.Dir)
+		legacy = append(legacy, k.Legacy...)
+	}
+	return append(out, legacy...)
+}
 
 func (r *Repo) now() time.Time {
 	if r.Now != nil {
@@ -139,10 +155,14 @@ func (r *Repo) Init(ctx context.Context) error {
 Written by conductor on the bot's behalf; every change is one commit.
 Correct anything by committing over it — the bot reads what is here.
 
-- knowledge/  durable facts: the infra map, how things work, learned lessons
-- runbooks/   procedures the bot follows
-- episodes/   what happened on each case and what was done (episodic log)
-- handoff/    notes one home session leaves for the next
+Every file is a typed document with YAML frontmatter, checked by conductor
+(`+"`conductor bot kinds`"+` lists the schemas):
+
+- knowledge/  durable facts (title, applies_to, evidence, confidence)
+- runbooks/   procedures (title, when_to_use, prerequisites, steps, verification, rollback, owner)
+- watch/      what to keep an eye on (what, signal, threshold, why)
+- log/        what happened on each case (conductor writes it; operators annotate)
+- handoff/    notes one home session leaves for the next (conductor writes it)
 `, r.Bot)
 	if r.Team {
 		readme = fmt.Sprintf(`# Knowledge of team %s
@@ -155,12 +175,14 @@ over it.
 
 - knowledge/  durable facts the whole team relies on
 - runbooks/   procedures the whole team follows
+- watch/      what the team keeps an eye on
 `, r.Bot)
 	}
 	if err := os.WriteFile(filepath.Join(r.Dir, "README.md"), []byte(readme), 0o600); err != nil {
 		return err
 	}
-	for _, d := range r.dirs() {
+	for _, k := range r.Kinds().List() {
+		d := k.Dir
 		if err := os.MkdirAll(filepath.Join(r.Dir, d), 0o700); err != nil {
 			return err
 		}
@@ -182,72 +204,73 @@ over it.
 	return err
 }
 
-// seed copies the seed directory's knowledge/ and runbooks/ Markdown into a
-// new repo. Regular files only (no symlinks — a seed cannot point the repo at
-// files outside it), .md/.txt only, each under the write-size cap.
+// seed copies the seed directory's documents into a new repo: every file
+// under a kind's home that is a valid document of that kind — the same rule
+// as any write (WriterSystem aside, which only conductor's own kinds take).
+// Regular files only (no symlinks — a seed cannot point the repo at files
+// outside it), each under the write-size cap. A file that is not a valid
+// document is skipped and listed in SeedSkipped, never silently dropped.
 func (r *Repo) seed() error {
 	if r.Seed == "" {
 		return nil
 	}
-	for _, top := range []string{DirKnowledge, DirRunbooks} {
-		root := filepath.Join(r.Seed, top)
-		if _, err := os.Stat(root); os.IsNotExist(err) {
-			continue
-		}
-		err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() || !d.Type().IsRegular() {
-				return nil
-			}
-			rel, err := filepath.Rel(r.Seed, p)
-			if err != nil {
-				return err
-			}
-			if _, err := CleanPath(filepath.ToSlash(rel)); err != nil {
-				return nil // not a memory file (wrong extension, hidden): skip
-			}
-			b, err := os.ReadFile(p)
-			if err != nil {
-				return err
-			}
-			if len(b) > 256<<10 {
-				return fmt.Errorf("%s is larger than 256KiB", rel)
-			}
-			dst := filepath.Join(r.Dir, rel)
-			if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-				return err
-			}
-			return os.WriteFile(dst, b, 0o600)
-		})
+	ks := r.Kinds()
+	return filepath.WalkDir(r.Seed, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-	}
-	return nil
+		rel, err := filepath.Rel(r.Seed, p)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			if rel != "." && strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() || !strings.Contains(rel, "/") {
+			return nil // top-level files (the pack's README, its manifest) are not memory
+		}
+		k, ok := ks.Of(rel)
+		if !ok {
+			return nil // not under any kind's home: not memory
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		if len(b) > 256<<10 {
+			return fmt.Errorf("%s is larger than 256KiB", rel)
+		}
+		if err := k.CheckPath(rel); err != nil {
+			r.SeedSkipped = append(r.SeedSkipped, err.Error())
+			return nil
+		}
+		if err := k.Validate(string(b)); err != nil {
+			r.SeedSkipped = append(r.SeedSkipped, rel+": "+err.Error())
+			return nil
+		}
+		dst := filepath.Join(r.Dir, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(dst, b, 0o600)
+	})
 }
 
-// CleanPath validates a memory path an agent names: relative, inside one of
-// the writable directories, no traversal, a Markdown or text file.
+// CleanPath validates the shape of a memory path an agent or operator
+// names: relative, no traversal, no hidden segment, a Markdown or text file.
+// Where it may be is the kinds' business (Repo.cleanPath, Kinds).
 func CleanPath(rel string) (string, error) {
 	rel = strings.TrimSpace(rel)
 	if rel == "" || filepath.IsAbs(rel) || strings.Contains(rel, "\\") {
 		return "", fmt.Errorf("memory path %q must be relative", rel)
 	}
 	c := filepath.Clean(rel)
-	if c != rel || strings.HasPrefix(c, "..") || strings.Contains(c, "/../") {
+	if c != rel || c == "." || strings.HasPrefix(c, "..") || strings.Contains(c, "/../") {
 		return "", fmt.Errorf("memory path %q is not clean", rel)
-	}
-	top := strings.SplitN(c, "/", 2)[0]
-	ok := false
-	for _, d := range writableDirs {
-		if top == d && c != d {
-			ok = true
-		}
-	}
-	if !ok {
-		return "", fmt.Errorf("memory path %q must be under one of %s", rel, strings.Join(writableDirs, "/, ")+"/")
 	}
 	for _, seg := range strings.Split(c, "/") {
 		if strings.HasPrefix(seg, ".") {
@@ -260,25 +283,27 @@ func CleanPath(rel string) (string, error) {
 	return c, nil
 }
 
-// Write records one file and commits it. mode "replace" overwrites, "append"
-// appends (with a separating newline). trailers become commit trailers.
-func (r *Repo) Write(ctx context.Context, rel, text, mode, subject string, trailers map[string]string) (string, error) {
-	return r.WriteAs(ctx, r.Bot, rel, text, mode, subject, trailers)
+// Write records one document and commits it, as written by w — through
+// the kinds' chokepoint (Kinds.CheckWrite). mode "replace" overwrites,
+// "append" appends to the body (with a separating newline). trailers
+// become commit trailers.
+func (r *Repo) Write(ctx context.Context, w Writer, rel, text, mode, subject string, trailers map[string]string) (string, error) {
+	return r.WriteAs(ctx, r.Bot, w, rel, text, mode, subject, trailers)
 }
 
 // WriteAs is Write with author as the commit's author (a team repo's
 // promotion is authored by the promoting bot).
-func (r *Repo) WriteAs(ctx context.Context, author, rel, text, mode, subject string, trailers map[string]string) (string, error) {
+func (r *Repo) WriteAs(ctx context.Context, author string, w Writer, rel, text, mode, subject string, trailers map[string]string) (string, error) {
 	id := BotIdent(author)
 	if r.Team && author == r.Bot {
 		id = Ident{"team " + r.Bot, r.Bot + teamDomain}
 	}
-	return r.WriteIdent(ctx, id, rel, text, mode, subject, trailers)
+	return r.WriteIdent(ctx, id, w, rel, text, mode, subject, trailers)
 }
 
 // WriteIdent is Write with id as the commit's author (an approved promotion
 // the operator edited is authored by the operator).
-func (r *Repo) WriteIdent(ctx context.Context, id Ident, rel, text, mode, subject string, trailers map[string]string) (string, error) {
+func (r *Repo) WriteIdent(ctx context.Context, id Ident, w Writer, rel, text, mode, subject string, trailers map[string]string) (string, error) {
 	c, err := r.cleanPath(rel)
 	if err != nil {
 		return "", err
@@ -289,9 +314,6 @@ func (r *Repo) WriteIdent(ctx context.Context, id Ident, rel, text, mode, subjec
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	abs := filepath.Join(r.Dir, c)
-	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
-		return "", err
-	}
 	if mode == "append" {
 		prev, _ := os.ReadFile(abs)
 		if len(prev) > 0 && !bytes.HasSuffix(prev, []byte("\n")) {
@@ -304,6 +326,13 @@ func (r *Repo) WriteIdent(ctx context.Context, id Ident, rel, text, mode, subjec
 	}
 	if !strings.HasSuffix(text, "\n") {
 		text += "\n"
+	}
+	// The chokepoint: what the file will hold, where, by whom.
+	if _, err := r.Kinds().CheckWrite(c, text, w, ""); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
+		return "", err
 	}
 	if err := os.WriteFile(abs, []byte(text), 0o600); err != nil {
 		return "", err
@@ -325,6 +354,20 @@ func (r *Repo) WriteIdent(ctx context.Context, id Ident, rel, text, mode, subjec
 	head := r.headLocked(ctx)
 	r.refreshLocked(ctx)
 	return head, nil
+}
+
+// AppendLog appends an entry to a conductor-composed document (a case's log,
+// a sweep's day): a new file starts with fm as its frontmatter. Written as
+// WriterSystem, through the same chokepoint.
+func (r *Repo) AppendLog(ctx context.Context, rel string, fm map[string]any, entry, subject string, trailers map[string]string) (string, error) {
+	k, ok := r.Kinds().Of(rel)
+	if !ok {
+		return "", fmt.Errorf("%s is not in any kind's home", rel)
+	}
+	if _, err := os.Stat(filepath.Join(r.Dir, rel)); os.IsNotExist(err) {
+		return r.Write(ctx, WriterSystem, rel, k.JoinFrontmatter(fm, entry), "replace", subject, trailers)
+	}
+	return r.Write(ctx, WriterSystem, rel, entry, "append", subject, trailers)
 }
 
 // commitMessage is a one-line subject and its trailers, sorted.
@@ -376,20 +419,21 @@ func Slug(s string) string {
 	return s
 }
 
-// EpisodePath is where a case's episode lives.
+// EpisodePath is where a case's log entry lives (the log kind).
 func (r *Repo) EpisodePath(caseID, title string, created time.Time) string {
-	return filepath.Join(DirEpisodes, created.Format("2006"), created.Format("01"),
+	return filepath.Join(DirLog, created.Format("2006"), created.Format("01"),
 		created.Format("2006-01-02")+"-"+caseID+"-"+Slug(title)+".md")
 }
 
-// cleanPath is CleanPath, held to a team repo's layout for a team repo.
+// cleanPath is CleanPath, held to the repo's kinds: in some kind's home,
+// or a legacy home (read only — writes are checked again by CheckWrite).
 func (r *Repo) cleanPath(rel string) (string, error) {
 	c, err := CleanPath(rel)
-	if err != nil || !r.Team {
-		return c, err
+	if err != nil {
+		return "", err
 	}
-	if top := strings.SplitN(c, "/", 2)[0]; top != DirKnowledge && top != DirRunbooks {
-		return "", fmt.Errorf("team knowledge path %q must be under knowledge/ or runbooks/", rel)
+	if _, ok := r.Kinds().Of(c); !ok {
+		return "", fmt.Errorf("memory path %q is not in any kind's home (%s)", rel, r.Kinds().homes())
 	}
 	return c, nil
 }
@@ -443,7 +487,7 @@ func (r *Repo) Search(query string, limit int) []map[string]string {
 	var out []map[string]string
 	for _, d := range r.dirs() {
 		files := r.List(d)
-		if d == DirEpisodes || d == DirHandoff {
+		if d == DirLog || d == DirEpisodes || d == DirHandoff {
 			sort.Sort(sort.Reverse(sort.StringSlice(files)))
 		}
 		for _, f := range files {
@@ -485,7 +529,7 @@ func (r *Repo) HandoffPath(session string) string {
 func (r *Repo) EpisodesSince(ctx context.Context, t time.Time) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	args := []string{"log", "--name-only", "--pretty=format:", "--", DirEpisodes}
+	args := []string{"log", "--name-only", "--pretty=format:", "--", DirLog, DirEpisodes}
 	if !t.IsZero() {
 		args = append(args[:1], append([]string{"--since=" + t.UTC().Format(time.RFC3339)}, args[1:]...)...)
 	}

@@ -15,7 +15,7 @@ import (
 
 func (f *teamFixture) head(t *testing.T, team, bot string) string {
 	t.Helper()
-	out, err := f.svc.RepoFile(context.Background(), team, bot, "")
+	out, err := f.svc.RepoFile(context.Background(), team, bot, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,11 +48,11 @@ func TestOperatorAuthorsTeamKnowledge(t *testing.T) {
 	ctx := context.Background()
 	repo := f.svc.TeamRepo("platform")
 	h0 := f.head(t, "platform", "")
-	h1 := f.edit(t, "platform", "", "op", Edit{Op: EditPut, Path: "knowledge/databases.md", Text: "db-main is the primary", Base: h0, Subject: "the primary"})
+	h1 := f.edit(t, "platform", "", "op", Edit{Op: EditPut, Path: "knowledge/databases.md", Text: kd("db-main is the primary"), Base: h0, Subject: "the primary"})
 	if h1 == h0 {
 		t.Fatal("no commit")
 	}
-	if text, err := f.svc.TeamRead(ctx, "b", "knowledge/databases.md"); err != nil || text != "db-main is the primary\n" {
+	if text, err := f.svc.TeamRead(ctx, "b", "knowledge/databases.md"); err != nil || text != kd("db-main is the primary")+"\n" {
 		t.Fatalf("a teammate does not read the operator's knowledge: %q %v", text, err)
 	}
 	log := lastCommit(t, repo)
@@ -64,29 +64,29 @@ func TestOperatorAuthorsTeamKnowledge(t *testing.T) {
 		t.Fatalf("an operator edit made %d proposals", n)
 	}
 	// Update, then an unchanged put is no commit.
-	h2 := f.edit(t, "platform", "", "op2", Edit{Op: EditPut, Path: "knowledge/databases.md", Text: "db-main is the primary; db-replica-1 follows", Base: h1})
-	out, err := f.svc.OperatorEdit(ctx, "platform", "", "op2", "", Edit{Op: EditPut, Path: "knowledge/databases.md", Text: "db-main is the primary; db-replica-1 follows", Base: h2})
+	h2 := f.edit(t, "platform", "", "op2", Edit{Op: EditPut, Path: "knowledge/databases.md", Text: kd("db-main is the primary; db-replica-1 follows"), Base: h1})
+	out, err := f.svc.OperatorEdit(ctx, "platform", "", "op2", "", Edit{Op: EditPut, Path: "knowledge/databases.md", Text: kd("db-main is the primary; db-replica-1 follows"), Base: h2})
 	if err != nil || out["changed"] != false || out["commit"] != h2 {
 		t.Fatalf("an unchanged put: %v %v", out, err)
 	}
 	// Move, then delete.
-	h3 := f.edit(t, "platform", "", "op", Edit{Op: EditMv, Path: "knowledge/databases.md", To: "knowledge/data/stores.md", Base: h2})
+	h3 := f.edit(t, "platform", "", "op", Edit{Op: EditMv, Path: "knowledge/databases.md", To: "knowledge/data-stores.md", Base: h2})
 	if _, err := f.svc.TeamRead(ctx, "b", "knowledge/databases.md"); err == nil {
 		t.Fatal("the old path still reads after a move")
 	}
-	if text, _ := f.svc.TeamRead(ctx, "b", "knowledge/data/stores.md"); !strings.Contains(text, "db-replica-1") {
+	if text, _ := f.svc.TeamRead(ctx, "b", "knowledge/data-stores.md"); !strings.Contains(text, "db-replica-1") {
 		t.Fatalf("moved file: %q", text)
 	}
-	other := f.edit(t, "platform", "", "op", Edit{Op: EditPut, Path: "knowledge/other.md", Text: "other", Base: h3})
-	if _, err := f.svc.OperatorEdit(ctx, "platform", "", "op", "", Edit{Op: EditMv, Path: "knowledge/other.md", To: "knowledge/data/stores.md", Base: other}); err == nil {
+	other := f.edit(t, "platform", "", "op", Edit{Op: EditPut, Path: "knowledge/other.md", Text: kd("other"), Base: h3})
+	if _, err := f.svc.OperatorEdit(ctx, "platform", "", "op", "", Edit{Op: EditMv, Path: "knowledge/other.md", To: "knowledge/data-stores.md", Base: other}); err == nil {
 		t.Fatal("a move overwrote an existing file")
 	}
-	if text, _ := f.svc.TeamRead(ctx, "b", "knowledge/data/stores.md"); !strings.Contains(text, "db-replica-1") {
+	if text, _ := f.svc.TeamRead(ctx, "b", "knowledge/data-stores.md"); !strings.Contains(text, "db-replica-1") {
 		t.Fatalf("a refused move changed the destination: %q", text)
 	}
 	h3b := f.edit(t, "platform", "", "op", Edit{Op: EditRm, Path: "knowledge/other.md", Base: other})
-	h4 := f.edit(t, "platform", "", "op", Edit{Op: EditRm, Path: "knowledge/data/stores.md", Base: h3b})
-	if _, err := os.Stat(filepath.Join(repo.Dir, "knowledge/data/stores.md")); !os.IsNotExist(err) {
+	h4 := f.edit(t, "platform", "", "op", Edit{Op: EditRm, Path: "knowledge/data-stores.md", Base: h3b})
+	if _, err := os.Stat(filepath.Join(repo.Dir, "knowledge/data-stores.md")); !os.IsNotExist(err) {
 		t.Fatalf("not deleted: %v", err)
 	}
 	// History: per repo and per file (following the move), with kinds.
@@ -97,7 +97,7 @@ func TestOperatorAuthorsTeamKnowledge(t *testing.T) {
 	if last := hist[len(hist)-1]; last.Kind != "team" {
 		t.Fatalf("the repo's first commit: %+v", last)
 	}
-	fh, err := repo.History(ctx, "knowledge/data/stores.md", 0)
+	fh, err := repo.History(ctx, "knowledge/data-stores.md", 0)
 	if err != nil || len(fh) != 4 {
 		t.Fatalf("file history across the move: %+v %v", fh, err)
 	}
@@ -106,7 +106,7 @@ func TestOperatorAuthorsTeamKnowledge(t *testing.T) {
 		{Op: EditPut, Path: "episodes/x.md", Text: "x"}, // not in a team repo's layout
 		{Op: EditPut, Path: "../x.md", Text: "x"},
 		{Op: EditPut, Path: "knowledge/.hidden.md", Text: "x"},
-		{Op: EditPut, Path: "knowledge/x.sh", Text: "x"},
+		{Op: EditPut, Path: "knowledge/x.sh", Text: kd("x")},
 		{Op: EditRm, Path: "knowledge/nope.md"},
 		{Op: EditMv, Path: "knowledge/nope.md", To: "knowledge/x.md"},
 		{Op: EditPut, Path: "README.md", Text: "x"},
@@ -129,14 +129,14 @@ func TestOperatorEditStaleBaseIsRefused(t *testing.T) {
 	ctx := context.Background()
 	repo := f.svc.TeamRepo("platform")
 	h0 := f.head(t, "platform", "")
-	h1 := f.edit(t, "platform", "", "op", Edit{Op: EditPut, Path: "knowledge/a.md", Text: "first", Base: h0})
+	h1 := f.edit(t, "platform", "", "op", Edit{Op: EditPut, Path: "knowledge/a.md", Text: kd("first"), Base: h0})
 	// A second writer still holds h0.
-	_, err := f.svc.OperatorEdit(ctx, "platform", "", "op2", "", Edit{Op: EditPut, Path: "knowledge/a.md", Text: "second", Base: h0})
+	_, err := f.svc.OperatorEdit(ctx, "platform", "", "op2", "", Edit{Op: EditPut, Path: "knowledge/a.md", Text: kd("second"), Base: h0})
 	var stale *StaleBaseError
 	if !errors.As(err, &stale) || stale.Head != h1 || stale.Base != h0 || !strings.Contains(err.Error(), h1) {
 		t.Fatalf("a stale write: %v", err)
 	}
-	if text, _ := repo.Read("knowledge/a.md"); text != "first\n" {
+	if text, _ := repo.Read("knowledge/a.md"); text != kd("first")+"\n" {
 		t.Fatalf("a stale write overwrote: %q", text)
 	}
 	// No base, a ref name, garbage, an unknown commit: all refused.
@@ -147,7 +147,7 @@ func TestOperatorEditStaleBaseIsRefused(t *testing.T) {
 	}
 	// The full and the short head both work.
 	full, _ := repo.git(ctx, repo.Dir, "rev-parse", "HEAD")
-	if _, err := f.svc.OperatorEdit(ctx, "platform", "", "op", "", Edit{Op: EditPut, Path: "knowledge/a.md", Text: "third", Base: strings.TrimSpace(full)}); err != nil {
+	if _, err := f.svc.OperatorEdit(ctx, "platform", "", "op", "", Edit{Op: EditPut, Path: "knowledge/a.md", Text: kd("third"), Base: strings.TrimSpace(full)}); err != nil {
 		t.Fatalf("the full head: %v", err)
 	}
 	// Stale reverts and moves are refused too.
@@ -171,7 +171,7 @@ func TestOperatorEditIsOperatorOnly(t *testing.T) {
 	f := newTeamFixture(t, nil)
 	ctx := context.Background()
 	h := f.head(t, "platform", "")
-	put := Edit{Op: EditPut, Path: "knowledge/x.md", Text: "x", Base: h}
+	put := Edit{Op: EditPut, Path: "knowledge/x.md", Text: kd("x"), Base: h}
 	if _, err := f.svc.OperatorEdit(ctx, "platform", "", "bop", "", put); err == nil || !strings.Contains(err.Error(), "not an operator of team platform") {
 		t.Fatalf("another team's operator edited: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestOperatorEditIsOperatorOnly(t *testing.T) {
 	// a's operators are [op]: op2 (the team's) may not edit a's memory, and
 	// op is picked when none is named.
 	mh := f.head(t, "", "a")
-	mput := Edit{Op: EditPut, Path: "knowledge/x.md", Text: "x", Base: mh}
+	mput := Edit{Op: EditPut, Path: "knowledge/x.md", Text: kd("x"), Base: mh}
 	if _, err := f.svc.OperatorEdit(ctx, "", "a", "op2", "", mput); err == nil {
 		t.Fatal("an operator of the team but not of the bot edited its memory")
 	}
@@ -202,7 +202,7 @@ func TestOperatorEditIsOperatorOnly(t *testing.T) {
 	}
 	for _, actor := range []Actor{f.homeOf("a"), childActor("a", w), f.homeOf("lead")} {
 		for _, sub := range []string{"edit", "file", "history"} {
-			args := map[string]any{"team": "platform", "bot": "a", "op": "put", "path": "knowledge/y.md", "text": "y", "base": f.head(t, "platform", ""), "as": "op"}
+			args := map[string]any{"team": "platform", "bot": "a", "op": "put", "path": "knowledge/y.md", "text": kd("y"), "base": f.head(t, "platform", ""), "as": "op"}
 			if out, err := f.svc.AgentOp(ctx, actor, sub, args); err == nil || !strings.Contains(err.Error(), "only an operator") {
 				t.Errorf("%s/%s reached %s: %v %v", actor.Bot, actor.Role, sub, out, err)
 			}
@@ -212,7 +212,7 @@ func TestOperatorEditIsOperatorOnly(t *testing.T) {
 		t.Fatal("a bot session wrote team knowledge directly")
 	}
 	// The operator socket does reach them.
-	if _, err := f.svc.OperatorOp(ctx, "edit", map[string]any{"team": "platform", "op": "put", "path": "knowledge/y.md", "text": "y", "base": f.head(t, "platform", ""), "as": "op"}); err != nil {
+	if _, err := f.svc.OperatorOp(ctx, "edit", map[string]any{"team": "platform", "op": "put", "path": "knowledge/y.md", "text": kd("y"), "base": f.head(t, "platform", ""), "as": "op"}); err != nil {
 		t.Fatalf("the operator op: %v", err)
 	}
 	if out, err := f.svc.OperatorOp(ctx, "history", map[string]any{"team": "platform", "path": "knowledge/y.md"}); err != nil || len(out["commits"].([]any)) != 1 {
@@ -225,15 +225,15 @@ func TestOperatorEditIsOperatorOnly(t *testing.T) {
 func TestOperatorEditsBotMemory(t *testing.T) {
 	f := newTeamFixture(t, nil)
 	ctx := context.Background()
-	if _, err := f.svc.WriteMemory(ctx, f.homeOf("b"), "knowledge/db.md", "db-old is the primary", false, ""); err != nil {
+	if _, _, err := f.svc.WriteMemory(ctx, f.homeOf("b"), MemoryWrite{Path: "knowledge/db.md", Text: kd("db-old is the primary")}); err != nil {
 		t.Fatal(err)
 	}
 	cid := f.deliver(t, Event{Bot: "b", Source: "operator", Requester: "op", Title: "fix the db note"})
-	out, err := f.svc.OperatorEdit(ctx, "", "b", "op", cid, Edit{Op: EditPut, Path: "knowledge/db.md", Text: "db-main is the primary", Base: f.head(t, "", "b")})
+	out, err := f.svc.OperatorEdit(ctx, "", "b", "op", cid, Edit{Op: EditPut, Path: "knowledge/db.md", Text: kd("db-main is the primary"), Base: f.head(t, "", "b")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if text, _ := f.svc.Repo("b").Read("knowledge/db.md"); text != "db-main is the primary\n" {
+	if text, _ := f.svc.Repo("b").Read("knowledge/db.md"); text != kd("db-main is the primary")+"\n" {
 		t.Fatalf("memory: %q", text)
 	}
 	if in := f.unreadText("b"); !strings.Contains(in, "operator op changed your memory") || !strings.Contains(in, out["commit"].(string)) {
@@ -247,7 +247,7 @@ func TestOperatorEditsBotMemory(t *testing.T) {
 		t.Fatal("linked an unknown case")
 	}
 	// A bot's memory layout is wider than a team repo's.
-	if _, err := f.svc.OperatorEdit(ctx, "", "b", "op", "", Edit{Op: EditPut, Path: "runbooks/page.md", Text: "x", Base: f.head(t, "", "b")}); err != nil {
+	if _, err := f.svc.OperatorEdit(ctx, "", "b", "op", "", Edit{Op: EditPut, Path: "runbooks/page.md", Text: rd("x"), Base: f.head(t, "", "b")}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -258,13 +258,13 @@ func TestOperatorRevert(t *testing.T) {
 	f := newTeamFixture(t, nil)
 	ctx := context.Background()
 	repo := f.svc.TeamRepo("platform")
-	h1 := f.edit(t, "platform", "", "op", Edit{Op: EditPut, Path: "knowledge/a.md", Text: "v1", Base: f.head(t, "platform", "")})
-	h2 := f.edit(t, "platform", "", "op", Edit{Op: EditPut, Path: "knowledge/a.md", Text: "v2 (wrong)", Base: h1})
+	h1 := f.edit(t, "platform", "", "op", Edit{Op: EditPut, Path: "knowledge/a.md", Text: kd("v1"), Base: f.head(t, "platform", "")})
+	h2 := f.edit(t, "platform", "", "op", Edit{Op: EditPut, Path: "knowledge/a.md", Text: kd("v2 (wrong)"), Base: h1})
 	h3 := f.edit(t, "platform", "", "op2", Edit{Op: EditRevert, Commit: h2, Base: h2})
 	if h3 == h2 {
 		t.Fatal("no revert commit")
 	}
-	if text, _ := repo.Read("knowledge/a.md"); text != "v1\n" {
+	if text, _ := repo.Read("knowledge/a.md"); text != kd("v1")+"\n" {
 		t.Fatalf("after the revert: %q", text)
 	}
 	log := lastCommit(t, repo)
@@ -277,7 +277,7 @@ func TestOperatorRevert(t *testing.T) {
 	}
 	// The revert itself reverts (back to v2): it is an ordinary commit.
 	h4 := f.edit(t, "platform", "", "op", Edit{Op: EditRevert, Commit: h3, Base: h3})
-	if text, _ := repo.Read("knowledge/a.md"); text != "v2 (wrong)\n" {
+	if text, _ := repo.Read("knowledge/a.md"); text != kd("v2 (wrong)")+"\n" {
 		t.Fatalf("reverting the revert: %q", text)
 	}
 	// Conflict: reverting h1 (created the file) after later edits to it.
@@ -313,7 +313,7 @@ func TestOperatorRevert(t *testing.T) {
 func (f *teamFixture) promote(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := f.svc.WriteMemory(ctx, f.homeOf("a"), "knowledge/db.md", "db-prod-1 is the primary", false, ""); err != nil {
+	if _, _, err := f.svc.WriteMemory(ctx, f.homeOf("a"), MemoryWrite{Path: "knowledge/db.md", Text: kd("db-prod-1 is the primary")}); err != nil {
 		t.Fatal(err)
 	}
 	out, err := f.svc.Promote(ctx, f.homeOf("a"), "knowledge/db.md", "knowledge/databases.md", "")
@@ -332,7 +332,7 @@ func TestApproveWithChanges(t *testing.T) {
 	proposed := f.st.Bot("a").Proposals[pid].Knowledge.SHA256
 	var signed []byte
 	f.x.Verify = func(_ context.Context, _, _ string, payload []byte, _ string) error { signed = payload; return nil }
-	final := "db-main is the primary (db-prod-1 was renamed)\n"
+	final := kd("db-main is the primary (db-prod-1 was renamed)") + "\n"
 	res, err := f.x.Decide(ctx, Decision{Bot: "a", Proposal: pid, Operator: "op2", Decision: "approve", Signature: "x", Edit: final})
 	if err != nil || res.Status != "executed" {
 		t.Fatalf("approve with changes: %+v %v", res, err)
