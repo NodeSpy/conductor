@@ -1326,8 +1326,10 @@ sandbox:
 #   conductor sandbox ls                  # this daemon's agent containers
 #   conductor sandbox archive IDENTITY    # remove an identity's containers and HOME volume
 #
-# Hand-offs (background: true agent steps on paseo) are sandboxed too: they
-# launch through <provider>-sandboxed, titled "[sandboxed]". The EXPLICIT,
+# Hand-offs (background: true agent steps on paseo) and detached launches
+# (detach: true — e.g. a Slack handover, whose thread can carry anyone's
+# messages) are sandboxed too: they launch through <provider>-sandboxed,
+# titled "[sandboxed]". The EXPLICIT,
 # LOOSENING knob is `isolation: { mode: none }` — on a step, a workflow or a
 # trigger of YOUR config (or a pack's, from your packs: overrides; a pack can
 # never set it on itself) — which launches the agent unsandboxed, as you,

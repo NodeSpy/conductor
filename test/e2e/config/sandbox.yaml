@@ -108,6 +108,21 @@ triggers:
         workspace: worktree
         background: true
         prompt: "Review {{.repo}}#{{.pr}} with me"
+  # Detached launches (the handover shape: a user-owned workspace, forgotten):
+  # sandboxed by default too; the operator's opt-out launches them plain.
+  - "on": github.merge_conflict
+    filter:
+      repo:
+        - grpz/detach
+    steps:
+      - { type: agent, agent: zdetach-default, runtime: pz, detach: true, prompt: "Take this over" }
+  - "on": github.merge_conflict
+    isolation: { mode: none }
+    filter:
+      repo:
+        - grpz/detachout
+    steps:
+      - { type: agent, agent: zdetach-optout, runtime: pz, detach: true, prompt: "Take this over" }
   # A review: sandboxed too, and conductor pushes nothing from it.
   - "on": github.review_requested
     filter:

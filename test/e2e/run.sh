@@ -1978,6 +1978,23 @@ group_Z_sandbox() {
     bad "Z opt-out logged" Z hoff-log "no UNSANDBOXED line for grpz/hoffout"
   fi
 
+  # Detached launches: sandboxed by default; the operator's opt-out plain.
+  force "$C" merge_conflict grpz/detach#1 "$CFG" >/dev/null
+  force "$C" merge_conflict grpz/detachout#1 "$CFG" >/dev/null
+  if wait_for 60 z_hoff_agent 'zdetach-default [' && wait_for 60 z_hoff_agent 'zdetach-optout ['; then
+    local dd do
+    dd="$(z_hoff_agent 'zdetach-default [')"; do="$(z_hoff_agent 'zdetach-optout [')"
+    echo "      detached default: $dd"; echo "      detached opted out: $do"
+    case "$dd" in *"-sandboxed|zdetach-default [sandboxed]|sandbox=on") ok "Z a detached launch is sandboxed by default (the -sandboxed entry, marked in its title)" Z detach-default ;;
+      *) bad "Z default detach sandboxed" Z detach-default "got '$dd'" ;; esac
+    case "$do" in *"-sandboxed|"*) bad "Z opted-out detach plain" Z detach-optout "got '$do'" ;;
+      *"|zdetach-optout [UNSANDBOXED]|sandbox=off") ok "Z isolation: {mode: none} launches a detached agent through the plain provider" Z detach-optout ;;
+      *) bad "Z opted-out detach plain" Z detach-optout "got '$do'" ;; esac
+  else
+    bad "Z detached launches" Z detach "no paseo agent for zdetach-default / zdetach-optout"
+    dc logs --tail 30 "$C"
+  fi
+
   # The reviewer: sandboxed too, and conductor pushes nothing from a review.
   local review_tip
   review_tip="$(cexec forge git --git-dir=/srv/git/grpz/review.git rev-parse pr-1 | tr -d '\r')"

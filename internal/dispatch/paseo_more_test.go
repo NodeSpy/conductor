@@ -34,7 +34,8 @@ case "$1" in
     case "$2" in
       ls)      cat "$dir/workspaces.json" 2>/dev/null || echo '[]' ;;
       archive) exit 0 ;;
-      create)  cat "$dir/wscreate.json" 2>/dev/null || echo '{"workspaceId":"wks_new","cwd":"'"$dir"'/wt"}' ;;
+      create)  [ -f "$dir/wscreate-fail" ] && { echo "create boom" >&2; exit 1; }
+               cat "$dir/wscreate.json" 2>/dev/null || echo '{"workspaceId":"wks_new","cwd":"'"$dir"'/wt"}' ;;
     esac ;;
   inspect)
     id=""
@@ -53,7 +54,8 @@ case "$1" in
     esac ;;
   archive) exit 0 ;;
   clone)   [ -f "$dir/clone-fail" ] && { echo "no forge" >&2; exit 1; }; echo '{}' ;;
-  run)     cat "$dir/run.json" 2>/dev/null || echo '{"agentId":"a-new"}' ;;
+  run)     [ -f "$dir/run-fail" ] && { echo "run boom" >&2; exit 1; }
+           cat "$dir/run.json" 2>/dev/null || echo '{"agentId":"a-new"}' ;;
   *) echo '{}' ;;
 esac
 `
@@ -373,7 +375,7 @@ func TestRunWorkspaceCreation(t *testing.T) {
 	req := Request{Trigger: core.Trigger{Kind: "cron", Target: core.Target{Repo: "acme/w", Number: 7}}}
 
 	put(t, dir, "wscreate.json", `{"workspaceId":"wks_run"}`)
-	id, err := d.runWorkspace(context.Background(), req)
+	id, _, err := d.runWorkspace(context.Background(), req)
 	if err != nil || id != "wks_run" {
 		t.Fatalf("create run workspace: %q %v", id, err)
 	}
@@ -398,7 +400,7 @@ func TestRunWorkspaceCreation(t *testing.T) {
 	// A second run gets a DIFFERENT directory — shared directories would make the
 	// cwd→workspace reclaim map ambiguous.
 	put(t, dir, "wscreate.json", `{"id":"wks_alt"}`) // also covers the id-key fallback
-	if id, err := d.runWorkspace(context.Background(), req); err != nil || id != "wks_alt" {
+	if id, _, err := d.runWorkspace(context.Background(), req); err != nil || id != "wks_alt" {
 		t.Fatalf("second run: %q %v", id, err)
 	}
 	if ents, _ := os.ReadDir(runs); len(ents) != 2 {
