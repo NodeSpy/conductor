@@ -1,0 +1,8 @@
+{
+  "name": "conductor-brand-tools",
+  "private": true,
+  "type": "module",
+  "description": "Generates the conductor brand SVGs and PNGs from hand-tuned geometry. Design tooling only.",
+  "scripts": { "build": "node build.mjs", "render": "node render.mjs" },
+  "dependencies": { "opentype.js": "2.0.0", "svgo": "4.1.0" }
+}
