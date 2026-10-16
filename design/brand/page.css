@@ -258,3 +258,9 @@ em{font-family:var(--serif);font-style:italic;font-size:1.12em;letter-spacing:-.
   .asset-grid{grid-template-columns:repeat(2,1fr)}
 }
 .asset-grid{align-items:start}
+
+.system-link{display:flex;align-items:baseline;gap:14px;margin:28px 0;padding:16px 20px;border:1px solid var(--line);border-left:3px solid var(--ember);border-radius:10px;background:var(--paper-2);text-decoration:none;color:var(--ink-2);font-size:14.5px}
+.system-link .mono{text-transform:uppercase;letter-spacing:.08em;font-size:10px;color:var(--ink-3)}
+.system-link b{font:400 italic 22px/1 var(--serif);color:var(--ink);white-space:nowrap}
+.system-link:hover b{color:var(--ember)}
+@media (max-width:900px){.system-link{flex-wrap:wrap}}
