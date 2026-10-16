@@ -46,9 +46,24 @@ type Repo struct {
 	// Seed is copied into a NEW repo's first commit (knowledge/ and
 	// runbooks/ Markdown only); "" seeds nothing.
 	Seed string
+	// Team marks a TEAM knowledge repo (Member is then the team's name): only
+	// knowledge/ and runbooks/, written only by promotion, each commit
+	// authored by the member whose memory it came from.
+	Team bool
 
 	mu sync.Mutex
 }
+
+// dirs is the repo's layout.
+func (r *Repo) dirs() []string {
+	if r.Team {
+		return teamDirs
+	}
+	return writableDirs
+}
+
+// teamDirs is a team knowledge repo's layout.
+var teamDirs = []string{DirKnowledge, DirRunbooks}
 
 func (r *Repo) now() time.Time {
 	if r.Now != nil {
@@ -60,11 +75,19 @@ func (r *Repo) now() time.Time {
 // git runs one git command in the repo, isolated from the operator's own git
 // configuration's side effects (signing prompts, hooks).
 func (r *Repo) git(ctx context.Context, dir string, args ...string) (string, error) {
+	return r.gitAs(ctx, r.Member, dir, args...)
+}
+
+// gitAs is git with the given member as the author.
+func (r *Repo) gitAs(ctx context.Context, author, dir string, args ...string) (string, error) {
 	full := append([]string{"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-c", "init.defaultBranch=main"}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = dir
-	name := "member " + r.Member
-	email := r.Member + "@members.conductor.invalid"
+	name := "member " + author
+	email := author + "@members.conductor.invalid"
+	if r.Team && author == r.Member {
+		name, email = "team "+r.Member, r.Member+"@teams.conductor.invalid"
+	}
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME="+name, "GIT_AUTHOR_EMAIL="+email,
 		"GIT_COMMITTER_NAME=conductor", "GIT_COMMITTER_EMAIL=conductor@members.conductor.invalid",
@@ -101,10 +124,23 @@ Correct anything by committing over it — the member reads what is here.
 - episodes/   what happened on each case and what was done (episodic log)
 - handoff/    notes one home session leaves for the next
 `, r.Member)
+	if r.Team {
+		readme = fmt.Sprintf(`# Knowledge of team %s
+
+Shared by every member of the team: each reads it, none writes it directly. A
+member PROPOSES promoting something from its own memory; it lands here as one
+commit authored by that member, once an operator of the team approves it (or
+at once, with knowledge.promotion: direct). Correct anything by committing
+over it.
+
+- knowledge/  durable facts the whole team relies on
+- runbooks/   procedures the whole team follows
+`, r.Member)
+	}
 	if err := os.WriteFile(filepath.Join(r.Dir, "README.md"), []byte(readme), 0o600); err != nil {
 		return err
 	}
-	for _, d := range writableDirs {
+	for _, d := range r.dirs() {
 		if err := os.MkdirAll(filepath.Join(r.Dir, d), 0o700); err != nil {
 			return err
 		}
@@ -118,7 +154,11 @@ Correct anything by committing over it — the member reads what is here.
 	if _, err := r.git(ctx, r.Dir, "add", "-A"); err != nil {
 		return err
 	}
-	_, err := r.git(ctx, r.Dir, "commit", "-q", "-m", "memory: initialize")
+	subject := "memory: initialize"
+	if r.Team {
+		subject = "knowledge: initialize"
+	}
+	_, err := r.git(ctx, r.Dir, "commit", "-q", "-m", subject)
 	return err
 }
 
@@ -203,7 +243,13 @@ func CleanPath(rel string) (string, error) {
 // Write records one file and commits it. mode "replace" overwrites, "append"
 // appends (with a separating newline). trailers become commit trailers.
 func (r *Repo) Write(ctx context.Context, rel, text, mode, subject string, trailers map[string]string) (string, error) {
-	c, err := CleanPath(rel)
+	return r.WriteAs(ctx, r.Member, rel, text, mode, subject, trailers)
+}
+
+// WriteAs is Write with author as the commit's author (a team repo's
+// promotion is authored by the promoting member).
+func (r *Repo) WriteAs(ctx context.Context, author, rel, text, mode, subject string, trailers map[string]string) (string, error) {
+	c, err := r.cleanPath(rel)
 	if err != nil {
 		return "", err
 	}
@@ -256,7 +302,7 @@ func (r *Repo) Write(ctx context.Context, rel, text, mode, subject string, trail
 			}
 		}
 	}
-	if _, err := r.git(ctx, r.Dir, "commit", "-q", "-m", msg, "--", c); err != nil {
+	if _, err := r.gitAs(ctx, author, r.Dir, "commit", "-q", "-m", msg, "--", c); err != nil {
 		return "", err
 	}
 	head := r.headLocked(ctx)
@@ -300,9 +346,28 @@ func (r *Repo) EpisodePath(caseID, title string, created time.Time) string {
 		created.Format("2006-01-02")+"-"+caseID+"-"+Slug(title)+".md")
 }
 
+// cleanPath is CleanPath, held to a team repo's layout for a team repo.
+func (r *Repo) cleanPath(rel string) (string, error) {
+	c, err := CleanPath(rel)
+	if err != nil || !r.Team {
+		return c, err
+	}
+	if top := strings.SplitN(c, "/", 2)[0]; top != DirKnowledge && top != DirRunbooks {
+		return "", fmt.Errorf("team knowledge path %q must be under knowledge/ or runbooks/", rel)
+	}
+	return c, nil
+}
+
+// Head is the repo's current commit (short).
+func (r *Repo) Head(ctx context.Context) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.headLocked(ctx)
+}
+
 // Read returns a memory file's text.
 func (r *Repo) Read(rel string) (string, error) {
-	c, err := CleanPath(rel)
+	c, err := r.cleanPath(rel)
 	if err != nil {
 		if rel != "README.md" {
 			return "", err
@@ -340,7 +405,7 @@ func (r *Repo) Search(query string, limit int) []map[string]string {
 		limit = 20
 	}
 	var out []map[string]string
-	for _, d := range []string{DirKnowledge, DirRunbooks, DirEpisodes, DirHandoff} {
+	for _, d := range r.dirs() {
 		files := r.List(d)
 		if d == DirEpisodes || d == DirHandoff {
 			sort.Sort(sort.Reverse(sort.StringSlice(files)))

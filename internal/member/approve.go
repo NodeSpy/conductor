@@ -120,6 +120,9 @@ type Executor struct {
 	Gate   *Gate
 	// Terraform applies an approved terraform proposal (nil: refused).
 	Terraform *Terraform
+	// Knowledge lands an approved knowledge promotion in its team's repo
+	// (Service.LandApproved; nil: refused).
+	Knowledge func(ctx context.Context, member string, p store.Proposal) (string, error)
 	// RunVerb is flow.Runner.RunSkillVerb: an approved verb runs through the
 	// same chokepoint every agent call does (access, scope, then the gate,
 	// which admits it because ctx carries this approval).
@@ -166,21 +169,27 @@ func (x *Executor) Decide(ctx context.Context, d Decision) (store.Proposal, erro
 		x.audit(map[string]any{"member": d.Member, "proposal": d.Proposal, "operator": d.Operator, "decision": d.Decision, "outcome": "refused", "error": err.Error()})
 		return store.Proposal{}, err
 	}
-	allowed := false
-	for _, op := range cfg.MemberOperators(d.Member) {
-		if op == d.Operator {
-			allowed = true
-		}
-	}
-	if !allowed {
-		return refuse(fmt.Errorf("%q is not an operator of member %s", d.Operator, d.Member))
-	}
-	opCfg := cfg.Operators[d.Operator]
 	rec := x.Ledger.Member(d.Member)
 	p := rec.Proposals[d.Proposal]
 	if p == nil {
 		return refuse(fmt.Errorf("no proposal %s for member %s", d.Proposal, d.Member))
 	}
+	// Who may decide comes from the config now, not from the proposal's
+	// record: the member's operators, or — for a knowledge promotion — its
+	// team's.
+	allowed := false
+	for _, op := range Approvers(cfg, d.Member, *p) {
+		if op == d.Operator {
+			allowed = true
+		}
+	}
+	if !allowed {
+		if p.Kind == KindKnowledge && p.Knowledge != nil {
+			return refuse(fmt.Errorf("%q is not an operator of team %s", d.Operator, p.Knowledge.Team))
+		}
+		return refuse(fmt.Errorf("%q is not an operator of member %s", d.Operator, d.Member))
+	}
+	opCfg := cfg.Operators[d.Operator]
 	verify := x.Verify
 	if verify == nil {
 		verify = VerifyApproval
@@ -218,6 +227,8 @@ func (x *Executor) Decide(ctx context.Context, d Decision) (store.Proposal, erro
 	switch p.Kind {
 	case "verb":
 		out, err = x.execVerb(ctx, d, *p)
+	case KindKnowledge:
+		out, err = x.execKnowledge(ctx, d, *p)
 	case KindTerraform:
 		if x.Terraform == nil {
 			_ = x.setStatus(d.Member, p.ID, "failed", "no terraform runner on this daemon", nil)
@@ -316,6 +327,55 @@ func (x *Executor) execVerb(ctx context.Context, d Decision, p store.Proposal) (
 	if err != nil {
 		return out, err
 	}
+	return out, uerr
+}
+
+// Approvers is who may decide a proposal under cfg: the member's operators;
+// for a knowledge promotion, the operators of the team it promotes into.
+func Approvers(cfg *config.Config, member string, p store.Proposal) []string {
+	if p.Kind == KindKnowledge && p.Knowledge != nil {
+		return cfg.TeamOperators(p.Knowledge.Team)
+	}
+	return cfg.MemberOperators(member)
+}
+
+// execKnowledge lands an approved promotion: exactly the signed text (its
+// hash and the digest re-checked), in the team repo.
+func (x *Executor) execKnowledge(ctx context.Context, d Decision, p store.Proposal) (store.Proposal, error) {
+	fail := func(err error) (store.Proposal, error) {
+		_ = x.setStatus(d.Member, p.ID, "failed", err.Error(), nil)
+		p.Status, p.Reason = "failed", err.Error()
+		return p, err
+	}
+	k := p.Knowledge
+	if k == nil {
+		return fail(errors.New("knowledge proposal without its change"))
+	}
+	digest, err := ActionDigest(d.Member, KindKnowledge, promoteVerb, knowledgeOptions(*k))
+	if err != nil || digest != p.Digest {
+		return fail(errors.New("the promotion does not match the approved digest — not landed"))
+	}
+	if x.Knowledge == nil {
+		return fail(errors.New("no team knowledge on this daemon"))
+	}
+	p.Approver = d.Operator
+	sha, err := x.Knowledge(ctx, d.Member, p)
+	if err != nil {
+		return fail(err)
+	}
+	var out store.Proposal
+	uerr := x.Ledger.UpdateMember(d.Member, func(r *store.MemberRecord) error {
+		q := r.Proposals[p.ID]
+		if q == nil {
+			return nil
+		}
+		q.Status, q.Result = "executed", map[string]any{"commit": sha, "team": k.Team, "path": k.To}
+		if q.Knowledge != nil {
+			q.Knowledge.Landed = sha
+		}
+		out = *q
+		return nil
+	})
 	return out, uerr
 }
 

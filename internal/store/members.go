@@ -80,6 +80,32 @@ type Case struct {
 	// sender's case — where a reply is routed.
 	Peer     string `json:"peer,omitempty"`
 	PeerCase string `json:"peer_case,omitempty"`
+	// Team is the team a team-routed case came in through, and Routing how
+	// it reached this member (or, on a lead's triage case, where it went).
+	// Payload keeps a triage case's event text for its assignee.
+	Team    string   `json:"team,omitempty"`
+	Routing *Routing `json:"routing,omitempty"`
+	Payload string   `json:"payload,omitempty"`
+}
+
+// Routing is a team routing decision, as the case's member records it.
+type Routing struct {
+	Team string `json:"team"`
+	// Via is how the assignee was picked: rule | lead | fallback.
+	Via  string `json:"via"`
+	Rule string `json:"rule,omitempty"` // the matching rule's label
+	// Lead and LeadCase are the triaging lead and its triage case.
+	Lead     string `json:"lead,omitempty"`
+	LeadCase string `json:"lead_case,omitempty"`
+	// Assignee / AssigneeCase: who handles it, and the case it opened there.
+	Assignee     string `json:"assignee,omitempty"`
+	AssigneeCase string `json:"assignee_case,omitempty"`
+	// State is a lead's triage case's: triage (unassigned) | assigned.
+	State string `json:"state,omitempty"`
+	// Reason says why it fell back; Note is the lead's triage note (data).
+	Reason string    `json:"reason,omitempty"`
+	Note   string    `json:"note,omitempty"`
+	At     time.Time `json:"at"`
 }
 
 // Proposal is an action the gate held for operator approval.
@@ -93,6 +119,14 @@ type Proposal struct {
 	Uses string `json:"uses,omitempty"`
 	// Terraform is a terraform proposal's pins and the plan conductor made.
 	Terraform *TerraformPlan `json:"terraform,omitempty"`
+	// Knowledge is a "knowledge" proposal: promoting a file of the member's
+	// memory into its team's knowledge repo.
+	Knowledge *KnowledgeChange `json:"knowledge,omitempty"`
+	// Team is the proposing member's team, and Approvers the operators who
+	// may decide it (the member's; for a knowledge promotion, the team's) —
+	// recorded for display; the daemon re-checks the config at decision.
+	Team      string   `json:"team,omitempty"`
+	Approvers []string `json:"approvers,omitempty"`
 	// Options are the verb's options exactly as proposed (secrets redacted
 	// before they land here — see member.Gate).
 	Options map[string]any `json:"options,omitempty"`
@@ -149,6 +183,19 @@ type TerraformPlan struct {
 	PlannedAt  time.Time `json:"planned_at,omitempty"`
 	// ReplanOf names the proposal this one re-plans (a stale plan's).
 	ReplanOf string `json:"replan_of,omitempty"`
+}
+
+// KnowledgeChange is a promotion of a member's memory file into its team's
+// knowledge repo: the text exactly as proposed (the digest covers its hash).
+type KnowledgeChange struct {
+	Team   string `json:"team"`
+	From   string `json:"from"`             // the member's memory path
+	To     string `json:"to"`               // the team repo path
+	SHA256 string `json:"sha256"`           // of Text
+	Text   string `json:"text"`             // the content that lands
+	Source string `json:"source,omitempty"` // the member repo's commit it was read at
+	Note   string `json:"note,omitempty"`
+	Landed string `json:"landed,omitempty"` // the team repo commit, once it lands
 }
 
 // Worker is one worker launched for a case.

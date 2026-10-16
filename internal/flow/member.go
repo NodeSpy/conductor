@@ -13,6 +13,10 @@ import (
 type MemberRoute struct {
 	Member, Action, Title, Text, Requester string
 	Urgent                                 bool
+	// Team routes to a team instead of Member (its routing: picks the
+	// member); Fields are the event's own fields, for its routing rules.
+	Team   string
+	Fields map[string]any
 	// Source is the event the run is for ("<instance>.<kind>"), stamped by
 	// the runner from the trigger — never from the step's options.
 	Source string
@@ -46,6 +50,12 @@ func (r *Runner) execMember(ctx context.Context, t core.Trigger, step config.Ste
 	if rt.Member, err = render1("name", ms.Name); err != nil {
 		return nil, "", err
 	}
+	if rt.Team, err = render1("team", ms.Team); err != nil {
+		return nil, "", err
+	}
+	if rt.Team != "" {
+		rt.Fields = data
+	}
 	if rt.Title, err = render1("title", ms.Title); err != nil {
 		return nil, "", err
 	}
@@ -59,6 +69,10 @@ func (r *Runner) execMember(ctx context.Context, t core.Trigger, step config.Ste
 		rt.Source = "manual." + t.Variant
 	}
 	if shadow {
+		if rt.Team != "" {
+			r.Log("%s [dry-run] would route to team %s", flowTag(t), rt.Team)
+			return map[string]any{"stubbed": true}, "", nil
+		}
 		r.Log("%s [dry-run] would %s member %s", flowTag(t), rt.Action, rt.Member)
 		return map[string]any{"stubbed": true}, "", nil
 	}
@@ -70,7 +84,7 @@ func (r *Runner) execMember(ctx context.Context, t core.Trigger, step config.Ste
 	if err != nil {
 		outcome = "failed"
 	}
-	r.audit(map[string]any{"event": "member_route", "member": rt.Member, "action": rt.Action, "source": rt.Source, "urgent": rt.Urgent, "outcome": outcome})
+	r.audit(map[string]any{"event": "member_route", "member": rt.Member, "team": rt.Team, "action": rt.Action, "source": rt.Source, "urgent": rt.Urgent, "outcome": outcome})
 	if err != nil {
 		return nil, "", fmt.Errorf("member: %w", err)
 	}

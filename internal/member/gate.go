@@ -448,6 +448,7 @@ func (g *Gate) propose(id flow.SkillIdentity, m config.MemberConfig, tier, uses 
 		}
 		p.RequesterClass = class
 		p.Requester = who
+		p.Team, p.Approvers = string(m.Team), g.Cfg().MemberOperators(id.Member)
 		if cl.worker != nil {
 			p.Worker = cl.worker.ID
 		}
@@ -474,10 +475,24 @@ func (g *Gate) propose(id flow.SkillIdentity, m config.MemberConfig, tier, uses 
 
 // proposalAnswer is what the agent sees instead of the verb's output.
 func proposalAnswer(p store.Proposal, m config.MemberConfig) map[string]any {
+	who := "An operator"
+	if len(p.Approvers) > 0 {
+		who = "An operator (" + strings.Join(p.Approvers, ", ") + ")"
+		if p.Kind == KindKnowledge && p.Team != "" {
+			who = "An operator of team " + p.Team + " (" + strings.Join(p.Approvers, ", ") + ")"
+		}
+	}
 	msg := fmt.Sprintf("Not executed: %s is tier %s for this member, so it is held as proposal %s for operator approval. "+
-		"An operator approves it with `conductor member approve <member> %s`; you cannot approve it yourself. "+
+		"%s approves it with `conductor member approve <member> %s`; you cannot approve it yourself. "+
 		"Tell the operator what it does and why, then continue with other work — `conductor member wait %s` blocks until it is decided.",
-		p.Uses, p.Tier, p.ID, p.ID, p.ID)
+		p.Uses, p.Tier, p.ID, who, p.ID, p.ID)
+	if p.Kind == KindKnowledge {
+		msg = fmt.Sprintf("Not landed yet: your promotion is held as proposal %s. %s approves it with `conductor member approve <member> %s`; you cannot approve it yourself. "+
+			"Until then it is in your memory only. `conductor member wait %s` blocks until it is decided.", p.ID, who, p.ID, p.ID)
+		if p.Reason != "" {
+			msg += " (" + p.Reason + ")"
+		}
+	}
 	if p.Status == "shadow" {
 		msg = fmt.Sprintf("Not executed (shadow mode): %s is tier %s; recorded as shadow proposal %s — what you WOULD do. "+
 			"Shadow proposals are a calibration record and cannot be approved. Write up your reasoning and move on.",

@@ -201,6 +201,13 @@ func (s *Service) member(name string) (config.MemberConfig, error) {
 
 // Start initializes every member and runs its loop until ctx ends.
 func (s *Service) Start(ctx context.Context) {
+	for _, team := range s.Cfg().TeamNames() {
+		if repo := s.TeamRepo(team); repo != nil {
+			if err := repo.Init(ctx); err != nil {
+				s.logf("team %s: knowledge repo: %v", team, err)
+			}
+		}
+	}
 	for _, name := range s.Cfg().MemberNames() {
 		if err := s.Repo(name).Init(ctx); err != nil {
 			s.logf("%s: memory repo: %v", name, err)
@@ -283,6 +290,12 @@ func (s *Service) loop(ctx context.Context, name string) {
 func (s *Service) Tick(ctx context.Context, name string) {
 	m, err := s.member(name)
 	if err != nil {
+		return
+	}
+	s.expireTriage(ctx, name)
+	if err := s.sandboxGate(name, m); err != nil {
+		// Nothing of this member starts until the sandbox does.
+		s.noteSkip(name, err)
 		return
 	}
 	s.maybeSweep(ctx, name, m)
@@ -453,7 +466,11 @@ func (s *Service) deliver(ctx context.Context, name string) {
 // from that note and the ledger, then retire the old one. A launch failure
 // leaves the old session in place.
 func (s *Service) Rotate(ctx context.Context, name, reason string) error {
-	if _, err := s.member(name); err != nil {
+	m, err := s.member(name)
+	if err != nil {
+		return err
+	}
+	if err := s.sandboxGate(name, m); err != nil {
 		return err
 	}
 	if s.Home == nil {
@@ -569,21 +586,7 @@ func (s *Service) waitSettled(ctx context.Context, name, agentID string) {
 func RequesterClass(cfg *config.Config, member, requester string) (string, string) {
 	// Matching is EXACT: a requester string that only resembles an operator's
 	// name or alias (padding, case, a prefix) is a third party.
-	r := requester
-	if strings.TrimSpace(r) == "" {
-		return "", ReqEvent
-	}
-	for _, op := range cfg.MemberOperators(member) {
-		if r == op || r == "operator:"+op {
-			return op, ReqOperator
-		}
-		for _, a := range cfg.Operators[op].Aliases {
-			if r == a {
-				return op, ReqOperator
-			}
-		}
-	}
-	return r, ReqUser
+	return classifyAgainst(cfg, cfg.MemberOperators(member), requester)
 }
 
 // Deliver routes an event into a member: a case, an inbox message, and —
@@ -593,19 +596,17 @@ func (s *Service) Deliver(ctx context.Context, ev Event) (string, error) {
 	if _, err := s.member(ev.Member); err != nil {
 		return "", err
 	}
-	cfg := s.Cfg()
-	who, class := RequesterClass(cfg, ev.Member, ev.Requester)
-	title := oneLine(ev.Title, 200)
-	if title == "" {
-		title = oneLine(ev.Text, 120)
-	}
-	if title == "" {
-		title = "event from " + ev.Source
-	}
-	src := ev.Source
-	if src == "" {
-		src = "unknown"
-	}
+	who, class := RequesterClass(s.Cfg(), ev.Member, ev.Requester)
+	return s.deliverCase(ctx, ev, who, class, nil, "")
+}
+
+// deliverCase opens a case attributed to (who, class) — already decided by
+// the caller, never by the event — with its routing record, if team-routed,
+// and delivers it: the inbox, and a worker at once for an urgent event. A
+// pre is a conductor line shown with the event (a lead's fenced note).
+func (s *Service) deliverCase(ctx context.Context, ev Event, who, class string, rt *store.Routing, pre string) (string, error) {
+	title := eventTitle(ev.Title, ev.Text, ev.Source)
+	src := srcOr(ev.Source)
 	now := s.now()
 	var c store.Case
 	err := s.Ledger.UpdateMember(ev.Member, func(r *store.MemberRecord) error {
@@ -615,6 +616,11 @@ func (s *Service) Deliver(ctx context.Context, ev Event) (string, error) {
 		}
 		cc := &store.Case{ID: id, Title: title, Status: "open", Urgent: ev.Urgent, Source: src,
 			Requester: who, RequesterClass: class, Created: now, Updated: now}
+		if rt != nil {
+			cp := *rt
+			cp.AssigneeCase = id
+			cc.Team, cc.Routing = rt.Team, &cp
+		}
 		r.Cases[id] = cc
 		c = *cc
 		return nil
@@ -622,7 +628,11 @@ func (s *Service) Deliver(ctx context.Context, ev Event) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	s.audit(map[string]any{"event": "member_event", "member": ev.Member, "case": c.ID, "source": src, "requester": who, "requester_class": class, "urgent": ev.Urgent})
+	ae := map[string]any{"event": "member_event", "member": ev.Member, "case": c.ID, "source": src, "requester": who, "requester_class": class, "urgent": ev.Urgent}
+	if rt != nil {
+		ae["team"], ae["via"] = rt.Team, rt.Via
+	}
+	s.audit(ae)
 	note := ""
 	if ev.Urgent {
 		brief := "URGENT event — triage it now. Investigate, act within your autonomy, propose anything beyond it, and escalate per your charter if needed. Report what you found and did.\n\n" + EventMessage(c, ev.Text, "")
@@ -632,6 +642,9 @@ func (s *Service) Deliver(ctx context.Context, ev Event) (string, error) {
 		} else {
 			note = fmt.Sprintf("(Urgent: conductor already started worker %s on this case; it will report here.)", w.ID)
 		}
+	}
+	if rt != nil {
+		note = strings.TrimSpace(RoutingNote(c) + "\n" + pre + "\n" + note)
 	}
 	s.enqueue(ev.Member, c.ID, EventMessage(c, ev.Text, note))
 	return c.ID, nil
@@ -687,6 +700,12 @@ func (s *Service) Spawn(ctx context.Context, c Actor, req SpawnRequest) (store.W
 	}
 	if req.Group != "" && req.Handoff {
 		return store.Worker{}, errors.New("a hand-off worker is not part of a fan-out group")
+	}
+	if req.Handoff && !m.Isolation.HandoffAllowed() {
+		return store.Worker{}, fmt.Errorf("hand-off workers are off for member %s (isolation.handoff_workers: false%s) — spawn a cli worker", c.Member, teamSuffix(m))
+	}
+	if err := s.sandboxGate(c.Member, m); err != nil {
+		return store.Worker{}, err
 	}
 	now := s.now()
 	var w store.Worker
@@ -992,6 +1011,12 @@ func (s *Service) finishWorker(ctx context.Context, name string, w store.Worker,
 	}
 	s.audit(map[string]any{"event": "member_worker", "member": name, "worker": w.ID, "case": w.CaseID, "group": w.Group, "action": status})
 	switch {
+	case isTriage(cs):
+		// A triage worker reports by assigning; the lead's conversation is
+		// not told about every routed event. Unassigned, it falls back.
+		if cs.Routing.State == "triage" {
+			s.triageFallback(ctx, name, cs.ID, "the triage worker finished ("+status+") without assigning")
+		}
 	case w.Group == "":
 		s.enqueue(name, w.CaseID, fmt.Sprintf("[conductor] worker %s on case %s finished (%s):\n%s", w.ID, w.CaseID, status, fence("WORKER REPORT", summary)))
 	case group != nil:

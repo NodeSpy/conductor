@@ -132,9 +132,20 @@ func (s *Service) StartSweep(ctx context.Context, name string, byOperator bool) 
 	if !byOperator && p.Quiet(now) {
 		return store.Sweep{}, fmt.Errorf("%w: quiet hours (%s)", ErrSweepSkipped, p.QuietHours)
 	}
+	if err := s.sandboxGate(name, m); err != nil {
+		return store.Sweep{}, fmt.Errorf("%w: %v", ErrSweepSkipped, err)
+	}
 	checklist, err := s.Cfg().MemberChecklist(name)
 	if err != nil {
 		return store.Sweep{}, err
+	}
+	// A team's pool spans its members' ledgers: one team lock holds while
+	// one member checks it and records its sweep, so two teammates cannot
+	// both take the last slot.
+	if team, _, ok := s.Cfg().TeamOf(name); ok {
+		tl := s.lock("team:" + team)
+		tl.Lock()
+		defer tl.Unlock()
 	}
 	var sw store.Sweep
 	var w store.Worker
@@ -146,6 +157,9 @@ func (s *Service) StartSweep(ctx context.Context, name string, byOperator bool) 
 			}
 		}
 		if why := sweepBudget(p, *r, now); why != "" {
+			return fmt.Errorf("%w: %s", ErrSweepSkipped, why)
+		}
+		if why := s.teamPool(name, *r); why != "" {
 			return fmt.Errorf("%w: %s", ErrSweepSkipped, why)
 		}
 		live := 0

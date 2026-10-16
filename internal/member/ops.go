@@ -108,8 +108,12 @@ func (s *Service) agentOp(ctx context.Context, c Actor, sub string, args map[str
 	switch sub {
 	case "whoami":
 		rec := s.Ledger.Member(c.Member)
-		return map[string]any{"member": c.Member, "role": c.Role, "case": c.CaseID,
-			"open_work": LedgerSummary(rec), "autonomy": AutonomySummary(s.Cfg(), c.Member)}, nil
+		out := map[string]any{"member": c.Member, "role": c.Role, "case": c.CaseID,
+			"open_work": LedgerSummary(rec), "autonomy": AutonomySummary(s.Cfg(), c.Member)}
+		if team, _, ok := s.Cfg().TeamOf(c.Member); ok {
+			out["team"] = team
+		}
+		return out, nil
 	case "remember":
 		sha, err := s.WriteMemory(ctx, c, str(args, "path"), str(args, "text"), boolArg(args, "append"), str(args, "case"))
 		if err != nil {
@@ -178,6 +182,10 @@ func (s *Service) agentOp(ctx context.Context, c Actor, sub string, args map[str
 		return map[string]any{"ok": true}, nil
 	case "peers":
 		return map[string]any{"peers": s.Peers(c.Member)}, nil
+	case "team":
+		return s.teamOp(ctx, c, args)
+	case "assign":
+		return s.Assign(ctx, c, str(args, "case"), str(args, "to"), str(args, "note"))
 	case "handoff":
 		sha, err := s.Handoff(ctx, c, str(args, "text"))
 		if err != nil {
@@ -218,6 +226,34 @@ func (s *Service) agentOp(ctx context.Context, c Actor, sub string, args map[str
 		return nil, fmt.Errorf("a member session cannot decide proposals — only an operator can, with a signed `conductor member approve` on the operator socket")
 	}
 	return nil, fmt.Errorf("unknown member op %q", sub)
+}
+
+// teamOp serves `conductor member team [read|recall|promote]`.
+func (s *Service) teamOp(ctx context.Context, c Actor, args map[string]any) (map[string]any, error) {
+	switch a := str(args, "action"); a {
+	case "", "info":
+		return s.TeamInfo(ctx, c.Member)
+	case "read":
+		text, err := s.TeamRead(ctx, c.Member, str(args, "path"))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"path": str(args, "path"), "text": text}, nil
+	case "recall":
+		hits, err := s.TeamRecall(ctx, c.Member, str(args, "query"))
+		if err != nil {
+			return nil, err
+		}
+		out := make([]any, 0, len(hits))
+		for _, h := range hits {
+			out = append(out, map[string]any{"path": h["path"], "line": h["line"]})
+		}
+		return map[string]any{"hits": out, "count": len(out)}, nil
+	case "promote":
+		return s.Promote(ctx, c, str(args, "path"), str(args, "to"), str(args, "note"))
+	default:
+		return nil, fmt.Errorf("unknown team action %q (info, read, recall, promote)", a)
+	}
 }
 
 // Proposals lists a member's proposals (pending first, newest first).
@@ -294,7 +330,10 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 		cp.Identity = nil
 		out := toMap(cp)
 		out["action"] = ProposalAction(cp)
-		out["operators"] = cfg.MemberOperators(name)
+		out["operators"] = Approvers(cfg, name, cp)
+		if cp.Knowledge != nil {
+			out["text"] = cp.Knowledge.Text
+		}
 		return out, nil
 	case "decide":
 		if err := need(); err != nil {
@@ -356,6 +395,18 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 			return nil, err
 		}
 		return map[string]any{"sweeps": toList(s.Sweeps(name, 20))}, nil
+	case "teams":
+		var out []any
+		for _, t := range cfg.TeamNames() {
+			out = append(out, s.teamStatus(ctx, t, false))
+		}
+		return map[string]any{"teams": out}, nil
+	case "team":
+		t := str(args, "team")
+		if _, ok := cfg.Teams[t]; !ok {
+			return nil, fmt.Errorf("unknown team %q", t)
+		}
+		return s.teamStatus(ctx, t, true), nil
 	case "consolidate":
 		w, err := s.Consolidate(ctx, name)
 		if err != nil {
@@ -367,6 +418,74 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 		return map[string]any{"worker": w.ID, "case": w.CaseID}, nil
 	}
 	return nil, fmt.Errorf("unknown member command %q", sub)
+}
+
+// teamStatus is a team for the operator: members, lead, routing, knowledge,
+// the proactive pool's use, and (full) recent routed cases and the
+// knowledge log.
+func (s *Service) teamStatus(ctx context.Context, team string, full bool) map[string]any {
+	cfg := s.Cfg()
+	t := cfg.Teams[team]
+	peers := "team"
+	if t.Peers == "none" {
+		peers = "none"
+	}
+	out := map[string]any{"team": team, "description": t.Description, "members": cfg.TeamMembers(team),
+		"operators": cfg.TeamOperators(team), "peers": peers}
+	if r := t.Routing; r != nil {
+		rules := make([]any, 0, len(r.Rules))
+		for i, rule := range r.Rules {
+			rules = append(rules, map[string]any{"rule": rule.Label(i), "match": rule.Match, "to": rule.To})
+		}
+		out["routing"] = map[string]any{"lead": r.Lead, "fallback": r.Fallback, "rules": rules, "timeout": r.TimeoutD().String()}
+	}
+	if pool := t.Budget.Proactive; pool != nil {
+		runs, cost := 0, 0.0
+		for _, n := range cfg.TeamMembers(team) {
+			for _, sw := range s.Ledger.Member(n).Sweeps {
+				if s.now().Sub(sw.Started) < SweepWindow {
+					runs++
+					cost += sw.CostUSD
+				}
+			}
+		}
+		out["proactive_pool"] = map[string]any{"runs_24h": runs, "cost_24h": cost, "max_runs_per_day": pool.MaxRunsPerDay, "max_cost_per_day": pool.MaxCostPerDay}
+	}
+	if repo := s.TeamRepo(team); repo != nil {
+		k := map[string]any{"repo": repo.Dir, "promotion": t.Knowledge.PromotionMode()}
+		if full {
+			k["log"] = repo.Log(ctx, 10)
+		}
+		out["knowledge"] = k
+	}
+	if full {
+		var routed []any
+		for _, n := range cfg.TeamMembers(team) {
+			for _, c := range s.Cases(n, true) {
+				if c.Team != team || c.Routing == nil {
+					continue
+				}
+				routed = append(routed, map[string]any{"member": n, "case": c.ID, "title": c.Title, "status": c.Status,
+					"via": c.Routing.Via, "rule": c.Routing.Rule, "lead": c.Routing.Lead, "lead_case": c.Routing.LeadCase,
+					"assignee": c.Routing.Assignee, "assignee_case": c.Routing.AssigneeCase, "state": c.Routing.State,
+					"requester": c.Requester, "requester_class": c.RequesterClass, "created": c.Created.Format(time.RFC3339)})
+			}
+		}
+		if len(routed) > 30 {
+			routed = routed[:30]
+		}
+		out["routed"] = routed
+		var pending []any
+		for _, n := range cfg.TeamMembers(team) {
+			for _, p := range s.Proposals(n, false) {
+				if p.Kind == KindKnowledge {
+					pending = append(pending, map[string]any{"member": n, "proposal": p.ID, "status": p.Status, "action": ProposalAction(p)})
+				}
+			}
+		}
+		out["knowledge_proposals"] = pending
+	}
+	return out
 }
 
 func (s *Service) statusOf(name string) map[string]any {
@@ -408,6 +527,15 @@ func (s *Service) statusOf(name string) map[string]any {
 	}
 	if peers := s.Peers(name); len(peers) > 0 {
 		out["peers"] = peers
+	}
+	if m.Team != "" {
+		out["team"] = string(m.Team)
+	}
+	if m.Isolation.SandboxRequired() {
+		out["sandbox_required"] = true
+	}
+	if m.Browser != nil {
+		out["browser"] = map[string]any{"logins": m.Browser.Logins, "credentials": m.Browser.Credentials}
 	}
 	delete(out, "worker_role")
 	return out

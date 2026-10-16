@@ -43,6 +43,8 @@ const memberUsage = `usage:
     conductor member replan <member> <id>          # re-plan a stale terraform proposal
     conductor member sweep <member>                # run a proactive sweep now (budget still applies)
     conductor member sweeps <member>
+    conductor member teams
+    conductor member team <team>                   # members, routing, routed cases, knowledge, pool
   from a member session:
     conductor member whoami
     conductor member remember --path knowledge/<f>.md --text "…" [--append]
@@ -60,6 +62,10 @@ const memberUsage = `usage:
     conductor member join (<group> | --case <id> --group <label>) [--timeout 30m]
     conductor member ask <member> [--case <id>] "<text>"     # a linked peer member
     conductor member peers
+    conductor member team                                     # your team: teammates, lead, knowledge
+    conductor member team recall <words…> | team read <path>  # the team's shared knowledge
+    conductor member team promote --path knowledge/<f>.md [--to <team path>] [--note "…"]
+    conductor member assign <case> <member> [--note "…"]      # the team's lead hands a triage case to a teammate
     conductor member handoff --text "…"
     conductor member propose-terraform --repo <name> --commit <full sha> [--dir <root module>] [--workspace <ws>] [--var-file <f>]… [--target <addr>]… [--summary "…"]
     conductor member replan <proposal>
@@ -103,7 +109,7 @@ func memberFlags(args []string) (pos []string, flags map[string]string, files []
 
 var operatorOnly = map[string]bool{"ls": true, "list": true, "show": true, "workers": true, "proposal": true,
 	"approve": true, "deny": true, "rotate": true, "say": true, "deliver": true, "consolidate": true,
-	"sweep": true, "sweeps": true}
+	"sweep": true, "sweeps": true, "teams": true}
 
 func cmdMember(args []string) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
@@ -213,6 +219,24 @@ func memberAgent(sub string, args []string) error {
 				return printJSON(out)
 			}
 		}
+	case "team":
+		if len(pos) > 0 {
+			a["action"] = pos[0]
+			switch pos[0] {
+			case "recall":
+				a["query"] = strings.Join(pos[1:], " ")
+			case "read":
+				if len(pos) != 2 {
+					return fmt.Errorf("usage: conductor member team read <path>")
+				}
+				a["path"] = pos[1]
+			}
+		}
+	case "assign":
+		if len(pos) != 2 {
+			return fmt.Errorf("usage: conductor member assign <case> <member> [--note \"…\"]")
+		}
+		a["case"], a["to"] = pos[0], pos[1]
 	case "recall":
 		a["query"] = strings.Join(pos, " ")
 	case "read":
@@ -351,6 +375,12 @@ func memberOperator(sub string, args []string) error {
 			return err
 		}
 		return printMemberList(out)
+	case "teams":
+	case "team":
+		if len(pos) != 1 {
+			return fmt.Errorf("usage: conductor member team <team>")
+		}
+		a["team"] = pos[0]
 	case "show", "cases", "workers", "proposals", "rotate", "consolidate", "sweep", "sweeps":
 		if err := needMember(1); err != nil {
 			return err

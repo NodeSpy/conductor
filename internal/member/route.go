@@ -14,6 +14,12 @@ var _ flow.MemberRouter = (*Service)(nil)
 
 // RouteMember implements flow.MemberRouter: the `member:` helper step.
 func (s *Service) RouteMember(ctx context.Context, r flow.MemberRoute) (map[string]any, error) {
+	if r.Team != "" {
+		if r.Action != "" && r.Action != "deliver" {
+			return nil, fmt.Errorf("a team is routed deliveries, not %s", r.Action)
+		}
+		return s.RouteTeam(ctx, TeamEvent{Team: r.Team, Source: r.Source, Requester: r.Requester, Title: r.Title, Text: r.Text, Urgent: r.Urgent, Fields: r.Fields})
+	}
 	switch r.Action {
 	case "", "deliver":
 		id, err := s.Deliver(ctx, Event{Member: r.Member, Source: r.Source, Requester: r.Requester, Title: r.Title, Text: r.Text, Urgent: r.Urgent})

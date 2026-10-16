@@ -199,6 +199,7 @@ func (t *Terraform) Propose(ctx context.Context, c Actor, req TerraformRequest) 
 				VarFiles: append([]string(nil), req.VarFiles...), Targets: append([]string(nil), req.Targets...), ReplanOf: req.ReplanOf},
 			Summary: req.Summary, Role: c.Role, Agent: c.Agent, Dispatch: c.Dispatch, Worker: worker,
 			Requester: who, RequesterClass: class, Status: "planning", Created: now, Expires: now.Add(m.Autonomy.TTL()),
+			Team: string(m.Team), Approvers: t.Cfg().MemberOperators(c.Member),
 		}
 		if cc := r.Cases[caseID]; cc != nil {
 			cc.Proposals = append(cc.Proposals, p.ID)

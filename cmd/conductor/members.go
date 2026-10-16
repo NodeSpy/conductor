@@ -90,6 +90,7 @@ func buildMembers(cfg *config.Config, st *store.Store, runner *flow.Runner, reg 
 	}
 	registerSandboxSessions(svc)
 	gate.OnProposal = svc.OnProposal
+	exec.Knowledge = svc.LandApproved
 	exec.Notify = svc.OnDecision
 	if tf != nil {
 		tf.OnPlanned = svc.OnProposal

@@ -49,7 +49,7 @@ func (s *Service) Ask(ctx context.Context, c Actor, to, text, caseID string) (ma
 		return refuse(err)
 	}
 	if !s.Cfg().MemberLinked(from, to) {
-		return refuse(fmt.Errorf("member %s is not linked with %s — an operator links members (peers: on both sides, or member_links:)", from, to))
+		return refuse(fmt.Errorf("member %s is not linked with %s — teammates peer unless their team sets peers: none; anyone else, an operator links (peers: on both sides, or member_links:)", from, to))
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
