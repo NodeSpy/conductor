@@ -689,8 +689,14 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 		}
 		out["login_sites_opted_in"] = opted
 		out["login_sites_granted"] = granted
+		// What a browser runs in, and evaluate as it stands for the current
+		// one — before any browser is started too.
+		out["isolation"] = plannedIsolation(st, runtime.GOOS)
 		if s.active != nil {
 			out["isolation"] = s.active.proc.Isolation()
+			if s.active.filled() {
+				out["evaluate"] = EvaluateOff + " (a credential was filled in this browser)"
+			}
 		}
 		out["allow"] = allowFor(c, st)
 		return out, nil
@@ -994,6 +1000,20 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 
 // deny are the workspace paths the browser's files may not touch.
 func (c Principal) deny() []string { return c.Deny }
+
+// plannedIsolation is what the next browser runs in.
+func plannedIsolation(st Settings, goos string) string {
+	switch {
+	case st.Unavailable != "":
+		return "none: " + st.Unavailable
+	case st.Engine != nil:
+		return "container"
+	case goos == "darwin":
+		return "seatbelt"
+	default:
+		return "namespace"
+	}
+}
 
 // evalMode is the caller's evaluate: read-only only for an identity the
 // operator opted in.

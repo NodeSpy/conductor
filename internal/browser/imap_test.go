@@ -133,3 +133,20 @@ func TestEmailCodeTLS(t *testing.T) {
 		t.Fatal("plaintext to a remote mailbox")
 	}
 }
+
+// TestEmailCodeLaxServer: a server whose SEARCH ignores its criteria still
+// yields only the configured sender's message with the configured subject.
+func TestEmailCodeLaxServer(t *testing.T) {
+	mb := fakeMailbox(t, nil)
+	mb.Lax = true
+	now := time.Now()
+	mb.Deliver("Test Site <no-reply@testsite.example>", "Your sign-in code", "your code is 222222", now)
+	mb.Deliver("Test Site <no-reply@testsite.example>", "Newsletter", "your code is 777777", now)
+	mb.Deliver("Evil <no-reply@testsite.example.evil>", "Your sign-in code", "your code is 666666", now)
+	box := Mailbox{Name: "inbox", Addr: mb.Addr(), PlainLoopback: true}
+	ec := EmailCode{Mailbox: "inbox", From: "no-reply@testsite.example", Subject: "sign-in code", Code: codeRE, Wait: time.Second}
+	code, _, err := fetchEmailCode(context.Background(), box, ec, mb.User, mb.Pass, now.Add(-time.Minute), map[string]bool{})
+	if err != nil || code != "222222" {
+		t.Fatalf("lax server: %q %v", code, err)
+	}
+}

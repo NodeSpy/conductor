@@ -93,6 +93,14 @@ func TestProxyHostsExactlyAsBound(t *testing.T) {
 	if c := get([]string{"127.0.0.1:" + port, "app.example:" + port}, "http://app.example:"+port+"/", rebind); c != 403 {
 		t.Fatalf("a name rebinding to a listed literal must not inherit it: %d", c)
 	}
+	// localhost is loopback, whatever a resolver (a hosts file, a DNS
+	// answer) says.
+	hosts := func(_ context.Context, host string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: net.ParseIP("10.1.2.3")}}, nil
+	}
+	if c := get([]string{"localhost:" + port}, "http://localhost:"+port+"/", hosts); c != 200 {
+		t.Fatalf("localhost resolved by the resolver: %d", c)
+	}
 	if c := get([]string{"[::1]:" + port}, "http://127.0.0.1:"+port+"/", nil); c != 403 {
 		t.Fatalf("[::1] bound must not imply 127.0.0.1: %d", c)
 	}

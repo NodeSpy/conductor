@@ -42,7 +42,9 @@ type ContainerEngine struct {
 
 // FindEngine finds a container engine: pref (docker | podman | a path)
 // when set, else Docker (Docker Desktop, colima) then podman on macOS,
-// podman then docker elsewhere.
+// podman then docker elsewhere. It mirrors the container backend's
+// agentsandbox.ResolveEngine (feat/agent-container) and becomes a call to
+// it once both have landed.
 func FindEngine(pref, goos string, lookPath func(string) (string, error), env []string) (*ContainerEngine, error) {
 	order := []string{"podman", "docker"}
 	if goos == "darwin" {
@@ -67,7 +69,8 @@ func FindEngine(pref, goos string, lookPath func(string) (string, error), env []
 
 // engineEnv keeps what an engine CLI needs to find its engine.
 func engineEnv(env []string) []string {
-	keep := map[string]bool{"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "TMPDIR": true, "XDG_RUNTIME_DIR": true, "XDG_CONFIG_HOME": true, "XDG_DATA_HOME": true}
+	keep := map[string]bool{"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "TMPDIR": true, "XDG_RUNTIME_DIR": true,
+		"XDG_CONFIG_HOME": true, "XDG_DATA_HOME": true, "DBUS_SESSION_BUS_ADDRESS": true}
 	var out []string
 	for _, kv := range env {
 		k, _, _ := strings.Cut(kv, "=")
@@ -76,6 +79,15 @@ func engineEnv(env []string) []string {
 		}
 	}
 	return out
+}
+
+// Ping reports whether the engine answers: Docker Desktop installed but
+// not running is no engine.
+func (e *ContainerEngine) Ping(ctx context.Context) error {
+	if out, err := e.cmd(ctx, "version").CombinedOutput(); err != nil {
+		return fmt.Errorf("browser: container engine %s is installed but not answering: %v: %s", e.Bin, err, clip(strings.TrimSpace(string(out)), 300))
+	}
+	return nil
 }
 
 func (e *ContainerEngine) cmd(ctx context.Context, args ...string) *exec.Cmd {

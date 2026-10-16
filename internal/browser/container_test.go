@@ -154,3 +154,20 @@ func TestLaunchSeatbeltWindow(t *testing.T) {
 		t.Fatalf("the operator's window: %+v", p)
 	}
 }
+
+func TestPlannedIsolation(t *testing.T) {
+	for _, c := range []struct {
+		st   Settings
+		goos string
+		want string
+	}{
+		{Settings{}, "linux", "namespace"},
+		{Settings{}, "darwin", "seatbelt"},
+		{Settings{Engine: &ContainerEngine{}}, "darwin", "container"},
+		{Settings{Engine: &ContainerEngine{}, Unavailable: "being prepared"}, "darwin", "none: being prepared"},
+	} {
+		if got := plannedIsolation(c.st, c.goos); got != c.want {
+			t.Errorf("%+v %s: %s", c.st, c.goos, got)
+		}
+	}
+}

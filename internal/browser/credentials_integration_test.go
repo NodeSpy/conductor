@@ -340,6 +340,9 @@ func TestCredentialRedaction(t *testing.T) {
 	if err := r.fail(c, "evaluate", map[string]any{"expr": "document.title"}); !strings.Contains(err.Error(), "credential was filled") {
 		t.Fatalf("evaluate after a fill: %v", err)
 	}
+	if st := r.do(c, "status", nil); !strings.HasPrefix(fmt.Sprint(st["evaluate"]), "off") {
+		t.Fatalf("status after a fill says evaluate is %v", st["evaluate"])
+	}
 	shot := r.do(c, "screenshot", map[string]any{"path": "code.png"})
 	b, _ := os.ReadFile(filepath.Join(r.ws, shot["path"].(string)))
 	img, err := png.Decode(bytes.NewReader(b))

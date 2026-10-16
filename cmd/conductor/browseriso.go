@@ -50,7 +50,13 @@ func applyIso(st browser.Settings) browser.Settings {
 // decideBrowserIso decides, then prepares the container in the background.
 func decideBrowserIso(ctx context.Context, b *config.BrowserConfig, logf func(string, ...any)) {
 	isoDecide(ctx, b, runtime.GOOS, func() (*browser.ContainerEngine, error) {
-		return browser.FindEngine(b.ContainerEngine, runtime.GOOS, exec.LookPath, os.Environ())
+		e, err := browser.FindEngine(b.ContainerEngine, runtime.GOOS, exec.LookPath, os.Environ())
+		if err != nil {
+			return nil, err
+		}
+		pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		return e, e.Ping(pctx)
 	}, prepareContainer, logf)
 }
 

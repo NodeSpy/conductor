@@ -17,6 +17,9 @@ import (
 // codes, recording every command so a test can see exactly what was read.
 type Mailbox struct {
 	User, Pass string
+	// Lax: SEARCH ignores its criteria and returns every message (a server
+	// conductor must not rely on).
+	Lax bool
 
 	mu       sync.Mutex
 	msgs     []mailMsg
@@ -131,7 +134,7 @@ func (m *Mailbox) conn(c net.Conn) {
 			var hits []string
 			m.mu.Lock()
 			for _, msg := range m.msgs {
-				if strings.Contains(strings.ToLower(msg.from), from) && strings.Contains(strings.ToLower(msg.subject), subj) {
+				if m.Lax || strings.Contains(strings.ToLower(msg.from), from) && strings.Contains(strings.ToLower(msg.subject), subj) {
 					hits = append(hits, strconv.Itoa(msg.uid))
 				}
 			}
