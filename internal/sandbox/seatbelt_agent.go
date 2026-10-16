@@ -176,6 +176,10 @@ func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string
 		b.WriteString("(allow mach-register (global-name-regex " + browserRendezvous + ") (global-name-regex " + browserCrashpad + "))\n")
 		b.WriteString("(allow iokit-open (iokit-user-client-class \"IOSurfaceRootUserClient\") (iokit-user-client-class \"RootDomainUserClient\"))\n")
 		b.WriteString("(allow ipc-posix-shm)\n(allow process-info*)\n(allow user-preference-read)\n")
+		if a.Window {
+			// PROBE: report what a window uses.
+			b.WriteString("(allow (with report) mach-lookup)\n(allow (with report) iokit-open)\n(allow (with report) mach-register)\n")
+		}
 		b.WriteString("(deny mach-lookup")
 		for _, s := range agentMachKeychain {
 			b.WriteString("\n  (global-name " + sbplString(s) + ")")

@@ -226,7 +226,7 @@ func launch(spec LaunchSpec, goos string) (*Process, error) {
 		closeFn = func() { closeProxy(); os.RemoveAll(shortTmp) }
 		deps.ExtraBinds = append(deps.ExtraBinds, sandbox.BindMount{Path: shortTmp})
 		deps.EgressAddr = func([]string) (string, string, func(), error) { return proxyAddr, "", nil, nil }
-		deps.Agent = &sandbox.AgentProfile{Browser: true, Home: spec.RealHome}
+		deps.Agent = &sandbox.AgentProfile{Browser: true, Window: spec.Headed, Home: spec.RealHome}
 	} else {
 		sock, c, err := spec.Proxy.TrustedUnixEndpoint(spec.Allow)
 		if err != nil {

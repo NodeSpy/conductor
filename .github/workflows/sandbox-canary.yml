@@ -91,15 +91,22 @@ jobs:
         run: |
           go test -count=1 -timeout 30m -v -run 'TestBrowser[A-Z]|TestCredential[A-Z]|TestContainer' ./internal/browser/
           docker ps -a --filter label=conductor.browser=1 --format '{{.Names}}' | xargs -r docker rm -f
-      - name: the operator's takeover in a real window (a virtual display)
-        if: runner.os == 'Linux'
+      - name: the operator's takeover in a real window (Linux a virtual display, macOS the runner's window server)
         shell: bash
         env:
           CONDUCTOR_REQUIRE_BROWSER: "1"
           CONDUCTOR_TEST_HEADED: "1"
         run: |
-          command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -yq xvfb; }
-          xvfb-run -a go test -count=1 -v -run 'TestHeadedTakeover' ./internal/browser/
+          if [ "$RUNNER_OS" = Linux ]; then
+            command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -yq xvfb; }
+            xvfb-run -a go test -count=1 -v -run 'TestHeadedTakeover' ./internal/browser/
+          else
+            go test -count=1 -v -run 'TestHeadedTakeover' ./internal/browser/
+          fi
+      - name: PROBE what a headed window uses on macOS
+        if: always() && runner.os == 'macOS'
+        run: |
+          log show --last 10m --style compact --predicate 'eventMessage CONTAINS "allow"' 2>/dev/null | grep -i -E 'chrom|google' | grep -E 'mach-lookup|mach-register|iokit-open' | sed -E 's/^.*(allow [a-z-]+ .*)$/\1/; s/[0-9]+/N/g' | sort | uniq -c | sort -rn | head -120 || true
       - name: the macOS sandbox's denials for the browser
         if: always() && runner.os == 'macOS'
         run: |

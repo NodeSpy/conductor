@@ -1,11 +1,10 @@
-//go:build linux
-
 package browser
 
 import (
 	"context"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,12 +13,12 @@ import (
 )
 
 // TestHeadedTakeoverOnAVirtualDisplay: the operator's takeover in a real
-// window (on Xvfb in CI): a headed, sandboxed Chromium whose jail shows the
-// display socket and nothing of the home seeds a session and registers a
-// passkey. CONDUCTOR_TEST_HEADED=1 with DISPLAY set.
+// window (Linux: on Xvfb in CI, the jail showing the display socket; macOS:
+// the runner's own window server, through the headed Seatbelt variant): a
+// headed, sandboxed Chromium seeds a session and registers a passkey.
 func TestHeadedTakeoverOnAVirtualDisplay(t *testing.T) {
-	if os.Getenv("CONDUCTOR_TEST_HEADED") != "1" || os.Getenv("DISPLAY") == "" {
-		t.Skip("CONDUCTOR_TEST_HEADED=1 with a DISPLAY (xvfb-run) runs the headed takeover")
+	if os.Getenv("CONDUCTOR_TEST_HEADED") != "1" || (runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "") {
+		t.Skip("CONDUCTOR_TEST_HEADED=1 (on Linux with a DISPLAY: xvfb-run) runs the headed takeover")
 	}
 	chrome := requireBrowser(t)
 	site := browsertest.New()
@@ -28,9 +27,11 @@ func TestHeadedTakeoverOnAVirtualDisplay(t *testing.T) {
 	port := srv.URL[strings.LastIndex(srv.URL, ":")+1:]
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	k, err := StartTakeover(ctx, LaunchSpec{Chrome: chrome, Dir: t.TempDir(), Allow: []string{"localhost:" + port}, SelfExe: selfExe(t),
-		Headed: true, Display: []string{"DISPLAY=" + os.Getenv("DISPLAY")}, Show: []string{"/tmp/.X11-unix"},
-		Args: []string{"--ozone-platform=x11"}, Stderr: &Ring{}},
+	spec := LaunchSpec{Chrome: chrome, Dir: t.TempDir(), Allow: []string{"localhost:" + port}, SelfExe: selfExe(t), Headed: true, Stderr: &Ring{}}
+	if runtime.GOOS == "linux" {
+		spec.Display, spec.Show, spec.Args = []string{"DISPLAY=" + os.Getenv("DISPLAY")}, []string{"/tmp/.X11-unix"}, []string{"--ozone-platform=x11"}
+	}
+	k, err := StartTakeover(ctx, spec,
 		[]Cookie{{Name: "sid", Value: site.Session(), Domain: "localhost", Path: "/"}})
 	if err != nil {
 		t.Fatal(err)
