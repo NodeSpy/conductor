@@ -115,6 +115,8 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	cwd := ""         // --cwd: a base checkout paseo derives the forge repo from
 	worktreeWS := ""  // pre-created isolated worktree workspace id (pinned via --workspace)
 	worktreeCwd := "" // that worktree's local path (RunRef.Workdir for gates/diffs)
+	runWS := ""       // ephemeral checkout:none run workspace this dispatch created
+	runDir := ""      // that run workspace's directory
 	if req.Action.WorkDir != "" {
 		wd, err := render(req.Action.WorkDir, data)
 		if err != nil {
@@ -196,9 +198,10 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 			// The built-in resolver creates a workspace and needs a live daemon, so
 			// skip it during a preview; an injected resolver is pure. A preview
 			// therefore renders the un-pinned argv, which is what it always did.
-			if id, err := d.runWorkspace(ctx, req); err == nil && id != "" {
+			if id, dir, err := d.runWorkspace(ctx, req); err == nil && id != "" {
 				argv = append(argv, "--workspace", id)
 				d.Owned.AddWorkspace(id) // conductor created this ephemeral run workspace
+				runWS, runDir = id, dir
 			}
 		}
 	}
@@ -316,12 +319,12 @@ func (d *Dispatcher) paseo(ctx context.Context, req Request) (RunRef, error) {
 	}
 	ref.Output = res.Output
 	if err != nil {
-		// A launch that failed before any agent came up can leave an agent-less
-		// workspace behind. Conductor does NOT reclaim it here: the runtime may
-		// have REUSED an existing workspace (which could hold another live agent),
-		// and conductor deliberately can't tell created from reused — that's the
-		// runtime's concern. Cleanup of a genuinely orphaned (agent-less) one is
-		// the reaper's orphan sweep, which only ever touches agent-less workspaces.
+		// A failed launch records no agent, so nothing will ever archive the
+		// workspace it ran in. This dispatch's own run workspace is reclaimed
+		// here. A worktree is NOT: createWorktree may have adopted an existing
+		// one (which could hold another live agent), and conductor can't tell
+		// created from adopted, so that one is the runtime's concern.
+		d.reclaimRunWorkspace(ctx, runWS, runDir)
 		return ref, err
 	}
 	ref.AgentID = res.AgentID
@@ -1003,29 +1006,54 @@ func isConductorOwnedWorkspace(w WorkspaceInfo) bool {
 const runWorkspaceDirs = "runs"
 
 // runWorkspace creates the ephemeral workspace for one un-pinned checkout:none
-// dispatch and returns its id. The caller pins the agent into it, and it is
-// archived when the agent finishes (Dispatcher.Archive), with the reaper as the
-// backstop for a run that crashed before it could be.
+// dispatch and returns its id and directory. The caller pins the agent into it,
+// and it is archived when the agent finishes (Dispatcher.Archive), or when the
+// launch itself fails (reclaimRunWorkspace). An injected RunWorkspace reports
+// no directory.
 //
 // Per-run, never shared: this replaced the single `conductor-scratch` workspace
 // every checkout:none agent used to pile into, where one agent's leftovers were
 // the next one's starting state.
-func (d *Dispatcher) runWorkspace(ctx context.Context, req Request) (string, error) {
+func (d *Dispatcher) runWorkspace(ctx context.Context, req Request) (id, dir string, err error) {
 	if d.RunWorkspace != nil {
-		return d.RunWorkspace(ctx, req)
+		id, err := d.RunWorkspace(ctx, req)
+		return id, "", err
 	}
 	slug := runWorkspaceSlug(req)
-	dir, err := d.makeRunDir(ctx, slug)
+	dir, err = d.makeRunDir(ctx, slug)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer holdProjects()()
 	res, err := d.backend().CreateWorkspace(ctx, CreateWorkspaceOptions{
 		Isolation: "local", Path: dir, Title: runWorkspacePrefix + slug})
 	if err != nil {
-		return "", fmt.Errorf("paseo workspace create run workspace: %w", err)
+		// No workspace came up, so nothing will ever archive this directory.
+		d.removeRunDir(ctx, dir)
+		return "", "", fmt.Errorf("paseo workspace create run workspace: %w", err)
 	}
-	return res.WorkspaceID, nil
+	return res.WorkspaceID, dir, nil
+}
+
+// reclaimRunWorkspace tears down the ephemeral run workspace of a dispatch whose
+// launch failed. No agent was recorded for it, so no done call or step-boundary
+// archive will ever reach it; left alone, every failed launch strands a
+// workspace, its agents, and its directory. Only ever called with a workspace
+// this dispatch just created on a fresh directory of its own, never a reused,
+// pinned, or worktree one. It runs past the dispatch's own cancellation (a
+// timed-out step is the commonest failure). Best-effort: a failed archive
+// leaves the workspace in the ledger.
+func (d *Dispatcher) reclaimRunWorkspace(ctx context.Context, id, dir string) {
+	if id == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if err := d.backend().ArchiveWorkspace(ctx, id); err != nil {
+		return
+	}
+	d.Owned.forget(id, "")
+	d.removeRunDir(ctx, dir)
 }
 
 // makeRunDir creates this run's working directory and returns the path to hand
@@ -1312,7 +1340,8 @@ func (d *Dispatcher) removeRunDir(ctx context.Context, cwd string) {
 	if !ok {
 		return
 	}
-	dir := filepath.Clean(cwd)
+	// `paseo ls` reports a cwd under $HOME as "~/…", never matching the root.
+	dir := normCwd(cwd)
 	if filepath.Dir(dir) != root || filepath.Base(dir) == "." || filepath.Base(dir) == ".." {
 		return
 	}
