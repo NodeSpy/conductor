@@ -92,16 +92,30 @@
 
   /* ---------- YAML highlighting (line based; good enough for a prototype) ---------- */
   UI.yamlLine = (raw) => {
-    let s = UI.esc(raw);
-    const ci = s.search(/(^|\s)#/);
-    let com = '';
-    if (ci >= 0) { com = `<span class="y-c">${s.slice(ci)}</span>`; s = s.slice(0, ci); }
-    s = s.replace(/^(\s*-?\s*)([A-Za-z0-9_.\-/*"\[\]<>]+)(:)(?=\s|$)/, '$1<span class="y-k">$2</span><span class="y-p">$3</span>')
-      .replace(/(&amp;|\*)[a-z][\w-]*/g, '<span class="y-a">$&</span>')
-      .replace(/(:\s+)(true|false|on|off|null)\b/g, '$1<span class="y-b">$2</span>')
-      .replace(/(:\s+)(-?\d[\d.]*[a-z]*)(\s*)$/i, '$1<span class="y-n">$2</span>$3')
-      .replace(/("[^"]*")/g, '<span class="y-s">$1</span>');
-    return s + com;
+    const E = UI.esc;
+    // split off a trailing comment (a # at line start or after a space, outside quotes)
+    let body = raw, com = '', q = null;
+    for (let i = 0; i < raw.length; i++) {
+      const c = raw[i];
+      if (q) { if (c === q) q = null; continue; }
+      if (c === '"' || c === "'") { q = c; continue; }
+      if (c === '#' && (i === 0 || /\s/.test(raw[i - 1]))) { body = raw.slice(0, i); com = raw.slice(i); break; }
+    }
+    const val = (v) => {
+      const t = v.trim(); if (!t) return E(v);
+      const lead = v.slice(0, v.indexOf(t)), tail = v.slice(v.indexOf(t) + t.length);
+      let cls = '';
+      if (/^["'].*["']$/.test(t)) cls = 'y-s';
+      else if (/^(true|false|on|off|null|yes|no)$/.test(t)) cls = 'y-b';
+      else if (/^-?\d[\d._]*[a-z%]*$/i.test(t)) cls = 'y-n';
+      else if (/^[&*][\w-]+/.test(t)) cls = 'y-a';
+      return E(lead) + (cls ? `<span class="${cls}">${E(t)}</span>` : E(t)) + E(tail);
+    };
+    const m = body.match(/^(\s*(?:-\s+)?)((?!-\s)[^\s:#'"{}\[\]][^:#{}]*?|"[^"]*")(:)(\s+|$)(.*)$/);
+    let out;
+    if (m) out = E(m[1]) + `<span class="y-k">${E(m[2])}</span><span class="y-p">:</span>` + E(m[4]) + val(m[5]);
+    else { const d = body.match(/^(\s*-\s+)(.*)$/); out = d ? `<span class="y-p">${E(d[1])}</span>` + val(d[2]) : val(body); }
+    return out + (com ? `<span class="y-c">${E(com)}</span>` : '');
   };
   UI.yaml = (text, opts = {}) => `<div class="code ${opts.cls || ''}">${text.split('\n').map((l, i) => `<span class="ln${(opts.hl || []).includes(i + 1) ? ' hl' : ''}${(opts.err || []).includes(i + 1) ? ' err' : ''}" data-ln="${i + 1}">${UI.yamlLine(l) || ' '}</span>`).join('')}</div>`;
 
