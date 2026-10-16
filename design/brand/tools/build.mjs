@@ -75,7 +75,8 @@ const svgoOpts = {
   floatPrecision: 2,
   plugins: [{ name: 'preset-default', params: { overrides: { inlineStyles: false, minifyStyles: false } } }],
 };
-const opt = (s) => (process.env.RAW ? s : optimize(s, svgoOpts).data);
+// svgo drops role="img"; put it back so inlined SVGs announce as one image with their <title>.
+const opt = (s) => (process.env.RAW ? s : optimize(s, svgoOpts).data.replace('<svg ', '<svg role="img" '));
 
 const VARIANTS = (dir) => ({
   light: [dir.pal.light.ink, dir.pal.light.acc],

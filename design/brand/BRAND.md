@@ -78,7 +78,7 @@ Keep the tagline paragraph as it is. Then upload `assets/social-card.png` under 
    ```html
    <svg class="mark" viewBox="3 7 26 18" aria-hidden="true"><path fill="var(--ink)" d="M3 21a13 14 0 0 1 26 0h-3.2a9.8 10 0 0 0-19.6 0z"/><circle cx="16" cy="21" r="4" fill="var(--accent)"/></svg>
    ```
-   The `viewBox` is the mark's content box, so the arch is as tall as the wordmark's ascenders (the same proportion as `logo-horizontal.svg`). At 34px and 18px, the access gate and the sign-in card keep `viewBox="0 0 32 32"`.
+   The `viewBox` is the mark's content box, so the arch is as tall as the wordmark's ascenders (the same proportion as `logo-horizontal.svg`). For the 34px mark on the access gate (`access.js`), use `viewBox="0 0 32 32"` so the mark keeps its square padding.
 2. `css/app.css:95`: rename `.baton` to `.mark { width: 22px; height: 15.2px; margin-top: -2px }`, and set `.strip .brand` to `gap: 7px`. The live-text `.wordmark` (Instrument Serif Italic, 21px) stays as it is; it is the same face the outlined wordmark is made from. Section 1.4 of `index.html` renders exactly this markup.
 3. `index.html:8`: replace the inline baton favicon with `favicon.svg`, plus `<link rel="icon" href="favicon-32.png" sizes="32x32">`, `<link rel="apple-touch-icon" href="apple-touch-icon.png">` and a manifest that lists `icon-192.png` and `icon-512.png`.
 4. No palette or type changes: Fermata uses the prototype's tokens and faces as they are.
