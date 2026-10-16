@@ -432,7 +432,7 @@ folder tree (folders → teams → bots, solo bots alongside teams) with
 | Overview | bots and the lead; the **ask & delegate activity graph** (teammates as nodes, asks dashed, delegations as arrows with counts, linked teams' bots at the edge); delegations with status and result; routing decisions with provenance; the team budget and the shared proactive pool; links inside and across teams, and each bot's **delegation reach** | add/remove a bot, make lead, link/unlink a team (config edits), **Route work here** (deliver to the team; its rules decide) |
 | Routing | ordered rules, and a "try a rule" check against real past events | add, edit, reorder, delete rules (config edits) |
 | Defaults | each default, and what every bot inherits, narrows, or (refused) widens | edit defaults (config edit) |
-| Knowledge | the shared repo in the knowledge editor (below), with bot proposals on top | author files directly; approve, **approve with changes**, deny with a reason, in bulk |
+| Knowledge | the shared repo by kind in the knowledge editor (below), with bot proposals (schema-checked) on top | author entries by kind; approve, **approve with changes**, deny with a reason, in bulk |
 
 **Bot detail.** The header shows:
 
@@ -452,42 +452,92 @@ Header actions:
 | **Chat** | The home conversation: operator messages, bot turns, tool calls, and fenced events (rendered as *untrusted data*). The transcript comes from paseo's agent timeline through conductor (**NEW** `GET /bots/<m>/transcript`, plus the SSE topic `bot.transcript`). A side rail shows pending proposals and open cases. | **Send**: `bot say`. The requester is `operator:<name>`, so it is the operator's own request with full operator trust. Delivered when the agent is idle, never into a turn in progress, as today. |
 | **Cases** | The ledger's cases: id, title, requester, class (`operator`/`event`/`user`/`peer`/`proactive`), **how it was routed** (rule, lead, operator, or "delegated by platform-sre → platform-data from case c29"), **delegation edges** with status and the reported result, workers and proposals. Shows the spend against the cap and the ledger's health (degraded or not). | Open, note, close or reopen a case (`bot case …`); reassign within the team (operator, provenance kept); have the bot delegate a task to a teammate (`bot delegate`); cancel a running delegation. Closing a delegated case reports its last note back as the result. |
 | **Proposals** | Pending, shadow, executed, refused, denied and failed proposals, each with tier, verb, case, requester class and worker. **Detail:** the exact action, or for Terraform: repo, commit, dir, workspace, var files, targets, the `+a ~c -d` counts, *replaces* list, plan text (`show -no-color`), plan sha256 and the approval digest. | **Approve / Deny with passkey** ([§6.6](#66-the-approvals-boundary)), and **Replan** for a stale plan. |
-| **Memory** | The bot's memory repo (`knowledge/`, `runbooks/`, `episodes/`, `handoff/`) in the knowledge editor (below), with pinned facts first. | Read, correct, pin and delete what it knows; every save is one operator commit. Promote a file to the team's repo. The bot keeps writing its own memory. |
+| **Memory** | The bot's memory by kind (knowledge, runbooks, watch, log, handoff, collections) in the knowledge editor (below), with pinned entries marked. | Read, correct, pin and delete what it knows; every save is one operator commit. Annotate or flag log entries. Promote knowledge or a runbook to the team. The bot keeps writing its own memory. |
 | **Workers** | The worker tree: home sessions (live and retired) → children, groups, sweeps. For each worker: taint (inherited requester class), narrowed verbs, read-only flag, case, cost, run link. | **Stop** a worker (**NEW**: cancel its run). There is deliberately no "tell", because only the parent instructs a child. |
 | **Access** | `skill.verbs` × `autonomy.tiers`, `promote`, browser credential bindings, logins, and the operators who can approve. | Tier, promote, verb, binding and login changes are **config edits** through [§7](#7-the-config-edit-pipeline). Revoking a saved login (`browser logout`) is immediate state. |
 | **Definition** | A form for the whole `bots.<m>` node: `team`, charter or `charter_file`, scope, escalation, operators, `home.rotate`, `worker.*`, autonomy (shadow, `approval_ttl`, spend cap), `proactive.*`, cross-team `peers`, `isolation`. Inherited team defaults show beside each field. Live YAML and validation sit beside it. | Review changes → the apply pipeline. **Define a bot** uses the same form with `shadow: true` preset. |
 
 **The knowledge editor** (a team's repo and a bot's memory, one component).
-The operator authors knowledge directly; it is git-backed.
+The operator authors knowledge directly; it is git-backed. **Knowledge goes
+in knowledge, runbooks go in runbooks:** there is no free-path file creation.
+Every entry has a **kind**, and its kind decides its home, its fields and who
+writes it:
 
-- **Files:** a tree with New file (blank, runbook or fact template), New
-  folder, Rename/move, Delete, and Upload/import: drop markdown files, paste
-  a runbook, or import a path from a repo through a read connector
-  (`Imported-From:` trailer).
+| Kind | Home | Fields / template | Who writes |
+|---|---|---|---|
+| Knowledge | `knowledge/` | title, statement, applies-to (service/resource tags), source/evidence, confidence; markdown details | operator directly; bots in their own memory, and into team knowledge by promotion |
+| Runbook | `runbooks/` | title, when to use (trigger/symptoms), prerequisites, steps (ordered, each optionally with a command `run:` or a verb `verb:`), verification, rollback, owner, applies-to; notes | operator directly; bots by proposal |
+| Watch item | entries in `watch.md` | what to watch, signal/query, threshold, why | operator directly; bots by proposal |
+| Episodic log | `log/` | per case, system-generated | bots only; the operator can **annotate** or **flag as wrong** (a sidecar beside the entry), never rewrite it |
+| Handoff note | `handoff/` | system-generated on rotation | read-only |
+| Custom collection | declared in config (`collections:`) or by a pack, e.g. `postmortems/` | the collection's own template and fields; free paths only if it declares `free_paths: true` | as declared |
+
+An entry is markdown with front matter (`kind:` plus the fields), so the
+files stay readable in git and the same schema check runs everywhere: on an
+operator save, on a bot proposal or promotion, and on import.
+
+- **New…** opens a kind chooser (choice cards; read-only kinds are shown
+  disabled with the reason). The kind's form has structured fields and a
+  markdown body where relevant; the **path is derived** from kind and title
+  (slug), shown read-only, and **renaming is changing the title** (one commit
+  that moves the file). A free path field appears only inside a collection
+  that declares `free_paths: true`, and stays inside its folder.
+- **Browsing is by kind** (Knowledge / Runbooks / Watch / Log / Handoff /
+  collections) with counts, search, and filters by applies-to tag. A
+  **Files** view exists as a secondary, read-mostly view: raw files, with
+  *Open as …* for typed files and *Map into a kind…* for untyped ones.
+- **Runbooks** get a structured step editor: add, reorder, remove, and per
+  step "no command", "run a command" or "call a verb" (verbs suggested from
+  your connector instances). A runbook shows the cases it was used in;
+  knowledge shows which runbooks, log entries and cases cite it (`[[path]]`
+  links and case notes).
 - **Every save is one commit authored by the operator** (`Authored-By:
   operator:<name>`, `Edited-Via: dashboard`) with an optional message. No
   approval: operator provenance is trusted. It is a session operation, not a
-  step-up ([§6.5](#65-step-up)).
-- **Editor:** markdown with highlighting, Edit / Split / Preview (the preview
-  is the safe renderer: no raw HTML, http(s) links only), an unsaved-changes
-  guard on navigation, and **conflict detection**: if a bot committed to the
-  file after it was opened, saving shows both diffs against the base and
-  asks for an explicit choice: rebase the edit on theirs, overwrite theirs,
-  or keep theirs.
-- **History** per file and per repo: author (operator or bot, with a case
+  step-up ([§6.5](#65-step-up)). A save that fails the kind's schema is
+  refused with the field errors.
+- **Conflicts:** if a bot committed to the entry after it was opened, saving
+  shows both diffs against the base and asks for an explicit choice: rebase
+  (field-wise: the fields you changed win, the body merges line by line),
+  overwrite theirs, or keep theirs. Unsaved changes are guarded on
+  navigation.
+- **History** per entry and per repo: author (operator or bot, with a case
   link), the diff, **revert** as a new commit, and **who wrote this**
-  (blame-lite: the file in sections, each with the bot or operator commit
-  that wrote it).
-- **Proposals** (team repos): approve (step-up), **approve with changes**
-  (the proposed result opens in the editor; the commit keeps the bot as
-  author with `Approved-By` and `Edited-By: operator` trailers), deny with a
-  **reason that goes back to the proposing bot**, and bulk approve/deny.
-- **Bot memory:** the same, plus **pins** (facts always in the bot's
-  context, recorded in `.pins`) and deleting wrong facts.
-- **Discoverability:** each file shows which bots read it (the team's bots,
-  or the bot itself), and search spans the team's knowledge and its bots'
-  memory (or a bot's memory and its team's knowledge).
+  (blame-lite).
+- **Proposals and promotion** (team repos) show the kind and are validated
+  against its schema. A malformed proposal (say, a runbook with a step that
+  has no `do:` or no verification) lists the schema errors, and *Approve* is
+  disabled with the reason; **approve with changes** opens it in the kind's
+  form with the errors marked, and the commit keeps the bot as author with
+  `Approved-By` and `Edited-By: operator` trailers. Deny sends a **reason
+  back to the proposing bot**; bulk approve refuses a selection that
+  contains a malformed proposal.
+- **Import** maps uploaded or pasted markdown (or a path from a repo through
+  a read connector) **into a kind**: a runbook-like structure (numbered
+  steps, *When*/*Verify*/*Rollback* sections) is detected and mapped to the
+  runbook fields; anything can be mapped into knowledge or a collection
+  instead. Each file shows its detected kind, the derived path and what was
+  found; entries that pass the schema are committed together, and the first
+  one missing fields opens in its form with the errors.
+- **Custom collections** are the escape hatch: **Config → Collections**
+  (`#/config/collections`) declares one (name, folder, team knowledge / bot
+  memory / both, fields as `name:string|text|list|enum(a|b)`, a body
+  template, `free_paths`, who can write) through the diff. A collection's
+  folder may not be a built-in kind's. Packs can ship collections (the
+  `sre-bot` pack ships `postmortems/`); they're listed with their pack and
+  overridden in `packs.<instance>`.
+- **Bot memory:** the same, plus **pins** (entries always in the bot's
+  context, recorded in `.pins`).
+- **Discoverability:** each entry shows which bots read it and who may write
+  its kind; search spans the team's knowledge and its bots' memory (or a
+  bot's memory and its team's knowledge).
 - **Phone:** view, search, light edits and approvals; the panes stack.
+- **API:** `GET /api/v1/knowledge/{repo}/kinds` (built-in kinds plus
+  collections, with their schemas), `GET …/entries?kind=&tag=&q=`,
+  `POST …/entries` (kind + fields + body → derived path, one commit; 422 with
+  field errors on a schema failure), `PUT …/entries/{path}` (with the base
+  sha; 409 on a conflict), `POST …/import` (`dry_run` returns the detected
+  kind and mapping per file), `POST …/log/{path}/annotations`.
 
 **Create in place.** Every picker that references another entity offers
 **+ New …** as its first option: team → bot, bot → team and folder, step →
