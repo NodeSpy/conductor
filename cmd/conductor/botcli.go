@@ -46,6 +46,9 @@ const botUsage = `usage:
     conductor bot sweeps <bot>
     conductor bot teams
     conductor bot team <team>                # bots, routing, routed cases, knowledge, pool
+    conductor bot knowledge put|rm|mv|revert|ls|cat|log <team> …   # edit a team's knowledge directly (as an operator)
+    conductor bot memory put|rm|mv|revert|ls|cat|log <bot> …       # edit a bot's memory directly (as an operator)
+    conductor bot approve <bot> <id> --edit-file <f>              # approve a knowledge promotion with your changes
   from a bot session:
     conductor bot whoami
     conductor bot remember --path knowledge/<f>.md --text "…" [--append]
@@ -113,7 +116,7 @@ func botFlags(args []string) (pos []string, flags map[string]string, files []str
 
 var operatorOnly = map[string]bool{"ls": true, "list": true, "show": true, "workers": true, "proposal": true,
 	"approve": true, "deny": true, "rotate": true, "say": true, "deliver": true, "consolidate": true,
-	"sweep": true, "sweeps": true, "teams": true}
+	"sweep": true, "sweeps": true, "teams": true, "knowledge": true, "memory": true}
 
 func cmdBot(args []string) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
@@ -123,6 +126,9 @@ func cmdBot(args []string) error {
 	sub := args[0]
 	inSession := os.Getenv("CONDUCTOR_SKILL_TOKEN") != ""
 	if operatorOnly[sub] {
+		if inSession && (sub == "knowledge" || sub == "memory") {
+			return fmt.Errorf("refusing: this shell is a conductor agent session — only an operator edits a repo directly; a bot proposes team knowledge (`conductor bot team promote`) and writes its own memory (`conductor bot remember`)")
+		}
 		if inSession && (sub == "approve" || sub == "deny") {
 			// Not the boundary (that is the signature + the operator socket);
 			// a clear refusal for the honest case of an agent trying.
@@ -366,6 +372,11 @@ func botControl(cfg *config.Config, sub string, a map[string]any) (map[string]an
 }
 
 func botOperator(sub string, args []string) error {
+	for i, a := range args {
+		if a == "-m" {
+			args[i] = "--message"
+		}
+	}
 	cfg, rest, err := loadConfig(args)
 	if err != nil {
 		return err
@@ -383,6 +394,8 @@ func botOperator(sub string, args []string) error {
 		return nil
 	}
 	switch sub {
+	case "knowledge", "memory":
+		return botRepoEdit(cfg, sub, pos, fl)
 	case "ls", "list":
 		folder, err := config.NormFolder(fl["folder"])
 		if err != nil {
@@ -442,6 +455,135 @@ func botOperator(sub string, args []string) error {
 		return nil
 	}
 	return printJSON(out)
+}
+
+const botRepoUsage = `usage:
+  conductor bot %[1]s put <%[2]s> <path> (--from-file <f> | --text "…") --base <commit> [-m "…"] [--as <operator>]%[3]s
+  conductor bot %[1]s rm <%[2]s> <path> --base <commit> [-m "…"] [--as <operator>]%[3]s
+  conductor bot %[1]s mv <%[2]s> <path> <new path> --base <commit> [-m "…"] [--as <operator>]%[3]s
+  conductor bot %[1]s revert <%[2]s> <commit> --base <commit> [-m "…"] [--as <operator>]%[3]s
+  conductor bot %[1]s ls <%[2]s>               # files, and the head to write against
+  conductor bot %[1]s cat <%[2]s> <path>       # a file (the head on stderr)
+  conductor bot %[1]s log <%[2]s> [<path>] [--limit N]   # commits: author, kind, case, proposal`
+
+// botRepoEdit is `conductor bot knowledge|memory …`: an operator's direct
+// reads and writes of a team's knowledge repo or a bot's memory repo.
+func botRepoEdit(cfg *config.Config, kind string, pos []string, fl map[string]string) error {
+	who, extra := "team", ""
+	if kind == "memory" {
+		who, extra = "bot", " [--case <id>]"
+	}
+	usage := fmt.Errorf(botRepoUsage, kind, who, extra)
+	if len(pos) < 2 {
+		return usage
+	}
+	action, target := pos[0], pos[1]
+	a := map[string]any{who: target}
+	need := func(n int) error {
+		if len(pos) != n {
+			return usage
+		}
+		return nil
+	}
+	switch action {
+	case "ls", "cat":
+		if action == "cat" {
+			if err := need(3); err != nil {
+				return err
+			}
+			a["path"] = pos[2]
+		} else if err := need(2); err != nil {
+			return err
+		}
+		out, _, err := botControl(cfg, "file", a)
+		if err != nil {
+			return err
+		}
+		if action == "cat" {
+			fmt.Fprintf(os.Stderr, "%s %v at %v\n", out["repo"], out["path"], out["head"])
+			fmt.Print(out["text"])
+			return nil
+		}
+		return printJSON(out)
+	case "log":
+		if len(pos) > 3 {
+			return usage
+		}
+		if len(pos) == 3 {
+			a["path"] = pos[2]
+		}
+		a["limit"] = fl["limit"]
+		out, _, err := botControl(cfg, "history", a)
+		if err != nil {
+			return err
+		}
+		cs, _ := out["commits"].([]any)
+		fmt.Printf("%v — head %v\n", out["repo"], out["head"])
+		for _, x := range cs {
+			c, _ := x.(map[string]any)
+			link := ""
+			for _, k := range []string{"case", "proposal", "bot", "reverts"} {
+				if v, _ := c[k].(string); v != "" {
+					link += fmt.Sprintf(" %s=%s", k, v)
+				}
+			}
+			fmt.Printf("%v %-25.25v %-8v %-14v %v%s\n", c["short"], c["date"], c["kind"], c["who"], c["subject"], link)
+		}
+		return nil
+	case "put", "rm", "mv", "revert":
+	default:
+		return usage
+	}
+	a["op"], a["base"], a["message"], a["as"], a["case"] = action, fl["base"], fl["message"], fl["as"], fl["case"]
+	if fl["base"] == "" {
+		return fmt.Errorf("--base <commit> is required: the commit you read (`conductor bot %s ls %s` shows the head) — a write against a stale base is refused", kind, target)
+	}
+	switch action {
+	case "put":
+		if err := need(3); err != nil {
+			return err
+		}
+		a["path"] = pos[2]
+		switch {
+		case fl["from-file"] != "" && fl["text"] != "":
+			return fmt.Errorf("--from-file or --text, not both")
+		case fl["from-file"] != "":
+			b, err := os.ReadFile(fl["from-file"])
+			if err != nil {
+				return err
+			}
+			a["text"] = string(b)
+		case fl["text"] != "":
+			a["text"] = fl["text"]
+		default:
+			return fmt.Errorf("put needs the content: --from-file <f> or --text \"…\"")
+		}
+	case "rm":
+		if err := need(3); err != nil {
+			return err
+		}
+		a["path"] = pos[2]
+	case "mv":
+		if err := need(4); err != nil {
+			return err
+		}
+		a["path"], a["to"] = pos[2], pos[3]
+	case "revert":
+		if err := need(3); err != nil {
+			return err
+		}
+		a["commit"] = pos[2]
+	}
+	out, _, err := botControl(cfg, "edit", a)
+	if err != nil {
+		return err
+	}
+	if out["changed"] == false {
+		fmt.Printf("%v: unchanged (head %v)\n", out["repo"], out["commit"])
+		return nil
+	}
+	fmt.Printf("%v: %s committed %v as operator %v\n", out["repo"], action, out["commit"], out["operator"])
+	return nil
 }
 
 // botListText renders `conductor bot ls`: a tree grouped by folder, then
@@ -570,6 +712,23 @@ func botDecide(cfg *config.Config, decision, name, id string, fl map[string]stri
 		return fmt.Errorf("operator %q is not configured", op)
 	}
 	digest, _ := p["digest"].(string)
+	// Approve with changes: --edit-file holds the final content (a
+	// knowledge promotion). The signature covers its hash.
+	edit := ""
+	if f := fl["edit-file"]; f != "" {
+		if decision != "approve" {
+			return fmt.Errorf("--edit-file goes with approve")
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return err
+		}
+		if len(b) == 0 {
+			return fmt.Errorf("--edit-file %s is empty", f)
+		}
+		edit = string(b)
+		fmt.Printf("with changes: %d bytes from %s replace the proposed text\n", len(b), f)
+	}
 	dash := func(v any) any {
 		if v == nil || v == "" {
 			return "-"
@@ -592,12 +751,12 @@ func botDecide(cfg *config.Config, decision, name, id string, fl map[string]stri
 		f.Close()
 		key = f.Name()
 	}
-	sig, err := bot.SignApproval(context.Background(), key, bot.ApprovalPayload(name, id, digest, decision))
+	sig, err := bot.SignApproval(context.Background(), key, bot.ApprovalPayload(name, id, digest, decision, edit, fl["reason"]))
 	if err != nil {
 		return fmt.Errorf("%w\n(no ssh-agent holding operators.%s.ssh_key? pass --key <private key file>)", err, op)
 	}
 	out, _, err := botControl(cfg, "decide", map[string]any{"bot": name, "id": id, "operator": op,
-		"decision": decision, "signature": sig, "reason": fl["reason"]})
+		"decision": decision, "signature": sig, "reason": fl["reason"], "edit": edit})
 	if err != nil {
 		return err
 	}

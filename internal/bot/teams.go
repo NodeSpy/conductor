@@ -656,12 +656,21 @@ func (s *Service) landKnowledge(ctx context.Context, bot string, k store.Knowled
 	}
 	tr := map[string]string{"Bot": bot, "Bot-Team": k.Team, "Promoted-From": k.From + "@" + k.Source,
 		"Bot-Proposal": proposal, "Approved-By": approver}
-	sha, err := repo.WriteAs(ctx, bot, k.To, k.Text, "replace", fmt.Sprintf("knowledge: %s (promoted by bot %s)", k.To, bot), tr)
+	// Approved with changes, the content is the operator's: the operator
+	// authors the commit, and the trailers name the proposing bot and what
+	// it proposed.
+	author, subject := BotIdent(bot), fmt.Sprintf("knowledge: %s (promoted by bot %s)", k.To, bot)
+	if k.EditedBy != "" {
+		author = OperatorIdent(k.EditedBy)
+		subject = fmt.Sprintf("knowledge: %s (promoted by bot %s, edited by operator %s)", k.To, bot, k.EditedBy)
+		tr["Edited-By"], tr["Proposed-SHA256"], tr["Operator"] = k.EditedBy, k.ProposedSHA256, k.EditedBy
+	}
+	sha, err := repo.WriteIdent(ctx, author, k.To, k.Text, "replace", subject, tr)
 	if err != nil {
 		return "", err
 	}
 	s.audit(map[string]any{"event": "bot_knowledge", "bot": bot, "team": k.Team, "from": k.From, "path": k.To,
-		"commit": sha, "proposal": proposal, "approver": approver})
+		"commit": sha, "proposal": proposal, "approver": approver, "edited_by": k.EditedBy})
 	return sha, nil
 }
 

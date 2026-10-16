@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -105,6 +106,9 @@ func (s *Service) AgentOp(ctx context.Context, c Actor, sub string, args map[str
 }
 
 func (s *Service) agentOp(ctx context.Context, c Actor, sub string, args map[string]any) (map[string]any, error) {
+	if operatorOnlyOps[sub] {
+		return nil, fmt.Errorf("a bot session cannot %s a repo directly — only an operator does, on the operator control socket; propose team knowledge with `conductor bot team promote`, and write your own memory with `conductor bot remember`", sub)
+	}
 	switch sub {
 	case "whoami":
 		rec := s.Ledger.Bot(c.Bot)
@@ -288,6 +292,17 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 		return nil
 	}
 	switch sub {
+	case "edit":
+		// An operator's direct write (opedit.go): a team's knowledge
+		// (team:) or a bot's memory (bot:), one commit against base.
+		return s.OperatorEdit(ctx, str(args, "team"), name, str(args, "as"), str(args, "case"), Edit{
+			Op: str(args, "op"), Path: str(args, "path"), To: str(args, "to"), Text: str(args, "text"),
+			Commit: str(args, "commit"), Base: str(args, "base"), Subject: str(args, "message")})
+	case "file":
+		return s.RepoFile(ctx, str(args, "team"), name, str(args, "path"))
+	case "history":
+		n, _ := strconv.Atoi(str(args, "limit"))
+		return s.RepoHistory(ctx, str(args, "team"), name, str(args, "path"), n)
 	case "list":
 		var out []any
 		for _, n := range cfg.BotNames() {
@@ -354,7 +369,7 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 			return nil, fmt.Errorf("no approval executor")
 		}
 		p, err := s.Exec.Decide(ctx, Decision{Bot: name, Proposal: str(args, "id"), Operator: str(args, "operator"),
-			Decision: str(args, "decision"), Signature: str(args, "signature"), Reason: str(args, "reason")})
+			Decision: str(args, "decision"), Signature: str(args, "signature"), Reason: str(args, "reason"), Edit: str(args, "edit")})
 		if err != nil {
 			return nil, err
 		}

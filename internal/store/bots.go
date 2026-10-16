@@ -238,6 +238,10 @@ type KnowledgeChange struct {
 	Source string `json:"source,omitempty"` // the bot repo's commit it was read at
 	Note   string `json:"note,omitempty"`
 	Landed string `json:"landed,omitempty"` // the team repo commit, once it lands
+	// EditedBy is the operator who approved it WITH CHANGES; Text/SHA256 are
+	// then the operator's final content and ProposedSHA256 the bot's.
+	EditedBy       string `json:"edited_by,omitempty"`
+	ProposedSHA256 string `json:"proposed_sha256,omitempty"`
 }
 
 // Worker is one worker launched for a case.

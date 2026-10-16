@@ -78,16 +78,36 @@ func (r *Repo) git(ctx context.Context, dir string, args ...string) (string, err
 	return r.gitAs(ctx, r.Bot, dir, args...)
 }
 
+// Ident is a commit author.
+type Ident struct{ Name, Email string }
+
+// Commit-author email domains: how history tells who wrote a commit.
+const (
+	botDomain      = "@bots.conductor.invalid"
+	teamDomain     = "@teams.conductor.invalid"
+	operatorDomain = "@operators.conductor.invalid"
+)
+
+// BotIdent / OperatorIdent are the authors of a bot's and an operator's
+// commits.
+func BotIdent(bot string) Ident     { return Ident{"bot " + bot, bot + botDomain} }
+func OperatorIdent(op string) Ident { return Ident{"operator " + op, op + operatorDomain} }
+
 // gitAs is git with the given bot as the author.
 func (r *Repo) gitAs(ctx context.Context, author, dir string, args ...string) (string, error) {
+	id := BotIdent(author)
+	if r.Team && author == r.Bot {
+		id = Ident{"team " + r.Bot, r.Bot + teamDomain}
+	}
+	return r.gitIdent(ctx, id, dir, args...)
+}
+
+// gitIdent is git with id as the author.
+func (r *Repo) gitIdent(ctx context.Context, id Ident, dir string, args ...string) (string, error) {
 	full := append([]string{"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-c", "init.defaultBranch=main"}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = dir
-	name := "bot " + author
-	email := author + "@bots.conductor.invalid"
-	if r.Team && author == r.Bot {
-		name, email = "team "+r.Bot, r.Bot+"@teams.conductor.invalid"
-	}
+	name, email := id.Name, id.Email
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME="+name, "GIT_AUTHOR_EMAIL="+email,
 		"GIT_COMMITTER_NAME=conductor", "GIT_COMMITTER_EMAIL=conductor@bots.conductor.invalid",
@@ -249,6 +269,16 @@ func (r *Repo) Write(ctx context.Context, rel, text, mode, subject string, trail
 // WriteAs is Write with author as the commit's author (a team repo's
 // promotion is authored by the promoting bot).
 func (r *Repo) WriteAs(ctx context.Context, author, rel, text, mode, subject string, trailers map[string]string) (string, error) {
+	id := BotIdent(author)
+	if r.Team && author == r.Bot {
+		id = Ident{"team " + r.Bot, r.Bot + teamDomain}
+	}
+	return r.WriteIdent(ctx, id, rel, text, mode, subject, trailers)
+}
+
+// WriteIdent is Write with id as the commit's author (an approved promotion
+// the operator edited is authored by the operator).
+func (r *Repo) WriteIdent(ctx context.Context, id Ident, rel, text, mode, subject string, trailers map[string]string) (string, error) {
 	c, err := r.cleanPath(rel)
 	if err != nil {
 		return "", err
@@ -288,7 +318,18 @@ func (r *Repo) WriteAs(ctx context.Context, author, rel, text, mode, subject str
 	if strings.TrimSpace(msg) == "" {
 		msg = "memory: update " + c
 	}
-	msg = firstLine(msg)
+	msg = commitMessage(msg, trailers)
+	if _, err := r.gitIdent(ctx, id, r.Dir, "commit", "-q", "-m", msg, "--", c); err != nil {
+		return "", err
+	}
+	head := r.headLocked(ctx)
+	r.refreshLocked(ctx)
+	return head, nil
+}
+
+// commitMessage is a one-line subject and its trailers, sorted.
+func commitMessage(subject string, trailers map[string]string) string {
+	msg := firstLine(subject)
 	if len(trailers) > 0 {
 		keys := make([]string, 0, len(trailers))
 		for k := range trailers {
@@ -302,12 +343,7 @@ func (r *Repo) WriteAs(ctx context.Context, author, rel, text, mode, subject str
 			}
 		}
 	}
-	if _, err := r.gitAs(ctx, author, r.Dir, "commit", "-q", "-m", msg, "--", c); err != nil {
-		return "", err
-	}
-	head := r.headLocked(ctx)
-	r.refreshLocked(ctx)
-	return head, nil
+	return msg
 }
 
 func (r *Repo) headLocked(ctx context.Context) string {

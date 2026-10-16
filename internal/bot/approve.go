@@ -37,10 +37,19 @@ import (
 // signature made for git or anything else can never be replayed here.
 const SigNamespace = "conductor-bot-approval"
 
-// ApprovalPayload is the exact text an operator signs.
-func ApprovalPayload(bot, proposal, digest, decision string) []byte {
-	return []byte(fmt.Sprintf("conductor bot approval v1\nbot: %s\nproposal: %s\ndigest: %s\ndecision: %s\n",
-		bot, proposal, digest, decision))
+// ApprovalPayload is the exact text an operator signs. edit is the final
+// content of an approve-with-changes (a knowledge promotion), reason a
+// denial's (or approval's) reason: both are covered by their SHA-256, so
+// neither can be swapped after signing ("-" when absent).
+func ApprovalPayload(bot, proposal, digest, decision, edit, reason string) []byte {
+	h := func(s string) string {
+		if s == "" {
+			return "-"
+		}
+		return sha256Hex(s)
+	}
+	return []byte(fmt.Sprintf("conductor bot approval v1\nbot: %s\nproposal: %s\ndigest: %s\ndecision: %s\nedit-sha256: %s\nreason-sha256: %s\n",
+		bot, proposal, digest, decision, h(edit), h(reason)))
 }
 
 // Decision is an operator's signed decision on one proposal.
@@ -51,7 +60,13 @@ type Decision struct {
 	Decision  string `json:"decision"`  // approve | deny
 	Signature string `json:"signature"` // armored SSHSIG
 	Reason    string `json:"reason,omitempty"`
+	// Edit is approve-with-changes: the final content the operator lands
+	// instead of the proposed text (knowledge promotions only).
+	Edit string `json:"edit,omitempty"`
 }
+
+// MaxDecisionReason bounds a decision's reason (it reaches the bot).
+const MaxDecisionReason = 4000
 
 // SignApproval signs a payload with ssh-keygen. key is a private key file,
 // or a PUBLIC key file whose private half is in the ssh-agent (ssh-keygen
@@ -174,6 +189,19 @@ func (x *Executor) Decide(ctx context.Context, d Decision) (store.Proposal, erro
 	if p == nil {
 		return refuse(fmt.Errorf("no proposal %s for bot %s", d.Proposal, d.Bot))
 	}
+	if len(d.Reason) > MaxDecisionReason {
+		return refuse(fmt.Errorf("reason too long (%d bytes, max %d)", len(d.Reason), MaxDecisionReason))
+	}
+	if d.Edit != "" {
+		switch {
+		case d.Decision != "approve":
+			return refuse(errors.New("changes go with an approval, not a denial"))
+		case p.Kind != KindKnowledge:
+			return refuse(fmt.Errorf("proposal %s is a %s proposal — only a knowledge promotion can be approved with changes (its text is the content)", p.ID, p.Kind))
+		case len(d.Edit) > 256<<10:
+			return refuse(fmt.Errorf("edited content too large (%d bytes, max 256KiB)", len(d.Edit)))
+		}
+	}
 	// Who may decide comes from the config now, not from the proposal's
 	// record: the bot's operators, or — for a knowledge promotion — its
 	// team's.
@@ -194,7 +222,7 @@ func (x *Executor) Decide(ctx context.Context, d Decision) (store.Proposal, erro
 	if verify == nil {
 		verify = VerifyApproval
 	}
-	if err := verify(ctx, d.Operator, opCfg.SSHKey, ApprovalPayload(d.Bot, p.ID, p.Digest, d.Decision), d.Signature); err != nil {
+	if err := verify(ctx, d.Operator, opCfg.SSHKey, ApprovalPayload(d.Bot, p.ID, p.Digest, d.Decision, d.Edit, d.Reason), d.Signature); err != nil {
 		return refuse(err)
 	}
 	switch {
@@ -359,6 +387,14 @@ func (x *Executor) execKnowledge(ctx context.Context, d Decision, p store.Propos
 		return fail(errors.New("no team knowledge on this daemon"))
 	}
 	p.Approver = d.Operator
+	if d.Edit != "" {
+		// Approve with changes: the operator's final text lands; the record
+		// keeps what was proposed (its hash) and who edited it.
+		ek := *k
+		ek.ProposedSHA256, ek.Text, ek.SHA256, ek.EditedBy = k.SHA256, d.Edit, sha256Hex(d.Edit), d.Operator
+		p.Knowledge = &ek
+		k = &ek
+	}
 	sha, err := x.Knowledge(ctx, d.Bot, p)
 	if err != nil {
 		return fail(err)
@@ -370,6 +406,11 @@ func (x *Executor) execKnowledge(ctx context.Context, d Decision, p store.Propos
 			return nil
 		}
 		q.Status, q.Result = "executed", map[string]any{"commit": sha, "team": k.Team, "path": k.To}
+		if k.EditedBy != "" {
+			q.Result["edited_by"] = k.EditedBy
+			cp := *k
+			q.Knowledge = &cp
+		}
 		if q.Knowledge != nil {
 			q.Knowledge.Landed = sha
 		}

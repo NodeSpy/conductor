@@ -103,3 +103,35 @@ func TestBotListFolderFilterAndFlat(t *testing.T) {
 		t.Errorf("empty: %q", s)
 	}
 }
+
+// A bot session's shell cannot run the operator's repo edits (the agent
+// socket has no such op either; this is the honest-case refusal).
+func TestBotRepoEditRefusedInASession(t *testing.T) {
+	t.Setenv("CONDUCTOR_SKILL_TOKEN", "tok")
+	for _, sub := range []string{"knowledge", "memory"} {
+		err := cmdBot([]string{sub, "put", "platform", "knowledge/x.md", "--text", "x", "--base", "abc1234"})
+		if err == nil || !strings.Contains(err.Error(), "refusing: this shell is a conductor agent session") {
+			t.Errorf("%s in a session: %v", sub, err)
+		}
+	}
+}
+
+func TestBotRepoEditNeedsABase(t *testing.T) {
+	for _, args := range [][]string{
+		{"put", "platform", "knowledge/x.md"},
+		{"rm", "platform", "knowledge/x.md"},
+		{"mv", "platform", "knowledge/x.md", "knowledge/y.md"},
+		{"revert", "platform", "abc1234"},
+	} {
+		err := botRepoEdit(nil, "knowledge", args, map[string]string{"text": "x"})
+		if err == nil || !strings.Contains(err.Error(), "--base <commit> is required") {
+			t.Errorf("%v without --base: %v", args, err)
+		}
+	}
+	if err := botRepoEdit(nil, "knowledge", []string{"put", "platform", "knowledge/x.md"}, map[string]string{"base": "abc1234"}); err == nil || !strings.Contains(err.Error(), "needs the content") {
+		t.Errorf("put without content: %v", err)
+	}
+	if err := botRepoEdit(nil, "memory", []string{"bogus", "sre"}, map[string]string{}); err == nil || !strings.Contains(err.Error(), "conductor bot memory put <bot>") {
+		t.Errorf("usage: %v", err)
+	}
+}

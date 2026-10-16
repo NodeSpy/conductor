@@ -324,7 +324,7 @@ func newExecFixture(t *testing.T, m config.BotConfig) *execFixture {
 func (f *execFixture) sign(t *testing.T, key opKey, pid, decision string) string {
 	t.Helper()
 	p := f.st.Bot("sre").Proposals[pid]
-	sig, err := SignApproval(context.Background(), key.priv, ApprovalPayload("sre", pid, p.Digest, decision))
+	sig, err := SignApproval(context.Background(), key.priv, ApprovalPayload("sre", pid, p.Digest, decision, "", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,7 +600,7 @@ func TestSignatureNamespaceIsBound(t *testing.T) {
 	p := f.st.Bot("sre").Proposals[pid]
 	dir := t.TempDir()
 	msg := filepath.Join(dir, "payload")
-	_ = os.WriteFile(msg, ApprovalPayload("sre", pid, p.Digest, "approve"), 0o600)
+	_ = os.WriteFile(msg, ApprovalPayload("sre", pid, p.Digest, "approve", "", ""), 0o600)
 	if out, err := exec.Command("ssh-keygen", "-Y", "sign", "-q", "-f", f.op.priv, "-n", "git", msg).CombinedOutput(); err != nil {
 		t.Fatalf("sign: %v %s", err, out)
 	}

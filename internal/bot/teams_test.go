@@ -75,7 +75,7 @@ func newTeamFixture(t *testing.T, edit func(*config.Config)) *teamFixture {
 	gate.OnProposal = f.svc.OnProposal
 	f.x = &Executor{Cfg: func() *config.Config { return cfg }, Ledger: st, Gate: gate, Now: f.clk.now,
 		Verify:    func(context.Context, string, string, []byte, string) error { return nil },
-		Knowledge: f.svc.LandApproved}
+		Knowledge: f.svc.LandApproved, Notify: f.svc.OnDecision}
 	f.svc.Exec = f.x
 	for _, n := range cfg.BotNames() {
 		if err := f.svc.Repo(n).Init(context.Background()); err != nil {
