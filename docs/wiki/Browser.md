@@ -66,8 +66,8 @@ Each launch's token gets its own browser, and an idle one closes after
   - **Linux:** in user, mount, pid and network namespaces with `pivot_root`,
     with Chromium's own sandbox (namespaces + seccomp-BPF) nested inside for
     every renderer.
-  - **macOS, with Docker Desktop, colima or podman installed (the default
-    whenever an engine is present):** in a container.
+  - **macOS, with Docker Desktop, colima or podman installed and running
+    (the default whenever an engine answers):** in a container.
     - Linux Chromium runs **with its own sandbox on** inside a container with
       no network, no capability, `no-new-privileges`, a read-only root and no
       mount of your Mac.
@@ -120,6 +120,9 @@ Each launch's token gets its own browser, and an idle one closes after
   rule out every side effect: no DOM write, no network, no storage. Whether
   the identity was opted in is in every evaluate's audit entry. In a browser
   where a credential was filled, evaluate is off whatever the opt-in says.
+- **Status.** `conductor browser status` shows what the browser runs in
+  (`container`, `seatbelt` or `namespace`, or why none can start yet) and
+  whether `evaluate` is on for this browser right now.
 - **Audit.** Every action is audited with:
   - the identity, the agent, repo and dispatch;
   - who asked (`requester`);

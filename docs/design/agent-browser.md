@@ -105,7 +105,9 @@ What (B) looks like as built:
 
 Decided at boot (`cmd/conductor/browseriso.go`):
 - `auto` (the default) uses the container on macOS whenever an engine is
-  present (`docker`, then `podman`), and the host's namespaces on Linux;
+  present and answers (`docker`, then `podman`; `docker version` must
+  succeed, so Docker Desktop installed but stopped counts as none), and the
+  host's namespaces on Linux;
   `on` requires it; `off` never uses it.
 - **Never quietly weaker.** While the image builds and proves itself, browser
   actions are refused as "being prepared". If it can't sandbox Chromium,
@@ -145,7 +147,11 @@ The container:
   same host transfer directory the native browser uses, so section 5's
   confinement is unchanged.
 - **Audit.** Every session's isolation (`container`, `seatbelt`,
-  `namespace`) is logged and recorded with each action.
+  `namespace`) is logged and recorded with each action, and `status` shows
+  it, before a browser starts too.
+- **The container backend** (`feat/agent-container`) finds its engine the
+  same way. `FindEngine` here mirrors its `agentsandbox.ResolveEngine` and
+  ping, and becomes a call to it once both branches have landed.
 
 ## 2. The allowlist is enforced by the proxy
 
