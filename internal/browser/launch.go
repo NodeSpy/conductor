@@ -249,6 +249,10 @@ func launch(spec LaunchSpec, goos string) (*Process, error) {
 	env := browserEnv(spec, goos, shortTmp)
 	flags := ChromeArgs(spec.Dir, proxyAddr, spec.Headed)
 	argv := append(append([]string{spec.Chrome}, flags[:len(flags)-1]...), platformArgs(goos)...)
+	if spec.Headed && goos == "darwin" {
+		// The window renders in software: its profile opens no GPU class.
+		argv = append(argv, "--disable-gpu")
+	}
 	argv = append(argv, spec.Args...)
 	argv = append(argv, flags[len(flags)-1])
 	wrapped, outEnv, wclean, err := sandbox.WrapLocalCommand(browserSpec(spec.Allow), argv, spec.Dir, env, deps)

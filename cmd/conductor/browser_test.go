@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -146,5 +148,68 @@ func TestBrowserIsoDecision(t *testing.T) {
 	}
 	if seatbeltNote("linux", "x") != "" {
 		t.Fatal("Linux has no Seatbelt note")
+	}
+}
+
+// TestBrowserIsoBoot: macOS uses the container whenever an engine is present,
+// refusing (never weaker) until it is proven; Linux stays native under auto;
+// a failed proof falls back with the warning (auto) or refuses (on).
+func TestBrowserIsoBoot(t *testing.T) {
+	defer browserIsoState.Store(nil)
+	logf := func(string, ...any) {}
+	eng := &browser.ContainerEngine{Bin: "/x/docker", Kind: "docker"}
+	found := func() (*browser.ContainerEngine, error) { return eng, nil }
+	none := func() (*browser.ContainerEngine, error) { return nil, errors.New("no container engine") }
+	gate := make(chan struct{})
+	ok := func(context.Context, *browser.ContainerEngine, func(string, ...any)) (string, error) {
+		<-gate
+		return "conductor-browser:t", nil
+	}
+	bad := func(context.Context, *browser.ContainerEngine, func(string, ...any)) (string, error) {
+		return "", errors.New("chrome://sandbox: not adequately sandboxed")
+	}
+	wait := func(cond func(browser.Settings) bool) browser.Settings {
+		for i := 0; i < 200; i++ {
+			if st := applyIso(browser.Settings{}); cond(st) {
+				return st
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("never: %+v", applyIso(browser.Settings{}))
+		return browser.Settings{}
+	}
+
+	isoDecide(context.Background(), &config.BrowserConfig{}, "darwin", found, ok, logf)
+	if st := applyIso(browser.Settings{}); !strings.Contains(st.Unavailable, "being prepared") || st.Engine != nil {
+		t.Fatalf("macOS with an engine, before the proof: %+v", st)
+	}
+	close(gate)
+	if st := wait(func(s browser.Settings) bool { return s.Engine != nil }); st.Unavailable != "" || st.Image != "conductor-browser:t" || st.IsolationNote != "" {
+		t.Fatalf("macOS, proven: %+v", st)
+	}
+
+	isoDecide(context.Background(), &config.BrowserConfig{}, "linux", found, ok, logf)
+	if st := applyIso(browser.Settings{}); st.Engine != nil || st.Unavailable != "" {
+		t.Fatalf("Linux auto: %+v", st)
+	}
+	isoDecide(context.Background(), &config.BrowserConfig{Container: "off"}, "darwin", found, ok, logf)
+	if st := applyIso(browser.Settings{}); st.Engine != nil || !strings.Contains(st.IsolationNote, "single-user Mac only") {
+		t.Fatalf("macOS off: %+v", st)
+	}
+	isoDecide(context.Background(), &config.BrowserConfig{}, "darwin", none, ok, logf)
+	if st := applyIso(browser.Settings{}); st.Engine != nil || st.Unavailable != "" || !strings.Contains(st.IsolationNote, "single-user Mac only") {
+		t.Fatalf("macOS without an engine: %+v", st)
+	}
+	isoDecide(context.Background(), &config.BrowserConfig{Container: "on"}, "linux", none, ok, logf)
+	if st := applyIso(browser.Settings{}); !strings.Contains(st.Unavailable, "container: on") {
+		t.Fatalf("on, no engine: %+v", st)
+	}
+	isoDecide(context.Background(), &config.BrowserConfig{}, "darwin", found, bad, logf)
+	if st := wait(func(s browser.Settings) bool { return s.IsolationNote != "" }); st.Engine != nil || st.Unavailable != "" || !strings.Contains(st.IsolationNote, "could not sandbox Chromium") {
+		t.Fatalf("auto, proof failed: %+v", st)
+	}
+	isoDecide(context.Background(), &config.BrowserConfig{Container: "on"}, "darwin", found, bad, logf)
+	if st := wait(func(s browser.Settings) bool { return strings.Contains(s.Unavailable, "container: on") }); st.Engine != nil {
+		t.Fatalf("on, proof failed: %+v", st)
 	}
 }

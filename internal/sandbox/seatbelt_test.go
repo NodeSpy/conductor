@@ -117,6 +117,25 @@ func TestSeatbeltBrowserProfile(t *testing.T) {
 	if strings.Contains(seatbeltAgentProfile(nil, &AgentProfile{}, AgentNet{}), "file-issue-extension") {
 		t.Fatal("an agent profile issues no extensions")
 	}
+	// The operator's window: the window server's services, by name, and
+	// still no blanket; an agent's (headless) browser has none of them.
+	if strings.Contains(p, "windowserver") || strings.Contains(p, "pasteboard") || strings.Contains(p, "IOHIDParamUserClient") {
+		t.Fatal("a headless browser reaches the window server")
+	}
+	w := seatbeltAgentProfile([]BindMount{{Path: "/b/run"}}, &AgentProfile{Browser: true, Window: true}, AgentNet{ProxyPort: 4242})
+	for _, want := range []string{`(global-name "com.apple.windowserver.active")`, `(global-name "com.apple.CARenderServer")`, `(local-name "com.apple.tsm.portname")`, `pasteboard`} {
+		if !strings.Contains(w, want) {
+			t.Errorf("window: missing %s", want)
+		}
+	}
+	for _, blanket := range []string{"(allow mach-lookup)", "(allow mach-register)", "(allow iokit-open)", "(allow mach*)", "(allow iokit*)", "(with report)"} {
+		if strings.Contains(w, blanket) {
+			t.Fatalf("a blanket %s in the window profile", blanket)
+		}
+	}
+	if strings.LastIndex(w, "(deny mach-lookup") < strings.LastIndex(w, "(allow mach-lookup") {
+		t.Fatal("the Keychain denial comes after the window's allows")
+	}
 }
 
 // TestSeatbeltBrowserMetadata: the browser profile reads metadata only

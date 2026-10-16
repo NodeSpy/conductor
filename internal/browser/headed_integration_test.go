@@ -30,7 +30,15 @@ func TestHeadedTakeoverOnAVirtualDisplay(t *testing.T) {
 	spec := LaunchSpec{Chrome: chrome, Dir: t.TempDir(), Allow: []string{"localhost:" + port}, SelfExe: selfExe(t), Headed: true, Stderr: &Ring{}}
 	if runtime.GOOS == "linux" {
 		spec.Display, spec.Show, spec.Args = []string{"DISPLAY=" + os.Getenv("DISPLAY")}, []string{"/tmp/.X11-unix"}, []string{"--ozone-platform=x11"}
+		if xa := os.Getenv("XAUTHORITY"); xa != "" {
+			spec.Display, spec.Show = append(spec.Display, "XAUTHORITY="+xa), append(spec.Show, xa)
+		}
 	}
+	defer func() {
+		if t.Failed() {
+			t.Logf("the browser's stderr: %s", spec.Stderr.String())
+		}
+	}()
 	k, err := StartTakeover(ctx, spec,
 		[]Cookie{{Name: "sid", Value: site.Session(), Domain: "localhost", Path: "/"}})
 	if err != nil {

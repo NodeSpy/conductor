@@ -103,10 +103,6 @@ jobs:
           else
             go test -count=1 -v -run 'TestHeadedTakeover' ./internal/browser/
           fi
-      - name: PROBE what a headed window uses on macOS
-        if: always() && runner.os == 'macOS'
-        run: |
-          log show --last 10m --style compact --predicate 'eventMessage CONTAINS "allow"' 2>/dev/null | grep -i -E 'chrom|google' | grep -E 'mach-lookup|mach-register|iokit-open' | sed -E 's/^.*(allow [a-z-]+ .*)$/\1/; s/[0-9]+/N/g' | sort | uniq -c | sort -rn | head -120 || true
       - name: the macOS sandbox's denials for the browser
         if: always() && runner.os == 'macOS'
         run: |

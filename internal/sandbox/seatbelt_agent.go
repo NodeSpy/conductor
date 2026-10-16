@@ -66,6 +66,20 @@ var agentMachNet = []string{
 // agent's (found on macos-latest from the sandbox's own denial log).
 var browserMach = []string{"com.apple.system.opendirectoryd.api"}
 
+// browserWindowMach, browserWindowXPC and browserWindowLocal are what a
+// headed Chrome's window reaches (found on macos-latest with the profile's
+// own report), for the operator's takeover only.
+var (
+	browserWindowMach = []string{
+		"com.apple.windowserver.active", "com.apple.CARenderServer", "com.apple.windowmanager.server",
+		"com.apple.window_proxies", "com.apple.dock.server", "com.apple.dock.fullscreen",
+		"com.apple.tsm.uiserver", "com.apple.backboard.hid-services.xpc",
+		"com.apple.iconservices", "com.apple.iconservices.store",
+	}
+	browserWindowXPC   = []string{"com.apple.hiservices-xpcservice", "com.apple.ViewBridgeAuxiliary", "com.apple.TextInputUI.xpc.CursorUIViewService"}
+	browserWindowLocal = []string{"com.apple.tsm.portname", "com.apple.axserver", "com.apple.coredrag"}
+)
+
 // browserRendezvous is Chromium's child-process rendezvous service,
 // "<bundle id>.MachPortRendezvousServer.<pid>" — the one name it registers.
 const browserRendezvous = `#"^[A-Za-z0-9.]+\.MachPortRendezvousServer\.[0-9]+$"`
@@ -177,8 +191,23 @@ func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string
 		b.WriteString("(allow iokit-open (iokit-user-client-class \"IOSurfaceRootUserClient\") (iokit-user-client-class \"RootDomainUserClient\"))\n")
 		b.WriteString("(allow ipc-posix-shm)\n(allow process-info*)\n(allow user-preference-read)\n")
 		if a.Window {
-			// PROBE: report what a window uses.
-			b.WriteString("(allow (with report) mach-lookup)\n(allow (with report) iokit-open)\n(allow (with report) mach-register)\n")
+			// The operator's own window: the window server, CoreAnimation,
+			// the window manager and dock, text input, HID, the pasteboard
+			// (pasting a password in) and icons — by name. The GPU is off
+			// (--disable-gpu), so no GPU IOKit class.
+			b.WriteString("(allow mach-lookup")
+			for _, s := range browserWindowMach {
+				b.WriteString("\n  (global-name " + sbplString(s) + ")")
+			}
+			for _, s := range browserWindowXPC {
+				b.WriteString("\n  (xpc-service-name " + sbplString(s) + ")")
+			}
+			b.WriteString("\n  (global-name-regex #\"^com\\.apple\\.pasteboard\\.[0-9]+$\"))\n")
+			b.WriteString("(allow mach-register")
+			for _, s := range browserWindowLocal {
+				b.WriteString("\n  (local-name " + sbplString(s) + ")")
+			}
+			b.WriteString(")\n(allow iokit-open (iokit-user-client-class \"IOHIDParamUserClient\"))\n")
 		}
 		b.WriteString("(deny mach-lookup")
 		for _, s := range agentMachKeychain {

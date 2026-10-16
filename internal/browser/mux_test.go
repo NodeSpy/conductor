@@ -106,6 +106,17 @@ func TestMuxWithTheShim(t *testing.T) {
 	if err := m.Put(filepath.Join(xfer, "..", "planted"), strings.NewReader("x")); err == nil {
 		t.Fatal("a put outside")
 	}
+	// A symlinked directory on the way out, for a put and a get.
+	os.Symlink(dir, filepath.Join(xfer, "ldir"))
+	if err := m.Put(filepath.Join(xfer, "ldir", "planted"), strings.NewReader("x")); err == nil {
+		t.Fatal("a put through a symlinked directory")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "planted")); err == nil {
+		t.Fatal("planted outside the transfer directory")
+	}
+	if _, err := m.Get(filepath.Join(xfer, "ldir", "secret"), 100, io.Discard); err == nil {
+		t.Fatal("a get through a symlinked directory")
+	}
 	// The stream ends: so does the shim (and its browser).
 	stdin.Close()
 	done := make(chan error, 1)

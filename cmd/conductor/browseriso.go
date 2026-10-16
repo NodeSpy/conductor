@@ -49,11 +49,27 @@ func applyIso(st browser.Settings) browser.Settings {
 
 // decideBrowserIso decides, then prepares the container in the background.
 func decideBrowserIso(ctx context.Context, b *config.BrowserConfig, logf func(string, ...any)) {
+	isoDecide(ctx, b, runtime.GOOS, func() (*browser.ContainerEngine, error) {
+		return browser.FindEngine(b.ContainerEngine, runtime.GOOS, exec.LookPath, os.Environ())
+	}, prepareContainer, logf)
+}
+
+// prepareContainer builds the image and proves Chromium's sandbox in it.
+func prepareContainer(ctx context.Context, e *browser.ContainerEngine, logf func(string, ...any)) (string, error) {
+	img, err := e.EnsureImage(ctx, logf)
+	if err == nil {
+		err = containerSelfTest(ctx, e, img)
+	}
+	return img, err
+}
+
+// isoDecide is the decision, its seams injected (tests).
+func isoDecide(ctx context.Context, b *config.BrowserConfig, goos string, find func() (*browser.ContainerEngine, error),
+	prepare func(context.Context, *browser.ContainerEngine, func(string, ...any)) (string, error), logf func(string, ...any)) {
 	mode := b.Container
 	if mode == "" {
 		mode = "auto"
 	}
-	goos := runtime.GOOS
 	if mode == "off" || (mode == "auto" && goos != "darwin") {
 		browserIsoState.Store(&browserIso{note: seatbeltNote(goos, "browser.container: off")})
 		if goos == "darwin" {
@@ -63,7 +79,7 @@ func decideBrowserIso(ctx context.Context, b *config.BrowserConfig, logf func(st
 		}
 		return
 	}
-	e, err := browser.FindEngine(b.ContainerEngine, goos, exec.LookPath, os.Environ())
+	e, err := find()
 	if err != nil {
 		fallbackIso(mode, goos, err.Error(), logf)
 		return
@@ -73,10 +89,7 @@ func decideBrowserIso(ctx context.Context, b *config.BrowserConfig, logf func(st
 	go func() {
 		pctx, cancel := context.WithTimeout(ctx, 25*time.Minute)
 		defer cancel()
-		img, err := e.EnsureImage(pctx, logf)
-		if err == nil {
-			err = containerSelfTest(pctx, e, img)
-		}
+		img, err := prepare(pctx, e, logf)
 		if err != nil {
 			fallbackIso(mode, goos, fmt.Sprintf("the %s container could not sandbox Chromium: %v", e.Kind, err), logf)
 			return
