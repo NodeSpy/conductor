@@ -5,38 +5,38 @@ import (
 	"testing"
 )
 
-// teamsOps continues membersBase's operators: block (which defines ops).
+// teamsOps continues botsBase's operators: block (which defines ops).
 const teamsOps = `  oncall: { ssh_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample2 oncall@box" }
   billing-ops: { ssh_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample3 b@box" }
 `
 
-// loadTeams loads membersBase with extra operators and body.
+// loadTeams loads botsBase with extra operators and body.
 func loadTeams(t *testing.T, body string) (*Config, error) {
 	t.Helper()
-	return loadMembers(t, teamsOps+"vaults:\n  house: { type: file, dir: /nonexistent/vault }\n"+body)
+	return loadBots(t, teamsOps+"vaults:\n  house: { type: file, dir: /nonexistent/vault }\n"+body)
 }
 
 func TestTeamsAbsentChangeNothing(t *testing.T) {
-	c, err := loadMembers(t, "members:\n  a: {}\n  b: {}\n")
+	c, err := loadBots(t, "bots:\n  a: {}\n  b: {}\n")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Teams) != 0 || c.Members["a"].Team != "" {
+	if len(c.Teams) != 0 || c.Bots["a"].Team != "" {
 		t.Fatalf("teams appeared from nowhere: %+v", c.Teams)
 	}
-	if c.MemberLinked("a", "b") {
-		t.Fatal("two teamless members are linked")
+	if c.BotLinked("a", "b") {
+		t.Fatal("two teamless bots are linked")
 	}
-	if got := c.MemberOperators("a"); len(got) != 1 || got[0] != "ops" {
-		t.Fatalf("a teamless member's operators changed: %v", got)
+	if got := c.BotOperators("a"); len(got) != 1 || got[0] != "ops" {
+		t.Fatalf("a teamless bot's operators changed: %v", got)
 	}
 }
 
 func TestTeamMembershipIsOneTeam(t *testing.T) {
 	for name, body := range map[string]string{
-		"unknown team": "members:\n  a: { team: nope }\n",
-		"two teams":    "teams:\n  x: {}\n  y: {}\nmembers:\n  a: { team: [x, y] }\n",
-		"team twice":   "teams:\n  x: {}\n  y: {}\nmembers:\n  a:\n    team: x\n    team: y\n",
+		"unknown team": "bots:\n  a: { team: nope }\n",
+		"two teams":    "teams:\n  x: {}\n  y: {}\nbots:\n  a: { team: [x, y] }\n",
+		"team twice":   "teams:\n  x: {}\n  y: {}\nbots:\n  a:\n    team: x\n    team: y\n",
 	} {
 		_, err := loadTeams(t, body)
 		if err == nil {
@@ -45,18 +45,18 @@ func TestTeamMembershipIsOneTeam(t *testing.T) {
 		}
 		t.Logf("%s: %v", name, err)
 	}
-	_, err := loadTeams(t, "teams:\n  x: {}\nmembers:\n  a: { team: [x, x] }\n")
+	_, err := loadTeams(t, "teams:\n  x: {}\nbots:\n  a: { team: [x, x] }\n")
 	if err == nil || !strings.Contains(err.Error(), "at most one team") {
 		t.Fatalf("a team list is not refused as two teams: %v", err)
 	}
 }
 
-// Every ceiling: a member setting past its team's is a load error naming
+// Every ceiling: a bot setting past its team's is a load error naming
 // both values; at the ceiling (or under it) it loads.
 func TestTeamCeilingsNarrowNeverWiden(t *testing.T) {
 	cases := []struct {
-		name, team, member string
-		want               []string // substrings of the error ("" member loads)
+		name, team, bot string
+		want            []string // substrings of the error ("" bot loads)
 	}{
 		{"operators outside", "operators: [ops]", "operators: [oncall]", []string{`"oncall"`, "team t's operators [ops]"}},
 		{"operators inside", "operators: [ops, oncall]", "operators: [oncall]", nil},
@@ -101,30 +101,30 @@ func TestTeamCeilingsNarrowNeverWiden(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			body := "teams:\n  t: { " + tc.team + " }\nmembers:\n  m: { team: t, " + tc.member + " }\n"
+			body := "teams:\n  t: { " + tc.team + " }\nbots:\n  m: { team: t, " + tc.bot + " }\n"
 			_, err := loadTeams(t, body)
 			if tc.want == nil {
 				if err != nil {
-					t.Fatalf("a member at or under its team's ceiling is refused: %v", err)
+					t.Fatalf("a bot at or under its team's ceiling is refused: %v", err)
 				}
 				return
 			}
 			if err == nil {
-				t.Fatalf("a member past its team's ceiling loaded:\n%s", body)
+				t.Fatalf("a bot past its team's ceiling loaded:\n%s", body)
 			}
 			for _, w := range tc.want {
 				if !strings.Contains(err.Error(), w) {
 					t.Errorf("error %q does not name %q", err, w)
 				}
 			}
-			if !strings.Contains(err.Error(), "members.m") {
-				t.Errorf("error %q does not name the member", err)
+			if !strings.Contains(err.Error(), "bots.m") {
+				t.Errorf("error %q does not name the bot", err)
 			}
 		})
 	}
 }
 
-// What a member leaves unset, it inherits; what it sets narrower, it keeps.
+// What a bot leaves unset, it inherits; what it sets narrower, it keeps.
 func TestTeamDefaultsInherited(t *testing.T) {
 	c, err := loadTeams(t, `
 teams:
@@ -137,7 +137,7 @@ teams:
     isolation: { sandbox: required, handoff_workers: false, skip_permission_prompts: false }
     credentials: { secrets_via: broker, allow_secrets: [house/pd, house/aws] }
     browser: { logins: [app.example.com], credentials: [app] }
-members:
+bots:
   inherit:
     team: platform
     charter: "## Checks\nlook"
@@ -151,8 +151,8 @@ members:
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := c.Members["inherit"]
-	if got := c.MemberOperators("inherit"); strings.Join(got, ",") != "ops,oncall" {
+	in := c.Bots["inherit"]
+	if got := c.BotOperators("inherit"); strings.Join(got, ",") != "ops,oncall" {
 		t.Errorf("operators not inherited: %v", got)
 	}
 	if in.Autonomy.ShadowMode() {
@@ -176,15 +176,15 @@ members:
 	if in.Browser == nil || strings.Join(in.Browser.Logins, ",") != "app.example.com" {
 		t.Errorf("browser scope not inherited: %+v", in.Browser)
 	}
-	nw := c.Members["narrow"]
-	if got := c.MemberOperators("narrow"); strings.Join(got, ",") != "oncall" {
+	nw := c.Bots["narrow"]
+	if got := c.BotOperators("narrow"); strings.Join(got, ",") != "oncall" {
 		t.Errorf("narrowed operators widened: %v", got)
 	}
 	if !nw.Autonomy.ShadowMode() || nw.Autonomy.SpendCap.PerAction != 10 || strings.Join(nw.Skill.AllowSecrets, ",") != "house/pd" {
 		t.Errorf("narrowed settings widened: %+v %+v", nw.Autonomy, nw.Skill)
 	}
-	// The team's never tier binds a member that classified nothing itself,
-	// and a verb the member made observe stays as strict as the team says.
+	// The team's never tier binds a bot that classified nothing itself,
+	// and a verb the bot made observe stays as strict as the team says.
 	if !hasString(nw.Autonomy.Tiers[TierNever], "aws.iam_*") || !hasString(nw.Autonomy.Tiers[TierObserve], "pd.get") {
 		t.Errorf("tiers not merged: %v", nw.Autonomy.Tiers)
 	}
@@ -198,14 +198,14 @@ members:
 	}
 	// The worker triggers carry the inherited grant.
 	for _, tr := range c.Triggers {
-		if tr.Name == MemberWorkerTrigger("inherit") && (tr.Steps[0].Skill == nil || tr.Steps[0].Skill.SecretsVia != "broker") {
+		if tr.Name == BotWorkerTrigger("inherit") && (tr.Steps[0].Skill == nil || tr.Steps[0].Skill.SecretsVia != "broker") {
 			t.Errorf("worker trigger did not get the inherited credentials: %+v", tr.Steps[0].Skill)
 		}
 	}
-	// A team's tier does not alias into the member's map.
-	c.Members["inherit"].Autonomy.Tiers[TierNever][0] = "changed"
+	// A team's tier does not alias into the bot's map.
+	c.Bots["inherit"].Autonomy.Tiers[TierNever][0] = "changed"
 	if c.Teams["platform"].Autonomy.Tiers[TierNever][0] != "aws.iam_*" {
-		t.Error("a member's inherited tiers alias its team's")
+		t.Error("a bot's inherited tiers alias its team's")
 	}
 }
 
@@ -216,7 +216,7 @@ func TestTeamCeilingChecksStandAlone(t *testing.T) {
 		return &Config{
 			Operators: map[string]OperatorConfig{"ops": {}, "other": {}},
 			Teams:     map[string]TeamConfig{"t": {Operators: []string{"ops"}}},
-			Members:   map[string]MemberConfig{"m": {Team: "t", Operators: []string{"other"}}},
+			Bots:      map[string]BotConfig{"m": {Team: "t", Operators: []string{"other"}}},
 		}
 	}
 	if err := widen().ResolveTeams(); err == nil || !strings.Contains(err.Error(), `"other" is not one of team t's operators [ops]`) {
@@ -226,16 +226,16 @@ func TestTeamCeilingChecksStandAlone(t *testing.T) {
 		t.Fatalf("validateTeams let a widening through: %v", err)
 	}
 	ok := widen()
-	ok.Members["m"] = MemberConfig{Team: "t"}
+	ok.Bots["m"] = BotConfig{Team: "t"}
 	if err := ok.ResolveTeams(); err != nil {
 		t.Fatal(err)
 	}
-	if err := ok.validateTeams(); err != nil || strings.Join(ok.Members["m"].Operators, ",") != "ops" {
-		t.Fatalf("an inheriting member: %v %v", err, ok.Members["m"].Operators)
+	if err := ok.validateTeams(); err != nil || strings.Join(ok.Bots["m"].Operators, ",") != "ops" {
+		t.Fatalf("an inheriting bot: %v %v", err, ok.Bots["m"].Operators)
 	}
 }
 
-// Inheritance copies: two members sharing one tier slice (a Config built in
+// Inheritance copies: two bots sharing one tier slice (a Config built in
 // code) do not write each other's team tiers into it.
 func TestTeamInheritanceDoesNotAlias(t *testing.T) {
 	shared := make([]string, 1, 8)
@@ -245,18 +245,18 @@ func TestTeamInheritanceDoesNotAlias(t *testing.T) {
 			"x": {Autonomy: TeamAutonomy{Tiers: map[string][]string{TierObserve: {"x.only"}}}},
 			"y": {Autonomy: TeamAutonomy{Tiers: map[string][]string{TierObserve: {"y.only"}}}},
 		},
-		Members: map[string]MemberConfig{
-			"a": {Team: "x", Autonomy: MemberAutonomy{Tiers: map[string][]string{TierObserve: shared}}},
-			"b": {Team: "y", Autonomy: MemberAutonomy{Tiers: map[string][]string{TierObserve: shared}}},
+		Bots: map[string]BotConfig{
+			"a": {Team: "x", Autonomy: BotAutonomy{Tiers: map[string][]string{TierObserve: shared}}},
+			"b": {Team: "y", Autonomy: BotAutonomy{Tiers: map[string][]string{TierObserve: shared}}},
 		},
 	}
 	if err := c.ResolveTeams(); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(c.Members["a"].Autonomy.Tiers[TierObserve], ","); got != "kv.get,x.only" {
+	if got := strings.Join(c.Bots["a"].Autonomy.Tiers[TierObserve], ","); got != "kv.get,x.only" {
 		t.Errorf("a's tiers: %s", got)
 	}
-	if got := strings.Join(c.Members["b"].Autonomy.Tiers[TierObserve], ","); got != "kv.get,y.only" {
+	if got := strings.Join(c.Bots["b"].Autonomy.Tiers[TierObserve], ","); got != "kv.get,y.only" {
 		t.Errorf("b's tiers: %s", got)
 	}
 }
@@ -267,7 +267,7 @@ teams:
   platform: {}
   billing: {}
   quiet: { peers: none }
-members:
+bots:
   a: { team: platform }
   b: { team: platform }
   c: { team: billing }
@@ -275,7 +275,7 @@ members:
   e: { team: quiet }
   f: { team: quiet }
   g: {}
-member_links:
+bot_links:
   - [d, e]
   - [a, c]
 `)
@@ -291,10 +291,10 @@ member_links:
 		{"a", "c", true},                     // …unless the operator links them
 		{"d", "f", false}, {"e", "f", false}, // peers: none
 		{"d", "e", true},                     // an explicit link still counts
-		{"a", "g", false}, {"g", "a", false}, // a teamless member
+		{"a", "g", false}, {"g", "a", false}, // a teamless bot
 		{"a", "a", false},
 	} {
-		if got := c.MemberLinked(x.a, x.b); got != x.want {
+		if got := c.BotLinked(x.a, x.b); got != x.want {
 			t.Errorf("linked(%s,%s) = %v, want %v", x.a, x.b, got, x.want)
 		}
 	}
@@ -313,21 +313,21 @@ teams:
       rules: [ { name: billing, match: { service: "billing-*", source: "pd.*" }, to: b } ]
       lead: a
       fallback: b
-members:
+bots:
   a: { team: platform }
   b: { team: platform }
   c: {}
 triggers:
   - on: manual
     name: page
-    steps: [ { member: { team: platform, title: "x" } } ]
+    steps: [ { bot: { team: platform, title: "x" } } ]
 `
 	c, err := loadTeams(t, ok)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.TeamMembers("platform"); strings.Join(got, ",") != "a,b" {
-		t.Errorf("team members: %v", got)
+	if got := c.TeamBots("platform"); strings.Join(got, ",") != "a,b" {
+		t.Errorf("team's bots: %v", got)
 	}
 	if !strings.HasSuffix(c.TeamKnowledgeDir("platform"), "teams/platform/knowledge") || c.TeamKnowledgeDir("nope") != "" {
 		t.Errorf("knowledge dir: %q", c.TeamKnowledgeDir("platform"))
@@ -345,8 +345,8 @@ triggers:
 		"rule outside":        {"to: b }", "to: c }"},
 		"empty match":         {`match: { service: "billing-*", source: "pd.*" }`, "match: {}"},
 		"bad pattern":         {`"billing-*"`, `"[billing"`},
-		"unknown routed team": {"member: { team: platform", "member: { team: nope"},
-		"name and team":       {"member: { team: platform", "member: { name: a, team: platform"},
+		"unknown routed team": {"bot: { team: platform", "bot: { team: nope"},
+		"name and team":       {"bot: { team: platform", "bot: { name: a, team: platform"},
 		"team action":         {`title: "x" }`, `action: rotate }`},
 	} {
 		body := strings.Replace(ok, edit[0], edit[1], 1)
@@ -358,7 +358,7 @@ triggers:
 		}
 	}
 	// A team without routing cannot be routed to.
-	if _, err := loadTeams(t, "teams:\n  x: {}\nmembers:\n  a: { team: x }\ntriggers:\n  - on: manual\n    name: p\n    steps: [ { member: { team: x } } ]\n"); err == nil ||
+	if _, err := loadTeams(t, "teams:\n  x: {}\nbots:\n  a: { team: x }\ntriggers:\n  - on: manual\n    name: p\n    steps: [ { bot: { team: x } } ]\n"); err == nil ||
 		!strings.Contains(err.Error(), "no routing") {
 		t.Errorf("routing to a routing-less team: %v", err)
 	}
@@ -383,13 +383,13 @@ triggers:
 		}
 	}
 	w := strings.Join(func() []string {
-		c, err := loadTeams(t, "teams:\n  empty: {}\n  boxed: { isolation: { sandbox: required } }\nmembers:\n  a: { team: boxed }\n")
+		c, err := loadTeams(t, "teams:\n  empty: {}\n  boxed: { isolation: { sandbox: required } }\nbots:\n  a: { team: boxed }\n")
 		if err != nil {
 			t.Fatal(err)
 		}
-		return c.MemberWarnings()
+		return c.BotWarnings()
 	}(), "\n")
-	if !strings.Contains(w, "teams.empty: no enabled member") || !strings.Contains(w, "teams.boxed: isolation.sandbox required") {
+	if !strings.Contains(w, "teams.empty: no enabled bot") || !strings.Contains(w, "teams.boxed: isolation.sandbox required") {
 		t.Errorf("team warnings: %s", w)
 	}
 }

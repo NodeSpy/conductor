@@ -34,8 +34,8 @@ const (
 	// a human who may not get to it for hours or days, so a 2h dispatch window
 	// leaves its conductor creds (how it auths `conductor call …` to the broker)
 	// dead by the time the human engages it. A week is plenty for a real
-	// hand-off and still bounds a scraped token. Member sessions use the same
-	// durable token, so the constant lives in config, where a member's
+	// hand-off and still bounds a scraped token. Bot sessions use the same
+	// durable token, so the constant lives in config, where a bot's
 	// rotation age is validated against it.
 	HandoffSessionTTL = config.HandoffSessionTTL
 	// SessionTTL bounds a dispatch token's life — roughly a dispatch's
@@ -100,12 +100,12 @@ type Identity struct {
 	// dispatch.Request.DispatchID): the anchor a live tool's reconstructed
 	// trigger is confined to when the target itself cannot be trusted.
 	Dispatch string
-	// Member / MemberRole / CaseID bind the session to a member (home or
-	// worker) and, for a worker, its case: what the member autonomy gate
+	// Bot / BotRole / CaseID bind the session to a bot (home or
+	// worker) and, for a worker, its case: what the bot autonomy gate
 	// decides against. Minted daemon-side from config and the ledger.
-	Member     string
-	MemberRole string
-	CaseID     string
+	Bot     string
+	BotRole string
+	CaseID  string
 	// Context is the originating trigger's context, held daemon-side for the
 	// session's lifetime. It exists for RESOURCE SCOPING: the trigger's
 	// declared target scope (Sem) reads its facts to decide which channel

@@ -1,0 +1,321 @@
+# Bots — design notes (#172)
+
+User-facing reference: docs/wiki/Bots.md. This page records the decisions
+behind it and the seams left for conductor's agent sandbox.
+
+## The issue's open questions, answered
+
+- **Ledger home.** Conductor's own state (`bots.json` beside
+  `affinity.json`/`plans.json`, written through `store.persist`), with paseo as
+  a client of the operator CLI. The ledger is what a fresh session resumes
+  from and what the gate decides against (case requesters, spend), so it lives
+  with the gate. A `bots.json` that does not parse is moved aside and the
+  ledger flagged degraded; commit-money is refused while degraded (a vanished
+  spend history must not reset a cap).
+- **Approval surface without chat.** `conductor bot approve` signs the
+  proposal's digest with the operator's SSH key and sends it over the operator
+  control socket; the daemon verifies against `operators.<name>.ssh_key`. Works
+  with paseo + the CLI alone. A chat approval path (an `ask` hand-off whose
+  answerer maps to an operator alias) can be added later on the same
+  `Executor.Decide`.
+- **Rotation trigger.** Age, delivered turns, the agent being gone, or an
+  operator request. Context size is not observable through paseo today; turns
+  are the proxy. Rotation waits for the old session's handoff turn to
+  *settle* (paseo `send` returns when the agent stops, which includes a
+  permission prompt mid-turn).
+- **Memory review flow.** Direct commits by conductor, one per write, with
+  trailers; review is `git log`, correction is a commit or a revert. A PR flow
+  can wrap the same repo later; nothing in the bot depends on it.
+
+## Launch paths (no parallel launcher)
+
+- **Home:** the paseo `Dispatcher` (labels, ownership ledger, skill session),
+  through the `bot.HomeLauncher` seam (`PaseoHome`). The model resolves
+  through the engine's fleet ladder like any step's.
+- **Workers:** each bot expands at load into two `on: manual` triggers;
+  `spawn` fires one through the same path as `conductor run` — an ordinary run
+  on the **cli runtime** (history, watch, budget, guidance, skill card). Only
+  `--handoff` uses paseo, through the ordinary background hand-off path.
+- cli sessions get their conductor session (endpoint + token) and `step.done`
+  resolves controller dispatches through the non-sandbox half of #160's
+  `ccc6331`, ported verbatim. Nothing in the worker path assumes a jail: a
+  worker is an ordinary cli run, so the sandbox confines it the way it
+  confines any cli step.
+
+## One enforcement path
+
+The gate is `flow.BotGate`, consulted inside `RunSkillVerb` after the
+skill policy's access and resource checks. Approved execution runs back through
+`RunSkillVerb` with the approval in its context; the gate admits exactly the
+signed digest of an `approved` proposal, once.
+
+## Binding
+
+`config.Step.BoundBot/BoundBotRole` (`yaml:"-"`) mark the synthesized
+worker step; `SkillEnv` stamps the bot, role and the case id from the
+daemon-built trigger into the session token (durable, like a hand-off's).
+Nothing an agent sends can set them.
+
+## Terraform: conductor applies, bots propose
+
+Bots never hold a write role and never run a write command; there are no
+host-command proposals and no grants. An infrastructure change is a
+**proposal of a commit** (`bot.Terraform`, proposal kind `terraform`):
+
+- **Inputs are pinned.** Repo (a name from `terraform.repos`, never a URL),
+  full commit SHA, root-module dir, workspace, var files, targets. Validation
+  refuses anything that escapes the checkout or isn't a full SHA. The gate
+  tiers the proposal as `terraform.apply`; a `never` tier refuses it before
+  any planning.
+- **Conductor plans it** in `<state>/bots/<m>/tf/<proposal>/` (0700; the
+  plan file 0600): clone `--no-checkout`, fetch the commit if needed,
+  `checkout --detach`, verify `HEAD`; `init`, `workspace select`/`new`,
+  `plan -out`, `show -json` → counts and replaced/destroyed addresses,
+  `show -no-color` → the operator's text, `sha256(plan.bin)`. Planning runs in
+  the background; the proposal is `planning` until it lands as `pending`,
+  `refused`, `shadow` or `failed`.
+- **Roles come from connector config**, never from the agent:
+  `plan_connector` / `apply_connector` are ordinary `terraform` connectors
+  whose `engine`/`binary`/`env` conductor reads (`Config.BotTerraformRole`)
+  and runs the CLI with directly. Inherited `TF_*`/`AWS_*`/`GOOGLE_*`/`ARM_*`
+  are stripped so the connector's `env` alone decides the role. Validation
+  makes it an error for any bot `skill.verbs` pattern to reach the apply
+  connector. Terragrunt is refused (no single saved plan).
+- **The approval covers the plan.** The digest is
+  `ActionDigest(bot, terraform, terraform.apply, {repo, commit, dir,
+  workspace, var_files, targets, plan_sha256})`; the SSHSIG path is unchanged.
+- **Apply checks, in order:** `sha256(plan.bin)` equals the approved hash; the
+  apply role resolves; `HEAD` is the commit; `git status --porcelain
+  --untracked-files=all` shows nothing except `init` artifacts inside the
+  module dir (`.terraform/`, `.terraform.lock.hcl`, local `terraform.tfstate*`).
+  Then `apply -input=false -lock=true plan.bin`. Terraform's own check makes a
+  stale plan fail; the reason names `replan`, which plans the same inputs as a
+  new proposal (`ReplanOf`).
+- **Destroys.** Any destroy or replace of a resource whose type matches
+  `terraform.stateful` (default `config.DefaultStatefulTypes`) is refused at
+  plan time unless the address matches `terraform.allow_destroy`. A plan with
+  no changes is refused too.
+- **Plan retention: none.** A plan file can embed secrets from variables, so
+  the work dir is deleted on every terminal outcome (applied, failed, denied,
+  expired, refused, shadow) and orphans are removed at daemon start
+  (`Recover`, which also fails proposals left `planning`/`approved` by a
+  restart). The ledger keeps the hash, the counts and the text.
+- **How a change becomes a commit (seam).** Conductor only fetches from the
+  configured repo; how the commit gets there is the session's job, through the
+  `git.push` verb once it exists (the guidance names it, and a missing commit
+  fails with "push it first (git.push)"). Until then an operator pushes for it.
+
+## Agent sandbox integration
+
+Behind `bot.Sandbox` (`Active`, `PaseoProvider`) until conductor's agent
+sandbox is on main; `bot.NoSandbox` is the default. The switch is in
+`cmd/conductor/bots.go`:
+
+```go
+func sandboxSeam() bot.Sandbox {
+	return bot.SandboxFuncs{
+		IsActive: func() bool { return <the sandbox is enforcing agent launches> },
+		Provider: func(base string) (string, bool) { return <the paseo provider entry `conductor paseo setup` made for base, e.g. claude-sandboxed> },
+	}
+}
+func registerSandboxSessions(svc *bot.Service) { <sandbox endpoint>.SetSessionLookup(… svc.SessionForCwd …) }
+```
+
+With it: promotion takes effect; the home session launches on the sandboxed
+provider entry for its base provider (the model pin unchanged); the sandbox's
+wrapper endpoint resolves a launch's cwd through `Service.SessionForCwd`
+(`IdentityForCwd` wraps it) — a live home session or hand-off worker, never a
+retired one — to mint that session's token with the bot binding. Tokens
+under rotation: the retiring session's are revoked at once, the new session
+gets fresh ones (`TestWrapperTokensAcrossRotation`). cli workers are launched by
+the engine and sandboxed like any cli step; nothing bot-specific is needed.
+
+## Proactive sweeps
+
+- **A sweep is a cli worker**, not a new launcher: the bot's third
+  synthesized `on: manual` trigger (`bot:<name>:sweep`, only with
+  `proactive:`), the worker step with the sweep's timeout and — when the budget
+  sets a cost — a 24h workflow `policy.budget` the engine enforces.
+- **Read-only is the gate's, not the prompt's.** The sweep's token is bound to
+  the sweep id (the case slot), its worker record carries class `proactive`
+  and `read_only`, and `Gate.caller` resolves both from the ledger.
+  `proactive` is outside the autonomy allowlist (`event`, `bot`,
+  `operator`), and read-only refuses autonomy on its own: either lock holds
+  alone.
+- **The notify decision is conductor's.** The agent reports findings with a
+  severity and a stable key; `finishSweep` dedupes by key against open cases,
+  opens a case (class `proactive`) only at or above `notify_at`, notifies on a
+  new case or an escalation past the threshold (the home inbox + the
+  `conductor.bot_notify` lifecycle event, via `notify.Publish`), and records
+  the rest quietly (ledger + `episodes/proactive/YYYY/MM/<date>.md`). A quiet
+  sweep writes one ledger record and one journal line.
+- **Budget** counts the ledger's sweeps over a rolling 24h: starts, and cost
+  from the run history (`RunCost`, recorded at `run_done`). One running sweep
+  at a time (checked inside the ledger transaction that creates the next).
+  Quiet hours are local time with an optional IANA zone; an operator's
+  explicit `conductor bot sweep` ignores them, never the budget.
+
+## Coordination: parents, children, peers
+
+The rule: **instructions flow down, authority never grows.**
+
+- **Parent → child.** A worker's record names its parent (`home:<session>`, or
+  `conductor` for workers conductor starts itself). Follow-ups
+  (`bot tell`) are stored on the worker and handed over at its next bot
+  op — the cli runtime has no mid-turn injection — and `CheckDone` refuses a
+  child's `step.done` while one is unread. They are rendered as instructions,
+  not fenced.
+- **Child → parent** is data: `step.done` output and `bot report` are fenced
+  `WORKER REPORT` blocks in the home inbox. A fan-out group (`spawn --group`)
+  reports once, decided inside the ledger transaction of its last finish.
+- **Provenance is inherited.** At spawn the worker records the less trusted of
+  its case's requester and the parent's `homeAttribution` (the least-trusted
+  open case) — computed inside the same ledger transaction. The gate reads a
+  worker's class from its record (by dispatch), not from the case, and fails
+  closed (`user`) without one. Conductor-started workers (urgent events,
+  consolidation) take the case's provenance alone: their parent is not a
+  conversation that could have been steered.
+- **The ceiling.** `--verbs` patterns are checked by the gate after the
+  bot's own policy admitted the call, so they can only narrow; `--read-only`
+  holds the child to observe. Children cannot spawn, join, tell, approve or ask.
+- **Peers** (`bot ask`) need an operator link (both sides' `peers:`, or a
+  `bot_links:` pair), arrive as a case of class `peer` (requester
+  `bot:<name>`, ranked with a third party), carry only the message text
+  (fenced), are audited on both sides, and are capped at 4000 bytes and 20 per
+  hour per direction. A reply (`ask --case <peer case>`) is routed into the
+  sender's original case.
+
+### Persistent sub-bots: left out
+
+A bot creating a long-lived helper bot does not fit cleanly:
+
+- bots are operator config, and nothing on the agent-facing surface writes
+  config — a runtime-created bot would need conductor to rewrite the config
+  file, or a second, state-held bot registry beside it;
+- "a charter scope that is a subset of the parent's" is free text and cannot be
+  checked mechanically;
+- there is no bot archive operation to cascade (a bot is removed by
+  editing config).
+
+The clean equivalent today is operator-side: declare the helper as its own
+bot and link it as a peer (data only), or use ephemeral workers (instructions
+down, same authority or less).
+
+## Teams
+
+User reference: docs/wiki/Bots.md#teams. A team is operator config like a
+bot (`teams:` in `internal/config/teams.go`), and conductor still has no
+notion of an org: a team is a set of bots that share ceilings, peer with
+each other, may share a knowledge repo, and can be routed work as a unit.
+
+### Ceilings, resolved once at load
+
+- **One effective `BotConfig`.** `Config.ResolveTeams` runs at load, before
+  `expandBots` copies a bot's grant into its worker triggers. For each
+  bot with a `team:` it checks every ceiling (`checkTeamCeilings`, pure),
+  then fills in each default the bot left unset (`inheritTeam`, copying
+  values, never aliasing the team's maps). Everything downstream (the gate,
+  the service, the home launch, the worker steps) reads the bot's own
+  config and needs no team awareness. Inherited values sit exactly at the
+  ceiling, so resolving again is a no-op. `validateTeams` re-runs the pure
+  check, which also covers a `Config` assembled in code. Either check alone
+  refuses a widening.
+- **Exactly one team.** `TeamName` decodes only a scalar. A list fails with
+  "a bot belongs to at most one team", and YAML itself refuses a repeated
+  `team:` key.
+- **The comparisons.**
+  - Operators: a subset.
+  - `autonomy.ceiling: observe`: refuses any `promote` (promotion only ever
+    reaches `reversible`).
+  - `shadow: true`: refuses `shadow: false`.
+  - Spend cap: per-action and per-period no higher, the period no shorter
+    (the same cap over less time is a faster rate), the same currency.
+  - Sweep budget: each limit no higher than the pool's.
+  - Isolation: each flag no looser.
+  - Credentials: `secrets_via` ranked `none < broker < env`; `allow_secrets` a
+    subset.
+  - Browser: logins a subset, with a `*.domain` entry covering its hosts and
+    narrower `*.sub.domain` patterns; credentials a subset.
+- **Tiers.** Team tiers merge into the bot's, and the gate's
+  strictest-wins rule makes that a floor. A bot pattern a team pattern
+  covers (`path.Match(team, bot)`) at a stricter tier is a load error, so
+  the operator sees the conflict. Overlaps that check cannot see (two globs
+  that only intersect) are still resolved strictly at runtime.
+
+### Runtime
+
+- **Peering** is `Config.BotLinked`: teammates whose team does not set
+  `peers: none`, in addition to the existing operator links. `Ask` is
+  unchanged, so a teammate's message is the ordinary peer case: data,
+  fenced, audited both sides, rate-limited.
+- **Routing.** `bot: { team: … }` reaches `Service.RouteTeam` with the
+  event's own fields for the rules. The requester is classified once, against
+  the team's operators. `atBot` bounds that at each receiving bot by
+  re-classifying an operator against that bot's operators and keeping the
+  less trusted result.
+- **The lead triages through a read-only worker** that conductor starts on a
+  triage case in the lead's ledger, not through the lead's home
+  conversation. The worker:
+  - is immediate (no waiting for an idle home);
+  - is read-only by the existing worker lock;
+  - leaves the lead's home attribution and inbox alone (a triage worker's
+    `step.done` is not reported home).
+
+  `Assign` claims the triage case inside one ledger transaction (`triage` →
+  `assigned`), so it happens once. A failed delivery puts it back. It is
+  allowed from the lead's home session or from the worker started on that
+  case.
+- **Taint on assignment.** The assignee's case is the triage case's
+  requester, made less trusted by the assigning session's own attribution
+  when that is below `bot`. An untainted lead (`bot`: its own
+  initiative, no less-trusted request open) adds nothing, so an operator's
+  routed request stays the operator's instead of being reset to the lead's
+  trust.
+- **Fallback.** A triage case left unassigned goes to `routing.fallback`, on
+  its original provenance, when:
+  - the triage worker finishes without assigning (in `finishWorker`);
+  - `routing.timeout` passes (in the lead's `Tick`);
+  - triage cannot start (in `RouteTeam`).
+- **Ledger.** `Case.Team` and `Case.Routing` (`via`, the rule's label, the
+  lead and its triage case, the assignee and its case, the reason, the
+  note), plus `Payload` on a triage case, the text its assignee receives.
+- **Knowledge** is a `Repo` with `Team: true`:
+  - only `knowledge/` and `runbooks/`;
+  - `WriteAs` gives each commit its promoting bot as author.
+
+  A promotion is a proposal of kind `knowledge` carrying the exact text. Its
+  digest is `ActionDigest(bot, knowledge, team.promote, {team, from, to,
+  sha256})`. `Executor.execKnowledge` re-checks the digest and the hash
+  before landing, and `LandApproved` refuses a bot that has left the team.
+  `Approvers` is the bot's operators for every other proposal, and the
+  team's for a promotion. It is computed from the config at decision time,
+  and stored on the proposal for display only. `promotion: direct` lands at
+  once only on the `autonomyClass` allowlist (event, bot, operator),
+  outside shadow mode, and not from a read-only worker.
+- **The pool.** `StartSweep` holds a per-team lock while it snapshots the
+  teammates' ledgers and checks the pool. The snapshot is taken outside the
+  bot's own ledger transaction, because the store lock is held inside it;
+  the team lock keeps it current. It records its sweep inside the
+  transaction as before.
+- **Isolation.** `sandboxGate` refuses a home launch, a worker and a sweep of
+  a bot with `isolation.sandbox: required` while `Sandbox.Active()` is
+  false. `Tick` logs that once per reason. `Spawn` refuses `--handoff` under
+  `handoff_workers: false`.
+
+### Seams and what is left out
+
+- **Browser scope** is config, inheritance and validation only. The agent
+  browser (#182) consumes `BotConfig.Browser` when it lands, next to the
+  `requesterFor` wiring. Until then nothing reads it, and `conductor
+  validate` says so.
+- **`isolation.sandbox: required`** becomes satisfiable when the agent
+  sandbox (#179) is on main, through the same `sandboxSeam`.
+- **The team spend cap is a per-bot ceiling, not a pool.** Each bot's
+  commit-money cap fits inside it, but the team's bots are not summed. A
+  shared money pool would need the gate to lock across bots' ledgers at
+  proposal and at execution. The proactive pool is the one cross-bot
+  budget, as specified.
+- **No team-level links.** Cross-team traffic still needs an operator to link
+  two bots. A `team_links:` granularity was not added; it would link every
+  pair across two teams at once, which is the kind of broad channel the
+  bot links were designed to avoid.

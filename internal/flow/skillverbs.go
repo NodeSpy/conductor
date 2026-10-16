@@ -57,34 +57,34 @@ type SkillIdentity struct {
 	// Sem is the originating trigger's declared semantics (daemon-side, like
 	// Context): its target scope answers ContextScope.
 	Sem *sdk.EventSemantics
-	// Member binds this grant to a member (docs/design/members.md): every verb
-	// it calls passes that member's autonomy gate after the access and scope
-	// checks below. MemberRole is home | worker; CaseID the case a worker was
+	// Bot binds this grant to a bot (docs/design/bots.md): every verb
+	// it calls passes that bot's autonomy gate after the access and scope
+	// checks below. BotRole is home | worker; CaseID the case a worker was
 	// launched for. All three are minted daemon-side from config and the
 	// ledger, never asserted by the agent.
-	Member     string `json:"member,omitempty"`
-	MemberRole string `json:"member_role,omitempty"`
-	CaseID     string `json:"case_id,omitempty"`
+	Bot     string `json:"bot,omitempty"`
+	BotRole string `json:"bot_role,omitempty"`
+	CaseID  string `json:"case_id,omitempty"`
 }
 
-// MemberGate is the members' autonomy gate (internal/member). RunSkillVerb
-// consults it for every call whose grant is bound to a member, AFTER the
+// BotGate is the bots' autonomy gate (internal/bot). RunSkillVerb
+// consults it for every call whose grant is bound to a bot, AFTER the
 // profile and resource checks — it can only narrow what the grant admits,
-// never widen it. A nil gate with a member-bound grant fails closed.
-type MemberGate interface {
-	CheckVerb(ctx context.Context, id SkillIdentity, uses string, options map[string]any) (MemberVerdict, error)
+// never widen it. A nil gate with a bot-bound grant fails closed.
+type BotGate interface {
+	CheckVerb(ctx context.Context, id SkillIdentity, uses string, options map[string]any) (BotVerdict, error)
 }
 
-// MemberVerdict is the gate's answer. Allow runs the verb; otherwise Output
+// BotVerdict is the gate's answer. Allow runs the verb; otherwise Output
 // (non-nil) is what the agent gets back instead of running it — a proposal
 // handle — and a non-nil error from CheckVerb is a refusal.
-type MemberVerdict struct {
+type BotVerdict struct {
 	Allow  bool
 	Output map[string]any
 }
 
 // MatchVerbPattern is the skill-grant matcher (path globs, conductor.* exact
-// only), exported so the member gate classifies verbs with the same rules
+// only), exported so the bot gate classifies verbs with the same rules
 // the grant admits them by.
 func MatchVerbPattern(patterns []string, uses string) bool { return matchAny(patterns, uses) }
 
@@ -699,15 +699,15 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	if err := r.checkSkillVerbResources(r.planPolicy(), t, uses, options, id.ScopesFor(uses)); err != nil {
 		return deny(r.redactErr(err))
 	}
-	// THE MEMBER GATE. A member-bound grant has passed access and scope; the
-	// member's autonomy tiers now decide whether this call runs, becomes a
+	// THE BOT GATE. A bot-bound grant has passed access and scope; the
+	// bot's autonomy tiers now decide whether this call runs, becomes a
 	// proposal for operator approval, or is refused. Same chokepoint, one
 	// more narrowing step — no second enforcement path.
-	if id.Member != "" {
-		if r.Members == nil {
-			return deny("member-bound grant but no member gate on this daemon")
+	if id.Bot != "" {
+		if r.Bots == nil {
+			return deny("bot-bound grant but no bot gate on this daemon")
 		}
-		v, err := r.Members.CheckVerb(ctx, id, uses, options)
+		v, err := r.Bots.CheckVerb(ctx, id, uses, options)
 		if err != nil {
 			return deny(r.redactErr(err))
 		}

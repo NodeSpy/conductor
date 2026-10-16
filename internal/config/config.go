@@ -151,16 +151,16 @@ type Config struct {
 	// with provenance and scope, written by verbs/agents and injected into
 	// opted-in agent prompts. Nil = memory not configured (no default).
 	Memory *MemoryConfig `yaml:"memory"`
-	// Operators are the humans who may approve member proposals, and Members
-	// the persistent conversational agents (members.go). Both optional.
+	// Operators are the humans who may approve bot proposals, and Bots
+	// the persistent conversational agents (bots.go). Both optional.
 	Operators map[string]OperatorConfig `yaml:"operators"`
-	Members   map[string]MemberConfig   `yaml:"members"`
-	// MemberLinks are operator-side peer links: each pair of members may
-	// message each other (`conductor member ask`), as if both listed the
+	Bots      map[string]BotConfig      `yaml:"bots"`
+	// BotLinks are operator-side peer links: each pair of bots may
+	// message each other (`conductor bot ask`), as if both listed the
 	// other under peers:. No link, no messages.
-	MemberLinks [][]string `yaml:"member_links,omitempty"`
-	// Teams group members (teams.go): shared ceilings, intra-team peering,
-	// an optional knowledge repo, routing. Optional; a member names its
+	BotLinks [][]string `yaml:"bot_links,omitempty"`
+	// Teams group bots (teams.go): shared ceilings, intra-team peering,
+	// an optional knowledge repo, routing. Optional; a bot names its
 	// team.
 	Teams     map[string]TeamConfig  `yaml:"teams,omitempty"`
 	Workflows map[string]WorkflowDef `yaml:"workflows"`
@@ -944,16 +944,16 @@ func Load(path string) (*Config, error) {
 	// Trigger `extends:` resolves + abstract bases are stripped BEFORE
 	// normalization, so a child can inherit a base's `on:` and bases (which may
 	// carry no `on:`) never reach the on:-required / manual-name checks.
-	// Each member expands into its two synthesized worker triggers (`on:
+	// Each bot expands into its two synthesized worker triggers (`on:
 	// manual`), here so they pass through normalization and validation like
-	// any trigger the operator wrote. No-op without `members:`.
-	// Teams resolve first: each member's team defaults are filled in (and a
-	// member setting past its team's ceiling refused) before the member's
+	// any trigger the operator wrote. No-op without `bots:`.
+	// Teams resolve first: each bot's team defaults are filled in (and a
+	// bot setting past its team's ceiling refused) before the bot's
 	// worker triggers copy its grant.
 	if err := c.ResolveTeams(); err != nil {
 		return nil, err
 	}
-	if err := c.expandMembers(); err != nil {
+	if err := c.expandBots(); err != nil {
 		return nil, err
 	}
 	if err := c.resolveTriggerExtends(); err != nil {
@@ -1289,7 +1289,7 @@ func (c *Config) Validate() error {
 	if err := c.validateSessions(); err != nil {
 		return err
 	}
-	if err := c.validateMembers(); err != nil {
+	if err := c.validateBots(); err != nil {
 		return err
 	}
 	if c.Policy != nil {

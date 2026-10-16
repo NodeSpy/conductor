@@ -13,8 +13,8 @@ import (
 
 // A local cli launch carries the dispatch's conductor session (endpoint +
 // token) so the agent can `conductor call step.done` and its granted verbs —
-// and a member worker's token is bound to its member and case, which is what
-// puts its calls through the member gate.
+// and a bot worker's token is bound to its bot and case, which is what
+// puts its calls through the bot gate.
 func TestCLILaunchCarriesSkillSession(t *testing.T) {
 	prev := memory.ToolCommand()
 	memory.SetToolCommand([]string{"conductor", "mcp", "memory", "--socket", "/tmp/x/memory.sock"})
@@ -28,8 +28,8 @@ func TestCLILaunchCarriesSkillSession(t *testing.T) {
 	c.launch = l.launch
 	req := makeReq("manual", "work")
 	req.DispatchID = "m-sre-w1-x:work"
-	req.Step.BoundMember, req.Step.BoundMemberRole = "sre", config.MemberRoleWorker
-	req.Trigger.Context = map[string]any{"member_case": "c3"}
+	req.Step.BoundBot, req.Step.BoundBotRole = "sre", config.BotRoleWorker
+	req.Trigger.Context = map[string]any{"bot_case": "c3"}
 	sess, err := c.NewSession(context.Background(), Spec{Request: req, Cwd: t.TempDir()}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +51,7 @@ func TestCLILaunchCarriesSkillSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id.Dispatch != "m-sre-w1-x:work" || id.Member != "sre" || id.MemberRole != config.MemberRoleWorker || id.CaseID != "c3" {
+	if id.Dispatch != "m-sre-w1-x:work" || id.Bot != "sre" || id.BotRole != config.BotRoleWorker || id.CaseID != "c3" {
 		t.Fatalf("token identity = %+v", id)
 	}
 }

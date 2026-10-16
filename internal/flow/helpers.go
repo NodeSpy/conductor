@@ -37,8 +37,8 @@ func (r *Runner) execHelper(ctx context.Context, t core.Trigger, step config.Ste
 		return r.execFail(step, data)
 	case config.HelperWaitFor:
 		return r.execWaitFor(ctx, t, step, id, data, shadow)
-	case config.HelperMember:
-		return r.execMember(ctx, t, step, data, shadow)
+	case config.HelperBot:
+		return r.execBot(ctx, t, step, data, shadow)
 	}
 	// Unreachable through the loader (config.HelperForm and this switch list
 	// the same set) — it fires only for a helper added to the config side and

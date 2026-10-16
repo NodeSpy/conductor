@@ -44,9 +44,9 @@ in a config.
 | `workflows:` | reusable step lists with `inputs:` / `outputs:` (+ a default `gate:` for their agent steps) | [[Workflows]], [[Gates]] |
 | `policy:` | global controls incl. the `budget:` spend cap; also valid on connectors and triggers (most specific wins) | [[Policy]], [[Cost-Accounting]] |
 | `vaults:` | named secret stores (`conductor`/`onepassword`/`pass`/`file`/`hashicorp`), read as `{{ vault "<name>" "<key>" }}` with per-vault read/write verbs | [[Secrets]] |
-| `operators:` | the humans who approve member proposals: `ssh_key` (approvals are SSH-signed), `aliases` (chat ids that are this operator) | [[Members]] |
-| `members:` | persistent conversational agents: charter, memory repo, home session (paseo), workers (cli), opt-in `proactive:` sweeps, `peers:`, `team:`, skill grant, `autonomy:` tiers / promotion / shadow / spend cap | [[Members]] |
-| `teams:` | groups of members: ceilings members inherit and can only narrow (operators, autonomy, budgets with a proactive pool, isolation, credentials, browser logins), intra-team peering, a shared `knowledge:` repo, `routing:` (rules, lead, fallback) | [[Members#teams]] |
+| `operators:` | the humans who approve bot proposals: `ssh_key` (approvals are SSH-signed), `aliases` (chat ids that are this operator) | [[Bots]] |
+| `bots:` | persistent conversational agents: charter, memory repo, home session (paseo), workers (cli), opt-in `proactive:` sweeps, `peers:`, `team:`, skill grant, `autonomy:` tiers / promotion / shadow / spend cap | [[Bots]] |
+| `teams:` | groups of bots: ceilings bots inherit and can only narrow (operators, autonomy, budgets with a proactive pool, isolation, credentials, browser logins), intra-team peering, a shared `knowledge:` repo, `routing:` (rules, lead, fallback) | [[Bots#teams]] |
 | `checks:` | named quality-gate checks (command / code / verb / critic agent) that `gate: run:` lists reference | [[Gates]] |
 | `pricing:` | model→$ overrides for cost estimation (`models:` glob patterns, `default:`) | [[Cost-Accounting]] |
 | `imports:` | split the config across files (globs, deep-merged) | below |

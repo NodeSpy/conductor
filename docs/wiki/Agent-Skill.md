@@ -185,14 +185,14 @@ imposes nothing of its own.
   broker only issues to a broker session, so the grants would never resolve;
   the config is rejected rather than failing silently at runtime.
 
-## Member sessions
+## Bot sessions
 
-A [[Members|member]]'s home session and workers carry the member's `skill:`
-grant, and their session token is additionally bound to the member (and, for a
+A [[Bots|bot]]'s home session and workers carry the bot's `skill:`
+grant, and their session token is additionally bound to the bot (and, for a
 worker, its case). After the grant's access and resource checks, every verb
-they call passes the member's **autonomy gate** — observe runs, anything above
-the member's tier comes back as a proposal id for an operator to approve with a
-signed `conductor member approve`. The gate only narrows: it can never admit a
+they call passes the bot's **autonomy gate** — observe runs, anything above
+the bot's tier comes back as a proposal id for an operator to approve with a
+signed `conductor bot approve`. The gate only narrows: it can never admit a
 verb the grant does not.
 
 ## How identity is bound

@@ -112,7 +112,7 @@ const FailureTTL = 10 * time.Minute
 // that is still starting (paseo discovering its providers) answers "no
 // models" for a while. Cached forever, as a positive result is, it left every
 // dispatch on that runtime bare-launching — which paseo refuses — until
-// conductor restarted. A member's home session, launched the moment the
+// conductor restarted. A bot's home session, launched the moment the
 // daemon boots, hit exactly that.
 const EmptyRosterTTL = time.Minute
 

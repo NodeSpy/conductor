@@ -963,13 +963,13 @@ type Step struct {
 	// detach is a capability the operator grants, never one an agent can take
 	// for itself. Needs a paseo runtime.
 	Detach bool `yaml:"detach,omitempty"`
-	// BoundMember / BoundMemberRole mark a step SYNTHESIZED for a member's workers
-	// (members.go expandMembers): the session token minted for it carries the
-	// member binding, which is what puts every verb it calls through that
-	// member's autonomy gate. Never decoded from YAML — an operator cannot
+	// BoundBot / BoundBotRole mark a step SYNTHESIZED for a bot's workers
+	// (bots.go expandBots): the session token minted for it carries the
+	// bot binding, which is what puts every verb it calls through that
+	// bot's autonomy gate. Never decoded from YAML — an operator cannot
 	// write it and an agent-authored plan cannot claim it.
-	BoundMember     string `yaml:"-"`
-	BoundMemberRole string `yaml:"-"`
+	BoundBot     string `yaml:"-"`
+	BoundBotRole string `yaml:"-"`
 
 	// command form (also carries workdir/env for agent/code forms), and the
 	// argv the `cli` engine runs. A list of words, or one string (see Argv).
@@ -1042,9 +1042,9 @@ type Step struct {
 	// the principled form of a bare `sleep:` before a state-dependent step —
 	// see WaitSpec. `until:` is its condition clause, not a standalone form.
 	WaitFor *WaitSpec `yaml:"wait_for,omitempty"`
-	// Member is the `member:` helper — route this event into a member
-	// (members.go), or rotate / consolidate one. See MemberStep.
-	Member *MemberStep `yaml:"member,omitempty"`
+	// Bot is the `bot:` helper — route this event into a bot
+	// (bots.go), or rotate / consolidate one. See BotStep.
+	Bot *BotStep `yaml:"bot,omitempty"`
 
 	// Watch makes an interactive hand-off REACTIVE: while it waits for a human,
 	// conductor polls a read verb and, when a rule's condition holds, runs a

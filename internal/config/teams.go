@@ -12,84 +12,84 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// TEAMS (docs/wiki/Members.md#teams, docs/design/members.md): a team is one
+// TEAMS (docs/wiki/Bots.md#teams, docs/design/bots.md): a team is one
 // more thing the operator defines and cuts however they like — by system,
 // function, environment. Conductor has no notion of an org; a team is a set
-// of members that share defaults, peer with each other, may share a knowledge
+// of bots that share defaults, peer with each other, may share a knowledge
 // repo, and can be routed work as a unit.
 //
-// The rule is the packs' rule: a team's defaults are CEILINGS. A member
+// The rule is the packs' rule: a team's defaults are CEILINGS. A bot
 // inherits each one it does not set and may only narrow it, never widen it —
-// a member setting past its team's is a load error naming both values. The
-// inheritance is resolved once, at load (resolveTeams), into the member's own
+// a bot setting past its team's is a load error naming both values. The
+// inheritance is resolved once, at load (resolveTeams), into the bot's own
 // config, so everything downstream (the gate, the service, the home launch)
-// reads one effective MemberConfig.
+// reads one effective BotConfig.
 //
-// Optional throughout: no `teams:` and no member `team:` behaves exactly as
+// Optional throughout: no `teams:` and no bot `team:` behaves exactly as
 // before.
 
 // TeamConfig is one team.
 type TeamConfig struct {
 	// Description is the team's one-line identity.
 	Description string `yaml:"description,omitempty"`
-	// Operators may approve the team's members' proposals and its knowledge
-	// promotions. A member's operators: must be a subset; a member that sets
+	// Operators may approve the team's bots' proposals and its knowledge
+	// promotions. A bot's operators: must be a subset; a bot that sets
 	// none inherits these. Empty = every configured operator.
 	Operators []string `yaml:"operators,omitempty"`
-	// Peers is how the team's members message each other: "team" (the
-	// default — every member may `ask` every other, with the ordinary peer
+	// Peers is how the team's bots message each other: "team" (the
+	// default — every bot may `ask` every other, with the ordinary peer
 	// rules: data only, fenced, audited, rate-limited) or "none" (only
 	// explicit operator links, as between teams).
 	Peers string `yaml:"peers,omitempty"`
-	// Autonomy bounds the members' gates.
+	// Autonomy bounds the bots' gates.
 	Autonomy TeamAutonomy `yaml:"autonomy,omitempty"`
 	// Budget bounds spend and proactive sweeps.
 	Budget TeamBudget `yaml:"budget,omitempty"`
-	// Isolation is the sandbox / session policy every member inherits.
-	Isolation MemberIsolation `yaml:"isolation,omitempty"`
-	// Credentials bounds the secrets the broker may issue to members.
+	// Isolation is the sandbox / session policy every bot inherits.
+	Isolation BotIsolation `yaml:"isolation,omitempty"`
+	// Credentials bounds the secrets the broker may issue to bots.
 	Credentials *TeamCredentials `yaml:"credentials,omitempty"`
 	// Browser bounds the saved browser logins and sign-in credentials
-	// members may use.
-	Browser *MemberBrowser `yaml:"browser,omitempty"`
+	// bots may use.
+	Browser *BotBrowser `yaml:"browser,omitempty"`
 	// Knowledge is the team's shared knowledge repo (nil: none).
 	Knowledge *TeamKnowledge `yaml:"knowledge,omitempty"`
-	// Routing picks who handles work routed to the team (`member: { team:
+	// Routing picks who handles work routed to the team (`bot: { team:
 	// … }`). Nil: the team cannot be routed to.
 	Routing *TeamRouting `yaml:"routing,omitempty"`
 }
 
-// TeamAutonomy is a team's ceiling on its members' gates.
+// TeamAutonomy is a team's ceiling on its bots' gates.
 type TeamAutonomy struct {
-	// Ceiling is the highest tier any member may be PROMOTED to, i.e. run
+	// Ceiling is the highest tier any bot may be PROMOTED to, i.e. run
 	// without an operator's signature: "reversible" (the default — the most
-	// promotion can reach) or "observe" (no member promotes anything).
+	// promotion can reach) or "observe" (no bot promotes anything).
 	Ceiling string `yaml:"ceiling,omitempty"`
-	// Shadow, when true, holds every member in shadow mode; a member cannot
-	// set shadow: false. Members that don't set shadow inherit it.
+	// Shadow, when true, holds every bot in shadow mode; a bot cannot
+	// set shadow: false. Bots that don't set shadow inherit it.
 	Shadow *bool `yaml:"shadow,omitempty"`
-	// Tiers are classified into every member's tiers: a verb matching several
-	// tiers takes the strictest, so a team tier can only make a member
-	// stricter. A member pattern the team classifies stricter is an error.
+	// Tiers are classified into every bot's tiers: a verb matching several
+	// tiers takes the strictest, so a team tier can only make a bot
+	// stricter. A bot pattern the team classifies stricter is an error.
 	Tiers map[string][]string `yaml:"tiers,omitempty"`
 }
 
 // TeamBudget is a team's spend and proactive limits.
 type TeamBudget struct {
-	// SpendCap is the ceiling on each member's commit_money cap (a member
+	// SpendCap is the ceiling on each bot's commit_money cap (a bot
 	// without one inherits it).
 	SpendCap *SpendCap `yaml:"spend_cap,omitempty"`
-	// Proactive is a POOL: the team's members' sweeps together, over a
-	// rolling 24h. A member's own proactive.budget must fit inside it (one
+	// Proactive is a POOL: the team's bots' sweeps together, over a
+	// rolling 24h. A bot's own proactive.budget must fit inside it (one
 	// that sets none inherits it), and no sweep starts once the team's
 	// sweeps have used it up.
 	Proactive *ProactiveBudget `yaml:"proactive,omitempty"`
 }
 
-// MemberIsolation is a member's (or a team's) session policy. Unset fields
+// BotIsolation is a bot's (or a team's) session policy. Unset fields
 // are inherited from the team; each can only be made stricter.
-type MemberIsolation struct {
-	// Sandbox: "optional" (the default) or "required" — the member's
+type BotIsolation struct {
+	// Sandbox: "optional" (the default) or "required" — the bot's
 	// sessions (home, workers, sweeps) start only while conductor's agent
 	// sandbox is enforcing agent launches.
 	Sandbox string `yaml:"sandbox,omitempty"`
@@ -102,27 +102,27 @@ type MemberIsolation struct {
 }
 
 // SandboxRequired reports the effective sandbox requirement.
-func (i MemberIsolation) SandboxRequired() bool { return i.Sandbox == "required" }
+func (i BotIsolation) SandboxRequired() bool { return i.Sandbox == "required" }
 
 // HandoffAllowed reports whether hand-off workers are allowed.
-func (i MemberIsolation) HandoffAllowed() bool { return i.HandoffWorkers == nil || *i.HandoffWorkers }
+func (i BotIsolation) HandoffAllowed() bool { return i.HandoffWorkers == nil || *i.HandoffWorkers }
 
 // PromptSkipAllowed reports whether a prompt-skipping home mode is allowed.
-func (i MemberIsolation) PromptSkipAllowed() bool {
+func (i BotIsolation) PromptSkipAllowed() bool {
 	return i.SkipPermissionPrompts == nil || *i.SkipPermissionPrompts
 }
 
 // TeamCredentials bounds what the secret broker may issue to a team's
-// members: their skill.secrets_via and skill.allow_secrets.
+// bots: their skill.secrets_via and skill.allow_secrets.
 type TeamCredentials struct {
 	SecretsVia   string   `yaml:"secrets_via,omitempty"` // none | broker | env
 	AllowSecrets []string `yaml:"allow_secrets,omitempty"`
 }
 
-// MemberBrowser names the saved browser logins (sites) and sign-in
-// credentials (names) a member's sessions may use. It narrows what the
+// BotBrowser names the saved browser logins (sites) and sign-in
+// credentials (names) a bot's sessions may use. It narrows what the
 // browser's own logins:/credentials: identities allow; it never grants.
-type MemberBrowser struct {
+type BotBrowser struct {
 	Logins      []string `yaml:"logins,omitempty"`
 	Credentials []string `yaml:"credentials,omitempty"`
 }
@@ -133,9 +133,9 @@ type TeamKnowledge struct {
 	Repo string `yaml:"repo,omitempty"`
 	// SeedDir seeds a NEW repo's first commit (knowledge/ and runbooks/).
 	SeedDir string `yaml:"seed_dir,omitempty"`
-	// Promotion is what a member's `conductor member team promote` does:
+	// Promotion is what a bot's `conductor bot team promote` does:
 	// "proposal" (the default — an operator of the team approves it) or
-	// "direct" (it lands as a commit at once, when the member's request
+	// "direct" (it lands as a commit at once, when the bot's request
 	// provenance would let a promoted verb run; otherwise it is a proposal).
 	Promotion string `yaml:"promotion,omitempty"`
 }
@@ -154,7 +154,7 @@ type TeamRouting struct {
 	// Rules are deterministic: event fields matched against globs, no model.
 	Rules []RoutingRule `yaml:"rules,omitempty"`
 	// Lead triages anything no rule matched: a read-only worker of the lead
-	// reads the event and picks a teammate (`conductor member assign`).
+	// reads the event and picks a teammate (`conductor bot assign`).
 	Lead string `yaml:"lead,omitempty"`
 	// Fallback handles what no rule matched with no lead — and what the lead
 	// did not assign within Timeout, or could not triage. Required.
@@ -191,14 +191,14 @@ func (r RoutingRule) Label(i int) string {
 	return fmt.Sprintf("rules[%d]", i)
 }
 
-// TeamName is a member's team: one name. A list is refused at decode — a
-// member belongs to at most one team.
+// TeamName is a bot's team: one name. A list is refused at decode — a
+// bot belongs to at most one team.
 type TeamName string
 
 // UnmarshalYAML implements yaml.Unmarshaler.
 func (t *TeamName) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind != yaml.ScalarNode {
-		return fmt.Errorf("line %d: team: a member belongs to at most one team — name one team, not a list", n.Line)
+		return fmt.Errorf("line %d: team: a bot belongs to at most one team — name one team, not a list", n.Line)
 	}
 	*t = TeamName(n.Value)
 	return nil
@@ -206,9 +206,9 @@ func (t *TeamName) UnmarshalYAML(n *yaml.Node) error {
 
 // ---- accessors ----
 
-// TeamOf is a member's team, when it has one.
-func (c *Config) TeamOf(member string) (string, TeamConfig, bool) {
-	m, ok := c.Members[member]
+// TeamOf is a bot's team, when it has one.
+func (c *Config) TeamOf(bot string) (string, TeamConfig, bool) {
+	m, ok := c.Bots[bot]
 	if !ok || m.Team == "" {
 		return "", TeamConfig{}, false
 	}
@@ -216,11 +216,11 @@ func (c *Config) TeamOf(member string) (string, TeamConfig, bool) {
 	return string(m.Team), t, ok
 }
 
-// TeamMembers lists a team's enabled members, sorted.
-func (c *Config) TeamMembers(team string) []string {
+// TeamBots lists a team's enabled bots, sorted.
+func (c *Config) TeamBots(team string) []string {
 	var out []string
-	for _, n := range c.MemberNames() {
-		if string(c.Members[n].Team) == team {
+	for _, n := range c.BotNames() {
+		if string(c.Bots[n].Team) == team {
 			out = append(out, n)
 		}
 	}
@@ -277,9 +277,9 @@ func (c *Config) TeamSeedDir(team string) string {
 	return p
 }
 
-// sameTeamPeers reports whether two members are teammates whose team peers.
+// sameTeamPeers reports whether two bots are teammates whose team peers.
 func (c *Config) sameTeamPeers(a, b string) bool {
-	ta, tb := c.Members[a].Team, c.Members[b].Team
+	ta, tb := c.Bots[a].Team, c.Bots[b].Team
 	if ta != tb {
 		return false
 	}
@@ -291,29 +291,29 @@ func (c *Config) sameTeamPeers(a, b string) bool {
 
 var secretsViaRank = map[string]int{"": 0, "none": 0, "broker": 1, "env": 2}
 
-// ResolveTeams applies every member's team: refuses a member setting past
+// ResolveTeams applies every bot's team: refuses a bot setting past
 // its team's ceiling (naming both values), then fills in each default the
-// member left unset. Idempotent — an inherited value sits exactly at the
+// bot left unset. Idempotent — an inherited value sits exactly at the
 // ceiling. Load runs it; a Config built in code calls it itself.
 func (c *Config) ResolveTeams() error {
-	for _, name := range sortedMemberKeys(c.Members) {
-		m := c.Members[name]
+	for _, name := range sortedBotKeys(c.Bots) {
+		m := c.Bots[name]
 		if m.Team == "" {
 			continue
 		}
 		t, ok := c.Teams[string(m.Team)]
 		if !ok {
-			return fmt.Errorf("config: members.%s: team: %q is not a configured team", name, m.Team)
+			return fmt.Errorf("config: bots.%s: team: %q is not a configured team", name, m.Team)
 		}
 		if err := checkTeamCeilings(string(m.Team), t, m); err != nil {
-			return fmt.Errorf("config: members.%s: %w", name, err)
+			return fmt.Errorf("config: bots.%s: %w", name, err)
 		}
-		c.Members[name] = inheritTeam(t, m)
+		c.Bots[name] = inheritTeam(t, m)
 	}
 	return nil
 }
 
-func sortedMemberKeys(ms map[string]MemberConfig) []string {
+func sortedBotKeys(ms map[string]BotConfig) []string {
 	out := make([]string, 0, len(ms))
 	for n := range ms {
 		out = append(out, n)
@@ -322,9 +322,9 @@ func sortedMemberKeys(ms map[string]MemberConfig) []string {
 	return out
 }
 
-// checkTeamCeilings is the pure half of ResolveTeams: every member setting
+// checkTeamCeilings is the pure half of ResolveTeams: every bot setting
 // that would widen its team's is an error naming both values.
-func checkTeamCeilings(team string, t TeamConfig, m MemberConfig) error {
+func checkTeamCeilings(team string, t TeamConfig, m BotConfig) error {
 	if len(t.Operators) > 0 {
 		for _, op := range m.Operators {
 			if !hasString(t.Operators, op) {
@@ -431,9 +431,9 @@ func siteWithin(list []string, site string) bool {
 	return false
 }
 
-// inheritTeam fills in each team default the member left unset. Values are
-// copied, never shared, so a member's config can't alias its team's.
-func inheritTeam(t TeamConfig, m MemberConfig) MemberConfig {
+// inheritTeam fills in each team default the bot left unset. Values are
+// copied, never shared, so a bot's config can't alias its team's.
+func inheritTeam(t TeamConfig, m BotConfig) BotConfig {
 	if len(m.Operators) == 0 && len(t.Operators) > 0 {
 		m.Operators = append([]string(nil), t.Operators...)
 	}
@@ -496,39 +496,39 @@ func inheritTeam(t TeamConfig, m MemberConfig) MemberConfig {
 		}
 	}
 	if m.Browser == nil && t.Browser != nil {
-		m.Browser = &MemberBrowser{Logins: append([]string(nil), t.Browser.Logins...), Credentials: append([]string(nil), t.Browser.Credentials...)}
+		m.Browser = &BotBrowser{Logins: append([]string(nil), t.Browser.Logins...), Credentials: append([]string(nil), t.Browser.Credentials...)}
 	}
 	return m
 }
 
 // ---- validation ----
 
-// validateTeams checks teams: and re-checks each member's ceilings (a no-op
+// validateTeams checks teams: and re-checks each bot's ceilings (a no-op
 // after ResolveTeams, which also catches a Config assembled in code).
 func (c *Config) validateTeams() error {
 	for _, name := range c.TeamNames() {
-		if err := c.validateMemberTeam(name, c.Teams[name]); err != nil {
+		if err := c.validateBotTeam(name, c.Teams[name]); err != nil {
 			return fmt.Errorf("config: teams.%s: %w", name, err)
 		}
 	}
-	for _, name := range sortedMemberKeys(c.Members) {
-		m := c.Members[name]
+	for _, name := range sortedBotKeys(c.Bots) {
+		m := c.Bots[name]
 		if m.Team == "" {
 			continue
 		}
 		t, ok := c.Teams[string(m.Team)]
 		if !ok {
-			return fmt.Errorf("config: members.%s: team: %q is not a configured team", name, m.Team)
+			return fmt.Errorf("config: bots.%s: team: %q is not a configured team", name, m.Team)
 		}
 		if err := checkTeamCeilings(string(m.Team), t, m); err != nil {
-			return fmt.Errorf("config: members.%s: %w", name, err)
+			return fmt.Errorf("config: bots.%s: %w", name, err)
 		}
 	}
 	return nil
 }
 
-func (c *Config) validateMemberTeam(name string, t TeamConfig) error {
-	if !validMemberName(name) {
+func (c *Config) validateBotTeam(name string, t TeamConfig) error {
+	if !validBotName(name) {
 		return fmt.Errorf("name must be lowercase letters, digits, - or _")
 	}
 	for _, op := range t.Operators {
@@ -548,7 +548,7 @@ func (c *Config) validateMemberTeam(name string, t TeamConfig) error {
 	}
 	for tier, pats := range t.Autonomy.Tiers {
 		if TierRank(tier) < 0 {
-			return fmt.Errorf("autonomy.tiers: unknown tier %q (want one of %s)", tier, strings.Join(MemberTiers, ", "))
+			return fmt.Errorf("autonomy.tiers: unknown tier %q (want one of %s)", tier, strings.Join(BotTiers, ", "))
 		}
 		for _, p := range pats {
 			if _, err := filepath.Match(p, "x"); err != nil || strings.TrimSpace(p) == "" {
@@ -572,7 +572,7 @@ func (c *Config) validateMemberTeam(name string, t TeamConfig) error {
 			return fmt.Errorf("budget.proactive: set max_runs_per_day and/or max_cost_per_day (the team's pool)")
 		}
 	}
-	if err := validateMemberIsolation(t.Isolation); err != nil {
+	if err := validateBotIsolation(t.Isolation); err != nil {
 		return err
 	}
 	if cr := t.Credentials; cr != nil {
@@ -580,7 +580,7 @@ func (c *Config) validateMemberTeam(name string, t TeamConfig) error {
 			return fmt.Errorf("credentials.secrets_via: want none, broker or env, got %q", cr.SecretsVia)
 		}
 		if len(cr.AllowSecrets) > 0 && secretsViaRank[cr.SecretsVia] == 0 {
-			return fmt.Errorf("credentials.allow_secrets is set but credentials.secrets_via is none — members could never be issued them; set secrets_via: broker")
+			return fmt.Errorf("credentials.allow_secrets is set but credentials.secrets_via is none — bots could never be issued them; set secrets_via: broker")
 		}
 	}
 	if k := t.Knowledge; k != nil {
@@ -597,17 +597,17 @@ func (c *Config) validateMemberTeam(name string, t TeamConfig) error {
 	}
 	if r := t.Routing; r != nil {
 		inTeam := func(field, m string) error {
-			mc, ok := c.Members[m]
+			mc, ok := c.Bots[m]
 			if !ok || mc.Disabled {
-				return fmt.Errorf("routing.%s: %q is not an enabled member", field, m)
+				return fmt.Errorf("routing.%s: %q is not an enabled bot", field, m)
 			}
 			if string(mc.Team) != name {
-				return fmt.Errorf("routing.%s: member %s is not in team %s", field, m, name)
+				return fmt.Errorf("routing.%s: bot %s is not in team %s", field, m, name)
 			}
 			return nil
 		}
 		if r.Fallback == "" {
-			return fmt.Errorf("routing.fallback: name the member that handles what no rule or lead assigned")
+			return fmt.Errorf("routing.fallback: name the bot that handles what no rule or lead assigned")
 		}
 		if err := inTeam("fallback", r.Fallback); err != nil {
 			return err
@@ -640,7 +640,7 @@ func (c *Config) validateMemberTeam(name string, t TeamConfig) error {
 	return nil
 }
 
-func validateMemberIsolation(i MemberIsolation) error {
+func validateBotIsolation(i BotIsolation) error {
 	switch i.Sandbox {
 	case "", "optional", "required":
 		return nil
@@ -653,14 +653,14 @@ func (c *Config) TeamWarnings() []string {
 	var out []string
 	for _, name := range c.TeamNames() {
 		t := c.Teams[name]
-		if len(c.TeamMembers(name)) == 0 {
-			out = append(out, fmt.Sprintf("teams.%s: no enabled member names this team", name))
+		if len(c.TeamBots(name)) == 0 {
+			out = append(out, fmt.Sprintf("teams.%s: no enabled bot names this team", name))
 		}
 		if t.Isolation.SandboxRequired() {
-			out = append(out, fmt.Sprintf("teams.%s: isolation.sandbox required — its members' sessions start only while conductor's agent sandbox is on", name))
+			out = append(out, fmt.Sprintf("teams.%s: isolation.sandbox required — its bots' sessions start only while conductor's agent sandbox is on", name))
 		}
 		if t.Browser != nil {
-			out = append(out, fmt.Sprintf("teams.%s: browser: scopes logins for conductor's agent browser; until it is on this daemon member sessions use no saved login at all", name))
+			out = append(out, fmt.Sprintf("teams.%s: browser: scopes logins for conductor's agent browser; until it is on this daemon bot sessions use no saved login at all", name))
 		}
 	}
 	return out

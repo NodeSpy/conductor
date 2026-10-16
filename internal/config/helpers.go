@@ -41,10 +41,10 @@ const (
 	// HelperWaitFor is `wait_for: {uses, until, every, timeout}` — poll a read
 	// verb until a condition holds or the timeout elapses.
 	HelperWaitFor = "wait_for"
-	// HelperMember is `member: {name, …}` — deliver the event into a member
+	// HelperBot is `bot: {name, …}` — deliver the event into a bot
 	// (a case + an inbox message, a worker at once when urgent), or rotate /
-	// consolidate it. Runs through the daemon's member service.
-	HelperMember = "member"
+	// consolidate it. Runs through the daemon's bot service.
+	HelperBot = "bot"
 )
 
 // HelperForm returns which helper this step is ("" when it is not one). It is
@@ -69,8 +69,8 @@ func (s Step) HelperForm() string {
 		return HelperFail
 	case s.WaitFor != nil:
 		return HelperWaitFor
-	case s.Member != nil:
-		return HelperMember
+	case s.Bot != nil:
+		return HelperBot
 	}
 	return ""
 }
@@ -103,8 +103,8 @@ func helperFormsSet(s Step) []string {
 	if s.WaitFor != nil {
 		out = append(out, HelperWaitFor)
 	}
-	if s.Member != nil {
-		out = append(out, HelperMember)
+	if s.Bot != nil {
+		out = append(out, HelperBot)
 	}
 	return out
 }
@@ -116,7 +116,7 @@ func validateHelperStep(w string, s Step) error {
 	// counted once), so the "exactly one form" check cannot see them — catch it
 	// here, with the same message a helper-beside-a-verb gets.
 	if forms := helperFormsSet(s); len(forms) > 1 {
-		return fmt.Errorf("config: %s: step forms are mutually exclusive (set exactly one of type/use/uses/call or a helper: sleep/log/set/assert/fail/wait_for/member) — this step sets %s", w, strings.Join(forms, " and "))
+		return fmt.Errorf("config: %s: step forms are mutually exclusive (set exactly one of type/use/uses/call or a helper: sleep/log/set/assert/fail/wait_for/bot) — this step sets %s", w, strings.Join(forms, " and "))
 	}
 	switch s.HelperForm() {
 	case HelperSleep:
@@ -147,9 +147,9 @@ func validateHelperStep(w string, s Step) error {
 		if wf.Every.D() < 0 {
 			return fmt.Errorf("config: %s: `wait_for.every: %s` must not be negative", w, wf.Every.D())
 		}
-	case HelperMember:
-		if err := s.Member.validate(); err != nil {
-			return fmt.Errorf("config: %s: member: %w", w, err)
+	case HelperBot:
+		if err := s.Bot.validate(); err != nil {
+			return fmt.Errorf("config: %s: bot: %w", w, err)
 		}
 	}
 	return nil

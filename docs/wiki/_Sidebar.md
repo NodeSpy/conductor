@@ -30,7 +30,7 @@ The model
 - [[Policy]]
 - [[Gates]]
 - [[Teams]]
-- [[Members]]
+- [[Bots]]
 - [[Outcomes]]
 - [[Cost-Accounting]]
 - [[Secrets]]

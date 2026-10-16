@@ -76,11 +76,11 @@ type Store struct {
 	outcomeStats map[string]map[string]int
 	ciFailed     map[string]ciFailMark
 
-	// Member case ledger (members.go).
-	members         map[string]*MemberRecord
-	membersDegraded bool
-	memberLocksMu   sync.Mutex
-	memberLocks     map[string]*sync.Mutex
+	// Bot case ledger (bots.go).
+	bots         map[string]*BotRecord
+	botsDegraded bool
+	botLocksMu   sync.Mutex
+	botLocks     map[string]*sync.Mutex
 }
 
 // Options configure a Store.
@@ -166,7 +166,7 @@ func Open(o Options) (*Store, error) {
 		return nil, err
 	}
 	s.loadOutcomeState()
-	s.loadMembers()
+	s.loadBots()
 	a, err := openAudit(o.AuditPath, o.AuditMaxSize)
 	if err != nil {
 		return nil, err

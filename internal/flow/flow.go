@@ -190,14 +190,14 @@ type Runner struct {
 	Cfg    *config.Config
 	Conns  *connector.Registry
 	Agents AgentServices
-	// Members is the member autonomy gate (nil when no member is configured;
-	// a member-bound skill grant then fails closed).
-	Members MemberGate
-	// MemberRouter serves the `member:` helper step (nil = no member service:
+	// Bots is the bot autonomy gate (nil when no bot is configured;
+	// a bot-bound skill grant then fails closed).
+	Bots BotGate
+	// BotRouter serves the `bot:` helper step (nil = no bot service:
 	// the step fails, naming why).
-	MemberRouter MemberRouter
-	Code         *code.Executor
-	Secrets      *secrets.Resolver
+	BotRouter BotRouter
+	Code      *code.Executor
+	Secrets   *secrets.Resolver
 	// SecretVals are the resolved named secrets: values ({{.secrets.<name>}}).
 	SecretVals map[string]string
 	// VaultVals are the preloaded listable-vault entries
