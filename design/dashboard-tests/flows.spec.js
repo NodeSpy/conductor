@@ -113,7 +113,8 @@ test.describe('bots', () => {
     await expect(page.locator('.diff')).toContainText('shadow: true');
     await applyStaged(page);
     await go(page, '#/bots');
-    await expect(page.locator('.bot-card', { hasText: 'docs-steward' })).toContainText('shadow mode');
+    await expect(page.locator('#ftree')).toContainText('docs-steward');
+    expect(await page.evaluate(() => D.bots.find((b) => b.name === 'docs-steward').cfg.autonomy.shadow)).toBe(true);
   });
   test('access: tier change and promotion are widening config edits; add verb; bind and unbind a credential', async ({ page }) => {
     await go(page, '#/bots/platform-sre/access');
@@ -126,7 +127,7 @@ test.describe('bots', () => {
     await page.selectOption('#f-identity', 'bot:platform-sre');
     await page.locator('[data-listk="fields"] select').selectOption('username');
     await page.locator('[data-listk="fields"] select').selectOption('password');
-    await page.selectOption('#f-vault', 'op'); await page.fill('#f-ref', 'Agents/PagerDuty/*');
+    await page.selectOption('#f-ref', 'store/conductor/pd');
     await submit(page);
     await expect(page.locator('.list .item')).toHaveCount(2);
     // the team caps credential scope: a binding outside it is refused on validation
@@ -157,10 +158,9 @@ test.describe('bots', () => {
     await page.locator('[data-act="login-revoke"]').click(); await page.locator('#cf-ok').click();
     await expect(page.locator('.panel', { hasText: 'Browser logins' })).toContainText('No saved logins');
     await go(page, '#/bots/platform-sre/memory');
-    await page.locator('[data-act="mem-mode"][data-v="edit"]').click();
-    await page.fill('#mem-text', '# db-prod-1\n\nPgbouncer pool: 200.\n');
-    await page.locator('[data-act="mem-commit"]').click();
-    await expect(page.locator('.prose')).toContainText('Pgbouncer pool: 200.');
+    await page.locator('#rp-ed .ced-ta').fill('# db-prod-1\n\nPgbouncer pool: 200.\n');
+    await page.locator('[data-act="rp-save"]').click();
+    await expect(page.locator('#rp-prev')).toContainText('Pgbouncer pool: 200.');
     await go(page, '#/bots/platform-sre/workers');
     await page.locator('[data-act="w-stop"]').first().click(); await page.locator('#cf-ok').click();
     await expect(page.locator('.wcard', { hasText: 'w41' })).toContainText('stopped');

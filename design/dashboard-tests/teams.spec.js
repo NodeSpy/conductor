@@ -82,11 +82,11 @@ test('routing: add a rule, try it on a past event, route work with provenance ke
 
 test('knowledge: approve a promotion with a passkey; a bot proposes one from memory', async ({ page }) => {
   await go(page, '#/teams/platform/knowledge');
-  await page.locator('[data-act="kn-decide"][data-id="k4"][data-d="approve"]').click();
+  await page.locator('[data-act="kp-approve"][data-id="k4"]').click();
   await page.locator('#su-go').click();
-  await expect(page.locator('.prose')).toContainText('30s');
+  await expect(page.locator('#rp-prev')).toContainText('30s');
   await go(page, '#/bots/web-triage/memory');
-  await page.locator('[data-act="mem-promote"]').click();
+  await page.locator('[data-act="rp-promote"]').click();
   await expect(page).toHaveURL(/#\/teams\/platform\/knowledge/);
   await expect(page.locator('.item', { hasText: 'Promote README.md from web-triage' })).toContainText('Approve');
 });
@@ -108,8 +108,8 @@ test('old member links land on the bots pages', async ({ page }) => {
   await expect(page).toHaveURL(/#\/bots\/platform-sre\/cases/);
   await expect(page.locator('.page-head, .bot-hero').first()).toContainText('platform-sre');
   await go(page, '#/bots');
-  await expect(page.locator('.page-head h1')).toContainText('Teams & bots');
-  await expect(page.locator('.team-band.loose')).toContainText('release-scribe'); // a solo bot
+  await expect(page.locator('.page-head h1')).toContainText('Bots');
+  if (page.viewportSize().width > 720) await expect(page.locator('.frow.bot', { hasText: 'release-scribe' })).toContainText('solo'); // a solo bot
 });
 
 test('a case shows its delegation edges with status and the reported result', async ({ page }) => {

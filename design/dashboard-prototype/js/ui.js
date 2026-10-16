@@ -167,7 +167,20 @@
   UI.go = (h) => { if (location.hash === h) UI.render(); else location.hash = h; };
   /** Re-render the current route in place (after a state change), keeping scroll. */
   UI.rerender = () => { UI.refreshChrome(); UI.render({ keepScroll: true }); };
-  window.addEventListener('hashchange', () => { document.querySelectorAll('.drawer-scrim').forEach((d) => d.remove()); UI.closeModal(); UI.render(); });
+  // An editor with unsaved changes can guard navigation: UI.guard() returns a message, or nothing.
+  let lastHash = location.hash, ignoreHash = false;
+  window.addEventListener('hashchange', () => {
+    if (ignoreHash) { ignoreHash = false; return; }
+    const msg = UI.guard && UI.guard();
+    if (msg) {
+      const target = location.hash; ignoreHash = true; location.replace(lastHash || '#/overview');
+      UI.confirm({ title: 'Discard unsaved changes?', body: msg, ok: 'Discard and leave', danger: true }).then((ok) => { if (ok) { if (UI.guardClear) UI.guardClear(); location.hash = target; } });
+      return;
+    }
+    lastHash = location.hash;
+    document.querySelectorAll('.drawer-scrim').forEach((d) => d.remove()); UI.closeModal(); UI.render();
+  });
+  window.addEventListener('beforeunload', (e) => { if (UI.guard && UI.guard()) { e.preventDefault(); e.returnValue = ''; } });
 
   /* ---------- nav ---------- */
   const navGroups = [
@@ -552,6 +565,7 @@
   const KW = { js: /\b(const|let|var|return|if|else|for|of|in|function|new|true|false|null|undefined|await|async|throw|try|catch)\b/g, python: /\b(import|from|def|return|if|elif|else|for|in|not|and|or|None|True|False|print|with|as|try|except|raise|lambda)\b/g, sh: /\b(if|then|fi|for|do|done|echo|exit|set|export|in)\b/g };
   UI.codeLine = (raw, lang) => {
     if (lang === 'yaml') return UI.yamlLine(raw);
+    if (lang === 'md' && UI.mdLine) return UI.mdLine(raw);
     const E = UI.esc; let out = '', i = 0;
     const com = lang === 'js' ? '//' : '#';
     const ci = (() => { let q = null; for (let k = 0; k < raw.length; k++) { const c = raw[k]; if (q) { if (c === '\\') k++; else if (c === q) q = null; continue; } if (c === '"' || c === "'" || c === '`') q = c; else if (raw.startsWith(com, k)) return k; } return -1; })();

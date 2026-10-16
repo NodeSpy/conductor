@@ -96,8 +96,10 @@
 
   /* the one listener: a "+ New …" option opens its drawer, then selects the result */
   document.addEventListener('focusin', (e) => { if (e.target.matches && e.target.matches('select[data-picker]')) e.target.dataset.prev = e.target.value === '__new__' ? '' : e.target.value; }, true);
+  // a select set to "+ New …" isn't a value: keep its input event from reaching the parent form
+  document.addEventListener('input', (e) => { if (e.target.matches && e.target.matches('select[data-picker]') && e.target.value === '__new__') e.stopImmediatePropagation(); }, true);
   document.addEventListener('change', (e) => {
-    const sel = e.target;
+    const sel0 = e.target; let sel = sel0;
     if (!sel.matches || !sel.matches('select[data-picker]') || sel.value !== '__new__') return;
     e.stopImmediatePropagation(); e.stopPropagation();
     const kind = sel.dataset.picker, ctx = JSON.parse(sel.dataset.ctx || '{}');
@@ -105,7 +107,8 @@
     if (ctx.page) { UI.go(ctx.page); return; }
     const fn = C[kind]; if (!fn) return;
     fn(ctx, (res) => {
-      if (!document.body.contains(sel)) return;
+      if (!document.body.contains(sel)) sel = (sel0.id && document.getElementById(sel0.id)) || null; // the parent re-rendered
+      if (!sel) return;
       const val = typeof res === 'object' ? res[sel.dataset.ret] || res.name : res;
       const label = typeof res === 'object' ? `${res.name} · ${res.ref}` : res;
       if (![...sel.options].some((o) => o.value === val)) { const o = document.createElement('option'); o.value = val; o.textContent = `${label} (new · staged)`; sel.insertBefore(o, sel.options[sel.classList.contains('list-add-sel') ? 2 : 1] || null); }

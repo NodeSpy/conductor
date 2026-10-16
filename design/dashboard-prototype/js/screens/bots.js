@@ -123,8 +123,8 @@
   const tv = { ev: 'ev-pd' };
 
   function teamShell(t, tab, body) {
-    const c = staged('teams', t.name) || t.cfg, ms = botsOf(t.name), kn = D.teamKnowledge[t.name];
-    const pend = kn ? kn.proposals.filter((p) => p.status === 'pending').length : 0;
+    const c = staged('teams', t.name) || t.cfg, ms = botsOf(t.name);
+    const pend = c.knowledge ? R.pending('team:' + t.name) : 0;
     return `<div class="page"><div class="bot-hero team-hero"><span class="sigil lg team-sigil">${esc(t.name[0])}</span><div class="grow"><div class="crumbs mono tiny muted">${UI.folderCrumbs(UI.folderOfTeam(t.name, false))} › team</div><h1>${esc(t.name)}</h1>
       <div class="facts">${tag(ms.length + ' bot' + (ms.length === 1 ? '' : 's'))}${c.lead ? tag('lead ' + c.lead, 'ember') : tag('no lead')}${tag(`operators: ${(S.getPath(c, 'defaults.operators') || []).join(', ') || '—'}`)}${tag(`ceiling ${S.getPath(c, 'defaults.autonomy.max_tier') || '—'}`)}${tag(icon('shield') + ' ' + (S.getPath(c, 'defaults.isolation.mode') || 'namespace'), 'ok')}${S.find('teams', t.name) ? tag('change staged', 'run') : ''}</div></div>
       <div class="row wrap"><button class="btn" data-act="team-deliver" data-t="${t.name}">${icon('send')}Route work here</button><button class="btn" data-act="team-edit" data-t="${t.name}">${icon('edit')}Edit team</button><button class="btn ghost" data-act="team-del" data-t="${t.name}" aria-label="Remove team">${icon('trash')}</button></div></div>
@@ -251,15 +251,9 @@
       </tbody></table></div>`);
   }
   function teamKnowledge(t) {
-    const c = staged('teams', t.name) || t.cfg, kn = D.teamKnowledge[t.name];
-    if (!c.knowledge || !kn) return teamShell(t, 'knowledge', `<div class="panel"><div class="empty"><span class="serif">No shared knowledge repo</span>A team can keep one repo every bot reads; bots propose promoting what they learn into it.<button class="btn primary" data-act="team-edit" data-t="${t.name}">${icon('plus')}Add a knowledge repo</button></div></div>`);
-    const open = kn.open || 'README.md';
-    return teamShell(t, 'knowledge', `<div class="grid g-side"><div class="stack">
-      <div class="panel"><div class="panel-head"><h3>Promotion proposals</h3><span class="muted small">promote: ${esc(c.knowledge.promote)}</span></div><div class="list">${kn.proposals.map((p) => `<div class="item" style="align-items:flex-start">${st(p.status === 'pending' ? 'ember' : p.status === 'approved' ? 'ok' : 'fail', '')}<div class="grow small"><div><b>${esc(p.summary)}</b></div><div class="mono tiny muted">${p.id} · ${p.bot}: ${p.from} → ${p.to}${p.case ? ' · case ' + p.case : ''} · ${ago(p.at)} ago${p.approver ? ' · ' + p.approver : ''}</div>${p.diff && p.status === 'pending' ? `<div class="diff" style="margin-top:6px">${p.diff.split('\n').filter(Boolean).map((l) => `<div class="dl ${l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : ''}"><span></span><span></span><span>${l[0] === ' ' ? ' ' : l[0]}</span><span>${esc(l.slice(1))}</span></div>`).join('')}</div>` : ''}</div>
-        ${p.status === 'pending' ? `<button class="btn sm primary" data-act="kn-decide" data-t="${t.name}" data-id="${p.id}" data-d="approve">${icon('passkey')}Approve</button><button class="btn sm danger" data-act="kn-decide" data-t="${t.name}" data-id="${p.id}" data-d="deny">Deny</button>` : tag(p.status, p.status === 'approved' ? 'ok' : 'fail')}</div>`).join('') || '<div class="item muted small">No proposals.</div>'}</div>
-        <div class="panel-foot small muted">A bot proposes from its own memory (Memory tab → Promote to team). Approving writes one commit to <span class="mono">${esc(kn.repo)}</span> with <span class="mono">Promoted-By</span> and <span class="mono">Approved-By</span> trailers.</div></div>
-      </div><div class="stack"><div class="panel"><div class="panel-head"><h3 class="mono small">${esc(kn.repo)}</h3></div><div class="tree" style="padding:6px">${Object.keys(kn.files).map((f) => `<a href="#/teams/${t.name}/knowledge" data-act="kn-open" data-t="${t.name}" data-f="${esc(f)}" class="f${f === open ? ' on' : ''}">${icon('file')}${esc(f)}</a>`).join('')}</div>
-        <div class="panel-body prose small" style="border-top:1px solid var(--line)">${md(kn.files[open] || '').replace(/^# (.*)$/m, '<b>$1</b>').replace(/\n/g, '<br>')}</div></div></div></div>`);
+    const c = staged('teams', t.name) || t.cfg;
+    if (!c.knowledge) return teamShell(t, 'knowledge', `<div class="panel"><div class="empty"><span class="serif">No shared knowledge repo</span>A team can keep one repo every bot on it reads. You write to it directly; bots propose and you approve.<button class="btn primary" data-act="team-edit" data-t="${t.name}">${icon('plus')}Add a knowledge repo</button></div></div>`);
+    return teamShell(t, 'knowledge', UI.repoView('team:' + t.name, { title: c.knowledge.repo }));
   }
   UI.route('teams/:name/:tab?', ({ name, tab }) => {
     const t = T(name);
@@ -443,20 +437,7 @@
   const memOf = (m) => { if (m.name === 'platform-sre') return D.memory; D.memories = D.memories || {}; return (D.memories[m.name] = D.memories[m.name] || { files: { 'knowledge/README.md': `# ${m.name}\n\nWhat ${m.name} has learned.\n` }, log: [], open: 'knowledge/README.md' }); };
   const mv = { edit: false };
   function memory(m) {
-    const mem = memOf(m), open = mem.open || Object.keys(mem.files)[0];
-    const dirs = [...new Set(Object.keys(mem.files).map((f) => f.split('/').slice(0, -1).join('/')))].sort();
-    const t = teamOf(m), kn = t && D.teamKnowledge[t.name] && (staged('teams', t.name) || t.cfg).knowledge;
-    const prose = esc(mem.files[open] || '').replace(/^# (.*)$/m, '<h1>$1</h1>').replace(/^## (.*)$/gm, '<h2>$1</h2>').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>').replace(/^- (.*)$/gm, '<li>$1</li>').replace(/\n\n/g, '<br>');
-    return shell(m, 'memory', `<div class="grid mem-grid">
-      <div class="panel"><div class="panel-head"><h3>memory repo</h3><button class="icon-btn" style="margin-left:auto" data-act="mem-new" data-m="${m.name}" data-tip="New file" aria-label="New file">${icon('plus')}</button></div><div class="tree" style="padding:6px">${dirs.map((d) => `<div class="tree-dir">${icon('folder')}${esc(d)}/</div>${Object.keys(mem.files).filter((f) => f.split('/').slice(0, -1).join('/') === d).map((f) => `<a href="#/bots/${m.name}/memory" data-act="mem-open" data-m="${m.name}" data-f="${esc(f)}" class="f${f === open ? ' on' : ''}">${icon('file')}${esc(f.split('/').pop())}</a>`).join('')}`).join('')}</div></div>
-      <div class="panel"><div class="panel-head"><span class="mono small">${esc(open)}</span><div class="tools">${UI.seg([['read', 'Read'], ['edit', `${icon('edit')}Edit`]], mv.edit ? 'edit' : 'read', 'mem-mode')}</div></div>
-        <div class="panel-body">${mv.edit ? `<div class="stack"><textarea class="textarea mono" rows="16" id="mem-text" aria-label="File content">${esc(mem.files[open] || '')}</textarea>
-          <div class="field"><label for="mem-msg">Commit message</label><input class="input" id="mem-msg" value="${esc(open.replace(/\.md$/, ''))}: operator edit"></div>
-          <div class="row"><span class="muted tiny grow">One commit, authored <span class="mono">ops (dashboard)</span>, trailers <span class="mono">Bot-Role: operator · Edited-Via: dashboard</span>.</span><button class="btn primary" data-act="mem-commit" data-m="${m.name}" id="mem-commit" ${UI.off('Nothing changed yet: edit the file first')}>${icon('commit')}Commit</button></div></div>`
-          : `<div class="prose">${prose}</div>${kn ? `<div class="row" style="margin-top:12px;border-top:1px dashed var(--line);padding-top:10px"><span class="muted small grow">Useful to the whole team?</span><button class="btn sm" data-act="mem-promote" data-m="${m.name}">${icon('upload')}Promote to team ${t.name}</button></div>` : ''}`}</div></div>
-      <div class="panel"><div class="panel-head"><h3>History</h3></div><div class="list">${mem.log.map((c) => `<div class="item" style="align-items:flex-start"><span class="mono tiny" style="color:var(--accent)">${c.sha}</span><div class="grow small"><div>${esc(c.msg)}</div><div class="mono tiny muted">${esc(c.author)} · ${ago(c.at)}</div><div class="mono tiny muted" style="opacity:.8">${esc(c.trailers)}</div></div>${c.prev !== undefined || c.revertable ? `<button class="btn sm ghost" data-act="mem-revert" data-m="${m.name}" data-sha="${c.sha}" aria-label="Revert ${c.sha}">${icon('undo')}</button>` : ''}</div>`).join('') || '<div class="item small muted">No commits yet.</div>'}</div>
-        <div class="panel-foot"><button class="btn sm ghost" data-act="mem-consolidate" data-m="${m.name}">Consolidate now</button></div></div>
-      </div>`);
+    return shell(m, 'memory', `<div class="callout small" style="margin-bottom:12px">${esc(m.name)} writes its own memory as it works. You can read, correct, pin and delete what it knows; every save is one commit authored by you.</div>${UI.repoView('bot:' + m.name, { title: `${m.name} · memory repo` })}`);
   }
   const sha = () => Math.random().toString(16).slice(2, 9);
   document.addEventListener('input', (e) => { if (e.target.id !== 'mem-text') return; const b = UI.$('#mem-commit'); const m = M(b.dataset.m), mem = memOf(m); const same = e.target.value === mem.files[mem.open || Object.keys(mem.files)[0]]; if (same) { b.setAttribute('aria-disabled', 'true'); b.dataset.reason = b.dataset.tip = 'Nothing changed yet: edit the file first'; } else { b.removeAttribute('aria-disabled'); delete b.dataset.reason; delete b.dataset.tip; } });
