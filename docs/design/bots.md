@@ -135,7 +135,16 @@ the engine and sandboxed like any cli step; nothing bot-specific is needed.
 - **A sweep is a cli worker**, not a new launcher: the bot's third
   synthesized `on: manual` trigger (`bot:<name>:sweep`, only with
   `proactive:`), the worker step with the sweep's timeout and — when the budget
-  sets a cost — a 24h workflow `policy.budget` the engine enforces.
+  caps tokens or dollars — a 24h workflow `policy.budget` the engine enforces
+  while the sweep runs.
+- **Budgets are in units first.** `config.ProactiveBudget` caps runs, turns,
+  tokens and (optionally) dollars; `Exceeded` names the first cap a window has
+  reached, and the bot's budget and the team pool both go through it. A sweep
+  records its run's turns, tokens and cost (and the same per runtime/model,
+  for display) from the run history. Turns are claude-code's `num_turns`, or
+  one per agent run. Nothing is required: a subscription user caps in units, or
+  not at all. `usage.mode` (default `off`) only changes what is shown; caps
+  enforce in every mode.
 - **Read-only is the gate's, not the prompt's.** The sweep's token is bound to
   the sweep id (the case slot), its worker record carries class `proactive`
   and `read_only`, and `Gate.caller` resolves both from the ledger.
@@ -297,7 +306,8 @@ each other, may share a knowledge repo, and can be routed work as a unit.
   - `shadow: true`: refuses `shadow: false`.
   - Spend cap: per-action and per-period no higher, the period no shorter
     (the same cap over less time is a faster rate), the same currency.
-  - Sweep budget: each limit no higher than the pool's.
+  - Sweep budget: per unit (runs, turns, tokens, dollars), no higher than a
+    unit the pool caps; an unset unit inherits it.
   - Isolation: each flag no looser.
   - Credentials: `secrets_via` ranked `none < broker < env`; `allow_secrets` a
     subset.

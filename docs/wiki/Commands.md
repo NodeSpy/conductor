@@ -10,7 +10,8 @@ conductor replay <event.json>              run a saved webhook through the pipel
 conductor sweep [--now]                    one catch-up sweep (dry-run print / signal the daemon)
 conductor force <kind> <owner/repo>#<n>    force an action for a target now (via the daemon)
 conductor status                           live agents, in-flight workflows, stuck/attention
-conductor report [--days N]                dispatches by kind/outcome + attention counts + spend
+conductor report [--days N]                dispatches by kind/outcome + attention counts + usage per runtime/model (per usage.mode)
+conductor usage [--since 24h]              model usage per runtime/model: observed by conductor, and what usage.sources report
 conductor runs [--limit N]                 recorded executions, newest first (id, status, cost)
 conductor runs <id>                        one run's step-by-step detail (also: conductor run <id>)
 conductor runs retry <id> [--from <step>] [--force-replay]  re-run a recorded execution (recorded inputs pinned; succeeded steps need --force-replay)

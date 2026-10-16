@@ -43,6 +43,7 @@ in a config.
 | `memory:` | shared agent memory: `store:` (a KV `stores:` entry) \| `dir:` (Markdown files) \| `type: memory` (ephemeral) — served by `memory.*` | [[Memory]] |
 | `workflows:` | reusable step lists with `inputs:` / `outputs:` (+ a default `gate:` for their agent steps) | [[Workflows]], [[Gates]] |
 | `policy:` | global controls incl. the `budget:` spend cap; also valid on connectors and triggers (most specific wins) | [[Policy]], [[Cost-Accounting]] |
+| `usage:` | what reports show of model usage: `mode: off` (default) \| `subscription` (observed units per runtime/model) \| `api` (+ dollars); optional `sources:` for plan-window data. Display only — caps enforce in every mode | [[Cost-Accounting]] |
 | `vaults:` | named secret stores (`conductor`/`onepassword`/`pass`/`file`/`hashicorp`), read as `{{ vault "<name>" "<key>" }}` with per-vault read/write verbs | [[Secrets]] |
 | `operators:` | the humans who approve bot proposals: `ssh_key` (approvals are SSH-signed), `aliases` (chat ids that are this operator) | [[Bots]] |
 | `bots:` | persistent conversational agents: charter, memory repo, home session (paseo), workers (cli), opt-in `proactive:` sweeps, `peers:`, `team:`, skill grant, `autonomy:` tiers / promotion / shadow / spend cap | [[Bots]] |

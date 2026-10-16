@@ -29,11 +29,50 @@ the model table when no `$` figure came along.
   run id, workflow scope, model, tokens in/out, `$`, approximate), one
   `workflow_cost` row per completed/failed workflow run (cost per run), one
   `budget_shed` row per shed.
-- **`conductor report`** — a spend section: total `$`/tokens/runs, `$` per
-  run, the estimated share, breakdowns by repo, by workflow/kind, and by day,
-  plus the shed count. The agent-quality section ([[Outcomes]]) adds
-  **cost-per-merged-change**, joined from these usage figures on merged
-  engagements.
+- **Turns** — the model turns a run took (claude-code's `num_turns`; one per
+  agent run when a runtime reports none), on the run record and each
+  `agent_usage` row, beside tokens.
+- **Per runtime and model** — the run record keeps its usage per runtime and
+  model (`usage:`), and every report shows it that way: usage is **never summed
+  across providers** (a Claude run and a Codex run are separate lines).
+- **`conductor report`** — a usage section, per runtime/model, with
+  breakdowns by repo, by workflow/kind and by day inside each, plus the shed
+  count. In `usage.mode: api`, dollar figures too, and the agent-quality
+  section ([[Outcomes]]) adds **cost-per-merged-change**.
+- **`conductor usage [--since 24h]`** — what conductor observed per
+  runtime/model, then what each configured usage source reports (below).
+
+## Showing usage (`usage:`)
+
+```yaml
+usage:
+  mode: off            # off (default) | subscription | api
+  sources:             # optional
+    - { name: proxy, type: http, url: "http://127.0.0.1:8080/usage", headers: { Authorization: "Bearer ${PROXY_TOKEN}" } }
+```
+
+- **`mode`** decides what reports and notifications show. It is **display
+  only**: every cap — runs, turns, tokens or dollars — enforces in every mode,
+  `off` included.
+  - `off` (the default): no usage or cost figures at all. Existing configs get
+    this, and nothing about enforcement changes.
+  - `subscription`: what conductor **observed** of its own runs — runs, turns,
+    tokens — per runtime/model, labelled as observed. No dollars: on a
+    subscription they would be estimates of money nobody bills.
+  - `api`: the same, plus dollar figures (API billing).
+- **Plan windows and utilization** (a 5-hour window, a weekly limit, how much of
+  it is used) come **only** from a configured **usage source**. Conductor
+  sees only its own runs, not the account, so without a source it reports
+  nothing about the plan.
+  - A source is pluggable by `type`. The built-in **`http`** type GETs a JSON
+    document from anything that reports its own usage, a proxy or a gateway:
+    `{"providers": [{"provider": "…", "model": "…", "window": "5h", "used": 40,
+    "limit": 100, "unit": "messages", "utilization": 0.4, "resets_at": "…"}]}`.
+    Each entry is shown per provider/model and labelled with the source's name.
+    No vendor is assumed.
+- **Model spend is optional.** Budgets can cap in units: `max_tokens` here,
+  and runs/turns/tokens on a bot's proactive budget ([[Bots]]). On a
+  subscription, leave the dollar caps out.
 
 ## Pricing
 

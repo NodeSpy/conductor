@@ -278,7 +278,7 @@ bots:
       every: 4h
       quiet_hours: "22:00-07:00"                 # no sweep starts in this window
       timezone: Europe/Berlin                    # default: the daemon's local zone
-      budget: { max_runs_per_day: 6, max_cost_per_day: 2.00 }   # rolling 24h; at least one is required
+      budget: { max_runs_per_day: 6, max_turns_per_day: 120, max_tokens_per_day: 2m }   # rolling 24h; any, or none
       checklist: { section: "Proactive checks" } # a charter heading — or { file: checklists/sre.md }
       notify_at: high                            # low | medium | high (default) | critical
       # timeout: 20m
@@ -305,9 +305,17 @@ the bot's memory says is worth watching, and reports findings through
   memory repo (`episodes/proactive/…`) and stay quiet. **A sweep with no
   findings is one ledger line** and nothing else.
 - **Bounded.** No sweep starts during quiet hours, while another sweep runs, or
-  past the budget (runs, and run cost from the run history, over a rolling 24
-  hours — the sweep trigger also carries the cost cap as a workflow budget the
-  engine enforces). A skipped sweep is logged and audited once per reason.
+  past the budget. The budget is in **units** — `max_runs_per_day`,
+  `max_turns_per_day` (model turns), `max_tokens_per_day` (`500k` / `2m`
+  accepted) — and, only if you are billed per token, `max_cost_per_day`
+  (dollars of model spend). Set any combination, or none (`every:` already
+  bounds the schedule); over a rolling 24 hours, the **first cap reached**
+  stops the next sweep. Turns and tokens come from the run history (what the
+  runtime reported: claude-code's `num_turns` and token usage; one turn per run
+  when a runtime reports none). Tokens and dollars also bound a sweep **while it
+  runs**: the sweep trigger carries them as a workflow budget the engine
+  enforces. Caps enforce whatever `usage.mode` says (display only, see
+  [[Configuration]]). A skipped sweep is logged and audited once per reason.
   `conductor bot sweep <bot>` runs one now (quiet hours don't apply to an
   explicit request; the budget does); `conductor bot sweeps <bot>` lists
   them.
@@ -455,7 +463,7 @@ teams:
       tiers: { never: [aws.iam_*] }   # classified into every bot; the strictest tier wins
     budget:
       spend_cap: { per_action: 500, per_period: 2000, period: 720h }
-      proactive: { max_runs_per_day: 12, max_cost_per_day: 4.00 }   # a POOL for the whole team
+      proactive: { max_runs_per_day: 12, max_tokens_per_day: 5m }   # a POOL for the whole team, in any units
     isolation: { sandbox: required, handoff_workers: false, skip_permission_prompts: false }
     credentials: { secrets_via: broker, allow_secrets: [house/pd-token] }
     browser: { logins: [status.example.com], credentials: [statuspage] }
@@ -490,7 +498,7 @@ config: bots.platform-sre: autonomy.spend_cap.per_action 2000 exceeds team platf
 | `autonomy.shadow: true` | `autonomy.shadow` | — | `shadow: false` |
 | `autonomy.tiers` | merged into its tiers (the strictest wins) | a stricter tier | a bot pattern the team classes stricter (`observe: [kv.set]` under the team's `propose: [kv.*]`) |
 | `budget.spend_cap` | `autonomy.spend_cap` | a lower `per_action`/`per_period`, a longer `period` | higher, shorter, another currency |
-| `budget.proactive` | `proactive.budget` (and it is a pool, below) | lower | higher |
+| `budget.proactive` | `proactive.budget` (and it is a pool, below) | lower, **per unit**: each of runs / turns / tokens / dollars the pool caps | higher in any unit the pool caps |
 | `isolation.sandbox: required` | `isolation.sandbox` | — | `optional` |
 | `isolation.handoff_workers: false` | likewise | — | `true` |
 | `isolation.skip_permission_prompts: false` | likewise | — | `true`, or a `home.mode` that skips prompts |
@@ -691,9 +699,17 @@ removed from the team can no longer approve.
 ### The team's proactive pool
 
 `budget.proactive` is one pool for the whole team. It counts every bot's
-sweeps together over a rolling 24h: runs, and cost from the run history. No
-sweep starts once the team has used the pool up, even if the sweeping bot's
-own budget has room.
+sweeps together over a rolling 24h, in each unit it caps: runs, turns, tokens,
+and (if set) dollars. No sweep starts once the team has used up any one of
+them, even if the sweeping bot's own budget has room. A bot's own budget is
+narrower **per unit**: a unit the pool caps can only be capped lower, and one
+the bot leaves unset inherits the pool's. A unit the pool doesn't cap stays the
+bot's own choice. A pool with no cap at all is a `conductor validate` warning
+(it limits nothing).
+
+Model spend is optional throughout: on a subscription, cap in units and leave
+the dollars out. (`commit_money`'s `spend_cap` is different: it caps **cloud
+spend** — purchases a bot proposes — and is unchanged.)
 
 ### Teams and packs
 
@@ -858,6 +874,7 @@ conductor bot deliver <bot> --title "…" [--text "…"] [--requester who] [--ur
 conductor bot consolidate <bot>
 conductor bot replan <bot> <id>  # re-plan a stale terraform proposal
 conductor bot sweep <bot>        # a proactive sweep now (budget applies)
+conductor usage [--since 24h]    # model usage per runtime/model (per usage.mode; see [[Configuration]])
 conductor bot sweeps <bot>
 conductor bot teams              # every team: bots, routing, pool, knowledge
 conductor bot team <team>        # …and recent routed cases, delegations, knowledge log, pending promotions

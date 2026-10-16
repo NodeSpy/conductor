@@ -486,6 +486,18 @@ engines:
 #     "claude-opus-*": { input: 15.00, output: 75.00 }   # $ per 1M tokens
 #   default: { input: 3.00, output: 15.00 }
 
+# usage: — what reports and notifications SHOW of model usage (display only:
+# every cap above enforces in every mode). off (the default) shows no usage
+# or cost figures; subscription shows what conductor observed of its own runs
+# (runs, turns, tokens) per runtime/model, never summed across providers;
+# api adds dollar figures. Plan windows / utilization come ONLY from a usage
+# source you configure (type http: a JSON report from e.g. a proxy) —
+# `conductor usage` shows both, labelled. (wiki: Cost-Accounting)
+# usage:
+#   mode: subscription
+#   sources:
+#     - { name: proxy, type: http, url: "http://127.0.0.1:8080/usage" }
+
 # ---------------------------------------------------------------------------
 # checks: + gate: — quality gates on agent output (#36 §16). A gate runs
 # named checks against the agent's PROPOSED change (in its worktree) before
@@ -1421,7 +1433,8 @@ bots:
     # proactive:                                 # OFF unless set: read-only sweeps on a schedule (wiki: Bots → Proactive sweeps)
     #   every: 4h
     #   quiet_hours: "22:00-07:00"               # no sweep starts in this window (local time; timezone: to pin a zone)
-    #   budget: { max_runs_per_day: 6, max_cost_per_day: 2.00 }   # rolling 24h; at least one is required
+    #   budget: { max_runs_per_day: 6, max_turns_per_day: 120, max_tokens_per_day: 2m }   # rolling 24h, any or none;
+    #                                                               # + max_cost_per_day (USD) only on API billing
     #   checklist: { section: "Proactive checks" }                # a charter heading, or { file: checklists/sre.md }
     #   notify_at: high                          # findings at/above this open a case and notify (conductor.bot_notify)
     # peers: [billing-sre]                       # bots this one may message — they must list it back (or bot_links:)
@@ -1447,7 +1460,7 @@ teams:
     #   tiers: { never: [gh.delete_*] }          # classified into every bot (the strictest tier wins)
     # budget:
     #   spend_cap: { per_action: 500, per_period: 2000, period: 720h }   # each bot's commit_money cap fits inside
-    #   proactive: { max_runs_per_day: 12, max_cost_per_day: 4.00 }      # a POOL: all bots' sweeps together, rolling 24h
+    #   proactive: { max_runs_per_day: 12, max_tokens_per_day: 5m }      # a POOL: all bots' sweeps together, rolling 24h; per unit
     # isolation:
     #   sandbox: required                        # bots start only while conductor's agent sandbox is on
     #   handoff_workers: false                   # no `spawn --handoff` paseo workers
