@@ -41,6 +41,10 @@ type BotRecord struct {
 	Sweeps map[string]*Sweep `json:"sweeps,omitempty"`
 	Groups map[string]*Group `json:"groups,omitempty"`
 	Peer   []PeerMsg         `json:"peer,omitempty"`
+	// Delegations are the work this bot handed to other bots — the
+	// delegation edges (who handed what to whom), keyed by id. The
+	// receiving side's case carries a DelegationRef back to its edge.
+	Delegations map[string]*Delegation `json:"delegations,omitempty"`
 	// Consolidated is when episodes were last distilled into knowledge.
 	Consolidated time.Time `json:"consolidated,omitempty"`
 	// Seq numbers ids within this bot so they stay short and readable.
@@ -86,6 +90,44 @@ type Case struct {
 	Team    string   `json:"team,omitempty"`
 	Routing *Routing `json:"routing,omitempty"`
 	Payload string   `json:"payload,omitempty"`
+	// Delegation is set on a case another bot delegated to this one: the
+	// edge it came in on, and the ancestry the loop guard checks.
+	Delegation *DelegationRef `json:"delegation,omitempty"`
+}
+
+// Delegation is one delegation edge, kept by the delegating bot: what it
+// handed to whom, on which of its cases, at what provenance, and how it
+// ended.
+type Delegation struct {
+	ID       string `json:"id"`
+	From     string `json:"from"`
+	FromCase string `json:"from_case"`
+	To       string `json:"to"`
+	ToCase   string `json:"to_case,omitempty"`
+	Title    string `json:"title"`
+	// Requester / RequesterClass are the provenance the receiving case was
+	// opened with (before the recipient re-checks an operator).
+	Requester      string `json:"requester,omitempty"`
+	RequesterClass string `json:"requester_class"`
+	// Depth is the number of delegation hops this edge ends, counting
+	// itself; Chain the bots it passed through, the delegator last.
+	Depth int      `json:"depth"`
+	Chain []string `json:"chain"`
+	// Status: open | done | declined.
+	Status  string    `json:"status"`
+	Result  string    `json:"result,omitempty"`
+	Created time.Time `json:"created"`
+	Updated time.Time `json:"updated"`
+}
+
+// DelegationRef ties a delegated case to its edge in the delegator's
+// ledger.
+type DelegationRef struct {
+	ID       string   `json:"id"`
+	From     string   `json:"from"`
+	FromCase string   `json:"from_case"`
+	Depth    int      `json:"depth"`
+	Chain    []string `json:"chain"`
 }
 
 // Routing is a team routing decision, as the case's bot records it.

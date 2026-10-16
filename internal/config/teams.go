@@ -41,6 +41,10 @@ type TeamConfig struct {
 	// rules: data only, fenced, audited, rate-limited) or "none" (only
 	// explicit operator links, as between teams).
 	Peers string `yaml:"peers,omitempty"`
+	// Delegation bounds `conductor bot delegate` chains through the team's
+	// bots (who may delegate to whom is the same rule as ask: Peers, or an
+	// operator's link).
+	Delegation *TeamDelegation `yaml:"delegation,omitempty"`
 	// Autonomy bounds the bots' gates.
 	Autonomy TeamAutonomy `yaml:"autonomy,omitempty"`
 	// Budget bounds spend and proactive sweeps.
@@ -57,6 +61,27 @@ type TeamConfig struct {
 	// Routing picks who handles work routed to the team (`bot: { team:
 	// … }`). Nil: the team cannot be routed to.
 	Routing *TeamRouting `yaml:"routing,omitempty"`
+}
+
+// TeamDelegation bounds delegation chains.
+type TeamDelegation struct {
+	// MaxDepth is the most delegation hops a chain may take through this
+	// team's bots (default DefaultDelegationMaxDepth).
+	MaxDepth int `yaml:"max_depth,omitempty"`
+}
+
+// DefaultDelegationMaxDepth is how many hops a delegation chain may take
+// when no team sets delegation.max_depth: a → b → c → d, and no further.
+const DefaultDelegationMaxDepth = 3
+
+// MaxDelegationDepth is the most hops a delegation may end at bot: its
+// team's delegation.max_depth, or the default for a team that sets none
+// and for a bot with no team.
+func (c *Config) MaxDelegationDepth(bot string) int {
+	if t, ok := c.Teams[string(c.Bots[bot].Team)]; ok && t.Delegation != nil && t.Delegation.MaxDepth > 0 {
+		return t.Delegation.MaxDepth
+	}
+	return DefaultDelegationMaxDepth
 }
 
 // TeamAutonomy is a team's ceiling on its bots' gates.
@@ -540,6 +565,9 @@ func (c *Config) validateBotTeam(name string, t TeamConfig) error {
 	case "", "team", "none":
 	default:
 		return fmt.Errorf("peers: want team or none, got %q", t.Peers)
+	}
+	if d := t.Delegation; d != nil && (d.MaxDepth < 1 || d.MaxDepth > 10) {
+		return fmt.Errorf("delegation.max_depth: want 1 to 10 hops, got %d", d.MaxDepth)
 	}
 	switch t.Autonomy.Ceiling {
 	case "", TierObserve, TierReversible:

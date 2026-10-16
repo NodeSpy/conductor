@@ -1156,12 +1156,22 @@ func (s *Service) CaseNote(c Actor, caseID, text string) error {
 }
 
 // CaseClose closes a case and writes its outcome to the episodic log.
+// A delegated case's outcome goes back to its delegator.
 func (s *Service) CaseClose(ctx context.Context, c Actor, caseID, outcome string) error {
 	if c.Role != config.BotRoleHome {
 		return errors.New("only the home session closes cases")
 	}
+	cs, err := s.closeCase(ctx, c.Bot, caseID, outcome)
+	if cs.ID != "" { // closed, even if its episode could not be written
+		s.reportDelegation(c.Bot, cs, DelegationDone, outcome)
+	}
+	return err
+}
+
+// closeCase closes a case and writes its outcome to the episodic log.
+func (s *Service) closeCase(ctx context.Context, bot, caseID, outcome string) (store.Case, error) {
 	var cs store.Case
-	err := s.Ledger.UpdateBot(c.Bot, func(r *store.BotRecord) error {
+	err := s.Ledger.UpdateBot(bot, func(r *store.BotRecord) error {
 		cc := r.Cases[caseID]
 		if cc == nil {
 			return fmt.Errorf("no case %q", caseID)
@@ -1171,12 +1181,12 @@ func (s *Service) CaseClose(ctx context.Context, c Actor, caseID, outcome string
 		return nil
 	})
 	if err != nil {
-		return err
+		return store.Case{}, err
 	}
-	repo := s.Repo(c.Bot)
+	repo := s.Repo(bot)
 	entry := fmt.Sprintf("## %s — closed\n\nSource: %s · requester: %s (%s)\n\nOutcome: %s\n", s.now().UTC().Format(time.RFC3339), cs.Source, orDash(cs.Requester), cs.RequesterClass, strings.TrimSpace(outcome))
 	_, err = repo.Write(ctx, repo.EpisodePath(cs.ID, cs.Title, cs.Created), entry, "append", "episode: case "+cs.ID+" closed", map[string]string{"Bot-Case": cs.ID})
-	return err
+	return cs, err
 }
 
 // Cases lists a bot's cases (open first, newest first).

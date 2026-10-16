@@ -173,6 +173,12 @@ func (s *Service) agentOp(ctx context.Context, c Actor, sub string, args map[str
 		return toMap(res), nil
 	case "ask":
 		return s.Ask(ctx, c, str(args, "to"), str(args, "text"), str(args, "case"))
+	case "delegate":
+		return s.Delegate(ctx, c, str(args, "to"), str(args, "task"), str(args, "case"))
+	case "decline":
+		return s.Decline(ctx, c, str(args, "case"), str(args, "reason"))
+	case "delegations":
+		return s.Delegations(c.Bot, boolArg(args, "all")), nil
 	case "tell":
 		return s.Tell(ctx, c, str(args, "to"), str(args, "text"))
 	case "report":
@@ -302,6 +308,11 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 			return nil, err
 		}
 		return map[string]any{"cases": toList(s.Cases(name, boolArg(args, "all")))}, nil
+	case "delegations":
+		if err := need(); err != nil {
+			return nil, err
+		}
+		return s.Delegations(name, boolArg(args, "all")), nil
 	case "workers":
 		if err := need(); err != nil {
 			return nil, err
@@ -484,6 +495,22 @@ func (s *Service) teamStatus(ctx context.Context, team string, full bool) map[st
 			}
 		}
 		out["knowledge_proposals"] = pending
+		var edges []store.Delegation
+		for _, n := range cfg.TeamBots(team) {
+			for _, d := range s.Ledger.Bot(n).Delegations {
+				edges = append(edges, *d)
+			}
+		}
+		sort.Slice(edges, func(i, j int) bool { return edges[i].Created.After(edges[j].Created) })
+		var ds []any
+		for _, d := range edges {
+			if len(ds) == 30 {
+				break
+			}
+			ds = append(ds, map[string]any{"delegation": d.ID, "from": d.From, "from_case": d.FromCase, "to": d.To, "to_case": d.ToCase,
+				"title": d.Title, "status": d.Status, "requester": d.Requester, "requester_class": d.RequesterClass, "depth": d.Depth})
+		}
+		out["delegations"] = ds
 	}
 	return out
 }

@@ -393,3 +393,29 @@ triggers:
 		t.Errorf("team warnings: %s", w)
 	}
 }
+
+func TestTeamDelegationDepth(t *testing.T) {
+	c, err := loadTeams(t, "teams:\n  x: { delegation: { max_depth: 2 } }\n  y: {}\nbots:\n  a: { team: x }\n  b: { team: y }\n  s: {}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.MaxDelegationDepth("a"); got != 2 {
+		t.Errorf("team x: %d", got)
+	}
+	if got := c.MaxDelegationDepth("b"); got != DefaultDelegationMaxDepth {
+		t.Errorf("a team that sets none: %d", got)
+	}
+	if got := c.MaxDelegationDepth("s"); got != DefaultDelegationMaxDepth {
+		t.Errorf("a teamless bot: %d", got)
+	}
+	for _, d := range []string{"0", "-1", "11"} {
+		if _, err := loadTeams(t, "teams:\n  x: { delegation: { max_depth: "+d+" } }\nbots:\n  a: { team: x }\n"); err == nil || !strings.Contains(err.Error(), "delegation.max_depth") {
+			t.Errorf("max_depth %s: %v", d, err)
+		}
+	}
+	for _, d := range []string{"1", "10"} {
+		if _, err := loadTeams(t, "teams:\n  x: { delegation: { max_depth: "+d+" } }\nbots:\n  a: { team: x }\n"); err != nil {
+			t.Errorf("max_depth %s: %v", d, err)
+		}
+	}
+}

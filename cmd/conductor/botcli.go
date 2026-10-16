@@ -32,6 +32,7 @@ const botUsage = `usage:
     conductor bot show <bot>
     conductor bot cases <bot> [--all]
     conductor bot workers <bot>
+    conductor bot delegations <bot> [--all]
     conductor bot proposals <bot> [--all]
     conductor bot proposal <bot> <id>
     conductor bot approve <bot> <id> [--as <operator>] [--key <path>] [--reason "…"]
@@ -60,7 +61,10 @@ const botUsage = `usage:
     conductor bot report "<progress>"                      # to your parent (a worker)
     conductor bot instructions [--wait 5m]                 # new instructions from your parent (a worker); --wait blocks for them
     conductor bot join (<group> | --case <id> --group <label>) [--timeout 30m]
-    conductor bot ask <bot> [--case <id>] "<text>"        # a linked peer bot
+    conductor bot ask <bot> [--case <id>] "<text>"        # a linked peer bot (data only)
+    conductor bot delegate <bot> [--case <id>] "<task>"   # hand a peer WORK; its outcome comes back to your case
+    conductor bot decline <case> "<reason>"                # refuse a delegated case; the reason goes back
+    conductor bot delegations [--all]                      # what you delegated (out) and hold (in)
     conductor bot peers
     conductor bot team                                     # your team: teammates, lead, knowledge
     conductor bot team recall <words…> | team read <path>  # the team's shared knowledge
@@ -150,7 +154,7 @@ func botAgent(sub string, args []string) error {
 	}
 	call := sub
 	switch sub {
-	case "whoami", "remember", "episode", "handoff", "proposals", "cases", "peers":
+	case "whoami", "remember", "episode", "handoff", "proposals", "cases", "peers", "delegations":
 	case "instructions":
 		// --wait blocks until the parent sends something (or the timeout):
 		// how a child waits on its parent, like wait/join.
@@ -196,6 +200,16 @@ func botAgent(sub string, args []string) error {
 			return fmt.Errorf("usage: conductor bot ask <bot> [--case <id>] \"<text>\"")
 		}
 		a["to"], a["text"] = pos[0], strings.Join(pos[1:], " ")
+	case "delegate":
+		if len(pos) < 2 {
+			return fmt.Errorf("usage: conductor bot delegate <bot> [--case <id>] \"<task>\"")
+		}
+		a["to"], a["task"] = pos[0], strings.Join(pos[1:], " ")
+	case "decline":
+		if len(pos) < 2 {
+			return fmt.Errorf("usage: conductor bot decline <case> \"<reason>\"")
+		}
+		a["case"], a["reason"] = pos[0], strings.Join(pos[1:], " ")
 	case "join":
 		if len(pos) == 1 {
 			a["id"] = pos[0]
@@ -381,7 +395,7 @@ func botOperator(sub string, args []string) error {
 			return fmt.Errorf("usage: conductor bot team <team>")
 		}
 		a["team"] = pos[0]
-	case "show", "cases", "workers", "proposals", "rotate", "consolidate", "sweep", "sweeps":
+	case "show", "cases", "workers", "delegations", "proposals", "rotate", "consolidate", "sweep", "sweeps":
 		if err := needBot(1); err != nil {
 			return err
 		}
