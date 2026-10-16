@@ -105,8 +105,10 @@ structurally untouchable. A foreground step's agent (and its conductor-created
 workspace) is archived the moment the step finishes; a hand-off's when it calls
 `step.done` (or its `idle_timeout` fires); any other agent when it calls the
 auto-granted `step.done` — every agent is instructed to do so as its final
-action. A dispatch that failed before the agent came up tears its own workspace
-down immediately. Reclaiming a `checkout: none` run's workspace also
+action. A `checkout: none` dispatch whose launch fails (the agent errored, the
+output schema was never met, paseo was unreachable) records no agent, so it
+tears its own run workspace down immediately; a failed launch's worktree is
+left alone, since it may be one a retry adopted. Reclaiming a `checkout: none` run's workspace also
 deletes its per-run directory (`~/.conductor/runs/<slug>`) — paseo archives a
 directory workspace but leaves the folder, so conductor removes it, and only
 ever a direct child of that runs root. The trade is deliberate: a conductor-launched agent that dies
