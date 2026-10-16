@@ -240,3 +240,11 @@
 @keyframes c-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
 @media (prefers-reduced-motion: reduce) { .c-skel, .c-spin, .c-dot.live, [data-s="running"] .c-glyph-spin { animation: none; } }
 [data-motion="reduced"] .c-skel, [data-motion="reduced"] .c-spin, [data-motion="reduced"] .c-dot.live, [data-motion="reduced"] .c-glyph-spin { animation: none; }
+
+/* icon sizing inside composite components */
+.c-table td svg { width: var(--size-icon); height: var(--size-icon); vertical-align: -3px; color: var(--color-icon-muted); }
+.c-table td[data-s] svg { color: var(--s-fg); }
+.c-table .c-badge svg { width: 13px; height: 13px; vertical-align: 0; color: inherit; }
+.c-drawer .hd svg { width: 18px; height: 18px; color: var(--color-icon-default); }
+.c-code .hd svg { width: 14px; height: 14px; flex: none; }
+.c-table td .check svg { width: 10px; height: 10px; color: inherit; vertical-align: 0; }

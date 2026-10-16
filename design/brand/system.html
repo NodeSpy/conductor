@@ -12,8 +12,9 @@
 <link rel="stylesheet" href="book/components.css">
 <link rel="stylesheet" href="book/book.css">
 <script>
-  // Restore the reader's toggles before first paint.
-  for (const k of ['theme', 'density', 'motion']) { const v = localStorage.getItem('cds-' + k); if (v) document.documentElement.dataset[k] = v; }
+  // Restore the reader's toggles before first paint (?theme=dark&density=compact overrides, for links).
+  const q = new URLSearchParams(location.search);
+  for (const k of ['theme', 'density', 'motion']) { const v = q.get(k) ?? localStorage.getItem('cds-' + k); if (v) document.documentElement.dataset[k] = v; }
 </script>
 </head>
 <body class="c-root">

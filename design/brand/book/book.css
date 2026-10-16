@@ -308,6 +308,7 @@ h4.cap { font: var(--type-overline); letter-spacing: var(--type-overline-trackin
 .perdir th, .perdir td { padding: var(--space-2) var(--space-3); border-bottom: var(--border-width) solid var(--color-border-subtle); text-align: left; vertical-align: top; }
 .perdir th { font: var(--type-overline); letter-spacing: var(--type-overline-tracking); text-transform: uppercase; color: var(--color-text-tertiary); }
 .perdir img { height: 26px; }
+.perdir td code { white-space: nowrap; overflow-wrap: normal; }
 .perdir .chip { display: inline-flex; align-items: center; gap: 6px; }
 .perdir .chip i { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
 .perdir tr.cur td { background: var(--color-accent-subtle); }
@@ -357,4 +358,20 @@ h4.cap { font: var(--type-overline); letter-spacing: var(--type-overline-trackin
   .panel { padding: var(--space-3); }
   .vp { grid-template-columns: 1fr; }
   .spec-row .sample { white-space: normal; }
+}
+.approval .hd .k svg { width: 14px; height: 14px; flex: none; }
+.micro { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 1023px) { .micro { grid-template-columns: 1fr; } }
+
+/* phone: multi-column sheets collapse; the button state grid scrolls sideways instead */
+@media (max-width: 599px) {
+  .panel { overflow-x: auto; }
+  .panel [style*="grid-template-columns"]:not(.btn-sheet) { grid-template-columns: 1fr !important; }
+  .panel .btn-sheet { min-width: 660px; }
+  .surfaces { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .textscale .row { min-width: 760px; }
+  .c-table-wrap { overflow-x: auto; }
+  .c-tabs { overflow-x: auto; }
+  .dens-tbl { font-size: 12px; }
+  .vp > b { padding-top: var(--space-2); }
 }

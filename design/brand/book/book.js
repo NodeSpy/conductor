@@ -340,7 +340,7 @@ ch('motion', 'Motion', 'Motion explains a change. It never decorates, delays or 
 const STATES = ['Default', 'Hover', 'Focus', 'Active', 'Disabled', 'Loading'];
 const stCls = { Default: '', Hover: 'is-hover', Focus: 'is-focus', Active: 'is-active', Disabled: 'is-disabled', Loading: 'is-loading' };
 const spin = `<svg class="c-spin" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">${STATUS.running.svg}</svg>`;
-const btnSheet = () => `<div class="grid-sheet" style="grid-template-columns:90px repeat(6, minmax(0,1fr))">
+const btnSheet = () => `<div class="grid-sheet btn-sheet" style="grid-template-columns:90px repeat(6, minmax(0,1fr))">
   <span></span>${STATES.map((s) => `<span class="h">${s}</span>`).join('')}
   ${[['primary', 'Approve'], ['secondary', 'Review'], ['ghost', 'Cancel'], ['danger', 'Delete']].map(([v, l]) => `<span class="rl">${v}</span>${STATES.map((s) => `<div><button class="c-btn ${v} ${stCls[s]}" ${s === 'Disabled' ? 'disabled' : ''} tabindex="-1">${s === 'Loading' ? spin : ''}${l}</button></div>`).join('')}`).join('')}
   <span class="rl">sizes</span><div style="grid-column:span 6;display:flex;gap:12px;align-items:center"><button class="c-btn primary sm" tabindex="-1">Small · ${'sm'}</button><button class="c-btn primary" tabindex="-1">${lu('fingerprint')}Approve and run</button><button class="c-btn primary lg" tabindex="-1">Large · lg</button><button class="c-btn secondary" tabindex="-1">${lu('play')}Run a workflow</button><button class="c-btn ghost sm" tabindex="-1">${lu('ellipsis')}</button></div>
@@ -503,7 +503,7 @@ ch('voice', 'Voice and tone', 'Plain, specific and calm. The interface talks to 
   <table class="names"><thead><tr><th>Term</th><th>Means</th><th>Convention</th></tr></thead><tbody>${NAMES.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>
   ${rules(['<b>Sentence case</b> for every title, button and label.', '<b>Numbers:</b> digits for counts and units (“3 bots”, “2 minutes”), with currency to the cent in tables and rounded in prose.', '<b>“You”</b> is the operator. conductor refers to itself as “conductor”, never “we”.', '<b>Risk words</b> are fixed: “Does on its own”, “Asks you first” and “Never”, with the tier name second.'])}
   ${sub('microcopy', 'Patterns')}
-  ${pair(() => `<div class="micro">${microPatterns()}</div>`, 'stack1')}
+  ${stack(() => `<div class="micro">${microPatterns()}</div>`)}
   `);
 
 // =====================================================================
@@ -536,7 +536,7 @@ ch('logo', 'Logo', 'Fermata is the working mark: an arch over a point, the condu
   </div>
   ${sub('misuse', 'Misuse')}
   <div class="logo-tiles">
-    ${[['transform:scaleX(1.5)', 'stretched'], ['filter:hue-rotate(180deg)', 'recoloured'], ['transform:rotate(180deg)', 'rotated (it becomes a smile)'], ['filter:drop-shadow(0 6px 8px rgba(0,0,0,.5))', 'effects and shadows'], ['', 'on a busy image', 'background:repeating-linear-gradient(45deg,#cc4a0e 0 12px,#3f9a86 12px 24px)'], ['letter-spacing:.4em;font:italic 34px var(--font-family-serif)', 're-typed wordmark', '', 'conductor']]
+    ${[['transform:scaleX(1.35);max-width:52%', 'stretched'], ['filter:hue-rotate(180deg)', 'recoloured'], ['transform:rotate(180deg)', 'rotated (it becomes a smile)'], ['filter:drop-shadow(0 6px 8px rgba(0,0,0,.5))', 'effects and shadows'], ['', 'on a busy image', 'repeating-linear-gradient(45deg,#cc4a0e 0 12px,#3f9a86 12px 24px)'], ['letter-spacing:.4em;font:italic 34px var(--font-family-serif)', 're-typed wordmark', '', 'conductor']]
       .map(([st, l, bg = '', txt = '']) => `<div class="ltile bad" style="background:${bg || '#efeadf'};color:#1b1a15">${txt ? `<span style="position:static;opacity:1;${st};text-transform:none">${txt}</span>` : `<img src="${A}logo-horizontal.svg" alt="" style="${st}">`}<span>${l}</span></div>`).join('')}
   </div>
   ${sub('cobrand', 'Co-branding', 'Partner logos sit to the right at equal optical height, separated by a hairline rule with two dot-widths of space on each side. conductor always comes first on our surfaces, and we never merge the marks.')}
@@ -546,9 +546,9 @@ ch('logo', 'Logo', 'Fermata is the working mark: an arch over a point, the condu
     <div style="display:flex;gap:var(--space-4);align-items:flex-end">${[16, 32, 48].map((s) => `<img src="${A}favicon-${s}.png" width="${s}" height="${s}" alt="" style="image-rendering:pixelated">`).join('')}<img src="${A}apple-touch-icon.png" width="60" height="60" alt="" style="border-radius:13px"></div>
     <img src="${A}social-card.png" alt="Social card" style="width:100%;max-width:640px;border-radius:var(--radius-card);box-shadow:var(--shadow-2)">
   </div>
-  ${sub('logo-directions', 'What changes per direction', 'Tokens never name the logo. Switching direction swaps the logo files and, where a direction has its own accent, adds a ramp and re-points nine accent tokens. Every other token stays.')}
+  ${sub('logo-directions', 'What changes per direction', 'Tokens never name the logo. Switching direction swaps the logo files and, where a direction has its own accent, adds a ramp and re-points the eleven accent tokens. Every other token stays.')}
   <table class="perdir"><thead><tr><th>Direction</th><th>Logo files</th><th>Accent</th><th>Token changes</th><th>Wordmark</th></tr></thead><tbody>
-    <tr class="cur"><td>${th('directions/fermata/logo-horizontal-light.svg', 'directions/fermata/logo-horizontal-dark.svg')}</td><td><code>directions/fermata/</code> (= <code>assets/</code>)</td><td><span class="chip"><i style="background:#ff6a2b"></i>ember</span></td><td>None: this system is built on it.</td><td>Instrument Serif Italic (the dashboard’s title face)</td></tr>
+    <tr class="cur"><td>${th('directions/fermata/logo-horizontal-light.svg', 'directions/fermata/logo-horizontal-dark.svg')}</td><td><code>directions/fermata/</code><br><span class="c-help">= assets/</span></td><td><span class="chip"><i style="background:#ff6a2b"></i>ember</span></td><td>None: this system is built on it.</td><td>Instrument Serif Italic (the dashboard’s title face)</td></tr>
     <tr><td>${th('directions/conduit/logo-horizontal-light.svg', 'directions/conduit/logo-horizontal-dark.svg')}</td><td><code>directions/conduit/</code></td><td><span class="chip"><i style="background:#e07a3f"></i>copper</span></td><td>Add a <code>copper</code> ramp (hue ≈ 50, lower chroma) and re-point the accent set below. Re-run the contrast check.</td><td>Instrument Sans SemiBold, in the logo only. UI type is unchanged.</td></tr>
     <tr><td>${th('directions/downbeat/logo-horizontal-light.svg', 'directions/downbeat/logo-horizontal-dark.svg')}</td><td><code>directions/downbeat/</code></td><td><span class="chip"><i style="background:#ff5533"></i>vermilion</span></td><td>Add a <code>vermilion</code> ramp (hue ≈ 32). It sits closer to danger red, so check that the needs-you and failed badges still differ by more than colour (they do: diamond and cross).</td><td>Martian Mono Medium</td></tr>
     <tr><td>${th('directions/signature/logo-horizontal-light.svg', 'directions/signature/logo-horizontal-dark.svg')}</td><td><code>directions/signature/</code></td><td><span class="chip"><i style="background:#e0b25a"></i>brass</span></td><td>Brass collides with <b>status.warning</b> (amber, hue 80). Either keep ember as the UI accent and use brass in the logo only, or move warning to a more orange amber.</td><td>Instrument Serif roman</td></tr>
