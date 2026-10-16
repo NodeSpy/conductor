@@ -28,7 +28,7 @@ import (
 
 const botUsage = `usage:
   operator:
-    conductor bot ls
+    conductor bot ls [--folder <path>] [--flat]   # a tree: folder, team, bot
     conductor bot show <bot>
     conductor bot cases <bot> [--all]
     conductor bot workers <bot>
@@ -76,7 +76,7 @@ const botUsage = `usage:
     conductor bot proposals [--all]
     conductor bot wait <proposal> [--timeout 30m]`
 
-var botBoolFlags = map[string]bool{"all": true, "append": true, "handoff": true, "urgent": true, "read-only": true}
+var botBoolFlags = map[string]bool{"all": true, "append": true, "handoff": true, "urgent": true, "read-only": true, "flat": true}
 
 // botFlags parses --k v / --k=v, boolean flags, repeated --file, and a
 // `--` that ends flag parsing (everything after is positional).
@@ -384,11 +384,16 @@ func botOperator(sub string, args []string) error {
 	}
 	switch sub {
 	case "ls", "list":
-		out, _, err := botControl(cfg, "list", a)
+		folder, err := config.NormFolder(fl["folder"])
+		if err != nil {
+			return fmt.Errorf("--folder: %w", err)
+		}
+		out, _, err := botControl(cfg, "list", map[string]any{})
 		if err != nil {
 			return err
 		}
-		return printBotList(out)
+		fmt.Print(botListText(out, folder, fl["flat"] == "true"))
+		return nil
 	case "teams":
 	case "team":
 		if len(pos) != 1 {
@@ -439,26 +444,105 @@ func botOperator(sub string, args []string) error {
 	return printJSON(out)
 }
 
-func printBotList(out map[string]any) error {
+// botListText renders `conductor bot ls`: a tree grouped by folder, then
+// team, then bot — or, with flat, one line per bot. A folder filter keeps
+// that folder and everything under it.
+func botListText(out map[string]any, folder string, flat bool) string {
 	ms, _ := out["bots"].([]any)
-	if len(ms) == 0 {
-		fmt.Println("no bots")
-		return nil
-	}
+	type row struct{ folder, team, bot, line string }
+	var rows []row
 	for _, x := range ms {
 		m, _ := x.(map[string]any)
-		home := "no home session"
-		if h, ok := m["home"].(map[string]any); ok {
-			home = fmt.Sprintf("home %v (agent %v, %v turns)", h["session"], h["agent"], h["turns"])
+		f, _ := m["folder"].(string)
+		if folder != "" && f != folder && !strings.HasPrefix(f, folder+"/") {
+			continue
 		}
-		mode := "live"
-		if m["shadow"] == true {
-			mode = "shadow"
-		}
-		fmt.Printf("%-16v %-6s %s · %v open cases · %v pending proposals · %v workers\n",
-			m["bot"], mode, home, m["open_cases"], m["pending_proposals"], m["live_workers"])
+		t, _ := m["team"].(string)
+		rows = append(rows, row{f, t, fmt.Sprint(m["bot"]), botLine(m)})
 	}
-	return nil
+	if len(rows) == 0 {
+		if folder != "" {
+			return fmt.Sprintf("no bots in folder %s\n", folder)
+		}
+		return "no bots\n"
+	}
+	// Folder, then team (teamless last), then bot.
+	sort.Slice(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		if a.folder != b.folder {
+			return a.folder < b.folder
+		}
+		if (a.team == "") != (b.team == "") {
+			return a.team != ""
+		}
+		if a.team != b.team {
+			return a.team < b.team
+		}
+		return a.bot < b.bot
+	})
+	var sb strings.Builder
+	if flat {
+		for _, r := range rows {
+			fmt.Fprintf(&sb, "%-16s %-20s %-14s %s\n", r.bot, orRoot(r.folder), orDashCLI(r.team), r.line)
+		}
+		return sb.String()
+	}
+	var printed []string // the folder segments already printed
+	lastTeam, lastFolder := "\x00", "\x00"
+	for _, r := range rows {
+		var segs []string
+		if r.folder != "" {
+			segs = strings.Split(r.folder, "/")
+		}
+		if r.folder != lastFolder {
+			common := 0
+			for common < len(printed) && common < len(segs) && printed[common] == segs[common] {
+				common++
+			}
+			for d := common; d < len(segs); d++ {
+				fmt.Fprintf(&sb, "%s%s/\n", strings.Repeat("  ", d), segs[d])
+			}
+			printed, lastFolder, lastTeam = segs, r.folder, "\x00"
+		}
+		ind := strings.Repeat("  ", len(segs))
+		if r.team != lastTeam {
+			if r.team != "" {
+				fmt.Fprintf(&sb, "%steam %s\n", ind, r.team)
+			}
+			lastTeam = r.team
+		}
+		if r.team != "" {
+			ind += "  "
+		}
+		fmt.Fprintf(&sb, "%s%-16s %s\n", ind, r.bot, r.line)
+	}
+	return sb.String()
+}
+
+func botLine(m map[string]any) string {
+	home := "no home session"
+	if h, ok := m["home"].(map[string]any); ok {
+		home = fmt.Sprintf("home %v (agent %v, %v turns)", h["session"], h["agent"], h["turns"])
+	}
+	mode := "live"
+	if m["shadow"] == true {
+		mode = "shadow"
+	}
+	return fmt.Sprintf("%-6s %s · %v open cases · %v pending proposals · %v workers", mode, home, m["open_cases"], m["pending_proposals"], m["live_workers"])
+}
+
+func orRoot(f string) string {
+	if f == "" {
+		return "/"
+	}
+	return f
+}
+
+func orDashCLI(t string) string {
+	if t == "" {
+		return "-"
+	}
+	return t
 }
 
 // botDecide signs and submits an approval or denial.

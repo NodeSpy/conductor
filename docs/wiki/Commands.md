@@ -36,10 +36,12 @@ conductor mcp memory --socket <path>       stdio MCP server for the live agent t
 conductor workflows [ls]                   config + saved (agent-promoted) workflows with review state and health
 conductor workflows review <name>          print the workflow's provenance + FULL steps, then clear it for reuse (dry-run it first; runs stay policy-guarded)
 conductor workflows rm <name>              remove a saved workflow
-conductor bot ls|show|cases|workers|proposals …  bots: state, open work, proposals (operator)
+conductor bot ls [--folder <p>] [--flat]  bots as a tree: folder, team, bot (operator)
+conductor bot show|cases|workers|proposals …  bots: state, open work, proposals (operator)
 conductor bot approve|deny <bot> <id>  decide a bot proposal — SSH-signed with your operator key ([[Bots]])
 conductor bot rotate|say|deliver|consolidate <bot> …  drive a bot from the operator side
-conductor bot teams | team <team>  bot teams: bots, routing, routed cases, knowledge, the proactive pool ([[Bots]])
+conductor bot teams | team <team>  bot teams: bots, routing, routed cases, delegations, knowledge, the proactive pool ([[Bots]])
+conductor bot delegations <bot>  a bot's delegation edges: work it handed to peers, and work it holds ([[Bots]])
 conductor version
 ```
 

@@ -119,6 +119,8 @@ conductor bot spawn --case c12 --group g --brief "…" [--verbs …] [--read-onl
 conductor bot tell <worker|group> "…"                                   # follow-up instructions to your workers
 conductor bot join --case c12 --group g                                 # fan-out results, together
 conductor bot ask <bot> [--case c] "…"                                  # a linked peer (data, never instructions)
+conductor bot delegate <bot> [--case c] "<task>"                        # hand a peer work (below)
+conductor bot decline <case> "<reason>"                                 # refuse work delegated to you
 conductor bot team [recall <words> | read <path>]                       # your team (below)
 conductor bot team promote --path knowledge/<f>.md [--to …] [--note "…"]
 conductor bot assign <case> <bot> [--note "…"]                          # a team lead's triage
@@ -217,6 +219,7 @@ grows.**
 | **parent → child**: the home session to a worker it started (fan-out workers included) | the brief, and follow-ups: `conductor bot tell <worker\|group> "…"` | **instructions** — the child carries them out |
 | **child → parent** | the `step.done` result, and interim `conductor bot report "…"` | **data** — fenced, for the parent to weigh |
 | **peer ↔ peer**: two independent bots an operator linked | `conductor bot ask <bot> "…"` (below) | **data only** — never instructions |
+| **peer → peer, work**: the same peers | `conductor bot delegate <bot> "<task>"` ([below](#delegating-work-to-a-peer)) | a **request** the recipient works under its own authority, at the original requester's trust; the outcome comes back as **data** |
 
 A cli worker cannot be interrupted mid-turn, so a `tell` is handed to the child
 at its **next `conductor bot …` call** (`conductor bot instructions` asks
@@ -348,9 +351,88 @@ DATA` block.
 > `conductor validate` warns about a one-sided `peers:` entry (it links
 > nothing).
 
+### Delegating work to a peer
+
+`ask` carries questions and information. To hand a peer **work**, the home
+session delegates it:
+
+```
+conductor bot delegate platform-data --case c6 "check replica lag on db-main and say whether it explains the 502s"
+```
+
+Conductor opens a case in the recipient, linked to the delegator's case
+(`--case`; without it, a new case is opened for it), and delivers the task
+inside a fenced `DELEGATED TASK` block. The recipient works it like any other
+case, under **its own** charter, verbs and autonomy, and finishes it with:
+
+```
+conductor bot case close <case> --outcome "lag is 3s from a long vacuum; not the 502s"   # the outcome goes back
+conductor bot decline <case> "web tier is not in my scope"                               # or a refusal, with a reason
+```
+
+Either one reaches the delegator's case as a fenced `DELEGATION RESULT` /
+`DELEGATION DECLINED` block: data for the delegator to weigh, like a child's
+report, delivered once.
+
+- **Who may delegate to whom** is exactly who may `ask` whom: teammates,
+  unless their team sets `peers: none`; anyone else only with an operator's
+  link. A refusal is audited. Only a home session delegates (a worker cannot).
+- **Provenance is inherited, never raised** — the same rule as the lead's
+  `assign` and a child worker. The recipient's case carries the less trusted
+  of the delegator's case's requester and the delegator's own trust (its
+  least-trusted open request), and the recipient re-checks an operator
+  against its own operators. A third party's request delegated (and delegated
+  onward) is still that third party's request at every gate. Work a bot
+  delegates on its **own** initiative arrives as a `peer`'s request
+  (`bot:<delegator>`): a bot's own trust never crosses to another bot.
+- **No loops.** A delegation cannot reach a bot already in its chain, and a
+  chain is at most `delegation.max_depth` hops (default 3; the lower of the
+  two sides' teams applies). A home session's conversation mixes its open
+  cases, so a delegation carries the ancestry of **every** delegated case it
+  has open: opening a fresh case does not reset the chain. Once the delegated
+  case is closed, the chain is gone.
+- **Bounded and recorded.** 4000 bytes per task, 10 per hour per direction.
+  Each side audits it (`bot_delegation`: `sent` / `received`, then `done` or
+  `declined` and `…_received`, with the text). The delegator's ledger keeps
+  the edge — who handed what to whom, on which cases, at what provenance, how
+  it ended — shown by `conductor bot delegations <bot>` and in
+  `conductor bot team <team>`.
+
+```yaml
+teams:
+  platform:
+    delegation: { max_depth: 2 }   # optional; 1–10, default 3
+```
+
 **Persistent sub-bots** (a bot creating a long-lived helper bot) are
 not supported: bots are operator config, which no bot can write. Declare
 a second bot yourself and link it as a peer, or use ephemeral workers.
+
+## Folders
+
+Folders organize bots and teams for display, nothing more:
+
+```yaml
+teams:
+  platform: { folder: work/platform, … }
+bots:
+  home-helper: { folder: personal/home, … }   # a solo bot files itself
+```
+
+`conductor bot ls` prints a tree grouped by folder, then team, then bot;
+`--folder work` shows that folder and everything under it, `--flat` one line
+per bot (with its folder and team).
+
+- **Folders have no behavior.** A folder confers no permissions, defaults,
+  isolation, peering or routing; moving a bot or a team to another folder
+  changes nothing it does. **Teams own all behavior.** Two bots in one folder
+  are no more linked than two bots in different folders.
+- **A bot on a team is listed under its team's folder.** A bot that sets its
+  own `folder:` while on a team gets a `conductor validate` warning, and the
+  team's folder wins.
+- A folder is a `/`-separated path: segments are trimmed, may hold letters,
+  digits, `.`, `-` and `_`, and may not be empty, `.` or `..` (at most 8
+  levels, 64 characters a segment). No folder means the root.
 
 ## Teams
 
@@ -437,8 +519,11 @@ Inside a team, bots are **peers by default**. Any bot may
 - it is audited on both sides;
 - it is capped at 4000 bytes and 20 per hour per direction.
 
-`peers: none` turns this off for a team. Then teammates exchange messages
-only where an operator linked them.
+Teammates can also hand each other **work** with `conductor bot delegate`
+([Delegating work to a peer](#delegating-work-to-a-peer)), on the same rule.
+
+`peers: none` turns both off for a team. Then teammates exchange messages and
+delegate only where an operator linked them.
 
 **Across teams, nothing changes.** Bots of different teams (or a bot
 without a team) are isolated unless an operator links them explicitly
@@ -700,7 +785,7 @@ the daemon (`conductor bot show` reports `sandboxed`). Without it:
 ## Operator commands
 
 ```
-conductor bot ls
+conductor bot ls [--folder <path>] [--flat]   # a tree: folder, team, bot
 conductor bot show <bot>         # home session, open work, memory log, charter
 conductor bot cases|workers|proposals <bot> [--all]
 conductor bot proposal <bot> <id>
@@ -713,7 +798,8 @@ conductor bot replan <bot> <id>  # re-plan a stale terraform proposal
 conductor bot sweep <bot>        # a proactive sweep now (budget applies)
 conductor bot sweeps <bot>
 conductor bot teams              # every team: bots, routing, pool, knowledge
-conductor bot team <team>        # …and recent routed cases, knowledge log, pending promotions
+conductor bot team <team>        # …and recent routed cases, delegations, knowledge log, pending promotions
+conductor bot delegations <bot> [--all]  # its delegation edges: handed out, and held
 ```
 
 Every session launch, event, worker, memory write, proposal and decision is

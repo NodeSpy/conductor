@@ -32,6 +32,9 @@ import (
 type TeamConfig struct {
 	// Description is the team's one-line identity.
 	Description string `yaml:"description,omitempty"`
+	// Folder files the team, and the bots on it, for display only
+	// (folders.go): no behavior.
+	Folder string `yaml:"folder,omitempty"`
 	// Operators may approve the team's bots' proposals and its knowledge
 	// promotions. A bot's operators: must be a subset; a bot that sets
 	// none inherits these. Empty = every configured operator.
@@ -555,6 +558,9 @@ func (c *Config) validateTeams() error {
 func (c *Config) validateBotTeam(name string, t TeamConfig) error {
 	if !validBotName(name) {
 		return fmt.Errorf("name must be lowercase letters, digits, - or _")
+	}
+	if _, err := NormFolder(t.Folder); err != nil {
+		return fmt.Errorf("folder: %w", err)
 	}
 	for _, op := range t.Operators {
 		if _, ok := c.Operators[op]; !ok {

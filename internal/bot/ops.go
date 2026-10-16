@@ -443,6 +443,9 @@ func (s *Service) teamStatus(ctx context.Context, team string, full bool) map[st
 	}
 	out := map[string]any{"team": team, "description": t.Description, "bots": cfg.TeamBots(team),
 		"operators": cfg.TeamOperators(team), "peers": peers}
+	if f := cfg.TeamFolder(team); f != "" {
+		out["folder"] = f
+	}
 	if r := t.Routing; r != nil {
 		rules := make([]any, 0, len(r.Rules))
 		for i, rule := range r.Rules {
@@ -557,6 +560,9 @@ func (s *Service) statusOf(name string) map[string]any {
 	}
 	if m.Team != "" {
 		out["team"] = string(m.Team)
+	}
+	if f := cfg.BotFolder(name); f != "" {
+		out["folder"] = f
 	}
 	if m.Isolation.SandboxRequired() {
 		out["sandbox_required"] = true

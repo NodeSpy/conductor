@@ -184,6 +184,27 @@ The rule: **instructions flow down, authority never grows.**
   (fenced), are audited on both sides, and are capped at 4000 bytes and 20 per
   hour per direction. A reply (`ask --case <peer case>`) is routed into the
   sender's original case.
+- **Delegation** (`bot delegate`, `internal/bot/delegate.go`) hands a peer
+  work rather than a message, on the same predicate (`BotLinked`, so `ask` and
+  `delegate` can never disagree about who reaches whom).
+  - The edge (`store.Delegation`) lives in the delegator's ledger; the
+    recipient's case carries a `DelegationRef` back to it. The outcome goes back
+    from `case close`, a refusal from `bot decline`; either moves the edge out
+    of `open` inside a ledger transaction, so it reports once.
+  - Provenance follows `assign`: the delegator's case's requester, bounded by
+    the delegator's `homeAttribution` unless that is the bot's own (`bot`),
+    then `atBot` at the recipient. A result of class `bot` — the delegator's
+    own initiative — becomes `peer` (`bot:<delegator>`): `bot` means "this
+    bot's own initiative" at a gate, and another bot's is not that.
+  - The loop guard takes the ancestry of every open delegated case, not just
+    the named one, for the same reason `homeAttribution` takes every open
+    case: a home session mixes them, and a fresh case would otherwise launder
+    a loop. Depth is the length of that ancestry, checked against the lower of
+    the two sides' `delegation.max_depth`.
+  - The text is fenced as `DELEGATED TASK`: a request to weigh against the
+    recipient's charter, like an event, never an instruction that bypasses it.
+    There is deliberately no op that lets a delegator approve, close or cancel
+    anything in the recipient.
 
 ### Persistent sub-bots: left out
 
@@ -200,6 +221,20 @@ A bot creating a long-lived helper bot does not fit cleanly:
 The clean equivalent today is operator-side: declare the helper as its own
 bot and link it as a peer (data only), or use ephemeral workers (instructions
 down, same authority or less).
+
+## Folders: display only
+
+`folder:` on a bot or a team (`internal/config/folders.go`) exists so an
+operator with many bots can file them (`work/platform`, `personal/home`).
+It is deliberately inert: nothing outside the listings reads it — not
+`ResolveTeams` (it is not a ceiling and is not inherited), not `BotLinked`,
+not the gate, not routing — and `TestFoldersChangeNothing` /
+`TestFoldersChangeNoRuntimeBehavior` hold that line. Behavior that wants a
+grouping belongs to a team. A bot on a team is displayed under the team's
+folder (`Config.BotFolder`), so a bot's own `folder:` there is a validate
+warning, not an error: it is harmless, just ignored. Paths are validated by
+one function (`NormFolder`) at load, and the CLI's `--folder` filter goes
+through the same one.
 
 ## Teams
 
@@ -247,7 +282,8 @@ each other, may share a knowledge repo, and can be routed work as a unit.
 - **Peering** is `Config.BotLinked`: teammates whose team does not set
   `peers: none`, in addition to the existing operator links. `Ask` is
   unchanged, so a teammate's message is the ordinary peer case: data,
-  fenced, audited both sides, rate-limited.
+  fenced, audited both sides, rate-limited. `Delegate` uses the same
+  predicate, so `peers: none` turns both off.
 - **Routing.** `bot: { team: … }` reaches `Service.RouteTeam` with the
   event's own fields for the rules. The requester is classified once, against
   the team's operators. `atBot` bounds that at each receiving bot by

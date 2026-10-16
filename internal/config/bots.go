@@ -111,6 +111,9 @@ type BotConfig struct {
 	// Team is the one team (teams:) this bot belongs to, if any. Its
 	// defaults are this bot's ceilings (teams.go).
 	Team TeamName `yaml:"team,omitempty"`
+	// Folder files the bot for display only (folders.go): no behavior. A
+	// bot on a team is listed under its team's folder instead.
+	Folder string `yaml:"folder,omitempty"`
 	// Isolation is the bot's session policy (inherited from its team,
 	// and only ever stricter).
 	Isolation BotIsolation `yaml:"isolation,omitempty"`
@@ -873,6 +876,9 @@ func (c *Config) validateBot(name string, m BotConfig) error {
 	if !validBotName(name) {
 		return fmt.Errorf("name must be lowercase letters, digits, - or _")
 	}
+	if _, err := NormFolder(m.Folder); err != nil {
+		return fmt.Errorf("folder: %w", err)
+	}
 	if m.Charter != "" && m.CharterFile != "" {
 		return fmt.Errorf("set charter or charter_file, not both")
 	}
@@ -1023,7 +1029,7 @@ func (c *Config) BotWarnings() []string {
 			}
 		}
 	}
-	return append(out, c.TeamWarnings()...)
+	return append(append(out, c.TeamWarnings()...), c.FolderWarnings()...)
 }
 
 // SkipsPrompts reports whether a paseo mode skips tool-permission prompts.
