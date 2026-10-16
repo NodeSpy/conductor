@@ -45,10 +45,10 @@
 
 /* the staff */
 .staff { position: relative; max-width: 760px; margin: 0 auto; }
-.staff::before { content: ""; position: absolute; left: 31px; top: 24px; bottom: 24px; width: 2px; background: linear-gradient(var(--line-3), var(--line-2)); border-radius: 1px; }
+.staff::before { content: ""; position: absolute; left: 31px; top: 24px; bottom: 24px; width: 2px; background: linear-gradient(var(--accent), var(--line-3) 12%, var(--line-3)); border-radius: 1px; }
 .staff-end { position: relative; padding: 8px 0 0 58px; }
 .staff-end.caps::before { content: ""; position: absolute; left: 25px; top: 8px; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line-3); background: var(--bg); }
-.spine-add { position: relative; height: 34px; display: flex; align-items: center; padding-left: 18px; }
+.spine-add { position: relative; height: 42px; display: flex; align-items: center; padding-left: 18px; }
 .spine-add .plus { position: relative; z-index: 2; width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line-3); background: var(--bg-2); color: var(--ink-3); display: grid; place-items: center; cursor: pointer; transition: transform var(--t-fast) var(--ease), background var(--t-fast), color var(--t-fast), border-color var(--t-fast); }
 .spine-add .plus svg { width: 14px; height: 14px; }
 .spine-add .plus:hover, .spine-add .plus:focus-visible { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); transform: scale(1.12); }

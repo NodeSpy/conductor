@@ -489,15 +489,15 @@
     const team = dv.draft.team && T(dv.draft.team), td = team ? team.cfg.defaults || {} : {};
     const inh = (path) => { const v = S.getPath(td, path); return v === undefined ? '' : `<div class="hint inh-hint">${icon('link')} team ${team.name}: <span class="mono">${esc(Array.isArray(v) ? v.join(', ') : v)}</span></div>`; };
     const inhMap = { operators: 'operators', 'autonomy.approval_ttl': 'autonomy.approval_ttl', 'isolation.mode': 'isolation.mode', 'proactive.budget.max_runs_per_day': 'budget.proactive_pool.max_runs_per_day', 'proactive.budget.max_cost_per_day': 'budget.proactive_pool.max_cost_per_day' };
-    let sec = '';
-    const fields = DF.map((f) => { const fd = Object.assign({}, f, { options: typeof f.options === 'function' ? f.options() : f.options }); const head = f.sec && f.sec !== sec ? ((sec = f.sec), `</div></div><div class="panel"><div class="panel-head"><h3>${f.sec}</h3></div><div class="panel-body def-grid">`) : ''; const html = UI.fieldHTML(Object.assign({}, fd, { k: 'df.' + f.k }), S.getPath(dv.draft, f.k)); return head + html.replace('<div class="ferr"', (inhMap[f.k] && team ? inh(inhMap[f.k]) : '') + '<div class="ferr"'); }).join('');
+    let sec = 'Identity & charter';
+    const charter = `<div class="field"><label for="df-charter">Charter <span class="opt">members/${esc(name)}.md · config only</span></label><textarea class="textarea" rows="6" id="df-charter" data-df-charter="1">${esc(dv.charter)}</textarea><div class="hint">Nothing on the agent-facing surface writes it.</div></div>`;
+    const fields = DF.map((f) => { const fd = Object.assign({}, f, { options: typeof f.options === 'function' ? f.options() : f.options }); const head = f.sec && f.sec !== sec ? (`${sec === 'Identity & charter' ? charter : ''}</div></div><div class="panel"><div class="panel-head"><h3>${(sec = f.sec)}</h3></div><div class="panel-body def-grid">`) : ''; const html = UI.fieldHTML(Object.assign({}, fd, { k: 'df.' + f.k }), S.getPath(dv.draft, f.k)); return head + html.replace('<div class="ferr"', (inhMap[f.k] && team ? inh(inhMap[f.k]) : '') + '<div class="ferr"'); }).join('');
     const yaml = YAML.stringify({ members: { [name]: dv.draft } });
     const changed = !YAML.eq(dv.draft, dv.base) || (isNew ? !!dv.newName : dv.charter !== (D.charters[m.name] || ''));
     const body = `<div class="grid g2" style="align-items:start">
-        <div class="stack def-form" data-member="${esc(key)}"><div class="panel"><div class="panel-body def-grid">
+        <div class="stack def-form" data-member="${esc(key)}"><div class="panel"><div class="panel-head"><h3>Identity &amp; charter</h3></div><div class="panel-body def-grid">
           ${isNew ? UI.fieldHTML({ k: 'df.$name', type: 'string', req: true, label: 'Name', ph: 'e.g. data-steward' }, dv.newName) : ''}
           ${fields}
-          <div class="field"><label for="df-charter">Charter <span class="opt">members/${esc(name)}.md · config only</span></label><textarea class="textarea" rows="6" id="df-charter" data-df-charter="1">${esc(dv.charter)}</textarea><div class="hint">Nothing on the agent-facing surface writes it.</div></div>
         </div></div></div>
         <div class="stack def-yaml"><div class="panel"><div class="panel-head"><h3>As YAML</h3><span class="muted small">config.yaml · <span class="mono">members.${esc(name)}</span></span><div class="tools">${errs.length ? st('fail', `${errs.length} error${errs.length > 1 ? 's' : ''}`) : st('ok', 'validates')}</div></div><div class="panel-body tight" id="df-yaml">${UI.yaml(yaml)}</div>
           ${errs.length || warns.length ? `<div class="panel-body" style="border-top:1px solid var(--line)">${errs.map((e) => `<div class="callout danger small" style="margin-bottom:6px">${esc(e)}</div>`).join('')}${warns.map((e) => `<div class="callout warn small" style="margin-bottom:6px">${esc(e)}</div>`).join('')}</div>` : ''}
