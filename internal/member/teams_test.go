@@ -678,7 +678,7 @@ func TestTeamKnowledgePromotionGating(t *testing.T) {
 	hp, _ := k.svc.Repo("a").LatestHandoff()
 	for name, args := range map[string][2]string{
 		"an episode":   {"episodes/2026/x.md", ""},
-		"a handoff":    {hp, ""},
+		"a handoff":    {hp, "knowledge/leak.md"},
 		"to episodes":  {"runbooks/r.md", "episodes/x.md"},
 		"traversal":    {"runbooks/../knowledge/x.md", ""},
 		"missing file": {"knowledge/nope.md", ""},

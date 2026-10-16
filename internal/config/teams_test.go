@@ -96,6 +96,7 @@ func TestTeamCeilingsNarrowNeverWiden(t *testing.T) {
 		{"login outside", "browser: { logins: [app.example.com] }", "browser: { logins: [admin.example.com] }", []string{`browser.logins "admin.example.com"`, "browser.logins [app.example.com]"}},
 		{"login under a domain", "browser: { logins: [\"*.example.com\"] }", "browser: { logins: [app.example.com, \"*.eu.example.com\"] }", nil},
 		{"domain wider than a host", "browser: { logins: [app.example.com] }", "browser: { logins: [\"*.example.com\"] }", []string{`"*.example.com"`}},
+		{"host outside a domain", "browser: { logins: [\"*.example.com\"] }", "browser: { logins: [app.example.org] }", []string{`"app.example.org"`, `browser.logins [*.example.com]`}},
 		{"browser credential outside", "browser: { credentials: [app] }", "browser: { credentials: [admin] }", []string{`browser.credentials "admin"`, "browser.credentials [app]"}},
 	}
 	for _, tc := range cases {

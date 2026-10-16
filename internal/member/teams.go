@@ -406,8 +406,10 @@ func (s *Service) triageFallback(ctx context.Context, lead, caseID, reason strin
 	if !ok || t.Routing == nil {
 		return
 	}
+	// Callers pick triage-state cases; assignTriage re-checks the state
+	// inside its transaction, so a race with an assignment is refused there.
 	cs := s.Ledger.Member(lead).Cases[caseID]
-	if cs == nil || cs.Routing == nil || cs.Routing.State != "triage" {
+	if cs == nil || cs.Routing == nil {
 		return
 	}
 	if _, err := s.assignTriage(ctx, team, lead, caseID, t.Routing.Fallback, "fallback", "", reason, cs.RequesterClass, cs.Requester); err != nil {
