@@ -131,3 +131,26 @@ func TestUnavailableRefusesEveryLaunch(t *testing.T) {
 		t.Fatalf("open while unavailable: %v (launched %v)", err, launched)
 	}
 }
+
+func TestSandboxedOK(t *testing.T) {
+	for status, want := range map[string]bool{
+		"Namespace Sandbox Yes\nSeccomp-BPF sandbox Yes\nYou are adequately sandboxed.": true,
+		"Seccomp-BPF sandbox No\nYou are not adequately sandboxed.":                     false,
+		"": false, "adequately sandboxed": false,
+	} {
+		if SandboxedOK(status) != want {
+			t.Errorf("%q: %v", status, !want)
+		}
+	}
+}
+
+// TestLaunchSeatbeltWindow: only the operator's headed window gets the
+// window server's services.
+func TestLaunchSeatbeltWindow(t *testing.T) {
+	if p := seatbeltProfile(LaunchSpec{}); !p.Browser || p.Window {
+		t.Fatalf("an agent's browser: %+v", p)
+	}
+	if p := seatbeltProfile(LaunchSpec{Headed: true}); !p.Browser || !p.Window {
+		t.Fatalf("the operator's window: %+v", p)
+	}
+}

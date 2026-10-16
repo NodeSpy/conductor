@@ -226,7 +226,7 @@ func launch(spec LaunchSpec, goos string) (*Process, error) {
 		closeFn = func() { closeProxy(); os.RemoveAll(shortTmp) }
 		deps.ExtraBinds = append(deps.ExtraBinds, sandbox.BindMount{Path: shortTmp})
 		deps.EgressAddr = func([]string) (string, string, func(), error) { return proxyAddr, "", nil, nil }
-		deps.Agent = &sandbox.AgentProfile{Browser: true, Window: spec.Headed, Home: spec.RealHome}
+		deps.Agent = seatbeltProfile(spec)
 	} else {
 		sock, c, err := spec.Proxy.TrustedUnixEndpoint(spec.Allow)
 		if err != nil {
@@ -393,6 +393,12 @@ func (r *Ring) String() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return string(r.buf)
+}
+
+// seatbeltProfile is the macOS browser's Seatbelt variant: the window
+// server's services for the operator's headed window only.
+func seatbeltProfile(spec LaunchSpec) *sandbox.AgentProfile {
+	return &sandbox.AgentProfile{Browser: true, Window: spec.Headed, Home: spec.RealHome}
 }
 
 // browserSpec is the browser's sandbox: no network of its own (a network
