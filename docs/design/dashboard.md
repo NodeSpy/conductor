@@ -59,7 +59,7 @@ These came in with the brief and are not reopened here.
 
 ```
 Now      Overview · Live · Needs you
-Work     Run history · Workflows (+ builder) · Members · Browsers
+Work     Run history · Workflows (+ builder) · Teams & members · Browsers
 System   Config · Secrets & vars · Packs & plugins · Connectors & hosts
          (connectors, runtimes, hosts, isolation) · Updates · Logs & audit · Access
 ```
@@ -101,7 +101,8 @@ Some elements are on every screen:
 | `#/attention` | Needs you |
 | `#/runs`, `#/runs/<id>` | Run history, run detail |
 | `#/workflows`, `#/workflows/<name>` | Workflows, builder |
-| `#/members`, `#/members/<m>/<tab>[/<id>]` | Members. Tabs: chat, cases, proposals[/id], memory, workers, access, definition |
+| `#/members`, `#/members/<m>/<tab>[/<id>]` | Teams & members. Member tabs: chat, cases[/id], proposals[/id], memory, workers, access, definition |
+| `#/teams/<t>[/<tab>]` | A team. Tabs: overview, routing, defaults, knowledge |
 | `#/browser`, `#/browser/<id>`, `#/browser/seed`, `#/browser/passkey` | Browsers |
 | `#/config`, `#/config/raw`, `#/config/apply` | Config, raw editor, the apply pipeline |
 | `#/secrets` | Secrets & vars |
@@ -216,10 +217,69 @@ Operations:
   - Retry from any step.
   - Export JSONL.
 
-### 4.4 Members (#178)
+### 4.4 Teams and members (#178)
 
-**List.** For each member: the home session's state, open cases, pending
-proposals, live workers, the next sweep, and a peer-link map.
+**Teams.** First-class `teams:` group members (the follow-up to #178). The
+operator cuts them any way they like; there is no org concept.
+
+```yaml
+teams:
+  platform:
+    description: Platform services
+    lead: platform-sre                 # optional: triages team work and assigns it
+    defaults:                          # inherited by members, which can only narrow them
+      operators: [ops, oncall]         # who may approve
+      autonomy: { max_tier: reversible, promote: true, approval_ttl: 24h }   # the ceiling
+      isolation: { mode: namespace }   # sandbox policy; container is stricter
+      budget: { max_cost_per_day: 20.00, proactive_pool: { max_runs_per_day: 10, max_cost_per_day: 4.00 } }
+      browser: { logins: [console.example.com], credentials: [grafana, statuspage] }   # scope
+    knowledge: { repo: team-knowledge/platform, promote: approval }   # optional shared repo
+    routing:                           # first match wins; to a member, or to the lead
+      - { name: pd-api, when: { on: pd.incident, service: [api, web] }, to: lead }
+      - { name: web-issues, when: { on: gh.issue_opened, repo: [acme/web] }, to: web-triage }
+    links: [finance]                   # teams are isolated unless both sides link
+members:
+  platform-sre: { team: platform, … }  # at most one team, or none
+```
+
+- **Narrow, never widen.** A member's own setting must sit inside the team
+  default: a subset of operators, no tier looser than `max_tier`, no
+  promotion when the team allows none, `container` where the team requires
+  it, sweep budgets inside the shared pool, credentials and logins inside the
+  team's scope. Validation refuses anything wider, naming the default it
+  breaks.
+- **Peers.** Members of one team are peers by default (data-only `ask`, as
+  #178's `peers:`). Across teams they're isolated unless both teams list each
+  other in `links:`; an explicit cross-team `peers:` entry needs that link.
+- **Knowledge.** An optional shared repo every member reads. A member
+  proposes promoting a file from its own memory; by default the operator
+  approves it (a step-up assertion), which writes one commit with
+  `Promoted-By` and `Approved-By` trailers.
+- **Routing.** Work reaches a team by rule, or through its lead, who reads
+  the case and assigns it. **Requester provenance is preserved through every
+  hop**: the assignee runs on no more trust than whoever asked. Each case
+  records how it got there ("routed to platform by rule pd-api → assigned by
+  lead platform-sre to web-triage"), and an operator reassignment is
+  recorded the same way.
+- Team, membership, defaults, routing, links and the knowledge policy are
+  config, so every edit goes through [§7](#7-the-config-edit-pipeline).
+  Widening includes adding a team approver, raising the ceiling, dropping a
+  container requirement, linking a team, and automatic promotion.
+
+**Teams & members list.** A peers graph with team boundaries (teams as
+regions, intra-team peers dashed, team links and explicit cross-team peers
+drawn, the lead ringed), then each team's band with its members, then the
+members in no team. For each member: the home session's state, open cases,
+pending proposals, live workers and the next sweep.
+
+**Team page.**
+
+| Tab | Shows | Operations |
+|---|---|---|
+| Overview | members and the lead; routing decisions with provenance; the team budget and the shared proactive pool; links inside and across teams | add/remove a member, make lead, link/unlink a team (config edits), **Route work here** (deliver to the team; its rules decide) |
+| Routing | ordered rules, and a "try a rule" check against real past events | add, edit, reorder, delete rules (config edits) |
+| Defaults | each default, and what every member inherits, narrows, or (refused) widens | edit defaults (config edit) |
+| Knowledge | the shared repo, pending promotion proposals with their diff | approve / deny with passkey |
 
 **Member detail.** The header shows:
 
@@ -237,12 +297,12 @@ Header actions:
 | Tab | Purpose and data | Operations |
 |---|---|---|
 | **Chat** | The home conversation: operator messages, member turns, tool calls, and fenced events (rendered as *untrusted data*). The transcript comes from paseo's agent timeline through conductor (**NEW** `GET /members/<m>/transcript`, plus the SSE topic `member.transcript`). A side rail shows pending proposals and open cases. | **Send**: `member say`. The requester is `operator:<name>`, so it is the operator's own request with full operator trust. Delivered when the agent is idle, never into a turn in progress, as today. |
-| **Cases** | The ledger's cases: id, title, requester, class (`operator`/`event`/`user`/`peer`/`proactive`), workers and proposals. Shows the spend against the cap and the ledger's health (degraded or not). | Open, note or close a case (`member case …`). |
+| **Cases** | The ledger's cases: id, title, requester, class (`operator`/`event`/`user`/`peer`/`proactive`), **how it was routed**, workers and proposals. Shows the spend against the cap and the ledger's health (degraded or not). | Open, note, close or reopen a case (`member case …`); reassign within the team (operator, provenance kept). |
 | **Proposals** | Pending, shadow, executed, refused, denied and failed proposals, each with tier, verb, case, requester class and worker. **Detail:** the exact action, or for Terraform: repo, commit, dir, workspace, var files, targets, the `+a ~c -d` counts, *replaces* list, plan text (`show -no-color`), plan sha256 and the approval digest. | **Approve / Deny with passkey** ([§6.6](#66-the-approvals-boundary)), and **Replan** for a stale plan. |
 | **Memory** | The memory repo's tree (`knowledge/`, `runbooks/`, `episodes/`, `handoff/`), a file in read view, and `git log` with the `Member-*` trailers. | **Edit → Commit** (**NEW** operator write through `memrepo`: one commit, author `<operator> (dashboard)`, trailers `Member-Role: operator`, `Edited-Via: dashboard`), **Revert** a commit, **Consolidate now**. |
 | **Workers** | The worker tree: home sessions (live and retired) → children, groups, sweeps. For each worker: taint (inherited requester class), narrowed verbs, read-only flag, case, cost, run link. | **Stop** a worker (**NEW**: cancel its run). There is deliberately no "tell", because only the parent instructs a child. |
 | **Access** | `skill.verbs` × `autonomy.tiers`, `promote`, browser credential bindings, logins, and the operators who can approve. | Tier, promote, verb, binding and login changes are **config edits** through [§7](#7-the-config-edit-pipeline). Revoking a saved login (`browser logout`) is immediate state. |
-| **Definition** | A form for the whole `members.<m>` node: charter or `charter_file`, scope, escalation, operators, `home.rotate`, `worker.*`, autonomy (shadow, `approval_ttl`, spend cap), `proactive.*`, `peers`, `isolation`. Live YAML sits beside it. | Review changes → the apply pipeline. **Define a member** uses the same form with `shadow: true` preset. |
+| **Definition** | A form for the whole `members.<m>` node: `team`, charter or `charter_file`, scope, escalation, operators, `home.rotate`, `worker.*`, autonomy (shadow, `approval_ttl`, spend cap), `proactive.*`, cross-team `peers`, `isolation`. Inherited team defaults show beside each field. Live YAML and validation sit beside it. | Review changes → the apply pipeline. **Define a member** uses the same form with `shadow: true` preset. |
 
 ### 4.5 Browsers (#182)
 
@@ -282,25 +342,67 @@ Header actions:
 ### 4.6 Workflows and the builder
 
 - **List.** Name, `on:`, owner (your config, a pack, or a member's
-  synthesized trigger), 24h runs, success rate, spend. Run one manually.
-- **Builder.** Three columns:
-  - a palette of step kinds and the verbs from `conductor schema`;
-  - a **canvas** with the trigger, steps and `parallel:` boxes;
-  - the **YAML**, which is canonical.
-
-  Selecting a plate highlights its YAML lines. An inspector edits the
-  step's fields. Each edit is a node-level YAML edit
-  ([§7.2](#72-node-level-edits)), and the YAML pane updates with comments
-  and unknown keys intact. Validation runs on every change (debounced,
-  against a copy), with errors in the gutter and on the plate. **Review &
-  apply** opens the apply pipeline, and is disabled while there are errors.
-- **Pack-owned workflows.** The plates are hatched. The YAML pane has two
-  tabs: **Your overrides** (editable, `packs.<instance>`) and **Pack source**
-  (read-only, the vendored file at its locked sha). An edit to a pack step
-  becomes an override in `packs.<i>.steps["<workflow>/<step>"]`. A
-  structural change (adding a step to a pack workflow) is refused with the
-  supported alternative: call the pack's workflow from your own trigger, or
-  fork the pack into a local `use: ./packs/…`.
+  synthesized trigger), 24h runs, success rate, spend, draft/staged state.
+  Run one manually (inputs, or replay a past event), delete one (a config
+  edit), or start a new one.
+- **Builder.** A vertical list, top to bottom, in the order conductor runs
+  it (the Pipedream model, not a free-form canvas):
+  - **The trigger card** at the top: the `on:` sources (connector event,
+    schedule, manual, conductor lifecycle), their filters (keys from the
+    event's schema, `not_` prefixes), and grouping, budget, `callable:`.
+    A reusable workflow shows its `inputs:` instead.
+  - **Ordered step cards.** A collapsed card is one line: number, kind, id,
+    a summary (`gh.comment · Comment on an issue or PR`), validation and test
+    status. A `parallel: [[…],[…]]` step is a fork that splits into lanes,
+    one per branch, each its own list, and joins before the next step.
+  - **"+" between every step** (and inside each branch) opens a searchable
+    picker: built-in kinds (agent, code with a language choice, decide,
+    hand-off / approval, wait, parallel group, call a workflow, log, set,
+    assert) and every connector's verbs from plugin declarations, grouped by
+    connector, with icons and recently used. Verbs of plugins not yet
+    installed are listed too, and the validator says what to add.
+  - **Each step expands in place** into a form generated from the verb's or
+    step kind's declared fields (required vs optional, types, enums, help).
+    A verb step has a **connected-account picker** when a plugin has several
+    instances (`tf-plan` / `tf-apply`). An agent step has prompt, runtime,
+    model (fleet, id or wildcard), sandbox (`isolation`), workspace, skill
+    verbs, gate and hand-off. A code step has an inline highlighted editor
+    and a language choice. "More options" holds `id`, `if`, `for_each`,
+    `timeout`, `retry`, `continue_on_error`.
+  - **References to earlier data.** Any field can insert a reference to the
+    trigger or an earlier step's output from a data tree, or by autocomplete
+    after `{{.`. It writes conductor's own syntax: `{{.repo}}` for event
+    fields, `{{.triage.kind}}` for a step's output, `ctx.triage.kind` in code.
+    Only data in scope is offered: earlier top-level steps, earlier steps in
+    the same branch, never a sibling branch.
+  - **Test.** Pick a **real past event** from run history; *Test* runs the
+    workflow up to a step as a dry run (writes aren't sent, agents are
+    stubbed, `js` code really runs) and shows each step's status (ok, error,
+    skipped by `if:`, not run) and **actual output**, which then fills later
+    steps' reference pickers. Errors show on the step.
+    (**NEW** `POST /api/v1/workflows/test`.)
+  - **The YAML pane** is canonical and live in both directions: an edit in a
+    form is a node-level edit ([§7.2](#72-node-level-edits)) that keeps
+    comments, anchors and unknown keys; an edit in the YAML updates the list,
+    and a parse error is shown at its line while the list keeps the last
+    valid version. Selecting a step highlights its lines.
+  - **Validation** runs on every change: unknown verbs and options, missing
+    required options, unknown models and runtimes, references to a later or
+    unknown step or a sibling branch, filters outside the event's schema.
+    Errors sit on the field, the card and the YAML gutter.
+  - **Undo/redo**, reorder by drag or Alt+↑/↓, duplicate, delete, an
+    outline of step chips to jump, expand/collapse all.
+  - **Save → Deploy.** Edits are an unsaved draft (kept across navigation);
+    **Save** stages the change; **Deploy** opens the apply pipeline (diff →
+    passkey → apply). Deploy is disabled while there are errors.
+  - **Phone.** The same list-and-expand model in one column, with a
+    Steps / YAML / Data switch; the picker and reference tree are sheets.
+- **Pack-owned workflows.** The list shows the pack's steps, hatched;
+  structure is read-only. A field edit (model, runtime, isolation, options)
+  becomes an override in `packs.<i>.steps["<workflow>/<step>"]`; the YAML pane
+  has **Pack source** (read-only) and **Your overrides**. Adding a step is
+  refused with the supported alternative: call the pack's workflow from your
+  own trigger, or fork the pack into a local `use: ./packs/…`.
 
 ### 4.7 Config
 
@@ -403,8 +505,10 @@ At 390px:
 - chat takes the screen;
 - the proposal page puts **Approve** in reach of a thumb.
 
-The phone flows that matter are overview, approvals and chat. They are first
-class, and the prototype's `phone.html` shows them in device frames.
+Every screen works at 390px by touch: navigation, tabs, filters, forms
+(as sheets), the builder's list mode and approvals. The flows that matter
+most are overview, approvals and chat; the prototype's `phone.html` shows
+them in device frames, and its test suite runs every route at 390×844.
 
 ## 5. API
 
@@ -490,6 +594,8 @@ Rows marked **NEW** need new daemon code. The others wrap code that exists on
 | `POST /api/v1/runs/<id>/stop` | cancel a running run | **NEW** |
 | `GET /api/v1/inflight` | in-flight workflows | `runs.json` (as `status`) |
 | `GET /api/v1/workflows`, `GET /api/v1/workflows/<name>/graph` | list; derived graph + node→YAML source map | config + **NEW** graph derivation |
+| `POST /api/v1/workflows/test` `{yaml, upto, event}` | dry-run up to a step against a pinned past event; per-step status, inputs, outputs | **NEW** (engine dry run: writes withheld, agents stubbed, code engines run) |
+| `GET /api/v1/events?on=` | real past events for Test (from history's pinned triggers) | history records |
 | `POST /api/v1/workflows/<name>/run` `{inputs}` | manual run | control `run` |
 | `GET /api/v1/cost?by=day\|workflow&days=` | spend series | history `CostUSD` |
 | `GET /api/v1/audit?event&actor&run&case&since&cursor` | audit query | `audit.jsonl` reader (**NEW** tail/index) |
@@ -507,7 +613,12 @@ Rows marked **NEW** need new daemon code. The others wrap code that exists on
 | `POST /api/v1/members/<m>/say` `{text}` | talk to the home session | `member say` (requester `operator:<name>`) |
 | `GET /api/v1/members/<m>/transcript?cursor` | home conversation | **NEW** paseo timeline relay |
 | `POST /api/v1/members/<m>/{deliver,rotate,sweep,consolidate}` | as the CLI | `member deliver\|rotate\|sweep\|consolidate` |
-| `POST /api/v1/members/<m>/cases/<c>/{note,close}` | case ops | `member case …` |
+| `POST /api/v1/members/<m>/cases/<c>/{note,close,reopen}` | case ops | `member case …` |
+| `POST /api/v1/members/<m>/cases/<c>/assign` `{to}` | operator reassignment within the team; provenance kept | **NEW** (`member assign`) |
+| `GET /api/v1/teams`, `GET /api/v1/teams/<t>` | teams, members, effective defaults (inherited / narrowed per member), routing, links | **NEW** teams follow-up to #178 |
+| `POST /api/v1/teams/<t>/deliver` `{title, text \| event}` | route work to a team: rules, else the lead | **NEW** |
+| `GET /api/v1/teams/<t>/knowledge/{tree,file,proposals}` | the team repo and pending promotions | **NEW** |
+| `POST /api/v1/teams/<t>/knowledge/proposals/<id>/decision` `{decision, assertion}` | approve / deny a promotion (step-up) | **NEW** |
 | `POST /api/v1/members/<m>/workers/<w>/stop` | cancel a worker's run | **NEW** (run cancel) |
 | `GET /api/v1/members/<m>/memory/{tree,file,log}?ref&path` | browse memory | `memrepo` reads |
 | `POST /api/v1/members/<m>/memory/commit` `{path, content, base, message}` | operator edit → one commit | **NEW** operator write in `memrepo` |
@@ -781,7 +892,8 @@ A **fresh assertion bound to the request's digest** is required for:
 - config apply and restore;
 - a secret write;
 - any widening (grants, verbs, tiers, promotions, browser sites, logins,
-  credentials, evaluate);
+  credentials, evaluate, team approvers, ceilings and links);
+- a team knowledge promotion;
 - a browser takeover;
 - update now;
 - pack and plugin add/remove;
@@ -1069,6 +1181,9 @@ is offered as **Roll back** on the success screen.
   - adds egress or `fs:`;
   - adds a verb to a member, loosens a tier or adds a promotion;
   - adds a browser site, login or credential, or turns `evaluate` on;
+  - adds a team approver, raises a team's autonomy ceiling, drops its
+    container requirement, links two teams, or makes knowledge promotion
+    automatic;
   - sets `trust: full`, adds a `pack_trust` source, or makes a trigger
     `callable:`.
 
@@ -1224,7 +1339,7 @@ proceed in parallel.
 
 | Builder | Owns | Delivers |
 |---|---|---|
-| **B8 Members** | `internal/dashboard/api/members.go`, the WebAuthn → `Executor.Decide` verifier (with B2), transcript relay, memrepo operator commit/revert, worker stop, `web/src/routes/members` | all member tabs, proposal + Terraform view, approve/deny, definition editor (over B5) |
+| **B8 Members & teams** | `internal/dashboard/api/{members,teams}.go`, the WebAuthn → `Executor.Decide` verifier (with B2), transcript relay, memrepo operator commit/revert, worker stop, team routing/knowledge endpoints, `web/src/routes/{members,teams}` | all member tabs, team pages (routing, defaults with inherit/narrow, knowledge approvals), proposal + Terraform view, approve/deny, definition editor (over B5) |
 | **B9 Browser** | screencast relay, takeover lease, headless seed/passkey-register, `web/src/routes/browser` | live view, takeover, seed, passkey registration, per-identity settings (over B5) |
 
 **Integration checkpoints:**
@@ -1291,23 +1406,36 @@ python3 -m http.server 8767 --bind 127.0.0.1 --directory design/dashboard-protot
 ```
 
 Opening `index.html` straight from the file system also works: classic
-scripts, no modules. Things to click:
+scripts, no modules.
 
-- **Approve with passkey:** Overview → Needs you → *Review* → `p12` →
-  **Approve**. The authenticator is simulated.
-- **Live run:** the graph is clickable and the log streams.
-- **Member chat:** send a message.
-- **Memory:** Edit → Commit.
-- **Browser:** **Take over**, then Esc to release.
-- **Builder:** change the model to `gpt-x` to see the inline error; set
-  isolation to `none` on the pack-owned `pr-review` to see the widening
-  warning; click **+** to add a step.
-- **Config:** watch the apply pipeline run its checks, then **Apply** and
-  watch the reload.
-- **Secrets:** Rotate (write-only).
-- **Updates:** Apply now.
-- **Search:** ⌘K.
-- **Theme:** the toggle in the rail's footer.
+**Every control works** against fake state kept in `localStorage`, so it
+survives navigation and reloads. **Reset demo data** (rail footer, Config,
+More) puts the seed back. Config edits from every screen stage into the
+real pipeline: the diff is computed from the generated `config.yaml`,
+validation runs real checks (missing fields, unresolved references, team
+narrowing, widening), and apply needs a (simulated) passkey and writes a
+backup you can restore. Things to try:
+
+- **Builder:** Workflows → New workflow → choose a trigger → **+** → search
+  "label". Open `ci-fixer`, pick a test event, **Test** `triage`, then insert
+  `{{.triage.kind}}` into `fix`'s prompt from the data tree. Type `gpt-x` as a
+  model to see inline validation; edit the YAML and watch the list follow;
+  Ctrl+Z.
+- **Teams:** Teams & members → `platform` → Defaults (inherits / narrows),
+  Routing (try a rule), Route work here, Knowledge (approve a promotion).
+  Add `release-scribe` to `finance` to see a narrowing refusal.
+- **Connectors & hosts:** add a connector; its form comes from the plugin's
+  declared settings.
+- **Approve with passkey:** Needs you → *Review* → `p12` → **Approve**.
+- **Secrets:** filter, store a value (write-only), change a ref.
+- **Browser:** **Take over**, Esc to release; seed a login.
+- **Search:** ⌘K. **Theme:** the rail footer.
+
+**Interaction tests** live in `design/dashboard-tests/` (Playwright; see its
+README). They visit every route at 1440×900 and 390×844 and click every
+control, failing on any that changes nothing and isn't disabled with a
+reason; run every create/edit/delete flow through diff and apply; drive the
+builder and the team flows; and fail on any console error.
 
 The prototype is a design artefact. Its code is not the product's code, and
 its data shapes follow [§5](#5-api) only loosely.

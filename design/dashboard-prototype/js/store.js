@@ -131,7 +131,20 @@
   };
   C.secrets = { section: 'secrets', file: 'config.yaml', label: 'secret reference', href: () => '#/secrets',
     keys: () => D().secrets.map((s) => s.name), get: (k) => { const s = byName(D().secrets, k); return s ? s.ref : null; },
-    set: (k, ref) => { if (ref == null) return drop(D().secrets, k); const v = ref.startsWith('op://') ? 'op' : ref.startsWith('env:') ? 'env' : ref.split('/')[0]; const s = byName(D().secrets, k); if (s) { s.ref = ref; s.vault = v; } else D().secrets.push({ name: k, ref, vault: v, set: null, used: [] }); },
+    set: (k, ref) => {
+      if (ref == null) return drop(D().secrets, k);
+      const v = ref.startsWith('op://') ? 'op' : ref.startsWith('env:') ? 'env' : ref.split('/')[0];
+      const s = byName(D().secrets, k); if (s) { s.ref = ref; s.vault = v; } else D().secrets.push({ name: k, ref, vault: v, set: null, used: [] });
+      // a reference is written where it is used: {{ vault "<v>" "<key>" }}, or ${NAME} for env
+      const expr = v === 'env' ? '${' + ref.slice(4) + '}' : v === 'op' ? `{{ vault "op" "${ref.replace('op://', '')}" }}` : `{{ vault "${v}" "${ref.split('/').slice(1).join('/')}" }}`;
+      ((s && s.used) || []).forEach((u) => {
+        const [sec, name, ...rest] = u.split('.');
+        const coll = { connectors: D().connectors, packs: D().packs, vaults: D().vaults }[sec];
+        const it = coll && byName(coll, name); if (!it || !it.cfg) return;
+        if (sec === 'vaults') { if (v === 'env') it.cfg.token = ref; return; }
+        S.setPath(it.cfg, rest.join('.'), expr);
+      });
+    },
     path: (k) => { const s = byName(D().secrets, k); return (s && s.used[0]) || `secrets.${k}`; },
     validate(k, ref, all) { const v = ref.startsWith('op://') ? 'op' : ref.startsWith('env:') ? 'env' : ref.split('/')[0]; if (v === 'env') return []; const vv = byName(all.vaults, v); return !vv ? [`${k}: ref "${ref}" names no vault`] : vv.status === 'fail' ? [`${k}: vault ${v} is unreachable, so ${ref} can't be checked`] : []; },
     refs(k, all) { const s = byName(all.secrets, k); return s ? s.used : []; },

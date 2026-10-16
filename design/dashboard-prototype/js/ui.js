@@ -4,6 +4,8 @@
  * the design clickable. */
 (function () {
   const UI = (window.UI = {});
+  // Tests set window.__PROTO_FAST so simulated waits (authenticator, reload) take milliseconds.
+  UI.fast = !!window.__PROTO_FAST;
   // Surface script errors visibly: a prototype should never fail silently.
   window.addEventListener('error', (e) => { const b = document.createElement('div'); b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#ff00ff;color:#fff;font:12px monospace;padding:6px 10px'; b.textContent = 'prototype error: ' + e.message; document.body.appendChild(b); });
   const $ = (s, el = document) => el.querySelector(s);
@@ -193,7 +195,7 @@
   };
   UI.closeModal = () => { const s = $('#scrim'); if (s) s.remove(); };
   UI.toast = (title, sub, s = 'ember') => {
-    let box = $('.toasts'); if (!box) { box = document.createElement('div'); box.className = 'toasts'; document.body.appendChild(box); }
+    let box = $('.toasts'); if (!box) { box = document.createElement('div'); box.className = 'toasts'; box.setAttribute('aria-live', 'polite'); document.body.appendChild(box); }
     const t = document.createElement('div'); t.className = 'toast'; t.dataset.s = s; t.style.setProperty('--sc', `var(--${s === 'ember' ? 'accent' : s})`);
     t.innerHTML = `<div>${title}${sub ? `<span class="mono">${sub}</span>` : ''}</div>`;
     box.appendChild(t); setTimeout(() => t.remove(), 4200);
@@ -241,8 +243,8 @@
         seal.classList.remove('signing'); seal.classList.add(deny ? 'denied' : 'done');
         $('#seal-msg', s).innerHTML = deny ? '<b>Denied</b><div class="muted small">Signed decision recorded · the member is told</div>' : `<b>Approved · executing</b><div class="muted small">Verified against operator <span class="mono">ops</span> · credential “laptop” · sign count 212</div>`;
         p.status = deny ? 'denied' : 'approved';
-        setTimeout(() => { UI.closeModal(); UI.toast(deny ? `Denied ${p.id}` : `Approved ${p.id}`, deny ? 'decision signed' : (p.kind === 'terraform' ? 'conductor re-checks the plan hash, HEAD, and a clean tree, then applies' : 'the gate re-runs exactly the signed digest'), deny ? 'fail' : 'ok'); D.attention = D.attention.filter((a) => !a.href.includes(p.id) && !(a.sub || '').includes(p.id)); D.audit.unshift({ ts: new Date().toISOString(), event: 'member_approval', who: 'operator:ops', detail: `${p.id} ${deny ? 'denied' : 'approved'} · webauthn · credential laptop · digest ${p.digest.slice(7, 11)}…`, run: '' }); S.save(); onDone && onDone(); UI.refreshChrome(); }, 1300);
-      }, 1600);
+        setTimeout(() => { UI.closeModal(); UI.toast(deny ? `Denied ${p.id}` : `Approved ${p.id}`, deny ? 'decision signed' : (p.kind === 'terraform' ? 'conductor re-checks the plan hash, HEAD, and a clean tree, then applies' : 'the gate re-runs exactly the signed digest'), deny ? 'fail' : 'ok'); D.attention = D.attention.filter((a) => !a.href.includes(p.id) && !(a.sub || '').includes(p.id)); D.audit.unshift({ ts: new Date().toISOString(), event: 'member_approval', who: 'operator:ops', detail: `${p.id} ${deny ? 'denied' : 'approved'} · webauthn · credential laptop · digest ${p.digest.slice(7, 11)}…`, run: '' }); S.save(); onDone && onDone(); UI.refreshChrome(); }, UI.fast ? 30 : 1300);
+      }, UI.fast ? 40 : 1600);
     });
   };
 

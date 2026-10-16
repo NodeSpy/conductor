@@ -186,7 +186,7 @@
       <div class="caps" style="margin-top:6px">Filters <span class="muted" style="text-transform:none;letter-spacing:0">· AND-ed; any key takes not_</span></div>
       ${Object.entries(isObj(v.filter) ? v.filter : {}).map(([k, x]) => `<div class="flt-row"><span class="mono small">${esc(k)}</span><input class="input mono" value="${esc([].concat(x).join(', '))}" data-wf-filter="${esc(k)}" ${ro ? 'readonly' : ''} aria-label="Filter ${esc(k)}"><button class="btn sm ghost" ${ro ? dis : `data-act="wf-flt-del" data-k="${esc(k)}"`} aria-label="Remove filter ${esc(k)}">${icon('trash')}</button></div>`).join('')}
       <div class="flt-row"><select class="select mono" id="flt-new" aria-label="New filter key" ${ro ? 'disabled' : ''}>${[...allowed].flatMap((k) => [k, 'not_' + k]).filter((k) => !(isObj(v.filter) && k in v.filter)).map((k) => `<option>${k}</option>`).join('')}</select><input class="input mono" id="flt-val" placeholder="value, value" aria-label="New filter value" ${ro ? 'readonly' : ''}><button class="btn sm" ${ro ? dis : allowed.size ? 'data-act="wf-flt-add"' : UI.off('This event declares no filters')}>${icon('plus')}Add</button></div>
-      <details class="adv"><summary>More: name, grouping, budget</summary><div class="stack tight" style="margin-top:8px">
+      <details class="adv"${B.advOpen && B.advOpen.has('$trigger') ? ' open' : ''} data-adv="$trigger"><summary>More: name, grouping, budget</summary><div class="stack tight" style="margin-top:8px">
         ${fieldRow('', 'name', { k: 'name', type: 'string', help: 'A trigger reachable by conductor run needs a unique name.' }, v.name, ro)}
         ${fieldRow('', 'group.key', { k: 'group.key', type: 'string', ref: true, help: 'Batch a burst of events into one run, e.g. {{.repo}}#{{.pr}}.' }, S.getPath(v, 'group.key'), ro)}
         ${fieldRow('', 'group.window', { k: 'group.window', type: 'duration' }, S.getPath(v, 'group.window'), ro)}
@@ -448,6 +448,7 @@
   function undo() { if (B.hi <= 0) return; B.hi--; B.text = B.hist[B.hi]; parse(); saveDraft(); redraw(); UI.toast('Undone', '', 'idle'); }
   function redo() { if (B.hi >= B.hist.length - 1) return; B.hi++; B.text = B.hist[B.hi]; parse(); saveDraft(); redraw(); }
   UI.act('wf-undo', undo); UI.act('wf-redo', redo);
+  document.addEventListener('toggle', (e) => { const d = e.target; if (!B || !d.matches || !d.matches('details[data-adv]')) return; B.advOpen = B.advOpen || new Set(); if (d.open) B.advOpen.add(d.dataset.adv); else B.advOpen.delete(d.dataset.adv); }, true);
   UI.act('wf-toggle', (el) => { const id = el.dataset.id; if (B.open.has(id)) B.open.delete(id); else B.open.add(id); B.sel = id === '$trigger' ? B.sel : id; drawList(); if (B.side === 'yaml') drawIssues(); else drawSide(); const h = UI.$(`#card-${CSS.escape(id)} .sc-head`); if (h) h.focus({ preventScroll: true }); });
   UI.act('wf-expand', (b) => { const all = WF.walk(B.value || {}).filter((e) => e.kind !== 'parallel').map((e) => e.id); if (b.dataset.v === '1') { all.forEach((x) => B.open.add(x)); B.open.add('$trigger'); } else B.open.clear(); drawList(); });
   UI.act('wf-jump', (b) => { B.sel = b.dataset.id; B.open.add(b.dataset.id); drawList(); drawSide(); const c = document.getElementById('card-' + b.dataset.id); if (c) c.scrollIntoView({ block: 'center', behavior: 'smooth' }); });

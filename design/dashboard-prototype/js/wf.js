@@ -167,7 +167,7 @@
           if (!c && !['git', 'kv'].includes(inst)) { const reg = window.SCHEMA.connectors[inst]; err(reg ? `uses: ${s.uses}: no "${inst}" connector yet — add one (${reg.registry ? 'installs ' + reg.registry : 'builtin'}) in Connectors` : `uses: ${s.uses}: no connector named "${inst}"`, 'uses'); break; }
           if (!decl) { err(`uses: ${s.uses}: ${c ? c.use : inst} declares no verb "${verb}"`, 'uses'); break; }
           const opts = s.options || {};
-          decl.fields.forEach((f) => { if (f.req && f.def == null && (opts[f.k] == null || opts[f.k] === '')) err(`options.${f.k} is required by ${s.uses}`, `options.${f.k}`); if (f.type === 'enum' && opts[f.k] != null && !String(opts[f.k]).includes('{{') && !f.options.includes(opts[f.k])) err(`options.${f.k}: "${opts[f.k]}" is not one of ${f.options.join(', ')}`, `options.${f.k}`); });
+          decl.fields.forEach((f) => { if (f.req && f.def == null && (opts[f.k] == null || opts[f.k] === '' || (Array.isArray(opts[f.k]) && !opts[f.k].length))) err(`options.${f.k} is required by ${s.uses}`, `options.${f.k}`); if (f.type === 'enum' && opts[f.k] != null && !String(opts[f.k]).includes('{{') && !f.options.includes(opts[f.k])) err(`options.${f.k}: "${opts[f.k]}" is not one of ${f.options.join(', ')}`, `options.${f.k}`); });
           Object.keys(opts).forEach((k) => { if (!decl.fields.find((f) => f.k === k)) err(`options.${k}: ${s.uses} has no option "${k}" (typo?)`, `options.${k}`); });
           break;
         }

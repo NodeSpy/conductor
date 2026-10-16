@@ -22,13 +22,13 @@
   function vaultForm(v) {
     const cur = v ? S.staged('vaults', v.name) : null;
     const type = cur ? cur.type : 'conductor';
-    UI.form({ caps: v ? `vaults.${v.name}` : 'vaults:', title: v ? `Edit vault ${v.name}` : 'Add a vault', edit: !!v, values: cur ? Object.assign({ name: v.name }, cur) : {},
+    UI.form({ caps: v ? `vaults.${v.name}` : 'vaults:', title: v ? `Edit vault ${v.name}` : 'Add a vault', edit: !!v, values: cur ? Object.assign({ name: v.name, type: cur.type }, Object.fromEntries(Object.entries(cur).map(([k, x]) => [`${cur.type}__${k}`, x]))) : {},
       fields: [{ k: 'name', type: 'string', req: true, readonly: !!v, pattern: /^[a-z][a-z0-9-]*$/, patternMsg: 'Lowercase letters, digits and dashes.', validate: (x) => (!v && D.vaults.find((y) => y.name === x) ? 'A vault by that name exists.' : '') },
         { k: 'type', type: 'seg', req: true, options: Object.keys(VT).map((t) => [t, t, v && t !== type ? 'Changing a vault\'s type is a new vault' : '']), def: type }]
-        .concat(Object.entries(VT).flatMap(([t, fs]) => fs.map((f) => Object.assign({}, f, { k: f.k, show: (vals) => (vals.type || type) === t })))),
+        .concat(Object.entries(VT).flatMap(([t, fs]) => fs.map((f) => Object.assign({}, f, { k: `${t}__${f.k}`, label: f.k, show: (vals) => (vals.type || type) === t })))),
       note: 'A vault is config: this stages a change, validated on a copy (the unlock ref must resolve) before it applies.',
       submit: 'Review change', submitIcon: 'check',
-      onSubmit: (x) => { const n = { type: x.type || type }; (VT[n.type] || []).forEach((f) => { if (x[f.k] != null) n[f.k] = x[f.k]; }); UI.staged(S.stage('vaults', x.name || v.name, n)); } });
+      onSubmit: (x) => { const n = { type: x.type || type }; (VT[n.type] || []).forEach((f) => { if (x[`${n.type}__${f.k}`] != null) n[f.k] = x[`${n.type}__${f.k}`]; }); UI.staged(S.stage('vaults', x.name || v.name, n)); } });
   }
   UI.act('vault-add', () => vaultForm(null));
   UI.act('vault-edit', (b) => vaultForm(D.vaults.find((v) => v.name === b.dataset.v)));

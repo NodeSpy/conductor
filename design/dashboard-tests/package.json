@@ -1,0 +1,6 @@
+{
+  "name": "conductor-dashboard-prototype-tests",
+  "private": true,
+  "description": "Interaction tests for design/dashboard-prototype. Install into a temp dir; see README.md.",
+  "devDependencies": { "@playwright/test": "1.58.2" }
+}
