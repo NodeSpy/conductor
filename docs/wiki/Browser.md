@@ -90,17 +90,21 @@ Each launch's token gets its own browser, and an idle one closes after
       to the allowlist. Use this mode on a **single-user Mac only**.
     - Conductor logs this at boot and on every session, with the number of
       local users when there is more than one. Install an engine to leave this
-      mode. Conductor drives it over the DevTools protocol on a **pipe**, so
-  there is no debugging port for anything else to reach. The agent never holds
-  the browser.
+      mode.
+    - A directory listing outside the browser's own paths fails: it sees no
+      file names of yours.
+  - **Control.** Conductor drives the browser over the DevTools protocol on a
+    **pipe**, so there is no debugging port for anything else to reach. The
+    agent never holds the browser.
 - **Network.** The browser has no network of its own. Its only way out is
   conductor's egress proxy with `browser.allow` (plus `sandbox.egress` and the
-  identity's own allowlist), loopback included. Hosts are taken **exactly as
-  bound**: `localhost:3000`, `127.0.0.1:3000` and `[::1]:3000` are three
-  entries, none implying another, and an allowlisted name that resolves (or
-  rebinds) to an internal address is refused even if that address is listed. A URL off the list is refused
-  up front, and a redirect or a page's own request off it dies at the proxy and
-  is audited. The agent's own process gets nothing from `browser.allow`: it
+  identity's own allowlist), loopback included.
+  - Hosts are taken **exactly as bound**: `localhost:3000`, `127.0.0.1:3000`
+    and `[::1]:3000` are three entries, and none implies another.
+  - An allowlisted name that resolves (or rebinds) to an internal address is
+    refused, even if that address is listed.
+  - A URL off the list is refused up front, and a redirect or a page's own
+    request off it dies at the proxy and is audited. The agent's own process gets nothing from `browser.allow`: it
   cannot `curl` those sites past the audit.
 - **Profile.** It is ephemeral and anonymous: no cookies, no saved passwords,
   nothing from your browser, gone when the browser closes.
@@ -343,7 +347,10 @@ account where the site allows one. They are revocable without touching yours.
 - `conductor browser peek <session> --out shot.png`: a screenshot of one
   (audited).
 - `conductor browser seed …` / `passkey register …`: your own window
-  (`--headless --wait-url` for a scripted site).
+  (`--headless --wait-url` for a scripted site). It's your installed Chrome,
+  under the same sandbox as an agent's browser: on Linux with your display's
+  socket shown read-only, and on macOS with the window server's services
+  allowed by name.
 
 A live, interactive view of an agent's browser belongs to the planned
 dashboard.
@@ -362,6 +369,30 @@ logged-in site or a credential counts as a mutating capability, so it follows
 the case's requester: an operator-requested case may sign in, while a third
 party's, an event's, or the member's own initiative gets the anonymous
 profile.
+
+## What remains
+
+These are the limits that still hold:
+
+- **macOS without Docker Desktop, colima or podman.** Chromium runs without
+  its own sandbox, so a malicious page that exploits the renderer gets
+  everything the browser's jail allows (its profile and its proxy, nothing of
+  your Mac's files). Any other local user could also relay through its proxy
+  port to the allowlisted sites. Conductor warns about both. Use this mode on
+  a single-user Mac, or install an engine.
+- **The container's Chromium is as current as its image.** Conductor builds
+  the image once, with Alpine's Chromium at that time, and rebuilds it only
+  when conductor's image definition changes. To pick up a newer Chromium,
+  remove the image (`docker rmi` the `conductor-browser:…` tag); conductor
+  rebuilds it at its next start.
+- **Page scripts on a credential's own origin can read the field they were
+  given.** That's how browsers work, and it's why a credential is bound to an
+  exact origin.
+- **SMS codes** are not supported: they need a forwarding service.
+- **Your own passkeys can't be used**, because 1Password doesn't export their
+  private keys. Register a separate passkey for the agent instead.
+- **No live view of an agent's browser.** You get a `peek` screenshot. The
+  interactive view belongs to the planned dashboard.
 
 ## Identities
 

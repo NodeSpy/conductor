@@ -37,26 +37,49 @@ What (B) looks like as built:
     shows only the browser's throwaway directory, Chromium's install
     (read-only) and the base system. Chromium's own sandbox stays on: its
     namespace sandbox nests inside ours (no `--no-sandbox`).
-  - **macOS:** Seatbelt, with the same file allow-list and the network limited
-    to one proxy port. Mach rules are broad, which Chromium's child-process
-    rendezvous needs, but the Keychain's services are denied by name; `--use-mock-keychain`
-    and `--password-store=basic` too.
+  - **macOS, with a container engine (the default whenever one is
+    present):** a container (`internal/browser/container.go`). Section 1a.
+  - **macOS without one (the fallback):** Seatbelt, with the same file
+    allow-list and the network limited to one proxy port.
     - macOS refuses a Seatbelt sandbox inside another
       (`forbidden-sandbox-reinit`), so Chromium's own per-process sandbox
       cannot nest there. It runs with `--no-sandbox`, and the outer profile
-      confines every Chromium process alike.
-    - Consequence: on macOS a renderer exploit holds what the browser process
-      holds inside the jail (its profile, including a logged-in browser's
-      cookies, and its proxy), and nothing beyond.
-    - Seatbelt classes a directory listing as metadata, which every
-      sandboxed process may read: names anywhere, contents only on the
-      allow-list. A `file://` listing would show them, but no agent or page
-      can navigate there (conductor refuses `file:`; Chrome refuses it from
-      a web page).
+      confines every Chromium process alike. A renderer exploit holds what
+      the browser process holds inside the jail (its profile, including a
+      logged-in browser's cookies, and its proxy), and nothing beyond.
+    - **Mach and IOKit are named, never blanket** (red team C). Headless
+      Chromium looks up the agent's service list plus
+      `opendirectoryd.api`, and registers and looks up only its own
+      child-process rendezvous (`<bundle>.MachPortRendezvousServer.<pid>`)
+      and crashpad's handshake port, by regex. IOKit is limited to
+      `IOSurfaceRootUserClient` and `RootDomainUserClient`. The list came
+      from the sandbox's own denial log on macos-latest. A test asserts that
+      the profile has no blanket `mach-lookup`, `mach-register` or
+      `iokit-open`. The Keychain's services are denied by name too, along
+      with `--use-mock-keychain` and `--password-store=basic`.
+    - The operator's own headed takeover window (`Window`) also gets the
+      window server's services, by name.
+    - **No metadata outside its paths.** Seatbelt counts a directory listing
+      as `file-read-metadata`. The browser profile drops the agent profile's
+      global metadata allowance and allows it only on its own paths, the
+      system's, and the literal components leading to them. A `file://`
+      listing of the workspace, `/Users` or the browser's parent fails (CI).
+    - Its run directories sit in `/private/tmp/cbr-…`, never under the home,
+      so no ancestor of a bound path reveals the home's layout.
     - Chromium's temp dir (its process-singleton socket) is redirected
       (`MAC_CHROMIUM_TMPDIR`) to a private short dir, so it never touches the
       per-user temp dir where the operator's own Chrome keeps its singleton
       socket. CoreFoundation's home (`CFFIXED_USER_HOME`) is the browser's own.
+    - **The trusted proxy endpoint is a TCP loopback port.** Chrome takes
+      its proxy as host:port. On Linux an in-jail forwarder bridges that to a
+      unix socket inside a private network namespace, but macOS has no
+      network namespace, so the port sits on the shared loopback. Any local
+      user could connect to it and reach the allowlist, but nothing beyond it
+      (red team A). Chrome sends no proxy credentials, so nothing only the
+      browser holds could gate it. This mode is therefore documented as **single-user Macs
+      only**. Conductor logs it at boot and with every session, and adds the
+      number of local users (`dscl`, uid ≥ 501) when there's more than one.
+      The container path closes it.
 - **The protocol.** CDP runs over `--remote-debugging-pipe` (fds 3/4, passed
   through the in-sandbox forwarder by a new `--pass-fds`). There is **no
   debugging port**: nothing but conductor can drive it, not even another local
@@ -65,9 +88,10 @@ What (B) looks like as built:
 - **The network.** The jail has none. Its only way out is the egress proxy
   with the browser's allowlist, through a per-browser **credential-less**
   endpoint, because Chrome cannot send proxy credentials:
-  - Linux: a unix socket in its own 0700 directory, shown only to that
-    browser's forwarder.
-  - macOS: a loopback port its Seatbelt profile alone allows.
+  - Linux, and the container on any OS: a unix socket in its own 0700
+    directory, shown only to that browser's forwarder (or relayed by
+    conductor over the container's stdio).
+  - The macOS fallback: a loopback port its Seatbelt profile alone allows.
 
   Loopback is proxied too (`--proxy-bypass-list=<-loopback>`); QUIC and
   non-proxied WebRTC UDP are off.
@@ -76,6 +100,52 @@ What (B) looks like as built:
 - **Container backend.** It works unchanged: the agent only needs its skill
   socket and the `conductor` binary, which both backends already provide, and
   the browser stays host-side under conductor's sandbox.
+
+## 1a. The container (macOS's default; `browser.container: on` anywhere)
+
+Decided at boot (`cmd/conductor/browseriso.go`):
+- `auto` (the default) uses the container on macOS whenever an engine is
+  present (`docker`, then `podman`), and the host's namespaces on Linux;
+  `on` requires it; `off` never uses it.
+- **Never quietly weaker.** While the image builds and proves itself, browser
+  actions are refused as "being prepared". If it can't sandbox Chromium,
+  `auto` falls back to Seatbelt with the warning, and `on` refuses every
+  browser action.
+
+The container:
+- **Image.** `conductor-browser:<hash>` is built from an embedded Dockerfile:
+  the shim built from embedded Go source, plus Alpine's `chromium`, run as
+  uid 1000. It's built with `docker build -` and a tar context, from no file
+  on the host.
+- **Run flags.** `--network none`, `--cap-drop ALL`,
+  `--security-opt no-new-privileges`, `--read-only` with tmpfs home and
+  `/tmp`, memory and pid limits, and no bind mount at all.
+- **Seccomp.** The engine's default profile (moby's, embedded) plus exactly
+  what Chromium's namespace sandbox needs: `clone`/`unshare` with namespace
+  flags, `setns`, `chroot`. `clone3` returns `ENOSYS`, so glibc and musl
+  fall back to `clone`, whose flags the profile can see.
+- **Chromium's own sandbox is on.** Its namespace layer and seccomp-BPF run
+  inside the container, which is the point: a renderer exploit then faces
+  Chromium's sandbox, then the container, then the engine's VM on macOS.
+  Before first use conductor opens `chrome://sandbox` in it and requires
+  "You are adequately sandboxed" (namespace layer, PID and network
+  namespaces, seccomp-BPF).
+- **One stdio channel.** The engine's stdin/stdout carry everything
+  (`internal/browser/mux.go` on the host, `containershim` inside):
+  - channel 0 is the DevTools pipe (fds 3/4 of Chromium);
+  - channel 1 is file transfers, confined to the in-container transfer dir
+    (no symlink, `O_NOFOLLOW`, `O_EXCL`);
+  - channels ≥ 2 are proxy connections. Chromium dials the shim's
+    in-container loopback listener; each connection is relayed to that
+    browser's unix-socket trusted endpoint on the host.
+
+  No TCP port is opened on the host or the Mac. This works the same through
+  Docker Desktop's or colima's VM.
+- **Files.** Downloads and uploads move through the file channel into the
+  same host transfer directory the native browser uses, so section 5's
+  confinement is unchanged.
+- **Audit.** Every session's isolation (`container`, `seatbelt`,
+  `namespace`) is logged and recorded with each action.
 
 ## 2. The allowlist is enforced by the proxy
 
@@ -86,9 +156,17 @@ What (B) looks like as built:
   up front. That is the readable error; the **proxy** is the boundary.
 - A redirect, a subresource or a page script that leaves the list dies at the
   proxy (403 or a tunnel failure). It is audited with the identity (each
-  browser gets its own proxy manager), and the SSRF guard applies: an
-  allowlisted name resolving to a private or loopback address is refused
-  unless that literal IP is listed.
+  browser gets its own proxy manager), and the SSRF guard applies.
+- **Exact host binding** (`specialAllowed`). A loopback, private or
+  link-local address is reached only through an entry that names it:
+  - the same IP literal, listed as a literal (not inside a glob), with a
+    matching port;
+  - or `localhost` listed and asked for. `localhost` is resolved by conductor
+    to `127.0.0.1`/`::1`, never by the resolver.
+
+  `localhost:3000`, `127.0.0.1:3000` and `[::1]:3000` are three entries, and
+  none implies another. An allowlisted name that resolves (or rebinds) to an
+  internal address is refused even when that address is listed.
 
 ## 3. Profiles: anonymous by default, logged in by the operator's opt-in
 
@@ -191,7 +269,27 @@ The second factors:
 - **Push.** With `approval: true`, conductor emits `needs_input` (the
   operator's `conductor.*` triggers alert their phone) and waits for the page
   to move on (bounded; `await-approval` continues).
-- **SMS and email codes** are not supported.
+- **Emailed codes** (opt-in, `internal/browser/imap.go`). A credential's
+  `email_code` names a `browser.mailboxes` entry (IMAP; the username and app
+  password are vault references; no provider is hardcoded) and the sender,
+  subject and code pattern. After the step that sends the code, conductor:
+  1. connects over TLS (implicit or STARTTLS, optional `ca_file`).
+     Plaintext is allowed only to a loopback address, and refused before any
+     dial.
+  2. `EXAMINE`s the folder (read-only, so no flag changes);
+  3. `UID SEARCH SINCE … FROM … SUBJECT …` on the server;
+  4. fetches only those messages' `INTERNALDATE` and From/Subject headers
+     (`BODY.PEEK`). It keeps a message only if the From address equals the
+     configured one (or its `@domain`), and only if it arrived after the step
+     (30 s clock skew);
+  5. reads the body of the newest such message, decoding multipart,
+     quoted-printable and base64;
+  6. extracts the code with the pattern and fills it like a TOTP code.
+
+  A message is used once per identity and credential. It polls every 3 s up
+  to `wait` (≤ 90 s). No error carries message text, and the code is
+  scrubbed like every filled value.
+- **SMS codes** are not supported (they need a forwarding service).
 
 **Passkeys** use CDP's WebAuthn virtual authenticator:
 - **Registration.** At a one-time operator takeover (`passkey register`), an
@@ -209,7 +307,9 @@ The second factors:
   WebAuthn's own RP-ID/origin binding applies on top.
 - **Binding.** A passkey credential names exactly one identity
   (validation-enforced).
-- **Platforms.** It works headless on Linux and macOS (CI proves both). On
+- **Platforms.** It works headless on Linux and macOS, and in the container
+  (CI proves all three), and in the operator's headed window (Linux on Xvfb
+  and macOS on the runner's window server, in CI). On
   `localhost` the test site is a secure context; an IP literal cannot be an RP
   ID, which is why the tests bind `localhost` and use `127.0.0.1` as the
   lookalike.
@@ -228,6 +328,19 @@ The second factors:
   - none of the workspace's read-only or hidden carve-outs;
   - `O_EXCL`, never an overwrite;
   - size limits.
+
+## 5a. `evaluate`: per identity, and off after a fill
+
+- **Opt-in.** `browser.evaluate` lists identities (`*` prefixes allowed), and
+  defaults to none. The old global `read-only` value is refused at validation
+  with a hint.
+- **Read-only.** For an opted-in identity, an expression runs only with V8's
+  `throwOnSideEffect`: no DOM write, no network, no storage.
+- **Off after any credential fill.** Once a credential has been filled in a
+  browser, `evaluate` stays off for that browser's whole life, opt-in or not
+  (section 4).
+- **Audited.** Every evaluate's audit entry records `evaluate_opt_in` and the
+  expression's length.
 
 ## 6. Audit
 
@@ -277,7 +390,11 @@ no browser.
    - Proxy auth confusion on the credential-less endpoint (any same-uid
      process can reach it; is anything more reachable through it than the
      allowlist?).
-   - On macOS, any local user can connect to the trusted loopback port.
+   - The macOS fallback's trusted loopback port (any local user; documented
+     single-user only): anything beyond the allowlist through it?
+   - Exact binding: reach `127.0.0.1` through a `localhost` entry or the
+     reverse; `[::1]`, `::ffff:127.0.0.1`, `0.0.0.0`, decimal/octal IPs, a
+     trailing dot, `localhost.` and `*.localhost`.
    - WebRTC, QUIC, DNS prefetch, service workers, `chrome://` / `file://` /
      `view-source:` / `data:` / `blob:` navigations started by a page.
 2. **Logged-in session theft.**
@@ -318,12 +435,53 @@ no browser.
    - Its own sandbox nesting, `/dev/shm`.
    - The `--pass-fds` path in `sandbox-net`: can a payload inherit more than
      fds 3/4?
-   - The macOS Seatbelt browser variant: broad Mach lookups (which services
-     beyond the Keychain matter?), IOKit, and no per-process Chromium sandbox
-     (a renderer holds the jail's reach). Directory names are readable
-     (metadata): find any way to make the browser load a `file:` URL.
-8. **Resource abuse.** Unbounded tabs, downloads, or wait loops; the
+   - The macOS fallback: the named Mach services (`opendirectoryd`, the
+     rendezvous and crashpad regexes: can another process's name match?),
+     IOKit's two classes, the headed window's extra services, and no
+     per-process Chromium sandbox (a renderer holds the jail's reach). Find
+     a directory listing or `stat` that still reveals a name outside the
+     allowed paths.
+8. **The container.**
+   - Escape from Chromium's renderer through the widened syscalls (`clone`
+     or `unshare` with namespace flags, `setns`, `chroot`) and then from the
+     container.
+   - The stdio mux: forge a frame from inside (the shim is in the container,
+     past Chromium's sandbox; a compromised browser process can write
+     anything to it). Can a frame open a channel conductor did not expect,
+     make the host read or write outside the transfer directory, or reach a
+     host socket other than its own proxy endpoint?
+   - The shim's file confinement: symlinks, `..`, hard links inside the
+     tmpfs transfer dir.
+   - Make conductor run the weaker mode: break the image build or the
+     `chrome://sandbox` self-test so `auto` falls back, quietly or not.
+   - Image provenance: the build pulls `golang:…-alpine` and `alpine:…` by
+     tag.
+9. **Emailed codes.**
+   - Get a code from a different message: a spoofed From, a lookalike
+     domain, an older message, a reply that quotes one, a subject trick.
+   - Read anything back through errors or timing.
+   - Make conductor write to the mailbox (flags, `\Seen`).
+   - Make it talk plaintext to a non-loopback server (STARTTLS stripping, a
+     `localhost` that isn't).
+10. **Resource abuse.** Unbounded tabs, downloads, or wait loops; the
    `max_browsers` cap; idle reaping during a held action.
+
+## 9a. What remains (plain language)
+
+- **macOS without a container engine.** Chromium runs without its own
+  sandbox, so a renderer exploit holds the browser jail's reach (its profile,
+  a logged-in browser's cookies, its proxy). Any other local user can relay
+  through its proxy port to the allowlist. Conductor warns at boot and per
+  session, with the local user count. Single-user Macs only, or install an
+  engine.
+- **The container's Chromium is as current as its image**, which is rebuilt
+  only when its definition changes. Removing the image forces a rebuild.
+- **Page scripts on a credential's own origin can read the field they're
+  given.** That's inherent to the web, and why the binding is exact.
+- **SMS codes** are a follow-up.
+- **Your own passkeys can't be used** (1Password doesn't export their private
+  keys). Register a dedicated one.
+- **There's no live view of an agent's browser**, only `peek`.
 
 ## 10. Found on the way (outside the browser)
 
@@ -342,8 +500,7 @@ no browser.
 - **A live takeover view**: watch and drive an agent's browser interactively.
   This is the dashboard follow-on; here, `peek` (a screenshot) and the
   operator's own headed windows (`seed`, `passkey register`).
-- **SMS and email codes**: an opt-in connector that reads a code server-side
-  and fills it like TOTP.
+- **SMS codes**: they need a forwarding service (Twilio or a phone bridge)
+  that conductor could read like the mailbox.
 - **An MCP face** for the browser (the CLI is the contract).
-- **Per-identity `browser.evaluate`**; it is global today, and off once a
-  credential is filled regardless.
+
