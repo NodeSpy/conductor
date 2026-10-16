@@ -205,18 +205,22 @@
     const s = document.createElement('div');
     s.className = 'scrim'; s.id = 'scrim';
     s.innerHTML = `<div class="modal ${opts.wide ? 'wide' : ''}" role="dialog" aria-modal="true"><span class="sheet-grip only-phone" aria-hidden="true"></span>${html}</div>`;
-    s.addEventListener('click', (e) => { if (e.target === s && !opts.sticky) UI.closeModal(); });
+    s.addEventListener('click', (e) => { if (e.target === s && !opts.sticky) UI.dismissModal(); });
     document.body.appendChild(s);
-    $$('[data-close]', s).forEach((b) => b.addEventListener('click', UI.closeModal));
+    $$('[data-close]', s).forEach((b) => b.addEventListener('click', () => UI.dismissModal()));
     return s;
   };
   UI.closeModal = () => { const s = $('#scrim'); if (s) s.remove(); };
+  /** A way out the user asked for (close, Cancel, Esc, the scrim): asks first if there are unsaved changes. */
+  const guarded = (el, rm) => { if (el._guard && el._guard()) { UI.confirm({ title: 'Discard your changes?', body: 'What you typed in this form isn\'t saved.', ok: 'Discard', cancel: 'Keep editing', danger: true }).then((ok) => { if (ok) rm(); }); return; } rm(); };
+  UI.dismissModal = () => { const s = $('#scrim'); if (!s) return false; guarded(s, () => s.remove()); return true; };
+  UI.dismissDrawer = () => { const all = document.querySelectorAll('.drawer-scrim'); if (!all.length) return false; const d = all[all.length - 1]; guarded(d, () => d.remove()); return true; };
   /** A create-in-place drawer: layered over the current page or modal, which keeps its unsaved state. */
   UI.openDrawer = (html) => {
     const d = document.createElement('div'); d.className = 'drawer-scrim';
     d.innerHTML = `<aside class="cdrawer" role="dialog" aria-modal="true">${html}</aside>`;
     document.body.appendChild(d);
-    d.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); d.remove(); }));
+    d.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); guarded(d, () => d.remove()); }));
     return d;
   };
   UI.closeDrawer = () => { const all = document.querySelectorAll('.drawer-scrim'); if (all.length) { all[all.length - 1].remove(); return true; } return false; };
@@ -300,7 +304,7 @@
     $('#pal-scrim', el).addEventListener('click', close); res.addEventListener('click', close);
     draw(); setTimeout(() => inp.focus(), 10);
   };
-  document.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); UI.palette(); } if (e.key === 'Escape') { if (!UI.closeDrawer()) UI.closeModal(); } });
+  document.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); UI.palette(); } if (e.key === 'Escape' && !e.defaultPrevented) { const pop = document.querySelector('#pop-menu'); if (pop) { pop.remove(); return; } if (!UI.dismissDrawer()) UI.dismissModal(); } });
 
   /* ---------- theme ---------- */
   UI.theme = (t) => { document.documentElement.dataset.theme = t; try { localStorage.setItem('cd-theme', t); } catch (e) {} const b = $('#theme-btn'); if (b) b.innerHTML = UI.icon(t === 'dark' ? 'sun' : 'moon'); };
@@ -410,11 +414,12 @@
   /* ---------- confirm / step-up ---------- */
   // over an open modal or drawer, dialogs layer instead of replacing it (its unsaved state stays)
   const layer = (html, opts) => { if (document.querySelector('#scrim, .drawer-scrim')) { const d = UI.openDrawer(html); d.classList.add('layered'); return [d, () => d.remove()]; } return [UI.modal(html, opts), UI.closeModal]; };
-  UI.confirm = ({ title, body = '', ok = 'Confirm', danger = false, caps = '' }) => new Promise((res) => {
+  UI.confirm = ({ title, body = '', ok = 'Confirm', cancel = 'Cancel', danger = false, caps = '' }) => new Promise((res) => {
     const [s, close] = layer(`<div class="modal-head"><div>${caps ? `<div class="caps">${caps}</div>` : ''}<h2>${title}</h2></div><button class="icon-btn" data-close aria-label="Close">${UI.icon('x')}</button></div>
       <div class="modal-body small dim">${body}</div>
-      <div class="modal-foot"><button class="btn ghost" data-close>Cancel</button><button class="btn ${danger ? 'danger' : 'primary'}" id="cf-ok">${ok}</button></div>`, {});
+      <div class="modal-foot"><button class="btn ghost" data-close id="cf-cancel">${cancel}</button><button class="btn ${danger ? 'danger' : 'primary'}" id="cf-ok">${ok}</button></div>`, {});
     let done = false;
+    if (danger) setTimeout(() => { const c = $('#cf-cancel', s); if (c) c.focus(); }, 20); // destructive: Cancel has the focus
     $('#cf-ok', s).addEventListener('click', () => { done = true; close(); res(true); });
     const obs = new MutationObserver(() => { if (!document.body.contains(s)) { obs.disconnect(); if (!done) res(false); } });
     obs.observe(document.body, { childList: true });
@@ -533,6 +538,7 @@
       <div class="modal-foot">${spec.extra || ''}<button type="button" class="btn ghost" data-close>Cancel</button><button type="button" class="btn primary" id="${ids.submit}">${spec.submitIcon ? UI.icon(spec.submitIcon) : ''}${spec.submit || 'Save'}</button></div>`);
     const close = dr ? () => s.remove() : UI.closeModal;
     const form = $('#' + ids.form, s);
+    setTimeout(() => { const init = JSON.stringify(UI.formValues(form, spec.fields)); s._guard = () => !!UI.VS.pending(form).length || JSON.stringify(UI.formValues(form, spec.fields)) !== init; }, 60);
     UI.applyConds(form, spec.fields);
     form.addEventListener('input', () => UI.applyConds(form, spec.fields));
     form.addEventListener('change', () => UI.applyConds(form, spec.fields));
