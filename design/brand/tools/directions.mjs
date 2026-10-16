@@ -19,8 +19,8 @@ export const DIRS = [
       box: [3, 7, 26, 18],
     },
     fav: {
-      ink: '<path d="M1 10a7 7 0 0 1 14 0h-2a5 5 0 0 0-10 0z"/>',
-      acc: '<circle cx="8" cy="10" r="2.25"/>',
+      ink: '<path d="M1 11a7 8 0 0 1 14 0h-2a5 6 0 0 0-10 0z"/>',
+      acc: '<circle cx="8" cy="11" r="2.1"/>',
     },
     word: { font: 'instrument-serif-latin-400-italic.woff', track: -0.01, label: 'Instrument Serif Italic' },
     lock: { h: 0.96, align: 'baseline', dy: 0.02, gap: 0.3 },
@@ -52,7 +52,7 @@ export const DIRS = [
     },
     fav: {
       ink: '<path d="M12.1 3.4a6.5 6.5 0 1 0 0 9.2l-1.77-1.77a4 4 0 1 1 0-5.66z"/>',
-      acc: '<circle cx="13.2" cy="8" r="2"/>',
+      acc: '<circle cx="13" cy="8" r="2"/>',
     },
     word: { font: 'instrument-sans-latin-600-normal.woff', track: -0.025, label: 'Instrument Sans SemiBold' },
     lock: { h: 1.02, align: 'center', dy: 0, gap: 0.3 },
@@ -83,8 +83,8 @@ export const DIRS = [
       box: [3.7, 3.7, 24.6, 24.6],
     },
     fav: {
-      ink: '<path d="M1.83 12.33l6-6a1.3 1.3 0 0 1 1.84 1.84l-6 6a1.3 1.3 0 0 1-1.84-1.84z"/>',
-      acc: '<circle cx="12.2" cy="3.8" r="2.45"/>',
+      ink: '<path d="M1.88 12.28l5.4-5.4a1.3 1.3 0 0 1 1.84 1.84l-5.4 5.4a1.3 1.3 0 0 1-1.84-1.84z"/>',
+      acc: '<circle cx="12" cy="4" r="2.5"/>',
     },
     word: { font: 'martian-mono-latin-500-normal.woff', track: -0.03, label: 'Martian Mono Medium' },
     lock: { h: 0.92, align: 'baseline', dy: 0.0, gap: 0.26 },
