@@ -81,6 +81,25 @@ jobs:
         run: |
           go test -race -count=1 -v ./internal/browser/...
           go test -race -count=1 -run 'TestBrowser|TestSplitBrowser|TestValidateBrowser|TestReadFresh' ./cmd/conductor/ ./internal/config/ ./internal/vaults/
+      - name: the browser in a container — the whole suite again, Chromium's own sandbox on inside
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CONDUCTOR_REQUIRE_BROWSER: "1"
+          CONDUCTOR_TEST_CONTAINER: "1"
+          CONDUCTOR_TEST_ENGINE: docker
+        run: |
+          go test -count=1 -timeout 30m -v -run 'TestBrowser[A-Z]|TestCredential[A-Z]|TestContainer' ./internal/browser/
+          docker ps -a --filter label=conductor.browser=1 --format '{{.Names}}' | xargs -r docker rm -f
+      - name: the operator's takeover in a real window (a virtual display)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CONDUCTOR_REQUIRE_BROWSER: "1"
+          CONDUCTOR_TEST_HEADED: "1"
+        run: |
+          command -v xvfb-run || { sudo apt-get update -q && sudo apt-get install -yq xvfb; }
+          xvfb-run -a go test -count=1 -v -run 'TestHeadedTakeover' ./internal/browser/
       - name: the macOS sandbox's denials for the browser
         if: always() && runner.os == 'macOS'
         run: |

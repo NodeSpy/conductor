@@ -496,6 +496,17 @@ loopback forward proxy **inside conductor's own process**:
   host means **:443 only** (the safe default); any other port needs an
   explicit `host:port`, and `host:*` is the deliberate any-port opt-in.
   Non-matching targets get a 403 and an `egress_denied` audit record.
+- **Hosts are taken exactly as bound.** The proxy resolves names itself, and
+  refuses an address in a private, loopback, link-local or metadata range
+  unless the target names it exactly:
+  - an IP-literal target matches the same literal listed (not a glob) for its
+    port;
+  - the target `localhost` reaches loopback when `localhost` itself is listed.
+
+  So `localhost:3000`, `127.0.0.1:3000` and `[::1]:3000` are three entries,
+  none implying another, and an allowlisted name that resolves (or rebinds)
+  to an internal address is refused, even when that address is listed too.
+  To reach an internal host, list its address and use it as the target.
 - `network: {}` (present but empty) — deny-all: every egress attempt is
   refused and audited.
 - The launch env gets `HTTP_PROXY`/`HTTPS_PROXY` (and lowercase) pointing at

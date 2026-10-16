@@ -19,8 +19,10 @@ browser:
     - docs.example.com        # a bare host is :443
     - "*.example.org"
     - "127.0.0.1:8080"        # a local site: host:port
-  # chrome: /usr/bin/chromium # default: the first Chrome/Chromium installed
-  # evaluate: off             # off (default) | read-only
+  # chrome: /usr/bin/chromium # default: the first Chrome/Chromium installed (host mode)
+  # container: auto           # auto (default) | on | off — see "Where it runs"
+  # container_engine: docker  # docker | podman | a path (default: docker, then podman, on macOS)
+  # evaluate: ["agent:triage@acme/app"]   # identities opted in to read-only evaluate (default: none)
   # idle_timeout: 10m
   # max_browsers: 4
   # max_download_mb: 100
@@ -58,18 +60,45 @@ Each launch's token gets its own browser, and an idle one closes after
 ## The boundary
 
 - **Where it runs.** Conductor launches a headless Chromium per agent session,
-  sandboxed like an agent:
-  - Linux: user, mount, pid and network namespaces with `pivot_root`.
-  - macOS: Seatbelt.
-
-  It sees only its own throwaway profile directory and Chromium's install, and
-  never your home, your real browser profiles, conductor's state, or the
-  workspace. Conductor drives it over the DevTools protocol on a **pipe**, so
+  in one of two ways. Either way it sees only its own throwaway profile
+  directory and Chromium's install, and never your home, your real browser
+  profiles, conductor's state, or the workspace.
+  - **Linux:** in user, mount, pid and network namespaces with `pivot_root`,
+    with Chromium's own sandbox (namespaces + seccomp-BPF) nested inside for
+    every renderer.
+  - **macOS, with Docker Desktop, colima or podman installed (the default
+    whenever an engine is present):** in a container.
+    - Linux Chromium runs **with its own sandbox on** inside a container with
+      no network, no capability, `no-new-privileges`, a read-only root and no
+      mount of your Mac.
+    - The container's seccomp profile is the engine's default plus exactly
+      what Chromium's sandbox needs (`clone`/`unshare` with namespace flags,
+      `setns`, `chroot`).
+    - Conductor reaches it over the engine's stdin/stdout alone: the DevTools
+      pipe, each proxy connection, and file transfers. That works the same
+      through Docker Desktop's or colima's VM.
+    - The first start builds its image (a few minutes). Until Chromium proves
+      in it that it is sandboxed (`chrome://sandbox`: "adequately sandboxed"),
+      browser actions are refused as "being prepared", never quietly run in
+      the weaker mode. `browser.container: on` requires a container on any OS.
+  - **macOS without a container engine (the fallback):** Seatbelt alone.
+    - macOS cannot nest Chromium's own Seatbelt sandbox, so Chromium runs
+      with `--no-sandbox` and a renderer exploit holds what the browser jail
+      holds.
+    - Its Mach and IOKit access is narrowed to named services.
+    - Its egress proxy is a loopback port any local user could relay through
+      to the allowlist. Use this mode on a **single-user Mac only**.
+    - Conductor logs this at boot and on every session, with the number of
+      local users when there is more than one. Install an engine to leave this
+      mode. Conductor drives it over the DevTools protocol on a **pipe**, so
   there is no debugging port for anything else to reach. The agent never holds
   the browser.
 - **Network.** The browser has no network of its own. Its only way out is
   conductor's egress proxy with `browser.allow` (plus `sandbox.egress` and the
-  identity's own allowlist), loopback included. A URL off the list is refused
+  identity's own allowlist), loopback included. Hosts are taken **exactly as
+  bound**: `localhost:3000`, `127.0.0.1:3000` and `[::1]:3000` are three
+  entries, none implying another, and an allowlisted name that resolves (or
+  rebinds) to an internal address is refused even if that address is listed. A URL off the list is refused
   up front, and a redirect or a page's own request off it dies at the proxy and
   is audited. The agent's own process gets nothing from `browser.allow`: it
   cannot `curl` those sites past the audit.
@@ -82,9 +111,11 @@ Each launch's token gets its own browser, and an idle one closes after
   - Conductor moves the files, not the browser, through a confined path walk:
     no absolute path, no `..`, no symlink out, nothing under `.git`, nothing in
     a read-only or hidden part of the workspace, and never an overwrite.
-- **Scripts.** `evaluate` is **off** by default. With `evaluate: read-only`,
-  an expression runs only when V8 can rule out every side effect: no DOM write,
-  no network, no storage.
+- **Scripts.** `evaluate` is **off** by default, opted in **per identity**
+  (`evaluate: [identities]`). For those, an expression runs only when V8 can
+  rule out every side effect: no DOM write, no network, no storage. Whether
+  the identity was opted in is in every evaluate's audit entry. In a browser
+  where a credential was filled, evaluate is off whatever the opt-in says.
 - **Audit.** Every action is audited with:
   - the identity, the agent, repo and dispatch;
   - who asked (`requester`);
@@ -226,11 +257,6 @@ After a fill, in that browser:
 Page JavaScript **on the credential's own origin** can read a field it is
 given; that is how browsers work, and why the origin binding matters.
 
-A credential on `localhost` (a development site): its browser also reaches the
-loopback address for that port, because the proxy dials `localhost` by
-address. The same server under `127.0.0.1` is another origin, so a fill there
-is still refused.
-
 ### Two-factor codes
 
 - **TOTP.** Conductor computes the current code outside the sandbox.
@@ -244,8 +270,44 @@ is still refused.
   triggers alert you (ntfy, Pushover, Slack, …). The agent then waits, and
   `login` returns once the page moves on, or with "still waiting"; the agent
   continues with `await-approval`.
-- **SMS and email codes** are not supported (a follow-up: an opt-in connector
-  that reads the code server-side).
+- **Emailed codes** (opt-in). A credential names a mailbox and the message
+  that carries its code:
+
+  ```yaml
+  browser:
+    mailboxes:
+      agent-inbox:
+        imap: imap.example.com:993            # 993: TLS; or starttls: true on 143
+        username: { vault: op, key: "Agents/Mail/username" }
+        password: { vault: op, key: "Agents/Mail/app-password" }   # an app password
+    credentials:
+      - name: app
+        # … origin, identities, username, password as above …
+        email_code:
+          mailbox: agent-inbox
+          from: no-reply@app.example.com      # exact sender, or @app.example.com
+          subject: "sign-in code"             # text the subject contains
+          code: "code is ([0-9]{6})"          # the code: the first group
+          # wait: 60s                         # up to 90s
+  ```
+
+  What conductor reads:
+  - It opens the mailbox **read-only** (`EXAMINE`): nothing is marked read,
+    moved or deleted.
+  - The server searches by sender and subject. Conductor reads only those
+    messages' headers, holds the From address to the configured one exactly,
+    and reads the body of the **one newest match that arrived after the sign-in
+    step**.
+  - It extracts the code with your pattern, fills it like a TOTP code, and
+    never uses a message twice.
+
+  The agent never sees the mailbox, the message or the code, and no error
+  carries message text. The connection is TLS (implicit or STARTTLS, with
+  `ca_file` for a private CA), with plaintext allowed only to a loopback
+  address (`plaintext_loopback: true`, for a local bridge). Prefer a mailbox
+  that only receives the agent's codes.
+- **SMS codes** are not supported: they need a forwarding service. That's a
+  follow-up.
 
 ### Passkeys
 
