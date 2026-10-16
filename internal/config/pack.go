@@ -128,6 +128,12 @@ type PackInstance struct {
 	// (N instances of the same trigger, each with its own repos/filters/gate).
 	// See TriggerArms.
 	Triggers map[string]TriggerArms `yaml:"triggers,omitempty"`
+	// Folder files every workflow and trigger of this instance for display
+	// (folders.go); Workflows files one workflow (a trigger: its
+	// triggers.<name>.folder). Absent: shown under the instance
+	// (packs/<instance>).
+	Folder    string                 `yaml:"folder,omitempty"`
+	Workflows map[string]WorkflowArm `yaml:"workflows,omitempty"`
 
 	// Packs instantiates the pack's own pack dependencies (requires.packs),
 	// recursively — the identical default/override/bind surface, one level down.
@@ -285,6 +291,15 @@ type TriggerArm struct {
 	// Gate replaces the shipped trigger's gate. The OPERATOR setting a gate is
 	// the point — it is their check that runs before the pack's steps land.
 	Gate *GateSpec `yaml:"gate,omitempty"`
+	// Folder files the trigger for display (folders.go) — the operator's
+	// choice, never the pack's. Not part of an instance's identity.
+	Folder string `yaml:"folder,omitempty"`
+}
+
+// WorkflowArm is the operator's per-workflow overlay on a pack's workflow:
+// only where it is filed.
+type WorkflowArm struct {
+	Folder string `yaml:"folder,omitempty"`
 }
 
 // UnmarshalYAML decodes an arming block, naming the retired `filters:` key
@@ -374,6 +389,9 @@ func mergeArm(star, named TriggerArm) TriggerArm {
 	}
 	if named.Gate != nil {
 		out.Gate = named.Gate
+	}
+	if named.Folder != "" {
+		out.Folder = named.Folder
 	}
 	return out
 }

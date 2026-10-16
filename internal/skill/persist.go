@@ -31,6 +31,9 @@ type persistedSession struct {
 	Policy        config.SkillPolicy  `json:"policy"`
 	TargetTrusted bool                `json:"target_trusted,omitempty"`
 	Dispatch      string              `json:"dispatch,omitempty"`
+	Bot           string              `json:"bot,omitempty"`
+	BotRole       string              `json:"bot_role,omitempty"`
+	CaseID        string              `json:"case_id,omitempty"`
 	Context       map[string]any      `json:"context,omitempty"`
 	Sem           *sdk.EventSemantics `json:"sem,omitempty"`
 }
@@ -68,6 +71,7 @@ func (b *Broker) SetPersistPath(path string) {
 			id: Identity{
 				Agent: p.Agent, Repo: p.Repo, Trigger: p.Trigger, Number: p.Number,
 				Policy: p.Policy, TargetTrusted: p.TargetTrusted, Dispatch: p.Dispatch,
+				Bot: p.Bot, BotRole: p.BotRole, CaseID: p.CaseID,
 				Context: p.Context, Sem: p.Sem,
 			},
 			expires:   p.Expires,
@@ -135,6 +139,7 @@ func (b *Broker) saveLocked() {
 			TokenHash: k.hash, Expires: s.expires, BoundUID: s.boundUID, VerbCalls: s.verbCalls,
 			Agent: s.id.Agent, Repo: s.id.Repo, Trigger: s.id.Trigger, Number: s.id.Number,
 			Policy: s.id.Policy, TargetTrusted: s.id.TargetTrusted, Dispatch: s.id.Dispatch,
+			Bot: s.id.Bot, BotRole: s.id.BotRole, CaseID: s.id.CaseID,
 			Context: s.id.Context, Sem: s.id.Sem,
 		})
 		if err != nil {

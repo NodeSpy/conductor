@@ -9,7 +9,7 @@ import (
 // The mirrored-section overlay (docs/design/runtimes-models-packs.md §5.3).
 //
 // The `packs.<name>:` block MIRRORS the pack's own sections, and keys
-// deep-merge onto the pack's members BY NAME using the machinery that
+// deep-merge onto the pack's bots BY NAME using the machinery that
 // already exists (`extends:`-style mergeStruct, additive guidance). There is
 // no pack-specific override language to learn:
 //
@@ -24,7 +24,7 @@ import (
 //	    models:                                   # its fleets, by name
 //	      reviewer: claude-opus-5
 //
-// Only NAMED members are addressable — a pack must name what it wants a
+// Only NAMED bots are addressable — a pack must name what it wants a
 // consumer to be able to reach. An overlay key that matches nothing is an
 // error rather than silent dead config: the whole point is targeted
 // override, and a typo that quietly does nothing is the worst outcome.
@@ -78,7 +78,7 @@ func (st *packInstantiation) applyTriggerOverlay(ns string, inst PackInstance, t
 //
 // The override semantics are the OVERRIDE half of Binding (a map deep-merges
 // onto the bundle), so this is the same surface a role binding already uses
-// — the difference is only that the overlay reaches members the pack did not
+// — the difference is only that the overlay reaches bots the pack did not
 // declare as roles.
 //
 // `enabled: false` disables a step: it is lowered to an `if: "false"` so the

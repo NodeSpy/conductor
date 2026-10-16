@@ -150,7 +150,19 @@ type Config struct {
 	// Memory is the shared agent memory (`memory:` section): durable notes
 	// with provenance and scope, written by verbs/agents and injected into
 	// opted-in agent prompts. Nil = memory not configured (no default).
-	Memory    *MemoryConfig          `yaml:"memory"`
+	Memory *MemoryConfig `yaml:"memory"`
+	// Operators are the humans who may approve bot proposals, and Bots
+	// the persistent conversational agents (bots.go). Both optional.
+	Operators map[string]OperatorConfig `yaml:"operators"`
+	Bots      map[string]BotConfig      `yaml:"bots"`
+	// BotLinks are operator-side peer links: each pair of bots may
+	// message each other (`conductor bot ask`), as if both listed the
+	// other under peers:. No link, no messages.
+	BotLinks [][]string `yaml:"bot_links,omitempty"`
+	// Teams group bots (teams.go): shared ceilings, intra-team peering,
+	// an optional knowledge repo, routing. Optional; a bot names its
+	// team.
+	Teams     map[string]TeamConfig  `yaml:"teams,omitempty"`
 	Workflows map[string]WorkflowDef `yaml:"workflows"`
 	// Triggers is the `triggers:` section. It decodes from the list form or
 	// the named/qualified MAP form, where the key is the trigger's stable
@@ -166,6 +178,9 @@ type Config struct {
 	// (#36 §14). Model prices drift; the built-ins are coarse defaults and
 	// every estimated figure is marked approximate.
 	Pricing *PricingConfig `yaml:"pricing"`
+	// Usage is how usage is reported (usage.mode, default off) and where
+	// plan-window data comes from (usage.sources). Display only.
+	Usage *UsageConfig `yaml:"usage"`
 	// SecretRefs is the named `secrets:` block: name -> secret reference
 	// (env:/op://…), readable in templates as {{.secrets.<name>}}.
 	SecretRefs map[string]string `yaml:"secrets"`
@@ -932,6 +947,21 @@ func Load(path string) (*Config, error) {
 	// Trigger `extends:` resolves + abstract bases are stripped BEFORE
 	// normalization, so a child can inherit a base's `on:` and bases (which may
 	// carry no `on:`) never reach the on:-required / manual-name checks.
+	// Each bot expands into its two synthesized worker triggers (`on:
+	// manual`), here so they pass through normalization and validation like
+	// any trigger the operator wrote. No-op without `bots:`.
+	// Teams resolve first: each bot's team defaults are filled in (and a
+	// bot setting past its team's ceiling refused) before the bot's
+	// worker triggers copy its grant.
+	if err := c.resolveCollections(); err != nil {
+		return nil, err
+	}
+	if err := c.ResolveTeams(); err != nil {
+		return nil, err
+	}
+	if err := c.expandBots(); err != nil {
+		return nil, err
+	}
 	if err := c.resolveTriggerExtends(); err != nil {
 		return nil, err
 	}
@@ -1265,6 +1295,9 @@ func (c *Config) Validate() error {
 	if err := c.validateSessions(); err != nil {
 		return err
 	}
+	if err := c.validateBots(); err != nil {
+		return err
+	}
 	if c.Policy != nil {
 		if err := validateAgentAuthored("policy", c.Policy.AgentAuthored, c.Hosts); err != nil {
 			return err
@@ -1272,6 +1305,12 @@ func (c *Config) Validate() error {
 		if err := validateBudget("policy", c.Policy.Budget); err != nil {
 			return err
 		}
+	}
+	if err := c.validateUsage(); err != nil {
+		return err
+	}
+	if err := c.validateEntityFolders(); err != nil {
+		return err
 	}
 	if err := c.validatePricing(); err != nil {
 		return err

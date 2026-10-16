@@ -187,11 +187,17 @@ func savedWFFrom(ctx context.Context) string {
 
 // Runner executes fired triggers through the trigger grammar.
 type Runner struct {
-	Cfg     *config.Config
-	Conns   *connector.Registry
-	Agents  AgentServices
-	Code    *code.Executor
-	Secrets *secrets.Resolver
+	Cfg    *config.Config
+	Conns  *connector.Registry
+	Agents AgentServices
+	// Bots is the bot autonomy gate (nil when no bot is configured;
+	// a bot-bound skill grant then fails closed).
+	Bots BotGate
+	// BotRouter serves the `bot:` helper step (nil = no bot service:
+	// the step fails, naming why).
+	BotRouter BotRouter
+	Code      *code.Executor
+	Secrets   *secrets.Resolver
 	// SecretVals are the resolved named secrets: values ({{.secrets.<name>}}).
 	SecretVals map[string]string
 	// VaultVals are the preloaded listable-vault entries

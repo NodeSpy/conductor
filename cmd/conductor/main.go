@@ -98,6 +98,8 @@ func main() {
 		err = cmdStatus(args)
 	case "report":
 		err = cmdReport(args)
+	case "usage":
+		err = cmdUsage(args)
 	case "runs":
 		err = cmdRuns(args)
 	case "watch":
@@ -140,6 +142,10 @@ func main() {
 		err = cmdSkillMemory(args)
 	case "secret":
 		err = cmdSecret(args)
+	case "bot", "bots":
+		err = cmdBot(args)
+	case "folders":
+		err = cmdFolders(args)
 	case "workflows":
 		err = cmdWorkflows(args)
 	case "init":
@@ -184,7 +190,9 @@ usage:
   conductor sweep --now [--config PATH] signal the running daemon to sweep now
   conductor force <kind> <owner/repo>#<n>  force an action for a target now (via the running daemon)
   conductor status [--config PATH]      snapshot: live agents, in-flight workflows, stuck/attention
-  conductor report [--days N]           activity summary: dispatches by kind/outcome + attention + spend
+  conductor report [--days N]           activity summary: dispatches by kind/outcome + attention + usage (per usage.mode)
+  conductor folders ls [path] [--flat]  everything filed in a folder: teams, bots, workflows, triggers (display only)
+  conductor usage [--since 24h]         model usage per runtime/model: what conductor observed, and what usage.sources report
   conductor runs [<id>] [--limit N]     recorded executions: list, or one run's step detail
   conductor runs retry <id> [--from <step>] [--force-replay]  re-run a recorded execution (recorded inputs pinned)
   conductor watch [<run-id>] [--json]   tail the live run event stream (steps, gates, outcomes)
@@ -203,8 +211,9 @@ usage:
   conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
   conductor unlock                      seed the default vault key for non-interactive restarts
   conductor mcp memory --socket <path>  stdio MCP server: memory + skill broker (agent-facing)
+  conductor bot <cmd> …             bots: ls/show/cases/proposals/approve/deny/rotate/say/deliver (conductor bot help)
   conductor mcp callable --token <name> [--config PATH]  stdio MCP server: invoke callable workflows (external MCP clients)
-  conductor workflows ls|review|rm      manage saved (agent-promoted) workflows
+  conductor workflows ls [--folder p] [--flat]   config workflows + triggers as a folder tree; saved workflows (review|rm)
   conductor init [--config PATH] [--allow-unlisted]  fetch the packs: block, write the lockfile, preview
   conductor pack list|plan              list configured packs; preview what they add
   conductor pack add <source>           fetch a pack, show its install review + a ready-to-paste block
@@ -259,6 +268,11 @@ func loadConfig(args []string) (*config.Config, []string, error) {
 	// loads them at runtime, without needing to export anything by hand.
 	loadEnvFile(filepath.Join(filepath.Dir(path), "conductor.env"))
 	cfg, err := config.Load(path)
+	if err == nil {
+		// usage.mode: what every report and notification of this process may
+		// show of model usage (display only; caps enforce in every mode).
+		cost.SetDisplayMode(cfg.UsageMode())
+	}
 	return cfg, rest, err
 }
 
@@ -321,6 +335,9 @@ func cmdValidate(args []string) error {
 	defer stack.Close()
 	// Deprecation + skill + isolation lint: warnings, never failures.
 	for _, w := range flow.DeprecationWarnings(cfg) {
+		fmt.Printf("warning: %s\n", w)
+	}
+	for _, w := range cfg.BotWarnings() {
 		fmt.Printf("warning: %s\n", w)
 	}
 	for _, w := range flow.IsolationWarnings(cfg) {
@@ -776,6 +793,14 @@ func cmdRun(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Bots (docs/design/bots.md): the gate on the skill chokepoint, the
+	// bot: routing step, home sessions on paseo, cli workers through the
+	// manual-trigger path. nil without a bots: section.
+	var bots *botStack
+	if stack != nil {
+		bots = buildBots(cfg, st, stack.Runner, reg, hold, eng, notifier, logf)
+	}
+
 	// The live agent-tool socket: with a memory: section configured — or any
 	// profile opted into the conductor skill (#36 §12) — serve the tool
 	// socket beside the state file and publish the launch command runtimes
@@ -887,6 +912,9 @@ func cmdRun(args []string) error {
 						}
 						return runner.SkillVerbCatalog(id.Policy.Verbs), nil
 					}
+					if bots != nil {
+						ops.Bot = bots.agentOp(sb)
+					}
 					ops.RunVerb = func(vctx context.Context, token, uses string, options map[string]any, peer memory.Peer) (map[string]any, error) {
 						id, err := sb.Authorize(token, asPeer(peer))
 						if err != nil {
@@ -902,6 +930,7 @@ func cmdRun(args []string) error {
 							Number: id.Number, Verbs: id.Policy.Verbs,
 							Scopes: id.Policy.VerbScopes, Context: id.Context, Sem: id.Sem,
 							TargetTrusted: id.TargetTrusted, Dispatch: id.Dispatch,
+							Bot: id.Bot, BotRole: id.BotRole, CaseID: id.CaseID,
 						}, uses, options)
 					}
 				}
@@ -1054,10 +1083,18 @@ func cmdRun(args []string) error {
 	defer connector.SetConductorOps(nil)
 	// handoff.done: the agent releasing its own live hand-off (skill surface),
 	// resolved through the engine's live-hand-off registry.
-	connector.SetStepOps(func() *connector.StepOps { return eng.StepOps() })
+	connector.SetStepOps(bots.wrapStepOps(func() *connector.StepOps { return eng.StepOps() }))
 	defer connector.SetStepOps(nil)
 	// A connector's declared poll verb: the same nudge the SIGUSR1 handler
 	// runs, for that instance.
+	if bots != nil {
+		var hub *flow.EventHub
+		if stack != nil {
+			hub = stack.Runner.Events
+		}
+		bots.start(ctx, hub)
+		botCtl = bots.svc
+	}
 	connector.SetSweepHook(func(_ context.Context, instance string) (int, error) {
 		n := 0
 		for _, ig := range igs {
@@ -1325,11 +1362,15 @@ func controlSockPath(cfg *config.Config) string {
 }
 
 type controlRequest struct {
-	Cmd         string `json:"cmd"`
-	Integration string `json:"integration,omitempty"`
-	Kind        string `json:"kind,omitempty"`
-	Repo        string `json:"repo,omitempty"`
-	Number      int    `json:"number,omitempty"`
+	Cmd string `json:"cmd"`
+	// bot: the sub-command (Sub) and its arguments (Args) — the operator
+	// face of bots (`conductor bot …`). Approvals arrive here, signed.
+	Sub         string         `json:"sub,omitempty"`
+	Args        map[string]any `json:"args,omitempty"`
+	Integration string         `json:"integration,omitempty"`
+	Kind        string         `json:"kind,omitempty"`
+	Repo        string         `json:"repo,omitempty"`
+	Number      int            `json:"number,omitempty"`
 	// run: the manual trigger's name and its CLI-provided inputs.
 	Name   string         `json:"name,omitempty"`
 	Inputs map[string]any `json:"inputs,omitempty"`
@@ -1361,6 +1402,8 @@ type controlResponse struct {
 	Dispatched int    `json:"dispatched,omitempty"`
 	Msg        string `json:"msg,omitempty"`
 	Error      string `json:"error,omitempty"`
+	// Result is a bot command's structured answer.
+	Result map[string]any `json:"result,omitempty"`
 }
 
 // callableGate authorizes + audits a control-socket `run` that the MCP callable
@@ -1443,6 +1486,8 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 		return
 	}
 	switch req.Cmd {
+	case "bot":
+		handleBotControl(ctx, conn, req, log)
 	case "force":
 		n, err := forceOnIntegrations(ctx, igs, req, emit)
 		if err != nil {

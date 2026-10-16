@@ -108,6 +108,10 @@ type Request struct {
 	// event data, never chosen by the agent.
 	DispatchID string
 	Data       map[string]any // extra template vars (e.g. prior step outputs)
+	// LiteralPrompt sends Action.Prompt as-is, never template-rendered: a
+	// bot's home prompt carries text agents wrote (handoff notes), which
+	// must not be evaluated against the dispatch's template data.
+	LiteralPrompt bool
 }
 
 // RunRef is the outcome of a dispatch.

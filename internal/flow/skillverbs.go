@@ -57,7 +57,36 @@ type SkillIdentity struct {
 	// Sem is the originating trigger's declared semantics (daemon-side, like
 	// Context): its target scope answers ContextScope.
 	Sem *sdk.EventSemantics
+	// Bot binds this grant to a bot (docs/design/bots.md): every verb
+	// it calls passes that bot's autonomy gate after the access and scope
+	// checks below. BotRole is home | worker; CaseID the case a worker was
+	// launched for. All three are minted daemon-side from config and the
+	// ledger, never asserted by the agent.
+	Bot     string `json:"bot,omitempty"`
+	BotRole string `json:"bot_role,omitempty"`
+	CaseID  string `json:"case_id,omitempty"`
 }
+
+// BotGate is the bots' autonomy gate (internal/bot). RunSkillVerb
+// consults it for every call whose grant is bound to a bot, AFTER the
+// profile and resource checks — it can only narrow what the grant admits,
+// never widen it. A nil gate with a bot-bound grant fails closed.
+type BotGate interface {
+	CheckVerb(ctx context.Context, id SkillIdentity, uses string, options map[string]any) (BotVerdict, error)
+}
+
+// BotVerdict is the gate's answer. Allow runs the verb; otherwise Output
+// (non-nil) is what the agent gets back instead of running it — a proposal
+// handle — and a non-nil error from CheckVerb is a refusal.
+type BotVerdict struct {
+	Allow  bool
+	Output map[string]any
+}
+
+// MatchVerbPattern is the skill-grant matcher (path globs, conductor.* exact
+// only), exported so the bot gate classifies verbs with the same rules
+// the grant admits them by.
+func MatchVerbPattern(patterns []string, uses string) bool { return matchAny(patterns, uses) }
 
 // OwnRepo is the repo this grant's dispatch may treat as its own — the same
 // core.OwnRepo rule every other representation of a dispatch uses. Read this
@@ -669,6 +698,23 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 	// the operator wrote onto a named verb here.
 	if err := r.checkSkillVerbResources(r.planPolicy(), t, uses, options, id.ScopesFor(uses)); err != nil {
 		return deny(r.redactErr(err))
+	}
+	// THE BOT GATE. A bot-bound grant has passed access and scope; the
+	// bot's autonomy tiers now decide whether this call runs, becomes a
+	// proposal for operator approval, or is refused. Same chokepoint, one
+	// more narrowing step — no second enforcement path.
+	if id.Bot != "" {
+		if r.Bots == nil {
+			return deny("bot-bound grant but no bot gate on this daemon")
+		}
+		v, err := r.Bots.CheckVerb(ctx, id, uses, options)
+		if err != nil {
+			return deny(r.redactErr(err))
+		}
+		if !v.Allow {
+			r.auditSkillVerb(t, id.Agent, uses, options, "proposed", nil)
+			return v.Output, nil
+		}
 	}
 	// handoff.* / step.* act on the CALLER's own dispatch: inject the
 	// token-bound identity so `done` releases the agent this token was minted

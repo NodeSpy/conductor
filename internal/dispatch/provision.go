@@ -190,7 +190,7 @@ func SessionKeyNamespace(req Request) string {
 // second time would evaluate any {{…}} that text contains against the
 // dispatch's template data, credentials included. See config.DecisionLaunch.
 func promptText(req Request) (string, error) {
-	if req.Step.DecisionLaunch != nil {
+	if req.Step.DecisionLaunch != nil || req.LiteralPrompt {
 		return req.Action.Prompt, nil
 	}
 	return render(req.Action.Prompt, templateData(req))
