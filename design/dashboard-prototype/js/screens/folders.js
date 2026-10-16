@@ -21,11 +21,24 @@
   UI.folderOfTeam = (t, staged = true) => cfgOf('teams', t, staged).folder || '';
   UI.folderOfBot = (b, staged = true) => { const c = cfgOf('bots', b, staged); return c.team ? UI.folderOfTeam(c.team, staged) : c.folder || ''; };
   UI.inFolder = (bot, f) => within(UI.folderOfBot(bot, false), f);
+  /* workflows share the same folders */
+  UI.wfOwner = (w) => (w.source.startsWith('pack') ? 'pack' : w.source === 'bot' ? 'bot' : 'config');
+  UI.packOf = (w) => w.source.replace(/^pack /, '');
+  UI.folderOfWf = (w, staged = true) => {
+    const o = UI.wfOwner(w);
+    if (o === 'bot') return UI.folderOfBot(w.name.slice(4), staged);
+    if (o === 'pack') { const inst = UI.packOf(w), c = staged ? S.staged('packs', inst) : (D.packs.find((p) => p.name === inst) || {}).cfg; return (c && c.folders && c.folders[w.name]) || `packs/${inst}`; }
+    const y = staged ? S.staged('workflows', w.name) || w.yaml : w.yaml; const m = String(y || '').match(/^folder:\s*"?([^"\n]+?)"?\s*$/m); return m ? m[1] : '';
+  };
+  UI.wfsIn = (f, deep = true) => S.view().workflows.filter((w) => { const x = UI.folderOfWf(w); return deep ? within(x, f) && (!f || x) : x === f; });
+  const lastRun = (name) => D.runs.find((r) => r.workflow === name);
+  UI.wfRoll = (ws) => { const runs = ws.reduce((a, w) => a + (w.runs24 || 0), 0), ok = runs ? ws.reduce((a, w) => a + (w.runs24 || 0) * (w.ok == null ? 1 : w.ok), 0) / runs : 1, failing = ws.filter((w) => { const r = lastRun(w.name); return r && (r.status === 'fail' || r.status === 'stopped'); }).length; return { n: ws.length, runs, ok: Math.round(ok * 100), failing }; };
   const prefixes = (p) => p.split('/').map((_, i, a) => a.slice(0, i + 1).join('/'));
-  UI.allFolders = (staged = true) => {
+  UI.allFolders = (staged = true, botsOnly = false) => {
     const set = new Set();
     D.teams.forEach((t) => { const f = UI.folderOfTeam(t.name, staged); if (f) prefixes(f).forEach((x) => set.add(x)); });
     D.bots.forEach((b) => { const c = cfgOf('bots', b.name, staged); if (!c.team && c.folder) prefixes(c.folder).forEach((x) => set.add(x)); });
+    if (!botsOnly) S.view().workflows.forEach((w) => { const f = UI.folderOfWf(w, staged); if (f) prefixes(f).forEach((x) => set.add(x)); });
     (D.folderDrafts || []).forEach((f) => prefixes(f).forEach((x) => set.add(x)));
     return [...set].sort();
   };
@@ -48,14 +61,14 @@
   function build() {
     const root = { path: '', kids: {}, teams: [], solos: [] };
     const node = (p) => { let n = root; if (!p) return n; p.split('/').forEach((seg, i, a) => { const full = a.slice(0, i + 1).join('/'); n = n.kids[seg] = n.kids[seg] || { path: full, kids: {}, teams: [], solos: [] }; }); return n; };
-    UI.allFolders().forEach(node);
+    UI.allFolders(true, true).forEach(node);
     D.teams.forEach((t) => node(UI.folderOfTeam(t.name)).teams.push(t.name));
     D.pending.filter((c) => c.coll === 'teams' && c.before == null && c.after).forEach((c) => { if (!T(c.key)) node(c.after.folder || '').teams.push(c.key); });
     D.bots.forEach((b) => { const c = cfgOf('bots', b.name, true); if (!c.team) node(c.folder || '').solos.push(b.name); });
     return root;
   }
   const botsUnder = (n) => { const out = []; n.teams.forEach((t) => D.bots.forEach((b) => { if (cfgOf('bots', b.name, true).team === t) out.push(b.name); })); out.push(...n.solos); Object.values(n.kids).forEach((k) => out.push(...botsUnder(k))); return out; };
-  const roll = (n) => { const bs = botsUnder(n); const p = bs.reduce((a, b) => a + pendingOf(b), 0), c = bs.reduce((a, b) => a + openCases(b), 0), live = bs.filter((b) => (M(b) || {}).home === 'live').length; return `<span class="roll"><span title="bots">${icon('members')}${bs.length}</span><span title="pending approvals" class="${p ? 'hot' : ''}">${icon('passkey')}${p}</span><span title="open cases">${icon('runs')}${c}</span><span title="home sessions live" class="${live ? 'live' : ''}"><i class="pulse${live ? ' run' : ''}"></i>${live} live</span>${UI.usageOn() ? Object.entries(UI.botsProv(bs)).filter(([, x]) => x.turns).map(([p, x]) => `<span title="${UI.provLabel(p)} turns today · ${UI.srcLabel('observed')}" data-usage data-prov="${p}">${icon('zap')}<span data-figure>${UI.provLabel(p)} ${x.turns}</span></span>`).join('') : ''}</span>`; };
+  const roll = (n) => { const bs = botsUnder(n); const p = bs.reduce((a, b) => a + pendingOf(b), 0), c = bs.reduce((a, b) => a + openCases(b), 0), live = bs.filter((b) => (M(b) || {}).home === 'live').length; const wr = UI.wfRoll(UI.wfsIn(n.path)); return `<span class="roll"><span title="bots">${icon('members')}${bs.length}</span><span title="workflows · runs 24h · failing" class="${wr.failing ? 'hot' : ''}">${icon('workflows')}${wr.n}${wr.failing ? ` · ${wr.failing} failing` : ''}</span><span title="pending approvals" class="${p ? 'hot' : ''}">${icon('passkey')}${p}</span><span title="open cases">${icon('runs')}${c}</span><span title="home sessions live" class="${live ? 'live' : ''}"><i class="pulse${live ? ' run' : ''}"></i>${live} live</span>${UI.usageOn() ? Object.entries(UI.botsProv(bs)).filter(([, x]) => x.turns).map(([p, x]) => `<span title="${UI.provLabel(p)} turns today · ${UI.srcLabel('observed')}" data-usage data-prov="${p}">${icon('zap')}<span data-figure>${UI.provLabel(p)} ${x.turns}</span></span>`).join('') : ''}</span>`; };
   const fv = { q: '' };
   const closed = () => new Set(D.prefs.closedFolders || []);
   const matchBot = (b) => { const m = M(b) || { name: b, desc: '' }; const q = fv.q.toLowerCase(); return (m.name + ' ' + (m.desc || '') + ' ' + UI.folderOfBot(b) + ' ' + (cfgOf('bots', b, true).team || '')).toLowerCase().includes(q); };
@@ -128,8 +141,36 @@
       ${path ? '' : `<details class="panel peers-panel"${D.prefs.peersOpen ? ' open' : ''}><summary class="panel-head"><h3>Peers &amp; links map</h3><span class="muted small">inside a team bots are peers; across teams they're isolated unless linked</span></summary><div class="panel-body tight">${UI.peersGraph()}</div></details>`}
     </div>`;
   }
+  /* a folder, everything in it: bots, teams and workflows, with roll-ups and what needs you there */
+  const movesCallout = () => { const moves = D.pending.filter((c) => ((c.coll === 'bots' || c.coll === 'teams') && c.before && c.after && (c.before.folder || '') !== (c.after.folder || '')) || (c.coll === 'workflows' && /^move workflow/.test(c.summary || '')) || (c.coll === 'packs' && /^move pack workflow/.test(c.summary || ''))).length; return moves ? `<div class="callout small staged-moves">${icon('folder')} <b>${moves} move${moves > 1 ? 's' : ''} staged.</b> Folders live in config, so moves apply through the diff.<a class="btn sm primary" href="#/config/apply">Review &amp; apply</a></div>` : ''; };
+  function folderView(path, tab) {
+    const root = build(); let n = findNode(root, path);
+    while (!n && path) { path = parentOf(path); n = findNode(root, path); }
+    if (!path) return page('');
+    tab = ['bots', 'teams', 'workflows'].includes(tab) ? tab : 'bots';
+    const phone = innerWidth <= 720, base = '#/folders/' + enc(path);
+    const bots = botsUnder(n), teams = D.teams.map((t) => t.name).filter((t) => UI.folderOfTeam(t) && within(UI.folderOfTeam(t), path)), ws = UI.wfsIn(path), wr = UI.wfRoll(ws);
+    const pend = bots.reduce((a, b) => a + pendingOf(b), 0), live = bots.filter((b) => (M(b) || {}).home === 'live').length;
+    const fails = ws.map((w) => [w, lastRun(w.name)]).filter(([, r]) => r && (r.status === 'fail' || r.status === 'stopped'));
+    const att = D.attention.filter((a) => { const b = UI.botOfHref(a.href); return b && bots.includes(b); });
+    const props = D.proposals.filter((p) => p.status === 'pending' && UI.live(p) && bots.includes(p.bot) && !att.some((a) => (a.sub || '').includes(p.id))).map((p) => ({ s: 'wait', title: `${p.verb || p.kind} · ${p.bot}`, sub: `${p.id} · ${p.summary || p.tier}`, href: `#/bots/${p.bot}/proposals` }));
+    const needs = att.concat(props).map((a) => `<a class="item click" href="${a.href}">${st(a.s === 'ember' ? 'wait' : a.s || 'wait', '')}<div class="grow small"><b>${esc(a.title)}</b><div class="muted tiny ellipsis">${esc(a.sub || '')}</div></div><span class="chev">${icon('chev')}</span></a>`)
+      .concat(fails.map(([w, r]) => `<a class="item click" href="#/runs/${r.id}">${st('fail', '')}<div class="grow small"><b>${esc(w.name)} failed</b><div class="muted tiny ellipsis">${esc(r.error || 'its last run failed')}</div></div><span class="chev">${icon('chev')}</span></a>`));
+    const stat = (k, v, d, hot) => `<div class="panel stat${hot ? ' hot' : ''}"><span class="k">${k}</span><span class="v">${v}</span>${d ? `<span class="d">${d}</span>` : ''}</div>`;
+    const body = tab === 'workflows' ? (UI.wfTable ? UI.wfTable(ws, { folder: path }) : '')
+      : tab === 'teams' ? `<div class="panel"><div class="list">${teams.map((t) => { const c = cfgOf('teams', t, true), bs = D.bots.filter((b) => cfgOf('bots', b.name, true).team === t); return `<a class="item click" href="#/teams/${t}"><span class="fic team-ic">${icon('members')}</span><div class="grow"><b>${esc(t)}</b><div class="muted tiny">${bs.length} bot${bs.length === 1 ? '' : 's'}${c.lead ? ' · lead ' + esc(c.lead) : ''} · ${esc(UI.folderOfTeam(t))}</div></div><span class="chev">${icon('chev')}</span></a>`; }).join('') || '<div class="empty small">No teams in this folder.</div>'}</div></div>`
+      : `<div class="panel ftree-panel"><div class="ftree" id="ftree" role="tree" data-path="${esc(path)}">${phone ? levelHTML(n) : `<div class="frow rootdrop" data-drop="${esc(path)}" style="--d:0"><span class="fic">${icon('folder')}</span><span class="muted small">${esc(path)}</span></div>${treeHTML(n)}`}</div></div>`;
+    return `<div class="page">
+      ${UI.head(esc(leaf(path)), { crumbs: UI.folderCrumbs(parentOf(path)), sub: `folder ${esc(path)} · organization only`, actions: `<button class="btn" data-act="f-new" data-parent="${esc(path)}">${icon('folder')}New folder inside</button><button class="btn ghost" data-act="f-menu" data-path="${esc(path)}" aria-label="Folder actions">${icon('more')}</button>` })}
+      ${movesCallout()}
+      <div class="grid g4 stats folder-stats">${stat('Bots', bots.length, `${live} live · ${teams.length} team${teams.length === 1 ? '' : 's'}`)}${stat('Workflows', wr.n, `${wr.runs} runs 24h · ${wr.ok}% ok`)}${stat('Failing', wr.failing, wr.failing ? 'last run failed' : 'none', wr.failing)}${stat('Approvals', pend, 'pending in this folder', pend)}</div>
+      <div class="panel" style="margin:14px 0"><div class="panel-head"><span class="attn-mark">${icon('diamond')}</span><h3>Needs you here</h3><span class="muted small">${needs.length} item${needs.length === 1 ? '' : 's'} in ${esc(path)}</span></div><div class="list">${needs.join('') || '<div class="item small muted">Nothing in this folder needs you.</div>'}</div></div>
+      ${UI.tabs([['bots', 'Bots', base + '/bots', bots.length], ['teams', 'Teams', base + '/teams', teams.length], ['workflows', 'Workflows', base + '/workflows', ws.length]], tab)}
+      ${body}
+      <div class="small muted" style="margin-top:12px">Folders are organization only: no permissions, defaults or behavior.</div></div>`;
+  }
   UI.route('bots', () => page(''), { nav: 'bots' });
-  UI.route('folders/:path', ({ path }) => page(path), { nav: 'bots' });
+  UI.route('folders/:path/:tab?', ({ path, tab }) => folderView(path, tab), { nav: 'bots' });
   document.addEventListener('toggle', (e) => { if (e.target.matches && e.target.matches('details.peers-panel')) { D.prefs.peersOpen = e.target.open; S.save(); } }, true);
 
   UI.act('f-q', (el) => { fv.q = el.value; const box = UI.$('#ftree'); const root = build(), n = findNode(root, box.dataset.path) || root; const rows = innerWidth <= 720 ? levelHTML(n) : treeHTML(n); box.querySelectorAll('.frow:not(.rootdrop), .empty, .drill, [role="group"]').forEach((x) => x.remove()); box.insertAdjacentHTML('beforeend', rows); });

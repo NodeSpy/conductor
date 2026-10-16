@@ -539,6 +539,24 @@ operator save, on a bot proposal or promotion, and on import.
   sha; 409 on a conflict), `POST …/import` (`dry_run` returns the detected
   kind and mapping per file), `POST …/log/{path}/annotations`.
 
+**Folders are one shared organization.** The same `folder: "a/b"` path
+places bots, teams **and workflows**, so `work/platform` holds that area's
+bots, teams and workflows together. Placement: your workflows carry
+`folder:` in config; **pack workflows** sit under `packs/<instance>/` by
+default and the operator can place them elsewhere with a pack override
+(`packs.<instance>.folders.<workflow>`), but a pack can't assign its own
+folder; **a bot's synthesized workflow follows its bot (or its team)**.
+Connector and pack instances are deliberately *not* foldered: they're shared
+infrastructure used across areas, and placing them would duplicate them
+across folders. The **Workflows** page has a folder tree beside the table
+(per-folder runs 24h, success rate and failing count), breadcrumbs, folder
+filters orthogonal to the ownership filter (all / yours / packs / bots),
+search across folders, and moves by drag-and-drop or *Move to…*, staged
+through the diff. **A folder's page** (`#/folders/<path>/<tab>`) shows
+everything in it: roll-ups, what needs you there, and Bots / Teams /
+Workflows tabs. The Bots tree shows only folders that hold bots or teams.
+Folders stay organization only: no behavior, permissions or defaults.
+
 **Create in place.** Every picker that references another entity offers
 **+ New …** as its first option: team → bot, bot → team and folder, step →
 connector instance, runtime, model fleet, credential binding and secret,

@@ -20,27 +20,78 @@
   let B = null;
 
   /* ================= workflows list ================= */
-  const wl = { q: '', owner: 'all' };
-  UI.route('workflows', () => {
-    const staged = D.pending.filter((c) => c.coll === 'workflows');
-    const drafts = Object.keys(D.drafts || {});
+  const wl = { q: '', owner: 'all', folder: '' };
+  const enc = encodeURIComponent;
+  const within = (x, f) => !f || x === f || x.startsWith(f + '/');
+  const wfRows = () => {
+    const staged = D.pending.filter((c) => c.coll === 'workflows'), drafts = Object.keys(D.drafts || {});
     const newOnes = [...new Set([...staged.filter((c) => c.before == null).map((c) => c.key), ...drafts.filter((n) => !D.workflows.find((w) => w.name === n))])];
-    const rows = D.workflows.map((w) => ({ w, owner: w.source.startsWith('pack') ? 'pack' : w.source === 'bot' ? 'bot' : 'config' })).concat(newOnes.map((n) => ({ w: { name: n, on: 'draft', runs24: 0, ok: 1, cost24: 0, source: 'config', fresh: true }, owner: 'config' })));
-    const vis = (r) => (wl.owner === 'all' || wl.owner === r.owner) && (!wl.q || (r.w.name + ' ' + r.w.on).toLowerCase().includes(wl.q.toLowerCase()));
+    return D.workflows.map((w) => ({ w, owner: UI.wfOwner(w), folder: UI.folderOfWf(w) })).concat(newOnes.map((n) => ({ w: { name: n, on: 'draft', runs24: 0, ok: 1, cost24: 0, source: 'config', fresh: true }, owner: 'config', folder: '' })));
+  };
+  const OWNER = { pack: (w) => `pack ${UI.packOf(w)}`, bot: () => 'bot · synthesized', config: () => 'your config' };
+  const moveOff = (r) => (r.owner === 'bot' ? `Follows ${r.w.name.slice(4)}'s folder: move the bot (or its team) to move it` : r.w.fresh ? 'Save it first' : '');
+  /** The workflows table, used by the Workflows page and by a folder's Workflows tab. */
+  UI.wfTable = (ws, opts = {}) => {
+    const staged = D.pending.filter((c) => c.coll === 'workflows');
+    const rows = Array.isArray(ws) && ws.length && ws[0].w ? ws : (ws || []).map((w) => ({ w, owner: UI.wfOwner(w), folder: UI.folderOfWf(w) }));
+    const vis = (r) => opts.folder != null || ((wl.owner === 'all' || wl.owner === r.owner) && (wl.q ? (r.w.name + ' ' + r.w.on + ' ' + r.folder).toLowerCase().includes(wl.q.toLowerCase()) : !wl.folder || (wl.folder === '__top__' ? !r.folder : within(r.folder, wl.folder))));
+    return `<div class="panel"><table class="tbl responsive wl-table"><thead><tr><th>workflow</th><th>on</th><th>folder</th><th>owner</th><th class="num">runs 24h</th><th class="num">ok</th>${UI.usageOn() ? `<th>usage by provider</th>` : ''}<th></th></tr></thead><tbody id="${opts.folder != null ? 'fwl-body' : 'wl-body'}">
+    ${rows.map((r) => { const w = r.w, d = (D.drafts || {})[w.name] != null, st2 = staged.find((c) => c.key === w.name);
+      return `<tr class="click${vis(r) ? '' : ' hidden'}" data-row="${esc(w.name + ' ' + w.on + ' ' + r.folder)}" data-owner="${r.owner}" data-folder="${esc(r.folder)}" ${moveOff(r) ? '' : `draggable="true" data-wf-drag="${esc(w.name)}"`}>
+      <td data-l="workflow"><a class="link-plain" href="#/workflows/${w.name}"><b>${w.name}</b></a> ${w.kind === 'workflow' ? tag('callable') : ''}${d ? tag('draft', 'wait') : ''}${st2 ? tag(st2.before == null ? 'new · staged' : 'edit staged', 'run') : ''}</td>
+      <td data-l="on" class="mono small">${esc(w.on || '')}</td>
+      <td data-l="folder">${r.folder ? `<a class="mono small link-plain folder-link" href="#/folders/${enc(r.folder)}/workflows">${icon('folder')}${esc(r.folder)}</a>` : '<span class="muted small">top level</span>'}</td>
+      <td data-l="owner"><span class="owner ${r.owner === 'config' ? 'op' : 'pack'}" title="${esc(OWNER[r.owner](w))}">${esc(OWNER[r.owner](w))}</span></td>
+      <td data-l="runs" class="num mono">${w.runs24}</td><td data-l="ok" class="num mono">${Math.round(w.ok * 100)}%</td>${UI.usageOn() ? `<td data-l="usage" class="small">${UI.provSet(UI.wfProv(w.name), { nosrc: true })}</td>` : ''}
+      <td class="num nowrap wl-acts"><a class="btn sm ghost" href="#/workflows/${w.name}" aria-label="Open ${w.name} in the builder" data-tip="Open in the builder">${icon('canvas')}</a><button class="btn sm ghost" ${moveOff(r) ? UI.off(moveOff(r)) : `data-act="wl-move" data-name="${esc(w.name)}"`} aria-label="Move ${w.name} to a folder" data-tip="${moveOff(r) ? esc(moveOff(r)) : 'Move to…'}">${icon('folder')}</button> ${w.fresh ? `<button class="btn sm ghost" ${UI.off('Deploy it first; a draft has never run')}>${icon('play')}</button>` : `<button class="btn sm ghost" data-act="wf-run" data-name="${w.name}" aria-label="Run ${w.name}" data-tip="Run now">${icon('play')}</button>`}
+        ${r.owner === 'config' && !w.fresh ? `<button class="btn sm ghost" data-act="wf-del" data-name="${w.name}" aria-label="Delete ${w.name}" data-tip="Delete">${icon('trash')}</button>` : r.owner === 'config' ? `<button class="btn sm ghost" data-act="wf-discard" data-name="${w.name}" aria-label="Discard draft ${w.name}" data-tip="Discard draft">${icon('trash')}</button>` : ''}</td></tr>`; }).join('')}
+    <tr class="empty-row${rows.some(vis) ? ' hidden' : ''}" id="${opts.folder != null ? 'fwl-empty' : 'wl-empty'}"><td colspan="8">No workflow matches.</td></tr></tbody></table></div>`;
+  };
+  function folderNav(rows) {
+    const fs = UI.allFolders().filter((f) => rows.some((r) => within(r.folder, f)));
+    const item = (key, label, depth, rs) => { const ws = rs.map((r) => r.w), wr = UI.wfRoll(ws); return `<a href="#" class="wfn${wl.folder === key ? ' on' : ''}" data-act="wl-folder" data-f="${esc(key)}" ${key && key !== '__top__' ? `data-wf-drop="${esc(key)}"` : key === '__top__' ? 'data-wf-drop=""' : ''} style="--d:${depth}" aria-current="${wl.folder === key}">${icon(key ? 'folder' : 'workflows')}<span class="wfn-name"><span class="ellipsis" title="${esc(key && key !== '__top__' ? key : label)}">${esc(label)}</span><span class="wfn-roll" title="${wr.runs} runs in 24h · ${wr.ok}% ok${wr.failing ? ` · ${wr.failing} failing` : ''}">${wr.runs} runs · ${wr.ok}% ok${wr.failing ? ` · <b class="danger-text">${wr.failing} failing</b>` : ''}</span></span><span class="count">${wr.n}</span></a>`; };
+    return `<div class="panel-head"><h3>Folders</h3><a class="link tiny" href="#/bots">shared with bots</a></div><div class="wfn-list">${item('', 'All workflows', 0, rows)}${fs.map((f) => item(f, f.split('/').pop(), f.split('/').length, rows.filter((r) => within(r.folder, f)))).join('')}${rows.some((r) => !r.folder) ? item('__top__', 'Top level', 1, rows.filter((r) => !r.folder)) : ''}</div><div class="panel-foot tiny muted">Drag a workflow onto a folder, or use Move to…. Pack workflows sit under their pack until you place them.</div>`;
+  }
+  UI.route('workflows', () => {
+    const rows = wfRows();
+    if (wl.folder && wl.folder !== '__top__' && !UI.allFolders().includes(wl.folder)) wl.folder = '';
+    const crumbs = wl.folder && wl.folder !== '__top__' ? `<div class="crumbs wl-crumbs"><a href="#" data-act="wl-folder" data-f="">All workflows</a>${wl.folder.split('/').map((seg, i, a) => ` › <a href="#" data-act="wl-folder" data-f="${esc(a.slice(0, i + 1).join('/'))}">${esc(seg)}</a>`).join('')} <a class="link tiny" href="#/folders/${enc(wl.folder)}/workflows" style="margin-left:8px">open the folder</a></div>` : '';
     return `<div class="page">
     ${UI.head('Workflows', { sub: 'triggers and the steps they run', actions: `<button class="btn primary" data-act="wf-new">${icon('plus')}New workflow</button>` })}
-    <div class="filters"><div class="input-icon">${icon('search')}<input class="input" placeholder="name or event" value="${esc(wl.q)}" data-on-input="wl-q" aria-label="Filter workflows"></div>${UI.seg([['all', 'all'], ['config', 'yours'], ['pack', 'packs'], ['bot', 'bots']], wl.owner, 'wl-owner')}<span class="count-note" id="wl-count">${rows.filter(vis).length} of ${rows.length}</span></div>
-    <div class="panel"><table class="tbl responsive"><thead><tr><th>workflow</th><th>on</th><th>owner</th><th class="num">runs 24h</th><th class="num">ok</th>${UI.usageOn() ? `<th>usage by provider</th>` : ''}<th></th></tr></thead><tbody id="wl-body">
-    ${rows.map((r) => { const w = r.w, d = (D.drafts || {})[w.name] != null, s = staged.find((c) => c.key === w.name); return `<tr class="click${vis(r) ? '' : ' hidden'}" data-row="${esc(w.name + ' ' + w.on)}" data-owner="${r.owner}"><td data-l="workflow"><a class="link-plain" href="#/workflows/${w.name}"><b>${w.name}</b></a> ${w.kind === 'workflow' ? tag('reusable') : ''}${d ? tag('draft', 'wait') : ''}${s ? tag(s.after == null ? 'removal staged' : 'staged', 'run') : ''}</td><td data-l="on" class="mono small">${esc(w.on)}</td>
-      <td data-l="owner">${r.owner === 'pack' ? `<span class="owner pack">${w.source}</span>` : r.owner === 'bot' ? '<span class="owner pack">bot (synthesized)</span>' : '<span class="owner op">your config</span>'}</td>
-      <td data-l="runs" class="num mono">${w.runs24}</td><td data-l="ok" class="num mono">${Math.round(w.ok * 100)}%</td>${UI.usageOn() ? `<td data-l="usage" class="small">${UI.provSet(UI.wfProv(w.name), { nosrc: true })}</td>` : ''}
-      <td class="num nowrap"><a class="btn sm" href="#/workflows/${w.name}">${icon('canvas')}Open</a> ${w.fresh ? `<button class="btn sm ghost" ${UI.off('Deploy it first; a draft has never run')}>${icon('play')}</button>` : `<button class="btn sm ghost" data-act="wf-run" data-name="${w.name}" aria-label="Run ${w.name}" data-tip="Run now">${icon('play')}</button>`}
-        ${r.owner === 'config' && !w.fresh ? `<button class="btn sm ghost" data-act="wf-del" data-name="${w.name}" aria-label="Delete ${w.name}" data-tip="Delete">${icon('trash')}</button>` : r.owner === 'config' ? `<button class="btn sm ghost" data-act="wf-discard" data-name="${w.name}" aria-label="Discard draft ${w.name}" data-tip="Discard draft">${icon('trash')}</button>` : `<button class="btn sm ghost" ${UI.off(r.owner === 'pack' ? 'A pack workflow is removed by removing (or not arming) its pack' : 'Synthesized from the bot definition')}>${icon('trash')}</button>`}</td></tr>`; }).join('')}
-    <tr class="empty-row hidden" id="wl-empty"><td colspan="7">No workflow matches.</td></tr></tbody></table></div></div>`;
+    <div class="wl-layout"><aside class="panel wl-folders">${folderNav(rows)}</aside><div class="wl-main">
+    ${crumbs}
+    <div class="filters"><div class="input-icon">${icon('search')}<input class="input" placeholder="name, event or folder" value="${esc(wl.q)}" data-on-input="wl-q" aria-label="Filter workflows"></div>${UI.seg([['all', 'all'], ['config', 'yours'], ['pack', 'packs'], ['bot', 'bots']], wl.owner, 'wl-owner')}
+      <label class="chip-select wl-fsel${wl.folder ? ' on' : ''}">${icon('folder')}<select data-on-change="wl-folder-sel" aria-label="Folder"><option value="">all folders</option>${UI.allFolders().filter((f) => rows.some((r) => within(r.folder, f))).map((f) => `<option value="${esc(f)}"${f === wl.folder ? ' selected' : ''}>${esc(f)}</option>`).join('')}</select></label>
+      <span class="count-note small muted" id="wl-note">${wl.q && wl.folder ? 'searching every folder' : ''}</span></div>
+    ${UI.wfTable(rows)}</div></div></div>`;
   });
-  const wlFilter = () => { let n = 0; UI.$$('#wl-body tr[data-row]').forEach((tr) => { const ok = (wl.owner === 'all' || tr.dataset.owner === wl.owner) && (!wl.q || tr.dataset.row.toLowerCase().includes(wl.q.toLowerCase())); tr.classList.toggle('hidden', !ok); if (ok) n++; }); UI.$('#wl-empty').classList.toggle('hidden', n > 0); UI.$('#wl-count').textContent = `${n} of ${UI.$$('#wl-body tr[data-row]').length}`; };
+  const wlFilter = () => { let n = 0; UI.$$('#wl-body tr[data-row]').forEach((tr) => { const f = tr.dataset.folder; const ok = (wl.owner === 'all' || tr.dataset.owner === wl.owner) && (wl.q ? tr.dataset.row.toLowerCase().includes(wl.q.toLowerCase()) : !wl.folder || (wl.folder === '__top__' ? !f : within(f, wl.folder))); tr.classList.toggle('hidden', !ok); if (ok) n++; }); const e = UI.$('#wl-empty'); if (e) e.classList.toggle('hidden', n > 0); const note = UI.$('#wl-note'); if (note) note.textContent = wl.q && wl.folder ? 'searching every folder' : ''; };
   UI.act('wl-q', (el) => { wl.q = el.value; wlFilter(); });
   UI.act('wl-owner', (b) => { wl.owner = b.dataset.v; UI.$$('[data-act="wl-owner"]').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); wlFilter(); });
+  UI.act('wl-folder', (a) => { wl.folder = a.dataset.f; UI.rerender(); });
+  UI.act('wl-folder-sel', (s2) => { wl.folder = s2.value; UI.rerender(); });
+  /** Move a workflow: your config gets folder:; a pack workflow is placed by your pack override; a bot's follows the bot. */
+  UI.moveWorkflow = (name, folder) => {
+    const w = S.view().workflows.find((x) => x.name === name), o = UI.wfOwner(w); let ch;
+    if (o === 'bot') return;
+    if (o === 'pack') { const inst = UI.packOf(w), c = JSON.parse(JSON.stringify(S.staged('packs', inst))); c.folders = Object.assign({}, c.folders); if (folder === `packs/${inst}`) delete c.folders[name]; else c.folders[name] = folder; if (!Object.keys(c.folders).length) delete c.folders; ch = S.stage('packs', inst, c, `move pack workflow ${name} → ${folder || 'top level'} (packs.${inst}.folders)`); }
+    else { const y = S.staged('workflows', name) || w.yaml || ''; const line = `folder: "${folder}"`; const ny = /^folder:.*$/m.test(y) ? (folder ? y.replace(/^folder:.*$/m, line) : y.replace(/^folder:.*\n/m, '')) : folder ? y.replace(/^(name: .*\n)/m, `$1${line}\n`) : y; ch = S.stage('workflows', name, ny, `move workflow ${name} → ${folder || 'top level'}`); }
+    D.folderDrafts = (D.folderDrafts || []).filter((f) => !within(folder || '\u0000', f));
+    S.save(); UI.refreshChrome(); UI.rerender();
+    UI.toast(ch ? `Move staged: ${esc(name)} → ${esc(folder || 'top level')}` : 'Already there', ch ? 'folders live in config: review and apply it with the other staged changes' : '', ch ? 'run' : 'idle');
+  };
+  UI.act('wl-move', (b) => {
+    const name = b.dataset.name, w = S.view().workflows.find((x) => x.name === name), cur = UI.folderOfWf(w), o = UI.wfOwner(w);
+    UI.form({ caps: o === 'pack' ? `packs.${UI.packOf(w)}.folders.${name}` : `triggers[name=${name}].folder`, title: `Move ${name}`, values: { to: cur },
+      fields: [{ k: 'to', type: 'enum', label: 'Folder', options: [['', 'top level']].concat([...new Set(UI.allFolders().concat(o === 'pack' ? [`packs/${UI.packOf(w)}`] : []))].sort().map((f) => [f, f])), create: 'folder', createLabel: 'New folder', createCtx: { parent: cur } }],
+      note: o === 'pack' ? `A pack can't choose its own folder: its workflows sit under <span class="mono">packs/${esc(UI.packOf(w))}</span> until you place them. This is your pack override, so it goes through the diff.` : 'Folders live in config, so the move is staged for the diff. It changes nothing else: folders carry no behavior.',
+      submit: 'Stage move', submitIcon: 'folder', onSubmit: (v) => UI.moveWorkflow(name, v.to || '') });
+  });
+  // drag a row onto a folder in the tree (mouse; touch uses Move to…)
+  document.addEventListener('dragstart', (e) => { const tr = e.target.closest && e.target.closest('[data-wf-drag]'); if (!tr) return; e.dataTransfer.setData('text/wf', tr.dataset.wfDrag); e.dataTransfer.effectAllowed = 'move'; tr.classList.add('dragging'); });
+  document.addEventListener('dragend', (e) => { const tr = e.target.closest && e.target.closest('[data-wf-drag]'); if (tr) tr.classList.remove('dragging'); UI.$$('.wfn.drop-on').forEach((x) => x.classList.remove('drop-on')); });
+  document.addEventListener('dragover', (e) => { const t = e.target.closest && e.target.closest('[data-wf-drop]'); if (!t || ![...(e.dataTransfer.types || [])].includes('text/wf')) return; e.preventDefault(); UI.$$('.wfn.drop-on').forEach((x) => x !== t && x.classList.remove('drop-on')); t.classList.add('drop-on'); });
+  document.addEventListener('drop', (e) => { const t = e.target.closest && e.target.closest('[data-wf-drop]'); const name = e.dataTransfer && e.dataTransfer.getData('text/wf'); if (!t || !name) return; e.preventDefault(); UI.moveWorkflow(name, t.dataset.wfDrop); });
   UI.act('wf-new', () => UI.form({ caps: 'new workflow', title: 'Name your workflow', fields: [{ k: 'name', label: 'Name', type: 'string', req: true, ph: 'e.g. release-notify', pattern: /^[a-z][a-z0-9-]*$/, patternMsg: 'Lowercase letters, digits and dashes.', validate: (v) => (D.workflows.find((w) => w.name === v) || (D.drafts || {})[v] != null ? 'A workflow by that name exists.' : '') }, { k: 'kind', label: 'Kind', type: 'seg', options: [['trigger', 'Triggered (on: an event)'], ['workflow', 'Reusable (call: it)']], def: 'trigger' }], submit: 'Create', onSubmit: (v) => { D.drafts = D.drafts || {}; D.drafts[v.name] = v.kind === 'workflow' ? `name: ${v.name}\ninputs:\n  repo: { type: string, required: true }\nsteps: []\n` : `name: ${v.name}\nsteps: []\n`; S.save(); UI.go('#/workflows/' + v.name); } }));
   UI.act('wf-run', (b) => {
     const w = D.workflows.find((x) => x.name === b.dataset.name); let ins = {};

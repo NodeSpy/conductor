@@ -193,3 +193,36 @@ pre.raw { margin: 10px 16px 16px; padding: 12px; background: var(--bg-1); border
 .anno { padding: 8px 10px; border-left: 3px solid var(--line-3); background: var(--bg-1); border-radius: var(--r-sm); margin-top: 6px; font-size: 12.5px; }
 .anno.flag { border-left-color: var(--fail); }
 @media (max-width: 720px) { .rb-step { grid-template-columns: 24px minmax(0, 1fr); } .rb-ctl { grid-column: 2; } .rb-act .input { min-width: 0; } }
+
+/* ---------- workflows in folders ---------- */
+.wl-layout { display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 14px; align-items: start; }
+.wl-folders { position: sticky; top: 12px; }
+.wfn-list { display: flex; flex-direction: column; padding: 6px; }
+.wfn { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 6px 8px 6px calc(8px + var(--d, 0) * 12px); border-radius: var(--r-sm); color: var(--ink-2); text-decoration: none; border: 1px solid transparent; }
+.wfn svg { width: 14px; height: 14px; flex: none; color: var(--ink-3); }
+.wfn:hover { background: var(--bg-3); color: var(--ink); }
+.wfn.on { background: var(--accent-wash); color: var(--ink); box-shadow: inset 2px 0 0 var(--accent); }
+.wfn.on svg { color: var(--accent); }
+.wfn.drop-on { border-color: var(--accent); border-style: dashed; background: var(--accent-wash); }
+.wfn-name { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.wfn-name > .ellipsis { font-weight: 500; font-size: 13px; }
+.wfn-roll { font: 10.5px/1.4 var(--font-mono); color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wfn .count { font: 500 10.5px/1 var(--font-mono); color: var(--ink-3); padding: 3px 6px; border-radius: 999px; background: var(--bg-1); border: 1px solid var(--line); }
+.wl-crumbs { margin: 0 0 8px; font-family: var(--font-mono); font-size: 11.5px; }
+.folder-link { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.folder-link svg { width: 12px; height: 12px; color: var(--ink-3); }
+tr.dragging { opacity: .45; }
+.wl-table [data-wf-drag] td:first-child { cursor: grab; }
+/* badges in a table column share one width, whatever they say */
+.owner { display: inline-block; box-sizing: border-box; min-width: 116px; max-width: 150px; text-align: center; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+td > .owner { width: auto; }
+.folder-stats { margin-top: 2px; }
+@media (max-width: 1180px) { .wl-layout { grid-template-columns: minmax(0, 1fr); } .wl-folders { display: none; } }
+@media (max-width: 720px) { .owner { min-width: 0; } }
+@media (min-width: 1181px) { .wl-fsel { display: none !important; } }
+.wl-main { min-width: 0; }
+.wl-main > .panel, .folder-wl > .panel { overflow-x: auto; }
+.wl-table td[data-l="workflow"] b, .wl-table td[data-l="workflow"] a { white-space: nowrap; }
+.wl-table td[data-l="on"] { max-width: 190px; } .wl-table th, .wl-table td { padding-left: 10px; padding-right: 10px; }
+.wl-acts { white-space: nowrap; }
+.wl-acts .btn { padding-left: 7px; padding-right: 7px; }

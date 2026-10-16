@@ -97,3 +97,67 @@ test('folder filters: Needs you, approvals, run history, browsers', async ({ pag
   await page.locator('[data-act="folder-clear"]').first().click();
   await expect(page.locator('.btile')).toHaveCount(3);
 });
+
+/* ---- one shared folder tree: bots, teams and workflows ---- */
+const wlRow = (page, name) => page.locator(`#wl-body tr[data-row^="${name} "]`);
+test('workflows in folders: move one through the diff; folder filters and search across folders', async ({ page }) => {
+  await go(page, '#/workflows', { fresh: true });
+  await expect(wlRow(page, 'ci-fixer').locator('td[data-l="folder"]')).toContainText('work/platform');
+  if (!isPhone(page)) {
+    await page.locator('.wfn[data-f="work/platform"]').click();
+    await expect(wlRow(page, 'ci-fixer')).toBeVisible();
+    await expect(wlRow(page, 'dep-bump')).toBeHidden();
+    await expect(page.locator('.wl-crumbs')).toContainText('platform');
+    // ownership is orthogonal to folders
+    await page.locator('[data-act="wl-owner"][data-v="pack"]').click();
+    await expect(page.locator('#wl-empty')).toBeVisible();
+    await page.locator('[data-act="wl-owner"][data-v="all"]').click();
+    // search spans every folder
+    await page.fill('[data-on-input="wl-q"]', 'dep-bump');
+    await expect(wlRow(page, 'dep-bump')).toBeVisible();
+    await expect(page.locator('#wl-note')).toContainText('every folder');
+    await page.fill('[data-on-input="wl-q"]', '');
+  }
+  await page.locator('[data-act="wl-move"][data-name="ci-fixer"]').click();
+  await page.selectOption('#f-to', 'work/web');
+  await page.locator('#gen-submit').click();
+  await page.goto(page.url().replace(/#.*/, '#/config/apply'));
+  await expect(page.locator('.diff')).toContainText('folder: "work/web"');
+  await applyStaged(page);
+  await go(page, '#/workflows');
+  await expect(wlRow(page, 'ci-fixer').locator('td[data-l="folder"]')).toContainText('work/web');
+});
+
+test('a pack workflow sits under its pack until placed by an override; a bot workflow follows its bot', async ({ page }) => {
+  await go(page, '#/workflows', { fresh: true });
+  await expect(wlRow(page, 'pr-review').locator('td[data-l="folder"]')).toContainText('packs/review');
+  await expect(wlRow(page, 'bot:platform-sre').locator('td[data-l="folder"]')).toContainText('work/platform');
+  await expect(wlRow(page, 'bot:platform-sre').locator('button[aria-label^="Move"]')).toHaveAttribute('data-reason', /move the bot/);
+  await page.locator('[data-act="wl-move"][data-name="pr-review"]').click();
+  await expect(page.locator('.modal')).toContainText("A pack can't choose its own folder");
+  await page.selectOption('#f-to', 'work/platform');
+  await page.locator('#gen-submit').click();
+  await page.goto(page.url().replace(/#.*/, '#/config/apply'));
+  await expect(page.locator('.diff')).toContainText('folders:');
+  await expect(page.locator('.diff')).toContainText('pr-review: work/platform');
+  await applyStaged(page);
+  // the bot's synthesized workflow follows when its team moves
+  await go(page, '#/teams/platform');
+  await page.evaluate(() => { const c = JSON.parse(JSON.stringify(S.staged('teams', 'platform'))); c.folder = 'work/sre'; S.stage('teams', 'platform', c); });
+  await go(page, '#/workflows');
+  await expect(wlRow(page, 'bot:platform-sre').locator('td[data-l="folder"]')).toContainText('work/sre');
+  await expect(wlRow(page, 'pr-review').locator('td[data-l="folder"]')).toContainText('work/platform');
+});
+
+test('a folder shows everything in it: bots, teams and workflows, roll-ups and what needs you there', async ({ page }) => {
+  await go(page, '#/folders/work%2Fplatform', { fresh: true });
+  await expect(page.locator('.folder-stats')).toContainText('Workflows');
+  await expect(page.locator('.panel', { hasText: 'Needs you here' })).toContainText('terraform');
+  await expect(page.locator('.tabs')).toContainText('Bots');
+  await expect(page.locator('#ftree, .drill').first()).toContainText('platform-sre');
+  await page.locator('.tabs a', { hasText: 'Workflows' }).click();
+  await expect(page.locator('#fwl-body')).toContainText('ci-fixer');
+  await expect(page.locator('#fwl-body')).toContainText('bot:platform-sre');
+  await page.locator('.tabs a', { hasText: 'Teams' }).click();
+  await expect(page.locator('.page')).toContainText('platform');
+});

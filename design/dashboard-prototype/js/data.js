@@ -779,3 +779,13 @@ steps:
     { scope: 'workflow:ci-fixer', name: 'NODE_OPTIONS', value: '--max-old-space-size=4096', plain: true },
   ];
 })();
+
+/* Folders are one shared organization: the same folder: path places bots,
+ * teams and workflows. Your workflows carry folder: in config; pack workflows
+ * sit under packs/<instance>/ unless you place them (packs.<i>.folders); a
+ * bot's synthesized workflow follows its bot or team. */
+(function () {
+  const D = window.D;
+  const put = (name, folder) => { const w = D.workflows.find((x) => x.name === name); if (w && w.yaml && !/^folder:/m.test(w.yaml)) w.yaml = w.yaml.replace(/^(name: .*\n)/m, `$1folder: "${folder}"\n`); };
+  put('ci-fixer', 'work/platform'); put('incident-intake', 'work/platform'); put('assess-and-post', 'work/platform'); put('issue-triage', 'work/web'); put('alert', 'personal/home');
+})();
