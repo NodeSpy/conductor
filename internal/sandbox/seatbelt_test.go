@@ -108,3 +108,25 @@ func TestSeatbeltBrowserProfile(t *testing.T) {
 		t.Fatal("an agent profile issues no extensions")
 	}
 }
+
+// TestSeatbeltBrowserMetadata: the browser profile reads metadata only
+// along its own paths — never a global allow, never a sibling or the home.
+func TestSeatbeltBrowserMetadata(t *testing.T) {
+	p := seatbeltAgentProfile([]BindMount{{Path: "/private/tmp/cbr1/run"}, {Path: "/Applications/Google Chrome.app", RO: true}}, &AgentProfile{Browser: true, Home: "/Users/op"}, AgentNet{ProxyPort: 1})
+	if strings.Contains(p, "(allow file-read-metadata)\n") {
+		t.Fatal("the browser profile allows metadata everywhere")
+	}
+	for _, want := range []string{`(literal "/")`, `(literal "/private/tmp/cbr1")`, `(literal "/Applications")`, `(literal "/var")`} {
+		if !strings.Contains(p, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	i := strings.Index(p, "(allow file-read-metadata\n")
+	block := p[i : i+strings.Index(p[i:], ")\n")]
+	if strings.Contains(block, "/Users") || strings.Contains(block, "subpath") {
+		t.Fatalf("metadata beyond the components of the allowed paths:\n%s", block)
+	}
+	if !strings.Contains(seatbeltAgentProfile(nil, &AgentProfile{}, AgentNet{}), "(allow file-read-metadata)\n") {
+		t.Fatal("an agent profile keeps its metadata (path resolution for any tool)")
+	}
+}

@@ -678,7 +678,7 @@ func browserTakeover(flags map[string]any, req controlRequest, passkey bool) err
 			return err
 		}
 	}
-	dir, err := os.MkdirTemp("", "cbk")
+	dir, err := browser.RunDir(os.TempDir(), "takeover")
 	if err != nil {
 		return err
 	}

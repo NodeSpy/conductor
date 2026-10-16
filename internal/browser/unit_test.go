@@ -642,3 +642,17 @@ func TestEvaluatePerIdentity(t *testing.T) {
 		t.Fatal("nothing opted in, nothing evaluates")
 	}
 }
+
+func TestRunDirNeverUnderTheHome(t *testing.T) {
+	d, err := runDir(t.TempDir(), "b1", "linux")
+	if err != nil || !strings.Contains(d, string(filepath.Separator)+"run"+string(filepath.Separator)+"b1-") {
+		t.Fatalf("linux: %s %v", d, err)
+	}
+	if _, err := os.Stat("/private/tmp"); err == nil {
+		d, err = runDir("/Users/op/.local/state/conductor/browser", "b1", "darwin")
+		defer os.RemoveAll(d)
+		if err != nil || !strings.HasPrefix(d, "/private/tmp/cbr-b1-") {
+			t.Fatalf("darwin: %s %v", d, err)
+		}
+	}
+}

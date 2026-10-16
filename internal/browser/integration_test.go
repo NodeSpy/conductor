@@ -469,6 +469,25 @@ func TestBrowserSeesNothingOfTheHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if runtime.GOOS == "darwin" {
+		// No directory listing outside the browser's own paths: not the
+		// workspace, not /Users (macOS counts a listing as metadata, which
+		// the browser's profile allows only along its own paths).
+		for _, p := range []string{r.ws, "/Users", filepath.Dir(r.ws)} {
+			if err := in.navigate(ctx, tb, "file://"+p); err == nil {
+				v, _ := in.eval(ctx, tb, "document.body ? document.body.innerText : ''")
+				t.Fatalf("the browser listed %s: %.300s", p, v)
+			}
+		}
+		// An ancestor of its own directory (it may stat that one): logged,
+		// to show what a literal component allows.
+		if err := in.navigate(ctx, tb, "file:///private/tmp"); err == nil {
+			v, _ := in.eval(ctx, tb, "document.body ? document.body.innerText.slice(0, 200) : ''")
+			t.Logf("listing /private/tmp: %s", v)
+		} else {
+			t.Logf("listing /private/tmp: %v", err)
+		}
+	}
 	for _, p := range []string{filepath.Join(decoy, "Cookies"), r.ws, "/etc/hostname"} {
 		if _, err := os.Stat(p); err != nil {
 			continue
@@ -478,14 +497,7 @@ func TestBrowserSeesNothingOfTheHost(t *testing.T) {
 			// The base system is read-only visible, like every sandbox's.
 			continue
 		}
-		if p == r.ws && runtime.GOOS == "darwin" {
-			// Seatbelt counts a directory's listing as metadata, which every
-			// sandboxed process may read (path resolution needs it): names,
-			// never contents — the decoy above stays unread. (No agent or
-			// page can navigate here: conductor refuses file:, and Chrome
-			// refuses it from a web page.)
-			continue
-		}
+
 		if err == nil {
 			v, _ := in.eval(ctx, tb, "document.body ? document.body.innerText : ''")
 			if strings.Contains(string(v), "DECOY") || p == r.ws {

@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -134,7 +135,15 @@ type AgentNet struct {
 // seatbeltAgentProfile renders the agent profile.
 func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string {
 	var b strings.Builder
-	b.WriteString(seatbeltAgentBase)
+	if a.Browser {
+		// The browser reads no metadata outside what it may read: no
+		// directory listing (Seatbelt counts one as metadata) anywhere but
+		// its own paths, the system's, and the components leading to them.
+		b.WriteString(strings.Replace(seatbeltAgentBase, "(allow file-read-metadata)\n", "", 1))
+		b.WriteString(browserMetadata(binds))
+	} else {
+		b.WriteString(seatbeltAgentBase)
+	}
 	mach := append([]string(nil), agentMachBase...)
 	if n.Open {
 		mach = append(mach, agentMachNet...)
@@ -263,4 +272,35 @@ func socketPaths(ps []string) []string {
 		}
 	}
 	return out
+}
+
+// browserMetadata is the metadata a browser profile reads beyond its
+// file-read* paths: the root, the firmlinked top-level symlinks, and each
+// component leading to an allowed path (its realpath) — literally, so the
+// component itself, never what else is in it.
+func browserMetadata(binds []BindMount) string {
+	seen := map[string]bool{}
+	var lits []string
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			lits = append(lits, p)
+		}
+	}
+	for _, p := range []string{"/", "/var", "/tmp", "/etc", "/private", "/private/var", "/private/tmp", "/private/etc"} {
+		add(p)
+	}
+	all := append(append([]BindMount(nil), binds...), resolveBinds(binds)...)
+	for _, m := range all {
+		for d := filepath.Dir(filepath.Clean(m.Path)); d != "/" && d != "." && d != ""; d = filepath.Dir(d) {
+			add(d)
+		}
+	}
+	var b strings.Builder
+	b.WriteString("(allow file-read-metadata")
+	for _, p := range lits {
+		b.WriteString("\n  (literal " + sbplString(p) + ")")
+	}
+	b.WriteString(")\n")
+	return b.String()
 }

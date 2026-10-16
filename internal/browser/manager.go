@@ -29,6 +29,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -440,11 +441,7 @@ func (m *Manager) instance(ctx context.Context, s *session, c Principal, st Sett
 	if err != nil {
 		return nil, err
 	}
-	runDir := filepath.Join(m.StateDir, "run")
-	if err := os.MkdirAll(runDir, 0o700); err != nil {
-		return nil, err
-	}
-	dir, err := os.MkdirTemp(runDir, s.id+"-")
+	dir, err := RunDir(m.StateDir, s.id)
 	if err != nil {
 		return nil, err
 	}
@@ -1170,3 +1167,23 @@ func refuseSecretFile(path string, secrets []string) error {
 
 // LoginAllow is the allowlist of a browser logged in to sites.
 func LoginAllow(st Settings, sites []string) []string { return loginAllow(st.Allow, sites, st) }
+
+// RunDir makes a browser's private directory (its profile, transfer dir,
+// HOME). On Linux it lives in conductor's state; on macOS in a fresh 0700
+// directory of /private/tmp, so that no component leading to it — each of
+// which the browser's Seatbelt profile must let it stat — is the
+// operator's home.
+func RunDir(stateDir, prefix string) (string, error) {
+	return runDir(stateDir, prefix, runtime.GOOS)
+}
+
+func runDir(stateDir, prefix, goos string) (string, error) {
+	if goos == "darwin" {
+		return os.MkdirTemp("/private/tmp", "cbr-"+prefix+"-")
+	}
+	root := filepath.Join(stateDir, "run")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(root, prefix+"-")
+}
