@@ -771,14 +771,14 @@ func (c *Config) expandBots() error {
 		handoff.Model = ModelSpec{}
 		enabled := true
 		c.Triggers = append(c.Triggers,
-			TriggerSpec{On: ManualSource, Name: BotWorkerTrigger(name), Enabled: &enabled, Steps: []Step{worker}},
-			TriggerSpec{On: ManualSource, Name: BotHandoffTrigger(name), Enabled: &enabled, Steps: []Step{handoff}},
+			TriggerSpec{On: ManualSource, Name: BotWorkerTrigger(name), Enabled: &enabled, Steps: []Step{worker}, Bot: name},
+			TriggerSpec{On: ManualSource, Name: BotHandoffTrigger(name), Enabled: &enabled, Steps: []Step{handoff}, Bot: name},
 		)
 		if p := m.Proactive; p != nil {
 			sweep := worker
 			sweep.Name = BotSweepTrigger(name)
 			sweep.WaitTimeout = Duration(p.TimeoutD())
-			ts := TriggerSpec{On: ManualSource, Name: BotSweepTrigger(name), Enabled: &enabled, Steps: []Step{sweep}}
+			ts := TriggerSpec{On: ManualSource, Name: BotSweepTrigger(name), Enabled: &enabled, Steps: []Step{sweep}, Bot: name}
 			// Tokens and dollars also bound a sweep while it runs (the
 			// workflow budget sheds its next agent dispatch); runs and turns
 			// are checked before each sweep starts.

@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -17,6 +16,10 @@ import (
 // `conductor replay`). The daemon picks a review up without a restart (the
 // registry reloads on file change).
 func cmdWorkflows(args []string) error {
+	args, folder, flat, err := takeFolderFlags(args)
+	if err != nil {
+		return err
+	}
 	cfg, _, err := loadConfig(args)
 	if err != nil {
 		return err
@@ -27,16 +30,14 @@ func cmdWorkflows(args []string) error {
 	}
 	rest := positional(args)
 	if len(rest) == 0 || rest[0] == "ls" {
-		names := make([]string, 0, len(cfg.Workflows))
-		for n := range cfg.Workflows {
-			names = append(names, n)
+		// Config workflows and triggers, as a folder tree (--folder keeps
+		// one folder and below; --flat one line each).
+		fmt.Println("config workflows and triggers:")
+		for _, l := range strings.Split(strings.TrimRight(folderTreeText(workflowEntries(cfg), folder, flat), "\n"), "\n") {
+			fmt.Println("  " + l)
 		}
-		if len(names) > 0 {
-			sort.Strings(names)
-			fmt.Println("config workflows:")
-			for _, n := range names {
-				fmt.Printf("  %-24s %s\n", n, cfg.Workflows[n].Description)
-			}
+		if folder != "" {
+			return nil // saved workflows are not filed in folders
 		}
 		saved := st.All()
 		if len(saved) == 0 {

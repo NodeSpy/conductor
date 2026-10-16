@@ -503,6 +503,11 @@ type WorkflowDef struct {
 	// Gate is the default quality gate (#36 §16) for this workflow's agent
 	// steps (a step's own gate wins).
 	Gate *GateSpec `yaml:"gate,omitempty"`
+	// Folder files the workflow for display only (folders.go): no behavior.
+	// A pack's workflow cannot set it; the operator does, in packs:.
+	Folder string `yaml:"folder,omitempty"`
+	// PackInstance is the pack instance a workflow came from (display).
+	PackInstance string `yaml:"-"`
 }
 
 // InputSpec declares one workflow input.
@@ -693,6 +698,14 @@ type TriggerSpec struct {
 	Repo string `yaml:"repo,omitempty"`
 	// Shadow previews this trigger's work without dispatching.
 	Shadow *bool `yaml:"shadow,omitempty"`
+	// Folder files the trigger for display only (folders.go): no behavior,
+	// and not part of an instance's identity. A pack's trigger cannot set
+	// it; the operator does, in packs:.
+	Folder string `yaml:"folder,omitempty"`
+	// PackInstance / Bot: where a trigger came from — a pack instance, or a
+	// bot's synthesized workers (display).
+	PackInstance string `yaml:"-"`
+	Bot          string `yaml:"-"`
 	// Gate is the default quality gate (#36 §16) for every agent step of
 	// this trigger that doesn't carry its own.
 	Gate *GateSpec `yaml:"gate,omitempty"`

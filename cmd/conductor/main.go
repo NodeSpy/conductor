@@ -144,6 +144,8 @@ func main() {
 		err = cmdSecret(args)
 	case "bot", "bots":
 		err = cmdBot(args)
+	case "folders":
+		err = cmdFolders(args)
 	case "workflows":
 		err = cmdWorkflows(args)
 	case "init":
@@ -189,6 +191,7 @@ usage:
   conductor force <kind> <owner/repo>#<n>  force an action for a target now (via the running daemon)
   conductor status [--config PATH]      snapshot: live agents, in-flight workflows, stuck/attention
   conductor report [--days N]           activity summary: dispatches by kind/outcome + attention + usage (per usage.mode)
+  conductor folders ls [path] [--flat]  everything filed in a folder: teams, bots, workflows, triggers (display only)
   conductor usage [--since 24h]         model usage per runtime/model: what conductor observed, and what usage.sources report
   conductor runs [<id>] [--limit N]     recorded executions: list, or one run's step detail
   conductor runs retry <id> [--from <step>] [--force-replay]  re-run a recorded execution (recorded inputs pinned)
@@ -210,7 +213,7 @@ usage:
   conductor mcp memory --socket <path>  stdio MCP server: memory + skill broker (agent-facing)
   conductor bot <cmd> …             bots: ls/show/cases/proposals/approve/deny/rotate/say/deliver (conductor bot help)
   conductor mcp callable --token <name> [--config PATH]  stdio MCP server: invoke callable workflows (external MCP clients)
-  conductor workflows ls|review|rm      manage saved (agent-promoted) workflows
+  conductor workflows ls [--folder p] [--flat]   config workflows + triggers as a folder tree; saved workflows (review|rm)
   conductor init [--config PATH] [--allow-unlisted]  fetch the packs: block, write the lockfile, preview
   conductor pack list|plan              list configured packs; preview what they add
   conductor pack add <source>           fetch a pack, show its install review + a ready-to-paste block

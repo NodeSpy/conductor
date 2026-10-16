@@ -34,7 +34,8 @@ conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
 conductor unlock                           seed the default vault key for non-interactive restarts
 conductor config migrate                   removed with the legacy config schema — run it on the release before the plugin contract, then upgrade
 conductor mcp memory --socket <path>       stdio MCP server for the live agent tools (memory + run_step; launched by runtimes, not by hand)
-conductor workflows [ls]                   config + saved (agent-promoted) workflows with review state and health
+conductor workflows [ls] [--folder p] [--flat]  config workflows and triggers as a folder tree, then saved (agent-promoted) workflows with review state and health
+conductor folders ls [path] [--flat]       everything filed in a folder — teams, bots, workflows, triggers (display only)
 conductor workflows review <name>          print the workflow's provenance + FULL steps, then clear it for reuse (dry-run it first; runs stay policy-guarded)
 conductor workflows rm <name>              remove a saved workflow
 conductor bot ls [--folder <p>] [--flat]  bots as a tree: folder, team, bot (operator)

@@ -92,3 +92,56 @@ func (c *Config) FolderWarnings() []string {
 	}
 	return out
 }
+
+// PackFolderRoot is the virtual folder a pack instance's workflows and
+// triggers are shown under when the operator filed them nowhere.
+const PackFolderRoot = "packs"
+
+// TriggerFolder is where a trigger is LISTED: its own folder (an operator
+// trigger's, or the one the operator set for a pack's), else its bot's (a
+// bot's synthesized workers), else its pack instance's (packs/<instance>),
+// else the root. Display only.
+func (c *Config) TriggerFolder(t TriggerSpec) string {
+	if f, _ := NormFolder(t.Folder); f != "" {
+		return f
+	}
+	if t.Bot != "" {
+		return c.BotFolder(t.Bot)
+	}
+	if t.PackInstance != "" {
+		return PackFolderRoot + "/" + t.PackInstance
+	}
+	return ""
+}
+
+// WorkflowFolder is where a named workflow is listed, by the same rule.
+func (c *Config) WorkflowFolder(name string) string {
+	w := c.Workflows[name]
+	if f, _ := NormFolder(w.Folder); f != "" {
+		return f
+	}
+	if w.PackInstance != "" {
+		return PackFolderRoot + "/" + w.PackInstance
+	}
+	return ""
+}
+
+// validateEntityFolders checks every workflow's and trigger's folder (and
+// the folders packs: entries set), with the bots' and teams' rule.
+func (c *Config) validateEntityFolders() error {
+	for _, name := range sortedWorkflowKeys(c.Workflows) {
+		if _, err := NormFolder(c.Workflows[name].Folder); err != nil {
+			return fmt.Errorf("config: workflows.%s: folder: %w", name, err)
+		}
+	}
+	for i, t := range c.Triggers {
+		if _, err := NormFolder(t.Folder); err != nil {
+			label := t.Name
+			if label == "" {
+				label = fmt.Sprintf("#%d (%s)", i+1, t.On)
+			}
+			return fmt.Errorf("config: trigger %s: folder: %w", label, err)
+		}
+	}
+	return nil
+}
