@@ -86,7 +86,7 @@ func TestWrapLocalNamespaceSeatbeltOnDarwin(t *testing.T) {
 func TestSeatbeltBrowserProfile(t *testing.T) {
 	p := seatbeltAgentProfile([]BindMount{{Path: "/b/run"}, {Path: "/Applications/Google Chrome.app", RO: true}}, &AgentProfile{Browser: true}, AgentNet{ProxyPort: 4242})
 	for _, want := range []string{
-		"(allow mach-lookup)\n", `(deny mach-lookup`, `(global-name "com.apple.SecurityServer")`,
+		`(deny mach-lookup`, `(global-name "com.apple.SecurityServer")`, `MachPortRendezvousServer`,
 		`(allow file-issue-extension (subpath "/b/run"))`, `(allow file-issue-extension (subpath "/Applications/Google Chrome.app"))`,
 		"(deny network*)", `(allow network-outbound (remote ip "localhost:4242"))`,
 		`(allow network-bind network-inbound (local unix-socket (subpath "/b/run")))`,
@@ -95,8 +95,18 @@ func TestSeatbeltBrowserProfile(t *testing.T) {
 			t.Errorf("missing %s", want)
 		}
 	}
-	if strings.Index(p, "(deny mach-lookup") < strings.Index(p, "(allow mach-lookup)") {
-		t.Fatal("the Keychain denial must come after the broad allow (later rules win)")
+	if strings.Index(p, "(deny mach-lookup") < strings.Index(p, "(allow mach-lookup") {
+		t.Fatal("the Keychain denial must come after the allow (later rules win)")
+	}
+	// No blanket allowance (red-team C): every mach and IOKit rule names
+	// what it allows.
+	for _, blanket := range []string{"(allow mach-lookup)", "(allow mach-register)", "(allow iokit-open)", "(allow mach*)", "(allow iokit*)"} {
+		if strings.Contains(p, blanket) {
+			t.Fatalf("a blanket %s in the browser profile", blanket)
+		}
+	}
+	if !strings.Contains(p, `(allow mach-register (global-name-regex`) || !strings.Contains(p, `(iokit-user-client-class "IOSurfaceRootUserClient")`) {
+		t.Fatal("register and IOKit are narrowed to named targets")
 	}
 	if strings.Index(p, "(local unix-socket") < strings.Index(p, "(deny network*)") || strings.Contains(p, `unix-socket (subpath "/Applications`) {
 		t.Fatal("unix sockets only in the browser's own read-write dirs, after the deny")

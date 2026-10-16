@@ -62,6 +62,14 @@ var agentMachNet = []string{
 	"com.apple.usymptomsd",
 }
 
+// browserMach are the services headless Chromium looks up beyond an
+// agent's (found on macos-latest from the sandbox's own denial log).
+var browserMach = []string{}
+
+// browserRendezvous is Chromium's child-process rendezvous service,
+// "<bundle id>.MachPortRendezvousServer.<pid>" — the one name it registers.
+const browserRendezvous = `#"^[A-Za-z0-9.]+\.MachPortRendezvousServer\.[0-9]+$"`
+
 // agentMachKeychain are the Security framework services a Keychain-held
 // login needs.
 var agentMachKeychain = []string{
@@ -152,8 +160,18 @@ func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string
 		mach = append(mach, agentMachKeychain...)
 	}
 	if a.Browser {
-		// Later rules win: every service, then the Keychain's denied.
-		b.WriteString("(allow mach-lookup)\n(allow mach-register)\n(allow iokit-open)\n(allow ipc-posix-shm)\n(allow process-info*)\n(allow user-preference-read)\n")
+		// Only what headless Chromium needs: the agent's service list, its
+		// own child-process rendezvous (registered and looked up by name),
+		// and IOSurface for its shared memory. The Keychain stays denied by
+		// name — later rules win.
+		b.WriteString("(allow mach-lookup")
+		for _, s := range append(append([]string(nil), mach...), browserMach...) {
+			b.WriteString("\n  (global-name " + sbplString(s) + ")")
+		}
+		b.WriteString("\n  (global-name-regex " + browserRendezvous + "))\n")
+		b.WriteString("(allow mach-register (global-name-regex " + browserRendezvous + "))\n")
+		b.WriteString("(allow iokit-open (iokit-user-client-class \"IOSurfaceRootUserClient\"))\n")
+		b.WriteString("(allow ipc-posix-shm)\n(allow process-info*)\n(allow user-preference-read)\n")
 		b.WriteString("(deny mach-lookup")
 		for _, s := range agentMachKeychain {
 			b.WriteString("\n  (global-name " + sbplString(s) + ")")

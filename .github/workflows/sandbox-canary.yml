@@ -81,8 +81,8 @@ jobs:
         run: |
           go test -race -count=1 -v ./internal/browser/...
           go test -race -count=1 -run 'TestBrowser|TestSplitBrowser|TestValidateBrowser|TestReadFresh' ./cmd/conductor/ ./internal/config/ ./internal/vaults/
-      - name: on failure, the macOS sandbox's denials for the browser
-        if: failure() && runner.os == 'macOS'
+      - name: the macOS sandbox's denials for the browser
+        if: always() && runner.os == 'macOS'
         run: |
           log show --last 15m --style compact --predicate 'eventMessage CONTAINS "deny"' 2>/dev/null | grep -i -E 'chrom|google' | sed -E 's/[0-9a-f]{8}-[0-9a-f-]{27}/<id>/g' | sort | uniq -c | sort -rn | head -80 || true
 
