@@ -126,6 +126,10 @@ func newRig(t *testing.T) *rig {
 	ws := filepath.Join(state, "ws")
 	os.MkdirAll(ws, 0o755)
 	st := &Settings{Chrome: chrome, Allow: []string{host}, MaxDownload: 1 << 20, MaxUpload: 1 << 20, MaxBrowsers: 6}
+	if os.Getenv("CONDUCTOR_TEST_CONTAINER") == "1" {
+		// The whole suite again, every browser in a container.
+		st.Engine, st.Image = requireContainer(t)
+	}
 	a := &auditLog{}
 	m := &Manager{
 		Settings: func() Settings { return *st },

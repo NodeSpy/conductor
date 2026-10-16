@@ -65,6 +65,13 @@ type Settings struct {
 	Credentials []Credential
 	// Mailboxes are where emailed codes are read, by name.
 	Mailboxes map[string]Mailbox
+	// Engine / Image run every browser in a container (Chromium's own
+	// sandbox on, inside it); nil runs it in the host's sandbox.
+	Engine *ContainerEngine
+	Image  string
+	// IsolationNote is logged with every browser started without a
+	// container on macOS (why, and what that means).
+	IsolationNote string
 }
 
 // LoginSiteConfig is one opted-in site: who may use it, and what further
@@ -190,6 +197,9 @@ func (m *Manager) Do(ctx context.Context, c Principal, action string, args map[s
 		entry["dispatch"] = c.Dispatch
 	}
 	entry["requester"] = c.Requester
+	if inst != nil {
+		entry["isolation"] = inst.proc.Isolation()
+	}
 	entry["logged_in"] = inst != nil && inst == s.login
 	if inst != nil && inst == s.login {
 		entry["sites"] = s.sites
@@ -437,9 +447,12 @@ func (m *Manager) instance(ctx context.Context, s *session, c Principal, st Sett
 	if max := st.MaxBrowsers; max > 0 && m.running() >= max {
 		return nil, fmt.Errorf("browser: %d browsers are running (browser.max_browsers); try again when one closes", max)
 	}
-	chrome, err := FindChrome(st.Chrome)
-	if err != nil {
-		return nil, err
+	var chrome string
+	var err error
+	if st.Engine == nil {
+		if chrome, err = FindChrome(st.Chrome); err != nil {
+			return nil, err
+		}
 	}
 	dir, err := RunDir(m.StateDir, s.id)
 	if err != nil {
@@ -464,7 +477,8 @@ func (m *Manager) instance(ctx context.Context, s *session, c Principal, st Sett
 		launch = Launch
 	}
 	ring := &Ring{}
-	p, err := launch(LaunchSpec{Chrome: chrome, Dir: dir, Allow: allow, SelfExe: m.SelfExe, Proxy: pm, RealHome: m.RealHome, Stderr: ring})
+	p, err := launch(LaunchSpec{Chrome: chrome, Dir: dir, Allow: allow, SelfExe: m.SelfExe, Proxy: pm, RealHome: m.RealHome, Stderr: ring,
+		Engine: st.Engine, Image: st.Image})
 	if err != nil {
 		pm.Close()
 		os.RemoveAll(dir)
@@ -497,7 +511,10 @@ func (m *Manager) instance(ctx context.Context, s *session, c Principal, st Sett
 		s.saved = time.Now()
 	}
 	*slot = in
-	m.logf("browser %s: started a %s browser for %s (%d allowed host pattern(s))", s.id, map[bool]string{true: "logged-in", false: "anonymous"}[len(sites) > 0], c.Identity, len(allow))
+	m.logf("browser %s: started a %s browser for %s (%d allowed host pattern(s); isolation: %s)", s.id, map[bool]string{true: "logged-in", false: "anonymous"}[len(sites) > 0], c.Identity, len(allow), p.Isolation())
+	if p.Isolation() == "seatbelt" && st.IsolationNote != "" {
+		m.logf("browser %s: WARNING: %s", s.id, st.IsolationNote)
+	}
 	return in, nil
 }
 
@@ -603,10 +620,16 @@ func refreshCookies(saved, live []Cookie) ([]Cookie, bool) {
 // directory into the workspace's .browser/downloads, by conductor.
 func (m *Manager) landDownload(in *Instance, c Principal, loggedIn bool, d *Download) {
 	st := m.Settings()
-	src := filepath.Join(in.downloadDir(), d.GUID)
-	defer os.Remove(src)
 	entry := map[string]any{"action": "download", "identity": c.Identity, "agent": c.Agent, "repo": c.Repo,
 		"url": d.URL, "logged_in": loggedIn, "requester": c.Requester}
+	src, err := in.hostDownload(d.GUID, st.MaxDownload)
+	if err != nil {
+		in.setDownload(d, func(d *Download) { d.State, d.Err = "refused", err.Error() })
+		entry["outcome"], entry["reason"] = "refused", err.Error()
+		m.audit(entry)
+		return
+	}
+	defer os.Remove(src)
 	if err := refuseSecretFile(src, in.secretValues()); err != nil {
 		in.setDownload(d, func(d *Download) { d.State, d.Err = "refused", err.Error() })
 		entry["outcome"], entry["reason"] = "refused", err.Error()
@@ -660,6 +683,9 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 		}
 		out["login_sites_opted_in"] = opted
 		out["login_sites_granted"] = granted
+		if s.active != nil {
+			out["isolation"] = s.active.proc.Isolation()
+		}
 		out["allow"] = allowFor(c, st)
 		return out, nil
 	case "close":
@@ -933,7 +959,11 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 			if _, err := readWorkspace(c.Workspace, rel, c.deny(), st.MaxUpload, dst); err != nil {
 				return nil, refuse("upload %s: %v", rel, err)
 			}
-			files, rels = append(files, dst), append(rels, rel)
+			bp, err := in.browserPath(dst)
+			if err != nil {
+				return nil, err
+			}
+			files, rels = append(files, bp), append(rels, rel)
 		}
 		entry["files"] = rels
 		if err := in.setFiles(ctx, t, ref, files); err != nil {

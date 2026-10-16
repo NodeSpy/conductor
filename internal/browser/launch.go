@@ -87,6 +87,10 @@ type LaunchSpec struct {
 	RealHome string
 	// Stderr receives the browser's own diagnostics (nil = discarded).
 	Stderr *Ring
+	// Engine / Image run the browser in a container (container.go) instead
+	// of the host's sandbox.
+	Engine *ContainerEngine
+	Image  string
 }
 
 // Process is a running, sandboxed browser.
@@ -96,6 +100,25 @@ type Process struct {
 	done chan struct{}
 	once sync.Once
 	stop func()
+	// Mux / Guest: a container browser's stream (file transfers ride it)
+	// and its directory as it sees it; nil / "" for a host browser.
+	Mux   *Mux
+	Guest string
+	// kill ends a container (its engine CLI going away does not).
+	kill func()
+}
+
+// Isolation names how a browser is confined: "container", "namespace"
+// (Linux), "seatbelt" (macOS without a container engine).
+func (p *Process) Isolation() string {
+	switch {
+	case p.Mux != nil:
+		return "container"
+	case runtime.GOOS == "darwin":
+		return "seatbelt"
+	default:
+		return "namespace"
+	}
 }
 
 // Done is closed when the browser has exited.
@@ -110,6 +133,9 @@ func (p *Process) Close() {
 		select {
 		case <-p.done:
 		case <-time.After(3 * time.Second):
+			if p.kill != nil {
+				p.kill()
+			}
 			if p.cmd.Process != nil {
 				_ = p.cmd.Process.Kill()
 			}
@@ -160,6 +186,9 @@ func ChromeArgs(dir, proxy string, headed bool) []string {
 // network is conductor's proxy. The protocol runs over a pipe: there is no
 // debugging port for anything else to reach.
 func Launch(spec LaunchSpec) (*Process, error) {
+	if spec.Engine != nil {
+		return launchContainer(spec)
+	}
 	return launch(spec, sandbox.CheckGOOS)
 }
 

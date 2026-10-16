@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,8 +67,10 @@ func newInstance(ctx context.Context, p *Process, dir string, sites []string) (*
 	if err := p.Conn.Call(ctx, "", "Target.setDiscoverTargets", map[string]any{"discover": true}, nil); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(in.downloadDir(), 0o700); err != nil {
-		return nil, err
+	if p.Mux == nil {
+		if err := os.MkdirAll(in.downloadDir(), 0o700); err != nil {
+			return nil, err
+		}
 	}
 	if err := p.Conn.Call(ctx, "", "Browser.setDownloadBehavior", map[string]any{
 		"behavior": "allowAndName", "downloadPath": in.downloadDir(), "eventsEnabled": true,
@@ -105,7 +108,60 @@ type targetInfo struct {
 	Title    string `json:"title"`
 }
 
-func (in *Instance) downloadDir() string { return filepath.Join(in.dir, "xfer", "dl") }
+// downloadDir is where the browser saves downloads, as it sees it.
+func (in *Instance) downloadDir() string {
+	if in.proc.Guest != "" {
+		return filepath.Join(in.proc.Guest, "xfer", "dl")
+	}
+	return filepath.Join(in.dir, "xfer", "dl")
+}
+
+// hostDownload is a finished download as a host file (fetched out of a
+// container, at most max bytes).
+func (in *Instance) hostDownload(guid string, max int64) (string, error) {
+	host := filepath.Join(in.dir, "xfer", "dl", guid)
+	if in.proc.Mux == nil {
+		return host, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(host), 0o700); err != nil {
+		return "", err
+	}
+	f, err := os.OpenFile(host, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return "", err
+	}
+	_, err = in.proc.Mux.Get(filepath.Join(in.downloadDir(), guid), max, f)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(host)
+		return "", err
+	}
+	return host, nil
+}
+
+// browserPath puts a staged host file (under the instance dir) where the
+// browser can open it, and returns that path as the browser sees it.
+func (in *Instance) browserPath(host string) (string, error) {
+	if in.proc.Mux == nil {
+		return host, nil
+	}
+	rel, err := filepath.Rel(in.dir, host)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("browser: %s is not staged", host)
+	}
+	guest := filepath.Join(in.proc.Guest, rel)
+	f, err := os.Open(host)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if err := in.proc.Mux.Put(guest, f); err != nil {
+		return "", err
+	}
+	return guest, nil
+}
 
 // Done is closed when the browser exits.
 func (in *Instance) Done() <-chan struct{} { return in.proc.Done() }
