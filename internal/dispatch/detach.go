@@ -199,7 +199,7 @@ func (d *Dispatcher) paseoDetached(ctx context.Context, req Request) (RunRef, er
 	}
 
 	// The agent sandbox: a detached agent is seeded from content conductor
-	// does not vouch for (a Slack thread can carry anyone's messages), so it
+	// does not vouch for (a chat thread can carry anyone's messages), so it
 	// launches through the provider's sandboxed entry like a hand-off —
 	// unless the operator's isolation: {mode: none} opts it out. It stays
 	// unregistered and token-free: its `sandbox exec` gets the default policy
