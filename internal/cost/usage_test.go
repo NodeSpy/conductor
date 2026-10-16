@@ -34,7 +34,14 @@ func TestTurns(t *testing.T) {
 	}
 }
 
+// initialDisplayMode is the mode before any test sets one: what a process
+// that never read a usage: block shows.
+var initialDisplayMode = DisplayMode()
+
 func TestDisplayModeDefaultsOff(t *testing.T) {
+	if initialDisplayMode != DisplayOff {
+		t.Fatalf("the built-in default is %q, not off", initialDisplayMode)
+	}
 	defer SetDisplayMode("")
 	SetDisplayMode("")
 	if DisplayMode() != DisplayOff || ShowUsage() || ShowDollars() {

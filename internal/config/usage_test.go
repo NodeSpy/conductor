@@ -79,6 +79,14 @@ func TestTeamPoolCeilingPerUnit(t *testing.T) {
 	if b := c.Bots["a"].Proactive.Budget; b.MaxTurnsPerDay != 10 || b.MaxRunsPerDay != 50 {
 		t.Fatalf("one-unit pool: %+v", b)
 	}
+	// Each unit inherits on its own: a token-only pool fills tokens.
+	c, err = loadTeams(t, "teams:\n  x: { budget: { proactive: { max_tokens_per_day: 2m } } }\nbots:\n  a:\n    team: x\n    charter: \"## Proactive checks\\n- x\"\n    proactive:\n      every: 4h\n      checklist: { section: Proactive checks }\n      budget: { max_turns_per_day: 9 }\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := c.Bots["a"].Proactive.Budget; b.MaxTokensPerDay != 2000000 || b.MaxTurnsPerDay != 9 || b.MaxRunsPerDay != 0 {
+		t.Fatalf("token inheritance: %+v", b)
+	}
 	// An empty pool loads, with a warning.
 	c, err = loadTeams(t, "teams:\n  x: { budget: { proactive: {} } }\nbots:\n  a: { team: x }\n")
 	if err != nil {
