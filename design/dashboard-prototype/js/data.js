@@ -723,7 +723,7 @@ steps:
  * declared in config (collections:) or shipped by a pack. */
 (function () {
   const D = window.D;
-  const fm = (o, body) => '---\n' + YAML.stringify(o) + '---\n' + (body || '');
+  const fm = (o, body) => '---\n' + YAML.stringify(o).replace(/\n?$/, '\n') + '---\n' + (body || '');
   D.memory.files = {
     'knowledge/db-prod-1.md': fm({ kind: 'knowledge', title: 'db-prod-1', statement: 'Primary Postgres for the platform services (acme/api, acme/web): Postgres 16, Multi-AZ, db.r6g.2xlarge.', applies_to: ['db-prod-1', 'postgres', 'acme/api'], source: 'RDS console; failover drill 2026-10-16 (case c31)', confidence: 'high' },
       '- **Failover drill:** 2026-10-16 — promoted standby in 48s; app reconnect\n  storm capped by pgbouncer `max_client_conn`. No data loss.\n\nSee [[runbooks/page-triage]] and [[runbooks/latency]].\n'),
@@ -754,6 +754,10 @@ steps:
       content: fm({ kind: 'runbook', title: 'Checkout errors', when: 'checkout 5xx above 2% for 5 minutes', steps: [{ do: 'Check the canary' }, { run: 'kubectl rollout undo deploy/web' }, { do: 'Tell #incidents', verb: 'slack-ops.post', run: 'echo hi' }] }, '') },
     { id: 'k2', bot: 'platform-sre', kind: 'runbook', to: 'runbooks/page-triage.md', summary: 'Ack within 5 minutes; one case per page', status: 'approved', at: new Date(Date.now() - 3000 * 60000).toISOString(), approver: 'ops (passkey · laptop)', content: '' },
   ];
+  D.botMemory = {
+    'web-triage': { 'knowledge/checkout-margin.md': fm({ kind: 'knowledge', title: 'Checkout margin fallback', statement: 'Checkout buttons use a margin fallback instead of flex gap, for Safari 18.', applies_to: ['acme/web', 'safari'], source: 'case c33', confidence: 'high' }, '') },
+    'billing-sre': { 'knowledge/nat-owners.md': fm({ kind: 'knowledge', title: 'NAT owners', statement: 'Three NAT gateways (api, web, data), all owned by platform.', applies_to: ['nat'], source: 'delegation d3 from platform-sre', confidence: 'medium' }, '') },
+  };
   // collections: the operator's own (config, collections:) and those packs ship
   D.collections = [];
   D.packCollections = [{ name: 'postmortems', pack: 'sre-bot', cfg: { dir: 'postmortems', scope: 'team', fields: ['date:string', 'severity:enum(sev1|sev2|sev3)', 'impact:text'], template: '## Timeline\n\n## Root cause\n\n## Actions\n', free_paths: false, write: ['operator', 'bots (proposal)'] } }];

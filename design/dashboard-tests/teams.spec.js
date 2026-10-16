@@ -10,7 +10,7 @@ test('define a team with bots and defaults, through the diff', async ({ page }) 
   await page.fill('#f-description', 'Release notes and API docs');
   await page.locator('[data-listk="bots"] select').selectOption('release-scribe');
   await page.locator('[data-listk="operators"] select').selectOption('ops');
-  await page.fill('#f-pool_runs', '4'); await page.fill('#f-pool_cost', '1.5');
+  await page.fill('#f-pool_runs', '4');
   await page.fill('#f-repo', 'team-knowledge/docs');
   await page.locator('#gen-submit').click();
   await expect(page.locator('.diff')).toContainText('docs:');
@@ -84,11 +84,11 @@ test('knowledge: approve a promotion with a passkey; a bot proposes one from mem
   await go(page, '#/teams/platform/knowledge');
   await page.locator('[data-act="kp-approve"][data-id="k4"]').click();
   await page.locator('#su-go').click();
-  await expect(page.locator('#rp-prev')).toContainText('30s');
+  await expect(page.locator('#ke-statement')).toHaveValue(/30s/);
   await go(page, '#/bots/web-triage/memory');
   await page.locator('[data-act="rp-promote"]').click();
   await expect(page).toHaveURL(/#\/teams\/platform\/knowledge/);
-  await expect(page.locator('.item', { hasText: 'Promote README.md from web-triage' })).toContainText('Approve');
+  await expect(page.locator('.item', { hasText: 'Promote knowledge entry “Checkout margin fallback” from web-triage' })).toContainText('Approve');
 });
 
 test('links: unlinking teams is a staged config change; lead change too', async ({ page }) => {

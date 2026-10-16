@@ -16,7 +16,7 @@
   const VS = (UI.VS = {});
   const V = () => S.view();
   VS.SRC = { typed: 'Typed', env: 'Env var', secret: 'Secret', vault: 'Vault', setting: 'Setting' };
-  const ICON = { typed: 'edit', env: 'terminal', secret: 'key', vault: 'lock', setting: 'settings' };
+  const ICON = { typed: 'edit', env: 'terminal', secret: 'key', vault: 'lock', setting: 'config' };
 
   VS.parse = (v) => {
     v = v == null ? '' : String(v); let m;

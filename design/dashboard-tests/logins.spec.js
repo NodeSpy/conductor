@@ -95,7 +95,7 @@ test('Logins tab: usage history, edit binding and revoke, all through the diff',
   await go(page, '#/browser/logins', { fresh: true });
   await page.locator('[data-login="grafana"] [data-act="login-uses"]').click();
   await expect(page.locator('[data-login="grafana"] .uses')).toContainText('platform-sre');
-  await page.locator('[data-login="grafana"] [data-act="login-revoke"]').click();
+  await page.locator('[data-login="grafana"] [data-act="lg-revoke"]').click();
   await page.locator('#cf-ok').click();
   await expect(page.locator('.diff')).toContainText('grafana');
   await applyStaged(page);

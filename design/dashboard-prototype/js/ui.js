@@ -370,7 +370,8 @@
    * and modals need no re-binding.
    * ================================================================= */
   UI.acts = {};
-  UI.act = (name, fn) => (UI.acts[name] = fn);
+  // one handler per action name: a second registration is a bug (two screens fighting over one name)
+  UI.act = (name, fn) => { if (UI.acts[name]) console.error(`duplicate action handler: ${name}`); UI.acts[name] = fn; };
   const disabledEl = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true';
   document.addEventListener('click', (e) => {
     const el = e.target.closest('[data-act]');

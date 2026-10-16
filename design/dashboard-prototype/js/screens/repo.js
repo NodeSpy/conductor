@@ -1,19 +1,20 @@
-/* Knowledge you can author: one git-backed repo view, used for a team's
- * knowledge repo and for a bot's own memory.
- *
- * The operator writes directly: every save is one commit authored by the
- * operator (Authored-By: operator:ops), no approval needed, since operator
- * provenance is trusted. Bots keep committing too; a save over a newer bot
- * commit is a conflict the operator resolves explicitly (rebase or
- * overwrite). History is per file and per repo, with diffs, revert-as-a-new-
- * commit, and blame-lite. Team repos also carry bot proposals: approve,
- * approve with changes (in the editor), deny with a reason, in bulk. */
+/* Knowledge you can author, by kind: a team's knowledge repo and a bot's own
+ * memory. Every entry has a kind, and its kind decides its home and its
+ * fields: knowledge/ (title, statement, applies-to, source, confidence),
+ * runbooks/ (when, prerequisites, ordered steps with a command or verb,
+ * verification, rollback, owner), watch.md entries, log/ (bots only; the
+ * operator annotates or flags), handoff/ (system), and custom collections
+ * declared in config or shipped by a pack. Paths are derived from kind and
+ * title; free paths only where a collection allows them. Git underneath:
+ * every save is one commit authored by the operator, with history, diff,
+ * revert, blame and conflict handling. Bot proposals and imports are checked
+ * against the same schema. */
 (function () {
   const { icon, esc, ago, tag } = UI;
   const now = () => new Date().toISOString();
+  const R = (window.R = {});
   const minsAgo = (m) => new Date(Date.now() - m * 60000).toISOString();
   const sha = () => Math.random().toString(16).slice(2, 9);
-  const R = (window.R = {});
 
   /* ---------- markdown: highlighting and a safe preview ---------- */
   UI.mdLine = (raw) => {
@@ -42,8 +43,74 @@
     return out.join('');
   };
 
-  /* ---------- the repos ---------- */
+
+  /* ---------- kinds: what goes where ---------- */
+  const slug = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'untitled';
+  const F = (k, type, o = {}) => Object.assign({ k, type }, o);
+  const KINDS = (UI.KINDS = {
+    knowledge: { id: 'knowledge', label: 'Knowledge', one: 'knowledge entry', icon: 'sparkle', dir: 'knowledge', repos: ['team', 'bot'], body: 'Details',
+      fields: [F('title', 'string', { req: true }), F('statement', 'text', { req: true, rows: 2, help: 'The fact itself, in a sentence or two.' }), F('applies_to', 'list', { req: true, label: 'Applies to', ph: 'service or resource', help: 'Services and resources this is about. Used to filter and to find it.' }), F('source', 'string', { req: true, label: 'Source / evidence', ph: 'case c31, modules/web/alb.tf, a dashboard' }), F('confidence', 'enum', { req: true, options: ['high', 'medium', 'low'], def: 'medium' })],
+      who: { team: 'You write directly; bots promote from their memory, with your approval.', bot: 'You and the bot write directly.' } },
+    runbook: { id: 'runbook', label: 'Runbooks', one: 'runbook', icon: 'workflows', dir: 'runbooks', repos: ['team', 'bot'], body: 'Notes',
+      fields: [F('title', 'string', { req: true }), F('when', 'text', { req: true, rows: 2, label: 'When to use', help: 'The trigger or the symptoms.' }), F('prerequisites', 'list', { ph: 'access, a change window, a tool' }), F('steps', 'steps', { req: true }), F('verification', 'text', { req: true, rows: 2, help: 'How you know it worked.' }), F('rollback', 'text', { rows: 2, help: 'How to undo it, or "nothing to roll back".' }), F('owner', 'string', { req: true, ph: 'a bot, a team or a person' }), F('applies_to', 'list', { label: 'Applies to', ph: 'service or resource' })],
+      who: { team: 'You write directly; bots propose.', bot: 'You write directly; the bot proposes.' } },
+    watch: { id: 'watch', label: 'Watch', one: 'watch item', icon: 'eye', file: 'watch.md', repos: ['team', 'bot'],
+      fields: [F('what', 'string', { req: true, label: 'What to watch' }), F('signal', 'string', { req: true, label: 'Signal / query' }), F('threshold', 'string', { req: true }), F('why', 'text', { req: true, rows: 2 })],
+      who: { team: 'You write directly; bots propose.', bot: 'You write directly; the bot proposes.' } },
+    log: { id: 'log', label: 'Log', one: 'log entry', icon: 'clock', dir: 'log', repos: ['bot'], readonly: 'The bot writes its log, one entry per case. You can annotate an entry or flag it as wrong, but history isn\'t rewritten.', who: { bot: 'The bot only. You annotate or flag.' } },
+    handoff: { id: 'handoff', label: 'Handoff', one: 'handoff note', icon: 'send', dir: 'handoff', repos: ['bot'], readonly: 'Written by conductor when a home session rotates. Read-only.', who: { bot: 'System-generated, read-only.' } },
+  });
+  const fieldOf = (spec) => { const m = String(spec).match(S.FIELD_RE); if (!m) return null; return m[2].startsWith('enum') ? F(m[1], 'enum', { options: m[3].split('|') }) : F(m[1], m[2], m[2] === 'text' ? { rows: 2 } : {}); };
+  const collections = (r) => (S.view().collections || []).map((c) => ({ name: c.name, cfg: c.cfg, pack: null })).concat((D.packCollections || []).map((c) => ({ name: c.name, cfg: c.cfg, pack: c.pack })))
+    .filter((c) => { const sc = c.cfg.scope || 'team'; return sc === 'both' || sc === r.kind; })
+    .map((c) => ({ id: 'c:' + c.name, coll: c.name, label: c.name, one: c.name.replace(/s$/, '') + ' entry', icon: 'folder', dir: String(c.cfg.dir).replace(/\/$/, ''), pack: c.pack, free: !!c.cfg.free_paths, template: c.cfg.template || '', write: c.cfg.write || ['operator'], body: 'Body',
+      fields: [F('title', 'string', { req: true })].concat((c.cfg.fields || []).map(fieldOf).filter(Boolean)), who: { team: `As declared: ${(c.cfg.write || ['operator']).join(', ')}.`, bot: `As declared: ${(c.cfg.write || ['operator']).join(', ')}.` } }));
+  const kindsFor = (r) => Object.values(KINDS).filter((k) => k.repos.includes(r.kind)).concat(collections(r));
+  const kindById = (r, id) => kindsFor(r).find((k) => k.id === id);
+  const visible = (p) => !p.split('/').some((x) => x.startsWith('.'));
+  const kindOfPath = (r, p) => (p === 'watch.md' ? KINDS.watch : kindsFor(r).filter((k) => k.dir).sort((a, b) => b.dir.length - a.dir.length).find((k) => p.startsWith(k.dir + '/')) || null);
+  const writable = (r, k) => (k.readonly ? k.readonly : k.coll && !k.write.includes('operator') ? `Only bots write ${k.label}, as the collection declares` : '');
+
+  /* ---------- the file format: markdown with front matter ---------- */
+  const FM = (R.FM = {
+    parse(text) { text = text || ''; if (!text.startsWith('---\n')) return { fm: {}, body: text, raw: true }; const end = text.indexOf('\n---\n', 3); if (end < 0) return { fm: {}, body: text, err: 'front matter is not closed with ---' }; try { return { fm: YAML.parse(text.slice(4, end + 1)).value || {}, body: text.slice(end + 5) }; } catch (e) { return { fm: {}, body: text.slice(end + 5), err: 'front matter: ' + e.message }; } },
+    emit(kind, fm, body) { const o = { kind: kind.coll || kind.id }; kind.fields.forEach((f) => { const v = fm[f.k]; if (v == null || v === '' || (Array.isArray(v) && !v.length)) return; o[f.k] = v; }); return '---\n' + YAML.stringify(o).replace(/\n?$/, '\n') + '---\n' + (body && body.trim() ? body.replace(/\s*$/, '\n') : ''); },
+  });
+  const WATCH = {
+    parse(text) { return String(text || '').split(/^## /m).slice(1).map((chunk) => { const [head, ...rest] = chunk.split('\n'); const e = { what: head.trim() }; rest.forEach((l) => { const m = l.match(/^- (signal|threshold|why):\s*(.*)$/); if (m) e[m[1]] = m[2]; }); return e; }); },
+    emit(items) { return '# Watch\n\n' + items.map((e) => `## ${e.what}\n- signal: ${e.signal || ''}\n- threshold: ${e.threshold || ''}\n- why: ${String(e.why || '').replace(/\n+/g, ' ')}\n`).join('\n'); },
+  };
+  /** Schema check for one kind; the same check runs on operator saves, bot proposals and imports. */
+  const validate = (R.validate = (kind, fm, declared) => {
+    const e = [];
+    if (declared && declared !== (kind.coll || kind.id)) e.push(`kind: says "${declared}", but ${kind.dir || kind.file} holds ${kind.label.toLowerCase()}`);
+    kind.fields.forEach((f) => {
+      const v = fm[f.k], empty = v == null || v === '' || (Array.isArray(v) && !v.length);
+      if (f.req && empty) { e.push(`${f.k}: required`); return; }
+      if (empty) return;
+      if (f.type === 'enum' && !f.options.includes(v)) e.push(`${f.k}: one of ${f.options.join(', ')}`);
+      if (f.type === 'list' && !Array.isArray(v)) e.push(`${f.k}: a list`);
+      if (f.type === 'steps') { if (!Array.isArray(v)) e.push('steps: a list of steps'); else v.forEach((s, i) => { if (!s || typeof s !== 'object') return e.push(`steps[${i + 1}]: a step with do:`); if (!s.do) e.push(`steps[${i + 1}].do: required (what to do)`); if (s.run && s.verb) e.push(`steps[${i + 1}]: either run: or verb:, not both`); if (s.verb && !/^[\w-]+\.[\w*-]+$/.test(s.verb)) e.push(`steps[${i + 1}].verb: connector.verb`); }); }
+    });
+    return e;
+  });
+  const entriesOf = (r, kind) => {
+    if (kind.id === 'watch') return WATCH.parse(r.files['watch.md']).map((w) => ({ kind, path: 'watch.md', key: 'watch.md#' + slug(w.what), title: w.what, fm: w, body: '' }));
+    return Object.keys(r.files).filter((p) => visible(p) && kindOfPath(r, p) === kind).sort().map((p) => { const x = FM.parse(r.files[p]); return { kind, path: p, key: p, title: x.fm.title || p.split('/').pop().replace(/\.md$/, ''), fm: x.fm, body: x.body, err: x.err }; });
+  };
+  const derive = (kind, title, free) => (kind.id === 'watch' ? 'watch.md' : `${kind.dir}/${kind.free && free ? free.replace(/^\/+/, '').replace(/\.md$/, '') : slug(title)}.md`);
   const botsOfTeam = (t) => D.bots.filter((b) => b.cfg && b.cfg.team === t).map((b) => b.name);
+  const related = (r) => { const repos = [r]; if (r.kind === 'team') botsOfTeam(r.name).forEach((b) => repos.push(R.get('bot:' + b))); else { const b = D.bots.find((x) => x.name === r.name); if (b && b.cfg && b.cfg.team) repos.push(R.get('team:' + b.cfg.team)); } return repos; };
+  const caseHref = (id) => { const c = D.cases.find((x) => x.id === id); return c ? `#/bots/${c.bot}/cases/${id}` : null; };
+  /** Who cites an entry: runbooks and log entries that link it, and the cases behind them. */
+  const cites = (r, path) => {
+    const stem = path.replace(/\.md$/, ''), out = { runbooks: [], logs: [], cases: new Set() };
+    related(r).forEach((x) => Object.entries(x.files).forEach(([p, c]) => { if (p === path || !visible(p) || !(c.includes('[[' + stem + ']]') || c.includes(path))) return; const k = kindOfPath(x, p), fm = FM.parse(c).fm; if (k && k.id === 'runbook') out.runbooks.push({ repo: x.id, path: p, title: fm.title || p }); if (k && k.id === 'log') { out.logs.push({ repo: x.id, path: p, title: fm.title || p }); if (fm.case) out.cases.add(fm.case); } }));
+    D.cases.forEach((c) => (c.notes || []).forEach((n) => { if ((n.text || '').includes(path) || (n.text || '').includes(stem + '.md')) out.cases.add(c.id); }));
+    out.cases = [...out.cases]; return out;
+  };
+
+  /* ---------- the repos (git underneath: files, commits, history) ---------- */
   R.get = (id) => {
     D.repos = D.repos || {};
     if (D.repos[id]) return D.repos[id];
@@ -53,29 +120,27 @@
     if (kind === 'bot' && name === 'platform-sre' && D.memory) {
       files = Object.assign({}, D.memory.files);
       const db = files['knowledge/db-prod-1.md'], lat = files['runbooks/latency.md'];
-      const db0 = db.split('\n').filter((l) => !/Failover drill|storm capped|No data loss/.test(l)).join('\n');
+      const db0 = db.split('\n').filter((l) => !/Failover drill|storm capped/.test(l)).join('\n');
       const lat0 = lat.split('\n').filter((l) => !/deregistration/.test(l)).join('\n');
       log = [
         { sha: '8e1f0aa', msg: 'knowledge: db-prod-1 failover drill outcome', who: 'bot:platform-sre', kind: 'bot', case: 'c31', at: minsAgo(1), changes: [{ path: 'knowledge/db-prod-1.md', before: db0, after: db }] },
-        { sha: 'b07e5c1', msg: 'runbooks/latency: add ALB deregistration note', who: 'operator:ops', kind: 'operator', at: minsAgo(1440), changes: [{ path: 'runbooks/latency.md', before: lat0, after: lat }] },
+        { sha: 'b07e5c1', msg: 'runbooks/latency: add ALB deregistration step', who: 'operator:ops', kind: 'operator', at: minsAgo(1440), changes: [{ path: 'runbooks/latency.md', before: lat0, after: lat }] },
         imp('bot:platform-sre', 'bot', minsAgo(4320), Object.assign({}, files, { 'knowledge/db-prod-1.md': db0, 'runbooks/latency.md': lat0 })),
       ];
       log[2].msg = 'import: memory from session s1';
     } else if (kind === 'bot') {
-      const old = (D.memories || {})[name];
-      files = old ? Object.assign({}, old.files) : { 'knowledge/README.md': `# ${name}\n\nWhat ${name} has learned.\n` };
-      log = [imp('bot:' + name, 'bot', minsAgo(2880), files)];
+      files = Object.assign({}, (D.botMemory || {})[name] || {});
+      log = Object.keys(files).length ? [imp('bot:' + name, 'bot', minsAgo(2880), files)] : [];
     } else {
       const tk = (D.teamKnowledge || {})[name];
-      files = tk ? Object.assign({}, tk.files) : { 'README.md': `# ${name} team knowledge\n` };
+      files = tk ? Object.assign({}, tk.files) : {};
       proposals = tk ? JSON.parse(JSON.stringify(tk.proposals || [])) : [];
       const lead = (D.teams.find((t) => t.name === name) || { cfg: {} }).cfg.lead || botsOfTeam(name)[0] || 'ops';
-      log = [imp('bot:' + lead, 'bot', minsAgo(5000), files)];
+      log = Object.keys(files).length ? [imp('bot:' + lead, 'bot', minsAgo(5000), files)] : [];
     }
-    const r = { id, kind, name, files, log, proposals, open: (id === 'bot:platform-sre' && D.memory && D.memory.open) || Object.keys(files).filter((p) => !p.startsWith('.') && !p.endsWith('.keep'))[0] };
+    const r = { id, kind, name, files, log, proposals, open: (id === 'bot:platform-sre' && D.memory && D.memory.open) || null };
     D.repos[id] = r; return r;
   };
-  const visible = (p) => !p.split('/').pop().startsWith('.');
   R.version = (r, path) => { const c = r.log.find((x) => x.changes.some((ch) => ch.path === path || ch.from === path)); return c ? c.sha : null; };
   R.commit = (r, o) => {
     const c = Object.assign({ sha: sha(), at: now(), who: 'operator:ops', kind: 'operator' }, o);
@@ -84,7 +149,6 @@
     D.audit.unshift({ ts: c.at, event: r.kind === 'team' ? 'team_knowledge_commit' : 'memory_commit', who: c.who, detail: `${r.id} · ${c.sha} · ${c.msg}`, run: '' });
     S.save(); return c;
   };
-  /** Blame-lite: replay the commits that touched a file and give each line to the commit that wrote it. */
   R.blame = (r, path) => {
     const chain = []; let p = path;
     for (const c of r.log) { const ch = c.changes.find((x) => x.path === p); if (ch) { chain.unshift({ c, ch }); if (ch.from) p = ch.from; if (ch.before == null && !ch.from) break; } }
@@ -98,184 +162,377 @@
     });
     return lines.map((l, i) => ({ line: l, c: owners[i] }));
   };
+  R.pending = (id) => R.get(id).proposals.filter((p) => p.status === 'pending').length;
   const whoLabel = (c) => (c.kind === 'operator' ? 'ops (operator)' : c.who.replace('bot:', ''));
-  const whoChip = (c) => `<span class="who ${c.kind}">${icon(c.kind === 'operator' ? 'passkey' : 'members')}${esc(whoLabel(c))}</span>${c.case ? ` <a class="link mono tiny" href="#/bots/${c.who.replace('bot:', '')}/cases/${c.case}">${c.case}</a>` : ''}`;
-  const proposedAfter = (r, p) => { const added = p.diff.split('\n').filter((l) => l[0] === '+').map((l) => l.slice(1)).join('\n'); const isNew = p.diff.startsWith('+#') || !r.files[p.to]; return (isNew ? '' : r.files[p.to].replace(/\n?$/, '\n')) + added + '\n'; };
-  const readers = (r, path) => (r.kind === 'team' ? botsOfTeam(r.name) : [r.name]);
+  const whoChip = (c) => `<span class="who ${c.kind}">${icon(c.kind === 'operator' ? 'passkey' : 'bots')}${esc(whoLabel(c))}</span>${c.case && caseHref(c.case) ? ` <a class="link mono tiny" href="${caseHref(c.case)}">${c.case}</a>` : ''}`;
+  const readers = (r) => (r.kind === 'team' ? botsOfTeam(r.name) : [r.name]);
 
   /* ---------- editor state ---------- */
-  const ev = { repo: null, path: null, text: '', base: '', baseSha: null, mode: 'split', dirty: false, conflict: null, blame: false, proposal: null, hist: 'file', q: '', sel: new Set() };
-  UI.guard = () => (ev.dirty ? `Your edits to <span class="mono">${esc(ev.path)}</span> aren't saved. Leave and lose them?` : null);
-  UI.guardClear = () => { ev.dirty = false; };
-  function openFile(r, path, text) { r.open = path; ev.repo = r.id; ev.path = path; ev.base = r.files[path] != null ? r.files[path] : ''; ev.text = text != null ? text : ev.base; ev.baseSha = R.version(r, path); ev.dirty = text != null && text !== ev.base; ev.conflict = null; ev.proposal = null; S.save(); }
-  const guardThen = (fn) => { if (!ev.dirty) return fn(); UI.confirm({ title: 'Discard unsaved changes?', body: UI.guard(), ok: 'Discard', danger: true }).then((ok) => { if (ok) { ev.dirty = false; fn(); } }); };
+  const ev = { repo: null, kind: null, key: null, isNew: false, base: '', baseSha: null, steps: [], mode: 'split', blame: false, proposal: null, conflict: null, q: '', tag: '', view: 'kinds', file: null, hist: 'file', sel: new Set(), draft: null };
+  const pathOf = () => (ev.key ? ev.key.split('#')[0] : null);
+  const stepsFrom = (fm) => (Array.isArray(fm.steps) ? fm.steps : []).map((s) => (s && typeof s === 'object' ? { do: s.do || '', type: s.verb ? 'verb' : s.run ? 'run' : '', arg: s.verb || s.run || '' } : { do: String(s || ''), type: '', arg: '' }));
+  const stepsTo = (st) => st.filter((s) => s.do || s.arg).map((s) => { const o = { do: s.do }; if (s.type && s.arg) o[s.type] = s.arg; return o; });
+  const serialize = (kind, d) => (!kind.fields ? '' : kind.id === 'watch' ? JSON.stringify(kind.fields.map((f) => d.fm[f.k] || '')) : FM.emit(kind, d.fm, d.body) + '|' + (d.free || ''));
+  function openEntry(r, kind, entry, draft) {
+    ev.repo = r.id; ev.kind = kind.id; ev.key = entry ? entry.key : null; ev.isNew = !entry; ev.conflict = null; ev.proposal = null; ev.blame = false; ev.view = 'kinds';
+    const d = draft || (entry ? { fm: JSON.parse(JSON.stringify(entry.fm)), body: entry.body || '', free: entry && kind.free ? entry.path.slice(kind.dir.length + 1).replace(/\.md$/, '') : '' } : { fm: {}, body: kind.template || '', free: '' });
+    ev.draft = d; ev.steps = stepsFrom(d.fm);
+    ev.base = draft && !entry ? serialize(kind, { fm: {}, body: kind.template || '', free: '' }) : entry ? serialize(kind, { fm: entry.fm, body: entry.body || '', free: d.free }) : serialize(kind, d);
+    ev.baseSha = entry ? R.version(r, entry.path) : null;
+    r.open = ev.key; r.openKind = kind.id; S.save();
+  }
+  function readDraft(kind) {
+    const f = UI.$('#ke-form'); if (!f) return ev.draft;
+    syncSteps();
+    const fm = UI.formValues(f, kind.fields.filter((x) => x.type !== 'steps'));
+    if (kind.fields.some((x) => x.type === 'steps')) fm.steps = stepsTo(ev.steps);
+    const ta = UI.$('#rp-ed .ced-ta'), fr = UI.$('#ke-free');
+    return { fm, body: ta ? ta.value : (ev.draft || {}).body || '', free: fr ? fr.value.trim() : '' };
+  }
+  const isDirty = () => { const r = ev.repo && R.get(ev.repo), kind = r && ev.kind && kindById(r, ev.kind); if (!kind || kind.readonly || !UI.$('#ke-form')) return false; return serialize(kind, readDraft(kind)) !== ev.base; };
+  UI.guard = () => (isDirty() ? `Your edits to <span class="mono">${esc(pathOf() || 'the new entry')}</span> aren't saved. Leave and lose them?` : null);
+  UI.guardClear = () => { ev.base = ''; ev.draft = null; };
+  const guardThen = (fn) => { if (!isDirty() && !ev.proposal) return fn(); UI.confirm({ title: 'Discard unsaved changes?', body: UI.guard() || 'You are approving a proposal with changes.', ok: 'Discard', cancel: 'Keep editing', danger: true }).then((ok) => { if (ok) { ev.base = ''; ev.proposal = null; fn(); } }); };
+  const enable = (el, on, reason) => { if (!el) return; if (on) { el.removeAttribute('aria-disabled'); delete el.dataset.reason; delete el.dataset.tip; } else { el.setAttribute('aria-disabled', 'true'); el.dataset.reason = el.dataset.tip = reason; } };
+  function refreshDirty() {
+    const r = ev.repo && R.get(ev.repo), kind = r && kindById(r, ev.kind); if (!kind || !UI.$('#ke-form')) return;
+    const d = readDraft(kind), dirty = serialize(kind, d) !== ev.base || !!ev.proposal;
+    enable(UI.$('[data-act="rp-save"]'), dirty, ev.isNew ? 'Fill in the fields first' : 'Nothing to save yet: change a field first');
+    enable(UI.$('[data-act="rp-discard"]'), (dirty || ev.isNew) && !ev.proposal, 'No unsaved changes');
+    const t = UI.$('#ke-dirty'); if (t) t.classList.toggle('hide', !dirty || !!ev.proposal);
+    const p = UI.$('#ke-path'); if (p && kind.id !== 'watch') p.textContent = derive(kind, d.fm.title || '', d.free);
+    const pv = UI.$('#rp-prev'); if (pv) pv.innerHTML = UI.mdRender(d.body);
+  }
+  let rdT; const later = () => { clearTimeout(rdT); rdT = setTimeout(refreshDirty, 60); };
+  ['input', 'change'].forEach((t) => document.addEventListener(t, (e) => { if (e.target.closest && e.target.closest('#ke-form')) refreshDirty(); }));
+  document.addEventListener('click', (e) => { if (e.target.closest && e.target.closest('#ke-form')) later(); });
+  document.addEventListener('keyup', (e) => { if (e.target.closest && e.target.closest('#ke-form')) later(); });
+
+  /* ---------- runbook steps ---------- */
+  const verbList = () => S.view().connectors.flatMap((c) => { const d = SCHEMA.connectors[(c.cfg && c.cfg.use || c.use || '').split('@')[0]]; return d ? Object.keys(d.verbs).map((v) => `${c.name}.${v}`) : []; });
+  function syncSteps() { const box = UI.$('#rb-steps'); if (!box) return; ev.steps = UI.$$('.rb-step', box).map((row) => ({ do: row.querySelector('[data-sk="do"]').value, type: row.querySelector('[data-sk="type"]').value, arg: (row.querySelector('[data-sk="arg"]') || { value: '' }).value })); }
+  const stepsHTML = () => `<div class="rb-steps" id="rb-steps">${ev.steps.map((s, i) => `<div class="rb-step" data-i="${i}"><span class="rb-n">${i + 1}</span>
+      <div class="rb-main"><input class="input" data-sk="do" value="${esc(s.do)}" placeholder="What to do" aria-label="Step ${i + 1}: what to do">
+        <div class="rb-act"><select class="select sm" data-sk="type" data-act-change="rb-type" aria-label="Step ${i + 1}: command or verb"><option value=""${!s.type ? ' selected' : ''}>no command</option><option value="run"${s.type === 'run' ? ' selected' : ''}>run a command</option><option value="verb"${s.type === 'verb' ? ' selected' : ''}>call a verb</option></select>${s.type ? `<input class="input mono" data-sk="arg" value="${esc(s.arg)}" ${s.type === 'verb' ? 'list="rb-verbs" placeholder="connector.verb"' : 'placeholder="the command"'} aria-label="Step ${i + 1}: ${s.type === 'verb' ? 'verb' : 'command'}">` : ''}</div></div>
+      <div class="rb-ctl"><button type="button" class="icon-btn sm" ${i ? `data-act="rb-up" data-i="${i}"` : UI.off('Already the first step')} aria-label="Move step ${i + 1} up">↑</button><button type="button" class="icon-btn sm" ${i < ev.steps.length - 1 ? `data-act="rb-down" data-i="${i}"` : UI.off('Already the last step')} aria-label="Move step ${i + 1} down">↓</button><button type="button" class="icon-btn sm" data-act="rb-del" data-i="${i}" aria-label="Remove step ${i + 1}">${icon('trash')}</button></div></div>`).join('') || '<div class="muted small">No steps yet.</div>'}</div>
+    <button type="button" class="btn sm" data-act="rb-add">${icon('plus')}Add a step</button><datalist id="rb-verbs">${verbList().map((v) => `<option value="${esc(v)}">`).join('')}</datalist>`;
+  const redrawSteps = () => { const f = UI.$('[data-field="steps"] .rb-wrap'); if (f) f.innerHTML = stepsHTML(); later(); };
+  UI.act('rb-add', () => { syncSteps(); ev.steps.push({ do: '', type: '', arg: '' }); redrawSteps(); const rows = UI.$$('#rb-steps [data-sk="do"]'); if (rows.length) rows[rows.length - 1].focus(); });
+  UI.act('rb-del', (b) => { syncSteps(); ev.steps.splice(+b.dataset.i, 1); redrawSteps(); });
+  UI.act('rb-up', (b) => { syncSteps(); const i = +b.dataset.i; [ev.steps[i - 1], ev.steps[i]] = [ev.steps[i], ev.steps[i - 1]]; redrawSteps(); });
+  UI.act('rb-down', (b) => { syncSteps(); const i = +b.dataset.i; [ev.steps[i + 1], ev.steps[i]] = [ev.steps[i], ev.steps[i + 1]]; redrawSteps(); });
+  document.addEventListener('change', (e) => { if (e.target.matches && e.target.matches('[data-act-change="rb-type"]')) { syncSteps(); redrawSteps(); } });
 
   /* ---------- the view ---------- */
   UI.repoView = (id, opts = {}) => {
-    const r = R.get(id);
-    if (ev.repo !== id || (ev.path && r.files[ev.path] == null && !ev.dirty)) { const p = r.open && r.files[r.open] != null ? r.open : Object.keys(r.files).filter(visible)[0]; if (p) openFile(r, p); else { ev.repo = id; ev.path = null; } }
-    const paths = Object.keys(r.files).filter(visible).sort();
-    const dirs = [...new Set(Object.keys(r.files).map((p) => p.split('/').slice(0, -1).join('/')).filter(Boolean))].sort();
+    const r = R.get(id), kinds = kindsFor(r);
+    if (ev.repo !== id) { ev.repo = id; ev.q = ''; ev.tag = ''; ev.view = 'kinds'; ev.key = null; ev.kind = null; const k = kindById(r, r.openKind) || (r.open && kindOfPath(r, r.open.split('#')[0])) || kinds[0]; const es = entriesOf(r, k), e = es.find((x) => x.key === r.open) || es[0]; if (e) openEntry(r, k, e); else ev.kind = k.id; }
+    let kind = kindById(r, ev.kind) || kinds[0];
+    if (ev.key && !ev.isNew && !entriesOf(r, kind).some((x) => x.key === ev.key)) { const e = entriesOf(r, kind)[0]; if (e) openEntry(r, kind, e); else { ev.key = null; } }
     const pins = (r.files['.pins'] || '').split('\n').filter(Boolean);
-    const fileRow = (p) => `<a href="#" class="f${p === ev.path ? ' on' : ''}" data-act="rp-open" data-repo="${id}" data-path="${esc(p)}" style="padding-left:${10 + (p.split('/').length - 1) * 12}px">${icon('file')}<span class="ellipsis">${esc(p.split('/').pop())}</span>${pins.includes(p) ? '<span class="pin" title="pinned">📌</span>' : ''}${p === ev.path && ev.dirty ? '<span class="dirty-dot" title="unsaved"></span>' : ''}</a>`;
-    const tree = `${pins.length && r.kind === 'bot' ? `<div class="tree-dir">${icon('zap')}pinned · always in context</div>${pins.filter((p) => r.files[p] != null).map(fileRow).join('')}` : ''}
-      ${paths.filter((p) => !p.includes('/')).map(fileRow).join('')}${dirs.map((d) => `<div class="tree-dir" style="padding-left:${10 + (d.split('/').length - 1) * 12}px">${icon('folder')}${esc(d.split('/').pop())}/</div>${paths.filter((p) => p.split('/').slice(0, -1).join('/') === d).map(fileRow).join('')}`).join('')}`;
-    const results = ev.q ? search(r, ev.q) : null;
-    const hist = r.log.filter((c) => ev.hist === 'repo' || c.changes.some((ch) => ch.path === ev.path || ch.from === ev.path));
-    const pend = r.proposals.filter((p) => p.status === 'pending');
-    return `<div class="repo" data-repo="${id}">
-      ${r.kind === 'team' ? proposalsHTML(r, pend) : ''}
-      <div class="grid repo-grid">
-        <div class="panel repo-side"><div class="panel-head"><h3 class="mono small">${esc(opts.title || id)}</h3><div class="tools"><button class="icon-btn sm" data-act="rp-new" data-repo="${id}" data-tip="New file" aria-label="New file">${icon('plus')}</button><button class="icon-btn sm" data-act="rp-mkdir" data-repo="${id}" data-tip="New folder" aria-label="New folder">${icon('folder')}</button><button class="icon-btn sm" data-act="rp-upload" data-repo="${id}" data-tip="Upload or import" aria-label="Upload or import">${icon('upload')}</button></div></div>
-          <div class="panel-body tight"><div class="input-icon" style="margin:8px">${icon('search')}<input class="input" placeholder="${r.kind === 'team' ? 'search team knowledge + bot memory' : 'search memory + team knowledge'}" value="${esc(ev.q)}" data-on-change="rp-q" data-repo="${id}" aria-label="Search knowledge"></div></div>
-          ${results ? `<div class="list search-res">${results.map((x) => `<a href="#" class="item click small" data-act="rp-hit" data-repo="${x.repo}" data-path="${esc(x.path)}"><div class="grow"><div class="mono tiny muted">${esc(x.repo)}</div><b class="mono">${esc(x.path)}</b><div class="muted tiny ellipsis">${esc(x.snip)}</div></div></a>`).join('') || '<div class="item small muted">No match.</div>'}<button class="btn sm ghost" data-act="rp-qclear" style="margin:6px">${icon('x')}Clear search</button></div>` : `<div class="tree" style="padding:6px">${tree || '<div class="muted small" style="padding:8px">Empty. Create a file or upload one.</div>'}</div>`}</div>
-        ${ev.path ? editorHTML(r) : `<div class="panel"><div class="empty"><span class="serif">No file open</span><button class="btn primary" data-act="rp-new" data-repo="${id}">${icon('plus')}New file</button></div></div>`}
-        <div class="panel repo-hist"><div class="panel-head"><h3>History</h3><div class="tools">${UI.seg([['file', 'this file'], ['repo', 'repo']], ev.hist, 'rp-hist')}</div></div>
-          <div class="list">${hist.slice(0, 30).map((c) => `<div class="item" style="align-items:flex-start"><span class="mono tiny" style="color:var(--accent)">${c.sha}</span><div class="grow small"><div>${esc(c.msg)}</div><div class="tiny">${whoChip(c)} <span class="muted mono">· ${ago(c.at)} ago</span></div>${ev.hist === 'repo' ? `<div class="mono tiny muted">${c.changes.map((ch) => esc(ch.from && ch.from !== ch.path ? `${ch.from} → ${ch.path}` : ch.path)).join(', ')}</div>` : ''}</div>
+    const tags = [...new Set(kinds.flatMap((k) => (k.dir || k.file ? entriesOf(r, k) : [])).flatMap((e) => (Array.isArray(e.fm.applies_to) ? e.fm.applies_to : [])))].sort();
+    const match = (e) => (!ev.tag || (Array.isArray(e.fm.applies_to) && e.fm.applies_to.includes(ev.tag))) && (!ev.q || JSON.stringify(e.fm).toLowerCase().includes(ev.q.toLowerCase()) || (e.body || '').toLowerCase().includes(ev.q.toLowerCase()));
+    const kindRow = (k) => { const es = entriesOf(r, k), shown = es.filter(match), on = k.id === kind.id;
+      return `<div class="kind-grp${on ? ' on' : ''}"><a href="#" class="kind-row" data-act="rp-kind" data-repo="${id}" data-k="${k.id}" aria-expanded="${on}">${icon(k.icon)}<span class="grow">${esc(k.label)}${k.pack ? ` <span class="origin custom">pack ${esc(k.pack)}</span>` : ''}</span><span class="count">${ev.q || ev.tag ? `${shown.length}/` : ''}${es.length}</span></a>
+        ${on ? `<div class="kind-entries">${shown.map((e) => `<a href="#" class="f entry${e.key === ev.key ? ' on' : ''}" data-act="rp-open" data-repo="${id}" data-key="${esc(e.key)}" data-k="${k.id}"><span class="ellipsis grow" title="${esc(e.title)}">${esc(e.title)}</span>${pins.includes(e.path) ? `<span class="pin" title="pinned: always in context">${icon('zap')}</span>` : ''}${e.err ? `<span class="tag" data-s="fail">invalid</span>` : ''}</a>`).join('') || `<div class="muted tiny" style="padding:6px 12px">${es.length ? 'Nothing matches.' : 'None yet.'}</div>`}</div>` : ''}</div>`; };
+    const files = Object.keys(r.files).filter(visible).sort();
+    const side = `<div class="panel repo-side"><div class="panel-head"><h3 class="mono small ellipsis" title="${esc(opts.title || id)}">${esc(opts.title || id)}</h3><div class="tools"><button class="btn sm primary" data-act="rp-new" data-repo="${id}">${icon('plus')}New…</button><button class="icon-btn sm" data-act="rp-upload" data-repo="${id}" data-tip="Import markdown into a kind" aria-label="Import">${icon('upload')}</button></div></div>
+      <div class="panel-body tight stack tight" style="padding:8px"><div class="input-icon">${icon('search')}<input class="input" placeholder="search" title="${r.kind === 'team' ? 'Searches team knowledge and its bots\' memory' : 'Searches this memory and the team\'s knowledge'}" value="${esc(ev.q)}" data-on-change="rp-q" data-repo="${id}" aria-label="Search knowledge"></div>
+        ${UI.seg([['kinds', 'By kind'], ['files', 'Files']], ev.view, 'rp-view')}</div>
+      ${ev.q && ev.view === 'kinds' ? searchHTML(r) : ''}
+      ${ev.view === 'files' ? `<div class="tree" style="padding:6px">${files.map((p) => `<a href="#" class="f${p === ev.file ? ' on' : ''}" data-act="rp-file" data-repo="${id}" data-path="${esc(p)}">${icon('file')}<span class="mono small ellipsis" title="${esc(p)}">${esc(p)}</span>${kindOfPath(r, p) ? '' : '<span class="tag">untyped</span>'}</a>`).join('') || '<div class="muted small" style="padding:8px">Empty.</div>'}<div class="muted tiny" style="padding:8px">Read-mostly: edit entries by kind.</div></div>`
+        : `<div class="kinds">${kinds.map(kindRow).join('')}</div>${tags.length ? `<div class="tag-filter"><div class="caps">applies to</div><div class="chips">${tags.map((t) => `<button type="button" class="chip${ev.tag === t ? ' on' : ''}" aria-pressed="${ev.tag === t}" data-act="rp-tag" data-t="${esc(t)}">${esc(t)}</button>`).join('')}</div></div>` : ''}
+          <div class="muted tiny" style="padding:8px 12px"><a class="link" href="#/config/collections">Collections…</a> · custom kinds, declared in config or by a pack</div>`}</div>`;
+    const hist = r.log.filter((c) => ev.hist === 'repo' || c.changes.some((ch) => ch.path === pathOf() || ch.from === pathOf()));
+    const main = ev.view === 'files' && ev.file ? rawHTML(r) : ev.key || ev.isNew ? (kind.readonly ? readHTML(r, kind) : editorHTML(r, kind)) : `<div class="panel"><div class="empty"><span class="serif">No ${esc(kind.label.toLowerCase())} yet</span><span>${esc(kind.who[r.kind] || '')}</span>${writable(r, kind) ? '' : `<button class="btn primary" data-act="rp-new-kind" data-repo="${id}" data-k="${kind.id}">${icon('plus')}New ${esc(kind.one)}</button>`}</div></div>`;
+    return `<div class="repo" data-repo="${id}">${r.kind === 'team' ? proposalsHTML(r) : ''}
+      <div class="grid repo-grid">${side}${main}
+        <div class="panel repo-hist"><div class="panel-head"><h3>History</h3><div class="tools">${UI.seg([['file', 'this entry'], ['repo', 'repo']], ev.hist, 'rp-hist')}</div></div>
+          <div class="list">${hist.slice(0, 30).map((c) => `<div class="item" style="align-items:flex-start"><span class="mono tiny" style="color:var(--accent)">${c.sha}</span><div class="grow small"><div>${esc(c.msg)}</div><div class="tiny">${whoChip(c)} <span class="muted mono">· ${ago(c.at)} ago</span></div>${ev.hist === 'repo' ? `<div class="mono tiny muted">${c.changes.filter((ch) => visible(ch.path)).map((ch) => esc(ch.from && ch.from !== ch.path ? `${ch.from} → ${ch.path}` : ch.path)).join(', ')}</div>` : ''}</div>
             <button class="icon-btn sm" data-act="rp-diff" data-repo="${id}" data-sha="${c.sha}" aria-label="Diff ${c.sha}" data-tip="Diff">${icon('eye')}</button><button class="icon-btn sm" data-act="rp-revert" data-repo="${id}" data-sha="${c.sha}" aria-label="Revert ${c.sha}" data-tip="Revert as a new commit">${icon('undo')}</button></div>`).join('') || '<div class="item small muted">No commits yet.</div>'}</div></div>
       </div></div>`;
   };
-  function editorHTML(r) {
-    const id = r.id, ver = R.version(r, ev.path), behind = ev.baseSha && ver && ver !== ev.baseSha;
-    const t = D.bots.find((b) => b.name === r.name), team = r.kind === 'bot' && t && t.cfg && t.cfg.team, tk = team && D.teams.find((x) => x.name === team);
+  function editorHTML(r, kind) {
+    const id = r.id, d = ev.draft || { fm: {}, body: '' }, path = ev.isNew ? derive(kind, d.fm.title || '', d.free) : pathOf();
+    const ver = !ev.isNew && R.version(r, path), behind = ev.baseSha && ver && ver !== ev.baseSha;
+    const b = D.bots.find((x) => x.name === r.name), team = r.kind === 'bot' && b && b.cfg && b.cfg.team, tk = team && D.teams.find((x) => x.name === team);
     const pins = (r.files['.pins'] || '').split('\n').filter(Boolean);
-    const blame = ev.blame ? R.blame(r, ev.path) : null;
+    const errs = ev.isNew ? [] : validate(kind, d.fm);
+    const c = kind.id === 'knowledge' || kind.id === 'runbook' ? cites(r, path) : null;
+    const blame = ev.blame && !ev.isNew ? R.blame(r, path) : null;
     let blameHTML = '';
-    if (blame) { const groups = []; blame.forEach((b) => { const last = groups[groups.length - 1]; if (last && last.c === b.c) last.lines.push(b.line); else groups.push({ c: b.c, lines: [b.line] }); }); blameHTML = `<div class="blame">${groups.map((g) => `<div class="bl-group ${g.c.kind}"><div class="bl-who">${whoChip(g.c)}<span class="mono tiny muted">${g.c.sha} · ${ago(g.c.at)}</span></div><pre>${esc(g.lines.join('\n'))}</pre></div>`).join('')}</div>`; }
-    return `<div class="panel repo-ed">
-      <div class="panel-head ed-head"><span class="mono small grow ellipsis">${esc(ev.path)}${ev.dirty ? ' <span class="tag" data-s="wait">unsaved</span>' : ''}${ev.proposal ? ` ${tag('approving ' + ev.proposal + ' with changes', 'ember')}` : ''}</span>
-        <div class="tools">${UI.seg([['edit', 'Edit'], ['split', 'Split'], ['preview', 'Preview']], ev.mode, 'rp-mode')}<button class="btn sm ghost${ev.blame ? ' on' : ''}" data-act="rp-blame" aria-pressed="${ev.blame}">${icon('members')}Who wrote this</button><button class="btn sm ghost" data-act="rp-file-menu" data-repo="${id}" aria-label="File actions">${icon('more')}</button></div></div>
-      <div class="readers small muted">${icon('eye')} read by ${readers(r, ev.path).map((b) => `<a class="link mono" href="#/bots/${b}">${esc(b)}</a>`).join(', ') || 'no bot yet'}${r.kind === 'team' ? ` · team ${esc(r.name)}` : ' · its own memory'}${pins.includes(ev.path) ? ' · <b>pinned</b>: always in its context' : ''}</div>
-      ${ev.conflict ? conflictHTML(r) : behind && !ev.dirty ? `<div class="callout info small">A newer commit (${ver}) changed this file. <button class="link" data-act="rp-reload" data-repo="${id}">Load it</button></div>` : ''}
-      ${blame ? blameHTML : `<div class="ed-panes mode-${ev.mode}">
-        <div class="ed-src">${UI.editor({ id: 'rp-ed', text: ev.text, lang: 'md', act: 'rp-input', minRows: 18, label: 'Markdown' })}</div>
-        <div class="ed-prev prose" id="rp-prev">${UI.mdRender(ev.text)}</div></div>`}
+    if (blame) { const groups = []; blame.forEach((x) => { const last = groups[groups.length - 1]; if (last && last.c === x.c) last.lines.push(x.line); else groups.push({ c: x.c, lines: [x.line] }); }); blameHTML = `<div class="blame">${groups.map((g) => `<div class="bl-group ${g.c.kind}"><div class="bl-who">${whoChip(g.c)}<span class="mono tiny muted">${g.c.sha} · ${ago(g.c.at)}</span></div><pre>${esc(g.lines.join('\n'))}</pre></div>`).join('')}</div>`; }
+    const fieldsHTML = kind.fields.map((f) => (f.type === 'steps' ? `<div class="field" data-field="steps"><label>Steps <span class="req">*</span></label><div class="rb-wrap">${stepsHTML()}</div><div class="ferr" role="alert"></div></div>` : UI.fieldHTML(f, d.fm[f.k] != null ? d.fm[f.k] : f.def != null && ev.isNew ? f.def : '', 'ke-'))).join('');
+    return `<div class="panel repo-ed ke" data-kind="${kind.id}">
+      <div class="panel-head ed-head"><span class="kind-tag">${icon(kind.icon)}${esc(kind.label)}</span><b class="grow ellipsis" title="${esc(d.fm.title || d.fm.what || '')}">${ev.isNew ? `New ${esc(kind.one)}` : esc(d.fm.title || d.fm.what || path)}</b><span class="tag hide" data-s="wait" id="ke-dirty">unsaved</span>${ev.proposal ? tag('approving ' + ev.proposal + ' with changes', 'ember') : ''}
+        <div class="tools">${ev.isNew ? '' : `<button class="btn sm ghost${ev.blame ? ' on' : ''}" data-act="rp-blame" aria-pressed="${ev.blame}">${icon('bots')}Who wrote this</button><button class="btn sm ghost" data-act="rp-file-menu" data-repo="${id}" aria-label="Entry actions">${icon('more')}</button>`}</div></div>
+      <div class="ke-path"><span class="caps">path</span><span class="mono" id="ke-path">${esc(kind.id === 'watch' ? 'watch.md · ' + (d.fm.what ? '#' + slug(d.fm.what) : 'new entry') : path)}</span><span class="muted tiny">${kind.free ? `you choose the path inside ${esc(kind.dir)}/` : kind.id === 'watch' ? 'one entry in watch.md' : 'derived from the kind and the title; rename by changing the title'}</span></div>
+      <div class="readers small muted">${icon('eye')} read by ${readers(r).map((x) => `<a class="link mono" href="#/bots/${x}">${esc(x)}</a>`).join(', ') || 'no bot yet'}${r.kind === 'team' ? ` · team ${esc(r.name)}` : ' · its own memory'}${pins.includes(path) ? ' · <b>pinned</b>: always in its context' : ''} · ${esc(kind.who[r.kind] || '')}</div>
+      ${ev.conflict ? conflictHTML(r) : behind && !isDirty() ? `<div class="callout info small">A newer commit (${ver}) changed this entry. <button class="link" data-act="rp-reload" data-repo="${id}">Load it</button></div>` : ''}
+      ${errs.length ? `<div class="callout danger small">This entry fails the ${esc(kind.one)} schema: ${errs.map(esc).join('; ')}. Fix it and save.</div>` : ''}
+      ${blame ? blameHTML : `<form class="ke-form stack" id="ke-form" data-pre="ke-" novalidate onsubmit="return false">
+        ${kind.free ? `<div class="field" data-field="free"><label for="ke-free">Path in ${esc(kind.dir)}/ <span class="opt">this collection allows free paths</span></label><div class="ke-free"><span class="mono muted">${esc(kind.dir)}/</span><input class="input mono" id="ke-free" value="${esc(d.free || '')}" placeholder="${esc(slug(d.fm.title || 'my-entry'))}" aria-label="Path inside ${esc(kind.dir)}"><span class="mono muted">.md</span></div><div class="ferr" role="alert"></div></div>` : ''}
+        ${fieldsHTML}
+        ${kind.body ? `<div class="field"><div class="row"><label>${esc(kind.body)} <span class="opt">markdown</span></label><span style="margin-left:auto">${UI.seg([['edit', 'Edit'], ['split', 'Split'], ['preview', 'Preview']], ev.mode, 'rp-mode')}</span></div>
+          <div class="ed-panes mode-${ev.mode}"><div class="ed-src">${UI.editor({ id: 'rp-ed', text: d.body || '', lang: 'md', act: 'rp-input', minRows: 8, label: kind.body + ' (markdown)' })}</div><div class="ed-prev prose" id="rp-prev">${UI.mdRender(d.body || '')}</div></div></div>` : ''}
+      </form>`}
+      ${c && !ev.isNew ? `<div class="cites small"><div class="caps">${kind.id === 'runbook' ? 'used in' : 'cited by'}</div>${c.runbooks.map((x) => `<a class="chip" href="#" data-act="rp-hit" data-repo="${x.repo}" data-key="${esc(x.path)}">${icon('workflows')}${esc(x.title)}</a>`).join('')}${c.cases.map((x) => caseHref(x) ? `<a class="chip" href="${caseHref(x)}">${icon('runs')}case ${esc(x)}</a>` : `<span class="chip">${icon('runs')}${esc(x)}</span>`).join('')}${c.logs.map((x) => `<a class="chip" href="#" data-act="rp-hit" data-repo="${x.repo}" data-key="${esc(x.path)}">${icon('clock')}${esc(x.title)}</a>`).join('')}${!c.runbooks.length && !c.cases.length && !c.logs.length ? '<span class="muted">nothing yet</span>' : ''}</div>` : ''}
+      <div class="form-err callout danger small hide" id="ke-err" role="alert"></div>
       <div class="panel-foot ed-foot"><input class="input grow" id="rp-msg" placeholder="Commit message (optional)" aria-label="Commit message">
-        <button class="btn sm ghost" data-act="rp-sim" data-repo="${id}" data-tip="Prototype: a bot commits to this file now, to try conflict handling">${icon('zap')}Simulate a bot commit</button>
-        ${team && tk && tk.cfg.knowledge && !ev.dirty ? `<button class="btn sm" data-act="rp-promote" data-repo="${id}">${icon('upload')}Promote to team ${esc(team)}</button>` : ''}
-        <button class="btn sm ghost" data-act="rp-discard" ${ev.dirty ? '' : UI.off('No unsaved changes')}>Discard</button>
-        <button class="btn primary" data-act="rp-save" data-repo="${id}" ${ev.dirty || ev.proposal ? '' : UI.off('Nothing to save yet: edit the file first')}>${icon('commit')}${ev.proposal ? 'Approve with changes' : 'Save · one commit'}</button></div>
+        ${ev.isNew ? '' : `<button class="btn sm ghost" data-act="rp-sim" data-repo="${id}" data-tip="Prototype: a bot commits to this entry now, to try conflict handling">${icon('zap')}Simulate a bot commit</button>`}
+        ${team && tk && tk.cfg.knowledge && !ev.isNew && (kind.id === 'knowledge' || kind.id === 'runbook') ? `<button class="btn sm" data-act="rp-promote" data-repo="${id}">${icon('upload')}Promote to team ${esc(team)}</button>` : ''}
+        <button class="btn sm ghost" data-act="rp-discard" ${ev.isNew ? '' : UI.off('No unsaved changes')}>${ev.isNew ? 'Cancel' : 'Discard'}</button>
+        <button class="btn primary" data-act="rp-save" data-repo="${id}" ${ev.proposal ? '' : UI.off(ev.isNew ? 'Fill in the fields first' : 'Nothing to save yet: change a field first')}>${icon('commit')}${ev.proposal ? 'Approve with changes' : 'Save · one commit'}</button></div>
       <div class="muted tiny ed-sign">Saved as you: <span class="mono">Authored-By: operator:ops · Edited-Via: dashboard</span>. No approval: operator provenance is trusted.</div></div>`;
+  }
+  function readHTML(r, kind) {
+    const e = entriesOf(r, kind).find((x) => x.key === ev.key); if (!e) return '';
+    const notes = annotations(r, e.path);
+    return `<div class="panel repo-ed ke" data-kind="${kind.id}"><div class="panel-head ed-head"><span class="kind-tag">${icon(kind.icon)}${esc(kind.label)}</span><b class="grow ellipsis">${esc(e.title)}</b>${notes.some((n) => n.flag) ? tag('flagged as wrong', 'fail') : ''}${e.fm.case && caseHref(e.fm.case) ? `<a class="btn sm ghost" href="${caseHref(e.fm.case)}">${icon('runs')}case ${esc(e.fm.case)}</a>` : ''}</div>
+      <div class="ke-path"><span class="caps">path</span><span class="mono">${esc(e.path)}</span><span class="muted tiny">${kind.id === 'log' ? 'written by the bot, per case' : 'system-generated'}</span></div>
+      <div class="callout small">${icon('lock')} ${esc(kind.readonly)}</div>
+      <div class="panel-body prose">${UI.mdRender(e.body)}</div>
+      ${kind.id === 'log' ? `<div class="panel-body"><div class="caps">annotations</div>${notes.map((n) => `<div class="anno${n.flag ? ' flag' : ''}"><b>${n.flag ? 'Flagged as wrong' : 'Note'}</b> <span class="muted tiny mono">${esc(n.who)} · ${ago(n.at)} ago</span><div>${esc(n.text)}</div></div>`).join('') || '<div class="muted small">None.</div>'}
+        <div class="row" style="margin-top:8px"><button class="btn sm" data-act="rp-annotate" data-repo="${r.id}">${icon('edit')}Annotate</button><button class="btn sm danger" data-act="rp-flag" data-repo="${r.id}">${icon('warn')}Flag as wrong</button></div></div>` : ''}</div>`;
+  }
+  const annoPath = (p) => `.annotations/${p}.yaml`;
+  const annotations = (r, p) => { const t = r.files[annoPath(p)]; if (!t) return []; try { return YAML.parse(t).value || []; } catch (e) { return []; } };
+  function rawHTML(r) {
+    const p = ev.file, k = kindOfPath(r, p), txt = r.files[p] || '';
+    return `<div class="panel repo-ed"><div class="panel-head ed-head"><span class="mono small grow ellipsis" title="${esc(p)}">${esc(p)}</span>${k ? tag(k.label) : tag('untyped', 'wait')}
+      <div class="tools">${k ? `<button class="btn sm" data-act="rp-as-kind" data-repo="${r.id}" data-path="${esc(p)}">Open as ${esc(k.one)}</button>` : `<button class="btn sm primary" data-act="rp-map-file" data-repo="${r.id}" data-path="${esc(p)}">Map into a kind…</button>`}</div></div>
+      <div class="muted small" style="padding:8px 16px 0">The files view is read-mostly: entries are edited through their kind, so they keep their fields and their place.</div>
+      <pre class="raw mono">${esc(txt)}</pre></div>`;
   }
   function conflictHTML(r) {
     const c = ev.conflict;
-    return `<div class="conflict"><div class="callout warn small"><b>Conflict.</b> ${esc(whoLabel(c.commit))} committed <span class="mono">${c.commit.sha}</span> to this file after you opened it. Choose explicitly:</div>
-      <div class="grid g2"><div><div class="caps">their change (vs. what you opened)</div>${UI.diffView(ev.base, c.theirs, 'unified', { file: ev.path }).html}</div><div><div class="caps">your change (vs. what you opened)</div>${UI.diffView(ev.base, ev.text, 'unified', { file: ev.path }).html}</div></div>
-      <div class="row" style="margin-top:8px"><button class="btn primary" data-act="rp-rebase" data-repo="${r.id}">${icon('branch')}Rebase my edit on theirs</button><button class="btn danger" data-act="rp-overwrite" data-repo="${r.id}">Overwrite theirs with mine</button><button class="btn ghost" data-act="rp-take-theirs" data-repo="${r.id}">Discard mine, keep theirs</button></div></div>`;
+    return `<div class="conflict"><div class="callout warn small"><b>Conflict.</b> ${esc(whoLabel(c.commit))} committed <span class="mono">${c.commit.sha}</span> to this entry after you opened it. Choose explicitly:</div>
+      <div class="grid g2"><div><div class="caps">their change</div>${UI.diffView(c.base, c.theirs, 'unified', { file: pathOf() }).html}</div><div><div class="caps">your change</div>${UI.diffView(c.base, c.mine, 'unified', { file: pathOf() }).html}</div></div>
+      <div class="row wrap" style="margin-top:8px"><button class="btn primary" data-act="rp-rebase" data-repo="${r.id}">${icon('branch')}Rebase my edit on theirs</button><button class="btn danger" data-act="rp-overwrite" data-repo="${r.id}">Overwrite theirs with mine</button><button class="btn ghost" data-act="rp-take-theirs" data-repo="${r.id}">Discard mine, keep theirs</button></div></div>`;
   }
-  function proposalsHTML(r, pend) {
+  function proposalsHTML(r) {
     const all = r.proposals;
-    return `<div class="panel" style="margin-bottom:14px"><div class="panel-head"><h3>Proposals from bots</h3><span class="muted small">bots propose; you approve, edit, or deny with a reason</span>
+    return `<div class="panel" style="margin-bottom:14px"><div class="panel-head"><h3>Proposals from bots</h3><span class="muted small">each is checked against its kind's schema</span>
       <div class="tools"><button class="btn sm" ${ev.sel.size ? `data-act="kp-bulk" data-repo="${r.id}" data-d="approve"` : UI.off('Tick proposals first')}>${icon('passkey')}Approve selected${ev.sel.size ? ` (${ev.sel.size})` : ''}</button><button class="btn sm danger" ${ev.sel.size ? `data-act="kp-bulk" data-repo="${r.id}" data-d="deny"` : UI.off('Tick proposals first')}>Deny selected</button></div></div>
-      <div class="list">${all.map((p) => `<div class="item kprop" style="align-items:flex-start">${p.status === 'pending' ? `<input type="checkbox" class="cbx" data-on-change="kp-sel" data-id="${p.id}" ${ev.sel.has(p.id) ? 'checked' : ''} aria-label="Select ${p.id}">` : UI.st(p.status.startsWith('approved') ? 'ok' : 'fail', '')}
-        <div class="grow small"><div><b>${esc(p.summary)}</b></div><div class="mono tiny muted">${p.id} · ${esc(p.bot)}: ${esc(p.from)} → ${esc(p.to)}${p.case ? ' · case ' + p.case : ''} · ${ago(p.at)} ago${p.approver ? ' · ' + esc(p.approver) : ''}</div>${p.reason ? `<div class="tiny" style="color:var(--fail)">denied: ${esc(p.reason)}</div>` : ''}
-        ${p.status === 'pending' && p.diff ? `<div class="diff" style="margin-top:6px">${p.diff.split('\n').filter(Boolean).map((l) => `<div class="dl ${l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : ''}"><span></span><span></span><span>${l[0] === ' ' ? ' ' : l[0]}</span><span>${esc(l.slice(1))}</span></div>`).join('')}</div>` : ''}</div>
-        ${p.status === 'pending' ? `<div class="row wrap" style="gap:4px"><button class="btn sm primary" data-act="kp-approve" data-repo="${r.id}" data-id="${p.id}">${icon('passkey')}Approve</button><button class="btn sm" data-act="kp-edit" data-repo="${r.id}" data-id="${p.id}">${icon('edit')}Approve with changes</button><button class="btn sm danger" data-act="kp-deny" data-repo="${r.id}" data-id="${p.id}">Deny</button></div>` : tag(p.status, p.status.startsWith('approved') ? 'ok' : 'fail')}</div>`).join('') || '<div class="item small muted">No proposals.</div>'}</div></div>`;
+      <div class="list">${all.map((p) => { const k = kindById(r, p.kind === 'knowledge' || p.kind === 'runbook' || p.kind === 'watch' ? p.kind : 'c:' + p.kind) || KINDS.knowledge; const x = FM.parse(p.content || ''); const errs = p.status === 'pending' ? (x.err ? [x.err] : validate(k, x.fm, x.fm.kind)) : [];
+        return `<div class="item kprop" style="align-items:flex-start" data-prop="${p.id}">${p.status === 'pending' ? `<input type="checkbox" class="cbx" data-on-change="kp-sel" data-id="${p.id}" ${ev.sel.has(p.id) ? 'checked' : ''} aria-label="Select ${p.id}">` : UI.st(p.status.startsWith('approved') ? 'ok' : 'fail', '')}
+        <div class="grow small"><div class="row wrap" style="gap:6px"><span class="kind-tag sm">${icon(k.icon)}${esc(k.label)}</span><b>${esc(p.summary)}</b></div><div class="mono tiny muted">${p.id} · ${esc(p.bot)} → ${esc(p.to)}${p.case ? ' · case ' + p.case : ''} · ${ago(p.at)} ago${p.approver ? ' · ' + esc(p.approver) : ''}</div>${p.reason ? `<div class="tiny" style="color:var(--fail)">denied: ${esc(p.reason)}</div>` : ''}
+          ${errs.length ? `<div class="schema-errs"><b>Fails the ${esc(k.one)} schema</b><ul>${errs.map((e) => `<li class="mono">${esc(e)}</li>`).join('')}</ul></div>` : ''}
+          ${p.status === 'pending' && !errs.length ? (r.files[p.to] != null ? UI.diffView(r.files[p.to], p.content, 'unified', { file: p.to }).html : `<div class="prop-fields">${k.fields.filter((f) => x.fm[f.k] != null && f.type !== 'steps').map((f) => `<div><span class="caps">${esc(f.label || f.k.replace(/_/g, ' '))}</span> ${esc(Array.isArray(x.fm[f.k]) ? x.fm[f.k].join(', ') : x.fm[f.k])}</div>`).join('')}</div>`) : ''}</div>
+        ${p.status === 'pending' ? `<div class="row wrap" style="gap:4px"><button class="btn sm primary" ${errs.length ? UI.off(`Fails the ${k.one} schema: ${errs[0]}${errs.length > 1 ? ` (+${errs.length - 1} more)` : ''}. Approve it with changes, or deny it.`) : `data-act="kp-approve" data-repo="${r.id}" data-id="${p.id}"`}>${icon('passkey')}Approve</button><button class="btn sm" data-act="kp-edit" data-repo="${r.id}" data-id="${p.id}">${icon('edit')}Approve with changes</button><button class="btn sm danger" data-act="kp-deny" data-repo="${r.id}" data-id="${p.id}">Deny</button></div>` : tag(p.status, p.status.startsWith('approved') ? 'ok' : 'fail')}</div>`; }).join('') || '<div class="item small muted">No proposals.</div>'}</div></div>`;
   }
-  function search(r, q) {
-    const ql = q.toLowerCase(), repos = [r];
-    if (r.kind === 'team') botsOfTeam(r.name).forEach((b) => repos.push(R.get('bot:' + b)));
-    else { const b = D.bots.find((x) => x.name === r.name); if (b && b.cfg && b.cfg.team) repos.push(R.get('team:' + b.cfg.team)); }
-    const out = [];
-    repos.forEach((x) => Object.entries(x.files).filter(([p]) => visible(p)).forEach(([p, c]) => { const i = (p + '\n' + c).toLowerCase().indexOf(ql); if (i >= 0) { const line = c.split('\n').find((l) => l.toLowerCase().includes(ql)) || p; out.push({ repo: x.id, path: p, snip: line.trim() }); } }));
-    return out;
+  function searchHTML(r) {
+    const ql = ev.q.toLowerCase(), out = [];
+    related(r).forEach((x) => kindsFor(x).forEach((k) => entriesOf(x, k).forEach((e) => { const hay = JSON.stringify(e.fm) + '\n' + (e.body || ''); if (hay.toLowerCase().includes(ql)) { const line = (e.body || '').split('\n').find((l) => l.toLowerCase().includes(ql)) || Object.values(e.fm).map(String).find((v) => v.toLowerCase().includes(ql)) || ''; out.push({ repo: x.id, kind: k, e, snip: line.trim() }); } })));
+    return `<div class="list search-res">${out.map((x) => `<a href="#" class="item click small" data-act="rp-hit" data-repo="${x.repo}" data-key="${esc(x.e.key)}"><div class="grow"><div class="mono tiny muted">${esc(x.repo)} · ${esc(x.kind.label)}</div><b>${esc(x.e.title)}</b><div class="muted tiny ellipsis" title="${esc(x.snip)}">${esc(x.snip)}</div></div></a>`).join('') || '<div class="item small muted">No match.</div>'}<button class="btn sm ghost" data-act="rp-qclear" style="margin:6px">${icon('x')}Clear search</button></div>`;
   }
 
   /* ---------- actions ---------- */
   const repoOf = (b) => R.get(b.dataset.repo || ev.repo);
   const rerender = () => UI.rerender();
-  UI.act('rp-open', (a) => { const r = repoOf(a); guardThen(() => { openFile(r, a.dataset.path); rerender(); }); });
-  UI.act('rp-mode', (b) => { ev.mode = b.dataset.v; ev.blame = false; rerender(); });
-  UI.act('rp-blame', () => { ev.blame = !ev.blame; rerender(); });
-  UI.act('rp-hist', (b) => { ev.hist = b.dataset.v; rerender(); });
+  UI.act('rp-kind', (a) => { const r = repoOf(a); guardThen(() => { const k = kindById(r, a.dataset.k); ev.kind = k.id; ev.view = 'kinds'; const e = entriesOf(r, k)[0]; if (e) openEntry(r, k, e); else { ev.key = null; ev.isNew = false; r.openKind = k.id; } rerender(); }); });
+  UI.act('rp-open', (a) => { const r = repoOf(a); guardThen(() => { const k = kindById(r, a.dataset.k), e = entriesOf(r, k).find((x) => x.key === a.dataset.key); if (e) openEntry(r, k, e); rerender(); }); });
+  UI.act('rp-view', (b) => guardThen(() => { ev.view = b.dataset.v; rerender(); }));
+  UI.act('rp-file', (a) => { ev.file = a.dataset.path; rerender(); });
+  UI.act('rp-as-kind', (b) => { const r = repoOf(b), k = kindOfPath(r, b.dataset.path), e = entriesOf(r, k).find((x) => x.path === b.dataset.path); if (e) openEntry(r, k, e); rerender(); });
+  UI.act('rp-tag', (b) => { ev.tag = ev.tag === b.dataset.t ? '' : b.dataset.t; rerender(); });
+  UI.act('rp-mode', (b) => { const ta = UI.$('#rp-ed .ced-ta'); if (ta && ev.draft) ev.draft.body = ta.value; const r = R.get(ev.repo), k = kindById(r, ev.kind); if (k && UI.$('#ke-form')) { const d = readDraft(k); ev.draft = d; } ev.mode = b.dataset.v; ev.blame = false; rerender(); });
+  UI.act('rp-blame', () => { const r = R.get(ev.repo), k = kindById(r, ev.kind); if (UI.$('#ke-form')) ev.draft = readDraft(k); ev.blame = !ev.blame; rerender(); });
+  UI.act('rp-hist', (b) => { const r = R.get(ev.repo), k = r && kindById(r, ev.kind); if (k && UI.$('#ke-form')) ev.draft = readDraft(k); ev.hist = b.dataset.v; rerender(); });
   UI.act('rp-q', (el) => { ev.q = el.value.trim(); rerender(); });
   UI.act('rp-qclear', () => { ev.q = ''; rerender(); });
-  UI.act('rp-hit', (a) => guardThen(() => { const r = R.get(a.dataset.repo); r.open = a.dataset.path; ev.q = ''; S.save(); const [k, n] = a.dataset.repo.split(':'); const href = k === 'team' ? `#/teams/${n}/knowledge` : `#/bots/${n}/memory`; ev.repo = null; if (location.hash.startsWith(href)) rerender(); else UI.go(href); }));
-  let pv;
-  UI.act('rp-input', (ta) => { ev.text = ta.value; const was = ev.dirty; ev.dirty = ev.text !== ev.base || !!ev.proposal; clearTimeout(pv); pv = setTimeout(() => { const p = UI.$('#rp-prev'); if (p) p.innerHTML = UI.mdRender(ev.text); }, 120); if (was !== ev.dirty) { const b = UI.$('[data-act="rp-save"]'); if (b && ev.dirty) { b.removeAttribute('aria-disabled'); delete b.dataset.reason; delete b.dataset.tip; } const d = UI.$('[data-act="rp-discard"]'); if (d && ev.dirty) { d.removeAttribute('aria-disabled'); delete d.dataset.reason; delete d.dataset.tip; } const h = UI.$('.ed-head .grow'); if (h && ev.dirty && !h.querySelector('.tag')) h.insertAdjacentHTML('beforeend', ' <span class="tag" data-s="wait">unsaved</span>'); } });
-  UI.act('rp-discard', () => UI.confirm({ title: 'Discard your edits?', body: `Puts <span class="mono">${esc(ev.path)}</span> back to the last commit.`, ok: 'Discard', danger: true }).then((ok) => { if (!ok) return; const r = R.get(ev.repo); openFile(r, ev.path); rerender(); }));
-  UI.act('rp-reload', (b) => { openFile(repoOf(b), ev.path); rerender(); });
-  function save(r, opts = {}) {
-    const ver = R.version(r, ev.path);
-    if (!opts.force && ev.baseSha && ver && ver !== ev.baseSha) { const c = r.log.find((x) => x.sha === ver); ev.conflict = { commit: c, theirs: r.files[ev.path] }; rerender(); return; }
-    const msg = (UI.$('#rp-msg') || {}).value || `${r.files[ev.path] == null ? 'add' : 'edit'} ${ev.path}`;
-    const c = R.commit(r, { msg: msg + (opts.force ? ` (overwrote ${ver})` : ''), changes: [{ path: ev.path, before: r.files[ev.path] != null ? r.files[ev.path] : null, after: ev.text }], trailers: 'Authored-By: operator:ops · Edited-Via: dashboard' });
-    openFile(r, ev.path); rerender(); UI.toast(`Committed ${c.sha}`, `one commit by ops · ${esc(ev.path)}`, 'ok');
+  UI.act('rp-hit', (a) => guardThen(() => { const x = R.get(a.dataset.repo), p = a.dataset.key.split('#')[0], k = kindOfPath(x, p); x.open = a.dataset.key; x.openKind = k && k.id; ev.q = ''; S.save(); const [kk, n] = a.dataset.repo.split(':'); const href = kk === 'team' ? `#/teams/${n}/knowledge` : `#/bots/${n}/memory`; ev.repo = null; if (location.hash.startsWith(href)) rerender(); else UI.go(href); }));
+  UI.act('rp-input', () => later());
+  UI.act('rp-discard', () => { if (ev.isNew && !isDirty()) { ev.isNew = false; ev.repo = null; return rerender(); } UI.confirm({ title: ev.isNew ? 'Discard this new entry?' : 'Discard your edits?', body: ev.isNew ? 'Nothing was saved.' : `Puts <span class="mono">${esc(pathOf())}</span> back to the last commit.`, ok: 'Discard', cancel: 'Keep editing', danger: true }).then((ok) => { if (!ok) return; const r = R.get(ev.repo), k = kindById(r, ev.kind); if (ev.isNew) { ev.isNew = false; ev.repo = null; } else openEntry(r, k, entriesOf(r, k).find((x) => x.key === ev.key)); rerender(); }); });
+  UI.act('rp-reload', (b) => { const r = repoOf(b), k = kindById(r, ev.kind); openEntry(r, k, entriesOf(r, k).find((x) => x.key === ev.key)); rerender(); });
+  function showErrs(kind, errs) {
+    const f = UI.$('#ke-form'); if (!f) return;
+    f.querySelectorAll('.field').forEach((x) => { x.classList.remove('bad'); const fe = x.querySelector('.ferr'); if (fe) fe.textContent = ''; });
+    errs.forEach((e) => { const k = e.split(/[.:[]/)[0]; const box = f.querySelector(`[data-field="${k}"]`); if (box) { box.classList.add('bad'); const fe = box.querySelector('.ferr'); if (fe) fe.textContent = (fe.textContent ? fe.textContent + ' · ' : '') + e.replace(/^[\w]+:\s*/, ''); } });
+    const box = UI.$('#ke-err'); box.textContent = `Fails the ${kind.one} schema: ${errs.join('; ')}`; box.classList.remove('hide');
   }
+  function save(r, opts = {}) {
+    const kind = kindById(r, ev.kind), d = readDraft(kind);
+    const errs = validate(kind, d.fm);
+    if (kind.free && d.free && !/^[a-z0-9][\w./-]*$/i.test(d.free)) errs.push('free: a relative path such as vendors/acme (no .. or leading /)');
+    if (kind.free && /\.\./.test(d.free)) errs.push('free: no .. in paths');
+    if (errs.length) { showErrs(kind, errs); return; }
+    const msgIn = (UI.$('#rp-msg') || {}).value;
+    const prop = ev.proposal && r.proposals.find((x) => x.id === ev.proposal);
+    const author = prop ? { who: 'bot:' + prop.bot, kind: 'bot', case: prop.case, trailers: `Promoted-By: bot:${prop.bot} · Approved-By: operator:ops · Edited-By: operator:ops` } : { trailers: 'Authored-By: operator:ops · Edited-Via: dashboard' };
+    if (kind.id === 'watch') {
+      const items = WATCH.parse(r.files['watch.md']), i = ev.isNew ? -1 : items.findIndex((w) => 'watch.md#' + slug(w.what) === ev.key);
+      if (items.some((w, j) => j !== i && slug(w.what) === slug(d.fm.what))) return showErrs(kind, [`what: there is already a watch item “${d.fm.what}”`]);
+      const ver = R.version(r, 'watch.md'); if (!opts.force && !ev.isNew && ev.baseSha && ver && ver !== ev.baseSha) return conflict(r, kind, d, 'watch.md');
+      const fm = {}; kind.fields.forEach((f) => { fm[f.k] = d.fm[f.k]; }); if (i >= 0) items[i] = fm; else items.push(fm);
+      const c = R.commit(r, Object.assign({ msg: msgIn || `${i >= 0 ? 'edit' : 'add'} watch item ${d.fm.what}`, changes: [{ path: 'watch.md', before: r.files['watch.md'] != null ? r.files['watch.md'] : null, after: WATCH.emit(items) }] }, author));
+      const k2 = entriesOf(r, kind).find((x) => x.key === 'watch.md#' + slug(d.fm.what)); finishSave(r, kind, k2, c, prop); return;
+    }
+    const path = derive(kind, d.fm.title, d.free), from = ev.isNew ? null : pathOf();
+    if (path !== from && r.files[path] != null) return showErrs(kind, [`title: an entry with this title already exists (${path})`]);
+    const ver = from && R.version(r, from); if (!opts.force && from && ev.baseSha && ver && ver !== ev.baseSha) return conflict(r, kind, d, from);
+    const text = FM.emit(kind, d.fm, d.body);
+    const c = R.commit(r, Object.assign({ msg: msgIn || `${ev.isNew ? 'add' : from !== path ? 'rename' : 'edit'} ${kind.one} ${path}${opts.force ? ` (overwrote ${ver})` : ''}`, changes: [{ path, from: from && from !== path ? from : undefined, before: from ? r.files[from] : null, after: text }] }, author));
+    if (from && from !== path) { const pins = (r.files['.pins'] || '').split('\n').filter(Boolean); if (pins.includes(from)) r.files['.pins'] = pins.map((p) => (p === from ? path : p)).join('\n'); }
+    finishSave(r, kind, entriesOf(r, kind).find((x) => x.path === path), c, prop);
+  }
+  function finishSave(r, kind, entry, c, prop) {
+    if (prop) { prop.status = 'approved (edited)'; prop.approver = 'ops (passkey · laptop), with changes'; }
+    openEntry(r, kind, entry); S.save(); rerender();
+    UI.toast(prop ? `Approved ${prop.id} with changes` : `Committed ${c.sha}`, prop ? 'one commit, the bot as author, your edit recorded' : `one commit by ops · ${esc(entry ? entry.path : '')}`, 'ok');
+  }
+  function conflict(r, kind, d, path) { const ver = R.version(r, path), c = r.log.find((x) => x.sha === ver); const base = r.log.find((x) => x.sha === ev.baseSha); const baseText = base ? (base.changes.find((ch) => ch.path === path) || {}).after || '' : ''; ev.draft = d; ev.conflict = { commit: c, theirs: r.files[path], base: baseText, mine: kind.id === 'watch' ? WATCH.emit([d.fm]) : FM.emit(kind, d.fm, d.body) }; rerender(); }
   UI.act('rp-save', (b) => {
     const r = repoOf(b);
-    if (ev.proposal) {
-      const p = r.proposals.find((x) => x.id === ev.proposal);
-      UI.stepup({ title: `Approve ${p.id} with your changes`, purpose: 'team knowledge', ok: 'Approve with passkey', what: `{ team: <b>${esc(r.name)}</b>, proposal: <b>${p.id}</b>, path: <b>${esc(ev.path)}</b>, edited_by: <b>operator:ops</b> }` }).then((ok) => {
-        if (!ok) return;
-        R.commit(r, { msg: `promote ${p.to} from ${p.bot} (edited)`, who: 'bot:' + p.bot, kind: 'bot', case: p.case, changes: [{ path: ev.path, before: r.files[ev.path] != null ? r.files[ev.path] : null, after: ev.text }], trailers: `Promoted-By: bot:${p.bot} · Approved-By: operator:ops · Edited-By: operator:ops` });
-        p.status = 'approved (edited)'; p.approver = 'ops (passkey · laptop), with changes';
-        openFile(r, ev.path); S.save(); rerender(); UI.toast(`Approved ${p.id} with changes`, 'one commit, the bot as author, your edit recorded', 'ok');
-      });
-      return;
-    }
+    if (ev.proposal) { const p = r.proposals.find((x) => x.id === ev.proposal); const kind = kindById(r, ev.kind), errs = validate(kind, readDraft(kind).fm); if (errs.length) return showErrs(kind, errs); UI.stepup({ title: `Approve ${p.id} with your changes`, purpose: 'team knowledge', ok: 'Approve with passkey', what: `{ team: <b>${esc(r.name)}</b>, proposal: <b>${p.id}</b>, kind: <b>${esc(kind.id)}</b>, edited_by: <b>operator:ops</b> }` }).then((ok) => { if (ok) save(r); }); return; }
     save(r);
   });
-  UI.act('rp-overwrite', (b) => { const r = repoOf(b); ev.conflict = null; save(r, { force: true }); });
-  UI.act('rp-take-theirs', (b) => { openFile(repoOf(b), ev.path); rerender(); });
+  UI.act('rp-overwrite', (b) => { const r = repoOf(b); ev.conflict = null; rerender(); setTimeout(() => save(r, { force: true }), 0); });
+  UI.act('rp-take-theirs', (b) => { const r = repoOf(b), k = kindById(r, ev.kind); openEntry(r, k, entriesOf(r, k).find((x) => x.key === ev.key)); rerender(); });
   UI.act('rp-rebase', (b) => {
-    // naive line rebase: theirs, plus the lines you added (after the line they followed), minus the lines you removed
-    const r = repoOf(b), base = ev.base.split('\n'), theirs = ev.conflict.theirs.split('\n');
-    const mine = YAML.diff(ev.base, ev.text); let out = theirs.slice(); let anchor = null;
-    mine.forEach((x) => { if (x.t === ' ') anchor = x.s; else if (x.t === '-') { const i = out.indexOf(x.s); if (i >= 0) out.splice(i, 1); } else { const i = anchor == null ? -1 : out.lastIndexOf(anchor); out.splice(i + 1, 0, x.s); anchor = x.s; } });
-    const merged = out.join('\n'); void base;
-    openFile(r, ev.path, merged); ev.dirty = true; rerender(); UI.toast('Rebased on their commit', 'review the result, then save', 'run');
+    // field-wise: every field you changed (vs. what you opened) wins; the rest is theirs. The body merges line by line.
+    const r = repoOf(b), k = kindById(r, ev.kind), c = ev.conflict;
+    const pb = k.id === 'watch' ? { fm: (WATCH.parse(c.base).find((w) => 'watch.md#' + slug(w.what) === ev.key) || {}), body: '' } : FM.parse(c.base);
+    const pt = k.id === 'watch' ? { fm: (WATCH.parse(c.theirs).find((w) => 'watch.md#' + slug(w.what) === ev.key) || {}), body: '' } : FM.parse(c.theirs);
+    const mine = ev.draft, fm = Object.assign({}, pt.fm);
+    k.fields.forEach((f) => { if (JSON.stringify(mine.fm[f.k]) !== JSON.stringify(pb.fm[f.k])) fm[f.k] = mine.fm[f.k]; });
+    let out = (pt.body || '').split('\n'), anchor = null;
+    YAML.diff(pb.body || '', mine.body || '').forEach((x) => { if (x.t === ' ') anchor = x.s; else if (x.t === '-') { const i = out.indexOf(x.s); if (i >= 0) out.splice(i, 1); } else { const i = anchor == null ? -1 : out.lastIndexOf(anchor); out.splice(i + 1, 0, x.s); anchor = x.s; } });
+    const entry = entriesOf(r, k).find((x) => x.key === ev.key);
+    openEntry(r, k, entry, { fm, body: out.join('\n'), free: mine.free });
+    ev.base = serialize(k, { fm: entry.fm, body: entry.body, free: mine.free }); rerender(); later();
+    UI.toast('Rebased on their commit', 'review the result, then save', 'run');
   });
   UI.act('rp-sim', (b) => {
-    const r = repoOf(b), who = r.kind === 'bot' ? r.name : ((D.teams.find((t) => t.name === r.name) || { cfg: {} }).cfg.lead || botsOfTeam(r.name)[0] || 'platform-sre');
-    const cur = r.files[ev.path] || '';
-    R.commit(r, { msg: `note from ${who}`, who: 'bot:' + who, kind: 'bot', case: 'c29', changes: [{ path: ev.path, before: cur, after: cur.replace(/\n?$/, '\n') + `- ${who}: seen again during c29 (auto-noted)\n` }] });
-    rerender(); UI.toast(`${who} committed to ${esc(ev.path)}`, ev.dirty ? 'saving now will show a conflict' : 'load it to see the change', 'run');
+    const r = repoOf(b), k = kindById(r, ev.kind), who = r.kind === 'bot' ? r.name : ((D.teams.find((t) => t.name === r.name) || { cfg: {} }).cfg.lead || botsOfTeam(r.name)[0] || 'platform-sre');
+    const p = pathOf(), cur = r.files[p] || '';
+    const after = k.id === 'watch' ? cur.replace(/\n?$/, '\n') : cur.replace(/\n?$/, '\n') + `- ${who}: seen again during c29 (auto-noted)\n`;
+    R.commit(r, { msg: `note from ${who}`, who: 'bot:' + who, kind: 'bot', case: 'c29', changes: [{ path: p, before: cur, after }] });
+    const dirty = isDirty(); if (UI.$('#ke-form')) ev.draft = readDraft(k); const base = ev.base; rerender(); ev.base = base; later();
+    UI.toast(`${who} committed to ${esc(p)}`, dirty ? 'saving now will show a conflict' : 'load it to see the change', 'run');
   });
-  const pathField = (r, label, def) => ({ k: 'path', type: 'string', req: true, label, def, pattern: /^[\w][\w./ -]*\.(md|markdown|txt)$/, patternMsg: 'A relative path ending in .md', validate: (v) => (r.files[v] != null ? 'That file exists.' : '') });
-  UI.act('rp-new', (b) => { const r = repoOf(b); guardThen(() => UI.form({ caps: r.id, title: 'New file', fields: [pathField(r, 'Path', r.kind === 'bot' ? 'knowledge/' : ''), { k: 'template', type: 'enum', label: 'Start from', options: [['blank', 'a blank page'], ['runbook', 'a runbook'], ['fact', 'a fact']], def: 'blank' }], submit: 'Create and edit', submitIcon: 'edit',
-    onSubmit: (v) => { const title = v.path.split('/').pop().replace(/\.\w+$/, ''); const body = { blank: `# ${title}\n\n`, runbook: `# ${title}\n\n## When\n\n## Steps\n1. \n\n## Verify\n`, fact: `# ${title}\n\n- **Fact:** \n- **Source:** \n` }[v.template || 'blank']; ev.repo = r.id; ev.path = v.path; ev.base = ''; ev.text = body; ev.baseSha = null; ev.dirty = true; ev.conflict = null; ev.proposal = null; ev.mode = 'split'; r.open = v.path; S.save(); UI.rerender(); } })); });
-  UI.act('rp-mkdir', (b) => { const r = repoOf(b); UI.form({ caps: r.id, title: 'New folder', fields: [{ k: 'dir', type: 'string', req: true, label: 'Folder', ph: 'runbooks/db', pattern: /^[\w][\w/ .-]*$/, patternMsg: 'letters, digits, / . _ -' }], submit: 'Create', onSubmit: (v) => { const p = v.dir.replace(/\/$/, '') + '/.keep'; R.commit(r, { msg: `mkdir ${v.dir}`, changes: [{ path: p, before: null, after: '' }], trailers: 'Authored-By: operator:ops' }); UI.rerender(); } }); });
-  UI.act('rp-file-menu', (b) => { const r = repoOf(b), pins = (r.files['.pins'] || '').split('\n').filter(Boolean), isNew = r.files[ev.path] == null; UI.menu(b, [['Rename / move…', 'edit', 'rp-rename', isNew ? UI.off('Save it first') : `data-repo="${r.id}"`], [pins.includes(ev.path) ? 'Unpin' : 'Pin (always in context)', 'zap', 'rp-pin', r.kind !== 'bot' ? UI.off('Pinning is for a bot\'s own memory') : isNew ? UI.off('Save it first') : `data-repo="${r.id}"`], ['-'], ['Delete…', 'trash', 'rp-delete', isNew ? UI.off('Not saved yet: Discard instead') : `data-repo="${r.id}"`]]); });
-  UI.act('rp-rename', (b) => { const r = repoOf(b), from = ev.path; guardThen(() => UI.form({ caps: r.id, title: `Rename ${esc(from)}`, edit: true, values: { path: from }, fields: [pathField(r, 'New path')], submit: 'Rename', onSubmit: (v) => { const c = r.files[from]; R.commit(r, { msg: `rename ${from} → ${v.path}`, changes: [{ path: v.path, from, before: c, after: c }], trailers: 'Authored-By: operator:ops' }); const pins = (r.files['.pins'] || '').split('\n').filter(Boolean); if (pins.includes(from)) r.files['.pins'] = pins.map((p) => (p === from ? v.path : p)).join('\n'); openFile(r, v.path); UI.rerender(); } })); });
-  UI.act('rp-delete', (b) => { const r = repoOf(b), p = ev.path; UI.confirm({ title: `Delete ${esc(p)}?`, body: 'One commit removes it. Revert that commit to bring it back.', ok: 'Delete', danger: true }).then((ok) => { if (!ok) return; R.commit(r, { msg: `delete ${p}`, changes: [{ path: p, before: r.files[p], after: null }], trailers: 'Authored-By: operator:ops' }); ev.dirty = false; ev.repo = null; r.open = null; UI.rerender(); UI.toast(`Deleted ${esc(p)}`, 'revert from history to restore it', 'ok'); }); });
-  UI.act('rp-pin', (b) => { const r = repoOf(b), pins = (r.files['.pins'] || '').split('\n').filter(Boolean), on = pins.includes(ev.path); const next = on ? pins.filter((x) => x !== ev.path) : pins.concat([ev.path]); R.commit(r, { msg: `${on ? 'unpin' : 'pin'} ${ev.path}`, changes: [{ path: '.pins', before: r.files['.pins'] || null, after: next.join('\n') }], trailers: 'Authored-By: operator:ops' }); openFile(r, ev.path); UI.rerender(); });
-  UI.act('rp-diff', (b) => { const r = repoOf(b), c = r.log.find((x) => x.sha === b.dataset.sha); UI.modal(`<div class="modal-head"><div><div class="caps">${c.sha} · ${esc(whoLabel(c))} · ${ago(c.at)} ago</div><h2>${esc(c.msg)}</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div><div class="modal-body">${c.trailers ? `<div class="mono tiny muted" style="margin-bottom:8px">${esc(c.trailers)}</div>` : ''}${c.changes.filter((ch) => visible(ch.path)).map((ch) => UI.diffView(ch.before || '', ch.after || '', 'unified', { file: ch.from && ch.from !== ch.path ? `${ch.from} → ${ch.path}` : ch.path }).html).join('') || '<div class="muted small">No file content changed.</div>'}</div><div class="modal-foot"><button class="btn" data-close>Close</button></div>`, { wide: true }); });
-  UI.act('rp-revert', (b) => { const r = repoOf(b), c = r.log.find((x) => x.sha === b.dataset.sha); UI.confirm({ title: `Revert ${c.sha}?`, body: `A new commit undoes “${esc(c.msg)}”. History is kept.`, ok: 'Revert' }).then((ok) => { if (!ok) return; const changes = c.changes.slice().reverse().map((ch) => (ch.from && ch.from !== ch.path ? { path: ch.from, from: ch.path, before: ch.after, after: ch.before } : { path: ch.path, before: r.files[ch.path] != null ? r.files[ch.path] : null, after: ch.before })); R.commit(r, { msg: `Revert "${c.msg}"`, changes, trailers: `Authored-By: operator:ops · Reverts: ${c.sha}` }); ev.repo = null; UI.rerender(); UI.toast(`Reverted ${c.sha}`, 'as a new commit', 'ok'); }); });
-  UI.act('rp-promote', (b) => { const r = repoOf(b), team = D.bots.find((x) => x.name === r.name).cfg.team, tr = R.get('team:' + team); const id = 'k' + (10 + tr.proposals.length); tr.proposals.unshift({ id, bot: r.name, from: ev.path, to: ev.path.split('/').pop(), summary: `Promote ${ev.path.split('/').pop()} from ${r.name}`, status: 'pending', at: now(), diff: (r.files[ev.path] || '').split('\n').map((l) => '+' + l).join('\n') }); S.save(); UI.go(`#/teams/${team}/knowledge`); });
-  /* upload / paste / import */
+  /* New… : choose a kind; the path follows from it */
+  const newEntry = (r, k) => { openEntry(r, k, null); ev.mode = 'split'; rerender(); setTimeout(() => { const t = UI.$('#ke-title, #ke-what'); if (t) t.focus(); }, 30); };
+  UI.act('rp-new-kind', (b) => { const r = repoOf(b); guardThen(() => newEntry(r, kindById(r, b.dataset.k))); });
+  UI.act('rp-new', (b) => {
+    const r = repoOf(b);
+    guardThen(() => {
+      UI.modal(`<div class="modal-head"><div><div class="caps">${esc(r.id)}</div><h2>New…</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
+        <div class="modal-body stack"><p class="small dim" style="margin:0">Pick what you're writing. Its kind decides where it lives and what it needs: knowledge goes in knowledge/, runbooks in runbooks/.</p>
+          <div class="choice-grid">${kindsFor(r).map((k) => UI.choice({ act: 'rp-new-pick', attrs: `data-repo="${r.id}" data-k="${k.id}"`, icon: k.icon, title: esc(k.coll ? `${k.label}` : k.one.replace(/^./, (c) => c.toUpperCase())), desc: esc(k.id === 'watch' ? 'An entry in watch.md: what, signal, threshold, why.' : `${k.dir}/ · ${(k.fields || []).map((f) => f.k.replace(/_/g, ' ')).join(', ')}${k.free ? ' · free paths' : ''}${k.pack ? ` · from pack ${k.pack}` : ''}`), off: writable(r, k) })).join('')}</div></div>
+        <div class="modal-foot"><a class="btn ghost" href="#/config/collections">Declare a collection…</a><button class="btn ghost" data-close>Cancel</button></div>`, { wide: true });
+    });
+  });
+  UI.act('rp-new-pick', (b) => { const r = repoOf(b); UI.closeModal(); newEntry(r, kindById(r, b.dataset.k)); });
+  UI.act('rp-file-menu', (b) => { const r = repoOf(b), k = kindById(r, ev.kind), pins = (r.files['.pins'] || '').split('\n').filter(Boolean); UI.menu(b, [[pins.includes(pathOf()) ? 'Unpin' : 'Pin (always in context)', 'zap', 'rp-pin', r.kind !== 'bot' ? UI.off('Pinning is for a bot\'s own memory') : k.id === 'watch' ? UI.off('Pin watch.md as a whole from the files view') : `data-repo="${r.id}"`], ['-'], ['Delete…', 'trash', 'rp-delete', `data-repo="${r.id}"`]]); });
+  UI.act('rp-delete', (b) => { const r = repoOf(b), k = kindById(r, ev.kind), p = pathOf(); UI.confirm({ title: `Delete this ${esc(k.one)}?`, body: `One commit removes <span class="mono">${esc(ev.key)}</span>. Revert that commit to bring it back.`, ok: 'Delete', cancel: 'Keep it', danger: true }).then((ok) => { if (!ok) return;
+    if (k.id === 'watch') { const items = WATCH.parse(r.files['watch.md']).filter((w) => 'watch.md#' + slug(w.what) !== ev.key); R.commit(r, { msg: `delete watch item ${ev.key.split('#')[1]}`, changes: [{ path: 'watch.md', before: r.files['watch.md'], after: WATCH.emit(items) }], trailers: 'Authored-By: operator:ops' }); }
+    else R.commit(r, { msg: `delete ${k.one} ${p}`, changes: [{ path: p, before: r.files[p], after: null }], trailers: 'Authored-By: operator:ops' });
+    ev.base = ''; ev.repo = null; r.open = null; rerender(); UI.toast(`Deleted ${esc(ev.key || p)}`, 'revert from history to restore it', 'ok'); }); });
+  UI.act('rp-pin', (b) => { const r = repoOf(b), p = pathOf(), pins = (r.files['.pins'] || '').split('\n').filter(Boolean), on = pins.includes(p); const next = on ? pins.filter((x) => x !== p) : pins.concat([p]); R.commit(r, { msg: `${on ? 'unpin' : 'pin'} ${p}`, changes: [{ path: '.pins', before: r.files['.pins'] || null, after: next.join('\n') }], trailers: 'Authored-By: operator:ops' }); rerender(); });
+  UI.act('rp-diff', (b) => { const r = repoOf(b), c = r.log.find((x) => x.sha === b.dataset.sha); UI.modal(`<div class="modal-head"><div><div class="caps">${c.sha} · ${esc(whoLabel(c))} · ${ago(c.at)} ago</div><h2>${esc(c.msg)}</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div><div class="modal-body">${c.trailers ? `<div class="mono tiny muted" style="margin-bottom:8px">${esc(c.trailers)}</div>` : ''}${c.changes.filter((ch) => visible(ch.path)).map((ch) => UI.diffView(ch.before || '', ch.after || '', 'unified', { file: ch.from && ch.from !== ch.path ? `${ch.from} → ${ch.path}` : ch.path }).html).join('')}</div><div class="modal-foot"><button class="btn" data-close>Close</button></div>`, { wide: true }); });
+  UI.act('rp-revert', (b) => { const r = repoOf(b), c = r.log.find((x) => x.sha === b.dataset.sha); UI.confirm({ title: `Revert ${c.sha}?`, body: `A new commit undoes “${esc(c.msg)}”. History is kept.`, ok: 'Revert' }).then((ok) => { if (!ok) return; const changes = c.changes.slice().reverse().map((ch) => (ch.from && ch.from !== ch.path ? { path: ch.from, from: ch.path, before: ch.after, after: ch.before } : { path: ch.path, before: r.files[ch.path] != null ? r.files[ch.path] : null, after: ch.before })); R.commit(r, { msg: `Revert "${c.msg}"`, changes, trailers: `Authored-By: operator:ops · Reverts: ${c.sha}` }); ev.repo = null; rerender(); }); });
+  UI.act('rp-promote', (b) => { const r = repoOf(b), team = D.bots.find((x) => x.name === r.name).cfg.team, tr = R.get('team:' + team), k = kindById(r, ev.kind), p = pathOf(), x = FM.parse(r.files[p]); const id = 'k' + (10 + tr.proposals.length); tr.proposals.unshift({ id, bot: r.name, kind: k.id, to: derive(k, x.fm.title), summary: `Promote ${k.one} “${x.fm.title || p}” from ${r.name}`, status: 'pending', at: now(), content: r.files[p] }); S.save(); UI.go(`#/teams/${team}/knowledge`); });
+  /* log: annotate or flag, never rewrite */
+  const annotate = (r, flag, text) => { const p = pathOf(), cur = annotations(r, p); cur.push({ who: 'operator:ops', at: now(), text, flag: !!flag }); R.commit(r, { msg: `${flag ? 'flag as wrong' : 'annotate'} ${p}`, changes: [{ path: annoPath(p), before: r.files[annoPath(p)] || null, after: YAML.stringify(cur) }], trailers: 'Authored-By: operator:ops' }); rerender(); };
+  UI.act('rp-annotate', (b) => { const r = repoOf(b); UI.form({ caps: pathOf(), title: 'Annotate this log entry', fields: [{ k: 'text', type: 'text', req: true, label: 'Note' }], submit: 'Add note', onSubmit: (v) => annotate(r, false, v.text) }); });
+  UI.act('rp-flag', (b) => { const r = repoOf(b); UI.form({ caps: pathOf(), title: 'Flag as wrong', intro: 'The entry stays as the bot wrote it; your flag and reason sit beside it, and the bot reads them.', fields: [{ k: 'text', type: 'text', req: true, label: 'What is wrong' }], submit: 'Flag', onSubmit: (v) => annotate(r, true, v.text) }); });
+
+  /* ---------- import: markdown mapped into a kind ---------- */
+  const sections = (md) => { let title = ''; const secs = { _intro: [] }; let cur = '_intro'; String(md).split('\n').forEach((l) => { const h1 = l.match(/^#\s+(.*)/), h = l.match(/^#{2,3}\s+(.*)/); if (h1 && !title) { title = h1[1].trim(); return; } if (h) { cur = h[1].trim().toLowerCase(); secs[cur] = []; return; } secs[cur].push(l); }); return { title, secs }; };
+  const items = (ls) => (ls || []).map((l) => l.match(/^\s*(?:\d+[.)]|[-*+])\s+(.*)$/)).filter(Boolean).map((m) => m[1].trim());
+  const sec = (secs, re) => { const k = Object.keys(secs).find((x) => x !== '_intro' && re.test(x)); return k ? secs[k] : null; };
+  const txt = (ls) => (ls || []).join('\n').trim();
+  R.detect = (md) => { const { secs } = sections(md); const numbered = String(md).split('\n').filter((l) => /^\s*\d+[.)]\s/.test(l)).length; return numbered >= 2 && (sec(secs, /step|procedure/) || sec(secs, /verif|rollback|when|symptom/)) ? 'runbook' : 'knowledge'; };
+  R.convert = (kind, md, name) => {
+    const { title, secs } = sections(md), t = title || String(name || 'imported').replace(/\.\w+$/, '').replace(/[-_]/g, ' ');
+    if (kind.id === 'runbook') {
+      const stepLines = sec(secs, /step|procedure/) || String(md).split('\n').filter((l) => /^\s*\d+[.)]\s/.test(l));
+      const steps = items(stepLines).map((x) => { const m = x.match(/`([^`]+)`/); return m ? { do: x.replace(/`[^`]+`/, '').replace(/[\s:—-]+$/, '').trim() || 'Run it', run: m[1] } : { do: x }; });
+      return { fm: { title: t, when: txt(sec(secs, /when|symptom|trigger/)) || txt(secs._intro), prerequisites: items(sec(secs, /prereq|before you/)), steps, verification: txt(sec(secs, /verif|check it worked|done when/)), rollback: txt(sec(secs, /rollback|undo|back out/)), owner: 'ops' }, body: '' };
+    }
+    if (kind.id === 'knowledge') { const paras = txt(secs._intro).split(/\n\s*\n/); return { fm: { title: t, statement: paras[0] || '', applies_to: [], source: `imported from ${name || 'paste'}`, confidence: 'medium' }, body: paras.slice(1).join('\n\n') + Object.entries(secs).filter(([k]) => k !== '_intro').map(([k, v]) => `\n\n## ${k}\n${txt(v)}`).join('') }; }
+    return { fm: { title: t }, body: String(md).replace(/^#\s+.*\n/, '').trim() + '\n' };
+  };
+  const summary = (kind, d) => { const errs = validate(kind, d.fm); const bits = kind.id === 'runbook' ? [`${(d.fm.steps || []).length} steps`, `when ${d.fm.when ? '✓' : '✗'}`, `verification ${d.fm.verification ? '✓' : '✗'}`, `rollback ${d.fm.rollback ? '✓' : '–'}`] : kind.id === 'knowledge' ? [`statement ${d.fm.statement ? '✓' : '✗'}`, `applies to ${(d.fm.applies_to || []).length ? '✓' : '✗ (you add it)'}`] : ['body ✓']; return `${bits.join(' · ')}${errs.length ? ` · <span class="danger-text">${errs.length} field${errs.length > 1 ? 's' : ''} to fill</span>` : ' · <span class="ok-text">ready</span>'}`; };
+  function importMap(r, docs) {
+    const choices = kindsFor(r).filter((k) => !writable(r, k) && k.id !== 'watch');
+    const st = docs.map((d) => ({ name: d.name, text: d.text, kind: R.detect(d.text) }));
+    const s = UI.modal(`<div class="modal-head"><div><div class="caps">${esc(r.id)} · import</div><h2>Map into a kind</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div><div class="modal-body stack" id="im-body"></div>
+      <div class="modal-foot"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="im-go">${icon('commit')}Import</button></div>`, { wide: true });
+    const draw = () => { UI.$('#im-body', s).innerHTML = `<p class="small dim" style="margin:0">Each file becomes one entry of the kind you confirm; its path follows from the kind and its title.</p>${st.map((x, i) => { const k = kindById(r, x.kind) || KINDS.knowledge, d = R.convert(k, x.text, x.name); return `<div class="im-row"><div class="row wrap"><b class="mono small">${esc(x.name)}</b><span class="muted tiny">detected: ${esc(KINDS[R.detect(x.text)].one)}</span><label class="row small" style="margin-left:auto">as <select class="select sm" data-im="${i}" aria-label="Kind for ${esc(x.name)}">${choices.map((c) => `<option value="${c.id}"${c.id === x.kind ? ' selected' : ''}>${esc(c.coll ? c.label : c.one)}</option>`).join('')}</select></label></div><div class="mono tiny">→ ${esc(derive(k, d.fm.title))}</div><div class="tiny muted">${summary(k, d)}</div></div>`; }).join('')}`;
+      s.querySelectorAll('[data-im]').forEach((sel) => sel.addEventListener('change', () => { st[+sel.dataset.im].kind = sel.value; draw(); })); };
+    draw();
+    UI.$('#im-go', s).addEventListener('click', () => {
+      const ok = [], todo = [];
+      st.forEach((x) => { const k = kindById(r, x.kind), d = R.convert(k, x.text, x.name), path = derive(k, d.fm.title); if (!validate(k, d.fm).length && r.files[path] == null) ok.push({ path, after: FM.emit(k, d.fm, d.body) }); else todo.push({ k, d }); });
+      if (ok.length) R.commit(r, { msg: `import ${ok.length} entr${ok.length > 1 ? 'ies' : 'y'}`, changes: ok.map((x) => ({ path: x.path, before: null, after: x.after })), trailers: 'Authored-By: operator:ops · Imported-Via: dashboard' });
+      UI.closeModal();
+      if (todo.length) { openEntry(r, todo[0].k, null, todo[0].d); ev.base = serialize(todo[0].k, { fm: {}, body: '', free: '' }); rerender(); setTimeout(() => { const f = UI.$('#ke-form'); if (f) showErrs(todo[0].k, validate(todo[0].k, todo[0].d.fm)); }, 40); UI.toast(ok.length ? `Imported ${ok.length}; ${todo.length} need${todo.length > 1 ? '' : 's'} fields` : 'Fill in what the import couldn\'t find', 'the first one is open: complete it and save', 'run'); }
+      else { const k = kindById(r, st[0].kind); const e = entriesOf(r, k).find((x) => x.path === ok[0].path); if (e) openEntry(r, k, e); rerender(); UI.toast(`Imported ${ok.length}`, 'one commit by you', 'ok'); }
+    });
+  }
+  UI.act('rp-map-file', (b) => { const r = repoOf(b); importMap(r, [{ name: b.dataset.path, text: r.files[b.dataset.path] }]); });
   UI.act('rp-upload', (b) => {
     const r = repoOf(b);
-    const s = UI.modal(`<div class="modal-head"><div><div class="caps">${esc(r.id)}</div><h2>Upload or import</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
+    const s = UI.modal(`<div class="modal-head"><div><div class="caps">${esc(r.id)}</div><h2>Import markdown</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
       <div class="modal-body stack">${UI.seg([['drop', 'Drop files'], ['paste', 'Paste'], ['repo', 'From a repo']], 'drop', 'up-mode')}
-        <div class="up-pane" data-pane="drop"><label class="dropzone" id="up-drop">${icon('upload')}<span><b>Drop markdown files here</b> or choose them</span><input type="file" id="up-file" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple aria-label="Choose markdown files"></label><div class="field"><label for="up-dir">Into folder</label><input class="input mono" id="up-dir" value="${r.kind === 'bot' ? 'knowledge' : ''}" placeholder="top level"></div><div id="up-list" class="small muted"></div></div>
-        <div class="up-pane hide" data-pane="paste"><div class="field"><label for="up-path">Path</label><input class="input mono" id="up-path" placeholder="runbooks/new-runbook.md"></div><div class="field"><label for="up-text">Paste a runbook</label><textarea class="textarea mono" id="up-text" rows="8"></textarea></div></div>
-        <div class="up-pane hide" data-pane="repo"><div class="grid g2"><div class="field"><label for="up-repo">Repo</label><input class="input mono" id="up-repo" value="acme/infra"></div><div class="field"><label for="up-src">Path in repo</label><input class="input mono" id="up-src" value="docs/runbooks/failover.md"></div></div><div class="hint">Fetched through the gh connector (read), committed with an Imported-From trailer.</div></div>
-        <div class="callout small">Each import is one commit authored by you.</div></div>
-      <div class="modal-foot"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="up-go">${icon('commit')}Import</button></div>`, { wide: true });
+        <div class="up-pane" data-pane="drop"><label class="dropzone" id="up-drop">${icon('upload')}<span><b>Drop markdown files here</b> or choose them</span><input type="file" id="up-file" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple aria-label="Choose markdown files"></label><div id="up-list" class="small muted"></div></div>
+        <div class="up-pane hide" data-pane="paste"><div class="field"><label for="up-text">Paste markdown</label><textarea class="textarea mono" id="up-text" rows="9" placeholder="# Failover&#10;&#10;## Steps&#10;1. …"></textarea></div></div>
+        <div class="up-pane hide" data-pane="repo"><div class="grid g2"><div class="field"><label for="up-repo">Repo</label><input class="input mono" id="up-repo" value="acme/infra"></div><div class="field"><label for="up-src">Path in repo</label><input class="input mono" id="up-src" value="docs/runbooks/failover.md"></div></div><div class="hint">Fetched through the gh connector (read).</div></div>
+        <div class="callout small">Next you confirm which kind each file becomes. Nothing is placed by path.</div></div>
+      <div class="modal-foot"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="up-go">Next: map into kinds ${icon('chev')}</button></div>`, { wide: true });
     let mode = 'drop', picked = [];
     const showPicked = () => { UI.$('#up-list', s).innerHTML = picked.map((f) => `<div class="mono">${esc(f.name)} · ${f.text.length} chars</div>`).join(''); };
-    const take = (files) => Promise.all([...files].map((f) => f.text().then((text) => ({ name: f.name, text })))).then((xs) => { picked = picked.concat(xs); showPicked(); });
+    const take = (fs) => Promise.all([...fs].map((f) => f.text().then((text) => ({ name: f.name, text })))).then((xs) => { picked = picked.concat(xs); showPicked(); });
     UI.$('#up-file', s).addEventListener('change', (e) => take(e.target.files));
     const dz = UI.$('#up-drop', s); dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('over'); }); dz.addEventListener('dragleave', () => dz.classList.remove('over')); dz.addEventListener('drop', (e) => { e.preventDefault(); dz.classList.remove('over'); take(e.dataTransfer.files); });
     UI.upMode = (v) => { mode = v; s.querySelectorAll('.up-pane').forEach((p) => p.classList.toggle('hide', p.dataset.pane !== v)); };
     UI.$('#up-go', s).addEventListener('click', () => {
-      let changes = [], msg, trailers = 'Authored-By: operator:ops';
-      if (mode === 'drop') { const dir = UI.$('#up-dir', s).value.trim().replace(/\/$/, ''); if (!picked.length) { UI.nudge(UI.$('#up-dir', s)); UI.$('#up-list', s).textContent = 'Choose or drop a file first.'; return; } changes = picked.map((f) => ({ path: (dir ? dir + '/' : '') + f.name.replace(/\.(markdown|txt)$/, '.md'), before: null, after: f.text })); msg = `import ${changes.length} file${changes.length > 1 ? 's' : ''}`; }
-      else if (mode === 'paste') { const p = UI.$('#up-path', s).value.trim(), t = UI.$('#up-text', s).value; if (!/\.md$/.test(p)) return UI.nudge(UI.$('#up-path', s), 'a path ending in .md'); if (!t.trim()) return UI.nudge(UI.$('#up-text', s), 'paste the runbook first'); changes = [{ path: p, before: r.files[p] != null ? r.files[p] : null, after: t }]; msg = `add ${p} (pasted)`; }
-      else { const repo = UI.$('#up-repo', s).value.trim(), src = UI.$('#up-src', s).value.trim(); const name = src.split('/').pop(); changes = [{ path: (r.kind === 'bot' ? 'runbooks/' : '') + name, before: null, after: `# ${name.replace(/\.md$/, '')}\n\nImported from ${repo}:${src}.\n\n1. Check replication lag.\n2. Promote the standby.\n3. Verify app reconnects.\n` }]; msg = `import ${src} from ${repo}`; trailers += ` · Imported-From: ${repo}@main:${src}`; }
-      const c = R.commit(r, { msg, changes, trailers }); UI.closeModal(); openFile(r, changes[0].path); UI.rerender(); UI.toast(`Imported · ${c.sha}`, `${changes.length} file${changes.length > 1 ? 's' : ''}, one commit by you`, 'ok');
+      let docs;
+      if (mode === 'drop') { if (!picked.length) { UI.$('#up-list', s).textContent = 'Choose or drop a file first.'; return; } docs = picked; }
+      else if (mode === 'paste') { const t = UI.$('#up-text', s).value; if (!t.trim()) return UI.nudge(UI.$('#up-text', s), 'paste some markdown first'); docs = [{ name: 'pasted.md', text: t }]; }
+      else { const src = UI.$('#up-src', s).value.trim(); docs = [{ name: src.split('/').pop(), text: `# Failover\n\nImported from ${UI.$('#up-repo', s).value.trim()}:${src}.\n\n## When\nThe primary is unhealthy for 2 minutes.\n\n## Steps\n1. Check replication lag\n2. Promote the standby: \`aws rds failover-db-cluster\`\n3. Verify the app reconnects\n\n## Verify\nWrites succeed on the new primary.\n\n## Rollback\nFail back after recovery.\n` }]; }
+      importMap(r, docs);
     });
   });
   UI.act('up-mode', (b) => { b.parentElement.querySelectorAll('button').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); UI.upMode(b.dataset.v); });
-  /* proposals */
+
+  /* ---------- proposals ---------- */
   UI.act('kp-sel', (cb) => { cb.checked ? ev.sel.add(cb.dataset.id) : ev.sel.delete(cb.dataset.id); rerender(); });
-  const approve = (r, ps) => { ps.forEach((p) => { const after = proposedAfter(r, p); R.commit(r, { msg: `promote ${p.to} from ${p.bot}`, who: 'bot:' + p.bot, kind: 'bot', case: p.case, changes: [{ path: p.to, before: r.files[p.to] != null ? r.files[p.to] : null, after }], trailers: `Promoted-By: bot:${p.bot} · Approved-By: operator:ops` }); p.status = 'approved'; p.approver = 'ops (passkey · laptop)'; ev.sel.delete(p.id); }); r.open = ps[0].to; ev.repo = null; S.save(); rerender(); };
+  const pkind = (r, p) => kindById(r, ['knowledge', 'runbook', 'watch'].includes(p.kind) ? p.kind : 'c:' + p.kind) || KINDS.knowledge;
+  const perrs = (r, p) => { const x = FM.parse(p.content || ''); return x.err ? [x.err] : validate(pkind(r, p), x.fm, x.fm.kind); };
+  const approve = (r, ps) => { ps.forEach((p) => { R.commit(r, { msg: `promote ${p.to} from ${p.bot}`, who: 'bot:' + p.bot, kind: 'bot', case: p.case, changes: [{ path: p.to, before: r.files[p.to] != null ? r.files[p.to] : null, after: p.content }], trailers: `Promoted-By: bot:${p.bot} · Approved-By: operator:ops` }); p.status = 'approved'; p.approver = 'ops (passkey · laptop)'; ev.sel.delete(p.id); }); r.open = ps[0].to; r.openKind = pkind(r, ps[0]).id; ev.repo = null; S.save(); rerender(); };
   const deny = (r, ps, reason) => { ps.forEach((p) => { p.status = 'denied'; p.reason = reason; ev.sel.delete(p.id); (D.chats[p.bot] = D.chats[p.bot] || []).push({ who: 'op', at: now(), text: `Denied knowledge proposal ${p.id} (${p.to}): ${reason}` }); D.audit.unshift({ ts: now(), event: 'team_knowledge_denied', who: 'operator:ops', detail: `${r.id} · ${p.id} · ${p.bot} · reason sent to the bot`, run: '' }); }); S.save(); rerender(); };
-  const denyForm = (r, ps) => UI.form({ caps: `${r.id} · ${ps.map((p) => p.id).join(', ')}`, title: ps.length > 1 ? `Deny ${ps.length} proposals` : `Deny ${ps[0].id}`, fields: [{ k: 'reason', type: 'text', req: true, label: 'Reason (goes back to the proposing bot)', ph: 'e.g. Already covered in alb.md; link to it instead.' }], submit: 'Deny', onSubmit: (v) => deny(r, ps, v.reason) });
-  UI.act('kp-approve', (b) => { const r = repoOf(b), p = r.proposals.find((x) => x.id === b.dataset.id); UI.stepup({ title: `Approve ${p.id}`, purpose: 'team knowledge', ok: 'Approve with passkey', what: `{ team: <b>${esc(r.name)}</b>, proposal: <b>${p.id}</b>, bot: <b>${esc(p.bot)}</b>, path: <b>${esc(p.to)}</b> }` }).then((ok) => { if (ok) { approve(r, [p]); UI.toast(`Approved ${p.id}`, `one commit to ${esc(p.to)}`, 'ok'); } }); });
-  UI.act('kp-edit', (b) => { const r = repoOf(b), p = r.proposals.find((x) => x.id === b.dataset.id); guardThen(() => { openFile(r, p.to, proposedAfter(r, p)); ev.proposal = p.id; ev.dirty = true; ev.mode = 'split'; rerender(); const ed = UI.$('.repo-ed'); if (ed) ed.scrollIntoView({ block: 'start' }); }); });
+  const denyForm = (r, ps) => UI.form({ caps: `${r.id} · ${ps.map((p) => p.id).join(', ')}`, title: ps.length > 1 ? `Deny ${ps.length} proposals` : `Deny ${ps[0].id}`, fields: [{ k: 'reason', type: 'text', req: true, label: 'Reason (goes back to the proposing bot)', ph: 'e.g. Already covered in knowledge/alb.md; link to it instead.' }], submit: 'Deny', onSubmit: (v) => deny(r, ps, v.reason) });
+  UI.act('kp-approve', (b) => { const r = repoOf(b), p = r.proposals.find((x) => x.id === b.dataset.id); if (perrs(r, p).length) return; UI.stepup({ title: `Approve ${p.id}`, purpose: 'team knowledge', ok: 'Approve with passkey', what: `{ team: <b>${esc(r.name)}</b>, proposal: <b>${p.id}</b>, kind: <b>${esc(p.kind)}</b>, bot: <b>${esc(p.bot)}</b>, path: <b>${esc(p.to)}</b> }` }).then((ok) => { if (ok) { approve(r, [p]); UI.toast(`Approved ${p.id}`, `one commit to ${esc(p.to)}`, 'ok'); } }); });
+  UI.act('kp-edit', (b) => { const r = repoOf(b), p = r.proposals.find((x) => x.id === b.dataset.id); guardThen(() => { const k = pkind(r, p), x = FM.parse(p.content || ''), existing = entriesOf(r, k).find((e) => e.path === p.to); openEntry(r, k, existing || null, { fm: x.fm, body: x.body, free: '' }); ev.proposal = p.id; ev.mode = 'split'; rerender(); later(); const ed = UI.$('.repo-ed'); if (ed) ed.scrollIntoView({ block: 'start' }); const errs = validate(k, x.fm, x.fm.kind); if (errs.length) setTimeout(() => showErrs(k, errs), 30); }); });
   UI.act('kp-deny', (b) => { const r = repoOf(b); denyForm(r, [r.proposals.find((x) => x.id === b.dataset.id)]); });
-  UI.act('kp-bulk', (b) => { const r = repoOf(b), ps = r.proposals.filter((p) => ev.sel.has(p.id) && p.status === 'pending'); if (b.dataset.d === 'deny') return denyForm(r, ps); UI.stepup({ title: `Approve ${ps.length} proposals`, purpose: 'team knowledge', ok: 'Approve with passkey', what: `{ team: <b>${esc(r.name)}</b>, proposals: <b>${ps.map((p) => p.id).join(', ')}</b> }` }).then((ok) => { if (ok) { approve(r, ps); UI.toast(`Approved ${ps.length}`, 'one commit each, the bot as author', 'ok'); } }); });
-  R.pending = (id) => R.get(id).proposals.filter((p) => p.status === 'pending').length;
+  UI.act('kp-bulk', (b) => { const r = repoOf(b), ps = r.proposals.filter((p) => ev.sel.has(p.id) && p.status === 'pending'); if (b.dataset.d === 'deny') return denyForm(r, ps); const bad = ps.filter((p) => perrs(r, p).length); if (bad.length) { UI.toast(`${bad.map((p) => p.id).join(', ')} fail${bad.length > 1 ? '' : 's'} the schema`, 'approve with changes or deny; untick to approve the rest', 'fail'); return; } UI.stepup({ title: `Approve ${ps.length} proposals`, purpose: 'team knowledge', ok: 'Approve with passkey', what: `{ team: <b>${esc(r.name)}</b>, proposals: <b>${ps.map((p) => p.id).join(', ')}</b> }` }).then((ok) => { if (ok) { approve(r, ps); UI.toast(`Approved ${ps.length}`, 'one commit each, the bot as author', 'ok'); } }); });
+
+  /* ---------- Config → Collections: the customized escape hatch ---------- */
+  UI.route('config/collections', () => {
+    const mine = S.view().collections || [], packs = D.packCollections || [];
+    const row = (c, pack) => `<div class="item" style="align-items:flex-start" data-coll="${esc(c.name)}"><span class="sc-ic sm">${icon('folder')}</span><div class="grow small"><div class="row wrap" style="gap:6px"><b>${esc(c.name)}</b><span class="mono tiny muted">${esc(c.cfg.dir)}/</span>${tag(c.cfg.scope || 'team')}${c.cfg.free_paths ? tag('free paths', 'wait') : ''}${pack ? `<span class="origin custom">pack ${esc(pack)}</span>` : S.find('collections', c.name) ? tag('staged', 'run') : ''}</div>
+      <div class="mono tiny muted">fields: title${(c.cfg.fields || []).map((f) => ', ' + esc(f)).join('')} · write: ${esc((c.cfg.write || []).join(', '))}</div></div>
+      ${pack ? `<span class="muted tiny">shipped by the pack; override it in <span class="mono">packs.${esc(pack)}</span></span>` : `<div class="row" style="gap:4px"><button class="btn sm" data-act="coll-edit" data-c="${esc(c.name)}">${icon('edit')}Edit</button><button class="btn sm danger" data-act="coll-del" data-c="${esc(c.name)}" aria-label="Remove collection ${esc(c.name)}">${icon('trash')}</button></div>`}</div>`;
+    return `<div class="page">${UI.head('Collections', { crumbs: '<a href="#/config">Config</a>', sub: 'custom kinds for team knowledge and bot memory', actions: `<button class="btn primary" data-act="coll-new">${icon('plus')}New collection</button>` })}
+      <div class="callout small" style="margin-bottom:14px">Built-in kinds keep their homes: knowledge in <span class="mono">knowledge/</span>, runbooks in <span class="mono">runbooks/</span>, watch items in <span class="mono">watch.md</span>, the log in <span class="mono">log/</span>, handoffs in <span class="mono">handoff/</span>. A collection is the escape hatch: its own folder, template and fields, and free paths only if it says so. Collections are config (<span class="mono">collections:</span>) and go through the diff.</div>
+      <div class="panel"><div class="panel-head"><h3>Yours</h3><span class="muted small">collections:</span></div><div class="list">${mine.map((c) => row(c)).join('') || '<div class="empty small">None yet. <button class="link" data-act="coll-new">Declare one</button></div>'}</div></div>
+      <div class="panel" style="margin-top:14px"><div class="panel-head"><h3>From packs</h3></div><div class="list">${packs.map((c) => row(c, c.pack)).join('') || '<div class="empty small">No pack ships a collection.</div>'}</div></div></div>`;
+  }, { nav: 'config' });
+  const collForm = (name) => { const cur = name ? S.staged('collections', name) : null;
+    UI.form({ caps: name ? `collections.${name}` : 'collections:', title: name ? `Edit ${name}` : 'New collection', edit: !!name, wide: true, values: cur ? Object.assign({ name }, cur) : { scope: 'team', write: ['operator'], free_paths: false },
+      fields: [{ k: 'name', type: 'string', req: true, readonly: !!name, pattern: /^[a-z][a-z0-9-]*$/, patternMsg: 'lowercase, digits, dashes', validate: (v) => (!name && (S.view().collections || []).concat(D.packCollections || []).some((c) => c.name === v) ? 'A collection by that name exists.' : '') },
+        { k: 'dir', type: 'string', req: true, label: 'Folder', ph: 'postmortems', validate: (v) => { const d = String(v || '').replace(/\/$/, ''); return !/^[a-z][a-z0-9-]*(\/[a-z0-9-]+)*$/.test(d) ? 'A relative folder such as notes/vendors' : S.RESERVED_DIRS.includes(d.split('/')[0]) ? `${d.split('/')[0]}/ belongs to a built-in kind` : ''; } },
+        { k: 'scope', type: 'seg', label: 'Where', options: [['team', 'team knowledge'], ['bot', 'bot memory'], ['both', 'both']] },
+        { k: 'fields', type: 'list', label: 'Fields (besides title)', ph: 'severity:enum(sev1|sev2|sev3)', help: 'name:string, name:text, name:list or name:enum(a|b|c).', validate: (v) => ((v || []).find((f) => !S.FIELD_RE.test(f)) ? `"${(v || []).find((f) => !S.FIELD_RE.test(f))}" is not name:string|text|list|enum(a|b)` : '') },
+        { k: 'template', type: 'text', label: 'Body template (markdown)', ph: '## Timeline\n\n## Root cause\n' },
+        { k: 'free_paths', type: 'bool', label: 'Free paths', on: 'let writers choose a path inside the folder (otherwise the path follows the title)' },
+        { k: 'write', type: 'select-multi', req: true, label: 'Who can write', options: ['operator', 'bots (proposal)', 'bots (direct)'] }],
+      submit: 'Review change', submitIcon: 'check',
+      onSubmit: (v) => { const n = { dir: v.dir.replace(/\/$/, ''), scope: v.scope || 'team', fields: v.fields || [], write: v.write }; if (v.template) n.template = v.template; if (v.free_paths) n.free_paths = true; D.prefs.returnTo = { href: '#/config/collections', label: 'Collections' }; UI.staged(S.stage('collections', v.name || name, n)); } }); };
+  UI.act('coll-new', () => collForm(null));
+  UI.act('coll-edit', (b) => collForm(b.dataset.c));
+  UI.act('coll-del', (b) => UI.confirm({ title: `Remove collection ${esc(b.dataset.c)}?`, body: 'Stages removing it from collections:. Its files stay in the repos (visible in the files view) until you map or delete them.', ok: 'Stage removal', cancel: 'Keep it', danger: true }).then((ok) => ok && UI.staged(S.stage('collections', b.dataset.c, null))));
 })();

@@ -315,6 +315,8 @@ test.describe('updates, config history, raw editor, access', () => {
     await page.locator('[data-act="enroll"]').click();
     await expect(page.locator('#en-code-f .ferr')).toContainText('pairing code');
     await page.fill('#en-code', '417-209'); await page.locator('[data-act="enroll"]').click();
+    await expect(page.locator('.modal')).toContainText('Confirm with an existing passkey');
+    await page.locator('#pk-go').click();
     await expect(page).toHaveURL(/#\/security/);
     expect(await state(page, () => D.passkeys.length)).toBe(3);
   });
