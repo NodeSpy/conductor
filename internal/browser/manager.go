@@ -889,7 +889,7 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 		if err != nil {
 			return nil, err
 		}
-		if err := m.fillField(ctx, in, t, fr, id, cred, field); err != nil {
+		if err := m.fillField(ctx, in, t, fr, o, id, cred, field); err != nil {
 			return nil, err
 		}
 		out["filled"] = field
