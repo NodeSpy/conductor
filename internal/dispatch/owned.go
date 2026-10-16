@@ -5,6 +5,8 @@ import (
 	"os"
 	"sort"
 	"sync"
+
+	"github.com/NodeSpy/conductor/internal/skill"
 )
 
 // OwnedSet is conductor's authoritative record of the paseo agents and
@@ -161,10 +163,12 @@ func (o *OwnedSet) forget(workspaceID, agentID string) {
 		delete(o.agents, agentID)
 		changed = true
 	}
+	var revoked []string
 	if agentID != "" {
 		for d, a := range o.dispatches {
 			if a == agentID {
 				delete(o.dispatches, d)
+				revoked = append(revoked, d)
 				changed = true
 			}
 		}
@@ -173,6 +177,16 @@ func (o *OwnedSet) forget(workspaceID, agentID string) {
 		o.save()
 	}
 	o.mu.Unlock()
+	// The dispatch is gone: retire its skill session token too, so a verb the
+	// profile granted stops being callable once the workspace is reclaimed (a
+	// token that outlives its dispatch is a live credential for its whole TTL —
+	// only hand-off release revoked it before). step.done/git.push already
+	// self-protect through the ownership ledger; this closes every other verb.
+	if b := skill.Active(); b != nil {
+		for _, d := range revoked {
+			b.RevokeDispatch(d)
+		}
+	}
 }
 
 func (o *OwnedSet) load() {

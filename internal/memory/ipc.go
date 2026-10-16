@@ -101,6 +101,13 @@ type LiveOps struct {
 	// run's identity. nil → those ops fall back to the body Source (the MCP
 	// path, where the daemon baked Source into the tool command's flags).
 	Identify func(token string, peer Peer) (src Source, number int, ok bool)
+	// CanRunStep reports whether the token's identity may execute an
+	// agent-authored step at all. run_step is orchestration governed daemon-wide
+	// by policy.agent_authored, deliberately separate from skill.verbs; but an
+	// authentication-only identity (no dispatch provenance and no grant — e.g. a
+	// sandbox's ad-hoc directory/scratch session) must not ride that ceiling.
+	// nil → no extra gate (the op stays governed by policy.agent_authored alone).
+	CanRunStep func(token string, peer Peer) (ok bool, reason string)
 }
 
 // Peer is the socket-peer identity of the calling process (Linux
@@ -303,6 +310,21 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 		ops := getLiveOps()
 		if ops.RunStep == nil {
 			return IPCResponse{Error: "run_step: the live plan runner is not available on this daemon"}
+		}
+		// Capability gate (round-13): run_step executes agent-authored steps
+		// under the daemon-wide policy.agent_authored. An authentication-only
+		// token — no dispatch provenance, no grant — must not reach it, or an
+		// ad-hoc sandbox session (a directory/scratch identity, whose step.done
+		// is already refused) could drive conductor's verbs through a plan.
+		if ops.CanRunStep != nil {
+			if ok, reason := ops.CanRunStep(req.Token, peer); !ok {
+				if reason == "" {
+					reason = "run_step: not permitted for this identity"
+				}
+				aud(map[string]any{"event": "plan_live_step", "via": "tool", "outcome": "blocked",
+					"agent": req.Source.Step, "repo": req.Source.Repo, "error": reason})
+				return IPCResponse{Error: reason}
+			}
 		}
 		if len(req.Step) == 0 {
 			return IPCResponse{Error: "run_step: step is required"}

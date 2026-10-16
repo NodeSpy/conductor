@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -110,9 +111,83 @@ func sandboxProbe(dir string, env []string, name, email string, ownPush error) {
 	line("git.push-other-ref", verdict(out, err))
 	out, err = exec.Command("conductor", "call", "step.done", "--reason", "sandbox probe").CombinedOutput()
 	line("step.done", verdict(out, err))
+	escapeProbe(dir, line)
 	_ = os.WriteFile(filepath.Join(dir, "SANDBOX_PROBE.md"), []byte(b.String()), 0o644)
 	git(dir, env, "add", "SANDBOX_PROBE.md")
 	git(dir, env, "-c", "user.name="+name, "-c", "user.email="+email, "commit", "-m", "conductor: sandbox probe record")
+}
+
+// escapeProbe records escape attempts the sandboxed agent makes, end to end
+// through the real jail (group Z). Each must be "blocked"; run.sh fails the
+// group on any "ESCAPED". These complement the unit escape batteries
+// (internal/sandbox, internal/agentsandbox) with an end-to-end check that the
+// dispatch path actually built the jail it should.
+func escapeProbe(ws string, line func(k, v string)) {
+	blocked := func(k string, escaped bool) {
+		if escaped {
+			line(k, "ESCAPED")
+		} else {
+			line(k, "blocked")
+		}
+	}
+
+	// (1) The daemon's control socket (which mints tokens / answers
+	// sandbox-policy) must not be reachable from inside — it is never bound in.
+	ctrlReach := false
+	for _, s := range []string{"/home/conductor/data/control.sock", "/home/conductor/.config/conductor/control.sock"} {
+		if c, err := net.DialTimeout("unix", s, 2*time.Second); err == nil {
+			c.Close()
+			ctrlReach = true
+		}
+	}
+	blocked("escape-control-socket", ctrlReach)
+
+	// (2) Another identity's tool state must be absent: the agent-state root is
+	// not bound, only this identity's home under it.
+	crossIdentity := false
+	if ents, err := os.ReadDir("/home/conductor/data/agent-state"); err == nil {
+		home := os.Getenv("HOME")
+		for _, e := range ents {
+			if filepath.Join("/home/conductor/data/agent-state", e.Name()) != home {
+				crossIdentity = true // saw a sibling identity's home
+			}
+		}
+	}
+	blocked("escape-cross-identity", crossIdentity)
+
+	// (3) The nested user+mount namespace "locked mount" bypass: make a ns we
+	// own and try to umount the jail's read-only /usr. rc 0 would be an escape.
+	out, _ := exec.Command("unshare", "--user", "--map-root-user", "--mount", "sh", "-c", "umount /usr 2>&1; echo rc=$?").CombinedOutput()
+	blocked("escape-nested-userns", strings.Contains(string(out), "rc=0"))
+
+	// (4) A host process must not be visible (fresh pid namespace).
+	hostProc := false
+	if ents, err := os.ReadDir("/proc"); err == nil {
+		n := 0
+		for _, e := range ents {
+			if _, err := strconv.Atoi(e.Name()); err == nil {
+				n++
+			}
+		}
+		hostProc = n > 50 // a sandbox has a handful; the host has many
+	}
+	blocked("escape-proc-host", hostProc)
+
+	// (5) Writing outside the workspace must not reach the HOST. Attempt writes
+	// to host-sensitive absolute paths; the harness verifies on the host side
+	// (conductor-sandbox, outside any jail) that none persisted. A write that
+	// only hits the jail's ephemeral tmpfs skeleton — the workspace's parent,
+	// an unbound path's mount-point ancestor — is harmless and must not count,
+	// which is why this is judged on the host, not from inside. Done LAST so the
+	// ephemeral canaries can't pollute the in-jail reads above (agent-state).
+	for _, p := range []string{
+		"/home/conductor/ESCAPED",
+		"/home/conductor/.ssh/ESCAPED",
+		"/home/conductor/data/ESCAPED",
+		"/home/conductor/data/agent-state/ESCAPED",
+	} {
+		_ = os.WriteFile(p, []byte("escaped-by-sandboxed-agent\n"), 0o644)
+	}
 }
 
 // verdict is "ok" or "refused: <first line of the error>".

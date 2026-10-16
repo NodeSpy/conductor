@@ -1888,7 +1888,9 @@ z_fixer() {
   probe="$(cexec forge git --git-dir="$G" show pr-1:SANDBOX_PROBE.md | tr -d '\r')"
   printf '%s\n' "$probe" | sed 's/^/      /'
   for kv in "secret=denied" "conductor-state=denied" "credentials-env=none" "own-push=refused" \
-            "network=unreachable" "git.push=ok" "step.done=ok"; do
+            "network=unreachable" "git.push=ok" "step.done=ok" \
+            "escape-control-socket=blocked" \
+            "escape-cross-identity=blocked" "escape-nested-userns=blocked" "escape-proc-host=blocked"; do
     k="${kv%%=*}"; want="${kv#*=}"; got="$(probe_line "$probe" "$k")"
     if [ "$got" = "$want" ]; then
       ok "Z $L: sandboxed agent: $k → $want" Z "$L/$k"
@@ -1939,6 +1941,15 @@ group_Z_sandbox() {
   z_fixer grpz/sandbox cli
   z_fixer grpz/opencode opencode
   z_fixer grpz/deck agent-deck
+
+  # Host-side verdict on the agents' write-outside attempts: a write that only
+  # hit a jail's ephemeral tmpfs skeleton leaves nothing here; a real escape
+  # would have landed a canary on conductor's own host filesystem.
+  if cexec "$C" sh -c 'ls /home/conductor/ESCAPED /home/conductor/.ssh/ESCAPED /home/conductor/data/ESCAPED /home/conductor/data/agent-state/ESCAPED 2>/dev/null' | grep -q ESCAPED; then
+    bad "Z no sandboxed agent wrote outside its workspace to the host" Z escape-write "a canary persisted on conductor's host filesystem"
+  else
+    ok "Z no sandboxed agent wrote outside its workspace to the host" Z escape-write
+  fi
   if wait_for 15 z_audit '"event":"git_push"' '"signed":true' '"outcome":"ok"'; then
     ok "Z the push is audited (git_push, signed)" Z audit
   else
