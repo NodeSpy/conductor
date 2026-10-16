@@ -58,6 +58,9 @@ func TestEmailCodeReadsOnlyTheMatch(t *testing.T) {
 		if strings.Contains(c, "BODY.PEEK[])") {
 			bodies++
 		}
+		if strings.Contains(strings.ToUpper(c), "FETCH") && strings.Contains(c, "BODY") && !strings.Contains(c, "BODY.PEEK[") {
+			t.Fatalf("a fetch that marks the message read: %s", c)
+		}
 		if strings.Contains(c, mb.Pass) {
 			t.Fatal("the app password is in the command log")
 		}
@@ -129,8 +132,11 @@ func TestEmailCodeTLS(t *testing.T) {
 		t.Fatalf("an untrusted certificate: %v", err)
 	}
 	// Plaintext only to loopback.
-	if _, err := imapDial(context.Background(), Mailbox{Name: "x", Addr: "192.0.2.1:143", PlainLoopback: true}); err == nil {
-		t.Fatal("plaintext to a remote mailbox")
+	// Refused before any dial: no connection is even attempted.
+	dctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := imapDial(dctx, Mailbox{Name: "x", Addr: "192.0.2.1:143", PlainLoopback: true}); err == nil || !strings.Contains(err.Error(), "loopback address only") {
+		t.Fatalf("plaintext to a remote mailbox: %v", err)
 	}
 }
 
