@@ -64,11 +64,20 @@ func cmdRuns(args []string) error {
 	if limit > 0 && len(all) > limit {
 		recs = all[:limit]
 	}
-	fmt.Printf("%-22s %-8s %-19s %-26s %-22s %5s %9s\n", "ID", "STATUS", "STARTED", "TRIGGER", "TARGET", "STEPS", "COST")
+	show := cost.ShowUsage()
+	hdr := fmt.Sprintf("%-22s %-8s %-19s %-26s %-22s %5s", "ID", "STATUS", "STARTED", "TRIGGER", "TARGET", "STEPS")
+	if show {
+		hdr += fmt.Sprintf(" %9s", "USAGE")
+	}
+	fmt.Println(hdr)
 	for _, r := range recs {
-		fmt.Printf("%-22s %-8s %-19s %-26s %-22s %5d %9s\n",
+		line := fmt.Sprintf("%-22s %-8s %-19s %-26s %-22s %5d",
 			r.ID, r.Status, r.Started.Format("2006-01-02 15:04:05"),
-			triggerLabel(r), targetLabel(r), len(r.Steps), costLabel(r.CostUSD, r.ApproxCost))
+			triggerLabel(r), targetLabel(r), len(r.Steps))
+		if show {
+			line += fmt.Sprintf(" %9s", runUsageCell(r))
+		}
+		fmt.Println(line)
 	}
 	if hidden := len(all) - len(recs); hidden > 0 {
 		fmt.Printf("… %d older run(s) not shown — use --limit %d (or --limit 0 for all)\n", hidden, len(all))
@@ -221,6 +230,25 @@ func usageLines(rec store.RunHistory) []string {
 		out = append(out, "  "+modelUsageLabel(u))
 	}
 	return out
+}
+
+// runUsageCell is a run's usage in one cell: a figure only when the run used
+// one runtime/model (a run that used several is never summed).
+func runUsageCell(r store.RunHistory) string {
+	switch len(r.Usage) {
+	case 0:
+		if r.Tokens == 0 && r.CostUSD == 0 {
+			return "-"
+		}
+		return "?"
+	case 1:
+		u := r.Usage[0]
+		if cost.ShowDollars() {
+			return costLabel(u.CostUSD, u.Approximate)
+		}
+		return fmtTokens(u.Tokens) + "tok"
+	}
+	return fmt.Sprintf("%d models", len(r.Usage))
 }
 
 // modelUsageLabel renders one runtime/model's observed usage.

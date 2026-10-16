@@ -11,6 +11,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/cost"
+	"github.com/NodeSpy/conductor/internal/store"
 )
 
 func TestUsageCommand(t *testing.T) {
@@ -47,5 +48,37 @@ func TestUsageCommand(t *testing.T) {
 	out, _ = captureStdout(t, func() error { return printUsage(cfg, 24*time.Hour) })
 	if !strings.Contains(out, "no usage source is configured") {
 		t.Errorf("no-source note:\n%s", out)
+	}
+}
+
+func TestRunsUsageByMode(t *testing.T) {
+	defer cost.SetDisplayMode("")
+	one := store.RunHistory{Tokens: 1200, CostUSD: 0.4, Usage: []store.ModelUsage{{Runtime: "claude-cli", Model: "claude-x", Runs: 1, Turns: 3, Tokens: 1200, CostUSD: 0.4}}}
+	two := store.RunHistory{Tokens: 1500, CostUSD: 0.5, Usage: []store.ModelUsage{
+		{Runtime: "claude-cli", Model: "claude-x", Runs: 1, Tokens: 1200, CostUSD: 0.4}, {Runtime: "codex-cli", Model: "gpt-y", Runs: 1, Tokens: 300, CostUSD: 0.1}}}
+	cost.SetDisplayMode("")
+	if l := usageLines(two); l != nil {
+		t.Fatalf("off shows usage: %v", l)
+	}
+	if s := stepUsageLabel(store.StepRecord{Tokens: 5, CostUSD: 1}); s != "" {
+		t.Fatalf("off shows step usage: %q", s)
+	}
+	cost.SetDisplayMode("subscription")
+	l := strings.Join(usageLines(two), "\n")
+	if !strings.Contains(l, "claude-cli / claude-x") || !strings.Contains(l, "codex-cli / gpt-y") || strings.Contains(l, "$") || strings.Contains(l, "1.5k") {
+		t.Fatalf("subscription lines:\n%s", l)
+	}
+	if c := runUsageCell(two); c != "2 models" {
+		t.Fatalf("a two-model run summed: %q", c)
+	}
+	if c := runUsageCell(one); c != "1.2ktok" {
+		t.Fatalf("one model: %q", c)
+	}
+	cost.SetDisplayMode("api")
+	if c := runUsageCell(one); !strings.Contains(c, "$0.400") {
+		t.Fatalf("api: %q", c)
+	}
+	if l := strings.Join(usageLines(two), "\n"); !strings.Contains(l, "$0.400") || !strings.Contains(l, "$0.100") || strings.Contains(l, "$0.500") {
+		t.Fatalf("api lines, per model only:\n%s", l)
 	}
 }
