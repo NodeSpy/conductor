@@ -409,7 +409,7 @@
   function proposals(m, sub) {
     const list = props(m.name);
     const p = sub && list.find((x) => x.id === sub);
-    if (p) return shell(m, 'proposals', proposalDetail(m, p));
+    if (p) return innerWidth <= 720 ? `<div class="page">${proposalDetail(m, p)}</div>` : shell(m, 'proposals', proposalDetail(m, p));
     const vis = list.filter((x) => pv.f === 'all' || (pv.f === 'pending' ? x.status === 'pending' : x.status !== 'pending'));
     return shell(m, 'proposals', `<div class="filters">${UI.seg([['all', 'all'], ['pending', `pending · ${pending(m.name).length}`], ['decided', 'decided']], pv.f, 'prop-f')}</div><div class="panel">${vis.map((p) => `
       <a class="proposal ${p.status}" href="#/bots/${m.name}/proposals/${p.id}">
@@ -421,29 +421,43 @@
   }
   UI.act('prop-f', (b) => { pv.f = b.dataset.v; UI.rerender(); });
   function planHTML(t) { return esc(t).split('\n').map((l) => /must be replaced|forces replacement/.test(l) ? `<span class="rep">${l}</span>` : /^\s*\+\/-|^\s*~|will be updated/.test(l) ? `<span class="chg">${l}</span>` : /^\s*\+ /.test(l) ? `<span class="add">${l}</span>` : /#|unchanged/.test(l) ? `<span class="c">${l}</span>` : l).join('\n'); }
+  /** Who asked, in words: a non-operator requester gets a banner, never just a colored chip. */
+  UI.requesterBanner = (p) => {
+    const r = p.requester || '';
+    if (/^chat:/.test(r) || p.cls === 'user') return `<div class="req-banner untrusted">${icon('warn')}<div><b>Requested by a chat user who isn't one of your operators</b> (<span class="mono">${esc(r)}</span>). The bot is acting on their request, so it runs with no more trust than they have. Check this is something you want.</div></div>`;
+    if (/^event:/.test(r) || p.cls === 'event') return `<div class="req-banner event">${icon('live')}<div><b>Started by an event, not a person</b> (<span class="mono">${esc(r)}</span>). No human asked for this action; the bot proposed it while handling the event.</div></div>`;
+    if (p.cls === 'proactive') return `<div class="req-banner event">${icon('clock')}<div><b>The bot's own sweep</b> (<span class="mono">${esc(r)}</span>): nobody asked; it found this on a scheduled check.</div></div>`;
+    if (p.cls === 'peer') return `<div class="req-banner untrusted">${icon('bots')}<div><b>Asked for by another bot</b> (<span class="mono">${esc(r)}</span>). It carries the original requester's trust, no more.</div></div>`;
+    return `<div class="req-banner op">${icon('passkey')}<div><b>Requested by an operator</b> (<span class="mono">${esc(r)}</span>).</div></div>`;
+  };
+  /** The whole signed payload: every option, untruncated; long text in a scroll box. */
+  UI.payloadHTML = (p) => `<div class="payload"><div class="pl-row"><span class="pl-k">verb</span><span class="pl-v mono">${esc(p.verb)}</span></div>${Object.entries(p.options || {}).map(([k, v]) => `<div class="pl-row"><span class="pl-k mono">${esc(k)}</span>${String(v).length > 80 || /\n/.test(String(v)) ? `<div class="pl-long">${esc(v)}</div>` : `<span class="pl-v mono">${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</span>`}</div>`).join('') || '<div class="pl-row muted small">no options</div>'}</div>`;
   function proposalDetail(m, p) {
-    const tf = p.tf;
+    const tf = p.tf, phone = innerWidth <= 720, pending = p.status === 'pending';
+    const why = `<div class="why-impact"><div><span class="caps">Why</span><p>${esc(p.why || p.summary)}</p></div>${p.impact ? `<div><span class="caps">Impact</span><p>${esc(p.impact)}</p></div>` : ''}</div>`;
+    const tiles = tf ? `<div class="tf-tiles"><div><span class="k">add</span><b style="color:var(--ok)">+${tf.add}</b></div><div><span class="k">change</span><b style="color:var(--wait)">~${tf.change}</b></div><div><span class="k">destroy</span><b>-${tf.destroy}</b></div><div><span class="k">replaces</span><b style="color:var(--fail)">${tf.replaces.length}</b></div></div>` : '';
+    const action = tf ? `${tiles}<div class="callout warn small" style="margin:10px 0"><b>Replaces aws_instance.web.</b> It isn't on this bot's stateful list, so the replacement is allowed; a stateful type (a database, say) would be refused outright.</div><details class="tech"><summary>The plan (tf-plan ran it with the READ role)</summary><div class="plan">${planHTML(D.tfPlan)}</div></details>`
+      : `<div class="caps" style="margin:4px 0 6px">Exactly what runs</div>${UI.payloadHTML(p)}`;
+    const tech = `<details class="tech"><summary>Technical details: what the passkey signs</summary><dl class="kv small">${tf ? `<dt>action</dt><dd class="mono">terraform apply of ${esc(tf.repo)}, dir ${esc(tf.dir)}, workspace ${esc(tf.workspace)}</dd><dt>commit</dt><dd class="hash">${tf.commit}</dd><dt>plan sha256</dt><dd class="hash">${tf.plan_sha}</dd>` : ''}<dt>verb</dt><dd class="mono">${esc(p.verb)}</dd><dt>case</dt><dd class="mono">${p.case}</dd><dt>requester</dt><dd class="mono">${esc(p.requester || '—')} (${esc(p.cls || '')})</dd><dt>digest</dt><dd class="hash">${p.digest}</dd></dl></details>`;
+    const buttons = pending ? `<button class="btn lg primary grow" data-act="p-approve" data-p="${p.id}" data-d="approve">${icon('passkey')}Approve</button><button class="btn lg danger" data-act="p-approve" data-p="${p.id}" data-d="deny">Deny</button>` : '';
+    const done = !pending && p.status !== 'shadow' ? `<div class="callout ${p.status.startsWith('approved') ? 'ok' : 'danger'} small">${p.status.startsWith('approved') ? `${icon('check')} Approved${p.approver ? ' · ' + esc(p.approver) : ''}. conductor is applying exactly the signed action.` : `Denied${p.approver ? ' · ' + esc(p.approver) : ''}${p.reason ? `: “${esc(p.reason)}”` : ''}. The bot was told.`}</div>` : '';
+    const head = `<div class="prop-head">${st(PS[p.status], p.status, true)}${tier(p.tier)}<span class="mono small muted">${p.id} · ${esc(p.verb)}</span><span class="mono tiny muted" style="margin-left:auto">proposed ${ago(p.at)} ago${p.expires && pending ? ' · expires in ' + p.expires : ''}</span></div><h2 class="prop-title">${esc(p.title || p.summary)}</h2>`;
+    if (phone) return `<div class="prop-sheet"><div class="row" style="margin-bottom:8px"><a class="btn sm ghost back" href="${UI.navOrigin && UI.navOrigin.hash === location.hash ? UI.navOrigin.back : '#/bots/' + m.name + '/proposals'}">${icon('chev', '')}Back</a></div>
+      <div class="panel"><div class="panel-body stack">${head}${UI.requesterBanner(p)}${why}${done}${action}${tech}</div></div>
+      ${pending ? `<div class="sticky-decide">${buttons}</div>` : p.status === 'shadow' ? '<div class="callout small">Shadow proposals can\'t be approved.</div>' : ''}</div>`;
     return `<div class="row" style="margin-bottom:12px"><a class="btn sm ghost back" href="#/bots/${m.name}/proposals">${icon('chev', '')}All proposals</a></div>
       <div class="grid g-side">
-        <div class="stack"><div class="panel"><div class="panel-head">${st(PS[p.status], p.status, true)}<h3 class="mono">${p.id}</h3>${tier(p.tier)}<span class="mono small muted">${p.verb}</span><div class="tools"><span class="mono tiny muted">proposed ${ago(p.at)} ago${p.expires && p.status === 'pending' ? ' · expires in ' + p.expires : ''}</span></div></div>
-            <div class="panel-body"><div class="serif" style="font-size:24px;line-height:1.2;margin-bottom:12px">${esc(p.summary)}</div>
-            ${tf ? `<div class="grid g4" style="margin-bottom:14px"><div class="panel inset stat"><span class="k">add</span><span class="v" style="color:var(--ok)">+${tf.add}</span></div><div class="panel inset stat"><span class="k">change</span><span class="v" style="color:var(--wait)">~${tf.change}</span></div><div class="panel inset stat"><span class="k">destroy</span><span class="v">-${tf.destroy}</span></div><div class="panel inset stat"><span class="k">replaces</span><span class="v" style="color:var(--fail)">${tf.replaces.length}</span><span class="d mono">${tf.replaces.join(', ')}</span></div></div>
-              <div class="callout warn small" style="margin-bottom:12px"><b>Replaces aws_instance.web.</b> Not a stateful type, so it isn't refused.</div>
-              <div class="caps" style="margin-bottom:6px">Plan (conductor ran it with the tf-plan connector's READ role)</div><div class="plan">${planHTML(D.tfPlan)}</div>`
-              : `<div class="caps" style="margin-bottom:6px">Exact action</div>${UI.yaml(`verb: ${p.verb}\noptions:\n${Object.entries(p.options || {}).map(([k, v]) => `  ${k}: "${v}"`).join('\n') || '  {}'}`)}`}
-            </div></div></div>
+        <div class="stack"><div class="panel"><div class="panel-body stack">${head}${UI.requesterBanner(p)}${why}${action}${tech}</div></div></div>
         <div class="stack">
-          <div class="panel approve-panel"><div class="panel-head"><h3>What you sign</h3></div><div class="panel-body"><dl class="kv">
-            ${tf ? `<dt>repo</dt><dd class="mono">${tf.repo}</dd><dt>commit</dt><dd class="hash">${tf.commit}</dd><dt>dir</dt><dd class="mono">${tf.dir}</dd><dt>workspace</dt><dd class="mono">${tf.workspace}</dd><dt>plan sha256</dt><dd class="hash">${tf.plan_sha}</dd>` : ''}
-            <dt>case</dt><dd class="mono">${p.case}</dd><dt>requester</dt><dd>${p.requester ? `<span class="taint ${p.cls}">${p.requester}</span>` : '—'}</dd><dt>digest</dt><dd class="hash">${p.digest}</dd></dl>
-          ${p.status === 'pending' ? `<div class="row approve-row" style="margin-top:16px"><button class="btn lg primary grow" data-act="p-approve" data-p="${p.id}" data-d="approve">${icon('passkey')}Approve</button><button class="btn lg danger" data-act="p-approve" data-p="${p.id}" data-d="deny">Deny</button></div><div class="muted tiny" style="margin-top:8px">Needs one of: <span class="mono">${(S.effective(m).operators.v || []).join(', ')}</span>${teamOf(m) ? ` (from team ${teamOf(m).name})` : ''}, with user verification.</div>` : p.status === 'shadow' ? '<div class="callout small" style="margin-top:12px">Shadow proposals can\'t be approved.</div>' : ''}
+          <div class="panel approve-panel"><div class="panel-head"><h3>Your decision</h3></div><div class="panel-body stack">${done}
+            ${pending ? `<div class="small">${p.reversible ? `If it goes wrong: ${esc(p.reversible)}.` : 'This can\'t be undone by conductor.'}</div><div class="row approve-row">${buttons}</div><div class="muted tiny">Needs one of: <span class="mono">${(S.effective(m).operators.v || []).join(', ')}</span>${teamOf(m) ? ` (from team ${teamOf(m).name})` : ''}, with user verification. Deny can carry a reason for the bot.</div>` : p.status === 'shadow' ? '<div class="callout small">Shadow proposals can\'t be approved.</div>' : ''}
           </div></div>
           <div class="panel"><div class="panel-head"><h3>Timeline</h3></div><div class="list small">
             <div class="item">${st('ok', '')}<span class="grow">proposed by home ${m.session}</span><span class="mono tiny muted">${ago(p.at)}</span></div>
-            <div class="item">${st(p.status === 'pending' ? 'ember' : PS[p.status], '')}<span class="grow">${p.status === 'pending' ? 'awaiting operator signature' : p.status + (p.approver ? ' · ' + p.approver : '')}</span></div></div></div>
+            <div class="item">${st(pending ? 'ember' : PS[p.status], '')}<span class="grow">${pending ? 'awaiting operator signature' : p.status + (p.approver ? ' · ' + esc(p.approver) : '')}</span></div></div></div>
         </div></div>`;
   }
-  UI.act('p-approve', (b) => { const p = D.proposals.find((x) => x.id === b.dataset.p); UI.approve(p, b.dataset.d, () => { if (b.dataset.d !== 'deny') p.approver = 'ops (passkey · laptop)'; else p.approver = 'ops (passkey · laptop)'; S.save(); UI.rerender(); }); });
+  UI.act('p-approve', (b) => { const p = D.proposals.find((x) => x.id === b.dataset.p); UI.approve(p, b.dataset.d, () => { S.save(); UI.rerender(); }); });
 
   /* ---------- memory ---------- */
   const memOf = (m) => { if (m.name === 'platform-sre') return D.memory; D.memories = D.memories || {}; return (D.memories[m.name] = D.memories[m.name] || { files: { 'knowledge/README.md': `# ${m.name}\n\nWhat ${m.name} has learned.\n` }, log: [], open: 'knowledge/README.md' }); };

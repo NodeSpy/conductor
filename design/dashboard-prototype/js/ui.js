@@ -155,7 +155,7 @@
       const params = {}; r.keys.forEach((k, i) => (params[k] = mt[i + 1] ? decodeURIComponent(mt[i + 1]) : undefined));
       const main = $('#main');
       const out = r.fn(params);
-      main.innerHTML = String(out);
+      main.classList.toggle("still", !!opts.keepScroll); main.innerHTML = String(out);
       main.scrollTop = keep;
       UI.params = params;
       UI.setNav(r.opts.nav || path.split('/')[0]);
@@ -195,7 +195,10 @@
     const n = c ? c() : null;
     return `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span class="lbl">${l}</span>${n ? `<span class="count${hot ? ' hot' : ''}">${n}</span>` : ''}</a>`;
   }).join('')}</nav></div>`).join('');
+  // a page opened from Approvals (or another nav section) keeps that section highlighted, and its Back returns there
+  document.addEventListener('click', (e) => { const a = e.target.closest && e.target.closest('a[href^="#/"]'); if (!a) return; const from = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0]; const to = a.getAttribute('href'); if (['attention', 'overview'].includes(from) && /^#\/bots\/[^/]+\/proposals\//.test(to)) UI.navOrigin = { hash: to, nav: from === 'overview' ? 'overview' : 'attention', back: '#/' + from }; else if (!a.closest('.tabbar, .rail')) UI.navOrigin = UI.navOrigin && UI.navOrigin.hash === to ? UI.navOrigin : null; else UI.navOrigin = null; }, true);
   UI.setNav = (k) => {
+    if (UI.navOrigin && location.hash === UI.navOrigin.hash) { k = UI.navOrigin.nav; UI.backHref = UI.navOrigin.back; } else UI.backHref = null;
     $$('[data-nav]').forEach((a) => { const on = a.dataset.nav === k; a.classList.toggle('on', on); if (on && location.hash.replace(/^#\/?/, '') === a.dataset.nav) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   };
 
@@ -247,33 +250,33 @@
    * navigator.credentials.get({challenge: H(nonce ‖ digest)}) with
    * userVerification: required → POST the assertion. Here the authenticator is
    * simulated. */
+  /** The authenticator this device would use (recorded with the decision, not assumed). */
+  UI.authenticator = () => (innerWidth <= 720 ? 'phone · Face ID' : 'laptop · Touch ID');
   UI.approve = (p, decision = 'approve', onDone) => {
-    const deny = decision === 'deny';
-    const lines = p.kind === 'terraform'
-      ? `<div class="kv" style="margin-bottom:12px"><dt>action</dt><dd class="mono">terraform apply</dd><dt>repo@commit</dt><dd class="mono">${p.tf.repo}@${p.tf.commit.slice(0, 12)}</dd><dt>dir · workspace</dt><dd class="mono">${p.tf.dir} · ${p.tf.workspace}</dd><dt>plan</dt><dd class="mono">+${p.tf.add} ~${p.tf.change} -${p.tf.destroy} · <span style="color:var(--wait)">replaces ${p.tf.replaces.join(', ')}</span></dd><dt>plan sha256</dt><dd class="hash">${p.tf.plan_sha}</dd></div>`
-      : `<div class="kv" style="margin-bottom:12px"><dt>verb</dt><dd class="mono">${p.verb}</dd><dt>action</dt><dd>${UI.esc(p.summary)}</dd><dt>requester</dt><dd class="mono">${p.requester} <span class="muted">(${p.cls})</span></dd></div>`;
+    const deny = decision === 'deny', dev = UI.authenticator();
     const s = UI.modal(`
-      <div class="modal-head"><div><div class="caps" style="margin-bottom:6px">${p.bot} · ${p.id} · case ${p.case}</div><h2>${deny ? 'Deny' : 'Approve'} this ${p.kind === 'terraform' ? 'apply' : 'action'}</h2></div><button class="icon-btn" data-close>${UI.icon('x')}</button></div>
-      <div class="modal-body">
-        ${lines}
-        <div class="panel inset" style="padding:10px 12px">
-          <div class="caps" style="margin-bottom:4px">You are signing</div>
-          <div class="digest">{ bot: <b>${p.bot}</b>, proposal: <b>${p.id}</b>, decision: <b>${decision}</b>, action_sha256: <b>${p.digest.replace('sha256:', '').slice(0, 32)}</b>…, nonce: <b>7Qx2…f9</b> }</div>
-        </div>
+      <div class="modal-head"><div><div class="caps" style="margin-bottom:6px">${p.bot} · ${p.id} · case ${p.case}</div><h2>${deny ? 'Deny' : 'Approve'}: ${UI.esc(p.title || p.summary)}</h2></div><button class="icon-btn" data-close aria-label="Close">${UI.icon('x')}</button></div>
+      <div class="modal-body stack">
+        <div class="seal-words">${deny ? 'You\'re denying' : 'You\'re approving'} <b>${UI.esc(p.title || p.summary)}</b>, proposed by <b>${p.bot}</b>.${p.impact ? ` <span class="dim">${UI.esc(p.impact)}</span>` : ''}</div>
+        ${UI.requesterBanner ? UI.requesterBanner(p) : ''}
+        ${p.kind === 'terraform' ? `<div class="kv small"><dt>action</dt><dd class="mono">terraform apply · ${p.tf.repo} · ${p.tf.dir} · ${p.tf.workspace}</dd><dt>plan</dt><dd class="mono">+${p.tf.add} ~${p.tf.change} -${p.tf.destroy} · <span style="color:var(--wait)">replaces ${p.tf.replaces.join(', ')}</span></dd></div>` : UI.payloadHTML ? UI.payloadHTML(p) : ''}
+        ${deny ? `<div class="field"><label for="seal-reason">Tell the bot why <span class="opt">optional</span></label><textarea class="textarea" id="seal-reason" rows="2" placeholder="e.g. Not in #incidents; post it to #finance instead."></textarea></div>` : ''}
+        <details class="tech"><summary>The exact payload the passkey signs</summary><div class="digest">{ bot: <b>${p.bot}</b>, proposal: <b>${p.id}</b>, decision: <b>${decision}</b>, action_sha256: <b>${p.digest.replace('sha256:', '')}</b>, nonce: <b>7Qx2…f9</b> }</div></details>
         <div class="seal" id="seal">
           <div class="ring">${UI.icon('passkey', 'key')}<svg class="arc" viewBox="0 0 108 108"><circle class="track" cx="54" cy="54" r="52"/><circle class="fill" cx="54" cy="54" r="53"/></svg></div>
-          <div id="seal-msg"><b>Confirm with your passkey</b><div class="muted small">User verification required · this assertion covers only this digest</div></div>
+          <div id="seal-msg"><b>Confirm with your passkey</b><div class="muted small">User verification required · this assertion covers only this action</div></div>
         </div>
       </div>
       <div class="modal-foot"><span class="proto-note" style="margin-right:auto">authenticator simulated</span><button class="btn ghost" data-close>Cancel</button><button class="btn ${deny ? 'danger' : 'primary'}" id="seal-go">${UI.icon('passkey')}${deny ? 'Deny with passkey' : 'Approve with passkey'}</button></div>`, { sticky: true });
     $('#seal-go', s).addEventListener('click', (e) => {
-      const seal = $('#seal', s); e.currentTarget.disabled = true;
-      seal.classList.add('signing'); $('#seal-msg', s).innerHTML = '<b>Touch your security key…</b><div class="muted small">navigator.credentials.get · rpId ops-box.tail0000.ts.net</div>';
+      const seal = $('#seal', s); e.currentTarget.disabled = true; const reason = deny ? ($('#seal-reason', s) || {}).value || '' : '';
+      seal.classList.add('signing'); $('#seal-msg', s).innerHTML = `<b>Confirm on your ${dev.split(' · ')[0]}…</b><div class="muted small">navigator.credentials.get · rpId ops-box.tail0000.ts.net</div>`;
       setTimeout(() => {
         seal.classList.remove('signing'); seal.classList.add(deny ? 'denied' : 'done');
-        $('#seal-msg', s).innerHTML = deny ? '<b>Denied</b><div class="muted small">Signed decision recorded · the bot is told</div>' : `<b>Approved · executing</b><div class="muted small">Verified against operator <span class="mono">ops</span> · credential “laptop” · sign count 212</div>`;
-        p.status = deny ? 'denied' : 'approved';
-        setTimeout(() => { UI.closeModal(); UI.toast(deny ? `Denied ${p.id}` : `Approved ${p.id}`, deny ? 'decision signed' : (p.kind === 'terraform' ? 'conductor re-checks the plan hash, HEAD, and a clean tree, then applies' : 'the gate re-runs exactly the signed digest'), deny ? 'fail' : 'ok'); D.attention = D.attention.filter((a) => !a.href.includes(p.id) && !(a.sub || '').includes(p.id)); D.audit.unshift({ ts: new Date().toISOString(), event: 'bot_approval', who: 'operator:ops', detail: `${p.id} ${deny ? 'denied' : 'approved'} · webauthn · credential laptop · digest ${p.digest.slice(7, 11)}…`, run: '' }); S.save(); onDone && onDone(); UI.refreshChrome(); }, UI.fast ? 30 : 1300);
+        $('#seal-msg', s).innerHTML = deny ? '<b>Denied</b><div class="muted small">Signed decision recorded · the bot is told</div>' : `<b>Approved · executing</b><div class="muted small">Verified against operator <span class="mono">ops</span> · credential “${dev}”</div>`;
+        p.status = deny ? 'denied' : 'approved'; p.approver = `ops (passkey · ${dev.split(' · ')[0]})`; if (reason.trim()) p.reason = reason.trim();
+        if (deny && reason.trim()) (D.chats[p.bot] = D.chats[p.bot] || []).push({ who: 'op', at: new Date().toISOString(), text: `Denied ${p.id}: ${reason.trim()}` });
+        setTimeout(() => { UI.closeModal(); UI.toast(deny ? `Denied ${p.id}` : `Approved ${p.id}`, deny ? (reason.trim() ? 'your reason went to the bot' : 'decision signed') : (p.kind === 'terraform' ? 'conductor re-checks the plan hash, HEAD, and a clean tree, then applies' : 'the gate re-runs exactly the signed digest'), deny ? 'fail' : 'ok'); D.attention = D.attention.filter((a) => !a.href.includes(p.id) && !(a.sub || '').includes(p.id)); D.audit.unshift({ ts: new Date().toISOString(), event: 'bot_approval', who: 'operator:ops', detail: `${p.id} · ${decision} · ${dev}${reason.trim() ? ' · reason given' : ''}`, run: '' }); if (onDone) onDone(); }, UI.fast ? 40 : 900);
       }, UI.fast ? 40 : 1600);
     });
   };

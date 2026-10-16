@@ -66,10 +66,10 @@ Plan (commit after each step):
   `image`, not on a paseo runtime; filter grammar string=expr, map=AND, list=OR, `expr:`/`not_<key>`, typed
   `not_draft: true`; agent `prompt` optional; `use: cli` + `command:` label; verbs `<instance>.<verb>`; unknown
   keys are errors; Checks panel shows `conductor validate`-style output). Notes in `.scratch/*.go` (git show copies).
-- **B. One secret reference syntax**: `{{ vault "<vault>" "<key>" }}` everywhere (op:// retired); drop the named
+- **B. One secret reference syntax** (DONE e5461c6): `{{ vault "<vault>" "<key>" }}` everywhere (op:// retired); drop the named
   `secrets:` layer (alias label at most); value-source sources become Typed / Env (`${env.NAME}`) / Vault /
   Setting; broker grants `<vault>/<key>` with `secrets_via` shown.
-- **C. Approvals**: full payload untruncated, Why + Impact on top, untrusted-requester banner, hashes under a
+- **C. Approvals** (DONE): full payload untruncated, Why + Impact on top, untrusted-requester banner, hashes under a
   disclosure, seal modal in words, Deny reason, real authenticator recorded, no blank fade; phone sheet with a
   sticky Approve/Deny bar.
 - **D. Teams/bots on the real schema** (`origin/feat/members:internal/config/{teams,bots}.go`): team

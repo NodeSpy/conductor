@@ -164,7 +164,7 @@ test.describe('bots', () => {
     await go(page, '#/bots/platform-sre/proposals/p12');
     await page.locator('[data-act="p-approve"][data-d="approve"]').click();
     await page.locator('#seal-go').click();
-    await expect(page.locator('.panel-head .st').first()).toContainText('approved');
+    await expect(page.locator('.prop-head .st').first()).toContainText('approved');
     expect(await state(page, () => D.proposals.find((p) => p.id === 'p12').status)).toBe('approved');
   });
 });
