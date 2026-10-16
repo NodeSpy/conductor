@@ -232,7 +232,7 @@ func (m *Manager) Do(ctx context.Context, c Principal, action string, args map[s
 			}
 		}
 	}
-	res["profile"] = profileName(s)
+	res["profile"] = profileName(s, granted)
 	if len(granted) == 0 && why != "" {
 		res["logged_in_note"] = why
 	}
@@ -252,9 +252,13 @@ func refuse(format string, a ...any) error {
 	return fmt.Errorf("%w: %s", errRefused, fmt.Sprintf(format, a...))
 }
 
-func profileName(s *session) string {
-	if s.active != nil && s.active == s.login {
+func profileName(s *session, granted []string) string {
+	switch {
+	case s.active != nil && s.active == s.login:
 		return "the logged-in browser (" + strings.Join(s.sites, ", ") + ")"
+	case s.active == nil && len(granted) > 0:
+		// Nothing open yet: the first page decides.
+		return "none open yet (a page on " + strings.Join(granted, ", ") + " opens in the logged-in browser, any other in the anonymous one)"
 	}
 	return "anonymous"
 }
@@ -1165,7 +1169,7 @@ func (m *Manager) Sessions() []SessionInfo {
 	for _, s := range ss {
 		s.mu.Lock()
 		if s.anon != nil || s.login != nil {
-			out = append(out, SessionInfo{ID: s.id, Identity: s.caller.Identity, Agent: s.caller.Agent, Requester: s.caller.Requester, Profile: profileName(s), LastUsed: s.last})
+			out = append(out, SessionInfo{ID: s.id, Identity: s.caller.Identity, Agent: s.caller.Agent, Requester: s.caller.Requester, Profile: profileName(s, nil), LastUsed: s.last})
 		}
 		s.mu.Unlock()
 	}

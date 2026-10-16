@@ -322,6 +322,10 @@ func TestBrowserLoginGatedByProvenance(t *testing.T) {
 	}
 
 	op := r.caller("operator-session", RequesterOperator)
+	// Before any page: status says which browser a page will open in.
+	if p := r.do(op, "status", nil)["profile"].(string); !strings.HasPrefix(p, "none open yet") {
+		t.Fatalf("operator status before a page: %s", p)
+	}
 	out = r.do(op, "open", map[string]any{"url": r.url + "/account"})
 	if !strings.HasPrefix(out["profile"].(string), "the logged-in browser") {
 		t.Fatalf("operator: %v", out)
