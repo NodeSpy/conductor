@@ -1,271 +1,546 @@
-/* Members (#178): list, and per member: chat, cases, proposals, memory, workers, access, definition. */
+/* Teams & members (#178). Teams group members: team defaults are a ceiling
+ * members inherit and can only narrow, members in a team are peers, teams are
+ * isolated unless linked, work routes to a team by rule or through its lead.
+ * Per member: chat, cases (with routing), proposals, memory, workers, access,
+ * definition. Config edits stage into the pipeline; ledger ops are immediate. */
 (function () {
   const { icon, st, tag, tier, usd, ago, esc, md } = UI;
-  const M = (n) => D.members.find((m) => m.name === n) || D.members[0];
+  const M = (n) => D.members.find((m) => m.name === n);
+  const T = (n) => D.teams.find((t) => t.name === n);
   const props = (n) => D.proposals.filter((p) => p.member === n);
   const pending = (n) => props(n).filter((p) => p.status === 'pending');
+  const teamOf = (m) => (m && m.cfg && m.cfg.team ? T(m.cfg.team) : null);
+  const membersOf = (t) => D.members.filter((m) => m.cfg && m.cfg.team === t);
+  const staged = (coll, k) => S.staged(coll, k);
+  const now = () => new Date().toISOString();
+  const audit = (event, detail) => D.audit.unshift({ ts: now(), event, who: 'operator:ops', detail, run: '' });
+
+  /* ---------- the peers graph, with team boundaries ---------- */
+  function peersGraph() {
+    const teams = D.teams.map((t) => ({ t, ms: membersOf(t.name) })), loose = D.members.filter((m) => !teamOf(m));
+    const W = 760, pad = 16, gap = 26; let x = pad;
+    const total = teams.reduce((a, g) => a + Math.max(1, g.ms.length), 0) + (loose.length ? loose.length * 0.8 : 0);
+    const unit = (W - pad * 2 - gap * (teams.length + (loose.length ? 1 : 0) - 1)) / Math.max(total, 1);
+    const pos = {}, boxes = [];
+    teams.forEach((g) => { const w = Math.max(1, g.ms.length) * unit; boxes.push({ g, x, w }); g.ms.forEach((m, i) => (pos[m.name] = { x: x + (w / (g.ms.length + 1)) * (i + 1), y: 92 })); x += w + gap; });
+    loose.forEach((m, i) => (pos[m.name] = { x: x + unit * 0.4 + i * unit * 0.8, y: 92 }));
+    const H = 168;
+    const edges = [];
+    teams.forEach((g) => g.ms.forEach((a, i) => g.ms.slice(i + 1).forEach((b) => edges.push(`<path d="M${pos[a.name].x} ${pos[a.name].y} Q ${(pos[a.name].x + pos[b.name].x) / 2} ${pos[a.name].y + 40} ${pos[b.name].x} ${pos[b.name].y}" class="pg-in"/>`))));
+    const linked = new Set();
+    D.teams.forEach((t) => (t.cfg.links || []).forEach((l) => { const o = T(l); if (o && (o.cfg.links || []).includes(t.name)) linked.add([t.name, l].sort().join('|')); }));
+    const bx = (n) => boxes.find((b) => b.g.t.name === n);
+    [...linked].forEach((k) => { const [a, b] = k.split('|').map(bx); if (!a || !b) return; const [l, r] = a.x < b.x ? [a, b] : [b, a]; const x1 = l.x + l.w, x2 = r.x; edges.push(`<path d="M${x1} 112 L ${x2} 112" class="pg-link"/><text x="${(x1 + x2) / 2}" y="104" class="pg-lt" text-anchor="middle">linked</text>`); });
+    D.members.forEach((m) => ((m.cfg && m.cfg.peers) || []).forEach((p) => { const o = M(p); if (!o || !pos[p] || m.name > p) return; const tm = teamOf(m), to = teamOf(o); if (tm && to && tm.name === to.name) return; edges.push(`<path d="M${pos[m.name].x} ${pos[m.name].y} C ${pos[m.name].x} 20, ${pos[p].x} 20, ${pos[p].x} ${pos[p].y}" class="pg-peer"/>`); }));
+    return `<svg class="peers-graph" viewBox="0 0 ${W} ${H}" role="img" aria-label="Members grouped by team, with peer links">
+      ${boxes.map((b) => `<a href="#/teams/${b.g.t.name}"><rect x="${b.x}" y="50" width="${b.w}" height="98" rx="14" class="pg-team"/><text x="${b.x + 12}" y="68" class="pg-tn">${esc(b.g.t.name)}</text></a>`).join('')}
+      ${loose.length ? `<text x="${pos[loose[0].name].x - 20}" y="68" class="pg-tn muted">no team</text>` : ''}
+      ${edges.join('')}
+      ${D.members.map((m) => { const p = pos[m.name]; const lead = teamOf(m) && teamOf(m).cfg.lead === m.name; return `<a href="#/members/${m.name}"><circle cx="${p.x}" cy="${p.y}" r="15" fill="${m.color}" class="pg-node"/>${lead ? `<circle cx="${p.x}" cy="${p.y}" r="19" class="pg-lead"/>` : ''}<text x="${p.x}" y="${p.y + 4}" text-anchor="middle" class="pg-init">${m.name[0]}</text><text x="${p.x}" y="${p.y + 34}" text-anchor="middle" class="pg-name">${esc(m.name)}</text></a>`; }).join('')}
+    </svg><div class="pg-legend small muted"><span><i class="lg-in"></i>peers inside a team (data-only ask)</span><span><i class="lg-link"></i>teams linked</span><span><i class="lg-peer"></i>explicit cross-team peer</span><span><i class="lg-lead"></i>lead</span></div>`;
+  }
 
   /* ---------- list ---------- */
-  UI.route('members', () => `<div class="page">
-    ${UI.head('Members', { sub: 'persistent agents with a charter, a memory and a ledger', actions: `<a class="btn primary" href="#/members/new/settings">${icon('plus')}Define a member</a>` })}
-    <div class="grid g3">${D.members.map((m) => `
-      <a class="panel member-card" href="#/members/${m.name}">
+  const memberCard = (m) => `<a class="panel member-card" href="#/members/${m.name}">
         <div class="row">${UI.sigil(m, 'lg')}<div class="grow"><h3>${m.name}</h3><div class="muted small">${esc(m.desc)}</div></div></div>
-        <div class="row wrap">${m.home === 'live' ? st('run', 'home live') : st('idle', 'home idle')}${m.shadow ? st('shadow', 'shadow mode') : ''}${tag(m.mode === 'container' ? 'container' : 'sandboxed', 'ok')}</div>
+        <div class="row wrap">${m.home === 'live' ? st('run', 'home live') : st('idle', 'home idle')}${m.shadow ? st('shadow', 'shadow mode') : ''}${tag(m.mode === 'container' ? 'container' : 'sandboxed', 'ok')}${teamOf(m) && teamOf(m).cfg.lead === m.name ? tag('lead', 'ember') : ''}</div>
         <div class="grid g3" style="gap:8px">
-          <div><div class="caps">cases</div><div class="serif" style="font-size:26px">${m.open}</div></div>
-          <div><div class="caps">pending</div><div class="serif" style="font-size:26px;color:${m.pending ? 'var(--accent)' : 'inherit'}">${m.pending}</div></div>
-          <div><div class="caps">workers</div><div class="serif" style="font-size:26px">${m.workers}</div></div>
+          <div><div class="caps">cases</div><div class="serif" style="font-size:26px">${D.cases.filter((c) => c.member === m.name && c.status === 'open').length}</div></div>
+          <div><div class="caps">pending</div><div class="serif" style="font-size:26px;color:${pending(m.name).length ? 'var(--accent)' : 'inherit'}">${pending(m.name).length}</div></div>
+          <div><div class="caps">workers</div><div class="serif" style="font-size:26px">${D.workers.filter((w) => (w.member || 'platform-sre') === m.name && w.status === 'run').length}</div></div>
         </div>
-        <div class="row small muted"><span class="mono tiny">session ${m.session} · ${m.turns}/${m.maxTurns} turns · ${m.age}/${m.maxAge}</span><span style="margin-left:auto">${m.proactive ? icon('clock') + ' sweep in ' + m.proactive.next : ''}</span></div>
-      </a>`).join('')}
-      <div class="panel inset" style="display:grid;place-items:center;border-style:dashed;min-height:220px"><div class="empty"><span class="serif">Peers</span><svg width="220" height="80" viewBox="0 0 220 80"><path d="M40 40 C 90 0, 130 0, 180 40" stroke="var(--line-3)" fill="none" stroke-dasharray="4 4"/><circle cx="40" cy="40" r="14" fill="#ff6a2b"/><circle cx="180" cy="40" r="14" fill="#4fb8e8"/><text x="40" y="70" text-anchor="middle" font-size="10" fill="var(--ink-3)" font-family="Martian Mono">platform-sre</text><text x="180" y="70" text-anchor="middle" font-size="10" fill="var(--ink-3)" font-family="Martian Mono">billing-sre</text><text x="110" y="18" text-anchor="middle" font-size="9" fill="var(--ink-3)" font-family="Martian Mono">data only · 20/h</text></svg><div class="small">web-triage is linked to no one.</div></div></div>
-    </div></div>`);
+        <div class="row small muted"><span class="mono tiny">session ${m.session} · ${m.turns}/${m.maxTurns} turns</span><span style="margin-left:auto">${m.proactive ? icon('clock') + ' sweep in ' + m.proactive.next : ''}</span></div>
+      </a>`;
+  UI.route('members', () => `<div class="page">
+    ${UI.head('Teams &amp; members', { sub: 'persistent agents, grouped the way you cut them', actions: `<button class="btn" data-act="team-new">${icon('plus')}Define a team</button><a class="btn primary" href="#/members/new/settings">${icon('plus')}Define a member</a>` })}
+    <div class="panel"><div class="panel-head"><h3>Peers</h3><span class="muted small">inside a team members are peers; across teams they're isolated unless linked</span></div><div class="panel-body tight">${peersGraph()}</div></div>
+    ${D.teams.map((t) => { const ms = membersOf(t.name); const c = t.cfg; return `<div class="team-band">
+      <div class="team-head"><a href="#/teams/${t.name}" class="grow"><span class="caps">team</span><h2>${esc(t.name)}</h2><span class="muted small">${esc(c.description || '')}</span></a>
+        <div class="row wrap small">${c.lead ? tag('lead ' + c.lead, 'ember') : tag('no lead')}${tag((c.routing || []).length + ' routing rule' + ((c.routing || []).length === 1 ? '' : 's'))}${(c.links || []).map((l) => tag('↔ ' + l)).join('')}${c.knowledge ? tag('knowledge repo') : ''}<a class="btn sm" href="#/teams/${t.name}">${icon('chev')}Open team</a></div></div>
+      <div class="grid g3">${ms.map(memberCard).join('') || `<div class="panel inset add-card"><div class="empty small">No members yet.<a class="btn sm" href="#/teams/${t.name}">Add one</a></div></div>`}</div></div>`; }).join('')}
+    ${D.members.filter((m) => !teamOf(m)).length ? `<div class="team-band loose"><div class="team-head"><div class="grow"><span class="caps">no team</span><h2>Unassigned</h2><span class="muted small">a member needn't be in a team</span></div></div><div class="grid g3">${D.members.filter((m) => !teamOf(m)).map(memberCard).join('')}</div></div>` : ''}
+  </div>`);
+
+  /* ---------- team pages ---------- */
+  const tierOpts = ['propose', 'commit_money', 'reversible'];
+  function teamForm(t) {
+    const isNew = !t, c = t ? staged('teams', t.name) : { defaults: { operators: ['ops'], autonomy: { max_tier: 'propose', promote: false }, isolation: { mode: 'namespace' } } };
+    const others = D.teams.filter((x) => !t || x.name !== t.name).map((x) => x.name);
+    UI.form({ caps: isNew ? 'teams:' : `teams.${t.name}`, title: isNew ? 'Define a team' : `Edit team ${t.name}`, wide: true,
+      intro: 'Cut teams any way you like. Members inherit these defaults and can only narrow them.',
+      values: isNew ? {} : { description: c.description, lead: c.lead, operators: S.getPath(c, 'defaults.operators'), max_tier: S.getPath(c, 'defaults.autonomy.max_tier'), promote: S.getPath(c, 'defaults.autonomy.promote') !== false, approval_ttl: S.getPath(c, 'defaults.autonomy.approval_ttl'), isolation: S.getPath(c, 'defaults.isolation.mode'), budget: S.getPath(c, 'defaults.budget.max_cost_per_day'), pool_runs: S.getPath(c, 'defaults.budget.proactive_pool.max_runs_per_day'), pool_cost: S.getPath(c, 'defaults.budget.proactive_pool.max_cost_per_day'), logins: S.getPath(c, 'defaults.browser.logins'), credentials: S.getPath(c, 'defaults.browser.credentials'), repo: S.getPath(c, 'knowledge.repo'), promote_mode: S.getPath(c, 'knowledge.promote'), links: c.links, members: [] }, edit: !isNew,
+      fields: [
+        isNew ? { k: 'name', type: 'string', req: true, ph: 'e.g. data', pattern: /^[a-z][a-z0-9-]*$/, patternMsg: 'Lowercase letters, digits and dashes.', validate: (v) => (T(v) ? 'A team by that name exists.' : '') } : null,
+        { k: 'description', type: 'string', mono: false },
+        isNew ? { k: 'members', type: 'select-multi', label: 'Members', options: D.members.map((m) => m.name), help: 'A member is in at most one team: adding one here moves it.' } : { k: 'lead', type: 'enum', label: 'Lead', options: membersOf(t.name).map((m) => m.name), help: 'Triages work routed to the team and assigns it. Requester provenance is kept.' },
+        { section: 'Defaults members inherit', k: 'operators', type: 'select-multi', label: 'Operators / approvers', options: Object.keys(D.operatorsCfg), req: true },
+        { k: 'max_tier', type: 'enum', label: 'Autonomy ceiling', options: tierOpts, def: 'propose', req: true, help: 'The loosest tier any member may give a write verb.' },
+        { k: 'promote', type: 'bool', label: 'Promotions', on: 'members may promote reversible verbs' },
+        { k: 'approval_ttl', type: 'duration', label: 'Approval TTL' },
+        { k: 'isolation', type: 'enum', label: 'Sandbox policy', options: ['namespace', 'container'], def: 'namespace', help: 'container: every member must run in its own container.' },
+        { k: 'budget', type: 'number', label: 'Team budget / day (USD)' },
+        { k: 'pool_runs', type: 'number', label: 'Proactive pool · runs / day', help: 'Shared by every member\'s sweeps.' },
+        { k: 'pool_cost', type: 'number', label: 'Proactive pool · USD / day' },
+        { k: 'logins', type: 'list', label: 'Browser login scope', ph: 'console.example.com' },
+        { k: 'credentials', type: 'select-multi', label: 'Credential scope', options: D.access.credentials.map((x) => x.name) },
+        { section: 'Knowledge and links', k: 'repo', type: 'string', label: 'Team knowledge repo', ph: 'team-knowledge/<team>', help: 'Optional. Members propose promoting knowledge into it.' },
+        { k: 'promote_mode', type: 'seg', label: 'Promotion', options: [['approval', 'needs approval'], ['auto', 'automatic'], ['off', 'off']], def: 'approval', show: (v) => !!v.repo },
+        { k: 'links', type: 'select-multi', label: 'Linked teams', options: others, help: 'Both sides must link. Linking is a channel for data to cross.' },
+      ].filter(Boolean),
+      submit: 'Review change', submitIcon: 'check',
+      onSubmit: (v) => {
+        const name = isNew ? v.name : t.name;
+        const n = Object.assign({}, isNew ? {} : (({ routing }) => (routing ? { routing } : {}))(c));
+        if (v.description) n.description = v.description;
+        if (v.lead) n.lead = v.lead;
+        n.defaults = {};
+        S.setPath(n.defaults, 'operators', v.operators);
+        n.defaults.autonomy = { max_tier: v.max_tier, promote: !!v.promote }; if (v.approval_ttl) n.defaults.autonomy.approval_ttl = v.approval_ttl;
+        n.defaults.isolation = { mode: v.isolation || 'namespace' };
+        if (v.budget != null) S.setPath(n.defaults, 'budget.max_cost_per_day', v.budget);
+        if (v.pool_runs != null) S.setPath(n.defaults, 'budget.proactive_pool.max_runs_per_day', v.pool_runs);
+        if (v.pool_cost != null) S.setPath(n.defaults, 'budget.proactive_pool.max_cost_per_day', v.pool_cost);
+        if (v.logins) S.setPath(n.defaults, 'browser.logins', v.logins);
+        if (v.credentials) S.setPath(n.defaults, 'browser.credentials', v.credentials);
+        if (v.repo) n.knowledge = { repo: v.repo, promote: v.promote_mode || 'approval' };
+        if (isNew ? false : c.routing) n.routing = c.routing;
+        if (v.links) n.links = v.links;
+        S.stage('teams', name, n);
+        (v.members || []).forEach((mn) => { const mc = Y_clone(staged('members', mn)); mc.team = name; S.stage('members', mn, mc); });
+        if (isNew && !D.teamKnowledge[name] && v.repo) D.teamKnowledge[name] = { repo: v.repo, files: { 'README.md': `# ${name} team knowledge\n` }, proposals: [] };
+        UI.staged(S.find('teams', name));
+      } });
+  }
+  const Y_clone = (o) => JSON.parse(JSON.stringify(o));
+  UI.act('team-new', () => teamForm(null));
+  UI.act('team-edit', (b) => teamForm(T(b.dataset.t)));
+  UI.act('team-del', (b) => {
+    const t = T(b.dataset.t), ms = membersOf(t.name);
+    UI.confirm({ title: `Remove team ${t.name}?`, body: `${ms.length ? `Its ${ms.length} member${ms.length > 1 ? 's' : ''} (${ms.map((m) => m.name).join(', ')}) leave the team and keep their own settings. ` : ''}Stages the removal; review and apply with your passkey.`, ok: 'Stage removal', danger: true }).then((ok) => {
+      if (!ok) return; ms.forEach((m) => { const c = Y_clone(staged('members', m.name)); delete c.team; S.stage('members', m.name, c); });
+      D.teams.filter((x) => (x.cfg.links || []).includes(t.name)).forEach((x) => { const c = Y_clone(staged('teams', x.name)); c.links = c.links.filter((l) => l !== t.name); if (!c.links.length) delete c.links; S.stage('teams', x.name, c); });
+      UI.staged(S.stage('teams', t.name, null));
+    });
+  });
+
+  const routeLabel = (r) => !r ? '' : r.by === 'rule' ? `routed to <b>${r.team}</b> by rule <span class="mono">${esc(r.rule)}</span>${r.via === 'lead' ? ` → assigned by lead <b>${esc(r.lead)}</b> to <b>${esc(r.to)}</b>` : ` → <b>${esc(r.to)}</b>`}` : r.by === 'lead' ? `assigned by lead <b>${esc(r.lead)}</b> to <b>${esc(r.to)}</b>` : r.by === 'operator' ? `reassigned by operator <b>ops</b> to <b>${esc(r.to)}</b>${r.from ? ` (was ${esc(r.from)})` : ''}` : r.by === 'link' ? `arrived over the team link from <b>${esc(r.team)}</b>` : r.by === 'proactive' ? 'opened by a proactive sweep' : `delivered to <b>${esc(r.to)}</b> directly`;
+  UI.routeLabel = routeLabel;
+  const matchRule = (t, ev) => (t.cfg.routing || []).find((r) => r.when && r.when.on === ev.on && Object.entries(r.when).every(([k, v]) => k === 'on' || [].concat(v).includes(String(ev.payload[k] != null ? ev.payload[k] : S.getPath(ev.payload, 'incident.' + k)))));
+  const tv = { ev: 'ev-pd' };
+
+  function teamShell(t, tab, body) {
+    const c = staged('teams', t.name) || t.cfg, ms = membersOf(t.name), kn = D.teamKnowledge[t.name];
+    const pend = kn ? kn.proposals.filter((p) => p.status === 'pending').length : 0;
+    return `<div class="page"><div class="member-hero team-hero"><span class="sigil lg team-sigil">${esc(t.name[0])}</span><div class="grow"><div class="crumbs mono tiny muted"><a href="#/members">Teams &amp; members</a> › team</div><h1>${esc(t.name)}</h1>
+      <div class="facts">${tag(ms.length + ' member' + (ms.length === 1 ? '' : 's'))}${c.lead ? tag('lead ' + c.lead, 'ember') : tag('no lead')}${tag(`operators: ${(S.getPath(c, 'defaults.operators') || []).join(', ') || '—'}`)}${tag(`ceiling ${S.getPath(c, 'defaults.autonomy.max_tier') || '—'}`)}${tag(icon('shield') + ' ' + (S.getPath(c, 'defaults.isolation.mode') || 'namespace'), 'ok')}${S.find('teams', t.name) ? tag('change staged', 'run') : ''}</div></div>
+      <div class="row wrap"><button class="btn" data-act="team-deliver" data-t="${t.name}">${icon('send')}Route work here</button><button class="btn" data-act="team-edit" data-t="${t.name}">${icon('edit')}Edit team</button><button class="btn ghost" data-act="team-del" data-t="${t.name}" aria-label="Remove team">${icon('trash')}</button></div></div>
+      ${UI.tabs([['overview', 'Overview', `#/teams/${t.name}`], ['routing', 'Routing', `#/teams/${t.name}/routing`, (c.routing || []).length], ['defaults', 'Defaults', `#/teams/${t.name}/defaults`], ['knowledge', 'Knowledge', `#/teams/${t.name}/knowledge`, pend || null, pend > 0]], tab)}
+      ${body}</div>`;
+  }
+  function teamOverview(t) {
+    const c = staged('teams', t.name) || t.cfg, ms = membersOf(t.name);
+    const others = D.members.filter((m) => !ms.includes(m));
+    const spend = ms.reduce((a, m) => a + (m.name === 'platform-sre' ? 3.75 : m.name === 'web-triage' ? 0.42 : m.name === 'billing-sre' ? 1.1 : 0), 0);
+    const pool = S.getPath(c, 'defaults.budget.proactive_pool'), claimed = ms.reduce((a, m) => a + (S.getPath(m.cfg, 'proactive.budget.max_runs_per_day') || 0), 0);
+    const cases = D.cases.filter((x) => x.routed && (x.routed.team === t.name || ms.some((m) => m.name === x.routed.to))).slice(0, 8);
+    const linkedBack = (l) => ((T(l) || { cfg: {} }).cfg.links || []).includes(t.name);
+    return teamShell(t, 'overview', `<div class="grid g-side">
+      <div class="stack">
+        <div class="panel"><div class="panel-head"><h3>Members</h3><span class="muted small">peers of each other by default</span></div><div class="list">
+          ${ms.map((m) => `<div class="item"><a href="#/members/${m.name}" class="row grow" style="gap:10px">${UI.sigil(m)}<div><b>${m.name}</b> ${c.lead === m.name ? tag('lead', 'ember') : ''}<div class="muted tiny">${esc(m.desc)}</div></div></a>
+            ${c.lead === m.name ? '' : `<button class="btn sm ghost" data-act="team-lead" data-t="${t.name}" data-m="${m.name}">Make lead</button>`}<button class="btn sm ghost" data-act="team-remove" data-t="${t.name}" data-m="${m.name}" aria-label="Remove ${m.name} from team">${icon('x')}Remove</button></div>`).join('') || '<div class="item muted small">No members yet.</div>'}</div>
+          <div class="panel-foot"><label class="row small grow"><span class="muted">Add a member</span><select class="select mono" id="team-add-sel" aria-label="Member to add">${others.map((m) => `<option value="${m.name}">${m.name}${teamOf(m) ? ' (moves from ' + teamOf(m).name + ')' : ''}</option>`).join('')}</select></label><button class="btn sm" ${others.length ? `data-act="team-add" data-t="${t.name}"` : UI.off('Every member is already in this team')}>${icon('plus')}Add to team</button></div></div>
+        <div class="panel"><div class="panel-head"><h3>Routing decisions</h3><span class="muted small">requester provenance kept through every hop</span></div><div class="list">${cases.map((x) => `<a class="item click" href="#/members/${x.member}/cases/${x.id}"><span class="mono tiny muted">${x.id}</span><div class="grow small"><div class="ellipsis"><b>${esc(x.title)}</b></div><div class="tiny muted">${routeLabel(x.routed)} · requester <span class="taint ${x.cls}">${x.requester}</span></div></div><span class="chev">${icon('chev')}</span></a>`).join('') || '<div class="item muted small">Nothing routed yet.</div>'}</div></div>
+      </div>
+      <div class="stack">
+        <div class="panel"><div class="panel-head"><h3>Budget</h3></div><div class="panel-body stack tight small">
+          <div class="row"><span class="grow">Team spend today</span><span class="mono">${usd(spend)} / ${S.getPath(c, 'defaults.budget.max_cost_per_day') != null ? usd(S.getPath(c, 'defaults.budget.max_cost_per_day')) : '∞'}</span></div>
+          <div class="meter"><i style="width:${Math.min(100, (spend / (S.getPath(c, 'defaults.budget.max_cost_per_day') || 1e9)) * 100)}%"></i></div>
+          ${pool ? `<div class="row" style="margin-top:6px"><span class="grow">Proactive pool (shared)</span><span class="mono">${claimed} / ${pool.max_runs_per_day} runs claimed · ${usd(pool.max_cost_per_day)}/day</span></div><div class="meter"><i style="width:${Math.min(100, (claimed / pool.max_runs_per_day) * 100)}%;background:var(--run)"></i></div><div class="muted tiny">Each member's sweep budget draws on the pool; the validator refuses a member over it.</div>` : '<div class="muted tiny">No shared proactive pool.</div>'}</div></div>
+        <div class="panel"><div class="panel-head"><h3>Links</h3></div><div class="panel-body stack tight small">
+          <div><span class="caps">inside the team</span><div class="muted tiny" style="margin-top:3px">${ms.length > 1 ? ms.map((m) => m.name).join(' ↔ ') + ' · data-only ask, no extra config' : 'One member: nobody to ask yet.'}</div></div>
+          <div><span class="caps">across teams</span>${D.teams.filter((x) => x.name !== t.name).map((x) => { const on = (c.links || []).includes(x.name); return `<div class="row" style="margin-top:6px"><b class="grow">${x.name}</b>${on ? (linkedBack(x.name) ? tag('linked both ways', 'ok') : tag('waiting for ' + x.name, 'wait')) : tag('isolated')}${UI.switchBtn(on, 'team-link', `data-t="${t.name}" data-o="${x.name}" aria-label="Link ${t.name} with ${x.name}"`)}</div>`; }).join('') || '<div class="muted tiny">No other teams.</div>'}</div>
+          <div class="muted tiny">Linking is a channel for data to cross between teams; both sides must link. A link change is a config edit (widening).</div></div></div>
+      </div></div>`);
+  }
+  function teamRouting(t) {
+    const c = staged('teams', t.name) || t.cfg, rules = c.routing || [];
+    const ev = SCHEMA.events.find((e) => e.id === tv.ev) || SCHEMA.events[0];
+    const hit = matchRule({ cfg: c }, ev);
+    return teamShell(t, 'routing', `<div class="grid g-side"><div class="stack">
+      <div class="panel"><div class="panel-head"><h3>Rules</h3><span class="muted small">first match wins · to a member, or to the lead to triage</span><div class="tools"><button class="btn sm" data-act="rule-edit" data-t="${t.name}" data-i="-1">${icon('plus')}Add a rule</button></div></div>
+        <div class="list">${rules.map((r, i) => `<div class="item"><span class="mono tiny muted">${i + 1}</span><div class="grow"><b class="mono small">${esc(r.name || 'rule ' + (i + 1))}</b><div class="tiny muted mono">when ${esc(r.when ? Object.entries(r.when).map(([k, v]) => `${k}: ${[].concat(v).join('|')}`).join(' · ') : '—')} → ${r.to === 'lead' ? `lead (${esc(c.lead || 'none')})` : esc(r.to)}</div></div>
+          <button class="icon-btn" ${i ? `data-act="rule-move" data-t="${t.name}" data-i="${i}" data-d="-1"` : UI.off('Already first')} aria-label="Move up">${icon('chev', 'up')}</button><button class="icon-btn" ${i < rules.length - 1 ? `data-act="rule-move" data-t="${t.name}" data-i="${i}" data-d="1"` : UI.off('Already last')} aria-label="Move down">${icon('chev', 'down')}</button><button class="btn sm ghost" data-act="rule-edit" data-t="${t.name}" data-i="${i}">${icon('edit')}Edit</button><button class="btn sm ghost" data-act="rule-del" data-t="${t.name}" data-i="${i}" aria-label="Delete rule">${icon('trash')}</button></div>`).join('') || '<div class="item muted small">No rules: work reaches this team only through its members directly.</div>'}</div>
+        <div class="panel-foot small muted">Rule edits stage a config change to <span class="mono">teams.${t.name}.routing</span>.${S.find('teams', t.name) ? ' <a class="link" href="#/config/apply">Review staged change</a>' : ''}</div></div>
+      </div><div class="stack">
+      <div class="panel"><div class="panel-head"><h3>Try a rule</h3></div><div class="panel-body stack tight small"><label class="field"><span class="caps">a real past event</span><select class="select mono" data-on-change="route-ev" aria-label="Event to route">${SCHEMA.events.map((e) => `<option value="${e.id}"${e.id === ev.id ? ' selected' : ''}>${esc(e.label)}</option>`).join('')}</select></label>
+        ${hit ? `<div class="callout ok small">Matches <b class="mono">${esc(hit.name)}</b> → ${hit.to === 'lead' ? `lead <b>${esc(c.lead)}</b> triages and assigns` : `<b>${esc(hit.to)}</b>`}. The case keeps requester <span class="mono">event:${esc(ev.on)}</span>.</div>` : `<div class="callout small">No rule in <b>${t.name}</b> matches <span class="mono">${esc(ev.on)}</span>; it goes to whichever trigger or member it was addressed to.</div>`}</div></div>
+      <div class="callout info small">The lead is a member: it reads the case, then assigns it with <span class="mono">member assign</span>. The requester never changes on the way, so the assignee runs on no more trust than whoever asked.</div></div></div>`);
+  }
+  function teamDefaults(t) {
+    const c = staged('teams', t.name) || t.cfg, d = c.defaults || {}, ms = membersOf(t.name);
+    const effs = ms.map((m) => ({ m, e: S.effective(Object.assign({}, m, { cfg: staged('members', m.name) }), Object.assign({}, D, { teams: D.teams.map((x) => (x.name === t.name ? { name: x.name, cfg: c } : x)) })) }));
+    const badge = (src, ok = true) => (ok ? (src === 'inherits' ? '<span class="inh">inherits</span>' : src === 'narrows' ? '<span class="nar">narrows</span>' : `<span class="inh">${src}</span>`) : '<span class="wid">wider ✗</span>');
+    const row = (label, teamV, cell) => `<tr><td data-l="default"><b>${label}</b></td><td data-l="team" class="mono small">${teamV}</td>${effs.map((x) => `<td data-l="${x.m.name}" class="small">${cell(x)}</td>`).join('')}</tr>`;
+    const subset = (a, b) => !b || (a || []).every((x) => b.includes(x));
+    return teamShell(t, 'defaults', `<div class="callout small" style="margin-bottom:12px">Members inherit every default and may only <b>narrow</b> it: fewer approvers, a stricter tier, a container instead of a namespace, a smaller budget, fewer sites. Anything wider is refused when the config is validated.</div>
+      <div class="panel"><div class="panel-head"><h3>Defaults and what members do with them</h3><div class="tools"><button class="btn sm" data-act="team-edit" data-t="${t.name}">${icon('edit')}Edit defaults</button></div></div>
+      <table class="tbl responsive inherit-tbl"><thead><tr><th>default</th><th>team</th>${effs.map((x) => `<th><a href="#/members/${x.m.name}/settings">${x.m.name}</a></th>`).join('')}</tr></thead><tbody>
+        ${row('operators', (d.operators || []).join(', ') || '—', ({ e }) => `<span class="mono">${(e.operators.v || []).join(', ')}</span> ${badge(e.operators.src, subset(e.operators.v, d.operators))}`)}
+        ${row('autonomy ceiling', S.getPath(d, 'autonomy.max_tier') || '—', ({ m }) => { const tiers = Object.keys(S.getPath(staged('members', m.name), 'autonomy.tiers') || {}).filter((x) => x !== 'observe'); const loosest = tiers.sort((a, b) => S.TIER_ORDER.indexOf(b) - S.TIER_ORDER.indexOf(a))[0] || 'propose'; const ok = S.TIER_ORDER.indexOf(loosest) <= S.TIER_ORDER.indexOf(S.getPath(d, 'autonomy.max_tier') || 'observe'); return `<span class="mono">${loosest}</span> ${badge(loosest === S.getPath(d, 'autonomy.max_tier') ? 'inherits' : 'narrows', ok)}`; })}
+        ${row('promotions', S.getPath(d, 'autonomy.promote') === false ? 'none allowed' : 'allowed', ({ e }) => `<span class="mono">${e.promote.v.join(', ') || 'none'}</span> ${badge(e.promote.v.length ? 'own' : 'narrows', !(S.getPath(d, 'autonomy.promote') === false && e.promote.v.length))}`)}
+        ${row('sandbox', S.getPath(d, 'isolation.mode') || 'namespace', ({ e }) => `<span class="mono">${e.isolation.v || 'namespace'}</span> ${badge(e.isolation.v === S.getPath(d, 'isolation.mode') ? 'inherits' : 'narrows', !(S.getPath(d, 'isolation.mode') === 'container' && e.isolation.v !== 'container'))}`)}
+        ${row('proactive budget', S.getPath(d, 'budget.proactive_pool') ? `pool ${d.budget.proactive_pool.max_runs_per_day} runs · ${usd(d.budget.proactive_pool.max_cost_per_day)}` : '—', ({ m }) => { const b = S.getPath(staged('members', m.name), 'proactive.budget'), p = S.getPath(d, 'budget.proactive_pool'); return b ? `<span class="mono">${b.max_runs_per_day} runs · ${usd(b.max_cost_per_day)}</span> ${badge('narrows', !p || (b.max_runs_per_day <= p.max_runs_per_day && b.max_cost_per_day <= p.max_cost_per_day))}` : '<span class="muted">no sweeps</span>'; })}
+        ${row('credential scope', (S.getPath(d, 'browser.credentials') || []).join(', ') || 'any', ({ e }) => `<span class="mono">${e.credentials.v.join(', ') || 'none'}</span> ${badge(e.credentials.v.length ? 'narrows' : 'narrows', subset(e.credentials.v, e.credentials.scope))}`)}
+        ${row('browser logins', (S.getPath(d, 'browser.logins') || []).join(', ') || 'any', ({ e }) => `<span class="mono">${e.logins.v.join(', ') || 'none'}</span> ${badge('narrows', subset(e.logins.v, e.logins.scope))}`)}
+      </tbody></table></div>`);
+  }
+  function teamKnowledge(t) {
+    const c = staged('teams', t.name) || t.cfg, kn = D.teamKnowledge[t.name];
+    if (!c.knowledge || !kn) return teamShell(t, 'knowledge', `<div class="panel"><div class="empty"><span class="serif">No shared knowledge repo</span>A team can keep one repo every member reads; members propose promoting what they learn into it.<button class="btn primary" data-act="team-edit" data-t="${t.name}">${icon('plus')}Add a knowledge repo</button></div></div>`);
+    const open = kn.open || 'README.md';
+    return teamShell(t, 'knowledge', `<div class="grid g-side"><div class="stack">
+      <div class="panel"><div class="panel-head"><h3>Promotion proposals</h3><span class="muted small">promote: ${esc(c.knowledge.promote)}</span></div><div class="list">${kn.proposals.map((p) => `<div class="item" style="align-items:flex-start">${st(p.status === 'pending' ? 'ember' : p.status === 'approved' ? 'ok' : 'fail', '')}<div class="grow small"><div><b>${esc(p.summary)}</b></div><div class="mono tiny muted">${p.id} · ${p.member}: ${p.from} → ${p.to}${p.case ? ' · case ' + p.case : ''} · ${ago(p.at)} ago${p.approver ? ' · ' + p.approver : ''}</div>${p.diff && p.status === 'pending' ? `<div class="diff" style="margin-top:6px">${p.diff.split('\n').filter(Boolean).map((l) => `<div class="dl ${l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : ''}"><span></span><span></span><span>${l[0] === ' ' ? ' ' : l[0]}</span><span>${esc(l.slice(1))}</span></div>`).join('')}</div>` : ''}</div>
+        ${p.status === 'pending' ? `<button class="btn sm primary" data-act="kn-decide" data-t="${t.name}" data-id="${p.id}" data-d="approve">${icon('passkey')}Approve</button><button class="btn sm danger" data-act="kn-decide" data-t="${t.name}" data-id="${p.id}" data-d="deny">Deny</button>` : tag(p.status, p.status === 'approved' ? 'ok' : 'fail')}</div>`).join('') || '<div class="item muted small">No proposals.</div>'}</div>
+        <div class="panel-foot small muted">A member proposes from its own memory (Memory tab → Promote to team). Approving writes one commit to <span class="mono">${esc(kn.repo)}</span> with <span class="mono">Promoted-By</span> and <span class="mono">Approved-By</span> trailers.</div></div>
+      </div><div class="stack"><div class="panel"><div class="panel-head"><h3 class="mono small">${esc(kn.repo)}</h3></div><div class="tree" style="padding:6px">${Object.keys(kn.files).map((f) => `<a href="#/teams/${t.name}/knowledge" data-act="kn-open" data-t="${t.name}" data-f="${esc(f)}" class="f${f === open ? ' on' : ''}">${icon('file')}${esc(f)}</a>`).join('')}</div>
+        <div class="panel-body prose small" style="border-top:1px solid var(--line)">${md(kn.files[open] || '').replace(/^# (.*)$/m, '<b>$1</b>').replace(/\n/g, '<br>')}</div></div></div></div>`);
+  }
+  UI.route('teams/:name/:tab?', ({ name, tab }) => {
+    const t = T(name);
+    if (!t) return `<div class="page"><div class="empty"><span class="serif">No team named ${esc(name)}</span><a class="btn" href="#/members">Teams &amp; members</a></div></div>`;
+    return tab === 'routing' ? teamRouting(t) : tab === 'defaults' ? teamDefaults(t) : tab === 'knowledge' ? teamKnowledge(t) : teamOverview(t);
+  }, { nav: 'members' });
+  UI.act('team-lead', (b) => { const c = Y_clone(staged('teams', b.dataset.t)); c.lead = b.dataset.m; UI.staged(S.stage('teams', b.dataset.t, c)); });
+  UI.act('team-remove', (b) => { const c = Y_clone(staged('members', b.dataset.m)); delete c.team; S.stage('members', b.dataset.m, c); const tc = Y_clone(staged('teams', b.dataset.t)); if (tc.lead === b.dataset.m) { delete tc.lead; S.stage('teams', b.dataset.t, tc); } (tc.routing || []).filter((r) => r.to === b.dataset.m).length && UI.toast('A routing rule still sends work to ' + b.dataset.m, 'the validator flags it; edit the rule', 'wait'); UI.staged(S.find('members', b.dataset.m)); });
+  UI.act('team-add', (b) => { const mn = UI.$('#team-add-sel').value; const c = Y_clone(staged('members', mn)); c.team = b.dataset.t; UI.staged(S.stage('members', mn, c)); });
+  UI.act('team-link', (b) => { const c = Y_clone(staged('teams', b.dataset.t)); const on = (c.links || []).includes(b.dataset.o); c.links = on ? c.links.filter((l) => l !== b.dataset.o) : (c.links || []).concat([b.dataset.o]); if (!c.links.length) delete c.links; UI.staged(S.stage('teams', b.dataset.t, c), { go: false }); UI.rerender(); });
+  UI.act('route-ev', (sel) => { tv.ev = sel.value; UI.rerender(); });
+  const evOn = () => [...new Set(SCHEMA.events.map((e) => e.on).concat(['aws-cost.anomaly', 'slack-ops.mention']))];
+  UI.act('rule-edit', (b) => {
+    const t = T(b.dataset.t), c = Y_clone(staged('teams', t.name)), i = +b.dataset.i, r = i >= 0 ? c.routing[i] : null;
+    const conds = r ? Object.fromEntries(Object.entries(r.when || {}).filter(([k]) => k !== 'on').map(([k, v]) => [k, [].concat(v).join(', ')])) : {};
+    UI.form({ caps: `teams.${t.name}.routing`, title: r ? `Edit rule ${r.name}` : 'Add a routing rule', values: r ? { name: r.name, on: r.when.on, conds, to: r.to } : {}, edit: !!r,
+      fields: [{ k: 'name', type: 'string', req: true, pattern: /^[a-z][\w-]*$/, patternMsg: 'letters, digits, - and _' }, { k: 'on', type: 'enum', label: 'When the event is', req: true, options: evOn() }, { k: 'conds', type: 'map', label: 'and its fields match', help: 'e.g. service → api, web. Comma-separate alternatives.' }, { k: 'to', type: 'enum', label: 'Route to', req: true, options: [['lead', `the lead (${c.lead || 'none set'})`]].concat(membersOf(t.name).map((m) => [m.name, m.name])) }],
+      submit: 'Stage rule', onSubmit: (v) => { const when = { on: v.on }; Object.entries(v.conds || {}).forEach(([k, x]) => { const vals = String(x).split(',').map((s) => s.trim()).filter(Boolean); when[k] = vals.length > 1 ? vals : vals[0]; }); const nr = { name: v.name, when, to: v.to }; c.routing = c.routing || []; if (r) c.routing[i] = nr; else c.routing.push(nr); UI.staged(S.stage('teams', t.name, c), { go: false }); UI.rerender(); } });
+  });
+  UI.act('rule-del', (b) => { const c = Y_clone(staged('teams', b.dataset.t)); c.routing.splice(+b.dataset.i, 1); if (!c.routing.length) delete c.routing; UI.staged(S.stage('teams', b.dataset.t, c), { go: false }); UI.rerender(); });
+  UI.act('rule-move', (b) => { const c = Y_clone(staged('teams', b.dataset.t)); const i = +b.dataset.i, j = i + +b.dataset.d; [c.routing[i], c.routing[j]] = [c.routing[j], c.routing[i]]; UI.staged(S.stage('teams', b.dataset.t, c), { go: false }); UI.rerender(); });
+  UI.act('kn-open', (a) => { D.teamKnowledge[a.dataset.t].open = a.dataset.f; S.save(); UI.rerender(); });
+  UI.act('kn-decide', (b) => {
+    const kn = D.teamKnowledge[b.dataset.t], p = kn.proposals.find((x) => x.id === b.dataset.id), approve = b.dataset.d === 'approve';
+    UI.stepup({ title: `${approve ? 'Approve' : 'Deny'} promoting “${esc(p.summary)}”`, purpose: 'team knowledge', danger: !approve, ok: approve ? 'Approve with passkey' : 'Deny with passkey', what: `{ team: <b>${b.dataset.t}</b>, proposal: <b>${p.id}</b>, member: <b>${p.member}</b>, path: <b>${esc(p.to)}</b>, decision: <b>${approve ? 'approve' : 'deny'}</b> }` }).then((ok) => {
+      if (!ok) return;
+      p.status = approve ? 'approved' : 'denied'; p.approver = 'ops (passkey · laptop)';
+      if (approve) { const body = p.diff.split('\n').filter((l) => l[0] === '+').map((l) => l.slice(1)).join('\n'); kn.files[p.to] = (kn.files[p.to] && !p.diff.startsWith('+#') ? kn.files[p.to].replace(/\n?$/, '\n') : '') + body + '\n'; kn.open = p.to; }
+      audit('team_knowledge_' + (approve ? 'promoted' : 'denied'), `${b.dataset.t} · ${p.id} · ${p.member} → ${p.to}`); S.save(); UI.rerender();
+      UI.toast(approve ? `Promoted to ${esc(p.to)}` : 'Denied', approve ? `one commit to ${kn.repo}` : 'the member is told', approve ? 'ok' : 'fail');
+    });
+  });
+  function newCase(member, o) {
+    const id = 'c' + (40 + D.cases.length);
+    D.cases.unshift(Object.assign({ id, member, status: 'open', opened: now(), workers: 0, proposals: 0, notes: [] }, o));
+    return id;
+  }
+  UI.act('team-deliver', (b) => {
+    const t = T(b.dataset.t), c = staged('teams', t.name) || t.cfg;
+    UI.form({ caps: 'conductor member deliver --team', title: `Route work to ${t.name}`, intro: 'The team\'s routing rules decide who gets it; with no match it goes to the lead.',
+      fields: [{ k: 'event', type: 'enum', label: 'Replay a past event', options: [['', 'none: write a request']].concat(SCHEMA.events.map((e) => [e.id, e.label])) }, { k: 'title', type: 'string', mono: false, show: (v) => !v.event }, { k: 'text', type: 'text', label: 'Text (reaches the member fenced as untrusted data)', show: (v) => !v.event }],
+      submit: 'Route', submitIcon: 'send',
+      onSubmit: (v) => {
+        const ev = SCHEMA.events.find((e) => e.id === v.event);
+        if (!ev && !v.title) return 'Give it a title, or pick an event.';
+        const hit = ev && matchRule({ cfg: c }, ev);
+        const lead = c.lead, ms = membersOf(t.name);
+        if (!hit && !lead && !ms.length) return `Team ${t.name} has no members to route to.`;
+        let to, routed;
+        if (hit && hit.to !== 'lead') { to = hit.to; routed = { by: 'rule', rule: hit.name, team: t.name, to }; }
+        else { const assignee = (ms.find((m) => m.name !== lead) || ms[0]).name; to = assignee; routed = hit ? { by: 'rule', rule: hit.name, team: t.name, via: 'lead', lead, to, note: 'the lead triaged and assigned it' } : { by: 'lead', lead: lead || assignee, team: t.name, to }; }
+        const id = newCase(to, { title: ev ? ev.label : v.title, requester: ev ? 'event:' + ev.on : 'operator:ops', cls: ev ? 'event' : 'operator', routed: Object.assign({ requester_kept: true }, routed) });
+        audit('member_route', `${t.name} · ${id} → ${to} · ${routed.by}${routed.rule ? ' ' + routed.rule : ''}`); S.save();
+        UI.go(`#/members/${to}/cases/${id}`);
+      } });
+  });
 
   /* ---------- member shell ---------- */
   function hero(m) {
-    return `<div class="member-hero">${UI.sigil(m, 'lg')}<div class="grow"><div class="crumbs mono tiny muted"><a href="#/members">Members</a> › ${m.name}</div><h1>${m.name}</h1>
+    const t = teamOf(m), lead = t && t.cfg.lead === m.name;
+    return `<div class="member-hero">${UI.sigil(m, 'lg')}<div class="grow"><div class="crumbs mono tiny muted"><a href="#/members">Teams &amp; members</a> › ${t ? `<a href="#/teams/${t.name}">${t.name}</a> › ` : ''}${m.name}</div><h1>${m.name}</h1>
       <div class="facts">${m.home === 'live' ? st('run', `home ${m.session} live`, true) : st('idle', `home ${m.session} idle`, true)}
-        ${tag(`${m.turns}/${m.maxTurns} turns`)}${tag(`age ${m.age}/${m.maxAge}`)}${m.shadow ? tag('shadow mode', 'shadow') : tag('approved execution', 'ok')}
-        ${tag(`${icon('shield')} ${m.mode}`, 'ok')}${tag(`operators: ${m.operators.join(', ')}`)}${m.peers.length ? tag(`peers: ${m.peers.join(', ')}`) : ''}</div></div>
-      <div class="row wrap"><button class="btn" data-act="rotate">${icon('updates')}Rotate session</button>${m.proactive ? `<button class="btn" data-act="sweep">${icon('eye')}Sweep now</button>` : ''}<button class="btn" data-act="deliver">${icon('send')}Deliver event</button></div></div>`;
+        ${t ? `<a href="#/teams/${t.name}">${tag('team ' + t.name + (lead ? ' · lead' : ''), 'ember')}</a>` : tag('no team')}${tag(`${m.turns}/${m.maxTurns} turns`)}${m.shadow ? tag('shadow mode', 'shadow') : tag('approved execution', 'ok')}
+        ${tag(`${icon('shield')} ${m.mode}`, 'ok')}${tag(`operators: ${(S.effective(m).operators.v || []).join(', ')}`)}</div></div>
+      <div class="row wrap"><button class="btn" data-act="m-rotate" data-m="${m.name}">${icon('updates')}Rotate session</button><button class="btn" ${m.proactive ? `data-act="m-sweep" data-m="${m.name}"` : UI.off('No proactive: block in its definition')}>${icon('eye')}Sweep now</button><button class="btn" data-act="m-deliver" data-m="${m.name}">${icon('send')}Deliver event</button></div></div>`;
   }
   function shell(m, tab, body) {
     const pc = pending(m.name).length;
     return `<div class="page">${hero(m)}
-      ${UI.tabs([['chat', 'Chat', `#/members/${m.name}/chat`], ['cases', 'Cases', `#/members/${m.name}/cases`, D.cases.filter((c) => c.status === 'open').length], ['proposals', 'Proposals', `#/members/${m.name}/proposals`, pc, pc > 0], ['memory', 'Memory', `#/members/${m.name}/memory`], ['workers', 'Workers', `#/members/${m.name}/workers`, D.workers.filter((w) => w.status === 'run').length], ['access', 'Access', `#/members/${m.name}/access`], ['settings', 'Definition', `#/members/${m.name}/settings`]], tab)}
+      ${UI.tabs([['chat', 'Chat', `#/members/${m.name}/chat`], ['cases', 'Cases', `#/members/${m.name}/cases`, D.cases.filter((c) => c.member === m.name && c.status === 'open').length], ['proposals', 'Proposals', `#/members/${m.name}/proposals`, pc, pc > 0], ['memory', 'Memory', `#/members/${m.name}/memory`], ['workers', 'Workers', `#/members/${m.name}/workers`, D.workers.filter((w) => (w.member || 'platform-sre') === m.name && w.status === 'run').length], ['access', 'Access', `#/members/${m.name}/access`], ['settings', 'Definition', `#/members/${m.name}/settings`]], tab)}
       ${body}</div>`;
   }
-  UI.afterRender.push((main) => {
-    UI.bind(main, '[data-act="rotate"]', 'click', () => UI.modal(`<div class="modal-head"><h2>Rotate the home session?</h2><button class="icon-btn" data-close>${icon('x')}</button></div><div class="modal-body small dim stack"><p style="margin:0">Conductor asks the current session for a hand-off note, waits for that turn to settle, launches a fresh session in a new worktree, and only then archives the old one. Its token is revoked at once.</p><div class="kv"><dt>current</dt><dd class="mono">s7 · 41 turns · 9h</dd><dt>next</dt><dd class="mono">s8 · resumes from handoff/s7.md + ledger</dd></div></div><div class="modal-foot"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-close onclick="UI.toast('Rotation started','asking s7 for a hand-off note','run')">Rotate</button></div>`));
-    UI.bind(main, '[data-act="sweep"]', 'click', () => UI.toast('Sweep x5 started', 'read-only · budget 3/6 runs · $0.31/$2.00 today', 'run'));
-    UI.bind(main, '[data-act="deliver"]', 'click', () => UI.modal(`<div class="modal-head"><div><div class="caps">conductor member deliver</div><h2>Deliver an event</h2></div><button class="icon-btn" data-close>${icon('x')}</button></div><div class="modal-body stack">
-      <div class="field"><label>Title</label><input class="input" value="Investigate elevated 5xx on /refund"></div>
-      <div class="field"><label>Text <span class="muted">(reaches the member fenced as untrusted data)</span></label><textarea class="textarea" rows="4">Error budget burn 4x over the last 30m.</textarea></div>
-      <div class="grid g2"><div class="field"><label>Requester</label><select class="select"><option>operator:ops (you)</option><option>event</option></select></div><div class="field"><label>Urgency</label><label class="row small" style="height:30px"><button class="switch" onclick="this.classList.toggle('on')"></button>urgent: start a worker now</label></div></div></div>
-      <div class="modal-foot"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-close onclick="UI.toast('Delivered as case c32','requester operator:ops','ok')">Deliver</button></div>`));
-  });
+  UI.act('m-rotate', (b) => { const m = M(b.dataset.m); UI.confirm({ title: 'Rotate the home session?', body: `<p style="margin:0 0 8px">Conductor asks the current session for a hand-off note, waits for that turn to settle, launches a fresh session, and only then archives the old one. Its token is revoked at once.</p><div class="kv"><dt>current</dt><dd class="mono">${m.session} · ${m.turns} turns</dd><dt>next</dt><dd class="mono">s${+m.session.slice(1) + 1} · resumes from handoff/${m.session}.md + ledger</dd></div>`, ok: 'Rotate' }).then((ok) => { if (!ok) return; const old = m.session; m.session = 's' + (+old.slice(1) + 1); m.turns = 0; m.age = '0m'; m.home = 'live'; audit('member_rotate', `${m.name} · ${old} → ${m.session}`); S.save(); UI.rerender(); UI.toast('Rotated', `${old} archived · ${m.session} live`, 'ok'); }); });
+  UI.act('m-sweep', (b) => { const m = M(b.dataset.m); const id = 'x' + (5 + D.workers.filter((w) => w.parent === 'sweep').length); D.workers.unshift({ id, member: m.name, parent: 'sweep', case: '—', group: '', status: 'run', verbs: 'observe only', readOnly: true, cls: 'proactive', brief: 'Proactive checks (charter §)', run: 'r-7f29', cost: 0, started: now() }); audit('member_sweep', `${m.name} · ${id} · read-only`); S.save(); UI.go(`#/members/${m.name}/workers`); UI.toast(`Sweep ${id} started`, 'read-only · draws on the team pool', 'run'); });
+  UI.act('m-deliver', (b) => { const m = M(b.dataset.m); UI.form({ caps: 'conductor member deliver', title: `Deliver an event to ${m.name}`, fields: [{ k: 'title', type: 'string', req: true, mono: false, ph: 'Investigate elevated 5xx on /refund' }, { k: 'text', type: 'text', label: 'Text (reaches the member fenced as untrusted data)' }, { k: 'requester', type: 'enum', req: true, options: [['operator:ops', 'operator:ops (you)'], ['event:manual', 'event']], def: 'operator:ops' }, { k: 'urgent', type: 'bool', on: 'start a worker now' }], submit: 'Deliver', submitIcon: 'send', onSubmit: (v) => { const id = newCase(m.name, { title: v.title, requester: v.requester, cls: v.requester.startsWith('operator') ? 'operator' : 'event', urgent: !!v.urgent, routed: { by: 'direct', to: m.name, requester_kept: true }, notes: v.text ? [{ at: now(), who: v.requester, text: v.text }] : [] }); (D.chats[m.name] = D.chats[m.name] || []).push({ who: 'event', at: now(), case: id, text: v.title + (v.text ? ' · ' + v.text : ''), fenced: true }); audit('member_deliver', `${m.name} · ${id} · ${v.requester}`); S.save(); UI.go(`#/members/${m.name}/cases/${id}`); } }); });
 
   /* ---------- chat ---------- */
-  let chatName = 'platform-sre';
-  const bubble = (c) => {
-    const who = c.who === 'op' ? 'you · ops' : c.who === 'member' ? chatName : c.who === 'event' ? `event → case ${c.case}` : 'tool';
-    return `<div class="msg ${c.who}"><div class="meta"><span>${who}</span><span>${UI.clock(c.at)}</span></div><div class="bubble">${c.who === 'tool' ? '$ ' + esc(c.text) : md(c.text)}</div></div>`;
-  };
+  const bubble = (c, name) => { const who = c.who === 'op' ? 'you · ops' : c.who === 'member' ? name : c.who === 'event' ? `event → case ${c.case}` : 'tool'; return `<div class="msg ${c.who}"><div class="meta"><span>${who}</span><span>${UI.clock(c.at)}</span></div><div class="bubble">${c.who === 'tool' ? '$ ' + esc(c.text) : md(c.text)}</div></div>`; };
   function chat(m) {
-    chatName = m.name;
-    const pp = pending(m.name);
+    const pp = pending(m.name), msgs = D.chats[m.name] || [];
     return shell(m, 'chat', `<div class="grid g-side">
-      <div class="panel chat"><div class="panel-head"><h3>Home session <span class="mono muted">${m.session}</span></h3><span class="muted small">via paseo · messages arrive when the agent is idle, never mid-turn</span><div class="tools"><button class="btn sm ghost">${icon('terminal')}Open in paseo</button></div></div>
-        <div class="msgs" id="msgs">${D.chat.map(bubble).join('')}</div>
-        <div class="composer"><textarea class="textarea" id="say" rows="1" placeholder="Message ${m.name}…  (you are the requester: operator:ops)"></textarea><button class="btn primary" id="send">${icon('send')}Send</button></div></div>
+      <div class="panel chat"><div class="panel-head"><h3>Home session <span class="mono muted">${m.session}</span></h3><span class="muted small">messages arrive when the agent is idle, never mid-turn</span><div class="tools"><button class="btn sm ghost" ${UI.off('Opens paseo\'s own agent view, outside the dashboard (not in the prototype)')}>${icon('terminal')}Open in paseo</button></div></div>
+        <div class="msgs" id="msgs">${msgs.map((c) => bubble(c, m.name)).join('') || '<div class="empty small">No conversation yet. Say hello.</div>'}</div>
+        <div class="composer"><textarea class="textarea" id="say" rows="1" placeholder="Message ${m.name}…  (you are the requester: operator:ops)" aria-label="Message"></textarea><button class="btn primary" data-act="chat-send" data-m="${m.name}">${icon('send')}Send</button></div></div>
       <div class="stack">
         ${pp.map((p) => `<div class="panel" style="border-color:color-mix(in srgb,var(--accent) 40%,var(--line))"><div class="panel-head">${st('ember', 'awaiting you')}<span class="mono tiny muted" style="margin-left:auto">${p.id} · ${ago(p.at)}</span></div><div class="panel-body small"><div style="font-weight:600;margin-bottom:6px">${esc(p.summary)}</div><div class="row"><a class="btn sm primary" href="#/members/${m.name}/proposals/${p.id}">${icon('passkey')}Review &amp; sign</a><span class="muted tiny">expires in ${p.expires}</span></div></div></div>`).join('')}
-        <div class="panel"><div class="panel-head"><h3>Open cases</h3><a class="btn sm ghost" style="margin-left:auto" href="#/members/${m.name}/cases">All</a></div><div class="list">${D.cases.filter((c) => c.status === 'open').map((c) => `<div class="item small"><span class="mono tiny muted">${c.id}</span><span class="grow ellipsis">${esc(c.title)}</span><span class="taint ${c.cls}">${c.cls}</span></div>`).join('')}</div></div>
-        <div class="callout info small">While a third party's request is open (case <b>c24</b>, chat:U-THIRD), nothing the home session does runs on more trust than that requester's.</div>
+        <div class="panel"><div class="panel-head"><h3>Open cases</h3><a class="btn sm ghost" style="margin-left:auto" href="#/members/${m.name}/cases">All</a></div><div class="list">${D.cases.filter((c) => c.member === m.name && c.status === 'open').map((c) => `<a class="item small click" href="#/members/${m.name}/cases/${c.id}"><span class="mono tiny muted">${c.id}</span><span class="grow ellipsis">${esc(c.title)}</span><span class="taint ${c.cls}">${c.cls}</span></a>`).join('') || '<div class="item small muted">None open.</div>'}</div></div>
       </div></div>`);
   }
-  function bindChat(main) {
-    const box = UI.$('#msgs', main); if (!box) return;
-    box.scrollTop = box.scrollHeight;
-    const send = () => {
-      const ta = UI.$('#say', main), v = ta.value.trim(); if (!v) return;
-      box.insertAdjacentHTML('beforeend', bubble({ who: 'op', at: new Date().toISOString(), text: v })); ta.value = '';
-      box.insertAdjacentHTML('beforeend', `<div class="msg member" id="typing"><div class="meta"><span>${chatName}</span><span>queued → delivered (idle)</span></div><div class="bubble typing"><i></i><i></i><i></i></div></div>`);
-      box.scrollTop = box.scrollHeight;
-      setTimeout(() => { const t = UI.$('#typing'); if (t) t.outerHTML = bubble({ who: 'member', at: new Date().toISOString(), text: 'Noted. I’ll keep **c29** open until p99 stays under 400ms for 30 minutes after the apply, then write the episode and close it.' }); box.scrollTop = box.scrollHeight; }, 1800);
-    };
-    UI.bind(main, '#send', 'click', send);
-    UI.bind(main, '#say', 'keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
-  }
+  UI.act('chat-send', (b) => {
+    const ta = UI.$('#say'), v = ta.value.trim(); if (!v) { ta.focus(); return; }
+    const L = (D.chats[b.dataset.m] = D.chats[b.dataset.m] || []); L.push({ who: 'op', at: now(), text: v }); ta.value = ''; S.save();
+    const box = UI.$('#msgs'); box.innerHTML = L.map((c) => bubble(c, b.dataset.m)).join('') + `<div class="msg member" id="typing"><div class="meta"><span>${b.dataset.m}</span><span>queued → delivered (idle)</span></div><div class="bubble typing"><i></i><i></i><i></i></div></div>`; box.scrollTop = box.scrollHeight;
+    setTimeout(() => { L.push({ who: 'member', at: now(), text: `Noted: “${v.slice(0, 80)}”. I’ll act on it as your request (operator trust) and report back on the case.` }); S.save(); const bx = UI.$('#msgs'); if (bx) { bx.innerHTML = L.map((c) => bubble(c, b.dataset.m)).join(''); bx.scrollTop = bx.scrollHeight; } }, UI.fast ? 50 : 1400);
+  });
+  document.addEventListener('keydown', (e) => { if (e.target.id === 'say' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); const b = UI.$('[data-act="chat-send"]'); if (b) b.click(); } });
 
   /* ---------- cases ---------- */
-  function cases(m) {
-    return shell(m, 'cases', `<div class="filters"><div class="seg"><button class="on">open</button><button>closed</button><button>all</button></div><span class="muted small">A case's requester class decides how much trust its work runs on: <span class="taint operator">operator</span> <span class="taint event">event</span> <span class="taint user">user</span> <span class="taint peer">peer</span> <span class="taint proactive">proactive</span></span></div>
-      <div class="panel"><table class="tbl responsive"><thead><tr><th>case</th><th>title</th><th>requester</th><th>class</th><th>opened</th><th class="num">workers</th><th class="num">proposals</th><th>status</th></tr></thead><tbody>
-      ${D.cases.map((c) => `<tr class="click"><td data-l="case" class="mono">${c.id}${c.urgent ? ' ' + tag('urgent', 'fail') : ''}</td><td data-l="title"><b>${esc(c.title)}</b></td><td data-l="requester" class="mono muted">${c.requester}</td><td data-l="class"><span class="taint ${c.cls}">${c.cls}</span></td><td data-l="opened" class="mono muted">${ago(c.opened)} ago</td><td data-l="workers" class="num mono">${c.workers}</td><td data-l="proposals" class="num mono">${c.proposals}</td><td data-l="status">${c.status === 'open' ? st('run', 'open') : st('ok', 'closed')}</td></tr>`).join('')}
+  const cv = { f: 'open' };
+  function cases(m, sub) {
+    const list = D.cases.filter((c) => c.member === m.name);
+    const c = sub && list.find((x) => x.id === sub);
+    if (c) return shell(m, 'cases', caseDetail(m, c));
+    const vis = list.filter((c) => cv.f === 'all' || c.status === cv.f);
+    return shell(m, 'cases', `<div class="filters">${UI.seg([['open', `open · ${list.filter((x) => x.status === 'open').length}`], ['closed', `closed · ${list.filter((x) => x.status === 'closed').length}`], ['all', 'all']], cv.f, 'case-f')}<button class="btn sm" data-act="m-deliver" data-m="${m.name}">${icon('plus')}Open a case</button><span class="muted small hide-phone">A case's requester class decides how much trust its work runs on.</span></div>
+      <div class="panel"><table class="tbl responsive"><thead><tr><th>case</th><th>title</th><th>requester</th><th>routed</th><th>opened</th><th>status</th></tr></thead><tbody>
+      ${vis.map((c) => `<tr class="click" data-href="#/members/${m.name}/cases/${c.id}"><td data-l="case" class="mono"><a class="link-plain" href="#/members/${m.name}/cases/${c.id}">${c.id}</a>${c.urgent ? ' ' + tag('urgent', 'fail') : ''}</td><td data-l="title"><b>${esc(c.title)}</b></td><td data-l="requester"><span class="taint ${c.cls}">${c.requester}</span></td><td data-l="routed" class="small route-cell">${c.routed ? routeLabel(c.routed) : '—'}</td><td data-l="opened" class="mono muted">${ago(c.opened)} ago</td><td data-l="status">${c.status === 'open' ? st('run', 'open') : st('ok', 'closed')}</td></tr>`).join('') || `<tr class="empty-row"><td colspan="6">No ${cv.f === 'all' ? '' : cv.f + ' '}cases.</td></tr>`}
       </tbody></table></div>
-      <div class="row small muted" style="margin-top:10px">${icon('dollar')} spend this period: <span class="mono">${usd(m.spend)}</span> of the commit_money cap · ledger <span class="mono">members.json</span> healthy (not degraded)</div>`);
+      <div class="row small muted" style="margin-top:10px">${icon('dollar')} spend this period: <span class="mono">${usd(m.spend)}</span> of the commit_money cap · ledger healthy</div>`);
   }
+  function caseDetail(m, c) {
+    const t = teamOf(m), mates = t ? membersOf(t.name).filter((x) => x.name !== m.name) : [];
+    return `<div class="row" style="margin-bottom:12px"><a class="btn sm ghost back" href="#/members/${m.name}/cases">${icon('chev')}All cases</a></div>
+      <div class="grid g-side"><div class="stack">
+        <div class="panel"><div class="panel-head">${c.status === 'open' ? st('run', 'open', true) : st('ok', 'closed', true)}<h3 class="mono">${c.id}</h3>${c.urgent ? tag('urgent', 'fail') : ''}<div class="tools"><span class="mono tiny muted">opened ${ago(c.opened)} ago</span></div></div>
+          <div class="panel-body"><div class="serif" style="font-size:24px;line-height:1.2;margin-bottom:12px">${esc(c.title)}</div>
+          <div class="route-box"><div class="caps">routing</div><div class="small">${c.routed ? routeLabel(c.routed) : 'delivered directly'}${c.routed && c.routed.note ? ` <span class="muted">· ${esc(c.routed.note)}</span>` : ''}</div><div class="tiny muted">requester <span class="taint ${c.cls}">${c.requester}</span> preserved through every hop: the assignee runs on no more trust than that.</div></div></div></div>
+        <div class="panel"><div class="panel-head"><h3>Notes</h3></div><div class="list">${(c.notes || []).map((n) => `<div class="item small" style="align-items:flex-start"><span class="mono tiny muted" style="width:60px">${ago(n.at)} ago</span><div class="grow"><span class="mono tiny">${esc(n.who)}</span><div>${esc(n.text)}</div></div></div>`).join('') || '<div class="item small muted">No notes yet.</div>'}</div>
+          <div class="panel-foot"><input class="input grow" id="case-note" placeholder="Add a note (member case note)" aria-label="Note"><button class="btn sm" data-act="case-note" data-m="${m.name}" data-c="${c.id}">${icon('plus')}Add note</button></div></div>
+      </div><div class="stack">
+        <div class="panel"><div class="panel-body stack tight">
+          ${c.status === 'open' ? `<button class="btn" data-act="case-close" data-m="${m.name}" data-c="${c.id}">${icon('check')}Close case</button>` : `<button class="btn" data-act="case-close" data-m="${m.name}" data-c="${c.id}">${icon('undo')}Reopen</button>`}
+          ${t ? `<label class="field"><span class="caps">reassign within ${t.name}</span><select class="select mono" id="case-to" aria-label="Reassign to">${mates.map((x) => `<option>${x.name}</option>`).join('')}</select></label><button class="btn sm" ${mates.length && c.status === 'open' ? `data-act="case-reassign" data-m="${m.name}" data-c="${c.id}"` : UI.off(c.status !== 'open' ? 'Reopen it first' : 'Nobody else in the team')}>${icon('send')}Reassign</button>` : '<div class="muted tiny">Not in a team: no one to reassign to.</div>'}
+        </div></div>
+        <div class="panel"><div class="panel-head"><h3>Linked</h3></div><div class="panel-body small"><dl class="kv"><dt>workers</dt><dd class="mono">${c.workers}</dd><dt>proposals</dt><dd class="mono">${c.proposals}</dd><dt>class</dt><dd><span class="taint ${c.cls}">${c.cls}</span></dd></dl></div></div>
+      </div></div>`;
+  }
+  UI.act('case-f', (b) => { cv.f = b.dataset.v; UI.rerender(); });
+  document.addEventListener('click', (e) => { const tr = e.target.closest('tr[data-href]'); if (tr && !e.target.closest('a,button')) UI.go(tr.dataset.href); });
+  UI.act('case-note', (b) => { const inp = UI.$('#case-note'), v = inp.value.trim(); if (!v) { inp.focus(); inp.classList.add('shake'); return; } const c = D.cases.find((x) => x.id === b.dataset.c); (c.notes = c.notes || []).push({ at: now(), who: 'operator:ops', text: v }); audit('member_case_note', `${b.dataset.m} · ${c.id}`); S.save(); UI.rerender(); });
+  UI.act('case-close', (b) => { const c = D.cases.find((x) => x.id === b.dataset.c); c.status = c.status === 'open' ? 'closed' : 'open'; audit('member_case_' + (c.status === 'open' ? 'reopen' : 'close'), `${b.dataset.m} · ${c.id}`); S.save(); UI.rerender(); UI.refreshChrome(); });
+  UI.act('case-reassign', (b) => { const c = D.cases.find((x) => x.id === b.dataset.c), to = UI.$('#case-to').value; const t = teamOf(M(b.dataset.m)); c.routed = { by: 'operator', from: c.member, to, team: t.name, requester_kept: true }; c.member = to; audit('member_route', `${c.id} → ${to} · operator reassign · requester ${c.requester} kept`); S.save(); UI.go(`#/members/${to}/cases/${c.id}`); });
 
   /* ---------- proposals ---------- */
   const PS = { pending: 'ember', shadow: 'shadow', executed: 'ok', approved: 'ok', refused: 'fail', denied: 'fail', failed: 'fail' };
+  const pv = { f: 'all' };
   function proposals(m, sub) {
     const list = props(m.name);
     const p = sub && list.find((x) => x.id === sub);
     if (p) return shell(m, 'proposals', proposalDetail(m, p));
-    return shell(m, 'proposals', `<div class="panel">${list.map((p) => `
+    const vis = list.filter((x) => pv.f === 'all' || (pv.f === 'pending' ? x.status === 'pending' : x.status !== 'pending'));
+    return shell(m, 'proposals', `<div class="filters">${UI.seg([['all', 'all'], ['pending', `pending · ${pending(m.name).length}`], ['decided', 'decided']], pv.f, 'prop-f')}</div><div class="panel">${vis.map((p) => `
       <a class="proposal ${p.status}" href="#/members/${m.name}/proposals/${p.id}">
         <div>${st(PS[p.status] || 'idle', p.status)}</div>
-        <div><div class="row wrap" style="gap:6px;margin-bottom:4px"><span class="mono" style="font-weight:600">${p.id}</span>${tier(p.tier)}<span class="mono small">${p.verb}</span><span class="muted tiny mono">case ${p.case}</span>${p.requester ? `<span class="taint ${p.cls}">${p.requester}</span>` : ''}${p.worker ? tag('worker ' + p.worker) : ''}</div><div>${esc(p.summary)}</div>${p.approver ? `<div class="muted tiny mono" style="margin-top:4px">approved by ${p.approver}</div>` : ''}</div>
+        <div><div class="row wrap" style="gap:6px;margin-bottom:4px"><span class="mono" style="font-weight:600">${p.id}</span>${tier(p.tier)}<span class="mono small">${p.verb}</span><span class="muted tiny mono">case ${p.case}</span>${p.requester ? `<span class="taint ${p.cls}">${p.requester}</span>` : ''}${p.worker ? tag('worker ' + p.worker) : ''}</div><div>${esc(p.summary)}</div>${p.approver ? `<div class="muted tiny mono" style="margin-top:4px">decided by ${p.approver}</div>` : ''}</div>
         <div class="row">${p.status === 'pending' ? `<span class="muted tiny mono">expires ${p.expires}</span><span class="btn sm primary">${icon('passkey')}Review</span>` : `<span class="muted tiny mono">${ago(p.at)} ago</span>`}</div>
-      </a>`).join('')}</div>
-      <p class="muted small" style="margin-top:10px">Shadow proposals are the calibration record of a member in shadow mode (or a proactive sweep's write): they can't be approved. Approval is also available from the CLI: <span class="mono">conductor member approve ${m.name} &lt;id&gt;</span> (SSH-signed).</p>`);
+      </a>`).join('') || '<div class="empty small">No proposals here.</div>'}</div>
+      <p class="muted small" style="margin-top:10px">Shadow proposals are the calibration record of a member in shadow mode: they can't be approved. Also from the CLI: <span class="mono">conductor member approve ${m.name} &lt;id&gt;</span> (SSH-signed).</p>`);
   }
-  function planHTML(t) {
-    return esc(t).split('\n').map((l) => /must be replaced|forces replacement/.test(l) ? `<span class="rep">${l}</span>` : /^\s*\+\/-|^\s*~|will be updated/.test(l) ? `<span class="chg">${l}</span>` : /^\s*\+ /.test(l) ? `<span class="add">${l}</span>` : /#|unchanged/.test(l) ? `<span class="c">${l}</span>` : l).join('\n');
-  }
+  UI.act('prop-f', (b) => { pv.f = b.dataset.v; UI.rerender(); });
+  function planHTML(t) { return esc(t).split('\n').map((l) => /must be replaced|forces replacement/.test(l) ? `<span class="rep">${l}</span>` : /^\s*\+\/-|^\s*~|will be updated/.test(l) ? `<span class="chg">${l}</span>` : /^\s*\+ /.test(l) ? `<span class="add">${l}</span>` : /#|unchanged/.test(l) ? `<span class="c">${l}</span>` : l).join('\n'); }
   function proposalDetail(m, p) {
     const tf = p.tf;
     return `<div class="row" style="margin-bottom:12px"><a class="btn sm ghost back" href="#/members/${m.name}/proposals">${icon('chev', '')}All proposals</a></div>
       <div class="grid g-side">
-        <div class="stack">
-          <div class="panel"><div class="panel-head">${st(PS[p.status], p.status, true)}<h3 class="mono">${p.id}</h3>${tier(p.tier)}<span class="mono small muted">${p.verb}</span><div class="tools"><span class="mono tiny muted">proposed ${ago(p.at)} ago${p.expires ? ' · expires in ' + p.expires : ''}</span></div></div>
+        <div class="stack"><div class="panel"><div class="panel-head">${st(PS[p.status], p.status, true)}<h3 class="mono">${p.id}</h3>${tier(p.tier)}<span class="mono small muted">${p.verb}</span><div class="tools"><span class="mono tiny muted">proposed ${ago(p.at)} ago${p.expires && p.status === 'pending' ? ' · expires in ' + p.expires : ''}</span></div></div>
             <div class="panel-body"><div class="serif" style="font-size:24px;line-height:1.2;margin-bottom:12px">${esc(p.summary)}</div>
-            ${tf ? `<div class="grid g4" style="margin-bottom:14px">
-                <div class="panel inset stat"><span class="k">add</span><span class="v" style="color:var(--ok)">+${tf.add}</span></div>
-                <div class="panel inset stat"><span class="k">change</span><span class="v" style="color:var(--wait)">~${tf.change}</span></div>
-                <div class="panel inset stat"><span class="k">destroy</span><span class="v">-${tf.destroy}</span></div>
-                <div class="panel inset stat"><span class="k">replaces</span><span class="v" style="color:var(--fail)">${tf.replaces.length}</span><span class="d mono">${tf.replaces.join(', ')}</span></div></div>
-              <div class="callout warn small" style="margin-bottom:12px"><b>Replaces aws_instance.web.</b> Not a stateful type, so it isn't refused; <span class="mono">aws_db_instance</span>, buckets, disks and keys would be unless <span class="mono">allow_destroy</span> names them.</div>
+            ${tf ? `<div class="grid g4" style="margin-bottom:14px"><div class="panel inset stat"><span class="k">add</span><span class="v" style="color:var(--ok)">+${tf.add}</span></div><div class="panel inset stat"><span class="k">change</span><span class="v" style="color:var(--wait)">~${tf.change}</span></div><div class="panel inset stat"><span class="k">destroy</span><span class="v">-${tf.destroy}</span></div><div class="panel inset stat"><span class="k">replaces</span><span class="v" style="color:var(--fail)">${tf.replaces.length}</span><span class="d mono">${tf.replaces.join(', ')}</span></div></div>
+              <div class="callout warn small" style="margin-bottom:12px"><b>Replaces aws_instance.web.</b> Not a stateful type, so it isn't refused.</div>
               <div class="caps" style="margin-bottom:6px">Plan (conductor ran it with the tf-plan connector's READ role)</div><div class="plan">${planHTML(D.tfPlan)}</div>`
-              : `<div class="caps" style="margin-bottom:6px">Exact action</div>${UI.yaml(`verb: ${p.verb}\noptions:\n${Object.entries(p.options || {}).map(([k, v]) => `  ${k}: "${v}"`).join('\n')}`)}`}
-            </div></div>
-        </div>
+              : `<div class="caps" style="margin-bottom:6px">Exact action</div>${UI.yaml(`verb: ${p.verb}\noptions:\n${Object.entries(p.options || {}).map(([k, v]) => `  ${k}: "${v}"`).join('\n') || '  {}'}`)}`}
+            </div></div></div>
         <div class="stack">
-          <div class="panel"><div class="panel-head"><h3>What you sign</h3></div><div class="panel-body"><dl class="kv">
-            ${tf ? `<dt>repo</dt><dd class="mono">${tf.repo}</dd><dt>commit</dt><dd class="hash">${tf.commit}</dd><dt>dir</dt><dd class="mono">${tf.dir}</dd><dt>workspace</dt><dd class="mono">${tf.workspace}</dd><dt>var files</dt><dd class="mono">${tf.var_files.join(', ')}</dd><dt>plan sha256</dt><dd class="hash">${tf.plan_sha}</dd>` : ''}
-            <dt>case</dt><dd class="mono">${p.case}</dd><dt>requester</dt><dd>${p.requester ? `<span class="taint ${p.cls}">${p.requester}</span>` : '—'}</dd><dt>digest</dt><dd class="hash">${p.digest}</dd>
-          </dl>
-          ${p.status === 'pending' ? `<div class="row" style="margin-top:16px"><button class="btn lg primary grow" id="ap">${icon('passkey')}Approve</button><button class="btn lg danger" id="dn">Deny</button></div><div class="muted tiny" style="margin-top:8px">Needs one of: <span class="mono">${m.operators.join(', ')}</span>, with user verification. Then conductor checks the plan file still hashes to the signed value, HEAD is the commit and the tree is clean, and applies with the tf-apply connector's WRITE role.</div>` : ''}
+          <div class="panel approve-panel"><div class="panel-head"><h3>What you sign</h3></div><div class="panel-body"><dl class="kv">
+            ${tf ? `<dt>repo</dt><dd class="mono">${tf.repo}</dd><dt>commit</dt><dd class="hash">${tf.commit}</dd><dt>dir</dt><dd class="mono">${tf.dir}</dd><dt>workspace</dt><dd class="mono">${tf.workspace}</dd><dt>plan sha256</dt><dd class="hash">${tf.plan_sha}</dd>` : ''}
+            <dt>case</dt><dd class="mono">${p.case}</dd><dt>requester</dt><dd>${p.requester ? `<span class="taint ${p.cls}">${p.requester}</span>` : '—'}</dd><dt>digest</dt><dd class="hash">${p.digest}</dd></dl>
+          ${p.status === 'pending' ? `<div class="row approve-row" style="margin-top:16px"><button class="btn lg primary grow" data-act="p-approve" data-p="${p.id}" data-d="approve">${icon('passkey')}Approve</button><button class="btn lg danger" data-act="p-approve" data-p="${p.id}" data-d="deny">Deny</button></div><div class="muted tiny" style="margin-top:8px">Needs one of: <span class="mono">${(S.effective(m).operators.v || []).join(', ')}</span>${teamOf(m) ? ` (from team ${teamOf(m).name})` : ''}, with user verification.</div>` : p.status === 'shadow' ? '<div class="callout small" style="margin-top:12px">Shadow proposals can\'t be approved.</div>' : ''}
           </div></div>
           <div class="panel"><div class="panel-head"><h3>Timeline</h3></div><div class="list small">
             <div class="item">${st('ok', '')}<span class="grow">proposed by home ${m.session}</span><span class="mono tiny muted">${ago(p.at)}</span></div>
-            ${tf ? `<div class="item">${st('ok', '')}<span class="grow">planned in <span class="mono tiny">&lt;state&gt;/members/${m.name}/tf/${p.id}/</span> (0700)</span><span class="mono tiny muted">${ago(p.at)}</span></div>` : ''}
-            <div class="item">${st(p.status === 'pending' ? 'ember' : PS[p.status], '')}<span class="grow">${p.status === 'pending' ? 'awaiting operator signature' : p.status}</span></div></div></div>
-        </div>
-      </div>`;
+            <div class="item">${st(p.status === 'pending' ? 'ember' : PS[p.status], '')}<span class="grow">${p.status === 'pending' ? 'awaiting operator signature' : p.status + (p.approver ? ' · ' + p.approver : '')}</span></div></div></div>
+        </div></div>`;
   }
+  UI.act('p-approve', (b) => { const p = D.proposals.find((x) => x.id === b.dataset.p); UI.approve(p, b.dataset.d, () => { if (b.dataset.d !== 'deny') p.approver = 'ops (passkey · laptop)'; else p.approver = 'ops (passkey · laptop)'; S.save(); UI.rerender(); }); });
 
   /* ---------- memory ---------- */
+  const memOf = (m) => { if (m.name === 'platform-sre') return D.memory; D.memories = D.memories || {}; return (D.memories[m.name] = D.memories[m.name] || { files: { 'knowledge/README.md': `# ${m.name}\n\nWhat ${m.name} has learned.\n` }, log: [], open: 'knowledge/README.md' }); };
+  const mv = { edit: false };
   function memory(m) {
-    const tree = D.memory.tree.map((f) => f.dir ? `<a>${icon('folder')}${f.p}</a>` : `<a class="f${f.p === 'knowledge/db-prod-1.md' ? ' on' : ''}">${icon('file')}${f.p.split('/').pop()}${f.recent ? '<span class="new"></span>' : ''}</a>`).join('');
-    const prose = D.memory.file.replace(/^# (.*)$/m, '<h1>$1</h1>').replace(/^## (.*)$/gm, '<h2>$1</h2>').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\*(.+?)\*/g, '<i>$1</i>').replace(/`([^`]+)`/g, '<code>$1</code>').replace(/^- (.*)$/gm, '<li>$1</li>').replace(/(<li>[\s\S]*?<\/li>\n?)+/g, (x) => `<ul>${x}</ul>`).replace(/\n\n/g, '<br>');
-    return shell(m, 'memory', `<div class="grid" style="grid-template-columns:240px minmax(0,1fr) 300px">
-      <div class="panel"><div class="panel-head"><h3>memory repo</h3><button class="icon-btn" style="margin-left:auto" title="New file">${icon('plus')}</button></div><div class="tree" style="padding:6px">${tree}</div></div>
-      <div class="panel"><div class="panel-head"><span class="mono small">knowledge/db-prod-1.md</span><span class="muted tiny mono">last: 8e1f0aa · platform-sre · 1m</span><div class="tools"><div class="seg" id="memv"><button class="on" data-v="read">Read</button><button data-v="edit">${icon('edit')}Edit</button></div></div></div>
-        <div class="panel-body"><div id="mem-read" class="prose">${prose}</div>
-        <div id="mem-edit" class="hide stack"><textarea class="textarea mono" rows="16">${esc(D.memory.file)}</textarea>
-          <div class="field"><label>Commit message</label><input class="input" value="knowledge/db-prod-1: note pgbouncer pool size"></div>
-          <div class="row"><span class="muted tiny">One commit, authored <span class="mono">ops (dashboard)</span>, trailers <span class="mono">Member-Role: operator · Edited-Via: dashboard</span>. The member sees it on its next read.</span><button class="btn primary" style="margin-left:auto" id="mem-commit">${icon('commit')}Commit</button></div></div></div></div>
-      <div class="panel"><div class="panel-head"><h3>History</h3></div><div class="list">${D.memory.log.map((c) => `<div class="item" style="align-items:flex-start"><span class="mono tiny" style="color:var(--accent)">${c.sha}</span><div class="grow small"><div>${esc(c.msg)}</div><div class="mono tiny muted">${c.author} · ${ago(c.at)}</div><div class="mono tiny muted" style="opacity:.8">${c.trailers}</div></div></div>`).join('')}</div>
-        <div class="panel-foot"><button class="btn sm">${icon('undo')}Revert…</button><button class="btn sm ghost">Consolidate now</button></div></div>
+    const mem = memOf(m), open = mem.open || Object.keys(mem.files)[0];
+    const dirs = [...new Set(Object.keys(mem.files).map((f) => f.split('/').slice(0, -1).join('/')))].sort();
+    const t = teamOf(m), kn = t && D.teamKnowledge[t.name] && (staged('teams', t.name) || t.cfg).knowledge;
+    const prose = esc(mem.files[open] || '').replace(/^# (.*)$/m, '<h1>$1</h1>').replace(/^## (.*)$/gm, '<h2>$1</h2>').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>').replace(/^- (.*)$/gm, '<li>$1</li>').replace(/\n\n/g, '<br>');
+    return shell(m, 'memory', `<div class="grid mem-grid">
+      <div class="panel"><div class="panel-head"><h3>memory repo</h3><button class="icon-btn" style="margin-left:auto" data-act="mem-new" data-m="${m.name}" data-tip="New file" aria-label="New file">${icon('plus')}</button></div><div class="tree" style="padding:6px">${dirs.map((d) => `<div class="tree-dir">${icon('folder')}${esc(d)}/</div>${Object.keys(mem.files).filter((f) => f.split('/').slice(0, -1).join('/') === d).map((f) => `<a href="#/members/${m.name}/memory" data-act="mem-open" data-m="${m.name}" data-f="${esc(f)}" class="f${f === open ? ' on' : ''}">${icon('file')}${esc(f.split('/').pop())}</a>`).join('')}`).join('')}</div></div>
+      <div class="panel"><div class="panel-head"><span class="mono small">${esc(open)}</span><div class="tools">${UI.seg([['read', 'Read'], ['edit', `${icon('edit')}Edit`]], mv.edit ? 'edit' : 'read', 'mem-mode')}</div></div>
+        <div class="panel-body">${mv.edit ? `<div class="stack"><textarea class="textarea mono" rows="16" id="mem-text" aria-label="File content">${esc(mem.files[open] || '')}</textarea>
+          <div class="field"><label for="mem-msg">Commit message</label><input class="input" id="mem-msg" value="${esc(open.replace(/\.md$/, ''))}: operator edit"></div>
+          <div class="row"><span class="muted tiny grow">One commit, authored <span class="mono">ops (dashboard)</span>, trailers <span class="mono">Member-Role: operator · Edited-Via: dashboard</span>.</span><button class="btn primary" data-act="mem-commit" data-m="${m.name}">${icon('commit')}Commit</button></div></div>`
+          : `<div class="prose">${prose}</div>${kn ? `<div class="row" style="margin-top:12px;border-top:1px dashed var(--line);padding-top:10px"><span class="muted small grow">Useful to the whole team?</span><button class="btn sm" data-act="mem-promote" data-m="${m.name}">${icon('upload')}Promote to team ${t.name}</button></div>` : ''}`}</div></div>
+      <div class="panel"><div class="panel-head"><h3>History</h3></div><div class="list">${mem.log.map((c) => `<div class="item" style="align-items:flex-start"><span class="mono tiny" style="color:var(--accent)">${c.sha}</span><div class="grow small"><div>${esc(c.msg)}</div><div class="mono tiny muted">${esc(c.author)} · ${ago(c.at)}</div><div class="mono tiny muted" style="opacity:.8">${esc(c.trailers)}</div></div>${c.prev !== undefined || c.revertable ? `<button class="btn sm ghost" data-act="mem-revert" data-m="${m.name}" data-sha="${c.sha}" aria-label="Revert ${c.sha}">${icon('undo')}</button>` : ''}</div>`).join('') || '<div class="item small muted">No commits yet.</div>'}</div>
+        <div class="panel-foot"><button class="btn sm ghost" data-act="mem-consolidate" data-m="${m.name}">Consolidate now</button></div></div>
       </div>`);
   }
+  const sha = () => Math.random().toString(16).slice(2, 9);
+  UI.act('mem-open', (a) => { const mem = memOf(M(a.dataset.m)); mem.open = a.dataset.f; mv.edit = false; S.save(); UI.rerender(); });
+  UI.act('mem-mode', (b) => { mv.edit = b.dataset.v === 'edit'; UI.rerender(); });
+  UI.act('mem-commit', (b) => { const m = M(b.dataset.m), mem = memOf(m), f = mem.open || Object.keys(mem.files)[0], txt = UI.$('#mem-text').value; if (txt === mem.files[f]) { UI.toast('No change to commit', '', 'idle'); return; } const prev = mem.files[f]; mem.files[f] = txt; const s = sha(); mem.log.unshift({ sha: s, msg: UI.$('#mem-msg').value || 'operator edit', author: 'ops (dashboard)', trailers: 'Member-Role: operator · Edited-Via: dashboard', at: now(), file: f, prev }); mv.edit = false; audit('memory_commit', `${m.name} · ${f} · ${s}`); S.save(); UI.rerender(); UI.toast(`Committed ${s}`, 'the member sees it on its next read', 'ok'); });
+  UI.act('mem-new', (b) => { const m = M(b.dataset.m); UI.form({ caps: 'memory repo', title: 'New file', fields: [{ k: 'path', type: 'string', req: true, ph: 'runbooks/new.md', pattern: /^(knowledge|runbooks|episodes|handoff)\/[\w./-]+\.md$/, patternMsg: 'Under knowledge/, runbooks/, episodes/ or handoff/, ending .md' }], submit: 'Create', onSubmit: (v) => { const mem = memOf(m); if (mem.files[v.path]) return 'That file exists.'; mem.files[v.path] = `# ${v.path.split('/').pop().replace('.md', '')}\n`; mem.open = v.path; mv.edit = true; S.save(); UI.rerender(); } }); });
+  UI.act('mem-revert', (b) => { const m = M(b.dataset.m), mem = memOf(m), c = mem.log.find((x) => x.sha === b.dataset.sha); UI.confirm({ title: `Revert ${c.sha}?`, body: `Adds a commit that undoes “${esc(c.msg)}”. History is kept.`, ok: 'Revert' }).then((ok) => { if (!ok) return; if (c.prev !== undefined && c.file) mem.files[c.file] = c.prev; const s = sha(); mem.log.unshift({ sha: s, msg: `Revert "${c.msg}"`, author: 'ops (dashboard)', trailers: 'Member-Role: operator · Edited-Via: dashboard · Reverts: ' + c.sha, at: now() }); audit('memory_revert', `${m.name} · ${c.sha} → ${s}`); S.save(); UI.rerender(); }); });
+  UI.act('mem-consolidate', (b) => { const m = M(b.dataset.m), mem = memOf(m), s = sha(); mem.log.unshift({ sha: s, msg: 'consolidate: merge episodes into knowledge', author: m.name, trailers: 'Member-Role: consolidate · Requested-By: operator:ops', at: now() }); audit('memory_consolidate', `${m.name} · ${s}`); S.save(); UI.rerender(); UI.toast('Consolidation ran', `commit ${s}`, 'ok'); });
+  UI.act('mem-promote', (b) => { const m = M(b.dataset.m), mem = memOf(m), f = mem.open, t = teamOf(m), kn = D.teamKnowledge[t.name]; const id = 'k' + (kn.proposals.length + 5); kn.proposals.unshift({ id, member: m.name, from: f, to: f.split('/').pop(), summary: `Promote ${f.split('/').pop()} from ${m.name}`, status: (staged('teams', t.name) || t.cfg).knowledge.promote === 'auto' ? 'approved' : 'pending', at: now(), diff: (mem.files[f] || '').split('\n').map((l) => '+' + l).join('\n') }); audit('team_knowledge_proposed', `${t.name} · ${id} · ${m.name}: ${f}`); S.save(); UI.go(`#/teams/${t.name}/knowledge`); });
 
   /* ---------- workers ---------- */
   function workers(m) {
-    const card = (w) => `<div class="wnode"><div class="wcard" data-s="${w.status}"><div class="row wrap" style="gap:6px">${st(w.status, '')}<b class="mono">${w.id}</b>${w.group ? tag('group ' + w.group) : ''}<span class="taint ${w.cls}">taint: ${w.cls}</span>${w.readOnly ? tag('read-only', 'ok') : ''}<span class="mono tiny muted" style="margin-left:auto">case ${w.case} · ${usd(w.cost)} · ${ago(w.started)}</span></div>
+    const ws = D.workers.filter((w) => (w.member || 'platform-sre') === m.name);
+    const card = (w) => `<div class="wnode"><div class="wcard" data-s="${w.status}"><div class="row wrap" style="gap:6px">${st(w.status === 'stopped' ? 'fail' : w.status, w.status === 'stopped' ? 'stopped' : '')}<b class="mono">${w.id}</b>${w.group ? tag('group ' + w.group) : ''}<span class="taint ${w.cls}">taint: ${w.cls}</span>${w.readOnly ? tag('read-only', 'ok') : ''}<span class="mono tiny muted" style="margin-left:auto">case ${w.case} · ${usd(w.cost)} · ${ago(w.started)}</span></div>
       <div class="small" style="margin:5px 0 3px">${esc(w.brief)}</div><div class="mono tiny muted">verbs: ${w.verbs}${w.note ? ` · <span style="color:var(--wait)">${w.note}</span>` : ''}</div>
-      <div class="row" style="margin-top:6px;gap:6px"><a class="btn sm" href="#/${w.status === 'run' ? 'live' : 'runs'}/${w.status === 'run' ? 'r-7f29' : 'r-7e52'}">${icon('runs')}Run</a>${w.status === 'run' ? `<button class="btn sm danger">Stop</button>` : ''}</div></div></div>`;
+      <div class="row" style="margin-top:6px;gap:6px"><a class="btn sm" href="#/${w.status === 'run' ? 'live/r-7f29' : 'runs/' + (D.runs.find((r) => r.id === w.run) ? w.run : 'r-7e52')}">${icon('runs')}Run</a>${w.status === 'run' ? `<button class="btn sm danger" data-act="w-stop" data-w="${w.id}">Stop</button>` : ''}</div></div></div>`;
+    const groups = [...new Set(ws.map((w) => w.parent))];
     return shell(m, 'workers', `<div class="grid g-side"><div class="panel"><div class="panel-head"><h3>Worker tree</h3><span class="muted small">instructions flow down, authority never grows</span></div><div class="wtree">
-      <div class="wnode"><span class="sigil sm" style="--sig:${m.color}">${m.name[0]}</span><div><b>home ${m.session}</b> <span class="muted small">live · paseo · turn ${m.turns}</span></div></div>
-      <div class="wkids">${D.workers.filter((w) => w.parent === 'home s7').map(card).join('')}</div>
-      <div class="wnode" style="opacity:.75"><span class="sigil sm" style="--sig:var(--ink-4)">${m.name[0]}</span><div><b>home s6</b> <span class="muted small">retired · token revoked</span></div></div>
-      <div class="wkids">${D.workers.filter((w) => w.parent === 'home s6').map(card).join('')}</div>
-      <div class="wnode"><span class="sigil sm" style="--sig:var(--shadow)">${icon('eye')}</span><div><b>proactive sweeps</b> <span class="muted small">every ${m.proactive ? m.proactive.every : '—'} · ${m.proactive ? m.proactive.budget : ''}</span></div></div>
-      <div class="wkids">${D.workers.filter((w) => w.parent === 'sweep').map(card).join('')}</div>
+      <div class="wnode"><span class="sigil sm" style="--sig:${m.color}">${m.name[0]}</span><div><b>home ${m.session}</b> <span class="muted small">${m.home} · turn ${m.turns}</span></div></div>
+      ${groups.map((g) => `<div class="wnode" style="opacity:.85"><span class="sigil sm" style="--sig:var(--ink-4)">${g === 'sweep' ? icon('eye') : m.name[0]}</span><div><b>${g === 'sweep' ? 'proactive sweeps' : g}</b></div></div><div class="wkids">${ws.filter((w) => w.parent === g).map(card).join('')}</div>`).join('') || '<div class="empty small">No workers yet.</div>'}
     </div></div>
-    <div class="stack"><div class="callout small">A child carries its member's verbs or fewer, and the <b>less trusted</b> of its case's requester and its parent's trust. Children can't spawn, join, tell or message peers.</div>
-      <div class="callout info small">Only the parent (the home session) tells a worker. From here you can open a worker's run, or stop it.</div>
-      <div class="panel"><div class="panel-head"><h3>Limits</h3></div><div class="panel-body"><dl class="kv small"><dt>max_concurrent</dt><dd class="mono">4 (2 live)</dd><dt>max_per_case</dt><dd class="mono">3</dd><dt>runtime</dt><dd class="mono">claude-cli · sandboxed</dd><dt>timeout</dt><dd class="mono">2h</dd></dl></div></div></div></div>`);
+    <div class="stack"><div class="callout small">A child carries its member's verbs or fewer, and the <b>less trusted</b> of its case's requester and its parent's trust.</div><div class="callout info small">Only the parent (the home session) tells a worker. From here you can open a worker's run, or stop it.</div></div></div>`);
   }
+  UI.act('w-stop', (b) => UI.confirm({ title: `Stop worker ${b.dataset.w}?`, body: 'Its run is cancelled with the checkpoint grace. The parent is told.', ok: 'Stop worker', danger: true }).then((ok) => { if (!ok) return; const w = D.workers.find((x) => x.id === b.dataset.w); w.status = 'stopped'; audit('member_worker_stop', `${w.id} · case ${w.case}`); S.save(); UI.rerender(); }));
 
-  /* ---------- access ---------- */
+  /* ---------- access (config edits through the pipeline) ---------- */
   function access(m) {
-    const a = D.access;
-    return shell(m, 'access', `<div class="callout small" style="margin-bottom:14px">Grants and verbs live in config, so each change here goes through the config pipeline: a node-level YAML edit, validated on a copy, shown as a diff, applied with a backup. <b>Widening</b> (a new verb, a looser tier, a promotion, a credential) also asks for your passkey. Revoking a saved browser login is immediate.</div>
+    const c = staged('members', m.name), tiers = S.getPath(c, 'autonomy.tiers') || {}, promote = S.getPath(c, 'autonomy.promote') || [];
+    const verbs = (S.getPath(c, 'skill.verbs') || []).map((v) => ({ v, tier: (Object.entries(tiers).find(([, vs]) => (vs || []).includes(v)) || ['propose'])[0] }));
+    const creds = D.access.credentials.filter((x) => (S.staged('credentials', x.name) || x.cfg || {}).identity === 'member:' + m.name);
+    const logins = D.access.logins.filter((l) => l.identity === 'member:' + m.name);
+    const eff = S.effective(m), max = eff.maxTier.v;
+    const stagedM = S.find('members', m.name);
+    return shell(m, 'access', `<div class="callout small" style="margin-bottom:14px">Grants and verbs live in config: each change here is staged into the pipeline (validated on a copy, shown as a diff, applied with your passkey). <b>Widening</b> is flagged. Revoking a saved browser login is immediate.${teamOf(m) ? ` Team <b>${teamOf(m).name}</b> caps autonomy at <span class="tier ${max}">${max}</span>.` : ''}${stagedM ? ` <a class="link" href="#/config/apply">${D.pending.length} staged · review</a>` : ''}</div>
       <div class="grid g2">
-        <div class="panel"><div class="panel-head"><h3>Verbs &amp; autonomy</h3><span class="muted small">skill.verbs × autonomy.tiers</span><div class="tools"><button class="btn sm">${icon('plus')}Add verb</button></div></div>
-          <table class="tbl compact"><thead><tr><th>verb</th><th>tier</th><th>promoted</th><th></th></tr></thead><tbody>${a.verbs.map((v) => `<tr><td class="mono">${v.v}</td><td><select class="select" style="height:24px;width:130px;font-family:var(--font-mono);font-size:10.5px">${['observe', 'reversible', 'propose', 'commit_money', 'never'].map((t) => `<option${t === v.tier ? ' selected' : ''}>${t}</option>`).join('')}</select></td><td>${v.tier === 'reversible' ? `<button class="switch${v.promoted ? ' on' : ''}" onclick="this.classList.toggle('on')"></button>` : '<span class="muted tiny">—</span>'}</td><td class="num"><button class="icon-btn" title="Remove">${icon('trash')}</button></td></tr>`).join('')}</tbody></table>
-          <div class="panel-foot small muted">An unclassified verb is <span class="tier propose">propose</span>. Promotion takes effect only while sessions are sandboxed (they are).</div></div>
+        <div class="panel"><div class="panel-head"><h3>Verbs &amp; autonomy</h3><span class="muted small">skill.verbs × autonomy.tiers</span><div class="tools"><button class="btn sm" data-act="acc-addverb" data-m="${m.name}">${icon('plus')}Add verb</button></div></div>
+          <table class="tbl compact responsive"><thead><tr><th>verb</th><th>tier</th><th>promoted</th><th></th></tr></thead><tbody>${verbs.map((x) => `<tr><td data-l="verb" class="mono">${x.v}</td><td data-l="tier"><select class="select mono tier-sel" data-on-change="acc-tier" data-m="${m.name}" data-v="${esc(x.v)}" aria-label="Tier for ${esc(x.v)}">${['observe', 'reversible', 'propose', 'commit_money', 'never'].map((t) => `<option${t === x.tier ? ' selected' : ''}${max && S.TIER_ORDER.indexOf(t) > S.TIER_ORDER.indexOf(max) && t !== 'observe' ? ' disabled' : ''}>${t}</option>`).join('')}</select></td><td data-l="promoted">${x.tier === 'reversible' ? UI.switchBtn(promote.includes(x.v), 'acc-promote', `data-m="${m.name}" data-v="${esc(x.v)}" aria-label="Promote ${esc(x.v)}"${eff.promote.src === 'blocked' ? ' ' + UI.off('Team allows no promotions') : ''}`) : '<span class="muted tiny">—</span>'}</td><td class="num"><button class="icon-btn" data-act="acc-delverb" data-m="${m.name}" data-v="${esc(x.v)}" aria-label="Remove ${esc(x.v)}">${icon('trash')}</button></td></tr>`).join('')}</tbody></table>
+          <div class="panel-foot small muted">An unclassified verb is <span class="tier propose">propose</span>. Tiers above the team ceiling are disabled.</div></div>
         <div class="stack">
-          <div class="panel"><div class="panel-head"><h3>Credential bindings</h3><div class="tools"><button class="btn sm">${icon('plus')}Bind</button></div></div><div class="list">${a.credentials.map((c) => `<div class="item"><span class="icon-btn">${icon('key')}</span><div class="grow"><b>${c.name}</b> <span class="mono tiny muted">${c.origin}</span><div class="mono tiny muted">${c.fields} · ${c.vault}:${c.ref}</div></div><a class="btn sm ghost" href="#/browser/b-01">Use</a><button class="btn sm danger">Unbind</button></div>`).join('')}</div></div>
-          <div class="panel"><div class="panel-head"><h3>Browser logins</h3><div class="tools"><a class="btn sm" href="#/browser/seed">${icon('hand')}Seed a login</a></div></div><div class="list">${a.logins.map((l) => `<div class="item"><span class="icon-btn">${icon('cookie')}</span><div class="grow"><b>${l.site}</b><div class="mono tiny muted">${l.cookies} cookies · seeded ${ago(l.seeded)} ago · operator requests only</div></div><button class="btn sm danger" onclick="UI.toast('Logged out of console.example.com','saved jar deleted · audited','ok')">Revoke</button></div>`).join('')}</div></div>
-          <div class="panel"><div class="panel-head"><h3>Operators who can approve</h3></div><div class="list"><div class="item"><span class="avatar">op</span><b>ops</b><span class="muted small grow">ssh-ed25519 …Example · 2 passkeys</span>${tag('you', 'ember')}</div></div></div>
+          <div class="panel"><div class="panel-head"><h3>Credential bindings</h3><div class="tools"><button class="btn sm" data-act="cred-bind" data-m="${m.name}">${icon('plus')}Bind</button></div></div><div class="list">${creds.map((x) => { const cf = S.staged('credentials', x.name) || x.cfg; return `<div class="item"><span class="icon-btn" aria-hidden="true">${icon('key')}</span><div class="grow"><b>${x.name}</b> <span class="mono tiny muted">${cf.origin}</span><div class="mono tiny muted">${(cf.fields || []).join(', ')} · ${cf.vault}:${cf.ref}</div></div><button class="btn sm ghost" data-act="cred-bind" data-m="${m.name}" data-c="${x.name}">${icon('edit')}Edit</button><button class="btn sm danger" data-act="cred-unbind" data-c="${x.name}">Unbind</button></div>`; }).join('') || '<div class="item small muted">No credentials bound.</div>'}</div></div>
+          <div class="panel"><div class="panel-head"><h3>Browser logins</h3><div class="tools"><a class="btn sm" href="#/browser/seed">${icon('hand')}Seed a login</a></div></div><div class="list">${logins.map((l) => `<div class="item"><span class="icon-btn" aria-hidden="true">${icon('cookie')}</span><div class="grow"><b>${l.site}</b><div class="mono tiny muted">${l.cookies} cookies · seeded ${ago(l.seeded)} ago · operator requests only</div></div><button class="btn sm danger" data-act="login-revoke" data-site="${l.site}" data-id="${l.identity}">Revoke</button></div>`).join('') || '<div class="item small muted">No saved logins.</div>'}</div></div>
+          <div class="panel"><div class="panel-head"><h3>Operators who can approve</h3><span class="muted small">${eff.operators.src}</span></div><div class="list">${(eff.operators.v || []).map((o) => `<div class="item"><span class="avatar">${o.slice(0, 2)}</span><b>${o}</b><span class="muted small grow mono">${esc((D.operatorsCfg[o] || {}).ssh_key || '')}</span>${o === 'ops' ? tag('you', 'ember') : ''}</div>`).join('')}</div></div>
         </div></div>`);
   }
+  const editM = (name, fn) => { const c = Y_clone(staged('members', name)); fn(c); const ch = S.stage('members', name, c); UI.refreshChrome(); UI.rerender(); if (ch) UI.toast('Staged', esc(ch.summary), 'run'); };
+  UI.act('acc-tier', (sel) => editM(sel.dataset.m, (c) => { const T2 = (c.autonomy = c.autonomy || {}).tiers = c.autonomy.tiers || {}; Object.keys(T2).forEach((t) => { T2[t] = T2[t].filter((v) => v !== sel.dataset.v); if (!T2[t].length) delete T2[t]; }); (T2[sel.value] = T2[sel.value] || []).push(sel.dataset.v); if (sel.value !== 'reversible' && c.autonomy.promote) c.autonomy.promote = c.autonomy.promote.filter((v) => v !== sel.dataset.v); }));
+  UI.act('acc-promote', (b) => editM(b.dataset.m, (c) => { const p = (c.autonomy.promote = c.autonomy.promote || []); const i = p.indexOf(b.dataset.v); if (i >= 0) p.splice(i, 1); else p.push(b.dataset.v); }));
+  UI.act('acc-delverb', (b) => editM(b.dataset.m, (c) => { c.skill.verbs = c.skill.verbs.filter((v) => v !== b.dataset.v); Object.values(c.autonomy.tiers || {}).forEach((vs) => { const i = vs.indexOf(b.dataset.v); if (i >= 0) vs.splice(i, 1); }); Object.keys(c.autonomy.tiers || {}).forEach((t) => { if (!c.autonomy.tiers[t].length) delete c.autonomy.tiers[t]; }); if (c.autonomy.promote) c.autonomy.promote = c.autonomy.promote.filter((v) => v !== b.dataset.v); }));
+  const verbList = () => { const out = []; D.connectors.forEach((c) => { const d = SCHEMA.connectors[c.use]; if (d) { out.push(`${c.name}.*`); Object.keys(d.verbs).forEach((v) => out.push(`${c.name}.${v}`)); } }); return out; };
+  UI.act('acc-addverb', (b) => { const c0 = staged('members', b.dataset.m); UI.form({ caps: `members.${b.dataset.m}.skill.verbs`, title: 'Grant a verb', fields: [{ k: 'verb', type: 'enum', req: true, options: verbList().filter((v) => !(c0.skill && c0.skill.verbs || []).includes(v)) }, { k: 'tier', type: 'enum', req: true, options: ['observe', 'reversible', 'propose', 'commit_money', 'never'], def: 'propose', help: 'Adding a verb widens what the member can do.' }], submit: 'Stage grant', onSubmit: (v) => { editM(b.dataset.m, (c) => { c.skill = c.skill || {}; (c.skill.verbs = c.skill.verbs || []).push(v.verb); c.autonomy = c.autonomy || {}; const T2 = (c.autonomy.tiers = c.autonomy.tiers || {}); (T2[v.tier] = T2[v.tier] || []).push(v.verb); }); } }); });
+  UI.act('cred-bind', (b) => {
+    const cur = b.dataset.c && (S.staged('credentials', b.dataset.c) || D.access.credentials.find((x) => x.name === b.dataset.c).cfg);
+    UI.form({ caps: 'browser.credentials', title: cur ? `Edit ${b.dataset.c}` : 'Bind a credential', edit: !!cur, values: cur ? Object.assign({ name: b.dataset.c }, cur) : { identity: 'member:' + b.dataset.m },
+      fields: [{ k: 'name', type: 'string', req: true, readonly: !!cur, pattern: /^[a-z][\w-]*$/, patternMsg: 'letters, digits, - and _' }, { k: 'origin', type: 'string', req: true, ph: 'https://grafana.example.com', pattern: /^https:\/\/[\w.-]+(:\d+)?$/, patternMsg: 'An https:// origin, no path.' }, { k: 'identity', type: 'enum', req: true, options: D.members.map((m) => 'member:' + m.name).concat(D.identities.map((i) => i.id).filter((i) => !i.startsWith('member:'))) }, { k: 'fields', type: 'select-multi', req: true, options: ['username', 'password', 'otp', 'push', 'passkey'] }, { k: 'vault', type: 'enum', req: true, options: D.vaults.map((v) => v.name) }, { k: 'ref', type: 'string', req: true, ph: 'Agents/Grafana/*', help: 'The vault item; values are filled into the page by conductor, never shown to the agent.' }],
+      submit: 'Review change', submitIcon: 'check', onSubmit: (v) => { const n = { origin: v.origin, identity: v.identity, fields: v.fields, vault: v.vault, ref: v.ref }; if (!cur && D.access.credentials.find((x) => x.name === v.name)) return 'A binding by that name exists.'; UI.staged(S.stage('credentials', v.name, n)); } });
+  });
+  UI.act('cred-unbind', (b) => UI.confirm({ title: `Unbind ${b.dataset.c}?`, body: 'Stages removing the binding. The vault item stays.', ok: 'Stage removal', danger: true }).then((ok) => ok && UI.staged(S.stage('credentials', b.dataset.c, null))));
+  UI.act('login-revoke', (b) => UI.confirm({ title: `Log out of ${b.dataset.site}?`, body: 'Deletes the saved cookie jar now (browser logout). Immediate, audited.', ok: 'Revoke', danger: true }).then((ok) => { if (!ok) return; D.access.logins = D.access.logins.filter((l) => !(l.site === b.dataset.site && l.identity === b.dataset.id)); audit('browser_logout', `${b.dataset.id} · ${b.dataset.site}`); S.save(); UI.rerender(); UI.toast(`Logged out of ${b.dataset.site}`, 'saved jar deleted · audited', 'ok'); }));
 
-  /* ---------- definition editor ---------- */
+  /* ---------- definition editor: a form over members.<m>, live YAML beside it ---------- */
+  const DF = [
+    { k: 'description', type: 'string', mono: false, sec: 'Identity & charter' },
+    { k: 'team', type: 'enum', label: 'Team', options: () => D.teams.map((t) => t.name), help: 'At most one. Defaults come from the team; this member can only narrow them.' },
+    { k: 'operators', type: 'list', label: 'Operators (approvers)', help: 'Leave empty to inherit the team\'s.' },
+    { k: 'escalation', type: 'string', mono: false },
+    { k: 'autonomy.shadow', type: 'bool', label: 'Shadow mode', on: 'nothing above observe executes', sec: 'Autonomy' },
+    { k: 'autonomy.approval_ttl', type: 'duration', label: 'Approval TTL' },
+    { k: 'autonomy.spend.per_action', type: 'number', label: 'Spend cap per action (cents)' },
+    { k: 'proactive.every', type: 'duration', label: 'Sweep every', sec: 'Proactive sweeps', help: 'Empty turns sweeps off.' },
+    { k: 'proactive.quiet_hours', type: 'string', label: 'Quiet hours', ph: '22:00-07:00' },
+    { k: 'proactive.notify_at', type: 'enum', label: 'Notify at', options: ['high', 'medium', 'low'] },
+    { k: 'proactive.budget.max_runs_per_day', type: 'number', label: 'Max runs / day' },
+    { k: 'proactive.budget.max_cost_per_day', type: 'number', label: 'Max cost / day' },
+    { k: 'home.rotate.max_age', type: 'duration', label: 'Rotate after', sec: 'Sessions, workers, isolation, peers' },
+    { k: 'home.rotate.max_turns', type: 'number', label: '…or turns' },
+    { k: 'worker.runtime', type: 'enum', label: 'Worker runtime', options: () => D.runtimes.map((r) => r.name) },
+    { k: 'worker.max_concurrent', type: 'number', label: 'Max concurrent workers' },
+    { k: 'isolation.mode', type: 'seg', label: 'Sandbox', options: [['namespace', 'namespace'], ['container', 'container'], ['none', 'none', 'isolation: {mode: none} is set on a runtime, workflow or trigger, never on a member']], def: 'namespace' },
+    { k: 'peers', type: 'list', label: 'Cross-team peers', help: 'Team-mates are already peers. A member in another team needs both teams linked.' },
+  ];
+  const dv = { name: null, draft: null, base: null, charter: null };
   function settings(m, isNew) {
-    const name = isNew ? 'new-member' : m.name;
-    const y = `members:
-  ${name}:
-    description: "${isNew ? '' : m.desc}"
-    charter_file: members/${name}.md
-    escalation: "Page the operator if a sev1 is not mitigated in 15 minutes."
-    operators: [ops]
-    home:
-      rotate: { max_age: 24h, max_turns: 100 }
-    worker:
-      runtime: claude-cli
-      timeout: 2h
-      max_concurrent: 4
-    skill:
-      verbs: [kv.get, kv.set, gh.get_*, gh.comment, slack-ops.post]
-    autonomy:
-      shadow: ${isNew ? 'true ' : 'false'}             # ${isNew ? 'the default for a new member' : 'approved execution'}
-      tiers:
-        observe: [gh.get_*, kv.get]
-        reversible: [slack-ops.post]
-        propose: [gh.comment, kv.set]
-        never: [gh.delete_*]
-      promote: [slack-ops.post]
-      approval_ttl: 24h
-    proactive:
-      every: 4h
-      quiet_hours: "22:00-07:00"
-      budget: { max_runs_per_day: 6, max_cost_per_day: 2.00 }
-      checklist: { section: "Proactive checks" }
-      notify_at: high
-    peers: [billing-sre]
-    isolation: { mode: ${m.mode === 'container' ? 'container' : 'namespace'} }`;
-    const sec = (t, body) => `<div class="panel"><div class="panel-head"><h3>${t}</h3></div><div class="panel-body stack">${body}</div></div>`;
-    return (isNew ? (b) => `<div class="page">${UI.head('Define a member', { crumbs: '<a href="#/members">Members</a>' })}${b}</div>` : (b) => shell(m, 'settings', b))(`
-      <div class="grid g2" style="align-items:start">
-        <div class="stack">
-          ${sec('Identity &amp; charter', `<div class="grid g2"><div class="field"><label>Name</label><input class="input mono" value="${name}" ${isNew ? '' : 'disabled'}></div><div class="field"><label>Operators</label><input class="input mono" value="ops"></div></div>
-            <div class="field"><label>Description</label><input class="input" value="${isNew ? '' : esc(m.desc)}"></div>
-            <div class="field"><label>Charter <span class="muted">· members/${name}.md</span></label><textarea class="textarea" rows="6">You are the platform services' first-line SRE. Triage pages, investigate with read-only tools, propose fixes, and escalate per the policy below.
-
-## Proactive checks
-- error budgets for api and web
-- NAT and egress cost vs last week</textarea><div class="hint">Config only: nothing on the agent-facing surface writes it.</div></div>
-            <div class="field"><label>Escalation</label><input class="input" value="Page the operator if a sev1 is not mitigated in 15 minutes."></div>`)}
-          ${sec('Autonomy', `<label class="row small"><button class="switch${isNew ? ' on' : ''}" onclick="this.classList.toggle('on')"></button><b>Shadow mode</b> <span class="muted">nothing above observe executes; proposals are a calibration record</span></label>
-            <div class="grid g2"><div class="field"><label>Approval TTL</label><input class="input mono" value="24h"></div><div class="field"><label>Spend cap (commit_money)</label><input class="input mono" placeholder="per_action 2000 · per_period 5000 / 720h"></div></div>
-            <div class="hint">Tiers per verb are on the Access tab. Promotion needs the sandbox; validation warns if it can't take effect.</div>`)}
-          ${sec('Proactive sweeps', `<label class="row small"><button class="switch on" onclick="this.classList.toggle('on')"></button>Enabled (read-only, enforced by the gate)</label>
-            <div class="grid g3"><div class="field"><label>Every</label><input class="input mono" value="4h"></div><div class="field"><label>Quiet hours</label><input class="input mono" value="22:00-07:00"></div><div class="field"><label>Notify at</label><select class="select"><option>high</option><option>medium</option><option>low</option></select></div></div>
-            <div class="grid g2"><div class="field"><label>Max runs / day</label><input class="input mono" value="6"></div><div class="field"><label>Max cost / day</label><input class="input mono" value="2.00"></div></div>`)}
-          ${sec('Sessions, workers, isolation, peers', `<div class="grid g3"><div class="field"><label>Rotate after</label><input class="input mono" value="24h"></div><div class="field"><label>…or turns</label><input class="input mono" value="100"></div><div class="field"><label>Worker runtime</label><select class="select"><option>claude-cli</option><option>oc</option></select></div></div>
-            <div class="field"><label>Sandbox</label><div class="seg"><button class="${m.mode !== 'container' ? 'on' : ''}">namespace</button><button class="${m.mode === 'container' ? 'on' : ''}">container</button><button disabled title="isolation: {mode: none} is set on a runtime, workflow or trigger — never here">none</button></div><div class="hint">The container backend runs each identity in its own container (<span class="mono">--network none</span>, no capabilities).</div></div>
-            <div class="field"><label>Peers</label><input class="input mono" value="billing-sre"><div class="hint">Both sides must list each other (or use member_links:). Linking is a channel for data to cross.</div></div>`)}
-        </div>
-        <div class="stack" style="position:sticky;top:12px">
-          <div class="panel"><div class="panel-head"><h3>As YAML</h3><span class="muted small">config.yaml · node <span class="mono">members.${name}</span></span><div class="tools">${st('ok', 'validates')}</div></div><div class="panel-body tight">${UI.yaml(y, { hl: isNew ? [] : [18, 19, 28] })}</div>
-            <div class="panel-foot"><span class="muted small">2 warnings: none · 0 errors</span><a class="btn primary" style="margin-left:auto" href="#/config/apply">${icon('check')}Review changes</a></div></div>
-        </div></div>`);
+    const key = isNew ? '$new' : m.name;
+    if (dv.name !== key) { dv.name = key; dv.base = isNew ? { description: '', operators: ['ops'], autonomy: { shadow: true, approval_ttl: '24h' }, skill: { verbs: ['gh.get_*'] }, isolation: { mode: 'namespace' } } : Y_clone(staged('members', m.name)); dv.draft = Y_clone(dv.base); dv.newName = ''; dv.charter = isNew ? '' : D.charters[m.name] || ''; }
+    const name = isNew ? dv.newName || 'new-member' : m.name;
+    const errs = S.cfg.members.validate(name, dv.draft, S.candidate(D.pending.filter((c) => !(c.coll === 'members' && c.key === name)).concat([{ coll: 'members', key: name, after: dv.draft }])));
+    const warns = S.cfg.members.warn ? S.cfg.members.warn(name, dv.draft, D) : [];
+    const team = dv.draft.team && T(dv.draft.team), td = team ? team.cfg.defaults || {} : {};
+    const inh = (path) => { const v = S.getPath(td, path); return v === undefined ? '' : `<div class="hint inh-hint">${icon('link')} team ${team.name}: <span class="mono">${esc(Array.isArray(v) ? v.join(', ') : v)}</span></div>`; };
+    const inhMap = { operators: 'operators', 'autonomy.approval_ttl': 'autonomy.approval_ttl', 'isolation.mode': 'isolation.mode', 'proactive.budget.max_runs_per_day': 'budget.proactive_pool.max_runs_per_day', 'proactive.budget.max_cost_per_day': 'budget.proactive_pool.max_cost_per_day' };
+    let sec = '';
+    const fields = DF.map((f) => { const fd = Object.assign({}, f, { options: typeof f.options === 'function' ? f.options() : f.options }); const head = f.sec && f.sec !== sec ? ((sec = f.sec), `</div></div><div class="panel"><div class="panel-head"><h3>${f.sec}</h3></div><div class="panel-body def-grid">`) : ''; const html = UI.fieldHTML(Object.assign({}, fd, { k: 'df.' + f.k }), S.getPath(dv.draft, f.k)); return head + html.replace('<div class="ferr"', (inhMap[f.k] && team ? inh(inhMap[f.k]) : '') + '<div class="ferr"'); }).join('');
+    const yaml = YAML.stringify({ members: { [name]: dv.draft } });
+    const changed = !YAML.eq(dv.draft, dv.base) || (isNew ? !!dv.newName : dv.charter !== (D.charters[m.name] || ''));
+    const body = `<div class="grid g2" style="align-items:start">
+        <div class="stack def-form" data-member="${esc(key)}"><div class="panel"><div class="panel-body def-grid">
+          ${isNew ? UI.fieldHTML({ k: 'df.$name', type: 'string', req: true, label: 'Name', ph: 'e.g. data-steward' }, dv.newName) : ''}
+          ${fields}
+          <div class="field"><label for="df-charter">Charter <span class="opt">members/${esc(name)}.md · config only</span></label><textarea class="textarea" rows="6" id="df-charter" data-df-charter="1">${esc(dv.charter)}</textarea><div class="hint">Nothing on the agent-facing surface writes it.</div></div>
+        </div></div></div>
+        <div class="stack def-yaml"><div class="panel"><div class="panel-head"><h3>As YAML</h3><span class="muted small">config.yaml · <span class="mono">members.${esc(name)}</span></span><div class="tools">${errs.length ? st('fail', `${errs.length} error${errs.length > 1 ? 's' : ''}`) : st('ok', 'validates')}</div></div><div class="panel-body tight" id="df-yaml">${UI.yaml(yaml)}</div>
+          ${errs.length || warns.length ? `<div class="panel-body" style="border-top:1px solid var(--line)">${errs.map((e) => `<div class="callout danger small" style="margin-bottom:6px">${esc(e)}</div>`).join('')}${warns.map((e) => `<div class="callout warn small" style="margin-bottom:6px">${esc(e)}</div>`).join('')}</div>` : ''}
+          <div class="panel-foot"><button class="btn ghost" data-act="df-reset" ${changed ? '' : UI.off('No edits')}>${icon('undo')}Reset</button><button class="btn primary" style="margin-left:auto" data-act="df-review" ${!changed ? UI.off('Change something first') : errs.length ? UI.off('Fix the errors first') : ''}>${icon('check')}Review changes</button></div></div></div></div>`;
+    return isNew ? `<div class="page">${UI.head('Define a member', { crumbs: '<a href="#/members">Teams &amp; members</a>', sub: 'starts in shadow mode' })}${body}</div>` : shell(m, 'settings', body);
   }
+  let dfT;
+  document.addEventListener('input', (e) => { const f = e.target.closest('.def-form'); if (!f) return; clearTimeout(dfT); dfT = setTimeout(() => readDef(f), 350); });
+  document.addEventListener('change', (e) => { const f = e.target.closest('.def-form'); if (!f) return; clearTimeout(dfT); readDef(f); });
+  function readDef(f) {
+    const d = Y_clone(dv.draft);
+    DF.forEach((fd) => { const v = UI.readField(f, Object.assign({}, fd, { k: 'df.' + fd.k })); if (v === undefined) return; S.setPath(d, fd.k, fd.type === 'bool' ? (v ? true : fd.k === 'autonomy.shadow' ? false : undefined) : v === '' ? undefined : v); });
+    if (S.getPath(d, 'autonomy.shadow') === false && !S.getPath(dv.base, 'autonomy.shadow')) S.setPath(d, 'autonomy.shadow', false);
+    const nm = f.querySelector('#f-df__name'); if (nm) dv.newName = nm.value.trim();
+    const ch = f.querySelector('[data-df-charter]'); if (ch) dv.charter = ch.value;
+    if (!d.proactive || !d.proactive.every) delete d.proactive;
+    dv.draft = d;
+    const active = document.activeElement && document.activeElement.id;
+    const pos = active && document.activeElement.selectionStart;
+    UI.render({ keepScroll: true });
+    if (active) { const el = document.getElementById(active); if (el) { el.focus(); try { if (pos != null) el.setSelectionRange(pos, pos); } catch (x) {} } }
+  }
+  UI.act('df-reset', () => { dv.name = null; UI.rerender(); });
+  UI.act('df-review', () => {
+    const isNew = dv.name === '$new', name = isNew ? dv.newName : dv.name;
+    if (isNew && !/^[a-z][a-z0-9-]*$/.test(name || '')) { UI.toast('Name the member first', 'lowercase letters, digits and dashes', 'fail'); return; }
+    if (isNew && M(name)) { UI.toast('A member by that name exists', '', 'fail'); return; }
+    if (!dv.draft.charter_file) dv.draft.charter_file = `members/${name}.md`;
+    D.charters[name] = dv.charter; const ch = S.stage('members', name, dv.draft);
+    dv.name = null; UI.staged(ch);
+  });
 
   UI.route('members/:name/:tab?/:sub?', ({ name, tab, sub }) => {
-    if (name === 'new') return settings(D.members[2], true);
+    if (name === 'new') return settings(null, true);
     const m = M(name);
+    if (!m) return `<div class="page"><div class="empty"><span class="serif">No member named ${esc(name)}</span><a class="btn" href="#/members">Teams &amp; members</a></div></div>`;
     switch (tab || 'chat') {
-      case 'cases': return cases(m);
-      case 'proposals': return { toString: () => proposals(m, sub), after: (main) => {
-        const p = sub && D.proposals.find((x) => x.id === sub);
-        UI.bind(main, '#ap', 'click', () => UI.approve(p, 'approve', () => UI.render()));
-        UI.bind(main, '#dn', 'click', () => UI.approve(p, 'deny', () => UI.render()));
-      } };
-      case 'memory': return { toString: () => memory(m), after: (main) => {
-        UI.bind(main, '#memv button', 'click', (e, b) => { UI.$$('#memv button').forEach((x) => x.classList.toggle('on', x === b)); UI.$('#mem-read').classList.toggle('hide', b.dataset.v !== 'read'); UI.$('#mem-edit').classList.toggle('hide', b.dataset.v !== 'edit'); });
-        UI.bind(main, '#mem-commit', 'click', () => UI.toast('Committed c2f7a19 to platform-sre memory', 'Member-Role: operator · Edited-Via: dashboard', 'ok'));
-      } };
+      case 'cases': return cases(m, sub);
+      case 'proposals': return proposals(m, sub);
+      case 'memory': return memory(m);
       case 'workers': return workers(m);
       case 'access': return access(m);
       case 'settings': return settings(m);
-      default: return { toString: () => chat(m), after: bindChat };
+      default: return { toString: () => chat(m), after: (main) => { const b = UI.$('#msgs', main); if (b) b.scrollTop = b.scrollHeight; } };
     }
   }, { nav: 'members' });
 })();

@@ -112,3 +112,54 @@ tr.hidden, .item.hidden, .hidden { display: none !important; }
   .card-actions { flex-wrap: wrap; }
   .apply-steps .as { min-width: 112px; padding: 8px 10px; font-size: 11.5px; }
 }
+
+/* teams */
+.peers-graph { width: 100%; height: auto; display: block; }
+.peers-graph a { cursor: pointer; }
+.pg-team { fill: color-mix(in srgb, var(--run) 6%, transparent); stroke: color-mix(in srgb, var(--run) 45%, var(--line-2)); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.peers-graph a:hover .pg-team { fill: color-mix(in srgb, var(--run) 12%, transparent); }
+.pg-tn { font: 600 10px var(--font-mono); fill: var(--run); text-transform: uppercase; letter-spacing: .08em; }
+.pg-tn.muted { fill: var(--ink-3); }
+.pg-in { fill: none; stroke: var(--line-3); stroke-dasharray: 3 3; }
+.pg-link { stroke: var(--run); stroke-width: 2.5; }
+.pg-lt { font: 9px var(--font-mono); fill: var(--run); }
+.pg-peer { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.pg-node { stroke: var(--bg); stroke-width: 2; }
+.pg-lead { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 2 2; }
+.pg-init { font: italic 15px var(--font-title); fill: #fff; pointer-events: none; }
+.pg-name { font: 9.5px var(--font-mono); fill: var(--ink-2); }
+.pg-legend { display: flex; gap: 16px; flex-wrap: wrap; padding: 6px 14px 10px; }
+.pg-legend i { display: inline-block; width: 18px; height: 0; vertical-align: middle; margin-right: 6px; border-top: 2px solid; }
+.lg-in { border-top: 1px dashed var(--line-3) !important; } .lg-link { border-color: var(--run) !important; } .lg-peer { border-color: var(--accent) !important; } .lg-lead { width: 10px !important; height: 10px !important; border: 1.5px dashed var(--accent) !important; border-radius: 50%; }
+.team-band { margin-top: 18px; }
+.team-head { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px dashed var(--line-2); }
+.team-head a.grow { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; color: inherit; }
+.team-head h2 { font-family: var(--font-title); font-style: italic; font-weight: 400; font-size: 28px; margin: 0; line-height: 1; }
+.team-band.loose .team-head h2 { color: var(--ink-3); }
+.team-sigil { --sig: var(--run); border-radius: 12px; }
+.route-box { border: 1px solid var(--line); border-left: 3px solid var(--run); border-radius: var(--r-sm); padding: 8px 10px; background: var(--bg-1); display: flex; flex-direction: column; gap: 4px; }
+.route-cell { max-width: 320px; color: var(--ink-2); }
+.inherit-tbl td { vertical-align: top; }
+.inh, .nar, .wid { font: 600 9.5px var(--font-mono); padding: 1px 5px; border-radius: 3px; margin-left: 4px; white-space: nowrap; }
+.inh { color: var(--ink-3); background: var(--idle-wash); } .nar { color: var(--ok); background: var(--ok-wash); } .wid { color: var(--fail); background: var(--fail-wash); }
+.inh-hint { color: var(--run); }
+.callout.ok { border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); background: var(--ok-wash); }
+.mem-grid { grid-template-columns: 240px minmax(0, 1fr) 300px; }
+.tree-dir { display: flex; gap: 7px; align-items: center; padding: 4px 10px; color: var(--ink-3); font-family: var(--font-mono); font-size: 11.5px; }
+.tree-dir svg { width: 13px; height: 13px; }
+.def-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; }
+.def-grid > .field:has(textarea), .def-grid > .field:has(.listed), .def-grid > .field:has(.seg), .def-grid > .field.boolf { grid-column: 1 / -1; }
+.def-yaml { position: sticky; top: 12px; }
+.meter { height: 6px; border-radius: 3px; background: var(--bg-4); overflow: hidden; }
+.meter > i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.op .who span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.op .who { min-width: 0; flex: 1; }
+@media (max-width: 1100px) { .mem-grid { grid-template-columns: 200px minmax(0, 1fr); } .mem-grid > :last-child { grid-column: 1 / -1; } }
+@media (max-width: 720px) {
+  .mem-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .def-grid { grid-template-columns: minmax(0, 1fr); }
+  .def-yaml { position: static; }
+  .team-head h2 { font-size: 24px; }
+  .peers-graph { min-width: 0; }
+  .route-cell { max-width: none; }
+}

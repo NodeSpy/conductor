@@ -76,6 +76,7 @@
     box: '<path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/>',
     server: '<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/>',
     download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+    upload: '<path d="M12 16V5M7 10l5-5 5 5M5 20h14"/>',
     expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   };
   UI.icon = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || P.dot}</svg>`;
@@ -168,7 +169,7 @@
   /* ---------- nav ---------- */
   const navGroups = [
     ['Now', [['overview', 'Overview', 'overview'], ['live', 'Live', 'live', () => D.runs.filter((r) => r.status === 'run').length], ['attention', 'Needs you', 'attention', () => D.attention.length, true]]],
-    ['Work', [['runs', 'Run history', 'runs'], ['workflows', 'Workflows', 'workflows'], ['members', 'Members', 'members'], ['browser', 'Browsers', 'browser', () => D.browsers.length]]],
+    ['Work', [['runs', 'Run history', 'runs'], ['workflows', 'Workflows', 'workflows'], ['members', 'Teams & members', 'members'], ['browser', 'Browsers', 'browser', () => D.browsers.length]]],
     ['System', [['config', 'Config', 'config'], ['secrets', 'Secrets & vars', 'secrets'], ['extensions', 'Packs & plugins', 'extensions'], ['connectors', 'Connectors & hosts', 'connectors'], ['updates', 'Updates', 'updates', () => 1], ['logs', 'Logs & audit', 'logs'], ['security', 'Access', 'shield']]],
   ];
   UI.navHTML = () => navGroups.map(([g, items]) => `<div class="nav-group"><span class="caps">${g}</span><nav class="nav">${items.map(([k, l, ic, c, hot]) => {
