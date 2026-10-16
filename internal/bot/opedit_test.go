@@ -77,13 +77,21 @@ func TestOperatorAuthorsTeamKnowledge(t *testing.T) {
 	if text, _ := f.svc.TeamRead(ctx, "b", "knowledge/data/stores.md"); !strings.Contains(text, "db-replica-1") {
 		t.Fatalf("moved file: %q", text)
 	}
-	h4 := f.edit(t, "platform", "", "op", Edit{Op: EditRm, Path: "knowledge/data/stores.md", Base: h3})
+	other := f.edit(t, "platform", "", "op", Edit{Op: EditPut, Path: "knowledge/other.md", Text: "other", Base: h3})
+	if _, err := f.svc.OperatorEdit(ctx, "platform", "", "op", "", Edit{Op: EditMv, Path: "knowledge/other.md", To: "knowledge/data/stores.md", Base: other}); err == nil {
+		t.Fatal("a move overwrote an existing file")
+	}
+	if text, _ := f.svc.TeamRead(ctx, "b", "knowledge/data/stores.md"); !strings.Contains(text, "db-replica-1") {
+		t.Fatalf("a refused move changed the destination: %q", text)
+	}
+	h3b := f.edit(t, "platform", "", "op", Edit{Op: EditRm, Path: "knowledge/other.md", Base: other})
+	h4 := f.edit(t, "platform", "", "op", Edit{Op: EditRm, Path: "knowledge/data/stores.md", Base: h3b})
 	if _, err := os.Stat(filepath.Join(repo.Dir, "knowledge/data/stores.md")); !os.IsNotExist(err) {
 		t.Fatalf("not deleted: %v", err)
 	}
 	// History: per repo and per file (following the move), with kinds.
 	hist, err := repo.History(ctx, "", 0)
-	if err != nil || len(hist) != 5 || hist[0].Short != h4 || hist[0].Kind != "operator" || hist[0].Who != "op" {
+	if err != nil || len(hist) != 7 || hist[0].Short != h4 || hist[0].Kind != "operator" || hist[0].Who != "op" {
 		t.Fatalf("repo history: %+v %v", hist, err)
 	}
 	if last := hist[len(hist)-1]; last.Kind != "team" {
@@ -101,6 +109,7 @@ func TestOperatorAuthorsTeamKnowledge(t *testing.T) {
 		{Op: EditPut, Path: "knowledge/x.sh", Text: "x"},
 		{Op: EditRm, Path: "knowledge/nope.md"},
 		{Op: EditMv, Path: "knowledge/nope.md", To: "knowledge/x.md"},
+		{Op: EditPut, Path: "README.md", Text: "x"},
 		{Op: "chmod", Path: "knowledge/x.md"},
 	} {
 		e.Base = f.head(t, "platform", "")
@@ -278,6 +287,19 @@ func TestOperatorRevert(t *testing.T) {
 	if st, _ := repo.git(ctx, repo.Dir, "status", "--porcelain"); strings.TrimSpace(st) != "" || f.head(t, "platform", "") != h4 {
 		t.Fatalf("a refused revert left the repo dirty (%q) or moved", st)
 	}
+	// A hand commit (the README invites them) touching a path outside the
+	// layout is not revertable through conductor.
+	if err := os.WriteFile(filepath.Join(repo.Dir, "README.md"), []byte("edited by hand\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.git(ctx, repo.Dir, "commit", "-q", "-am", "readme by hand"); err != nil {
+		t.Fatal(err)
+	}
+	hand := f.head(t, "platform", "")
+	if _, err := f.svc.OperatorEdit(ctx, "platform", "", "op", "", Edit{Op: EditRevert, Commit: hand, Base: hand}); err == nil || !strings.Contains(err.Error(), "outside what may be edited") {
+		t.Fatalf("reverted a commit outside the layout: %v", err)
+	}
+	h4 = hand
 	// The first commit (README) is not revertable, nor an unknown commit.
 	first, _ := repo.git(ctx, repo.Dir, "rev-list", "--max-parents=0", "HEAD")
 	for _, c := range []string{strings.TrimSpace(first), "deadbeefdeadbeef", "HEAD"} {

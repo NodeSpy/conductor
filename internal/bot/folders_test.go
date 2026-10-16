@@ -24,11 +24,22 @@ func TestFoldersChangeNoRuntimeBehavior(t *testing.T) {
 		f := newTeamFixture(t, edit)
 		o := outcome{Verdicts: map[string]bool{}, Linked: map[string]bool{}, Delegate: map[string]bool{}}
 		names := f.cfg.BotNames()
-		for _, n := range names {
-			for _, verb := range []string{"pd.get_x", "pd.ack", "pd.get_secret", "gh.comment"} {
-				v, err := f.svc.Gate.CheckVerb(ctx, flow.SkillIdentity{Bot: n, BotRole: config.BotRoleHome, Dispatch: f.homeOf(n).Dispatch}, verb, nil)
-				o.Verdicts[n+" "+verb] = err == nil && v.Allow
+		verdicts := func(tag string) {
+			for _, n := range names {
+				for _, verb := range []string{"pd.get_x", "pd.ack", "pd.snooze", "pd.get_secret", "gh.comment"} {
+					v, err := f.svc.Gate.CheckVerb(ctx, flow.SkillIdentity{Bot: n, BotRole: config.BotRoleHome, Dispatch: f.homeOf(n).Dispatch}, verb, nil)
+					o.Verdicts[tag+" "+n+" "+verb] = err == nil && v.Allow
+				}
 			}
+		}
+		// Every verdict, on the bots' own initiative and then with a third
+		// party's request open (where autonomy, not the tier, decides).
+		verdicts("own")
+		for _, n := range names {
+			f.deliver(t, Event{Bot: n, Source: "chat.dm", Requester: "chat:U8", Title: "please"})
+		}
+		verdicts("third-party")
+		for _, n := range names {
 			for _, m := range names {
 				o.Linked[n+">"+m] = f.cfg.BotLinked(n, m)
 			}

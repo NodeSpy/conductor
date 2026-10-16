@@ -138,9 +138,7 @@ func (r *Repo) Commit(ctx context.Context, id Ident, e Edit) (head string, chang
 		if !r.trackedLocked(ctx, from) {
 			return "", false, fmt.Errorf("no file %s", from)
 		}
-		if _, err := os.Lstat(filepath.Join(r.Dir, to)); err == nil {
-			return "", false, fmt.Errorf("%s already exists", to)
-		}
+		// (git mv refuses an existing destination itself.)
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(r.Dir, to)), 0o700); err != nil {
 			return "", false, err
 		}
@@ -196,16 +194,10 @@ func (r *Repo) trackedLocked(ctx context.Context, path string) bool {
 }
 
 // revertableLocked lists the files a commit touched, refusing one that
-// touched anything outside the repo's writable layout (the first commit's
-// README, say) or a merge.
+// touched anything outside the repo's writable layout — which refuses the
+// repo's first commit (it holds the README) — or none (diff-tree lists no
+// files for a merge, so a merge is refused here too).
 func (r *Repo) revertableLocked(ctx context.Context, sha string) ([]string, error) {
-	parents, _ := r.git(ctx, r.Dir, "rev-list", "--parents", "-n", "1", sha)
-	switch n := len(strings.Fields(parents)) - 1; {
-	case n == 0:
-		return nil, fmt.Errorf("commit %s is the repo's first commit — not revertable", short(sha))
-	case n > 1:
-		return nil, fmt.Errorf("commit %s is a merge — not revertable", short(sha))
-	}
 	out, err := r.git(ctx, r.Dir, "diff-tree", "--no-commit-id", "--name-only", "-r", "--no-renames", sha)
 	if err != nil {
 		return nil, err

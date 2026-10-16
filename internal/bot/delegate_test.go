@@ -239,6 +239,24 @@ func TestDelegationNeverUpgradesTrust(t *testing.T) {
 		t.Fatalf("a tainted delegator's own task was untainted: %+v", bc)
 	}
 
+	// A delegator tainted by something MORE trusted than the case's requester
+	// (a proactive finding is open) still hands on the third party's class.
+	pf := newTeamFixture(t, nil)
+	if err := pf.st.UpdateBot("a", func(r *store.BotRecord) error {
+		if r.Cases == nil {
+			r.Cases = map[string]*store.Case{}
+		}
+		r.Cases["c900"] = &store.Case{ID: "c900", Title: "finding", Status: "open", Source: "proactive", Requester: "sweep x1", RequesterClass: ReqProactive}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	uc := pf.deliver(t, Event{Bot: "a", Source: "chat.mention", Requester: "chat:U3", Title: "restart web"})
+	bc, _ = pf.delegate(t, "a", "b", uc, "restart web")
+	if bc.RequesterClass != ReqUser || bc.Requester != "chat:U3" {
+		t.Fatalf("a third party's request took the delegator's (more trusted) taint: %+v", bc)
+	}
+
 	// An untainted delegator keeps an operator's request the operator's,
 	// re-checked at the recipient (op is an operator of both a and b)…
 	h := newTeamFixture(t, nil)
@@ -287,6 +305,8 @@ func TestDelegatedProvenance(t *testing.T) {
 		{"operator, tainted by a user", "op", ReqOperator, ReqUser, "chat:U1", "chat:U1", ReqUser},
 		{"event, tainted by a peer", "", ReqEvent, ReqPeer, "bot:x", "bot:x", ReqPeer},
 		{"user, untainted", "chat:U2", ReqUser, ReqBot, "", "chat:U2", ReqUser},
+		{"user, tainted by something more trusted", "chat:U2", ReqUser, ReqProactive, "sweep x1", "chat:U2", ReqUser},
+		{"peer, tainted by an event", "bot:x", ReqPeer, ReqEvent, "", "bot:x", ReqPeer},
 		{"own initiative", "", ReqBot, ReqBot, "", "bot:a", ReqPeer},
 		{"own initiative, proactive taint", "", ReqBot, ReqProactive, "sweep x1", "sweep x1", ReqProactive},
 		{"unknown class", "who", "weird", ReqBot, "", "who", ReqUser},
