@@ -23,8 +23,8 @@ replaceable at any time; continuity lives on disk:
 | layer | contents | where |
 |---|---|---|
 | charter | identity, scope, escalation policy, autonomy tiers | `bots:` config — the bot can never write it |
-| knowledge | infra map, runbooks, learned facts | the bot's **memory repo** (git) |
-| episodic log | past cases, actions, outcomes | the memory repo |
+| knowledge | infra map, runbooks, what to watch, learned facts — [typed documents](#content-kinds) | the bot's **memory repo** (git) |
+| log | past cases, actions, outcomes | the memory repo's `log/` |
 | case ledger | open events, proposals awaiting approval, running workers, the home session, the inbox, spend | `bots.json` in conductor's state dir |
 
 Each bot is isolated: its own memory repo, ledger, home session, verb policy,
@@ -107,7 +107,8 @@ Its working directory is its **own worktree** of the bot's memory repo
 runbooks directly. It writes memory only through conductor:
 
 ```
-conductor bot remember --path knowledge/db.md --text "…" [--append]
+conductor bot kinds                                                     # the document kinds and their schemas
+conductor bot remember --kind knowledge --title "DB primary" --text "<document>" [--append]
 conductor bot episode  --case c12 --text "…"
 conductor bot recall   <words>
 conductor bot cases | case open|note|close
@@ -302,7 +303,7 @@ the bot's memory says is worth watching, and reports findings through
   anywhere (`on: conductor.bot_notify` → `slack.post`). A known key adds a
   note to its case, and notifies again only when it got worse past the
   threshold. Findings below the threshold are recorded in the ledger and the
-  memory repo (`episodes/proactive/…`) and stay quiet. **A sweep with no
+  memory repo (`log/proactive/…`) and stay quiet. **A sweep with no
   findings is one ledger line** and nothing else.
 - **Bounded.** No sweep starts during quiet hours, while another sweep runs, or
   past the budget. The budget is in **units** — `max_runs_per_day`,
@@ -415,6 +416,72 @@ teams:
 **Persistent sub-bots** (a bot creating a long-lived helper bot) are
 not supported: bots are operator config, which no bot can write. Declare
 a second bot yourself and link it as a peer, or use ephemeral workers.
+
+## Content kinds
+
+Every file in a memory or knowledge repo is a **typed document**: a kind
+with a fixed home, a path derived from a slug, and a YAML frontmatter schema.
+Conductor checks all of it on **every** write — a bot's `remember`, conductor's
+own log and handoff entries, an operator's edits, a promotion landing in a
+team's repo — at one chokepoint. Nothing is written anywhere else.
+
+| kind | home | frontmatter | written by |
+|---|---|---|---|
+| **knowledge** | `knowledge/` | `title`, `applies_to` (list), `evidence`, `confidence` (low \| medium \| high) | the bot (its memory) or an operator; a team's: an operator or a promotion |
+| **runbook** | `runbooks/` | `title`, `when_to_use`, `prerequisites` (list), `steps` (an ordered list), `verification`, `rollback`, `owner` | as knowledge |
+| **watch** | `watch/` | `what`, `signal`, `threshold`, `why` | as knowledge |
+| **log** | `log/` (`episodes/`: older entries, read-only) | `title`, `case` or `sweep` | conductor, per case (`conductor bot episode`); an operator may **annotate** or **flag wrong**, never rewrite |
+| **handoff** | `handoff/` | `session` | conductor only (`conductor bot handoff`) |
+
+Every field is required except `applies_to`, `prerequisites`, and the log's
+`case`/`sweep`. `conductor bot kinds` (a session) or
+`conductor bot knowledge|memory kinds <team|bot>` (an operator) prints each
+kind's home, path rule, writers, fields and a skeleton.
+
+- **Paths are derived**: `<home>/<slug>.md`, the slug from `--slug` or the title
+  (a watch: its `what`). A document of one kind cannot be written in another's
+  home (`--kind runbook` on a `knowledge/` path is refused), and sub-paths are
+  allowed only in a collection with `free_paths: true`.
+- **Schema errors are precise**: every missing field, wrong type, bad enum
+  value and unknown field, in one message with the kind's field list.
+- **Watch is a directory**, one document per thing to watch. Each item then has
+  its own frontmatter, history and revert, and nothing has to parse several
+  items out of one file.
+
+**Custom collections** add kinds of your own, on a bot (its memory) or a team
+(its knowledge repo), or shipped by a pack and used with `from:`:
+
+```yaml
+teams:
+  platform:
+    collections:
+      postmortems:
+        dir: postmortems
+        fields:
+          title:    { type: string, required: true }
+          severity: { type: enum, values: [sev1, sev2, sev3], required: true }
+          action_items: { type: list }
+        template: "## Timeline\n\n## Cause\n\n## Follow-ups\n"
+        free_paths: false
+        writers: [operator, proposal]      # a team's: operator, proposal; a bot's: operator, bots
+bots:
+  platform-sre:
+    collections:
+      postmortems: { from: .conductor/packs/platform-sre/collections/postmortems.yaml }
+```
+
+Field types: `string` (one line), `text`, `list`, `steps` (a non-empty list),
+`enum` (with `values:`), `number`, `bool`. A collection cannot take a built-in
+kind's home, or overlap another collection.
+
+**Existing memory is never deleted.** A seed (`seed_dir`) copies only valid
+documents of a kind and reports the rest. At start, conductor reports every
+file that is not a valid document — outside every kind's home (unmapped), or
+failing its kind's schema — in its log and the `bot_memory_inventory` audit
+event. Those files stay readable; the next write to one must be a valid
+document. `ls` shows each file's kind and status (`ok`, `invalid`, `legacy`,
+`unmapped`). Older `episodes/` entries are read as the log's legacy home:
+recall and consolidation still see them.
 
 ## Folders
 
@@ -587,12 +654,18 @@ An operator writes a team's knowledge repo, or a bot's memory repo,
 conductor bot knowledge ls platform                      # its files, and the head to write against
 conductor bot knowledge cat platform knowledge/databases.md
 conductor bot knowledge put platform knowledge/databases.md --from-file db.md --base 3f2a9c1 -m "the primary moved"
-conductor bot knowledge mv  platform knowledge/databases.md knowledge/data/stores.md --base 7d1e0b4
+conductor bot knowledge new platform --kind runbook --title "DB failover" --field when_to_use="the primary is down" \
+    --field 'steps=[promote the replica, repoint the app]' --field verification="writes succeed" \
+    --field rollback="repoint back" --field owner=platform-data --base 3f2a9c1
+conductor bot knowledge mv  platform knowledge/databases.md knowledge/data-stores.md --base 7d1e0b4
 conductor bot knowledge rm  platform knowledge/old.md --base 9a4b691
-conductor bot knowledge log platform [knowledge/data/stores.md]   # per repo, or per file (following moves)
+conductor bot knowledge log platform [knowledge/data-stores.md]   # per repo, or per file (following moves)
+conductor bot knowledge ls platform --kind runbook                # one kind; every file shows its kind and status
 conductor bot knowledge revert platform 9a4b691 --base c0ffee1    # undo one commit, as a new commit
 
-conductor bot memory put|rm|mv|revert|ls|cat|log platform-sre …   # the same for a bot's memory [--case <id>]
+conductor bot memory new|put|rm|mv|revert|ls|cat|log|kinds platform-sre …   # the same for a bot's memory [--case <id>]
+conductor bot memory annotate platform-sre log/2026/10/…-c12-….md --text "the cache, not the db" --base …
+conductor bot memory flag     platform-sre log/2026/10/…-c12-….md --text "wrong root cause" --base …
 ```
 
 - **Only an operator does this.** The ops live on the operator control socket;

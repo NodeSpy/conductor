@@ -263,6 +263,33 @@ wraps the same three.
   proposal keeps `ProposedSHA256` and `EditedBy`. `OnDecision` fences an
   operator's reason as `OPERATOR REASON`.
 
+## Content kinds
+
+`internal/bot/kinds.go`, `internal/config/collections.go`. A repo's kinds are
+the built-ins plus its collections, computed from config on each use (so a
+reload applies). One chokepoint, `Kinds.CheckWrite(path, text, writer,
+wantKind)`, runs on what the file will hold: the kind's home (legacy homes
+read-only), its path rule (slug, or `free_paths`), the writer (operator, bots,
+proposal, system), the named kind, and the frontmatter schema.
+
+- `Repo.WriteIdent` (bots, conductor, promotions) and `Repo.Commit` (operator
+  put, mv, revert) both call it. Promotions are also checked when proposed,
+  against the team repo's kinds, so a malformed document is refused with its
+  schema errors before it is a proposal.
+- **Writers.** log and handoff are `system`. Conductor composes their paths and
+  frontmatter (`Repo.AppendLog`). An operator's only touch on the log is
+  `annotate`/`flag`, which append a note (and set `flagged_wrong`) without
+  rewriting history; a revert that would change a log entry is refused by
+  the same writer check.
+- **Watch** is a directory, not entries in `watch.md`. One document per item
+  gives each its own frontmatter, history and revert, and the chokepoint stays
+  one rule per file.
+- **Migration** never deletes. `episodes/` is the log's legacy home, still
+  read, searched and consolidated. A seed copies only valid documents (the
+  rest go into `SeedSkipped`). `Repo.Inventory` classifies every file (`ok`,
+  `invalid`, `legacy`, `unmapped`); conductor reports it at start and `ls`
+  shows it.
+
 ## Folders: display only
 
 `folder:` on a bot or a team (`internal/config/folders.go`) exists so an
