@@ -97,6 +97,25 @@ Plan (commit after each step):
   (visible close, Esc, Back for full-page flows); copy check for numbers contradicting data; screenshot review
   of every route/dialog at both viewports and themes.
 
+## After the audit: adopt the brand/design system (queued)
+
+Source: `origin/design/brand` (worktree `~/Projects/paseo-home/worktrees/2ccqu2oy/design-brand`, folder `design/brand/`):
+live book http://100.119.192.38:8768/system.html, `BRAND.md`, `tokens/tokens.json` + generated `tokens/tokens.css`,
+a compatibility file mapping prototype vars → tokens, logo assets in `assets/` (working mark **Fermata**; keep
+the asset swap in one place). One clean pass: copy tokens.css + fonts, map everything onto tokens, then **remove
+the compatibility layer**. Colours semantic only (no raw hex in screens; accent-as-text → text-safe accent token;
+status = glyph + word with the 9 status glyphs; Needs you = accent + diamond). Type: Instrument Serif/Sans/
+Martian Mono at the system scale, body 14px, 11px floor (mono 11.5); **italic serif only for human titles ≤5
+words at ≥20px**, generated titles (proposals, runs, cases) in sans with a mono detail line. Density
+Comfortable/Compact → `[data-density]`. Radii/borders/elevation/z-index/motion from tokens;
+prefers-reduced-motion everywhere. Lucide + status glyphs at system sizes. Components match every state. Copy per
+the voice guide + naming table (plain word first, term second, risk plainly, no issue numbers). Logo Fermata +
+favicon. Default theme follows the OS, manual choice persisted. Then contrast check, full suite, visual QA (both
+themes, both densities, desktop + phone), update the doc, AUDIT-RESPONSE.md, HANDOFF.md.
+
+**Final report ends with a line containing only `DESIGN SYSTEM ADOPTED`** (replaces `AUDIT FIXES COMPLETE`);
+the reviewers re-review once both the audit fixes and the adoption are done.
+
 ## Queued directions (status)
 
 | Direction | Status |
