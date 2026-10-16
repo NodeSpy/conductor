@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en" data-density="comfortable">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>conductor · design system</title>
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="fonts/InstrumentSans-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/MartianMono-wdth.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="fonts/fonts.css">
+<link rel="stylesheet" href="tokens/tokens.css">
+<link rel="stylesheet" href="book/components.css">
+<link rel="stylesheet" href="book/book.css">
+<script>
+  // Restore the reader's toggles before first paint.
+  for (const k of ['theme', 'density', 'motion']) { const v = localStorage.getItem('cds-' + k); if (v) document.documentElement.dataset[k] = v; }
+</script>
+</head>
+<body class="c-root">
+<header class="top">
+  <a class="brand" href="index.html" title="Brand directions">
+    <svg viewBox="3 7 26 18" aria-hidden="true"><path fill="var(--color-text-primary)" d="M3 21a13 14 0 0 1 26 0h-3.2a9.8 10 0 0 0-19.6 0z"/><circle cx="16" cy="21" r="4" fill="var(--color-accent-default)"/></svg>
+    <b>conductor</b><span>Design system</span>
+  </a>
+  <div class="grow"></div>
+  <div class="ctl"><span>Theme</span><div class="c-seg" data-ctl="theme"><span data-v="">Auto</span><span data-v="dark">Dark</span><span data-v="light">Light</span></div></div>
+  <div class="ctl"><span>Density</span><div class="c-seg" data-ctl="density"><span data-v="comfortable">Comfortable</span><span data-v="compact">Compact</span></div></div>
+  <div class="ctl"><span>Motion</span><div class="c-seg" data-ctl="motion"><span data-v="">Auto</span><span data-v="reduced">Reduced</span></div></div>
+  <nav class="files"><a href="BRAND.md">BRAND.md</a><a href="tokens/tokens.json">tokens.json</a><a href="tokens/tokens.css">tokens.css</a></nav>
+</header>
+
+<div class="shell">
+  <nav class="toc" id="toc" aria-label="Contents"></nav>
+  <main id="book">
+    <div class="hero" id="principles">
+      <div class="kick">conductor · design system · v1 · October 2026</div>
+      <h1>Calm enough to trust near production.</h1>
+      <p>This is the single source of truth for the README and docs, the dashboard and every surface after them: colour, type, space, shape, motion, components, words and the logo. Everything on this page is rendered live from <a href="tokens/tokens.css">tokens.css</a>, so what you see is what ships.</p>
+      <p>The system is independent of the logo. The working mark is Fermata. Switching to another direction swaps the logo files and, at most, the accent ramp (see <a href="#logo-directions">what changes per direction</a>).</p>
+      <div class="principles">
+        <div><b>Accent means you</b><span>Ember appears only where a person is needed or can act: the needs-you count, the primary button, the focus ring and the logo’s dot. Everything else is ink and paper.</span></div>
+        <div><b>Two voices</b><span>The italic serif is the human voice, kept to short titles. The mono is the machine’s voice, for ids, digests, times and YAML. The sans carries everything in between.</span></div>
+        <div><b>State is never colour alone</b><span>Every status pairs a colour with a glyph and a word, so it reads in one colour, on a phone in sunlight, and to colour-blind operators.</span></div>
+        <div><b>Say the risk plainly</b><span>Plain words come first and the technical term second. Hashes go under “Technical details”. Before you sign anything, conductor tells you what will change and whether it can be undone.</span></div>
+      </div>
+    </div>
+    <div id="chapters"></div>
+    <div class="foot"><span>Fonts: Instrument Serif, Instrument Sans and Martian Mono (SIL OFL 1.1). Icons: Lucide (ISC) and our own status glyphs.</span><span>Generated from tokens/tokens.json · branch design/brand</span></div>
+  </main>
+</div>
+<script type="module" src="book/book.js"></script>
+</body>
+</html>

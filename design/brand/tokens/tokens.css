@@ -799,7 +799,7 @@
   --value-source-segment-fg: var(--color-text-secondary);
   --value-source-segment-active-bg: var(--color-bg-raised);
   --value-source-segment-active-fg: var(--color-text-primary);
-  --value-source-ref-fg: var(--color-text-accent);
+  --value-source-ref-fg: var(--color-text-primary);
   --choice-card-bg: var(--color-bg-surface);
   --choice-card-border: var(--color-border-default);
   --choice-card-border-hover: var(--color-border-strong);

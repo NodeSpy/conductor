@@ -1,7 +1,7 @@
 // Generates CSS and a contrast report from tokens/tokens.json (the source of truth).
 //
 //   node tools/tokens.mjs          writes tokens/tokens.css, tokens/prototype-compat.css,
-//                                  tokens/contrast.json and tokens/CONTRAST.md
+//                                  tokens/contrast.json, tokens/CONTRAST.md and tokens/migration.json
 //   node tools/tokens.mjs --check  only verifies contrast; exits 1 if any declared pair fails
 //
 // Every token that is used as text or as a control edge declares where it sits in
@@ -297,6 +297,7 @@ if (!checkOnly) {
   fs.writeFileSync(path.join(dir, 'tokens.css'), css);
   fs.writeFileSync(path.join(dir, 'prototype-compat.css'), compat);
   fs.writeFileSync(path.join(dir, 'contrast.json'), JSON.stringify(results, null, 1) + '\n');
+  fs.writeFileSync(path.join(dir, 'migration.json'), JSON.stringify(MIGRATION.map(([from, to, note]) => ({ from, to, note })), null, 1) + '\n');
   fs.writeFileSync(path.join(dir, 'CONTRAST.md'), md);
 }
 console.log(`${tokens.size} tokens · ${results.length} contrast pairs · ${fails.length} failing`);

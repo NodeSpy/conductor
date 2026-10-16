@@ -1,0 +1,252 @@
+[
+ {
+  "from": "--font-ui",
+  "to": "--font-family-sans",
+  "note": ""
+ },
+ {
+  "from": "--font-title",
+  "to": "--font-family-serif",
+  "note": "Titles: use the --type-h1 / --type-h2 shorthands, which also set italic, size and tracking."
+ },
+ {
+  "from": "--font-mono",
+  "to": "--font-family-mono",
+  "note": "Add font-stretch: var(--dense-mono-stretch)% so compact density narrows it."
+ },
+ {
+  "from": "--r-xs",
+  "to": "--radius-badge",
+  "note": ""
+ },
+ {
+  "from": "--r-sm",
+  "to": "--radius-control",
+  "note": ""
+ },
+ {
+  "from": "--r",
+  "to": "--radius-card",
+  "note": ""
+ },
+ {
+  "from": "--r-lg",
+  "to": "--radius-overlay",
+  "note": ""
+ },
+ {
+  "from": "--rail-w",
+  "to": "--size-rail",
+  "note": "Now density-dependent (224 → 200 compact)."
+ },
+ {
+  "from": "--strip-h",
+  "to": "--size-strip",
+  "note": "Now density-dependent (34 → 30 compact)."
+ },
+ {
+  "from": "--ease",
+  "to": "--motion-easing-out",
+  "note": ""
+ },
+ {
+  "from": "--t-fast",
+  "to": "--motion-duration-fast",
+  "note": "Drops to 0 under reduced motion."
+ },
+ {
+  "from": "--t",
+  "to": "--motion-duration-base",
+  "note": "220 → 200ms."
+ },
+ {
+  "from": "--bg",
+  "to": "--color-bg-canvas",
+  "note": ""
+ },
+ {
+  "from": "--bg-1",
+  "to": "--color-bg-rail",
+  "note": ""
+ },
+ {
+  "from": "--bg-2",
+  "to": "--color-bg-surface",
+  "note": ""
+ },
+ {
+  "from": "--bg-3",
+  "to": "--color-bg-raised",
+  "note": ""
+ },
+ {
+  "from": "--bg-4",
+  "to": "--color-bg-overlay",
+  "note": ""
+ },
+ {
+  "from": "--line",
+  "to": "--color-border-subtle",
+  "note": ""
+ },
+ {
+  "from": "--line-2",
+  "to": "--color-border-default",
+  "note": "Inputs and checkboxes should use --color-border-control (3:1) instead."
+ },
+ {
+  "from": "--line-3",
+  "to": "--color-border-strong",
+  "note": ""
+ },
+ {
+  "from": "--ink",
+  "to": "--color-text-primary",
+  "note": ""
+ },
+ {
+  "from": "--ink-2",
+  "to": "--color-text-secondary",
+  "note": "Dark: #b6b1a2 → #c9c2b0 (AAA on every surface)."
+ },
+ {
+  "from": "--ink-3",
+  "to": "--color-text-tertiary",
+  "note": "Changed for AA: dark #807c6f → #aea796, light #847f71 → #666256. The old values failed 4.5:1 on cards."
+ },
+ {
+  "from": "--ink-4",
+  "to": "--color-text-disabled",
+  "note": "Disabled only. Was also used for placeholder-like text: use --color-text-tertiary."
+ },
+ {
+  "from": "--accent",
+  "to": "--color-accent-default",
+  "note": "Fills only. Where it colours text (links, .cell.alert, crumbs:hover), use --color-text-accent: the light fill is 3.8:1 on paper."
+ },
+ {
+  "from": "--accent-2",
+  "to": "--color-accent-hover",
+  "note": ""
+ },
+ {
+  "from": "--accent-ink",
+  "to": "--color-text-on-accent",
+  "note": ""
+ },
+ {
+  "from": "--accent-wash",
+  "to": "--color-accent-subtle",
+  "note": ""
+ },
+ {
+  "from": "--ok",
+  "to": "--color-status-success-fg",
+  "note": "Dots and bars: --color-status-success-solid."
+ },
+ {
+  "from": "--run",
+  "to": "--color-status-running-fg",
+  "note": "Dots and bars: --color-status-running-solid."
+ },
+ {
+  "from": "--wait",
+  "to": "--color-status-warning-fg",
+  "note": "Dots and bars: --color-status-warning-solid."
+ },
+ {
+  "from": "--fail",
+  "to": "--color-status-danger-fg",
+  "note": "Dots and bars: --color-status-danger-solid."
+ },
+ {
+  "from": "--idle",
+  "to": "--color-status-neutral-fg",
+  "note": ""
+ },
+ {
+  "from": "--shadow",
+  "to": "--color-status-info-fg",
+  "note": "Shadow mode is shown as info (observes, never acts) with its own glyph."
+ },
+ {
+  "from": "--ok-wash",
+  "to": "--color-status-success-bg",
+  "note": ""
+ },
+ {
+  "from": "--run-wash",
+  "to": "--color-status-running-bg",
+  "note": ""
+ },
+ {
+  "from": "--wait-wash",
+  "to": "--color-status-warning-bg",
+  "note": ""
+ },
+ {
+  "from": "--fail-wash",
+  "to": "--color-status-danger-bg",
+  "note": ""
+ },
+ {
+  "from": "--idle-wash",
+  "to": "--color-status-neutral-bg",
+  "note": ""
+ },
+ {
+  "from": "--shadow-wash",
+  "to": "--color-status-info-bg",
+  "note": ""
+ },
+ {
+  "from": "--code-key",
+  "to": "--color-code-key",
+  "note": ""
+ },
+ {
+  "from": "--code-str",
+  "to": "--color-code-string",
+  "note": ""
+ },
+ {
+  "from": "--code-num",
+  "to": "--color-code-number",
+  "note": ""
+ },
+ {
+  "from": "--code-com",
+  "to": "--color-code-comment",
+  "note": "Light: #9a9482 → #666256 (comments were 2.9:1)."
+ },
+ {
+  "from": "--code-anchor",
+  "to": "--color-code-anchor",
+  "note": ""
+ },
+ {
+  "from": "--code-bool",
+  "to": "--color-code-bool",
+  "note": ""
+ },
+ {
+  "from": "--dot",
+  "to": "--color-decor-dot",
+  "note": ""
+ },
+ {
+  "from": "--elev",
+  "to": "--shadow-2",
+  "note": ""
+ },
+ {
+  "from": "--elev-pop",
+  "to": "--shadow-3",
+  "note": "The old value included a 1px ring; add border: 1px solid var(--color-border-default)."
+ },
+ {
+  "from": "--grain-op",
+  "to": "--opacity-grain",
+  "note": ""
+ }
+]
