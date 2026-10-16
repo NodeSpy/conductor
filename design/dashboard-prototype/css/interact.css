@@ -1,0 +1,114 @@
+/* Interactive pieces added when the prototype became fully clickable:
+ * forms and sheets, menus, editors, diffs, disabled-with-reason controls. */
+
+/* disabled with a reason (aria-disabled keeps the tooltip working) */
+.btn[aria-disabled="true"], .icon-btn[aria-disabled="true"], .seg button[aria-disabled="true"], .chipsel[aria-disabled="true"], .menu button[aria-disabled="true"], a[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
+.btn[aria-disabled="true"]:hover { background: inherit; }
+.reason-flash { z-index: 200; max-width: 280px; }
+.link { color: var(--accent); border-bottom: 1px dotted color-mix(in srgb, var(--accent) 50%, transparent); }
+.link:hover { border-bottom-style: solid; }
+button.link { background: none; border: 0; padding: 0; font: inherit; cursor: pointer; }
+
+/* strip: staged config changes */
+.strip .cell.staged { color: var(--run); }
+.strip .cell.staged b { color: var(--run); }
+.strip .cell.staged svg { width: 12px; height: 12px; margin-right: 4px; }
+
+/* forms */
+.field > label .req { color: var(--accent); margin-left: 2px; }
+.field > label .opt { color: var(--ink-4); font-weight: 400; font-size: 10.5px; margin-left: 6px; text-transform: none; letter-spacing: 0; }
+.field .ferr { color: var(--fail); font-size: 11.5px; min-height: 0; }
+.field .ferr:empty { display: none; }
+.field.bad .input, .field.bad .select, .field.bad .textarea, .field.bad .listed { border-color: var(--fail); box-shadow: 0 0 0 3px var(--fail-wash); }
+.form-sec { margin-top: 6px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.cbx { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
+.ack { align-items: flex-start; padding: 10px; border: 1px solid color-mix(in srgb, var(--wait) 45%, var(--line)); border-radius: var(--r-sm); background: var(--wait-wash); }
+.ack .cbx { margin-top: 2px; flex: none; }
+.listed { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; padding: 4px; border: 1px solid var(--line-2); border-radius: var(--r-sm); background: var(--bg-1); min-height: 34px; }
+.listed .list-add, .listed .list-add-sel { flex: 1; min-width: 120px; height: 24px; border: 0; background: transparent; box-shadow: none; padding: 0 6px; }
+.listed .btn.sm { height: 24px; }
+.chip-x { display: inline-flex; align-items: center; gap: 2px; height: 24px; padding: 0 2px 0 8px; border-radius: 12px; background: var(--bg-4); border: 1px solid var(--line-2); font-size: 11px; }
+.chip-x button { width: 20px; height: 20px; display: grid; place-items: center; border: 0; background: none; color: var(--ink-3); cursor: pointer; border-radius: 50%; }
+.chip-x button:hover { background: var(--fail-wash); color: var(--fail); }
+.chip-x button svg { width: 11px; height: 11px; }
+.kvedit { display: flex; flex-direction: column; gap: 5px; }
+.kvrow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 30px; gap: 5px; align-items: center; }
+.modal .modal-body.stack { max-height: min(70vh, 720px); overflow: auto; }
+.sheet-grip { display: block; width: 40px; height: 4px; border-radius: 2px; background: var(--line-3); margin: 8px auto 0; }
+
+/* popover menu */
+.menu { position: fixed; z-index: 120; min-width: 200px; background: var(--bg-3); border: 1px solid var(--line-2); border-radius: var(--r); box-shadow: var(--elev-pop); padding: 4px; animation: pop .14s var(--ease); }
+.menu button { display: flex; width: 100%; gap: 9px; align-items: center; padding: 8px 10px; border: 0; background: none; color: var(--ink-2); font: inherit; font-size: 12.5px; text-align: left; border-radius: var(--r-sm); cursor: pointer; }
+.menu button:hover { background: var(--bg-4); color: var(--ink); }
+.menu button svg { width: 14px; height: 14px; color: var(--ink-3); }
+.menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+.menu.as-sheet { left: 0; right: 0; bottom: 0; top: auto; border-radius: 16px 16px 0 0; padding: 10px 10px calc(10px + env(safe-area-inset-bottom)); }
+.menu.as-sheet button { padding: 13px 12px; font-size: 14px; }
+
+/* config */
+.sec-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.sec-chip { display: flex; align-items: center; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); padding-left: 10px; }
+.sec-chip > a.grow { padding: 7px 0; font-size: 12.5px; }
+.sec-chip:hover { border-color: var(--line-3); }
+.sec-chip .icon-btn { width: 28px; height: 28px; }
+.hist .hist-diff { margin-top: 8px; }
+.raw-grid { grid-template-columns: minmax(0, 1fr) 300px; }
+
+/* editable code */
+.ced { position: relative; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.7; }
+.ced .ced-hl { margin: 0; border: 0; border-radius: 0; min-height: 100%; position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.ced .ced-ta { position: relative; display: block; width: 100%; margin: 0; border: 0; outline: 0; resize: vertical; background: transparent; color: transparent; caret-color: var(--ink); font: inherit; line-height: inherit; tab-size: 2; padding: 8px 14px 8px 52px; white-space: pre; overflow: auto; letter-spacing: normal; word-spacing: normal; }
+.ced .ced-ta::selection { background: color-mix(in srgb, var(--run) 30%, transparent); color: transparent; }
+.ced .ced-ta:focus { box-shadow: inset 0 0 0 1px var(--line-3); }
+.ced[data-readonly] .ced-ta { caret-color: transparent; }
+.ced .code .ln { padding-right: 14px; }
+.panel > .ced-scroll .ced, .panel > .ced { border-top: 0; }
+
+/* diffs */
+.diff .split { display: grid; grid-template-columns: 1fr 1fr; }
+.diff .split > div + div { border-left: 1px solid var(--line); }
+.diff .sl { display: grid; grid-template-columns: 38px 1fr; white-space: pre; }
+.diff .sl span:first-child { color: var(--ink-4); text-align: right; padding-right: 8px; user-select: none; }
+.diff .sl.add { background: var(--ok-wash); } .diff .sl.del { background: var(--fail-wash); } .diff .sl.gap { background: repeating-linear-gradient(-45deg, transparent 0 4px, var(--bg-3) 4px 6px); }
+.diff.whole { max-height: 560px; }
+
+/* filters that filter */
+.filters .count-note { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--ink-3); }
+.chipsel select { all: unset; cursor: pointer; }
+.chip-select { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px dashed var(--line-2); border-radius: 20px; color: var(--ink-2); font-size: 12px; }
+.chip-select.on { border-style: solid; border-color: var(--accent); background: var(--accent-wash); color: var(--ink); }
+.chip-select svg { width: 12px; height: 12px; }
+.chip-select select { appearance: none; background: transparent; border: 0; color: inherit; font: inherit; padding-right: 2px; cursor: pointer; }
+.chip-select select:focus { outline: none; }
+.chip-select:focus-within { box-shadow: 0 0 0 3px var(--accent-wash); }
+tr.hidden, .item.hidden, .hidden { display: none !important; }
+.empty-row td { text-align: center; color: var(--ink-3); padding: 22px; }
+
+/* cards with actions */
+.card-actions { display: flex; gap: 4px; margin-left: auto; }
+.add-card { display: grid; place-items: center; border-style: dashed; min-height: 150px; }
+.member-card .row .btn.sm { flex: none; }
+.danger-text { color: var(--fail); }
+
+/* phone */
+@media (max-width: 720px) {
+  .raw-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .raw-side { order: -1; }
+  .raw-side .tree { max-height: 160px !important; }
+  .kvrow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 30px; }
+  .filters .input-icon { width: 100%; }
+  .filters { gap: 6px; }
+  .page-head .actions { flex-wrap: wrap; }
+  .page-head .actions .btn { flex: 1 1 auto; justify-content: center; }
+  .btn, .icon-btn { min-height: 34px; }
+  .btn.sm { min-height: 30px; }
+  .seg button { min-height: 32px; }
+  .diff .split { grid-template-columns: 1fr; }
+  .diff .split > div + div { border-left: 0; border-top: 1px solid var(--line); }
+  .modal .modal-body.stack { max-height: 66vh; }
+  .modal-foot { flex-wrap: wrap; }
+  .modal-foot .btn { flex: 1 1 auto; justify-content: center; }
+  .tbl.responsive td.num { justify-content: flex-end; }
+  .card-actions { flex-wrap: wrap; }
+  .apply-steps .as { min-width: 112px; padding: 8px 10px; font-size: 11.5px; }
+}

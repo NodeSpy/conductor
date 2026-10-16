@@ -322,4 +322,228 @@ Primary Postgres for the platform services (acme/api, acme/web).
     { id: 'cfg-20261014-2205', at: m(2100), who: 'file edit (external)', summary: 'detected on reload: connectors.pd added', status: 'backup' },
     { id: 'cfg-20261013-1730', at: m(3400), who: 'ops (dashboard)', summary: 'packs.review.steps.review-flow/review.model my-fleet', status: 'backup' },
   ];
+  /* ===================================================================
+   * Config nodes. Everything editable carries the node it is written as in
+   * config.yaml, so the pipeline can diff, validate and apply it. Runtime
+   * status (health, counts) stays beside it and is never written.
+   * =================================================================== */
+  const V = (vault, key) => `{{ vault "${vault}" "${key}" }}`;
+  const CC = {
+    gh: { use: 'github', app_id: 123456, private_key: V('house', 'gh-app-key'), webhook_secret: V('house', 'gh-webhook'), webhook: 'smee', sweep: 'adaptive 30s', repos: ['acme/*'] },
+    'slack-ops': { use: 'slack', bot_token: V('op', 'Agents/Slack/bot-token'), app_token: V('op', 'Agents/Slack/app-token'), mode: 'socket', default_channel: '#ops' },
+    pd: { use: 'pagerduty', token: V('store', 'conductor/pd'), webhook_path: '/pd', services: ['PAPI01', 'PWEB02'] },
+    kv: { use: 'kv', store: 'state' },
+    'tf-plan': { use: 'terraform', engine: 'tofu', role: 'READ' },
+    'tf-apply': { use: 'terraform', engine: 'tofu', role: 'WRITE' },
+    hoff: { use: 'web', listen: '127.0.0.1:8099', ttl: '30m' },
+  };
+  D.connectors.forEach((c) => (c.cfg = CC[c.name]));
+  const RC = {
+    paseo: { use: 'paseo', bin: 'paseo', default: true },
+    'claude-cli': { use: 'cli', tool: 'claude-code', isolation: { mode: 'namespace' } },
+    oc: { use: 'opencode', isolation: { mode: 'namespace' } },
+    deck: { use: 'agent-deck', wrapper: '/usr/local/bin/deck-wrap' },
+    'gpu-box': { use: 'cli', tool: 'claude-code', host: 'gpu-box', isolation: { mode: 'container' } },
+  };
+  D.runtimes.forEach((r) => (r.cfg = RC[r.name]));
+  D.hosts[0].cfg = { addr: 'gpu-box.tail0000.ts.net', user: 'conductor' };
+  D.hosts[1].cfg = { addr: '10.0.4.12', user: 'ci', env: { GOFLAGS: '-mod=mod' } };
+  D.sandboxCfg = { agents: 'on', backend: 'namespace', egress: ['registry.npmjs.org', 'proxy.golang.org', '*.pypi.org'] };
+  D.updateCfg = { auto: true, deps: true, reload: 'in place', apply: 'auto', interval: '10m' };
+  D.operatorsCfg = { ops: { ssh_key: 'ssh-ed25519 AAAAC3Nz…Example', require_device_bound: false }, oncall: { ssh_key: 'ssh-ed25519 AAAAC3Nz…Oncall' } };
+  D.vaults.forEach((v) => (v.cfg = { house: { type: 'conductor', unlock: 'creds:house' }, op: { type: 'onepassword', account: 'acme', token: 'env:OP_SERVICE_ACCOUNT_TOKEN' }, store: { type: 'pass', prefix: 'conductor' }, hcv: { type: 'hashicorp', address: 'https://vault.acme.internal:8200', mount: 'kv', token: 'env:VAULT_TOKEN' } }[v.name]));
+  D.secrets.push({ name: 'OLD_DEPLOY_KEY', ref: 'house/deploy-old', vault: 'house', set: m(90000), used: [] });
+  D.secrets.push({ name: 'LINEAR_KEY', ref: 'store/conductor/linear', vault: 'store', set: m(30000), used: [] });
+
+  const MEMBER = (name, o) => Object.assign({
+    description: '', charter_file: `members/${name}.md`, escalation: 'Page the operator if a sev1 is not mitigated in 15 minutes.', operators: ['ops'],
+    home: { rotate: { max_age: '24h', max_turns: 100 } }, worker: { runtime: 'claude-cli', timeout: '2h', max_concurrent: 4 },
+    skill: { verbs: ['kv.get', 'gh.get_*'] }, autonomy: { shadow: false, tiers: { observe: ['gh.get_*', 'kv.get'] }, promote: [], approval_ttl: '24h' },
+    peers: [], isolation: { mode: 'namespace' },
+  }, o);
+  D.members[0].cfg = MEMBER('platform-sre', { description: 'SRE for the platform services',
+    skill: { verbs: ['gh.get_*', 'kv.get', 'kv.set', 'gh.comment', 'slack-ops.post', 'terraform.apply', 'gh.delete_*'] },
+    autonomy: { shadow: false, tiers: { observe: ['gh.get_*', 'kv.get'], reversible: ['slack-ops.post'], propose: ['kv.set', 'gh.comment', 'terraform.apply'], never: ['gh.delete_*'] }, promote: ['slack-ops.post'], approval_ttl: '24h' },
+    proactive: { every: '4h', quiet_hours: '22:00-07:00', budget: { max_runs_per_day: 6, max_cost_per_day: 2.0 }, notify_at: 'high' },
+    peers: ['billing-sre'] });
+  D.members[1].cfg = MEMBER('billing-sre', { description: 'Cost and billing operations', skill: { verbs: ['kv.get', 'slack-ops.post'] },
+    autonomy: { shadow: false, tiers: { observe: ['kv.get'], propose: ['slack-ops.post'] }, promote: [], approval_ttl: '24h', spend: { per_action: 2000, per_period: 5000, period: '720h' } },
+    peers: ['platform-sre'], isolation: { mode: 'container' } });
+  D.members[2].cfg = MEMBER('web-triage', { description: 'Triage for the web app’s issues', operators: ['ops', 'oncall'], home: { rotate: { max_age: '12h', max_turns: 60 } },
+    skill: { verbs: ['gh.get_*', 'gh.label', 'gh.comment'] }, autonomy: { shadow: true, tiers: { observe: ['gh.get_*'], propose: ['gh.label', 'gh.comment'] }, promote: [], approval_ttl: '24h' } });
+  D.charters = {
+    'platform-sre': 'You are the platform services\' first-line SRE. Triage pages, investigate with read-only tools, propose fixes, and escalate per the policy below.\n\n## Proactive checks\n- error budgets for api and web\n- NAT and egress cost vs last week\n',
+    'billing-sre': 'You watch cost and billing. Forecast monthly spend, flag jumps over 20%, and never move money without an approved proposal.\n',
+    'web-triage': 'Label and route new issues on acme/web. Ask for reproduction steps when missing.\n',
+  };
+  D.identities = [
+    { id: 'member:platform-sre', allow: ['grafana.example.com', 'console.example.com'], logins: ['console.example.com'], evaluate: 'off' },
+    { id: 'agent:triage@acme/app', allow: ['app.example.com', 'docs.example.com'], logins: ['app.example.com'], evaluate: 'off' },
+    { id: 'agent:docs@acme/web', allow: ['docs.example.com'], logins: [], evaluate: 'read-only' },
+  ];
+  D.access.credentials.forEach((c) => (c.cfg = { origin: c.origin, identity: c.identity, fields: c.fields.split(', '), vault: c.vault, ref: c.ref }));
+  D.access.credentials.push({ name: 'app', origin: 'https://app.example.com', identity: 'agent:triage@acme/app', fields: 'username, password, otp, push', vault: 'op', ref: 'Agents/App/*', cfg: { origin: 'https://app.example.com', identity: 'agent:triage@acme/app', fields: ['username', 'password', 'otp', 'push'], vault: 'op', ref: 'Agents/App/*' } });
+  D.packs.forEach((p) => (p.cfg = {
+    review: { use: 'conductor-packs/pr-review-team', connectors: { github: 'gh' }, steps: { 'review-flow/review': { model: 'my-fleet' } }, triggers: { on_review_request: { enabled: true, repos: ['acme/*'] } } },
+    'house-style': { use: './packs/house-style' },
+    'sre-member': { use: 'conductor-packs/sre-member@0.9.0', hold: true, steps: { 'sweep/check': { model: 'light' } } },
+    kit: { use: 'acme/conductor-packs/kit@^1.2' },
+  }[p.name]));
+
+  /* Workflows: the YAML is the source; the list and graph are derived. */
+  const WY = {
+    'ci-fixer': `name: ci-fixer
+on: gh.check_failed
+filter: { repo: [acme/api, acme/web], not_label_any: [wip] }   # never touch drafts
+policy:
+  budget: { max_cost_usd: 2.00 }   # raised from 1.50 on 2026-10-16
+steps:
+  - id: logs
+    uses: gh.check_logs
+  - id: triage
+    model: light
+    decide:
+      state: "{{.logs.text}}"
+      questions:
+        kind: { type: choice, choices: [test_failure, flaky, infra], instructions: What kind of failure is this? }
+  - id: fix
+    if: "{{.triage.kind}} == test_failure"
+    type: agent
+    runtime: claude-cli
+    model: fixer                   # fleet: sonnet, then opus on retry
+    prompt: |
+      Fix the failing check on {{.repo}}#{{.number}}.
+      {{.logs.text}}
+  - id: test
+    use: cli
+    command: [go, test, ./...]
+  - id: push
+    uses: git.push
+  - id: comment
+    uses: gh.comment
+    options: { repo: "{{.repo}}", number: "{{.number}}", body: "Fixed in {{.push.sha}}" }
+x-owner: platform                  # unknown key: kept as written
+`,
+    'issue-triage': `name: issue-triage
+on: gh.issue_opened
+filter: { repo: [acme/api, acme/web] }
+steps:
+  - id: classify
+    type: agent
+    model: summarizer
+    checkout: none
+    prompt: |
+      Classify issue {{.repo}}#{{.number}}: "{{.title}}".
+      Answer with one label from bug, feature, question.
+  - id: label
+    uses: gh.label
+    options: { repo: "{{.repo}}", number: "{{.number}}", labels: ["{{.classify.text}}"] }
+`,
+    'dep-bump': `name: dep-bump
+on: timer.weekly                   # Mondays 06:00
+steps:
+  - id: bump
+    type: agent
+    <<: *fixer
+    prompt: Bump direct dependencies in acme/web and keep the build green.
+  - id: notify
+    uses: slack-ops.post
+    options: { channel: "#deps", text: "dep-bump opened {{.bump.text}}" }
+`,
+    alert: `name: alert
+on: [conductor.escalate, conductor.needs_input, conductor.failed]
+steps:
+  - id: post
+    uses: slack-ops.post
+    options: { channel: "#ops", text: "conductor: {{.kind}} on {{.workflow}} — {{.url}}" }
+`,
+    'assess-and-post': `name: assess-and-post
+description: "triage a PR: agent decides auto vs manual, pings a channel when manual"
+inputs:
+  repo: { type: string, required: true }
+  pr: { type: integer, required: true }
+  channel: { type: string, default: C0123456789 }
+outputs:
+  decision: "{{.triage.decision}}"
+steps:
+  - id: triage
+    type: agent
+    model: summarizer
+    checkout: none
+    output_schema: { type: object, required: [decision], properties: { decision: { enum: [auto, manual] } } }
+    prompt: "Assess {{.inputs.repo}}#{{.inputs.pr}}; decide auto vs manual."
+  - id: ping
+    if: "{{.triage.decision}} == manual"
+    uses: slack-ops.post
+    options: { channel: "{{.inputs.channel}}", text: "Needs a human: {{.inputs.repo}}#{{.inputs.pr}}" }
+`,
+    'pr-review': `# review-flow — shipped by conductor-packs/pr-review-team@1.4.2 (c81e09a)
+name: review-flow
+on: gh.review_requested
+gate: { run: [review/no-todos] }
+steps:
+  - id: fetch
+    uses: gh.pr_diff
+  - parallel:
+      - - id: lint
+          use: js
+          code: |
+            const todos = (ctx.fetch.diff.match(/TODO/g) || []).length;
+            return { todos, ok: todos === 0 };
+      - - id: review
+          type: agent
+          model: reviewer
+          prompt: "Review {{.repo}}#{{.pr}}. Diff:\\n{{.fetch.diff}}"
+  - id: post
+    uses: gh.review
+    options: { repo: "{{.repo}}", pr: "{{.pr}}", event: COMMENT, body: "{{.review.text}}" }
+`,
+    'release-notes': `# shipped by ./packs/house-style
+name: release-notes
+on: gh.release
+steps:
+  - id: draft
+    type: agent
+    model: summarizer
+    prompt: Write release notes for {{.repo}} {{.tag_name}}.
+  - id: post
+    uses: slack-ops.post
+    options: { channel: "#releases", text: "{{.draft.text}}" }
+`,
+  };
+  D.workflows.forEach((w) => { w.yaml = WY[w.name] || null; w.kind = 'trigger'; });
+  D.workflows.splice(5, 0, { name: 'assess-and-post', source: 'config', kind: 'workflow', on: 'call (reusable)', runs24: 3, ok: 1, cost24: 0.31, steps: [], yaml: WY['assess-and-post'] });
+  D.workflows.find((w) => w.name === 'pr-review').pack = 'review';
+  D.workflows.find((w) => w.name === 'release-notes').pack = 'house-style';
+
+  /* Chat per member; memory files; access; preferences; staged changes. */
+  D.chats = { 'platform-sre': D.chat, 'billing-sre': [{ who: 'member', at: m(30), text: 'Forecast for October is **$41.2k**, +6% on September. Proposal **p4** posts it to #incidents; awaiting approval.' }], 'web-triage': [] };
+  D.memory.files = {
+    'knowledge/README.md': '# Knowledge\n\nWhat platform-sre has learned about the systems it runs.\n',
+    'knowledge/db-prod-1.md': D.memory.file,
+    'knowledge/infra-map.md': '# Infra map\n\n- **api**: ECS on us-east-1, behind the shared ALB\n- **web**: EC2 ASG, launch template `web`\n',
+    'knowledge/alb.md': '# ALB\n\n`deregistration_delay` is 30s on every target group.\n',
+    'runbooks/latency.md': '# Latency\n\n1. Check p99 by route.\n2. Compare against the deploy log.\n3. ALB deregistration delay is 30s.\n',
+    'runbooks/page-triage.md': '# Page triage\n\nAcknowledge within 5 minutes; open a case per page.\n',
+    'runbooks/nat-gateway.md': '# NAT gateway\n\nCost jumps usually mean a new cross-AZ path.\n',
+    'episodes/2026-10-16-c29.md': '# c29 · api p99\n\nRegression lines up with web on the old AMI after the 14:02 scale-out.\n',
+    'episodes/proactive/2026-10-16-x4.md': '# Sweep x4\n\nNAT gateway cost +44% week over week.\n',
+    'handoff/s6.md': '# Hand-off s6 → s7\n\nOpen: c24 (cache TTL), c27 (NAT cost).\n',
+  };
+  D.memory.open = 'knowledge/db-prod-1.md';
+  D.passkeys = [
+    { id: 'pk1', name: 'laptop · Touch ID', rp: 'ops-box.tail0000.ts.net', kind: 'platform authenticator', used: m(4), count: 212, bound: true },
+    { id: 'pk2', name: 'phone · Face ID', rp: 'ops-box.tail0000.ts.net', kind: 'synced passkey', used: m(2880), count: 31, bound: false },
+    { id: 'pk3', name: 'security key', rp: 'ops-box.tail0000.ts.net', kind: 'roaming · FIDO2', used: m(27360), count: 4, bound: true },
+  ];
+  D.sessions = [
+    { id: 's-this', device: 'Firefox · laptop', addr: '127.0.0.1', started: m(190), idle: '4m', current: true },
+    { id: 's-phone', device: 'Safari · phone', addr: '100.101.7.3 (tailnet)', started: m(2880), idle: '6h' },
+  ];
+  D.prefs = { notifyApprovals: true, notifyPush: true, notifyFailed: false };
+  D.optouts = [{ id: 'oo1', where: 'trigger gh.review_requested (hand-off)', owner: 'your config', detail: 'runs as you through paseo\'s plain provider · titled [UNSANDBOXED]', path: 'triggers[on=gh.review_requested].isolation' }];
+  D.containers = [{ identity: 'member:billing-sre', image: 'agents:latest', volume: 'home-billing-sre', size: '1.4 GB', up: '2h' }, { identity: 'runtime:gpu-box', image: 'agents:latest', volume: 'home-gpu-box', size: '6.1 GB', up: '3d' }];
+  D.pending = [];
+  D.audit.forEach((a) => (a.run = (a.who.match(/^r-/) ? a.who : '')));
+
 })();

@@ -1,34 +1,42 @@
-/* Config: files, sections and owners, apply history with one-click rollback,
- * and the change pipeline: node edit → validate on a copy → diff → apply with
- * a backup → reload → health window → commit (or automatic restore). */
+/* Config: files, sections and owners, apply history with one-click restore,
+ * the raw editor, and the change pipeline every editor ends in:
+ * staged node edits → validate on a copy → diff → passkey → apply with a
+ * backup → reload → health window → committed (or restored). */
 (function () {
   const { icon, st, tag, ago, esc } = UI;
+  const C = () => S.cfg;
 
   const SECTIONS = [
-    ['settings', 4, 'op'], ['vaults', 4, 'op'], ['connectors', 7, 'op'], ['hosts', 2, 'op'], ['runtimes', 5, 'op'], ['models', 3, 'op'],
-    ['workflows', 2, 'op'], ['triggers', 6, 'op'], ['operators', 1, 'op'], ['members', 3, 'op'], ['sandbox', 1, 'op'], ['browser', 1, 'op'],
-    ['packs', 4, 'op'], ['policy', 1, 'op'], ['update', 1, 'op'],
+    ['settings', 'secrets', () => D.settings.length], ['vaults', 'secrets', () => D.vaults.length], ['connectors', 'connectors/connectors', () => D.connectors.length],
+    ['hosts', 'connectors/hosts', () => D.hosts.length], ['runtimes', 'connectors/runtimes', () => D.runtimes.length], ['sandbox', 'connectors/isolation', () => 1],
+    ['operators', 'security', () => Object.keys(D.operatorsCfg).length], ['members', 'members', () => D.members.length], ['browser', 'browser', () => D.identities.length + D.access.credentials.length],
+    ['packs', 'extensions/packs', () => D.packs.length], ['update', 'updates', () => 1], ['workflows', 'workflows', () => D.workflows.filter((w) => w.kind === 'workflow' && w.source === 'config').length], ['triggers', 'workflows', () => D.workflows.filter((w) => w.kind === 'trigger' && w.source === 'config').length],
   ];
+  const view = { open: null };
 
-  UI.route('config', () => `<div class="page">
-    ${UI.head('Config', { sub: 'the file is the source of truth', actions: `<a class="btn" href="#/config/raw">${icon('code')}Edit YAML</a><a class="btn primary" href="#/config/apply">${icon('check')}2 pending changes</a>` })}
+  UI.route('config', () => {
+    const n = D.pending.length;
+    return `<div class="page">
+    ${UI.head('Config', { sub: 'the file is the source of truth', actions: `<a class="btn" href="#/config/raw">${icon('code')}Edit YAML</a>${n ? `<a class="btn primary" href="#/config/apply">${icon('check')}${n} staged change${n > 1 ? 's' : ''}</a>` : `<button class="btn" ${UI.off('Nothing staged. Edit a section, a member or a workflow, and its change waits here for review.')}>${icon('check')}No staged changes</button>`}` })}
     <div class="grid g-side">
       <div class="stack">
         <div class="panel"><div class="panel-head"><h3>Files</h3><span class="muted small">what the daemon loaded at boot</span><div class="tools">${st('ok', 'on disk = loaded')}</div></div>
-          <table class="tbl compact"><thead><tr><th>file</th><th>owner</th><th>sha</th><th>loaded</th></tr></thead><tbody>
-            <tr><td class="mono">~/.config/conductor/config.yaml</td><td><span class="owner op">you</span></td><td class="mono">4be1f02a</td><td class="mono muted">50m ago</td></tr>
-            <tr><td class="mono">~/.config/conductor/conf.d/connectors/pd.yaml</td><td><span class="owner op">you · imports:</span></td><td class="mono">91d0c7e3</td><td class="mono muted">50m ago</td></tr>
-            <tr><td class="mono">.conductor/packs/review/ (vendored)</td><td><span class="owner pack">pack review · c81e09a</span></td><td class="mono">c81e09a</td><td class="mono muted">re-vendored 6m ago</td></tr>
-            <tr><td class="mono">.conductor/packs/sre-member/ (vendored)</td><td><span class="owner pack">pack sre-member · hold</span></td><td class="mono">3d70b2e</td><td class="mono muted">held</td></tr>
-            <tr><td class="mono">conductor.lock.yaml</td><td><span class="owner pack">conductor</span></td><td class="mono">5e2c91aa</td><td class="mono muted">6m ago</td></tr>
+          <table class="tbl compact responsive"><thead><tr><th>file</th><th>owner</th><th>sha</th><th>loaded</th></tr></thead><tbody>
+            <tr><td data-l="file" class="mono"><a class="link" href="#/config/raw">~/.config/conductor/config.yaml</a></td><td data-l="owner"><span class="owner op">you</span></td><td data-l="sha" class="mono">${D.daemon.config_sha}</td><td data-l="loaded" class="mono muted">${ago(D.configHistory[0].at)} ago</td></tr>
+            <tr><td data-l="file" class="mono">~/.config/conductor/conf.d/connectors/pd.yaml</td><td data-l="owner"><span class="owner op">you · imports:</span></td><td data-l="sha" class="mono">91d0c7e3</td><td data-l="loaded" class="mono muted">50m ago</td></tr>
+            <tr><td data-l="file" class="mono">.conductor/packs/review/ (vendored)</td><td data-l="owner"><span class="owner pack">pack review · c81e09a</span></td><td data-l="sha" class="mono">c81e09a</td><td data-l="loaded" class="mono muted">re-vendored 6m ago</td></tr>
+            <tr><td data-l="file" class="mono">.conductor/packs/sre-member/ (vendored)</td><td data-l="owner"><span class="owner pack">pack sre-member · hold</span></td><td data-l="sha" class="mono">3d70b2e</td><td data-l="loaded" class="mono muted">held</td></tr>
+            <tr><td data-l="file" class="mono">conductor.lock.yaml</td><td data-l="owner"><span class="owner pack">conductor</span></td><td data-l="sha" class="mono">5e2c91aa</td><td data-l="loaded" class="mono muted">6m ago</td></tr>
           </tbody></table></div>
-        <div class="panel"><div class="panel-head"><h3>Sections</h3><span class="muted small">open one in its visual editor, or as YAML</span></div><div class="panel-body"><div class="row wrap" style="gap:6px">${SECTIONS.map(([n, c]) => `<a class="chipsel" href="#/config/raw">${n} <span class="mono tiny muted">${c}</span></a>`).join('')}</div></div></div>
-        <div class="callout small"><b>Packs.</b> A pack's own files are vendored and never edited here. What you change about a pack lives in <b>your</b> <span class="mono">packs.&lt;instance&gt;</span> block: bindings, <span class="mono">steps:</span> overrides, <span class="mono">triggers:</span> arms, <span class="mono">policy:</span>, <span class="mono">models:</span>. A pack can narrow, never widen: a pack that sets <span class="mono">isolation: {mode: none}</span> (or user/container, privileged, egress, fs) on its agents is refused at load. Loosening is your decision, made in your overrides, and the dashboard asks for your passkey when you do.</div>
+        <div class="panel"><div class="panel-head"><h3>Sections</h3><span class="muted small">open one in its visual editor, or jump to it in the YAML</span></div><div class="panel-body"><div class="sec-grid">${SECTIONS.map(([s, href, c]) => `<div class="sec-chip"><a href="#/${href}" class="grow"><b>${s}</b> <span class="mono tiny muted">${c()}</span></a><a class="icon-btn" href="#/config/raw?at=${s}" data-tip="${s}: in the YAML" aria-label="${s} in the YAML">${icon('code')}</a></div>`).join('')}</div></div></div>
+        <div class="callout small"><b>Packs.</b> A pack's own files are vendored and never edited here. What you change about a pack lives in <b>your</b> <span class="mono">packs.&lt;instance&gt;</span> block: bindings, <span class="mono">steps:</span> overrides, <span class="mono">triggers:</span> arms, <span class="mono">policy:</span>, <span class="mono">models:</span>. A pack can narrow, never widen. Loosening is your decision, made in your overrides, and the dashboard asks for your passkey when you do.</div>
       </div>
       <div class="stack">
         <div class="panel"><div class="panel-head"><h3>Applied changes</h3><span class="muted small">each keeps a backup</span></div><div class="list">${D.configHistory.map((h) => `
-          <div class="item" style="align-items:flex-start">${h.status === 'live' ? st('ok', '') : st('idle', '')}<div class="grow"><div class="small">${esc(h.summary)}</div><div class="mono tiny muted">${h.id} · ${h.who} · ${ago(h.at)} ago</div></div>
-          ${h.status === 'live' ? tag('live', 'ok') : `<button class="btn sm" data-rollback="${h.id}">${icon('undo')}Restore</button>`}</div>`).join('')}</div>
+          <div class="item hist" style="align-items:flex-start">${h.status === 'live' ? st('ok', '') : st('idle', '')}<div class="grow"><div class="small">${esc(h.summary)}</div><div class="mono tiny muted">${h.id} · ${esc(h.who)} · ${ago(h.at)} ago</div>
+            ${view.open === h.id ? `<div class="hist-diff">${(h.changes || []).map((c) => UI.diffView(c.before == null ? '' : typeof c.before === 'string' ? c.before : YAML.stringify({ [C()[c.coll].path(c.key)]: c.before }), c.after == null ? '' : typeof c.after === 'string' ? c.after : YAML.stringify({ [C()[c.coll].path(c.key)]: c.after }), 'unified', { file: C()[c.coll].path(c.key) }).html).join('')}</div>` : ''}</div>
+            <div class="row" style="gap:4px"><button class="btn sm ghost" data-act="hist-view" data-id="${h.id}" aria-expanded="${view.open === h.id}">${icon(view.open === h.id ? 'chevd' : 'eye')}${view.open === h.id ? 'Hide' : 'Diff'}</button>
+            ${h.status === 'live' ? tag('live', 'ok') : `<button class="btn sm" data-act="restore" data-id="${h.id}">${icon('undo')}Restore</button>`}</div></div>`).join('')}</div>
           <div class="panel-foot small muted">Restore is the same pipeline in reverse: the backup is validated on a copy first, then applied.</div></div>
         <div class="panel"><div class="panel-head"><h3>Guards</h3></div><div class="panel-body small stack tight">
           <div class="row">${st('ok', '')}Edits are node-level: comments, anchors and unknown keys are kept.</div>
@@ -36,116 +44,165 @@
           <div class="row">${st('ok', '')}A config this binary can't load is never written.</div>
           <div class="row">${st('ok', '')}Also checked against the pending update (v0.72.0).</div>
           <div class="row">${st('ok', '')}Boot guard: a config that fails at boot is restored automatically.</div></div></div>
-      </div></div></div>`, { after: (p, main) => UI.bind(main, '[data-rollback]', 'click', (e, b) => UI.go('#/config/apply?rollback=' + b.dataset.rollback)) });
+        <div class="panel"><div class="panel-body row small"><span class="muted grow">Prototype: everything here is fake state in this browser.</span><button class="btn sm" data-act="reset-demo">${icon('undo')}Reset demo data</button></div></div>
+      </div></div></div>`;
+  });
+  UI.act('hist-view', (b) => { view.open = view.open === b.dataset.id ? null : b.dataset.id; UI.rerender(); });
+  UI.act('restore', (b) => {
+    const n = S.restore(b.dataset.id);
+    if (!n) { UI.toast('Nothing to restore', 'the live config already matches that backup', 'idle'); return; }
+    UI.refreshChrome(); UI.go('#/config/apply');
+  });
 
   /* ---------- raw editor ---------- */
-  const RAW = `# conductor config — ops-box
-settings:
-  org: acme
-  review_channel: "#code-reviews"
-
-sandbox:
-  egress: [registry.npmjs.org, proxy.golang.org, "*.pypi.org"]
-
-members:
-  platform-sre:
-    description: "SRE for the platform services"
-    charter_file: members/platform-sre.md
-    proactive:
-      every: 4h                        # was 6h until 2026-10-15
-      quiet_hours: "22:00-07:00"
-      budget: { max_runs_per_day: 6, max_cost_per_day: 2.00 }
-      notify_at: high
-
-packs:
-  review:
-    use: conductor-packs/pr-review-team
-    steps:
-      review-flow/review: { model: my-fleet }   # house fleet
-    triggers:
-      on_review_request: { enabled: true, repos: [acme/*] }`;
-  UI.route('config/raw', () => `<div class="page wide">
-    ${UI.head('config.yaml', { crumbs: `<a href="#/config">Config</a>`, sub: '~/.config/conductor/config.yaml · sha 4be1f02a', actions: `<span class="mono tiny muted">node: members.platform-sre.proactive.every</span><a class="btn primary" href="#/config/apply">${icon('check')}Validate &amp; review</a>` })}
-    <div class="grid" style="grid-template-columns:minmax(0,1fr) 320px">
-      <div class="panel"><div class="panel-head"><span class="mono small">editing</span><div class="tools"><span class="mono tiny muted">schema from <span class="mono">conductor schema</span> · completion on</span></div></div>${UI.yaml(RAW, { hl: [14] })}</div>
-      <div class="stack"><div class="panel"><div class="panel-head"><h3>Outline</h3></div><div class="tree" style="padding:6px">${['settings', 'sandbox', 'members', '  platform-sre', '    proactive', 'packs', '  review'].map((n) => `<a class="${n.includes('proactive') ? 'on' : ''}" style="padding-left:${10 + (n.length - n.trimStart().length) * 6}px">${icon(n.startsWith(' ') ? 'chev' : 'folder')}${n.trim()}</a>`).join('')}</div></div>
-        <div class="callout info small">Raw edits are parsed into the same node tree as the visual editors, so a diff here is still a node-level change and the same pipeline applies.</div></div>
-    </div></div>`, { nav: 'config' });
-
-  /* ---------- apply pipeline ---------- */
-  const STEPS = ['Edit', 'Validate on a copy', 'Review diff', 'Apply', 'Reload & verify'];
-  const CHECKS = [
-    ['Node-level edit', '2 nodes changed · 31 comments, 2 anchors, 1 unknown key (x-owner) kept byte-for-byte'],
-    ['Base unchanged', 'config.yaml is still 4be1f02a: no one edited it since you started'],
-    ['Loads in this binary', 'v0.71.2 loader, in-process, on the candidate bytes: 0 errors'],
-    ['conductor validate on a copy', 'scratch HOME + copied plugin state, live dirs read-only: 0 errors, 1 warning'],
-    ['Loads in the pending update', 'downloaded v0.72.0 validate on the same copy: 0 errors (auto-update won\'t crash-loop)'],
-    ['Packs: narrow, never widen', 'no pack manifest loosens isolation; your overrides: 0 widening'],
-    ['References resolve', '3 secrets, 2 settings, 1 fleet referenced by the change all resolve'],
-  ];
-  const DIFF = `<div class="h">config.yaml · triggers[name=ci-fixer] (line 214)</div>
-    <div class="dl"><span>228</span><span>228</span><span> </span><span>        runtime: claude-cli</span></div>
-    <div class="dl del"><span>229</span><span></span><span>-</span><span>        model: fixer                   # fleet: sonnet, then opus on retry</span></div>
-    <div class="dl add"><span></span><span>229</span><span>+</span><span>        model: claude-opus-5           # fleet: sonnet, then opus on retry</span></div>
-    <div class="dl"><span>230</span><span>230</span><span> </span><span>        prompt: |</span></div>
-    <div class="h">config.yaml · triggers[name=ci-fixer].steps (line 241)</div>
-    <div class="dl"><span>241</span><span>241</span><span> </span><span>        options: { body: "Fixed in {{.push.sha}}" }</span></div>
-    <div class="dl add"><span></span><span>242</span><span>+</span><span>      - id: notify</span></div>
-    <div class="dl add"><span></span><span>243</span><span>+</span><span>        uses: slack-ops.post</span></div>
-    <div class="dl add"><span></span><span>244</span><span>+</span><span>        options: { text: "ci-fixer fixed {{.repo}}#{{.number}}" }</span></div>
-    <div class="dl"><span>242</span><span>245</span><span> </span><span>    x-owner: platform                  # unknown key: kept as written</span></div>`;
-
-  UI.route('config/apply', () => {
-    const rb = (location.hash.split('rollback=')[1] || '');
+  const raw = { text: null, base: null, err: null };
+  function rawToChanges(text) {
+    const p = YAML.parse(text), v = p.value || {}, meta = p.meta, lines = text.split('\n');
+    const out = [];
+    const cmp = (coll, key, node) => { const cur = S.staged(coll, key); if (!YAML.eq(cur, node)) out.push([coll, key, node]); };
+    const mapSec = (coll, obj) => { const keys = new Set([...C()[coll].keys(), ...Object.keys(obj || {})]); keys.forEach((k) => cmp(coll, k, obj && k in obj ? obj[k] : null)); };
+    mapSec('settings', v.settings); mapSec('vaults', v.vaults); mapSec('connectors', v.connectors); mapSec('hosts', v.hosts); mapSec('runtimes', v.runtimes);
+    mapSec('operators', v.operators); mapSec('members', v.members); mapSec('packs', v.packs);
+    mapSec('identities', v.browser && v.browser.identities); mapSec('credentials', v.browser && v.browser.credentials);
+    if (v.sandbox) cmp('sandbox', 'sandbox', v.sandbox);
+    if (v.update) cmp('update', 'update', v.update);
+    const slice = (m, dedent) => lines.slice(m.line - 1, m.end).map((l) => l.slice(dedent)).join('\n') + '\n';
+    const seen = new Set();
+    (v.triggers || []).forEach((t, i) => { const m = meta[`triggers.${i}`]; if (!m || !t || !t.name) return; seen.add(t.name); let y = slice(m, 4); y = y.replace(/^\s*-\s*/, ''); cmp('workflows', t.name, y); });
+    Object.keys(v.workflows || {}).forEach((name) => { const m = meta[`workflows.${name}`]; seen.add(name); const y = 'name: ' + name + '\n' + lines.slice(m.line, m.end).map((l) => l.slice(4)).join('\n') + '\n'; cmp('workflows', name, y); });
+    C().workflows.keys().forEach((k) => { if (!seen.has(k)) out.push(['workflows', k, null]); });
+    return out;
+  }
+  UI.route('config/raw', () => {
+    const at = (location.hash.split('at=')[1] || '').split('&')[0];
+    const live = S.configText(S.candidate());
+    if (raw.base !== live || raw.text == null) { raw.base = live; raw.text = live; raw.err = null; }
+    const outline = raw.text.split('\n').map((l, i) => [l, i + 1]).filter(([l]) => /^[a-z][\w-]*:/.test(l) || /^ {2}[\w"@:./-]+:/.test(l) || /^ {2}- name: /.test(l));
+    const changed = YAML.diff(raw.base, raw.text).filter((r) => r.t !== ' ').length;
     return {
-      toString: () => `<div class="page">
-        ${UI.head(rb ? 'Restore a backup' : 'Review and apply', { crumbs: `<a href="#/config">Config</a>`, sub: rb ? rb : '2 changes from the workflow builder' })}
-        <div class="apply-steps" id="steps">${STEPS.map((s, i) => `<div class="as ${i === 0 ? 'done' : i === 1 ? 'cur' : ''}"><b>${i === 0 ? '✓' : i + 1}</b>${s}</div>`).join('')}</div>
-        <div class="grid g-side">
-          <div class="stack">
-            <div class="panel"><div class="panel-head"><h3>Diff</h3><span class="muted small">what will be written · +4 −1</span><div class="tools"><div class="seg"><button class="on">unified</button><button>split</button><button>whole file</button></div></div></div><div class="panel-body tight"><div class="diff">${DIFF}</div></div></div>
-            <div class="panel"><div class="panel-head"><h3>Effect</h3></div><div class="panel-body small stack tight">
-              <div class="row">${icon('workflows')}<span><b>ci-fixer</b>: step <span class="mono">fix</span> pins <span class="mono">claude-opus-5</span> (was the <span class="mono">fixer</span> fleet) · est. +$0.40/run</span></div>
-              <div class="row">${icon('zap')}<span><b>ci-fixer</b>: new step <span class="mono">notify</span> posts to Slack after a fix</span></div>
-              <div class="row">${icon('updates')}<span>Reload re-execs the daemon. In-flight steps get a grace to checkpoint and resume after boot; this page reconnects by itself.</span></div></div></div>
-          </div>
-          <div class="stack">
-            <div class="panel"><div class="panel-head"><h3>Checks</h3><div class="tools" id="chk-state">${st('run', 'running')}</div></div><div class="panel-body" id="checks">${CHECKS.map(([k, d], i) => `<div class="check-row" data-i="${i}"><span class="ci">${st('idle', '')}</span><div><b>${k}</b><div class="muted tiny">${d}</div></div></div>`).join('')}</div>
-              <div class="panel-body" style="border-top:1px solid var(--line)"><div class="callout warn small">1 warning: <span class="mono">triggers.ci-fixer.steps.fix</span>: an exact model pin skips the fleet's fallback.</div></div></div>
-            <div class="panel" id="apply-box"><div class="panel-body stack">
-              <div class="small muted">${icon('download')} Backup <span class="mono">cfg-20261016-1032</span> is written before anything changes.</div>
-              <button class="btn lg primary" id="go" disabled>${icon('passkey')}Apply with passkey</button>
-              <div class="muted tiny">Every apply is a fresh passkey assertion over the diff's digest, like an approval.</div></div></div>
-          </div></div></div>`,
+      toString: () => `<div class="page wide">
+      ${UI.head('config.yaml', { crumbs: `<a href="#/config">Config</a>`, sub: `~/.config/conductor/config.yaml · sha ${D.daemon.config_sha}${D.pending.length ? ' · shown with your staged changes' : ''}`,
+        actions: `<span class="mono tiny muted" id="raw-state">${changed ? changed + ' lines edited' : 'no edits'}</span><button class="btn" data-act="raw-revert" ${changed ? '' : UI.off('No edits to throw away')}>${icon('undo')}Revert edits</button><button class="btn primary" data-act="raw-review" ${changed ? '' : UI.off('Edit the YAML first; the review shows the node-level diff')}>${icon('check')}Validate &amp; review</button>` })}
+      <div class="grid raw-grid">
+        <div class="panel"><div class="panel-head"><span class="mono small">editing</span><div class="tools"><span class="mono tiny muted">schema from <span class="mono">conductor schema</span></span></div></div>
+          <div id="raw-err" class="callout danger small ${raw.err ? '' : 'hide'}" style="margin:10px">${raw.err ? esc(raw.err.message) : ''}</div>
+          <div class="ced-scroll">${UI.editor({ id: 'raw-ed', text: raw.text, lang: 'yaml', act: 'raw-input', minRows: 30, label: 'config.yaml', err: raw.err ? [raw.err.line] : [] })}</div></div>
+        <div class="stack raw-side"><div class="panel"><div class="panel-head"><h3>Outline</h3></div><div class="tree" style="padding:6px;max-height:60vh;overflow:auto">${outline.map(([l, n]) => { const d = l.search(/\S/); const name = l.trim().replace(/^- name: /, '').replace(/:.*$/, ''); return `<a href="#/config/raw?at=${encodeURIComponent(d ? name : name)}" data-act="raw-goto" data-line="${n}" class="${at === name ? 'on' : ''}" style="padding-left:${10 + d * 6}px">${icon(d ? 'chev' : 'folder')}${esc(name)}</a>`; }).join('')}</div></div>
+          <div class="callout info small">Raw edits are parsed into the same node tree as the visual editors, so a change here is still a node-level change and the same pipeline applies.</div></div>
+      </div></div>`,
       after(main) {
-        const rows = UI.$$('.check-row', main); let i = 0;
-        const tick = () => {
-          if (i < rows.length) { rows[i].querySelector('.ci').innerHTML = st('ok', ''); i++; setTimeout(tick, 260); return; }
-          UI.$('#chk-state').innerHTML = st('ok', '7 passed');
-          UI.$$('#steps .as')[1].className = 'as done'; UI.$$('#steps .as')[1].querySelector('b').textContent = '✓'; UI.$$('#steps .as')[2].className = 'as cur';
-          UI.$('#go').disabled = false;
-        };
-        rows.forEach((r) => (r.querySelector('.ci').innerHTML = st('run', ''))); setTimeout(tick, 400);
-        UI.bind(main, '#go', 'click', () => {
-          const box = UI.$('#apply-box .panel-body');
-          const S = UI.$$('#steps .as');
-          S[2].className = 'as done'; S[2].querySelector('b').textContent = '✓'; S[3].className = 'as cur';
-          const stages = [['Passkey assertion verified', 'operator ops · credential laptop · digest 7c19…'], ['Backup written', 'cfg-20261016-1032 (0600)'], ['Apply journal written', '<state>/config-apply/pending.json'], ['config.yaml replaced', 'atomic rename · sha 7c19e2b0'], ['Daemon re-exec', 'SIGHUP path · 2 steps checkpointed'], ['Reconnected', 'SSE resumed from event 88412'], ['Booted with 7c19e2b0', 'v0.71.2 · all connectors up'], ['Health window', '60s: no crash, connectors ok → committed']];
-          box.innerHTML = `<div id="stages"></div>`; let k = 0;
-          const next = () => {
-            if (k === 4) { S[3].className = 'as done'; S[3].querySelector('b').textContent = '✓'; S[4].className = 'as cur'; }
-            if (k >= stages.length) {
-              S[4].className = 'as done'; S[4].querySelector('b').textContent = '✓';
-              box.insertAdjacentHTML('beforeend', `<div class="callout ember small" style="margin-top:10px"><b>Applied.</b> Live config is <span class="mono">7c19e2b0</span>.</div><div class="row" style="margin-top:10px"><button class="btn" onclick="UI.toast('Restoring cfg-20261016-1032','validated on a copy first','run')">${icon('undo')}Roll back</button><a class="btn ghost" href="#/config">Done</a></div>`);
-              return;
-            }
-            const [a, b] = stages[k++];
-            UI.$('#stages').insertAdjacentHTML('beforeend', `<div class="check-row">${k === 5 || k === 6 ? st('run', '') : st('ok', '')}<div><b>${a}</b><div class="muted tiny mono">${b}</div></div></div>`);
-            setTimeout(() => { const all = UI.$$('#stages .check-row'); const last = all[all.length - 1]; if (last) last.firstElementChild.outerHTML = st('ok', ''); next(); }, k === 5 ? 1100 : 380);
-          };
-          next();
-        });
+        if (at) { const n = S.lineOf(raw.text, decodeURIComponent(at)); if (n > 0) setTimeout(() => { const ed = UI.$('#raw-ed', main); UI.editorMark(ed, { hl: [n] }); UI.editorScrollTo(ed, n); }); }
       },
     };
   }, { nav: 'config' });
+  let rawT;
+  UI.act('raw-input', (ta) => {
+    raw.text = ta.value;
+    clearTimeout(rawT);
+    rawT = setTimeout(() => {
+      try { YAML.parse(raw.text); raw.err = null; } catch (e) { raw.err = e; }
+      const box = UI.$('#raw-err'); if (box) { box.classList.toggle('hide', !raw.err); box.textContent = raw.err ? raw.err.message : ''; }
+      UI.editorMark(UI.$('#raw-ed'), { err: raw.err ? [raw.err.line] : [] });
+      const changed = YAML.diff(raw.base, raw.text).filter((r) => r.t !== ' ').length;
+      UI.$('#raw-state').textContent = changed ? changed + ' lines edited' : 'no edits';
+      UI.$$('[data-act="raw-review"],[data-act="raw-revert"]').forEach((b) => { if (changed) { b.removeAttribute('aria-disabled'); b.removeAttribute('data-tip'); b.removeAttribute('data-reason'); } else b.setAttribute('aria-disabled', 'true'); });
+    }, 250);
+  });
+  UI.act('raw-goto', (a) => { const ed = UI.$('#raw-ed'); const n = +a.dataset.line; UI.$$('.tree a').forEach((x) => x.classList.toggle('on', x === a)); UI.editorMark(ed, { hl: [n] }); UI.editorScrollTo(ed, n); });
+  UI.act('raw-revert', () => { raw.text = raw.base; raw.err = null; UI.rerender(); });
+  UI.act('raw-review', () => {
+    let ch;
+    try { ch = rawToChanges(raw.text); } catch (e) { raw.err = e; UI.rerender(); return; }
+    if (!ch.length) { UI.toast('No node changed', 'whitespace or comment-only edits outside a workflow don\'t change config', 'idle'); return; }
+    ch.forEach(([coll, key, node]) => S.stage(coll, key, node, null));
+    raw.text = null; UI.refreshChrome(); UI.go('#/config/apply');
+  });
+
+  /* ---------- apply pipeline ---------- */
+  const STEPS = ['Edit', 'Validate on a copy', 'Review diff', 'Apply', 'Reload & verify'];
+  const ap = { mode: 'unified', ack: false, phase: 'check', done: null, checksFor: null };
+  UI.route('config/apply', () => {
+    const P = D.pending;
+    if (ap.done && !P.length) return doneView();
+    ap.done = null;
+    if (!P.length) return `<div class="page">${UI.head('Review and apply', { crumbs: `<a href="#/config">Config</a>` })}
+      <div class="panel"><div class="empty"><span class="serif">Nothing staged</span>Edit a connector, a member, a secret reference or a workflow and its change waits here: validated on a copy, shown as a diff, applied with your passkey.<div class="row" style="justify-content:center;margin-top:10px"><a class="btn" href="#/config">Config</a><a class="btn" href="#/connectors">Connectors</a><a class="btn" href="#/workflows">Workflows</a></div></div></div></div>`;
+    const key = JSON.stringify(P.map((c) => c.id));
+    if (ap.checksFor !== key) { ap.checksFor = key; ap.phase = 'check'; ap.ack = false; }
+    const before = S.configText(D), cand = S.candidate(), after = S.configText(cand);
+    const v = S.validate(), wid = S.widening();
+    const dv = UI.diffView(before, after, ap.mode, { sections: true });
+    const restoring = P.every((c) => /^restore /.test(c.summary));
+    const blocked = v.errors.length ? `${v.errors.length} error${v.errors.length > 1 ? 's' : ''} block the apply — fix ${v.errors.length > 1 ? 'them' : 'it'} or discard the change` : ap.phase === 'check' ? 'Checks are still running on the copy' : wid.length && !ap.ack ? 'This change widens what agents can do: tick the acknowledgement first' : '';
+    const CHECKS = [
+      ['Node-level edit', `${P.length} node${P.length > 1 ? 's' : ''} changed · ${(before.match(/^\s*#/gm) || []).length} comment lines kept byte-for-byte`, true],
+      ['Base unchanged', `config.yaml is still ${D.daemon.config_sha}: no one edited it since you started`, true],
+      ['Loads in this binary', v.errors.length ? `${v.errors.length} error${v.errors.length > 1 ? 's' : ''}` : `${D.daemon.version} loader, in-process, on the candidate bytes: 0 errors`, !v.errors.length],
+      ['conductor validate on a copy', `scratch HOME + copied plugin state, live dirs read-only: ${v.errors.length} errors, ${v.warnings.length} warning${v.warnings.length === 1 ? '' : 's'}`, !v.errors.length],
+      ['Loads in the pending update', v.errors.length ? 'skipped: fix the errors first' : `downloaded ${D.daemon.update.available || 'release'} validate on the same copy: 0 errors`, !v.errors.length],
+      ['Packs: narrow, never widen', wid.length ? `your change widens ${wid.length}: needs acknowledgement` : 'no pack manifest loosens isolation; your change: 0 widening', true, wid.length ? 'wait' : 'ok'],
+      ['References resolve', v.errors.some((e) => /vault|no |unreachable|does not exist|names no/.test(e)) ? 'a reference does not resolve (see errors)' : 'every secret, setting, connector and runtime the change references resolves', !v.errors.some((e) => /vault|no |unreachable|does not exist|names no/.test(e))],
+    ];
+    const cur = ap.phase === 'check' ? 1 : 2;
+    return {
+      toString: () => `<div class="page">
+        ${UI.head(restoring ? 'Restore a backup' : 'Review and apply', { crumbs: `<a href="#/config">Config</a>`, sub: `${P.length} staged change${P.length > 1 ? 's' : ''} · +${dv.adds} −${dv.dels}`, actions: `<button class="btn ghost" data-act="discard-all">${icon('trash')}Discard all</button>` })}
+        <div class="apply-steps" id="steps">${STEPS.map((s, i) => `<div class="as ${i < cur ? 'done' : i === cur ? (v.errors.length && i === 1 ? 'bad' : 'cur') : ''}"><b>${i < cur ? '✓' : i + 1}</b>${s}</div>`).join('')}</div>
+        <div class="grid g-side">
+          <div class="stack">
+            <div class="panel"><div class="panel-head"><h3>Staged</h3><span class="muted small">each one is a node edit in config.yaml</span></div><div class="list">${P.map((c) => {
+              const w = wid.filter((x) => x.change === c), href = C()[c.coll].href ? C()[c.coll].href(c.key) : '#/config';
+              return `<div class="item" style="align-items:flex-start">${st(c.after == null ? 'fail' : c.before == null ? 'ok' : 'run', '')}<div class="grow"><div class="small"><b>${esc(c.summary)}</b></div><div class="mono tiny muted">${esc(C()[c.coll].path(c.key))} · ${c.after == null ? 'remove' : c.before == null ? 'add' : 'edit'} · staged ${ago(c.at)} ago</div>${w.map((x) => `<span class="tag" data-s="wait">${icon('warn')} widens: ${esc(x.text)}</span>`).join(' ')}</div>
+                <a class="btn sm ghost" href="${href}">${icon('edit')}Edit</a><button class="btn sm ghost" data-act="unstage" data-id="${c.id}" aria-label="Discard ${esc(c.summary)}">${icon('x')}Discard</button></div>`; }).join('')}</div></div>
+            <div class="panel"><div class="panel-head"><h3>Diff</h3><span class="muted small">what will be written · +${dv.adds} −${dv.dels}</span><div class="tools">${UI.seg([['unified', 'unified'], ['split', 'split'], ['whole', 'whole file']], ap.mode, 'diff-mode')}</div></div><div class="panel-body tight">${dv.html}</div></div>
+          </div>
+          <div class="stack">
+            <div class="panel"><div class="panel-head"><h3>Checks</h3><div class="tools" id="chk-state">${ap.phase === 'check' ? st('run', 'running') : v.errors.length ? st('fail', `${v.errors.length} failed`) : st('ok', `7 passed${v.warnings.length ? ` · ${v.warnings.length} warning${v.warnings.length > 1 ? 's' : ''}` : ''}`)}</div></div>
+              <div class="panel-body" id="checks">${CHECKS.map(([k, d, ok, s], i) => `<div class="check-row" data-i="${i}"><span class="ci">${ap.phase === 'check' ? st('run', '') : st(ok ? s || 'ok' : 'fail', '')}</span><div><b>${k}</b><div class="muted tiny">${esc(d)}</div></div></div>`).join('')}</div>
+              ${ap.phase !== 'check' && (v.errors.length || v.warnings.length) ? `<div class="panel-body" style="border-top:1px solid var(--line)">${v.errors.map((e) => `<div class="callout danger small" style="margin-bottom:6px"><span class="mono">${esc(e)}</span></div>`).join('')}${v.warnings.map((e) => `<div class="callout warn small" style="margin-bottom:6px">${esc(e)}</div>`).join('')}</div>` : ''}</div>
+            <div class="panel" id="apply-box"><div class="panel-body stack">
+              ${wid.length ? `<label class="row small ack"><input type="checkbox" class="cbx" data-on-change="ack" ${ap.ack ? 'checked' : ''}> <span>I understand this <b>widens</b> what agents can do: ${wid.map((x) => esc(x.text)).join('; ')}.</span></label>` : ''}
+              <div class="small muted">${icon('download')} A backup is written before anything changes.</div>
+              <button class="btn lg primary" data-act="apply-go" ${blocked ? UI.off(blocked) : ''}>${icon('passkey')}Apply with passkey</button>
+              <div class="muted tiny">Every apply is a fresh passkey assertion over the diff's digest, like an approval.</div></div></div>
+          </div></div></div>`,
+      after(main) {
+        if (ap.phase !== 'check') return;
+        const rows = UI.$$('.check-row', main); let i = 0;
+        const tick = () => {
+          if (!document.body.contains(main) || !UI.$('#checks')) return;
+          if (i < rows.length) { rows[i].querySelector('.ci').innerHTML = st(CHECKS[i][2] ? CHECKS[i][3] || 'ok' : 'fail', ''); i++; setTimeout(tick, UI.fast ? 10 : 160); return; }
+          ap.phase = 'review'; UI.render({ keepScroll: true });
+        };
+        setTimeout(tick, UI.fast ? 10 : 250);
+      },
+    };
+  }, { nav: 'config' });
+  UI.act('diff-mode', (b) => { ap.mode = b.dataset.v; UI.rerender(); });
+  UI.act('ack', (cb) => { ap.ack = cb.checked; UI.rerender(); });
+  UI.act('unstage', (b) => { S.unstage(b.dataset.id); UI.rerender(); });
+  UI.act('discard-all', () => UI.confirm({ title: 'Discard all staged changes?', body: `${D.pending.length} change${D.pending.length > 1 ? 's' : ''} will be thrown away. The live config is untouched.`, ok: 'Discard', danger: true }).then((ok) => { if (ok) { S.discardAll(); UI.rerender(); } }));
+  UI.act('apply-go', () => {
+    const P = D.pending, digest = Math.random().toString(16).slice(2, 10);
+    UI.stepup({ title: `Apply ${P.length} change${P.length > 1 ? 's' : ''}`, purpose: 'config apply', what: `{ purpose: <b>config_apply</b>, base_sha: <b>${D.daemon.config_sha}</b>, diff_sha256: <b>${digest}…</b>, changes: <b>${P.length}</b> }`, ok: 'Apply with passkey' }).then((ok) => {
+      if (!ok) return;
+      const entry = S.apply();
+      ap.done = { entry, stage: 0 };
+      UI.refreshChrome(); UI.render();
+    });
+  });
+  function doneView() {
+    const e = ap.done.entry;
+    const stages = [['Passkey assertion verified', 'operator ops · credential laptop'], ['Backup written', `${e.id} (0600)`], ['Apply journal written', '<state>/config-apply/pending.json'], ['config.yaml replaced', `atomic rename · sha ${D.daemon.config_sha}`], ['Daemon re-exec', 'SIGHUP path · in-flight steps checkpointed'], ['Reconnected', 'SSE resumed from event 88412'], [`Booted with ${D.daemon.config_sha}`, `${D.daemon.version} · all connectors up`], ['Health window', '60s: no crash, connectors ok → committed']];
+    const k = ap.done.stage, fin = k >= stages.length;
+    return {
+      toString: () => `<div class="page">${UI.head('Applied', { crumbs: `<a href="#/config">Config</a>`, sub: esc(e.summary) })}
+        <div class="apply-steps">${STEPS.map((s, i) => `<div class="as ${i < (fin ? 5 : k >= 4 ? 4 : 3) ? 'done' : 'cur'}"><b>${i < (fin ? 5 : k >= 4 ? 4 : 3) ? '✓' : i + 1}</b>${s}</div>`).join('')}</div>
+        <div class="grid g-side"><div class="panel"><div class="panel-head"><h3>Reload &amp; verify</h3>${fin ? st('ok', 'committed') : st('run', 'in progress')}</div><div class="panel-body" id="stages">${stages.slice(0, Math.min(k + 1, stages.length)).map(([a, b], i) => `<div class="check-row">${i < k || fin ? st('ok', '') : st('run', '')}<div><b>${a}</b><div class="muted tiny mono">${esc(b)}</div></div></div>`).join('')}</div></div>
+        <div class="stack">${fin ? `<div class="callout ember small"><b>Applied.</b> Live config is <span class="mono">${D.daemon.config_sha}</span>. Backup <span class="mono">${e.id}</span> holds what it replaced.</div>
+          <div class="row"><button class="btn" data-act="rollback-now" data-id="${e.id}">${icon('undo')}Roll back</button><a class="btn ghost" href="#/config">Done</a></div>` : `<div class="callout small">The daemon re-execs on reload. This page reconnects by itself and resumes the stream.</div>`}</div></div></div>`,
+      after() { if (fin) return; setTimeout(() => { if (!ap.done) return; ap.done.stage++; if (location.hash.startsWith('#/config/apply')) UI.render({ keepScroll: true }); }, UI.fast ? 15 : k === 4 ? 900 : 260); },
+    };
+  }
+  UI.act('rollback-now', (b) => { const n = S.restore(b.dataset.id); ap.done = null; UI.refreshChrome(); if (n) UI.render(); });
 })();
