@@ -255,7 +255,7 @@
         F('checkout', { type: 'enum', options: ['none', 'checkout-pr', 'branch-off'] });
         F('skill.verbs', { type: 'multi', label: 'skill verbs (grant)', options: allVerbs(), help: 'Deny-by-default: the verbs this agent may call back into conductor.' });
         F('handoff', { type: 'enum', options: S.view().connectors.filter((c) => SCHEMA.connectors[c.use] && Object.values(SCHEMA.connectors[c.use].verbs).some((x) => x.ask)).map((c) => c.name), create: 'connector', createCtx: { uses: ['web', 'slack'] }, createLabel: 'New ask-capable connector', help: 'Present a review loop on an ask-capable connector.' });
-        F('browser.credentials', { type: 'multi', label: 'browser credentials', options: S.view().access.credentials.map((x) => x.name), create: 'credential', createLabel: 'New credential binding', help: 'Logins this step\'s browser may fill (values never reach the agent).' });
+        F('browser.credentials', { type: 'multi', label: 'browser credentials', options: S.view().access.credentials.map((x) => x.name), create: 'credential', createLabel: 'Add a login', help: 'Logins this step\'s browser may fill (values never reach the agent).' });
         F('skill.allow_secrets', { type: 'multi', label: 'secrets (broker grants)', options: S.view().secrets.map((x) => x.ref), create: 'secret', ret: 'ref', createLabel: 'New secret', help: 'Exact vault entries the agent may request through the broker: single use, 60s, audited.' });
         F('gate.run', { type: 'multi', label: 'quality gate', options: SCHEMA.checks });
       }

@@ -474,10 +474,50 @@ back on the team. A bot can be created solo.
   - On release, the agent gets a fresh snapshot.
   - Cookie write-back keeps #182's rule: only cookies the saved session
     already had, and only for that browser's logged-in sites.
-- **Seed a login.** This replaces `conductor browser seed`'s headed window
-  with a **headless jailed browser in takeover mode**, so it works from a
-  phone over the tailnet. Only the site's cookies are kept, in
-  `<state>/browser/logins/` (0700/0600).
+- **Add a login** (replaces "Seed a login"). Browsers → **Add a login**
+  (`#/browser/add`) offers three methods; each ends in the same **binding**
+  step and then the config diff:
+  - **Username & password.** Typed once into password fields (optional TOTP
+    secret or `otpauth://` URI, with a "••• ••• · code works ✓" preview
+    computed locally, never showing a code). On save the values go straight
+    to conductor's vault (`house/login/<name>/{username,password,otp}`)
+    behind a step-up `secret_write`, and the inputs are cleared. Afterwards
+    the page only ever says **set**, with **Replace** and **Remove**.
+  - **From a vault.** Pick the vault (1Password, pass, HashiCorp, conductor's).
+    For 1Password there is an item browser with search that shows **titles,
+    websites and field labels only**, never values; map username, password
+    and one-time-password to fields; the item's website is suggested as the
+    origin. Only references are stored (`op://Vault/Item/field`).
+  - **Sign in yourself.** The takeover below: the operator signs in (SSO,
+    CAPTCHA, SMS or email codes), conductor keeps only the site's cookies in
+    `<state>/browser/logins/` (0700/0600), and the page notes when the
+    session is expected to expire. Desktop only; on the phone the card is
+    disabled with that reason and points at the vault method.
+  - **Binding.** A name, the **exact origins** (scheme + host, checked
+    atomically with the fill), **who may use it** (bots, teams or folders;
+    a team or folder covers its bots) and **operator-started cases only**,
+    on by default (#182's provenance rule). A team's credential scope still
+    caps what its bots can use.
+- **Test login.** Runs the login in a throwaway sandboxed browser and logs
+  out again: *signed in*, *sign-in refused* (nothing saved), or *needs you*
+  (a push to approve; the result updates when you do). No values or
+  screenshots of filled fields are recorded.
+- **Logins tab** (`#/browser/logins`). Every credential, passkey and saved
+  session: method, site, bound bots/teams/folders, last used, last test,
+  expiry; **Test**, **Usage** (which bot, which case, when — never a value),
+  **Edit binding**, **Replace** (password logins), **Revoke** (through the
+  diff; a password login's stored values are deleted from the vault when
+  the revoke applies). Saved sessions revoke immediately (audited).
+- **Inline.** Every credential picker (a team's credential scope, a workflow
+  step's `browser.credentials`) offers **+ Add a login**, a create-in-place
+  drawer with the password and vault methods; the new binding is staged with
+  the parent, one diff.
+- **API.** `POST /api/v1/browser/logins` (method `password` | `vault` |
+  `session`; values in the body only for `password`, written to the vault and
+  dropped, step-up), `POST /api/v1/browser/logins/{name}/test` (SSE result:
+  `ok` | `refused` | `needs_input`), `GET /api/v1/browser/logins` (metadata
+  and usage, never values), `GET /api/v1/vaults/{v}/items?q=` (titles,
+  websites, field labels only).
 - **Register a passkey.** `browser passkey register` through the same
   takeover. An empty virtual authenticator is armed on that tab only, the
   operator adds a passkey on the site, and conductor stores the one

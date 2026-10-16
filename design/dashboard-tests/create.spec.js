@@ -113,7 +113,7 @@ test('every entity picker has a create option', async ({ page }) => {
   await go(page, '#/connectors/runtimes'); await page.locator('[data-act="rt-add"]').click(); await audit('runtime form'); await close();
   await go(page, '#/secrets'); await page.locator('[data-act="secret-add"]').click(); await audit('secret form'); await close();
   await go(page, page.viewportSize().width <= 720 ? '#/folders/personal%2Fhome' : '#/bots'); await page.locator('[data-act="f-item-menu"][data-name="homelab"]').click(); await page.locator('#pop-menu [data-act="f-move"]').click(); await audit('move dialog'); await close();
-  await go(page, '#/browser/seed'); await audit('seed wizard');
+  await go(page, '#/browser/takeover'); await audit('sign-in takeover wizard');
   await go(page, '#/browser/passkey'); await audit('passkey wizard');
   expect(missing).toEqual([]);
   for (const k of ['bot', 'team', 'folder', 'connector', 'runtime', 'fleet', 'credential', 'secret', 'vault', 'host', 'identity', 'site']) expect([...seen], `a ${k} picker was audited`).toContain(k);

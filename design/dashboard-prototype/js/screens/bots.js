@@ -79,7 +79,7 @@
         { k: 'pool_tokens', type: 'number', label: 'Proactive pool · tokens / day', help: 'Per provider.' },
         { k: 'pool_cost', type: 'number', label: 'Proactive pool · USD / day', show: () => UI.isApi() },
         { k: 'logins', type: 'list', label: 'Browser login scope', ph: 'console.example.com' },
-        { k: 'credentials', type: 'select-multi', label: 'Credential scope', options: S.view().access.credentials.map((x) => x.name), create: 'credential', createLabel: 'New credential binding' },
+        { k: 'credentials', type: 'select-multi', label: 'Credential scope', options: S.view().access.credentials.map((x) => x.name), create: 'credential', createLabel: 'Add a login' },
         { section: 'Knowledge and links', k: 'repo', type: 'string', label: 'Team knowledge repo', ph: 'team-knowledge/<team>', help: 'Optional. Bots propose promoting knowledge into it.' },
         { k: 'promote_mode', type: 'seg', label: 'Promotion', options: [['approval', 'needs approval'], ['auto', 'automatic'], ['off', 'off']], def: 'approval', show: (v) => !!v.repo },
         { k: 'links', type: 'select-multi', label: 'Linked teams', options: others, create: 'team', createLabel: 'New team', help: 'Both sides must link. Linking is a channel for data to cross.' },

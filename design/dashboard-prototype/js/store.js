@@ -200,7 +200,10 @@
     keys: () => D().access.credentials.map((c) => c.name), get: (k) => { const c = byName(D().access.credentials, k); return c ? clone(c.cfg) : null; },
     set: (k, n) => { const L = D().access.credentials; if (n == null) return drop(L, k); const c = byName(L, k); const patch = { cfg: n, origin: n.origin, identity: n.identity, fields: (n.fields || []).join(', '), vault: n.vault, ref: n.ref }; if (c) Object.assign(c, patch); else L.push(Object.assign({ name: k }, patch)); },
     path: (k) => `browser.credentials.${k}`,
-    validate(k, n, all) { const e = []; if (!/^https:\/\//.test(n.origin || '')) e.push(`browser.credentials.${k}.origin must be an https:// origin`); const v = byName(all.vaults, n.vault); if (!v) e.push(`browser.credentials.${k}.vault: no vault "${n.vault}"`); else if (v.status === 'fail') e.push(`browser.credentials.${k}: vault ${n.vault} is unreachable`); if (!(n.fields || []).length) e.push(`browser.credentials.${k}.fields: pick at least one field`); return e; },
+    validate(k, n, all) { const e = []; (n.origins || [n.origin]).forEach((o) => { if (!/^https:\/\/[\w.-]+(:\d+)?$/.test(o || '')) e.push(`browser.credentials.${k}: "${o || ''}" must be an exact https:// origin`); });
+      if (n.allow && !n.allow.length) e.push(`browser.credentials.${k}.allow: bind it to at least one bot, team or folder`);
+      if (n.method === 'session' || n.method === 'passkey') return e; // a saved session or a passkey lives in the browser profile, not a vault
+      const v = byName(all.vaults, n.vault); if (!v) e.push(`browser.credentials.${k}.vault: no vault "${n.vault}"`); else if (v.status === 'fail') e.push(`browser.credentials.${k}: vault ${n.vault} is unreachable`); if (!(n.fields || []).length) e.push(`browser.credentials.${k}.fields: pick at least one field`); return e; },
     widens: (b, a) => (a && !b ? [`binds credential to ${a.identity}`] : a && b && a.identity !== b.identity ? [`rebinds credential to ${a.identity}`] : []),
   };
   C.packs = { section: 'packs', file: 'config.yaml', label: 'pack', href: () => '#/extensions/packs',
