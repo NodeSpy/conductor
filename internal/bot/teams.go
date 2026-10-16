@@ -713,22 +713,8 @@ func (s *Service) teamPool(name string, own store.BotRecord, others []store.BotR
 	if !ok || t.Budget.Proactive == nil {
 		return ""
 	}
-	pool := t.Budget.Proactive
-	now := s.now()
-	runs, cost := 0, 0.0
-	for _, rec := range append([]store.BotRecord{own}, others...) {
-		for _, sw := range rec.Sweeps {
-			if now.Sub(sw.Started) < SweepWindow {
-				runs++
-				cost += sw.CostUSD
-			}
-		}
-	}
-	if b := pool.MaxRunsPerDay; b > 0 && runs >= b {
-		return fmt.Sprintf("team %s's budget: its bots ran %d sweeps in the last 24h (budget.proactive.max_runs_per_day %d)", team, runs, b)
-	}
-	if b := pool.MaxCostPerDay; b > 0 && cost >= b {
-		return fmt.Sprintf("team %s's budget: its bots' sweeps cost $%.2f in the last 24h (budget.proactive.max_cost_per_day $%.2f)", team, cost, b)
+	if why := t.Budget.Proactive.Exceeded(sweepUsage(s.now(), append([]store.BotRecord{own}, others...)...)); why != "" {
+		return fmt.Sprintf("team %s's budget (budget.proactive, all its bots' sweeps): %s", team, why)
 	}
 	return ""
 }

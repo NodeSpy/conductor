@@ -368,7 +368,6 @@ triggers:
 		"bad sandbox":    "isolation: { sandbox: maybe }",
 		"bad secrets":    "credentials: { secrets_via: smoke }",
 		"secrets unused": "credentials: { allow_secrets: [house/pd] }",
-		"empty pool":     "budget: { proactive: {} }",
 		"negative pool":  "budget: { proactive: { max_runs_per_day: -1 } }",
 		"bad spend cap":  "budget: { spend_cap: { per_action: 5, per_period: 1 } }",
 		"zero spend cap": "budget: { spend_cap: { per_action: 0, per_period: 1 } }",

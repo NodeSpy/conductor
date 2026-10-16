@@ -119,6 +119,7 @@ type sweepFixture struct {
 	audits  []map[string]any
 	logs    []string
 	cost    float64
+	usage   RunUsage // tokens / turns per finished sweep run (cost comes from cost)
 	mu      sync.Mutex
 }
 
@@ -136,7 +137,11 @@ func newSweepFixture(t *testing.T, p config.BotProactive) *sweepFixture {
 	f.svc.Notify = func(_ context.Context, n Notice) { f.mu.Lock(); f.notices = append(f.notices, n); f.mu.Unlock() }
 	f.svc.Audit = func(e map[string]any) { f.mu.Lock(); f.audits = append(f.audits, e); f.mu.Unlock() }
 	f.svc.Log = func(s string, a ...any) { f.mu.Lock(); f.logs = append(f.logs, fmt.Sprintf(s, a...)); f.mu.Unlock() }
-	f.svc.RunCost = func(string) (float64, bool) { return f.cost, true }
+	f.svc.RunUsage = func(string) (RunUsage, bool) {
+		u := f.usage
+		u.CostUSD = f.cost
+		return u, true
+	}
 	return f
 }
 

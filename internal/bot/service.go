@@ -58,6 +58,13 @@ type Actor struct {
 	Bot, Role, CaseID, Dispatch, Agent string
 }
 
+// RunUsage is one run's model usage, in every unit a budget caps.
+type RunUsage struct {
+	CostUSD       float64
+	Tokens, Turns int
+	ByModel       []store.ModelUsage
+}
+
 // Event is something routed into a bot.
 type Event struct {
 	Bot       string
@@ -94,10 +101,10 @@ type Service struct {
 	// broker's RevokeDispatch). Bot tokens are durable — they would
 	// otherwise outlive a finished worker by days.
 	RevokeToken func(dispatchID string)
-	// RunCost is a finished run's total cost (the run history's), for the
+	// RunUsage is a finished run's totals (the run history's), for the
 	// proactive budget. Notify publishes a proactive finding to the
 	// conductor.bot_notify lifecycle event. Both optional.
-	RunCost func(historyID string) (float64, bool)
+	RunUsage func(historyID string) (RunUsage, bool)
 	Notify  func(ctx context.Context, n Notice)
 
 	mu       sync.Mutex

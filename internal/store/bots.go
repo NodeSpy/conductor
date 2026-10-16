@@ -309,8 +309,13 @@ type Sweep struct {
 	Summary   string    `json:"summary,omitempty"`
 	Findings  []Finding `json:"findings,omitempty"`
 	CostUSD   float64   `json:"cost_usd,omitempty"`
-	Started   time.Time `json:"started"`
-	Ended     time.Time `json:"ended,omitempty"`
+	Tokens    int       `json:"tokens,omitempty"`
+	Turns     int       `json:"turns,omitempty"`
+	// Usage is the same per runtime and model (for display; budgets count
+	// the totals above).
+	Usage   []ModelUsage `json:"usage,omitempty"`
+	Started time.Time    `json:"started"`
+	Ended   time.Time    `json:"ended,omitempty"`
 }
 
 // Finding is one thing a sweep reported.

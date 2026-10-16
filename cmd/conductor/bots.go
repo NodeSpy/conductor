@@ -74,9 +74,9 @@ func buildBots(cfg *config.Config, st *store.Store, runner *flow.Runner, reg *co
 			return err
 		}),
 		Log: logf, Audit: audit, RevokeToken: revokeDispatch,
-		RunCost: func(hid string) (float64, bool) {
+		RunUsage: func(hid string) (bot.RunUsage, bool) {
 			h, ok := st.GetHistory(hid)
-			return h.CostUSD, ok
+			return bot.RunUsage{CostUSD: h.CostUSD, Tokens: h.Tokens, Turns: h.Turns, ByModel: h.Usage}, ok
 		},
 	}
 	if notifier != nil {

@@ -776,7 +776,7 @@ func TestTeamProactivePool(t *testing.T) {
 	finish("b")
 	// a has used 1 of its own 2, but the team has used 2 of 2.
 	_, err := f.svc.StartSweep(ctx, "a", true)
-	if err == nil || !strings.Contains(err.Error(), "team platform's budget: its bots ran 2 sweeps") {
+	if err == nil || !strings.Contains(err.Error(), "team platform's budget (budget.proactive, all its bots' sweeps): 2 sweeps in the last 24h") {
 		t.Fatalf("the pool did not stop a teammate: %v", err)
 	}
 	if _, err := f.svc.StartSweep(ctx, "c", true); err != nil {
@@ -798,7 +798,7 @@ func TestTeamProactivePool(t *testing.T) {
 		}
 		return nil
 	})
-	if _, err := f.svc.StartSweep(ctx, "b", true); err == nil || !strings.Contains(err.Error(), "cost $1.00") {
+	if _, err := f.svc.StartSweep(ctx, "b", true); err == nil || !strings.Contains(err.Error(), "$1.00 of model spend") {
 		t.Fatalf("pool cost: %v", err)
 	}
 }

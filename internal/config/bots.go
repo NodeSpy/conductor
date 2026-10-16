@@ -150,10 +150,88 @@ type BotProactive struct {
 	Timeout Duration `yaml:"timeout,omitempty"`
 }
 
-// ProactiveBudget bounds sweeps per rolling 24 hours.
+// ProactiveBudget bounds sweeps per rolling 24 hours, in units — runs,
+// model turns, tokens — and, optionally, dollars of model spend (only
+// meaningful on API billing). Any combination, none required: the first cap
+// a window reaches stops the next sweep. (commit_money's spend_cap is cloud
+// spend, a different thing.)
 type ProactiveBudget struct {
-	MaxRunsPerDay int     `yaml:"max_runs_per_day,omitempty"`
-	MaxCostPerDay float64 `yaml:"max_cost_per_day,omitempty"` // USD
+	MaxRunsPerDay   int        `yaml:"max_runs_per_day,omitempty"`
+	MaxTurnsPerDay  int        `yaml:"max_turns_per_day,omitempty"`
+	MaxTokensPerDay TokenCount `yaml:"max_tokens_per_day,omitempty"` // "500k" / "2m" accepted
+	MaxCostPerDay   float64    `yaml:"max_cost_per_day,omitempty"`   // USD of model spend
+}
+
+// IsZero reports a budget with no cap set.
+func (b ProactiveBudget) IsZero() bool {
+	return b.MaxRunsPerDay == 0 && b.MaxTurnsPerDay == 0 && b.MaxTokensPerDay == 0 && b.MaxCostPerDay == 0
+}
+
+// validate refuses a negative cap.
+func (b ProactiveBudget) validate() error {
+	if b.MaxRunsPerDay < 0 || b.MaxTurnsPerDay < 0 || b.MaxTokensPerDay < 0 || b.MaxCostPerDay < 0 {
+		return fmt.Errorf("max_runs_per_day, max_turns_per_day, max_tokens_per_day and max_cost_per_day must not be negative")
+	}
+	return nil
+}
+
+// BudgetUsage is what a window of sweeps used, in every unit a budget caps.
+type BudgetUsage struct {
+	Runs, Turns, Tokens int
+	CostUSD             float64
+}
+
+// Exceeded names the first cap the usage has reached ("" = it fits): runs,
+// then turns, then tokens, then dollars.
+func (b ProactiveBudget) Exceeded(u BudgetUsage) string {
+	switch {
+	case b.MaxRunsPerDay > 0 && u.Runs >= b.MaxRunsPerDay:
+		return fmt.Sprintf("%d sweeps in the last 24h (max_runs_per_day %d)", u.Runs, b.MaxRunsPerDay)
+	case b.MaxTurnsPerDay > 0 && u.Turns >= b.MaxTurnsPerDay:
+		return fmt.Sprintf("%d model turns in the last 24h (max_turns_per_day %d)", u.Turns, b.MaxTurnsPerDay)
+	case b.MaxTokensPerDay > 0 && u.Tokens >= int(b.MaxTokensPerDay):
+		return fmt.Sprintf("%d tokens in the last 24h (max_tokens_per_day %d)", u.Tokens, b.MaxTokensPerDay)
+	case b.MaxCostPerDay > 0 && u.CostUSD >= b.MaxCostPerDay:
+		return fmt.Sprintf("$%.2f of model spend in the last 24h (max_cost_per_day $%.2f)", u.CostUSD, b.MaxCostPerDay)
+	}
+	return ""
+}
+
+// withinCeiling refuses a bot budget past its team pool's, per unit: a unit
+// the pool caps must be capped no higher (an unset unit inherits it).
+func (b ProactiveBudget) withinCeiling(pool ProactiveBudget, team string) error {
+	type unit struct {
+		name      string
+		own, ceil float64
+	}
+	for _, u := range []unit{
+		{"max_runs_per_day", float64(b.MaxRunsPerDay), float64(pool.MaxRunsPerDay)},
+		{"max_turns_per_day", float64(b.MaxTurnsPerDay), float64(pool.MaxTurnsPerDay)},
+		{"max_tokens_per_day", float64(b.MaxTokensPerDay), float64(pool.MaxTokensPerDay)},
+		{"max_cost_per_day", b.MaxCostPerDay, pool.MaxCostPerDay},
+	} {
+		if u.ceil > 0 && u.own > u.ceil {
+			return fmt.Errorf("proactive.budget.%s %g exceeds team %s's budget.proactive.%s %g", u.name, u.own, team, u.name, u.ceil)
+		}
+	}
+	return nil
+}
+
+// inherit fills each unit the bot left unset from its team's pool.
+func (b ProactiveBudget) inherit(pool ProactiveBudget) ProactiveBudget {
+	if b.MaxRunsPerDay == 0 {
+		b.MaxRunsPerDay = pool.MaxRunsPerDay
+	}
+	if b.MaxTurnsPerDay == 0 {
+		b.MaxTurnsPerDay = pool.MaxTurnsPerDay
+	}
+	if b.MaxTokensPerDay == 0 {
+		b.MaxTokensPerDay = pool.MaxTokensPerDay
+	}
+	if b.MaxCostPerDay == 0 {
+		b.MaxCostPerDay = pool.MaxCostPerDay
+	}
+	return b
 }
 
 // ProactiveChecklist names the sweep checklist's source.
@@ -698,8 +776,11 @@ func (c *Config) expandBots() error {
 			sweep.Name = BotSweepTrigger(name)
 			sweep.WaitTimeout = Duration(p.TimeoutD())
 			ts := TriggerSpec{On: ManualSource, Name: BotSweepTrigger(name), Enabled: &enabled, Steps: []Step{sweep}}
-			if p.Budget.MaxCostPerDay > 0 {
-				ts.Policy = &Policy{Budget: &BudgetPolicy{Window: Duration(24 * time.Hour), MaxCostUSD: p.Budget.MaxCostPerDay}}
+			// Tokens and dollars also bound a sweep while it runs (the
+			// workflow budget sheds its next agent dispatch); runs and turns
+			// are checked before each sweep starts.
+			if p.Budget.MaxCostPerDay > 0 || p.Budget.MaxTokensPerDay > 0 {
+				ts.Policy = &Policy{Budget: &BudgetPolicy{Window: Duration(24 * time.Hour), MaxCostUSD: p.Budget.MaxCostPerDay, MaxTokens: p.Budget.MaxTokensPerDay}}
 			}
 			c.Triggers = append(c.Triggers, ts)
 		}
@@ -851,11 +932,8 @@ func (c *Config) validateBotProactive(name string, p *BotProactive) error {
 			return fmt.Errorf("timezone: %w", err)
 		}
 	}
-	if p.Budget.MaxRunsPerDay < 0 || p.Budget.MaxCostPerDay < 0 {
-		return fmt.Errorf("budget: max_runs_per_day and max_cost_per_day must not be negative")
-	}
-	if p.Budget.MaxRunsPerDay == 0 && p.Budget.MaxCostPerDay == 0 {
-		return fmt.Errorf("budget: set max_runs_per_day and/or max_cost_per_day — an unbudgeted sweep schedule is refused")
+	if err := p.Budget.validate(); err != nil {
+		return fmt.Errorf("budget: %w", err)
 	}
 	if (p.Checklist.Section == "") == (p.Checklist.File == "") {
 		return fmt.Errorf("checklist: name exactly one of section (a charter heading) or file")

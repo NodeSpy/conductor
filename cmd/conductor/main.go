@@ -98,6 +98,8 @@ func main() {
 		err = cmdStatus(args)
 	case "report":
 		err = cmdReport(args)
+	case "usage":
+		err = cmdUsage(args)
 	case "runs":
 		err = cmdRuns(args)
 	case "watch":
@@ -186,7 +188,8 @@ usage:
   conductor sweep --now [--config PATH] signal the running daemon to sweep now
   conductor force <kind> <owner/repo>#<n>  force an action for a target now (via the running daemon)
   conductor status [--config PATH]      snapshot: live agents, in-flight workflows, stuck/attention
-  conductor report [--days N]           activity summary: dispatches by kind/outcome + attention + spend
+  conductor report [--days N]           activity summary: dispatches by kind/outcome + attention + usage (per usage.mode)
+  conductor usage [--since 24h]         model usage per runtime/model: what conductor observed, and what usage.sources report
   conductor runs [<id>] [--limit N]     recorded executions: list, or one run's step detail
   conductor runs retry <id> [--from <step>] [--force-replay]  re-run a recorded execution (recorded inputs pinned)
   conductor watch [<run-id>] [--json]   tail the live run event stream (steps, gates, outcomes)
@@ -262,6 +265,11 @@ func loadConfig(args []string) (*config.Config, []string, error) {
 	// loads them at runtime, without needing to export anything by hand.
 	loadEnvFile(filepath.Join(filepath.Dir(path), "conductor.env"))
 	cfg, err := config.Load(path)
+	if err == nil {
+		// usage.mode: what every report and notification of this process may
+		// show of model usage (display only; caps enforce in every mode).
+		cost.SetDisplayMode(cfg.UsageMode())
+	}
 	return cfg, rest, err
 }
 

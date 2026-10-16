@@ -392,11 +392,8 @@ func checkTeamCeilings(team string, t TeamConfig, m BotConfig) error {
 		}
 	}
 	if pool, p := t.Budget.Proactive, m.Proactive; pool != nil && p != nil {
-		if b := pool.MaxRunsPerDay; b > 0 && p.Budget.MaxRunsPerDay > b {
-			return fmt.Errorf("proactive.budget.max_runs_per_day %d exceeds team %s's budget.proactive.max_runs_per_day %d", p.Budget.MaxRunsPerDay, team, b)
-		}
-		if b := pool.MaxCostPerDay; b > 0 && p.Budget.MaxCostPerDay > b {
-			return fmt.Errorf("proactive.budget.max_cost_per_day %g exceeds team %s's budget.proactive.max_cost_per_day %g", p.Budget.MaxCostPerDay, team, b)
+		if err := p.Budget.withinCeiling(*pool, team); err != nil {
+			return err
 		}
 	}
 	ti, mi := t.Isolation, m.Isolation
@@ -489,12 +486,7 @@ func inheritTeam(t TeamConfig, m BotConfig) BotConfig {
 	}
 	if pool := t.Budget.Proactive; pool != nil && m.Proactive != nil {
 		p := *m.Proactive
-		if p.Budget.MaxRunsPerDay == 0 {
-			p.Budget.MaxRunsPerDay = pool.MaxRunsPerDay
-		}
-		if p.Budget.MaxCostPerDay == 0 {
-			p.Budget.MaxCostPerDay = pool.MaxCostPerDay
-		}
+		p.Budget = p.Budget.inherit(*pool)
 		m.Proactive = &p
 	}
 	if m.Isolation.Sandbox == "" {
@@ -599,11 +591,8 @@ func (c *Config) validateBotTeam(name string, t TeamConfig) error {
 		}
 	}
 	if p := t.Budget.Proactive; p != nil {
-		if p.MaxRunsPerDay < 0 || p.MaxCostPerDay < 0 {
-			return fmt.Errorf("budget.proactive: max_runs_per_day and max_cost_per_day must not be negative")
-		}
-		if p.MaxRunsPerDay == 0 && p.MaxCostPerDay == 0 {
-			return fmt.Errorf("budget.proactive: set max_runs_per_day and/or max_cost_per_day (the team's pool)")
+		if err := p.validate(); err != nil {
+			return fmt.Errorf("budget.proactive: %w", err)
 		}
 	}
 	if err := validateBotIsolation(t.Isolation); err != nil {
@@ -689,6 +678,9 @@ func (c *Config) TeamWarnings() []string {
 		t := c.Teams[name]
 		if len(c.TeamBots(name)) == 0 {
 			out = append(out, fmt.Sprintf("teams.%s: no enabled bot names this team", name))
+		}
+		if p := t.Budget.Proactive; p != nil && p.IsZero() {
+			out = append(out, fmt.Sprintf("teams.%s: budget.proactive sets no cap, so it limits nothing (set max_runs_per_day, max_turns_per_day, max_tokens_per_day or max_cost_per_day)", name))
 		}
 		if t.Isolation.SandboxRequired() {
 			out = append(out, fmt.Sprintf("teams.%s: isolation.sandbox required — its bots' sessions start only while conductor's agent sandbox is on", name))

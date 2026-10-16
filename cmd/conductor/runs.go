@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/cost"
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
@@ -93,8 +94,8 @@ func printRunDetail(dir, id string) error {
 		fmt.Printf("   took: %s", rec.Finished.Sub(rec.Started).Round(time.Millisecond))
 	}
 	fmt.Println()
-	if rec.Tokens > 0 || rec.CostUSD > 0 {
-		fmt.Printf("  spend: %s (%d tokens)\n", costLabel(rec.CostUSD, rec.ApproxCost), rec.Tokens)
+	for _, l := range usageLines(rec) {
+		fmt.Println("  " + l)
 	}
 	if rec.RetryOf != "" {
 		fmt.Printf("  retry of: %s\n", rec.RetryOf)
@@ -108,15 +109,12 @@ func printRunDetail(dir, id string) error {
 		if s.DurationMS > 0 {
 			dur = (time.Duration(s.DurationMS) * time.Millisecond).Round(time.Millisecond).String()
 		}
-		cost := ""
-		if s.CostUSD > 0 || s.Tokens > 0 {
-			cost = fmt.Sprintf("  $%.4f/%dtok", s.CostUSD, s.Tokens)
-		}
+		usage := stepUsageLabel(s)
 		note := ""
 		if s.ContinuedOnError {
 			note = "  (continued)"
 		}
-		fmt.Printf("  [%d] %-20s %-8s %8s%s%s\n", s.Index, s.ID, s.Status, dur, cost, note)
+		fmt.Printf("  [%d] %-20s %-8s %8s%s%s\n", s.Index, s.ID, s.Status, dur, usage, note)
 		if s.Error != "" {
 			fmt.Printf("        error: %s\n", s.Error)
 		}
@@ -204,6 +202,58 @@ func targetLabel(r store.RunHistory) string {
 		return fmt.Sprintf("%s#%d", r.Repo, r.Number)
 	}
 	return r.Repo
+}
+
+// usageLines is a run's observed usage, per runtime and model, as
+// usage.mode allows: nothing when off, units when subscription, units and
+// dollars when api. Never summed across providers.
+func usageLines(rec store.RunHistory) []string {
+	if !cost.ShowUsage() || (rec.Tokens == 0 && rec.CostUSD == 0 && len(rec.Usage) == 0) {
+		return nil
+	}
+	if len(rec.Usage) == 0 {
+		// A record from before per-model accounting: one runtime/model is not
+		// known, so show nothing rather than a cross-provider total.
+		return []string{"usage: observed, but not recorded per model (an older run)"}
+	}
+	out := []string{"usage (observed by conductor):"}
+	for _, u := range rec.Usage {
+		out = append(out, "  "+modelUsageLabel(u))
+	}
+	return out
+}
+
+// modelUsageLabel renders one runtime/model's observed usage.
+func modelUsageLabel(u store.ModelUsage) string {
+	s := fmt.Sprintf("%s / %s: %d run(s), %d turn(s), %s tokens", orDashStr(u.Runtime), orDashStr(u.Model), u.Runs, u.Turns, fmtTokens(u.Tokens))
+	if cost.ShowDollars() {
+		s += ", " + costLabel(u.CostUSD, u.Approximate)
+	}
+	if u.Approximate {
+		s += " (estimated)"
+	}
+	return s
+}
+
+func stepUsageLabel(s store.StepRecord) string {
+	if !cost.ShowUsage() || (s.Tokens == 0 && s.CostUSD == 0) {
+		return ""
+	}
+	l := fmt.Sprintf("  %dtok/%dturns", s.Tokens, s.Turns)
+	if s.Model != "" {
+		l += " " + s.Model
+	}
+	if cost.ShowDollars() {
+		l = fmt.Sprintf("  $%.4f", s.CostUSD) + l
+	}
+	return l
+}
+
+func orDashStr(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func costLabel(usd float64, approx bool) string {

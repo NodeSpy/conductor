@@ -21,6 +21,48 @@ import (
 	"time"
 )
 
+// Usage display modes (`usage.mode`): what reports and notifications show
+// of model usage. Enforcement — every configured cap, in tokens or dollars —
+// is the same in every mode; only display changes.
+const (
+	// DisplayOff (the default) shows no usage or cost figures at all.
+	DisplayOff = "off"
+	// DisplaySubscription shows the units conductor observed — runs, turns,
+	// tokens — per runtime and model, and no dollar figures: on a
+	// subscription they would be estimates of money nobody is billed.
+	DisplaySubscription = "subscription"
+	// DisplayAPI also shows dollar figures (API billing).
+	DisplayAPI = "api"
+)
+
+var (
+	displayMu   sync.RWMutex
+	displayMode = DisplayOff
+)
+
+// SetDisplayMode installs the config's usage.mode ("" = the default, off).
+func SetDisplayMode(mode string) {
+	if mode == "" {
+		mode = DisplayOff
+	}
+	displayMu.Lock()
+	displayMode = mode
+	displayMu.Unlock()
+}
+
+// DisplayMode is the current usage.mode.
+func DisplayMode() string {
+	displayMu.RLock()
+	defer displayMu.RUnlock()
+	return displayMode
+}
+
+// ShowDollars reports whether dollar figures may be shown (usage.mode: api).
+func ShowDollars() bool { return DisplayMode() == DisplayAPI }
+
+// ShowUsage reports whether usage figures may be shown at all.
+func ShowUsage() bool { return DisplayMode() != DisplayOff }
+
 // BudgetError marks a dispatch shed by a spend cap (#36 §14). It is shared
 // between the engine (which owns the meter/reservation accounting in
 // internal/engine/budget.go) and the flow runner (which owns the full
@@ -44,6 +86,9 @@ type Usage struct {
 	OutputTokens int     `json:"output_tokens,omitempty"`
 	TotalTokens  int     `json:"total_tokens"`
 	CostUSD      float64 `json:"cost_usd"`
+	// Turns is the model turns the run took (claude-code's num_turns); at
+	// least 1 for any agent run, when the runtime reports none.
+	Turns int `json:"turns,omitempty"`
 	Model        string  `json:"model,omitempty"`
 	// Approximate marks estimated (not runtime-reported) numbers.
 	Approximate bool `json:"approximate,omitempty"`
@@ -184,6 +229,9 @@ func usageFrom(m map[string]any, model string) (Usage, bool) {
 	if u.TotalTokens == 0 {
 		u.TotalTokens = u.InputTokens + u.OutputTokens
 	}
+	if n, ok := intField(m, "num_turns"); ok {
+		u.Turns = max(n, 0)
+	}
 	costReported := false
 	for _, k := range []string{"total_cost_usd", "cost_usd", "total_cost"} {
 		if f, ok := m[k].(float64); ok {
@@ -228,7 +276,7 @@ func Estimate(model, prompt, output string) Usage {
 	in, out := len(prompt)/4, len(output)/4
 	return Usage{
 		InputTokens: in, OutputTokens: out, TotalTokens: in + out,
-		CostUSD: PriceUSD(model, in, out), Model: model, Approximate: true,
+		CostUSD: PriceUSD(model, in, out), Model: model, Approximate: true, Turns: 1,
 	}
 }
 
@@ -249,6 +297,8 @@ func FromRun(model, prompt, output string) Usage {
 		return Estimate(model, prompt, output)
 	}
 	est := Estimate(model, prompt, output)
+	est.Turns = max(u.Turns, 1)
+	u.Turns = est.Turns
 	// Implausibly low token report → the estimate is the floor.
 	if u.TotalTokens*underReportDivisor < est.TotalTokens {
 		return est

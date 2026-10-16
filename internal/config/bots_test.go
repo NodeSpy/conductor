@@ -352,7 +352,6 @@ bots:
 		}
 	}
 	for name, body := range map[string]string{
-		"no budget":       "every: 4h\n      checklist: { section: Proactive checks }",
 		"too frequent":    "every: 1m\n      budget: { max_runs_per_day: 1 }\n      checklist: { section: Proactive checks }",
 		"no checklist":    "every: 4h\n      budget: { max_runs_per_day: 1 }",
 		"both checklists": "every: 4h\n      budget: { max_runs_per_day: 1 }\n      checklist: { section: Proactive checks, file: x.md }",

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/cost"
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
@@ -420,7 +421,11 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 		if err := need(); err != nil {
 			return nil, err
 		}
-		return map[string]any{"sweeps": toList(s.Sweeps(name, 20))}, nil
+		sws := s.Sweeps(name, 20)
+		for i := range sws {
+			sws[i] = sweepForDisplay(sws[i])
+		}
+		return map[string]any{"sweeps": toList(sws)}, nil
 	case "teams":
 		var out []any
 		for _, t := range cfg.TeamNames() {
@@ -469,16 +474,11 @@ func (s *Service) teamStatus(ctx context.Context, team string, full bool) map[st
 		out["routing"] = map[string]any{"lead": r.Lead, "fallback": r.Fallback, "rules": rules, "timeout": r.TimeoutD().String()}
 	}
 	if pool := t.Budget.Proactive; pool != nil {
-		runs, cost := 0, 0.0
+		var recs []store.BotRecord
 		for _, n := range cfg.TeamBots(team) {
-			for _, sw := range s.Ledger.Bot(n).Sweeps {
-				if s.now().Sub(sw.Started) < SweepWindow {
-					runs++
-					cost += sw.CostUSD
-				}
-			}
+			recs = append(recs, s.Ledger.Bot(n))
 		}
-		out["proactive_pool"] = map[string]any{"runs_24h": runs, "cost_24h": cost, "max_runs_per_day": pool.MaxRunsPerDay, "max_cost_per_day": pool.MaxCostPerDay}
+		out["proactive_pool"] = poolForDisplay(*pool, s.now(), recs)
 	}
 	if repo := s.TeamRepo(team); repo != nil {
 		k := map[string]any{"repo": repo.Dir, "promotion": t.Knowledge.PromotionMode()}
@@ -586,5 +586,77 @@ func (s *Service) statusOf(name string) map[string]any {
 		out["browser"] = map[string]any{"logins": m.Browser.Logins, "credentials": m.Browser.Credentials}
 	}
 	delete(out, "worker_role")
+	return out
+}
+
+// The usage a bot listing shows follows usage.mode (cost.DisplayMode): off,
+// no usage figures; subscription, what conductor observed per runtime and
+// model, no dollars; api, with dollars. The budget's caps (config) are
+// always shown — enforcement does not depend on the mode.
+
+// sweepForDisplay strips a sweep's usage figures the mode does not show.
+func sweepForDisplay(sw store.Sweep) store.Sweep {
+	if !cost.ShowUsage() {
+		sw.CostUSD, sw.Tokens, sw.Turns, sw.Usage = 0, 0, 0, nil
+		return sw
+	}
+	// Per runtime/model only: the totals sum across providers.
+	sw.Tokens, sw.Turns = 0, 0
+	if !cost.ShowDollars() {
+		sw.CostUSD = 0
+		sw.Usage = withoutDollars(sw.Usage)
+	}
+	return sw
+}
+
+func withoutDollars(us []store.ModelUsage) []store.ModelUsage {
+	out := make([]store.ModelUsage, len(us))
+	for i, u := range us {
+		u.CostUSD = 0
+		out[i] = u
+	}
+	return out
+}
+
+// poolForDisplay is a team's proactive pool: its caps, and (when the mode
+// shows usage) what its bots' sweeps used in the window, per runtime/model.
+func poolForDisplay(pool config.ProactiveBudget, now time.Time, recs []store.BotRecord) map[string]any {
+	out := map[string]any{"max_runs_per_day": pool.MaxRunsPerDay, "max_turns_per_day": pool.MaxTurnsPerDay,
+		"max_tokens_per_day": int(pool.MaxTokensPerDay), "max_cost_per_day": pool.MaxCostPerDay}
+	if !cost.ShowUsage() {
+		return out
+	}
+	byModel := map[[2]string]*store.ModelUsage{}
+	runs := 0
+	for _, rec := range recs {
+		for _, sw := range rec.Sweeps {
+			if now.Sub(sw.Started) >= SweepWindow {
+				continue
+			}
+			runs++
+			for _, u := range sw.Usage {
+				k := [2]string{u.Runtime, u.Model}
+				m := byModel[k]
+				if m == nil {
+					m = &store.ModelUsage{Runtime: u.Runtime, Model: u.Model}
+					byModel[k] = m
+				}
+				m.Runs += u.Runs
+				m.Turns += u.Turns
+				m.Tokens += u.Tokens
+				m.CostUSD += u.CostUSD
+				m.Approximate = m.Approximate || u.Approximate
+			}
+		}
+	}
+	var ms []store.ModelUsage
+	for _, m := range byModel {
+		ms = append(ms, *m)
+	}
+	sort.Slice(ms, func(i, j int) bool { return ms[i].Runtime+"\x00"+ms[i].Model < ms[j].Runtime+"\x00"+ms[j].Model })
+	if !cost.ShowDollars() {
+		ms = withoutDollars(ms)
+	}
+	out["observed_24h"] = map[string]any{"sweeps": runs, "by_model": toList(ms)}
 	return out
 }

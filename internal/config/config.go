@@ -178,6 +178,9 @@ type Config struct {
 	// (#36 §14). Model prices drift; the built-ins are coarse defaults and
 	// every estimated figure is marked approximate.
 	Pricing *PricingConfig `yaml:"pricing"`
+	// Usage is how usage is reported (usage.mode, default off) and where
+	// plan-window data comes from (usage.sources). Display only.
+	Usage *UsageConfig `yaml:"usage"`
 	// SecretRefs is the named `secrets:` block: name -> secret reference
 	// (env:/op://…), readable in templates as {{.secrets.<name>}}.
 	SecretRefs map[string]string `yaml:"secrets"`
@@ -1299,6 +1302,9 @@ func (c *Config) Validate() error {
 		if err := validateBudget("policy", c.Policy.Budget); err != nil {
 			return err
 		}
+	}
+	if err := c.validateUsage(); err != nil {
+		return err
 	}
 	if err := c.validatePricing(); err != nil {
 		return err

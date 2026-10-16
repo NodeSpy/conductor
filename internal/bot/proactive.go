@@ -98,20 +98,27 @@ func (s *Service) noteSkip(name string, err error) {
 
 // sweepBudget reports why a new sweep would exceed the budget ("" = fits).
 func sweepBudget(p *config.BotProactive, rec store.BotRecord, now time.Time) string {
-	runs, cost := 0, 0.0
-	for _, sw := range rec.Sweeps {
-		if now.Sub(sw.Started) < SweepWindow {
-			runs++
-			cost += sw.CostUSD
-		}
-	}
-	if b := p.Budget.MaxRunsPerDay; b > 0 && runs >= b {
-		return fmt.Sprintf("budget: %d sweeps in the last 24h (max_runs_per_day %d)", runs, b)
-	}
-	if b := p.Budget.MaxCostPerDay; b > 0 && cost >= b {
-		return fmt.Sprintf("budget: sweeps cost $%.2f in the last 24h (max_cost_per_day $%.2f)", cost, b)
+	if why := p.Budget.Exceeded(sweepUsage(now, rec)); why != "" {
+		return "budget: " + why
 	}
 	return ""
+}
+
+// sweepUsage totals the sweeps in the rolling window across records, in
+// every unit a budget caps.
+func sweepUsage(now time.Time, recs ...store.BotRecord) config.BudgetUsage {
+	var u config.BudgetUsage
+	for _, rec := range recs {
+		for _, sw := range rec.Sweeps {
+			if now.Sub(sw.Started) < SweepWindow {
+				u.Runs++
+				u.Turns += sw.Turns
+				u.Tokens += sw.Tokens
+				u.CostUSD += sw.CostUSD
+			}
+		}
+	}
+	return u
 }
 
 // StartSweep starts one sweep now. byOperator (`conductor bot sweep`)
@@ -246,19 +253,19 @@ func pruneSweeps(r *store.BotRecord) {
 	}
 }
 
-// recordSweepCost attaches a finished sweep run's cost (the run history's
-// total) to the sweep — what the daily cost budget counts.
+// recordSweepCost attaches a finished sweep run's usage (the run history's
+// totals: turns, tokens, cost) to the sweep — what the daily budget counts.
 func (s *Service) recordSweepCost(name string, w store.Worker, historyID string) {
-	if w.Sweep == "" || s.RunCost == nil {
+	if w.Sweep == "" || s.RunUsage == nil {
 		return
 	}
-	cost, ok := s.RunCost(historyID)
+	u, ok := s.RunUsage(historyID)
 	if !ok {
 		return
 	}
 	_ = s.Ledger.UpdateBot(name, func(r *store.BotRecord) error {
 		if sw := r.Sweeps[w.Sweep]; sw != nil {
-			sw.CostUSD = cost
+			sw.CostUSD, sw.Tokens, sw.Turns, sw.Usage = u.CostUSD, u.Tokens, u.Turns, u.ByModel
 		}
 		return nil
 	})
