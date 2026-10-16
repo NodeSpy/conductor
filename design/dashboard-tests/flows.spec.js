@@ -24,7 +24,7 @@ test.describe('connectors, runtimes, hosts, isolation', () => {
     await expect(page.locator('.diff')).toContainText('slack-eng:');
     await applyStaged(page);
     await go(page, '#/connectors/connectors');
-    await expect(page.locator('.member-card', { hasText: 'slack-eng' })).toContainText('use: slack');
+    await expect(page.locator('.bot-card', { hasText: 'slack-eng' })).toContainText('use: slack');
   });
   test('edit a connector and delete one', async ({ page }) => {
     await go(page, '#/connectors/connectors');
@@ -90,19 +90,19 @@ test.describe('connectors, runtimes, hosts, isolation', () => {
   });
 });
 
-test.describe('members', () => {
-  test('edit a member definition (proactive, team, sandbox) through the pipeline', async ({ page }) => {
-    await go(page, '#/members/platform-sre/settings');
+test.describe('bots', () => {
+  test('edit a bot definition (proactive, team, sandbox) through the pipeline', async ({ page }) => {
+    await go(page, '#/bots/platform-sre/settings');
     await page.fill('[id="f-df_proactive_every"]', '2h');
     await page.locator('[id="f-df_proactive_every"]').blur();
     await expect(page.locator('#df-yaml')).toContainText('every: 2h');
     await page.locator('[data-act="df-review"]').click();
     await expect(page.locator('.diff')).toContainText('every: 2h');
     await applyStaged(page);
-    expect(await state(page, () => D.members[0].cfg.proactive.every)).toBe('2h');
+    expect(await state(page, () => D.bots[0].cfg.proactive.every)).toBe('2h');
   });
-  test('define a new member, in shadow mode, with charter and scope', async ({ page }) => {
-    await go(page, '#/members/new/settings');
+  test('define a new bot, in shadow mode, with charter and scope', async ({ page }) => {
+    await go(page, '#/bots/new/settings');
     await page.fill('[id="f-df__name"]', 'docs-steward');
     await page.fill('[id="f-df_description"]', 'Keeps the API docs honest');
     await page.locator('[id="f-df_description"]').blur();
@@ -112,18 +112,18 @@ test.describe('members', () => {
     await expect(page.locator('.diff')).toContainText('docs-steward:');
     await expect(page.locator('.diff')).toContainText('shadow: true');
     await applyStaged(page);
-    await go(page, '#/members');
-    await expect(page.locator('.member-card', { hasText: 'docs-steward' })).toContainText('shadow mode');
+    await go(page, '#/bots');
+    await expect(page.locator('.bot-card', { hasText: 'docs-steward' })).toContainText('shadow mode');
   });
   test('access: tier change and promotion are widening config edits; add verb; bind and unbind a credential', async ({ page }) => {
-    await go(page, '#/members/platform-sre/access');
+    await go(page, '#/bots/platform-sre/access');
     await page.selectOption('select[data-v="kv.set"]', 'reversible');
     await page.locator('[data-act="acc-addverb"]').click();
     await page.selectOption('#f-verb', 'gh.label'); await page.selectOption('#f-tier', 'propose');
     await submit(page);
     await page.locator('[data-act="cred-bind"]').first().click();
     await page.fill('#f-name', 'pagerduty-ui'); await page.fill('#f-origin', 'https://acme.pagerduty.com');
-    await page.selectOption('#f-identity', 'member:platform-sre');
+    await page.selectOption('#f-identity', 'bot:platform-sre');
     await page.locator('[data-listk="fields"] select').selectOption('username');
     await page.locator('[data-listk="fields"] select').selectOption('password');
     await page.selectOption('#f-vault', 'op'); await page.fill('#f-ref', 'Agents/PagerDuty/*');
@@ -135,17 +135,17 @@ test.describe('members', () => {
     await page.locator('.list .item', { hasText: 'browser.credentials.pagerduty-ui' }).locator('[data-act="unstage"]').click();
     await expect(page.locator('.tag', { hasText: 'loosens kv.set' })).toBeVisible();
     await applyStaged(page, { expectWidening: true });
-    const m = await state(page, () => D.members[0].cfg);
+    const m = await state(page, () => D.bots[0].cfg);
     expect(m.autonomy.tiers.reversible).toContain('kv.set');
     expect(m.skill.verbs).toContain('gh.label');
-    await go(page, '#/members/platform-sre/access');
+    await go(page, '#/bots/platform-sre/access');
     await page.locator('[data-act="cred-unbind"][data-c="grafana"]').click();
     await page.locator('#cf-ok').click();
     await applyStaged(page);
     expect(await state(page, () => D.access.credentials.some((c) => c.name === 'grafana'))).toBe(false);
   });
   test('ledger operations are immediate: deliver, note, close, revoke a login, memory commit, stop a worker', async ({ page }) => {
-    await go(page, '#/members/platform-sre/cases');
+    await go(page, '#/bots/platform-sre/cases');
     await page.locator('[data-act="m-deliver"]').first().click();
     await page.fill('#f-title', 'Check the NAT gateway bill'); await submit(page);
     await expect(page.locator('.route-box')).toContainText('delivered to');
@@ -153,20 +153,20 @@ test.describe('members', () => {
     await expect(page.locator('.panel', { hasText: 'Notes' })).toContainText('Owner is billing.');
     await page.locator('[data-act="case-close"]').click();
     await expect(page.locator('.panel-head .st').first()).toContainText('closed');
-    await go(page, '#/members/platform-sre/access');
+    await go(page, '#/bots/platform-sre/access');
     await page.locator('[data-act="login-revoke"]').click(); await page.locator('#cf-ok').click();
     await expect(page.locator('.panel', { hasText: 'Browser logins' })).toContainText('No saved logins');
-    await go(page, '#/members/platform-sre/memory');
+    await go(page, '#/bots/platform-sre/memory');
     await page.locator('[data-act="mem-mode"][data-v="edit"]').click();
     await page.fill('#mem-text', '# db-prod-1\n\nPgbouncer pool: 200.\n');
     await page.locator('[data-act="mem-commit"]').click();
     await expect(page.locator('.prose')).toContainText('Pgbouncer pool: 200.');
-    await go(page, '#/members/platform-sre/workers');
+    await go(page, '#/bots/platform-sre/workers');
     await page.locator('[data-act="w-stop"]').first().click(); await page.locator('#cf-ok').click();
     await expect(page.locator('.wcard', { hasText: 'w41' })).toContainText('stopped');
   });
   test('approve a proposal with the passkey seal', async ({ page }) => {
-    await go(page, '#/members/platform-sre/proposals/p12');
+    await go(page, '#/bots/platform-sre/proposals/p12');
     await page.locator('[data-act="p-approve"][data-d="approve"]').click();
     await page.locator('#seal-go').click();
     await expect(page.locator('.panel-head .st').first()).toContainText('approved');
@@ -246,7 +246,7 @@ test.describe('packs and plugins', () => {
     await applyStaged(page);
     expect(await state(page, () => D.packs.find((p) => p.name === 'review').ver)).toBe('1.5.0');
     await go(page, '#/extensions/packs');
-    await page.locator('[data-act="pack-ov"][data-p="sre-member"]').click();
+    await page.locator('[data-act="pack-ov"][data-p="sre-bot"]').click();
     const row = page.locator('[data-mapk="steps"] .kvrow').nth(1); // the empty row after the one existing override
     await row.locator('[data-mk=k]').fill('sweep/report');
     await row.locator('[data-mk=v]').fill('{"model": "summarizer"}');
@@ -292,7 +292,7 @@ test.describe('updates, config history, raw editor, access', () => {
     await page.locator('[data-act="restore"][data-id="cfg-20261015-1412"]').click();
     await expect(page.locator('.page-head h1')).toContainText('Restore a backup');
     await applyStaged(page);
-    expect(await state(page, () => D.members[0].cfg.proactive.every)).toBe('6h');
+    expect(await state(page, () => D.bots[0].cfg.proactive.every)).toBe('6h');
     await go(page, '#/config/raw');
     const ta = page.locator('#raw-ed .ced-ta');
     const text = await ta.inputValue();

@@ -20,7 +20,7 @@
     attention: '<path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
     runs: '<path d="M4 6h16M4 12h16M4 18h10"/>',
     workflows: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="12" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M8.5 6H12a3 3 0 013 3v.5M8.5 18H12a3 3 0 003-3v-.5"/>',
-    members: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 010 6.8M18.5 14.8c1.6.8 2.6 2.5 3 5.2"/>',
+    bots: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 010 6.8M18.5 14.8c1.6.8 2.6 2.5 3 5.2"/>',
     browser: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/>',
     config: '<path d="M8 4H6a2 2 0 00-2 2v3l-2 3 2 3v3a2 2 0 002 2h2M16 4h2a2 2 0 012 2v3l2 3-2 3v3a2 2 0 01-2 2h-2"/>',
     secrets: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
@@ -171,7 +171,7 @@
   /* ---------- nav ---------- */
   const navGroups = [
     ['Now', [['overview', 'Overview', 'overview'], ['live', 'Live', 'live', () => D.runs.filter((r) => r.status === 'run').length], ['attention', 'Needs you', 'attention', () => D.attention.length, true]]],
-    ['Work', [['runs', 'Run history', 'runs'], ['workflows', 'Workflows', 'workflows'], ['members', 'Teams & members', 'members'], ['browser', 'Browsers', 'browser', () => D.browsers.length]]],
+    ['Work', [['runs', 'Run history', 'runs'], ['workflows', 'Workflows', 'workflows'], ['bots', 'Teams & bots', 'bots'], ['browser', 'Browsers', 'browser', () => D.browsers.length]]],
     ['System', [['config', 'Config', 'config'], ['secrets', 'Secrets & vars', 'secrets'], ['extensions', 'Packs & plugins', 'extensions'], ['connectors', 'Connectors & hosts', 'connectors'], ['updates', 'Updates', 'updates', () => 1], ['logs', 'Logs & audit', 'logs'], ['security', 'Access', 'shield']]],
   ];
   UI.navHTML = () => navGroups.map(([g, items]) => `<div class="nav-group"><span class="caps">${g}</span><nav class="nav">${items.map(([k, l, ic, c, hot]) => {
@@ -223,12 +223,12 @@
       ? `<div class="kv" style="margin-bottom:12px"><dt>action</dt><dd class="mono">terraform apply</dd><dt>repo@commit</dt><dd class="mono">${p.tf.repo}@${p.tf.commit.slice(0, 12)}</dd><dt>dir · workspace</dt><dd class="mono">${p.tf.dir} · ${p.tf.workspace}</dd><dt>plan</dt><dd class="mono">+${p.tf.add} ~${p.tf.change} -${p.tf.destroy} · <span style="color:var(--wait)">replaces ${p.tf.replaces.join(', ')}</span></dd><dt>plan sha256</dt><dd class="hash">${p.tf.plan_sha}</dd></div>`
       : `<div class="kv" style="margin-bottom:12px"><dt>verb</dt><dd class="mono">${p.verb}</dd><dt>action</dt><dd>${UI.esc(p.summary)}</dd><dt>requester</dt><dd class="mono">${p.requester} <span class="muted">(${p.cls})</span></dd></div>`;
     const s = UI.modal(`
-      <div class="modal-head"><div><div class="caps" style="margin-bottom:6px">${p.member} · ${p.id} · case ${p.case}</div><h2>${deny ? 'Deny' : 'Approve'} this ${p.kind === 'terraform' ? 'apply' : 'action'}</h2></div><button class="icon-btn" data-close>${UI.icon('x')}</button></div>
+      <div class="modal-head"><div><div class="caps" style="margin-bottom:6px">${p.bot} · ${p.id} · case ${p.case}</div><h2>${deny ? 'Deny' : 'Approve'} this ${p.kind === 'terraform' ? 'apply' : 'action'}</h2></div><button class="icon-btn" data-close>${UI.icon('x')}</button></div>
       <div class="modal-body">
         ${lines}
         <div class="panel inset" style="padding:10px 12px">
           <div class="caps" style="margin-bottom:4px">You are signing</div>
-          <div class="digest">{ member: <b>${p.member}</b>, proposal: <b>${p.id}</b>, decision: <b>${decision}</b>, action_sha256: <b>${p.digest.replace('sha256:', '').slice(0, 32)}</b>…, nonce: <b>7Qx2…f9</b> }</div>
+          <div class="digest">{ bot: <b>${p.bot}</b>, proposal: <b>${p.id}</b>, decision: <b>${decision}</b>, action_sha256: <b>${p.digest.replace('sha256:', '').slice(0, 32)}</b>…, nonce: <b>7Qx2…f9</b> }</div>
         </div>
         <div class="seal" id="seal">
           <div class="ring">${UI.icon('passkey', 'key')}<svg class="arc" viewBox="0 0 108 108"><circle class="track" cx="54" cy="54" r="52"/><circle class="fill" cx="54" cy="54" r="53"/></svg></div>
@@ -241,9 +241,9 @@
       seal.classList.add('signing'); $('#seal-msg', s).innerHTML = '<b>Touch your security key…</b><div class="muted small">navigator.credentials.get · rpId ops-box.tail0000.ts.net</div>';
       setTimeout(() => {
         seal.classList.remove('signing'); seal.classList.add(deny ? 'denied' : 'done');
-        $('#seal-msg', s).innerHTML = deny ? '<b>Denied</b><div class="muted small">Signed decision recorded · the member is told</div>' : `<b>Approved · executing</b><div class="muted small">Verified against operator <span class="mono">ops</span> · credential “laptop” · sign count 212</div>`;
+        $('#seal-msg', s).innerHTML = deny ? '<b>Denied</b><div class="muted small">Signed decision recorded · the bot is told</div>' : `<b>Approved · executing</b><div class="muted small">Verified against operator <span class="mono">ops</span> · credential “laptop” · sign count 212</div>`;
         p.status = deny ? 'denied' : 'approved';
-        setTimeout(() => { UI.closeModal(); UI.toast(deny ? `Denied ${p.id}` : `Approved ${p.id}`, deny ? 'decision signed' : (p.kind === 'terraform' ? 'conductor re-checks the plan hash, HEAD, and a clean tree, then applies' : 'the gate re-runs exactly the signed digest'), deny ? 'fail' : 'ok'); D.attention = D.attention.filter((a) => !a.href.includes(p.id) && !(a.sub || '').includes(p.id)); D.audit.unshift({ ts: new Date().toISOString(), event: 'member_approval', who: 'operator:ops', detail: `${p.id} ${deny ? 'denied' : 'approved'} · webauthn · credential laptop · digest ${p.digest.slice(7, 11)}…`, run: '' }); S.save(); onDone && onDone(); UI.refreshChrome(); }, UI.fast ? 30 : 1300);
+        setTimeout(() => { UI.closeModal(); UI.toast(deny ? `Denied ${p.id}` : `Approved ${p.id}`, deny ? 'decision signed' : (p.kind === 'terraform' ? 'conductor re-checks the plan hash, HEAD, and a clean tree, then applies' : 'the gate re-runs exactly the signed digest'), deny ? 'fail' : 'ok'); D.attention = D.attention.filter((a) => !a.href.includes(p.id) && !(a.sub || '').includes(p.id)); D.audit.unshift({ ts: new Date().toISOString(), event: 'bot_approval', who: 'operator:ops', detail: `${p.id} ${deny ? 'denied' : 'approved'} · webauthn · credential laptop · digest ${p.digest.slice(7, 11)}…`, run: '' }); S.save(); onDone && onDone(); UI.refreshChrome(); }, UI.fast ? 30 : 1300);
       }, UI.fast ? 40 : 1600);
     });
   };
@@ -252,13 +252,13 @@
   UI.palette = () => {
     const items = [
       ...navGroups.flatMap(([, it]) => it.map(([k, l, ic]) => [l, '#/' + k, ic])),
-      ...D.members.map((mb) => [`Member · ${mb.name}`, '#/members/' + mb.name, 'members']),
+      ...D.bots.map((mb) => [`Bot · ${mb.name}`, '#/bots/' + mb.name, 'bots']),
       ...D.runs.slice(0, 8).map((r) => [`Run ${r.id} · ${r.workflow} ${r.repo ? r.repo + '#' + r.number : ''}`, '#/runs/' + r.id, 'runs']),
       ...D.workflows.slice(0, 5).map((w) => [`Edit workflow · ${w.name}`, '#/workflows/' + w.name, 'canvas']),
       ['Pause dispatch', '#/overview', 'pause'], ['Apply update v0.72.0', '#/updates', 'updates'], ['Phone layouts', 'phone.html', 'phone'], ['Sign-in & enrollment', '#/signin', 'passkey'],
     ];
     const el = document.createElement('div');
-    el.innerHTML = `<div class="scrim" id="pal-scrim" style="place-items:start center;background:rgba(8,8,6,.4)"></div><div class="palette"><input placeholder="Jump to a run, member, workflow, setting…" autofocus><div class="res"></div></div>`;
+    el.innerHTML = `<div class="scrim" id="pal-scrim" style="place-items:start center;background:rgba(8,8,6,.4)"></div><div class="palette"><input placeholder="Jump to a run, bot, workflow, setting…" autofocus><div class="res"></div></div>`;
     document.body.appendChild(el);
     const inp = $('input', el), res = $('.res', el); let sel = 0, list = items;
     const draw = () => { res.innerHTML = list.slice(0, 12).map(([l, h, ic], i) => `<a href="${h}" class="${i === sel ? 'on' : ''}">${UI.icon(ic)}${UI.esc(l)}<span class="muted mono" style="margin-left:auto">${h.replace('#/', '')}</span></a>`).join(''); };
@@ -293,7 +293,7 @@
       <div class="spacer"></div>
       <div class="cell wide">${d.magicdns} · TLS</div>`;
     $('#rail-nav').innerHTML = UI.navHTML();
-    $('#tabbar').innerHTML = [['overview', 'Overview', 'overview'], ['live', 'Live', 'live'], ['attention', 'Approvals', 'attention', need], ['members', 'Members', 'members'], ['more', 'More', 'grid']].map(([k, l, ic, c]) => `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}${l}${c ? `<span class="count hot">${c}</span>` : ''}</a>`).join('');
+    $('#tabbar').innerHTML = [['overview', 'Overview', 'overview'], ['live', 'Live', 'live'], ['attention', 'Approvals', 'attention', need], ['bots', 'Bots', 'bots'], ['more', 'More', 'grid']].map(([k, l, ic, c]) => `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}${l}${c ? `<span class="count hot">${c}</span>` : ''}</a>`).join('');
     UI.setNav((location.hash.replace(/^#\/?/, '') || 'overview').split('/')[0]);
   };
 

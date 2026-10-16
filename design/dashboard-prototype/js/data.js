@@ -1,5 +1,5 @@
 /* Fake data for the prototype. Shapes mirror the API in docs/design/dashboard.md
- * (RunHistory/StepRecord from internal/store/history.go, the members ledger
+ * (RunHistory/StepRecord from internal/store/history.go, the bots ledger
  * from #178, browser sessions from #182). Every name here is neutral. */
 (function () {
   const now = Date.now();
@@ -25,7 +25,7 @@
     { name: 'pd', use: 'pagerduty', status: 'ok', detail: 'webhook :8787/pd · 2 services', events: 14, verbs: 3 },
     { name: 'kv', use: 'kv', status: 'ok', detail: 'boltdb · 214 keys', events: 0, verbs: 902 },
     { name: 'tf-plan', use: 'terraform', status: 'ok', detail: 'engine tofu 1.8 · READ role', events: 0, verbs: 6 },
-    { name: 'tf-apply', use: 'terraform', status: 'idle', detail: 'engine tofu 1.8 · WRITE role · no member verb reaches it', events: 0, verbs: 1 },
+    { name: 'tf-apply', use: 'terraform', status: 'idle', detail: 'engine tofu 1.8 · WRITE role · no bot verb reaches it', events: 0, verbs: 1 },
     { name: 'hoff', use: 'web', status: 'wait', detail: 'listen :8099 · 1 draft awaiting answer', events: 3, verbs: 3 },
   ];
 
@@ -56,7 +56,7 @@
     { name: 'dep-bump', source: 'config', on: 'schedule 0 6 * * 1', runs24: 1, ok: 1, cost24: 0.82, steps: [] },
     { name: 'issue-triage', source: 'config', on: 'gh.issue_opened', runs24: 12, ok: 1, cost24: 1.40, steps: [] },
     { name: 'release-notes', source: 'pack house-style', on: 'gh.release_drafted', runs24: 0, ok: 1, cost24: 0, steps: [] },
-    { name: 'member:platform-sre', source: 'member', on: 'pd.incident · manual · sweep', runs24: 7, ok: 0.86, cost24: 3.75, steps: [] },
+    { name: 'bot:platform-sre', source: 'bot', on: 'pd.incident · manual · sweep', runs24: 7, ok: 0.86, cost24: 3.75, steps: [] },
     { name: 'alert', source: 'config', on: 'conductor.escalate · needs_input · failed', runs24: 4, ok: 1, cost24: 0, steps: [] },
   ];
 
@@ -66,20 +66,20 @@
       st('logs', 'ok', 2100, 0), st('triage', 'ok', 8400, 0.03), st('fix', 'run', 0, 0.68, { started: m(5) }), st('test', 'idle'), st('push', 'idle'), st('comment', 'idle') ] },
     { id: 'r-7f2c', workflow: 'pr-review', trigger: 'gh.review_requested', repo: 'acme/web', number: 1291, status: 'run', started: m(2), cost: 0.12, steps: [
       st('fetch', 'ok', 900, 0), st('lint', 'run', 0, 0), st('review', 'run', 0, 0.12), st('post', 'idle') ] },
-    { id: 'r-7f29', workflow: 'member:platform-sre', trigger: 'manual (spawn w41)', repo: '', number: 0, status: 'run', started: m(11), cost: 0.33, steps: [ st('work', 'run', 0, 0.33) ] },
+    { id: 'r-7f29', workflow: 'bot:platform-sre', trigger: 'manual (spawn w41)', repo: '', number: 0, status: 'run', started: m(11), cost: 0.33, steps: [ st('work', 'run', 0, 0.33) ] },
     { id: 'r-7f11', workflow: 'pr-review', trigger: 'gh.review_requested', repo: 'acme/api', number: 480, status: 'ok', started: m(38), finished: m(31), cost: 0.41, tokens: 30110, steps: [] },
     { id: 'r-7ef0', workflow: 'ci-fixer', trigger: 'gh.check_failed', repo: 'acme/web', number: 1288, status: 'fail', started: m(64), finished: m(52), cost: 1.12, failed_step: 'test', error: 'go test ./...: 2 failures (TestCheckout, TestRefund)', steps: [] },
     { id: 'r-7ee3', workflow: 'issue-triage', trigger: 'gh.issue_opened', repo: 'acme/api', number: 486, status: 'ok', started: m(80), finished: m(79), cost: 0.06, steps: [] },
     { id: 'r-7ed1', workflow: 'pr-review', trigger: 'gh.review_requested', repo: 'acme/infra', number: 77, status: 'wait', started: m(95), cost: 0.38, detail: 'hand-off: awaiting answer on hoff (approve / revise / discard)', steps: [] },
     { id: 'r-7ec8', workflow: 'dep-bump', trigger: 'schedule', repo: 'acme/web', number: 0, status: 'ok', started: m(140), finished: m(131), cost: 0.82, steps: [] },
-    { id: 'r-7eb2', workflow: 'member:platform-sre', trigger: 'pd.incident', repo: '', number: 0, status: 'ok', started: m(190), finished: m(176), cost: 0.54, steps: [] },
+    { id: 'r-7eb2', workflow: 'bot:platform-sre', trigger: 'pd.incident', repo: '', number: 0, status: 'ok', started: m(190), finished: m(176), cost: 0.54, steps: [] },
     { id: 'r-7ea0', workflow: 'ci-fixer', trigger: 'gh.check_failed', repo: 'acme/api', number: 471, status: 'idle', started: m(230), finished: m(230), cost: 0, detail: 'parked: conductor:hold label', steps: [] },
     { id: 'r-7e91', workflow: 'pr-review', trigger: 'gh.review_requested', repo: 'acme/web', number: 1285, status: 'ok', started: m(260), finished: m(252), cost: 0.29, steps: [] },
     { id: 'r-7e80', workflow: 'issue-triage', trigger: 'gh.issue_opened', repo: 'acme/web', number: 1284, status: 'ok', started: m(300), finished: m(299), cost: 0.05, steps: [] },
     { id: 'r-7e64', workflow: 'release-notes', trigger: 'gh.release_drafted', repo: 'acme/api', number: 0, status: 'fail', started: m(420), finished: m(418), cost: 0.09, failed_step: 'draft', error: 'budget: max_cost_usd 0.05 exceeded (shed)', steps: [] },
     { id: 'r-7e52', workflow: 'pr-review', trigger: 'gh.review_requested', repo: 'acme/api', number: 468, status: 'ok', started: m(510), finished: m(503), cost: 0.36, steps: [] },
     { id: 'r-7e40', workflow: 'ci-fixer', trigger: 'gh.check_failed', repo: 'acme/web', number: 1279, status: 'ok', started: m(610), finished: m(588), cost: 1.48, steps: [] },
-    { id: 'r-7e31', workflow: 'member:platform-sre', trigger: 'sweep', repo: '', number: 0, status: 'ok', started: m(720), finished: m(716), cost: 0.004, steps: [] },
+    { id: 'r-7e31', workflow: 'bot:platform-sre', trigger: 'sweep', repo: '', number: 0, status: 'ok', started: m(720), finished: m(716), cost: 0.004, steps: [] },
   ];
 
   // timeline lanes for the overview "score" (last 12h); [startMinAgo, endMinAgo, status, runId]
@@ -95,8 +95,8 @@
   D.costDaily = [4.1, 6.8, 5.2, 7.9, 3.3, 2.1, 8.4, 9.7, 6.2, 5.5, 7.1, 11.9, 8.8, 6.4].map((v, i) => ({ day: i, usd: v }));
 
   D.attention = [
-    { kind: 'approval', s: 'ember', title: 'terraform apply · infra@3f2a9c1d', sub: 'platform-sre · p12 · +1 ~2 -0 · REPLACES aws_instance.web', href: '#/members/platform-sre/proposals/p12', age: '7m' },
-    { kind: 'approval', s: 'ember', title: 'slack-ops.post to #incidents', sub: 'billing-sre · p4 · requester chat:U-THIRD (user)', href: '#/members/billing-sre/proposals', age: '22m' },
+    { kind: 'approval', s: 'ember', title: 'terraform apply · infra@3f2a9c1d', sub: 'platform-sre · p12 · +1 ~2 -0 · REPLACES aws_instance.web', href: '#/bots/platform-sre/proposals/p12', age: '7m' },
+    { kind: 'approval', s: 'ember', title: 'slack-ops.post to #incidents', sub: 'billing-sre · p4 · requester chat:U-THIRD (user)', href: '#/bots/billing-sre/proposals', age: '22m' },
     { kind: 'failed', s: 'fail', title: 'ci-fixer failed on acme/web#1288', sub: 'step test · 2 failures', href: '#/runs/r-7ef0', age: '52m' },
     { kind: 'needs_input', s: 'wait', title: 'hand-off awaiting answer · acme/infra#77', sub: 'pr-review · hoff draft (approve / revise / discard)', href: '#/runs/r-7ed1', age: '1h' },
     { kind: 'browser', s: 'wait', title: 'push approval requested by app.example.com', sub: 'agent:triage@acme/app · browser login', href: '#/browser/b-02', age: '3m' },
@@ -133,8 +133,8 @@
     ['fix', 'info', 'All billing tests pass. Writing summary for step.done.'],
   ];
 
-  /* ---------- members (#178) ---------- */
-  D.members = [
+  /* ---------- bots (#178) ---------- */
+  D.bots = [
     { name: 'platform-sre', color: '#ff6a2b', desc: 'SRE for the platform services', home: 'live', session: 's7', turns: 41, maxTurns: 100, age: '9h', maxAge: '24h', shadow: false, sandboxed: true, mode: 'namespace',
       operators: ['ops'], open: 4, pending: 1, workers: 2, spend: 0, proactive: { every: '4h', next: '1h 12m', quiet: '22:00-07:00', budget: '2/6 runs · $0.31/$2.00' }, peers: ['billing-sre'] },
     { name: 'billing-sre', color: '#4fb8e8', desc: 'Cost and billing operations', home: 'idle', session: 's3', turns: 12, maxTurns: 100, age: '2h', maxAge: '24h', shadow: false, sandboxed: true, mode: 'container',
@@ -145,13 +145,13 @@
 
   D.chat = [
     { who: 'event', at: m(48), case: 'c29', text: 'pd.incident · SEV2 · api p99 latency > 2s for 10m (acme/api, us-east)', fenced: true },
-    { who: 'member', at: m(47), text: 'Opened **c29**. Checking the runbook `runbooks/latency.md`. I’ll start a read-only worker to pull the last hour of p99 by route and the deploy log.' },
-    { who: 'tool', at: m(47), text: 'conductor member spawn --case c29 --group recon --read-only "p99 by route, last 60m"' },
-    { who: 'tool', at: m(46), text: 'conductor member spawn --case c29 --group recon --read-only "deploys + config changes, last 3h"' },
-    { who: 'member', at: m(31), text: 'Both workers reported. The regression lines up with **web** instances on the old AMI after the 14:02 scale-out; routes `/checkout` and `/refund` are the slow ones. The fix is in `infra` commit `3f2a9c1d`: it pins the launch template to the current AMI and replaces `aws_instance.web`.' },
-    { who: 'member', at: m(8), text: 'I proposed **p12**: `terraform apply` of infra@3f2a9c1d, dir envs/prod, workspace prod. Conductor planned it: +1 ~2 -0, and it **replaces aws_instance.web**. Awaiting your approval.' },
+    { who: 'bot', at: m(47), text: 'Opened **c29**. Checking the runbook `runbooks/latency.md`. I’ll start a read-only worker to pull the last hour of p99 by route and the deploy log.' },
+    { who: 'tool', at: m(47), text: 'conductor bot spawn --case c29 --group recon --read-only "p99 by route, last 60m"' },
+    { who: 'tool', at: m(46), text: 'conductor bot spawn --case c29 --group recon --read-only "deploys + config changes, last 3h"' },
+    { who: 'bot', at: m(31), text: 'Both workers reported. The regression lines up with **web** instances on the old AMI after the 14:02 scale-out; routes `/checkout` and `/refund` are the slow ones. The fix is in `infra` commit `3f2a9c1d`: it pins the launch template to the current AMI and replaces `aws_instance.web`.' },
+    { who: 'bot', at: m(8), text: 'I proposed **p12**: `terraform apply` of infra@3f2a9c1d, dir envs/prod, workspace prod. Conductor planned it: +1 ~2 -0, and it **replaces aws_instance.web**. Awaiting your approval.' },
     { who: 'op', at: m(5), text: 'What happens to in-flight requests on web while it’s replaced?' },
-    { who: 'member', at: m(4), text: 'The ALB drains the old target for 30s (deregistration_delay in `modules/web/alb.tf`); create_before_destroy is set, so the new instance is healthy before the old one goes. Expect no dropped requests; a brief p99 bump during the swap.' },
+    { who: 'bot', at: m(4), text: 'The ALB drains the old target for 30s (deregistration_delay in `modules/web/alb.tf`); create_before_destroy is set, so the new instance is healthy before the old one goes. Expect no dropped requests; a brief p99 bump during the swap.' },
   ];
 
   D.cases = [
@@ -159,21 +159,21 @@
     { id: 'c29', title: 'SEV2 api p99 latency > 2s', status: 'open', requester: 'event:pd.incident', cls: 'event', opened: m(48), workers: 2, proposals: 1, urgent: true },
     { id: 'c27', title: 'FINDING high · cost jump 44% on nat-gateway', status: 'open', requester: 'proactive (sweep x4)', cls: 'proactive', opened: m(260), workers: 0, proposals: 0 },
     { id: 'c24', title: 'Can you bump the cache TTL for /search?', status: 'open', requester: 'chat:U-THIRD', cls: 'user', opened: m(380), workers: 1, proposals: 1 },
-    { id: 'c19', title: 'Peer: billing-sre asks for NAT gateway owners', status: 'closed', requester: 'member:billing-sre', cls: 'peer', opened: m(1600), workers: 0, proposals: 0 },
+    { id: 'c19', title: 'Peer: billing-sre asks for NAT gateway owners', status: 'closed', requester: 'bot:billing-sre', cls: 'peer', opened: m(1600), workers: 0, proposals: 0 },
     { id: 'c12', title: 'Weekly runbook consolidation', status: 'closed', requester: 'operator:ops', cls: 'operator', opened: m(4000), workers: 1, proposals: 0 },
   ];
 
   D.proposals = [
-    { id: 'p12', member: 'platform-sre', kind: 'terraform', verb: 'terraform.apply', tier: 'propose', status: 'pending', case: 'c29', requester: 'event:pd.incident', cls: 'event', worker: null, at: m(8), expires: '23h 52m',
+    { id: 'p12', bot: 'platform-sre', kind: 'terraform', verb: 'terraform.apply', tier: 'propose', status: 'pending', case: 'c29', requester: 'event:pd.incident', cls: 'event', worker: null, at: m(8), expires: '23h 52m',
       summary: 'terraform apply of infra@3f2a9c1d07e4, dir envs/prod, workspace prod: +1 ~2 -0; REPLACES aws_instance.web',
       tf: { repo: 'infra', commit: '3f2a9c1d07e4b1c0a9d2e88f31c0b6a1d4e2f907', dir: 'envs/prod', workspace: 'prod', var_files: ['prod.tfvars'], targets: [], add: 1, change: 2, destroy: 0, replaces: ['aws_instance.web'], plan_sha: 'a4c1e09b7f22d81c5e6a03f9b2d47c18e5f0a6b3c9d2e1f4a7b8c0d3e6f9a2b5' },
       digest: 'sha256:9f2c47e1b0a3d58c6e7f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7' },
-    { id: 'p11', member: 'platform-sre', kind: 'verb', verb: 'kv.set', tier: 'propose', status: 'pending', case: 'c24', requester: 'chat:U-THIRD', cls: 'user', worker: 'w28', at: m(370), expires: '17h 50m',
+    { id: 'p11', bot: 'platform-sre', kind: 'verb', verb: 'kv.set', tier: 'propose', status: 'pending', case: 'c24', requester: 'chat:U-THIRD', cls: 'user', worker: 'w28', at: m(370), expires: '17h 50m',
       summary: 'kv.set search/cache_ttl = "300s" (was "60s")', options: { key: 'search/cache_ttl', value: '300s' }, digest: 'sha256:1b7e0c9d2a4f6e8b0c1d3e5f7a9b2c4d6e8f0a1b3c5d7e9f1a2b4c6d8e0f2a4b' },
-    { id: 'p9', member: 'platform-sre', kind: 'verb', verb: 'slack-ops.post', tier: 'reversible', status: 'shadow', case: 'c27', requester: 'proactive (sweep x4)', cls: 'proactive', at: m(255), summary: 'post finding to #platform-costs', digest: 'sha256:—' },
-    { id: 'p8', member: 'platform-sre', kind: 'verb', verb: 'gh.comment', tier: 'propose', status: 'executed', approver: 'ops (passkey · laptop)', case: 'c22', at: m(1500), summary: 'comment on acme/api#455 with the RCA', digest: 'sha256:5d9a…' },
-    { id: 'p6', member: 'platform-sre', kind: 'terraform', verb: 'terraform.apply', tier: 'propose', status: 'refused', case: 'c18', at: m(3100), summary: 'destroys stateful local_file.config — refused by default (allow_destroy)', digest: 'sha256:—' },
-    { id: 'p4', member: 'billing-sre', kind: 'verb', verb: 'slack-ops.post', tier: 'propose', status: 'pending', case: 'c7', requester: 'chat:U-THIRD', cls: 'user', at: m(22), expires: '23h 38m', summary: 'post the monthly forecast to #incidents', options: { channel: '#incidents' }, digest: 'sha256:c3e5a7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5' },
+    { id: 'p9', bot: 'platform-sre', kind: 'verb', verb: 'slack-ops.post', tier: 'reversible', status: 'shadow', case: 'c27', requester: 'proactive (sweep x4)', cls: 'proactive', at: m(255), summary: 'post finding to #platform-costs', digest: 'sha256:—' },
+    { id: 'p8', bot: 'platform-sre', kind: 'verb', verb: 'gh.comment', tier: 'propose', status: 'executed', approver: 'ops (passkey · laptop)', case: 'c22', at: m(1500), summary: 'comment on acme/api#455 with the RCA', digest: 'sha256:5d9a…' },
+    { id: 'p6', bot: 'platform-sre', kind: 'terraform', verb: 'terraform.apply', tier: 'propose', status: 'refused', case: 'c18', at: m(3100), summary: 'destroys stateful local_file.config — refused by default (allow_destroy)', digest: 'sha256:—' },
+    { id: 'p4', bot: 'billing-sre', kind: 'verb', verb: 'slack-ops.post', tier: 'propose', status: 'pending', case: 'c7', requester: 'chat:U-THIRD', cls: 'user', at: m(22), expires: '23h 38m', summary: 'post the monthly forecast to #incidents', options: { channel: '#incidents' }, digest: 'sha256:c3e5a7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5' },
   ];
 
   D.tfPlan = `Terraform will perform the following actions:
@@ -228,10 +228,10 @@ Primary Postgres for the platform services (acme/api, acme/web).
 - [[runbooks/latency]]
 `,
     log: [
-      { sha: '8e1f0aa', msg: 'knowledge: db-prod-1 failover drill outcome', author: 'platform-sre', trailers: 'Member-Case: c31 · Member-Role: home · Member-Session: s7', at: m(1) },
-      { sha: '41c09d2', msg: 'episodes: c29 recon findings', author: 'platform-sre', trailers: 'Member-Case: c29 · Member-Worker: w40', at: m(31) },
-      { sha: 'b07e5c1', msg: 'runbooks/latency: add ALB deregistration note', author: 'ops (dashboard)', trailers: 'Member-Role: operator · Edited-Via: dashboard', at: m(1440) },
-      { sha: '2aa91f4', msg: 'handoff: s6 → s7', author: 'platform-sre', trailers: 'Member-Session: s6', at: m(560) },
+      { sha: '8e1f0aa', msg: 'knowledge: db-prod-1 failover drill outcome', author: 'platform-sre', trailers: 'Bot-Case: c31 · Bot-Role: home · Bot-Session: s7', at: m(1) },
+      { sha: '41c09d2', msg: 'episodes: c29 recon findings', author: 'platform-sre', trailers: 'Bot-Case: c29 · Bot-Worker: w40', at: m(31) },
+      { sha: 'b07e5c1', msg: 'runbooks/latency: add ALB deregistration note', author: 'ops (dashboard)', trailers: 'Bot-Role: operator · Edited-Via: dashboard', at: m(1440) },
+      { sha: '2aa91f4', msg: 'handoff: s6 → s7', author: 'platform-sre', trailers: 'Bot-Session: s6', at: m(560) },
     ],
   };
 
@@ -241,15 +241,15 @@ Primary Postgres for the platform services (acme/api, acme/web).
       { v: 'kv.set', tier: 'propose' }, { v: 'gh.comment', tier: 'propose' }, { v: 'terraform.apply', tier: 'propose' }, { v: 'gh.delete_*', tier: 'never' },
     ],
     credentials: [
-      { name: 'grafana', origin: 'https://grafana.example.com', identity: 'member:platform-sre', fields: 'username, password, otp', vault: 'op', ref: 'Agents/Grafana/*' },
-      { name: 'statuspage', origin: 'https://manage.statuspage.example', identity: 'member:platform-sre', fields: 'passkey', vault: 'house', ref: 'passkeys/statuspage' },
+      { name: 'grafana', origin: 'https://grafana.example.com', identity: 'bot:platform-sre', fields: 'username, password, otp', vault: 'op', ref: 'Agents/Grafana/*' },
+      { name: 'statuspage', origin: 'https://manage.statuspage.example', identity: 'bot:platform-sre', fields: 'passkey', vault: 'house', ref: 'passkeys/statuspage' },
     ],
-    logins: [ { site: 'console.example.com', identity: 'member:platform-sre', seeded: m(4300), cookies: 6 } ],
+    logins: [ { site: 'console.example.com', identity: 'bot:platform-sre', seeded: m(4300), cookies: 6 } ],
   };
 
   /* ---------- browser (#182) ---------- */
   D.browsers = [
-    { id: 'b-01', identity: 'member:platform-sre', agent: 'w41', requester: 'event:pd.incident', loggedIn: false, url: 'https://grafana.example.com/d/api-latency?from=now-1h', title: 'API latency · Grafana', status: 'run', tabs: 2, actions: 37, profile: 'anonymous', note: 'requested by event, not the operator → anonymous profile' },
+    { id: 'b-01', identity: 'bot:platform-sre', agent: 'w41', requester: 'event:pd.incident', loggedIn: false, url: 'https://grafana.example.com/d/api-latency?from=now-1h', title: 'API latency · Grafana', status: 'run', tabs: 2, actions: 37, profile: 'anonymous', note: 'requested by event, not the operator → anonymous profile' },
     { id: 'b-02', identity: 'agent:triage@acme/app', agent: 'r-7f2c', requester: 'operator:ops', loggedIn: true, url: 'https://app.example.com/login/approve', title: 'Approve sign-in · App', status: 'wait', tabs: 1, actions: 12, profile: 'logged-in: app.example.com', note: 'push approval: waiting on you' },
     { id: 'b-03', identity: 'agent:docs@acme/web', agent: 'r-7f11', requester: 'operator:ops', loggedIn: false, url: 'https://docs.example.com/api/refunds', title: 'Refunds API · Docs', status: 'idle', tabs: 1, actions: 5, profile: 'anonymous' },
   ];
@@ -286,7 +286,7 @@ Primary Postgres for the platform services (acme/api, acme/web).
   D.packs = [
     { name: 'review', use: 'conductor-packs/pr-review-team', ver: '1.4.2', sha: 'c81e09a', status: 'ok', official: true, hold: false, triggers: '2 armed / 3', overrides: 4, update: '1.5.0' },
     { name: 'house-style', use: './packs/house-style', ver: 'local', sha: '—', status: 'ok', official: false, hold: false, triggers: '1 armed / 1', overrides: 0 },
-    { name: 'sre-member', use: 'conductor-packs/sre-member', ver: '0.9.0', sha: '3d70b2e', status: 'ok', official: true, hold: true, triggers: '0 armed / 2', overrides: 1 },
+    { name: 'sre-bot', use: 'conductor-packs/sre-bot', ver: '0.9.0', sha: '3d70b2e', status: 'ok', official: true, hold: true, triggers: '0 armed / 2', overrides: 1 },
     { name: 'kit', use: 'acme/conductor-packs/kit@^1.2', ver: '1.2.7', sha: '9f01c44', status: 'wait', official: false, hold: false, triggers: 'dormant: no pagerduty connector bound', overrides: 0 },
   ];
   D.plugins = [
@@ -298,27 +298,27 @@ Primary Postgres for the platform services (acme/api, acme/web).
     { name: 'js', kind: 'engine', ver: 'v0.3.1', src: 'conductor-plugins/js', status: 'ok', instances: ['run: js'], reload: 'in place', update: null },
   ];
   D.releases = [
-    { v: 'v0.72.0', date: '2026-10-16', notes: ['Members: proactive sweeps report cost from run history', 'Browser: per-identity evaluate', 'Fix: a paused daemon still rotated member sessions'], preflight: 'passed', current: false },
+    { v: 'v0.72.0', date: '2026-10-16', notes: ['Bots: proactive sweeps report cost from run history', 'Browser: per-identity evaluate', 'Fix: a paused daemon still rotated bot sessions'], preflight: 'passed', current: false },
     { v: 'v0.71.2', date: '2026-10-12', notes: ['Reclaim a checkout:none run’s workspace when its launch fails'], current: true },
     { v: 'v0.71.1', date: '2026-10-09', notes: ['Remove a run’s directory when its workspace is reclaimed'], current: false },
   ];
 
   D.audit = [
-    { ts: m(1), event: 'memory_remember', who: 'member:platform-sre', detail: 'knowledge/db-prod-1.md · commit 8e1f0aa · case c31' },
+    { ts: m(1), event: 'memory_remember', who: 'bot:platform-sre', detail: 'knowledge/db-prod-1.md · commit 8e1f0aa · case c31' },
     { ts: m(3), event: 'browser_action', who: 'agent:triage@acme/app', detail: 'await-approval · app.example.com/login/approve · logged_in: app.example.com' },
     { ts: m(3), event: 'browser_fill', who: 'agent:triage@acme/app', detail: 'credential app · origin https://app.example.com · field password · len 24' },
     { ts: m(5), event: 'dashboard_session', who: 'operator:ops', detail: 'passkey assertion · credential laptop · 127.0.0.1' },
-    { ts: m(7), event: 'member_proposal', who: 'member:platform-sre', detail: 'p12 terraform.apply · planned +1 ~2 -0 · plan sha a4c1e09b…' },
+    { ts: m(7), event: 'bot_proposal', who: 'bot:platform-sre', detail: 'p12 terraform.apply · planned +1 ~2 -0 · plan sha a4c1e09b…' },
     { ts: m(31), event: 'verb', who: 'r-7f11', detail: 'gh.review acme/api#480 · as bot' },
     { ts: m(52), event: 'workflow_failed', who: 'r-7ef0', detail: 'ci-fixer · step test · acme/web#1288' },
     { ts: m(70), event: 'egress_denied', who: 'agent:fixer@acme/web', detail: 'pastebin.com:443' },
-    { ts: m(1500), event: 'member_approval', who: 'operator:ops', detail: 'p8 approved · webauthn · credential laptop · digest 5d9a…' },
-    { ts: m(1440), event: 'config_apply', who: 'operator:ops', detail: 'members.platform-sre.proactive.every 6h → 4h · backup cfg-20261015-1412 · validated on copy' },
+    { ts: m(1500), event: 'bot_approval', who: 'operator:ops', detail: 'p8 approved · webauthn · credential laptop · digest 5d9a…' },
+    { ts: m(1440), event: 'config_apply', who: 'operator:ops', detail: 'bots.platform-sre.proactive.every 6h → 4h · backup cfg-20261015-1412 · validated on copy' },
   ];
 
   D.configHistory = [
     { id: 'cfg-20261016-0912', at: m(50), who: 'ops (dashboard)', summary: 'triggers[ci-fixer].policy.budget.max_cost_usd 1.50 → 2.00', status: 'live' },
-    { id: 'cfg-20261015-1412', at: m(1440), who: 'ops (dashboard)', summary: 'members.platform-sre.proactive.every 6h → 4h', status: 'backup' },
+    { id: 'cfg-20261015-1412', at: m(1440), who: 'ops (dashboard)', summary: 'bots.platform-sre.proactive.every 6h → 4h', status: 'backup' },
     { id: 'cfg-20261014-2205', at: m(2100), who: 'file edit (external)', summary: 'detected on reload: connectors.pd added', status: 'backup' },
     { id: 'cfg-20261013-1730', at: m(3400), who: 'ops (dashboard)', summary: 'packs.review.steps.review-flow/review.model my-fleet', status: 'backup' },
   ];
@@ -355,21 +355,21 @@ Primary Postgres for the platform services (acme/api, acme/web).
   D.secrets.push({ name: 'OLD_DEPLOY_KEY', ref: 'house/deploy-old', vault: 'house', set: m(90000), used: [] });
   D.secrets.push({ name: 'LINEAR_KEY', ref: 'store/conductor/linear', vault: 'store', set: m(30000), used: [] });
 
-  const MEMBER = (name, o) => Object.assign({
-    description: '', charter_file: `members/${name}.md`, escalation: 'Page the operator if a sev1 is not mitigated in 15 minutes.', operators: ['ops'],
+  const BOT = (name, o) => Object.assign({
+    description: '', charter_file: `bots/${name}.md`, escalation: 'Page the operator if a sev1 is not mitigated in 15 minutes.', operators: ['ops'],
     home: { rotate: { max_age: '24h', max_turns: 100 } }, worker: { runtime: 'claude-cli', timeout: '2h', max_concurrent: 4 },
     skill: { verbs: ['kv.get', 'gh.get_*'] }, autonomy: { shadow: false, tiers: { observe: ['gh.get_*', 'kv.get'] }, promote: [], approval_ttl: '24h' },
     peers: [], isolation: { mode: 'namespace' },
   }, o);
-  D.members[0].cfg = MEMBER('platform-sre', { description: 'SRE for the platform services',
+  D.bots[0].cfg = BOT('platform-sre', { description: 'SRE for the platform services',
     skill: { verbs: ['gh.get_*', 'kv.get', 'kv.set', 'gh.comment', 'slack-ops.post', 'terraform.apply', 'gh.delete_*'] },
     autonomy: { shadow: false, tiers: { observe: ['gh.get_*', 'kv.get'], reversible: ['slack-ops.post'], propose: ['kv.set', 'gh.comment', 'terraform.apply'], never: ['gh.delete_*'] }, promote: ['slack-ops.post'], approval_ttl: '24h' },
     proactive: { every: '4h', quiet_hours: '22:00-07:00', budget: { max_runs_per_day: 6, max_cost_per_day: 2.0 }, notify_at: 'high' },
     peers: ['billing-sre'] });
-  D.members[1].cfg = MEMBER('billing-sre', { description: 'Cost and billing operations', skill: { verbs: ['kv.get', 'slack-ops.post'] },
+  D.bots[1].cfg = BOT('billing-sre', { description: 'Cost and billing operations', skill: { verbs: ['kv.get', 'slack-ops.post'] },
     autonomy: { shadow: false, tiers: { observe: ['kv.get'], propose: ['slack-ops.post'] }, promote: [], approval_ttl: '24h', spend: { per_action: 2000, per_period: 5000, period: '720h' } },
     peers: ['platform-sre'], isolation: { mode: 'container' } });
-  D.members[2].cfg = MEMBER('web-triage', { description: 'Triage for the web app’s issues', operators: ['ops', 'oncall'], home: { rotate: { max_age: '12h', max_turns: 60 } },
+  D.bots[2].cfg = BOT('web-triage', { description: 'Triage for the web app’s issues', operators: ['ops', 'oncall'], home: { rotate: { max_age: '12h', max_turns: 60 } },
     skill: { verbs: ['gh.get_*', 'gh.label', 'gh.comment'] }, autonomy: { shadow: true, tiers: { observe: ['gh.get_*'], propose: ['gh.label', 'gh.comment'] }, promote: [], approval_ttl: '24h' } });
   D.charters = {
     'platform-sre': 'You are the platform services\' first-line SRE. Triage pages, investigate with read-only tools, propose fixes, and escalate per the policy below.\n\n## Proactive checks\n- error budgets for api and web\n- NAT and egress cost vs last week\n',
@@ -377,7 +377,7 @@ Primary Postgres for the platform services (acme/api, acme/web).
     'web-triage': 'Label and route new issues on acme/web. Ask for reproduction steps when missing.\n',
   };
   D.identities = [
-    { id: 'member:platform-sre', allow: ['grafana.example.com', 'console.example.com'], logins: ['console.example.com'], evaluate: 'off' },
+    { id: 'bot:platform-sre', allow: ['grafana.example.com', 'console.example.com'], logins: ['console.example.com'], evaluate: 'off' },
     { id: 'agent:triage@acme/app', allow: ['app.example.com', 'docs.example.com'], logins: ['app.example.com'], evaluate: 'off' },
     { id: 'agent:docs@acme/web', allow: ['docs.example.com'], logins: [], evaluate: 'read-only' },
   ];
@@ -386,7 +386,7 @@ Primary Postgres for the platform services (acme/api, acme/web).
   D.packs.forEach((p) => (p.cfg = {
     review: { use: 'conductor-packs/pr-review-team', connectors: { github: 'gh' }, steps: { 'review-flow/review': { model: 'my-fleet' } }, triggers: { on_review_request: { enabled: true, repos: ['acme/*'] } } },
     'house-style': { use: './packs/house-style' },
-    'sre-member': { use: 'conductor-packs/sre-member@0.9.0', hold: true, steps: { 'sweep/check': { model: 'light' } } },
+    'sre-bot': { use: 'conductor-packs/sre-bot@0.9.0', hold: true, steps: { 'sweep/check': { model: 'light' } } },
     kit: { use: 'acme/conductor-packs/kit@^1.2' },
   }[p.name]));
 
@@ -516,8 +516,8 @@ steps:
   D.workflows.find((w) => w.name === 'pr-review').pack = 'review';
   D.workflows.find((w) => w.name === 'release-notes').pack = 'house-style';
 
-  /* Chat per member; memory files; access; preferences; staged changes. */
-  D.chats = { 'platform-sre': D.chat, 'billing-sre': [{ who: 'member', at: m(30), text: 'Forecast for October is **$41.2k**, +6% on September. Proposal **p4** posts it to #incidents; awaiting approval.' }], 'web-triage': [] };
+  /* Chat per bot; memory files; access; preferences; staged changes. */
+  D.chats = { 'platform-sre': D.chat, 'billing-sre': [{ who: 'bot', at: m(30), text: 'Forecast for October is **$41.2k**, +6% on September. Proposal **p4** posts it to #incidents; awaiting approval.' }], 'web-triage': [] };
   D.memory.files = {
     'knowledge/README.md': '# Knowledge\n\nWhat platform-sre has learned about the systems it runs.\n',
     'knowledge/db-prod-1.md': D.memory.file,
@@ -542,12 +542,12 @@ steps:
   ];
   D.prefs = { notifyApprovals: true, notifyPush: true, notifyFailed: false };
   D.optouts = [{ id: 'oo1', where: 'trigger gh.review_requested (hand-off)', owner: 'your config', detail: 'runs as you through paseo\'s plain provider · titled [UNSANDBOXED]', path: 'triggers[on=gh.review_requested].isolation' }];
-  D.containers = [{ identity: 'member:billing-sre', image: 'agents:latest', volume: 'home-billing-sre', size: '1.4 GB', up: '2h' }, { identity: 'runtime:gpu-box', image: 'agents:latest', volume: 'home-gpu-box', size: '6.1 GB', up: '3d' }];
+  D.containers = [{ identity: 'bot:billing-sre', image: 'agents:latest', volume: 'home-billing-sre', size: '1.4 GB', up: '2h' }, { identity: 'runtime:gpu-box', image: 'agents:latest', volume: 'home-gpu-box', size: '6.1 GB', up: '3d' }];
   D.pending = [];
   D.audit.forEach((a) => (a.run = (a.who.match(/^r-/) ? a.who : '')));
 
-  /* Teams (draft #178 follow-up). A member is in at most one team. Team
-   * defaults are a ceiling members inherit and can only narrow; members in a
+  /* Teams (draft #178 follow-up). A bot is in at most one team. Team
+   * defaults are a ceiling bots inherit and can only narrow; bots in a
    * team are peers by default; teams are isolated unless linked. */
   D.teams = [
     { name: 'platform', cfg: { description: 'Platform services: api, web, infra', lead: 'platform-sre',
@@ -565,13 +565,13 @@ steps:
       routing: [{ name: 'cost-anomaly', when: { on: 'aws-cost.anomaly' }, to: 'billing-sre' }],
       links: ['platform'] } },
   ];
-  D.members[0].cfg.team = 'platform'; D.members[2].cfg.team = 'platform'; D.members[1].cfg.team = 'finance';
+  D.bots[0].cfg.team = 'platform'; D.bots[2].cfg.team = 'platform'; D.bots[1].cfg.team = 'finance';
   // inside a team peers are implicit, so the explicit cross-team link is the only one written
-  D.members.push({ name: 'release-scribe', color: '#e6b33c', desc: 'Drafts release notes; no team', home: 'idle', session: 's1', turns: 0, maxTurns: 40, age: '1h', maxAge: '12h', shadow: true, sandboxed: true, mode: 'namespace', operators: ['ops'], open: 0, pending: 0, workers: 0, spend: 0, proactive: null, peers: [],
-    cfg: { description: 'Drafts release notes; no team', charter_file: 'members/release-scribe.md', operators: ['ops'], home: { rotate: { max_age: '12h', max_turns: 40 } }, skill: { verbs: ['gh.get_*', 'slack-ops.post'] }, autonomy: { shadow: true, tiers: { observe: ['gh.get_*'], propose: ['slack-ops.post'] }, promote: [], approval_ttl: '24h' }, peers: [], isolation: { mode: 'namespace' } } });
+  D.bots.push({ name: 'release-scribe', color: '#e6b33c', desc: 'Drafts release notes; no team', home: 'idle', session: 's1', turns: 0, maxTurns: 40, age: '1h', maxAge: '12h', shadow: true, sandboxed: true, mode: 'namespace', operators: ['ops'], open: 0, pending: 0, workers: 0, spend: 0, proactive: null, peers: [],
+    cfg: { description: 'Drafts release notes; no team', charter_file: 'bots/release-scribe.md', operators: ['ops'], home: { rotate: { max_age: '12h', max_turns: 40 } }, skill: { verbs: ['gh.get_*', 'slack-ops.post'] }, autonomy: { shadow: true, tiers: { observe: ['gh.get_*'], propose: ['slack-ops.post'] }, promote: [], approval_ttl: '24h' }, peers: [], isolation: { mode: 'namespace' } } });
   D.charters['release-scribe'] = 'Draft release notes from merged PRs. Never post without approval.\n';
   D.chats['release-scribe'] = [];
-  D.cases.forEach((c) => (c.member = 'platform-sre'));
+  D.cases.forEach((c) => (c.bot = 'platform-sre'));
   const R = (o) => Object.assign({ requester_kept: true }, o);
   D.cases.find((c) => c.id === 'c29').routed = R({ by: 'rule', rule: 'pd-api', team: 'platform', via: 'lead', lead: 'platform-sre', to: 'platform-sre', note: 'the lead kept it' });
   D.cases.find((c) => c.id === 'c24').routed = R({ by: 'direct', to: 'platform-sre' });
@@ -580,18 +580,59 @@ steps:
   D.cases.find((c) => c.id === 'c19').routed = R({ by: 'link', team: 'finance', to: 'platform-sre', note: 'peer ask over the platform↔finance link' });
   D.cases.find((c) => c.id === 'c12').routed = R({ by: 'direct', to: 'platform-sre' });
   D.cases.push(
-    { id: 'c33', member: 'web-triage', title: 'Checkout button misaligned on Safari', status: 'open', requester: 'event:gh.issue_opened', cls: 'event', opened: m(70), workers: 0, proposals: 0, routed: R({ by: 'rule', rule: 'web-issues', team: 'platform', to: 'web-triage' }) },
-    { id: 'c34', member: 'web-triage', title: 'pd: web 5xx elevated on /cart', status: 'open', requester: 'event:pd.incident', cls: 'event', opened: m(18), workers: 1, proposals: 0, urgent: true, routed: R({ by: 'rule', rule: 'pd-api', team: 'platform', via: 'lead', lead: 'platform-sre', to: 'web-triage', note: 'lead assigned: web owns /cart' }) },
-    { id: 'c7', member: 'billing-sre', title: 'Monthly forecast for October', status: 'open', requester: 'chat:U-THIRD', cls: 'user', opened: m(40), workers: 0, proposals: 1, routed: R({ by: 'direct', to: 'billing-sre' }) },
+    { id: 'c33', bot: 'web-triage', title: 'Checkout button misaligned on Safari', status: 'open', requester: 'event:gh.issue_opened', cls: 'event', opened: m(70), workers: 0, proposals: 0, routed: R({ by: 'rule', rule: 'web-issues', team: 'platform', to: 'web-triage' }) },
+    { id: 'c34', bot: 'web-triage', title: 'pd: web 5xx elevated on /cart', status: 'open', requester: 'event:pd.incident', cls: 'event', opened: m(18), workers: 1, proposals: 0, urgent: true, routed: R({ by: 'rule', rule: 'pd-api', team: 'platform', via: 'lead', lead: 'platform-sre', to: 'web-triage', note: 'lead assigned: web owns /cart' }) },
+    { id: 'c7', bot: 'billing-sre', title: 'Monthly forecast for October', status: 'open', requester: 'chat:U-THIRD', cls: 'user', opened: m(40), workers: 0, proposals: 1, routed: R({ by: 'direct', to: 'billing-sre' }) },
   );
   D.teamKnowledge = {
-    platform: { repo: 'team-knowledge/platform', files: { 'README.md': '# Platform team knowledge\n\nShared by every member of team platform. Members propose; the operator approves.\n', 'alb.md': '# ALB\n\nShared target groups; check deregistration delay before blaming the app.\n', 'oncall.md': '# On-call\n\nops is primary, oncall secondary, 22:00-07:00 quiet hours for sweeps.\n' },
+    platform: { repo: 'team-knowledge/platform', files: { 'README.md': '# Platform team knowledge\n\nShared by every bot of team platform. Bots propose; the operator approves.\n', 'alb.md': '# ALB\n\nShared target groups; check deregistration delay before blaming the app.\n', 'oncall.md': '# On-call\n\nops is primary, oncall secondary, 22:00-07:00 quiet hours for sweeps.\n' },
       proposals: [
-        { id: 'k4', member: 'platform-sre', from: 'knowledge/alb.md', to: 'alb.md', summary: 'ALB deregistration delay is 30s on every target group', status: 'pending', at: m(25), case: 'c29', diff: ' # ALB\n \n Shared target groups; check deregistration delay before blaming the app.\n+\n+`deregistration_delay` is **30s** on every target group (modules/web/alb.tf).\n' },
-        { id: 'k3', member: 'web-triage', from: 'knowledge/safari.md', to: 'browsers.md', summary: 'Safari 18 flex gap bug: use margin fallback in checkout', status: 'pending', at: m(55), case: 'c33', diff: '+# Browsers\n+\n+Safari 18 mis-sizes flex `gap` inside buttons; checkout uses a margin fallback.\n' },
-        { id: 'k2', member: 'platform-sre', from: 'runbooks/page-triage.md', to: 'oncall.md', summary: 'Ack within 5 minutes; one case per page', status: 'approved', at: m(3000), approver: 'ops (passkey · laptop)', diff: '' },
+        { id: 'k4', bot: 'platform-sre', from: 'knowledge/alb.md', to: 'alb.md', summary: 'ALB deregistration delay is 30s on every target group', status: 'pending', at: m(25), case: 'c29', diff: ' # ALB\n \n Shared target groups; check deregistration delay before blaming the app.\n+\n+`deregistration_delay` is **30s** on every target group (modules/web/alb.tf).\n' },
+        { id: 'k3', bot: 'web-triage', from: 'knowledge/safari.md', to: 'browsers.md', summary: 'Safari 18 flex gap bug: use margin fallback in checkout', status: 'pending', at: m(55), case: 'c33', diff: '+# Browsers\n+\n+Safari 18 mis-sizes flex `gap` inside buttons; checkout uses a margin fallback.\n' },
+        { id: 'k2', bot: 'platform-sre', from: 'runbooks/page-triage.md', to: 'oncall.md', summary: 'Ack within 5 minutes; one case per page', status: 'approved', at: m(3000), approver: 'ops (passkey · laptop)', diff: '' },
       ] },
     finance: null,
   };
+
+  /* A fourth platform bot, so the team has someone to delegate data work to. */
+  D.bots.splice(3, 0, { name: 'platform-data', color: '#a59fc4', desc: 'Data pipelines and the warehouse', home: 'idle', session: 's2', turns: 9, maxTurns: 80, age: '3h', maxAge: '24h', shadow: false, sandboxed: true, mode: 'namespace', operators: ['ops'], open: 0, pending: 0, workers: 0, spend: 0, proactive: null, peers: [],
+    cfg: { description: 'Data pipelines and the warehouse', team: 'platform', charter_file: 'bots/platform-data.md', home: { rotate: { max_age: '24h', max_turns: 80 } }, skill: { verbs: ['kv.get', 'gh.get_*'] }, autonomy: { shadow: false, tiers: { observe: ['kv.get', 'gh.get_*'] }, promote: [], approval_ttl: '24h' }, isolation: { mode: 'namespace' } } });
+  D.charters['platform-data'] = 'Own the warehouse and its pipelines. Answer data questions from teammates with queries, never with guesses.\n';
+  D.chats['platform-data'] = [];
+
+  /* Delegation (`conductor bot delegate`): a bot hands a teammate a task.
+   * The recipient works it as a child case under the ORIGINAL requester; the
+   * result reports back to the parent case. Across teams only where linked. */
+  const DR = (o) => Object.assign({ requester_kept: true }, o);
+  D.delegations = [
+    { id: 'd1', from: 'platform-sre', to: 'platform-data', parent: 'c29', child: 'c35', task: 'Pull p99 by route from the warehouse for the last 3h', requester: 'event:pd.incident', cls: 'event', status: 'done', result: 'p99 regression starts 14:03, only on /checkout and /refund', at: m(44), done: m(36) },
+    { id: 'd2', from: 'platform-sre', to: 'web-triage', parent: 'c29', child: 'c36', task: 'Check whether the web canary shows the same regression', requester: 'event:pd.incident', cls: 'event', status: 'running', at: m(20) },
+    { id: 'd3', from: 'billing-sre', to: 'platform-sre', parent: 'c7', child: 'c37', task: 'List the NAT gateway owners for the forecast', requester: 'chat:U-THIRD', cls: 'user', status: 'done', result: '3 gateways (api, web, data); owners in knowledge/infra-map.md', at: m(39), done: m(33) },
+  ];
+  D.cases.push(
+    { id: 'c35', bot: 'platform-data', title: 'Pull p99 by route from the warehouse for the last 3h', status: 'closed', requester: 'event:pd.incident', cls: 'event', opened: m(44), workers: 1, proposals: 0, routed: DR({ by: 'delegate', from: 'platform-sre', to: 'platform-data', parent: 'c29', delegation: 'd1', team: 'platform' }), notes: [{ at: m(36), who: 'bot:platform-data', text: 'p99 regression starts 14:03, only on /checkout and /refund' }] },
+    { id: 'c36', bot: 'web-triage', title: 'Check whether the web canary shows the same regression', status: 'open', requester: 'event:pd.incident', cls: 'event', opened: m(20), workers: 1, proposals: 0, routed: DR({ by: 'delegate', from: 'platform-sre', to: 'web-triage', parent: 'c29', delegation: 'd2', team: 'platform' }), notes: [] },
+    { id: 'c37', bot: 'platform-sre', title: 'List the NAT gateway owners for the forecast', status: 'closed', requester: 'chat:U-THIRD', cls: 'user', opened: m(39), workers: 0, proposals: 0, routed: DR({ by: 'delegate', from: 'billing-sre', to: 'platform-sre', parent: 'c7', delegation: 'd3', team: 'finance', cross: true }), notes: [{ at: m(33), who: 'bot:platform-sre', text: '3 gateways (api, web, data); owners in knowledge/infra-map.md' }] },
+  );
+  D.cases.find((c) => c.id === 'c29').notes = [{ at: m(36), who: 'bot:platform-data', text: '↩ result of d1: p99 regression starts 14:03, only on /checkout and /refund' }];
+  D.cases.find((c) => c.id === 'c7').notes = [{ at: m(33), who: 'bot:platform-sre', text: '↩ result of d3: 3 gateways (api, web, data); owners in knowledge/infra-map.md' }];
+  // data-only asks between peers, for the team's activity graph
+  D.asks = [
+    { from: 'web-triage', to: 'platform-sre', at: m(65), text: 'Is /cart behind the same ALB as /checkout?' },
+    { from: 'platform-data', to: 'platform-sre', at: m(40), text: 'Which time zone is the incident window in?' },
+    { from: 'platform-sre', to: 'platform-data', at: m(30), text: 'Can the warehouse split p99 by AMI?' },
+    { from: 'billing-sre', to: 'platform-sre', at: m(1600), text: 'Who owns the NAT gateways?' },
+  ];
+
+  /* A trigger that hands work to a team: the team's rules (or its lead) pick the bot. */
+  D.workflows.splice(6, 0, { name: 'incident-intake', source: 'config', kind: 'trigger', on: 'pd.incident', runs24: 2, ok: 1, cost24: 0, steps: [], yaml: `name: incident-intake
+on: pd.incident
+filter: { urgency: high }
+steps:
+  - id: page
+    bot: { team: platform }        # routing rules pick the bot; no match → the lead triages
+    title: "{{.title}}"
+    text: "{{.incident.service}} · {{.url}}"
+` });
 
 })();

@@ -15,10 +15,10 @@ const { test, expect, go } = require('./fixtures');
 
 const ROUTES = [
   '#/overview', '#/live', '#/attention', '#/runs', '#/runs/r-7ef0',
-  '#/workflows', '#/workflows/ci-fixer', '#/workflows/pr-review', '#/workflows/assess-and-post', '#/workflows/member:platform-sre',
-  '#/members', '#/teams/platform', '#/teams/platform/routing', '#/teams/platform/defaults', '#/teams/platform/knowledge', '#/teams/finance',
-  '#/members/platform-sre/chat', '#/members/platform-sre/cases', '#/members/web-triage/cases/c34', '#/members/platform-sre/proposals', '#/members/platform-sre/proposals/p12',
-  '#/members/platform-sre/memory', '#/members/platform-sre/workers', '#/members/platform-sre/access', '#/members/platform-sre/settings', '#/members/new/settings',
+  '#/workflows', '#/workflows/ci-fixer', '#/workflows/pr-review', '#/workflows/assess-and-post', '#/workflows/incident-intake', '#/workflows/bot:platform-sre',
+  '#/bots', '#/teams/platform', '#/teams/platform/routing', '#/teams/platform/defaults', '#/teams/platform/knowledge', '#/teams/finance',
+  '#/bots/platform-sre/chat', '#/bots/platform-sre/cases', '#/bots/web-triage/cases/c34', '#/bots/platform-sre/cases/c29', '#/bots/web-triage/cases/c36', '#/bots/platform-data/cases/c35', '#/bots/release-scribe/cases', '#/bots/platform-sre/proposals', '#/bots/platform-sre/proposals/p12',
+  '#/bots/platform-sre/memory', '#/bots/platform-sre/workers', '#/bots/platform-sre/access', '#/bots/platform-sre/settings', '#/bots/new/settings',
   '#/browser', '#/browser/b-02', '#/browser/seed', '#/browser/passkey',
   '#/config', '#/config/raw', '#/config/apply', '#/secrets',
   '#/extensions/packs', '#/extensions/plugins', '#/extensions/browse',
@@ -77,7 +77,7 @@ async function inject(page) {
         if (window.__obs) window.__obs.disconnect();
         window.__obs = new MutationObserver((ms) => { ms.forEach((m) => { const t = m.target.nodeType === 1 ? m.target : m.target.parentElement; if (!t || t.closest(IGNORE_MUT)) return; if (m.type === 'childList') { const nodes = [...m.addedNodes, ...m.removedNodes].filter((n) => !(n.nodeType === 1 && n.matches(IGNORE_MUT))); if (!nodes.length) return; } window.__muts++; }); });
         window.__obs.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true, attributeFilter: ['class', 'aria-pressed', 'aria-checked', 'aria-expanded', 'aria-disabled', 'style', 'open', 'value', 'hidden'] });
-        return { url: location.href, ls: localStorage.getItem('cd-proto-state-v2') || '', theme: localStorage.getItem('cd-theme') };
+        return { url: location.href, ls: localStorage.getItem('cd-proto-state-v3') || '', theme: localStorage.getItem('cd-theme') };
       },
       overlay() { const o = document.querySelector('#pop-menu, #scrim, .palette'); return o ? (o.id ? '#' + o.id : '.palette') : null; },
     };
@@ -128,7 +128,7 @@ async function crawlRoute(page, testInfo, route, { afterLoad } = {}) {
         report.broken.push(`${item.sel} "${item.text}": could not be clicked (${e.message.split('\n')[0].slice(0, 60)}; on top: ${onTop}; path ${item.path.join(' → ')})`); dirty = true; continue;
       }
       await page.waitForTimeout(140);
-      const after = await page.evaluate(() => ({ url: location.href, ls: localStorage.getItem('cd-proto-state-v2') || '', theme: localStorage.getItem('cd-theme'), muts: window.__muts || 0, overlay: window.__crawl ? window.__crawl.overlay() : false })).catch(() => ({ url: 'navigated', ls: '', muts: 1 }));
+      const after = await page.evaluate(() => ({ url: location.href, ls: localStorage.getItem('cd-proto-state-v3') || '', theme: localStorage.getItem('cd-theme'), muts: window.__muts || 0, overlay: window.__crawl ? window.__crawl.overlay() : false })).catch(() => ({ url: 'navigated', ls: '', muts: 1 }));
       report.clicked++;
       const changed = after.url !== before.url || after.ls !== before.ls || after.theme !== before.theme || after.muts > 0 || downloads > dl0;
       if (!changed) { report.dead.push(`${item.sel} "${item.text}"${item.path.length ? ` (after ${item.path.join(' → ')})` : ''}`); continue; }

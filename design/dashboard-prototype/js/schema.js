@@ -81,7 +81,7 @@
     },
     terraform: {
       label: 'Terraform', icon: 'server', color: '#a59fc4',
-      settings: [f('engine', 'enum', { options: ['tofu', 'terraform'], def: 'tofu' }), f('role', 'enum', { req: true, options: ['READ', 'WRITE'], help: 'WRITE is reachable only through an approved member proposal.' }), f('allow_destroy', 'list', { help: 'Stateful types it may destroy. Empty refuses all.' })],
+      settings: [f('engine', 'enum', { options: ['tofu', 'terraform'], def: 'tofu' }), f('role', 'enum', { req: true, options: ['READ', 'WRITE'], help: 'WRITE is reachable only through an approved bot proposal.' }), f('allow_destroy', 'list', { help: 'Stateful types it may destroy. Empty refuses all.' })],
       events: {},
       verbs: {
         plan: { label: 'Plan', read: true, fields: [f('repo', 'string', { req: true }), f('dir', 'string', { req: true }), f('workspace', 'string', { def: 'default' })], outputs: { add: 1, change: 2, destroy: 0, plan_sha: 'a4c1e09b…' } },
@@ -147,6 +147,7 @@
     { k: 'ask', label: 'Hand-off / approval', icon: 'hand', desc: 'Ask a human and wait: approve, revise or discard.', make: (id) => ({ id, uses: 'hoff.ask', options: { prompt: '', timeout: '1h' } }) },
     { k: 'wait', label: 'Wait', icon: 'clock', desc: 'sleep: a duration, or wait_for: a condition on a read verb.', make: () => ({ sleep: '30s' }) },
     { k: 'parallel', label: 'Parallel group', icon: 'workflows', desc: 'Branches run at once and join before the next step.', make: (id) => ({ parallel: [[{ id: id + '-a', log: 'branch a' }], [{ id: id + '-b', log: 'branch b' }]] }) },
+    { k: 'bot', label: 'Hand to a bot or team', icon: 'members', desc: 'Deliver to a bot, or to a team whose rules (or lead) route it.', make: (id) => ({ id, bot: { team: 'platform' }, title: '{{.title}}' }) },
     { k: 'call', label: 'Call a workflow', icon: 'link', desc: 'Run a reusable workflow with inputs; its outputs come back.', make: (id) => ({ id, call: 'assess-and-post', with: {} }) },
     { k: 'log', label: 'Log', icon: 'logs', desc: 'A breadcrumb in the run log.', make: () => ({ log: '' }) },
     { k: 'set', label: 'Set values', icon: 'edit', desc: 'Publish computed values as outputs.', make: (id) => ({ id, set: { key: 'value' } }) },

@@ -19,11 +19,12 @@
     verb: { icon: 'zap', label: 'Action', color: 'var(--run)' }, call: { icon: 'link', label: 'Call', color: 'var(--ink-2)' },
     wait: { icon: 'clock', label: 'Wait', color: 'var(--ink-3)' }, log: { icon: 'logs', label: 'Log', color: 'var(--ink-3)' },
     set: { icon: 'edit', label: 'Set', color: 'var(--ink-3)' }, assert: { icon: 'check', label: 'Assert', color: 'var(--ink-3)' },
-    fail: { icon: 'x', label: 'Fail', color: 'var(--fail)' }, parallel: { icon: 'workflows', label: 'Parallel', color: 'var(--run)' }, unknown: { icon: 'warn', label: 'Unknown', color: 'var(--fail)' },
+    fail: { icon: 'x', label: 'Fail', color: 'var(--fail)' }, bot: { icon: 'members', label: 'Bot', color: 'var(--accent-2)' }, parallel: { icon: 'workflows', label: 'Parallel', color: 'var(--run)' }, unknown: { icon: 'warn', label: 'Unknown', color: 'var(--fail)' },
   };
   WF.kind = (s) => {
     if (!isObj(s)) return 'unknown';
     if (Array.isArray(s.parallel)) return 'parallel';
+    if (s.bot) return 'bot';
     if (s.uses) { const v = window.SCHEMA.verb(s.uses); return v && v.ask ? 'ask' : 'verb'; }
     if (s.decide) return 'decide';
     if (s.call) return 'call';
@@ -51,6 +52,7 @@
       case 'assert': return `assert ${t(s.assert, 50)}`;
       case 'fail': return `fail “${t(s.fail, 50)}”`;
       case 'parallel': return `${s.parallel.length} branches, joined before the next step`;
+      case 'bot': return typeof s.bot === 'string' ? `to bot ${s.bot}${s.title ? ' · “' + t(s.title, 40) + '”' : ''}` : `to team ${s.bot.team} · its rules, else the lead`;
       default: return 'no step type: add uses:, type: agent, use:, decide:, call: …';
     }
   };
@@ -108,6 +110,7 @@
     if (k === 'call') { const w = (window.D.workflows || []).find((x) => x.name === s.call); if (!w || !w.yaml) return null; try { return Y.clone(Y.parse(w.yaml).value.outputs || {}); } catch (e) { return null; } }
     if (k === 'wait' && s.wait_for) { const v = window.SCHEMA.verb(s.wait_for.uses); return v ? Y.clone(v.outputs) : null; }
     if (k === 'code') return null; // known only after a Test
+    if (k === 'bot') return { case: 'c41', routed_to: typeof s.bot === 'string' ? s.bot : 'lead', by: typeof s.bot === 'string' ? 'direct' : 'rule' };
     return {};
   };
 
@@ -198,6 +201,7 @@
           break;
         }
         case 'wait': if ('sleep' in s && !/^\d+(ms|s|m|h)$/.test(String(s.sleep))) err(`sleep: "${s.sleep}" is not a positive duration`, 'sleep'); break;
+        case 'bot': if (typeof s.bot === 'string') { if (!window.D.bots.find((b) => b.name === s.bot)) err(`bot: no bot named "${s.bot}"`, 'bot'); } else if (!s.bot.team || !window.D.teams.find((x) => x.name === s.bot.team)) err(`bot.team: no team named "${s.bot.team || ''}"`, 'bot.team'); if (!s.title) err('title: is required: it becomes the case title', 'title'); break;
         case 'parallel': if (s.parallel.length < 2) err('parallel: needs at least two branches', 'parallel', 'warn'); s.parallel.forEach((br, b) => { if (!Array.isArray(br) || !br.length) err(`parallel branch ${b + 1} is empty`, 'parallel'); }); break;
         default:
       }
@@ -308,6 +312,15 @@
       case 'set': return { output: renderDeep(s.set, scope, miss), inputs: {}, note: '' };
       case 'assert': if (!WF.cond(s.assert, scope)) throw new Error(`assert failed: ${s.assert}`); return { output: {}, inputs: {}, note: 'held' };
       case 'fail': throw new Error(WF.render(s.fail, scope));
+      case 'bot': {
+        const title = WF.render(s.title || '', scope, miss); if (miss.length) throw new Error(`title: {{.${miss[0]}}} has no value`);
+        if (typeof s.bot === 'string') return { output: { case: 'c41', routed_to: s.bot, by: 'direct' }, inputs: { title }, note: 'dry run: the case is not opened' };
+        const t = window.D.teams.find((x) => x.name === s.bot.team); if (!t) throw new Error(`no team ${s.bot.team}`);
+        const on = ev && (ev.incident ? 'pd.incident' : ev.check_name ? 'gh.check_failed' : ev.labels ? 'gh.issue_opened' : '');
+        const r = (t.cfg.routing || []).find((x) => x.when && x.when.on === on && Object.entries(x.when).every(([k, v]) => k === 'on' || [].concat(v).includes(String(ev[k] != null ? ev[k] : (ev.incident || {})[k]))));
+        const to = r ? (r.to === 'lead' ? t.cfg.lead : r.to) : t.cfg.lead;
+        return { output: { case: 'c41', routed_to: to || '(no lead)', by: r ? `rule ${r.name}` : 'lead' }, inputs: { title, team: t.name }, note: 'dry run: routed by the team\'s rules; no case opened' };
+      }
       default: throw new Error('this step has no type');
     }
   }

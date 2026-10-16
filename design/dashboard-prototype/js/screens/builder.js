@@ -25,17 +25,17 @@
     const staged = D.pending.filter((c) => c.coll === 'workflows');
     const drafts = Object.keys(D.drafts || {});
     const newOnes = [...new Set([...staged.filter((c) => c.before == null).map((c) => c.key), ...drafts.filter((n) => !D.workflows.find((w) => w.name === n))])];
-    const rows = D.workflows.map((w) => ({ w, owner: w.source.startsWith('pack') ? 'pack' : w.source === 'member' ? 'member' : 'config' })).concat(newOnes.map((n) => ({ w: { name: n, on: 'draft', runs24: 0, ok: 1, cost24: 0, source: 'config', fresh: true }, owner: 'config' })));
+    const rows = D.workflows.map((w) => ({ w, owner: w.source.startsWith('pack') ? 'pack' : w.source === 'bot' ? 'bot' : 'config' })).concat(newOnes.map((n) => ({ w: { name: n, on: 'draft', runs24: 0, ok: 1, cost24: 0, source: 'config', fresh: true }, owner: 'config' })));
     const vis = (r) => (wl.owner === 'all' || wl.owner === r.owner) && (!wl.q || (r.w.name + ' ' + r.w.on).toLowerCase().includes(wl.q.toLowerCase()));
     return `<div class="page">
     ${UI.head('Workflows', { sub: 'triggers and the steps they run', actions: `<button class="btn primary" data-act="wf-new">${icon('plus')}New workflow</button>` })}
-    <div class="filters"><div class="input-icon">${icon('search')}<input class="input" placeholder="name or event" value="${esc(wl.q)}" data-on-input="wl-q" aria-label="Filter workflows"></div>${UI.seg([['all', 'all'], ['config', 'yours'], ['pack', 'packs'], ['member', 'members']], wl.owner, 'wl-owner')}<span class="count-note" id="wl-count">${rows.filter(vis).length} of ${rows.length}</span></div>
+    <div class="filters"><div class="input-icon">${icon('search')}<input class="input" placeholder="name or event" value="${esc(wl.q)}" data-on-input="wl-q" aria-label="Filter workflows"></div>${UI.seg([['all', 'all'], ['config', 'yours'], ['pack', 'packs'], ['bot', 'bots']], wl.owner, 'wl-owner')}<span class="count-note" id="wl-count">${rows.filter(vis).length} of ${rows.length}</span></div>
     <div class="panel"><table class="tbl responsive"><thead><tr><th>workflow</th><th>on</th><th>owner</th><th class="num">runs 24h</th><th class="num">ok</th><th class="num">spend 24h</th><th></th></tr></thead><tbody id="wl-body">
     ${rows.map((r) => { const w = r.w, d = (D.drafts || {})[w.name] != null, s = staged.find((c) => c.key === w.name); return `<tr class="click${vis(r) ? '' : ' hidden'}" data-row="${esc(w.name + ' ' + w.on)}" data-owner="${r.owner}"><td data-l="workflow"><a class="link-plain" href="#/workflows/${w.name}"><b>${w.name}</b></a> ${w.kind === 'workflow' ? tag('reusable') : ''}${d ? tag('draft', 'wait') : ''}${s ? tag(s.after == null ? 'removal staged' : 'staged', 'run') : ''}</td><td data-l="on" class="mono small">${esc(w.on)}</td>
-      <td data-l="owner">${r.owner === 'pack' ? `<span class="owner pack">${w.source}</span>` : r.owner === 'member' ? '<span class="owner pack">member (synthesized)</span>' : '<span class="owner op">your config</span>'}</td>
+      <td data-l="owner">${r.owner === 'pack' ? `<span class="owner pack">${w.source}</span>` : r.owner === 'bot' ? '<span class="owner pack">bot (synthesized)</span>' : '<span class="owner op">your config</span>'}</td>
       <td data-l="runs" class="num mono">${w.runs24}</td><td data-l="ok" class="num mono">${Math.round(w.ok * 100)}%</td><td data-l="spend" class="num mono">${usd(w.cost24)}</td>
       <td class="num nowrap"><a class="btn sm" href="#/workflows/${w.name}">${icon('canvas')}Open</a> ${w.fresh ? `<button class="btn sm ghost" ${UI.off('Deploy it first; a draft has never run')}>${icon('play')}</button>` : `<button class="btn sm ghost" data-act="wf-run" data-name="${w.name}" aria-label="Run ${w.name}" data-tip="Run now">${icon('play')}</button>`}
-        ${r.owner === 'config' && !w.fresh ? `<button class="btn sm ghost" data-act="wf-del" data-name="${w.name}" aria-label="Delete ${w.name}" data-tip="Delete">${icon('trash')}</button>` : r.owner === 'config' ? `<button class="btn sm ghost" data-act="wf-discard" data-name="${w.name}" aria-label="Discard draft ${w.name}" data-tip="Discard draft">${icon('trash')}</button>` : `<button class="btn sm ghost" ${UI.off(r.owner === 'pack' ? 'A pack workflow is removed by removing (or not arming) its pack' : 'Synthesized from the member definition')}>${icon('trash')}</button>`}</td></tr>`; }).join('')}
+        ${r.owner === 'config' && !w.fresh ? `<button class="btn sm ghost" data-act="wf-del" data-name="${w.name}" aria-label="Delete ${w.name}" data-tip="Delete">${icon('trash')}</button>` : r.owner === 'config' ? `<button class="btn sm ghost" data-act="wf-discard" data-name="${w.name}" aria-label="Discard draft ${w.name}" data-tip="Discard draft">${icon('trash')}</button>` : `<button class="btn sm ghost" ${UI.off(r.owner === 'pack' ? 'A pack workflow is removed by removing (or not arming) its pack' : 'Synthesized from the bot definition')}>${icon('trash')}</button>`}</td></tr>`; }).join('')}
     <tr class="empty-row hidden" id="wl-empty"><td colspan="7">No workflow matches.</td></tr></tbody></table></div></div>`;
   });
   const wlFilter = () => { let n = 0; UI.$$('#wl-body tr[data-row]').forEach((tr) => { const ok = (wl.owner === 'all' || tr.dataset.owner === wl.owner) && (!wl.q || tr.dataset.row.toLowerCase().includes(wl.q.toLowerCase())); tr.classList.toggle('hidden', !ok); if (ok) n++; }); UI.$('#wl-empty').classList.toggle('hidden', n > 0); UI.$('#wl-count').textContent = `${n} of ${UI.$$('#wl-body tr[data-row]').length}`; };
@@ -62,12 +62,12 @@
   UI.act('wf-discard', (b) => { if (D.drafts) delete D.drafts[b.dataset.name]; const c = S.find('workflows', b.dataset.name); if (c) S.unstage(c.id); S.save(); UI.rerender(); });
 
   /* ================= builder state ================= */
-  function synthMember(name) { const m = D.members.find((x) => 'member:' + x.name === name) || D.members[0]; return `# synthesized from members.${m.name} — edit the member, not this\nname: member:${m.name}\non: [pd.incident, manual]\nsteps:\n  - id: deliver\n    log: "deliver the event to ${m.name}'s home session"\n`; }
+  function synthBot(name) { const m = D.bots.find((x) => 'bot:' + x.name === name) || D.bots[0]; return `# synthesized from bots.${m.name} — edit the bot, not this\nname: bot:${m.name}\non: [pd.incident, manual]\nsteps:\n  - id: deliver\n    bot: ${m.name}\n    title: "{{.title}}"\n`; }
   function load(name) {
     const w = D.workflows.find((x) => x.name === name);
     const drafts = (D.drafts = D.drafts || {});
-    const owner = !w ? (drafts[name] != null || S.find('workflows', name) ? 'config' : 'missing') : w.source === 'config' ? 'config' : w.pack ? 'pack' : 'member';
-    const live = owner === 'config' ? S.cfg.workflows.get(name) : w ? w.yaml || synthMember(name) : null;
+    const owner = !w ? (drafts[name] != null || S.find('workflows', name) ? 'config' : 'missing') : w.source === 'config' ? 'config' : w.pack ? 'pack' : 'bot';
+    const live = owner === 'config' ? S.cfg.workflows.get(name) : w ? w.yaml || synthBot(name) : null;
     const staged = owner === 'config' ? S.staged('workflows', name) : live;
     const text = drafts[name] != null ? drafts[name] : staged != null ? staged : live || '';
     B = { name, owner, w, live, text, hist: [text], hi: 0, open: new Set(), sel: null, tests: {}, ev: '', side: 'yaml', pane: 'steps', lastPush: 0, pack: w && w.pack, ov: null };
@@ -84,7 +84,7 @@
     try { const p = Y.parse(B.text); B.value = p.value || {}; B.meta = p.meta; B.err = null; } catch (e) { B.err = e; }
     B.issues = B.err ? [{ level: 'error', line: B.err.line, msg: B.err.msg || B.err.message }] : WF.validate(B.text, { reusable: !!(B.value && B.value.inputs) });
   }
-  const readOnly = () => B.owner === 'member' ? 'Synthesized from the member definition: edit the member instead' : B.owner === 'pack' ? 'Pack-owned: the structure is the pack\'s. Edit step fields to make overrides, or call this workflow from your own trigger' : '';
+  const readOnly = () => B.owner === 'bot' ? 'Synthesized from the bot definition: edit the bot instead' : B.owner === 'pack' ? 'Pack-owned: the structure is the pack\'s. Edit step fields to make overrides, or call this workflow from your own trigger' : '';
   const errs = () => B.issues.filter((i) => i.level === 'error');
   const status = () => {
     if (B.owner === 'pack') return YAML.eq(B.ov, B.ovBase) ? (S.find('packs', B.pack) ? 'saved' : 'live') : 'draft';
@@ -137,13 +137,13 @@
 
   function bar() {
     const s = status(), ro = readOnly(), e = errs().length;
-    const name = B.name.startsWith('member:') ? B.name : B.name;
-    const deployBlock = B.err ? 'Fix the YAML parse error first' : e ? `${e} error${e > 1 ? 's' : ''} to fix before deploying` : B.owner === 'member' ? ro : s === 'live' ? 'Nothing to deploy: this is what\'s live' : '';
-    const saveBlock = B.owner === 'member' ? ro : s !== 'draft' ? (s === 'saved' ? 'Saved; deploy it, or keep editing' : 'No unsaved edits') : B.err ? 'Fix the YAML parse error first' : '';
+    const name = B.name.startsWith('bot:') ? B.name : B.name;
+    const deployBlock = B.err ? 'Fix the YAML parse error first' : e ? `${e} error${e > 1 ? 's' : ''} to fix before deploying` : B.owner === 'bot' ? ro : s === 'live' ? 'Nothing to deploy: this is what\'s live' : '';
+    const saveBlock = B.owner === 'bot' ? ro : s !== 'draft' ? (s === 'saved' ? 'Saved; deploy it, or keep editing' : 'No unsaved edits') : B.err ? 'Fix the YAML parse error first' : '';
     const evs = SCHEMA.events.filter((x) => WF.sources(B.value || {}).some((so) => so.on === x.on) || x.on === 'manual');
     return `<a class="btn sm ghost back" href="#/workflows" aria-label="All workflows">${icon('chev')}</a>
       <span class="serif wfb-title">${esc(name)}</span>
-      ${B.owner === 'pack' ? `<span class="owner pack">pack ${B.pack}</span>` : B.owner === 'member' ? '<span class="owner pack">member (synthesized)</span>' : '<span class="owner op">your config</span>'}
+      ${B.owner === 'pack' ? `<span class="owner pack">pack ${B.pack}</span>` : B.owner === 'bot' ? '<span class="owner pack">bot (synthesized)</span>' : '<span class="owner op">your config</span>'}
       <span class="wf-state ${s}" id="wf-state">${s === 'draft' ? icon('edit') + 'unsaved draft' : s === 'saved' ? icon('check') + 'saved · not deployed' : icon('dot') + 'live'}</span>
       <div class="wfb-tools">
         <button class="icon-btn" data-act="wf-undo" ${B.hi > 0 ? 'data-tip="Undo (Ctrl+Z)"' : UI.off('Nothing to undo')} aria-label="Undo">${icon('undo')}</button>
@@ -275,6 +275,13 @@
       rows.push(`<div class="field"><label>Wait for</label>${UI.seg([['sleep', 'a duration'], ['wait_for', 'a condition']], mode, 'wf-waitmode', `data-loc="${loc}"`).replace(/data-act="wf-waitmode"/g, ro ? UI.off(ro) : `data-act="wf-waitmode" data-loc="${loc}"`)}</div>`);
       if (mode === 'sleep') F('sleep', { type: 'string', req: true, help: 'e.g. 30s, 5m.' });
       else { F('wait_for.uses', { type: 'enum', label: 'read verb', options: allVerbs(true) }); F('wait_for.until', { type: 'string', label: 'until', help: 'Over the verb\'s outputs: status == \'completed\'.' }); F('wait_for.every', { type: 'string', label: 'every' }); F('wait_for.timeout', { type: 'string', label: 'timeout' }); }
+    } else if (k === 'bot') {
+      const toTeam = typeof s.bot === 'object';
+      rows.push(`<div class="field"><label>Hand to</label>${UI.seg([['bot', 'a bot'], ['team', 'a team']], toTeam ? 'team' : 'bot', 'wf-bottarget').replace(/data-act="wf-bottarget"/g, ro ? UI.off(ro) : `data-act="wf-bottarget" data-loc="${loc}"`)}<div class="hint">${toTeam ? 'The team\'s routing rules pick the bot; with no match its lead triages. The requester is this trigger\'s event.' : 'Delivered to the bot directly, as conductor bot deliver.'}</div></div>`);
+      if (toTeam) F('bot.team', { type: 'enum', label: 'team', req: true, options: D.teams.map((x) => x.name) });
+      else F('bot', { type: 'enum', label: 'bot', req: true, options: D.bots.map((x) => x.name) });
+      F('title', { type: 'string', req: true, help: 'Becomes the case title.' });
+      F('text', { type: 'text', rows: 3, help: 'Reaches the bot fenced as untrusted data.' });
     } else if (k === 'log') F('log', { type: 'text', rows: 2 });
     else if (k === 'set') F('set', { type: 'map', label: 'values', help: 'Read later as {{.' + (s.id || 'this') + '.<key>}}.' });
     else if (k === 'assert') F('assert', { type: 'string', help: 'Same grammar as if:. The run fails unless it holds.' });
@@ -364,7 +371,7 @@
     const top = WF.walk(v).filter((e) => !e.branch);
     const ro = readOnly();
     return `${B.err ? `<div class="callout danger small sticky-err">${icon('warn')} YAML error at line ${B.err.line}: ${esc(B.err.msg || B.err.message)}. The list shows the last valid version.</div>` : ''}
-      ${ro ? `<div class="callout ${B.owner === 'pack' ? 'info' : 'warn'} small">${B.owner === 'pack' ? `<b>Pack-owned.</b> Field edits become overrides in <span class="mono">packs.${B.pack}.steps</span>; the pack's file is never touched and an update keeps them. To add steps, call <span class="mono">${B.pack}/${esc((v.name || ''))}</span> from your own trigger.` : `<b>Synthesized.</b> This workflow comes from <a class="link" href="#/members/${B.name.replace('member:', '')}/settings">the member definition</a>.`}</div>` : ''}
+      ${ro ? `<div class="callout ${B.owner === 'pack' ? 'info' : 'warn'} small">${B.owner === 'pack' ? `<b>Pack-owned.</b> Field edits become overrides in <span class="mono">packs.${B.pack}.steps</span>; the pack's file is never touched and an update keeps them. To add steps, call <span class="mono">${B.pack}/${esc((v.name || ''))}</span> from your own trigger.` : `<b>Synthesized.</b> This workflow comes from <a class="link" href="#/bots/${B.name.replace('bot:', '')}/settings">the bot definition</a>.`}</div>` : ''}
       <div class="list-tools"><div class="outline">${top.map((e, i) => `<button type="button" class="ol-chip${B.sel === e.id ? ' on' : ''}" data-act="wf-jump" data-id="${esc(e.id)}" aria-label="Jump to step ${i + 1}">${i + 1}<span>${esc(e.kind === 'parallel' ? '∥' : e.id)}</span></button>`).join('')}</div>
         <button type="button" class="btn sm ghost" data-act="wf-expand" data-v="1">${icon('expand')}Expand all</button><button type="button" class="btn sm ghost" data-act="wf-expand" data-v="0">${icon('chev', 'up')}Collapse all</button></div>
       <div class="staff">
@@ -387,7 +394,7 @@
       body = `<div class="data-pane"><div class="small muted" style="margin-bottom:8px">Data <b>${e ? esc(e.id) : 'the first step'}</b> can read. ${B.ev ? 'Tested steps show their actual output.' : 'Pick a test event and Test a step to see real values.'}</div>
         ${groups.map((g) => `<div class="dgroup"><div class="dg-head">${icon(g.icon)}<b class="mono">${esc(g.label)}</b><span class="mono tiny muted ellipsis">${esc(g.sub)}</span>${g.tested ? '<span class="tpill ok">tested</span>' : g.unknown ? '<span class="tpill idle">test to see</span>' : '<span class="tpill idle">declared</span>'}</div>${tree(g.data, g.key, 0)}</div>`).join('')}</div>`;
     } else {
-      const ro = B.owner === 'member' || B.owner === 'pack';
+      const ro = B.owner === 'bot' || B.owner === 'pack';
       body = `${B.owner === 'pack' ? `<div class="seg ytabs" role="group">${[['source', 'Pack source (read-only)'], ['ov', 'Your overrides']].map(([v, l]) => `<button type="button" data-act="wf-ytab" data-v="${v}" aria-pressed="${(B.ytab || 'source') === v}" class="${(B.ytab || 'source') === v ? 'on' : ''}">${l}</button>`).join('')}</div>` : ''}
         <div class="yaml-wrap">${UI.editor({ id: 'wf-yaml', text: B.owner === 'pack' && B.ytab === 'ov' ? Y.stringify({ packs: { [B.pack]: B.ov } }) : B.text, lang: 'yaml', act: ro ? null : 'wf-yaml-input', minRows: 24, err: B.issues.filter((i) => i.level === 'error').map((i) => i.line), hl: hlLines(), readonly: ro, label: 'Workflow YAML' })}</div>`;
     }
@@ -492,7 +499,7 @@
   UI.act('pk-pick', (b) => B.onPick && B.onPick(b.dataset.key));
   function makeStep(v, item) {
     const [t, k] = item.key.split(/:(.*)/s);
-    if (t === 'kind') { const kd = SCHEMA.kinds.find((x) => x.k === k); const base = { agent: 'agent', code: 'code', decide: 'decide', ask: 'approval', wait: 'wait', parallel: 'parallel', call: 'call', log: 'log', set: 'vars', assert: 'check' }[k]; const id = uniqueId(v, base); const node = kd.make(id); if (k === 'parallel') { node.parallel[0][0].id = uniqueId(v, id + '-a'); node.parallel[1][0].id = uniqueId(Object.assign({}, v, { steps: (v.steps || []).concat([node]) }), id + '-b'); } if (k === 'call') { const w = D.workflows.find((x) => x.kind === 'workflow'); node.call = w ? w.name : 'assess-and-post'; } if (k === 'ask') { const c = D.connectors.find((x) => x.use === 'web') || D.connectors.find((x) => x.use === 'slack'); node.uses = (c ? c.name : 'hoff') + '.ask'; } return node; }
+    if (t === 'kind') { const kd = SCHEMA.kinds.find((x) => x.k === k); const base = { agent: 'agent', code: 'code', decide: 'decide', ask: 'approval', wait: 'wait', parallel: 'parallel', call: 'call', log: 'log', set: 'vars', assert: 'check', bot: 'handoff' }[k]; const id = uniqueId(v, base); const node = kd.make(id); if (k === 'parallel') { node.parallel[0][0].id = uniqueId(v, id + '-a'); node.parallel[1][0].id = uniqueId(Object.assign({}, v, { steps: (v.steps || []).concat([node]) }), id + '-b'); } if (k === 'call') { const w = D.workflows.find((x) => x.kind === 'workflow'); node.call = w ? w.name : 'assess-and-post'; } if (k === 'ask') { const c = D.connectors.find((x) => x.use === 'web') || D.connectors.find((x) => x.use === 'slack'); node.uses = (c ? c.name : 'hoff') + '.ask'; } return node; }
     const uses = k, verb = uses.split('.')[1];
     const decl = SCHEMA.verb(uses);
     const node = { id: uniqueId(v, verb), uses };
@@ -626,6 +633,7 @@
   });
   UI.act('wf-list-del', (b) => { const box = b.closest('[data-wf-loc]'); const txt = b.parentElement.querySelector('.mono').textContent; const cur = [].concat(S.getPath(WF.at(B.value, locOf(box.dataset.wfLoc)), box.dataset.wfPath) || []); setField(box.dataset.wfLoc, box.dataset.wfPath, cur.filter((x) => String(x) !== txt)); });
   UI.act('wf-seg', (b) => setField(b.dataset.loc, b.dataset.path, b.dataset.v === '' ? undefined : b.dataset.v));
+  UI.act('wf-bottarget', (b) => mutate((v) => { const s = WF.at(v, locOf(b.dataset.loc)); s.bot = b.dataset.v === 'team' ? { team: (D.teams[0] || {}).name } : (D.bots[0] || {}).name; }));
   UI.act('wf-waitmode', (b) => mutate((v) => { const s = WF.at(v, locOf(b.dataset.loc)); if (b.dataset.v === 'sleep') { delete s.wait_for; s.sleep = s.sleep || '30s'; } else { delete s.sleep; s.wait_for = { uses: 'gh.get_run', options: { repo: '{{.repo}}', run_id: '{{.run_id}}' }, until: "status == 'completed'", every: '5s', timeout: '2m' }; } }));
   function writeQuestions(loc) {
     const rows = UI.$$(`.q-row`).filter((r) => r.querySelector(`[data-loc="${loc}"]`));

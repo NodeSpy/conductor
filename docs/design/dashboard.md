@@ -9,7 +9,7 @@ into with a passkey, embedded in the binary, and usable on a phone. It covers
 today's runs, workflows, packs, plugins and updates on `main`, and the four
 features in flight:
 
-- **members:** #178, `feat/members`;
+- **bots** (called *members* in #178 and its branch): #178, `feat/members`;
 - **the agent sandbox:** #179, `feat/agent-sandbox`;
 - **the agent browser and vault credential fills:** #182, `feat/agent-browser`;
 - **the container backend:** `feat/agent-container`.
@@ -35,11 +35,11 @@ These came in with the brief and are not reopened here.
 - Make every operator action the CLI has available in the UI, with **at least
   the CLI's safety**. Approvals, config applies, secret writes, grants and
   browser takeovers ask for a fresh passkey assertion.
-- Give members (#178) and the agent browser (#182) the surfaces their PRs
+- Give bots (#178) and the agent browser (#182) the surfaces their PRs
   deferred:
-  - talking to a member;
+  - talking to a bot;
   - signing proposals, including Terraform plans;
-  - editing a member's memory;
+  - editing a bot's memory;
   - the live takeover view, which #182 §11 names as "the dashboard follow-on".
 - Let the operator edit config visually without ever giving up YAML.
 
@@ -49,8 +49,8 @@ These came in with the brief and are not reopened here.
   Every operator who can sign in is a full operator, as with the CLI today.
 - Any access path off the tailnet. If you need it from elsewhere, join the
   tailnet or use `ssh -L` ([§6.2](#62-listeners-and-tls)).
-- Replacing paseo's own UI. The member chat drives the home session through
-  conductor (`conductor member say`) and links to paseo for the full agent
+- Replacing paseo's own UI. The bot chat drives the home session through
+  conductor (`conductor bot say`) and links to paseo for the full agent
   view.
 
 ## 2. Information architecture
@@ -59,7 +59,7 @@ These came in with the brief and are not reopened here.
 
 ```
 Now      Overview · Live · Needs you
-Work     Run history · Workflows (+ builder) · Teams & members · Browsers
+Work     Run history · Workflows (+ builder) · Teams & bots · Browsers
 System   Config · Secrets & vars · Packs & plugins · Connectors & hosts
          (connectors, runtimes, hosts, isolation) · Updates · Logs & audit · Access
 ```
@@ -78,8 +78,8 @@ Some elements are on every screen:
   knows which origin they're on.
 - **Rail** (left). Grouped navigation with live counts. It collapses to icons
   below 1100px. Below 720px it becomes a **bottom tab bar**: Overview, Live,
-  Approvals, Members, More.
-- **⌘K palette**. Jump to any run, member, workflow or setting, or run an
+  Approvals, Bots, More.
+- **⌘K palette**. Jump to any run, bot, workflow or setting, or run an
   action such as pausing dispatch or applying an update.
 - **Needs you**. One queue merges everything that waits on a human:
   - pending proposals;
@@ -101,7 +101,7 @@ Some elements are on every screen:
 | `#/attention` | Needs you |
 | `#/runs`, `#/runs/<id>` | Run history, run detail |
 | `#/workflows`, `#/workflows/<name>` | Workflows, builder |
-| `#/members`, `#/members/<m>/<tab>[/<id>]` | Teams & members. Member tabs: chat, cases[/id], proposals[/id], memory, workers, access, definition |
+| `#/bots`, `#/bots/<m>/<tab>[/<id>]` | Teams & bots. Bot tabs: chat, cases[/id], proposals[/id], memory, workers, access, definition |
 | `#/teams/<t>[/<tab>]` | A team. Tabs: overview, routing, defaults, knowledge |
 | `#/browser`, `#/browser/<id>`, `#/browser/seed`, `#/browser/passkey` | Browsers |
 | `#/config`, `#/config/raw`, `#/config/apply` | Config, raw editor, the apply pipeline |
@@ -160,11 +160,11 @@ doing, and what needs me?
 
 | Panel | Data | Source today |
 |---|---|---|
-| Needs you | `GET /api/v1/attention` | Members ledger (pending proposals), run history (failed), audit (`escalate`/`needs_input`, which `status` already reads), hand-off drafts (web connector), backoff/hold (`state.json`), browser `needs_input`, update checker. Merging them is **NEW** (`attention` aggregator). |
-| Running / runs / spend / members tiles | `GET /api/v1/status`, `GET /api/v1/cost?by=day` | `status.go` (live agents, in-flight workflows from `runs.json`), `RunHistory.CostUSD` |
+| Needs you | `GET /api/v1/attention` | Bots ledger (pending proposals), run history (failed), audit (`escalate`/`needs_input`, which `status` already reads), hand-off drafts (web connector), backoff/hold (`state.json`), browser `needs_input`, update checker. Merging them is **NEW** (`attention` aggregator). |
+| Running / runs / spend / bots tiles | `GET /api/v1/status`, `GET /api/v1/cost?by=day` | `status.go` (live agents, in-flight workflows from `runs.json`), `RunHistory.CostUSD` |
 | The score | `GET /api/v1/runs?since=12h&fields=lane` | History records (`Kind`, `Variant`, `Started`, `Finished`, `Status`) |
 | Health | `GET /api/v1/status` | Version, pid, uptime, config sha, sandbox registry (identities, containers), paseo provider-entry merge result (#179), connector registry health, update state |
-| Activity | SSE `run`, `audit`, `member`, `browser` topics | `flow.EventHub` (`RunEvent`), audit writer tap (**NEW**) |
+| Activity | SSE `run`, `audit`, `bot`, `browser` topics | `flow.EventHub` (`RunEvent`), audit writer tap (**NEW**) |
 | Spend | `GET /api/v1/cost?by=day&days=14` | History `CostUSD`/`ApproxCost`; the shed count comes from `budget_shed`/`step_shed` audit events |
 
 Operations:
@@ -217,9 +217,15 @@ Operations:
   - Retry from any step.
   - Export JSONL.
 
-### 4.4 Teams and members (#178)
+### 4.4 Teams and bots (#178)
 
-**Teams.** First-class `teams:` group members (the follow-up to #178). The
+A **bot** is a persistent conversational worker with a charter, a memory
+repo, a ledger of cases and a home session (#178 calls them *members*). A
+bot is **solo or on a team**. "Agent" stays the word for conductor's agent
+steps and profiles; a bot is not an agent, though its workers run agent
+steps.
+
+**Teams.** First-class `teams:` group bots (the follow-up to #178). The
 operator cuts them any way they like; there is no org concept.
 
 ```yaml
@@ -227,31 +233,48 @@ teams:
   platform:
     description: Platform services
     lead: platform-sre                 # optional: triages team work and assigns it
-    defaults:                          # inherited by members, which can only narrow them
+    defaults:                          # inherited by bots, which can only narrow them
       operators: [ops, oncall]         # who may approve
       autonomy: { max_tier: reversible, promote: true, approval_ttl: 24h }   # the ceiling
       isolation: { mode: namespace }   # sandbox policy; container is stricter
       budget: { max_cost_per_day: 20.00, proactive_pool: { max_runs_per_day: 10, max_cost_per_day: 4.00 } }
       browser: { logins: [console.example.com], credentials: [grafana, statuspage] }   # scope
     knowledge: { repo: team-knowledge/platform, promote: approval }   # optional shared repo
-    routing:                           # first match wins; to a member, or to the lead
+    routing:                           # first match wins; to a bot, or to the lead
       - { name: pd-api, when: { on: pd.incident, service: [api, web] }, to: lead }
       - { name: web-issues, when: { on: gh.issue_opened, repo: [acme/web] }, to: web-triage }
     links: [finance]                   # teams are isolated unless both sides link
-members:
+bots:
   platform-sre: { team: platform, … }  # at most one team, or none
+  release-scribe: { … }                # a solo bot
+triggers:
+  - name: incident-intake
+    on: pd.incident
+    steps:
+      - id: page
+        bot: { team: platform }        # the team's rules pick the bot; no match → the lead
+        title: "{{.title}}"
+      # - { bot: platform-sre, title: … }   # or straight to one bot
 ```
 
-- **Narrow, never widen.** A member's own setting must sit inside the team
+- **Narrow, never widen.** A bot's own setting must sit inside the team
   default: a subset of operators, no tier looser than `max_tier`, no
   promotion when the team allows none, `container` where the team requires
   it, sweep budgets inside the shared pool, credentials and logins inside the
   team's scope. Validation refuses anything wider, naming the default it
   breaks.
-- **Peers.** Members of one team are peers by default (data-only `ask`, as
+- **Peers.** Bots of one team are peers by default (data-only `ask`, as
   #178's `peers:`). Across teams they're isolated unless both teams list each
   other in `links:`; an explicit cross-team `peers:` entry needs that link.
-- **Knowledge.** An optional shared repo every member reads. A member
+- **Delegation.** A bot can hand a teammate a task (`conductor bot
+  delegate <bot> --case <c> --to <teammate> "<task>"`). The recipient works
+  it as a child case **under the original requester's provenance**, never the
+  delegating bot's, and its result reports back to the parent case. Asks
+  stay data-only; delegation carries a task. Across teams, delegation exists
+  only where both teams list each other in `links:`; a solo bot delegates to
+  no one. The ledger records each delegation as an edge (`d<n>`: from, to,
+  parent case, child case, status, result).
+- **Knowledge.** An optional shared repo every bot reads. A bot
   proposes promoting a file from its own memory; by default the operator
   approves it (a step-up assertion), which writes one commit with
   `Promoted-By` and `Approved-By` trailers.
@@ -261,27 +284,27 @@ members:
   records how it got there ("routed to platform by rule pd-api → assigned by
   lead platform-sre to web-triage"), and an operator reassignment is
   recorded the same way.
-- Team, membership, defaults, routing, links and the knowledge policy are
+- Team, botship, defaults, routing, links and the knowledge policy are
   config, so every edit goes through [§7](#7-the-config-edit-pipeline).
   Widening includes adding a team approver, raising the ceiling, dropping a
   container requirement, linking a team, and automatic promotion.
 
-**Teams & members list.** A peers graph with team boundaries (teams as
+**Teams & bots list.** A peers graph with team boundaries (teams as
 regions, intra-team peers dashed, team links and explicit cross-team peers
-drawn, the lead ringed), then each team's band with its members, then the
-members in no team. For each member: the home session's state, open cases,
+drawn, the lead ringed), then each team's band with its bots, then the
+solo bots. For each bot: the home session's state, open cases,
 pending proposals, live workers and the next sweep.
 
 **Team page.**
 
 | Tab | Shows | Operations |
 |---|---|---|
-| Overview | members and the lead; routing decisions with provenance; the team budget and the shared proactive pool; links inside and across teams | add/remove a member, make lead, link/unlink a team (config edits), **Route work here** (deliver to the team; its rules decide) |
+| Overview | bots and the lead; the **ask & delegate activity graph** (teammates as nodes, asks dashed, delegations as arrows with counts, linked teams' bots at the edge); delegations with status and result; routing decisions with provenance; the team budget and the shared proactive pool; links inside and across teams, and each bot's **delegation reach** | add/remove a bot, make lead, link/unlink a team (config edits), **Route work here** (deliver to the team; its rules decide) |
 | Routing | ordered rules, and a "try a rule" check against real past events | add, edit, reorder, delete rules (config edits) |
-| Defaults | each default, and what every member inherits, narrows, or (refused) widens | edit defaults (config edit) |
+| Defaults | each default, and what every bot inherits, narrows, or (refused) widens | edit defaults (config edit) |
 | Knowledge | the shared repo, pending promotion proposals with their diff | approve / deny with passkey |
 
-**Member detail.** The header shows:
+**Bot detail.** The header shows:
 
 - the home session (id, turns against `max_turns`, age against `max_age`);
 - shadow mode or approved execution;
@@ -290,19 +313,19 @@ pending proposals, live workers and the next sweep.
 
 Header actions:
 
-- **Rotate session**: `member rotate`.
-- **Sweep now**: `member sweep`.
-- **Deliver event**: `member deliver --title --text --requester --urgent`.
+- **Rotate session**: `bot rotate`.
+- **Sweep now**: `bot sweep`.
+- **Deliver event**: `bot deliver --title --text --requester --urgent`.
 
 | Tab | Purpose and data | Operations |
 |---|---|---|
-| **Chat** | The home conversation: operator messages, member turns, tool calls, and fenced events (rendered as *untrusted data*). The transcript comes from paseo's agent timeline through conductor (**NEW** `GET /members/<m>/transcript`, plus the SSE topic `member.transcript`). A side rail shows pending proposals and open cases. | **Send**: `member say`. The requester is `operator:<name>`, so it is the operator's own request with full operator trust. Delivered when the agent is idle, never into a turn in progress, as today. |
-| **Cases** | The ledger's cases: id, title, requester, class (`operator`/`event`/`user`/`peer`/`proactive`), **how it was routed**, workers and proposals. Shows the spend against the cap and the ledger's health (degraded or not). | Open, note, close or reopen a case (`member case …`); reassign within the team (operator, provenance kept). |
+| **Chat** | The home conversation: operator messages, bot turns, tool calls, and fenced events (rendered as *untrusted data*). The transcript comes from paseo's agent timeline through conductor (**NEW** `GET /bots/<m>/transcript`, plus the SSE topic `bot.transcript`). A side rail shows pending proposals and open cases. | **Send**: `bot say`. The requester is `operator:<name>`, so it is the operator's own request with full operator trust. Delivered when the agent is idle, never into a turn in progress, as today. |
+| **Cases** | The ledger's cases: id, title, requester, class (`operator`/`event`/`user`/`peer`/`proactive`), **how it was routed** (rule, lead, operator, or "delegated by platform-sre → platform-data from case c29"), **delegation edges** with status and the reported result, workers and proposals. Shows the spend against the cap and the ledger's health (degraded or not). | Open, note, close or reopen a case (`bot case …`); reassign within the team (operator, provenance kept); have the bot delegate a task to a teammate (`bot delegate`); cancel a running delegation. Closing a delegated case reports its last note back as the result. |
 | **Proposals** | Pending, shadow, executed, refused, denied and failed proposals, each with tier, verb, case, requester class and worker. **Detail:** the exact action, or for Terraform: repo, commit, dir, workspace, var files, targets, the `+a ~c -d` counts, *replaces* list, plan text (`show -no-color`), plan sha256 and the approval digest. | **Approve / Deny with passkey** ([§6.6](#66-the-approvals-boundary)), and **Replan** for a stale plan. |
-| **Memory** | The memory repo's tree (`knowledge/`, `runbooks/`, `episodes/`, `handoff/`), a file in read view, and `git log` with the `Member-*` trailers. | **Edit → Commit** (**NEW** operator write through `memrepo`: one commit, author `<operator> (dashboard)`, trailers `Member-Role: operator`, `Edited-Via: dashboard`), **Revert** a commit, **Consolidate now**. |
+| **Memory** | The memory repo's tree (`knowledge/`, `runbooks/`, `episodes/`, `handoff/`), a file in read view, and `git log` with the `Bot-*` trailers. | **Edit → Commit** (**NEW** operator write through `memrepo`: one commit, author `<operator> (dashboard)`, trailers `Bot-Role: operator`, `Edited-Via: dashboard`), **Revert** a commit, **Consolidate now**. |
 | **Workers** | The worker tree: home sessions (live and retired) → children, groups, sweeps. For each worker: taint (inherited requester class), narrowed verbs, read-only flag, case, cost, run link. | **Stop** a worker (**NEW**: cancel its run). There is deliberately no "tell", because only the parent instructs a child. |
 | **Access** | `skill.verbs` × `autonomy.tiers`, `promote`, browser credential bindings, logins, and the operators who can approve. | Tier, promote, verb, binding and login changes are **config edits** through [§7](#7-the-config-edit-pipeline). Revoking a saved login (`browser logout`) is immediate state. |
-| **Definition** | A form for the whole `members.<m>` node: `team`, charter or `charter_file`, scope, escalation, operators, `home.rotate`, `worker.*`, autonomy (shadow, `approval_ttl`, spend cap), `proactive.*`, cross-team `peers`, `isolation`. Inherited team defaults show beside each field. Live YAML and validation sit beside it. | Review changes → the apply pipeline. **Define a member** uses the same form with `shadow: true` preset. |
+| **Definition** | A form for the whole `bots.<m>` node: `team`, charter or `charter_file`, scope, escalation, operators, `home.rotate`, `worker.*`, autonomy (shadow, `approval_ttl`, spend cap), `proactive.*`, cross-team `peers`, `isolation`. Inherited team defaults show beside each field. Live YAML and validation sit beside it. | Review changes → the apply pipeline. **Define a bot** uses the same form with `shadow: true` preset. |
 
 ### 4.5 Browsers (#182)
 
@@ -341,7 +364,7 @@ Header actions:
 
 ### 4.6 Workflows and the builder
 
-- **List.** Name, `on:`, owner (your config, a pack, or a member's
+- **List.** Name, `on:`, owner (your config, a pack, or a bot's
   synthesized trigger), 24h runs, success rate, spend, draft/staged state.
   Run one manually (inputs, or replay a past event), delete one (a config
   edit), or start a new one.
@@ -528,7 +551,7 @@ them in device frames, and its test suite runs every route at 390×844.
   which is minted by a passkey assertion bound to that request's digest
   ([§6.5](#65-step-up)).
 - **Shared code.** Handlers call the same internal functions the CLI and the
-  control socket use (`setPaused`, `doUpdate`, `retry`, the member service,
+  control socket use (`setPaused`, `doUpdate`, `retry`, the bot service,
   the browser manager). There is no second implementation of any operation.
 - **Package layout.** The API lives in a new `internal/dashboard` package
   with subpackages `api`, `auth`, `events`, `configedit` and `web`.
@@ -554,7 +577,7 @@ them in device frames, and its test suite runs every route at 390×844.
 | `step_log` | `{run, step, seq, kind, text}` | **NEW** per-step log tap |
 | `audit` | each audit line (redacted) | **NEW** tap in the audit writer |
 | `attention` | add / update / remove | **NEW** aggregator |
-| `member` | ledger changes (case, proposal, worker, session), `transcript` turns | members service hooks (#178) + paseo timeline relay (**NEW**) |
+| `bot` | ledger changes (case, proposal, worker, session), `transcript` turns | bots service hooks (#178) + paseo timeline relay (**NEW**) |
 | `browser` | session list changes, status, `needs_input` | browser manager (#182) |
 | `config` | drift, apply progress, restored | **NEW** pipeline |
 | `daemon` | health, paused, update found/applied, `restarting` | status/update loop |
@@ -601,28 +624,31 @@ Rows marked **NEW** need new daemon code. The others wrap code that exists on
 | `GET /api/v1/audit?event&actor&run&case&since&cursor` | audit query | `audit.jsonl` reader (**NEW** tail/index) |
 | `GET /api/v1/logs?level&since` | daemon log | **NEW** log ring |
 
-**Members (#178)**
+**Bots (#178)**
 
 | Method & path | Does | Maps to |
 |---|---|---|
-| `GET /api/v1/members`, `GET /api/v1/members/<m>` | list, show | `member ls`, `member show` |
-| `GET /api/v1/members/<m>/{cases,proposals,workers}` | ledger views | `member cases\|proposals\|workers` |
-| `GET /api/v1/members/<m>/proposals/<id>` | detail + **canonical approval payload** + digest; Terraform plan text and counts | `member proposal` |
-| `POST /api/v1/members/<m>/proposals/<id>/decision` `{decision, assertion}` | approve/deny with WebAuthn | **NEW** WebAuthn verifier → `Executor.Decide` ([§6.6](#66-the-approvals-boundary)) |
-| `POST /api/v1/members/<m>/proposals/<id>/replan` | replan stale Terraform | `member replan` |
-| `POST /api/v1/members/<m>/say` `{text}` | talk to the home session | `member say` (requester `operator:<name>`) |
-| `GET /api/v1/members/<m>/transcript?cursor` | home conversation | **NEW** paseo timeline relay |
-| `POST /api/v1/members/<m>/{deliver,rotate,sweep,consolidate}` | as the CLI | `member deliver\|rotate\|sweep\|consolidate` |
-| `POST /api/v1/members/<m>/cases/<c>/{note,close,reopen}` | case ops | `member case …` |
-| `POST /api/v1/members/<m>/cases/<c>/assign` `{to}` | operator reassignment within the team; provenance kept | **NEW** (`member assign`) |
-| `GET /api/v1/teams`, `GET /api/v1/teams/<t>` | teams, members, effective defaults (inherited / narrowed per member), routing, links | **NEW** teams follow-up to #178 |
+| `GET /api/v1/bots`, `GET /api/v1/bots/<m>` | list, show | `bot ls`, `bot show` |
+| `GET /api/v1/bots/<m>/{cases,proposals,workers}` | ledger views | `bot cases\|proposals\|workers` |
+| `GET /api/v1/bots/<m>/proposals/<id>` | detail + **canonical approval payload** + digest; Terraform plan text and counts | `bot proposal` |
+| `POST /api/v1/bots/<m>/proposals/<id>/decision` `{decision, assertion}` | approve/deny with WebAuthn | **NEW** WebAuthn verifier → `Executor.Decide` ([§6.6](#66-the-approvals-boundary)) |
+| `POST /api/v1/bots/<m>/proposals/<id>/replan` | replan stale Terraform | `bot replan` |
+| `POST /api/v1/bots/<m>/say` `{text}` | talk to the home session | `bot say` (requester `operator:<name>`) |
+| `GET /api/v1/bots/<m>/transcript?cursor` | home conversation | **NEW** paseo timeline relay |
+| `POST /api/v1/bots/<m>/{deliver,rotate,sweep,consolidate}` | as the CLI | `bot deliver\|rotate\|sweep\|consolidate` |
+| `POST /api/v1/bots/<m>/cases/<c>/{note,close,reopen}` | case ops | `bot case …` |
+| `POST /api/v1/bots/<m>/cases/<c>/assign` `{to}` | operator reassignment within the team; provenance kept | **NEW** (`bot assign`) |
+| `POST /api/v1/bots/<m>/cases/<c>/delegate` `{to, task}` | hand a teammate (or a linked team's bot) a task; child case under the original requester | **NEW** (`bot delegate`) |
+| `GET /api/v1/bots/<m>/delegations`, `DELETE …/<d>` | delegation edges (from, to, parent, child, status, result); cancel | **NEW** |
+| `GET /api/v1/teams/<t>/activity?since=` | ask and delegate counts between bots, for the activity graph | **NEW** (from the ledgers) |
+| `GET /api/v1/teams`, `GET /api/v1/teams/<t>` | teams, bots, effective defaults (inherited / narrowed per bot), routing, links | **NEW** teams follow-up to #178 |
 | `POST /api/v1/teams/<t>/deliver` `{title, text \| event}` | route work to a team: rules, else the lead | **NEW** |
 | `GET /api/v1/teams/<t>/knowledge/{tree,file,proposals}` | the team repo and pending promotions | **NEW** |
 | `POST /api/v1/teams/<t>/knowledge/proposals/<id>/decision` `{decision, assertion}` | approve / deny a promotion (step-up) | **NEW** |
-| `POST /api/v1/members/<m>/workers/<w>/stop` | cancel a worker's run | **NEW** (run cancel) |
-| `GET /api/v1/members/<m>/memory/{tree,file,log}?ref&path` | browse memory | `memrepo` reads |
-| `POST /api/v1/members/<m>/memory/commit` `{path, content, base, message}` | operator edit → one commit | **NEW** operator write in `memrepo` |
-| `POST /api/v1/members/<m>/memory/revert` `{sha}` | revert | **NEW** (`git revert` via `memrepo`) |
+| `POST /api/v1/bots/<m>/workers/<w>/stop` | cancel a worker's run | **NEW** (run cancel) |
+| `GET /api/v1/bots/<m>/memory/{tree,file,log}?ref&path` | browse memory | `memrepo` reads |
+| `POST /api/v1/bots/<m>/memory/commit` `{path, content, base, message}` | operator edit → one commit | **NEW** operator write in `memrepo` |
+| `POST /api/v1/bots/<m>/memory/revert` `{sha}` | revert | **NEW** (`git revert` via `memrepo`) |
 
 **Browser (#182)**
 
@@ -672,7 +698,7 @@ Rows marked **NEW** need new daemon code. The others wrap code that exists on
    - an enrollment ticket store in `<state>/dashboard/` (0700; files 0600).
 3. `conductor dashboard enroll | reset | status`, over the operator control
    socket.
-4. A WebAuthn approval verifier plugged into the members `Executor.Decide`.
+4. A WebAuthn approval verifier plugged into the bots `Executor.Decide`.
 5. `internal/configedit`:
    - node-level edits with byte-preserving splices;
    - a source map across `imports:`;
@@ -687,7 +713,7 @@ Rows marked **NEW** need new daemon code. The others wrap code that exists on
    - the history index;
    - run cancel;
    - the attention aggregator.
-7. Members:
+7. Bots:
    - paseo transcript relay;
    - operator memory commit and revert;
    - worker stop.
@@ -711,12 +737,12 @@ Rows marked **NEW** need new daemon code. The others wrap code that exists on
   agent);
 - secrets (write-only here, but writable);
 - browser sessions with an operator's logins;
-- members' memory (it steers future behaviour);
+- bots' memory (it steers future behaviour);
 - the audit trail.
 
 **Adversaries:**
 
-1. **A prompt-injected agent.** It may be a member, worker, hand-off, paseo
+1. **A prompt-injected agent.** It may be a bot, worker, hand-off, paseo
    session or code step, and it may be sandboxed or deliberately not.
 2. **Another device on the tailnet**, compromised or simply shared, for
    example a CI box or a server.
@@ -796,7 +822,7 @@ pairing code: 417-209
 
 - The CLI talks to the daemon over the **operator control socket**. That
   socket is never mounted into a sandbox (agents get only the skill socket).
-  The CLI also refuses to run inside a conductor agent session, as `member
+  The CLI also refuses to run inside a conductor agent session, as `bot
   approve` does.
 - The ticket is a 256-bit random value. It lives in the URL **fragment**,
   so it never reaches a log. It expires in 10m and is single use, with one
@@ -909,8 +935,8 @@ The approval payload is canonical and server-built. It is the same object the
 CLI signs:
 
 ```json
-{ "v": 1, "ns": "conductor-member-approval",
-  "member": "platform-sre", "proposal": "p12", "decision": "approve",
+{ "v": 1, "ns": "conductor-bot-approval",
+  "bot": "platform-sre", "proposal": "p12", "decision": "approve",
   "action_sha256": "9f2c…",          // for terraform: covers repo, commit, dir, workspace,
                                      // var files, targets AND the plan's sha256 (as #178)
   "operator": "ops", "expires": "2026-10-16T10:42:00Z" }
@@ -929,15 +955,15 @@ CLI signs:
    - verifies the assertion: RP ID, origin, UP+UV flags, sign count, and a
      challenge recomputed from **its own** N and D;
    - maps the credential to an operator;
-   - checks that the operator is one of **this member's** operators;
-   - calls `Executor.Decide(member, id, decision, Approver{Operator, Method:
+   - checks that the operator is one of **this bot's** operators;
+   - calls `Executor.Decide(bot, id, decision, Approver{Operator, Method:
      "webauthn", Credential, Evidence})`.
 
    This is the seam #178 named ("a chat approval path … can be added later
    on the same `Executor.Decide`"). The atomic pending→approved transition,
    the shadow/expired/non-pending refusals, and "only the exact signed digest
    runs" are unchanged.
-5. The audit records `member_approval` with `method: webauthn`, the
+5. The audit records `bot_approval` with `method: webauthn`, the
    credential id, and the raw `authenticatorData`, `clientDataJSON` and
    signature. An approval can be re-verified offline against the stored
    public key, which is the same non-repudiation SSHSIG gives.
@@ -963,7 +989,7 @@ The brief's premise is "sandboxed agents' network is cut". This design
 
 | Agent launch | Network as built | Reaches 127.0.0.1:7788? | Reaches the tailnet address? | Guard and test |
 |---|---|---|---|---|
-| Linux namespace sandbox (default for cli/acp/opencode/agent-deck, member workers, paseo `<provider>-sandboxed`) | Own network namespace. `lo` is its own. The only way out is a unix socket to conductor's **egress proxy** (allowlist), plus model relays to fixed loopback endpoints (#179) | No: its loopback isn't the host's | No: no route | The proxy **hard-denies** the dashboard's addresses and names whatever `sandbox.egress`/`browser.allow` say (**NEW**). Validation refuses a model route or exposed port equal to the dashboard port. e2e group Z gains "agent curls both dashboard origins, direct and via the proxy → refused". |
+| Linux namespace sandbox (default for cli/acp/opencode/agent-deck, bot workers, paseo `<provider>-sandboxed`) | Own network namespace. `lo` is its own. The only way out is a unix socket to conductor's **egress proxy** (allowlist), plus model relays to fixed loopback endpoints (#179) | No: its loopback isn't the host's | No: no route | The proxy **hard-denies** the dashboard's addresses and names whatever `sandbox.egress`/`browser.allow` say (**NEW**). Validation refuses a model route or exposed port equal to the dashboard port. e2e group Z gains "agent curls both dashboard origins, direct and via the proxy → refused". |
 | macOS Seatbelt | No network namespace. `(deny network*)` plus `localhost:<proxy port>`, `LoopbackPorts` (model) and `ListenPorts` (`seatbelt_agent.go`) | Only if 7788 were one of those ports, which validation forbids (**NEW**) | No (`localhost` only) | The profile has an **`Open`** verdict (`AgentNet.Open`, the host network). Any launch with `Open` is treated as *unsandboxed network*: the Isolation tab lists it, and the e2e macOS leg asserts the dashboard port is never allowed. |
 | Container backend (`feat/agent-container`) | `--network none`, no capabilities, non-root. Every stream (proxy, model, socket) is muxed over `sandbox-net --mux` stdio. No socket is bind-mounted | No | No | Proxy hard-deny as above. The container CI leg (docker + rootless podman) asserts it. |
 | Conductor's agent browser (#182) | Jailed Chromium with no network; egress only through the allowlist proxy, **loopback included if allowlisted** | Only through the proxy | Only through the proxy | The same proxy hard-deny stops an agent navigating its browser to the dashboard. |
@@ -1038,7 +1064,7 @@ Operations are path-addressed:
 ```json
 { "op": "set",    "path": "triggers[name=ci-fixer].steps[id=fix].model", "value": "claude-opus-5" }
 { "op": "insert", "path": "triggers[name=ci-fixer].steps", "after": "[id=comment]", "value": { "id": "notify", "uses": "slack-ops.post", "options": { "text": "…" } } }
-{ "op": "delete", "path": "members.platform-sre.peers[0]" }
+{ "op": "delete", "path": "bots.platform-sre.peers[0]" }
 { "op": "move",   "path": "…", "to": "…" }
 ```
 
@@ -1179,7 +1205,7 @@ is offered as **Roll back** on the success screen.
   when it:
   - loosens isolation (`mode: none`, sandbox off, `privileged`);
   - adds egress or `fs:`;
-  - adds a verb to a member, loosens a tier or adds a promotion;
+  - adds a verb to a bot, loosens a tier or adds a promotion;
   - adds a browser site, login or credential, or turns `evaluate` on;
   - adds a team approver, raises a team's autonomy ceiling, drops its
     container requirement, links two teams, or makes knowledge promotion
@@ -1244,9 +1270,9 @@ All tests are hermetic:
 - throwaway daemons on their own ports. A fresh paseo home would otherwise
   bind the live port 6767.
 
-These are the rules the member and sandbox PRs already follow.
+These are the rules the bot and sandbox PRs already follow.
 
-- **Go unit tests.** Every handler against fakes of the member service, the
+- **Go unit tests.** Every handler against fakes of the bot service, the
   browser manager, the store and the update checker:
   - auth middleware order (Host → Origin → session → CSRF → step-up);
   - the SSE ring and resume;
@@ -1258,7 +1284,7 @@ These are the rules the member and sandbox PRs already follow.
   - UV not set;
   - a replayed challenge;
   - the sign count going backwards;
-  - a credential of an operator who isn't this member's;
+  - a credential of an operator who isn't this bot's;
   - a session with no assertion;
   - a nonce minted for p11 used on p12;
   - an expired proposal.
@@ -1268,7 +1294,7 @@ These are the rules the member and sandbox PRs already follow.
   - Corpus round-trip byte identity.
   - Fuzzing (`go test -fuzz`) over random edits that asserts every
     untouched byte range is identical and the result parses.
-  - Golden diffs for each editor (member definition, builder ops, pack
+  - Golden diffs for each editor (bot definition, builder ops, pack
     overrides).
   - Widening-classification table tests.
 - **Validate-on-copy.** A test hashes the live config and state dirs (and
@@ -1306,7 +1332,7 @@ These are the rules the member and sandbox PRs already follow.
 One feature branch, **`feat/dashboard`**, built by parallel builders who each
 own a disjoint set of files. A builder merges into the feature branch through
 small PRs. The branch merges to `main` when [§9](#9-testing-strategy)'s gates
-pass. Members and browser work starts after #178 and #182 (and #179) land on
+pass. Bots and browser work starts after #178 and #182 (and #179) land on
 `main`.
 
 **Phase 0: the contract** (one builder, about 2 days, merged first).
@@ -1339,7 +1365,7 @@ proceed in parallel.
 
 | Builder | Owns | Delivers |
 |---|---|---|
-| **B8 Members & teams** | `internal/dashboard/api/{members,teams}.go`, the WebAuthn → `Executor.Decide` verifier (with B2), transcript relay, memrepo operator commit/revert, worker stop, team routing/knowledge endpoints, `web/src/routes/{members,teams}` | all member tabs, team pages (routing, defaults with inherit/narrow, knowledge approvals), proposal + Terraform view, approve/deny, definition editor (over B5) |
+| **B8 Bots & teams** | `internal/dashboard/api/{bots,teams}.go`, the WebAuthn → `Executor.Decide` verifier (with B2), transcript relay, memrepo operator commit/revert, worker stop, team routing/knowledge endpoints, `web/src/routes/{bots,teams}` | all bot tabs, team pages (routing, defaults with inherit/narrow, knowledge approvals), proposal + Terraform view, approve/deny, definition editor (over B5) |
 | **B9 Browser** | screencast relay, takeover lease, headless seed/passkey-register, `web/src/routes/browser` | live view, takeover, seed, passkey registration, per-identity settings (over B5) |
 
 **Integration checkpoints:**
@@ -1372,7 +1398,7 @@ proceed in parallel.
    - `docs/wiki/Dashboard.md` covers operators: enroll, phone, approvals,
      config editing, rollback, and the CT-log caveat;
    - the Isolation page links the unsandboxed-agent caveat;
-   - Members and Browser get "in the dashboard" sections.
+   - Bots and Browser get "in the dashboard" sections.
 
 ## 12. Decisions (formerly open questions)
 
@@ -1382,7 +1408,7 @@ proceed in parallel.
    defense in depth for `mode: none` agents, not the primary boundary (that
    remains the passkey requirement on every approval and sensitive write).
 2. **Enrollment always requires the operator's SSH signature.** No
-   localhost-link-only mode, including on boxes without members.
+   localhost-link-only mode, including on boxes without bots.
 3. **Per-step log store: configurable,** default 1 MiB per step, persisted
    next to the history record and pruned with `history_retention`.
 4. **Chat transcript: conductor records it itself,** from the inbox it
@@ -1421,9 +1447,13 @@ backup you can restore. Things to try:
   `{{.triage.kind}}` into `fix`'s prompt from the data tree. Type `gpt-x` as a
   model to see inline validation; edit the YAML and watch the list follow;
   Ctrl+Z.
-- **Teams:** Teams & members → `platform` → Defaults (inherits / narrows),
+- **Teams:** Teams & bots → `platform` → Defaults (inherits / narrows),
   Routing (try a rule), Route work here, Knowledge (approve a promotion).
   Add `release-scribe` to `finance` to see a narrowing refusal.
+- **Delegation:** `platform-sre` → case `c29` shows its delegation edges;
+  open `web-triage`'s child case `c36`, add a note and close it to report
+  the result back. **Delegate a task…** from a case; try a bot in an
+  unlinked team. The team page shows the ask & delegate graph.
 - **Connectors & hosts:** add a connector; its form comes from the plugin's
   declared settings.
 - **Approve with passkey:** Needs you → *Review* → `p12` → **Approve**.

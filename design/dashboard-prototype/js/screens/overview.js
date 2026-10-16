@@ -19,8 +19,8 @@
 
   UI.bindApprove = (root) => UI.bind(root, '[data-approve]', 'click', (e, el) => {
     e.preventDefault(); e.stopPropagation();
-    const p = D.proposals.find((x) => x.id === el.dataset.approve && x.member === el.dataset.member) || D.proposals.find((x) => x.status === 'pending' && x.member === el.dataset.member);
-    if (p) UI.go(`#/members/${p.member}/proposals/${p.id}`);
+    const p = D.proposals.find((x) => x.id === el.dataset.approve && x.bot === el.dataset.bot) || D.proposals.find((x) => x.status === 'pending' && x.bot === el.dataset.bot);
+    if (p) UI.go(`#/bots/${p.bot}/proposals/${p.id}`);
   });
 
   const ov = { cost: 'chart' };
@@ -109,7 +109,7 @@
             <a class="panel stat" href="#/live"><span class="k"><span class="pulse run"></span>Running</span><span class="v">${running.length}</span><span class="d">${running.map((r) => r.workflow).join(' · ')}</span></a>
             <a class="panel stat" href="#/runs"><span class="k">Runs · 12h</span><span class="v">${ok24 + fail24 + 9}<small>${Math.round(((ok24 + 9) / (ok24 + fail24 + 9)) * 100)}% ok</small></span><span class="d">${fail24} failed · 1 parked · 1 waiting</span></a>
             <a class="panel stat" href="#/runs"><span class="k">Spend · today</span><span class="v">${usd(D.costDaily[13].usd)}</span><span class="d">budget $25/day · 1 step shed</span></a>
-            <a class="panel stat hot" href="#/members"><span class="k">Members</span><span class="v">${D.members.length}<small>${D.members.filter((m) => m.home === 'live').length} live</small></span><span class="d">${D.proposals.filter((p) => p.status === 'pending').length} proposals pending · ${D.cases.filter((c) => c.status === 'open').length} open cases</span></a>
+            <a class="panel stat hot" href="#/bots"><span class="k">Bots</span><span class="v">${D.bots.length}<small>${D.bots.filter((m) => m.home === 'live').length} live</small></span><span class="d">${D.proposals.filter((p) => p.status === 'pending').length} proposals pending · ${D.cases.filter((c) => c.status === 'open').length} open cases</span></a>
           </div>
         </div>
         ${score()}

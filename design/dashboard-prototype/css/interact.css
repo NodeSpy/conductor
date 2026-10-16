@@ -87,7 +87,7 @@ tr.hidden, .item.hidden, .hidden { display: none !important; }
 /* cards with actions */
 .card-actions { display: flex; gap: 4px; margin-left: auto; }
 .add-card { display: grid; place-items: center; border-style: dashed; min-height: 150px; }
-.member-card .row .btn.sm { flex: none; }
+.bot-card .row .btn.sm { flex: none; }
 .danger-text { color: var(--fail); }
 
 /* phone */
@@ -176,3 +176,15 @@ button.node { font: inherit; color: inherit; text-align: left; }
 /* toasts inform; they never block a click underneath */
 .toasts, .toast { pointer-events: none; }
 .score a.mark { z-index: 1; }
+/* delegation */
+.act-graph { width: 100%; max-height: 300px; display: block; }
+.ag-team { fill: color-mix(in srgb, var(--run) 5%, transparent); stroke: color-mix(in srgb, var(--run) 40%, var(--line-2)); stroke-dasharray: 5 4; }
+.ag-ask { stroke: var(--ink-3); stroke-width: 1.4; stroke-dasharray: 4 3; }
+.ag-delegate { stroke: var(--accent); stroke-width: 2; }
+.ag-delegate.live { stroke-dasharray: 6 4; animation: agflow 1s linear infinite; }
+@keyframes agflow { to { stroke-dashoffset: -20; } }
+.ag-head-ask { fill: var(--ink-3); } .ag-head-delegate { fill: var(--accent); }
+.ag-n { font: 9px var(--font-mono); fill: var(--ink-2); paint-order: stroke; stroke: var(--bg-2); stroke-width: 3px; }
+.pg-node.outside { opacity: .75; }
+.deleg-result { margin-top: 3px; padding: 4px 8px; border-left: 2px solid var(--ok); background: var(--ok-wash); border-radius: 0 4px 4px 0; }
+.item.deleg.inbound { background: var(--run-wash); }

@@ -9,7 +9,7 @@
   const SECTIONS = [
     ['settings', 'secrets', () => D.settings.length], ['vaults', 'secrets', () => D.vaults.length], ['connectors', 'connectors/connectors', () => D.connectors.length],
     ['hosts', 'connectors/hosts', () => D.hosts.length], ['runtimes', 'connectors/runtimes', () => D.runtimes.length], ['sandbox', 'connectors/isolation', () => 1],
-    ['operators', 'security', () => Object.keys(D.operatorsCfg).length], ['members', 'members', () => D.members.length], ['browser', 'browser', () => D.identities.length + D.access.credentials.length],
+    ['operators', 'security', () => Object.keys(D.operatorsCfg).length], ['bots', 'bots', () => D.bots.length], ['browser', 'browser', () => D.identities.length + D.access.credentials.length],
     ['packs', 'extensions/packs', () => D.packs.length], ['update', 'updates', () => 1], ['workflows', 'workflows', () => D.workflows.filter((w) => w.kind === 'workflow' && w.source === 'config').length], ['triggers', 'workflows', () => D.workflows.filter((w) => w.kind === 'trigger' && w.source === 'config').length],
   ];
   const view = { open: null };
@@ -17,7 +17,7 @@
   UI.route('config', () => {
     const n = D.pending.length;
     return `<div class="page">
-    ${UI.head('Config', { sub: 'the file is the source of truth', actions: `<a class="btn" href="#/config/raw">${icon('code')}Edit YAML</a>${n ? `<a class="btn primary" href="#/config/apply">${icon('check')}${n} staged change${n > 1 ? 's' : ''}</a>` : `<button class="btn" ${UI.off('Nothing staged. Edit a section, a member or a workflow, and its change waits here for review.')}>${icon('check')}No staged changes</button>`}` })}
+    ${UI.head('Config', { sub: 'the file is the source of truth', actions: `<a class="btn" href="#/config/raw">${icon('code')}Edit YAML</a>${n ? `<a class="btn primary" href="#/config/apply">${icon('check')}${n} staged change${n > 1 ? 's' : ''}</a>` : `<button class="btn" ${UI.off('Nothing staged. Edit a section, a bot or a workflow, and its change waits here for review.')}>${icon('check')}No staged changes</button>`}` })}
     <div class="grid g-side">
       <div class="stack">
         <div class="panel"><div class="panel-head"><h3>Files</h3><span class="muted small">what the daemon loaded at boot</span><div class="tools">${st('ok', 'on disk = loaded')}</div></div>
@@ -25,7 +25,7 @@
             <tr><td data-l="file" class="mono"><a class="link" href="#/config/raw">~/.config/conductor/config.yaml</a></td><td data-l="owner"><span class="owner op">you</span></td><td data-l="sha" class="mono">${D.daemon.config_sha}</td><td data-l="loaded" class="mono muted">${ago(D.configHistory[0].at)} ago</td></tr>
             <tr><td data-l="file" class="mono">~/.config/conductor/conf.d/connectors/pd.yaml</td><td data-l="owner"><span class="owner op">you · imports:</span></td><td data-l="sha" class="mono">91d0c7e3</td><td data-l="loaded" class="mono muted">50m ago</td></tr>
             <tr><td data-l="file" class="mono">.conductor/packs/review/ (vendored)</td><td data-l="owner"><span class="owner pack">pack review · c81e09a</span></td><td data-l="sha" class="mono">c81e09a</td><td data-l="loaded" class="mono muted">re-vendored 6m ago</td></tr>
-            <tr><td data-l="file" class="mono">.conductor/packs/sre-member/ (vendored)</td><td data-l="owner"><span class="owner pack">pack sre-member · hold</span></td><td data-l="sha" class="mono">3d70b2e</td><td data-l="loaded" class="mono muted">held</td></tr>
+            <tr><td data-l="file" class="mono">.conductor/packs/sre-bot/ (vendored)</td><td data-l="owner"><span class="owner pack">pack sre-bot · hold</span></td><td data-l="sha" class="mono">3d70b2e</td><td data-l="loaded" class="mono muted">held</td></tr>
             <tr><td data-l="file" class="mono">conductor.lock.yaml</td><td data-l="owner"><span class="owner pack">conductor</span></td><td data-l="sha" class="mono">5e2c91aa</td><td data-l="loaded" class="mono muted">6m ago</td></tr>
           </tbody></table></div>
         <div class="panel"><div class="panel-head"><h3>Sections</h3><span class="muted small">open one in its visual editor, or jump to it in the YAML</span></div><div class="panel-body"><div class="sec-grid">${SECTIONS.map(([s, href, c]) => `<div class="sec-chip"><a href="#/${href}" class="grow"><b>${s}</b> <span class="mono tiny muted">${c()}</span></a><a class="icon-btn" href="#/config/raw?at=${s}" data-tip="${s}: in the YAML" aria-label="${s} in the YAML">${icon('code')}</a></div>`).join('')}</div></div></div>
@@ -62,7 +62,7 @@
     const cmp = (coll, key, node) => { const cur = S.staged(coll, key); if (!YAML.eq(cur, node)) out.push([coll, key, node]); };
     const mapSec = (coll, obj) => { const keys = new Set([...C()[coll].keys(), ...Object.keys(obj || {})]); keys.forEach((k) => cmp(coll, k, obj && k in obj ? obj[k] : null)); };
     mapSec('settings', v.settings); mapSec('vaults', v.vaults); mapSec('connectors', v.connectors); mapSec('hosts', v.hosts); mapSec('runtimes', v.runtimes);
-    mapSec('operators', v.operators); mapSec('members', v.members); mapSec('packs', v.packs);
+    mapSec('operators', v.operators); mapSec('bots', v.bots); mapSec('packs', v.packs);
     mapSec('identities', v.browser && v.browser.identities); mapSec('credentials', v.browser && v.browser.credentials);
     if (v.sandbox) cmp('sandbox', 'sandbox', v.sandbox);
     if (v.update) cmp('update', 'update', v.update);
@@ -126,7 +126,7 @@
     if (ap.done && !P.length) return doneView();
     ap.done = null;
     if (!P.length) return `<div class="page">${UI.head('Review and apply', { crumbs: `<a href="#/config">Config</a>` })}
-      <div class="panel"><div class="empty"><span class="serif">Nothing staged</span>Edit a connector, a member, a secret reference or a workflow and its change waits here: validated on a copy, shown as a diff, applied with your passkey.<div class="row" style="justify-content:center;margin-top:10px"><a class="btn" href="#/config">Config</a><a class="btn" href="#/connectors">Connectors</a><a class="btn" href="#/workflows">Workflows</a></div></div></div></div>`;
+      <div class="panel"><div class="empty"><span class="serif">Nothing staged</span>Edit a connector, a bot, a secret reference or a workflow and its change waits here: validated on a copy, shown as a diff, applied with your passkey.<div class="row" style="justify-content:center;margin-top:10px"><a class="btn" href="#/config">Config</a><a class="btn" href="#/connectors">Connectors</a><a class="btn" href="#/workflows">Workflows</a></div></div></div></div>`;
     const key = JSON.stringify(P.map((c) => c.id));
     if (ap.checksFor !== key) { ap.checksFor = key; ap.phase = 'check'; ap.ack = false; }
     const before = S.configText(D), cand = S.candidate(), after = S.configText(cand);

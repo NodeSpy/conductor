@@ -9,7 +9,7 @@ const test = base.test.extend({
     page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
     await page.addInitScript(() => { window.__PROTO_FAST = true; });
     await page.goto('/index.html#/overview');
-    await page.evaluate(() => { localStorage.removeItem('cd-proto-state-v2'); localStorage.setItem('cd-theme', 'dark'); });
+    await page.evaluate(() => { localStorage.removeItem('cd-proto-state-v3'); localStorage.setItem('cd-theme', 'dark'); });
     await use(page);
     base.expect(errors, `console errors in ${info.title}`).toEqual([]);
   },
@@ -17,7 +17,7 @@ const test = base.test.extend({
 
 /** Navigate to a route with a reload, so module state resets too. */
 async function go(page, route, { fresh = false } = {}) {
-  if (fresh) await page.evaluate(() => localStorage.removeItem('cd-proto-state-v2'));
+  if (fresh) await page.evaluate(() => localStorage.removeItem('cd-proto-state-v3'));
   await page.goto('/index.html?r=' + Date.now() + route);
   await page.waitForSelector('#main > *');
   await page.waitForTimeout(80);
