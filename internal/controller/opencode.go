@@ -3,6 +3,8 @@ package controller
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -155,7 +158,16 @@ func (c *opencodeController) NewSession(ctx context.Context, spec Spec, _ Handle
 	}
 
 	sctx, scancel := context.WithCancel(context.Background())
-	baseURL, cleanup, err := c.connect(sctx, spec.Cwd, env, launchOptsFor(c.iso, spec.Request))
+	req := spec.Request
+	opt := withAgent(launchOptsFor(c.iso, req), "opencode", &req, true)
+	if sandboxApplies(c.host, opt) {
+		prompt += sandboxNote(req)
+		if toolCfg != "" {
+			// The tool server's config file, shown read-only.
+			opt.agent.files = append(opt.agent.files, toolCfg)
+		}
+	}
+	baseURL, hc, cleanup, err := c.connect(sctx, spec.Cwd, env, opt)
 	if err != nil {
 		removeToolCfg()
 		scancel()
@@ -170,7 +182,7 @@ func (c *opencodeController) NewSession(ctx context.Context, spec Spec, _ Handle
 		}
 		return nil
 	}
-	cl := &opencodeClient{baseURL: strings.TrimRight(baseURL, "/"), hc: c.hc}
+	cl := &opencodeClient{baseURL: strings.TrimRight(baseURL, "/"), hc: hc}
 
 	title := opencodeTitle(spec.Request)
 	id, err := cl.createSession(sctx, spec.Cwd, title)
@@ -206,21 +218,31 @@ func (c *opencodeController) ResumeSession(ctx context.Context, id string, agent
 	sctx, scancel := context.WithCancel(context.Background())
 	// Root the resumed server at the session's OWN worktree. Passing ""
 	// rooted it at the daemon's cwd, so a follow-up turn read and edited
-	// a different tree than the one the session had been working in.
-	baseURL, cleanup, err := c.connect(sctx, c.cwdFor(id), nil, resumeOpts(c.iso, agentAuthored))
+	// a different tree than the one the session had been working in. A
+	// sandboxed server restarts under the identity that workspace was
+	// registered with: the session lives in that identity's tool state.
+	opt := withAgent(resumeOpts(c.iso, agentAuthored), "opencode", nil, false)
+	baseURL, hc, cleanup, err := c.connect(sctx, c.cwdFor(id), nil, opt)
 	if err != nil {
 		scancel()
 		return nil, err
 	}
-	cl := &opencodeClient{baseURL: strings.TrimRight(baseURL, "/"), hc: c.hc}
+	cl := &opencodeClient{baseURL: strings.TrimRight(baseURL, "/"), hc: hc}
 	return &opencodeSession{id: id, cl: cl, cleanup: cleanup, cancel: scancel, ctx: sctx}, nil
 }
 
-func (c *opencodeController) connect(ctx context.Context, cwd string, env []string, opt launchOpts) (string, func() error, error) {
+// connect starts (or dials) the session's server and returns its base URL
+// and the HTTP client that reaches it.
+func (c *opencodeController) connect(ctx context.Context, cwd string, env []string, opt launchOpts) (string, *http.Client, func() error, error) {
 	if c.dial != nil {
-		return c.dial(ctx, cwd, env)
+		u, cleanup, err := c.dial(ctx, cwd, env)
+		return u, c.hc, cleanup, err
 	}
-	return spawnOpencode(ctx, c.host, cwd, env, opt)
+	u, hc, cleanup, err := spawnOpencode(ctx, c.host, cwd, env, opt)
+	if hc == nil {
+		hc = c.hc
+	}
+	return u, hc, cleanup, err
 }
 
 // writeOpencodeToolConfig writes a per-session opencode config (0600, outside
@@ -271,30 +293,56 @@ func writeOpencodeToolConfig(ts *dispatch.ToolServerSpec) (string, error) {
 // HTTP client reaches it via ssh -W. A locally-provisioned worktree path is
 // not meaningful on the remote box, so remote sessions want checkout: none or
 // a remote-existing directory.
-func spawnOpencode(_ context.Context, host, cwd string, env []string, opt launchOpts) (string, func() error, error) {
-	argv := []string{"opencode", "serve", "--hostname", "127.0.0.1", "--port", "0"}
+//
+// Under the agent sandbox the server is this dispatch's own, confined like
+// any agent (its tools run inside it): it listens on the sandbox's loopback
+// — a fixed port in its own network namespace on Linux, reached through the
+// unix socket the sandbox exposes it on; a free host port on macOS, the only
+// one its profile lets it listen on — and answers only with this session's
+// password. The returned client (nil: the controller's own) reaches it.
+func spawnOpencode(_ context.Context, host, cwd string, env []string, opt launchOpts) (string, *http.Client, func() error, error) {
+	port := "0"
+	var password string
+	sandboxed := sandboxApplies(host, opt)
+	if sandboxed {
+		p, err := opencodeServePort()
+		if err != nil {
+			return "", nil, nil, fmt.Errorf("opencode: %w", err)
+		}
+		port = strconv.Itoa(p)
+		addr := net.JoinHostPort("127.0.0.1", port)
+		opt.agent.expose = append(opt.agent.expose, addr)
+		if password, err = randomToken(); err != nil {
+			return "", nil, nil, fmt.Errorf("opencode: %w", err)
+		}
+		opt.agent.env = append(opt.agent.env, "OPENCODE_SERVER_PASSWORD="+password,
+			// No self-update and no language-server downloads: the sandbox
+			// reaches its model and nothing else.
+			"OPENCODE_DISABLE_AUTOUPDATE=1", "OPENCODE_DISABLE_LSP_DOWNLOAD=1")
+	}
+	argv := []string{"opencode", "serve", "--hostname", "127.0.0.1", "--port", port}
 	opt, revoke := withEgressRevoke(opt)
 	argv, localDir, localEnv, remote, err := prepareLaunch(host, cwd, env, argv, opt)
 	if err != nil {
 		revoke()
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	if localDir != "" {
 		cmd.Dir = localDir
 	}
 	if !remote {
-		cmd.Env = append(os.Environ(), localEnv...)
+		cmd.Env = launchEnv(host, opt, os.Environ(), localEnv)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		revoke()
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		revoke()
-		return "", nil, fmt.Errorf("opencode: start serve: %w", err)
+		return "", nil, nil, fmt.Errorf("opencode: start serve: %w", err)
 	}
 	// Background server owned by cleanup, not ctx — retire the egress
 	// credential at session end (#36 iso-review round 2, item 4).
@@ -309,9 +357,63 @@ func spawnOpencode(_ context.Context, host, cwd string, env []string, opt launch
 	url, err := scanOpencodeURL(stdout)
 	if err != nil {
 		cleanup()
-		return "", nil, err
+		return "", nil, nil, err
 	}
-	return url, cleanup, nil
+	if !sandboxed {
+		return url, nil, cleanup, nil
+	}
+	return url, sandboxedOpencodeClient(opt.agent.exposed[net.JoinHostPort("127.0.0.1", port)], password), cleanup, nil
+}
+
+// opencodeServePort is the port a sandboxed `opencode serve` listens on:
+// fixed inside a Linux sandbox's own network namespace (nothing else is
+// there), a free host loopback port on macOS (no namespace).
+func opencodeServePort() (int, error) {
+	if sandboxGOOS() != "darwin" {
+		return 4096, nil
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port, nil
+}
+
+// sandboxedOpencodeClient reaches a sandboxed server: over the unix socket
+// its port is exposed on (sock "" — macOS — the port itself), with the
+// session's password.
+func sandboxedOpencodeClient(sock, password string) *http.Client {
+	tr := &http.Transport{}
+	if sock != "" {
+		tr.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", sock)
+		}
+	}
+	return &http.Client{Transport: basicAuth{rt: tr, user: "opencode", pass: password}}
+}
+
+// basicAuth adds HTTP basic auth to every request (opencode's
+// OPENCODE_SERVER_PASSWORD).
+type basicAuth struct {
+	rt         http.RoundTripper
+	user, pass string
+}
+
+func (b basicAuth) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.SetBasicAuth(b.user, b.pass)
+	return b.rt.RoundTrip(r)
+}
+
+// randomToken is a fresh secret for one session.
+func randomToken() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // scanOpencodeURL reads server stdout until it prints the http URL it's listening
@@ -394,6 +496,11 @@ func (c *opencodeClient) prompt(ctx context.Context, sessionID, text, provider, 
 	}
 	if model != "" {
 		body["modelID"] = model
+	}
+	if provider != "" && model != "" {
+		// opencode 1.x routes a turn by this object and ignores the
+		// top-level pair older servers read (both are sent).
+		body["model"] = map[string]string{"providerID": provider, "modelID": model}
 	}
 	var res opencodeMessage
 	if err := c.do(ctx, http.MethodPost, "/session/"+sessionID+"/message", body, &res); err != nil {

@@ -724,6 +724,13 @@ callable:
 # The notify: block is retired — alerting is triggers on the conductor.*
 # lifecycle source (this stack asserts verbs/grouping, not sink delivery).
 
+# The agent sandbox is off for this daemon: it runs as root in its container
+# (where a user namespace is no boundary, so the sandbox refuses), and its
+# fake agents push for themselves. The sandboxed path is the conductor-sandbox
+# daemon's (sandbox.yaml, group Z).
+sandbox:
+  agents: "off"
+
 store:
   state_file: /data/state.json
   audit_log: /data/audit.jsonl

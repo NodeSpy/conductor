@@ -680,6 +680,11 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 		options["__handoff_agent"] = id.Agent
 		options["__dispatch"] = id.Dispatch
 	}
+	// git.* pushes the CALLER's own workspace: the dispatch comes from the
+	// token, never from an option (an agent names no ref and no workspace).
+	if connName == "git" {
+		options["__dispatch"] = id.Dispatch
+	}
 	// Identity is a per-verb concern: a verb's own `as:` option (when it has
 	// one) travels through as the agent supplied it, and the connector applies
 	// its own default when it's absent — e.g. gh writes default to `me`

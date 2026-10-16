@@ -416,7 +416,9 @@ type HostConfig struct {
 // profile → runtime). It only applies to launches conductor performs itself
 // (acp / cli / opencode / agent-deck runtimes, host scripts) — a paseo
 // runtime's agents are children of the paseo daemon, which conductor cannot
-// wrap (validate rejects the combination).
+// wrap (validate rejects the combination). The one exception is `{mode:
+// none}`: on a paseo step or runtime it launches through paseo's plain
+// provider instead of the conductor-owned sandboxed entry.
 type IsolationConfig struct {
 	// Mode selects the wrapper: user | namespace | container.
 	Mode string `yaml:"mode"`
@@ -503,6 +505,11 @@ type WorkflowDef struct {
 	// Gate is the default quality gate (#36 §16) for this workflow's agent
 	// steps (a step's own gate wins).
 	Gate *GateSpec `yaml:"gate,omitempty"`
+	// Isolation is the default isolation: for this workflow's agent steps (a
+	// step's own wins) — `{mode: none}` is the operator's explicit opt-out of
+	// the agent sandbox for the whole workflow. A pack cannot set it to
+	// loosen its own sandbox (see checkPackSandboxLoosening).
+	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
 }
 
 // InputSpec declares one workflow input.
@@ -696,6 +703,11 @@ type TriggerSpec struct {
 	// Gate is the default quality gate (#36 §16) for every agent step of
 	// this trigger that doesn't carry its own.
 	Gate *GateSpec `yaml:"gate,omitempty"`
+	// Isolation is the default isolation: for every agent step of this
+	// trigger (and the workflows it calls) that doesn't carry its own —
+	// `{mode: none}` is the operator's explicit opt-out of the agent sandbox
+	// for the whole workflow, a hand-off's included.
+	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
 	// Callable opts a manual trigger into the inbound invoke surface (#36 §13):
 	// `callable: true` makes it reachable via `POST /invoke/<name>`. Unset/false
 	// (the default) means an external caller can never fire it — the entry point
@@ -1829,7 +1841,10 @@ func (c *Config) validateConnectors() error {
 		}
 		if rt.Isolation != nil {
 			if rt.BuiltinType() == "paseo" {
-				return fmt.Errorf("config: runtime %q: isolation cannot apply to a paseo runtime (its agents are the paseo daemon's children) — use an acp/cli/opencode/agent-deck runtime, or paseo's own sandboxing", name)
+				if err := validatePaseoIsolation(fmt.Sprintf("runtime %q", name), rt.Isolation); err != nil {
+					return err
+				}
+				continue
 			}
 			if err := validateIsolation("runtime "+name, rt.Isolation, rt.Host != ""); err != nil {
 				return err
@@ -2112,8 +2127,10 @@ func validateDetach(w string, s Step) error {
 		{"gate:", s.Gate != nil},
 		// Everything below would be silently ignored by a detach launch
 		// (no isolation shim, no env, a fresh branch-off worktree of its
-		// own, no guidance/memory appended), so it is refused instead.
-		{"isolation:", s.Isolation != nil},
+		// own, no guidance/memory appended), so it is refused instead —
+		// except `isolation: {mode: none}`, the operator's opt-out of the
+		// agent sandbox, which the launch does honor (the plain provider).
+		{"isolation: other than {mode: none} (the only isolation a detached launch takes: the sandbox opt-out)", s.Isolation != nil && !s.Isolation.OptsOut()},
 		{"env:", len(s.Env) > 0},
 		{"workdir:", s.WorkDir != ""},
 		{"checkout:", s.Checkout != ""},

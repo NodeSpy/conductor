@@ -49,6 +49,9 @@ type launchOpts struct {
 	// outlive the dispatch on the host-wide loopback proxy (#36 iso-review
 	// round 2, item 4). nil = no revocation collected (tests / no-egress paths).
 	onEgressCred func(revoke func())
+	// agent marks an agent runtime's own launch (cli/acp): the launches the
+	// agent sandbox covers (see sandboxApplies). nil: any other launch.
+	agent *agentLaunch
 }
 
 // withEgressRevoke installs an onEgressCred sink on opt and returns it
@@ -120,8 +123,23 @@ func resumeOpts(runtimeIso *config.IsolationConfig, agentAuthored bool) launchOp
 // The egress proxy is loopback-only and never applies to a remote launch
 // (config validation rejects a remote egress allowlist; the remote box's own
 // `hosts:` isolation is the wall there).
+// An agent runtime's own launch (opt.agent) on this box runs under the agent
+// sandbox when it is on (sandboxApplies): localEnv is then the launch's
+// COMPLETE environment — the caller starts it with exactly that (launchEnv),
+// never on top of the daemon's own.
 func prepareLaunch(host, dir string, env, argv []string, opt launchOpts) (wrappedArgv []string, localDir string, localEnv []string, remote bool, err error) {
 	spec := sandbox.FromConfig(opt.iso)
+
+	if sandboxApplies(host, opt) {
+		wrapped, wdir, wenv, cleanup, serr := prepareAgentSandbox(dir, env, argv, opt)
+		if serr != nil {
+			return nil, "", nil, false, serr
+		}
+		if opt.onEgressCred != nil {
+			opt.onEgressCred(cleanup)
+		}
+		return wrapped, wdir, wenv, false, nil
+	}
 
 	if host == "" {
 		wrapSpec := spec
@@ -173,4 +191,14 @@ func prepareLaunch(host, dir string, env, argv []string, opt launchOpts) (wrappe
 	wrapped = append(wrapped, prefix...)
 	wrapped = append(wrapped, remoteCmd)
 	return wrapped, "", nil, true, nil
+}
+
+// launchEnv is the environment a prepared launch starts with: exactly
+// localEnv for a sandboxed agent (prepareLaunch built it from scratch), else
+// base (the daemon's own, or its minimal allowlist) plus localEnv.
+func launchEnv(host string, opt launchOpts, base, localEnv []string) []string {
+	if sandboxApplies(host, opt) {
+		return localEnv
+	}
+	return append(base, localEnv...)
 }

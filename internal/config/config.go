@@ -177,6 +177,9 @@ type Config struct {
 	// CallableConfig and internal/callable.
 	Callable CallableConfig `yaml:"callable"`
 
+	// Sandbox is the agent sandbox (SandboxConfig): on by default.
+	Sandbox *SandboxConfig `yaml:"sandbox,omitempty"`
+
 	Store  Store  `yaml:"store"`
 	Update Update `yaml:"update"`
 	DryRun bool   `yaml:"dry_run"`
@@ -1260,6 +1263,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateMemory(); err != nil {
+		return err
+	}
+	if err := c.validateSandbox(); err != nil {
 		return err
 	}
 	if err := c.validateSessions(); err != nil {

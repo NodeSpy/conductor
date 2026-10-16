@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"testing"
+
+	"github.com/NodeSpy/conductor/internal/testhome"
 )
 
 // TestMain isolates the plugin/pack install-state directory for the WHOLE
@@ -18,7 +20,18 @@ import (
 // pointing XDG_STATE_HOME at a throwaway dir here guarantees no test in this
 // package can touch the real manifest, regardless of whether the individual test
 // remembered to pass --state-dir. Tests that set their own state dir still win.
+//
+// HOME itself is a temp dir too (testhome), and PASEO_HOME is dropped: the
+// daemon's start-up paseo merge and `conductor paseo setup` fall back to
+// $PASEO_HOME, then ~/.paseo — a developer's live paseo config. A mutant
+// that lost a runtime's home: once wrote conductor's entries there.
 func TestMain(m *testing.M) {
+	root, err := testhome.Isolate()
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(root)
+	os.Unsetenv("PASEO_HOME")
 	tmp, err := os.MkdirTemp("", "conductor-cmd-teststate")
 	if err != nil {
 		panic(err)
@@ -33,5 +46,6 @@ func TestMain(m *testing.M) {
 	os.Unsetenv("XDG_CONFIG_HOME")
 	code := m.Run()
 	os.RemoveAll(tmp)
+	os.RemoveAll(root)
 	os.Exit(code)
 }

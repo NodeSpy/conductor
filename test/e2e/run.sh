@@ -37,7 +37,10 @@ cd "$DIR"
 source "$DIR/lib/assert.sh"
 
 MODE="${MODE:-stub}"
-PROJECT="${PROJECT:-pc-e2e}"
+# One stack per checkout: runs from two worktrees must not share a compose
+# project, nor the image each builds (a build would swap another's binary).
+PROJECT="${PROJECT:-pc-e2e-$(basename "$(cd "$DIR/../.." && pwd)" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9_\n' '-')}"
+export E2E_IMAGE_TAG="$PROJECT"
 KEEP="${KEEP:-0}"
 COMPOSE=(docker compose -f "$DIR/docker-compose.yml")
 # Live mode layers an override that swaps the stub controllers for real agents and
@@ -156,6 +159,16 @@ stage_github_plugin() {
 
 setup() {
   banner "build & up ($MODE mode, project $PROJECT)"
+  # Group Z runs the agent sandbox, which needs unprivileged user namespaces.
+  # GitHub's Ubuntu 23.10+ runners restrict them through AppArmor
+  # (kernel.apparmor_restrict_unprivileged_userns=1) — even inside a
+  # privileged container — so on CI ONLY the harness lifts that for the run.
+  # It never touches a developer's host sysctls.
+  if [ -n "${GITHUB_ACTIONS:-}" ] && [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
+    sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 \
+      && echo "CI: allowed unprivileged user namespaces for the agent-sandbox group" \
+      || echo "CI: could not lift the AppArmor user-namespace restriction; group Z will fail"
+  fi
   dc down -v --remove-orphans >/dev/null 2>&1 || true
   stage_github_plugin
   dc build || { echo "build failed"; exit 1; }
@@ -168,7 +181,7 @@ setup() {
   # root) and the config dir is mounted read-only, so a 0600 root-owned pem would be
   # unreadable and the github integration would fail to start.
   if [ ! -f "$DIR/config/github-app.pem" ]; then
-    docker run --rm -v "$DIR/config:/c" conductor-e2e:latest \
+    docker run --rm -v "$DIR/config:/c" "conductor-e2e:$E2E_IMAGE_TAG" \
       sh -c 'openssl genrsa -out /c/github-app.pem 2048' >/dev/null 2>&1
   fi
   # ALWAYS re-assert the mode — a pem left 0600 by an older run is root-owned (a host
@@ -176,7 +189,7 @@ setup() {
   # above, wedging the github integration ("read app key: permission denied") so
   # nothing dispatches. A root container is the only way to fix a root-owned file's
   # mode from here.
-  docker run --rm -v "$DIR/config:/c" conductor-e2e:latest \
+  docker run --rm -v "$DIR/config:/c" "conductor-e2e:$E2E_IMAGE_TAG" \
     chmod 644 /c/github-app.pem >/dev/null 2>&1
 
   dc up -d || { echo "up failed"; dc logs; exit 1; }
@@ -188,6 +201,9 @@ setup() {
   for c in conductor conductor-ctrl conductor-fail conductor-conn; do
     wait_for 60 cexec "$c" test -S /data/control.sock || fatal "$c daemon not ready (control socket)"
   done
+  if [ "$MODE" != "live" ]; then
+    wait_for 60 cexec conductor-sandbox test -S /home/conductor/data/control.sock || fatal "conductor-sandbox daemon not ready (control socket)"
+  fi
   echo "stack ready"
 }
 
@@ -1777,6 +1793,7 @@ main() {
   group_X_listeners
   group_Y_listeners_github_smee
   group_W_stepdone
+  group_Z_sandbox
   print_matrix
   [ "$FAIL" -eq 0 ]
 }
@@ -1833,6 +1850,153 @@ group_W_stepdone() {
     bad "W user workspace untouched" W foreign "conductor archived a workspace it did not create"
   else
     ok "W user workspace untouched (ownership ledger)" W foreign
+  fi
+}
+
+# probe_line <file-content> <key> — the value recorded for key in SANDBOX_PROBE.md.
+probe_line() { printf '%s\n' "$1" | sed -n "s/^$2: //p" | head -1; }
+# z_probe_landed <repo> — the sandboxed fixer's probe record is on the forge's pr-1.
+z_probe_landed() { cexec forge git --git-dir="/srv/git/$1.git" cat-file -e pr-1:SANDBOX_PROBE.md 2>/dev/null; }
+# z_audit <pattern...> — one conductor-sandbox audit line carries every pattern.
+z_audit() {
+  local out p line all
+  out="$(cexec conductor-sandbox cat /home/conductor/data/audit.jsonl 2>/dev/null)" || return 1
+  while IFS= read -r line; do
+    all=1
+    for p in "$@"; do case "$line" in *"$p"*) ;; *) all=0; break ;; esac; done
+    [ "$all" = 1 ] && return 0
+  done <<<"$out"
+  return 1
+}
+
+# z_fixer <repo> <label> — a sandboxed fixer on one runtime: the agent
+# commits, tries to push for itself, calls git.push and step.done, and records
+# each verdict in SANDBOX_PROBE.md — which reaches the forge only through
+# conductor's push. Every commit conductor pushed is signed (G); main stays.
+z_fixer() {
+  local repo="$1" L="$2" C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml
+  local G="/srv/git/$repo.git" main_before probe k want got sigs
+  main_before="$(cexec forge git --git-dir="$G" rev-parse main 2>/dev/null | tr -d '\r')"
+  force "$C" merge_conflict "$repo#1" "$CFG" >/dev/null
+  if wait_for 90 z_probe_landed "$repo"; then
+    ok "Z $L: the sandboxed agent's work reached the forge — pushed by conductor" Z "$L/pushed"
+  else
+    bad "Z $L: sandboxed work pushed" Z "$L/pushed" "no SANDBOX_PROBE.md on $repo pr-1"
+    dc logs --tail 40 "$C"
+    return
+  fi
+  probe="$(cexec forge git --git-dir="$G" show pr-1:SANDBOX_PROBE.md | tr -d '\r')"
+  printf '%s\n' "$probe" | sed 's/^/      /'
+  for kv in "secret=denied" "conductor-state=denied" "credentials-env=none" "own-push=refused" \
+            "network=unreachable" "git.push=ok" "step.done=ok"; do
+    k="${kv%%=*}"; want="${kv#*=}"; got="$(probe_line "$probe" "$k")"
+    if [ "$got" = "$want" ]; then
+      ok "Z $L: sandboxed agent: $k → $want" Z "$L/$k"
+    else
+      bad "Z $L: sandboxed agent: $k" Z "$L/$k" "want $want, got '$got'"
+    fi
+  done
+  got="$(probe_line "$probe" git.push-other-ref)"
+  case "$got" in refused:*"takes no options"*) ok "Z $L: git.push refuses to name another ref" Z "$L/other-ref" ;;
+    *) bad "Z $L: git.push other ref" Z "$L/other-ref" "got '$got'" ;; esac
+  got="$(probe_line "$probe" home)"
+  case "$got" in /home/conductor/data/agent-state/*) ok "Z $L: HOME is the identity's own tool state" Z "$L/home" ;;
+    *) bad "Z $L: identity HOME" Z "$L/home" "got '$got'" ;; esac
+  cexec "$C" cat /home/conductor/data/keys/allowed_signers | dc exec -T forge sh -c 'cat > /tmp/allowed_signers'
+  sigs="$(cexec forge git --git-dir="$G" -c gpg.ssh.allowedSignersFile=/tmp/allowed_signers \
+    log --format='%G?' refs/pull/1/head..pr-1 | tr -d '\r' | sort -u | tr '\n' ' ')"
+  if [ "$sigs" = "G " ]; then
+    ok "Z $L: every pushed commit is signed (G) by conductor's key" Z "$L/signed"
+  else
+    bad "Z $L: pushed commits signed" Z "$L/signed" "signature verdicts: '$sigs'"
+  fi
+  if [ "$(cexec forge git --git-dir="$G" rev-parse main | tr -d '\r')" = "$main_before" ]; then
+    ok "Z $L: no other ref moved (main untouched)" Z "$L/refs"
+  else
+    bad "Z $L: main untouched" Z "$L/refs" "main moved"
+  fi
+}
+
+# z_hoff_agent <repo#n> — "<provider>|<title>|sandbox=<label>" of the fake
+# paseo agent launched for that PR on the sandbox daemon (fails if none).
+z_hoff_agent() {
+  cexec conductor-sandbox cat /home/conductor/data/fakepaseo/state.json 2>/dev/null | python3 -c '
+import json, sys
+want = sys.argv[1]
+for a in json.load(sys.stdin).get("agents", {}).values():
+    if want in a.get("title", ""):
+        print("%s|%s|sandbox=%s" % (a.get("provider", ""), a.get("title", ""), (a.get("labels") or {}).get("sandbox", "")))
+        sys.exit(0)
+sys.exit(1)' "$1"
+}
+
+group_Z_sandbox() {
+  banner "Group Z — the agent sandbox: a read-only agent, conductor pushes (signed)"
+  local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml
+
+  # The fixer on each runtime the sandbox covers: a cli worker, opencode's
+  # per-dispatch `opencode serve`, an agent-deck session's tool.
+  z_fixer grpz/sandbox cli
+  z_fixer grpz/opencode opencode
+  z_fixer grpz/deck agent-deck
+  if wait_for 15 z_audit '"event":"git_push"' '"signed":true' '"outcome":"ok"'; then
+    ok "Z the push is audited (git_push, signed)" Z audit
+  else
+    bad "Z push audited" Z audit "no signed git_push audit row"
+  fi
+
+  # Paseo hand-offs: sandboxed by default; the operator's isolation: {mode:
+  # none} on the workflow launches the plain provider. The verdict is in the
+  # hand-off's title, on its labels, and in the daemon's log.
+  force "$C" review_requested grpz/hoff#1 "$CFG" >/dev/null
+  force "$C" review_requested grpz/hoffout#1 "$CFG" >/dev/null
+  if wait_for 60 z_hoff_agent 'grpz/hoff#1' && wait_for 60 z_hoff_agent 'grpz/hoffout#1'; then
+    local hd ho
+    hd="$(z_hoff_agent 'grpz/hoff#1')"; ho="$(z_hoff_agent 'grpz/hoffout#1')"
+    echo "      default: $hd"; echo "      opted out: $ho"
+    case "$hd" in *"-sandboxed|"*"[sandboxed]|sandbox=on") ok "Z a hand-off launches sandboxed by default (the -sandboxed entry, marked in its title)" Z hoff-default ;;
+      *) bad "Z default hand-off sandboxed" Z hoff-default "got '$hd'" ;; esac
+    case "$ho" in *"-sandboxed|"*) bad "Z opted-out hand-off plain" Z hoff-optout "got '$ho'" ;;
+      *"[UNSANDBOXED]|sandbox=off") ok "Z isolation: {mode: none} launches the hand-off through the plain provider (marked UNSANDBOXED)" Z hoff-optout ;;
+      *) bad "Z opted-out hand-off plain" Z hoff-optout "got '$ho'" ;; esac
+  else
+    bad "Z hand-offs launched" Z hoff "no paseo agent for grpz/hoff / grpz/hoffout"
+  fi
+  if dc logs "$C" 2>&1 | grep -q 'paseo hand-off conductor: grpz/hoffout#1 review_requested: UNSANDBOXED'; then
+    ok "Z the opt-out is logged" Z hoff-log
+  else
+    bad "Z opt-out logged" Z hoff-log "no UNSANDBOXED line for grpz/hoffout"
+  fi
+
+  # Detached launches: sandboxed by default; the operator's opt-out plain.
+  force "$C" merge_conflict grpz/detach#1 "$CFG" >/dev/null
+  force "$C" merge_conflict grpz/detachout#1 "$CFG" >/dev/null
+  if wait_for 60 z_hoff_agent 'zdetach-default [' && wait_for 60 z_hoff_agent 'zdetach-optout ['; then
+    local dd do
+    dd="$(z_hoff_agent 'zdetach-default [')"; do="$(z_hoff_agent 'zdetach-optout [')"
+    echo "      detached default: $dd"; echo "      detached opted out: $do"
+    case "$dd" in *"-sandboxed|zdetach-default [sandboxed]|sandbox=on") ok "Z a detached launch is sandboxed by default (the -sandboxed entry, marked in its title)" Z detach-default ;;
+      *) bad "Z default detach sandboxed" Z detach-default "got '$dd'" ;; esac
+    case "$do" in *"-sandboxed|"*) bad "Z opted-out detach plain" Z detach-optout "got '$do'" ;;
+      *"|zdetach-optout [UNSANDBOXED]|sandbox=off") ok "Z isolation: {mode: none} launches a detached agent through the plain provider" Z detach-optout ;;
+      *) bad "Z opted-out detach plain" Z detach-optout "got '$do'" ;; esac
+  else
+    bad "Z detached launches" Z detach "no paseo agent for zdetach-default / zdetach-optout"
+    dc logs --tail 30 "$C"
+  fi
+
+  # The reviewer: sandboxed too, and conductor pushes nothing from a review.
+  local review_tip
+  review_tip="$(cexec forge git --git-dir=/srv/git/grpz/review.git rev-parse pr-1 | tr -d '\r')"
+  force "$C" review_requested grpz/review#1 "$CFG" >/dev/null
+  if wait_for 60 z_audit '"uses":"git.push"' '"outcome":"failed"' 'grpz/review'; then
+    if [ "$(cexec forge git --git-dir=/srv/git/grpz/review.git rev-parse pr-1 | tr -d '\r')" = "$review_tip" ]; then
+      ok "Z a sandboxed review pushes nothing (its git.push is refused)" Z review
+    else
+      bad "Z review pushes nothing" Z review "grpz/review pr-1 moved"
+    fi
+  else
+    bad "Z sandboxed review ran" Z review "no git.push call recorded for grpz/review"
   fi
 }
 

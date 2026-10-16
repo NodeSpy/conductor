@@ -35,7 +35,7 @@ func TestStartCLIProcFeedsLargeStdin(t *testing.T) {
 	if _, err := exec.LookPath("wc"); err != nil {
 		t.Skip("wc unavailable")
 	}
-	proc, err := startCLIProc(context.Background(), "", nil, []string{"wc", "-c"}, bigPrompt)
+	proc, err := startCLIProc(context.Background(), "", nil, []string{"wc", "-c"}, bigPrompt, false)
 	if err != nil {
 		t.Fatal(err)
 	}

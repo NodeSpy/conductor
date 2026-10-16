@@ -116,6 +116,7 @@ type agent struct {
 	Cwd       string            `json:"cwd"`
 	Status    string            `json:"status"` // idle when finished
 	Title     string            `json:"title"`
+	Provider  string            `json:"provider,omitempty"` // --provider (the agent sandbox: <p>-sandboxed)
 	Labels    map[string]string `json:"labels"`
 	Archived  bool              `json:"archived"`
 	CreatedAt time.Time         `json:"created_at"`
@@ -393,7 +394,7 @@ func cmdRun(args []string) {
 		id = fmt.Sprintf("agent-%d", s.Seq)
 		now := time.Now()
 		s.Agents[id] = &agent{
-			ID: id, Cwd: cwd, Status: "idle", Title: p.title,
+			ID: id, Cwd: cwd, Status: "idle", Title: p.title, Provider: p.provider,
 			Labels: p.labels, CreatedAt: now, LastUsage: now,
 			Prompt: prompt, Reply: string(replyRaw), Env: p.env,
 		}
@@ -733,6 +734,17 @@ func wsCreate(args []string) {
 		dir = filepath.Join(stateDir(), "ws", id)
 	})
 	must(os.MkdirAll(filepath.Dir(dir), 0o755))
+	if os.Getenv("FAKE_PASEO_LINKED_WORKTREES") != "" {
+		// Real paseo's shape: a linked worktree of the base checkout (the
+		// agent sandbox pushes from its common dir, never from a clone the
+		// agent could have rewritten).
+		linkedWorktree(base, dir, p)
+		withState(func(s *state) {
+			s.Workspaces[id] = &workspace{ID: id, Cwd: dir, Project: base, Isolation: "worktree"}
+		})
+		emitJSON(map[string]any{"workspaceId": id, "cwd": dir})
+		return
+	}
 	if out, err := run("", "git", "clone", url, dir); err != nil {
 		fail("workspace create: clone %s: %v: %s", url, err, out)
 	}
@@ -762,6 +774,33 @@ func wsCreate(args []string) {
 		s.Workspaces[id] = &workspace{ID: id, Cwd: dir, Project: base, Isolation: "worktree"}
 	})
 	emitJSON(map[string]any{"workspaceId": id, "cwd": dir})
+}
+
+// linkedWorktree adds dir as a linked worktree of base on the workspace's
+// branch (checkout-pr: the PR head; branch-off: a new branch).
+func linkedWorktree(base, dir string, p parsed) {
+	branch, start := "conductor-work", "origin/HEAD"
+	switch p.mode {
+	case "checkout-pr":
+		branch = "pr-" + p.prNumber
+		start = "origin/" + branch
+		if _, err := run(base, "git", "fetch", "origin", fmt.Sprintf("refs/pull/%s/head", p.prNumber)); err == nil {
+			start = "FETCH_HEAD"
+		} else {
+			_, _ = run(base, "git", "fetch", "origin", branch)
+		}
+	case "branch-off":
+		branch = p.newBranch
+		if branch == "" {
+			branch = "conductor-branch"
+		}
+		if p.base != "" {
+			start = "origin/" + p.base
+		}
+	}
+	if out, err := run(base, "git", "worktree", "add", "-B", branch, dir, start); err != nil {
+		fail("workspace create: worktree add %s: %v: %s", dir, err, out)
+	}
 }
 
 // ---- provider ls / provider models -------------------------------------------

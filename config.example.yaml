@@ -633,7 +633,8 @@ runtimes:
     #   prefer:  [claude-opus-5, gpt-5.6-sol]   # ranking when a fleet offers a choice
     #   allow:   ["claude-opus-*", "gpt-5.6-*"] # a hard ceiling on what may run
   gpu-paseo: { use: paseo, bin: /usr/local/bin/paseo, host: build-box }
-  # deck:   { use: agent-deck }
+  # deck:   { use: agent-deck }                     # sandboxed through agent-deck's --wrapper
+  # oc:     { use: opencode }                       # one sandboxed `opencode serve` per dispatch
   # gemini: { use: acp, agent: gemini }              # ACP transport
   # jev:                                            # a DECISION runtime plugin: answers
   #   connection: { api_key: env:JEV_API_KEY }      # decide: steps only, never an agent
@@ -1262,7 +1263,60 @@ policy:
   #  `conductor pause` / `resume`; disable one connector or trigger in place
   #  with its own `enabled: false`)
 
-# Conductor's own lifecycle is a built-in source: alerting is an ordinary
+# ---------------------------------------------------------------------------
+# sandbox: — the agent sandbox (on by default; wiki: Isolation, Paseo-Sandbox).
+# Agents are read-only and conductor performs every write. Every local cli,
+# acp, opencode (its per-dispatch `opencode serve`) and agent-deck (the
+# session's agent, through agent-deck's --wrapper) launch — and every paseo
+# session started with a sandboxed provider entry, which the daemon writes into
+# its paseo runtime's config at every start (`conductor paseo setup` by
+# hand) — runs in conductor's built-in sandbox
+# (Linux namespaces + pivot_root, macOS Seatbelt): its workspace read-write,
+# its identity's own tool state as HOME, the conductor socket, no network but
+# its model endpoints (+ egress below), none of your credentials. The agent
+# commits; conductor pushes HEAD to the dispatch's own branch, fast-forward
+# only, re-signed with your SSH signing key (`conductor call git.push`, and at
+# the end of the step). It fails closed: a launch whose sandbox can't be
+# built does not run. opencode's allowlist follows its configured
+# provider/model (wiki: Isolation#opencode-and-agent-deck).
+# ---------------------------------------------------------------------------
+sandbox:
+  # agents: on              # `off` = the explicit opt-out (agents run as before; logged at boot).
+  #                         #   Per runtime/step: isolation: { mode: none }.
+  egress: []                # hosts every sandboxed agent may reach beyond its model endpoints,
+  #                         #   e.g. [registry.npmjs.org, proxy.golang.org, "*.pypi.org"]
+  # state_dir: ~/.local/state/conductor/agent-state   # the per-identity HOMEs
+  push:
+    # signing_key: ~/.ssh/conductor_signing   # default: git's user.signingkey (gpg.format ssh).
+    #                                         # GitHub shows "Verified" when this key is registered
+    #                                         # on your account as an SSH *signing* key.
+    # name: Your Name                         # the committer of signed commits (default: git's user.name)
+    # email: you@example.com                  #   (default: git's user.email)
+    # sign: false                             # push unsigned (default: refuse to push without a key)
+    # at_step_end: false                      # only an explicit git.push pushes
+#
+# Hand-offs (background: true agent steps on paseo) and detached launches
+# (detach: true — e.g. a Slack handover, whose thread can carry anyone's
+# messages) are sandboxed too: they launch through <provider>-sandboxed,
+# titled "[sandboxed]". The EXPLICIT,
+# LOOSENING knob is `isolation: { mode: none }` — on a step, a workflow or a
+# trigger of YOUR config (or a pack's, from your packs: overrides; a pack can
+# never set it on itself) — which launches the agent unsandboxed, as you,
+# through paseo's plain provider ("[UNSANDBOXED]", logged). E.g. one workflow
+# whose hand-off you want to drive with your own credentials:
+#
+#   triggers:
+#     - on: gh.review_requested
+#       isolation: { mode: none }        # this workflow's hand-off runs as you
+#       steps:
+#         - { id: review, type: agent, background: true, prompt: "Review {{.repo}}#{{.pr}} with me" }
+#   packs:
+#     review:
+#       use: conductor-packs/review
+#       triggers:
+#         <trigger>: { enabled: true, repos: [acme/app], isolation: { mode: none } }   # a pack trigger, by name
+
+
 # trigger on conductor.* — dispatch, escalate (gave up after retries),
 # needs_input, complete, failed (a run errored), updated, update_available.
 # Context: {{.message}} (the composed line) + event/ref/repo/number/

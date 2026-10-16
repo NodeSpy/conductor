@@ -17,8 +17,9 @@ make e2e-live     # real agents + mounted keys (manual; see below)
 make e2e-down     # tear down a leftover stack (e.g. after KEEP=1)
 ```
 
-Useful env: `KEEP=1` leaves the stack up for inspection; `PROJECT=<name>` isolates
-parallel runs.
+Useful env: `KEEP=1` leaves the stack up for inspection. Each checkout gets its own
+compose project and image tag (`pc-e2e-<checkout dir>`), so runs from different
+worktrees don't collide; `PROJECT=<name>` overrides it.
 
 ## What comes up (`docker-compose.yml`)
 

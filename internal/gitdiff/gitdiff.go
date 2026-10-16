@@ -89,8 +89,21 @@ func upstreamBase(ctx context.Context, dir string) string {
 	return ""
 }
 
+// Confine, when set, runs a git command for dir where dir's own content
+// cannot steer it beyond dir: conductor's agent sandbox, for a workspace a
+// sandboxed agent writes — its .git/config, .gitattributes and hooks are
+// the agent's, and a filter, textconv or fsmonitor command in them would
+// otherwise run as conductor, on the host. ok=false: dir is not such a
+// workspace; git runs here as before.
+var Confine func(ctx context.Context, dir string, args []string) (out string, ok bool, err error)
+
 // git runs one git command in dir and returns its stdout.
 func git(ctx context.Context, dir string, args ...string) (string, error) {
+	if Confine != nil {
+		if out, ok, err := Confine(ctx, dir, args); ok {
+			return out, err
+		}
+	}
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb

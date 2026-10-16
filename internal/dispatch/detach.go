@@ -198,10 +198,28 @@ func (d *Dispatcher) paseoDetached(ctx context.Context, req Request) (RunRef, er
 		return RunRef{}, Unrecoverable(err)
 	}
 
-	argv := []string{"run", prompt, "--title", title}
-	if req.Provider != "" {
-		argv = append(argv, "--provider", req.Provider)
+	// The agent sandbox: a detached agent is seeded from content conductor
+	// does not vouch for (a chat thread can carry anyone's messages), so it
+	// launches through the provider's sandboxed entry like a hand-off —
+	// unless the operator's isolation: {mode: none} opts it out. It stays
+	// unregistered and token-free: its `sandbox exec` gets the default policy
+	// for its own worktree.
+	sandboxed, optedOut := paseoSandboxDecision(req, d.remote())
+	provider := req.Provider
+	if sandboxed {
+		if provider == "" {
+			provider = PaseoDefaultProvider
+		}
+		provider = sandboxedProvider(provider)
 	}
+	argv := []string{"run", prompt, "--title", title + sandboxTitleMark(req, sandboxed, optedOut)}
+	if provider != "" {
+		argv = append(argv, "--provider", provider)
+	}
+	for _, l := range sandboxLabel(sandboxed, optedOut) {
+		argv = append(argv, "--label", l)
+	}
+	logPaseoSandboxAs(req, "detached launch", title, sandboxed, optedOut, provider)
 	if req.Model != "" {
 		argv = append(argv, "--model", req.Model)
 	}

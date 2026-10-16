@@ -241,20 +241,32 @@ func (e *Engine) doneSignal(ctx context.Context, dispatchID, agentID, reason str
 //     so a done call can never cut off the output conductor is waiting on;
 //   - otherwise → archive the agent + its workspace now (ledger-gated: the
 //     dispatcher refuses anything conductor didn't launch).
+//
+// The dispatch resolves on the runner it went to: the paseo dispatcher, or
+// the cli/acp runner that opened it (archived through archiveAgent).
 func (e *Engine) StepDone(ctx context.Context, dispatchID, agentID, reason string) error {
-	if resolved := e.disp.AgentForDispatch(dispatchID); resolved != "" {
+	runner := e.dispatcherFor(dispatchID)
+	if resolved := runner.AgentForDispatch(dispatchID); resolved != "" {
 		agentID = resolved
+	}
+	if agentID != "" {
+		if lh := e.lookupLiveHandoff(agentID); lh != nil {
+			return e.handoffDone(ctx, agentID, reason)
+		}
+	}
+	// A dispatch conductor is still blocked on defers to the step boundary —
+	// before its agent is even bound (paseo binds it when its run returns),
+	// so an eager done mid-run is accepted, not refused.
+	if dispatchID != "" && runner.DispatchInFlight(dispatchID) {
+		e.log("step.done from dispatch %s (%s) — still in flight; reclaiming at step boundary", dispatchID, reason)
+		return nil
 	}
 	if agentID == "" {
 		return fmt.Errorf("step.done: no conductor-launched agent for this session")
 	}
-	if lh := e.lookupLiveHandoff(agentID); lh != nil {
-		return e.handoffDone(ctx, agentID, reason)
-	}
-	if dispatchID != "" && e.disp.DispatchInFlight(dispatchID) {
-		e.log("step.done from agent %s (%s) — dispatch still in flight; reclaiming at step boundary", agentID, reason)
-		return nil
-	}
 	e.log("step.done from agent %s: %s — reclaiming", agentID, reason)
+	if runner != e.disp {
+		return e.archiveAgent(context.WithoutCancel(ctx), agentID)
+	}
 	return e.disp.Archive(context.WithoutCancel(ctx), agentID)
 }
