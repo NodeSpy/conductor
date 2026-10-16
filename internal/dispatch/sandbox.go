@@ -38,11 +38,12 @@ func paseoSandboxDecision(req Request, remote bool) (sandboxed, optedOut bool) {
 	return true, false
 }
 
-// sandboxTitleMark tells a hand-off's driver, in paseo's sidebar, whether
-// it runs sandboxed ("" when the sandbox is off or this is no hand-off).
+// sandboxTitleMark tells the driver of a hand-off or a detached agent, in
+// paseo's sidebar, whether it runs sandboxed ("" when the sandbox is off,
+// or for a dispatch nobody drives).
 func sandboxTitleMark(req Request, sandboxed, optedOut bool) string {
 	switch {
-	case !req.Interactive:
+	case !req.Interactive && !req.Step.Detach:
 		return ""
 	case sandboxed:
 		return " [sandboxed]"
@@ -66,22 +67,27 @@ func sandboxLabel(sandboxed, optedOut bool) []string {
 
 // logPaseoSandbox logs a dispatch's verdict.
 func logPaseoSandbox(req Request, sandboxed, optedOut bool, provider string) {
-	if PaseoSandboxLog == nil || req.Shadow {
-		return
-	}
 	what := "dispatch"
 	if req.Interactive {
 		what = "hand-off"
 	}
+	logPaseoSandboxAs(req, what, agentTitle(req), sandboxed, optedOut, provider)
+}
+
+// logPaseoSandboxAs logs the verdict for a launch of kind what titled title.
+func logPaseoSandboxAs(req Request, what, title string, sandboxed, optedOut bool, provider string) {
+	if PaseoSandboxLog == nil || req.Shadow {
+		return
+	}
 	switch {
 	case sandboxed:
-		PaseoSandboxLog("paseo %s %s: sandboxed (provider %s)", what, agentTitle(req), provider)
+		PaseoSandboxLog("paseo %s %s: sandboxed (provider %s)", what, title, provider)
 	case optedOut:
 		p := provider
 		if p == "" {
 			p = "paseo's default"
 		}
-		PaseoSandboxLog("paseo %s %s: UNSANDBOXED — isolation: {mode: none} (the operator's opt-out); plain provider %s", what, agentTitle(req), p)
+		PaseoSandboxLog("paseo %s %s: UNSANDBOXED — isolation: {mode: none} (the operator's opt-out); plain provider %s", what, title, p)
 	}
 }
 

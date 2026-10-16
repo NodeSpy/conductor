@@ -86,8 +86,10 @@ Reclaim then rides the machinery worktrees already used:
   `conductor-run-*` ones — and archives the WORKSPACE, which reclaims the
   directory and the agent together. This is the normal path
   (`archive_when_done`, the engine's `archiveAgent`, the flow runner).
-- The **reaper** is the backstop for a run that crashed or was abandoned before
-  it reached `Archive`: it walks the same map from any idle `archive=1` agent.
+- A launch that **fails** never records an agent, so nothing would reach
+  `Archive`; the dispatch archives its own run workspace and removes its
+  directory on the spot (`reclaimRunWorkspace`). (The background reaper that
+  once backstopped this was removed in #140; reclaim is done-driven only.)
 - A **pinned** workspace matches neither branch, so only its agent is archived
   and the workspace persists for the next run — asserted by
   `TestArchivePinnedWorkspaceSurvives`.

@@ -183,11 +183,24 @@ the label `sandbox=on`, and the daemon logs each verdict:
 paseo hand-off conductor: acme/app#7 review_requested: sandboxed (provider claude-sandboxed)
 ```
 
+**Detached launches are sandboxed too.** A `detach: true` step — the Slack
+handover that turns a thread into a paseo workspace of yours — is seeded from
+content conductor does not vouch for: a thread can carry anyone's messages,
+which is a prompt-injection channel into an agent that then works as you. So
+it launches through the sandboxed entry as well, titled `… [sandboxed]`,
+labelled `sandbox=on`, and logged (`paseo detached launch <title>: sandboxed
+(provider claude-sandboxed)`). It stays what a detached launch is — not
+conductor's (never archived), with no conductor token — so its sandbox is the
+default one for its own worktree: that workspace read-write, its own tool
+state, the model, nothing else. The same `{mode: none}` opt-out below
+applies, with the same rules about who may write it.
+
 **`isolation: {mode: none}` is the explicit, loosening knob.** On a step, a
 workflow, or a trigger (its default for every agent step it runs, the
 workflows it calls included, unless a step sets its own), it launches the
-agent **unsandboxed, as you**: on paseo through the *plain* provider, titled
-`[UNSANDBOXED]`, labelled `sandbox=off`, and logged:
+agent **unsandboxed, as you**: on paseo through the *plain* provider — a
+hand-off or a detached launch titled `[UNSANDBOXED]` — labelled
+`sandbox=off`, and logged:
 
 ```
 paseo hand-off conductor: acme/app#7 review_requested: UNSANDBOXED — isolation: {mode: none} (the operator's opt-out); plain provider claude
@@ -243,9 +256,6 @@ review rounds to harden is gone rather than hardened.
   provider, or an agent-deck session you start from agent-deck's own UI, is
   that tool's, not conductor's. A remote (`host:`) launch runs under that
   box's isolation.
-- **`detach: true` launches** (an agent handed over to you and forgotten:
-  no conductor token, never archived) run on paseo's plain provider, as
-  before — they are not routed through the sandboxed entry.
 - **Registrations live in the daemon.** After conductor restarts, a
   workspace it registered is no longer known: an agent-deck session that
   agent-deck restarts then is refused (`--agent-cwd`), and a paseo session

@@ -1304,7 +1304,8 @@ sandbox:
 #
 # browser:
 #   allow: [docs.example.com, app.example.com]   # "*" (the whole web) is refused
-#   # evaluate: off                               # off | read-only (V8's side-effect check)
+#   # evaluate: ["agent:triage@acme/app"]         # identities opted in to read-only evaluate (default: none)
+#   # container: auto                              # macOS: a container whenever docker/podman is present
 #   logins:                                        # opt in per site AND per identity
 #     - site: app.example.com
 #       identities: ["agent:triage@acme/app"]      # then: conductor browser seed --identity … --site …
@@ -1318,9 +1319,14 @@ sandbox:
 #       otp: { vault: op, key: "Agents/App/one-time password?attribute=otp" }
 #       # passkey: { vault: house, key: passkeys/app }   # conductor browser passkey register app
 #       # approval: true                               # a push approval: you're notified (needs_input)
+#       # email_code: { mailbox: agent-inbox, from: no-reply@app.example.com, subject: "sign-in code", code: "code is ([0-9]{6})" }
+#   # mailboxes:                                   # emailed codes: IMAP, read-only, an app password from a vault
+#   #   agent-inbox: { imap: "imap.example.com:993", username: { vault: op, key: "Agents/Mail/username" }, password: { vault: op, key: "Agents/Mail/app-password" } }
 #
-# Hand-offs (background: true agent steps on paseo) are sandboxed too: they
-# launch through <provider>-sandboxed, titled "[sandboxed]". The EXPLICIT,
+# Hand-offs (background: true agent steps on paseo) and detached launches
+# (detach: true — e.g. a Slack handover, whose thread can carry anyone's
+# messages) are sandboxed too: they launch through <provider>-sandboxed,
+# titled "[sandboxed]". The EXPLICIT,
 # LOOSENING knob is `isolation: { mode: none }` — on a step, a workflow or a
 # trigger of YOUR config (or a pack's, from your packs: overrides; a pack can
 # never set it on itself) — which launches the agent unsandboxed, as you,
