@@ -889,7 +889,7 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 			return nil, err
 		}
 		// A code mailed for this step: recent, never one filled before.
-		if err := m.fillField(ctx, in, t, fr, id, cred, field, time.Now().Add(-5*time.Minute)); err != nil {
+		if err := m.fillField(ctx, in, t, fr, o, id, cred, field, time.Now().Add(-5*time.Minute)); err != nil {
 			return nil, err
 		}
 		out["filled"] = field

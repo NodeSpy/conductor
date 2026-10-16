@@ -61,14 +61,9 @@ func readWorkspace(ws, rel string, deny []string, max int64, dst string) (int64,
 	if err != nil {
 		return 0, err
 	}
-	root, err := os.OpenRoot(ws)
+	f, err := openWorkspaceFile(ws, rel, os.O_RDONLY, 0)
 	if err != nil {
 		return 0, err
-	}
-	defer root.Close()
-	f, err := root.Open(rel)
-	if err != nil {
-		return 0, fmt.Errorf("%s: %w", rel, unwrapRoot(err))
 	}
 	defer f.Close()
 	fi, err := f.Stat()
@@ -107,14 +102,9 @@ func writeWorkspace(ws, rel string, deny []string, r io.Reader, max int64) (stri
 	if err != nil {
 		return "", err
 	}
-	root, err := os.OpenRoot(ws)
-	if err != nil {
-		return "", err
-	}
-	defer root.Close()
 	if dir := filepath.Dir(rel); dir != "." {
-		if err := root.MkdirAll(dir, 0o755); err != nil {
-			return "", fmt.Errorf("%s: %w", dir, unwrapRoot(err))
+		if err := mkdirAllWorkspace(ws, dir); err != nil {
+			return "", err
 		}
 	}
 	ext := filepath.Ext(rel)
@@ -122,12 +112,12 @@ func writeWorkspace(ws, rel string, deny []string, r io.Reader, max int64) (stri
 	var f *os.File
 	name := rel
 	for i := 1; ; i++ {
-		f, err = root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		f, err = openWorkspaceFile(ws, name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 		if err == nil {
 			break
 		}
 		if !errors.Is(err, os.ErrExist) || i > 999 {
-			return "", fmt.Errorf("%s: %w", name, unwrapRoot(err))
+			return "", err
 		}
 		name = fmt.Sprintf("%s-%d%s", stem, i, ext)
 	}
@@ -139,7 +129,7 @@ func writeWorkspace(ws, rel string, deny []string, r io.Reader, max int64) (stri
 		err = fmt.Errorf("over the size limit (%d bytes)", max)
 	}
 	if err != nil {
-		_ = root.Remove(name)
+		_ = removeWorkspaceFile(ws, name)
 		return "", err
 	}
 	return filepath.ToSlash(name), nil

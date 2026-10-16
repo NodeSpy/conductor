@@ -74,6 +74,15 @@ func (o origin) String() string {
 	return o.scheme + "://" + net.JoinHostPort(o.host, o.port) + o.path
 }
 
+// browserOrigin is the origin as a browser's location.origin reports it: no
+// path, and the default port omitted — for the atomic re-check in fieldSet.
+func (o origin) browserOrigin() string {
+	if (o.scheme == "https" && o.port == "443") || (o.scheme == "http" && o.port == "80") {
+		return o.scheme + "://" + o.host
+	}
+	return o.scheme + "://" + net.JoinHostPort(o.host, o.port)
+}
+
 // check refuses a page that is not exactly this origin: the browser's own
 // view of the frame's security origin (never the page's word) and its URL's
 // path under the bound path.
@@ -194,15 +203,22 @@ const fieldCheck = `function(field){
 	return ["text", "email", "tel"].includes(t) ? "" : "it is not a username field (type=" + t + ")";
 }`
 
-// fieldSet sets a field's value through the isolated world's own (pristine)
-// setter and tells the page it changed.
-const fieldSet = `function(v){
+// fieldSet re-verifies the field and the frame's origin, then sets the value
+// through the isolated world's own (pristine) setter — all in ONE call, so a
+// frame swap or a navigation to another (allowlisted) origin racing between the
+// earlier checkPage/fieldCheck and the set cannot land the value on the wrong
+// origin. It returns "" on success, else the refusal. location.origin in the
+// isolated world is the document's real origin and the page cannot spoof it.
+const fieldSet = `function(expected, v){
+	if (this.ownerDocument !== document || window !== window.top) return "the field left the page's own document before the fill";
+	if (!(this instanceof HTMLInputElement)) return "the field is no longer an input";
+	if (String(location.origin).toLowerCase() !== String(expected).toLowerCase()) return "the page moved to a different origin before the fill";
 	const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
 	this.focus();
 	set.call(this, v);
 	this.dispatchEvent(new InputEvent("input", {bubbles: true, inputType: "insertText"}));
 	this.dispatchEvent(new Event("change", {bubbles: true}));
-	return true;
+	return "";
 }`
 
 // findFields locates the sign-in form's fields in the main frame.
@@ -283,7 +299,9 @@ func (m *Manager) checkPage(ctx context.Context, in *Instance, t *tab, o origin,
 }
 
 // fillField fills one field of the main frame's document with a fresh value.
-func (m *Manager) fillField(ctx context.Context, in *Instance, t *tab, fr frame, nodeID int64, cred Credential, field string, after time.Time) error {
+// o is the credential's origin, re-verified atomically with the set (fieldSet);
+// after bounds an emailed code's arrival.
+func (m *Manager) fillField(ctx context.Context, in *Instance, t *tab, fr frame, o origin, nodeID int64, cred Credential, field string, after time.Time) error {
 	var ref *SecretRef
 	switch field {
 	case "username":
@@ -332,8 +350,12 @@ func (m *Manager) fillField(ctx context.Context, in *Instance, t *tab, fr frame,
 	if field != "username" {
 		in.remember(nodeID, val)
 	}
-	if _, err := in.callOn(ctx, t, obj, fieldSet, val); err != nil {
+	res, err := in.callOn(ctx, t, obj, fieldSet, o.browserOrigin(), val)
+	if err != nil {
 		return fmt.Errorf("browser: fill the %s: the page changed", field)
+	}
+	if why := strings.Trim(string(res), `"`); why != "" {
+		return refuse("cannot fill the %s: %s", field, why)
 	}
 	return nil
 }
@@ -455,7 +477,7 @@ func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c
 			if found.Username && cred.Username != nil {
 				id, err := in.markedNode(ctx, t, w, "username")
 				if err == nil {
-					if err := m.fillField(ctx, in, t, fr, id, cred, "username", since); err != nil {
+					if err := m.fillField(ctx, in, t, fr, o, id, cred, "username", since); err != nil {
 						return nil, err
 					}
 					steps = append(steps, "username")
@@ -465,7 +487,7 @@ func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c
 			if err != nil {
 				return nil, err
 			}
-			if err := m.fillField(ctx, in, t, fr, id, cred, "password", since); err != nil {
+			if err := m.fillField(ctx, in, t, fr, o, id, cred, "password", since); err != nil {
 				return nil, err
 			}
 			steps, submit = append(steps, "password"), id
@@ -474,7 +496,7 @@ func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c
 			if err != nil {
 				return nil, err
 			}
-			if err := m.fillField(ctx, in, t, fr, id, cred, "otp", since); err != nil {
+			if err := m.fillField(ctx, in, t, fr, o, id, cred, "otp", since); err != nil {
 				return nil, err
 			}
 			steps, submit = append(steps, "one-time code"), id
@@ -484,7 +506,7 @@ func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c
 			if err != nil {
 				return nil, err
 			}
-			if err := m.fillField(ctx, in, t, fr, id, cred, "username", since); err != nil {
+			if err := m.fillField(ctx, in, t, fr, o, id, cred, "username", since); err != nil {
 				return nil, err
 			}
 			steps, submit = append(steps, "username"), id
@@ -700,13 +722,24 @@ func (in *Instance) scrubAny(v any) any {
 
 // secretRects are the boxes (CSS px, relative to the capture) of every
 // field holding a filled value and every element whose own text shows one.
+// secretRectsJS walks the document AND every OPEN shadow root (web components
+// commonly put a visible code field in one; a closed shadow root, canvas or CSS
+// generated content cannot be read back and remain documented limitations).
 const secretRectsJS = `function(secrets, full){
 	const out = [];
 	const add = r => { if (r.width > 0 && r.height > 0) out.push([r.left + (full ? scrollX : 0), r.top + (full ? scrollY : 0), r.width, r.height]); };
 	const has = s => typeof s === "string" && secrets.some(v => v && s.includes(v));
-	for (const e of document.querySelectorAll("input, textarea")) if (has(e.value)) add(e.getBoundingClientRect());
-	const w = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
-	for (let n = w.nextNode(); n; n = w.nextNode()) if (has(n.nodeValue) && n.parentElement) add(n.parentElement.getBoundingClientRect());
+	const roots = [document];
+	for (let i = 0; i < roots.length; i++) {
+		const root = roots[i];
+		for (const e of root.querySelectorAll("*")) {
+			if ((e.tagName === "INPUT" || e.tagName === "TEXTAREA") && has(e.value)) add(e.getBoundingClientRect());
+			if (e.shadowRoot) roots.push(e.shadowRoot);
+		}
+		const base = root.body || root.documentElement || root;
+		const w = document.createTreeWalker(base, NodeFilter.SHOW_TEXT);
+		for (let n = w.nextNode(); n; n = w.nextNode()) if (has(n.nodeValue) && n.parentElement) add(n.parentElement.getBoundingClientRect());
+	}
 	return {rects: out, width: full ? document.documentElement.scrollWidth : innerWidth};
 }`
 

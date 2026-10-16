@@ -264,7 +264,7 @@ func TestCredentialOriginBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := r.vault.count()
-	if err := r.m.fillField(ctx, in, tb, fr, pw, cr, "password", time.Now()); err == nil || !strings.Contains(err.Error(), "own document") {
+	if err := r.m.fillField(ctx, in, tb, fr, o, pw, cr, "password", time.Now()); err == nil || !strings.Contains(err.Error(), "own document") {
 		t.Fatalf("a frame's field: %v", err)
 	}
 	if r.vault.count() != before {
