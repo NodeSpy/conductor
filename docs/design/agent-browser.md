@@ -149,6 +149,12 @@ The container:
 - **Audit.** Every session's isolation (`container`, `seatbelt`,
   `namespace`) is logged and recorded with each action, and `status` shows
   it, before a browser starts too.
+- **Proven where.** On Linux, locally and in CI: the whole browser and
+  credential suite runs with every browser in a container, and
+  `chrome://sandbox` passes. It hasn't yet run on a Mac with Docker Desktop
+  or colima: GitHub's macOS runners have no engine, and neither had the Mac
+  used for the real-desktop proof. The code path is the same, and the
+  engine is reached through its CLI either way.
 - **The container backend** (`feat/agent-container`) finds its engine the
   same way. `FindEngine` here mirrors its `agentsandbox.ResolveEngine` and
   ping, and becomes a call to it once both branches have landed.
@@ -315,7 +321,8 @@ The second factors:
   (validation-enforced).
 - **Platforms.** It works headless on Linux and macOS, and in the container
   (CI proves all three), and in the operator's headed window (Linux on Xvfb
-  and macOS on the runner's window server, in CI). On
+  and macOS on the runner's window server, in CI, and on a real desktop
+  Mac). On
   `localhost` the test site is a secure context; an IP literal cannot be an RP
   ID, which is why the tests bind `localhost` and use `127.0.0.1` as the
   lookalike.
