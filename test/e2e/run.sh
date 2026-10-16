@@ -1168,8 +1168,8 @@ group_M_cost() {
   fi
   out="$(conn report 2>&1)"
   case "$out" in
-    *"spend (agent runs):"*"func/cost"*) ok "M \`conductor report\` shows the metered spend for func/cost" M M-report ;;
-    *) bad "M report shows metered spend" M M-report "func/cost not in report spend section" ;;
+    *"usage (observed by conductor"*"func/cost  ["*"\$"*) ok "M \`conductor report\` shows the metered usage for func/cost, per runtime/model, with dollars (usage.mode api)" M M-report ;;
+    *) bad "M report shows metered usage" M M-report "func/cost not in the report's per-model usage section" ;;
   esac
 }
 
