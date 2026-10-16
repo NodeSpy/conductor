@@ -263,6 +263,25 @@ wraps the same three.
   proposal keeps `ProposedSHA256` and `EditedBy`. `OnDecision` fences an
   operator's reason as `OPERATOR REASON`.
 
+### Folders across entity types
+
+Workflows and triggers take `folder:` with the same rule. Three things keep
+it inert:
+
+- `contentHandle` drops it, so a trigger instance's identity (its dedup,
+  session and outcome state) does not move with it;
+- a pack's manifest may not set it (`packSetsNoFolder`, at load and in lint),
+  because filing is the operator's organization;
+- the operator's `packs.<instance>.folder`, `.workflows.<name>.folder` and
+  `.triggers.<name>.folder` are applied at instantiation, the per-name one
+  winning.
+
+Provenance (`PackInstance`, `Bot`, both `yaml:"-"`) is only for display: an
+unfiled pack entity is listed under `packs/<instance>`, and a bot's
+synthesized workers under the bot's folder. `TestEntityFoldersChangeNothing`
+compares the effective triggers and workflows, instance names included, with
+and without folders.
+
 ## Content kinds
 
 `internal/bot/kinds.go`, `internal/config/collections.go`. A repo's kinds are

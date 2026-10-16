@@ -1035,6 +1035,11 @@ callable:
 #       - { on: github.pull_request, filter: { repo: [me/api] } }
 # ---------------------------------------------------------------------------
 triggers:
+  # A trigger (and a workflow) can be filed in a folder for display only —
+  # `conductor workflows ls --folder work`, `conductor folders ls work`. No behavior:
+  #   - { on: manual, name: release-notes, folder: work/platform, steps: [ … ] }
+  # A pack's own workflows/triggers are filed by YOU, in its packs: entry
+  # (packs.<instance>.folder / .workflows.<name>.folder / .triggers.<name>.folder).
   # Near-identical triggers can share a base: a trigger `extends: <name>` inherits
   # another's steps/filter/policy/options (options deep-merge; filter and steps
   # replace when set), and a base marked `abstract: true` never fires and is
@@ -1550,6 +1555,8 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #       review-flow/post:   { workspace: local }  #   …or <workflow>[<n>] for a step with no id:
 #     models:
 #       reviewer: claude-opus-5                   # OVERRIDE a bundled fleet
+#     folder: work/review                         # file its workflows + triggers (display only;
+#     workflows: { review-flow: { folder: work/review/flows } }   #   a pack cannot set folder: itself)
 #     on:                                          # its triggers, by qualified name
 #       github.pull_request: { filter: { not_label_any: [wip] } }
 #     # Scope lives on the CONNECTOR, not the pack: each trigger binds to your

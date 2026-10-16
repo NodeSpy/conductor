@@ -509,6 +509,11 @@ per bot (with its folder and team).
   digits, `.`, `-` and `_`, and may not be empty, `.` or `..` (at most 8
   levels, 64 characters a segment). No folder means the root.
 
+Folders are **one organization across entity types**: workflows and triggers
+take `folder:` too ([[Workflows]]), and a bot's synthesized workers are listed
+under the bot's (or its team's) folder. `conductor folders ls [path]` lists
+everything in a folder — teams, bots, workflows, triggers — and below it.
+
 ## Teams
 
 A **team** is a group of bots you define in `teams:` (not the `team:`
