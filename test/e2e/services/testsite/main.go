@@ -10,6 +10,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/browser/browsertest"
 )
@@ -17,10 +18,33 @@ import (
 func main() {
 	addr := flag.String("listen", "127.0.0.1:8090", "listen address")
 	seed := flag.String("totp-seed", "", "base32 TOTP seed of the test account (empty: no code step)")
+	imap := flag.String("imap", "", "serve a fake IMAP mailbox here (plaintext, loopback) and mail a code after the password")
+	imapUser := flag.String("imap-user", "agent-inbox", "the mailbox's login")
+	imapPass := flag.String("imap-pass", "", "the mailbox's (app) password")
 	flag.Parse()
 	site := browsertest.New()
 	site.TOTPSeed = *seed
-	mux := http.NewServeMux()
+	if *imap != "" {
+		mb := &browsertest.Mailbox{User: *imapUser, Pass: *imapPass}
+		// What conductor must NOT use: an older genuine code, and a
+		// lookalike sender's fresh one.
+		mb.Deliver("Test Site <no-reply@testsite.example>", "Your sign-in code", "Your sign-in code is 111111.\r\n", time.Now().Add(-time.Hour))
+		go func() {
+			time.Sleep(time.Second)
+			for {
+				mb.Deliver("Test Site <no-reply@testsite.example.evil>", "Your sign-in code", "Your sign-in code is 666666.\r\n", time.Now())
+				time.Sleep(20 * time.Second)
+			}
+		}()
+		if err := mb.Serve(*imap, nil); err != nil {
+			log.Fatal(err)
+		}
+		site.EmailCodes = mb
+		http.HandleFunc("/_harness/imap", func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(mb.Log())
+		})
+	}
+	mux := http.DefaultServeMux
 	mux.HandleFunc("/_harness/session", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(site.Session()))
 	})
