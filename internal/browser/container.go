@@ -221,7 +221,9 @@ func launchContainer(spec LaunchSpec) (*Process, error) {
 	if spec.Image == "" {
 		return nil, fmt.Errorf("browser: no browser image")
 	}
-	if err := os.MkdirAll(spec.Dir, 0o700); err != nil {
+	// The host side of transfers: uploads are staged here, downloads
+	// fetched here, on their way through the stream.
+	if err := os.MkdirAll(filepath.Join(spec.Dir, "xfer"), 0o700); err != nil {
 		return nil, err
 	}
 	sock, closeProxy, err := spec.Proxy.TrustedUnixEndpoint(spec.Allow)
