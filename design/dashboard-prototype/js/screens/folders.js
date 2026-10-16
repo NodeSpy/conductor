@@ -100,6 +100,10 @@
 
   /* phone: one level at a time */
   function levelHTML(n) {
+    if (fv.q) { // on a phone, search is a flat list across every folder
+      const ts = D.teams.map((t) => t.name).filter(matchTeam), bs = D.bots.map((b) => b.name).filter(matchBot);
+      return `<div class="list drill">${ts.map((t) => `<a class="item click" href="#/teams/${t}"><span class="fic team-ic">${icon('members')}</span><div class="grow"><b>${esc(t)}</b><div class="muted tiny">team · ${esc(UI.folderOfTeam(t) || 'top level')}</div></div></a>`).join('')}${bs.map((b) => `<a class="item click" href="#/bots/${b}">${UI.sigil(M(b), 'sm')}<div class="grow"><b>${esc(b)}</b><div class="muted tiny">${esc(UI.folderOfBot(b) || 'top level')}${cfgOf('bots', b, true).team ? ' · team ' + esc(cfgOf('bots', b, true).team) : ' · solo'}</div></div></a>`).join('') || `<div class="item muted small">Nothing matches “${esc(fv.q)}”.</div>`}</div>`;
+    }
     const kids = Object.values(n.kids).sort((a, b) => a.path.localeCompare(b.path)).filter(nodeMatches);
     return `<div class="list drill">${kids.map((k) => `<div class="item" data-drop="${esc(k.path)}"><span class="fic">${icon('folder')}</span><a class="grow" href="#/folders/${enc(k.path)}"><b>${esc(leaf(k.path))}</b>${roll(k)}</a><button class="icon-btn" data-act="f-menu" data-path="${esc(k.path)}" aria-label="Folder actions for ${esc(k.path)}">${icon('more')}</button><a class="chev" href="#/folders/${enc(k.path)}" aria-label="Open ${esc(k.path)}">${icon('chev')}</a></div>`).join('')}
       ${n.teams.filter((t) => !fv.q || matchTeam(t)).map((t) => { const bs = D.bots.filter((b) => cfgOf('bots', b.name, true).team === t); return `<div class="item"><span class="fic team-ic">${icon('members')}</span><a class="grow" href="#/teams/${t}"><b>${esc(t)}</b><div class="muted tiny">team · ${bs.map((b) => b.name).join(', ')}</div></a><button class="icon-btn" data-act="f-item-menu" data-kind="team" data-name="${t}" aria-label="Actions for team ${t}">${icon('more')}</button></div>`; }).join('')}
@@ -108,8 +112,10 @@
   }
 
   function page(path) {
-    const root = build(), n = findNode(root, path);
-    if (!n) return `<div class="page"><div class="empty"><span class="serif">No folder ${esc(path)}</span><a class="btn" href="#/bots">All bots</a></div></div>`;
+    const root = build();
+    let n = findNode(root, path);
+    // a folder emptied by a staged move (or deleted) falls back to its nearest existing ancestor
+    while (!n && path) { path = parentOf(path); n = findNode(root, path); }
     const phone = innerWidth <= 720;
     const moves = D.pending.filter((c) => (c.coll === 'bots' || c.coll === 'teams') && c.before && c.after && (c.before.folder || '') !== (c.after.folder || '')).length;
     return `<div class="page">

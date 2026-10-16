@@ -296,7 +296,7 @@ test.describe('updates, config history, raw editor, access', () => {
     await go(page, '#/config/raw');
     const ta = page.locator('#raw-ed .ced-ta');
     const text = await ta.inputValue();
-    await ta.fill(text.replace('org: acme', 'org: acme-corp'));
+    await ta.evaluate((el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }, text.replace('org: acme', 'org: acme-corp'));
     await page.locator('[data-act="raw-review"]:not([aria-disabled="true"])').click();
     await expect(page.locator('.diff')).toContainText('org: acme-corp');
     await applyStaged(page);

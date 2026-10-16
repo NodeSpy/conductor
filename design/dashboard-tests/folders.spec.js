@@ -21,6 +21,7 @@ test('create a folder and move a solo bot into it with "Move to…", through the
   await page.locator('[data-act="f-new"]').first().click();
   await page.selectOption('#f-parent', 'personal'); await page.fill('#f-name', 'side'); await page.locator('#gen-submit').click();
   if (!isPhone(page)) await expect(page.locator('.frow.folder', { hasText: 'side' })).toContainText('empty');
+  else { await go(page, '#/folders/personal'); await expect(page.locator('.drill')).toContainText('side'); await go(page, '#/folders/personal%2Fhome'); }
   await page.locator('[data-act="f-item-menu"][data-name="homelab"]').click();
   await page.locator('#pop-menu [data-act="f-move"]').click();
   await page.selectOption('#f-to', 'personal/side'); await page.locator('#gen-submit').click();

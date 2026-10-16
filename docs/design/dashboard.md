@@ -59,7 +59,7 @@ These came in with the brief and are not reopened here.
 
 ```
 Now      Overview · Live · Needs you
-Work     Run history · Workflows (+ builder) · Teams & bots · Browsers
+Work     Run history · Workflows (+ builder) · Bots · Browsers
 System   Config · Secrets & vars · Packs & plugins · Connectors & hosts
          (connectors, runtimes, hosts, isolation) · Updates · Logs & audit · Access
 ```
@@ -101,7 +101,8 @@ Some elements are on every screen:
 | `#/attention` | Needs you |
 | `#/runs`, `#/runs/<id>` | Run history, run detail |
 | `#/workflows`, `#/workflows/<name>` | Workflows, builder |
-| `#/bots`, `#/bots/<m>/<tab>[/<id>]` | Teams & bots. Bot tabs: chat, cases[/id], proposals[/id], memory, workers, access, definition |
+| `#/bots`, `#/folders/<path>` | Bots: the folder tree (a folder's subtree on desktop, one level at a time on a phone) |
+| `#/bots/<m>/<tab>[/<id>]`, `#/bots/new/settings[?team=]` | A bot. Tabs: chat, cases[/id], proposals[/id], memory, workers, access, definition |
 | `#/teams/<t>[/<tab>]` | A team. Tabs: overview, routing, defaults, knowledge |
 | `#/browser`, `#/browser/<id>`, `#/browser/seed`, `#/browser/passkey` | Browsers |
 | `#/config`, `#/config/raw`, `#/config/apply` | Config, raw editor, the apply pipeline |
@@ -289,11 +290,44 @@ triggers:
   Widening includes adding a team approver, raising the ceiling, dropping a
   container requirement, linking a team, and automatic promotion.
 
-**Teams & bots list.** A peers graph with team boundaries (teams as
-regions, intra-team peers dashed, team links and explicit cross-team peers
-drawn, the lead ringed), then each team's band with its bots, then the
-solo bots. For each bot: the home session's state, open cases,
-pending proposals, live workers and the next sweep.
+**Folders.** Any bot or team may carry an optional `folder: "a/b"` (slashes
+nest): everything for one company, "personal" bots, or by what they do or
+watch. **Folders are organization only**: display, filter and search. They
+carry no permissions, defaults or behavior; teams own behavior (shared
+defaults and ceilings, peering and delegation, knowledge, routing). A bot on
+a team shows under its team, and the team sits in a folder; solo bots sit in
+folders beside teams. Config holds no empty folders, so a folder created in
+the dashboard exists only in the browser until something moves into it.
+
+```yaml
+teams:
+  platform: { folder: work/platform, … }
+  finance:  { folder: work/billing, … }
+bots:
+  release-scribe: { folder: work/platform, … }   # solo, beside team platform
+  homelab:        { folder: personal/home, … }
+```
+
+**Bots screen.** The sidebar item is **Bots**. The screen is a collapsible
+folder tree (folders → teams → bots, solo bots alongside teams) with
+**New bot**, **New team** and **New folder**, and:
+
+- folder roll-ups: bots, pending approvals, open cases, live home sessions;
+- create, rename and delete folders. Rename rewrites the `folder:` of
+  everything inside; delete moves the contents up. Both are staged edits;
+- move a team or a solo bot by drag-and-drop onto a folder, or with
+  **Move to…**. Folders live in config, so moves stage into the diff and
+  apply with the passkey (a bot on a team moves with its team);
+- search across folders (names, descriptions, paths, teams);
+- a folder breadcrumb on bot and team pages (`Bots › work › platform ›
+  team platform › platform-sre`);
+- a **folder filter** wherever it helps: Needs you on the overview and its
+  own page (approvals), run history, browsers. Items not tied to a bot in
+  that folder are hidden, and the page says how many;
+- on a phone, the tree becomes a drill-down list, one level at a time;
+  search there is a flat list across every folder;
+- below the tree, the peers and links map: team boundaries, intra-team peers
+  dashed, team links and explicit cross-team peers drawn, the lead ringed.
 
 **Team page.**
 
@@ -302,7 +336,7 @@ pending proposals, live workers and the next sweep.
 | Overview | bots and the lead; the **ask & delegate activity graph** (teammates as nodes, asks dashed, delegations as arrows with counts, linked teams' bots at the edge); delegations with status and result; routing decisions with provenance; the team budget and the shared proactive pool; links inside and across teams, and each bot's **delegation reach** | add/remove a bot, make lead, link/unlink a team (config edits), **Route work here** (deliver to the team; its rules decide) |
 | Routing | ordered rules, and a "try a rule" check against real past events | add, edit, reorder, delete rules (config edits) |
 | Defaults | each default, and what every bot inherits, narrows, or (refused) widens | edit defaults (config edit) |
-| Knowledge | the shared repo, pending promotion proposals with their diff | approve / deny with passkey |
+| Knowledge | the shared repo in the knowledge editor (below), with bot proposals on top | author files directly; approve, **approve with changes**, deny with a reason, in bulk |
 
 **Bot detail.** The header shows:
 
@@ -322,10 +356,58 @@ Header actions:
 | **Chat** | The home conversation: operator messages, bot turns, tool calls, and fenced events (rendered as *untrusted data*). The transcript comes from paseo's agent timeline through conductor (**NEW** `GET /bots/<m>/transcript`, plus the SSE topic `bot.transcript`). A side rail shows pending proposals and open cases. | **Send**: `bot say`. The requester is `operator:<name>`, so it is the operator's own request with full operator trust. Delivered when the agent is idle, never into a turn in progress, as today. |
 | **Cases** | The ledger's cases: id, title, requester, class (`operator`/`event`/`user`/`peer`/`proactive`), **how it was routed** (rule, lead, operator, or "delegated by platform-sre → platform-data from case c29"), **delegation edges** with status and the reported result, workers and proposals. Shows the spend against the cap and the ledger's health (degraded or not). | Open, note, close or reopen a case (`bot case …`); reassign within the team (operator, provenance kept); have the bot delegate a task to a teammate (`bot delegate`); cancel a running delegation. Closing a delegated case reports its last note back as the result. |
 | **Proposals** | Pending, shadow, executed, refused, denied and failed proposals, each with tier, verb, case, requester class and worker. **Detail:** the exact action, or for Terraform: repo, commit, dir, workspace, var files, targets, the `+a ~c -d` counts, *replaces* list, plan text (`show -no-color`), plan sha256 and the approval digest. | **Approve / Deny with passkey** ([§6.6](#66-the-approvals-boundary)), and **Replan** for a stale plan. |
-| **Memory** | The memory repo's tree (`knowledge/`, `runbooks/`, `episodes/`, `handoff/`), a file in read view, and `git log` with the `Bot-*` trailers. | **Edit → Commit** (**NEW** operator write through `memrepo`: one commit, author `<operator> (dashboard)`, trailers `Bot-Role: operator`, `Edited-Via: dashboard`), **Revert** a commit, **Consolidate now**. |
+| **Memory** | The bot's memory repo (`knowledge/`, `runbooks/`, `episodes/`, `handoff/`) in the knowledge editor (below), with pinned facts first. | Read, correct, pin and delete what it knows; every save is one operator commit. Promote a file to the team's repo. The bot keeps writing its own memory. |
 | **Workers** | The worker tree: home sessions (live and retired) → children, groups, sweeps. For each worker: taint (inherited requester class), narrowed verbs, read-only flag, case, cost, run link. | **Stop** a worker (**NEW**: cancel its run). There is deliberately no "tell", because only the parent instructs a child. |
 | **Access** | `skill.verbs` × `autonomy.tiers`, `promote`, browser credential bindings, logins, and the operators who can approve. | Tier, promote, verb, binding and login changes are **config edits** through [§7](#7-the-config-edit-pipeline). Revoking a saved login (`browser logout`) is immediate state. |
 | **Definition** | A form for the whole `bots.<m>` node: `team`, charter or `charter_file`, scope, escalation, operators, `home.rotate`, `worker.*`, autonomy (shadow, `approval_ttl`, spend cap), `proactive.*`, cross-team `peers`, `isolation`. Inherited team defaults show beside each field. Live YAML and validation sit beside it. | Review changes → the apply pipeline. **Define a bot** uses the same form with `shadow: true` preset. |
+
+**The knowledge editor** (a team's repo and a bot's memory, one component).
+The operator authors knowledge directly; it is git-backed.
+
+- **Files:** a tree with New file (blank, runbook or fact template), New
+  folder, Rename/move, Delete, and Upload/import: drop markdown files, paste
+  a runbook, or import a path from a repo through a read connector
+  (`Imported-From:` trailer).
+- **Every save is one commit authored by the operator** (`Authored-By:
+  operator:<name>`, `Edited-Via: dashboard`) with an optional message. No
+  approval: operator provenance is trusted. It is a session operation, not a
+  step-up ([§6.5](#65-step-up)).
+- **Editor:** markdown with highlighting, Edit / Split / Preview (the preview
+  is the safe renderer: no raw HTML, http(s) links only), an unsaved-changes
+  guard on navigation, and **conflict detection**: if a bot committed to the
+  file after it was opened, saving shows both diffs against the base and
+  asks for an explicit choice: rebase the edit on theirs, overwrite theirs,
+  or keep theirs.
+- **History** per file and per repo: author (operator or bot, with a case
+  link), the diff, **revert** as a new commit, and **who wrote this**
+  (blame-lite: the file in sections, each with the bot or operator commit
+  that wrote it).
+- **Proposals** (team repos): approve (step-up), **approve with changes**
+  (the proposed result opens in the editor; the commit keeps the bot as
+  author with `Approved-By` and `Edited-By: operator` trailers), deny with a
+  **reason that goes back to the proposing bot**, and bulk approve/deny.
+- **Bot memory:** the same, plus **pins** (facts always in the bot's
+  context, recorded in `.pins`) and deleting wrong facts.
+- **Discoverability:** each file shows which bots read it (the team's bots,
+  or the bot itself), and search spans the team's knowledge and its bots'
+  memory (or a bot's memory and its team's knowledge).
+- **Phone:** view, search, light edits and approvals; the panes stack.
+
+**Create in place.** Every picker that references another entity offers
+**+ New …** as its first option: team → bot, bot → team and folder, step →
+connector instance, runtime, model fleet, credential binding and secret,
+routing rule → bot, credential binding → secret and vault, folder pickers →
+folder, and the step and trigger pickers → connector. It opens a drawer over
+the current flow, which keeps its unsaved state, and the new thing is
+selected on return. **One rule: the child is staged, never applied on its
+own**, so parent and child apply together as one combined diff; pickers and
+validation read the staged view, so the parent can use the child at once.
+The one exception is a secret **value**, which is never config: it is
+written to its vault immediately behind a step-up, as on the Secrets page,
+and only its reference is staged. A team's **Add a bot** offers *Create a new
+bot in this team*: the full New bot flow, prefilled with the team (its
+defaults shown as inherited and narrowable), ending in the diff and landing
+back on the team. A bot can be created solo.
 
 ### 4.5 Browsers (#182)
 
@@ -643,12 +725,15 @@ Rows marked **NEW** need new daemon code. The others wrap code that exists on
 | `GET /api/v1/teams/<t>/activity?since=` | ask and delegate counts between bots, for the activity graph | **NEW** (from the ledgers) |
 | `GET /api/v1/teams`, `GET /api/v1/teams/<t>` | teams, bots, effective defaults (inherited / narrowed per bot), routing, links | **NEW** teams follow-up to #178 |
 | `POST /api/v1/teams/<t>/deliver` `{title, text \| event}` | route work to a team: rules, else the lead | **NEW** |
-| `GET /api/v1/teams/<t>/knowledge/{tree,file,proposals}` | the team repo and pending promotions | **NEW** |
-| `POST /api/v1/teams/<t>/knowledge/proposals/<id>/decision` `{decision, assertion}` | approve / deny a promotion (step-up) | **NEW** |
+| `GET /api/v1/{teams/<t>/knowledge,bots/<m>/memory}/{tree,file,log,blame}?path&ref` | a repo: tree, a file with its version, history (per file or repo), blame-lite | `memrepo` reads + **NEW** blame |
+| `POST …/commit` `{path, content, base, message}` | operator write → one commit (`Authored-By: operator`); **409** with their version and diff when `base` is stale | **NEW** operator write in `memrepo` |
+| `POST …/move` `{from, to}`, `DELETE …/file?path`, `POST …/revert` `{sha}` | rename/move, delete, revert as a new commit | **NEW** |
+| `POST …/import` `{files[] \| {connector, repo, path}}` | upload or import markdown → one commit | **NEW** (repo import via a read verb) |
+| `PUT /api/v1/bots/<m>/memory/pins` `{paths}` | pinned facts | **NEW** |
+| `GET /api/v1/teams/<t>/knowledge/proposals` | bot proposals with diffs | **NEW** |
+| `POST /api/v1/teams/<t>/knowledge/proposals/decision` `{ids[], decision, assertion, content?, reason?}` | approve (optionally with edited content), or deny with a reason sent to the bot; one or many | **NEW** |
 | `POST /api/v1/bots/<m>/workers/<w>/stop` | cancel a worker's run | **NEW** (run cancel) |
-| `GET /api/v1/bots/<m>/memory/{tree,file,log}?ref&path` | browse memory | `memrepo` reads |
-| `POST /api/v1/bots/<m>/memory/commit` `{path, content, base, message}` | operator edit → one commit | **NEW** operator write in `memrepo` |
-| `POST /api/v1/bots/<m>/memory/revert` `{sha}` | revert | **NEW** (`git revert` via `memrepo`) |
+| `GET/POST /api/v1/bots/<m>/memory/…` | the bot's memory through the same repo endpoints as team knowledge (above) | `memrepo` |
 
 **Browser (#182)**
 
@@ -910,7 +995,8 @@ A session is enough for reads and for low-risk operations:
 - pause/resume, retry, stop;
 - chat;
 - case notes;
-- a memory commit (a reversible commit with operator trailers).
+- an operator commit to a bot's memory or a team's knowledge (reversible,
+  `Authored-By: operator`).
 
 A **fresh assertion bound to the request's digest** is required for:
 
@@ -1447,7 +1533,14 @@ backup you can restore. Things to try:
   `{{.triage.kind}}` into `fix`'s prompt from the data tree. Type `gpt-x` as a
   model to see inline validation; edit the YAML and watch the list follow;
   Ctrl+Z.
-- **Teams:** Teams & bots → `platform` → Defaults (inherits / narrows),
+- **Folders:** Bots → New folder; drag `finance` onto `personal`, or
+  **Move to…**; filter Needs you by folder; on a phone, drill down.
+- **Create in place:** on team `platform`, *Add a bot* → *Create a new bot
+  in this team*. In a workflow step, the account picker → *New connector*.
+- **Knowledge:** team `platform` → Knowledge: New file, edit, Split
+  preview, Save; *Approve with changes* on `k4`; *Simulate a bot commit*
+  while editing to see a conflict.
+- **Teams:** Bots → `platform` → Defaults (inherits / narrows),
   Routing (try a rule), Route work here, Knowledge (approve a promotion).
   Add `release-scribe` to `finance` to see a narrowing refusal.
 - **Delegation:** `platform-sre` → case `c29` shows its delegation edges;
