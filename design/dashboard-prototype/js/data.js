@@ -38,14 +38,14 @@
   ];
   D.hosts = [ { name: 'gpu-box', addr: 'gpu-box.tail0000.ts.net', user: 'conductor', status: 'ok', rtt: '18ms' }, { name: 'build-box', addr: '10.0.4.12', user: 'ci', status: 'ok', rtt: '3ms' } ];
 
-  // workflows: steps form a DAG via needs:
+  // workflows: steps run in list order; parallel: [[…],[…]] branches join before the next step.
+  // `needs` here is the graph the dashboard DERIVES from that order (not a config key).
   D.workflows = [
     { name: 'pr-review', source: 'pack review', on: 'gh.review_requested', runs24: 31, ok: 0.94, cost24: 6.12, steps: [
       { id: 'fetch', kind: 'uses', uses: 'gh.pr_diff', needs: [] },
       { id: 'lint', kind: 'code', run: 'js', needs: ['fetch'] },
-      { id: 'review', kind: 'agent', runtime: 'claude-cli', model: 'reviewer', needs: ['fetch'] },
-      { id: 'gate', kind: 'gate', checks: ['review/no-todos'], needs: ['review', 'lint'] },
-      { id: 'post', kind: 'uses', uses: 'gh.review', needs: ['gate'] } ] },
+      { id: 'review', kind: 'agent', runtime: 'claude-cli', model: 'reviewer', gate: 'review/no-todos', needs: ['fetch'] },
+      { id: 'post', kind: 'uses', uses: 'gh.review', needs: ['lint', 'review'] } ] },
     { name: 'ci-fixer', source: 'config', on: 'gh.check_failed', runs24: 9, ok: 0.78, cost24: 9.40, steps: [
       { id: 'logs', kind: 'uses', uses: 'gh.check_logs', needs: [] },
       { id: 'triage', kind: 'decide', needs: ['logs'] },
@@ -65,7 +65,7 @@
     { id: 'r-7f3a', workflow: 'ci-fixer', trigger: 'gh.check_failed', repo: 'acme/api', number: 482, status: 'run', started: m(6), cost: 0.71, tokens: 48210, steps: [
       st('logs', 'ok', 2100, 0), st('triage', 'ok', 8400, 0.03), st('fix', 'run', 0, 0.68, { started: m(5) }), st('test', 'idle'), st('push', 'idle'), st('comment', 'idle') ] },
     { id: 'r-7f2c', workflow: 'pr-review', trigger: 'gh.review_requested', repo: 'acme/web', number: 1291, status: 'run', started: m(2), cost: 0.12, steps: [
-      st('fetch', 'ok', 900, 0), st('lint', 'run', 0, 0), st('review', 'run', 0, 0.12), st('gate', 'idle'), st('post', 'idle') ] },
+      st('fetch', 'ok', 900, 0), st('lint', 'run', 0, 0), st('review', 'run', 0, 0.12), st('post', 'idle') ] },
     { id: 'r-7f29', workflow: 'member:platform-sre', trigger: 'manual (spawn w41)', repo: '', number: 0, status: 'run', started: m(11), cost: 0.33, steps: [ st('work', 'run', 0, 0.33) ] },
     { id: 'r-7f11', workflow: 'pr-review', trigger: 'gh.review_requested', repo: 'acme/api', number: 480, status: 'ok', started: m(38), finished: m(31), cost: 0.41, tokens: 30110, steps: [] },
     { id: 'r-7ef0', workflow: 'ci-fixer', trigger: 'gh.check_failed', repo: 'acme/web', number: 1288, status: 'fail', started: m(64), finished: m(52), cost: 1.12, failed_step: 'test', error: 'go test ./...: 2 failures (TestCheckout, TestRefund)', steps: [] },

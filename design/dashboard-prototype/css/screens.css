@@ -46,8 +46,9 @@
 .graph { position: relative; overflow: auto; background: var(--bg-1); border-radius: 0 0 var(--r) var(--r);
   background-image: linear-gradient(var(--dot) 1px, transparent 1px), linear-gradient(90deg, var(--dot) 1px, transparent 1px); background-size: 20px 20px; }
 .graph svg.edges { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
-.graph svg.edges path { fill: none; stroke: var(--line-3); stroke-width: 1.5; }
-.graph svg.edges path.done { stroke: color-mix(in srgb, var(--ok) 70%, var(--line-3)); }
+.graph svg.edges path, .canvas svg.edges path { fill: none; stroke: var(--line-3); stroke-width: 1.5; }
+.canvas svg.edges { pointer-events: none; }
+.graph svg.edges path.done, .canvas svg.edges path.done { stroke: color-mix(in srgb, var(--ok) 70%, var(--line-3)); }
 .graph svg.edges path.active { stroke: var(--run); stroke-dasharray: 5 5; animation: flow .8s linear infinite; }
 @keyframes flow { to { stroke-dashoffset: -10; } }
 .node { position: absolute; width: 172px; border-radius: var(--r-sm); background: var(--bg-3); border: 1px solid var(--line-2); padding: 9px 11px 9px 13px; cursor: pointer; transition: border-color var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast); box-shadow: var(--elev); }
@@ -158,7 +159,7 @@
 .site .masked { background: repeating-linear-gradient(45deg, #222 0 4px, #333 4px 8px); color: transparent; border-radius: 3px; }
 
 /* ===== builder ===== */
-.builder { display: grid; grid-template-columns: 200px minmax(0, 1fr) minmax(0, 0.9fr); height: calc(100vh - var(--strip-h)); }
+.builder { display: grid; grid-template-columns: 184px minmax(0, 1fr) minmax(0, 0.95fr); height: calc(100vh - var(--strip-h)); }
 .builder .palette-col { border-right: 1px solid var(--line); overflow: auto; padding: 12px; background: var(--bg-1); }
 .builder .canvas-col { position: relative; overflow: hidden; display: flex; flex-direction: column; }
 .builder .yaml-col { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; background: var(--bg-1); }
@@ -173,7 +174,16 @@
 .node.trigger::before { background: var(--accent); }
 .node.trigger { border-style: dashed; }
 .node.pack-owned { background: repeating-linear-gradient(-45deg, var(--bg-3) 0 8px, var(--bg-2) 8px 16px); }
-.inspector { position: absolute; right: 14px; top: 14px; width: 290px; z-index: 5; }
+.par-box { position: absolute; border: 1px dashed var(--line-3); border-radius: var(--r); background: color-mix(in srgb, var(--bg-2) 50%, transparent); }
+.par-box .caps { position: absolute; top: -8px; left: 12px; background: var(--bg); padding: 0 6px; font-size: 9px; }
+.add-step { position: absolute; width: 30px; height: 30px; border-radius: 50%; border: 1.5px dashed var(--line-3); background: var(--bg-2); color: var(--ink-3); display: grid; place-items: center; cursor: pointer; z-index: 2; }
+.add-step:hover { border-color: var(--accent); color: var(--accent); border-style: solid; }
+.node .nk svg { width: 11px; height: 11px; vertical-align: -1px; }
+.btn.disabled { opacity: .4; pointer-events: none; }
+.inspector { position: absolute; left: 14px; right: 14px; bottom: 14px; z-index: 5; max-height: 48%; overflow: auto; box-shadow: var(--elev-pop); }
+.inspector .panel-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
+.inspector .panel-body > .callout, .inspector .panel-body > .row { grid-column: 1 / -1; }
+.canvas-col .canvas { padding-bottom: 260px; }
 .val-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; }
 
 /* ===== config ===== */
@@ -187,7 +197,7 @@
 .apply-steps .as.bad b { background: var(--fail); border-color: var(--fail); color: var(--bg); }
 .check-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px dashed var(--line); font-size: 12.5px; }
 .check-row:last-child { border-bottom: 0; }
-.owner { font-family: var(--font-mono); font-size: 10px; padding: 1px 6px; border-radius: 3px; }
+.owner { flex: none; white-space: nowrap; font-family: var(--font-mono); font-size: 10px; padding: 1px 6px; border-radius: 3px; }
 .owner.op { background: var(--accent-wash); color: var(--accent); } .owner.pack { background: var(--run-wash); color: var(--run); }
 
 /* ===== secrets ===== */

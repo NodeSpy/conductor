@@ -35,7 +35,7 @@
     }).join('');
     const nodes = wf.steps.map((s) => {
       const r = run.steps.find((x) => x.id === s.id) || {}, stt = r.status || 'idle', p = L.pos[s.id];
-      const what = s.uses || (s.kind === 'agent' ? `${s.runtime} · ${s.model}` : s.kind === 'code' ? `run: ${s.run}` : s.kind === 'gate' ? s.checks.join(', ') : 'decide');
+      const what = s.uses || (s.kind === 'agent' ? `${s.runtime} · ${s.model}` : s.kind === 'code' ? `run: ${s.run}` : 'decide');
       return `<div class="node${s.id === sel ? ' sel' : ''}" data-s="${stt}" data-step="${s.id}" style="left:${p.x}px;top:${p.y}px;width:${L.W}px">
         <div class="nk"><span>${s.kind}</span><span>${stt === 'run' ? 'running' : stt === 'ok' ? dur(r.duration_ms) : ''}</span></div>
         <div class="nn">${s.id}</div>
@@ -58,7 +58,7 @@
       <div class="panel-body"><dl class="kv">
         <dt>kind</dt><dd class="mono">${s.kind}${s.uses ? ' · ' + s.uses : ''}</dd>
         ${s.kind === 'agent' ? `<dt>runtime</dt><dd class="mono">${s.runtime} · fleet ${s.model} → claude-sonnet-5 (rung 1)</dd><dt>sandbox</dt><dd>${tag('namespace', 'ok')} ${tag('egress: proxy allowlist')} ${tag('identity agent:fixer@acme/api')}</dd>` : ''}
-        <dt>needs</dt><dd class="mono">${s.needs.join(', ') || '—'}</dd>
+        <dt>after</dt><dd class="mono">${s.needs.join(', ') || 'trigger'}</dd>${s.gate ? `<dt>gate</dt><dd class="mono">${s.gate}</dd>` : ''}
         <dt>started</dt><dd class="mono">${r.started ? ago(r.started) + ' ago' : r.status === 'ok' ? 'done in ' + dur(r.duration_ms) : '—'}</dd>
         <dt>cost</dt><dd class="mono">${usd(r.cost_usd)}${s.kind === 'agent' ? ' · 41.2k tokens' : ''}</dd>
       </dl>
@@ -84,7 +84,7 @@
         ${UI.head(`${run.workflow}`, { crumbs: `<a href="#/live">Live</a> ${icon('chev')} ${run.id}`, sub: run.repo ? `${run.repo}#${run.number}` : run.trigger,
           actions: `<span class="mono small muted">${elapsed}m elapsed · ${usd(run.cost)} · budget $2.00</span><button class="btn">${icon('terminal')}Open in paseo</button><button class="btn danger" id="stop">${icon('x')}Stop run</button>` })}
         <div class="row wrap" style="margin:-8px 0 16px;gap:8px">${live.map((r) => `<a class="chipsel${r.id === run.id ? ' on' : ''}" href="#/live/${r.id}">${st('run', '')}${r.workflow} <span class="mono muted tiny">${r.repo ? r.repo + '#' + r.number : r.trigger}</span></a>`).join('')}</div>
-        <div class="panel" style="margin-bottom:14px"><div class="panel-head"><h3>Steps</h3><span class="muted small">trigger <span class="mono">${run.trigger}</span> · DAG from <span class="mono">needs:</span> · click a step</span><div class="tools"><span class="mono tiny muted">${run.steps.filter((s) => s.status === 'ok').length}/${wf.steps.length} done</span></div></div>${graph(run, wf, sel)}</div>
+        <div class="panel" style="margin-bottom:14px"><div class="panel-head"><h3>Steps</h3><span class="muted small">trigger <span class="mono">${run.trigger}</span> · graph from step order + <span class="mono">parallel:</span> branches · click a step</span><div class="tools"><span class="mono tiny muted">${run.steps.filter((s) => s.status === 'ok').length}/${wf.steps.length} done</span></div></div>${graph(run, wf, sel)}</div>
         <div class="run-layout">
             <div class="panel log-panel"><div class="panel-head"><h3>Log</h3><span class="st" data-s="run"><i><span class="rec" style="background:var(--run)"></span></i>streaming</span>
               <div class="tools"><div class="seg" id="logf"><button class="on">all steps</button><button>fix</button><button>tools</button><button>errors</button></div><button class="icon-btn" title="Follow">${icon('download')}</button></div></div>
@@ -139,7 +139,7 @@
     if (r.status === 'run') { setTimeout(() => UI.go('#/live/' + r.id)); return ''; }
     const fail = r.status === 'fail';
     const steps = fail ? [['logs', 'ok', 0, 4, 0], ['triage', 'ok', 4, 12, 0.03], ['fix', 'ok', 12, 70, 0.98], ['test', 'fail', 70, 96, 0.11], ['push', 'idle'], ['comment', 'idle']]
-      : [['fetch', 'ok', 0, 3, 0], ['lint', 'ok', 3, 18, 0], ['review', 'ok', 3, 82, 0.39], ['gate', 'ok', 82, 88, 0.02], ['post', 'ok', 88, 100, 0]];
+      : [['fetch', 'ok', 0, 3, 0], ['lint', 'ok', 3, 18, 0], ['review', 'ok', 3, 82, 0.39], ['review gate', 'ok', 82, 88, 0.02], ['post', 'ok', 88, 100, 0]];
     const gantt = steps.map(([n, s, a, b, c]) => `<div class="mono">${n}</div><div class="gt" data-s="${s}">${a != null ? `<i style="left:${a}%;width:${Math.max(b - a, 1)}%"></i>` : '<span class="muted tiny">not reached</span>'}</div><div>${st(s, '')}</div><div class="mono num muted">${c != null ? usd(c) : ''}</div>`).join('');
     return `<div class="page">
       ${UI.head(r.workflow, { crumbs: `<a href="#/runs">Run history</a> ${icon('chev')} ${r.id}`, sub: r.repo ? `${r.repo}#${r.number}` : r.trigger,
