@@ -192,7 +192,9 @@ func delegationChain(r *store.BotRecord, bot string) []string {
 			open = append(open, c)
 		}
 	}
-	sort.Slice(open, func(i, j int) bool { return open[i].Created.Before(open[j].Created) || open[i].Created.Equal(open[j].Created) && open[i].ID < open[j].ID })
+	sort.Slice(open, func(i, j int) bool {
+		return open[i].Created.Before(open[j].Created) || open[i].Created.Equal(open[j].Created) && open[i].ID < open[j].ID
+	})
 	seen := map[string]bool{}
 	var chain []string
 	add := func(b string) {
