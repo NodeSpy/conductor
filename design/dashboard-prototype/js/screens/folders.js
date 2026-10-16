@@ -43,7 +43,7 @@
   UI.act('folder-clear', () => { D.prefs.folder = ''; S.save(); UI.rerender(); });
 
   /* ---------- the tree ---------- */
-  const pendingOf = (b) => D.proposals.filter((p) => p.bot === b && p.status === 'pending').length;
+  const pendingOf = (b) => D.proposals.filter((p) => p.bot === b && p.status === 'pending' && UI.live(p)).length;
   const openCases = (b) => D.cases.filter((c) => c.bot === b && c.status === 'open').length;
   function build() {
     const root = { path: '', kids: {}, teams: [], solos: [] };
@@ -55,7 +55,7 @@
     return root;
   }
   const botsUnder = (n) => { const out = []; n.teams.forEach((t) => D.bots.forEach((b) => { if (cfgOf('bots', b.name, true).team === t) out.push(b.name); })); out.push(...n.solos); Object.values(n.kids).forEach((k) => out.push(...botsUnder(k))); return out; };
-  const roll = (n) => { const bs = botsUnder(n); const p = bs.reduce((a, b) => a + pendingOf(b), 0), c = bs.reduce((a, b) => a + openCases(b), 0), live = bs.filter((b) => (M(b) || {}).home === 'live').length; return `<span class="roll"><span title="bots">${icon('members')}${bs.length}</span><span title="pending approvals" class="${p ? 'hot' : ''}">${icon('passkey')}${p}</span><span title="open cases">${icon('runs')}${c}</span><span title="home sessions live" class="${live ? 'live' : ''}"><i class="pulse${live ? ' run' : ''}"></i>${live} live</span></span>`; };
+  const roll = (n) => { const bs = botsUnder(n); const p = bs.reduce((a, b) => a + pendingOf(b), 0), c = bs.reduce((a, b) => a + openCases(b), 0), live = bs.filter((b) => (M(b) || {}).home === 'live').length; return `<span class="roll"><span title="bots">${icon('members')}${bs.length}</span><span title="pending approvals" class="${p ? 'hot' : ''}">${icon('passkey')}${p}</span><span title="open cases">${icon('runs')}${c}</span><span title="home sessions live" class="${live ? 'live' : ''}"><i class="pulse${live ? ' run' : ''}"></i>${live} live</span>${UI.usageOn() ? Object.entries(UI.botsProv(bs)).filter(([, x]) => x.turns).map(([p, x]) => `<span title="${UI.provLabel(p)} turns today · ${UI.srcLabel('observed')}" data-usage data-prov="${p}">${icon('zap')}<span data-figure>${UI.provLabel(p)} ${x.turns}</span></span>`).join('') : ''}</span>`; };
   const fv = { q: '' };
   const closed = () => new Set(D.prefs.closedFolders || []);
   const matchBot = (b) => { const m = M(b) || { name: b, desc: '' }; const q = fv.q.toLowerCase(); return (m.name + ' ' + (m.desc || '') + ' ' + UI.folderOfBot(b) + ' ' + (cfgOf('bots', b, true).team || '')).toLowerCase().includes(q); };

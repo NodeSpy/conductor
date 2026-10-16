@@ -106,7 +106,7 @@
   WF.outputsOf = (s) => {
     const k = WF.kind(s);
     if (k === 'verb' || k === 'ask') { const v = window.SCHEMA.verb(s.uses); return v ? Y.clone(v.outputs) : null; }
-    if (k === 'agent') { const o = { text: '(the agent\'s final message)', diff: '(its proposed change)', cost_usd: 0.4 }; const props = s.output_schema && s.output_schema.properties; if (props) Object.keys(props).forEach((p) => (o[p] = props[p].enum ? props[p].enum[0] : '…')); return o; }
+    if (k === 'agent') { const o = Object.assign({ text: '(the agent\'s final message)', diff: '(its proposed change)', tokens: 28000 }, window.UI && UI.isApi() ? { cost_usd: 0.4 } : {}); const props = s.output_schema && s.output_schema.properties; if (props) Object.keys(props).forEach((p) => (o[p] = props[p].enum ? props[p].enum[0] : '…')); return o; }
     if (k === 'decide') { const o = { _by: 'light' }; Object.entries((s.decide && s.decide.questions) || {}).forEach(([q, d]) => (o[q] = (d && d.type) === 'choice' ? { choice: (d.choices || [])[0] || '' } : (d && d.type) === 'score' ? { score: 0.5 } : { noul: 0.5 })); Object.entries((s.decide && s.decide.questions) || {}).forEach(([q, d]) => { if ((d && d.type) === 'choice') o[q] = (d.choices || [])[0] || ''; }); return o; }
     if (k === 'set') return Y.clone(s.set);
     if (k === 'call') { const w = (V().workflows || []).find((x) => x.name === s.call); if (!w || !w.yaml) return null; try { return Y.clone(Y.parse(w.yaml).value.outputs || {}); } catch (e) { return null; } }
@@ -279,7 +279,7 @@
         else if (/decide auto vs manual/i.test(prompt)) text = 'auto';
         else if (/^fix/i.test(prompt)) text = 'Fixed the rounding in applyFee (half-even); go test ./internal/billing passes.';
         else if (/^review/i.test(prompt)) text = 'Two N+1 queries in the orders handler; add an index on (tenant_id, created_at).';
-        const out = { text, diff: /^(fix|bump)/i.test(prompt) ? 'internal/billing/refund.go | 6 +++--' : '', cost_usd: +(0.18 + (hash(prompt) % 40) / 100).toFixed(2) };
+        const out = Object.assign({ text, diff: /^(fix|bump)/i.test(prompt) ? 'internal/billing/refund.go | 6 +++--' : '', tokens: 12000 + (hash(prompt) % 30000) }, window.UI && UI.isApi() ? { cost_usd: +(0.18 + (hash(prompt) % 40) / 100).toFixed(2) } : {});
         const props = s.output_schema && s.output_schema.properties; if (props) Object.keys(props).forEach((p) => (out[p] = props[p].enum ? props[p].enum[0] : text));
         return { output: out, inputs: { prompt, model: s.model || '(bare launch)', runtime: s.runtime || 'paseo (default)' }, note: 'dry-run agent: no checkout, tools stubbed' };
       }

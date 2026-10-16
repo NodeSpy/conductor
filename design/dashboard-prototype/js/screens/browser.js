@@ -16,7 +16,8 @@
 
   /* ---------- list ---------- */
   UI.route('browser', () => `<div class="page">
-    ${UI.head('Browsers', { sub: 'conductor\'s Chromium, one per agent session, sandboxed', actions: `${UI.folderChip()}<a class="btn" href="#/browser/seed">${icon('hand')}Seed a login</a><a class="btn" href="#/browser/passkey">${icon('passkey')}Register a passkey</a>` })}
+    ${UI.head('Browsers', { sub: 'conductor\'s Chromium, one per agent session, sandboxed', actions: `${UI.folderChip()}<a class="btn" href="#/browser/add">${icon('key')}Add a login</a><a class="btn" href="#/browser/passkey">${icon('passkey')}Register a passkey</a>` })}
+    ${UI.tabs([['sessions', 'Sessions', '#/browser', D.browsers.length], ['logins', 'Logins', '#/browser/logins', D.access.credentials.length + D.access.logins.length]], 'sessions')}
     ${UI.scopeNote(D.browsers.filter((b) => !UI.scopeKeeps(b.identity.startsWith('bot:') ? b.identity.slice(4) : null)).length)}
     <div class="grid g3">${D.browsers.filter((b) => UI.scopeKeeps(b.identity.startsWith('bot:') ? b.identity.slice(4) : null)).map((b) => `
       <a class="panel btile" href="#/browser/${b.id}">
@@ -102,7 +103,7 @@
       : k === 1 ? `<div class="callout ember small">${passkey ? `An empty virtual authenticator is armed on this tab only. Add a passkey on the site's security page.` : `Sign in to <b>${esc(site)}</b> yourself. Keys you type are audited as a length only.`}</div><div class="row"><button class="btn ghost" data-act="sd-cancel">Cancel</button><button class="btn primary" style="margin-left:auto" data-act="sd-next">${icon('check')}${passkey ? 'I\'ve added the passkey' : 'I\'ve signed in'}</button></div>`
       : k === 2 ? `<div class="callout small">${passkey ? `Conductor takes the one credential whose RP covers <span class="mono">${esc(site)}</span> and writes it to the vault.` : `Conductor keeps only <b>${esc(site)}</b>'s cookies, in <span class="mono">&lt;state&gt;/browser/logins/</span> (0600), and only for <b>your own</b> requests to ${esc(ident)}.`}</div><div class="row"><button class="btn ghost" data-act="sd-cancel">Discard</button><button class="btn primary" style="margin-left:auto" data-act="sd-save">${icon('check')}${passkey ? 'Save passkey' : 'Save session'}</button></div>`
       : `<div class="row"><button class="btn" data-act="sd-again">${icon('plus')}Seed another</button><a class="btn ghost" href="#/bots/${ident.replace('bot:', '')}/access">See it in Access</a></div>`;
-    return `<div class="page wide">${UI.head(passkey ? 'Register a passkey' : 'Seed a login', { crumbs: `<a href="#/browser">Browsers</a>`, sub: passkey ? 'a dedicated, separately revocable passkey per identity and site' : 'a headless takeover, from any device on your tailnet' })}
+    return `<div class="page wide">${UI.head(passkey ? 'Register a passkey' : 'Sign in yourself', { crumbs: `<a href="#/browser">Browsers</a> › <a href="#/browser/add">Add a login</a>`, sub: passkey ? 'a dedicated, separately revocable passkey per identity and site' : 'a headless takeover, from any device on your tailnet' })}
       <div class="apply-steps">${steps.map((x, i) => `<div class="as ${i < k || k >= 3 ? 'done' : i === k ? 'cur' : ''}"><b>${i < k || k >= 3 ? '✓' : i + 1}</b>${x}</div>`).join('')}</div>
       <div class="grid seed-grid"><div class="panel">${left}</div><div class="stack"><div class="panel"><div class="panel-body stack">${right}</div></div>
         <div class="panel"><div class="panel-body small muted">Or import one domain's cookies: <span class="mono">conductor browser cookies import</span>. A whole browser profile is never imported.</div></div></div></div></div>`;
@@ -125,7 +126,10 @@
   });
 
   UI.route('browser/:id', ({ id }) => {
-    if (id === 'seed') return seed(false);
+    if (id === 'seed') { setTimeout(() => UI.go('#/browser/add?m=takeover')); return ''; }
+    if (id === 'add') return UI.addLoginPage();
+    if (id === 'logins') return UI.loginsPage();
+    if (id === 'takeover') return seed(false);
     if (id === 'passkey') return seed(true);
     const b = D.browsers.find((x) => x.id === id);
     if (!b) return `<div class="page"><div class="empty"><span class="serif">That browser has closed</span><a class="btn" href="#/browser">Browsers</a></div></div>`;

@@ -50,7 +50,7 @@
         ${s.kind === 'agent' ? `<dt>runtime</dt><dd class="mono">${s.runtime || 'paseo'} · fleet ${s.model || 'default'} → claude-sonnet-5 (rung 1)</dd><dt>sandbox</dt><dd>${tag('namespace', 'ok')} ${tag('egress: proxy allowlist')}</dd>` : ''}
         <dt>after</dt><dd class="mono">${s.needs.join(', ') || 'trigger'}</dd>
         <dt>started</dt><dd class="mono">${r.started ? ago(r.started) + ' ago' : r.status === 'ok' ? 'done in ' + dur(r.duration_ms) : '—'}</dd>
-        <dt>cost</dt><dd class="mono">${usd(r.cost_usd)}</dd></dl>
+        ${UI.usageOn() && s.kind === 'agent' ? `<dt>usage</dt><dd>${UI.runFig({ id: run.id + s.id, cost: r.cost_usd, provider: 'claude', model_id: 'claude-sonnet-5' })}</dd>` : ''}</dl>
       ${s.kind === 'agent' && r.status === 'run' ? `<div class="caps" style="margin:14px 0 6px">Proposed diff (so far)</div><div class="diff"><div class="h">internal/billing/refund.go</div>
         <div class="dl"><span>41</span><span>41</span><span> </span><span>func applyFee(cents int64, bps int64) int64 {</span></div>
         <div class="dl del"><span>42</span><span></span><span>-</span><span>	return cents * bps / 10000</span></div>
@@ -71,7 +71,7 @@
     return {
       toString: () => `<div class="page wide">
         ${UI.head(`${run.workflow}`, { crumbs: `<a href="#/live">Live</a> ${icon('chev')} ${run.id}`, sub: run.repo ? `${run.repo}#${run.number}` : run.trigger,
-          actions: `<span class="mono small muted">${elapsed}m elapsed · ${usd(run.cost)} · budget $2.00</span><button class="btn" ${UI.off('Opens paseo\'s own view of the agent, outside the dashboard (not in the prototype)')}>${icon('terminal')}Open in paseo</button>${run.status === 'run' ? `<button class="btn danger" data-act="stop-run" data-run="${run.id}">${icon('x')}Stop run</button>` : `${st(run.status === 'stopped' ? 'fail' : run.status, run.status, true)}`}` })}
+          actions: `<span class="mono small muted">${elapsed}m elapsed</span>${UI.runFig(run)}${UI.isApi() ? '<span class="mono small muted">budget $2.00</span>' : ''}<button class="btn" ${UI.off('Opens paseo\'s own view of the agent, outside the dashboard (not in the prototype)')}>${icon('terminal')}Open in paseo</button>${run.status === 'run' ? `<button class="btn danger" data-act="stop-run" data-run="${run.id}">${icon('x')}Stop run</button>` : `${st(run.status === 'stopped' ? 'fail' : run.status, run.status, true)}`}` })}
         <div class="row wrap" style="margin:-8px 0 16px;gap:8px">${live.map((r) => `<a class="chipsel${r.id === run.id ? ' on' : ''}" href="#/live/${r.id}"${r.id === run.id ? ' aria-current="page"' : ''}>${st('run', '')}${r.workflow} <span class="mono muted tiny">${r.repo ? r.repo + '#' + r.number : r.trigger}</span></a>`).join('')}</div>
         <div class="panel" style="margin-bottom:14px"><div class="panel-head"><h3>Steps</h3><span class="muted small">trigger <span class="mono">${run.trigger}</span> · from step order + <span class="mono">parallel:</span> · click a step</span><div class="tools"><span class="mono tiny muted">${run.steps.filter((s) => s.status === 'ok').length}/${steps.length} done</span></div></div><div id="graph">${graph(run, steps, lv.sel)}</div></div>
         <div class="run-layout">
@@ -116,7 +116,7 @@
     if (hv.wf && r.workflow !== hv.wf) return false;
     if (hv.repo && r.repo !== hv.repo) return false;
     if (hv.since && Date.now() - new Date(r.started) > +hv.since * 60000) return false;
-    if (hv.cost && !(r.cost >= +hv.cost)) return false;
+    if (hv.cost && UI.runProv(r) !== hv.cost) return false;
     if (hv.q) { const t = `${r.id} ${r.workflow} ${r.repo}#${r.number} ${r.error || ''} ${r.detail || ''} ${r.trigger}`.toLowerCase(); if (!t.includes(hv.q.toLowerCase())) return false; }
     return true;
   };
@@ -129,7 +129,7 @@
       <td data-l="workflow"><b>${r.workflow}</b></td><td data-l="trigger" class="mono muted">${r.trigger}</td>
       <td data-l="target" class="mono">${r.repo ? r.repo + '#' + r.number : '—'}</td><td data-l="started" class="mono muted">${ago(r.started)} ago</td>
       <td data-l="duration" class="mono num">${r.finished ? Math.max(1, Math.round((new Date(r.finished) - new Date(r.started)) / 60000)) + 'm' : '…'}</td>
-      <td data-l="cost" class="mono num">${usd(r.cost)}</td><td class="muted small ellipsis hide-phone" style="max-width:260px">${esc(r.error || r.detail || '')}</td></tr>`).join('') || `<tr class="empty-row"><td colspan="9">No run matches these filters. <button class="link" data-act="hist-clear">Clear filters</button></td></tr>`;
+      ${UI.usageOn() ? `<td data-l="usage" class="num">${UI.runFig(r)}</td>` : ''}<td class="muted small ellipsis hide-phone" style="max-width:260px">${esc(r.error || r.detail || '')}</td></tr>`).join('') || `<tr class="empty-row"><td colspan="9">No run matches these filters. <button class="link" data-act="hist-clear">Clear filters</button></td></tr>`;
   }
   UI.route('runs', () => {
     const n = D.runs.filter(histMatch).length;
@@ -141,10 +141,10 @@
         ${chipSel('wf', 'Workflow', 'workflows', [['', 'workflow: any']].concat([...new Set(D.runs.map((r) => r.workflow))].map((w) => [w, w])))}
         ${chipSel('repo', 'Repo', 'branch', [['', 'repo: any']].concat([...new Set(D.runs.map((r) => r.repo).filter(Boolean))].map((w) => [w, w])))}
         ${chipSel('since', 'Time range', 'clock', [['', 'any time'], ['60', 'last 1h'], ['360', 'last 6h'], ['1440', 'last 24h']])}
-        ${chipSel('cost', 'Minimum cost', 'dollar', [['', 'cost: any'], ['0.1', '≥ $0.10'], ['0.5', '≥ $0.50'], ['1', '≥ $1.00']])}
+        ${!UI.usageOn() ? '' : chipSel('cost', 'Provider', 'zap', [['', 'provider: any']].concat(Object.keys(D.usage.providers).map((p) => [p, UI.provLabel(p)])))}
         ${UI.folderChip()}<span class="count-note" id="hist-n">${n} of ${D.runs.length}</span>
       </div>
-      <div class="panel"><table class="tbl responsive"><thead><tr><th>status</th><th>run</th><th>workflow</th><th>trigger</th><th>target</th><th>started</th><th class="num">took</th><th class="num">cost</th><th class="hide-phone">note</th></tr></thead><tbody id="hist-body">${histRows()}</tbody></table>
+      <div class="panel"><table class="tbl responsive"><thead><tr><th>status</th><th>run</th><th>workflow</th><th>trigger</th><th>target</th><th>started</th><th class="num">took</th>${UI.usageOn() ? `<th class="num">usage · ${UI.measHead()}</th>` : ''}<th class="hide-phone">note</th></tr></thead><tbody id="hist-body">${histRows()}</tbody></table>
       <div class="panel-foot small muted"><span>Records are HMAC-signed in <span class="mono">${D.daemon.state_dir}/history/</span>; a record that fails its signature shows as tampered.</span></div></div>
     </div>`;
   });
@@ -164,7 +164,7 @@
     const fail = r.status === 'fail' || r.status === 'stopped';
     const steps = r.steps.length ? r.steps.map((s, i, a) => [s.id, s.status === 'stopped' ? 'fail' : s.status, (i / a.length) * 100, ((i + 1) / a.length) * 100, s.cost_usd]) : fail ? [['logs', 'ok', 0, 4, 0], ['triage', 'ok', 4, 12, 0.03], ['fix', 'ok', 12, 70, 0.98], ['test', 'fail', 70, 96, 0.11], ['push', 'idle'], ['comment', 'idle']] : [['fetch', 'ok', 0, 3, 0], ['lint', 'ok', 3, 18, 0], ['review', 'ok', 3, 82, 0.39], ['post', 'ok', 88, 100, 0]];
     const focus = fail ? (r.failed_step || (steps.find((s) => s[1] === 'fail') || steps[0])[0]) : (steps.find((s) => s[0] === 'review') || steps[steps.length - 1])[0];
-    const gantt = steps.map(([n, s, a, b, c]) => `<div class="mono">${n}</div><div class="gt" data-s="${s}">${a != null && s !== 'idle' ? `<i style="left:${a}%;width:${Math.max(b - a, 1)}%"></i>` : '<span class="muted tiny">not reached</span>'}</div><div>${st(s, '')}</div><div class="mono num muted">${c != null ? usd(c) : ''}</div>`).join('');
+    const gantt = steps.map(([n, s, a, b, c]) => `<div class="mono">${n}</div><div class="gt" data-s="${s}">${a != null && s !== 'idle' ? `<i style="left:${a}%;width:${Math.max(b - a, 1)}%"></i>` : '<span class="muted tiny">not reached</span>'}</div><div>${st(s, '')}</div><div class="mono num muted">${c && UI.usageOn() ? UI.runFig({ id: r.id + n, cost: c, provider: UI.runProv(r), model_id: UI.runModel(r) }) : ''}</div>`).join('');
     const content = {
       outputs: UI.yaml(fail ? `exit_code: 1\nstdout: |\n  --- FAIL: TestCheckout (0.31s)\n      checkout_test.go:142: total = 10.49, want 10.50\n  --- FAIL: TestRefund (0.02s)\n      refund_test.go:88: got 1999, want 2000\nduration_ms: 26114  # scrubbed: 0 secrets` : `verdict: request_changes\ncomments: 3\nsummary: "Two N+1 queries in the orders handler; missing index on (tenant_id, created_at)."\ntokens: 30110\ncost_usd: 0.39`, { err: fail ? [3, 5] : [] }),
       inputs: UI.yaml(`repo: ${r.repo || '—'}\nnumber: ${r.number || 0}\nworkdir: <state>/runs/${r.id}/${focus}\ncommand: [go, test, ./...]`),
@@ -184,7 +184,7 @@
         <div class="stack">
           <div class="panel"><div class="panel-head"><h3>Run</h3></div><div class="panel-body"><dl class="kv">
             <dt>id</dt><dd class="mono">${r.id}</dd><dt>trigger</dt><dd class="mono">${r.trigger}</dd><dt>started</dt><dd class="mono">${new Date(r.started).toLocaleString()}</dd>
-            <dt>cost</dt><dd class="mono">${usd(r.cost)} ${r.tokens ? '· ' + (r.tokens / 1000).toFixed(1) + 'k tok' : ''}</dd><dt>signature</dt><dd>${st('ok', 'HMAC verified')}</dd><dt>retry of</dt><dd class="mono">${r.retry_of ? `<a class="link" href="#/runs/${r.retry_of}">${r.retry_of}</a>` : '—'}</dd></dl></div></div>
+            ${UI.usageOn() ? `<dt>usage</dt><dd>${UI.runFig(r)} <span class="mono tiny muted">${UI.runModel(r)} · ${UI.srcLabel(UI.isApi() || UI.usageSource() ? 'source' : 'observed')}</span></dd>` : ''}<dt>signature</dt><dd>${st('ok', 'HMAC verified')}</dd><dt>retry of</dt><dd class="mono">${r.retry_of ? `<a class="link" href="#/runs/${r.retry_of}">${r.retry_of}</a>` : '—'}</dd></dl></div></div>
           <div class="panel"><div class="panel-head"><h3>Audit for this run</h3><a class="btn sm ghost" style="margin-left:auto" href="#/logs/audit">All ${icon('chev')}</a></div><div class="list">${runAudit.map((a) => `<div class="item small"><span class="mono tiny muted" style="width:44px">${ago(a.ts)}</span><span class="mono" style="color:var(--run)">${a.event}</span><span class="muted ellipsis grow">${esc(a.detail)}</span></div>`).join('')}</div></div>
         </div></div></div>`;
   });

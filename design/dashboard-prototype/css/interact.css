@@ -152,6 +152,7 @@ tr.hidden, .item.hidden, .hidden { display: none !important; }
 .def-yaml { position: sticky; top: 12px; }
 .meter { height: 6px; border-radius: 3px; background: var(--bg-4); overflow: hidden; }
 .meter > i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.meter > i[style*="width"] { flex: none; }
 .op .who span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
 .op .who { min-width: 0; flex: 1; }
 @media (max-width: 1100px) { .mem-grid { grid-template-columns: 200px minmax(0, 1fr); } .mem-grid > :last-child { grid-column: 1 / -1; } }
@@ -273,3 +274,21 @@ button.node { font: inherit; color: inherit; text-align: left; }
   .ed-src { border-right: 0; }
   .bl-group { grid-template-columns: 1fr; }
 }
+
+/* ---- usage: per provider, never combined ---- */
+.pv-set { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.pv-set.block { display: flex; }
+.pv { display: inline-flex; align-items: baseline; gap: 5px; padding: 1px 7px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; white-space: nowrap; }
+.pv .pv-n { color: var(--ink-3); font-size: 11px; }
+.pv[data-prov="claude"] { border-color: color-mix(in srgb, #d97757 45%, var(--line)); }
+.pv[data-prov="codex"] { border-color: color-mix(in srgb, #4b8bf5 45%, var(--line)); }
+.pv.one { border: 0; padding: 0; }
+.pv-src { color: var(--ink-3); font-size: 11px; font-style: italic; }
+.prov-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.prov-card { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.prov-card[data-prov="claude"] { border-top: 3px solid #d97757; }
+.prov-card[data-prov="codex"] { border-top: 3px solid #4b8bf5; }
+.prov-row + .prov-row { border-top: 1px dashed var(--line); padding-top: 6px; }
+.prov-lines { display: flex; flex-direction: column; gap: 2px; font-size: 13px; margin: 4px 0; }
+.win-meter { display: flex; flex-direction: column; gap: 4px; }
+.cchart.sm { height: 46px; padding-left: 0; }

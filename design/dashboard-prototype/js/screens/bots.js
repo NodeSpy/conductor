@@ -7,7 +7,7 @@
   const { icon, st, tag, tier, usd, ago, esc, md } = UI;
   const M = (n) => D.bots.find((m) => m.name === n);
   const T = (n) => D.teams.find((t) => t.name === n);
-  const props = (n) => D.proposals.filter((p) => p.bot === n);
+  const props = (n) => D.proposals.filter((p) => p.bot === n && UI.live(p));
   const pending = (n) => props(n).filter((p) => p.status === 'pending');
   const teamOf = (m) => (m && m.cfg && m.cfg.team ? T(m.cfg.team) : null);
   const botsOf = (t) => D.bots.filter((m) => m.cfg && m.cfg.team === t);
@@ -60,7 +60,7 @@
     const others = D.teams.filter((x) => !t || x.name !== t.name).map((x) => x.name);
     UI.form({ caps: isNew ? 'teams:' : `teams.${t.name}`, title: isNew ? 'New team' : `Edit team ${t.name}`, wide: true,
       intro: 'Cut teams any way you like. Bots inherit these defaults and can only narrow them.',
-      values: isNew ? {} : { description: c.description, lead: c.lead, operators: S.getPath(c, 'defaults.operators'), max_tier: S.getPath(c, 'defaults.autonomy.max_tier'), promote: S.getPath(c, 'defaults.autonomy.promote') !== false, approval_ttl: S.getPath(c, 'defaults.autonomy.approval_ttl'), isolation: S.getPath(c, 'defaults.isolation.mode'), budget: S.getPath(c, 'defaults.budget.max_cost_per_day'), pool_runs: S.getPath(c, 'defaults.budget.proactive_pool.max_runs_per_day'), pool_cost: S.getPath(c, 'defaults.budget.proactive_pool.max_cost_per_day'), logins: S.getPath(c, 'defaults.browser.logins'), credentials: S.getPath(c, 'defaults.browser.credentials'), repo: S.getPath(c, 'knowledge.repo'), promote_mode: S.getPath(c, 'knowledge.promote'), links: c.links, bots: [], folder: c.folder }, edit: !isNew,
+      values: isNew ? {} : { budget_turns: S.getPath(c, 'defaults.budget.max_turns_per_day'), description: c.description, lead: c.lead, operators: S.getPath(c, 'defaults.operators'), max_tier: S.getPath(c, 'defaults.autonomy.max_tier'), promote: S.getPath(c, 'defaults.autonomy.promote') !== false, approval_ttl: S.getPath(c, 'defaults.autonomy.approval_ttl'), isolation: S.getPath(c, 'defaults.isolation.mode'), budget: S.getPath(c, 'defaults.budget.max_cost_per_day'), budget_runs: S.getPath(c, 'defaults.budget.max_runs_per_day'), budget_tokens: S.getPath(c, 'defaults.budget.max_tokens_per_day'), pool_tokens: S.getPath(c, 'defaults.budget.proactive_pool.max_tokens_per_day'), pool_runs: S.getPath(c, 'defaults.budget.proactive_pool.max_runs_per_day'), pool_cost: S.getPath(c, 'defaults.budget.proactive_pool.max_cost_per_day'), logins: S.getPath(c, 'defaults.browser.logins'), credentials: S.getPath(c, 'defaults.browser.credentials'), repo: S.getPath(c, 'knowledge.repo'), promote_mode: S.getPath(c, 'knowledge.promote'), links: c.links, bots: [], folder: c.folder }, edit: !isNew,
       fields: [
         isNew ? { k: 'name', type: 'string', req: true, ph: 'e.g. data', pattern: /^[a-z][a-z0-9-]*$/, patternMsg: 'Lowercase letters, digits and dashes.', validate: (v) => (T(v) ? 'A team by that name exists.' : '') } : null,
         { k: 'description', type: 'string', mono: false },
@@ -71,9 +71,13 @@
         { k: 'promote', type: 'bool', label: 'Promotions', on: 'bots may promote reversible verbs' },
         { k: 'approval_ttl', type: 'duration', label: 'Approval TTL' },
         { k: 'isolation', type: 'enum', label: 'Sandbox policy', options: ['namespace', 'container'], def: 'namespace', help: 'container: every bot must run in its own container.' },
-        { k: 'budget', type: 'number', label: 'Team budget / day (USD)' },
+        { k: 'budget_runs', type: 'number', label: 'Team budget · runs / day' },
+        { k: 'budget_turns', type: 'number', label: 'Team budget · turns / day' },
+        { k: 'budget_tokens', type: 'number', label: 'Team budget · tokens / day', help: 'Counted per provider: Claude and Codex each get this cap.' },
+        { k: 'budget', type: 'number', label: 'Team budget / day (USD, per provider)', show: () => UI.isApi() },
         { k: 'pool_runs', type: 'number', label: 'Proactive pool · runs / day', help: 'Shared by every bot\'s sweeps.' },
-        { k: 'pool_cost', type: 'number', label: 'Proactive pool · USD / day' },
+        { k: 'pool_tokens', type: 'number', label: 'Proactive pool · tokens / day', help: 'Per provider.' },
+        { k: 'pool_cost', type: 'number', label: 'Proactive pool · USD / day', show: () => UI.isApi() },
         { k: 'logins', type: 'list', label: 'Browser login scope', ph: 'console.example.com' },
         { k: 'credentials', type: 'select-multi', label: 'Credential scope', options: S.view().access.credentials.map((x) => x.name), create: 'credential', createLabel: 'New credential binding' },
         { section: 'Knowledge and links', k: 'repo', type: 'string', label: 'Team knowledge repo', ph: 'team-knowledge/<team>', help: 'Optional. Bots propose promoting knowledge into it.' },
@@ -90,9 +94,14 @@
         S.setPath(n.defaults, 'operators', v.operators);
         n.defaults.autonomy = { max_tier: v.max_tier, promote: !!v.promote }; if (v.approval_ttl) n.defaults.autonomy.approval_ttl = v.approval_ttl;
         n.defaults.isolation = { mode: v.isolation || 'namespace' };
-        if (v.budget != null) S.setPath(n.defaults, 'budget.max_cost_per_day', v.budget);
+        if (v.budget_runs != null) S.setPath(n.defaults, 'budget.max_runs_per_day', v.budget_runs);
+        if (v.budget_turns != null) S.setPath(n.defaults, 'budget.max_turns_per_day', v.budget_turns);
+        if (v.budget_tokens != null) S.setPath(n.defaults, 'budget.max_tokens_per_day', v.budget_tokens);
+        if (v.pool_tokens != null) S.setPath(n.defaults, 'budget.proactive_pool.max_tokens_per_day', v.pool_tokens);
+        const keepCost = (k, path) => { if (UI.isApi()) { if (v[k] != null) S.setPath(n.defaults, path, v[k]); } else if (S.getPath(c, 'defaults.' + path) != null) S.setPath(n.defaults, path, S.getPath(c, 'defaults.' + path)); };
+        keepCost('budget', 'budget.max_cost_per_day');
         if (v.pool_runs != null) S.setPath(n.defaults, 'budget.proactive_pool.max_runs_per_day', v.pool_runs);
-        if (v.pool_cost != null) S.setPath(n.defaults, 'budget.proactive_pool.max_cost_per_day', v.pool_cost);
+        keepCost('pool_cost', 'budget.proactive_pool.max_cost_per_day');
         if (v.logins) S.setPath(n.defaults, 'browser.logins', v.logins);
         if (v.credentials) S.setPath(n.defaults, 'browser.credentials', v.credentials);
         if (v.repo) n.knowledge = { repo: v.repo, promote: v.promote_mode || 'approval' };
@@ -191,7 +200,6 @@
   function teamOverview(t) {
     const c = staged('teams', t.name) || t.cfg, ms = botsOf(t.name);
     const others = S.view().bots.filter((m) => !ms.some((x) => x.name === m.name));
-    const spend = ms.reduce((a, m) => a + (m.name === 'platform-sre' ? 3.75 : m.name === 'web-triage' ? 0.42 : m.name === 'billing-sre' ? 1.1 : 0), 0);
     const pool = S.getPath(c, 'defaults.budget.proactive_pool'), claimed = ms.reduce((a, m) => a + (S.getPath(m.cfg, 'proactive.budget.max_runs_per_day') || 0), 0);
     const cases = D.cases.filter((x) => x.routed && (x.routed.team === t.name || ms.some((m) => m.name === x.routed.to))).slice(0, 8);
     const linkedBack = (l) => ((T(l) || { cfg: {} }).cfg.links || []).includes(t.name);
@@ -207,10 +215,14 @@
         <div class="panel"><div class="panel-head"><h3>Routing decisions</h3><span class="muted small">requester provenance kept through every hop</span></div><div class="list">${cases.map((x) => `<a class="item click" href="#/bots/${x.bot}/cases/${x.id}"><span class="mono tiny muted">${x.id}</span><div class="grow small"><div class="ellipsis"><b>${esc(x.title)}</b></div><div class="tiny muted">${routeLabel(x.routed)} · requester <span class="taint ${x.cls}">${x.requester}</span></div></div><span class="chev">${icon('chev')}</span></a>`).join('') || '<div class="item muted small">Nothing routed yet.</div>'}</div></div>
       </div>
       <div class="stack">
-        <div class="panel"><div class="panel-head"><h3>Budget</h3></div><div class="panel-body stack tight small">
-          <div class="row"><span class="grow">Team spend today</span><span class="mono">${usd(spend)} / ${S.getPath(c, 'defaults.budget.max_cost_per_day') != null ? usd(S.getPath(c, 'defaults.budget.max_cost_per_day')) : '∞'}</span></div>
-          <div class="meter"><i style="width:${Math.min(100, (spend / (S.getPath(c, 'defaults.budget.max_cost_per_day') || 1e9)) * 100)}%"></i></div>
-          ${pool ? `<div class="row" style="margin-top:6px"><span class="grow">Proactive pool (shared)</span><span class="mono">${claimed} / ${pool.max_runs_per_day} runs claimed · ${usd(pool.max_cost_per_day)}/day</span></div><div class="meter"><i style="width:${Math.min(100, (claimed / pool.max_runs_per_day) * 100)}%;background:var(--run)"></i></div><div class="muted tiny">Each bot's sweep budget draws on the pool; the validator refuses a bot over it.</div>` : '<div class="muted tiny">No shared proactive pool.</div>'}</div></div>
+        ${!UI.usageOn() ? '' : (() => { const bp = UI.botsProv(ms.map((m) => m.name)), b0 = S.getPath(c, 'defaults.budget') || {}, rc = b0.max_runs_per_day, tc = b0.max_tokens_per_day, uc = UI.isApi() ? b0.max_cost_per_day : null, runs = ms.reduce((a, m) => a + Object.values(D.usage.bots[m.name] || {}).reduce((x, y) => x + (y.runs || 0), 0), 0), src = UI.usageSource();
+          const meter = (v, cap, label, f) => `<div class="row"><span class="grow muted">${label}</span><span class="mono">${f(v)} / ${f(cap)}</span></div><div class="meter"><i style="width:${Math.min(100, (v / cap) * 100)}%"></i></div>`;
+          return `<div class="panel" data-usage><div class="panel-head"><h3>Usage today</h3><span class="muted small">per provider, never combined</span></div><div class="panel-body stack tight small">
+          ${Object.keys(D.usage.providers).map((p) => { const x = bp[p] || { runs: 0, turns: 0 }; return `<div class="prov-row" data-prov="${p}"><div class="row"><b class="grow">${UI.provLabel(p)}</b><span class="mono" data-figure>${x.runs} runs · ${x.turns} turns${x.tokens != null ? ' · ' + UI.fmtTok(x.tokens) + ' tok' : ''}${UI.isApi() ? ' · ' + usd(x.usd || 0) : ''}</span></div>${tc && x.tokens != null ? meter(x.tokens, tc, 'token cap', UI.fmtTok) : ''}${uc != null ? meter(x.usd || 0, uc, 'spend cap', usd) : ''}</div>`; }).join('')}
+          <div class="pv-src tiny" data-src="${src ? 'source' : 'observed'}">runs and turns observed by conductor${src ? ' · tokens' + (UI.isApi() ? ' and dollars' : '') + ' from ' + esc(src.name) : UI.isApi() ? ' · dollars from runtime reports' : ''}</div>
+          ${tc || uc != null ? '<div class="muted tiny">Token and spend caps apply to each provider on its own.</div>' : ''}
+          ${rc ? `<div data-budget><div class="row"><span class="grow muted">runs dispatched · budget</span><span class="mono">${runs} / ${rc}</span></div><div class="meter"><i style="width:${Math.min(100, (runs / rc) * 100)}%"></i></div></div>` : ''}
+          ${pool ? `<div data-budget><div style="margin-top:6px"><b>Proactive pool (shared)</b></div><div class="mono">${claimed} / ${pool.max_runs_per_day} runs claimed${pool.max_tokens_per_day ? ' · ' + UI.fmtTok(pool.max_tokens_per_day) + ' tok/day per provider' : ''}${UI.isApi() && pool.max_cost_per_day != null ? ' · ' + usd(pool.max_cost_per_day) + '/day per provider' : ''}</div><div class="meter"><i style="width:${Math.min(100, (claimed / pool.max_runs_per_day) * 100)}%;background:var(--run)"></i></div><div class="muted tiny">Each bot's sweep budget draws on the pool; the validator refuses a bot over it.</div></div>` : '<div class="muted tiny">No shared proactive pool.</div>'}</div></div>`; })()}
         <div class="panel"><div class="panel-head"><h3>Links</h3></div><div class="panel-body stack tight small">
           <div><span class="caps">inside the team</span><div class="muted tiny" style="margin-top:3px">${ms.length > 1 ? ms.map((m) => m.name).join(' ↔ ') + ' · data-only ask, no extra config' : 'One bot: nobody to ask yet.'}</div></div>
           <div><span class="caps">across teams</span>${D.teams.filter((x) => x.name !== t.name).map((x) => { const on = (c.links || []).includes(x.name); return `<div class="row" style="margin-top:6px"><b class="grow">${x.name}</b>${on ? (linkedBack(x.name) ? tag('linked both ways', 'ok') : tag('waiting for ' + x.name, 'wait')) : tag('isolated')}${UI.switchBtn(on, 'team-link', `data-t="${t.name}" data-o="${x.name}" aria-label="Link ${t.name} with ${x.name}"`)}</div>`; }).join('') || '<div class="muted tiny">No other teams.</div>'}</div>
@@ -245,7 +257,7 @@
         ${row('autonomy ceiling', S.getPath(d, 'autonomy.max_tier') || '—', ({ m }) => { const tiers = Object.keys(S.getPath(staged('bots', m.name), 'autonomy.tiers') || {}).filter((x) => x !== 'observe'); const loosest = tiers.sort((a, b) => S.TIER_ORDER.indexOf(b) - S.TIER_ORDER.indexOf(a))[0] || 'propose'; const ok = S.TIER_ORDER.indexOf(loosest) <= S.TIER_ORDER.indexOf(S.getPath(d, 'autonomy.max_tier') || 'observe'); return `<span class="mono">${loosest}</span> ${badge(loosest === S.getPath(d, 'autonomy.max_tier') ? 'inherits' : 'narrows', ok)}`; })}
         ${row('promotions', S.getPath(d, 'autonomy.promote') === false ? 'none allowed' : 'allowed', ({ e }) => `<span class="mono">${e.promote.v.join(', ') || 'none'}</span> ${badge(e.promote.v.length ? 'own' : 'narrows', !(S.getPath(d, 'autonomy.promote') === false && e.promote.v.length))}`)}
         ${row('sandbox', S.getPath(d, 'isolation.mode') || 'namespace', ({ e }) => `<span class="mono">${e.isolation.v || 'namespace'}</span> ${badge(e.isolation.v === S.getPath(d, 'isolation.mode') ? 'inherits' : 'narrows', !(S.getPath(d, 'isolation.mode') === 'container' && e.isolation.v !== 'container'))}`)}
-        ${row('proactive budget', S.getPath(d, 'budget.proactive_pool') ? `pool ${d.budget.proactive_pool.max_runs_per_day} runs · ${usd(d.budget.proactive_pool.max_cost_per_day)}` : '—', ({ m }) => { const b = S.getPath(staged('bots', m.name), 'proactive.budget'), p = S.getPath(d, 'budget.proactive_pool'); return b ? `<span class="mono">${b.max_runs_per_day} runs · ${usd(b.max_cost_per_day)}</span> ${badge('narrows', !p || (b.max_runs_per_day <= p.max_runs_per_day && b.max_cost_per_day <= p.max_cost_per_day))}` : '<span class="muted">no sweeps</span>'; })}
+        ${row('proactive budget', S.getPath(d, 'budget.proactive_pool') ? `pool ${d.budget.proactive_pool.max_runs_per_day} runs${UI.isApi() && d.budget.proactive_pool.max_cost_per_day != null ? ' · ' + usd(d.budget.proactive_pool.max_cost_per_day) : ''}` : '—', ({ m }) => { const b = S.getPath(staged('bots', m.name), 'proactive.budget'), p = S.getPath(d, 'budget.proactive_pool'); return b ? `<span class="mono">${b.max_runs_per_day} runs${UI.isApi() && b.max_cost_per_day != null ? ' · ' + usd(b.max_cost_per_day) : ''}</span> ${badge('narrows', !p || (b.max_runs_per_day <= p.max_runs_per_day && b.max_cost_per_day <= p.max_cost_per_day))}` : '<span class="muted">no sweeps</span>'; })}
         ${row('credential scope', (S.getPath(d, 'browser.credentials') || []).join(', ') || 'any', ({ e }) => `<span class="mono">${e.credentials.v.join(', ') || 'none'}</span> ${badge(e.credentials.v.length ? 'narrows' : 'narrows', subset(e.credentials.v, e.credentials.scope))}`)}
         ${row('browser logins', (S.getPath(d, 'browser.logins') || []).join(', ') || 'any', ({ e }) => `<span class="mono">${e.logins.v.join(', ') || 'none'}</span> ${badge('narrows', subset(e.logins.v, e.logins.scope))}`)}
       </tbody></table></div>`);
@@ -316,7 +328,7 @@
     const t = teamOf(m), lead = t && t.cfg.lead === m.name;
     return `<div class="bot-hero">${UI.sigil(m, 'lg')}<div class="grow"><div class="crumbs mono tiny muted">${UI.folderCrumbs(UI.folderOfBot(m.name, false))} › ${t ? `<a href="#/teams/${t.name}">team ${t.name}</a> › ` : ''}${m.name}</div><h1>${m.name}</h1>
       <div class="facts">${m.home === 'live' ? st('run', `home ${m.session} live`, true) : st('idle', `home ${m.session} idle`, true)}
-        ${t ? `<a href="#/teams/${t.name}">${tag('team ' + t.name + (lead ? ' · lead' : ''), 'ember')}</a>` : tag('no team')}${tag(`${m.turns}/${m.maxTurns} turns`)}${m.shadow ? tag('shadow mode', 'shadow') : tag('approved execution', 'ok')}
+        ${t ? `<a href="#/teams/${t.name}">${tag('team ' + t.name + (lead ? ' · lead' : ''), 'ember')}</a>` : tag('no team')}${tag(`${m.turns}/${m.maxTurns} turns`)}${UI.usageOn() ? UI.provSet(UI.botProv(m.name)) : ''}${m.shadow ? tag('shadow mode', 'shadow') : tag('approved execution', 'ok')}
         ${tag(`${icon('shield')} ${m.mode}`, 'ok')}${tag(`operators: ${(S.effective(m).operators.v || []).join(', ')}`)}</div></div>
       <div class="row wrap"><button class="btn" data-act="m-rotate" data-m="${m.name}">${icon('updates')}Rotate session</button><button class="btn" ${m.proactive ? `data-act="m-sweep" data-m="${m.name}"` : UI.off('No proactive: block in its definition')}>${icon('eye')}Sweep now</button><button class="btn" data-act="m-deliver" data-m="${m.name}">${icon('send')}Deliver event</button></div></div>`;
   }
@@ -362,7 +374,7 @@
       <div class="panel"><table class="tbl responsive"><thead><tr><th>case</th><th>title</th><th>requester</th><th>routed</th><th>opened</th><th>status</th></tr></thead><tbody>
       ${vis.map((c) => `<tr class="click" data-href="#/bots/${m.name}/cases/${c.id}"><td data-l="case" class="mono"><a class="link-plain" href="#/bots/${m.name}/cases/${c.id}">${c.id}</a>${c.urgent ? ' ' + tag('urgent', 'fail') : ''}</td><td data-l="title"><b>${esc(c.title)}</b></td><td data-l="requester"><span class="taint ${c.cls}">${c.requester}</span></td><td data-l="routed" class="small route-cell">${c.routed ? routeLabel(c.routed) : '—'}${D.delegations.some((d) => d.parent === c.id) ? ` ${tag(`${D.delegations.filter((d) => d.parent === c.id).length} delegated`, 'run')}` : ''}</td><td data-l="opened" class="mono muted">${ago(c.opened)} ago</td><td data-l="status">${c.status === 'open' ? st('run', 'open') : st('ok', 'closed')}</td></tr>`).join('') || `<tr class="empty-row"><td colspan="6">No ${cv.f === 'all' ? '' : cv.f + ' '}cases.</td></tr>`}
       </tbody></table></div>
-      <div class="row small muted" style="margin-top:10px">${icon('dollar')} spend this period: <span class="mono">${usd(m.spend)}</span> of the commit_money cap · ledger healthy</div>`);
+      <div class="row small muted" style="margin-top:10px" data-cloud-spend>${icon('dollar')} cloud spend this period: <span class="mono">${usd(m.spend)}</span> of the commit_money cap · ledger healthy</div>`);
   }
   function caseDetail(m, c) {
     const t = teamOf(m), mates = t ? botsOf(t.name).filter((x) => x.name !== m.name) : [];
@@ -452,7 +464,7 @@
   /* ---------- workers ---------- */
   function workers(m) {
     const ws = D.workers.filter((w) => (w.bot || 'platform-sre') === m.name);
-    const card = (w) => `<div class="wnode"><div class="wcard" data-s="${w.status}"><div class="row wrap" style="gap:6px">${st(w.status === 'stopped' ? 'fail' : w.status, w.status === 'stopped' ? 'stopped' : '')}<b class="mono">${w.id}</b>${w.group ? tag('group ' + w.group) : ''}<span class="taint ${w.cls}">taint: ${w.cls}</span>${w.readOnly ? tag('read-only', 'ok') : ''}<span class="mono tiny muted" style="margin-left:auto">case ${w.case} · ${usd(w.cost)} · ${ago(w.started)}</span></div>
+    const card = (w) => `<div class="wnode"><div class="wcard" data-s="${w.status}"><div class="row wrap" style="gap:6px">${st(w.status === 'stopped' ? 'fail' : w.status, w.status === 'stopped' ? 'stopped' : '')}<b class="mono">${w.id}</b>${w.group ? tag('group ' + w.group) : ''}<span class="taint ${w.cls}">taint: ${w.cls}</span>${w.readOnly ? tag('read-only', 'ok') : ''}<span class="mono tiny muted" style="margin-left:auto">case ${w.case}${UI.usageOn() ? ' · ' + UI.runFig({ id: w.id || w.case, cost: w.cost }) : ''} · ${ago(w.started)}</span></div>
       <div class="small" style="margin:5px 0 3px">${esc(w.brief)}</div><div class="mono tiny muted">verbs: ${w.verbs}${w.note ? ` · <span style="color:var(--wait)">${w.note}</span>` : ''}</div>
       <div class="row" style="margin-top:6px;gap:6px"><a class="btn sm" href="#/${w.status === 'run' ? 'live/r-7f29' : 'runs/' + (D.runs.find((r) => r.id === w.run) ? w.run : 'r-7e52')}">${icon('runs')}Run</a>${w.status === 'run' ? `<button class="btn sm danger" data-act="w-stop" data-w="${w.id}">Stop</button>` : ''}</div></div></div>`;
     const groups = [...new Set(ws.map((w) => w.parent))];
@@ -479,7 +491,7 @@
           <div class="panel-foot small muted">An unclassified verb is <span class="tier propose">propose</span>. Tiers above the team ceiling are disabled.</div></div>
         <div class="stack">
           <div class="panel"><div class="panel-head"><h3>Credential bindings</h3><div class="tools"><button class="btn sm" data-act="cred-bind" data-m="${m.name}">${icon('plus')}Bind</button></div></div><div class="list">${creds.map((x) => { const cf = S.staged('credentials', x.name) || x.cfg; return `<div class="item"><span class="icon-btn" aria-hidden="true">${icon('key')}</span><div class="grow"><b>${x.name}</b> <span class="mono tiny muted">${cf.origin}</span><div class="mono tiny muted">${(cf.fields || []).join(', ')} · ${cf.vault}:${cf.ref}</div></div><button class="btn sm ghost" data-act="cred-bind" data-m="${m.name}" data-c="${x.name}">${icon('edit')}Edit</button><button class="btn sm danger" data-act="cred-unbind" data-c="${x.name}">Unbind</button></div>`; }).join('') || '<div class="item small muted">No credentials bound.</div>'}</div></div>
-          <div class="panel"><div class="panel-head"><h3>Browser logins</h3><div class="tools"><a class="btn sm" href="#/browser/seed">${icon('hand')}Seed a login</a></div></div><div class="list">${logins.map((l) => `<div class="item"><span class="icon-btn" aria-hidden="true">${icon('cookie')}</span><div class="grow"><b>${l.site}</b><div class="mono tiny muted">${l.cookies} cookies · seeded ${ago(l.seeded)} ago · operator requests only</div></div><button class="btn sm danger" data-act="login-revoke" data-site="${l.site}" data-id="${l.identity}">Revoke</button></div>`).join('') || '<div class="item small muted">No saved logins.</div>'}</div></div>
+          <div class="panel"><div class="panel-head"><h3>Browser logins</h3><div class="tools"><a class="btn sm" href="#/browser/add">${icon('key')}Add a login</a></div></div><div class="list">${logins.map((l) => `<div class="item"><span class="icon-btn" aria-hidden="true">${icon('cookie')}</span><div class="grow"><b>${l.site}</b><div class="mono tiny muted">${l.cookies} cookies · seeded ${ago(l.seeded)} ago · operator requests only</div></div><button class="btn sm danger" data-act="login-revoke" data-site="${l.site}" data-id="${l.identity}">Revoke</button></div>`).join('') || '<div class="item small muted">No saved logins.</div>'}</div></div>
           <div class="panel"><div class="panel-head"><h3>Operators who can approve</h3><span class="muted small">${eff.operators.src}</span></div><div class="list">${(eff.operators.v || []).map((o) => `<div class="item"><span class="avatar">${o.slice(0, 2)}</span><b>${o}</b><span class="muted small grow mono">${esc((D.operatorsCfg[o] || {}).ssh_key || '')}</span>${o === 'ops' ? tag('you', 'ember') : ''}</div>`).join('')}</div></div>
         </div></div>`);
   }
@@ -507,12 +519,14 @@
     { k: 'escalation', type: 'string', mono: false },
     { k: 'autonomy.shadow', type: 'bool', label: 'Shadow mode', on: 'nothing above observe executes', sec: 'Autonomy' },
     { k: 'autonomy.approval_ttl', type: 'duration', label: 'Approval TTL' },
-    { k: 'autonomy.spend.per_action', type: 'number', label: 'Spend cap per action (cents)' },
+    { k: 'autonomy.spend.per_action', type: 'number', label: 'commit_money cap per action (cloud spend, cents)', cloud: true },
     { k: 'proactive.every', type: 'duration', label: 'Sweep every', sec: 'Proactive sweeps', help: 'Empty turns sweeps off.' },
     { k: 'proactive.quiet_hours', type: 'string', label: 'Quiet hours', ph: '22:00-07:00' },
     { k: 'proactive.notify_at', type: 'enum', label: 'Notify at', options: ['high', 'medium', 'low'] },
     { k: 'proactive.budget.max_runs_per_day', type: 'number', label: 'Max runs / day' },
-    { k: 'proactive.budget.max_cost_per_day', type: 'number', label: 'Max cost / day' },
+    { k: 'proactive.budget.max_turns_per_day', type: 'number', label: 'Max turns / day' },
+    { k: 'proactive.budget.max_tokens_per_day', type: 'number', label: 'Max tokens / day', help: 'Per provider.' },
+    { k: 'proactive.budget.max_cost_per_day', type: 'number', label: 'Max cost / day (USD, per provider)', api: true },
     { k: 'home.rotate.max_age', type: 'duration', label: 'Rotate after', sec: 'Sessions, workers, isolation, peers' },
     { k: 'home.rotate.max_turns', type: 'number', label: '…or turns' },
     { k: 'worker.runtime', type: 'enum', label: 'Worker runtime', options: () => S.view().runtimes.map((r) => r.name), create: 'runtime', createLabel: 'New runtime' },
@@ -533,7 +547,7 @@
     const inhMap = { operators: 'operators', 'autonomy.approval_ttl': 'autonomy.approval_ttl', 'isolation.mode': 'isolation.mode', 'proactive.budget.max_runs_per_day': 'budget.proactive_pool.max_runs_per_day', 'proactive.budget.max_cost_per_day': 'budget.proactive_pool.max_cost_per_day' };
     let sec = 'Identity & charter';
     const charter = `<div class="field"><label for="df-charter">Charter <span class="opt">bots/${esc(name)}.md · config only</span></label><textarea class="textarea" rows="6" id="df-charter" data-df-charter="1">${esc(dv.charter)}</textarea><div class="hint">Nothing on the agent-facing surface writes it.</div></div>`;
-    const fields = DF.map((f) => { const fd = Object.assign({}, f, { options: typeof f.options === 'function' ? f.options() : f.options }); const head = f.sec && f.sec !== sec ? (`${sec === 'Identity & charter' ? charter : ''}</div></div><div class="panel"><div class="panel-head"><h3>${(sec = f.sec)}</h3></div><div class="panel-body def-grid">`) : ''; if (f.solo && dv.draft.team) return head + `<div class="field"><label>Folder</label><div class="hint inh-hint">${icon('folder')} shows under team ${esc(dv.draft.team)}${UI.folderOfTeam(dv.draft.team) ? ' in ' + esc(UI.folderOfTeam(dv.draft.team)) : ''}</div></div>`; const html = UI.fieldHTML(Object.assign({}, fd, { k: 'df.' + f.k }), S.getPath(dv.draft, f.k)); return head + html.replace('<div class="ferr"', (inhMap[f.k] && team ? inh(inhMap[f.k]) : '') + '<div class="ferr"'); }).join('');
+    const fields = DF.map((f) => { const fd = Object.assign({}, f, { options: typeof f.options === 'function' ? f.options() : f.options }); const head = f.sec && f.sec !== sec ? (`${sec === 'Identity & charter' ? charter : ''}</div></div><div class="panel"><div class="panel-head"><h3>${(sec = f.sec)}</h3></div><div class="panel-body def-grid">`) : ''; if (f.api && !UI.isApi()) return head; if (f.solo && dv.draft.team) return head + `<div class="field"><label>Folder</label><div class="hint inh-hint">${icon('folder')} shows under team ${esc(dv.draft.team)}${UI.folderOfTeam(dv.draft.team) ? ' in ' + esc(UI.folderOfTeam(dv.draft.team)) : ''}</div></div>`; const html = UI.fieldHTML(Object.assign({}, fd, { k: 'df.' + f.k }), S.getPath(dv.draft, f.k)); return head + html.replace('<div class="ferr"', (inhMap[f.k] && team ? inh(inhMap[f.k]) : '') + '<div class="ferr"'); }).join('');
     const yaml = YAML.stringify({ bots: { [name]: dv.draft } });
     const changed = !YAML.eq(dv.draft, dv.base) || (isNew ? !!dv.newName : dv.charter !== (D.charters[m.name] || ''));
     const body = `<div class="grid g2" style="align-items:start">

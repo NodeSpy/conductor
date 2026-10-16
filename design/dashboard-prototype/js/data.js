@@ -657,4 +657,62 @@ steps:
     { name: 'my-fleet', cfg: { any: ['claude-opus-5'], required: true } },
   ];
 
+  /* usage: how model consumption is shown (conductor's usage.mode). Off by
+   * default: model accounts sit behind a proxy or load balancer, so anything
+   * conductor showed unasked would be partial. When enabled, figures are per
+   * provider (Claude, Codex), never totalled; plan limits and tokens come only
+   * from a configured usage.source. Cloud spend (commit_money, aws-cost) is
+   * separate and always shown. */
+  D.usageCfg = { mode: 'off' };
+  const series = (a) => a.map((k) => k * 1000);
+  D.usage = {
+    providers: { claude: { label: 'Claude', vendor: 'Anthropic' }, codex: { label: 'Codex', vendor: 'OpenAI' } },
+    // what conductor itself observes today: runs it dispatched and agent turns, by the provider each ran on
+    observed: { claude: { runs: 12, turns: 83 }, codex: { runs: 3, turns: 6 } },
+    bots: { 'platform-sre': { claude: { runs: 6, turns: 36 }, codex: { runs: 1, turns: 5 } }, 'billing-sre': { claude: { runs: 2, turns: 12 } }, 'web-triage': { claude: { runs: 2, turns: 8 }, codex: { runs: 1, turns: 1 } }, 'platform-data': { claude: { runs: 1, turns: 9 } }, 'release-scribe': {}, homelab: { codex: { runs: 1, turns: 0 }, claude: { runs: 1, turns: 18 } } },
+    // what a configured usage source (the proxy / load balancer in front of the accounts) reports, per provider, in its own units
+    reported: {
+      claude: { windows: [{ span: '5h', pct: 62, resets: '1h 48m' }, { span: 'weekly', pct: 31, resets: '3d 4h' }], today: 1240000, daily: series([290, 480, 365, 553, 231, 147, 588, 679, 434, 385, 497, 833, 616, 448]), models: { 'claude-opus-5': 812000, 'claude-sonnet-5': 391000, 'claude-haiku-4-5': 37000 } },
+      codex: { windows: [{ span: '5h', pct: 18, resets: '3h 10m' }, { span: 'weekly', pct: 9, resets: '5d 1h' }], today: 210000, daily: series([40, 0, 22, 61, 15, 0, 9, 88, 31, 12, 70, 54, 19, 21]), models: { 'gpt-5-codex': 210000 } },
+    },
+    // api mode: dollars per provider (from runtime reports, or the source when configured)
+    usd: { claude: { today: 5.92, daily: [3.6, 6.1, 4.4, 7.0, 2.9, 1.8, 7.5, 8.6, 5.4, 4.9, 6.3, 10.7, 7.8, 5.9] }, codex: { today: 0.48, daily: [0.5, 0.7, 0.8, 0.9, 0.4, 0.3, 0.9, 1.1, 0.8, 0.6, 0.8, 1.2, 1.0, 0.5] } },
+  };
+  D.bots[0].proactive.budget = '2/6 runs today';
+  D.activity.forEach((a) => { if (a.who === '$0.41') a.who = 'acme/api#480'; });
+  /* a commit-money proposal (cloud spend, not model spend) with two-person approval — shown with planned features */
+  D.proposals.push({ id: 'p13', bot: 'billing-sre', kind: 'verb', verb: 'aws-cost.purchase_savings_plan', tier: 'commit_money', status: 'pending', case: 'c7', requester: 'proactive (sweep x3)', cls: 'proactive', at: m(90), expires: '22h 30m',
+    summary: 'Buy a 1-year Compute Savings Plan at $1,200/month (covers 71% of steady EC2)', options: { term: '1y', commitment_usd_month: 1200, payment: 'no_upfront' }, digest: 'sha256:7a11c0de4f9b2e6d8c3a5f1b0e9d7c6a4b2f8e1d3c5a7b9f0e2d4c6a8b1f3e5d', planned: true,
+    approvals: [{ who: 'alex', method: 'passkey · phone', at: m(40) }], needs: 2 });
+  D.instances = [
+    { id: 'personal', name: 'Daniel (personal)', kind: 'personal', host: 'ops-box', need: 6, status: 'ok', signedIn: true, role: 'owner' },
+    { id: 'work-platform', name: 'work-platform', kind: 'org', host: 'conductor-platform', need: 3, status: 'ok', signedIn: false, role: 'approver · team platform' },
+    { id: 'home-lab', name: 'home-lab', kind: 'org', host: 'lab-nuc', need: 0, status: 'wait', signedIn: false, role: 'operator' },
+  ];
+  D.people = [
+    { name: 'daniel', roles: [['owner', '']], passkeys: ['laptop · Touch ID', 'phone · Face ID'], active: m(4) },
+    { name: 'alex', roles: [['approver', 'team platform'], ['operator', 'folder work']], passkeys: ['phone · Face ID'], active: m(40) },
+    { name: 'sam', roles: [['viewer', '']], passkeys: ['security key'], active: m(3000) },
+    { name: 'ci-bot', roles: [['operator', 'bot release-scribe']], passkeys: [], active: m(600), service: true },
+  ];
+  D.twoPerson = { observe: false, reversible: false, propose: false, commit_money: true, never: false };
+
+  /* Logins (#182): a credential binding (password in conductor's vault, a
+   * vault reference, or a passkey) or a saved session from "sign in yourself".
+   * Values never leave the vault; the dashboard sees labels and references. */
+  D.opItems = [
+    { vault: 'Agents', title: 'Grafana', website: 'https://grafana.example.com', fields: [['username', 'text'], ['password', 'concealed'], ['one-time password', 'otp']] },
+    { vault: 'Agents', title: 'Status page', website: 'https://manage.statuspage.example', fields: [['email', 'email'], ['password', 'concealed']] },
+    { vault: 'Agents', title: 'App', website: 'https://app.example.com', fields: [['username', 'text'], ['password', 'concealed'], ['one-time password', 'otp']] },
+    { vault: 'Ops', title: 'Cloud console', website: 'https://console.example.com', fields: [['login', 'text'], ['password', 'concealed'], ['recovery codes', 'concealed']] },
+    { vault: 'Personal', title: 'Home NAS', website: 'https://nas.home.example', fields: [['username', 'text'], ['password', 'concealed']] },
+  ];
+  D.access.credentials.forEach((c) => { c.cfg.method = c.cfg.fields.includes('passkey') ? 'passkey' : 'vault'; c.cfg.operator_only = true; });
+  D.loginMeta = {
+    grafana: { lastUsed: m(44), test: { result: 'ok', at: m(300) }, uses: [{ bot: 'platform-sre', case: 'c29', at: m(44) }, { bot: 'platform-sre', case: 'c27', at: m(250) }] },
+    statuspage: { lastUsed: m(4300), test: { result: 'ok', at: m(4300) }, uses: [{ bot: 'platform-sre', case: 'c12', at: m(4300) }] },
+    app: { lastUsed: m(3), test: { result: 'needs you', at: m(3) }, uses: [{ bot: 'triage', case: '—', at: m(3) }] },
+  };
+  D.access.logins.forEach((l) => { l.expires = '23d'; });
+
 })();

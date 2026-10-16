@@ -30,10 +30,10 @@
     return `<div class="page">
     ${UI.head('Workflows', { sub: 'triggers and the steps they run', actions: `<button class="btn primary" data-act="wf-new">${icon('plus')}New workflow</button>` })}
     <div class="filters"><div class="input-icon">${icon('search')}<input class="input" placeholder="name or event" value="${esc(wl.q)}" data-on-input="wl-q" aria-label="Filter workflows"></div>${UI.seg([['all', 'all'], ['config', 'yours'], ['pack', 'packs'], ['bot', 'bots']], wl.owner, 'wl-owner')}<span class="count-note" id="wl-count">${rows.filter(vis).length} of ${rows.length}</span></div>
-    <div class="panel"><table class="tbl responsive"><thead><tr><th>workflow</th><th>on</th><th>owner</th><th class="num">runs 24h</th><th class="num">ok</th><th class="num">spend 24h</th><th></th></tr></thead><tbody id="wl-body">
+    <div class="panel"><table class="tbl responsive"><thead><tr><th>workflow</th><th>on</th><th>owner</th><th class="num">runs 24h</th><th class="num">ok</th>${UI.usageOn() ? `<th>usage by provider</th>` : ''}<th></th></tr></thead><tbody id="wl-body">
     ${rows.map((r) => { const w = r.w, d = (D.drafts || {})[w.name] != null, s = staged.find((c) => c.key === w.name); return `<tr class="click${vis(r) ? '' : ' hidden'}" data-row="${esc(w.name + ' ' + w.on)}" data-owner="${r.owner}"><td data-l="workflow"><a class="link-plain" href="#/workflows/${w.name}"><b>${w.name}</b></a> ${w.kind === 'workflow' ? tag('reusable') : ''}${d ? tag('draft', 'wait') : ''}${s ? tag(s.after == null ? 'removal staged' : 'staged', 'run') : ''}</td><td data-l="on" class="mono small">${esc(w.on)}</td>
       <td data-l="owner">${r.owner === 'pack' ? `<span class="owner pack">${w.source}</span>` : r.owner === 'bot' ? '<span class="owner pack">bot (synthesized)</span>' : '<span class="owner op">your config</span>'}</td>
-      <td data-l="runs" class="num mono">${w.runs24}</td><td data-l="ok" class="num mono">${Math.round(w.ok * 100)}%</td><td data-l="spend" class="num mono">${usd(w.cost24)}</td>
+      <td data-l="runs" class="num mono">${w.runs24}</td><td data-l="ok" class="num mono">${Math.round(w.ok * 100)}%</td>${UI.usageOn() ? `<td data-l="usage" class="small">${UI.provSet(UI.wfProv(w.name), { nosrc: true })}</td>` : ''}
       <td class="num nowrap"><a class="btn sm" href="#/workflows/${w.name}">${icon('canvas')}Open</a> ${w.fresh ? `<button class="btn sm ghost" ${UI.off('Deploy it first; a draft has never run')}>${icon('play')}</button>` : `<button class="btn sm ghost" data-act="wf-run" data-name="${w.name}" aria-label="Run ${w.name}" data-tip="Run now">${icon('play')}</button>`}
         ${r.owner === 'config' && !w.fresh ? `<button class="btn sm ghost" data-act="wf-del" data-name="${w.name}" aria-label="Delete ${w.name}" data-tip="Delete">${icon('trash')}</button>` : r.owner === 'config' ? `<button class="btn sm ghost" data-act="wf-discard" data-name="${w.name}" aria-label="Discard draft ${w.name}" data-tip="Discard draft">${icon('trash')}</button>` : `<button class="btn sm ghost" ${UI.off(r.owner === 'pack' ? 'A pack workflow is removed by removing (or not arming) its pack' : 'Synthesized from the bot definition')}>${icon('trash')}</button>`}</td></tr>`; }).join('')}
     <tr class="empty-row hidden" id="wl-empty"><td colspan="7">No workflow matches.</td></tr></tbody></table></div></div>`;
@@ -191,7 +191,10 @@
         ${fieldRow('', 'name', { k: 'name', type: 'string', help: 'A trigger reachable by conductor run needs a unique name.' }, v.name, ro)}
         ${fieldRow('', 'group.key', { k: 'group.key', type: 'string', ref: true, help: 'Batch a burst of events into one run, e.g. {{.repo}}#{{.pr}}.' }, S.getPath(v, 'group.key'), ro)}
         ${fieldRow('', 'group.window', { k: 'group.window', type: 'duration' }, S.getPath(v, 'group.window'), ro)}
-        ${fieldRow('', 'policy.budget.max_cost_usd', { k: 'policy.budget.max_cost_usd', type: 'number', label: 'budget · max cost (USD)' }, S.getPath(v, 'policy.budget.max_cost_usd'), ro)}
+        ${fieldRow('', 'policy.budget.max_runs', { k: 'policy.budget.max_runs', type: 'number', label: 'budget · max runs / day', ref: false }, S.getPath(v, 'policy.budget.max_runs'), ro)}
+        ${fieldRow('', 'policy.budget.max_turns', { k: 'policy.budget.max_turns', type: 'number', label: 'budget · max turns / run', ref: false }, S.getPath(v, 'policy.budget.max_turns'), ro)}
+        ${fieldRow('', 'policy.budget.max_tokens', { k: 'policy.budget.max_tokens', type: 'number', label: 'budget · max tokens / run', ref: false }, S.getPath(v, 'policy.budget.max_tokens'), ro)}
+        ${UI.isApi() ? fieldRow('', 'policy.budget.max_cost_usd', { k: 'policy.budget.max_cost_usd', type: 'number', label: 'budget · max cost (USD)' }, S.getPath(v, 'policy.budget.max_cost_usd'), ro) : ''}
         ${fieldRow('', 'callable', { k: 'callable', type: 'bool', on: 'callable over the invoke API (widening)' }, v.callable, ro)}
       </div></details>`;
   }

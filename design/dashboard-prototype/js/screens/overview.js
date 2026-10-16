@@ -27,7 +27,6 @@
 
   const ov = { cost: 'chart' };
   UI.act('score-span', (b) => { SPAN = SPANS[b.dataset.v]; UI.rerender(); });
-  UI.act('cost-view', (b) => { ov.cost = b.dataset.v; UI.rerender(); });
   UI.act('pause', () => { D.daemon.paused = !D.daemon.paused; D.audit.unshift({ ts: new Date().toISOString(), event: D.daemon.paused ? 'daemon_pause' : 'daemon_resume', who: 'operator:ops', detail: 'dispatch ' + (D.daemon.paused ? 'paused' : 'resumed') + ' from the dashboard', run: '' }); S.save(); UI.rerender(); UI.toast(D.daemon.paused ? 'Dispatch paused' : 'Dispatch resumed', D.daemon.paused ? 'runs in flight continue; new events queue' : 'queued events dispatch now', D.daemon.paused ? 'wait' : 'ok'); });
   function score() {
     const ticks = [];
@@ -37,7 +36,7 @@
       <div class="lane"><div class="lane-name mono">${l.lane}</div><div class="lane-track">${l.marks.filter(([a]) => a <= SPAN || SPAN >= 720).map(([a, b, s, id]) => {
         const left = Math.max(0, ((SPAN - a) / SPAN) * 100), w = Math.max(((Math.min(a, SPAN) - b) / SPAN) * 100, 0.55);
         const run = id && D.runs.find((r) => r.id === id);
-        const tip = `<b>${l.lane}</b> · ${s === 'run' ? 'running' : s}<br><span class='mono'>${id || 'run'} · ${a - b || '<1'}m${run && run.repo ? ' · ' + run.repo + '#' + run.number : ''}${run ? ' · ' + usd(run.cost) : ''}</span>`;
+        const tip = `<b>${l.lane}</b> · ${s === 'run' ? 'running' : s}<br><span class='mono'>${id || 'run'} · ${a - b || '<1'}m${run && run.repo ? ' · ' + run.repo + '#' + run.number : ''}${run && UI.usageOn() ? ' · ' + UI.provLabel(UI.runProv(run)) + ' ' + (UI.isApi() ? UI.usd(run.cost) : UI.usageSource() ? UI.fmtTok(UI.tokOf(run)) + ' tok' : UI.runTurns(run) + ' turns') : ''}</span>`;
         // only marks with a recorded run open one; older marks are history without a record here
         return id ? `<a class="mark" data-s="${s}" style="left:${left}%;width:${w}%" href="#/${s === 'run' ? 'live' : 'runs'}/${id}" data-tip="${tip}" aria-label="${l.lane} run ${id}"></a>` : `<span class="mark" data-s="${s}" style="left:${left}%;width:${w}%" data-tip="${tip}"></span>`;
       }).join('')}</div></div>`).join('');
@@ -49,22 +48,12 @@
     </div>`;
   }
 
+  function workflowsPanel() {
+    return `<div class="panel"><div class="panel-head"><h3>Workflows</h3><span class="muted small">runs in the last 24h</span><div class="tools"><a class="btn sm ghost" href="#/workflows">All ${icon('chev')}</a></div></div>
+      <div class="list">${D.workflows.filter((w) => w.runs24).sort((a, b) => b.runs24 - a.runs24).slice(0, 7).map((w) => `<a class="item click" href="#/workflows/${w.name}"><span class="mono small grow">${w.name}</span><span class="mono tiny muted">${w.runs24} runs</span>${st(w.ok >= 0.9 ? 'ok' : 'wait', Math.round(w.ok * 100) + '%')}</a>`).join('')}</div></div>`;
+  }
   function costChart() {
-    const max = Math.max(...D.costDaily.map((d) => d.usd)), top = Math.ceil(max / 4) * 4;
-    const bars = D.costDaily.map((d, i) => {
-      const day = new Date(Date.now() - (13 - i) * 864e5);
-      const lbl = day.toLocaleDateString('en', { month: 'short', day: 'numeric' });
-      return `<div class="cbar${i === 13 ? ' today' : ''}" data-tip="<b>${lbl}</b><br><span class='mono'>${usd(d.usd)} · ${Math.round(d.usd * 9)} runs</span>"><i style="height:${(d.usd / top) * 100}%"></i></div>`;
-    }).join('');
-    const total = D.costDaily.reduce((a, d) => a + d.usd, 0);
-    return `<div class="panel">
-      <div class="panel-head"><h3>Spend</h3><span class="muted small">per day, last 14 days</span><div class="tools">${UI.seg([['chart', 'Chart'], ['table', 'Table']], ov.cost, 'cost-view')}</div></div>
-      <div class="panel-body">
-        <div class="row" style="align-items:baseline;gap:14px;margin-bottom:10px"><span class="serif" style="font-size:34px">${usd(total)}</span><span class="muted small">14 days · today ${usd(D.costDaily[13].usd)} · budget shed 1 run</span></div>
-        <div id="cost-chart" class="${ov.cost === 'chart' ? '' : 'hide'}"><div class="cchart"><div class="cgrid">${[top, top / 2, 0].map((v) => `<span><em class="mono">$${v}</em></span>`).join('')}</div><div class="cbars">${bars}</div></div>
-          <div class="row between mono tiny muted" style="margin-top:6px;padding-left:34px"><span>${new Date(Date.now() - 13 * 864e5).toLocaleDateString('en', { month: 'short', day: 'numeric' })}</span><span>today</span></div></div>
-        <div id="cost-table" class="${ov.cost === 'table' ? '' : 'hide'}"><table class="tbl compact"><thead><tr><th>day</th><th class="num">spend</th></tr></thead><tbody>${D.costDaily.slice().reverse().map((d, i) => `<tr><td class="mono">${new Date(Date.now() - i * 864e5).toISOString().slice(0, 10)}</td><td class="num mono">${usd(d.usd)}</td></tr>`).join('')}</tbody></table></div>
-      </div></div>`;
+    return UI.usageOn() ? UI.usagePanel() : workflowsPanel();
   }
 
   function health() {
@@ -110,8 +99,9 @@
           <div class="grid g2 stats">
             <a class="panel stat" href="#/live"><span class="k"><span class="pulse run"></span>Running</span><span class="v">${running.length}</span><span class="d">${running.map((r) => r.workflow).join(' · ')}</span></a>
             <a class="panel stat" href="#/runs"><span class="k">Runs · 12h</span><span class="v">${ok24 + fail24 + 9}<small>${Math.round(((ok24 + 9) / (ok24 + fail24 + 9)) * 100)}% ok</small></span><span class="d">${fail24} failed · 1 parked · 1 waiting</span></a>
-            <a class="panel stat" href="#/runs"><span class="k">Spend · today</span><span class="v">${usd(D.costDaily[13].usd)}</span><span class="d">budget $25/day · 1 step shed</span></a>
-            <a class="panel stat hot" href="#/bots"><span class="k">Bots</span><span class="v">${D.bots.length}<small>${D.bots.filter((m) => m.home === 'live').length} live</small></span><span class="d">${D.proposals.filter((p) => p.status === 'pending').length} proposals pending · ${D.cases.filter((c) => c.status === 'open').length} open cases</span></a>
+            ${UI.usageOn() ? UI.usageStat()
+              : `<a class="panel stat" href="#/attention"><span class="k">Approvals</span><span class="v">${D.proposals.filter((p) => p.status === 'pending' && UI.live(p)).length}<small>pending</small></span><span class="d">signed with your passkey</span></a>`}
+            <a class="panel stat hot" href="#/bots"><span class="k">Bots</span><span class="v">${D.bots.length}<small>${D.bots.filter((m) => m.home === 'live').length} live</small></span><span class="d">${D.proposals.filter((p) => p.status === 'pending' && UI.live(p)).length} proposals pending · ${D.cases.filter((c) => c.status === 'open').length} open cases</span></a>
           </div>
         </div>
         ${score()}

@@ -6,6 +6,9 @@
   const UI = (window.UI = {});
   // Tests set window.__PROTO_FAST so simulated waits (authenticator, reload) take milliseconds.
   UI.fast = !!window.__PROTO_FAST;
+  /** Planned features (multi-user, #185) are design previews behind Config → General; off by default. */
+  UI.planned = () => !!(window.D && D.prefs && D.prefs.planned);
+  UI.live = (p) => !p.planned || UI.planned();
   // Surface script errors visibly: a prototype should never fail silently.
   window.addEventListener('error', (e) => { const b = document.createElement('div'); b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#ff00ff;color:#fff;font:12px monospace;padding:6px 10px'; b.textContent = 'prototype error: ' + e.message; document.body.appendChild(b); });
   const $ = (s, el = document) => el.querySelector(s);

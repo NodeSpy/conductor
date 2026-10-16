@@ -162,16 +162,60 @@ doing, and what needs me?
 | Panel | Data | Source today |
 |---|---|---|
 | Needs you | `GET /api/v1/attention` | Bots ledger (pending proposals), run history (failed), audit (`escalate`/`needs_input`, which `status` already reads), hand-off drafts (web connector), backoff/hold (`state.json`), browser `needs_input`, update checker. Merging them is **NEW** (`attention` aggregator). |
-| Running / runs / spend / bots tiles | `GET /api/v1/status`, `GET /api/v1/cost?by=day` | `status.go` (live agents, in-flight workflows from `runs.json`), `RunHistory.CostUSD` |
+| Running / runs / approvals (or model usage) / bots tiles | `GET /api/v1/status`, `GET /api/v1/usage` when `usage.mode` is not `off` | `status.go` (live agents, in-flight workflows from `runs.json`); usage per provider ([§4.1.1](#411-usage-display-usagemode)) |
 | The score | `GET /api/v1/runs?since=12h&fields=lane` | History records (`Kind`, `Variant`, `Started`, `Finished`, `Status`) |
 | Health | `GET /api/v1/status` | Version, pid, uptime, config sha, sandbox registry (identities, containers), paseo provider-entry merge result (#179), connector registry health, update state |
 | Activity | SSE `run`, `audit`, `bot`, `browser` topics | `flow.EventHub` (`RunEvent`), audit writer tap (**NEW**) |
-| Spend | `GET /api/v1/cost?by=day&days=14` | History `CostUSD`/`ApproxCost`; the shed count comes from `budget_shed`/`step_shed` audit events |
+| Workflows (off) or Model usage (subscription/api) | `GET /api/v1/workflows`; `GET /api/v1/usage?days=14` | One card per provider, never a combined chart ([§4.1.1](#411-usage-display-usagemode)) |
 
 Operations:
 
 - **Pause/Resume dispatch**: `setPaused`, as `conductor pause` does.
 - **Run a workflow**: control `run`.
+
+#### 4.1.1 Usage display (`usage.mode`)
+
+Model accounts usually sit behind a proxy or load balancer that conductor
+can't see past, so anything conductor showed by default would be partial and
+misleading. Usage display is therefore opt-in:
+
+```yaml
+usage:
+  mode: off            # off (default) | subscription | api
+  source:              # optional: who reports plan limits and tokens
+    name: llm-proxy
+    url: http://llm-proxy.internal:4000/usage
+    token: ${secret.house/llm-proxy}
+```
+
+- **`off` (the default).** No usage or spend anywhere: no columns, tiles,
+  charts, filters or tags. The screens are laid out to be complete without
+  them (the overview shows an Approvals tile and a Workflows panel instead).
+- **`subscription`.** Runs and turns conductor itself observes, **per
+  provider**, labelled "observed by conductor". Plan-window utilization (5h,
+  weekly) and token counts appear **only** when `usage.source` is configured,
+  and each figure is labelled with that source ("from llm-proxy"). Never
+  dollars.
+- **`api`.** Dollars **per provider** (from the runtime's reports, or from
+  the source when configured).
+- **Never a total across providers or models.** Claude and Codex (and any
+  other provider) are always shown side by side, each in its own units: one
+  card per provider on the overview, a provider column and filter in run
+  history, provider chips on bot, team, folder and workflow rows. A run uses
+  one provider and model, so its own figure is never a mix. No "overall"
+  bar, no summed tokens or dollars.
+- **Budgets.** Run, turn and token caps are always available (`budget.*`,
+  `proactive.budget.*`, `policy.budget.*`); token and dollar caps apply to
+  each provider on its own. Dollar fields appear only in `api` mode; a
+  dollar cap already in config is kept, not dropped, when the mode changes.
+- **Cloud spend is not model usage.** The `commit_money` tier, the ledger's
+  spend cap and the `aws-cost` connector are real-world money and show in
+  every mode.
+
+Config → General edits `usage.mode` and `usage.source` through the normal
+diff. **NEW** endpoint: `GET /api/v1/usage?days=` returns
+`{ providers: { <id>: { observed: {runs, turns}, reported?: {windows[], tokens, by_model{}, source}, usd? } } }`;
+the daemon never adds providers together, and the UI has no code path that does.
 
 ### 4.2 Live (running workflows)
 
@@ -205,14 +249,14 @@ Operations:
 
 ### 4.3 Run history and run detail
 
-- **History.** Filters: status, workflow, repo, time range, minimum cost,
+- **History.** Filters: status, workflow, repo, time range, provider (when usage display is on),
   and free text over ids and errors. Reads `<state>/history/*.json`. Listing
   more than ~500 records cheaply needs a small **NEW** index: an append-only
   `history/index.jsonl` written by `PutHistory` and rebuilt when missing.
   Each record's HMAC (`Sig`) is verified, and a record that fails shows as
   **tampered**.
 - **Detail.**
-  - A timeline (gantt) with per-step cost.
+  - A timeline (gantt), with each agent step's usage when usage display is on.
   - Each step's inputs and outputs, log and diff, all scrubbed.
   - The run's audit lines.
   - Retry from any step.
@@ -702,7 +746,7 @@ Rows marked **NEW** need new daemon code. The others wrap code that exists on
 | `POST /api/v1/workflows/test` `{yaml, upto, event}` | dry-run up to a step against a pinned past event; per-step status, inputs, outputs | **NEW** (engine dry run: writes withheld, agents stubbed, code engines run) |
 | `GET /api/v1/events?on=` | real past events for Test (from history's pinned triggers) | history records |
 | `POST /api/v1/workflows/<name>/run` `{inputs}` | manual run | control `run` |
-| `GET /api/v1/cost?by=day\|workflow&days=` | spend series | history `CostUSD` |
+| `GET /api/v1/usage?days=&by=provider\|bot\|workflow` | usage per provider (never totalled); `usage.mode` off returns 404 | observed run/turn counts from history; `usage.source` for limits/tokens; history `CostUSD` per provider in `api` |
 | `GET /api/v1/audit?event&actor&run&case&since&cursor` | audit query | `audit.jsonl` reader (**NEW** tail/index) |
 | `GET /api/v1/logs?level&since` | daemon log | **NEW** log ring |
 
