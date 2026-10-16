@@ -588,3 +588,728 @@ Rows marked **NEW** need new daemon code. The others wrap code that exists on
    ([§6.7](#67-threat-model-can-an-agent-reach-the-dashboard)).
 10. Config: a `dashboard:` block ([§6.2](#62-listeners-and-tls)) and its
     validation.
+
+## 6. Auth and security
+
+### 6.1 What we protect, and from whom
+
+**Assets:**
+
+- the approval decision (it moves money and infrastructure);
+- config (one bad apply crash-loops the box, and loosening it widens every
+  agent);
+- secrets (write-only here, but writable);
+- browser sessions with an operator's logins;
+- members' memory (it steers future behaviour);
+- the audit trail.
+
+**Adversaries:**
+
+1. **A prompt-injected agent.** It may be a member, worker, hand-off, paseo
+   session or code step, and it may be sandboxed or deliberately not.
+2. **Another device on the tailnet**, compromised or simply shared, for
+   example a CI box or a server.
+3. **A web page in the operator's browser** (CSRF, clickjacking, DNS
+   rebinding).
+4. **Someone with a stolen session cookie.**
+5. **Other local processes on the box.**
+
+Out of scope: root on the box, and a malicious plugin. Plugins are trusted
+code today, and nothing here changes that.
+
+### 6.2 Listeners and TLS
+
+```yaml
+dashboard:                      # optional; defaults shown
+  enabled: true                 # localhost works out of the box; tailnet when tailscaled is up
+  listen: [localhost, tailscale]   # ONLY these keywords — no addresses, no 0.0.0.0, no expose:
+  port: 7788
+  tailscale:
+    cert: auto                  # LocalAPI cert for <host>.<tailnet>.ts.net; or { cert_file, key_file }
+    allow_tagged: false         # refuse tailnet peers that are tagged nodes (servers, CI)
+    # allow_users: [you@example.com]   # optional: WhoIs allowlist on top of the passkey
+  session: { idle: 30m, max: 12h }
+```
+
+- **`localhost`**:
+  - binds `127.0.0.1` and `::1`, plain HTTP;
+  - `http://localhost` is a *potentially trustworthy* origin, so WebAuthn
+    works there with RP ID `localhost`;
+  - an IP literal can't be an RP ID (#182 hit the same rule), so the SPA
+    redirects `127.0.0.1` to `localhost`;
+  - this listener is the bootstrap: enrollment always starts here.
+- **`tailscale`**:
+  - binds only the node's Tailscale addresses (`100.x`, `fd7a:115c:a1e0::/48`),
+    discovered through tailscaled's LocalAPI (`/localapi/v0/status`), and
+    re-binds when they change;
+  - TLS uses the MagicDNS name's certificate from the LocalAPI
+    (`/localapi/v0/cert/<name>?type=pair`), which needs `tailscale set
+    --operator=$USER` or a root daemon. `tailscale cert` files work too;
+  - the certificate is reloaded daily through `GetCertificate`, with no
+    restart;
+  - RP ID is the MagicDNS name;
+  - **Funnel is never used** and `tailscale serve` is not involved: the
+    daemon binds the interface itself, so nothing is published.
+- **Refused by validation:**
+  - any other listen value;
+  - an `expose:` on the dashboard;
+  - a port that collides with the inbound (webhook/callable) listener;
+  - `enabled: true` with `listen: [tailscale]` on a box where tailscaled is
+    absent. That case logs and serves localhost only; it does not fail
+    closed.
+
+**Caveat.** Tailscale HTTPS certificates put the machine and tailnet name in
+public Certificate Transparency logs. That is not an endpoint, but the name
+becomes public. The doc and the Access screen say so. An operator who won't
+accept that can set `listen: [localhost]` and use `ssh -L
+7788:localhost:7788 box`. `http://localhost:7788` on the laptop is a secure
+context, and passkeys work there.
+
+**Peer checks on the tailnet listener:**
+
+- `WhoIs` on every connection gives the node and user. Tagged nodes are
+  refused unless `allow_tagged`, and `allow_users` narrows further.
+- **Host header allowlist**: `localhost`, the MagicDNS name, and the
+  Tailscale IPs. Anything else is refused, which defeats DNS rebinding.
+
+### 6.3 Enrollment, sign-in, sessions
+
+**First enrollment.** This is the CLI-printed one-time localhost link:
+
+```
+$ conductor dashboard enroll --operator ops
+operator ops: open this on THIS machine within 10m (single use):
+  http://localhost:7788/enroll#t=Hk3v…q9
+pairing code: 417-209
+```
+
+- The CLI talks to the daemon over the **operator control socket**. That
+  socket is never mounted into a sandbox (agents get only the skill socket).
+  The CLI also refuses to run inside a conductor agent session, as `member
+  approve` does.
+- The ticket is a 256-bit random value. It lives in the URL **fragment**,
+  so it never reaches a log. It expires in 10m and is single use, with one
+  live ticket per operator.
+- The CLI **signs the ticket with the operator's SSH key** (`ssh-keygen -Y
+  sign`, namespace `conductor-dashboard-enroll`). The daemon verifies the
+  signature against `operators.<name>.ssh_key`, the same trust root as
+  SSH-signed approvals. A process that can reach the socket but can't use
+  the key, for example behind a confirming agent or a hardware key, can't
+  enroll.
+- The page asks for the pairing code, then registers a passkey:
+  - **Default:** for the **MagicDNS RP**. The localhost page hands a
+    one-time registration ticket to `https://<magicdns>:7788/enroll`, in the
+    same browser or on another device by QR code. A passkey belongs to one
+    RP ID, and this one works from the box and from the phone.
+  - **"localhost only"** is the choice for a box without Tailscale.
+- `userVerification: required` and `residentKey: preferred`. Attestation is
+  `none`; we don't pretend to vet authenticators.
+
+**Further passkeys.** Adding another passkey needs an **existing passkey
+assertion** as well as the CLI ticket.
+
+**Recovery.** `conductor dashboard reset --operator ops` (SSH-signed) removes
+that operator's passkeys and sessions, audits it, and fires a lifecycle event
+(`conductor.dashboard_reset`) so any connector can alert. Then first
+enrollment applies again. Every enrollment fires `conductor.dashboard_enrolled`.
+
+**Sign-in.**
+
+- A discoverable-credential assertion (`allowCredentials` empty).
+- The challenge is 32 random bytes, single use, with a 2 min TTL.
+- The sign count is checked, and a regression flags a possible clone, locks
+  that credential and raises a Needs-you item.
+
+**Sessions.**
+
+- The server keeps a revocable session store. The cookie is
+  `__Host-conductor_session`, `Secure`, `HttpOnly`, `SameSite=Strict`, and is
+  set per origin.
+- Idle 30m, absolute 12h. Rotated on sign-in and on step-up.
+- The session is bound to the listener (localhost vs tailnet) and to the
+  WhoIs node on the tailnet. A cookie replayed from another tailnet node is
+  refused.
+
+**Lockout.**
+
+- `login/begin` is rate-limited per client: 5 failed assertions per 15 min
+  give a 15 min lock, doubling to a cap.
+- Enrollment redeem: 3 per hour, and pairing-code failures burn the ticket.
+- Every lock is audited and visible on the Access screen.
+
+### 6.4 CSRF, clickjacking, XSS, rebinding
+
+- **CSRF:**
+  - `SameSite=Strict`;
+  - every non-GET also needs `X-Conductor-CSRF` (a per-session token, double
+    submit), `Content-Type: application/json`, and an `Origin` matching the
+    listener's origin. `Sec-Fetch-Site` must be `same-origin` when present;
+  - `GET` never mutates.
+- **Clickjacking:** `Content-Security-Policy: frame-ancestors 'none'` and
+  `X-Frame-Options: DENY`. The passkey ceremony can't be framed anyway.
+- **XSS.** The realistic vector is **agent-authored text**: chat turns, run
+  outputs, logs, memory files, proposal reasons, page titles from the agent
+  browser.
+  - Strict CSP: `default-src 'self'; script-src 'self'; style-src 'self';
+    img-src 'self' data: blob:; connect-src 'self'; object-src 'none';
+    base-uri 'none'; form-action 'none'`, plus `require-trusted-types-for
+    'script'`.
+  - Preact escapes by default. `dangerouslySetInnerHTML` is lint-banned
+    except in one audited markdown renderer: a safe subset with no raw HTML,
+    `javascript:` links stripped, and `rel="noopener noreferrer"` on links.
+  - Screencast frames are blob images.
+- **Rebinding:** the Host allowlist from [§6.2](#62-listeners-and-tls).
+- **Other headers:** `Referrer-Policy: no-referrer`,
+  `Cross-Origin-Opener-Policy: same-origin`,
+  `Cross-Origin-Resource-Policy: same-origin`,
+  `Permissions-Policy` that denies everything but
+  `publickey-credentials-get/create`, and `Cache-Control: no-store` on
+  `/api`.
+
+### 6.5 Step-up
+
+A session is enough for reads and for low-risk operations:
+
+- pause/resume, retry, stop;
+- chat;
+- case notes;
+- a memory commit (a reversible commit with operator trailers).
+
+A **fresh assertion bound to the request's digest** is required for:
+
+- approve/deny (its own payload, [§6.6](#66-the-approvals-boundary));
+- config apply and restore;
+- a secret write;
+- any widening (grants, verbs, tiers, promotions, browser sites, logins,
+  credentials, evaluate);
+- a browser takeover;
+- update now;
+- pack and plugin add/remove;
+- enrolling another passkey.
+
+The step-up token is single use, lives 2 min, and is bound to `{session,
+purpose, sha256(request body)}`. The UI shows what you are signing before the
+ceremony.
+
+### 6.6 The approvals boundary
+
+The approval payload is canonical and server-built. It is the same object the
+CLI signs:
+
+```json
+{ "v": 1, "ns": "conductor-member-approval",
+  "member": "platform-sre", "proposal": "p12", "decision": "approve",
+  "action_sha256": "9f2c…",          // for terraform: covers repo, commit, dir, workspace,
+                                     // var files, targets AND the plan's sha256 (as #178)
+  "operator": "ops", "expires": "2026-10-16T10:42:00Z" }
+```
+
+1. `GET …/proposals/<id>` returns the payload, its digest `D =
+   sha256(canonical JSON)` and a human summary. The summary is rendered from
+   the **payload, not from agent text**. Agent-written reasons are shown
+   separately, fenced as data.
+2. `POST …/decision/begin` mints a nonce N, single use, 2 min, bound to the
+   session and the proposal. The WebAuthn challenge is `sha256("conductor-
+   dashboard-approval-v1" ‖ N ‖ D)`.
+3. The browser calls `navigator.credentials.get({challenge, userVerification:
+   "required"})`. The operator touches the authenticator.
+4. `POST …/decision` sends `{decision, assertion}`. The daemon:
+   - verifies the assertion: RP ID, origin, UP+UV flags, sign count, and a
+     challenge recomputed from **its own** N and D;
+   - maps the credential to an operator;
+   - checks that the operator is one of **this member's** operators;
+   - calls `Executor.Decide(member, id, decision, Approver{Operator, Method:
+     "webauthn", Credential, Evidence})`.
+
+   This is the seam #178 named ("a chat approval path … can be added later
+   on the same `Executor.Decide`"). The atomic pending→approved transition,
+   the shadow/expired/non-pending refusals, and "only the exact signed digest
+   runs" are unchanged.
+5. The audit records `member_approval` with `method: webauthn`, the
+   credential id, and the raw `authenticatorData`, `clientDataJSON` and
+   signature. An approval can be re-verified offline against the stored
+   public key, which is the same non-repudiation SSHSIG gives.
+
+**Why an agent cannot approve:**
+
+- No agent-reachable surface has a decision operation. The skill socket has
+  none (#178), and the dashboard isn't reachable from a sandbox
+  ([§6.7](#67-threat-model-can-an-agent-reach-the-dashboard)).
+- Even a session doesn't approve: the decision endpoint needs an assertion
+  made with user verification on an enrolled authenticator, over a nonce the
+  daemon minted for this proposal.
+- No verb, option, chat text or peer message approves anything (#178), and
+  the dashboard doesn't change that.
+
+SSH-signed approvals keep working. The two are alternative operator proofs
+into one `Decide`.
+
+### 6.7 Threat model: can an agent reach the dashboard?
+
+The brief's premise is "sandboxed agents' network is cut". This design
+**verified** it per backend against the branches, and adds two hard guards.
+
+| Agent launch | Network as built | Reaches 127.0.0.1:7788? | Reaches the tailnet address? | Guard and test |
+|---|---|---|---|---|
+| Linux namespace sandbox (default for cli/acp/opencode/agent-deck, member workers, paseo `<provider>-sandboxed`) | Own network namespace. `lo` is its own. The only way out is a unix socket to conductor's **egress proxy** (allowlist), plus model relays to fixed loopback endpoints (#179) | No: its loopback isn't the host's | No: no route | The proxy **hard-denies** the dashboard's addresses and names whatever `sandbox.egress`/`browser.allow` say (**NEW**). Validation refuses a model route or exposed port equal to the dashboard port. e2e group Z gains "agent curls both dashboard origins, direct and via the proxy → refused". |
+| macOS Seatbelt | No network namespace. `(deny network*)` plus `localhost:<proxy port>`, `LoopbackPorts` (model) and `ListenPorts` (`seatbelt_agent.go`) | Only if 7788 were one of those ports, which validation forbids (**NEW**) | No (`localhost` only) | The profile has an **`Open`** verdict (`AgentNet.Open`, the host network). Any launch with `Open` is treated as *unsandboxed network*: the Isolation tab lists it, and the e2e macOS leg asserts the dashboard port is never allowed. |
+| Container backend (`feat/agent-container`) | `--network none`, no capabilities, non-root. Every stream (proxy, model, socket) is muxed over `sandbox-net --mux` stdio. No socket is bind-mounted | No | No | Proxy hard-deny as above. The container CI leg (docker + rootless podman) asserts it. |
+| Conductor's agent browser (#182) | Jailed Chromium with no network; egress only through the allowlist proxy, **loopback included if allowlisted** | Only through the proxy | Only through the proxy | The same proxy hard-deny stops an agent navigating its browser to the dashboard. |
+| Code-step engines (`run: js` …) | Sandboxed namespace, network off by default (`engines:`) | No | No | — |
+| `isolation: {mode: user}` (separate uid) | Host network | **Yes (login page only)** | Yes | No cookies (another uid can't read the operator's browser profile). Passkey required. |
+| **`isolation: {mode: none}`, `sandbox.agents: off`, the paseo plain provider (hand-off opt-out)** | Host network, **the operator's uid** | **Yes** | Yes | This is the honest gap; see below. |
+| Remote `hosts:` agents | Reach conductor by SSH reverse tunnel to the skill socket only. Their host may be a tailnet peer | n/a | Their **node** may | `allow_tagged: false` by default refuses tagged server nodes. Passkey required. |
+
+**Unsandboxed agents.** Same uid, host network. #178 states the same limit
+for SSH approvals: without the sandbox, the guarantee is exactly as strong as
+the key's protection. The dashboard keeps that bar and doesn't lower it:
+
+- It can reach the login page, but **every approval and every sensitive
+  write needs a UV assertion** from an authenticator the agent can't drive:
+  Touch ID, a security key, or a phone. The docs recommend these and warn
+  against software passkeys stored in an unlocked CLI-scriptable password
+  manager.
+- It could read a dashboard **session cookie** out of the operator's browser
+  profile on the same box. That gives reads and the low-risk operations in
+  [§6.5](#65-step-up), but no approval, apply, secret write, widening or
+  takeover. Bounds:
+  - sessions are short;
+  - a stolen localhost cookie only works on localhost;
+  - the Sessions list shows every session.
+- It could run `conductor dashboard enroll`. Enrollment needs the operator's
+  **SSH signature** and, for an extra passkey, an existing passkey. With a
+  confirming agent or a hardware key, the agent gets neither.
+- The Isolation tab and the strip list every opt-out in effect, so the
+  operator sees exactly where this applies.
+- Possible hardening, open: refuse loopback TCP peers whose process is a
+  conductor-launched agent, resolved through `/proc/net/tcp` → inode → pid →
+  cgroup/env marker ([§12](#12-open-questions)).
+
+**The other adversaries:**
+
+- **Other local users:** the localhost listener needs a passkey. The state
+  under `<state>/dashboard/` is 0700/0600.
+- **Tailnet peers:** see the tagged-node rule, the WhoIs allowlist and the
+  passkey.
+- **Web pages:** see [§6.4](#64-csrf-clickjacking-xss-rebinding).
+
+## 7. The config-edit pipeline
+
+The config has crash-looped the fleet before, so every rule here is a guard
+against a specific way that happened or could happen.
+
+### 7.1 Invariants
+
+1. **The file is the source of truth.** The dashboard holds no shadow
+   config. It reads the files the daemon loaded and writes them back.
+2. **Every edit is node-level.** Bytes outside the edited nodes don't
+   change: comments, anchors and aliases, key order, flow vs block style,
+   blank lines, and unknown keys (`x-…`).
+3. **Validation happens on a copy.** `conductor validate` is **not
+   read-only**: since v0.64, launching a plugin rewrites the install's
+   `.path`. The live config and state dirs are never touched by a check.
+4. **Nothing this binary can't load is ever written**, and the same holds
+   for the pending update's binary.
+5. **Every apply keeps a backup**, and rollback is one click.
+6. **A failed boot restores the last good config by itself.**
+
+### 7.2 Node-level edits
+
+`internal/configedit` parses each file with `yaml.v3` into a `yaml.Node`
+tree. It keeps the original bytes and a **source map**: node path → `{file,
+start, end}`. `imports:` files, per-entry `import:` and glob imports are
+followed, so an edit lands in the file that owns the node, and a new entry
+goes to the file that owns its parent map.
+
+Operations are path-addressed:
+
+```json
+{ "op": "set",    "path": "triggers[name=ci-fixer].steps[id=fix].model", "value": "claude-opus-5" }
+{ "op": "insert", "path": "triggers[name=ci-fixer].steps", "after": "[id=comment]", "value": { "id": "notify", "uses": "slack-ops.post", "options": { "text": "…" } } }
+{ "op": "delete", "path": "members.platform-sre.peers[0]" }
+{ "op": "move",   "path": "…", "to": "…" }
+```
+
+Paths use stable selectors (`[name=…]`, `[id=…]`, map keys), not indexes,
+so a concurrent reorder can't retarget an edit.
+
+**Byte-preserving splice.** `yaml.v3` re-encoding normalises formatting. So
+only the **byte range of the changed node** is replaced:
+
+- the range starts at the node's line and column;
+- it ends before the next sibling's start, found by an indentation scan;
+- the replacement keeps the node's original style where it can: a scalar
+  keeps its quoting style, a flow map stays a flow map, and a trailing
+  comment on the same line is kept at its column (the prototype's builder
+  shows this);
+- everything else stays byte-identical.
+
+The property test is: for every file in a corpus (`config.example.yaml`,
+`config.starter.yaml`, `testdata/`, e2e configs, every pack manifest), parse
+plus a no-op edit is byte-identical, and a set followed by the inverse set is
+byte-identical.
+
+**Concurrency.** A change set records each touched file's `base_sha`. Apply
+re-reads and refuses on mismatch ("config.yaml changed on disk since you
+started; rebase?"). A **file watcher** detects external edits (vim, `pack
+add`, the daemon's own re-vendoring) and raises a drift banner when the file
+on disk is not the file the daemon loaded.
+
+### 7.3 Validate on a copy
+
+`POST /config/changes/<id>/validate` streams these checks. They are the ones
+the prototype shows.
+
+1. **Node edit.** Report the nodes changed and assert the preserved
+   comments, anchors and unknown keys.
+2. **Base unchanged.** The base sha still matches.
+3. **Loads in this binary (in process).** `config.Load` from a temp dir that
+   mirrors the candidate tree (config + imports + vendored packs + lock).
+   This is the same loader the daemon boots with. It must have no side
+   effects; a test asserts that by hashing the live dirs around it.
+4. **`conductor validate` on a copy (subprocess).** The full check,
+   including plugin launches:
+   - a scratch dir gets the candidate tree and a **copy of plugin state**
+     (`installed.yaml` with its absolute install paths rewritten into the
+     scratch dir);
+   - with a temp `HOME` and `XDG_*`, it runs `<this binary> validate
+     --config scratch/config.yaml`;
+   - on Linux it runs **inside conductor's own sandbox** (`internal/sandbox`
+     `pivot_root`), with the live config and state dirs not mounted, so it
+     *structurally* can't write them;
+   - on macOS it runs under a Seatbelt profile that denies writes outside
+     the scratch dir.
+
+   This is the procedure that was verified by hand to keep live dirs
+   unchanged, made mechanical.
+5. **Loads in the pending update.** If the update checker holds a downloaded
+   release, run check 4 with **that** binary too. A change that the next
+   auto-update couldn't load is refused now, not discovered at 3am.
+6. **Packs: narrow, never widen.** Pack lint on each pristine manifest (the
+   existing load-time and `pack lint` checks), plus the **widening
+   classification** of the operator's own change ([§7.6](#76-packs-overrides-and-narrow-never-widen)).
+7. **References resolve.** Every secret, setting, fleet, connector and
+   runtime the change references resolves. Secrets resolve in the daemon,
+   values discarded.
+
+Warnings show inline. Errors block apply and point at the YAML line in the
+builder or raw editor.
+
+**The longer-term fix** is `conductor validate --read-only`, which skips
+plugin-dir writes. Until that exists everywhere, the copy is mandatory. Once
+it does, step 4 still runs on a copy as defence in depth.
+
+### 7.4 Apply, reload, verify
+
+After a step-up assertion over the change's digest:
+
+1. **Backup.** Every touched file is copied to
+   `<state>/config-history/<id>/` (0600), with a manifest: file, sha before
+   and after, operator, credential, summary.
+2. **Journal.** `<state>/config-apply/pending.json` records `{change id,
+   backup, new shas, attempts: 0}`.
+3. **Write.** Each file is written to a temp file in the same directory,
+   fsynced, then renamed. Multi-file changes are renamed in dependency
+   order, and a failure mid-way restores from the backup before reload.
+4. **Reload.** The existing path: SIGHUP → re-exec ("config is read at boot,
+   so a re-exec is the reload"), with the in-flight checkpoint grace. The
+   SSE stream announces `daemon.restarting`. The SPA shows "reloading" and
+   resumes with `Last-Event-ID`.
+5. **Boot guard** (**NEW**, in the boot path before anything dispatches). If
+   `pending.json` exists:
+   - **The config fails to load:** restore the backup, boot with it, raise
+     `config.restored` in Needs you and fire `conductor.config_restored`.
+   - **It loads:** increment `attempts`. If `attempts ≥ 2` (the service
+     manager restarted us mid-window, which means a crash), restore as
+     above.
+6. **Health window** (60s). The daemon is up, connectors are registered,
+   and nothing panicked. Then `pending.json` is removed and the change is
+   **committed** in the history.
+
+Steps 5 and 6 cover the case validation can't: a config that loads but
+misbehaves at runtime badly enough to crash.
+
+### 7.5 Rollback
+
+**Restore** on any history entry creates a change whose candidate is the
+backup's bytes, and runs the **same pipeline**. A backup taken before an
+auto-update might not load in the current binary, and the rule "never apply
+a config this binary can't load" applies to rollbacks too. A restore that
+fails validation says why and offers the diff. The newest pre-change backup
+is offered as **Roll back** on the success screen.
+
+### 7.6 Packs: overrides and narrow-never-widen
+
+- **Pack-owned content is read-only.** Vendored packs under
+  `.conductor/packs/` are re-vendored by the daemon on its dependency cycle,
+  so the dashboard never writes there.
+- **Operator overrides.** The operator's changes to a pack go only into
+  their `packs.<instance>` block. The builder and section editors translate
+  an edit on pack-owned content into the supported override:
+
+  | Edit on pack content | Becomes |
+  |---|---|
+  | a step's field (model, runtime, workspace, options, `isolation`, `gate`) | `packs.<i>.steps["<wf>/<step-id>"]` (deep-merge), or `"<wf>[<n>]"` for an id-less step |
+  | arming or scoping a trigger | `packs.<i>.triggers.<name>` (or `"*"`; an array arms the same trigger N times) |
+  | policy, budget | `packs.<i>.policy` |
+  | a bundled fleet | `packs.<i>.models.<fleet>` |
+  | required connector or secret | `packs.<i>.connectors` / `secrets` bindings |
+  | anything structural (add or remove a step) | refused, with the alternatives: call `<i>/<wf>` from your own trigger, or fork into `use: ./packs/<name>` |
+
+- **A pack can narrow, never widen.** This is enforced at load and by `pack
+  lint` on the **pristine manifest**. A pack that sets `isolation: {mode:
+  none}` on itself, or `user`/`container`, `privileged`, `network.egress` or
+  `fs:` for its agents, is refused, as are its runtime/host and `trust:`
+  settings. The error names the override to use instead. The dashboard
+  surfaces these refusals verbatim in the Packs view and the pipeline.
+- **Loosening is the operator's decision.** It is allowed in the operator's
+  own config and overrides. The pipeline classifies a change as **widening**
+  when it:
+  - loosens isolation (`mode: none`, sandbox off, `privileged`);
+  - adds egress or `fs:`;
+  - adds a verb to a member, loosens a tier or adds a promotion;
+  - adds a browser site, login or credential, or turns `evaluate` on;
+  - sets `trust: full`, adds a `pack_trust` source, or makes a trigger
+    `callable:`.
+
+  A widening change gets a **widens** badge on the diff, an explicit
+  acknowledgement line, and the step-up assertion (which every apply needs
+  anyway).
+
+## 8. Frontend stack
+
+**Preact + @preact/signals + TypeScript, built by Vite.**
+
+- **Small.** About 4 KB of runtime. The initial bundle budget is **≤ 200 KB
+  gzipped**, with heavy pieces lazy-loaded:
+  - CodeMirror 6 with `@codemirror/lang-yaml`, about 150 KB, only on
+    config, builder and memory edit;
+  - the screencast player.
+- **Fits what this app is:**
+  - live streams (signals update only the plates and log lines that
+    change);
+  - a canvas editor;
+  - a phone layout.
+
+  A server-rendered stack (`templ` + htmx) fights the canvas, the screencast
+  and the offline-tolerant reconnect logic.
+- **Familiar.** It is React-shaped, so a later paseo panel can reuse
+  components or simply call the same API.
+- **Rest of the stack:**
+  - Router: a tiny path router (about 1 KB).
+  - Data: `fetch` wrappers generated from the Go API types (`tygo`), plus
+    one SSE client with resume.
+  - Graph layout: our own. Workflows are series-parallel (order +
+    `parallel:`), so layered layout is about 150 lines; no dagre or elk.
+  - Charts: hand-built SVG, following the dataviz method (validated status
+    palette, one axis, a table view).
+  - Design system: CSS custom properties ported from the prototype's
+    `app.css` tokens. No CSS framework.
+  - Fonts: vendored and SIL OFL.
+
+**Embedding.**
+
+- Source lives in `web/`. `make web` runs `npm ci && vite build` into
+  `internal/dashboard/dist/`.
+- **`dist/` is committed**, so `go build` and `go install` never need Node.
+  Node is a build-time dependency only, as decided.
+- A CI job rebuilds and fails if `dist/` differs (reproducible from
+  `package-lock.json`).
+- `//go:embed dist` serves hashed assets with `immutable` caching and
+  `index.html` with `no-store`.
+- No CDN or runtime network fetches, so it works on an air-gapped tailnet.
+
+## 9. Testing strategy
+
+All tests are hermetic:
+
+- `env -i` with a temp `HOME` and `PASEO_HOME`;
+- `XDG_*`, `CONDUCTOR_*` and `CLAUDE_CONFIG_DIR` unset;
+- live installs hashed before and after;
+- throwaway daemons on their own ports. A fresh paseo home would otherwise
+  bind the live port 6767.
+
+These are the rules the member and sandbox PRs already follow.
+
+- **Go unit tests.** Every handler against fakes of the member service, the
+  browser manager, the store and the update checker:
+  - auth middleware order (Host → Origin → session → CSRF → step-up);
+  - the SSE ring and resume;
+  - the attention aggregator.
+- **WebAuthn.** Registration and assertion against a software authenticator
+  in tests (`go-webauthn` test vectors), plus **Chromium's CDP virtual
+  authenticator** in e2e (#182 already drives it). Negative cases:
+  - wrong RP or origin;
+  - UV not set;
+  - a replayed challenge;
+  - the sign count going backwards;
+  - a credential of an operator who isn't this member's;
+  - a session with no assertion;
+  - a nonce minted for p11 used on p12;
+  - an expired proposal.
+- **Mutation testing** of the approval verifier and step-up, as with #178:
+  gremlins plus a guard-deletion pass. Every refusal guard must be killed.
+- **`configedit`.**
+  - Corpus round-trip byte identity.
+  - Fuzzing (`go test -fuzz`) over random edits that asserts every
+    untouched byte range is identical and the result parses.
+  - Golden diffs for each editor (member definition, builder ops, pack
+    overrides).
+  - Widening-classification table tests.
+- **Validate-on-copy.** A test hashes the live config and state dirs (and
+  the plugin install's `.path`) around a full validate run, on Linux and
+  macOS CI.
+- **Boot guard.** e2e:
+  - apply a config that fails to load (by faking past validation) → the
+    daemon boots on the backup and raises `config.restored`;
+  - a config that crashes after boot → restored on the second attempt.
+- **Security e2e:**
+  - CSRF: a cross-origin form post and a missing header are refused;
+  - `frame-ancestors`;
+  - a rebinding Host is refused;
+  - a tagged-node WhoIs is refused (faked LocalAPI);
+  - **an agent reaching the dashboard**, per backend (group Z namespace,
+    the macOS Seatbelt leg, the container legs): a direct curl to both
+    origins and a request through the egress proxy fail;
+  - the browser can't navigate to the dashboard.
+- **Frontend.**
+  - vitest for stores, the router, the SSE client and the layout.
+  - Playwright e2e against a throwaway daemon with fixture state: every
+    screen, the approve flow with the virtual authenticator, a config apply
+    and rollback, a builder edit round-trip, the phone viewport.
+  - Accessibility: axe on every route, keyboard-only approve.
+  - Visual regression: screenshots of every route × {dark, light} ×
+    {desktop, phone}.
+  - XSS corpus: agent-authored strings with HTML, markdown and
+    `javascript:` links render inert.
+- **Live proof** (as #178/#179 do). Done with the stack up, temp `HOME`, on
+  a tailnet node: enroll, sign in from a phone, approve a Terraform proposal
+  end to end, take over a browser, apply and roll back a config.
+
+## 10. Build plan
+
+One feature branch, **`feat/dashboard`**, built by parallel builders who each
+own a disjoint set of files. A builder merges into the feature branch through
+small PRs. The branch merges to `main` when [§9](#9-testing-strategy)'s gates
+pass. Members and browser work starts after #178 and #182 (and #179) land on
+`main`.
+
+**Phase 0: the contract** (one builder, about 2 days, merged first).
+
+- `internal/dashboard/api`: Go request and response types for every
+  endpoint in [§5](#5-api), the route table with stub handlers returning
+  fixtures, and the SSE envelope and topics.
+- TypeScript types generated with `tygo` into `web/src/api/`.
+- The `dashboard:` config block, its validation, and an off-by-default flag
+  until Phase 2.
+- The design tokens: `web/src/styles/tokens.css`, ported from the
+  prototype.
+
+Every other builder codes against the stubs, so the backend and the frontend
+proceed in parallel.
+
+**Phase 1: parallel builders**
+
+| Builder | Owns | Delivers | Depends on |
+|---|---|---|---|
+| **B1 Server & events** | `internal/dashboard/{server,events,observe}`, history index, log ring, audit tap, step-log tap, run cancel, attention aggregator | listeners (localhost + Tailscale LocalAPI bind and cert), Host/WhoIs checks, SPA serving, SSE hub with resume, the read endpoints for status, runs, audit and logs, stop/retry/run | Phase 0 |
+| **B2 Auth** | `internal/dashboard/auth`, `cmd/conductor/dashboard.go` | WebAuthn sign-in, sessions, CSRF, lockout, step-up, enrollment (SSH-signed ticket, MagicDNS hand-off), reset, the Access API, the proxy hard-deny + validation guards, the security e2e | Phase 0 |
+| **B3 Frontend shell** | `web/` app shell, router, SSE client, design system, auth screens, phone layout, `make web`, `dist/` embed + CI check | the app chrome (strip, rail, tab bar, ⌘K, Needs you), sign-in/enroll UI, overview | Phase 0 |
+| **B4 Runs** | `web/src/routes/{live,runs,attention}`, run graph derivation (`GET /workflows/<n>/graph`) | live run view (graph, streaming log, inspector), history, detail, retry/stop | B1 stubs |
+| **B5 Config pipeline** | `internal/configedit`, `web/src/routes/config`, `…/secrets` | node edits, splices, source map, validate-on-copy runner, journal + boot guard, history/restore, config UI, secrets & vars UI, vault write API, used-by index | Phase 0 |
+| **B6 Builder** | `web/src/routes/workflows`, `web/src/canvas/` | canvas, inspector, CodeMirror YAML pane with selection sync, pack override translation, inline validation | B5's op API (contract first, so they start together) |
+| **B7 Ops** | `web/src/routes/{extensions,updates,connectors,logs}`, their handlers | packs/plugins (plan, add/update/hold/remove via B5), updates over `doUpdate`, connectors/runtimes/hosts/isolation, logs and audit UI | B1, B5 |
+
+**Phase 2: in-flight features** (after their PRs merge to `main`)
+
+| Builder | Owns | Delivers |
+|---|---|---|
+| **B8 Members** | `internal/dashboard/api/members.go`, the WebAuthn → `Executor.Decide` verifier (with B2), transcript relay, memrepo operator commit/revert, worker stop, `web/src/routes/members` | all member tabs, proposal + Terraform view, approve/deny, definition editor (over B5) |
+| **B9 Browser** | screencast relay, takeover lease, headless seed/passkey-register, `web/src/routes/browser` | live view, takeover, seed, passkey registration, per-identity settings (over B5) |
+
+**Integration checkpoints:**
+
+- **End of Phase 1:** the dashboard runs behind the flag, with read-only
+  screens plus runs and config apply. Run the security e2e, then turn the
+  flag on for localhost.
+- **After B8:** the approval path is mutation-tested and proven live, and
+  the tailnet listener is on by default.
+- **After B9:** the takeover live proof.
+
+**Rules for builders:**
+
+- stay inside your owned files; changes to shared files (the route table,
+  tokens) go through the Phase 0 owner;
+- hermetic tests only;
+- never touch the live service, config or state;
+- every PR carries screenshots of the screens it changes, in both themes,
+  on desktop and phone.
+
+## 11. Rollout
+
+1. **Ship behind `dashboard.enabled: false`.** Then enable it with
+   `listen: [localhost]`, and add `tailscale` once B2's security e2e and the
+   live proof pass.
+2. `conductor status` gains a line (`dashboard: https://<magicdns>:7788 ·
+   2 passkeys`). `conductor dashboard status` prints the URLs and the
+   enrollment state.
+3. **Docs:**
+   - `docs/wiki/Dashboard.md` covers operators: enroll, phone, approvals,
+     config editing, rollback, and the CT-log caveat;
+   - the Isolation page links the unsandboxed-agent caveat;
+   - Members and Browser get "in the dashboard" sections.
+
+## 12. Open questions
+
+1. **Loopback peer attribution.** Should the localhost listener refuse TCP
+   peers whose process is a conductor-launched agent (resolved through
+   `/proc`, with cgroup and env markers)? It's Linux-only and heuristic, but
+   it would close the stolen-cookie path for `mode: none` agents on Linux.
+2. **Enrollment without an operator SSH key.** `operators:` today always has
+   one, because members need it. A box without members could allow
+   localhost-link-only enrollment. Is that acceptable as a documented,
+   weaker mode?
+3. **The per-step log store's size.** A bounded ring persisted next to the
+   history record and pruned with `history_retention`. Is 1 MiB per step
+   enough?
+4. **Chat transcript source.** Is paseo's agent timeline API stable enough
+   to relay, or should conductor record the home conversation itself, from
+   the inbox it delivers plus the agent's turns?
+5. **Approvals from a phone on a synced passkey.** A synced passkey (iCloud
+   or Google) is convenient and still needs UV, but its private key leaves
+   the device. Should the Access screen offer an "approvals need a
+   device-bound key" policy per operator?
+
+## 13. The prototype
+
+Path: `design/dashboard-prototype/`. It is static HTML, CSS and JS with fake
+data and no build step. Fonts are vendored, so it works offline.
+
+```sh
+python3 -m http.server 8767 --bind 127.0.0.1 --directory design/dashboard-prototype
+# desktop:  http://127.0.0.1:8767/
+# phones:   http://127.0.0.1:8767/phone.html
+# light:    http://127.0.0.1:8767/?theme=light
+```
+
+Opening `index.html` straight from the file system also works: classic
+scripts, no modules. Things to click:
+
+- **Approve with passkey:** Overview → Needs you → *Review* → `p12` →
+  **Approve**. The authenticator is simulated.
+- **Live run:** the graph is clickable and the log streams.
+- **Member chat:** send a message.
+- **Memory:** Edit → Commit.
+- **Browser:** **Take over**, then Esc to release.
+- **Builder:** change the model to `gpt-x` to see the inline error; set
+  isolation to `none` on the pack-owned `pr-review` to see the widening
+  warning; click **+** to add a step.
+- **Config:** watch the apply pipeline run its checks, then **Apply** and
+  watch the reload.
+- **Secrets:** Rotate (write-only).
+- **Updates:** Apply now.
+- **Search:** ⌘K.
+- **Theme:** the toggle in the rail's footer.
+
+The prototype is a design artefact. Its code is not the product's code, and
+its data shapes follow [§5](#5-api) only loosely.
