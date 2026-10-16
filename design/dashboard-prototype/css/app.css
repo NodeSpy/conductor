@@ -55,7 +55,7 @@
 html, body { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--ink);
-  font: 13.5px/1.45 var(--font-ui); letter-spacing: .005em;
+  font: 13.5px/1.45 var(--font-ui); letter-spacing: .005em; word-spacing: .04em;
   -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
   background-image: radial-gradient(var(--dot) 1px, transparent 1.2px);
   background-size: 22px 22px;
@@ -273,7 +273,9 @@ hr.rule { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
 
 /* key/value */
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 7px 16px; font-size: 12.5px; margin: 0; }
-.kv dt { color: var(--ink-3); } .kv dd { margin: 0; min-width: 0; }
+.kv dt { color: var(--ink-3); } .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.kv dd.hash { word-break: break-all; }
+.back svg { transform: rotate(180deg); }
 
 /* ---------- tabs ---------- */
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 18px; overflow-x: auto; scrollbar-width: none; }
