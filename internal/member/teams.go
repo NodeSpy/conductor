@@ -345,8 +345,13 @@ func (s *Service) assignTriage(ctx context.Context, team, lead, caseID, to, via,
 		return nil, err
 	}
 	// The request keeps its own provenance, bounded by the assigning
-	// session's: the less trusted of the two, never more.
-	who, class := lessTrusted(cs.RequesterClass, cs.Requester, callerClass, callerWho)
+	// session's: the less trusted of the two, never more. A session acting
+	// on its own initiative (member: no less-trusted request open) adds no
+	// taint — the request stays exactly whose it was.
+	who, class := cs.Requester, cs.RequesterClass
+	if callerClass != ReqMember {
+		class, who = lessTrusted(cs.RequesterClass, cs.Requester, callerClass, callerWho)
+	}
 	rt := store.Routing{Team: team, Via: via, Lead: lead, LeadCase: caseID, Note: note, Reason: reason, At: s.now()}
 	msg := ""
 	if note != "" {
@@ -660,22 +665,36 @@ func (s *Service) LandApproved(ctx context.Context, member string, p store.Propo
 
 // ---- budgets and isolation ----
 
-// teamPool reports why a sweep would overrun its team's pool ("" = fits):
-// every team member's sweeps over the rolling window, this one's included.
-func (s *Service) teamPool(name string, own store.MemberRecord) string {
+// teamSweeps snapshots a member's teammates' ledgers for the pool check.
+// Read OUTSIDE the member's own ledger transaction (the store lock is held
+// inside it); the team lock StartSweep holds makes the snapshot current —
+// no teammate records a sweep while it is held.
+func (s *Service) teamSweeps(name string) []store.MemberRecord {
 	cfg := s.Cfg()
 	team, t, ok := cfg.TeamOf(name)
+	if !ok || t.Budget.Proactive == nil {
+		return nil
+	}
+	var out []store.MemberRecord
+	for _, n := range cfg.TeamMembers(team) {
+		if n != name {
+			out = append(out, s.Ledger.Member(n))
+		}
+	}
+	return out
+}
+
+// teamPool reports why a sweep would overrun its team's pool ("" = fits):
+// every team member's sweeps over the rolling window, this one's included.
+func (s *Service) teamPool(name string, own store.MemberRecord, others []store.MemberRecord) string {
+	team, t, ok := s.Cfg().TeamOf(name)
 	if !ok || t.Budget.Proactive == nil {
 		return ""
 	}
 	pool := t.Budget.Proactive
 	now := s.now()
 	runs, cost := 0, 0.0
-	for _, n := range cfg.TeamMembers(team) {
-		rec := own
-		if n != name {
-			rec = s.Ledger.Member(n)
-		}
+	for _, rec := range append([]store.MemberRecord{own}, others...) {
 		for _, sw := range rec.Sweeps {
 			if now.Sub(sw.Started) < SweepWindow {
 				runs++

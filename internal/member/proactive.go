@@ -147,6 +147,7 @@ func (s *Service) StartSweep(ctx context.Context, name string, byOperator bool) 
 		tl.Lock()
 		defer tl.Unlock()
 	}
+	others := s.teamSweeps(name)
 	var sw store.Sweep
 	var w store.Worker
 	var rec store.MemberRecord
@@ -159,7 +160,7 @@ func (s *Service) StartSweep(ctx context.Context, name string, byOperator bool) 
 		if why := sweepBudget(p, *r, now); why != "" {
 			return fmt.Errorf("%w: %s", ErrSweepSkipped, why)
 		}
-		if why := s.teamPool(name, *r); why != "" {
+		if why := s.teamPool(name, *r, others); why != "" {
 			return fmt.Errorf("%w: %s", ErrSweepSkipped, why)
 		}
 		live := 0
