@@ -438,5 +438,9 @@ override: the `packs:` `steps:` overlay, or a trigger arm's new `isolation:`
 `[UNSANDBOXED]` in a hand-off's title, `sandbox=on|off` on every paseo
 agent, and a log line per dispatch.
 
-Not changed: `detach: true` launches (handed to the user and forgotten) stay
-on the plain provider.
+Detached launches (`detach: true`, e.g. the Slack handover that makes a
+user-owned paseo workspace from a thread): sandboxed by default too, with the
+same operator-only opt-out — the seeding thread can carry other people's
+messages, a prompt-injection channel. `paseoDetached` takes the same
+decision, title mark, label and log; it stays unregistered and token-free, so
+its `sandbox exec` gets the default policy for its own worktree.

@@ -1595,6 +1595,9 @@ func (r *Runner) execDetached(ctx context.Context, t core.Trigger, step config.S
 			return nil, "", err
 		}
 	}
+	// The isolation: it carries — the operator's opt-out of the sandbox
+	// (agent-authored detach is refused before this point).
+	step.Isolation = r.effectiveIsolation(ctx, step)
 	req := dispatch.Request{
 		Trigger: t, Action: act, Step: step, Identity: identity,
 		Model: model, Provider: provider, Shadow: shadow, Wait: true, Data: data,

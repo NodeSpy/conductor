@@ -156,3 +156,34 @@ func TestIsolationStrippedFromAgentAuthored(t *testing.T) {
 		t.Fatalf("operator-authored keeps the opt-out, agent-authored loses it: %+v / %+v", got[0].Step.Isolation, got[1].Step.Isolation)
 	}
 }
+
+// A detached launch carries the isolation: its scope gives it (the
+// operator's opt-out reaches the paseo dispatcher), a step's own winning.
+func TestIsolationReachesADetachedLaunch(t *testing.T) {
+	cfg := loadConfig(t, isolationCfg)
+	rig := newTestRunner(t, cfg, buildRegistry(t, cfg))
+	var got []dispatch.Request
+	rig.Agents.dispatchFunc = func(_ context.Context, req dispatch.Request) (dispatch.RunRef, error) {
+		got = append(got, req)
+		return dispatch.RunRef{AgentID: "a1", Detached: true}, nil
+	}
+	step := config.Step{Type: "agent", Detach: true, Repo: "a/b", Prompt: "x"}
+	if _, _, err := rig.Runner.execAgent(context.Background(), newTrigger("ping", nil), step, "s", "s", map[string]any{}, false); err != nil {
+		t.Fatal(err)
+	}
+	ctx := withDefaultIsolation(context.Background(), &config.IsolationConfig{Mode: "none"})
+	if _, _, err := rig.Runner.execAgent(ctx, newTrigger("ping", nil), step, "s", "s", map[string]any{}, false); err != nil {
+		t.Fatal(err)
+	}
+	own := step
+	own.Isolation = &config.IsolationConfig{Mode: "namespace"}
+	if _, _, err := rig.Runner.execAgent(ctx, newTrigger("ping", nil), own, "s", "s", map[string]any{}, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || !got[0].Step.Detach {
+		t.Fatalf("three detached launches: %+v", got)
+	}
+	if got[0].Step.Isolation != nil || !got[1].Step.Isolation.OptsOut() || got[2].Step.Isolation.Mode != "namespace" {
+		t.Fatalf("isolation: %+v / %+v / %+v", got[0].Step.Isolation, got[1].Step.Isolation, got[2].Step.Isolation)
+	}
+}

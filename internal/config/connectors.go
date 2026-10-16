@@ -2127,8 +2127,10 @@ func validateDetach(w string, s Step) error {
 		{"gate:", s.Gate != nil},
 		// Everything below would be silently ignored by a detach launch
 		// (no isolation shim, no env, a fresh branch-off worktree of its
-		// own, no guidance/memory appended), so it is refused instead.
-		{"isolation:", s.Isolation != nil},
+		// own, no guidance/memory appended), so it is refused instead —
+		// except `isolation: {mode: none}`, the operator's opt-out of the
+		// agent sandbox, which the launch does honor (the plain provider).
+		{"isolation: other than {mode: none} (the only isolation a detached launch takes: the sandbox opt-out)", s.Isolation != nil && !s.Isolation.OptsOut()},
 		{"env:", len(s.Env) > 0},
 		{"workdir:", s.WorkDir != ""},
 		{"checkout:", s.Checkout != ""},

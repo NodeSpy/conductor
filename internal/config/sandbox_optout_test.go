@@ -199,3 +199,30 @@ func TestOperatorOptsAPackHandoffOut(t *testing.T) {
 		t.Fatal("no opt-out unless the operator writes one")
 	}
 }
+
+// A detached launch takes exactly one isolation: the operator's opt-out of
+// the agent sandbox (it launches the plain provider); anything else would be
+// silently ignored by it, so it stays refused. A trigger's opt-out reaches
+// it as its default.
+func TestDetachTakesOnlyTheOptOut(t *testing.T) {
+	step := func(iso string) string {
+		return "connectors:\n  svc: { use: web }\ntriggers:\n  - on: svc.x\n    steps: [ { id: a, type: agent, detach: true, repo: o/r, prompt: p" + iso + " } ]\n"
+	}
+	for i, doc := range []string{
+		step(""),
+		step(", isolation: { mode: none }"),
+		"connectors:\n  svc: { use: web }\ntriggers:\n  - on: svc.x\n    isolation: { mode: none }\n    steps: [ { id: a, type: agent, detach: true, repo: o/r, prompt: p } ]\n",
+	} {
+		if _, err := loadDoc(t, doc); err != nil {
+			t.Errorf("ok[%d]: %v", i, err)
+		}
+	}
+	for _, iso := range []string{", isolation: { mode: namespace }", ", isolation: { mode: none, privileged: true }"} {
+		if _, err := loadDoc(t, step(iso)); err == nil || !strings.Contains(err.Error(), "isolation") {
+			t.Errorf("%s: %v", iso, err)
+		}
+	}
+	if _, err := loadDoc(t, step(", isolation: { mode: namespace }")); err == nil || !strings.Contains(err.Error(), "the only isolation a detached launch takes") {
+		t.Errorf("the refusal names the opt-out: %v", err)
+	}
+}
