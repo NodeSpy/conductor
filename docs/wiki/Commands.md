@@ -39,6 +39,7 @@ conductor workflows rm <name>              remove a saved workflow
 conductor member ls|show|cases|workers|proposals …  members: state, open work, proposals (operator)
 conductor member approve|deny <member> <id>  decide a member proposal — SSH-signed with your operator key ([[Members]])
 conductor member rotate|say|deliver|consolidate <member> …  drive a member from the operator side
+conductor member teams | team <team>  member teams: members, routing, routed cases, knowledge, the proactive pool ([[Members]])
 conductor version
 ```
 

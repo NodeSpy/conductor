@@ -208,7 +208,7 @@ The family, each a form in its own right:
 | `assert: <expr>` | Fail the run unless the condition is truthy — the same grammar as `if:`. |
 | `fail: <message>` | Stop the run with a rendered message; guard it with `if:` for a conditional abort. |
 | `wait_for: {…}` | Poll a read verb until a condition holds, or a timeout — [below](#wait_for). |
-| `member: {name, title, text, requester, urgent, action}` | Route the event into a member (a case, its home inbox, a worker at once when `urgent`), or `action: rotate \| consolidate` it — [[Members]]. Refused in an agent-authored plan. |
+| `member: {name, title, text, requester, urgent, action}` | Route the event into a member (a case, its home inbox, a worker at once when `urgent`), or `action: rotate \| consolidate` it — [[Members]]. `team:` in place of `name:` routes to a member team (its rules, lead or fallback pick the member — [[Members#routing-work-to-a-team]]). Refused in an agent-authored plan. |
 
 Each is mutually exclusive with `type:` / `use:` / `uses:` / `call:` and with
 the other helpers — a step does one thing — and each takes `id:`, `if:`,

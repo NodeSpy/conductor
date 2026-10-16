@@ -2,7 +2,8 @@
 
 A **member** is a persistent, conversational teammate — an SRE for your
 platform services, say. Define as many as you want in `members:`, cut any way
-that suits you: a company, a team, an environment, a service.
+that suits you: a system, a function, an environment, a service — and group
+them into [teams](#teams) the same way.
 You talk to it in paseo and give it tasks; conductor routes events into it
 (pages, chat requests, schedules); it keeps long-term memory, tracks its open
 work, and starts **workers** to get things done. Every mutating action it takes
@@ -22,7 +23,9 @@ replaceable at any time; continuity lives on disk:
 Each member is isolated: its own memory repo, ledger, home session, verb policy,
 operators and pack instance. A session token is bound to exactly one member,
 so nothing one member does can reach another's memory, cases or workers — and
-an agent-authored plan cannot route work into any member at all.
+an agent-authored plan cannot route work into any member at all. What a
+[team](#teams) shares is explicit: messages between teammates (data only), and
+a knowledge repo nothing writes but an approved promotion.
 
 ## Configuration
 
@@ -109,6 +112,9 @@ conductor member spawn --case c12 --group g --brief "…" [--verbs …] [--read-
 conductor member tell <worker|group> "…"        # follow-up instructions to your workers
 conductor member join --case c12 --group g      # fan-out results, together
 conductor member ask <member> [--case c] "…"    # a linked peer (data, never instructions)
+conductor member team [recall <words> | read <path>]                     # your team (below)
+conductor member team promote --path knowledge/<f>.md [--to …] [--note "…"]
+conductor member assign <case> <member> [--note "…"]                     # a team lead's triage
 ```
 
 A worker has `conductor member report "…"` (to its parent) and `conductor member
@@ -154,6 +160,9 @@ triggers:
   - on: timer.weekly
     steps: [ { member: { name: platform-sre, action: consolidate } } ]   # or action: rotate
 ```
+
+`member: { team: platform, … }` routes to a [team](#routing-work-to-a-team)
+instead: its rules, its lead or its fallback pick the member.
 
 Each delivery opens a **case** carrying its source (`<connector>.<event>`) and
 its **requester**: an operator (by name or alias), a third-party user, or — with
@@ -297,7 +306,8 @@ the member's memory says is worth watching, and reports findings through
 
 ### Messages between members
 
-Members can message each other only when an operator links them:
+Members can message each other only when they are [teammates](#teammates-are-peers)
+or an operator links them:
 
 ```yaml
 members:
@@ -326,13 +336,215 @@ DATA` block.
 
 > **Linking two members is a channel for data to cross between them.**
 > Whatever one member writes in a message reaches the other — only link
-> members whose data may mix. Members are otherwise isolated from each other.
+> members whose data may mix (the same goes for putting them in one team).
+> Members are otherwise isolated from each other.
 > `conductor validate` warns about a one-sided `peers:` entry (it links
 > nothing).
 
 **Persistent sub-members** (a member creating a long-lived helper member) are
 not supported: members are operator config, which no member can write. Declare
 a second member yourself and link it as a peer, or use ephemeral workers.
+
+## Teams
+
+A **team** is a group of members you define in `teams:` (not the `team:`
+*step*, a planner/worker fan-out — that is [[Teams]]) and cut however you
+like: by system (`platform`), function (`billing`), environment, on-call
+rotation. Conductor has no notion of an org; a team is one more thing in your
+config. A member names **at most one** team; a member without one behaves
+exactly as before, and `teams:` is optional.
+
+```yaml
+teams:
+  platform:
+    description: "Platform services: the shared runtime, its data stores and deploys"
+    operators: [ops, oncall]          # who approves for the team; default: every operator
+    # peers: none                     # default team: teammates may `ask` each other
+    autonomy:
+      ceiling: reversible             # observe | reversible: the highest tier any member may be PROMOTED to
+      shadow: true                    # every member in shadow mode until the team says otherwise
+      tiers: { never: [aws.iam_*] }   # classified into every member; the strictest tier wins
+    budget:
+      spend_cap: { per_action: 500, per_period: 2000, period: 720h }
+      proactive: { max_runs_per_day: 12, max_cost_per_day: 4.00 }   # a POOL for the whole team
+    isolation: { sandbox: required, handoff_workers: false, skip_permission_prompts: false }
+    credentials: { secrets_via: broker, allow_secrets: [house/pd-token] }
+    browser: { logins: [status.example.com], credentials: [statuspage] }
+    knowledge: { promotion: proposal }          # a shared repo; repo:, seed_dir: optional
+    routing:
+      rules:
+        - { name: data, match: { source: "pd.*", service: "db-*" }, to: platform-data }
+      lead: platform-lead
+      fallback: platform-sre
+members:
+  platform-lead: { team: platform, … }
+  platform-sre:  { team: platform, operators: [oncall], … }   # narrower than the team: fine
+  platform-data: { team: platform, … }
+  billing-sre:   { team: billing, … }
+```
+
+### Defaults are ceilings: narrow, never widen
+
+Each team setting is a **ceiling**, the same rule packs follow. A member
+**inherits** every one it leaves unset and may set it **narrower**, never wider.
+A member setting past its team's is a **load error** naming both values:
+
+```
+config: members.platform-sre: autonomy.promote [pd.ack] promotes to reversible, above team platform's autonomy.ceiling observe
+config: members.platform-sre: autonomy.spend_cap.per_action 2000 exceeds team platform's budget.spend_cap.per_action 500
+```
+
+| team setting | a member inherits it as | narrower | refused |
+|---|---|---|---|
+| `operators` | `operators` | a subset | an operator outside the team's |
+| `autonomy.ceiling` | — | — | `observe`: any `autonomy.promote` |
+| `autonomy.shadow: true` | `autonomy.shadow` | — | `shadow: false` |
+| `autonomy.tiers` | merged into its tiers (the strictest wins) | a stricter tier | a member pattern the team classes stricter (`observe: [kv.set]` under the team's `propose: [kv.*]`) |
+| `budget.spend_cap` | `autonomy.spend_cap` | a lower `per_action`/`per_period`, a longer `period` | higher, shorter, another currency |
+| `budget.proactive` | `proactive.budget` (and it is a pool, below) | lower | higher |
+| `isolation.sandbox: required` | `isolation.sandbox` | — | `optional` |
+| `isolation.handoff_workers: false` | likewise | — | `true` |
+| `isolation.skip_permission_prompts: false` | likewise | — | `true`, or a `home.mode` that skips prompts |
+| `credentials` | `skill.secrets_via` / `skill.allow_secrets` | `none` under `broker`; a subset | `env` under `broker`; a secret outside the list |
+| `browser` | `browser` | a subset of logins (a host under a `*.domain`) and credentials | a site or credential outside |
+
+What the isolation settings do:
+- **`sandbox: required`**: the member's sessions, home, workers and sweeps,
+  start only while conductor's agent sandbox is enforcing agent launches.
+  Until the sandbox is on the daemon, such a member does not start at all.
+  `conductor validate` warns about this, and the daemon logs it once.
+- **`handoff_workers: false`**: refuses `spawn --handoff`, so a member uses cli
+  workers only.
+
+The `browser:` scope narrows which saved logins and sign-in credentials of
+conductor's agent browser a member's sessions may use. It never grants
+anything. Until the agent browser is on the daemon, it is checked at load and
+reported by `conductor member show`, but nothing consumes it.
+
+### Teammates are peers
+
+Inside a team, members are **peers by default**. Any member may
+`conductor member ask` any teammate, with the ordinary peer rules (see
+[Messages between members](#messages-between-members)):
+- the message is data only, fenced, and arrives as a `peer` case;
+- it is audited on both sides;
+- it is capped at 4000 bytes and 20 per hour per direction.
+
+`peers: none` turns this off for a team. Then teammates exchange messages
+only where an operator linked them.
+
+**Across teams, nothing changes.** Members of different teams (or a member
+without a team) are isolated unless an operator links them explicitly
+(`member_links:`, or both sides' `peers:`). A team is a channel for data to
+cross between its members: put members in one team only where their data may
+mix.
+
+### Shared knowledge
+
+`knowledge:` gives the team a **knowledge repo**. It is git, like member
+memory, at `<state>/teams/<name>/knowledge` by default, with `knowledge/` and
+`runbooks/`. Every member of the team reads it through conductor:
+
+```
+conductor member team recall <words>
+conductor member team read knowledge/databases.md
+```
+
+Nothing writes it directly. A member **proposes** promoting one of its own
+`knowledge/` or `runbooks/` files:
+
+```
+conductor member team promote --path knowledge/db.md --to knowledge/databases.md --note "the team keeps asking"
+```
+
+- With **`promotion: proposal`** (the default), it becomes a `knowledge`
+  proposal holding the exact text. Any **operator of the team** approves it,
+  with the ordinary signed `conductor member approve <member> <id>`. Only then
+  does it land.
+- With **`promotion: direct`**, it lands at once, but only on a provenance a
+  promoted verb could run on: an event's, the member's own initiative, or an
+  operator's. While a third party's, a peer's or a sweep's request is open, a
+  promotion is still a proposal. The same applies to one from a read-only
+  worker, and to any promotion in shadow mode (there, a shadow proposal).
+- **It lands exactly what was approved.** The digest covers the team, the
+  source and destination paths, and the text's SHA-256. A changed text or path
+  fails rather than lands.
+- **Each landing is one commit, authored by the promoting member.** Its
+  trailers are `Member-Team`, `Promoted-From: <path>@<memory commit>`,
+  `Member-Proposal` and `Approved-By`.
+
+**Member memory stays private to the member.** Only what a member promotes
+reaches the team, and members of other teams cannot read it.
+
+### Routing work to a team
+
+A trigger can target a team instead of a member:
+
+```yaml
+triggers:
+  - on: pd.incident_triggered
+    steps:
+      - member: { team: platform, title: "{{.title}}", text: "{{.summary}}", urgent: true }
+```
+
+The team picks who handles it, in order:
+
+1. **Rules** (`routing.rules`). These are deterministic, with no model. Each
+   rule's `match:` holds globs against `source`, `title`, `text`, `requester`,
+   or any field of the event (dotted for nested ones: `labels.env`). All of
+   them must match, and the first matching rule wins.
+2. **The lead's triage** (`routing.lead`). Conductor opens a triage case in
+   the lead and starts a **read-only** worker of the lead: observe-tier verbs
+   and memory reads only. That worker picks a teammate:
+   `conductor member assign <case> <member> [--note "…"]`. The lead's home
+   session can assign too.
+3. **The fallback** (`routing.fallback`, required) takes what no rule matched
+   with no lead. It also takes what the lead did not assign within
+   `routing.timeout` (default 10m), what its triage worker finished without
+   assigning, and what it could not start triaging.
+
+**Requester provenance is preserved end to end.** The requester is classified
+once, at intake, against the team's operators. Each hop can only lower that
+trust:
+- The assignee's case carries the **original** requester, source, text and
+  urgency.
+- An operator of the team who is not one of the assignee's operators is a
+  third party there.
+- A lead acting while a less-trusted request is open passes that taint on.
+
+**Assignment never upgrades trust.** A third party's request routed through
+the lead to another member is still that third party's request at that
+member's gate: its writes become proposals attributed to the third party.
+Only the team's lead assigns, only its own triage cases, only to a member of
+the team, and only once. The lead's note reaches the assignee fenced, as data.
+
+**The ledger** records the team, the routing decision (`rule` with its name,
+`lead` with the lead's triage case, or `fallback` with why) and the assignee on
+every routed case. The lead's triage case records where it went.
+`conductor member team platform` lists recent routed cases, the pool's use and
+pending knowledge proposals.
+
+### Approvers
+
+Every proposal names the operators who may decide it, and the proposing
+member's team:
+- a member's proposals: the member's operators (a subset of the team's);
+- a knowledge promotion: the team's operators.
+
+The daemon re-checks this against the config at decision time, so an operator
+removed from the team can no longer approve.
+
+### The team's proactive pool
+
+`budget.proactive` is one pool for the whole team. It counts every member's
+sweeps together over a rolling 24h: runs, and cost from the run history. No
+sweep starts once the team has used the pool up, even if the sweeping member's
+own budget has room.
+
+### Teams and packs
+
+A pack can ship a commented team for the members it defines. The `sre-member`
+pack has one: a lead and two members, disarmed, with routing examples.
 
 ## The autonomy gate
 
@@ -493,6 +705,8 @@ conductor member consolidate <member>
 conductor member replan <member> <id>              # re-plan a stale terraform proposal
 conductor member sweep <member>                    # a proactive sweep now (budget applies)
 conductor member sweeps <member>
+conductor member teams                             # every team: members, routing, pool, knowledge
+conductor member team <team>                       # …and recent routed cases, knowledge log, pending promotions
 ```
 
 Every session launch, event, worker, memory write, proposal and decision is

@@ -200,3 +200,122 @@ A member creating a long-lived helper member does not fit cleanly:
 The clean equivalent today is operator-side: declare the helper as its own
 member and link it as a peer (data only), or use ephemeral workers (instructions
 down, same authority or less).
+
+## Teams
+
+User reference: docs/wiki/Members.md#teams. A team is operator config like a
+member (`teams:` in `internal/config/teams.go`), and conductor still has no
+notion of an org: a team is a set of members that share ceilings, peer with
+each other, may share a knowledge repo, and can be routed work as a unit.
+
+### Ceilings, resolved once at load
+
+- **One effective `MemberConfig`.** `Config.ResolveTeams` runs at load, before
+  `expandMembers` copies a member's grant into its worker triggers. For each
+  member with a `team:` it checks every ceiling (`checkTeamCeilings`, pure),
+  then fills in each default the member left unset (`inheritTeam`, copying
+  values, never aliasing the team's maps). Everything downstream (the gate,
+  the service, the home launch, the worker steps) reads the member's own
+  config and needs no team awareness. Inherited values sit exactly at the
+  ceiling, so resolving again is a no-op. `validateTeams` re-runs the pure
+  check, which also covers a `Config` assembled in code. Either check alone
+  refuses a widening.
+- **Exactly one team.** `TeamName` decodes only a scalar. A list fails with
+  "a member belongs to at most one team", and YAML itself refuses a repeated
+  `team:` key.
+- **The comparisons.**
+  - Operators: a subset.
+  - `autonomy.ceiling: observe`: refuses any `promote` (promotion only ever
+    reaches `reversible`).
+  - `shadow: true`: refuses `shadow: false`.
+  - Spend cap: per-action and per-period no higher, the period no shorter
+    (the same cap over less time is a faster rate), the same currency.
+  - Sweep budget: each limit no higher than the pool's.
+  - Isolation: each flag no looser.
+  - Credentials: `secrets_via` ranked `none < broker < env`; `allow_secrets` a
+    subset.
+  - Browser: logins a subset, with a `*.domain` entry covering its hosts and
+    narrower `*.sub.domain` patterns; credentials a subset.
+- **Tiers.** Team tiers merge into the member's, and the gate's
+  strictest-wins rule makes that a floor. A member pattern a team pattern
+  covers (`path.Match(team, member)`) at a stricter tier is a load error, so
+  the operator sees the conflict. Overlaps that check cannot see (two globs
+  that only intersect) are still resolved strictly at runtime.
+
+### Runtime
+
+- **Peering** is `Config.MemberLinked`: teammates whose team does not set
+  `peers: none`, in addition to the existing operator links. `Ask` is
+  unchanged, so a teammate's message is the ordinary peer case: data,
+  fenced, audited both sides, rate-limited.
+- **Routing.** `member: { team: … }` reaches `Service.RouteTeam` with the
+  event's own fields for the rules. The requester is classified once, against
+  the team's operators. `atMember` bounds that at each receiving member by
+  re-classifying an operator against that member's operators and keeping the
+  less trusted result.
+- **The lead triages through a read-only worker** that conductor starts on a
+  triage case in the lead's ledger, not through the lead's home
+  conversation. The worker:
+  - is immediate (no waiting for an idle home);
+  - is read-only by the existing worker lock;
+  - leaves the lead's home attribution and inbox alone (a triage worker's
+    `step.done` is not reported home).
+
+  `Assign` claims the triage case inside one ledger transaction (`triage` →
+  `assigned`), so it happens once. A failed delivery puts it back. It is
+  allowed from the lead's home session or from the worker started on that
+  case.
+- **Taint on assignment.** The assignee's case is the triage case's
+  requester, made less trusted by the assigning session's own attribution
+  when that is below `member`. An untainted lead (`member`: its own
+  initiative, no less-trusted request open) adds nothing, so an operator's
+  routed request stays the operator's instead of being reset to the lead's
+  trust.
+- **Fallback.** A triage case left unassigned goes to `routing.fallback`, on
+  its original provenance, when:
+  - the triage worker finishes without assigning (in `finishWorker`);
+  - `routing.timeout` passes (in the lead's `Tick`);
+  - triage cannot start (in `RouteTeam`).
+- **Ledger.** `Case.Team` and `Case.Routing` (`via`, the rule's label, the
+  lead and its triage case, the assignee and its case, the reason, the
+  note), plus `Payload` on a triage case, the text its assignee receives.
+- **Knowledge** is a `Repo` with `Team: true`:
+  - only `knowledge/` and `runbooks/`;
+  - `WriteAs` gives each commit its promoting member as author.
+
+  A promotion is a proposal of kind `knowledge` carrying the exact text. Its
+  digest is `ActionDigest(member, knowledge, team.promote, {team, from, to,
+  sha256})`. `Executor.execKnowledge` re-checks the digest and the hash
+  before landing, and `LandApproved` refuses a member that has left the team.
+  `Approvers` is the member's operators for every other proposal, and the
+  team's for a promotion. It is computed from the config at decision time,
+  and stored on the proposal for display only. `promotion: direct` lands at
+  once only on the `autonomyClass` allowlist (event, member, operator),
+  outside shadow mode, and not from a read-only worker.
+- **The pool.** `StartSweep` holds a per-team lock while it snapshots the
+  teammates' ledgers and checks the pool. The snapshot is taken outside the
+  member's own ledger transaction, because the store lock is held inside it;
+  the team lock keeps it current. It records its sweep inside the
+  transaction as before.
+- **Isolation.** `sandboxGate` refuses a home launch, a worker and a sweep of
+  a member with `isolation.sandbox: required` while `Sandbox.Active()` is
+  false. `Tick` logs that once per reason. `Spawn` refuses `--handoff` under
+  `handoff_workers: false`.
+
+### Seams and what is left out
+
+- **Browser scope** is config, inheritance and validation only. The agent
+  browser (#182) consumes `MemberConfig.Browser` when it lands, next to the
+  `requesterFor` wiring. Until then nothing reads it, and `conductor
+  validate` says so.
+- **`isolation.sandbox: required`** becomes satisfiable when the agent
+  sandbox (#179) is on main, through the same `sandboxSeam`.
+- **The team spend cap is a per-member ceiling, not a pool.** Each member's
+  commit-money cap fits inside it, but the team's members are not summed. A
+  shared money pool would need the gate to lock across members' ledgers at
+  proposal and at execution. The proactive pool is the one cross-member
+  budget, as specified.
+- **No team-level links.** Cross-team traffic still needs an operator to link
+  two members. A `team_links:` granularity was not added; it would link every
+  pair across two teams at once, which is the kind of broad channel the
+  member links were designed to avoid.
