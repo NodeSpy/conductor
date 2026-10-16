@@ -486,7 +486,7 @@
     draw('');
     const q = UI.$('#pk-q', s); q.addEventListener('input', () => draw(q.value));
     q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const f = UI.$('.pk-item[data-act]', s); if (f) f.click(); } });
-    setTimeout(() => q.focus(), 30);
+    setTimeout(() => { if (!s.contains(document.activeElement) || document.activeElement === document.body) q.focus(); }, 30);
     B.onPick = (key) => { UI.closeModal(); D.recentSteps = [key].concat((D.recentSteps || []).filter((k) => k !== key)).slice(0, 8); S.save(); onPick(items.find((x) => x.key === key)); };
   }
   UI.act('pk-pick', (b) => B.onPick && B.onPick(b.dataset.key));
@@ -675,7 +675,7 @@
     const groups = scopeFor(el);
     const s = UI.modal(`<div class="modal-head"><div><div class="caps">insert a reference · ${el.classList.contains('code-wrap') ? 'ctx.<path>' : '{{.path}}'}</div><h2>Data from earlier</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
       <div class="modal-body"><div class="input-icon" style="margin-bottom:10px">${icon('search')}<input class="input" id="rf-q" placeholder="filter: repo, logs.text…" aria-label="Filter data"></div><div id="rf-tree">${groups.map((g) => `<div class="dgroup" data-g="${esc(g.label)}"><div class="dg-head">${icon(g.icon)}<b class="mono">${esc(g.label)}</b><span class="mono tiny muted ellipsis">${esc(g.sub)}</span>${g.tested ? '<span class="tpill ok">actual</span>' : g.unknown ? '<span class="tpill idle">Test it to see outputs</span>' : '<span class="tpill idle">declared</span>'}</div>${g.key ? `<button type="button" class="dleaf ins whole" data-act="wf-ins" data-path="${esc(g.key)}" data-target="${b.dataset.target}"><span class="dk mono">${esc(g.key)}</span><span class="dv mono">the whole output</span><span class="dins">${icon('plus')}</span></button>` : ''}${tree(g.data, g.key, 0, b.dataset.target)}</div>`).join('')}</div></div>`, { wide: true });
-    const q = UI.$('#rf-q', s); setTimeout(() => innerWidth > 720 && q.focus(), 30);
+    const q = UI.$('#rf-q', s); setTimeout(() => { if (innerWidth > 720 && !s.contains(document.activeElement)) q.focus(); }, 30);
     q.addEventListener('input', () => { const v = q.value.toLowerCase(); UI.$$('.dleaf.ins', s).forEach((x) => x.classList.toggle('hidden', !!v && !x.dataset.path.toLowerCase().includes(v))); });
   });
   UI.act('wf-ins', (b) => { UI.closeModal(); insertRef(b.dataset.target, b.dataset.path); });

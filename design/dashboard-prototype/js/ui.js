@@ -503,7 +503,8 @@
       if (typeof r === 'string') { box.textContent = r; box.classList.remove('hide'); return; }
       if (r !== false) UI.closeModal();
     });
-    setTimeout(() => { const f = form.querySelector('input:not([type=hidden]):not([readonly]),select,textarea'); if (f && innerWidth > 720) f.focus(); }, 30);
+    // autofocus the first field, unless the user is already in one (never steal keystrokes)
+    setTimeout(() => { if (form.contains(document.activeElement)) return; const f = form.querySelector('input:not([type=hidden]):not([readonly]),select,textarea'); if (f && innerWidth > 720) f.focus(); }, 30);
     return s;
   };
   // form control behaviours (shared by modal forms and inline editors)
