@@ -105,8 +105,19 @@ type MemberConfig struct {
 	Proactive *MemberProactive `yaml:"proactive,omitempty"`
 	// Peers are the members this one may exchange messages with (`conductor
 	// member ask`). A link needs BOTH sides to list each other, or an
-	// operator-side member_links: entry. Empty: no peers.
+	// operator-side member_links: entry. Empty: no peers (teammates in a
+	// team that peers are linked without it).
 	Peers []string `yaml:"peers,omitempty"`
+	// Team is the one team (teams:) this member belongs to, if any. Its
+	// defaults are this member's ceilings (teams.go).
+	Team TeamName `yaml:"team,omitempty"`
+	// Isolation is the member's session policy (inherited from its team,
+	// and only ever stricter).
+	Isolation MemberIsolation `yaml:"isolation,omitempty"`
+	// Browser scopes the saved browser logins and sign-in credentials the
+	// member's sessions may use (nil: whatever the browser config allows its
+	// identity).
+	Browser *MemberBrowser `yaml:"browser,omitempty"`
 }
 
 // MemberProactive configures proactive sweeps. A sweep is a cli worker that
@@ -694,8 +705,9 @@ func (c *Config) expandMembers() error {
 }
 
 // MemberLinked reports whether two members may message each other: both
-// list the other under peers:, or an operator-side member_links: entry
-// pairs them. A member is never its own peer.
+// list the other under peers:, an operator-side member_links: entry pairs
+// them, or they are teammates in a team whose peers: is not none. A member is
+// never its own peer.
 func (c *Config) MemberLinked(a, b string) bool {
 	if a == b || a == "" || b == "" {
 		return false
@@ -709,6 +721,9 @@ func (c *Config) MemberLinked(a, b string) bool {
 		if len(l) == 2 && (l[0] == a && l[1] == b || l[0] == b && l[1] == a) {
 			return true
 		}
+	}
+	if c.sameTeamPeers(a, b) {
+		return true
 	}
 	return hasString(ma.Peers, b) && hasString(mb.Peers, a)
 }
@@ -787,6 +802,9 @@ func MarkdownSection(doc, title string) (string, bool) {
 // a config with neither.
 func (c *Config) validateMembers() error {
 	if err := c.validateMemberSteps(); err != nil {
+		return err
+	}
+	if err := c.validateTeams(); err != nil {
 		return err
 	}
 	for name, op := range c.Operators {
@@ -926,6 +944,12 @@ func (c *Config) validateMember(name string, m MemberConfig) error {
 			return fmt.Errorf("peers: %q is not a configured member", peer)
 		}
 	}
+	if err := validateMemberIsolation(m.Isolation); err != nil {
+		return err
+	}
+	if !m.Isolation.PromptSkipAllowed() && SkipsPrompts(m.Home.Mode) {
+		return fmt.Errorf("home.mode %q skips tool-permission prompts, but isolation.skip_permission_prompts is false%s", m.Home.Mode, teamNote(m))
+	}
 	if m.Worker.MaxConcurrent < 0 || m.Home.Rotate.MaxTurns < 0 || m.Worker.MaxPerCase < 0 {
 		return fmt.Errorf("max_concurrent / max_per_case / rotate.max_turns must not be negative")
 	}
@@ -984,7 +1008,7 @@ func (c *Config) MemberWarnings() []string {
 		if len(c.MemberOperators(name)) == 0 {
 			out = append(out, fmt.Sprintf("members.%s: no operators are configured — its proposals can never be approved", name))
 		}
-		if strings.Contains(strings.ToLower(m.Home.Mode), "bypass") {
+		if SkipsPrompts(m.Home.Mode) {
 			out = append(out, fmt.Sprintf("members.%s: home.mode %q skips tool-permission prompts; unless conductor's agent sandbox is on, the home agent's shell runs unprompted as you — the gate covers conductor verbs, not raw shell", name, m.Home.Mode))
 		}
 		if len(m.Autonomy.Promote) > 0 {
@@ -999,7 +1023,18 @@ func (c *Config) MemberWarnings() []string {
 			}
 		}
 	}
-	return out
+	return append(out, c.TeamWarnings()...)
+}
+
+// SkipsPrompts reports whether a paseo mode skips tool-permission prompts.
+func SkipsPrompts(mode string) bool { return strings.Contains(strings.ToLower(mode), "bypass") }
+
+// teamNote names a member's team in an error about an inherited setting.
+func teamNote(m MemberConfig) string {
+	if m.Team == "" {
+		return ""
+	}
+	return " (team " + string(m.Team) + ")"
 }
 
 func validMemberName(s string) bool {
@@ -1027,7 +1062,11 @@ func validMemberName(s string) bool {
 // action: rotate | consolidate runs those instead of a delivery (a cron
 // trigger's weekly consolidation, say).
 type MemberStep struct {
-	Name      string `yaml:"name"`
+	Name string `yaml:"name"`
+	// Team routes to a team instead of one member: its routing: picks who
+	// handles it (a rule, the lead's triage, or the fallback). Exactly one
+	// of name and team.
+	Team      string `yaml:"team,omitempty"`
 	Action    string `yaml:"action,omitempty"` // deliver (default) | rotate | consolidate
 	Title     string `yaml:"title,omitempty"`
 	Text      string `yaml:"text,omitempty"`
@@ -1036,8 +1075,11 @@ type MemberStep struct {
 }
 
 func (m *MemberStep) validate() error {
-	if strings.TrimSpace(m.Name) == "" {
-		return fmt.Errorf("name: is required (the member to route to)")
+	if (strings.TrimSpace(m.Name) == "") == (strings.TrimSpace(m.Team) == "") {
+		return fmt.Errorf("name exactly one of name: (the member to route to) or team: (a team, whose routing picks the member)")
+	}
+	if m.Team != "" && m.Action != "" && m.Action != "deliver" {
+		return fmt.Errorf("team: routes a delivery; action %s needs a member name:", m.Action)
 	}
 	switch m.Action {
 	case "", "deliver", "rotate", "consolidate":
@@ -1056,7 +1098,23 @@ func (m *MemberStep) validate() error {
 func (c *Config) validateMemberSteps() error {
 	check := func(where string, steps []Step) error {
 		for i, st := range steps {
-			if st.Member == nil || strings.Contains(st.Member.Name, "{{") {
+			if st.Member == nil {
+				continue
+			}
+			if tn := st.Member.Team; tn != "" {
+				if strings.Contains(tn, "{{") {
+					continue
+				}
+				t, ok := c.Teams[tn]
+				if !ok {
+					return fmt.Errorf("config: %s.steps[%d]: member.team: %q is not a configured team", where, i, tn)
+				}
+				if t.Routing == nil {
+					return fmt.Errorf("config: %s.steps[%d]: member.team: team %s has no routing: (rules, a lead, a fallback) — it cannot be routed to", where, i, tn)
+				}
+				continue
+			}
+			if strings.Contains(st.Member.Name, "{{") {
 				continue
 			}
 			if _, ok := c.Members[st.Member.Name]; !ok {

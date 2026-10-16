@@ -158,8 +158,12 @@ type Config struct {
 	// MemberLinks are operator-side peer links: each pair of members may
 	// message each other (`conductor member ask`), as if both listed the
 	// other under peers:. No link, no messages.
-	MemberLinks [][]string             `yaml:"member_links,omitempty"`
-	Workflows   map[string]WorkflowDef `yaml:"workflows"`
+	MemberLinks [][]string `yaml:"member_links,omitempty"`
+	// Teams group members (teams.go): shared ceilings, intra-team peering,
+	// an optional knowledge repo, routing. Optional; a member names its
+	// team.
+	Teams     map[string]TeamConfig  `yaml:"teams,omitempty"`
+	Workflows map[string]WorkflowDef `yaml:"workflows"`
 	// Triggers is the `triggers:` section. It decodes from the list form or
 	// the named/qualified MAP form, where the key is the trigger's stable
 	// address and a `source.event` key implies `on:` — see TriggerList and
@@ -943,6 +947,12 @@ func Load(path string) (*Config, error) {
 	// Each member expands into its two synthesized worker triggers (`on:
 	// manual`), here so they pass through normalization and validation like
 	// any trigger the operator wrote. No-op without `members:`.
+	// Teams resolve first: each member's team defaults are filled in (and a
+	// member setting past its team's ceiling refused) before the member's
+	// worker triggers copy its grant.
+	if err := c.ResolveTeams(); err != nil {
+		return nil, err
+	}
 	if err := c.expandMembers(); err != nil {
 		return nil, err
 	}
