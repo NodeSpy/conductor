@@ -404,9 +404,11 @@ hr.rule { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
   .page { padding: 14px 14px 90px; }
   .page-head h1 { font-size: 30px; }
   .page-head .actions { margin-left: 0; width: 100%; }
-  .g2, .g3, .g4, .g-side, .g-side-l { grid-template-columns: 1fr; }
+  .g2, .g3, .g4, .g-side, .g-side-l, .grid[style*='grid-template-columns'] { grid-template-columns: minmax(0, 1fr) !important; }
   .span2, .span3 { grid-column: auto; }
   .hide-phone { display: none !important; }
+  .panel-head { flex-wrap: wrap; }
+  .panel-head .tools { margin-left: 0; }
   .tabbar {
     display: grid; grid-template-columns: repeat(5, 1fr); border-top: 1px solid var(--line); background: color-mix(in srgb, var(--bg-1) 92%, transparent);
     backdrop-filter: blur(10px); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); position: relative; z-index: 30;

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>conductor · phone layouts</title>
+<link rel="stylesheet" href="css/app.css">
+<style>
+  body { overflow-x: auto; }
+  .wrap { padding: 32px 40px 60px; min-width: max-content; }
+  .intro { display: flex; align-items: flex-end; gap: 24px; margin-bottom: 28px; }
+  .intro h1 { font-family: var(--font-title); font-style: italic; font-weight: 400; font-size: 46px; margin: 0; line-height: 1; }
+  .intro p { margin: 0; color: var(--ink-2); max-width: 560px; }
+  .phones { display: flex; gap: 40px; align-items: flex-start; }
+  .device { width: 414px; display: flex; flex-direction: column; gap: 12px; }
+  .bezel { width: 414px; height: 868px; border-radius: 56px; padding: 12px; background: linear-gradient(145deg, #2c2d27, #121310); box-shadow: 0 0 0 1px #3a3b31, 0 40px 80px -30px rgba(0,0,0,.8), inset 0 0 0 2px #1a1b16; position: relative; }
+  .bezel::before { content: ""; position: absolute; top: 22px; left: 50%; transform: translateX(-50%); width: 112px; height: 30px; border-radius: 20px; background: #000; z-index: 2; }
+  .bezel iframe { width: 390px; height: 844px; border: 0; border-radius: 44px; background: var(--bg); display: block; }
+  .device .cap { font-family: var(--font-mono); font-size: 11px; color: var(--ink-3); text-align: center; }
+  .device .cap b { color: var(--ink); font-family: var(--font-ui); font-size: 14px; display: block; margin-bottom: 2px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="intro"><div><div class="caps">conductor dashboard · prototype</div><h1>On the phone</h1></div>
+    <p>The same app at 390px: a bottom tab bar replaces the rail, approvals open as a sheet, and chat takes the full screen. Over Tailscale, with the same passkey (synced, or a second one enrolled from the phone).</p>
+    <a class="btn" href="index.html" style="margin-left:auto">← Desktop</a></div>
+  <div class="phones">
+    <div class="device"><div class="bezel"><iframe src="index.html#/overview" title="Overview"></iframe></div><div class="cap"><b>Overview</b>#/overview</div></div>
+    <div class="device"><div class="bezel"><iframe src="index.html#/attention" title="Approvals"></iframe></div><div class="cap"><b>Approvals</b>#/attention → tap Review → sign</div></div>
+    <div class="device"><div class="bezel"><iframe src="index.html#/members/platform-sre/chat" title="Chat"></iframe></div><div class="cap"><b>Chat with a member</b>#/members/platform-sre</div></div>
+    <div class="device"><div class="bezel"><iframe src="index.html#/members/platform-sre/proposals/p12" title="Proposal"></iframe></div><div class="cap"><b>Sign an apply</b>#/…/proposals/p12</div></div>
+  </div>
+</div>
+<script>try { const t = localStorage.getItem('cd-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
+</body>
+</html>

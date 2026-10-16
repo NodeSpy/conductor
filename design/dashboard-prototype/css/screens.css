@@ -221,7 +221,15 @@
   .chat { height: calc(100vh - 230px); min-height: 0; }
   .msg { max-width: 92%; }
   .builder { grid-template-columns: 1fr; height: auto; } .builder .yaml-col { min-height: 50vh; }
-  .member-hero h1 { font-size: 32px; }
+  .member-hero { gap: 10px; margin-bottom: 10px; }
+  .member-hero h1 { font-size: 30px; }
+  .member-hero .sigil.lg { width: 40px; height: 40px; font-size: 24px; }
+  .member-hero .facts .pill ~ .tag:nth-of-type(n+3) { display: none; }
+  .member-hero > .row { width: 100%; flex-wrap: nowrap; overflow-x: auto; }
+  .member-hero > .row .btn { height: 26px; font-size: 11.5px; }
+  .chat .panel-head .muted { display: none; }
+  .chat { height: calc(100vh - 300px); }
+  .plan { max-height: 300px; }
   .inspector { position: static; width: auto; margin: 10px; }
   .proposal { grid-template-columns: 1fr; }
 }
