@@ -79,7 +79,7 @@ async function inject(page) {
         window.__obs.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true, attributeFilter: ['class', 'aria-pressed', 'aria-checked', 'aria-expanded', 'aria-disabled', 'style', 'open', 'value', 'hidden'] });
         return { url: location.href, ls: localStorage.getItem('cd-proto-state-v2') || '', theme: localStorage.getItem('cd-theme') };
       },
-      overlay() { return !!document.querySelector('#scrim, #pop-menu'); },
+      overlay() { const o = document.querySelector('#pop-menu, #scrim, .palette'); return o ? (o.id ? '#' + o.id : '.palette') : null; },
     };
   });
 }
@@ -134,7 +134,7 @@ async function crawlRoute(page, testInfo, route, { afterLoad } = {}) {
       if (!changed) { report.dead.push(`${item.sel} "${item.text}"${item.path.length ? ` (after ${item.path.join(' → ')})` : ''}`); continue; }
       if (after.url !== before.url || after.ls !== before.ls) dirty = true;
       if (item.path.length < MAX_DEPTH && after.url === before.url) {
-        const scope = after.overlay ? (await page.locator('#pop-menu').count() ? '#pop-menu' : '#scrim') : null;
+        const scope = after.overlay || null;
         await inject(page);
         const now = await page.evaluate(([s, c]) => window.__crawl.list(s, c), [scope, chrome]);
         now.forEach((x) => {

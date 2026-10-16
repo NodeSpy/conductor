@@ -117,7 +117,7 @@ tr.hidden, .item.hidden, .hidden { display: none !important; }
 .peers-graph { width: 100%; height: auto; display: block; }
 .peers-graph a { cursor: pointer; }
 .pg-team { fill: color-mix(in srgb, var(--run) 6%, transparent); stroke: color-mix(in srgb, var(--run) 45%, var(--line-2)); stroke-width: 1.5; stroke-dasharray: 5 4; }
-.peers-graph a:hover .pg-team { fill: color-mix(in srgb, var(--run) 12%, transparent); }
+.peers-graph a:hover .pg-tn { text-decoration: underline; }
 .pg-tn { font: 600 10px var(--font-mono); fill: var(--run); text-transform: uppercase; letter-spacing: .08em; }
 .pg-tn.muted { fill: var(--ink-3); }
 .pg-in { fill: none; stroke: var(--line-3); stroke-dasharray: 3 3; }
