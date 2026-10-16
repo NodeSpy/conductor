@@ -1,6 +1,6 @@
 /* Access: passkey sign-in, operator enrollment (CLI one-time localhost link), passkeys, sessions, listeners. */
 (function () {
-  const { icon, st, tag, ago } = UI;
+  const { icon, st, tag, ago, esc } = UI;
   const baton = `<svg width="34" height="34" viewBox="0 0 24 24" fill="none"><path d="M4 20L18.5 5.5" stroke="var(--ink)" stroke-width="1.6" stroke-linecap="round"/><circle cx="19.5" cy="4.5" r="2.3" fill="var(--accent)"/><path d="M3 21l2.4-.7-1.7-1.7z" fill="var(--ink)"/></svg>`;
   const gate = (inner) => `<div class="gate" style="position:fixed;inset:0;z-index:60;background:var(--bg);background-image:radial-gradient(var(--dot) 1px,transparent 1.2px);background-size:22px 22px">${inner}</div>`;
 
@@ -8,30 +8,32 @@
     toString: () => gate(`<div class="panel card"><div class="row">${baton}<span class="mono tiny muted" style="margin-left:auto">${D.daemon.magicdns}</span></div>
       <h1>conductor</h1><p class="dim" style="margin:0 0 20px">Sign in to <b>ops-box</b> with your passkey.</p>
       <div class="seal" id="seal" style="padding:6px 0 16px"><div class="ring">${icon('passkey', 'key')}<svg class="arc" viewBox="0 0 108 108"><circle class="track" cx="54" cy="54" r="52"/><circle class="fill" cx="54" cy="54" r="53"/></svg></div></div>
-      <button class="btn lg primary" style="width:100%;justify-content:center" id="go">${icon('passkey')}Sign in with a passkey</button>
+      <button class="btn lg primary" style="width:100%;justify-content:center" data-act="signin">${icon('passkey')}Sign in with a passkey</button>
       <div class="muted tiny" style="margin-top:14px;line-height:1.6">Reachable only on 127.0.0.1 and this box's tailnet address. No passkey on this device? Run <span class="mono">conductor dashboard enroll</span> on the box for a one-time link.</div>
       <div class="row tiny muted" style="margin-top:16px;border-top:1px dashed var(--line);padding-top:12px"><span>${icon('shield')} TLS · Tailscale cert</span><a style="margin-left:auto;color:var(--accent)" href="#/enroll">Enrollment demo →</a></div></div>`),
-    after(main) {
-      UI.$('#go').addEventListener('click', () => {
-        UI.$('#seal').classList.add('signing');
-        setTimeout(() => { UI.$('#seal').classList.remove('signing'); UI.$('#seal').classList.add('done'); setTimeout(() => UI.go('#/overview'), 600); }, 1300);
-      });
-    },
   }), { nav: 'security' });
 
   UI.route('enroll', () => ({
-    toString: () => gate(`<div class="panel card" style="width:min(560px,100%)"><div class="row">${baton}<span class="tag" data-s="wait">one-time link · expires in 9:41</span></div>
+    toString: () => gate(`<div class="panel card" style="width:min(560px,100%)"><div class="row">${baton}<span class="tag" data-s="wait">one-time link · expires in 9:41</span><span class="mono tiny muted" style="margin-left:6px">demo code 417-209</span></div>
       <h1>Enroll a passkey</h1><p class="dim" style="margin:0 0 16px">You opened the link <span class="mono">conductor dashboard enroll</span> printed. It works once, on <b>localhost</b> only, for 10 minutes. Then registration continues on the tailnet origin, because a passkey belongs to one name.</p>
       <div class="code" style="margin-bottom:16px"><span class="ln"><span class="y-c">$ conductor dashboard enroll --operator ops</span></span><span class="ln">operator ops: open this on THIS machine within 10m (single use):</span><span class="ln"><span class="y-s">  http://localhost:7788/enroll#t=Hk3v…q9</span></span><span class="ln">pairing code: <span class="y-n">417-209</span></span></div>
       <div class="stack">
-        <div class="grid g2"><div class="field"><label>Operator</label><input class="input mono" value="ops" disabled></div><div class="field"><label>Pairing code</label><input class="input mono" value="417-209"></div></div>
-        <div class="field"><label>Name this passkey</label><input class="input" value="laptop · Touch ID"></div>
-        <div class="field"><label>Register on</label><div class="seg"><button class="on">${D.daemon.magicdns}</button><button>localhost only</button></div><div class="hint">The tailnet name (the default) works from this box and your phone; this page hands a one-time ticket to <span class="mono">https://${D.daemon.magicdns}:7788/enroll</span>, here or by QR on another device. A localhost-only passkey works only on the box.</div></div>
-        <div class="callout warn small">You already have 2 passkeys, so adding a third also needs one of them. Every enrollment is audited and fires <span class="mono">conductor.dashboard_enrolled</span>.</div>
-        <button class="btn lg primary" style="justify-content:center" onclick="UI.toast('Passkey “laptop · Touch ID” enrolled','operator ops · user verification required','ok');UI.go('#/security')">${icon('passkey')}Create passkey</button>
+        <div class="grid g2"><div class="field"><label for="en-op">Operator</label><input class="input mono" id="en-op" value="ops" readonly></div><div class="field" id="en-code-f"><label for="en-code">Pairing code</label><input class="input mono" id="en-code" placeholder="000-000" inputmode="numeric"><div class="ferr"></div></div></div>
+        <div class="field"><label for="en-name">Name this passkey</label><input class="input" id="en-name" value="${['phone · Face ID', 'desktop · Windows Hello', 'yubikey'][D.passkeys.length % 3]}"></div>
+        <div class="field"><label>Register on</label>${UI.seg([['tailnet', D.daemon.magicdns], ['localhost', 'localhost only']], en.rp, 'en-rp')}<div class="hint">The tailnet name (the default) works from this box and your phone; this page hands a one-time ticket to <span class="mono">https://${D.daemon.magicdns}:7788/enroll</span>, here or by QR on another device. A localhost-only passkey works only on the box.</div></div>
+        <div class="callout warn small">You already have ${D.passkeys.length} passkeys, so adding a third also needs one of them. Every enrollment is audited and fires <span class="mono">conductor.dashboard_enrolled</span>.</div>
+        <button class="btn lg primary" style="justify-content:center" data-act="enroll">${icon('passkey')}Create passkey</button>
       </div></div>`),
   }), { nav: 'security' });
 
+  const en = { rp: 'tailnet' };
+  UI.act('signin', () => { const seal = UI.$('#seal'); seal.classList.add('signing'); setTimeout(() => { seal.classList.remove('signing'); seal.classList.add('done'); if (!D.sessions.find((x) => x.current)) D.sessions.unshift({ id: 's-' + Date.now().toString(36), device: 'Firefox · laptop', addr: '127.0.0.1', started: new Date().toISOString(), idle: '0m', current: true }); S.save(); setTimeout(() => UI.go('#/overview'), UI.fast ? 20 : 500); }, UI.fast ? 30 : 1100); });
+  UI.act('en-rp', (b) => { en.rp = b.dataset.v; UI.$$('[data-act="en-rp"]').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); });
+  UI.act('enroll', () => { const code = UI.$('#en-code').value.trim(), f = UI.$('#en-code-f'); if (code !== '417-209') { f.classList.add('bad'); f.querySelector('.ferr').textContent = code ? 'That code doesn\'t match the one the CLI printed. A wrong code burns the ticket after 3 tries.' : 'Type the pairing code the CLI printed.'; UI.$('#en-code').focus(); return; } const name = UI.$('#en-name').value.trim() || 'new passkey'; D.passkeys.push({ id: 'pk' + Date.now().toString(36), name, rp: en.rp === 'tailnet' ? D.daemon.magicdns : 'localhost', kind: 'platform authenticator', used: new Date().toISOString(), count: 0, bound: true }); D.audit.unshift({ ts: new Date().toISOString(), event: 'dashboard_enrolled', who: 'operator:ops', detail: `passkey “${name}” · rp ${en.rp === 'tailnet' ? D.daemon.magicdns : 'localhost'}`, run: '' }); S.save(); UI.toast(`Passkey “${UI.esc(name)}” enrolled`, 'operator ops · user verification required', 'ok'); UI.go('#/security'); });
+  UI.act('pk-revoke', (b) => { const k = D.passkeys.find((x) => x.id === b.dataset.id); UI.stepup({ title: `Revoke “${UI.esc(k.name)}”`, purpose: 'passkey revoke', danger: true, ok: 'Revoke with passkey', what: `{ purpose: <b>passkey_revoke</b>, credential: <b>${UI.esc(k.name)}</b> } · its sessions end` }).then((ok) => { if (!ok) return; D.passkeys = D.passkeys.filter((x) => x !== k); D.audit.unshift({ ts: new Date().toISOString(), event: 'dashboard_passkey_revoked', who: 'operator:ops', detail: k.name, run: '' }); S.save(); UI.rerender(); }); });
+  UI.act('sess-end', (b) => { D.sessions = D.sessions.filter((x) => x.id !== b.dataset.id); D.audit.unshift({ ts: new Date().toISOString(), event: 'dashboard_session_end', who: 'operator:ops', detail: b.dataset.id, run: '' }); S.save(); UI.rerender(); });
+  UI.act('sess-all', () => UI.confirm({ title: 'Sign out everywhere?', body: 'Ends every session, this one too. You sign in again with a passkey.', ok: 'Sign out everywhere', danger: true }).then((ok) => { if (!ok) return; D.sessions = []; D.audit.unshift({ ts: new Date().toISOString(), event: 'dashboard_logout_all', who: 'operator:ops', detail: 'all sessions', run: '' }); S.save(); UI.go('#/signin'); }));
+  UI.act('op-bound', () => { const c = JSON.parse(JSON.stringify(S.staged('operators', 'ops'))); c.require_device_bound = !c.require_device_bound; S.stage('operators', 'ops', c); UI.refreshChrome(); UI.rerender(); });
   UI.route('security', () => {
     const d = D.daemon;
     return `<div class="page">
@@ -39,11 +41,13 @@
       <div class="grid g2">
         <div class="stack">
           <div class="panel"><div class="panel-head"><h3>Passkeys · ops</h3><div class="tools"><a class="btn sm" href="#/enroll">${icon('plus')}Add (CLI link)</a></div></div><div class="list">
-            ${[['laptop · Touch ID', 'ops-box.tail0000.ts.net', 'platform authenticator', '4m ago', 212], ['phone · Face ID', 'ops-box.tail0000.ts.net', 'synced passkey', '2d ago', 31], ['security key', 'ops-box.tail0000.ts.net', 'roaming · FIDO2', '19d ago', 4]].map(([n, rp, k, used, c]) => `<div class="item"><span class="icon-btn">${icon('passkey')}</span><div class="grow"><b>${n}</b><div class="mono tiny muted">${rp} · ${k} · sign count ${c}</div></div><span class="mono tiny muted">used ${used}</span><button class="btn sm danger">Revoke</button></div>`).join('')}</div>
+            ${D.passkeys.map((k) => `<div class="item"><span class="icon-btn" aria-hidden="true">${icon('passkey')}</span><div class="grow"><b>${esc(k.name)}</b> ${k.bound ? tag('device-bound') : tag('synced')}<div class="mono tiny muted">${k.rp} · ${k.kind} · sign count ${k.count}</div></div><span class="mono tiny muted hide-phone">used ${ago(k.used)} ago</span><button class="btn sm danger" ${D.passkeys.length > 1 ? `data-act="pk-revoke" data-id="${k.id}"` : UI.off('Your last passkey: enroll another first, or reset with conductor dashboard reset')}>Revoke</button></div>`).join('')}</div>
             <div class="panel-foot small muted">Revoking a passkey ends its sessions. The last passkey can be replaced only through a fresh CLI enrollment link.</div></div>
-          <div class="panel"><div class="panel-head"><h3>Sessions</h3><div class="tools"><button class="btn sm danger">Sign out everywhere</button></div></div><div class="list">
-            <div class="item">${st('ok', '')}<div class="grow small"><b>Firefox · laptop</b> ${tag('this session', 'ember')}<div class="mono tiny muted">127.0.0.1 · started ${ago(D.operator.session.created)} ago · idle ${D.operator.session.idle}</div></div></div>
-            <div class="item">${st('ok', '')}<div class="grow small"><b>Safari · phone</b><div class="mono tiny muted">100.101.7.3 (tailnet) · started 2d ago · idle 6h</div></div><button class="btn sm ghost">End</button></div></div>
+          <div class="panel"><div class="panel-head"><h3>Approval policy</h3>${S.find('operators', 'ops') ? tag('staged', 'run') : ''}</div><div class="panel-body small stack tight">
+            <label class="row">${UI.switchBtn(!!(S.staged('operators', 'ops') || {}).require_device_bound, 'op-bound', 'aria-label="Require a device-bound passkey for approvals"')}<span><b>Require a device-bound passkey for approvals</b><div class="muted tiny">Synced passkeys (iCloud, Google) still sign in and apply config; approvals then need a key that never leaves its device.</div></span></label>
+            <a class="btn sm primary" href="#/config/apply" ${S.find('operators', 'ops') ? '' : UI.off('Change the policy first')} style="align-self:flex-start">Review change</a></div></div>
+          <div class="panel"><div class="panel-head"><h3>Sessions</h3><div class="tools"><button class="btn sm danger" data-act="sess-all">Sign out everywhere</button></div></div><div class="list">
+            ${D.sessions.map((x) => `<div class="item">${st('ok', '')}<div class="grow small"><b>${esc(x.device)}</b> ${x.current ? tag('this session', 'ember') : ''}<div class="mono tiny muted">${esc(x.addr)} · started ${ago(x.started)} ago · idle ${x.idle}</div></div>${x.current ? '' : `<button class="btn sm ghost" data-act="sess-end" data-id="${x.id}">End</button>`}</div>`).join('')}</div>
             <div class="panel-foot small muted">Idle 30m, absolute 12h. Cookie: <span class="mono">__Host-</span>, Secure, HttpOnly, SameSite=Strict.</div></div>
         </div>
         <div class="stack">

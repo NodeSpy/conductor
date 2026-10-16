@@ -163,3 +163,13 @@ tr.hidden, .item.hidden, .hidden { display: none !important; }
   .peers-graph { min-width: 0; }
   .route-cell { max-width: none; }
 }
+
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+button.node { font: inherit; color: inherit; text-align: left; }
+.as-btn { width: 100%; background: none; border: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.icon-btn.on { color: var(--accent); border-color: var(--accent); }
+.vault-card.bad { border-color: color-mix(in srgb, var(--fail) 45%, var(--line)); }
+.row-removed td { opacity: .5; text-decoration: line-through; }
+.seed-grid { grid-template-columns: minmax(0, 1fr) 340px; align-items: start; }
+.pack-row .card-actions { justify-content: flex-end; }
+@media (max-width: 720px) { .seed-grid { grid-template-columns: minmax(0, 1fr); } .pack-row { flex-wrap: wrap; } .pack-row .card-actions { width: 100%; justify-content: flex-start; } }
