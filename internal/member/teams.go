@@ -598,7 +598,7 @@ func (s *Service) proposeKnowledge(c Actor, m config.MemberConfig, cl callerInfo
 		kc := k
 		p := &store.Proposal{ID: r.NextID("p"), Kind: KindKnowledge, Tier: config.TierPropose, Uses: promoteVerb,
 			Options: opts, Digest: digest, Knowledge: &kc, Role: c.Role, Agent: c.Agent, Dispatch: c.Dispatch,
-			Summary: fmt.Sprintf("promote %s into team %s's knowledge as %s", k.From, k.Team, k.To),
+			Summary:   fmt.Sprintf("promote %s into team %s's knowledge as %s", k.From, k.Team, k.To),
 			Requester: cl.who, RequesterClass: cl.class, Status: status, Reason: reason,
 			Team: k.Team, Approvers: cfg.TeamOperators(k.Team), Created: now, Expires: now.Add(m.Autonomy.TTL())}
 		if cl.worker != nil {
