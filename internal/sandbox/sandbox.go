@@ -76,8 +76,8 @@ func FromConfig(c *config.IsolationConfig) *Spec {
 		return nil
 	}
 	s := &Spec{Mode: c.Mode, User: c.User, Privileged: c.Privileged, AllowRoot: c.AllowRoot, FS: c.FS}
+	s.Image = c.ImageName()
 	if c.Container != nil {
-		s.Image = c.Container.Image
 		s.Engine = c.Container.Engine
 	}
 	if c.Limits != nil {

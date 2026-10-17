@@ -31,7 +31,7 @@ func TestSandboxApplies(t *testing.T) {
 	if sandboxApplies("box", agent) || sandboxApplies("", launchOpts{}) {
 		t.Fatal("remote launches and non-agent launches are not")
 	}
-	for mode, want := range map[string]bool{"none": false, "user": false, "container": false, "namespace": true} {
+	for mode, want := range map[string]bool{"none": false, "user": false, "container": true, "namespace": true} {
 		o := agent
 		o.iso = &config.IsolationConfig{Mode: mode}
 		if got := sandboxApplies("", o); got != want {

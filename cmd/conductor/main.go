@@ -1479,9 +1479,12 @@ func serveControl(ctx context.Context, path string, igs []core.Integration, emit
 // engine's RetryRunByID.
 type retryFunc func(ctx context.Context, runID, fromStep string, forceReplay bool) (string, error)
 
+// controlConnDeadline bounds a control-socket exchange (a test shortens it).
+var controlConnDeadline = 30 * time.Second
+
 func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integration, emit core.EmitFunc, manual map[string]connector.CompiledTrigger, retry retryFunc, events *flow.EventHub, gate *callableGate, log func(string, ...any)) {
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(controlConnDeadline))
 	var req controlRequest
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
 		writeControlResp(conn, controlResponse{Error: "bad request: " + err.Error()})
@@ -1532,7 +1535,26 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 		}
 		streamRunEvents(ctx, conn, events, req.RunID, log)
 	case "sandbox-policy":
-		writeControlResp(conn, sandboxPolicyResponse(conn, req, log))
+		// A container policy creates (or starts) the identity's container
+		// before it answers: an engine under load takes longer than the
+		// usual deadline, which must not leave the caller waiting on an
+		// answer that can no longer be written.
+		_ = conn.SetDeadline(time.Now().Add(sandboxPolicyDeadline))
+		resp, release := sandboxPolicyResponse(ctx, conn, req, log)
+		if err := json.NewEncoder(conn).Encode(resp); err != nil {
+			if release != nil {
+				release()
+			}
+			log("sandbox-policy for %s: reply not delivered: %v", req.Cwd, err)
+			return
+		}
+		if release != nil {
+			holdContainerLease(conn, release)
+		}
+	case "sandbox-containers", "sandbox-archive":
+		// Removing an identity's containers waits on the engine.
+		_ = conn.SetDeadline(time.Now().Add(sandboxPolicyDeadline))
+		writeControlResp(conn, sandboxContainersResponse(ctx, conn, req, log))
 	case "retry":
 		if retry == nil {
 			writeControlResp(conn, controlResponse{Error: "retry is not available (no flow runner configured)"})
@@ -1775,6 +1797,24 @@ func parsePRRef(s string) (repo string, number int, err error) {
 		return "", 0, fmt.Errorf("bad number in %q (want owner/repo#N)", s)
 	}
 	return repo, number, nil
+}
+
+// controlCall does one request/response on the control socket at sock.
+func controlCall(sock string, req controlRequest) (controlResponse, error) {
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		return controlResponse{}, fmt.Errorf("connect to daemon control socket %s — is it running? %w", sock, err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Minute))
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		return controlResponse{}, err
+	}
+	var resp controlResponse
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return controlResponse{}, err
+	}
+	return resp, nil
 }
 
 // sendControl dials the daemon control socket and does one request/response.

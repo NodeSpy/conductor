@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -176,16 +177,16 @@ func TestSandboxPolicyResponse(t *testing.T) {
 	old := sandboxResolver.Load()
 	t.Cleanup(func() { sandboxResolver.Store(old) })
 	sandboxResolver.Store(nil)
-	if r := sandboxPolicyResponse(nil, controlRequest{Cwd: "/tmp"}, t.Logf); r.Error == "" || r.Policy != nil {
+	if r, _ := sandboxPolicyResponse(context.Background(), nil, controlRequest{Cwd: "/tmp"}, t.Logf); r.Error == "" || r.Policy != nil {
 		t.Fatalf("sandbox off: no policy: %+v", r)
 	}
 	ws := t.TempDir()
 	sandboxResolver.Store(&agentsandbox.Resolver{Registry: &agentsandbox.Registry{}, StateRoot: t.TempDir(), GOOS: sandbox.CheckGOOS})
-	r := sandboxPolicyResponse(nil, controlRequest{Cwd: ws, Tool: "claude"}, t.Logf)
+	r, _ := sandboxPolicyResponse(context.Background(), nil, controlRequest{Cwd: ws, Tool: "claude"}, t.Logf)
 	if r.Error != "" || r.Policy == nil || r.Policy.Tool != "claude-code" {
 		t.Fatalf("a policy: %+v", r)
 	}
-	if r := sandboxPolicyResponse(nil, controlRequest{Cwd: "/", Tool: "claude"}, t.Logf); r.Error == "" {
+	if r, _ := sandboxPolicyResponse(context.Background(), nil, controlRequest{Cwd: "/", Tool: "claude"}, t.Logf); r.Error == "" {
 		t.Fatal("refused workspace")
 	}
 }

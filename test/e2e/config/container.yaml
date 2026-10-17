@@ -1,0 +1,61 @@
+# The container-backend daemon (group ZC, docs/design/agent-sandbox.md §15):
+# the agent sandbox's container backend, end to end. Its cli runtime runs
+# the probing fake agent (fakecli) in a persistent per-identity container
+# on the stack's own Docker engine (the dind sidecar): conductor's own
+# e2e image with the decoy key removed is the agent image. The agent
+# commits; conductor pushes, signed.
+connectors:
+  github:
+    use: /usr/local/bin/conductor-github
+    api_base: http://mock-github:8080
+    app:
+      app_id: 123456
+      private_key_path: /etc/conductor/github-app.pem
+    identity:
+      commit_author: self
+      read_token: app
+      write_token: e2e-user-write-token
+    me:
+      logins:
+        - conductor-user
+    policy:
+      reply_to_bots: decline_only
+    webhook:
+      listen: 0.0.0.0:8789
+      secret: e2e-webhook-secret
+      verify_signature: false
+runtimes:
+  cli_box:
+    use: acp
+    agent: claude-code
+    transport: cli
+    default: true
+    isolation:
+      mode: container
+      image: conductor-e2e-agent:latest
+      persistent: true
+      container: { engine: docker, read_only: true }
+      limits: { pids: 512 }
+triggers:
+  - "on": github.merge_conflict
+    filter:
+      repo:
+        - grpzc/box
+    steps:
+      - type: agent
+        name: fx_container
+        runtime: cli_box
+        workspace: worktree
+        archive_when_done: true
+        prompt: "Resolve {{.repo}}#{{.pr}} (cli:claude-code, in its container) [[sandbox-probe]]"
+policy:
+  concurrency:
+    max_agents: 2
+sandbox:
+  push:
+    signing_key: /home/conductor/cdata/keys/signing
+    name: Conductor User
+    email: conductor@users.noreply.forge.test
+store:
+  state_file: /home/conductor/cdata/state.json
+  audit_log: /home/conductor/cdata/audit.jsonl

@@ -58,6 +58,9 @@ type Policy struct {
 	// Note is something the launcher should tell its operator about this
 	// policy (a scratch workspace in place of a refused directory).
 	Note string `json:"note,omitempty"`
+	// Container runs the agent in a container instead of the
+	// namespace/Seatbelt jail (isolation `mode: container`; nil = the jail).
+	Container *Container `json:"container,omitempty"`
 }
 
 // Validate refuses a policy that cannot be realized as a boundary.
@@ -148,6 +151,10 @@ type Launch struct {
 	// reaches it (Linux: the sandbox has its own network), or to "" where
 	// the address itself is reachable from the host (macOS).
 	Exposed map[string]string
+	// Signal delivers a signal (TERM, KILL, …) to the agent where signalling
+	// the launched process does not reach it (a container launch: the
+	// engine client forwards none). nil: signal the process.
+	Signal func(sig string)
 }
 
 // Wrap realizes p around argv. Fail-closed: any error means no launch.
@@ -157,6 +164,9 @@ func Wrap(p Policy, argv []string, d Deps) (*Launch, error) {
 	}
 	if err := p.Validate(); err != nil {
 		return nil, err
+	}
+	if p.Container != nil {
+		return WrapContainer(p, argv, d)
 	}
 	if d.SelfExe == nil || d.LookPath == nil {
 		return nil, fmt.Errorf("agentsandbox: launcher not wired")

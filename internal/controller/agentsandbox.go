@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
 	"github.com/NodeSpy/conductor/internal/dispatch"
@@ -26,6 +27,8 @@ type SandboxWiring struct {
 	// a process conductor does not start itself (agent-deck's tmux
 	// session): `conductor sandbox exec --socket <control socket>`.
 	Exec []string
+	// Containers is the container backend (isolation `mode: container`).
+	Containers *agentsandbox.Containers
 }
 
 // AgentSandbox is the wiring (nil = off).
@@ -65,17 +68,20 @@ func withAgent(opt launchOpts, tool string, req *dispatch.Request, skillEnv bool
 
 // sandboxApplies reports whether a launch runs under the agent sandbox: a
 // local agent launch with the sandbox on, unless its isolation block opts
-// out (`mode: none`) or chose another wrapper (mode user or container, or
-// namespace with `privileged: true`). A remote (host:) launch runs on
-// another box, under that box's own isolation.
+// out (`mode: none`) or chose another wrapper (mode user, or namespace with
+// `privileged: true`). `mode: container` is the agent sandbox's container
+// backend. A remote (host:) launch runs on another box, under that box's
+// own isolation.
 func sandboxApplies(host string, opt launchOpts) bool {
 	if AgentSandbox == nil || opt.agent == nil || host != "" {
 		return false
 	}
 	if iso := opt.iso; iso != nil {
 		switch iso.Mode {
-		case "none", "user", "container":
+		case "none", "user":
 			return false
+		case "container":
+			return true
 		case "namespace":
 			return !iso.Privileged
 		}
@@ -130,6 +136,11 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	if err != nil {
 		return nil, "", nil, nil, err
 	}
+	if c := agentsandbox.ContainerFor(opt.iso); c != nil {
+		// The container backend; this launch's own, never re-keying a
+		// registration's.
+		entry.Container = c
+	}
 	if iso := opt.iso; iso != nil {
 		// An explicit namespace block shapes the sandbox further: its
 		// network allowlist joins the model endpoints, its fs: paths are
@@ -159,6 +170,22 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 	pol.Env = append(pol.Env, a.env...)
 	pol.ReadOnly = append(pol.ReadOnly, a.files...)
 	pol.Expose = append(pol.Expose, a.expose...)
+	if opt.iso != nil && opt.iso.Mode == "namespace" {
+		// Named explicitly: the jail, whatever the default backend.
+		pol.Container = nil
+	}
+	var release func()
+	if pol.Container != nil {
+		if w.Containers == nil {
+			return nil, "", nil, nil, fmt.Errorf("agent sandbox: no container backend — the agent is not launched unsandboxed")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		release, err = w.Containers.Prepare(ctx, &pol)
+		cancel()
+		if err != nil {
+			return nil, "", nil, nil, fmt.Errorf("agent sandbox: %w — the agent is not launched unsandboxed", err)
+		}
+	}
 	launch, err := agentsandbox.Wrap(pol, argv, agentsandbox.Deps{
 		SelfExe:    launchSelfExe,
 		EgressUnix: EgressProxyUnix,
@@ -171,10 +198,17 @@ func prepareAgentSandbox(dir string, env, argv []string, opt launchOpts) (wrappe
 		Inherited: append(os.Environ(), env...),
 	})
 	if err != nil {
+		if release != nil {
+			release()
+		}
 		return nil, "", nil, nil, fmt.Errorf("agent sandbox: %w — the agent is not launched unsandboxed", err)
 	}
 	a.exposed = launch.Exposed
-	return launch.Argv, launch.Dir, launch.Env, launch.Cleanup, nil
+	cleanup = launch.Cleanup
+	if release != nil {
+		cleanup = func() { launch.Cleanup(); release() }
+	}
+	return launch.Argv, launch.Dir, launch.Env, cleanup, nil
 }
 
 // registerWorkspace is dispatch.RegisterSandboxWorkspace.

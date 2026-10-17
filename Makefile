@@ -4,7 +4,7 @@
 # bare-git forge, a mock GitHub API, a notify sink-catcher, and stub controllers —
 # NO production GitHub/smee/repos, NO LLM keys.
 
-.PHONY: build test vet fmt e2e e2e-live e2e-down e2e-packs ship-gate
+.PHONY: build test vet fmt e2e e2e-live e2e-down e2e-packs ship-gate agent-image
 
 # Go build / test / static checks.
 build:
@@ -42,3 +42,13 @@ e2e-down:
 # The M6 ship gate: static checks + race tests + the hermetic e2e suite.
 ship-gate: fmt vet test e2e
 	@echo "ship-gate: OK"
+
+# conductor's agent image (the agent sandbox's container backend's default).
+# Pin the CLIs / base with AGENT_IMAGE_ARGS, e.g.
+#   make agent-image AGENT_IMAGE_ARGS='--build-arg CLAUDE_CODE_VERSION=2.1.281'
+AGENT_IMAGE_ENGINE ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
+AGENT_IMAGE_VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
+agent-image:
+	$(AGENT_IMAGE_ENGINE) build -f images/agent/Dockerfile \
+		--build-arg VERSION=$(AGENT_IMAGE_VERSION) $(AGENT_IMAGE_ARGS) \
+		-t conductor-agent:$(AGENT_IMAGE_VERSION) -t conductor-agent:latest .

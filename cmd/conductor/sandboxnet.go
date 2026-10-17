@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/NodeSpy/conductor/internal/sandbox"
@@ -15,6 +16,47 @@ import (
 // 127.0.0.1:PORT → the egress proxy's unix socket, and execs the wrapped
 // launch. Never invoked by operators directly.
 func runSandboxNet(args []string) int {
+	if len(args) > 0 {
+		// The in-container half of an agent container (sandbox.AgentContainer).
+		switch args[0] {
+		case "--init":
+			return sandbox.RunContainerInit()
+		case "--mux":
+			if err := sandbox.ServeContainerMux(os.Stdin, os.Stdout, sandbox.ContainerSockDir); err != nil {
+				fmt.Fprintf(os.Stderr, "sandbox-net: mux: %v\n", err)
+				return 1
+			}
+			return 0
+		case "--seed":
+			if len(args) != 5 {
+				fmt.Fprintln(os.Stderr, "sandbox-net: --seed SRC DST UID GID")
+				return 2
+			}
+			uid, err1 := strconv.Atoi(args[3])
+			gid, err2 := strconv.Atoi(args[4])
+			if err1 != nil || err2 != nil {
+				fmt.Fprintln(os.Stderr, "sandbox-net: --seed: bad uid/gid")
+				return 2
+			}
+			if err := sandbox.SeedHome(args[1], args[2], uid, gid); err != nil {
+				fmt.Fprintf(os.Stderr, "sandbox-net: %v\n", err)
+				return 1
+			}
+			return 0
+		case "--run":
+			if len(args) < 4 || args[2] != "--" {
+				fmt.Fprintln(os.Stderr, "sandbox-net: --run ID -- COMMAND...")
+				return 2
+			}
+			return sandbox.RunContainerLaunch(args[1], args[3:])
+		case "--signal":
+			if len(args) != 3 {
+				fmt.Fprintln(os.Stderr, "sandbox-net: --signal ID SIG")
+				return 2
+			}
+			return sandbox.SignalContainerLaunch(args[1], args[2])
+		}
+	}
 	opt := sandbox.EnterOpts{}
 	i := 0
 	for ; i < len(args); i++ {
