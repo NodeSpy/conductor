@@ -2,8 +2,6 @@ package config
 
 import (
 	"fmt"
-
-	"gopkg.in/yaml.v3"
 	"net"
 	"net/url"
 	"path"
@@ -11,6 +9,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/NodeSpy/conductor/internal/secrets"
+	"gopkg.in/yaml.v3"
 )
 
 // BrowserConfig is conductor's browser for agents (docs/wiki/Browser.md):
@@ -130,10 +131,101 @@ type BrowserCredential struct {
 	EmailCode *BrowserEmailCode `yaml:"email_code,omitempty"`
 }
 
-// BrowserSecretRef names a value in one of the operator's vaults.
+// BrowserSecretRef is where one credential field's value comes from — any
+// value source (secrets.ParseSource), read only when the field is filled:
+//
+//	password: '{{ vault "op" "Agents/App/password" }}'
+//	password: '{{secret "house/app_pw"}}'
+//	password: '${env.APP_PW}'
+//	username: agent@example.com          # a typed value: username only
+//	password: { vault: op, key: "Agents/App/password" }   # the map form
+//
+// A typed secret (password, code, passkey) never sits in the config: it
+// goes in write-only (`conductor browser credential set`).
 type BrowserSecretRef struct {
-	Vault string `yaml:"vault"`
-	Key   string `yaml:"key"`
+	Vault string `yaml:"vault,omitempty"`
+	Key   string `yaml:"key,omitempty"`
+	// Env is an environment variable (${env.NAME}), read at fill time.
+	Env string `yaml:"env,omitempty"`
+	// Literal is a typed value (allowed for a username only).
+	Literal string `yaml:"-"`
+	// Named: the vault entry was written as a named secret.
+	Named bool `yaml:"-"`
+}
+
+// UnmarshalYAML accepts a source string or the {vault, key} map.
+func (r *BrowserSecretRef) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		src, err := secrets.ParseSource(n.Value)
+		if err != nil {
+			return fmt.Errorf("config: browser credential value: %w", err)
+		}
+		switch src.Kind {
+		case secrets.SourceEnv:
+			*r = BrowserSecretRef{Env: src.Env}
+		case secrets.SourceVault, secrets.SourceSecret:
+			*r = BrowserSecretRef{Vault: src.Vault, Key: src.Key, Named: src.Kind == secrets.SourceSecret}
+		default:
+			*r = BrowserSecretRef{Literal: src.Literal}
+		}
+		return nil
+	}
+	type plain BrowserSecretRef
+	var p plain
+	if err := n.Decode(&p); err != nil {
+		return err
+	}
+	*r = BrowserSecretRef(p)
+	return nil
+}
+
+// Source is the reference in conductor's canonical syntax ("(typed
+// value)" for a literal: never the value).
+func (r *BrowserSecretRef) Source() string {
+	switch {
+	case r == nil:
+		return ""
+	case r.Env != "":
+		return secrets.Source{Kind: secrets.SourceEnv, Env: r.Env}.String()
+	case r.Named:
+		return secrets.Source{Kind: secrets.SourceSecret, Vault: r.Vault, Key: r.Key}.String()
+	case r.Vault != "":
+		return secrets.Source{Kind: secrets.SourceVault, Vault: r.Vault, Key: r.Key}.String()
+	}
+	return "(typed value)"
+}
+
+// checkRef validates one field's source: secret says it holds a secret
+// (no typed value), vaultOnly that it must be a vault entry (a passkey is
+// written back).
+func (c *Config) checkRef(where, field string, r *BrowserSecretRef, secret, vaultOnly bool) error {
+	if r == nil {
+		return nil
+	}
+	n := 0
+	for _, set := range []bool{r.Vault != "" || r.Key != "", r.Env != "", r.Literal != ""} {
+		if set {
+			n++
+		}
+	}
+	switch {
+	case n != 1:
+		return fmt.Errorf("%s: %s names one source — a vault reference, ${env.NAME}, or (a username only) a typed value", where, field)
+	case r.Literal != "" && secret:
+		return fmt.Errorf("%s: %s is a typed secret in the config — store it write-only (conductor browser credential set), or name a vault reference or ${env.NAME}", where, field)
+	case r.Literal != "" && strings.TrimSpace(r.Literal) == "":
+		return fmt.Errorf("%s: %s is empty", where, field)
+	case vaultOnly && r.Vault == "":
+		return fmt.Errorf("%s: %s is kept in a writable vault — name one: {{ vault \"<vault>\" \"<key>\" }}", where, field)
+	case r.Vault != "" || r.Key != "":
+		if r.Vault == "" || r.Key == "" {
+			return fmt.Errorf("%s: %s: a vault reference names a vault and a key", where, field)
+		}
+		if _, ok := c.Vaults[r.Vault]; !ok {
+			return fmt.Errorf("%s: %s: no vault named %q (vaults:)", where, field, r.Vault)
+		}
+	}
+	return nil
 }
 
 // BrowserEvaluate is the identities opted in to read-only evaluate. `off`
@@ -287,16 +379,17 @@ func (c *Config) validateBrowser() error {
 			return fmt.Errorf("%s: a passkey is dedicated to one identity and one site — name exactly one identity (no prefix)", where)
 		}
 		refs := 0
-		for _, r := range []*BrowserSecretRef{cr.Username, cr.Password, cr.OTP, cr.Passkey} {
-			if r == nil {
+		for _, f := range []struct {
+			name              string
+			r                 *BrowserSecretRef
+			secret, vaultOnly bool
+		}{{"username", cr.Username, false, false}, {"password", cr.Password, true, false}, {"otp", cr.OTP, true, false}, {"passkey", cr.Passkey, true, true}} {
+			if f.r == nil {
 				continue
 			}
 			refs++
-			if r.Vault == "" || r.Key == "" {
-				return fmt.Errorf("%s: every value is {vault, key} — a reference to your vaults, never the value", where)
-			}
-			if _, ok := c.Vaults[r.Vault]; !ok {
-				return fmt.Errorf("%s: no vault named %q (vaults:)", where, r.Vault)
+			if err := c.checkRef(where, f.name, f.r, f.secret, f.vaultOnly); err != nil {
+				return err
 			}
 		}
 		if ec := cr.EmailCode; ec != nil {
@@ -361,13 +454,14 @@ func (c *Config) validateBrowser() error {
 		if mb.CAFile != "" && !filepath.IsAbs(expandHome(mb.CAFile)) {
 			return fmt.Errorf("%s: ca_file must be an absolute path", where)
 		}
-		for _, r := range []*BrowserSecretRef{mb.Username, mb.Password} {
-			if r == nil || r.Vault == "" || r.Key == "" {
-				return fmt.Errorf("%s: username and password are {vault, key} — an app password from your vaults, never the value", where)
-			}
-			if _, ok := c.Vaults[r.Vault]; !ok {
-				return fmt.Errorf("%s: no vault named %q (vaults:)", where, r.Vault)
-			}
+		if mb.Username == nil || mb.Password == nil {
+			return fmt.Errorf("%s: username and password are required — an app password from your vaults, never the value", where)
+		}
+		if err := c.checkRef(where, "username", mb.Username, false, false); err != nil {
+			return err
+		}
+		if err := c.checkRef(where, "password", mb.Password, true, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -415,4 +509,107 @@ func splitHostPortPattern(p string) (host, port string) {
 		return h, pt
 	}
 	return p, ""
+}
+
+// browserSecretFields are the browser fields that hold a secret, by where
+// they sit: browser.credentials[].<field>, browser.mailboxes.<name>.<field>.
+var (
+	browserCredentialSecretFields = map[string]bool{"password": true, "otp": true, "passkey": true}
+	browserMailboxSecretFields    = map[string]bool{"password": true}
+)
+
+// srcRefRE finds every ${…} in a body, for checkSecretSources' tokenized
+// parse.
+var srcRefRE = regexp.MustCompile(`\$\{[^}\n]*\}`)
+
+// checkSecretSources refuses a browser secret field whose authored text
+// takes its value from the config itself, before either substitution runs:
+//
+//   - ${settings.NAME}: plain config, readable by anything that reads it;
+//   - ${NAME}: the loader's expansion, which would put the value into the
+//     config at load — ${env.NAME} reads it when the field is filled.
+//
+// It runs on the RAW body (expandEnv calls it first): after substitution a
+// secret pulled from a setting is indistinguishable from any literal.
+func checkSecretSources(path string, raw []byte) error {
+	if !srcRefRE.Match(raw) {
+		return nil
+	}
+	refs := map[string]string{}
+	i := 0
+	tokenized := srcRefRE.ReplaceAllFunc(raw, func(m []byte) []byte {
+		tok := fmt.Sprintf("CBRSRCREF%dZ", i)
+		i++
+		refs[tok] = string(m)
+		return []byte(tok)
+	})
+	var doc yaml.Node
+	if yaml.Unmarshal(tokenized, &doc) != nil || len(doc.Content) == 0 {
+		return nil // the real parse reports it
+	}
+	restore := func(v string) string {
+		for tok, ref := range refs {
+			v = strings.ReplaceAll(v, tok, ref)
+		}
+		return v
+	}
+	check := func(where, field, val string) error {
+		v := restore(val)
+		switch {
+		case secrets.SettingsRef(v):
+			return fmt.Errorf("config %s: %s.%s: %w", path, where, field, secrets.ErrPlainConfig)
+		case secrets.LoaderEnvRef(v):
+			return fmt.Errorf("config %s: %s.%s: %s would put the secret into the config at load — write ${env.%s}, read only when the field is filled", path, where, field, v, strings.TrimSuffix(strings.TrimPrefix(v, "${"), "}"))
+		}
+		return nil
+	}
+	browserNode := mapValue(doc.Content[0], "browser")
+	if browserNode == nil {
+		return nil
+	}
+	if creds := mapValue(browserNode, "credentials"); creds != nil && creds.Kind == yaml.SequenceNode {
+		for idx, cr := range creds.Content {
+			if cr.Kind != yaml.MappingNode {
+				continue
+			}
+			for j := 0; j+1 < len(cr.Content); j += 2 {
+				k, v := cr.Content[j].Value, cr.Content[j+1]
+				if browserCredentialSecretFields[k] && v.Kind == yaml.ScalarNode {
+					if err := check(fmt.Sprintf("browser.credentials[%d]", idx), k, v.Value); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	if mbs := mapValue(browserNode, "mailboxes"); mbs != nil && mbs.Kind == yaml.MappingNode {
+		for j := 0; j+1 < len(mbs.Content); j += 2 {
+			name, mb := mbs.Content[j].Value, mbs.Content[j+1]
+			if mb.Kind != yaml.MappingNode {
+				continue
+			}
+			for k := 0; k+1 < len(mb.Content); k += 2 {
+				f, v := mb.Content[k].Value, mb.Content[k+1]
+				if browserMailboxSecretFields[f] && v.Kind == yaml.ScalarNode {
+					if err := check("browser.mailboxes."+name, f, v.Value); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// mapValue is a mapping node's value for key (nil when absent).
+func mapValue(n *yaml.Node, key string) *yaml.Node {
+	if n == nil || n.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == key {
+			return n.Content[i+1]
+		}
+	}
+	return nil
 }

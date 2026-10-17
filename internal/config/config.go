@@ -1100,6 +1100,12 @@ var envRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // line-splitting implementation went out of its way to do and what a node
 // walk gets for free: comments are not scalar values.
 func expandEnv(path string, b []byte) ([]byte, error) {
+	// A secret field must name its source, read when the value is used —
+	// never take one substituted into the config here (see
+	// checkSecretSources).
+	if err := checkSecretSources(path, b); err != nil {
+		return nil, err
+	}
 	var missing []string
 	seen := map[string]bool{}
 	out, err := SubstituteRefs(b, envRe, func(ref string) (string, bool) {

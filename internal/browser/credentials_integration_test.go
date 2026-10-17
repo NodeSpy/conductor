@@ -258,7 +258,7 @@ func TestCredentialOriginBinding(t *testing.T) {
 	if pw == 0 {
 		t.Fatal("no password field in the frame")
 	}
-	cr, o, _ := r.m.credentialFor(c, *r.st, "site")
+	cr, o, _ := r.m.credentialFor(c, *r.st, "site", "")
 	fr, err := r.m.checkPage(ctx, in, tb, o, r.st.Allow)
 	if err != nil {
 		t.Fatal(err)

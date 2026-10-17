@@ -70,11 +70,11 @@ func browserSettings(cfg *config.Config) browser.Settings {
 		if r == nil {
 			return nil
 		}
-		return &browser.SecretRef{Vault: r.Vault, Key: r.Key}
+		return &browser.SecretRef{Vault: r.Vault, Key: r.Key, Named: r.Named, Env: r.Env, Literal: r.Literal}
 	}
 	for _, c := range b.Credentials {
 		cr := browser.Credential{
-			Name: c.Name, Origin: c.Origin, Identities: c.Identities, LoginURL: c.LoginURL, Approval: c.Approval,
+			Name: c.Name, Origin: c.Origin, Identities: c.Identities, LoginURL: c.LoginURL, Approval: c.Approval, Method: browser.MethodConfig,
 			Username: ref(c.Username), Password: ref(c.Password), OTP: ref(c.OTP), Passkey: ref(c.Passkey),
 		}
 		if ec := c.EmailCode; ec != nil {
@@ -94,6 +94,20 @@ func browserSettings(cfg *config.Config) browser.Settings {
 			CAFile: mb.CAFile, Username: ref(mb.Username), Password: ref(mb.Password), Folder: mb.Folder}
 	}
 	return st
+}
+
+// browserEffective is the config's browser settings with the login store's
+// logins (what every browser action sees).
+func browserEffective(cfg *config.Config, m *browser.Manager) browser.Settings {
+	st := browserSettings(cfg)
+	if m == nil || m.Store == nil {
+		return st
+	}
+	recs, err := m.Store.List()
+	if err != nil {
+		return st
+	}
+	return browser.WithStore(st, recs)
 }
 
 // wireBrowser turns the browser on for this daemon.
@@ -121,6 +135,9 @@ func wireBrowser(ctx context.Context, cfg *config.Config, notifier *notify.Notif
 		PutSecret: func(ctx context.Context, vault, key, value string) error {
 			return vaults.Write(ctx, vault, key, value)
 		},
+		LookupEnv: os.LookupEnv,
+		Taint:     vaults.Taint,
+		Store:     &browser.LoginStore{Dir: cfg.BrowserStateDir()},
 		Notify: func(msg string) {
 			if notifier != nil {
 				notifier.Emit(context.Background(), notify.EventNeedsInput, core.Trigger{Kind: "browser", Title: msg}, msg)
@@ -198,7 +215,7 @@ func browserControl(conn net.Conn, req controlRequest) controlResponse {
 	if cfg == nil || !cfg.BrowserOn() || m == nil {
 		return controlResponse{Error: "browser: not configured on this daemon (no browser: section, or the agent sandbox is off)"}
 	}
-	st := browserSettings(cfg)
+	st := browserEffective(cfg, m)
 	audit := func(e map[string]any) {
 		if m.Audit != nil {
 			e["event"], e["by"] = "browser", "operator"

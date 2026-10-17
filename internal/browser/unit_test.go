@@ -468,7 +468,7 @@ func TestGrantNeedsOptInJarAndProvenance(t *testing.T) {
 func TestCredentialFor(t *testing.T) {
 	m := &Manager{}
 	st := Settings{Credentials: []Credential{{Name: "c", Origin: "https://a.test", Identities: []string{"id"}}, {Name: "bad", Origin: "a.test", Identities: []string{"id"}}}}
-	if _, _, err := m.credentialFor(Principal{Identity: "id", Requester: RequesterOperator}, st, "c"); err != nil {
+	if _, _, err := m.credentialFor(Principal{Identity: "id", Requester: RequesterOperator}, st, "c", ""); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
@@ -481,7 +481,7 @@ func TestCredentialFor(t *testing.T) {
 		{Principal{Identity: "id", Requester: RequesterOperator}, "nope"},
 		{Principal{Identity: "id", Requester: RequesterOperator}, "bad"},
 	} {
-		if _, _, err := m.credentialFor(tc.p, st, tc.name); err == nil {
+		if _, _, err := m.credentialFor(tc.p, st, tc.name, ""); err == nil {
 			t.Errorf("%+v %s", tc.p, tc.name)
 		}
 	}

@@ -45,6 +45,9 @@ type Principal struct {
 	Requester string
 	// Agent / Repo / Dispatch label the audit.
 	Agent, Repo, Dispatch string
+	// Groups are the bots and teams the session acts for ("bot:<name>",
+	// "team:<name>"): a login bound to one of them is bound to it.
+	Groups []string
 }
 
 // Provenance decides whether a caller may use its logged-in session on a
@@ -88,6 +91,25 @@ func (l LoginSite) For(identity string) bool {
 		}
 		if pre, ok := strings.CutSuffix(p, "*"); ok && pre != "" && strings.HasPrefix(identity, pre) {
 			return true
+		}
+	}
+	return false
+}
+
+// ForPrincipal reports whether the site is opted in for the caller: its
+// identity, or a bot or team it acts for (an exact bot:/team: binding).
+func (l LoginSite) ForPrincipal(p Principal) bool {
+	if l.For(p.Identity) {
+		return true
+	}
+	for _, b := range l.Identities {
+		if !strings.HasPrefix(b, "bot:") && !strings.HasPrefix(b, "team:") {
+			continue
+		}
+		for _, g := range p.Groups {
+			if g == b {
+				return true
+			}
 		}
 	}
 	return false

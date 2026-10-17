@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"time"
+
+	"github.com/NodeSpy/conductor/internal/secrets"
 )
 
 // Credentials: conductor signs an agent in without the agent ever seeing a
@@ -20,20 +23,81 @@ import (
 // (snapshots, page text, titles, URLs), masked in screenshots, refused in
 // downloads, and evaluate is off for the rest of that browser's life.
 
-// SecretRef names a value in one of the operator's vaults.
+// SecretRef is where one value comes from, read only when it is filled
+// (outside every sandbox): a vault entry, an environment variable, a
+// value typed into the login store (write-only), or — a username only — a
+// literal from the config.
 type SecretRef struct {
-	Vault string `json:"vault"`
-	Key   string `json:"key"`
+	Vault string `json:"vault,omitempty"`
+	Key   string `json:"key,omitempty"`
+	// Named: the vault entry was named as a secret ({{secret "v/k"}}).
+	Named bool `json:"named,omitempty"`
+	// Env is an environment variable (${env.NAME}).
+	Env string `json:"env,omitempty"`
+	// Stored is a login store entry ("<login>/<field>").
+	Stored string `json:"stored,omitempty"`
+	// Literal is a typed username from the config.
+	Literal string `json:"-"`
+}
+
+// Source is the reference in conductor's canonical syntax; never a value.
+func (r *SecretRef) Source() string {
+	switch {
+	case r == nil:
+		return ""
+	case r.Env != "":
+		return secrets.Source{Kind: secrets.SourceEnv, Env: r.Env}.String()
+	case r.Stored != "":
+		return "(stored, write-only)"
+	case r.Literal != "":
+		return "(typed value)"
+	case r.Named:
+		return secrets.Source{Kind: secrets.SourceSecret, Vault: r.Vault, Key: r.Key}.String()
+	}
+	return secrets.Source{Kind: secrets.SourceVault, Vault: r.Vault, Key: r.Key}.String()
+}
+
+// Kind is the source's kind: vault, secret, env, stored or literal.
+func (r *SecretRef) Kind() string {
+	switch {
+	case r.Env != "":
+		return string(secrets.SourceEnv)
+	case r.Stored != "":
+		return "stored"
+	case r.Literal != "":
+		return string(secrets.SourceLiteral)
+	case r.Named:
+		return string(secrets.SourceSecret)
+	}
+	return string(secrets.SourceVault)
+}
+
+// RefFromSource turns a parsed source into a SecretRef.
+func RefFromSource(src secrets.Source) *SecretRef {
+	switch src.Kind {
+	case secrets.SourceEnv:
+		return &SecretRef{Env: src.Env}
+	case secrets.SourceVault:
+		return &SecretRef{Vault: src.Vault, Key: src.Key}
+	case secrets.SourceSecret:
+		return &SecretRef{Vault: src.Vault, Key: src.Key, Named: true}
+	}
+	return &SecretRef{Literal: src.Literal}
 }
 
 // Credential is one sign-in the operator shares with identities.
 type Credential struct {
 	Name string
 	// Origin is the exact scheme://host[:port] (and optional path prefix)
-	// every fill must happen on.
-	Origin string
-	// Identities may use it: exact, or a prefix ending in "*".
+	// every fill must happen on. Origins, when set, are every such origin
+	// (Origin is the first): a fill happens on the one the page is on.
+	Origin  string
+	Origins []string
+	// Identities may use it: exact, or a prefix ending in "*", or a bot:
+	// or team: binding.
 	Identities []string
+	// Method is how it was added (config, password, vault, session).
+	Method string
 	// LoginURL is where `login` starts when the page is elsewhere (on
 	// Origin).
 	LoginURL string
@@ -50,6 +114,23 @@ type Credential struct {
 // For reports whether the credential is bound to identity.
 func (c Credential) For(identity string) bool {
 	return LoginSite{Identities: c.Identities}.For(identity)
+}
+
+// ForPrincipal reports whether the credential is bound to the caller: its
+// identity, or a bot or team it acts for.
+func (c Credential) ForPrincipal(p Principal) bool {
+	return LoginSite{Identities: c.Identities}.ForPrincipal(p)
+}
+
+// AllOrigins is every exact origin the credential may fill on.
+func (c Credential) AllOrigins() []string {
+	if len(c.Origins) > 0 {
+		return c.Origins
+	}
+	if c.Origin != "" {
+		return []string{c.Origin}
+	}
+	return nil
 }
 
 // origin is a parsed credential origin.
@@ -240,16 +321,18 @@ const findFields = `function(){
 }`
 
 // credentialFor resolves a credential the caller may use now: bound to its
-// identity, and its provenance the operator's.
-func (m *Manager) credentialFor(c Principal, st Settings, name string) (Credential, origin, error) {
+// identity, and its provenance the operator's. Of its origins, the one the
+// page is on (securityOrigin, the browser's view) is the one checked; when
+// the page is on none, the login URL's (or the first).
+func (m *Manager) credentialFor(c Principal, st Settings, name, securityOrigin string) (Credential, origin, error) {
 	for _, cr := range st.Credentials {
 		if cr.Name != name {
 			continue
 		}
-		if !cr.For(c.Identity) {
+		if !cr.ForPrincipal(c) {
 			return Credential{}, origin{}, refuse("credential %q is not bound to this identity (%s)", name, c.Identity)
 		}
-		o, err := parseOrigin(cr.Origin)
+		o, err := pickOrigin(cr, securityOrigin)
 		if err != nil {
 			return Credential{}, origin{}, err
 		}
@@ -262,24 +345,102 @@ func (m *Manager) credentialFor(c Principal, st Settings, name string) (Credenti
 		}
 		return cr, o, nil
 	}
-	return Credential{}, origin{}, refuse("no credential %q is configured (browser.credentials)", name)
+	return Credential{}, origin{}, refuse("no credential %q is configured (browser.credentials, or conductor browser credential add)", name)
 }
 
-// secret fetches one value for one fill: fresh from the vault, never
+// pickOrigin is the credential origin a page is on, else the login URL's,
+// else the first.
+func pickOrigin(cr Credential, securityOrigin string) (origin, error) {
+	var parsed []origin
+	for _, s := range cr.AllOrigins() {
+		o, err := parseOrigin(s)
+		if err != nil {
+			return origin{}, err
+		}
+		parsed = append(parsed, o)
+	}
+	if len(parsed) == 0 {
+		return origin{}, fmt.Errorf("browser: credential %q has no origin", cr.Name)
+	}
+	if so, err := parseOrigin(securityOrigin); err == nil {
+		for _, o := range parsed {
+			if so.scheme == o.scheme && so.host == o.host && so.port == o.port {
+				return o, nil
+			}
+		}
+	}
+	if lu, err := url.Parse(cr.LoginURL); err == nil && cr.LoginURL != "" {
+		if lo, err := parseOrigin(lu.Scheme + "://" + lu.Host); err == nil {
+			for _, o := range parsed {
+				if lo.scheme == o.scheme && lo.host == o.host && lo.port == o.port {
+					return o, nil
+				}
+			}
+		}
+	}
+	return parsed[0], nil
+}
+
+// secret fetches one value for one fill: fresh from its source, never
 // cached by conductor, never returned to the caller.
 func (m *Manager) secret(ctx context.Context, ref *SecretRef) (string, error) {
+	v, err := m.resolveRef(ctx, ref)
+	if err != nil {
+		// The source's error, never a value.
+		return "", err
+	}
+	if v == "" {
+		return "", fmt.Errorf("browser: credential source %s returned nothing", ref.Source())
+	}
+	return v, nil
+}
+
+// resolveRef reads one source. Every value read is tainted (the vaults'
+// reads taint themselves; an environment value or a stored one here), so
+// the logs' redaction knows it.
+func (m *Manager) resolveRef(ctx context.Context, ref *SecretRef) (string, error) {
+	switch {
+	case ref == nil:
+		return "", fmt.Errorf("browser: no source")
+	case ref.Env != "":
+		look := m.LookupEnv
+		if look == nil {
+			look = os.LookupEnv
+		}
+		v, ok := look(ref.Env)
+		if !ok {
+			return "", fmt.Errorf("browser: credential source ${env.%s}: the variable is not set", ref.Env)
+		}
+		m.taint(v)
+		return v, nil
+	case ref.Stored != "":
+		if m.Store == nil {
+			return "", fmt.Errorf("browser: no login store")
+		}
+		name, field, _ := strings.Cut(ref.Stored, "/")
+		v, err := m.Store.value(name, field)
+		if err != nil {
+			return "", err
+		}
+		m.taint(v)
+		return v, nil
+	case ref.Literal != "":
+		return ref.Literal, nil
+	}
 	if m.Secrets == nil {
 		return "", fmt.Errorf("browser: no vault is wired for credentials")
 	}
 	v, err := m.Secrets(ctx, ref.Vault, ref.Key)
 	if err != nil {
-		// The vault's error, never a value.
 		return "", fmt.Errorf("browser: credential source %s: %w", ref.Vault, err)
 	}
-	if v == "" {
-		return "", fmt.Errorf("browser: credential source %s returned nothing", ref.Vault)
-	}
 	return v, nil
+}
+
+func (m *Manager) taint(v string) {
+	if m.Taint != nil && v != "" {
+		m.Taint(v)
+	}
 }
 
 // checkPage refuses a page that is not the credential's origin or not on
@@ -787,7 +948,7 @@ const codeSkew = 30 * time.Second
 // from its vault, one message, never one used before.
 func (m *Manager) emailCode(ctx context.Context, cred Credential, after time.Time) (string, error) {
 	ec := cred.Email
-	mb, ok := m.Settings().Mailboxes[ec.Mailbox]
+	mb, ok := m.settings().Mailboxes[ec.Mailbox]
 	if !ok {
 		return "", fmt.Errorf("browser: credential %q: no mailbox %q (browser.mailboxes)", cred.Name, ec.Mailbox)
 	}

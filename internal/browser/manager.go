@@ -106,6 +106,13 @@ type Manager struct {
 	Secrets   func(ctx context.Context, vault, key string) (string, error)
 	PutSecret func(ctx context.Context, vault, key, value string) error
 	Notify    func(msg string)
+	// LookupEnv reads a ${env.NAME} source (nil = os.LookupEnv); Taint
+	// marks a value read outside the vaults sensitive (the logs' redaction).
+	LookupEnv func(string) (string, bool)
+	Taint     func(string)
+	// Store is the logins the operator added at runtime (nil = none): they
+	// join the config's credentials and login sites.
+	Store *LoginStore
 
 	// usedMail are the messages whose codes were filled: never twice.
 	mailMu   sync.Mutex
@@ -127,6 +134,33 @@ type session struct {
 	last        time.Time
 	saved       time.Time
 	caller      Principal
+}
+
+// settings are the operator's settings with the login store's logins.
+func (m *Manager) settings() Settings {
+	st := m.Settings()
+	if m.Store == nil {
+		return st
+	}
+	recs, err := m.Store.List()
+	if err != nil {
+		m.logf("browser: the login store: %v", err)
+		return st
+	}
+	return WithStore(st, recs)
+}
+
+// Effective is the settings every browser action sees: the config's and the
+// login store's.
+func (m *Manager) Effective() Settings { return m.settings() }
+
+// recordUse keeps one use of a login in the store's history (never a value).
+func (m *Manager) recordUse(c Principal, name, action, outcome, origin string) {
+	if m.Store == nil {
+		return
+	}
+	m.Store.RecordUse(Usage{Login: name, Identity: c.Identity, Requester: c.Requester, Dispatch: c.Dispatch,
+		Action: action, Outcome: outcome, Origin: origin, At: time.Now().UTC()})
 }
 
 // Logins is the saved-session store.
@@ -176,7 +210,7 @@ func (m *Manager) Do(ctx context.Context, c Principal, action string, args map[s
 	if c.Workspace == "" || c.Identity == "" || c.Key == "" {
 		return nil, fmt.Errorf("browser: conductor's browser is for sandboxed agent launches — this session has no sandbox identity")
 	}
-	st := m.Settings()
+	st := m.settings()
 	s, err := m.session(c)
 	if err != nil {
 		return nil, err
@@ -216,6 +250,10 @@ func (m *Manager) Do(ctx context.Context, c Principal, action string, args map[s
 		entry["outcome"] = "ok"
 	}
 	m.audit(entry)
+	if name, _ := entry["credential"].(string); name != "" && (action == "login" || action == "fill-credential") {
+		o, _ := entry["origin"].(string)
+		m.recordUse(c, name, action, entry["outcome"].(string), o)
+	}
 	if inst != nil && inst == s.login && time.Since(s.saved) > 30*time.Second {
 		m.saveBack(s)
 	}
@@ -272,7 +310,7 @@ func (m *Manager) grant(c Principal, st Settings) (sites []string, why string) {
 		prov = OperatorOnly
 	}
 	for _, l := range st.Logins {
-		if !l.For(c.Identity) {
+		if !l.ForPrincipal(c) {
 			continue
 		}
 		if _, ok, err := m.Logins().Load(c.Identity, l.Site); err != nil || !ok {
@@ -291,18 +329,20 @@ func (m *Manager) grant(c Principal, st Settings) (sites []string, why string) {
 	// usable: whatever conductor signs the agent in to lives in the
 	// separate, narrowed browser — never beside an untrusted page.
 	for _, cr := range st.Credentials {
-		if !cr.For(c.Identity) {
+		if !cr.ForPrincipal(c) {
 			continue
 		}
-		o, err := parseOrigin(cr.Origin)
-		if err != nil {
-			continue
+		for _, os := range cr.AllOrigins() {
+			o, err := parseOrigin(os)
+			if err != nil {
+				continue
+			}
+			if ok, w := prov(c, o.host); !ok {
+				why = w
+				continue
+			}
+			sites = appendSite(sites, o.host)
 		}
-		if ok, w := prov(c, o.host); !ok {
-			why = w
-			continue
-		}
-		sites = appendSite(sites, o.host)
 	}
 	sort.Strings(sites)
 	if len(sites) > 0 {
@@ -629,7 +669,7 @@ func refreshCookies(saved, live []Cookie) ([]Cookie, bool) {
 // landDownload moves a completed download from the browser's transfer
 // directory into the workspace's .browser/downloads, by conductor.
 func (m *Manager) landDownload(in *Instance, c Principal, loggedIn bool, d *Download) {
-	st := m.Settings()
+	st := m.settings()
 	entry := map[string]any{"action": "download", "identity": c.Identity, "agent": c.Agent, "repo": c.Repo,
 		"url": d.URL, "logged_in": loggedIn, "requester": c.Requester}
 	src, err := in.hostDownload(d.GUID, st.MaxDownload)
@@ -687,7 +727,7 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 		out := map[string]any{"session": s.id, "identity": c.Identity, "requester": c.Requester, "evaluate": evalMode(st, c)}
 		var opted []string
 		for _, l := range st.Logins {
-			if l.For(c.Identity) {
+			if l.ForPrincipal(c) {
 				opted = append(opted, l.Site)
 			}
 		}
@@ -900,7 +940,11 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 	case "login", "fill-credential":
 		name := str("credential")
 		entry["credential"] = name
-		cred, o, err := m.credentialFor(c, st, name)
+		var so string
+		if fr, err := in.mainFrame(ctx, t); err == nil {
+			so = fr.SecurityOrigin
+		}
+		cred, o, err := m.credentialFor(c, st, name, so)
 		if err != nil {
 			return nil, err
 		}
@@ -938,7 +982,7 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 	case "await-approval":
 		name := str("credential")
 		entry["credential"] = name
-		cred, _, err := m.credentialFor(c, st, name)
+		cred, _, err := m.credentialFor(c, st, name, "")
 		if err != nil {
 			return nil, err
 		}
@@ -1088,7 +1132,7 @@ func (m *Manager) closeSession(s *session) {
 
 // Reap closes sessions idle past the timeout. The daemon runs it on a ticker.
 func (m *Manager) Reap() {
-	st := m.Settings()
+	st := m.settings()
 	idle := st.IdleTimeout
 	if idle <= 0 {
 		idle = 10 * time.Minute

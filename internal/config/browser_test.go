@@ -2,10 +2,11 @@ package config
 
 import (
 	"fmt"
-
-	"gopkg.in/yaml.v3"
+	"os"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestValidateBrowser(t *testing.T) {
@@ -59,7 +60,11 @@ func TestValidateBrowser(t *testing.T) {
 			b.Credentials[0].Passkey = nil
 			b.Credentials[0].Identities = []string{"agent:triage@*"}
 		}, ""},
-		{"value not ref", func(b *BrowserConfig) { b.Credentials[0].Password = &BrowserSecretRef{Key: "hunter2"} }, "never the value"},
+		{"value not ref", func(b *BrowserConfig) { b.Credentials[0].Password = &BrowserSecretRef{Literal: "hunter2"} }, "typed secret"},
+		{"typed otp", func(b *BrowserConfig) { b.Credentials[0].OTP = &BrowserSecretRef{Literal: "JBSWY3DPEHPK3PXP"} }, "typed secret"},
+		{"key without vault", func(b *BrowserConfig) { b.Credentials[0].Password = &BrowserSecretRef{Key: "hunter2"} }, "names a vault and a key"},
+		{"two sources", func(b *BrowserConfig) { b.Credentials[0].Password = &BrowserSecretRef{Vault: "op", Key: "k", Env: "X"} }, "names one source"},
+		{"passkey from env", func(b *BrowserConfig) { b.Credentials[0].Passkey = &BrowserSecretRef{Env: "PK"} }, "writable vault"},
 		{"unknown vault", func(b *BrowserConfig) { b.Credentials[0].Password = &BrowserSecretRef{Vault: "nope", Key: "k"} }, "no vault"},
 		{"nothing to fill", func(b *BrowserConfig) { b.Credentials[0].Password, b.Credentials[0].Passkey = nil, nil }, "nothing to fill"},
 		{"login url elsewhere", func(b *BrowserConfig) { b.Credentials[0].LoginURL = "https://evil.example.com/login" }, "not on the origin"},
@@ -103,9 +108,14 @@ func TestValidateBrowser(t *testing.T) {
 		{"mailbox plaintext loopback", with(func(b *BrowserConfig) {
 			b.Mailboxes["inbox"] = BrowserMailbox{IMAP: "127.0.0.1:1143", PlaintextLoopback: true, Username: ref, Password: ref}
 		}), ""},
+		{"typed username is fine", func(b *BrowserConfig) { b.Credentials[0].Username = &BrowserSecretRef{Literal: "agent@example.com"} }, ""},
+		{"env password is fine", func(b *BrowserConfig) { b.Credentials[0].Password = &BrowserSecretRef{Env: "APP_PW"} }, ""},
+		{"named secret is fine", func(b *BrowserConfig) {
+			b.Credentials[0].Password = &BrowserSecretRef{Vault: "op", Key: "Agents/App/password", Named: true}
+		}, ""},
 		{"mailbox literal password", with(func(b *BrowserConfig) {
-			b.Mailboxes["inbox"] = BrowserMailbox{IMAP: "imap.example.com:993", Username: ref, Password: &BrowserSecretRef{Key: "hunter2"}}
-		}), "never the value"},
+			b.Mailboxes["inbox"] = BrowserMailbox{IMAP: "imap.example.com:993", Username: ref, Password: &BrowserSecretRef{Literal: "hunter2"}}
+		}), "typed secret"},
 	}...)
 	for _, tc := range cases {
 		b := good()
@@ -137,5 +147,68 @@ func TestBrowserEvaluateYAML(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("%s: %s", in, got)
 		}
+	}
+}
+
+// Every value source, as written in YAML: a string in the reference
+// syntax conductor uses elsewhere, or the old map.
+func TestBrowserSecretRefYAML(t *testing.T) {
+	for in, want := range map[string]string{
+		`password: '{{ vault "op" "Agents/App/password" }}'`: `{{ vault "op" "Agents/App/password" }}`,
+		`password: '{{secret "house/app_pw"}}'`:              `{{secret "house/app_pw"}}`,
+		`password: '${env.APP_PW}'`:                          `${env.APP_PW}`,
+		`password: {vault: op, key: "Agents/App/password"}`:  `{{ vault "op" "Agents/App/password" }}`,
+		`password: agent@example.com`:                        `(typed value)`,
+		`password: '${settings.app_pw}'`:                     `plain config`,
+		`password: '{{secret "nokey"}}'`:                     `"<vault>/<key>"`,
+	} {
+		var cr BrowserCredential
+		err := yaml.Unmarshal([]byte(in), &cr)
+		got := ""
+		if err != nil {
+			got = err.Error()
+		} else {
+			got = cr.Password.Source()
+		}
+		if !strings.Contains(got, want) {
+			t.Errorf("%s: %s", in, got)
+		}
+	}
+}
+
+// A secret field's text is checked before ${…} substitution: a setting is
+// plain config, and the loader's ${NAME} would put the value into the
+// config at load. A username may take a setting; ${env.NAME} is read at
+// fill time and passes.
+func TestCheckSecretSources(t *testing.T) {
+	for body, want := range map[string]string{
+		"browser:\n  credentials:\n    - {name: a, password: \"${settings.pw}\"}\n": "plain config",
+		"browser:\n  credentials:\n    - name: a\n      otp: ${settings.seed}\n":    "plain config",
+		"browser:\n  credentials:\n    - name: a\n      password: ${APP_PW}\n":      "${env.APP_PW}",
+		"browser:\n  mailboxes:\n    m: {password: \"${settings.x}\"}\n":            "plain config",
+		"browser:\n  credentials:\n    - name: a\n      username: ${settings.u}\n":  "",
+		"browser:\n  credentials:\n    - name: a\n      password: ${env.APP_PW}\n":  "",
+		"settings: {pw: x}\nother: ${settings.pw}\n":                                "",
+	} {
+		err := checkSecretSources("c.yaml", []byte(body))
+		switch {
+		case want == "" && err != nil:
+			t.Errorf("%q: %v", body, err)
+		case want != "" && (err == nil || !strings.Contains(err.Error(), want)):
+			t.Errorf("%q: want %q, got %v", body, want, err)
+		}
+	}
+}
+
+// The check runs in the real load path, before expansion.
+func TestLoadRefusesASettingAsASecret(t *testing.T) {
+	dir := t.TempDir()
+	p := dir + "/conductor.yaml"
+	body := "settings: {pw: hunter2}\nbrowser:\n  allow: [app.example.com]\n  credentials:\n    - name: a\n      origin: https://app.example.com\n      identities: [x]\n      password: \"${settings.pw}\"\n"
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "plain config") {
+		t.Fatalf("load: %v", err)
 	}
 }

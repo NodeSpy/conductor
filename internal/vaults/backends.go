@@ -123,8 +123,11 @@ func (o *OnePasswordVault) Read(ctx context.Context, key string) (string, error)
 // PassVault reads and writes the pass GPG store.
 type PassVault struct {
 	Prefix string // optional store subdirectory every key lives under
-	Exec   ExecFn
-	c      cache
+	// Dir is the store's root, for listing names (default
+	// $PASSWORD_STORE_DIR, else ~/.password-store).
+	Dir  string
+	Exec ExecFn
+	c    cache
 }
 
 func (p *PassVault) entry(key string) string {
