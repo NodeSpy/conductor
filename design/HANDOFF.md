@@ -71,6 +71,12 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Done (commits on this branch, newest first)
 
+- **From Daniel's iPhone review**: one stepper component everywhere, compact ("Step 2 of 5 · Watches" + a thin bar)
+  whenever the labelled steps don't fit, never overlapping (`wizard.spec.js`, plus stepper checks in the layout and
+  iPhone sweeps); the passkey glyph only on controls that sign (`passkey.spec.js`); Pause dispatch moved to the status
+  menu and the System row (explained, confirmed, visible paused state, Resume); Run a workflow off the Overview (it's on
+  each workflow and in ⌘K).
+
 - **Calm by default** (Daniel: "all of it just looks so busy"): exception-first on every key screen. The Overview's
   answer line ("2 things need you." / "All quiet. Nothing needs you."), large needs-you rows, calm lanes (passing runs as
   a faint tick strip; failures and waits labelled where they are; running in ink), everything normal in quiet one-line

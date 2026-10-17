@@ -188,8 +188,15 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
   when something needs you), an optional quieter second line, then actions.
 - **Choice cards** (`UI.choice`): a neutral icon, title over description, a radio on the right; the selected card
   takes the accent edge and wash; a disabled card says why. The choice made carries into the next step (`UI.chosen`).
-- **Wizard and stepper** (`UI.stepper`): at most five steps named for the decision; done is an ink check, current
-  an ember ring; Back keeps input; the review lives inside the wizard.
+- **Wizard and stepper** (`UI.stepper`, the one implementation everywhere): at most five steps named for the
+  decision; done is an ink check, current an ember ring; Back keeps input; the review lives inside the wizard. The
+  labelled steps show with fixed gaps (no connector runs through text) only when they fit; otherwise the stepper is
+  "Step 2 of 5 · Watches" over a thin bar. It never wraps, clips or overlaps (`wizard.spec.js` walks every wizard's
+  states at 1440 and 390 in Chromium, and in WebKit on the iPhone).
+- **The passkey glyph means "this signs".** It appears only on a control that starts a WebAuthn signing (Approve,
+  Deny, Apply for a widening change, sign in, enrol, the signing sheet's own button) and on the passkeys themselves.
+  Opening, reviewing and navigating never carry it; "your passkey signs this" is said in the signing sheet, at the
+  point of signing (`passkey.spec.js`).
 - **Empty states** (`UI.empty`): the sunrise, a short human title, why it's empty, the one next step.
 - **Toasts** (`UI.toast`): past tense and specific, a status glyph, 6 seconds (errors stay until dismissed), above
   the phone tab bar. **Dialogs** for decisions, **drawers** for create-in-place beside a list (layered over a dialog
@@ -279,10 +286,12 @@ In reading order (calm by default, §3.0):
 | Activity | SSE `run`, `audit`, `bot`, `browser` topics | `flow.EventHub` (`RunEvent`), audit writer tap (**NEW**) |
 | Workflows (off) or Model usage (subscription/api) | `GET /api/v1/workflows`; `GET /api/v1/usage?days=14` | One card per provider, never a combined chart ([§4.1.1](#411-usage-display-usagemode)) |
 
-Operations:
+Operations (not on the Overview itself, which leads with the answer and what needs you):
 
-- **Pause/Resume dispatch**: `setPaused`, as `conductor pause` does.
-- **Run a workflow**: control `run`.
+- **Pause/Resume dispatch**: `setPaused`, as `conductor pause` does. It lives in the status menu (the health word
+  in the top bar) and the System row: it says what pausing does, asks first, and while paused the top bar reads
+  "Dispatch paused" and the Overview carries a banner with Resume.
+- **Run a workflow**: control `run`, from the Workflows page (each workflow's Run) and ⌘K.
 
 #### 4.1.1 Usage display (`usage.mode`)
 
