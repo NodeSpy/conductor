@@ -124,6 +124,23 @@ func (p *Process) Isolation() string {
 // Done is closed when the browser has exited.
 func (p *Process) Done() <-chan struct{} { return p.done }
 
+// killProcess ends one browser process. It is a var so no test sends a real
+// signal, and it refuses a pid <= 1: kill(-1) would reach every process the
+// daemon's user owns, kill(0) its own group.
+var killProcess = func(p *os.Process) error {
+	if p == nil || p.Pid <= 1 {
+		return fmt.Errorf("browser: refused to signal pid %d", pidOf(p))
+	}
+	return p.Kill()
+}
+
+func pidOf(p *os.Process) int {
+	if p == nil {
+		return 0
+	}
+	return p.Pid
+}
+
 // Close ends the browser: politely over the protocol, then by signal.
 func (p *Process) Close() {
 	p.once.Do(func() {
@@ -137,7 +154,7 @@ func (p *Process) Close() {
 				p.kill()
 			}
 			if p.cmd.Process != nil {
-				_ = p.cmd.Process.Kill()
+				_ = killProcess(p.cmd.Process)
 			}
 			<-p.done
 		}

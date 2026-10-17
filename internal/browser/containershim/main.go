@@ -210,9 +210,18 @@ func main() {
 			}
 		}
 		// conductor is gone: so is the browser.
-		_ = cmd.Process.Signal(syscall.SIGTERM)
+		_ = terminate(cmd.Process)
 	}()
 	os.Exit(<-exited)
+}
+
+// terminate ends the browser. A var, so no test sends a real signal; a pid
+// <= 1 is refused (kill(-1) would reach every process of the user).
+var terminate = func(p *os.Process) error {
+	if p == nil || p.Pid <= 1 {
+		return fmt.Errorf("shim: refused to signal")
+	}
+	return p.Signal(syscall.SIGTERM)
 }
 
 // status ends a transfer.
