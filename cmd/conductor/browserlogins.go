@@ -402,7 +402,7 @@ func browserLoginControl(cfg *config.Config, m *browser.Manager, req controlRequ
 			}
 		}
 		if rec.Method == browser.MethodSession {
-			if err := browser.OriginsReachable(st, []string{"https://" + strings.TrimPrefix(rec.Site, "*.")}); err != nil {
+			if err := browser.SiteReachable(st, rec.Site, rec.Also); err != nil {
 				return fail(err)
 			}
 		}

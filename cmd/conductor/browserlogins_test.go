@@ -32,7 +32,7 @@ func loginRig(t *testing.T) (call func(cmd string, q browserLoginReq) controlRes
 	t.Helper()
 	dir := t.TempDir()
 	cfg := &config.Config{Browser: &config.BrowserConfig{
-		Allow: []string{"app.example.com", "login.example.com", "sso.example.com"},
+		Allow: []string{"app.example.com", "login.example.com", "sso.example.com", "localhost:18090"},
 		Credentials: []config.BrowserCredential{{Name: "configured", Origin: "https://app.example.com", Identities: []string{"agent:t@o/r"},
 			Password: &config.BrowserSecretRef{Vault: "op", Key: "Agents/Example App/password"}}},
 	}}
@@ -228,10 +228,22 @@ func TestBrowserLoginAddRefuses(t *testing.T) {
 			Refs: map[string]string{"password": "${env.P}"}, Values: map[string]string{"password": "p"}}, "not both"},
 		{browserLoginReq{Name: "a", Method: "password", Origins: []string{"https://app.example.com"}, Values: map[string]string{"password": "p"}}, "bound to nobody"},
 		{browserLoginReq{Name: "a", Method: "session", Site: "evil.example.org", Bindings: []string{"x"}}, "not reachable"},
+		{browserLoginReq{Name: "a", Method: "session", Site: "*.example.org", Bindings: []string{"x"}}, "not reachable"},
 	} {
 		r := call("browser-login-add", tc.q)
 		if !strings.Contains(r.Error, tc.want) {
 			t.Errorf("%+v: %q, want %q", tc.q, r.Error, tc.want)
+		}
+	}
+}
+
+// A session login's site is a host, reachable on any listed port (found
+// live: localhost listed as localhost:18090 was refused as https://localhost).
+func TestBrowserLoginSessionSiteOnAnyPort(t *testing.T) {
+	call, _, _ := loginRig(t)
+	for _, site := range []string{"localhost", "sso.example.com"} {
+		if r := call("browser-login-add", browserLoginReq{Name: "s-" + strings.Split(site, ".")[0], Method: browser.MethodSession, Site: site, Bindings: []string{"x"}}); r.Error != "" {
+			t.Errorf("%s: %s", site, r.Error)
 		}
 	}
 }

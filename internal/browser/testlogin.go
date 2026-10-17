@@ -322,3 +322,23 @@ func OriginsReachable(st Settings, origins []string) error {
 	}
 	return nil
 }
+
+// SiteReachable refuses a logged-in site no allowlist entry names (the
+// config's rule for browser.logins: a site is a host, on any listed port;
+// *.domain needs the same wildcard, or the domain itself).
+func SiteReachable(st Settings, site string, also []string) error {
+	s := strings.ToLower(site)
+	base, wild := strings.CutPrefix(s, "*.")
+	for _, a := range append(append([]string(nil), st.Allow...), also...) {
+		h, _ := splitHost(strings.ToLower(strings.TrimSpace(a)))
+		switch {
+		case h == s:
+			return nil
+		case wild && (h == base || strings.HasSuffix(h, "."+base)):
+			return nil
+		case !wild && strings.HasPrefix(h, "*.") && strings.HasSuffix(s, h[1:]):
+			return nil
+		}
+	}
+	return fmt.Errorf("browser: %s is not reachable through browser.allow — add it there first", site)
+}
