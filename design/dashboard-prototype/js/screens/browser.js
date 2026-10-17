@@ -39,8 +39,9 @@
   /* ---------- live view ---------- */
   function live(b) {
     return `<div class="page wide">
-      ${UI.head(esc(b.title), { crumbs: `<a href="#/browser">Browsers</a> ${icon('chev')} ${b.id}`, sub: b.identity,
+      ${UI.head(esc(b.title), { gen: true, crumbs: `<a href="#/browser">Browsers</a> ${icon('chev')} ${esc(b.title)}`,
         actions: `${st(b.status, b.status === 'run' ? 'agent acting' : b.status === 'wait' ? 'waiting on you' : 'idle', true)}<button class="btn" data-act="b-peek" data-b="${b.id}">${icon('download')}Screenshot</button><button class="btn${bv.lease === b.id ? '' : ' primary'}" data-act="b-take" data-b="${b.id}" id="take">${icon(bv.lease === b.id ? 'undo' : 'hand')}${bv.lease === b.id ? 'Release' : 'Take over'}</button><button class="btn danger" data-act="b-close" data-b="${b.id}">${icon('x')}Close browser</button>` })}
+      ${UI.metaLine([{ obj: 'browser', label: 'Browser', value: b.id, mono: true }, { obj: 'run', label: 'Used by run', value: `<a class="mono" href="#/live/${b.agent.startsWith('r-') ? b.agent : 'r-7f29'}">${b.agent}</a>` }, { obj: 'login', label: 'Signs in as', value: esc(b.identity), mono: true }, { label: 'Asked for by', value: esc(b.requester), mono: true }])}
       <div class="grid" style="grid-template-columns:minmax(0,1fr) 340px;align-items:start">
         <div class="panel">
           <div class="bchrome">${['back', 'fwd', 'reload'].map((k) => `<button class="icon-btn${k === 'back' ? ' flip' : ''}" ${bv.lease === b.id ? (k === 'fwd' && !(bv.fwd || []).length ? UI.off('Nothing to go forward to') : k === 'back' && !(bv.hist || []).length ? UI.off('Nothing to go back to') : `data-act="b-nav" data-k="${k}" data-b="${b.id}"`) : UI.off('The agent is driving: take over to use the browser yourself')} aria-label="${k}">${icon(k === 'reload' ? 'updates' : 'chev')}</button>`).join('')}
@@ -53,8 +54,7 @@
         </div>
         <div class="stack">
           <div class="panel"><div class="panel-head"><h3>Session</h3></div><div class="panel-body"><dl class="kv small">
-            <dt>identity</dt><dd class="mono">${b.identity}</dd><dt>agent</dt><dd class="mono"><a href="#/live/${b.agent.startsWith('r-') ? b.agent : 'r-7f29'}" style="color:var(--color-text-accent)">${b.agent}</a></dd>
-            <dt>requester</dt><dd class="mono">${b.requester}</dd><dt>profile</dt><dd>${b.loggedIn ? tag('logged-in browser · narrowed to its sites', 'wait') : tag('anonymous · ephemeral', 'ok')}</dd>
+            <dt>profile</dt><dd>${b.loggedIn ? tag('logged-in browser · narrowed to its sites', 'wait') : tag('anonymous · ephemeral', 'ok')}</dd>
             <dt>evaluate</dt><dd>${tag(b.loggedIn ? 'off (a credential was filled)' : 'off', 'ok')}</dd></dl>
             ${b.note ? `<div class="callout ${b.status === 'wait' ? 'warn' : 'info'} small" style="margin-top:10px">${esc(b.note)}</div>` : ''}</div></div>
           <div class="panel"><div class="panel-head"><h3>Actions</h3><span class="muted small">audited · values never recorded</span></div><div class="list">${(D.browserLogs = D.browserLogs || {}, D.browserLogs[b.id] = D.browserLogs[b.id] || (b.id === 'b-02' ? D.browserLog.slice() : D.browserLog.slice(0, 3))).map(([a, d, s]) => `<div class="item small" style="align-items:flex-start">${st(s, '')}<div class="grow"><span class="mono" style="font-weight:500">${a}</span><div class="muted tiny mono">${esc(d)}</div></div></div>`).join('')}</div></div>
