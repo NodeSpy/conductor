@@ -8,6 +8,15 @@
 # The paseo leg runs the provider-entry + sandbox exec path against the
 # LATEST published paseo, so a paseo release that changes the CLI or config
 # shape conductor depends on fails here first — on a schedule, and on demand.
+#
+# The container legs run the agent sandbox's container backend (isolation
+# `mode: container`) against real engines on Linux: Docker, and rootless
+# podman (preinstalled on ubuntu-latest). GitHub's macOS runners cannot run
+# a container engine — they are Apple-silicon VMs without nested
+# virtualization, so neither Docker Desktop nor colima/lima can start their
+# VM there — so the macOS leg proves what is provable without one: the
+# darwin build and unit tests, and that a container launch with no engine
+# is refused (fails closed).
 name: sandbox-canary
 
 on:
@@ -44,6 +53,8 @@ jobs:
         run: |
           go test -race -count=1 ./internal/sandbox/... ./internal/agentsandbox/... ./internal/gitpush/... ./internal/paseosetup/...
           go test -race -count=1 -run 'TestConfinedGit|TestSandboxApplies|TestDispatchIdentity|TestNonCredentialEnv|TestControllerRunnerBinds|TestOpencodeSandboxed|TestAgentDeckSandboxed|TestDeckWrapper' ./internal/controller/
+      - name: the container backend with no engine fails closed (no engine on the runner)
+        run: go test -race -count=1 -run 'TestSandboxPolicyContainerNoEngine|TestSandboxPolicyOutlivesTheControlDeadline|TestSandboxExecContainerLaunch' ./cmd/conductor/
       - name: canary — conductor sandbox exec around a fake agent
         run: bash test/sandbox-canary/run.sh
 
@@ -67,3 +78,54 @@ jobs:
           paseo --version
       - name: canary — paseo provider entries + conductor sandbox exec
         run: bash test/sandbox-canary/paseo.sh
+
+  container:
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [docker, podman]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: allow unprivileged user namespaces (rootless podman)
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+      - name: the engine
+        run: |
+          ${{ matrix.engine }} version
+          if [ "${{ matrix.engine }}" = podman ]; then
+            podman system migrate || true
+            podman info --format 'rootless={{.Host.Security.Rootless}} cgroups={{.Host.CgroupsVersion}} runtime={{.Host.OCIRuntime.Name}}'
+          fi
+      - name: install the latest published paseo (the canary's paseo leg)
+        run: |
+          npm install -g @getpaseo/cli@latest
+          paseo --version
+      - name: container backend against the real engine
+        env:
+          CONDUCTOR_CONTAINER_TEST: ${{ matrix.engine }}
+        run: go test -race -count=1 -run 'TestContainer|TestMux|AgentContainer|CheckContainerArgs' ./internal/agentsandbox/ ./internal/sandbox/
+      - name: canary — the container backend end to end
+        env:
+          ENGINE: ${{ matrix.engine }}
+          IMAGE: alpine:3
+        run: bash test/sandbox-canary/container.sh
+
+  agent-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build conductor's agent image (images/agent)
+        run: make agent-image AGENT_IMAGE_ENGINE=docker AGENT_IMAGE_VERSION=ci
+      - name: its CLIs and tooling run, as a non-root uid
+        run: |
+          docker run --rm --user 1000:1000 --network none --cap-drop ALL --security-opt no-new-privileges \
+            --entrypoint sh conductor-agent:ci -c \
+            'set -e; claude --version; codex --version; opencode --version; conductor --version; git --version; rg --version | head -1; python3 --version; node --version'

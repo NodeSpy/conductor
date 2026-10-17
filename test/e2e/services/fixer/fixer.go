@@ -82,12 +82,26 @@ func sandboxProbe(dir string, env []string, name, email string, ownPush error) {
 	} else {
 		line("secret", "READABLE")
 	}
-	if _, err := os.ReadFile("/home/conductor/data/state.json"); err != nil {
-		line("conductor-state", "denied")
-	} else {
-		line("conductor-state", "READABLE")
+	state := "denied"
+	for _, p := range []string{"/home/conductor/data/state.json", "/home/conductor/cdata/state.json"} {
+		if _, err := os.ReadFile(p); err == nil {
+			state = "READABLE"
+		}
 	}
+	line("conductor-state", state)
 	line("home", os.Getenv("HOME"))
+	host, _ := os.Hostname()
+	line("hostname", host)
+	sock := "absent"
+	for _, p := range []string{"/var/run/docker.sock", "/run/docker.sock", "/run/podman/podman.sock"} {
+		if _, err := os.Stat(p); err == nil {
+			sock = "PRESENT " + p
+		}
+	}
+	if os.Getenv("DOCKER_HOST") != "" {
+		sock = "PRESENT DOCKER_HOST"
+	}
+	line("engine-socket", sock)
 	if os.Getenv("GH_TOKEN") == "" && os.Getenv("GITHUB_TOKEN") == "" && os.Getenv("SSH_AUTH_SOCK") == "" {
 		line("credentials-env", "none")
 	} else {

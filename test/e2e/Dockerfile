@@ -48,7 +48,7 @@ RUN set -e; for p in github slack discord ntfy pushover notifiarr smee; do \
 
 # ---- runtime stage ----
 FROM alpine:3.20
-RUN apk add --no-cache git git-daemon curl bash coreutils openssl openssh util-linux \
+RUN apk add --no-cache git git-daemon curl bash coreutils openssl openssh util-linux docker-cli \
  && adduser -D -h /home/conductor conductor
 # The agent-sandbox daemon (group Z) runs as this user: a "secret" ssh key in
 # its home the sandboxed agent must not be able to read.

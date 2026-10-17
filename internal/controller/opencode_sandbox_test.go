@@ -267,11 +267,14 @@ func TestOpencodeServePort(t *testing.T) {
 	old := sandbox.CheckGOOS
 	t.Cleanup(func() { sandbox.CheckGOOS = old })
 	sandbox.CheckGOOS = "linux"
-	if p, err := opencodeServePort(); err != nil || p != 4096 {
+	if p, err := opencodeServePort(false); err != nil || p != 4096 {
 		t.Fatalf("linux: %d %v", p, err)
 	}
+	if p, err := opencodeServePort(true); err != nil || p == 4096 || p <= 0 {
+		t.Fatalf("linux, a container: a free port, got %d %v", p, err)
+	}
 	sandbox.CheckGOOS = "darwin"
-	p, err := opencodeServePort()
+	p, err := opencodeServePort(false)
 	if err != nil || p == 4096 || p <= 0 {
 		t.Fatalf("darwin: a free port, got %d %v", p, err)
 	}

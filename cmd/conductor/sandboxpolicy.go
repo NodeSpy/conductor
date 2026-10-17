@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -27,21 +28,42 @@ var sandboxResolver atomic.Pointer[agentsandbox.Resolver]
 // policy for the caller's cwd and a token minted for this launch alone. The
 // socket is 0600 already; the caller's uid is checked too — a policy carries
 // a live token.
-func sandboxPolicyResponse(conn net.Conn, req controlRequest, log func(string, ...any)) controlResponse {
+//
+// A container policy is prepared here — the identity's container created or
+// started, this launch's proxy listener, relays and socket wired into it —
+// and release (non-nil then) ends the launch's share: the caller holds it
+// until the `sandbox exec` closes the connection.
+func sandboxPolicyResponse(ctx context.Context, conn net.Conn, req controlRequest, log func(string, ...any)) (controlResponse, func()) {
 	if uid, ok := agentsandbox.PeerUID(conn); ok && int(uid) != os.Getuid() {
-		return controlResponse{Error: fmt.Sprintf("sandbox-policy: refused for uid %d", uid)}
+		return controlResponse{Error: fmt.Sprintf("sandbox-policy: refused for uid %d", uid)}, nil
 	}
 	r := sandboxResolver.Load()
 	if r == nil {
-		return controlResponse{Error: "the agent sandbox is off in this conductor (sandbox.agents: off)"}
+		return controlResponse{Error: "the agent sandbox is off in this conductor (sandbox.agents: off)"}, nil
 	}
 	pol, err := r.PolicyFor(req.Cwd, req.Tool, req.Env, req.Scratch)
 	if err != nil {
 		log("sandbox-policy for %s refused: %v", req.Cwd, err)
-		return controlResponse{Error: err.Error()}
+		return controlResponse{Error: err.Error()}, nil
+	}
+	var release func()
+	if pol.Container != nil {
+		w := controller.AgentSandbox
+		if w == nil || w.Containers == nil {
+			return controlResponse{Error: "this conductor has no container backend"}, nil
+		}
+		pctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		release, err = w.Containers.Prepare(pctx, &pol)
+		cancel()
+		if err != nil {
+			log("sandbox-policy for %s refused: %v", req.Cwd, err)
+			return controlResponse{Error: err.Error()}, nil
+		}
+		log("sandbox-policy: %s in %s (identity %s, container %s, egress %d host(s), %d relay(s))", pol.Tool, req.Cwd, pol.Identity, pol.Container.Session.Name, len(pol.Egress), len(pol.Loopback))
+		return controlResponse{OK: true, Policy: &pol}, release
 	}
 	log("sandbox-policy: %s in %s (identity %s, egress %d host(s), %d relay(s))", pol.Tool, req.Cwd, pol.Identity, len(pol.Egress), len(pol.Loopback))
-	return controlResponse{OK: true, Policy: &pol}
+	return controlResponse{OK: true, Policy: &pol}, nil
 }
 
 // sandboxTokenTTL bounds a `conductor sandbox exec` launch's token: a paseo
@@ -93,6 +115,14 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		Env:  os.Environ(),
 		GOOS: runtime.GOOS,
 	}
+	if s := cfg.Sandbox; s != nil && s.Backend == "container" {
+		// Every agent launch with no isolation: of its own — a `sandbox exec`
+		// session in any directory included — runs in a container.
+		r.Container = &agentsandbox.Container{Persistent: s.Container != nil && s.Container.Persistent}
+		if s.Container != nil {
+			r.Container.Engine = s.Container.Engine
+		}
+	}
 	if err := os.MkdirAll(r.StateRoot, 0o700); err != nil {
 		return nil, fmt.Errorf("agent sandbox state dir %s: %w", r.StateRoot, err)
 	}
@@ -105,9 +135,11 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		rel.Close()
 		return nil, fmt.Errorf("agent sandbox: resolve conductor's own binary: %w", err)
 	}
+	containers := agentContainers(cfg, r.StateRoot, logf)
+	agentsandbox.SetDaemonContainers(containers)
 	sandboxResolver.Store(r)
 	controller.AgentSandbox = &controller.SandboxWiring{
-		Resolver: r, Relay: rel.Relay,
+		Resolver: r, Relay: rel.Relay, Containers: containers,
 		// What an agent-deck session's wrapper runs: this daemon's policy.
 		Exec: []string{self, "sandbox", "exec", "--socket", controlSockPath(cfg)},
 	}
@@ -124,6 +156,8 @@ func wireAgentSandbox(cfg *config.Config, cfgFile string, logf func(string, ...a
 		logf("agent sandbox: on (identity homes in %s; conductor socket %q)", r.StateRoot, r.Socket)
 	}
 	return func() {
+		agentsandbox.SetDaemonContainers(nil)
+		containers.Close()
 		sandboxResolver.Store(nil)
 		controller.AgentSandbox = nil
 		gitdiff.Confine = nil
