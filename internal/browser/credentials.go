@@ -694,7 +694,11 @@ func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c
 	}
 	out := map[string]any{"steps": steps}
 	if cred.Approval {
-		out["approval"] = m.awaitApproval(ctx, in, t, c, cred, 90*time.Second, entry)
+		wait := m.ApprovalWait
+		if wait <= 0 {
+			wait = 90 * time.Second
+		}
+		out["approval"] = m.awaitApproval(ctx, in, t, c, cred, wait, entry)
 	}
 	return out, nil
 }

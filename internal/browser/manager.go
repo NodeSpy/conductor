@@ -110,6 +110,12 @@ type Manager struct {
 	// marks a value read outside the vaults sensitive (the logs' redaction).
 	LookupEnv func(string) (string, bool)
 	Taint     func(string)
+	// ApprovalWait bounds a sign-in's wait for the operator's approval
+	// (0 = 90s).
+	ApprovalWait time.Duration
+	// EnvFile is conductor.env (a plain file), named in a resolve check's
+	// warning when a secret comes from a variable it sets.
+	EnvFile string
 	// Store is the logins the operator added at runtime (nil = none): they
 	// join the config's credentials and login sites.
 	Store *LoginStore
@@ -210,7 +216,12 @@ func (m *Manager) Do(ctx context.Context, c Principal, action string, args map[s
 	if c.Workspace == "" || c.Identity == "" || c.Key == "" {
 		return nil, fmt.Errorf("browser: conductor's browser is for sandboxed agent launches — this session has no sandbox identity")
 	}
-	st := m.settings()
+	return m.doWith(ctx, c, m.settings(), action, args)
+}
+
+// doWith runs one action with these settings (Do's are the operator's;
+// a test sign-in narrows them to one credential).
+func (m *Manager) doWith(ctx context.Context, c Principal, st Settings, action string, args map[string]any) (map[string]any, error) {
 	s, err := m.session(c)
 	if err != nil {
 		return nil, err
@@ -332,8 +343,8 @@ func (m *Manager) grant(c Principal, st Settings) (sites []string, why string) {
 		if !cr.ForPrincipal(c) {
 			continue
 		}
-		for _, os := range cr.AllOrigins() {
-			o, err := parseOrigin(os)
+		for _, so := range cr.AllOrigins() {
+			o, err := parseOrigin(so)
 			if err != nil {
 				continue
 			}

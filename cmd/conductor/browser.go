@@ -138,6 +138,7 @@ func wireBrowser(ctx context.Context, cfg *config.Config, notifier *notify.Notif
 		LookupEnv: os.LookupEnv,
 		Taint:     vaults.Taint,
 		Store:     &browser.LoginStore{Dir: cfg.BrowserStateDir()},
+		EnvFile:   filepath.Join(cfg.BaseDir(), "conductor.env"),
 		Notify: func(msg string) {
 			if notifier != nil {
 				notifier.Emit(context.Background(), notify.EventNeedsInput, core.Trigger{Kind: "browser", Title: msg}, msg)
@@ -214,6 +215,9 @@ func browserControl(conn net.Conn, req controlRequest) controlResponse {
 	m := browserMgr.Load()
 	if cfg == nil || !cfg.BrowserOn() || m == nil {
 		return controlResponse{Error: "browser: not configured on this daemon (no browser: section, or the agent sandbox is off)"}
+	}
+	if browserLoginOps[req.Cmd] {
+		return browserLoginControl(cfg, m, req)
 	}
 	st := browserEffective(cfg, m)
 	audit := func(e map[string]any) {
@@ -405,6 +409,11 @@ The operator's (on the daemon's control socket):
   peek SESSION [--out FILE.png]            watch one: a screenshot
   passkey register CREDENTIAL [--url U] [--headless]
                                            register a dedicated passkey for CREDENTIAL on its site
+  credential add|ls|usage|check|test|set|unset|bind|rm …
+                                           logins you add: typed (write-only), from a vault, or your own sign-in
+                                           (conductor browser credential --help)
+  vault-items VAULT [--query Q] | vault-item VAULT ITEM
+                                           a vault's items for picking — names and fields, never a value
   --config PATH / --socket PATH            which daemon
 `
 
@@ -421,6 +430,10 @@ func cmdBrowser(args []string) int {
 	switch args[0] {
 	case "logins", "seed", "cookies", "logout", "sessions", "peek", "passkey":
 		err = browserOperator(args[0], args[1:])
+	case "credential", "credentials":
+		err = browserCredentialCmd(args[1:])
+	case "vault-items", "vault-item":
+		err = browserVaultCmd(args[0], args[1:])
 	default:
 		err = browserAgent(args[0], args[1:])
 	}
@@ -590,7 +603,11 @@ func browserCtl(flags map[string]any, req controlRequest) (controlResponse, erro
 		return controlResponse{}, fmt.Errorf("the conductor daemon is unreachable at %s (%v)", sock, err)
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(60 * time.Second))
+	deadline := 60 * time.Second
+	if req.Cmd == "browser-login-test" {
+		deadline = 180 * time.Second // a sign-in, maybe waiting on the operator's phone
+	}
+	_ = conn.SetDeadline(time.Now().Add(deadline))
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return controlResponse{}, err
 	}
