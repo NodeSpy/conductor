@@ -71,7 +71,8 @@
   // a folder's roll-up says only what needs you there (pending approvals, failing workflows); the neutral counts are a hover away
   const roll = (n) => { const bs = botsUnder(n); const p = bs.reduce((a, b) => a + pendingOf(b), 0), c = bs.reduce((a, b) => a + openCases(b), 0), live = bs.filter((b) => (M(b) || {}).home === 'live').length; const wr = UI.wfRoll(UI.wfsIn(n.path));
     const tip = `${bs.length} bot${bs.length === 1 ? '' : 's'} · ${wr.n} workflow${wr.n === 1 ? '' : 's'} · ${c} open case${c === 1 ? '' : 's'} · ${live} working now`;
-    return `<span class="roll" data-tip="${tip}">${p ? `<span class="hot">${p} pending</span>` : ''}${wr.failing ? `<span class="hot">${wr.failing} failing</span>` : ''}${!p && !wr.failing ? `<span class="calm-n">${bs.length} bot${bs.length === 1 ? '' : 's'}</span>` : ''}</span>`; };
+    // in words, so there is no legend to decode; what needs you first and coloured, the rest quiet
+    return `<span class="roll" data-tip="${tip}">${p ? `<span class="hot">${p} pending</span>` : ''}${wr.failing ? `<span class="hot">${wr.failing} failing</span>` : ''}<span class="calm-n">${bs.length} bot${bs.length === 1 ? '' : 's'} · ${wr.n} workflow${wr.n === 1 ? '' : 's'} · ${c} open case${c === 1 ? '' : 's'}${live ? ` · ${live} working` : ''}</span></span>`; };
   const fv = { q: '' };
   const closed = () => new Set(D.prefs.closedFolders || []);
   const matchBot = (b) => { const m = M(b) || { name: b, desc: '' }; const q = fv.q.toLowerCase(); return (m.name + ' ' + (m.desc || '') + ' ' + UI.folderOfBot(b) + ' ' + (cfgOf('bots', b, true).team || '')).toLowerCase().includes(q); };
@@ -104,7 +105,7 @@
       return `<div class="frow folder" role="treeitem" aria-expanded="${open}" style="--d:${d}" data-drop="${esc(k.path)}">
         <button class="icon-btn sm ftoggle" data-act="f-toggle" data-path="${esc(k.path)}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(k.path)}">${icon(open ? 'chevd' : 'chev')}</button><span class="fic">${icon('folder')}</span>
         <a class="fname" href="#/folders/${enc(k.path)}"><b>${esc(leaf(k.path))}</b>${draft ? '<span class="muted small">empty · saved to config once something moves in</span>' : ''}</a>
-        ${open ? '' : roll(k)}<button class="icon-btn sm" data-act="f-menu" data-path="${esc(k.path)}" aria-label="Folder actions for ${esc(k.path)}">${icon('more')}</button></div>
+        ${roll(k)}<button class="icon-btn sm" data-act="f-menu" data-path="${esc(k.path)}" aria-label="Folder actions for ${esc(k.path)}">${icon('more')}</button></div>
         ${open ? `<div role="group">${folderRows(k, d + 1)}${k.teams.filter((t) => !fv.q || matchTeam(t)).map((t) => teamRow(t, d + 1)).join('')}${k.solos.filter((b) => !fv.q || matchBot(b)).map((b) => botRow(b, d + 1, false)).join('')}</div>` : ''}`;
     }).join('');
   }

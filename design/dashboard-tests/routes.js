@@ -1,6 +1,6 @@
 // Every route the sweeps visit (the crawl, the iPhone layout and contrast sweep).
 const ROUTES = [
-  '#/overview', '#/live', '#/attention', '#/runs', '#/runs/r-7ef0',
+  '#/overview', '#/live', '#/live/r-7f3a', '#/attention', '#/runs', '#/runs/r-7ef0',
   '#/workflows', '#/workflows/ci-fixer', '#/workflows/pr-review', '#/workflows/assess-and-post', '#/workflows/incident-intake', '#/workflows/bot:platform-sre',
   '#/bots', '#/folders/work', '#/folders/work%2Fplatform', '#/bots/homelab/memory', '#/teams/platform', '#/teams/platform/routing', '#/teams/platform/defaults', '#/teams/platform/knowledge', '#/teams/finance',
   '#/bots/platform-sre/chat', '#/bots/platform-sre/cases', '#/bots/web-triage/cases/c34', '#/bots/platform-sre/cases/c29', '#/bots/web-triage/cases/c36', '#/bots/platform-data/cases/c35', '#/bots/release-scribe/cases', '#/bots/platform-sre/proposals', '#/bots/platform-sre/proposals/p12',

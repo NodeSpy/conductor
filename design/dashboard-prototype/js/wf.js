@@ -15,13 +15,14 @@
   const V = () => (window.S && window.S.view ? window.S.view() : window.D); // staged view: a just-created connector resolves
 
   /* ---------- kinds ---------- */
+  // a step's kind is told by its icon and word, in ink; colour is kept for status (a fail step is the only red one)
   WF.KINDS = {
-    agent: { icon: 'sparkle', label: 'Agent', color: 'var(--color-accent-default)' }, code: { icon: 'code', label: 'Code', color: 'var(--color-status-success-solid)' },
-    decide: { icon: 'diamond', label: 'Decide', color: 'var(--color-status-info-solid)' }, ask: { icon: 'hand', label: 'Hand-off', color: 'var(--color-status-warning-solid)' },
-    verb: { icon: 'zap', label: 'Action', color: 'var(--color-status-running-solid)' }, call: { icon: 'link', label: 'Call', color: 'var(--color-text-secondary)' },
-    wait: { icon: 'clock', label: 'Wait', color: 'var(--color-text-tertiary)' }, log: { icon: 'logs', label: 'Log', color: 'var(--color-text-tertiary)' },
-    set: { icon: 'edit', label: 'Set', color: 'var(--color-text-tertiary)' }, assert: { icon: 'check', label: 'Assert', color: 'var(--color-text-tertiary)' },
-    fail: { icon: 'x', label: 'Fail', color: 'var(--color-status-danger-solid)' }, bot: { icon: 'members', label: 'Bot', color: 'var(--color-accent-hover)' }, parallel: { icon: 'workflows', label: 'Parallel', color: 'var(--color-status-running-solid)' }, unknown: { icon: 'warn', label: 'Unknown', color: 'var(--color-status-danger-solid)' },
+    agent: { icon: 'sparkle', label: 'Agent', color: 'var(--color-icon-default)' }, code: { icon: 'code', label: 'Code', color: 'var(--color-icon-default)' },
+    decide: { icon: 'diamond', label: 'Decide', color: 'var(--color-icon-default)' }, ask: { icon: 'hand', label: 'Hand-off', color: 'var(--color-icon-default)' },
+    verb: { icon: 'zap', label: 'Action', color: 'var(--color-icon-default)' }, call: { icon: 'link', label: 'Call', color: 'var(--color-icon-default)' },
+    wait: { icon: 'clock', label: 'Wait', color: 'var(--color-icon-default)' }, log: { icon: 'logs', label: 'Log', color: 'var(--color-icon-default)' },
+    set: { icon: 'edit', label: 'Set', color: 'var(--color-icon-default)' }, assert: { icon: 'check', label: 'Assert', color: 'var(--color-icon-default)' },
+    fail: { icon: 'x', label: 'Fail', color: 'var(--color-status-danger-solid)' }, bot: { icon: 'members', label: 'Bot', color: 'var(--color-icon-default)' }, parallel: { icon: 'workflows', label: 'Parallel', color: 'var(--color-icon-default)' }, unknown: { icon: 'warn', label: 'Unknown', color: 'var(--color-status-danger-solid)' },
   };
   WF.kind = (s) => {
     if (!isObj(s)) return 'unknown';

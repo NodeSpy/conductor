@@ -904,3 +904,20 @@ window.D.packMembers = {
   D.attention = D.attention.filter((a) => a.kind !== 'update');
   D.attention.forEach((a) => { const p = PLAIN[a.href]; if (p) [a.plain, a.why, a.verb] = p; });
 })();
+
+/* 2026-10 addendum (meaning at a glance): what each needs-you item is, what it does and where it lands, so the risk
+ * marker and environment tag are right everywhere (UI.objectIcon, UI.riskMarker, UI.envTag). */
+(function () {
+  const D = window.D;
+  const META = {
+    '#/bots/platform-sre/proposals/p12': { obj: 'terraform', kindWord: 'Terraform apply', tier: 'propose', cverb: 'tf-apply.apply', env: 'production', ctx: 'platform-sre · infra · replaces 1 server' },
+    '#/bots/billing-sre/proposals': { obj: 'message', kindWord: 'Slack post', tier: 'propose', cverb: 'slack-ops.post', ctx: 'billing-sre · #incidents' },
+    '#/runs/r-7ef0': { obj: 'check', kindWord: 'Failed check', action: 'push', ctx: 'ci-fixer · acme/web#1288' },
+    '#/runs/r-7ed1': { obj: 'question', kindWord: 'Question', action: 'post', ctx: 'pr-review · acme/infra#77' },
+    '#/browser/b-02': { obj: 'login', kindWord: 'Sign-in', action: 'permission', ctx: 'triage agent · app.example.com' },
+  };
+  D.attention.forEach((a) => Object.assign(a, META[a.href] || {}));
+  (D.fyi || []).forEach((a) => { if (a.kind === 'update') Object.assign(a, { obj: 'update', kindWord: 'Update' }); if (a.kind === 'sandbox') Object.assign(a, { obj: 'sandbox', kindWord: 'Sandbox' }); });
+  const p12 = D.proposals.find((p) => p.id === 'p12'); if (p12) p12.env = 'production';
+  D.connectors.forEach((c) => { if (c.name === 'tf-apply' || c.name === 'tf-plan') c.env = 'production'; if (c.name === 'kv') c.env = 'local'; });
+})();

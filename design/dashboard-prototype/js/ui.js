@@ -46,6 +46,60 @@
   UI.groupHead = ({ title, n, say = '', action = '', tone = 'done' }) => `<div class="grp-head" data-tone="${tone}"><span class="grp-t">${title}${n != null ? ` <span class="grp-n">· ${n}</span>` : ''}</span>${say ? `<span class="grp-say">${say}</span>` : ''}${action ? `<span class="grp-act">${action}</span>` : ''}</div>`;
   /** The same heading as a table row spanning every column. */
   UI.groupRow = (o) => `<tr class="grp-row" data-tone="${o.tone || 'done'}"><td colspan="20">${UI.groupHead(o)}</td></tr>`;
+  /* ---------- meaning at a glance: what a thing is, what it does, how risky it is, where it lands ----------
+   * Shared components, so the brand's final icon set and risk markers drop in from one place (css/marks.css).
+   * Every icon here has exactly one meaning and is always paired with a word. */
+  UI.OBJ = { approval: 'Approval', run: 'Run', bot: 'Bot', team: 'Team', workflow: 'Workflow', pr: 'Pull request', issue: 'Issue', check: 'Check', incident: 'Incident', deploy: 'Deploy', terraform: 'Terraform', spend: 'Cloud spend', connector: 'Connector', login: 'Login', secret: 'Secret', knowledge: 'Knowledge', config: 'Config change', question: 'Question', browser: 'Browser', update: 'Update', schedule: 'Schedule', message: 'Message', case: 'Case', pack: 'Pack', host: 'Host', sandbox: 'Sandbox' };
+  UI.ACT = { read: 'Reads', post: 'Comments or posts', push: 'Pushes code', change: 'Changes things', infra: 'Applies infrastructure', money: 'Spends money', destroy: 'Deletes or destroys', permission: 'Changes permissions' };
+  /** What a thing is: its icon, and (word) its kind in words. */
+  UI.objectIcon = (k, o = {}) => `<span class="obj" data-obj="${k}"${o.word === false ? ` title="${UI.OBJ[k] || k}"` : ''}>${UI.icon('obj-' + k)}${o.word === false ? `<span class="sr-only">${UI.OBJ[k] || k}</span>` : `<span class="obj-w">${o.label || UI.OBJ[k] || k}</span>`}</span>`;
+  /** What an action does: its icon and its kind in words. */
+  UI.actionIcon = (k, o = {}) => `<span class="act" data-act-kind="${k}" title="${UI.ACT[k] || k}">${UI.icon('act-' + k)}${o.word === false ? `<span class="sr-only">${UI.ACT[k] || k}</span>` : `<span class="act-w">${o.label || UI.ACT[k] || k}</span>`}</span>`;
+  /** The verb → action kind. */
+  UI.actionOf = (verb = '', hint = '') => { const v = String(verb).toLowerCase() + ' ' + String(hint).toLowerCase();
+    if (/purchase|buy|savings_plan|reserve|spend|budget\.raise/.test(v)) return 'money';
+    if (/destroy|delete|drop|\.rm\b|remove|purge|revoke/.test(v)) return 'destroy';
+    if (/grant|permission|operators|access|widen|allow_secrets|autonomy|sandbox|egress/.test(v)) return 'permission';
+    if (/tf-apply|terraform apply|\.apply\b|deploy|rollout|migrate/.test(v)) return 'infra';
+    if (/push|commit|merge|git\./.test(v)) return 'push';
+    if (/comment|post|reply|review|message|send|notify|page\b/.test(v)) return 'post';
+    if (/\.get\b|get_|list|read|search|logs|diff|plan\b|tf-plan|fetch|query|status|watch/.test(v)) return 'read';
+    return 'change'; };
+  /* the risk ladder, quiet at the bottom and unmistakable at the top */
+  UI.RISK = [['read', 'Reads only'], ['reversible', 'Reversible'], ['change', 'Changes things'], ['prod', 'Touches production'], ['money', 'Spends money'], ['destroy', 'Destructive']];
+  /** How risky: from conductor's tier (observe / reversible / propose / commit_money / never), the verb's action and the
+      environment it lands in. Returns { level 0..5, key, word }. */
+  UI.riskOf = ({ tier = '', verb = '', env = '', destroys = 0, action = '' } = {}) => { const a = action || UI.actionOf(verb); let lv;
+    if (a === 'permission') lv = 5; else if (a === 'destroy' || destroys > 0 || tier === 'never') lv = 5; else if (a === 'money' || tier === 'commit_money') lv = 4;
+    else if (env === 'production' && a !== 'read') lv = 3; else if (a === 'read' || tier === 'observe') lv = 0; else if (tier === 'reversible' || a === 'post') lv = 1; else lv = 2;
+    const word = lv === 5 && a === 'permission' ? 'Changes permissions' : UI.RISK[lv][1]; return { level: lv, key: UI.RISK[lv][0], word }; };
+  /* runs: what a run is about (its trigger's object) and what its workflow does */
+  const WF_OBJ = { 'ci-fixer': ['check', 'push'], 'pr-review': ['pr', 'post'], 'issue-triage': ['issue', 'post'], 'dep-bump': ['schedule', 'push'], 'release-notes': ['pr', 'post'], 'incident-intake': ['incident', 'post'], 'assess-and-post': ['message', 'post'], alert: ['incident', 'post'] };
+  UI.runObj = (r) => (String(r.workflow).startsWith('bot:') ? 'bot' : (WF_OBJ[r.workflow] || ['run'])[0]);
+  UI.runRisk = (r) => UI.riskOf({ action: String(r.workflow).startsWith('bot:') ? 'change' : (WF_OBJ[r.workflow] || [0, 'change'])[1] });
+  UI.wfRisk = (w) => UI.riskOf({ action: String(w.name).startsWith('bot:') ? 'change' : (WF_OBJ[w.name] || [0, 'change'])[1] });
+  /** The risk marker: a six-step ladder filled to the level, and the word; top levels coloured and bold. */
+  UI.riskMarker = (r, o = {}) => { if (!r) return ''; const lv = typeof r === 'number' ? r : r.level, word = typeof r === 'number' ? UI.RISK[lv][1] : r.word;
+    return `<span class="risk" data-risk="${lv}" title="${UI.esc(word)}"><span class="risk-ladder" aria-hidden="true">${[0, 1, 2, 3, 4, 5].map((i) => `<i${i <= lv ? ' class="on"' : ''}></i>`).join('')}</span>${o.word === false ? `<span class="sr-only">${word}</span>` : `<span class="risk-w">${word}</span>`}</span>`; };
+  /** Where it lands: production / staging / local. */
+  UI.envTag = (env) => (env ? `<span class="env" data-env="${env}">${env}</span>` : '');
+  /** A labelled metadata line: each item says what it is (an object icon or a word) before its value, so ids and times
+      are never a bare string. items: [{ obj?, label, value, mono? }] */
+  /** '23h 52m' → '23 h 52 min': spans people read, not unit codes. */
+  UI.humanSpan = (t) => String(t).replace(/(\d+)\s*d\b/g, '$1 d').replace(/(\d+)\s*h\b/g, '$1 h').replace(/(\d+)\s*m\b/g, '$1 min').replace(/(\d+)\s*s\b/g, '$1 s');
+  UI.metaLine = (items) => `<dl class="meta-line">${items.filter(Boolean).map((x) => `<div class="ml-i">${x.obj ? UI.objectIcon(x.obj, { word: false }) : ''}<dt>${x.label}</dt><dd${x.mono ? ' class="mono"' : ''}>${x.value}</dd></div>`).join('')}</dl>`;
+  /** What a run's target is, as a labelled item. */
+  UI.targetItem = (r) => { if (!r.repo) return { obj: 'connector', label: 'Started by', value: UI.esc(r.trigger) }; const o = UI.runObj(r); return { obj: ['pr', 'issue', 'check'].includes(o) ? o : 'pr', label: o === 'issue' ? 'Issue' : o === 'check' ? 'Check on' : 'Pull request', value: `${r.repo}${r.number ? '#' + r.number : ''}`, mono: true }; };
+  /** One row anatomy everywhere: [icon: what it is] · [title + context] · [risk] · [status mark + word] · [time] · [action].
+      o: { tag ('a'|'div'), href, obj, kind (word), title, ctx, risk, env, s, sword, time, act, cls, attrs, row (row state) } */
+  UI.row = (o) => { const t = o.tag || (o.href ? 'a' : 'div');
+    return `<${t} class="xrow${o.cls ? ' ' + o.cls : ''}"${o.href ? ` href="${o.href}"` : ''}${UI.rowState(o.row || '')}${o.risk && o.risk.level >= 3 ? ` data-hi="${o.risk.level}"` : ''}${o.attrs ? ' ' + o.attrs : ''}>
+      <span class="xr-obj">${o.obj ? UI.objectIcon(o.obj, { label: o.kind }) : ''}</span>
+      <span class="xr-main"><span class="xr-title">${o.title}</span>${o.ctx ? `<span class="xr-ctx">${o.ctx}</span>` : ''}</span>
+      <span class="xr-risk">${o.risk ? UI.riskMarker(o.risk) : ''}${UI.envTag(o.env)}</span>
+      <span class="xr-status">${o.s ? UI.statusMark(o.s, o.sword) : ''}</span>
+      <span class="xr-time">${o.time || ''}</span>
+      <span class="xr-act">${o.act || ''}</span></${t}>`; };
   /** A count beside a tab or nav item; hot (ember) only where a person is needed. */
   UI.count = (n, o = {}) => `<span class="count${o.hot ? ' hot' : ''}${o.cls ? ' ' + o.cls : ''}"${o.label ? ` aria-label="${UI.esc(o.label)}"` : ''}>${n}</span>`;
   /** Attributes for a row (tr, .item) that needs someone: a thin leading edge in the state's colour, never a tint. */
@@ -173,7 +227,7 @@
       UI.confirm({ title: 'Discard unsaved changes?', body: msg, ok: 'Discard and leave', danger: true }).then((ok) => { if (ok) { if (UI.guardClear) UI.guardClear(); location.hash = target; } });
       return;
     }
-    lastHash = location.hash;
+    UI.prevHash = lastHash; lastHash = location.hash;
     document.querySelectorAll('.drawer-scrim').forEach((d) => d.remove()); UI.closeModal(); UI.render();
   });
   window.addEventListener('beforeunload', (e) => { if (UI.guard && UI.guard()) { e.preventDefault(); e.returnValue = ''; } });
@@ -257,7 +311,7 @@
       <div class="modal-body stack">
         <div class="seal-words">${deny ? 'You\'re denying' : 'You\'re approving'} <b>${UI.esc(p.title || p.summary)}</b>, proposed by <b>${p.bot}</b>.${p.impact ? ` <span class="dim">${UI.esc(p.impact)}</span>` : ''}</div>
         ${UI.requesterBanner ? UI.requesterBanner(p) : ''}
-        ${p.kind === 'terraform' ? `<div class="kv small"><dt>action</dt><dd class="mono">terraform apply · ${p.tf.repo} · ${p.tf.dir} · ${p.tf.workspace}</dd><dt>plan</dt><dd class="mono">+${p.tf.add} ~${p.tf.change} -${p.tf.destroy} · <span style="color:var(--color-status-warning-fg)">replaces ${p.tf.replaces.join(', ')}</span></dd></div>` : UI.payloadHTML ? UI.payloadHTML(p) : ''}
+        ${p.kind === 'terraform' ? `<div class="kv small"><dt>action</dt><dd class="mono">terraform apply · ${p.tf.repo} · ${p.tf.dir} · ${p.tf.workspace}</dd><dt>plan</dt><dd class="mono">+${p.tf.add} ~${p.tf.change} -${p.tf.destroy} · ${UI.statusMark('wait', `replaces ${p.tf.replaces.join(', ')}`, { sm: true })}</dd></div>` : UI.payloadHTML ? UI.payloadHTML(p) : ''}
         ${deny ? `<div class="field"><label for="seal-reason">Tell the bot why <span class="opt">optional</span></label><textarea class="textarea" id="seal-reason" rows="2" placeholder="e.g. Not in #incidents; post it to #finance instead."></textarea></div>` : ''}
         <details class="tech"><summary>The exact payload the passkey signs</summary><div class="digest">{ bot: <b>${p.bot}</b>, proposal: <b>${p.id}</b>, decision: <b>${decision}</b>, action_sha256: <b>${p.digest.replace('sha256:', '')}</b>, nonce: <b>7Qx2…f9</b> }</div></details>
         <div class="seal" id="seal">
@@ -304,9 +358,9 @@
     const health = d.paused ? ['wait', 'Dispatch paused'] : warn ? ['wait', 'Something needs a look'] : ['ok', 'All systems normal'];
     $('#strip-cells').innerHTML = `
       <div class="spacer"></div>
-      <button type="button" class="cell status-btn" data-act="strip-status" aria-label="System status: ${health[1]}" data-tip="${d.paused ? 'Dispatch is paused: no new runs start' : `conductor ${d.version}, up ${d.uptime}`}">${UI.statusMark(health[0], d.paused ? `<span class="lbl-paused">${health[1]}</span>` : `<span class="lbl-long">${health[1]}</span>`)}</button>
-      <a class="cell quiet hide-calm" href="#/safety" data-tip="The agent sandbox is on: bots can't touch files or the network beyond what you allowed. See what each bot may do on its own.<br><span class='mono'>backend ${d.sandbox.backend} · ${d.sandbox.containers} containers</span>">${UI.icon('shield')}<span class="lbl-long">Sandbox on</span></a>
-      <a class="cell quiet hide-calm" href="#/updates" data-tip="conductor ${d.version}${d.update.available ? `; ${d.update.available} is available` : ', up to date'}">${UI.icon('updates')}<span class="lbl-long">${d.update.available ? `Update ready` : d.version}</span></a>
+      <button type="button" class="cell status-btn" data-act="strip-status" aria-label="System status: ${health[1]}" data-tip="${d.paused ? 'Dispatch is paused: no new runs start' : `conductor ${d.version}, up ${UI.humanSpan(d.uptime)}`}">${UI.statusMark(health[0], d.paused ? `<span class="lbl-paused">${health[1]}</span>` : `<span class="lbl-long">${health[1]}</span>`)}</button>
+      <a class="cell quiet" href="#/safety" data-tip="The agent sandbox is on: bots can't touch files or the network beyond what you allowed. See what each bot may do on its own.<br><span class='mono'>backend ${d.sandbox.backend} · ${d.sandbox.containers} containers</span>">${UI.icon('shield')}<span class="lbl-long">Sandbox on</span></a>
+      <a class="cell quiet" href="#/updates" data-tip="conductor ${d.version}${d.update.available ? `; ${d.update.available} is available` : ', up to date'}">${UI.icon('updates')}<span class="lbl-long">${d.update.available ? `Update ready` : d.version}</span></a>
       ${running ? `<a class="cell quiet" href="#/live" data-tip="Runs in progress"><span><b>${running}</b> running</span></a>` : ''}
       ${D.pending.length ? `<a class="cell staged" href="#/config/apply" data-tip="Config changes staged but not applied">${UI.icon('edit')}<span><b>${D.pending.length}</b><span class="lbl-long"> to review</span></span></a>` : ''}
       ${need ? `<a class="cell alert" href="#/attention" aria-label="${need} need you">${UI.count(need, { hot: true })}<span class="lbl-long">need you</span></a>` : ''}`;
@@ -327,7 +381,7 @@
         <aside class="rail">
           <div id="rail-nav"></div>
           <div class="foot">
-            <a class="host" href="#/connectors/hosts" data-tip="This box, over Tailscale with TLS<br><span class='mono'>${D.daemon.magicdns}</span>"><span class="dot" data-s="success"></span><span class="who"><b>${D.daemon.host}</b><span id="host-line">Healthy · up ${D.daemon.uptime}</span></span></a>
+            <a class="host" href="#/connectors/hosts" data-tip="This box, over Tailscale with TLS<br><span class='mono'>${D.daemon.magicdns}</span>">${UI.statusMark('ok', '<span class="sr-only">healthy</span>')}<span class="who"><b>${D.daemon.host}</b><span id="host-line">Healthy · up ${UI.humanSpan(D.daemon.uptime)}</span></span></a>
             <div class="tools">
               <span class="op" data-tip="Signed in as ${D.operator.name}, with a passkey"><span class="avatar">${D.operator.name.slice(0, 2)}</span></span>
               <a class="icon-btn" href="#/glossary" data-tip="Glossary: the words conductor uses" aria-label="Glossary">${UI.icon('info')}</a>
@@ -406,7 +460,7 @@
   UI.seg = (items, value, act, extra = '') => `<div class="seg" role="group" ${extra}>${items.map(([v, l, dis]) => `<button type="button" data-v="${UI.esc(v)}" ${dis ? UI.off(dis) : `data-act="${act}"`} aria-pressed="${String(v) === String(value)}" class="${String(v) === String(value) ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   UI.switchBtn = (on, act, attrs = '') => `<button type="button" role="switch" class="switch${on ? ' on' : ''}" aria-checked="${!!on}" data-act="${act}" ${attrs}></button>`;
   UI.act('strip-status', (b) => { const d = D.daemon, running = D.runs.filter((r) => r.status === 'run').length;
-    UI.menu(b, [[d.paused ? 'Resume dispatch…' : 'Pause dispatch…', d.paused ? 'play' : 'pause', 'pause'], ['-'], [`conductor ${d.version}, ${d.paused ? 'paused' : 'up'} ${d.uptime}${d.update.available ? ` · ${d.update.available} ready` : ''}`, 'server', 'strip-go', 'data-href="#/updates"'], [`Sandbox enforcing: what bots can do`, 'shield', 'strip-go', 'data-href="#/safety"'], [`Agents healthy (${d.paseo.agents})`, 'zap', 'strip-go', 'data-href="#/connectors/runtimes"'], [`${running} running now`, 'live', 'strip-go', 'data-href="#/live"'], ...(D.pending.length ? [[`${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review`, 'edit', 'strip-go', 'data-href="#/config/apply"']] : []), ['-'], [`${d.magicdns} · TLS`, 'lock', 'strip-go', 'data-href="#/security"']]); });
+    UI.menu(b, [[d.paused ? 'Resume dispatch…' : 'Pause dispatch…', d.paused ? 'play' : 'pause', 'pause'], ['-'], [`conductor ${d.version}, ${d.paused ? 'paused' : 'up'} ${UI.humanSpan(d.uptime)}${d.update.available ? ` · ${d.update.available} ready` : ''}`, 'server', 'strip-go', 'data-href="#/updates"'], [`Sandbox enforcing: what bots can do`, 'shield', 'strip-go', 'data-href="#/safety"'], [`Agents healthy (${d.paseo.agents})`, 'zap', 'strip-go', 'data-href="#/connectors/runtimes"'], [`${running} running now`, 'live', 'strip-go', 'data-href="#/live"'], ...(D.pending.length ? [[`${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review`, 'edit', 'strip-go', 'data-href="#/config/apply"']] : []), ['-'], [`${d.magicdns} · TLS`, 'lock', 'strip-go', 'data-href="#/security"']]); });
   /** Demo data (prototype only): which fake day to show, chosen per browser (js/scenario.js), or reset the current one. */
   UI.DEMOS = [['calm', 'A mostly healthy day', 'Dozens of runs; one approval and one failure need you'], ['quiet', 'All quiet', 'Nothing needs you; every system healthy'], ['full', 'Everything at once', 'Every kind of exception, to try each flow']];
   UI.setDemo = (k) => { try { localStorage.setItem('cd-demo', k); localStorage.removeItem('cd-proto-state-v5'); localStorage.removeItem('cd-last-looked'); } catch (e) {} location.reload(); };

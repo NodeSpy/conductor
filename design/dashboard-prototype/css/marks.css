@@ -14,7 +14,8 @@
 
 [data-s="ok"] { --s-fg: var(--color-text-secondary); --s-border: var(--color-border-default); --s-solid: var(--color-text-tertiary); --s-bg: var(--color-status-neutral-bg); }
 [data-s="success"] { --s-fg: var(--color-status-success-fg); --s-border: var(--color-status-success-border); --s-solid: var(--color-status-success-solid); --s-bg: var(--color-status-success-bg); }
-[data-s="run"] { --s-fg: var(--color-status-running-fg); --s-border: var(--color-status-running-border); --s-solid: var(--color-status-running-solid); --s-bg: var(--color-status-running-bg); }
+/* running is ordinary work: drawn in ink everywhere (the shared status mark, bars, edges, dots), never in a hue */
+[data-s="run"] { --s-fg: var(--color-text-secondary); --s-border: var(--color-border-strong); --s-solid: var(--color-icon-default); --s-bg: var(--color-bg-sunken); }
 [data-s="wait"] { --s-fg: var(--color-status-warning-fg); --s-border: var(--color-status-warning-border); --s-solid: var(--color-status-warning-solid); --s-bg: var(--color-status-warning-bg); }
 [data-s="fail"] { --s-fg: var(--color-status-danger-fg); --s-border: var(--color-status-danger-border); --s-solid: var(--color-status-danger-solid); --s-bg: var(--color-status-danger-bg); }
 [data-s="idle"], [data-s="skip"] { --s-fg: var(--color-status-neutral-fg); --s-border: var(--color-status-neutral-border); --s-solid: var(--color-status-neutral-solid); --s-bg: var(--color-status-neutral-bg); }
@@ -70,7 +71,7 @@ tr[data-row] > td:first-child, .item[data-row], .frow[data-row] { box-shadow: in
 [data-row="fail"] { --s-solid: var(--color-status-danger-solid); }
 [data-row="wait"] { --s-solid: var(--color-status-warning-solid); }
 [data-row="ember"] { --s-solid: var(--color-accent-default); }
-[data-row="moved"] { --s-solid: var(--color-status-running-solid); }
+[data-row="moved"] { --s-solid: var(--color-icon-default); }
 
 /* ---- label kinds (all quiet; the word carries the meaning) ---- */
 .tag.owner { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
@@ -119,9 +120,67 @@ tr.quiet td b, .item.quiet b { font-weight: var(--font-weight-semibold); color: 
 tr[data-row] .why-line { color: var(--color-text-primary); }
 /* running is not an exception: the arc keeps its colour, the word stays ink */
 .st[data-s="run"] { color: var(--color-text-secondary); }
-.st[data-s="run"] i { color: var(--color-status-running-fg); }
 /* running work doesn't need anyone: its arc keeps its shape (and spins) but is drawn in ink, not colour */
 .st[data-s="run"] i { color: var(--color-text-secondary); }
 /* calm labels: a staged change, a running thing, a shadow-mode bot or a healthy state is information, not an alarm;
    only failed, waiting and needs-you labels keep their colour */
 .tag[data-s="run"], .tag[data-s="shadow"], .tag[data-s="success"], .tag[data-s="idle"], .tag[data-s="skip"] { color: var(--color-text-secondary); border-color: var(--color-border-default); }
+
+/* ---- what it is (object icons) and what it does (action icons): always an icon and a word ---- */
+.obj, .act { display: inline-flex; align-items: center; gap: var(--space-1_5); color: var(--color-text-secondary); font: var(--type-caption); font-weight: var(--font-weight-semibold); white-space: nowrap; vertical-align: middle; }
+.obj svg, .act svg { width: 18px; height: 18px; flex: none; color: var(--color-icon-default); }
+.act svg { width: 16px; height: 16px; }
+
+/* ---- the risk ladder: six steps filled to the level; quiet at the bottom, unmistakable at the top ----
+ * 0 reads only · 1 reversible · 2 changes things · 3 touches production · 4 spends money · 5 destructive / permissions */
+.risk { display: inline-flex; align-items: center; gap: var(--space-1_5); font: var(--type-caption); white-space: nowrap; color: var(--color-text-tertiary); vertical-align: middle; }
+.risk-ladder { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
+.risk-ladder i { width: 3px; border-radius: 1px; background: var(--color-border-default); }
+.risk-ladder i:nth-child(1) { height: 4px; } .risk-ladder i:nth-child(2) { height: 6px; } .risk-ladder i:nth-child(3) { height: 8px; }
+.risk-ladder i:nth-child(4) { height: 10px; } .risk-ladder i:nth-child(5) { height: 12px; } .risk-ladder i:nth-child(6) { height: 14px; }
+.risk-ladder i.on { background: var(--risk-c, var(--color-text-tertiary)); }
+.risk[data-risk="0"] { --risk-c: var(--color-text-tertiary); }
+.risk[data-risk="1"] { --risk-c: var(--color-text-secondary); color: var(--color-text-secondary); }
+.risk[data-risk="2"] { --risk-c: var(--color-text-primary); color: var(--color-text-primary); }
+.risk[data-risk="3"] { --risk-c: var(--color-status-warning-solid); color: var(--color-status-warning-fg); font-weight: var(--font-weight-bold); }
+.risk[data-risk="4"] { --risk-c: var(--color-status-info-solid); color: var(--color-status-info-fg); font-weight: var(--font-weight-bold); }
+.risk[data-risk="5"] { --risk-c: var(--color-status-danger-solid); color: var(--color-status-danger-fg); font-weight: var(--font-weight-bold); }
+/* a high-risk row carries a band on its leading edge in the risk's colour (under a needs-you edge, beside it) */
+[data-hi] { position: relative; }
+[data-hi]::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 6px; pointer-events: none; }
+[data-hi="3"]::after { background: repeating-linear-gradient(-45deg, var(--color-status-warning-solid) 0 3px, transparent 3px 6px); }
+[data-hi="4"]::after { background: repeating-linear-gradient(-45deg, var(--color-status-info-solid) 0 3px, transparent 3px 6px); }
+[data-hi="5"]::after { background: repeating-linear-gradient(-45deg, var(--color-status-danger-solid) 0 3px, transparent 3px 6px); }
+
+/* ---- environment: production is unmistakable, staging distinct, local quiet ---- */
+.env { display: inline-flex; align-items: center; gap: var(--space-1); font: var(--type-caption); font-weight: var(--font-weight-semibold); white-space: nowrap; vertical-align: middle; }
+.env::before { content: ""; width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.env[data-env="production"] { color: var(--color-status-warning-fg); font-weight: var(--font-weight-bold); text-transform: uppercase; letter-spacing: .04em; }
+.env[data-env="production"]::before { background: var(--color-status-warning-solid); }
+.env[data-env="staging"] { color: var(--color-text-secondary); }
+.env[data-env="staging"]::before { border: 2px solid var(--color-text-secondary); }
+.env[data-env="local"] { color: var(--color-text-tertiary); font-weight: var(--font-weight-regular); }
+.env[data-env="local"]::before { border: 1.5px dashed var(--color-text-tertiary); }
+.risk + .env { margin-left: var(--space-2); }
+
+/* ---- one row anatomy: [what it is] [title + context] [risk] [status] [time] [action], in fixed columns ---- */
+.xrow { display: grid; grid-template-columns: 128px minmax(0, 1fr) 190px 150px 92px auto; align-items: center; gap: var(--space-3); min-height: var(--size-row); padding: var(--pad-cell-y) var(--pad-card); border-bottom: var(--border-width) solid var(--color-border-subtle); color: inherit; }
+.xrow:last-child { border-bottom: 0; }
+a.xrow:hover { background: var(--color-state-hover); }
+.xr-obj { min-width: 0; overflow: hidden; }
+.xr-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.xr-title { font: var(--type-h4); color: var(--color-text-primary); overflow-wrap: anywhere; }
+.xr-ctx { font: var(--type-body-s); color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.xr-risk { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
+.xr-time { font: var(--type-caption); color: var(--color-text-tertiary); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.xr-act { justify-self: end; }
+@media (max-width: 1100px) { .xrow { grid-template-columns: 112px minmax(0, 1fr) 170px 120px auto; } .xrow .xr-time { display: none; } }
+@media (max-width: 720px) {
+  .xrow { grid-template-columns: 22px minmax(0, 1fr) auto; grid-template-areas: "obj main act" ". risk status"; row-gap: var(--space-1); padding-inline: var(--space-4); }
+  .xr-obj { grid-area: obj; align-self: start; padding-top: 2px; } .xr-obj .obj-w { display: none; } .xr-main { grid-area: main; } .xr-act { grid-area: act; }
+  .xr-risk { grid-area: risk; } .xr-status { grid-area: status; justify-self: end; } .xrow .xr-time { display: none; }
+}
+/* the anatomy wins over older list styles */
+.list .xrow, .needs .xrow, .xrow.item { display: grid; align-items: center; }
+.xr-obj .obj { white-space: normal; align-items: flex-start; line-height: 1.25; }
+.xr-obj .obj svg { margin-top: 1px; }

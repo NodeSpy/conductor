@@ -244,8 +244,8 @@ pre.code-out { margin: 8px 0 0; padding: 10px 12px; background: var(--color-bg-r
 .req-banner svg { width: 16px; height: 16px; flex: none; margin-top: 2px; }
 .req-banner.untrusted { background: var(--color-status-warning-bg); border-color: color-mix(in srgb, var(--color-status-warning-solid) 45%, transparent); color: var(--color-text-primary); }
 .req-banner.untrusted svg { color: var(--color-status-warning-fg); }
-.req-banner.event { background: var(--color-status-running-bg); border-color: color-mix(in srgb, var(--color-status-running-solid) 35%, transparent); }
-.req-banner.event svg { color: var(--color-status-running-fg); }
+.req-banner.event { background: var(--color-bg-sunken); border-color: color-mix(in srgb, var(--color-icon-default) 35%, transparent); }
+.req-banner.event svg { color: var(--color-text-secondary); }
 .req-banner.op { background: var(--color-status-success-bg); border-color: color-mix(in srgb, var(--color-status-success-solid) 35%, transparent); }
 .payload { border: 1px solid var(--color-border-subtle); border-radius: var(--radius-card); background: var(--color-bg-rail); }
 .pl-row { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px; padding: 8px 12px; border-top: 1px solid var(--color-border-subtle); align-items: baseline; }
@@ -283,7 +283,6 @@ a.cell { color: inherit; text-decoration: none; } a.cell:hover { background: var
 
 /* run detail: selectable timeline rows with a time axis; compare table */
 .run-story p { max-width: 78ch; }
-.cmp-tbl tr.on td { background: var(--color-accent-subtle); }
 .warn-t { color: var(--color-status-warning-fg); }
 
 /* overview: get started, system card */
@@ -400,3 +399,8 @@ th.sel, td.sel { width: 30px; padding-right: 0 !important; }
 .req-banner.event, .req-banner.op { background: transparent; border-color: var(--color-border-subtle); }
 .req-banner.event svg, .req-banner.op svg { color: var(--color-icon-default); }
 .why-impact > div { background: transparent; border: 0; border-left: 2px solid var(--color-border-default); border-radius: 0; padding: 0 0 0 var(--space-4); }
+.can-i { align-items: center; }
+.can-i .act .act-w:empty { display: none; }
+.can-i .grow { min-width: 0; }
+.prop-head { gap: var(--space-3); }
+.prop-head .sep { width: 1px; height: 16px; background: var(--color-border-default); }

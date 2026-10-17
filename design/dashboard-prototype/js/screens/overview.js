@@ -18,15 +18,10 @@
     const items = byKind.filter((a) => UI.scopeKeeps(UI.botOfHref(a.href))).slice(0, limit || 99);
     const note = UI.scopeNote(byKind.length - byKind.filter((a) => UI.scopeKeeps(UI.botOfHref(a.href))).length);
     if (!items.length) return note + UI.empty({ title: `Nothing ${f === 'all' ? '' : 'here '}needs you`, body: 'When a bot asks for approval or a run fails, it shows up here.', small: true });
-    // one item per row, large: a mark, the plain title, one sentence, the age, one verb. Ids and hashes sit behind
-    // hover (and on the item's own page), never on the row.
-    const row = (a) => { const verb = a.verb || VERB[a.kind] || 'Open';
-      return `<a class="item click att" href="${a.href}"${UI.rowState(a.s)} data-tip="<span class='mono'>${esc(a.plain ? `${a.title} · ${a.sub}` : a.sub)}</span>">
-        ${UI.statusMark(a.s, `<span class="sr-only">${WORD[a.s] || a.s}</span>`, { cls: 'att-mark' })}
-        <div class="grow att-text"><div class="item-t">${esc(a.plain || a.title)}</div>${a.why ? `<div class="item-why">${esc(a.why)}</div>` : ''}</div>
-        <span class="att-age">${UI.ageText(a.age)}</span>
-        <span class="btn sm${a.kind === 'approval' ? ' primary' : ''}">${verb}</span>
-      </a>`; };
+    // one row anatomy: what it is · plain title, why and context · risk (and where it lands) · status · age · one verb.
+    // Hashes and raw ids sit behind hover; everything used to understand or decide stays on the row.
+    const row = (a) => { const verb = a.verb || VERB[a.kind] || 'Open', risk = a.obj ? UI.riskOf({ tier: a.tier, verb: a.cverb, env: a.env, action: a.action }) : null;
+      return UI.row({ href: a.href, cls: 'item click att', obj: a.obj, kind: a.kindWord, title: esc(a.plain || a.title), ctx: `${a.why ? esc(a.why) : ''}${a.ctx ? `<span class="xr-ctx2">${esc(a.ctx)}</span>` : ''}`, risk, env: a.env, s: a.s, sword: WORD[a.s] || a.s, time: UI.ageText(a.age), act: `<span class="btn sm${a.kind === 'approval' ? ' primary' : ''}">${verb}</span>`, row: a.s, attrs: `data-tip="<span class='mono'>${esc(a.plain ? `${a.title} · ${a.sub}` : a.sub)}</span>"` }); };
     if (!grouped) return note + `<div class="list needs">${items.map(row).join('')}</div>`;
     // grouped on the Needs you page: approvals, then failures, then questions; each with a sentence
     const G = [['approval', 'Approvals', (n) => `${n === 1 ? 'A bot wants' : 'Bots want'} to do something that needs your passkey.`], ['failed', 'Failures', (n) => `${n === 1 ? 'A run' : 'Runs'} stopped and ${n === 1 ? 'needs' : 'need'} a decision: retry, fix or dismiss.`], ['other', 'Waiting on you', (n) => `${n === 1 ? 'Something is' : 'Things are'} paused until you answer.`]];
@@ -77,7 +72,8 @@
         const flip = (pos(a) > 70 ? ' flip' : '') + stagger.get(mk);
         return id ? `<a class="mark${flip}" data-m="${s}" style="left:${pos(a)}%" href="#/${s === 'run' ? 'live' : 'runs'}/${id}" data-tip="${tip}" aria-label="${esc(l.lane)}: ${MW[s]} run ${id}">${inner}</a>` : `<span class="mark${flip}" data-m="${s}" style="left:${pos(a)}%" data-tip="${tip}" role="img" aria-label="${esc(l.lane)}: ${MW[s]}">${inner}</span>`; }).join('');
       return `<div class="lane${loud.some(([, , s]) => s === 'fail' || s === 'wait') ? ' loud' : ''}"><div class="lane-lbl"><div class="lane-name">${esc(l.lane)}</div>${fine ? `<span class="lane-n">${fine} fine</span>` : ''}</div><div class="lane-track">${strip}${marks}</div></div>`; }).join('');
-    return { kept, legend: '', html: `<div class="lanes">${rows || UI.empty({ title: 'No runs here', body: 'Nothing in this folder ran in that time.', small: true })}${rows ? `<div class="lane"><div></div><div class="lane-axis">${ticks}</div></div><div class="nowline" aria-hidden="true"></div>` : ''}</div>` };
+    const legend = `<div class="lane-legend"><span data-m="ok"><i class="tick-key"></i>Passed</span>${['fail', 'run', 'wait', 'idle'].map((k) => `<span data-m="${k}">${UI.laneMark(k)}${{ fail: 'Failed', run: 'Running', wait: 'Waiting on you', idle: 'Parked' }[k]}</span>`).join('')}</div>`;
+    return { kept, legend, html: `<div class="lanes">${rows || UI.empty({ title: 'No runs here', body: 'Nothing in this folder ran in that time.', small: true })}${rows ? `<div class="lane"><div></div><div class="lane-axis">${ticks}</div></div><div class="nowline" aria-hidden="true"></div>` : ''}</div>` };
   };
   function score() {
     const L = UI.lanes({ span: SPAN, all: ALL_LANES });
@@ -149,7 +145,7 @@
     return `<details class="quiet-row sys-card"${D.prefs.sysOpen ? ' open' : ''} data-on-toggle="sys-open">
       <summary>${UI.statusMark(bad ? 'wait' : 'success', `<span class="sr-only">${bad ? 'needs a look' : 'healthy'}</span>`)}<b>System</b><span class="qr-line">${bad ? `${plural(bad, 'connector')} need${bad > 1 ? '' : 's'} a look` : 'All healthy: conductor, the sandbox, agents and every connector'}</span>${icon('chevd', 'qr-chev')}</summary>
       <div class="qr-body"><div class="list">
-        ${row('ok', 'conductor', `${d.version} · up ${d.uptime} · <span class="mono">pid ${d.pid} · config ${d.config_sha}</span>`, '#/logs')}
+        ${row('ok', 'conductor', `${d.version} · up ${UI.humanSpan(d.uptime)} · <span class="mono">pid ${d.pid} · config ${d.config_sha}</span>`, '#/logs')}
         ${row('ok', 'Sandbox', `enforcing · ${d.sandbox.identities} identities · ${d.sandbox.containers} containers · <span class="mono">${d.sandbox.backend}</span>`, '#/connectors')}
         ${row('ok', 'Agents', `paseo ${d.paseo.version} · ${d.paseo.agents} agents`, '#/connectors')}
         ${D.connectors.map((c) => row(c.status, esc(c.name), `${c.use} · ${c.detail}`, '#/connectors')).join('')}
@@ -162,7 +158,8 @@
       <div class="panel-head"><h3>Latest events</h3><div class="tools">${UI.statusMark('run', 'Live', { sm: true })}</div></div>
       <div class="list feed" id="feed" data-volatile>${D.activity.map((a) => feedItem(a.s, a.text, a.who, UI.when(a.t))).join('')}</div></div>`;
   }
-  const feedItem = (s, text, who, when, fresh) => `<div class="item${fresh ? ' new-item' : ''}">${UI.statusMark(s === 'idle' ? 'idle' : s, `<span class="sr-only">${WORD[s] || s}</span>`, { sm: true })}<div class="grow small">${text}<div class="item-id">${who}</div></div><span class="att-age">${when}</span></div>`;
+  const EV_OBJ = (t) => (/knowledge/.test(t) ? 'knowledge' : /browser/.test(t) ? 'browser' : /update/.test(t) ? 'update' : /proposed|terraform/.test(t) ? 'approval' : /egress|sandbox/.test(t) ? 'sandbox' : /sweep|GitHub/.test(t) ? 'connector' : /session|turn/.test(t) ? 'bot' : 'run');
+  const feedItem = (s, text, who, when, fresh) => UI.row({ cls: `item${fresh ? ' new-item' : ''}`, obj: EV_OBJ(text), title: `<span class="ev-t">${text}</span>`, ctx: who, s: s === 'ok' ? 'ok' : s, sword: { ok: 'done', run: 'running', wait: 'waiting', fail: 'failed', ember: 'needs you', idle: 'blocked' }[s] || s, time: when });
 
   /* Get started: four plain steps with ticks derived from the setup; dismissible (a display preference, this browser only) */
   UI.botWatches = (name) => { const b = D.bots.find((x) => x.name === name); const team = b && b.cfg && b.cfg.team; const re = new RegExp(`bot:\\s*(${name}\\b|\\{[^}]*\\b(name:\\s*${name}|team:\\s*${team || '__none__'})\\b)`);
@@ -216,17 +213,11 @@
         ${UI.sunrise('hide-phone hello-art')}
         ${D.prefs.gsHidden ? `<div class="actions"><button class="btn ghost" data-act="gs-show">${icon('sparkle')}Get started</button></div>` : ''}</div>
       ${D.daemon.paused ? `<div class="callout warn paused-note">${UI.statusMark('wait', '<b>Dispatch is paused.</b>')} No new runs start; events wait in the queue. Runs already going finish. <button class="btn sm" data-act="pause">${icon('play')}Resume dispatch…</button></div>` : ''}
-      ${need ? `<div class="panel attn"><div class="panel-head"><h2>Needs you</h2><span class="muted small">${need} items</span><div class="tools">${UI.folderChip()}${need > 3 ? `<a class="btn sm ghost" href="#/attention">See all ${need} ${icon('chev')}</a>` : ''}</div></div>${UI.attentionList(3)}</div>` : ''}
+      ${need ? `<div class="panel attn"><div class="panel-head"><h2>Needs you</h2><span class="muted small">${need} items, most urgent first</span><div class="tools">${UI.folderChip()}<a class="btn sm ghost" href="#/attention">Open Needs you ${icon('chev')}</a></div></div>${UI.attentionList(6)}</div>` : ''}
       ${getStarted()}
-      ${score()}
-      <div class="quiet-rows">
-        ${quiet('since', 'Since you last looked', digestLine(), digest(), isOpen('since'))}
-        ${quiet('glance', 'Today in numbers', `${running} running · ${w.total} runs in 12 hours · ${D.bots.length} bots`, glance(), isOpen('glance'))}
-        ${quiet('fyi', 'For your information', (D.fyi || []).map((a) => esc(a.plain)).join(' · ') || 'Nothing new', fyi(), isOpen('fyi'))}
-        ${quiet('events', 'Latest events', D.activity[0] ? D.activity[0].text.replace(/<[^>]+>/g, '') : 'Nothing yet', activity(), isOpen('events'))}
-        ${quiet('wfs', UI.usageOn() ? 'Model usage' : 'Workflows', UI.usageOn() ? 'today, per provider' : `${D.workflows.filter((x) => x.runs24).length} ran in the last 24 hours`, UI.usageOn() ? UI.usagePanel() : workflowsPanel(), isOpen('wfs', UI.usageOn()))}
-        ${health()}
-      </div>
+      <div class="grid ov-top">${score()}<div class="stack ov-side">${digest()}${glance()}</div></div>
+      <div class="grid ov-bottom">${activity()}${fyi()}${UI.usageOn() ? UI.usagePanel() : workflowsPanel()}</div>
+      <div class="quiet-rows">${health()}</div>
     </div>`;
     },
   }));

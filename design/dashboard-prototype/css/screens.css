@@ -51,12 +51,12 @@ svg.hello-art { width: 132px; height: auto; flex: none; align-self: flex-start; 
 .lane-legend svg, .lanes .mark svg { width: 14px; height: 14px; display: block; }
 [data-m="ok"] { color: var(--color-text-tertiary); }
 [data-m="fail"] { color: var(--color-status-danger-solid); }
-[data-m="run"] { color: var(--color-status-running-solid); }
+[data-m="run"] { color: var(--color-icon-default); }
 [data-m="wait"] { color: var(--color-accent-default); }
 [data-m="idle"] { color: var(--color-status-neutral-solid); }
 .lane-legend [data-m] { color: var(--color-text-secondary); }
 .lane-legend [data-m] svg { color: inherit; }
-.lane-legend [data-m="ok"] svg { color: var(--color-text-tertiary); } .lane-legend [data-m="fail"] svg { color: var(--color-status-danger-solid); } .lane-legend [data-m="run"] svg { color: var(--color-status-running-solid); } .lane-legend [data-m="wait"] svg { color: var(--color-accent-default); } .lane-legend [data-m="idle"] svg { color: var(--color-status-neutral-solid); }
+.lane-legend [data-m="ok"] svg { color: var(--color-text-tertiary); } .lane-legend [data-m="fail"] svg { color: var(--color-status-danger-solid); } .lane-legend [data-m="run"] svg { color: var(--color-icon-default); } .lane-legend [data-m="wait"] svg { color: var(--color-accent-default); } .lane-legend [data-m="idle"] svg { color: var(--color-status-neutral-solid); }
 .lanes { position: relative; --lane-label: 148px; padding-right: var(--space-2); }
 .lanes .lane { display: grid; grid-template-columns: var(--lane-label) 1fr; align-items: center; min-height: 40px; }
 .lane-name { font: var(--type-label); color: var(--color-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: var(--space-3); }
@@ -84,7 +84,7 @@ svg.hello-art { width: 132px; height: auto; flex: none; align-self: flex-start; 
 .graph svg.edges { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
 .graph svg.edges path { fill: none; stroke: var(--color-border-strong); stroke-width: 1.5; }
 .graph svg.edges path.done { stroke: var(--color-text-tertiary); }
-.graph svg.edges path.active { stroke: var(--color-status-running-solid); stroke-dasharray: 5 5; animation: flow .8s linear infinite; }
+.graph svg.edges path.active { stroke: var(--color-icon-default); stroke-dasharray: 5 5; animation: flow .8s linear infinite; }
 @keyframes flow { to { stroke-dashoffset: -10; } }
 .node { position: absolute; border-radius: var(--radius-control); background: var(--color-bg-surface); border: var(--border-width) solid var(--color-border-default); padding: var(--space-2) var(--space-3); cursor: pointer; box-shadow: var(--shadow-1); transition: border-color var(--motion-duration-fast) var(--motion-easing-out); }
 .node:hover { border-color: var(--color-border-strong); }
@@ -95,7 +95,7 @@ svg.hello-art { width: 132px; height: auto; flex: none; align-self: flex-start; 
 .node .nm { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); }
 .node[data-s="idle"] .nn { color: var(--color-text-secondary); }
 .node .prog { height: 2px; background: var(--color-border-subtle); margin-top: var(--space-2); border-radius: 2px; overflow: hidden; }
-.node .prog i { display: block; height: 100%; width: 40%; background: var(--color-status-running-solid); animation: indet 1.4s var(--motion-easing-out) infinite; }
+.node .prog i { display: block; height: 100%; width: 40%; background: var(--color-icon-default); animation: indet 1.4s var(--motion-easing-out) infinite; }
 @keyframes indet { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
 .log-panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .log-panel .log { flex: 1; min-height: 320px; max-height: 520px; border-radius: 0 0 var(--radius-card) var(--radius-card); }
@@ -288,7 +288,7 @@ svg.gate-art { position: absolute; width: min(560px, 90vw); height: auto; right:
 .story-tree .gt::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: var(--border-width) solid var(--color-dataviz-grid); }
 .story-tree .gt i { position: absolute; top: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--color-text-tertiary); }
 .story-tree .gt[data-s="fail"] i { background: var(--color-status-danger-solid); }
-.story-tree .gt[data-s="run"] i { background: var(--color-status-running-solid); }
+.story-tree .gt[data-s="run"] i { background: var(--color-icon-default); }
 .story-tree .gt[data-s="wait"] i { background: var(--color-status-warning-solid); }
 .story-tree .gt-dur { text-align: right; font: var(--type-body-s); color: var(--color-text-secondary); }
 .gt-call { margin-left: var(--space-8); border-left: var(--border-width) solid var(--color-border-default); }
@@ -412,26 +412,60 @@ tr.folded { display: none; }
 .lane.loud .lane-lbl .lane-name { color: var(--color-text-primary); font-weight: var(--font-weight-semibold); }
 .site .top.dark b { color: var(--color-text-inverse); }
 .ctrl-banner.wait { background: var(--color-bg-raised); color: var(--color-status-warning-fg); border: var(--border-width) solid var(--color-status-warning-border); }
-/* phones: run history and workflows are one-line list rows, not labelled cards */
+/* phones: run history and workflows as structured rows (the same anatomy), not labelled cards */
 @media (max-width: 720px) {
-  #hist-body tr[data-href], #wl-body tr[data-row] { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--space-3); padding: var(--space-3) var(--space-4); position: relative; }
-  #hist-body tr[data-href] > td, #wl-body tr[data-row] > td { display: block; padding: 0; border: 0; }
+  #hist-body tr[data-href], #wl-body tr[data-row] { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; grid-template-areas: "kind run status" "sel risk started"; gap: 2px var(--space-3); padding: var(--space-3) var(--space-4); position: relative; }
+  #hist-body tr[data-href] > td, #wl-body tr[data-row] > td { display: block; padding: 0; border: 0; height: auto; }
   #hist-body tr[data-href] > td::before, #wl-body tr[data-row] > td::before { content: none !important; }
-  #hist-body td[data-l="run"] { grid-column: 1; grid-row: 1 / span 2; padding-right: var(--space-8); }
-  #hist-body td[data-l="status"] { grid-column: 2; grid-row: 1; justify-self: end; }
-  /* the mark alone; the row's edge and reason line carry the word (clipped, never font-size 0: WebKit aborts on it) */
-  #hist-body td[data-l="status"] .st { width: 16px; overflow: hidden; color: transparent; gap: 0; }
-  #hist-body td[data-l="status"] .st i { color: var(--s-fg, var(--color-text-secondary)); }
-  #hist-body td[data-l="status"] .st[data-s="ok"] i { color: var(--color-status-success-fg); }
-  #hist-body td[data-l="started"] { grid-column: 2; grid-row: 2; justify-self: end; font: var(--type-caption); }
-  #hist-body td[data-l="took"] { display: none; }
-  #hist-body td.sel, #wl-body td.sel { position: absolute; right: var(--space-2); bottom: var(--space-2); top: auto; }
-  #wl-body td[data-l="workflow"] { grid-column: 1; grid-row: 1; }
-  #wl-body td[data-l="on"] { grid-column: 1; grid-row: 2; }
-  #wl-body td[data-l="last 24 hours"] { grid-column: 2; grid-row: 1; justify-self: end; }
-  #wl-body td[data-l="folder"], #wl-body td.wl-acts { display: none; }
+  #hist-body td[data-l="kind"] { grid-area: kind; } #hist-body td[data-l="kind"] .obj-w { display: none; }
+  #hist-body td[data-l="run"] { grid-area: run; padding-right: var(--space-6); }
+  #hist-body td[data-l="status"] { grid-area: status; justify-self: end; }
+  #hist-body td[data-l="risk"] { grid-area: risk; }
+  #hist-body td[data-l="started"] { grid-area: started; justify-self: end; font: var(--type-caption); }
+  #hist-body tr[data-href] > td[data-l="took"] { display: none; }
+  #hist-body tr[data-href] > td.sel, #wl-body tr[data-row] > td.sel { position: static; grid-area: sel; width: auto !important; padding: 0 !important; }
+  #wl-body tr[data-row] { grid-template-areas: "sel wf last" ". on last" ". risk risk"; }
+  #wl-body td[data-l="workflow"] { grid-area: wf; } #wl-body td[data-l="on"] { grid-area: on; } #wl-body td[data-l="last 24 hours"] { grid-area: last; justify-self: end; }
+  #wl-body tr[data-row] > td[data-l="folder"], #wl-body tr[data-row] > td.wl-acts, #wl-body tr[data-row] > td[data-l="owner"] { display: none; }
+  #wl-body tr[data-row] > td[data-l="risk"] { grid-area: risk; }
+}
 }
 .run-row .bar > i { background: var(--color-text-tertiary); }
 .lanes .mark.up { margin-top: -10px; } .lanes .mark.down { margin-top: 10px; }
 .paused-note { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--gap-section); }
 .paused-note .btn { margin-left: auto; }
+/* information restored: the overview keeps the digest, figures, events and workflows in view */
+.ov-top { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+.ov-bottom { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); }
+.ov-top .score { margin: 0; }
+.lane-legend .tick-key { display: inline-block; width: 2px; height: 12px; background: var(--color-border-strong); border-radius: 1px; margin: 0 4px; }
+.xr-ctx2 { display: block; font: var(--type-caption); color: var(--color-text-tertiary); }
+.feed .xrow, .ov-bottom .xrow { grid-template-columns: 110px minmax(0, 1fr) 96px 72px; }
+.feed .xrow .xr-risk, .feed .xrow .xr-act { display: none; }
+.ev-t b { font-weight: var(--font-weight-semibold); }
+.feed .xr-title { font: var(--type-body-s); }
+@media (max-width: 720px) { .feed .xrow, .ov-bottom .xrow { grid-template-columns: 22px minmax(0, 1fr) auto; } }
+.run-row.xrow .xr-status .st { white-space: nowrap; }
+.act-grid .xrow { grid-template-columns: 116px minmax(0, 1fr) 150px 120px 96px; }
+.act-grid .feed .xrow { grid-template-columns: 110px minmax(0, 1fr) 96px 72px; }
+@media (max-width: 1300px) { .act-grid .xrow .xr-risk .risk-w { display: none; } }
+/* running is drawn in ink everywhere (the shared status mark's arc), never its own hue: graph, bars, edges */
+.node[data-s="run"] { box-shadow: var(--shadow-1); }
+.node .prog i { background: var(--color-text-tertiary); }
+.graph svg.edges path.active { stroke: var(--color-text-secondary); }
+.story-tree .gt[data-s="run"] i { background: var(--color-text-secondary); }
+.wcard[data-s="run"] { border-color: var(--color-border-subtle); }
+/* run pages: back to the list you came from, stepping through it; a labelled metadata line */
+.run-nav { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
+.run-nav .pager { display: inline-flex; align-items: center; gap: var(--space-1); margin-left: auto; }
+.meta-line { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); margin: calc(-1 * var(--space-6)) 0 var(--gap-section); padding: var(--space-3) 0; border-top: var(--border-width) solid var(--color-border-subtle); border-bottom: var(--border-width) solid var(--color-border-subtle); }
+.meta-line .ml-i { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.meta-line dt { font: var(--type-caption); color: var(--color-text-tertiary); }
+.meta-line dd { margin: 0; font: var(--type-body-s); color: var(--color-text-primary); overflow-wrap: anywhere; }
+.meta-line dd.mono { font-family: var(--font-family-mono); font-size: var(--type-code-s-size); }
+.meta-line .obj svg { width: 16px; height: 16px; }
+/* inside a card (a proposal, a case) the line sits under the title, without rules */
+.panel-body .meta-line { margin: 0 0 var(--space-3); padding: 0; border: 0; gap: var(--space-1) var(--space-5); }
+.head-detail .risk { margin-left: var(--space-3); }
+.paseo-open { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); padding-bottom: var(--space-3); border-bottom: var(--border-width) solid var(--color-border-subtle); }
+@media (max-width: 720px) { .meta-line { margin-top: calc(-1 * var(--space-3)); gap: var(--space-2) var(--space-4); } }
