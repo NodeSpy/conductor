@@ -269,6 +269,15 @@ another image store — set `CONTAINERS_STORAGE_CONF` to name yours.
   token in the environment.
 - An **image's own conductor** runs the mux on macOS; it must be a release
   that speaks this conductor's mux (`conductor-mux/1`).
+- **One identity's launches share its container**, and an `attach:` worker
+  shares the target's: same uid, same processes, same `/tmp` and HOME. Each
+  can read the others' `/proc/<pid>/environ`, tokens included — give a
+  launch that must not see another's grants an identity (a container) of
+  its own.
+- **Disk is not capped.** `limits:` bound pids, memory (which `/tmp`, a
+  tmpfs, counts against) and CPU; the HOME volume and, without
+  `read_only: true`, the container's own layer grow on the engine's disk.
+  Watch `conductor sandbox ls`, and archive identities you are done with.
 - A remote (`host:`) launch runs under that box's own isolation, as before.
 
 ### Pushing: conductor, not the agent
