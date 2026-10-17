@@ -390,6 +390,7 @@
     const el = e.target.closest(`[data-on-${type}]`);
     if (el && UI.acts[el.dataset['on' + type[0].toUpperCase() + type.slice(1)]]) UI.acts[el.dataset['on' + type[0].toUpperCase() + type.slice(1)]](el, e);
   }));
+  document.addEventListener('toggle', (e) => { const el = e.target; if (el.dataset && el.dataset.onToggle && UI.acts[el.dataset.onToggle]) UI.acts[el.dataset.onToggle](el, e); }, true); // toggle doesn't bubble
   /** On touch there's no hover: tapping a disabled control shows its reason. */
   UI.flashReason = (el) => {
     const r = el.dataset.reason || el.dataset.tip; if (!r) return;

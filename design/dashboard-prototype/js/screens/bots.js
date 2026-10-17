@@ -346,9 +346,17 @@
         ${tag(`${icon('shield')} ${m.mode}`, 'ok')}${tag(`operators: ${(S.effective(m).operators.v || []).join(', ')}`)}</div></div>
       <div class="row wrap"><button class="btn" data-act="m-rotate" data-m="${m.name}">${icon('updates')}Rotate session</button><button class="btn" ${m.proactive ? `data-act="m-sweep" data-m="${m.name}"` : UI.off('No proactive: block in its definition')}>${icon('eye')}Sweep now</button><button class="btn" data-act="m-deliver" data-m="${m.name}">${icon('send')}Deliver event</button></div></div>`;
   }
+  UI.act('bot-watch-add', (b) => { const name = b.dataset.m, evs = S.view().connectors.flatMap((c) => Object.entries((SCHEMA.connectors[c.use] || {}).events || {}).map(([ev, d]) => [`${c.name}.${ev}`, `${d.label} (${c.name}.${ev})`, c.use]));
+    UI.form({ caps: 'triggers:', title: `What should ${name} watch?`, intro: 'Adds a trigger that hands each matching event to the bot (a bot: step). It reads the event, then tells you or proposes what to do.',
+      fields: [{ k: 'on', type: 'enum', req: true, label: 'When this happens', options: evs.map(([v, l]) => [v, l]) }, { k: 'repos', type: 'list', label: 'Only these repos (GitHub events)', ph: 'acme/api', show: (v) => /^gh\./.test(v.on || '') }],
+      submit: 'Review change', submitIcon: 'check',
+      onSubmit: (v) => { const tn = `${name}-${v.on.split('.')[1].replace(/_/g, '-')}`; const y = [`name: ${tn}`, `on: ${v.on}`, ...((v.repos || []).length ? [`filter: { repo: [${v.repos.join(', ')}] }`] : []), 'steps:', '  - id: tell', `    bot: { name: ${name}, title: "{{.title}}" }`].join('\n') + '\n'; D.prefs.returnTo = { href: `#/bots/${name}`, label: name }; UI.staged(S.stage('workflows', tn, y, `trigger ${tn} hands ${v.on} to ${name}`)); } }); });
   function shell(m, tab, body) {
     const pc = pending(m.name).length;
-    return `<div class="page">${hero(m)}
+    const w = UI.botWatches(m.name);
+    const watchNote = !w.triggers.length && !w.sweep ? `<div class="callout wait watch-empty" style="margin-bottom:14px">${icon('eye')}<span class="grow"><b>${m.name} isn't watching anything yet.</b> No trigger hands it events and it doesn't check in on its own, so it only answers when you chat with it.</span><button class="btn sm primary" data-act="bot-watch-add" data-m="${m.name}">${icon('plus')}Add what it watches</button></div>`
+      : `<div class="small muted watch-line" style="margin:-6px 0 12px">${icon('eye')} Watches ${w.triggers.map((n) => `<a class="link mono" href="#/workflows/${esc(n)}">${esc(n)}</a>`).join(', ') || 'no events'}${w.sweep ? `${w.triggers.length ? ' · ' : ''}checks in every ${esc(S.getPath(staged('bots', m.name), 'proactive.every') || '')}` : ''} · <button class="link" data-act="bot-watch-add" data-m="${m.name}">add</button></div>`;
+    return `<div class="page">${hero(m)}${watchNote}
       ${UI.tabs([['chat', 'Chat', `#/bots/${m.name}/chat`], ['cases', 'Cases', `#/bots/${m.name}/cases`, D.cases.filter((c) => c.bot === m.name && c.status === 'open').length], ['proposals', 'Proposals', `#/bots/${m.name}/proposals`, pc, pc > 0], ['memory', 'Memory', `#/bots/${m.name}/memory`], ['workers', 'Workers', `#/bots/${m.name}/workers`, D.workers.filter((w) => (w.bot || 'platform-sre') === m.name && w.status === 'run').length], ['access', 'Access', `#/bots/${m.name}/access`], ['settings', 'Definition', `#/bots/${m.name}/settings`]], tab)}
       ${body}</div>`;
   }
@@ -506,6 +514,7 @@
 
   /* ---------- Safety: every bot, in words ---------- */
   UI.route('safety', () => {
+    if (!D.prefs.seenSafety) { D.prefs.seenSafety = true; S.save(); }
     const rows = D.bots.map((m) => ({ m, x: UI.botCan(m) }));
     const own = rows.reduce((a, r) => a + r.x.own.filter((i) => i.t !== 'observe').length, 0);
     return `<div class="page">${UI.head('Safety', { sub: 'what your bots may do without asking you' })}

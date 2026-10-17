@@ -306,3 +306,32 @@ a.cell { color: inherit; text-decoration: none; } a.cell:hover { background: var
 .cmp-tbl tr.on td { background: var(--accent-wash); }
 .warn-t { color: var(--wait); }
 @media (max-width: 720px) { .gantt .gt-axis span:not(:first-child):not(:last-child) { display: none; } }
+
+/* overview: get started, system card */
+.gs-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 12px 14px 14px; }
+@media (max-width: 1100px) { .gs-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .gs-grid { grid-template-columns: 1fr; } }
+.gs-card { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg-1); color: inherit; text-decoration: none; transition: border-color var(--t-fast); }
+.gs-card:hover { border-color: var(--line-3); }
+.gs-card .gs-n { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font: 600 11px/1 var(--font-mono); background: var(--accent-wash); color: var(--accent); }
+.gs-card.done .gs-n { background: var(--ok-wash); color: var(--ok); }
+.gs-card.done .gs-n svg { width: 13px; height: 13px; }
+.gs-card .gs-go { margin-top: auto; color: var(--accent); display: inline-flex; align-items: center; gap: 2px; }
+.gs-card.done .gs-go { color: var(--ink-3); }
+.gs-card .gs-go svg { width: 12px; height: 12px; }
+details.sys-card > summary { list-style: none; cursor: pointer; }
+details.sys-card > summary::-webkit-details-marker { display: none; }
+details.sys-card > summary .tools svg { transition: transform var(--t-fast); }
+details.sys-card[open] > summary .tools svg { transform: rotate(90deg); }
+details.sys-card:not([open]) > summary { border-bottom: 0; }
+
+/* new bot wizard */
+.bw-body .choice-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.bw-body .choice-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 720px) { .bw-body .choice-grid, .bw-body .choice-grid.three { grid-template-columns: 1fr; } }
+.bw-ev { gap: 10px; }
+details.adv > summary { list-style: none; cursor: pointer; }
+details.adv > summary::-webkit-details-marker { display: none; }
+.watch-empty { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.watch-line svg { width: 13px; height: 13px; vertical-align: -2px; }
+svg.flip { transform: rotate(180deg); }

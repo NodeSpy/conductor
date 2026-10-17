@@ -132,7 +132,7 @@
     const phone = innerWidth <= 720;
     const moves = D.pending.filter((c) => (c.coll === 'bots' || c.coll === 'teams') && c.before && c.after && (c.before.folder || '') !== (c.after.folder || '')).length;
     return `<div class="page">
-      ${UI.head(path ? esc(leaf(path)) : 'Bots', { crumbs: path ? UI.folderCrumbs(parentOf(path)) : '', sub: path ? `folder ${esc(path)}` : 'solo or on a team, organized in folders', actions: `<button class="btn" data-act="f-new" data-parent="${esc(path)}">${icon('folder')}New folder</button><button class="btn" data-act="team-new">${icon('plus')}New team</button><a class="btn primary" href="#/bots/new/settings">${icon('plus')}New bot</a>` })}
+      ${UI.head(path ? esc(leaf(path)) : 'Bots', { crumbs: path ? UI.folderCrumbs(parentOf(path)) : '', sub: path ? `folder ${esc(path)}` : 'solo or on a team, organized in folders', actions: `<button class="btn" data-act="f-new" data-parent="${esc(path)}">${icon('folder')}New folder</button><button class="btn" data-act="team-new">${icon('plus')}New team</button><a class="btn primary" href="#/bots/new">${icon('plus')}New bot</a>` })}
       ${moves ? `<div class="callout small staged-moves">${icon('folder')} <b>${moves} move${moves > 1 ? 's' : ''} staged.</b> Folders live in config, so moves apply through the diff.<a class="btn sm primary" href="#/config/apply">Review &amp; apply</a></div>` : ''}
       <div class="filters"><div class="input-icon">${icon('search')}<input class="input" placeholder="search bots, teams and folders" value="${esc(fv.q)}" data-on-input="f-q" aria-label="Search bots, teams and folders"></div>${path ? '' : roll(root)}</div>
       <div class="panel ftree-panel"><div class="ftree" id="ftree" role="tree" data-path="${esc(path)}">
