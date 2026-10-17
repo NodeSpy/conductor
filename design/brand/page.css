@@ -6,8 +6,10 @@
 @font-face{font-family:'Instrument Sans';font-style:normal;font-weight:400 700;font-display:swap;src:url(fonts/InstrumentSans-normal.woff2) format('woff2')}
 @font-face{font-family:'Martian Mono';font-style:normal;font-weight:300 600;font-display:swap;src:url(fonts/MartianMono-normal.woff2) format('woff2')}
 
+/* A light-only document: say so, so no browser auto-darkens it (the iPhone bug). */
 :root{
-  --paper:#f2eee5; --paper-2:#f8f5ee; --ink:#1b1a15; --ink-2:#514d43; --ink-3:#847f71; --ink-4:#aaa493;
+  color-scheme: only light;
+  --paper:#f2eee5; --paper-2:#f8f5ee; --ink:#1b1a15; --ink-2:#514d43; --ink-3:#68635a; --ink-4:#aaa493;
   --line:#ddd6c5; --line-2:#cbc3af; --ember:#cc4a0e;
   --serif:'Instrument Serif',Georgia,serif; --sans:'Instrument Sans',system-ui,sans-serif; --mono:'Martian Mono',ui-monospace,monospace;
   --sys:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans",Helvetica,Arial,"Adwaita Sans",Cantarell,sans-serif;
@@ -72,7 +74,7 @@ em{font-family:var(--serif);font-style:italic;font-size:1.12em;letter-spacing:-.
 .tile{position:relative;margin:0;border-radius:14px;display:grid;place-items:center;overflow:hidden;min-height:180px}
 .tile.light{background:var(--l-bg);color:var(--l-ink);box-shadow:inset 0 0 0 1px rgba(0,0,0,.06)}
 .tile.dark{background:var(--d-bg);color:var(--d-ink)}
-.tile figcaption{position:absolute;left:14px;bottom:11px;font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;opacity:.55}
+.tile figcaption{position:absolute;left:14px;bottom:11px;font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;opacity:.82}
 .tile.big{aspect-ratio:1}
 .tile.big>img{width:72%;height:72%}
 .tile .grid{position:absolute;width:72%;height:72%;pointer-events:none}
@@ -163,11 +165,11 @@ em{font-family:var(--serif);font-style:italic;font-size:1.12em;letter-spacing:-.
 .dash .li{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--p-line);font-weight:500}
 .dash .li:last-child{border:0}
 .dash .li.m{color:var(--p-ink2)}
-.dash .rv{background:var(--p-acc);color:var(--p-bg);border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600}
-.dash .cap{font:600 9.5px var(--sans);letter-spacing:.09em;text-transform:uppercase;color:var(--p-ink3)}
+.dash .rv{background:var(--p-acc);color:var(--p-bg);font-weight:700;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600}
+.dash .cap{font:600 9.5px var(--sans);letter-spacing:.09em;text-transform:uppercase;color:var(--p-ink2)}
 .dash .n{font:400 italic 40px/1.05 var(--serif);margin:6px 0 4px}
 .dash .n small{font:12px var(--mono);font-style:normal;color:var(--p-ink2)}
-.dash .sm{color:var(--p-ink3);font-size:11px}
+.dash .sm{color:var(--p-ink2);font-size:11px}
 
 /* ---------- favicon ---------- */
 .fav{display:grid;grid-template-columns:1fr auto;gap:28px;align-items:center}
@@ -264,3 +266,6 @@ em{font-family:var(--serif);font-style:italic;font-size:1.12em;letter-spacing:-.
 .system-link b{font:400 italic 22px/1 var(--serif);color:var(--ink);white-space:nowrap}
 .system-link:hover b{color:var(--ember)}
 @media (max-width:900px){.system-link{flex-wrap:wrap}}
+
+.dash.light .rv{color:#fff}
+.dash .ch span,.dash .crumbs,.dash .host,.dash .grp,.dash .rail em{color:var(--p-ink2)}

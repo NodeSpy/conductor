@@ -10,6 +10,7 @@ const d = q.get('d') || 'daylight', s = q.get('s') || 'overview', theme = q.get(
 const D = DIRS[d];
 const root = document.documentElement;
 root.dataset.d = d; root.dataset.theme = theme;
+root.style.colorScheme = `only ${theme}`; // the forced theme always wins over the OS and UA auto-darkening
 for (const [k, v] of Object.entries({ ...D.vars, ...D[theme] })) root.style.setProperty(k, v);
 
 // ---------- helpers ----------

@@ -334,7 +334,7 @@ h2 { font: var(--d-title-weight) var(--d-h2)/1.25 var(--font-family-display); fo
 [data-d="score"] .step { border-radius: var(--radius-card); }
 [data-d="score"] .flow::before { content: ""; position: absolute; left: 29px; top: 10px; bottom: 54px; width: 2px; background: var(--color-border-default); }
 [data-d="score"] .step .sn { position: relative; z-index: 1; background: var(--color-text-primary); color: var(--color-bg-surface); }
-[data-d="score"] .step[data-t="agent"] .sn { background: var(--color-status-info-solid); color: #fff; }
+[data-d="score"] .step[data-t="agent"] .sn { background: var(--color-status-info-bg); color: var(--color-status-info-fg); box-shadow: inset 0 0 0 1.5px var(--color-status-info-solid); }
 [data-d="score"] .when { border-radius: var(--radius-card); }
 [data-d="score"] .btn { border-radius: 999px; }
 [data-d="score"] .bot-av { border-radius: 50%; background: var(--color-text-primary); color: var(--color-bg-surface); border: 0; }

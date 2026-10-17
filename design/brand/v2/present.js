@@ -4,7 +4,9 @@ import { LUCIDE, STATUS } from '../icons/icons.js';
 
 const gl = (n) => `<svg class="gl" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${STATUS[n].svg}</svg>`;
 const ic = (n) => `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${LUCIDE[n]}</svg>`;
-const varsOf = (id, t = 'light') => Object.entries({ ...DIRS[id].vars, ...DIRS[id][t] }).map(([k, v]) => `${k}:${v}`).join(';');
+// Each scoped specimen is self-contained: every token value plus its own colour scheme, so
+// neither the OS preference nor a UA's auto-darkening can leak into it.
+const varsOf = (id, t = 'light') => Object.entries({ ...DIRS[id].vars, ...DIRS[id][t] }).map(([k, v]) => `${k}:${v}`).join(';') + `;color-scheme:only ${t}`;
 const AFTER = (html) => `<div class="after" style="${varsOf('daylight')}">${html}</div>`;
 const BEFORE = (html) => `<div class="before">${html}</div>`;
 
@@ -91,5 +93,5 @@ addEventListener('keydown', (e) => { if (e.key === 'Escape') lb.hidden = true; }
 
 // ---------- recommendation table ----------
 const R = [['Approachable for a newcomer', [4, 3, 3]], ['Legible at a glance', [4, 4, 3]], ['Information density', [3, 4, 3]], ['Feels like a brand, not a tool', [4, 3, 4]], ['Less “engineery”', [4, 3, 3]], ['Dark mode quality', [3, 4, 4]], ['Effort to build and keep consistent', [4, 3, 2]]];
-const dots = (n) => '●'.repeat(n) + `<span class="off">${'●'.repeat(4 - n)}</span>`;
+const dots = (n) => `<span role="img" aria-label="${n} of 4">${'●'.repeat(n)}<span class="off" data-contrast="exempt">${'●'.repeat(4 - n)}</span></span>`;
 document.getElementById('rec-table').innerHTML = `<thead><tr><th></th>${['Daylight', 'Broadsheet', 'Score'].map((n, i) => `<th class="${i ? '' : 'rec'}">${n}</th>`).join('')}</tr></thead><tbody>${R.map(([k, v]) => `<tr><td>${k}</td>${v.map((n, i) => `<td class="${i ? '' : 'rec'}">${dots(n)}</td>`).join('')}</tr>`).join('')}<tr class="tot"><td>Total</td>${[0, 1, 2].map((i) => `<td class="${i ? '' : 'rec'}">${R.reduce((a, [, v]) => a + v[i], 0)}<small>/28</small></td>`).join('')}</tr></tbody>`;

@@ -248,3 +248,7 @@
 .c-drawer .hd svg { width: 18px; height: 18px; color: var(--color-icon-default); }
 .c-code .hd svg { width: 14px; height: 14px; flex: none; }
 .c-table td .check svg { width: 10px; height: 10px; color: inherit; vertical-align: 0; }
+
+/* text in tinted diff lines and selected cards keeps AA: inherit the line's own ink */
+.c-code .ln.add .n, .c-code .ln.add .m, .c-code .ln.del .n, .c-code .ln.del .m { color: inherit; }
+.c-choice.is-selected .tag { background: var(--color-bg-surface); }

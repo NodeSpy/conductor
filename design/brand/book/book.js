@@ -48,7 +48,7 @@ const rampRow = (name) => {
   const steps = Object.entries(T.primitive.color[name]);
   const short = steps.length < 11;
   return `<div class="ramp ${short ? 'short' : ''}"><b>${name}</b>${steps.map(([s, t]) => {
-    const h = t.$value.hex; const ink = lumi(h) > 0.32 ? '#1a1a14' : '#f0ede3';
+    const h = t.$value.hex; const L = lumi(h); const ink = (L + 0.05) / 0.05 >= 1.05 / (L + 0.05) ? '#000000' : '#ffffff';
     return `<i style="background:${h};color:${ink}" title="--palette-${name}-${s}: ${h}"><em>${s}</em>${h.slice(1)}</i>`;
   }).join('')}${short ? '<span></span>' : ''}</div>`;
 };
@@ -58,7 +58,7 @@ const textMatrix = (theme) => `<div class="textscale">
   <div class="row hdr"><b>text ↓ / bg →</b>${SURF.map((s) => `<span>${s}</span>`).join('')}</div>
   ${TEXTS.map((tx) => `<div class="row"><b>text.${tx}</b>${SURF.map((s) => {
     const r = conFor(`semantic.color.text.${tx}`, `semantic.color.bg.${s}`, theme);
-    return `<div class="cell" style="background:var(--color-bg-${s});color:var(--color-text-${tx})"><span>Needs you · 6</span><small>${r ? `${r.ratio.toFixed(2)} ${r.level === 'exempt' ? 'exempt' : r.level}` : ''}</small></div>`;
+    return `<div class="cell" style="background:var(--color-bg-${s});color:var(--color-text-${tx})"${tx === 'disabled' ? ' data-contrast="exempt"' : ''}><span>Needs you · 6</span><small>${r ? `${r.ratio.toFixed(2)} ${r.level === 'exempt' ? 'exempt' : r.level}` : ''}</small></div>`;
   }).join('')}</div>`).join('')}
 </div>`;
 const semGroups = [
@@ -139,7 +139,7 @@ function fillContrast() {
   const th = document.querySelector('#ct .is-active').dataset.v;
   const s = (p) => p.replace('semantic.color.', '').replace('component.', 'component.');
   document.getElementById('cbody').innerHTML = CON.filter((r) => (!th || r.theme === th) && (!q || (r.token + r.on).toLowerCase().includes(q))).map((r) => `<tr>
-    <td><span class="pv" style="background:${r.bg};color:${r.fg}">Aa</span></td><td><code>${s(r.token)}</code></td><td><code>${s(r.on)}</code></td><td>${r.theme}</td>
+    <td><span class="pv" style="background:${r.bg};color:${r.fg}"${r.min < 4.5 ? ' data-contrast="exempt" title="Pair checked at its own minimum (UI 3:1 or exempt), not as body text"' : ''}>Aa</span></td><td><code>${s(r.token)}</code></td><td><code>${s(r.on)}</code></td><td>${r.theme}</td>
     <td class="r">${r.ratio.toFixed(2)}</td><td>${r.level === 'exempt' ? '—' : r.min}</td>
     <td><span class="lvl ${r.level === 'AAA' ? 'AAA' : r.level === 'AA' ? 'AA' : r.level === 'exempt' ? 'ex' : 'ui'}">${r.pass ? '' : 'FAIL · '}${r.level}</span></td></tr>`).join('');
 }

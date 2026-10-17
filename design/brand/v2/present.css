@@ -11,7 +11,7 @@
 .sect + .sect { border-top: 1px solid var(--line); }
 .sintro { color: var(--ink-2); font-size: 17px; max-width: 46rem; margin: -10px 0 30px; line-height: 1.55; }
 .sintro code, .next code { font: 12.5px var(--mono); background: var(--paper-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
-.sintro a { color: var(--ember); }
+.sintro a { color: #a33901; }
 
 /* principles */
 .pr { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.6fr); gap: 32px; padding: 26px 0; border-top: 1px solid var(--line); align-items: start; }

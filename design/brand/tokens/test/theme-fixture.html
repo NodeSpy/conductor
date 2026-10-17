@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- Fixture for tools/theme-test.mjs: tokens.css with every scoping combination.
+     ?root=light|dark forces the page theme; otherwise it follows the OS. -->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="../tokens.css">
+<script>const r = new URLSearchParams(location.search).get('root'); if (r) document.documentElement.dataset.theme = r;</script>
+<style>
+  body { margin: 0; padding: 12px; background: var(--color-bg-canvas); color: var(--color-text-primary); font: 16px/1.4 sans-serif; }
+  .p { background: var(--color-bg-surface); color: var(--color-text-primary); padding: 18px 16px 16px; margin: 0 0 10px; min-height: 40px; }
+  .t { color: var(--color-text-secondary); }
+</style>
+</head>
+<body>
+  <div class="p" id="inherit"><span class="t">Inherits the page theme</span></div>
+  <div class="p" id="light" data-theme="light"><span class="t">Forced light</span>
+    <div class="p" id="darkInLight" data-theme="dark"><span class="t">Dark inside light</span></div></div>
+  <div class="p" id="dark" data-theme="dark"><span class="t">Forced dark</span>
+    <div class="p" id="lightInDark" data-theme="light"><span class="t">Light inside dark</span></div></div>
+</body>
+</html>

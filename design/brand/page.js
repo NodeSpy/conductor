@@ -55,7 +55,7 @@ function construction(d, theme) {
 function github(d, theme) {
   const v = theme === 'dark' ? 'dark' : 'light';
   return `<div class="gh ${theme}">
-    <div class="gh-top"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M2 2.5A1.5 1.5 0 0 1 3.5 1h9A1.5 1.5 0 0 1 14 2.5v11a.5.5 0 0 1-.5.5h-10A1.5 1.5 0 0 1 2 12.5zM3.5 2a.5.5 0 0 0-.5.5v10c0 .28.22.5.5.5H13V2z"/></svg><span>NodeSpy</span><span class="sl">/</span><b>conductor</b><span class="pill">Public</span></div>
+    <div class="gh-top"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M2 2.5A1.5 1.5 0 0 1 3.5 1h9A1.5 1.5 0 0 1 14 2.5v11a.5.5 0 0 1-.5.5h-10A1.5 1.5 0 0 1 2 12.5zM3.5 2a.5.5 0 0 0-.5.5v10c0 .28.22.5.5.5H13V2z"/></svg><span>NodeSpy</span><span class="sl" data-contrast="exempt">/</span><b>conductor</b><span class="pill">Public</span></div>
     <div class="gh-tabs"><span class="on">Code</span><span>Issues</span><span>Pull requests</span><span>Actions</span></div>
     <div class="gh-readme">
       <div class="gh-rh">README</div>
@@ -117,9 +117,9 @@ function dashboard(d, theme) {
 function tabs(d, theme) {
   const v = theme === 'dark' ? 'dark' : 'light';
   return `<div class="tabs ${theme}">
-    <div class="tab on"><img src="${f(d.id, `favicon16-${v}.svg`)}" width="16" height="16" alt=""><span>Overview · conductor</span><i>×</i></div>
-    <div class="tab"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="currentColor" opacity=".35"/></svg><span>Pull request #182</span><i>×</i></div>
-    <div class="tab"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="3" fill="currentColor" opacity=".35"/></svg><span>Incidents · Slack</span><i>×</i></div>
+    <div class="tab on"><img src="${f(d.id, `favicon16-${v}.svg`)}" width="16" height="16" alt=""><span>Overview · conductor</span><i data-contrast="exempt">×</i></div>
+    <div class="tab"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="currentColor" opacity=".35"/></svg><span>Pull request #182</span><i data-contrast="exempt">×</i></div>
+    <div class="tab"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="3" fill="currentColor" opacity=".35"/></svg><span>Incidents · Slack</span><i data-contrast="exempt">×</i></div>
   </div>`;
 }
 
@@ -191,7 +191,7 @@ const SCORE = [
   ['Fits the dashboard', [4, 3, 4, 3]],
   ['Low switching cost', [3, 2, 4, 3]],
 ];
-const dots = (n) => '●'.repeat(n) + '<span class="off">' + '●'.repeat(4 - n) + '</span>';
+const dots = (n) => `<span role="img" aria-label="${n} of 4">${'●'.repeat(n)}<span class="off" data-contrast="exempt">${'●'.repeat(4 - n)}</span></span>`;
 document.getElementById('scoretable').innerHTML =
   `<thead><tr><th></th>${DIRS.map((d) => `<th class="${d.id === RECOMMENDED ? 'rec' : ''}"><img src="${f(d.id, 'logo-mark-light.svg')}" width="28" height="28" alt=""><span>${d.name}</span></th>`).join('')}</tr></thead><tbody>` +
   SCORE.map(([k, v]) => `<tr><td>${k}</td>${v.map((n, i) => `<td class="${DIRS[i].id === RECOMMENDED ? 'rec' : ''}">${dots(n)}</td>`).join('')}</tr>`).join('') +
