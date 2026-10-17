@@ -1,5 +1,5 @@
-/* Home (the Overview), as in Daylight's approved mock (design/brand/v2 mock.js overview()): a greeting and one sentence
- * that answers "does anything need me?"; then Needs you (the mark, a plain title, why, the machine detail last, one
+/* Home (the Overview), from Daylight's approved mock (design/brand/v2 mock.js overview()) less its greeting and summary
+ * sentence: they said nothing the figures and the list below don't, so the page opens on At a glance and Needs you (the mark, a plain title, why, the machine detail last, one
  * verb); beside it Running now, the last 12 hours (a figure, hour bars, the failures in words) and For your
  * information. Status marks and words come from the one vocabulary (UI.statusMark / UI.mark). */
 (function () {
@@ -83,7 +83,7 @@
   UI.act('gs-show', () => { D.prefs.gsHidden = false; S.save(); UI.rerender(); });
   UI.act('sys-open', (el) => { D.prefs.sysOpen = el.open; S.save(); });
 
-  /* At a glance: four quiet figures under the greeting (the bot page's stat tiles, design/brand/v2 botBefore) */
+  /* At a glance: four quiet figures at the top (the bot page's stat tiles, design/brand/v2 botBefore) */
   function glance() {
     const running = D.runs.filter((r) => r.status === 'run'), w = window12(), pending = D.proposals.filter((p) => p.status === 'pending' && UI.live(p)).length;
     const tile = (href, l, v, d) => `<a class="dl-tile" href="${href}"><span class="dl-lbl">${l}</span><b>${v}</b><span class="d">${d}</span></a>`;
@@ -95,16 +95,10 @@
     </section>`;
   }
 
-  const greeting = () => { const h = new Date().getHours(); return `Good ${h < 5 ? 'evening' : h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening'}, ${esc(D.operator.name)}.`; };
-  /** Home's one sentence, bold count first when something needs you. */
-  UI.overviewSummary = () => { const need = D.attention.length, w = window12();
-    const rest = `${w.ok} of ${w.total} runs in the last 12 hours went fine.`;
-    return need ? `<b>${need} ${need === 1 ? 'thing needs' : 'things need'} you.</b> Everything else is running normally: ${rest}` : `<b>Nothing needs you.</b> Everything is running normally: ${rest}`; };
-
   UI.route('overview', () => {
     const need = D.attention.length;
     return `<div class="page dl-page">
-      <section class="dl-hello"><div><h1>${greeting()}</h1><p class="dl-lead">${UI.overviewSummary()}</p></div></section>
+      <h1 class="sr-only">Home</h1>
       ${glance()}
       <div class="dl-cols"><div class="dl-col-main">
         <section class="dl-card dl-needs-card"><header class="dl-ch"><h2>Needs you</h2>${need ? UI.count(need, { hot: true }) : ''}<span class="dl-sp"></span><a class="dl-link" href="#/attention">See all</a></header>

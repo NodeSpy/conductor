@@ -105,12 +105,10 @@
       ${fails.length ? `<p class="dl-foot-note">${UI.mark('fail')}<span>${fails.length} failed: ${fails.slice(0, 4).map((r) => `<a class="dl-link" href="#/runs/${r.id}">${esc(r.workflow.replace(/^bot:/, ''))} at ${UI.hm(r.started)}</a>`).join(', ')}${fails.length > 4 ? ` and ${fails.length - 4} more` : ''}</span></p>` : `<p class="dl-foot-note">${UI.mark('ok')}Nothing failed.</p>`}</section>`;
   }
   const chip = (key, icon_, label, opts) => `<label class="dl-chip${av[key] ? ' on' : ''}">${icon(icon_)}<span class="sr-only">${label}</span><select data-on-change="act-f" data-k="${key}" aria-label="${label}">${opts.map(([v, l]) => `<option value="${esc(v)}"${String(av[key]) === String(v) ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
-  UI.activitySummary = (G = groups()) => { const label = RANGES.find(([v]) => v === av.since)[1];
-    return `<b>${label}: ${G.all.length} ${G.all.length === 1 ? 'run' : 'runs'}.</b> ${G.attn.length} ${G.attn.length === 1 ? 'needs' : 'need'} attention, ${G.run.length} ${G.run.length === 1 ? 'is' : 'are'} running and ${G.done.length} finished.`; };
   function activityPage() {
     const G = groups(), wfs = [...new Set(D.runs.map((r) => r.workflow).filter((w) => !w.startsWith('bot:')))].sort(), bots = [...new Set(D.runs.map(botOf).filter(Boolean))].sort();
     return `<div class="page dl-page">
-      <div class="dl-phead"><div><h1>Activity</h1><p class="dl-lead" id="act-lead">${UI.activitySummary(G)}</p></div></div>
+      <div class="dl-phead"><div><h1>Activity</h1></div></div>
       <div class="dl-filters" id="act-filters">
         <label class="dl-search">${icon('search')}<input value="${esc(av.q)}" placeholder="Search repo, PR, run or error" data-on-input="act-q" aria-label="Search runs"></label>
         ${chip('status', 'filter', 'Status', [['', 'Any status'], ['attn', 'Needs attention'], ['run', 'Running'], ['fail', 'Failed'], ['wait', 'Needs you'], ['ok', 'Passed'], ['idle', 'Parked']])}
@@ -126,7 +124,7 @@
       <p class="dl-sub dl-keep">Runs are kept for 14 days; each record is signed, and one that fails its signature shows as tampered.</p>
     </div>`;
   }
-  const actRefresh = () => { const G = groups(), t = UI.$('#act-tbl'); if (!t) return; t.innerHTML = theadHTML(G) + tableBody(G); UI.$('#act-phone').innerHTML = (av.sel.size ? selBar(G) : '') + phoneBody(G); UI.$('#act-lead').innerHTML = UI.activitySummary(G); UI.$('#act-strip').innerHTML = strip(G); };
+  const actRefresh = () => { const G = groups(), t = UI.$('#act-tbl'); if (!t) return; t.innerHTML = theadHTML(G) + tableBody(G); UI.$('#act-phone').innerHTML = (av.sel.size ? selBar(G) : '') + phoneBody(G); UI.$('#act-strip').innerHTML = strip(G); };
   UI.act('act-q', (el) => { av.q = el.value; av.limit = PAGE; actRefresh(); });
   UI.act('act-f', (sel) => { av[sel.dataset.k] = sel.value; av.limit = PAGE; sel.closest('.dl-chip').classList.toggle('on', !!sel.value); actRefresh(); });
   UI.act('act-clear', () => { Object.assign(av, { q: '', status: '', wf: '', bot: '', repo: '', since: '' }); UI.rerender(); });
@@ -249,7 +247,7 @@
 
   /* ---------- Needs you: the Overview's list, every item, then the quiet things ---------- */
   UI.route('attention', () => `<div class="page dl-page">
-    <div class="dl-phead"><div><h1>Needs you</h1><p class="dl-lead">${UI.needsSummary()}</p></div>${UI.folderChip()}</div>
+    <div class="dl-phead"><div><h1>Needs you</h1></div>${UI.folderChip()}</div>
     <div class="dl-cols"><div class="dl-col-main"><section class="dl-card">${UI.attentionList(0)}</section></div>
       <div class="dl-col-side">
         ${(D.fyi || []).length ? `<section class="dl-card"><header class="dl-ch"><h2>For your information</h2></header><ul class="dl-list">${D.fyi.map((a) => `<li><a class="dl-row-a" href="${a.href}"><span class="dl-ng">${icon(/update/i.test(a.title + a.plain) ? 'updates' : 'shield')}</span><span class="dl-nt"><b>${esc(a.plain)}</b><span class="dl-why">${esc(a.why)}</span></span></a></li>`).join('')}</ul></section>` : ''}
@@ -260,9 +258,5 @@
           <label class="row">${UI.switchBtn(D.prefs.notifyFailed, 'pref', 'data-k="notifyFailed" aria-label="When any run fails"')}When any run fails</label></div>
           <p class="dl-sub">Alerts outside the dashboard (Slack, PagerDuty) are set up as workflows on conductor’s own events.</p></section>
       </div></div></div>`);
-  UI.needsSummary = () => { const a = D.attention, n = (k) => a.filter((x) => (k === 'other' ? !['approval', 'failed'].includes(x.kind) : x.kind === k)).length;
-    if (!a.length) return '<b>Nothing needs you.</b> Approvals, failed runs and questions from bots land here.';
-    const parts = [[n('approval'), 'approval'], [n('failed'), 'failed run'], [n('other'), 'question']].filter(([k]) => k).map(([k, w]) => `${k} ${w}${k === 1 ? '' : 's'}`);
-    return `<b>${a.length} ${a.length === 1 ? 'thing needs' : 'things need'} you:</b> ${parts.join(', ').replace(/, ([^,]*)$/, ' and $1')}.`; };
   UI.act('pref', (b) => { D.prefs[b.dataset.k] = !D.prefs[b.dataset.k]; S.save(); b.classList.toggle('on', D.prefs[b.dataset.k]); b.setAttribute('aria-checked', D.prefs[b.dataset.k]); });
 })();

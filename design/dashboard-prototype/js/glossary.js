@@ -48,6 +48,6 @@
   // keyboard users get the same tip on focus
   document.addEventListener('focusin', (e) => { const el = e.target.closest && e.target.closest('.term'); if (el) el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); });
   document.addEventListener('focusout', (e) => { if (e.target.closest && e.target.closest('.term')) document.body.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); });
-  UI.route('glossary', () => `<div class="page wizard">${UI.head('Glossary', { sub: 'the words conductor uses, in plain language' })}
+  UI.route('glossary', () => `<div class="page wizard">${UI.head('Glossary', { })}
     <div class="panel"><dl class="gloss">${Object.entries(G).map(([k, [t, d]]) => `<div id="g-${k}"><dt>${UI.esc(t)}</dt><dd>${UI.esc(d)}</dd></div>`).join('')}</dl></div></div>`);
 })();

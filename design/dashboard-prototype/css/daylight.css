@@ -6,7 +6,8 @@
 
 .dl-page { max-width: calc(1280px - 72px); margin: 0; padding: 8px 36px 56px; }
 .dl-page h1 { font: var(--type-display); font-size: 34px; line-height: 1.12; font-variation-settings: var(--type-display-variation); letter-spacing: -0.015em; margin: 0; }
-.dl-page h1.dl-h1-long { font-family: var(--font-family-serif); font-size: calc(34px * .78); line-height: 1.18; max-width: 26em; }
+/* a generated title (a run's, a case's) is long and machine-written: the sans, per the serif rule (BRAND.md) */
+.dl-page h1.dl-h1-long { font-family: var(--font-family-sans); font-weight: 700; font-size: 26px; letter-spacing: -0.01em; line-height: 1.22; max-width: 30em; font-variation-settings: normal; }
 .dl-page h2 { font: var(--type-h2); font-family: var(--font-family-serif); font-size: 21px; line-height: 1.25; font-weight: 600; font-variation-settings: var(--type-display-variation); letter-spacing: -0.009em; margin: 0; }
 .dl-lead { font: var(--type-body-l); color: var(--color-text-secondary); margin: 8px 0 0; max-width: 46em; }
 .dl-lead b { color: var(--color-text-primary); font-weight: var(--font-weight-bold); }
@@ -17,8 +18,6 @@
 .dl-link:hover { text-decoration: underline; text-underline-offset: 3px; }
 
 /* layout */
-.dl-hello { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 18px 0 6px; }
-.dl-hello h1 { font-size: 40px; }
 .dl-cols { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(300px, 1fr); gap: 20px; margin-top: 20px; align-items: start; }
 .dl-col-main, .dl-col-side { display: grid; gap: 20px; min-width: 0; }
 .dl-card { background: var(--color-bg-surface); border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-card); box-shadow: var(--shadow-1); padding: 22px; min-width: 0; }
@@ -188,7 +187,7 @@
 @media (max-width: 720px) {
   .dl-page { padding: 14px max(16px, var(--sar)) 24px max(16px, var(--sal)); }
   .dl-page h1 { font-size: calc(34px * .8); }
-  .dl-hello { padding-top: 6px; } .dl-hello h1 { font-size: 30px; }
+
   .dl-lead { font: var(--type-body-m); }
   .dl-cols { gap: 14px; margin-top: 14px; } .dl-col-main, .dl-col-side { gap: 14px; }
   .dl-card { padding: 16px; } .dl-ch.dl-pad { padding: 16px 16px 0; }
@@ -212,8 +211,6 @@
   .dl-changes { grid-template-columns: 1fr 1fr; }
   .dl-where { grid-template-columns: 1fr; gap: 2px; } .dl-where dd { margin-bottom: 8px; }
   .dl-decide .btn { flex: 1 1 40%; justify-content: center; }
-  .dl-proposal .dl-decide { position: sticky; bottom: 0; z-index: 4; background: var(--color-bg-surface); margin: 16px -16px 0; padding: 12px 16px; border-top: var(--border-width) solid var(--color-border-subtle); }
-  .dl-proposal .dl-decide .hint { display: none; }
   .dl-bothead { flex-wrap: wrap; } .dl-bothead > .st { margin-left: 0; } .dl-bot-av { width: 44px; height: 44px; }
   .dl-story .t { display: none; }
   .dl-fails li { grid-template-columns: 18px minmax(0, 1fr); } .dl-fails .src { grid-column: 2; }
@@ -241,7 +238,7 @@
 
 .dl-audit { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; padding: 10px 0; }
 .dl-list > li.dl-audit:first-child { padding-top: 2px; }
-.dl-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--color-text-tertiary); margin-top: 2px; }
+.dl-axis { display: flex; justify-content: space-between; font-size: 12px; color: var(--color-text-tertiary); margin-top: 2px; }
 .dl-filters .chip { border-radius: 999px; height: 34px; min-height: 34px; font-size: 13.5px; }
 .dl-prefs { display: grid; gap: 10px; margin-bottom: 12px; }
 .dl-keep { margin: 14px 2px 0; }
@@ -427,3 +424,53 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 .tbl thead.selecting th { position: sticky; top: 0; z-index: 3; padding: 0; background: var(--color-bg-raised); text-transform: none; letter-spacing: 0; }
 [data-density="compact"] .dl-tbl td { height: 36px; }
 [data-density="compact"] .dl-tbl tr.attn td { padding-top: 6px; padding-bottom: 6px; }
+
+/* the approval: header, then Overview | Technical details, the decision pinned to the bottom of the card (both tabs) */
+.prop-tabs { margin-top: 18px; }
+.prop-body { padding-top: 6px; }
+.dl-proposal { padding-bottom: 0; }
+.dl-proposal > :last-child:not(.prop-decide) { margin-bottom: 22px; }
+.prop-decide { position: sticky; bottom: 0; z-index: 4; background: var(--color-bg-surface); margin: 20px -22px 0; padding: 14px 22px; border-top: var(--border-width) solid var(--color-border-subtle); border-radius: 0 0 var(--radius-card) var(--radius-card); box-shadow: 0 -10px 24px -18px color-mix(in srgb, var(--color-text-primary) 35%, transparent); }
+.prop-tech-facts { margin: 12px 0 4px; }
+.prop-tech-facts dd.mono { word-break: break-all; }
+/* the Terraform plan in Terraform's conventions, on the diff tokens; symbols stay, so colour is never the only cue */
+.prop-plan { max-height: none; overflow-x: auto; }
+.prop-plan .pl { display: block; padding: 0 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.prop-plan .pl-create { color: var(--color-code-add-fg); background: var(--color-code-add-bg); }
+.prop-plan .pl-destroy { color: var(--color-code-del-fg); background: var(--color-code-del-bg); }
+.prop-plan .pl-update { color: var(--color-status-warning-fg); }
+.prop-plan .pl-replace { color: var(--color-code-del-fg); background: var(--color-code-del-bg); font-weight: var(--font-weight-bold); box-shadow: inset 3px 0 0 var(--color-status-danger-solid); }
+.prop-plan .pl-read { color: var(--color-code-number); }
+.prop-plan .pl-h { color: var(--color-text-primary); font-weight: var(--font-weight-bold); margin-top: 6px; }
+.prop-plan .pl-h.pl-replace, .prop-plan .pl-h.pl-destroy { color: var(--color-code-del-fg); }
+.prop-plan .pl-muted, .prop-plan .pl-kaa { color: var(--color-text-tertiary); font-weight: 400; }
+.prop-plan .pl-force { color: var(--color-code-del-fg); }
+.prop-plan .pl-sum { color: var(--color-text-primary); font-weight: var(--font-weight-bold); margin-top: 8px; }
+.plan-jump { display: grid; gap: 4px; margin: 6px 0 10px; font: var(--type-body-s); }
+.plan-jump b { font-weight: var(--font-weight-bold); margin-right: 6px; }
+.plan-jump .pj-replace b, .plan-jump .pj-destroy b { color: var(--color-code-del-fg); }
+.plan-jump .pj-create b { color: var(--color-code-add-fg); }
+.plan-jump .pj-update b { color: var(--color-status-warning-fg); }
+.plan-jump .pj-read b { color: var(--color-code-number); }
+.plan-jump a { color: var(--color-text-accent); }
+@media (max-width: 720px) {
+  .prop-decide { bottom: 0; margin: 16px -16px 0; padding: 12px 16px calc(12px + var(--sab)); }
+  .prop-decide .btn { flex: 1 1 40%; justify-content: center; } .prop-decide .hint { flex: 1 1 100%; }
+}
+/* Technical details take the full width; the side cards move below */
+.dl-cols.prop-wide { grid-template-columns: minmax(0, 1fr); }
+.dl-cols.prop-wide .dl-col-side { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+/* a sentence with inline code or a chip flows as one line of text, never as flex columns */
+.dl-origin { display: block; }
+.dl-origin > svg { display: inline-block; vertical-align: -3px; margin-right: 8px; }
+.prop-plan { white-space: normal; }
+.sentence { display: block; } .sentence > svg { display: inline-block; vertical-align: -3px; margin-right: 6px; width: 15px; height: 15px; }
+.dl-facts dd { display: block; }
+.dl-facts dd > .st { vertical-align: baseline; }
+.wfb-owner { display: block; } .wfb-owner > .st { margin-left: 6px; }
+.readers { display: block !important; }
+.panel-foot.small:not(:has(button, .btn, input, select)) { display: block; }
+@media (max-width: 720px) { .dl-page h1.dl-h1-long { font-size: 22px; } }
+/* a collection a pack defines: the note sits beside the row, and under it on a phone */
+.coll-row .coll-note { max-width: 220px; overflow-wrap: anywhere; }
+@media (max-width: 720px) { .coll-row { flex-wrap: wrap; } .coll-row .coll-note { max-width: none; flex-basis: 100%; padding-left: 34px; } }

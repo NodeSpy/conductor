@@ -305,7 +305,7 @@ test.describe('updates, config history, raw editor, access', () => {
     await applyStaged(page);
     await go(page, '#/updates');
     await page.locator('[data-act="upd-apply"]').click(); await page.locator('#cf-ok').click();
-    await expect(page.locator('.dl-phead')).toContainText('up to date (v0.72.0)');
+    await expect(page.locator('#main')).toContainText('You’re on v0.72.0, the newest release.');
   });
   test('revert one change keeps the later ones', async ({ page }) => {
     await go(page, '#/config');

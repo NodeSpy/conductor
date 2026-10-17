@@ -57,7 +57,7 @@
     if (wl.folder && wl.folder !== '__top__' && !UI.allFolders().includes(wl.folder)) wl.folder = '';
     const crumbs = wl.folder && wl.folder !== '__top__' ? `<div class="crumbs wl-crumbs"><a href="#" data-act="wl-folder" data-f="">All workflows</a>${wl.folder.split('/').map((seg, i, a) => ` › <a href="#" data-act="wl-folder" data-f="${esc(a.slice(0, i + 1).join('/'))}">${esc(seg)}</a>`).join('')} <a class="link tiny" href="#/folders/${enc(wl.folder)}/workflows" style="margin-left:8px">open the folder</a></div>` : '';
     return `<div class="page">
-    ${UI.head('Workflows', { lede: (() => { const ws = rows.map((r) => r.w), bad = ws.filter((w) => w.runs24 && w.ok < 0.9); return `${bad.length ? `<b>${bad.length} ${bad.length === 1 ? 'workflow is' : 'workflows are'} failing some runs:</b> ${bad.map((w) => esc(w.name)).join(', ')}. ` : '<b>Every workflow is running fine.</b> '}${ws.length} workflows; ${ws.reduce((a, w) => a + (w.runs24 || 0), 0)} runs in the last 24 hours.`; })(), lede2: `A ${UI.term('workflow')} is a fixed recipe: when something happens, run these steps. Want an AI to decide what to do? Hand the event to a <a class="link" href="#/bots">bot</a>.`, actions: `<button class="btn primary" data-act="wf-new">${icon('plus')}New workflow</button>` })}
+    ${UI.head('Workflows', { lede2: `A ${UI.term('workflow')} is a fixed recipe: when something happens, run these steps. Want an AI to decide what to do? Hand the event to a <a class="link" href="#/bots">bot</a>.`, actions: `<button class="btn primary" data-act="wf-new">${icon('plus')}New workflow</button>` })}
     <div class="wl-layout"><aside class="panel wl-folders">${folderNav(rows)}</aside><div class="wl-main">
     ${crumbs}
     <div class="filters"><div class="input-icon">${icon('search')}<input class="input" placeholder="name, event or folder" value="${esc(wl.q)}" data-on-input="wl-q" aria-label="Filter workflows"></div>${UI.seg([['all', 'all'], ['config', 'yours'], ['pack', 'packs'], ['bot', 'bots']], wl.owner, 'wl-owner')}
@@ -218,7 +218,7 @@
   function bar() {
     const s = status(), ro = readOnly(), e = errs();
     const applyBlock = B.err ? 'Fix the YAML first' : e.length ? `${e.length} error${e.length > 1 ? 's' : ''} to fix first` : B.owner === 'bot' ? ro : s === 'live' ? 'Nothing to apply: this is what’s live' : '';
-    const v = B.value || {}, desc = esc(v.description || (WF.sources(v).length ? `${whenWords(WF.sources(v))}${isObj(v.filter) && filterWords(v.filter) ? ' ' + filterWords(v.filter) : ''}: this runs.` : ''));
+    const v = B.value || {}, desc = esc(v.description || '');
     const folder = (() => { try { const w = D.workflows.find((x) => x.name === B.name); return w && UI.folderOfWf ? UI.folderOfWf(w, false) : (B.value || {}).folder || ""; } catch (e) { return (B.value || {}).folder || ""; } })();
     return `<div class="dl-crumbs"><a href="#/workflows">Workflows</a>${folder ? `${icon('chev')}<span>${esc(folder)}</span>` : ''}</div>
       <div class="dl-phead"><div><h1 class="wfb-title">${esc(B.name)}</h1><p class="dl-lead">${desc}</p>

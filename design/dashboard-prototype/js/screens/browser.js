@@ -17,7 +17,7 @@
 
   /* ---------- list ---------- */
   UI.route('browser', () => `<div class="page">
-    ${UI.head('Browsers', { lede: (() => { const w = D.browsers.filter((b) => b.status === 'wait').length, r = D.browsers.filter((b) => b.status === 'run').length; return `${w ? `<b>${w} ${w === 1 ? 'browser is' : 'browsers are'} waiting on you.</b> ` : '<b>Nothing needs you.</b> '}${D.browsers.length} open, ${r} in use by an agent right now.`; })(), lede2: 'conductor’s Chromium: one per agent session, sandboxed.', actions: `${UI.folderChip()}<a class="btn" href="#/browser/add">${icon('key')}Add a login</a><a class="btn" href="#/browser/passkey">${icon('plus')}Register a passkey</a>` })}
+    ${UI.head('Browsers', { lede2: 'conductor’s Chromium: one per agent session, sandboxed.', actions: `${UI.folderChip()}<a class="btn" href="#/browser/add">${icon('key')}Add a login</a><a class="btn" href="#/browser/passkey">${icon('plus')}Register a passkey</a>` })}
     ${UI.tabs([['sessions', 'Sessions', '#/browser', D.browsers.length], ['logins', 'Logins', '#/browser/logins', D.access.credentials.length + D.access.logins.length]], 'sessions')}
     ${UI.scopeNote(D.browsers.filter((b) => !UI.scopeKeeps(b.identity.startsWith('bot:') ? b.identity.slice(4) : null)).length)}
     <div class="grid g3">${D.browsers.filter((b) => UI.scopeKeeps(b.identity.startsWith('bot:') ? b.identity.slice(4) : null)).map((b) => `

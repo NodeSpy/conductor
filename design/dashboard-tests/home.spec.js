@@ -1,4 +1,5 @@
-// Home, as approved in review (and recorded in design/CONFORMANCE.md): the greeting and one sentence; four At a glance
+// Home, as approved in review (and recorded in design/CONFORMANCE.md), less the greeting and its summary sentence
+// (they restated the figures and the list below, and claimed "everything else is running normally" beside failures): four At a glance
 // tiles (Running links to Activity filtered to running and lists no names); Needs you as plain-sentence items with one
 // action each; Running now capped at three, longest-running first, then a quiet "+N more running" link, hidden when
 // nothing runs; the last 12 hours as runs per hour with the failures named; For your information; Get started showing
@@ -7,10 +8,12 @@ const { test, expect, go } = require('./fixtures');
 
 const day = async (page, demo) => { await page.evaluate((d) => { localStorage.setItem('cd-demo', d); localStorage.removeItem('cd-proto-state-v5'); }, demo); };
 
-test('Home: the sentence, At a glance, Needs you with one action each, the last 12 hours, For your information', async ({ page }) => {
+test('Home: no greeting or summary line; At a glance, Needs you with one action each, the last 12 hours, For your information', async ({ page }) => {
   await go(page, '#/overview', { fresh: true });
-  await expect(page.locator('.dl-hello h1')).toContainText(/Good (morning|afternoon|evening), ops\./);
-  await expect(page.locator('.dl-hello .dl-lead b')).toHaveText(/\d+ things? needs? you\./);
+  await expect(page.locator('.dl-hello')).toHaveCount(0);
+  await expect(page.locator('#main')).not.toContainText(/Good (morning|afternoon|evening)|running normally/);
+  // the page opens on the figures, and Needs you is the first card
+  await expect(page.locator('.dl-page > :not(.sr-only)').first()).toHaveClass(/dl-glance/);
   const tiles = page.locator('.dl-glance .dl-tile');
   await expect(tiles).toHaveCount(4);
   await expect(tiles.locator('.dl-lbl')).toHaveText(['Running', 'Runs, last 12 h', 'Approvals', 'Bots']);
@@ -69,4 +72,13 @@ test('the Running tile opens Activity filtered to running', async ({ page }) => 
   await expect(page).toHaveURL(/#\/activity\?status=run/);
   await expect(page.locator('select[data-k="status"]')).toHaveValue('run');
   await expect(page.locator('#act-tbl tbody.g-attn')).toHaveCount(0);
+});
+
+// a header sentence earns its place: list pages open on their rows, not on a count of them
+test('no header sentence restates the page below it', async ({ page }) => {
+  for (const r of ['#/activity', '#/attention', '#/workflows', '#/bots', '#/browser', '#/browser/logins', '#/extensions', '#/connectors', '#/logs', '#/updates']) {
+    await go(page, r, { fresh: true });
+    await expect(page.locator('#main h1').first()).toBeVisible();
+    await expect(page.locator('#main .dl-lead, #main .page-head .lede'), r).toHaveCount(0);
+  }
 });

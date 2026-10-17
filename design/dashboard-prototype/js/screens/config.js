@@ -41,7 +41,7 @@
   UI.route('config', () => {
     const n = D.pending.length;
     return `<div class="page dl-page">${UI.systemTabs('config')}
-    <div class="dl-phead"><div><h1>Config</h1><p class="dl-lead">${n ? `<b>${n} ${n === 1 ? 'change is' : 'changes are'} waiting for your review.</b> Nothing applies until you do.` : '<b>No changes waiting.</b> Edit a section, a bot or a workflow, and the change waits here for review.'}</p></div>
+    <div class="dl-phead"><div><h1>Config</h1><p class="dl-lead">Edits to a section, a bot or a workflow wait here; nothing applies until you review it.</p></div>
       <div class="dl-actions tight"><a class="btn secondary" href="#/config/raw">${icon('code')}Edit the file</a>${n ? `<a class="btn primary" href="#/config/apply">Review ${n} change${n > 1 ? 's' : ''}</a>` : ''}</div></div>
     <div class="cfg-stack">${historyCard()}
         <div class="panel cfg-files"><div class="panel-head"><h3>Files</h3><span class="muted small">what the daemon loaded at boot</span><div class="tools">${st('ok', 'on disk = loaded')}</div></div>

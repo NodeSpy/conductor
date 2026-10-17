@@ -62,7 +62,7 @@
   UI.route('security', () => {
     const d = D.daemon, pol = S.staged('operators', 'ops') || {};
     return `<div class="page dl-page">${UI.systemTabs('security')}
-      <div class="dl-phead"><div><h1>Access</h1><p class="dl-lead"><b>Only you can sign in</b>, from this computer and your tailnet, with one of your ${D.passkeys.length} passkeys. ${D.sessions.length} ${D.sessions.length === 1 ? 'device is' : 'devices are'} signed in now.</p></div></div>
+      <div class="dl-phead"><div><h1>Access</h1><p class="dl-lead"><b>Only you can sign in</b>, with a passkey, from this computer and your tailnet.</p></div></div>
       <div class="dl-cols"><div class="dl-col-main">
         <section class="dl-card"><header class="dl-ch"><h2>Your passkeys</h2><span class="dl-sp"></span><a class="btn sm secondary" href="#/enroll?from=security">${icon('plus')}Add a passkey</a></header>
           <ul class="dl-list">${D.passkeys.map((k) => `<li class="acc-row pk-list"><div class="dl-nt"><b>${esc(k.name)}</b><span class="dl-why">${devWord(k)} · last used ${UI.agoText(k.used)}</span></div><span class="dl-na"><button class="btn sm ghost" ${D.passkeys.length > 1 ? `data-act="pk-revoke" data-id="${k.id}"` : UI.off('Your only passkey: add another first, so you can still sign in')}>Remove…</button></span></li>`).join('')}</ul>

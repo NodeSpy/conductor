@@ -138,7 +138,8 @@ signals. Concretely:
   `color-scheme` is declared so in-app WebViews never auto-darken the page.
 - **Type.** Three faces, all SIL OFL and self-hosted (`fonts/`): **Atkinson Hyperlegible Next** for everything
   people read (body 15px, `--type-body-m`), **Fraunces** (upright, SemiBold, soft) for short human titles only
-  (five words or fewer, 20px or more: page titles, the greeting, card titles), and **Atkinson Hyperlegible Mono**
+  (five words or fewer, 20px or more: page titles and card titles; a generated title, such as a run's or a case's,
+  is in the sans), and **Atkinson Hyperlegible Mono**
   only for literal code, ids, YAML and logs (12px or more). Generated titles (runs, cases, proposals) are `h3` in
   the sans with any machine detail on a mono line below. Nothing renders under 11.5px; tables use tabular figures.
 - **Shape.** 10px controls, 14px cards, 18px overlays, 22px phone sheets; warm soft shadows in light, lighter
@@ -185,8 +186,11 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
 - **Tooltips** only where they add something missing: an icon-only button's name, the full text of something
   truncated, why a control can't be used, a glossary term's meaning. Always anchored to their element; never a copy of
   what the row already shows.
-- **Summary header** (`UI.head`): the title, then one sentence that answers the page's question (bold count first
-  when something needs you), an optional quieter second line, then actions.
+- **Page header** (`UI.head`): the title and the page's actions. A sentence under the title earns its place only by
+  saying something the page doesn't: a rule (nothing applies until you review it; values are write-only), a problem's
+  consequence (a vault that can't be reached), a one-line definition of a concept, a run's story. A sentence that counts
+  or restates the rows directly below it ("4 logins bots may use", "All 7 connectors are healthy") is cut: list pages
+  open on their rows. (`home.spec.js` checks the list pages.)
 - **Choice cards** (`UI.choice`): a neutral icon, title over description, a radio on the right; the selected card
   takes the accent edge and wash; a disabled card says why. The choice made carries into the next step (`UI.chosen`).
 - **Wizard and stepper** (`UI.stepper`, the one implementation everywhere): at most five steps named for the
@@ -265,8 +269,11 @@ stands is approved (`design/CONFORMANCE.md`); it is the model for the other scre
 
 In reading order:
 
-1. **The greeting and one sentence**: "5 things need you. Everything else is running normally: 19 of 26 runs in the
-   last 12 hours went fine."
+No greeting and no summary sentence: they restated the tiles and the list below (and "everything else is running
+normally" sat beside failed runs), so the page opens on the figures, with Needs you directly under them. The page's h1
+("Home") is for screen readers; the rail and the phone header already name the page.
+
+1. ~~The greeting and one sentence~~ (removed in review).
 2. **At a glance**: four tiles. Running (links to Activity filtered to running; the longest-running time, no list of
    names), Runs in the last 12 hours, Approvals waiting, Bots.
 3. **Needs you**: the mark, a plain title, why, the machine detail last, the age, one verb (Review is primary for

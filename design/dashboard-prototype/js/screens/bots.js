@@ -396,9 +396,9 @@
     const vis = list.filter((c) => cv.f === 'all' || c.status === cv.f);
     return shell(m, 'cases', `<div class="filters">${UI.seg([['open', `open · ${list.filter((x) => x.status === 'open').length}`], ['closed', `closed · ${list.filter((x) => x.status === 'closed').length}`], ['all', 'all']], cv.f, 'case-f')}<button class="btn sm" data-act="m-deliver" data-m="${m.name}">${icon('plus')}Open a case</button><span class="muted small hide-phone">A case's requester class decides how much trust its work runs on.</span></div>
       <div class="panel"><table class="tbl responsive"><thead><tr><th>Case</th><th>Requester</th><th>Routed</th><th>Opened</th><th>Status</th></tr></thead><tbody>
-      ${vis.map((c) => { const dl = D.delegations.filter((d) => d.parent === c.id).length; return `<tr class="click" data-href="#/bots/${m.name}/cases/${c.id}"${UI.rowState(c.urgent && c.status === 'open' ? 'wait' : '')} ><td data-l="case"><a class="link-plain" href="#/bots/${m.name}/cases/${c.id}"><b>${esc(c.title)}</b></a>${c.urgent && c.status === 'open' ? ' ' + tag('urgent', 'fail') : ''}${dl ? `<span class="why-line">${dl} delegated</span>` : ''}</td><td data-l="requester">${UI.label(`${c.requester}`, { cls: 'taint ' + c.cls })}</td><td data-l="routed" class="small route-cell">${c.routed ? routeLabel(c.routed) : 'delivered directly'}</td><td data-l="opened" class="muted nowrap">${UI.agoText(c.opened)}</td><td data-l="status" class="muted">${c.status === 'open' ? 'open' : 'closed'}</td></tr>`; }).join('') || `<tr class="empty-row"><td colspan="6">No ${cv.f === 'all' ? '' : cv.f + ' '}cases.</td></tr>`}
+      ${vis.map((c) => { const dl = D.delegations.filter((d) => d.parent === c.id).length; return `<tr class="click" data-href="#/bots/${m.name}/cases/${c.id}"${UI.rowState(c.urgent && c.status === 'open' ? 'wait' : '')} ><td data-l="case"><a class="link-plain" href="#/bots/${m.name}/cases/${c.id}"><b>${esc(c.title)}</b></a>${c.urgent && c.status === 'open' ? ' ' + tag('urgent', 'fail') : ''}${dl ? `<span class="why-line">${dl} delegated</span>` : ''}</td><td data-l="requester">${UI.label(`${c.requester}`, { cls: 'taint ' + c.cls })}</td><td data-l="routed" class="small route-cell"><span>${c.routed ? routeLabel(c.routed) : 'delivered directly'}</span></td><td data-l="opened" class="muted nowrap">${UI.agoText(c.opened)}</td><td data-l="status" class="muted">${c.status === 'open' ? 'open' : 'closed'}</td></tr>`; }).join('') || `<tr class="empty-row"><td colspan="6">No ${cv.f === 'all' ? '' : cv.f + ' '}cases.</td></tr>`}
       </tbody></table></div>
-      <div class="row small muted" style="margin-top:10px" data-cloud-spend>${icon('dollar')} cloud spend this period: <span class="mono">${usd(m.spend)}</span> of the commit_money cap · ledger healthy</div>`);
+      <div class="small muted sentence" style="margin-top:10px" data-cloud-spend>${icon('dollar')} cloud spend this period: <span class="mono">${usd(m.spend)}</span> of the commit_money cap · ledger healthy</div>`);
   }
   function caseDetail(m, c) {
     const t = teamOf(m), mates = t ? botsOf(t.name).filter((x) => x.name !== m.name) : [];
@@ -430,7 +430,7 @@
 
   /* ---------- proposals ---------- */
   const PS = { pending: 'ember', shadow: 'shadow', executed: 'ok', approved: 'ok', refused: 'fail', denied: 'fail', failed: 'fail' };
-  const pv = { f: 'all' };
+  const pv = { f: 'all', tab: {} };
   function proposals(m, sub) {
     const list = props(m.name);
     const p = sub && list.find((x) => x.id === sub);
@@ -445,7 +445,22 @@
       ${list.some((x) => x.status === 'shadow') ? '<p class="dl-sub" style="margin-top:12px">Shadow proposals are what a bot in shadow mode would have done; they can’t be approved.</p>' : ''}`);
   }
   UI.act('prop-f', (b) => { pv.f = b.dataset.v; UI.rerender(); });
-  function planHTML(t) { return esc(t).split('\n').map((l) => /must be replaced|forces replacement/.test(l) ? `<span class="rep">${l}</span>` : /^\s*\+\/-|^\s*~|will be updated/.test(l) ? `<span class="chg">${l}</span>` : /^\s*\+ /.test(l) ? `<span class="add">${l}</span>` : /#|unchanged/.test(l) ? `<span class="c">${l}</span>` : l).join('\n'); }
+  /* a Terraform plan in Terraform's own conventions, on Daylight's diff tokens: + create (the diff's add colour), - destroy
+     (its delete colour), ~ update (amber), -/+ or +/- replace (the strongest: delete colour, bold, a bar), <= read (a muted
+     blue); resource headers emphasised; "(known after apply)" and hidden lines muted. The symbols stay, so colour is never
+     the only cue. A jump list of the resources, grouped by action, sits on top. */
+  const PLAN_ACT = [['replace', /must be replaced|will be replaced/], ['destroy', /will be destroyed/], ['create', /will be created/], ['update', /will be updated in-place/], ['read', /will be read during apply/]];
+  const PLAN_WORD = { replace: 'Replaced', destroy: 'Destroyed', create: 'Created', update: 'Updated in place', read: 'Read' };
+  function planHTML(t) {
+    const lines = String(t).split('\n'), res = [];
+    const body = lines.map((raw, i) => { const l = esc(raw); let m;
+      if ((m = raw.match(/^\s*# (\S+) (.*)$/)) && /will be|must be/.test(raw)) { const act = (PLAN_ACT.find(([, re]) => re.test(raw)) || ['update'])[0]; res.push([act, m[1], i]); return `<span class="pl pl-h pl-${act}" id="plan-${i}">${l}</span>`; }
+      const kind = /^\s*(-\/\+|\+\/-)\s/.test(raw) ? 'replace' : /^\s*\+\s/.test(raw) ? 'create' : /^\s*-\s/.test(raw) ? 'destroy' : /^\s*~\s/.test(raw) ? 'update' : /^\s*<=\s/.test(raw) ? 'read' : /^\s*#|unchanged|hidden/.test(raw) ? 'muted' : /^Plan:/.test(raw) ? 'sum' : '';
+      const withMuted = l.replace(/\(known after apply\)/g, '<span class="pl-kaa">(known after apply)</span>').replace(/# forces replacement/g, '<b class="pl-force"># forces replacement</b>');
+      return `<span class="pl${kind ? ' pl-' + kind : ''}">${withMuted || ' '}</span>`; }).join('');
+    const groups = Object.keys(PLAN_WORD).map((k) => [k, res.filter(([a]) => a === k)]).filter(([, xs]) => xs.length);
+    const jump = groups.length ? `<div class="plan-jump">${groups.map(([k, xs]) => `<span class="pj pj-${k}"><b>${PLAN_WORD[k]}</b> ${xs.map(([, r, i]) => `<a href="#" data-act="plan-jump" data-l="plan-${i}" class="mono">${esc(r)}</a>`).join(', ')}</span>`).join('')}</div>` : '';
+    return { jump, body }; }
   /** Who asked, in words: a non-operator requester gets a banner, never just a colored chip. */
   UI.requesterBanner = (p) => {
     const r = p.requester || '';
@@ -473,25 +488,32 @@
     const origin = /^event:/.test(p.requester || '') || p.cls === 'event' ? `${icon('zap')}Started by an event (<span class="mono">${esc(String(p.requester).replace(/^event:/, ''))}</span>), not a person.`
       : /^chat:/.test(p.requester || '') || p.cls === 'user' ? `${icon('warn')}Asked for in chat by someone who isn’t one of your operators (<span class="mono">${esc(p.requester)}</span>); it runs with no more trust than they have.`
       : p.cls === 'proactive' ? `${icon('clock')}Found on the bot’s own routine check; nobody asked.` : p.cls === 'peer' ? `${icon('bots')}Asked for by another bot (<span class="mono">${esc(p.requester)}</span>), carrying the original requester’s trust.` : `${icon('users')}Asked for by an operator (<span class="mono">${esc(p.requester || '')}</span>).`;
-    const tech = `<details class="dl-tech-d"><summary>${icon('chev')}Technical details <span class="dl-sub">${tf ? 'plan, hashes, exact command' : 'the exact payload and hashes'}</span></summary><dl class="dl-facts">
-      <dt>Proposal</dt><dd class="mono">${p.id} · tier ${esc(p.tier)}</dd><dt>Verb</dt><dd class="mono">${esc(p.verb)}</dd>${tf ? `<dt>Command</dt><dd class="mono">terraform apply · ${esc(tf.repo)} · dir ${esc(tf.dir)} · workspace ${esc(tf.workspace)}</dd><dt>Commit</dt><dd class="mono">${tf.commit}</dd><dt>Plan sha256</dt><dd class="mono">${tf.plan_sha}</dd>` : ''}<dt>Case</dt><dd class="mono">${p.case}</dd><dt>Digest</dt><dd class="mono">${p.digest}</dd></dl>
-      ${tf ? `<pre class="dl-code">${planHTML(D.tfPlan || '')}</pre>` : ''}</details>`;
+    const techFacts = `<dl class="dl-facts prop-tech-facts"><dt>Proposal</dt><dd><span class="mono">${p.id}</span> · tier <span class="mono">${esc(p.tier)}</span></dd><dt>Verb</dt><dd class="mono">${esc(p.verb)}</dd>
+      ${tf ? `<dt>Exact command</dt><dd class="mono">terraform apply · repo ${esc(tf.repo)} · dir ${esc(tf.dir)} · workspace ${esc(tf.workspace)}${(tf.var_files || []).length ? ` · var files ${tf.var_files.map(esc).join(', ')}` : ''}</dd><dt>Commit</dt><dd class="mono">${tf.commit}</dd><dt>Plan sha256</dt><dd class="mono">${tf.plan_sha}</dd>` : ''}
+      <dt>Case</dt><dd><a class="mono dl-link" href="#/bots/${m.name}/cases/${p.case}">${p.case}</a></dd><dt>Asked for by</dt><dd class="mono">${esc(p.requester || '—')}${p.cls ? ` (${esc(p.cls)})` : ''}</dd><dt>Digest</dt><dd class="mono">${p.digest}</dd><dt>Signed by</dt><dd>${p.approver ? esc(p.approver) : 'not yet: your passkey signs this digest'}</dd></dl>`;
+    const tech = `${techFacts}
+      ${tf ? `<h3 class="po-h3">The plan, as tf-plan ran it with the read role</h3>${(() => { const pl = planHTML(D.tfPlan || ''); return `${pl.jump}<pre class="dl-code prop-plan">${pl.body}</pre>`; })()}` : `<h3 class="po-h3">Exactly what runs</h3>${UI.payloadHTML(p)}`}`;
     const decided = !pend && p.status !== 'shadow' ? `<p class="dl-decided">${UI.statusMark(PS[p.status] || 'idle', p.status.startsWith('approved') || p.status === 'executed' ? 'Approved' : p.status[0].toUpperCase() + p.status.slice(1))}${p.approver ? ` by ${esc(p.approver)}` : ''}${p.reason ? `: “${esc(p.reason)}”` : ''}. ${p.status.startsWith('approved') || p.status === 'executed' ? 'conductor applied exactly what was signed.' : 'The bot was told.'}</p>` : p.status === 'shadow' ? '<p class="dl-decided dl-sub">A shadow proposal: what the bot would have done. It can’t be approved.</p>' : '';
+    // tabs only when the technical details change the decision: a plan or a diff (terraform, anything diff-shaped);
+    // a simple action's decision content (exactly what runs) is already on the Overview, so its details collapse
+    const shaped = !!(tf || p.diff || p.plan), tab = shaped ? pv.tab[p.id] || 'overview' : 'overview';
+    const overview = `${p.why ? `<div class="dl-pwhy"><span class="dl-lbl">Why</span><p>${esc(p.why)}</p></div>` : ''}${tf ? changes : ''}
+      ${where.length ? `<dl class="dl-where">${where.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>` : ''}
+      <p class="dl-origin">${origin}</p>${pend ? '' : decided}${!tf ? `<div class="dl-pwhy"><span class="dl-lbl">What it sends</span>${UI.payloadHTML(p)}</div>` : ''}`;
     const card = `<article class="dl-card dl-proposal">${pend ? `<div class="dl-kick">${UI.mark('ember')}Needs you · asked ${UI.agoText(p.at)}${p.expires ? ` · expires in ${UI.humanSpan(p.expires)}` : ''}</div>` : `<div class="dl-kick dl-sub">${UI.agoText(p.at)}</div>`}
       <h2 class="dl-ptitle">${esc(p.title || p.summary)}</h2><p class="dl-ask">${ask}</p>
-      ${p.why ? `<div class="dl-pwhy"><span class="dl-lbl">Why</span><p>${esc(p.why)}</p></div>` : ''}
-      ${changes}
-      ${where.length ? `<dl class="dl-where">${where.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>` : ''}
-      <p class="dl-origin">${origin}</p>
-      ${pend ? `<div class="dl-decide"><button class="btn lg primary" data-act="p-approve" data-p="${p.id}" data-d="approve">${icon('passkey')}Approve with passkey</button><button class="btn lg secondary" data-act="p-approve" data-p="${p.id}" data-d="deny">Deny…</button><span class="hint">Only operators${t ? ` on the ${esc(t.name)} team` : ''} can approve.</span></div>` : decided}
-      ${tech}</article>`;
+      ${shaped ? `<nav class="dl-tabs prop-tabs" role="tablist">${[['overview', 'Overview'], ['tech', 'Technical details']].map(([k, l]) => `<a href="#" role="tab" data-act="prop-tab" data-p="${p.id}" data-v="${k}" class="${tab === k ? 'on' : ''}" aria-selected="${tab === k}">${l}</a>`).join('')}</nav>
+      <div class="prop-body">${tab === 'tech' ? tech : overview}</div>` : `<div class="prop-body">${overview}<details class="dl-tech-d"><summary>${icon('chev')}Technical details <span class="dl-sub">the proposal, its case and the digest your passkey signs</span></summary>${techFacts}</details></div>`}
+      ${pend ? `<div class="dl-decide prop-decide"><button class="btn lg primary" data-act="p-approve" data-p="${p.id}" data-d="approve">${icon('passkey')}Approve with passkey</button><button class="btn lg secondary" data-act="p-approve" data-p="${p.id}" data-d="deny">Deny…</button><span class="hint">Only operators${t ? ` on the ${esc(t.name)} team` : ''} can approve.</span></div>` : p.status === 'shadow' ? decided : ''}</article>`;
     const x = UI.botCan(m), plain = (i) => esc(String(i.text).replace(/ \([^)]*\)$/, ''));
     const can = `<section class="dl-card dl-can"><header class="dl-ch"><h2>What ${esc(m.name)} can do</h2></header>${[['Does on its own', 'ok', x.own], ['Asks you first', 'ember', x.asks], ['Never', 'fail', x.never]].map(([h, s2, xs]) => `<div class="cang" data-s="${s2}"><h3>${UI.mark(s2)}${h}</h3><ul>${xs.map((i) => `<li>${plain(i)}</li>`).join('') || '<li class="dl-sub">nothing</li>'}</ul></div>`).join('')}</section>`;
     const tl = `<section class="dl-card"><header class="dl-ch"><h2>Timeline</h2></header><ol class="dl-story"><li><span class="sg">${UI.mark('ok')}</span><div><b>Proposed by ${esc(m.name)}</b><span>${p.cls === 'event' ? 'while handling the event' : `in case ${p.case}`}</span></div><span class="t">${UI.agoText(p.at)}</span></li>
       <li><span class="sg">${UI.mark(pend ? 'ember' : PS[p.status] || 'idle')}</span><div><b>${pend ? 'Waiting for your decision' : decidedWord(p)}</b><span>${pend && p.expires ? `expires in ${UI.humanSpan(p.expires)}` : esc(p.approver || '')}</span></div><span class="t">${pend ? 'now' : ''}</span></li></ol></section>`;
-    return `<div class="dl-crumbs" style="margin-top:16px"><a href="#/bots/${m.name}/proposals">${icon('chev', 'flip')}All approvals</a></div><div class="dl-cols" style="margin-top:6px"><div class="dl-col-main">${card}</div><div class="dl-col-side">${can}${tl}</div></div>`;
+    return `<div class="dl-crumbs" style="margin-top:16px"><a href="#/bots/${m.name}/proposals">${icon('chev', 'flip')}All approvals</a></div><div class="dl-cols${shaped && tab === 'tech' ? ' prop-wide' : ''}" style="margin-top:6px"><div class="dl-col-main">${card}</div><div class="dl-col-side">${can}${tl}</div></div>`;
   }
   const decidedWord = (p) => (p.status === 'executed' || String(p.status).startsWith('approved') ? 'Approved' : p.status === 'shadow' ? 'Shadow: not for approval' : p.status[0].toUpperCase() + p.status.slice(1));
+  UI.act('plan-jump', (b) => { const el = document.getElementById(b.dataset.l); if (el) el.scrollIntoView({ block: 'center' }); });
+  UI.act('prop-tab', (b) => { pv.tab[b.dataset.p] = b.dataset.v; UI.rerender(); });
   UI.act('p-approve', (b) => { const p = D.proposals.find((x) => x.id === b.dataset.p); UI.approve(p, b.dataset.d, () => { S.save(); UI.rerender(); }); });
 
   /* ---------- memory ---------- */

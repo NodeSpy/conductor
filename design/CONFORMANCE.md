@@ -15,7 +15,7 @@ It is the input to the brand designer's deviation review.
   distinct in hue and shape; one vocabulary everywhere (`design/brand/status/marks.js`).
 - **The Daylight brand book:** `system.html`, `tokens/tokens.css` (copied verbatim), `book/components.css`, `BRAND.md`.
 - **The logo:** Fermata, strengthened, only as the logo (no sunrise motif or other derivative anywhere).
-- **Home as it stands** (approved in review): the greeting and one-line summary, the four At a glance tiles, Needs you
+- **Home as it stands** (approved in review, then the greeting and its summary line removed in review): the four At a glance tiles, Needs you
   as plain-sentence items with one action each, Running now (at most three), the last 12 hours as a runs-per-hour strip
   with failures named, For your information, and Get started showing only what's left. Its patterns (one row anatomy,
   one action per item, quiet secondary panels, an aggregate plus its exceptions) are the model for every other screen.
@@ -52,12 +52,14 @@ Deliberate differences:
 
 Source: v2 `overview()` (Daylight), and Home as approved in review.
 
-Matches: the greeting and one sentence; Needs you as the mock's list (the mark, a plain title, why, the machine detail
+Matches: Needs you as the mock's list (the mark, a plain title, why, the machine detail
 last in mono, the age, one verb, Review primary for approvals); Running now; Last 12 hours (the figure, hour bars with
 failures stacked in the danger colour, the failures named); For your information.
 
 Deliberate differences:
-- **At a glance** tiles under the greeting (approved in review). The Running tile links to Activity filtered to running
+- **No greeting or summary sentence** (removed in review): they carried nothing the tiles and Needs you don't, and the
+  summary contradicted itself ("everything else is running normally" beside failed runs). The page opens on At a glance.
+- **At a glance** tiles at the top (approved in review). The Running tile links to Activity filtered to running
   and carries no list of names.
 - **Running now** shows at most three runs, longest-running first, then "+N more running →"; no step counts (the status
   rule); hidden when nothing runs.
@@ -164,7 +166,8 @@ Deliberate differences:
 
 Each uses only the brand book's components (cards, the status mark, labels, buttons, fields, tables, tabs) and the
 approved screens' patterns: one compact row per thing (its mark, name and kind, what it's doing or why it needs you, one
-action and a ⋯ menu), a page title with one sentence, quiet secondary panels, technical detail folded.
+action and a ⋯ menu), a page title (with a sentence only when it says something the rows don't), quiet secondary
+panels, technical detail folded.
 
 | Screen | What it follows | Prototype |
 |---|---|---|

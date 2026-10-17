@@ -37,13 +37,35 @@ test('deny with a reason: the reason reaches the bot', async ({ page }) => {
   expect(await page.evaluate(() => D.chats['billing-sre'].slice(-1)[0].text)).toContain('post it to #finance');
 });
 
-test('terraform: plain-language summary first, hashes under a disclosure; event requester explained', async ({ page }) => {
+test('terraform: the plan decides it, so Overview | Technical details; the colorized plan full width; the decision pinned on both tabs', async ({ page }) => {
   await go(page, '#/bots/platform-sre/proposals/p12', { fresh: true });
   await expect(page.locator('.dl-ptitle')).toHaveText('Replace the production web server');
   await expect(page.locator('.dl-origin')).toContainText('Started by an event');
   await expect(page.locator('.dl-changes')).toContainText('Replaces');
-  await expect(page.locator('details.dl-tech-d')).toContainText('Plan sha256');
-  await expect(page.locator('details.dl-tech-d dd.mono').first()).toBeHidden();
+  await expect(page.locator('.prop-tabs [data-v]')).toHaveText(['Overview', 'Technical details']);
+  const bar = page.locator('.dl-proposal .prop-decide');
+  await expect(bar.locator('[data-d="approve"]')).toBeVisible();
+  expect(await bar.evaluate((el) => getComputedStyle(el).position)).toBe('sticky');
+  await page.locator('[data-act="prop-tab"][data-v="tech"]').click();
+  await expect(page.locator('.prop-tech-facts')).toContainText('Plan sha256');
+  await expect(page.locator('.prop-tech-facts')).toContainText('terraform apply');
+  // the plan in Terraform's conventions: the replace line strongest, updates amber, symbols kept
+  await expect(page.locator('.prop-plan .pl-replace', { hasText: /[-+]\/[-+]/ }).first()).toBeVisible();
+  await expect(page.locator('.prop-plan .pl-update').first()).toContainText('~');
+  await expect(page.locator('.prop-plan .pl-kaa').first()).toHaveText('(known after apply)');
+  await expect(page.locator('.plan-jump')).toContainText('Replaced');
+  await expect(page.locator('.dl-cols.prop-wide')).toHaveCount(1); // the details take the full width
+  await expect(bar.locator('[data-d="approve"]')).toBeVisible(); // and the decision is still there
+});
+
+test('a simple action: what runs is on the Overview; the rest is a collapsed disclosure, no tabs; inline ids flow in the sentence', async ({ page }) => {
+  await go(page, '#/bots/billing-sre/proposals/p4', { fresh: true });
+  await expect(page.locator('.prop-tabs')).toHaveCount(0);
+  await expect(page.locator('.dl-proposal .payload')).toBeVisible();
+  await expect(page.locator('details.dl-tech-d')).not.toHaveAttribute('open', '');
+  await expect(page.locator('.dl-proposal .prop-decide [data-d="approve"]')).toBeVisible();
+  // the requester sentence is one line of text, the inline id inside it
+  expect(await page.locator('.dl-origin').evaluate((el) => getComputedStyle(el).display)).toBe('block');
 });
 
 test('phone: opened from Approvals, Approve is in thumb reach and the tab stays highlighted', async ({ page }) => {
@@ -51,7 +73,7 @@ test('phone: opened from Approvals, Approve is in thumb reach and the tab stays 
   await go(page, '#/attention', { fresh: true });
   await page.locator('a[href="#/bots/platform-sre/proposals/p12"]').first().click();
   await expect(page.locator('.dl-ptitle')).toBeVisible();
-  const box = await page.locator('.dl-decide [data-d="approve"]').boundingBox();
+  const box = await page.locator('.prop-decide [data-d="approve"]').boundingBox();
   expect(box.y + box.height).toBeLessThanOrEqual(844);
   await expect(page.locator('#tabbar [data-nav="attention"]')).toHaveClass(/on/);
   await expect(page.locator('.dl-crumbs a').last()).toBeVisible();

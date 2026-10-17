@@ -74,6 +74,13 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Done (commits on this branch, newest first)
 
+- **Header sentences earn their place** (from review: the Overview's greeting and summary were "useless info"): Home
+  opens on At a glance and Needs you; the count-and-health sentence under the title is gone from Activity, Needs you,
+  Workflows, Bots, Browsers, Logins, Packs, Connectors, Logs and Updates (the rows say it). Kept where the sentence says
+  something the page doesn't: Config (nothing applies until you review it), Secrets (write-only; an unreachable vault's
+  consequence), Env (plain-text secrets), Access (who and from where), pack overrides, a run's story, a bot's role, and
+  the one-line definitions of workflow, bot and pack. Generated titles (a run's, a case's) moved to the sans. The Env
+  Export button the export removal missed is gone.
 - **Reset to the approved designs** (the approved designs are the spec; `design/CONFORMANCE.md` maps every screen to
   its source with the mock beside the prototype). Daylight's v2 mocks for the shell, Home, the run page, the bot page
   and approval, run history and the builder; the chosen status column (D's grouping with A's margin marks, every row

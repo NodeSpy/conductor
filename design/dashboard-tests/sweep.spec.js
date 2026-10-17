@@ -4,7 +4,8 @@
 //   - content spilling outside its card (a button past the card's right edge);
 //   - extreme wrapping (a phrase squeezed to one word per line in a column far too narrow for it);
 //   - list content centred by accident (a row's text starting mid-row) and rows blown up to many times their content;
-//   - a dropped interpolation: an unknown element in the DOM (`<name>` read as a tag) or an empty gap before a full stop.
+//   - a dropped interpolation: an unknown element in the DOM (`<name>` read as a tag) or an empty gap before a full stop;
+//   - a sentence split into columns (inline code or a chip inside a flex box turns each piece of text into a column).
 const { test, expect, go } = require('./fixtures');
 const { ROUTES } = require('./routes');
 
@@ -47,6 +48,9 @@ const audit = () => {
     if (r.width > 320 && fr.left - r.left > r.width * 0.4) out.push(`row content starts mid-row: ${label(row)}`);
     // a knowledge proposal row shows the text it proposes, so it may be tall
     if (r.height > 220 && !row.matches('.kprop') && !row.querySelector('details[open], .open, textarea, .diff, pre, .hist-diff, .sec-detail')) out.push(`row height blown up: ${label(row)} (${Math.round(r.height)}px)`); });
+  // a sentence broken into columns: text on both sides of an inline chip or code inside a flex or grid box
+  document.querySelectorAll('#main *, .modal *').forEach((el) => { const d = getComputedStyle(el).display; if (!/flex|grid/.test(d) || el.closest('svg')) return; if (!vis(el)) return;
+    const texts = [...el.childNodes].filter((n) => n.nodeType === 3 && n.textContent.trim().length > 1); if (texts.length >= 2) out.push(`a sentence split into columns: ${label(el)}`); });
   // dropped interpolations: an element the browser doesn't know (an unescaped <name>), or a gap before punctuation
   const known = /^(a|abbr|article|aside|b|blockquote|br|button|code|dd|del|details|dfn|div|dl|dt|em|fieldset|figure|footer|form|h[1-6]|header|hr|i|img|input|ins|kbd|label|legend|li|main|mark|nav|ol|optgroup|option|p|pre|s|section|select|small|span|strong|sub|summary|sup|table|tbody|td|textarea|tfoot|th|thead|time|tr|u|ul|var|svg|path|circle|rect|line|polyline|polygon|g|text|tspan|title|defs|use|ellipse|lineargradient|stop|clippath|mask|pattern|foreignobject|template|script|style|iframe|canvas|picture|source|video|audio|output|progress|meter|dialog|wbr|q|cite|data|address|caption|col|colgroup|map|area|noscript|search|datalist|marker)$/i;
   document.querySelectorAll('#main *, .modal *').forEach((el) => { if (!known.test(el.tagName)) out.push(`unknown element <${el.tagName.toLowerCase()}> (an unescaped placeholder?) in ${label(el.parentElement)}`); });
