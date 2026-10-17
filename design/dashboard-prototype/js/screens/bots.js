@@ -649,8 +649,9 @@
   UI.act('df-reset', () => { dv.name = null; UI.rerender(); });
   UI.act('df-review', () => {
     const isNew = dv.name === '$new', name = isNew ? dv.newName : dv.name;
-    if (isNew && !/^[a-z][a-z0-9-]*$/.test(name || '')) { UI.toast('Name the bot first', 'lowercase letters, digits and dashes', 'fail'); return; }
-    if (isNew && M(name)) { UI.toast('A bot by that name exists', '', 'fail'); return; }
+    const nameErr = (msg) => { const f = document.getElementById('f-df__name'), fld = f && f.closest('.field'); if (!fld) { UI.toast(msg, '', 'fail'); return; } fld.classList.add('bad'); let e = fld.querySelector('.ferr'); if (!e) { e = document.createElement('div'); e.className = 'ferr'; e.setAttribute('role', 'alert'); fld.appendChild(e); } e.textContent = msg; f.focus(); };
+    if (isNew && !/^[a-z][a-z0-9-]*$/.test(name || '')) return nameErr('Name the bot first: lowercase letters, digits and dashes.');
+    if (isNew && M(name)) return nameErr('A bot by that name exists.');
     if (!dv.draft.charter_file) dv.draft.charter_file = `bots/${name}.md`;
     D.charters[name] = dv.charter; const ch = S.stage('bots', name, dv.draft);
     if (dv.back) { D.prefs.returnTo = { href: dv.back, label: dv.team ? `team ${dv.team}` : 'where you were' }; S.save(); }

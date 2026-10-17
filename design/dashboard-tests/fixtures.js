@@ -23,7 +23,9 @@ async function go(page, route, { fresh = false } = {}) {
   if (fresh) await page.evaluate(() => localStorage.removeItem('cd-proto-state-v4'));
   await page.goto('/index.html?r=' + Date.now() + route);
   await page.waitForSelector('#main > *');
-  await page.waitForTimeout(80);
+  // let the page's entrance animation settle, so drags and positions are measured on a still page
+  await page.waitForFunction(() => document.getAnimations().filter((a) => a.playState === 'running' && a.effect && a.effect.target && a.effect.target.closest && a.effect.target.closest('.page')).every((a) => a.effect.getComputedTiming().iterations !== 1 || (a.currentTime || 0) >= 400), null, { timeout: 2000 }).catch(() => {});
+  await page.waitForTimeout(40);
 }
 const isPhone = (page) => page.viewportSize().width <= 720;
 /** Complete the staged-change pipeline: wait for checks, ack widening, sign if it widens, wait for commit. */

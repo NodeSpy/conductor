@@ -383,7 +383,7 @@ details.env-tech:not(.panel) > summary { font-size: 12px; color: var(--ink-2); }
 /* bulk selection */
 th.sel, td.sel { width: 30px; padding-right: 0 !important; }
 .bulk-bar { position: sticky; bottom: 10px; z-index: 6; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; padding: 10px 12px; background: var(--bg-3); border: 1px solid var(--line-2); border-radius: var(--r); box-shadow: var(--elev-pop); }
-@media (max-width: 720px) { .tbl.responsive td.sel { position: absolute; right: 8px; } .tbl.responsive tr { position: relative; } }
+@media (max-width: 720px) { .tbl.responsive td.sel { position: absolute; right: 6px; top: 6px; width: auto !important; padding: 4px !important; display: block; } .tbl.responsive td.sel::before { content: none; } .tbl.responsive tr { position: relative; } }
 
 /* density: compact = one-line rows (~28px) */
 [data-density="compact"] .tbl td, [data-density="compact"] .tbl th { padding-top: 4px; padding-bottom: 4px; }
@@ -407,3 +407,4 @@ th.sel, td.sel { width: 30px; padding-right: 0 !important; }
 /* builder polish: the YAML pane fills the column; parallel branch cards show two lines instead of "def…" */
 .side-body .yaml-wrap .ced, .side-body .yaml-wrap .ced-ta { min-height: calc(var(--dvh) - var(--strip-h) - 170px); }
 .par-lanes .sc-sum, .par-lanes .sc-title b { white-space: normal; overflow: visible; text-overflow: clip; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
+@media (max-width: 720px) { .tbl.responsive tr:has(> td.sel) > td:nth-child(2) { padding-right: 40px !important; } }

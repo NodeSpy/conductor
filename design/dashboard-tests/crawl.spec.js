@@ -122,7 +122,8 @@ async function crawlRoute(page, testInfo, route, { afterLoad } = {}) {
       const changed = after.url !== before.url || after.ls !== before.ls || after.theme !== before.theme || after.muts > 0 || downloads > dl0;
       if (!changed) { report.dead.push(`${item.sel} "${item.text}"${item.path.length ? ` (after ${item.path.join(' → ')})` : ''}`); continue; }
       if (after.url !== before.url || after.ls !== before.ls) dirty = true;
-      if (item.path.length < MAX_DEPTH && after.url === before.url) {
+      // a signed or confirmed action (#su-go, #cf-ok) changes the data and re-renders the page: its "children" are the page's own controls, already crawled
+      if (item.path.length < MAX_DEPTH && after.url === before.url && !/^#(su-go|cf-ok)$/.test(item.sel)) {
         const scope = after.overlay || null;
         await inject(page);
         const now = await page.evaluate(([s, c]) => window.__crawl.list(s, c), [scope, chrome]);
