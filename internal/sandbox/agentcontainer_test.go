@@ -493,3 +493,28 @@ func TestAgentContainerSystemDirBehindASymlink(t *testing.T) {
 		t.Errorf("the resolved form of a symlinked system dir bound in: %v", err)
 	}
 }
+
+// A flag-shaped value where the builder puts a name, an image, a label or an
+// env entry would be parsed by the engine as a flag: the final scan of the
+// argv refuses it, for the container and for its root seed run alike.
+func TestAgentContainerFlagShapedValuesRefused(t *testing.T) {
+	for name, mut := range map[string]func(*AgentContainer){
+		"image":     func(c *AgentContainer) { c.Image = "--privileged" },
+		"image -v":  func(c *AgentContainer) { c.Image = "-v=/:/host" },
+		"name":      func(c *AgentContainer) { c.Name = "--privileged" },
+		"label key": func(c *AgentContainer) { c.Labels["--privileged"] = "x" },
+		"env entry": func(c *AgentContainer) { c.Env = append(c.Env, "--privileged") },
+	} {
+		c := testContainer(t)
+		mut(&c)
+		if _, err := c.CreateArgs(); err == nil {
+			t.Errorf("create, a flag-shaped %s: accepted", name)
+		}
+		if name == "env entry" {
+			continue // the seed run carries no env
+		}
+		if _, err := c.SeedArgs(t.TempDir()); err == nil {
+			t.Errorf("seed, a flag-shaped %s: accepted", name)
+		}
+	}
+}

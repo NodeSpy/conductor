@@ -95,10 +95,22 @@ func (c AgentContainer) uidGid() (int, int, error) {
 	return uid, gid, nil
 }
 
+// checkNames refuses a missing engine, name or image, and a name or image an
+// engine would parse as a flag.
+func (c AgentContainer) checkNames() error {
+	if c.Engine == "" || c.Name == "" || c.Image == "" {
+		return fmt.Errorf("sandbox: an agent container needs an engine, a name and an image")
+	}
+	if strings.HasPrefix(c.Name, "-") || strings.HasPrefix(c.Image, "-") {
+		return fmt.Errorf("sandbox: agent container name %q or image %q starts with a dash", c.Name, c.Image)
+	}
+	return nil
+}
+
 // CreateArgs is the engine argv that creates the container (stopped).
 func (c AgentContainer) CreateArgs() ([]string, error) {
-	if c.Engine == "" || c.Name == "" || c.Image == "" {
-		return nil, fmt.Errorf("sandbox: an agent container needs an engine, a name and an image")
+	if err := c.checkNames(); err != nil {
+		return nil, err
 	}
 	if _, _, err := c.uidGid(); err != nil {
 		return nil, err
@@ -175,6 +187,9 @@ func (c AgentContainer) CreateArgs() ([]string, error) {
 // but the volume, the seed (read-only) and the helper, and only the
 // capabilities a copy-and-chown needs.
 func (c AgentContainer) SeedArgs(seed string) ([]string, error) {
+	if err := c.checkNames(); err != nil {
+		return nil, err
+	}
 	uid, gid, err := c.uidGid()
 	if err != nil {
 		return nil, err
