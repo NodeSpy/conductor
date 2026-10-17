@@ -472,3 +472,24 @@ func TestAgentContainerHomeSocketsAndSymlinkedSystemDirs(t *testing.T) {
 		t.Errorf("a symlink to /etc bound in: %v", err)
 	}
 }
+
+// A system directory that is itself a symlink (macOS's /etc → /private/etc)
+// is refused by the path it resolves to as well.
+func TestAgentContainerSystemDirBehindASymlink(t *testing.T) {
+	root := t.TempDir()
+	real, sys := filepath.Join(root, "private-etc"), filepath.Join(root, "etc")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, sys); err != nil {
+		t.Fatal(err)
+	}
+	saved := hostSystemDirs
+	hostSystemDirs = append([]string{sys}, saved...)
+	t.Cleanup(func() { hostSystemDirs = saved })
+	c := testContainer(t)
+	c.Mounts = append(c.Mounts, ContainerMount{Src: real, Dst: "/data"})
+	if _, err := c.CreateArgs(); err == nil || !strings.Contains(err.Error(), "system directory") {
+		t.Errorf("the resolved form of a symlinked system dir bound in: %v", err)
+	}
+}

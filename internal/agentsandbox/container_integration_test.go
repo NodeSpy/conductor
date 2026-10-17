@@ -325,7 +325,7 @@ func TestContainerPersistentIdentity(t *testing.T) {
 	root := c.Root
 	probe := staticBuild(t, root, "probe.test", "test", "-c", "-trimpath", ".")
 	mark := "tool-" + nonce(4)
-	a := containerPolicy(t, root, "member-a", true, probe)
+	a := containerPolicy(t, root, "bot-a", true, probe)
 	out, rel := runContainer(t, c, a, "AGENTSANDBOX_CPROBE=write-home", "PROBE_MARK="+mark)
 	rel()
 	checkProbe(t, out, "wrote to HOME")
@@ -336,9 +336,9 @@ func TestContainerPersistentIdentity(t *testing.T) {
 	// The daemon restarts: a new backend with the same daemon id, its
 	// container stopped meanwhile.
 	ctx := context.Background()
-	rows, _ := c.list(ctx, IdentityKey("member-a"))
+	rows, _ := c.list(ctx, IdentityKey("bot-a"))
 	if len(rows) != 1 {
-		t.Fatalf("member-a has %d containers, want 1", len(rows))
+		t.Fatalf("bot-a has %d containers, want 1", len(rows))
 	}
 	c.Close()
 	if _, err := c.Engine.Output(ctx, "stop", "--time", "1", rows[0].Name); err != nil {
@@ -353,12 +353,12 @@ func TestContainerPersistentIdentity(t *testing.T) {
 	out, rel = runContainer(t, c2, a, "AGENTSANDBOX_CPROBE=read-home", "PROBE_MARK="+mark)
 	rel()
 	checkProbe(t, out, "HOME kept what an earlier launch installed")
-	if rows2, _ := c2.list(ctx, IdentityKey("member-a")); len(rows2) != 1 || rows2[0].Name != rows[0].Name {
+	if rows2, _ := c2.list(ctx, IdentityKey("bot-a")); len(rows2) != 1 || rows2[0].Name != rows[0].Name {
 		t.Errorf("the restart made another container: %v (was %v)", rows2, rows)
 	}
 
 	// Another identity: its own container and HOME.
-	b := containerPolicy(t, root, "member-b", true, probe)
+	b := containerPolicy(t, root, "bot-b", true, probe)
 	sockDir, _ := SocketDir("cct")
 	t.Cleanup(func() { os.RemoveAll(sockDir) })
 	sock := filepath.Join(sockDir, "c.sock")
@@ -367,34 +367,34 @@ func TestContainerPersistentIdentity(t *testing.T) {
 	out, rel = runContainer(t, c2, b, "AGENTSANDBOX_CPROBE=read-home", "PROBE_MARK="+mark)
 	rel()
 	if !strings.Contains(out, "FAIL HOME kept") {
-		t.Errorf("member-b sees member-a's HOME:\n%s", out)
+		t.Errorf("bot-b sees bot-a's HOME:\n%s", out)
 	}
 	b.Socket, b.Token = sock, "t"
 	out, rel = runContainer(t, c2, b, "AGENTSANDBOX_CPROBE=1", "PROBE_WS="+b.Workspace, "PROBE_OTHER_WS="+a.Workspace, "PROBE_TOKEN=t")
 	rel()
 	if !strings.Contains(out, "ok another identity's workspace absent") || !strings.Contains(out, "ok another identity's HOME absent") {
-		t.Errorf("member-b sees member-a:\n%s", out)
+		t.Errorf("bot-b sees bot-a:\n%s", out)
 	}
 
-	// Archive member-a: its container and volume are gone, member-b's stay.
-	removed, err := c2.Archive(ctx, "member-a")
+	// Archive bot-a: its container and volume are gone, bot-b's stay.
+	removed, err := c2.Archive(ctx, "bot-a")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(removed) != 2 {
 		t.Errorf("archive removed %v", removed)
 	}
-	if rows, _ := c2.list(ctx, IdentityKey("member-a")); len(rows) != 0 {
-		t.Errorf("member-a's container survived the archive: %v", rows)
+	if rows, _ := c2.list(ctx, IdentityKey("bot-a")); len(rows) != 0 {
+		t.Errorf("bot-a's container survived the archive: %v", rows)
 	}
-	if _, err := c2.Engine.Output(ctx, "volume", "inspect", c2.VolumeName("member-a")); err == nil {
-		t.Error("member-a's HOME volume survived the archive")
+	if _, err := c2.Engine.Output(ctx, "volume", "inspect", c2.VolumeName("bot-a")); err == nil {
+		t.Error("bot-a's HOME volume survived the archive")
 	}
-	if rows, _ := c2.list(ctx, IdentityKey("member-b")); len(rows) != 1 {
-		t.Errorf("member-b's container went with member-a's archive: %v", rows)
+	if rows, _ := c2.list(ctx, IdentityKey("bot-b")); len(rows) != 1 {
+		t.Errorf("bot-b's container went with bot-a's archive: %v", rows)
 	}
-	if _, err := c2.Engine.Output(ctx, "volume", "inspect", c2.VolumeName("member-b")); err != nil {
-		t.Error("member-b's HOME volume went with member-a's archive")
+	if _, err := c2.Engine.Output(ctx, "volume", "inspect", c2.VolumeName("bot-b")); err != nil {
+		t.Error("bot-b's HOME volume went with bot-a's archive")
 	}
 }
 
@@ -403,7 +403,7 @@ func TestContainerPersistentIdentity(t *testing.T) {
 func TestContainerLaunchEndsWithItsHost(t *testing.T) {
 	c, _ := containerHarness(t)
 	probe := staticBuild(t, c.Root, "probe.test", "test", "-c", "-trimpath", ".")
-	p := containerPolicy(t, c.Root, "member-k", true, probe)
+	p := containerPolicy(t, c.Root, "bot-k", true, probe)
 	p.Env = []string{"AGENTSANDBOX_CPROBE=sleep"}
 	rel, err := c.Prepare(context.Background(), &p)
 	if err != nil {
@@ -478,11 +478,13 @@ func TestContainerLaunchSeamRealEngine(t *testing.T) {
 	}
 	cmd := exec.Command(l.Argv[0], l.Argv[1:]...)
 	cmd.Dir, cmd.Env = l.Dir, l.Env
-	out, err := cmd.CombinedOutput()
+	var stderr strings.Builder
+	cmd.Stderr = &stderr // rootless podman's cgroup warnings, not the command's
+	out, err := cmd.Output()
 	l.Cleanup()
 	got := string(out)
 	if err != nil || !strings.HasPrefix(got, "conductor-agent\n") || strings.Contains(got, "\n0\n") || !strings.Contains(got, "No such file") {
-		t.Fatalf("launch: %v\n%s", err, got)
+		t.Fatalf("launch: %v\n%s\nstderr: %s", err, got, stderr.String())
 	}
 	if rows, _ := c.list(context.Background(), ""); len(rows) != 0 {
 		t.Errorf("the launch's container outlived it: %v", rows)

@@ -8,14 +8,32 @@ import (
 	"testing"
 )
 
-// fakeEngineBin puts an engine CLI named name on PATH that runs script.
+// The seam's shape is what other branches build against (the browser's
+// engine mirrors ResolveEngine and Ping, and moves onto them): a change here
+// is a change to them, so it breaks this build first.
+var (
+	_ func(context.Context, string) (*CLIEngine, error)                                = FindEngine
+	_ func(string, string, func(string) (string, error), []string) (*CLIEngine, error) = ResolveEngine
+	_ func(*CLIEngine, context.Context) error                                          = (*CLIEngine).Ping
+	_ func(*CLIEngine, context.Context) bool                                           = (*CLIEngine).Rootless
+	_ func() *Containers                                                               = DaemonContainers
+	_ func(*Containers, context.Context, LaunchSpec) (*Launch, error)                  = (*Containers).Launch
+)
+
+var (
+	_ = LaunchSpec{Identity: "", Workspace: "", Home: "", Container: Container{}, Egress: nil, Loopback: nil, Expose: nil, Env: nil, Argv: nil, Inherited: nil}
+	_ = Launch{Argv: nil, Env: nil, Dir: "", Cleanup: nil, Exposed: nil}
+)
+
+// fakeEngineBin makes PATH an engine CLI named name that runs script, and
+// nothing else (a runner's own podman or docker in /usr/bin is not found).
 func fakeEngineBin(t *testing.T, name, script string) {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+":/usr/bin:/bin")
+	t.Setenv("PATH", dir)
 }
 
 // FindEngine: an engine that is installed and answers — not one that is

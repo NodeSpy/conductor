@@ -451,10 +451,8 @@ func allowedBindSource(src string) error {
 		if fi, err := os.Stat(p); err == nil && fi.Mode()&os.ModeSocket != 0 {
 			return fmt.Errorf("sandbox: %s is a socket — no socket is ever mounted into an agent container", src)
 		}
-		for _, d := range hostSystemDirs {
-			if p == d {
-				return fmt.Errorf("sandbox: %s is a host system directory — never mounted into an agent container", src)
-			}
+		if isHostSystemDir(p) {
+			return fmt.Errorf("sandbox: %s is a host system directory — never mounted into an agent container", src)
 		}
 		for _, s := range EngineSocketPaths() {
 			if within(s, p) {
@@ -463,6 +461,21 @@ func allowedBindSource(src string) error {
 		}
 	}
 	return nil
+}
+
+// isHostSystemDir reports p is one of hostSystemDirs by its own path or by
+// the path it resolves to (macOS's /etc, /tmp and /var are symlinks into
+// /private).
+func isHostSystemDir(p string) bool {
+	for _, d := range hostSystemDirs {
+		if p == d {
+			return true
+		}
+		if r, err := filepath.EvalSymlinks(d); err == nil && p == r {
+			return true
+		}
+	}
+	return false
 }
 
 // within reports p == dir or p inside dir.
