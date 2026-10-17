@@ -162,6 +162,16 @@ func TestCredentialTestLogin(t *testing.T) {
 		t.Fatalf("wrong code: %+v", res)
 	}
 
+	// A sign-in page with nothing to fill: failed, with why (the sign-in
+	// itself errs — never read as signed in).
+	s.SetValue("stored", "otp", "otpauth://totp/Test?secret="+testSeed)
+	s.Update("stored", func(rec *LoginRecord) error { rec.LoginURL = r.bound + "/account"; return nil })
+	res = r.m.TestLogin(ctx, "stored")
+	if res.Status != TestFailed || !strings.Contains(res.Reason, "no sign-in field") {
+		t.Fatalf("nothing to fill: %+v", res)
+	}
+	s.Update("stored", func(rec *LoginRecord) error { rec.LoginURL = r.bound + "/login"; return nil })
+
 	// An approval nobody gives: needs-you.
 	s.SetValue("stored", "password", browsertest.Password)
 	s.ClearField("stored", "otp")
@@ -187,7 +197,7 @@ func TestCredentialTestLogin(t *testing.T) {
 		}
 	}
 	r.audit.mu.Unlock()
-	if n != 5 {
+	if n != 6 {
 		t.Fatalf("test-login audited %d times", n)
 	}
 	r.noLeak()
