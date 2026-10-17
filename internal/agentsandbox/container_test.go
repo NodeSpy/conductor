@@ -859,7 +859,8 @@ func TestContainersSeedFailure(t *testing.T) {
 }
 
 // A launch with no conductor socket or no token gets neither an endpoint
-// nor a token in its environment.
+// nor a token in its environment (with both, the real-engine probe reaches
+// the socket with its token: container_integration_test.go).
 func TestContainersNoSocketNoEndpoint(t *testing.T) {
 	e := newFakeEngine(t)
 	c := fakeContainers(t, e)
