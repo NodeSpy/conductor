@@ -48,10 +48,12 @@ CLIENT_ENV=()
 [ -n "${DOCKER_HOST:-}" ] && CLIENT_ENV+=("DOCKER_HOST=$DOCKER_HOST")
 # Rootless podman's store is under the user's HOME, and the daemon runs with
 # a temp one: name the runner's store, where this script builds the image.
+# (A rootless store is rootless_storage_path; graphroot is a rootful one's.)
 if [ "$ENGINE" = podman ]; then
-  printf '[storage]\ndriver = "%s"\ngraphroot = "%s"\nrunroot = "%s"\n' \
-    "$(podman info --format '{{.Store.GraphDriverName}}')" "$(podman info --format '{{.Store.GraphRoot}}')" \
-    "$(podman info --format '{{.Store.RunRoot}}')" > "$W/storage.conf"
+  gr="$(podman info --format '{{.Store.GraphRoot}}')"
+  printf '[storage]\ndriver = "%s"\ngraphroot = "%s"\nrunroot = "%s"\nrootless_storage_path = "%s"\n' \
+    "$(podman info --format '{{.Store.GraphDriverName}}')" "$gr" "$(podman info --format '{{.Store.RunRoot}}')" "$gr" > "$W/storage.conf"
+  echo "the daemon's podman store: $gr"
   CLIENT_ENV+=("CONTAINERS_STORAGE_CONF=$W/storage.conf")
 fi
 DPATH="$W/bin:$EXTRA_PATH:$ENGINE_DIR:/usr/bin:/bin:/usr/sbin:/sbin"

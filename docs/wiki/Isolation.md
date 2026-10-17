@@ -245,7 +245,8 @@ it at start; an engine that comes up later is picked up.
 The engine client runs with the daemon's own `HOME` and `XDG_RUNTIME_DIR`
 (and any `DOCKER_*`/`CONTAINERS_*`/`PODMAN_*` variables): rootless podman
 keeps its images under `HOME`, so a daemon started with another `HOME` sees
-another image store — set `CONTAINERS_STORAGE_CONF` to name yours.
+another image store — point `CONTAINERS_STORAGE_CONF` at a `storage.conf`
+whose `rootless_storage_path` is yours.
 
 **Limits of the container backend.**
 
