@@ -41,7 +41,7 @@ func loginRig(t *testing.T) (call func(cmd string, q browserLoginReq) controlRes
 	var a []map[string]any
 	m = &browser.Manager{StateDir: filepath.Join(dir, "browser"), Store: &browser.LoginStore{Dir: filepath.Join(dir, "browser")},
 		Settings: func() browser.Settings { return browserSettings(cfg) },
-		Audit: func(e map[string]any) { a = append(a, e) }}
+		Audit:    func(e map[string]any) { a = append(a, e) }}
 	browserMgr.Store(m)
 	t.Cleanup(func() { browserMgr.Store(nil); browserCfg.Store(nil) })
 	vaults.Reset()

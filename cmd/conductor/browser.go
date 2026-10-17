@@ -36,9 +36,15 @@ var (
 )
 
 // requesterFor is who asked for a session's work, as the browser sees it:
-// the token's own requester. Members (#178) replace it with their case
-// provenance (the member gate's requester class, read at every action).
+// the token's own requester. Bots (#178, internal/bot) replace it with
+// their case provenance — the bot gate's requester class ("operator", or
+// "bot:<name>" for a bot's own initiative, …), read at every action.
 var requesterFor = func(id skill.Identity) string { return id.Requester }
+
+// groupsFor is the bots and teams a session acts for ("bot:<name>",
+// "team:<name>"): a login bound to one of them is bound to the session.
+// None until bots (#178) wire it.
+var groupsFor = func(id skill.Identity) []string { return nil }
 
 // browserSettings resolves the browser: section.
 func browserSettings(cfg *config.Config) browser.Settings {
@@ -188,7 +194,7 @@ func wireBrowser(ctx context.Context, cfg *config.Config, notifier *notify.Notif
 // (bound into the token at mint, else its dispatch's registered workspace),
 // its provenance, and a session of its own.
 func browserCaller(token string, id skill.Identity) (browser.Principal, error) {
-	c := browser.Principal{Key: browser.SessionKey(token), Agent: id.Agent, Repo: id.Repo, Dispatch: id.Dispatch, Requester: requesterFor(id)}
+	c := browser.Principal{Key: browser.SessionKey(token), Agent: id.Agent, Repo: id.Repo, Dispatch: id.Dispatch, Requester: requesterFor(id), Groups: groupsFor(id)}
 	switch {
 	case id.Sandbox != nil:
 		c.Identity, c.Workspace, c.Egress, c.Deny = id.Sandbox.Identity, id.Sandbox.Workspace, id.Sandbox.Egress, id.Sandbox.Deny
