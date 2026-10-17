@@ -1,0 +1,74 @@
+v2: the tokens.json categorical palette (8 slots, fixed order) validated against each direction's chart surface with the dataviz skill's validate_palette.js.
+Lanes in Score and bars in Daylight/Broadsheet encode status only (ok runs in neutral ink), so they need no categorical colour.
+## daylight light (#fffdf9)
+
+Palette (light, surface #fffdf9, categorical): 8 slots
+  [PASS] Lightness band         all 8 inside L 0.43–0.77
+  [PASS] Chroma floor           all 8 >= 0.1
+  [PASS] CVD separation         worst adjacent #d42e54↔#0684b1 ΔE 16.5 (deutan) · tritan 8.7
+  [PASS] Normal-vision floor    worst adjacent #1c5db7↔#088c81 ΔE 18.1 (normal)
+  [PASS] Contrast vs surface    all 8 >= 3:1
+
+  → ALL CHECKS PASS  (CVD in the 6–8 floor band is legal ONLY with secondary encoding: direct labels, gaps, or texture)
+  scope: categorical palettes only. For a lone status/text color check WCAG text contrast; for a sequential ramp, lightness monotonicity.
+
+## broadsheet light (#fbfaf7)
+
+Palette (light, surface #fbfaf7, categorical): 8 slots
+  [PASS] Lightness band         all 8 inside L 0.43–0.77
+  [PASS] Chroma floor           all 8 >= 0.1
+  [PASS] CVD separation         worst adjacent #d42e54↔#0684b1 ΔE 16.5 (deutan) · tritan 8.7
+  [PASS] Normal-vision floor    worst adjacent #1c5db7↔#088c81 ΔE 18.1 (normal)
+  [PASS] Contrast vs surface    all 8 >= 3:1
+
+  → ALL CHECKS PASS  (CVD in the 6–8 floor band is legal ONLY with secondary encoding: direct labels, gaps, or texture)
+  scope: categorical palettes only. For a lone status/text color check WCAG text contrast; for a sequential ramp, lightness monotonicity.
+
+## score light (#ffffff)
+
+Palette (light, surface #ffffff, categorical): 8 slots
+  [PASS] Lightness band         all 8 inside L 0.43–0.77
+  [PASS] Chroma floor           all 8 >= 0.1
+  [PASS] CVD separation         worst adjacent #d42e54↔#0684b1 ΔE 16.5 (deutan) · tritan 8.7
+  [PASS] Normal-vision floor    worst adjacent #1c5db7↔#088c81 ΔE 18.1 (normal)
+  [PASS] Contrast vs surface    all 8 >= 3:1
+
+  → ALL CHECKS PASS  (CVD in the 6–8 floor band is legal ONLY with secondary encoding: direct labels, gaps, or texture)
+  scope: categorical palettes only. For a lone status/text color check WCAG text contrast; for a sequential ramp, lightness monotonicity.
+
+## daylight dark (#26211c)
+
+Palette (dark, surface #26211c, categorical): 8 slots
+  [PASS] Lightness band         all 8 inside L 0.48–0.67
+  [PASS] Chroma floor           all 8 >= 0.1
+  [PASS] CVD separation         worst adjacent #d861aa↔#059149 ΔE 12.8 (deutan) · tritan 9.1
+  [PASS] Normal-vision floor    worst adjacent #4a91f8↔#088c81 ΔE 18.9 (normal)
+  [PASS] Contrast vs surface    all 8 >= 3:1
+
+  → ALL CHECKS PASS  (CVD in the 6–8 floor band is legal ONLY with secondary encoding: direct labels, gaps, or texture)
+  scope: categorical palettes only. For a lone status/text color check WCAG text contrast; for a sequential ramp, lightness monotonicity.
+
+## broadsheet dark (#11141a)
+
+Palette (dark, surface #11141a, categorical): 8 slots
+  [PASS] Lightness band         all 8 inside L 0.48–0.67
+  [PASS] Chroma floor           all 8 >= 0.1
+  [PASS] CVD separation         worst adjacent #d861aa↔#059149 ΔE 12.8 (deutan) · tritan 9.1
+  [PASS] Normal-vision floor    worst adjacent #4a91f8↔#088c81 ΔE 18.9 (normal)
+  [PASS] Contrast vs surface    all 8 >= 3:1
+
+  → ALL CHECKS PASS  (CVD in the 6–8 floor band is legal ONLY with secondary encoding: direct labels, gaps, or texture)
+  scope: categorical palettes only. For a lone status/text color check WCAG text contrast; for a sequential ramp, lightness monotonicity.
+
+## score dark (#1d1c36)
+
+Palette (dark, surface #1d1c36, categorical): 8 slots
+  [PASS] Lightness band         all 8 inside L 0.48–0.67
+  [PASS] Chroma floor           all 8 >= 0.1
+  [PASS] CVD separation         worst adjacent #d861aa↔#059149 ΔE 12.8 (deutan) · tritan 9.1
+  [PASS] Normal-vision floor    worst adjacent #4a91f8↔#088c81 ΔE 18.9 (normal)
+  [PASS] Contrast vs surface    all 8 >= 3:1
+
+  → ALL CHECKS PASS  (CVD in the 6–8 floor band is legal ONLY with secondary encoding: direct labels, gaps, or texture)
+  scope: categorical palettes only. For a lone status/text color check WCAG text contrast; for a sequential ramp, lightness monotonicity.
+

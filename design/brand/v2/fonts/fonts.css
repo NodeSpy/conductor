@@ -1,0 +1,10 @@
+/* Direction fonts for directions-v2 (all SIL OFL 1.1, latin subsets via Fontsource; licences in OFL-*.txt). */
+@font-face { font-family: 'Atkinson Hyperlegible Next'; font-weight: 200 800; font-display: swap; src: url(AtkinsonNext.woff2) format('woff2'); }
+@font-face { font-family: 'Atkinson Hyperlegible Mono'; font-weight: 200 800; font-display: swap; src: url(AtkinsonMono.woff2) format('woff2'); }
+@font-face { font-family: 'Fraunces'; font-weight: 100 900; font-display: swap; src: url(Fraunces.woff2) format('woff2'); }
+@font-face { font-family: 'Archivo'; font-weight: 100 900; font-display: swap; src: url(Archivo.woff2) format('woff2'); }
+@font-face { font-family: 'Newsreader'; font-style: italic; font-weight: 200 800; font-display: swap; src: url(Newsreader-italic.woff2) format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-weight: 100 800; font-display: swap; src: url(JetBrainsMono.woff2) format('woff2'); }
+@font-face { font-family: 'Bricolage Grotesque'; font-weight: 200 800; font-display: swap; src: url(Bricolage.woff2) format('woff2'); }
+@font-face { font-family: 'Figtree'; font-weight: 300 900; font-display: swap; src: url(Figtree.woff2) format('woff2'); }
+@font-face { font-family: 'Geist Mono'; font-weight: 100 900; font-display: swap; src: url(GeistMono.woff2) format('woff2'); }
