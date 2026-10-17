@@ -54,7 +54,7 @@ type Container struct {
 	// launch ends (Go duration; "" = the backend's default).
 	IdleStop string `json:"idle_stop,omitempty"`
 	// Attach runs the launch in another identity's persistent container (a
-	// member's), which must already exist and show the launch's workspace.
+	// bot's), which must already exist and show the launch's workspace.
 	Attach string `json:"attach,omitempty"`
 	// Session is the prepared launch (the daemon fills it in): where and
 	// as whom to exec, and the per-launch env.
@@ -953,7 +953,7 @@ func (c *Containers) signal(s *ContainerSession, sig string) {
 }
 
 // Archive removes identity's containers and HOME volume: the identity (a
-// member) is gone. Its running launches end with it.
+// bot) is gone. Its running launches end with it.
 func (c *Containers) Archive(ctx context.Context, identity string) (removed []string, err error) {
 	if c == nil {
 		return nil, errors.New("agentsandbox: no container backend")

@@ -279,7 +279,7 @@ func TestContainersPersistentReuse(t *testing.T) {
 	e := newFakeEngine(t)
 	c := fakeContainers(t, e)
 	c.IdleStop = 50 * time.Millisecond
-	p := fakePolicy(t, "member:alice", true)
+	p := fakePolicy(t, "bot:alice", true)
 	rel1, err := c.Prepare(context.Background(), &p)
 	if err != nil {
 		t.Fatal(err)
@@ -297,7 +297,7 @@ func TestContainersPersistentReuse(t *testing.T) {
 	if len(e.ran("volume", "create")) != 1 || len(e.ran("run")) != 1 {
 		t.Errorf("volume created %d, seeded %d — want once each", len(e.ran("volume", "create")), len(e.ran("run")))
 	}
-	vol := c.VolumeName("member:alice")
+	vol := c.VolumeName("bot:alice")
 	if l := e.volumes[vol]; l[LabelDaemon] != "d1" || l["conductor.test"] != "unit" {
 		t.Errorf("volume labels %v", l)
 	}
@@ -331,7 +331,7 @@ func TestContainersPersistentReuse(t *testing.T) {
 		t.Error("the HOME volume went with the stop")
 	}
 	// The next launch starts it again, same container.
-	p3 := fakePolicy(t, "member:alice", true)
+	p3 := fakePolicy(t, "bot:alice", true)
 	p3.Workspace, p3.Home = p.Workspace, p.Home
 	rel3, err := c.Prepare(context.Background(), &p3)
 	if err != nil {
@@ -371,7 +371,7 @@ func checkSeed(args []string) error {
 func TestContainersSpecChange(t *testing.T) {
 	e := newFakeEngine(t)
 	c := fakeContainers(t, e)
-	p := fakePolicy(t, "member:bob", true)
+	p := fakePolicy(t, "bot:bob", true)
 	rel, err := c.Prepare(context.Background(), &p)
 	if err != nil {
 		t.Fatal(err)
@@ -416,42 +416,42 @@ func TestContainersSpecChange(t *testing.T) {
 func TestContainersArchive(t *testing.T) {
 	e := newFakeEngine(t)
 	c := fakeContainers(t, e)
-	pa := fakePolicy(t, "member:alice", true)
+	pa := fakePolicy(t, "bot:alice", true)
 	ra, err := c.Prepare(context.Background(), &pa)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ra()
-	pb := fakePolicy(t, "member:bob", true)
+	pb := fakePolicy(t, "bot:bob", true)
 	rb, err := c.Prepare(context.Background(), &pb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rb()
 	// Another daemon's container for the same identity key, and a stranger.
-	e.containers["conductor-other-alice"] = &fakeContainer{state: "running", labels: map[string]string{LabelSandbox: "agent", LabelDaemon: "d2", LabelIdentity: IdentityKey("member:alice"), "conductor.test": "unit"}}
+	e.containers["conductor-other-alice"] = &fakeContainer{state: "running", labels: map[string]string{LabelSandbox: "agent", LabelDaemon: "d2", LabelIdentity: IdentityKey("bot:alice"), "conductor.test": "unit"}}
 	e.containers["someone-elses"] = &fakeContainer{state: "running", labels: map[string]string{}}
-	removed, err := c.Archive(context.Background(), "member:alice")
+	removed, err := c.Archive(context.Background(), "bot:alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(removed) != 2 || !strings.HasPrefix(removed[0], "container ") || removed[1] != "volume "+c.VolumeName("member:alice") {
+	if len(removed) != 2 || !strings.HasPrefix(removed[0], "container ") || removed[1] != "volume "+c.VolumeName("bot:alice") {
 		t.Errorf("removed %v", removed)
 	}
 	if e.stateOf(pa.Container.Session.Name) != "" {
 		t.Error("alice's container survived")
 	}
-	if _, ok := e.volumes[c.VolumeName("member:alice")]; ok {
+	if _, ok := e.volumes[c.VolumeName("bot:alice")]; ok {
 		t.Error("alice's volume survived")
 	}
-	if e.stateOf(pb.Container.Session.Name) != "running" || e.volumes[c.VolumeName("member:bob")] == nil {
+	if e.stateOf(pb.Container.Session.Name) != "running" || e.volumes[c.VolumeName("bot:bob")] == nil {
 		t.Error("bob's container or volume went with alice's archive")
 	}
 	if e.stateOf("conductor-other-alice") == "" || e.stateOf("someone-elses") == "" {
 		t.Error("archive touched a container this daemon did not create")
 	}
 	// Nothing left: nothing removed, no error.
-	if removed, err := c.Archive(context.Background(), "member:alice"); err != nil || len(removed) != 0 {
+	if removed, err := c.Archive(context.Background(), "bot:alice"); err != nil || len(removed) != 0 {
 		t.Errorf("second archive: %v %v", removed, err)
 	}
 }
@@ -472,8 +472,8 @@ func TestContainersReconcile(t *testing.T) {
 		return l
 	}
 	e.containers["stale"] = &fakeContainer{state: "running", labels: with(map[string]string{LabelPersistent: "false", LabelIdentity: "a"})}
-	e.containers["member"] = &fakeContainer{state: "running", labels: with(map[string]string{LabelPersistent: "true", LabelIdentity: "m"})}
-	e.containers["member-stopped"] = &fakeContainer{state: "exited", labels: with(map[string]string{LabelPersistent: "true", LabelIdentity: "n"})}
+	e.containers["bot"] = &fakeContainer{state: "running", labels: with(map[string]string{LabelPersistent: "true", LabelIdentity: "m"})}
+	e.containers["bot-stopped"] = &fakeContainer{state: "exited", labels: with(map[string]string{LabelPersistent: "true", LabelIdentity: "n"})}
 	e.containers["other-daemon"] = &fakeContainer{state: "running", labels: map[string]string{LabelSandbox: "agent", LabelDaemon: "d2", LabelPersistent: "false", "conductor.test": "unit"}}
 	c := fakeContainers(t, e)
 	c.IdleStop = 50 * time.Millisecond
@@ -483,11 +483,11 @@ func TestContainersReconcile(t *testing.T) {
 	if e.stateOf("stale") != "" {
 		t.Errorf("a dead daemon's per-launch container survived (engine calls: %q)", e.cmds)
 	}
-	if e.stateOf("other-daemon") == "" || e.stateOf("member-stopped") != "exited" {
+	if e.stateOf("other-daemon") == "" || e.stateOf("bot-stopped") != "exited" {
 		t.Error("reconcile touched what it should not")
 	}
 	deadline := time.Now().Add(3 * time.Second)
-	for e.stateOf("member") != "exited" {
+	for e.stateOf("bot") != "exited" {
 		if time.Now().After(deadline) {
 			t.Fatal("a running persistent container got no idle stop")
 		}
@@ -654,39 +654,39 @@ func readLine(t *testing.T, netw, addr string) string {
 	return strings.TrimSpace(string(b))
 }
 
-// A worker attaches to a member's container only when it exists and shows
+// A worker attaches to a bot's container only when it exists and shows
 // the worker's workspace.
 func TestContainersAttach(t *testing.T) {
 	e := newFakeEngine(t)
 	c := fakeContainers(t, e)
 	worker := fakePolicy(t, "agent:w", false)
-	worker.Container = &Container{Attach: "member:m"}
-	if _, err := c.Prepare(context.Background(), &worker); err == nil || !strings.Contains(err.Error(), "no container of member:m") {
+	worker.Container = &Container{Attach: "bot:m"}
+	if _, err := c.Prepare(context.Background(), &worker); err == nil || !strings.Contains(err.Error(), "no container of bot:m") {
 		t.Errorf("attach to nothing: %v", err)
 	}
-	member := fakePolicy(t, "member:m", true)
-	rel, err := c.Prepare(context.Background(), &member)
+	bot := fakePolicy(t, "bot:m", true)
+	rel, err := c.Prepare(context.Background(), &bot)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rel()
 	if _, err := c.Prepare(context.Background(), &worker); err == nil || !strings.Contains(err.Error(), "does not show the workspace") {
-		t.Errorf("attach outside the member's workspace: %v", err)
+		t.Errorf("attach outside the bot's workspace: %v", err)
 	}
-	inside := filepath.Join(member.Workspace, "sub")
+	inside := filepath.Join(bot.Workspace, "sub")
 	_ = os.MkdirAll(inside, 0o755)
 	worker.Workspace = inside
-	worker.Container = &Container{Attach: "member:m"}
+	worker.Container = &Container{Attach: "bot:m"}
 	wrel, err := c.Prepare(context.Background(), &worker)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if worker.Container.Session.Name != member.Container.Session.Name || len(e.ran("create")) != 1 {
-		t.Error("the worker did not run in the member's container")
+	if worker.Container.Session.Name != bot.Container.Session.Name || len(e.ran("create")) != 1 {
+		t.Error("the worker did not run in the bot's container")
 	}
 	wrel()
-	if e.stateOf(member.Container.Session.Name) != "running" {
-		t.Error("the worker's end stopped the member's container")
+	if e.stateOf(bot.Container.Session.Name) != "running" {
+		t.Error("the worker's end stopped the bot's container")
 	}
 }
 
@@ -694,7 +694,7 @@ func TestContainersAttach(t *testing.T) {
 func TestContainersList(t *testing.T) {
 	e := newFakeEngine(t)
 	c := fakeContainers(t, e)
-	p := fakePolicy(t, "member:l", true)
+	p := fakePolicy(t, "bot:l", true)
 	rel, err := c.Prepare(context.Background(), &p)
 	if err != nil {
 		t.Fatal(err)
@@ -705,7 +705,7 @@ func TestContainersList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 1 || list[0].Identity != "member:l" || !list[0].Persistent || list[0].Launches != 1 || list[0].State != "running" {
+	if len(list) != 1 || list[0].Identity != "bot:l" || !list[0].Persistent || list[0].Launches != 1 || list[0].State != "running" {
 		t.Errorf("list %+v", list)
 	}
 }
@@ -789,12 +789,12 @@ func (cannedEngine) Start(...string) (io.Reader, io.WriteCloser, func() error, e
 // A container whose last fields are empty labels is still listed — even
 // when it is the last line (the output is split, never trimmed whole).
 func TestContainersListKeepsEmptyTrailingFields(t *testing.T) {
-	c := &Containers{Engine: cannedEngine{inspect: "/a\trunning\ts1\tka\ttrue\tmember:a\n/b\texited\t\tkb\tfalse\t\n"}, DaemonID: "d"}
+	c := &Containers{Engine: cannedEngine{inspect: "/a\trunning\ts1\tka\ttrue\tbot:a\n/b\texited\t\tkb\tfalse\t\n"}, DaemonID: "d"}
 	rows, err := c.list(context.Background(), "")
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("rows %+v %v", rows, err)
 	}
-	if rows[1].Name != "b" || rows[1].Persistent || rows[1].IdentityName != "kb" || rows[0].IdentityName != "member:a" || rows[0].Name != "a" {
+	if rows[1].Name != "b" || rows[1].Persistent || rows[1].IdentityName != "kb" || rows[0].IdentityName != "bot:a" || rows[0].Name != "a" {
 		t.Errorf("rows %+v", rows)
 	}
 }

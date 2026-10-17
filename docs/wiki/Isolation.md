@@ -138,7 +138,7 @@ runtimes:
         engine: podman                # default: rootless podman on Linux, Docker Desktop on macOS
         read_only: true               # the image read-only; HOME, /tmp, the workspace stay writable
         idle_stop: 30m                # stop it this long after its last launch
-        # attach: member:alice        # run in that identity's container instead (a member's worker)
+        # attach: bot:alice           # run in that identity's container instead (a bot's worker)
       limits: { memory: 4g, cpu: "2", pids: 1024 }
 sandbox:
   # backend: container    # every agent launch with no isolation: of its own — a
@@ -204,8 +204,9 @@ conductor sandbox ls                     # this daemon's agent containers and th
 conductor sandbox archive IDENTITY       # remove an identity's containers and HOME volume
 ```
 
-Archiving is what an identity's end does: a member's archive calls the same
-`Containers.Archive` (its running launches end with it).
+Archiving is what an identity's end does: `conductor sandbox archive`, or
+`Containers.Archive` from code (a bot's archive, once bots land, is that
+caller). Its running launches end with it.
 
 **What an agent can install, and what lasts.** The agent runs as a non-root
 user with no capabilities, so it cannot `apt-get` into the image. It installs

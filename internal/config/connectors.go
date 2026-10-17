@@ -490,7 +490,7 @@ type ContainerIsolation struct {
 	// sandbox.container.idle_stop, else 30m). It starts again on the next.
 	IdleStop string `yaml:"idle_stop,omitempty"`
 	// Attach (agents) runs the launch in another identity's persistent
-	// container — a member's — instead of one of its own. That container
+	// container — a bot's — instead of one of its own. That container
 	// must exist and show the launch's workspace.
 	Attach string `yaml:"attach,omitempty"`
 }

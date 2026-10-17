@@ -451,7 +451,7 @@ its `sandbox exec` gets the default policy for its own worktree.
 
 `isolation: {mode: container, image: …, persistent: true|false}` runs an
 agent in a container instead of the namespace/Seatbelt jail. With
-`persistent: true` an identity — a member, a dispatch's profile per
+`persistent: true` an identity — a bot, a dispatch's profile per
 repository, a directory — gets one long-lived container whose HOME is a named
 volume: what the agent installs there is there next session. It is opt-in:
 `mode: container` on a runtime/step/workflow/trigger (paseo's included), or
@@ -507,7 +507,7 @@ wiring, `sandbox ls|archive`), `images/agent` (conductor's agent image).
   the image id (a rebuilt tag is a new spec), mounts, user and limits, and a
   changed spec gets a new container once the old one is idle — same volume.
   Non-persistent: a container per launch, removed with it. `attach:` runs a
-  launch in another identity's persistent container (a member's), refused
+  launch in another identity's persistent container (a bot's), refused
   unless it shows the launch's workspace.
 - **Labels scope everything.** `conductor.sandbox=agent`,
   `conductor.daemon=<hash of the state root>`, the identity's key and name,
