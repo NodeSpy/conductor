@@ -141,6 +141,9 @@
     const key = JSON.stringify(P.map((c) => c.id));
     if (ap.checksFor !== key) { ap.checksFor = key; ap.phase = 'check'; ap.ack = false; }
     const before = S.configText(D), cand = S.candidate(), after = S.configText(cand), envB = S.envText(D), envA = S.envText(cand);
+    // conductor.lock.yaml: what `conductor init` would pin for added or changed packs
+    const lockOf = (st) => 'packs:\n' + (st.packs || []).map((p) => { const u = String((p.cfg || {}).use || ''); const src = u.split('@')[0], ver = u.split('@')[1] || p.ver || 'latest'; return `  ${p.name}:\n    source: ${src.replace(/^conductor-packs\//, 'NodeSpy/conductor-packs/')}\n    version: ${ver.replace(/^\^/, '')}${/^\.\//.test(src) ? '\n    local: true' : `\n    sha: ${(p.name.length * 2654435761 >>> 0).toString(16).slice(0, 8)}`}`; }).join('\n') + '\n';
+    const lockB = lockOf(D), lockA = lockOf(cand);
     const v = S.validate(), wid = S.widening();
     const dv = UI.diffView(before, after, ap.mode, { sections: true });
     const restoring = P.every((c) => /^restore /.test(c.summary));
@@ -168,6 +171,7 @@
               return `<div class="item" style="align-items:flex-start">${st(c.after == null ? 'fail' : c.before == null ? 'ok' : 'run', '')}<div class="grow"><div class="small"><b>${esc(c.summary)}</b></div><div class="mono tiny muted">${esc(C()[c.coll].path(c.key))} · ${c.after == null ? 'remove' : c.before == null ? 'add' : 'edit'} · staged ${ago(c.at)} ago</div>${w.map((x) => `<span class="tag" data-s="wait">${icon('warn')} widens: ${esc(x.text)}</span>`).join(' ')}</div>
                 <a class="btn sm ghost" href="${href}">${icon('edit')}Edit</a><button class="btn sm ghost" data-act="unstage" data-id="${c.id}" aria-label="Discard ${esc(c.summary)}">${icon('x')}Discard</button></div>`; }).join('')}</div></div>
             <div class="panel"><div class="panel-head"><h3>Diff</h3><span class="muted small">what will be written · +${dv.adds} −${dv.dels}</span><div class="tools">${UI.seg([['unified', 'unified'], ['split', 'split'], ['whole', 'whole file']], ap.mode, 'diff-mode')}</div></div><div class="panel-body tight">${dv.html}</div></div>
+            ${lockB !== lockA ? `<div class="panel lock-diff"><div class="panel-head"><h3 class="mono">conductor.lock.yaml</h3><span class="muted small">what conductor init fetches and pins, checked on the copy</span></div><div class="panel-body tight">${UI.diffView(lockB, lockA, ap.mode === 'split' ? 'split' : 'unified', { file: 'conductor.lock.yaml' }).html}</div></div>` : ''}
             ${envB !== envA ? `<div class="panel"><div class="panel-head"><h3 class="mono">conductor.env</h3><span class="muted small">daemon environment · backed up before writing · restart through the boot guard</span></div><div class="panel-body tight">${UI.diffView(envB, envA, ap.mode === 'split' ? 'split' : 'unified', { file: 'conductor.env' }).html}</div></div>` : ''}
           </div>
           <div class="stack">

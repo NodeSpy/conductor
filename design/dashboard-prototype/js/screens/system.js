@@ -15,7 +15,7 @@
     tab = tab || 'packs';
     const packs = `<div class="panel">${D.packs.map((p) => { const c = S.staged('packs', p.name) || p.cfg; return `<div class="list"><div class="item pack-row" style="padding:14px 16px;align-items:flex-start">
         <span class="sigil" style="--sig:${p.official ? 'var(--accent)' : 'var(--ink-3)'}">${p.name[0]}</span>
-        <div class="grow"><div class="row wrap" style="gap:6px"><b style="font-size:15px">${p.name}</b><span class="mono tiny muted">${esc(c.use)}</span>${p.official ? tag('official registry', 'ember') : tag('third party')}${c.hold ? tag('hold', 'wait') : ''}${stagedTag('packs', p.name)}</div>
+        <div class="grow"><div class="row wrap" style="gap:6px"><b style="font-size:15px">${p.name}</b><span class="mono tiny muted">${esc(c.use)}</span>${p.official ? tag('official registry', 'ember') : /^\.\//.test(c.use || '') ? tag('local · yours', 'ok') : tag('third party · pack_trust', 'wait')}${c.hold ? tag('hold', 'wait') : ''}${stagedTag('packs', p.name)}</div>
           <div class="row wrap small muted" style="gap:14px;margin-top:5px"><span class="mono">${p.ver} · ${p.sha}</span><span>${icon('live')} ${p.triggers}</span><span>${icon('edit')} ${Object.keys(c.steps || {}).length + Object.keys(c.triggers || {}).length} override${Object.keys(c.steps || {}).length + Object.keys(c.triggers || {}).length === 1 ? '' : 's'} in your config</span></div>
           ${p.status === 'wait' ? `<div class="callout warn small" style="margin-top:8px">Triggers are dormant: the pack needs a <span class="mono">pagerduty</span> connector and none is bound. <button class="link" data-act="pack-ov" data-p="${p.name}">Bind one</button></div>` : ''}</div>
         <div class="row wrap card-actions">${p.update && !(c.use || '').endsWith('@' + p.update) ? `<button class="btn sm primary" data-act="pack-plan" data-p="${p.name}" data-update="1">${icon('updates')}Update to ${p.update}</button>` : ''}<button class="btn sm" data-act="pack-plan" data-p="${p.name}">${icon('eye')}Plan</button><button class="btn sm" data-act="pack-ov" data-p="${p.name}">${icon('edit')}Overrides</button><button class="btn sm ghost" data-act="pack-hold" data-p="${p.name}">${c.hold ? 'Release hold' : 'Hold'}</button><button class="btn sm danger" data-act="pack-del" data-p="${p.name}" aria-label="Remove pack ${p.name}">${icon('trash')}</button></div></div></div>`; }).join('')}</div>
@@ -29,7 +29,7 @@
     return `<div class="page">
       ${UI.head('Packs &amp; plugins', { lede: `A ${UI.term('pack')} is a bundle of workflows someone else wrote, installed and updated as one unit. A ${UI.term('plugin')} teaches conductor a new service.`, actions: `<button class="btn" data-act="pack-add">${icon('link')}Add from a source…</button>` })}
       ${UI.tabs([['packs', 'Packs', '#/extensions/packs', D.packs.length], ['plugins', 'Plugins', '#/extensions/plugins', D.plugins.length], ['browse', 'Browse', '#/extensions/browse']], tab)}
-      ${tab === 'plugins' ? plugins : tab === 'browse' ? browse : packs}
+      ${tab === 'plugins' ? plugins : tab === 'browse' ? UI.catalogHTML(['pack', 'connector', 'runtime', 'engine'], 'browse') : packs}
       <div class="row small muted" style="margin-top:14px">${icon('updates')} Dependencies follow <span class="mono">update.deps</span> (${D.updateCfg.deps ? 'on' : 'off'}): a moved pack or plugin that still validates is applied on the ${D.updateCfg.interval} cycle.</div>
     </div>`;
   }, { nav: 'extensions' });
