@@ -69,6 +69,10 @@
   /** '3d 4h 12m' → '3 days': the rail's uptime, to the largest unit. */
   UI.upFor = (t) => { const m = String(t).match(/(\d+)\s*([dhm])/); if (!m) return t; const n = +m[1]; return `${n} ${{ d: 'day', h: 'hour', m: 'minute' }[m[2]]}${n === 1 ? '' : 's'}`; };
   UI.humanSpan = (t) => String(t).replace(/(\d+)\s*d\b/g, '$1 d').replace(/(\d+)\s*h\b/g, '$1 h').replace(/(\d+)\s*m\b/g, '$1 min').replace(/(\d+)\s*s\b/g, '$1 s');
+  /** Where an action lands, as a quiet word (no colour, no badge): production / staging / local. */
+  UI.envTag = (env) => (env ? UI.label(env[0].toUpperCase() + env.slice(1)) : '');
+  /** Labelled metadata (the labelled facts below, from items { label, value, mono }). */
+  UI.metaLine = (items) => UI.facts(items.filter(Boolean).map((x) => [x.label, x.mono ? `<span class="mono">${x.value}</span>` : x.value]));
   /** The labelled facts of a thing (the run page's Details card): label, then value; ids and times never bare. */
   UI.facts = (items) => `<dl class="dl-facts">${items.filter(Boolean).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
   /** A count beside a tab or nav item; hot (ember) only where a person is needed. */
@@ -426,7 +430,7 @@
   UI.seg = (items, value, act, extra = '') => `<div class="seg" role="group" ${extra}>${items.map(([v, l, dis]) => `<button type="button" data-v="${UI.esc(v)}" ${dis ? UI.off(dis) : `data-act="${act}"`} aria-pressed="${String(v) === String(value)}" class="${String(v) === String(value) ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   UI.switchBtn = (on, act, attrs = '') => `<button type="button" role="switch" class="switch${on ? ' on' : ''}" aria-checked="${!!on}" data-act="${act}" ${attrs}></button>`;
   UI.act('strip-status', (b) => { const d = D.daemon, running = D.runs.filter((r) => r.status === 'run').length;
-    UI.menu(b, [[d.paused ? 'Resume dispatch…' : 'Pause dispatch…', d.paused ? 'play' : 'pause', 'pause'], ['-'], [`conductor ${d.version}, ${d.paused ? 'paused' : 'up'} ${UI.humanSpan(d.uptime)}${d.update.available ? ` · ${d.update.available} ready` : ''}`, 'server', 'strip-go', 'data-href="#/updates"'], [`Sandbox enforcing: what bots can do`, 'shield', 'strip-go', 'data-href="#/safety"'], [`Agents healthy (${d.paseo.agents})`, 'bots', 'strip-go', 'data-href="#/connectors/runtimes"'], [`${running} running now`, 'live', 'strip-go', 'data-href="#/live"'], ...(D.pending.length ? [[`${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review`, 'edit', 'strip-go', 'data-href="#/config/apply"']] : []), ['-'], [`${d.magicdns} · TLS`, 'lock', 'strip-go', 'data-href="#/security"']]); });
+    UI.menu(b, [[d.paused ? 'Resume dispatch…' : 'Pause dispatch…', d.paused ? 'play' : 'pause', 'pause'], ['-'], [`conductor ${d.version}, ${d.paused ? 'paused' : 'up'} ${UI.humanSpan(d.uptime)}${d.update.available ? ` · ${d.update.available} ready` : ''}`, 'server', 'strip-go', 'data-href="#/updates"'], [`Sandbox enforcing: what bots can do`, 'shield', 'strip-go', 'data-href="#/safety"'], [`Agents healthy (${d.paseo.agents})`, 'bots', 'strip-go', 'data-href="#/connectors/runtimes"'], [`${running} running now`, 'live', 'strip-go', 'data-href="#/activity"'], ...(D.pending.length ? [[`${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review`, 'edit', 'strip-go', 'data-href="#/config/apply"']] : []), ['-'], [`${d.magicdns} · TLS`, 'lock', 'strip-go', 'data-href="#/security"']]); });
   /** Demo data (prototype only): which fake day to show, chosen per browser (js/scenario.js), or reset the current one. */
   UI.DEMOS = [['calm', 'A mostly healthy day', 'Dozens of runs; one approval and one failure need you'], ['quiet', 'All quiet', 'Nothing needs you; every system healthy'], ['full', 'Everything at once', 'Every kind of exception, to try each flow']];
   UI.setDemo = (k) => { try { localStorage.setItem('cd-demo', k); localStorage.removeItem('cd-proto-state-v5'); } catch (e) {} location.reload(); };

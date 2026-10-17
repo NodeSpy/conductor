@@ -339,28 +339,28 @@
     const first = pend ? `<b class="loud-word">${pend} ${pend === 1 ? 'approval waits' : 'approvals wait'} for you.</b> ` : '';
     const doing = m.shadow ? 'In shadow mode: it watches and proposes, and never acts.' : m.home === 'live' ? `Working in a live session${open ? ` on ${open} open case${open === 1 ? '' : 's'}` : ''}.` : open ? `Idle, with ${open} open case${open === 1 ? '' : 's'}.` : 'Idle. Nothing open.';
     return first + doing; };
+  /** The bot's head, as in the approved mock: avatar, name, what it's for in one line, and what it's doing now. */
   function hero(m) {
-    const t = teamOf(m), lead = t && leadOf(t) === m.name;
-    return `<div class="bot-hero">${UI.sigil(m, 'lg')}<div class="grow"><div class="crumbs">${UI.folderCrumbs(UI.folderOfBot(m.name, false))} › ${t ? `<a href="#/teams/${t.name}">team ${t.name}</a> › ` : ''}${m.name}</div><h1>${m.name}</h1>
-      <p class="lede">${UI.botLine(m)}</p>
-      <div class="facts">${m.home === 'live' ? st('run', `home ${m.session} live`) : st('idle', `home ${m.session} idle`)}
-        ${t ? `<a href="#/teams/${t.name}">${tag('team ' + t.name + (lead ? ' · lead' : ''))}</a>` : tag('no team')}${tag(`${m.turns}/${m.maxTurns} ${UI.term('turns', 'turn')}`)}${UI.usageOn() ? UI.provSet(UI.botProv(m.name)) : ''}${m.shadow ? tag(UI.term('shadow mode', 'shadow'), 'shadow') : tag('approved execution')}
-        ${tag(`${icon('shield')} ${m.mode}`)}${tag(`operators: ${(S.effective(m).operators.v || []).join(', ')}`)}</div></div>
-      <div class="row wrap"><button class="btn" data-act="m-rotate" data-m="${m.name}">${icon('updates')}Rotate session</button><button class="btn" ${m.proactive ? `data-act="m-sweep" data-m="${m.name}"` : UI.off('No proactive: block in its definition')}>${icon('eye')}Sweep now</button><button class="btn" data-act="m-deliver" data-m="${m.name}">${icon('send')}Deliver event</button></div></div>`;
+    const t = teamOf(m), open = D.cases.filter((c) => c.bot === m.name && c.status === 'open'), cur = open[0];
+    const role = (S.staged('bots', m.name) || m.cfg || {}).description || m.role || (t ? `A bot on the ${t.name} team` : 'A bot');
+    const now = m.shadow ? UI.statusMark('shadow', 'In shadow mode') : m.home === 'live' ? UI.statusMark('run', cur ? `Working on case ${cur.id}` : 'Working') : UI.statusMark('idle', 'Idle');
+    return `<div class="dl-crumbs">${UI.folderCrumbs(UI.folderOfBot(m.name, false))}${t ? `${icon('chev')}<a href="#/teams/${t.name}">team ${t.name}</a>` : ''}</div>
+      <div class="dl-bothead"><span class="dl-bot-av">${esc(m.name.split(/[-_]/).map((w) => w[0]).join('').slice(0, 2))}</span><div><h1>${esc(m.name)}</h1><p class="dl-lead">${esc(role)}</p></div>${now}
+        <button class="icon-btn" data-act="bot-more" data-m="${m.name}" aria-label="More for ${esc(m.name)}">${icon('more')}</button></div>`;
   }
+  UI.act('bot-more', (b) => { const m = M(b.dataset.m); UI.menu(b, [['Rotate session…', 'updates', 'm-rotate', `data-m="${m.name}"`], ['Sweep now', 'eye', 'm-sweep', m.proactive ? `data-m="${m.name}"` : UI.off('It has no proactive: block in its definition')], ['Deliver an event…', 'send', 'm-deliver', `data-m="${m.name}"`], ['-'], ['Workers', 'workflows', 'strip-go', `data-href="#/bots/${m.name}/workers"`]]); });
   UI.act('bot-watch-add', (b) => { const name = b.dataset.m, evs = S.view().connectors.flatMap((c) => Object.entries((SCHEMA.connectors[c.use] || {}).events || {}).map(([ev, d]) => [`${c.name}.${ev}`, `${d.label} (${c.name}.${ev})`, c.use]));
     UI.form({ caps: 'triggers:', title: `What should ${name} watch?`, intro: 'Adds a trigger that hands each matching event to the bot (a bot: step). It reads the event, then tells you or proposes what to do.',
       fields: [{ k: 'on', type: 'enum', req: true, label: 'When this happens', options: evs.map(([v, l]) => [v, l]) }, { k: 'repos', type: 'list', label: 'Only these repos (GitHub events)', ph: 'acme/api', show: (v) => /^gh\./.test(v.on || '') }],
       submit: 'Review change', submitIcon: 'check',
       onSubmit: (v) => { const tn = `${name}-${v.on.split('.')[1].replace(/_/g, '-')}`; const y = [`name: ${tn}`, `on: ${v.on}`, ...((v.repos || []).length ? [`filter: { repo: [${v.repos.join(', ')}] }`] : []), 'steps:', '  - id: tell', `    bot: { name: ${name}, title: "{{.title}}" }`].join('\n') + '\n'; D.prefs.returnTo = { href: `#/bots/${name}`, label: name }; UI.staged(S.stage('workflows', tn, y, `trigger ${tn} hands ${v.on} to ${name}`)); } }); });
   function shell(m, tab, body) {
-    const pc = pending(m.name).length;
-    const w = UI.botWatches(m.name);
-    const watchNote = !w.triggers.length && !w.sweep ? `<div class="callout wait watch-empty" style="margin-bottom:14px">${icon('eye')}<span class="grow"><b>${m.name} isn't watching anything yet.</b> No trigger hands it events and it doesn't check in on its own, so it only answers when you chat with it.</span><button class="btn sm primary" data-act="bot-watch-add" data-m="${m.name}">${icon('plus')}Add what it watches</button></div>`
-      : `<div class="small muted watch-line" style="margin:-6px 0 12px">${icon('eye')} ${w.triggers.length ? `Watches ${w.triggers.map((n) => `<a class="link mono" href="#/workflows/${esc(n)}">${esc(n)}</a>`).join(', ')}${w.sweep ? ' · ' : ''}` : 'No events handed to it · '}${w.sweep ? `checks in on its own every ${esc(S.getPath(staged('bots', m.name), 'proactive.every') || '')}` : ''} · <button class="link" data-act="bot-watch-add" data-m="${m.name}">add what it watches</button></div>`;
-    return `<div class="page">${hero(m)}${watchNote}
-      ${UI.tabs([['chat', 'Chat', `#/bots/${m.name}/chat`], ['cases', 'Cases', `#/bots/${m.name}/cases`, D.cases.filter((c) => c.bot === m.name && c.status === 'open').length], ['proposals', 'Proposals', `#/bots/${m.name}/proposals`, pc, pc > 0], ['memory', 'Memory', `#/bots/${m.name}/memory`], ['workers', 'Workers', `#/bots/${m.name}/workers`, D.workers.filter((w) => (w.bot || 'platform-sre') === m.name && w.status === 'run').length], ['access', 'Access', `#/bots/${m.name}/access`], ['settings', 'Definition', `#/bots/${m.name}/settings`]], tab)}
-      ${body}</div>`;
+    const pc = pending(m.name).length, w = UI.botWatches(m.name), cases = D.cases.filter((c) => c.bot === m.name && c.status === 'open').length;
+    const watchNote = !w.triggers.length && !w.sweep ? `<div class="callout wait watch-empty" style="margin-top:14px">${UI.statusMark('wait', `<b>${m.name} isn't watching anything yet.</b>`)} <span class="grow">Nothing hands it events and it doesn't check in on its own, so it only answers when you chat with it.</span><button class="btn sm primary" data-act="bot-watch-add" data-m="${m.name}">${icon('plus')}Choose what it watches</button></div>` : '';
+    const T = [['proposals', 'Approvals', pc, true], ['chat', 'Chat'], ['cases', 'Cases', cases], ['memory', 'Memory'], ['access', 'What it can do'], ['settings', 'Settings']];
+    return `<div class="page dl-page">${hero(m)}${watchNote}
+      <nav class="dl-tabs" role="tablist">${T.map(([k, l, n, hot]) => `<a href="#/bots/${m.name}/${k}" role="tab" class="${k === tab ? 'on' : ''}"${k === tab ? ' aria-current="page" aria-selected="true"' : ''}>${l}${n ? ` <em class="${hot ? 'hot' : ''}">${n}</em>` : ''}</a>`).join('')}</nav>
+      <div class="dl-tab-body">${body}</div></div>`;
   }
   UI.act('m-rotate', (b) => { const m = M(b.dataset.m); UI.confirm({ title: 'Rotate the home session?', body: `<p style="margin:0 0 8px">Conductor asks the current session for a hand-off note, waits for that turn to settle, launches a fresh session, and only then archives the old one. Its token is revoked at once.</p><div class="kv"><dt>current</dt><dd class="mono">${m.session} · ${m.turns} turns</dd><dt>next</dt><dd class="mono">s${+m.session.slice(1) + 1} · resumes from handoff/${m.session}.md + ledger</dd></div>`, ok: 'Rotate' }).then((ok) => { if (!ok) return; const old = m.session; m.session = 's' + (+old.slice(1) + 1); m.turns = 0; m.age = '0m'; m.home = 'live'; audit('bot_rotate', `${m.name} · ${old} → ${m.session}`); S.save(); UI.rerender(); UI.toast('Rotated', `${old} archived · ${m.session} live`, 'ok'); }); });
   UI.act('m-sweep', (b) => { const m = M(b.dataset.m); const id = 'x' + (5 + D.workers.filter((w) => w.parent === 'sweep').length); D.workers.unshift({ id, bot: m.name, parent: 'sweep', case: '—', group: '', status: 'run', verbs: 'observe only', readOnly: true, cls: 'proactive', brief: 'Proactive checks (charter §)', run: 'r-7f29', cost: 0, started: now() }); audit('bot_sweep', `${m.name} · ${id} · read-only`); S.save(); UI.go(`#/bots/${m.name}/workers`); UI.toast(`Sweep ${id} started`, 'read-only · draws on the team pool', 'run'); });
@@ -404,9 +404,9 @@
     const t = teamOf(m), mates = t ? botsOf(t.name).filter((x) => x.name !== m.name) : [];
     return `<div class="row" style="margin-bottom:12px"><a class="btn sm ghost back" href="#/bots/${m.name}/cases">${icon('chev')}All cases</a></div>
       <div class="grid g-side"><div class="stack">
-        <div class="panel"><div class="panel-head">${UI.objectIcon('case')}${c.status === 'open' ? st('idle', 'open') : st('ok', 'closed')}${c.urgent ? tag('urgent', 'fail') : ''}</div>
+        <div class="panel"><div class="panel-head">${c.status === 'open' ? st('idle', 'open') : st('ok', 'closed')}${c.urgent ? tag('urgent', 'fail') : ''}</div>
           <div class="panel-body"><h2 class="case-title">${esc(c.title)}</h2>
-          ${UI.metaLine([{ obj: 'case', label: 'Case', value: c.id, mono: true }, { label: 'Opened', value: `${UI.hm(c.opened)} <span class="muted">(${UI.agoText(c.opened)})</span>` }, { obj: 'bot', label: 'Handled by', value: esc(m.name) }])}
+          ${UI.metaLine([{ label: 'Case', value: c.id, mono: true }, { label: 'Opened', value: `${UI.agoText(c.opened)} <span class="dl-sub">(${UI.hm(c.opened)})</span>` }])}
           <div class="route-box"><div class="caps">routing</div><div class="small">${c.routed ? routeLabel(c.routed) : 'delivered directly'}${c.routed && c.routed.note ? ` <span class="muted">· ${esc(c.routed.note)}</span>` : ''}</div><div class="tiny muted">requester ${UI.label(`${c.requester}`, { cls: 'taint ' + c.cls })} preserved through every hop: the assignee runs on no more trust than that.</div></div></div></div>
         ${(() => { const out = D.delegations.filter((d) => d.parent === c.id), inn = D.delegations.find((d) => d.child === c.id); return out.length || inn ? `<div class="panel"><div class="panel-head"><h3>Delegation</h3><span class="muted small">${out.length ? `${out.length} handed out from this case` : ''}${inn ? 'this case is a delegated task' : ''}</span></div><div class="list">${inn ? edgeHTML(inn).replace('class="item deleg"', 'class="item deleg inbound"') : ''}${out.map(edgeHTML).join('')}</div>${inn && inn.status === 'running' ? '<div class="panel-foot small muted">Closing this case reports its last note back to the delegating bot as the result.</div>' : ''}</div>` : ''; })()}
         <div class="panel"><div class="panel-head"><h3>Notes</h3></div><div class="list">${(c.notes || []).map((n) => `<div class="item small" style="align-items:flex-start"><span class="tiny muted" style="width:72px">${UI.agoText(n.at)}</span><div class="grow"><span class="mono tiny">${esc(n.who)}</span><div>${esc(n.text)}</div></div></div>`).join('') || '<div class="item small muted">No notes yet.</div>'}</div>
@@ -434,11 +434,15 @@
   function proposals(m, sub) {
     const list = props(m.name);
     const p = sub && list.find((x) => x.id === sub);
-    if (p) return innerWidth <= 720 ? `<div class="page">${proposalDetail(m, p)}</div>` : shell(m, 'proposals', proposalDetail(m, p));
+    if (p) return shell(m, 'proposals', proposalDetail(m, p));
     const vis = list.filter((x) => pv.f === 'all' || (pv.f === 'pending' ? x.status === 'pending' : x.status !== 'pending'));
-    return shell(m, 'proposals', `<div class="filters">${UI.seg([['all', 'all'], ['pending', `pending · ${pending(m.name).length}`], ['decided', 'decided']], pv.f, 'prop-f')}</div><div class="panel">${vis.map((p) => `
-      ${UI.row({ href: `#/bots/${m.name}/proposals/${p.id}`, cls: `proposal-row ${p.status}`, obj: UI.propObj(p), kind: UI.propKind(p), title: esc(p.title || p.summary), ctx: `${p.title ? esc(p.summary) + ' · ' : ''}case ${p.case}${p.requester ? ` · from ${esc(p.requester)}` : ''}${p.approver ? ` · decided by ${esc(p.approver)}` : ''}`, risk: UI.propRisk(p), env: p.env, s: PS[p.status] || 'idle', sword: p.status === 'pending' ? 'needs you' : p.status, time: p.status === 'pending' ? `expires ${p.expires}` : UI.agoText(p.at), act: p.status === 'pending' ? '<span class="btn sm primary">Review</span>' : '', row: p.status === 'pending' ? 'ember' : '', attrs: `data-tip="<span class='mono'>${p.id} · ${esc(p.verb)} · tier ${p.tier}</span>"` })}`).join('') || '<div class="empty small">No proposals here.</div>'}</div>
-      <p class="muted small" style="margin-top:10px">Shadow proposals are the calibration record of a bot in shadow mode: they can't be approved. Also from the CLI: <span class="mono">conductor bot approve ${m.name} &lt;id&gt;</span> (SSH-signed).</p>`);
+    const row = (x) => { const pend = x.status === 'pending';
+      return `<li class="dl-need proposal-row ${x.status}"><a class="dl-need-a" href="#/bots/${m.name}/proposals/${x.id}"><span class="dl-ng">${UI.mark(PS[x.status] || 'idle', { lg: true, label: pend ? 'Needs you' : x.status })}</span>
+        <span class="dl-nt"><b>${esc(x.title || x.summary)}</b><span class="dl-why">${pend ? esc(x.ask || x.why || x.summary) : `${esc(x.status[0].toUpperCase() + x.status.slice(1))}${x.approver ? ` by ${esc(x.approver)}` : ''}`}</span><span class="dl-tech mono">${x.id} · ${esc(x.verb)}</span></span>
+        <span class="dl-age">${UI.agoText(x.at)}</span><span class="dl-na">${pend ? '<span class="btn sm primary">Review</span>' : ''}</span></a></li>`; };
+    return shell(m, 'proposals', `<div class="dl-filters">${UI.seg([['all', 'All'], ['pending', `Waiting · ${pending(m.name).length}`], ['decided', 'Decided']], pv.f, 'prop-f')}</div>
+      <section class="dl-card">${vis.length ? `<ul class="dl-list">${vis.map(row).join('')}</ul>` : `<p class="dl-sub">Nothing ${pv.f === 'pending' ? 'waits for you' : 'here'}.</p>`}</section>
+      ${list.some((x) => x.status === 'shadow') ? '<p class="dl-sub" style="margin-top:12px">Shadow proposals are what a bot in shadow mode would have done; they can’t be approved.</p>' : ''}`);
   }
   UI.act('prop-f', (b) => { pv.f = b.dataset.v; UI.rerender(); });
   function planHTML(t) { return esc(t).split('\n').map((l) => /must be replaced|forces replacement/.test(l) ? `<span class="rep">${l}</span>` : /^\s*\+\/-|^\s*~|will be updated/.test(l) ? `<span class="chg">${l}</span>` : /^\s*\+ /.test(l) ? `<span class="add">${l}</span>` : /#|unchanged/.test(l) ? `<span class="c">${l}</span>` : l).join('\n'); }
@@ -457,34 +461,37 @@
   UI.propObj = (p) => (p.kind === 'terraform' ? 'terraform' : UI.actionOf(p.verb) === 'money' ? 'spend' : UI.actionOf(p.verb) === 'post' ? 'message' : UI.actionOf(p.verb) === 'push' ? 'pr' : 'approval');
   UI.propKind = (p) => (p.kind === 'terraform' ? 'Terraform apply' : { spend: 'Purchase', message: 'Post', pr: 'Code change', approval: 'Approval' }[UI.propObj(p)]);
   UI.propRisk = (p) => UI.riskOf({ tier: p.tier, verb: p.verb, env: p.env, destroys: p.tf ? p.tf.destroy : 0 });
+  /** The approval, as in the approved mock (approvalPage): a needs-you kicker, the plain title, what it asks, why,
+      what changes, where / effect / undo, who started it, the decision, and the technical details folded. */
   function proposalDetail(m, p) {
-    const tf = p.tf, phone = innerWidth <= 720, pending = p.status === 'pending';
-    const why = `<div class="why-impact"><div><span class="caps">Why</span><p>${esc(p.why || p.summary)}</p></div>${p.impact ? `<div><span class="caps">Impact</span><p>${esc(p.impact)}</p></div>` : ''}</div>`;
-    // what changes, in one quiet row; only a replacement or a destroy is coloured
-    const tiles = tf ? `<div class="tf-tiles"><div><span class="k">Adds</span><b>${tf.add}</b></div><div><span class="k">Changes</span><b>${tf.change}</b></div><div${tf.destroy ? ' class="loud"' : ''}><span class="k">Destroys</span><b>${tf.destroy}</b></div><div${tf.replaces.length ? ' class="loud"' : ''}><span class="k">Replaces</span><b>${tf.replaces.length}</b></div></div>` : '';
-    const action = tf ? `${tiles}<div class="callout warn small" style="margin:10px 0"><b>Replaces aws_instance.web.</b> It isn't on this bot's stateful list, so the replacement is allowed; a stateful type (a database, say) would be refused outright.</div><details class="tech"><summary>The plan (tf-plan ran it with the READ role)</summary><div class="plan">${planHTML(D.tfPlan)}</div></details>`
-      : `<div class="caps" style="margin:4px 0 6px">Exactly what runs</div>${UI.payloadHTML(p)}`;
-    const tech = `<details class="tech"><summary>Technical details: what the passkey signs</summary><dl class="kv small"><dt>proposal</dt><dd class="mono">${p.id} · tier ${esc(p.tier)}</dd>${tf ? `<dt>action</dt><dd class="mono">terraform apply of ${esc(tf.repo)}, dir ${esc(tf.dir)}, workspace ${esc(tf.workspace)}</dd><dt>commit</dt><dd class="hash">${tf.commit}</dd><dt>plan sha256</dt><dd class="hash">${tf.plan_sha}</dd>` : ''}<dt>verb</dt><dd class="mono">${esc(p.verb)}</dd><dt>case</dt><dd class="mono">${p.case}</dd><dt>requester</dt><dd class="mono">${esc(p.requester || '—')} (${esc(p.cls || '')})</dd><dt>digest</dt><dd class="hash">${p.digest}</dd></dl></details>`;
-    const buttons = pending ? `<button class="btn lg primary grow" data-act="p-approve" data-p="${p.id}" data-d="approve">${icon('passkey')}Approve</button><button class="btn lg" data-act="p-approve" data-p="${p.id}" data-d="deny">Deny…</button>` : '';
-    const done = !pending && p.status !== 'shadow' ? `<div class="callout ${p.status.startsWith('approved') ? 'ok' : 'danger'} small">${p.status.startsWith('approved') ? `${icon('check')} Approved${p.approver ? ' · ' + esc(p.approver) : ''}. conductor is applying exactly the signed action.` : `Denied${p.approver ? ' · ' + esc(p.approver) : ''}${p.reason ? `: “${esc(p.reason)}”` : ''}. The bot was told.`}</div>` : '';
-    // the approval card's head: a needs-you kicker in words, the plain title, and nothing technical (that's below, collapsed)
-    const head = `<div class="prop-head">${UI.objectIcon(UI.propObj(p), { label: UI.propKind(p) })}${(() => { const r = UI.propRisk(p); return UI.riskWord(r) + (r.level === 3 && p.env === 'production' ? '' : UI.envTag(p.env)); })()}<span class="sep"></span>${pending ? UI.statusMark('ember', 'Needs you') : st(PS[p.status], p.status)}</div><h2 class="prop-title">${esc(p.title || p.summary)}</h2>
-      ${UI.metaLine([{ obj: 'bot', label: 'Proposed by', value: `<a href="#/bots/${m.name}">${esc(m.name)}</a>` }, { label: 'Proposed', value: `${UI.hm(p.at)} <span class="muted">(${UI.agoText(p.at)})</span>` }, p.expires && pending ? { label: 'Expires in', value: UI.humanSpan(p.expires) } : null, p.case ? { obj: 'case', label: 'Case', value: `<a class="mono" href="#/bots/${m.name}/cases/${p.case}">${p.case}</a>` } : null])}`;
-    if (phone) return `<div class="prop-sheet"><div class="row" style="margin-bottom:8px"><a class="btn sm ghost back" href="${UI.navOrigin && UI.navOrigin.hash === location.hash ? UI.navOrigin.back : '#/bots/' + m.name + '/proposals'}">${icon('chev', '')}Back</a></div>
-      <div class="panel"><div class="panel-body stack">${head}${UI.requesterBanner(p)}${why}${done}${action}${tech}</div></div>
-      ${pending ? `<div class="sticky-decide">${buttons}</div>` : p.status === 'shadow' ? '<div class="callout small">Shadow proposals can\'t be approved.</div>' : ''}</div>`;
-    return `<div class="row" style="margin-bottom:12px"><a class="btn sm ghost back" href="#/bots/${m.name}/proposals">${icon('chev', '')}All proposals</a></div>
-      <div class="grid g-side">
-        <div class="stack"><div class="panel"><div class="panel-body stack">${head}${UI.requesterBanner(p)}${why}${action}${tech}</div></div></div>
-        <div class="stack">
-          <div class="panel approve-panel"><div class="panel-head"><h3>Your decision</h3></div><div class="panel-body stack">${done}
-            ${pending ? `<div class="small">${p.reversible ? `If it goes wrong: ${esc(p.reversible)}.` : 'This can\'t be undone by conductor.'}</div><div class="row approve-row">${buttons}</div><div class="muted tiny">Needs one of: <span class="mono">${(S.effective(m).operators.v || []).join(', ')}</span>${teamOf(m) ? ` (from team ${teamOf(m).name})` : ''}, with user verification. Deny can carry a reason for the bot.</div>` : p.status === 'shadow' ? '<div class="callout small">Shadow proposals can\'t be approved.</div>' : ''}
-          </div></div>
-          <div class="panel"><div class="panel-head"><h3>Timeline</h3></div><div class="list small">
-            <div class="item">${st('ok', '')}<span class="grow">proposed by home ${m.session}</span><span class="tiny muted">${UI.agoText(p.at)}</span></div>
-            <div class="item">${st(pending ? 'ember' : PS[p.status], '')}<span class="grow">${pending ? 'awaiting operator signature' : p.status + (p.approver ? ' · ' + esc(p.approver) : '')}</span></div></div></div>
-        </div></div>`;
+    const tf = p.tf, pend = p.status === 'pending', t = teamOf(m);
+    const ask = p.ask || (tf ? `${m.name} wants to run terraform apply on ${p.env || tf.workspace}.` : `${m.name} wants to ${esc(String(p.summary || p.verb))}.`);
+    const changes = tf ? `<div class="dl-changes">${[['Adds', tf.add], ['Changes', tf.change], ['Replaces', tf.replaces.length, 'wait'], ['Destroys', tf.destroy, 'fail']].map(([l, n, st]) => `<div${n && st ? ` data-s="${st}"` : ''}><b>${n}</b><span>${l}</span></div>`).join('')}
+      ${tf.replaces.length ? `<p class="dl-chg-note">${UI.mark('wait')}<span><b>Replaces ${tf.replaces.length} ${tf.replaces.length === 1 ? 'server' : 'resources'}</b> (${tf.replaces.map(esc).join(', ')}). Stateful things such as databases are never replaced without a separate rule.</span></p>` : ''}</div>`
+      : `<div class="dl-pwhy"><span class="dl-lbl">Exactly what runs</span>${UI.payloadHTML(p)}</div>`;
+    const where = [['Where', p.env ? `${p.env[0].toUpperCase()}${p.env.slice(1)}${tf ? ` · workspace ${esc(tf.workspace)}` : ''}` : tf ? `workspace ${esc(tf.workspace)}` : ''], ['Effect', esc(p.impact || '')], ['Undo', esc(p.reversible ? p.reversible.replace(/^./, (c) => c.toUpperCase()) : 'conductor can’t undo this')]].filter(([, v]) => v);
+    const origin = /^event:/.test(p.requester || '') || p.cls === 'event' ? `${icon('zap')}Started by an event (<span class="mono">${esc(String(p.requester).replace(/^event:/, ''))}</span>), not a person.`
+      : /^chat:/.test(p.requester || '') || p.cls === 'user' ? `${icon('warn')}Asked for in chat by someone who isn’t one of your operators (<span class="mono">${esc(p.requester)}</span>); it runs with no more trust than they have.`
+      : p.cls === 'proactive' ? `${icon('clock')}Found on the bot’s own routine check; nobody asked.` : p.cls === 'peer' ? `${icon('bots')}Asked for by another bot (<span class="mono">${esc(p.requester)}</span>), carrying the original requester’s trust.` : `${icon('users')}Asked for by an operator (<span class="mono">${esc(p.requester || '')}</span>).`;
+    const tech = `<details class="dl-tech-d"><summary>${icon('chev')}Technical details <span class="dl-sub">${tf ? 'plan, hashes, exact command' : 'the exact payload and hashes'}</span></summary><dl class="dl-facts">
+      <dt>Proposal</dt><dd class="mono">${p.id} · tier ${esc(p.tier)}</dd><dt>Verb</dt><dd class="mono">${esc(p.verb)}</dd>${tf ? `<dt>Command</dt><dd class="mono">terraform apply · ${esc(tf.repo)} · dir ${esc(tf.dir)} · workspace ${esc(tf.workspace)}</dd><dt>Commit</dt><dd class="mono">${tf.commit}</dd><dt>Plan sha256</dt><dd class="mono">${tf.plan_sha}</dd>` : ''}<dt>Case</dt><dd class="mono">${p.case}</dd><dt>Digest</dt><dd class="mono">${p.digest}</dd></dl>
+      ${tf ? `<pre class="dl-code">${planHTML(D.tfPlan || '')}</pre>` : ''}</details>`;
+    const decided = !pend && p.status !== 'shadow' ? `<p class="dl-decided">${UI.statusMark(PS[p.status] || 'idle', p.status.startsWith('approved') || p.status === 'executed' ? 'Approved' : p.status[0].toUpperCase() + p.status.slice(1))}${p.approver ? ` by ${esc(p.approver)}` : ''}${p.reason ? `: “${esc(p.reason)}”` : ''}. ${p.status.startsWith('approved') || p.status === 'executed' ? 'conductor applied exactly what was signed.' : 'The bot was told.'}</p>` : p.status === 'shadow' ? '<p class="dl-decided dl-sub">A shadow proposal: what the bot would have done. It can’t be approved.</p>' : '';
+    const card = `<article class="dl-card dl-proposal">${pend ? `<div class="dl-kick">${UI.mark('ember')}Needs you · asked ${UI.agoText(p.at)}${p.expires ? ` · expires in ${UI.humanSpan(p.expires)}` : ''}</div>` : `<div class="dl-kick dl-sub">${UI.agoText(p.at)}</div>`}
+      <h2 class="dl-ptitle">${esc(p.title || p.summary)}</h2><p class="dl-ask">${ask}</p>
+      ${p.why ? `<div class="dl-pwhy"><span class="dl-lbl">Why</span><p>${esc(p.why)}</p></div>` : ''}
+      ${changes}
+      ${where.length ? `<dl class="dl-where">${where.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>` : ''}
+      <p class="dl-origin">${origin}</p>
+      ${pend ? `<div class="dl-decide"><button class="btn lg primary" data-act="p-approve" data-p="${p.id}" data-d="approve">${icon('passkey')}Approve with passkey</button><button class="btn lg secondary" data-act="p-approve" data-p="${p.id}" data-d="deny">Deny…</button><span class="hint">Only operators${t ? ` on the ${esc(t.name)} team` : ''} can approve.</span></div>` : decided}
+      ${tech}</article>`;
+    const x = UI.botCan(m), plain = (i) => esc(String(i.text).replace(/ \([^)]*\)$/, ''));
+    const can = `<section class="dl-card dl-can"><header class="dl-ch"><h2>What ${esc(m.name)} can do</h2></header>${[['Does on its own', 'ok', x.own], ['Asks you first', 'ember', x.asks], ['Never', 'fail', x.never]].map(([h, s2, xs]) => `<div class="cang" data-s="${s2}"><h3>${UI.mark(s2)}${h}</h3><ul>${xs.map((i) => `<li>${plain(i)}</li>`).join('') || '<li class="dl-sub">nothing</li>'}</ul></div>`).join('')}</section>`;
+    const tl = `<section class="dl-card"><header class="dl-ch"><h2>Timeline</h2></header><ol class="dl-story"><li><span class="sg">${UI.mark('ok')}</span><div><b>Proposed by ${esc(m.name)}</b><span>${p.cls === 'event' ? 'while handling the event' : `in case ${p.case}`}</span></div><span class="t">${UI.agoText(p.at)}</span></li>
+      <li><span class="sg">${UI.mark(pend ? 'ember' : PS[p.status] || 'idle')}</span><div><b>${pend ? 'Waiting for your decision' : decidedWord(p)}</b><span>${pend && p.expires ? `expires in ${UI.humanSpan(p.expires)}` : esc(p.approver || '')}</span></div><span class="t">${pend ? 'now' : ''}</span></li></ol></section>`;
+    return `<div class="dl-crumbs" style="margin-top:16px"><a href="#/bots/${m.name}/proposals">${icon('chev', 'flip')}All approvals</a></div><div class="dl-cols" style="margin-top:6px"><div class="dl-col-main">${card}</div><div class="dl-col-side">${can}${tl}</div></div>`;
   }
+  const decidedWord = (p) => (p.status === 'executed' || String(p.status).startsWith('approved') ? 'Approved' : p.status === 'shadow' ? 'Shadow: not for approval' : p.status[0].toUpperCase() + p.status.slice(1));
   UI.act('p-approve', (b) => { const p = D.proposals.find((x) => x.id === b.dataset.p); UI.approve(p, b.dataset.d, () => { S.save(); UI.rerender(); }); });
 
   /* ---------- memory ---------- */
@@ -670,7 +677,7 @@
     if (name === 'new') return settings(null, true);
     const m = M(name);
     if (!m) return `<div class="page"><div class="empty"><span class="serif">No bot named ${esc(name)}</span><a class="btn" href="#/bots">Bots</a></div></div>`;
-    switch (tab || 'chat') {
+    switch (tab || (pending(m.name).length ? 'proposals' : 'chat')) {
       case 'cases': return cases(m, sub);
       case 'proposals': return proposals(m, sub);
       case 'memory': return memory(m);

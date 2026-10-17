@@ -252,3 +252,58 @@
 .dl-code .ln.fail { background: var(--color-status-danger-bg); color: var(--color-status-danger-fg); box-shadow: inset 3px 0 0 var(--color-status-danger-solid); }
 .dl-code .src { color: var(--color-text-tertiary); }
 .dl-empty-row { text-align: center; color: var(--color-text-secondary); height: auto !important; padding: 24px 14px !important; }
+
+/* connections: one compact, left-aligned line each (the Overview's row anatomy) */
+.dl-conns { padding: 4px 22px; }
+.dl-conn { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; padding: 12px 0; text-align: left; }
+.dl-conn.attn { box-shadow: inset 3px 0 0 var(--s-solid); margin-left: -22px; padding-left: 19px; }
+.dl-conn .tgt { color: var(--color-text-secondary); font-weight: 400; }
+.dl-conn .reason, .dl-row .reason { font: var(--type-body-s); font-weight: var(--font-weight-semibold); color: var(--s-fg); }
+.dl-na { display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
+@media (max-width: 720px) { .dl-conns { padding: 4px 16px; } .dl-conn.attn { margin-left: -16px; padding-left: 13px; } .dl-conn { grid-template-columns: 18px minmax(0, 1fr); } .dl-conn .dl-na { grid-column: 2; justify-content: flex-start; } }
+
+/* the workflow builder as the approved mock (builderPage): a page with a head and tabs; the recipe is a card of step
+   cards (number, title over summary, the kind with its icon, chevron); Try it, At a glance and the config file beside */
+.wfb-page .wfb { display: block; height: auto; }
+.wfb-page .wfb-bar { display: block; padding: 0; gap: 0; border: 0; background: none; }
+.wfb-page .wfb-title { font: var(--type-display); font-family: var(--font-family-serif); font-size: 34px; line-height: 1.12; font-variation-settings: var(--type-display-variation); letter-spacing: -0.015em; }
+.wfb-owner { margin: 8px 0 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font: var(--type-body-s); color: var(--color-text-secondary); }
+.wfb-page .wfb-tab { margin-top: 20px; }
+.wfb-page .wfb-list { overflow: visible; padding: 0; background: none; }
+.wfb-page .dl-recipe { padding: 18px; }
+.wfb-page .step-card, .wfb-page .par-card { border-radius: 10px; border: var(--border-width) solid var(--color-border-default); background: var(--color-bg-raised); box-shadow: none; }
+.wfb-page .step-card::before { display: none; }
+.wfb-page .step-card.open { box-shadow: var(--shadow-1); border-color: var(--color-border-strong); }
+.wfb-page .step-card.has-err { box-shadow: inset 3px 0 0 var(--color-status-danger-solid); }
+.wfb-page .trig-card { border: 0; border-radius: 10px; background: var(--color-accent-subtle); }
+.wfb-page .trig-card .sc-ic.trig { background: none; border: 0; color: var(--color-text-accent); }
+.wfb-page .sc-head { gap: 14px; padding: 12px 14px; }
+.wfb-page .sc-head .grip { display: none; }
+.wfb-page .sc-num { width: 30px; height: 30px; min-width: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--color-bg-sunken); font: var(--type-label); font-size: 14px; font-weight: var(--font-weight-bold); color: var(--color-text-primary); }
+.wfb-page .sc-title b { font: var(--type-body-m); font-weight: var(--font-weight-bold); }
+.wfb-page .sc-sum { font: var(--type-body-s); color: var(--color-text-secondary); white-space: normal; }
+.wfb-page .sc-ty { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; font-weight: var(--font-weight-semibold); color: var(--color-text-secondary); white-space: nowrap; }
+.wfb-page .sc-ty svg { width: 15px; height: 15px; }
+.wfb-page .spine-add { height: 30px; padding-left: 14px; }
+.wfb-page .spine-add::before { display: none; }
+.wfb-page .spine-add .plus { width: 24px; height: 24px; border-style: dashed; }
+.wfb-page .wfb-config { padding: 0; overflow: hidden; }
+.wfb-page .wfb-config .wfb-side { border: 0; background: none; min-height: 60vh; }
+.dl-select { min-width: 0; width: 100%; color: var(--color-text-primary); }
+.dl-select select { appearance: none; border: 0; background: transparent; font: var(--type-body-s); color: inherit; width: 100%; outline: none; cursor: pointer; }
+.btn.wide { width: 100%; justify-content: center; margin-top: 10px; }
+.dl-code.small { font-size: 11.5px; margin: 0; max-height: none; }
+.dl-code.small .ln i { width: 34px; }
+.dl-code.small .ln { white-space: pre; overflow-wrap: normal; }
+@media (max-width: 720px) {
+  .wfb-page .wfb-title { font-size: 27px; }
+  .wfb-page .dl-actions.tight { width: 100%; } .wfb-page .dl-actions.tight .btn.ghost { display: none; } .wfb-page .dl-actions .btn { flex: 1 1 auto; justify-content: center; }
+  .wfb-page .sc-ty { display: none; }
+  .wfb-page .dl-recipe { padding: 12px; }
+}
+.ref-btn { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; height: 22px; line-height: 1; }
+.wfb-page .trig-card .sc-head { gap: 14px; }
+.wfb-page .trig-card .wl { display: inline-flex; align-items: center; gap: 6px; font-weight: var(--font-weight-bold); color: var(--color-text-accent); flex: none; }
+.wfb-page .trig-card .wl svg { width: 16px; height: 16px; }
+.wfb-page .trig-card b { font-weight: var(--font-weight-bold); }
+.wfb-page .staff::before, .wfb-page .spine { display: none; }
