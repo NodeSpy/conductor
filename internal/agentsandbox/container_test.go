@@ -798,3 +798,92 @@ func TestContainersListKeepsEmptyTrailingFields(t *testing.T) {
 		t.Errorf("rows %+v", rows)
 	}
 }
+
+// An idle timer that fired while a new launch took the container (it waits
+// on the identity's lock) stops nothing that launch holds.
+func TestContainersIdleStopSparesALeasedContainer(t *testing.T) {
+	e := newFakeEngine(t)
+	c := fakeContainers(t, e)
+	p := fakePolicy(t, "bot:i", true)
+	rel, err := c.Prepare(context.Background(), &p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rel()
+	name := p.Container.Session.Name
+	c.mu.Lock()
+	b := c.boxes[name]
+	c.mu.Unlock()
+	if b == nil {
+		t.Fatal("no box for the launch")
+	}
+	c.stopIdle(b)
+	if e.stateOf(name) != "running" {
+		t.Error("an idle stop stopped a container a launch holds")
+	}
+}
+
+// A failed seed removes the HOME volume made for it, and never one that was
+// already there: that is the identity's HOME.
+func TestContainersSeedFailure(t *testing.T) {
+	e := newFakeEngine(t)
+	c := fakeContainers(t, e)
+	p := fakePolicy(t, "bot:s", true)
+	vol := c.VolumeName("bot:s")
+	e.fail["run"] = errors.New("seed failed")
+	if _, err := c.Prepare(context.Background(), &p); err == nil {
+		t.Fatal("prepared with a failed seed")
+	}
+	if _, ok := e.volumes[vol]; ok {
+		t.Error("a volume made for a failed seed was left behind")
+	}
+	delete(e.fail, "run")
+	p = fakePolicy(t, "bot:s", true)
+	rel, err := c.Prepare(context.Background(), &p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel()
+	// The container goes (removed outside conductor); its HOME stays. A
+	// later daemon's re-seed fails: the HOME is kept.
+	delete(e.containers, p.Container.Session.Name)
+	c2 := fakeContainers(t, e)
+	e.fail["run"] = errors.New("seed failed")
+	p = fakePolicy(t, "bot:s", true)
+	if _, err := c2.Prepare(context.Background(), &p); err == nil {
+		t.Fatal("prepared with a failed re-seed")
+	}
+	if _, ok := e.volumes[vol]; !ok {
+		t.Error("a failed re-seed removed the identity's HOME volume")
+	}
+}
+
+// A launch with no conductor socket or no token gets neither an endpoint
+// nor a token in its environment.
+func TestContainersNoSocketNoEndpoint(t *testing.T) {
+	e := newFakeEngine(t)
+	c := fakeContainers(t, e)
+	sock := filepath.Join(t.TempDir(), "s.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	for name, set := range map[string]func(*Policy){
+		"no socket": func(p *Policy) { p.Token = "tok" },
+		"no token":  func(p *Policy) { p.Socket = sock },
+	} {
+		p := fakePolicy(t, "bot:"+strings.ReplaceAll(name, " ", "-"), false)
+		set(&p)
+		rel, err := c.Prepare(context.Background(), &p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, kv := range p.Container.Session.Env {
+			if strings.HasPrefix(kv, "CONDUCTOR_ENDPOINT=") || strings.HasPrefix(kv, "CONDUCTOR_SKILL_TOKEN=") {
+				t.Errorf("%s: %s in the launch's env", name, kv)
+			}
+		}
+		rel()
+	}
+}

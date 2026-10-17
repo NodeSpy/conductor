@@ -51,6 +51,13 @@ func TestFindEngine(t *testing.T) {
 	if e.Rootless(ctx) {
 		t.Error("docker reported rootless")
 	}
+	fakeEngineBin(t, "docker", `case "$1" in info) echo true;; esac; exit 0`)
+	if e, err := FindEngine(ctx, "docker"); err != nil || e.Rootless(ctx) {
+		t.Errorf("only podman is rootless (keep-id), whatever docker says: %v", err)
+	}
+	if _, err := ResolveEngine("nerdctl", "linux", func(string) (string, error) { return "/usr/bin/nerdctl", nil }, nil); err == nil {
+		t.Error("an engine that is neither docker nor podman was accepted")
+	}
 	fakeEngineBin(t, "docker", `echo "Cannot connect to the Docker daemon" >&2; exit 1`)
 	if _, err := FindEngine(ctx, "docker"); err == nil || !strings.Contains(err.Error(), "not answering") {
 		t.Errorf("a docker that does not answer: %v", err)

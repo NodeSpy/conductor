@@ -445,3 +445,31 @@ func TestCanonResolvesThroughAMissingTail(t *testing.T) {
 		t.Fatalf("canon = %s", got)
 	}
 }
+
+// sandbox.backend: container is the default for a launch whose entry names
+// no isolation of its own — a copy, so one launch's prepared session never
+// reaches the resolver's default or another launch's policy.
+func TestResolverContainerDefault(t *testing.T) {
+	def := &Container{Image: "img:1", Persistent: true}
+	r := &Resolver{Registry: &Registry{}, StateRoot: t.TempDir(), GOOS: "linux", Container: def}
+	ws := t.TempDir()
+	p, err := r.PolicyForEntry(Entry{Workspace: ws, Identity: "a"}, "claude", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Container == nil || p.Container.Image != "img:1" || !p.Container.Persistent {
+		t.Fatalf("the default backend was not applied: %+v", p.Container)
+	}
+	if p.Container == def {
+		t.Fatal("the policy shares the resolver's default")
+	}
+	p.Container.Session = &ContainerSession{Name: "x"}
+	if def.Session != nil {
+		t.Error("a launch's session reached the default")
+	}
+	own := &Container{Image: "img:2"}
+	p2, err := r.PolicyForEntry(Entry{Workspace: ws, Identity: "a", Container: own}, "claude", nil)
+	if err != nil || p2.Container == nil || p2.Container.Image != "img:2" {
+		t.Fatalf("an entry's own container: %+v %v", p2.Container, err)
+	}
+}
