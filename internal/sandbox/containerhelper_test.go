@@ -4,8 +4,11 @@ package sandbox
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -55,6 +58,7 @@ func TestSeedHome(t *testing.T) {
 // A launch runs in its own group, recorded by id; the host's signal reaches
 // the whole group; its status is the launch's; its pid file goes with it.
 func TestContainerLaunchAndSignal(t *testing.T) {
+	guardSignals(t)
 	old := launchDir
 	launchDir = t.TempDir()
 	t.Cleanup(func() { launchDir = old })
@@ -131,5 +135,88 @@ func TestContainerLaunchAndSignal(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(launchDir, "run-L6.pid"), []byte("12345"), 0o600)
 	if rc := SignalContainerLaunch("L6", "BOGUS"); rc != 2 {
 		t.Error("an unknown signal")
+	}
+}
+
+// guardSignals makes every group signal sent during the test either reach a
+// process group made only of this test's descendants (or an empty group,
+// where it is a no-op) or fail the test unsent. A test must never be able to
+// signal anything else: a mutated guard then fails here instead of taking out
+// the operator's session.
+func guardSignals(t *testing.T) {
+	t.Helper()
+	var mu sync.Mutex
+	seen := map[int]bool{} // groups already verified as ours: a pgid isn't reused while any member lives
+	old := rawKill
+	rawKill = func(pid int, sig syscall.Signal) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if pgid := -pid; pgid > 1 && (seen[pgid] || groupIsOurs(pgid)) {
+			seen[pgid] = true
+			return old(pid, sig)
+		}
+		t.Errorf("refused to send signal %v to %d: not a process group this test started", sig, pid)
+		return syscall.EPERM
+	}
+	t.Cleanup(func() { rawKill = old })
+}
+
+// groupIsOurs reports whether every process in group pgid descends from the
+// test process. An empty group counts as ours (signalling it is a no-op);
+// anything it can't determine does not.
+func groupIsOurs(pgid int) bool {
+	out, err := exec.Command("ps", "-A", "-o", "pid=,ppid=,pgid=").Output()
+	if err != nil {
+		return false
+	}
+	parent := map[int]int{}
+	var members []int
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 3 {
+			continue
+		}
+		pid, e1 := strconv.Atoi(f[0])
+		ppid, e2 := strconv.Atoi(f[1])
+		pg, e3 := strconv.Atoi(f[2])
+		if e1 != nil || e2 != nil || e3 != nil {
+			continue
+		}
+		parent[pid] = ppid
+		if pg == pgid {
+			members = append(members, pid)
+		}
+	}
+	self := os.Getpid()
+	for _, m := range members {
+		ours := false
+		for p, hops := m, 0; p > 1 && hops < 64; p, hops = parent[p], hops+1 {
+			if parent[p] == self {
+				ours = true
+				break
+			}
+		}
+		if !ours {
+			return false
+		}
+	}
+	return true
+}
+
+func TestSignalGroupRefusesLowPGIDs(t *testing.T) {
+	var got []int
+	old := rawKill
+	rawKill = func(pid int, sig syscall.Signal) error { got = append(got, pid); return nil }
+	t.Cleanup(func() { rawKill = old })
+	for _, pgid := range []int{1, 0, -1, -7} {
+		if err := signalGroup(pgid, syscall.SIGKILL); err != syscall.EINVAL {
+			t.Errorf("signalGroup(%d): %v, want EINVAL", pgid, err)
+		}
+	}
+	if len(got) != 0 {
+		t.Fatalf("signalGroup sent %v for a pgid <= 1", got)
+	}
+	if err := signalGroup(4242, syscall.SIGTERM); err != nil || len(got) != 1 || got[0] != -4242 {
+		t.Fatalf("signalGroup(4242): err=%v sent=%v, want one signal to -4242", err, got)
 	}
 }

@@ -151,12 +151,12 @@ func RunContainerLaunch(id string, argv []string) int {
 	defer os.Remove(pidf)
 	go func() {
 		for s := range sigs {
-			_ = syscall.Kill(-cmd.Process.Pid, s.(syscall.Signal))
+			_ = signalGroup(cmd.Process.Pid, s.(syscall.Signal))
 		}
 	}()
 	err = cmd.Wait()
 	// The launch is over: nothing it started outlives it.
-	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	_ = signalGroup(cmd.Process.Pid, syscall.SIGKILL)
 	if err == nil {
 		return 0
 	}
@@ -191,6 +191,6 @@ func SignalContainerLaunch(id, sig string) int {
 		fmt.Fprintf(os.Stderr, "sandbox-net: --signal: unknown signal %q\n", sig)
 		return 2
 	}
-	_ = syscall.Kill(-pid, s)
+	_ = signalGroup(pid, s)
 	return 0
 }
