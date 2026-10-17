@@ -390,3 +390,4 @@ th.sel, td.sel { width: 30px; padding-right: 0 !important; }
 .tf-tiles > div.loud b { color: var(--color-status-danger-fg); }
 .req-banner.event, .req-banner.op { background: transparent; border-color: var(--color-border-subtle); }
 .req-banner.event svg, .req-banner.op svg { color: var(--color-icon-default); }
+.why-impact > div { background: transparent; border: 0; border-left: 2px solid var(--color-border-default); border-radius: 0; padding: 0 0 0 var(--space-4); }

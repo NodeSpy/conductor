@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>conductor · calm by default: before and after</title>
+<link rel="icon" href="../assets/logo/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../fonts/fonts.css">
+<link rel="stylesheet" href="../css/tokens.css">
+<style>
+  body { margin: 0; background: var(--color-bg-canvas); color: var(--color-text-primary); font: var(--type-body-m); }
+  main { max-width: 1320px; margin: 0 auto; padding: var(--space-10) var(--space-6) var(--space-20); }
+  h1 { font: var(--type-display); font-size: clamp(2rem, 5vw, 3rem); letter-spacing: var(--type-display-tracking); font-variation-settings: var(--type-display-variation); margin: 0 0 var(--space-3); }
+  h2 { font: var(--type-h1); font-size: 1.75rem; font-variation-settings: var(--type-h1-variation); margin: var(--space-16) 0 var(--space-2); }
+  .lede { font: var(--type-body-l); color: var(--color-text-secondary); max-width: 46rem; }
+  .rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-4) var(--space-8); margin: var(--space-8) 0; padding: 0; list-style: none; }
+  .rules li b { display: block; font: var(--type-h4); }
+  .rules li { color: var(--color-text-secondary); font: var(--type-body-s); }
+  .answer { font: var(--type-h3); margin: 0 0 var(--space-1); }
+  .answer span { color: var(--color-text-tertiary); font-weight: var(--font-weight-regular); }
+  .check { font: var(--type-body-s); color: var(--color-text-secondary); margin: 0 0 var(--space-5); }
+  .row { display: grid; grid-template-columns: 120px repeat(3, minmax(0, 1fr)); gap: var(--space-3); align-items: start; margin-bottom: var(--space-4); }
+  .row.phone { grid-template-columns: 120px repeat(3, minmax(0, 220px)); }
+  .row .k { font: var(--type-label); color: var(--color-text-secondary); padding-top: var(--space-2); }
+  .head { font: var(--type-label); font-size: var(--type-caption-size); color: var(--color-text-tertiary); }
+  figure { margin: 0; }
+  figure img { width: 100%; height: auto; display: block; border-radius: var(--radius-md); border: var(--border-width) solid var(--color-border-subtle); box-shadow: var(--shadow-1); }
+  .tabs { display: flex; gap: var(--space-2); flex-wrap: wrap; margin: var(--space-6) 0 0; }
+  .tabs a { font: var(--type-label); color: var(--color-text-secondary); padding: var(--space-2) var(--space-3); border: var(--border-width) solid var(--color-border-default); border-radius: var(--radius-control); text-decoration: none; }
+  a { color: var(--color-text-accent); }
+  @media (max-width: 760px) { .row, .row.phone { grid-template-columns: 1fr 1fr 1fr; } .row .k { grid-column: 1 / -1; } main { padding: var(--space-6) var(--space-4); } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Calm by default</h1>
+  <p class="lede">Daniel: “all of it just looks so busy… I have to read everything all the time.” Each screen now answers <b>is anything wrong, and what needs me?</b> in about three seconds without reading, and says almost nothing when nothing does. Before and after use the same data (the “everything at once” demo day, five things need you). The third column is the default demo day: a mostly healthy day, dozens of runs, one approval and one failure.</p>
+  <ul class="rules">
+    <li><b>One loud thing per screen</b>The few things that need you sit at the top, large, with one sentence and one action. Everything else steps back.</li>
+    <li><b>Normal collapses into one line</b>Finished runs, healthy systems and passing lanes fold into a quiet line you can open.</li>
+    <li><b>Colour only for exceptions</b>Failures, things waiting on you and the “now” cursor. Running work is drawn in ink.</li>
+    <li><b>Less text by default</b>One line per row; ids, hashes and counts sit behind hover or a tap.</li>
+    <li><b>Direct labels</b>Marks on the lanes say what they are (“failed 52 min ago”); no legend to decode.</li>
+    <li><b>Quiet states are first-class</b>“All quiet. Nothing needs you.” is a complete Overview.</li>
+  </ul>
+  <p class="check">Checked automatically (<code>dashboard-tests/calm.spec.js</code>): on the mostly healthy day the answer is first in reading order and bold, the Overview's answer is the largest text, and the first viewport of each screen stays within a colour budget with no wall-of-text rows; the all-quiet Overview says so and draws no exception colour. Try the days live: the ✦ button at the bottom of the rail → Demo data.</p>
+  <nav class="tabs" id="toc"></nav>
+  <div id="screens"></div>
+</main>
+<script>
+  // the one sentence each screen should give at a glance (the same list calm.spec.js asserts on)
+  const S = [
+    ['overview', 'Overview', '2 things need you.', 'Everything else is fine, in one line beneath; lanes show the day; the rest folds into quiet rows.'],
+    ['runs', 'Run history', '1 run needs attention.', 'Needs attention first; running now; finished work as one line: “40 finished · 39 passed, 1 parked”.'],
+    ['lanes', 'Activity (lanes)', '3 runs are going now.', 'Passing runs are a faint tick strip; only the failure and the run waiting on you are marks, labelled where they are.'],
+    ['bot', 'A bot', '2 approvals wait for you.', 'The bot in one sentence; the facts behind “Details”; cases one line each.'],
+    ['approval', 'An approval', 'Replace the production web server', 'A needs-you kicker, the plain title, why and impact, then the decision. Ids and hashes are collapsed.'],
+  ];
+  const DEV = [['desktop', 'light'], ['desktop', 'dark'], ['phone', 'light'], ['phone', 'dark']];
+  const img = (set, k, d, t) => `<figure><img loading="lazy" src="shots/${set}-${k}-${d}-${t}.jpg" alt="${set} ${k} ${d} ${t}"></figure>`;
+  document.getElementById('toc').innerHTML = S.map(([k, l]) => `<a href="#${k}">${l}</a>`).join('') + '<a href="#quiet">All quiet</a>';
+  document.getElementById('screens').innerHTML = S.map(([k, l, a, how]) => `<section id="${k}"><h2>${l}</h2><p class="answer">${a} <span>is what you should see first.</span></p><p class="check">${how}</p>
+    <div class="row"><span></span><span class="head">Before (busy)</span><span class="head">After, same data</span><span class="head">After, the default day</span></div>
+    ${DEV.map(([d, t]) => `<div class="row${d === 'phone' ? ' phone' : ''}"><span class="k">${d}, ${t}</span>${img('before', k, d, t)}${img('after', k, d, t)}${img('calmday', k, d, t)}</div>`).join('')}</section>`).join('') +
+    `<section id="quiet"><h2>All quiet</h2><p class="answer">All quiet. Nothing needs you. <span>is the whole Overview.</span></p><p class="check">The same screens on a day when nothing needs you: one line, the lanes, quiet rows.</p>
+    <div class="row"><span></span><span class="head">Overview</span><span class="head">Run history</span><span class="head">Activity</span></div>
+    ${DEV.map(([d, t]) => `<div class="row${d === 'phone' ? ' phone' : ''}"><span class="k">${d}, ${t}</span>${img('quietday', 'overview', d, t)}${img('quietday', 'runs', d, t)}${img('quietday', 'lanes', d, t)}</div>`).join('')}</section>`;
+</script>
+</main>
+</body>
+</html>

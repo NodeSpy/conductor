@@ -406,3 +406,4 @@ tr.folded { display: none; }
 .gs .gs-card.done .gs-n { border-color: transparent; color: var(--color-text-tertiary); }
 .gs .gs-card.done .gs-n svg { color: var(--color-text-tertiary); }
 .gs .gs-card .gs-go { color: var(--color-text-secondary); }
+@media (max-width: 720px) { .hello .lede-2 { display: none; } .calm .hello h1 { font-size: 1.25rem; } }
