@@ -1769,6 +1769,14 @@ main() {
     [ "$FAIL" -eq 0 ]
     return
   fi
+  if [ -n "${E2E_GROUPS:-}" ]; then
+    # E2E_GROUPS="Z BR": run only those groups (a quicker loop on one).
+    local g
+    for g in $E2E_GROUPS; do "$(declare -F | awk -v g="group_${g}_" '$3 ~ "^"g {print $3; exit}')"; done
+    print_matrix
+    [ "$FAIL" -eq 0 ]
+    return
+  fi
   group_A_resolution
   group_B_fixer
   group_I_identity
@@ -1794,6 +1802,7 @@ main() {
   group_Y_listeners_github_smee
   group_W_stepdone
   group_Z_sandbox
+  group_BR_browser
   print_matrix
   [ "$FAIL" -eq 0 ]
 }
@@ -1998,6 +2007,135 @@ group_Z_sandbox() {
   else
     bad "Z sandboxed review ran" Z review "no git.push call recorded for grpz/review"
   fi
+}
+
+# br_probe <kind> — the BROWSER_PROBE.md a browser-probing agent of that kind
+# (event | operator) left in its workspace on the sandbox daemon.
+br_probe() {
+  cexec conductor-sandbox sh -c 'find /home/conductor -name BROWSER_PROBE.md 2>/dev/null | while read -r f; do cat "$f"; echo "@@"; done' |
+    tr -d '\r' | awk -v k="kind: $1" 'BEGIN{RS="@@\n"} index($0, k) {print; exit}'
+}
+br_has() { [ -n "$(br_probe "$1")" ]; }
+br_expect() { # <probe> <label> <key> <pattern>
+  local got; got="$(probe_line "$1" "$3")"
+  case "$got" in $4) ok "BR $2: $3 → $got" BR "$2/$3" ;; *) bad "BR $2: $3" BR "$2/$3" "want $4, got '$got'" ;; esac
+}
+
+group_BR_browser() {
+  banner "Group BR — conductor's browser: sandboxed, allowlisted, logged in only for the operator, credentials never seen"
+  local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml sid probe st leak
+  # A saved session for the event dispatch's identity: it must NOT get it.
+  sid="$(cexec "$C" curl -s 127.0.0.1:8090/_harness/session | tr -d '\r')"
+  for id in "agent:br_event@grpz/browser" "agent:br_event"; do
+    cexec "$C" sh -c "printf '[{\"name\":\"sid\",\"value\":\"$sid\",\"domain\":\"localhost\",\"path\":\"/\"}]' > /tmp/br-c.json && conductor browser cookies import --identity '$id' --site localhost /tmp/br-c.json --config $CFG" >/dev/null 2>&1
+  done
+  force "$C" merge_conflict "grpz/browser#1" "$CFG" >/dev/null
+  if wait_for 150 br_has event; then
+    probe="$(br_probe event)"
+    printf '%s\n' "$probe" | sed 's/^/      /'
+    br_expect "$probe" event open "ok"
+    br_expect "$probe" event fill "ok"
+    br_expect "$probe" event select "ok"
+    br_expect "$probe" event upload "ok"
+    br_expect "$probe" event upload-escape "refused:*"
+    br_expect "$probe" event submit "ok Thanks"
+    br_expect "$probe" event download ".browser/downloads/report.csv"
+    br_expect "$probe" event download-content "ok"
+    br_expect "$probe" event screenshot "ok"
+    br_expect "$probe" event offlist "refused:*not in this browser's allowlist*"
+    br_expect "$probe" event evaluate "refused:*evaluate is off*"
+    br_expect "$probe" event profile "anonymous"
+    br_expect "$probe" event logged-in-note "*not the operator*"
+    br_expect "$probe" event account "anonymous"
+    br_expect "$probe" event login 'refused:*credential "testsite": this session*not the operator*'
+    br_expect "$probe" event after-login "anonymous"
+  else
+    bad "BR the event's browser probe ran" BR event "no BROWSER_PROBE.md (kind event)"
+    dc logs --tail 60 "$C"
+  fi
+  cexec "$C" conductor run br_operator --config "$CFG" >/dev/null 2>&1
+  if wait_for 150 br_has operator; then
+    probe="$(br_probe operator)"
+    printf '%s\n' "$probe" | sed 's/^/      /'
+    br_expect "$probe" operator login "ok*one-time code*"
+    br_expect "$probe" operator after-login "signed-in"
+    br_expect "$probe" operator lookalike "refused:*origin*"
+    br_expect "$probe" operator download-content "ok"
+  else
+    bad "BR the operator's browser probe ran" BR operator "no BROWSER_PROBE.md (kind operator)"
+    dc logs --tail 60 "$C"
+  fi
+  st="$(cexec "$C" curl -s 127.0.0.1:8090/_harness/state | tr -d '\r')"
+  case "$st" in *'"sign_ins":["password+otp"]'*) ok "BR the site saw exactly one sign-in: the operator's, password + TOTP" BR site/signins ;;
+    *) bad "BR one sign-in" BR site/signins "state: $st" ;; esac
+  case "$st" in *'"Name":"E2E Agent","Color":"red","FileName":"upload-me.txt"'*) ok "BR the site got the form with the workspace file" BR site/form ;;
+    *) bad "BR the form" BR site/form "state: $st" ;; esac
+  # No secret anywhere the agent or the logs reach: the password, the TOTP
+  # seed, any code the site accepted.
+  leak="$(cexec "$C" sh -c '
+    codes=$(curl -s 127.0.0.1:8090/_harness/state | sed -n "s/.*\"codes\":\[\([^]]*\)\].*/\1/p" | tr -d "\" " | tr "," " ")
+    for s in test-password-not-secret JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP $codes; do
+      grep -rl --exclude-dir=vault -e "$s" /home/conductor/data /home/conductor/.conductor 2>/dev/null | grep -v "/testsite.log$" | sed "s|^|$s in |"
+    done' | tr -d '\r')"
+  if dc logs "$C" 2>&1 | grep -q -e test-password-not-secret -e JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP; then
+    leak="$leak the daemon log"
+  fi
+  if [ -z "$leak" ]; then
+    ok "BR no password, seed or code in any workspace, transcript, audit or log" BR leak
+  else
+    bad "BR no secret leaked" BR leak "$leak"
+  fi
+  if z_audit '"event":"browser"' '"action":"login"' '"credential":"testsite"' '"requester":"event"' '"outcome":"refused"'; then
+    ok "BR the event's sign-in attempt is audited as refused" BR audit/refused
+  else bad "BR audit refused login" BR audit/refused "no such audit line"; fi
+  if z_audit '"event":"browser"' '"action":"login"' '"credential":"testsite"' '"requester":"operator"' '"outcome":"ok"'; then
+    ok "BR the operator's sign-in is audited (identity, origin, credential — no value)" BR audit/login
+  else bad "BR audit login" BR audit/login "no such audit line"; fi
+  if z_audit '"event":"browser"' '"action":"open"' '"outcome":"refused"' 'example.com'; then
+    ok "BR an off-list site is refused and audited" BR audit/offlist
+  else bad "BR audit off-list" BR audit/offlist "no such audit line"; fi
+  br_login_setup
+}
+
+# br_login_setup: a login added at runtime, as the dashboard drives it —
+# each field from a different source (the username from the file vault, the
+# password typed and stored write-only, the code as a named secret) — checked,
+# tested in a sandboxed browser, classified, listed without a value, revoked.
+br_login_setup() {
+  local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml out
+  out="$(cexec "$C" sh -c "printf 'test-password-not-secret\n' | conductor browser credential add br-typed --origin http://localhost:8090 \
+      --login-url http://localhost:8090/login --bind 'agent:br_op' --username-ref '{{ vault \"e2evault\" \"username\" }}' \
+      --password-stdin --otp-ref '{{secret \"e2evault/otp\"}}' --config $CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'"change": "widening"'*'"kind": "stored"'*|*'"kind": "stored"'*'"change": "widening"'*) ok "BR a typed login is added (widening), its password stored write-only" BR setup/add ;;
+    *) bad "BR add a typed login" BR setup/add "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential check br-typed --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'"ok": true'*) ok "BR every field resolves (vault, typed, named secret) — no value returned" BR setup/check ;;
+    *) bad "BR resolve check" BR setup/check "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential test br-typed --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'"status": "ok"'*) ok "BR the test sign-in passes, in a sandboxed browser" BR setup/test ;;
+    *) bad "BR test sign-in" BR setup/test "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential bind br-typed --bind bot:helper --dry-run --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'"change": "widening"'*'"dry_run": true'*|*'"dry_run": true'*'"change": "widening"'*) ok "BR binding a bot is widening (dry run)" BR setup/widening ;;
+    *) bad "BR widening" BR setup/widening "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential ls --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *test-password-not-secret*|*JBSWY3DPEHPK3PXP*) bad "BR the inventory carries a value" BR setup/inventory "$out" ;;
+    *'"status": "ok"'*'"name": "br-typed"'*|*'"name": "br-typed"'*'"status": "ok"'*) ok "BR the inventory lists it with its last test — no value" BR setup/inventory ;;
+    *) bad "BR inventory" BR setup/inventory "$out" ;; esac
+  out="$(cexec "$C" conductor browser vault-items e2evault --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *test-password-not-secret*|*JBSWY3DPEHPK3PXP*) bad "BR a vault listing carries a value" BR setup/listing "$out" ;;
+    *'{{ vault \"e2evault\" \"password\" }}'*) ok "BR a vault lists names and references — no value" BR setup/listing ;;
+    *) bad "BR vault listing" BR setup/listing "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential rm br-typed --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'"change": "narrowing"'*) ok "BR revoked (narrowing)" BR setup/revoke ;; *) bad "BR revoke" BR setup/revoke "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential test br-typed --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'no credential'*'"status": "failed"'*|*'"status": "failed"'*'no credential'*) ok "BR a revoked login is refused" BR setup/revoked ;;
+    *) bad "BR a revoked login" BR setup/revoked "$out" ;; esac
+  if z_audit '"event":"browser"' '"action":"test-login"' '"credential":"br-typed"' '"outcome":"ok"'; then
+    ok "BR the test sign-in is audited" BR setup/audit
+  else bad "BR test sign-in audit" BR setup/audit "no such audit line"; fi
+  out="$(cexec "$C" sh -c 'grep -rl -e test-password-not-secret /home/conductor/data /home/conductor/.conductor 2>/dev/null | grep -v -e "/vault/" -e "/testsite.log$"' | tr -d '\r')"
+  if [ -z "$out" ]; then ok "BR the typed password is nowhere in plain text after setup, test and revoke" BR setup/leak
+  else bad "BR typed password leaked" BR setup/leak "$out"; fi
 }
 
 main "$@"

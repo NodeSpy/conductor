@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -60,6 +61,32 @@ var agentMachNet = []string{
 	"com.apple.symptomsd",
 	"com.apple.usymptomsd",
 }
+
+// browserMach are the services headless Chromium looks up beyond an
+// agent's (found on macos-latest from the sandbox's own denial log).
+var browserMach = []string{"com.apple.system.opendirectoryd.api"}
+
+// browserWindowMach, browserWindowXPC and browserWindowLocal are what a
+// headed Chrome's window reaches (found on macos-latest with the profile's
+// own report), for the operator's takeover only.
+var (
+	browserWindowMach = []string{
+		"com.apple.windowserver.active", "com.apple.CARenderServer", "com.apple.windowmanager.server",
+		"com.apple.window_proxies", "com.apple.dock.server", "com.apple.dock.fullscreen",
+		"com.apple.tsm.uiserver", "com.apple.backboard.hid-services.xpc",
+		"com.apple.iconservices", "com.apple.iconservices.store",
+	}
+	browserWindowXPC   = []string{"com.apple.hiservices-xpcservice", "com.apple.ViewBridgeAuxiliary", "com.apple.TextInputUI.xpc.CursorUIViewService"}
+	browserWindowLocal = []string{"com.apple.tsm.portname", "com.apple.axserver", "com.apple.coredrag"}
+)
+
+// browserRendezvous is Chromium's child-process rendezvous service,
+// "<bundle id>.MachPortRendezvousServer.<pid>" — the one name it registers.
+const browserRendezvous = `#"^[A-Za-z0-9.]+\.MachPortRendezvousServer\.[0-9]+$"`
+
+// browserCrashpad is crashpad's child handshake port, which Chromium
+// registers even with crash reporting off.
+const browserCrashpad = `#"^org\.chromium\.crashpad\.child_port_handshake\.[0-9.A-Z]+$"`
 
 // agentMachKeychain are the Security framework services a Keychain-held
 // login needs.
@@ -134,7 +161,15 @@ type AgentNet struct {
 // seatbeltAgentProfile renders the agent profile.
 func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string {
 	var b strings.Builder
-	b.WriteString(seatbeltAgentBase)
+	if a.Browser {
+		// The browser reads no metadata outside what it may read: no
+		// directory listing (Seatbelt counts one as metadata) anywhere but
+		// its own paths, the system's, and the components leading to them.
+		b.WriteString(strings.Replace(seatbeltAgentBase, "(allow file-read-metadata)\n", "", 1))
+		b.WriteString(browserMetadata(binds))
+	} else {
+		b.WriteString(seatbeltAgentBase)
+	}
 	mach := append([]string(nil), agentMachBase...)
 	if n.Open {
 		mach = append(mach, agentMachNet...)
@@ -142,11 +177,50 @@ func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string
 	if a.Keychain {
 		mach = append(mach, agentMachKeychain...)
 	}
-	b.WriteString("(allow mach-lookup")
-	for _, s := range mach {
-		b.WriteString("\n  (global-name " + sbplString(s) + ")")
+	if a.Browser {
+		// Only what headless Chromium needs: the agent's service list, its
+		// own child-process rendezvous (registered and looked up by name),
+		// and IOSurface for its shared memory. The Keychain stays denied by
+		// name — later rules win.
+		b.WriteString("(allow mach-lookup")
+		for _, s := range append(append([]string(nil), mach...), browserMach...) {
+			b.WriteString("\n  (global-name " + sbplString(s) + ")")
+		}
+		b.WriteString("\n  (global-name-regex " + browserRendezvous + ")\n  (global-name-regex " + browserCrashpad + "))\n")
+		b.WriteString("(allow mach-register (global-name-regex " + browserRendezvous + ") (global-name-regex " + browserCrashpad + "))\n")
+		b.WriteString("(allow iokit-open (iokit-user-client-class \"IOSurfaceRootUserClient\") (iokit-user-client-class \"RootDomainUserClient\"))\n")
+		b.WriteString("(allow ipc-posix-shm)\n(allow process-info*)\n(allow user-preference-read)\n")
+		if a.Window {
+			// The operator's own window: the window server, CoreAnimation,
+			// the window manager and dock, text input, HID, the pasteboard
+			// (pasting a password in) and icons — by name. The GPU is off
+			// (--disable-gpu), so no GPU IOKit class.
+			b.WriteString("(allow mach-lookup")
+			for _, s := range browserWindowMach {
+				b.WriteString("\n  (global-name " + sbplString(s) + ")")
+			}
+			for _, s := range browserWindowXPC {
+				b.WriteString("\n  (xpc-service-name " + sbplString(s) + ")")
+			}
+			b.WriteString("\n  (global-name-regex #\"^com\\.apple\\.pasteboard\\.[0-9]+$\"))\n")
+			b.WriteString("(allow mach-register")
+			for _, s := range browserWindowLocal {
+				b.WriteString("\n  (local-name " + sbplString(s) + ")")
+			}
+			b.WriteString(")\n(allow iokit-open (iokit-user-client-class \"IOHIDParamUserClient\"))\n")
+		}
+		b.WriteString("(deny mach-lookup")
+		for _, s := range agentMachKeychain {
+			b.WriteString("\n  (global-name " + sbplString(s) + ")")
+		}
+		b.WriteString(")\n")
+	} else {
+		b.WriteString("(allow mach-lookup")
+		for _, s := range mach {
+			b.WriteString("\n  (global-name " + sbplString(s) + ")")
+		}
+		b.WriteString(")\n")
 	}
-	b.WriteString(")\n")
 	for _, m := range resolveBinds(binds) {
 		if m.Path == "" {
 			continue
@@ -155,6 +229,12 @@ func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string
 			b.WriteString("(allow file-read* (subpath " + sbplString(m.Path) + "))\n")
 		} else {
 			b.WriteString("(allow file-read* file-write* (subpath " + sbplString(m.Path) + "))\n")
+		}
+		if a.Browser {
+			// Chromium hands its child processes sandbox extensions for
+			// what it may read itself (its bundle, its profile) — nothing
+			// beyond the allow-list.
+			b.WriteString("(allow file-issue-extension (subpath " + sbplString(m.Path) + "))\n")
 		}
 	}
 	for _, p := range resolvePaths(a.ReadOnly) {
@@ -201,6 +281,16 @@ func seatbeltAgentProfile(binds []BindMount, a *AgentProfile, n AgentNet) string
 		for _, p := range a.ListenPorts {
 			b.WriteString(fmt.Sprintf("(allow network-bind network-inbound (local ip \"localhost:%d\"))\n", p))
 		}
+		if a.Browser {
+			// Chromium's own unix sockets (its process singleton), in its
+			// own directories only.
+			for _, m := range resolveBinds(binds) {
+				if m.Path != "" && !m.RO {
+					b.WriteString("(allow network-bind network-inbound (local unix-socket (subpath " + sbplString(m.Path) + ")))\n")
+					b.WriteString("(allow network-outbound (remote unix-socket (subpath " + sbplString(m.Path) + ")))\n")
+				}
+			}
+		}
 	}
 	return b.String()
 }
@@ -237,4 +327,35 @@ func socketPaths(ps []string) []string {
 		}
 	}
 	return out
+}
+
+// browserMetadata is the metadata a browser profile reads beyond its
+// file-read* paths: the root, the firmlinked top-level symlinks, and each
+// component leading to an allowed path (its realpath) — literally, so the
+// component itself, never what else is in it.
+func browserMetadata(binds []BindMount) string {
+	seen := map[string]bool{}
+	var lits []string
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			lits = append(lits, p)
+		}
+	}
+	for _, p := range []string{"/", "/var", "/tmp", "/etc", "/private", "/private/var", "/private/tmp", "/private/etc"} {
+		add(p)
+	}
+	all := append(append([]BindMount(nil), binds...), resolveBinds(binds)...)
+	for _, m := range all {
+		for d := filepath.Dir(filepath.Clean(m.Path)); d != "/" && d != "." && d != ""; d = filepath.Dir(d) {
+			add(d)
+		}
+	}
+	var b strings.Builder
+	b.WriteString("(allow file-read-metadata")
+	for _, p := range lits {
+		b.WriteString("\n  (literal " + sbplString(p) + ")")
+	}
+	b.WriteString(")\n")
+	return b.String()
 }

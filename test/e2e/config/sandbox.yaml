@@ -135,6 +135,47 @@ triggers:
         workspace: worktree
         archive_when_done: true
         prompt: "Review {{.repo}}#{{.pr}} (sandboxed reviewer) [[sandbox-probe]]"
+  # Group BR: conductor's browser. An event's dispatch drives it anonymously
+  # (its identity has a saved session and a credential it may NOT use: the
+  # request is not the operator's) …
+  - "on": github.merge_conflict
+    filter:
+      repo:
+        - grpz/browser
+    steps:
+      - type: agent
+        name: br_event
+        agent: br_event
+        runtime: cli_claude
+        workspace: worktree
+        archive_when_done: true
+        prompt: "Resolve {{.repo}}#{{.pr}} [[browser-probe]]"
+  # … and the operator's own `conductor run` signs in with the credential.
+  - "on": manual
+    name: br_operator
+    steps:
+      - type: agent
+        name: br_op
+        agent: br_op
+        runtime: cli_claude
+        prompt: "Sign in to the test site [[browser-probe operator]]"
+vaults:
+  e2evault:
+    type: file
+    dir: /home/conductor/data/vault
+browser:
+  allow: ["localhost:8090", "127.0.0.1:8090"]
+  logins:
+    - site: localhost
+      identities: ["agent:br_*"]
+  credentials:
+    - name: testsite
+      origin: http://localhost:8090
+      identities: ["agent:br_*"]
+      login_url: http://localhost:8090/login
+      username: { vault: e2evault, key: username }
+      password: { vault: e2evault, key: password }
+      otp: { vault: e2evault, key: otp }
 policy:
   concurrency:
     max_agents: 4

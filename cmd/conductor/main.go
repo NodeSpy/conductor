@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/NodeSpy/conductor/internal/agentsandbox"
+	"github.com/NodeSpy/conductor/internal/browser"
 	"github.com/NodeSpy/conductor/internal/confdir"
 	"net"
 	"os"
@@ -74,6 +75,10 @@ func main() {
 		// Launched by conductor itself inside a namespace/container; not a
 		// user-facing command.
 		os.Exit(runSandboxNet(args))
+	case "browser":
+		// `conductor browser …`: an agent's browser (over its skill
+		// socket), or the operator's browser commands (the control socket).
+		os.Exit(cmdBrowser(args))
 	case "sandbox":
 		// `conductor sandbox exec -- <agent>`: run an agent CLI under the
 		// agent sandbox with the daemon's policy for this directory (paseo's
@@ -941,6 +946,8 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer stopSandbox()
+	// The browser (after the sandbox, whose identities it serves).
+	defer wireBrowser(ctx, cfg, notifier, st.Audit, logf)()
 	if cfg.AgentSandboxOn() && !cfg.DryRun {
 		// The sandboxed paseo provider entries this daemon's paseo
 		// dispatches name: written (merged, conductor's own only) at every
@@ -1396,6 +1403,19 @@ type controlRequest struct {
 	// spawn of a provider): a cwd that may not be a workspace gets the
 	// tool's scratch workspace instead of a refusal.
 	Scratch bool `json:"scratch,omitempty"`
+	// browser-* (the operator's browser commands): the identity and site
+	// of a saved session, a credential, cookies or a passkey to save, a
+	// live session to peek at.
+	Identity   string           `json:"identity,omitempty"`
+	Site       string           `json:"site,omitempty"`
+	Credential string           `json:"credential,omitempty"`
+	Session    string           `json:"session,omitempty"`
+	Source     string           `json:"source,omitempty"`
+	Cookies    []browser.Cookie `json:"cookies,omitempty"`
+	Passkey    *browser.Passkey `json:"passkey,omitempty"`
+	// Login is a browser-login-* / browser-vault-* command's body
+	// (browserlogins.go).
+	Login *browserLoginReq `json:"login,omitempty"`
 }
 
 type controlResponse struct {
@@ -1406,6 +1426,8 @@ type controlResponse struct {
 	// Policy answers sandbox-policy: the launch's sandbox, with a token
 	// minted for this launch alone.
 	Policy *agentsandbox.Policy `json:"policy,omitempty"`
+	// Data answers a browser-* command.
+	Data json.RawMessage `json:"data,omitempty"`
 }
 
 // callableGate authorizes + audits a control-socket `run` that the MCP callable
@@ -1533,6 +1555,10 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 		streamRunEvents(ctx, conn, events, req.RunID, log)
 	case "sandbox-policy":
 		writeControlResp(conn, sandboxPolicyResponse(conn, req, log))
+	case "browser-logins", "browser-cookies-save", "browser-logout", "browser-sessions", "browser-peek", "browser-takeover", "browser-passkey-save",
+		"browser-login-add", "browser-login-set", "browser-login-unset", "browser-login-bind", "browser-login-remove", "browser-login-list",
+		"browser-login-usage", "browser-login-check", "browser-login-test", "browser-vault-items", "browser-vault-item":
+		writeControlResp(conn, browserControl(conn, req))
 	case "retry":
 		if retry == nil {
 			writeControlResp(conn, controlResponse{Error: "retry is not available (no flow runner configured)"})
@@ -1590,6 +1616,7 @@ func runManualTrigger(ctx context.Context, manual map[string]connector.CompiledT
 		Title:     "manual run: " + ct.Spec.Name,
 		Context:   trigCtx,
 		Force:     true, // bypass dedup gates — an on-demand run always runs
+		Operator:  !req.Callable,
 		Action:    act,
 		HistoryID: req.HistoryID, // "" unless a caller (the §13 invoke surface) pinned it
 	})
@@ -1799,20 +1826,39 @@ func sendControl(cfg *config.Config, req controlRequest) (controlResponse, error
 // signalSweepNow tells the running daemon to run a catch-up sweep immediately by
 // sending it SIGUSR1 (pid read from the pidfile).
 func signalSweepNow(cfg *config.Config) error {
-	p := pidPath(cfg)
-	b, err := os.ReadFile(p)
+	pid, err := signalDaemon(cfg, syscall.SIGUSR1)
 	if err != nil {
-		return fmt.Errorf("read pidfile %s — is the daemon running? %w", p, err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil {
-		return fmt.Errorf("bad pidfile %s: %w", p, err)
-	}
-	if err := syscall.Kill(pid, syscall.SIGUSR1); err != nil {
-		return fmt.Errorf("signal daemon (pid %d): %w", pid, err)
+		return err
 	}
 	fmt.Printf("signaled conductor (pid %d) to run a sweep now\n", pid)
 	return nil
+}
+
+// signalProcess is syscall.Kill. Tests replace it, so no test sends a real
+// signal.
+var signalProcess = syscall.Kill
+
+// signalDaemon reads the daemon's pid from the pidfile and sends it sig. A pid
+// must be > 1: kill(-1) signals every process the caller may signal, kill(0)
+// the caller's own group, and a negative pid a whole group, so a corrupt or
+// hostile pidfile must never reach syscall.Kill.
+func signalDaemon(cfg *config.Config, sig syscall.Signal) (int, error) {
+	p := pidPath(cfg)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return 0, fmt.Errorf("read pidfile %s — is the daemon running? %w", p, err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return 0, fmt.Errorf("bad pidfile %s: %w", p, err)
+	}
+	if pid <= 1 {
+		return 0, fmt.Errorf("bad pidfile %s: pid %d is not a daemon process", p, pid)
+	}
+	if err := signalProcess(pid, sig); err != nil {
+		return 0, fmt.Errorf("signal daemon (pid %d): %w", pid, err)
+	}
+	return pid, nil
 }
 
 // cmdReload signals the running daemon to re-read its config. Config is read at
@@ -1831,17 +1877,9 @@ func cmdReload(args []string) error {
 // canonical "reread config" signal, which the daemon handles by re-execing
 // itself so the new config loads at boot.
 func signalReload(cfg *config.Config) error {
-	p := pidPath(cfg)
-	b, err := os.ReadFile(p)
+	pid, err := signalDaemon(cfg, syscall.SIGHUP)
 	if err != nil {
-		return fmt.Errorf("read pidfile %s — is the daemon running? %w", p, err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil {
-		return fmt.Errorf("bad pidfile %s: %w", p, err)
-	}
-	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
-		return fmt.Errorf("signal daemon (pid %d): %w", pid, err)
+		return err
 	}
 	fmt.Printf("signaled conductor (pid %d) to reload its config\n", pid)
 	return nil

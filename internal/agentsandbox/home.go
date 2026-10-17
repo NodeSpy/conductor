@@ -91,15 +91,20 @@ func PrepareHome(s HomeSpec) (string, []Login, error) {
 		}
 	}
 	// Every state path exists, so the CLI writes into the identity home,
-	// never a missing one: a file (~/.claude.json) as an empty file, a dir
-	// as a dir.
+	// never a missing one: a file (~/.claude.json) as an empty one — `{}`
+	// for JSON, which a CLI reads as corrupt when it has no bytes at all
+	// (Claude Code exits) — a dir as a dir.
 	for _, rel := range t.state {
 		dst := filepath.Join(home, rel)
 		if _, err := os.Lstat(dst); err == nil {
 			continue
 		}
 		if stateIsFile(rel) {
-			if err := writeIfAbsent(dst, nil); err != nil {
+			var empty []byte
+			if strings.HasSuffix(rel, ".json") {
+				empty = []byte("{}\n")
+			}
+			if err := writeIfAbsent(dst, empty); err != nil {
 				return "", nil, err
 			}
 			continue

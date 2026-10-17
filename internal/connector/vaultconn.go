@@ -206,11 +206,12 @@ func buildVaultBackend(name string, ref config.VaultRef, boot *vaults.Bootstrap,
 	case "pass":
 		var conn struct {
 			Prefix string `yaml:"prefix"`
+			Dir    string `yaml:"dir"` // the store, for listing names
 		}
 		if err := ref.Decode(&conn); err != nil {
 			return nil, "", fmt.Errorf("vault %q: decode: %w", name, err)
 		}
-		return &vaults.PassVault{Prefix: conn.Prefix, Exec: deps.VaultExec}, "", nil
+		return &vaults.PassVault{Prefix: conn.Prefix, Dir: conn.Dir, Exec: deps.VaultExec}, "", nil
 	case "file":
 		var conn struct {
 			Dir string `yaml:"dir"`

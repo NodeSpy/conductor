@@ -143,6 +143,12 @@ func TestResolverDefaultPolicy(t *testing.T) {
 	if p.Token != "fresh" || p.Socket != "/s/memory.sock" || len(minted) != 1 || len(minted[0].Policy.Verbs) != 0 {
 		t.Fatalf("a fresh token that grants no verb: %+v %+v", p, minted)
 	}
+	if b := minted[0].Sandbox; b == nil || b.Identity != p.Identity || b.Workspace != p.Workspace {
+		t.Fatalf("the token stands for its sandbox: %+v", minted[0].Sandbox)
+	}
+	if minted[0].Requester != skill.RequesterOperator {
+		t.Fatalf("a directory of the operator's own is the operator's request: %q", minted[0].Requester)
+	}
 	if _, err := r.PolicyFor(ws, "claude", nil, false); err != nil || len(minted) != 2 {
 		t.Fatal("every launch mints its own token")
 	}
@@ -162,6 +168,9 @@ func TestResolverDefaultPolicy(t *testing.T) {
 		p, err := r.PolicyFor(bad, "codex", nil, true)
 		if err != nil || p.Identity != "scratch:codex" || !within(p.Workspace, canon(r.StateRoot)) || p.Workspace == canon(bad) {
 			t.Fatalf("scratch for %s: %+v %v", bad, p, err)
+		}
+		if last := minted[len(minted)-1]; last.Requester != "" {
+			t.Fatalf("a launcher's utility process has no requester: %q", last.Requester)
 		}
 	}
 	if p, _ := r.PolicyFor(ws, "codex", nil, true); p.Identity != "dir:"+canon(ws) {
@@ -425,8 +434,10 @@ func TestPrepareHomeSeedsNothingWithoutARealHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b, err := os.ReadFile(filepath.Join(home, ".claude.json")); err != nil || len(b) != 0 {
-		t.Fatalf("~/.claude.json is an empty file of its own, never the cwd's: %q %v", b, err)
+	// An empty JSON object, not zero bytes: Claude Code reads an empty
+	// .claude.json as corrupt and exits (found live, a fresh home).
+	if b, err := os.ReadFile(filepath.Join(home, ".claude.json")); err != nil || string(b) != "{}\n" {
+		t.Fatalf("~/.claude.json is an empty object of its own, never the cwd's: %q %v", b, err)
 	}
 	if fi, err := os.Stat(filepath.Join(home, ".claude")); err != nil || !fi.IsDir() {
 		t.Fatal("~/.claude is a dir")

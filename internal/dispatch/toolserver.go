@@ -190,7 +190,8 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 			// skill-enabled dispatch with an untrusted target loses the
 			// cross-dispatch confinement run_step relies on and falls back to
 			// the shared literal namespace (round-12 #4).
-			Dispatch: req.DispatchID,
+			Dispatch:  req.DispatchID,
+			Requester: requesterOf(req),
 		})
 		if err == nil {
 			out.Env = map[string]string{"CONDUCTOR_SKILL_CLAIM": claim}
@@ -208,6 +209,12 @@ func BuildToolServer(req Request, host string) *ToolServerSpec {
 // there is nothing to offer: no skill: on the profile, or no endpoint. This is
 // the paseo/cli counterpart to BuildToolServer's MCP injection (ACP/opencode).
 func SkillEnv(req Request, endpoint string) map[string]string {
+	return SkillEnvFor(req, endpoint, nil)
+}
+
+// SkillEnvFor is SkillEnv for an agent launched sandboxed: its token also
+// stands for that sandbox (sb) — what the browser keys on.
+func SkillEnvFor(req Request, endpoint string, sb *skill.SandboxBinding) map[string]string {
 	if endpoint == "" {
 		return nil
 	}
@@ -229,6 +236,7 @@ func SkillEnv(req Request, endpoint string) map[string]string {
 	// uid, so the uid check passes and provenance rests on the token — which is
 	// exactly why memory/run_step ops derive Source from the token, not the peer.
 	id, _ := SkillIdentityFor(req)
+	id.Sandbox = sb
 	var tok string
 	var err error
 	if req.Interactive {
@@ -263,7 +271,17 @@ func SkillIdentityFor(req Request) (skill.Identity, bool) {
 		Sem:           req.Trigger.Semantics(),
 		TargetTrusted: req.Trigger.TargetTrusted,
 		Dispatch:      req.DispatchID,
+		Requester:     requesterOf(req),
 	}, true
+}
+
+// requesterOf is who asked for a dispatch's work: the operator for a
+// trigger they fired themselves, else the event.
+func requesterOf(req Request) string {
+	if req.Trigger.Operator {
+		return skill.RequesterOperator
+	}
+	return skill.RequesterEvent
 }
 
 // LocalSkillEndpoint is the `unix://` endpoint for a LOCAL dispatched agent —

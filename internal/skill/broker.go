@@ -109,6 +109,32 @@ type Identity struct {
 	// with Context: its target scope is what the dispatch may address with
 	// no explicit grant (the channel a chat event came from).
 	Sem *sdk.EventSemantics
+	// Requester is who asked for the work this session does: "operator"
+	// (the operator's own request — a local `conductor run`, or an agent
+	// they started in a directory of their own), "event" (a trigger), or a
+	// member's case class ("member", "user"). "" is unknown and trusted
+	// least. It only ever narrows: the browser acts logged in only for the
+	// operator.
+	Requester string
+	// Sandbox binds a session minted for a sandboxed launch to that
+	// launch's identity and workspace (agentsandbox): what per-identity
+	// surfaces — the browser — key on. nil: resolved from the dispatch.
+	Sandbox *SandboxBinding
+}
+
+// Requester classes (Identity.Requester).
+const (
+	RequesterOperator = "operator"
+	RequesterEvent    = "event"
+)
+
+// SandboxBinding is the sandbox a session's agent runs in.
+type SandboxBinding struct {
+	Identity  string   `json:"identity"`
+	Workspace string   `json:"workspace"`
+	Egress    []string `json:"egress,omitempty"`
+	// Deny are carve-outs inside the workspace (read-only, hidden).
+	Deny []string `json:"deny,omitempty"`
 }
 
 type session struct {

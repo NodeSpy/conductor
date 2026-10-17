@@ -1295,6 +1295,34 @@ sandbox:
     # sign: false                             # push unsigned (default: refuse to push without a key)
     # at_step_end: false                      # only an explicit git.push pushes
 #
+# A browser for agents (docs/wiki/Browser.md): every sandboxed agent can drive
+# a headless Chromium through `conductor browser …`. Conductor runs it,
+# sandboxed, reaching only `allow:`, with an anonymous profile. A logged-in
+# site gives that identity's agent YOUR session's power on it, for your own
+# requests only. Credentials are filled by conductor from your vaults, and the
+# agent never sees a value.
+#
+# browser:
+#   allow: [docs.example.com, app.example.com]   # "*" (the whole web) is refused
+#   # evaluate: ["agent:triage@acme/app"]         # identities opted in to read-only evaluate (default: none)
+#   # container: auto                              # macOS: a container whenever docker/podman is present
+#   logins:                                        # opt in per site AND per identity
+#     - site: app.example.com
+#       identities: ["agent:triage@acme/app"]      # then: conductor browser seed --identity … --site …
+#   credentials:
+#     - name: app
+#       origin: https://app.example.com           # exact; a lookalike or a frame is refused
+#       identities: ["agent:triage@acme/app"]
+#       login_url: https://app.example.com/login
+#       username: { vault: op, key: "Agents/App/username" }
+#       password: { vault: op, key: "Agents/App/password" }
+#       otp: { vault: op, key: "Agents/App/one-time password?attribute=otp" }
+#       # passkey: { vault: house, key: passkeys/app }   # conductor browser passkey register app
+#       # approval: true                               # a push approval: you're notified (needs_input)
+#       # email_code: { mailbox: agent-inbox, from: no-reply@app.example.com, subject: "sign-in code", code: "code is ([0-9]{6})" }
+#   # mailboxes:                                   # emailed codes: IMAP, read-only, an app password from a vault
+#   #   agent-inbox: { imap: "imap.example.com:993", username: { vault: op, key: "Agents/Mail/username" }, password: { vault: op, key: "Agents/Mail/app-password" } }
+#
 # Hand-offs (background: true agent steps on paseo) and detached launches
 # (detach: true — e.g. a Slack handover, whose thread can carry anyone's
 # messages) are sandboxed too: they launch through <provider>-sandboxed,

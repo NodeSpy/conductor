@@ -36,6 +36,7 @@ The model
 - [[Hosts]]
 - [[Isolation]]
 - [[Paseo-Sandbox]]
+- [[Browser]]
 - [[Trust-and-Isolation]]
 
 Connectors

@@ -33,6 +33,8 @@ type persistedSession struct {
 	Dispatch      string              `json:"dispatch,omitempty"`
 	Context       map[string]any      `json:"context,omitempty"`
 	Sem           *sdk.EventSemantics `json:"sem,omitempty"`
+	Requester     string              `json:"requester,omitempty"`
+	Sandbox       *SandboxBinding     `json:"sandbox,omitempty"`
 }
 
 func tokenHash(tok string) string {
@@ -68,7 +70,7 @@ func (b *Broker) SetPersistPath(path string) {
 			id: Identity{
 				Agent: p.Agent, Repo: p.Repo, Trigger: p.Trigger, Number: p.Number,
 				Policy: p.Policy, TargetTrusted: p.TargetTrusted, Dispatch: p.Dispatch,
-				Context: p.Context, Sem: p.Sem,
+				Context: p.Context, Sem: p.Sem, Requester: p.Requester, Sandbox: p.Sandbox,
 			},
 			expires:   p.Expires,
 			uidBound:  true,
@@ -135,7 +137,7 @@ func (b *Broker) saveLocked() {
 			TokenHash: k.hash, Expires: s.expires, BoundUID: s.boundUID, VerbCalls: s.verbCalls,
 			Agent: s.id.Agent, Repo: s.id.Repo, Trigger: s.id.Trigger, Number: s.id.Number,
 			Policy: s.id.Policy, TargetTrusted: s.id.TargetTrusted, Dispatch: s.id.Dispatch,
-			Context: s.id.Context, Sem: s.id.Sem,
+			Context: s.id.Context, Sem: s.id.Sem, Requester: s.id.Requester, Sandbox: s.id.Sandbox,
 		})
 		if err != nil {
 			if b.log != nil {

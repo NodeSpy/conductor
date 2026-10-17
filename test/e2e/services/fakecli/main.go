@@ -56,6 +56,7 @@ func main() {
 		if resume != "" {
 			runtime = "cli:claude-code(resume)"
 		}
+		fixer.BrowserProbe(cwd, prompt)
 		_ = fixer.Apply(cwd, runtime, prompt)
 		// A `[[reply {...}]]` marker is the scripted structured answer for the
 		// output_schema-on-cli scenario (Group T): echo it into the `result`

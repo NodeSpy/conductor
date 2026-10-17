@@ -26,6 +26,7 @@ RUN go build -o /out/conductor ./cmd/conductor \
  && go build -o /out/fakeagentdeck ./test/e2e/services/fakeagentdeck \
  && go build -o /out/fakeacp       ./test/e2e/services/fakeacp \
  && go build -o /out/fakecli       ./test/e2e/services/fakecli \
+ && go build -o /out/testsite      ./test/e2e/services/testsite \
  && go build -o /out/conductor-acme-engine ./test/plugins/acme-engine \
  && go build -o /out/conductor-acme-listener ./test/plugins/acme-listener
 
@@ -48,7 +49,8 @@ RUN set -e; for p in github slack discord ntfy pushover notifiarr smee; do \
 
 # ---- runtime stage ----
 FROM alpine:3.20
-RUN apk add --no-cache git git-daemon curl bash coreutils openssl openssh util-linux \
+# chromium + a font: conductor's browser for agents (group BR).
+RUN apk add --no-cache git git-daemon curl bash coreutils openssl openssh util-linux chromium font-dejavu \
  && adduser -D -h /home/conductor conductor
 # The agent-sandbox daemon (group Z) runs as this user: a "secret" ssh key in
 # its home the sandboxed agent must not be able to read.

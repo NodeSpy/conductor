@@ -43,7 +43,7 @@ services:
         conn/cweb conn/csvc conn/rweb conn/cengine
         func/cost func/budget1 func/budget2 func/budget3
         func/gatepass func/gatefail func/blob func/hist func/watch
-        grpz/sandbox grpz/review grpz/opencode grpz/deck grpz/hoff grpz/hoffout grpz/detach grpz/detachout
+        grpz/sandbox grpz/review grpz/opencode grpz/deck grpz/hoff grpz/hoffout grpz/detach grpz/detachout grpz/browser
     volumes:
       - ./seed:/seed:ro
     # git daemon (started by the seed script) serves git://forge:9418/<owner>/<repo>.git

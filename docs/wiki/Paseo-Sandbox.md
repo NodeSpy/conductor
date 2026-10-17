@@ -106,6 +106,13 @@ reports the session's error. An agent is never launched unsandboxed.
 the sandbox has no route to it, so those tools fail closed (the agent sees a
 connection error and no `mcp__paseo__*` tools).
 
+**The browser.** Paseo's browser tools are in that MCP server too, so they are
+blocked. The supported path is conductor's browser: tell the agent to use
+`conductor browser …` (`conductor browser --help`). A session you start in a
+directory of your own is your own request (identity `dir:<the directory>`), so
+logged-in sites and credentials opted in for that identity are available to it.
+See [[Browser]].
+
 ## What paseo needs from conductor, and what it doesn't
 
 The only paseo surface conductor depends on: provider entries with `extends`

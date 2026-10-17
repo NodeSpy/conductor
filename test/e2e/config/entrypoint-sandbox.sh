@@ -14,4 +14,13 @@ echo "conductor@users.noreply.forge.test $(cat "$D/keys/signing.pub")" > "$D/key
 git config --global user.name "Conductor User"
 git config --global user.email "conductor@users.noreply.forge.test"
 git config --global init.defaultBranch main
+# Group BR (conductor's browser): the local test site on loopback, with a
+# TOTP step, and the test account in a file vault — a TEST account, nothing
+# real. The seed and password are fixed so the harness can grep for leaks.
+mkdir -p "$D/vault" && chmod 700 "$D/vault"
+printf '%s' test-user > "$D/vault/username"
+printf '%s' test-password-not-secret > "$D/vault/password"
+printf '%s' "otpauth://totp/TestSite?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" > "$D/vault/otp"
+chmod 600 "$D/vault/"*
+testsite --listen 127.0.0.1:8090 --totp-seed JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP >"$D/testsite.log" 2>&1 &
 exec conductor run --config "$CONFIG"

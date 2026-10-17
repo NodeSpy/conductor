@@ -34,4 +34,14 @@ type AgentProfile struct {
 	// Keychain allows the Security framework services a Keychain-held login
 	// needs (see seatbelt_agent.go). Off by default: see docs/wiki/Isolation.md.
 	Keychain bool
+	// Browser is a Chromium launch (internal/browser): it registers and looks
+	// up Mach services of its own (the child-process rendezvous) and opens
+	// IOKit user clients by name — the Keychain's services stay denied, and
+	// the file and network rules are the same allow-list. Never set for an
+	// agent.
+	Browser bool
+	// Window is a headed Browser (the operator's own takeover window): it
+	// also reaches the window server and the services a window needs, by
+	// name. Never set for an agent's browser.
+	Window bool
 }
