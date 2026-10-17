@@ -334,7 +334,7 @@
     const d = D.daemon, need = D.attention.length, running = D.runs.filter((r) => r.status === 'run').length;
     const warn = d.paused || D.connectors.some((c) => !['ok', 'idle'].includes(c.status));
     // the top bar says how things are in words; detail (uptime, version, agents, the address) is one step down
-    const health = d.paused ? ['wait', 'Dispatch paused'] : warn ? ['wait', 'Something needs a look'] : ['ok', 'All systems normal'];
+    const health = d.paused ? ['wait', 'Dispatch paused'] : d.update && d.update.blocked ? ['wait', 'An update needs you'] : warn ? ['wait', 'Something needs a look'] : ['ok', 'All systems normal'];
     void running;
     $('#strip-cells').innerHTML = `
       <div class="spacer"></div>
@@ -374,6 +374,8 @@
   /** The summary header: crumbs, the title (the serif for a short human title; gen: the UI face for generated ones),
       one sentence that answers the page's question (lede), an optional detail line (machine detail last), actions. */
   UI.head = (title, opts = {}) => `<div class="page-head"><div>${opts.crumbs ? `<div class="crumbs">${opts.crumbs}</div>` : ''}<h1${opts.gen ? ' class="gen"' : ''}>${title}${opts.sub ? `<span class="sub">${opts.sub}</span>` : ''}</h1>${opts.lede ? `<p class="lede">${opts.lede}</p>` : ''}${opts.lede2 ? `<p class="lede-2">${opts.lede2}</p>` : ''}${opts.detail ? `<div class="head-detail">${opts.detail}</div>` : ''}</div>${opts.actions ? `<div class="actions">${opts.actions}</div>` : ''}</div>`;
+  /** The System area's own navigation: the rarely visited pages, one sidebar item (Settings → System). */
+  UI.systemTabs = (on) => `<nav class="dl-tabs dl-subnav" aria-label="System">${[['config', 'Config', '#/config'], ['updates', 'Updates', '#/updates', D.daemon.update && D.daemon.update.blocked ? '!' : ''], ['logs', 'Logs & audit', '#/logs'], ['security', 'Access', '#/security']].map(([k, l, h, n]) => `<a href="${h}" class="${k === on ? 'on' : ''}"${k === on ? ' aria-current="page"' : ''}>${l}${n ? ` <em class="hot">${n}</em>` : ''}</a>`).join('')}</nav>`;
   UI.tabs = (items, on) => `<div class="tabs" role="tablist">${items.map(([k, l, href, c, hot]) => `<a href="${href}" role="tab" class="${k === on ? 'on' : ''}"${k === on ? ' aria-current="page" aria-selected="true"' : ''}>${l}${c != null ? ' ' + UI.count(c, { hot }) : ''}</a>`).join('')}</div>`;
   UI.bind = (root, sel, ev, fn) => $$(sel, root).forEach((el) => el.addEventListener(ev, (e) => fn(e, el)));
 
@@ -429,8 +431,11 @@
   /** Segmented control: items [[value, label]]; act receives el.dataset.v. */
   UI.seg = (items, value, act, extra = '') => `<div class="seg" role="group" ${extra}>${items.map(([v, l, dis]) => `<button type="button" data-v="${UI.esc(v)}" ${dis ? UI.off(dis) : `data-act="${act}"`} aria-pressed="${String(v) === String(value)}" class="${String(v) === String(value) ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   UI.switchBtn = (on, act, attrs = '') => `<button type="button" role="switch" class="switch${on ? ' on' : ''}" aria-checked="${!!on}" data-act="${act}" ${attrs}></button>`;
-  UI.act('strip-status', (b) => { const d = D.daemon, running = D.runs.filter((r) => r.status === 'run').length;
-    UI.menu(b, [[d.paused ? 'Resume dispatch…' : 'Pause dispatch…', d.paused ? 'play' : 'pause', 'pause'], ['-'], [`conductor ${d.version}, ${d.paused ? 'paused' : 'up'} ${UI.humanSpan(d.uptime)}${d.update.available ? ` · ${d.update.available} ready` : ''}`, 'server', 'strip-go', 'data-href="#/updates"'], [`Sandbox enforcing: what bots can do`, 'shield', 'strip-go', 'data-href="#/safety"'], [`Agents healthy (${d.paseo.agents})`, 'bots', 'strip-go', 'data-href="#/connectors/runtimes"'], [`${running} running now`, 'live', 'strip-go', 'data-href="#/activity"'], ...(D.pending.length ? [[`${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review`, 'edit', 'strip-go', 'data-href="#/config/apply"']] : []), ['-'], [`${d.magicdns} · TLS`, 'lock', 'strip-go', 'data-href="#/security"']]); });
+  UI.act('strip-status', (b) => { const d = D.daemon, u = d.update || {}, running = D.runs.filter((r) => r.status === 'run').length;
+    // an available update is said quietly here; it only escalates (in the top bar) when it needs a person
+    UI.menu(b, [[d.paused ? 'Resume dispatch…' : 'Pause dispatch…', d.paused ? 'play' : 'pause', 'pause'], ['-'],
+      u.available ? [u.blocked ? `${u.available} is waiting for you: ${u.blocked}` : `${u.available} installs itself within 10 min`, 'updates', 'strip-go', 'data-href="#/updates"'] : [`conductor ${d.version}, up to date`, 'updates', 'strip-go', 'data-href="#/updates"'],
+      [`The sandbox is on: see what bots may do`, 'shield', 'strip-go', 'data-href="#/safety"'], [`${running} running now`, 'live', 'strip-go', 'data-href="#/activity?status=run"'], ...(D.pending.length ? [[`${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review`, 'edit', 'strip-go', 'data-href="#/config/apply"']] : [])]); });
   /** Demo data (prototype only): which fake day to show, chosen per browser (js/scenario.js), or reset the current one. */
   UI.DEMOS = [['calm', 'A mostly healthy day', 'Dozens of runs; one approval and one failure need you'], ['quiet', 'All quiet', 'Nothing needs you; every system healthy'], ['full', 'Everything at once', 'Every kind of exception, to try each flow']];
   UI.setDemo = (k) => { try { localStorage.setItem('cd-demo', k); localStorage.removeItem('cd-proto-state-v5'); } catch (e) {} location.reload(); };
@@ -442,7 +447,7 @@
     UI.confirm(on ? { title: 'Pause dispatch?', body: 'No new runs start until you resume: events from GitHub, Slack, schedules and bots wait in the queue. Runs already going finish normally. Nothing is lost.', ok: 'Pause dispatch', danger: true } : { title: 'Resume dispatch?', body: 'Queued events start their runs now, oldest first.', ok: 'Resume dispatch' }).then((ok) => { if (ok) UI.setPaused(on); }); });
   UI.act('strip-go', (b) => { UI.closeMenu(); UI.go(b.dataset.href); });
   /** The avatar menu: who you are, the display preferences, the glossary, the prototype's demo data, and Lock. */
-  UI.act('op-menu', (b) => UI.menu(b, [[`Signed in as ${D.operator.name}`, 'shield', 'strip-go', 'data-href="#/security"'], ['-'], [document.documentElement.dataset.theme === 'dark' ? 'Light theme' : 'Dark theme', document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon', 'theme-menu'], ['Display preferences', 'settings', 'strip-go', 'data-href="#/config/display"'], ['Glossary', 'info', 'strip-go', 'data-href="#/glossary"'], ['Demo data…', 'sparkle', 'demo-menu'], ['-'], ['Lock', 'lock', 'strip-go', 'data-href="#/signin"']]));
+  UI.act('op-menu', (b) => UI.menu(b, [[`Signed in as ${D.operator.name}`, 'shield', 'strip-go', 'data-href="#/security"'], ['-'], [document.documentElement.dataset.theme === 'dark' ? 'Light theme' : 'Dark theme', document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon', 'theme-menu'], ['Display preferences', 'settings', 'strip-go', 'data-href="#/config"'], ['Glossary', 'info', 'strip-go', 'data-href="#/glossary"'], ['Demo data…', 'sparkle', 'demo-menu'], ['-'], ['Lock', 'lock', 'strip-go', 'data-href="#/signin"']]));
   UI.act('theme-menu', () => { UI.closeMenu(); UI.theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); });
   UI.act('theme', () => UI.theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
   UI.act('palette', () => UI.palette());

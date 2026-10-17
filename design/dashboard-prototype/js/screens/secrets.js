@@ -72,17 +72,38 @@
     fields: [{ k: 'ref', type: 'string', req: true, label: 'New entry (<vault>/<key>)', ph: 'op/Agents/Slack/bot-token-2', help: 'Checked by the daemon: ok or an error, never the value.', validate: (x) => (/^[a-z][\w-]*\/.+/.test(x) ? (D.vaults.some((v) => v.name === x.split('/')[0]) ? '' : `no vault "${x.split('/')[0]}"`) : '<vault>/<key>') }], submit: 'Review change', submitIcon: 'check', onSubmit: (v) => UI.staged(S.stage('secrets', s.ref, v.ref)) }); });
   UI.act('secret-del', (b) => { const s = D.secrets.find((x) => x.ref === b.dataset.s); UI.stepup({ title: `Delete ${esc(s.ref)}`, purpose: 'secret delete', danger: true, ok: 'Delete with passkey', what: `{ purpose: <b>secret_delete</b>, vault: <b>${esc(s.vault)}</b>, key: <b>${esc(s.key)}</b> }` }).then((ok) => { if (!ok) return; D.secrets = D.secrets.filter((x) => x !== s); D.audit.unshift({ ts: now(), event: 'secret_delete', who: 'operator:ops', detail: s.ref, run: '' }); S.save(); UI.rerender(); UI.toast(`Deleted ${esc(s.ref)}`, 'removed from the vault', 'ok'); }); });
 
+  /* one line per secret: its name (the key) and where it's stored, what uses it in words, when it changed (or that its
+     own vault manages it), and whether it's unused or stale; the copyable reference, the YAML paths and the actions are
+     one click away (the row opens; the ⋯ menu acts). No value column: values never come back to the browser. */
+  const VNAME = { conductor: 'conductor vault', onepassword: '1Password', pass: 'pass', hashicorp: 'HashiCorp Vault', file: 'mounted files', env: 'environment' };
+  const STALE = 180 * 1440; // minutes: half a year without a change
+  const keyOf = (ref) => { const [vv, ...kk] = String(ref).replace(/^op:\/\//, 'op/').split('/'); return [vv, kk.join('/')]; };
+  const useWords = (u) => { let m;
+    if ((m = u.match(/^connectors\.([\w-]+)\.(.+)$/))) return `${m[1]} connection · ${m[2].replace(/[._]/g, ' ')}`;
+    if ((m = u.match(/^packs\.([\w-]+)\.secrets\.(.+)$/))) return `${m[1]} pack · ${m[2].replace(/_/g, ' ')}`;
+    if ((m = u.match(/^browser\.credentials\.([\w-]+)\.(.+)$/))) return `${m[1]} login · ${m[2].replace(/_/g, ' ')}`;
+    if ((m = u.match(/^runtimes\.([\w-]+)\.(.+)$/))) return `${m[1]} runtime · ${m[2].replace(/[._]/g, ' ')}`;
+    return u; };
+  const ov = { open: null };
   function rows() {
     const list = D.secrets.filter(match);
-    return list.map((s) => { const v = vaultOf(s); const pend = S.find('secrets', s.ref); const ref = pend ? pend.after : s.ref; const [vv, ...kk] = ref.split('/');
-      return `<tr data-secret="${esc(s.ref)}"><td data-l="entry"><span class="row" style="gap:6px">${icon(VIC[(v || { type: 'env' }).type])}<b class="mono" style="font-size:12px">${esc(vv)} · ${esc(kk.join('/'))}</b></span><div class="mono tiny muted vexpr">{{ vault "${esc(vv)}" "${esc(kk.join('/'))}" }}</div>${s.warn ? `<div class="tiny">${UI.statusMark('wait', esc(s.warn), { sm: true })}</div>` : ''}${pend ? ` ${tag('uses repointed · staged', 'run')}` : ''}</td>
-        <td data-l="alias">${s.alias ? `<span class="mono tiny">${esc(s.alias)}</span> <span class="muted tiny">dashboard only</span>` : '<span class="muted tiny">—</span>'}</td>
-        <td data-l="value"><span class="wo">••••••••</span></td>
-        <td data-l="used in" class="uses">${s.used.map((u) => `<a href="#/config/raw?at=${section(u)}">${esc(u)}</a>`).join('<br>') || '<span class="muted tiny">unused</span>'}</td>
-        <td data-l="set" class="mono tiny muted">${s.set ? ago(s.set) + ' ago' : v && v.writable === false ? 'external' : '—'}</td>
-        <td class="num nowrap">${v && v.writable !== false && v.status !== 'fail' ? `<button class="btn sm" data-act="secret-set" data-s="${esc(s.ref)}">${icon('updates')}Replace</button>` : ''} <button class="btn sm ghost" data-act="secret-ref" data-s="${esc(s.ref)}" ${s.used.length ? '' : UI.off('Nothing uses it yet')}>${icon('link')}Repoint uses</button>
-          <button class="icon-btn" ${s.used.length ? UI.off(`Still used by ${s.used.join(', ')}: repoint those first`) : s.set ? `data-act="secret-del" data-s="${esc(s.ref)}"` : UI.off('Lives in an external vault: delete it there')} aria-label="Delete ${esc(s.ref)}">${icon('trash')}</button></td></tr>`; }).join('') || `<tr class="empty-row"><td colspan="6">No secret matches. <button class="link" data-act="sec-clear">Clear the filter</button></td></tr>`;
+    return list.map((s) => { const v = vaultOf(s) || { type: 'env', name: s.vault }, pend = S.find('secrets', s.ref), ref = pend ? pend.after : s.ref, [vv, kk] = keyOf(ref);
+      const unused = !s.used.length, age = s.set ? (Date.now() - new Date(s.set)) / 60000 : 0, stale = s.set && age > STALE, open = ov.open === s.ref;
+      const changed = s.set ? `changed ${UI.agoText(s.set)}` : `managed in ${VNAME[v.type] || v.name}`;
+      return `<li class="sec-row${open ? ' open' : ''}${unused ? ' unused' : ''}" data-secret="${esc(s.ref)}">
+        <div class="sec-line"><button type="button" class="sec-main" data-act="sec-open" data-s="${esc(s.ref)}" aria-expanded="${open}"><span class="sec-name"><b class="mono">${esc(kk)}</b><span class="sec-vault">${icon(VIC[v.type])}${esc(VNAME[v.type] || v.name)}</span></span>
+          <span class="sec-uses">${unused ? UI.label('Unused') : s.used.map((u) => esc(useWords(u))).join(', ')}</span>
+          <span class="sec-when">${stale ? UI.statusMark('wait', `not changed in ${Math.round(age / 43200)} months`) : `<span class="dl-sub">${changed}</span>`}${pend ? ` ${UI.statusMark('staged', 'Uses repointed, not applied')}` : ''}${s.warn ? ` ${UI.statusMark('wait', esc(s.warn))}` : ''}</span></button>
+          <button class="icon-btn" data-act="sec-more" data-s="${esc(s.ref)}" aria-label="More for ${esc(kk)}">${icon('more')}</button></div>
+        ${open ? `<div class="sec-detail"><dl class="dl-facts"><dt>Use it in config as</dt><dd><code class="mono sec-ref">{{ vault "${esc(vv)}" "${esc(kk)}" }}</code> <button class="btn sm ghost" data-act="sec-copy" data-v='{{ vault "${esc(vv)}" "${esc(kk)}" }}'>${icon('copy')}Copy</button></dd>
+          <dt>Used by</dt><dd>${s.used.map((u) => `<a class="dl-link" href="#/config/raw?at=${section(u)}">${esc(useWords(u))}</a> <span class="mono dl-sub">${esc(u)}</span>`).join('<br>') || 'Nothing uses it yet.'}</dd>
+          <dt>Stored in</dt><dd>${esc(VNAME[v.type] || v.name)} <span class="mono dl-sub">(the vault “${esc(v.name)}”)</span>${v.writable === false ? ' · its value is set there, not here' : ''}</dd>
+          ${s.alias ? `<dt>Alias</dt><dd><span class="mono">${esc(s.alias)}</span> <span class="dl-sub">a short name the dashboard shows for this secret; config never uses it</span></dd>` : ''}</dl></div>` : ''}</li>`; }).join('') || `<li class="dl-empty-row">No secret matches. <button class="link" data-act="sec-clear">Clear the filter</button></li>`;
   }
+  UI.act('sec-open', (b) => { ov.open = ov.open === b.dataset.s ? null : b.dataset.s; const el = UI.$('#sec-body'); if (el) el.innerHTML = rows(); });
+  UI.act('sec-copy', (b) => { try { navigator.clipboard.writeText(b.dataset.v); } catch (e) {} UI.toast('Copied the reference', 'paste it where a value goes in config', 'ok'); });
+  UI.act('sec-more', (b) => { const s = D.secrets.find((x) => x.ref === b.dataset.s), v = vaultOf(s) || {};
+    UI.menu(b, [v.writable !== false && v.status !== 'fail' ? ['Replace the value…', 'updates', 'secret-set', `data-s="${esc(s.ref)}"`] : null, ['Point its uses at another secret…', 'link', 'secret-ref', s.used.length ? `data-s="${esc(s.ref)}"` : UI.off('Nothing uses it yet')], ['-'], ['Delete…', 'trash', 'secret-del', s.used.length ? UI.off(`Still used by ${s.used.map(useWords).join(', ')}: point those elsewhere first`) : s.set ? `data-s="${esc(s.ref)}"` : UI.off(`It lives in ${VNAME[v.type] || v.name}: delete it there`)]].filter(Boolean)); });
   UI.route('secrets', () => {
     const counts = Object.fromEntries(Object.keys(IN).map((k) => [k, D.secrets.filter(IN[k]).length]));
     const pendSettings = D.pending.filter((c) => c.coll === 'settings' || c.coll === 'secrets' || c.coll === 'vaults').length;
@@ -96,7 +117,7 @@
     ${D.vaults.some((v) => v.status === 'fail') ? `<div class="callout danger small" style="margin-bottom:14px"><b>hcv is unreachable:</b> its unlock token (<span class="mono">unlock.token: \${env.VAULT_TOKEN}</span>) expired 2h ago. Nothing references hcv yet, so no connector is affected. <button class="link" data-act="vault-edit" data-v="hcv">Update the unlock ref</button></div>` : ''}
     <div class="section-title"><h2>Secrets</h2><span class="caps">${D.secrets.length} known</span></div>
     <div class="filters"><div class="input-icon">${icon('search')}<input class="input" placeholder="vault, key, alias, or where it's used" value="${esc(sv.q)}" data-on-input="sec-q" aria-label="Search secrets"></div>${UI.seg([['all', `all · ${counts.all}`], ['stored', `stored here · ${counts.stored}`], ['referenced', `referenced · ${counts.referenced}`], ['unused', `unused · ${counts.unused}`]], sv.f, 'sec-f')}</div>
-    <div class="panel"><table class="tbl responsive"><thead><tr><th>entry · reference</th><th>alias</th><th>value</th><th>used in</th><th>last set</th><th></th></tr></thead><tbody id="sec-body">${rows()}</tbody></table><div class="panel-foot small muted">${icon('eyeoff')} No screen, API route or log line returns a secret's value. Values are tainted and redacted from logs and the audit trail.</div></div>
+    <div class="panel"><div class="sec-head" aria-hidden="true"><span>Secret</span><span>Used by</span><span>Changed</span></div><ul class="dl-list sec-list" id="sec-body">${rows()}</ul><div class="panel-foot small muted">${icon('eyeoff')} No screen, API route or log line returns a secret's value. Values are tainted and redacted from logs and the audit trail.</div></div>
     <div class="section-title"><h2>Settings</h2><span class="caps">\${settings.NAME} anywhere in config</span></div>
     <div class="panel"><table class="tbl responsive"><thead><tr><th>name</th><th>value</th><th class="num">used</th><th></th></tr></thead><tbody>
       ${D.settings.map((s) => { const p = S.find('settings', s.name); const v = p ? p.after : s.value; return `<tr${p && p.after == null ? ' class="row-removed"' : ''}><td data-l="name" class="mono"><b>${s.name}</b>${p ? ' ' + tag(p.after == null ? 'removal staged' : 'staged', 'run') : ''}</td><td data-l="value"><input class="input mono setting-in" value="${esc(v == null ? s.value : v)}" data-on-change="setting-edit" data-k="${s.name}" aria-label="Value of ${s.name}"> ${s.chains ? tag('chains') : ''}${s.env ? tag('from env') : ''}</td><td data-l="used" class="num mono"><a class="link" href="#/config/raw?at=settings">${s.used} refs</a></td><td class="num"><button class="icon-btn" ${s.used ? UI.off(`Used ${s.used} times in config: remove those references first`) : `data-act="setting-del" data-k="${s.name}"`} aria-label="Remove ${s.name}">${icon('trash')}</button></td></tr>`; }).join('')}

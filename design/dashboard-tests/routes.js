@@ -8,7 +8,7 @@ const ROUTES = [
   '#/browser', '#/browser/b-02', '#/browser/takeover', '#/browser/passkey', '#/browser/add', '#/browser/logins',
   '#/config', '#/config/raw', '#/config/apply', '#/secrets',
   '#/extensions/packs', '#/extensions/plugins', '#/extensions/browse',
-  '#/connectors/connectors', '#/connectors/runtimes', '#/connectors/hosts', '#/connectors/isolation',
+  '#/connectors/connectors', '#/connectors/runtimes', '#/connectors/hosts',
   '#/updates', '#/logs/daemon', '#/logs/audit', '#/security', '#/signin', '#/enroll', '#/more',
 ];
 module.exports = { ROUTES };

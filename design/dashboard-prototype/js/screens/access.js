@@ -52,36 +52,39 @@
   UI.act('en-pk-pick', (b) => { if (en.pick) en.pick(b.dataset.id); b.closest('.choice-grid').querySelectorAll('.choice').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); });
   UI.act('en-cancel', () => UI.confirm({ title: 'Cancel this enrollment?', body: 'The one-time link becomes void on the box and can\'t be used again. Run <span class="mono">conductor dashboard enroll</span> for a new one.', ok: 'Void the link', cancel: 'Keep enrolling', danger: true }).then((ok) => { if (!ok) return; en.void = true; D.audit.unshift({ ts: new Date().toISOString(), event: 'dashboard_enroll_cancelled', who: 'operator:ops', detail: 'one-time link voided', run: '' }); S.save(); UI.rerender(); UI.toast('This link is now void', 'run conductor dashboard enroll for a new one', 'ok'); }));
   UI.act('en-reset', () => { en.void = false; });
-  UI.act('pk-revoke', (b) => { const k = D.passkeys.find((x) => x.id === b.dataset.id); UI.stepup({ title: `Revoke “${UI.esc(k.name)}”`, purpose: 'passkey revoke', danger: true, ok: 'Revoke with passkey', what: `{ purpose: <b>passkey_revoke</b>, credential: <b>${UI.esc(k.name)}</b> } · its sessions end` }).then((ok) => { if (!ok) return; D.passkeys = D.passkeys.filter((x) => x !== k); D.audit.unshift({ ts: new Date().toISOString(), event: 'dashboard_passkey_revoked', who: 'operator:ops', detail: k.name, run: '' }); S.save(); UI.rerender(); }); });
+  UI.act('pk-revoke', (b) => { const k = D.passkeys.find((x) => x.id === b.dataset.id); UI.confirm({ title: `Remove “${UI.esc(k.name)}”?`, body: 'It can no longer sign in or approve, and any session it started ends now. Your other passkeys keep working.', ok: 'Remove passkey', danger: true }).then((ok) => { if (!ok) return; D.passkeys = D.passkeys.filter((x) => x !== k); D.audit.unshift({ ts: new Date().toISOString(), event: 'dashboard_passkey_revoked', who: 'operator:ops', detail: k.name, run: '' }); S.save(); UI.rerender(); UI.toast(`Removed ${UI.esc(k.name)}`, '', 'ok'); }); });
   UI.act('sess-end', (b) => { D.sessions = D.sessions.filter((x) => x.id !== b.dataset.id); D.audit.unshift({ ts: new Date().toISOString(), event: 'dashboard_session_end', who: 'operator:ops', detail: b.dataset.id, run: '' }); S.save(); UI.rerender(); });
-  UI.act('sess-all', () => UI.confirm({ title: 'Sign out everywhere?', body: 'Ends every session, this one too. You sign in again with a passkey.', ok: 'Sign out everywhere', danger: true }).then((ok) => { if (!ok) return; D.sessions = []; D.audit.unshift({ ts: new Date().toISOString(), event: 'dashboard_logout_all', who: 'operator:ops', detail: 'all sessions', run: '' }); S.save(); UI.go('#/signin'); }));
+  UI.act('sess-all', () => UI.confirm({ title: 'Sign out everywhere?', body: 'Every device is signed out, this one too. You sign in again with a passkey.', ok: 'Sign out everywhere', danger: true }).then((ok) => { if (!ok) return; D.sessions = []; D.audit.unshift({ ts: new Date().toISOString(), event: 'dashboard_logout_all', who: 'operator:ops', detail: 'all sessions', run: '' }); S.save(); UI.go('#/signin'); }));
   UI.act('op-bound', () => { const c = JSON.parse(JSON.stringify(S.staged('operators', 'ops'))); c.require_device_bound = !c.require_device_bound; S.stage('operators', 'ops', c); UI.refreshChrome(); UI.rerender(); });
+  /* Access, in plain words: who can get in and from where, which devices can approve, what's signed in now, and when
+     conductor asks for your passkey. Listeners, the certificate, lockout numbers and cookie flags are folded. */
+  const devWord = (k) => (k.bound ? 'Stays on this device' : 'Synced to your other devices');
   UI.route('security', () => {
-    const d = D.daemon;
-    return `<div class="page">
-      ${UI.head('Access', { lede: `<b>Only you can sign in</b>, with one of ${D.passkeys.length} passkeys; ${D.sessions.length} session${D.sessions.length === 1 ? ' is' : 's are'} active. The dashboard listens on this box and its tailnet address only.` })}
-      <div class="grid g2">
-        <div class="stack">
-          <div class="panel"><div class="panel-head"><h3>Passkeys · ops</h3><div class="tools"><a class="btn sm" href="#/enroll?from=security">${icon('plus')}Add (CLI link)</a></div></div><div class="list">
-            ${D.passkeys.map((k) => `<div class="item pk-list"><span class="icon-btn" aria-hidden="true">${icon('passkey')}</span><div class="grow"><b>${esc(k.name)}</b> ${k.bound ? tag('device-bound') : tag('synced')}<div class="mono tiny muted">${k.rp} · ${k.kind} · sign count ${k.count}</div></div><span class="mono tiny muted hide-phone">used ${ago(k.used)} ago</span><button class="btn sm danger" ${D.passkeys.length > 1 ? `data-act="pk-revoke" data-id="${k.id}"` : UI.off('Your last passkey: enroll another first, or reset with conductor dashboard reset')}>Revoke</button></div>`).join('')}</div>
-            <div class="panel-foot small muted">Revoking a passkey ends its sessions. The last passkey can be replaced only through a fresh CLI enrollment link.</div></div>
-          <div class="panel"><div class="panel-head"><h3>Approval policy</h3>${S.find('operators', 'ops') ? tag('staged', 'run') : ''}</div><div class="panel-body small stack tight">
-            <label class="row">${UI.switchBtn(!!(S.staged('operators', 'ops') || {}).require_device_bound, 'op-bound', 'aria-label="Require a device-bound passkey for approvals"')}<span><b>Require a device-bound passkey for approvals</b><div class="muted tiny">Synced passkeys (iCloud, Google) still sign in and apply config; approvals then need a key that never leaves its device.</div></span></label>
-            ${S.find('operators', 'ops') ? '<a class="btn sm primary" href="#/config/apply" style="align-self:flex-start">Review change</a>' : '<span class="muted tiny">Change the policy above; a Review button appears once something changed.</span>'}</div></div>
-          <div class="panel"><div class="panel-head"><h3>Sessions</h3><div class="tools"><button class="btn sm danger" data-act="sess-all">Sign out everywhere</button></div></div><div class="list">
-            ${D.sessions.map((x) => `<div class="item">${st('ok', '')}<div class="grow small"><b>${esc(x.device)}</b> ${x.current ? tag('this session') : ''}<div class="mono tiny muted">${esc(x.addr)} · started ${ago(x.started)} ago · idle ${x.idle}</div></div>${x.current ? '' : `<button class="btn sm ghost" data-act="sess-end" data-id="${x.id}">End</button>`}</div>`).join('')}</div>
-            <div class="panel-foot small muted">Idle 30m, absolute 12h. Cookie: <span class="mono">__Host-</span>, Secure, HttpOnly, SameSite=Strict.</div></div>
-        </div>
-        <div class="stack">
-          <div class="panel"><div class="panel-head"><h3>Listeners</h3>${st('ok', 'private', true)}</div><div class="panel-body"><dl class="kv small">
-            <dt>localhost</dt><dd class="mono">http://localhost:7788 (a secure context by spec) · bootstrap + enrollment</dd>
-            <dt>tailnet</dt><dd class="mono">https://${d.magicdns}:7788 · ${d.tailscale_ip}</dd><dt>certificate</dt><dd class="mono">${d.tls}</dd>
-            <dt>refused</dt><dd class="small">0.0.0.0, LAN and public addresses; exposure connectors (tunnels) never serve the dashboard</dd></dl></div></div>
-          <div class="panel"><div class="panel-head"><h3>Step-up</h3></div><div class="panel-body small stack tight">
-            <div>A fresh passkey assertion is required for:</div>
-            <div class="row wrap" style="gap:6px">${['approve / deny', 'config apply & restore', 'secret write', 'grant / widen', 'browser takeover', 'update now', 'pack add/remove'].map((t) => tag(t)).join('')}</div>
-            <div class="muted">Everything else uses the session.</div></div></div>
-          <div class="panel"><div class="panel-head"><h3>Lockout</h3></div><div class="panel-body small"><dl class="kv"><dt>failed assertions</dt><dd>5 per 15m per client → 15m lock, doubling</dd><dt>enrollment links</dt><dd>3 per hour; one live at a time</dd><dt>right now</dt><dd>${st('ok', 'no locks')}</dd></dl></div></div>
-        </div></div></div>`;
+    const d = D.daemon, pol = S.staged('operators', 'ops') || {};
+    return `<div class="page dl-page">${UI.systemTabs('security')}
+      <div class="dl-phead"><div><h1>Access</h1><p class="dl-lead"><b>Only you can sign in</b>, from this computer and your tailnet, with one of your ${D.passkeys.length} passkeys. ${D.sessions.length} ${D.sessions.length === 1 ? 'device is' : 'devices are'} signed in now.</p></div></div>
+      <div class="dl-cols"><div class="dl-col-main">
+        <section class="dl-card"><header class="dl-ch"><h2>Your passkeys</h2><span class="dl-sp"></span><a class="btn sm secondary" href="#/enroll?from=security">${icon('plus')}Add a passkey</a></header>
+          <ul class="dl-list">${D.passkeys.map((k) => `<li class="acc-row pk-list"><div class="dl-nt"><b>${esc(k.name)}</b><span class="dl-why">${devWord(k)} · last used ${UI.agoText(k.used)}</span></div><span class="dl-na"><button class="btn sm ghost" ${D.passkeys.length > 1 ? `data-act="pk-revoke" data-id="${k.id}"` : UI.off('Your only passkey: add another first, so you can still sign in')}>Remove…</button></span></li>`).join('')}</ul>
+          <p class="dl-sub acc-note">Adding a passkey needs a one-time link from the command line on this computer (<span class="mono">conductor dashboard enroll</span>), so only someone with your SSH access can add one.</p></section>
+        <section class="dl-card"><header class="dl-ch"><h2>Signed in now</h2><span class="dl-sp"></span><button class="btn sm secondary" data-act="sess-all">Sign out everywhere…</button></header>
+          <ul class="dl-list">${D.sessions.map((x) => `<li class="acc-row"><div class="dl-nt"><b>${esc(x.device)}${x.current ? ' <span class="dl-sub">(this one)</span>' : ''}</b><span class="dl-why">${/tailnet/.test(x.addr) ? 'over your tailnet' : 'on this computer'} · signed in ${UI.agoText(x.started)} · last active ${UI.humanSpan(x.idle)} ago</span></div><span class="dl-na">${x.current ? '' : `<button class="btn sm ghost" data-act="sess-end" data-id="${x.id}">Sign out</button>`}</span></li>`).join('')}</ul>
+          <p class="dl-sub acc-note">A session ends after 30 minutes idle, or 12 hours at most.</p></section>
+      </div><div class="dl-col-side">
+        <section class="dl-card"><header class="dl-ch"><h2>When conductor asks for your passkey</h2></header>
+          <ul class="acc-asks"><li>Approving or denying what a bot asks to do</li><li>Changes that give bots more access or loosen safety: a new permission, a new allowed site, the sandbox off</li><li>Taking over a browser a bot is signed in to</li></ul>
+          <p class="dl-sub">Everything else, including routine config changes, uses your signed-in session.</p></section>
+        <section class="dl-card"><header class="dl-ch"><h2>Approvals</h2>${S.find('operators', 'ops') ? UI.statusMark('staged', 'Not applied') : ''}</header>
+          <label class="row">${UI.switchBtn(!!pol.require_device_bound, 'op-bound', 'aria-label="Approve only with a passkey that stays on its device"')}<span><b>Approve only with a passkey that stays on its device</b></span></label>
+          <p class="dl-sub">${pol.require_device_bound ? 'A synced passkey can still sign you in, but approvals need one that never leaves its device.' : 'Any of your passkeys can approve.'}</p>
+          ${S.find('operators', 'ops') ? '<a class="btn sm primary" href="#/config/apply">Review the change</a>' : ''}</section>
+        <details class="dl-card dl-tech-d acc-tech"><summary>${icon('chev')}Technical details</summary><dl class="dl-facts">
+          <dt>Addresses</dt><dd><span class="mono">http://localhost:7788</span> (sign-in and enrolment only) and <span class="mono">https://${d.magicdns}:7788</span> (${d.tailscale_ip}); never 0.0.0.0, your LAN or the internet, and tunnels never serve it</dd>
+          <dt>Certificate</dt><dd class="mono">${d.tls}</dd>
+          <dt>Wrong passkey</dt><dd>5 failed tries in 15 minutes locks that client for 15 minutes, doubling each time</dd>
+          <dt>Enrolment links</dt><dd>3 an hour, one live at a time</dd>
+          <dt>Session cookie</dt><dd class="mono">__Host-, Secure, HttpOnly, SameSite=Strict</dd>
+          <dt>Passkeys</dt><dd>${D.passkeys.map((k) => `${esc(k.name)}: ${esc(k.kind)}, used ${k.count} times`).join('; ')}</dd></dl></details>
+      </div></div></div>`;
   });
 })();

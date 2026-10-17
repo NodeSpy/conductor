@@ -262,7 +262,7 @@
   };
   const single = (sec, getter, setter, o = {}) => (C[sec] = Object.assign({ section: sec, file: 'config.yaml', keys: () => [sec], get: () => clone(getter()), set: (k, n) => setter(n), path: () => sec }, o));
   single('sandbox', () => D().sandboxCfg, (n) => { D().sandboxCfg = n; D().daemon.sandbox.backend = n.backend; D().daemon.sandbox.egress = n.egress || []; D().daemon.sandbox.agents = n.agents; }, {
-    label: 'sandbox', href: () => '#/connectors/isolation',
+    label: 'sandbox', href: () => '#/safety',
     validate(k, n) { const e = []; (n.egress || []).forEach((h) => { if (h === '*') e.push('sandbox.egress: "*" is refused; name the hosts'); if (/(^|\.)tail0000\.ts\.net$|^127\.|^localhost/.test(h)) e.push(`sandbox.egress: ${h} is the dashboard's own address; the proxy hard-denies it`); }); return e; },
     widens(b, a) { const r = []; (a.egress || []).forEach((h) => { if (!(b.egress || []).includes(h)) r.push(`adds egress ${h}`); }); if (a.agents === 'off' && b.agents !== 'off') r.push('turns the agent sandbox off'); return r; },
   });
