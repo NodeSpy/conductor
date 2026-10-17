@@ -23,7 +23,8 @@ test('Browse → Add → the install wizard: roles, arming with repos, loud gran
 
 test('trust badges: official, local (yours), third party', async ({ page }) => {
   await go(page, '#/extensions/packs', { fresh: true });
-  const rows = await page.locator('.pack-row').allTextContents();
+  // each row's text, plus its hover detail (the use: path lives there)
+  const rows = await page.locator('.pack-row').evaluateAll((els) => els.map((e) => e.textContent + ' ' + (e.dataset.tip || '')));
   expect(rows.some((t) => /official registry/.test(t))).toBe(true);
   expect(rows.some((t) => /local · yours/.test(t))).toBe(true);
   for (const t of rows.filter((x) => /\.\/packs\//.test(x))) expect(t).not.toContain('third party');

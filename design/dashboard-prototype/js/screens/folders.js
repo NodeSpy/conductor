@@ -68,7 +68,10 @@
     return root;
   }
   const botsUnder = (n) => { const out = []; n.teams.forEach((t) => D.bots.forEach((b) => { if (cfgOf('bots', b.name, true).team === t) out.push(b.name); })); out.push(...n.solos); Object.values(n.kids).forEach((k) => out.push(...botsUnder(k))); return out; };
-  const roll = (n) => { const bs = botsUnder(n); const p = bs.reduce((a, b) => a + pendingOf(b), 0), c = bs.reduce((a, b) => a + openCases(b), 0), live = bs.filter((b) => (M(b) || {}).home === 'live').length; const wr = UI.wfRoll(UI.wfsIn(n.path)); return `<span class="roll"><span title="bots">${icon('members')}${bs.length}</span><span title="workflows · runs 24h · failing" class="${wr.failing ? 'hot' : ''}">${icon('workflows')}${wr.n}${wr.failing ? ` · ${wr.failing} failing` : ''}</span><span title="pending approvals" class="${p ? 'hot' : ''}">${icon('passkey')}${p}</span><span title="open cases">${icon('runs')}${c}</span><span title="home sessions live" class="${live ? 'live' : ''}"><i class="pulse${live ? ' run' : ''}"></i>${live} live</span>${UI.usageOn() ? Object.entries(UI.botsProv(bs)).filter(([, x]) => x.turns).map(([p, x]) => `<span title="${UI.provLabel(p)} turns today · ${UI.srcLabel('observed')}" data-usage data-prov="${p}">${icon('zap')}<span data-figure>${UI.provLabel(p)} ${x.turns}</span></span>`).join('') : ''}</span>`; };
+  // a folder's roll-up says only what needs you there (pending approvals, failing workflows); the neutral counts are a hover away
+  const roll = (n) => { const bs = botsUnder(n); const p = bs.reduce((a, b) => a + pendingOf(b), 0), c = bs.reduce((a, b) => a + openCases(b), 0), live = bs.filter((b) => (M(b) || {}).home === 'live').length; const wr = UI.wfRoll(UI.wfsIn(n.path));
+    const tip = `${bs.length} bot${bs.length === 1 ? '' : 's'} · ${wr.n} workflow${wr.n === 1 ? '' : 's'} · ${c} open case${c === 1 ? '' : 's'} · ${live} working now`;
+    return `<span class="roll" data-tip="${tip}">${p ? `<span class="hot">${p} pending</span>` : ''}${wr.failing ? `<span class="hot">${wr.failing} failing</span>` : ''}${!p && !wr.failing ? `<span class="calm-n">${bs.length} bot${bs.length === 1 ? '' : 's'}</span>` : ''}</span>`; };
   const fv = { q: '' };
   const closed = () => new Set(D.prefs.closedFolders || []);
   const matchBot = (b) => { const m = M(b) || { name: b, desc: '' }; const q = fv.q.toLowerCase(); return (m.name + ' ' + (m.desc || '') + ' ' + UI.folderOfBot(b) + ' ' + (cfgOf('bots', b, true).team || '')).toLowerCase().includes(q); };
@@ -80,8 +83,8 @@
     const p = pendingOf(b);
     return `<div class="frow bot${stagedMove('bots', b) ? ' moved' : ''}" role="treeitem" style="--d:${d}" ${onTeam ? '' : `draggable="true" data-drag="bot:${b}"`}>
       ${onTeam ? '<span class="grip off"></span>' : `<span class="grip" data-tip="Drag onto a folder">${icon('more')}</span>`}${UI.sigil(m, 'sm')}
-      <a class="fname" href="#/bots/${b}"><b>${esc(b)}</b><span class="muted small ellipsis">${esc(m.desc || '')}</span></a>
-      <span class="fstat">${m.home === 'live' ? st('run', 'live') : st('idle', 'idle')}${p ? ` ${tag(p + ' pending', 'ember')}` : ''}${stagedMove('bots', b) ? ' ' + tag('move staged', 'run') : ''}${onTeam ? '' : ' ' + tag('solo')}</span>
+      <a class="fname" href="#/bots/${b}"><b>${esc(b)}</b><span class="muted small ellipsis">${onTeam ? '' : 'solo · '}${esc(m.desc || '')}</span></a>
+      <span class="fstat">${p ? tag(p + ' pending', 'ember') : ''}${stagedMove('bots', b) ? ' ' + tag('move staged', 'run') : ''}${m.home === 'live' ? st('run', 'working') : ''}</span>
       <button class="icon-btn sm" data-act="f-item-menu" data-kind="bot" data-name="${b}" aria-label="Actions for ${b}">${icon('more')}</button></div>`;
   }
   function teamRow(t, d) {
@@ -90,7 +93,7 @@
     return `<div class="frow team${stagedMove('teams', t) ? ' moved' : ''}" role="treeitem" style="--d:${d}" draggable="true" data-drag="team:${t}">
       <span class="grip" data-tip="Drag onto a folder">${icon('more')}</span><span class="fic team-ic">${icon('members')}</span>
       <a class="fname" href="#/teams/${t}"><b>${esc(t)}</b><span class="muted small ellipsis">team · ${bs.length} bot${bs.length === 1 ? '' : 's'}${c.lead ? ' · lead ' + esc(c.lead) : ''}</span></a>
-      <span class="fstat">${pend ? tag(pend + ' pending', 'ember') : ''}${stagedMove('teams', t) ? ' ' + tag('move staged', 'run') : ''}${S.find('teams', t) && S.find('teams', t).before == null ? ' ' + tag('new · staged', 'run') : ''}</span>
+      <span class="fstat">${stagedMove('teams', t) ? ' ' + tag('move staged', 'run') : ''}${S.find('teams', t) && S.find('teams', t).before == null ? ' ' + tag('new · staged', 'run') : ''}</span>
       <button class="icon-btn sm" data-act="f-item-menu" data-kind="team" data-name="${t}" aria-label="Actions for team ${t}">${icon('more')}</button></div>
       ${bs.filter((b) => !fv.q || matchBot(b) || matchTeam(t)).map((b) => botRow(b, d + 1, true)).join('')}`;
   }
@@ -101,7 +104,7 @@
       return `<div class="frow folder" role="treeitem" aria-expanded="${open}" style="--d:${d}" data-drop="${esc(k.path)}">
         <button class="icon-btn sm ftoggle" data-act="f-toggle" data-path="${esc(k.path)}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(k.path)}">${icon(open ? 'chevd' : 'chev')}</button><span class="fic">${icon('folder')}</span>
         <a class="fname" href="#/folders/${enc(k.path)}"><b>${esc(leaf(k.path))}</b>${draft ? '<span class="muted small">empty · saved to config once something moves in</span>' : ''}</a>
-        ${roll(k)}<button class="icon-btn sm" data-act="f-menu" data-path="${esc(k.path)}" aria-label="Folder actions for ${esc(k.path)}">${icon('more')}</button></div>
+        ${open ? '' : roll(k)}<button class="icon-btn sm" data-act="f-menu" data-path="${esc(k.path)}" aria-label="Folder actions for ${esc(k.path)}">${icon('more')}</button></div>
         ${open ? `<div role="group">${folderRows(k, d + 1)}${k.teams.filter((t) => !fv.q || matchTeam(t)).map((t) => teamRow(t, d + 1)).join('')}${k.solos.filter((b) => !fv.q || matchBot(b)).map((b) => botRow(b, d + 1, false)).join('')}</div>` : ''}`;
     }).join('');
   }
@@ -132,9 +135,9 @@
     const phone = innerWidth <= 720;
     const moves = D.pending.filter((c) => (c.coll === 'bots' || c.coll === 'teams') && c.before && c.after && (c.before.folder || '') !== (c.after.folder || '')).length;
     return `<div class="page">
-      ${UI.head(path ? esc(leaf(path)) : 'Bots', { crumbs: path ? UI.folderCrumbs(parentOf(path)) : '', sub: path ? `folder ${esc(path)}` : 'solo or on a team, organized in folders', lede: path ? '' : `A ${UI.term('bot')} is an AI teammate with memory you can chat with; it watches what you pick and proposes actions. Bots work alone or on a ${UI.term('team')}.`, actions: `<button class="btn" data-act="f-new" data-parent="${esc(path)}">${icon('folder')}New folder</button><button class="btn" data-act="team-new">${icon('plus')}New team</button><a class="btn primary" href="#/bots/new">${icon('plus')}New bot</a>` })}
+      ${UI.head(path ? esc(leaf(path)) : 'Bots', { crumbs: path ? UI.folderCrumbs(parentOf(path)) : '', sub: path ? `folder ${esc(path)}` : '', lede: path ? '' : (() => { const pend = D.proposals.filter((x) => x.status === 'pending' && UI.live(x)).length, live = D.bots.filter((b) => b.home === 'live').length; return `${pend ? `<b>${pend} ${pend === 1 ? 'approval waits' : 'approvals wait'} for you.</b> ` : '<b>Nothing needs you.</b> '}${D.bots.length} bots on ${D.teams.length} teams; ${live} working now.`; })(), lede2: path ? '' : `A ${UI.term('bot')} is an AI teammate with memory you can chat with; it watches what you pick and proposes actions. Bots work alone or on a ${UI.term('team')}.`, actions: `<button class="btn" data-act="f-new" data-parent="${esc(path)}">${icon('folder')}New folder</button><button class="btn" data-act="team-new">${icon('plus')}New team</button><a class="btn primary" href="#/bots/new">${icon('plus')}New bot</a>` })}
       ${moves ? `<div class="callout small staged-moves">${icon('folder')} <b>${moves} move${moves > 1 ? 's' : ''} staged.</b> Folders live in config, so moves apply through the diff.<a class="btn sm primary" href="#/config/apply">Review &amp; apply</a></div>` : ''}
-      <div class="filters"><div class="input-icon">${icon('search')}<input class="input" placeholder="search bots, teams and folders" value="${esc(fv.q)}" data-on-input="f-q" aria-label="Search bots, teams and folders"></div>${path ? '' : roll(root)}</div>
+      <div class="filters"><div class="input-icon">${icon('search')}<input class="input" placeholder="search bots, teams and folders" value="${esc(fv.q)}" data-on-input="f-q" aria-label="Search bots, teams and folders"></div></div>
       <div class="panel ftree-panel"><div class="ftree" id="ftree" role="tree" data-path="${esc(path)}">
         ${phone ? levelHTML(n) : `${!path ? '<div class="frow rootdrop" data-drop="" style="--d:0"><span class="fic">' + icon('folder') + '</span><span class="muted small">top level · drop here to take something out of its folder</span></div>' : `<div class="frow rootdrop" data-drop="${esc(path)}" style="--d:0"><span class="fic">${icon('folder')}</span><span class="muted small">${esc(path)}</span>${roll(n)}</div>`}${treeHTML(n)}`}
       </div><div class="panel-foot small muted"><span class="roll-legend" aria-label="What the counts mean"><span>${icon('members')}bots</span><span>${icon('workflows')}workflows</span><span>${icon('passkey')}approvals waiting</span><span>${icon('runs')}open cases</span><span><i class="pulse run"></i>live sessions</span></span><span style="margin-left:auto">${UI.term('Folders', 'folder')} are organization only: no permissions, defaults or behavior. Teams own those.</span></div></div>

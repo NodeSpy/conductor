@@ -303,16 +303,15 @@
   /* ---------- needs you ---------- */
   UI.route('attention', () => `<div class="page">
     ${UI.head('Needs you', { lede: UI.needsSummary(), actions: UI.folderChip() + UI.seg([['all', 'All'], ['approvals', 'Approvals'], ['failures', 'Failures'], ['waiting', 'Waiting']], UI.attnFilter || 'all', 'attn-f') })}
-    <div class="grid g-side">
-      <div class="stack"><div class="panel attn">${UI.attentionList(0, true)}</div>
-        ${(D.fyi || []).length ? `<div class="panel"><div class="panel-head"><h2>For your information</h2>${UI.count(D.fyi.length)}<span class="muted small">True, but not waiting on you.</span></div><div class="list">${D.fyi.map((a) => `<a class="item click quiet" href="${a.href}"><div class="grow"><div class="item-t">${esc(a.plain)}</div><div class="item-why">${esc(a.why)}</div></div><span class="att-age">${UI.ageText(a.age)}</span><span class="chev">${icon('chev')}</span></a>`).join('')}</div></div>` : ''}</div>
-      <div class="stack">
-        <div class="callout ember"><b>Approvals are yours alone.</b> Each one is a WebAuthn assertion over that proposal's digest, made on this device with user verification. No agent can reach this page, and no verb, chat text or peer message approves anything.</div>
-        <div class="panel"><div class="panel-head"><h3>Notify me</h3></div><div class="panel-body stack tight small">
+    <div class="calm">${D.attention.length ? `<div class="panel attn">${UI.attentionList(0, true)}</div>` : `<div class="panel">${UI.empty({ title: 'All quiet', body: 'Nothing needs you. When a bot asks for approval, a run fails, or something waits on your answer, it shows up here.' })}</div>`}
+      <div class="quiet-rows" style="margin-top:var(--gap-section)">
+        ${(D.fyi || []).length ? `<details class="quiet-row"><summary><span class="qr-dot"></span><b>For your information</b><span class="qr-line">${D.fyi.map((a) => esc(a.plain)).join(' · ')}</span>${icon('chevd', 'qr-chev')}</summary><div class="qr-body"><div class="list">${D.fyi.map((a) => `<a class="item click quiet" href="${a.href}"><div class="grow"><div class="item-t">${esc(a.plain)}</div><div class="item-why">${esc(a.why)}</div></div><span class="att-age">${UI.ageText(a.age)}</span><span class="chev">${icon('chev')}</span></a>`).join('')}</div></div></details>` : ''}
+        <details class="quiet-row"><summary><span class="qr-dot"></span><b>How approvals work</b><span class="qr-line">Only you can approve, with your passkey, on this device.</span>${icon('chevd', 'qr-chev')}</summary><div class="qr-body"><p class="dim" style="margin:0;max-width:var(--layout-container-prose)">Each approval is a WebAuthn assertion over that proposal's digest, made on this device with user verification. No agent can reach this page, and no verb, chat text or peer message approves anything.</p></div></details>
+        <details class="quiet-row"><summary><span class="qr-dot"></span><b>Notify me</b><span class="qr-line">${[D.prefs.notifyApprovals ? 'new approvals' : '', D.prefs.notifyPush ? 'push approvals' : '', D.prefs.notifyFailed ? 'every failed run' : ''].filter(Boolean).join(', ') || 'off'}</span>${icon('chevd', 'qr-chev')}</summary><div class="qr-body stack tight small">
           <label class="row">${UI.switchBtn(D.prefs.notifyApprovals, 'pref', 'data-k="notifyApprovals" aria-label="Browser notifications for new approvals"')}Browser notifications for new approvals</label>
           <label class="row">${UI.switchBtn(D.prefs.notifyPush, 'pref', 'data-k="notifyPush" aria-label="Push approvals need me"')}Push approvals (browser 2FA) need me</label>
           <label class="row">${UI.switchBtn(D.prefs.notifyFailed, 'pref', 'data-k="notifyFailed" aria-label="Every failed run"')}Every failed run</label>
-          <div class="muted tiny">Off-box alerts stay with your <span class="mono">conductor.*</span> lifecycle triggers (Slack, PagerDuty…).</div></div></div>
+          <div class="muted">Off-box alerts stay with your <span class="mono">conductor.*</span> lifecycle triggers (Slack, PagerDuty…).</div></div></details>
       </div></div></div>`);
   UI.needsSummary = () => { const a = D.attention, n = (k) => a.filter((x) => (k === 'other' ? !['approval', 'failed'].includes(x.kind) : x.kind === k)).length;
     if (!a.length) return '<b>Nothing needs you.</b> Approvals, failed runs and questions from bots land here.';

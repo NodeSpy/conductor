@@ -12,7 +12,10 @@ test('the Bots page: a folder tree with teams, solo bots and roll-ups; New bot /
   for (const b of ['New bot', 'New team', 'New folder']) await expect(page.locator('.page-head .actions', { hasText: b })).toBeVisible();
   if (isPhone(page)) { await expect(page.locator('.drill')).toContainText('work'); return; }
   await expect(row(page, 'platform-sre')).toBeVisible();
-  await expect(page.locator('.frow.folder', { hasText: 'billing' }).locator('.roll')).toContainText('1');
+  // calm: an open folder lets its rows speak; a collapsed one rolls up only what needs you
+  await page.locator('[data-act="f-toggle"][data-path="work/billing"]').click();
+  await expect(page.locator('.frow.folder', { hasText: 'billing' }).locator('.roll')).toContainText('1 pending');
+  await page.locator('[data-act="f-toggle"][data-path="work/billing"]').click();
   await expect(page.locator('.frow.bot', { hasText: 'homelab' })).toContainText('solo');
 });
 

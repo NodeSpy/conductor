@@ -348,7 +348,7 @@
   /* small shared bits */
   /** The summary header: crumbs, the title (the serif for a short human title; gen: the UI face for generated ones),
       one sentence that answers the page's question (lede), an optional detail line (machine detail last), actions. */
-  UI.head = (title, opts = {}) => `<div class="page-head"><div>${opts.crumbs ? `<div class="crumbs">${opts.crumbs}</div>` : ''}<h1${opts.gen ? ' class="gen"' : ''}>${title}${opts.sub ? `<span class="sub">${opts.sub}</span>` : ''}</h1>${opts.lede ? `<p class="lede">${opts.lede}</p>` : ''}${opts.detail ? `<div class="head-detail">${opts.detail}</div>` : ''}</div>${opts.actions ? `<div class="actions">${opts.actions}</div>` : ''}</div>`;
+  UI.head = (title, opts = {}) => `<div class="page-head"><div>${opts.crumbs ? `<div class="crumbs">${opts.crumbs}</div>` : ''}<h1${opts.gen ? ' class="gen"' : ''}>${title}${opts.sub ? `<span class="sub">${opts.sub}</span>` : ''}</h1>${opts.lede ? `<p class="lede">${opts.lede}</p>` : ''}${opts.lede2 ? `<p class="lede-2">${opts.lede2}</p>` : ''}${opts.detail ? `<div class="head-detail">${opts.detail}</div>` : ''}</div>${opts.actions ? `<div class="actions">${opts.actions}</div>` : ''}</div>`;
   UI.tabs = (items, on) => `<div class="tabs" role="tablist">${items.map(([k, l, href, c, hot]) => `<a href="${href}" role="tab" class="${k === on ? 'on' : ''}"${k === on ? ' aria-current="page" aria-selected="true"' : ''}>${l}${c != null ? ' ' + UI.count(c, { hot }) : ''}</a>`).join('')}</div>`;
   UI.bind = (root, sel, ev, fn) => $$(sel, root).forEach((el) => el.addEventListener(ev, (e) => fn(e, el)));
 

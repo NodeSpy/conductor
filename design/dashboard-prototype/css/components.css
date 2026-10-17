@@ -380,3 +380,13 @@ th.sel, td.sel { width: 30px; padding-right: 0 !important; }
 .vs-body > .vs-ref { flex-basis: 100%; padding: var(--space-1) var(--space-3) var(--space-1_5); border-top: var(--border-width) solid var(--color-border-subtle); color: var(--value-source-ref-fg); }
 .vs-body > .vs-ref.muted { color: var(--color-text-tertiary); }
 .vs-body > .vs-same:not(:empty) { flex-basis: 100%; padding: 0 var(--space-3) var(--space-2); }
+/* the approval card (calm): kicker, plain title, why and impact, then the decision; technical detail collapsed */
+.prop-kick { font: var(--type-caption); color: var(--color-text-tertiary); }
+.prop-title { font: var(--type-h3); font-size: 1.375rem; }
+.tf-tiles > div { background: transparent; }
+.tf-tiles b { font: var(--type-h3); font-variant-numeric: tabular-nums; color: var(--color-text-primary); }
+.tf-tiles .k { font: var(--type-caption); color: var(--color-text-tertiary); }
+.tf-tiles > div.loud { border-color: var(--color-status-danger-border); }
+.tf-tiles > div.loud b { color: var(--color-status-danger-fg); }
+.req-banner.event, .req-banner.op { background: transparent; border-color: var(--color-border-subtle); }
+.req-banner.event svg, .req-banner.op svg { color: var(--color-icon-default); }
