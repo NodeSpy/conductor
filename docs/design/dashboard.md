@@ -274,7 +274,7 @@ In reading order (calm by default, §3.0):
 |---|---|---|
 | Needs you | `GET /api/v1/attention` | Bots ledger (pending proposals), run history (failed), audit (`escalate`/`needs_input`, which `status` already reads), hand-off drafts (web connector), backoff/hold (`state.json`), browser `needs_input`, update checker. Merging them is **NEW** (`attention` aggregator). |
 | Running / runs / approvals (or model usage) / bots tiles | `GET /api/v1/status`, `GET /api/v1/usage` when `usage.mode` is not `off` | `status.go` (live agents, in-flight workflows from `runs.json`); usage per provider ([§4.1.1](#411-usage-display-usagemode)) |
-| The score | `GET /api/v1/runs?since=12h&fields=lane` | History records (`Kind`, `Variant`, `Started`, `Finished`, `Status`) |
+| Runs, last 12h (activity lanes) | `GET /api/v1/runs?since=12h&fields=lane` | History records (`Kind`, `Variant`, `Started`, `Finished`, `Status`) |
 | Health | `GET /api/v1/status` | Version, pid, uptime, config sha, sandbox registry (identities, containers), paseo provider-entry merge result (#179), connector registry health, update state |
 | Activity | SSE `run`, `audit`, `bot`, `browser` topics | `flow.EventHub` (`RunEvent`), audit writer tap (**NEW**) |
 | Workflows (off) or Model usage (subscription/api) | `GET /api/v1/workflows`; `GET /api/v1/usage?days=14` | One card per provider, never a combined chart ([§4.1.1](#411-usage-display-usagemode)) |
@@ -1979,8 +1979,11 @@ Opening `index.html` straight from the file system also works: classic
 scripts, no modules.
 
 **Every control works** against fake state kept in `localStorage`, so it
-survives navigation and reloads. **Reset demo data** (rail footer, Config,
-More) puts the seed back. Config edits from every screen stage into the
+survives navigation and reloads. **Demo data** (✦ in the rail footer) picks the
+day the prototype shows: *a mostly healthy day* (the default: dozens of runs,
+one approval and one failure), *all quiet*, or *everything at once* (every kind
+of exception; the test suite runs on it), and resets the current one. The
+before/after review of the calm-by-default pass is at `review/calm.html`. Config edits from every screen stage into the
 real pipeline: the diff is computed from the generated `config.yaml`,
 validation runs real checks (missing fields, unresolved references, team
 narrowing, widening), and apply needs a (simulated) passkey and writes a
@@ -2010,13 +2013,20 @@ backup you can restore. Things to try:
 - **Approve with passkey:** Needs you → *Review* → `p12` → **Approve**.
 - **Secrets:** filter, store a value (write-only), change a ref.
 - **Browser:** **Take over**, Esc to release; seed a login.
-- **Search:** ⌘K. **Theme:** the rail footer.
+- **Search:** ⌘K. **Theme:** the rail footer. **Density:** Config → General
+  (Comfortable or Compact, this browser only).
+- **Calm:** switch to *All quiet* (✦) and open the Overview: one line says
+  nothing needs you.
 
 **Interaction tests** live in `design/dashboard-tests/` (Playwright; see its
 README). They visit every route at 1440×900 and 390×844 and click every
 control, failing on any that changes nothing and isn't disabled with a
 reason; run every create/edit/delete flow through diff and apply; drive the
-builder and the team flows; and fail on any console error.
+builder and the team flows; check Daylight conformance (tokens only, type
+floors, the serif rule) and the calm rules (the answer first, a colour budget);
+sweep layout and rendered contrast at the brand's minimums in both themes and
+on WebKit iPhone 15 with Safari's toolbar simulated; and fail on any console
+error.
 
 The prototype is a design artefact. Its code is not the product's code, and
 its data shapes follow [§5](#5-api) only loosely.
