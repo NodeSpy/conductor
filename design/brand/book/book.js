@@ -2,10 +2,11 @@
 // Everything visual comes from tokens.css; this file only lays content out.
 import { LUCIDE, STATUS } from '../icons/icons.js';
 import { LOGOS, OFFICIAL_LOGO, kitDir } from '../tools/logos.mjs';
-import { STATES as STATUS_STATES, CHANGE, GLYPH_STATE, mark, chartMark, legend, injectMarkCSS } from '../status/marks.js';
-injectMarkCSS();
+import { STATES as STATUS_STATES, CHANGE, GLYPH_STATE, mark, injectMarkCSS } from '../status/marks.js';
+import { summaryLine, quietState, exception as calmException, excRows, calmLanes, injectCalmCSS } from '../status/calm.js';
+injectMarkCSS(); injectCalmCSS();
 
-const [T, CON, MIG] = await Promise.all(['tokens/tokens.json', 'tokens/contrast.json', 'tokens/migration.json'].map((u) => fetch(u).then((r) => r.json())));
+const [T, CON, MIG, CALMCHK] = await Promise.all(['tokens/tokens.json', 'tokens/contrast.json', 'tokens/migration.json', 'tokens/calm-check.json'].map((u) => fetch(u).then((r) => r.json())));
 
 // ---------- helpers ----------
 const lu = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${LUCIDE[n] ?? ''}</svg>`;
@@ -44,6 +45,63 @@ const verdict = (ok) => `<div class="verdict">${sg(ok ? 'success' : 'danger')}${
 const chapters = [];
 const ch = (id, title, blurb, subs, body) => chapters.push({ id, title, blurb, subs, body });
 const sub = (id, title, lede = '') => `<h3 class="sub" id="${id}">${title}</h3>${lede ? `<p class="lede">${lede}</p>` : ''}`;
+
+// =====================================================================
+// Calm by default (exception-first information design)
+// =====================================================================
+const CALM_RULES = [
+  ['The 3-second glance', 'Every screen answers “is anything wrong, and what needs me?” in about three seconds, without reading. The answer is the page heading: the largest, first and highest-contrast text. When nothing needs you, the screen says almost nothing.'],
+  ['Normal collapses into one quiet line', 'Finished work is a summary line (“10 finished · 9 passed · 1 parked”) that expands, never a wall of rows. In timelines, passing runs are faint ticks in a density band; only failures, things that need you and running work are marks. Healthy systems, connections and bots collapse to “All healthy”.'],
+  ['One loud thing per screen', 'What needs you is few, large and at the top: one plain sentence and one action. Everything else steps back: lower contrast, smaller, no colour. If more than about three things on screen are coloured, it’s too loud.'],
+  ['Less text by default', 'One line per row. Ids, hashes, timestamps, counts and technical detail move behind a disclosure, hover or tap. Marks are labelled on the item itself, so there’s no legend to decode.'],
+  ['Quiet states are first-class', '“All quiet. Nothing needs you. 46 runs went fine in the last 12 hours.” is a complete overview, not an empty one.'],
+  ['Fewer, bigger, more space', 'Fewer cards, columns and chips per row; clear groups; generous spacing at comfortable density. Compact density stays available for operators at scale.'],
+];
+const CALM_SCREENS = [['overview', 'Overview'], ['quiet', 'Overview, quiet day'], ['history', 'Run history'], ['activity', 'Lanes (Activity)'], ['bot', 'Bot page'], ['approval', 'Approval header']];
+const CALM_CHECK_NAME = { overview: 'overview', quiet: 'quiet overview', history: 'run history', activity: 'lanes (activity)', bot: 'bot page', approval: 'approval header' };
+const calmResult = (screen, version, vp, theme) => CALMCHK.find((r) => r.screen === CALM_CHECK_NAME[screen] && r.version === version && r.theme === theme && r.engine === (vp === 'phone' ? 'webkit-iphone' : 'chromium-desktop'));
+const calmChip = (r) => (r ? `<span class="calm-chip ${r.pass ? 'ok' : 'loud'}">${r.coloured} coloured · ${r.heavy} text-heavy · ${r.pass ? 'within budget' : 'too loud'}</span>` : '');
+const calmPair = (screen, vp = 'desktop', theme = 'light') => {
+  const shot = (v) => `v2/shots/calm/${screen}-${v}-${vp}-${theme}.png`;
+  const live = (v) => `v2/mock.html?d=daylight&s=${screen === 'quiet' ? 'overview' : screen}&t=${theme}${screen === 'quiet' ? '&day=quiet' : ''}${v === 'before' ? '&v=before' : ''}`;
+  const fig = (v, label) => `<figure><figcaption><b>${label}</b>${calmChip(calmResult(screen, v, vp, theme))}<a href="${live(v)}">live</a></figcaption><img loading="lazy" src="${shot(v)}" alt="${label}: ${screen}, ${vp}, ${theme}"></figure>`;
+  return `${screen === 'quiet' ? `<figure class="calm-none"><figcaption><b>Before</b></figcaption><p>The busy overview had no quiet state: on a calm day it still showed every card.</p></figure>` : fig('before', 'Before')}${fig('calm', 'Calm')}`;
+};
+const BOOK_LANES = [['pr-review', [[2, 'running'], [31, 'passed'], [95, 'needs'], [252, 'passed'], [503, 'passed'], [640, 'passed']]], ['ci-fixer', [[6, 'running'], [52, 'failed'], [230, 'parked'], [588, 'passed']]], ['issue-triage', [[79, 'passed'], [299, 'passed'], [410, 'passed']]], ['platform-sre', [[7, 'needs'], [176, 'passed'], [716, 'passed']]], ['dep-bump', [[131, 'passed']]], ['release-notes', [[418, 'failed']]]];
+const calmLanesDemo = () => `<div class="calm-lanes-wrap">${calmLanes(BOOK_LANES, { width: 860 })}</div>`;
+const CALM_TOKENS = ['semantic.color.emphasis', 'semantic.color.band', 'semantic.calm', 'component.summary-line', 'component.density-band', 'component.quiet-state', 'component.exception'];
+const fmtTok = (v) => (v == null ? '' : v.hex ? hexOf(v) : v.value != null ? `${v.value}${v.unit ?? ''}` : typeof v === 'object' ? JSON.stringify(v) : String(v));
+const calmTokenRows = () => [...flat.keys()].filter((p) => CALM_TOKENS.some((g) => p.startsWith(g + '.'))).map((p) => { const t = flat.get(p); const raw = t.modes?.dark ?? t.modes?.light ?? t.value; return `<code>${cssName(p)}</code><span>${isAlias(raw) ? `<code>${raw.slice(1, -1).replace(/^semantic\./, '').replace(/^primitive\.color\./, 'palette.')}</code>` : esc(fmtTok(raw))}</span><span class="c-help">${t.desc ?? ''}</span>`; }).join('');
+const EMPH = [['loud', 'Replace the production web server', 'The one thing that needs you. The only level allowed colour (its mark, its edge, its action).'], ['normal', '18 of 20 runs went fine', 'What things are: summary-line leads, row titles.'], ['quiet', 'last 12 hours · $8.40 spent', 'Supporting facts and reasons.'], ['ghost', '7 min ago · Show', 'Times, disclosures and the band’s axis.']];
+const emphasisSheet = () => `<div class="calm-emph">${EMPH.map(([k, sample, use]) => `<div class="em-${k}"><code>--color-emphasis-${k}</code><span class="em-sample" style="color:var(--color-emphasis-${k})">${k === 'loud' ? mark('needs', { size: 14 }) : ''}${sample}</span><span class="c-help">${use}</span></div>`).join('')}</div>`;
+
+ch('calm', 'Calm by default', 'Exception-first information design. Everything normal is quiet and folded away; the one thing that needs you is loud, large and first. Every Daylight screen follows these rules, and a check enforces them.',
+  [['calm-rules', 'Principles'], ['calm-pairs', 'Before and after'], ['calm-glance', 'Glance answers and the loudness check'], ['calm-emphasis', 'Emphasis levels'], ['calm-components', 'Components'], ['calm-tokens', 'Tokens']],
+  () => `
+  ${sub('calm-rules', 'Principles', 'From Daniel’s review of the first Daylight mocks: “all of it just looks so busy… there is no way for me to just pick out what’s going on… I have to read everything all the time.” Everything was shown at equal weight, all the time. The fix is the information design, not the decoration.')}
+  <ol class="calm-rules">${CALM_RULES.map(([t, d]) => `<li><b>${t}</b><span>${d}</span></li>`).join('')}</ol>
+  ${sub('calm-pairs', 'Before and after', 'The same data, the busy version against the calm one, in the first viewport (what a glance sees). Every image links to the live mock. The figures under each label are the loudness check’s counts for that render.')}
+  <div class="calm-ctl"><div class="c-seg" id="calm-vp"><span data-v="desktop" class="is-active">Desktop</span><span data-v="phone">Phone</span></div><div class="c-seg" id="calm-th"><span data-v="light" class="is-active">Light</span><span data-v="dark">Dark</span></div></div>
+  <div class="calm-pairs" data-vp="desktop">${CALM_SCREENS.map(([s, t]) => `<section class="calm-pair" data-screen="${s}"><h4>${t}</h4><p class="calm-answer">“${(calmResult(s, 'calm', 'desktop', 'light')?.glance ?? '').replace(/^./, (c) => c.toUpperCase())}.”</p><div class="calm-figs">${calmPair(s)}</div></section>`).join('')}</div>
+  ${sub('calm-glance', 'Glance answers and the loudness check', 'For each calm screen, the one sentence a person should get at a glance, marked on the page as <code>[data-glance]</code>. <code>tools/calm-check.mjs</code> checks that the glance element is the most prominent thing on screen (largest text, first large text in reading order, at least 7:1), and counts loudness in the first viewport: things in a saturated colour (OKLCH chroma ≥ 0.05, once per row or item) and text-heavy rows (over 110 characters or 3+ lines). With 3 or fewer exceptions the budget is <b>coloured ≤ exceptions + 2</b> and <b>text-heavy ≤ 2</b>; with more, 5 and 3. Calm pages must pass; the busy versions are measured against the same budget.')}
+  <div class="c-table-wrap"><table class="c-table calm-table"><thead><tr><th>Screen</th><th>Glance answer</th><th class="num">Needs a person</th><th class="num">Before</th><th class="num">Calm</th><th>Result</th></tr></thead><tbody>
+  ${CALM_SCREENS.map(([s, t]) => { const n = (r) => (r ? `${r.coloured} · ${r.heavy}` : '—'); const c = calmResult(s, 'calm', 'desktop', 'light'); const all = CALMCHK.filter((r) => r.screen === CALM_CHECK_NAME[s] && r.version === 'calm'); return `<tr><td><b>${t}</b></td><td>${c?.glance ?? ''}</td><td class="num">${c?.exceptions ?? ''}</td><td class="num">${s === 'quiet' ? '—' : `${n(calmResult(s, 'before', 'desktop', 'light'))} / ${n(calmResult(s, 'before', 'phone', 'light'))}`}</td><td class="num">${n(c)} / ${n(calmResult(s, 'calm', 'phone', 'light'))}</td><td>${all.length && all.every((r) => r.pass && r.glanceOk) ? `${mark('passed')} ${all.length} renders pass` : `${mark('failed')} fails`}</td></tr>`; }).join('')}
+  </tbody></table></div>
+  ${why('Counts are “coloured · text-heavy”, desktop (Chromium) / iPhone (WebKit), light theme; dark is the same. The full matrix (both engines, both themes, before and calm) is generated into <a href="tokens/CALM-CHECK.md">tokens/CALM-CHECK.md</a>.')}
+  ${sub('calm-emphasis', 'Emphasis levels', 'Four levels, and only the loudest may carry colour. At most three loud things per screen (<code>--calm-max-loud</code>).')}
+  ${stack(emphasisSheet)}
+  ${sub('calm-components', 'Components', 'Four components carry the principle. They live in <code>status/calm.js</code> with the status marks, so every surface draws them the same way.')}
+  <h4 class="cap">One loud thing (exception)</h4><p class="lede">The thing that needs you most: a kicker with its mark, a serif title, one sentence, one action. The next few are exception rows: one line each, a 3px edge in the mark’s colour, one action. Anything beyond that folds into “N more need you”.</p>
+  ${stack(() => `<div class="calm-demo">${calmException({ state: 'needs', kicker: 'Needs your approval · 7 min ago', title: 'Replace the production web server', sentence: 'platform-sre wants to run terraform apply on production to fix the SEV2 latency incident.', action: '<button class="c-btn primary" tabindex="-1">Review</button>' })}<div style="margin-top:24px">${excRows([{ state: 'failed', title: 'ci-fixer couldn’t fix acme/web#1288', sentence: '2 tests fail; nothing was pushed', age: '52 min ago', action: '<button class="c-btn secondary sm" tabindex="-1">Open</button>' }])}${summaryLine({ lead: '2 more need you', parts: ['pr-review needs your call on a draft', 'approve a sign-in on app.example.com'], label: 'Show' })}</div></div>`)}
+  <h4 class="cap">Summary line</h4><p class="lede">Normal work as one quiet line: a count in ink, the parts in secondary, and “Show” in ghost. It expands in place (a native <code>&lt;details&gt;</code>), so the detail is one tap away and never in the way.</p>
+  ${stack(() => `<div class="calm-demo">${summaryLine({ lead: '10 finished', parts: ['9 passed', '1 parked'], label: 'Show' })}${summaryLine({ lead: '3 running', parts: ['ci-fixer, pr-review, platform-sre'], label: 'Show' })}${summaryLine({ lead: 'All healthy', parts: ['ops-box', '6 connections', 'up 3 days'], label: 'Show' })}</div>`)}
+  <h4 class="cap">Density band</h4><p class="lede">A timeline where passing and parked runs are faint ticks on a track, so twenty normal runs read as texture rather than twenty marks. Only failures, things that need you and running work are drawn as marks, and each lane says in words what they are, so there is no legend. Lanes with exceptions come first; lanes where everything went fine fold into one row.</p>
+  ${stack(calmLanesDemo)}
+  <h4 class="cap">Quiet state</h4><p class="lede">When nothing needs you, the screen says so in one serif sentence and one supporting line, then the summary lines. The arch is drawn in border colours: present, never loud.</p>
+  ${stack(() => `<div class="calm-demo">${quietState({ title: 'All quiet. Nothing needs you.', sub: '46 runs went fine in the last 12 hours. 2 are running now.' })}</div>`)}
+  ${sub('calm-tokens', 'Tokens', 'The emphasis levels, the band colours, the loudness budget and the four components’ tokens. Values are the dark theme’s; aliases resolve per theme.')}
+  <div class="dens-tbl calm-tok"><span class="h">Token</span><span class="h">Value</span><span class="h">Use</span>${calmTokenRows()}</div>
+  `);
 
 // =====================================================================
 // 0. Reading at a glance (information design)
@@ -298,7 +356,12 @@ const TABLE_SAMPLE = [
 const sampleTable = (extra = '') => {
   const groups = [['attn', 'Needs attention', 'attn-h'], ['live', 'Running now', ''], ['done', 'Finished', '']];
   return `<div class="c-table-wrap"><table class="c-table"><thead><tr><th style="width:28px"></th><th>Run</th><th>Status</th><th class="num">Took</th><th class="num">Cost</th><th>ID</th><th></th></tr></thead>
-  ${groups.map(([g, title, cls]) => { const rows = TABLE_SAMPLE.filter((r) => r[0] === g); return `<tbody class="${g}"><tr class="grp ${cls}"><td colspan="7"><b>${title}</b><span>${rows.length}</span></td></tr>${rows.map(([, id, wf, tgt, s, glyph, word, reason, d, c, act], i) => `<tr class="${g === 'attn' ? 'attn' : ''} ${g === 'done' && i === 0 ? 'is-selected' : ''} ${extra && g === 'live' ? extra : ''}" data-s="${s}"><td><span class="check">${g === 'done' && i === 0 ? lu('check') : ''}</span></td><td class="run"><b>${wf}</b> <span class="sub">${tgt}</span>${reason ? `<span class="reason">${reason}</span>` : ''}</td><td><span class="c-status" data-s="${s}">${sg(glyph, s === 'running' ? 'c-glyph-spin' : '')}${word}</span></td><td class="num">${d}</td><td class="num">${c}</td><td><span class="c-mono sub">${id}</span></td><td class="act">${act ? `<button class="c-btn ${s === 'accent' ? 'primary' : 'secondary'} sm" tabindex="-1">${act}</button>` : ''}</td></tr>`).join('')}</tbody>`; }).join('')}
+  ${groups.map(([g, title, cls]) => { const rows = TABLE_SAMPLE.filter((r) => r[0] === g);
+    // Calm by default: Finished is one summary line ("2 finished · 1 passed · 1 parked") that opens in place.
+    const head = g === 'done'
+      ? `<tr class="grp done-sum"><td colspan="7"><b>${rows.length} finished</b><span class="cs-parts">${rows.filter((r) => r[6] === 'Passed').length} passed · ${rows.filter((r) => r[6] === 'Parked').length} parked</span><span class="cs-more">Show</span></td></tr>`
+      : `<tr class="grp ${cls}"><td colspan="7"><b>${title}</b><span>${rows.length}</span></td></tr>`;
+    return `<tbody class="${g}">${head}${rows.map(([, id, wf, tgt, s, glyph, word, reason, d, c, act], i) => `<tr${g === 'done' ? ' hidden' : ''} class="${g === 'attn' ? 'attn' : ''} ${g === 'live' && i === 0 ? 'is-selected' : ''} ${extra && g === 'live' ? extra : ''}" data-s="${s}"><td><span class="check">${g === 'live' && i === 0 ? lu('check') : ''}</span></td><td class="run"><b>${wf}</b> <span class="sub">${tgt}</span>${reason ? `<span class="reason">${reason}</span>` : ''}</td><td><span class="c-status" data-s="${s}">${sg(glyph, s === 'running' ? 'c-glyph-spin' : '')}${word}</span></td><td class="num">${d}</td><td class="num">${c}</td><td><span class="c-mono sub">${id}</span></td><td class="act">${act ? `<button class="c-btn ${s === 'accent' ? 'primary' : 'secondary'} sm" tabindex="-1">${act}</button>` : ''}</td></tr>`).join('')}</tbody>`; }).join('')}
 </table></div>`;
 };
 ch('layout', 'Space and layout', 'A 4px base, a 12-column grid on desktop and two density modes for the same components.',
@@ -524,39 +587,18 @@ function story(compact = false) {
   const steps = [['success', 'Get the failing logs', '3 failing checks found', '2 s'], ['success', 'Decide what failed', 'A test failure (91% sure)', '8 s'], ['success', 'Fix it', 'Changed applyFee to round half-even', '7 min 40 s'], ['danger', 'Run the tests', '2 of 148 tests fail', '26 s'], ['skipped', 'Push the fix', 'Not reached', '']];
   return `<ol class="pt-story">${steps.slice(0, compact ? 5 : 5).map(([st, t, d, x]) => `<li data-s="${st === 'skipped' ? 'neutral' : st}" class="${st}"><span class="sg">${sg(st)}</span><div><b>${t}</b><span>${d}</span></div><em>${x}</em></li>`).join('')}</ol>`;
 }
-function lanes() {
-  const L = [['pr-review', [[2, 'running'], [31, 'passed'], [95, 'needs'], [252, 'passed'], [503, 'passed'], [640, 'passed']]], ['ci-fixer', [[6, 'running'], [52, 'failed'], [230, 'parked'], [588, 'passed']]], ['issue-triage', [[79, 'passed'], [299, 'passed'], [410, 'passed']]], ['platform-sre', [[7, 'needs'], [176, 'passed'], [716, 'passed']]], ['dep-bump', [[131, 'passed']]], ['release-notes', [[418, 'failed']]]];
-  const w = 900, left = 112, lh = 34, top = 8, H = top + L.length * lh + 24, span = 720, x = (m) => left + (1 - m / span) * (w - left - 12);
-  let g = '';
-  for (let h = 0; h <= 12; h += 3) { const xx = x(h * 60); g += `<line x1="${xx}" x2="${xx}" y1="${top}" y2="${H - 20}" class="lgrid"/><text x="${xx}" y="${H - 5}" class="lax" text-anchor="middle">${h ? h + ' h ago' : 'now'}</text>`; }
-  L.forEach(([n, notes], i) => {
-    const y = top + i * lh + lh / 2;
-    g += `<text x="0" y="${y + 4}" class="llab">${n}</text><line x1="${left}" x2="${w - 12}" y1="${y}" y2="${y}" class="lline"/>`;
-    // Passed is the majority, so it is the quietest mark: smaller, in muted sage.
-    for (const [m, st] of notes) g += chartMark(st, x(m), y, st === 'passed' ? 10 : 14, `${n}: ${STATUS_STATES[st].word.toLowerCase()}`);
-  });
-  g += `<line x1="${x(0)}" x2="${x(0)}" y1="${top - 4}" y2="${H - 20}" stroke="var(--color-dataviz-now)" stroke-width="1.5"/>`;
-  const used = [...new Set(L.flatMap(([, notes]) => notes.map(([, st]) => st)))];
-  return `<div class="pt-lanes" data-legend-scope>${legend(['passed', 'running', 'failed', 'needs', 'parked'].filter((s) => used.includes(s)))}<svg viewBox="0 0 ${w} ${H}" role="img" aria-label="Every run of every workflow, last 12 hours">${g}</svg></div>`;
-}
 
-const NEEDS = [
-  ['accent', 'needs-you', 'Replace the production web server', 'platform-sre wants to run terraform apply on production, for the SEV2 latency incident', 'p12 · infra@3f2a9c1d · +1 ~2 −0', '7 min ago', 'Review', 'primary'],
-  ['danger', 'danger', 'ci-fixer couldn’t fix acme/web#1288', 'Its change made 2 tests fail. Nothing was pushed.', 'r-7ef0 · step test', '52 min ago', 'Open', 'secondary'],
-  ['warning', 'warning', 'pr-review needs your call on a draft', 'Approve, revise or discard its review of acme/infra#77', 'r-7ed1 · hand-off', '1 h ago', 'Answer', 'secondary'],
-];
-const needsList = () => `<ul class="pt-needs">${NEEDS.map(([s, g, t, w, tech, age, act, kind]) => `<li data-s="${s}"><span class="ng">${sg(g)}</span><div><b>${t}</b><span>${w}</span><code>${tech}</code></div><em>${age}</em><button class="c-btn ${kind} sm" tabindex="-1">${act}</button></li>`).join('')}</ul>`;
 const PATTERNS = [
-  ['pt-summary', 'Summary header', 'Every page opens with its title and one sentence that answers the page’s question in plain words, then the actions. The sentence leads with a bold count when something needs you.',
-    () => `<div class="pt-head"><h1>Good afternoon, ops.</h1><p><b>5 things need you.</b> Everything else is running normally: 18 of 20 runs in the last 12 hours went fine.</p><div class="pt-act"><button class="c-btn primary" tabindex="-1">Review approvals</button><button class="c-btn secondary" tabindex="-1">${lu('play')}Run a workflow</button></div></div>`],
-  ['pt-needs', 'Needs you list', 'One row per thing waiting on a person: a status glyph, a plain title, why it matters, the machine details last in mono, the age, and one verb. Approvals get the primary button; the rest are secondary.',
-    () => needsList()],
+  ['pt-summary', 'Summary header', 'Every page heading is the answer to the page’s question, in plain words: “5 things need you”, “3 runs need attention”, “All quiet. Nothing needs you.” It is the largest text on screen, so the glance lands on it first. One supporting sentence follows; actions belong to the thing that needs you, not to the header.',
+    () => `<div class="pt-head"><h1>5 things need you</h1><p>Start with the first. Everything else is running normally.</p></div>`],
+  ['pt-needs', 'Needs you', 'The one loud thing first: the most urgent item as an exception card with one sentence and one action. The next few are one-line rows with a 3px edge in their mark’s colour. The rest fold into “N more need you”. Machine details (ids, hashes, diff stats) live on the item’s own page.',
+    () => `${calmException({ state: 'needs', kicker: 'Needs your approval · 7 min ago', title: 'Replace the production web server', sentence: 'platform-sre wants to run terraform apply on production to fix the SEV2 latency incident.', action: '<button class="c-btn primary" tabindex="-1">Review</button>' })}<div style="margin-top:24px">${excRows([{ state: 'needs', title: 'Post the monthly forecast to #incidents', sentence: 'asked by someone who isn’t an operator', age: '22 min ago', action: '<button class="c-btn secondary sm" tabindex="-1">Review</button>' }, { state: 'failed', title: 'ci-fixer couldn’t fix acme/web#1288', sentence: '2 tests fail; nothing was pushed', age: '52 min ago', action: '<button class="c-btn secondary sm" tabindex="-1">Open</button>' }])}${summaryLine({ lead: '2 more need you', parts: ['pr-review needs your call on a draft', 'approve a sign-in on app.example.com'], label: 'Show' })}</div>`],
   ['pt-digest', 'Since you last looked (from Broadsheet)', 'Borrowed from the Broadsheet direction. When you come back, the overview leads with what changed since your last visit, as counts and one line each, linked to the detail. New failures and approvals carry their status colour; everything else stays ink.',
     () => digest()],
   ['pt-story', 'Run story', 'A run as a short story, top to bottom: each step’s outcome in a sentence, the duration on the right, and the failing step called out. Steps after a failure say “Not reached”.',
     () => story()],
-  ['pt-lanes', 'Activity lanes (from Score)', 'Borrowed from the Score direction, for the Activity page. Every workflow is a named lane, time runs left to right, and each run is a mark whose shape and colour give its state. Passing runs are ink dots, so the failures and the ember diamonds on “now” stand out. Lanes are labelled rather than coloured.',
-    () => lanes()],
+  ['pt-lanes', 'Activity lanes (from Score)', 'Borrowed from the Score direction, for the Activity page, and made calm: every workflow is a lane and time runs left to right, but passing and parked runs are faint ticks in a density band. Only failures, things that need you and running work are marks, and each lane says in words what they are, so there is no legend to decode. Lanes with exceptions come first; lanes where everything went fine fold into one row.',
+    () => calmLanesDemo()],
 ];
 ch('patterns', 'Patterns', 'Recurring screen patterns built from the components, including the two borrowed from the other round-two directions.',
   PATTERNS.map(([id, t]) => [id, t]),
@@ -702,6 +744,22 @@ document.getElementById('brand-mark').outerHTML = inlineMark(W);
 const root = document.getElementById('chapters');
 root.innerHTML = chapters.map((c, i) => `<section class="ch" id="${c.id}"><div class="ch-head"><div><span class="num">${String(i + 1).padStart(2, '0')} · ${c.title}</span><h2>${c.title}</h2></div><p>${c.blurb}</p></div>${c.body()}</section>`).join('');
 document.getElementById('toc').innerHTML = `<ol><li><a href="#principles"><span class="n">00</span>Principles</a></li>${chapters.map((c, i) => `<li><a href="#${c.id}"><span class="n">${String(i + 1).padStart(2, '0')}</span>${c.title}</a><ol>${c.subs.map(([id, t]) => `<li><a href="#${id}">${t}</a></li>`).join('')}</ol></li>`).join('')}</ol>`;
+
+// calm before/after pairs: viewport and theme toggles swap the screenshots and their check counts
+const calmState = { vp: 'desktop', th: 'light' };
+for (const [id, k] of [['calm-vp', 'vp'], ['calm-th', 'th']]) document.getElementById(id).addEventListener('click', (e) => {
+  const v = e.target.closest('span[data-v]')?.dataset.v; if (!v) return;
+  calmState[k] = v;
+  for (const x of document.querySelectorAll(`#${id} span`)) x.classList.toggle('is-active', x.dataset.v === v);
+  document.querySelector('.calm-pairs').dataset.vp = calmState.vp;
+  for (const sec of document.querySelectorAll('.calm-pair')) sec.querySelector('.calm-figs').innerHTML = calmPair(sec.dataset.screen, calmState.vp, calmState.th);
+});
+// a collapsed Finished group in the sample tables opens in place
+document.addEventListener('click', (e) => {
+  const sum = e.target.closest('tr.done-sum'); if (!sum) return;
+  const open = sum.classList.toggle('open');
+  for (const r of sum.parentElement.querySelectorAll('tr:not(.done-sum)')) r.hidden = !open;
+});
 
 // theme-dependent logo images (in this page's own theme)
 function syncLogos() {

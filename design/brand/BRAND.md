@@ -8,6 +8,7 @@ This is the single source of truth for how conductor looks, reads and behaves on
 | **Tokens** (source of truth, W3C DTCG) | [`tokens/tokens.json`](tokens/tokens.json) → generated [`tokens/tokens.css`](tokens/tokens.css) |
 | **Prototype → Daylight mapping** | [`tokens/migration.json`](tokens/migration.json), [`tokens/prototype-compat.css`](tokens/prototype-compat.css), and the table in the book (*Tokens › Migrating the dashboard*) |
 | **Contrast report** (every declared pair, both themes) | [`tokens/CONTRAST.md`](tokens/CONTRAST.md) |
+| **Calm by default** (before/after pairs and the loudness check) | [`system.html#calm`](system.html#calm), [`v2/shots/calm/`](v2/shots/calm/), [`tokens/CALM-CHECK.md`](tokens/CALM-CHECK.md) |
 | **Logo** (official kit, one canonical location) | [`assets/`](assets/); the choice is recorded on [`logo-review.html`](logo-review.html) |
 | **How we got here** | [`index.html`](index.html) (logo directions), [`directions-v2.html`](directions-v2.html) (system directions) |
 
@@ -22,6 +23,7 @@ The logo is **Fermata, strengthened**: the hold-until-released arch, chosen by D
 | Area | Decision | Why |
 |---|---|---|
 | Direction | Daylight: warm, light-first, sentence-first | Daniel found round one “engineery” and generic, and wanted conductor’s firehose easier to consume. Daylight leads with plain language and keeps colour for what needs attention. |
+| Calm by default | Exception-first: the heading is the glance answer, one loud thing, everything normal folded into quiet summary lines and density bands | Daniel: “all of it just looks so busy… I have to read everything all the time.” A check (`tools/calm-check.mjs`) now holds every screen to a loudness budget. |
 | Information design | Ten rules (below): summary first, plain headline over technical detail, three type levels, colour only for attention… | These are the heart of the system. The audits’ biggest problems (no first step, “what can my bots do?”, hashes up front) were information problems, not paint. |
 | Palette | Cream and cocoa surfaces, sand neutrals, one ember accent | Warm paper reads as a product rather than a terminal, and one accent keeps “where do I act?” unambiguous. |
 | Status | Colour only on what needs attention; passing work is ink | When eleven of sixteen rows are green, green means nothing and the two red rows are harder to find. |
@@ -34,11 +36,71 @@ The logo is **Fermata, strengthened**: the hold-until-released arch, chosen by D
 
 ---
 
+## Calm by default (exception-first)
+
+Daniel’s review of the first Daylight mocks: *“all of it just looks so busy… there is no way for me to just pick out what’s going on… I have to read everything all the time.”* Everything was shown at equal weight, all the time. The fix is in the information design, not the decoration. This principle sits above the ten rules that follow, and it applies to every screen. The book chapter is [*Calm by default*](system.html#calm).
+
+1. **The 3-second glance.** Every screen answers “is anything wrong, and what needs me?” in about three seconds, without reading. The answer *is* the page heading: “5 things need you”, “3 runs need attention”, “All quiet. Nothing needs you.” It is the largest, first and highest-contrast text on the screen. When nothing needs you, the screen says almost nothing.
+2. **Normal collapses into one quiet line.** Finished work is a summary line (“10 finished · 9 passed · 1 parked”) that expands in place, never a wall of rows. In timelines, passing runs are faint ticks in a **density band**; only failures, needs-you and running work are marks. Healthy systems, connections and bots collapse to “All healthy”.
+3. **One loud thing per screen.** What needs you is few, large and at the top: one plain sentence and one action. Everything else steps back: lower contrast, smaller, no colour. If more than about three things on screen are coloured, it’s too loud.
+4. **Less text by default.** One line per row. Ids, hashes, timestamps, counts and technical detail move behind a disclosure, hover or tap. Marks are labelled on the item (direct labelling), so there’s no legend to decode.
+5. **Quiet states are first-class.** “All quiet. Nothing needs you. 46 runs went fine in the last 12 hours.” is a complete overview.
+6. **Fewer, bigger, more space.** Fewer cards, columns and chips per row, clear grouping, generous spacing at comfortable density. Compact stays available for operators at scale.
+
+### Before and after
+
+The same data, busy against calm, first viewport only. Shots are in [`v2/shots/calm/`](v2/shots/calm/) (`{screen}-{before|calm}-{desktop|phone}-{light|dark}.png`, rendered by `v2/render-calm.mjs`); the live mocks are `v2/mock.html?d=daylight&s={screen}` (calm) and `&v=before` (busy), with `&day=quiet` for the quiet overview.
+
+| Screen | Glance answer (the heading) | Needs a person | Before: coloured · text-heavy (desktop / iPhone) | Calm (desktop / iPhone) |
+|---|---|---|---|---|
+| Overview | 5 things need you, starting with the production web server | 5 | 19 · 7 / 8 · 3 | 4 · 0 / 4 · 0 |
+| Overview, quiet day | All quiet. Nothing needs you. | 0 | no quiet state existed | 0 · 0 / 0 · 0 |
+| Run history | 3 runs need attention: 2 failed and 1 waits for you | 3 | 14 · 3 / 4 · 4 | 4 · 0 / 4 · 0 |
+| Lanes (Activity) | In 12 hours 2 runs failed and 2 wait for you; everything else went fine | 4 | 30 · 1 / 25 · 0 | 5 · 0 / 5 · 0 |
+| Bot page | platform-sre needs one decision from you; otherwise all is well | 1 | 21 · 3 / 7 · 1 | 2 · 0 / 2 · 0 |
+| Approval header | platform-sre wants to replace the production web server: approve or deny | 1 | 20 · 0 / 8 · 0 | 2 · 0 / 2 · 0 |
+
+Light theme shown; dark is identical in every count. The nav’s “Needs you” count is included in “coloured”: it is one of the loud things.
+
+![Overview, before and calm (desktop, light)](v2/shots/calm/overview-before-desktop-light.png)
+![](v2/shots/calm/overview-calm-desktop-light.png)
+
+### The components (`status/calm.js`, with the marks)
+
+- **Summary line** (`summaryLine`): a count in ink, its parts in secondary, “Show” in ghost; a native `<details>` that opens in place. Used for Running, Finished, health, notes, “N more need you”, and every collapsed fact on the bot and approval pages. Parts stay on one line (ellipsis), so it is always one row.
+- **Density band** (`calmLanes`): per lane, a track with a 2px tick for each run that went fine (passed or parked), and a mark only for failed, needs-you and running. The lane says in words what its marks are (“failed 52 min ago · running”), so there is no legend. Lanes with exceptions come first, worst first; lanes where everything went fine fold into one “N more · N fine” row. Marks closer than 16 units are nudged apart in time order. `stacked` puts name and words above the band for phones.
+- **Quiet state** (`quietState`): the arch in border colours, one serif sentence, one supporting line. It carries the glance answer.
+- **One loud thing** (`exception`): kicker with mark, serif title, one sentence, one action, a 4px edge in the mark’s colour, on a raised surface. The next few are **exception rows** (`excRows`): one line each (mark, title, a short reason that truncates, age, one action) with a 3px edge. Anything beyond two rows folds into “N more need you”. With `terse`, a phone drops the reason line when the title is already a sentence.
+
+### Emphasis levels and tokens
+
+| Level | Token | Use | Colour? |
+|---|---|---|---|
+| Loud | `--color-emphasis-loud` (text.primary) | The one thing that needs you: largest type | Its mark, edge and one action only |
+| Normal | `--color-emphasis-normal` (text.primary) | What things are: summary-line leads, row titles | No |
+| Quiet | `--color-emphasis-quiet` (text.secondary) | Reasons, parts, supporting facts | No |
+| Ghost | `--color-emphasis-ghost` (text.tertiary) | Times, “Show”, axes, the band’s note | No |
+
+Also: `--color-band-track` and `--color-band-tick` (cream 0 / sand 300 light, cocoa 0 / sand 800 dark: deliberately faint, because the count is also given in words); the budget `--calm-max-loud: 3` and `--calm-max-dense-rows: 2`; and the component tokens `--summary-line-*`, `--density-band-*`, `--quiet-state-*` and `--exception-*`. The full list, with values, is in the book (*Calm by default › Tokens*).
+
+### The loudness check (`tools/calm-check.mjs`)
+
+Loads every before/after pair in Chromium desktop and WebKit iPhone, light and dark, and measures only the first viewport:
+
+- **Coloured:** anything drawn in a saturated colour (OKLCH chroma ≥ 0.05: text, SVG marks and bars, backgrounds, edges), counted once per item, row, link or button. Sage passed dots count; slate parked marks and the band’s ticks do not.
+- **Text-heavy rows:** `li`, `tr` or summary lines over 110 characters or 3+ lines of text (button labels aside). Content in a closed disclosure isn’t visible and isn’t counted.
+- **Glance:** the page’s `[data-glance]` element must be the largest text (the wordmark aside), the first large text in reading order, and ≥ 7:1.
+- **Budget** from the page’s declared exceptions (`main[data-exceptions]`): with ≤ 3, coloured ≤ exceptions + 2 and text-heavy ≤ 2; with more, coloured ≤ 5 and text-heavy ≤ 3.
+
+It writes [`tokens/CALM-CHECK.md`](tokens/CALM-CHECK.md) and `tokens/calm-check.json` (the book reads it), and exits 1 if any calm render fails. **Result: all 24 calm renders pass; all 20 busy renders fail the same budget.**
+
+---
+
 ## Reading at a glance (information design)
 
 conductor produces runs, cases, approvals, logs, diffs and bot activity around the clock. A person must be able to answer three questions in seconds: **does anything need me, is anything broken, and is everything else fine?** Every screen follows these rules. Before/after examples are in the book (*Reading at a glance*).
 
-1. **Summary first, detail on demand.** Every screen opens with one plain sentence (“**5 things need you.** Everything else is running normally: 18 of 20 runs in the last 12 hours went fine.”). Health checks, raw counts and system internals sit one step down, never across the top of every page.
+1. **Summary first, detail on demand.** Every screen’s heading answers its question (“5 things need you”), with one supporting sentence (“Start with the first. Everything else is running normally.”). Health checks, raw counts and system internals sit one step down, in summary lines, never across the top of every page.
 2. **A plain headline, the technical detail beneath.** “Replace the production web server”, then why it matters, then `p12 · infra@3f2a9c1d · +1 ~2 −0` in mono, last.
 3. **Three levels of type, and only three.** What (title or bold lead-in), why it matters (regular, secondary ink), machine detail (mono, small, tertiary, at the end).
 4. **Colour only for what needs attention.** Passing work is ink. Failed, waiting, running and needs-you get colour, always with a glyph and a word.
@@ -51,11 +113,11 @@ conductor produces runs, cases, approvals, logs, diffs and bot activity around t
 
 ### Patterns
 
-- **Summary header:** title, one sentence that answers the page’s question (bold count first when something needs you), then actions.
-- **Needs you list:** glyph · plain title · why it matters · machine details last · age · one verb. Approvals get the primary button.
+- **Summary header:** the heading *is* the answer to the page’s question (“5 things need you”, “All quiet. Nothing needs you.”), then one supporting sentence. Actions belong to the thing that needs you, not to the header.
+- **Needs you:** the most urgent item as the one loud thing (exception card: kicker, title, one sentence, one action), the next two as one-line exception rows, the rest as “N more need you”. Machine details live on the item’s own page.
 - **Since you last looked** (from Broadsheet): the overview leads with what changed since your last visit, as counts with one line each. New failures and approvals carry their status colour; everything else is ink.
 - **Run story:** a run as steps in sentences, top to bottom, with durations on the right.
-- **Activity lanes** (from Score), for the Activity page: one named lane per workflow, time left to right, every run a mark whose shape and colour give its state (ink dot passed, red cross failed, blue arc running, ember diamond needs you, bars parked), and the “now” line in the accent. Lanes are labelled, not coloured.
+- **Activity lanes** (from Score, made calm), for the Activity page: one named lane per workflow, time left to right. Passing and parked runs are faint ticks in a density band; only failures, needs-you and running are marks, and each lane says in words what they are. Lanes with exceptions come first; healthy lanes fold into one row. No legend.
 - **Approval card:** needs-you kicker · plain title · what it wants to run · *Why* · what changes (adds / changes / replaces / destroys) · *Where / Effect / Undo* · origin · “Approve with passkey” / “Deny…” · technical details collapsed. On a phone the decision buttons stay pinned above the tab bar.
 
 ---
@@ -159,13 +221,13 @@ Every status mark, in a table, card, lane chart, legend, the overview, the run p
 
 - **Passed and parked never share a hue or a shape:** a sage dot vs slate pause bars.
 - **The mark always carries its colour.** The word is coloured only when a person is needed or the thing is live.
-- **No tinted rows, capsules or icon chips.** In a list, a row that needs someone (failed or needs you) gets a 3px leading edge in its mark’s colour, its reason as a plain sentence and one action, and it sits in the **Needs attention · N** group at the top. Then come **Running now**, then **Finished** in quiet ink.
+- **No tinted rows, capsules or icon chips.** In a list, a row that needs someone (failed or needs you) gets a 3px leading edge in its mark’s colour, its reason as a plain sentence and one action, and it sits in the **Needs attention · N** group at the top. **Running** and **Finished** are each one summary line (“10 finished · 9 passed · 1 parked”) that opens in place; took, cost and ids live inside.
 - **No step trace in lists.** Step detail lives on the run page as a collapsible tree, where a nested workflow call is one node with its own status and the failing path opens by itself.
-- **Every chart mark appears in its legend.** Legends are generated from the same list (`legend()`).
+- **Every chart mark is explained:** labelled in words on its own row (the calm lanes, `data-labelled`) or listed in its legend. Legends are generated from the same list (`legend()`).
 
 **Checks.**
 - `tools/status-cvd.mjs` (the dataviz skill’s validator, run pairwise against `bg.surface`) writes `tokens/STATUS-CVD.md`. The five table states (passed, running, failed, needs you, parked) are distinct by colour for colour-blind readers in dark (all 10 pairs) and in light (9 of 10). The exception is passed vs needs you in light, at CVD ΔE 6.5: the floor band, with normal-vision ΔE 27 and different shapes. Passed vs parked is ΔE 11–12 for colour-blind readers and 12.7 to normal vision: clearly different hues, plus different shapes. Waiting and shadow (label-only states) lean on shape against needs you and running. All marks are ≥ 3:1 on every surface, and no two states share a shape.
-- `tools/mark-check.mjs` loads every page in WebKit (iPhone and desktop) and Chromium, with the OS light and dark. It fails if a rendered mark isn’t its state’s token, a chart mark is missing from its legend, a chart has no legend, a legacy status glyph bypasses the vocabulary, or a needs-attention row’s edge differs from its mark.
+- `tools/mark-check.mjs` loads every page in WebKit (iPhone and desktop) and Chromium, with the OS light and dark. It fails if a rendered mark isn’t its state’s token, a chart mark is neither labelled on the chart nor in its legend, a legacy status glyph bypasses the vocabulary, or a needs-attention row’s edge differs from its mark.
 
 The decisions and the explored alternatives are in [`explore/status-column.html`](explore/status-column.html) and [`status-review.html`](status-review.html).
 
@@ -261,7 +323,7 @@ The book shows each component's states (default, hover, focus, active, disabled,
 - **Value source:** the source is a quiet menu inside the field. Secret is the default; Vault item and Environment variable are listed; typed value and setting sit under “Other sources”. This replaces the five-way segmented control on every field.
 - **Choice cards:** for decisions that need a sentence each (permission presets, connector methods). Five at most.
 - **Tabs** switch views of one thing, and **segmented controls** switch a setting. Neither navigates.
-- **Tables and dense lists:** text left, numbers right in tabular figures, status as glyph + word, ids in mono at the end of the row, passing rows in ink (colour only on rows that need attention), focusable rows (j/k, x, Enter), and selection as the accent wash plus a 3px bar.
+- **Tables and dense lists:** grouped by who needs to act; only rows that need someone are drawn by default, and Running and Finished are summary lines that open in place. Text left, numbers right in tabular figures, status as mark + word, ids in mono at the end of an opened row, focusable rows (j/k, x, Enter), and selection as the accent wash plus a 3px bar.
 - **Badges** label state, **chips** filter, and the **count** (accent) appears only where a person is needed.
 - **Banners** are for persistent conditions. **Toasts** are for events: 6 seconds (errors stay), above the phone tab bar, with an action.
 - **Dialogs** are for decisions, **drawers** for detail beside a list, and **sheets** for the phone. All of them trap focus, close on Esc and return focus.

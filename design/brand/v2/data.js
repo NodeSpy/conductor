@@ -6,10 +6,10 @@ export const NOW = 'Fri 16 Oct · 17:55';
 
 export const NEEDS = [
   { kind: 'approval', glyph: 'needs-you', s: 'accent', title: 'Replace the production web server', why: 'platform-sre wants to run terraform apply on production, for the SEV2 latency incident', tech: 'p12 · infra@3f2a9c1d · +1 ~2 −0', age: '7 min ago', act: 'Review' },
-  { kind: 'approval', glyph: 'needs-you', s: 'accent', title: 'Post the monthly forecast to #incidents', why: 'billing-sre, asked by a Slack user who isn’t one of your operators', tech: 'p4 · slack-ops.post', age: '22 min ago', act: 'Review' },
-  { kind: 'failed', glyph: 'danger', s: 'danger', title: 'ci-fixer couldn’t fix acme/web#1288', why: 'Its change made 2 tests fail. Nothing was pushed.', tech: 'r-7ef0 · step test', age: '52 min ago', act: 'Open' },
-  { kind: 'question', glyph: 'warning', s: 'warning', title: 'pr-review needs your call on a draft', why: 'Approve, revise or discard its review of acme/infra#77', tech: 'r-7ed1 · hand-off', age: '1 h ago', act: 'Answer' },
-  { kind: 'signin', glyph: 'warning', s: 'warning', title: 'Approve a sign-in on app.example.com', why: 'The triage agent’s browser is waiting on a push approval', tech: 'b-02 · agent:triage', age: '3 min ago', act: 'Open' },
+  { kind: 'approval', glyph: 'needs-you', s: 'accent', title: 'Post the monthly forecast to #incidents', why: 'billing-sre, asked by a Slack user who isn’t one of your operators', short: 'asked by someone who isn’t an operator', tech: 'p4 · slack-ops.post', age: '22 min ago', act: 'Review' },
+  { kind: 'failed', glyph: 'danger', s: 'danger', title: 'ci-fixer couldn’t fix acme/web#1288', why: 'Its change made 2 tests fail. Nothing was pushed.', short: '2 tests fail; nothing was pushed', tech: 'r-7ef0 · step test', age: '52 min ago', act: 'Open' },
+  { kind: 'question', glyph: 'warning', s: 'warning', title: 'pr-review needs your call on a draft', why: 'Approve, revise or discard its review of acme/infra#77', short: 'approve, revise or discard its review', tech: 'r-7ed1 · hand-off', age: '1 h ago', act: 'Answer' },
+  { kind: 'signin', glyph: 'warning', s: 'warning', title: 'Approve a sign-in on app.example.com', why: 'The triage agent’s browser is waiting on a push approval', short: 'the triage agent’s browser is waiting', tech: 'b-02 · agent:triage', age: '3 min ago', act: 'Open' },
 ];
 export const FYI = [
   { glyph: 'update', s: 'info', title: 'Update v0.72.0 is ready', why: 'Installs within 10 minutes; running work finishes first.' },
@@ -107,3 +107,26 @@ export const WORKFLOW = {
     ['policy', ''], ['  budget', '{ max_cost_usd: 2.00 }'], ['steps', ''], ['  - id', 'logs'], ['    uses', 'gh.check_logs'], ['  - id', 'triage'], ['    model', 'light'],
   ],
 };
+
+// A bot's own page (platform-sre): the busy “before” shows all of this at once; the calm version
+// leads with the one decision and folds the rest into summary lines.
+export const BOT = {
+  name: 'platform-sre', role: 'Keeps production healthy for the platform team', folder: 'work / platform', status: 'Working on case c31',
+  stats: [['Runs this week', '14', 'all went fine'], ['Cost this week', '$3.10', 'of $20 budget'], ['Waiting on you', '1', 'approval'], ['Open cases', '4', '1 active']],
+  week: [2, 1, 3, 2, 0, 4, 2],
+  pending: [{ title: 'Replace the production web server', why: 'terraform apply on production, for the SEV2 latency incident', age: '7 min ago' }],
+  runs: [['running', 'Investigating db-prod-1 disk usage', 'case c31', '11 min ago', '', '$0.33', 'r-7f29'], ['ok', 'Answered the PagerDuty incident', 'case c29', '3 h ago', '14 min', '$0.54', 'r-7eb2'], ['ok', 'Routine sweep', 'every 30 min', '3 h ago', '4 min', '$0.00', 'r-7eb0'], ['ok', 'Routine sweep', 'every 30 min', '4 h ago', '4 min', '$0.00', 'r-7e9a'], ['ok', 'Checked certificate expiry', 'daily 06:00', '12 h ago', '1 min', '$0.02', 'r-7e2f'], ['ok', 'Routine sweep', 'every 30 min', '12 h ago', '4 min', '$0.00', 'r-7e31']],
+  cases: [['running', 'c31', 'db-prod-1 disk at 86%', 'active'], ['ok', 'c29', 'api p99 latency (SEV2)', 'waiting on approval'], ['ok', 'c27', 'Expired staging certificate', 'closed'], ['ok', 'c22', 'Noisy disk alert on cache-2', 'closed']],
+  connections: [['GitHub', 'read'], ['Datadog metrics', 'read'], ['Slack #platform', 'post'], ['Terraform Cloud', 'plan; apply with approval']],
+  memory: 12,
+};
+
+// The quiet day: nothing needs anyone. 46 runs went fine, 2 are running.
+export const QUIET_LANES = [
+  ['pr-review', [[3, 'running'], ...[22, 64, 101, 150, 199, 262, 318, 371, 440, 512, 588, 655].map((m) => [m, 'ok'])]],
+  ['ci-fixer', [[8, 'running'], ...[47, 133, 236, 351, 470, 602, 690].map((m) => [m, 'ok'])]],
+  ['issue-triage', [35, 88, 142, 207, 280, 333, 395, 466, 541, 619, 701].map((m) => [m, 'ok'])],
+  ['platform-sre', [15, 45, 75, 105, 165, 225, 285, 345, 405, 465, 585, 645].map((m) => [m, 'ok'])],
+  ['dep-bump', [[131, 'ok'], [612, 'ok']]],
+  ['release-notes', [[418, 'ok'], [560, 'parked']]],
+];

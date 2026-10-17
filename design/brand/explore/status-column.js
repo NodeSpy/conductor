@@ -3,7 +3,9 @@
 import { HISTORY } from '../v2/data.js';
 import { LUCIDE } from '../icons/icons.js';
 import { mark, status, legend, injectMarkCSS } from '../status/marks.js';
-injectMarkCSS();
+import { calmLanes, injectCalmCSS } from '../status/calm.js';
+import { LANES } from '../v2/data.js';
+injectMarkCSS(); injectCalmCSS();
 
 const ROWS = HISTORY[0][1].map(([st, wf, target, by, when, took, cost, id, note]) => ({ st, wf, target, by, when, took, cost, id, note }));
 // Where each run is in its workflow: [steps total, reached step (1-based), step names]
@@ -74,7 +76,23 @@ function grouped() {
 }
 
 
-// CHOSEN: D's grouping + A's margin marks. Rows that need someone first (a thin leading edge, the
+// CHOSEN, calm by default: the same grouping, but only the rows that need someone are drawn. Each is one
+// line (mark and word, the run, the reason, when, one action). Running and Finished are each one
+// summary line that opens in place; took, cost and ids live inside, never in the default view.
+const CALM_REASON = { 'r-7ef0': '2 tests fail after its change', 'r-7ed1': 'Approve, revise or discard its draft review', 'r-7e64': 'Stopped at its $0.05 budget' };
+function calm() {
+  const attn = ROWS.filter(ATTN), live = ROWS.filter((r) => r.st === 'running'), rest = ROWS.filter((r) => !ATTN(r) && r.st !== 'running');
+  const passed = rest.filter((r) => r.st === 'ok').length, parked = rest.length - passed;
+  const row = (r) => `<tr class="${r.st} attn" data-s="${S[r.st]}"><td class="st">${status(STATE[r.st])}</td>${runCell(r)}<td class="why-c">${CALM_REASON[r.id] ?? r.note}</td><td class="sub">${r.when}</td><td class="act"><button class="c-btn ${r.st === 'waiting' ? 'primary' : 'secondary'} sm" tabindex="-1">${r.st === 'waiting' ? 'Answer' : 'Open'}</button></td></tr>`;
+  const quiet = (r) => `<tr class="${r.st}" hidden><td class="st">${status(STATE[r.st])}</td>${runCell(r)}<td class="sub">${[r.took, r.cost, `<code>${r.id}</code>`].filter(Boolean).join(' · ')}</td><td class="sub">${r.when}</td><td class="act"></td></tr>`;
+  const sum = (lead, parts, rows, cls) => `<tbody class="${cls}"><tr class="sum"><td colspan="5"><b>${lead}</b><span class="parts">${parts}</span><span class="more">Show</span></td></tr>${rows.map(quiet).join('')}</tbody>`;
+  return `<table class="tX calm">${head([['Status'], ['Run'], [''], ['When'], ['', 'act']])}
+    <tbody class="g-attn"><tr class="gh"><td colspan="5"><b>Needs attention</b><span>${attn.length}</span></td></tr>${attn.map(row).join('')}</tbody>
+    ${sum(`${live.length} running`, live.map((r) => r.wf).join(', '), live, 'g-live')}${sum(`${rest.length} finished`, `${passed} passed · ${parked} parked`, rest, 'g-done')}</table>`;
+}
+const lanesCalm = () => `<div class="lanes-calm">${calmLanes(LANES, { width: 860 })}</div>`;
+
+// BEFORE CALM (kept for the record): D's grouping + A's margin marks, every row drawn. Rows that need someone first (a thin leading edge, the
 // reason in words, one action), then what is running, then what finished in quiet ink. Status is a
 // mark plus a word from the one vocabulary. No step trace in lists: step detail is on the run page.
 function chosen() {
@@ -113,8 +131,10 @@ const tree = () => `<div class="run-tree"><div class="rt-h"><b>ci-fixer</b> acme
   <p class="tree-note">Nested workflow calls collapse to a single step with their own status. The failing path opens by itself; everything else stays closed.</p></div>`;
 
 const VARIANTS = [
-  ['chosen', 'Chosen: grouped rows, margin marks', 'Daniel’s decision: <b>D’s grouping</b> with <b>A’s marks</b>. “Needs attention · N” comes first, each row with a thin leading edge, the reason in a plain sentence and one action. “Running now” follows, then “Finished” in quiet ink. Status is a small mark plus a word, from the one vocabulary used everywhere. Passed is a quiet sage dot and parked is slate pause bars, so they never look alike. No row is tinted, and there is no step trace in the list: steps live on the run page (below).', chosen],
+  ['chosen', 'Chosen: calm by default', 'Daniel’s decision (D’s grouping with A’s margin marks), made calm. Only the runs that need someone are drawn: one line each, with a 3px edge, the mark and word, the reason and one action. <b>Running</b> and <b>Finished</b> are each one summary line (“10 finished · 9 passed · 1 parked”) that opens in place, and took, cost and ids live inside it. Passed is a quiet sage dot and parked is slate pause bars, so they never look alike when opened. See <a href="../system.html#calm">Calm by default</a>.', calm],
+  ['lanes', 'Where lanes appear: the density band', 'On the Activity page and anywhere runs are drawn over time, passing and parked runs are faint ticks in a band, and only failures, things that need you and running work are marks. Each lane says in words what its marks are, so no legend is needed.', lanesCalm],
   ['tree', 'Run detail: the step tree', 'Workflows can have many steps and can call other workflows, so the number of steps is unpredictable and has no place in a list. On the run page they are a collapsible tree: one line per step with its mark, what it did and how long it took. A nested workflow call is one node with its own status, and the failing path opens on its own.', tree],
+  ['grouped-all', 'Explored · Chosen before calm: every row drawn', 'The first version of the decision: grouped rows with margin marks, but every run drawn at equal weight. Daniel: “all of it just looks so busy… I have to read everything all the time.” It became the calm version above.', chosen],
   ['before', 'Explored · Before: tinted capsule and tinted row', 'The stock pattern (the prototype’s, and round two’s mocks too): every row carries a coloured pill with an outline icon, and failing rows are washed in red. Five colours compete, the passing majority is as loud as the failure, and the tint muddies text contrast.', before],
   ['margin', 'Explored · A: margin mark', 'The capsule goes. Passing rows show a small ink dot and the word, at the same weight as the rest of the row. A row that needs attention gets a 4px edge in its colour, its status word in that colour, and its reason in words under the run name. There is no fill anywhere.', margin],
   ['outcome', 'Explored · B: outcome sentence', 'The status column becomes “what happened”, in a sentence: “Passed in 7 min”, “Failed at step 4, ‘Run the tests’”, “Waiting for your answer on a draft”. Only the sentences that need you take colour. It is the most readable for a newcomer, but it needs a wide column.', outcome],
@@ -126,3 +146,9 @@ document.getElementById('variants').innerHTML = VARIANTS.map(([id, title, why, f
   <h2>${title}</h2><p class="why-p">${why}</p>
   <div class="pair">${['light', 'dark'].map((t) => `<div class="panel v-${id}" data-theme="${t}"><span class="tag">${t}</span><div class="scroll">${fn()}</div></div>`).join('')}</div></section>`).join('');
 document.getElementById('legend').innerHTML = legend(['passed', 'running', 'failed', 'needs', 'parked', 'skipped']);
+// Summary lines open in place.
+document.addEventListener('click', (e) => {
+  const sum = e.target.closest('tr.sum'); if (!sum) return;
+  const open = sum.classList.toggle('open');
+  for (const r of sum.parentElement.querySelectorAll('tr:not(.sum)')) r.hidden = !open;
+});

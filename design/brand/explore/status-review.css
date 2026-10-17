@@ -69,3 +69,18 @@
   .jobs td { border: 0; padding: 0; width: auto !important; }
   .ty-state, .ty-fact, .ty-trust { white-space: normal; }
 }
+
+/* Calm by default: one line per row; only loud labels show, the rest behind “Details”. */
+.rows.calm li { grid-template-columns: minmax(9em, 1fr) minmax(0, max-content); align-items: center; gap: 4px 16px; padding: 10px 0; }
+.rows.calm .rt { min-width: 0; overflow-wrap: anywhere; }
+.rows.calm li .rt b { font-weight: 600; }
+.rows.calm li:not(.has-loud) .rt b { font-weight: 400; color: var(--color-text-secondary); }
+.v-calm .labels { justify-content: flex-end; }
+.calm-more { font: var(--type-caption); color: var(--color-text-tertiary); }
+.calm-more > summary { cursor: pointer; list-style: none; font-weight: 600; }
+.calm-more > summary::-webkit-details-marker { display: none; }
+.calm-more[open] { flex-basis: 100%; }
+.calm-more[open] > summary { display: none; }
+.calm-more .labels { justify-content: flex-start; padding-top: 4px; }
+.v-calm .bot .labels { justify-content: flex-start; }
+@media (max-width: 600px) { .rows.calm li { grid-template-columns: 1fr; } .v-calm .labels { justify-content: flex-start; } }

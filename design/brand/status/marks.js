@@ -34,7 +34,10 @@ export const mark = (state, { size = 12, label = false } = {}) => {
 /** A mark placed inside a chart <svg> at (cx, cy). */
 export const chartMark = (state, cx, cy, size = 13, title = '') => {
   const S = ALL[state];
-  return `<svg x="${cx - size / 2}" y="${cy - size / 2}" width="${size}" height="${size}" viewBox="0 0 16 16" class="mk${S.spin ? ' mk-spin' : ''}" data-mark="${state}" style="color:var(${S.mark})" overflow="visible">${title ? `<title>${title}</title>` : ''}${svgInner(state)}</svg>`;
+  // A nested <svg> can't rotate about its own centre (its CSS transform applies in the parent's
+  // coordinates and swings it off the chart), so a spinning mark spins an inner group instead.
+  const inner = S.spin ? `<g class="mk-spin">${svgInner(state)}</g>` : svgInner(state);
+  return `<svg x="${cx - size / 2}" y="${cy - size / 2}" width="${size}" height="${size}" viewBox="0 0 16 16" class="mk" data-mark="${state}" style="color:var(${S.mark})" overflow="visible">${title ? `<title>${title}</title>` : ''}${inner}</svg>`;
 };
 /** Mark + word, the status label used in tables, cards and headers. */
 export const status = (state, word = ALL[state].word) => {
@@ -45,7 +48,7 @@ export const status = (state, word = ALL[state].word) => {
 export const legend = (states) => `<div class="mk-legend" data-legend="${states.join(' ')}">${states.map((s) => `<span>${mark(s)}${ALL[s].word}</span>`).join('')}</div>`;
 /** CSS every page using marks needs (inject once). */
 export const MARK_CSS = `.mk{flex:none;display:inline-block;vertical-align:-1px}.mk-spin{animation:mk-spin var(--motion-duration-spin,1.2s) linear infinite;transform-origin:center;transform-box:fill-box}
-@keyframes mk-spin{to{transform:rotate(1turn)}}@media (prefers-reduced-motion:reduce){.mk-spin{animation:none}}[data-motion="reduced"] .mk-spin{animation:none}
+g.mk-spin{transform-origin:8px 8px;transform-box:view-box}@keyframes mk-spin{to{transform:rotate(1turn)}}@media (prefers-reduced-motion:reduce){.mk-spin{animation:none}}[data-motion="reduced"] .mk-spin{animation:none}
 .mk-status{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;color:var(--color-text-secondary)}.mk-status.attn{font-weight:700}
 .mk-legend{display:flex;flex-wrap:wrap;gap:6px 16px;font:var(--type-caption,400 12.5px/1.4 var(--font-family-sans,system-ui));color:var(--color-text-secondary)}.mk-legend span{display:inline-flex;align-items:center;gap:6px}`;
 export const injectMarkCSS = () => { if (document.getElementById('mk-css')) return; const s = document.createElement('style'); s.id = 'mk-css'; s.textContent = MARK_CSS; document.head.append(s); };

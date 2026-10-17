@@ -15,20 +15,21 @@
 <header class="hd">
   <div class="crumb"><a href="../system.html">Daylight</a><span>/</span><span>Exploration</span></div>
   <h1>The status column</h1>
-  <p class="lead">Companion to <a href="../status-review.html"><b>Labels and status</b></a>, which covers every other label in the product. Daniel’s reference: a status column of tinted capsules with outline icons (Passed, Failed, Running, Waiting on you, Parked), plus a full-row red tint on failures. His verdict was “generic”. Round two’s own mocks did the same. <b>Decided:</b> D’s grouping with A’s margin marks, and step detail moved to a tree on the run page. The four explored alternatives are kept below for the record.</p>
+  <p class="lead">Companion to <a href="../status-review.html"><b>Labels and status</b></a>, which covers every other label in the product. Daniel’s reference: a status column of tinted capsules with outline icons (Passed, Failed, Running, Waiting on you, Parked), plus a full-row red tint on failures. His verdict was “generic”. Round two’s own mocks did the same. <b>Decided:</b> D’s grouping with A’s margin marks, and step detail moved to a tree on the run page. <b>Then made calm by default</b> (Daniel: “all of it just looks so busy”): only the rows that need someone are drawn; Running and Finished are one summary line each. The explored alternatives are kept below for the record.</p>
   <div id="legend" aria-label="Status marks"></div>
-  <nav class="jump"><a href="#chosen">Chosen</a><a href="#tree">Run detail tree</a><a href="#before">Explored: before</a><a href="#margin">A</a><a href="#outcome">B</a><a href="#trace">C</a><a href="#grouped">D</a><a href="#rules">Rules</a><a href="../status-review.html">All labels and status →</a></nav>
+  <nav class="jump"><a href="#chosen">Chosen</a><a href="#lanes">Lanes</a><a href="#tree">Run detail tree</a><a href="#grouped-all">Before calm</a><a href="#before">Explored: before</a><a href="#margin">A</a><a href="#outcome">B</a><a href="#trace">C</a><a href="#grouped">D</a><a href="#rules">Rules</a><a href="../status-review.html">All labels and status →</a></nav>
 </header>
 <main id="variants"></main>
 <section class="var" id="rules">
   <h2>The rules</h2>
   <ul class="rules-l">
-    <li><b>Group by who needs to act.</b> “Needs attention · N” (failed and needs-you rows) comes first, then “Running now”, then “Finished”. A row moves group as its state changes.</li>
+    <li><b>Group by who needs to act.</b> “Needs attention · N” (failed and needs-you rows) comes first, then running, then finished. A row moves group as its state changes.</li>
+    <li><b>Normal collapses into one quiet line.</b> Running and Finished are summary lines (“10 finished · 9 passed · 1 parked”) that open in place. Took, cost and ids live inside, never in the default view. In lanes, passing runs are a faint density band.</li>
     <li><b>A row that needs someone</b> gets a 3px leading edge in its state colour, its reason as a plain sentence under the run name, and one action. Nothing else in the table is coloured.</li>
     <li><b>No tints and no capsules.</b> Status is a small mark plus a word, from <code>status/marks.js</code>, the one vocabulary for tables, cards, lanes, legends, the overview, the run page and phones.</li>
     <li><b>Passed is quiet, but never parked.</b> Passed is a small sage dot with an ink word. Parked is slate pause bars. They differ in hue and in shape (see <code>tokens/STATUS-CVD.md</code>).</li>
     <li><b>No step trace in lists.</b> Step detail lives on the run page as a collapsible tree. Nested workflow calls collapse to one node with their own status.</li>
-    <li><b>Every chart mark is in its legend,</b> and every mark matches a status token. <code>tools/mark-check.mjs</code> enforces both.</li>
+    <li><b>Every chart mark is explained:</b> labelled in words on its own row (the calm lanes) or listed in its legend, and every mark matches a status token. <code>tools/mark-check.mjs</code> enforces both; <code>tools/calm-check.mjs</code> keeps the first viewport within its loudness budget.</li>
   </ul>
 </section>
 <footer class="ft">Built from <code>tokens.css</code> (Daylight). Run data is the dashboard prototype’s. Fonts: Fraunces, Atkinson Hyperlegible Next and Mono (SIL OFL 1.1).</footer>

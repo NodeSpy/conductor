@@ -24,6 +24,11 @@ const PAGES = [
   'system.html', 'system.html?theme=light', 'system.html?theme=dark', 'system.html?theme=dark&density=compact',
 ];
 for (const d of ['daylight', 'broadsheet', 'score']) for (const s of ['overview', 'run', 'approval', 'history', 'builder']) for (const t of ['light', 'dark']) PAGES.push(`v2/mock.html?d=${d}&s=${s}&t=${t}`);
+// Daylight is calm by default; its busy versions (&v=before), the two calm-only screens and the quiet day too.
+for (const t of ['light', 'dark']) {
+  for (const s of ['overview', 'approval', 'history', 'activity', 'bot']) PAGES.push(`v2/mock.html?d=daylight&s=${s}&t=${t}&v=before`);
+  PAGES.push(`v2/mock.html?d=daylight&s=activity&t=${t}`, `v2/mock.html?d=daylight&s=bot&t=${t}`, `v2/mock.html?d=daylight&s=overview&t=${t}&day=quiet`);
+}
 
 function measure() {
   const parse = (s) => { const m = s.match(/rgba?\(([^)]+)\)/); if (!m) return null; const p = m[1].split(/[\s,/]+/).filter(Boolean).map(Number); return [p[0], p[1], p[2], p[3] ?? 1]; };

@@ -164,3 +164,17 @@ details[open] > summary .tl::after { transform: rotate(90deg); }
   .tX tr.gh { display: block; padding: 18px 6px 6px; border-bottom: 1px solid var(--color-border-default); } .tX tr.gh td { padding: 0; border: 0; }
   .tl { grid-template-columns: 16px 16px 1fr auto; } .tl .wf { grid-column: 3; } .kids { margin-left: 14px; }
 }
+
+/* Calm by default: only rows that need someone; Running and Finished are summary lines. */
+.tX.calm .g-attn tr.gh span { background: none; color: var(--color-text-tertiary); font-weight: 400; padding: 0; }
+.tX.calm tr.attn td { padding-top: 10px; padding-bottom: 10px; }
+.tX.calm .why-c { color: var(--color-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 22rem; }
+.tX.calm tr.sum { cursor: pointer; }
+.tX.calm tr.sum td { height: var(--size-row, 52px); padding: 0 12px; border-bottom: 1px solid var(--color-border-subtle); }
+.tX.calm tbody.g-live tr.sum td { border-top: 1px solid var(--color-border-default); }
+.tX.calm tr.sum b { font-weight: 600; color: var(--color-text-primary); }
+.tX.calm tr.sum .parts { margin-left: 10px; color: var(--color-text-secondary); }
+.tX.calm tr.sum .more { float: right; font: var(--type-label); color: var(--color-text-tertiary); }
+.tX.calm tr.sum.open .more { visibility: hidden; }
+.lanes-calm { max-width: 900px; padding: 8px 4px; }
+@media (max-width: 600px) { .tX.calm .why-c { white-space: normal; max-width: none; } .tX.calm tr.sum .more { display: none; } }

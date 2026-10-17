@@ -276,6 +276,12 @@
 .c-table tr.grp span { margin-left: var(--space-2); font: var(--type-caption); color: var(--color-text-tertiary); }
 .c-table tr.grp.attn-h span { background: var(--color-accent-default); color: var(--color-text-on-accent); font-weight: 700; border-radius: 999px; padding: 1px 8px; }
 .c-table tr.grp:hover td { background: none; }
+/* Calm by default: the Finished group is one summary line that opens in place. */
+.c-table tr.done-sum { cursor: pointer; }
+.c-table tr.done-sum td { padding-bottom: var(--space-4); border-bottom-color: var(--color-border-subtle); }
+.c-table tr.done-sum .cs-parts { font: var(--type-body-s); color: var(--color-text-secondary); }
+.c-table tr.done-sum .cs-more { float: right; font: var(--type-label); color: var(--color-text-tertiary); }
+.c-table tr.done-sum.open .cs-more { visibility: hidden; }
 .c-table tbody.done td { color: var(--color-text-secondary); }
 .c-table tbody.done .run b { color: var(--color-text-primary); font-weight: 600; }
 .c-table td.act { width: 1%; text-align: right; }

@@ -2,7 +2,8 @@
 //   1. a [data-mark] whose state isn't in status/marks.js;
 //   2. a mark whose rendered colour isn't its state's token (probed in the mark's own theme scope);
 //   3. a mark inside a chart (an <svg>) with no legend, or whose state is missing from the legend
-//      of its [data-legend-scope]: every mark on a chart must appear in its legend;
+//      of its [data-legend-scope]: every mark on a chart must appear in its legend, unless it is
+//      labelled directly on the chart (data-labelled, as in the calm lanes);
 //   4. a legacy status glyph that bypasses the vocabulary (old .gl/.sh/.lgd/.c-dot marks);
 //   5. a needs-attention row whose leading edge is a different colour from its status mark.
 //
@@ -11,7 +12,8 @@ import { available, context, closeAll } from './browsers.mjs';
 
 const BASE = process.env.BRAND_BASE || 'http://localhost:8768';
 const PAGES = ['system.html', 'system.html?theme=dark', 'status-review.html', 'explore/status-column.html'];
-for (const s of ['overview', 'run', 'approval', 'history', 'builder']) for (const t of ['light', 'dark']) PAGES.push(`v2/mock.html?d=daylight&s=${s}&t=${t}`);
+for (const s of ['overview', 'run', 'approval', 'history', 'builder', 'activity', 'bot']) for (const t of ['light', 'dark']) PAGES.push(`v2/mock.html?d=daylight&s=${s}&t=${t}`, `v2/mock.html?d=daylight&s=${s}&t=${t}&v=before`);
+for (const t of ['light', 'dark']) PAGES.push(`v2/mock.html?d=daylight&s=overview&t=${t}&day=quiet`);
 const LEGACY = '.lgd, .c-dot, svg.gl, svg.sh, .ty-state > svg:not([data-mark]), .c-status > svg:not([data-mark]), .c-badge[data-s] > svg:not([data-mark])';
 
 function audit({ base, legacy }) {
@@ -29,6 +31,7 @@ function audit({ base, legacy }) {
       probe.remove();
       const inChart = !!el.parentElement.closest('svg');
       const scope = el.closest('[data-legend-scope]');
+      if (inChart && el.dataset.labelled) continue;
       if (inChart && !scope) { out.problems.push(`chart mark ${st} has no legend at ${where(el)}`); continue; }
       if (scope) {
         const lg = scope.querySelector('[data-legend]');

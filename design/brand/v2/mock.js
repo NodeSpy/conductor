@@ -1,19 +1,25 @@
-// Renders one hi-fi mock: mock.html?d=daylight|broadsheet|score&s=overview|run|approval|history|builder&t=light|dark
+// Renders one hi-fi mock: mock.html?d=daylight|broadsheet|score&s=overview|run|approval|history|builder|activity|bot&t=light|dark
+// Daylight is calm by default (status/calm.js); &v=before renders the earlier, busy version of the
+// same data for comparison, and &day=quiet renders the overview on a day when nothing needs you.
 // The markup is shared; directions differ by token values (directions.js) and, where the
 // direction's data presentation differs, by the small per-direction variants below.
 import { DIRS } from './directions.js';
 import * as C from './data.js';
 import { LUCIDE, STATUS } from '../icons/icons.js';
 import { STATES, GLYPH_STATE, mark, chartMark, status, legend, injectMarkCSS } from '../status/marks.js';
-injectMarkCSS();
+import { summaryLine, quietState, exception, excRows, calmLanes, injectCalmCSS } from '../status/calm.js';
+injectMarkCSS(); injectCalmCSS();
 
 const q = new URLSearchParams(location.search);
 const d = q.get('d') || 'daylight', s = q.get('s') || 'overview', theme = q.get('t') || 'light';
 const D = DIRS[d];
+const calm = d === 'daylight' && q.get('v') !== 'before', quietDay = q.get('day') === 'quiet';
 const root = document.documentElement;
 root.dataset.d = d; root.dataset.theme = theme;
 root.style.colorScheme = `only ${theme}`; // the forced theme always wins over the OS and UA auto-darkening
-for (const [k, v] of Object.entries({ ...D.vars, ...D[theme] })) root.style.setProperty(k, v);
+// Daylight takes its colours from tokens.css (the shipped system); the other directions keep their own values.
+for (const [k, v] of Object.entries({ ...D.vars, ...(d === 'daylight' ? {} : D[theme]) })) root.style.setProperty(k, v);
+if (calm) root.dataset.calm = '';
 
 // ---------- helpers ----------
 const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="var(--d-icon-stroke)" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${LUCIDE[n] ?? ''}</svg>`;
@@ -38,9 +44,9 @@ const spark = (vals, w = 96, h = 26, cls = '') => {
 };
 
 // ---------- shell ----------
-const NAV = [['layout-grid', 'Home', 'overview'], ['bell', 'Needs you', 'needs', 5], ['activity', 'Activity', 'live'], ['history', 'Runs', 'history'], ['workflow', 'Workflows', 'builder'], ['bot', 'Bots', 'approval'], ['globe', 'Browsers', 'browsers', '']];
+const NAV = [['layout-grid', 'Home', 'overview'], ['bell', 'Needs you', 'needs', quietDay ? 0 : 5], ['activity', 'Activity', 'activity'], ['history', 'Runs', 'history'], ['workflow', 'Workflows', 'builder'], ['bot', 'Bots', 'approval'], ['globe', 'Browsers', 'browsers', '']];
 const NAV2 = [['plug', 'Connections'], ['key-round', 'Secrets'], ['package', 'Packs'], ['refresh-cw', 'Updates', 1], ['shield-check', 'Access']];
-const activeOf = { overview: 'overview', run: 'history', history: 'history', approval: 'approval', builder: 'builder' };
+const activeOf = { overview: 'overview', run: 'history', history: 'history', approval: 'approval', builder: 'builder', activity: 'activity', bot: 'approval' };
 function shell(body, title) {
   const act = activeOf[s];
   const navItem = ([i, l, k, n]) => `<a class="${k === act ? 'on' : ''}">${ic(i)}<span>${l}</span>${n ? `<em class="${k === 'needs' ? 'hot' : ''}">${n}</em>` : ''}</a>`;
@@ -53,11 +59,11 @@ function shell(body, title) {
   return `<div class="app">
     <aside class="rail"><div class="brand">${logoMark}<b>conductor</b></div>
       <nav>${NAV.map(navItem).join('')}<span class="grp">Settings</span>${NAV2.map(([i, l, n]) => navItem([i, l, l, n])).join('')}</nav>
-      <div class="host"><span class="dot" data-s="ok"></span><div><b>ops-box</b><span>Healthy · up 3 days</span></div></div></aside>
-    <div class="main"><header class="topbar"><span class="ph-title">${logoMark}<b>${title}</b></span><span class="search">${ic('search')}Search runs, bots and settings<kbd>⌘K</kbd></span><span class="sp"></span><span class="health">${gl('success')}All systems normal</span><span class="avatar">op</span></header>
+      <div class="host">${calm ? '' : '<span class="dot" data-s="ok"></span>'}<div><b>ops-box</b><span>Healthy · up 3 days</span></div></div></aside>
+    <div class="main"><header class="topbar"><span class="ph-title">${logoMark}<b>${title}</b></span><span class="search">${ic('search')}Search runs, bots and settings<kbd>⌘K</kbd></span><span class="sp"></span>${calm ? '' : `<span class="health">${gl('success')}All systems normal</span>`}<span class="avatar">op</span></header>
     <main class="page">${body}</main></div>${tabbar(act)}</div>`;
 }
-const tabbar = (act) => `<nav class="tabbar">${[['layout-grid', 'Home', 'overview'], ['bell', 'Needs you', 'needs', 5], ['history', 'Runs', 'history'], ['bot', 'Bots', 'approval'], ['ellipsis', 'More', 'more']].map(([i, l, k, n]) => `<a class="${k === act ? 'on' : ''}">${ic(i)}${n ? `<em>${n}</em>` : ''}<span>${l}</span></a>`).join('')}</nav>`;
+const tabbar = (act) => `<nav class="tabbar">${[['layout-grid', 'Home', 'overview'], ['bell', 'Needs you', 'needs', quietDay ? 0 : 5], ['history', 'Runs', 'history'], ['bot', 'Bots', 'approval'], ['ellipsis', 'More', 'more']].map(([i, l, k, n]) => `<a class="${k === act ? 'on' : ''}">${ic(i)}${n ? `<em>${n}</em>` : ''}<span>${l}</span></a>`).join('')}</nav>`;
 
 // ---------- pieces ----------
 const needItem = (n, i) => `<li class="need" data-s="${n.s}">
@@ -220,7 +226,115 @@ function runTreeDaylight() {
   return `<section class="card"><header class="ch"><h2>What happened</h2><span class="sub">6 steps · 12 minutes</span></header><ol class="tree">${T.map((t, i) => node(t, i)).join('')}</ol></section>`;
 }
 
-const SCREENS = { overview: [overview, 'Home'], run: [runPage, 'Runs'], approval: [approvalPage, 'Bots'], history: [historyPage, 'Runs'], builder: [builderPage, 'Workflows'] };
-const [fn, title] = SCREENS[s];
+// ---------- the busy “before” versions of the two screens added for the calm comparison ----------
+function activityBefore() {
+  return `<div class="phead"><div><h1>Activity</h1><p class="lead"><b>Last 12 hours: ${C.LANES.reduce((a, [, n]) => a + n.length, 0)} runs across ${C.LANES.length} workflows.</b> Every run is a mark on its workflow’s lane.</p></div><div class="filters"><span class="chip">${ic('clock')}Last 12 hours</span></div></div>
+    <section class="card score" data-legend-scope><header class="ch"><h2>Every run, one lane per workflow</h2><span class="sp"></span>${scoreLegend}</header>${scoreSVG(1060, 12)}<div class="score-phone">${scoreSVG(360, 12, true)}</div></section>
+    <div class="cols"><div class="col-main"><section class="card"><header class="ch"><h2>Runs per hour</h2></header>${hourBars(560, 110)}</section></div><div class="col-side">${runningCard()}</div></div>`;
+}
+function botBefore() {
+  const B = C.BOT;
+  const head = `<div class="crumbs"><a>Bots</a>${ic('chevron-right')}<a>${B.folder}</a></div>
+    <div class="bothead"><span class="bot-av">ps</span><div><h1>${B.name}</h1><p class="lead">${B.role}</p></div><span class="badge" data-s="running">${gl('running', 'spin')}${B.status}</span></div>
+    <nav class="tabs"><a class="on">Overview</a><a>Approvals <em>1</em></a><a>Chat</a><a>Cases <em>4</em></a><a>Memory <em>${B.memory}</em></a><a>What it can do</a><a>Settings</a></nav>`;
+  const stats = `<section class="statrow bot-stats">${B.stats.map(([l, v, sub], i) => `<div class="${i === 2 ? 'alert acc' : ''}"><span class="lbl">${l}</span><b>${v}</b><span class="d">${sub}</span>${i === 0 ? spark(B.week, 80, 22) : ''}</div>`).join('')}</section>`;
+  const pend = `<section class="card needs"><header class="ch"><h2>Waiting on you</h2><span class="count-pill">1</span></header><ul class="list">${B.pending.map((p) => `<li class="need" data-s="accent"><span class="ng">${gl('needs-you')}</span><div class="nt"><b>${p.title}</b><span class="why">${p.why}</span><span class="tech mono">p12 · infra@3f2a9c1d</span></div><span class="age">${p.age}</span><span class="na"><button class="btn primary sm">Review</button></span></li>`).join('')}</ul></section>`;
+  const runs = `<section class="card flush"><header class="ch pad"><h2>Recent runs</h2><span class="sp"></span><a class="link">All runs</a></header><table class="tbl runs"><thead><tr><th>Status</th><th>Run</th><th>When</th><th class="num">Took</th><th class="num">Cost</th><th class="id-h">ID</th></tr></thead><tbody>${B.runs.map((r) => `<tr><td>${badge(r[0])}</td><td><b>${r[1]}</b> <span class="tgt">${r[2]}</span></td><td class="sub nowrap">${r[3]}</td><td class="num">${r[4] || '…'}</td><td class="num">${r[5]}</td><td class="mono id">${r[6]}</td></tr>`).join('')}</tbody></table></section>`;
+  const cases = `<section class="card"><header class="ch"><h2>Cases</h2><span class="sub">4</span></header><ul class="list">${B.cases.map(([st, id, t, w]) => `<li><span class="ng" data-s="${SS[st]}">${gl(SG[st])}</span><div class="nt"><b>${t}</b><span class="why"><span class="mono">${id}</span> · ${w}</span></div></li>`).join('')}</ul></section>`;
+  const conns = `<section class="card"><header class="ch"><h2>Connections</h2></header><ul class="list">${B.connections.map(([n, a]) => `<li><span class="ng" data-s="ok">${gl('success')}</span><div class="nt"><b>${n}</b><span class="why">${a} · healthy</span></div></li>`).join('')}</ul></section>`;
+  const P = C.PROPOSAL;
+  const can = `<section class="card can"><header class="ch"><h2>What it can do</h2></header>${[['Does on its own', 'success', P.can.own], ['Asks you first', 'accent', P.can.asks], ['Never', 'danger', P.can.never]].map(([t, st, xs]) => `<div class="cang" data-s="${st}"><h3>${gl(st === 'success' ? 'success' : st === 'accent' ? 'needs-you' : 'danger')}${t}</h3><ul>${xs.map((x) => `<li>${x}</li>`).join('')}</ul></div>`).join('')}</section>`;
+  return `${head}${stats}<div class="cols"><div class="col-main">${pend}${runs}${cases}</div><div class="col-side">${conns}${can}</div></div>`;
+}
+
+// ---------- Daylight, calm by default ----------
+// Each calm screen leads with its glance answer (data-glance): the largest, first text on the page,
+// a sentence a person gets in three seconds. One loud thing; everything normal is one quiet line.
+const glanceHead = ({ over = '', title, answer = title, lead = '' }) =>
+  `<header class="calm-head">${over ? `<p class="overline">${over}</p>` : ''}<h1 data-glance data-glance-answer="${answer.replace(/"/g, '&quot;')}">${title}</h1>${lead ? `<p class="lead">${lead}</p>` : ''}</header>`;
+const NEED_STATE = { approval: 'needs', failed: 'failed', question: 'needs', signin: 'needs' };
+const KICK = { approval: 'Needs your approval', failed: 'Failed', question: 'Needs your answer', signin: 'Needs your sign-in' };
+const needRow = (n) => ({ state: NEED_STATE[n.kind], title: n.title, sentence: n.short ?? n.why, age: n.age, action: `<button class="btn secondary sm">${n.act}</button>` });
+const runningLine = (list) => summaryLine({ lead: `${list.length} running`, parts: [list.map((r) => r.wf).join(', ')], label: 'Show',
+  body: `<ul class="list running">${list.map((r) => `<li><span class="ng" data-s="running">${gl('running', 'spin')}</span><div class="nt"><b>${r.doing}</b><span class="why">${r.wf} · ${r.target}</span></div><div class="prog"><span>Step ${r.step} of ${r.of}</span><i><b style="width:${(r.step / r.of) * 100}%"></b></i></div></li>`).join('')}</ul>` });
+const lanesBoth = (lanes) => `<div class="cl-desk">${calmLanes(lanes, { width: 860 })}</div><div class="cl-phone">${calmLanes(lanes, { width: 330, stacked: true })}</div>`;
+const healthLine = () => summaryLine({ lead: 'All healthy', parts: ['ops-box', '6 connections', 'up 3 days'], label: 'Show',
+  body: `<ul class="plain">${['ops-box: up 3 days, 41% disk', 'GitHub, Slack, Datadog, Terraform Cloud, PagerDuty, OpenAI: connected'].map((x) => `<li>${x}</li>`).join('')}</ul>` });
+const fyiLine = () => summaryLine({ lead: `${C.FYI.length} notes`, parts: ['update v0.72.0 is ready', 'sandbox blocked pastebin.com'], label: 'Show',
+  body: `<ul class="plain">${C.FYI.map((f) => `<li><b>${f.title}.</b> ${f.why}</li>`).join('')}</ul>` });
+
+function overviewCalm() {
+  if (quietDay) {
+    return `${quietState({ title: 'All quiet. Nothing needs you.', sub: '46 runs went fine in the last 12 hours. 2 are running now.' })}
+      <div class="calm-rest">${summaryLine({ lead: 'Last 12 hours', parts: ['46 runs, all fine', '$6.90 spent'], body: lanesBoth(C.QUIET_LANES), label: 'Show' })}
+      ${runningLine(C.RUNNING.slice(0, 2))}${healthLine()}</div>`;
+  }
+  const [top, ...rest] = C.NEEDS;
+  const loud = exception({ state: NEED_STATE[top.kind], kicker: `${KICK[top.kind]} · ${top.age}`, title: top.title, sentence: 'platform-sre wants to run terraform apply on production to fix the SEV2 latency incident.', action: `<button class="btn primary">${top.act}</button>` });
+  return `${glanceHead({ title: `${C.NEEDS.length} things need you`, answer: `${C.NEEDS.length} things need you, starting with the production web server`, lead: 'Start with the first. Everything else is running normally.' })}
+    <div class="calm-stack">${loud}
+    <div>${excRows(rest.slice(0, 2).map(needRow), { terse: true })}${summaryLine({ lead: `${rest.length - 2} more need you`, parts: rest.slice(2).map((n) => n.title.replace(/^./, (c) => c.toLowerCase())), label: 'Show', body: excRows(rest.slice(2).map(needRow), { terse: true }) })}</div>
+    <div class="calm-rest">${summaryLine({ lead: `${C.STATS.fine} of ${C.STATS.runs} runs went fine`, parts: ['last 12 hours', `${C.STATS.cost} spent`], body: lanesBoth(C.LANES), label: 'Show' })}
+      ${runningLine(C.RUNNING)}${healthLine()}${fyiLine()}</div></div>`;
+}
+
+const REASON = { 'r-7ef0': '2 tests fail after its change; nothing was pushed', 'r-7ed1': 'Approve, revise or discard its draft review', 'r-7e64': 'Stopped at its $0.05 budget' };
+function historyCalm() {
+  const rows = C.HISTORY[0][1];
+  const attn = rows.filter((r) => r[0] === 'failed' || r[0] === 'waiting'), live = rows.filter((r) => r[0] === 'running'), done = rows.filter((r) => !attn.includes(r) && !live.includes(r));
+  const passed = done.filter((r) => r[0] === 'ok').length, parked = done.length - passed;
+  const failed = attn.filter((r) => r[0] === 'failed').length;
+  const doneTable = `<table class="tbl runs compact"><thead><tr><th>Status</th><th>Run</th><th>When</th><th class="num">Took</th><th class="num">Cost</th><th class="id-h">ID</th></tr></thead><tbody>${done.map((r) => `<tr><td>${status(ST[r[0]])}</td><td><b>${r[1]}</b> <span class="tgt">${r[2]}</span>${r[8] ? `<span class="sub-l">${r[8]}</span>` : ''}</td><td class="sub nowrap">${r[4]}</td><td class="num">${r[5]}</td><td class="num">${r[6]}</td><td class="mono id">${r[7]}</td></tr>`).join('')}</tbody></table>`;
+  return `${glanceHead({ over: 'Runs · last 12 hours', title: `${attn.length} runs need attention`, answer: `${attn.length} runs need attention: ${failed} failed and ${attn.length - failed} waits for you`, lead: `${failed} failed and ${attn.length - failed} waits for you. The other ${rows.length - attn.length} are fine.` })}
+    <div class="calm-stack"><div>${excRows(attn.map((r) => ({ state: ST[r[0]], title: `${r[1]} <span class="tgt">${r[2]}</span>`, sentence: REASON[r[7]] ?? r[8], age: r[4], action: `<button class="btn ${r[0] === 'waiting' ? 'primary' : 'secondary'} sm">${r[0] === 'waiting' ? 'Answer' : 'Open'}</button>` })))}</div>
+    <div class="calm-rest">${runningLine(C.RUNNING)}${summaryLine({ lead: `${done.length} finished`, parts: [`${passed} passed`, `${parked} parked`], label: 'Show', body: doneTable })}</div></div>`;
+}
+
+function activityCalm() {
+  const all = C.LANES.flatMap(([, n]) => n), f = all.filter(([, s]) => s === 'failed').length, w = all.filter(([, s]) => s === 'approval').length, r = all.filter(([, s]) => s === 'running').length;
+  const fine = all.length - f - w - r;
+  return `${glanceHead({ over: 'Activity · last 12 hours', title: `${f} failed, ${w} wait for you`, answer: `In 12 hours ${f} runs failed and ${w} wait for you; everything else went fine`, lead: `Everything else went fine: ${fine} runs. ${r} are running now.` })}
+    <section class="card calm-card">${lanesBoth(C.LANES)}</section>`;
+}
+
+function approvalCalm() {
+  const P = C.PROPOSAL;
+  const can = `<div class="calm-can">${[['Does on its own', P.can.own], ['Asks you first', P.can.asks], ['Never', P.can.never]].map(([t, xs]) => `<div><h3>${t}</h3><ul>${xs.map((x) => `<li>${x}</li>`).join('')}</ul></div>`).join('')}</div>`;
+  return `<div class="crumbs"><a>Bots</a>${ic('chevron-right')}<a>${P.bot}</a></div>
+    <header class="calm-decision" data-item data-s="accent"><p class="cd-k">${mark('needs', { size: 14, label: true })}<span>${P.bot} asks you · ${P.expires.toLowerCase()}</span></p>
+      <h1 data-glance data-glance-answer="${P.bot} wants to replace the production web server: approve or deny">${P.title}?</h1>
+      <p class="lead">It rolls out the new image to fix the SEV2 latency incident. About 2 minutes of drain; you can undo it for 7 days.</p>
+      <div class="decide"><button class="btn primary lg">${ic('fingerprint')}Approve with passkey</button><button class="btn secondary lg">Deny…</button></div></header>
+    <div class="calm-rest">
+      ${summaryLine({ lead: 'What changes', parts: ['1 added', '2 changed', '1 replaced', 'nothing destroyed'], label: 'Show', body: `<dl class="risk">${P.risk.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl><p class="sub">Stateful things such as databases are never replaced without a separate rule.</p>` })}
+      ${summaryLine({ lead: 'Why it’s asking', parts: ['the SEV2 incident “api p99 latency”'], label: 'Show', body: `<p>${P.why}</p><p class="sub">${P.origin} Only operators on the platform team can approve.</p>` })}
+      ${summaryLine({ lead: `What ${P.bot} can do`, parts: [`${P.can.own.length} on its own`, `${P.can.asks.length} ask you first`, `${P.can.never.length} never`], label: 'Show', body: can })}
+      ${summaryLine({ lead: 'Technical details', parts: ['plan, hashes, exact command'], label: 'Show', body: `<dl class="risk">${P.tech.map(([k, v]) => `<dt>${k}</dt><dd class="mono">${v}</dd>`).join('')}</dl>` })}</div>`;
+}
+
+function botCalm() {
+  const B = C.BOT, p = B.pending[0];
+  return `<div class="crumbs"><a>Bots</a>${ic('chevron-right')}<a>${B.folder}</a></div>
+    ${glanceHead({ over: B.role, title: `${B.name} needs one decision`, answer: `${B.name} needs one decision from you; otherwise all is well`, lead: 'Otherwise all is well: its 14 runs this week went fine.' })}
+    <div class="calm-stack">${exception({ state: 'needs', kicker: `Needs your approval · ${p.age}`, title: p.title, sentence: 'It wants to run terraform apply on production to fix the SEV2 latency incident.', action: '<button class="btn primary">Review</button>' })}
+    <div class="calm-rest">
+      ${summaryLine({ lead: 'Working on case c31', parts: ['db-prod-1 disk at 86%', 'for 11 min'], label: 'Show', body: `<ul class="plain">${B.cases.map(([, id, t, w]) => `<li><b>${t}</b> · ${w} <span class="mono sub">${id}</span></li>`).join('')}</ul>` })}
+      ${summaryLine({ lead: '14 runs this week', parts: ['all went fine', '$3.10 of its $20 budget'], label: 'Show', body: `<ul class="plain">${B.runs.map((r) => `<li>${r[1]} · <span class="sub">${r[3]}</span></li>`).join('')}</ul>` })}
+      ${summaryLine({ lead: 'Connections all healthy', parts: B.connections.map(([n]) => n), label: 'Show', body: `<ul class="plain">${B.connections.map(([n, a]) => `<li><b>${n}</b> · ${a}</li>`).join('')}</ul>` })}
+      ${summaryLine({ lead: 'What it can do', parts: ['3 on its own', '3 ask you first', '2 never'], label: 'Show', body: `<div class="calm-can">${[['Does on its own', C.PROPOSAL.can.own], ['Asks you first', C.PROPOSAL.can.asks], ['Never', C.PROPOSAL.can.never]].map(([t, xs]) => `<div><h3>${t}</h3><ul>${xs.map((x) => `<li>${x}</li>`).join('')}</ul></div>`).join('')}</div>` })}
+      ${summaryLine({ lead: 'Memory', parts: [`${B.memory} notes`, 'last added 2 days ago'], label: 'Show', body: '<p>Runbooks for db-prod, the SEV2 playbook and 10 notes from past cases.</p>' })}</div></div>`;
+}
+
+// exceptions = how many things on the screen genuinely need a person (the loudness budget's input)
+const SCREENS = {
+  overview: [overview, 'Home', 5], run: [runPage, 'Runs', 1], approval: [approvalPage, 'Bots', 1], history: [historyPage, 'Runs', 3], builder: [builderPage, 'Workflows', 0],
+  activity: [activityBefore, 'Activity', 4], bot: [botBefore, 'Bots', 1],
+};
+const CALM = { overview: overviewCalm, history: historyCalm, activity: activityCalm, approval: approvalCalm, bot: botCalm };
+let [fn, title, exceptions] = SCREENS[s];
+if (calm && CALM[s]) fn = CALM[s];
+if (quietDay && s === 'overview') exceptions = 0;
 document.body.innerHTML = shell(fn(), title);
-document.title = `${D.name} · ${s}`;
+const main = document.querySelector('main');
+main.dataset.exceptions = exceptions; main.dataset.version = calm && CALM[s] ? 'calm' : 'before';
+document.title = `${D.name} · ${s}${calm ? '' : ' · before'}`;
