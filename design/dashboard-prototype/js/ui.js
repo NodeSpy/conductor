@@ -51,6 +51,7 @@
     plus: '<path d="M12 5v14M5 12h14"/>',
     send: '<path d="M4 12l16-8-6 16-2.5-6.5z"/>',
     branch: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-12 7"/>',
+    split: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/>',
     file: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
     folder: '<path d="M3 6a1 1 0 011-1h5l2 2h9a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1z"/>',
     commit: '<circle cx="12" cy="12" r="3.5"/><path d="M3 12h5.5M15.5 12H21"/>',
@@ -286,7 +287,7 @@
     const items = [
       ...navGroups.flatMap(([, it]) => it.map(([k, l, ic]) => [l, '#/' + k, ic])),
       ...D.bots.map((mb) => [`Bot · ${mb.name}`, '#/bots/' + mb.name, 'bots']),
-      ...D.runs.slice(0, 8).map((r) => [`Run ${r.id} · ${r.workflow} ${r.repo ? r.repo + '#' + r.number : ''}`, '#/runs/' + r.id, 'runs']),
+      ...D.runs.slice(0, 8).map((r) => [`Run ${r.id} · ${r.workflow} ${r.repo ? UI.runTarget(r) : ''}`, '#/runs/' + r.id, 'runs']),
       ...D.workflows.slice(0, 5).map((w) => [`Edit workflow · ${w.name}`, '#/workflows/' + w.name, 'canvas']),
       ...(UI.paletteExtra ? UI.paletteExtra() : []),
       ['Pause dispatch', '#/overview', 'pause'], ['Apply update v0.72.0', '#/updates', 'updates'], ['Phone layouts', 'phone.html', 'phone'], ['Sign-in & enrollment', '#/signin', 'passkey'],
@@ -608,6 +609,12 @@
   /* ---------- diffs ---------- */
   UI.diffView = (A, B, mode = 'unified', o = {}) => {
     const d = YAML.diff(A, B), E = UI.esc;
+    /* word-level highlight: pair each run of removed lines with the added lines after it; mark what changed between them */
+    for (let i = 0; i < d.length;) { if (d[i].t !== '-') { i++; continue; } let j = i; while (j < d.length && d[j].t === '-') j++; let k = j; while (k < d.length && d[k].t === '+') k++;
+      for (let n = 0; n < Math.min(j - i, k - j); n++) { const x = d[i + n].s, y = d[j + n].s; let p = 0; while (p < x.length && p < y.length && x[p] === y[p]) p++; let q = 0; while (q < x.length - p && q < y.length - p && x[x.length - 1 - q] === y[y.length - 1 - q]) q++;
+        if ((p + q) / Math.max(x.length, y.length, 1) >= 0.4) { d[i + n].w = [x.slice(0, p), x.slice(p, x.length - q), x.slice(x.length - q)]; d[j + n].w = [y.slice(0, p), y.slice(p, y.length - q), y.slice(y.length - q)]; } }
+      i = k; }
+    const lineHTML = (r) => (r.w ? `${E(r.w[0])}${r.w[1] ? `<mark class="wd">${E(r.w[1])}</mark>` : ''}${E(r.w[2])}` : UI.yamlLine(r.s) || ' ');
     const adds = d.filter((r) => r.t === '+').length, dels = d.filter((r) => r.t === '-').length;
     if (!adds && !dels) return { html: `<div class="empty small"><span class="serif">No difference</span>The candidate is byte-identical to the live file.</div>`, adds, dels };
     /* The hunk's location: the key path of its first changed line (teams.platform.collections.vendors) and that line's number. */
@@ -615,11 +622,11 @@
     const keyAt = (lines, i) => { const path = []; let ind = Infinity; for (let k = i; k >= 0; k--) { const m = (lines[k] || '').match(/^(\s*)(- )?("[^"]+"|[\w.@/${}-]+):(\s|$)/); if (!m) continue; const n = m[1].length + (m[2] ? 2 : 0); if (n < ind) { path.unshift(m[3].replace(/^"|"$/g, '')); ind = m[2] ? m[1].length : n; if (!ind) break; } } return path.join('.'); };
     const loc = (h) => { const r = h.find((x) => x.t !== ' ') || h[0]; const inB = r.t !== '-'; return { path: o.sections ? keyAt(inB ? LB : LA, (inB ? r.b : r.a) - 1) : '', line: inB ? r.b : r.a }; };
     const headOf = (h) => { const l = loc(h); return `<div class="h">${E(o.file || 'config.yaml')}${l.path ? ' · <span class="mono">' + E(l.path) + '</span>' : ''} · line ${l.line}</div>`; };
-    const row = (r) => `<div class="dl ${r.t === '+' ? 'add' : r.t === '-' ? 'del' : ''}"><span>${r.a || ''}</span><span>${r.b || ''}</span><span>${r.t === ' ' ? ' ' : r.t}</span><span>${UI.yamlLine(r.s) || ' '}</span></div>`;
+    const row = (r) => `<div class="dl ${r.t === '+' ? 'add' : r.t === '-' ? 'del' : ''}"><span>${r.a || ''}</span><span>${r.b || ''}</span><span>${r.t === ' ' ? ' ' : r.t}</span><span>${lineHTML(r)}</span></div>`;
     let html;
     if (mode === 'whole') html = d.map(row).join('');
     else if (mode === 'split') {
-      html = YAML.hunks(d, 2).map((h) => { const L = [], R = []; let dl = [], al = []; const flush = () => { const n = Math.max(dl.length, al.length); for (let k = 0; k < n; k++) { L.push(dl[k] ? `<div class="sl del"><span>${dl[k].a}</span><span>${UI.yamlLine(dl[k].s) || ' '}</span></div>` : '<div class="sl gap"><span></span><span> </span></div>'); R.push(al[k] ? `<div class="sl add"><span>${al[k].b}</span><span>${UI.yamlLine(al[k].s) || ' '}</span></div>` : '<div class="sl gap"><span></span><span> </span></div>'); } dl = []; al = []; };
+      html = YAML.hunks(d, 2).map((h) => { const L = [], R = []; let dl = [], al = []; const flush = () => { const n = Math.max(dl.length, al.length); for (let k = 0; k < n; k++) { L.push(dl[k] ? `<div class="sl del"><span>${dl[k].a}</span><span>${lineHTML(dl[k])}</span></div>` : '<div class="sl gap"><span></span><span> </span></div>'); R.push(al[k] ? `<div class="sl add"><span>${al[k].b}</span><span>${lineHTML(al[k])}</span></div>` : '<div class="sl gap"><span></span><span> </span></div>'); } dl = []; al = []; };
         h.forEach((r) => { if (r.t === '-') dl.push(r); else if (r.t === '+') al.push(r); else { flush(); L.push(`<div class="sl"><span>${r.a}</span><span>${UI.yamlLine(r.s) || ' '}</span></div>`); R.push(`<div class="sl"><span>${r.b}</span><span>${UI.yamlLine(r.s) || ' '}</span></div>`); } }); flush();
         return `${headOf(h)}<div class="split"><div>${L.join('')}</div><div>${R.join('')}</div></div>`; }).join('');
     } else html = YAML.hunks(d, 3).map((h) => `${headOf(h)}${h.map(row).join('')}`).join('');

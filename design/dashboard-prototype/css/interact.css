@@ -68,9 +68,14 @@ button.link { background: none; border: 0; padding: 0; font: inherit; cursor: po
 .diff .split { display: grid; grid-template-columns: 1fr 1fr; }
 .diff .split > div + div { border-left: 1px solid var(--line); }
 .diff .sl { display: grid; grid-template-columns: 38px 1fr; white-space: pre; }
-.diff .sl span:first-child { color: var(--ink-4); text-align: right; padding-right: 8px; user-select: none; }
+.diff .sl > span:first-child { color: var(--ink-4); text-align: right; padding-right: 8px; user-select: none; }
 .diff .sl.add { background: var(--ok-wash); } .diff .sl.del { background: var(--fail-wash); } .diff .sl.gap { background: repeating-linear-gradient(-45deg, transparent 0 4px, var(--bg-3) 4px 6px); }
 .diff.whole { max-height: 560px; }
+.diff .split > div { min-width: 0; overflow-x: auto; }
+.diff .split .sl { width: max-content; min-width: 100%; }
+.diff mark.wd { background: none; border-radius: 2px; padding: 0 1px; color: inherit; }
+.diff .dl.del mark.wd, .diff .sl.del mark.wd { background: color-mix(in srgb, var(--fail) 30%, transparent); }
+.diff .dl.add mark.wd, .diff .sl.add mark.wd { background: color-mix(in srgb, var(--ok) 30%, transparent); }
 
 /* filters that filter */
 .filters .count-note { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--ink-3); }
