@@ -311,17 +311,22 @@ Operations:
 ### 4.3 Run history and run detail
 
 - **History.** Filters: status, workflow, repo, time range, provider (when usage display is on),
-  and free text over ids and errors. Reads `<state>/history/*.json`. Listing
+  and free text over ids and errors; bulk select (retry the failed ones, export). Reads `<state>/history/*.json`. Listing
   more than ~500 records cheaply needs a small **NEW** index: an append-only
   `history/index.jsonl` written by `PutHistory` and rebuilt when missing.
   Each record's HMAC (`Sig`) is verified, and a record that fails shows as
   **tampered**.
-- **Detail.**
-  - A timeline (gantt), with each agent step's usage when usage display is on.
-  - Each step's inputs and outputs, log and diff, all scrubbed.
-  - The run's audit lines.
-  - Retry from any step.
-  - Export JSONL.
+  History pages by cursor (`GET /runs?cursor=`), 50 at a time.
+- **Detail** (one run record, the shape of `RunHistory`/`StepRecord`):
+  - **What happened / What you can do** for failed, waiting and parked runs.
+  - A timeline with a time axis; every row selects its step (↑/↓ too); each
+    agent step's usage when usage display is on.
+  - The selected step's inputs, outputs, log and (agent steps) diff, all
+    scrubbed; tabs only for what the step recorded; a step that never ran
+    says so; its effective environment.
+  - The run's own audit lines (`GET /audit?run=`).
+  - Retry from any step; on a live run, **Restart this step** (stop first).
+  - **Compare** with another run of the workflow; **Download run record**.
 
 ### 4.4 Teams and bots (#178)
 
