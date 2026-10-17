@@ -3,22 +3,22 @@
 Branch `design/dashboard` (worktree `~/Projects/paseo-home/worktrees/2ccqu2oy/design-dashboard`).
 Prototype: `design/dashboard-prototype/` (static HTML/CSS/JS, hash routes, fake state in
 localStorage key `cd-proto-state-v5`, demo day in `cd-demo`, "Reset" and the demo days under ✦ in the rail). Served live
-by the user service `dashboard-prototype` at http://100.119.192.38:8767/ (don't stop or replace it); the before/after
-review is at http://100.119.192.38:8767/review/calm.html.
+by the user service `dashboard-prototype` on this machine's tailnet address, port 8767 (don't stop or replace it); the
+before/after review is at `/review/calm.html` on it.
 Design doc: `docs/design/dashboard.md` (§3 is the visual language: Daylight and calm by default). Tests: `design/dashboard-tests/`.
 
-Guardrails (from Daniel): `df -h /` before heavy work (stop under 25 GB); **all scratch, caches,
+Guardrails: `df -h /` before heavy work (stop under 25 GB); **all scratch, caches,
 node_modules, browsers, screenshots and test output on LOCAL disk under `~/.cache/conductor-design/`,
 never under `~/Projects` (NFS)**; run suites sequentially, few browsers at once; sequential work, no parallel subagents;
-nothing that signals processes outside a PID namespace; commit and push early and often as Daniel, no AI attribution;
+nothing that signals processes outside a PID namespace; commit and push early and often under the repository owner's git identity, no AI attribution and no personal names in commit messages or files (`privacy.spec.js` fails on one);
 prototype + docs only; neutral fake data only (`platform-sre`, `acme/api`).
 
 ## How to run the tests
 
 ```
 cd design/dashboard-tests
-BASE_URL=http://100.119.192.38:8767 WORKERS=3 ./run.sh --project=desktop --reporter=line   # against the live prototype
-BASE_URL=http://100.119.192.38:8767 ./run-webkit.sh --reporter=line                         # WebKit iPhone 15 sweep (Docker)
+BASE_URL=http://<tailnet-address>:8767 WORKERS=3 ./run.sh --project=desktop --reporter=line   # against the live prototype
+BASE_URL=http://<tailnet-address>:8767 ./run-webkit.sh --reporter=line                         # WebKit iPhone 15 sweep (Docker)
 ```
 
 While editing, run against a frozen snapshot so edits don't race the run: `~/.cache/conductor-design/daylight/suite.sh`
@@ -71,13 +71,13 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Done (commits on this branch, newest first)
 
-- **From Daniel's iPhone review**: one stepper component everywhere, compact ("Step 2 of 5 · Watches" + a thin bar)
+- **From the iPhone review**: one stepper component everywhere, compact ("Step 2 of 5 · Watches" + a thin bar)
   whenever the labelled steps don't fit, never overlapping (`wizard.spec.js`, plus stepper checks in the layout and
   iPhone sweeps); the passkey glyph only on controls that sign (`passkey.spec.js`); Pause dispatch moved to the status
   menu and the System row (explained, confirmed, visible paused state, Resume); Run a workflow off the Overview (it's on
   each workflow and in ⌘K).
 
-- **Calm by default** (Daniel: "all of it just looks so busy"): exception-first on every key screen. The Overview's
+- **Calm by default** (from the first review: "all of it just looks so busy"): exception-first on every key screen. The Overview's
   answer line ("2 things need you." / "All quiet. Nothing needs you."), large needs-you rows, calm lanes (passing runs as
   a faint tick strip; failures and waits labelled where they are; running in ink), everything normal in quiet one-line
   rows; run history as grouped lists with finished work folded to one line; Needs you single-column; bots tree rolls up
@@ -129,7 +129,7 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 - The phone breakpoint stays at 720px (Daylight's phone is < 600px): tablets in portrait between 600 and 720 get the
   phone layout, which keeps the tab bar and sheets. Revisit with real tablet use.
 - The WebKit projects need Docker (the Playwright Ubuntu image); WebKit's Ubuntu build doesn't run on the Arch host.
-- Running work is drawn in ink, not the brand's sky blue: Daniel's calm rule (colour only for what needs someone)
+- Running work is drawn in ink, not the brand's sky blue: the calm rule (colour only for what needs someone)
   outranks the brand book here; flagged for the brand designer.
 - Deferred from the audits (why in AUDIT-RESPONSE): bulk on bots tree/packs/connectors/secrets/cases; pack dependency
   tree; visual AND/OR filter groups; new-trigger comment placement; multi-user previews.

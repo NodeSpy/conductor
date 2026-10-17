@@ -118,7 +118,7 @@ the dashboard applies it; the brand book is the source of truth for values.
 
 ### 3.0 Calm by default (exception-first)
 
-The most important rule, from Daniel's review ("it all looks so busy … I have to read everything all the time"):
+The most important rule, from the first review ("it all looks so busy … I have to read everything all the time"):
 every screen answers **is anything wrong, and what needs me?** in about three seconds without reading, and says
 almost nothing when nothing does.
 

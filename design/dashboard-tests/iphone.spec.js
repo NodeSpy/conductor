@@ -1,4 +1,4 @@
-// The iPhone as Daniel sees it: WebKit, iPhone 15, the OS in dark or light mode, the prototype theme left on
+// The iPhone as the operator sees it: WebKit, iPhone 15, the OS in dark or light mode, the prototype theme left on
 // auto or set explicitly, Safari's floating toolbar and the safe areas simulated (?sim=ios: a 34px home
 // indicator inset and an 80px toolbar overlay that takes taps). On every route:
 //   - exactly one theme: the one chosen, or the OS's when none is (never a mix of surfaces and text);

@@ -27,7 +27,7 @@ result, mostly in §3, §4.4, §4.11, §4.12, §6.5 and §7.
 | M4 | Bot vs workflow vs team vs pack unexplained | fixed | One-line definitions at the top of Bots, Workflows and Packs; dotted glossary terms everywhere and a `#/glossary`; "synthesized" and owner badges explain themselves; Workflows points to bots for judgment, and the bot wizard's triggers appear in Workflows. | onboarding |
 | M5 | New workflow opens in an error state; templating hidden | fixed | Untouched required fields are a neutral to-do checklist ("Choose what starts this workflow", "Fill in labels"), not errors; the insert button is labelled **Insert from the event**. | builder, builder2 |
 | M6 | Step picker gives no sense of risk | fixed | Every action is tagged *reads only*, *changes things* or *high impact*, sorted by risk; descriptions wrap to two lines. (Per-team "needs approval" tags: changed differently, see below.) | builder |
-| M7 | Every edit is a passkey-signed deploy | fixed | Daniel's rule: a passkey only for changes that widen what bots or agents can do (the one classifier) and for every approval or deny. Everything else gets a plain **Apply** after the diff (still validated on a copy, backed up, rollback-able); the review says why a passkey is or isn't needed. Theme, density and the usage display are local display preferences, instant, not config. | passkey, usage, scale |
+| M7 | Every edit is a passkey-signed deploy | fixed | The rule: a passkey only for changes that widen what bots or agents can do (the one classifier) and for every approval or deny. Everything else gets a plain **Apply** after the diff (still validated on a copy, backed up, rollback-able); the review says why a passkey is or isn't needed. Theme, density and the usage display are local display preferences, instant, not config. | passkey, usage, scale |
 | M8 | Folders grant logins | fixed | Folders are never principals: login and credential scopes name bots (`identities`), with a team shortcut that expands to its bots. | logins |
 | M9 | "binds credential to undefined" | fixed | Credential bindings use the real shape; the staged summary and acknowledgement name the bots. | logins |
 | M10 | Failed run: no next step; audit not scoped | fixed | **What happened / What you can do** (see the fix diff, retry from fix, compare with the last good run, dismiss); audit filtered to the run; "Record" is **Download run record**. | runs |
@@ -45,7 +45,7 @@ result, mostly in §3, §4.4, §4.11, §4.12, §6.5 and §7.
 | m6 Add a login "teleports" to Config | changed differently | Review stays the one shared apply page (one pipeline for every config change), but it names where you came from and returns you there; the reason a passkey is needed is stated. |
 | m7 wrong diff location label | fixed | Hunk headers name the key path of the first changed line (`usage.source`, `teams.platform.collections.vendors`). |
 | m8 page fades to blank after approving | fixed | Re-renders after a decision don't animate. |
-| m9 deny without a reason | fixed | Deny takes a reason, sent to the bot. Deny still needs the passkey (Daniel: every approval and deny). |
+| m9 deny without a reason | fixed | Deny takes a reason, sent to the bot. Deny still needs the passkey (every approval and deny is signed). |
 | m10 Guards card layout | fixed | Each guard is one line of text. |
 | m11 raw cron | fixed | "Mondays at 06:00", the raw expression on hover. |
 | m12 chat reply truncation, "(operator trust)" | fixed | A plain reply. |
@@ -131,7 +131,7 @@ result, mostly in §3, §4.4, §4.11, §4.12, §6.5 and §7.
 | agent card height / grouping | fixed with Daylight: the agent card is three named groups (What it does · Where it runs · Isolation, with "isolation ·" dropped from every label), the rarely used keys under "More options" and "+N keys only in YAML". |
 | YAML pane stops at 2/3 height | fixed: it fills the column. |
 
-## Also done during the audit work (Daniel's later directions)
+## Also done during the audit work (later directions)
 
 - **iPhone (WebKit, Safari's floating toolbar).** The shell is a locked `100dvh` column with an in-flow tab bar (it was `100vh`, which reaches under the toolbar), safe areas honoured, the status strip collapsed on phones. WebKit iPhone 15 projects (OS dark/light × theme auto/light/dark) with the toolbar and insets simulated sweep every route (iphone spec, `run-webkit.sh`).
 - **One theme at a time.** An explicit choice always wins over the OS for every surface and text colour; with none, the page follows the OS live. The cause of the drift: boot saved whatever theme a first visit started with as an explicit choice. Contrast tokens nudged so rendered text is ≥ 3:1 in both themes (layout and iphone specs).
@@ -142,7 +142,7 @@ result, mostly in §3, §4.4, §4.11, §4.12, §6.5 and §7.
 ## Daylight (the items that waited for it are done)
 
 The restyle the audit response held back is done: Daylight is adopted across the prototype in one pass (tokens,
-fonts, the Fermata logo kit, components, type, density, copy), and then, after Daniel's review ("it all looks so
+fonts, the Fermata logo kit, components, type, density, copy), and then, after the first review of it ("it all looks so
 busy"), the information design went exception-first (`docs/design/dashboard.md` §3.0). What changed for findings:
 
 - **Riley polish, agent card grouping**: done (above).

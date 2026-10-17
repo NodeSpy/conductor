@@ -2,7 +2,7 @@
 # The WebKit iPhone projects. The dev host is Arch; Playwright's WebKit build needs Ubuntu's libraries, so this
 # runs the suite inside the Playwright Ubuntu image, with browsers, node_modules and output on LOCAL disk under
 # ~/.cache/conductor-design (WebKit unpacked into ms-playwright/webkit-2248). Same arguments as run.sh.
-#   BASE_URL=http://100.119.192.38:8767 ./run-webkit.sh iphone.spec.js --reporter=line
+#   BASE_URL=http://<tailnet-address>:8767 ./run-webkit.sh iphone.spec.js --reporter=line
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 CACHE=${LOCAL_CACHE:-$HOME/.cache/conductor-design}

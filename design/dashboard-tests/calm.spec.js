@@ -1,4 +1,4 @@
-// Calm by default (Daniel: "all of it just looks so busy … I have to read everything all the time"). On the mostly
+// Calm by default (from the first review: "all of it just looks so busy … I have to read everything all the time"). On the mostly
 // healthy demo day (js/scenario.js: dozens of runs, one approval and one failure need you), each key screen must
 // answer "is anything wrong / what needs me?" at a glance:
 //   - the answer sentence is first in reading order after the title, in primary ink, with a bold lead-in; on the

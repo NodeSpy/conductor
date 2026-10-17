@@ -1,6 +1,6 @@
 // A passkey only for changes that widen what bots or agents can do (from the one widening classifier) and
 // for approvals; everything else applies after the diff review with a plain Apply, still validated on a
-// copy, backed up and rollback-able. The review says why a passkey is or isn't needed. (Sam M7, Daniel)
+// copy, backed up and rollback-able. The review says why a passkey is or isn't needed. (Sam M7)
 const { test, expect, go } = require('./fixtures');
 
 async function toReview(page) {
@@ -50,7 +50,7 @@ test('mixing a widening and a non-widening change in one set needs the passkey',
 
 // The passkey glyph means "this signs": it appears only on a control that starts a WebAuthn signing (approve, deny,
 // apply a widening change, sign in, enrol, the signing sheet's own button) and on the passkeys themselves. Opening,
-// reviewing and navigating never carry it (Daniel: "Review only opens the approval").
+// reviewing and navigating never carry it (Review only opens the approval).
 const { ROUTES } = require('./routes');
 const SIGNS = new Set(['p-approve', 'kp-approve', 'kp-bulk', 'apply-go', 'signin', 'enroll', 'cm-store', 'cm-go', 'upd-apply']);
 test('the passkey glyph sits only on controls that sign', async ({ page }) => {

@@ -686,12 +686,12 @@ steps:
     summary: 'Buy a 1-year Compute Savings Plan at $1,200/month (covers 71% of steady EC2)', options: { term: '1y', commitment_usd_month: 1200, payment: 'no_upfront' }, digest: 'sha256:7a11c0de4f9b2e6d8c3a5f1b0e9d7c6a4b2f8e1d3c5a7b9f0e2d4c6a8b1f3e5d', planned: true,
     approvals: [{ who: 'alex', method: 'passkey · phone', at: m(40) }], needs: 2 });
   D.instances = [
-    { id: 'personal', name: 'Daniel (personal)', kind: 'personal', host: 'ops-box', need: 6, status: 'ok', signedIn: true, role: 'owner' },
+    { id: 'personal', name: 'ops (personal)', kind: 'personal', host: 'ops-box', need: 6, status: 'ok', signedIn: true, role: 'owner' },
     { id: 'work-platform', name: 'work-platform', kind: 'org', host: 'conductor-platform', need: 3, status: 'ok', signedIn: false, role: 'approver · team platform' },
     { id: 'home-lab', name: 'home-lab', kind: 'org', host: 'lab-nuc', need: 0, status: 'wait', signedIn: false, role: 'operator' },
   ];
   D.people = [
-    { name: 'daniel', roles: [['owner', '']], passkeys: ['laptop · Touch ID', 'phone · Face ID'], active: m(4) },
+    { name: 'ops', roles: [['owner', '']], passkeys: ['laptop · Touch ID', 'phone · Face ID'], active: m(4) },
     { name: 'alex', roles: [['approver', 'team platform'], ['operator', 'folder work']], passkeys: ['phone · Face ID'], active: m(40) },
     { name: 'sam', roles: [['viewer', '']], passkeys: ['security key'], active: m(3000) },
     { name: 'ci-bot', roles: [['operator', 'bot release-scribe']], passkeys: [], active: m(600), service: true },

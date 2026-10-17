@@ -1,4 +1,4 @@
-// Wizard headers never overlap, wrap or clip (Daniel, iPhone: the New bot stepper ran its five labels into each other).
+// Wizard headers never overlap, wrap or clip (from the iPhone review: the New bot stepper ran its five labels into each other).
 // Every wizard is walked through its states; at each one the stepper either shows its labelled steps with room to
 // spare, or the compact "Step 2 of 5 · Watches" with a thin bar. Chromium at 1440 and 390 here; WebKit in iphone.spec.
 const { test, expect } = require('./fixtures');

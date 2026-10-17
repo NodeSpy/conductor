@@ -1,5 +1,5 @@
 // Every modal, drawer and sheet has a visible way out and closes on Esc; full-page flows leave with the
-// browser's Back; destructive confirmations put focus on Cancel. (Visual QA bar, Daniel's rule)
+// browser's Back; destructive confirmations put focus on Cancel. (Visual QA bar)
 const { test, expect, go, isPhone, headAction } = require('./fixtures');
 
 const OPENERS = [
