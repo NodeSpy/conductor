@@ -2094,6 +2094,48 @@ group_BR_browser() {
   if z_audit '"event":"browser"' '"action":"open"' '"outcome":"refused"' 'example.com'; then
     ok "BR an off-list site is refused and audited" BR audit/offlist
   else bad "BR audit off-list" BR audit/offlist "no such audit line"; fi
+  br_login_setup
+}
+
+# br_login_setup: a login added at runtime, as the dashboard drives it —
+# each field from a different source (the username from the file vault, the
+# password typed and stored write-only, the code as a named secret) — checked,
+# tested in a sandboxed browser, classified, listed without a value, revoked.
+br_login_setup() {
+  local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml out
+  out="$(cexec "$C" sh -c "printf 'test-password-not-secret\n' | conductor browser credential add br-typed --origin http://localhost:8090 \
+      --login-url http://localhost:8090/login --bind 'agent:br_op' --username-ref '{{ vault \"e2evault\" \"username\" }}' \
+      --password-stdin --otp-ref '{{secret \"e2evault/otp\"}}' --config $CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'"change": "widening"'*'"kind": "stored"'*|*'"kind": "stored"'*'"change": "widening"'*) ok "BR a typed login is added (widening), its password stored write-only" BR setup/add ;;
+    *) bad "BR add a typed login" BR setup/add "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential check br-typed --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'"ok": true'*) ok "BR every field resolves (vault, typed, named secret) — no value returned" BR setup/check ;;
+    *) bad "BR resolve check" BR setup/check "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential test br-typed --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'"status": "ok"'*) ok "BR the test sign-in passes, in a sandboxed browser" BR setup/test ;;
+    *) bad "BR test sign-in" BR setup/test "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential bind br-typed --bind bot:helper --dry-run --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'"change": "widening"'*'"dry_run": true'*|*'"dry_run": true'*'"change": "widening"'*) ok "BR binding a bot is widening (dry run)" BR setup/widening ;;
+    *) bad "BR widening" BR setup/widening "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential ls --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *test-password-not-secret*|*JBSWY3DPEHPK3PXP*) bad "BR the inventory carries a value" BR setup/inventory "$out" ;;
+    *'"name": "br-typed"'*'"status": "ok"'*) ok "BR the inventory lists it with its last test — no value" BR setup/inventory ;;
+    *) bad "BR inventory" BR setup/inventory "$out" ;; esac
+  out="$(cexec "$C" conductor browser vault-items e2evault --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *test-password-not-secret*|*JBSWY3DPEHPK3PXP*) bad "BR a vault listing carries a value" BR setup/listing "$out" ;;
+    *'{{ vault \"e2evault\" \"password\" }}'*) ok "BR a vault lists names and references — no value" BR setup/listing ;;
+    *) bad "BR vault listing" BR setup/listing "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential rm br-typed --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'"change": "narrowing"'*) ok "BR revoked (narrowing)" BR setup/revoke ;; *) bad "BR revoke" BR setup/revoke "$out" ;; esac
+  out="$(cexec "$C" conductor browser credential test br-typed --config "$CFG" 2>&1 | tr -d '\r')"
+  case "$out" in *'"status": "failed"'*'no credential'*) ok "BR a revoked login is refused" BR setup/revoked ;;
+    *) bad "BR a revoked login" BR setup/revoked "$out" ;; esac
+  if z_audit '"event":"browser"' '"action":"test-login"' '"credential":"br-typed"' '"outcome":"ok"'; then
+    ok "BR the test sign-in is audited" BR setup/audit
+  else bad "BR test sign-in audit" BR setup/audit "no such audit line"; fi
+  out="$(cexec "$C" sh -c 'grep -rl -e test-password-not-secret /home/conductor/data /home/conductor/.conductor 2>/dev/null | grep -v -e "/vault/" -e "/testsite.log$"' | tr -d '\r')"
+  if [ -z "$out" ]; then ok "BR the typed password is nowhere in plain text after setup, test and revoke" BR setup/leak
+  else bad "BR typed password leaked" BR setup/leak "$out"; fi
 }
 
 main "$@"
