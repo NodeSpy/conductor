@@ -21,7 +21,7 @@
         <p class="small" style="margin:0">conductor made this ${use === 'slack' ? 'app manifest' : 'GitHub App manifest'}. ${sv.label} opens with it filled in; you review the permissions there and install the app. Nothing is stored until you come back.</p>
         <details><summary class="small">The manifest</summary>${UI.yaml(MANIFEST[use](st.inst))}</details>` :
         `<div class="callout ok small">${icon('check')} ${esc(sv.back)}</div><p class="small" style="margin:0">The ${sv.keys.map((k) => k.replace('_', ' ')).join(' and ')} go to conductor's vault as <span class="mono">house/${esc(st.inst)}-…</span> (you sign the write), and <span class="mono">connectors.${esc(st.inst)}</span> is staged with references to them.</p>${verbsLine(use, st.inst)}`}</div>
-      <div class="modal-foot"><button class="btn ghost" data-close>Cancel</button>${st.phase === 0 ? `<button class="btn primary" data-act="cm-go">${icon('link')}${sv.btn}</button>` : `<button class="btn primary" data-act="cm-store">${icon('passkey')}Store the tokens and review</button>`}</div>`;
+      <div class="modal-foot"><button class="btn ghost" data-close>Cancel</button>${st.phase === 0 ? `<button class="btn primary" data-act="cm-go">${icon('link')}${sv.btn}</button>` : `<button class="btn primary" data-act="cm-store">Store the tokens…</button>`}</div>`;
     UI.modal(body());
     UI.cm = { st, draw, use };
   };

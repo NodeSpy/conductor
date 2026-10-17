@@ -34,6 +34,7 @@
   (D.vaults || []).forEach((v) => { if (v.status === 'fail') { v.status = 'ok'; v.detail = 'reachable'; } });
   (D.packs || []).forEach((p) => { if (p.status === 'wait') p.status = 'ok'; });
   (D.browsers || []).forEach((b) => { if (b.status === 'wait') b.status = 'run'; });
+  if (D.loginMeta && D.loginMeta.app) D.loginMeta.app.test = { result: 'ok', at: m(3) }; // its push approval was answered
   D.daemon.paused = false;
 
   // only one approval and one failure need you; everything else was answered or went fine

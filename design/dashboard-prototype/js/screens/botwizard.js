@@ -114,5 +114,5 @@
   UI.act('bw-next', () => { if (canNext()) return; bw.at = Math.min(STEPS.length - 1, bw.at + 1); redraw(); });
   UI.act('bw-back', () => { bw.at = Math.max(0, bw.at - 1); redraw(); });
   UI.act('bw-cancel', () => { bw = fresh(); });
-  UI.act('bw-create', () => { const name = bw.name; S.stage('bots', name, botCfg(), `new bot ${name}`); chosenEvents().forEach((e) => S.stage('workflows', trigName(e), trigYAML(e), `trigger ${trigName(e)} hands ${e.on} to ${name}`)); D.prefs.returnTo = { href: `#/bots/${name}`, label: name }; bw = fresh(); UI.staged(D.pending[D.pending.length - 1]); });
+  UI.act('bw-create', () => { if (bw.at !== STEPS.length - 1 || nameErr() || canNext()) return; const name = bw.name; S.stage('bots', name, botCfg(), `new bot ${name}`); chosenEvents().forEach((e) => S.stage('workflows', trigName(e), trigYAML(e), `trigger ${trigName(e)} hands ${e.on} to ${name}`)); D.prefs.returnTo = { href: `#/bots/${name}`, label: name }; bw = fresh(); UI.staged(D.pending[D.pending.length - 1]); });
 })();

@@ -92,6 +92,8 @@
       svg.removeAttribute('role'); svg.removeAttribute('aria-label'); svg.setAttribute('aria-hidden', 'true'); svg.setAttribute('focusable', 'false');
       UI.logoSvg = svg.outerHTML; document.querySelectorAll('.logo-slot').forEach((n) => { n.innerHTML = UI.logoSvg; }); }).catch(() => {}); };
   UI.logo = (kind = 'mark', cls = '') => { const L = window.LOGO || {}, mark = `<span class="logo-slot ${cls}">${UI.logoSvg}</span>`;
+    // sign-in and enrolment use the kit's horizontal lockup file (BRAND.md Logo › Files), one per theme
+    if (kind === 'horizontal') return `<span class="logo-h ${cls}"><img class="lh-light" src="assets/logo/logo-horizontal.svg" alt="${UI.esc(L.wordmark || 'conductor')}"><img class="lh-dark" src="assets/logo/logo-horizontal-dark.svg" alt="${UI.esc(L.wordmark || 'conductor')}"></span>`;
     return kind === 'mark' ? mark : `<span class="lockup" role="img" aria-label="${UI.esc(L.wordmark || 'conductor')}">${mark}<span class="wordmark" aria-hidden="true">${UI.esc(L.wordmark || 'conductor')}</span></span>`; };
   UI.sigil = (mbr, size = '') => `<span class="sigil ${size}" style="--sig:${mbr.color}">${mbr.name[0]}${mbr.home === 'live' ? '<span class="live"></span>' : ''}</span>`;
   UI.ago = (iso) => { const s = (Date.now() - new Date(iso)) / 1000; if (s < 60) return Math.max(1, s | 0) + 's'; if (s < 3600) return (s / 60 | 0) + 'm'; if (s < 86400) return (s / 3600 | 0) + 'h'; return (s / 86400 | 0) + 'd'; };
@@ -169,7 +171,30 @@
   let cleanup = [];
   UI.onLeave = (f) => cleanup.push(f);
   UI.every = (ms, f) => { const id = setInterval(f, ms); cleanup.push(() => clearInterval(id)); return id; };
+  /** Workflow figures come from the run records (the same ones Activity lists), never from hand-written numbers:
+      runs24 = runs started in the last 24 hours, fail24 = those that failed, ok = the share that didn't. */
+  UI.syncRunStats = () => { if (!window.D || !D.workflows) return; const since = Date.now() - 864e5;
+    D.workflows.forEach((w) => { const rs = D.runs.filter((r) => r.workflow === w.name && new Date(r.started) >= since), f = rs.filter((r) => r.status === 'fail' || r.status === 'stopped').length;
+      w.runs24 = rs.length; w.fail24 = f; w.ok = rs.length ? (rs.length - f) / rs.length : 1; }); };
+  /** Needs you is derived, on every render, from the things that need a person: a pending approval, a failed run (until
+      dismissed), a run waiting on an answer, a browser or a login waiting on a push approval. Anything shown as "Needs
+      you" anywhere is in this list and in the counts; an item whose cause is resolved leaves it. Fixture items keep
+      their hand-written words; new ones are written from their source. */
+  UI.syncAttention = () => { if (!window.D || !D.attention || !D.proposals) return;
+    const dismissed = new Set(D.dismissed || []), want = [], ago = (iso) => (iso ? UI.ago(iso) : '');
+    D.proposals.filter((p) => p.status === 'pending' && UI.live(p)).forEach((p) => want.push({ kind: 'approval', href: `#/bots/${p.bot}/proposals/${p.id}`, title: `${p.verb} · ${p.id}`, sub: `${p.bot} · case ${p.case}`, plain: p.title || p.summary || p.verb, why: `${p.bot} asks before it does this`, verb: 'Review', age: ago(p.at) }));
+    D.runs.filter((r) => r.status === 'fail' && Date.now() - new Date(r.finished || r.started) < 864e5).forEach((r) => want.push({ kind: 'failed', href: `#/runs/${r.id}`, title: `${r.workflow} failed${r.repo ? ' on ' + UI.runTarget(r) : ''}`, sub: r.error || '', plain: `${r.workflow.replace(/^bot:/, '')} failed${r.repo ? ' on ' + UI.runTarget(r) : ''}`, why: r.error || '', verb: 'Open', age: ago(r.finished || r.started) }));
+    D.runs.filter((r) => r.status === 'wait').forEach((r) => want.push({ kind: 'needs_input', href: `#/runs/${r.id}`, title: `${r.workflow} is waiting on you`, sub: r.detail || '', plain: `${r.workflow.replace(/^bot:/, '')} needs your answer`, why: r.detail || '', verb: 'Answer', age: ago(r.started) }));
+    const waitingOrigins = new Set();
+    (D.browsers || []).filter((b) => b.status === 'wait').forEach((b) => { try { waitingOrigins.add(new URL(b.url).origin); } catch (e) {} want.push({ kind: 'browser', href: `#/browser/${b.id}`, title: `${b.title || 'a sign-in'} · ${b.identity}`, sub: b.url || '', plain: `Approve a sign-in for ${b.identity}`, why: 'Its browser is waiting on you', verb: 'Open', age: '' }); });
+    Object.entries(D.loginMeta || {}).forEach(([n, m]) => { const c = (D.access && D.access.credentials || []).find((x) => x.name === n), origin = c && c.origin; if (m.test && m.test.result === 'needs you' && !waitingOrigins.has(origin)) want.push({ kind: 'browser', href: '#/browser/logins', title: `login ${n} · push approval`, sub: origin || '', plain: `Approve a sign-in on ${origin ? origin.replace(/^https?:\/\//, '') : n}`, why: 'A push approval is waiting on your phone', verb: 'Open', age: ago(m.test.at) }); });
+    const keep = D.attention.filter((a) => want.some((w) => w.href === a.href) && !dismissed.has(a.href));
+    D.attention = keep.concat(want.filter((w) => !dismissed.has(w.href) && !keep.some((a) => a.href === w.href)));
+  };
+  /** A set of runs in words whose parts add up to the whole: "19 went fine · 2 failed · 3 running". */
+  UI.runParts = (rs) => [[rs.filter((r) => r.status === 'ok').length, 'went fine'], [rs.filter((r) => r.status === 'fail' || r.status === 'stopped').length, 'failed'], [rs.filter((r) => r.status === 'run').length, 'running'], [rs.filter((r) => r.status === 'wait').length, 'waiting on you'], [rs.filter((r) => r.status === 'idle').length, 'parked']].filter(([n]) => n).map(([n, t]) => `${n} ${t}`).join(' · ');
   UI.render = (opts = {}) => {
+    UI.syncRunStats(); UI.syncAttention();
     const keep = opts.keepScroll ? $('#main').scrollTop : 0;
     cleanup.forEach((f) => f()); cleanup = [];
     UI.closeMenu && UI.closeMenu();
@@ -184,6 +209,7 @@
       main.scrollTop = keep;
       UI.params = params;
       UI.setNav(r.opts.nav || path.split('/')[0]);
+      document.body.classList.toggle('bare', !!r.opts.bare); // signed out: no rail, top bar or tab bar
       if (r.opts.after) r.opts.after(params, main);
       if (typeof out === 'object' && out && out.after) out.after(main);
       UI.afterRender.forEach((f) => f(main));
@@ -218,7 +244,7 @@
     ['Settings', [['connectors', 'Connections', 'connectors'], ['secrets', 'Secrets', 'secrets'], ['extensions', 'Packs', 'extensions'], ['safety', 'Safety', 'shield'], ['system', 'System', 'settings']]],
   ];
   UI.navGroups = navGroups;
-  UI.pageTitle = () => { const k = (location.hash.replace(/^#\/?/, '') || 'overview').split(/[/?]/)[0]; const map = { live: 'activity', runs: 'activity', teams: 'bots', folders: 'bots', config: 'system', updates: 'system', logs: 'system', security: 'system', more: 'more' }; const key = map[k] || k; const hit = navGroups.flatMap(([, x]) => x).find(([n]) => n === key); return hit ? hit[1] : key === 'more' ? 'More' : 'conductor'; };
+  UI.pageTitle = (nav) => { const k = nav || (location.hash.replace(/^#\/?/, '') || 'overview').split(/[/?]/)[0]; const map = { live: 'activity', runs: 'activity', teams: 'bots', folders: 'bots', config: 'system', updates: 'system', logs: 'system', security: 'system', more: 'more' }; const key = map[k] || k; const hit = navGroups.flatMap(([, x]) => x).find(([n]) => n === key); return hit ? hit[1] : key === 'more' ? 'More' : 'conductor'; };
   UI.navHTML = () => navGroups.map(([g, items]) => `<div class="nav-group">${g ? `<span class="grp">${g}</span>` : ''}<nav class="nav">${items.map(([k, l, ic, c, hot]) => {
     const n = c ? c() : null;
     return `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span class="lbl">${l}</span>${n ? UI.count(n, { hot }) : ''}</a>`;
@@ -230,17 +256,39 @@
   UI.setNav = (k) => {
     k = NAV_ALIAS[k] || k;
     if (UI.navOrigin && location.hash === UI.navOrigin.hash) { k = UI.navOrigin.nav; UI.backHref = UI.navOrigin.back; } else UI.backHref = null;
+    // the phone header names the section on every render (it was set once, at boot, and went stale)
+    const pt = $('#ph-title'); if (pt) pt.textContent = UI.pageTitle(k);
     $$('[data-nav]').forEach((a) => { const on = a.dataset.nav === k; a.classList.toggle('on', on); if (on && location.hash.replace(/^#\/?/, '') === a.dataset.nav) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   };
 
   /* ---------- modal / toast / tooltip ---------- */
+  /* Focus, for every dialog: it opens on the dialog itself (not a button, so Enter can never act by accident; a form
+     then focuses its first field and a destructive confirm its Cancel), Tab stays inside the topmost dialog, and
+     closing returns focus to whatever opened it. */
+  const focusInto = (box) => { if (!box) return; const lab = box.querySelector('h2, h1'); if (lab) { lab.id = lab.id || 'dlg-' + Math.random().toString(36).slice(2, 8); box.setAttribute('aria-labelledby', lab.id); }
+    setTimeout(() => { if (box.isConnected && !box.contains(document.activeElement)) box.focus({ preventScroll: true }); }); };
+  const FOCUSABLE = 'a[href], button:not([disabled]), input:not([type=hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+  UI.topDialog = () => { const all = [...document.querySelectorAll('.palette, #scrim .modal, .drawer-scrim .cdrawer')]; return all.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1)).pop() || null; };
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return; const top = UI.topDialog(); if (!top) return;
+    const els = [...top.querySelectorAll(FOCUSABLE)].filter((x) => x.getClientRects().length && !x.closest('details:not([open]) > :not(summary)')); if (!els.length) { e.preventDefault(); top.focus(); return; }
+    const first = els[0], last = els[els.length - 1], at = document.activeElement;
+    if (!top.contains(at)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
+    else if (e.shiftKey && (at === first || at === top)) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && at === last) { e.preventDefault(); first.focus(); }
+  });
+  // closing however it closes (Esc, Cancel, the scrim, a handler removing it) hands focus back to the opener
+  new MutationObserver((ms) => ms.forEach((m) => m.removedNodes.forEach((n) => { const o = n._opener;
+    if (o && o.isConnected && (!document.activeElement || document.activeElement === document.body || !document.activeElement.isConnected)) o.focus({ preventScroll: true }); }))).observe(document.body, { childList: true });
   UI.modal = (html, opts = {}) => {
     UI.closeModal();
     const s = document.createElement('div');
     s.className = 'scrim'; s.id = 'scrim';
-    s.innerHTML = `<div class="modal ${opts.wide ? 'wide' : ''}" role="dialog" aria-modal="true"><span class="sheet-grip only-phone" aria-hidden="true"></span>${html}</div>`;
+    s.innerHTML = `<div class="modal ${opts.wide ? 'wide' : ''}" role="dialog" aria-modal="true" tabindex="-1"><span class="sheet-grip only-phone" aria-hidden="true"></span>${html}</div>`;
     s.addEventListener('click', (e) => { if (e.target === s && !opts.sticky) UI.dismissModal(); });
+    s._opener = document.activeElement;
     document.body.appendChild(s);
+    focusInto($('.modal', s));
     $$('[data-close]', s).forEach((b) => b.addEventListener('click', () => UI.dismissModal()));
     return s;
   };
@@ -252,19 +300,22 @@
   /** A create-in-place drawer: layered over the current page or modal, which keeps its unsaved state. */
   UI.openDrawer = (html) => {
     const d = document.createElement('div'); d.className = 'drawer-scrim';
-    d.innerHTML = `<aside class="cdrawer" role="dialog" aria-modal="true">${html}</aside>`;
+    d.innerHTML = `<aside class="cdrawer" role="dialog" aria-modal="true" tabindex="-1">${html}</aside>`;
+    d._opener = document.activeElement;
     document.body.appendChild(d);
+    focusInto($('.cdrawer', d));
     d.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); guarded(d, () => d.remove()); }));
     return d;
   };
   UI.closeDrawer = () => { const all = document.querySelectorAll('.drawer-scrim'); if (all.length) { all[all.length - 1].remove(); return true; } return false; };
   /** A toast: an event, past tense and specific. 6 seconds; errors stay until dismissed. s: ok | fail | wait | run | ember. */
-  UI.toast = (title, sub, s = 'ember') => {
+  UI.toast = (title, sub, s = 'ember', action = null) => {
     let box = $('.toasts'); if (!box) { box = document.createElement('div'); box.className = 'toasts'; box.setAttribute('aria-live', 'polite'); document.body.appendChild(box); }
     const t = document.createElement('div'); t.className = 'toast'; t.dataset.s = s === 'ok' ? 'success' : s; t.setAttribute('role', s === 'fail' ? 'alert' : 'status');
     const g = { ok: 'success', fail: 'danger', wait: 'warning', run: 'running', ember: 'needs-you', idle: 'neutral' }[s] || 'info';
     t.innerHTML = `<span class="st" data-s="${s === 'ok' ? 'success' : s}"><i>${UI.glyph(g)}</i></span><div><b>${title}</b>${sub ? `<p>${sub}</p>` : ''}</div>${s === 'fail' ? `<button class="icon-btn toast-x" aria-label="Dismiss">${UI.icon('x')}</button>` : '<span></span>'}`;
     const x = t.querySelector('.toast-x'); if (x) x.addEventListener('click', () => t.remove());
+    if (action) { const ab = document.createElement('button'); ab.type = 'button'; ab.className = 'btn sm ghost toast-act'; ab.textContent = action.label; ab.addEventListener('click', () => { t.remove(); action.fn(); }); t.lastElementChild.replaceWith(ab); }
     box.appendChild(t); if (s !== 'fail') setTimeout(() => t.remove(), 6000); else setTimeout(() => t.remove(), 20000);
   };
   let tip;
@@ -297,7 +348,6 @@
         ${deny ? `<div class="field"><label for="seal-reason">Tell the bot why <span class="opt">optional</span></label><textarea class="textarea" id="seal-reason" rows="2" placeholder="e.g. Not in #incidents; post it to #finance instead."></textarea></div>` : ''}
         <details class="tech"><summary>The exact payload the passkey signs</summary><div class="digest">{ bot: <b>${p.bot}</b>, proposal: <b>${p.id}</b>, decision: <b>${decision}</b>, action_sha256: <b>${p.digest.replace('sha256:', '')}</b>, nonce: <b>7Qx2…f9</b> }</div></details>
         <div class="seal" id="seal">
-          <div class="ring">${UI.icon('passkey', 'key')}<svg class="arc" viewBox="0 0 108 108"><circle class="track" cx="54" cy="54" r="52"/><circle class="fill" cx="54" cy="54" r="53"/></svg></div>
           <div id="seal-msg"><b>Confirm with your passkey</b><div class="muted small">User verification required · this assertion covers only this action</div></div>
         </div>
       </div>
@@ -334,6 +384,7 @@
 
   /* ---------- chrome ---------- */
   UI.refreshChrome = () => {
+    UI.syncAttention();
     const d = D.daemon, need = D.attention.length, running = D.runs.filter((r) => r.status === 'run').length;
     const warn = d.paused || D.connectors.some((c) => !['ok', 'idle'].includes(c.status));
     // the top bar says how things are in words; detail (uptime, version, agents, the address) is one step down
@@ -346,13 +397,13 @@
       <button type="button" class="cell op-btn" data-act="op-menu" aria-label="${D.operator.name}: account and display"><span class="avatar">${D.operator.name.slice(0, 2)}</span></button>`;
     $('#rail-nav').innerHTML = UI.navHTML();
     $('#tabbar').innerHTML = [['overview', 'Home', 'overview'], ['attention', 'Needs you', 'attention', need], ['activity', 'Activity', 'live'], ['bots', 'Bots', 'bots'], ['more', 'More', 'more']].map(([k, l, ic, c]) => `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span>${l}</span>${c ? UI.count(c, { hot: true }) : ''}</a>`).join('');
-    const pt = $('#ph-title'); if (pt) pt.textContent = UI.pageTitle();
     UI.setNav((location.hash.replace(/^#\/?/, '') || 'overview').split('/')[0]);
   };
 
   UI.boot = () => {
     window.D = D;
     document.body.innerHTML = `
+      <a class="skip" href="#main" data-act="skip-main">Skip to the page</a>
       <div class="shell">
         <aside class="rail">
           <a class="brand" href="#/overview" aria-label="conductor: home">${UI.logo('lockup')}</a>
@@ -364,7 +415,7 @@
           <div class="search" role="button" tabindex="0" data-act="palette" aria-label="Search runs, bots and settings">${UI.icon('search')}<span class="lbl">Search runs, bots and settings</span><span class="kbd">⌘K</span></div>
           <div id="strip-cells" style="display:contents"></div>
         </header>
-        <main class="main" id="main"></main>
+        <main class="main" id="main" tabindex="-1"></main>
         <nav class="tabbar" id="tabbar"></nav>
       </div>`;
     UI.initTheme();
@@ -390,11 +441,16 @@
   UI.acts = {};
   // one handler per action name: a second registration is a bug (two screens fighting over one name)
   UI.act = (name, fn) => { if (UI.acts[name]) console.error(`duplicate action handler: ${name}`); UI.acts[name] = fn; };
+  // the skip link lands on the page's decision when there is one (an approval's Approve), else on the page itself
+  UI.act('skip-main', (b, e) => { if (e) e.preventDefault(); const t = $('#main .prop-decide .btn'), m = $('#main'); if (t) t.focus(); else m.focus({ preventScroll: true }); });
+
   const disabledEl = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true';
   document.addEventListener('click', (e) => {
     const el = e.target.closest('[data-act]');
     if (!el) return;
     if (disabledEl(el)) { e.preventDefault(); e.stopPropagation(); UI.flashReason(el); return; }
+    // a double-click is one action: its second click (detail 2) never stages, signs or applies twice
+    if (e.detail > 1 && !el.matches('input, select, textarea, label')) { e.preventDefault(); e.stopPropagation(); return; }
     const fn = UI.acts[el.dataset.act];
     if (fn) { e.preventDefault(); e.stopPropagation(); fn(el, e); }
   });
@@ -474,7 +530,7 @@
   UI.stepup = ({ title, what, purpose = 'step-up', ok = 'Confirm with passkey', danger = false }) => new Promise((res) => {
     const [s, close] = layer(`<div class="modal-head"><div><div class="caps">${purpose} · fresh passkey assertion</div><h2>${title}</h2></div><button class="icon-btn" data-close aria-label="Close">${UI.icon('x')}</button></div>
       <div class="modal-body"><div class="panel inset" style="padding:10px 12px"><div class="caps" style="margin-bottom:4px">You are signing</div><div class="digest">${what}</div></div>
-        <div class="seal" id="su-seal"><div class="ring">${UI.icon('passkey', 'key')}<svg class="arc" viewBox="0 0 108 108"><circle class="track" cx="54" cy="54" r="52"/><circle class="fill" cx="54" cy="54" r="53"/></svg></div>
+        <div class="seal" id="su-seal">
         <div id="su-msg"><b>Confirm with your passkey</b><div class="muted small">User verification required · bound to this request's digest · single use, 2 min</div></div></div></div>
       <div class="modal-foot"><span class="proto-note" style="margin-right:auto">authenticator simulated</span><button class="btn ghost" data-close>Cancel</button><button class="btn ${danger ? 'danger' : 'primary'}" id="su-go">${UI.icon('passkey')}${ok}</button></div>`, { sticky: true });
     let done = false;
@@ -488,7 +544,7 @@
   });
 
   /* ---------- popover menu ---------- */
-  UI.closeMenu = () => { const m = $('#pop-menu'); if (m) m.remove(); };
+  UI.closeMenu = () => { const m = $('#pop-menu'); if (!m) return; const back = m.contains(document.activeElement) && m._opener; m.remove(); if (back && back.isConnected) back.focus({ preventScroll: true }); };
   /** items: [[label, icon, act, attrs?]] — attrs may carry data-* for the act, or UI.off(reason). */
   UI.menu = (anchor, items) => {
     UI.closeMenu();
@@ -501,6 +557,14 @@
     else { m.style.top = Math.min(innerHeight - m.offsetHeight - 8, b.bottom + 4) + 'px'; m.style.left = Math.max(8, Math.min(innerWidth - m.offsetWidth - 8, b.right - m.offsetWidth)) + 'px'; }
     setTimeout(() => document.addEventListener('click', function off(e) { if (!m.contains(e.target)) { UI.closeMenu(); document.removeEventListener('click', off, true); } }, true));
     m.addEventListener('click', (e) => { if (e.target.closest('[data-act]')) setTimeout(UI.closeMenu); });
+    // a menu is a menu to the keyboard too: it takes focus, ↑/↓ (and Home/End) move, Esc or Tab closes it
+    m._opener = anchor; const menuItems = () => [...m.querySelectorAll('[role="menuitem"]')];
+    m.addEventListener('keydown', (e) => { const xs = menuItems(), i = xs.indexOf(document.activeElement);
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); xs[(i + (e.key === 'ArrowDown' ? 1 : xs.length - 1)) % xs.length].focus(); }
+      else if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); (e.key === 'Home' ? xs[0] : xs[xs.length - 1]).focus(); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); UI.closeMenu(); }
+      else if (e.key === 'Tab') UI.closeMenu(); });
+    const firstItem = menuItems()[0]; if (firstItem) firstItem.focus({ preventScroll: true });
   };
 
   /* ---------- generated forms ----------
@@ -524,7 +588,9 @@
       case 'bool': input = `<label class="row small" style="min-height:30px"><input type="checkbox" class="cbx" id="${id}" data-k="${fd.k}" ${val ? 'checked' : ''}> ${fd.on || 'on'}</label>`; break;
       case 'enum': case 'host': {
         if (fd.type === 'host') fd = Object.assign({ create: 'host', createLabel: 'New host' }, fd);
-        const opts = fd.type === 'host' ? [''].concat(S.view().hosts.map((h) => h.name)) : (fd.req ? [] : ['']).concat(fd.options || []);
+        // one empty choice at most: an optional field adds "— none —" only when its options don't already name one ("top level")
+        const hasEmpty = (fd.options || []).some((o) => (Array.isArray(o) ? o[0] : o) === '');
+        const opts = fd.type === 'host' ? [''].concat(S.view().hosts.map((h) => h.name)) : (fd.req || hasEmpty ? [] : ['']).concat(fd.options || []);
         input = `<select class="select mono" id="${id}" data-k="${fd.k}" ${UI.pickerAttrs(fd)}>${UI.createOpt(fd)}${opts.map((o) => { const [ov, ol] = Array.isArray(o) ? o : [o, o === '' ? '— none —' : o]; return `<option value="${UI.esc(ov)}"${String(ov) === String(val === '' && fd.def != null && fd.type !== 'host' ? fd.def : val) ? ' selected' : ''}>${UI.esc(ol)}</option>`; }).join('')}</select>`; break;
       }
       case 'seg': input = `<div class="seg" role="group" data-segk="${fd.k}">${fd.options.map((o) => { const [ov, ol, dis] = Array.isArray(o) ? o : [o, o]; const on = String(ov) === String(val === '' ? fd.def : val); return `<button type="button" data-v="${UI.esc(ov)}" ${dis ? UI.off(dis) : 'data-act="form-seg"'} aria-pressed="${on}" class="${on ? 'on' : ''}">${ol}</button>`; }).join('')}</div><input type="hidden" id="${id}" data-k="${fd.k}" value="${UI.esc(val === '' ? fd.def ?? '' : val)}">`; break;

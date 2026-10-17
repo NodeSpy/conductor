@@ -48,7 +48,7 @@
     v.teams.forEach((t) => add('team', t.name, go('#/teams/' + t.name), { icon: 'members', words: t.cfg && t.cfg.description }));
     (UI.allFolders ? UI.allFolders(true) : []).forEach((f) => add('folder', f, go('#/folders/' + encodeURIComponent(f)), { icon: 'folder' }));
     v.workflows.forEach((w) => add('workflow', w.name, go('#/workflows/' + w.name), { icon: 'workflows', hint: w.source === 'config' ? 'your config' : w.source, words: (w.yaml || '').slice(0, 200) }));
-    D.runs.forEach((r) => add('run', `${r.id} · ${r.workflow}${r.repo ? ' · ' + UI.runTarget(r) : ''}`, go(`#/${r.status === 'run' ? 'live' : 'runs'}/${r.id}`), { icon: 'runs', hint: r.status, words: `${r.error || ''} ${r.trigger}` }));
+    D.runs.forEach((r) => add('run', `${r.id} · ${r.workflow}${r.repo ? ' · ' + UI.runTarget(r) : ''}`, go(`#/runs/${r.id}`), { icon: 'runs', hint: UI.runWord(r.status), words: `${r.error || ''} ${r.trigger}` }));
     v.connectors.forEach((c) => { add('connector', `${c.name} (${c.use})`, go('#/connectors/connectors'), { icon: 'link' }); const d = SCHEMA.connectors[c.use]; if (d) Object.entries(d.verbs || {}).forEach(([vn, vd]) => add('verb', `${c.name}.${vn}`, go('#/safety'), { icon: 'zap', hint: vd.label, words: vd.label })); });
     (v.vaults || []).forEach((x) => add('vault', x.name, go('#/secrets/vaults'), { icon: 'lock', hint: x.kind || x.type || '' }));
     (v.secrets || []).forEach((x) => add('secret', `${x.vault}/${x.key}`, go('#/secrets'), { icon: 'lock', hint: x.alias ? 'alias ' + x.alias : '', words: x.alias }));
@@ -69,6 +69,7 @@
     const all = index();
     const el = document.createElement('div');
     el.innerHTML = `<div class="scrim" id="pal-scrim" style="place-items:start center"></div><div class="palette" role="dialog" aria-label="Command line"><input placeholder="Type a command, a name, a run id, a config key…" aria-label="Search or run a command" autocomplete="off" spellcheck="false"><div class="res" role="listbox"></div><div class="pal-foot muted tiny"><span><span class="kbd">↑↓</span> move</span><span><span class="kbd">↵</span> open or run</span><span><span class="kbd">esc</span> close</span><span><span class="kbd">?</span> all shortcuts</span></div></div>`;
+    el._opener = document.activeElement; // closing hands focus back (ui.js)
     document.body.appendChild(el);
     const inp = el.querySelector('input'), res = el.querySelector('.res'); let sel = 0, list = search(all, '');
     const draw = () => { const q = inp.value.trim();

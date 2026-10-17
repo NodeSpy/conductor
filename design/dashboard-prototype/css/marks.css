@@ -36,9 +36,11 @@
 @media (prefers-reduced-motion: reduce) { .glyph.spin, .st[data-s="run"] i svg { animation: none; } }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--s-solid, var(--color-status-neutral-solid)); display: inline-block; flex: none; }
 
-/* ---- label: a quiet word in a hairline box; status labels take the state's ink, never a fill ---- */
-.tag { display: inline-flex; align-items: center; gap: var(--space-1); min-height: 22px; padding: 0 var(--space-1_5); border-radius: var(--radius-sm); border: var(--border-width) solid var(--color-border-default); font: var(--type-caption); font-weight: var(--font-weight-medium); color: var(--color-text-secondary); background: transparent; white-space: nowrap; letter-spacing: 0; vertical-align: middle; }
-.tag[data-s] { color: var(--s-fg); border-color: var(--s-border); }
+/* ---- label: a quiet word in plain text (no box, no fill: the status rule allows no capsules); labels in a row are
+   separated by a middot; a status label takes the state's ink ---- */
+.tag { display: inline-flex; align-items: center; gap: var(--space-1); padding: 0; border: 0; border-radius: 0; font: var(--type-caption); font-weight: var(--font-weight-regular); color: var(--color-text-secondary); background: transparent; white-space: nowrap; letter-spacing: 0; vertical-align: baseline; }
+.tag + .tag::before { content: "·"; margin-right: var(--space-1); color: var(--color-text-tertiary); }
+.tag[data-s] { color: var(--s-fg); }
 .tag svg { width: 13px; height: 13px; flex: none; }
 .tag.mono { font-family: var(--font-family-mono); font-size: var(--type-code-s-size); font-weight: var(--font-weight-regular); }
 .tag.plain { border-color: transparent; padding: 0; min-height: 0; }
@@ -78,7 +80,7 @@ tr[data-row] > td:first-child, .item[data-row], .frow[data-row] { box-shadow: in
 .tag.owner { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .tag.owner.op { color: var(--color-text-primary); }
 .tag.origin.builtin, .tag.origin.official { color: var(--color-text-secondary); }
-.tag.origin.custom { color: var(--color-status-warning-fg); border-color: var(--color-status-warning-border); }
+.tag.origin.custom { color: var(--color-text-secondary); }
 .tag.kind-tag { color: var(--color-text-primary); font-weight: var(--font-weight-semibold); }
 .tag.kind-tag svg { color: var(--color-icon-default); }
 .tag.who svg { width: 12px; height: 12px; }

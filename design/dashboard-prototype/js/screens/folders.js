@@ -32,7 +32,7 @@
   };
   UI.wfsIn = (f, deep = true) => S.view().workflows.filter((w) => { const x = UI.folderOfWf(w); return deep ? within(x, f) && (!f || x) : x === f; });
   const lastRun = (name) => D.runs.find((r) => r.workflow === name);
-  UI.wfRoll = (ws) => { const runs = ws.reduce((a, w) => a + (w.runs24 || 0), 0), ok = runs ? ws.reduce((a, w) => a + (w.runs24 || 0) * (w.ok == null ? 1 : w.ok), 0) / runs : 1, failing = ws.filter((w) => { const r = lastRun(w.name); return r && (r.status === 'fail' || r.status === 'stopped'); }).length; return { n: ws.length, runs, ok: Math.round(ok * 100), failing }; };
+  UI.wfRoll = (ws) => { const runs = ws.reduce((a, w) => a + (w.runs24 || 0), 0), ok = runs ? ws.reduce((a, w) => a + (w.runs24 || 0) * (w.ok == null ? 1 : w.ok), 0) / runs : 1, failing = ws.filter((w) => w.fail24).length; return { n: ws.length, runs, ok: Math.round(ok * 100), failing }; };
   const prefixes = (p) => p.split('/').map((_, i, a) => a.slice(0, i + 1).join('/'));
   UI.allFolders = (staged = true, botsOnly = false) => {
     const set = new Set();
@@ -155,20 +155,20 @@
     const phone = innerWidth <= 720, base = '#/folders/' + enc(path);
     const bots = botsUnder(n), teams = D.teams.map((t) => t.name).filter((t) => UI.folderOfTeam(t) && within(UI.folderOfTeam(t), path)), ws = UI.wfsIn(path), wr = UI.wfRoll(ws);
     const pend = bots.reduce((a, b) => a + pendingOf(b), 0), live = bots.filter((b) => (M(b) || {}).home === 'live').length;
-    const fails = ws.map((w) => [w, lastRun(w.name)]).filter(([, r]) => r && (r.status === 'fail' || r.status === 'stopped'));
-    const att = D.attention.filter((a) => { const b = UI.botOfHref(a.href); return b && bots.includes(b); });
-    const props = D.proposals.filter((p) => p.status === 'pending' && UI.live(p) && bots.includes(p.bot) && !att.some((a) => (a.sub || '').includes(p.id))).map((p) => ({ s: 'wait', title: `${p.verb || p.kind} · ${p.bot}`, sub: `${p.id} · ${p.summary || p.tier}`, href: `#/bots/${p.bot}/proposals` }));
-    const needs = att.concat(props).map((a) => `<a class="item click" href="${a.href}">${st(a.s === 'ember' ? 'wait' : a.s || 'wait', '')}<div class="grow small"><b>${esc(a.title)}</b><div class="muted tiny ellipsis">${esc(a.sub || '')}</div></div><span class="chev">${icon('chev')}</span></a>`)
-      .concat(fails.map(([w, r]) => `<a class="item click" href="#/runs/${r.id}">${st('fail', '')}<div class="grow small"><b>${esc(w.name)} failed</b><div class="muted tiny ellipsis">${esc(r.error || 'its last run failed')}</div></div><span class="chev">${icon('chev')}</span></a>`));
-    const stat = (k, v, d, hot) => `<div class="panel stat${hot ? ' hot' : ''}"><span class="k">${k}</span><span class="v">${v}</span>${d ? `<span class="d">${d}</span>` : ''}</div>`;
+    // what needs you here is the global Needs you list, narrowed to this folder's bots and workflows (one source, one
+    // row anatomy, the same marks), so the folder and the global list can never disagree
+    const wnames = new Set(ws.map((w) => w.name)), mine = (a) => { const b = UI.botOfHref(a.href); if (b) return bots.includes(b); const rm = String(a.href).match(/#\/runs\/([^/?]+)/), r = rm && D.runs.find((x) => x.id === rm[1]); return !!(r && (wnames.has(r.workflow) || bots.includes(UI.botOfRun(r)))); };
+    const att = D.attention.filter(mine);
+    const needs = att.length ? `<ul class="dl-list dl-needs">${att.slice(0, 5).map((a, i) => UI.needItem(a, i)).join('')}</ul>${att.length > 5 ? `<p class="dl-foot-note"><a class="dl-link" href="#/attention">${att.length - 5} more need you →</a></p>` : ''}` : '<p class="dl-sub">Nothing in this folder needs you.</p>';
+    const stat = (k, v, d) => `<div class="panel stat"><span class="k">${k}</span><span class="v">${v}</span>${d ? `<span class="d">${d}</span>` : ''}</div>`;
     const body = tab === 'workflows' ? (UI.wfTable ? UI.wfTable(ws, { folder: path }) : '')
       : tab === 'teams' ? `<div class="panel"><div class="list">${teams.map((t) => { const c = cfgOf('teams', t, true), bs = D.bots.filter((b) => cfgOf('bots', b.name, true).team === t); return `<a class="item click" href="#/teams/${t}"><span class="fic team-ic">${icon('members')}</span><div class="grow"><b>${esc(t)}</b><div class="muted tiny">${bs.length} bot${bs.length === 1 ? '' : 's'}${c.lead ? ' · lead ' + esc(c.lead) : ''} · ${esc(UI.folderOfTeam(t))}</div></div><span class="chev">${icon('chev')}</span></a>`; }).join('') || '<div class="empty small">No teams in this folder.</div>'}</div></div>`
       : `<div class="panel ftree-panel"><div class="ftree" id="ftree" role="tree" data-path="${esc(path)}">${phone ? levelHTML(n) : `<div class="frow rootdrop" data-drop="${esc(path)}" style="--d:0"><span class="fic">${icon('folder')}</span><span class="muted small">${esc(path)}</span></div>${treeHTML(n)}`}</div></div>`;
     return `<div class="page">
       ${UI.head(esc(leaf(path)), { crumbs: UI.folderCrumbs(parentOf(path)), sub: `folder ${esc(path)} · organization only`, actions: `<button class="btn" data-act="f-new" data-parent="${esc(path)}">${icon('folder')}New folder inside</button><button class="btn ghost" data-act="f-menu" data-path="${esc(path)}" aria-label="Folder actions">${icon('more')}</button>` })}
       ${movesCallout()}
-      <div class="grid g4 stats folder-stats">${stat('Bots', bots.length, `${live} live · ${teams.length} team${teams.length === 1 ? '' : 's'}`)}${stat('Workflows', wr.n, `${wr.runs} runs 24h · ${wr.ok}% ok`)}${stat('Failing', wr.failing, wr.failing ? 'last run failed' : 'none', wr.failing)}${stat('Approvals', pend, 'pending in this folder', pend)}</div>
-      <div class="panel" style="margin:14px 0"><div class="panel-head"><span class="attn-mark">${icon('attention')}</span><h3>Needs you here</h3><span class="muted small">${needs.length} item${needs.length === 1 ? '' : 's'} in ${esc(path)}</span></div><div class="list">${needs.join('') || '<div class="item small muted">Nothing in this folder needs you.</div>'}</div></div>
+      <div class="grid g4 stats folder-stats">${stat('Bots', bots.length, `${live} live · ${teams.length} team${teams.length === 1 ? '' : 's'}`)}${stat('Workflows', wr.n, `${wr.runs} runs 24h · ${wr.ok}% ok`)}${stat('Failing', wr.failing, wr.failing ? `${wr.failing === 1 ? 'a workflow' : 'workflows'} with a failed run today` : 'none today')}${stat('Approvals', pend, 'pending in this folder')}</div>
+      <section class="dl-card folder-needs" style="margin:14px 0"><header class="dl-ch"><h2>Needs you here</h2>${att.length ? UI.count(att.length, { hot: true }) : ''}</header>${needs}</section>
       ${UI.tabs([['bots', 'Bots', base + '/bots', bots.length], ['teams', 'Teams', base + '/teams', teams.length], ['workflows', 'Workflows', base + '/workflows', ws.length]], tab)}
       ${body}
       <div class="small muted" style="margin-top:12px">Folders are organization only: no permissions, defaults or behavior.</div></div>`;

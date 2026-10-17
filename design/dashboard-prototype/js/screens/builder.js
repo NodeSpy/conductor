@@ -43,7 +43,7 @@
       <td data-l="on" class="small dim${UI.humanOn(w.on) === (w.on || '') ? ' mono' : ''}">${esc(UI.humanOn(w.on))}</td>
       <td data-l="folder">${r.folder ? `<a class="small link-plain folder-link muted" href="#/folders/${enc(r.folder)}/workflows">${esc(r.folder)}</a>` : '<span class="muted small">top level</span>'}</td>
       <td data-l="owner">${UI.label(esc(String(OWNER[r.owner](w)).replace(/<[^>]+>/g, '')), { cls: 'owner ' + (r.owner === 'config' ? 'op' : 'pack') })}</td>
-      <td data-l="last 24 hours" class="num">${w.runs24 && w.ok < 0.9 ? UI.statusMark('wait', `${Math.round(w.ok * w.runs24)} of ${w.runs24} fine`) : `<span class="muted">${w.runs24 ? `${w.runs24} run${w.runs24 === 1 ? '' : 's'}` : 'no runs'}</span>`}</td>${UI.usageOn() ? `<td data-l="usage" class="small">${UI.provSet(UI.wfProv(w.name), { nosrc: true })}</td>` : ''}
+      <td data-l="last 24 hours" class="num">${w.fail24 ? `${UI.statusMark('fail', `${w.fail24} failed`)} <span class="muted">of ${w.runs24}</span>` : `<span class="muted">${w.runs24 ? `${w.runs24} run${w.runs24 === 1 ? '' : 's'}` : 'no runs'}</span>`}</td>${UI.usageOn() ? `<td data-l="usage" class="small">${UI.provSet(UI.wfProv(w.name), { nosrc: true })}</td>` : ''}
       <td class="num nowrap wl-acts">${w.fresh ? '' : `<button class="btn sm ghost" data-act="wf-run" data-name="${w.name}">${icon('play')}Run</button>`}<button class="icon-btn" data-act="wl-more" data-name="${esc(w.name)}" aria-label="More for ${esc(w.name)}">${icon('more')}</button></td></tr>`; }).join('')}
     <tr class="empty-row${rows.some(vis) ? ' hidden' : ''}" id="${opts.folder != null ? 'fwl-empty' : 'wl-empty'}"><td colspan="9">No workflow matches.</td></tr></tbody></table></div>`;
   };
@@ -559,10 +559,10 @@
         <button class="btn secondary wide" data-act="wf-test-all" ${B.ev ? '' : UI.off('Choose an event first')}>${icon('play')}Run a test</button></section>`; }
   function trySide() {
     const v = B.value || {}, srcs = WF.sources(v), evs = SCHEMA.events.filter((x) => srcs.some((so) => so.on === x.on) || x.on === 'manual');
-    const runs = D.runs.filter((r) => r.workflow === B.name), ok = runs.filter((r) => r.status === 'ok').length, fail = runs.filter((r) => r.status === 'fail' || r.status === 'stopped').length, parked = runs.filter((r) => r.status === 'idle').length;
+    const runs = D.runs.filter((r) => r.workflow === B.name);
     const budget = S.getPath(v, 'policy.budget.max_cost_usd');
     return `${tryCard()}
-      <section class="dl-card"><header class="dl-ch"><h2>At a glance</h2></header>${UI.facts([budget != null ? ['Budget', `Up to $${Number(budget).toFixed(2)} per run`] : null, ['Recent runs', runs.length ? `${runs.length} · ${ok} fine${fail ? ` · ${fail} failed` : ''}${parked ? ` · ${parked} parked` : ''}` : 'none yet'], ['Owner', B.owner === 'pack' ? `the pack ${esc(B.pack)}` : B.owner === 'bot' ? 'conductor (for the bot)' : 'your config']])}</section>
+      <section class="dl-card"><header class="dl-ch"><h2>At a glance</h2></header>${UI.facts([budget != null ? ['Budget', `Up to $${Number(budget).toFixed(2)} per run`] : null, ['Recent runs', runs.length ? `${runs.length}: ${UI.runParts(runs)}` : 'none yet'], ['Owner', B.owner === 'pack' ? `the pack ${esc(B.pack)}` : B.owner === 'bot' ? 'conductor (for the bot)' : 'your config']])}</section>
       <section class="dl-card wfb-side-card"><header class="dl-ch"><h2>Config file</h2><span class="dl-sp"></span><a class="dl-link" href="#" data-act="wf-tab" data-v="config">Open full size</a></header><aside class="wfb-side" id="wfb-side">${sideHTML()}</aside></section>`;
   }
   function tabBody() {

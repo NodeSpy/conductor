@@ -354,11 +354,11 @@
       fields: [{ k: 'on', type: 'enum', req: true, label: 'When this happens', options: evs.map(([v, l]) => [v, l]) }, { k: 'repos', type: 'list', label: 'Only these repos (GitHub events)', ph: 'acme/api', show: (v) => /^gh\./.test(v.on || '') }],
       submit: 'Review change', submitIcon: 'check',
       onSubmit: (v) => { const tn = `${name}-${v.on.split('.')[1].replace(/_/g, '-')}`; const y = [`name: ${tn}`, `on: ${v.on}`, ...((v.repos || []).length ? [`filter: { repo: [${v.repos.join(', ')}] }`] : []), 'steps:', '  - id: tell', `    bot: { name: ${name}, title: "{{.title}}" }`].join('\n') + '\n'; D.prefs.returnTo = { href: `#/bots/${name}`, label: name }; UI.staged(S.stage('workflows', tn, y, `trigger ${tn} hands ${v.on} to ${name}`)); } }); });
-  function shell(m, tab, body) {
+  function shell(m, tab, body, cls = '') {
     const pc = pending(m.name).length, w = UI.botWatches(m.name), cases = D.cases.filter((c) => c.bot === m.name && c.status === 'open').length;
     const watchNote = !w.triggers.length && !w.sweep ? `<div class="callout wait watch-empty" style="margin-top:14px">${UI.statusMark('wait', `<b>${m.name} isn't watching anything yet.</b>`)} <span class="grow">Nothing hands it events and it doesn't check in on its own, so it only answers when you chat with it.</span><button class="btn sm primary" data-act="bot-watch-add" data-m="${m.name}">${icon('plus')}Choose what it watches</button></div>` : '';
     const T = [['proposals', 'Approvals', pc, true], ['chat', 'Chat'], ['cases', 'Cases', cases], ['memory', 'Memory'], ['access', 'What it can do'], ['settings', 'Settings']];
-    return `<div class="page dl-page">${hero(m)}${watchNote}
+    return `<div class="page dl-page${cls ? ' ' + cls : ''}">${hero(m)}${watchNote}
       <nav class="dl-tabs" role="tablist">${T.map(([k, l, n, hot]) => `<a href="#/bots/${m.name}/${k}" role="tab" class="${k === tab ? 'on' : ''}"${k === tab ? ' aria-current="page" aria-selected="true"' : ''}>${l}${n ? ` <em class="${hot ? 'hot' : ''}">${n}</em>` : ''}</a>`).join('')}</nav>
       <div class="dl-tab-body">${body}</div></div>`;
   }
@@ -434,7 +434,8 @@
   function proposals(m, sub) {
     const list = props(m.name);
     const p = sub && list.find((x) => x.id === sub);
-    if (p) return shell(m, 'proposals', proposalDetail(m, p));
+    // on a phone the approval stands on its own (no bot header or tabs above it): the title, why and effect come first
+    if (p) return shell(m, 'proposals', proposalDetail(m, p), 'prop-page');
     const vis = list.filter((x) => pv.f === 'all' || (pv.f === 'pending' ? x.status === 'pending' : x.status !== 'pending'));
     const row = (x) => { const pend = x.status === 'pending';
       return `<li class="dl-need proposal-row ${x.status}"><a class="dl-need-a" href="#/bots/${m.name}/proposals/${x.id}"><span class="dl-ng">${UI.mark(PS[x.status] || 'idle', { lg: true, label: pend ? 'Needs you' : x.status })}</span>
@@ -509,7 +510,8 @@
     const can = `<section class="dl-card dl-can"><header class="dl-ch"><h2>What ${esc(m.name)} can do</h2></header>${[['Does on its own', 'ok', x.own], ['Asks you first', 'ember', x.asks], ['Never', 'fail', x.never]].map(([h, s2, xs]) => `<div class="cang" data-s="${s2}"><h3>${UI.mark(s2)}${h}</h3><ul>${xs.map((i) => `<li>${plain(i)}</li>`).join('') || '<li class="dl-sub">nothing</li>'}</ul></div>`).join('')}</section>`;
     const tl = `<section class="dl-card"><header class="dl-ch"><h2>Timeline</h2></header><ol class="dl-story"><li><span class="sg">${UI.mark('ok')}</span><div><b>Proposed by ${esc(m.name)}</b><span>${p.cls === 'event' ? 'while handling the event' : `in case ${p.case}`}</span></div><span class="t">${UI.agoText(p.at)}</span></li>
       <li><span class="sg">${UI.mark(pend ? 'ember' : PS[p.status] || 'idle')}</span><div><b>${pend ? 'Waiting for your decision' : decidedWord(p)}</b><span>${pend && p.expires ? `expires in ${UI.humanSpan(p.expires)}` : esc(p.approver || '')}</span></div><span class="t">${pend ? 'now' : ''}</span></li></ol></section>`;
-    return `<div class="dl-crumbs" style="margin-top:16px"><a href="#/bots/${m.name}/proposals">${icon('chev', 'flip')}All approvals</a></div><div class="dl-cols${shaped && tab === 'tech' ? ' prop-wide' : ''}" style="margin-top:6px"><div class="dl-col-main">${card}</div><div class="dl-col-side">${can}${tl}</div></div>`;
+    const from = UI.navOrigin && UI.navOrigin.hash === location.hash ? UI.navOrigin.nav : '', back = from === 'attention' ? ['#/attention', 'Needs you'] : from === 'overview' ? ['#/overview', 'Home'] : [`#/bots/${m.name}/proposals`, `${esc(m.name)}’s approvals`];
+    return `<div class="dl-crumbs prop-crumbs" style="margin-top:16px"><a class="prop-back-wide" href="#/bots/${m.name}/proposals">${icon('chev', 'flip')}All approvals</a><a class="prop-back-phone" href="${back[0]}">${icon('chev', 'flip')}${back[1]}</a></div><div class="dl-cols${shaped && tab === 'tech' ? ' prop-wide' : ''}" style="margin-top:6px"><div class="dl-col-main">${card}</div><div class="dl-col-side">${can}${tl}</div></div>`;
   }
   const decidedWord = (p) => (p.status === 'executed' || String(p.status).startsWith('approved') ? 'Approved' : p.status === 'shadow' ? 'Shadow: not for approval' : p.status[0].toUpperCase() + p.status.slice(1));
   UI.act('plan-jump', (b) => { const el = document.getElementById(b.dataset.l); if (el) el.scrollIntoView({ block: 'center' }); });

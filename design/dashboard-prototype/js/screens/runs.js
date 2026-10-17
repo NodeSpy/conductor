@@ -77,13 +77,13 @@
     if (!G.all.length) return `<tbody><tr><td colspan="${cols() + 1}" class="dl-empty-row">No run matches these filters. <button class="link" data-act="act-clear">Clear filters</button></td></tr></tbody>`;
     return `${G.attn.length ? `<tbody class="g-attn">${head('g-attn', 'Needs attention', G.attn.length)}${G.attn.map((r) => row(r, true)).join('')}</tbody>` : ''}
       ${G.run.length ? `<tbody class="g-live">${head('g-live', 'Running now', G.run.length)}${G.run.map((r) => row(r)).join('')}</tbody>` : ''}
-      ${G.done.length ? `<tbody class="g-done">${head('g-done', 'Finished', G.done.length)}${shown.map((r) => row(r)).join('')}${more > 0 ? `<tr class="more"><td colspan="${cols() + 1}"><button class="btn sm secondary" data-act="act-more" id="act-more">Show ${Math.min(PAGE, more)} more of ${more}</button></td></tr>` : ''}</tbody>` : ''}`;
+      ${G.done.length ? `<tbody class="g-done">${head('g-done', 'Finished', G.done.length)}${shown.map((r) => row(r)).join('')}${more > 0 ? `<tr class="more"><td colspan="${cols() + 1}"><button class="btn sm secondary" data-act="act-more" id="act-more">Show ${Math.min(PAGE, more)} more (${G.done.length} in all)</button></td></tr>` : ''}</tbody>` : ''}`;
   }
   function phoneBody(G) {
     const li = (r, rich) => `<li class="${rich ? 'attn' : ''}"${rich ? ` data-s="${edge(r)}"` : ''}>${cbx(r)}<a href="#/runs/${r.id}"><span class="dl-nt"><b>${runName(r)}</b>${rich ? `<span class="reason">${reason(r)}</span>` : ''}${statusCell(r)}</span><span class="dl-age">${UI.agoText(r.started).replace(' ago', '')}</span></a></li>`;
-    const grp = (t, xs, rich) => (xs.length ? `<h3 class="ph-g">${t}<span>${xs.length}</span></h3><ul class="dl-list dl-runs-phone">${xs.map((r) => li(r, rich)).join('')}</ul>` : '');
+    const grp = (t, xs, rich, total = xs.length) => (xs.length ? `<h3 class="ph-g">${t}<span>${total}</span></h3><ul class="dl-list dl-runs-phone">${xs.map((r) => li(r, rich)).join('')}</ul>` : '');
     const shown = G.done.slice(0, av.limit), more = G.done.length - shown.length;
-    return grp('Needs attention', G.attn, true) + grp('Running now', G.run) + grp('Finished', shown) + (more > 0 ? `<button class="btn sm secondary" data-act="act-more">Show ${Math.min(PAGE, more)} more of ${more}</button>` : '');
+    return grp('Needs attention', G.attn, true) + grp('Running now', G.run) + grp('Finished', shown, false, G.done.length) + (more > 0 ? `<button class="btn sm secondary" data-act="act-more">Show ${Math.min(PAGE, more)} more (${G.done.length} in all)</button>` : '');
   }
   const theadHTML = (G) => (av.sel.size ? `<thead class="selecting"><tr><th colspan="${cols() + 1}">${selBar(G)}</th></tr></thead>`
     : `<thead><tr><th class="sel"><input type="checkbox" class="cbx" data-act="act-sel-all" aria-label="Select every run shown"></th><th>Run</th><th>Status</th><th>When</th><th class="num">Took</th>${UI.usageOn() ? `<th class="num">${UI.measHead()}</th>` : ''}<th class="id-h">ID</th><th></th></tr></thead>`);
@@ -102,7 +102,7 @@
     const fails = G.all.filter((r) => (r.status === 'fail' || r.status === 'stopped') && (Date.now() - new Date(r.started)) / 60000 <= span);
     return `<section class="dl-card dl-strip"><header class="dl-ch"><h2>Runs per ${unit}</h2><span class="dl-sub">${av.since ? `the last ${label}` : 'the last 7 days'}</span></header>
       <svg class="dl-hours" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Runs per ${unit}: ${fails.length} failed">${bars}<line x1="0" x2="${w}" y1="${h - 17}" y2="${h - 17}" class="hb-axis"/></svg><div class="dl-axis"><span>${av.since ? `${label.replace(/^hour$/, '1 hour')} ago` : '7 days ago'}</span><span>now</span></div>
-      ${fails.length ? `<p class="dl-foot-note">${UI.mark('fail')}<span>${fails.length} failed: ${fails.slice(0, 4).map((r) => `<a class="dl-link" href="#/runs/${r.id}">${esc(r.workflow.replace(/^bot:/, ''))} at ${UI.hm(r.started)}</a>`).join(', ')}${fails.length > 4 ? ` and ${fails.length - 4} more` : ''}</span></p>` : `<p class="dl-foot-note">${UI.mark('ok')}Nothing failed.</p>`}</section>`;
+      ${fails.length ? `<p class="dl-foot-note">${UI.mark('fail')}<span>${fails.length} failed: ${fails.slice(0, 4).map((r) => `<a class="dl-link" href="#/runs/${r.id}">${esc(r.workflow.replace(/^bot:/, ''))} at ${UI.failedAt(r)}</a>`).join(', ')}${fails.length > 4 ? ` and ${fails.length - 4} more` : ''}</span></p>` : `<p class="dl-foot-note">${UI.mark('ok')}Nothing failed.</p>`}</section>`;
   }
   const chip = (key, icon_, label, opts) => `<label class="dl-chip${av[key] ? ' on' : ''}">${icon(icon_)}<span class="sr-only">${label}</span><select data-on-change="act-f" data-k="${key}" aria-label="${label}">${opts.map(([v, l]) => `<option value="${esc(v)}"${String(av[key]) === String(v) ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
   function activityPage() {
@@ -215,7 +215,9 @@
   UI.act('run-step', (b) => { dv.sel[b.dataset.run] = b.dataset.step; if (b.dataset.tab) dv.tab = b.dataset.tab; UI.rerender(); });
   UI.act('run-pick', (b) => { dv.sel[b.dataset.run] = b.dataset.step; dv.tab = b.dataset.tab || dv.tab; UI.rerender(); });
   UI.act('run-record', (b) => { const r = D.runs.find((x) => x.id === b.dataset.run); UI.download(`${r.id}.json`, JSON.stringify(Object.assign({}, r, { steps: UI.runRecord(r).steps.map((s) => ({ id: s.id, status: s.status, started_offset_ms: s.t0, duration_ms: s.ms, inputs: s.inputs, outputs: s.outputs })) }), null, 2)); UI.toast('Downloaded the run record', `${r.id}.json · signed, scrubbed`, 'ok'); });
-  UI.act('run-dismiss', (b) => { const href = '#/runs/' + b.dataset.run; const n = D.attention.length; D.attention = D.attention.filter((a) => a.href !== href); S.save(); UI.refreshChrome(); UI.toast(n > D.attention.length ? 'Dismissed from Needs you' : 'Not in Needs you', 'the run and its record stay in history', 'ok'); });
+  // dismissing is reversible, so it asks nothing; its toast carries the Undo
+  UI.act('run-dismiss', (b) => { const href = '#/runs/' + b.dataset.run, was = D.attention.some((a) => a.href === href); D.dismissed = [...new Set((D.dismissed || []).concat(href))]; S.save(); UI.rerender();
+    UI.toast(was ? 'Dismissed from Needs you' : 'Not in Needs you', 'the run and its record stay in Activity', 'ok', was ? { label: 'Undo', fn: () => { D.dismissed = D.dismissed.filter((h) => h !== href); S.save(); UI.rerender(); } } : null); });
 
   /* ---------- compare two runs of a workflow: step by step, then the chosen step's outputs side by side ---------- */
   const cv = { step: null };
@@ -248,7 +250,7 @@
   /* ---------- Needs you: the Overview's list, every item, then the quiet things ---------- */
   UI.route('attention', () => `<div class="page dl-page">
     <div class="dl-phead"><div><h1>Needs you</h1></div>${UI.folderChip()}</div>
-    <div class="dl-cols"><div class="dl-col-main"><section class="dl-card">${UI.attentionList(0)}</section></div>
+    <div class="dl-cols"><div class="dl-col-main"><section class="dl-card">${UI.attentionList(/[?&]all=1/.test(location.hash) ? 1e9 : 0)}</section></div>
       <div class="dl-col-side">
         ${(D.fyi || []).length ? `<section class="dl-card"><header class="dl-ch"><h2>For your information</h2></header><ul class="dl-list">${D.fyi.map((a) => `<li><a class="dl-row-a" href="${a.href}"><span class="dl-ng">${icon(/update/i.test(a.title + a.plain) ? 'updates' : 'shield')}</span><span class="dl-nt"><b>${esc(a.plain)}</b><span class="dl-why">${esc(a.why)}</span></span></a></li>`).join('')}</ul></section>` : ''}
         <section class="dl-card"><header class="dl-ch"><h2>Tell me in this browser</h2></header>

@@ -122,10 +122,12 @@ hr.rule { border: 0; border-top: var(--border-width) solid var(--color-border-su
 .section-title .caps { margin-left: auto; }
 
 /* page entrance: one quiet rise; nothing moves after an action */
-.page > * { animation: rise var(--motion-duration-slow) var(--motion-easing-out) both; }
+/* transform only: content is never hidden waiting on the animation (WebKit can start it seconds late, which left pages
+   blank at opacity 0) */
+.page > * { animation: rise var(--motion-duration-slow) var(--motion-easing-out) backwards; }
 .page > *:nth-child(2) { animation-delay: 30ms; } .page > *:nth-child(3) { animation-delay: 60ms; }
 .page > *:nth-child(4) { animation-delay: 90ms; } .page > *:nth-child(n+5) { animation-delay: 120ms; }
-@keyframes rise { from { opacity: 0; transform: translateY(var(--motion-distance-sm)); } to { opacity: 1; transform: none; } }
+@keyframes rise { from { transform: translateY(var(--motion-distance-sm)); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 
 /* ---------- layout helpers ---------- */
@@ -442,3 +444,12 @@ html.sim-ios #sim-toolbar span { width: 70%; height: 44px; border-radius: 22px; 
 .tbl td.num { white-space: nowrap; }
 /* calm top bar: only how things are (one word) and what needs you; the rest is in the status menu */
 
+/* signed out (sign-in): the page alone, no rail, top bar or tab bar */
+body.bare .rail, body.bare .strip, body.bare .tabbar { display: none; }
+body.bare .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+.logo-h img { display: block; height: 28px; width: auto; } .logo-h .lh-dark { display: none; }
+[data-theme="dark"] .logo-h .lh-light { display: none; } [data-theme="dark"] .logo-h .lh-dark { display: block; }
+/* skip link: off screen until it has the keyboard's focus */
+.skip { position: fixed; left: 12px; top: -60px; z-index: calc(var(--z-modal) + 20); padding: 10px 14px; border-radius: var(--radius-control); background: var(--color-bg-raised); color: var(--color-text-primary); font: var(--type-label); box-shadow: var(--shadow-2); }
+.skip:focus { top: 12px; }
+.main:focus { outline: none; }

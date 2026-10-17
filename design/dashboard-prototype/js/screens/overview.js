@@ -8,17 +8,21 @@
 
   /* ---------- needs you: the mock's list (mark · title, why, detail · age · one verb) ---------- */
   const VERB = { approval: 'Review', failed: 'Open', needs_input: 'Answer', browser: 'Open' };
-  const MARK = { approval: 'ember', failed: 'fail', needs_input: 'wait', browser: 'wait' };
-  const needItem = (a) => { const verb = a.verb || VERB[a.kind] || 'Open', s = MARK[a.kind] || a.s;
+  // everything here waits on a person, so it all takes the needs-you mark; only a failure has its own
+  const MARK = { approval: 'ember', failed: 'fail', needs_input: 'ember', browser: 'ember' };
+  // the first item's action is the view's one primary button; the rest are secondary
+  const needItem = (a, i = 1) => { const verb = a.verb || VERB[a.kind] || 'Open', s = MARK[a.kind] || a.s;
     return `<li class="dl-need" data-s="${s}"><a class="dl-need-a" href="${a.href}"><span class="dl-ng">${UI.mark(s, { lg: true, label: true })}</span>
       <span class="dl-nt"><b>${esc(a.plain || a.title)}</b>${a.why ? `<span class="dl-why">${esc(a.why)}</span>` : ''}<span class="dl-tech mono">${esc(a.plain ? a.title : a.sub)}</span></span>
-      <span class="dl-age">${UI.ageText(a.age)}</span><span class="dl-na"><span class="btn sm ${a.kind === 'approval' ? 'primary' : 'secondary'}">${verb}</span></span></a></li>`; };
+      <span class="dl-age">${UI.ageText(a.age)}</span><span class="dl-na"><span class="btn sm ${i === 0 ? 'primary' : 'secondary'}">${verb}</span></span></a></li>`; };
   UI.needItem = needItem;
   UI.attentionList = (limit) => {
     const items = D.attention.filter((a) => UI.scopeKeeps(UI.botOfHref(a.href)));
     const note = UI.scopeNote(D.attention.length - items.length);
     if (!items.length) return note + UI.empty({ title: 'Nothing needs you', body: 'When a bot asks for approval or a run fails, it shows up here.', small: true });
-    return note + `<ul class="dl-list dl-needs">${items.slice(0, limit || 99).map(needItem).join('')}</ul>`;
+    // a long list folds: the first few, then "N more need you" (Needs you itself pages by 20)
+    const cap = limit || 20, more = items.length - cap;
+    return note + `<ul class="dl-list dl-needs">${items.slice(0, cap).map((a, i) => needItem(a, i)).join('')}</ul>${more > 0 ? `<p class="dl-foot-note dl-more"><a class="dl-link" href="#/attention${limit ? '' : '?all=1'}">${more} more need${more === 1 ? 's' : ''} you →</a></p>` : ''}`;
   };
   UI.bindApprove = (root) => UI.bind(root, '[data-approve]', 'click', (e, el) => {
     e.preventDefault(); e.stopPropagation();
@@ -27,25 +31,28 @@
   });
 
   /* ---------- the last 12 hours ---------- */
-  const window12 = () => { const marks = D.score.flatMap((l) => l.marks.map((m) => ({ lane: l.lane, a: m[0], b: m[1], s: m[2], id: m[3] }))).filter((m) => m.a <= 720);
-    return { marks, total: marks.length, ok: marks.filter((m) => m.s === 'ok').length, fail: marks.filter((m) => m.s === 'fail').length, parked: marks.filter((m) => m.s === 'idle').length, waiting: marks.filter((m) => m.s === 'wait').length }; };
+  // one source for every count, strip and time: the run records Activity lists (D.runs), started in the last 12 hours;
+  // a failure is timed when it failed (its finish), the same on Home, Activity and the run page
+  const FAILED = (r) => r.status === 'fail' || r.status === 'stopped';
+  UI.failedAt = (r) => UI.hm(r.finished || r.started);
+  const window12 = () => { const runs = D.runs.filter((r) => (Date.now() - new Date(r.started)) / 60000 <= 720);
+    return { runs, total: runs.length, ok: runs.filter((r) => r.status === 'ok').length, fail: runs.filter(FAILED).length, running: runs.filter((r) => r.status === 'run').length, parked: runs.filter((r) => r.status === 'idle').length, waiting: runs.filter((r) => r.status === 'wait').length }; };
   UI.window12 = window12;
   /** Runs per hour over the last 12 hours, failures stacked on top in the danger colour (the mock's hourBars). */
   const hourBars = (w = 300, h = 96) => { const n = 12, per = Array.from({ length: n }, () => [0, 0]);
-    window12().marks.forEach((m) => { const i = Math.min(n - 1, Math.floor((720 - m.a) / 60)); if (m.s === 'fail') per[i][1]++; else per[i][0]++; });
+    window12().runs.forEach((r) => { const ago = (Date.now() - new Date(r.started)) / 60000, i = Math.min(n - 1, Math.max(0, n - 1 - Math.floor(ago / 60))); if (FAILED(r)) per[i][1]++; else per[i][0]++; });
     const mx = Math.max(4, ...per.map(([a, b]) => a + b)), bw = w / n - 6;
     const bars = per.map(([ok, f], i) => { const x = i * (w / n) + 3, ho = (ok / mx) * (h - 22), hf = (f / mx) * (h - 22);
       return `<rect x="${x}" y="${h - 18 - ho}" width="${bw}" height="${Math.max(ho - (hf ? 2 : 0), 0)}" rx="2" class="hb-ok"/>${f ? `<rect x="${x}" y="${h - 18 - ho - hf}" width="${bw}" height="${hf - 1}" rx="2" class="hb-fail"/>` : ''}`; }).join('');
     const fails = per.reduce((a, [, f]) => a + f, 0);
     return `<svg class="dl-hours" viewBox="0 0 ${w} ${h}" role="img" aria-label="Runs per hour, last 12 hours: ${plural(fails, 'failure')}">${bars}<line x1="0" x2="${w}" y1="${h - 17}" y2="${h - 17}" class="hb-axis"/><text x="0" y="${h - 3}" class="hb-ax">12 h ago</text><text x="${w}" y="${h - 3}" class="hb-ax" text-anchor="end">now</text></svg>`; };
   function last12() {
-    const w = window12(), fails = w.marks.filter((m) => m.s === 'fail').sort((a, b) => a.b - b.b);
-    const at = (m) => new Date(Date.now() - m.b * 60000).toTimeString().slice(0, 5);
+    const w = window12(), fails = w.runs.filter(FAILED).sort((a, b) => new Date(b.finished || b.started) - new Date(a.finished || a.started));
     const spent = D.runs.filter((r) => (Date.now() - new Date(r.started)) / 60000 <= 720).reduce((a, r) => a + (r.cost || 0), 0);
     return `<section class="dl-card"><header class="dl-ch"><h2>Last 12 hours</h2></header>
       <div class="dl-stat-line"><b>${w.ok}</b><span>of ${w.total} runs went fine</span>${UI.isApi && UI.isApi() ? `<b class="r">$${spent.toFixed(2)}</b><span>spent</span>` : ''}</div>
       ${hourBars()}
-      ${fails.length ? `<p class="dl-foot-note">${UI.mark('fail')}${plural(fails.length, 'failed', 'failed')}: ${fails.map((m) => `${esc(m.lane)} at ${at(m)}`).join(', ')}</p>` : `<p class="dl-foot-note">${UI.mark('ok')}Nothing failed.</p>`}</section>`;
+      ${fails.length ? `<p class="dl-foot-note">${UI.mark('fail')}<span>${plural(fails.length, 'failed', 'failed')}: ${fails.slice(0, 4).map((r) => `<a class="dl-link" href="#/runs/${r.id}">${esc(r.workflow.replace(/^bot:/, ''))} at ${UI.failedAt(r)}</a>`).join(', ')}${fails.length > 4 ? ` and ${fails.length - 4} more` : ''}</span></p>` : `<p class="dl-foot-note">${UI.mark('ok')}Nothing failed.</p>`}</section>`;
   }
 
   /* ---------- running now (no step counts: step detail lives on the run page) ---------- */
@@ -89,7 +96,7 @@
     const tile = (href, l, v, d) => `<a class="dl-tile" href="${href}"><span class="dl-lbl">${l}</span><b>${v}</b><span class="d">${d}</span></a>`;
     return `<section class="dl-glance" aria-label="At a glance">
       ${tile('#/activity?status=run', 'Running', running.length, running.length ? `longest ${UI.durText(Date.now() - Math.min(...running.map((r) => new Date(r.started))))}` : 'nothing right now')}
-      ${tile('#/activity', 'Runs, last 12 h', w.total, `${w.ok} went fine · ${plural(w.fail, 'failed', 'failed')}`)}
+      ${tile('#/activity?since=720', 'Runs, last 12 h', w.total, UI.runParts(w.runs) || 'none')}
       ${tile('#/attention', 'Approvals', pending, pending ? 'waiting for you' : 'none waiting')}
       ${tile('#/bots', 'Bots', D.bots.length, `${D.bots.filter((m) => m.home === 'live').length} working · ${plural(D.cases.filter((c) => c.status === 'open').length, 'open case')}`)}
     </section>`;

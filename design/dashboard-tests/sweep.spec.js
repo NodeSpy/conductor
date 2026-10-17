@@ -46,8 +46,11 @@ const audit = () => {
     const first = [...row.querySelectorAll('b, span, a, div')].find((x) => vis(x) && (x.innerText || '').trim()); if (!first) return;
     const fr = first.getBoundingClientRect(); if (r.width > 320 && fr.left - r.left > r.width * 0.3 && getComputedStyle(row).textAlign === 'center') out.push(`centred row content: ${label(row)}`);
     if (r.width > 320 && fr.left - r.left > r.width * 0.4) out.push(`row content starts mid-row: ${label(row)}`);
-    // a knowledge proposal row shows the text it proposes, so it may be tall
-    if (r.height > 220 && !row.matches('.kprop') && !row.querySelector('details[open], .open, textarea, .diff, pre, .hist-diff, .sec-detail')) out.push(`row height blown up: ${label(row)} (${Math.round(r.height)}px)`); });
+    // blown up: much more empty space than content (a row stretched to a fixed or centred height), not a row whose
+    // content is simply long
+    const kids = [...row.querySelectorAll('*')].map((x) => x.getBoundingClientRect()).filter((q) => q.width && q.height);
+    const used = kids.length ? Math.max(...kids.map((q) => q.bottom)) - Math.min(...kids.map((q) => q.top)) : r.height;
+    if (r.height > 120 && r.height - used > 90) out.push(`row height blown up: ${label(row)} (${Math.round(r.height)}px for ${Math.round(used)}px of content)`); });
   // a sentence broken into columns: text on both sides of an inline chip or code inside a flex or grid box
   document.querySelectorAll('#main *, .modal *').forEach((el) => { const d = getComputedStyle(el).display; if (!/flex|grid/.test(d) || el.closest('svg')) return; if (!vis(el)) return;
     const texts = [...el.childNodes].filter((n) => n.nodeType === 3 && n.textContent.trim().length > 1); if (texts.length >= 2) out.push(`a sentence split into columns: ${label(el)}`); });

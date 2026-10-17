@@ -1,17 +1,16 @@
 /* Access: passkey sign-in, operator enrollment (CLI one-time localhost link), passkeys, sessions, listeners. */
 (function () {
   const { icon, st, tag, ago, esc } = UI;
-  const baton = () => UI.logo('lockup', 'gate-mark'); // rendered per visit: the kit's mark loads after this file
+  const baton = () => UI.logo('horizontal', 'gate-mark'); // rendered per visit: the kit's mark loads after this file
   const gate = (inner) => `<div class="gate">${inner}</div>`;
 
   UI.route('signin', () => ({
     toString: () => gate(`<div class="panel card"><div class="row">${baton()}</div>
       <h1>Sign in</h1><p class="dim" style="margin:0 0 20px">Sign in to <b>ops-box</b> with your passkey. <span class="item-id" style="display:block;margin-top:4px">${D.daemon.magicdns}</span></p>
-      <div class="seal" id="seal" style="padding:6px 0 16px"><div class="ring">${icon('passkey', 'key')}<svg class="arc" viewBox="0 0 108 108"><circle class="track" cx="54" cy="54" r="52"/><circle class="fill" cx="54" cy="54" r="53"/></svg></div></div>
       <button class="btn lg primary" style="width:100%;justify-content:center" data-act="signin">${icon('passkey')}Sign in with a passkey</button>
       <div class="muted tiny" style="margin-top:14px;line-height:1.6">Reachable only on 127.0.0.1 and this box's tailnet address. No passkey on this device? Run <span class="mono">conductor dashboard enroll</span> on the box for a one-time link.</div>
       <div class="row tiny muted gate-foot"><span>${icon('shield')} TLS · Tailscale cert</span><a class="link" style="margin-left:auto" href="#/enroll?from=signin">Enrollment demo →</a></div></div>`),
-  }), { nav: 'security' });
+  }), { nav: 'security', bare: true });
 
   const ORD = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
   const ordinal = (n) => ORD[n - 1] || n + 'th';
@@ -32,7 +31,7 @@
   }, { nav: 'security' });
 
   const en = { rp: 'tailnet' };
-  UI.act('signin', () => { const seal = UI.$('#seal'); seal.classList.add('signing'); setTimeout(() => { seal.classList.remove('signing'); seal.classList.add('done'); if (!D.sessions.find((x) => x.current)) D.sessions.unshift({ id: 's-' + Date.now().toString(36), device: 'Firefox · laptop', addr: '127.0.0.1', started: new Date().toISOString(), idle: '0m', current: true }); S.save(); setTimeout(() => UI.go('#/overview'), UI.fast ? 20 : 500); }, UI.fast ? 30 : 1100); });
+  UI.act('signin', (b) => { b.setAttribute('aria-disabled', 'true'); b.lastChild.textContent = 'Confirm on your device…'; setTimeout(() => { if (!D.sessions.find((x) => x.current)) D.sessions.unshift({ id: 's-' + Date.now().toString(36), device: 'Firefox · laptop', addr: '127.0.0.1', started: new Date().toISOString(), idle: '0m', current: true }); S.save(); setTimeout(() => UI.go('#/overview'), UI.fast ? 20 : 500); }, UI.fast ? 30 : 1100); });
   UI.act('en-rp', (b) => { en.rp = b.dataset.v; UI.$$('[data-act="en-rp"]').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); });
   const register = (name, by) => { D.passkeys.push({ id: 'pk' + Date.now().toString(36), name, rp: en.rp === 'tailnet' ? D.daemon.magicdns : 'localhost', kind: 'platform authenticator', used: new Date().toISOString(), count: 0, bound: true }); D.audit.unshift({ ts: new Date().toISOString(), event: 'dashboard_enrolled', who: 'operator:ops', detail: `passkey “${name}” · rp ${en.rp === 'tailnet' ? D.daemon.magicdns : 'localhost'}${by ? ` · confirmed with “${by}”` : ''}`, run: '' }); S.save(); UI.toast(`Passkey “${UI.esc(name)}” enrolled`, by ? `confirmed with ${UI.esc(by)} · user verification required` : 'operator ops · user verification required', 'ok'); UI.go(enFrom() === '#/signin' ? '#/signin' : '#/security'); };
   UI.act('enroll', () => {

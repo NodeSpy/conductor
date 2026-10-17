@@ -187,7 +187,9 @@
       const decl = SCHEMA.connectors[use];
       UI.form({ caps: name ? `connectors.${name} · use: ${use}` : `new connector · use: ${use}`, title: name ? `Configure ${name}` : `Add a ${decl.label} connector`, edit: !!name, wide: true,
         intro: `${!name && (use === 'slack' || use === 'github') ? `<div class="callout info small conn-manifest"><span class="grow"><b>No tokens yet?</b> conductor can create the ${use === 'slack' ? 'Slack app' : 'GitHub App'} for you from a manifest and fill all of this in.</span><button type="button" class="btn sm primary" data-act="conn-manifest" data-u="${use}">${icon('link')}Connect with ${use === 'slack' ? 'Slack' : 'GitHub'}</button></div><div class="caps" style="margin-top:10px">Or, if you already have tokens</div>` : ''}Settings are declared by the <b>${use}</b> plugin${decl.registry ? ` (${decl.registry})` : ' (builtin)'}. Secrets are references, never values.`,
-        values: cur ? Object.assign({ name }, cur) : {},
+        // a new instance's name is prefilled (gh for GitHub, else the service's use key; -2, -3… when taken)
+        // a sensitive setting starts on the vault entry named for this service when there is one (conductor/linear)
+        values: cur ? Object.assign({ name }, cur) : { ...Object.fromEntries(decl.settings.filter((f) => f.sensitive).map((f) => { const keyOf = (x) => x.key || String(x.ref || '').split('/').slice(1).join('/'), hit = S.view().secrets.find((x) => { const k = keyOf(x); return k === use || k.startsWith(use + '-') || k.split('/').pop() === use; }); return [f.k, hit ? `{{ vault "${hit.vault}" "${keyOf(hit)}" }}` : undefined]; }).filter(([, v]) => v)), name: (() => { const base = use === 'github' ? 'gh' : use; let n = base, i = 2; while (S.view().connectors.some((c) => c.name === n)) n = `${base}-${i++}`; return n; })() },
         fields: [{ k: 'name', type: 'string', req: true, label: 'Instance name', readonly: !!name, ph: use === 'github' ? 'gh' : use, pattern: /^[a-z][a-z0-9-]*$/, patternMsg: 'lowercase, digits, dashes', validate: (v) => (!name && D.connectors.find((c) => c.name === v) ? 'An instance by that name exists.' : '') }].concat(decl.settings.map((f) => Object.assign({}, f, f.type === 'string' && !/path|listen|url$/.test(f.k) ? { type: 'value' } : {}))),
         note: decl.registry && !D.plugins.find((p) => p.name === use) ? `The <b>${use}</b> plugin isn't installed: applying runs <span class="mono">conductor init</span>, which fetches ${decl.registry}@${decl.ver} (official registry, trusted).` : '',
         submit: 'Review change', submitIcon: 'check',
@@ -201,7 +203,9 @@
   }
   UI.act('conn-pick', (b) => UI.connPick(b.dataset.u));
   UI.act('conn-manifest', (b) => { UI.dismissModal ? UI.closeModal() : null; UI.connectManifest(b.dataset.u); });
-  UI.act('conn-add', () => connForm(null));
+  // Add a connector: the catalog's searchable picker (built-in, official plugin, custom source; a custom one from a git
+  // URL at the end); a service conductor has a settings form for opens it, anything else goes through its install page
+  UI.act('conn-add', () => UI.catalogPicker('connector', (it) => { if (!it) return; if (SCHEMA.connectors[it.name]) connForm(null, it.name); else UI.go(`#/extensions/install/connector/${encodeURIComponent(it.name)}`); }));
   UI.act('conn-edit', (b) => connForm(b.dataset.c));
   UI.act('conn-del', (b) => { const used = D.workflows.filter((w) => (w.yaml || '').includes(b.dataset.c + '.')).map((w) => w.name); UI.confirm({ title: `Remove connector ${b.dataset.c}?`, body: `Stages removing it from connectors:.${used.length ? ` <b>Workflows that use it:</b> ${used.join(', ')} — the validator will flag them.` : ''}`, ok: 'Stage removal', danger: true }).then((ok) => ok && UI.staged(S.stage('connectors', b.dataset.c, null))); });
   function rtForm(name) {

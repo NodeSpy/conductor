@@ -4,13 +4,13 @@ const { test, expect, go, isPhone } = require('./fixtures');
 
 const many = (page, n) => page.evaluate((k) => { const base = D.runs.filter((r) => r.status !== 'run'); for (let i = 0; i < k; i++) { const r = JSON.parse(JSON.stringify(base[i % base.length])); r.id = 'r-x' + i.toString(16).padStart(3, '0'); D.runs.push(r); } S.save(); }, n);
 
-test('Activity: Finished pages by 20 ("Show 20 more of N"), however many runs there are', async ({ page }) => {
+test('Activity: Finished pages by 20 ("Show 20 more (N in all)"), however many runs there are', async ({ page }) => {
   await go(page, '#/activity', { fresh: true });
   await many(page, 400);
   await go(page, '#/activity?since=');
   const done = page.locator('#act-tbl tbody.g-done tr[data-href]');
   await expect(done).toHaveCount(20);
-  await expect(page.locator('#act-more')).toContainText(/Show 20 more of \d+/);
+  await expect(page.locator('#act-more')).toContainText(/Show 20 more \(\d+ in all\)/);
   await page.locator('#act-more').click();
   await expect(done).toHaveCount(40);
   // the runs-per-hour strip stays one strip, whatever the count

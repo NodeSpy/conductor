@@ -96,7 +96,7 @@
 
   D.attention = [
     { kind: 'approval', s: 'ember', title: 'terraform apply · infra@3f2a9c1d', sub: 'platform-sre · p12 · +1 ~2 -0 · REPLACES aws_instance.web', href: '#/bots/platform-sre/proposals/p12', age: '7m' },
-    { kind: 'approval', s: 'ember', title: 'slack-ops.post to #incidents', sub: 'billing-sre · p4 · requester chat:U-THIRD (user)', href: '#/bots/billing-sre/proposals', age: '22m' },
+    { kind: 'approval', s: 'ember', title: 'slack-ops.post to #incidents', sub: 'billing-sre · p4 · requester chat:U-THIRD (user)', href: '#/bots/billing-sre/proposals/p4', age: '22m' },
     { kind: 'failed', s: 'fail', title: 'ci-fixer failed on acme/web#1288', sub: 'step test · 2 failures', href: '#/runs/r-7ef0', age: '52m' },
     { kind: 'needs_input', s: 'wait', title: 'hand-off awaiting answer · acme/infra#77', sub: 'pr-review · handoff draft (approve / revise / discard)', href: '#/runs/r-7ed1', age: '1h' },
     { kind: 'browser', s: 'wait', title: 'push approval requested by app.example.com', sub: 'agent:triage@acme/app · browser login', href: '#/browser/b-02', age: '3m' },
@@ -894,7 +894,7 @@ window.D.packMembers = {
   const D = window.D;
   const PLAIN = {
     '#/bots/platform-sre/proposals/p12': ['Replace the production web server', 'platform-sre wants to run terraform apply on production, for the SEV2 latency incident', 'Review'],
-    '#/bots/billing-sre/proposals': ['Post the monthly forecast to #incidents', 'billing-sre, asked by a Slack user who isn’t one of your operators', 'Review'],
+    '#/bots/billing-sre/proposals/p4': ['Post the monthly forecast to #incidents', 'billing-sre, asked by a Slack user who isn’t one of your operators', 'Review'],
     '#/runs/r-7ef0': ['ci-fixer couldn’t fix acme/web#1288', 'Its change made 2 tests fail. Nothing was pushed.', 'Open'],
     '#/runs/r-7ed1': ['pr-review needs your call on a draft', 'Approve, revise or discard its review of acme/infra#77', 'Answer'],
     '#/browser/b-02': ['Approve a sign-in on app.example.com', 'The triage agent’s browser is waiting on a push approval', 'Open'],
@@ -911,7 +911,7 @@ window.D.packMembers = {
   const D = window.D;
   const META = {
     '#/bots/platform-sre/proposals/p12': { obj: 'terraform', kindWord: 'Terraform apply', tier: 'propose', cverb: 'tf-apply.apply', env: 'production', ctx: 'platform-sre · infra · replaces 1 server' },
-    '#/bots/billing-sre/proposals': { obj: 'message', kindWord: 'Slack post', tier: 'propose', cverb: 'slack-ops.post', ctx: 'billing-sre · #incidents' },
+    '#/bots/billing-sre/proposals/p4': { obj: 'message', kindWord: 'Slack post', tier: 'propose', cverb: 'slack-ops.post', ctx: 'billing-sre · #incidents' },
     '#/runs/r-7ef0': { obj: 'check', kindWord: 'Failed check', action: 'push', ctx: 'ci-fixer · acme/web#1288' },
     '#/runs/r-7ed1': { obj: 'question', kindWord: 'Question', action: 'post', ctx: 'pr-review · acme/infra#77' },
     '#/browser/b-02': { obj: 'login', kindWord: 'Sign-in', action: 'permission', ctx: 'triage agent · app.example.com' },

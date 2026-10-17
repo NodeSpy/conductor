@@ -478,3 +478,10 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 /* a collection a pack defines: the note sits beside the row, and under it on a phone */
 .coll-row .coll-note { max-width: 220px; overflow-wrap: anywhere; }
 @media (max-width: 720px) { .coll-row { flex-wrap: wrap; } .coll-row .coll-note { max-width: none; flex-basis: 100%; padding-left: 34px; } }
+/* an approval on a phone: no bot header, tabs or crumbs above it; one Back to where it was opened from */
+.prop-back-phone { display: none; }
+@media (max-width: 720px) {
+  .prop-page > .dl-crumbs, .prop-page > .dl-bothead, .prop-page > .watch-empty, .prop-page > .dl-tabs { display: none; }
+  .prop-page .prop-crumbs { margin-top: 0 !important; }
+  .prop-back-wide { display: none; } .prop-back-phone { display: inline-flex; }
+}
