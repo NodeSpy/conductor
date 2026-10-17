@@ -74,7 +74,9 @@
     const draw = () => { const q = inp.value.trim();
       res.innerHTML = list.length ? list.map((x, i) => `<a href="#" role="option" data-i="${i}" class="${i === sel ? 'on' : ''}" aria-selected="${i === sel}">${icon(x.icon || 'dot')}<span class="grow ellipsis">${esc(x.label)}</span>${x.hint ? `<span class="muted tiny ellipsis" style="max-width:40%">${esc(x.hint)}</span>` : ''}<span class="pal-kind">${x.kind}</span></a>`).join('')
         : `<div class="empty small pal-empty"><b>No results for “${esc(q)}”.</b> Try a bot or workflow name, a run id like r-7ef0, a config key like budget, or a command: <button class="link" data-q="new bot">new bot</button>, <button class="link" data-q="approve">approve</button>, <button class="link" data-q="add a login">add a login</button>.</div>`; };
-    const close = () => el.remove();
+    const onEsc = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } };
+    const close = () => { el.remove(); document.removeEventListener('keydown', onEsc, true); };
+    document.addEventListener('keydown', onEsc, true);
     const run = (x) => { close(); x.run(); };
     inp.addEventListener('input', () => { list = search(all, inp.value); sel = 0; draw(); });
     inp.addEventListener('keydown', (e) => {

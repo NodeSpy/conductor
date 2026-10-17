@@ -68,7 +68,7 @@ button.link { background: none; border: 0; padding: 0; font: inherit; cursor: po
 .diff .split { display: grid; grid-template-columns: 1fr 1fr; }
 .diff .split > div + div { border-left: 1px solid var(--line); }
 .diff .sl { display: grid; grid-template-columns: 38px 1fr; white-space: pre; }
-.diff .sl > span:first-child { color: var(--ink-4); text-align: right; padding-right: 8px; user-select: none; }
+.diff .sl > span:first-child { color: var(--ink-3); text-align: right; padding-right: 8px; user-select: none; }
 .diff .sl.add { background: var(--ok-wash); } .diff .sl.del { background: var(--fail-wash); } .diff .sl.gap { background: repeating-linear-gradient(-45deg, transparent 0 4px, var(--bg-3) 4px 6px); }
 .diff.whole { max-height: 560px; }
 .diff .split > div { min-width: 0; overflow-x: auto; }
