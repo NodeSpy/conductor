@@ -578,6 +578,18 @@
     if (opts.go !== false) UI.go('#/config/apply');
     else UI.toast(`Staged: ${UI.esc(ch.summary)}`, `${D.pending.length} change${D.pending.length > 1 ? 's' : ''} waiting · review in Config → apply`, 'run');
   };
+  /* phone polish after every render: tab rows that scroll show a fade and keep the current tab in view;
+     page-head actions beyond the first two fold into a ⋯ menu (the originals stay, hidden, and get the click) */
+  UI.afterRender.push((main) => {
+    main.querySelectorAll('.tabs').forEach((t) => { const upd = () => { t.classList.toggle('scrolls', t.scrollWidth > t.clientWidth + 2); t.classList.toggle('at-end', t.scrollLeft + t.clientWidth >= t.scrollWidth - 2); }; const on = t.querySelector('.on'); if (on && t.scrollWidth > t.clientWidth) t.scrollLeft = Math.max(0, on.offsetLeft - t.clientWidth / 2 + on.offsetWidth / 2); upd(); t.addEventListener('scroll', upd, { passive: true }); });
+    if (innerWidth > 720) return;
+    main.querySelectorAll('.page-head .actions').forEach((box) => { const btns = [...box.children].filter((x) => x.matches('.btn, a.btn') && !x.classList.contains('st')); if (btns.length <= 2) return;
+      const keep = btns.filter((x) => x.classList.contains('primary')).slice(0, 1); btns.forEach((x) => { if (keep.length < 2 && !keep.includes(x)) keep.push(x); }); const extra = btns.filter((x) => !keep.includes(x));
+      extra.forEach((x, i) => { x.classList.add('ph-folded'); x.dataset.fold = i; });
+      const more = document.createElement('button'); more.type = 'button'; more.className = 'btn ph-more'; more.setAttribute('aria-label', 'More actions'); more.innerHTML = UI.icon('more'); more.dataset.act = 'ph-more'; box.appendChild(more); });
+  });
+  UI.act('ph-more', (b) => { const box = b.closest('.actions'), extra = [...box.querySelectorAll('.ph-folded')]; UI.menu(b, extra.map((x) => [x.textContent.trim() || x.getAttribute('aria-label') || 'Action', 'chev', 'ph-fold-go', `data-i="${x.dataset.fold}"${x.getAttribute('aria-disabled') === 'true' ? ` aria-disabled="true" data-reason="${UI.esc(x.dataset.reason || '')}"` : ''}`])); UI.phFoldBox = box; });
+  UI.act('ph-fold-go', (b) => { UI.closeMenu(); const x = UI.phFoldBox && UI.phFoldBox.querySelector(`.ph-folded[data-fold="${b.dataset.i}"]`); if (x) x.click(); });
   /** The sticky bulk bar: n selected, actions [[label, icon, act, attrs?, offReason?]], and a clear action. */
   UI.bulkBar = (n, noun, actions, clearAct) => `<div class="bulk-bar" role="region" aria-label="Bulk actions"><b>${n} ${noun}${n > 1 ? 's' : ''} selected</b>${actions.map(([l, ic, act, attrs = '', off]) => `<button class="btn sm" ${off ? UI.off(off) : `data-act="${act}" ${attrs}`}>${UI.icon(ic)}${l}</button>`).join('')}<button class="btn sm ghost" data-act="${clearAct}" style="margin-left:auto">Clear</button></div>`;
   /** Download a text file (exports). */

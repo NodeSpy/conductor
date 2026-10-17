@@ -1,7 +1,7 @@
 // Secrets & vars → Env: variables by scope with where they're used, plain-text secrets flagged and moved into
 // the vault in one step, import that never writes a secret in plain text, and the effective environment of a
 // step or worker (names and sources only). (Riley M6)
-const { test, expect, go } = require('./fixtures');
+const { test, expect, go, headAction } = require('./fixtures');
 
 test('the Env tab: scopes, uses, a plain-text secret moved into the vault', async ({ page }) => {
   await go(page, '#/secrets', { fresh: true });
@@ -36,7 +36,7 @@ test('effective environment: the narrowest scope wins, and the sandbox passes on
 
 test('import: secret-looking values go to the vault, never into the file', async ({ page }) => {
   await go(page, '#/secrets/env', { fresh: true });
-  await page.locator('[data-act="env-import"]').click();
+  await headAction(page, '[data-act="env-import"]');
   await page.locator('#f-scope').selectOption('daemon');
   await page.fill('#f-text', 'REGION=eu-west-1\nDEPLOY_TOKEN=tok-not-a-real-one-9911\n');
   await page.locator('#gen-submit').click();

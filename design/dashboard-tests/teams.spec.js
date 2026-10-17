@@ -1,11 +1,11 @@
 // Teams: define and edit through the pipeline, assign bots, narrow-only
 // defaults, routing rules and routed work with provenance, the knowledge
 // repo's promotion approvals, links, and the peers graph's team boundaries.
-const { test, expect, go, applyStaged } = require('./fixtures');
+const { test, expect, go, applyStaged, headAction } = require('./fixtures');
 
 test('define a team with bots and defaults, through the diff', async ({ page }) => {
   await go(page, '#/bots');
-  await page.locator('[data-act="team-new"]').click();
+  await headAction(page, '[data-act="team-new"]');
   await page.fill('#f-name', 'docs');
   await page.fill('#f-description', 'Release notes and API docs');
   await page.locator('[data-listk="bots"] select').selectOption('release-scribe');

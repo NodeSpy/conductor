@@ -1,7 +1,7 @@
 // Create in place: every picker that references another entity offers
 // "+ New …". The drawer keeps the parent flow's unsaved state, the new thing
 // is selected on return, and parent + child apply as ONE combined diff.
-const { test, expect, go, applyStaged } = require('./fixtures');
+const { test, expect, go, applyStaged, headAction } = require('./fixtures');
 
 const pickNew = async (page, sel) => { await page.locator(sel).selectOption('__new__'); await expect(page.locator('.cdrawer')).toBeVisible(); };
 
@@ -102,7 +102,7 @@ test('every entity picker has a create option', async ({ page }) => {
   const close = () => page.keyboard.press('Escape');
   await go(page, '#/teams/platform'); await audit('team page');
   await page.locator('[data-act="team-edit"]').first().click(); await audit('team form'); await close();
-  await go(page, '#/members'); await go(page, '#/bots'); await page.locator('[data-act="team-new"]').click(); await audit('new team'); await close();
+  await go(page, '#/members'); await go(page, '#/bots'); await headAction(page, '[data-act="team-new"]'); await audit('new team'); await close();
   await go(page, '#/teams/platform/routing'); await page.locator('[data-act="rule-edit"][data-i="-1"]').click(); await audit('routing rule'); await close();
   await go(page, '#/bots/release-scribe/settings'); await audit('bot definition');
   await go(page, '#/bots/platform-sre/access'); await page.locator('[data-act="cred-bind"]').first().click(); await audit('credential binding'); await close();
