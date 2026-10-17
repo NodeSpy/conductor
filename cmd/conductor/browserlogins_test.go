@@ -268,3 +268,52 @@ func TestCredFlags(t *testing.T) {
 		t.Fatalf("%v %v %v", pos, multi, bools)
 	}
 }
+
+func TestClassifyReach(t *testing.T) {
+	base := browser.LoginRecord{Bindings: []string{"a"}, Origins: []string{"https://x.example.com"}, Site: "s.example.com", Also: []string{"cdn.example.com"}}
+	for name, tc := range map[string]struct {
+		mod  func(*browser.LoginRecord)
+		want string
+	}{
+		"same":           {func(r *browser.LoginRecord) {}, changeNeutral},
+		"new binding":    {func(r *browser.LoginRecord) { r.Bindings = []string{"a", "bot:b"} }, changeWidening},
+		"new origin":     {func(r *browser.LoginRecord) { r.Origins = append(r.Origins, "https://y.example.com") }, changeWidening},
+		"new also":       {func(r *browser.LoginRecord) { r.Also = append(r.Also, "sso.example.com") }, changeWidening},
+		"other site":     {func(r *browser.LoginRecord) { r.Site = "t.example.com" }, changeWidening},
+		"fewer bindings": {func(r *browser.LoginRecord) { r.Bindings = nil }, changeNarrowing},
+		"fewer origins":  {func(r *browser.LoginRecord) { r.Origins = nil }, changeNarrowing},
+		"swap":           {func(r *browser.LoginRecord) { r.Bindings = []string{"c"} }, changeWidening},
+	} {
+		after := base
+		after.Bindings = append([]string(nil), base.Bindings...)
+		after.Origins = append([]string(nil), base.Origins...)
+		after.Also = append([]string(nil), base.Also...)
+		tc.mod(&after)
+		if got := classifyReach(base, after); got != tc.want {
+			t.Errorf("%s: %s, want %s", name, got, tc.want)
+		}
+	}
+}
+
+// Revoking a session login drops its saved sessions (every identity's, that
+// site's only); the next action finds none.
+func TestBrowserLoginRemoveDropsSessions(t *testing.T) {
+	call, m, _ := loginRig(t)
+	if r := call("browser-login-add", browserLoginReq{Name: "mine", Method: browser.MethodSession, Site: "sso.example.com", Bindings: []string{"agent:t@o/r", "agent:u@o/r"}}); r.Error != "" {
+		t.Fatal(r.Error)
+	}
+	for _, j := range []browser.Jar{{Identity: "agent:t@o/r", Site: "sso.example.com"}, {Identity: "agent:u@o/r", Site: "sso.example.com"}, {Identity: "agent:t@o/r", Site: "app.example.com"}} {
+		j.Cookies = []browser.Cookie{{Name: "sid", Value: "v", Domain: j.Site}}
+		if err := m.Logins().Save(j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := call("browser-login-remove", browserLoginReq{Name: "mine"})
+	if r.Error != "" || !strings.Contains(string(r.Data), `"sessions_dropped":2`) {
+		t.Fatalf("remove: %+v %s", r, r.Data)
+	}
+	jars, _ := m.Logins().List()
+	if len(jars) != 1 || jars[0].Site != "app.example.com" {
+		t.Fatalf("left: %+v", jars)
+	}
+}
