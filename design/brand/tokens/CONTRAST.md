@@ -64,9 +64,9 @@ Minimums: 7 (AAA) for primary text and anywhere marked `aaaOn`; 4.5 (AA) for all
 | `status.success.fg` | `bg.overlay` | 5.96 AA | 6.30 AA | 4.5 |
 | `status.success.fg` | `status.success.bg@semantic.color.bg.surface` | 5.94 AA | 5.60 AA | 4.5 |
 | `status.success.fg` | `status.success.bg@semantic.color.bg.canvas` | 6.54 AA | 5.17 AA | 4.5 |
-| `status.success.solid` | `bg.canvas` | 6.01 AA | 3.68 AA large / UI | 3 |
-| `status.success.solid` | `bg.surface` | 5.49 AA | 4.01 AA large / UI | 3 |
-| `status.success.solid` | `bg.raised` | 5.01 AA | 4.08 AA large / UI | 3 |
+| `status.success.solid` | `bg.canvas` | 5.82 AA | 3.81 AA large / UI | 3 |
+| `status.success.solid` | `bg.surface` | 5.31 AA | 4.15 AA large / UI | 3 |
+| `status.success.solid` | `bg.raised` | 4.85 AA | 4.21 AA large / UI | 3 |
 | `status.warning.fg` | `bg.canvas` | 7.46 AAA | 5.72 AA | 4.5 |
 | `status.warning.fg` | `bg.sunken` | 7.91 AAA | 5.24 AA | 4.5 |
 | `status.warning.fg` | `bg.rail` | 7.21 AAA | 5.34 AA | 4.5 |
@@ -86,9 +86,9 @@ Minimums: 7 (AAA) for primary text and anywhere marked `aaaOn`; 4.5 (AA) for all
 | `status.danger.fg` | `bg.overlay` | 5.25 AA | 6.92 AA | 4.5 |
 | `status.danger.fg` | `status.danger.bg@semantic.color.bg.surface` | 5.43 AA | 6.05 AA | 4.5 |
 | `status.danger.fg` | `status.danger.bg@semantic.color.bg.canvas` | 5.98 AA | 5.58 AA | 4.5 |
-| `status.danger.solid` | `bg.canvas` | 5.09 AA | 4.40 AA large / UI | 3 |
-| `status.danger.solid` | `bg.surface` | 4.65 AA | 4.79 AA | 3 |
-| `status.danger.solid` | `bg.raised` | 4.24 AA large / UI | 4.86 AA | 3 |
+| `status.danger.solid` | `bg.canvas` | 9.61 AAA | 8.90 AAA | 3 |
+| `status.danger.solid` | `bg.surface` | 8.77 AAA | 9.69 AAA | 3 |
+| `status.danger.solid` | `bg.raised` | 8.01 AAA | 9.84 AAA | 3 |
 | `status.info.fg` | `bg.canvas` | 7.29 AAA | 5.95 AA | 4.5 |
 | `status.info.fg` | `bg.sunken` | 7.73 AAA | 5.45 AA | 4.5 |
 | `status.info.fg` | `bg.rail` | 7.05 AAA | 5.55 AA | 4.5 |
@@ -100,28 +100,28 @@ Minimums: 7 (AAA) for primary text and anywhere marked `aaaOn`; 4.5 (AA) for all
 | `status.info.solid` | `bg.canvas` | 5.32 AA | 4.20 AA large / UI | 3 |
 | `status.info.solid` | `bg.surface` | 4.86 AA | 4.57 AA | 3 |
 | `status.info.solid` | `bg.raised` | 4.43 AA large / UI | 4.64 AA | 3 |
-| `status.running.fg` | `bg.canvas` | 7.73 AAA | 5.55 AA | 4.5 |
-| `status.running.fg` | `bg.sunken` | 8.19 AAA | 5.09 AA | 4.5 |
-| `status.running.fg` | `bg.rail` | 7.47 AAA | 5.18 AA | 4.5 |
-| `status.running.fg` | `bg.surface` | 7.05 AAA | 6.05 AA | 4.5 |
-| `status.running.fg` | `bg.raised` | 6.44 AA | 6.14 AA | 4.5 |
-| `status.running.fg` | `bg.overlay` | 5.76 AA | 6.14 AA | 4.5 |
-| `status.running.fg` | `status.running.bg@semantic.color.bg.surface` | 5.80 AA | 5.45 AA | 4.5 |
-| `status.running.fg` | `status.running.bg@semantic.color.bg.canvas` | 6.40 AA | 5.04 AA | 4.5 |
-| `status.running.solid` | `bg.canvas` | 5.78 AA | 3.84 AA large / UI | 3 |
-| `status.running.solid` | `bg.surface` | 5.28 AA | 4.18 AA large / UI | 3 |
-| `status.running.solid` | `bg.raised` | 4.81 AA | 4.25 AA large / UI | 3 |
-| `status.neutral.fg` | `bg.canvas` | 6.95 AA | 5.24 AA | 4.5 |
-| `status.neutral.fg` | `bg.sunken` | 7.37 AAA | 4.80 AA | 4.5 |
-| `status.neutral.fg` | `bg.rail` | 6.72 AA | 4.89 AA | 4.5 |
-| `status.neutral.fg` | `bg.surface` | 6.34 AA | 5.70 AA | 4.5 |
-| `status.neutral.fg` | `bg.raised` | 5.79 AA | 5.80 AA | 4.5 |
-| `status.neutral.fg` | `bg.overlay` | 5.18 AA | 5.80 AA | 4.5 |
-| `status.neutral.fg` | `status.neutral.bg@semantic.color.bg.surface` | 5.25 AA | 5.24 AA | 4.5 |
-| `status.neutral.fg` | `status.neutral.bg@semantic.color.bg.canvas` | 5.80 AA | 4.84 AA | 4.5 |
-| `status.neutral.solid` | `bg.canvas` | 4.82 AA | 5.24 AA | 3 |
-| `status.neutral.solid` | `bg.surface` | 4.40 AA large / UI | 5.70 AA | 3 |
-| `status.neutral.solid` | `bg.raised` | 4.01 AA large / UI | 5.80 AA | 3 |
+| `status.running.fg` | `bg.canvas` | 7.73 AAA | 5.76 AA | 4.5 |
+| `status.running.fg` | `bg.sunken` | 8.19 AAA | 5.27 AA | 4.5 |
+| `status.running.fg` | `bg.rail` | 7.47 AAA | 5.37 AA | 4.5 |
+| `status.running.fg` | `bg.surface` | 7.05 AAA | 6.27 AA | 4.5 |
+| `status.running.fg` | `bg.raised` | 6.44 AA | 6.37 AA | 4.5 |
+| `status.running.fg` | `bg.overlay` | 5.76 AA | 6.37 AA | 4.5 |
+| `status.running.fg` | `status.running.bg@semantic.color.bg.surface` | 5.80 AA | 5.65 AA | 4.5 |
+| `status.running.fg` | `status.running.bg@semantic.color.bg.canvas` | 6.40 AA | 5.22 AA | 4.5 |
+| `status.running.solid` | `bg.canvas` | 7.73 AAA | 4.01 AA large / UI | 3 |
+| `status.running.solid` | `bg.surface` | 7.05 AAA | 4.37 AA large / UI | 3 |
+| `status.running.solid` | `bg.raised` | 6.44 AA | 4.43 AA large / UI | 3 |
+| `status.neutral.fg` | `bg.canvas` | 10.05 AAA | 5.64 AA | 4.5 |
+| `status.neutral.fg` | `bg.sunken` | 10.65 AAA | 5.17 AA | 4.5 |
+| `status.neutral.fg` | `bg.rail` | 9.71 AAA | 5.26 AA | 4.5 |
+| `status.neutral.fg` | `bg.surface` | 9.17 AAA | 6.14 AA | 4.5 |
+| `status.neutral.fg` | `bg.raised` | 8.37 AAA | 6.24 AA | 4.5 |
+| `status.neutral.fg` | `bg.overlay` | 7.49 AAA | 6.24 AA | 4.5 |
+| `status.neutral.fg` | `status.neutral.bg@semantic.color.bg.surface` | 7.04 AAA | 5.62 AA | 4.5 |
+| `status.neutral.fg` | `status.neutral.bg@semantic.color.bg.canvas` | 7.81 AAA | 5.15 AA | 4.5 |
+| `status.neutral.solid` | `bg.canvas` | 4.02 AA large / UI | 5.64 AA | 3 |
+| `status.neutral.solid` | `bg.surface` | 3.67 AA large / UI | 6.14 AA | 3 |
+| `status.neutral.solid` | `bg.raised` | 3.35 AA large / UI | 6.24 AA | 3 |
 | `code.key` | `bg.sunken` | 10.50 AAA | 7.52 AAA | 4.5 |
 | `code.key` | `bg.surface` | 9.04 AAA | 8.94 AAA | 4.5 |
 | `code.string` | `bg.sunken` | 11.05 AAA | 5.21 AA | 4.5 |
@@ -153,7 +153,7 @@ Minimums: 7 (AAA) for primary text and anywhere marked `aaaOn`; 4.5 (AA) for all
 | `component.button.secondary.fg` | `component.button.secondary.bg` | 13.82 AAA | 15.25 AAA | 4.5 |
 | `component.button.secondary.fg` | `component.button.secondary.bg-hover` | 12.61 AAA | 15.49 AAA | 4.5 |
 | `component.button.secondary.fg` | `component.button.secondary.bg-active` | 11.28 AAA | 15.49 AAA | 4.5 |
-| `component.button.danger.fg` | `component.button.danger.bg` | 4.51 AA | 4.86 AA | 4.5 |
+| `component.button.danger.fg` | `component.button.danger.bg` | 8.52 AAA | 9.84 AAA | 4.5 |
 | `component.button.danger.fg` | `component.button.danger.bg-hover` | 6.24 AA | 6.92 AA | 4.5 |
 | `component.button.danger.fg` | `component.button.danger.bg-active` | 8.52 AAA | 9.84 AAA | 4.5 |
 | `component.input.fg` | `bg.field` | 16.04 AAA | 15.49 AAA | 7 |

@@ -4,6 +4,8 @@
 import { DIRS } from './directions.js';
 import * as C from './data.js';
 import { LUCIDE, STATUS } from '../icons/icons.js';
+import { STATES, GLYPH_STATE, mark, chartMark, status, legend, injectMarkCSS } from '../status/marks.js';
+injectMarkCSS();
 
 const q = new URLSearchParams(location.search);
 const d = q.get('d') || 'daylight', s = q.get('s') || 'overview', theme = q.get('t') || 'light';
@@ -15,12 +17,16 @@ for (const [k, v] of Object.entries({ ...D.vars, ...D[theme] })) root.style.setP
 
 // ---------- helpers ----------
 const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="var(--d-icon-stroke)" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${LUCIDE[n] ?? ''}</svg>`;
-const gl = (n, cls = '') => `<svg class="gl ${cls}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${(STATUS[n] ?? STATUS.info).svg}</svg>`;
+const glLegacy = (n, cls = '') => `<svg class="gl ${cls}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${(STATUS[n] ?? STATUS.info).svg}</svg>`;
+// Status glyphs come from the one vocabulary (status/marks.js).
+const gl = (n, cls = '') => (GLYPH_STATE[n] ? mark(GLYPH_STATE[n], { size: 16 }) : glLegacy(n, cls));
+// run state → vocabulary state
+const ST = { ok: 'passed', failed: 'failed', running: 'running', waiting: 'needs', parked: 'parked', skipped: 'skipped', approval: 'needs' };
 const SG = { ok: 'success', failed: 'danger', running: 'running', waiting: 'warning', parked: 'neutral', skipped: 'skipped', approval: 'needs-you' };
 const SS = { ok: 'ok', failed: 'danger', running: 'running', waiting: 'warning', parked: 'neutral', skipped: 'neutral', approval: 'accent' };
 const SL = { ok: 'Passed', failed: 'Failed', running: 'Running', waiting: 'Waiting on you', parked: 'Parked', skipped: 'Not reached' };
-const badge = (st, label = SL[st]) => `<span class="badge" data-s="${SS[st]}">${gl(SG[st], st === 'running' ? 'spin' : '')}${label}</span>`;
-const mark = `<svg class="logo" viewBox="3 7 26 18" aria-hidden="true"><path fill="currentColor" d="M3 21a13 14 0 0 1 26 0h-3.2a9.8 10 0 0 0-19.6 0z"/><circle cx="16" cy="21" r="4" fill="var(--color-accent-default)"/></svg>`;
+const badge = (st, label = SL[st]) => status(ST[st], label);
+const logoMark = `<svg class="logo" viewBox="3 7 26 18" aria-hidden="true"><path fill="currentColor" d="M3 21a13 14 0 0 1 26 0h-3.2a9.8 10 0 0 0-19.6 0z"/><circle cx="16" cy="21" r="4" fill="var(--color-accent-default)"/></svg>`;
 const sunrise = (w = 160) => `<svg class="sunrise" width="${w}" viewBox="0 0 160 92" aria-hidden="true">
   <g stroke="var(--color-border-default)" stroke-width="1.5" stroke-linecap="round">${[-62, -38, -14, 14, 38, 62].map((a) => { const r = Math.PI * (a - 90) / 180; return `<line x1="${80 + Math.cos(r) * 44}" y1="${70 + Math.sin(r) * 44}" x2="${80 + Math.cos(r) * 54}" y2="${70 + Math.sin(r) * 54}"/>`; }).join('')}</g>
   <path d="M46 70a34 36 0 0 1 68 0h-9a25 26 0 0 0-50 0z" fill="var(--color-text-primary)"/><circle cx="80" cy="70" r="10" fill="var(--color-accent-default)"/>
@@ -40,15 +46,15 @@ function shell(body, title) {
   const navItem = ([i, l, k, n]) => `<a class="${k === act ? 'on' : ''}">${ic(i)}<span>${l}</span>${n ? `<em class="${k === 'needs' ? 'hot' : ''}">${n}</em>` : ''}</a>`;
   if (d === 'broadsheet') {
     return `<div class="app">
-      <header class="masthead"><div class="mh-top"><span class="brand">${mark}<b>conductor</b></span><span class="dateline">${C.NOW} · ops-box · <span class="okline">all systems normal</span></span><span class="mh-search">${ic('search')}Search runs, bots, settings <kbd>⌘K</kbd></span><span class="avatar">op</span></div>
+      <header class="masthead"><div class="mh-top"><span class="brand">${logoMark}<b>conductor</b></span><span class="dateline">${C.NOW} · ops-box · <span class="okline">all systems normal</span></span><span class="mh-search">${ic('search')}Search runs, bots, settings <kbd>⌘K</kbd></span><span class="avatar">op</span></div>
       <nav class="sections">${NAV.map(navItem).join('')}<span class="sp"></span>${NAV2.slice(0, 3).map(([i, l]) => `<a>${l}</a>`).join('')}<a>Settings</a></nav></header>
       <main class="page">${body}</main>${tabbar(act)}</div>`;
   }
   return `<div class="app">
-    <aside class="rail"><div class="brand">${mark}<b>conductor</b></div>
+    <aside class="rail"><div class="brand">${logoMark}<b>conductor</b></div>
       <nav>${NAV.map(navItem).join('')}<span class="grp">Settings</span>${NAV2.map(([i, l, n]) => navItem([i, l, l, n])).join('')}</nav>
       <div class="host"><span class="dot" data-s="ok"></span><div><b>ops-box</b><span>Healthy · up 3 days</span></div></div></aside>
-    <div class="main"><header class="topbar"><span class="ph-title">${mark}<b>${title}</b></span><span class="search">${ic('search')}Search runs, bots and settings<kbd>⌘K</kbd></span><span class="sp"></span><span class="health">${gl('success')}All systems normal</span><span class="avatar">op</span></header>
+    <div class="main"><header class="topbar"><span class="ph-title">${logoMark}<b>${title}</b></span><span class="search">${ic('search')}Search runs, bots and settings<kbd>⌘K</kbd></span><span class="sp"></span><span class="health">${gl('success')}All systems normal</span><span class="avatar">op</span></header>
     <main class="page">${body}</main></div>${tabbar(act)}</div>`;
 }
 const tabbar = (act) => `<nav class="tabbar">${[['layout-grid', 'Home', 'overview'], ['bell', 'Needs you', 'needs', 5], ['history', 'Runs', 'history'], ['bot', 'Bots', 'approval'], ['ellipsis', 'More', 'more']].map(([i, l, k, n]) => `<a class="${k === act ? 'on' : ''}">${ic(i)}${n ? `<em>${n}</em>` : ''}<span>${l}</span></a>`).join('')}</nav>`;
@@ -63,7 +69,7 @@ const needsCard = (limit = 5) => `<section class="card needs"><header class="ch"
   <ul class="list">${C.NEEDS.slice(0, limit).map(needItem).join('')}</ul></section>`;
 const runningCard = () => `<section class="card"><header class="ch"><h2>Running now</h2><span class="sub">${C.RUNNING.length}</span></header>
   <ul class="list running">${C.RUNNING.map((r) => `<li><span class="ng" data-s="running">${gl('running', 'spin')}</span><div class="nt"><b>${r.doing}</b><span class="why">${r.wf} · ${r.target}</span></div><div class="prog"><span>Step ${r.step} of ${r.of}</span><i><b style="width:${(r.step / r.of) * 100}%"></b></i></div></li>`).join('')}</ul></section>`;
-const fyiCard = () => `<section class="card fyi"><header class="ch"><h2>For your information</h2></header><ul class="list">${C.FYI.map((f) => `<li><span class="ng" data-s="${f.s}">${f.glyph === 'shield' ? ic('shield-check') : gl(f.glyph)}</span><div class="nt"><b>${f.title}</b><span class="why">${f.why}</span></div></li>`).join('')}</ul></section>`;
+const fyiCard = () => `<section class="card fyi"><header class="ch"><h2>For your information</h2></header><ul class="list">${C.FYI.map((f) => `<li><span class="ng" data-s="${f.s}">${f.glyph === 'shield' ? ic('shield-check') : f.glyph === 'update' ? ic('refresh-cw') : gl(f.glyph)}</span><div class="nt"><b>${f.title}</b><span class="why">${f.why}</span></div></li>`).join('')}</ul></section>`;
 function hourBars(w = 300, h = 96) {
   const n = C.HOURLY.length, bw = w / n - 6, mx = 4;
   const bars = C.HOURLY.map(([ok, f], i) => { const x = i * (w / n) + 3; const ho = (ok / mx) * (h - 22), hf = (f / mx) * (h - 22); return `<rect x="${x}" y="${h - 18 - ho}" width="${bw}" height="${Math.max(ho - (hf ? 2 : 0), 0)}" rx="2" fill="var(--color-border-default)"/>${f ? `<rect x="${x}" y="${h - 18 - ho - hf}" width="${bw}" height="${hf - 1}" rx="2" fill="var(--color-status-danger-solid)"/>` : ''}`; }).join('');
@@ -77,20 +83,12 @@ function scoreSVG(w = 980, hrs = 12, compact = false) {
   C.LANES.forEach(([name, notes], i) => {
     const y = top + i * lh + lh / 2;
     g += `<text x="0" y="${y + 4}" class="lane-l">${name}</text>${[0, 1, 2, 3, 4].map((k) => `<line x1="${left}" x2="${w - 16}" y1="${y - 8 + k * 4}" y2="${y - 8 + k * 4}" class="staff"/>`).join('')}`;
-    for (const [min, st] of notes) {
-      if (min > span) continue;
-      const xx = x(min), c = { ok: 'var(--color-text-tertiary)', failed: 'var(--color-status-danger-solid)', running: 'var(--color-status-running-solid)', waiting: 'var(--color-status-warning-solid)', parked: 'var(--color-status-neutral-solid)', approval: 'var(--color-accent-default)' }[st];
-      g += st === 'failed' ? `<path d="M${xx - 5} ${y - 5}l10 10M${xx + 5} ${y - 5}l-10 10" stroke="${c}" stroke-width="2.6" stroke-linecap="round"/>`
-        : st === 'approval' || st === 'waiting' ? `<path d="M${xx} ${y - 7}l7 7-7 7-7-7z" fill="${c}"/>`
-        : st === 'running' ? `<circle cx="${xx}" cy="${y}" r="6" fill="none" stroke="${c}" stroke-width="2.4" stroke-dasharray="26 12"/>`
-        : st === 'parked' ? `<path d="M${xx - 2.5} ${y - 5}v10M${xx + 2.5} ${y - 5}v10" stroke="${c}" stroke-width="2.4" stroke-linecap="round"/>`
-        : `<circle cx="${xx}" cy="${y}" r="5" fill="${c}"/>`;
-    }
+    for (const [min, st] of notes) { if (min <= span) g += chartMark(ST[st], x(min), y, st === 'ok' ? 10 : 14, `${name}: ${STATES[ST[st]].word.toLowerCase()}`); }
   });
   g += `<line x1="${x(0)}" x2="${x(0)}" y1="${top - 4}" y2="${H - 22}" stroke="var(--color-accent-default)" stroke-width="1.5"/>`;
   return `<svg class="score-svg" viewBox="0 0 ${w} ${H}" role="img" aria-label="Runs per workflow over the last ${hrs} hours">${g}</svg>`;
 }
-const scoreLegend = `<div class="legend"><span><i class="lgd ok"></i>Passed</span><span><i class="lgd fail"></i>Failed</span><span><i class="lgd run"></i>Running</span><span><i class="lgd wait"></i>Needs you</span><span><i class="lgd park"></i>Parked</span></div>`;
+const scoreLegend = legend(['passed', 'running', 'failed', 'needs', 'parked']);
 
 // ---------- screens ----------
 function overview() {
@@ -114,7 +112,7 @@ function overview() {
       ${runningCard()}</div></div>`;
   return `
     <section class="ov-head"><h1>Overview</h1><p class="lead">${sumLine}</p></section>
-    <section class="card score"><header class="ch"><h2>The last 12 hours</h2><span class="sub">every run, one lane per workflow</span><span class="sp"></span>${scoreLegend}</header>${scoreSVG(1060, 12)}<div class="score-phone">${scoreSVG(360, 6, true)}</div></section>
+    <section class="card score" data-legend-scope><header class="ch"><h2>The last 12 hours</h2><span class="sub">every run, one lane per workflow</span><span class="sp"></span>${scoreLegend}</header>${scoreSVG(1060, 12)}<div class="score-phone">${scoreSVG(360, 6, true)}</div></section>
     <div class="cols"><div class="col-main">${needsCard()}</div><div class="col-side">${runningCard()}${fyiCard()}</div></div>`;
 }
 
@@ -126,7 +124,7 @@ function runPage() {
   const total = 460;
   const dur = { '2 s': 2, '8 s': 8, '7 min 40 s': 460 - 36, '26 s': 26 };
   let off = 0;
-  const steps = d === 'score'
+  const steps = d === 'daylight' ? runTreeDaylight() : d === 'score'
     ? `<section class="card"><header class="ch"><h2>What happened</h2><span class="sub">12 minutes, step by step</span></header><div class="gantt">${R.steps.map(([n, st, t, note]) => { const w = st === 'skipped' ? 0 : Math.max(((dur[t] || 1) / total) * 100, 1.2); const l = off; off += w; return `<div class="g-row" data-s="${SS[st]}"><span class="g-l">${n}</span><span class="g-track">${st === 'skipped' ? `<em class="g-skip">not reached</em>` : `<b style="left:${l}%;width:${w}%"></b>`}</span><span class="g-n">${t ? `<b>${t}</b>` : ''}${note}</span></div>`; }).join('')}<div class="g-axis"><span>17:03</span><span>17:15</span></div></div></section>`
     : d === 'broadsheet'
       ? `<section class="card"><header class="ch"><h2>What happened</h2><span class="sub">6 steps · 12 minutes</span></header><table class="tbl"><thead><tr><th>Step</th><th>Result</th><th class="num">Took</th><th class="bar-h"></th><th>Note</th></tr></thead><tbody>${R.steps.map(([n, st, t, note]) => `<tr class="${st}"><td><b>${n}</b></td><td>${badge(st)}</td><td class="num">${t || '—'}</td><td class="bar-c">${st === 'skipped' ? '' : `<i style="width:${Math.max(((dur[t] || 1) / total) * 100, 2)}%" data-s="${SS[st]}"></i>`}</td><td class="sub">${note}</td></tr>`).join('')}</tbody></table></section>`
@@ -160,6 +158,7 @@ function approvalPage() {
 
 function historyPage() {
   const rows = C.HISTORY[0][1];
+  if (d === 'daylight') return historyDaylight(`<div class="phead"><div><h1>Runs</h1><p class="lead"><b>Last 12 hours: 16 runs.</b> 3 need attention, 3 are running and 10 finished.</p></div><button class="btn secondary">${ic('external-link')}Export</button></div><div class="filters"><span class="field">${ic('search')}Search repo, PR or run</span><span class="chip">${ic('workflow')}Any workflow</span><span class="chip">${ic('clock')}Last 12 hours</span></div>`);
   const head = `<div class="phead"><div><h1>Runs</h1><p class="lead"><b>Last 12 hours: 16 runs.</b> 11 went fine, 2 failed, 3 are running and 1 is waiting on you.</p></div><button class="btn secondary">${ic('external-link')}Export</button></div>
     <div class="filters"><div class="seg"><span class="on">All <em>16</em></span><span>Needs attention <em>3</em></span><span>Failed <em>2</em></span><span>Running <em>3</em></span></div><span class="field">${ic('search')}Search repo, PR or run</span><span class="chip">${ic('workflow')}Any workflow</span><span class="chip">${ic('clock')}Last 12 hours</span></div>`;
   const span = 12 * 60;
@@ -187,6 +186,38 @@ function builderPage() {
     <section class="card facts"><header class="ch"><h2>At a glance</h2></header><dl><dt>Budget</dt><dd>${W.budget}</dd><dt>Last 24 h</dt><dd>${W.recent}</dd><dt>Owner</dt><dd>your config</dd></dl></section>
     <section class="card"><header class="ch"><h2>Config file</h2><span class="sp"></span><a class="link">Open</a></header><pre class="code small">${W.yaml.map(([k, v], i) => `<span class="ln"><i>${i + 1}</i><span class="k">${k}</span>:${v ? ' ' + `<span class="s">${v}</span>` : ''}</span>`).join('')}</pre></section>`;
   return `${head}<div class="cols"><div class="col-main">${recipe}</div><div class="col-side">${side}</div></div>`;
+}
+
+
+// ---------- Daylight: the chosen status column (grouped rows + margin marks) ----------
+// Edge and reason colour follow the mark's state (needs you is ember, never the amber of “waiting”).
+const EDGE = { failed: 'danger', waiting: 'accent' };
+function historyDaylight(head) {
+  const rows = C.HISTORY[0][1];
+  const attn = rows.filter((r) => r[0] === 'failed' || r[0] === 'waiting'), live = rows.filter((r) => r[0] === 'running'), done = rows.filter((r) => !attn.includes(r) && !live.includes(r));
+  const REASON = { 'r-7ef0': 'Failed at step 4, “Run the tests”: 2 tests fail after its change.', 'r-7ed1': 'Waiting for your answer: approve, revise or discard its draft review.', 'r-7e64': 'Stopped at step 2: it hit its $0.05 budget.' };
+  const row = (r, rich) => `<tr class="${r[0]}${rich ? ' attn' : ''}" data-s="${EDGE[r[0]] ?? SS[r[0]]}"><td class="run"><b>${r[1]}</b> <span class="tgt">${r[2]}</span>${rich ? `<span class="reason">${REASON[r[7]] ?? r[8]}</span>` : r[8] ? `<span class="sub-l">${r[8]}</span>` : ''}</td><td class="st">${status(ST[r[0]])}</td><td class="sub nowrap">${r[4]}</td><td class="num">${r[5] || '<span class="sub">…</span>'}</td><td class="num">${r[6]}</td><td class="mono id">${r[7]}</td><td class="act">${rich ? `<button class="btn ${r[0] === 'waiting' ? 'primary' : 'secondary'} sm">${r[0] === 'waiting' ? 'Answer' : 'Open'}</button>` : ''}</td></tr>`;
+  const grp = (title, list, rich, cls) => `<tbody class="${cls}"><tr class="gh"><td colspan="7"><b>${title}</b><span>${list.length}</span></td></tr>${list.map((r) => row(r, rich)).join('')}</tbody>`;
+  const table = `<section class="card flush"><table class="tbl runs grouped"><thead><tr><th>Run</th><th>Status</th><th>When</th><th class="num">Took</th><th class="num">Cost</th><th class="id-h">ID</th><th></th></tr></thead>
+    ${grp('Needs attention', attn, true, 'g-attn')}${grp('Running now', live, false, 'g-live')}${grp('Finished', done, false, 'g-done')}</table></section>`;
+  const phone = (title, list, rich) => `<h3 class="ph-g">${title} <span>${list.length}</span></h3><ul class="list runs-phone">${list.map((r) => `<li class="${r[0]}${rich ? ' attn' : ''}" data-s="${EDGE[r[0]] ?? SS[r[0]]}"><div class="nt"><b>${r[1]} <span class="tgt">${r[2]}</span></b>${rich ? `<span class="reason">${REASON[r[7]] ?? r[8]}</span>` : ''}${status(ST[r[0]])}</div><span class="age">${r[4].replace(' ago', '')}</span></li>`).join('')}</ul>`;
+  return head + table + `<div class="phone-groups">${phone('Needs attention', attn, true)}${phone('Running now', live)}${phone('Finished', done)}</div>`;
+}
+// The run page carries the step detail: a collapsible tree; nested workflow calls are one node.
+function runTreeDaylight() {
+  const T = [
+    ['passed', 'Get the failing logs', '3 failing checks found', '2 s'],
+    ['passed', 'Decide what failed', 'A test failure (91% sure, 6% flaky)', '8 s'],
+    ['passed', 'Fix it', 'Calls workflow fix-and-verify', '7 min 40 s', [['passed', 'Reproduce locally', 'TestRefund fails on main', '40 s'], ['passed', 'Patch applyFee', 'Rounds half-even now', '6 min 12 s'], ['passed', 'Lint', 'No issues', '48 s']], 'fix-and-verify'],
+    ['failed', 'Run the tests', 'Calls workflow test-suite: 2 of 148 tests fail', '26 s', [['failed', 'Unit tests', 'TestCheckout, TestRefund fail', '21 s'], ['passed', 'Lint', 'No issues', '3 s'], ['skipped', 'End-to-end tests', 'Not reached', '']], 'test-suite'],
+    ['skipped', 'Push the fix', 'Not reached', ''],
+    ['skipped', 'Comment on the PR', 'Not reached', ''],
+  ];
+  const node = ([st, title, sub, took, kids, wf], i, depth = 0) => {
+    const line = `<span class="tl">${depth ? '' : `<span class="tn">${i + 1}</span>`}${mark(st, { label: true, size: 14 })}<span class="tt"><b>${title}</b><span>${sub}</span></span>${wf ? `<span class="wf">${ic('workflow')}${wf} · ${kids.length} steps</span>` : ''}<em>${took}</em></span>`;
+    return kids ? `<li class="${st}"><details ${st === 'failed' ? 'open' : ''}><summary>${line}</summary><ol class="kids">${kids.map((k, j) => node(k, j, depth + 1)).join('')}</ol></details></li>` : `<li class="${st}">${line}</li>`;
+  };
+  return `<section class="card"><header class="ch"><h2>What happened</h2><span class="sub">6 steps · 12 minutes</span></header><ol class="tree">${T.map((t, i) => node(t, i)).join('')}</ol></section>`;
 }
 
 const SCREENS = { overview: [overview, 'Home'], run: [runPage, 'Runs'], approval: [approvalPage, 'Bots'], history: [historyPage, 'Runs'], builder: [builderPage, 'Workflows'] };

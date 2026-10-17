@@ -2,6 +2,8 @@
 // column, on the same 16 runs, in Daylight light and dark. Everything is drawn from tokens.css.
 import { HISTORY } from '../v2/data.js';
 import { LUCIDE } from '../icons/icons.js';
+import { mark, status, legend, injectMarkCSS } from '../status/marks.js';
+injectMarkCSS();
 
 const ROWS = HISTORY[0][1].map(([st, wf, target, by, when, took, cost, id, note]) => ({ st, wf, target, by, when, took, cost, id, note }));
 // Where each run is in its workflow: [steps total, reached step (1-based), step names]
@@ -19,15 +21,9 @@ const OUTCOME = {
 const ATTN = (r) => r.st === 'failed' || r.st === 'waiting';
 const lu = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${LUCIDE[n]}</svg>`;
 
-// Filled status shapes (not outline icons in pills): distinct silhouettes that survive one colour.
-const SHAPE = {
-  ok: '<circle cx="6" cy="6" r="3.2" fill="currentColor"/>',
-  failed: '<path d="M2.6 2.6l6.8 6.8M9.4 2.6l-6.8 6.8" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
-  waiting: '<path d="M6 .8L11.2 6 6 11.2.8 6z" fill="currentColor"/>',
-  running: '<circle cx="6" cy="6" r="4" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="17 8" class="spin"/>',
-  parked: '<path d="M4 2.5v7M8 2.5v7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>',
-};
-const shape = (st, cls = '') => `<svg class="sh ${cls}" viewBox="0 0 12 12" aria-hidden="true">${SHAPE[st]}</svg>`;
+// Run states → the shared vocabulary (status/marks.js).
+const STATE = { ok: 'passed', failed: 'failed', running: 'running', waiting: 'needs', parked: 'parked' };
+const shape = (st) => mark(STATE[st] ?? st);
 const WORD = { ok: 'Passed', failed: 'Failed', running: 'Running', waiting: 'Needs you', parked: 'Parked' };
 const S = { ok: 'ok', failed: 'danger', running: 'running', waiting: 'accent', parked: 'neutral' };
 
@@ -77,15 +73,56 @@ function grouped() {
     ${grp('Needs attention', attn.length, attn, true, 'g-attn')}${grp('Running now', live.length, live, false, 'g-live')}${grp('Finished', rest.length, rest, false, 'g-done')}</table>`;
 }
 
+
+// CHOSEN: D's grouping + A's margin marks. Rows that need someone first (a thin leading edge, the
+// reason in words, one action), then what is running, then what finished in quiet ink. Status is a
+// mark plus a word from the one vocabulary. No step trace in lists: step detail is on the run page.
+function chosen() {
+  const attn = ROWS.filter(ATTN), live = ROWS.filter((r) => r.st === 'running'), rest = ROWS.filter((r) => !ATTN(r) && r.st !== 'running');
+  const row = (r, rich) => `<tr class="${r.st}${rich ? ' attn' : ''}" data-s="${S[r.st]}">${runCell(r, rich ? `<span class="why">${OUTCOME[r.st](r)}</span>` : r.st === 'running' ? `<span class="sub-l">${OUTCOME.running(r).replace('Running · ', '')}</span>` : '')}<td class="st">${status(STATE[r.st])}</td>${tail(r)}<td class="act">${rich ? `<button class="c-btn ${r.st === 'waiting' ? 'primary' : 'secondary'} sm" tabindex="-1">${r.st === 'waiting' ? 'Answer' : 'Open'}</button>` : ''}</td></tr>`;
+  const grp = (title, n, rows, rich, cls) => `<tbody class="${cls}"><tr class="gh"><td colspan="7"><b>${title}</b><span>${n}</span></td></tr>${rows.map((r) => row(r, rich)).join('')}</tbody>`;
+  return `<table class="tX">${head([['Run'], ['Status'], ['When'], ['Took', 'num'], ['Cost', 'num'], ['ID'], ['', 'act']])}
+    ${grp('Needs attention', attn.length, attn, true, 'g-attn')}${grp('Running now', live.length, live, false, 'g-live')}${grp('Finished', rest.length, rest, false, 'g-done')}</table>`;
+}
+
+// The run detail page carries the step detail lists no longer show: a collapsible tree. A step that
+// calls another workflow is one node with its own status; it opens to that workflow's steps.
+const TREE = [
+  ['passed', 'Get the failing logs', '3 failing checks found', '2 s'],
+  ['passed', 'Decide what failed', 'A test failure (91% sure)', '8 s'],
+  ['passed', 'Fix it', 'Calls workflow fix-and-verify', '7 min 40 s', [
+    ['passed', 'Reproduce locally', 'TestRefund fails on main', '40 s'],
+    ['passed', 'Patch applyFee', 'Rounds half-even now', '6 min 12 s'],
+    ['passed', 'Lint', 'No issues', '48 s'],
+  ], 'fix-and-verify'],
+  ['failed', 'Run the tests', 'Calls workflow test-suite: 2 of 148 tests fail', '26 s', [
+    ['failed', 'Unit tests', 'TestCheckout, TestRefund fail', '21 s'],
+    ['passed', 'Lint', 'No issues', '3 s'],
+    ['skipped', 'End-to-end tests', 'Not reached', ''],
+  ], 'test-suite'],
+  ['skipped', 'Push the fix', 'Not reached', ''],
+  ['skipped', 'Comment on the PR', 'Not reached', ''],
+];
+function treeNode([st, title, sub, took, kids, wf], i, depth = 0) {
+  const n = depth ? '' : `<span class="tn">${i + 1}</span>`;
+  const line = `<span class="tl">${n}${mark(st, { label: true })}<span class="tt"><b>${title}</b><span>${sub}</span></span>${wf ? `<span class="wf">${LUCIDE.workflow ? `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${LUCIDE.workflow}</svg>` : ''}${wf} · ${kids.length} steps</span>` : ''}<em>${took}</em></span>`;
+  if (!kids) return `<li class="leaf ${st}" data-state="${st}">${line}</li>`;
+  return `<li class="${st}" data-state="${st}"><details ${st === 'failed' ? 'open' : ''}><summary>${line}</summary><ol class="kids">${kids.map((k, j) => treeNode(k, j, depth + 1)).join('')}</ol></details></li>`;
+}
+const tree = () => `<div class="run-tree"><div class="rt-h"><b>ci-fixer</b> acme/web#1288 ${status('failed', 'Failed at step 4')}<span class="sub-l">12 min · 52 min ago</span></div><ol class="tree">${TREE.map((t, i) => treeNode(t, i)).join('')}</ol>
+  <p class="tree-note">Nested workflow calls collapse to a single step with their own status. The failing path opens by itself; everything else stays closed.</p></div>`;
+
 const VARIANTS = [
-  ['before', 'Before: tinted capsule and tinted row', 'The stock pattern (the prototype’s, and round two’s mocks too): every row carries a coloured pill with an outline icon, and failing rows are washed in red. Five colours compete, the passing majority is as loud as the failure, and the tint muddies text contrast.', before],
-  ['margin', 'A · Margin mark', 'The capsule goes. Passing rows show a small ink dot and the word, at the same weight as the rest of the row. A row that needs attention gets a 4px edge in its colour, its status word in that colour, and its reason in words under the run name. There is no fill anywhere.', margin],
-  ['outcome', 'B · Outcome sentence', 'The status column becomes “what happened”, in a sentence: “Passed in 7 min”, “Failed at step 4, ‘Run the tests’”, “Waiting for your answer on a draft”. Only the sentences that need you take colour. It is the most readable for a newcomer, but it needs a wide column.', outcome],
-  ['trace', 'C · Step trace', 'The column shows each run’s steps as a short row of marks: done steps as ink ticks, the failing step as a red cross, a waiting step as an ember diamond, a running step as an arc, and unreached steps hollow. You see not just that a run failed but where, and how far the others got. It is the densest and most conductor-specific.', traced],
-  ['grouped', 'D · Grouped, with the trace (recommended)', 'Runs that need a person are lifted out of the list into their own group, each with a plain sentence and one action. Running work follows, then everything that finished, in quiet ink. The step trace stays as the status column. Emphasis comes from position and words, not from tinting rows, so the table stays calm at 500 rows.', grouped],
+  ['chosen', 'Chosen: grouped rows, margin marks', 'Daniel’s decision: <b>D’s grouping</b> with <b>A’s marks</b>. “Needs attention · N” comes first, each row with a thin leading edge, the reason in a plain sentence and one action. “Running now” follows, then “Finished” in quiet ink. Status is a small mark plus a word, from the one vocabulary used everywhere. Passed is a quiet sage dot and parked is slate pause bars, so they never look alike. No row is tinted, and there is no step trace in the list: steps live on the run page (below).', chosen],
+  ['tree', 'Run detail: the step tree', 'Workflows can have many steps and can call other workflows, so the number of steps is unpredictable and has no place in a list. On the run page they are a collapsible tree: one line per step with its mark, what it did and how long it took. A nested workflow call is one node with its own status, and the failing path opens on its own.', tree],
+  ['before', 'Explored · Before: tinted capsule and tinted row', 'The stock pattern (the prototype’s, and round two’s mocks too): every row carries a coloured pill with an outline icon, and failing rows are washed in red. Five colours compete, the passing majority is as loud as the failure, and the tint muddies text contrast.', before],
+  ['margin', 'Explored · A: margin mark', 'The capsule goes. Passing rows show a small ink dot and the word, at the same weight as the rest of the row. A row that needs attention gets a 4px edge in its colour, its status word in that colour, and its reason in words under the run name. There is no fill anywhere.', margin],
+  ['outcome', 'Explored · B: outcome sentence', 'The status column becomes “what happened”, in a sentence: “Passed in 7 min”, “Failed at step 4, ‘Run the tests’”, “Waiting for your answer on a draft”. Only the sentences that need you take colour. It is the most readable for a newcomer, but it needs a wide column.', outcome],
+  ['trace', 'Explored · C: step trace', 'The column shows each run’s steps as a short row of marks: done steps as ink ticks, the failing step as a red cross, a waiting step as an ember diamond, a running step as an arc, and unreached steps hollow. You see not just that a run failed but where, and how far the others got. It is the densest and most conductor-specific.', traced],
+  ['grouped', 'Explored · D: grouped, with the step trace', 'The grouping was kept, but the trace was dropped: workflows can have many steps and can call other workflows, so the number of marks per row is unpredictable.', grouped],
 ];
 
 document.getElementById('variants').innerHTML = VARIANTS.map(([id, title, why, fn]) => `<section class="var" id="${id}">
   <h2>${title}</h2><p class="why-p">${why}</p>
   <div class="pair">${['light', 'dark'].map((t) => `<div class="panel v-${id}" data-theme="${t}"><span class="tag">${t}</span><div class="scroll">${fn()}</div></div>`).join('')}</div></section>`).join('');
-document.getElementById('legend').innerHTML = ['ok', 'failed', 'waiting', 'running', 'parked'].map((s) => `<span data-s="${S[s]}">${shape(s)}${WORD[s]}</span>`).join('');
+document.getElementById('legend').innerHTML = legend(['passed', 'running', 'failed', 'needs', 'parked', 'skipped']);

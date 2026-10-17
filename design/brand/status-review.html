@@ -22,14 +22,15 @@
 </header>
 <main id="variants"></main>
 <section class="var" id="system">
-  <h2>Recommendation: B, typed labels, with the status column’s D</h2>
+  <h2>Chosen: B, typed labels, with the status column’s grouped rows and margin marks</h2>
   <p class="why-p">These form one system. The state mark is the same everywhere, in the status column’s step trace, a bot header, a proposal or a pack row. Colour carries one meaning across the product: something needs a person, or something is live. Everything else is ink. Pills survive only as filters, because a pill now means “you can click this”.</p>
   <div id="jobs"></div>
   <h2 class="h2s">Rules</h2>
   <ul class="rules-l">
     <li><b>Classify before you style.</b> Every label is a state, a tier, a staged change, a trust level, a count, a fact or a role. Each job has one form. A new label picks its job; it never gets a new colour.</li>
     <li><b>No static pills.</b> A pill means clickable. Tinted fills behind words are gone, both from labels and from rows (see the status column).</li>
-    <li><b>Colour means attention.</b> Ember for needs you, red for failed or refused, amber for waiting or risky, blue for live or pending, violet for shadow. Passed, installed, official, pinned and every fact are ink.</li>
+    <li><b>One vocabulary of marks.</b> Every state mark, in a table, a card, a lane chart, a legend, the overview, the run page or a phone, comes from <code>status/marks.js</code>. Passed is a quiet sage dot and parked is slate pause bars. Every chart mark appears in its legend, and <code>tools/mark-check.mjs</code> fails the build otherwise.</li>
+    <li><b>Words take colour only for attention.</b> Ember for needs you, red for failed or refused, amber for waiting or risky, blue for live or pending, violet for shadow. Passed, parked, installed, official, pinned and every fact have ink words.</li>
     <li><b>Words first.</b> Tiers show their risk words (“Asks you first”), not their config names. Counts say “41 of 100 turns”, and staged edits say “not applied”.</li>
     <li><b>One state per surface.</b> A row or header shows one state mark. Further states are facts or go in the detail view.</li>
     <li><b>Shapes carry state without colour,</b> so labels read in one colour, for colour-blind readers and in forced-colours mode. Each mark has a text label for screen readers.</li>

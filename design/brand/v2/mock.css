@@ -408,3 +408,39 @@ h2 { font: var(--d-title-weight) var(--d-h2)/1.25 var(--font-family-display); fo
   .proposal .decide .btn { flex: 1 1 40%; } .proposal .decide .hint { display: none; }
   .bothead .lead { font-size: 14px; }
 }
+
+/* ---------- Daylight: the chosen status vocabulary (no tints, no capsules, no tinted icon chips) ---------- */
+[data-d="daylight"] .ng { background: none; width: 18px; height: auto; }
+[data-d="daylight"] .tbl tr.failed td, [data-d="daylight"] .tbl tr.waiting td { background: none; }
+.tbl.grouped tr.gh td { height: auto; padding: 20px 14px 8px; border-bottom: 1px solid var(--color-border-default); background: none; }
+.tbl.grouped tbody:first-of-type tr.gh td { padding-top: 8px; }
+.tbl.grouped tr.gh b { font-weight: 700; } .tbl.grouped tr.gh span { margin-left: 8px; font-size: 12.5px; color: var(--color-text-tertiary); }
+.tbl.grouped .g-attn tr.gh span { background: var(--color-accent-default); color: var(--color-text-on-accent); font-weight: 700; border-radius: 999px; padding: 1px 8px; }
+.tbl.grouped tr.attn td { height: auto; padding-top: 12px; padding-bottom: 12px; }
+.tbl.grouped tr.attn td:first-child { box-shadow: inset 3px 0 0 var(--s-solid); }
+.tbl.grouped .reason, .runs-phone .reason { display: block; font-size: 13.5px; font-weight: 600; color: var(--s-fg); margin-top: 2px; white-space: normal; }
+.tbl.grouped .sub-l { display: block; font-size: 12.5px; color: var(--color-text-tertiary); }
+.tbl.grouped .g-done td { color: var(--color-text-secondary); } .tbl.grouped .g-done td b { color: var(--color-text-primary); font-weight: 600; }
+.tbl.grouped td.act { width: 1%; text-align: right; }
+.phone-groups { display: none; }
+.tree, .tree .kids { list-style: none; margin: 0; padding: 0; }
+.tree > li { border-top: 1px solid var(--color-border-subtle); } .tree > li:first-child { border-top: 0; }
+.tree .kids { margin-left: 30px; padding-left: 10px; border-left: 1px solid var(--color-border-default); }
+.tree .tl { display: grid; grid-template-columns: 20px 16px 1fr auto auto; gap: 4px 10px; align-items: center; padding: 9px 0; }
+.tree .kids .tl { grid-template-columns: 16px 1fr auto auto; padding: 6px 0; }
+.tree .tn { font-size: 12.5px; color: var(--color-text-tertiary); text-align: right; }
+.tree .tt b { display: block; font-weight: 700; } .tree .tt span { font-size: 13.5px; color: var(--color-text-secondary); }
+.tree li.failed > .tl .tt b, .tree li.failed > details > summary .tt b { color: var(--color-status-danger-fg); }
+.tree li.skipped .tt b { color: var(--color-text-tertiary); font-weight: 500; }
+.tree em { font-style: normal; font-size: 12.5px; color: var(--color-text-tertiary); white-space: nowrap; }
+.tree .wf { display: inline-flex; gap: 5px; align-items: center; font-size: 12.5px; color: var(--color-text-secondary); white-space: nowrap; } .tree .wf .ic { width: 14px; height: 14px; }
+.tree summary { list-style: none; cursor: pointer; } .tree summary::-webkit-details-marker { display: none; }
+@media (max-width: 600px) {
+  [data-d="daylight"] .phone-groups { display: block; }
+  [data-d="daylight"] .runs-phone { display: block; margin-bottom: 14px; }
+  .phone-groups .ph-g { font: 700 15px var(--font-family-sans); margin: 12px 2px 8px; } .phone-groups .ph-g span { font-weight: 400; color: var(--color-text-tertiary); font-size: 12.5px; margin-left: 6px; }
+  .runs-phone li.attn { box-shadow: inset 3px 0 0 var(--s-solid); padding-left: 12px; }
+  .runs-phone .nt .mk-status { margin-top: 3px; font-size: 13.5px; }
+  [data-d="daylight"] .runs-phone li { grid-template-columns: minmax(0, 1fr) auto; }
+  .tree .tl { grid-template-columns: 16px 16px 1fr auto; } .tree .wf { grid-column: 3; } .tree .kids { margin-left: 14px; }
+}

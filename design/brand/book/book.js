@@ -2,12 +2,16 @@
 // Everything visual comes from tokens.css; this file only lays content out.
 import { LUCIDE, STATUS } from '../icons/icons.js';
 import { LOGOS, OFFICIAL_LOGO, kitDir } from '../tools/logos.mjs';
+import { STATES as STATUS_STATES, CHANGE, GLYPH_STATE, mark, chartMark, legend, injectMarkCSS } from '../status/marks.js';
+injectMarkCSS();
 
 const [T, CON, MIG] = await Promise.all(['tokens/tokens.json', 'tokens/contrast.json', 'tokens/migration.json'].map((u) => fetch(u).then((r) => r.json())));
 
 // ---------- helpers ----------
 const lu = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${LUCIDE[n] ?? ''}</svg>`;
-const sg = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${STATUS[n].svg}</svg>`;
+const sgLegacy = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${STATUS[n].svg}</svg>`;
+// Status glyphs come from the one vocabulary (status/marks.js); only the news “info” icon is drawn here.
+const sg = (n, cls = '') => (GLYPH_STATE[n] ? mark(GLYPH_STATE[n], { size: 16 }) : sgLegacy(n, cls));
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const THEMES = ['dark', 'light'];
 
@@ -54,9 +58,9 @@ const PRINCIPLES = [
   ['Three levels of type', 'What (title or bold lead-in), why it matters (regular, secondary ink), machine detail (mono, small, tertiary, last). Nothing else.',
     'ci-fixer acme/web#1288 / Failed at step test. go test ./...: 2 failures (TestCheckout, TestRefund)',
     () => `<div class="ia-levels"><b>ci-fixer couldn’t fix the failing check on acme/web#1288</b><span>Its change made 2 tests fail. It stopped before pushing anything.</span><code>r-7ef0 · step test</code></div>`],
-  ['Colour only for what needs attention', 'Passing work is ink, not green: when eleven of sixteen rows are green, green means nothing. Failed, waiting, running and needs-you get colour, always with a glyph and a word.',
+  ['Colour only for what needs attention', 'Passing work is quiet: a small green mark and an ink word, never a green row. When eleven of sixteen rows shout “passed”, the two failures hide. A row that needs someone gets a thin leading edge, its reason in words, and a place at the top. No row is ever tinted.',
     '✓ ok · ✓ ok · × failed · ✓ ok · ◎ waiting · ✓ ok (every row coloured)',
-    () => `<div class="ia-rows">${[['success', 'pr-review', 'acme/api#480', ''], ['danger', 'ci-fixer', 'acme/web#1288', '2 tests fail after its change'], ['success', 'issue-triage', 'acme/api#486', ''], ['warning', 'pr-review', 'acme/infra#77', 'Waiting for your answer']].map(([st, w, t, n]) => `<div class="ia-row ${st === 'success' ? 'quiet' : ''}" data-s="${st}">${sg(st)}<span><b>${w}</b> ${t}</span><em>${n}</em></div>`).join('')}</div>`],
+    () => `<div class="ia-rows">${[['success', 'pr-review', 'acme/api#480', ''], ['danger', 'ci-fixer', 'acme/web#1288', '2 tests fail after its change'], ['success', 'issue-triage', 'acme/api#486', ''], ['warning', 'pr-review', 'acme/infra#77', 'Waiting for your answer']].map(([st, w, t, n]) => `<div class="ia-row ${['danger', 'warning', 'accent'].includes(st) ? 'attn' : 'quiet'}" data-s="${st}"><span class="c-status" data-s="${st}">${sg(st)}</span><span><b>${w}</b> ${t}${n ? `<em>${n}</em>` : ''}</span></div>`).join('')}</div>`],
   ['Numbers line up', 'Durations, costs and counts are right-aligned in tabular figures with units, so a column scans without reading every cell.',
     '7m · 12m · 1m · … · 9m (left-aligned, mono, no units)',
     () => `<div class="ia-nums">${[['7 min', '$0.41'], ['12 min', '$1.12'], ['1 min', '$0.06'], ['9 min', '$0.82']].map(([a, b]) => `<span>${a}</span><span>${b}</span>`).join('')}</div>`],
@@ -76,7 +80,7 @@ const PRINCIPLES = [
     'NOW · Overview · Live 3 · Needs you 6 · WORK · Run history · … (dense mono everywhere)',
     () => `<div class="ia-dens"><div data-density="comfortable">${sampleRows()}</div><div data-density="compact">${sampleRows()}</div></div>`],
 ];
-function sampleRows() { return [['success', 'pr-review', 'acme/web#1291'], ['danger', 'ci-fixer', 'acme/web#1288'], ['success', 'issue-triage', 'acme/api#486']].map(([st, w, t]) => `<div class="ia-row ${st === 'success' ? 'quiet' : ''}" data-s="${st}">${sg(st)}<span><b>${w}</b> ${t}</span></div>`).join(''); }
+function sampleRows() { return [['danger', 'ci-fixer', 'acme/web#1288'], ['success', 'pr-review', 'acme/web#1291'], ['neutral', 'dep-bump', 'acme/web']].map(([st, w, t]) => `<div class="ia-row ${st === 'danger' ? 'attn' : 'quiet'}" data-s="${st}"><span class="c-status" data-s="${st}">${sg(st)}</span><span><b>${w}</b> ${t}</span></div>`).join(''); }
 ch('glance', 'Reading at a glance', 'conductor produces a firehose of runs, cases, approvals, logs and diffs. These ten rules turn it into something a person can read in seconds. Every screen follows them.',
   PRINCIPLES.map(([t], i) => [`p${i + 1}`, t]),
   () => PRINCIPLES.map(([t, rule, before, after], i) => `<article class="principle" id="p${i + 1}"><div class="pr-t"><span class="pn">${String(i + 1).padStart(2, '0')}</span><div><h3>${t}</h3><p>${rule}</p></div></div>
@@ -117,13 +121,13 @@ const semSwatches = (theme) => `<div class="sem-grid">${semGroups.flatMap(([g, k
 })).join('')}</div>`;
 
 const STAT = Object.keys(T.semantic.color.status).filter((k) => !k.startsWith('$'));
-const STAT_GLYPH = { success: 'success', warning: 'warning', danger: 'danger', info: 'info', running: 'running', neutral: 'neutral' };
+const STAT_GLYPH = { success: 'success', warning: 'warning', danger: 'danger', info: 'shadow', running: 'running', neutral: 'neutral' };
 const STAT_EX = {
   success: ['Passed', 'pr-review finished · 31 checks', '2m'], warning: ['Waiting on you', 'hand-off awaiting answer', '1h'], danger: ['Failed', 'ci-fixer failed on acme/web#1288', '52m'],
-  info: ['Update', 'v0.72.0 available · preflight passed', '4m'], running: ['Running', 'issue-triage · step classify', 'now'], neutral: ['Parked', 'dep-bump paused by you', '3d'],
+  info: ['Shadow', 'billing-sre would have posted · not sent', '4m'], running: ['Running', 'issue-triage · step classify', 'now'], neutral: ['Parked', 'dep-bump paused by you', '3d'],
 };
 const statusCards = (theme) => `<div class="statuses">${STAT.map((s) => `<div class="status-card" data-s="${s}">
-  <div class="top-row">${sg(STAT_GLYPH[s], s === 'running' ? 'c-glyph-spin' : '')}<b>${s}</b><span class="c-dot ${s === 'running' ? 'live' : ''}"></span></div>
+  <div class="top-row">${sg(STAT_GLYPH[s], s === 'running' ? 'c-glyph-spin' : '')}<b>${s}</b></div>
   <div class="chips"><span class="c-badge" data-s="${s}">${sg(STAT_GLYPH[s], s === 'running' ? 'c-glyph-spin' : '')}${STAT_EX[s][0]}</span><span class="c-badge" data-s="${s}">${STAT_EX[s][0].toLowerCase()}</span></div>
   <div class="row">${sg(STAT_GLYPH[s])}<span>${STAT_EX[s][1]}</span><em>${STAT_EX[s][2]}</em></div>
   <p>${esc(T.semantic.color.status[s].$description.split(' Always')[0])}<br><code>--color-status-${s}-{fg,bg,border,solid}</code> · fg ${resolve(`semantic.color.status.${s}.fg`, theme).hex}</p>
@@ -205,7 +209,7 @@ ch('colour', 'Colour', 'Warm cream and cocoa surfaces, sand neutrals, one ember 
   ${sub('semantic', 'Semantic tokens', 'The names components use. Each resolves to a different raw value per theme.')}
   ${stack((t) => semSwatches(t))}
 
-  ${sub('status', 'Status', 'There are six states, each with fg (text and glyph), bg (a tinted wash), border and solid (dots and bars) tokens. Each is always shown with its glyph and a word. The accent is not a status: “needs you” uses the accent with a diamond.')}
+  ${sub('status', 'Status', 'One vocabulary of marks (<code>status/marks.js</code>), the same in tables, cards, lane charts, legends, the overview, the run page and on phones. The mark always carries its state colour, and the word is coloured only when a person is needed or the thing is live. Passed is a quiet sage dot and parked is slate pause bars, so they never share a hue or a shape. Rows are never tinted: a row that needs someone gets a thin leading edge, its reason and one action. Each state has fg (text), bg, border and solid (mark) tokens.')}
   ${stack((t) => statusCards(t))}
 
   ${sub('dataviz', 'Data visualisation', 'The palettes were built with the dataviz method and checked with its validator against <code>bg.surface</code> in both themes. Categorical slots are assigned in this order and never cycled, and a ninth series folds into “Other”.')}
@@ -282,10 +286,21 @@ ch('type', 'Type', 'A soft, upright serif for short human titles, a typeface bui
 // =====================================================================
 const SPACES = Object.entries(T.primitive.space).filter(([k]) => !k.startsWith('$')).sort((a, b) => a[1].$value.value - b[1].$value.value);
 const densityTokens = [...flat.entries()].filter(([, t]) => t.modes && 'compact' in t.modes);
-const sampleTable = (extra = '') => `<div class="c-table-wrap"><table class="c-table"><thead><tr><th style="width:28px"></th><th>Run</th><th>Workflow</th><th>Status</th><th class="num">Duration</th><th class="num">Cost</th></tr></thead><tbody>
-  ${[['r-7f2c', 'pr-review', 'success', 'Passed', '1m 12s', '$0.04'], ['r-7f2b', 'ci-fixer', 'danger', 'Failed', '6m 40s', '$0.31'], ['r-7f29', 'issue-triage', 'running', 'Running', '0m 22s', '$0.01'], ['r-7f27', 'platform-sre', 'warning', 'Waiting on you', '12m 03s', '$0.18'], ['r-7f22', 'dep-bump', 'neutral', 'Parked', '—', '—']]
-    .map(([id, wf, s, l, d, c], i) => `<tr class="${i === 1 ? 'is-selected' : ''} ${extra && i === 2 ? extra : ''}"><td><span class="check">${i === 1 ? lu('check') : ''}</span></td><td><span class="c-mono">${id}</span></td><td>${wf}</td><td><span class="c-badge" data-s="${s}">${sg(s === 'neutral' ? 'neutral' : s, s === 'running' ? 'c-glyph-spin' : '')}${l}</span></td><td class="num">${d}</td><td class="num">${c}</td></tr>`).join('')}
-</tbody></table></div>`;
+// The table pattern: rows that need someone are grouped first (edge + reason + one action),
+// then what is running, then what finished. Status is a mark plus a word; rows are never tinted.
+const TABLE_SAMPLE = [
+  ['attn', 'r-7f2b', 'ci-fixer', 'acme/web#1288', 'danger', 'danger', 'Failed', 'Failed at step 4, “Run the tests”: 2 tests fail after its change.', '6 min 40 s', '$0.31', 'Open'],
+  ['attn', 'r-7f27', 'pr-review', 'acme/infra#77', 'accent', 'needs-you', 'Needs you', 'Waiting for your answer: approve, revise or discard its draft review.', '—', '$0.18', 'Answer'],
+  ['live', 'r-7f29', 'issue-triage', 'acme/api#486', 'running', 'running', 'Running', '', '22 s', '$0.01'],
+  ['done', 'r-7f2c', 'pr-review', 'acme/web#1291', 'success', 'success', 'Passed', '', '1 min 12 s', '$0.04'],
+  ['done', 'r-7f22', 'dep-bump', 'acme/web', 'neutral', 'neutral', 'Parked', '', '—', '—'],
+];
+const sampleTable = (extra = '') => {
+  const groups = [['attn', 'Needs attention', 'attn-h'], ['live', 'Running now', ''], ['done', 'Finished', '']];
+  return `<div class="c-table-wrap"><table class="c-table"><thead><tr><th style="width:28px"></th><th>Run</th><th>Status</th><th class="num">Took</th><th class="num">Cost</th><th>ID</th><th></th></tr></thead>
+  ${groups.map(([g, title, cls]) => { const rows = TABLE_SAMPLE.filter((r) => r[0] === g); return `<tbody class="${g}"><tr class="grp ${cls}"><td colspan="7"><b>${title}</b><span>${rows.length}</span></td></tr>${rows.map(([, id, wf, tgt, s, glyph, word, reason, d, c, act], i) => `<tr class="${g === 'attn' ? 'attn' : ''} ${g === 'done' && i === 0 ? 'is-selected' : ''} ${extra && g === 'live' ? extra : ''}" data-s="${s}"><td><span class="check">${g === 'done' && i === 0 ? lu('check') : ''}</span></td><td class="run"><b>${wf}</b> <span class="sub">${tgt}</span>${reason ? `<span class="reason">${reason}</span>` : ''}</td><td><span class="c-status" data-s="${s}">${sg(glyph, s === 'running' ? 'c-glyph-spin' : '')}${word}</span></td><td class="num">${d}</td><td class="num">${c}</td><td><span class="c-mono sub">${id}</span></td><td class="act">${act ? `<button class="c-btn ${s === 'accent' ? 'primary' : 'secondary'} sm" tabindex="-1">${act}</button>` : ''}</td></tr>`).join('')}</tbody>`; }).join('')}
+</table></div>`;
+};
 ch('layout', 'Space and layout', 'A 4px base, a 12-column grid on desktop and two density modes for the same components.',
   [['space', 'Spacing'], ['grid', 'Grid and breakpoints'], ['containers', 'Content widths'], ['density', 'Density']],
   () => `
@@ -352,7 +367,7 @@ ch('icons', 'Iconography', 'Lucide outline icons for objects and actions, plus n
   ${sub('icon-set', 'Set', 'This is the vocabulary the dashboard uses. Each concept gets exactly one icon.')}
   <div class="icon-grid">${Object.keys(LUCIDE).map((n) => `<div>${lu(n)}<span>${n}</span></div>`).join('')}</div>
   ${sub('glyphs', 'Status glyphs', 'Drawn on a 16-unit grid with a 1.5 stroke and round caps, so each is legible at 13px. Each state has a distinct shape, so they read in one colour and to colour-blind readers. Running is the only one that moves.')}
-  ${pair(() => `<div class="glyphs" style="grid-template-columns:1fr 1fr">${Object.entries(STATUS).map(([k, g]) => `<div data-s="${GLYPH_S[k]}">${sg(k, k === 'running' ? 'c-glyph-spin' : '')}<b>${k}</b><span>${g.label}</span></div>`).join('')}</div>`)}
+  ${pair(() => `<div class="glyphs" style="grid-template-columns:1fr 1fr">${Object.entries({ ...STATUS_STATES, ...CHANGE }).map(([k, g]) => `<div>${mark(k, { size: 24 })}<b>${g.word}</b><span>${g.shape} · <code>${g.mark}</code></span></div>`).join('')}</div>`)}
   `);
 
 // =====================================================================
@@ -422,12 +437,10 @@ const tabsSheet = () => `<div style="display:grid;gap:var(--space-5)">
   <div style="display:flex;gap:var(--space-4);flex-wrap:wrap;align-items:center"><div class="c-seg"><span>1h</span><span class="is-active">12h</span><span class="is-hover">24h</span><span>7d</span></div><div class="c-seg"><span class="is-active">Comfortable</span><span>Compact</span></div>
   <span class="c-help">Tabs switch views of one thing; a segmented control switches a setting. Neither ever navigates to another page.</span></div>
 </div>`;
-const listSheet = () => `${sampleTable('is-focus')}<div style="height:12px"></div><div class="c-table-wrap"><table class="c-table"><tbody>
-  ${[['needs-you', 'accent', 'terraform apply · infra@3f2a9c1d', 'platform-sre · p12', '7m'], ['danger', 'danger', 'ci-fixer failed on acme/web#1288', 'step test · 2 failures', '52m'], ['warning', 'warning', 'hand-off awaiting answer · acme/infra#77', 'pr-review', '1h']].map(([g, s, t, m, a]) => `<tr><td style="width:28px;color:var(--s-fg)" data-s="${s}">${sg(g)}</td><td><div style="font-weight:500">${t}</div><div class="c-mono sub">${m}</div></td><td class="num sub">${a}</td><td style="width:1%">${s === 'accent' ? '<button class="c-btn primary sm" tabindex="-1">Review</button>' : lu('chevron-right')}</td></tr>`).join('')}
-</tbody></table></div>`;
+const listSheet = () => sampleTable('is-focus');
 const badgeSheet = () => `<div style="display:grid;gap:var(--space-4)">
-  <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">${STAT.map((s) => `<span class="c-badge" data-s="${s}">${sg(s, s === 'running' ? 'c-glyph-spin' : '')}${STAT_EX[s][0]}</span>`).join('')}<span class="c-badge" data-s="accent">${sg('needs-you')}Needs you</span><span class="c-badge">${lu('package')}pack</span><span class="c-badge">read</span></div>
-  <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center"><span class="c-chip">${lu('folder')}All folders</span><span class="c-chip is-hover">work</span><span class="c-chip is-selected">${lu('check')}personal</span><span class="c-count">6</span><span style="display:flex;gap:6px;align-items:center" data-s="success"><span class="c-dot live"></span><span class="c-help">live</span></span><span data-s="running"><span class="c-dot"></span></span><span data-s="danger"><span class="c-dot"></span></span></div>
+  <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">${STAT.map((s) => `<span class="c-badge" data-s="${s}">${sg(STAT_GLYPH[s])}${STAT_EX[s][0]}</span>`).join('')}<span class="c-badge" data-s="accent">${sg('needs-you')}Needs you</span><span class="c-badge">${lu('package')}pack</span><span class="c-badge">read</span></div>
+  <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center"><span class="c-chip">${lu('folder')}All folders</span><span class="c-chip is-hover">work</span><span class="c-chip is-selected">${lu('check')}personal</span><span class="c-count">6</span>${mark("running")}<span class="c-help">live</span></div>
   <span class="c-help">Badges label state (glyph + word). Chips filter (they toggle). The orange count appears only where a person is needed.</span>
 </div>`;
 const feedbackSheet = () => `<div style="display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:var(--space-4);align-items:start">
@@ -485,7 +498,7 @@ const COMP = [
   ['value-source', 'Value source', 'This field takes a value from a source. Secret is the default and the source sits in a quiet menu, instead of a five-way segmented control in front of every field (from the newcomer audit).', vsSheet, true],
   ['choice', 'Choice cards', 'Use these for decisions that need a sentence each, such as permission presets, connector methods and wizard forks. Never use more than five; the rest go under “Advanced”.', choiceSheet, true],
   ['tabs', 'Tabs and segmented controls', null, tabsSheet, true],
-  ['tables', 'Tables and dense lists', '<b>Under review:</b> the capsule-and-row-tint status column below was called generic; four alternatives are in the <a href="explore/status-column.html">status column exploration</a>. Text is left-aligned and numbers are right-aligned with tabular figures. The status column always has a glyph and a word, and ids are in mono. Rows are focusable (j/k to move, x to select, Enter to open). Selection uses the accent wash and a 3px bar.', listSheet, true],
+  ['tables', 'Tables and dense lists', 'Rows are grouped: <b>Needs attention</b> (a thin leading edge, the reason in words and one action), then <b>Running now</b>, then <b>Finished</b> in quiet ink. Status is a mark plus a word, and no row is ever tinted. The decision is recorded on the <a href="explore/status-column.html">status column</a> and <a href="status-review.html">labels</a> pages. Text is left-aligned and numbers are right-aligned with tabular figures. The status column always has a glyph and a word, and ids are in mono. Rows are focusable (j/k to move, x to select, Enter to open). Selection uses the accent wash and a 3px bar.', listSheet, true],
   ['badges', 'Badges, chips and counts', null, badgeSheet, true],
   ['feedback', 'Banners and toasts', 'Banners are for conditions that persist (until fixed). Toasts are for things that just happened, last 6 seconds (errors stay until dismissed) and sit above the phone tab bar. Every message says what happened and what to do next.', feedbackSheet, true],
   ['overlays', 'Dialogs, drawers and sheets', 'Dialogs are for decisions, drawers for detail beside a list, and sheets for the phone. All of them trap focus, close on Esc and return focus to where you were.', overlaySheet, true],
@@ -512,25 +525,21 @@ function story(compact = false) {
   return `<ol class="pt-story">${steps.slice(0, compact ? 5 : 5).map(([st, t, d, x]) => `<li data-s="${st === 'skipped' ? 'neutral' : st}" class="${st}"><span class="sg">${sg(st)}</span><div><b>${t}</b><span>${d}</span></div><em>${x}</em></li>`).join('')}</ol>`;
 }
 function lanes() {
-  const L = [['pr-review', [[2, 'running'], [31, 'ok'], [95, 'waiting'], [252, 'ok'], [503, 'ok'], [640, 'ok']]], ['ci-fixer', [[6, 'running'], [52, 'failed'], [230, 'parked'], [588, 'ok']]], ['issue-triage', [[79, 'ok'], [299, 'ok'], [410, 'ok']]], ['platform-sre', [[7, 'approval'], [176, 'ok'], [716, 'ok']]], ['dep-bump', [[131, 'ok']]], ['release-notes', [[418, 'failed']]]];
+  const L = [['pr-review', [[2, 'running'], [31, 'passed'], [95, 'needs'], [252, 'passed'], [503, 'passed'], [640, 'passed']]], ['ci-fixer', [[6, 'running'], [52, 'failed'], [230, 'parked'], [588, 'passed']]], ['issue-triage', [[79, 'passed'], [299, 'passed'], [410, 'passed']]], ['platform-sre', [[7, 'needs'], [176, 'passed'], [716, 'passed']]], ['dep-bump', [[131, 'passed']]], ['release-notes', [[418, 'failed']]]];
   const w = 900, left = 112, lh = 34, top = 8, H = top + L.length * lh + 24, span = 720, x = (m) => left + (1 - m / span) * (w - left - 12);
   let g = '';
   for (let h = 0; h <= 12; h += 3) { const xx = x(h * 60); g += `<line x1="${xx}" x2="${xx}" y1="${top}" y2="${H - 20}" class="lgrid"/><text x="${xx}" y="${H - 5}" class="lax" text-anchor="middle">${h ? h + ' h ago' : 'now'}</text>`; }
   L.forEach(([n, notes], i) => {
     const y = top + i * lh + lh / 2;
     g += `<text x="0" y="${y + 4}" class="llab">${n}</text><line x1="${left}" x2="${w - 12}" y1="${y}" y2="${y}" class="lline"/>`;
-    for (const [m, st] of notes) {
-      const xx = x(m), c = { ok: 'var(--color-text-tertiary)', failed: 'var(--color-status-danger-solid)', running: 'var(--color-status-running-solid)', waiting: 'var(--color-status-warning-solid)', parked: 'var(--color-status-neutral-solid)', approval: 'var(--color-accent-default)' }[st];
-      g += st === 'failed' ? `<path d="M${xx - 5} ${y - 5}l10 10M${xx + 5} ${y - 5}l-10 10" stroke="${c}" stroke-width="2.6" stroke-linecap="round"><title>${n}: failed</title></path>`
-        : st === 'approval' || st === 'waiting' ? `<path d="M${xx} ${y - 7}l7 7-7 7-7-7z" fill="${c}"><title>${n}: ${st === 'approval' ? 'needs your approval' : 'waiting on you'}</title></path>`
-        : st === 'running' ? `<circle cx="${xx}" cy="${y}" r="6" fill="none" stroke="${c}" stroke-width="2.4" stroke-dasharray="26 12"><title>${n}: running</title></circle>`
-        : st === 'parked' ? `<path d="M${xx - 2.5} ${y - 5}v10M${xx + 2.5} ${y - 5}v10" stroke="${c}" stroke-width="2.4" stroke-linecap="round"><title>${n}: parked</title></path>`
-        : `<circle cx="${xx}" cy="${y}" r="5" fill="${c}"><title>${n}: passed</title></circle>`;
-    }
+    // Passed is the majority, so it is the quietest mark: smaller, in muted sage.
+    for (const [m, st] of notes) g += chartMark(st, x(m), y, st === 'passed' ? 10 : 14, `${n}: ${STATUS_STATES[st].word.toLowerCase()}`);
   });
   g += `<line x1="${x(0)}" x2="${x(0)}" y1="${top - 4}" y2="${H - 20}" stroke="var(--color-dataviz-now)" stroke-width="1.5"/>`;
-  return `<div class="pt-lanes"><div class="legend">${[['ok', 'Passed'], ['fail', 'Failed'], ['run', 'Running'], ['wait', 'Needs you'], ['park', 'Parked']].map(([k, l]) => `<span><i class="lgd ${k}"></i>${l}</span>`).join('')}</div><svg viewBox="0 0 ${w} ${H}" role="img" aria-label="Every run of every workflow, last 12 hours">${g}</svg></div>`;
+  const used = [...new Set(L.flatMap(([, notes]) => notes.map(([, st]) => st)))];
+  return `<div class="pt-lanes" data-legend-scope>${legend(['passed', 'running', 'failed', 'needs', 'parked'].filter((s) => used.includes(s)))}<svg viewBox="0 0 ${w} ${H}" role="img" aria-label="Every run of every workflow, last 12 hours">${g}</svg></div>`;
 }
+
 const NEEDS = [
   ['accent', 'needs-you', 'Replace the production web server', 'platform-sre wants to run terraform apply on production, for the SEV2 latency incident', 'p12 · infra@3f2a9c1d · +1 ~2 −0', '7 min ago', 'Review', 'primary'],
   ['danger', 'danger', 'ci-fixer couldn’t fix acme/web#1288', 'Its change made 2 tests fail. Nothing was pushed.', 'r-7ef0 · step test', '52 min ago', 'Open', 'secondary'],

@@ -253,3 +253,30 @@
 .c-code .ln.add .n, .c-code .ln.add .m, .c-code .ln.del .n, .c-code .ln.del .m { color: inherit; }
 .c-choice.is-selected .tag { background: var(--color-bg-surface); }
 .c-vs-menu .opt.on span { color: var(--color-text-secondary); }
+
+/* ---------- status, the chosen system (status-review.html + explore/status-column.html) ----------
+ * A state is a filled mark plus a word, never a pill. The mark always carries the state's colour;
+ * the word is coloured only when a person is needed or the thing is live. Pills are only for
+ * things you can click (chips). Rows are never tinted: a row that needs someone gets a thin
+ * leading edge, its reason in words, and its place in the "Needs attention" group. */
+.c-badge, .c-badge[data-s] { height: auto; padding: 0; border: 0; border-radius: 0; background: none; gap: 6px; font: var(--type-label); font-weight: 400; color: var(--color-text-secondary); }
+.c-badge svg { width: 12px; height: 12px; color: var(--s-solid, var(--color-icon-muted)); }
+.c-badge[data-s="danger"], .c-badge[data-s="warning"], .c-badge[data-s="accent"], .c-badge[data-s="running"], .c-badge[data-s="info"] { color: var(--s-fg); font-weight: 700; }
+.c-status { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; color: var(--color-text-secondary); }
+.c-status svg { width: 12px; height: 12px; flex: none; color: var(--s-solid); }
+.c-status[data-s="danger"], .c-status[data-s="accent"], .c-status[data-s="warning"] { color: var(--s-fg); font-weight: 700; }
+.c-status[data-s="running"] { color: var(--s-fg); }
+.c-table td .c-status svg, .c-table td .c-badge svg { width: 12px; height: 12px; vertical-align: 0; color: var(--s-solid); }
+.c-table tr.attn td:first-child { box-shadow: inset 3px 0 0 var(--s-solid); }
+.c-table tr.attn td { height: auto; padding-top: calc(var(--table-cell-y) + 4px); padding-bottom: calc(var(--table-cell-y) + 4px); }
+.c-table .reason { display: block; white-space: normal; font: var(--type-body-s); font-weight: 600; color: var(--s-fg); margin-top: 2px; max-width: 36rem; }
+.c-table tr.grp td { height: auto; padding: var(--space-5) var(--table-cell-x) var(--space-2); border-bottom: var(--border-width) solid var(--color-border-default); background: none; }
+.c-table tr.grp:first-child td { padding-top: var(--space-3); }
+.c-table tr.grp b { font: var(--type-h4); color: var(--color-text-primary); }
+.c-table tr.grp span { margin-left: var(--space-2); font: var(--type-caption); color: var(--color-text-tertiary); }
+.c-table tr.grp.attn-h span { background: var(--color-accent-default); color: var(--color-text-on-accent); font-weight: 700; border-radius: 999px; padding: 1px 8px; }
+.c-table tr.grp:hover td { background: none; }
+.c-table tbody.done td { color: var(--color-text-secondary); }
+.c-table tbody.done .run b { color: var(--color-text-primary); font-weight: 600; }
+.c-table td.act { width: 1%; text-align: right; }
+.c-table .run b { font-weight: 700; }

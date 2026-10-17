@@ -141,18 +141,33 @@ Each was taken to a complete kit and tested in the same dashboard chrome before 
 
 Ember marks the places a person is needed or can act: the needs-you count and kicker, the primary button, the focus ring, the logo dot and the chart’s “now” line. It is not used for decoration, headings, ids or values. *Why:* one colour with one meaning can be scanned.
 
-### Status (`--color-status-{success,warning,danger,info,running,neutral}-{fg,bg,border,solid}`)
+### Status: one vocabulary of marks (`status/marks.js`)
 
-| State | Hue | Glyph | Means |
+Every status mark, in a table, card, lane chart, legend, the overview, the run page or a phone, comes from `status/marks.js`. A state has the same shape, colour and word everywhere.
+
+| State | Mark | Colour (light · dark) | Word |
 |---|---|---|---|
-| success | green | check in a circle | done, passed, healthy |
-| warning | amber | triangle | needs attention soon, degraded, waiting on something |
-| danger | red | cross in a circle | failed, refused, destructive |
-| info | violet | i in a circle (shadow mode: half-filled circle) | news, updates, shadow mode (observes, never acts) |
-| running | sky | rotating arc | in progress right now |
-| neutral | warm grey | pause bars (skipped: dash) | parked, idle, skipped, cancelled |
+| Passed | filled dot, small | sage `#568663` · `#6fa07c` | ink (quiet: it is most marks) |
+| Running | open arc (spins; static under reduced motion) | blue `#2f76db` · sky `#51b7e8` | blue |
+| Failed | cross | wine `#8a032e` · salmon `#ffa9b0` | red text (`status.danger.fg`) |
+| Needs you | diamond | ember (`accent.default`) | ember text (`text.accent`) |
+| Waiting / at risk | triangle | amber | amber text |
+| Parked | pause bars | slate `#506279` · `#677b94` | ink |
+| Not reached | dash | slate (as parked) | ink |
+| Shadow | half disc | violet | violet text |
+| Staged (not a status) | dashed ring | blue | blue text |
 
-`fg` is for text and glyphs (AA on every surface and on its own wash). `bg` is a translucent wash, `border` is decorative, and `solid` is for dots and bars (3:1, never text). **Always pair the colour with its glyph and a word.** “Needs you” is not a status. It uses the accent with a diamond glyph.
+- **Passed and parked never share a hue or a shape:** a sage dot vs slate pause bars.
+- **The mark always carries its colour.** The word is coloured only when a person is needed or the thing is live.
+- **No tinted rows, capsules or icon chips.** In a list, a row that needs someone (failed or needs you) gets a 3px leading edge in its mark’s colour, its reason as a plain sentence and one action, and it sits in the **Needs attention · N** group at the top. Then come **Running now**, then **Finished** in quiet ink.
+- **No step trace in lists.** Step detail lives on the run page as a collapsible tree, where a nested workflow call is one node with its own status and the failing path opens by itself.
+- **Every chart mark appears in its legend.** Legends are generated from the same list (`legend()`).
+
+**Checks.**
+- `tools/status-cvd.mjs` (the dataviz skill’s validator, run pairwise against `bg.surface`) writes `tokens/STATUS-CVD.md`. The five table states (passed, running, failed, needs you, parked) are distinct by colour for colour-blind readers in dark (all 10 pairs) and in light (9 of 10). The exception is passed vs needs you in light, at CVD ΔE 6.5: the floor band, with normal-vision ΔE 27 and different shapes. Passed vs parked is ΔE 11–12 for colour-blind readers and 12.7 to normal vision: clearly different hues, plus different shapes. Waiting and shadow (label-only states) lean on shape against needs you and running. All marks are ≥ 3:1 on every surface, and no two states share a shape.
+- `tools/mark-check.mjs` loads every page in WebKit (iPhone and desktop) and Chromium, with the OS light and dark. It fails if a rendered mark isn’t its state’s token, a chart mark is missing from its legend, a chart has no legend, a legacy status glyph bypasses the vocabulary, or a needs-attention row’s edge differs from its mark.
+
+The decisions and the explored alternatives are in [`explore/status-column.html`](explore/status-column.html) and [`status-review.html`](status-review.html).
 
 ### Data visualisation (`--color-dataviz-*`)
 
@@ -403,7 +418,7 @@ The prototype adopts Daylight in one pass:
 
 ## Open decisions for Daniel
 
-0. **Labels and status** ([`status-review.html`](status-review.html), with [`explore/status-column.html`](explore/status-column.html)). The prototype’s tinted pills, and the tinted rows behind failures, were judged generic. I recommend one system: **typed labels** (B on the labels page) plus **grouped rows with a step trace** (D on the status-column page). Every label is classified by its job (state, tier, staged change, trust, count, fact, role). Each job has one form, colour appears only where a person is needed or something is live, and pills remain only for clickable filters. Once it’s chosen, the components, the book and the mocks are updated to match.
+0. ~~Labels and status~~: **decided.** Typed labels, with grouped rows and margin marks; see the Status section.
 
 1. **Where the brand files live long-term:** `design/brand/` or `.github/brand/`, which sets the README paths.
 2. **The dashboard default theme:** follow the OS (as the tokens do now), or light unless the user picks dark. Daylight is designed light-first.

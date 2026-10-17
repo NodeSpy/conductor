@@ -436,7 +436,7 @@ body { font-variation-settings: 'SOFT' 100, 'WONK' 0; }  /* Fraunces' soft axis;
 .pt-story li.success .sg { background: var(--color-bg-sunken); color: var(--color-text-tertiary); }
 .pt-story b { display: block; font: var(--type-h4); } .pt-story li.danger b { color: var(--color-status-danger-fg); } .pt-story li.skipped b { color: var(--color-text-tertiary); font-weight: 500; }
 .pt-story span { color: var(--color-text-secondary); font: var(--type-body-s); } .pt-story em { font-style: normal; font: var(--type-caption); color: var(--color-text-tertiary); padding-top: 4px; }
-.pt-lanes svg { width: 100%; height: auto; display: block; }
+.pt-lanes > svg { width: 100%; height: auto; display: block; }
 .pt-lanes .lgrid { stroke: var(--color-border-subtle); stroke-dasharray: 2 4; } .pt-lanes .lline { stroke: var(--color-border-default); }
 .pt-lanes .lax { font: var(--type-caption); font-size: 11px; fill: var(--color-text-tertiary); } .pt-lanes .llab { font: var(--type-label); font-size: 12.5px; fill: var(--color-text-secondary); }
 .legend { display: flex; gap: var(--space-3); flex-wrap: wrap; font: var(--type-caption); color: var(--color-text-secondary); margin-bottom: var(--space-2); }
@@ -460,3 +460,4 @@ body { font-variation-settings: 'SOFT' 100, 'WONK' 0; }  /* Fraunces' soft axis;
   .perdir td { border: 0; padding: 0; }
   .perdir img { max-width: 100%; }
 }
+.pt-lanes .mk-legend { margin-bottom: var(--space-2); }

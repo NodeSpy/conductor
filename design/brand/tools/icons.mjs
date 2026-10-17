@@ -10,9 +10,10 @@ const read = (sub) => Object.fromEntries(fs.readdirSync(path.join(dir, sub)).fil
   .map((f) => [f.slice(0, -4), inner(fs.readFileSync(path.join(dir, sub, f), 'utf8'))]));
 // Status glyph meanings, shown in the book next to each glyph.
 const LABELS = {
-  success: 'Done, passed, healthy', warning: 'Needs attention, degraded', danger: 'Failed, refused', info: 'News, updates',
-  running: 'In progress (rotates)', neutral: 'Parked, idle', skipped: 'Skipped, cancelled', shadow: 'Shadow mode: observes, never acts',
-  'needs-you': 'Waiting on you (accent)',
+  success: 'Passed, done, healthy (quiet green)', warning: 'Waiting, at risk, degraded', danger: 'Failed, refused', info: 'News, updates',
+  running: 'Running (rotates)', neutral: 'Parked, idle (slate)', skipped: 'Skipped, cancelled', shadow: 'Shadow mode: observes, never acts',
+  'needs-you': 'Needs you (accent)',
+  staged: 'Staged change, not applied',
 };
 const status = Object.fromEntries(Object.keys(LABELS).map((k) => [k, { label: LABELS[k], svg: read('status')[k] }]));
 fs.writeFileSync(path.join(dir, 'icons.js'),

@@ -12,7 +12,7 @@ export const NEEDS = [
   { kind: 'signin', glyph: 'warning', s: 'warning', title: 'Approve a sign-in on app.example.com', why: 'The triage agent’s browser is waiting on a push approval', tech: 'b-02 · agent:triage', age: '3 min ago', act: 'Open' },
 ];
 export const FYI = [
-  { glyph: 'info', s: 'info', title: 'Update v0.72.0 is ready', why: 'Installs within 10 minutes; running work finishes first.' },
+  { glyph: 'update', s: 'info', title: 'Update v0.72.0 is ready', why: 'Installs within 10 minutes; running work finishes first.' },
   { glyph: 'shield', s: 'neutral', title: 'Sandbox blocked pastebin.com', why: 'agent:fixer tried to reach it from acme/web. Nothing left the box.' },
 ];
 export const RUNNING = [
@@ -26,7 +26,7 @@ export const STATS = { runs: 20, fine: 18, failed: 2, cost: '$8.40', costTrend: 
 
 // Lanes for the score: minutes ago of each run, and its state.
 export const LANES = [
-  ['pr-review', [[2, 'running'], [31, 'ok'], [95, 'waiting'], [252, 'ok'], [503, 'ok'], [640, 'ok']]],
+  ['pr-review', [[2, 'running'], [31, 'ok'], [95, 'approval'], [252, 'ok'], [503, 'ok'], [640, 'ok']]],
   ['ci-fixer', [[6, 'running'], [52, 'failed'], [230, 'parked'], [588, 'ok']]],
   ['issue-triage', [[79, 'ok'], [299, 'ok'], [410, 'ok']]],
   ['platform-sre', [[7, 'approval'], [11, 'running'], [176, 'ok'], [716, 'ok']]],

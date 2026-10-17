@@ -15,20 +15,20 @@
 <header class="hd">
   <div class="crumb"><a href="../system.html">Daylight</a><span>/</span><span>Exploration</span></div>
   <h1>The status column</h1>
-  <p class="lead">Companion to <a href="../status-review.html"><b>Labels and status</b></a>, which covers every other label in the product. Daniel’s reference: a status column of tinted capsules with outline icons (Passed, Failed, Running, Waiting on you, Parked), plus a full-row red tint on failures. His verdict was “generic”. Round two’s own mocks did the same. Here are four alternatives on the same 16 runs, in Daylight light and dark, that emphasise a failed or needs-you row <b>without</b> the row tint and capsule.</p>
-  <div class="legend" id="legend" aria-label="Status shapes"></div>
-  <nav class="jump"><a href="#before">Before</a><a href="#margin">A · Margin mark</a><a href="#outcome">B · Outcome</a><a href="#trace">C · Step trace</a><a href="#grouped">D · Grouped</a><a href="#rules">Rules</a><a href="../status-review.html">All labels and status →</a></nav>
+  <p class="lead">Companion to <a href="../status-review.html"><b>Labels and status</b></a>, which covers every other label in the product. Daniel’s reference: a status column of tinted capsules with outline icons (Passed, Failed, Running, Waiting on you, Parked), plus a full-row red tint on failures. His verdict was “generic”. Round two’s own mocks did the same. <b>Decided:</b> D’s grouping with A’s margin marks, and step detail moved to a tree on the run page. The four explored alternatives are kept below for the record.</p>
+  <div id="legend" aria-label="Status marks"></div>
+  <nav class="jump"><a href="#chosen">Chosen</a><a href="#tree">Run detail tree</a><a href="#before">Explored: before</a><a href="#margin">A</a><a href="#outcome">B</a><a href="#trace">C</a><a href="#grouped">D</a><a href="#rules">Rules</a><a href="../status-review.html">All labels and status →</a></nav>
 </header>
 <main id="variants"></main>
 <section class="var" id="rules">
-  <h2>What D changes, as rules</h2>
+  <h2>The rules</h2>
   <ul class="rules-l">
-    <li><b>No capsules in the status column.</b> Status is a filled shape (dot, cross, diamond, arc, bars) plus a word only when the row isn’t passing. The shapes are distinct silhouettes, so they work in one colour and for colour-blind readers.</li>
-    <li><b>No row tints.</b> A row earns emphasis by <i>position</i> (the “Needs attention” group at the top), <i>words</i> (a plain sentence saying what happened and what to do), and <i>one action</i>. Never by a fill behind the text.</li>
-    <li><b>Passing is quiet.</b> Finished runs are ink: the trace shows ticks, with no colour and no word. Colour goes only to the failing step, the waiting step and the live arc.</li>
-    <li><b>The trace replaces the badge.</b> One mark per step shows how far a run got and where it stopped, which a “Failed” pill can’t.</li>
-    <li><b>Phones</b> keep the groups; each row becomes run name, sentence, and trace.</li>
-    <li><b>Accessibility:</b> the trace has an <code>aria-label</code> (“step 4 of 6: failed”). Group headings are real rows with counts, so a screen reader hears “Needs attention, 2” before the rows.</li>
+    <li><b>Group by who needs to act.</b> “Needs attention · N” (failed and needs-you rows) comes first, then “Running now”, then “Finished”. A row moves group as its state changes.</li>
+    <li><b>A row that needs someone</b> gets a 3px leading edge in its state colour, its reason as a plain sentence under the run name, and one action. Nothing else in the table is coloured.</li>
+    <li><b>No tints and no capsules.</b> Status is a small mark plus a word, from <code>status/marks.js</code>, the one vocabulary for tables, cards, lanes, legends, the overview, the run page and phones.</li>
+    <li><b>Passed is quiet, but never parked.</b> Passed is a small sage dot with an ink word. Parked is slate pause bars. They differ in hue and in shape (see <code>tokens/STATUS-CVD.md</code>).</li>
+    <li><b>No step trace in lists.</b> Step detail lives on the run page as a collapsible tree. Nested workflow calls collapse to one node with their own status.</li>
+    <li><b>Every chart mark is in its legend,</b> and every mark matches a status token. <code>tools/mark-check.mjs</code> enforces both.</li>
   </ul>
 </section>
 <footer class="ft">Built from <code>tokens.css</code> (Daylight). Run data is the dashboard prototype’s. Fonts: Fraunces, Atkinson Hyperlegible Next and Mono (SIL OFL 1.1).</footer>
