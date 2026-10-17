@@ -93,7 +93,7 @@ test('knowledge: approve a promotion with a passkey; a bot proposes one from mem
   await go(page, '#/teams/platform/knowledge');
   await page.locator('[data-act="kp-approve"][data-id="k4"]').click();
   await page.locator('#su-go').click();
-  await expect(page.locator('#ke-statement')).toHaveValue(/30s/);
+  await expect(page.locator('#rp-ed .ced-ta')).toHaveValue(/30s/);
   await go(page, '#/bots/web-triage/memory');
   await page.locator('[data-act="rp-promote"]').click();
   await expect(page).toHaveURL(/#\/teams\/platform\/knowledge/);

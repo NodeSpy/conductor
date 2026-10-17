@@ -338,18 +338,29 @@ operator cuts them any way they like; there is no org concept.
 teams:
   platform:
     description: Platform services
-    lead: platform-sre                 # optional: triages team work and assigns it
-    defaults:                          # inherited by bots, which can only narrow them
-      operators: [ops, oncall]         # who may approve
-      autonomy: { max_tier: reversible, promote: true, approval_ttl: 24h }   # the ceiling
-      isolation: { mode: namespace }   # sandbox policy; container is stricter
-      budget: { max_cost_per_day: 20.00, proactive_pool: { max_runs_per_day: 10, max_cost_per_day: 4.00 } }
-      browser: { logins: [console.example.com], credentials: [grafana, statuspage] }   # scope
-    knowledge: { repo: team-knowledge/platform, promote: approval }   # optional shared repo
-    routing:                           # first match wins; to a bot, or to the lead
-      - { name: pd-api, when: { on: pd.incident, service: [api, web] }, to: lead }
-      - { name: web-issues, when: { on: gh.issue_opened, repo: [acme/web] }, to: web-triage }
-    links: [finance]                   # teams are isolated unless both sides link
+    folder: work/platform                # organization only
+    operators: [ops, oncall]             # who may approve the team's bots
+    peers: team                          # teammates may ask each other (or none)
+    delegation: { max_depth: 2 }
+    autonomy:
+      ceiling: reversible                # the most a bot may be promoted to (or observe)
+      tiers: { propose: [terraform.apply] }   # only ever stricter than a bot's own
+    budget:
+      spend_cap: { per_period: 200, period: month, currency: USD }
+      proactive: { max_runs_per_day: 10 }     # a shared sweep pool
+    isolation: { sandbox: required }
+    credentials: { secrets_via: broker, allow_secrets: [op/Agents/Grafana/password] }
+    browser: { logins: [console.example.com], credentials: [grafana, statuspage] }   # scope
+    knowledge: { repo: team-knowledge/platform, promotion: proposal }
+    collections:
+      postmortems: { from: .conductor/packs/sre-bot/collections/postmortems.yaml }
+    routing:                             # first matching rule wins; then the lead triages; then the fallback
+      rules:
+        - { name: pd-api, match: { on: pd.incident, service: [api, web] }, to: platform-sre }
+        - { name: web-issues, match: { on: gh.issue_opened, repo: [acme/web] }, to: web-triage }
+      lead: platform-sre
+      fallback: platform-sre
+bot_links: [[platform-sre, billing-sre]]   # a pair of bots on different teams may talk
 bots:
   platform-sre: { team: platform, … }  # at most one team, or none
   release-scribe: { … }                # a solo bot
@@ -358,42 +369,46 @@ triggers:
     on: pd.incident
     steps:
       - id: page
-        bot: { team: platform }        # the team's rules pick the bot; no match → the lead
+        bot: { team: platform }        # the team's rules pick the bot; no match → the lead, then the fallback
         title: "{{.title}}"
       # - { bot: platform-sre, title: … }   # or straight to one bot
 ```
 
-- **Narrow, never widen.** A bot's own setting must sit inside the team
-  default: a subset of operators, no tier looser than `max_tier`, no
-  promotion when the team allows none, `container` where the team requires
-  it, sweep budgets inside the shared pool, credentials and logins inside the
-  team's scope. Validation refuses anything wider, naming the default it
+- **Narrow, never widen.** A bot's own setting must sit inside the team's:
+  a subset of operators, no tier looser than the team's classification, no
+  promotion above `autonomy.ceiling` (none at `observe`), a sandbox where the
+  team requires one, sweep budgets inside the shared pool, credentials and
+  logins inside the team's scope. Validation refuses anything wider, naming the default it
   breaks.
-- **Peers.** Bots of one team are peers by default (data-only `ask`, as
-  #178's `peers:`). Across teams they're isolated unless both teams list each
-  other in `links:`; an explicit cross-team `peers:` entry needs that link.
+- **Peers.** Bots of one team are peers by default (`peers: team`; data-only
+  `ask`). Across teams they're isolated unless a **pair of bots** is linked:
+  both list each other under `peers`, or an operator `bot_links` entry names
+  the pair. There are no team-to-team links.
 - **Delegation.** A bot can hand a teammate a task (`conductor bot
   delegate <bot> --case <c> --to <teammate> "<task>"`). The recipient works
   it as a child case **under the original requester's provenance**, never the
   delegating bot's, and its result reports back to the parent case. Asks
   stay data-only; delegation carries a task. Across teams, delegation exists
-  only where both teams list each other in `links:`; a solo bot delegates to
-  no one. The ledger records each delegation as an edge (`d<n>`: from, to,
+  only between linked bots; `delegation.max_depth` bounds the chain. The ledger records each delegation as an edge (`d<n>`: from, to,
   parent case, child case, status, result).
-- **Knowledge.** An optional shared repo every bot reads. A bot
-  proposes promoting a file from its own memory; by default the operator
-  approves it (a step-up assertion), which writes one commit with
-  `Promoted-By` and `Approved-By` trailers.
-- **Routing.** Work reaches a team by rule, or through its lead, who reads
-  the case and assigns it. **Requester provenance is preserved through every
+- **Knowledge.** An optional shared repo every bot reads
+  (`knowledge.repo`). A bot proposes promoting a file from its own memory;
+  with `promotion: proposal` (the default) the operator approves it (a
+  step-up assertion), which writes one commit with `Promoted-By` and
+  `Approved-By` trailers; `direct` lands it at once and is flagged as a
+  widening.
+- **Routing.** Work reaches a team by rule (`routing.rules`, each a `match`
+  and a `to` bot), or through its `lead`, who reads the case and assigns it,
+  or else the `fallback`. **Requester provenance is preserved through every
   hop**: the assignee runs on no more trust than whoever asked. Each case
   records how it got there ("routed to platform by rule pd-api → assigned by
   lead platform-sre to web-triage"), and an operator reassignment is
   recorded the same way.
-- Team, botship, defaults, routing, links and the knowledge policy are
-  config, so every edit goes through [§7](#7-the-config-edit-pipeline).
-  Widening includes adding a team approver, raising the ceiling, dropping a
-  container requirement, linking a team, and automatic promotion.
+- Team membership, the team's settings, routing, bot links and the knowledge
+  policy are config, so every edit goes through
+  [§7](#7-the-config-edit-pipeline). Widening includes adding a team
+  approver, raising the ceiling, dropping a sandbox requirement, linking a
+  pair of bots, and `promotion: direct`.
 
 **Folders.** Any bot or team may carry an optional `folder: "a/b"` (slashes
 nest): everything for one company, "personal" bots, or by what they do or
@@ -474,12 +489,15 @@ writes it:
 
 | Kind | Home | Fields / template | Who writes |
 |---|---|---|---|
-| Knowledge | `knowledge/` | title, statement, applies-to (service/resource tags), source/evidence, confidence; markdown details | operator directly; bots in their own memory, and into team knowledge by promotion |
-| Runbook | `runbooks/` | title, when to use (trigger/symptoms), prerequisites, steps (ordered, each optionally with a command `run:` or a verb `verb:`), verification, rollback, owner, applies-to; notes | operator directly; bots by proposal |
-| Watch item | entries in `watch.md` | what to watch, signal/query, threshold, why | operator directly; bots by proposal |
-| Episodic log | `log/` | per case, system-generated | bots only; the operator can **annotate** or **flag as wrong** (a sidecar beside the entry), never rewrite it |
-| Handoff note | `handoff/` | system-generated on rotation | read-only |
-| Custom collection | declared in config (`collections:`) or by a pack, e.g. `postmortems/` | the collection's own template and fields; free paths only if it declares `free_paths: true` | as declared |
+| Knowledge | `knowledge/` | `title`*, `applies_to` (list), `evidence`* (why you believe it), `confidence`* (low / medium / high); body: what is true, and why | operator directly; bots in their own memory, and into team knowledge by promotion |
+| Runbook | `runbooks/` | `title`*, `when_to_use`*, `prerequisites` (list), `steps`* (a list of non-empty strings; the editor writes a command as ``(run: `cmd`)`` and a verb as `(verb: x)` in the step's text), `verification`*, `rollback`*, `owner`* | operator directly; bots by proposal |
+| Watch item | `watch/` (one file each, named from `what`) | `what`*, `signal`*, `threshold`*, `why`* | operator directly; bots by proposal |
+| Log | `log/` | `title`*, `case`, `sweep`, `flagged_wrong`; written by the bot per case or sweep | bots only; the operator can **add a note** or **flag it wrong**: both append a section (`## Operator note — ops, <time>` / `## Flagged WRONG by the operator — …`), and flagging sets `flagged_wrong`; the bot's text is never rewritten |
+| Handoff | `handoff/` | `session`*; written on rotation | read-only |
+| Collection | declared on the team (`teams.<t>.collections`) or the bot (`bots.<b>.collections`), or by a pack via `from:`, e.g. `postmortems/` | the collection's `fields` (`{type, required, values}`; types string, text, list, steps, enum, number, bool) and `template`; free paths only with `free_paths: true` | `writers`: a team's `operator` / `proposal`, a bot's `operator` / `bots` |
+
+`*` required. These are conductor's content kinds (`internal/bot/kinds.go` on
+the bots branch); the dashboard adds no fields of its own.
 
 An entry is markdown with front matter (`kind:` plus the fields), so the
 files stay readable in git and the same schema check runs everywhere: on an
@@ -514,8 +532,8 @@ operator save, on a bot proposal or promotion, and on import.
   link), the diff, **revert** as a new commit, and **who wrote this**
   (blame-lite).
 - **Proposals and promotion** (team repos) show the kind and are validated
-  against its schema. A malformed proposal (say, a runbook with a step that
-  has no `do:` or no verification) lists the schema errors, and *Approve* is
+  against its schema. A malformed proposal (say, a runbook with an empty or
+  non-string step, or no rollback) lists the schema errors, and *Approve* is
   disabled with the reason; **approve with changes** opens it in the kind's
   form with the errors marked, and the commit keeps the bot as author with
   `Approved-By` and `Edited-By: operator` trailers. Deny sends a **reason
@@ -524,17 +542,22 @@ operator save, on a bot proposal or promotion, and on import.
 - **Import** maps uploaded or pasted markdown (or a path from a repo through
   a read connector) **into a kind**: a runbook-like structure (numbered
   steps, *When*/*Verify*/*Rollback* sections) is detected and mapped to the
-  runbook fields; anything can be mapped into knowledge or a collection
+  runbook fields; a note mapped as knowledge keeps its text as the body,
+  with `evidence: imported from <file>`; anything can be mapped into knowledge or a collection
   instead. Each file shows its detected kind, the derived path and what was
   found; entries that pass the schema are committed together, and the first
   one missing fields opens in its form with the errors.
-- **Custom collections** are the escape hatch: **Config → Collections**
-  (`#/config/collections`) declares one (name, folder, team knowledge / bot
-  memory / both, fields as `name:string|text|list|enum(a|b)`, a body
-  template, `free_paths`, who can write) through the diff. A collection's
-  folder may not be a built-in kind's. Packs can ship collections (the
-  `sre-bot` pack ships `postmortems/`); they're listed with their pack and
-  overridden in `packs.<instance>`.
+- **Collections** add a kind: **Config → Collections**
+  (`#/config/collections`) lists every team's and bot's collections and
+  declares one (which team or bot it belongs to, name, folder, fields as
+  `name:type` lines with `!` for required and `enum(a|b)` for choices, a
+  body template, `free_paths`, writers) as an edit to
+  `teams.<t>.collections` or `bots.<b>.collections`, through the diff. A
+  collection's folder may not be a built-in kind's (`knowledge`, `runbooks`,
+  `watch`, `log`, `handoff`, `episodes`), and a team's writers are
+  `operator`/`proposal`, a bot's `operator`/`bots`. A pack ships a
+  collection as a file that the team or bot points at with `from:` (the
+  `sre-bot` pack ships `postmortems`); `from:` excludes the inline keys.
 - **Bot memory:** the same, plus **pins** (entries always in the bot's
   context, recorded in `.pins`).
 - **Discoverability:** each entry shows which bots read it and who may write
@@ -546,7 +569,7 @@ operator save, on a bot proposal or promotion, and on import.
   `POST …/entries` (kind + fields + body → derived path, one commit; 422 with
   field errors on a schema failure), `PUT …/entries/{path}` (with the base
   sha; 409 on a conflict), `POST …/import` (`dry_run` returns the detected
-  kind and mapping per file), `POST …/log/{path}/annotations`.
+  kind and mapping per file), `POST …/log/{path}/notes` (`{text, flag}`; appends the section, sets `flagged_wrong` on a flag).
 
 **Teams and bots follow conductor's schema** (`teams.<t>` and `bots.<b>` on
 the bots branch). A team has approvers (`operators`), an **autonomy ceiling**

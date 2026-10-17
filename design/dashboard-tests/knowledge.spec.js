@@ -1,4 +1,5 @@
-// Knowledge by kind: a team's repo and a bot's memory. New… picks a kind and
+// Knowledge by kind (conductor's content kinds: knowledge, runbook, watch, log,
+// handoff, plus collections declared on a team or bot). New… picks a kind and
 // the path follows from kind + title; free paths exist only in a collection
 // that declares them. Runbooks have a step editor; proposals and imports are
 // checked against the kind's schema. Git underneath: one operator commit per
@@ -25,33 +26,33 @@ test('New… creates each kind, and the path is derived from kind and title (nev
   await expect(page.locator('#ke-free')).toHaveCount(0);
   await page.fill('#ke-title', 'Cache TTLs');
   await expect(page.locator('#ke-path')).toHaveText('knowledge/cache-ttls.md');
-  await page.fill('#ke-statement', 'The /search cache TTL is 300s.');
   await addTo(page, 'applies_to', 'acme/api');
-  await page.fill('#ke-source', 'modules/api/cache.tf');
+  await page.fill('#ke-evidence', 'modules/api/cache.tf');
+  await ta(page).fill('The /search cache TTL is 300s.');
   await page.fill('#rp-msg', 'knowledge: cache TTLs');
   await save(page);
   expect(await head(page, 'team:platform')).toMatchObject({ who: 'operator:ops', kind: 'operator', msg: 'knowledge: cache TTLs', paths: ['knowledge/cache-ttls.md'] });
   expect((await head(page, 'team:platform')).trailers).toContain('Authored-By: operator:ops');
-  expect((await files(page, 'team:platform'))['knowledge/cache-ttls.md']).toMatch(/kind: knowledge[\s\S]*applies_to: \[acme\/api\][\s\S]*confidence: medium/);
+  expect((await files(page, 'team:platform'))['knowledge/cache-ttls.md']).toMatch(/kind: knowledge[\s\S]*applies_to: \[acme\/api\][\s\S]*evidence: modules\/api\/cache.tf[\s\S]*confidence: medium[\s\S]*---\nThe \/search cache TTL is 300s./);
   // renaming is changing the title: one commit moves the file
   await page.fill('#ke-title', 'Search cache TTLs');
   await expect(page.locator('#ke-path')).toHaveText('knowledge/search-cache-ttls.md');
   await save(page);
   const f = await files(page, 'team:platform');
   expect(f['knowledge/search-cache-ttls.md']).toBeTruthy(); expect(f['knowledge/cache-ttls.md']).toBeUndefined();
-  // a watch item: an entry in watch.md
+  // a watch item: its own file in watch/, named from "what to watch"
   await newKind(page, 'watch');
   await page.fill('#ke-what', 'Queue depth on jobs');
-  await expect(page.locator('#ke-path')).toContainText('watch.md');
+  await expect(page.locator('#ke-path')).toHaveText('watch/queue-depth-on-jobs.md');
   await page.fill('#ke-signal', 'sqs ApproximateNumberOfMessages (jobs)'); await page.fill('#ke-threshold', '> 1000 for 10m'); await page.fill('#ke-why', 'Workers fall behind before anyone notices');
   await save(page);
-  expect((await files(page, 'team:platform'))['watch.md']).toContain('## Queue depth on jobs');
+  await expect.poll(async () => (await files(page, 'team:platform'))['watch/queue-depth-on-jobs.md'] || '').toMatch(/kind: watch\nwhat: Queue depth on jobs\nsignal: /);
   // a required field missing: the save is refused with the schema error
   await newKind(page, 'knowledge');
   await page.fill('#ke-title', 'Half a fact');
   await save(page);
-  await expect(page.locator('#ke-err')).toContainText('statement: required');
-  await expect(page.locator('[data-field="source"].bad')).toBeVisible();
+  await expect(page.locator('#ke-err')).toContainText('evidence: missing required field');
+  await expect(page.locator('[data-field="evidence"].bad')).toBeVisible();
 });
 
 test('the runbook step editor: add, a command and a verb per step, reorder, remove', async ({ page }) => {
@@ -59,7 +60,7 @@ test('the runbook step editor: add, a command and a verb per step, reorder, remo
   await newKind(page, 'runbook');
   await page.fill('#ke-title', 'Restart the worker');
   await expect(page.locator('#ke-path')).toHaveText('runbooks/restart-the-worker.md');
-  await page.fill('#ke-when', 'Jobs queue grows and workers are idle');
+  await page.fill('#ke-when_to_use', 'Jobs queue grows and workers are idle');
   for (let i = 0; i < 3; i++) await page.locator('[data-act="rb-add"]').click();
   const row = (i) => page.locator('.rb-step').nth(i);
   await row(0).locator('[data-sk="do"]').fill('Drain the worker');
@@ -80,8 +81,12 @@ test('the runbook step editor: add, a command and a verb per step, reorder, remo
   await page.fill('#ke-verification', 'Queue drains within 10 minutes');
   await page.fill('#ke-owner', 'platform');
   await save(page);
+  await expect(page.locator('#ke-err')).toContainText('rollback: missing required field');
+  await page.fill('#ke-rollback', 'Nothing to roll back; the worker restarts clean.');
+  await save(page);
+  // steps are a list of strings, as conductor's runbook kind declares; the command or verb rides in the text
   const t = (await files(page, 'team:platform'))['runbooks/restart-the-worker.md'];
-  expect(t).toMatch(/- do: Drain the worker\n\s+run: systemctl stop worker\n\s+- do: Start it again\n\s+- do: "?Tell #ops"?\n\s+verb: slack-ops.post/);
+  expect(t).toMatch(/steps:\n\s+- "?Drain the worker \(run: `systemctl stop worker`\)"?\n\s+- Start it again\n\s+- "?Tell #ops \(verb: slack-ops.post\)"?/);
   // knowledge shows what cites it; runbooks show the cases they were used in
   await go(page, '#/bots/platform-sre/memory');
   await page.locator('[data-act="rp-kind"][data-k="knowledge"]').click();
@@ -104,16 +109,20 @@ test('no free path outside a custom collection; declare one, then create in it w
   await page.locator('[data-act="rp-discard"]').click(); await page.locator('#cf-ok').click();
   // declare a collection that allows free paths: config, through the diff
   await go(page, '#/config/collections');
+  await expect(page.locator('[data-coll="team:platform/postmortems"]')).toContainText('from pack sre-bot');
   await page.locator('[data-act="coll-new"]').first().click();
+  await page.locator('#f-owner').selectOption('team:platform');
   await page.fill('#f-name', 'vendors'); await page.fill('#f-dir', 'knowledge/vendors');
   await page.locator('#gen-submit').click();
   await expect(page.locator('[data-field="dir"] .ferr')).toContainText('built-in kind');
   await page.fill('#f-dir', 'vendors');
-  const fl = page.locator('[data-listk="fields"] input.list-add'); await fl.fill('contact:string'); await fl.press('Enter');
+  const fl = page.locator('[data-listk="fields"] input.list-add'); await fl.fill('contact!:string'); await fl.press('Enter');
   await page.locator('#f-free_paths').check();
   await page.locator('#gen-submit').click();
+  await expect(page.locator('.diff')).toContainText('teams.platform');
   await expect(page.locator('.diff')).toContainText('vendors:');
   await expect(page.locator('.diff')).toContainText('free_paths: true');
+  await expect(page.locator('.diff')).toContainText('required: true');
   await applyStaged(page);
   await go(page, '#/teams/platform/knowledge');
   await newKind(page, 'c:vendors');
@@ -130,16 +139,18 @@ test('a malformed runbook proposal shows its schema errors; fixed by approving w
   await go(page, '#/teams/platform/knowledge', { fresh: true });
   const k5 = page.locator('.kprop[data-prop="k5"]');
   await expect(k5).toContainText('Runbooks');
-  await expect(k5.locator('.schema-errs')).toContainText('steps[2].do: required');
-  await expect(k5.locator('.schema-errs')).toContainText('steps[3]: either run: or verb:, not both');
-  await expect(k5.locator('.schema-errs')).toContainText('verification: required');
-  await expect(k5.locator('.schema-errs')).toContainText('owner: required');
+  await expect(k5.locator('.schema-errs')).toContainText('steps: item 2: want a non-empty string');
+  await expect(k5.locator('.schema-errs')).toContainText('steps: item 3: want a non-empty string');
+  await expect(k5.locator('.schema-errs')).toContainText('verification: missing required field');
+  await expect(k5.locator('.schema-errs')).toContainText('rollback: missing required field');
+  await expect(k5.locator('.schema-errs')).toContainText('owner: missing required field');
   await expect(k5.locator('button', { hasText: 'Approve' }).first()).toHaveAttribute('aria-disabled', 'true');
   await k5.locator('[data-act="kp-edit"]').click();
   await expect(page.locator('.ed-head')).toContainText('approving k5 with changes');
-  await expect(page.locator('#ke-err')).toContainText('verification: required');
+  await expect(page.locator('#ke-err')).toContainText('verification: missing required field');
   await page.locator('.rb-step').nth(1).locator('[data-sk="do"]').fill('Roll back the web deploy');
   await page.fill('#ke-verification', 'checkout 5xx back under 0.5%');
+  await page.fill('#ke-rollback', 'Redeploy the previous web release.');
   await page.fill('#ke-owner', 'web-triage');
   await page.locator('[data-act="rp-save"]', { hasText: 'Approve with changes' }).click();
   await page.locator('#su-go').click();
@@ -147,13 +158,14 @@ test('a malformed runbook proposal shows its schema errors; fixed by approving w
   const h = await head(page, 'team:platform');
   expect(h).toMatchObject({ who: 'bot:web-triage', kind: 'bot', paths: ['runbooks/checkout-errors.md'] });
   expect(h.trailers).toContain('Edited-By: operator:ops');
+  expect((await files(page, 'team:platform'))['runbooks/checkout-errors.md']).toContain('Roll back the web deploy (run: `kubectl rollout undo deploy/web`)');
 });
 
 test('approve with changes, deny with a reason, bulk approve', async ({ page }) => {
   await go(page, '#/teams/platform/knowledge', { fresh: true });
   await page.locator('[data-act="kp-edit"][data-id="k4"]').click();
-  await expect(page.locator('#ke-statement')).toHaveValue(/deregistration_delay is 30s/);
-  await page.fill('#ke-source', 'modules/web/alb.tf, checked 2026-10-16');
+  await expect(ta(page)).toHaveValue(/deregistration_delay. is \*\*30s\*\*|deregistration_delay is 30s/);
+  await page.fill('#ke-evidence', 'modules/web/alb.tf, checked 2026-10-16');
   await page.locator('[data-act="rp-save"]', { hasText: 'Approve with changes' }).click();
   await page.locator('#su-go').click();
   await expect(page.locator('.kprop[data-prop="k4"]')).toContainText('approved (edited)');
@@ -179,18 +191,16 @@ test('import maps markdown into a kind: a runbook is detected and confirmed', as
   await expect(page.locator('.im-row')).toContainText('3 steps');
   await page.locator('#im-go').click();
   const t = (await files(page, 'team:platform'))['runbooks/rotate-the-tls-cert.md'];
-  expect(t).toContain('run: tailscale cert ops-box'); expect(t).toContain('verification: openssl shows the new expiry.');
+  expect(t).toContain('Issue a new cert (run: `tailscale cert ops-box`)'); expect(t).toContain('verification: openssl shows the new expiry.'); expect(t).toContain('rollback: Restore the previous cert files.');
   await expect(page.locator('#ke-path')).toHaveText('runbooks/rotate-the-tls-cert.md');
-  // a note mapped as knowledge needs what the import couldn't find: it opens with the errors
+  // a note mapped as knowledge: the note becomes the body, the evidence says where it came from
   await page.locator('[data-act="rp-upload"]').click();
   await page.setInputFiles('#up-file', { name: 'oncall-v2.md', mimeType: 'text/markdown', buffer: Buffer.from('# On-call v2\n\nPrimary rotates weekly.\n') });
   await page.locator('#up-go').click();
   await expect(page.locator('.im-row')).toContainText('detected: knowledge entry');
   await page.locator('#im-go').click();
-  await expect(page.locator('#ke-err')).toContainText('applies_to: required');
-  await addTo(page, 'applies_to', 'team:platform');
-  await save(page);
-  expect((await files(page, 'team:platform'))['knowledge/on-call-v2.md']).toContain('statement: Primary rotates weekly.');
+  const k = (await files(page, 'team:platform'))['knowledge/on-call-v2.md'];
+  expect(k).toContain('evidence: imported from oncall-v2.md'); expect(k).toMatch(/---\nPrimary rotates weekly./);
 });
 
 test('bot memory: edit, pin, who wrote it; the log is annotated or flagged, never rewritten', async ({ page }) => {
@@ -207,12 +217,20 @@ test('bot memory: edit, pin, who wrote it; the log is annotated or flagged, neve
   await page.locator('[data-act="rp-kind"][data-k="log"]').click();
   await expect(page.locator('#ke-form')).toHaveCount(0);
   await expect(page.locator('.repo-ed')).toContainText('history isn\'t rewritten');
+  const before = (await files(page, 'bot:platform-sre'))['log/2026-10-16-c29.md'];
+  const body = before.slice(before.indexOf('\n---\n') + 5).trimEnd();
   await page.locator('[data-act="rp-flag"]').click();
   await page.fill('#f-text', 'The regression started at 14:03, not 14:02.'); await page.locator('#gen-submit').click();
-  await expect(page.locator('.anno.flag')).toContainText('14:03');
+  await expect(page.locator('.repo-ed .callout.danger')).toContainText('14:03');
   await expect(page.locator('.ed-head')).toContainText('flagged as wrong');
-  const f = await files(page, 'bot:platform-sre');
-  expect(f['log/2026-10-16-c29.md']).not.toContain('14:03'); // the entry itself is untouched
+  // conductor's operator edit: flagged_wrong is set and a section is appended; the bot's text is untouched
+  const after = (await files(page, 'bot:platform-sre'))['log/2026-10-16-c29.md'];
+  expect(after).toContain('flagged_wrong: The regression started at 14:03, not 14:02.');
+  expect(after).toContain(body);
+  expect(after).toMatch(/## Flagged WRONG by the operator — ops, .+\n\nThe regression started at 14:03/);
+  await page.locator('[data-act="rp-annotate"]').click();
+  await page.fill('#f-text', 'Paged twice; second page was a duplicate.'); await page.locator('#gen-submit').click();
+  expect((await files(page, 'bot:platform-sre'))['log/2026-10-16-c29.md']).toMatch(/## Operator note — ops, .+\n\nPaged twice/);
 });
 
 test('a bot commits while you edit: the conflict is shown and you rebase explicitly', async ({ page }) => {
@@ -236,7 +254,7 @@ test('unsaved changes are guarded; browse by kind with tag filters; search spans
   await expect(page.locator('.kind-entries .entry')).toHaveCount(1);
   await expect(page.locator('.kind-entries')).toContainText('Infra map');
   await page.locator('.chip[data-act="rp-tag"][data-t="nat"]').click();
-  await page.fill('#ke-statement', 'changed');
+  await page.fill('#ke-title', 'changed');
   await page.evaluate(() => { location.hash = '#/overview'; });
   await expect(page.locator('.modal, .cdrawer').first()).toContainText('aren\'t saved');
   await page.locator('#cf-cancel, .modal [data-close]').first().click();
@@ -248,5 +266,5 @@ test('unsaved changes are guarded; browse by kind with tag filters; search spans
   await page.fill('[data-on-change="rp-q"]', 'deregistration'); await page.locator('[data-on-change="rp-q"]').press('Enter');
   await page.locator('.search-res [data-act="rp-hit"][data-repo="bot:platform-sre"]').first().click();
   await expect(page).toHaveURL(/#\/bots\/platform-sre\/memory/);
-  await expect(page.locator('#ke-statement, #rp-ed .ced-ta').first()).toBeVisible();
+  await expect(page.locator('#ke-evidence, #rp-ed .ced-ta').first()).toBeVisible();
 });

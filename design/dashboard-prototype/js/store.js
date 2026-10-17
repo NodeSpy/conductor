@@ -122,20 +122,21 @@
     validate(k, n) { const e = []; if (!/^[A-Z_][A-Z0-9_]*$/.test(n.name || '')) e.push(`env ${n.name}: names are UPPER_SNAKE_CASE`); if (n.value == null || n.value === '') { if (!n.len) e.push(`env ${n.name}: no value`); } return e; } };
   /** conductor.env as the daemon would write it (with a backup); values that look secret are never rendered. */
   S.envText = (state) => ((state || window.D).env || []).filter((e) => e.scope === 'daemon').map((e) => `${e.name}=${e.looksSecret && e.plain ? '•'.repeat(Math.min(e.len || 8, 12)) + '  # plain text in this file' : e.value}`).join('\n') + '\n';
-  /* collections: custom knowledge collections (the escape hatch from the built-in kinds) */
-  S.RESERVED_DIRS = ['knowledge', 'runbooks', 'log', 'handoff', 'watch.md', 'proposals'];
-  S.FIELD_RE = /^([a-z][a-z0-9_]*):(string|text|list|enum\(([\w-]+(\|[\w-]+)*)\))$/;
-  listColl('collections', () => D().collections, {
-    label: 'knowledge collection', href: () => '#/config/collections',
-    set(k, node) { const L = D().collections; if (node == null) return drop(L, k); const it = byName(L, k); if (it) it.cfg = node; else L.push({ name: k, cfg: node }); },
-    validate(k, n) { const e = []; const dir = (n.dir || '').replace(/\/$/, '');
-      if (!/^[a-z][a-z0-9-]*(\/[a-z0-9-]+)*$/.test(dir)) e.push(`collections.${k}.dir: a relative folder such as postmortems or notes/vendors`);
-      else if (S.RESERVED_DIRS.includes(dir.split('/')[0])) e.push(`collections.${k}.dir: ${dir.split('/')[0]}/ belongs to a built-in kind; pick another folder`);
-      (n.fields || []).forEach((f) => { if (!S.FIELD_RE.test(f)) e.push(`collections.${k}.fields: "${f}" is not name:string|text|list|enum(a|b)`); });
-      if (!['team', 'bot', 'both'].includes(n.scope || 'team')) e.push(`collections.${k}.scope: team, bot or both`);
-      if (!(n.write || []).length) e.push(`collections.${k}.write: say who may write (operator, bots (proposal), bots (direct))`);
-      return e; },
-  });
+  /* collections: custom content kinds, declared under teams.<t>.collections or bots.<b>.collections
+     (conductor's CollectionSpec: dir, fields {type, required, values}, template, free_paths, writers, from) */
+  S.RESERVED_DIRS = ['knowledge', 'runbooks', 'watch', 'log', 'handoff', 'episodes'];
+  S.FIELD_TYPES = ['string', 'text', 'list', 'steps', 'enum', 'number', 'bool'];
+  S.collErrors = (P, cols, owner) => { const e = [], dirs = {};
+    Object.entries(cols || {}).forEach(([name, c]) => { const Q = `${P}.collections.${name}`; c = c || {};
+      if (!/^[a-z][a-z0-9_-]{0,39}$/.test(name)) e.push(`${Q}: names are lowercase letters, digits, _ and -, up to 40`);
+      if (c.from) { if (['dir', 'fields', 'template', 'free_paths', 'writers'].some((x) => c[x] != null)) e.push(`${Q}: from: names a pack's definition, so it can't also set dir, fields, template, free_paths or writers`); return; }
+      const dir = String(c.dir || name).replace(/\/$/, '');
+      if (!/^[a-z][a-z0-9_-]*(\/[a-z0-9_-]+)*$/.test(dir)) e.push(`${Q}.dir: a relative folder such as postmortems or notes/vendors`);
+      else if (S.RESERVED_DIRS.includes(dir.split('/')[0])) e.push(`${Q}.dir: ${dir.split('/')[0]}/ belongs to a built-in kind; pick another folder`);
+      else if (dirs[dir]) e.push(`${Q}.dir: ${dir}/ is already ${dirs[dir]}'s folder`); else dirs[dir] = name;
+      Object.entries(c.fields || {}).forEach(([f, d]) => { d = d || {}; if (!/^[a-z][a-z0-9_]*$/.test(f)) e.push(`${Q}.fields.${f}: field names are lowercase letters, digits and _`); if (!S.FIELD_TYPES.includes(d.type || 'string')) e.push(`${Q}.fields.${f}.type: one of ${S.FIELD_TYPES.join(', ')}, not "${d.type}"`); if (d.type === 'enum' && !(d.values || []).length) e.push(`${Q}.fields.${f}.values: an enum needs its values`); if (d.values && d.type !== 'enum') e.push(`${Q}.fields.${f}.values: only an enum has values`); });
+      const W = owner === 'team' ? ['operator', 'proposal'] : ['operator', 'bots']; (c.writers || []).forEach((w) => { if (!W.includes(w)) e.push(`${Q}.writers: "${w}" — a ${owner}'s writers are ${W.join(' or ')}`); }); });
+    return e; };
   listColl('hosts', () => D().hosts, {
     label: 'host', href: () => '#/connectors/hosts',
     set(k, node) { const L = D().hosts; if (node == null) return drop(L, k); const it = byName(L, k); if (it) Object.assign(it, { cfg: node, addr: node.addr, user: node.user }); else L.push({ name: k, addr: node.addr, user: node.user, status: 'wait', rtt: '—', cfg: node }); },
@@ -192,6 +193,7 @@
     validate(k, n, all) {
       const e = [];
       if (!/^[a-z][a-z0-9-]*$/.test(k)) e.push(`bot name "${k}": lowercase letters, digits and dashes`);
+      e.push(...S.collErrors(`bots.${k}`, n.collections, 'bot'));
       if (n.folder != null && !S.FOLDER_RE.test(n.folder)) e.push(`bots.${k}.folder: "${n.folder}" — segments of letters, digits, space, . _ -, joined by /`);
       if (!Object.keys(all.operatorsCfg || {}).length) e.push(`bots.${k}.operators: no operators: are configured, so nobody could approve its proposals`); // empty = the team's, or every operator
       (n.operators || []).forEach((o) => { if (!all.operatorsCfg[o]) e.push(`bots.${k}.operators: "${o}" is not in operators:`); });
@@ -343,6 +345,7 @@
       if (window.RS) Object.keys(n).forEach((x) => { if (!RS.team.has(x)) e.push(`teams.${k}.${x}: not a team key (field ${x} not found in type config.TeamConfig)`); });
       if (n.folder != null && !S.FOLDER_RE.test(n.folder)) e.push(`teams.${k}.folder: "${n.folder}" — segments of letters, digits, space, . _ -, joined by /`);
       const mem = all.bots.filter((m) => m.cfg && m.cfg.team === k).map((m) => m.name);
+      e.push(...S.collErrors(`teams.${k}`, n.collections, 'team'));
       const c = S.getPath(n, 'autonomy.ceiling'); if (c != null && !['reversible', 'observe'].includes(c)) e.push(`teams.${k}.autonomy.ceiling: reversible (the most promotion can reach) or observe (no bot promotes anything), not "${c}"`);
       if (n.peers != null && !['team', 'none'].includes(n.peers)) e.push(`teams.${k}.peers: team or none`);
       const sb = S.getPath(n, 'isolation.sandbox'); if (sb != null && !['optional', 'required'].includes(sb)) e.push(`teams.${k}.isolation.sandbox: optional or required`);
@@ -430,10 +433,10 @@
     else if (coll === 'connectors') { added(B.repos, A.repos).forEach((x) => r.push(`repos: adds ${x}`)); }
     return r;
   };
-  S.ORDER = ['settings', 'vaults', 'secrets', 'connectors', 'hosts', 'runtimes', 'sandbox', 'operators', 'teams', 'bots', 'botLinks', 'collections', 'env', 'identities', 'credentials', 'packs', 'update', 'workflows'];
+  S.ORDER = ['settings', 'vaults', 'secrets', 'connectors', 'hosts', 'runtimes', 'sandbox', 'operators', 'teams', 'bots', 'botLinks', 'env', 'identities', 'credentials', 'packs', 'update', 'workflows'];
 
   /* ---------- config.yaml, generated from the state ---------- */
-  const HEAD = { settings: 'settings: — ${settings.NAME} anywhere below', vaults: 'vaults: — where secrets live; values never appear here', connectors: 'connectors: — use: names the plugin', hosts: 'hosts: — remote machines over SSH', runtimes: 'runtimes: — where agents run', models: 'models: — fleets of acceptable models', sandbox: 'sandbox: — the agent sandbox', operators: 'operators: — who can approve', bots: 'bots: — persistent agents (#178)', teams: 'teams: — bots inherit team defaults and can only narrow them', browser: 'browser: — the agent browser (#182)', packs: 'packs: — your overrides; the pack files are vendored', update: 'update: — the auto-update policy', bot_links: 'bot_links: — operator-side links: each pair of bots may message each other', collections: 'collections: — custom knowledge collections (built-in kinds stay where they are)', usage: 'usage: — off | subscription | api, per provider; limits only from source:', triggers: 'triggers: — on / filter / steps', workflows: 'workflows: — reusable, called with call:', secrets: 'secret references' };
+  const HEAD = { settings: 'settings: — ${settings.NAME} anywhere below', vaults: 'vaults: — where secrets live; values never appear here', connectors: 'connectors: — use: names the plugin', hosts: 'hosts: — remote machines over SSH', runtimes: 'runtimes: — where agents run', models: 'models: — fleets of acceptable models', sandbox: 'sandbox: — the agent sandbox', operators: 'operators: — who can approve', bots: 'bots: — persistent agents with their own memory', teams: 'teams: — bots inherit team defaults and can only narrow them', browser: 'browser: — the agent browser: which sites bots may use, and how they sign in', packs: 'packs: — your overrides; the pack files are vendored', update: 'update: — the auto-update policy', bot_links: 'bot_links: — operator-side links: each pair of bots may message each other', usage: 'usage: — off | subscription | api, per provider; limits only from source:', triggers: 'triggers: — on / filter / steps', workflows: 'workflows: — reusable, called with call:', secrets: 'secret references' };
   S.configText = (state) => {
     const st = state || window.D; const out = ['# conductor config — ops-box', '# managed by hand and by the dashboard; comments and unknown keys are kept', ''];
     const sec = (h, obj) => { if (obj == null || (typeof obj === 'object' && !Object.keys(obj).length)) return; out.push('# ' + HEAD[h]); out.push(Y.stringify({ [h]: obj })); out.push(''); };
@@ -447,7 +450,6 @@
     sec('operators', st.operatorsCfg);
     sec('teams', Object.fromEntries(st.teams.map((t) => [t.name, t.cfg])));
     sec('bots', Object.fromEntries(st.bots.map((m) => [m.name, m.cfg])));
-    sec('collections', Object.fromEntries((st.collections || []).map((c) => [c.name, c.cfg])));
     if ((st.botLinks || []).length) { out.push('# ' + HEAD.bot_links); out.push(Y.stringify({ bot_links: st.botLinks })); out.push(''); }
     const br = {};
     // the real shape: one allowlist, logins per site with the identities that may use them, evaluate per identity

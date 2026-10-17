@@ -610,15 +610,19 @@
     const d = YAML.diff(A, B), E = UI.esc;
     const adds = d.filter((r) => r.t === '+').length, dels = d.filter((r) => r.t === '-').length;
     if (!adds && !dels) return { html: `<div class="empty small"><span class="serif">No difference</span>The candidate is byte-identical to the live file.</div>`, adds, dels };
-    const sec = (r) => { if (!o.sections) return ''; const lines = B.split('\n'); for (let k = (r.b || r.a) - 1; k >= 0; k--) if (/^[a-z]/.test(lines[k] || '')) return lines[k].replace(/:.*$/, ''); return ''; };
+    /* The hunk's location: the key path of its first changed line (teams.platform.collections.vendors) and that line's number. */
+    const LA = A.split('\n'), LB = B.split('\n');
+    const keyAt = (lines, i) => { const path = []; let ind = Infinity; for (let k = i; k >= 0; k--) { const m = (lines[k] || '').match(/^(\s*)(- )?("[^"]+"|[\w.@/${}-]+):(\s|$)/); if (!m) continue; const n = m[1].length + (m[2] ? 2 : 0); if (n < ind) { path.unshift(m[3].replace(/^"|"$/g, '')); ind = m[2] ? m[1].length : n; if (!ind) break; } } return path.join('.'); };
+    const loc = (h) => { const r = h.find((x) => x.t !== ' ') || h[0]; const inB = r.t !== '-'; return { path: o.sections ? keyAt(inB ? LB : LA, (inB ? r.b : r.a) - 1) : '', line: inB ? r.b : r.a }; };
+    const headOf = (h) => { const l = loc(h); return `<div class="h">${E(o.file || 'config.yaml')}${l.path ? ' · <span class="mono">' + E(l.path) + '</span>' : ''} · line ${l.line}</div>`; };
     const row = (r) => `<div class="dl ${r.t === '+' ? 'add' : r.t === '-' ? 'del' : ''}"><span>${r.a || ''}</span><span>${r.b || ''}</span><span>${r.t === ' ' ? ' ' : r.t}</span><span>${UI.yamlLine(r.s) || ' '}</span></div>`;
     let html;
     if (mode === 'whole') html = d.map(row).join('');
     else if (mode === 'split') {
       html = YAML.hunks(d, 2).map((h) => { const L = [], R = []; let dl = [], al = []; const flush = () => { const n = Math.max(dl.length, al.length); for (let k = 0; k < n; k++) { L.push(dl[k] ? `<div class="sl del"><span>${dl[k].a}</span><span>${UI.yamlLine(dl[k].s) || ' '}</span></div>` : '<div class="sl gap"><span></span><span> </span></div>'); R.push(al[k] ? `<div class="sl add"><span>${al[k].b}</span><span>${UI.yamlLine(al[k].s) || ' '}</span></div>` : '<div class="sl gap"><span></span><span> </span></div>'); } dl = []; al = []; };
         h.forEach((r) => { if (r.t === '-') dl.push(r); else if (r.t === '+') al.push(r); else { flush(); L.push(`<div class="sl"><span>${r.a}</span><span>${UI.yamlLine(r.s) || ' '}</span></div>`); R.push(`<div class="sl"><span>${r.b}</span><span>${UI.yamlLine(r.s) || ' '}</span></div>`); } }); flush();
-        return `<div class="h">${E(o.file || 'config.yaml')}${sec(h[0]) ? ' · ' + E(sec(h[0])) : ''} · line ${h[0].b || h[0].a}</div><div class="split"><div>${L.join('')}</div><div>${R.join('')}</div></div>`; }).join('');
-    } else html = YAML.hunks(d, 3).map((h) => `<div class="h">${E(o.file || 'config.yaml')}${sec(h[0]) ? ' · ' + E(sec(h[0])) : ''} · line ${h[0].b || h[0].a}</div>${h.map(row).join('')}`).join('');
+        return `${headOf(h)}<div class="split"><div>${L.join('')}</div><div>${R.join('')}</div></div>`; }).join('');
+    } else html = YAML.hunks(d, 3).map((h) => `${headOf(h)}${h.map(row).join('')}`).join('');
     return { html: `<div class="diff ${mode}">${html}</div>`, adds, dels };
   };
 })();

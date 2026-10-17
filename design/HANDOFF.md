@@ -43,6 +43,11 @@ clashes fail tests. Screenshot helpers for the visual review: `~/Projects/.cache
 
 ## Done (commits on this branch, newest first)
 
+- (this commit) knowledge on conductor's real content kinds (knowledge/runbook/watch/log/handoff fields, steps as
+  strings, `watch/<slug>.md`, log notes and flags appended + `flagged_wrong`), collections under
+  `teams.<t>.collections` / `bots.<b>.collections` (top-level `collections:` removed), diff hunk headers show the
+  key path of the first changed line, issue numbers removed from UI copy; doc §4.4 on the real team schema.
+- 67130be teams and bots on conductor's schema (step D).
 - 9be090d one shared folder tree (bots, teams, workflows), folder pages with tabs, workflows folder tree/moves.
 - 1f117d7 / d808107 knowledge by kind (built-in kinds + collections, derived paths, runbook steps, schema-checked
   proposals and imports, Config → Collections).
@@ -85,7 +90,7 @@ Plan (commit after each step):
   {title, case, sweep, flagged_wrong} (annotate/flag append a "## Operator note" section); handoff {session};
   collections live under `teams.<t>.collections` / `bots.<b>.collections` (fields map {type, required, values},
   writers team operator|proposal, bot operator|bots, `from:` for pack-shipped).
-- **E.** builder supports map-form `skill.verbs` with resource scopes; any internal error locks the list.
+- **E.** (DONE in A/D) builder supports map-form `skill.verbs` with resource scopes; any internal error locks the list.
 - **F.** run detail: per-step selection/log/diff, run-scoped audit, time axis, compare runs, consistent data,
   "What happened / What you can do".
 - **P1 8–22** from Daniel's list (Get started, New bot wizard, Safety view, glossary + no issue numbers, Connect
@@ -118,7 +123,7 @@ numbers), states and flows. **The final report ends with a line containing only 
 | Packs & plugins catalog (browse/detail/install wizard/sources/trust) | catalog.js written, **not routed**; audit P1 19 |
 | Connectors catalog (real builtin vs plugin split, custom git connector) | **not started** (SCHEMA still marks github builtin); facts in summary: builtins web, cron, webhook, rss, command, rest, graphql, kv, sql, memory, workflow, conductor (+ lan, tunnel); everything vendor is an official plugin |
 | Value-source field | done; changes in step B (canonical vault syntax, no named secrets) |
-| Knowledge kinds | done; align field names to the real kinds in step D |
+| Knowledge kinds | done, on conductor's real kinds and collection locations |
 | Visual QA bar + shared components | components started (choice, stepper, wizard, catalog cards, chips); checks not written |
 | Passkey enroll cancel + every flow has a way out | enroll done; Esc/guard done; dismiss tests not written |
 | Shared folders across workflows | done |
@@ -127,6 +132,6 @@ numbers), states and flows. **The final report ends with a line containing only 
 
 - `#/secrets/env` route doesn't exist yet (C.env points at it).
 - `catalog.js` routes (`extensions/browse|item|install`) not registered; Browse still the old REG list.
-- Team/bot config shapes are the prototype's own, not the real schema (step D).
-- `op://` references still in data/value-source output (step B).
-- Docs: usage, logins, value source, kinds, folders documented; env, catalog, multi-user, audit changes not yet.
+- Docs: usage, logins, value source, kinds (real fields), folders, teams schema documented; env, catalog, multi-user,
+  run detail and the P1 audit changes not yet.
+- Next: step F (run detail), then P1 8–22.

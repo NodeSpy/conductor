@@ -852,3 +852,37 @@ window.D.packMembers = {
   // the one cross-team pair: both list each other (a link needs both sides, or bot_links)
   D.botLinks = [];
 })();
+
+/* Content kinds as conductor implements them (feat/members internal/bot/kinds.go):
+ * knowledge {title, applies_to, evidence, confidence} + body; runbook {title,
+ * when_to_use, prerequisites, steps (strings), verification, rollback, owner};
+ * watch items are files watch/<slug>.md {what, signal, threshold, why}; log
+ * {title, case, sweep, flagged_wrong}; handoff {session}. Collections live on a
+ * team or bot (collections:), a pack's via from:. */
+(function () {
+  const D = window.D;
+  const fm = (o, body) => '---\n' + YAML.stringify(o).replace(/\n?$/, '\n') + '---\n' + (body || '');
+  const parse = (t) => { if (!/^---\n/.test(t || '')) return null; const e = t.indexOf('\n---\n', 3); try { return { fm: YAML.parse(t.slice(4, e + 1)).value || {}, body: t.slice(e + 5) }; } catch (x) { return null; } };
+  const slug = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const stepStr = (s) => (typeof s === 'string' ? s : !s ? s : `${s.do || ''}${s.run ? ` (run: \`${s.run}\`)` : s.verb ? ` (verb: ${s.verb})` : ''}`);
+  const convert = (text) => {
+    const x = parse(text); if (!x) return text; const f = x.fm;
+    if (f.kind === 'knowledge') return fm({ kind: 'knowledge', title: f.title, applies_to: f.applies_to, evidence: f.source || f.evidence || 'operator note', confidence: f.confidence || 'medium' }, (f.statement ? f.statement + '\n\n' : '') + (x.body || ''));
+    if (f.kind === 'runbook') { const o = { kind: 'runbook', title: f.title, when_to_use: f.when || f.when_to_use, prerequisites: f.prerequisites, steps: (f.steps || []).map(stepStr), verification: f.verification, rollback: f.rollback || 'Nothing to roll back: the steps only read.', owner: f.owner }; Object.keys(o).forEach((k) => o[k] == null && delete o[k]); return fm(o, x.body); }
+    if (f.kind === 'log') { const o = { kind: 'log', title: f.title }; if (/^c\d+$/.test(f.case || '')) o.case = f.case; else if (f.case) o.sweep = f.case; return fm(o, x.body); }
+    return text;
+  };
+  const watchSplit = (files) => { const w = files['watch.md']; if (w == null) return; delete files['watch.md']; String(w).split(/^## /m).slice(1).forEach((chunk) => { const [head, ...rest] = chunk.split('\n'); const e = { kind: 'watch', what: head.trim() }; rest.forEach((l) => { const m = l.match(/^- (signal|threshold|why):\s*(.*)$/); if (m) e[m[1]] = m[2]; }); files[`watch/${slug(e.what)}.md`] = fm(e, ''); }); };
+  const conv = (files) => { Object.keys(files).forEach((p) => { files[p] = convert(files[p]); }); watchSplit(files); };
+  conv(D.memory.files);
+  Object.values(D.teamKnowledge).forEach((tk) => { if (!tk) return; conv(tk.files); (tk.proposals || []).forEach((p) => { if (p.content) p.content = convert(p.content); }); });
+  Object.values(D.botMemory || {}).forEach(conv);
+  // a malformed bot proposal, as conductor would reject it
+  const k5 = D.teamKnowledge.platform.proposals.find((p) => p.id === 'k5');
+  if (k5) k5.content = fm({ kind: 'runbook', title: 'Checkout errors', when_to_use: 'checkout 5xx above 2% for 5 minutes', steps: ['Check the canary', { run: 'kubectl rollout undo deploy/web' }, ''] }, '');
+  // collections: the operator's on a team; a pack's by from:
+  D.packCollectionFiles = { '.conductor/packs/sre-bot/collections/postmortems.yaml': { dir: 'postmortems', fields: { title: { type: 'string', required: true }, date: { type: 'string' }, severity: { type: 'enum', values: ['sev1', 'sev2', 'sev3'], required: true }, impact: { type: 'text' } }, template: '## Timeline\n\n## Cause\n\n## Follow-ups\n', writers: ['operator', 'proposal'] } };
+  const plat = D.teams.find((t) => t.name === 'platform');
+  if (plat) plat.cfg.collections = { postmortems: { from: '.conductor/packs/sre-bot/collections/postmortems.yaml' } };
+  D.collections = []; D.packCollections = [];
+})();

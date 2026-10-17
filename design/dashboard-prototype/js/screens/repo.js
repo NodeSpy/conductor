@@ -1,10 +1,10 @@
 /* Knowledge you can author, by kind: a team's knowledge repo and a bot's own
  * memory. Every entry has a kind, and its kind decides its home and its
- * fields: knowledge/ (title, statement, applies-to, source, confidence),
- * runbooks/ (when, prerequisites, ordered steps with a command or verb,
- * verification, rollback, owner), watch.md entries, log/ (bots only; the
- * operator annotates or flags), handoff/ (system), and custom collections
- * declared in config or shipped by a pack. Paths are derived from kind and
+ * fields, as conductor's kinds declare them: knowledge/ (title, applies_to,
+ * evidence, confidence), runbooks/ (title, when_to_use, prerequisites, steps,
+ * verification, rollback, owner), watch/ (what, signal, threshold, why),
+ * log/ (bots only; the operator appends a note or flags it wrong), handoff/
+ * (system), and collections declared on the team or bot (or by a pack). Paths are derived from kind and
  * title; free paths only where a collection allows them. Git underneath:
  * every save is one commit authored by the operator, with history, diff,
  * revert, blame and conflict handling. Bot proposals and imports are checked
@@ -48,27 +48,28 @@
   const slug = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'untitled';
   const F = (k, type, o = {}) => Object.assign({ k, type }, o);
   const KINDS = (UI.KINDS = {
-    knowledge: { id: 'knowledge', label: 'Knowledge', one: 'knowledge entry', icon: 'sparkle', dir: 'knowledge', repos: ['team', 'bot'], body: 'Details',
-      fields: [F('title', 'string', { req: true }), F('statement', 'text', { req: true, rows: 2, help: 'The fact itself, in a sentence or two.' }), F('applies_to', 'list', { req: true, label: 'Applies to', ph: 'service or resource', help: 'Services and resources this is about. Used to filter and to find it.' }), F('source', 'string', { req: true, label: 'Source / evidence', ph: 'case c31, modules/web/alb.tf, a dashboard' }), F('confidence', 'enum', { req: true, options: ['high', 'medium', 'low'], def: 'medium' })],
+    knowledge: { id: 'knowledge', label: 'Knowledge', one: 'knowledge entry', icon: 'sparkle', dir: 'knowledge', repos: ['team', 'bot'], body: 'What is true, and why you believe it', template: '',
+      fields: [F('title', 'string', { req: true }), F('applies_to', 'list', { label: 'Applies to', ph: 'service or resource', help: 'Services and resources this is about. Used to filter and to find it.' }), F('evidence', 'text', { req: true, rows: 2, label: 'Evidence', help: 'Why you believe it: a case, a file, a dashboard, a test.' }), F('confidence', 'enum', { req: true, options: ['low', 'medium', 'high'], def: 'medium' })],
       who: { team: 'You write directly; bots promote from their memory, with your approval.', bot: 'You and the bot write directly.' } },
-    runbook: { id: 'runbook', label: 'Runbooks', one: 'runbook', icon: 'workflows', dir: 'runbooks', repos: ['team', 'bot'], body: 'Notes',
-      fields: [F('title', 'string', { req: true }), F('when', 'text', { req: true, rows: 2, label: 'When to use', help: 'The trigger or the symptoms.' }), F('prerequisites', 'list', { ph: 'access, a change window, a tool' }), F('steps', 'steps', { req: true }), F('verification', 'text', { req: true, rows: 2, help: 'How you know it worked.' }), F('rollback', 'text', { rows: 2, help: 'How to undo it, or "nothing to roll back".' }), F('owner', 'string', { req: true, ph: 'a bot, a team or a person' }), F('applies_to', 'list', { label: 'Applies to', ph: 'service or resource' })],
-      who: { team: 'You write directly; bots propose.', bot: 'You write directly; the bot proposes.' } },
-    watch: { id: 'watch', label: 'Watch', one: 'watch item', icon: 'eye', file: 'watch.md', repos: ['team', 'bot'],
-      fields: [F('what', 'string', { req: true, label: 'What to watch' }), F('signal', 'string', { req: true, label: 'Signal / query' }), F('threshold', 'string', { req: true }), F('why', 'text', { req: true, rows: 2 })],
-      who: { team: 'You write directly; bots propose.', bot: 'You write directly; the bot proposes.' } },
-    log: { id: 'log', label: 'Log', one: 'log entry', icon: 'clock', dir: 'log', repos: ['bot'], readonly: 'The bot writes its log, one entry per case. You can annotate an entry or flag it as wrong, but history isn\'t rewritten.', who: { bot: 'The bot only. You annotate or flag.' } },
+    runbook: { id: 'runbook', label: 'Runbooks', one: 'runbook', icon: 'workflows', dir: 'runbooks', repos: ['team', 'bot'], body: 'Notes on the procedure',
+      fields: [F('title', 'string', { req: true }), F('when_to_use', 'text', { req: true, rows: 2, label: 'When to use', help: 'The trigger or the symptoms.' }), F('prerequisites', 'list', { ph: 'access, a change window, a tool' }), F('steps', 'steps', { req: true }), F('verification', 'text', { req: true, rows: 2, help: 'How you know it worked.' }), F('rollback', 'text', { req: true, rows: 2, help: 'How to undo it, or "nothing to roll back".' }), F('owner', 'string', { req: true, ph: 'a bot, a team or a person' })],
+      who: { team: 'You write directly; bots propose.', bot: 'You and the bot write directly.' } },
+    watch: { id: 'watch', label: 'Watch', one: 'watch item', icon: 'eye', dir: 'watch', titleKey: 'what', repos: ['team', 'bot'],
+      fields: [F('what', 'string', { req: true, label: 'What to watch' }), F('signal', 'text', { req: true, rows: 2, label: 'Signal / query' }), F('threshold', 'text', { req: true, rows: 1 }), F('why', 'text', { req: true, rows: 2 })],
+      who: { team: 'You write directly; bots propose.', bot: 'You and the bot write directly.' } },
+    log: { id: 'log', label: 'Log', one: 'log entry', icon: 'clock', dir: 'log', repos: ['bot'], readonly: 'The bot writes its log, one entry per case or sweep. You can add a note or flag it as wrong (both appended, with your name), but history isn\'t rewritten.', who: { bot: 'The bot only. You annotate or flag.' } },
     handoff: { id: 'handoff', label: 'Handoff', one: 'handoff note', icon: 'send', dir: 'handoff', repos: ['bot'], readonly: 'Written by conductor when a home session rotates. Read-only.', who: { bot: 'System-generated, read-only.' } },
   });
-  const fieldOf = (spec) => { const m = String(spec).match(S.FIELD_RE); if (!m) return null; return m[2].startsWith('enum') ? F(m[1], 'enum', { options: m[3].split('|') }) : F(m[1], m[2], m[2] === 'text' ? { rows: 2 } : {}); };
-  const collections = (r) => (S.view().collections || []).map((c) => ({ name: c.name, cfg: c.cfg, pack: null })).concat((D.packCollections || []).map((c) => ({ name: c.name, cfg: c.cfg, pack: c.pack })))
-    .filter((c) => { const sc = c.cfg.scope || 'team'; return sc === 'both' || sc === r.kind; })
-    .map((c) => ({ id: 'c:' + c.name, coll: c.name, label: c.name, one: c.name.replace(/s$/, '') + ' entry', icon: 'folder', dir: String(c.cfg.dir).replace(/\/$/, ''), pack: c.pack, free: !!c.cfg.free_paths, template: c.cfg.template || '', write: c.cfg.write || ['operator'], body: 'Body',
-      fields: [F('title', 'string', { req: true })].concat((c.cfg.fields || []).map(fieldOf).filter(Boolean)), who: { team: `As declared: ${(c.cfg.write || ['operator']).join(', ')}.`, bot: `As declared: ${(c.cfg.write || ['operator']).join(', ')}.` } }));
+  const titleOf = (kind, fm) => fm[kind.titleKey || 'title'];
+  const fieldFromCfg = ([name, f]) => F(name, f.type === 'enum' ? 'enum' : ['string', 'text', 'list', 'steps', 'number', 'bool'].includes(f.type) ? f.type : 'string', Object.assign({ req: !!f.required }, f.type === 'enum' ? { options: f.values || [] } : {}, f.type === 'text' ? { rows: 2 } : {}));
+  /** A repo's collections: teams.<t>.collections or bots.<b>.collections; a pack's definition via from:. */
+  const collections = (r) => { const owner = r.kind === 'team' ? S.view().teams.find((t) => t.name === r.name) : S.view().bots.find((b) => b.name === r.name); const cols = (owner && owner.cfg && owner.cfg.collections) || {};
+    return Object.entries(cols).map(([name, c0]) => { const c = c0.from ? Object.assign({}, (D.packCollectionFiles || {})[c0.from] || {}, { from: c0.from }) : c0; const fields = Object.entries(c.fields || {}).map(fieldFromCfg); if (!fields.some((f) => f.k === 'title')) fields.unshift(F('title', 'string', { req: true })); const writers = c.writers || ['operator'];
+      return { id: 'c:' + name, coll: name, label: name, one: name.replace(/s$/, '') + ' entry', icon: 'folder', dir: String(c.dir || name).replace(/\/$/, ''), pack: c.from ? (c.from.match(/packs\/([^/]+)/) || [])[1] : null, from: c.from, free: !!c.free_paths, template: c.template || '', write: writers, body: 'Body', fields, who: { team: `Writers: ${writers.join(', ')}.`, bot: `Writers: ${writers.join(', ')}.` } }; }); };
   const kindsFor = (r) => Object.values(KINDS).filter((k) => k.repos.includes(r.kind)).concat(collections(r));
   const kindById = (r, id) => kindsFor(r).find((k) => k.id === id);
   const visible = (p) => !p.split('/').some((x) => x.startsWith('.'));
-  const kindOfPath = (r, p) => (p === 'watch.md' ? KINDS.watch : kindsFor(r).filter((k) => k.dir).sort((a, b) => b.dir.length - a.dir.length).find((k) => p.startsWith(k.dir + '/')) || null);
+  const kindOfPath = (r, p) => kindsFor(r).filter((k) => k.dir).sort((a, b) => b.dir.length - a.dir.length).find((k) => p.startsWith(k.dir + '/')) || null;
   const writable = (r, k) => (k.readonly ? k.readonly : k.coll && !k.write.includes('operator') ? `Only bots write ${k.label}, as the collection declares` : '');
 
   /* ---------- the file format: markdown with front matter ---------- */
@@ -76,29 +77,26 @@
     parse(text) { text = text || ''; if (!text.startsWith('---\n')) return { fm: {}, body: text, raw: true }; const end = text.indexOf('\n---\n', 3); if (end < 0) return { fm: {}, body: text, err: 'front matter is not closed with ---' }; try { return { fm: YAML.parse(text.slice(4, end + 1)).value || {}, body: text.slice(end + 5) }; } catch (e) { return { fm: {}, body: text.slice(end + 5), err: 'front matter: ' + e.message }; } },
     emit(kind, fm, body) { const o = { kind: kind.coll || kind.id }; kind.fields.forEach((f) => { const v = fm[f.k]; if (v == null || v === '' || (Array.isArray(v) && !v.length)) return; o[f.k] = v; }); return '---\n' + YAML.stringify(o).replace(/\n?$/, '\n') + '---\n' + (body && body.trim() ? body.replace(/\s*$/, '\n') : ''); },
   });
-  const WATCH = {
-    parse(text) { return String(text || '').split(/^## /m).slice(1).map((chunk) => { const [head, ...rest] = chunk.split('\n'); const e = { what: head.trim() }; rest.forEach((l) => { const m = l.match(/^- (signal|threshold|why):\s*(.*)$/); if (m) e[m[1]] = m[2]; }); return e; }); },
-    emit(items) { return '# Watch\n\n' + items.map((e) => `## ${e.what}\n- signal: ${e.signal || ''}\n- threshold: ${e.threshold || ''}\n- why: ${String(e.why || '').replace(/\n+/g, ' ')}\n`).join('\n'); },
-  };
   /** Schema check for one kind; the same check runs on operator saves, bot proposals and imports. */
+  /** The kind's schema check, worded like conductor's (missing required field, want a list…). */
   const validate = (R.validate = (kind, fm, declared) => {
     const e = [];
-    if (declared && declared !== (kind.coll || kind.id)) e.push(`kind: says "${declared}", but ${kind.dir || kind.file} holds ${kind.label.toLowerCase()}`);
+    if (declared && declared !== (kind.coll || kind.id)) e.push(`kind: says "${declared}", but ${kind.dir}/ holds ${kind.label.toLowerCase()}`);
     kind.fields.forEach((f) => {
       const v = fm[f.k], empty = v == null || v === '' || (Array.isArray(v) && !v.length);
-      if (f.req && empty) { e.push(`${f.k}: required`); return; }
+      if (f.req && empty) { e.push(`${f.k}: missing required field (${f.type === 'steps' ? 'at least one step' : f.type})`); return; }
       if (empty) return;
-      if (f.type === 'enum' && !f.options.includes(v)) e.push(`${f.k}: one of ${f.options.join(', ')}`);
-      if (f.type === 'list' && !Array.isArray(v)) e.push(`${f.k}: a list`);
-      if (f.type === 'steps') { if (!Array.isArray(v)) e.push('steps: a list of steps'); else v.forEach((s, i) => { if (!s || typeof s !== 'object') return e.push(`steps[${i + 1}]: a step with do:`); if (!s.do) e.push(`steps[${i + 1}].do: required (what to do)`); if (s.run && s.verb) e.push(`steps[${i + 1}]: either run: or verb:, not both`); if (s.verb && !/^[\w-]+\.[\w*-]+$/.test(s.verb)) e.push(`steps[${i + 1}].verb: connector.verb`); }); }
+      if (f.type === 'string' && (typeof v !== 'string' || /\n/.test(v))) e.push(`${f.k}: want one line`);
+      if (f.type === 'enum' && !f.options.includes(v)) e.push(`${f.k}: ${v} is not one of ${f.options.join(', ')}`);
+      if ((f.type === 'list' || f.type === 'steps') && !Array.isArray(v)) e.push(`${f.k}: want a list`);
+      else if (f.type === 'list' || f.type === 'steps') v.forEach((x, i) => { if (typeof x !== 'string' || !x.trim()) e.push(`${f.k}: item ${i + 1}: want a non-empty string`); });
+      if (f.type === 'number' && typeof v !== 'number') e.push(`${f.k}: want a number`);
+      if (f.type === 'bool' && typeof v !== 'boolean') e.push(`${f.k}: want true or false`);
     });
     return e;
   });
-  const entriesOf = (r, kind) => {
-    if (kind.id === 'watch') return WATCH.parse(r.files['watch.md']).map((w) => ({ kind, path: 'watch.md', key: 'watch.md#' + slug(w.what), title: w.what, fm: w, body: '' }));
-    return Object.keys(r.files).filter((p) => visible(p) && kindOfPath(r, p) === kind).sort().map((p) => { const x = FM.parse(r.files[p]); return { kind, path: p, key: p, title: x.fm.title || p.split('/').pop().replace(/\.md$/, ''), fm: x.fm, body: x.body, err: x.err }; });
-  };
-  const derive = (kind, title, free) => (kind.id === 'watch' ? 'watch.md' : `${kind.dir}/${kind.free && free ? free.replace(/^\/+/, '').replace(/\.md$/, '') : slug(title)}.md`);
+  const entriesOf = (r, kind) => Object.keys(r.files).filter((p) => visible(p) && kindOfPath(r, p) === kind).sort().map((p) => { const x = FM.parse(r.files[p]); return { kind, path: p, key: p, title: titleOf(kind, x.fm) || p.split('/').pop().replace(/\.md$/, ''), fm: x.fm, body: x.body, err: x.err }; });
+  const derive = (kind, title, free) => `${kind.dir}/${kind.free && free ? free.replace(/^\/+/, '').replace(/\.md$/, '') : slug(title)}.md`;
   const botsOfTeam = (t) => D.bots.filter((b) => b.cfg && b.cfg.team === t).map((b) => b.name);
   const related = (r) => { const repos = [r]; if (r.kind === 'team') botsOfTeam(r.name).forEach((b) => repos.push(R.get('bot:' + b))); else { const b = D.bots.find((x) => x.name === r.name); if (b && b.cfg && b.cfg.team) repos.push(R.get('team:' + b.cfg.team)); } return repos; };
   const caseHref = (id) => { const c = D.cases.find((x) => x.id === id); return c ? `#/bots/${c.bot}/cases/${id}` : null; };
@@ -170,9 +168,10 @@
   /* ---------- editor state ---------- */
   const ev = { repo: null, kind: null, key: null, isNew: false, base: '', baseSha: null, steps: [], mode: 'split', blame: false, proposal: null, conflict: null, q: '', tag: '', view: 'kinds', file: null, hist: 'file', sel: new Set(), draft: null };
   const pathOf = () => (ev.key ? ev.key.split('#')[0] : null);
-  const stepsFrom = (fm) => (Array.isArray(fm.steps) ? fm.steps : []).map((s) => (s && typeof s === 'object' ? { do: s.do || '', type: s.verb ? 'verb' : s.run ? 'run' : '', arg: s.verb || s.run || '' } : { do: String(s || ''), type: '', arg: '' }));
-  const stepsTo = (st) => st.filter((s) => s.do || s.arg).map((s) => { const o = { do: s.do }; if (s.type && s.arg) o[s.type] = s.arg; return o; });
-  const serialize = (kind, d) => (!kind.fields ? '' : kind.id === 'watch' ? JSON.stringify(kind.fields.map((f) => d.fm[f.k] || '')) : FM.emit(kind, d.fm, d.body) + '|' + (d.free || ''));
+  // a step is one line of text (conductor's runbook steps are strings); a command or verb rides along as "(run: `cmd`)" / "(verb: x)"
+  const stepsFrom = (fm) => (Array.isArray(fm.steps) ? fm.steps : []).map((st) => { if (st && typeof st === 'object') return { do: st.do || '', type: st.verb ? 'verb' : st.run ? 'run' : '', arg: st.verb || st.run || '' }; const m = String(st || '').match(/^(.*?)\s*\((run|verb): `?([^`)]*)`?\)\s*$/); return m ? { do: m[1], type: m[2], arg: m[3] } : { do: String(st || ''), type: '', arg: '' }; });
+  const stepsTo = (st) => st.filter((x) => x.do || x.arg).map((x) => `${x.do}${x.type === 'run' && x.arg ? ` (run: \`${x.arg}\`)` : x.type === 'verb' && x.arg ? ` (verb: ${x.arg})` : ''}`);
+  const serialize = (kind, d) => (!kind.fields ? '' : FM.emit(kind, d.fm, d.body) + '|' + (d.free || ''));
   function openEntry(r, kind, entry, draft) {
     ev.repo = r.id; ev.kind = kind.id; ev.key = entry ? entry.key : null; ev.isNew = !entry; ev.conflict = null; ev.proposal = null; ev.blame = false; ev.view = 'kinds';
     const d = draft || (entry ? { fm: JSON.parse(JSON.stringify(entry.fm)), body: entry.body || '', free: entry && kind.free ? entry.path.slice(kind.dir.length + 1).replace(/\.md$/, '') : '' } : { fm: {}, body: kind.template || '', free: '' });
@@ -200,7 +199,7 @@
     enable(UI.$('[data-act="rp-save"]'), dirty, ev.isNew ? 'Fill in the fields first' : 'Nothing to save yet: change a field first');
     enable(UI.$('[data-act="rp-discard"]'), (dirty || ev.isNew) && !ev.proposal, 'No unsaved changes');
     const t = UI.$('#ke-dirty'); if (t) t.classList.toggle('hide', !dirty || !!ev.proposal);
-    const p = UI.$('#ke-path'); if (p && kind.id !== 'watch') p.textContent = derive(kind, d.fm.title || '', d.free);
+    const p = UI.$('#ke-path'); if (p) p.textContent = derive(kind, titleOf(kind, d.fm) || '', d.free);
     const pv = UI.$('#rp-prev'); if (pv) pv.innerHTML = UI.mdRender(d.body);
   }
   let rdT; const later = () => { clearTimeout(rdT); rdT = setTimeout(refreshDirty, 60); };
@@ -253,7 +252,7 @@
       </div></div>`;
   };
   function editorHTML(r, kind) {
-    const id = r.id, d = ev.draft || { fm: {}, body: '' }, path = ev.isNew ? derive(kind, d.fm.title || '', d.free) : pathOf();
+    const id = r.id, d = ev.draft || { fm: {}, body: '' }, path = ev.isNew ? derive(kind, titleOf(kind, d.fm) || '', d.free) : pathOf();
     const ver = !ev.isNew && R.version(r, path), behind = ev.baseSha && ver && ver !== ev.baseSha;
     const b = D.bots.find((x) => x.name === r.name), team = r.kind === 'bot' && b && b.cfg && b.cfg.team, tk = team && D.teams.find((x) => x.name === team);
     const pins = (r.files['.pins'] || '').split('\n').filter(Boolean);
@@ -266,7 +265,7 @@
     return `<div class="panel repo-ed ke" data-kind="${kind.id}">
       <div class="panel-head ed-head"><span class="kind-tag">${icon(kind.icon)}${esc(kind.label)}</span><b class="grow ellipsis" title="${esc(d.fm.title || d.fm.what || '')}">${ev.isNew ? `New ${esc(kind.one)}` : esc(d.fm.title || d.fm.what || path)}</b><span class="tag hide" data-s="wait" id="ke-dirty">unsaved</span>${ev.proposal ? tag('approving ' + ev.proposal + ' with changes', 'ember') : ''}
         <div class="tools">${ev.isNew ? '' : `<button class="btn sm ghost${ev.blame ? ' on' : ''}" data-act="rp-blame" aria-pressed="${ev.blame}">${icon('bots')}Who wrote this</button><button class="btn sm ghost" data-act="rp-file-menu" data-repo="${id}" aria-label="Entry actions">${icon('more')}</button>`}</div></div>
-      <div class="ke-path"><span class="caps">path</span><span class="mono" id="ke-path">${esc(kind.id === 'watch' ? 'watch.md · ' + (d.fm.what ? '#' + slug(d.fm.what) : 'new entry') : path)}</span><span class="muted tiny">${kind.free ? `you choose the path inside ${esc(kind.dir)}/` : kind.id === 'watch' ? 'one entry in watch.md' : 'derived from the kind and the title; rename by changing the title'}</span></div>
+      <div class="ke-path"><span class="caps">path</span><span class="mono" id="ke-path">${esc(path)}</span><span class="muted tiny">${kind.free ? `you choose the path inside ${esc(kind.dir)}/` : `derived from the kind and the ${kind.titleKey === 'what' ? '“what to watch”' : 'title'}; rename by changing it`}</span></div>
       <div class="readers small muted">${icon('eye')} read by ${readers(r).map((x) => `<a class="link mono" href="#/bots/${x}">${esc(x)}</a>`).join(', ') || 'no bot yet'}${r.kind === 'team' ? ` · team ${esc(r.name)}` : ' · its own memory'}${pins.includes(path) ? ' · <b>pinned</b>: always in its context' : ''} · ${esc(kind.who[r.kind] || '')}</div>
       ${ev.conflict ? conflictHTML(r) : behind && !isDirty() ? `<div class="callout info small">A newer commit (${ver}) changed this entry. <button class="link" data-act="rp-reload" data-repo="${id}">Load it</button></div>` : ''}
       ${errs.length ? `<div class="callout danger small">This entry fails the ${esc(kind.one)} schema: ${errs.map(esc).join('; ')}. Fix it and save.</div>` : ''}
@@ -287,16 +286,12 @@
   }
   function readHTML(r, kind) {
     const e = entriesOf(r, kind).find((x) => x.key === ev.key); if (!e) return '';
-    const notes = annotations(r, e.path);
-    return `<div class="panel repo-ed ke" data-kind="${kind.id}"><div class="panel-head ed-head"><span class="kind-tag">${icon(kind.icon)}${esc(kind.label)}</span><b class="grow ellipsis">${esc(e.title)}</b>${notes.some((n) => n.flag) ? tag('flagged as wrong', 'fail') : ''}${e.fm.case && caseHref(e.fm.case) ? `<a class="btn sm ghost" href="${caseHref(e.fm.case)}">${icon('runs')}case ${esc(e.fm.case)}</a>` : ''}</div>
-      <div class="ke-path"><span class="caps">path</span><span class="mono">${esc(e.path)}</span><span class="muted tiny">${kind.id === 'log' ? 'written by the bot, per case' : 'system-generated'}</span></div>
+    return `<div class="panel repo-ed ke" data-kind="${kind.id}"><div class="panel-head ed-head"><span class="kind-tag">${icon(kind.icon)}${esc(kind.label)}</span><b class="grow ellipsis">${esc(e.title)}</b>${e.fm.flagged_wrong ? tag('flagged as wrong', 'fail') : ''}${e.fm.case && caseHref(e.fm.case) ? `<a class="btn sm ghost" href="${caseHref(e.fm.case)}">${icon('runs')}case ${esc(e.fm.case)}</a>` : ''}</div>
+      <div class="ke-path"><span class="caps">path</span><span class="mono">${esc(e.path)}</span><span class="muted tiny">${kind.id === 'log' ? `written by the bot, ${e.fm.case ? 'case ' + esc(e.fm.case) : e.fm.sweep ? 'sweep ' + esc(e.fm.sweep) : 'per case'}` : 'system-generated'}</span></div>
       <div class="callout small">${icon('lock')} ${esc(kind.readonly)}</div>
       <div class="panel-body prose">${UI.mdRender(e.body)}</div>
-      ${kind.id === 'log' ? `<div class="panel-body"><div class="caps">annotations</div>${notes.map((n) => `<div class="anno${n.flag ? ' flag' : ''}"><b>${n.flag ? 'Flagged as wrong' : 'Note'}</b> <span class="muted tiny mono">${esc(n.who)} · ${ago(n.at)} ago</span><div>${esc(n.text)}</div></div>`).join('') || '<div class="muted small">None.</div>'}
-        <div class="row" style="margin-top:8px"><button class="btn sm" data-act="rp-annotate" data-repo="${r.id}">${icon('edit')}Annotate</button><button class="btn sm danger" data-act="rp-flag" data-repo="${r.id}">${icon('warn')}Flag as wrong</button></div></div>` : ''}</div>`;
+      ${kind.id === 'log' ? `${e.fm.flagged_wrong ? `<div class="callout danger small" style="margin:0 16px">${icon('warn')} Flagged wrong: ${esc(e.fm.flagged_wrong)}</div>` : ''}<div class="panel-body"><div class="row"><button class="btn sm" data-act="rp-annotate" data-repo="${r.id}">${icon('edit')}Add a note</button><button class="btn sm danger" data-act="rp-flag" data-repo="${r.id}">${icon('warn')}Flag as wrong</button><span class="muted tiny">appended below the bot's text with your name; nothing is rewritten</span></div></div>` : ''}</div>`;
   }
-  const annoPath = (p) => `.annotations/${p}.yaml`;
-  const annotations = (r, p) => { const t = r.files[annoPath(p)]; if (!t) return []; try { return YAML.parse(t).value || []; } catch (e) { return []; } };
   function rawHTML(r) {
     const p = ev.file, k = kindOfPath(r, p), txt = r.files[p] || '';
     return `<div class="panel repo-ed"><div class="panel-head ed-head"><span class="mono small grow ellipsis" title="${esc(p)}">${esc(p)}</span>${k ? tag(k.label) : tag('untyped', 'wait')}
@@ -360,15 +355,7 @@
     const msgIn = (UI.$('#rp-msg') || {}).value;
     const prop = ev.proposal && r.proposals.find((x) => x.id === ev.proposal);
     const author = prop ? { who: 'bot:' + prop.bot, kind: 'bot', case: prop.case, trailers: `Promoted-By: bot:${prop.bot} · Approved-By: operator:ops · Edited-By: operator:ops` } : { trailers: 'Authored-By: operator:ops · Edited-Via: dashboard' };
-    if (kind.id === 'watch') {
-      const items = WATCH.parse(r.files['watch.md']), i = ev.isNew ? -1 : items.findIndex((w) => 'watch.md#' + slug(w.what) === ev.key);
-      if (items.some((w, j) => j !== i && slug(w.what) === slug(d.fm.what))) return showErrs(kind, [`what: there is already a watch item “${d.fm.what}”`]);
-      const ver = R.version(r, 'watch.md'); if (!opts.force && !ev.isNew && ev.baseSha && ver && ver !== ev.baseSha) return conflict(r, kind, d, 'watch.md');
-      const fm = {}; kind.fields.forEach((f) => { fm[f.k] = d.fm[f.k]; }); if (i >= 0) items[i] = fm; else items.push(fm);
-      const c = R.commit(r, Object.assign({ msg: msgIn || `${i >= 0 ? 'edit' : 'add'} watch item ${d.fm.what}`, changes: [{ path: 'watch.md', before: r.files['watch.md'] != null ? r.files['watch.md'] : null, after: WATCH.emit(items) }] }, author));
-      const k2 = entriesOf(r, kind).find((x) => x.key === 'watch.md#' + slug(d.fm.what)); finishSave(r, kind, k2, c, prop); return;
-    }
-    const path = derive(kind, d.fm.title, d.free), from = ev.isNew ? null : pathOf();
+    const path = derive(kind, titleOf(kind, d.fm), d.free), from = ev.isNew ? null : pathOf();
     if (path !== from && r.files[path] != null) return showErrs(kind, [`title: an entry with this title already exists (${path})`]);
     const ver = from && R.version(r, from); if (!opts.force && from && ev.baseSha && ver && ver !== ev.baseSha) return conflict(r, kind, d, from);
     const text = FM.emit(kind, d.fm, d.body);
@@ -381,7 +368,7 @@
     openEntry(r, kind, entry); S.save(); rerender();
     UI.toast(prop ? `Approved ${prop.id} with changes` : `Committed ${c.sha}`, prop ? 'one commit, the bot as author, your edit recorded' : `one commit by ops · ${esc(entry ? entry.path : '')}`, 'ok');
   }
-  function conflict(r, kind, d, path) { const ver = R.version(r, path), c = r.log.find((x) => x.sha === ver); const base = r.log.find((x) => x.sha === ev.baseSha); const baseText = base ? (base.changes.find((ch) => ch.path === path) || {}).after || '' : ''; ev.draft = d; ev.conflict = { commit: c, theirs: r.files[path], base: baseText, mine: kind.id === 'watch' ? WATCH.emit([d.fm]) : FM.emit(kind, d.fm, d.body) }; rerender(); }
+  function conflict(r, kind, d, path) { const ver = R.version(r, path), c = r.log.find((x) => x.sha === ver); const base = r.log.find((x) => x.sha === ev.baseSha); const baseText = base ? (base.changes.find((ch) => ch.path === path) || {}).after || '' : ''; ev.draft = d; ev.conflict = { commit: c, theirs: r.files[path], base: baseText, mine: FM.emit(kind, d.fm, d.body) }; rerender(); }
   UI.act('rp-save', (b) => {
     const r = repoOf(b);
     if (ev.proposal) { const p = r.proposals.find((x) => x.id === ev.proposal); const kind = kindById(r, ev.kind), errs = validate(kind, readDraft(kind).fm); if (errs.length) return showErrs(kind, errs); UI.stepup({ title: `Approve ${p.id} with your changes`, purpose: 'team knowledge', ok: 'Approve with passkey', what: `{ team: <b>${esc(r.name)}</b>, proposal: <b>${p.id}</b>, kind: <b>${esc(kind.id)}</b>, edited_by: <b>operator:ops</b> }` }).then((ok) => { if (ok) save(r); }); return; }
@@ -392,8 +379,8 @@
   UI.act('rp-rebase', (b) => {
     // field-wise: every field you changed (vs. what you opened) wins; the rest is theirs. The body merges line by line.
     const r = repoOf(b), k = kindById(r, ev.kind), c = ev.conflict;
-    const pb = k.id === 'watch' ? { fm: (WATCH.parse(c.base).find((w) => 'watch.md#' + slug(w.what) === ev.key) || {}), body: '' } : FM.parse(c.base);
-    const pt = k.id === 'watch' ? { fm: (WATCH.parse(c.theirs).find((w) => 'watch.md#' + slug(w.what) === ev.key) || {}), body: '' } : FM.parse(c.theirs);
+    const pb = FM.parse(c.base);
+    const pt = FM.parse(c.theirs);
     const mine = ev.draft, fm = Object.assign({}, pt.fm);
     k.fields.forEach((f) => { if (JSON.stringify(mine.fm[f.k]) !== JSON.stringify(pb.fm[f.k])) fm[f.k] = mine.fm[f.k]; });
     let out = (pt.body || '').split('\n'), anchor = null;
@@ -406,7 +393,7 @@
   UI.act('rp-sim', (b) => {
     const r = repoOf(b), k = kindById(r, ev.kind), who = r.kind === 'bot' ? r.name : ((D.teams.find((t) => t.name === r.name) || { cfg: {} }).cfg.lead || botsOfTeam(r.name)[0] || 'platform-sre');
     const p = pathOf(), cur = r.files[p] || '';
-    const after = k.id === 'watch' ? cur.replace(/\n?$/, '\n') : cur.replace(/\n?$/, '\n') + `- ${who}: seen again during c29 (auto-noted)\n`;
+    const after = cur.replace(/\n?$/, '\n') + `- ${who}: seen again during c29 (auto-noted)\n`;
     R.commit(r, { msg: `note from ${who}`, who: 'bot:' + who, kind: 'bot', case: 'c29', changes: [{ path: p, before: cur, after }] });
     const dirty = isDirty(); if (UI.$('#ke-form')) ev.draft = readDraft(k); const base = ev.base; rerender(); ev.base = base; later();
     UI.toast(`${who} committed to ${esc(p)}`, dirty ? 'saving now will show a conflict' : 'load it to see the change', 'run');
@@ -419,22 +406,22 @@
     guardThen(() => {
       UI.modal(`<div class="modal-head"><div><div class="caps">${esc(r.id)}</div><h2>New…</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
         <div class="modal-body stack"><p class="small dim" style="margin:0">Pick what you're writing. Its kind decides where it lives and what it needs: knowledge goes in knowledge/, runbooks in runbooks/.</p>
-          <div class="choice-grid">${kindsFor(r).map((k) => UI.choice({ act: 'rp-new-pick', attrs: `data-repo="${r.id}" data-k="${k.id}"`, icon: k.icon, title: esc(k.coll ? `${k.label}` : k.one.replace(/^./, (c) => c.toUpperCase())), desc: esc(k.id === 'watch' ? 'An entry in watch.md: what, signal, threshold, why.' : `${k.dir}/ · ${(k.fields || []).map((f) => f.k.replace(/_/g, ' ')).join(', ')}${k.free ? ' · free paths' : ''}${k.pack ? ` · from pack ${k.pack}` : ''}`), off: writable(r, k) })).join('')}</div></div>
+          <div class="choice-grid">${kindsFor(r).map((k) => UI.choice({ act: 'rp-new-pick', attrs: `data-repo="${r.id}" data-k="${k.id}"`, icon: k.icon, title: esc(k.coll ? `${k.label}` : k.one.replace(/^./, (c) => c.toUpperCase())), desc: esc(`${k.dir}/ · ${(k.fields || []).map((f) => f.k.replace(/_/g, ' ')).join(', ')}${k.free ? ' · free paths' : ''}${k.pack ? ` · from pack ${k.pack}` : ''}`), off: writable(r, k) })).join('')}</div></div>
         <div class="modal-foot"><a class="btn ghost" href="#/config/collections">Declare a collection…</a><button class="btn ghost" data-close>Cancel</button></div>`, { wide: true });
     });
   });
   UI.act('rp-new-pick', (b) => { const r = repoOf(b); UI.closeModal(); newEntry(r, kindById(r, b.dataset.k)); });
-  UI.act('rp-file-menu', (b) => { const r = repoOf(b), k = kindById(r, ev.kind), pins = (r.files['.pins'] || '').split('\n').filter(Boolean); UI.menu(b, [[pins.includes(pathOf()) ? 'Unpin' : 'Pin (always in context)', 'zap', 'rp-pin', r.kind !== 'bot' ? UI.off('Pinning is for a bot\'s own memory') : k.id === 'watch' ? UI.off('Pin watch.md as a whole from the files view') : `data-repo="${r.id}"`], ['-'], ['Delete…', 'trash', 'rp-delete', `data-repo="${r.id}"`]]); });
+  UI.act('rp-file-menu', (b) => { const r = repoOf(b), k = kindById(r, ev.kind), pins = (r.files['.pins'] || '').split('\n').filter(Boolean); UI.menu(b, [[pins.includes(pathOf()) ? 'Unpin' : 'Pin (always in context)', 'zap', 'rp-pin', r.kind !== 'bot' ? UI.off('Pinning is for a bot\'s own memory') : `data-repo="${r.id}"`], ['-'], ['Delete…', 'trash', 'rp-delete', `data-repo="${r.id}"`]]); });
   UI.act('rp-delete', (b) => { const r = repoOf(b), k = kindById(r, ev.kind), p = pathOf(); UI.confirm({ title: `Delete this ${esc(k.one)}?`, body: `One commit removes <span class="mono">${esc(ev.key)}</span>. Revert that commit to bring it back.`, ok: 'Delete', cancel: 'Keep it', danger: true }).then((ok) => { if (!ok) return;
-    if (k.id === 'watch') { const items = WATCH.parse(r.files['watch.md']).filter((w) => 'watch.md#' + slug(w.what) !== ev.key); R.commit(r, { msg: `delete watch item ${ev.key.split('#')[1]}`, changes: [{ path: 'watch.md', before: r.files['watch.md'], after: WATCH.emit(items) }], trailers: 'Authored-By: operator:ops' }); }
-    else R.commit(r, { msg: `delete ${k.one} ${p}`, changes: [{ path: p, before: r.files[p], after: null }], trailers: 'Authored-By: operator:ops' });
+    R.commit(r, { msg: `delete ${k.one} ${p}`, changes: [{ path: p, before: r.files[p], after: null }], trailers: 'Authored-By: operator:ops' });
     ev.base = ''; ev.repo = null; r.open = null; rerender(); UI.toast(`Deleted ${esc(ev.key || p)}`, 'revert from history to restore it', 'ok'); }); });
   UI.act('rp-pin', (b) => { const r = repoOf(b), p = pathOf(), pins = (r.files['.pins'] || '').split('\n').filter(Boolean), on = pins.includes(p); const next = on ? pins.filter((x) => x !== p) : pins.concat([p]); R.commit(r, { msg: `${on ? 'unpin' : 'pin'} ${p}`, changes: [{ path: '.pins', before: r.files['.pins'] || null, after: next.join('\n') }], trailers: 'Authored-By: operator:ops' }); rerender(); });
   UI.act('rp-diff', (b) => { const r = repoOf(b), c = r.log.find((x) => x.sha === b.dataset.sha); UI.modal(`<div class="modal-head"><div><div class="caps">${c.sha} · ${esc(whoLabel(c))} · ${ago(c.at)} ago</div><h2>${esc(c.msg)}</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div><div class="modal-body">${c.trailers ? `<div class="mono tiny muted" style="margin-bottom:8px">${esc(c.trailers)}</div>` : ''}${c.changes.filter((ch) => visible(ch.path)).map((ch) => UI.diffView(ch.before || '', ch.after || '', 'unified', { file: ch.from && ch.from !== ch.path ? `${ch.from} → ${ch.path}` : ch.path }).html).join('')}</div><div class="modal-foot"><button class="btn" data-close>Close</button></div>`, { wide: true }); });
   UI.act('rp-revert', (b) => { const r = repoOf(b), c = r.log.find((x) => x.sha === b.dataset.sha); UI.confirm({ title: `Revert ${c.sha}?`, body: `A new commit undoes “${esc(c.msg)}”. History is kept.`, ok: 'Revert' }).then((ok) => { if (!ok) return; const changes = c.changes.slice().reverse().map((ch) => (ch.from && ch.from !== ch.path ? { path: ch.from, from: ch.path, before: ch.after, after: ch.before } : { path: ch.path, before: r.files[ch.path] != null ? r.files[ch.path] : null, after: ch.before })); R.commit(r, { msg: `Revert "${c.msg}"`, changes, trailers: `Authored-By: operator:ops · Reverts: ${c.sha}` }); ev.repo = null; rerender(); }); });
   UI.act('rp-promote', (b) => { const r = repoOf(b), team = D.bots.find((x) => x.name === r.name).cfg.team, tr = R.get('team:' + team), k = kindById(r, ev.kind), p = pathOf(), x = FM.parse(r.files[p]); const id = 'k' + (10 + tr.proposals.length); tr.proposals.unshift({ id, bot: r.name, kind: k.id, to: derive(k, x.fm.title), summary: `Promote ${k.one} “${x.fm.title || p}” from ${r.name}`, status: 'pending', at: now(), content: r.files[p] }); S.save(); UI.go(`#/teams/${team}/knowledge`); });
   /* log: annotate or flag, never rewrite */
-  const annotate = (r, flag, text) => { const p = pathOf(), cur = annotations(r, p); cur.push({ who: 'operator:ops', at: now(), text, flag: !!flag }); R.commit(r, { msg: `${flag ? 'flag as wrong' : 'annotate'} ${p}`, changes: [{ path: annoPath(p), before: r.files[annoPath(p)] || null, after: YAML.stringify(cur) }], trailers: 'Authored-By: operator:ops' }); rerender(); };
+  // conductor's operator edit for the log: a "## Operator note" (or "## Flagged WRONG") section appended; flagging also sets flagged_wrong
+  const annotate = (r, flag, text) => { const p = pathOf(), cur = r.files[p], x = FM.parse(cur), at = now(); const fm = Object.assign({}, x.fm); if (flag) fm.flagged_wrong = text.replace(/\s+/g, ' ').slice(0, 500); const entry = `\n## ${flag ? 'Flagged WRONG by the operator' : 'Operator note'} — ops, ${at}\n\n${text}\n`; const next = '---\n' + YAML.stringify(fm).replace(/\n?$/, '\n') + '---\n' + String(x.body || '').replace(/\n*$/, '\n') + entry; R.commit(r, { msg: `${flag ? 'flag wrong: ' : 'annotate '}${p}`, changes: [{ path: p, before: cur, after: next }], trailers: 'Authored-By: operator:ops' }); rerender(); };
   UI.act('rp-annotate', (b) => { const r = repoOf(b); UI.form({ caps: pathOf(), title: 'Annotate this log entry', fields: [{ k: 'text', type: 'text', req: true, label: 'Note' }], submit: 'Add note', onSubmit: (v) => annotate(r, false, v.text) }); });
   UI.act('rp-flag', (b) => { const r = repoOf(b); UI.form({ caps: pathOf(), title: 'Flag as wrong', intro: 'The entry stays as the bot wrote it; your flag and reason sit beside it, and the bot reads them.', fields: [{ k: 'text', type: 'text', req: true, label: 'What is wrong' }], submit: 'Flag', onSubmit: (v) => annotate(r, true, v.text) }); });
 
@@ -448,19 +435,19 @@
     const { title, secs } = sections(md), t = title || String(name || 'imported').replace(/\.\w+$/, '').replace(/[-_]/g, ' ');
     if (kind.id === 'runbook') {
       const stepLines = sec(secs, /step|procedure/) || String(md).split('\n').filter((l) => /^\s*\d+[.)]\s/.test(l));
-      const steps = items(stepLines).map((x) => { const m = x.match(/`([^`]+)`/); return m ? { do: x.replace(/`[^`]+`/, '').replace(/[\s:—-]+$/, '').trim() || 'Run it', run: m[1] } : { do: x }; });
-      return { fm: { title: t, when: txt(sec(secs, /when|symptom|trigger/)) || txt(secs._intro), prerequisites: items(sec(secs, /prereq|before you/)), steps, verification: txt(sec(secs, /verif|check it worked|done when/)), rollback: txt(sec(secs, /rollback|undo|back out/)), owner: 'ops' }, body: '' };
+      const steps = items(stepLines).map((x) => { const m = x.match(/`([^`]+)`/); return m ? `${x.replace(/`[^`]+`/, '').replace(/[\s:—-]+$/, '').trim() || 'Run it'} (run: \`${m[1]}\`)` : x; });
+      return { fm: { title: t, when_to_use: txt(sec(secs, /when|symptom|trigger/)) || txt(secs._intro), prerequisites: items(sec(secs, /prereq|before you/)), steps, verification: txt(sec(secs, /verif|check it worked|done when/)), rollback: txt(sec(secs, /rollback|undo|back out/)), owner: 'ops' }, body: '' };
     }
-    if (kind.id === 'knowledge') { const paras = txt(secs._intro).split(/\n\s*\n/); return { fm: { title: t, statement: paras[0] || '', applies_to: [], source: `imported from ${name || 'paste'}`, confidence: 'medium' }, body: paras.slice(1).join('\n\n') + Object.entries(secs).filter(([k]) => k !== '_intro').map(([k, v]) => `\n\n## ${k}\n${txt(v)}`).join('') }; }
+    if (kind.id === 'knowledge') { const paras = txt(secs._intro).split(/\n\s*\n/); return { fm: { title: t, evidence: `imported from ${name || 'a paste'}`, confidence: 'medium' }, body: paras.join('\n\n') + Object.entries(secs).filter(([k]) => k !== '_intro').map(([k, v]) => `\n\n## ${k}\n${txt(v)}`).join('') }; }
     return { fm: { title: t }, body: String(md).replace(/^#\s+.*\n/, '').trim() + '\n' };
   };
-  const summary = (kind, d) => { const errs = validate(kind, d.fm); const bits = kind.id === 'runbook' ? [`${(d.fm.steps || []).length} steps`, `when ${d.fm.when ? '✓' : '✗'}`, `verification ${d.fm.verification ? '✓' : '✗'}`, `rollback ${d.fm.rollback ? '✓' : '–'}`] : kind.id === 'knowledge' ? [`statement ${d.fm.statement ? '✓' : '✗'}`, `applies to ${(d.fm.applies_to || []).length ? '✓' : '✗ (you add it)'}`] : ['body ✓']; return `${bits.join(' · ')}${errs.length ? ` · <span class="danger-text">${errs.length} field${errs.length > 1 ? 's' : ''} to fill</span>` : ' · <span class="ok-text">ready</span>'}`; };
+  const summary = (kind, d) => { const errs = validate(kind, d.fm); const bits = kind.id === 'runbook' ? [`${(d.fm.steps || []).length} steps`, `when to use ${d.fm.when_to_use ? '✓' : '✗'}`, `verification ${d.fm.verification ? '✓' : '✗'}`, `rollback ${d.fm.rollback ? '✓' : '✗ (you add it)'}`] : kind.id === 'knowledge' ? [`evidence ✓`, `applies to ${(d.fm.applies_to || []).length ? '✓' : '– (optional)'}`] : ['body ✓']; return `${bits.join(' · ')}${errs.length ? ` · <span class="danger-text">${errs.length} field${errs.length > 1 ? 's' : ''} to fill</span>` : ' · <span class="ok-text">ready</span>'}`; };
   function importMap(r, docs) {
     const choices = kindsFor(r).filter((k) => !writable(r, k) && k.id !== 'watch');
     const st = docs.map((d) => ({ name: d.name, text: d.text, kind: R.detect(d.text) }));
     const s = UI.modal(`<div class="modal-head"><div><div class="caps">${esc(r.id)} · import</div><h2>Map into a kind</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div><div class="modal-body stack" id="im-body"></div>
       <div class="modal-foot"><button class="btn ghost" data-close>Cancel</button><button class="btn primary" id="im-go">${icon('commit')}Import</button></div>`, { wide: true });
-    const draw = () => { UI.$('#im-body', s).innerHTML = `<p class="small dim" style="margin:0">Each file becomes one entry of the kind you confirm; its path follows from the kind and its title.</p>${st.map((x, i) => { const k = kindById(r, x.kind) || KINDS.knowledge, d = R.convert(k, x.text, x.name); return `<div class="im-row"><div class="row wrap"><b class="mono small">${esc(x.name)}</b><span class="muted tiny">detected: ${esc(KINDS[R.detect(x.text)].one)}</span><label class="row small" style="margin-left:auto">as <select class="select sm" data-im="${i}" aria-label="Kind for ${esc(x.name)}">${choices.map((c) => `<option value="${c.id}"${c.id === x.kind ? ' selected' : ''}>${esc(c.coll ? c.label : c.one)}</option>`).join('')}</select></label></div><div class="mono tiny">→ ${esc(derive(k, d.fm.title))}</div><div class="tiny muted">${summary(k, d)}</div></div>`; }).join('')}`;
+    const draw = () => { UI.$('#im-body', s).innerHTML = `<p class="small dim" style="margin:0">Each file becomes one entry of the kind you confirm; its path follows from the kind and its title.</p>${st.map((x, i) => { const k = kindById(r, x.kind) || KINDS.knowledge, d = R.convert(k, x.text, x.name); return `<div class="im-row"><div class="row wrap"><b class="mono small">${esc(x.name)}</b><span class="muted tiny">detected: ${esc(KINDS[R.detect(x.text)].one)}</span><label class="row small" style="margin-left:auto">as <select class="select sm" data-im="${i}" aria-label="Kind for ${esc(x.name)}">${choices.map((c) => `<option value="${c.id}"${c.id === x.kind ? ' selected' : ''}>${esc(c.coll ? c.label : c.one)}</option>`).join('')}</select></label></div><div class="mono tiny">→ ${esc(derive(k, titleOf(k, d.fm)))}</div><div class="tiny muted">${summary(k, d)}</div></div>`; }).join('')}`;
       s.querySelectorAll('[data-im]').forEach((sel) => sel.addEventListener('change', () => { st[+sel.dataset.im].kind = sel.value; draw(); })); };
     draw();
     UI.$('#im-go', s).addEventListener('click', () => {
@@ -510,29 +497,37 @@
   UI.act('kp-deny', (b) => { const r = repoOf(b); denyForm(r, [r.proposals.find((x) => x.id === b.dataset.id)]); });
   UI.act('kp-bulk', (b) => { const r = repoOf(b), ps = r.proposals.filter((p) => ev.sel.has(p.id) && p.status === 'pending'); if (b.dataset.d === 'deny') return denyForm(r, ps); const bad = ps.filter((p) => perrs(r, p).length); if (bad.length) { UI.toast(`${bad.map((p) => p.id).join(', ')} fail${bad.length > 1 ? '' : 's'} the schema`, 'approve with changes or deny; untick to approve the rest', 'fail'); return; } UI.stepup({ title: `Approve ${ps.length} proposals`, purpose: 'team knowledge', ok: 'Approve with passkey', what: `{ team: <b>${esc(r.name)}</b>, proposals: <b>${ps.map((p) => p.id).join(', ')}</b> }` }).then((ok) => { if (ok) { approve(r, ps); UI.toast(`Approved ${ps.length}`, 'one commit each, the bot as author', 'ok'); } }); });
 
-  /* ---------- Config → Collections: the customized escape hatch ---------- */
+  /* ---------- Config → Collections: custom kinds, declared per team or bot ---------- */
+  const FIELD_LINE = /^([a-z][a-z0-9_]*)(!)?:(string|text|list|steps|number|bool|enum\(([\w-]+(\|[\w-]+)*)\))$/;
+  const fieldLine = ([f, d]) => `${f}${d.required ? '!' : ''}:${d.type === 'enum' ? `enum(${(d.values || []).join('|')})` : d.type || 'string'}`;
+  const fieldsFromLines = (ls) => Object.fromEntries((ls || []).map((l) => { const m = l.match(FIELD_LINE); const d = { type: m[3].startsWith('enum') ? 'enum' : m[3] }; if (m[2]) d.required = true; if (d.type === 'enum') d.values = m[4].split('|'); return [m[1], d]; }));
+  const ownerColl = (o) => (o.startsWith('team:') ? 'teams' : 'bots');
+  const allColls = () => { const v = S.view(); return [...v.teams.map((t) => ['team:' + t.name, t]), ...v.bots.map((b) => ['bot:' + b.name, b])].flatMap(([o, x]) => Object.entries((x.cfg && x.cfg.collections) || {}).map(([name, c]) => ({ owner: o, name, c }))); };
   UI.route('config/collections', () => {
-    const mine = S.view().collections || [], packs = D.packCollections || [];
-    const row = (c, pack) => `<div class="item" style="align-items:flex-start" data-coll="${esc(c.name)}"><span class="sc-ic sm">${icon('folder')}</span><div class="grow small"><div class="row wrap" style="gap:6px"><b>${esc(c.name)}</b><span class="mono tiny muted">${esc(c.cfg.dir)}/</span>${tag(c.cfg.scope || 'team')}${c.cfg.free_paths ? tag('free paths', 'wait') : ''}${pack ? `<span class="origin custom">pack ${esc(pack)}</span>` : S.find('collections', c.name) ? tag('staged', 'run') : ''}</div>
-      <div class="mono tiny muted">fields: title${(c.cfg.fields || []).map((f) => ', ' + esc(f)).join('')} · write: ${esc((c.cfg.write || []).join(', '))}</div></div>
-      ${pack ? `<span class="muted tiny">shipped by the pack; override it in <span class="mono">packs.${esc(pack)}</span></span>` : `<div class="row" style="gap:4px"><button class="btn sm" data-act="coll-edit" data-c="${esc(c.name)}">${icon('edit')}Edit</button><button class="btn sm danger" data-act="coll-del" data-c="${esc(c.name)}" aria-label="Remove collection ${esc(c.name)}">${icon('trash')}</button></div>`}</div>`;
-    return `<div class="page">${UI.head('Collections', { crumbs: '<a href="#/config">Config</a>', sub: 'custom kinds for team knowledge and bot memory', actions: `<button class="btn primary" data-act="coll-new">${icon('plus')}New collection</button>` })}
-      <div class="callout small" style="margin-bottom:14px">Built-in kinds keep their homes: knowledge in <span class="mono">knowledge/</span>, runbooks in <span class="mono">runbooks/</span>, watch items in <span class="mono">watch.md</span>, the log in <span class="mono">log/</span>, handoffs in <span class="mono">handoff/</span>. A collection is the escape hatch: its own folder, template and fields, and free paths only if it says so. Collections are config (<span class="mono">collections:</span>) and go through the diff.</div>
-      <div class="panel"><div class="panel-head"><h3>Yours</h3><span class="muted small">collections:</span></div><div class="list">${mine.map((c) => row(c)).join('') || '<div class="empty small">None yet. <button class="link" data-act="coll-new">Declare one</button></div>'}</div></div>
-      <div class="panel" style="margin-top:14px"><div class="panel-head"><h3>From packs</h3></div><div class="list">${packs.map((c) => row(c, c.pack)).join('') || '<div class="empty small">No pack ships a collection.</div>'}</div></div></div>`;
+    const cs = allColls();
+    const row = ({ owner, name, c }) => { const kind = owner.split(':')[0], who = owner.slice(kind.length + 1), d = c.from ? Object.assign({}, (D.packCollectionFiles || {})[c.from] || {}) : c, pack = c.from && (c.from.match(/packs\/([^/]+)/) || [])[1], staged = S.find(ownerColl(owner), who);
+      return `<div class="item" style="align-items:flex-start" data-coll="${esc(owner + '/' + name)}"><span class="sc-ic sm">${icon('folder')}</span><div class="grow small"><div class="row wrap" style="gap:6px"><b>${esc(name)}</b><span class="mono tiny muted">${esc(String(d.dir || name).replace(/\/$/, ''))}/</span>${tag(kind === 'team' ? 'team knowledge · ' + who : 'bot memory · ' + who)}${d.free_paths ? tag('free paths', 'wait') : ''}${pack ? `<span class="origin custom">from pack ${esc(pack)}</span>` : staged ? tag('staged', 'run') : ''}</div>
+      <div class="mono tiny muted">fields: ${Object.entries(d.fields || {}).map(fieldLine).map(esc).join(', ') || 'title only'} · writers: ${esc((d.writers || ['operator']).join(', '))}</div>${pack ? `<div class="mono tiny muted">from: ${esc(c.from)}</div>` : ''}</div>
+      ${pack ? `<span class="muted tiny" style="max-width:220px">defined by the pack's file; ${kind}s.${esc(who)}.collections.${esc(name)} just points at it</span>` : `<div class="row" style="gap:4px"><button class="btn sm" data-act="coll-edit" data-o="${esc(owner)}" data-c="${esc(name)}">${icon('edit')}Edit</button><button class="btn sm danger" data-act="coll-del" data-o="${esc(owner)}" data-c="${esc(name)}" aria-label="Remove collection ${esc(name)}">${icon('trash')}</button></div>`}</div>`; };
+    return `<div class="page">${UI.head('Collections', { crumbs: '<a href="#/config">Config</a>', sub: 'custom kinds of entry for a team\'s knowledge or a bot\'s memory', actions: `<button class="btn primary" data-act="coll-new">${icon('plus')}New collection</button>` })}
+      <div class="callout small" style="margin-bottom:14px">Built-in kinds keep their homes: knowledge in <span class="mono">knowledge/</span>, runbooks in <span class="mono">runbooks/</span>, watch items in <span class="mono">watch/</span>, the log in <span class="mono">log/</span>, handoffs in <span class="mono">handoff/</span>. A collection adds a kind with its own folder, fields and template, declared on the team (<span class="mono">teams.&lt;team&gt;.collections</span>) or the bot (<span class="mono">bots.&lt;bot&gt;.collections</span>) whose repo it lives in. It's config, so it goes through the diff.</div>
+      <div class="panel"><div class="list">${cs.map(row).join('') || '<div class="empty small">No collections yet. <button class="link" data-act="coll-new">Declare one</button></div>'}</div></div></div>`;
   }, { nav: 'config' });
-  const collForm = (name) => { const cur = name ? S.staged('collections', name) : null;
-    UI.form({ caps: name ? `collections.${name}` : 'collections:', title: name ? `Edit ${name}` : 'New collection', edit: !!name, wide: true, values: cur ? Object.assign({ name }, cur) : { scope: 'team', write: ['operator'], free_paths: false },
-      fields: [{ k: 'name', type: 'string', req: true, readonly: !!name, pattern: /^[a-z][a-z0-9-]*$/, patternMsg: 'lowercase, digits, dashes', validate: (v) => (!name && (S.view().collections || []).concat(D.packCollections || []).some((c) => c.name === v) ? 'A collection by that name exists.' : '') },
-        { k: 'dir', type: 'string', req: true, label: 'Folder', ph: 'postmortems', validate: (v) => { const d = String(v || '').replace(/\/$/, ''); return !/^[a-z][a-z0-9-]*(\/[a-z0-9-]+)*$/.test(d) ? 'A relative folder such as notes/vendors' : S.RESERVED_DIRS.includes(d.split('/')[0]) ? `${d.split('/')[0]}/ belongs to a built-in kind` : ''; } },
-        { k: 'scope', type: 'seg', label: 'Where', options: [['team', 'team knowledge'], ['bot', 'bot memory'], ['both', 'both']] },
-        { k: 'fields', type: 'list', label: 'Fields (besides title)', ph: 'severity:enum(sev1|sev2|sev3)', help: 'name:string, name:text, name:list or name:enum(a|b|c).', validate: (v) => ((v || []).find((f) => !S.FIELD_RE.test(f)) ? `"${(v || []).find((f) => !S.FIELD_RE.test(f))}" is not name:string|text|list|enum(a|b)` : '') },
+  const collForm = (owner, name) => { const v0 = S.view(); const cur = owner ? (S.staged(ownerColl(owner), owner.split(':').slice(1).join(':')).collections || {})[name] : null;
+    const owners = [...v0.teams.map((t) => ['team:' + t.name, `team ${t.name} (team knowledge)`]), ...v0.bots.map((b) => ['bot:' + b.name, `bot ${b.name} (its memory)`])];
+    UI.form({ caps: owner ? `${ownerColl(owner)}.${owner.split(':')[1]}.collections.${name}` : 'collections:', title: owner ? `Edit ${name}` : 'New collection', edit: !!owner, wide: true,
+      values: cur ? { owner, name, dir: cur.dir || '', fields: Object.entries(cur.fields || {}).map(fieldLine), template: cur.template || '', free_paths: !!cur.free_paths, writers: cur.writers || ['operator'] } : { owner: owners[0] && owners[0][0], writers: ['operator'], free_paths: false },
+      fields: [{ k: 'owner', type: 'enum', req: true, readonly: !!owner, label: 'Belongs to', options: owners, help: 'A team\'s collection lives in its knowledge repo; a bot\'s, in its memory.' },
+        { k: 'name', type: 'string', req: true, readonly: !!owner, pattern: /^[a-z][a-z0-9_-]{0,39}$/, patternMsg: 'lowercase letters, digits, _ and -, up to 40', validate: (v, all) => (!owner && allColls().some((c) => c.owner === all.owner && c.name === v) ? 'That team or bot already has a collection by that name.' : '') },
+        { k: 'dir', type: 'string', label: 'Folder', ph: 'defaults to the name', validate: (v) => { const d = String(v || '').replace(/\/$/, ''); return d && !/^[a-z][a-z0-9_-]*(\/[a-z0-9_-]+)*$/.test(d) ? 'A relative folder such as notes/vendors' : d && S.RESERVED_DIRS.includes(d.split('/')[0]) ? `${d.split('/')[0]}/ belongs to a built-in kind` : ''; } },
+        { k: 'fields', type: 'list', label: 'Fields (besides title)', ph: 'severity!:enum(sev1|sev2|sev3)', help: 'name:type, one per line; type is string, text, list, steps, number, bool or enum(a|b|c). Add ! after the name for a required field.', validate: (v) => { const bad = (v || []).find((f) => !FIELD_LINE.test(f)); return bad ? `"${bad}" is not name:type (or name!:type)` : ''; } },
         { k: 'template', type: 'text', label: 'Body template (markdown)', ph: '## Timeline\n\n## Root cause\n' },
         { k: 'free_paths', type: 'bool', label: 'Free paths', on: 'let writers choose a path inside the folder (otherwise the path follows the title)' },
-        { k: 'write', type: 'select-multi', req: true, label: 'Who can write', options: ['operator', 'bots (proposal)', 'bots (direct)'] }],
+        { k: 'writers', type: 'select-multi', req: true, label: 'Who writes', options: [['operator', 'operator (you, from the dashboard)'], ['proposal', 'proposal (team bots propose, you approve)'], ['bots', 'bots (the bot writes its own memory)']], help: 'A team takes operator and proposal; a bot takes operator and bots.', validate: (v, all) => { const W = String(all.owner || owner || '').startsWith('team:') ? ['operator', 'proposal'] : ['operator', 'bots']; const bad = (v || []).find((w) => !W.includes(w)); return bad ? `${bad} isn't a writer for a ${String(all.owner || owner).split(':')[0]}; use ${W.join(' or ')}` : ''; } }],
       submit: 'Review change', submitIcon: 'check',
-      onSubmit: (v) => { const n = { dir: v.dir.replace(/\/$/, ''), scope: v.scope || 'team', fields: v.fields || [], write: v.write }; if (v.template) n.template = v.template; if (v.free_paths) n.free_paths = true; D.prefs.returnTo = { href: '#/config/collections', label: 'Collections' }; UI.staged(S.stage('collections', v.name || name, n)); } }); };
+      onSubmit: (v) => { const o = owner || v.owner, coll = ownerColl(o), who = o.split(':').slice(1).join(':'), n = {}; const dir = String(v.dir || '').replace(/\/$/, ''); if (dir && dir !== (v.name || name)) n.dir = dir; const f = fieldsFromLines(v.fields); if (Object.keys(f).length) n.fields = f; if (v.template) n.template = v.template; if (v.free_paths) n.free_paths = true; if (JSON.stringify(v.writers) !== '["operator"]') n.writers = v.writers;
+        const cfg = S.staged(coll, who); cfg.collections = Object.assign({}, cfg.collections, { [v.name || name]: n }); D.prefs.returnTo = { href: '#/config/collections', label: 'Collections' }; UI.staged(S.stage(coll, who, cfg)); } }); };
   UI.act('coll-new', () => collForm(null));
-  UI.act('coll-edit', (b) => collForm(b.dataset.c));
-  UI.act('coll-del', (b) => UI.confirm({ title: `Remove collection ${esc(b.dataset.c)}?`, body: 'Stages removing it from collections:. Its files stay in the repos (visible in the files view) until you map or delete them.', ok: 'Stage removal', cancel: 'Keep it', danger: true }).then((ok) => ok && UI.staged(S.stage('collections', b.dataset.c, null))));
+  UI.act('coll-edit', (b) => collForm(b.dataset.o, b.dataset.c));
+  UI.act('coll-del', (b) => UI.confirm({ title: `Remove collection ${esc(b.dataset.c)}?`, body: 'Stages removing it from the config. Its files stay in the repo (visible in the files view) until you map or delete them.', ok: 'Stage removal', cancel: 'Keep it', danger: true }).then((ok) => { if (!ok) return; const o = b.dataset.o, coll = ownerColl(o), who = o.split(':').slice(1).join(':'), cfg = S.staged(coll, who); const cs = Object.assign({}, cfg.collections); delete cs[b.dataset.c]; if (Object.keys(cs).length) cfg.collections = cs; else delete cfg.collections; UI.staged(S.stage(coll, who, cfg)); }));
 })();
