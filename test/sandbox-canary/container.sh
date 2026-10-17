@@ -46,6 +46,14 @@ command -v paseo >/dev/null && EXTRA_PATH="$(dirname "$(command -v paseo)"):$(di
 CLIENT_ENV=()
 [ -n "${XDG_RUNTIME_DIR:-}" ] && CLIENT_ENV+=("XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR")
 [ -n "${DOCKER_HOST:-}" ] && CLIENT_ENV+=("DOCKER_HOST=$DOCKER_HOST")
+# Rootless podman's store is under the user's HOME, and the daemon runs with
+# a temp one: name the runner's store, where this script builds the image.
+if [ "$ENGINE" = podman ]; then
+  printf '[storage]\ndriver = "%s"\ngraphroot = "%s"\nrunroot = "%s"\n' \
+    "$(podman info --format '{{.Store.GraphDriverName}}')" "$(podman info --format '{{.Store.GraphRoot}}')" \
+    "$(podman info --format '{{.Store.RunRoot}}')" > "$W/storage.conf"
+  CLIENT_ENV+=("CONTAINERS_STORAGE_CONF=$W/storage.conf")
+fi
 DPATH="$W/bin:$EXTRA_PATH:$ENGINE_DIR:/usr/bin:/bin:/usr/sbin:/sbin"
 pe() { env -i HOME="$W/home" PATH="$DPATH" LANG=C "${CLIENT_ENV[@]}" "$@"; }
 daemon_label() { echo "conductor.daemon=$(printf '%s' "$W/st/agent-state" | sha256sum | cut -c1-12)"; }
