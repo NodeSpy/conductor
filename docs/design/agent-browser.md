@@ -151,10 +151,18 @@ The container:
   it, before a browser starts too.
 - **Proven where.** On Linux, locally and in CI: the whole browser and
   credential suite runs with every browser in a container, and
-  `chrome://sandbox` passes. It hasn't yet run on a Mac with Docker Desktop
-  or colima: GitHub's macOS runners have no engine, and neither had the Mac
-  used for the real-desktop proof. The code path is the same, and the
-  engine is reached through its CLI either way.
+  `chrome://sandbox` passes. The live proofs (a real agent through paseo,
+  pass 2 and the login-setup pass) ran with `container: on`.
+- **Not yet on a Mac.**
+  - GitHub's macOS runners have no engine.
+  - The real-desktop Mac now has Docker Desktop installed, but stopped.
+    It wasn't started for a run, because every test run that touches
+    processes, containers or the sandbox must run inside a PID namespace
+    (after a mutant's `kill(-1)` took the build box down), and macOS has
+    none.
+  - The code path is the same on both, and the engine is reached through
+    its CLI either way. What is unproven is Docker Desktop's VM itself:
+    its stdio relay and its seccomp profile handling.
 - **The container backend** (`feat/agent-container`) finds its engine the
   same way. `FindEngine` here mirrors its `agentsandbox.ResolveEngine` and
   ping, and becomes a call to it once both branches have landed.
@@ -610,6 +618,19 @@ no browser.
 - **Your own passkeys can't be used** (1Password doesn't export their private
   keys). Register a dedicated one.
 - **There's no live view of an agent's browser**, only `peek`.
+- **The container path is unproven on a real Mac** (section 1a).
+- **`bot:` and `team:` bindings match no session yet.** They need bots (#178)
+  to wire `groupsFor`. Until then they fail closed.
+- **A test sign-in's default success check is a heuristic**: off every page
+  a step was submitted from, and no password or code field left. A site
+  that answers a failure elsewhere needs the login's own `check` (a URL
+  prefix or text).
+- **The login store's key sits beside it** (`credential-values/vault.key`,
+  0600, in conductor's state dir). A copied or committed store is sealed
+  without it, but anything running as the operator's user can read both:
+  the same trust as the conductor vault's default key file.
+- **HashiCorp field names are entered by hand** (`path#field`): listing them
+  would mean reading the secret's data.
 
 ## 10. Found on the way (outside the browser)
 
