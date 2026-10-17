@@ -557,6 +557,20 @@ wiring, `sandbox ls|archive`), `images/agent` (conductor's agent image).
   listed by id and read with `inspect` (`index .Config.Labels`), which both
   render alike; the socket tmpfs is `mode=1777` rather than `uid=`/`gid=`
   options podman may refuse.
+- macOS's `/etc`, `/tmp` and `/var` are symlinks into `/private`: a system
+  dir is compared as it resolves (a bind of `/etc`, or of a link to it,
+  resolved to `/private/etc`, which the list did not name).
+- An operator image or a name starting with `-` would be read by the engine
+  as a flag: refused before any argv, and the final argv scan refuses any
+  flag-shaped label key or env entry (a guard-deletion survivor showed
+  nothing pinned that scan).
+- A guard-deletion mutant of the helper's `pid <= 1` check sent
+  `kill(-1, SIGKILL)` to the operator's whole session: every group signal
+  goes through `signalGroup` (refuses pgid <= 1) and a `rawKill` var tests
+  confine to their own descendants; mutation runs live in a PID namespace.
+- Rootless podman keeps its images under the client's `HOME`: a daemon run
+  with another `HOME` sees another store (the canary names the runner's
+  with `CONTAINERS_STORAGE_CONF`/`rootless_storage_path`).
 
 **CI.** The container legs run on `ubuntu-latest` against Docker and rootless
 podman (preinstalled there): the real-engine tests and
