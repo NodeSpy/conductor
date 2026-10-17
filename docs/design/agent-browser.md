@@ -210,7 +210,7 @@ The container:
     (`core.Trigger.Operator`, not the MCP callable face) and for a session
     started in a directory of the operator's own (`DefaultEntry`); `event` for
     any trigger; `""` (least trust) for a launcher's utility process.
-  - Members replace `requesterFor` with the case's requester class, read from
+  - Bots (#178) replace `requesterFor` with the case's requester class, read from
     the ledger at every action, so a home session whose open cases include a
     third party's falls to anonymous.
   - When the answer changes, the logged-in browser is saved and closed before
@@ -327,6 +327,92 @@ The second factors:
   ID, which is why the tests bind `localhost` and use `127.0.0.1` as the
   lookalike.
 
+## 4a. Login setup: the dashboard's backend
+
+The dashboard offers three ways to add a login. Each is a control-socket
+operation (`browser-login-*`, `browser-vault-*` in
+`cmd/conductor/browserlogins.go`) and a `conductor browser credential …`
+command. The store is `internal/browser/loginstore.go`; its logins join the
+config's `browser.credentials` and `browser.logins` (`WithStore`, and the
+config's names win).
+
+- **Typed** (`password`). A username, a password, and optionally a TOTP
+  secret or `otpauth://` URI.
+  - The values go into the store's own vault: conductor's sealed vault
+    format, keyed by a random key in its own 0600 file, and not a `vaults:`
+    entry. So no `vault get`, template, verb or broker grant names it.
+  - **Write-only:** set, replace, remove. The one read path is unexported
+    and used only by a fill (and the resolve check, which returns nothing of
+    it). A reflection test pins the store's exported methods.
+- **From a vault** (`vault`). The picker gets metadata only
+  (`vaults.ListItems` / `ItemDetail`).
+  - **1Password.** `op item list` / `op item get --format json` are decoded
+    into types with no value field: a value (or an OTP field's current code)
+    is dropped by the parse itself, and the buffer is zeroed after. A test
+    feeds fixture values and asserts that none crosses any listing or any
+    control response, and a reflection test pins the types' fields.
+  - **The mapping.** Username, password and code come from 1Password's
+    purpose, then type, then label. The reference is canonical:
+    `{{ vault "op" "<op's own reference without op://>" }}`, plus
+    `?attribute=otp` for an OTP field, so the seed stays in 1Password.
+  - **Other vaults.** pass lists names from the store's files (never
+    `pass show`); HashiCorp `LIST`s metadata paths (a field is named by
+    hand); conductor and file list entry names.
+- **Sign in yourself** (`session`). A login site from the store, seeded by
+  the existing takeover. The inventory reads its expiry from the saved
+  cookies: the earliest persistent cookie's, or unknown when one is a
+  session cookie.
+
+**Any value source per field** (`secrets.ParseSource`, at the shared
+resolver, so every config field gets it too):
+- `${env.NAME}` and `{{secret "<vault>/<key>"}}` resolve wherever
+  `env:`/`{{ vault }}` did;
+- a typed value is stored write-only;
+- `${settings.…}` is refused as a secret source: at the shared parser, at
+  set time, and at load on the raw body (`checkSecretSources`, before either
+  substitution), because a substituted setting is indistinguishable from a
+  literal afterwards;
+- the loader's `${NAME}` is refused in a secret field for the same reason;
+- everything resolves at fill time, outside the sandbox, and is tainted.
+
+**Bindings** are identities (exact or prefix), `bot:<name>` or
+`team:<name>`. A bot or team binding matches a session whose
+`Principal.Groups` names it (the `groupsFor` seam, wired by bots, #178).
+**Origins** are exact, and several are allowed: a fill checks the one the
+page is on (`pickOrigin`: the browser's security origin, else the login
+URL's, else the first). The fill's own origin check is unchanged.
+
+**Classification.** A new login, binding, origin, `also` host or site is
+`widening` (the dashboard's passkey gate). Removals are `narrowing`, and a
+field's value or source is `neutral`. `dry_run` answers without changing
+anything.
+
+**Resolve check** (`CheckSources`). It reads each field fresh, as a fill
+would, and returns per field only `ok` or the error. A code's secret must
+parse. A password or code from `${env.…}` gets a warning (plain text; named
+when `conductor.env` sets it).
+
+**Test login** (`TestLogin`). It is the agents' own pipeline (`doWith`)
+with a settings view narrowed to that one credential:
+- the identity is `operator:test-login`, the requester the operator;
+- the allowlist is the allowlist's entries for the credential's hosts;
+- there is no login site and no evaluate;
+- a throwaway workspace and session are removed after.
+
+Signed in means the check's URL prefix or text when given; else the page
+left the login URL's path and asks for no password or code. The answer is
+`ok`, `failed` (why), or `needs-you` (an approval still waiting). No
+value, no screenshot and no cookie are kept. It is audited and recorded as
+the login's last test.
+
+**Inventory and usage.** For each login: method, origins or site,
+bindings, field sources (`(stored, write-only)` for a typed value), item,
+added and via, last used, last test, and session expiry. Every
+`login`/`fill-credential` appends identity, requester, dispatch, action,
+outcome and origin to `credential-usage.jsonl` (bounded). **Revoking**
+removes the record and its stored values, and a session login's saved
+sessions. The next use is refused ("no credential").
+
 ## 5. Files: only through the workspace, by conductor
 
 - The browser never sees the workspace:
@@ -381,14 +467,17 @@ dispatch into a resumed workspace, because the registry keeps the first
 dispatch's entry so a resume finds its own state. A token with no binding gets
 no browser.
 
-## 8. Paseo, members, and the container backend
+## 8. Paseo, bots, and the container backend
 
 - **Paseo.** It works through the `<provider>-sandboxed` entries:
   `conductor sandbox exec` mints a token bound (`skill.Identity.Sandbox`) to
   the session's sandbox identity and workspace. Paseo's own browser MCP tools
   are blocked by the sandbox, by design.
-- **Members.** They wire one seam: `requesterFor` in `cmd/conductor/browser.go`
-  (or `Manager.Provenance`). A logged-in site or a credential is a mutating
+- **Bots** (#178, formerly members). They wire two seams in
+  `cmd/conductor/browser.go`: `requesterFor` (the case's requester class:
+  `operator`, `bot:<name>`, …; or `Manager.Provenance`), and `groupsFor`
+  (the bots and teams a session acts for, which `bot:`/`team:` bindings
+  match). A logged-in site or a credential is a mutating
   capability, so it is allowed for an operator-requested case, and an event's,
   a third party's, a proactive case's, or a child of a non-operator case gets
   the anonymous profile. A member's tier for `browser.*` can narrow it further
@@ -476,7 +565,20 @@ no browser.
    - Make conductor write to the mailbox (flags, `\Seen`).
    - Make it talk plaintext to a non-loopback server (STARTTLS stripping, a
      `localhost` that isn't).
-10. **Resource abuse.** Unbounded tabs, downloads, or wait loops; the
+10. **Login setup.**
+   - Read a typed value back through any operation, the inventory, the
+     usage history, an error, the audit, or the store's files.
+   - Make a 1Password listing carry a value (an item whose label, title or
+     URL holds one is the item owner's choice; a value field must never
+     cross).
+   - Widen a login without `change: widening` (a binding, an origin, a site,
+     a bot or team), or make a dry run change something.
+   - Make a test login leak (its result, the audit, a kept cookie or
+     screenshot) or run beyond the credential's hosts.
+   - Use a `${settings.…}` as a secret source past the raw-body check
+     (imports, packs, flow mappings, anchors).
+   - Use a revoked login (a live browser, a racing write-back).
+11. **Resource abuse.** Unbounded tabs, downloads, or wait loops; the
    `max_browsers` cap; idle reaping during a held action.
 
 ## 9a. What remains (plain language)

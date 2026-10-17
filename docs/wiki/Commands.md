@@ -42,6 +42,8 @@ conductor browser cookies import --identity ID --site SITE FILE   import one dom
 conductor browser logout --identity ID --site SITE  drop a saved session
 conductor browser sessions | peek <session> [--out F.png]   live agent browsers; a screenshot of one
 conductor browser passkey register <credential> [--url U]   register a dedicated passkey for a credential (a takeover)
+conductor browser credential add|ls|usage|check|test|set|unset|bind|rm …   logins you add: typed (write-only), from a vault, or your own sign-in
+conductor browser vault-items <vault> [--query Q] | vault-item <vault> <item>   a vault's items for picking: names and fields, never a value
 conductor browser <action> …               (inside an agent) open, snapshot, click, fill, login --credential, … — conductor browser --help
 conductor version
 ```

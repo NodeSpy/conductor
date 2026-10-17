@@ -2,7 +2,7 @@
 
 Any agent conductor launches sandboxed (a `cli`/`acp` worker, an opencode or
 agent-deck session, a paseo session on a `<provider>-sandboxed` entry, a
-hand-off, a member's worker) can drive a real browser to do work on websites:
+hand-off, a bot's worker) can drive a real browser to do work on websites:
 `conductor browser …`. Conductor runs the browser. The agent asks; conductor
 decides, acts, and audits.
 
@@ -179,12 +179,12 @@ How it is enforced:
   - an agent you started in a directory of your own (a paseo session on a
     sandboxed entry);
   - a local `conductor run` of a manual trigger;
-  - for members, an operator-requested case.
+  - for bots, an operator-requested case.
 
-  An event, a third party's request, a member's own initiative (proactive
+  An event, a third party's request, a bot's own initiative (proactive
   work), a case spawned from a non-operator case, or an unknown requester gets
   the **anonymous** profile, with a note saying why. If a session's provenance
-  changes (a member's home session takes on a third party's case), its
+  changes (a bot's home session takes on a third party's case), its
   logged-in browser closes at the next action.
 
 ## Credentials: sign-ins the agent never sees
@@ -206,17 +206,32 @@ browser:
       origin: https://app.example.com    # EXACT scheme://host[:port], optional /path prefix
       identities: ["agent:triage@acme/app"]
       login_url: https://app.example.com/login
-      username: { vault: op, key: "Agents/App/username" }
-      password: { vault: op, key: "Agents/App/password" }
-      otp:      { vault: op, key: "Agents/App/one-time password?attribute=otp" }
-      passkey:  { vault: house, key: "passkeys/app-triage" }
+      username: '{{ vault "op" "Agents/App/username" }}'
+      password: '{{ vault "op" "Agents/App/password" }}'
+      otp:      '{{ vault "op" "Agents/App/one-time password?attribute=otp" }}'
+      passkey:  '{{ vault "house" "passkeys/app-triage" }}'
       # approval: true                   # the site asks you to approve on your phone
 ```
 
-Values are always `{vault, key}` references, never values. Nothing is shared
-by default: a credential is usable only by the identities it names, on its
-origin, and only for the operator's own request (the same provenance rule as
-logged-in sites).
+Each field names **where its value comes from**, and the sources can be mixed
+per field. They are read only when the field is filled, by conductor, outside
+every sandbox:
+
+| source | example |
+|---|---|
+| a vault entry | `'{{ vault "op" "Agents/App/password" }}'` (or the old map `{vault: op, key: …}`) |
+| a named secret | `'{{secret "house/app_pw"}}'` |
+| an environment variable | `'${env.APP_PW}'` (conductor.env included) |
+| a typed value | a username only: `username: agent@example.com` |
+
+A typed password, code or passkey never sits in the config: add it write-only
+(`conductor browser credential`, below). `${settings.…}` is refused in a secret
+field (a setting is plain config), and so is the loader's `${APP_PW}`, which
+would put the value into the config at load: write `${env.APP_PW}`.
+
+Nothing is shared by default: a credential is usable only by the identities it
+names, on its origin, and only for the operator's own request (the same
+provenance rule as logged-in sites).
 
 The agent's side:
 
@@ -263,6 +278,87 @@ After a fill, in that browser:
 
 Page JavaScript **on the credential's own origin** can read a field it is
 given; that is how browsers work, and why the origin binding matters.
+
+### Adding logins (what the dashboard drives)
+
+Besides `browser.credentials`, you can add logins at runtime: from the
+dashboard, or `conductor browser credential …` (both use the same daemon
+operations). There are three ways:
+
+1. **Type a username and password**, and optionally a TOTP secret or an
+   `otpauth://` URI. Typed values are stored **write-only** in conductor's own
+   encrypted store (`<state>/browser/credential-values/`, its own key, not a
+   `vaults:` entry). You can set, replace or remove one, but nothing reads one
+   back, through any command or API. Only a fill uses it.
+
+   ```sh
+   conductor browser credential add app --origin https://app.example.com \
+     --bind agent:triage@acme/app --username agent@example.com --password-stdin
+   ```
+
+2. **Pick from a vault.** The picker lists **metadata only**: vault, item
+   title, websites, field labels and types, never a value.
+   - **1Password:** `op item list` / `op item get`, read into types that have
+     no value field, so a value never leaves the daemon. The username,
+     password and one-time code fields are matched automatically. The
+     reference is stored in conductor's syntax
+     (`{{ vault "op" "Vault/Item/field" }}`; a one-time code is
+     `…?attribute=otp`, so its seed stays in 1Password).
+   - **conductor and `file` vaults:** entry names.
+   - **`pass`:** entry names, from the store's directory.
+   - **HashiCorp:** secret paths. Name a field by hand (`path#field`).
+
+   ```sh
+   conductor browser vault-items op --query example     # pick an item
+   conductor browser credential add app --vault op --item <id> --bind agent:triage@acme/app
+   ```
+
+   Each field can also take any source by hand: `--password-ref '${env.APP_PW}'`.
+
+3. **Sign in yourself.** Add a session login, then seed it:
+
+   ```sh
+   conductor browser credential add app-session --session --site app.example.com --bind agent:triage@acme/app
+   conductor browser seed --identity agent:triage@acme/app --site app.example.com
+   ```
+
+   The inventory shows when the saved session expires, where its cookies say
+   so. A session cookie has no expiry, so then it says it's unknown.
+
+A login binds to **identities** (exact, or a prefix ending in `*`),
+**`bot:<name>`** or **`team:<name>`**, and to exact origins (`--origin` repeats).
+An origin must be reachable through `browser.allow`.
+
+Then:
+
+```sh
+conductor browser credential ls          # method, origins, bindings, last used, last test, expiry: no values
+conductor browser credential usage app   # who used it (identity, dispatch), when
+conductor browser credential check app   # does each field resolve? ok or why, never the value
+conductor browser credential test app    # sign in, in a sandboxed browser
+conductor browser credential bind app --bind bot:helper --dry-run   # → "widening"
+conductor browser credential rm app      # revoke: the login and every value it stored
+```
+
+- **`check`** resolves every field fresh and reports `ok` or the error.
+  - It warns when a password or code comes from an environment variable,
+    which is plain text, and says when `conductor.env` sets it.
+  - It refuses a `${settings.…}` source.
+- **`test`** signs in exactly as an agent would (the same checks, in a fresh
+  sandboxed browser narrowed to the login's hosts). It answers `ok`, `failed`
+  with the reason, or `needs-you` when the site waits for your approval on
+  your phone. It returns no value and no screenshot, keeps no cookie, and the
+  result shows in the inventory. By default, success means the page left the
+  sign-in page and asks for no password or code. A login can name what
+  signed-in looks like instead (`--check-url`, `--check-text`).
+- **Widening.** Every change that widens who may use a login, or where,
+  answers `change: widening`: a new login, a new binding, a new origin. The
+  dashboard asks for a passkey for those. Removals are `narrowing`, and a
+  field's new value is `neutral`. `--dry-run` reports the classification and
+  changes nothing.
+- **Revoking.** `rm` removes the login and its stored values, and a session
+  login's saved sessions. The next use is refused, and a browser still
+  holding it closes at its next action.
 
 ### Two-factor codes
 
@@ -358,7 +454,7 @@ account where the site allows one. They are revocable without touching yours.
 A live, interactive view of an agent's browser belongs to the planned
 dashboard.
 
-## Paseo, members
+## Paseo, bots
 
 **Paseo.** A paseo session started on a `<provider>-sandboxed` entry already
 has `conductor` and its token. Tell the agent to use `conductor browser …`.
@@ -367,10 +463,10 @@ design, so conductor's browser is the supported path. A session you start in a
 directory of your own is your own request: logged-in sites and credentials
 opted in for its identity (`dir:<the directory>`) are available to it.
 
-**Members** use it from their home session and workers like any agent. A
+**Bots** use it from their home session and workers like any agent. A
 logged-in site or a credential counts as a mutating capability, so it follows
 the case's requester: an operator-requested case may sign in, while a third
-party's, an event's, or the member's own initiative gets the anonymous
+party's, an event's, or the bot's own initiative gets the anonymous
 profile.
 
 ## What remains
@@ -406,7 +502,8 @@ A login or credential names agent sandbox identities:
 | a dispatch on a configured repo | `agent:<profile>@<owner/repo>` |
 | a dispatch whose target the sender chose | `agent:<profile>@dispatch-<id>` (never opt one in) |
 | an agent you started in a directory | `dir:<the directory>` |
-| a member | the member's registered identity |
+| a bot | the bot's registered identity |
+| any session acting for a bot or a team | `bot:<name>`, `team:<name>` (a login added at runtime) |
 
 A trailing `*` matches a prefix (`agent:triage@*`). A passkey credential names
 exactly one identity.
