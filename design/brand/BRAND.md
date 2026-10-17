@@ -8,7 +8,8 @@ This is the single source of truth for how conductor looks, reads and behaves on
 | **Tokens** (source of truth, W3C DTCG) | [`tokens/tokens.json`](tokens/tokens.json) → generated [`tokens/tokens.css`](tokens/tokens.css) |
 | **Prototype → Daylight mapping** | [`tokens/migration.json`](tokens/migration.json), [`tokens/prototype-compat.css`](tokens/prototype-compat.css), and the table in the book (*Tokens › Migrating the dashboard*) |
 | **Contrast report** (every declared pair, both themes) | [`tokens/CONTRAST.md`](tokens/CONTRAST.md) |
-| **Calm by default** (before/after pairs and the loudness check) | [`system.html#calm`](system.html#calm), [`v2/shots/calm/`](v2/shots/calm/), [`tokens/CALM-CHECK.md`](tokens/CALM-CHECK.md) |
+| **Scannable by default** (proposal under review) | [`scannable-review.html`](scannable-review.html), [`system.html#scannable`](system.html#scannable) |
+| **Calm by default** (the record of the previous round) | [`v2/shots/calm/`](v2/shots/calm/), [`tokens/CALM-CHECK.md`](tokens/CALM-CHECK.md) |
 | **Logo** (official kit, one canonical location) | [`assets/`](assets/); the choice is recorded on [`logo-review.html`](logo-review.html) |
 | **How we got here** | [`index.html`](index.html) (logo directions), [`directions-v2.html`](directions-v2.html) (system directions) |
 
@@ -23,7 +24,7 @@ The logo is **Fermata, strengthened**: the hold-until-released arch, chosen in O
 | Area | Decision | Why |
 |---|---|---|
 | Direction | Daylight: warm, light-first, sentence-first | Round one read as “engineery” and generic; the brief asked for conductor’s firehose easier to consume. Daylight leads with plain language and keeps colour for what needs attention. |
-| Calm by default | Exception-first: the heading is the glance answer, one loud thing, everything normal folded into quiet summary lines and density bands | The first review: “all of it just looks so busy… I have to read everything all the time.” A check (`tools/calm-check.mjs`) now holds every screen to a loudness budget. |
+| Scannable by default *(proposal)* | Keep the information; add icons for what each thing is, a six-step risk ladder, environment tags and one row anatomy | The calm round hid too much. The real problem was telling items apart without reading them. Replaces the calm round once reviewed. |
 | Information design | Ten rules (below): summary first, plain headline over technical detail, three type levels, colour only for attention… | These are the heart of the system. The audits’ biggest problems (no first step, “what can my bots do?”, hashes up front) were information problems, not paint. |
 | Palette | Cream and cocoa surfaces, sand neutrals, one ember accent | Warm paper reads as a product rather than a terminal, and one accent keeps “where do I act?” unambiguous. |
 | Status | Colour only on what needs attention; passing work is ink | When eleven of sixteen rows are green, green means nothing and the two red rows are harder to find. |
@@ -36,9 +37,34 @@ The logo is **Fermata, strengthened**: the hold-until-released arch, chosen in O
 
 ---
 
-## Calm by default (exception-first)
+## Scannable by default (proposal under review)
 
-The first review of the Daylight mocks: *“all of it just looks so busy… there is no way for me to just pick out what’s going on… I have to read everything all the time.”* Everything was shown at equal weight, all the time. The fix is in the information design, not the decoration. This principle sits above the ten rules that follow, and it applies to every screen. The book chapter is [*Calm by default*](system.html#calm).
+**A correction to “Calm by default”, below.** The calm round answered “too busy” by showing less, and over-corrected: it hid information. The real problem was identification. Every item looked the same, so each had to be read to learn what it was and whether it mattered, and icons were missing or didn’t make sense. The goal is **scannable and identifiable at a glance, with the information kept**. The full proposal is [`scannable-review.html`](scannable-review.html); the book chapter is [*Scannable by default*](system.html#scannable). Nothing is adopted into the tokens or the mocks until it is reviewed.
+
+1. **Identify before reading.** Every item shows what it is, how risky it is, where it happens and how it went, in the same place on every screen.
+2. **Keep the information.** Titles, the one-line why, bot, repo, environment, risk, status and time stay on the row. Only ids, hashes and raw payloads go behind a disclosure or a hover.
+3. **Order by attention.** Needs you → failing → running → finished, by position (groups), weight and the status marks. Kept from the calm round: the greeting with the needs-you summary, grouping by attention, margin marks, no tinted capsules.
+4. **Danger is unmistakable, routine is quiet.** A production Terraform apply never looks like a bot posting a comment.
+5. **One meaning per icon, always with a word.** Never decorative, never reused, legible at 16px.
+6. **Dense, but structured.** One row anatomy with fixed, aligned columns.
+
+**The four parts** (`scannable/scan.js`):
+
+- **Icons.** One per kind of object or event: approval `stamp`, run `circle-play`, bot, team `users`, workflow, pull request, incident `siren`, deploy `rocket`, Terraform `layers`, cloud spend `receipt`, connector `plug`, login `key-round`, knowledge `book-open`, config change `settings-2`. A run’s state is the status mark beside it, never its icon. One per kind of action: reads `eye`, writes / updates `pencil-line`, comments / posts `message-square`, pushes code `git-commit-horizontal`, applies infra `hammer`, spends money `banknote`, deletes / destroys `trash-2`, changes permissions `lock-open`. Lucide (ISC, lucide-static 1.59.0). The review page has the audit of every icon in the dashboard prototype.
+- **Risk ladder.** Reads only · Reversible · Changes things · Changes production · Spends money · Destructive (“Destroys” or “Grants access”). The marker is a meter filled to the step plus the word: the bottom three in ink, the top three as solid bands (inverse ink, amber with the amount, red). The step comes from the verb’s action, its autonomy tier (`observe`, `reversible`, `propose`, `commit_money`, `never`) and its environment. Destroy and permission verbs are always the top step.
+- **Environment tags.** Production (solid square, strong outline, bold) · Staging (outlined square with a centre) · Local (dashed circle, dashed outline). Told apart by fill and shape, never by colour alone.
+- **Row anatomy.** What (icon and word) · title and one line of why · where (bot, target, environment) · risk · status · when · action. On a phone: the same order in two to three lines.
+
+**Checks.** `tools/icon-check.mjs` renders every glyph at 16 CSS px on a 1× screen and measures its real pixels: 43 glyphs, all in the ink range, no two too alike (report: [`scannable/ICON-CHECK.md`](scannable/ICON-CHECK.md), with the enlarged pixels in [`scannable/icon-16px-sheet.png`](scannable/icon-16px-sheet.png)). It led to two refinements of the status marks, applied everywhere: **passed** is a smaller dot (r 3.4) and **waiting** is an outlined triangle, so neither reads as the needs-you diamond. `tools/risk-cvd.mjs` checks the three risk bands for colour-blind readers in both themes: all pairs distinct, every band ≥ 3:1 on the surface with its words ≥ 4.5:1 ([`scannable/RISK-CVD.md`](scannable/RISK-CVD.md)).
+
+---
+
+## For the record: Calm by default (superseded by the proposal above)
+
+*Kept as the record of the over-correction. Its components (summary line, quiet state, exception card, density band) remain for genuinely secondary detail; its loudness budget is retired pending review.*
+
+
+The first review of the Daylight mocks: *“all of it just looks so busy… there is no way for me to just pick out what’s going on… I have to read everything all the time.”* Everything was shown at equal weight, all the time. The fix is in the information design, not the decoration. This principle sits above the ten rules that follow, and it applies to every screen. The book chapter is [*Calm by default*](system.html#calm-pairs).
 
 1. **The 3-second glance.** Every screen answers “is anything wrong, and what needs me?” in about three seconds, without reading. The answer *is* the page heading: “5 things need you”, “3 runs need attention”, “All quiet. Nothing needs you.” It is the largest, first and highest-contrast text on the screen. When nothing needs you, the screen says almost nothing.
 2. **Normal collapses into one quiet line.** Finished work is a summary line (“10 finished · 9 passed · 1 parked”) that expands in place, never a wall of rows. In timelines, passing runs are faint ticks in a **density band**; only failures, needs-you and running work are marks. Healthy systems, connections and bots collapse to “All healthy”.
@@ -209,11 +235,11 @@ Every status mark, in a table, card, lane chart, legend, the overview, the run p
 
 | State | Mark | Colour (light · dark) | Word |
 |---|---|---|---|
-| Passed | filled dot, small | sage `#568663` · `#6fa07c` | ink (quiet: it is most marks) |
+| Passed | filled dot, small (r 3.4 on the 16 grid) | sage `#568663` · `#6fa07c` | ink (quiet: it is most marks) |
 | Running | open arc (spins; static under reduced motion) | blue `#2f76db` · sky `#51b7e8` | blue |
 | Failed | cross | wine `#8a032e` · salmon `#ffa9b0` | red text (`status.danger.fg`) |
 | Needs you | diamond | ember (`accent.default`) | ember text (`text.accent`) |
-| Waiting / at risk | triangle | amber | amber text |
+| Waiting / at risk | outlined triangle | amber | amber text |
 | Parked | pause bars | slate `#506279` · `#677b94` | ink |
 | Not reached | dash | slate (as parked) | ink |
 | Shadow | half disc | violet | violet text |

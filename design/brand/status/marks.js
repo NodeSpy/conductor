@@ -12,7 +12,7 @@ export const STATES = {
   running: { word: 'Running',   glyph: 'running',   mark: '--color-status-running-solid', fg: '--color-status-running-fg',    shape: 'open arc', spin: true },
   failed:  { word: 'Failed',    glyph: 'danger',    mark: '--color-status-danger-solid',  fg: '--color-status-danger-fg',     shape: 'cross', attn: true },
   needs:   { word: 'Needs you', glyph: 'needs-you', mark: '--color-accent-default',       fg: '--color-text-accent',          shape: 'diamond', attn: true },
-  waiting: { word: 'Waiting',   glyph: 'warning',   mark: '--color-status-warning-solid', fg: '--color-status-warning-fg',    shape: 'triangle', attn: true },
+  waiting: { word: 'Waiting',   glyph: 'warning',   mark: '--color-status-warning-solid', fg: '--color-status-warning-fg',    shape: 'outlined triangle', attn: true },
   parked:  { word: 'Parked',    glyph: 'neutral',   mark: '--color-status-neutral-solid', fg: null,                           shape: 'pause bars' },
   shadow:  { word: 'Shadow',    glyph: 'shadow',    mark: '--color-status-info-solid',    fg: '--color-status-info-fg',       shape: 'half disc' },
   // A step after a failure, or a cancelled run: the parked slate, but a single dash.

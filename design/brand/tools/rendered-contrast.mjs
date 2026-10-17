@@ -29,6 +29,9 @@ for (const t of ['light', 'dark']) {
   for (const s of ['overview', 'approval', 'history', 'activity', 'bot']) PAGES.push(`v2/mock.html?d=daylight&s=${s}&t=${t}&v=before`);
   PAGES.push(`v2/mock.html?d=daylight&s=activity&t=${t}`, `v2/mock.html?d=daylight&s=bot&t=${t}`, `v2/mock.html?d=daylight&s=overview&t=${t}&day=quiet`);
 }
+// The scannable proposal.
+PAGES.push('scannable-review.html');
+for (const t of ['light', 'dark']) for (const s of ['overview', 'history', 'approval', 'perms', 'picker']) PAGES.push(`v2/mock.html?d=daylight&v=scan&s=${s}&t=${t}`);
 
 function measure() {
   const parse = (s) => { const m = s.match(/rgba?\(([^)]+)\)/); if (!m) return null; const p = m[1].split(/[\s,/]+/).filter(Boolean).map(Number); return [p[0], p[1], p[2], p[3] ?? 1]; };

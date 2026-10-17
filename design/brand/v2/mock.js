@@ -8,12 +8,17 @@ import * as C from './data.js';
 import { LUCIDE, STATUS } from '../icons/icons.js';
 import { STATES, GLYPH_STATE, mark, chartMark, status, legend, injectMarkCSS } from '../status/marks.js';
 import { summaryLine, quietState, exception, excRows, calmLanes, injectCalmCSS } from '../status/calm.js';
+import { injectScanCSS } from '../scannable/scan.js';
+import * as SCAN from '../scannable/screens.js';
 injectMarkCSS(); injectCalmCSS();
 
 const q = new URLSearchParams(location.search);
 const d = q.get('d') || 'daylight', s = q.get('s') || 'overview', theme = q.get('t') || 'light';
 const D = DIRS[d];
-const calm = d === 'daylight' && q.get('v') !== 'before', quietDay = q.get('day') === 'quiet';
+// &v=scan renders the scannable-by-default proposal (scannable/), &v=before the original busy version.
+const scan = d === 'daylight' && q.get('v') === 'scan';
+const calm = d === 'daylight' && q.get('v') !== 'before' && !scan, quietDay = q.get('day') === 'quiet';
+if (scan) { injectScanCSS(); const st = document.createElement('style'); st.textContent = SCAN.SCAN_SCREEN_CSS; document.head.append(st); }
 const root = document.documentElement;
 root.dataset.d = d; root.dataset.theme = theme;
 root.style.colorScheme = `only ${theme}`; // the forced theme always wins over the OS and UA auto-darkening
@@ -44,9 +49,9 @@ const spark = (vals, w = 96, h = 26, cls = '') => {
 };
 
 // ---------- shell ----------
-const NAV = [['layout-grid', 'Home', 'overview'], ['bell', 'Needs you', 'needs', quietDay ? 0 : 5], ['activity', 'Activity', 'activity'], ['history', 'Runs', 'history'], ['workflow', 'Workflows', 'builder'], ['bot', 'Bots', 'approval'], ['globe', 'Browsers', 'browsers', '']];
+const NAV = [['layout-grid', 'Home', 'overview'], ['bell', 'Needs you', 'needs', quietDay ? 0 : scan ? 6 : 5], ['activity', 'Activity', 'activity'], ['history', 'Runs', 'history'], ['workflow', 'Workflows', 'builder'], ['bot', 'Bots', 'approval'], ['globe', 'Browsers', 'browsers', '']];
 const NAV2 = [['plug', 'Connections'], ['key-round', 'Secrets'], ['package', 'Packs'], ['refresh-cw', 'Updates', 1], ['shield-check', 'Access']];
-const activeOf = { overview: 'overview', run: 'history', history: 'history', approval: 'approval', builder: 'builder', activity: 'activity', bot: 'approval' };
+const activeOf = { overview: 'overview', run: 'history', history: 'history', approval: 'approval', builder: 'builder', activity: 'activity', bot: 'approval', perms: 'approval', picker: 'builder' };
 function shell(body, title) {
   const act = activeOf[s];
   const navItem = ([i, l, k, n]) => `<a class="${k === act ? 'on' : ''}">${ic(i)}<span>${l}</span>${n ? `<em class="${k === 'needs' ? 'hot' : ''}">${n}</em>` : ''}</a>`;
@@ -63,7 +68,7 @@ function shell(body, title) {
     <div class="main"><header class="topbar"><span class="ph-title">${logoMark}<b>${title}</b></span><span class="search">${ic('search')}Search runs, bots and settings<kbd>⌘K</kbd></span><span class="sp"></span>${calm ? '' : `<span class="health">${gl('success')}All systems normal</span>`}<span class="avatar">op</span></header>
     <main class="page">${body}</main></div>${tabbar(act)}</div>`;
 }
-const tabbar = (act) => `<nav class="tabbar">${[['layout-grid', 'Home', 'overview'], ['bell', 'Needs you', 'needs', quietDay ? 0 : 5], ['history', 'Runs', 'history'], ['bot', 'Bots', 'approval'], ['ellipsis', 'More', 'more']].map(([i, l, k, n]) => `<a class="${k === act ? 'on' : ''}">${ic(i)}${n ? `<em>${n}</em>` : ''}<span>${l}</span></a>`).join('')}</nav>`;
+const tabbar = (act) => `<nav class="tabbar">${[['layout-grid', 'Home', 'overview'], ['bell', 'Needs you', 'needs', quietDay ? 0 : scan ? 6 : 5], ['history', 'Runs', 'history'], ['bot', 'Bots', 'approval'], ['ellipsis', 'More', 'more']].map(([i, l, k, n]) => `<a class="${k === act ? 'on' : ''}">${ic(i)}${n ? `<em>${n}</em>` : ''}<span>${l}</span></a>`).join('')}</nav>`;
 
 // ---------- pieces ----------
 const needItem = (n, i) => `<li class="need" data-s="${n.s}">
@@ -329,12 +334,15 @@ function botCalm() {
 const SCREENS = {
   overview: [overview, 'Home', 5], run: [runPage, 'Runs', 1], approval: [approvalPage, 'Bots', 1], history: [historyPage, 'Runs', 3], builder: [builderPage, 'Workflows', 0],
   activity: [activityBefore, 'Activity', 4], bot: [botBefore, 'Bots', 1],
+  perms: [SCAN.perms, 'Bots', 0], picker: [SCAN.picker, 'Workflows', 0],
 };
+const SCANS = { overview: SCAN.overview, history: SCAN.history, approval: SCAN.approval, perms: SCAN.perms, picker: SCAN.picker };
 const CALM = { overview: overviewCalm, history: historyCalm, activity: activityCalm, approval: approvalCalm, bot: botCalm };
 let [fn, title, exceptions] = SCREENS[s];
 if (calm && CALM[s]) fn = CALM[s];
+if (scan && SCANS[s]) fn = SCANS[s];
 if (quietDay && s === 'overview') exceptions = 0;
 document.body.innerHTML = shell(fn(), title);
 const main = document.querySelector('main');
-main.dataset.exceptions = exceptions; main.dataset.version = calm && CALM[s] ? 'calm' : 'before';
-document.title = `${D.name} · ${s}${calm ? '' : ' · before'}`;
+main.dataset.exceptions = exceptions; main.dataset.version = scan ? 'scan' : calm && CALM[s] ? 'calm' : 'before';
+document.title = `${D.name} · ${s}${scan ? ' · scannable' : calm ? '' : ' · before'}`;

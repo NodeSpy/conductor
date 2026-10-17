@@ -27,7 +27,7 @@ const STATES = {
   Running: ['semantic.color.status.running.solid', 'open arc'],
   Failed: ['semantic.color.status.danger.solid', 'cross'],
   'Needs you': ['semantic.color.accent.default', 'diamond'],
-  Waiting: ['semantic.color.status.warning.solid', 'triangle'],
+  Waiting: ['semantic.color.status.warning.solid', 'outlined triangle'],
   Parked: ['semantic.color.status.neutral.solid', 'pause bars'],
   Shadow: ['semantic.color.status.info.solid', 'half disc'],
   'Not reached': ['semantic.color.status.neutral.solid', 'dash'],
