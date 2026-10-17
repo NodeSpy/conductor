@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>conductor · system directions, round two</title>
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="page.css">
+<link rel="stylesheet" href="v2/fonts/fonts.css">
+<link rel="stylesheet" href="v2/present.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="kicker mono"><span>conductor</span><span>/</span><span>design system</span><span>/</span><span>round two</span><a href="index.html">Logo directions</a><a href="system.html">Round one (v1 system)</a></div>
+  <h1>Make the firehose readable.</h1>
+  <div class="lede-row">
+    <p class="lede">Round one refined the prototype. Daniel asked for more: <em>“a little less generic, a little more like a real brand”</em>, less <em>“engineery”</em>, and above all <em>“something that helps make the crazy amount of info conductor produces easier to consume.”</em> This round starts from that last line. First come ten information-design principles that every direction follows, then three genuinely different visual languages, each proved on the same five dense screens beside the current prototype.</p>
+    <aside class="keeps">
+      <b class="mono">Kept from round one</b>
+      <ul><li>The Fermata mark and every logo asset</li><li>The token architecture: primitive → semantic → component, with DTCG and modes</li><li>The generator and the contrast check, which fails the build</li><li>The dataviz method and validated palettes</li></ul>
+      <b class="mono">Rethought</b>
+      <ul><li>Colour, type, shape, rhythm, illustration and data presentation</li><li>How every screen leads: summary first, detail on demand</li></ul>
+    </aside>
+  </div>
+  <nav class="v2nav"><a href="#principles">Principles</a><a href="#directions">Three directions</a><a href="#compare">Side by side</a><a href="#recommendation">Recommendation</a></nav>
+</header>
+
+<section class="sect" id="principles">
+  <div class="sec-head"><span class="num">§</span><h2>Ten principles for reading at a glance</h2></div>
+  <p class="sintro">conductor produces runs, cases, approvals, logs, diffs and bot chatter around the clock. A person needs to answer three questions in seconds: <b>does anything need me, is anything broken, and is everything else fine?</b> Every direction below follows these ten rules. They change the content model, not the paint. The “before” examples are verbatim from the current prototype; the “after” examples are set in the recommended direction.</p>
+  <div id="principle-list"></div>
+</section>
+
+<section class="sect" id="directions">
+  <div class="sec-head"><span class="num">§</span><h2>Three directions</h2></div>
+  <p class="sintro">Each direction is a value set for the same semantic tokens as <code>tokens.json</code>. The mocks are written once against those token names, so switching direction is a value swap, not a rebuild. All three palettes pass the round-one contrast rules (<b>456 pairs, 0 failures</b>, from <code>v2/check.mjs</code>), and the categorical chart palette validates against each direction’s surfaces (<a href="v2/dataviz-validation.txt">v2/dataviz-validation.txt</a>).</p>
+  <div id="dir-cards"></div>
+</section>
+
+<section class="sect wide" id="compare">
+  <div class="sec-head"><span class="num">§</span><h2>Side by side</h2></div>
+  <p class="sintro">These are five real screens built from the prototype’s own content: the overview, a failed run with its test output, the platform-sre bot with the terraform approval, run history and the ci-fixer workflow builder. Shots are viewport-sized, as you first see them. <b>Click any shot</b> to open it full size, and <b>Open live</b> to scroll the real HTML mock.</p>
+  <div class="cmp-ctl">
+    <div class="c-seg" id="vp"><span class="on" data-v="desktop">Desktop · 1440</span><span data-v="phone">Phone · 390</span></div>
+    <div class="c-seg" id="th"><span class="on" data-v="light">Light</span><span data-v="dark">Dark</span></div>
+  </div>
+  <div id="compare-grid"></div>
+</section>
+
+<section class="sect" id="recommendation">
+  <div class="sec-head"><span class="num">→</span><h2>Recommendation: <em>Daylight</em></h2></div>
+  <div class="recgrid">
+    <div class="rec-copy">
+      <p class="big">Ship <b>Daylight</b>. It answers all three of Daniel’s notes directly: it reads as a product rather than a terminal, it has a recognisable brand voice, and it is built for legibility from the typeface up.</p>
+      <h3>Why it works for the newcomer</h3>
+      <p>Sam, the newcomer audit’s persona, couldn’t find a first step and couldn’t say what bots may do without asking. Daylight leads every screen with a sentence (“5 things need you. Everything else is running normally.”) and puts plain-language titles above the technical ones. Its typeface, Atkinson Hyperlegible, was designed by the Braille Institute so that easily confused characters (1/l/I, 0/O, rn/m) stay distinct, which matters for ids and numbers read at a glance. The warm surfaces and the sunrise arch make empty states and onboarding feel welcoming rather than daunting.</p>
+      <h3>Why it works for the power user</h3>
+      <p>Riley, the power-user audit’s persona, needs density and precision. Under Daylight’s friendliness is the same discipline as Broadsheet: tabular figures, right-aligned durations and costs, ids kept in mono at the end of every row, colour only on rows that need attention, and a compact density (36px rows) as a token set. The history table carries exactly the same columns as Broadsheet’s; only the shell is softer.</p>
+      <h3>What to borrow from the others</h3>
+      <p>The principles are shared, so the best information patterns travel. Take Broadsheet’s <b>“since you last looked” digest</b> for the overview, and Score’s <b>lane view</b> as the Activity page, where pattern-finding across workflows is the job. Neither changes Daylight’s visual language.</p>
+      <h3>Runner-up</h3>
+      <p><b>Broadsheet</b> is the strongest pure information design, and the one Riley would choose. But it reads as an editorial product for experts, and its starkness asks more of a newcomer. <b>Score</b> is the most distinctive brand. But making the timeline the main view everywhere adds a metaphor to learn, and that suits a single Activity view better than every screen.</p>
+    </div>
+    <table class="score mono" id="rec-table"></table>
+  </div>
+  <p class="next">Next, once Daniel picks: rebuild <code>tokens.json</code> / <code>tokens.css</code>, the brand book and <code>BRAND.md</code> for the chosen direction, using the same generator and contrast tooling. Nothing has been rebuilt yet.</p>
+</section>
+
+<div class="lightbox" id="lb" hidden><button class="lb-x" aria-label="Close">×</button><img alt=""><p></p></div>
+<footer class="colophon mono"><span>Fonts: all SIL OFL 1.1 (see each direction for licences). Icons: Lucide (ISC). Mocks use the prototype’s content.</span><span>branch design/brand</span></footer>
+<script type="module" src="v2/present.js"></script>
+</body>
+</html>

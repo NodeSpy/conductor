@@ -89,7 +89,7 @@ function scoreSVG(w = 980, hrs = 12, compact = false) {
   g += `<line x1="${x(0)}" x2="${x(0)}" y1="${top - 4}" y2="${H - 22}" stroke="var(--color-accent-default)" stroke-width="1.5"/>`;
   return `<svg class="score-svg" viewBox="0 0 ${w} ${H}" role="img" aria-label="Runs per workflow over the last ${hrs} hours">${g}</svg>`;
 }
-const scoreLegend = `<div class="legend"><span><i class="lg ok"></i>Passed</span><span><i class="lg fail"></i>Failed</span><span><i class="lg run"></i>Running</span><span><i class="lg wait"></i>Needs you</span><span><i class="lg park"></i>Parked</span></div>`;
+const scoreLegend = `<div class="legend"><span><i class="lgd ok"></i>Passed</span><span><i class="lgd fail"></i>Failed</span><span><i class="lgd run"></i>Running</span><span><i class="lgd wait"></i>Needs you</span><span><i class="lgd park"></i>Parked</span></div>`;
 
 // ---------- screens ----------
 function overview() {

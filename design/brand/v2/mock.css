@@ -324,12 +324,12 @@ h2 { font: var(--d-title-weight) var(--d-h2)/1.25 var(--font-family-display); fo
 [data-d="score"] .gridl { stroke: var(--color-border-subtle); stroke-dasharray: 2 4; }
 .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--color-text-secondary); }
 .legend span { display: flex; align-items: center; gap: 6px; }
-.lg { width: 10px; height: 10px; display: inline-block; }
-.lg.ok { border-radius: 50%; background: var(--color-text-tertiary); }
-.lg.fail { background: linear-gradient(45deg, transparent 40%, var(--color-status-danger-solid) 40% 60%, transparent 60%), linear-gradient(-45deg, transparent 40%, var(--color-status-danger-solid) 40% 60%, transparent 60%); }
-.lg.run { border-radius: 50%; border: 2px solid var(--color-status-running-solid); }
-.lg.wait { background: var(--color-accent-default); transform: rotate(45deg) scale(.8); }
-.lg.park { border-left: 2.5px solid var(--color-status-neutral-solid); border-right: 2.5px solid var(--color-status-neutral-solid); width: 8px; }
+.lgd { width: 10px; height: 10px; display: inline-block; }
+.lgd.ok { border-radius: 50%; background: var(--color-text-tertiary); }
+.lgd.fail { background: linear-gradient(45deg, transparent 40%, var(--color-status-danger-solid) 40% 60%, transparent 60%), linear-gradient(-45deg, transparent 40%, var(--color-status-danger-solid) 40% 60%, transparent 60%); }
+.lgd.run { border-radius: 50%; border: 2px solid var(--color-status-running-solid); }
+.lgd.wait { background: var(--color-accent-default); transform: rotate(45deg) scale(.8); }
+.lgd.park { border-left: 2.5px solid var(--color-status-neutral-solid); border-right: 2.5px solid var(--color-status-neutral-solid); width: 8px; }
 [data-d="score"] .ng { border-radius: 50%; }
 [data-d="score"] .step { border-radius: var(--radius-card); }
 [data-d="score"] .flow::before { content: ""; position: absolute; left: 29px; top: 10px; bottom: 54px; width: 2px; background: var(--color-border-default); }
@@ -402,3 +402,9 @@ h2 { font: var(--d-title-weight) var(--d-h2)/1.25 var(--font-family-display); fo
 .decide .btn, .actions .btn, .phead > .btn, .phead > .badge { flex: none; }
 [data-d="score"] .rail nav a em.hot { color: var(--color-text-on-accent); }
 @media (max-width: 600px) { .decide .btn, .actions .btn { flex: 1 1 auto; } }
+/* phone: the approval decision stays reachable (newcomer audit P1: Approve was 1,700px down) */
+@media (max-width: 600px) {
+  .proposal .decide { position: sticky; bottom: 76px; z-index: 4; background: var(--color-bg-surface); margin: 16px calc(-1 * min(var(--d-pad), 16px)) 0; padding: 12px min(var(--d-pad), 16px); border-top: 1px solid var(--color-border-subtle); box-shadow: 0 -10px 24px -16px rgb(0 0 0 / .35); }
+  .proposal .decide .btn { flex: 1 1 40%; } .proposal .decide .hint { display: none; }
+  .bothead .lead { font-size: 14px; }
+}

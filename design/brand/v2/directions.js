@@ -93,7 +93,7 @@ export const DIRS = {
   score: {
     name: 'Score',
     tag: 'Work as a score: lanes of activity over time, with personality.',
-    pov: 'conductor shows its work the way a conductor reads it: every workflow and bot is a lane, time runs left to right, and each run is a note. Pattern-finding is spatial: a failure is a red cross on a lane, and a waiting approval is an ember diamond that sits on “now”. A characterful grotesk (Bricolage Grotesque) gives the brand a voice, and a friendly geometric face (Figtree) carries the UI. Surfaces are tinted (pale lilac by day, deep indigo “concert hall” by night) rather than grey, and the shapes are round. Lanes get calm categorical colours for identity; status is shape plus colour. This is the most distinctive and visual of the three.',
+    pov: 'conductor shows its work the way a conductor reads it: every workflow and bot is a lane, time runs left to right, and each run is a note. Pattern-finding is spatial: a failure is a red cross on a lane, and a waiting approval is an ember diamond that sits on “now”. A characterful grotesk (Bricolage Grotesque) gives the brand a voice, and a friendly geometric face (Figtree) carries the UI. Surfaces are tinted (pale lilac by day, deep indigo “concert hall” by night) rather than grey, and the shapes are round. Lanes are named rows, so they need no identity colour: a note is ink when all is well, and status takes shape plus colour. This is the most distinctive and visual of the three.',
     fonts: {
       display: ['Bricolage Grotesque', 'SIL OFL 1.1', 'Headings at 700, tight tracking'],
       sans: ['Figtree', 'SIL OFL 1.1', 'UI and body at 400 / 500 / 700'],
@@ -102,7 +102,7 @@ export const DIRS = {
     shape: 'Round: 12px cards, pill controls and badges, notes as circles and diamonds.',
     space: 'Medium: 8px base, 28px lanes and 44px rows (32 compact).',
     icons: 'Lucide at 2px, plus the staff (five hairlines) as a background motif and lane notes as the illustration.',
-    data: 'Timeline first: the score on the overview, a Gantt for runs, and duration lanes in history. Categorical colour encodes which workflow a run belongs to; status is encoded by shape.',
+    data: 'Timeline first: the score on the overview, a Gantt for runs, and duration lanes in history. Position encodes time, the lane encodes the workflow, and shape plus colour encode status.',
     light: {
       '--color-bg-canvas': '#f3f2f8', '--color-bg-sunken': '#e9e7f2', '--color-bg-surface': '#ffffff', '--color-bg-raised': '#ffffff', '--color-bg-overlay': '#ffffff', '--color-bg-rail': '#1c1a33',
       '--color-border-subtle': '#e5e2ef', '--color-border-default': '#d2cee2', '--color-border-control': '#7f799e',
