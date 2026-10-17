@@ -199,7 +199,7 @@ svg.hello-art { width: 132px; height: auto; flex: none; align-self: flex-start; 
 .uses a { font-family: var(--font-family-mono); font-size: var(--type-code-s-size); color: var(--color-text-secondary); border-bottom: var(--border-width) dotted var(--color-border-strong); }
 .uses a:hover { color: var(--color-text-accent); }
 
-/* ===== sign-in and enrolment: the sunrise, the lockup, one card ===== */
+/* ===== sign-in and enrolment: the lockup, one card ===== */
 .gate { position: fixed; inset: 0; z-index: calc(var(--z-strip) + 10); overflow-y: auto; min-height: var(--dvh); display: grid; place-items: center; padding: var(--space-5); position: relative; overflow: hidden; background: var(--color-bg-canvas); }
 .gate .card { width: min(440px, 100%); position: relative; padding: var(--space-8) var(--space-8) var(--space-6); box-shadow: var(--shadow-3); }
 .gate h1 { font: var(--type-h1); letter-spacing: var(--type-h1-tracking); font-variation-settings: var(--type-h1-variation); margin: var(--space-4) 0 var(--space-2); }
@@ -457,7 +457,6 @@ tr.folded { display: none; }
 .wcard[data-s="run"] { border-color: var(--color-border-subtle); }
 /* run pages: back to the list you came from, stepping through it; a labelled metadata line */
 .run-nav { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
-.run-nav .pager { display: inline-flex; align-items: center; gap: var(--space-1); margin-left: auto; }
 .meta-line { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); margin: calc(-1 * var(--space-6)) 0 var(--gap-section); padding: var(--space-3) 0; border-top: var(--border-width) solid var(--color-border-subtle); border-bottom: var(--border-width) solid var(--color-border-subtle); }
 .meta-line .ml-i { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .meta-line dt { font: var(--type-caption); color: var(--color-text-tertiary); }

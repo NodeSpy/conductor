@@ -25,20 +25,21 @@
   /* ---------- status ---------- */
   /* ---------- status marks, labels, filter chips, counts, row states (css/marks.css) ----------
    * The only way screens draw these. The brand's final status-and-label system swaps in here and in marks.css. */
-  // state → Daylight glyph and default word. Passing work is ink; colour is for failed, waiting, running, needs you.
-  const SG = { ok: ['success', 'ok'], success: ['success', 'done'], run: ['running', 'running'], wait: ['warning', 'waiting'], fail: ['danger', 'failed'], idle: ['neutral', 'idle'], shadow: ['shadow', 'shadow'], ember: ['needs-you', 'needs you'], skip: ['skipped', 'not reached'] };
-  /** A status mark: glyph + word. opts: { cls, sm, tip, id } */
-  UI.statusMark = (s, word, o = {}) => { const g = SG[s] || SG.idle; return `<span class="st${o.sm ? ' sm' : ''}${o.cls ? ' ' + o.cls : ''}" data-s="${s}"${o.id ? ` id="${o.id}"` : ''}${o.tip ? ` data-tip="${UI.esc(o.tip)}"` : ''}><i>${UI.glyph(g[0], s === 'run' ? 'spin' : '')}</i>${word ?? g[1]}</span>`; };
+  // state → Daylight mark and default word (design/brand/status/marks.js STATES)
+  const SG = { ok: ['success', 'Passed'], success: ['success', 'Passed'], run: ['running', 'Running'], wait: ['warning', 'Waiting'], fail: ['danger', 'Failed'], idle: ['neutral', 'Parked'], shadow: ['shadow', 'Shadow'], ember: ['needs-you', 'Needs you'], skip: ['skipped', 'Not reached'], staged: ['staged', 'Not applied'] };
+  /** The mark alone (a 12px state shape in its state colour), for margins, trees and lanes. */
+  UI.mark = (s, o = {}) => { const g = SG[s] || SG.idle; return `<span class="st mk-only${o.lg ? ' lg' : ''}" data-s="${s}"${o.label ? ` role="img" aria-label="${UI.esc(o.label === true ? g[1] : o.label)}"` : ''}><i>${UI.glyph(g[0])}</i></span>`; };
+  /** A status mark: mark + word (marks.js status()). opts: { cls, sm, lg, tip, id } */
+  UI.statusMark = (s, word, o = {}) => { const g = SG[s] || SG.idle; return `<span class="st${o.sm ? ' sm' : ''}${o.lg ? ' lg' : ''}${o.cls ? ' ' + o.cls : ''}" data-s="${s}"${o.id ? ` id="${o.id}"` : ''}${o.tip ? ` data-tip="${UI.esc(o.tip)}"` : ''}><i>${UI.glyph(g[0])}</i>${word ?? g[1]}</span>`; };
   UI.st = (s, label) => UI.statusMark(s, label);
   /** A label: a quiet word. opts: { s (state), mono, cls, icon, tip, attrs } */
   UI.label = (text, o = {}) => `<span class="tag${o.mono ? ' mono' : ''}${o.cls ? ' ' + o.cls : ''}"${o.s ? ` data-s="${o.s}"` : ''}${o.tip ? ` data-tip="${UI.esc(o.tip)}"` : ''}${o.attrs ? ' ' + o.attrs : ''}>${o.icon ? UI.icon(o.icon) : ''}${text}</span>`;
   UI.tag = (t, s) => UI.label(t, { s });
   /** A filter chip: { text, on, act, attrs, icon, cls, tag ('button'|'label'|'a'), href } */
   UI.filterChip = (o) => { const t = o.tag || 'button', on = !!o.on; return `<${t}${t === 'button' ? ' type="button"' : ''}${o.href ? ` href="${o.href}"` : ''} class="chip${on ? ' on' : ''}${o.cls ? ' ' + o.cls : ''}"${t === 'button' ? ` aria-pressed="${on}"` : ''}${o.act ? ` data-act="${o.act}"` : ''}${o.attrs ? ' ' + o.attrs : ''}>${on && !o.icon && !o.noCheck ? UI.icon('check') : o.icon ? UI.icon(o.icon) : ''}${o.text}</${t}>`; };
-  /** Daylight's illustration motif (never part of the logo): the arch rising over a hairline horizon, rays above. */
-  UI.sunrise = (cls = '') => `<svg class="sunrise ${cls}" viewBox="0 0 160 92" aria-hidden="true"><g stroke="var(--color-border-default)" stroke-width="2" stroke-linecap="round">${[-62, -38, -14, 14, 38, 62].map((a) => { const r = Math.PI * (a - 90) / 180; return `<line x1="${(80 + Math.cos(r) * 44).toFixed(1)}" y1="${(70 + Math.sin(r) * 44).toFixed(1)}" x2="${(80 + Math.cos(r) * 54).toFixed(1)}" y2="${(70 + Math.sin(r) * 54).toFixed(1)}"/>`; }).join('')}</g><path d="M46 70a34 36 0 0 1 68 0h-9a25 26 0 0 0-50 0z" fill="var(--color-logo-ink)"/><circle cx="80" cy="70" r="10" fill="var(--color-accent-default)"/><path d="M8 76h144" stroke="var(--color-logo-ink)" stroke-width="2" stroke-linecap="round"/><path d="M30 84h40M90 84h28" stroke="var(--color-border-default)" stroke-width="2" stroke-linecap="round"/></svg>`;
-  /** An empty state: what appears here (a short human title), why it's empty, and the one next step. */
-  UI.empty = ({ title, body = '', action = '', small = false, art = true, cls = '' }) => `<div class="empty${small ? ' small' : ''}${cls ? ' ' + cls : ''}">${art ? UI.sunrise() : ''}<span class="serif">${title}</span>${body ? `<p>${body}</p>` : ''}${action}</div>`;
+  /** An empty state: what appears here (a short human title), why it's empty, and the one next step. No illustration:
+      the logo is never turned into a motif, and a plain useful sentence does the job. */
+  UI.empty = ({ title, body = '', action = '', small = false, cls = '' }) => `<div class="empty${small ? ' small' : ''}${cls ? ' ' + cls : ''}"><span class="serif">${title}</span>${body ? `<p>${body}</p>` : ''}${action}</div>`;
   /** A filter that picks one value: a chip wrapping a native select. { icon, on, label, attrs (on the select), options (html), cls } */
   UI.selectChip = (o) => `<label class="chip chip-sel${o.on ? ' on' : ''}${o.cls ? ' ' + o.cls : ''}"${o.wrapAttrs ? ' ' + o.wrapAttrs : ''}>${o.icon ? UI.icon(o.icon) : ''}<span class="sr-only">${o.label}</span><select ${o.attrs || ''} aria-label="${o.label}">${o.options}</select></label>`;
   /** A group heading in a grouped list or table: "Needs attention · 3", then one plain sentence and at most one action.
@@ -46,16 +47,8 @@
   UI.groupHead = ({ title, n, say = '', action = '', tone = 'done' }) => `<div class="grp-head" data-tone="${tone}"><span class="grp-t">${title}${n != null ? ` <span class="grp-n">· ${n}</span>` : ''}</span>${say ? `<span class="grp-say">${say}</span>` : ''}${action ? `<span class="grp-act">${action}</span>` : ''}</div>`;
   /** The same heading as a table row spanning every column. */
   UI.groupRow = (o) => `<tr class="grp-row" data-tone="${o.tone || 'done'}"><td colspan="20">${UI.groupHead(o)}</td></tr>`;
-  /* ---------- meaning at a glance: what a thing is, what it does, how risky it is, where it lands ----------
-   * Shared components, so the brand's final icon set and risk markers drop in from one place (css/marks.css).
-   * Every icon here has exactly one meaning and is always paired with a word. */
-  UI.OBJ = { approval: 'Approval', run: 'Run', bot: 'Bot', team: 'Team', workflow: 'Workflow', pr: 'Pull request', issue: 'Issue', check: 'Check', incident: 'Incident', deploy: 'Deploy', terraform: 'Terraform', spend: 'Cloud spend', connector: 'Connector', login: 'Login', secret: 'Secret', knowledge: 'Knowledge', config: 'Config change', question: 'Question', browser: 'Browser', update: 'Update', schedule: 'Schedule', message: 'Message', case: 'Case', pack: 'Pack', host: 'Host', sandbox: 'Sandbox' };
-  UI.ACT = { read: 'Reads', post: 'Comments or posts', push: 'Pushes code', change: 'Changes things', infra: 'Applies infrastructure', money: 'Spends money', destroy: 'Deletes or destroys', permission: 'Changes permissions' };
-  /** What a thing is: its icon, and (word) its kind in words. */
-  UI.objectIcon = (k, o = {}) => `<span class="obj" data-obj="${k}"${o.word === false ? ` title="${UI.OBJ[k] || k}"` : ''}>${UI.icon('obj-' + k)}${o.word === false ? `<span class="sr-only">${UI.OBJ[k] || k}</span>` : `<span class="obj-w">${o.label || UI.OBJ[k] || k}</span>`}</span>`;
-  /** What an action does: its icon and its kind in words. */
-  UI.actionIcon = (k, o = {}) => `<span class="act" data-act-kind="${k}" title="${UI.ACT[k] || k}">${UI.icon('act-' + k)}${o.word === false ? `<span class="sr-only">${UI.ACT[k] || k}</span>` : `<span class="act-w">${o.label || UI.ACT[k] || k}</span>`}</span>`;
-  /** The verb → action kind. */
+  /* what a verb does, and how much a decision risks, in plain words: used only inside approval content ("Touches
+   * production", "Spends money"); there is no visual risk scale (the brand's proposal is pending review) */
   UI.actionOf = (verb = '', hint = '') => { const v = String(verb).toLowerCase() + ' ' + String(hint).toLowerCase();
     if (/purchase|buy|savings_plan|reserve|spend|budget\.raise/.test(v)) return 'money';
     if (/destroy|delete|drop|\.rm\b|remove|purge|revoke/.test(v)) return 'destroy';
@@ -65,7 +58,6 @@
     if (/comment|post|reply|review|message|send|notify|page\b/.test(v)) return 'post';
     if (/\.get\b|get_|list|read|search|logs|diff|plan\b|tf-plan|fetch|query|status|watch/.test(v)) return 'read';
     return 'change'; };
-  /* the risk ladder, quiet at the bottom and unmistakable at the top */
   UI.RISK = [['read', 'Reads only'], ['reversible', 'Reversible'], ['change', 'Changes things'], ['prod', 'Touches production'], ['money', 'Spends money'], ['destroy', 'Destructive']];
   /** How risky: from conductor's tier (observe / reversible / propose / commit_money / never), the verb's action and the
       environment it lands in. Returns { level 0..5, key, word }. */
@@ -73,33 +65,12 @@
     if (a === 'permission') lv = 5; else if (a === 'destroy' || destroys > 0 || tier === 'never') lv = 5; else if (a === 'money' || tier === 'commit_money') lv = 4;
     else if (env === 'production' && a !== 'read') lv = 3; else if (a === 'read' || tier === 'observe') lv = 0; else if (tier === 'reversible' || a === 'post') lv = 1; else lv = 2;
     const word = lv === 5 && a === 'permission' ? 'Changes permissions' : UI.RISK[lv][1]; return { level: lv, key: UI.RISK[lv][0], word }; };
-  /* runs: what a run is about (its trigger's object) and what its workflow does */
-  const WF_OBJ = { 'ci-fixer': ['check', 'push'], 'pr-review': ['pr', 'post'], 'issue-triage': ['issue', 'post'], 'dep-bump': ['schedule', 'push'], 'release-notes': ['pr', 'post'], 'incident-intake': ['incident', 'post'], 'assess-and-post': ['message', 'post'], alert: ['incident', 'post'] };
-  UI.runObj = (r) => (String(r.workflow).startsWith('bot:') ? 'bot' : (WF_OBJ[r.workflow] || ['run'])[0]);
-  UI.runRisk = (r) => UI.riskOf({ action: String(r.workflow).startsWith('bot:') ? 'change' : (WF_OBJ[r.workflow] || [0, 'change'])[1] });
-  UI.wfRisk = (w) => UI.riskOf({ action: String(w.name).startsWith('bot:') ? 'change' : (WF_OBJ[w.name] || [0, 'change'])[1] });
-  /** The risk marker: a six-step ladder filled to the level, and the word; top levels coloured and bold. */
-  UI.riskMarker = (r, o = {}) => { if (!r) return ''; const lv = typeof r === 'number' ? r : r.level, word = typeof r === 'number' ? UI.RISK[lv][1] : r.word;
-    return `<span class="risk" data-risk="${lv}" title="${UI.esc(word)}"><span class="risk-ladder" aria-hidden="true">${[0, 1, 2, 3, 4, 5].map((i) => `<i${i <= lv ? ' class="on"' : ''}></i>`).join('')}</span>${o.word === false ? `<span class="sr-only">${word}</span>` : `<span class="risk-w">${word}</span>`}</span>`; };
-  /** Where it lands: production / staging / local. */
-  UI.envTag = (env) => (env ? `<span class="env" data-env="${env}">${env}</span>` : '');
-  /** A labelled metadata line: each item says what it is (an object icon or a word) before its value, so ids and times
-      are never a bare string. items: [{ obj?, label, value, mono? }] */
   /** '23h 52m' → '23 h 52 min': spans people read, not unit codes. */
+  /** '3d 4h 12m' → '3 days': the rail's uptime, to the largest unit. */
+  UI.upFor = (t) => { const m = String(t).match(/(\d+)\s*([dhm])/); if (!m) return t; const n = +m[1]; return `${n} ${{ d: 'day', h: 'hour', m: 'minute' }[m[2]]}${n === 1 ? '' : 's'}`; };
   UI.humanSpan = (t) => String(t).replace(/(\d+)\s*d\b/g, '$1 d').replace(/(\d+)\s*h\b/g, '$1 h').replace(/(\d+)\s*m\b/g, '$1 min').replace(/(\d+)\s*s\b/g, '$1 s');
-  UI.metaLine = (items) => `<dl class="meta-line">${items.filter(Boolean).map((x) => `<div class="ml-i">${x.obj ? UI.objectIcon(x.obj, { word: false }) : ''}<dt>${x.label}</dt><dd${x.mono ? ' class="mono"' : ''}>${x.value}</dd></div>`).join('')}</dl>`;
-  /** What a run's target is, as a labelled item. */
-  UI.targetItem = (r) => { if (!r.repo) return { obj: 'connector', label: 'Started by', value: UI.esc(r.trigger) }; const o = UI.runObj(r); return { obj: ['pr', 'issue', 'check'].includes(o) ? o : 'pr', label: o === 'issue' ? 'Issue' : o === 'check' ? 'Check on' : 'Pull request', value: `${r.repo}${r.number ? '#' + r.number : ''}`, mono: true }; };
-  /** One row anatomy everywhere: [icon: what it is] · [title + context] · [risk] · [status mark + word] · [time] · [action].
-      o: { tag ('a'|'div'), href, obj, kind (word), title, ctx, risk, env, s, sword, time, act, cls, attrs, row (row state) } */
-  UI.row = (o) => { const t = o.tag || (o.href ? 'a' : 'div');
-    return `<${t} class="xrow${o.cls ? ' ' + o.cls : ''}"${o.href ? ` href="${o.href}"` : ''}${UI.rowState(o.row || '')}${o.risk && o.risk.level >= 3 ? ` data-hi="${o.risk.level}"` : ''}${o.attrs ? ' ' + o.attrs : ''}>
-      <span class="xr-obj">${o.obj ? UI.objectIcon(o.obj, { label: o.kind }) : ''}</span>
-      <span class="xr-main"><span class="xr-title">${o.title}</span>${o.ctx ? `<span class="xr-ctx">${o.ctx}</span>` : ''}</span>
-      <span class="xr-risk">${o.risk ? UI.riskMarker(o.risk) : ''}${UI.envTag(o.env)}</span>
-      <span class="xr-status">${o.s ? UI.statusMark(o.s, o.sword) : ''}</span>
-      <span class="xr-time">${o.time || ''}</span>
-      <span class="xr-act">${o.act || ''}</span></${t}>`; };
+  /** The labelled facts of a thing (the run page's Details card): label, then value; ids and times never bare. */
+  UI.facts = (items) => `<dl class="dl-facts">${items.filter(Boolean).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
   /** A count beside a tab or nav item; hot (ember) only where a person is needed. */
   UI.count = (n, o = {}) => `<span class="count${o.hot ? ' hot' : ''}${o.cls ? ' ' + o.cls : ''}"${o.label ? ` aria-label="${UI.esc(o.label)}"` : ''}>${n}</span>`;
   /** Attributes for a row (tr, .item) that needs someone: a thin leading edge in the state's colour, never a tint. */
@@ -139,8 +110,9 @@
     if (/stopped by operator/.test(e)) return 'You stopped it';
     return e; };
   /** The words for a run's state, used in tables and stories. */
-  UI.runWord = (s) => ({ ok: 'Passed', run: 'Running', fail: 'Failed', wait: 'Waiting on you', idle: 'Parked', stopped: 'Stopped' }[s] || s);
-  UI.runS = (s) => (s === 'stopped' ? 'fail' : s);
+  UI.runWord = (s) => ({ ok: 'Passed', run: 'Running', fail: 'Failed', wait: 'Needs you', idle: 'Parked', stopped: 'Stopped' }[s] || s);
+  // a run's state → the status vocabulary (a run waiting on a person's answer needs you; a stopped run is a dash)
+  UI.runS = (s) => ({ stopped: 'skip', wait: 'ember' }[s] || s);
   UI.usd = (v) => v == null ? '—' : v < 0.01 && v > 0 ? '<$0.01' : '$' + v.toFixed(2);
   UI.dur = (ms) => !ms ? '—' : ms < 1000 ? ms + 'ms' : ms < 60000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms / 60000) + 'm';
   UI.md = (t) => UI.esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code class="mono">$1</code>');
@@ -233,20 +205,23 @@
   window.addEventListener('beforeunload', (e) => { if (UI.guard && UI.guard()) { e.preventDefault(); e.returnValue = ''; } });
 
   /* ---------- nav ---------- */
+  // the rail, as in Daylight's mocks (design/brand/v2): the work, then Settings; only "Needs you" is counted hot
   const navGroups = [
-    ['Now', [['overview', 'Overview', 'overview'], ['live', 'Activity', 'live', () => D.runs.filter((r) => r.status === 'run').length], ['attention', 'Needs you', 'attention', () => D.attention.length, true]]],
-    ['Work', [['runs', 'Run history', 'runs'], ['workflows', 'Workflows', 'workflows'], ['bots', 'Bots', 'bots'], ['browser', 'Browsers', 'browser', () => D.browsers.length]]],
-    ['System', [['config', 'Config', 'config'], ['secrets', 'Secrets & vars', 'secrets'], ['extensions', 'Packs & plugins', 'extensions'], ['connectors', 'Connectors & hosts', 'connectors'], ['updates', 'Updates', 'updates', () => (D.daemon.update.available ? 1 : 0)], ['logs', 'Logs & audit', 'logs'], ['security', 'Access', 'shield']]],
+    ['', [['overview', 'Home', 'overview'], ['attention', 'Needs you', 'attention', () => D.attention.length, true], ['activity', 'Activity', 'live'], ['workflows', 'Workflows', 'workflows'], ['bots', 'Bots', 'bots'], ['browser', 'Browsers', 'globe']]],
+    ['Settings', [['connectors', 'Connections', 'connectors'], ['secrets', 'Secrets', 'secrets'], ['extensions', 'Packs', 'extensions'], ['safety', 'Safety', 'shield'], ['system', 'System', 'settings']]],
   ];
   UI.navGroups = navGroups;
-  UI.navHTML = () => navGroups.map(([g, items]) => `<div class="nav-group"><span class="caps">${g}</span><nav class="nav">${items.map(([k, l, ic, c, hot]) => {
+  UI.pageTitle = () => { const k = (location.hash.replace(/^#\/?/, '') || 'overview').split(/[/?]/)[0]; const map = { live: 'activity', runs: 'activity', teams: 'bots', folders: 'bots', config: 'system', updates: 'system', logs: 'system', security: 'system', more: 'more' }; const key = map[k] || k; const hit = navGroups.flatMap(([, x]) => x).find(([n]) => n === key); return hit ? hit[1] : key === 'more' ? 'More' : 'conductor'; };
+  UI.navHTML = () => navGroups.map(([g, items]) => `<div class="nav-group">${g ? `<span class="grp">${g}</span>` : ''}<nav class="nav">${items.map(([k, l, ic, c, hot]) => {
     const n = c ? c() : null;
-    // only what needs someone is counted in the rail; neutral counts are noise
-    return `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span class="lbl">${l}</span>${n && hot ? UI.count(n, { hot }) : ''}</a>`;
+    return `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span class="lbl">${l}</span>${n ? UI.count(n, { hot }) : ''}</a>`;
   }).join('')}</nav></div>`).join('');
   // a page opened from Approvals (or another nav section) keeps that section highlighted, and its Back returns there
   document.addEventListener('click', (e) => { const a = e.target.closest && e.target.closest('a[href^="#/"]'); if (!a) return; const from = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0]; const to = a.getAttribute('href'); if (['attention', 'overview'].includes(from) && /^#\/bots\/[^/]+\/proposals\//.test(to)) UI.navOrigin = { hash: to, nav: from === 'overview' ? 'overview' : 'attention', back: '#/' + from }; else if (!a.closest('.tabbar, .rail')) UI.navOrigin = UI.navOrigin && UI.navOrigin.hash === to ? UI.navOrigin : null; else UI.navOrigin = null; }, true);
+  // pages that live inside another nav destination
+  const NAV_ALIAS = { live: 'activity', runs: 'activity', teams: 'bots', folders: 'bots', config: 'system', updates: 'system', logs: 'system', security: 'system' };
   UI.setNav = (k) => {
+    k = NAV_ALIAS[k] || k;
     if (UI.navOrigin && location.hash === UI.navOrigin.hash) { k = UI.navOrigin.nav; UI.backHref = UI.navOrigin.back; } else UI.backHref = null;
     $$('[data-nav]').forEach((a) => { const on = a.dataset.nav === k; a.classList.toggle('on', on); if (on && location.hash.replace(/^#\/?/, '') === a.dataset.nav) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   };
@@ -356,16 +331,15 @@
     const warn = d.paused || D.connectors.some((c) => !['ok', 'idle'].includes(c.status));
     // the top bar says how things are in words; detail (uptime, version, agents, the address) is one step down
     const health = d.paused ? ['wait', 'Dispatch paused'] : warn ? ['wait', 'Something needs a look'] : ['ok', 'All systems normal'];
+    void running;
     $('#strip-cells').innerHTML = `
       <div class="spacer"></div>
-      <button type="button" class="cell status-btn" data-act="strip-status" aria-label="System status: ${health[1]}" data-tip="${d.paused ? 'Dispatch is paused: no new runs start' : `conductor ${d.version}, up ${UI.humanSpan(d.uptime)}`}">${UI.statusMark(health[0], d.paused ? `<span class="lbl-paused">${health[1]}</span>` : `<span class="lbl-long">${health[1]}</span>`)}</button>
-      <a class="cell quiet" href="#/safety" data-tip="The agent sandbox is on: bots can't touch files or the network beyond what you allowed. See what each bot may do on its own.<br><span class='mono'>backend ${d.sandbox.backend} · ${d.sandbox.containers} containers</span>">${UI.icon('shield')}<span class="lbl-long">Sandbox on</span></a>
-      <a class="cell quiet" href="#/updates" data-tip="conductor ${d.version}${d.update.available ? `; ${d.update.available} is available` : ', up to date'}">${UI.icon('updates')}<span class="lbl-long">${d.update.available ? `Update ready` : d.version}</span></a>
-      ${running ? `<a class="cell quiet" href="#/live" data-tip="Runs in progress"><span><b>${running}</b> running</span></a>` : ''}
-      ${D.pending.length ? `<a class="cell staged" href="#/config/apply" data-tip="Config changes staged but not applied">${UI.icon('edit')}<span><b>${D.pending.length}</b><span class="lbl-long"> to review</span></span></a>` : ''}
-      ${need ? `<a class="cell alert" href="#/attention" aria-label="${need} need you">${UI.count(need, { hot: true })}<span class="lbl-long">need you</span></a>` : ''}`;
+      ${D.pending.length ? `<a class="cell staged" href="#/config/apply">${UI.statusMark('staged', `${D.pending.length} not applied`)}</a>` : ''}
+      <button type="button" class="cell status-btn" data-act="strip-status" aria-label="System status: ${health[1]}">${UI.statusMark(health[0], health[1])}</button>
+      <button type="button" class="cell op-btn" data-act="op-menu" aria-label="${D.operator.name}: account and display"><span class="avatar">${D.operator.name.slice(0, 2)}</span></button>`;
     $('#rail-nav').innerHTML = UI.navHTML();
-    $('#tabbar').innerHTML = [['overview', 'Overview', 'overview'], ['live', 'Activity', 'live'], ['attention', 'Approvals', 'attention', need], ['bots', 'Bots', 'bots'], ['more', 'More', 'grid']].map(([k, l, ic, c]) => `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}${l}${c ? UI.count(c, { hot: true }) : ''}</a>`).join('');
+    $('#tabbar').innerHTML = [['overview', 'Home', 'overview'], ['attention', 'Needs you', 'attention', need], ['activity', 'Activity', 'live'], ['bots', 'Bots', 'bots'], ['more', 'More', 'more']].map(([k, l, ic, c]) => `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span>${l}</span>${c ? UI.count(c, { hot: true }) : ''}</a>`).join('');
+    const pt = $('#ph-title'); if (pt) pt.textContent = UI.pageTitle();
     UI.setNav((location.hash.replace(/^#\/?/, '') || 'overview').split('/')[0]);
   };
 
@@ -373,24 +347,16 @@
     window.D = D;
     document.body.innerHTML = `
       <div class="shell">
+        <aside class="rail">
+          <a class="brand" href="#/overview" aria-label="conductor: home">${UI.logo('lockup')}</a>
+          <div id="rail-nav"></div>
+          <a class="host" href="#/connectors/hosts">${UI.statusMark('ok', '<span class="sr-only">healthy</span>')}<span class="who"><b>${D.daemon.host}</b><span id="host-line">Healthy · up ${UI.upFor(D.daemon.uptime)}</span></span></a>
+        </aside>
         <header class="strip">
-          <a class="brand" href="#/overview" aria-label="conductor: overview">${UI.logo('lockup')}</a>
+          <a class="brand ph-brand" href="#/overview" aria-label="conductor: home">${UI.logo('mark')}<b id="ph-title"></b></a>
           <div class="search" role="button" tabindex="0" data-act="palette" aria-label="Search runs, bots and settings">${UI.icon('search')}<span class="lbl">Search runs, bots and settings</span><span class="kbd">⌘K</span></div>
           <div id="strip-cells" style="display:contents"></div>
         </header>
-        <aside class="rail">
-          <div id="rail-nav"></div>
-          <div class="foot">
-            <a class="host" href="#/connectors/hosts" data-tip="This box, over Tailscale with TLS<br><span class='mono'>${D.daemon.magicdns}</span>">${UI.statusMark('ok', '<span class="sr-only">healthy</span>')}<span class="who"><b>${D.daemon.host}</b><span id="host-line">Healthy · up ${UI.humanSpan(D.daemon.uptime)}</span></span></a>
-            <div class="tools">
-              <span class="op" data-tip="Signed in as ${D.operator.name}, with a passkey"><span class="avatar">${D.operator.name.slice(0, 2)}</span></span>
-              <a class="icon-btn" href="#/glossary" data-tip="Glossary: the words conductor uses" aria-label="Glossary">${UI.icon('info')}</a>
-              <button class="icon-btn" id="theme-btn" data-tip="Light or dark" aria-label="Light or dark" data-act="theme"></button>
-              <button class="icon-btn" data-act="demo-menu" data-tip="Demo data: which day the prototype shows, or reset it" aria-label="Demo data">${UI.icon('sparkle')}</button>
-              <a class="icon-btn" href="#/signin" data-tip="Lock (sign out)" aria-label="Lock">${UI.icon('lock')}</a>
-            </div>
-          </div>
-        </aside>
         <main class="main" id="main"></main>
         <nav class="tabbar" id="tabbar"></nav>
       </div>`;
@@ -463,7 +429,7 @@
     UI.menu(b, [[d.paused ? 'Resume dispatch…' : 'Pause dispatch…', d.paused ? 'play' : 'pause', 'pause'], ['-'], [`conductor ${d.version}, ${d.paused ? 'paused' : 'up'} ${UI.humanSpan(d.uptime)}${d.update.available ? ` · ${d.update.available} ready` : ''}`, 'server', 'strip-go', 'data-href="#/updates"'], [`Sandbox enforcing: what bots can do`, 'shield', 'strip-go', 'data-href="#/safety"'], [`Agents healthy (${d.paseo.agents})`, 'bots', 'strip-go', 'data-href="#/connectors/runtimes"'], [`${running} running now`, 'live', 'strip-go', 'data-href="#/live"'], ...(D.pending.length ? [[`${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review`, 'edit', 'strip-go', 'data-href="#/config/apply"']] : []), ['-'], [`${d.magicdns} · TLS`, 'lock', 'strip-go', 'data-href="#/security"']]); });
   /** Demo data (prototype only): which fake day to show, chosen per browser (js/scenario.js), or reset the current one. */
   UI.DEMOS = [['calm', 'A mostly healthy day', 'Dozens of runs; one approval and one failure need you'], ['quiet', 'All quiet', 'Nothing needs you; every system healthy'], ['full', 'Everything at once', 'Every kind of exception, to try each flow']];
-  UI.setDemo = (k) => { try { localStorage.setItem('cd-demo', k); localStorage.removeItem('cd-proto-state-v5'); localStorage.removeItem('cd-last-looked'); } catch (e) {} location.reload(); };
+  UI.setDemo = (k) => { try { localStorage.setItem('cd-demo', k); localStorage.removeItem('cd-proto-state-v5'); } catch (e) {} location.reload(); };
   UI.act('demo-menu', (b) => UI.menu(b, UI.DEMOS.map(([k, t]) => [`${D.demo === k ? '● ' : ''}${t}`, k === 'quiet' ? 'check' : k === 'full' ? 'grid' : 'sun', 'demo-set', `data-k="${k}"`]).concat([['-'], ['Reset this day’s demo data', 'undo', 'reset-demo']])));
   UI.act('demo-set', (b) => { UI.closeMenu(); UI.setDemo(b.dataset.k); });
   /** Pause or resume dispatch: weighty, so it says what it does and asks first. Lives in the status menu and the System row. */
@@ -471,6 +437,9 @@
   UI.act('pause', () => { UI.closeMenu(); const on = !D.daemon.paused;
     UI.confirm(on ? { title: 'Pause dispatch?', body: 'No new runs start until you resume: events from GitHub, Slack, schedules and bots wait in the queue. Runs already going finish normally. Nothing is lost.', ok: 'Pause dispatch', danger: true } : { title: 'Resume dispatch?', body: 'Queued events start their runs now, oldest first.', ok: 'Resume dispatch' }).then((ok) => { if (ok) UI.setPaused(on); }); });
   UI.act('strip-go', (b) => { UI.closeMenu(); UI.go(b.dataset.href); });
+  /** The avatar menu: who you are, the display preferences, the glossary, the prototype's demo data, and Lock. */
+  UI.act('op-menu', (b) => UI.menu(b, [[`Signed in as ${D.operator.name}`, 'shield', 'strip-go', 'data-href="#/security"'], ['-'], [document.documentElement.dataset.theme === 'dark' ? 'Light theme' : 'Dark theme', document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon', 'theme-menu'], ['Display preferences', 'settings', 'strip-go', 'data-href="#/config/display"'], ['Glossary', 'info', 'strip-go', 'data-href="#/glossary"'], ['Demo data…', 'sparkle', 'demo-menu'], ['-'], ['Lock', 'lock', 'strip-go', 'data-href="#/signin"']]));
+  UI.act('theme-menu', () => { UI.closeMenu(); UI.theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); });
   UI.act('theme', () => UI.theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
   UI.act('palette', () => UI.palette());
   UI.act('close-modal', () => UI.closeModal());
@@ -655,8 +624,10 @@
   UI.humanCron = (c) => { const f = String(c).trim().split(/\s+/); if (f.length !== 5 || !/^\d+$/.test(f[0]) || !/^\d+$/.test(f[1])) return c; const t = `${f[1].padStart(2, '0')}:${f[0].padStart(2, '0')}`, D7 = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'];
     if (f[2] === '*' && f[3] === '*' && f[4] === '*') return `Every day at ${t}`; if (f[2] === '*' && f[3] === '*' && /^[0-6]$/.test(f[4])) return `${D7[+f[4]]} at ${t}`; if (f[2] === '*' && f[3] === '*' && f[4] === '1-5') return `Weekdays at ${t}`; if (/^\d+$/.test(f[2]) && f[3] === '*' && f[4] === '*') return `On day ${f[2]} of each month at ${t}`; return c; };
   UI.humanOn = (on) => String(on || '').replace(/schedule ((?:\S+\s+){4}\S+)/, (m, c) => { const h = UI.humanCron(c); return h === c ? m : `${h} (schedule)`; });
-  /** The sticky bulk bar: n selected, actions [[label, icon, act, attrs?, offReason?]], and a clear action. */
-  UI.bulkBar = (n, noun, actions, clearAct) => `<div class="bulk-bar" role="region" aria-label="Bulk actions"><b>${n} ${noun}${n > 1 ? 's' : ''} selected</b>${actions.map(([l, ic, act, attrs = '', off]) => `<button class="btn sm" ${off ? UI.off(off) : `data-act="${act}" ${attrs}`}>${UI.icon(ic)}${l}</button>`).join('')}<button class="btn sm ghost" data-act="${clearAct}" style="margin-left:auto">Clear</button></div>`;
+  /** The selection bar, one pattern for every list with bulk select: while anything is checked it replaces the list's
+      header (or filter) row in place, pinned at the top while you scroll: "3 selected", the actions that apply to the
+      selection [[label, icon, act, attrs?, offReason?]], "Select all N matching" and Clear. o: { all: n, allAct } */
+  UI.bulkBar = (n, noun, actions, clearAct, o = {}) => `<div class="dl-selbar" role="region" aria-label="Selection"><b>${n} selected</b>${actions.map(([l, ic, act, attrs = '', off]) => `<button class="btn sm secondary" ${off ? UI.off(off) : `data-act="${act}" ${attrs}`}>${ic ? UI.icon(ic) : ''}${l}</button>`).join('')}<span class="dl-sp"></span>${o.all && o.all > n ? `<button class="btn sm ghost" data-act="${o.allAct}">Select all ${o.all} matching</button>` : ''}<button class="btn sm ghost" data-act="${clearAct}">Clear</button></div>`;
   /** Download a text file (exports). */
   UI.download = (name, text, type = 'application/json') => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 100); UI.lastDownload = name; };
 

@@ -2,7 +2,7 @@
 (function () {
   const { icon, st, tag, ago, esc } = UI;
   const baton = () => UI.logo('lockup', 'gate-mark'); // rendered per visit: the kit's mark loads after this file
-  const gate = (inner) => `<div class="gate">${UI.sunrise('gate-art')}${inner}</div>`;
+  const gate = (inner) => `<div class="gate">${inner}</div>`;
 
   UI.route('signin', () => ({
     toString: () => gate(`<div class="panel card"><div class="row">${baton()}</div>
