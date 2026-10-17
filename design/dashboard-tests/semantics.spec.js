@@ -115,13 +115,14 @@ test('one widening classifier: egress, grants and repos are caught; an official 
 
 test('Safety: every bot in words (on its own / asks you first / never), linked from the sandbox chip', async ({ page }) => {
   await go(page, '#/overview', { fresh: true });
-  if (!(await page.locator('.strip a.cell[href="#/safety"]').isVisible())) await go(page, '#/safety'); else await page.locator('.strip a.cell[href="#/safety"]').click();
-  await expect(page.locator('.page-head h1')).toHaveText(/Safety/);
+  await page.locator('.nav a[data-nav="safety"]').first().click().catch(() => go(page, '#/safety'));
+  await expect(page.locator('.dl-phead h1')).toHaveText(/Safety/);
   await expect(page.locator('.tier-ladder')).toContainText('commit_money');
+  // each bot's three groups, as the approved "What it can do": in plain words
   const sre = page.locator('.panel', { hasText: 'platform-sre' }).first();
-  await expect(sre.locator('.can-col.own')).toContainText('slack-ops.post');
-  await expect(sre.locator('.can-col.asks')).toContainText('tf-apply.apply');
-  await expect(sre.locator('.can-col.never')).toContainText('gh.delete_*');
+  await expect(sre.locator('.cang[data-s="ok"]')).toContainText('post a message');
+  await expect(sre.locator('.cang[data-s="ember"]')).toContainText('apply a signed plan');
+  await expect(sre.locator('.cang[data-s="fail"]')).toContainText('anything matching gh.delete_*');
   await go(page, '#/bots/platform-sre/access');
-  await expect(page.locator('.can-col.own')).toContainText('slack-ops.post');
+  await expect(page.locator('.dl-can .cang[data-s="ok"]')).toContainText('post a message');
 });

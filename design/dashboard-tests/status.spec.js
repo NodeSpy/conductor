@@ -1,8 +1,8 @@
-// One status, one look. Every status a screen shows (running, passed, failed, waiting …) is drawn by the shared
-// status mark (UI.statusMark: a glyph plus a word, js/ui.js), so "Running" reads the same on the run page, the
-// lists, the lanes and the rail. Static: no screen hand-writes a status mark or a status dot, and the running hue
-// is only in tokens.css (running is ordinary work, drawn in ink). Rendered, on every route: each mark carries its
-// glyph and its state, and each state has one colour across the whole app.
+// One status, one look. Every status a screen shows (running, passed, failed, needs you …) is drawn by the shared
+// status mark (UI.statusMark / UI.mark, exactly the brand's status/marks.js vocabulary), so "Running" reads the same
+// on the run page, in Activity, on Home and in the rail. Static: no screen hand-writes a status mark or dot, and no
+// screen stylesheet picks a status hue. Rendered, on every route: each mark carries its glyph and its state, and each
+// state has one colour across the whole app.
 const fs = require('fs');
 const path = require('path');
 const { test, expect, go } = require('./fixtures');
@@ -20,8 +20,9 @@ test('statuses are built only by the shared status mark', () => {
     }
     for (const m of text.matchAll(/--color-status-running/g)) bad.push(`${rel}: ${m[0]}`);
   }
+  // state colours live in the vocabulary (marks.css) and the tokens; screens' stylesheets never pick a status hue
   for (const f of files(path.join(PROTO, 'css'), /\.css$/)) {
-    if (f.endsWith('tokens.css')) continue;
+    if (/tokens\.css$|marks\.css$/.test(f)) continue;
     for (const m of fs.readFileSync(f, 'utf8').matchAll(/--color-status-running/g)) bad.push(`${path.relative(PROTO, f)}: ${m[0]}`);
   }
   expect(bad).toEqual([]);
@@ -61,10 +62,13 @@ for (const theme of ['light', 'dark']) {
   });
 }
 
-test('running looks the same on the run page as everywhere else: ink, not a hue', async ({ page }) => {
-  await go(page, '#/live/r-7f3a');
-  const r = await page.evaluate(() => { const st = document.querySelector('.page-head .st[data-s="run"]'); const ink = getComputedStyle(document.documentElement).getPropertyValue('--color-text-secondary').trim(); const probe = document.createElement('span'); probe.style.color = ink; document.body.appendChild(probe); const want = getComputedStyle(probe).color; probe.remove(); return { have: st && getComputedStyle(st).color, glyph: st && getComputedStyle(st.querySelector('i')).color, want, word: st && st.textContent.trim() }; });
-  expect(r.word).toMatch(/running/i);
-  expect(r.have).toBe(r.want);
-  expect(r.glyph).toBe(r.want);
+test('running looks the same on the run page as in Activity: the vocabulary’s running mark and word', async ({ page }) => {
+  const look = (sel) => page.evaluate((q) => { const st = document.querySelector(q); if (!st) return null; const probe = document.createElement('span'); probe.style.color = 'var(--color-status-running-fg)'; document.body.appendChild(probe); const fg = getComputedStyle(probe).color; probe.style.color = 'var(--color-status-running-solid)'; const solid = getComputedStyle(probe).color; probe.remove(); return { word: st.textContent.trim(), color: getComputedStyle(st).color, mark: getComputedStyle(st.querySelector('i')).color, fg, solid }; }, sel);
+  await go(page, '#/runs/r-7f3a', { fresh: true });
+  const a = await look('.dl-phead .st[data-s="run"]');
+  expect(a.word).toMatch(/running/i);
+  expect(a.color).toBe(a.fg); expect(a.mark).toBe(a.solid);
+  await go(page, '#/activity');
+  const b = await look('#act-tbl .g-live .st[data-s="run"]');
+  expect([b.color, b.mark]).toEqual([a.color, a.mark]);
 });

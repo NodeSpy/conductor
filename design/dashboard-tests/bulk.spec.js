@@ -42,13 +42,13 @@ test('runs: the selection bar takes the header row; retry the failed ones in one
   await expect(page).toHaveURL(/#\/activity$/); // ticking doesn't open the row
   // pinned: it stays at the top of the list while you scroll
   expect(await bar.evaluate((el) => getComputedStyle(el.closest('th')).position)).toBe('sticky');
-  await expect(page.locator('[data-act="act-bulk-stop"]')).toHaveAttribute('aria-disabled', 'true'); // nothing selected is running
-  await page.locator('[data-act="act-bulk-retry"]').click();
+  await expect(page.locator('#act-tbl .dl-selbar button', { hasText: 'Stop' })).toHaveAttribute('aria-disabled', 'true'); // nothing selected is running
+  await page.locator('#act-tbl [data-act="act-bulk-retry"]').click();
   await page.locator('#cf-ok').click();
   expect(await page.evaluate(() => D.runs.filter((r) => ['r-7ef0', 'r-7e64'].includes(r.retry_of)).length)).toBe(2);
   await expect(page.locator('.dl-selbar')).toHaveCount(0); // the header row is back
   await page.locator('#act-tbl input[data-act="act-sel-row"][data-id="r-7f2c"]').click();
-  await page.locator('[data-act="act-bulk-stop"]').click();
+  await page.locator('#act-tbl [data-act="act-bulk-stop"]').click();
   await expect(page.locator('#cf-cancel')).toBeFocused();
   await page.locator('#cf-ok').click();
   expect(await page.evaluate(() => D.runs.find((r) => r.id === 'r-7f2c').status)).toBe('stopped');

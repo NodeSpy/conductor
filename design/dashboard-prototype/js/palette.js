@@ -91,17 +91,17 @@
   };
 
   /* ---------- single-key shortcuts ---------- */
-  const KEYS = [['⌘K / Ctrl K', 'command line: find anything, run actions'], ['?', 'this sheet'], ['/', 'focus the page\'s search or filter'], ['g o', 'Overview'], ['g l', 'Live'], ['g a', 'Needs you (approvals)'], ['g r', 'Run history'], ['g w', 'Workflows'], ['g b', 'Bots'], ['g c', 'Config'], ['g s', 'Secrets & vars'], ['j / k', 'next / previous row in a list'], ['Enter', 'open the selected row'], ['x', 'tick the selected row (bulk select)'], ['Esc', 'close a dialog, drawer or menu']];
+  const KEYS = [['⌘K / Ctrl K', 'command line: find anything, run actions'], ['?', 'this sheet'], ['/', 'focus the page\'s search or filter'], ['g h', 'Home'], ['g a', 'Needs you'], ['g r', 'Activity (every run)'], ['g w', 'Workflows'], ['g b', 'Bots'], ['g c', 'Config'], ['g s', 'Secrets & vars'], ['j / k', 'next / previous row in a list'], ['Enter', 'open the selected row'], ['x', 'tick the selected row (bulk select)'], ['Esc', 'close a dialog, drawer or menu']];
   UI.shortcuts = () => UI.modal(`<div class="modal-head"><div><div class="caps">help</div><h2>Keyboard shortcuts</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div><div class="modal-body"><dl class="gloss keys">${KEYS.map(([k, d]) => `<div><dt><span class="kbd">${esc(k)}</span></dt><dd>${esc(d)}</dd></div>`).join('')}</dl></div>`);
-  const GO = { o: 'overview', l: 'live', a: 'attention', r: 'runs', w: 'workflows', b: 'bots', c: 'config', s: 'secrets' };
+  const GO = { h: 'overview', o: 'overview', l: 'activity', a: 'attention', r: 'activity', w: 'workflows', b: 'bots', c: 'config', s: 'secrets' };
   let gAt = 0, kSel = -1;
-  const rows = () => [...document.querySelectorAll('#main tr[data-href], #main tr.click, #main a.item, #main .item.click, #main .ftree .frow a, #main .kind-entries .entry')].filter((r) => r.offsetParent);
+  const rows = () => [...document.querySelectorAll('#main tr[data-href], #main tr.click, #main a.item, #main .item.click, #main .dl-list > li > a, #main .ftree .frow a, #main .kind-entries .entry')].filter((r) => r.offsetParent);
   const mark = (rs, i) => { rs.forEach((r) => r.classList.remove('kbd-sel')); const r = rs[i]; if (!r) return; r.classList.add('kbd-sel'); r.scrollIntoView({ block: 'nearest' }); };
   document.addEventListener('keydown', (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target; if (t && (t.closest('input, textarea, select, [contenteditable="true"]') || document.querySelector('.scrim, .drawer-scrim, .palette'))) return;
     if (e.key === '?') { e.preventDefault(); UI.shortcuts(); return; }
-    if (e.key === '/') { const f = document.querySelector('#main .filters input, #main input[type="search"], #main .input-icon input, #main [data-on-change="rp-q"]'); if (f) { e.preventDefault(); f.focus(); } return; }
+    if (e.key === '/') { const f = document.querySelector('#main .dl-filters input, #main .filters input, #main input[type="search"], #main .input-icon input, #main [data-on-change="rp-q"]'); if (f) { e.preventDefault(); f.focus(); } return; }
     if (e.key === 'g') { gAt = Date.now(); return; }
     if (gAt && Date.now() - gAt < 1200 && GO[e.key]) { e.preventDefault(); gAt = 0; UI.go('#/' + GO[e.key]); kSel = -1; return; }
     gAt = 0;

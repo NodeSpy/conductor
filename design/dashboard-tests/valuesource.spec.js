@@ -76,7 +76,9 @@ test('a mixed-source login: typed username, password and TOTP from the same 1Pas
   await expect(page.locator('.diff')).toContainText('key: login-app2-username');
   await applyStaged(page);
   await go(page, '#/browser/logins');
-  await expect(page.locator('[data-login="app2"]')).toContainText('op · Agents/App/password');
+  await page.locator('[data-act="login-more"][data-n="app2"]').click();
+  await page.locator('#pop-menu [data-act="login-uses"]').click();
+  await expect(page.locator('[data-login="app2"]')).toContainText('{{ vault "op" "Agents/App/password" }}');
   expect(await leaked(page, 'svc-mixed-77')).toEqual([]);
 });
 

@@ -344,7 +344,7 @@
     const t = teamOf(m), open = D.cases.filter((c) => c.bot === m.name && c.status === 'open'), cur = open[0];
     const role = (S.staged('bots', m.name) || m.cfg || {}).description || m.role || (t ? `A bot on the ${t.name} team` : 'A bot');
     const now = m.shadow ? UI.statusMark('shadow', 'In shadow mode') : m.home === 'live' ? UI.statusMark('run', cur ? `Working on case ${cur.id}` : 'Working') : UI.statusMark('idle', 'Idle');
-    return `<div class="dl-crumbs">${UI.folderCrumbs(UI.folderOfBot(m.name, false))}${t ? `${icon('chev')}<a href="#/teams/${t.name}">team ${t.name}</a>` : ''}</div>
+    return `<div class="dl-crumbs">${UI.folderCrumbs(UI.folderOfBot(m.name, false))}${t ? ` › <a href="#/teams/${t.name}">team ${t.name}</a>` : ''}</div>
       <div class="dl-bothead"><span class="dl-bot-av">${esc(m.name.split(/[-_]/).map((w) => w[0]).join('').slice(0, 2))}</span><div><h1>${esc(m.name)}</h1><p class="dl-lead">${esc(role)}</p></div>${now}
         <button class="icon-btn" data-act="bot-more" data-m="${m.name}" aria-label="More for ${esc(m.name)}">${icon('more')}</button></div>`;
   }

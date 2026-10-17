@@ -1,43 +1,21 @@
-// A newcomer's first minutes: the overview says what conductor is and offers
-// four plain first steps with ticks; New bot asks what it should do, what it
+// A newcomer's first minutes: Home offers the first steps that are left, the next one as the primary button; New bot asks what it should do, what it
 // watches, where it tells you and what it may do, and writes real config; a
 // bot that watches nothing says so. (Sam B1, B2, m2; Riley M9 tiles/score)
 const { test, expect, go, isPhone } = require('./fixtures');
 
-test('overview: one-line explanation, Get started with derived ticks, hide and bring back', async ({ page }) => {
+test('Home: Get started lists what is left, derived from the setup; done steps sit in one quiet line; hide', async ({ page }) => {
   await go(page, '#/overview', { fresh: true });
-  await expect(page.locator('.page-head')).toContainText('anything risky waits for your passkey');
-  const gs = page.locator('.panel.gs');
-  await expect(gs.locator('.gs-card')).toHaveCount(4);
-  await expect(gs.locator('[data-gs="connect"]')).toHaveClass(/done/); // connectors exist in the demo
-  await expect(gs.locator('[data-gs="safety"]')).not.toHaveClass(/done/);
-  await gs.locator('[data-gs="safety"]').click();
+  const gs = page.locator('.dl-gs');
+  await expect(gs.locator('[data-gs="connect"]')).toHaveCount(0); // connectors exist in the demo: done
+  await expect(gs.locator('.dl-gs-done')).toContainText('Connect a service');
+  await expect(gs.locator('[data-gs="safety"]')).toBeVisible();
+  await gs.locator('[data-gs="safety"] .btn').click();
   await expect(page).toHaveURL(/#\/safety/);
   await go(page, '#/overview');
-  await expect(page.locator('[data-gs="safety"]')).toHaveClass(/done/);
+  await expect(page.locator('.dl-gs [data-gs="safety"]')).toHaveCount(0);
+  await expect(page.locator('.dl-gs .dl-gs-done')).toContainText('Check what your bots can do');
   await page.locator('[data-act="gs-hide"]').click();
-  await expect(page.locator('.panel.gs')).toHaveCount(0);
-  await page.locator('[data-act="gs-show"]').click();
-  await expect(page.locator('.panel.gs')).toBeVisible();
-});
-
-test('overview: "Runs, last 12h" (not "The score"), busiest rows first, filtered by folder; System is collapsed', async ({ page }) => {
-  await go(page, '#/overview', { fresh: true });
-  const runs = page.locator('.panel.score');
-  await expect(runs.locator('h3')).toHaveText('Runs, last 12h');
-  await expect(page.locator('text=The score')).toHaveCount(0);
-  await expect(runs.locator('.lane-name').first()).toHaveText('pr-review');
-  await runs.locator('[data-on-change="folder-scope"]').selectOption({ index: 1 });
-  const n = await runs.locator('.lane').count();
-  expect(n).toBeLessThan(6);
-  const sys = page.locator('details.sys-card');
-  await expect(sys).not.toHaveAttribute('open', '');
-  await expect(sys.locator('summary')).toContainText('System');
-  await sys.locator('summary').click();
-  await expect(sys.locator('.list')).toContainText('conductor');
-  // the Bots tile reads "6 bots", with the live count in words
-  await expect(page.locator('.stat.bots .v')).toContainText('bots');
-  await expect(page.locator('.stat.bots .d')).toContainText('in a live session');
+  await expect(page.locator('.dl-gs')).toHaveCount(0);
 });
 
 test('New bot: purpose → watches → tells you where → what it may do → review, staged as a bot plus a trigger', async ({ page }) => {
@@ -56,8 +34,8 @@ test('New bot: purpose → watches → tells you where → what it may do → re
   await page.fill('#bw-channel', '#incidents');
   await page.locator('[data-act="bw-next"]').click();
   await page.locator('[data-act="bw-preset"][data-v="read"]').click();
-  await expect(page.locator('.can-col.own')).toContainText('slack-ops.post'); // it tells you on its own
-  await expect(page.locator('.can-col.never')).toContainText('gh.comment');
+  await expect(page.locator('.dl-can .cang[data-s="ok"]')).toContainText('post a message'); // it tells you on its own
+  await expect(page.locator('.dl-can .cang[data-s="fail"]')).toContainText('comment on an issue or PR');
   await expect(page.locator('details.adv')).not.toHaveAttribute('open', '');
   await page.locator('[data-act="bw-next"]').click();
   await expect(page.locator('.bw-body')).toContainText('in #incidents via slack-ops');
@@ -107,5 +85,8 @@ test('terms explain themselves (hover or keyboard focus); the glossary lists the
   await expect(page.locator('#g-provenance')).toContainText('no more trust');
   await expect(page.locator('#g-tier')).toContainText('observe');
   await expect(page.locator('#strip-cells')).not.toContainText('paseo');
-  await expect(page.locator('#strip-cells a[href="#/updates"]')).toHaveAttribute('data-tip', /available/);
+  // an available update is said quietly in the status menu, not as a chip in the top bar
+  await expect(page.locator('#strip-cells a[href="#/updates"]')).toHaveCount(0);
+  await page.locator('#strip-cells .status-btn').click();
+  await expect(page.locator('#pop-menu')).toContainText('installs itself within 10 min');
 });

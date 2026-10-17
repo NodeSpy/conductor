@@ -278,7 +278,7 @@
 .wfb-page .trig-card { border: 0; border-radius: 10px; background: var(--color-accent-subtle); }
 .wfb-page .trig-card .sc-ic.trig { background: none; border: 0; color: var(--color-text-accent); }
 .wfb-page .sc-head { gap: 14px; padding: 12px 14px; }
-.wfb-page .sc-head .grip { display: none; }
+.wfb-page .sc-head .grip { opacity: .45; } .wfb-page .step-card:hover .sc-head .grip { opacity: 1; }
 .wfb-page .sc-num { width: 30px; height: 30px; min-width: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--color-bg-sunken); font: var(--type-label); font-size: 14px; font-weight: var(--font-weight-bold); color: var(--color-text-primary); }
 .wfb-page .sc-title b { font: var(--type-body-m); font-weight: var(--font-weight-bold); }
 .wfb-page .sc-sum { font: var(--type-body-s); color: var(--color-text-secondary); white-space: normal; }
@@ -425,3 +425,5 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 .wfb-page .wfb-side-card .wfb-side { border: 0; background: none; max-height: 520px; min-height: 0; }
 .wfb-page .wfb-side-card .side-body { overflow: auto; }
 .tbl thead.selecting th { position: sticky; top: 0; z-index: 3; padding: 0; background: var(--color-bg-raised); text-transform: none; letter-spacing: 0; }
+[data-density="compact"] .dl-tbl td { height: 36px; }
+[data-density="compact"] .dl-tbl tr.attn td { padding-top: 6px; padding-bottom: 6px; }

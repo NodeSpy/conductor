@@ -29,7 +29,7 @@ test('assign a bot from its definition; the team ceiling and team tiers are enfo
   await page.locator('[data-act="df-review"]').click();
   await applyStaged(page);
   await go(page, '#/bots/release-scribe');
-  await expect(page.locator('.bot-hero')).toContainText('team platform');
+  await expect(page.locator('.dl-crumbs')).toContainText('team platform');
   // finance's ceiling is observe: no bot on it may run anything without asking
   await go(page, '#/bots/billing-sre/access');
   await page.selectOption('select[data-v="slack-ops.post"]', 'reversible');
@@ -118,7 +118,7 @@ test('links are pairs of bots (bot_links), never whole teams; a lead change is a
 test('old member links land on the bots pages', async ({ page }) => {
   await go(page, '#/members/platform-sre/cases');
   await expect(page).toHaveURL(/#\/bots\/platform-sre\/cases/);
-  await expect(page.locator('.page-head, .bot-hero').first()).toContainText('platform-sre');
+  await expect(page.locator('.page-head, .dl-bothead').first()).toContainText('platform-sre');
   await go(page, '#/bots');
   await expect(page.locator('.page-head h1')).toContainText('Bots');
   if (page.viewportSize().width > 720) await expect(page.locator('.frow.bot', { hasText: 'release-scribe' })).toContainText('solo'); // a solo bot

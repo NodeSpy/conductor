@@ -14,7 +14,7 @@ const OPENERS = [
   ['#/teams/platform/routing', '[data-act="rule-edit"]', 'routing rule'],
   ['#/config/collections', '[data-act="coll-new"]', 'new collection'],
   ['#/bots/release-scribe', '[data-act="bot-watch-add"]', 'add what it watches'],
-  ['#/extensions/packs', '[data-act="pack-ov"]', 'pack overrides'],
+  ['#/extensions/packs', '[data-act="pack-plan"][data-update="1"]', 'pack update plan'],
 ];
 const open = () => page => page.locator('.scrim, .drawer-scrim, .cdrawer, .modal').count();
 
@@ -57,6 +57,7 @@ test('destructive confirmations focus Cancel', async ({ page }) => {
   await page.keyboard.press('Escape');
   await go(page, '#/config/collections');
   await go(page, '#/workflows');
-  await page.locator('[data-act="wf-del"]').first().click();
+  await page.locator('[data-act="wl-more"][data-name="ci-fixer"]').click();
+  await page.locator('#pop-menu [data-act="wf-del"]').click();
   await expect(page.locator('#cf-cancel')).toBeFocused();
 });

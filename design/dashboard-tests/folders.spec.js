@@ -66,7 +66,7 @@ test('search across folders; breadcrumbs on bot and team pages', async ({ page }
   await expect(page.locator('#ftree')).toContainText('platform-data');
   await expect(page.locator('#ftree')).not.toContainText('homelab');
   await go(page, '#/bots/platform-data');
-  await expect(page.locator('.bot-hero .crumbs')).toContainText('Bots › work › platform › team platform › platform-data');
+  await expect(page.locator('.dl-crumbs')).toContainText('Bots › work › platform › team platform');
   await go(page, '#/teams/finance');
   await expect(page.locator('.crumbs').first()).toContainText('Bots › work › billing');
 });
@@ -82,19 +82,21 @@ test('phone: the tree collapses to a drill-down list', async ({ page }) => {
   await expect(page.locator('.page-head .crumbs')).toContainText('work');
 });
 
-test('folder filters: Needs you, approvals, run history, browsers', async ({ page }) => {
-  await go(page, '#/overview');
-  await page.locator('.attn select[data-on-change="folder-scope"]').selectOption('work/billing');
-  await expect(page.locator('.attn .list')).toContainText('Post the monthly forecast to #incidents');
-  await expect(page.locator('.attn .list')).not.toContainText('Replace the production web server');
+test('folder filters: Needs you (and Home with it), Activity, browsers', async ({ page }) => {
+  await go(page, '#/attention');
+  await page.locator('select[data-on-change="folder-scope"]').first().selectOption('work/billing');
+  await expect(page.locator('.dl-needs')).toContainText('Post the monthly forecast to #incidents');
+  await expect(page.locator('.dl-needs')).not.toContainText('Replace the production web server');
   await expect(page.locator('.scope-note').first()).toContainText('work/billing');
+  await go(page, '#/overview');
+  await expect(page.locator('.dl-needs')).not.toContainText('Replace the production web server');
   await go(page, '#/attention');
   await expect(page.locator('select[data-on-change="folder-scope"]').first()).toHaveValue('work/billing');
   await page.locator('select[data-on-change="folder-scope"]').first().selectOption('work/platform');
-  await expect(page.locator('.attn')).toContainText('Replace the production web server');
-  await go(page, '#/runs');
-  await expect(page.locator('#hist-body')).toContainText('bot:platform-sre');
-  await expect(page.locator('#hist-body')).not.toContainText('ci-fixer');
+  await expect(page.locator('.dl-needs')).toContainText('Replace the production web server');
+  await go(page, '#/activity');
+  await expect(page.locator('#act-tbl')).toContainText('platform-sre');
+  await expect(page.locator('#act-tbl')).not.toContainText('ci-fixer');
   await go(page, '#/browser');
   await expect(page.locator('.btile')).toHaveCount(1);
   await page.locator('[data-act="folder-clear"]').first().click();
@@ -121,7 +123,8 @@ test('workflows in folders: move one through the diff; folder filters and search
     await expect(page.locator('#wl-note')).toContainText('every folder');
     await page.fill('[data-on-input="wl-q"]', '');
   }
-  await page.locator('[data-act="wl-move"][data-name="ci-fixer"]').click();
+  await page.locator('[data-act="wl-more"][data-name="ci-fixer"]').click();
+  await page.locator('#pop-menu [data-act="wl-move"]').click();
   await page.selectOption('#f-to', 'work/web');
   await page.locator('#gen-submit').click();
   await page.goto(page.url().replace(/#.*/, '#/config/apply'));
@@ -135,8 +138,11 @@ test('a pack workflow sits under its pack until placed by an override; a bot wor
   await go(page, '#/workflows', { fresh: true });
   await expect(wlRow(page, 'pr-review').locator('td[data-l="folder"]')).toContainText('packs/review');
   await expect(wlRow(page, 'bot:platform-sre').locator('td[data-l="folder"]')).toContainText('work/platform');
-  await expect(wlRow(page, 'bot:platform-sre').locator('button[aria-label^="Move"]')).toHaveAttribute('data-reason', /move the bot/);
-  await page.locator('[data-act="wl-move"][data-name="pr-review"]').click();
+  await page.locator('[data-act="wl-more"][data-name="bot:platform-sre"]').click();
+  await expect(page.locator('#pop-menu button', { hasText: 'Move to a folder' })).toHaveAttribute('data-reason', /move the bot/);
+  await page.keyboard.press('Escape');
+  await page.locator('[data-act="wl-more"][data-name="pr-review"]').click();
+  await page.locator('#pop-menu [data-act="wl-move"]').click();
   await expect(page.locator('.modal')).toContainText("A pack can't choose its own folder");
   await page.selectOption('#f-to', 'work/platform');
   await page.locator('#gen-submit').click();

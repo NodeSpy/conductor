@@ -38,9 +38,11 @@ test('username & password: TOTP preview, password stored write-only behind a pas
   expect(await leaked(page, PASSWORD, SEED, 'svc-wiki')).toEqual([]);
   await applyStaged(page);
   await go(page, '#/browser/logins');
+  await page.locator('[data-act="login-more"][data-n="wiki"]').click();
+  await page.locator('#pop-menu [data-act="login-uses"]').click();
   const row = page.locator('[data-login="wiki"]');
-  await expect(row).toContainText('house · login-wiki-password');
-  await expect(row).toContainText('house · login-wiki-otp');
+  await expect(row).toContainText('{{ vault "house" "login-wiki-password" }}');
+  await expect(row).toContainText('{{ vault "house" "login-wiki-otp" }}');
   expect(await page.evaluate(() => window.D.secrets.filter((s) => s.ref.startsWith('house/login-wiki-')).length)).toBe(3);
   expect(await leaked(page, PASSWORD, SEED)).toEqual([]);
 });
@@ -67,7 +69,9 @@ test('from a vault: browse 1Password items (labels only); one item fills all thr
   await expect(page.locator('.diff')).not.toContainText('team:platform');
   await applyStaged(page);
   await go(page, '#/browser/logins');
-  await expect(page.locator('[data-login="grafana-ro"]')).toContainText('op · Agents/Grafana/username');
+  await page.locator('[data-act="login-more"][data-n="grafana-ro"]').click();
+  await page.locator('#pop-menu [data-act="login-uses"]').click();
+  await expect(page.locator('[data-login="grafana-ro"]')).toContainText('{{ vault "op" "Agents/Grafana/username" }}');
 });
 
 test('sign in yourself goes to the takeover on desktop; on the phone it is disabled with a reason', async ({ page }) => {
@@ -91,14 +95,16 @@ test('Test login: success, failure and a push that needs you', async ({ page }) 
   await page.locator('#lt-approved').click();
   await expect(page.locator('#lt-body')).toContainText('signed in after your approval');
   await page.locator('.modal [data-close]').first().click();
-  await expect(page.locator('[data-login="app"]')).toContainText('works');
+  await expect(page.locator('[data-login="app"]')).toContainText('Works');
 });
 
 test('Logins tab: usage history, edit binding and revoke, all through the diff', async ({ page }) => {
   await go(page, '#/browser/logins', { fresh: true });
-  await page.locator('[data-login="grafana"] [data-act="login-uses"]').click();
-  await expect(page.locator('[data-login="grafana"] .uses')).toContainText('platform-sre');
-  await page.locator('[data-login="grafana"] [data-act="lg-revoke"]').click();
+  await page.locator('[data-act="login-more"][data-n="grafana"]').click();
+  await page.locator('#pop-menu [data-act="login-uses"]').click();
+  await expect(page.locator('[data-login="grafana"] .login-detail')).toContainText('platform-sre');
+  await page.locator('[data-act="login-more"][data-n="grafana"]').click();
+  await page.locator('#pop-menu [data-act="lg-revoke"]').click();
   await page.locator('#cf-ok').click();
   await expect(page.locator('.diff')).toContainText('grafana');
   await applyStaged(page);

@@ -21,11 +21,11 @@ test('Browse → Add → the install wizard: roles, arming with repos, loud gran
   await expect(page.locator('#pk-why')).toContainText('Needs your passkey');
 });
 
-test('trust badges: official, local (yours), third party', async ({ page }) => {
+test('where each pack comes from, on its row: the official catalog, your own, or a third party (named)', async ({ page }) => {
   await go(page, '#/extensions/packs', { fresh: true });
-  // each row's text, plus its hover detail (the use: path lives there)
-  const rows = await page.locator('.pack-row').evaluateAll((els) => els.map((e) => e.textContent + ' ' + (e.dataset.tip || '')));
-  expect(rows.some((t) => /official registry/.test(t))).toBe(true);
-  expect(rows.some((t) => /local · yours/.test(t))).toBe(true);
-  for (const t of rows.filter((x) => /\.\/packs\//.test(x))) expect(t).not.toContain('third party');
+  const row = (n) => page.locator(`.pack-row`, { hasText: n }).first();
+  await expect(row('review')).toContainText('official catalog');
+  await expect(row('house-style')).toContainText('your own, local');
+  await expect(row('kit')).toContainText('third party · acme/conductor-packs/kit');
+  await expect(page.locator('.pack-row[data-tip]')).toHaveCount(0); // nothing repeats the row in a tooltip
 });

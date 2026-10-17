@@ -40,16 +40,16 @@ test('actions execute: Pause dispatch pauses (after a confirm)', async ({ page }
   await expect(page.locator('#strip-cells')).toContainText('paused');
 });
 
-test('? shows the shortcuts; g r goes to runs; / focuses the filter; j/k pick a row and Enter opens it', async ({ page }) => {
+test('? shows the shortcuts; g r goes to Activity; / focuses the filter; j/k pick a row and Enter opens it', async ({ page }) => {
   await go(page, '#/overview', { fresh: true });
   await page.keyboard.press('?');
   await expect(page.locator('.modal')).toContainText('Keyboard shortcuts');
   await page.keyboard.press('Escape');
   await page.keyboard.press('g'); await page.keyboard.press('r');
-  await expect(page).toHaveURL(/#\/runs$/);
+  await expect(page).toHaveURL(/#\/activity$/);
   await page.locator('#main h1').click();
   await page.keyboard.press('/');
-  await expect(page.locator('#main .filters input').first()).toBeFocused();
+  await expect(page.locator('#main .dl-filters input').first()).toBeFocused();
   await page.locator('#main h1').click();
   await page.keyboard.press('j'); await page.keyboard.press('j');
   await expect(page.locator('#main .kbd-sel')).toHaveCount(1);

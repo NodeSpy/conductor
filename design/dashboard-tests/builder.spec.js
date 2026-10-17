@@ -137,6 +137,7 @@ test('edit the YAML and see the list update; undo a delete; keyboard reorder', a
 
 test('drag a step to reorder it', async ({ page }) => {
   test.skip(isPhone(page), 'touch uses Move up/down and Alt+arrows; drag is a mouse affordance');
+  await page.setViewportSize({ width: 1440, height: 1500 }); // both plates on screen: the recipe is a page now, not a scroll box
   await go(page, '#/workflows/ci-fixer');
   await card(page, 'comment').locator('.sc-head').dragTo(card(page, 'logs'), { targetPosition: { x: 40, y: 6 } });
   const y = await yaml(page);
@@ -156,7 +157,7 @@ test('inline validation blocks deploy; a fix deploys through the diff with comme
   await expect(page.locator('.diff .dl.add')).toContainText('model: claude-opus-5           # fleet: sonnet, then opus on retry');
   await applyStaged(page);
   await go(page, '#/workflows/ci-fixer');
-  await expect(page.locator('#wf-state')).toContainText('live');
+  await expect(page.locator('#wf-state')).toContainText(/live/i);
   expect(await yaml(page)).toContain('model: claude-opus-5');
 });
 

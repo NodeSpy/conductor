@@ -553,13 +553,15 @@
 
   /* the side of the recipe: Try it (a recent event; anything that would change something is a dry run), At a glance,
      and the config file, read-only, one click from its own tab */
+  function tryCard() { const v = B.value || {}, srcs = WF.sources(v), evs = SCHEMA.events.filter((x) => srcs.some((so) => so.on === x.on) || x.on === 'manual');
+    return `<section class="dl-card" id="wfb-try"><header class="dl-ch"><h2>Try it</h2></header><p class="dl-sub" style="margin:0 0 12px">Run every step against a recent event. Anything that would change something is a dry run.</p>
+        <label class="dl-search dl-select">${icon('pr')}<select data-on-change="wf-ev" aria-label="Test event"><option value="">Choose an event…</option>${evs.map((x) => `<option value="${x.id}"${x.id === B.ev ? ' selected' : ''}>${esc(x.label)}${x.at ? ` · ${x.at < 60 ? x.at + ' min' : Math.round(x.at / 60) + ' h'} ago` : ''}</option>`).join('')}${srcs.filter((so) => so.on !== 'manual' && !evs.some((x) => x.on === so.on)).map((so) => `<option disabled>no ${esc(so.on)} events in the last 14 days</option>`).join('')}<option value="__paste__">Paste a payload…</option></select></label>
+        <button class="btn secondary wide" data-act="wf-test-all" ${B.ev ? '' : UI.off('Choose an event first')}>${icon('play')}Run a test</button></section>`; }
   function trySide() {
     const v = B.value || {}, srcs = WF.sources(v), evs = SCHEMA.events.filter((x) => srcs.some((so) => so.on === x.on) || x.on === 'manual');
     const runs = D.runs.filter((r) => r.workflow === B.name), ok = runs.filter((r) => r.status === 'ok').length, fail = runs.filter((r) => r.status === 'fail' || r.status === 'stopped').length, parked = runs.filter((r) => r.status === 'idle').length;
     const budget = S.getPath(v, 'policy.budget.max_cost_usd');
-    return `<section class="dl-card"><header class="dl-ch"><h2>Try it</h2></header><p class="dl-sub" style="margin:0 0 12px">Run every step against a recent event. Anything that would change something is a dry run.</p>
-        <label class="dl-search dl-select">${icon('pr')}<select data-on-change="wf-ev" aria-label="Test event"><option value="">Choose an event…</option>${evs.map((x) => `<option value="${x.id}"${x.id === B.ev ? ' selected' : ''}>${esc(x.label)}${x.at ? ` · ${x.at < 60 ? x.at + ' min' : Math.round(x.at / 60) + ' h'} ago` : ''}</option>`).join('')}</select></label>
-        <button class="btn secondary wide" data-act="wf-test-all" ${B.ev ? '' : UI.off('Choose an event first')}>${icon('play')}Run a test</button></section>
+    return `${tryCard()}
       <section class="dl-card"><header class="dl-ch"><h2>At a glance</h2></header>${UI.facts([budget != null ? ['Budget', `Up to $${Number(budget).toFixed(2)} per run`] : null, ['Recent runs', runs.length ? `${runs.length} · ${ok} fine${fail ? ` · ${fail} failed` : ''}${parked ? ` · ${parked} parked` : ''}` : 'none yet'], ['Owner', B.owner === 'pack' ? `the pack ${esc(B.pack)}` : B.owner === 'bot' ? 'conductor (for the bot)' : 'your config']])}</section>
       <section class="dl-card wfb-side-card"><header class="dl-ch"><h2>Config file</h2><span class="dl-sp"></span><a class="dl-link" href="#" data-act="wf-tab" data-v="config">Open full size</a></header><aside class="wfb-side" id="wfb-side">${sideHTML()}</aside></section>`;
   }
@@ -582,10 +584,11 @@
   function drawList() { flushPending(); const el = UI.$('#wfb-list'); if (el) { const y = el.scrollTop; el.innerHTML = listHTML(); el.scrollTop = y; } }
   function drawSide() { const el = UI.$('#wfb-side'); if (el) el.innerHTML = sideHTML(); }
   function drawIssues() { const el = UI.$('#wf-issues'); if (el) el.innerHTML = issuesHTML(); const ed = UI.$('#wf-yaml'); if (ed && B.side === 'yaml') UI.editorMark(ed, { err: B.issues.filter((i) => i.level === 'error').map((i) => i.line), hl: hlLines() }); }
-  function redraw() { drawBar(); drawList(); drawSide(); }
+  function redraw() { drawBar(); const tb = UI.$('#wfb-tab'); if (tb && (B.tab || 'recipe') === 'recipe') { flushPending(); const y = (UI.$('#wfb-list') || {}).scrollTop; tb.innerHTML = tabBody(); const l = UI.$('#wfb-list'); if (l && y) l.scrollTop = y; } else { drawList(); drawSide(); } }
   /** After typing in a field: refresh YAML, issues, summary and badges, keep focus. */
   function softUpdate() {
     drawBar();
+    const tc = UI.$('#wfb-try'); if (tc) tc.outerHTML = tryCard(); // the trigger may have changed which past events fit
     const ed = UI.$('#wf-yaml'); if (ed && B.side === 'yaml' && B.owner === 'config') UI.editorSet(ed, B.text, { err: B.issues.filter((i) => i.level === 'error').map((i) => i.line), hl: hlLines() });
     else if (B.side === 'yaml' && B.owner === 'pack') drawSide();
     drawIssues();
@@ -899,7 +902,7 @@
 
   /* YAML pane → list */
   let yT;
-  UI.act('wf-yaml-input', (ta) => { clearTimeout(yT); yT = setTimeout(() => { commit(ta.value, { fromYaml: true, coalesce: true }); UI.editorMark(UI.$('#wf-yaml'), { err: B.issues.filter((i) => i.level === 'error').map((i) => i.line), hl: hlLines() }); }, 300); });
+  UI.act('wf-yaml-input', (ta) => { clearTimeout(yT); yT = setTimeout(() => { commit(ta.value, { fromYaml: true, coalesce: true }); const tc = UI.$('#wfb-try'); if (tc) tc.outerHTML = tryCard(); UI.editorMark(UI.$('#wf-yaml'), { err: B.issues.filter((i) => i.level === 'error').map((i) => i.line), hl: hlLines() }); }, 300); });
 
   /* test */
   function runTest(target) {

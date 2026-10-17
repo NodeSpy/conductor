@@ -54,7 +54,7 @@
   UI.act('pack-hold', (b) => { const c = clone(S.staged('packs', b.dataset.p)); if (c.hold) delete c.hold; else c.hold = true; UI.staged(S.stage('packs', b.dataset.p, c), { go: false }); UI.rerender(); });
   UI.act('pack-del', (b) => UI.confirm({ title: `Remove pack ${b.dataset.p}?`, body: 'Stages removing it from packs: (and its overrides). Its workflows stop; conductor init drops the vendored copy on apply.', ok: 'Stage removal', danger: true }).then((ok) => ok && UI.staged(S.stage('packs', b.dataset.p, null))));
   UI.act('pack-add', () => UI.go('#/extensions/browse?kind=pack'));
-  UI.act('pack-source', () => { Object.assign(ps, { use: '', read: null, inst: '' }); UI.go('#/extensions/source'); });
+  UI.act('pack-source', () => { Object.assign(ps, { use: '', read: null, inst: '' }); UI.go('#/extensions/source/add'); });
   UI.act('reg-add', (b) => {
     if (b.dataset.k === 'pack') { const name = b.dataset.n.split('/')[1]; UI.staged(S.stage('packs', D.packs.find((p) => p.name === name) ? name + '-2' : name, { use: b.dataset.n })); return; }
     const pn = b.dataset.n.split('/')[1];
@@ -115,7 +115,7 @@
 
   /* ---------- add a pack from a source: read its manifest first, then the same role → connection mapping ---------- */
   const ps = { use: '', read: null, inst: '' };
-  UI.route('extensions/source', () => {
+  UI.route('extensions/source/add', () => {
     const m = ps.read, conns = S.view().connectors, kindOf = (cn) => ((S.staged('connectors', cn.name) || cn.cfg || {}).use || cn.use);
     return `<div class="page dl-page"><div class="dl-crumbs"><a href="#/extensions/browse">${icon('chev', 'flip')}Back to the catalog</a></div>
       <div class="dl-phead"><div><h1>Add a pack from a source</h1><p class="dl-lead">For a pack that isn’t in the official catalog: one of your own, or a team’s. conductor reads what it needs before anything is added.</p></div></div>

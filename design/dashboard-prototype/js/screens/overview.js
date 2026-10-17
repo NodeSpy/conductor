@@ -43,7 +43,7 @@
     const at = (m) => new Date(Date.now() - m.b * 60000).toTimeString().slice(0, 5);
     const spent = D.runs.filter((r) => (Date.now() - new Date(r.started)) / 60000 <= 720).reduce((a, r) => a + (r.cost || 0), 0);
     return `<section class="dl-card"><header class="dl-ch"><h2>Last 12 hours</h2></header>
-      <div class="dl-stat-line"><b>${w.ok}</b><span>of ${w.total} runs went fine</span>${UI.usageOn() ? `<b class="r">$${spent.toFixed(2)}</b><span>spent</span>` : ''}</div>
+      <div class="dl-stat-line"><b>${w.ok}</b><span>of ${w.total} runs went fine</span>${UI.isApi && UI.isApi() ? `<b class="r">$${spent.toFixed(2)}</b><span>spent</span>` : ''}</div>
       ${hourBars()}
       ${fails.length ? `<p class="dl-foot-note">${UI.mark('fail')}${plural(fails.length, 'failed', 'failed')}: ${fails.map((m) => `${esc(m.lane)} at ${at(m)}`).join(', ')}</p>` : `<p class="dl-foot-note">${UI.mark('ok')}Nothing failed.</p>`}</section>`;
   }

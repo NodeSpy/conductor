@@ -7,7 +7,7 @@ const ROUTES = [
   '#/bots/platform-sre/memory', '#/bots/platform-sre/workers', '#/bots/platform-sre/access', '#/bots/platform-sre/settings', '#/bots/new/settings', '#/bots/new', '#/safety', '#/glossary', '#/runs/r-7ef0/compare/r-7e40', '#/runs/r-7ed1', '#/config/collections',
   '#/browser', '#/browser/b-02', '#/browser/takeover', '#/browser/passkey', '#/browser/add', '#/browser/logins',
   '#/config', '#/config/raw', '#/config/apply', '#/secrets',
-  '#/extensions/packs', '#/extensions/plugins', '#/extensions/browse', '#/extensions/pack/kit', '#/extensions/pack/review', '#/extensions/source',
+  '#/extensions/packs', '#/extensions/plugins', '#/extensions/browse', '#/extensions/pack/kit', '#/extensions/pack/review', '#/extensions/source/add',
   '#/connectors/connectors', '#/connectors/runtimes', '#/connectors/hosts',
   '#/updates', '#/logs/daemon', '#/logs/audit', '#/security', '#/signin', '#/enroll', '#/more',
 ];

@@ -29,7 +29,7 @@ test('effective environment: the narrowest scope wins, and the sandbox passes on
   await expect(eff).toContainText('values are never shown');
   // the same view on a run's agent step
   await go(page, '#/runs/r-7ef0');
-  await page.locator('.gt-row[data-step="fix"]').click();
+  await page.locator('.dl-tree .tl[data-step="fix"]').click();
   await page.locator('#run-step details.env-tech summary').click();
   await expect(page.locator('#run-step details.env-tech')).toContainText('NODE_OPTIONS');
 });
