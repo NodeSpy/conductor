@@ -375,7 +375,7 @@
         <div class="msgs" id="msgs">${msgs.map((c) => bubble(c, m.name)).join('') || '<div class="empty small">No conversation yet. Say hello.</div>'}</div>
         <div class="composer"><textarea class="textarea" id="say" rows="1" placeholder="Message ${m.name}…  (you are the requester: operator:ops)" aria-label="Message"></textarea><button class="btn primary" data-act="chat-send" data-m="${m.name}">${icon('send')}Send</button></div></div>
       <div class="stack">
-        ${pp.map((p) => `<div class="panel" style="border-color:color-mix(in srgb,var(--color-accent-default) 40%,var(--color-border-subtle))"><div class="panel-head">${st('ember', 'awaiting you')}<span class="mono tiny muted" style="margin-left:auto">${p.id} · ${ago(p.at)}</span></div><div class="panel-body small"><div style="font-weight:600;margin-bottom:6px">${esc(p.summary)}</div><div class="row"><a class="btn sm primary" href="#/bots/${m.name}/proposals/${p.id}">${icon('passkey')}Review &amp; sign</a><span class="muted tiny">expires in ${p.expires}</span></div></div></div>`).join('')}
+        ${pp.map((p) => `<div class="panel" style="border-color:color-mix(in srgb,var(--color-accent-default) 40%,var(--color-border-subtle))"><div class="panel-head">${st('ember', 'awaiting you')}<span class="mono tiny muted" style="margin-left:auto">${p.id} · ${ago(p.at)}</span></div><div class="panel-body small"><div style="font-weight:600;margin-bottom:6px">${esc(p.summary)}</div><div class="row"><a class="btn sm primary" href="#/bots/${m.name}/proposals/${p.id}">Review</a><span class="muted tiny">expires in ${p.expires}</span></div></div></div>`).join('')}
         <div class="panel"><div class="panel-head"><h3>Open cases</h3><a class="btn sm ghost" style="margin-left:auto" href="#/bots/${m.name}/cases">All</a></div><div class="list">${D.cases.filter((c) => c.bot === m.name && c.status === 'open').map((c) => `<a class="item small click" href="#/bots/${m.name}/cases/${c.id}"><span class="mono tiny muted">${c.id}</span><span class="grow ellipsis">${esc(c.title)}</span>${UI.label(`${c.cls}`, { cls: 'taint ' + c.cls })}</a>`).join('') || '<div class="item small muted">None open.</div>'}</div></div>
       </div></div>`);
   }
@@ -439,7 +439,7 @@
       <a class="proposal ${p.status}" href="#/bots/${m.name}/proposals/${p.id}">
         <div>${st(PS[p.status] || 'idle', p.status)}</div>
         <div><div class="row wrap" style="gap:6px;margin-bottom:4px"><span class="mono" style="font-weight:600">${p.id}</span>${tier(p.tier)}<span class="mono small">${p.verb}</span><span class="muted tiny mono">case ${p.case}</span>${p.requester ? `${UI.label(`${p.requester}`, { cls: 'taint ' + p.cls })}` : ''}${p.worker ? tag('worker ' + p.worker) : ''}</div><div>${esc(p.summary)}</div>${p.approver ? `<div class="muted tiny mono" style="margin-top:4px">decided by ${p.approver}</div>` : ''}</div>
-        <div class="row">${p.status === 'pending' ? `<span class="muted tiny mono">expires ${p.expires}</span><span class="btn sm primary">${icon('passkey')}Review</span>` : `<span class="muted tiny mono">${ago(p.at)} ago</span>`}</div>
+        <div class="row">${p.status === 'pending' ? `<span class="muted tiny mono">expires ${p.expires}</span><span class="btn sm primary">Review</span>` : `<span class="muted tiny mono">${ago(p.at)} ago</span>`}</div>
       </a>`).join('') || '<div class="empty small">No proposals here.</div>'}</div>
       <p class="muted small" style="margin-top:10px">Shadow proposals are the calibration record of a bot in shadow mode: they can't be approved. Also from the CLI: <span class="mono">conductor bot approve ${m.name} &lt;id&gt;</span> (SSH-signed).</p>`);
   }
@@ -452,7 +452,7 @@
     if (/^event:/.test(r) || p.cls === 'event') return `<div class="req-banner event">${icon('live')}<div><b>Started by an event, not a person</b> (<span class="mono">${esc(r)}</span>). No human asked for this action; the bot proposed it while handling the event.</div></div>`;
     if (p.cls === 'proactive') return `<div class="req-banner event">${icon('clock')}<div><b>The bot's own sweep</b> (<span class="mono">${esc(r)}</span>): nobody asked; it found this on a scheduled check.</div></div>`;
     if (p.cls === 'peer') return `<div class="req-banner untrusted">${icon('bots')}<div><b>Asked for by another bot</b> (<span class="mono">${esc(r)}</span>). It carries the original requester's trust, no more.</div></div>`;
-    return `<div class="req-banner op">${icon('passkey')}<div><b>Requested by an operator</b> (<span class="mono">${esc(r)}</span>).</div></div>`;
+    return `<div class="req-banner op">${icon('users')}<div><b>Requested by an operator</b> (<span class="mono">${esc(r)}</span>).</div></div>`;
   };
   /** The whole signed payload: every option, untruncated; long text in a scroll box. */
   UI.payloadHTML = (p) => `<div class="payload"><div class="pl-row"><span class="pl-k">verb</span><span class="pl-v mono">${esc(p.verb)}</span></div>${Object.entries(p.options || {}).map(([k, v]) => `<div class="pl-row"><span class="pl-k mono">${esc(k)}</span>${String(v).length > 80 || /\n/.test(String(v)) ? `<div class="pl-long">${esc(v)}</div>` : `<span class="pl-v mono">${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</span>`}</div>`).join('') || '<div class="pl-row muted small">no options</div>'}</div>`;

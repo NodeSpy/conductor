@@ -15,6 +15,7 @@ const { ROUTES } = require('./routes');
 const SKIP = new Set(['#/signin', '#/enroll']); // full-screen gates without the app chrome; checked separately below
 
 const { audit, primaries } = require('./audit');
+const { walkWizards, stepperAudit } = require('./wizards');
 
 test.describe('iPhone (WebKit): one theme, nothing too wide, nothing under the toolbar, readable text', () => {
   for (const route of ROUTES.filter((r) => !SKIP.has(r))) {
@@ -30,6 +31,7 @@ test.describe('iPhone (WebKit): one theme, nothing too wide, nothing under the t
       expect(a.wide, `wider than the viewport on ${route}`).toEqual([]);
       expect(a.hidden, `tab bar under the toolbar on ${route}`).toEqual([]);
       expect(a.low, `text under the brand's contrast minimums on ${route}`).toEqual([]);
+      expect(await page.evaluate(stepperAudit), `wizard header on ${route}`).toEqual([]);
       test.info().annotations.push({ type: 'contrast', description: `${route}: ${a.n} text runs, ${(a.weakShare * 100).toFixed(0)}% between 3:1 and 4.5:1` });
       expect(await page.evaluate(primaries), `primary actions covered on ${route}`).toEqual([]);
     });
@@ -43,6 +45,10 @@ test.describe('iPhone (WebKit): one theme, nothing too wide, nothing under the t
     await expect(page.locator('#pop-menu')).toContainText('Sandbox enforcing');
     await page.locator('#pop-menu [data-href="#/safety"]').tap();
     await expect(page).toHaveURL(/#\/safety/);
+  });
+  test('wizard headers fit in every state: no overlap, wrap or clipping', async ({ page }) => {
+    test.setTimeout(3 * 60 * 1000);
+    expect(await walkWizards(page)).toEqual([]);
   });
   test('the logo: the mark renders and holds contrast in this theme; the 16px favicon cut draws', async ({ page }) => {
     await go(page, '#/overview', { fresh: true });

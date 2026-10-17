@@ -18,7 +18,7 @@
 
   /* ---------- icons: Lucide at a 1.75 stroke (js/icons.js); status glyphs are Daylight's own ---------- */
   const P = window.ICONS || {};
-  UI.icon = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || P.dot}</svg>`;
+  UI.icon = (n, cls = '') => `<svg class="${cls}" data-ico="${n}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || P.dot}</svg>`;
   /** A status glyph (success, warning, danger, info, running, neutral, skipped, shadow, needs-you), 16-unit grid. */
   UI.glyph = (n, cls = '') => `<svg class="glyph ${cls}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${(window.GLYPHS || {})[n] || ''}</svg>`;
 
@@ -154,6 +154,7 @@
       if (r.opts.after) r.opts.after(params, main);
       if (typeof out === 'object' && out && out.after) out.after(main);
       UI.afterRender.forEach((f) => f(main));
+      UI.fitSteppers(main);
       return;
     }
     $('#main').innerHTML = `<div class="page"><div class="empty"><span class="serif">No such page</span><a class="btn" href="#/overview">Back to overview</a></div></div>`;
@@ -303,7 +304,7 @@
     const health = d.paused ? ['wait', 'Dispatch paused'] : warn ? ['wait', 'Something needs a look'] : ['ok', 'All systems normal'];
     $('#strip-cells').innerHTML = `
       <div class="spacer"></div>
-      <button type="button" class="cell status-btn" data-act="strip-status" aria-label="System status: ${health[1]}" data-tip="${d.paused ? 'Dispatch is paused: no new runs start' : `conductor ${d.version}, up ${d.uptime}`}">${UI.statusMark(health[0], `<span class="lbl-long">${health[1]}</span>`)}</button>
+      <button type="button" class="cell status-btn" data-act="strip-status" aria-label="System status: ${health[1]}" data-tip="${d.paused ? 'Dispatch is paused: no new runs start' : `conductor ${d.version}, up ${d.uptime}`}">${UI.statusMark(health[0], d.paused ? `<span class="lbl-paused">${health[1]}</span>` : `<span class="lbl-long">${health[1]}</span>`)}</button>
       <a class="cell quiet hide-calm" href="#/safety" data-tip="The agent sandbox is on: bots can't touch files or the network beyond what you allowed. See what each bot may do on its own.<br><span class='mono'>backend ${d.sandbox.backend} · ${d.sandbox.containers} containers</span>">${UI.icon('shield')}<span class="lbl-long">Sandbox on</span></a>
       <a class="cell quiet hide-calm" href="#/updates" data-tip="conductor ${d.version}${d.update.available ? `; ${d.update.available} is available` : ', up to date'}">${UI.icon('updates')}<span class="lbl-long">${d.update.available ? `Update ready` : d.version}</span></a>
       ${running ? `<a class="cell quiet" href="#/live" data-tip="Runs in progress"><span><b>${running}</b> running</span></a>` : ''}
@@ -392,17 +393,29 @@
   /** The choice made in an earlier step, carried forward, with a way back. */
   UI.chosen = (o) => `<div class="choice-chosen"${o.kc ? ` style="--kc:${o.kc}"` : ''}><span class="choice-ic">${UI.icon(o.icon)}</span><div class="grow"><span class="caps">${o.caps || 'method'}</span><b>${o.title}</b></div>${o.act ? `<button class="btn sm ghost" data-act="${o.act}">Change</button>` : ''}</div>`;
   /** A wizard stepper: steps = labels, at = current index (done before it). */
-  UI.stepper = (steps, at, bad) => `<div class="stepper apply-steps" role="list">${steps.map((x, i) => `<div class="as ${i < at ? 'done' : i === at ? (bad ? 'cur bad' : 'cur') : ''}" role="listitem"${i === at ? ' aria-current="step"' : ''}><b>${i < at ? '✓' : i + 1}</b>${x}</div>`).join('')}</div>`;
+  /** A wizard stepper, the one implementation: steps = labels, at = current index (done before it). opts.states overrides
+      each step's state ('done' | 'cur' | 'bad' | ''); opts.id names it. The full row of labelled steps shows when it fits;
+      when it doesn't (a phone, a narrow column), UI.fitSteppers switches it to "Step 2 of 5 · Watches" and a thin bar.
+      It never wraps, clips or overlaps. */
+  UI.stepper = (steps, at, bad, o = {}) => { const st = o.states || steps.map((x, i) => (i < at ? 'done' : i === at ? (bad ? 'cur bad' : 'cur') : '')), cur = Math.max(0, st.findIndex((x) => /cur|bad/.test(x))), done = st.filter((x) => x === 'done').length, n = steps.length, k = st.every((x) => x === 'done') ? n : cur + 1;
+    return `<div class="stepper apply-steps" role="list" aria-label="Step ${Math.min(k, n)} of ${n}: ${UI.esc(String(steps[Math.min(k, n) - 1]).replace(/<[^>]+>/g, ''))}"${o.id ? ` id="${o.id}"` : ''} data-n="${n}">${steps.map((x, i) => `<div class="as ${st[i]}" role="listitem"${/cur|bad/.test(st[i]) ? ' aria-current="step"' : ''}><b>${st[i] === 'done' ? '✓' : i + 1}</b><span class="as-l">${x}</span></div>`).join('')}<div class="step-compact" aria-hidden="true"><span class="sc-t">Step ${Math.min(k, n)} of ${n} · <b>${steps[Math.min(k, n) - 1]}</b></span><span class="step-bar"><i style="width:${(Math.max(done, k - 1 + (st[cur] && /cur/.test(st[cur]) ? 0.5 : 0)) / n) * 100}%"></i></span></div></div>`; };
+  /** Show each stepper in full only when its labelled steps fit; otherwise the compact form. Run after every render. */
+  UI.fitSteppers = (root = document) => { root.querySelectorAll('.stepper').forEach((el) => { el.classList.remove('compact'); if (el.scrollWidth > el.clientWidth + 1) el.classList.add('compact'); }); };
+  window.addEventListener('resize', () => UI.fitSteppers());
   /** Segmented control: items [[value, label]]; act receives el.dataset.v. */
   UI.seg = (items, value, act, extra = '') => `<div class="seg" role="group" ${extra}>${items.map(([v, l, dis]) => `<button type="button" data-v="${UI.esc(v)}" ${dis ? UI.off(dis) : `data-act="${act}"`} aria-pressed="${String(v) === String(value)}" class="${String(v) === String(value) ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   UI.switchBtn = (on, act, attrs = '') => `<button type="button" role="switch" class="switch${on ? ' on' : ''}" aria-checked="${!!on}" data-act="${act}" ${attrs}></button>`;
   UI.act('strip-status', (b) => { const d = D.daemon, running = D.runs.filter((r) => r.status === 'run').length;
-    UI.menu(b, [[`conductor ${d.version}, ${d.paused ? 'paused' : 'up'} ${d.uptime}${d.update.available ? ` · ${d.update.available} ready` : ''}`, 'server', 'strip-go', 'data-href="#/updates"'], [`Sandbox enforcing: what bots can do`, 'shield', 'strip-go', 'data-href="#/safety"'], [`Agents healthy (${d.paseo.agents})`, 'zap', 'strip-go', 'data-href="#/connectors/runtimes"'], [`${running} running now`, 'live', 'strip-go', 'data-href="#/live"'], ...(D.pending.length ? [[`${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review`, 'edit', 'strip-go', 'data-href="#/config/apply"']] : []), ['-'], [`${d.magicdns} · TLS`, 'lock', 'strip-go', 'data-href="#/security"']]); });
+    UI.menu(b, [[d.paused ? 'Resume dispatch…' : 'Pause dispatch…', d.paused ? 'play' : 'pause', 'pause'], ['-'], [`conductor ${d.version}, ${d.paused ? 'paused' : 'up'} ${d.uptime}${d.update.available ? ` · ${d.update.available} ready` : ''}`, 'server', 'strip-go', 'data-href="#/updates"'], [`Sandbox enforcing: what bots can do`, 'shield', 'strip-go', 'data-href="#/safety"'], [`Agents healthy (${d.paseo.agents})`, 'zap', 'strip-go', 'data-href="#/connectors/runtimes"'], [`${running} running now`, 'live', 'strip-go', 'data-href="#/live"'], ...(D.pending.length ? [[`${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review`, 'edit', 'strip-go', 'data-href="#/config/apply"']] : []), ['-'], [`${d.magicdns} · TLS`, 'lock', 'strip-go', 'data-href="#/security"']]); });
   /** Demo data (prototype only): which fake day to show, chosen per browser (js/scenario.js), or reset the current one. */
   UI.DEMOS = [['calm', 'A mostly healthy day', 'Dozens of runs; one approval and one failure need you'], ['quiet', 'All quiet', 'Nothing needs you; every system healthy'], ['full', 'Everything at once', 'Every kind of exception, to try each flow']];
   UI.setDemo = (k) => { try { localStorage.setItem('cd-demo', k); localStorage.removeItem('cd-proto-state-v5'); localStorage.removeItem('cd-last-looked'); } catch (e) {} location.reload(); };
   UI.act('demo-menu', (b) => UI.menu(b, UI.DEMOS.map(([k, t]) => [`${D.demo === k ? '● ' : ''}${t}`, k === 'quiet' ? 'check' : k === 'full' ? 'grid' : 'sun', 'demo-set', `data-k="${k}"`]).concat([['-'], ['Reset this day’s demo data', 'undo', 'reset-demo']])));
   UI.act('demo-set', (b) => { UI.closeMenu(); UI.setDemo(b.dataset.k); });
+  /** Pause or resume dispatch: weighty, so it says what it does and asks first. Lives in the status menu and the System row. */
+  UI.setPaused = (on) => { D.daemon.paused = on; D.audit.unshift({ ts: new Date().toISOString(), event: on ? 'daemon_pause' : 'daemon_resume', who: 'operator:ops', detail: 'dispatch ' + (on ? 'paused' : 'resumed') + ' from the dashboard', run: '' }); S.save(); UI.refreshChrome(); UI.rerender(); UI.toast(on ? 'Dispatch paused' : 'Dispatch resumed', on ? 'Runs already going finish; new events wait until you resume.' : 'Queued events are dispatching now.', on ? 'wait' : 'ok'); };
+  UI.act('pause', () => { UI.closeMenu(); const on = !D.daemon.paused;
+    UI.confirm(on ? { title: 'Pause dispatch?', body: 'No new runs start until you resume: events from GitHub, Slack, schedules and bots wait in the queue. Runs already going finish normally. Nothing is lost.', ok: 'Pause dispatch', danger: true } : { title: 'Resume dispatch?', body: 'Queued events start their runs now, oldest first.', ok: 'Resume dispatch' }).then((ok) => { if (ok) UI.setPaused(on); }); });
   UI.act('strip-go', (b) => { UI.closeMenu(); UI.go(b.dataset.href); });
   UI.act('theme', () => UI.theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
   UI.act('palette', () => UI.palette());

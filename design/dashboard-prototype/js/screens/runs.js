@@ -316,7 +316,7 @@
   UI.needsSummary = () => { const a = D.attention, n = (k) => a.filter((x) => (k === 'other' ? !['approval', 'failed'].includes(x.kind) : x.kind === k)).length;
     if (!a.length) return '<b>Nothing needs you.</b> Approvals, failed runs and questions from bots land here.';
     const parts = [[n('approval'), 'approval'], [n('failed'), 'failed run'], [n('other'), 'question']].filter(([k]) => k).map(([k, w]) => `${k} ${w}${k === 1 ? '' : 's'}`);
-    return `<b>${a.length} ${a.length === 1 ? 'thing needs' : 'things need'} you:</b> ${parts.join(', ').replace(/, ([^,]*)$/, ' and $1')}. Approvals are signed with your passkey.`; };
+    return `<b>${a.length} ${a.length === 1 ? 'thing needs' : 'things need'} you:</b> ${parts.join(', ').replace(/, ([^,]*)$/, ' and $1')}. `; };
   UI.act('attn-f', (b) => { UI.attnFilter = b.dataset.v; UI.rerender(); });
   UI.act('pref', (b) => { D.prefs[b.dataset.k] = !D.prefs[b.dataset.k]; S.save(); b.classList.toggle('on', D.prefs[b.dataset.k]); b.setAttribute('aria-checked', D.prefs[b.dataset.k]); });
 })();

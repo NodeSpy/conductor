@@ -47,3 +47,28 @@ test('mixing a widening and a non-widening change in one set needs the passkey',
   await page.locator('[data-act="apply-go"]').click();
   await expect(page.locator('#su-go')).toBeVisible();
 });
+
+// The passkey glyph means "this signs": it appears only on a control that starts a WebAuthn signing (approve, deny,
+// apply a widening change, sign in, enrol, the signing sheet's own button) and on the passkeys themselves. Opening,
+// reviewing and navigating never carry it (Daniel: "Review only opens the approval").
+const { ROUTES } = require('./routes');
+const SIGNS = new Set(['p-approve', 'kp-approve', 'kp-bulk', 'apply-go', 'signin', 'enroll', 'cm-store', 'cm-go', 'upd-apply']);
+test('the passkey glyph sits only on controls that sign', async ({ page }) => {
+  test.setTimeout(6 * 60 * 1000);
+  const bad = [];
+  for (const r of ROUTES) {
+    await go(page, r, { fresh: true });
+    const found = await page.evaluate((signs) => [...document.querySelectorAll('svg[data-ico="passkey"]')].filter((s) => s.getBoundingClientRect().width).map((s) => {
+      const ctl = s.closest('a, button, [role="button"], summary');
+      // the passkeys themselves (Access, a login that is a passkey) and the signing surfaces may show it as decoration
+      if (!ctl) return s.closest('.ring, #pk-why, .pk-list, .pk-obj, .seal') ? null : `decoration outside a signing surface: ${s.parentElement.className} "${s.parentElement.textContent.trim().slice(0, 30)}"`;
+      if (ctl.tagName === 'A') return `a link carries it: ${ctl.getAttribute('href')} "${ctl.textContent.trim().slice(0, 30)}"`;
+      if (signs.includes(ctl.dataset.act) || /^(seal-go|su-go|pk-go)$/.test(ctl.id) || /passkey/i.test(ctl.textContent)) return null;
+      // a signing action that can't be used yet (disabled with its reason) keeps its glyph
+      if (ctl.getAttribute('aria-disabled') === 'true' && /^(Approve|Deny)/.test(ctl.textContent.trim())) return null;
+      return `${ctl.tagName.toLowerCase()}[data-act="${ctl.dataset.act || ''}"]#${ctl.id} "${ctl.textContent.trim().slice(0, 30)}"`;
+    }).filter(Boolean), [...SIGNS]);
+    found.forEach((f) => bad.push(`${r}: ${f}`));
+  }
+  expect(bad).toEqual([]);
+});

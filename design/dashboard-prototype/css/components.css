@@ -12,17 +12,27 @@
 .wizard-foot { display: flex; align-items: center; gap: var(--space-2); padding-top: var(--space-4); margin-top: var(--space-1); border-top: var(--border-width) solid var(--color-border-subtle); }
 .wizard-foot .spacer { flex: 1; }
 
-/* ---------- stepper: at most five steps, named for the decision; done is an ink check, current an ember ring ---------- */
-.apply-steps, .stepper { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-1) 0 var(--gap-stack); padding: 0; overflow-x: auto; scrollbar-width: none; }
-.apply-steps .as, .stepper .as { flex: 0 1 auto; display: flex; align-items: center; gap: var(--space-2); padding: 0; border: 0; background: none; box-shadow: none; font: var(--type-label); color: var(--stepper-upcoming); white-space: nowrap; }
-.apply-steps .as + .as::before, .stepper .as + .as::before { content: ''; flex: 0 1 48px; min-width: 16px; width: 48px; height: 1px; background: var(--stepper-connector); margin-right: var(--space-1); }
-.apply-steps .as.done + .as::before { background: var(--color-text-primary); }
-.apply-steps .as b, .stepper .as b { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font: var(--type-caption); font-weight: var(--font-weight-semibold); border: 1.5px solid var(--color-border-control); background: transparent; color: var(--color-text-tertiary); flex: none; font-variant-numeric: tabular-nums; }
-.apply-steps .as.done, .stepper .as.done { color: var(--stepper-done); }
-.apply-steps .as.done b { background: var(--color-text-primary); border-color: var(--color-text-primary); color: var(--color-bg-canvas); }
-.apply-steps .as.cur, .stepper .as.cur { color: var(--color-text-primary); }
-.apply-steps .as.cur b { border-color: var(--stepper-current); color: var(--color-text-accent); box-shadow: 0 0 0 3px var(--color-accent-subtle); }
-.apply-steps .as.bad b { border-color: var(--color-status-danger-fg); color: var(--color-status-danger-fg); box-shadow: none; }
+/* ---------- stepper: at most five steps named for the decision; done is an ink check, current an ember ring.
+ * One row of labelled steps with fixed gaps (connectors never run through text) when it fits; when it doesn't,
+ * UI.fitSteppers adds .compact: "Step 2 of 5 · Watches" over a thin bar. Never wraps, clips or overlaps. ---------- */
+.apply-steps, .stepper { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-1) 0 var(--gap-stack); padding: 0; overflow: hidden; min-width: 0; }
+.stepper .as { flex: none; display: flex; align-items: center; gap: var(--space-2); font: var(--type-label); color: var(--stepper-upcoming); white-space: nowrap; }
+.stepper .as + .as::before { content: ''; flex: none; width: 32px; height: 1px; background: var(--stepper-connector); margin-right: var(--space-1); }
+.stepper .as.done + .as::before { background: var(--color-text-primary); }
+.stepper .as b { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font: var(--type-caption); font-weight: var(--font-weight-semibold); border: 1.5px solid var(--color-border-control); color: var(--color-text-tertiary); flex: none; font-variant-numeric: tabular-nums; }
+.stepper .as.done { color: var(--stepper-done); }
+.stepper .as.done b { background: var(--color-text-primary); border-color: var(--color-text-primary); color: var(--color-bg-canvas); }
+.stepper .as.cur { color: var(--color-text-primary); }
+.stepper .as.cur b { border-color: var(--stepper-current); color: var(--color-text-accent); box-shadow: 0 0 0 3px var(--color-accent-subtle); }
+.stepper .as.bad b { border-color: var(--color-status-danger-fg); color: var(--color-status-danger-fg); box-shadow: none; }
+.stepper .step-compact { display: none; }
+.stepper.compact { flex-direction: column; align-items: stretch; gap: var(--space-2); }
+.stepper.compact > .as { display: none; }
+.stepper.compact .step-compact { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.step-compact .sc-t { font: var(--type-label); color: var(--color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step-compact .sc-t b { color: var(--color-text-primary); }
+.step-bar { display: block; height: 4px; border-radius: var(--radius-pill); background: var(--color-border-subtle); overflow: hidden; }
+.step-bar i { display: block; height: 100%; background: var(--color-text-primary); border-radius: var(--radius-pill); }
 
 /* ---------- choice cards: for decisions that need a sentence each; five at most ---------- */
 .choice-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-3); }
@@ -79,7 +89,6 @@
 @media (max-width: 720px) {
 .choice-grid { grid-template-columns: 1fr; gap: 10px; }
 .choice { min-height: 0; padding: 14px; }
-.apply-steps .as, .stepper .as { min-width: 74px; font-size: var(--type-caption-size); }
 .wizard-foot { flex-wrap: wrap; }
 .cat-grid { grid-template-columns: 1fr; }
 }

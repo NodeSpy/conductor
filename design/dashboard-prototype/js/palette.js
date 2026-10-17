@@ -32,14 +32,14 @@
     add('action', 'New team', () => { UI.go('#/bots'); setTimeout(act('team-new'), 60); }, { icon: 'plus' });
     add('action', 'Add a login', go('#/browser/add'), { icon: 'passkey', words: 'credential password site browser' });
     add('action', 'Connect a service (Slack, GitHub…)', go('#/connectors/connectors'), { icon: 'plus', words: 'connector slack github pagerduty add integrate' });
-    add('action', D.daemon.paused ? 'Resume dispatch' : 'Pause dispatch', () => UI.confirm({ title: D.daemon.paused ? 'Resume dispatch?' : 'Pause dispatch?', body: D.daemon.paused ? 'New runs start again.' : 'No new runs start until you resume. Running ones finish.', ok: D.daemon.paused ? 'Resume' : 'Pause', danger: !D.daemon.paused }).then((ok) => ok && act('pause')()), { icon: 'pause', words: 'stop halt' });
+    add('action', D.daemon.paused ? 'Resume dispatch' : 'Pause dispatch', () => UI.acts.pause(), { icon: 'pause', words: 'stop halt' });
     add('action', 'Review and apply staged changes', go('#/config/apply'), { icon: 'check', words: 'apply diff staged', hint: D.pending.length ? `${D.pending.length} staged` : 'nothing staged' });
     add('action', 'Switch to the ' + (document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark') + ' theme', () => UI.theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'), { icon: 'sun', words: 'theme dark light mode' });
     add('action', 'What can my bots do? (Safety)', go('#/safety'), { icon: 'shield', words: 'safety permissions tiers sandbox' });
     add('action', 'Keyboard shortcuts', () => UI.shortcuts(), { icon: 'keyboard', words: 'keys help ?' });
     add('action', 'Update conductor', go('#/updates'), { icon: 'updates', words: 'upgrade version', hint: D.daemon.update.available || '' });
     // what needs you
-    D.proposals.filter((p) => p.status === 'pending' && UI.live(p)).forEach((p) => add('approval', `Approve or deny ${p.id}: ${p.title || p.summary || p.verb}`, go(`#/bots/${p.bot}/proposals/${p.id}`), { icon: 'passkey', words: `approve deny ${p.bot} ${p.verb} ${p.tf || /^tf|terraform/.test(p.verb || '') ? 'terraform plan apply' : ''} ${JSON.stringify(p.options || {}).slice(0, 200)}` }));
+    D.proposals.filter((p) => p.status === 'pending' && UI.live(p)).forEach((p) => add('approval', `Approve or deny ${p.id}: ${p.title || p.summary || p.verb}`, go(`#/bots/${p.bot}/proposals/${p.id}`), { icon: 'attention', words: `approve deny ${p.bot} ${p.verb} ${p.tf || /^tf|terraform/.test(p.verb || '') ? 'terraform plan apply' : ''} ${JSON.stringify(p.options || {}).slice(0, 200)}` }));
     // pages
     UI.navGroups.forEach(([, items]) => items.forEach(([k, l, ic]) => add('page', l, go('#/' + k), { icon: ic })));
     [['Glossary', 'glossary', 'info'], ['Collections', 'config/collections', 'folder'], ['Raw config', 'config/raw', 'code'], ['Isolation', 'connectors/isolation', 'shield'], ['Runtimes', 'connectors/runtimes', 'server'], ['Hosts', 'connectors/hosts', 'server'], ['Audit log', 'logs/audit', 'runs'], ['Phone layouts', 'phone.html', 'phone']].forEach(([l, h, ic]) => add('page', l, () => { if (h.endsWith('.html')) location.href = h; else UI.go('#/' + h); }, { icon: ic }));

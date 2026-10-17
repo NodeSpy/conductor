@@ -103,7 +103,6 @@ tr.hidden, .item.hidden, .hidden { display: none !important; }
 .modal-foot .btn { flex: 1 1 auto; justify-content: center; }
 .tbl.responsive td.num { justify-content: flex-end; }
 .card-actions { flex-wrap: wrap; }
-.apply-steps .as { min-width: 112px; padding: 8px 10px; font-size: var(--type-caption-size); }
 }
 
 /* teams */

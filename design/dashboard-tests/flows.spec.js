@@ -335,13 +335,20 @@ test.describe('updates, config history, raw editor, access', () => {
     expect(await state(page, () => D.passkeys.length)).toBe(3);
   });
   test('state persists across navigation and reloads; reset demo data restores the seed', async ({ page }) => {
+    // Pause dispatch lives in the status menu (the health word in the top bar): it explains itself and asks first
     await go(page, '#/overview');
-    await page.locator('[data-act="pause"]').click();
+    await page.locator('.strip .status-btn').click();
+    await page.locator('#pop-menu [data-act="pause"]').click();
+    await expect(page.locator('.modal')).toContainText('No new runs start');
+    await page.locator('#cf-ok').click();
     await page.reload();
-    await expect(page.locator('[data-act="pause"]')).toContainText('Resume dispatch');
+    await expect(page.locator('#strip-cells .status-btn')).toContainText('Dispatch paused');
+    await expect(page.locator('.paused-note')).toContainText('Dispatch is paused');
     await go(page, '#/more');
     await page.locator('#main [data-act="reset-demo"]').click(); await page.locator('#cf-ok').click();
     await go(page, '#/overview');
-    await expect(page.locator('[data-act="pause"]')).toContainText('Pause dispatch');
+    await expect(page.locator('.paused-note')).toHaveCount(0);
+    await page.locator('.strip .status-btn').click();
+    await expect(page.locator('#pop-menu [data-act="pause"]')).toContainText('Pause dispatch');
   });
 });

@@ -463,3 +463,4 @@ html.sim-ios #sim-toolbar span { width: 70%; height: 44px; border-radius: 22px; 
 /* calm top bar: only how things are (one word) and what needs you; the rest is in the status menu */
 .strip .cell.quiet, .strip .cell.quiet b { color: var(--color-text-tertiary); font-weight: var(--font-weight-regular); }
 .strip .cell.hide-calm { display: none; }
+@media (max-width: 720px) { .strip .cell.status-btn .lbl-paused { display: inline; font: var(--type-caption); font-weight: var(--font-weight-semibold); } }

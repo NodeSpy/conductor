@@ -4,6 +4,7 @@
 const { test, expect, go, isPhone } = require('./fixtures');
 const { ROUTES } = require('./routes');
 const { audit } = require('./audit');
+const { stepperAudit } = require('./wizards');
 
 for (const theme of ['light', 'dark']) {
   test(`every route, ${theme} theme: fits the window, one theme, readable text`, async ({ page }) => {
@@ -17,6 +18,7 @@ for (const theme of ['light', 'dark']) {
       if (a.theme !== theme) problems.push(`${r}: theme ${a.theme}`);
       a.wide.forEach((w) => problems.push(`${r}: too wide: ${w}`));
       a.low.forEach((l) => problems.push(`${r}: low contrast: ${l}`));
+      (await page.evaluate(stepperAudit)).forEach((x) => problems.push(`${r}: ${x}`));
     }
     expect(problems).toEqual([]);
   });

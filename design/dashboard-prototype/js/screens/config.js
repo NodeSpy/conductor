@@ -171,7 +171,7 @@
     return {
       toString: () => `<div class="page">
         ${UI.head(restoring ? 'Restore a backup' : 'Review and apply', { crumbs: `<a href="#/config">Config</a>`, sub: `${P.length} staged change${P.length > 1 ? 's' : ''} · +${dv.adds} −${dv.dels}`, actions: `<button class="btn ghost" data-act="discard-all">${icon('trash')}Discard all</button>` })}
-        <div class="apply-steps" id="steps">${STEPS.map((s, i) => `<div class="as ${i < cur ? 'done' : i === cur ? (v.errors.length && i === 1 ? 'bad' : 'cur') : ''}"><b>${i < cur ? '✓' : i + 1}</b>${s}</div>`).join('')}</div>
+        ${UI.stepper(STEPS, cur, false, { id: 'steps', states: STEPS.map((s, i) => (i < cur ? 'done' : i === cur ? (v.errors.length && i === 1 ? 'bad' : 'cur') : '')) })}
         <div class="grid g-side">
           <div class="stack">
             <div class="panel"><div class="panel-head"><h3>Staged</h3><span class="muted small">each one is a node edit in config.yaml</span></div><div class="list">${P.map((c) => {
@@ -225,7 +225,7 @@
     const k = ap.done.stage, fin = k >= stages.length;
     return {
       toString: () => `<div class="page">${UI.head('Applied', { crumbs: `<a href="#/config">Config</a>`, sub: esc(e.summary) })}
-        <div class="apply-steps">${STEPS.map((s, i) => `<div class="as ${i < (fin ? 5 : k >= 4 ? 4 : 3) ? 'done' : 'cur'}"><b>${i < (fin ? 5 : k >= 4 ? 4 : 3) ? '✓' : i + 1}</b>${s}</div>`).join('')}</div>
+        ${UI.stepper(STEPS, 0, false, { states: STEPS.map((s, i) => (i < (fin ? 5 : k >= 4 ? 4 : 3) ? 'done' : 'cur')) })}
         <div class="grid g-side"><div class="panel"><div class="panel-head"><h3>Reload &amp; verify</h3>${fin ? st('ok', 'committed') : st('run', 'in progress')}</div><div class="panel-body" id="stages">${stages.slice(0, Math.min(k + 1, stages.length)).map(([a, b], i) => `<div class="check-row">${i < k || fin ? st('ok', '') : st('run', '')}<div><b>${a}</b><div class="muted tiny mono">${esc(b)}</div></div></div>`).join('')}</div></div>
         <div class="stack">${fin ? `<div class="callout ember small"><b>Applied.</b> Live config is <span class="mono">${D.daemon.config_sha}</span>. Backup <span class="mono">${e.id}</span> holds what it replaced.</div>
           <div class="row"><button class="btn" data-act="rollback-now" data-id="${e.id}">${icon('undo')}Roll back</button>${D.prefs.returnTo ? `<a class="btn primary" href="${D.prefs.returnTo.href}" data-act="return-to">${icon('chev')}Back to ${esc(D.prefs.returnTo.label)}</a>` : `<a class="btn ghost" href="#/config">Done</a>`}</div>${D.prefs.returnTo ? `<div class="muted tiny">Taking you back to ${esc(D.prefs.returnTo.label)}…</div>` : ''}` : `<div class="callout small">The daemon re-execs on reload. This page reconnects by itself and resumes the stream.</div>`}</div></div></div>`,

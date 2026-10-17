@@ -25,7 +25,7 @@
         ${UI.statusMark(a.s, `<span class="sr-only">${WORD[a.s] || a.s}</span>`, { cls: 'att-mark' })}
         <div class="grow att-text"><div class="item-t">${esc(a.plain || a.title)}</div>${a.why ? `<div class="item-why">${esc(a.why)}</div>` : ''}</div>
         <span class="att-age">${UI.ageText(a.age)}</span>
-        <span class="btn sm${a.kind === 'approval' ? ' primary' : ''}">${a.kind === 'approval' ? icon('passkey') : ''}${verb}</span>
+        <span class="btn sm${a.kind === 'approval' ? ' primary' : ''}">${verb}</span>
       </a>`; };
     if (!grouped) return note + `<div class="list needs">${items.map(row).join('')}</div>`;
     // grouped on the Needs you page: approvals, then failures, then questions; each with a sentence
@@ -40,7 +40,6 @@
   });
 
   UI.act('score-span', (b) => { SPAN = SPANS[b.dataset.v]; UI.rerender(); });
-  UI.act('pause', () => { D.daemon.paused = !D.daemon.paused; D.audit.unshift({ ts: new Date().toISOString(), event: D.daemon.paused ? 'daemon_pause' : 'daemon_resume', who: 'operator:ops', detail: 'dispatch ' + (D.daemon.paused ? 'paused' : 'resumed') + ' from the dashboard', run: '' }); S.save(); UI.refreshChrome(); UI.rerender(); UI.toast(D.daemon.paused ? 'Dispatch paused' : 'Dispatch resumed', D.daemon.paused ? 'Runs in flight continue; new events queue until you resume.' : 'Queued events are dispatching now.', D.daemon.paused ? 'wait' : 'ok'); });
 
   /* ---------- activity lanes (from Score): one named lane per workflow, time left to right ----------
    * Every run is a mark whose shape gives its state: an ink dot passed, a red cross failed, a blue arc running,
@@ -155,7 +154,7 @@
         ${row('ok', 'Agents', `paseo ${d.paseo.version} · ${d.paseo.agents} agents`, '#/connectors')}
         ${D.connectors.map((c) => row(c.status, esc(c.name), `${c.use} · ${c.detail}`, '#/connectors')).join('')}
         ${row('run', 'Update', `${d.update.available} ready · installs itself · next check within ${d.update.interval}`, '#/updates')}
-      </div></div></details>`;
+      </div><div class="row" style="margin-top:var(--space-3)"><button class="btn sm" data-act="pause">${d.paused ? icon('play') + 'Resume dispatch…' : icon('pause') + 'Pause dispatch…'}</button><span class="muted small">${d.paused ? 'Paused: no new runs start.' : 'Stops new runs from starting; running ones finish.'}</span></div></div></details>`;
   }
 
   function activity() {
@@ -215,8 +214,9 @@
         <p class="quiet-line">${need ? 'Everything else is fine: ' : ''}${quietLine}.</p>
         <p class="lede-2">conductor runs your ${UI.term('bots', 'bot')} and ${UI.term('workflows', 'workflow')} on this machine; anything risky waits for your passkey.</p></div>
         ${UI.sunrise('hide-phone hello-art')}
-        <div class="actions">${D.prefs.gsHidden ? `<button class="btn ghost" data-act="gs-show">${icon('sparkle')}Get started</button>` : ''}<button class="btn ghost" data-act="pause">${D.daemon.paused ? icon('play') + 'Resume dispatch' : icon('pause') + 'Pause dispatch'}</button><a class="btn ghost" href="#/workflows">${icon('play')}Run a workflow</a></div></div>
-      ${need ? `<div class="panel attn"><div class="panel-head"><h2>Needs you</h2><span class="muted small">${need} items · approvals are signed with your passkey</span><div class="tools">${UI.folderChip()}${need > 3 ? `<a class="btn sm ghost" href="#/attention">See all ${need} ${icon('chev')}</a>` : ''}</div></div>${UI.attentionList(3)}</div>` : ''}
+        ${D.prefs.gsHidden ? `<div class="actions"><button class="btn ghost" data-act="gs-show">${icon('sparkle')}Get started</button></div>` : ''}</div>
+      ${D.daemon.paused ? `<div class="callout warn paused-note">${UI.statusMark('wait', '<b>Dispatch is paused.</b>')} No new runs start; events wait in the queue. Runs already going finish. <button class="btn sm" data-act="pause">${icon('play')}Resume dispatch…</button></div>` : ''}
+      ${need ? `<div class="panel attn"><div class="panel-head"><h2>Needs you</h2><span class="muted small">${need} items</span><div class="tools">${UI.folderChip()}${need > 3 ? `<a class="btn sm ghost" href="#/attention">See all ${need} ${icon('chev')}</a>` : ''}</div></div>${UI.attentionList(3)}</div>` : ''}
       ${getStarted()}
       ${score()}
       <div class="quiet-rows">
