@@ -73,6 +73,9 @@
   UI.envTag = (env) => (env ? UI.label(env[0].toUpperCase() + env.slice(1)) : '');
   /** Labelled metadata (the labelled facts below, from items { label, value, mono }). */
   UI.metaLine = (items) => UI.facts(items.filter(Boolean).map((x) => [x.label, x.mono ? `<span class="mono">${x.value}</span>` : x.value]));
+  /** Prose that may carry markup (<b>, <span class="mono">…) and plain placeholders (<vault>, <name>): the
+      placeholders are escaped so the browser never swallows them as unknown tags (a dropped interpolation). */
+  UI.ph = (html) => String(html).replace(/<(?!\/?(?:a|b|i|em|strong|span|code|br|div|p|ul|ol|li|kbd|small|mark|time|svg|path|button|input|label|select|option|details|summary|dl|dt|dd|table|tr|td|th|thead|tbody|pre|h[1-6])\b)([a-z][\w-]*)>/gi, '&lt;$1&gt;');
   /** The labelled facts of a thing (the run page's Details card): label, then value; ids and times never bare. */
   UI.facts = (items) => `<dl class="dl-facts">${items.filter(Boolean).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
   /** A count beside a tab or nav item; hot (ember) only where a person is needed. */
@@ -96,7 +99,7 @@
   /* human times: "52 min ago (17:03)"; the exact local time (and UTC) on hover */
   UI.agoText = (iso) => { const s = (Date.now() - new Date(iso)) / 1000; if (s < 60) return 'just now'; if (s < 3600) return `${s / 60 | 0} min ago`; if (s < 86400) { const h = s / 3600 | 0; return `${h} h ago`; } const d = s / 86400 | 0; return d === 1 ? 'yesterday' : `${d} days ago`; };
   UI.hm = (iso) => new Date(iso).toTimeString().slice(0, 5);
-  UI.when = (iso, withClock = false) => { const d = new Date(iso); return `<time datetime="${d.toISOString()}" data-tip="${d.toLocaleString()} · ${d.toISOString().slice(0, 16).replace('T', ' ')} UTC">${UI.agoText(iso)}${withClock ? ` <span class="muted">(${UI.hm(iso)})</span>` : ''}</time>`; };
+  UI.when = (iso, withClock = false) => { const d = new Date(iso); return `<time datetime="${d.toISOString()}">${UI.agoText(iso)}${withClock ? ` <span class="muted">(${UI.hm(iso)})</span>` : ''}</time>`; };
   /** "7m" / "1h" / "3d" (the fake data's short ages) → "7 min ago" */
   UI.ageText = (a) => { const m = String(a).match(/^(\d+)\s*([smhd])$/); if (!m) return a; return m[2] === 's' ? 'just now' : m[2] === 'm' ? `${m[1]} min ago` : m[2] === 'h' ? `${m[1]} h ago` : `${m[1]} days ago`; };
   /** Durations in words with units: "12 min", "7 min 40 s", "26 s". */
@@ -512,7 +515,7 @@
   UI.fieldHTML = (fd, v, pre = 'f-') => {
     const id = fieldId(fd.k, pre), lbl = fd.label || fd.k.split('.').pop().replace(/_/g, ' ');
     const req = fd.req ? '<span class="req" aria-label="required">*</span>' : '<span class="opt">optional</span>';
-    const help = fd.help ? `<div class="hint">${fd.help}</div>` : '';
+    const help = fd.help ? `<div class="hint">${UI.ph(fd.help)}</div>` : '';
     const val = v == null ? '' : v;
     let input;
     switch (fd.type) {
@@ -574,7 +577,7 @@
     const dr = !!spec.drawer, pre = dr ? 'd-' : 'f-', ids = dr ? { form: 'dr-form', submit: 'dr-submit' } : { form: 'gen-form', submit: 'gen-submit' };
     const shell = (h) => (dr ? UI.openDrawer(h) : UI.modal(h, { wide: spec.wide, sticky: true }));
     const s = shell(`<div class="modal-head"><div>${spec.caps ? `<div class="caps">${spec.caps}</div>` : ''}<h2>${spec.title}</h2></div><button class="icon-btn" data-close aria-label="Close">${UI.icon('x')}</button></div>
-      <form class="modal-body stack" novalidate id="${ids.form}" data-pre="${pre}">${spec.intro ? `<div class="small dim">${spec.intro}</div>` : ''}
+      <form class="modal-body stack" novalidate id="${ids.form}" data-pre="${pre}">${spec.intro ? `<div class="small dim">${UI.ph(spec.intro)}</div>` : ''}
         ${spec.fields.map((fd) => (fd.section ? `<div class="caps form-sec">${fd.section}</div>` : '') + UI.fieldHTML(fd, vals[fd.k] !== undefined ? vals[fd.k] : fd.def != null && !spec.edit ? fd.def : '', pre)).join('')}
         <div class="form-err callout danger small hide" role="alert"></div>${spec.note ? `<div class="callout small">${spec.note}</div>` : ''}
       </form>

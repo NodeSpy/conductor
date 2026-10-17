@@ -361,3 +361,22 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 .sb-kinds .sb-kind .dl-why { display: block; font-weight: 400; }
 .sb-kinds .sb-kind b { font-weight: var(--font-weight-bold); }
 .sb-add { display: flex; gap: 8px; margin: 10px 0; align-items: center; } .sb-add .input { flex: 1 1 auto; width: auto; min-width: 0; } .sb-add .btn { flex: none; }
+
+/* layout regressions the sweep caught: tab labels never wrap; long ids and paths wrap inside their cell; a table that
+   still can't fit scrolls inside its card instead of spilling past it */
+.tabs a, .dl-tabs a { white-space: nowrap; }
+.tabs { overflow-x: auto; scrollbar-width: none; }
+.tbl td.mono, .tbl td .mono { overflow-wrap: anywhere; }
+.panel:has(> table.tbl), .panel:has(> .tbl-wrap) { overflow-x: auto; }
+.wl-acts { width: 1%; }
+
+/* pack overrides and add-from-source: one line per role, trigger and step; the control on the right */
+.po-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 16px; align-items: center; padding: 12px 0; text-align: left; }
+.dl-list > li.po-row:first-child { padding-top: 2px; }
+.po-sel { min-width: 220px; width: 260px; }
+.po-warn { display: inline-flex; align-items: center; gap: 6px; color: var(--color-status-warning-fg); font-weight: var(--font-weight-semibold); }
+.po-repos { margin-top: 6px; max-width: 360px; }
+.po-h3 { font: var(--type-label); font-size: 14px; margin: 18px 0 4px; }
+.po-yaml textarea { width: 100%; margin-top: 10px; }
+.cat-source { margin: 0 0 12px; }
+@media (max-width: 720px) { .po-row { grid-template-columns: minmax(0, 1fr); } .po-sel { width: 100%; min-width: 0; } }

@@ -56,7 +56,9 @@
     ${kinds.length > 1 ? UI.seg([['all', 'all']].concat(kinds.map((k) => [k, k + 's'])), cv.kind, 'cat-kind') : ''}${UI.seg([['all', 'any origin'], ['builtin', 'built-in'], ['official', 'official'], ['custom', 'custom']], cv.origin, 'cat-origin')}${UI.seg([['all', 'all'], ['installed', 'installed'], ['not', 'not installed']], cv.inst, 'cat-inst')}
     ${kinds.includes('pack') ? UI.selectChip({ icon: 'connectors', on: !!cv.needs, label: 'Needs connector', attrs: 'data-on-change="cat-needs"', options: `<option value="">needs: any</option>${['github', 'pagerduty', 'cron', 'fswatch'].map((n) => `<option${cv.needs === n ? ' selected' : ''}>${n}</option>`).join('')}` }) : ''}
     ${UI.selectChip({ icon: 'runs', label: 'Sort', attrs: 'data-on-change="cat-sort"', options: `<option value="name">sort: name</option><option value="updated"${cv.sort === 'updated' ? ' selected' : ''}>sort: recently updated</option>` })}</div>
+    ${mode === 'browse' && kinds.includes('pack') ? `<p class="dl-sub cat-source">Not in the catalog? <button class="link" data-act="pack-source">Add a pack from a source or git URL</button></p>` : ''}
     <div class="cat-grid" id="cat-grid">${cards(filtered(kinds), mode)}</div></div>`;
+  UI.catalogKind = (k) => { cv.kind = k; };
   const redrawCat = () => { const c = UI.$('.cat'); if (!c) return; UI.$('#cat-grid').innerHTML = cards(filtered(c.dataset.kinds.split(',')), c.dataset.mode); };
   UI.act('cat-q', (el) => { cv.q = el.value; redrawCat(); });
   ['kind', 'origin', 'inst'].forEach((k) => UI.act('cat-' + k, (b) => { cv[k] = b.dataset.v; b.parentElement.querySelectorAll('button').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); redrawCat(); }));
