@@ -284,9 +284,20 @@ test.describe('updates, config history, raw editor, access', () => {
     await page.locator('[data-act="upd-apply"]').click(); await page.locator('#su-go').click();
     await expect(page.locator('.page-head .sub')).toContainText('v0.72.0');
   });
+  test('revert one change keeps the later ones', async ({ page }) => {
+    await go(page, '#/config');
+    await page.locator('[data-act="revert-one"][data-id="cfg-20261015-1412"]').click();
+    await expect(page).toHaveURL(/#\/config\/apply/);
+    expect(await page.evaluate(() => D.pending.map((c) => c.key))).toEqual(['platform-sre']);
+    await applyStaged(page);
+    expect(await state(page, () => [D.bots[0].cfg.proactive.every, /max_cost_usd: 2\.00/.test(D.workflows.find((w) => w.name === 'ci-fixer').yaml)])).toEqual(['6h', true]);
+  });
   test('restore a backup runs the same pipeline; raw YAML edits become node changes', async ({ page }) => {
     await go(page, '#/config');
     await page.locator('[data-act="restore"][data-id="cfg-20261015-1412"]').click();
+    await expect(page.locator('.modal')).toContainText('also undoes 1 later change'); // and names it
+    await expect(page.locator('.modal')).toContainText('cfg-20261016-0912');
+    await page.locator('#cf-ok').click();
     await expect(page.locator('.page-head h1')).toContainText('Restore a backup');
     await applyStaged(page);
     expect(await state(page, () => D.bots[0].cfg.proactive.every)).toBe('6h');

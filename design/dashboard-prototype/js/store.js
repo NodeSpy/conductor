@@ -556,6 +556,12 @@
     return n;
   };
 
+  /** Later entries (newer than id) that touch the same nodes as id; reverting id alone would fight them. */
+  S.revertConflicts = (id) => { const H = window.D.configHistory, idx = H.findIndex((h) => h.id === id); if (idx < 0) return []; const keys = new Set((H[idx].changes || []).map((c) => c.coll + ':' + c.key));
+    return H.slice(0, idx).filter((h) => (h.changes || []).some((c) => keys.has(c.coll + ':' + c.key))); };
+  /** Stage the inverse of entry id alone (later changes stay). */
+  S.revertOne = (id) => { const h = window.D.configHistory.find((x) => x.id === id); if (!h) return 0; let n = 0; (h.changes || []).slice().reverse().forEach((c) => { if (S.stage(c.coll, c.key, c.before, `revert ${C[c.coll].path(c.key)} (only ${id})`)) n++; }); return n; };
+
   /* Seed history entries get real change records, so Restore works on them. */
   function seedHistory() {
     const H = window.D.configHistory; if (!H || H.every((h) => h.changes)) return;

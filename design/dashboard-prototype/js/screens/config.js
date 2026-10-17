@@ -43,8 +43,8 @@
           <div class="item hist" style="align-items:flex-start">${h.status === 'live' ? st('ok', '') : st('idle', '')}<div class="grow"><div class="small">${esc(h.summary)}</div><div class="mono tiny muted">${h.id} · ${esc(h.who)} · ${ago(h.at)} ago</div>
             ${view.open === h.id ? `<div class="hist-diff">${(h.changes || []).map((c) => UI.diffView(c.before == null ? '' : typeof c.before === 'string' ? c.before : YAML.stringify({ [C()[c.coll].path(c.key)]: c.before }), c.after == null ? '' : typeof c.after === 'string' ? c.after : YAML.stringify({ [C()[c.coll].path(c.key)]: c.after }), 'unified', { file: C()[c.coll].path(c.key) }).html).join('')}</div>` : ''}</div>
             <div class="row" style="gap:4px"><button class="btn sm ghost" data-act="hist-view" data-id="${h.id}" aria-expanded="${view.open === h.id}">${icon(view.open === h.id ? 'chevd' : 'eye')}${view.open === h.id ? 'Hide' : 'Diff'}</button>
-            ${h.status === 'live' ? tag('live', 'ok') : `<button class="btn sm" data-act="restore" data-id="${h.id}">${icon('undo')}Restore</button>`}</div></div>`).join('')}</div>
-          <div class="panel-foot small muted">Restore is the same pipeline in reverse: the backup is validated on a copy first, then applied.</div></div>
+            ${h.status === 'live' && D.configHistory[0] === h && D.configHistory.length === 1 ? tag('live', 'ok') : `${(() => { const cf = S.revertConflicts(h.id); return `<button class="btn sm" ${cf.length ? UI.off(`A later change also edits this: ${cf.map((x) => x.summary).join('; ')}. Restore to before this instead.`) : `data-act="revert-one" data-id="${h.id}"`}>${icon('undo')}Revert this change</button>`; })()}${D.configHistory.indexOf(h) > 0 ? `<button class="btn sm ghost" data-act="restore" data-id="${h.id}">Restore to before this</button>` : ''}`}${h.status === 'live' ? ' ' + tag('live', 'ok') : ''}</div></div>`).join('')}</div>
+          <div class="panel-foot small muted">Revert undoes one change and keeps the ones after it. Restore goes back to before a change, undoing everything since. Both go through the same pipeline: validated on a copy, backed up, applied.</div></div>
         <div class="panel"><div class="panel-head"><h3>Guards</h3></div><div class="panel-body small stack tight">
           <div class="row">${st('ok', '')}Edits are node-level: comments, anchors and unknown keys are kept.</div>
           <div class="row">${st('ok', '')}Validated on a copy, with copied plugin state; <span class="mono">conductor validate</span> is not read-only.</div>
@@ -61,7 +61,13 @@
   UI.act('usage-src-del', () => { const c = JSON.parse(JSON.stringify(S.staged('usage', 'usage'))); delete c.source; S.stage('usage', 'usage', c); UI.rerender(); });
   UI.act('planned-toggle', () => { D.prefs.planned = !D.prefs.planned; if (!D.prefs.planned) D.prefs.instance = 'personal'; S.save(); UI.rerender(); UI.toast(D.prefs.planned ? 'Planned features shown' : 'Planned features hidden', D.prefs.planned ? 'each is marked Planned; nothing there changes your setup' : '', 'run'); });
   UI.act('hist-view', (b) => { view.open = view.open === b.dataset.id ? null : b.dataset.id; UI.rerender(); });
+  UI.act('revert-one', (b) => { const n = S.revertOne(b.dataset.id); if (!n) { UI.toast('Nothing to revert', 'the live config already matches', 'idle'); return; } UI.refreshChrome(); UI.go('#/config/apply'); });
   UI.act('restore', (b) => {
+    const H = D.configHistory, idx = H.findIndex((h) => h.id === b.dataset.id), later = H.slice(0, idx);
+    const go = () => { const n = S.restore(b.dataset.id); if (!n) { UI.toast('Nothing to restore', 'the live config already matches that backup', 'idle'); return; } UI.refreshChrome(); UI.go('#/config/apply'); };
+    if (!later.length) return go();
+    UI.confirm({ title: `Restore to before ${esc(H[idx].id)}?`, body: `This also undoes <b>${later.length} later change${later.length > 1 ? 's' : ''}</b>: ${later.map((h) => `<div class="mono tiny" style="margin-top:4px">${esc(h.id)} · ${esc(h.summary)}</div>`).join('')}<div style="margin-top:8px">To undo only ${esc(H[idx].id)}, use <b>Revert this change</b>.</div>`, ok: `Undo all ${later.length + 1}`, cancel: 'Keep them', danger: true }).then((ok) => ok && go()); });
+  UI.act('restore-old', (b) => {
     const n = S.restore(b.dataset.id);
     if (!n) { UI.toast('Nothing to restore', 'the live config already matches that backup', 'idle'); return; }
     UI.refreshChrome(); UI.go('#/config/apply');
