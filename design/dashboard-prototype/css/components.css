@@ -268,22 +268,9 @@ a.cell { color: inherit; text-decoration: none; } a.cell:hover { background: var
 a.cell { color: inherit; text-decoration: none; } a.cell:hover { background: var(--color-bg-raised); }
 
 /* run detail: selectable timeline rows with a time axis; compare table */
-.gantt-sel .gt-row { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
-.gantt-sel .gt-row > span { padding: 7px 8px; border-bottom: 1px solid var(--color-border-subtle); display: flex; align-items: center; min-width: 0; cursor: pointer; }
-.gantt-sel .gt-row > .gt { padding: 0 8px; }
-.gantt-sel .gt-row:hover > span { background: var(--color-bg-raised); }
-.gantt-sel .gt-row.on > span { background: var(--color-accent-subtle); }
-.gantt-sel .gt-row.on > span:first-child { box-shadow: inset 3px 0 0 var(--color-accent-default); font-weight: 600; }
-.gantt-sel .gt-row:focus-visible { outline: none; }
-.gantt-sel .gt-row:focus-visible > span:first-child { outline: 2px solid var(--color-accent-default); outline-offset: -2px; }
-.gantt .gt-axis { position: relative; height: 22px; padding: 0 8px; border-bottom: 1px solid var(--color-border-subtle); }
-.gantt .gt-axis span { position: absolute; top: 5px; transform: translateX(-50%); font: var(--type-caption-size)/1 var(--font-family-sans); color: var(--color-text-tertiary); white-space: nowrap; }
-.gantt .gt-axis span:first-child { transform: none; }
-.gantt .gt-axis span:last-child { transform: translateX(-100%); }
 .run-story p { max-width: 78ch; }
 .cmp-tbl tr.on td { background: var(--color-accent-subtle); }
 .warn-t { color: var(--color-status-warning-fg); }
-@media (max-width: 720px) { .gantt .gt-axis span:not(:first-child):not(:last-child) { display: none; } }
 
 /* overview: get started, system card */
 .gs-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 12px 14px 14px; }

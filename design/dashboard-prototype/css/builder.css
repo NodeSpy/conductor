@@ -147,16 +147,16 @@ details.adv > summary::-webkit-details-marker { display: none; }
 .par-head { display: flex; gap: 10px; align-items: center; padding: 10px 12px 6px 10px; }
 .par-fork { height: 14px; margin: 0 28px; border: 2px solid color-mix(in srgb, var(--color-status-running-solid) 50%, var(--color-border-default)); border-bottom: 0; border-radius: var(--radius-md) 10px 0 0; }
 .par-lanes { display: grid; grid-template-columns: repeat(var(--n), minmax(220px, 1fr)); gap: 10px; padding: 0 10px; overflow-x: auto; }
-.lane { position: relative; border: 1px dashed color-mix(in srgb, var(--color-status-running-solid) 30%, var(--color-border-default)); border-radius: var(--radius-control); padding: 6px 8px 8px; background: var(--color-bg-canvas); }
-.lane::before { content: ""; position: absolute; left: 21px; top: 30px; bottom: 10px; width: 2px; background: var(--color-border-default); }
-.lane .spine-add { padding-left: 8px; height: 30px; }
-.lane .spine-add .plus { width: 26px; height: 26px; }
+.par-lanes .lane { position: relative; border: 1px dashed color-mix(in srgb, var(--color-status-running-solid) 30%, var(--color-border-default)); border-radius: var(--radius-control); padding: 6px 8px 8px; background: var(--color-bg-canvas); }
+.par-lanes .lane::before { content: ""; position: absolute; left: 21px; top: 30px; bottom: 10px; width: 2px; background: var(--color-border-default); }
+.par-lanes .lane .spine-add { padding-left: 8px; height: 30px; }
+.par-lanes .lane .spine-add .plus { width: 26px; height: 26px; }
 .lane-head { display: flex; align-items: center; justify-content: space-between; }
-.lane .step-card .sc-head { gap: 7px; padding: 8px; }
-.lane .sc-num { font-size: var(--type-body-m-size); min-width: 26px; }
-.lane .sc-form { grid-template-columns: minmax(0, 1fr); }
-.lane .sc-form > * { grid-column: 1 / -1; }
-.lane .acct-row, .lane .adv-grid { grid-template-columns: minmax(0, 1fr); }
+.par-lanes .lane .step-card .sc-head { gap: 7px; padding: 8px; }
+.par-lanes .lane .sc-num { font-size: var(--type-body-m-size); min-width: 26px; }
+.par-lanes .lane .sc-form { grid-template-columns: minmax(0, 1fr); }
+.par-lanes .lane .sc-form > * { grid-column: 1 / -1; }
+.par-lanes .lane .acct-row, .par-lanes .lane .adv-grid { grid-template-columns: minmax(0, 1fr); }
 .add-lane { display: grid; place-items: center; min-height: 90px; }
 .icon-btn.sm { width: 24px; height: 24px; }
 .icon-btn.sm svg { width: 12px; height: 12px; }

@@ -100,3 +100,20 @@ tr[data-row] > td:first-child, .item[data-row], .frow[data-row] { box-shadow: in
 a.cite-link:hover { text-decoration: underline; text-underline-offset: 3px; }
 /* the test-result and value-source marks are status marks; keep them small in dense rows */
 .st.tpill, .st.vs-st { font-size: var(--type-caption-size); }
+
+/* ---- grouped lists: "Needs attention · N" (a plain sentence, one action) → "Running now" → "Finished" (quiet ink) ---- */
+.grp-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-1) var(--space-3); padding: var(--space-5) var(--pad-cell-x) var(--space-2); }
+.grp-t { font: var(--type-h4); color: var(--color-text-primary); }
+.grp-n { font-weight: var(--font-weight-regular); color: var(--color-text-tertiary); font-variant-numeric: tabular-nums; }
+.grp-head[data-tone="attn"] .grp-n { color: var(--color-text-primary); font-weight: var(--font-weight-bold); }
+.grp-say { font: var(--type-body-s); color: var(--color-text-secondary); }
+.grp-act { margin-left: auto; }
+.tbl .grp-row td { height: auto; padding: 0; border-bottom: var(--border-width) solid var(--color-border-default); background: var(--color-bg-surface); }
+.tbl .grp-row:first-child .grp-head { padding-top: var(--space-3); }
+.tbl tbody tr.grp-row:hover { background: none; }
+/* finished work reads in quiet ink: the mark keeps its shape, the words step back */
+tr.quiet td, .item.quiet { color: var(--color-text-secondary); }
+tr.quiet td b, .item.quiet b { font-weight: var(--font-weight-semibold); color: var(--color-text-primary); }
+/* a reason line under the name */
+.why-line { display: block; font: var(--type-body-s); color: var(--color-text-secondary); margin-top: 2px; }
+tr[data-row] .why-line { color: var(--color-text-primary); }

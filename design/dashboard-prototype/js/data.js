@@ -70,7 +70,7 @@
     { id: 'r-7f11', workflow: 'pr-review', trigger: 'gh.review_requested', repo: 'acme/api', number: 480, status: 'ok', started: m(38), finished: m(31), cost: 0.41, tokens: 30110, steps: [] },
     { id: 'r-7ef0', workflow: 'ci-fixer', trigger: 'gh.check_failed', repo: 'acme/web', number: 1288, status: 'fail', started: m(64), finished: m(52), cost: 1.12, failed_step: 'test', error: 'go test ./...: 2 failures (TestCheckout, TestRefund)', steps: [] },
     { id: 'r-7ee3', workflow: 'issue-triage', trigger: 'gh.issue_opened', repo: 'acme/api', number: 486, status: 'ok', started: m(80), finished: m(79), cost: 0.06, steps: [] },
-    { id: 'r-7ed1', workflow: 'pr-review', trigger: 'gh.review_requested', repo: 'acme/infra', number: 77, status: 'wait', started: m(95), cost: 0.38, detail: 'hand-off: awaiting answer on hoff (approve / revise / discard)', steps: [] },
+    { id: 'r-7ed1', workflow: 'pr-review', trigger: 'gh.review_requested', repo: 'acme/infra', number: 77, status: 'wait', started: m(95), cost: 0.38, detail: 'hand-off: awaiting your answer (approve, revise or discard)', steps: [] },
     { id: 'r-7ec8', workflow: 'dep-bump', trigger: 'schedule', repo: 'acme/web', number: 0, status: 'ok', started: m(140), finished: m(131), cost: 0.82, steps: [] },
     { id: 'r-7eb2', workflow: 'bot:platform-sre', trigger: 'pd.incident', repo: '', number: 0, status: 'ok', started: m(190), finished: m(176), cost: 0.54, steps: [] },
     { id: 'r-7ea0', workflow: 'ci-fixer', trigger: 'gh.check_failed', repo: 'acme/api', number: 471, status: 'idle', started: m(230), finished: m(230), cost: 0, detail: 'parked: conductor:hold label', steps: [] },

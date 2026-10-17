@@ -16,7 +16,7 @@ test('a failed run: what happened, what you can do, and an audit scoped to the r
   for (const other of ['p12', 'acme/api#480', 'pastebin', 'dashboard_session']) await expect(audit).not.toContainText(other);
   // the timeline has a time axis spanning the run
   await expect(page.locator('.gt-axis span')).toHaveCount(5);
-  await expect(page.locator('.gt-axis span').last()).toHaveText('12m00s');
+  await expect(page.locator('.gt-axis span').last()).toHaveText('12 min');
 });
 
 test('every step is selectable; tabs follow the step (no diff on a command step); ↑/↓ moves', async ({ page }) => {
@@ -58,7 +58,7 @@ test('compare two runs: step status, durations, and the outputs diff with word h
   await page.locator('.run-story a', { hasText: 'Compare with the last good' }).click();
   await expect(page).toHaveURL(/#\/runs\/r-7ef0\/compare\/r-7e40/);
   const row = page.locator('.cmp-tbl tr[data-step="test"]');
-  await expect(row).toContainText('differs'); await expect(row).toContainText('failed'); await expect(row).toContainText('ok');
+  await expect(row).toContainText('differs'); await expect(row).toContainText('failed'); await expect(row).toContainText('passed');
   await expect(page.locator('.cmp-tbl tr[data-step="push"]')).toContainText('not reached');
   await expect(page.locator('.diff mark.wd').first()).toBeVisible();
   await page.locator('.cmp-tbl tr[data-step="fix"]').click();

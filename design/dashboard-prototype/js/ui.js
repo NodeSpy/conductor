@@ -41,6 +41,11 @@
   UI.empty = ({ title, body = '', action = '', small = false, art = true, cls = '' }) => `<div class="empty${small ? ' small' : ''}${cls ? ' ' + cls : ''}">${art ? UI.sunrise() : ''}<span class="serif">${title}</span>${body ? `<p>${body}</p>` : ''}${action}</div>`;
   /** A filter that picks one value: a chip wrapping a native select. { icon, on, label, attrs (on the select), options (html), cls } */
   UI.selectChip = (o) => `<label class="chip chip-sel${o.on ? ' on' : ''}${o.cls ? ' ' + o.cls : ''}"${o.wrapAttrs ? ' ' + o.wrapAttrs : ''}>${o.icon ? UI.icon(o.icon) : ''}<span class="sr-only">${o.label}</span><select ${o.attrs || ''} aria-label="${o.label}">${o.options}</select></label>`;
+  /** A group heading in a grouped list or table: "Needs attention · 3", then one plain sentence and at most one action.
+      tone: attn (needs someone) | run (running now) | done (finished, quiet ink). */
+  UI.groupHead = ({ title, n, say = '', action = '', tone = 'done' }) => `<div class="grp-head" data-tone="${tone}"><span class="grp-t">${title}${n != null ? ` <span class="grp-n">· ${n}</span>` : ''}</span>${say ? `<span class="grp-say">${say}</span>` : ''}${action ? `<span class="grp-act">${action}</span>` : ''}</div>`;
+  /** The same heading as a table row spanning every column. */
+  UI.groupRow = (o) => `<tr class="grp-row" data-tone="${o.tone || 'done'}"><td colspan="20">${UI.groupHead(o)}</td></tr>`;
   /** A count beside a tab or nav item; hot (ember) only where a person is needed. */
   UI.count = (n, o = {}) => `<span class="count${o.hot ? ' hot' : ''}${o.cls ? ' ' + o.cls : ''}"${o.label ? ` aria-label="${UI.esc(o.label)}"` : ''}>${n}</span>`;
   /** Attributes for a row (tr, .item) that needs someone: a thin leading edge in the state's colour, never a tint. */
@@ -73,6 +78,12 @@
   UI.runTitle = (r) => { const bot = String(r.workflow || '').startsWith('bot:') ? r.workflow.slice(4) : null; const i = r.status === 'run' ? 0 : ['fail', 'stopped'].includes(r.status) ? 2 : 1;
     if (r.status === 'wait') return `Waiting for your answer${bot ? ` (${bot})` : ''}`; if (r.status === 'idle') return 'Parked: on hold';
     if (bot) return [`${bot} is working`, `${bot} finished a task`, `${bot}’s task failed`][i]; const w = RUN_WHAT[r.workflow]; return w ? w[i] : [`Running ${r.workflow}`, `${r.workflow} finished`, `${r.workflow} failed`][i]; };
+  /** A run's error in plain words; the raw text stays on the run's record and in the step log. */
+  UI.plainError = (r) => { const e = String(r.error || ''); let m;
+    if ((m = e.match(/(\d+) failures? \(([^)]*)\)/))) return `${m[1]} test${m[1] === '1' ? '' : 's'} failed (${m[2]})`;
+    if ((m = e.match(/max_cost_usd ([\d.]+) exceeded/))) return `It went over its $${m[1]} budget, so conductor stopped it`;
+    if (/stopped by operator/.test(e)) return 'You stopped it';
+    return e; };
   /** The words for a run's state, used in tables and stories. */
   UI.runWord = (s) => ({ ok: 'Passed', run: 'Running', fail: 'Failed', wait: 'Waiting on you', idle: 'Parked', stopped: 'Stopped' }[s] || s);
   UI.runS = (s) => (s === 'stopped' ? 'fail' : s);
@@ -168,7 +179,7 @@
 
   /* ---------- nav ---------- */
   const navGroups = [
-    ['Now', [['overview', 'Overview', 'overview'], ['live', 'Live', 'live', () => D.runs.filter((r) => r.status === 'run').length], ['attention', 'Needs you', 'attention', () => D.attention.length, true]]],
+    ['Now', [['overview', 'Overview', 'overview'], ['live', 'Activity', 'live', () => D.runs.filter((r) => r.status === 'run').length], ['attention', 'Needs you', 'attention', () => D.attention.length, true]]],
     ['Work', [['runs', 'Run history', 'runs'], ['workflows', 'Workflows', 'workflows'], ['bots', 'Bots', 'bots'], ['browser', 'Browsers', 'browser', () => D.browsers.length]]],
     ['System', [['config', 'Config', 'config'], ['secrets', 'Secrets & vars', 'secrets'], ['extensions', 'Packs & plugins', 'extensions'], ['connectors', 'Connectors & hosts', 'connectors'], ['updates', 'Updates', 'updates', () => (D.daemon.update.available ? 1 : 0)], ['logs', 'Logs & audit', 'logs'], ['security', 'Access', 'shield']]],
   ];
@@ -298,7 +309,7 @@
       ${D.pending.length ? `<a class="cell staged" href="#/config/apply" data-tip="Config changes staged but not applied">${UI.icon('edit')}<span><b>${D.pending.length}</b><span class="lbl-long"> to review</span></span></a>` : ''}
       ${need ? `<a class="cell alert" href="#/attention" aria-label="${need} need you">${UI.count(need, { hot: true })}<span class="lbl-long">need you</span></a>` : ''}`;
     $('#rail-nav').innerHTML = UI.navHTML();
-    $('#tabbar').innerHTML = [['overview', 'Overview', 'overview'], ['live', 'Live', 'live'], ['attention', 'Approvals', 'attention', need], ['bots', 'Bots', 'bots'], ['more', 'More', 'grid']].map(([k, l, ic, c]) => `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}${l}${c ? UI.count(c, { hot: true }) : ''}</a>`).join('');
+    $('#tabbar').innerHTML = [['overview', 'Overview', 'overview'], ['live', 'Activity', 'live'], ['attention', 'Approvals', 'attention', need], ['bots', 'Bots', 'bots'], ['more', 'More', 'grid']].map(([k, l, ic, c]) => `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}${l}${c ? UI.count(c, { hot: true }) : ''}</a>`).join('');
     UI.setNav((location.hash.replace(/^#\/?/, '') || 'overview').split('/')[0]);
   };
 
@@ -334,7 +345,9 @@
   };
 
   /* small shared bits */
-  UI.head = (title, opts = {}) => `<div class="page-head"><div>${opts.crumbs ? `<div class="crumbs">${opts.crumbs}</div>` : ''}<h1>${title}${opts.sub ? `<span class="sub">${opts.sub}</span>` : ''}</h1>${opts.lede ? `<p class="lede">${opts.lede}</p>` : ''}</div>${opts.actions ? `<div class="actions">${opts.actions}</div>` : ''}</div>`;
+  /** The summary header: crumbs, the title (the serif for a short human title; gen: the UI face for generated ones),
+      one sentence that answers the page's question (lede), an optional detail line (machine detail last), actions. */
+  UI.head = (title, opts = {}) => `<div class="page-head"><div>${opts.crumbs ? `<div class="crumbs">${opts.crumbs}</div>` : ''}<h1${opts.gen ? ' class="gen"' : ''}>${title}${opts.sub ? `<span class="sub">${opts.sub}</span>` : ''}</h1>${opts.lede ? `<p class="lede">${opts.lede}</p>` : ''}${opts.detail ? `<div class="head-detail">${opts.detail}</div>` : ''}</div>${opts.actions ? `<div class="actions">${opts.actions}</div>` : ''}</div>`;
   UI.tabs = (items, on) => `<div class="tabs" role="tablist">${items.map(([k, l, href, c, hot]) => `<a href="${href}" role="tab" class="${k === on ? 'on' : ''}"${k === on ? ' aria-current="page" aria-selected="true"' : ''}>${l}${c != null ? ' ' + UI.count(c, { hot }) : ''}</a>`).join('')}</div>`;
   UI.bind = (root, sel, ev, fn) => $$(sel, root).forEach((el) => el.addEventListener(ev, (e) => fn(e, el)));
 

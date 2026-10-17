@@ -59,19 +59,39 @@
   }
 
   /* ---------- live ---------- */
+  /* ---------- activity: what ran when (Score's lanes), what's running now, the live feed ---------- */
+  const av = { span: 720 };
+  const ASPANS = { '1h': 60, '12h': 720, '24h': 1440 };
+  UI.act('act-span', (b) => { av.span = ASPANS[b.dataset.v]; UI.rerender(); });
+  const runProgress = (r) => { const steps = graphOf(r), i = Math.max(0, r.steps.findIndex((x) => x.status === 'run')), n = Math.max(steps.length, r.steps.length, 1); return { at: Math.min(i + 1, n), n }; };
+  UI.runningList = () => { const live = D.runs.filter((r) => r.status === 'run');
+    return live.length ? `<div class="list">${live.map((r) => { const p = runProgress(r); return `<a class="item click run-row" href="#/live/${r.id}">${st('run', '<span class="sr-only">Running</span>')}<span class="grow"><b>${esc(UI.runTitle(r))}</b><span class="why-line">${esc(r.workflow)} · ${UI.runTarget(r)} · started ${UI.agoText(r.started)}</span></span><span class="prog"><span>Step ${p.at} of ${p.n}</span><span class="bar"><i style="width:${(p.at / p.n) * 100}%"></i></span></span></a>`; }).join('')}</div>`
+      : UI.empty({ title: 'Nothing is running', body: 'Runs start when something a workflow or bot watches happens, or when you start one.', action: `<a class="btn" href="#/workflows">${icon('play')}Run a workflow</a>`, small: true }); };
+  function activityPage() {
+    const live = D.runs.filter((r) => r.status === 'run'), L = UI.lanes({ span: av.span, all: true }), k = Object.keys(ASPANS).find((x) => ASPANS[x] === av.span);
+    const marks = D.score.flatMap((l) => l.marks).filter(([a]) => a <= av.span), fails = marks.filter((m) => m[2] === 'fail').length;
+    return `<div class="page">${UI.head('Activity', { lede: `${live.length ? `<b>${live.length} ${live.length === 1 ? 'run is' : 'runs are'} going now.</b> ` : '<b>Nothing is running.</b> '}In the last ${k === '1h' ? 'hour' : k.replace('h', ' hours')}, ${marks.filter((m) => m[2] === 'ok').length} of ${marks.length} runs went fine${fails ? `; ${fails} failed` : ''}.`, actions: `<a class="btn" href="#/runs">${icon('runs')}Run history</a>` })}
+      <div class="panel score"><div class="panel-head"><h2>What ran when</h2><span class="muted small hide-phone">one lane per workflow or bot · now is on the right</span><div class="tools">${UI.seg(Object.keys(ASPANS).map((x) => [x, x]), k, 'act-span')}</div></div><div class="panel-body">${L.legend}${L.html}</div></div>
+      <div class="grid act-grid" style="margin-top:var(--gap-stack)">
+        <div class="panel"><div class="panel-head"><h2>Running now</h2>${UI.count(live.length)}</div>${UI.runningList()}</div>
+        <div class="panel"><div class="panel-head"><h3>Latest events</h3><div class="tools">${UI.statusMark('run', 'Live', { sm: true })}</div></div><div class="list feed">${D.activity.slice(0, 7).map((a) => `<div class="item">${st(a.s, '<span class="sr-only">' + a.s + '</span>', { sm: true })}<div class="grow small">${a.text}<div class="item-id">${a.who}</div></div><span class="att-age">${UI.agoText(a.t)}</span></div>`).join('')}</div></div>
+      </div></div>`;
+  }
+
+  /* ---------- one live run ---------- */
   UI.route('live/:id?', ({ id }) => {
+    if (!id) return activityPage();
     const live = D.runs.filter((r) => r.status === 'run');
-    const run = D.runs.find((r) => r.id === id) || live[0];
-    if (!run) return `<div class="page">${UI.head('Live')}<div class="panel"><div class="empty"><span class="serif">Nothing is running</span><a class="btn" href="#/workflows">Run a workflow</a></div></div></div>`;
-    if (run.status !== 'run' && !id) return '';
+    const run = D.runs.find((r) => r.id === id);
+    if (!run) return `<div class="page">${UI.head('Activity')}${UI.empty({ title: 'No such run', body: `There is no run ${esc(id)}.`, action: `<a class="btn" href="#/live">Back to Activity</a>` })}</div>`;
     const steps = graphOf(run);
     if (lv.run !== run.id) { lv.run = run.id; lv.sel = (run.steps.find((s) => s.status === 'run') || run.steps[0] || {}).id || (steps[0] || {}).id; lv.n = 9; }
     const elapsed = Math.round((Date.now() - new Date(run.started)) / 60000);
     const srcs = [...new Set(D.liveLog.map((l) => l[0]))];
     return {
       toString: () => `<div class="page wide">
-        ${UI.head(`${run.workflow}`, { crumbs: `<a href="#/live">Live</a> ${icon('chev')} ${run.id}`, sub: run.repo ? `${run.repo}#${run.number}` : run.trigger,
-          actions: `<span class="mono small muted">${elapsed}m elapsed</span>${UI.runFig(run)}${UI.isApi() ? '<span class="mono small muted">budget $2.00</span>' : ''}<button class="btn" ${UI.off('Opens paseo\'s own view of the agent, outside the dashboard (not in the prototype)')}>${icon('terminal')}Open in paseo</button>${run.status === 'run' ? `<button class="btn danger" data-act="stop-run" data-run="${run.id}">${icon('x')}Stop run</button>` : `${st(run.status === 'stopped' ? 'fail' : run.status, run.status, true)}`}` })}
+        ${UI.head(esc(UI.runTitle(run)), { gen: true, crumbs: `<a href="#/live">Activity</a> ${icon('chev')} <span class="mono">${run.id}</span>`, detail: `${st(UI.runS(run.status), UI.runWord(run.status))} <span class="muted">started ${UI.when(run.started, true)} · ${elapsed} min so far${UI.isApi() ? ' · budget $2.00' : ''}</span>${UI.runFig(run)} <span class="item-id">${run.id} · ${esc(run.workflow)} · ${run.repo ? `${run.repo}#${run.number}` : esc(run.trigger)}</span>`,
+          actions: `<button class="btn" ${UI.off('Opens paseo\'s own view of the agent, outside the dashboard (not in the prototype)')}>${icon('terminal')}Open in paseo</button>${run.status === 'run' ? `<button class="btn danger" data-act="stop-run" data-run="${run.id}">${icon('x')}Stop run</button>` : `${st(run.status === 'stopped' ? 'fail' : run.status, run.status, true)}`}` })}
         <div class="row wrap" style="margin:-8px 0 16px;gap:8px">${live.map((r) => UI.filterChip({ tag: 'a', href: `#/live/${r.id}`, on: r.id === run.id, attrs: r.id === run.id ? 'aria-current="page"' : '', icon: 'live', text: `${r.workflow} <span class="muted">${r.repo ? r.repo + '#' + r.number : r.trigger}</span>` })).join('')}</div>
         <div class="panel" style="margin-bottom:14px"><div class="panel-head"><h3>Steps</h3><span class="muted small">trigger <span class="mono">${run.trigger}</span> · from step order + <span class="mono">parallel:</span> · click a step</span><div class="tools"><span class="mono tiny muted">${run.steps.filter((s) => s.status === 'ok').length}/${steps.length} done</span></div></div><div id="graph">${graph(run, steps, lv.sel)}</div></div>
         <div class="run-layout">
@@ -115,7 +135,7 @@
   /* ---------- history ---------- */
   const PAGE = 50;
   const hv = { q: '', status: new Set(), wf: '', repo: '', since: '', cost: '', sel: new Set(), last: null, limit: PAGE };
-  const SL = { ok: 'ok', run: 'running', fail: 'failed', wait: 'waiting', idle: 'parked', stopped: 'stopped' };
+  const SL = { ok: 'passed', run: 'running', fail: 'failed', wait: 'waiting on you', idle: 'parked', stopped: 'stopped' };
   const histMatch = (r) => {
     if (!UI.scopeKeeps(UI.botOfRun(r))) return false;
     if (hv.status.size && !hv.status.has(r.status === 'stopped' ? 'fail' : r.status)) return false;
@@ -128,22 +148,40 @@
   };
   const chipSel = (key, label, ic, opts) => UI.selectChip({ icon: ic, on: !!hv[key], label, attrs: `data-on-change="hist-sel" data-k="${key}"`, options: opts.map(([v, l]) => `<option value="${esc(v)}"${String(hv[key]) === String(v) ? ' selected' : ''}>${esc(l)}</option>`).join('') });
   /* history pages by cursor (the API returns { runs, next_cursor }): the first 50, then "Load 50 more" */
+  // grouped: what needs someone first, then what's running, then what finished (quiet ink). Paging cuts across groups.
+  const GROUP = (r) => (['fail', 'stopped', 'wait'].includes(r.status) ? 'attn' : r.status === 'run' ? 'run' : 'done');
+  const reason = (r) => (r.status === 'fail' || r.status === 'stopped' ? `${r.failed_step ? `Stopped at ${esc(r.failed_step)}: ` : ''}${esc(UI.plainError ? UI.plainError(r) : r.error || '')}` : r.status === 'wait' ? esc(String(r.detail || '').replace(/^hand-off: /, 'Hand-off: ')) : r.status === 'idle' ? esc(String(r.detail || 'parked').replace(/^parked: /, 'Parked: ')) : '');
   function histRows() {
-    const all = D.runs.filter(histMatch), rows = all.slice(0, hv.limit), more = all.length - rows.length;
-    return (rows.map((r) => `<tr class="click" data-href="#/${r.status === 'run' ? 'live' : 'runs'}/${r.id}">
+    const all = D.runs.filter(histMatch).sort((x, y) => ['attn', 'run', 'done'].indexOf(GROUP(x)) - ['attn', 'run', 'done'].indexOf(GROUP(y)) || new Date(y.started) - new Date(x.started));
+    const rows = all.slice(0, hv.limit), more = all.length - rows.length;
+    const n = { attn: all.filter((r) => GROUP(r) === 'attn'), run: all.filter((r) => GROUP(r) === 'run'), done: all.filter((r) => GROUP(r) === 'done') };
+    const failed = n.attn.filter((r) => r.status !== 'wait');
+    const heads = {
+      attn: { title: 'Needs attention', n: n.attn.length, tone: 'attn', say: [failed.length ? `${failed.length} failed` : '', n.attn.length - failed.length ? `${n.attn.length - failed.length} waiting on you` : ''].filter(Boolean).join(', ') + '.', action: failed.length ? `<button class="btn sm" data-act="hist-retry-failed">${icon('undo')}Retry the failed ones…</button>` : '' },
+      run: { title: 'Running now', n: n.run.length, tone: 'run', say: 'Open one to watch its steps live.' },
+      done: { title: 'Finished', n: n.done.length, tone: 'done', say: `${n.done.filter((r) => r.status === 'ok').length} passed${n.done.some((r) => r.status === 'idle') ? `, ${n.done.filter((r) => r.status === 'idle').length} parked` : ''}.` },
+    };
+    let g = null;
+    const html = rows.map((r) => { const gr = GROUP(r), head = gr !== g ? UI.groupRow(heads[gr]) : ''; g = gr; const href = `#/${r.status === 'run' ? 'live' : 'runs'}/${r.id}`, why = reason(r);
+      return head + `<tr class="click${gr === 'done' ? ' quiet' : ''}" data-href="${href}"${UI.rowState(r.status)}>
       <td class="sel" data-l=""><input type="checkbox" class="cbx" data-act="hist-sel-row" data-id="${r.id}" aria-label="Select ${r.id}"${hv.sel.has(r.id) ? ' checked' : ''}></td>
-      <td data-l="status">${st(r.status === 'stopped' ? 'fail' : r.status, SL[r.status] || r.status)}</td>
-      <td data-l="run" class="mono"><a class="link-plain" href="#/${r.status === 'run' ? 'live' : 'runs'}/${r.id}">${r.id}</a></td>
-      <td data-l="workflow"><b>${r.workflow}</b></td><td data-l="trigger" class="mono muted">${r.trigger}</td>
-      <td data-l="target" class="mono">${UI.runTarget(r)}</td><td data-l="started" class="mono muted">${ago(r.started)} ago</td>
-      <td data-l="duration" class="mono num">${r.finished ? Math.max(1, Math.round((new Date(r.finished) - new Date(r.started)) / 60000)) + 'm' : '…'}</td>
-      ${UI.usageOn() ? `<td data-l="usage" class="num">${UI.runFig(r)}</td>` : ''}<td class="muted small ellipsis hide-phone" style="max-width:260px">${esc(r.error || r.detail || '')}</td></tr>`).join('') || `<tr class="empty-row"><td colspan="10">No run matches these filters. <button class="link" data-act="hist-clear">Clear filters</button></td></tr>`) + (more > 0 ? `<tr class="more-row"><td colspan="10"><button class="btn sm" data-act="hist-more">Load ${Math.min(PAGE, more)} more</button> <span class="muted small">showing ${rows.length} of ${all.length} · next cursor ${btoa(rows[rows.length - 1].id).replace(/=+$/, '')}</span></td></tr>` : '');
+      <td data-l="status">${st(UI.runS(r.status), UI.runWord(r.status))}</td>
+      <td data-l="run" class="run-what"><a class="link-plain" href="${href}"><b>${esc(UI.runTitle(r))}</b></a>${why ? `<span class="why-line">${why}</span>` : ''}</td>
+      <td data-l="workflow">${esc(r.workflow)}</td>
+      <td data-l="target">${UI.runTarget(r)}</td><td data-l="started" class="nowrap">${UI.when(r.started)}</td>
+      <td data-l="took" class="num">${UI.runDur(r)}</td>
+      ${UI.usageOn() ? `<td data-l="usage" class="num">${UI.runFig(r)}</td>` : ''}<td data-l="id" class="mono hide-phone">${r.id}</td></tr>`; }).join('');
+    return (html || `<tr class="empty-row"><td colspan="10">No run matches these filters. <button class="link" data-act="hist-clear">Clear filters</button></td></tr>`) + (more > 0 ? `<tr class="more-row"><td colspan="10"><button class="btn sm" data-act="hist-more">Load ${Math.min(PAGE, more)} more</button> <span class="muted small">${more} older · next cursor <span class="mono">${esc(btoa(rows[rows.length - 1].id).slice(0, 10))}</span></span></td></tr>` : '');
   }
+  UI.act('hist-retry-failed', () => { hv.sel = new Set(D.runs.filter(histMatch).filter((r) => r.status === 'fail' || r.status === 'stopped').map((r) => r.id)); UI.acts['hist-bulk-retry'](); });
   UI.act('hist-more', () => { hv.limit += PAGE; histRefresh(); });
+  /** Run history's one sentence. */
+  UI.runsSummary = () => { const attn = D.runs.filter((r) => GROUP(r) === 'attn'), run = D.runs.filter((r) => r.status === 'run').length, ok = D.runs.filter((r) => r.status === 'ok').length;
+    return `${attn.length ? `<b>${attn.length} ${attn.length === 1 ? 'run needs' : 'runs need'} attention.</b> ` : '<b>Nothing needs attention.</b> '}${run ? `${run} ${run === 1 ? 'is' : 'are'} running now; ` : ''}${ok} finished fine in the last 12 hours.`; };
   UI.route('runs', () => {
     const n = D.runs.filter(histMatch).length;
     return `<div class="page">
-      ${UI.head('Run history', { sub: `${D.runs.length} of 500 kept · 14d retention`, actions: `<button class="btn" data-act="hist-export">${icon('download')}Export JSONL</button>` })}
+      ${UI.head('Run history', { lede: UI.runsSummary(), actions: `<button class="btn" data-act="hist-export">${icon('download')}Export JSONL</button>` })}
       <div class="filters">
         <div class="input-icon">${icon('search')}<input class="input" placeholder="repo, #number, run id, error text…" value="${esc(hv.q)}" data-on-input="hist-q" aria-label="Search runs"></div>
         ${['ok', 'run', 'fail', 'wait', 'idle'].map((s) => UI.filterChip({ on: hv.status.has(s), act: 'hist-st', attrs: `data-st="${s}"`, noCheck: true, text: st(s, SL[s]) })).join('')}
@@ -153,8 +191,8 @@
         ${!UI.usageOn() ? '' : chipSel('cost', 'Provider', 'zap', [['', 'provider: any']].concat(Object.keys(D.usage.providers).map((p) => [p, UI.provLabel(p)])))}
         ${UI.folderChip()}<span class="count-note" id="hist-n">${n} of ${D.runs.length}</span>
       </div>
-      <div class="panel"><table class="tbl responsive"><thead><tr><th class="sel"><input type="checkbox" class="cbx" data-act="hist-sel-all" aria-label="Select all shown"></th><th>status</th><th>run</th><th>workflow</th><th>trigger</th><th>target</th><th>started</th><th class="num">took</th>${UI.usageOn() ? `<th class="num">usage · ${UI.measHead()}</th>` : ''}<th class="hide-phone">note</th></tr></thead><tbody id="hist-body">${histRows()}</tbody></table><div id="hist-bulk">${histBulk()}</div>
-      <div class="panel-foot small muted"><span>Records are HMAC-signed in <span class="mono">${D.daemon.state_dir}/history/</span>; a record that fails its signature shows as tampered.</span></div></div>
+      <div class="panel"><table class="tbl responsive"><thead><tr><th class="sel"><input type="checkbox" class="cbx" data-act="hist-sel-all" aria-label="Select all shown"></th><th>Status</th><th>What happened</th><th>Workflow</th><th>Target</th><th>Started</th><th class="num">Took</th>${UI.usageOn() ? `<th class="num">Usage · ${UI.measHead()}</th>` : ''}<th class="hide-phone">Run</th></tr></thead><tbody id="hist-body">${histRows()}</tbody></table><div id="hist-bulk">${histBulk()}</div>
+      <div class="panel-foot"><span>${D.runs.length} of 500 kept for 14 days. Each record is signed; one that fails its signature shows as tampered. <span class="mono">${D.daemon.state_dir}/history/</span></span></div></div>
     </div>`;
   });
   function histBulk() { const ids = [...hv.sel], retryable = ids.filter((id) => { const r = D.runs.find((x) => x.id === id); return r && (r.status === 'fail' || r.status === 'stopped'); });
@@ -174,7 +212,7 @@
   const histRefresh = () => { UI.$('#hist-body').innerHTML = histRows(); UI.$('#hist-n').textContent = `${D.runs.filter(histMatch).length} of ${D.runs.length}`; };
   UI.act('hist-q', (el) => { hv.q = el.value; histRefresh(); });
   UI.act('hist-st', (b) => { const k = b.dataset.st; hv.status.has(k) ? hv.status.delete(k) : hv.status.add(k); b.classList.toggle('on'); b.setAttribute('aria-pressed', hv.status.has(k)); histRefresh(); });
-  UI.act('hist-sel', (sel) => { hv[sel.dataset.k] = sel.value; sel.closest('.chip-select').classList.toggle('on', !!sel.value); histRefresh(); });
+  UI.act('hist-sel', (sel) => { hv[sel.dataset.k] = sel.value; sel.closest('.chip').classList.toggle('on', !!sel.value); histRefresh(); });
   UI.act('hist-clear', () => { Object.assign(hv, { q: '', wf: '', repo: '', since: '', cost: '' }); hv.status.clear(); UI.rerender(); });
   UI.act('hist-export', () => { const rows = D.runs.filter(histMatch); UI.download('conductor-runs.jsonl', rows.map((r) => JSON.stringify(r)).join('\n') + '\n', 'application/x-ndjson'); UI.toast(`Exported ${rows.length} runs`, 'conductor-runs.jsonl · scrubbed', 'ok'); });
 
@@ -183,9 +221,18 @@
   const SSL = Object.assign({}, SL, { idle: 'not reached' });
   const mmss = (ms) => { const s = Math.round(ms / 1000); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`; };
   const tabsFor = (s) => [s.outputs ? ['outputs', 'Outputs'] : null, s.inputs ? ['inputs', 'Inputs'] : null, s.log.length ? ['log', 'Log'] : null, s.diff ? ['diff', 'Diff'] : null].filter(Boolean);
+  /* the run story: steps top to bottom, each with its outcome in a sentence and its duration on the right, the failing
+     step called out, later steps "Not reached"; a thin bar places each step on the run's time axis. Nested workflow
+     calls are one node you can open. Every row selects its step (click, or ↑/↓). */
+  const stepSentence = (r, rec, s) => { if (s.status === 'idle') return 'Not reached'; if (s.status === 'run') return 'Running now';
+    const lines = (s.log || []).map(([, t]) => String(t)); const bad = lines.find((t) => /FAIL|error|exceeded/i.test(t));
+    if (s.status === 'fail' || s.status === 'stopped') return (r.failed_step === s.id && r.error ? UI.plainError(r) : '') || bad || 'Failed';
+    const out = s.outputs || {}; return out.summary || lines[0] || 'Done'; };
+  const storyRow = (r, rec, s, sel, T) => { const stt = UI.runS(s.status);
+    return `<button type="button" class="gt-row${s.id === sel ? ' on' : ''}" role="option" aria-selected="${s.id === sel}" data-act="run-step" data-run="${r.id}" data-step="${s.id}"${UI.rowState(stt)}><span class="gt-mark">${st(stt === 'idle' ? 'skip' : stt, `<span class="sr-only">${SSL[s.status] || s.status}</span>`)}</span><span class="gt-what"><b>${esc(s.id)}</b><span class="why-line">${esc(stepSentence(r, rec, s))}</span></span><span class="gt" data-s="${stt}">${s.t0 != null ? `<i style="left:${(s.t0 / T) * 100}%;width:${Math.max((s.ms / T) * 100, 0.8)}%" title="${esc(s.id)} · ${mmss(s.ms)}"></i>` : ''}</span><span class="num gt-dur">${s.t0 != null ? UI.durText(s.ms) : ''}</span></button>${s.children && s.children.length ? `<details class="gt-call"><summary>${s.children.length} steps inside ${esc(s.what || s.id)}</summary>${s.children.map((c) => storyRow(r, rec, c, sel, T)).join('')}</details>` : ''}`; };
   const ganttHTML = (r, rec, sel) => { const T = Math.max(1, rec.total), ticks = [0, 0.25, 0.5, 0.75, 1];
-    return `<div class="gantt gantt-sel" role="listbox" aria-label="Steps of ${esc(r.id)}" data-run="${r.id}"><div></div><div class="gt-axis" aria-hidden="true">${ticks.map((f) => `<span style="left:${f * 100}%">${mmss(f * T)}</span>`).join('')}</div><div></div><div></div>
-      ${rec.steps.map((s) => { const stt = s.status === 'stopped' ? 'fail' : s.status; return `<button type="button" class="gt-row${s.id === sel ? ' on' : ''}" role="option" aria-selected="${s.id === sel}" data-act="run-step" data-run="${r.id}" data-step="${s.id}"><span class="mono">${esc(s.id)}</span><span class="gt" data-s="${stt}">${s.t0 != null ? `<i style="left:${(s.t0 / T) * 100}%;width:${Math.max((s.ms / T) * 100, 0.8)}%" title="${esc(s.id)} · ${mmss(s.ms)}"></i>` : '<span class="muted tiny">not reached</span>'}</span><span>${st(stt, '')}</span><span class="mono num muted tiny">${s.t0 != null ? mmss(s.ms) : ''}</span></button>`; }).join('')}</div>`; };
+    return `<div class="gantt gantt-sel story-tree" role="listbox" aria-label="Steps of ${esc(r.id)}" data-run="${r.id}"><div class="gt-head"><span></span><span></span><span class="gt-axis" aria-hidden="true">${ticks.map((f) => `<span style="left:${f * 100}%">${f ? UI.durText(f * T) : 'start'}</span>`).join('')}</span><span></span></div>
+      ${rec.steps.map((s) => storyRow(r, rec, s, sel, T)).join('')}</div>`; };
   const stepPanel = (r, rec, s) => { const tabs = tabsFor(s); const tab = tabs.some(([v]) => v === dv.tab) ? dv.tab : (tabs[0] || [''])[0];
     const body = { outputs: () => UI.yaml(UI.stepOutputsYAML(r, s), { err: s.status === 'fail' ? UI.stepOutputsYAML(r, s).split('\n').map((l, i) => (/FAIL|error/.test(l) ? i + 1 : 0)).filter(Boolean) : [] }), inputs: () => UI.yaml(YAML.stringify(s.inputs)), log: () => `<div class="log" style="max-height:280px">${s.log.map(([k, t], i) => `<div class="l ${logCls(k)}"><span class="t">${UI.clock(new Date(new Date(r.started).getTime() + (s.t0 || 0) + (i * s.ms) / Math.max(1, s.log.length)).toISOString())}</span><span class="src">${esc(s.id)}</span><span class="m">${esc(t)}</span></div>`).join('')}</div>`, diff: () => UI.stepDiffHTML(s.diff) };
     const what = { verb: 'calls a verb', code: 'runs a command', agent: 'agent', decide: 'an agent decides', bot: 'hands to a bot' }[s.kind] || s.kind;
@@ -202,19 +249,19 @@
     const rec = UI.runRecord(r), sel = dv.sel[r.id] || rec.failAt || rec.waitAt || (rec.steps.find((s) => s.kind === 'agent') || rec.steps[rec.steps.length - 1]).id, s = rec.steps.find((x) => x.id === sel) || rec.steps[0];
     const audit = UI.runAudit(r), same = D.runs.filter((x) => x.workflow === r.workflow && x.id !== r.id && x.status !== 'run');
     return `<div class="page">
-      ${UI.head(r.workflow, { crumbs: `<a href="#/runs">Run history</a> ${icon('chev')} ${r.id}`, sub: r.repo ? UI.runTarget(r) + ' · ' + r.trigger : r.trigger,
-        actions: `${st(r.status === 'stopped' ? 'fail' : r.status, SL[r.status], true)}<button class="btn" data-act="retry" data-run="${r.id}" data-from="${rec.failAt || ''}">${icon('undo')}Retry…</button>${same.length ? `<a class="btn" href="#/runs/${r.id}/compare">${icon('split')}Compare…</a>` : ''}<button class="btn ghost" data-act="run-record" data-run="${r.id}" data-tip="The signed JSON record: every step's inputs, outputs and timing, scrubbed">${icon('download')}Download run record</button>` })}
+      ${UI.head(esc(UI.runTitle(r)), { gen: true, crumbs: `<a href="#/runs">Run history</a> ${icon('chev')} <span class="mono">${r.id}</span>`, detail: `${st(UI.runS(r.status), UI.runWord(r.status))} <span class="muted">${UI.when(r.started, true)} · took ${UI.runDur(r)}</span> <span class="item-id">${r.id} · ${esc(r.workflow)} · ${UI.runTarget(r)} · ${esc(r.trigger)}</span>`,
+        actions: `<button class="btn" data-act="retry" data-run="${r.id}" data-from="${rec.failAt || ''}">${icon('undo')}Retry…</button>${same.length ? `<a class="btn" href="#/runs/${r.id}/compare">${icon('split')}Compare…</a>` : ''}<button class="btn ghost" data-act="run-record" data-run="${r.id}" data-tip="The signed JSON record: every step's inputs, outputs and timing, scrubbed">${icon('download')}Download run record</button>` })}
       ${storyHTML(r)}
       <div class="grid g-side">
         <div class="stack">
-          <div class="panel"><div class="panel-head"><h3>Timeline</h3><span class="muted small">${mmss(rec.total)} total · pick a step, or use ↑ ↓</span></div><div class="panel-body tight">${ganttHTML(r, rec, s.id)}</div></div>
+          <div class="panel"><div class="panel-head"><h2>Steps</h2><span class="muted small">${UI.durText(rec.total)} in all · pick a step, or use ↑ ↓</span></div><div class="panel-body tight">${ganttHTML(r, rec, s.id)}</div></div>
           ${stepPanel(r, rec, s)}
         </div>
         <div class="stack">
           <div class="panel"><div class="panel-head"><h3>Run</h3></div><div class="panel-body"><dl class="kv">
-            <dt>id</dt><dd class="mono">${r.id}</dd><dt>target</dt><dd class="mono">${UI.runTarget(r)}</dd><dt>trigger</dt><dd class="mono">${esc(r.trigger)}</dd><dt>started</dt><dd class="mono">${new Date(r.started).toLocaleString()}</dd>
+            <dt>id</dt><dd class="mono">${r.id}</dd><dt>target</dt><dd class="mono">${UI.runTarget(r)}</dd><dt>trigger</dt><dd class="mono">${esc(r.trigger)}</dd><dt>started</dt><dd>${UI.when(r.started, true)}</dd>
             ${UI.usageOn() ? `<dt>usage</dt><dd>${UI.runFig(r)} <span class="mono tiny muted">${UI.runModel(r)} · ${UI.srcLabel(UI.isApi() || UI.usageSource() ? 'source' : 'observed')}</span></dd>` : ''}<dt>signature</dt><dd>${st('ok', 'HMAC verified')}</dd><dt>retry of</dt><dd class="mono">${r.retry_of ? `<a class="link" href="#/runs/${r.retry_of}">${r.retry_of}</a>` : '—'}</dd></dl></div></div>
-          <div class="panel"><div class="panel-head"><h3>Audit for this run</h3><a class="btn sm ghost" style="margin-left:auto" href="#/logs/audit?run=${r.id}">All ${icon('chev')}</a></div><div class="list run-audit">${audit.map((a) => `<div class="item small"><span class="mono tiny muted" style="width:44px">${ago(a.ts)}</span><span class="mono" style="color:var(--color-status-running-fg)">${a.event}</span><span class="muted ellipsis grow">${esc(a.detail)}</span></div>`).join('') || '<div class="empty small">No audit events for this run.</div>'}</div></div>
+          <div class="panel"><div class="panel-head"><h3>Audit for this run</h3><a class="btn sm ghost" style="margin-left:auto" href="#/logs/audit?run=${r.id}">All ${icon('chev')}</a></div><div class="list run-audit">${audit.map((a) => `<div class="item small"><span class="grow"><span class="ellipsis" style="display:block">${esc(a.detail)}</span><span class="item-id">${a.event}</span></span><span class="att-age">${UI.agoText(a.ts)}</span></div>`).join('') || '<div class="empty small">No audit events for this run.</div>'}</div></div>
         </div></div></div>`;
   });
   UI.act('run-tab', (b) => { dv.tab = b.dataset.v; UI.rerender(); });

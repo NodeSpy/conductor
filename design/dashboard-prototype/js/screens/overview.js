@@ -148,7 +148,7 @@
 
   function activity() {
     return `<div class="panel">
-      <div class="panel-head"><h3>Activity</h3><div class="tools">${UI.statusMark('run', 'Live', { sm: true })}</div></div>
+      <div class="panel-head"><h3>Latest events</h3><div class="tools">${UI.statusMark('run', 'Live', { sm: true })}</div></div>
       <div class="list feed" id="feed" data-volatile>${D.activity.map((a) => feedItem(a.s, a.text, a.who, UI.when(a.t))).join('')}</div></div>`;
   }
   const feedItem = (s, text, who, when, fresh) => `<div class="item${fresh ? ' new-item' : ''}">${UI.statusMark(s === 'idle' ? 'idle' : s, `<span class="sr-only">${WORD[s] || s}</span>`, { sm: true })}<div class="grow small">${text}<div class="item-id">${who}</div></div><span class="att-age">${when}</span></div>`;
