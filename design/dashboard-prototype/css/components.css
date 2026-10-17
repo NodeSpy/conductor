@@ -398,3 +398,8 @@ th.sel, td.sel { width: 30px; padding-right: 0 !important; }
 @media (max-width: 720px) { .page-head .actions .ph-folded { display: none !important; } .page-head .actions { flex-wrap: nowrap; } .page-head .actions .btn { flex: 1 1 auto; } .page-head .actions .ph-more { flex: 0 0 auto; } }
 .row.guard { align-items: flex-start; } .row.guard .st { flex: none; margin-top: 1px; }
 .score .panel-foot { flex-wrap: wrap; row-gap: 6px; }
+
+/* builder: hooks lane and keys only in YAML */
+.hooks-lane { margin: 10px 0 6px; padding: 10px 12px; border: 1px dashed var(--line-2); border-radius: var(--r); display: flex; flex-direction: column; gap: 6px; }
+.hook-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.yaml-only { margin: 4px 0 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }

@@ -189,12 +189,16 @@
   function mutate(fn, opts) {
     flushPending();
     if (B.err) { UI.toast('Fix the YAML first', `line ${B.err.line}: ${esc(B.err.msg || B.err.message)}`, 'fail'); return false; }
-    const v = Y.clone(B.value);
+    const v = Y.clone(B.value), had = new Set(Object.keys(B.value || {}));
     const r = fn(v);
     if (r === false) return false;
-    commit(Y.emit(v, B.meta), opts);
+    commit(Y.emit(canonical(v, had), B.meta), opts);
     return true;
   }
+  /* A newly added trigger key goes where you'd write it (name, folder, on, enabled, filter, group, policy … before steps), not after steps. Existing keys keep their order. */
+  const CANON = ['name', 'extends', 'abstract', 'folder', 'description', 'on', 'enabled', 'repo', 'filter', 'group', 'policy', 'gate', 'shadow', 'callable', 'options', 'inputs', 'outputs', 'steps', 'hooks'];
+  function canonical(v, had) { if (!v || typeof v !== 'object' || Array.isArray(v)) return v; const keys = Object.keys(v), fresh = keys.filter((k) => !had.has(k) && CANON.includes(k)); if (!fresh.length) return v;
+    const out = {}, rank = (k) => CANON.indexOf(k); keys.filter((k) => !fresh.includes(k)).forEach((k) => { fresh.filter((f) => !(f in out) && rank(f) < rank(k) && rank(k) >= 0).sort((a, b) => rank(a) - rank(b)).forEach((f) => { out[f] = v[f]; }); out[k] = v[k]; }); fresh.forEach((f) => { if (!(f in out)) out[f] = v[f]; }); return out; }
   const allIds = (v) => WF.walk(v).map((e) => e.step && e.step.id).filter(Boolean);
   const uniqueId = (v, base) => { base = String(base || 'step').replace(/[^\w-]/g, '-').replace(/^[^a-z]+/i, '') || 'step'; const ids = new Set(allIds(v)); if (!ids.has(base)) return base; let n = 2; while (ids.has(`${base}-${n}`)) n++; return `${base}-${n}`; };
   const locOf = (s) => s.split('.').map((x) => (/^\d+$/.test(x) ? +x : x));
@@ -213,7 +217,7 @@
     const name = B.name.startsWith('bot:') ? B.name : B.name;
     const deployBlock = B.err ? 'Fix the YAML parse error first' : e ? `${e} error${e > 1 ? 's' : ''} to fix before deploying` : B.owner === 'bot' ? ro : s === 'live' ? 'Nothing to deploy: this is what\'s live' : '';
     const saveBlock = B.owner === 'bot' ? ro : s !== 'draft' ? (s === 'saved' ? 'Saved; deploy it, or keep editing' : 'No unsaved edits') : B.err ? 'Fix the YAML parse error first' : '';
-    const evs = SCHEMA.events.filter((x) => WF.sources(B.value || {}).some((so) => so.on === x.on) || x.on === 'manual');
+    const srcs = WF.sources(B.value || {}), evs = SCHEMA.events.filter((x) => srcs.some((so) => so.on === x.on) || x.on === 'manual');
     return `<a class="btn sm ghost back" href="#/workflows" aria-label="All workflows">${icon('chev')}</a>
       <span class="serif wfb-title">${esc(name)}</span>
       ${B.owner === 'pack' ? `<span class="owner pack">pack ${B.pack}</span>` : B.owner === 'bot' ? `<span class="owner pack">bot (${UI.term('synthesized')})</span>` : '<span class="owner op">your config</span>'}
@@ -221,7 +225,7 @@
       <div class="wfb-tools">
         <button class="icon-btn" data-act="wf-undo" ${B.hi > 0 ? 'data-tip="Undo (Ctrl+Z)"' : UI.off('Nothing to undo')} aria-label="Undo">${icon('undo')}</button>
         <button class="icon-btn flip" data-act="wf-redo" ${B.hi < B.hist.length - 1 ? 'data-tip="Redo (Ctrl+Shift+Z)"' : UI.off('Nothing to redo')} aria-label="Redo">${icon('undo')}</button>
-        <label class="ev-pick" data-tip="A real past event from run history: Test runs steps against it"><span class="caps">test event</span><select class="select mono" data-on-change="wf-ev" aria-label="Test event"><option value="">— none —</option>${evs.map((x) => `<option value="${x.id}"${x.id === B.ev ? ' selected' : ''}>${esc(x.label)}${x.at ? ` · ${x.at < 60 ? x.at + 'm' : Math.round(x.at / 60) + 'h'} ago` : ''}</option>`).join('')}</select></label>
+        <label class="ev-pick" data-tip="A real past event from run history: Test runs steps against it"><span class="caps">test event</span><select class="select mono" data-on-change="wf-ev" aria-label="Test event"><option value="">— none —</option>${evs.map((x) => `<option value="${x.id}"${x.id === B.ev ? ' selected' : ''}>${esc(x.label)}${x.at ? ` · ${x.at < 60 ? x.at + 'm' : Math.round(x.at / 60) + 'h'} ago` : ''}</option>`).join('')}${srcs.filter((so) => so.on !== 'manual' && !evs.some((x) => x.on === so.on)).map((so) => `<option disabled>no ${esc(so.on)} events in the last 14 days</option>`).join('')}<option value="__paste__">Paste a payload…</option></select></label>
         <button class="btn sm" data-act="wf-test-all" ${B.ev ? '' : UI.off('Pick a test event first')} ${B.err ? UI.off('Fix the YAML first') : ''}>${icon('play')}Test all</button>
         <button class="btn sm" data-act="wf-save" ${saveBlock ? UI.off(saveBlock) : ''}>${icon('check')}Save</button>
         <button class="btn sm primary" data-act="wf-deploy" ${deployBlock ? UI.off(deployBlock) : ''}>${icon('zap')}Deploy</button>
@@ -306,11 +310,12 @@
   const entryAt = (loc) => WF.walk(B.value || {}).find((e) => e.list.concat([e.index]).join('.') === loc);
   function formFor(e, loc, ro) {
     const s = e.step, k = e.kind, rows = [];
-    const F = (path, fd) => rows.push(fieldRow(loc, path, fd, S.getPath(s, path), ro));
+    const seen = new Set(['id', 'type', 'uses', 'if', 'for_each', 'timeout', 'retry', 'continue_on_error', 'hooks', 'output_schema', 'decide', 'parallel', 'bot', 'call', 'with', 'use', 'command', 'run', 'code', 'sleep', 'wait_for', 'log', 'set', 'assert', 'fail', 'skill', 'isolation', '<<']);
+    const F = (path, fd) => { seen.add(path.split('.')[0]); rows.push(fieldRow(loc, path, fd, S.getPath(s, path), ro)); };
     const packRo = B.owner === 'pack';
     const ovPath = packRo ? `${B.w.yaml.match(/^name: (.*)$/m)[1]}/${s.id}` : '';
     const ovRo = (field) => (packRo && !['model', 'runtime'].includes(field) && !field.startsWith('isolation.') && !field.startsWith('options.') ? 'Structure and prompts are the pack\'s; model, runtime, isolation and options can be overridden' : '');
-    const G = (path, fd) => { const r = packRo ? ovRo(path) : ro; const ovv = packRo ? S.getPath((B.ov.steps || {})[ovPath] || {}, path) : undefined; rows.push(fieldRow(loc, path, Object.assign({}, fd, packRo && !r ? { help: (fd.help ? fd.help + ' ' : '') + (ovv !== undefined ? `<b>Overridden</b> in packs.${B.pack}.steps["${ovPath}"]` : `An edit becomes an override in packs.${B.pack}.steps["${ovPath}"]`) } : {}), ovv !== undefined ? ovv : S.getPath(s, path), r)); };
+    const G = (path, fd) => { seen.add(path.split('.')[0]); const r = packRo ? ovRo(path) : ro; const ovv = packRo ? S.getPath((B.ov.steps || {})[ovPath] || {}, path) : undefined; rows.push(fieldRow(loc, path, Object.assign({}, fd, packRo && !r ? { help: (fd.help ? fd.help + ' ' : '') + (ovv !== undefined ? `<b>Overridden</b> in packs.${B.pack}.steps["${ovPath}"]` : `An edit becomes an override in packs.${B.pack}.steps["${ovPath}"]`) } : {}), ovv !== undefined ? ovv : S.getPath(s, path), r)); };
     if (k === 'verb' || k === 'ask') {
       const decl = SCHEMA.verb(s.uses);
       const [inst, verb] = String(s.uses).split('.');
@@ -391,7 +396,10 @@
     A('timeout', { type: 'string' });
     A('retry.max', { type: 'number', label: 'retry · max', ref: false });
     A('continue_on_error', { type: 'bool', on: 'record the error and keep going' });
-    return rows.join('') + `<details class="adv"${B.advOpen && B.advOpen.has(loc) ? ' open' : ''} data-adv="${loc}"><summary>More options: id, if, for_each, timeout, retry</summary><div class="adv-grid">${adv.join('')}</div></details>`;
+    if (k === 'agent' && s.output_schema) { const props = Object.entries((s.output_schema && s.output_schema.properties) || {}); rows.push(`<div class="field"><label>output_schema <span class="opt">what the agent must answer with</span></label><div class="small">${props.length ? 'returns ' + props.map(([n, d]) => `<span class="mono">${esc(n)}</span> <span class="muted">(${esc((d && d.type) || 'any')})</span>`).join(', ') : '<span class="mono">' + esc(JSON.stringify(s.output_schema).slice(0, 80)) + '</span>'}</div><div class="hint">Edit it with the keys below or in the YAML pane.</div></div>`); }
+    const extra = Object.keys(s || {}).filter((x) => !seen.has(x));
+    const yamlOnly = (extra.length || (k === 'agent' && s.output_schema)) ? `<div class="yaml-only small"><span class="tag">+${extra.length + (k === 'agent' && s.output_schema ? 1 : 0)} key${extra.length + (k === 'agent' && s.output_schema ? 1 : 0) === 1 ? '' : 's'} only in YAML</span> <span class="mono muted">${extra.concat(k === 'agent' && s.output_schema ? ['output_schema'] : []).map(esc).join(', ')}</span>${ro ? '' : ` <button type="button" class="link" data-act="wf-yaml-sub" data-loc="${loc}">Edit them here</button>`}</div>` : '';
+    return rows.join('') + yamlOnly + `<details class="adv"${B.advOpen && B.advOpen.has(loc) ? ' open' : ''} data-adv="${loc}"><summary>More options: id, if, for_each, timeout, retry</summary><div class="adv-grid">${adv.join('')}</div></details>`;
   }
   function questionsEditor(s, loc, ro) {
     const q = (s.decide && s.decide.questions) || {};
@@ -449,7 +457,7 @@
         <span class="grip" ${ro ? 'aria-hidden="true"' : 'data-tip="Drag to reorder · Alt+↑/↓"'}>${icon('more')}</span>
         <span class="sc-num serif">${num}</span>
         <span class="sc-ic">${icon(kc.icon)}</span>
-        <div class="grow sc-text"><div class="sc-title"><b class="mono">${esc(s && s.id ? s.id : '(no id)')}</b><span class="caps">${kc.label}</span>${s && s.if ? `<span class="tag" data-tip="${esc(s.if)}">if</span>` : ''}${s && s.for_each ? '<span class="tag">for each</span>' : ''}</div><div class="sc-sum mono" id="sum-${esc(id)}">${esc(WF.summary(s))}</div></div>
+        <div class="grow sc-text"><div class="sc-title"><b class="mono">${esc(s && s.id ? s.id : '(no id)')}</b><span class="caps">${kc.label}</span>${s && s.if ? `<span class="tag" data-tip="${esc(s.if)}">if</span>` : ''}${s && s.for_each ? '<span class="tag">for each</span>' : ''}${s && Array.isArray(s.hooks) && s.hooks.length ? `<span class="tag" data-tip="${esc(s.hooks.map((h) => `on ${h.at}: ${h.uses}`).join(' · '))}">hooks ${s.hooks.length}</span>` : ''}</div><div class="sc-sum mono" id="sum-${esc(id)}">${esc(WF.summary(s))}</div></div>
         <span class="sc-badges" id="badge-${esc(id)}">${badges(id)}</span>${pill(r)}
         <button type="button" class="icon-btn sc-more" data-act="wf-menu" data-id="${esc(id)}" aria-label="Step actions">${icon('more')}</button>
         <span class="chev">${icon(open ? 'chevd' : 'chev')}</span>
@@ -498,10 +506,25 @@
         ${triggerCard()}
         ${addSlot('steps', 0, 'Add a step after the trigger')}
         ${top.map((e, i) => stepCard(e, `steps.${e.index}`, i + 1) + addSlot('steps', e.index + 1, `Add a step after ${e.id}`)).join('')}
+        ${hooksLane(v, ro)}
         ${!steps.length ? `<div class="staff-end muted small">${ro ? '' : 'Add the first step with +'}</div>` : '<div class="staff-end caps">end</div>'}
       </div>
       <datalist id="dl-models">${SCHEMA.fleets.concat(SCHEMA.models).map((m) => `<option value="${m}">`).join('')}</datalist>`;
   }
+
+  /* hooks: the workflow's own (start / done / fail / stop), each a verb call */
+  function hooksLane(v, ro) { const hs = Array.isArray(v.hooks) ? v.hooks : [];
+    return `<div class="hooks-lane" id="hooks-lane"><div class="row" style="gap:8px"><span class="caps">Hooks</span><span class="muted tiny">verb calls when the workflow starts, finishes, fails or is stopped</span></div>
+      ${hs.map((h, i) => `<div class="hook-row"><span class="tag" data-s="${h.at === 'fail' ? 'fail' : h.at === 'done' ? 'ok' : 'idle'}">on ${esc(h.at || '?')}</span><span class="mono small">${esc(h.uses || '')}</span>${h.if ? `<span class="tag" data-tip="${esc(h.if)}">if</span>` : ''}<span class="muted tiny grow ellipsis">${esc(Object.entries(h.options || {}).map(([k2, x]) => `${k2}: ${typeof x === 'object' ? JSON.stringify(x) : x}`).join(' · '))}</span>${ro ? '' : `<button type="button" class="icon-btn" data-act="wf-hook-del" data-i="${i}" aria-label="Remove the ${esc(h.at)} hook">${icon('trash')}</button>`}</div>`).join('') || '<div class="muted tiny">none</div>'}
+      ${ro ? '' : `<div class="row wrap" style="gap:6px">${['start', 'done', 'fail', 'stop'].map((at) => `<button type="button" class="btn sm ghost" data-act="wf-hook-add" data-at="${at}">${icon('plus')}on ${at}</button>`).join('')}</div>`}</div>`; }
+  UI.act('wf-hook-add', (b) => { const at = b.dataset.at; openPicker((item) => mutate((v) => { const n = makeStep(v, item); if (!n.uses) return; v.hooks = Array.isArray(v.hooks) ? v.hooks : []; v.hooks.push(Object.assign({ at, uses: n.uses }, n.options ? { options: n.options } : {})); }), { items: pickerItems().filter((x) => x.key.startsWith('verb:')), title: `Which call on ${at}?`, caps: 'add a hook' }); });
+  UI.act('wf-hook-del', (b) => mutate((v) => { v.hooks.splice(+b.dataset.i, 1); if (!v.hooks.length) delete v.hooks; }));
+  /* the keys the form doesn't model, edited as YAML in place */
+  UI.act('wf-yaml-sub', (b) => { const e = entryAt(b.dataset.loc), s = e.step, known = new Set(['id', 'type', 'uses', 'if', 'for_each', 'timeout', 'retry', 'continue_on_error', 'prompt', 'runtime', 'model', 'isolation', 'skill', 'options', 'hooks', 'decide', 'parallel', 'bot', 'call', 'with', 'use', 'command', 'run', 'code', 'sleep', 'wait_for', 'log', 'set', 'assert', 'fail']);
+    const sub = Object.fromEntries(Object.entries(s).filter(([k2]) => !known.has(k2) || k2 === 'output_schema'));
+    UI.form({ caps: `${s.id || 'step'} · keys only in YAML`, title: `More keys on ${esc(s.id || 'this step')}`, values: { y: YAML.stringify(sub) }, intro: 'Keys the form doesn\'t model yet, kept exactly as written. The validator checks them like any other.',
+      fields: [{ k: 'y', type: 'code', rows: 10, label: 'YAML', validate: (t) => { try { const v = YAML.parse(t || '').value; return v == null || (typeof v === 'object' && !Array.isArray(v)) ? '' : 'A map of keys'; } catch (err) { return 'Not valid YAML: ' + err.message; } } }],
+      submit: 'Apply to the step', submitIcon: 'check', onSubmit: (v) => { const nv = YAML.parse(v.y || '').value || {}; mutate((root) => { const st = WF.at(root, e.list)[e.index]; Object.keys(sub).forEach((k2) => delete st[k2]); Object.assign(st, nv); }); } }); });
 
   /* ---------- side: YAML + data ---------- */
   function hlLines() { const e = B.sel && entryById(B.sel); if (!e || !B.meta) return []; const m = B.meta[e.path]; if (!m) return []; const out = []; for (let n = m.line; n <= m.end; n++) out.push(n); return out; }
@@ -585,7 +608,13 @@
   UI.act('wf-pane', (b) => { B.pane = b.dataset.v; if (b.dataset.v !== 'steps') B.side = b.dataset.v; UI.$('#wfb').className = `wfb pane-${B.pane}`; UI.$$('[data-act="wf-pane"]').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); drawSide(); });
   UI.act('wf-ytab', (b) => { B.ytab = b.dataset.v; drawSide(); });
   UI.act('wf-rtab', (b) => { B.rtab = B.rtab || {}; B.rtab[b.dataset.id] = b.dataset.v; drawList(); });
-  UI.act('wf-ev', (sel) => { B.ev = sel.value; B.tests = {}; redraw(); });
+  UI.act('wf-ev', (sel) => { if (sel.value !== '__paste__') { B.ev = sel.value; B.tests = {}; redraw(); return; }
+    const on = (WF.sources(B.value || {})[0] || {}).on || 'manual', ev = SCHEMA.event(on), sample = ev && ev.fields ? JSON.stringify(ev.fields, null, 2) : '{\n  \n}';
+    sel.value = B.ev || '';
+    UI.form({ caps: 'test event', title: `Paste a ${on} payload`, intro: 'Test runs the steps against it (writes are dry runs). It stays in this browser session; nothing is sent.', values: { json: sample },
+      fields: [{ k: 'json', type: 'code', rows: 12, req: true, label: 'Payload (JSON)', validate: (t) => { try { const v = JSON.parse(t); return v && typeof v === 'object' ? '' : 'An object'; } catch (e) { return 'Not valid JSON: ' + e.message; } } }],
+      submit: 'Use this payload', submitIcon: 'play',
+      onSubmit: (v) => { const id = 'paste-' + Date.now().toString(36); SCHEMA.events.push({ id, on, at: 0, label: `pasted ${on} payload`, payload: JSON.parse(v.json) }); B.ev = id; B.tests = {}; redraw(); UI.toast('Test event set', 'Test now runs against the pasted payload', 'ok'); } }); });
   UI.act('wf-issue', (b) => { const i = B.issues[+b.dataset.n]; if (!i) return; if (i.step) { B.sel = i.step; B.open.add(i.step); drawList(); } else if (i.trigger) { B.open.add('$trigger'); drawList(); } if (B.side !== 'yaml') { B.side = 'yaml'; drawSide(); } const ed = UI.$('#wf-yaml'); if (ed) { UI.editorMark(ed, { err: [i.line], hl: [i.line] }); UI.editorScrollTo(ed, i.line); } const c = i.step && document.getElementById('card-' + i.step); if (c) c.scrollIntoView({ block: 'center' }); });
 
   /* add a step: the picker */

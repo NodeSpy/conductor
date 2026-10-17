@@ -23,7 +23,7 @@ test('build a workflow from scratch through the picker, then deploy it', async (
   await page.locator('.spine-add .plus[data-loc="steps"][data-i="0"]').click();
   await pick(page, 'label', 'verb:gh.label');
   await expect(card(page, 'label')).toBeVisible();
-  await expect(card(page, 'label')).toContainText('options.labels is required');
+  await expect(card(page, 'label')).toContainText('Fill in labels'); // an untouched required field is a to-do, not an error
   await page.locator('[data-wf-path="options.labels"] .list-add').fill('needs-triage');
   await page.locator('[data-wf-path="options.labels"] .list-add').press('Enter');
   // + after it → a built-in agent step, filled in its generated form
