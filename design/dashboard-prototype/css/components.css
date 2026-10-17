@@ -403,3 +403,7 @@ th.sel, td.sel { width: 30px; padding-right: 0 !important; }
 .hooks-lane { margin: 10px 0 6px; padding: 10px 12px; border: 1px dashed var(--line-2); border-radius: var(--r); display: flex; flex-direction: column; gap: 6px; }
 .hook-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .yaml-only { margin: 4px 0 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+/* builder polish: the YAML pane fills the column; parallel branch cards show two lines instead of "def…" */
+.side-body .yaml-wrap .ced, .side-body .yaml-wrap .ced-ta { min-height: calc(var(--dvh) - var(--strip-h) - 170px); }
+.par-lanes .sc-sum, .par-lanes .sc-title b { white-space: normal; overflow: visible; text-overflow: clip; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }

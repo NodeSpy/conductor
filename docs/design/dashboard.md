@@ -911,6 +911,84 @@ Every screen works at 390px by touch: navigation, tabs, filters, forms
 most are overview, approvals and chat; the prototype's `phone.html` shows
 them in device frames, and its test suite runs every route at 390×844.
 
+### 4.12 First steps, help and power tools
+
+These came out of two UX audits (a newcomer and a power user; responses in
+`design/AUDIT-RESPONSE.md`).
+
+- **Overview first steps.** One line says what conductor is ("runs your bots
+  and workflows on this machine; anything risky waits for your passkey").
+  A **Get started** panel offers four steps with ticks derived from the setup
+  (connect a service, make a bot that watches something, check what bots can
+  do, try an approval); hiding it is a browser preference. The timeline is
+  **Runs, last 12h**, busiest rows first, the top six by default, filtered by
+  folder; health folds into a collapsed **System** card; the Running tile
+  lists three names and a count.
+- **New bot** is a guided page (`#/bots/new`): *Purpose → Watches → Tells you
+  where → What it may do → Review*. It writes `bots.<name>` (description,
+  escalation, team or folder, `skill.verbs`, `autonomy.tiers/promote/shadow`,
+  optional `proactive`) and one trigger per watched event whose step is
+  `bot: { name, title }`. Permission presets: read only; can comment and post;
+  asks before anything else. Runtime, approvers and approval TTL sit under
+  Advanced; the full definition form is one link away. A bot that watches
+  nothing says so on its page, with **Add what it watches**.
+- **Plain words.** List pages open with a one-line definition (workflow, bot,
+  pack, plugin); conductor's nouns are dotted terms that explain themselves on
+  hover, focus or tap, and `#/glossary` lists them all. The top strip says
+  what each chip means; no issue numbers appear in the UI.
+- **⌘K** is one command line: actions that run (destructive ones confirm),
+  pending approvals, pages, bots, teams, folders, workflows, runs, connectors,
+  verbs, vaults, secrets, settings, config paths
+  (`triggers[ci-fixer].policy.budget`) and glossary terms, deduped, with an
+  empty state that suggests what to try. Single keys: `?` shortcuts, `/`
+  filter, `g` + o/l/a/r/w/b/c/s, `j`/`k`/Enter/`x` in lists.
+- **Run detail** reads one run record (every step's status, start offset,
+  duration, inputs, outputs, log and, for agent steps, the diff). Every
+  timeline row selects its step (↑/↓ too); tabs show only what the step
+  recorded; the audit panel is scoped to the run; the timeline has a time
+  axis. Failed, waiting and parked runs say **What happened / What you can
+  do**. **Compare** sets two runs of a workflow side by side (status,
+  durations, the outputs diff with word highlights, both diffs). A running
+  step offers **Restart this step** (stop first, confirmed), never "retry".
+- **Bulk.** Lists take checkboxes with shift-click ranges and a sticky bulk
+  bar: workflows (move to folder, enable, disable) and run history (retry the
+  failed ones, export). Config changes from one bulk action are one change
+  set and one diff.
+- **Scale.** Run history pages by cursor (50, then *Load 50 more*); a
+  Compact density (one-line rows) sits with the other display preferences.
+- **Env** (Secrets & vars → Env, `#/secrets/env`): variables by scope
+  (`conductor.env`, runtimes, hosts, workflows) with where each is used;
+  secret-looking plain values are flagged and moved into the vault in one
+  signed step; import vaults secret-looking values; export redacts them. The
+  **effective environment** for a context (narrowest scope wins; the sandbox
+  passes daemon variables only on `sandbox.env_allow`) shows on the Env tab,
+  on run steps and on a bot's Workers tab, names and sources only.
+- **Packs.** Browse is the catalog; **Add** opens the install wizard: bind
+  each required connector role, arm triggers with their repos (arming a
+  github trigger without repos is refused, as the loader does), a *pack plan*
+  with the grants shown loudly, and the `conductor.lock.yaml` change, which
+  also appears as its own hunk in the apply diff. Badges: official registry,
+  **local · yours**, third party (needs `pack_trust`). Overrides are edited as
+  YAML with the pack's addressable members listed and unknown ones refused.
+- **Connect with Slack / GitHub.** The connector form offers an app-manifest
+  flow: conductor generates the manifest, the service creates and installs the
+  app, and the tokens it returns go to conductor's vault (a signed write) while
+  the connector is staged with references. The manual form stays for people
+  who have tokens. It then says what bots could do with the connection.
+- **Builder.** Workflow `hooks:` have their own lane (start/done/fail/stop);
+  steps show their hooks; `output_schema` is summarized; keys the form doesn't
+  model show as "+N keys only in YAML" with an in-place YAML editor. Untouched
+  required fields are a neutral to-do checklist ("Fill in labels"), not errors.
+  The step picker tags every action *reads only*, *changes things* or *high
+  impact*, and offers Run a command, Wait for a condition, Hand to a team and
+  Fail the run. Test can use a pasted payload, and says when history holds no
+  event for the trigger. A new trigger key is inserted where you'd write it,
+  before `steps:`.
+- **History.** *Revert this change* undoes one applied change and keeps the
+  later ones (refused, with the reason, if a later change touched the same
+  node); *Restore to before this* names the later changes it also undoes.
+  Backup ids are labelled UTC beside local times.
+
 ## 5. API
 
 ### 5.1 Conventions

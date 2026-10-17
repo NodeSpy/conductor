@@ -40,6 +40,12 @@ clashes fail tests. Screenshot helpers for the visual review: `~/.cache/conducto
 - `js/ui.js` router, forms (`UI.form`, `UI.fieldHTML`), drawers, guarded dismissal (`UI.dismissModal`), shared
   component helpers (`UI.choice`, `UI.chosen`, `UI.stepper`). `css/components.css` holds the shared components.
 - `js/usage.js` usage display (off by default, per provider). `js/valuesource.js` the value-source field.
+- `js/runrec.js` one record per run (steps, timing, inputs, outputs, logs, diffs), the run story and run-scoped
+  audit. `js/glossary.js` terms (`UI.term`) and `#/glossary`. `js/palette.js` ⌘K and single-key shortcuts.
+- `js/screens/botwizard.js` New bot (loaded before bots.js), `env.js` the Env tab and effective environment,
+  `connect.js` the Slack/GitHub manifest flows. `assets/logo/` + `logo.js` the logo (via `UI.logo()`).
+- `index.html` head script picks the theme before paint (explicit wins, else the OS); `?sim=ios` is the
+  test-only iPhone emulation (toolbar overlay + safe areas). Asset URLs carry `?v=<stamp>`; bump it on deploys.
 - `js/create.js` create-in-place drawers (`UI.CREATE`). `js/wf.js` workflow engine + validator.
 - Screens in `js/screens/`: overview, runs, repo (knowledge by kind), bots (teams, bots), folders (shared folder
   tree, folder pages), browser, logins, builder (workflows list + builder), config, secrets, system (packs,
@@ -48,71 +54,39 @@ clashes fail tests. Screenshot helpers for the visual review: `~/.cache/conducto
 
 ## Done (commits on this branch, newest first)
 
-- (this commit) knowledge on conductor's real content kinds (knowledge/runbook/watch/log/handoff fields, steps as
-  strings, `watch/<slug>.md`, log notes and flags appended + `flagged_wrong`), collections under
-  `teams.<t>.collections` / `bots.<b>.collections` (top-level `collections:` removed), diff hunk headers show the
-  key path of the first changed line, issue numbers removed from UI copy; doc §4.4 on the real team schema.
-- 67130be teams and bots on conductor's schema (step D).
-- 9be090d one shared folder tree (bots, teams, workflows), folder pages with tabs, workflows folder tree/moves.
-- 1f117d7 / d808107 knowledge by kind (built-in kinds + collections, derived paths, runbook steps, schema-checked
-  proposals and imports, Config → Collections).
-- 628b6a7 enrollment cancel + confirm-with-existing-passkey; guarded dismissal and Esc; Cancel focus on destructive.
-- 48bb6d9 value-source field (typed/env/secret/vault/setting) everywhere; shared components; Add a login restyle.
-- bf4b585 Add a login (password, vault, sign in yourself), Test login, Logins tab.
-- ba263ef usage display off by default; per provider only.
-- earlier: builder, teams/bots, delegation, folders, create-in-place, knowledge editor, crawler suite.
+- Audit P1 and minors: builder hooks lane / keys only in YAML / pasted test payloads / canonical key order;
+  visual QA bar specs (layout both themes, dismiss/Esc/Back, copy numbers); history revert-one + restore
+  warning; phone tab fade + folded header actions; Connect with Slack/GitHub; scale (cursor paging, Compact
+  density); bulk select (workflows, runs); packs install wizard routed + lockfile hunk + trust badges; Env tab +
+  effective environment; ⌘K command line + keyboard shortcuts; passkey only for widening changes; display
+  preferences local; glossary + plain definitions; New bot wizard; Get started; run detail on one run record
+  + compare; iPhone fixes (dvh shell, safe areas, collapsed strip, one theme before paint) + WebKit iPhone
+  projects; swappable logo assets; knowledge on conductor's real kinds. See `git log` for commit ids.
+- 67130be teams and bots on conductor's schema (step D). e5461c6 one vault syntax (step B). 0502566 approvals (C).
+- 9be090d shared folders; 1f117d7 / d808107 knowledge by kind; 628b6a7 enrollment cancel + guarded dismissal;
+  48bb6d9 value-source field; bf4b585 Add a login; ba263ef usage off by default.
 
 ## In progress
 
-**The UX audit fix list** (highest priority; reports at
-`~/Projects/danielcbaldwin/.scratch/ui-audit/{newcomer,power}/REPORT.md`). Write `design/AUDIT-RESPONSE.md`
-mapping every finding ID (Sam B1–B3, M1–M11, m1–m14, P1–P5, polish; Riley B1–B4, M1–M14, minors, polish) to
-fixed / changed-differently / deferred. Finish with the line `AUDIT FIXES COMPLETE` in the final report.
+**Audit fixes: complete pending the final full runs.** `design/AUDIT-RESPONSE.md` maps every finding (Sam B1–B3,
+M1–M11, m1–m14, P1–P5, polish; Riley B1–B4, M1–M14, minors, polish) to fixed / changed differently / deferred.
+Remaining: the final full Chromium suite (desktop + phone, sequential) and the WebKit iPhone sweep, then the
+report ending with the line `AUDIT FIXES COMPLETE`.
 
-Plan (commit after each step):
-- **A. Strict validation and builder fixes** (DONE, see commit after 9be090d; `js/realschema.js`, `semantics.spec.js`): real keys from `origin/main:internal/config`
-  (trigger keys on/name/extends/abstract/enabled/filter/group/steps/hooks/policy/options/repo/shadow/gate/callable;
-  `policy.budget` = window/max_cost_usd/max_tokens; isolation modes user|namespace|container, container needs
-  `image`, not on a paseo runtime; filter grammar string=expr, map=AND, list=OR, `expr:`/`not_<key>`, typed
-  `not_draft: true`; agent `prompt` optional; `use: cli` + `command:` label; verbs `<instance>.<verb>`; unknown
-  keys are errors; Checks panel shows `conductor validate`-style output). Notes in `.scratch/*.go` (git show copies).
-- **B. One secret reference syntax** (DONE e5461c6): `{{ vault "<vault>" "<key>" }}` everywhere (op:// retired); drop the named
-  `secrets:` layer (alias label at most); value-source sources become Typed / Env (`${env.NAME}`) / Vault /
-  Setting; broker grants `<vault>/<key>` with `secrets_via` shown.
-- **C. Approvals** (DONE): full payload untruncated, Why + Impact on top, untrusted-requester banner, hashes under a
-  disclosure, seal modal in words, Deny reason, real authenticator recorded, no blank fade; phone sheet with a
-  sticky Approve/Deny bar.
-- **D. Teams/bots on the real schema** (DONE) (`origin/feat/members:internal/config/{teams,bots}.go`): team
-  description/folder/collections/operators/peers/delegation.max_depth/autonomy{ceiling: reversible|observe,
-  shadow, tiers}/budget{spend_cap, proactive}/isolation{sandbox optional|required, handoff_workers,
-  skip_permission_prompts}/credentials{secrets_via, allow_secrets}/browser{logins, credentials}/knowledge{repo,
-  seed_dir, promotion}/routing{rules[{name,match,to}], lead, fallback, timeout}; bot autonomy{shadow, tiers,
-  promote, amounts, spend_cap{per_action,per_period,period}, approval_ttl}; `bot_links` top-level. Enforce the
-  ceiling (promotion above it disabled + refused); one widening classifier; split Team-ceilings/Packs checks;
-  folders never principals (drop `folder:` from login allow); fix "binds … undefined". Real kinds: knowledge
-  {title, applies_to, evidence, confidence} + body; runbook {title, when_to_use, prerequisites, steps (list of
-  strings), verification, rollback, owner}; watch is `watch/<slug>.md` {what, signal, threshold, why}; log
-  {title, case, sweep, flagged_wrong} (annotate/flag append a "## Operator note" section); handoff {session};
-  collections live under `teams.<t>.collections` / `bots.<b>.collections` (fields map {type, required, values},
-  writers team operator|proposal, bot operator|bots, `from:` for pack-shipped).
-- **E.** (DONE in A/D) builder supports map-form `skill.verbs` with resource scopes; any internal error locks the list.
-- **F.** run detail: per-step selection/log/diff, run-scoped audit, time axis, compare runs, consistent data,
-  "What happened / What you can do".
-- **P1 8–22** from Daniel's list (Get started, New bot wizard, Safety view, glossary + no issue numbers, Connect
-  with Slack/GitHub, neutral new workflow, display prefs local, bulk select + one diff, ⌘K command line + keys,
-  density/virtualization/paging, builder completeness, routed pack install wizard, diff fixes + revert-one,
-  env tab + effective env, phone sheet/tabs/menus/cards).
-- **Visual QA bar**: Playwright layout checks (overlap, overflow/clipping, abutting text, alignment, touch target
-  ≥24px on phone, WCAG AA contrast both themes) on every route + dialog/drawer/wizard step; dismiss checks
-  (visible close, Esc, Back for full-page flows); copy check for numbers contradicting data; screenshot review
-  of every route/dialog at both viewports and themes.
+Deferred (why in AUDIT-RESPONSE): bulk on bots tree/packs/connectors/secrets/cases; pack dependency tree; visual
+AND/OR filter groups; agent card regrouping (waits for Daylight); new-trigger comment placement; multi-user
+previews.
 
-## Brand / design system: NOT now
+## Visual direction: Daylight chosen, restyle on hold
 
-The `origin/design/brand` system is **not** to be adopted (Daniel found it too close to the current look). The
-brand designer is producing 2–3 different directions; after Daniel picks one, the system gets rebuilt. Until
-then avoid big visual restyling: focus on behaviour, IA, copy clarity (plain language, defined terms, no issue
-numbers), states and flows. **The final report ends with a line containing only `AUDIT FIXES COMPLETE`.**
+Daniel chose **Daylight** (warm, light-first; Atkinson Hyperlegible UI, Fraunces headings; colour only as
+signal; summary-first; mono only for literal code/IDs/YAML; see http://100.119.192.38:8768/directions-v2.html and
+`origin/design/brand:design/brand/v2/`). The brand designer is rebuilding tokens and the brand book; adopt the
+finished package **in one pass after** the audit fixes. Until then: no restyle; new UI follows Daylight's
+information design (summary sentence first, plain headline over technical detail, human times, colour only for
+attention). The logo is one swappable asset (`dashboard-prototype/assets/logo/` + `logo.js`, used only via
+`UI.logo()`); swapping it is a file drop. The final report ends with a line containing only
+`AUDIT FIXES COMPLETE`.
 
 ## Queued directions (status)
 
@@ -122,21 +96,21 @@ numbers), states and flows. **The final report ends with a line containing only 
 | Pipedream-style builder | done; audit adds hooks/isolation/filter/test-events (P1 18) |
 | Teams; members → bots; delegation; Bots + folders; inline creation; knowledge authoring | done; teams move to the real schema in step D |
 | Usage mode (off default, per provider, source-only limits) | done |
-| Planned multi-user (#185) behind a toggle | **not started** (only toggle + data seeds); remove issue numbers from copy |
+| Planned multi-user behind a toggle | deferred (toggle says so); issue numbers removed from copy |
 | Add a login | done; folder principals removed in step D |
-| Environment variables ("Secrets, vars & env", scopes, effective env, import/export, restart via boot guard) | **not started** beyond `D.env` + `C.env` + conductor.env diff; audit P1 21 |
-| Packs & plugins catalog (browse/detail/install wizard/sources/trust) | catalog.js written, **not routed**; audit P1 19 |
+| Environment variables (scopes, effective env, import/export, restart via boot guard) | done (`#/secrets/env`) |
+| Packs & plugins catalog (browse/detail/install wizard/sources/trust) | done (routed; lockfile hunk) |
 | Connectors catalog (real builtin vs plugin split, custom git connector) | **not started** (SCHEMA still marks github builtin); facts in summary: builtins web, cron, webhook, rss, command, rest, graphql, kv, sql, memory, workflow, conductor (+ lan, tunnel); everything vendor is an official plugin |
 | Value-source field | done; changes in step B (canonical vault syntax, no named secrets) |
 | Knowledge kinds | done, on conductor's real kinds and collection locations |
-| Visual QA bar + shared components | components started (choice, stepper, wizard, catalog cards, chips); checks not written |
-| Passkey enroll cancel + every flow has a way out | enroll done; Esc/guard done; dismiss tests not written |
+| Visual QA bar + shared components | done: layout (both themes), iPhone WebKit sweep, dismiss, copy-number specs |
+| Passkey enroll cancel + every flow has a way out | done (dismiss spec) |
 | Shared folders across workflows | done |
 
 ## Known gaps
 
-- `#/secrets/env` route doesn't exist yet (C.env points at it).
-- `catalog.js` routes (`extensions/browse|item|install`) not registered; Browse still the old REG list.
-- Docs: usage, logins, value source, kinds (real fields), folders, teams schema documented; env, catalog, multi-user,
-  run detail and the P1 audit changes not yet.
-- Next: step F (run detail), then P1 8–22.
+- The `dashboard-prototype` user service no longer exists on this machine (gone after the crash); it was not
+  recreated (Daniel's service). Tests serve the prototype themselves (`./run.sh` with no BASE_URL, or a temporary
+  `python3 -m http.server 8799` for `run-webkit.sh`).
+- The WebKit projects need Docker (the Playwright Ubuntu image); WebKit's Ubuntu build doesn't run on the Arch host.
+- Docs describe the audit additions in §4.12; the multi-user preview isn't designed in detail.
