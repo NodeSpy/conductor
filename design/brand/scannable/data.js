@@ -4,8 +4,8 @@
 // Needs you, most consequential first.
 export const NEEDS = [
   { kind: 'approval', title: 'Apply the Terraform plan to production', why: 'Replaces 1 web server to fix the SEV2 latency incident', ctx: ['platform-sre', 'infra · envs/prod'], env: 'production', action: 'apply', tier: 'propose', state: 'needs', time: '7 min', act: 'Review', primary: true, id: 'p12 · infra@3f2a9c1d' },
-  { kind: 'approval', title: 'Give deploy-bot write access to acme/infra', why: 'It asked to push rollout configs itself', ctx: ['platform-sre', 'acme/infra'], action: 'perms', tier: 'propose', riskWord: 'Grants access', state: 'needs', time: '35 min', act: 'Review', primary: true, id: 'p15 · gh.collaborator_add' },
-  { kind: 'approval', title: 'Buy a 1-year compute savings plan', why: 'Saves about $310 a month on steady EC2 usage', ctx: ['finops', 'AWS'], action: 'spend', tier: 'commit_money', riskWord: 'Spends $1,800', state: 'needs', time: '22 min', act: 'Review', primary: true, id: 'p14 · aws.purchase_savings_plan' },
+  { kind: 'approval', title: 'Give deploy-bot write access to acme/infra', why: 'It asked to push rollout configs itself', ctx: ['platform-sre', 'acme/infra'], action: 'perms', tier: 'propose', flagWord: 'Grants access', state: 'needs', time: '35 min', act: 'Review', primary: true, id: 'p15 · gh.collaborator_add' },
+  { kind: 'approval', title: 'Buy a 1-year compute savings plan', why: 'Saves about $310 a month on steady EC2 usage', ctx: ['finops', 'AWS'], action: 'spend', tier: 'commit_money', flagWord: 'Spends $1,800', state: 'needs', time: '22 min', act: 'Review', primary: true, id: 'p14 · aws.purchase_savings_plan' },
   { kind: 'approval', title: 'Post the monthly forecast to #incidents', why: 'Asked by a Slack user who isn’t one of your operators', ctx: ['billing-sre', 'Slack #incidents'], action: 'post', tier: 'propose', state: 'needs', time: '22 min', act: 'Review', id: 'p4 · slack-ops.post' },
   { kind: 'pr', title: 'Answer pr-review’s question on a draft review', why: 'Approve, revise or discard its review', ctx: ['pr-review', 'acme/infra#77'], action: 'post', tier: 'reversible', state: 'needs', time: '1 h', act: 'Answer', id: 'r-7ed1' },
   { kind: 'credential', title: 'Approve a sign-in on grafana.internal', why: 'The triage agent wants to read a dashboard', ctx: ['issue-triage', 'browser'], action: 'read', tier: 'observe', state: 'needs', time: '3 min', act: 'Open', id: 'b-02' },
@@ -39,7 +39,7 @@ export const FINISHED = [
 export const PERMS = {
   bot: 'platform-sre', role: 'Keeps production healthy for the platform team', team: 'platform',
   groups: [
-    ['observe', 'Does on its own', 'Runs without asking.', [
+    ['observe', 'Does on its own', '', [
       ['read', 'Reads metrics and logs', 'dd.query_*', '', 'observe'],
       ['read', 'Reads repositories and pull requests', 'gh.get_*', '', 'observe'],
       ['read', 'Plans Terraform', 'tf-plan.plan', 'production', 'observe'],
@@ -48,16 +48,16 @@ export const PERMS = {
       ['write', 'Acknowledges pages', 'pd.ack', '', 'reversible', 'promoted'],
       ['write', 'Writes to the KV store', 'kv.set', 'staging', 'reversible'],
     ]],
-    ['propose', 'Asks you first', 'Always a proposal; runs when an operator approves it.', [
+    ['propose', 'Asks you first', '', [
       ['post', 'Comments on pull requests', 'gh.comment', '', 'propose'],
       ['post', 'Posts to #platform', 'slack-ops.post', '', 'propose'],
       ['apply', 'Applies Terraform to staging', 'tf-apply.apply', 'staging', 'propose'],
       ['apply', 'Applies Terraform to production', 'tf-apply.apply', 'production', 'propose'],
     ]],
-    ['commit_money', 'Asks you, with an amount', 'A proposal with a typed amount, under its spend cap ($2,000 a purchase, $5,000 a month).', [
+    ['commit_money', 'Asks you, with an amount', 'Under its spend cap: $2,000 a purchase, $5,000 a month.', [
       ['spend', 'Buys savings plans', 'aws.purchase_savings_plan', '', 'commit_money', '', 'Spends up to $2,000'],
     ]],
-    ['never', 'Never', 'Refused outright, whoever asks.', [
+    ['never', 'Never', 'Refused, whoever asks.', [
       ['perms', 'Changes IAM roles and policies', 'aws.iam_*', '', 'never', '', 'Grants access'],
       ['destroy', 'Deletes repositories', 'gh.delete_*', '', 'never', '', 'Destroys'],
     ]],

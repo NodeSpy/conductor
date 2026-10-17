@@ -157,42 +157,6 @@
    "ink": 0.2265625
   },
   {
-   "fam": "risk",
-   "word": "Risk 1: Reads only",
-   "src": "meter 1",
-   "ink": 0.03125
-  },
-  {
-   "fam": "risk",
-   "word": "Risk 2: Reversible",
-   "src": "meter 2",
-   "ink": 0.078125
-  },
-  {
-   "fam": "risk",
-   "word": "Risk 3: Changes things",
-   "src": "meter 3",
-   "ink": 0.140625
-  },
-  {
-   "fam": "risk",
-   "word": "Risk 4: Changes production",
-   "src": "meter 4",
-   "ink": 0.21875
-  },
-  {
-   "fam": "risk",
-   "word": "Risk 5: Spends money",
-   "src": "meter 5",
-   "ink": 0.3125
-  },
-  {
-   "fam": "risk",
-   "word": "Risk 6: Destructive",
-   "src": "meter 6",
-   "ink": 0.421875
-  },
-  {
    "fam": "env",
    "word": "Production",
    "src": "env production",
@@ -280,13 +244,6 @@
    "fa": "action",
    "fb": "status",
    "sim": 0.556
-  },
-  {
-   "a": "Risk 6: Destructive",
-   "b": "Production",
-   "fa": "risk",
-   "fb": "env",
-   "sim": 0.551
   },
   {
    "a": "Running",
@@ -422,13 +379,6 @@
    "sim": 0.44
   },
   {
-   "a": "Risk 5: Spends money",
-   "b": "Needs you",
-   "fa": "risk",
-   "fb": "status",
-   "sim": 0.439
-  },
-  {
    "a": "Reads",
    "b": "Shadow",
    "fa": "action",
@@ -448,13 +398,6 @@
    "fa": "kind",
    "fb": "step",
    "sim": 0.433
-  },
-  {
-   "a": "Risk 5: Spends money",
-   "b": "Shadow",
-   "fa": "risk",
-   "fb": "status",
-   "sim": 0.43
   },
   {
    "a": "Deploy",
@@ -520,32 +463,11 @@
    "sim": 0.419
   },
   {
-   "a": "Applies infra",
-   "b": "Risk 5: Spends money",
-   "fa": "action",
-   "fb": "risk",
-   "sim": 0.418
-  },
-  {
    "a": "Cloud spend",
    "b": "AI agent",
    "fa": "kind",
    "fb": "step",
    "sim": 0.415
-  },
-  {
-   "a": "Risk 6: Destructive",
-   "b": "Shadow",
-   "fa": "risk",
-   "fb": "status",
-   "sim": 0.415
-  },
-  {
-   "a": "Risk 6: Destructive",
-   "b": "Needs you",
-   "fa": "risk",
-   "fb": "status",
-   "sim": 0.412
   },
   {
    "a": "Comments / posts",
@@ -569,27 +491,6 @@
    "sim": 0.408
   },
   {
-   "a": "Risk 5: Spends money",
-   "b": "Production",
-   "fa": "risk",
-   "fb": "env",
-   "sim": 0.408
-  },
-  {
-   "a": "Risk 5: Spends money",
-   "b": "Waiting",
-   "fa": "risk",
-   "fb": "status",
-   "sim": 0.407
-  },
-  {
-   "a": "Applies infra",
-   "b": "Risk 6: Destructive",
-   "fa": "action",
-   "fb": "risk",
-   "sim": 0.405
-  },
-  {
    "a": "Spends money",
    "b": "AI agent",
    "fa": "action",
@@ -604,24 +505,10 @@
    "sim": 0.404
   },
   {
-   "a": "Risk 6: Destructive",
-   "b": "Staging",
-   "fa": "risk",
-   "fb": "env",
-   "sim": 0.404
-  },
-  {
    "a": "Knowledge",
    "b": "Spends money",
    "fa": "kind",
    "fb": "action",
-   "sim": 0.4
-  },
-  {
-   "a": "Risk 4: Changes production",
-   "b": "Needs you",
-   "fa": "risk",
-   "fb": "status",
    "sim": 0.4
   }
  ],

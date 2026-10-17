@@ -1,13 +1,12 @@
-// Scannable by default (PROPOSAL): a visual language that says what each thing is, how risky it is and
-// where it happens before anyone reads a word. Four parts, all paired with words:
+// Scannable by default (PROPOSAL): a visual language that says what each thing is, where it happens
+// and how it went, before anyone reads a word, and flags the few things worth stopping for.
 //   KINDS    one icon per kind of object or event (approval, run, bot, PR, incident, Terraform…)
-//   ACTIONS  one icon per kind of action (reads, posts, pushes code, applies infra, spends, destroys, grants)
-//   RISK     a six-step ladder with one marker per step: a meter filled to the step, the step's word, and
-//            for the top three a solid band (production ink, money amber, destructive red)
-//   ENV      production / staging / local tags, told apart by fill, never by colour alone
-// and one row anatomy that puts them in fixed columns: kind · title · context · risk · status · time · action.
-// Icons are Lucide (ISC, lucide-static 1.59.0, 24 grid, 1.75 stroke); the meter and environment glyphs
-// are ours, drawn on the 16 grid of the status marks. Status marks come from status/marks.js.
+//   ACTIONS  one icon per kind of action (reads, writes, posts, pushes code, applies infra, spends…)
+//   FLAGS    risk, shown only where a person decides (approvals, proposals, bot permissions) and only
+//            for production, money and destructive or access changes: plain words and one mark
+//   ENV      production / staging tags, told apart by fill, never by colour alone
+// and one row anatomy: kind · title · where · status · time · action.
+// Icons are Lucide (ISC, lucide-static 1.59.0, 24 grid, 1.75 stroke); the environment glyphs are ours.
 import { LUCIDE } from '../icons/icons.js';
 import { mark, status, STATES } from '../status/marks.js';
 
@@ -47,32 +46,26 @@ export const STEPS = {
   wait:     { icon: 'hourglass', word: 'Wait', means: 'Waits for a time or a condition.' },
 };
 
-// ---------- the risk ladder ----------
-// Ordered by consequence. Mapped from the gate's autonomy tier, the verb's action and the environment.
-export const RISK = [
-  null,
-  { key: 'read', word: 'Reads only', means: 'Looks, never changes anything.', tiers: 'observe' },
-  { key: 'reversible', word: 'Reversible', means: 'Changes something that can be undone in one step (a label, an ack, a draft).', tiers: 'reversible' },
-  { key: 'change', word: 'Changes things', means: 'A lasting change outside production: pushes code, posts publicly, applies to staging.', tiers: 'propose' },
-  { key: 'prod', word: 'Changes production', means: 'Changes something in production.', tiers: 'propose, in a production environment' },
-  { key: 'money', word: 'Spends money', means: 'Commits real money. The amount is in the marker.', tiers: 'commit_money' },
-  { key: 'destroy', word: 'Destructive', means: 'Destroys data or changes who may do what. “Destroys” or “Grants access”.', tiers: 'any tier, by verb (deletes, IAM, grants); usually never' },
-];
-/** The ladder step for a verb: destroy and permission verbs top it, then money, then production. */
-export function riskOf({ action = 'read', tier = 'propose', env = '' }) {
-  if (action === 'destroy' || action === 'perms') return 6;
-  if (tier === 'commit_money' || action === 'spend') return 5;
-  if (action === 'read' || tier === 'observe') return 1;
-  if (env === 'production') return 4;
-  if (tier === 'reversible') return 2;
-  return 3;
+// ---------- risk flags ----------
+// Most verbs need no risk label: the action icon and its word already say what it does. Three things
+// are worth stopping for, and only where someone decides. Each is plain words with one mark that
+// means the same thing everywhere else (the production glyph, the money and the trash icons).
+// Never a meter or bars: bars read as signal strength, not danger.
+export const FLAGS = {
+  prod:    { word: 'Changes production', mark: 'production', means: 'Any change (not a read) to a production environment.' },
+  money:   { word: 'Spends money', mark: 'banknote', means: 'A commit_money verb. The words carry the amount.' },
+  destroy: { word: 'Destroys', mark: 'trash-2', means: 'Deletes or destroys something stateful, at any tier.' },
+  access:  { word: 'Grants access', mark: 'lock-open', means: 'Changes who may do what: IAM, collaborators, grants.' },
+};
+/** Which flag a verb earns, if any: destroy and access first, then money, then production. */
+export function flagOf({ action = 'read', tier = 'propose', env = '' }) {
+  if (action === 'destroy') return 'destroy';
+  if (action === 'perms') return 'access';
+  if (tier === 'commit_money' || action === 'spend') return 'money';
+  if (env === 'production' && action !== 'read' && tier !== 'observe') return 'prod';
+  return null;
 }
-const meter = (lvl, size = 16) => `<svg class="rk-meter" viewBox="0 0 16 16" width="${size}" height="${size}" aria-hidden="true">${[0, 1, 2, 3, 4, 5].map((i) => {
-  const h = 4 + i * 2;
-  return `<rect x="${(0.95 + i * 2.5).toFixed(2)}" y="${15 - h}" width="1.6" height="${h}" rx=".5" fill="currentColor"${i < lvl ? '' : ' opacity=".22"'}/>`;
-}).join('')}</svg>`;
-/** The risk marker: meter + word. `word` overrides the step's word (“Spends $1,800”, “Grants access”). */
-export const risk = (lvl, word = RISK[lvl].word) => `<span class="rk" data-risk="${lvl}" title="Risk ${lvl} of 6: ${RISK[lvl].word}. ${RISK[lvl].means}">${meter(lvl)}<span>${word}</span></span>`;
+export const flag = (k, word = FLAGS[k].word) => `<span class="flag" data-flag="${k}">${k === 'prod' ? envGlyph('production') : lucide(FLAGS[k].mark)}<span>${word}</span></span>`;
 
 // ---------- environments ----------
 export const ENV = {
@@ -90,17 +83,18 @@ export const kind = (k, { word = true, size = 16 } = {}) => `<span class="kind">
 export const act = (a, word = ACTIONS[a].word) => `<span class="actn">${lucide(ACTIONS[a].icon)}<span>${word}</span></span>`;
 
 // ---------- the row anatomy ----------
-// kind (icon + word) · title (+ one plain sentence) · context (bot, repo, environment) · risk · status · time · action
-export const COLS = ['What', 'Title', 'Where', 'Risk', 'Status', 'When', ''];
+// kind (icon + word) · title (+ one plain sentence, after the flag if any) · where (bot, target, environment) · status · time · action
+export const COLS = ['What', 'Title', 'Where', 'Status', 'When', ''];
 const STATE_EDGE = { needs: 'accent', failed: 'danger' };
 export function row(it) {
-  const lvl = it.risk ?? riskOf(it);
+  // Flags only on things you decide (approvals); runs and finished work carry none.
+  // Production isn't flagged on a row: its Production tag already says so.
+  const f0 = it.kind === 'approval' && it.state === 'needs' ? flagOf(it) : null, f = f0 === 'prod' ? null : f0;
   const st = it.state ?? 'passed';
   return `<div class="srow g-${it.group ?? 'fine'}" role="row" data-item data-s="${STATE_EDGE[st] ?? ''}"${it.id ? ` title="${it.id}"` : ''}>
     <span class="c-kind" role="cell">${kind(it.kind)}</span>
-    <span class="c-title" role="cell"><b>${it.title}</b>${it.why ? `<span class="c-why">${it.why}</span>` : ''}</span>
+    <span class="c-title" role="cell"><b>${it.title}</b>${f || it.why ? `<span class="c-why">${f ? flag(f, it.flagWord) : ''}${it.why ?? ''}</span>` : ''}</span>
     <span class="c-ctx" role="cell"><span class="kw">${KINDS[it.kind].word}</span><i class="kw">·</i>${(it.ctx ?? []).map((c, i) => `<span${i ? '' : ' class="who"'}>${c}</span>`).join('<i>·</i>')}${env(it.env)}</span>
-    <span class="c-risk" role="cell">${risk(lvl, it.riskWord)}</span>
     <span class="c-st" role="cell">${status(st, it.stateWord)}</span>
     <span class="c-time" role="cell">${it.time ?? ''}</span>
     <span class="c-act" role="cell">${it.act ? `<button class="btn ${it.primary ? 'primary' : 'secondary'} sm" tabindex="-1">${it.act}</button>` : ''}</span></div>`;
@@ -110,28 +104,20 @@ export const rows = (groups, { head = true } = {}) => `<div class="srows" role="
   ${groups.map(([g, items, extra = '']) => `<div class="sgroup" role="rowgroup"><div class="sgh g-${g}"><b>${GROUP[g]}</b><span>${items.length}</span>${extra}</div>${items.map((it) => row({ ...it, group: g })).join('')}</div>`).join('')}</div>`;
 
 export const SCAN_CSS = `
-:root, [data-theme="light"] { --risk-prod-bg: var(--color-bg-inverse); --risk-prod-fg: var(--color-text-inverse); --risk-money-bg: var(--palette-amber-500); --risk-money-fg: var(--palette-sand-975); --risk-destroy-bg: var(--palette-red-700); --risk-destroy-fg: var(--palette-sand-50); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --risk-money-bg: var(--palette-amber-300); --risk-destroy-bg: var(--palette-red-400); --risk-destroy-fg: var(--palette-sand-975); } }
-[data-theme="dark"] { --risk-prod-bg: var(--color-bg-inverse); --risk-prod-fg: var(--color-text-inverse); --risk-money-bg: var(--palette-amber-300); --risk-money-fg: var(--palette-sand-975); --risk-destroy-bg: var(--palette-red-400); --risk-destroy-fg: var(--palette-sand-975); }
 .ki { flex: none; display: inline-block; vertical-align: -3px; }
 .kind, .actn { display: inline-flex; align-items: center; gap: 7px; color: var(--color-text-primary); white-space: nowrap; }
 .kind > span, .actn > span { font-size: 13.5px; color: var(--color-text-secondary); }
-/* risk: meter + word; 1–3 quiet ink, 4–6 solid bands */
-.rk { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; line-height: 1; white-space: nowrap; border-radius: 6px; }
-.rk-meter { flex: none; }
-.rk[data-risk="1"] { color: var(--color-text-tertiary); }
-.rk[data-risk="2"] { color: var(--color-text-secondary); }
-.rk[data-risk="3"] { color: var(--color-text-primary); font-weight: 600; }
-.rk[data-risk="4"], .rk[data-risk="5"], .rk[data-risk="6"] { font-weight: 700; padding: 4px 8px 4px 6px; }
-.rk[data-risk="4"] { background: var(--risk-prod-bg); color: var(--risk-prod-fg); }
-.rk[data-risk="5"] { background: var(--risk-money-bg); color: var(--risk-money-fg); }
-.rk[data-risk="6"] { background: var(--risk-destroy-bg); color: var(--risk-destroy-fg); }
+/* risk flags: plain words and one mark; only destroys and grants access take colour */
+.flag { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; color: var(--color-text-primary); white-space: nowrap; }
+.flag .ki { width: 15px; height: 15px; }
+.flag[data-flag="destroy"], .flag[data-flag="access"] { color: var(--color-status-danger-fg); }
+.c-why .flag { margin-right: 8px; }
 /* environments: told apart by fill and outline */
 .env { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; line-height: 1; padding: 3px 7px 3px 5px; border-radius: 5px; color: var(--color-text-secondary); border: 1px solid var(--color-border-default); white-space: nowrap; }
 .env[data-env="production"] { color: var(--color-text-primary); font-weight: 700; border: 1.5px solid var(--color-text-primary); }
 .env[data-env="local"] { border-style: dashed; }
 /* the row anatomy: fixed columns, aligned */
-.srows { --cols: 118px minmax(0, 1fr) minmax(150px, 210px) 172px 108px 46px 78px; }
+.srows { --cols: 118px minmax(0, 1fr) minmax(160px, 240px) 112px 50px 80px; }
 .srow { display: grid; grid-template-columns: var(--cols); gap: 14px; align-items: center; min-height: 52px; padding: 7px 10px 7px 14px; border-top: 1px solid var(--color-border-subtle); }
 .srow[data-s] { box-shadow: inset 3px 0 0 var(--s-solid, transparent); }
 .srow.shead { min-height: 0; padding-top: 0; padding-bottom: 6px; border-top: 0; font-size: 12px; font-weight: 600; color: var(--color-text-tertiary); }
@@ -161,8 +147,7 @@ export const SCAN_CSS = `
   .srow .c-title { grid-area: t; } .srow .c-title b, .srow .c-title .c-why { white-space: normal; }
   .srow .c-time { grid-area: time; padding-top: 2px; }
   .srow .c-ctx { grid-area: m; } .srow .c-ctx .kw { display: inline; } .srow .c-ctx span.kw { color: var(--color-text-primary); }
-  .srow .c-risk, .srow .c-st { grid-area: a; }
-  .srow .c-risk { justify-self: start; } .srow .c-st { justify-self: end; }
+  .srow .c-st { grid-area: a; }
   .srow .c-act { display: none; }
 }`;
 export const injectScanCSS = () => { if (document.getElementById('scan-css')) return; const s = document.createElement('style'); s.id = 'scan-css'; s.textContent = SCAN_CSS; document.head.append(s); };

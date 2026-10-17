@@ -496,7 +496,7 @@ body { font-variation-settings: 'SOFT' 100, 'WONK' 0; }  /* Fraunces' soft axis;
 
 /* Scannable by default (proposal) */
 .scan-demo { display: grid; gap: var(--space-4); }
-.sd-ladder, .sd-env { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+.sd-flags, .sd-env { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
 .scan-demo .srows { background: var(--color-bg-surface); border-radius: var(--radius-md); padding: 12px; }
 .scan-demo .btn { display: inline-flex; align-items: center; height: 30px; padding: 0 11px; border-radius: 8px; border: 1px solid var(--color-border-default); background: var(--color-bg-surface); color: var(--color-text-primary); font: 600 13px var(--font-family-sans); }
 .scan-demo .btn.primary { background: var(--color-accent-default); border-color: transparent; color: var(--color-text-on-accent); }

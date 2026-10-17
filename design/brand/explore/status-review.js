@@ -9,9 +9,8 @@ const lu = (n) => `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="curre
 // Every state mark comes from the one vocabulary (status/marks.js).
 const KEY = { ok: 'passed', failed: 'failed', needs: 'needs', waiting: 'waiting', running: 'running', parked: 'parked', shadow: 'shadow', staged: 'staged' };
 const shape = (k) => mark(KEY[k]);
-// Autonomy tiers as an ordinal ladder (one hue, more filled = more autonomy) plus plain words.
+// Autonomy tiers in plain words. No bars or meters: bars read as signal strength, not risk.
 const TIERS = { observe: [1, 'Reads only'], reversible: [2, 'Acts, undoable'], propose: [3, 'Asks you first'], commit_money: [4, 'Spends money'], never: [0, 'Never'] };
-const ladder = (t) => { const [n] = TIERS[t]; return `<span class="ladder ${t}" aria-hidden="true">${[1, 2, 3, 4].map((i) => `<i class="${i <= n ? 'on' : ''}" style="height:${3 + i * 2.5}px"></i>`).join('')}</span>`; };
 
 // ---------- the labels, as the prototype has them: [text, job, prototype hue, extra] ----------
 const SURFACES = [
@@ -58,7 +57,7 @@ const R = {
   typed: ([t, job, hue, x]) => {
     switch (job) {
       case 'state': return status(KEY[x.k], x.word);
-      case 'tier': return `<span class="ty-tier">${ladder(x.t)}<span>${TIERS[x.t][1]}</span></span>`;
+      case 'tier': return `<span class="ty-tier">${TIERS[x.t][1]}</span>`;
       case 'change': return status('staged', x.word);
       case 'trust': return `<span class="ty-trust ${x.warn ? 'warn' : ''}">${lu(x.icon)}<span>${x.word}</span></span>`;
       case 'count': return `<span class="ty-count"><i class="bar"><b style="width:${(x.n / x.of) * 100}%"></b></i><span>${x.word}</span></span>`;
@@ -102,7 +101,7 @@ const VARIANTS = [
   ['calm', 'Chosen: typed labels, calm by default', 'The typed vocabulary (B, below), shown the calm way. A row shows only what needs someone or is live: a failure, “needs you”, a waiting sign-in, a running bot, an unapplied change, an untrusted pack. Everything that is simply true (tiers, scopes, roles, counts, ids, and states that are fine) moves behind a quiet <b>Details</b>, in the same typed forms when opened. Most rows are now one line, and the eye lands on the three or four that matter. See <a href="system.html#scannable">Scannable by default (it replaces Calm by default)</a>.'],
   ['before', 'Before: a tinted pill for everything', 'The prototype renders states, autonomy tiers, staged edits, trust, roles and plain facts with the same tinted pill. Only the hue changes, and the hues were picked per call site, so “approved execution”, “official” and “installed” are all as green as “Passed”. Nothing tells a state from a fact, and the page reads as confetti.'],
   ['outline', 'A · One quiet tag', 'Every static label keeps a tag, but a single neutral outline with no fill. Only labels that need a person (failed, needs you, an untrusted third party) take colour, on the text and the outline. It is the smallest change, and calmer, but still a row of boxes, and states, tiers and facts still look alike.'],
-  ['typed', 'B · Typed labels (the vocabulary, every label shown)', 'Chosen as the vocabulary, and shown calm by default (above). Each job gets exactly one form, and pills are kept only for things you can click (filters):<br><b>State</b> is the shape mark from the status column plus a word; it is coloured only when someone is needed or it is live. <b>Tier</b> is a four-step ladder plus the plain risk words. A <b>staged change</b> is a dashed ring and “not applied”. <b>Trust</b> is an icon plus a word, in warning colour only for untrusted third parties. A <b>count</b> is a thin meter and “41 of 100”. A <b>fact</b> is “Key value” text. A <b>role</b> is plain text.'],
+  ['typed', 'B · Typed labels (the vocabulary, every label shown)', 'Chosen as the vocabulary, and shown calm by default (above). Each job gets exactly one form, and pills are kept only for things you can click (filters):<br><b>State</b> is the shape mark from the status column plus a word; it is coloured only when someone is needed or it is live. <b>Tier</b> is plain risk words (no bars). A <b>staged change</b> is a dashed ring and “not applied”. <b>Trust</b> is an icon plus a word, in warning colour only for untrusted third parties. A <b>count</b> is a thin meter and “41 of 100”. A <b>fact</b> is “Key value” text. A <b>role</b> is plain text.'],
   ['quiet', 'C · Quiet metadata', 'No labels at all: one state mark, then everything else as a single line of metadata in words (“lead of team platform · 41 of 100 turns · sandbox: namespace”). It is the calmest and reads well, but the facts can’t be scanned down a column, and it is long on a phone.'],
 ];
 
@@ -112,7 +111,7 @@ document.getElementById('variants').innerHTML = VARIANTS.map(([id, title, why]) 
 // The recommended system, as a reference table: every label job, its form, and its colour rule.
 const JOBS = [
   ['State', 'ok, passed, installed, works, running, live, waiting, needs you, pending, failed, refused, flagged as wrong, parked, idle, shadow, not tested', ['needs', 'failed', 'running', 'waiting', 'ok', 'parked', 'shadow'], 'Mark + word, from <code>status/marks.js</code>: the same marks in tables, cards, lanes, legends, the overview, the run page and phones.', 'The mark always carries its state colour: passed a quiet sage dot, parked slate pause bars (never the same hue or shape), running blue arc, failed red cross, needs you ember diamond, waiting amber triangle, shadow violet half disc. The word is coloured only when a person is needed or the thing is live.'],
-  ['Autonomy tier', 'observe, reversible, propose, commit_money, never', null, 'Four-step ladder + plain risk words: Reads only · Acts, undoable · Asks you first · Spends money · Never.', 'One hue (ink), filled by level. The tier name appears on hover and in docs, never as the label.'],
+  ['Autonomy tier', 'observe, reversible, propose, commit_money, never', null, 'Plain words: Reads only · Acts, undoable · Asks you first · Spends money · Never. No bars or meters.', 'Ink. The tier name appears on hover and in docs, never as the label.'],
   ['Staged change', 'staged, “new · staged”, move staged, change staged, uses repointed', ['staged'], 'Dashed ring + “New / Changed / Move, not applied”.', 'Running blue on the ring only: it is pending, not wrong.'],
   ['Trust', '“official · trusted by default”, official registry, built in, “local · yours”, “third party · pack_trust”, trusted third party', null, 'Icon + word: shield Official, folder Yours, globe Third party.', 'Ink. Warning colour only for an untrusted third party.'],
   ['Count', '41/100 turns, usage, quotas', null, 'Thin meter + “41 of 100 turns”.', 'Ink meter; amber over 80%, red at the limit.'],

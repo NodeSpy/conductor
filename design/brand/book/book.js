@@ -4,7 +4,7 @@ import { LUCIDE, STATUS } from '../icons/icons.js';
 import { LOGOS, OFFICIAL_LOGO, kitDir } from '../tools/logos.mjs';
 import { STATES as STATUS_STATES, CHANGE, GLYPH_STATE, mark, injectMarkCSS } from '../status/marks.js';
 import { summaryLine, quietState, exception as calmException, excRows, calmLanes, injectCalmCSS } from '../status/calm.js';
-import { risk as scanRisk, env as scanEnv, rows as scanRows, injectScanCSS } from '../scannable/scan.js';
+import { flag as scanFlag, env as scanEnv, rows as scanRows, injectScanCSS } from '../scannable/scan.js';
 import * as SCAN from '../scannable/data.js';
 injectMarkCSS(); injectCalmCSS(); injectScanCSS();
 
@@ -53,12 +53,12 @@ const sub = (id, title, lede = '') => `<h3 class="sub" id="${id}">${title}</h3>$
 // =====================================================================
 // Scannable by default (a correction to Calm by default, which hid too much). Proposal under review.
 const CALM_RULES = [
-  ['Identify before reading', 'Every item shows what it is (an icon and a word), how risky it is (a marker on a fixed ladder), where it happens (an environment tag) and how it went (the status mark), in the same place on every screen.'],
+  ['Identify before reading', 'Every item shows what it is (an icon and a word), where it happens (an environment tag) and how it went (the status mark), in the same place on every screen.'],
   ['Keep the information', 'Nothing a person uses to understand or decide is hidden. Only ids, hashes and raw payloads go behind a disclosure or a hover.'],
   ['Order by attention', 'Needs you, then failing, then running, then finished: by position, weight and the status marks. The page heading still answers “what needs me?”.'],
-  ['Danger is unmistakable, routine is quiet', 'Reads and reversible changes are quiet ink; production, money and destructive or access changes are solid bands. A production Terraform apply never looks like a bot posting a comment.'],
+  ['Flag only what is worth stopping for', 'Production changes, money and destructive or access changes, in plain words with one mark, only where someone decides: approvals and a bot’s permissions. No meters or ladders.'],
   ['One meaning per icon, always with a word', 'An icon stands for one kind of thing or action, everywhere, and is never decorative or alone.'],
-  ['Dense, but structured', 'One row anatomy with fixed, aligned columns: what · title · where · risk · status · when · action.'],
+  ['Dense, but structured', 'One row anatomy with fixed, aligned columns: what · title · where · status · when · action.'],
 ];
 const CALM_SCREENS = [['overview', 'Overview'], ['quiet', 'Overview, quiet day'], ['history', 'Run history'], ['activity', 'Lanes (Activity)'], ['bot', 'Bot page'], ['approval', 'Approval header']];
 const CALM_CHECK_NAME = { overview: 'overview', quiet: 'quiet overview', history: 'run history', activity: 'lanes (activity)', bot: 'bot page', approval: 'approval header' };
@@ -83,10 +83,9 @@ ch('scannable', 'Scannable by default', 'Identify before reading. Every item say
   () => `
   ${sub('calm-rules', 'Principles', 'The first review of the Daylight mocks found them busy: “there is no way for me to just pick out what’s going on… I have to read everything all the time.” The calm round answered by showing less, and over-corrected. The real problem was identification: every item looked the same, so each had to be read to learn what it was and whether it mattered, and icons were missing or didn’t make sense. The fix keeps the information and adds a visual language that encodes meaning.')}
   <ol class="calm-rules">${CALM_RULES.map(([t, d]) => `<li><b>${t}</b><span>${d}</span></li>`).join('')}</ol>
-  ${sub('scan-proposal', 'The proposal', 'Four parts, specified on <a href="scannable-review.html">the scannable review page</a> with the full icon set, the risk ladder mapped to the autonomy tiers, the icon audit of the prototype and before / calm / proposed on five screens. Not yet adopted into the tokens or the mocks.')}
-  ${stack(() => `<div class="scan-demo"><div class="sd-ladder">${[1, 2, 3, 4, 5, 6].map((l) => scanRisk(l)).join('')}</div><div class="sd-env">${['production', 'staging', 'local'].map((e) => scanEnv(e)).join('')}</div>${scanRows([['needs', [SCAN.NEEDS[0], SCAN.NEEDS[3]]], ['running', [SCAN.RUNNING[2]]]])}</div>`)}
-  ${why('The top three steps of the risk ladder are the only solid bands on a row; the bottom three are ink. Environments differ by fill, never by colour alone. Icons are Lucide (ISC), one meaning each, always with a word.')}
-  ${sub('calm-pairs', 'For the record: the calm round', 'The busy version against the calm one, in the first viewport. The calm versions pass a loudness budget, but they hide what a person needs to decide; they are kept here as the over-correction the proposal replaces.')}
+  ${sub('scan-proposal', 'The proposal', 'Specified on <a href="scannable-review.html">the scannable review page</a>: the icon set, the risk flags, the environment tags, the icon audit of the prototype and before / calm / proposed on five screens. Not yet adopted into the tokens or the mocks.')}
+  ${stack(() => `<div class="scan-demo"><div class="sd-flags">${['prod', 'money', 'destroy', 'access'].map((k) => scanFlag(k)).join('')}</div><div class="sd-env">${['production', 'staging', 'local'].map((e) => scanEnv(e)).join('')}</div>${scanRows([['needs', [SCAN.NEEDS[0], SCAN.NEEDS[3]]], ['running', [SCAN.RUNNING[2]]]])}</div>`)}
+    ${sub('calm-pairs', 'For the record: the calm round', 'The busy version against the calm one, in the first viewport. The calm versions pass a loudness budget, but they hide what a person needs to decide; they are kept here as the over-correction the proposal replaces.')}
   <div class="calm-ctl"><div class="c-seg" id="calm-vp"><span data-v="desktop" class="is-active">Desktop</span><span data-v="phone">Phone</span></div><div class="c-seg" id="calm-th"><span data-v="light" class="is-active">Light</span><span data-v="dark">Dark</span></div></div>
   <div class="calm-pairs" data-vp="desktop">${CALM_SCREENS.map(([s, t]) => `<section class="calm-pair" data-screen="${s}"><h4>${t}</h4><p class="calm-answer">“${(calmResult(s, 'calm', 'desktop', 'light')?.glance ?? '').replace(/^./, (c) => c.toUpperCase())}.”</p><div class="calm-figs">${calmPair(s)}</div></section>`).join('')}</div>
   ${sub('calm-glance', 'The glance answer and the loudness check', 'Kept: the page heading is the glance answer. Retired with this correction (pending review): the loudness budget, which rewarded hiding information. For each calm screen, the one sentence a person should get at a glance, marked on the page as <code>[data-glance]</code>. <code>tools/calm-check.mjs</code> checks that the glance element is the most prominent thing on screen (largest text, first large text in reading order, at least 7:1), and counts loudness in the first viewport: things in a saturated colour (OKLCH chroma ≥ 0.05, once per row or item) and text-heavy rows (over 110 characters or 3+ lines). With 3 or fewer exceptions the budget is <b>coloured ≤ exceptions + 2</b> and <b>text-heavy ≤ 2</b>; with more, 5 and 3. Calm pages must pass; the busy versions are measured against the same budget.')}
