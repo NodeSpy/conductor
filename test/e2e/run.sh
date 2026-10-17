@@ -2119,7 +2119,7 @@ br_login_setup() {
     *) bad "BR widening" BR setup/widening "$out" ;; esac
   out="$(cexec "$C" conductor browser credential ls --config "$CFG" 2>&1 | tr -d '\r')"
   case "$out" in *test-password-not-secret*|*JBSWY3DPEHPK3PXP*) bad "BR the inventory carries a value" BR setup/inventory "$out" ;;
-    *'"name": "br-typed"'*'"status": "ok"'*) ok "BR the inventory lists it with its last test — no value" BR setup/inventory ;;
+    *'"status": "ok"'*'"name": "br-typed"'*|*'"name": "br-typed"'*'"status": "ok"'*) ok "BR the inventory lists it with its last test — no value" BR setup/inventory ;;
     *) bad "BR inventory" BR setup/inventory "$out" ;; esac
   out="$(cexec "$C" conductor browser vault-items e2evault --config "$CFG" 2>&1 | tr -d '\r')"
   case "$out" in *test-password-not-secret*|*JBSWY3DPEHPK3PXP*) bad "BR a vault listing carries a value" BR setup/listing "$out" ;;
@@ -2128,7 +2128,7 @@ br_login_setup() {
   out="$(cexec "$C" conductor browser credential rm br-typed --config "$CFG" 2>&1 | tr -d '\r')"
   case "$out" in *'"change": "narrowing"'*) ok "BR revoked (narrowing)" BR setup/revoke ;; *) bad "BR revoke" BR setup/revoke "$out" ;; esac
   out="$(cexec "$C" conductor browser credential test br-typed --config "$CFG" 2>&1 | tr -d '\r')"
-  case "$out" in *'"status": "failed"'*'no credential'*) ok "BR a revoked login is refused" BR setup/revoked ;;
+  case "$out" in *'no credential'*'"status": "failed"'*|*'"status": "failed"'*'no credential'*) ok "BR a revoked login is refused" BR setup/revoked ;;
     *) bad "BR a revoked login" BR setup/revoked "$out" ;; esac
   if z_audit '"event":"browser"' '"action":"test-login"' '"credential":"br-typed"' '"outcome":"ok"'; then
     ok "BR the test sign-in is audited" BR setup/audit
