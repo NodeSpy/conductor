@@ -831,3 +831,24 @@ window.D.packMembers = {
   Object.assign(P('p4'), { title: 'Post the monthly forecast to #incidents', options: { channel: '#incidents', text: 'October forecast: AWS spend is tracking $41.2k against a $38k budget (+8%). Main driver: NAT gateway transfer (+44% week over week). Savings Plan coverage is 64%. Full breakdown in the billing dashboard.' }, why: 'A Slack user asked billing-sre (case c7) to share the monthly forecast. They aren\'t one of your operators.', impact: 'Posts one public message to #incidents, a channel for live incidents, which is unusual for a forecast · can be deleted afterwards, but people will have seen it.', reversible: 'the message can be deleted' });
   Object.assign(P('p11'), { title: 'Change the /search cache TTL to 300s', options: Object.assign({ store: 'state', namespace: 'search', key: 'cache_ttl_s', value: '300' }, P('p11').options || {}), why: 'A Slack user asked platform-sre to evaluate the /search cache TTL (case c24); a worker measured hit rates at 300s and proposes it.', impact: 'Changes one key in the shared KV store; /search caches results longer (up to 5 minutes stale) · undo by setting it back.', reversible: 'set the key back' });
 })();
+
+/* Teams and bots in conductor's real shapes (feat/members teams.go, bots.go).
+ * A team's autonomy ceiling is the highest tier a bot may be PROMOTED to (run
+ * without your signature): reversible or observe. Team tiers only make a bot
+ * stricter. Routing is rules → the lead's triage → the fallback. Cross-team
+ * talk is a pair of bots that list each other as peers, or an operator
+ * bot_links entry; there are no team-to-team links. */
+(function () {
+  const D = window.D;
+  const T = (n) => D.teams.find((t) => t.name === n);
+  const B = (n) => D.bots.find((b) => b.name === n);
+  const plat = T('platform'), fin = T('finance');
+  if (plat) plat.cfg = { description: 'Platform services: api, web, infra', folder: plat.cfg.folder || 'work/platform', operators: ['ops', 'oncall'], autonomy: { ceiling: 'reversible', tiers: { never: ['gh.delete_*'] } }, budget: { proactive: { max_runs_per_day: 10, max_turns_per_day: 120 } }, isolation: { sandbox: 'required' }, browser: { logins: ['console.example.com'], credentials: ['grafana', 'statuspage'] }, knowledge: { repo: 'team-knowledge/platform', promotion: 'proposal' }, routing: { rules: [{ name: 'pd-api', match: { on: 'pd.incident', service: 'api*' }, to: 'platform-sre' }, { name: 'web-issues', match: { on: 'gh.issue_opened', repo: 'acme/web' }, to: 'web-triage' }], lead: 'platform-sre', fallback: 'platform-sre' } };
+  if (fin) fin.cfg = { description: 'Cost, billing and forecasts', folder: fin.cfg.folder || 'work/billing', operators: ['ops'], autonomy: { ceiling: 'observe' }, budget: { spend_cap: { per_action: 2500, per_period: 6000 } }, isolation: { sandbox: 'required', handoff_workers: false }, routing: { rules: [{ name: 'cost-anomaly', match: { on: 'aws-cost.anomaly' }, to: 'billing-sre' }], fallback: 'billing-sre' } };
+  const fix = (n, f) => { const b = B(n); if (b && b.cfg) f(b.cfg); };
+  D.bots.forEach((b) => { const c = b.cfg || {}; if (c.isolation && c.isolation.mode) c.isolation = c.isolation.mode === 'container' ? { sandbox: 'required' } : {}; if (c.isolation && !Object.keys(c.isolation).length) delete c.isolation; if (c.autonomy && c.autonomy.spend) { c.autonomy.spend_cap = c.autonomy.spend; delete c.autonomy.spend; } if (c.autonomy && Array.isArray(c.autonomy.promote) && !c.autonomy.promote.length) delete c.autonomy.promote; });
+  fix('platform-sre', (c) => { c.proactive = { every: '4h', quiet_hours: '22:00-07:00', budget: { max_runs_per_day: 6, max_turns_per_day: 60 }, checklist: { section: 'Proactive checks' }, notify_at: 'high' }; });
+  fix('homelab', (c) => { c.proactive = { every: '6h', quiet_hours: '23:00-08:00', budget: { max_runs_per_day: 3 }, checklist: { file: 'bots/homelab-checks.md' } }; });
+  // the one cross-team pair: both list each other (a link needs both sides, or bot_links)
+  D.botLinks = [];
+})();

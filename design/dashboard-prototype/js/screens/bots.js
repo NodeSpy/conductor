@@ -1,4 +1,4 @@
-/* Teams & bots (#178). Teams group bots: team defaults are a ceiling
+/* Teams & bots. Teams group bots: team defaults are a ceiling
  * bots inherit and can only narrow, bots in a team are peers, teams are
  * isolated unless linked, work routes to a team by rule or through its lead.
  * Per bot: chat, cases (with routing), proposals, memory, workers, access,
@@ -28,7 +28,7 @@
     const edges = [];
     teams.forEach((g) => g.ms.forEach((a, i) => g.ms.slice(i + 1).forEach((b) => edges.push(`<path d="M${pos[a.name].x} ${pos[a.name].y} Q ${(pos[a.name].x + pos[b.name].x) / 2} ${pos[a.name].y + 40} ${pos[b.name].x} ${pos[b.name].y}" class="pg-in"/>`))));
     const linked = new Set();
-    D.teams.forEach((t) => (t.cfg.links || []).forEach((l) => { const o = T(l); if (o && (o.cfg.links || []).includes(t.name)) linked.add([t.name, l].sort().join('|')); }));
+
     const bx = (n) => boxes.find((b) => b.g.t.name === n);
     [...linked].forEach((k) => { const [a, b] = k.split('|').map(bx); if (!a || !b) return; const [l, r] = a.x < b.x ? [a, b] : [b, a]; const x1 = l.x + l.w, x2 = r.x; edges.push(`<path d="M${x1} 112 L ${x2} 112" class="pg-link"/><text x="${(x1 + x2) / 2}" y="104" class="pg-lt" text-anchor="middle">linked</text>`); });
     D.bots.forEach((m) => ((m.cfg && m.cfg.peers) || []).forEach((p) => { const o = M(p); if (!o || !pos[p] || m.name > p) return; const tm = teamOf(m), to = teamOf(o); if (tm && to && tm.name === to.name) return; edges.push(`<path d="M${pos[m.name].x} ${pos[m.name].y} C ${pos[m.name].x} 20, ${pos[p].x} 20, ${pos[p].x} ${pos[p].y}" class="pg-peer"/>`); }));
@@ -36,14 +36,14 @@
       ${boxes.map((b) => `<rect x="${b.x}" y="50" width="${b.w}" height="98" rx="14" class="pg-team"/><a href="#/teams/${b.g.t.name}" aria-label="Team ${esc(b.g.t.name)}"><text x="${b.x + 12}" y="68" class="pg-tn">${esc(b.g.t.name)} ›</text></a>`).join('')}
       ${loose.length ? `<text x="${pos[loose[0].name].x - 20}" y="68" class="pg-tn muted">no team</text>` : ''}
       ${edges.join('')}
-      ${D.bots.map((m) => { const p = pos[m.name]; const lead = teamOf(m) && teamOf(m).cfg.lead === m.name; return `<a href="#/bots/${m.name}"><circle cx="${p.x}" cy="${p.y}" r="15" fill="${m.color}" class="pg-node"/>${lead ? `<circle cx="${p.x}" cy="${p.y}" r="19" class="pg-lead"/>` : ''}<text x="${p.x}" y="${p.y + 4}" text-anchor="middle" class="pg-init">${m.name[0]}</text><text x="${p.x}" y="${p.y + 34}" text-anchor="middle" class="pg-name">${esc(m.name)}</text></a>`; }).join('')}
+      ${D.bots.map((m) => { const p = pos[m.name]; const lead = teamOf(m) && leadOf(teamOf(m)) === m.name; return `<a href="#/bots/${m.name}"><circle cx="${p.x}" cy="${p.y}" r="15" fill="${m.color}" class="pg-node"/>${lead ? `<circle cx="${p.x}" cy="${p.y}" r="19" class="pg-lead"/>` : ''}<text x="${p.x}" y="${p.y + 4}" text-anchor="middle" class="pg-init">${m.name[0]}</text><text x="${p.x}" y="${p.y + 34}" text-anchor="middle" class="pg-name">${esc(m.name)}</text></a>`; }).join('')}
     </svg><div class="pg-legend small muted"><span><i class="lg-in"></i>peers inside a team (data-only ask)</span><span><i class="lg-link"></i>teams linked</span><span><i class="lg-peer"></i>explicit cross-team peer</span><span><i class="lg-lead"></i>lead</span></div>`;
   }
 
   /* ---------- list ---------- */
   const botCard = (m) => `<a class="panel bot-card" href="#/bots/${m.name}">
         <div class="row">${UI.sigil(m, 'lg')}<div class="grow"><h3>${m.name}</h3><div class="muted small">${esc(m.desc)}</div></div></div>
-        <div class="row wrap">${m.home === 'live' ? st('run', 'home live') : st('idle', 'home idle')}${m.shadow ? st('shadow', 'shadow mode') : ''}${tag(m.mode === 'container' ? 'container' : 'sandboxed', 'ok')}${teamOf(m) && teamOf(m).cfg.lead === m.name ? tag('lead', 'ember') : ''}</div>
+        <div class="row wrap">${m.home === 'live' ? st('run', 'home live') : st('idle', 'home idle')}${m.shadow ? st('shadow', 'shadow mode') : ''}${tag(S.getPath(m.cfg || {}, 'isolation.sandbox') === 'required' || S.getPath((teamOf(m) || { cfg: {} }).cfg, 'isolation.sandbox') === 'required' ? 'sandbox required' : 'sandboxed', 'ok')}${teamOf(m) && teamOf(m).cfg.lead === m.name ? tag('lead', 'ember') : ''}</div>
         <div class="grid g3" style="gap:8px">
           <div><div class="caps">cases</div><div class="serif" style="font-size:26px">${D.cases.filter((c) => c.bot === m.name && c.status === 'open').length}</div></div>
           <div><div class="caps">pending</div><div class="serif" style="font-size:26px;color:${pending(m.name).length ? 'var(--accent)' : 'inherit'}">${pending(m.name).length}</div></div>
@@ -54,63 +54,63 @@
   UI.peersGraph = peersGraph;
 
   /* ---------- team pages ---------- */
-  const tierOpts = ['propose', 'commit_money', 'reversible'];
+  const leadOf = (t) => (t && t.cfg && t.cfg.routing && t.cfg.routing.lead) || null;
+  UI.leadOf = leadOf;
+  /* the team form: conductor's teams.<t> keys (feat/members teams.go) */
   function teamForm(t) {
-    const isNew = !t, c = t ? staged('teams', t.name) : { defaults: { operators: ['ops'], autonomy: { max_tier: 'propose', promote: false }, isolation: { mode: 'namespace' } } };
-    const others = D.teams.filter((x) => !t || x.name !== t.name).map((x) => x.name);
+    const isNew = !t, c = t ? staged('teams', t.name) : { operators: ['ops'], autonomy: { ceiling: 'reversible' }, isolation: { sandbox: 'required' } };
+    const g = (p) => S.getPath(c, p);
     UI.form({ caps: isNew ? 'teams:' : `teams.${t.name}`, title: isNew ? 'New team' : `Edit team ${t.name}`, wide: true,
-      intro: 'Cut teams any way you like. Bots inherit these defaults and can only narrow them.',
-      values: isNew ? {} : { budget_turns: S.getPath(c, 'defaults.budget.max_turns_per_day'), description: c.description, lead: c.lead, operators: S.getPath(c, 'defaults.operators'), max_tier: S.getPath(c, 'defaults.autonomy.max_tier'), promote: S.getPath(c, 'defaults.autonomy.promote') !== false, approval_ttl: S.getPath(c, 'defaults.autonomy.approval_ttl'), isolation: S.getPath(c, 'defaults.isolation.mode'), budget: S.getPath(c, 'defaults.budget.max_cost_per_day'), budget_runs: S.getPath(c, 'defaults.budget.max_runs_per_day'), budget_tokens: S.getPath(c, 'defaults.budget.max_tokens_per_day'), pool_tokens: S.getPath(c, 'defaults.budget.proactive_pool.max_tokens_per_day'), pool_runs: S.getPath(c, 'defaults.budget.proactive_pool.max_runs_per_day'), pool_cost: S.getPath(c, 'defaults.budget.proactive_pool.max_cost_per_day'), logins: S.getPath(c, 'defaults.browser.logins'), credentials: S.getPath(c, 'defaults.browser.credentials'), repo: S.getPath(c, 'knowledge.repo'), promote_mode: S.getPath(c, 'knowledge.promote'), links: c.links, bots: [], folder: c.folder }, edit: !isNew,
+      intro: 'A team groups bots: they share approvers and ceilings, and a bot on it can only be stricter. Teams are the unit for shared access.',
+      values: isNew ? { ceiling: 'reversible', sandbox: 'required', peers: 'team' } : { description: c.description, folder: c.folder, operators: c.operators, ceiling: g('autonomy.ceiling') || 'reversible', shadow: !!g('autonomy.shadow'), sandbox: g('isolation.sandbox') || 'optional', handoff: g('isolation.handoff_workers') !== false, peers: c.peers || 'team', depth: g('delegation.max_depth'), pool_runs: g('budget.proactive.max_runs_per_day'), pool_turns: g('budget.proactive.max_turns_per_day'), pool_tokens: g('budget.proactive.max_tokens_per_day'), pool_cost: g('budget.proactive.max_cost_per_day'), cap_action: g('budget.spend_cap.per_action'), cap_period: g('budget.spend_cap.per_period'), secrets_via: g('credentials.secrets_via') || 'none', allow_secrets: g('credentials.allow_secrets'), logins: g('browser.logins'), credentials: g('browser.credentials'), repo: g('knowledge.repo'), promotion: g('knowledge.promotion') || 'proposal', lead: g('routing.lead'), fallback: g('routing.fallback') },
       fields: [
         isNew ? { k: 'name', type: 'string', req: true, ph: 'e.g. data', pattern: /^[a-z][a-z0-9-]*$/, patternMsg: 'Lowercase letters, digits and dashes.', validate: (v) => (T(v) ? 'A team by that name exists.' : '') } : null,
-        { k: 'description', type: 'string', mono: false },
-        isNew ? { k: 'bots', type: 'select-multi', label: 'Bots', options: S.view().bots.map((m) => m.name), create: 'bot', createLabel: 'New bot', help: 'A bot is in at most one team: adding one here moves it.' } : { k: 'lead', type: 'enum', label: 'Lead', options: botsOf(t.name).map((m) => m.name), create: 'bot', createCtx: { team: t.name }, createLabel: 'New bot on this team', help: 'Triages work routed to the team and assigns it. Requester provenance is kept.' },
-        { k: 'folder', type: 'enum', label: 'Folder', options: UI.allFolders(), create: 'folder', createLabel: 'New folder', help: 'Organization only: where the team shows on the Bots page.' },
-        { section: 'Defaults bots inherit', k: 'operators', type: 'select-multi', label: 'Operators / approvers', options: Object.keys(D.operatorsCfg), req: true },
-        { k: 'max_tier', type: 'enum', label: 'Autonomy ceiling', options: tierOpts, def: 'propose', req: true, help: 'The loosest tier any bot may give a write verb.' },
-        { k: 'promote', type: 'bool', label: 'Promotions', on: 'bots may promote reversible verbs' },
-        { k: 'approval_ttl', type: 'duration', label: 'Approval TTL' },
-        { k: 'isolation', type: 'enum', label: 'Sandbox policy', options: ['namespace', 'container'], def: 'namespace', help: 'container: every bot must run in its own container.' },
-        { k: 'budget_runs', type: 'number', label: 'Team budget · runs / day' },
-        { k: 'budget_turns', type: 'number', label: 'Team budget · turns / day' },
-        { k: 'budget_tokens', type: 'number', label: 'Team budget · tokens / day', help: 'Counted per provider: Claude and Codex each get this cap.' },
-        { k: 'budget', type: 'number', label: 'Team budget / day (USD, per provider)', show: () => UI.isApi() },
-        { k: 'pool_runs', type: 'number', label: 'Proactive pool · runs / day', help: 'Shared by every bot\'s sweeps.' },
-        { k: 'pool_tokens', type: 'number', label: 'Proactive pool · tokens / day', help: 'Per provider.' },
-        { k: 'pool_cost', type: 'number', label: 'Proactive pool · USD / day', show: () => UI.isApi() },
-        { k: 'logins', type: 'list', label: 'Browser login scope', ph: 'console.example.com' },
-        { k: 'credentials', type: 'select-multi', label: 'Credential scope', options: S.view().access.credentials.map((x) => x.name), create: 'credential', createLabel: 'Add a login' },
-        { section: 'Knowledge and links', k: 'repo', type: 'string', label: 'Team knowledge repo', ph: 'team-knowledge/<team>', help: 'Optional. Bots propose promoting knowledge into it.' },
-        { k: 'promote_mode', type: 'seg', label: 'Promotion', options: [['approval', 'needs approval'], ['auto', 'automatic'], ['off', 'off']], def: 'approval', show: (v) => !!v.repo },
-        { k: 'links', type: 'select-multi', label: 'Linked teams', options: others, create: 'team', createLabel: 'New team', help: 'Both sides must link. Linking is a channel for data to cross.' },
+        { k: 'description', type: 'string', mono: false, label: 'Description' },
+        isNew ? { k: 'bots', type: 'select-multi', label: 'Bots', options: S.view().bots.map((m) => m.name), create: 'bot', createLabel: 'New bot', help: 'A bot is on at most one team: adding one here moves it.' } : null,
+        { k: 'folder', type: 'enum', label: 'Folder', options: UI.allFolders(), create: 'folder', createLabel: 'New folder', help: 'Organization only: where the team shows. No permissions.' },
+        { section: 'Who approves', k: 'operators', type: 'select-multi', label: 'Operators (approvers)', options: Object.keys(D.operatorsCfg), help: 'May approve the bots\' proposals and knowledge promotions. A bot\'s operators must be a subset. Empty: every operator.' },
+        { section: 'What bots may do on their own', k: 'ceiling', type: 'seg', label: 'Ceiling (the most a bot may run without asking)', options: [['reversible', 'reversible: undoable actions'], ['observe', 'observe: read only']], help: 'A bot may promote a verb (run it without your signature) only up to this tier. propose, commit_money and never always ask or refuse.' },
+        { k: 'shadow', type: 'bool', label: 'Shadow mode', on: 'hold every bot in shadow mode (proposals are recorded, nothing executes)' },
+        { k: 'sandbox', type: 'seg', label: 'Agent sandbox', options: [['required', 'required'], ['optional', 'optional']], help: 'required: the bots\' sessions start only while conductor\'s agent sandbox is enforcing.' },
+        { k: 'handoff', type: 'bool', label: 'Hand-off sessions', on: 'bots may spawn a session a human can take over (otherwise cli workers only)' },
+        { section: 'Talking and delegating', k: 'peers', type: 'seg', label: 'Teammates', options: [['team', 'may message each other'], ['none', 'only explicit links']] },
+        { k: 'depth', type: 'number', label: 'Delegation · most hops', ph: '3 (default)' },
+        { section: 'Budgets', k: 'pool_runs', type: 'number', label: 'Proactive sweeps · runs / day (shared pool)' },
+        { k: 'pool_turns', type: 'number', label: 'Proactive sweeps · model turns / day' },
+        { k: 'pool_tokens', type: 'string', label: 'Proactive sweeps · tokens / day', ph: '500k' },
+        { k: 'pool_cost', type: 'number', label: 'Proactive sweeps · USD / day (model spend)', show: () => UI.isApi() },
+        { k: 'cap_action', type: 'number', label: 'Cloud spend cap · per action (commit_money)', help: 'Real money a bot may commit in one approved action. Not model spend.' },
+        { k: 'cap_period', type: 'number', label: 'Cloud spend cap · per 30 days' },
+        { section: 'Shared access', k: 'secrets_via', type: 'seg', label: 'Secrets via', options: [['none', 'none'], ['broker', 'broker (single-use grants)'], ['env', 'env']] },
+        { k: 'allow_secrets', type: 'select-multi', label: 'Vault entries the broker may issue', options: S.view().secrets.map((x) => x.ref), show: (v) => v.secrets_via === 'broker' },
+        { k: 'logins', type: 'list', label: 'Saved logins bots may use (sites)', ph: 'console.example.com' },
+        { k: 'credentials', type: 'select-multi', label: 'Sign-in credentials bots may use', options: S.view().access.credentials.map((x) => x.name), create: 'credential', createLabel: 'Add a login' },
+        { section: 'Knowledge and routing', k: 'repo', type: 'string', label: 'Team knowledge repo', ph: 'team-knowledge/<team>', help: 'Optional. The team\'s shared knowledge.' },
+        { k: 'promotion', type: 'seg', label: 'Promotion', options: [['proposal', 'an operator approves'], ['direct', 'lands at once']], show: (v) => !!v.repo },
+        isNew ? null : { k: 'lead', type: 'enum', label: 'Lead (triages what no rule matched)', options: botsOf(t.name).map((m) => m.name), create: 'bot', createCtx: { team: t.name }, createLabel: 'New bot on this team' },
+        isNew ? null : { k: 'fallback', type: 'enum', label: 'Fallback (when the lead can\'t triage)', options: botsOf(t.name).map((m) => m.name) },
       ].filter(Boolean),
       submit: 'Review change', submitIcon: 'check',
       onSubmit: (v) => {
-        const name = isNew ? v.name : t.name;
-        const n = Object.assign({}, isNew ? {} : (({ routing }) => (routing ? { routing } : {}))(c));
+        const name = isNew ? v.name : t.name, n = {};
         if (v.description) n.description = v.description;
-        if (v.lead) n.lead = v.lead;
-        n.defaults = {};
-        S.setPath(n.defaults, 'operators', v.operators);
-        n.defaults.autonomy = { max_tier: v.max_tier, promote: !!v.promote }; if (v.approval_ttl) n.defaults.autonomy.approval_ttl = v.approval_ttl;
-        n.defaults.isolation = { mode: v.isolation || 'namespace' };
-        if (v.budget_runs != null) S.setPath(n.defaults, 'budget.max_runs_per_day', v.budget_runs);
-        if (v.budget_turns != null) S.setPath(n.defaults, 'budget.max_turns_per_day', v.budget_turns);
-        if (v.budget_tokens != null) S.setPath(n.defaults, 'budget.max_tokens_per_day', v.budget_tokens);
-        if (v.pool_tokens != null) S.setPath(n.defaults, 'budget.proactive_pool.max_tokens_per_day', v.pool_tokens);
-        const keepCost = (k, path) => { if (UI.isApi()) { if (v[k] != null) S.setPath(n.defaults, path, v[k]); } else if (S.getPath(c, 'defaults.' + path) != null) S.setPath(n.defaults, path, S.getPath(c, 'defaults.' + path)); };
-        keepCost('budget', 'budget.max_cost_per_day');
-        if (v.pool_runs != null) S.setPath(n.defaults, 'budget.proactive_pool.max_runs_per_day', v.pool_runs);
-        keepCost('pool_cost', 'budget.proactive_pool.max_cost_per_day');
-        if (v.logins) S.setPath(n.defaults, 'browser.logins', v.logins);
-        if (v.credentials) S.setPath(n.defaults, 'browser.credentials', v.credentials);
-        if (v.repo) n.knowledge = { repo: v.repo, promote: v.promote_mode || 'approval' };
-        if (isNew ? false : c.routing) n.routing = c.routing;
-        if (v.links) n.links = v.links;
         if (v.folder) n.folder = v.folder;
+        if (isNew ? false : c.collections) n.collections = c.collections;
+        if ((v.operators || []).length) n.operators = v.operators;
+        if (v.peers === 'none') n.peers = 'none';
+        if (v.depth != null) n.delegation = { max_depth: v.depth };
+        n.autonomy = {}; if (v.ceiling && v.ceiling !== 'reversible') n.autonomy.ceiling = v.ceiling; else if (v.ceiling) n.autonomy.ceiling = 'reversible'; if (v.shadow) n.autonomy.shadow = true; if (g('autonomy.tiers')) n.autonomy.tiers = g('autonomy.tiers');
+        const pool = {}; if (v.pool_runs != null) pool.max_runs_per_day = v.pool_runs; if (v.pool_turns != null) pool.max_turns_per_day = v.pool_turns; if (v.pool_tokens) pool.max_tokens_per_day = v.pool_tokens; if (UI.isApi() ? v.pool_cost != null : g('budget.proactive.max_cost_per_day') != null) pool.max_cost_per_day = UI.isApi() ? v.pool_cost : g('budget.proactive.max_cost_per_day');
+        const cap = {}; if (v.cap_action != null) cap.per_action = v.cap_action; if (v.cap_period != null) cap.per_period = v.cap_period;
+        if (Object.keys(pool).length || Object.keys(cap).length) { n.budget = {}; if (Object.keys(cap).length) n.budget.spend_cap = cap; if (Object.keys(pool).length) n.budget.proactive = pool; }
+        n.isolation = { sandbox: v.sandbox || 'optional' }; if (v.handoff === false) n.isolation.handoff_workers = false;
+        if (v.secrets_via && v.secrets_via !== 'none') { n.credentials = { secrets_via: v.secrets_via }; if ((v.allow_secrets || []).length) n.credentials.allow_secrets = v.allow_secrets; }
+        if ((v.logins || []).length || (v.credentials || []).length) { n.browser = {}; if ((v.logins || []).length) n.browser.logins = v.logins; if ((v.credentials || []).length) n.browser.credentials = v.credentials; }
+        if (v.repo) { n.knowledge = { repo: v.repo }; if (v.promotion === 'direct') n.knowledge.promotion = 'direct'; }
+        const ro = Object.assign({}, isNew ? {} : c.routing || {}); if (v.lead) ro.lead = v.lead; if (v.fallback) ro.fallback = v.fallback; if (Object.keys(ro).length) n.routing = ro;
         S.stage('teams', name, n);
         (v.bots || []).forEach((mn) => { const mc = Y_clone(staged('bots', mn)); mc.team = name; S.stage('bots', mn, mc); });
-        if (isNew && !D.teamKnowledge[name] && v.repo) D.teamKnowledge[name] = { repo: v.repo, files: { 'README.md': `# ${name} team knowledge\n` }, proposals: [] };
+        if (isNew && !D.teamKnowledge[name] && v.repo) D.teamKnowledge[name] = { repo: v.repo, files: {}, proposals: [] };
         UI.staged(S.find('teams', name));
       } });
   }
@@ -121,37 +121,37 @@
     const t = T(b.dataset.t), ms = botsOf(t.name);
     UI.confirm({ title: `Remove team ${t.name}?`, body: `${ms.length ? `Its ${ms.length} bot${ms.length > 1 ? 's' : ''} (${ms.map((m) => m.name).join(', ')}) leave the team and keep their own settings. ` : ''}Stages the removal; review and apply with your passkey.`, ok: 'Stage removal', danger: true }).then((ok) => {
       if (!ok) return; ms.forEach((m) => { const c = Y_clone(staged('bots', m.name)); delete c.team; S.stage('bots', m.name, c); });
-      D.teams.filter((x) => (x.cfg.links || []).includes(t.name)).forEach((x) => { const c = Y_clone(staged('teams', x.name)); c.links = c.links.filter((l) => l !== t.name); if (!c.links.length) delete c.links; S.stage('teams', x.name, c); });
       UI.staged(S.stage('teams', t.name, null));
     });
   });
 
   const routeLabel = (r) => !r ? '' : r.by === 'rule' ? `routed to <b>${r.team}</b> by rule <span class="mono">${esc(r.rule)}</span>${r.via === 'lead' ? ` → assigned by lead <b>${esc(r.lead)}</b> to <b>${esc(r.to)}</b>` : ` → <b>${esc(r.to)}</b>`}` : r.by === 'lead' ? `assigned by lead <b>${esc(r.lead)}</b> to <b>${esc(r.to)}</b>` : r.by === 'operator' ? `reassigned by operator <b>ops</b> to <b>${esc(r.to)}</b>${r.from ? ` (was ${esc(r.from)})` : ''}` : r.by === 'link' ? `arrived over the team link from <b>${esc(r.team)}</b>` : r.by === 'proactive' ? 'opened by a proactive sweep' : r.by === 'delegate' ? `delegated by <b>${esc(r.from)}</b> → <b>${esc(r.to)}</b> from case <span class="mono">${esc(r.parent)}</span>${r.cross ? ` (across the ${esc(r.team)} link)` : ''}` : `delivered to <b>${esc(r.to)}</b> directly`;
   UI.routeLabel = routeLabel;
-  const matchRule = (t, ev) => (t.cfg.routing || []).find((r) => r.when && r.when.on === ev.on && Object.entries(r.when).every(([k, v]) => k === 'on' || [].concat(v).includes(String(ev.payload[k] != null ? ev.payload[k] : S.getPath(ev.payload, 'incident.' + k)))));
+  const glob = (pat, v) => new RegExp('^' + String(pat).split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$').test(String(v));
+  const matchRule = (t, ev) => (((t.cfg.routing || {}).rules) || []).find((r) => r.match && Object.entries(r.match).every(([k, v]) => (k === 'on' ? glob(v, ev.on) : glob(v, ev.payload[k] != null ? ev.payload[k] : S.getPath(ev.payload, 'incident.' + k) || ''))));
   const tv = { ev: 'ev-pd' };
 
   function teamShell(t, tab, body) {
     const c = staged('teams', t.name) || t.cfg, ms = botsOf(t.name);
     const pend = c.knowledge ? R.pending('team:' + t.name) : 0;
     return `<div class="page"><div class="bot-hero team-hero"><span class="sigil lg team-sigil">${esc(t.name[0])}</span><div class="grow"><div class="crumbs mono tiny muted">${UI.folderCrumbs(UI.folderOfTeam(t.name, false))} › team</div><h1>${esc(t.name)}</h1>
-      <div class="facts">${tag(ms.length + ' bot' + (ms.length === 1 ? '' : 's'))}${c.lead ? tag('lead ' + c.lead, 'ember') : tag('no lead')}${tag(`operators: ${(S.getPath(c, 'defaults.operators') || []).join(', ') || '—'}`)}${tag(`ceiling ${S.getPath(c, 'defaults.autonomy.max_tier') || '—'}`)}${tag(icon('shield') + ' ' + (S.getPath(c, 'defaults.isolation.mode') || 'namespace'), 'ok')}${S.find('teams', t.name) ? tag('change staged', 'run') : ''}</div></div>
+      <div class="facts">${tag(ms.length + ' bot' + (ms.length === 1 ? '' : 's'))}${leadOf({ cfg: c }) ? tag('lead ' + leadOf({ cfg: c }), 'ember') : tag('no lead')}${tag(`approvers: ${(c.operators || []).join(', ') || 'every operator'}`)}${tag(`runs alone up to: ${S.getPath(c, 'autonomy.ceiling') || 'reversible'}`)}${tag(icon('shield') + ' ' + (S.getPath(c, 'defaults.isolation.mode') || 'namespace'), 'ok')}${S.find('teams', t.name) ? tag('change staged', 'run') : ''}</div></div>
       <div class="row wrap"><button class="btn" data-act="team-deliver" data-t="${t.name}">${icon('send')}Route work here</button><button class="btn" data-act="team-edit" data-t="${t.name}">${icon('edit')}Edit team</button><button class="btn ghost" data-act="team-del" data-t="${t.name}" aria-label="Remove team">${icon('trash')}</button></div></div>
-      ${UI.tabs([['overview', 'Overview', `#/teams/${t.name}`], ['routing', 'Routing', `#/teams/${t.name}/routing`, (c.routing || []).length], ['defaults', 'Defaults', `#/teams/${t.name}/defaults`], ['knowledge', 'Knowledge', `#/teams/${t.name}/knowledge`, pend || null, pend > 0]], tab)}
+      ${UI.tabs([['overview', 'Overview', `#/teams/${t.name}`], ['routing', 'Routing', `#/teams/${t.name}/routing`, ((c.routing || {}).rules || []).length], ['defaults', 'Ceilings & scopes', `#/teams/${t.name}/defaults`], ['knowledge', 'Knowledge', `#/teams/${t.name}/knowledge`, pend || null, pend > 0]], tab)}
       ${body}</div>`;
   }
   /* ---------- delegation ---------- */
   const DST = { running: 'run', done: 'ok', failed: 'fail', cancelled: 'idle' };
-  const linked = (a, b) => { const ta = T(a), tb = T(b); return !!(ta && tb && (ta.cfg.links || []).includes(b) && (tb.cfg.links || []).includes(a)); };
   /** Who `from` may delegate to: teammates, and bots in teams linked both ways. Others carry the reason they can't. */
   UI.delegationReach = (from) => {
-    const f = M(from), ft = f && f.cfg && f.cfg.team;
+    const f = M(from), ft = f && f.cfg && f.cfg.team, fteam = ft && T(ft);
     return D.bots.filter((b) => b.name !== from).map((b) => { const bt = b.cfg && b.cfg.team;
-      const why = !ft ? `${from} is solo: delegation is between teammates` : !bt ? `${b.name} is solo` : bt === ft ? '' : linked(ft, bt) ? '' : `teams ${ft} and ${bt} are isolated: link them to delegate across`;
+      const mates = ft && bt === ft && (!fteam || fteam.cfg.peers !== 'none');
+      const why = mates || S.linked(from, b.name) ? '' : ft && bt === ft ? `team ${ft} sets peers: none; link the two bots to delegate` : `${from} and ${b.name} aren't linked: both list each other under peers, or add a bot_links pair`;
       return { name: b.name, team: bt, ok: !why, why, cross: !!(bt && ft && bt !== ft) }; });
   };
   const edgeHTML = (d) => `<div class="item deleg" data-deleg="${d.id}" style="align-items:flex-start">${st(DST[d.status], '')}<div class="grow small">
-      <div><span class="mono tiny muted">${d.id}</span> delegated by <b>${esc(d.from)}</b> → <a class="link" href="#/bots/${d.to}/cases/${d.child}"><b>${esc(d.to)}</b></a> <span class="tag" data-s="${DST[d.status]}">${d.status}</span>${M(d.from) && M(d.to) && teamOf(M(d.from)) && teamOf(M(d.to)) && teamOf(M(d.from)).name !== teamOf(M(d.to)).name ? ' ' + tag('cross-team · linked') : ''}</div>
+      <div><span class="mono tiny muted">${d.id}</span> delegated by <b>${esc(d.from)}</b> → <a class="link" href="#/bots/${d.to}/cases/${d.child}"><b>${esc(d.to)}</b></a> <span class="tag" data-s="${DST[d.status]}">${d.status}</span>${M(d.from) && M(d.to) && teamOf(M(d.from)) && teamOf(M(d.to)) && teamOf(M(d.from)).name !== teamOf(M(d.to)).name ? ' ' + tag('linked bots') : ''}</div>
       <div class="muted">“${esc(d.task)}”</div>
       ${d.result ? `<div class="deleg-result">↩ result: ${esc(d.result)}</div>` : ''}
       <div class="tiny muted">requester <span class="taint ${d.cls}">${esc(d.requester)}</span> kept · ${ago(d.at)} ago${d.done ? ` · reported back ${ago(d.done)} ago` : ''}</div></div>
@@ -165,12 +165,12 @@
   UI.act('case-delegate', (b) => {
     const m = M(b.dataset.m), c = D.cases.find((x) => x.id === b.dataset.c), reach = UI.delegationReach(m.name);
     UI.form({ caps: `conductor bot delegate ${m.name} --case ${c.id}`, title: `Have ${m.name} delegate a task`, intro: `${m.name} hands a teammate a task from <b>${c.id}</b>. The recipient works it as a child case under the original requester (<span class="mono">${esc(c.requester)}</span>), and the result reports back here.`,
-      fields: [{ k: 'to', type: 'enum', req: true, label: 'Delegate to', options: reach.map((r) => [r.name, `${r.name}${r.team ? ' · ' + r.team : ' · solo'}${r.ok ? (r.cross ? ' (linked team)' : '') : ' — not reachable'}`]), def: (reach.find((r) => r.ok) || reach[0]).name, validate: (v) => { const r = reach.find((x) => x.name === v); return r && !r.ok ? r.why : ''; } },
+      fields: [{ k: 'to', type: 'enum', req: true, label: 'Delegate to', options: reach.map((r) => [r.name, `${r.name}${r.team ? ' · ' + r.team : ' · solo'}${r.ok ? (r.cross ? ' (linked)' : '') : ' — not linked'}`]), def: (reach.find((r) => r.ok) || reach[0]).name, validate: (v) => { const r = reach.find((x) => x.name === v); return r && !r.ok ? r.why : ''; } },
         { k: 'task', type: 'text', req: true, label: 'Task', ph: 'What should the teammate do, and what should it report back?' }],
       submit: 'Delegate', submitIcon: 'send',
       onSubmit: (v) => {
         const r = reach.find((x) => x.name === v.to);
-        const id = 'd' + (D.delegations.length + 1), child = newCase(v.to, { title: v.task.split('\n')[0].slice(0, 90), requester: c.requester, cls: c.cls, routed: { by: 'delegate', from: m.name, to: v.to, parent: c.id, delegation: id, team: teamOf(m).name, cross: r.cross, requester_kept: true }, notes: [] });
+        const id = 'd' + (D.delegations.length + 1), child = newCase(v.to, { title: v.task.split('\n')[0].slice(0, 90), requester: c.requester, cls: c.cls, routed: { by: 'delegate', from: m.name, to: v.to, parent: c.id, delegation: id, team: teamOf(m) ? teamOf(m).name : null, cross: r.cross, requester_kept: true }, notes: [] });
         D.delegations.unshift({ id, from: m.name, to: v.to, parent: c.id, child, task: v.task, requester: c.requester, cls: c.cls, status: 'running', at: now() });
         audit('bot_delegate', `${id} · ${m.name} → ${v.to} · case ${c.id} → ${child} · requester ${c.requester} kept`); S.save(); UI.rerender();
         UI.toast(`Delegated to ${v.to}`, `child case ${child} · result reports back to ${c.id}`, 'run');
@@ -200,22 +200,22 @@
   function teamOverview(t) {
     const c = staged('teams', t.name) || t.cfg, ms = botsOf(t.name);
     const others = S.view().bots.filter((m) => !ms.some((x) => x.name === m.name));
-    const pool = S.getPath(c, 'defaults.budget.proactive_pool'), claimed = ms.reduce((a, m) => a + (S.getPath(m.cfg, 'proactive.budget.max_runs_per_day') || 0), 0);
+    const pool = S.getPath(c, 'budget.proactive'), claimed = ms.reduce((a, m) => a + (S.getPath(m.cfg, 'proactive.budget.max_runs_per_day') || 0), 0);
     const cases = D.cases.filter((x) => x.routed && (x.routed.team === t.name || ms.some((m) => m.name === x.routed.to))).slice(0, 8);
-    const linkedBack = (l) => ((T(l) || { cfg: {} }).cfg.links || []).includes(t.name);
+    const cross = ms.flatMap((m) => S.linksOf(m.name).filter((o) => { const ob = M(o); return !(ob && ob.cfg && ob.cfg.team === t.name); }).map((o) => [m.name, o]));
     return teamShell(t, 'overview', `<div class="grid g-side">
       <div class="stack">
         <div class="panel"><div class="panel-head"><h3>Bots on this team</h3><span class="muted small">peers of each other by default</span></div><div class="list">
-          ${ms.map((m) => `<div class="item"><a href="#/bots/${m.name}" class="row grow" style="gap:10px">${UI.sigil(m)}<div><b>${m.name}</b> ${c.lead === m.name ? tag('lead', 'ember') : ''}<div class="muted tiny">${esc(m.desc)}</div></div></a>
-            ${c.lead === m.name ? '' : `<button class="btn sm ghost" data-act="team-lead" data-t="${t.name}" data-m="${m.name}">Make lead</button>`}<button class="btn sm ghost" data-act="team-remove" data-t="${t.name}" data-m="${m.name}" aria-label="Remove ${m.name} from team">${icon('x')}Remove</button></div>`).join('') || '<div class="item muted small">No bots yet.</div>'}</div>
+          ${ms.map((m) => `<div class="item"><a href="#/bots/${m.name}" class="row grow" style="gap:10px">${UI.sigil(m)}<div><b>${m.name}</b> ${leadOf({ cfg: c }) === m.name ? tag('lead', 'ember') : ''}<div class="muted tiny">${esc(m.desc)}</div></div></a>
+            ${leadOf({ cfg: c }) === m.name ? '' : `<button class="btn sm ghost" data-act="team-lead" data-t="${t.name}" data-m="${m.name}">Make lead</button>`}<button class="btn sm ghost" data-act="team-remove" data-t="${t.name}" data-m="${m.name}" aria-label="Remove ${m.name} from team">${icon('x')}Remove</button></div>`).join('') || '<div class="item muted small">No bots yet.</div>'}</div>
           <div class="panel-foot"><label class="row small grow"><span class="muted">Add a bot</span><select class="select mono" id="team-add-sel" aria-label="Bot to add" data-picker="bot" data-ctx='${esc(JSON.stringify({ page: `#/bots/new/settings?team=${t.name}&back=${encodeURIComponent('#/teams/' + t.name)}` }))}'><option value="__new__">+ Create a new bot in this team…</option>${others.map((m) => `<option value="${m.name}"${m === others[0] ? ' selected' : ''}>${m.name}${teamOf(m) ? ' (moves from ' + teamOf(m).name + ')' : ' (solo)'}</option>`).join('')}</select></label><button class="btn sm" ${others.length ? `data-act="team-add" data-t="${t.name}"` : UI.off('Every existing bot is already here: create a new one from the list')}>${icon('plus')}Add to team</button></div></div>
         <div class="panel"><div class="panel-head"><h3>Ask &amp; delegate activity</h3><span class="muted small">last 24h</span></div><div class="panel-body tight">${activityGraph(t)}</div></div>
         <div class="panel"><div class="panel-head"><h3>Delegations</h3><span class="muted small">teammates hand each other tasks; results report back</span></div><div class="list">${D.delegations.filter((d) => botsOf(t.name).some((b) => b.name === d.from || b.name === d.to)).map(edgeHTML).join('') || '<div class="item small muted">No delegations yet.</div>'}</div>
-          <div class="panel-foot small muted">Across teams, delegation exists only where both teams link each other.</div></div>
+          <div class="panel-foot small muted">Beyond the team, a bot delegates only to a bot it's linked with (both list each other as peers, or an operator's bot_links pair).</div></div>
         <div class="panel"><div class="panel-head"><h3>Routing decisions</h3><span class="muted small">requester provenance kept through every hop</span></div><div class="list">${cases.map((x) => `<a class="item click" href="#/bots/${x.bot}/cases/${x.id}"><span class="mono tiny muted">${x.id}</span><div class="grow small"><div class="ellipsis"><b>${esc(x.title)}</b></div><div class="tiny muted">${routeLabel(x.routed)} · requester <span class="taint ${x.cls}">${x.requester}</span></div></div><span class="chev">${icon('chev')}</span></a>`).join('') || '<div class="item muted small">Nothing routed yet.</div>'}</div></div>
       </div>
       <div class="stack">
-        ${!UI.usageOn() ? '' : (() => { const bp = UI.botsProv(ms.map((m) => m.name)), b0 = S.getPath(c, 'defaults.budget') || {}, rc = b0.max_runs_per_day, tc = b0.max_tokens_per_day, uc = UI.isApi() ? b0.max_cost_per_day : null, runs = ms.reduce((a, m) => a + Object.values(D.usage.bots[m.name] || {}).reduce((x, y) => x + (y.runs || 0), 0), 0), src = UI.usageSource();
+        ${!UI.usageOn() ? '' : (() => { const bp = UI.botsProv(ms.map((m) => m.name)), b0 = {}, rc = b0.max_runs_per_day, tc = b0.max_tokens_per_day, uc = UI.isApi() ? b0.max_cost_per_day : null, runs = ms.reduce((a, m) => a + Object.values(D.usage.bots[m.name] || {}).reduce((x, y) => x + (y.runs || 0), 0), 0), src = UI.usageSource();
           const meter = (v, cap, label, f) => `<div class="row"><span class="grow muted">${label}</span><span class="mono">${f(v)} / ${f(cap)}</span></div><div class="meter"><i style="width:${Math.min(100, (v / cap) * 100)}%"></i></div>`;
           return `<div class="panel" data-usage><div class="panel-head"><h3>Usage today</h3><span class="muted small">per provider, never combined</span></div><div class="panel-body stack tight small">
           ${Object.keys(D.usage.providers).map((p) => { const x = bp[p] || { runs: 0, turns: 0 }; return `<div class="prov-row" data-prov="${p}"><div class="row"><b class="grow">${UI.provLabel(p)}</b><span class="mono" data-figure>${x.runs} runs · ${x.turns} turns${x.tokens != null ? ' · ' + UI.fmtTok(x.tokens) + ' tok' : ''}${UI.isApi() ? ' · ' + usd(x.usd || 0) : ''}</span></div>${tc && x.tokens != null ? meter(x.tokens, tc, 'token cap', UI.fmtTok) : ''}${uc != null ? meter(x.usd || 0, uc, 'spend cap', usd) : ''}</div>`; }).join('')}
@@ -225,43 +225,51 @@
           ${pool ? `<div data-budget><div style="margin-top:6px"><b>Proactive pool (shared)</b></div><div class="mono">${claimed} / ${pool.max_runs_per_day} runs claimed${pool.max_tokens_per_day ? ' · ' + UI.fmtTok(pool.max_tokens_per_day) + ' tok/day per provider' : ''}${UI.isApi() && pool.max_cost_per_day != null ? ' · ' + usd(pool.max_cost_per_day) + '/day per provider' : ''}</div><div class="meter"><i style="width:${Math.min(100, (claimed / pool.max_runs_per_day) * 100)}%;background:var(--run)"></i></div><div class="muted tiny">Each bot's sweep budget draws on the pool; the validator refuses a bot over it.</div></div>` : '<div class="muted tiny">No shared proactive pool.</div>'}</div></div>`; })()}
         <div class="panel"><div class="panel-head"><h3>Links</h3></div><div class="panel-body stack tight small">
           <div><span class="caps">inside the team</span><div class="muted tiny" style="margin-top:3px">${ms.length > 1 ? ms.map((m) => m.name).join(' ↔ ') + ' · data-only ask, no extra config' : 'One bot: nobody to ask yet.'}</div></div>
-          <div><span class="caps">across teams</span>${D.teams.filter((x) => x.name !== t.name).map((x) => { const on = (c.links || []).includes(x.name); return `<div class="row" style="margin-top:6px"><b class="grow">${x.name}</b>${on ? (linkedBack(x.name) ? tag('linked both ways', 'ok') : tag('waiting for ' + x.name, 'wait')) : tag('isolated')}${UI.switchBtn(on, 'team-link', `data-t="${t.name}" data-o="${x.name}" aria-label="Link ${t.name} with ${x.name}"`)}</div>`; }).join('') || '<div class="muted tiny">No other teams.</div>'}</div>
-          <div class="muted tiny">Linking is a channel for data to cross between teams, and the only way a bot can delegate across them; both sides must link. A link change is a config edit (widening).</div>
+          <div><span class="caps">beyond the team</span>${cross.map(([a, o]) => `<div class="row" style="margin-top:6px"><span class="mono grow">${esc(a)} ↔ ${esc(o)}</span><span class="muted tiny">${(D.botLinks || []).some((pr) => pr.includes(a) && pr.includes(o)) ? 'bot_links' : 'both list each other as peers'}</span>${(D.botLinks || []).some((pr) => pr.includes(a) && pr.includes(o)) ? `<button class="btn sm ghost" data-act="botlink-del" data-a="${a}" data-b="${o}">Unlink</button>` : ''}</div>`).join('') || '<div class="muted tiny" style="margin-top:4px">No links: the team\'s bots talk only to each other.</div>'}<button class="btn sm" style="margin-top:8px" data-act="botlink-add" data-t="${t.name}">${icon('link')}Link a bot…</button></div>
+          <div class="muted tiny">A link lets two bots message each other and delegate, data only. It's a pair of bots, never a whole team, and a config edit (widening).</div>
           <div><span class="caps">delegation reach</span>${botsOf(t.name).map((b) => { const r = UI.delegationReach(b.name); return `<div class="tiny" style="margin-top:4px"><b class="mono">${b.name}</b> → ${r.filter((x) => x.ok).map((x) => `<span class="mono">${x.name}</span>`).join(', ') || '<span class="muted">no one</span>'}${r.some((x) => !x.ok && x.team) ? ` <span class="muted">· isolated from ${r.filter((x) => !x.ok && x.team).map((x) => x.name).join(', ')}</span>` : ''}</div>`; }).join('')}</div></div></div>
       </div></div>`);
   }
   function teamRouting(t) {
-    const c = staged('teams', t.name) || t.cfg, rules = c.routing || [];
+    const c = staged('teams', t.name) || t.cfg, rules = (c.routing || {}).rules || [];
     const ev = SCHEMA.events.find((e) => e.id === tv.ev) || SCHEMA.events[0];
     const hit = matchRule({ cfg: c }, ev);
     return teamShell(t, 'routing', `<div class="grid g-side"><div class="stack">
-      <div class="panel"><div class="panel-head"><h3>Rules</h3><span class="muted small">first match wins · to a bot, or to the lead to triage</span><div class="tools"><button class="btn sm" data-act="rule-edit" data-t="${t.name}" data-i="-1">${icon('plus')}Add a rule</button></div></div>
+      <div class="panel"><div class="panel-head"><h3>Rules</h3><span class="muted small">first match wins · no match: the lead triages · then the fallback</span><div class="tools"><button class="btn sm" data-act="rule-edit" data-t="${t.name}" data-i="-1">${icon('plus')}Add a rule</button></div></div>
         <div class="list">${rules.map((r, i) => `<div class="item"><span class="mono tiny muted">${i + 1}</span><div class="grow"><b class="mono small">${esc(r.name || 'rule ' + (i + 1))}</b><div class="tiny muted mono">when ${esc(r.when ? Object.entries(r.when).map(([k, v]) => `${k}: ${[].concat(v).join('|')}`).join(' · ') : '—')} → ${r.to === 'lead' ? `lead (${esc(c.lead || 'none')})` : esc(r.to)}</div></div>
           <button class="icon-btn" ${i ? `data-act="rule-move" data-t="${t.name}" data-i="${i}" data-d="-1"` : UI.off('Already first')} aria-label="Move up">${icon('chev', 'up')}</button><button class="icon-btn" ${i < rules.length - 1 ? `data-act="rule-move" data-t="${t.name}" data-i="${i}" data-d="1"` : UI.off('Already last')} aria-label="Move down">${icon('chev', 'down')}</button><button class="btn sm ghost" data-act="rule-edit" data-t="${t.name}" data-i="${i}">${icon('edit')}Edit</button><button class="btn sm ghost" data-act="rule-del" data-t="${t.name}" data-i="${i}" aria-label="Delete rule">${icon('trash')}</button></div>`).join('') || '<div class="item muted small">No rules: work reaches this team only through its bots directly.</div>'}</div>
-        <div class="panel-foot small muted">Rule edits stage a config change to <span class="mono">teams.${t.name}.routing</span>.${S.find('teams', t.name) ? ' <a class="link" href="#/config/apply">Review staged change</a>' : ''}</div></div>
+        <div class="panel-foot small muted">Rule edits stage a config change to <span class="mono">teams.${t.name}.routing.rules</span>. Lead: <b>${esc((c.routing || {}).lead || 'none')}</b> · fallback: <b>${esc((c.routing || {}).fallback || 'none')}</b>.${S.find('teams', t.name) ? ' <a class="link" href="#/config/apply">Review staged change</a>' : ''}</div></div>
       </div><div class="stack">
       <div class="panel"><div class="panel-head"><h3>Try a rule</h3></div><div class="panel-body stack tight small"><label class="field"><span class="caps">a real past event</span><select class="select mono" data-on-change="route-ev" aria-label="Event to route">${SCHEMA.events.map((e) => `<option value="${e.id}"${e.id === ev.id ? ' selected' : ''}>${esc(e.label)}</option>`).join('')}</select></label>
-        ${hit ? `<div class="callout ok small">Matches <b class="mono">${esc(hit.name)}</b> → ${hit.to === 'lead' ? `lead <b>${esc(c.lead)}</b> triages and assigns` : `<b>${esc(hit.to)}</b>`}. The case keeps requester <span class="mono">event:${esc(ev.on)}</span>.</div>` : `<div class="callout small">No rule in <b>${t.name}</b> matches <span class="mono">${esc(ev.on)}</span>; it goes to whichever trigger or bot it was addressed to.</div>`}</div></div>
+        ${hit ? `<div class="callout ok small">Matches <b class="mono">${esc(hit.name)}</b> → <b>${esc(hit.to)}</b>. The case keeps requester <span class="mono">event:${esc(ev.on)}</span>.</div>` : `<div class="callout small">No rule in <b>${t.name}</b> matches <span class="mono">${esc(ev.on)}</span>; it goes to whichever trigger or bot it was addressed to.</div>`}</div></div>
       <div class="callout info small">The lead is a bot: it reads the case, then assigns it with <span class="mono">bot assign</span>. The requester never changes on the way, so the assignee runs on no more trust than whoever asked.</div></div></div>`);
   }
   function teamDefaults(t) {
-    const c = staged('teams', t.name) || t.cfg, d = c.defaults || {}, ms = botsOf(t.name);
-    const effs = ms.map((m) => ({ m, e: S.effective(Object.assign({}, m, { cfg: staged('bots', m.name) }), Object.assign({}, D, { teams: D.teams.map((x) => (x.name === t.name ? { name: x.name, cfg: c } : x)) })) }));
-    const badge = (src, ok = true) => (ok ? (src === 'inherits' ? '<span class="inh">inherits</span>' : src === 'narrows' ? '<span class="nar">narrows</span>' : `<span class="inh">${src}</span>`) : '<span class="wid">wider ✗</span>');
-    const row = (label, teamV, cell) => `<tr><td data-l="default"><b>${label}</b></td><td data-l="team" class="mono small">${teamV}</td>${effs.map((x) => `<td data-l="${x.m.name}" class="small">${cell(x)}</td>`).join('')}</tr>`;
+    const c = staged('teams', t.name) || t.cfg, ms = botsOf(t.name);
+    const st2 = Object.assign({}, D, { teams: D.teams.map((x) => (x.name === t.name ? { name: x.name, cfg: c } : x)) });
+    const effs = ms.map((m) => { const mm = Object.assign({}, m, { cfg: staged('bots', m.name) }); return { m: mm, e: S.effective(mm, st2), errs: S.narrowErrors(m.name, mm.cfg, st2) }; });
+    const badge = (src, ok = true) => (!ok ? '<span class="wid">wider ✗</span>' : src === 'inherits' ? '<span class="inh">inherits</span>' : src === 'equal' ? '<span class="inh">same as team</span>' : src === 'narrows' ? '<span class="nar">narrows</span>' : src === 'own' ? '<span class="inh">own</span>' : `<span class="inh">${esc(src)}</span>`);
+    const row = (label, teamV, cell) => `<tr><td data-l="setting"><b>${label}</b></td><td data-l="team" class="mono small">${teamV}</td>${effs.map((x) => `<td data-l="${x.m.name}" class="small">${cell(x)}</td>`).join('')}</tr>`;
     const subset = (a, b) => !b || (a || []).every((x) => b.includes(x));
-    return teamShell(t, 'defaults', `<div class="callout small" style="margin-bottom:12px">Bots inherit every default and may only <b>narrow</b> it: fewer approvers, a stricter tier, a container instead of a namespace, a smaller budget, fewer sites. Anything wider is refused when the config is validated.</div>
-      <div class="panel"><div class="panel-head"><h3>Defaults and what bots do with them</h3><div class="tools"><button class="btn sm" data-act="team-edit" data-t="${t.name}">${icon('edit')}Edit defaults</button></div></div>
-      <table class="tbl responsive inherit-tbl"><thead><tr><th>default</th><th>team</th>${effs.map((x) => `<th><a href="#/bots/${x.m.name}/settings">${x.m.name}</a></th>`).join('')}</tr></thead><tbody>
-        ${row('operators', (d.operators || []).join(', ') || '—', ({ e }) => `<span class="mono">${(e.operators.v || []).join(', ')}</span> ${badge(e.operators.src, subset(e.operators.v, d.operators))}`)}
-        ${row('autonomy ceiling', S.getPath(d, 'autonomy.max_tier') || '—', ({ m }) => { const tiers = Object.keys(S.getPath(staged('bots', m.name), 'autonomy.tiers') || {}).filter((x) => x !== 'observe'); const loosest = tiers.sort((a, b) => S.TIER_ORDER.indexOf(b) - S.TIER_ORDER.indexOf(a))[0] || 'propose'; const ok = S.TIER_ORDER.indexOf(loosest) <= S.TIER_ORDER.indexOf(S.getPath(d, 'autonomy.max_tier') || 'observe'); return `<span class="mono">${loosest}</span> ${badge(loosest === S.getPath(d, 'autonomy.max_tier') ? 'inherits' : 'narrows', ok)}`; })}
-        ${row('promotions', S.getPath(d, 'autonomy.promote') === false ? 'none allowed' : 'allowed', ({ e }) => `<span class="mono">${e.promote.v.join(', ') || 'none'}</span> ${badge(e.promote.v.length ? 'own' : 'narrows', !(S.getPath(d, 'autonomy.promote') === false && e.promote.v.length))}`)}
-        ${row('sandbox', S.getPath(d, 'isolation.mode') || 'namespace', ({ e }) => `<span class="mono">${e.isolation.v || 'namespace'}</span> ${badge(e.isolation.v === S.getPath(d, 'isolation.mode') ? 'inherits' : 'narrows', !(S.getPath(d, 'isolation.mode') === 'container' && e.isolation.v !== 'container'))}`)}
-        ${row('proactive budget', S.getPath(d, 'budget.proactive_pool') ? `pool ${d.budget.proactive_pool.max_runs_per_day} runs${UI.isApi() && d.budget.proactive_pool.max_cost_per_day != null ? ' · ' + usd(d.budget.proactive_pool.max_cost_per_day) : ''}` : '—', ({ m }) => { const b = S.getPath(staged('bots', m.name), 'proactive.budget'), p = S.getPath(d, 'budget.proactive_pool'); return b ? `<span class="mono">${b.max_runs_per_day} runs${UI.isApi() && b.max_cost_per_day != null ? ' · ' + usd(b.max_cost_per_day) : ''}</span> ${badge('narrows', !p || (b.max_runs_per_day <= p.max_runs_per_day && b.max_cost_per_day <= p.max_cost_per_day))}` : '<span class="muted">no sweeps</span>'; })}
-        ${row('credential scope', (S.getPath(d, 'browser.credentials') || []).join(', ') || 'any', ({ e }) => `<span class="mono">${e.credentials.v.join(', ') || 'none'}</span> ${badge(e.credentials.v.length ? 'narrows' : 'narrows', subset(e.credentials.v, e.credentials.scope))}`)}
-        ${row('browser logins', (S.getPath(d, 'browser.logins') || []).join(', ') || 'any', ({ e }) => `<span class="mono">${e.logins.v.join(', ') || 'none'}</span> ${badge('narrows', subset(e.logins.v, e.logins.scope))}`)}
+    const ceiling = S.getPath(c, 'autonomy.ceiling') || 'reversible';
+    const pool = S.getPath(c, 'budget.proactive');
+    return teamShell(t, 'defaults', `<div class="callout small" style="margin-bottom:12px">A bot on a team can only be <b>stricter</b>: approvers from the team's list, promotions no higher than the ceiling, the team's tier classifications and sandbox, sweeps inside the shared pool, logins inside the team's scope. Anything wider is refused when the config is validated, naming the team value it breaks.</div>
+      ${UI.tierLadder()}
+      <div class="panel" style="margin-top:14px"><div class="panel-head"><h3>Team values and what each bot does with them</h3><div class="tools"><button class="btn sm" data-act="team-edit" data-t="${t.name}">${icon('edit')}Edit team</button></div></div>
+      <table class="tbl responsive inherit-tbl"><thead><tr><th>setting</th><th>team</th>${effs.map((x) => `<th><a href="#/bots/${x.m.name}/settings">${x.m.name}</a></th>`).join('')}</tr></thead><tbody>
+        ${row('approvers', (c.operators || []).join(', ') || 'every operator', ({ e }) => `<span class="mono">${(e.operators.v || []).join(', ') || '—'}</span> ${badge(e.operators.src, subset(e.operators.v, c.operators))}`)}
+        ${row('runs alone up to (ceiling)', ceiling, ({ m }) => { const pr = S.getPath(m.cfg, 'autonomy.promote') || []; const over = pr.filter((v) => S.LADDER.indexOf(S.tierFor(m, v, st2).tier) > S.LADDER.indexOf(ceiling)); return `<span class="mono">${pr.join(', ') || 'nothing promoted'}</span> ${badge(pr.length ? 'own' : 'inherits', !over.length)}`; })}
+        ${row('tier classifications', Object.entries(S.getPath(c, 'autonomy.tiers') || {}).map(([k, v]) => `${k}: ${v.join(', ')}`).join('; ') || '—', ({ errs }) => { const te = errs.filter((x) => /classifies/.test(x)); return te.length ? `<span class="wid">wider ✗</span> <span class="tiny">${esc(te[0])}</span>` : '<span class="inh">stricter or equal</span>'; })}
+        ${row('shadow mode', S.getPath(c, 'autonomy.shadow') ? 'held in shadow' : 'not held', ({ e }) => `<span class="mono">${e.shadow.v === undefined ? (S.getPath(c, 'autonomy.shadow') ? 'shadow' : '—') : e.shadow.v ? 'shadow' : 'off'}</span> ${badge(e.shadow.src, !(S.getPath(c, 'autonomy.shadow') && e.shadow.v === false))}`)}
+        ${row('agent sandbox', S.getPath(c, 'isolation.sandbox') || 'optional', ({ e }) => `<span class="mono">${e.sandbox.v || 'optional'}</span> ${badge(e.sandbox.src, !(S.getPath(c, 'isolation.sandbox') === 'required' && e.sandbox.v === 'optional'))}`)}
+        ${row('proactive sweeps (shared pool)', pool ? Object.entries(pool).map(([k, v]) => `${k.replace(/^max_|_per_day$/g, '')} ${v}`).join(' · ') : '—', ({ m, errs }) => { const b = S.getPath(m.cfg, 'proactive.budget'); return b ? `<span class="mono">${Object.entries(b).map(([k, v]) => `${k.replace(/^max_|_per_day$/g, '')} ${v}`).join(' · ')}</span> ${badge(pool ? 'narrows' : 'own', !errs.some((x) => /proactive pool/.test(x)))}` : '<span class="muted">no sweeps</span>'; })}
+        ${row('cloud spend cap', S.getPath(c, 'budget.spend_cap') ? `${S.getPath(c, 'budget.spend_cap.per_action') || '—'} / action` : '—', ({ e, errs }) => `<span class="mono">${e.spendCap.v ? (e.spendCap.v.per_action || '—') + ' / action' : '—'}</span> ${badge(e.spendCap.src, !errs.some((x) => /spend_cap/.test(x)))}`)}
+        ${row('sign-in credentials', (S.getPath(c, 'browser.credentials') || []).join(', ') || 'any', ({ e }) => `<span class="mono">${e.credentials.v.join(', ') || 'none'}</span> ${badge(!e.credentials.scope ? 'own' : e.credentials.v.length === e.credentials.scope.length && subset(e.credentials.v, e.credentials.scope) ? 'equal' : 'narrows', subset(e.credentials.v, e.credentials.scope))}`)}
+        ${row('saved logins', (S.getPath(c, 'browser.logins') || []).join(', ') || 'any', ({ e }) => `<span class="mono">${e.logins.v.join(', ') || 'none'}</span> ${badge(!e.logins.scope ? 'own' : e.logins.v.length === e.logins.scope.length && subset(e.logins.v, e.logins.scope) ? 'equal' : 'narrows', subset(e.logins.v, e.logins.scope))}`)}
       </tbody></table></div>`);
   }
+  /** The tier ladder, explained once: what each tier means for execution. */
+  UI.tierLadder = () => `<div class="tier-ladder" role="list" aria-label="Tiers, least to most cautious">${[['observe', 'Reads only: runs on its own.'], ['reversible', 'Acts, and the action can be undone: runs on its own only if promoted (up to the team ceiling), otherwise asks.'], ['propose', 'Asks you first: a proposal you approve with your passkey.'], ['commit_money', 'Spends real money: asks you, within the spend cap.'], ['never', 'Refused outright.']].map(([t, d], i) => `<div class="tl-step" role="listitem"><span class="tier ${t}">${t}</span><span class="small">${d}</span>${i < 4 ? '<span class="tl-arrow" aria-hidden="true">›</span>' : ''}</div>`).join('')}</div>`;
   function teamKnowledge(t) {
     const c = staged('teams', t.name) || t.cfg;
     if (!c.knowledge) return teamShell(t, 'knowledge', `<div class="panel"><div class="empty"><span class="serif">No shared knowledge repo</span>A team can keep one repo every bot on it reads. You write to it directly; bots propose and you approve.<button class="btn primary" data-act="team-edit" data-t="${t.name}">${icon('plus')}Add a knowledge repo</button></div></div>`);
@@ -272,21 +280,27 @@
     if (!t) return `<div class="page"><div class="empty"><span class="serif">No team named ${esc(name)}</span><a class="btn" href="#/bots">Bots</a></div></div>`;
     return tab === 'routing' ? teamRouting(t) : tab === 'defaults' ? teamDefaults(t) : tab === 'knowledge' ? teamKnowledge(t) : teamOverview(t);
   }, { nav: 'bots' });
-  UI.act('team-lead', (b) => { const c = Y_clone(staged('teams', b.dataset.t)); c.lead = b.dataset.m; UI.staged(S.stage('teams', b.dataset.t, c)); });
-  UI.act('team-remove', (b) => { const c = Y_clone(staged('bots', b.dataset.m)); delete c.team; S.stage('bots', b.dataset.m, c); const tc = Y_clone(staged('teams', b.dataset.t)); if (tc.lead === b.dataset.m) { delete tc.lead; S.stage('teams', b.dataset.t, tc); } (tc.routing || []).filter((r) => r.to === b.dataset.m).length && UI.toast('A routing rule still sends work to ' + b.dataset.m, 'the validator flags it; edit the rule', 'wait'); UI.staged(S.find('bots', b.dataset.m)); });
+  UI.act('team-lead', (b) => { const c = Y_clone(staged('teams', b.dataset.t)); c.routing = Object.assign({}, c.routing, { lead: b.dataset.m }); UI.staged(S.stage('teams', b.dataset.t, c)); });
+  UI.act('team-remove', (b) => { const c = Y_clone(staged('bots', b.dataset.m)); delete c.team; S.stage('bots', b.dataset.m, c); const tc = Y_clone(staged('teams', b.dataset.t)); const ro = tc.routing || {}; let ch = false; if (ro.lead === b.dataset.m) { delete ro.lead; ch = true; } if (ro.fallback === b.dataset.m) { delete ro.fallback; ch = true; } const before = (ro.rules || []).length; ro.rules = (ro.rules || []).filter((r) => r.to !== b.dataset.m); if (ro.rules.length !== before) ch = true; if (!ro.rules.length) delete ro.rules; if (ch) { if (Object.keys(ro).length) tc.routing = ro; else delete tc.routing; S.stage('teams', b.dataset.t, tc); } UI.staged(S.find('bots', b.dataset.m)); });
   UI.act('team-add', (b) => { const mn = UI.$('#team-add-sel').value; const c = Y_clone(staged('bots', mn)); c.team = b.dataset.t; UI.staged(S.stage('bots', mn, c)); });
-  UI.act('team-link', (b) => { const c = Y_clone(staged('teams', b.dataset.t)); const on = (c.links || []).includes(b.dataset.o); c.links = on ? c.links.filter((l) => l !== b.dataset.o) : (c.links || []).concat([b.dataset.o]); if (!c.links.length) delete c.links; UI.staged(S.stage('teams', b.dataset.t, c), { go: false }); UI.rerender(); });
+  UI.act('botlink-add', (b) => { const t = b.dataset.t, mine = botsOf(t).map((m) => m.name), others = D.bots.filter((x) => !mine.includes(x.name)).map((x) => [x.name, `${x.name}${x.cfg && x.cfg.team ? ' · team ' + x.cfg.team : ' · solo'}`]);
+    UI.form({ caps: 'bot_links', title: 'Link two bots', intro: 'They may message each other and delegate, data only, as if both listed the other under peers. Requester provenance is kept on every hop.', fields: [{ k: 'a', type: 'enum', req: true, label: `A bot on ${t}`, options: mine }, { k: 'b', type: 'enum', req: true, label: 'The bot to link', options: others }], submit: 'Review change', submitIcon: 'link',
+      onSubmit: (v) => UI.staged(S.stage('botLinks', [v.a, v.b].sort().join('+'), [v.a, v.b], `link ${v.a} ↔ ${v.b}`)) }); });
+  UI.act('botlink-del', (b) => UI.confirm({ title: `Unlink ${esc(b.dataset.a)} and ${esc(b.dataset.b)}?`, body: 'Stages removing the bot_links pair. Delegations already running finish.', ok: 'Stage it', cancel: 'Keep it', danger: true }).then((ok) => ok && UI.staged(S.stage('botLinks', [b.dataset.a, b.dataset.b].sort().join('+'), null))));
   UI.act('route-ev', (sel) => { tv.ev = sel.value; UI.rerender(); });
   const evOn = () => [...new Set(SCHEMA.events.map((e) => e.on).concat(['aws-cost.anomaly', 'slack-ops.mention']))];
+  const rulesOf = (c) => { c.routing = c.routing || {}; c.routing.rules = c.routing.rules || []; return c.routing.rules; };
+  const tidy = (c) => { if (c.routing && c.routing.rules && !c.routing.rules.length) delete c.routing.rules; if (c.routing && !Object.keys(c.routing).length) delete c.routing; };
   UI.act('rule-edit', (b) => {
-    const t = T(b.dataset.t), c = Y_clone(staged('teams', t.name)), i = +b.dataset.i, r = i >= 0 ? c.routing[i] : null;
-    const conds = r ? Object.fromEntries(Object.entries(r.when || {}).filter(([k]) => k !== 'on').map(([k, v]) => [k, [].concat(v).join(', ')])) : {};
-    UI.form({ caps: `teams.${t.name}.routing`, title: r ? `Edit rule ${r.name}` : 'Add a routing rule', values: r ? { name: r.name, on: r.when.on, conds, to: r.to } : {}, edit: !!r,
-      fields: [{ k: 'name', type: 'string', req: true, pattern: /^[a-z][\w-]*$/, patternMsg: 'letters, digits, - and _' }, { k: 'on', type: 'enum', label: 'When the event is', req: true, options: evOn() }, { k: 'conds', type: 'map', label: 'and its fields match', help: 'e.g. service → api, web. Comma-separate alternatives.' }, { k: 'to', type: 'enum', label: 'Route to', req: true, options: [['lead', `the lead (${c.lead || 'none set'})`]].concat(botsOf(t.name).map((m) => [m.name, m.name])), create: 'bot', createCtx: { team: t.name }, createLabel: 'New bot on this team' }],
-      submit: 'Stage rule', onSubmit: (v) => { const when = { on: v.on }; Object.entries(v.conds || {}).forEach(([k, x]) => { const vals = String(x).split(',').map((s) => s.trim()).filter(Boolean); when[k] = vals.length > 1 ? vals : vals[0]; }); const nr = { name: v.name, when, to: v.to }; c.routing = c.routing || []; if (r) c.routing[i] = nr; else c.routing.push(nr); UI.staged(S.stage('teams', t.name, c), { go: false }); UI.rerender(); } });
+    const t = T(b.dataset.t), c = Y_clone(staged('teams', t.name)), i = +b.dataset.i, rules = rulesOf(c), r = i >= 0 ? rules[i] : null;
+    const conds = r ? Object.fromEntries(Object.entries(r.match || {}).filter(([k]) => k !== 'on')) : {};
+    UI.form({ caps: `teams.${t.name}.routing.rules`, title: r ? `Edit rule ${r.name}` : 'Add a routing rule', values: r ? { name: r.name, on: (r.match || {}).on, conds, to: r.to } : {}, edit: !!r,
+      intro: 'Deterministic: the event\'s fields matched against globs, no model. First match wins; no match goes to the lead to triage.',
+      fields: [{ k: 'name', type: 'string', req: true, pattern: /^[a-z][\w-]*$/, patternMsg: 'letters, digits, - and _' }, { k: 'on', type: 'enum', label: 'When the event is', req: true, options: evOn() }, { k: 'conds', type: 'map', label: 'and its fields match (globs)', help: 'e.g. service → api*, repo → acme/web.' }, { k: 'to', type: 'enum', req: true, label: 'Route to', options: botsOf(t.name).map((m) => m.name), create: 'bot', createCtx: { team: t.name }, createLabel: 'New bot on this team' }],
+      submit: 'Stage rule', onSubmit: (v) => { const match = { on: v.on }; Object.entries(v.conds || {}).forEach(([k, x]) => { match[k] = String(x); }); const nr = { name: v.name, match, to: v.to }; if (r) rules[i] = nr; else rules.push(nr); UI.staged(S.stage('teams', t.name, c), { go: false }); UI.closeModal(); UI.rerender(); return false; } });
   });
-  UI.act('rule-del', (b) => { const c = Y_clone(staged('teams', b.dataset.t)); c.routing.splice(+b.dataset.i, 1); if (!c.routing.length) delete c.routing; UI.staged(S.stage('teams', b.dataset.t, c), { go: false }); UI.rerender(); });
-  UI.act('rule-move', (b) => { const c = Y_clone(staged('teams', b.dataset.t)); const i = +b.dataset.i, j = i + +b.dataset.d; [c.routing[i], c.routing[j]] = [c.routing[j], c.routing[i]]; UI.staged(S.stage('teams', b.dataset.t, c), { go: false }); UI.rerender(); });
+  UI.act('rule-del', (b) => { const c = Y_clone(staged('teams', b.dataset.t)); rulesOf(c).splice(+b.dataset.i, 1); tidy(c); UI.staged(S.stage('teams', b.dataset.t, c), { go: false }); UI.rerender(); });
+  UI.act('rule-move', (b) => { const c = Y_clone(staged('teams', b.dataset.t)); const rr = rulesOf(c), i = +b.dataset.i, j = i + +b.dataset.d; [rr[i], rr[j]] = [rr[j], rr[i]]; UI.staged(S.stage('teams', b.dataset.t, c), { go: false }); UI.rerender(); });
   UI.act('kn-open', (a) => { D.teamKnowledge[a.dataset.t].open = a.dataset.f; S.save(); UI.rerender(); });
   UI.act('kn-decide', (b) => {
     const kn = D.teamKnowledge[b.dataset.t], p = kn.proposals.find((x) => x.id === b.dataset.id), approve = b.dataset.d === 'approve';
@@ -312,10 +326,10 @@
         const ev = SCHEMA.events.find((e) => e.id === v.event);
         if (!ev && !v.title) return 'Give it a title, or pick an event.';
         const hit = ev && matchRule({ cfg: c }, ev);
-        const lead = c.lead, ms = botsOf(t.name);
+        const lead = (c.routing || {}).lead, ms = botsOf(t.name);
         if (!hit && !lead && !ms.length) return `Team ${t.name} has no bots to route to.`;
         let to, routed;
-        if (hit && hit.to !== 'lead') { to = hit.to; routed = { by: 'rule', rule: hit.name, team: t.name, to }; }
+        if (hit) { to = hit.to; routed = { by: 'rule', rule: hit.name, team: t.name, to }; }
         else { const assignee = (ms.find((m) => m.name !== lead) || ms[0]).name; to = assignee; routed = hit ? { by: 'rule', rule: hit.name, team: t.name, via: 'lead', lead, to, note: 'the lead triaged and assigned it' } : { by: 'lead', lead: lead || assignee, team: t.name, to }; }
         const id = newCase(to, { title: ev ? ev.label : v.title, requester: ev ? 'event:' + ev.on : 'operator:ops', cls: ev ? 'event' : 'operator', routed: Object.assign({ requester_kept: true }, routed) });
         audit('bot_route', `${t.name} · ${id} → ${to} · ${routed.by}${routed.rule ? ' ' + routed.rule : ''}`); S.save();
@@ -325,7 +339,7 @@
 
   /* ---------- bot shell ---------- */
   function hero(m) {
-    const t = teamOf(m), lead = t && t.cfg.lead === m.name;
+    const t = teamOf(m), lead = t && leadOf(t) === m.name;
     return `<div class="bot-hero">${UI.sigil(m, 'lg')}<div class="grow"><div class="crumbs mono tiny muted">${UI.folderCrumbs(UI.folderOfBot(m.name, false))} › ${t ? `<a href="#/teams/${t.name}">team ${t.name}</a> › ` : ''}${m.name}</div><h1>${m.name}</h1>
       <div class="facts">${m.home === 'live' ? st('run', `home ${m.session} live`, true) : st('idle', `home ${m.session} idle`, true)}
         ${t ? `<a href="#/teams/${t.name}">${tag('team ' + t.name + (lead ? ' · lead' : ''), 'ember')}</a>` : tag('no team')}${tag(`${m.turns}/${m.maxTurns} turns`)}${UI.usageOn() ? UI.provSet(UI.botProv(m.name)) : ''}${m.shadow ? tag('shadow mode', 'shadow') : tag('approved execution', 'ok')}
@@ -388,7 +402,7 @@
           <div class="panel-foot"><input class="input grow" id="case-note" placeholder="Add a note (bot case note)" aria-label="Note"><button class="btn sm" data-act="case-note" data-m="${m.name}" data-c="${c.id}">${icon('plus')}Add note</button></div></div>
       </div><div class="stack">
         <div class="panel"><div class="panel-body stack tight">
-          <button class="btn" ${c.status !== 'open' ? UI.off('Reopen the case to delegate from it') : !t ? UI.off(`${m.name} is solo: delegation is between teammates`) : `data-act="case-delegate" data-m="${m.name}" data-c="${c.id}"`}>${icon('send')}Delegate a task…</button>
+          <button class="btn" ${c.status !== 'open' ? UI.off('Reopen the case to delegate from it') : !UI.delegationReach(m.name).some((r) => r.ok) ? UI.off(`${m.name} has no teammate or linked bot to delegate to: put it on a team or link it with another bot`) : `data-act="case-delegate" data-m="${m.name}" data-c="${c.id}"`}>${icon('send')}Delegate a task…</button>
           ${c.status === 'open' ? `<button class="btn" data-act="case-close" data-m="${m.name}" data-c="${c.id}">${icon('check')}Close case</button>` : `<button class="btn" data-act="case-close" data-m="${m.name}" data-c="${c.id}">${icon('undo')}Reopen</button>`}
           ${t ? `<label class="field"><span class="caps">reassign within ${t.name}</span><select class="select mono" id="case-to" aria-label="Reassign to">${mates.map((x) => `<option>${x.name}</option>`).join('')}</select></label><button class="btn sm" ${mates.length && c.status === 'open' ? `data-act="case-reassign" data-m="${m.name}" data-c="${c.id}"` : UI.off(c.status !== 'open' ? 'Reopen it first' : 'Nobody else in the team')}>${icon('send')}Reassign</button>` : '<div class="muted tiny">Not in a team: no one to reassign to.</div>'}
         </div></div>
@@ -490,19 +504,46 @@
   }
   UI.act('w-stop', (b) => UI.confirm({ title: `Stop worker ${b.dataset.w}?`, body: 'Its run is cancelled with the checkpoint grace. The parent is told.', ok: 'Stop worker', danger: true }).then((ok) => { if (!ok) return; const w = D.workers.find((x) => x.id === b.dataset.w); w.status = 'stopped'; audit('bot_worker_stop', `${w.id} · case ${w.case}`); S.save(); UI.rerender(); }));
 
+  /* ---------- Safety: every bot, in words ---------- */
+  UI.route('safety', () => {
+    const rows = D.bots.map((m) => ({ m, x: UI.botCan(m) }));
+    const own = rows.reduce((a, r) => a + r.x.own.filter((i) => i.t !== 'observe').length, 0);
+    return `<div class="page">${UI.head('Safety', { sub: 'what your bots may do without asking you' })}
+      <div class="callout small" style="margin-bottom:14px">${icon('shield')} The agent sandbox is <b>enforcing</b>: bots read through conductor and can't reach files or the network beyond what you allowed. Below, every bot's granted actions by what happens: done on its own, asked first, or refused. ${own ? `<b>${own} action${own > 1 ? 's' : ''}</b> beyond reading run${own > 1 ? '' : 's'} without asking.` : 'Nothing beyond reading runs without asking.'}</div>
+      ${UI.tierLadder()}
+      <div class="stack" style="margin-top:14px">${rows.map(({ m }) => `<div class="panel"><div class="panel-head">${UI.sigil(m, 'sm')}<h3><a class="link-plain" href="#/bots/${m.name}/access">${esc(m.name)}</a></h3><span class="muted small">${teamOf(m) ? `team ${esc(teamOf(m).name)} · runs alone up to ${S.ceilingOf(m)}` : 'solo'}</span><div class="tools"><a class="btn sm ghost" href="#/bots/${m.name}/access">${icon('edit')}Change</a></div></div><div class="panel-body">${UI.botCanHTML(m, true)}</div></div>`).join('')}</div></div>`;
+  }, { nav: 'security' });
+
   /* ---------- access (config edits through the pipeline) ---------- */
+  /** What a bot can do, in words: on its own / asks you first / never (the effective tier of every granted verb). */
+  UI.botCan = (m) => {
+    const c = (S.staged('bots', m.name) || m.cfg || {}), sv = S.getPath(c, 'skill.verbs'), verbs = Array.isArray(sv) ? sv : sv ? Object.keys(sv) : [];
+    const promote = S.getPath(c, 'autonomy.promote') || [], shadow = S.getPath(c, 'autonomy.shadow') || S.getPath((teamOf(m) || { cfg: {} }).cfg, 'autonomy.shadow');
+    const out = { own: [], asks: [], never: [], shadow: !!shadow };
+    const label = (v) => { const d = SCHEMA.verb(v.replace(/\*$/, '')) || null; return d ? `${d.label.replace(/^./, (x) => x.toLowerCase())} (${v})` : v.endsWith('*') ? `anything matching ${v}` : v; };
+    verbs.forEach((v) => { const t = S.tierFor({ cfg: c, name: m.name }, v).tier; const it = { v, t, text: label(v) }; if (t === 'never') out.never.push(it); else if (t === 'observe' || (t === 'reversible' && promote.includes(v))) out.own.push(it); else out.asks.push(it); });
+    return out;
+  };
+  UI.botCanHTML = (m, compact) => { const x = UI.botCan(m); const col = (title, cls, items, empty) => `<div class="can-col ${cls}"><div class="can-h">${title}</div>${items.map((i) => `<div class="can-i"><span class="tier ${i.t}">${i.t}</span><span>${esc(i.text)}</span></div>`).join('') || `<div class="muted tiny">${empty}</div>`}</div>`;
+    return `<div class="can${compact ? ' compact' : ''}">${x.shadow ? '<div class="callout small">In <b>shadow mode</b>: even “on its own” actions are only recorded, never executed.</div>' : ''}<div class="can-grid">${col('Does on its own', 'own', x.own, 'Nothing: it asks before every action.')}${col('Asks you first', 'asks', x.asks, 'Nothing needs your approval.')}${col('Never', 'never', x.never, 'Nothing is refused outright.')}</div></div>`; };
   function access(m) {
-    const c = staged('bots', m.name), tiers = S.getPath(c, 'autonomy.tiers') || {}, promote = S.getPath(c, 'autonomy.promote') || [];
-    const verbs = (S.getPath(c, 'skill.verbs') || []).map((v) => ({ v, tier: (Object.entries(tiers).find(([, vs]) => (vs || []).includes(v)) || ['propose'])[0] }));
+    const c = staged('bots', m.name), promote = S.getPath(c, 'autonomy.promote') || [];
+    const sv = S.getPath(c, 'skill.verbs'), vlist = Array.isArray(sv) ? sv : sv ? Object.keys(sv) : [];
+    const team = teamOf(m), ceiling = S.ceilingOf(Object.assign({}, m, { cfg: c }));
+    const verbs = vlist.map((v) => { const tf = S.tierFor(Object.assign({}, m, { cfg: c }), v); return { v, tier: tf.own || 'propose', eff: tf.tier, teamTier: tf.team }; });
     const creds = D.access.credentials.filter((x) => ((S.staged('credentials', x.name) || x.cfg || {}).identities || []).includes('bot:' + m.name));
     const logins = D.access.logins.filter((l) => l.identity === 'bot:' + m.name);
-    const eff = S.effective(m), max = eff.maxTier.v;
+    const eff = S.effective(m);
     const stagedM = S.find('bots', m.name);
-    return shell(m, 'access', `<div class="callout small" style="margin-bottom:14px">Grants and verbs live in config: each change here is staged into the pipeline (validated on a copy, shown as a diff, applied with your passkey). <b>Widening</b> is flagged. Revoking a saved browser login is immediate.${teamOf(m) ? ` Team <b>${teamOf(m).name}</b> caps autonomy at <span class="tier ${max}">${max}</span>.` : ''}${stagedM ? ` <a class="link" href="#/config/apply">${D.pending.length} staged · review</a>` : ''}</div>
+    const tierSel = (x) => `<select class="select mono tier-sel" data-on-change="acc-tier" data-m="${m.name}" data-v="${esc(x.v)}" aria-label="Tier for ${esc(x.v)}">${S.LADDER.map((t) => { const looser = x.teamTier && S.LADDER.indexOf(t) < S.LADDER.indexOf(x.teamTier); return `<option${t === x.tier ? ' selected' : ''}${looser ? ` disabled title="team ${esc(team.name)} classifies ${esc(x.v)} as ${x.teamTier}; a bot can only be stricter"` : ''}>${t}${looser ? ' (team: ' + x.teamTier + ')' : ''}</option>`; }).join('')}</select>`;
+    const promoteCell = (x) => { if (!['observe', 'reversible'].includes(x.eff)) return `<span class="muted tiny" title="Only a reversible verb can run without your signature">asks</span>`; if (x.eff === 'observe') return '<span class="muted tiny">runs (read only)</span>'; const off = ceiling === 'observe' ? `Team ${team ? team.name : ''}'s ceiling is observe: no bot promotes anything` : ''; return UI.switchBtn(promote.includes(x.v), 'acc-promote', `data-m="${m.name}" data-v="${esc(x.v)}" aria-label="Let ${esc(x.v)} run without asking"${off ? ' ' + UI.off(off) : ''}`); };
+    return shell(m, 'access', `<div class="panel" style="margin-bottom:14px"><div class="panel-head"><h3>What ${esc(m.name)} can do</h3><span class="muted small">from its grants, tiers and promotions${team ? `, inside team ${esc(team.name)}` : ''}</span><div class="tools"><a class="btn sm ghost" href="#/safety">All bots</a></div></div><div class="panel-body">${UI.botCanHTML(Object.assign({}, m, { cfg: c }))}</div></div>
+      ${UI.tierLadder()}
+      <div class="callout small" style="margin:14px 0">Grants and tiers live in config: each change here is staged (validated on a copy, shown as a diff, applied with your passkey). Wider changes are flagged.${team ? ` On team <b>${team.name}</b> a bot may run verbs without asking only up to <span class="tier ${ceiling}">${ceiling}</span>, and only as strict or stricter than the team's own classifications.` : ''}${stagedM ? ` <a class="link" href="#/config/apply">${D.pending.length} staged · review</a>` : ''}</div>
       <div class="grid g2">
-        <div class="panel"><div class="panel-head"><h3>Verbs &amp; autonomy</h3><span class="muted small">skill.verbs × autonomy.tiers</span><div class="tools"><button class="btn sm" data-act="acc-addverb" data-m="${m.name}">${icon('plus')}Add verb</button></div></div>
-          <table class="tbl compact responsive"><thead><tr><th>verb</th><th>tier</th><th>promoted</th><th></th></tr></thead><tbody>${verbs.map((x) => `<tr><td data-l="verb" class="mono">${x.v}</td><td data-l="tier"><select class="select mono tier-sel" data-on-change="acc-tier" data-m="${m.name}" data-v="${esc(x.v)}" aria-label="Tier for ${esc(x.v)}">${['observe', 'reversible', 'propose', 'commit_money', 'never'].map((t) => `<option${t === x.tier ? ' selected' : ''}${max && S.TIER_ORDER.indexOf(t) > S.TIER_ORDER.indexOf(max) && t !== 'observe' ? ' disabled' : ''}>${t}</option>`).join('')}</select></td><td data-l="promoted">${x.tier === 'reversible' ? UI.switchBtn(promote.includes(x.v), 'acc-promote', `data-m="${m.name}" data-v="${esc(x.v)}" aria-label="Promote ${esc(x.v)}"${eff.promote.src === 'blocked' ? ' ' + UI.off('Team allows no promotions') : ''}`) : '<span class="muted tiny">—</span>'}</td><td class="num"><button class="icon-btn" data-act="acc-delverb" data-m="${m.name}" data-v="${esc(x.v)}" aria-label="Remove ${esc(x.v)}">${icon('trash')}</button></td></tr>`).join('')}</tbody></table>
-          <div class="panel-foot small muted">An unclassified verb is <span class="tier propose">propose</span>. Tiers above the team ceiling are disabled.</div></div>
+        <div class="panel"><div class="panel-head"><h3>Verbs and tiers</h3><span class="muted small">skill.verbs × autonomy.tiers</span><div class="tools"><button class="btn sm" data-act="acc-addverb" data-m="${m.name}">${icon('plus')}Grant a verb</button></div></div>
+          <table class="tbl compact responsive"><thead><tr><th>verb</th><th>tier</th><th>runs without asking</th><th></th></tr></thead><tbody>${verbs.map((x) => `<tr><td data-l="verb" class="mono">${x.v}${x.teamTier && x.teamTier !== x.tier ? `<div class="tiny muted">team: ${x.teamTier}</div>` : ''}</td><td data-l="tier">${tierSel(x)}</td><td data-l="runs without asking">${promoteCell(x)}</td><td class="num"><button class="icon-btn" data-act="acc-delverb" data-m="${m.name}" data-v="${esc(x.v)}" aria-label="Remove ${esc(x.v)}">${icon('trash')}</button></td></tr>`).join('') || '<tr class="empty-row"><td colspan="4">No verbs granted: it can only read what it\'s told.</td></tr>'}</tbody></table>
+          <div class="panel-foot small muted">An unclassified verb is <span class="tier propose">propose</span> (asks first). Tiers looser than the team's are disabled, and validation refuses them.</div></div>
         <div class="stack">
           <div class="panel"><div class="panel-head"><h3>Sign-in credentials</h3><span class="muted small">browser.credentials naming bot:${m.name}</span><div class="tools"><button class="btn sm" data-act="cred-bind" data-m="${m.name}">${icon('plus')}Let it use a login</button></div></div><div class="list">${creds.map((x) => { const cf = S.staged('credentials', x.name) || x.cfg; return `<div class="item"><span class="icon-btn" aria-hidden="true">${icon('key')}</span><div class="grow"><b>${x.name}</b> <span class="mono tiny muted">${esc(cf.origin)}</span><div class="mono tiny muted">${['username', 'password', 'otp', 'passkey'].filter((k) => cf[k]).map((k) => `${k} ${esc(cf[k].vault)} · ${esc(cf[k].key)}`).join(' · ')}</div></div><a class="btn sm ghost" href="#/browser/logins">${icon('edit')}Logins</a><button class="btn sm ghost" data-act="cred-unbind" data-m="${m.name}" data-c="${x.name}">Remove ${esc(m.name)}</button></div>`; }).join('') || '<div class="item small muted">No sign-in credentials name this bot.</div>'}</div></div>
           <div class="panel"><div class="panel-head"><h3>Browser logins</h3><div class="tools"><a class="btn sm" href="#/browser/add">${icon('key')}Add a login</a></div></div><div class="list">${logins.map((l) => `<div class="item"><span class="icon-btn" aria-hidden="true">${icon('cookie')}</span><div class="grow"><b>${l.site}</b><div class="mono tiny muted">${l.cookies} cookies · seeded ${ago(l.seeded)} ago · operator requests only</div></div><button class="btn sm danger" data-act="login-revoke" data-site="${l.site}" data-id="${l.identity}">Revoke</button></div>`).join('') || '<div class="item small muted">No saved logins.</div>'}</div></div>
@@ -512,9 +553,12 @@
   const editM = (name, fn) => { const c = Y_clone(staged('bots', name)); fn(c); const ch = S.stage('bots', name, c); UI.refreshChrome(); UI.rerender(); if (ch) UI.toast('Staged', esc(ch.summary), 'run'); };
   UI.act('acc-tier', (sel) => editM(sel.dataset.m, (c) => { const T2 = (c.autonomy = c.autonomy || {}).tiers = c.autonomy.tiers || {}; Object.keys(T2).forEach((t) => { T2[t] = T2[t].filter((v) => v !== sel.dataset.v); if (!T2[t].length) delete T2[t]; }); (T2[sel.value] = T2[sel.value] || []).push(sel.dataset.v); if (sel.value !== 'reversible' && c.autonomy.promote) c.autonomy.promote = c.autonomy.promote.filter((v) => v !== sel.dataset.v); }));
   UI.act('acc-promote', (b) => editM(b.dataset.m, (c) => { const p = (c.autonomy.promote = c.autonomy.promote || []); const i = p.indexOf(b.dataset.v); if (i >= 0) p.splice(i, 1); else p.push(b.dataset.v); }));
-  UI.act('acc-delverb', (b) => editM(b.dataset.m, (c) => { c.skill.verbs = c.skill.verbs.filter((v) => v !== b.dataset.v); Object.values(c.autonomy.tiers || {}).forEach((vs) => { const i = vs.indexOf(b.dataset.v); if (i >= 0) vs.splice(i, 1); }); Object.keys(c.autonomy.tiers || {}).forEach((t) => { if (!c.autonomy.tiers[t].length) delete c.autonomy.tiers[t]; }); if (c.autonomy.promote) c.autonomy.promote = c.autonomy.promote.filter((v) => v !== b.dataset.v); }));
+  const verbsOf = (c) => { const v = S.getPath(c, 'skill.verbs'); return Array.isArray(v) ? v : v ? Object.keys(v) : []; };
+  const addVerb = (c, verb) => { c.skill = c.skill || {}; const v = c.skill.verbs; if (v && !Array.isArray(v)) v[verb] = {}; else c.skill.verbs = (v || []).concat([verb]); };
+  const dropVerb = (c, verb) => { const v = S.getPath(c, 'skill.verbs'); if (v && !Array.isArray(v)) delete v[verb]; else if (v) c.skill.verbs = v.filter((x) => x !== verb); };
+  UI.act('acc-delverb', (b) => editM(b.dataset.m, (c) => { dropVerb(c, b.dataset.v); c.autonomy = c.autonomy || {}; Object.values(c.autonomy.tiers || {}).forEach((vs) => { const i = vs.indexOf(b.dataset.v); if (i >= 0) vs.splice(i, 1); }); Object.keys(c.autonomy.tiers || {}).forEach((t) => { if (!c.autonomy.tiers[t].length) delete c.autonomy.tiers[t]; }); if (c.autonomy.promote) c.autonomy.promote = c.autonomy.promote.filter((v) => v !== b.dataset.v); }));
   const verbList = () => { const out = []; D.connectors.forEach((c) => { const d = SCHEMA.connectors[c.use]; if (d) { out.push(`${c.name}.*`); Object.keys(d.verbs).forEach((v) => out.push(`${c.name}.${v}`)); } }); return out; };
-  UI.act('acc-addverb', (b) => { const c0 = staged('bots', b.dataset.m); UI.form({ caps: `bots.${b.dataset.m}.skill.verbs`, title: 'Grant a verb', fields: [{ k: 'verb', type: 'enum', req: true, options: verbList().filter((v) => !(c0.skill && c0.skill.verbs || []).includes(v)) }, { k: 'tier', type: 'enum', req: true, options: ['observe', 'reversible', 'propose', 'commit_money', 'never'], def: 'propose', help: 'Adding a verb widens what the bot can do.' }], submit: 'Stage grant', onSubmit: (v) => { editM(b.dataset.m, (c) => { c.skill = c.skill || {}; (c.skill.verbs = c.skill.verbs || []).push(v.verb); c.autonomy = c.autonomy || {}; const T2 = (c.autonomy.tiers = c.autonomy.tiers || {}); (T2[v.tier] = T2[v.tier] || []).push(v.verb); }); } }); });
+  UI.act('acc-addverb', (b) => { const c0 = staged('bots', b.dataset.m); UI.form({ caps: `bots.${b.dataset.m}.skill.verbs`, title: 'Grant a verb', fields: [{ k: 'verb', type: 'enum', req: true, options: verbList().filter((v) => !verbsOf(c0).includes(v)) }, { k: 'tier', type: 'enum', req: true, options: ['observe', 'reversible', 'propose', 'commit_money', 'never'], def: 'propose', help: 'Adding a verb widens what the bot can do.' }], submit: 'Stage grant', onSubmit: (v) => { editM(b.dataset.m, (c) => { addVerb(c, v.verb); c.autonomy = c.autonomy || {}; const T2 = (c.autonomy.tiers = c.autonomy.tiers || {}); (T2[v.tier] = T2[v.tier] || []).push(v.verb); }); } }); });
   /* a bot may use a login when the credential's identities name it: binding edits that list (one diff) */
   UI.act('cred-bind', (b) => { const id = 'bot:' + b.dataset.m; const others = S.view().access.credentials.filter((c) => !((c.cfg || {}).identities || []).includes(id));
     UI.form({ caps: 'browser.credentials[…].identities', title: `Let ${b.dataset.m} use a login`, fields: [{ k: 'cred', type: 'enum', req: true, label: 'Login', options: others.map((c) => [c.name, `${c.name} · ${(c.cfg || {}).origin || ''}`]), create: 'credential', createCtx: { bot: b.dataset.m }, createLabel: 'Add a login' }],
@@ -531,34 +575,37 @@
     { k: 'folder', type: 'enum', label: 'Folder', options: () => UI.allFolders(), create: 'folder', createLabel: 'New folder', help: 'Organization only. A bot on a team shows under its team instead.', solo: true },
     { k: 'operators', type: 'list', label: 'Operators (approvers)', help: 'Leave empty to inherit the team\'s.' },
     { k: 'escalation', type: 'string', mono: false },
-    { k: 'autonomy.shadow', type: 'bool', label: 'Shadow mode', on: 'nothing above observe executes', sec: 'Autonomy' },
-    { k: 'autonomy.approval_ttl', type: 'duration', label: 'Approval TTL' },
-    { k: 'autonomy.spend.per_action', type: 'number', label: 'commit_money cap per action (cloud spend, cents)', cloud: true },
-    { k: 'proactive.every', type: 'duration', label: 'Sweep every', sec: 'Proactive sweeps', help: 'Empty turns sweeps off.' },
+    { k: 'autonomy.shadow', type: 'bool', label: 'Shadow mode', on: 'record proposals; nothing executes', sec: 'Autonomy' },
+    { k: 'autonomy.approval_ttl', type: 'duration', label: 'Approval expires after', help: 'An unapproved proposal lapses.' },
+    { k: 'autonomy.spend_cap.per_action', type: 'number', label: 'Cloud spend cap · per action (commit_money)', cloud: true, help: 'Real money one approved action may commit. Not model spend.' },
+    { k: 'autonomy.spend_cap.per_period', type: 'number', label: 'Cloud spend cap · per 30 days', cloud: true },
+    { k: 'proactive.every', type: 'duration', label: 'Sweep every', sec: 'Proactive sweeps', help: 'Empty: no sweeps (a bot opts in).' },
+    { k: 'proactive.checklist.section', type: 'string', label: 'Checklist: a charter section', ph: 'Proactive checks', help: 'What every sweep works through: a heading in the charter, or a file below (exactly one).' },
+    { k: 'proactive.checklist.file', type: 'string', label: '…or a checklist file', ph: 'bots/<name>-checks.md' },
     { k: 'proactive.quiet_hours', type: 'string', label: 'Quiet hours', ph: '22:00-07:00' },
     { k: 'proactive.notify_at', type: 'enum', label: 'Notify at', options: ['high', 'medium', 'low'] },
     { k: 'proactive.budget.max_runs_per_day', type: 'number', label: 'Max runs / day' },
     { k: 'proactive.budget.max_turns_per_day', type: 'number', label: 'Max turns / day' },
-    { k: 'proactive.budget.max_tokens_per_day', type: 'number', label: 'Max tokens / day', help: 'Per provider.' },
+    { k: 'proactive.budget.max_tokens_per_day', type: 'string', label: 'Max tokens / day', ph: '500k' },
     { k: 'proactive.budget.max_cost_per_day', type: 'number', label: 'Max cost / day (USD, per provider)', api: true },
     { k: 'home.rotate.max_age', type: 'duration', label: 'Rotate after', sec: 'Sessions, workers, isolation, peers' },
     { k: 'home.rotate.max_turns', type: 'number', label: '…or turns' },
     { k: 'worker.runtime', type: 'enum', label: 'Worker runtime', options: () => S.view().runtimes.map((r) => r.name), create: 'runtime', createLabel: 'New runtime' },
     { k: 'worker.max_concurrent', type: 'number', label: 'Max concurrent workers' },
-    { k: 'isolation.mode', type: 'seg', label: 'Sandbox', options: [['namespace', 'namespace'], ['container', 'container'], ['none', 'none', 'isolation: {mode: none} is set on a runtime, workflow or trigger, never on a bot']], def: 'namespace' },
-    { k: 'peers', type: 'select-multi', label: 'Cross-team peers', options: () => S.view().bots.map((b) => b.name), create: 'bot', createLabel: 'New bot', help: 'Teammates are already peers. A bot in another team needs both teams linked.' },
+    { k: 'isolation.sandbox', type: 'seg', label: 'Agent sandbox', options: [['', 'inherit'], ['optional', 'optional'], ['required', 'required']], help: 'required: its sessions start only while the agent sandbox is enforcing. On a team, only ever stricter than the team.' },
+    { k: 'peers', type: 'select-multi', label: 'Peers (bots it may message)', options: () => S.view().bots.map((b) => b.name), create: 'bot', createLabel: 'New bot', help: 'Teammates are already peers. A link needs both bots to list each other (or an operator bot_links pair).' },
   ];
   const dv = { name: null, draft: null, base: null, charter: null };
   function settings(m, isNew) {
     const key = isNew ? '$new' : m.name;
     const q = new URLSearchParams((location.hash.split('?')[1] || ''));
-    if (dv.name !== key || (isNew && (q.get('team') || '') !== (dv.team || ''))) { dv.name = key; dv.team = isNew ? q.get('team') || '' : ''; dv.back = isNew ? q.get('back') || '' : ''; dv.base = isNew ? Object.assign({ description: '', autonomy: { shadow: true, approval_ttl: '24h' }, skill: { verbs: ['gh.get_*'] }, isolation: { mode: 'namespace' } }, dv.team ? { team: dv.team } : { operators: ['ops'] }) : Y_clone(staged('bots', m.name)); dv.draft = Y_clone(dv.base); dv.newName = ''; dv.charter = isNew ? '' : D.charters[m.name] || ''; }
+    if (dv.name !== key || (isNew && (q.get('team') || '') !== (dv.team || ''))) { dv.name = key; dv.team = isNew ? q.get('team') || '' : ''; dv.back = isNew ? q.get('back') || '' : ''; dv.base = isNew ? Object.assign({ description: '', autonomy: { shadow: true, approval_ttl: '24h' } }, dv.team ? { team: dv.team } : { operators: ['ops'] }) : Y_clone(staged('bots', m.name)); dv.draft = Y_clone(dv.base); dv.newName = ''; dv.charter = isNew ? '' : D.charters[m.name] || ''; }
     const name = isNew ? dv.newName || 'new-bot' : m.name;
     const errs = S.cfg.bots.validate(name, dv.draft, S.candidate(D.pending.filter((c) => !(c.coll === 'bots' && c.key === name)).concat([{ coll: 'bots', key: name, after: dv.draft }])));
     const warns = S.cfg.bots.warn ? S.cfg.bots.warn(name, dv.draft, D) : [];
-    const team = dv.draft.team && T(dv.draft.team), td = team ? team.cfg.defaults || {} : {};
+    const team = dv.draft.team && T(dv.draft.team), td = team ? team.cfg || {} : {};
     const inh = (path) => { const v = S.getPath(td, path); return v === undefined ? '' : `<div class="hint inh-hint">${icon('link')} team ${team.name}: <span class="mono">${esc(Array.isArray(v) ? v.join(', ') : v)}</span></div>`; };
-    const inhMap = { operators: 'operators', 'autonomy.approval_ttl': 'autonomy.approval_ttl', 'isolation.mode': 'isolation.mode', 'proactive.budget.max_runs_per_day': 'budget.proactive_pool.max_runs_per_day', 'proactive.budget.max_cost_per_day': 'budget.proactive_pool.max_cost_per_day' };
+    const inhMap = { operators: 'operators', 'autonomy.approval_ttl': 'autonomy.approval_ttl', 'isolation.sandbox': 'isolation.sandbox', 'proactive.budget.max_runs_per_day': 'budget.proactive.max_runs_per_day', 'proactive.budget.max_cost_per_day': 'budget.proactive.max_cost_per_day' };
     let sec = 'Identity & charter';
     const charter = `<div class="field"><label for="df-charter">Charter <span class="opt">bots/${esc(name)}.md · config only</span></label><textarea class="textarea" rows="6" id="df-charter" data-df-charter="1">${esc(dv.charter)}</textarea><div class="hint">Nothing on the agent-facing surface writes it.</div></div>`;
     const fields = DF.map((f) => { const fd = Object.assign({}, f, { options: typeof f.options === 'function' ? f.options() : f.options }); const head = f.sec && f.sec !== sec ? (`${sec === 'Identity & charter' ? charter : ''}</div></div><div class="panel"><div class="panel-head"><h3>${(sec = f.sec)}</h3></div><div class="panel-body def-grid">`) : ''; if (f.api && !UI.isApi()) return head; if (f.solo && dv.draft.team) return head + `<div class="field"><label>Folder</label><div class="hint inh-hint">${icon('folder')} shows under team ${esc(dv.draft.team)}${UI.folderOfTeam(dv.draft.team) ? ' in ' + esc(UI.folderOfTeam(dv.draft.team)) : ''}</div></div>`; const html = UI.fieldHTML(Object.assign({}, fd, { k: 'df.' + f.k }), S.getPath(dv.draft, f.k)); return head + html.replace('<div class="ferr"', (inhMap[f.k] && team ? inh(inhMap[f.k]) : '') + '<div class="ferr"'); }).join('');

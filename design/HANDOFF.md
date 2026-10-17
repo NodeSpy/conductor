@@ -72,7 +72,7 @@ Plan (commit after each step):
 - **C. Approvals** (DONE): full payload untruncated, Why + Impact on top, untrusted-requester banner, hashes under a
   disclosure, seal modal in words, Deny reason, real authenticator recorded, no blank fade; phone sheet with a
   sticky Approve/Deny bar.
-- **D. Teams/bots on the real schema** (IN PROGRESS: store/teams/bots/forms/access done; tests to fix) (`origin/feat/members:internal/config/{teams,bots}.go`): team
+- **D. Teams/bots on the real schema** (DONE) (`origin/feat/members:internal/config/{teams,bots}.go`): team
   description/folder/collections/operators/peers/delegation.max_depth/autonomy{ceiling: reversible|observe,
   shadow, tiers}/budget{spend_cap, proactive}/isolation{sandbox optional|required, handoff_workers,
   skip_permission_prompts}/credentials{secrets_via, allow_secrets}/browser{logins, credentials}/knowledge{repo,

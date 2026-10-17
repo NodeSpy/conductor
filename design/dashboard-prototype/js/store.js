@@ -193,13 +193,16 @@
       const e = [];
       if (!/^[a-z][a-z0-9-]*$/.test(k)) e.push(`bot name "${k}": lowercase letters, digits and dashes`);
       if (n.folder != null && !S.FOLDER_RE.test(n.folder)) e.push(`bots.${k}.folder: "${n.folder}" — segments of letters, digits, space, . _ -, joined by /`);
-      if ((!n.operators || !n.operators.length) && !(n.team && S.getPath((byName(all.teams, n.team) || {}).cfg || {}, 'defaults.operators'))) e.push(`bots.${k}.operators: at least one operator must be able to approve (or inherit them from a team)`);
+      if (!Object.keys(all.operatorsCfg || {}).length) e.push(`bots.${k}.operators: no operators: are configured, so nobody could approve its proposals`); // empty = the team's, or every operator
       (n.operators || []).forEach((o) => { if (!all.operatorsCfg[o]) e.push(`bots.${k}.operators: "${o}" is not in operators:`); });
       (n.peers || []).forEach((p) => { if (p === k) e.push(`bots.${k}.peers: a bot can't peer with itself`); else if (!byName(all.bots, p)) e.push(`bots.${k}.peers: no bot named "${p}"`); });
       const tiers = S.getPath(n, 'autonomy.tiers') || {}; const seen = {};
       Object.entries(tiers).forEach(([t, vs]) => (vs || []).forEach((v) => { if (seen[v]) e.push(`bots.${k}.autonomy.tiers: ${v} is in both ${seen[v]} and ${t}`); seen[v] = t; }));
-      (S.getPath(n, 'autonomy.promote') || []).forEach((v) => { if (seen[v] !== 'reversible') e.push(`bots.${k}.autonomy.promote: ${v} must be a reversible-tier verb to be promoted`); });
-      if (n.isolation && n.isolation.mode === 'none') e.push(`bots.${k}.isolation: mode none is set on a runtime, workflow or trigger, never on a bot`);
+      if (window.RS) Object.keys(n).forEach((x) => { if (!RS.bot.has(x)) e.push(`bots.${k}.${x}: not a bot key (field ${x} not found in type config.BotConfig)`); });
+      (S.getPath(n, 'autonomy.promote') || []).forEach((v) => { const tr = S.tierFor({ cfg: n }, v, all).tier; if (!['observe', 'reversible'].includes(tr)) e.push(`bots.${k}.autonomy.promote: ${v} runs at ${tr}; only a reversible-tier verb can be promoted (run without your signature)`); });
+      if (n.isolation) { Object.keys(n.isolation).forEach((x) => { if (!['sandbox', 'handoff_workers', 'skip_permission_prompts'].includes(x)) e.push(`bots.${k}.isolation.${x}: not a bot isolation key (sandbox, handoff_workers, skip_permission_prompts)`); }); if (n.isolation.sandbox != null && !['optional', 'required'].includes(n.isolation.sandbox)) e.push(`bots.${k}.isolation.sandbox: optional or required`); }
+      if (n.proactive) { if (!n.proactive.every) e.push(`bots.${k}.proactive.every: required (how often it sweeps)`); const ch = n.proactive.checklist || {}; if (!!ch.section === !!ch.file) e.push(`bots.${k}.proactive.checklist: exactly one of section (a charter heading) or file`); }
+      const sc = S.getPath(n, 'autonomy.spend_cap'); if (sc && Object.keys(sc).some((x) => !['per_action', 'per_period', 'period', 'currency'].includes(x))) e.push(`bots.${k}.autonomy.spend_cap: per_action, per_period, period, currency`);
       if (n.worker && n.worker.runtime && !byName(all.runtimes, n.worker.runtime)) e.push(`bots.${k}.worker.runtime: no runtime "${n.worker.runtime}"`);
       e.push(...S.narrowErrors(k, n, all));
       return e;
@@ -274,39 +277,60 @@
   S.TIER_ORDER = TIER_ORDER;
   S.FOLDER_RE = /^[\w][\w .-]*(\/[\w][\w .-]*)*$/;
   S.teamOf = (bot, st = window.D) => { const m = byName(st.bots, bot); const t = m && m.cfg && m.cfg.team; return t ? byName(st.teams, t) : null; };
-  /** What a bot actually runs with: team defaults, narrowed by the bot. */
+  /** Tier strictness: observe < reversible < propose < commit_money < never (a verb in several tiers takes the strictest). */
+  /** least to most cautious: observe < reversible < propose < commit_money < never */
+  S.LADDER = ['observe', 'reversible', 'propose', 'commit_money', 'never'];
+  const STRICT = (t) => S.LADDER.indexOf(t);
+  const tierOfIn = (tiers, verb) => { let best = null; Object.entries(tiers || {}).forEach(([t, vs]) => (vs || []).forEach((p) => { if (p === verb || (p.endsWith('*') && verb.startsWith(p.slice(0, -1)))) { if (best == null || STRICT(t) > STRICT(best)) best = t; } })); return best; };
+  S.tierOfIn = tierOfIn;
+  /** The tier a verb runs at for a bot: the strictest of its own and its team's classification (unclassified: propose). */
+  S.tierFor = (m, verb, st = window.D) => { const n = m.cfg || {}, t = n.team && byName(st.teams, n.team); const own = tierOfIn(S.getPath(n, 'autonomy.tiers'), verb), team = t ? tierOfIn(S.getPath(t.cfg, 'autonomy.tiers'), verb) : null; const ts = [own, team].filter(Boolean); return { tier: ts.length ? ts.sort((a, b) => STRICT(b) - STRICT(a))[0] : 'propose', own, team, teamName: t && t.name }; };
+  /** The team ceiling: the highest tier a bot may be promoted to (run without a signature). */
+  S.ceilingOf = (m, st = window.D) => { const n = m.cfg || {}, t = n.team && byName(st.teams, n.team); return t ? S.getPath(t.cfg, 'autonomy.ceiling') || 'reversible' : 'reversible'; };
+  /** What a bot actually runs with: the team's values, only ever narrowed by the bot. */
   S.effective = (m, st = window.D) => {
-    const n = m.cfg || {}, t = n.team && byName(st.teams, n.team), d = (t && t.cfg.defaults) || {};
-    const pick = (mine, theirs) => (mine !== undefined ? { v: mine, src: theirs !== undefined ? 'narrows' : 'own' } : theirs !== undefined ? { v: theirs, src: 'inherits' } : { v: undefined, src: 'unset' });
+    const n = m.cfg || {}, t = n.team && byName(st.teams, n.team), tc = (t && t.cfg) || {};
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const pick = (mine, theirs) => (mine !== undefined ? { v: mine, src: theirs === undefined ? 'own' : same(mine, theirs) ? 'equal' : 'narrows' } : theirs !== undefined ? { v: theirs, src: 'inherits' } : { v: undefined, src: 'unset' });
     return {
       team: t ? t.name : null,
-      operators: pick(n.operators, d.operators),
-      isolation: pick(n.isolation && n.isolation.mode, d.isolation && d.isolation.mode),
-      maxTier: { v: d.autonomy && d.autonomy.max_tier, src: d.autonomy ? 'inherits' : 'unset' },
-      promote: { v: (S.getPath(n, 'autonomy.promote') || []).length ? S.getPath(n, 'autonomy.promote') : [], src: d.autonomy && d.autonomy.promote === false ? 'blocked' : 'own' },
-      approvalTtl: pick(S.getPath(n, 'autonomy.approval_ttl'), S.getPath(d, 'autonomy.approval_ttl')),
-      proactive: pick(n.proactive && n.proactive.budget, S.getPath(d, 'budget.proactive_pool')),
-      credentials: { v: st.access.credentials.filter((c) => (c.identities || []).includes('bot:' + m.name)).map((c) => c.name), scope: S.getPath(d, 'browser.credentials') },
-      logins: { v: (st.identities.find((i) => i.id === 'bot:' + m.name) || {}).logins || [], scope: S.getPath(d, 'browser.logins') },
-      peersIn: t ? st.bots.filter((x) => x.name !== m.name && x.cfg && x.cfg.team === t.name).map((x) => x.name) : [],
-      peersOut: (n.peers || []).filter((p) => { const o = byName(st.bots, p); return !t || !o || !o.cfg || o.cfg.team !== t.name; }),
+      operators: pick(n.operators, tc.operators),
+      sandbox: pick(S.getPath(n, 'isolation.sandbox'), S.getPath(tc, 'isolation.sandbox')),
+      ceiling: { v: S.getPath(tc, 'autonomy.ceiling') || (t ? 'reversible' : undefined), src: t ? 'team' : 'unset' },
+      maxTier: { v: S.getPath(tc, 'autonomy.ceiling') || (t ? 'reversible' : undefined), src: t ? 'team' : 'unset' },
+      shadow: pick(S.getPath(n, 'autonomy.shadow'), S.getPath(tc, 'autonomy.shadow')),
+      promote: { v: S.getPath(n, 'autonomy.promote') || [], src: 'own' },
+      approvalTtl: pick(S.getPath(n, 'autonomy.approval_ttl'), undefined),
+      spendCap: pick(S.getPath(n, 'autonomy.spend_cap'), S.getPath(tc, 'budget.spend_cap')),
+      proactive: pick(n.proactive && n.proactive.budget, S.getPath(tc, 'budget.proactive')),
+      credentials: { v: st.access.credentials.filter((c) => (c.identities || []).includes('bot:' + m.name)).map((c) => c.name), scope: S.getPath(tc, 'browser.credentials') },
+      logins: { v: (st.identities.find((i) => i.id === 'bot:' + m.name) || {}).logins || [], scope: S.getPath(tc, 'browser.logins') },
+      peersIn: t && tc.peers !== 'none' ? st.bots.filter((x) => x.name !== m.name && x.cfg && x.cfg.team === t.name).map((x) => x.name) : [],
+      peersOut: S.linksOf(m.name, st).filter((p) => { const o = byName(st.bots, p); return !t || !o || !o.cfg || o.cfg.team !== t.name; }),
     };
   };
+  /** Bots this one may message: mutual peers, or an operator bot_links pair. */
+  S.linksOf = (bot, st = window.D) => { const m = byName(st.bots, bot); const mine = (m && m.cfg && m.cfg.peers) || []; const mutual = mine.filter((p) => { const o = byName(st.bots, p); return o && o.cfg && (o.cfg.peers || []).includes(bot); }); const ops = (st.botLinks || []).filter((pr) => pr.includes(bot)).map((pr) => pr.find((x) => x !== bot)); return [...new Set(mutual.concat(ops))]; };
+  S.linked = (a, b, st = window.D) => S.linksOf(a, st).includes(b);
   S.narrowErrors = (k, n, all) => {
     const e = []; if (!n.team) return e;
     const t = byName(all.teams, n.team);
     if (!t) return [`bots.${k}.team: no team named "${n.team}"`];
-    const d = t.cfg.defaults || {};
-    if (n.operators && d.operators) n.operators.forEach((o) => { if (!d.operators.includes(o)) e.push(`bots.${k}.operators: ${o} is not one of team ${t.name}'s operators (${d.operators.join(', ')}); a bot can only narrow`); });
-    const max = S.getPath(d, 'autonomy.max_tier');
-    if (max) Object.entries(S.getPath(n, 'autonomy.tiers') || {}).forEach(([tier, vs]) => { if ((vs || []).length && TIER_ORDER.indexOf(tier) > TIER_ORDER.indexOf(max) && tier !== 'observe') e.push(`bots.${k}.autonomy.tiers.${tier}: team ${t.name} caps autonomy at ${max}; ${vs.join(', ')} would be looser`); });
-    if (S.getPath(d, 'autonomy.promote') === false && (S.getPath(n, 'autonomy.promote') || []).length) e.push(`bots.${k}.autonomy.promote: team ${t.name} allows no promotions`);
-    if (S.getPath(d, 'isolation.mode') === 'container' && n.isolation && n.isolation.mode && n.isolation.mode !== 'container') e.push(`bots.${k}.isolation: team ${t.name} requires container; ${n.isolation.mode} would widen it`);
-    const pool = S.getPath(d, 'budget.proactive_pool'), mb = n.proactive && n.proactive.budget;
-    if (pool && mb) { if (mb.max_runs_per_day > pool.max_runs_per_day) e.push(`bots.${k}.proactive.budget.max_runs_per_day: ${mb.max_runs_per_day} is over the team pool (${pool.max_runs_per_day})`); if (mb.max_cost_per_day > pool.max_cost_per_day) e.push(`bots.${k}.proactive.budget.max_cost_per_day: ${mb.max_cost_per_day} is over the team pool (${pool.max_cost_per_day})`); }
-    const scope = S.getPath(d, 'browser.credentials'); if (scope) all.access.credentials.filter((c) => (c.identities || []).includes('bot:' + k) && !scope.includes(c.name)).forEach((c) => e.push(`browser.credentials.${c.name}: bound to bot:${k}, outside team ${t.name}'s credential scope`));
-    const ls = S.getPath(d, 'browser.logins'); const idn = all.identities.find((i) => i.id === 'bot:' + k); if (ls && idn) (idn.logins || []).filter((h) => !ls.includes(h)).forEach((h) => e.push(`browser.identities["bot:${k}"].logins: ${h} is outside team ${t.name}'s login scope`));
-    (n.peers || []).forEach((p) => { const o = byName(all.bots, p); const ot = o && o.cfg && o.cfg.team; if (ot && ot !== n.team && !((t.cfg.links || []).includes(ot))) e.push(`bots.${k}.peers: ${p} is in team ${ot}; teams ${n.team} and ${ot} are isolated until linked (teams.${n.team}.links)`); });
+    const tc = t.cfg || {};
+    if (n.operators && tc.operators) n.operators.forEach((o) => { if (!tc.operators.includes(o)) e.push(`bots.${k}.operators: ${o} is not one of team ${t.name}'s operators (${tc.operators.join(', ')}); a bot's operators must be a subset`); });
+    const ceiling = S.getPath(tc, 'autonomy.ceiling') || 'reversible';
+    const bt = S.getPath(n, 'autonomy.tiers') || {}, tt = S.getPath(tc, 'autonomy.tiers') || {};
+    Object.entries(bt).forEach(([tier, vs]) => (vs || []).forEach((v) => { const teamTier = tierOfIn(tt, v); if (teamTier && STRICT(teamTier) > STRICT(tier)) e.push(`bots.${k}.autonomy.tiers.${tier}: team ${t.name} classifies ${v} as ${teamTier}; a bot can only be stricter (Team ceilings)`); }));
+    (S.getPath(n, 'autonomy.promote') || []).forEach((v) => { const tier = S.tierFor({ cfg: n }, v, all).tier; if (STRICT(tier) > STRICT(ceiling)) e.push(`bots.${k}.autonomy.promote: ${v} runs at ${tier}; team ${t.name}'s ceiling is ${ceiling}, so it can't run without your signature (Team ceilings)`); });
+    if (S.getPath(tc, 'autonomy.shadow') === true && S.getPath(n, 'autonomy.shadow') === false) e.push(`bots.${k}.autonomy.shadow: team ${t.name} holds every bot in shadow mode; a bot can't set shadow: false (Team ceilings)`);
+    if (S.getPath(tc, 'isolation.sandbox') === 'required' && S.getPath(n, 'isolation.sandbox') === 'optional') e.push(`bots.${k}.isolation.sandbox: team ${t.name} requires the sandbox; optional would loosen it (Team ceilings)`);
+    const pool = S.getPath(tc, 'budget.proactive'), mb = n.proactive && n.proactive.budget;
+    if (pool && mb) ['max_runs_per_day', 'max_turns_per_day', 'max_tokens_per_day', 'max_cost_per_day'].forEach((f) => { if (pool[f] != null && mb[f] != null && Number(mb[f]) > Number(pool[f])) e.push(`bots.${k}.proactive.budget.${f}: ${mb[f]} doesn't fit team ${t.name}'s proactive pool (${pool[f]})`); });
+    const sc = S.getPath(tc, 'budget.spend_cap'), bs = S.getPath(n, 'autonomy.spend_cap');
+    if (sc && bs) ['per_action', 'per_period'].forEach((f) => { if (sc[f] != null && bs[f] != null && bs[f] > sc[f]) e.push(`bots.${k}.autonomy.spend_cap.${f}: ${bs[f]} is over team ${t.name}'s cap (${sc[f]})`); });
+    const scope = S.getPath(tc, 'browser.credentials'); if (scope) all.access.credentials.filter((c) => (c.identities || []).includes('bot:' + k) && !scope.includes(c.name)).forEach((c) => e.push(`browser.credentials.${c.name}: names bot:${k}, outside team ${t.name}'s credential scope (teams.${t.name}.browser.credentials)`));
+    const ls = S.getPath(tc, 'browser.logins'); const idn = all.identities.find((i) => i.id === 'bot:' + k); if (ls && idn) (idn.logins || []).filter((h) => !ls.includes(h)).forEach((h) => e.push(`browser.logins: ${h} for bot:${k} is outside team ${t.name}'s login scope`));
+    if (n.isolation && n.isolation.handoff_workers === true && S.getPath(tc, 'isolation.handoff_workers') === false) e.push(`bots.${k}.isolation.handoff_workers: team ${t.name} allows cli workers only`);
     return e;
   };
   C.teams = { section: 'teams', file: 'config.yaml', label: 'team', href: (k) => `#/teams/${k}`,
@@ -316,36 +340,100 @@
     validate(k, n, all) {
       const e = [];
       if (!/^[a-z][a-z0-9-]*$/.test(k)) e.push(`team name "${k}": lowercase letters, digits and dashes`);
+      if (window.RS) Object.keys(n).forEach((x) => { if (!RS.team.has(x)) e.push(`teams.${k}.${x}: not a team key (field ${x} not found in type config.TeamConfig)`); });
       if (n.folder != null && !S.FOLDER_RE.test(n.folder)) e.push(`teams.${k}.folder: "${n.folder}" — segments of letters, digits, space, . _ -, joined by /`);
       const mem = all.bots.filter((m) => m.cfg && m.cfg.team === k).map((m) => m.name);
-      if (n.lead && !mem.includes(n.lead)) e.push(`teams.${k}.lead: ${n.lead} is not a bot of team ${k}`);
-      (n.routing || []).forEach((r, i) => { const nm = r.name || `routing[${i}]`; if (!r.when || !r.when.on) e.push(`teams.${k}.routing.${nm}: when.on is required`); if (r.to === 'lead' && !n.lead) e.push(`teams.${k}.routing.${nm}: routes to the lead, but the team has none`); else if (r.to && r.to !== 'lead' && !mem.includes(r.to)) e.push(`teams.${k}.routing.${nm}: ${r.to} is not in team ${k}`); });
-      (n.links || []).forEach((l) => { if (l === k) e.push(`teams.${k}.links: a team can't link to itself`); else if (!byName(all.teams, l)) e.push(`teams.${k}.links: no team "${l}"`); });
-      (S.getPath(n, 'defaults.operators') || []).forEach((o) => { if (!all.operatorsCfg[o]) e.push(`teams.${k}.defaults.operators: "${o}" is not in operators:`); });
+      const c = S.getPath(n, 'autonomy.ceiling'); if (c != null && !['reversible', 'observe'].includes(c)) e.push(`teams.${k}.autonomy.ceiling: reversible (the most promotion can reach) or observe (no bot promotes anything), not "${c}"`);
+      if (n.peers != null && !['team', 'none'].includes(n.peers)) e.push(`teams.${k}.peers: team or none`);
+      const sb = S.getPath(n, 'isolation.sandbox'); if (sb != null && !['optional', 'required'].includes(sb)) e.push(`teams.${k}.isolation.sandbox: optional or required`);
+      const sv = S.getPath(n, 'credentials.secrets_via'); if (sv != null && !['none', 'broker', 'env'].includes(sv)) e.push(`teams.${k}.credentials.secrets_via: none, broker or env`);
+      const pr = S.getPath(n, 'knowledge.promotion'); if (pr != null && !['proposal', 'direct'].includes(pr)) e.push(`teams.${k}.knowledge.promotion: proposal or direct`);
+      const ro = n.routing; if (ro) { if (ro.lead && !mem.includes(ro.lead)) e.push(`teams.${k}.routing.lead: ${ro.lead} is not a bot of team ${k}`); if (ro.fallback && !mem.includes(ro.fallback)) e.push(`teams.${k}.routing.fallback: ${ro.fallback} is not a bot of team ${k}`); (ro.rules || []).forEach((r, i) => { const nm = r.name || `rules[${i}]`; if (!r.match || !Object.keys(r.match).length) e.push(`teams.${k}.routing.rules.${nm}: match is required`); if (!r.to) e.push(`teams.${k}.routing.rules.${nm}: to is required`); else if (!mem.includes(r.to)) e.push(`teams.${k}.routing.rules.${nm}: ${r.to} is not a bot of team ${k}`); }); }
+      const pool = S.getPath(n, 'budget.proactive'); if (pool && !['max_runs_per_day', 'max_turns_per_day', 'max_tokens_per_day', 'max_cost_per_day'].some((f) => pool[f] != null)) e.push(`teams.${k}: budget.proactive sets no cap, so it limits nothing (set max_runs_per_day, max_turns_per_day, max_tokens_per_day or max_cost_per_day)`);
+      (n.operators || []).forEach((o) => { if (!all.operatorsCfg[o]) e.push(`teams.${k}.operators: "${o}" is not in operators:`); });
       all.bots.filter((m) => m.cfg && m.cfg.team === k).forEach((m) => e.push(...S.narrowErrors(m.name, m.cfg, all)));
       return e;
     },
-    warn(k, n, all) { const w = []; (n.links || []).forEach((l) => { const o = byName(all.teams, l); if (o && !((o.cfg.links || []).includes(k))) w.push(`teams.${k}.links: ${l} doesn't link back, so the link stays closed until it does`); }); if (n.knowledge && n.knowledge.promote === 'auto') w.push(`teams.${k}.knowledge.promote: auto lets any bot write shared knowledge without you`); return w; },
+    warn(k, n) { const w = []; if (S.getPath(n, 'knowledge.promotion') === 'direct') w.push(`teams.${k}.knowledge.promotion: direct — a bot's promotion lands as a commit at once when its request's provenance would let a promoted verb run`); return w; },
     refs(k, all) { return all.bots.filter((m) => m.cfg && m.cfg.team === k).map((m) => `bots.${m.name}.team`); },
-    widens(b, a) {
-      const r = [], B = b || {}, A = a || {};
-      const bo = new Set(S.getPath(B, 'defaults.operators') || []); (S.getPath(A, 'defaults.operators') || []).forEach((o) => { if (b && !bo.has(o)) r.push(`adds approver ${o} for every bot`); });
-      const bm = S.getPath(B, 'defaults.autonomy.max_tier'), am = S.getPath(A, 'defaults.autonomy.max_tier'); if (b && am && TIER_ORDER.indexOf(am) > TIER_ORDER.indexOf(bm || 'propose')) r.push(`raises the team autonomy ceiling to ${am}`);
-      if (S.getPath(B, 'defaults.isolation.mode') === 'container' && S.getPath(A, 'defaults.isolation.mode') !== 'container') r.push('drops the team container requirement');
-      (A.links || []).forEach((l) => { if (!(B.links || []).includes(l)) r.push(`links team ${l}: data can cross`); });
-      if (S.getPath(A, 'knowledge.promote') === 'auto' && S.getPath(B, 'knowledge.promote') !== 'auto') r.push('bots promote shared knowledge without approval');
-      return r;
-    },
+    widens(b, a) { return S.classify('teams', b, a); },
+  };
+  /* bot_links: operator-side peer links between pairs of bots (top-level) */
+  C.botLinks = { section: 'bot_links', file: 'config.yaml', label: 'bot link', href: () => '#/bots',
+    keys: () => (D().botLinks || []).map((p) => p.slice().sort().join('+')),
+    get: (k) => { const p = (D().botLinks || []).find((x) => x.slice().sort().join('+') === k); return p ? p.slice() : null; },
+    set: (k, n) => { D().botLinks = (D().botLinks || []).filter((x) => x.slice().sort().join('+') !== k); if (n) D().botLinks.push(n); },
+    path: () => 'bot_links',
+    validate(k, n, all) { return (n || []).length !== 2 || n[0] === n[1] ? [`bot_links: a pair of two different bots`] : n.filter((x) => !byName(all.bots, x)).map((x) => `bot_links: no bot "${x}"`); },
+    widens(b, a) { return S.classify('botLinks', b, a); },
   };
   C.models = { section: 'models', file: 'config.yaml', label: 'fleet', href: () => '#/connectors/runtimes',
     keys: () => D().fleets.map((f) => f.name), get: (k) => { const f = byName(D().fleets, k); return f ? clone(f.cfg) : null; },
     set: (k, n) => { if (n == null) return drop(D().fleets, k); const f = byName(D().fleets, k); if (f) f.cfg = n; else D().fleets.push({ name: k, cfg: n }); },
     path: (k) => `models.${k}`,
     validate: (k, n) => (/^[a-z][\w-]*$/.test(k) ? [] : [`fleet name "${k}": letters, digits, - and _`]).concat((n.any || []).length ? [] : [`models.${k}.any: list at least one model or wildcard`]) };
-  S.ORDER = ['settings', 'vaults', 'secrets', 'connectors', 'hosts', 'runtimes', 'sandbox', 'operators', 'teams', 'bots', 'collections', 'env', 'identities', 'credentials', 'packs', 'update', 'workflows'];
+  /* ONE widening classifier for every edit surface (builder, bots, teams, packs, sandbox, browser): each item
+   * names what got wider and where. Official packs and local packs aren't flagged as new sources. */
+  const added = (b, a) => (a || []).filter((x) => !(b || []).includes(x));
+  const yv = (t) => { if (t == null) return null; if (typeof t !== 'string') return t; try { return Y.parse(t).value || {}; } catch (e) { return {}; } };
+  const stepsOf = (w) => { const out = []; const walk = (ss) => (ss || []).forEach((st) => { if (!st || typeof st !== 'object') return; out.push(st); (st.parallel || []).forEach((br) => walk(br)); }); walk(w && w.steps); return out; };
+  S.classify = (coll, before, after) => {
+    const r = [], B = yv(before) || {}, A = yv(after) || {}, isNew = before == null;
+    if (after == null) return r;
+    const tiersLoosened = (bt, at, where) => { const verbs = new Set([].concat(...Object.values(bt || {}), ...Object.values(at || {}))); verbs.forEach((v) => { const tb = tierOfIn(bt, v) || 'propose', ta = tierOfIn(at, v) || 'propose'; if (STRICT(ta) < STRICT(tb)) r.push(`${where}: loosens ${v} from ${tb} to ${ta}`); }); };
+    if (coll === 'bots') {
+      tiersLoosened(S.getPath(B, 'autonomy.tiers'), S.getPath(A, 'autonomy.tiers'), 'autonomy.tiers');
+      added(S.getPath(B, 'autonomy.promote'), S.getPath(A, 'autonomy.promote')).forEach((v) => r.push(`autonomy.promote: ${v} now runs without your signature`));
+      if (S.getPath(B, 'autonomy.shadow') === true && S.getPath(A, 'autonomy.shadow') !== true) r.push('autonomy.shadow: leaves shadow mode (approved actions execute)');
+      if (S.getPath(B, 'isolation.sandbox') === 'required' && S.getPath(A, 'isolation.sandbox') !== 'required') r.push('isolation.sandbox: no longer requires the agent sandbox');
+      if (!isNew) added(B.operators, A.operators).forEach((o) => r.push(`operators: adds approver ${o}`));
+      added(Array.isArray(S.getPath(B, 'skill.verbs')) ? S.getPath(B, 'skill.verbs') : Object.keys(S.getPath(B, 'skill.verbs') || {}), Array.isArray(S.getPath(A, 'skill.verbs')) ? S.getPath(A, 'skill.verbs') : Object.keys(S.getPath(A, 'skill.verbs') || {})).forEach((v) => r.push(`skill.verbs: grants ${v}`));
+      added(B.peers, A.peers).forEach((p) => r.push(`peers: may message ${p}`));
+      if ((S.getPath(A, 'skill.secrets_via') || 'none') !== 'none' && (S.getPath(B, 'skill.secrets_via') || 'none') === 'none') r.push(`skill.secrets_via: ${S.getPath(A, 'skill.secrets_via')} (the agent can obtain secrets)`);
+      added(S.getPath(B, 'skill.allow_secrets'), S.getPath(A, 'skill.allow_secrets')).forEach((x) => r.push(`skill.allow_secrets: ${x}`));
+    } else if (coll === 'teams') {
+      if ((S.getPath(B, 'autonomy.ceiling') || 'reversible') === 'observe' && (S.getPath(A, 'autonomy.ceiling') || 'reversible') === 'reversible') r.push('autonomy.ceiling: raised to reversible (bots may promote reversible verbs)');
+      if (S.getPath(B, 'autonomy.shadow') === true && S.getPath(A, 'autonomy.shadow') !== true) r.push('autonomy.shadow: bots leave shadow mode');
+      tiersLoosened(S.getPath(B, 'autonomy.tiers'), S.getPath(A, 'autonomy.tiers'), 'autonomy.tiers');
+      if (S.getPath(B, 'isolation.sandbox') === 'required' && S.getPath(A, 'isolation.sandbox') !== 'required') r.push('isolation.sandbox: bots no longer need the agent sandbox');
+      if (!isNew) added(B.operators, A.operators).forEach((o) => r.push(`operators: adds approver ${o} for every bot`));
+      added(S.getPath(B, 'browser.credentials'), S.getPath(A, 'browser.credentials')).forEach((x) => r.push(`browser.credentials: bots may use ${x}`));
+      added(S.getPath(B, 'browser.logins'), S.getPath(A, 'browser.logins')).forEach((x) => r.push(`browser.logins: bots may use your session on ${x}`));
+      added(S.getPath(B, 'credentials.allow_secrets'), S.getPath(A, 'credentials.allow_secrets')).forEach((x) => r.push(`credentials.allow_secrets: ${x}`));
+      if (S.getPath(A, 'knowledge.promotion') === 'direct' && S.getPath(B, 'knowledge.promotion') !== 'direct') r.push('knowledge.promotion: bots promote shared knowledge without approval');
+      if (B.peers === 'none' && A.peers !== 'none') r.push('peers: teammates may message each other');
+      if (S.getPath(B, 'isolation.handoff_workers') === false && S.getPath(A, 'isolation.handoff_workers') !== false) r.push('isolation.handoff_workers: hand-off sessions allowed');
+    } else if (coll === 'botLinks') { if (isNew) r.push(`bot_links: ${A[0]} and ${A[1]} may message each other`); }
+    else if (coll === 'workflows') {
+      const bs = stepsOf(B), as = stepsOf(A), byId = (ss, id) => ss.find((x) => x.id === id) || {};
+      as.forEach((st, i) => { const prev = st.id ? byId(bs, st.id) : bs[i] || {}; const P = `steps[${st.id || i}]`;
+        added(S.getPath(prev, 'isolation.network.egress'), S.getPath(st, 'isolation.network.egress')).forEach((h) => r.push(`${P}.isolation.network.egress: adds ${h}`));
+        if (prev.isolation && !st.isolation) r.push(`${P}.isolation: removed (the step runs with the runtime's isolation only)`);
+        if (S.getPath(st, 'isolation.privileged') && !S.getPath(prev, 'isolation.privileged')) r.push(`${P}.isolation.privileged: sees the daemon's own files`);
+        if (S.getPath(prev, 'isolation.network.deny') && !S.getPath(st, 'isolation.network.deny')) r.push(`${P}.isolation.network: network no longer cut`);
+        const vb = S.getPath(prev, 'skill.verbs'), va = S.getPath(st, 'skill.verbs'); added(Array.isArray(vb) ? vb : Object.keys(vb || {}), Array.isArray(va) ? va : Object.keys(va || {})).forEach((v) => r.push(`${P}.skill.verbs: grants ${v}`));
+        if (va && typeof va === 'object' && !Array.isArray(va)) Object.entries(va).forEach(([v, sc]) => Object.entries(sc || {}).forEach(([rk, xs]) => added(S.getPath(vb || {}, `${v}.${rk}`) || [], xs).forEach((x) => r.push(`${P}.skill.verbs.${v}.${rk}: may name ${x}`))));
+        added(S.getPath(prev, 'skill.allow_secrets'), S.getPath(st, 'skill.allow_secrets')).forEach((x) => r.push(`${P}.skill.allow_secrets: ${x}`));
+      });
+      const repos = (w) => { const f = w.filter; const out = []; const walk = (x) => { if (Array.isArray(x)) x.forEach(walk); else if (x && typeof x === 'object') [].concat(x.repo || []).forEach((y) => out.push(y)); }; walk(f); return out; };
+      if (!isNew) { const rb = repos(B), ra = repos(A); added(rb, ra).forEach((x) => r.push(`filter.repo: also runs on ${x}`)); if (rb.length && !ra.length) r.push('filter.repo: removed (runs on every repo the connector sees)'); }
+      if (A.callable === true && B.callable !== true) r.push('callable: reachable over the invoke API');
+    } else if (coll === 'packs') {
+      const src = String(A.use || '').split('@')[0];
+      if (isNew && !/^conductor-packs\//.test(src) && !/^\.\//.test(src)) r.push(`adds third-party pack source ${src} (needs pack_trust)`);
+      Object.entries(A.triggers || {}).forEach(([t, arm]) => { const was = (B.triggers || {})[t] || {}; if (arm && arm.enabled && !was.enabled) r.push(`triggers.${t}: armed${(arm.repos || []).length ? ' on ' + arm.repos.join(', ') : ''}`); added(was.repos, arm && arm.repos).forEach((x) => { if (was.enabled) r.push(`triggers.${t}.repos: adds ${x}`); }); });
+      Object.entries(A.steps || {}).forEach(([k, o]) => { const was = (B.steps || {})[k] || {}; added(S.getPath(was, 'isolation.network.egress'), S.getPath(o, 'isolation.network.egress')).forEach((h) => r.push(`steps["${k}"].isolation.network.egress: adds ${h}`)); if (S.getPath(o, 'isolation.privileged') && !S.getPath(was, 'isolation.privileged')) r.push(`steps["${k}"].isolation.privileged`); });
+    } else if (coll === 'identities') { added(B.allow, A.allow).forEach((h) => r.push(`browser.allow: allows site ${h}`)); added(B.logins, A.logins).forEach((h) => r.push(`browser.logins: uses your session on ${h}`)); if (A.evaluate && A.evaluate !== 'off' && B.evaluate !== A.evaluate) r.push('browser.evaluate: read-only JavaScript'); }
+    else if (coll === 'credentials') { added(B.identities, A.identities).forEach((id) => r.push(`browser.credentials[${A.name || ''}]: ${id} may sign in as you on ${A.origin}`)); }
+    else if (coll === 'sandbox') { added(B.egress, A.egress).forEach((h) => r.push(`sandbox.egress: adds ${h}`)); if (B.agents === 'on' && A.agents !== 'on') r.push('sandbox.agents: off (agents run unsandboxed)'); }
+    else if (coll === 'runtimes') { if (B.isolation && !A.isolation) r.push('isolation: removed from the runtime'); }
+    else if (coll === 'connectors') { added(B.repos, A.repos).forEach((x) => r.push(`repos: adds ${x}`)); }
+    return r;
+  };
+  S.ORDER = ['settings', 'vaults', 'secrets', 'connectors', 'hosts', 'runtimes', 'sandbox', 'operators', 'teams', 'bots', 'botLinks', 'collections', 'env', 'identities', 'credentials', 'packs', 'update', 'workflows'];
 
   /* ---------- config.yaml, generated from the state ---------- */
-  const HEAD = { settings: 'settings: — ${settings.NAME} anywhere below', vaults: 'vaults: — where secrets live; values never appear here', connectors: 'connectors: — use: names the plugin', hosts: 'hosts: — remote machines over SSH', runtimes: 'runtimes: — where agents run', models: 'models: — fleets of acceptable models', sandbox: 'sandbox: — the agent sandbox', operators: 'operators: — who can approve', bots: 'bots: — persistent agents (#178)', teams: 'teams: — bots inherit team defaults and can only narrow them', browser: 'browser: — the agent browser (#182)', packs: 'packs: — your overrides; the pack files are vendored', update: 'update: — the auto-update policy', collections: 'collections: — custom knowledge collections (built-in kinds stay where they are)', usage: 'usage: — off | subscription | api, per provider; limits only from source:', triggers: 'triggers: — on / filter / steps', workflows: 'workflows: — reusable, called with call:', secrets: 'secret references' };
+  const HEAD = { settings: 'settings: — ${settings.NAME} anywhere below', vaults: 'vaults: — where secrets live; values never appear here', connectors: 'connectors: — use: names the plugin', hosts: 'hosts: — remote machines over SSH', runtimes: 'runtimes: — where agents run', models: 'models: — fleets of acceptable models', sandbox: 'sandbox: — the agent sandbox', operators: 'operators: — who can approve', bots: 'bots: — persistent agents (#178)', teams: 'teams: — bots inherit team defaults and can only narrow them', browser: 'browser: — the agent browser (#182)', packs: 'packs: — your overrides; the pack files are vendored', update: 'update: — the auto-update policy', bot_links: 'bot_links: — operator-side links: each pair of bots may message each other', collections: 'collections: — custom knowledge collections (built-in kinds stay where they are)', usage: 'usage: — off | subscription | api, per provider; limits only from source:', triggers: 'triggers: — on / filter / steps', workflows: 'workflows: — reusable, called with call:', secrets: 'secret references' };
   S.configText = (state) => {
     const st = state || window.D; const out = ['# conductor config — ops-box', '# managed by hand and by the dashboard; comments and unknown keys are kept', ''];
     const sec = (h, obj) => { if (obj == null || (typeof obj === 'object' && !Object.keys(obj).length)) return; out.push('# ' + HEAD[h]); out.push(Y.stringify({ [h]: obj })); out.push(''); };
@@ -360,6 +448,7 @@
     sec('teams', Object.fromEntries(st.teams.map((t) => [t.name, t.cfg])));
     sec('bots', Object.fromEntries(st.bots.map((m) => [m.name, m.cfg])));
     sec('collections', Object.fromEntries((st.collections || []).map((c) => [c.name, c.cfg])));
+    if ((st.botLinks || []).length) { out.push('# ' + HEAD.bot_links); out.push(Y.stringify({ bot_links: st.botLinks })); out.push(''); }
     const br = {};
     // the real shape: one allowlist, logins per site with the identities that may use them, evaluate per identity
     if (st.identities.length) {
@@ -428,7 +517,8 @@
     try { changes.forEach((c) => C[c.coll].set(c.key, clone(c.after))); } finally { window.D = real; }
     return copy;
   };
-  S.widening = (changes = window.D.pending) => changes.flatMap((c) => (C[c.coll].widens ? C[c.coll].widens(c.before, c.after) : []).map((w) => ({ change: c, text: w })));
+  /** Every widening in the staged set, from the one classifier, each with its YAML path. */
+  S.widening = (changes = window.D.pending) => changes.flatMap((c) => S.classify(c.coll, c.before, c.after).map((w) => ({ change: c, text: w, path: `${(C[c.coll].path || (() => c.coll))(c.key)}`, pack: c.coll === 'packs' })));
   S.validate = (changes = window.D.pending) => {
     const cand = S.candidate(changes);
     const errors = [], warnings = [];

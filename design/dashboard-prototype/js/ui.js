@@ -319,7 +319,7 @@
     $('#strip-cells').innerHTML = `
       <div class="cell"><span class="pulse"></span><b>${d.paused ? 'paused' : 'up'}</b>&nbsp;${d.uptime}</div>
       <div class="cell wide">${d.version}${d.update.available ? ` <span style="color:var(--run)">→ ${d.update.available}</span>` : ''}</div>
-      <div class="cell wide" data-tip="Agents are read-only; conductor writes.<br><span class='mono'>backend ${d.sandbox.backend} · ${d.sandbox.containers} containers</span>">${UI.icon('shield')}<b>sandbox</b>&nbsp;enforcing</div>
+      <a class="cell wide" href="#/safety" data-tip="The agent sandbox is enforcing: bots can't touch files or the network beyond what you allowed. Click to see what each bot may do on its own.<br><span class='mono'>backend ${d.sandbox.backend} · ${d.sandbox.containers} containers</span>">${UI.icon('shield')}<b>sandbox</b>&nbsp;enforcing</a>
       <div class="cell wide">paseo <b>ok</b></div>
       <div class="cell"><span class="pulse run"></span><b>${running}</b>&nbsp;running</div>
       ${need ? `<a class="cell alert" href="#/attention">${UI.icon('diamond')}<b>${need}</b>&nbsp;need you</a>` : ''}

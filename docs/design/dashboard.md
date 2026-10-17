@@ -548,6 +548,42 @@ operator save, on a bot proposal or promotion, and on import.
   sha; 409 on a conflict), `POST …/import` (`dry_run` returns the detected
   kind and mapping per file), `POST …/log/{path}/annotations`.
 
+**Teams and bots follow conductor's schema** (`teams.<t>` and `bots.<b>` on
+the bots branch). A team has approvers (`operators`), an **autonomy ceiling**
+(`reversible` or `observe`: the most a bot may be **promoted** to, i.e. run
+without your signature), optional `shadow`, tier classifications that only
+make a bot stricter, a `budget` (`spend_cap` for real money, `proactive` as a
+shared sweep pool in runs / turns / tokens / dollars), `isolation`
+(`sandbox: required|optional`, `handoff_workers`), `credentials`
+(`secrets_via`, `allow_secrets`), `browser` scopes, `knowledge`
+(`promotion: proposal|direct`), `delegation.max_depth`, `peers: team|none`
+and `routing` (`rules: [{name, match, to}]` → the `lead`'s triage → the
+`fallback`). Cross-team talk is a **pair of bots**: both list each other
+under `peers`, or an operator `bot_links` entry; there are no team-to-team
+links. The UI enforces this where you edit: tier options looser than the
+team's classification are disabled, "runs without asking" can't be switched
+on above the ceiling (each with the reason), and validation refuses either if
+written by hand ("Team ceilings" in the checks, separate from "Packs"). The
+**Ceilings & scopes** tab labels each bot's value *inherits*, *same as team*
+or *narrows*, beside a **tier ladder** (observe < reversible < propose <
+commit_money; never) that says what each tier means for execution.
+
+**What a bot can do, in words.** Each bot's Access tab opens with "Does on
+its own / Asks you first / Never", computed from its grants, the effective
+tier (the stricter of its own and its team's) and its promotions; the
+**Safety** page (`#/safety`, linked from the "sandbox enforcing" chip) shows
+the same for every bot.
+
+**One widening classifier** (`S.classify`) serves every edit surface:
+builder (egress hosts, verb grants and their resource scopes, broker grants,
+repos a trigger runs on, removed or privileged isolation, `callable`), bots
+and teams (looser tiers, new promotions, leaving shadow, sandbox no longer
+required, new approvers, peers, credential and login scopes, direct
+promotion), packs (third-party sources only, never the official registry or a
+local pack; armed triggers and their repos; override egress), browser,
+sandbox, runtimes and connectors. The review lists each widening with its
+path, and the apply needs an explicit acknowledgement.
+
 **Folders are one shared organization.** The same `folder: "a/b"` path
 places bots, teams **and workflows**, so `work/platform` holds that area's
 bots, teams and workflows together. Placement: your workflows carry

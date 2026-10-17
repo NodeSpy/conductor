@@ -98,3 +98,30 @@ test('pack overrides: a key that matches nothing is an error; Checks show the re
   await expect(page.locator('#validate-out')).toContainText('exit status 1');
   await expect(page.locator('[data-act="apply-go"]')).toHaveAttribute('aria-disabled', 'true');
 });
+
+test('one widening classifier: egress, grants and repos are caught; an official pack is not flagged', async ({ page }) => {
+  await go(page, '#/overview', { fresh: true });
+  const w = await page.evaluate(() => {
+    const before = D.workflows.find((x) => x.name === 'ci-fixer').yaml;
+    const after = before.replace('filter: { repo: [acme/api, acme/web]', 'filter: { repo: [acme/api, acme/web, acme/infra]').replace(/^( *)runtime: claude-cli\n/m, (m0, ind) => `${ind}runtime: claude-cli\n${ind}isolation: { mode: namespace, network: { egress: ["api.github.com:443"] } }\n${ind}skill: { verbs: [gh.comment] }\n`);
+    return { wf: S.classify('workflows', before, after), pack: S.classify('packs', null, { use: 'conductor-packs/dep-hygiene' }), third: S.classify('packs', null, { use: 'acme/conductor-packs/kit' }) };
+  });
+  expect(w.wf.join('\n')).toMatch(/egress: adds api\.github\.com:443/);
+  expect(w.wf.join('\n')).toMatch(/skill\.verbs: grants gh\.comment/);
+  expect(w.wf.join('\n')).toMatch(/filter\.repo: also runs on acme\/infra/);
+  expect(w.pack).toEqual([]);
+  expect(w.third.join()).toMatch(/third-party pack source/);
+});
+
+test('Safety: every bot in words (on its own / asks you first / never), linked from the sandbox chip', async ({ page }) => {
+  await go(page, '#/overview', { fresh: true });
+  if (!(await page.locator('.strip a.cell[href="#/safety"]').isVisible())) await go(page, '#/safety'); else await page.locator('.strip a.cell[href="#/safety"]').click();
+  await expect(page.locator('.page-head h1')).toHaveText(/Safety/);
+  await expect(page.locator('.tier-ladder')).toContainText('commit_money');
+  const sre = page.locator('.panel', { hasText: 'platform-sre' }).first();
+  await expect(sre.locator('.can-col.own')).toContainText('slack-ops.post');
+  await expect(sre.locator('.can-col.asks')).toContainText('tf-apply.apply');
+  await expect(sre.locator('.can-col.never')).toContainText('gh.delete_*');
+  await go(page, '#/bots/platform-sre/access');
+  await expect(page.locator('.can-col.own')).toContainText('slack-ops.post');
+});

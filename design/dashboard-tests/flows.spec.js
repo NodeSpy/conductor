@@ -51,9 +51,9 @@ test.describe('connectors, runtimes, hosts, isolation', () => {
     await go(page, '#/connectors/runtimes');
     await expect(page.locator('tr', { hasText: 'gemini' })).toBeVisible();
     await page.locator('[data-act="rt-edit"][data-r="oc"]').click();
-    await page.selectOption('[id="f-isolation_mode_opencode"]', 'none');
+    await page.selectOption('[id="f-isolation_mode_opencode"]', '');
     await submit(page);
-    await expect(page.locator('.tag', { hasText: 'widens' })).toBeVisible();
+    await expect(page.locator('.tag', { hasText: 'widens: isolation: removed from the runtime' })).toBeVisible();
     await applyStaged(page, { expectWidening: true });
     await go(page, '#/connectors/runtimes');
     await page.locator('[data-act="rt-del"][data-r="deck"]').click();

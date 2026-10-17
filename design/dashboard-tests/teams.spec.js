@@ -22,7 +22,7 @@ test('define a team with bots and defaults, through the diff', async ({ page }) 
   await expect(page.locator('svg.peers-graph rect.pg-team')).toHaveCount(3);
 });
 
-test('assign a bot from its definition; a team ceiling refuses a wider bot', async ({ page }) => {
+test('assign a bot from its definition; the team ceiling and team tiers are enforced in the controls and refused on validation', async ({ page }) => {
   await go(page, '#/bots/release-scribe/settings');
   await page.locator('#f-df_team').selectOption('platform');
   await expect(page.locator('.inh-hint').first()).toContainText('team platform');
@@ -30,24 +30,33 @@ test('assign a bot from its definition; a team ceiling refuses a wider bot', asy
   await applyStaged(page);
   await go(page, '#/bots/release-scribe');
   await expect(page.locator('.bot-hero')).toContainText('team platform');
-  // finance requires a container; release-scribe runs in a namespace → refused
-  await go(page, '#/teams/finance');
-  await page.locator('#team-add-sel').selectOption('release-scribe');
-  await page.locator('[data-act="team-add"]').click();
+  // finance's ceiling is observe: no bot on it may run anything without asking
+  await go(page, '#/bots/billing-sre/access');
+  await page.selectOption('select[data-v="slack-ops.post"]', 'reversible');
+  await go(page, '#/bots/billing-sre/access');
+  await expect(page.locator('[data-act="acc-promote"][data-v="slack-ops.post"]')).toHaveAttribute('data-reason', /ceiling is observe/);
+  // platform classifies gh.delete_* as never: looser tiers are disabled for its bots
+  await go(page, '#/bots/platform-sre/access');
+  await expect(page.locator('select[data-v="gh.delete_*"] option', { hasText: 'propose' })).toBeDisabled();
+  // and validation refuses a promotion above the ceiling even if it's written by hand
+  await page.evaluate(() => { const c = JSON.parse(JSON.stringify(S.staged('bots', 'billing-sre'))); c.autonomy.promote = ['slack-ops.post']; S.stage('bots', 'billing-sre', c); });
+  await go(page, '#/config/apply');
   await expect(page.locator('#chk-state')).toContainText('failed');
-  await expect(page.locator('.callout.danger')).toContainText('team finance requires container');
+  await expect(page.locator('.callout.danger').first()).toContainText("team finance's ceiling is observe");
+  await expect(page.locator('#checks')).toContainText('Team ceilings');
   await expect(page.locator('[data-act="apply-go"]')).toHaveAttribute('aria-disabled', 'true');
 });
 
-test('defaults tab shows what bots inherit and narrow; editing defaults stages a change', async ({ page }) => {
+test('the ceilings tab shows inherits / narrows / same as team; editing the team stages a change', async ({ page }) => {
   await go(page, '#/teams/platform/defaults');
+  await expect(page.locator('.tier-ladder')).toContainText('observe');
   await expect(page.locator('.inherit-tbl')).toContainText('inherits');
-  await expect(page.locator('.inherit-tbl')).toContainText('narrows');
+  await expect(page.locator('.inherit-tbl')).toContainText('same as team'); // web-triage's approvers equal the team's: not "narrows"
   await page.locator('[data-act="team-edit"]').first().click();
   await page.fill('#f-pool_runs', '5');
   await page.locator('#gen-submit').click();
   // platform-sre's 6 sweep runs no longer fit the pool
-  await expect(page.locator('.callout.danger')).toContainText('over the team pool');
+  await expect(page.locator('.callout.danger').first()).toContainText("doesn't fit team platform's proactive pool");
 });
 
 test('routing: add a rule, try it on a past event, route work with provenance kept', async ({ page }) => {
@@ -63,16 +72,16 @@ test('routing: add a rule, try it on a past event, route work with provenance ke
   await page.selectOption('[data-on-change="route-ev"]', 'ev-pd');
   await expect(page.locator('.callout.ok')).toContainText('pd-api');
   await page.locator('a', { hasText: 'Review staged change' }).click();
+  await expect(page.locator('.diff').first()).toContainText('match: { on: gh.issue_opened, repo: acme/api }');
   await applyStaged(page);
   await go(page, '#/teams/platform');
   await page.locator('[data-act="team-deliver"]').click();
   await page.selectOption('#f-event', 'ev-pd');
   await page.locator('#gen-submit').click();
-  await expect(page).toHaveURL(/#\/bots\/web-triage\/cases\/c\d+/);
-  await expect(page.locator('.route-box')).toContainText('routed to platform by rule pd-api → assigned by lead platform-sre to web-triage');
+  await expect(page).toHaveURL(/#\/bots\/platform-sre\/cases\/c\d+/);
+  await expect(page.locator('.route-box')).toContainText('routed to platform by rule pd-api');
+  await expect(page.locator('.route-box')).toContainText('→ platform-sre');
   await expect(page.locator('.route-box')).toContainText('event:pd.incident');
-  await go(page, '#/bots/web-triage/cases');
-  await expect(page.locator('td.route-cell').first()).toContainText('routed to platform');
   // an operator reassignment is recorded too, requester still kept
   await go(page, '#/bots/web-triage/cases/c33');
   await page.locator('[data-act="case-reassign"]').click();
@@ -91,14 +100,17 @@ test('knowledge: approve a promotion with a passkey; a bot proposes one from mem
   await expect(page.locator('.item', { hasText: 'Promote knowledge entry “Checkout margin fallback” from web-triage' })).toContainText('Approve');
 });
 
-test('links: unlinking teams is a staged config change; lead change too', async ({ page }) => {
+test('links are pairs of bots (bot_links), never whole teams; a lead change is a routing edit', async ({ page }) => {
   await go(page, '#/teams/platform');
-  await page.locator('[data-act="team-link"][data-o="finance"]').click();
-  await expect(page.locator('.facts')).toContainText('change staged');
+  await expect(page.locator('.panel:has(h3:text-is("Links"))')).toContainText('platform-sre ↔ billing-sre');
+  await page.locator('[data-act="botlink-add"]').click();
+  await page.selectOption('#f-a', 'web-triage'); await page.selectOption('#f-b', 'homelab');
+  await page.locator('#gen-submit').click();
+  await expect(page.locator('.diff').first()).toContainText('bot_links:');
+  await expect(page.locator('ul.widen-list')).toContainText('web-triage and homelab may message each other');
+  await page.goto(page.url().replace(/#.*/, '#/teams/platform'));
   await page.locator('[data-act="team-lead"][data-m="web-triage"]').click();
-  await expect(page.locator('.diff')).toContainText('lead: web-triage');
-  // platform-sre peers billing-sre across teams: without the link that is refused
-  await expect(page.locator('.callout.danger')).toContainText('isolated until linked');
+  await expect(page.locator('.diff').first()).toContainText('lead: web-triage');
 });
 
 /* ---------- bots: solo or on a team; delegation between teammates ---------- */
@@ -153,40 +165,27 @@ test('have a bot delegate to a teammate; the child case works under the original
   await expect(page.locator('.panel', { hasText: 'Delegations' }).first()).toContainText('Split p99 by AMI');
 });
 
-test('cross-team delegation exists only where the teams are linked; solo bots have no one to delegate to', async ({ page }) => {
-  // finance ↔ platform are linked: billing-sre may delegate to web-triage
+test('across teams, delegation exists only between linked bots; a bot with no link has no one to delegate to', async ({ page }) => {
+  // billing-sre and platform-sre list each other as peers: linked
   await go(page, '#/bots/billing-sre/cases/c7');
   await page.locator('[data-act="case-delegate"]').click();
-  await page.selectOption('#f-to', 'web-triage');
-  await page.fill('#f-task', 'Which web routes call the billing API?');
+  await page.selectOption('#f-to', 'platform-sre');
+  await page.fill('#f-task', 'Which NAT gateways does platform own?');
   await page.locator('#gen-submit').click();
-  await expect(page.locator('.item.deleg', { hasText: 'Which web routes' })).toContainText('cross-team · linked');
-  // unlink the teams (both sides), drop the explicit cross-team peers that relied on the link, apply
-  await go(page, '#/teams/platform');
-  await page.locator('[data-act="team-link"][data-o="finance"]').click();
-  await go(page, '#/teams/finance');
-  await page.locator('[data-act="team-link"][data-o="platform"]').click();
-  for (const b of ['platform-sre', 'billing-sre']) {
-    await go(page, `#/bots/${b}/settings`);
-    await page.locator('[data-listk="df.peers"] [data-act="list-del"]').first().click();
-    await expect(page.locator('#df-yaml')).not.toContainText('peers:');
-    await page.locator('[data-act="df-review"]').click();
-  }
-  await expect(page.locator('.list .item')).toHaveCount(4);
-  await applyStaged(page);
-  await go(page, '#/bots/billing-sre/cases/c7');
+  await expect(page.locator('.item.deleg', { hasText: 'Which NAT gateways' })).toContainText('linked bots');
+  // web-triage is on another team and not linked to billing-sre
   await page.locator('[data-act="case-delegate"]').click();
   await page.selectOption('#f-to', 'web-triage');
   await page.fill('#f-task', 'Again?');
   await page.locator('#gen-submit').click();
-  await expect(page.locator('[data-field="to"] .ferr')).toContainText('isolated');
+  await expect(page.locator('[data-field="to"] .ferr')).toContainText("aren't linked");
   await page.locator('.modal [data-close]').first().click();
-  // a solo bot can't delegate at all
+  // a solo bot with no links can't delegate at all
   await go(page, '#/bots/release-scribe/cases');
   await page.locator('[data-act="m-deliver"]').first().click();
   await page.fill('#f-title', 'Draft notes for v2.14'); await page.locator('#gen-submit').click();
   await expect(page.locator('button', { hasText: 'Delegate a task' })).toHaveAttribute('aria-disabled', 'true');
-  await expect(page.locator('button', { hasText: 'Delegate a task' })).toHaveAttribute('data-reason', /solo/);
+  await expect(page.locator('button', { hasText: 'Delegate a task' })).toHaveAttribute('data-reason', /no teammate or linked bot/);
 });
 
 test('the team page shows ask and delegate activity and each bot\'s delegation reach', async ({ page }) => {
@@ -194,8 +193,8 @@ test('the team page shows ask and delegate activity and each bot\'s delegation r
   const g = page.locator('svg.act-graph');
   await expect(g.locator('line.ag-delegate')).not.toHaveCount(0);
   await expect(g.locator('line.ag-ask')).not.toHaveCount(0);
-  await expect(g).toContainText('billing-sre · finance'); // a linked team's bot, outside the circle
-  await expect(page.locator('.panel', { hasText: 'Links' })).toContainText('delegation reach');
+  await expect(g).toContainText('billing-sre · finance'); // a linked bot from another team, outside the circle
+  await expect(page.locator('.panel:has(h3:text-is("Links"))')).toContainText('delegation reach');
 });
 
 test('builder: hand a trigger\'s work to a team and test the routing', async ({ page }) => {

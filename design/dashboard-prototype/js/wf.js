@@ -370,8 +370,10 @@
         if (b.name) return { output: { case: 'c41', routed_to: b.name, by: 'direct' }, inputs: { title }, note: 'dry run: the case is not opened' };
         const t = V().teams.find((x) => x.name === b.team); if (!t) throw new Error(`no team ${b.team}`);
         const on = ev && (ev.incident ? 'pd.incident' : ev.check_name ? 'gh.check_failed' : ev.labels ? 'gh.issue_opened' : '');
-        const r = (t.cfg.routing || []).find((x) => x.when && x.when.on === on && Object.entries(x.when).every(([k, v]) => k === 'on' || [].concat(v).includes(String(ev[k] != null ? ev[k] : (ev.incident || {})[k]))));
-        const to = r ? (r.to === 'lead' ? t.cfg.lead : r.to) : t.cfg.lead;
+        const glob = (pat, v) => new RegExp('^' + String(pat).split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$').test(String(v == null ? '' : v));
+        const ro = t.cfg.routing || {};
+        const r = (ro.rules || []).find((x) => x.match && Object.entries(x.match).every(([k, v]) => (k === 'on' ? glob(v, on) : glob(v, ev[k] != null ? ev[k] : (ev.incident || {})[k]))));
+        const to = r ? r.to : ro.lead || ro.fallback;
         return { output: { case: 'c41', routed_to: to || '(no lead)', by: r ? `rule ${r.name}` : 'lead' }, inputs: { title, team: t.name }, note: 'dry run: routed by the team\'s rules; no case opened' };
       }
       default: throw new Error('this step has no type');

@@ -25,14 +25,14 @@
       { k: 'team', type: 'enum', label: 'Team', options: V().teams.map((t) => t.name), create: 'team', createLabel: 'New team', help: 'Leave empty for a solo bot. On a team it inherits the defaults and can only narrow them.' },
       { k: 'operators', type: 'list', label: 'Operators', help: 'Leave empty to inherit the team\'s.' }],
     note: note('bot'),
-    onSubmit: (v) => { const n = { description: v.description || '', charter_file: `bots/${v.name}.md`, autonomy: { shadow: true, approval_ttl: '24h' }, skill: { verbs: ['gh.get_*'] }, isolation: { mode: 'namespace' } }; if (v.team) n.team = v.team; if (v.operators) n.operators = v.operators; else if (!v.team) n.operators = ['ops']; stage('bots', v.name, n, done); } });
-  C.team = (ctx, done) => drawer({ caps: 'new team', title: 'New team', intro: 'Bots on a team inherit its defaults and can only narrow them.',
+    onSubmit: (v) => { const n = { description: v.description || '', charter_file: `bots/${v.name}.md`, autonomy: { shadow: true, approval_ttl: '24h' } }; if (v.team) n.team = v.team; if (v.operators) n.operators = v.operators; else if (!v.team) n.operators = ['ops']; stage('bots', v.name, n, done); } });
+  C.team = (ctx, done) => drawer({ caps: 'new team', title: 'New team', intro: 'Bots on a team share its approvers and ceilings, and can only be stricter.',
     fields: [Object.assign({ k: 'name', type: 'string', req: true, validate: taken(() => V().teams) }, NAME), { k: 'description', type: 'string', mono: false },
       { k: 'operators', type: 'select-multi', label: 'Operators / approvers', req: true, options: Object.keys(D.operatorsCfg) },
-      { k: 'max_tier', type: 'enum', label: 'Autonomy ceiling', req: true, options: ['propose', 'commit_money', 'reversible'], def: 'propose' },
+      { k: 'ceiling', type: 'seg', label: 'Bots may run on their own', options: [['reversible', 'up to reversible (undoable)'], ['observe', 'reads only']], def: 'reversible' },
       { k: 'folder', type: 'enum', label: 'Folder', options: UI.allFolders(), create: 'folder', createLabel: 'New folder' }],
     note: note('team'),
-    onSubmit: (v) => { const n = { defaults: { operators: v.operators, autonomy: { max_tier: v.max_tier, promote: false }, isolation: { mode: 'namespace' } } }; if (v.description) n.description = v.description; if (v.folder) n.folder = v.folder; stage('teams', v.name, n, done); } });
+    onSubmit: (v) => { const n = { operators: v.operators, autonomy: { ceiling: v.ceiling || 'reversible' }, isolation: { sandbox: 'required' } }; if (v.description) n.description = v.description; if (v.folder) n.folder = v.folder; stage('teams', v.name, n, done); } });
   C.folder = (ctx, done) => drawer({ caps: 'new folder · organization only', title: 'New folder', values: { parent: ctx.parent || '' },
     fields: [{ k: 'parent', type: 'enum', label: 'Inside', options: [['', 'top level']].concat(UI.allFolders().map((f) => [f, f])) }, { k: 'name', type: 'string', req: true, pattern: /^[\w][\w .-]*$/, patternMsg: 'Letters, digits, space, . _ -; no slashes.' }],
     submit: 'Create folder',
