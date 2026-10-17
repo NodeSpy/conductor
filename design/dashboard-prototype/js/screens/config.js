@@ -27,10 +27,10 @@
   function historyCard() {
     return `<section class="dl-card cfg-hist"><header class="dl-ch"><h2>Applied changes</h2><span class="dl-sub">newest first · each keeps a backup you can go back to</span></header>
       <ul class="dl-list">${D.configHistory.map((h, i) => { const open = view.open === h.id, cf = S.revertConflicts(h.id), live = h.status === 'live';
-        return `<li class="cfg-h"><div class="cfg-h-row"><span class="dl-ng">${UI.mark(live ? 'ok' : 'idle', { lg: true, label: live ? 'Live' : 'A backup' })}</span>
+        return `<li class="cfg-h"><div class="cfg-h-row"><span class="dl-ng"></span>
           <span class="dl-nt"><b>${esc(plainChange(h))}</b><span class="dl-tech mono">${esc(yamlPath(h))}</span></span>
           <span class="cfg-who"><span>${whoWords(h.who)}</span><span class="dl-sub">${UI.agoText(h.at)} · ${new Date(h.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span></span>
-          <span class="dl-na">${live ? UI.statusMark('ok', 'Live') : ''}<button class="btn sm ghost" data-act="hist-view" data-id="${h.id}" aria-expanded="${open}">${open ? 'Hide the diff' : 'Diff'}</button>
+          <span class="dl-na">${live ? '<span class="dl-sub">in use now</span>' : ''}<button class="btn sm ghost" data-act="hist-view" data-id="${h.id}" aria-expanded="${open}">${open ? 'Hide the diff' : 'Diff'}</button>
             ${live && D.configHistory.length === 1 ? '' : `<button class="icon-btn" data-act="cfg-h-more" data-id="${h.id}" data-i="${i}"${cf.length ? ` data-cf="${esc(cf.map((x) => x.summary).join('; '))}"` : ''} aria-label="More for this change">${icon('more')}</button>`}</span></div>
           ${open ? `<div class="hist-diff">${(h.changes || []).map((c) => UI.diffView(c.before == null ? '' : typeof c.before === 'string' ? c.before : YAML.stringify({ [C()[c.coll].path(c.key)]: c.before }), c.after == null ? '' : typeof c.after === 'string' ? c.after : YAML.stringify({ [C()[c.coll].path(c.key)]: c.after }), 'unified', { file: C()[c.coll].path(c.key) }).html).join('') || '<p class="dl-sub">This change was made outside the dashboard; its diff is in the backup <span class="mono">' + esc(h.id) + '</span>.</p>'}</div>` : ''}</li>`; }).join('')}</ul>
       <p class="dl-sub cfg-note">Revert undoes one change and keeps the ones after it. Restore goes back to before a change, undoing everything since. Both are checked on a copy and backed up before they apply.</p></section>`;
@@ -44,7 +44,7 @@
     <div class="dl-phead"><div><h1>Config</h1><p class="dl-lead">Edits to a section, a bot or a workflow wait here; nothing applies until you review it.</p></div>
       <div class="dl-actions tight"><a class="btn secondary" href="#/config/raw">${icon('code')}Edit the file</a>${n ? `<a class="btn primary" href="#/config/apply">Review ${n} change${n > 1 ? 's' : ''}</a>` : ''}</div></div>
     <div class="cfg-stack">${historyCard()}
-        <div class="panel cfg-files"><div class="panel-head"><h3>Files</h3><span class="muted small">what the daemon loaded at boot</span><div class="tools">${st('ok', 'on disk = loaded')}</div></div>
+        <div class="panel cfg-files"><div class="panel-head"><h3>Files</h3><span class="muted small">what the daemon loaded at boot</span><div class="tools"><span class="dl-sub">on disk matches what's loaded</span></div></div>
           <table class="tbl compact responsive"><thead><tr><th>file</th><th>owner</th><th>sha</th><th>loaded</th></tr></thead><tbody>
             <tr><td data-l="file" class="mono"><a class="link" href="#/config/raw">~/.config/conductor/config.yaml</a></td><td data-l="owner">${UI.label(`you`, { cls: 'owner op' })}</td><td data-l="sha" class="mono">${D.daemon.config_sha}</td><td data-l="loaded" class="mono muted">${ago(D.configHistory[0].at)} ago</td></tr>
             <tr><td data-l="file" class="mono">~/.config/conductor/conf.d/connectors/pd.yaml</td><td data-l="owner">${UI.label(`you · imports:`, { cls: 'owner op' })}</td><td data-l="sha" class="mono">91d0c7e3</td><td data-l="loaded" class="mono muted">50m ago</td></tr>
@@ -69,11 +69,11 @@
         ${UI.usageMode() === 'off' ? '' : (() => { const src = (S.staged('usage', 'usage') || {}).source; return `<div class="panel" id="general"><div class="panel-head"><h3>Usage source</h3><span class="muted small">config: usage.source</span>${S.find('usage', 'usage') ? tag('staged', 'run') : ''}</div><div class="panel-body stack tight small"><div class="field">${src ? `<div class="row"><span class="mono grow">${esc(src.name)} · ${esc(src.url)}</span><button class="btn sm" data-act="usage-src">Edit</button><button class="btn sm ghost" data-act="usage-src-del">Remove</button></div>` : `<div class="row"><span class="muted grow">none: only counts conductor observes (runs, turns), per provider</span><button class="btn sm" data-act="usage-src">${icon('plus')}Add a usage source</button></div>`}<div class="hint">The proxy or load balancer in front of your model accounts, which reports plan limits and tokens. Config, so it goes through the diff.</div></div>${S.find('usage', 'usage') ? '<a class="btn sm primary" href="#/config/apply" style="align-self:flex-start">Review change</a>' : ''}</div></div>`; })()}
         
         <div class="panel"><div class="panel-head"><h3>Guards</h3></div><div class="panel-body small stack tight">
-          <div class="row guard">${st('ok', '')}<span class="grow">Edits are node-level: comments, anchors and unknown keys are kept.</span></div>
-          <div class="row guard">${st('ok', '')}<span class="grow">Validated on a copy, with copied plugin state; <span class="mono">conductor validate</span> is not read-only.</span></div>
-          <div class="row guard">${st('ok', '')}<span class="grow">A config this binary can't load is never written.</span></div>
-          <div class="row guard">${st('ok', '')}<span class="grow">Also checked against the pending update (v0.72.0).</span></div>
-          <div class="row guard">${st('ok', '')}<span class="grow">Boot guard: a config that fails at boot is restored automatically.</span></div></div></div>
+          <div class="row guard"><span class="grow">Edits are node-level: comments, anchors and unknown keys are kept.</span></div>
+          <div class="row guard"><span class="grow">Validated on a copy, with copied plugin state; <span class="mono">conductor validate</span> is not read-only.</span></div>
+          <div class="row guard"><span class="grow">A config this binary can't load is never written.</span></div>
+          <div class="row guard"><span class="grow">Also checked against the pending update (v0.72.0).</span></div>
+          <div class="row guard"><span class="grow">Boot guard: a config that fails at boot is restored automatically.</span></div></div></div>
         
         <div class="panel"><div class="panel-body row small"><span class="muted grow">Prototype: everything here is fake state in this browser.</span><button class="btn sm" data-act="reset-demo">${icon('undo')}Reset demo data</button></div></div>
       

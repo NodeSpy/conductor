@@ -6,9 +6,11 @@ const { test, expect, go } = require('./fixtures');
 test('a failed run: what happened, what you can do, and an audit scoped to the run', async ({ page }) => {
   await go(page, '#/runs/r-7ef0', { fresh: true });
   await expect(page.locator('.dl-phead .dl-lead')).toContainText('The fix made it worse');
-  await expect(page.locator('.dl-actions [data-act="retry"]')).toContainText('Retry');
+  // the check failed on the fix step's change, so the primary redoes the fix; rerunning the test alone is secondary
+  await expect(page.locator('.dl-actions .btn.primary[data-act="retry"]')).toHaveAttribute('data-from', 'fix');
+  await expect(page.locator('.dl-actions .btn.secondary[data-act="retry"][data-from="test"]')).toContainText('Rerun “test” only');
   await expect(page.locator('.dl-actions [data-act="run-dismiss"]')).toBeVisible();
-  await expect(page.locator('[data-act="run-record"]')).toHaveText(/Download the run record/);
+  await expect(page.locator('[data-act="run-record"]')).toHaveCount(0); // export is retired: no downloads
   const audit = page.locator('.run-audit');
   await expect(audit).toContainText('workflow failed');
   await expect(audit).toContainText('run started');

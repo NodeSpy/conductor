@@ -128,7 +128,7 @@ test('workflows in folders: move one through the diff; folder filters and search
   await page.selectOption('#f-to', 'work/web');
   await page.locator('#gen-submit').click();
   await page.goto(page.url().replace(/#.*/, '#/config/apply'));
-  await expect(page.locator('.diff')).toContainText('folder: "work/web"');
+  await expect(page.locator('.diff')).toContainText('# folder: work/web');
   await applyStaged(page);
   await go(page, '#/workflows');
   await expect(wlRow(page, 'ci-fixer').locator('td[data-l="folder"]')).toContainText('work/web');

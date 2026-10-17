@@ -32,7 +32,7 @@
     turn: ['Turn', 'One reply from the bot\'s model. Counted to rotate sessions and to cap how much a bot may run.'],
     sweep: ['Sweep', 'A bot checking in on its own on a schedule, without an event.'],
     handoff: ['Hand-off', 'A step that pauses the run and asks a person to approve, revise or discard what an agent made.'],
-    fleet: ['Fleet', 'An ordered list of acceptable models. A step starts on the first (rung 1) and moves down the list on retry.'],
+    fleet: ['Fleet', 'An ordered list of acceptable models. A step starts on the first and moves down the list on retry.'],
     sandbox: ['Sandbox', 'Where agents run: they can only reach the files and network hosts you allowed.'],
     egress: ['Egress', 'Network hosts an agent may reach from its sandbox. Anything else is denied.'],
     vault: ['Vault', 'Where secrets live (1Password, pass, HashiCorp, conductor\'s own). Config holds a reference, never the value.'],

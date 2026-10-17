@@ -1,7 +1,7 @@
 // Daylight conformance: the prototype is built only from the brand's tokens, and what renders keeps the brand's
 // type rules. Static: no raw colours (hex, rgb, hsl) outside css/tokens.css, and none of the retired prototype
 // variables (--ink, --bg-2, --accent, --ok …). Rendered, on every route: nothing under 11.5px, mono never under
-// 12px, the serif (Fraunces) only in titles of five words or fewer at 20px or larger, and status marks, labels,
+// 12px, the serif (Fraunces) only in titles of five words or fewer (BRAND.md: "five words or fewer") at 20px or larger, and status marks, labels,
 // chips and counts drawn only by the shared components (no tinted capsules).
 const fs = require('fs');
 const path = require('path');
@@ -44,7 +44,7 @@ test('every route keeps the type rules: size floors, mono for code only, the ser
         const label = `${el.tagName.toLowerCase()}.${String(el.className).split(' ')[0]} "${txt.slice(0, 30)}"`;
         if (px < 11.5 - 0.01) out.push(`${label} ${px}px`);
         if (/Mono/.test(fam) && px < 12 - 0.01) out.push(`mono ${label} ${px}px`);
-        if (/Fraunces/.test(fam)) { const own = [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(' ').trim().replace(/\s+/g, ' '); if (!own) continue; const words = own.split(' ').length; if (px < 20 - 0.01) out.push(`serif under 20px: ${label} ${px}px`); if (words > 6) out.push(`serif on a long title: ${label} (${words} words)`); }
+        if (/Fraunces/.test(fam)) { const own = [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(' ').trim().replace(/\s+/g, ' '); if (!own) continue; const words = own.split(' ').length; if (px < 20 - 0.01) out.push(`serif under 20px: ${label} ${px}px`); if (words > 5) out.push(`serif on a long title: ${label} (${words} words)`); }
       }
       // no tinted capsules: a pill-shaped element with a tinted background is the old badge
       document.querySelectorAll('body *').forEach((el) => { const cs = getComputedStyle(el); if (parseFloat(cs.borderTopLeftRadius) >= 9 && el.getBoundingClientRect().height <= 24 && el.textContent.trim().length > 2 && !/count|switch|kbd|bar|dot|pulse|chip|wordmark|\bon\b/.test(el.className) && (() => { const m = String(cs.backgroundColor).match(/rgba?\(([^)]+)\)/); if (!m) return false; const [r, g, b, a = 1] = m[1].split(/[ ,/]+/).filter(Boolean).map(Number); const mx = Math.max(r, g, b), mn = Math.min(r, g, b); return a > 0.02 && mx - mn > 18; })() && !el.closest('.site, .btn, .seg, .tabbar, .strip .search, .toast')) out.push(`capsule: ${el.tagName.toLowerCase()}.${String(el.className).split(' ').join('.')} "${el.textContent.trim().slice(0, 24)}"`); });

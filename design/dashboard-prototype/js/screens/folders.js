@@ -28,7 +28,7 @@
     const o = UI.wfOwner(w);
     if (o === 'bot') return UI.folderOfBot(w.name.slice(4), staged);
     if (o === 'pack') { const inst = UI.packOf(w), c = staged ? S.staged('packs', inst) : (D.packs.find((p) => p.name === inst) || {}).cfg; return (c && c.folders && c.folders[w.name]) || `packs/${inst}`; }
-    const y = staged ? S.staged('workflows', w.name) || w.yaml : w.yaml; const m = String(y || '').match(/^folder:\s*"?([^"\n]+?)"?\s*$/m); return m ? m[1] : '';
+    const y = staged ? S.staged('workflows', w.name) || w.yaml : w.yaml; const m = String(y || '').match(/^#?\s*folder:\s*"?([^"\n]+?)"?\s*$/m); return m ? m[1] : '';
   };
   UI.wfsIn = (f, deep = true) => S.view().workflows.filter((w) => { const x = UI.folderOfWf(w); return deep ? within(x, f) && (!f || x) : x === f; });
   const lastRun = (name) => D.runs.find((r) => r.workflow === name);
@@ -72,7 +72,7 @@
   const roll = (n) => { const bs = botsUnder(n); const p = bs.reduce((a, b) => a + pendingOf(b), 0), c = bs.reduce((a, b) => a + openCases(b), 0), live = bs.filter((b) => (M(b) || {}).home === 'live').length; const wr = UI.wfRoll(UI.wfsIn(n.path));
     const tip = `${bs.length} bot${bs.length === 1 ? '' : 's'} · ${wr.n} workflow${wr.n === 1 ? '' : 's'} · ${c} open case${c === 1 ? '' : 's'} · ${live} working now`;
     // in words, so there is no legend to decode; what needs you first and coloured, the rest quiet
-    return `<span class="roll">${p ? `<span class="hot">${p} pending</span>` : ''}${wr.failing ? `<span class="hot">${wr.failing} failing</span>` : ''}<span class="calm-n">${bs.length} bot${bs.length === 1 ? '' : 's'} · ${wr.n} workflow${wr.n === 1 ? '' : 's'} · ${c} open case${c === 1 ? '' : 's'}${live ? ` · ${live} working` : ''}</span></span>`; };
+    return `<span class="roll">${p ? `<span class="hot">${p} need${p === 1 ? 's' : ''} you</span>` : ''}${wr.failing ? `<span class="hot">${wr.failing} failing</span>` : ''}<span class="calm-n">${bs.length} bot${bs.length === 1 ? '' : 's'} · ${wr.n} workflow${wr.n === 1 ? '' : 's'} · ${c} open case${c === 1 ? '' : 's'}${live ? ` · ${live} running` : ''}</span></span>`; };
   const fv = { q: '' };
   const closed = () => new Set(D.prefs.closedFolders || []);
   const matchBot = (b) => { const m = M(b) || { name: b, desc: '' }; const q = fv.q.toLowerCase(); return (m.name + ' ' + (m.desc || '') + ' ' + UI.folderOfBot(b) + ' ' + (cfgOf('bots', b, true).team || '')).toLowerCase().includes(q); };
@@ -85,7 +85,7 @@
     return `<div class="frow bot${stagedMove('bots', b) ? ' moved' : ''}" role="treeitem" style="--d:${d}" ${onTeam ? '' : `draggable="true" data-drag="bot:${b}"`}>
       ${onTeam ? '<span class="grip off"></span>' : `<span class="grip" data-tip="Drag onto a folder">${icon('more')}</span>`}${UI.sigil(m, 'sm')}
       <a class="fname" href="#/bots/${b}"><b>${esc(b)}</b><span class="muted small ellipsis">${onTeam ? '' : 'solo · '}${esc(m.desc || '')}</span></a>
-      <span class="fstat">${p ? tag(p + ' pending', 'ember') : ''}${stagedMove('bots', b) ? ' ' + tag('move staged', 'run') : ''}${m.home === 'live' ? st('run', 'working') : ''}</span>
+      <span class="fstat">${p ? UI.statusMark('ember', p === 1 ? 'Needs you' : `Needs you · ${p}`) : m.home === 'live' ? UI.statusMark('run', 'Running') : ''}${stagedMove('bots', b) ? ' ' + UI.statusMark('staged', 'Move not applied') : ''}</span>
       <button class="icon-btn sm" data-act="f-item-menu" data-kind="bot" data-name="${b}" aria-label="Actions for ${b}">${icon('more')}</button></div>`;
   }
   function teamRow(t, d) {

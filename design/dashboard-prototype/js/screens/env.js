@@ -1,12 +1,13 @@
 /* Secrets & vars → Env: environment variables by scope, where each one is used, and the effective environment
- * a step or a bot worker would get. Scopes, from widest to narrowest (the narrowest wins):
+ * a step or a bot worker would get. Scopes (what conductor documents, plus one dashboard proposal marked NEW):
  *   daemon      conductor.env, a plain-text file read at boot (applying re-execs through the boot guard)
  *   runtime:<n> runtimes.<n>.env, for every agent on that runtime
  *   host:<n>    hosts.<n>.env, for steps that run over SSH there
- *   workflow:<n> the trigger's env, for its steps
+ *   workflow:<n> NEW (a dashboard proposal, not in conductor today): a trigger-wide env for its steps
  * Values are never shown when they look secret; a secret-looking plain value is flagged with a one-click move
- * into conductor's vault. The sandbox passes agents the runtime/host/workflow env, and from the daemon only
- * the names on sandbox.env_allow (TZ, LANG and anything you list). */
+ * into conductor's vault. A sandboxed launch gets a scrubbed environment: the daemon's own environment (conductor.env)
+ * is not forwarded into it (Isolation.md); there is no allowlist key for it. Which scope wins when two set the same
+ * name is a NEW proposal too: conductor documents no precedence chain. */
 (function () {
   const { icon, esc, tag } = UI;
   const ORDER = ['daemon', 'runtime', 'host', 'workflow'];
@@ -16,16 +17,15 @@
   const looksSecret = (e) => e.looksSecret || (e.plain && SECRETISH.test(e.name));
   const shown = (e) => (looksSecret(e) && e.plain ? `<span class="masked-v">${'•'.repeat(Math.min(e.len || 10, 12))}</span>` : esc(e.value));
   const usesOf = (name) => { const t = S.configText(), out = []; t.split('\n').forEach((l, i) => { if (l.includes('${env.' + name + '}')) out.push(i + 1); }); return out; };
-  const allow = () => ((S.view().sandboxCfg || {}).env_allow || ['TZ', 'LANG']);
 
   /** The effective env for a context: [{ name, scope, shadowed: [scopes], passes: bool, ref }] — names and sources only. */
   UI.effectiveEnv = (ctx = {}) => { const env = S.view().env || [], want = { daemon: true, runtime: ctx.runtime, host: ctx.host, workflow: ctx.workflow }, by = {};
     env.filter((e) => { const k = scopeKind(e.scope), n = e.scope.split(':')[1]; return k === 'daemon' || (want[k] && want[k] === n); })
       .sort((a, b) => ORDER.indexOf(scopeKind(a.scope)) - ORDER.indexOf(scopeKind(b.scope)))
       .forEach((e) => { const prev = by[e.name]; by[e.name] = { name: e.name, scope: e.scope, shadowed: prev ? prev.shadowed.concat(prev.scope) : [], ref: /^\{\{|\$\{/.test(e.value || '') ? e.value : null, secretish: looksSecret(e) }; });
-    return Object.values(by).map((x) => Object.assign(x, { passes: !ctx.sandboxed || scopeKind(x.scope) !== 'daemon' || allow().includes(x.name) })).sort((a, b) => a.name.localeCompare(b.name)); };
+    return Object.values(by).map((x) => Object.assign(x, { passes: !ctx.sandboxed || scopeKind(x.scope) !== 'daemon' })).sort((a, b) => a.name.localeCompare(b.name)); };
   UI.effectiveEnvHTML = (ctx) => { const rows = UI.effectiveEnv(ctx);
-    return `<table class="tbl compact responsive env-eff"><thead><tr><th>name</th><th>comes from</th><th>overrides</th><th>${ctx.sandboxed ? 'reaches the agent' : 'reaches the step'}</th></tr></thead><tbody>${rows.map((r) => `<tr><td data-l="name" class="mono">${esc(r.name)}</td><td data-l="comes from" class="mono">${esc(scopeLabel(r.scope))}${r.ref ? ` <span class="muted tiny">(${esc(UI.VS ? UI.VS.parse(r.ref).label || r.ref : r.ref)})</span>` : ''}</td><td data-l="overrides" class="mono muted">${r.shadowed.map(scopeLabel).map(esc).join(', ') || '—'}</td><td data-l="reaches">${r.passes ? UI.st('ok', 'yes') : UI.st('idle', 'no: not on sandbox.env_allow')}</td></tr>`).join('') || '<tr class="empty-row"><td colspan="4">No env vars reach this context.</td></tr>'}</tbody></table><div class="muted tiny" style="padding:6px 2px">Names and where they come from only; values are never shown here.</div>`; };
+    return `<table class="tbl compact responsive env-eff"><thead><tr><th>name</th><th>comes from</th><th>overrides</th><th>${ctx.sandboxed ? 'reaches the agent' : 'reaches the step'}</th></tr></thead><tbody>${rows.map((r) => `<tr><td data-l="name" class="mono">${esc(r.name)}</td><td data-l="comes from" class="mono">${esc(scopeLabel(r.scope))}${r.ref ? ` <span class="muted tiny">(${esc(UI.VS ? UI.VS.parse(r.ref).label || r.ref : r.ref)})</span>` : ''}</td><td data-l="overrides" class="mono muted">${r.shadowed.map(scopeLabel).map(esc).join(', ') || '—'}</td><td data-l="reaches">${r.passes ? 'yes' : '<span class="muted">no: the sandbox gets a scrubbed environment</span>'}</td></tr>`).join('') || '<tr class="empty-row"><td colspan="4">No env vars reach this context.</td></tr>'}</tbody></table><div class="muted tiny" style="padding:6px 2px">Names and where they come from only; values are never shown here.</div>`; };
 
   const ev = { scope: 'all', ctx: { runtime: 'claude-cli', host: '', workflow: 'ci-fixer', sandboxed: true } };
   UI.route('secrets/:tab', ({ tab }) => {
@@ -34,9 +34,9 @@
     const plainSecrets = (v.env || []).filter((e) => looksSecret(e) && e.plain);
     return `<div class="page">${UI.head('Secrets &amp; vars', { lede: (() => { const env = S.view().env || D.env || [], plain = env.filter((e) => e.plain && e.scope === 'daemon').length; return `${plain ? `<b>${plain} sensitive-looking ${plain === 1 ? 'variable is' : 'variables are'} plain text in conductor.env.</b> Move ${plain === 1 ? 'it' : 'them'} to the vault.` : ''}`; })(), actions: `<button class="btn" data-act="env-import">${icon('upload')}Import</button><button class="btn primary" data-act="env-add">${icon('plus')}Add an env var</button>` })}
       ${UI.tabs([['main', 'Secrets, vaults &amp; settings', '#/secrets'], ['env', 'Env', '#/secrets/env', (v.env || []).length]], 'env')}
-      <p class="lede" style="margin:0 0 12px">Variables reach steps and agents by scope; the narrowest wins (a workflow's beats a host's, beats a runtime's, beats <span class="mono">conductor.env</span>). Changes to <span class="mono">conductor.env</span> apply by restarting conductor through the boot guard, with a backup.</p>
+      <p class="lede" style="margin:0 0 12px"><span class="mono">conductor.env</span> is the daemon's own environment: config reads it, and a sandboxed agent never sees it (its launch gets a scrubbed environment). A host's <span class="mono">env:</span> reaches commands run there. Changes to <span class="mono">conductor.env</span> apply by restarting conductor through the boot guard, with a backup. <span class="dl-sub">Workflow-wide env, and which scope wins when two set the same name, are <b>NEW</b>: proposed here, not in conductor today.</span></p>
       ${plainSecrets.length ? `<div class="callout warn small" style="margin-bottom:12px">${icon('warn')} <span class="grow"><b>${plainSecrets.map((e) => e.name).join(', ')}</b> look${plainSecrets.length > 1 ? '' : 's'} secret but sit${plainSecrets.length > 1 ? '' : 's'} in plain text in ${plainSecrets.map((e) => scopeLabel(e.scope)).join(', ')}.</span>${plainSecrets.map((e) => `<button class="btn sm" data-act="env-to-vault" data-k="${esc(e.scope + ':' + e.name)}">${icon('lock')}Move ${esc(e.name)} to the vault</button>`).join('')}</div>` : ''}
-      <div class="filters">${UI.seg([['all', 'all scopes'], ['daemon', 'conductor.env'], ['runtime', 'runtimes'], ['host', 'hosts'], ['workflow', 'workflows']], ev.scope, 'env-scope')}</div>
+      <div class="filters">${UI.seg([['all', 'all scopes'], ['daemon', 'conductor.env'], ['runtime', 'runtimes'], ['host', 'hosts'], ['workflow', 'workflows · NEW']], ev.scope, 'env-scope')}</div>
       <div class="panel"><table class="tbl responsive"><thead><tr><th>name</th><th>scope</th><th>value</th><th>used in config</th><th></th></tr></thead><tbody>
         ${env.map((e) => { const k = e.scope + ':' + e.name, u = usesOf(e.name), st = S.find('env', k); return `<tr data-env="${esc(k)}"><td data-l="name" class="mono"><b>${esc(e.name)}</b></td><td data-l="scope" class="mono">${esc(scopeLabel(e.scope))}</td><td data-l="value" class="mono">${shown(e)}${looksSecret(e) && e.plain ? ' ' + tag('plain text', 'wait') : ''}${st ? ' ' + tag('staged', 'run') : ''}</td><td data-l="used in">${u.length ? u.map((n) => `<a class="link mono" href="#/config/raw?line=${n}">line ${n}</a>`).join(', ') : '<span class="muted tiny">' + (scopeKind(e.scope) === 'daemon' ? 'read by conductor or its plugins' : 'given to every step in scope') + '</span>'}</td><td class="num nowrap"><button class="btn sm ghost" data-act="env-edit" data-k="${esc(k)}">${icon('edit')}Edit</button><button class="icon-btn" data-act="env-del" data-k="${esc(k)}" aria-label="Remove ${esc(e.name)}">${icon('trash')}</button></td></tr>`; }).join('') || '<tr class="empty-row"><td colspan="5">No env vars in this scope.</td></tr>'}
       </tbody></table></div>

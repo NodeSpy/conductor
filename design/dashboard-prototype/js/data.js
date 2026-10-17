@@ -65,7 +65,7 @@
     { id: 'r-7f3a', workflow: 'ci-fixer', trigger: 'gh.check_failed', repo: 'acme/api', number: 482, status: 'run', started: m(6), cost: 0.71, tokens: 48210, steps: [
       st('logs', 'ok', 2100, 0), st('triage', 'ok', 8400, 0.03), st('fix', 'run', 0, 0.68, { started: m(5) }), st('test', 'idle'), st('push', 'idle'), st('comment', 'idle') ] },
     { id: 'r-7f2c', workflow: 'pr-review', trigger: 'gh.review_requested', repo: 'acme/web', number: 1291, status: 'run', started: m(2), cost: 0.12, steps: [
-      st('fetch', 'ok', 900, 0), st('lint', 'run', 0, 0), st('review', 'run', 0, 0.12), st('post', 'idle') ] },
+      st('fetch', 'ok', 900, 0), st('lint', 'ok', 40000, 0), st('review', 'run', 0, 0.12), st('post', 'idle') ] },
     { id: 'r-7f29', workflow: 'bot:platform-sre', trigger: 'manual (spawn w41)', repo: '', number: 0, status: 'run', started: m(11), cost: 0.33, steps: [ st('work', 'run', 0, 0.33) ] },
     { id: 'r-7f11', workflow: 'pr-review', trigger: 'gh.review_requested', repo: 'acme/api', number: 480, status: 'ok', started: m(38), finished: m(31), cost: 0.41, tokens: 30110, steps: [] },
     { id: 'r-7ef0', workflow: 'ci-fixer', trigger: 'gh.check_failed', repo: 'acme/web', number: 1288, status: 'fail', started: m(64), finished: m(52), cost: 1.12, failed_step: 'test', error: 'go test ./...: 2 failures (TestCheckout, TestRefund)', steps: [] },
@@ -118,7 +118,7 @@
   D.liveLog = [
     ['logs', 'ok', 'fetched 3 failing checks (unit, lint, e2e) · 412 KiB'],
     ['triage', 'info', 'decide: kind=test_failure p=0.91 · flaky=0.06'],
-    ['fix', 'info', 'claude-cli · model claude-sonnet-5 (fleet fixer, rung 1) · sandbox namespace · identity agent:fixer@acme/api'],
+    ['fix', 'info', 'claude-cli · model claude-sonnet-5 (the fixer fleet’s first choice) · sandbox namespace · identity agent:fixer@acme/api'],
     ['fix', 'tool', '▸ Read internal/billing/refund.go'],
     ['fix', 'tool', '▸ Bash go test ./internal/billing/ -run TestRefund'],
     ['fix', 'err', '--- FAIL: TestRefund (0.02s) refund_test.go:88: got 1999, want 2000'],
@@ -127,11 +127,16 @@
     ['fix', 'tool', '▸ Bash go test ./internal/billing/...'],
     ['fix', 'ok', 'ok  acme/api/internal/billing 0.412s'],
     ['fix', 'tool', '▸ Bash git commit -m "billing: round refund fees half-even"'],
-    ['fix', 'info', 'conductor call git.push → refs/heads/conductor/fix-482 (fast-forward, re-signed)'],
     ['fix', 'warn', 'egress denied: storage.googleapis.com (not in sandbox.egress)'],
     ['fix', 'tool', '▸ Bash go vet ./internal/billing/...'],
     ['fix', 'info', 'All billing tests pass. Writing summary for step.done.'],
   ];
+
+  // what a running step of another workflow prints (each workflow streams its own lines)
+  D.liveLogs = {
+    'pr-review': [['info', 'claude-sonnet-5 (the reviewer fleet’s first choice) · sandbox namespace'], ['tool', '▸ Read internal/api/handlers.go'], ['tool', '▸ Read internal/api/handlers_test.go'], ['info', 'The new handler skips the auth middleware for /export.'], ['tool', '▸ Bash go test ./internal/api/...'], ['ok', 'ok  acme/web/internal/api 1.022s'], ['info', 'Drafting 3 review comments.']],
+    'bot:platform-sre': [['info', 'platform-sre · home session s7 · case c31'], ['tool', '▸ Read knowledge/db-prod-1.md'], ['tool', '▸ aws.rds describe db-prod-1'], ['info', 'Replica lag is 0.4s; no action needed.'], ['tool', '▸ Write log/2026-10-17.md']],
+  };
 
   /* ---------- bots (#178) ---------- */
   D.bots = [
@@ -787,7 +792,8 @@ steps:
  * bot's synthesized workflow follows its bot or team. */
 (function () {
   const D = window.D;
-  const put = (name, folder) => { const w = D.workflows.find((x) => x.name === name); if (w && w.yaml && !/^folder:/m.test(w.yaml)) w.yaml = w.yaml.replace(/^(name: .*\n)/m, `$1folder: "${folder}"\n`); };
+    // a workflow's folder is a comment on its first line (# folder: …): organization only, invisible to today's loader
+  const put = (name, folder) => { const w = D.workflows.find((x) => x.name === name); if (w && w.yaml && !/^#\s*folder:/m.test(w.yaml)) w.yaml = w.yaml.replace(/^(name: .*\n)/m, `$1# folder: ${folder}\n`); };
   put('ci-fixer', 'work/platform'); put('incident-intake', 'work/platform'); put('assess-and-post', 'work/platform'); put('issue-triage', 'work/web'); put('alert', 'personal/home');
 })();
 

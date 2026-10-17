@@ -396,7 +396,7 @@ tr.folded { display: none; }
 .conn-row .card-actions .btn { color: var(--color-text-tertiary); }
 .conn-row:hover .card-actions .btn { color: var(--color-text-secondary); }
 @media (max-width: 720px) { .conn-row { flex-wrap: wrap; } .conn-row .conn-name { min-width: 0; flex: 1; } }
-.case-title, .dl-page h2.case-title { font: var(--type-h3); font-family: var(--font-family-sans); font-weight: 700; font-size: 1.375rem; letter-spacing: normal; font-variation-settings: normal; margin: 0 0 var(--space-3); }
+.case-title, .dl-page h2.case-title { font: var(--type-h3); font-size: var(--type-h2-size); letter-spacing: normal; font-variation-settings: normal; margin: 0 0 var(--space-3); }
 .bot-card[data-row] { box-shadow: inset var(--border-indicator) 0 0 var(--s-solid), var(--shadow-1); }
 .lanes .mark[data-m="run"] { color: var(--color-text-secondary); }
 .lanes .mark[data-m="run"] svg { color: var(--color-text-secondary); }

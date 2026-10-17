@@ -70,7 +70,7 @@
           <ul class="dl-list">${D.sessions.map((x) => `<li class="acc-row"><div class="dl-nt"><b>${esc(x.device)}${x.current ? ' <span class="dl-sub">(this one)</span>' : ''}</b><span class="dl-why">${/tailnet/.test(x.addr) ? 'over your tailnet' : 'on this computer'} · signed in ${UI.agoText(x.started)} · last active ${UI.humanSpan(x.idle)} ago</span></div><span class="dl-na">${x.current ? '' : `<button class="btn sm ghost" data-act="sess-end" data-id="${x.id}">Sign out</button>`}</span></li>`).join('')}</ul>
           <p class="dl-sub acc-note">A session ends after 30 minutes idle, or 12 hours at most.</p></section>
       </div><div class="dl-col-side">
-        <section class="dl-card"><header class="dl-ch"><h2>When conductor asks for your passkey</h2></header>
+        <section class="dl-card"><header class="dl-ch"><h2>When it needs your passkey</h2></header>
           <ul class="acc-asks"><li>Approving or denying what a bot asks to do</li><li>Changes that give bots more access or loosen safety: a new permission, a new allowed site, the sandbox off</li><li>Taking over a browser a bot is signed in to</li></ul>
           <p class="dl-sub">Everything else, including routine config changes, uses your signed-in session.</p></section>
         <section class="dl-card"><header class="dl-ch"><h2>Approvals</h2>${S.find('operators', 'ops') ? UI.statusMark('staged', 'Not applied') : ''}</header>

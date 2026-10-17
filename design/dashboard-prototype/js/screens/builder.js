@@ -94,7 +94,8 @@
     const w = S.view().workflows.find((x) => x.name === name), o = UI.wfOwner(w); let ch = null;
     if (o === 'bot') return null;
     if (o === 'pack') { const inst = UI.packOf(w), c = JSON.parse(JSON.stringify(S.staged('packs', inst))); c.folders = Object.assign({}, c.folders); if (folder === `packs/${inst}`) delete c.folders[name]; else c.folders[name] = folder; if (!Object.keys(c.folders).length) delete c.folders; ch = S.stage('packs', inst, c, `move pack workflow ${name} → ${folder || 'top level'} (packs.${inst}.folders)`); }
-    else { const y = S.staged('workflows', name) || w.yaml || ''; const line = `folder: "${folder}"`; const ny = /^folder:.*$/m.test(y) ? (folder ? y.replace(/^folder:.*$/m, line) : y.replace(/^folder:.*\n/m, '')) : folder ? y.replace(/^(name: .*\n)/m, `$1${line}\n`) : y; ch = S.stage('workflows', name, ny, `move workflow ${name} → ${folder || 'top level'}`); }
+    else { const y = S.staged('workflows', name) || w.yaml || ''; // the folder is a comment line (# folder: …), so the trigger still loads in today's conductor
+      const line = `# folder: ${folder}`, re = /^#?\s*folder:.*$/m; const ny = re.test(y) ? (folder ? y.replace(re, line) : y.replace(/^#?\s*folder:.*\n/m, '')) : folder ? y.replace(/^(name: .*\n)/m, `$1${line}\n`) : y; ch = S.stage('workflows', name, ny, `move workflow ${name} → ${folder || 'top level'}`); }
     D.folderDrafts = (D.folderDrafts || []).filter((f) => !within(folder || '\u0000', f));
     return ch;
   };
@@ -645,9 +646,8 @@
   function pickerItems(inBranch) {
     const items = [];
     SCHEMA.kinds.forEach((k) => items.push({ key: 'kind:' + k.k, group: 'Built-in', icon: k.icon, label: k.label, sub: k.desc, dis: inBranch && k.k === 'parallel' ? 'A parallel group can\'t nest inside a branch' : '' }));
+    // (Wait already covers wait_for, and Hand to a bot or team covers a team: no second entry for either)
     items.push({ key: 'tpl:command', group: 'Built-in', icon: 'code', label: 'Run a command', sub: 'use: cli with command: [ … ], in the sandbox', risk: 'change' },
-      { key: 'tpl:wait_for', group: 'Built-in', icon: 'clock', label: 'Wait for a condition', sub: 'wait_for: check a read verb until a condition holds' },
-      { key: 'tpl:team', group: 'Built-in', icon: 'members', label: 'Hand to a team', sub: 'bot: { team }: the team\'s rules or its lead pick the bot' },
       { key: 'tpl:fail', group: 'Built-in', icon: 'x', label: 'Fail the run', sub: 'fail: stop here with a message (pair it with if:)' });
     const RISKY = /apply|merge|delete|resolve|push|deploy|destroy|close|revert|rollback/;
     const seen = new Set();
@@ -655,7 +655,9 @@
     Object.entries(SCHEMA.connectors).forEach(([use, d]) => { if (seen.has(use) || d.registry) return; if (use === 'git') Object.entries(d.verbs).forEach(([vn, vd]) => items.push({ key: `verb:git.${vn}`, group: 'git · builtin', icon: d.icon, label: vd.label, sub: `git.${vn}`, risk: vd.read ? 'read' : RISKY.test(vn) ? 'high' : 'change' })); });
     Object.entries(SCHEMA.connectors).forEach(([use, d]) => { if (!d.registry) return; Object.entries(d.verbs).forEach(([vn, vd]) => items.push({ key: `verb:${use}.${vn}`, group: `${d.label} · not installed`, icon: d.icon, label: vd.label, sub: `${use}.${vn} · needs ${d.registry}`, notInstalled: true })); });
     const R = { read: 0, change: 1, high: 2 };
-    return items.map((x, i) => [x, i]).sort((a, b) => (a[0].group === b[0].group ? (R[a[0].risk] || 0) - (R[b[0].risk] || 0) || a[1] - b[1] : a[1] - b[1])).map(([x]) => x);
+    // groups keep their order; inside a group, what only reads comes first and what's high impact last
+    const gi = new Map(); items.forEach((x) => { if (!gi.has(x.group)) gi.set(x.group, gi.size); });
+    return items.map((x, i) => [x, i]).sort((a, b) => gi.get(a[0].group) - gi.get(b[0].group) || (R[a[0].risk] || 0) - (R[b[0].risk] || 0) || a[1] - b[1]).map(([x]) => x);
   }
   const RISK_TAG = { read: ['reads only', 'ok'], change: ['changes things', 'wait'], high: ['high impact', 'fail'] };
   function openPicker(onPick, opts = {}) {
@@ -668,7 +670,7 @@
       q = (q || '').toLowerCase().trim();
       const match = items.filter((x) => !q || (x.label + ' ' + x.sub + ' ' + x.group + ' ' + x.key).toLowerCase().includes(q));
       const groups = {}; match.forEach((x) => (groups[x.group] = groups[x.group] || []).push(x));
-      const sect = (title, list) => `<div class="pk-group"><div class="caps">${esc(title)}</div><div class="pk-grid">${list.map((x) => `<button type="button" class="pk-item${x.notInstalled ? ' ni' : ''}" role="option" ${x.dis ? UI.off(x.dis) : `data-act="pk-pick" data-key="${esc(x.key)}"`}><span class="sc-ic sm">${icon(x.icon)}</span><span class="grow"><b>${esc(x.label)}</b><span class="mono tiny muted">${esc(x.sub)}</span></span></button>`).join('')}</div></div>`;
+      const sect = (title, list) => `<div class="pk-group"><div class="caps">${esc(title)}</div><div class="pk-grid">${list.map((x) => `<button type="button" class="pk-item${x.notInstalled ? ' ni' : ''}" role="option" ${x.dis ? UI.off(x.dis) : `data-act="pk-pick" data-key="${esc(x.key)}"`}><span class="sc-ic sm">${icon(x.icon)}</span><span class="grow"><b>${esc(x.label)}</b>${x.risk ? `<span class="pk-risk${x.risk === 'high' ? ' high' : ''}">${RISK_TAG[x.risk][0]}</span>` : ''}<span class="pk-sub${x.key.startsWith('verb:') ? ' mono' : ''}">${esc(x.sub)}</span></span></button>`).join('')}</div></div>`;
       UI.$('#pk-list', s).innerHTML = (!q && recent.length ? sect('Recently used', recent) : '') + (Object.keys(groups).length ? Object.entries(groups).map(([g, l]) => sect(g, l)).join('') : `<div class="empty small">Nothing matches “${esc(q)}”.</div>`);
     };
     draw('');

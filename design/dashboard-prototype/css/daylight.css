@@ -7,7 +7,7 @@
 .dl-page { max-width: calc(1280px - 72px); margin: 0; padding: 8px 36px 56px; }
 .dl-page h1 { font: var(--type-display); font-size: 34px; line-height: 1.12; font-variation-settings: var(--type-display-variation); letter-spacing: -0.015em; margin: 0; }
 /* a generated title (a run's, a case's) is long and machine-written: the sans, per the serif rule (BRAND.md) */
-.dl-page h1.dl-h1-long { font-family: var(--font-family-sans); font-weight: 700; font-size: 26px; letter-spacing: -0.01em; line-height: 1.22; max-width: 30em; font-variation-settings: normal; }
+.dl-page h1.dl-h1-long { font: var(--type-h3); font-size: var(--type-h2-size); letter-spacing: normal; line-height: 1.25; max-width: 34em; font-variation-settings: normal; }
 .dl-page h2 { font: var(--type-h2); font-family: var(--font-family-serif); font-size: 21px; line-height: 1.25; font-weight: 600; font-variation-settings: var(--type-display-variation); letter-spacing: -0.009em; margin: 0; }
 .dl-lead { font: var(--type-body-l); color: var(--color-text-secondary); margin: 8px 0 0; max-width: 46em; }
 .dl-lead b { color: var(--color-text-primary); font-weight: var(--font-weight-bold); }
@@ -142,7 +142,7 @@
 .dl-tabs a em.hot { background: var(--color-accent-default); color: var(--color-text-on-accent); }
 .dl-proposal { box-shadow: var(--shadow-2), inset 3px 0 0 var(--color-accent-default); }
 .dl-kick { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: var(--font-weight-semibold); color: var(--color-text-accent); }
-.dl-ptitle { font-size: calc(34px * .8) !important; margin-top: 10px !important; line-height: 1.15 !important; }
+.dl-ptitle { font: var(--type-h3) !important; font-size: var(--type-h2-size) !important; letter-spacing: normal !important; font-variation-settings: normal !important; margin-top: 10px !important; line-height: 1.25 !important; }
 .dl-ask { font: var(--type-body-l); color: var(--color-text-secondary); margin: 6px 0 0; }
 .dl-pwhy { margin-top: 18px; display: grid; gap: 4px; }
 .dl-pwhy p { margin: 0; line-height: 1.55; max-width: 40em; }
@@ -244,8 +244,9 @@
 .dl-keep { margin: 14px 2px 0; }
 .dl-runs-card { overflow: clip; }
 .dl-code { margin: 6px 0 0; padding: 12px 0; border-radius: 10px; background: var(--color-bg-sunken); font: 12.5px/1.65 var(--font-family-mono); overflow: auto; max-height: 420px; }
-.dl-code .ln { display: block; padding: 0 14px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.dl-code .ln i { display: inline-block; width: 74px; text-align: right; padding-right: 12px; color: var(--color-text-tertiary); font-style: normal; user-select: none; }
+/* a log line: a fixed time (or line-number) column that never wraps; a long line wraps under its own text */
+.dl-code .ln { --gut: 10ch; display: block; padding: 0 14px 0 var(--gut); text-indent: calc(-1 * var(--gut)); white-space: pre-wrap; overflow-wrap: anywhere; }
+.dl-code .ln i { display: inline-block; box-sizing: border-box; width: var(--gut); text-indent: 0; text-align: right; padding-right: 1.5ch; white-space: nowrap; color: var(--color-text-tertiary); font-style: normal; user-select: none; }
 .dl-code .ln.fail { background: var(--color-status-danger-bg); color: var(--color-status-danger-fg); box-shadow: inset 3px 0 0 var(--color-status-danger-solid); }
 .dl-code .src { color: var(--color-text-tertiary); }
 .dl-empty-row { text-align: center; color: var(--color-text-secondary); height: auto !important; padding: 24px 14px !important; }
@@ -290,7 +291,7 @@
 .dl-select select { appearance: none; border: 0; background: transparent; font: var(--type-body-s); color: inherit; width: 100%; outline: none; cursor: pointer; }
 .btn.wide { width: 100%; justify-content: center; margin-top: 10px; }
 .dl-code.small { font-size: 11.5px; margin: 0; max-height: none; }
-.dl-code.small .ln i { width: 34px; }
+.dl-code.small .ln { --gut: 5ch; }
 .dl-code.small .ln { white-space: pre; overflow-wrap: normal; }
 @media (max-width: 720px) {
   .wfb-page .wfb-title { font-size: 27px; }
@@ -474,7 +475,7 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 .wfb-owner { display: block; } .wfb-owner > .st { margin-left: 6px; }
 .readers { display: block !important; }
 .panel-foot.small:not(:has(button, .btn, input, select)) { display: block; }
-@media (max-width: 720px) { .dl-page h1.dl-h1-long { font-size: 22px; } }
+
 /* a collection a pack defines: the note sits beside the row, and under it on a phone */
 .coll-row .coll-note { max-width: 220px; overflow-wrap: anywhere; }
 @media (max-width: 720px) { .coll-row { flex-wrap: wrap; } .coll-row .coll-note { max-width: none; flex-basis: 100%; padding-left: 34px; } }
@@ -487,3 +488,9 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 }
 /* a long reason or name wraps inside its box (never past the page) */
 .dl-decided, .toast, .seal-words { overflow-wrap: anywhere; }
+/* the step picker: a description wraps in the sans (an action's id stays mono); what an action does to the world in
+   plain words, the high-impact ones in the danger ink, never a badge */
+.pk-item .pk-sub { display: block; font: var(--type-body-s); color: var(--color-text-secondary); white-space: normal; overflow: visible; text-overflow: clip; }
+.pk-item .pk-sub.mono { font-family: var(--font-family-mono); font-size: var(--type-code-s-size); }
+.pk-item .pk-risk { display: block; font: var(--type-caption); color: var(--color-text-secondary); }
+.pk-item .pk-risk.high { color: var(--color-status-danger-fg); font-weight: var(--font-weight-semibold); }

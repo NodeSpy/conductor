@@ -386,7 +386,7 @@
         <div class="msgs" id="msgs">${msgs.map((c) => bubble(c, m.name)).join('') || '<div class="empty small">No conversation yet. Say hello.</div>'}</div>
         <div class="composer"><textarea class="textarea" id="say" rows="1" placeholder="Message ${m.name}…  (you are the requester: operator:ops)" aria-label="Message"></textarea><button class="btn primary" data-act="chat-send" data-m="${m.name}">${icon('send')}Send</button></div></div>
       <div class="stack">
-        ${pp.map((p) => `<div class="panel" style="border-color:color-mix(in srgb,var(--color-accent-default) 40%,var(--color-border-subtle))"><div class="panel-head">${st('ember', 'awaiting you')}<span class="mono tiny muted" style="margin-left:auto">${p.id} · ${ago(p.at)}</span></div><div class="panel-body small"><div style="font-weight:600;margin-bottom:6px">${esc(p.summary)}</div><div class="row"><a class="btn sm primary" href="#/bots/${m.name}/proposals/${p.id}">Review</a><span class="muted tiny">expires in ${p.expires}</span></div></div></div>`).join('')}
+        ${pp.map((p) => `<div class="panel" style="border-color:color-mix(in srgb,var(--color-accent-default) 40%,var(--color-border-subtle))"><div class="panel-head">${UI.statusMark('ember', 'Needs you')}<span class="mono tiny muted" style="margin-left:auto">${p.id} · ${ago(p.at)}</span></div><div class="panel-body small"><div style="font-weight:600;margin-bottom:6px">${esc(p.summary)}</div><div class="row"><a class="btn sm primary" href="#/bots/${m.name}/proposals/${p.id}">Review</a><span class="muted tiny">expires in ${p.expires}</span></div></div></div>`).join('')}
         <div class="panel"><div class="panel-head"><h3>Open cases</h3><a class="btn sm ghost" style="margin-left:auto" href="#/bots/${m.name}/cases">All</a></div><div class="list">${D.cases.filter((c) => c.bot === m.name && c.status === 'open').map((c) => `<a class="item small click" href="#/bots/${m.name}/cases/${c.id}"><span class="mono tiny muted">${c.id}</span><span class="grow ellipsis">${esc(c.title)}</span>${UI.label(`${c.cls}`, { cls: 'taint ' + c.cls })}</a>`).join('') || '<div class="item small muted">None open.</div>'}</div></div>
       </div></div>`);
   }
@@ -415,7 +415,7 @@
     const t = teamOf(m), mates = t ? botsOf(t.name).filter((x) => x.name !== m.name) : [];
     return `<div class="row" style="margin-bottom:12px"><a class="btn sm ghost back" href="#/bots/${m.name}/cases">${icon('chev')}All cases</a></div>
       <div class="grid g-side"><div class="stack">
-        <div class="panel"><div class="panel-head">${c.status === 'open' ? st('idle', 'open') : st('ok', 'closed')}${c.urgent ? tag('urgent', 'fail') : ''}</div>
+        <div class="panel"><div class="panel-head"><span class="dl-sub case-state">${c.status === 'open' ? 'Open case' : 'Closed'}</span>${c.urgent ? tag('urgent', 'fail') : ''}</div>
           <div class="panel-body"><h2 class="case-title">${esc(c.title)}</h2>
           ${UI.metaLine([{ label: 'Case', value: c.id, mono: true }, { label: 'Opened', value: `${UI.agoText(c.opened)} <span class="dl-sub">(${UI.hm(c.opened)})</span>` }])}
           <div class="route-box"><div class="caps">routing</div><div class="small">${c.routed ? routeLabel(c.routed) : 'delivered directly'}${c.routed && c.routed.note ? ` <span class="muted">· ${esc(c.routed.note)}</span>` : ''}</div><div class="tiny muted">requester ${UI.label(`${c.requester}`, { cls: 'taint ' + c.cls })} preserved through every hop: the assignee runs on no more trust than that.</div></div></div></div>

@@ -167,9 +167,10 @@
   // the run's live log, in the running step's card
   const lv = { follow: true, n: 9 };
   let LOG = D.liveLog;
-  const logOf = (run) => { const ids = run.steps.filter((s) => s.status && s.status !== 'idle').map((s) => s.id), srcs = [...new Set(D.liveLog.map((l) => l[0]))];
-    if (!ids.length || srcs.every((x) => ids.includes(x))) return D.liveLog;
-    return D.liveLog.map(([src, ...rest]) => [ids[Math.min(srcs.indexOf(src), ids.length - 1)], ...rest]); };
+  // each running run streams its own workflow's lines (never another workflow's fixture): ci-fixer's live tail, or the
+  // lines its run record writes for each step it has reached
+  const logOf = (run) => { if (run.workflow === 'ci-fixer') return D.liveLog;
+    const rec = UI.runRecord(run); return rec.steps.filter((s) => s.status !== 'idle').flatMap((s) => (s.status === 'run' && (D.liveLogs || {})[run.workflow] ? D.liveLogs[run.workflow] : s.log).map(([k, t]) => [s.id, k, t])); };
   const logLine = ([src, kind, text], i, fresh) => `<span class="ln ${kind === 'err' ? 'fail' : ''}${fresh ? ' new' : ''}"><i>${new Date(Date.now() - (LOG.length - i) * 17000).toTimeString().slice(0, 8)}</i><span class="src">${esc(src)}</span> ${esc(text)}</span>`;
   /** Only a step with a live paseo session has somewhere to open: an agent on a paseo runtime, a hand-off, a bot's home session. */
   const paseoOf = (r, s) => (s.kind === 'agent' && /^paseo/.test(String(s.what || 'paseo'))) || s.kind === 'bot' || s.kind === 'handoff' || String(r.workflow).startsWith('bot:');
@@ -178,7 +179,7 @@
     const live = s.status === 'run';
     const body = live ? `<pre class="dl-code dl-log" id="log" data-volatile>${LOG.filter(([src]) => src === s.id || !rec.steps.some((x) => x.id === src)).slice(0, lv.n).map((l, i) => logLine(l, i)).join('')}<span class="ln"><i></i><span class="cursor-blink"></span></span></pre>`
       : s.status === 'idle' ? `<p class="dl-sub">Not reached: the run ${r.status === 'idle' ? 'was parked before any step ran' : `stopped at ${esc(rec.failAt || rec.waitAt || '')}`}, so this step never ran.</p>`
-      : { outputs: () => UI.yaml(UI.stepOutputsYAML(r, s)), inputs: () => UI.yaml(YAML.stringify(s.inputs)), log: () => `<pre class="dl-code">${s.log.map(([k, t], i) => `<span class="ln ${k === 'err' ? 'fail' : ''}"><i>${i + 1}</i>${esc(t)}</span>`).join('')}</pre>`, diff: () => UI.stepDiffHTML(s.diff) }[tab]?.() || '';
+      : { outputs: () => UI.yaml(UI.stepOutputsYAML(r, s)), inputs: () => UI.yaml(YAML.stringify(s.inputs)), log: () => `<pre class="dl-code" style="--gut:5ch">${s.log.map(([k, t], i) => `<span class="ln ${k === 'err' ? 'fail' : ''}"><i>${i + 1}</i>${esc(t)}</span>`).join('')}</pre>`, diff: () => UI.stepDiffHTML(s.diff) }[tab]?.() || '';
     return `<section class="dl-card" id="run-step"><header class="dl-ch"><h2>${esc(s.id)}</h2>${UI.statusMark(STEP_S[s.status] || 'skip', s.status === 'idle' ? 'Not reached' : s.status === 'stopped' ? 'Stopped' : null)}<span class="dl-sp"></span>${!live && tabs.length > 1 ? UI.seg(tabs, tab, 'run-tab') : ''}</header>
       ${live && paseoOf(r, s) ? `<div class="dl-step-open"><button class="btn sm secondary" ${UI.off('Opens this step’s conversation in paseo, outside the dashboard (not in the prototype)')}>${icon('terminal')}Open in paseo</button><span class="dl-sub">Watch or take over this agent’s conversation.</span></div>` : ''}
       ${live ? `<div class="dl-step-open"><button class="btn sm secondary" data-act="restart-step" data-run="${r.id}" data-from="${s.id}">${icon('undo')}Restart this step…</button></div>` : r.status !== 'run' && s.status !== 'idle' ? `<div class="dl-step-open"><button class="btn sm secondary" data-act="retry" data-run="${r.id}" data-from="${s.id}">${icon('undo')}Retry from here…</button></div>` : ''}
@@ -193,11 +194,16 @@
     const story = UI.runStory(r), audit = UI.runAudit(r), same = D.runs.filter((x) => x.workflow === r.workflow && x.id !== r.id && x.status !== 'run'), inNeeds = D.attention.some((a) => a.href === '#/runs/' + r.id);
     if (r.status === 'run') LOG = logOf(r);
     const title = `${esc(UI.runTitle(r))}${r.repo ? ` on ${UI.runTarget(r)}` : ''}`;
-    const lead = story ? story.happened : r.status === 'run' ? `Started ${UI.agoText(r.started)} by ${trigWords(r).replace(/^./, (c) => c.toLowerCase())}; now working on <b>${esc(s.id)}</b>.` : r.status === 'ok' ? `Finished in ${UI.runDur(r)}; every step passed.` : '';
+    const lead = story ? story.happened : r.status === 'run' ? `${trigWords(r)} ${UI.agoText(r.started)}; now on step <b>${esc((r.steps.find((x) => x.status === 'run') || s).id)}</b>.` : r.status === 'ok' ? `Finished in ${UI.runDur(r)}; every step passed.` : '';
     const prBtn = r.repo && r.number ? `<a class="btn secondary" href="#/runs/${r.id}" ${UI.off('Opens the pull request on GitHub (not in the prototype)')}>${icon('pr')}Open the ${/issue/.test(r.trigger) ? 'issue' : 'pull request'}</a>` : '';
     const actions = r.status === 'run' ? `<button class="btn secondary" data-act="stop-run" data-run="${r.id}">${icon('x')}Stop run…</button>${prBtn}`
-      : `${['fail', 'stopped', 'idle'].includes(r.status) ? `<button class="btn primary" data-act="retry" data-run="${r.id}" data-from="${rec.failAt || ''}">${icon('updates')}Retry${rec.failAt ? ` “${esc(rec.failAt)}”` : ''}…</button>` : r.status === 'wait' ? `<a class="btn primary" href="#/attention">Answer it</a>` : ''}${prBtn}${same.length ? `<a class="btn secondary" href="#/runs/${r.id}/compare">${icon('split')}Compare…</a>` : ''}${inNeeds ? `<button class="btn ghost" data-act="run-dismiss" data-run="${r.id}">Dismiss</button>` : ''}`;
-    const facts = [['Started', `${UI.agoText(r.started)} <span class="dl-sub">(${UI.hm(r.started)})</span>`], r.status === 'run' ? ['Running for', UI.durText(Date.now() - new Date(r.started))] : ['Took', UI.runDur(r)], UI.usageOn() ? ['Cost', UI.runFig(r)] : null, ['Triggered by', trigWords(r)], ['Workflow', `<a class="dl-link" href="#/workflows/${encodeURIComponent(r.workflow)}">${esc(r.workflow)}</a>`], ['Run', `<span class="mono">${r.id}</span>`], r.retry_of ? ['Retry of', `<a class="mono dl-link" href="#/runs/${r.retry_of}">${r.retry_of}</a>`] : null, ['Record', `${UI.statusMark('ok', 'Signature verified')}`]];
+      : `${['fail', 'stopped', 'idle'].includes(r.status) ? (() => {
+          // when a check failed on a change an earlier step made, rerunning the check fails again: the primary redoes the
+          // step that made the change (its agent gets the failure), and rerunning the check alone is secondary
+          const at = rec.steps.findIndex((x) => x.id === rec.failAt), maker = at > 0 ? rec.steps.slice(0, at).reverse().find((x) => x.diff) : null, failed = rec.steps[at];
+          const one = (from, label, cls) => `<button class="btn ${cls}" data-act="retry" data-run="${r.id}" data-from="${esc(from)}">${icon('updates')}${label}…</button>`;
+          return maker && failed && failed.kind !== 'agent' ? one(maker.id, `Retry from “${esc(maker.id)}”`, 'primary') + one(rec.failAt, `Rerun “${esc(rec.failAt)}” only`, 'secondary') : one(rec.failAt || '', `Retry${rec.failAt ? ` from “${esc(rec.failAt)}”` : ''}`, 'primary'); })() : r.status === 'wait' ? `<a class="btn primary" href="#/attention">Answer it</a>` : ''}${prBtn}${same.length ? `<a class="btn secondary" href="#/runs/${r.id}/compare">${icon('split')}Compare…</a>` : ''}${inNeeds ? `<button class="btn ghost" data-act="run-dismiss" data-run="${r.id}">Dismiss</button>` : ''}`;
+    const facts = [['Started', `${UI.agoText(r.started)} <span class="dl-sub">(${UI.hm(r.started)})</span>`], r.status === 'run' ? ['Running for', UI.durText(Date.now() - new Date(r.started))] : ['Took', UI.runDur(r)], UI.usageOn() ? ['Cost', UI.runFig(r)] : null, ['Triggered by', trigWords(r)], ['Workflow', `<a class="dl-link" href="#/workflows/${encodeURIComponent(r.workflow)}">${esc(r.workflow)}</a>`], ['Run', `<span class="mono">${r.id}</span>`], r.retry_of ? ['Retry of', `<a class="mono dl-link" href="#/runs/${r.retry_of}">${r.retry_of}</a>`] : null, ['Record', r.status === 'run' || r.status === 'wait' ? 'signed when it finishes' : 'signed; the signature checks out']];
     return { toString: () => `<div class="page dl-page">
       <div class="dl-crumbs run-nav"><a href="#/activity">${icon('chev', 'flip')}Back to Activity</a></div>
       <div class="dl-phead"><div><h1 class="dl-h1-long">${title}</h1>${lead ? `<p class="dl-lead">${lead}</p>` : ''}</div>${UI.statusMark(UI.runS(r.status), UI.runWord(r.status), { lg: true })}</div>
@@ -205,7 +211,7 @@
       <div class="dl-cols"><div class="dl-col-main">
         <section class="dl-card"><header class="dl-ch"><h2>What happened</h2><span class="dl-sub">${rec.steps.length} steps · ${r.status === 'run' ? 'running' : UI.durText(rec.total)}</span></header>${tree(r, rec, s.id)}</section>
         ${stepCard(r, rec, s)}</div>
-        <div class="dl-col-side"><section class="dl-card"><header class="dl-ch"><h2>Details</h2></header>${UI.facts(facts)}<p class="dl-foot-note"><button class="link" data-act="run-record" data-run="${r.id}">Download the run record</button></p></section>
+        <div class="dl-col-side"><section class="dl-card"><header class="dl-ch"><h2>Details</h2></header>${UI.facts(facts)}</section>
           <section class="dl-card run-audit"><header class="dl-ch"><h2>Audit</h2><span class="dl-sp"></span><a class="dl-link" href="#/logs/audit?run=${r.id}">All</a></header><ul class="dl-list">${audit.slice(0, 6).map((a) => `<li class="dl-audit"><span class="dl-nt"><b>${esc(a.event.replace(/_/g, ' '))}</b><span class="dl-why">${esc(a.detail || '')}</span></span><span class="dl-age">${UI.agoText(a.ts)}</span></li>`).join('')}</ul></section></div></div>
     </div>`,
     after(main) { if (r.status !== 'run') return; const log = UI.$('#log', main); if (!log) return; log.scrollTop = log.scrollHeight;
@@ -214,7 +220,6 @@
   UI.act('run-tab', (b) => { dv.tab = b.dataset.v; UI.rerender(); });
   UI.act('run-step', (b) => { dv.sel[b.dataset.run] = b.dataset.step; if (b.dataset.tab) dv.tab = b.dataset.tab; UI.rerender(); });
   UI.act('run-pick', (b) => { dv.sel[b.dataset.run] = b.dataset.step; dv.tab = b.dataset.tab || dv.tab; UI.rerender(); });
-  UI.act('run-record', (b) => { const r = D.runs.find((x) => x.id === b.dataset.run); UI.download(`${r.id}.json`, JSON.stringify(Object.assign({}, r, { steps: UI.runRecord(r).steps.map((s) => ({ id: s.id, status: s.status, started_offset_ms: s.t0, duration_ms: s.ms, inputs: s.inputs, outputs: s.outputs })) }), null, 2)); UI.toast('Downloaded the run record', `${r.id}.json · signed, scrubbed`, 'ok'); });
   // dismissing is reversible, so it asks nothing; its toast carries the Undo
   UI.act('run-dismiss', (b) => { const href = '#/runs/' + b.dataset.run, was = D.attention.some((a) => a.href === href); D.dismissed = [...new Set((D.dismissed || []).concat(href))]; S.save(); UI.rerender();
     UI.toast(was ? 'Dismissed from Needs you' : 'Not in Needs you', 'the run and its record stay in Activity', 'ok', was ? { label: 'Undo', fn: () => { D.dismissed = D.dismissed.filter((h) => h !== href); S.save(); UI.rerender(); } } : null); });
