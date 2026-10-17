@@ -113,7 +113,8 @@
   });
 
   /* ---------- history ---------- */
-  const hv = { q: '', status: new Set(), wf: '', repo: '', since: '', cost: '', sel: new Set(), last: null };
+  const PAGE = 50;
+  const hv = { q: '', status: new Set(), wf: '', repo: '', since: '', cost: '', sel: new Set(), last: null, limit: PAGE };
   const SL = { ok: 'ok', run: 'running', fail: 'failed', wait: 'waiting', idle: 'parked', stopped: 'stopped' };
   const histMatch = (r) => {
     if (!UI.scopeKeeps(UI.botOfRun(r))) return false;
@@ -126,17 +127,19 @@
     return true;
   };
   const chipSel = (key, label, ic, opts) => `<label class="chip-select${hv[key] ? ' on' : ''}">${icon(ic)}<span class="sr-only">${label}</span><select data-on-change="hist-sel" data-k="${key}" aria-label="${label}">${opts.map(([v, l]) => `<option value="${esc(v)}"${String(hv[key]) === String(v) ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
+  /* history pages by cursor (the API returns { runs, next_cursor }): the first 50, then "Load 50 more" */
   function histRows() {
-    const rows = D.runs.filter(histMatch);
-    return rows.map((r) => `<tr class="click" data-href="#/${r.status === 'run' ? 'live' : 'runs'}/${r.id}">
+    const all = D.runs.filter(histMatch), rows = all.slice(0, hv.limit), more = all.length - rows.length;
+    return (rows.map((r) => `<tr class="click" data-href="#/${r.status === 'run' ? 'live' : 'runs'}/${r.id}">
       <td class="sel" data-l=""><input type="checkbox" class="cbx" data-act="hist-sel-row" data-id="${r.id}" aria-label="Select ${r.id}"${hv.sel.has(r.id) ? ' checked' : ''}></td>
       <td data-l="status">${st(r.status === 'stopped' ? 'fail' : r.status, SL[r.status] || r.status)}</td>
       <td data-l="run" class="mono"><a class="link-plain" href="#/${r.status === 'run' ? 'live' : 'runs'}/${r.id}">${r.id}</a></td>
       <td data-l="workflow"><b>${r.workflow}</b></td><td data-l="trigger" class="mono muted">${r.trigger}</td>
       <td data-l="target" class="mono">${UI.runTarget(r)}</td><td data-l="started" class="mono muted">${ago(r.started)} ago</td>
       <td data-l="duration" class="mono num">${r.finished ? Math.max(1, Math.round((new Date(r.finished) - new Date(r.started)) / 60000)) + 'm' : '…'}</td>
-      ${UI.usageOn() ? `<td data-l="usage" class="num">${UI.runFig(r)}</td>` : ''}<td class="muted small ellipsis hide-phone" style="max-width:260px">${esc(r.error || r.detail || '')}</td></tr>`).join('') || `<tr class="empty-row"><td colspan="9">No run matches these filters. <button class="link" data-act="hist-clear">Clear filters</button></td></tr>`;
+      ${UI.usageOn() ? `<td data-l="usage" class="num">${UI.runFig(r)}</td>` : ''}<td class="muted small ellipsis hide-phone" style="max-width:260px">${esc(r.error || r.detail || '')}</td></tr>`).join('') || `<tr class="empty-row"><td colspan="10">No run matches these filters. <button class="link" data-act="hist-clear">Clear filters</button></td></tr>`) + (more > 0 ? `<tr class="more-row"><td colspan="10"><button class="btn sm" data-act="hist-more">Load ${Math.min(PAGE, more)} more</button> <span class="muted small">showing ${rows.length} of ${all.length} · next cursor ${btoa(rows[rows.length - 1].id).replace(/=+$/, '')}</span></td></tr>` : '');
   }
+  UI.act('hist-more', () => { hv.limit += PAGE; histRefresh(); });
   UI.route('runs', () => {
     const n = D.runs.filter(histMatch).length;
     return `<div class="page">
