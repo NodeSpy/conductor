@@ -66,7 +66,7 @@ async function inject(page) {
         if (window.__obs) window.__obs.disconnect();
         window.__obs = new MutationObserver((ms) => { ms.forEach((m) => { const t = m.target.nodeType === 1 ? m.target : m.target.parentElement; if (!t || t.closest(IGNORE_MUT)) return; if (m.type === 'childList') { const nodes = [...m.addedNodes, ...m.removedNodes].filter((n) => !(n.nodeType === 1 && n.matches(IGNORE_MUT))); if (!nodes.length) return; } window.__muts++; }); });
         window.__obs.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true, attributeFilter: ['class', 'aria-pressed', 'aria-checked', 'aria-expanded', 'aria-disabled', 'style', 'open', 'value', 'hidden'] });
-        return { url: location.href, ls: localStorage.getItem('cd-proto-state-v5') || '', theme: localStorage.getItem('cd-theme') };
+        return { url: location.href, ls: localStorage.getItem('cd-proto-state-v5') || '', theme: localStorage.getItem('cd-theme'), demo: localStorage.getItem('cd-demo') };
       },
       overlay() { const d = document.querySelectorAll('.drawer-scrim'); if (d.length) return '.drawer-scrim .cdrawer'; const o = document.querySelector('#pop-menu, #scrim, .palette'); return o ? (o.id ? '#' + o.id : '.palette') : null; },
     };
@@ -117,11 +117,12 @@ async function crawlRoute(page, testInfo, route, { afterLoad } = {}) {
         report.broken.push(`${item.sel} "${item.text}": could not be clicked (${e.message.split('\n')[0].slice(0, 60)}; on top: ${onTop}; path ${item.path.join(' → ')})`); dirty = true; continue;
       }
       await page.waitForTimeout(140);
-      const after = await page.evaluate(() => ({ url: location.href, ls: localStorage.getItem('cd-proto-state-v5') || '', theme: localStorage.getItem('cd-theme'), muts: window.__muts || 0, overlay: window.__crawl ? window.__crawl.overlay() : false })).catch(() => ({ url: 'navigated', ls: '', muts: 1 }));
+      const after = await page.evaluate(() => ({ url: location.href, ls: localStorage.getItem('cd-proto-state-v5') || '', theme: localStorage.getItem('cd-theme'), demo: localStorage.getItem('cd-demo'), muts: window.__muts || 0, overlay: window.__crawl ? window.__crawl.overlay() : false })).catch(() => ({ url: 'navigated', ls: '', muts: 1 }));
       report.clicked++;
-      const changed = after.url !== before.url || after.ls !== before.ls || after.theme !== before.theme || after.muts > 0 || downloads > dl0;
+      // a demo-day switch reloads the page: that is its effect
+      const changed = after.url !== before.url || after.ls !== before.ls || after.theme !== before.theme || after.demo !== before.demo || after.muts > 0 || downloads > dl0;
       if (!changed) { report.dead.push(`${item.sel} "${item.text}"${item.path.length ? ` (after ${item.path.join(' → ')})` : ''}`); continue; }
-      if (after.url !== before.url || after.ls !== before.ls) dirty = true;
+      if (after.url !== before.url || after.ls !== before.ls || after.demo !== before.demo) dirty = true;
       // a signed or confirmed action (#su-go, #cf-ok) changes the data and re-renders the page: its "children" are the page's own controls, already crawled
       if (item.path.length < MAX_DEPTH && after.url === before.url && !/^#(su-go|cf-ok)$/.test(item.sel)) {
         const scope = after.overlay || null;

@@ -74,7 +74,7 @@
         const inner = `${UI.laneMark(s)}${s === 'idle' ? '' : `<span class="mark-say">${say}</span>`}`;
         const flip = pos(a) > 70 ? ' flip' : '';
         return id ? `<a class="mark${flip}" data-m="${s}" style="left:${pos(a)}%" href="#/${s === 'run' ? 'live' : 'runs'}/${id}" data-tip="${tip}" aria-label="${esc(l.lane)}: ${MW[s]} run ${id}">${inner}</a>` : `<span class="mark${flip}" data-m="${s}" style="left:${pos(a)}%" data-tip="${tip}" role="img" aria-label="${esc(l.lane)}: ${MW[s]}">${inner}</span>`; }).join('');
-      return `<div class="lane${loud.some(([, , s]) => s === 'fail' || s === 'wait') ? ' loud' : ''}"><div class="lane-name">${esc(l.lane)}<span class="lane-n">${fine ? `${fine} fine` : ''}</span></div><div class="lane-track">${strip}${marks}</div></div>`; }).join('');
+      return `<div class="lane${loud.some(([, , s]) => s === 'fail' || s === 'wait') ? ' loud' : ''}"><div class="lane-lbl"><div class="lane-name">${esc(l.lane)}</div>${fine ? `<span class="lane-n">${fine} fine</span>` : ''}</div><div class="lane-track">${strip}${marks}</div></div>`; }).join('');
     return { kept, legend: '', html: `<div class="lanes">${rows || UI.empty({ title: 'No runs here', body: 'Nothing in this folder ran in that time.', small: true })}${rows ? `<div class="lane"><div></div><div class="lane-axis">${ticks}</div></div><div class="nowline" aria-hidden="true"></div>` : ''}</div>` };
   };
   function score() {

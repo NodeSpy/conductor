@@ -17,7 +17,7 @@
 
   /* ---------- list ---------- */
   UI.route('browser', () => `<div class="page">
-    ${UI.head('Browsers', { sub: 'conductor\'s Chromium, one per agent session, sandboxed', actions: `${UI.folderChip()}<a class="btn" href="#/browser/add">${icon('key')}Add a login</a><a class="btn" href="#/browser/passkey">${icon('passkey')}Register a passkey</a>` })}
+    ${UI.head('Browsers', { lede: (() => { const w = D.browsers.filter((b) => b.status === 'wait').length, r = D.browsers.filter((b) => b.status === 'run').length; return `${w ? `<b>${w} ${w === 1 ? 'browser is' : 'browsers are'} waiting on you.</b> ` : '<b>Nothing needs you.</b> '}${D.browsers.length} open, ${r} in use by an agent right now.`; })(), lede2: 'conductor’s Chromium: one per agent session, sandboxed.', actions: `${UI.folderChip()}<a class="btn" href="#/browser/add">${icon('key')}Add a login</a><a class="btn" href="#/browser/passkey">${icon('passkey')}Register a passkey</a>` })}
     ${UI.tabs([['sessions', 'Sessions', '#/browser', D.browsers.length], ['logins', 'Logins', '#/browser/logins', D.access.credentials.length + D.access.logins.length]], 'sessions')}
     ${UI.scopeNote(D.browsers.filter((b) => !UI.scopeKeeps(b.identity.startsWith('bot:') ? b.identity.slice(4) : null)).length)}
     <div class="grid g3">${D.browsers.filter((b) => UI.scopeKeeps(b.identity.startsWith('bot:') ? b.identity.slice(4) : null)).map((b) => `
@@ -47,7 +47,7 @@
             <div class="url">${icon('lock', 'lockic')}<span class="ellipsis">${esc(b.url)}</span></div>
             ${UI.label(`${b.tabs} tab${b.tabs > 1 ? 's' : ''}`)}<span class="row tiny mono muted"><span class="rec"></span>CDP screencast · 12 fps</span></div>
           <div class="bscreen${bv.lease === b.id ? ' takeover' : ''}" id="screen" data-volatile>${bv.lease === b.id ? `<div class="ctrl-banner" id="banner">${icon('hand')}You have control · agent paused<span class="kbd on-accent">Esc</span> to release</div>` : ''}${(SITES[b.id] || SITES['b-03'])()}
-            <svg class="fake-cursor" id="cur" style="left:62%;top:44%;${bv.lease === b.id ? 'display:none' : ''}" viewBox="0 0 24 24"><path d="M4 2l16 9-7 2-3 7z" fill="#111" stroke="#fff" stroke-width="1.5"/></svg>
+            <svg class="fake-cursor" id="cur" style="left:62%;top:44%;${bv.lease === b.id ? 'display:none' : ''}" viewBox="0 0 24 24"><path d="M4 2l16 9-7 2-3 7z" fill="var(--color-text-primary)" stroke="var(--color-bg-surface)" stroke-width="1.5"/></svg>
           </div>
           <div class="panel-foot small"><span class="muted">${icon('shield')} jailed Chromium · CDP over a pipe (no debugging port) · egress via the allowlist proxy only</span><span style="margin-left:auto" class="mono tiny muted">${b.profile}</span></div>
         </div>

@@ -85,13 +85,13 @@ test('phone: the tree collapses to a drill-down list', async ({ page }) => {
 test('folder filters: Needs you, approvals, run history, browsers', async ({ page }) => {
   await go(page, '#/overview');
   await page.locator('.attn select[data-on-change="folder-scope"]').selectOption('work/billing');
-  await expect(page.locator('.attn .list')).toContainText('slack-ops.post to #incidents');
-  await expect(page.locator('.attn .list')).not.toContainText('terraform apply');
+  await expect(page.locator('.attn .list')).toContainText('Post the monthly forecast to #incidents');
+  await expect(page.locator('.attn .list')).not.toContainText('Replace the production web server');
   await expect(page.locator('.scope-note').first()).toContainText('work/billing');
   await go(page, '#/attention');
   await expect(page.locator('select[data-on-change="folder-scope"]').first()).toHaveValue('work/billing');
   await page.locator('select[data-on-change="folder-scope"]').first().selectOption('work/platform');
-  await expect(page.locator('.attn')).toContainText('terraform apply');
+  await expect(page.locator('.attn')).toContainText('Replace the production web server');
   await go(page, '#/runs');
   await expect(page.locator('#hist-body')).toContainText('bot:platform-sre');
   await expect(page.locator('#hist-body')).not.toContainText('ci-fixer');

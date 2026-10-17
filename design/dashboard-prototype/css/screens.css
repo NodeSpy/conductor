@@ -407,3 +407,8 @@ tr.folded { display: none; }
 .gs .gs-card.done .gs-n svg { color: var(--color-text-tertiary); }
 .gs .gs-card .gs-go { color: var(--color-text-secondary); }
 @media (max-width: 720px) { .hello .lede-2 { display: none; } .calm .hello h1 { font-size: 1.25rem; } }
+.lane-lbl { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; padding-right: var(--space-3); }
+.lane-lbl .lane-name { padding-right: 0; }
+.lane.loud .lane-lbl .lane-name { color: var(--color-text-primary); font-weight: var(--font-weight-semibold); }
+.site .top.dark b { color: var(--color-text-inverse); }
+.ctrl-banner.wait { background: var(--color-bg-raised); color: var(--color-status-warning-fg); border: var(--border-width) solid var(--color-status-warning-border); }

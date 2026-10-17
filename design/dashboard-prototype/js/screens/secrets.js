@@ -87,7 +87,7 @@
     const counts = Object.fromEntries(Object.keys(IN).map((k) => [k, D.secrets.filter(IN[k]).length]));
     const pendSettings = D.pending.filter((c) => c.coll === 'settings' || c.coll === 'secrets' || c.coll === 'vaults').length;
     return `<div class="page">
-    ${UI.head('Secrets &amp; vars', { sub: 'values are write-only', actions: `<button class="btn" data-act="vault-add">${icon('plus')}Add a vault</button><button class="btn primary" data-act="secret-add">${icon('key')}Add a secret</button>` })}
+    ${UI.head('Secrets &amp; vars', { lede: (() => { const bad = (S.view().vaults || []).filter((v) => v.status === 'fail'); return `${bad.length ? `<b>${bad.length === 1 ? `Vault ${bad[0].name} can't be reached.` : `${bad.length} vaults can't be reached.`}</b> Anything that reads from it fails until it's back. ` : '<b>Every vault is reachable.</b> '}${S.view().secrets.length} secrets in ${(S.view().vaults || []).length} vaults. Values are write-only: they never come back to the browser.`; })(), actions: `<button class="btn" data-act="vault-add">${icon('plus')}Add a vault</button><button class="btn primary" data-act="secret-add">${icon('key')}Add a secret</button>` })}
     ${UI.tabs([['main', 'Secrets, vaults &amp; settings', '#/secrets'], ['env', 'Env', '#/secrets/env', (S.view().env || []).length]], 'main')}
     <div class="grid g4" style="margin-bottom:18px">${D.vaults.map((v) => `<div class="panel stat vault-card${v.status === 'fail' ? ' bad' : ''}">
       <span class="k">${icon(VIC[v.type])} ${v.name} <span class="mono" style="text-transform:none;letter-spacing:0;margin-left:auto">${v.type}</span></span>

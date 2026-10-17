@@ -96,7 +96,7 @@ test('watching nothing in the wizard is allowed but explained', async ({ page })
 
 test('terms explain themselves (hover or keyboard focus); the glossary lists them; the top strip says what each chip means', async ({ page }) => {
   await go(page, '#/workflows', { fresh: true });
-  await expect(page.locator('.page-head .lede')).toContainText('fixed recipe');
+  await expect(page.locator('.page-head')).toContainText('fixed recipe');
   const t = page.locator('.page-head .term[data-term="workflow"]');
   await t.focus();
   await expect(page.locator('.tooltip')).toContainText('A fixed recipe');

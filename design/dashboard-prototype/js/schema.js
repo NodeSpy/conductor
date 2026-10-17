@@ -144,7 +144,7 @@
     { k: 'agent', label: 'Agent', icon: 'sparkle', desc: 'An agent with a prompt, a runtime and a model, sandboxed.', make: (id) => ({ id, type: 'agent', prompt: '' }) },
     { k: 'code', label: 'Code', icon: 'code', desc: 'Inline JavaScript, Python, shell… stdout becomes outputs.', make: (id) => ({ id, use: 'js', code: 'return { ok: true };\n' }) },
     { k: 'decide', label: 'Decide', icon: 'diamond', desc: 'Typed questions answered with probabilities.', make: (id) => ({ id, model: 'light', decide: { state: '', questions: { proceed: { type: 'noul', instructions: '' } } } }) },
-    { k: 'ask', label: 'Hand-off / approval', icon: 'hand', desc: 'Ask a human and wait: approve, revise or discard.', make: (id) => ({ id, uses: 'hoff.ask', options: { prompt: '', timeout: '1h' } }) },
+    { k: 'ask', label: 'Hand-off / approval', icon: 'hand', desc: 'Ask a human and wait: approve, revise or discard.', make: (id) => ({ id, uses: 'handoff.ask', options: { prompt: '', timeout: '1h' } }) },
     { k: 'wait', label: 'Wait', icon: 'clock', desc: 'sleep: a duration, or wait_for: a condition on a read verb.', make: () => ({ sleep: '30s' }) },
     { k: 'parallel', label: 'Parallel group', icon: 'workflows', desc: 'Branches run at once and join before the next step.', make: (id) => ({ parallel: [[{ id: id + '-a', log: 'branch a' }], [{ id: id + '-b', log: 'branch b' }]] }) },
     { k: 'bot', label: 'Hand to a bot or team', icon: 'members', desc: 'Deliver to a bot, or to a team whose rules (or lead) route it.', make: (id) => ({ id, bot: { team: 'platform', title: '{{.title}}' } }) },

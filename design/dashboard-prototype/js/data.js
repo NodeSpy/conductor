@@ -26,7 +26,7 @@
     { name: 'kv', use: 'kv', status: 'ok', detail: 'boltdb · 214 keys', events: 0, verbs: 902 },
     { name: 'tf-plan', use: 'terraform', status: 'ok', detail: 'engine tofu 1.8 · READ role', events: 0, verbs: 6 },
     { name: 'tf-apply', use: 'terraform', status: 'idle', detail: 'engine tofu 1.8 · WRITE role · no bot verb reaches it', events: 0, verbs: 1 },
-    { name: 'hoff', use: 'web', status: 'wait', detail: 'listen :8099 · 1 draft awaiting answer', events: 3, verbs: 3 },
+    { name: 'handoff', use: 'web', status: 'wait', detail: 'listen :8099 · 1 draft awaiting answer', events: 3, verbs: 3 },
   ];
 
   D.runtimes = [
@@ -98,7 +98,7 @@
     { kind: 'approval', s: 'ember', title: 'terraform apply · infra@3f2a9c1d', sub: 'platform-sre · p12 · +1 ~2 -0 · REPLACES aws_instance.web', href: '#/bots/platform-sre/proposals/p12', age: '7m' },
     { kind: 'approval', s: 'ember', title: 'slack-ops.post to #incidents', sub: 'billing-sre · p4 · requester chat:U-THIRD (user)', href: '#/bots/billing-sre/proposals', age: '22m' },
     { kind: 'failed', s: 'fail', title: 'ci-fixer failed on acme/web#1288', sub: 'step test · 2 failures', href: '#/runs/r-7ef0', age: '52m' },
-    { kind: 'needs_input', s: 'wait', title: 'hand-off awaiting answer · acme/infra#77', sub: 'pr-review · hoff draft (approve / revise / discard)', href: '#/runs/r-7ed1', age: '1h' },
+    { kind: 'needs_input', s: 'wait', title: 'hand-off awaiting answer · acme/infra#77', sub: 'pr-review · handoff draft (approve / revise / discard)', href: '#/runs/r-7ed1', age: '1h' },
     { kind: 'browser', s: 'wait', title: 'push approval requested by app.example.com', sub: 'agent:triage@acme/app · browser login', href: '#/browser/b-02', age: '3m' },
     { kind: 'update', s: 'run', title: 'v0.72.0 available', sub: 'auto-update applies within 10m · preflight passed', href: '#/updates', age: '4m' },
   ];
@@ -335,7 +335,7 @@ Primary Postgres for the platform services (acme/api, acme/web).
     kv: { use: 'kv', store: 'state' },
     'tf-plan': { use: 'terraform', engine: 'tofu', role: 'READ' },
     'tf-apply': { use: 'terraform', engine: 'tofu', role: 'WRITE' },
-    hoff: { use: 'web', listen: '127.0.0.1:8099', ttl: '30m' },
+    handoff: { use: 'web', listen: '127.0.0.1:8099', ttl: '30m' },
   };
   D.connectors.forEach((c) => (c.cfg = CC[c.name]));
   const RC = {

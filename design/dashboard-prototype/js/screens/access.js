@@ -59,7 +59,7 @@
   UI.route('security', () => {
     const d = D.daemon;
     return `<div class="page">
-      ${UI.head('Access', { sub: 'operators, passkeys, sessions and where the dashboard listens' })}
+      ${UI.head('Access', { lede: `<b>Only you can sign in</b>, with one of ${D.passkeys.length} passkeys; ${D.sessions.length} session${D.sessions.length === 1 ? ' is' : 's are'} active. The dashboard listens on this box and its tailnet address only.` })}
       <div class="grid g2">
         <div class="stack">
           <div class="panel"><div class="panel-head"><h3>Passkeys · ops</h3><div class="tools"><a class="btn sm" href="#/enroll?from=security">${icon('plus')}Add (CLI link)</a></div></div><div class="list">

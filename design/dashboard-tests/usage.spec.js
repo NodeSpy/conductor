@@ -47,7 +47,7 @@ test('default is off: no usage or cost UI on any screen, and the screens are sti
     await go(page, r);
     expect(await noUsageUI(page), r).toEqual([]);
     // no hole where usage would be: the overview's side column still has its panel and four stat tiles
-    if (r === '#/overview') { await expect(page.locator('.stats .stat')).toHaveCount(4); await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible(); }
+    if (r === '#/overview') { await expect(page.locator('.stats .stat')).toHaveCount(4); await expect(page.locator('.quiet-row.wfs summary')).toContainText('Workflows'); }
   }
   // cloud spend is a real-world action, not model usage: still visible
   await go(page, '#/bots/platform-sre/cases');

@@ -41,7 +41,7 @@ test('terraform: plain-language summary first, hashes under a disclosure; event 
   await go(page, '#/bots/platform-sre/proposals/p12', { fresh: true });
   await expect(page.locator('.prop-title')).toHaveText('Replace the production web server');
   await expect(page.locator('.req-banner.event')).toContainText('Started by an event');
-  await expect(page.locator('.tf-tiles')).toContainText('replaces');
+  await expect(page.locator('.tf-tiles')).toContainText('Replaces');
   await expect(page.locator('details.tech').last()).toContainText('plan sha256');
   await expect(page.locator('details.tech').last().locator('.hash').first()).toBeHidden();
 });

@@ -17,7 +17,7 @@
   UI.route('config', () => {
     const n = D.pending.length;
     return `<div class="page">
-    ${UI.head('Config', { sub: 'the file is the source of truth', actions: `<a class="btn" href="#/config/raw">${icon('code')}Edit YAML</a>${n ? `<a class="btn primary" href="#/config/apply">${icon('check')}${n} staged change${n > 1 ? 's' : ''}</a>` : `<button class="btn" ${UI.off('Nothing staged. Edit a section, a bot or a workflow, and its change waits here for review.')}>${icon('check')}No staged changes</button>`}` })}
+    ${UI.head('Config', { lede: n ? `<b>${n} ${n === 1 ? 'change is' : 'changes are'} waiting for your review.</b> Nothing applies until you do.` : '<b>No changes waiting.</b> Edit a section, a bot or a workflow, and the change waits here for review.', lede2: 'The file is the source of truth; every change is a diff, validated on a copy.', actions: `<a class="btn" href="#/config/raw">${icon('code')}Edit YAML</a>${n ? `<a class="btn primary" href="#/config/apply">${icon('check')}${n} staged change${n > 1 ? 's' : ''}</a>` : `<button class="btn" ${UI.off('Nothing staged. Edit a section, a bot or a workflow, and its change waits here for review.')}>${icon('check')}No staged changes</button>`}` })}
     <div class="grid g-side">
       <div class="stack">
         <div class="panel" id="display"><div class="panel-head"><h3>Display preferences</h3><span class="muted small">this browser only · instant · not config, no passkey</span></div><div class="panel-body stack tight small">

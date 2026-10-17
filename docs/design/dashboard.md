@@ -58,7 +58,7 @@ These came in with the brief and are not reopened here.
 ### 2.1 Navigation
 
 ```
-Now      Overview · Live · Needs you
+Now      Overview · Activity · Needs you
 Work     Run history · Workflows (+ builder) · Bots · Browsers
 System   Config · Secrets & vars · Packs & plugins · Connectors & hosts
          (connectors, runtimes, hosts, isolation) · Updates · Logs & audit · Access
@@ -66,18 +66,12 @@ System   Config · Secrets & vars · Packs & plugins · Connectors & hosts
 
 Some elements are on every screen:
 
-- **Status strip** (top, 34px, monospace). It shows:
-  - daemon up/paused and uptime;
-  - the version, and the available version;
-  - the sandbox verdict;
-  - paseo health;
-  - the running count;
-  - **"N need you"**, the one place the ember accent is used for counts.
-
-  It also shows the MagicDNS name and TLS state, so the operator always
-  knows which origin they're on.
-- **Rail** (left). Grouped navigation with live counts. It collapses to icons
-  below 1100px. Below 720px it becomes a **bottom tab bar**: Overview, Live,
+- **Top bar** (60px, 48px compact). Search (⌘K) on the left; on the right only how things are, in one word
+  ("All systems normal", "Something needs a look", "Dispatch paused"), the running count in quiet ink, and the
+  **needs-you count**, the one place ember marks a count. Uptime, version, the sandbox, agents and the address
+  (MagicDNS and TLS) are one tap away in the status menu.
+- **Rail** (left). Grouped navigation; only Needs you carries a count. The host card at the foot says the box is
+  healthy. It collapses to icons below 1100px. Below 720px it becomes a **bottom tab bar**: Overview, Activity,
   Approvals, Bots, More.
 - **⌘K palette**. Jump to any run, bot, workflow or setting, or run an
   action such as pausing dispatch or applying an update.
@@ -97,7 +91,7 @@ Some elements are on every screen:
 | Route | Screen |
 |---|---|
 | `#/overview` | Overview |
-| `#/live`, `#/live/<run>` | Live runs: step graph, streaming log, step inspector |
+| `#/live`, `#/live/<run>` | Activity: what ran when (lanes), running now, latest events; one live run: step graph, streaming log, step inspector |
 | `#/attention` | Needs you |
 | `#/runs`, `#/runs/<id>` | Run history, run detail |
 | `#/workflows`, `#/workflows/<name>` | Workflows, builder |
@@ -117,62 +111,103 @@ opened from a file.
 
 ## 3. Visual language
 
-The tool should be one you can keep open all day. It is dense but calm. It
-uses color for state and almost nothing else.
+The dashboard uses **Daylight**, conductor's brand and design system (`design/brand/` on `origin/design/brand`:
+`BRAND.md`, the brand book `system.html`, `tokens/tokens.json` → `tokens.css`). Warm, light-first, and written to
+be read: conductor tells you how things are going in a sentence before it shows you a table. This section is how
+the dashboard applies it; the brand book is the source of truth for values.
 
-- **Type.** Three typefaces, all SIL OFL and vendored:
-  - *Instrument Sans* for the UI;
-  - *Instrument Serif* italic for titles and big numbers (the "score sheet"
-    voice);
-  - *Martian Mono* for anything a machine said: ids, digests, times, costs,
-    YAML and logs.
-- **Color.**
-  - Surfaces are warm graphite (dark) or paper (light). Each theme is its own
-    set of steps, not an inversion.
-  - One **ember** accent (`#ff6a2b`, light `#cc4a0e`) means *you / act here*:
-    the primary button, Needs you, the "now" line, the focus ring.
-  - Status hues are reserved: ok, running, waiting, failed, parked, shadow.
-    Each always ships with a glyph and a label, so meaning never rides on
-    hue alone. The status set was run through the dataviz palette validator.
-    Red/green deuteranopia separation is below the floor, as it is for every
-    red/green pair, which is why the glyph and label are mandatory.
-- **Signature elements.**
-  - **The score**, on the overview: one staff per workflow and every run of
-    the last 12h as a mark on it. Running marks are animated stripes,
-    waiting marks are hollow, and the ember "now" line pulses.
-  - **The seal**, the passkey ring that fills as you sign.
-  - **The step plates** of the run graph, with a status edge and a flowing
-    dash on the active edge.
-- **Motion.** One staggered rise on page entry, log lines sliding in, and
-  pulses on live things. `prefers-reduced-motion` turns all of it off.
-- **Texture.** A faint dot grid on the page and a 3–5% grain overlay. The
-  builder canvas has a denser dot grid.
+### 3.0 Calm by default (exception-first)
 
-### 3.1 Shared components
+The most important rule, from Daniel's review ("it all looks so busy … I have to read everything all the time"):
+every screen answers **is anything wrong, and what needs me?** in about three seconds without reading, and says
+almost nothing when nothing does.
 
-Repeated patterns are one component each (`css/components.css`, helpers in
-`ui.js`), restyled once and used everywhere; screens compose them and don't
-restyle them.
+1. **One loud thing per screen.** What needs you is few, large and first: a plain title, one sentence, one action.
+   Everything else steps back: lower contrast, smaller, no colour.
+2. **Normal collapses into one quiet line.** Finished runs ("40 finished · all passed", expandable), healthy
+   connectors ("All 7 connectors are healthy"), the system ("All healthy"), and passing runs on the lanes (a faint
+   tick strip, not marks).
+3. **Colour only for exceptions.** Failed, waiting on you, needs you, and the "now" cursor. Running work keeps its
+   shape (a spinning arc) but is drawn in ink: it doesn't need anyone. More than about three coloured things on a
+   screen is too loud.
+4. **Less text by default.** One line per row. Ids, hashes, exact times, counts and paths sit behind hover (and on the
+   item's own page), never first on a line.
+5. **Direct labels.** Marks say what they are where they are ("failed 52 min ago"); no legends to decode.
+6. **Quiet states are complete.** "All quiet. Nothing needs you." with one line of how the day went is a whole
+   Overview.
 
-- **Choice cards** (`UI.choice`): icon left, title over description, left
-  aligned; clear hover, focus and selected states; a disabled card says why.
-  The choice made carries into the next step as a compact **chosen** strip
-  with *Change*.
-- **Wizard and stepper** (`UI.stepper`, `.wizard`, `.wz-card`): a readable
-  column (max 880px), a light dotted stepper that never outweighs the
-  content, and a footer with *Back* on the left and the primary action on the
-  right.
-- **Catalog cards**, **drawers** (create-in-place, layered over modals),
-  **forms** (`UI.form`), **tables**, **empty states** and **badges** (`tag`,
-  `origin`), with one size and rhythm.
+Each screen's one-sentence answer and a loudness budget are asserted by `dashboard-tests/calm.spec.js` on the
+mostly healthy demo day. The demo data has three days (`js/scenario.js`, chosen under ✦ Demo data in the rail):
+**a mostly healthy day** (the default: dozens of runs, one approval and one failure), **all quiet**, and
+**everything at once** (every exception, which the test suite runs on). The before/after pairs are at
+`review/calm.html` in the prototype.
+
+### 3.1 Tokens, type and shape
+
+- **Tokens only.** `css/tokens.css` is a verbatim copy of the brand's generated file; every colour, size, radius,
+  shadow and duration in the prototype is a semantic or component token (`--color-*`, `--type-*`, `--size-*`,
+  `--pad-*`, `--radius-*`, `--shadow-*`, `--motion-*`). No raw colours anywhere else (`daylight.spec.js` fails on
+  one). Accent as text uses `--color-text-accent`; `--color-accent-default` is for fills only.
+- **Themes.** `index.html` sets `data-theme` before paint: an explicit choice wins, otherwise the OS, live.
+  `color-scheme` is declared so in-app WebViews never auto-darken the page.
+- **Type.** Three faces, all SIL OFL and self-hosted (`fonts/`): **Atkinson Hyperlegible Next** for everything
+  people read (body 15px, `--type-body-m`), **Fraunces** (upright, SemiBold, soft) for short human titles only
+  (five words or fewer, 20px or more: page titles, the greeting, card titles), and **Atkinson Hyperlegible Mono**
+  only for literal code, ids, YAML and logs (12px or more). Generated titles (runs, cases, proposals) are `h3` in
+  the sans with any machine detail on a mono line below. Nothing renders under 11.5px; tables use tabular figures.
+- **Shape.** 10px controls, 14px cards, 18px overlays, 22px phone sheets; warm soft shadows in light, lighter
+  surfaces in dark. No film grain or dot grid on app surfaces.
+- **Icons.** Lucide (ISC, `assets/icons/`) at a 1.75 stroke, one icon per concept; Daylight's own status glyphs
+  (`UI.glyph`), each a distinct shape so they read in one colour.
+- **Density.** Comfortable by default (52px rows); Compact (36px rows) is a per-browser display preference wired to
+  Daylight's density tokens (`data-density` on `<html>`). Phones are always comfortable (44px targets).
+- **Motion.** One quiet rise on page entry; drawers and sheets from their edge; the running arc spins; nothing moves
+  after an approval. `prefers-reduced-motion` stops it all.
+- **The logo** is one swappable asset: `assets/logo/` holds a complete Daylight logo kit (today Fermata,
+  strengthened) and `logo.js`, the one reference. The top bar, phone header, sign-in and enrolment draw the kit's
+  `mark-inline.html` beside the live-text wordmark (Fraunces); `index.html` links the kit's favicon set,
+  apple-touch icon and `manifest.webmanifest` (PWA icons). Swapping the logo is copying another kit's files over
+  the folder.
+- **Illustration.** Daylight's sunrise (the arch rising over a hairline horizon) appears only in empty states, the
+  greeting and the sign-in page, never in the mark.
+
+### 3.2 Shared components
+
+Repeated patterns are one component each, restyled once and used everywhere; screens compose them and don't
+restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
+
+- **Status marks, labels, filter chips, counts and row states** are drawn only by `UI.statusMark`, `UI.label`,
+  `UI.filterChip` / `UI.selectChip`, `UI.count` and `UI.rowState` (`css/marks.css`). A status is a **margin
+  mark**: a small glyph and a plain word, no capsule; passed and parked differ in shape and hue. A row that needs
+  someone gets a thin coloured leading edge and a reason line under its name; no row tints. The brand's final
+  status-and-label system swaps in there and nowhere else.
+- **Grouped lists** (`UI.groupHead`, `UI.groupRow`): "Needs attention · N" with one sentence and one action, then
+  "Running now", then "Finished" in quiet ink, folded to one line by default.
+- **Quiet rows** (`.quiet-row`): one line saying how a part is ("System · All healthy"), the detail one tap away.
+- **Summary header** (`UI.head`): the title, then one sentence that answers the page's question (bold count first
+  when something needs you), an optional quieter second line, then actions.
+- **Choice cards** (`UI.choice`): a neutral icon, title over description, a radio on the right; the selected card
+  takes the accent edge and wash; a disabled card says why. The choice made carries into the next step (`UI.chosen`).
+- **Wizard and stepper** (`UI.stepper`): at most five steps named for the decision; done is an ink check, current
+  an ember ring; Back keeps input; the review lives inside the wizard.
+- **Empty states** (`UI.empty`): the sunrise, a short human title, why it's empty, the one next step.
+- **Toasts** (`UI.toast`): past tense and specific, a status glyph, 6 seconds (errors stay until dismissed), above
+  the phone tab bar. **Dialogs** for decisions, **drawers** for create-in-place beside a list (layered over a dialog
+  when needed), **sheets** on the phone.
+- **Code, YAML and diffs**: the only long mono, on the sunken surface; no space before a colon; diffs carry +/−
+  gutter marks and a 2px bar besides the tint; the header names the file and the enclosing key.
 
 #### The value-source field
 
 Every configurable value (connector instance settings, plugin config, env
 vars, settings, workflow step inputs, bot and team settings that take
 secrets, login credentials) uses one field, `type: 'value'` (`'secret'` is
-the same field with `sensitive: true`). A compact switcher on the field picks
-where the value comes from:
+the same field with `sensitive: true`). The source is a quiet menu inside the
+field (Daylight), not a segmented control in front of it: for a sensitive field
+**Secret** (typed, stored encrypted in conductor's vault), **Vault item** and
+**Environment variable** are listed, and **Setting** sits under "Other
+sources"; for a plain field, typed value and setting are the other sources. The
+sources:
 
 | Source | Writes | Notes |
 |---|---|---|
@@ -219,6 +254,21 @@ have today.
 
 The purpose is to answer, in under five seconds: is it healthy, what is it
 doing, and what needs me?
+
+In reading order (calm by default, §3.0):
+
+1. **The answer**, the largest text on the page: "2 things need you." in ember, or "All quiet. Nothing needs you."
+   Beneath it one quiet line: "Everything else is fine: 49 of 54 runs fine in the last 12 hours · 3 running now ·
+   all systems healthy."
+2. **Needs you**, only when something does: at most three large rows (mark, plain title, one sentence, age, one
+   verb; ids behind hover), "See all" beyond three.
+3. **Get started** (until hidden): a compact four-step checklist.
+4. **Runs, last 12h** as activity lanes (Score's pattern): one named lane per workflow or bot, time left to right,
+   passing runs a faint tick strip, failures and runs waiting on you as labelled marks, running work as an ink arc,
+   the ember "now" line.
+5. **Quiet rows**, one line each, open on demand: Since you last looked (Broadsheet's digest: counts, one line
+   each, linked; new failures and approvals in bold), Today in numbers (the four figures), For your information
+   (an update that installs itself, a sandbox block), Latest events, Workflows (or Model usage), System.
 
 | Panel | Data | Source today |
 |---|---|---|
@@ -278,9 +328,13 @@ diff. **NEW** endpoint: `GET /api/v1/usage?days=` returns
 `{ providers: { <id>: { observed: {runs, turns}, reported?: {windows[], tokens, by_model{}, source}, usd? } } }`;
 the daemon never adds providers together, and the UI has no code path that does.
 
-### 4.2 Live (running workflows)
+### 4.2 Activity and one live run
 
-This screen watches one run step by step.
+**Activity** (`#/live`) answers "what is running, and how has the day gone?": a summary sentence, the lanes
+(what ran when, 1h / 12h / 24h), Running now (plain titles, step x of y) and the latest events.
+
+**One live run** (`#/live/<run>`) watches a run step by step; its title is the run's plain headline ("Fixing a
+failing check") with the workflow, target and id on a detail line.
 
 - **Step graph.** The data comes from the config's step list. Steps run in
   order, and `parallel: [[…],[…]]` branches join before the next step; there
@@ -310,14 +364,21 @@ Operations:
 
 ### 4.3 Run history and run detail
 
-- **History.** Filters: status, workflow, repo, time range, provider (when usage display is on),
-  and free text over ids and errors; bulk select (retry the failed ones, export). Reads `<state>/history/*.json`. Listing
+- **History** is a grouped list: **Needs attention · N** (failed or waiting on you, one sentence, one action:
+  retry the failed ones), **Running now**, then **Finished** folded to one line ("40 finished · 39 passed, 1
+  parked", Show them). Each row is one plain headline ("Couldn't fix a failing check") with a reason line under it
+  (the plain error, or workflow and target), the time in words and the duration; the run id and trigger are on
+  hover. Search is always there; status, workflow, repo, time range, provider (when usage display is on) and folder
+  sit behind one Filter button. Bulk select (retry the failed ones, export). Reads `<state>/history/*.json`. Listing
   more than ~500 records cheaply needs a small **NEW** index: an append-only
   `history/index.jsonl` written by `PutHistory` and rebuilt when missing.
   Each record's HMAC (`Sig`) is verified, and a record that fails shows as
   **tampered**.
   History pages by cursor (`GET /runs?cursor=`), 50 at a time.
-- **Detail** (one run record, the shape of `RunHistory`/`StepRecord`):
+- **Detail** (one run record, the shape of `RunHistory`/`StepRecord`): the plain headline as the title, the mark,
+  time and duration, then the ids on a mono detail line. The steps are a **run story**: top to bottom, each step's
+  outcome in a sentence, its duration on the right and a thin bar on the run's time axis; the failing step is
+  called out and later steps say "Not reached"; a nested workflow call is one node you can open.
   - **What happened / What you can do** for failed, waiting and parked runs.
   - A timeline with a time axis; every row selects its step (↑/↓ too); each
     agent step's usage when usage display is on.

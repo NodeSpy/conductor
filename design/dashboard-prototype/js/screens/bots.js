@@ -521,7 +521,7 @@
     if (!D.prefs.seenSafety) { D.prefs.seenSafety = true; S.save(); }
     const rows = D.bots.map((m) => ({ m, x: UI.botCan(m) }));
     const own = rows.reduce((a, r) => a + r.x.own.filter((i) => i.t !== 'observe').length, 0);
-    return `<div class="page">${UI.head('Safety', { sub: 'what your bots may do without asking you' })}
+    return `<div class="page">${UI.head('Safety', { lede: `<b>Nothing risky happens without you.</b> What each of your ${D.bots.length} bots does on its own, what it asks you first, and what it never does.` })}
       <div class="callout small" style="margin-bottom:14px">${icon('shield')} The agent sandbox is <b>enforcing</b>: bots read through conductor and can't reach files or the network beyond what you allowed. Below, every bot's granted actions by what happens: done on its own, asked first, or refused. ${own ? `<b>${own} action${own > 1 ? 's' : ''}</b> beyond reading run${own > 1 ? '' : 's'} without asking.` : 'Nothing beyond reading runs without asking.'}</div>
       ${UI.tierLadder()}
       <div class="stack" style="margin-top:14px">${rows.map(({ m }) => `<div class="panel"><div class="panel-head">${UI.sigil(m, 'sm')}<h3><a class="link-plain" href="#/bots/${m.name}/access">${esc(m.name)}</a></h3><span class="muted small">${teamOf(m) ? `team ${esc(teamOf(m).name)} · runs alone up to ${S.ceilingOf(m)}` : 'solo'}</span><div class="tools"><a class="btn sm ghost" href="#/bots/${m.name}/access">${icon('edit')}Change</a></div></div><div class="panel-body">${UI.botCanHTML(m, true)}</div></div>`).join('')}</div></div>`;

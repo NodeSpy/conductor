@@ -81,7 +81,7 @@
   UI.route('updates', () => {
     const d = D.daemon, u = S.staged('update', 'update'), avail = d.update.available;
     return `<div class="page">
-      ${UI.head('Updates', { sub: `running ${d.version}`, actions: `<button class="btn" data-act="upd-check">${icon('updates')}Check now</button>` })}
+      ${UI.head('Updates', { lede: d.update.available ? `<b>${d.update.available} is ready.</b> It installs itself within 10 minutes; running work finishes first. You're on ${d.version}.` : `<b>conductor is up to date</b> (${d.version}).`, actions: `<button class="btn" data-act="upd-check">${icon('updates')}Check now</button>` })}
       <div class="grid g-side">
         <div class="stack">
           ${avail ? `<div class="panel" style="border-color:color-mix(in srgb,var(--color-status-running-solid) 45%,var(--color-border-subtle))"><div class="panel-body"><div class="row wrap" style="gap:16px;align-items:flex-start">
@@ -214,7 +214,7 @@ ${D.pending.filter((x) => x.coll === 'connectors' && x.before == null).map((x) =
     const audit2 = `<div class="filters"><div class="input-icon">${icon('search')}<input class="input" placeholder="event, actor, run, case…" value="${esc(lg.aq)}" data-on-change="audit-q" aria-label="Search audit"></div>${UI.selectChip({ icon: 'members', on: !!lg.actor, label: 'Actor', attrs: 'data-on-change="audit-actor"', options: `<option value="">actor: anyone</option>${actors.map((x) => `<option${lg.actor === x ? ' selected' : ''}>${esc(x)}</option>`).join('')}` })}${runF ? UI.filterChip({ tag: 'a', href: '#/logs/audit', on: true, noCheck: true, attrs: 'aria-label="Clear the run filter"', text: `run ${esc(runF)} ${icon('x')}` }) : ''}${AUDIT_EV.map((e) => UI.filterChip({ on: lg.ev.has(e), act: 'audit-ev', attrs: `data-e="${e}"`, text: e })).join('')}<span class="count-note">${rows.length} of ${D.audit.length}</span></div>
       <div class="panel"><table class="tbl responsive"><thead><tr><th>when</th><th>event</th><th>actor</th><th>detail</th></tr></thead><tbody>${rows.map((a) => `<tr><td data-l="when" class="mono tiny muted">${ago(a.ts)} ago</td><td data-l="event" class="mono" style="color:var(--color-status-running-fg)">${a.event}</td><td data-l="actor" class="mono small">${a.who}</td><td data-l="detail" class="small">${esc(a.detail)}</td></tr>`).join('') || '<tr class="empty-row"><td colspan="4">No audit lines match.</td></tr>'}</tbody></table>
       <div class="panel-foot small muted">audit.jsonl · append-only · every dashboard action is audited with the operator, the passkey credential and the client address.</div></div>`;
-    return `<div class="page">${UI.head('Logs &amp; audit', { actions: `<button class="btn" data-act="log-dl" data-t="${tab}">${icon('download')}Download</button>` })}${UI.tabs([['daemon', 'Daemon log', '#/logs/daemon'], ['audit', 'Audit', '#/logs/audit', D.audit.length]], tab)}${tab === 'audit' ? audit2 : daemon}</div>`;
+    return `<div class="page">${UI.head('Logs &amp; audit', { lede: `${D.audit.length} audit events recorded; the daemon log follows live. Every operator action, approval and config change is here.`, actions: `<button class="btn" data-act="log-dl" data-t="${tab}">${icon('download')}Download</button>` })}${UI.tabs([['daemon', 'Daemon log', '#/logs/daemon'], ['audit', 'Audit', '#/logs/audit', D.audit.length]], tab)}${tab === 'audit' ? audit2 : daemon}</div>`;
   }, { nav: 'logs' });
   UI.act('log-lvl', (b) => { lg.lvl = b.dataset.v; UI.rerender(); });
   UI.act('log-q', (el) => { lg.q = el.value; UI.rerender(); });

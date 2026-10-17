@@ -215,3 +215,5 @@ details.adv > summary::-webkit-details-marker { display: none; }
 .flt-row .select { max-width: none; flex: 1; }
 .side-head .muted.tiny { display: none; }
 }
+/* step numbers: the UI face in tabular figures (the serif is for short human titles only) */
+.sc-num { font: var(--type-h4); font-variant-numeric: tabular-nums; color: var(--color-text-tertiary); }
