@@ -229,7 +229,7 @@
         <label class="ev-pick" data-tip="A real past event from run history: Test runs steps against it"><span class="caps">test event</span><select class="select mono" data-on-change="wf-ev" aria-label="Test event"><option value="">— none —</option>${evs.map((x) => `<option value="${x.id}"${x.id === B.ev ? ' selected' : ''}>${esc(x.label)}${x.at ? ` · ${x.at < 60 ? x.at + 'm' : Math.round(x.at / 60) + 'h'} ago` : ''}</option>`).join('')}${srcs.filter((so) => so.on !== 'manual' && !evs.some((x) => x.on === so.on)).map((so) => `<option disabled>no ${esc(so.on)} events in the last 14 days</option>`).join('')}<option value="__paste__">Paste a payload…</option></select></label>
         <button class="btn sm" data-act="wf-test-all" ${B.ev ? '' : UI.off('Pick a test event first')} ${B.err ? UI.off('Fix the YAML first') : ''}>${icon('play')}Test all</button>
         <button class="btn sm" data-act="wf-save" ${saveBlock ? UI.off(saveBlock) : ''}>${icon('check')}Save</button>
-        <button class="btn sm primary" data-act="wf-deploy" ${deployBlock ? UI.off(deployBlock) : ''}>${icon('zap')}Deploy</button>
+        <button class="btn sm primary" data-act="wf-deploy" ${deployBlock ? UI.off(deployBlock) : ''}>${icon('obj-deploy')}Deploy</button>
       </div>`;
   }
 

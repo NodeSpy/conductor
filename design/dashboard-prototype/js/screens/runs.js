@@ -207,7 +207,7 @@
         ${chipSel('wf', 'Workflow', 'workflows', [['', 'workflow: any']].concat([...new Set(D.runs.map((r) => r.workflow))].map((w) => [w, w])))}
         ${chipSel('repo', 'Repo', 'branch', [['', 'repo: any']].concat([...new Set(D.runs.map((r) => r.repo).filter(Boolean))].map((w) => [w, w])))}
         ${chipSel('since', 'Time range', 'clock', [['', 'any time'], ['60', 'last 1h'], ['360', 'last 6h'], ['1440', 'last 24h']])}
-        ${!UI.usageOn() ? '' : chipSel('cost', 'Provider', 'zap', [['', 'provider: any']].concat(Object.keys(D.usage.providers).map((p) => [p, UI.provLabel(p)])))}
+        ${!UI.usageOn() ? '' : chipSel('cost', 'Provider', 'sparkle', [['', 'provider: any']].concat(Object.keys(D.usage.providers).map((p) => [p, UI.provLabel(p)])))}
         ${UI.folderChip()}</div></details><span class="count-note" id="hist-n">${n} of ${D.runs.length}</span>
       </div>
       <div class="panel"><table class="tbl responsive"><thead><tr><th class="sel"><input type="checkbox" class="cbx" data-act="hist-sel-all" aria-label="Select all shown"></th><th>What it is</th><th>What happened</th><th>Risk</th><th>Status</th><th>Started</th><th class="num">Took</th>${UI.usageOn() ? `<th class="num">Usage · ${UI.measHead()}</th>` : ''}</tr></thead><tbody id="hist-body">${histRows()}</tbody></table><div id="hist-bulk">${histBulk()}</div>

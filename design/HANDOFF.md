@@ -53,7 +53,8 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 - `js/schema.js` plugin/connector/verb/event declarations. `js/store.js` collections, staging, the config
   pipeline (`S.stage`, `S.view`, `S.configText`, `S.envText`, `S.validate`, `S.apply`).
 - `js/ui.js` router, forms (`UI.form`, `UI.fieldHTML`), drawers, guarded dismissal (`UI.dismissModal`), shared
-  component helpers (`UI.choice`, `UI.chosen`, `UI.stepper`). `css/components.css` holds the shared components.
+  component helpers (`UI.choice`, `UI.chosen`, `UI.stepper`, `UI.statusMark`, `UI.objectIcon`, `UI.actionIcon`,
+  `UI.riskMarker`, `UI.envTag`, `UI.row`, `UI.metaLine`). `css/components.css` holds the shared components.
 - `js/usage.js` usage display (off by default, per provider). `js/valuesource.js` the value-source field.
 - `js/runrec.js` one record per run (steps, timing, inputs, outputs, logs, diffs), the run story and run-scoped
   audit. `js/glossary.js` terms (`UI.term`) and `#/glossary`. `js/palette.js` ⌘K and single-key shortcuts.
@@ -70,6 +71,21 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
   access (sign-in, enroll, passkeys).
 
 ## Done (commits on this branch, newest first)
+
+- **Meaning at a glance** (the review that corrected "calm by default": scannable, with information kept): object and
+  action icons (`UI.objectIcon`, `UI.actionIcon`; one meaning per glyph, always with a word), the risk ladder
+  (`UI.riskOf`, `UI.riskMarker`: reads only → reversible → changes things → touches production → spends money →
+  destructive, from tier, verb and environment), environment tags (`UI.envTag`), one row anatomy (`UI.row`, `.xrow`:
+  icon · title + reason · context · risk · status · time) on Needs you, Activity, proposals and the Overview; the
+  information the calm pass had folded away is back on the page (lanes legend, workflow columns, bot facts, cases'
+  requester and route). Only hashes, raw ids and payloads are disclosed on demand.
+- **Run detail** (Activity › a running run): no run tabs; Back to Activity keeps Activity's filters and scroll
+  position; "‹ 1 of 3 running ›"; a labelled metadata line (`UI.metaLine`: Started 13:48 (6 min ago) · Running for
+  6 min · Run r-7f3a · Workflow ci-fixer · Check on acme/api#482) also on run detail, compare, proposals and cases;
+  Open in paseo moved onto the steps that have a live paseo session ("Watch or take over this agent's conversation");
+  the header keeps whole-run actions only (Stop run…, marked destructive on the risk ladder, confirmed). Running is
+  drawn in ink everywhere through the shared status mark (`status.spec.js` fails on a hand-written mark, on the
+  running hue outside tokens.css, or on one state rendered in two colours).
 
 - **From the iPhone review**: one stepper component everywhere, compact ("Step 2 of 5 · Watches" + a thin bar)
   whenever the labelled steps don't fit, never overlapping (`wizard.spec.js`, plus stepper checks in the layout and
@@ -120,7 +136,8 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 | Knowledge kinds | done, on conductor's real kinds and collection locations |
 | Visual QA bar + shared components | done: layout (both themes), iPhone WebKit sweep, dismiss, copy-number, Daylight and calm specs |
 | Daylight adoption | done (this pass) |
-| Calm by default (exception-first) | done (this pass): every key screen; `calm.spec.js`; `review/calm.html` |
+| Calm by default (exception-first) | done, then corrected: scannable with information kept (icons, risk ladder, env tags, one row anatomy); `calm.spec.js`; `review/calm.html` |
+| Run detail (no tabs, back with state, labelled ids, paseo per step, one status look) | done; `status.spec.js` |
 | Passkey enroll cancel + every flow has a way out | done (dismiss spec) |
 | Shared folders across workflows | done |
 

@@ -116,11 +116,14 @@ The dashboard uses **Daylight**, conductor's brand and design system (`design/br
 be read: conductor tells you how things are going in a sentence before it shows you a table. This section is how
 the dashboard applies it; the brand book is the source of truth for values.
 
-### 3.0 Calm by default (exception-first)
+### 3.0 Scannable at a glance (exception-first, information kept)
 
 The most important rule, from the first review ("it all looks so busy … I have to read everything all the time"):
 every screen answers **is anything wrong, and what needs me?** in about three seconds without reading, and says
-almost nothing when nothing does.
+almost nothing when nothing does. A second review corrected an over-correction: calm must not mean hidden. The
+goal is that every row is **identifiable at a glance** (what kind of thing, how risky, where it lands, how it is
+going) with the information kept on the page. So the rules below are about order and emphasis, not removal; the
+semantic icons, the risk ladder and the environment tags (§3.2) do the identifying.
 
 1. **One loud thing per screen.** What needs you is few, large and first: a plain title, one sentence, one action.
    Everything else steps back: lower contrast, smaller, no colour.
@@ -130,8 +133,10 @@ almost nothing when nothing does.
 3. **Colour only for exceptions.** Failed, waiting on you, needs you, and the "now" cursor. Running work keeps its
    shape (a spinning arc) but is drawn in ink: it doesn't need anyone. More than about three coloured things on a
    screen is too loud.
-4. **Less text by default.** One line per row. Ids, hashes, exact times, counts and paths sit behind hover (and on the
-   item's own page), never first on a line.
+4. **Information stays; only the truly secondary is disclosed.** Rows keep their facts (what, context, risk,
+   status, time) in fixed columns. Only hashes, raw ids and raw payloads go behind hover or a "Technical details"
+   fold; where an id is shown it is labelled ("Run r-7f3a", "Pull request acme/api#482") and durations are human
+   ("2 h 30 min", never "150 min" or "2h30m").
 5. **Direct labels.** Marks say what they are where they are ("failed 52 min ago"); no legends to decode.
 6. **Quiet states are complete.** "All quiet. Nothing needs you." with one line of how the day went is a whole
    Overview.
@@ -181,6 +186,35 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
   mark**: a small glyph and a plain word, no capsule; passed and parked differ in shape and hue. A row that needs
   someone gets a thin coloured leading edge and a reason line under its name; no row tints. The brand's final
   status-and-label system swaps in there and nowhere else.
+- **One status, one look.** Every status a screen shows goes through `UI.statusMark`; no screen hand-writes a mark
+  or a status dot, and each state has one colour across the app. Running is ordinary work and is drawn in ink
+  everywhere (the mark, graph edges, progress bars, the run story); the running hue lives only in `tokens.css`. Step
+  kinds (agent, code, decide …) are told by icon and word in ink; status hues are not reused as kind colours
+  (`status.spec.js`).
+- **Object and action icons** (`UI.objectIcon(kind)`, `UI.actionIcon(kind)`): what a thing is (run, approval, pull
+  request, issue, check, incident, deploy, Terraform, cloud spend, bot, team, workflow, case, connector, login,
+  secret …) and what an action does (reads, comments or posts, pushes code, changes things, applies infrastructure,
+  spends money, deletes or destroys, changes permissions). Lucide glyphs, one meaning each, always with a word (or
+  a label for screen readers where the word is the column header). The icon audit gave every glyph one meaning: the bell is
+  "needs you" everywhere (no diamond), the diamond is only a decide step, the bolt only a connector action (pinning
+  is a pin, testing a host is a plug, CI work is a check list, deploying a rocket), and status glyphs are never
+  reused as object icons.
+- **The risk ladder** (`UI.riskOf`, `UI.riskMarker`): six rungs, a small stepped bar plus a word. 0 *Reads only*,
+  1 *Reversible* (comments, posts), 2 *Changes things*, 3 *Touches production*, 4 *Spends money*, 5 *Destructive*
+  (deletes, permission changes, anything at tier `never`). It is derived from the tier (`observe` → 0, `propose` →
+  2, `commit_money` → 4, `never` → 5), the verb (`.post`/`.comment` → 1, delete/destroy/grant → 5) and the
+  environment (a non-read action on production is at least 3). Rungs 3–5 carry colour (warning, info, danger);
+  rung 3 and up also hatch the row's leading edge. Shown on approvals, proposals, Needs you, activity rows, run
+  headers, workflow steps, the step picker and a bot's "what it can do"; destructive controls carry it too (Stop
+  run).
+- **Environment tags** (`UI.envTag`): *production* (uppercase, amber, a solid square), *staging* (outline), *local*
+  (dashed). Only where an action lands somewhere; never decorative.
+- **One row anatomy** (`UI.row`, `.xrow`): `[icon: what] · [title + reason line] · [context] · [risk] · [status +
+  word] · [time]`, fixed columns on desktop so the eye can run down one; on the phone the icon and title lead and
+  risk and status wrap under the title. Needs you, Activity, proposals and the Overview lists use it.
+- **Labelled metadata line** (`UI.metaLine`): the facts under a title as label–value pairs with object icons:
+  "Started 11:12 (2 h ago) · Running for 2 h 30 min · Run r-7f3a · Workflow ci-fixer · Pull request acme/api#482".
+  Used on runs, compare, proposals and cases; never a bare run of ids.
 - **Grouped lists** (`UI.groupHead`, `UI.groupRow`): "Needs attention · N" with one sentence and one action, then
   "Running now", then "Finished" in quiet ink, folded to one line by default.
 - **Quiet rows** (`.quiet-row`): one line saying how a part is ("System · All healthy"), the detail one tap away.
@@ -342,8 +376,12 @@ the daemon never adds providers together, and the UI has no code path that does.
 **Activity** (`#/live`) answers "what is running, and how has the day gone?": a summary sentence, the lanes
 (what ran when, 1h / 12h / 24h), Running now (plain titles, step x of y) and the latest events.
 
-**One live run** (`#/live/<run>`) watches a run step by step; its title is the run's plain headline ("Fixing a
-failing check") with the workflow, target and id on a detail line.
+**One live run** (`#/live/<run>`) watches a run step by step. One run per page: there are no run tabs. A
+**Back to Activity** link returns to Activity with its filters and scroll position as you left them, and
+"‹ 1 of 3 running ›" steps through the running runs in Activity's order. The title is the run's plain headline
+("Fixing a failing check") with its status mark and risk rung; under it the labelled metadata line (started,
+running for, run, workflow, target). The header's actions are only those for the whole run: **Stop run…**, marked
+on the risk ladder and confirmed.
 
 - **Step graph.** The data comes from the config's step list. Steps run in
   order, and `parallel: [[…],[…]]` branches join before the next step; there
@@ -369,7 +407,9 @@ Operations:
 - **Stop run**: **NEW** cancel through the engine's context, with the same
   grace as a reload checkpoint.
 - **Retry from step**: control `retry {run_id, from_step, force_replay}`.
-- **Open in paseo**: a deep link.
+- **Open in paseo** lives on the step, not the run: only a step with a live paseo session has it (an agent step on
+  a paseo runtime, a hand-off, a bot's home session), with the line "Watch or take over this agent's
+  conversation". A run with no such step shows no paseo link at all.
 
 ### 4.3 Run history and run detail
 
@@ -384,8 +424,8 @@ Operations:
   Each record's HMAC (`Sig`) is verified, and a record that fails shows as
   **tampered**.
   History pages by cursor (`GET /runs?cursor=`), 50 at a time.
-- **Detail** (one run record, the shape of `RunHistory`/`StepRecord`): the plain headline as the title, the mark,
-  time and duration, then the ids on a mono detail line. The steps are a **run story**: top to bottom, each step's
+- **Detail** (one run record, the shape of `RunHistory`/`StepRecord`): the plain headline as the title, the mark
+  and the risk rung, then the labelled metadata line (started, took, run, workflow, target, started by). The steps are a **run story**: top to bottom, each step's
   outcome in a sentence, its duration on the right and a thin bar on the run's time axis; the failing step is
   called out and later steps say "Not reached"; a nested workflow call is one node you can open.
   - **What happened / What you can do** for failed, waiting and parked runs.
@@ -396,7 +436,8 @@ Operations:
     says so; its effective environment.
   - The run's own audit lines (`GET /audit?run=`).
   - Retry from any step; on a live run, **Restart this step** (stop first).
-  - **Compare** with another run of the workflow; **Download run record**.
+  - **Compare** with another run of the workflow ("Compare two ci-fixer runs": this run and the one compared
+    with, labelled, step by step with human durations and the difference); **Download run record**.
 
 ### 4.4 Teams and bots (#178)
 

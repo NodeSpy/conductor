@@ -10,7 +10,7 @@
   const PURPOSES = {
     incidents: { icon: 'warn', title: 'Watch incidents and triage them', desc: 'Reads the alert, checks what changed, tells you what it thinks is wrong.', name: 'incident-bot', description: 'Triages incidents', events: ['pagerduty.incident'] },
     reviews: { icon: 'branch', title: 'Review pull requests', desc: 'Reads each PR when you ask for a review and leaves comments.', name: 'review-bot', description: 'Reviews pull requests', events: ['github.review_requested'] },
-    ci: { icon: 'zap', title: 'Look into failing CI', desc: 'When a check fails, reads the logs and explains or proposes a fix.', name: 'ci-bot', description: 'Looks into failing CI checks', events: ['github.check_failed'] },
+    ci: { icon: 'obj-check', title: 'Look into failing CI', desc: 'When a check fails, reads the logs and explains or proposes a fix.', name: 'ci-bot', description: 'Looks into failing CI checks', events: ['github.check_failed'] },
     custom: { icon: 'sparkle', title: 'Something else', desc: 'Start blank and pick what it watches yourself.', name: 'my-bot', description: '', events: [] },
   };
   const PRESETS = {

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<title>conductor · calm by default: before and after</title>
+<title>conductor · scannable at a glance: before and after</title>
 <link rel="icon" href="../assets/logo/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../fonts/fonts.css">
 <link rel="stylesheet" href="../css/tokens.css">
@@ -34,13 +34,14 @@
 </head>
 <body>
 <main>
-  <h1>Calm by default</h1>
-  <p class="lede">From the first review: “all of it just looks so busy… I have to read everything all the time.” Each screen now answers <b>is anything wrong, and what needs me?</b> in about three seconds without reading, and says almost nothing when nothing does. Before and after use the same data (the “everything at once” demo day, five things need you). The third column is the default demo day: a mostly healthy day, dozens of runs, one approval and one failure.</p>
+  <h1>Scannable at a glance</h1>
+  <p class="lede">From the first review: “all of it just looks so busy… I have to read everything all the time.” Each screen now answers <b>is anything wrong, and what needs me?</b> in about three seconds without reading, and says almost nothing when nothing does. The second review corrected an over-correction: calm must not mean hidden, so every row also says what it is, how risky it is and where it lands, with the information kept. Before and after use the same data (the “everything at once” demo day, five things need you). The third column is the default demo day: a mostly healthy day, dozens of runs, one approval and one failure.</p>
   <ul class="rules">
     <li><b>One loud thing per screen</b>The few things that need you sit at the top, large, with one sentence and one action. Everything else steps back.</li>
     <li><b>Normal collapses into one line</b>Finished runs, healthy systems and passing lanes fold into a quiet line you can open.</li>
-    <li><b>Colour only for exceptions</b>Failures, things waiting on you and the “now” cursor. Running work is drawn in ink.</li>
-    <li><b>Less text by default</b>One line per row; ids, hashes and counts sit behind hover or a tap.</li>
+    <li><b>Colour only for exceptions and risk</b>Failures, things waiting on you, the higher risk rungs and the “now” cursor. Running work is drawn in ink, the same everywhere.</li>
+    <li><b>Information kept, identified at a glance</b>One row anatomy: an icon for what it is, the title and reason, context, a rung of the risk ladder, the status in a word, the time. Only hashes, raw ids and payloads fold away.</li>
+    <li><b>Risk and environment always visible</b>Reads only → reversible → changes things → touches production → spends money → destructive, plus a production / staging / local tag where an action lands.</li>
     <li><b>Direct labels</b>Marks on the lanes say what they are (“failed 52 min ago”); no legend to decode.</li>
     <li><b>Quiet states are first-class</b>“All quiet. Nothing needs you.” is a complete Overview.</li>
   </ul>
@@ -51,11 +52,11 @@
 <script>
   // the one sentence each screen should give at a glance (the same list calm.spec.js asserts on)
   const S = [
-    ['overview', 'Overview', '2 things need you.', 'Everything else is fine, in one line beneath; lanes show the day; the rest folds into quiet rows.'],
-    ['runs', 'Run history', '1 run needs attention.', 'Needs attention first; running now; finished work as one line: “40 finished · 39 passed, 1 parked”.'],
+    ['overview', 'Overview', '2 things need you.', 'Everything else is fine, in one line beneath; each needs-you row says what it is, its risk and where it lands; lanes show the day.'],
+    ['runs', 'Run history', '1 run needs attention.', 'Needs attention first; running now; finished below. Each row: what it is, the title, the workflow, its risk, its status in a word, the time.'],
     ['lanes', 'Activity (lanes)', '3 runs are going now.', 'Passing runs are a faint tick strip; only the failure and the run waiting on you are marks, labelled where they are.'],
-    ['bot', 'A bot', '2 approvals wait for you.', 'The bot in one sentence; the facts behind “Details”; cases one line each.'],
-    ['approval', 'An approval', 'Replace the production web server', 'A needs-you kicker, the plain title, why and impact, then the decision. Ids and hashes are collapsed.'],
+    ['bot', 'A bot', '2 approvals wait for you.', 'The bot in one sentence with its facts as labels; cases one line each, with requester and route.'],
+    ['approval', 'An approval', 'Replace the production web server', 'What it is, its risk rung and environment, the plain title, a labelled line (proposed by, when, expires, case), why and impact, then the decision. Hashes are collapsed.'],
   ];
   const DEV = [['desktop', 'light'], ['desktop', 'dark'], ['phone', 'light'], ['phone', 'dark']];
   const img = (set, k, d, t) => `<figure><img loading="lazy" src="shots/${set}-${k}-${d}-${t}.jpg" alt="${set} ${k} ${d} ${t}"></figure>`;
