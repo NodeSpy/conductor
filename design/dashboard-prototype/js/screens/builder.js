@@ -35,17 +35,18 @@
     const staged = D.pending.filter((c) => c.coll === 'workflows');
     const rows = Array.isArray(ws) && ws.length && ws[0].w ? ws : (ws || []).map((w) => ({ w, owner: UI.wfOwner(w), folder: UI.folderOfWf(w) }));
     const vis = (r) => opts.folder != null || ((wl.owner === 'all' || wl.owner === r.owner) && (wl.q ? (r.w.name + ' ' + r.w.on + ' ' + r.folder).toLowerCase().includes(wl.q.toLowerCase()) : !wl.folder || (wl.folder === '__top__' ? !r.folder : within(r.folder, wl.folder))));
-    return `<div class="panel"><table class="tbl responsive wl-table"><thead><tr><th>workflow</th><th>on</th><th>folder</th><th>owner</th><th class="num">runs 24h</th><th class="num">ok</th>${UI.usageOn() ? `<th>usage by provider</th>` : ''}<th></th></tr></thead><tbody id="${opts.folder != null ? 'fwl-body' : 'wl-body'}">
+    const bulk = opts.folder == null;
+    return `<div class="panel"><table class="tbl responsive wl-table"><thead><tr>${bulk ? `<th class="sel"><input type="checkbox" class="cbx" data-on-change="wl-sel-all" aria-label="Select all shown"${UI.wlSel.size && rows.filter(vis).every((r) => UI.wlSel.has(r.w.name)) ? ' checked' : ''}></th>` : ''}<th>workflow</th><th>on</th><th>folder</th><th>owner</th><th class="num">runs 24h</th><th class="num">ok</th>${UI.usageOn() ? `<th>usage by provider</th>` : ''}<th></th></tr></thead><tbody id="${opts.folder != null ? 'fwl-body' : 'wl-body'}">
     ${rows.map((r) => { const w = r.w, d = (D.drafts || {})[w.name] != null, st2 = staged.find((c) => c.key === w.name);
       return `<tr class="click${vis(r) ? '' : ' hidden'}" data-row="${esc(w.name + ' ' + w.on + ' ' + r.folder)}" data-owner="${r.owner}" data-folder="${esc(r.folder)}" ${moveOff(r) ? '' : `draggable="true" data-wf-drag="${esc(w.name)}"`}>
-      <td data-l="workflow"><a class="link-plain" href="#/workflows/${w.name}"><b>${w.name}</b></a> ${w.kind === 'workflow' ? tag('callable') : ''}${d ? tag('draft', 'wait') : ''}${st2 ? tag(st2.before == null ? 'new · staged' : 'edit staged', 'run') : ''}</td>
+      ${bulk ? `<td class="sel" data-l=""><input type="checkbox" class="cbx" data-act="wl-sel" data-name="${esc(w.name)}" aria-label="Select ${esc(w.name)}"${UI.wlSel.has(w.name) ? ' checked' : ''}></td>` : ''}<td data-l="workflow"><a class="link-plain" href="#/workflows/${w.name}"><b>${w.name}</b></a> ${w.kind === 'workflow' ? tag('callable') : ''}${d ? tag('draft', 'wait') : ''}${st2 ? tag(st2.before == null ? 'new · staged' : 'edit staged', 'run') : ''}</td>
       <td data-l="on" class="mono small">${esc(w.on || '')}</td>
       <td data-l="folder">${r.folder ? `<a class="mono small link-plain folder-link" href="#/folders/${enc(r.folder)}/workflows">${icon('folder')}${esc(r.folder)}</a>` : '<span class="muted small">top level</span>'}</td>
       <td data-l="owner"><span class="owner ${r.owner === 'config' ? 'op' : 'pack'}" title="${esc(OWNER[r.owner](w))}">${esc(OWNER[r.owner](w))}</span></td>
       <td data-l="runs" class="num mono">${w.runs24}</td><td data-l="ok" class="num mono">${Math.round(w.ok * 100)}%</td>${UI.usageOn() ? `<td data-l="usage" class="small">${UI.provSet(UI.wfProv(w.name), { nosrc: true })}</td>` : ''}
       <td class="num nowrap wl-acts"><a class="btn sm ghost" href="#/workflows/${w.name}" aria-label="Open ${w.name} in the builder" data-tip="Open in the builder">${icon('canvas')}</a><button class="btn sm ghost" ${moveOff(r) ? UI.off(moveOff(r)) : `data-act="wl-move" data-name="${esc(w.name)}"`} aria-label="Move ${w.name} to a folder" data-tip="${moveOff(r) ? esc(moveOff(r)) : 'Move to…'}">${icon('folder')}</button> ${w.fresh ? `<button class="btn sm ghost" ${UI.off('Deploy it first; a draft has never run')}>${icon('play')}</button>` : `<button class="btn sm ghost" data-act="wf-run" data-name="${w.name}" aria-label="Run ${w.name}" data-tip="Run now">${icon('play')}</button>`}
         ${r.owner === 'config' && !w.fresh ? `<button class="btn sm ghost" data-act="wf-del" data-name="${w.name}" aria-label="Delete ${w.name}" data-tip="Delete">${icon('trash')}</button>` : r.owner === 'config' ? `<button class="btn sm ghost" data-act="wf-discard" data-name="${w.name}" aria-label="Discard draft ${w.name}" data-tip="Discard draft">${icon('trash')}</button>` : ''}</td></tr>`; }).join('')}
-    <tr class="empty-row${rows.some(vis) ? ' hidden' : ''}" id="${opts.folder != null ? 'fwl-empty' : 'wl-empty'}"><td colspan="8">No workflow matches.</td></tr></tbody></table></div>`;
+    <tr class="empty-row${rows.some(vis) ? ' hidden' : ''}" id="${opts.folder != null ? 'fwl-empty' : 'wl-empty'}"><td colspan="9">No workflow matches.</td></tr></tbody></table></div>`;
   };
   function folderNav(rows) {
     const fs = UI.allFolders().filter((f) => rows.some((r) => within(r.folder, f)));
@@ -63,27 +64,48 @@
     <div class="filters"><div class="input-icon">${icon('search')}<input class="input" placeholder="name, event or folder" value="${esc(wl.q)}" data-on-input="wl-q" aria-label="Filter workflows"></div>${UI.seg([['all', 'all'], ['config', 'yours'], ['pack', 'packs'], ['bot', 'bots']], wl.owner, 'wl-owner')}
       <label class="chip-select wl-fsel${wl.folder ? ' on' : ''}">${icon('folder')}<select data-on-change="wl-folder-sel" aria-label="Folder"><option value="">all folders</option>${UI.allFolders().filter((f) => rows.some((r) => within(r.folder, f))).map((f) => `<option value="${esc(f)}"${f === wl.folder ? ' selected' : ''}>${esc(f)}</option>`).join('')}</select></label>
       <span class="count-note small muted" id="wl-note">${wl.q && wl.folder ? 'searching every folder' : ''}</span></div>
-    ${UI.wfTable(rows)}</div></div></div>`;
+    ${UI.wfTable(rows)}${wlBulkBar()}</div></div></div>`;
   });
+  /* bulk: tick rows (shift-click for a range), then one action stages one change per workflow, reviewed as one diff */
+  UI.wlSel = UI.wlSel || new Set(); let wlLast = null;
+  const wlBulkBar = () => { const n = UI.wlSel.size; if (!n) return ''; const ws = [...UI.wlSel].map((x) => S.view().workflows.find((w) => w.name === x)).filter(Boolean), cfg = ws.filter((w) => UI.wfOwner(w) === 'config').length;
+    return UI.bulkBar(n, 'workflow', [['Move to folder…', 'folder', 'wl-bulk-move'], ['Disable', 'pause', 'wl-bulk-enable', 'data-v="false"', cfg ? '' : 'Only workflows in your config can be switched off here'], ['Enable', 'play', 'wl-bulk-enable', 'data-v="true"', cfg ? '' : 'Only workflows in your config can be switched on here']], 'wl-bulk-clear'); };
+  UI.act('wl-sel', (cb, e) => { const boxes = UI.$$('#wl-body input[data-act="wl-sel"]').filter((x) => !x.closest('tr').classList.contains('hidden')), i = boxes.indexOf(cb);
+    if (e && e.shiftKey && wlLast != null) { const [a, b] = [Math.min(wlLast, i), Math.max(wlLast, i)]; boxes.slice(a, b + 1).forEach((x) => { x.checked = cb.checked; cb.checked ? UI.wlSel.add(x.dataset.name) : UI.wlSel.delete(x.dataset.name); }); } else cb.checked ? UI.wlSel.add(cb.dataset.name) : UI.wlSel.delete(cb.dataset.name);
+    wlLast = i; UI.rerender({ keepScroll: true }); });
+  UI.act('wl-sel-all', (cb) => { UI.$$('#wl-body tr[data-row]:not(.hidden) input[data-act="wl-sel"]').forEach((x) => (cb.checked ? UI.wlSel.add(x.dataset.name) : UI.wlSel.delete(x.dataset.name))); UI.rerender({ keepScroll: true }); });
+  UI.act('wl-bulk-clear', () => { UI.wlSel.clear(); UI.rerender({ keepScroll: true }); });
+  UI.act('wl-bulk-move', () => { const names = [...UI.wlSel], bots = names.filter((n) => UI.wfOwner(S.view().workflows.find((w) => w.name === n)) === 'bot');
+    UI.form({ caps: 'move', title: `Move ${names.length} workflow${names.length > 1 ? 's' : ''}`, values: { to: '' }, fields: [{ k: 'to', type: 'enum', req: true, label: 'Folder', options: [['', 'top level']].concat(UI.allFolders().map((f) => [f, f])), create: 'folder', createLabel: 'New folder' }],
+      note: `One staged change per workflow, reviewed together as one diff.${bots.length ? ` ${bots.length} bot workflow${bots.length > 1 ? 's follow their bot' : ' follows its bot'} and stay${bots.length > 1 ? '' : 's'} put.` : ''}`, submit: 'Stage moves', submitIcon: 'folder',
+      onSubmit: (v) => { let last = null; names.forEach((n) => { const ch = UI.stageWorkflowMove(n, v.to || ''); if (ch) last = ch; }); UI.wlSel.clear(); UI.staged(last); } }); });
+  UI.act('wl-bulk-enable', (b) => { const on = b.dataset.v === 'true'; let last = null, skipped = 0;
+    [...UI.wlSel].forEach((n) => { const w = S.view().workflows.find((x) => x.name === n); if (UI.wfOwner(w) !== 'config') { skipped++; return; } const y = S.staged('workflows', n) || w.yaml || ''; const ny = /^enabled:.*$/m.test(y) ? (on ? y.replace(/^enabled:.*\n/m, '') : y.replace(/^enabled:.*$/m, 'enabled: false')) : on ? y : y.replace(/^(name: .*\n)/m, '$1enabled: false\n'); const ch = S.stage('workflows', n, ny, `${on ? 'enable' : 'disable'} workflow ${n}`); if (ch) last = ch; });
+    if (skipped) UI.toast(`${skipped} skipped`, 'pack and bot workflows are switched on or off in their pack or bot', 'idle'); UI.wlSel.clear(); UI.staged(last); });
   const wlFilter = () => { let n = 0; UI.$$('#wl-body tr[data-row]').forEach((tr) => { const f = tr.dataset.folder; const ok = (wl.owner === 'all' || tr.dataset.owner === wl.owner) && (wl.q ? tr.dataset.row.toLowerCase().includes(wl.q.toLowerCase()) : !wl.folder || (wl.folder === '__top__' ? !f : within(f, wl.folder))); tr.classList.toggle('hidden', !ok); if (ok) n++; }); const e = UI.$('#wl-empty'); if (e) e.classList.toggle('hidden', n > 0); const note = UI.$('#wl-note'); if (note) note.textContent = wl.q && wl.folder ? 'searching every folder' : ''; };
   UI.act('wl-q', (el) => { wl.q = el.value; wlFilter(); });
   UI.act('wl-owner', (b) => { wl.owner = b.dataset.v; UI.$$('[data-act="wl-owner"]').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); wlFilter(); });
   UI.act('wl-folder', (a) => { wl.folder = a.dataset.f; UI.rerender(); });
   UI.act('wl-folder-sel', (s2) => { wl.folder = s2.value; UI.rerender(); });
   /** Move a workflow: your config gets folder:; a pack workflow is placed by your pack override; a bot's follows the bot. */
-  UI.moveWorkflow = (name, folder) => {
-    const w = S.view().workflows.find((x) => x.name === name), o = UI.wfOwner(w); let ch;
-    if (o === 'bot') return;
+  UI.stageWorkflowMove = (name, folder) => {
+    const w = S.view().workflows.find((x) => x.name === name), o = UI.wfOwner(w); let ch = null;
+    if (o === 'bot') return null;
     if (o === 'pack') { const inst = UI.packOf(w), c = JSON.parse(JSON.stringify(S.staged('packs', inst))); c.folders = Object.assign({}, c.folders); if (folder === `packs/${inst}`) delete c.folders[name]; else c.folders[name] = folder; if (!Object.keys(c.folders).length) delete c.folders; ch = S.stage('packs', inst, c, `move pack workflow ${name} → ${folder || 'top level'} (packs.${inst}.folders)`); }
     else { const y = S.staged('workflows', name) || w.yaml || ''; const line = `folder: "${folder}"`; const ny = /^folder:.*$/m.test(y) ? (folder ? y.replace(/^folder:.*$/m, line) : y.replace(/^folder:.*\n/m, '')) : folder ? y.replace(/^(name: .*\n)/m, `$1${line}\n`) : y; ch = S.stage('workflows', name, ny, `move workflow ${name} → ${folder || 'top level'}`); }
     D.folderDrafts = (D.folderDrafts || []).filter((f) => !within(folder || '\u0000', f));
+    return ch;
+  };
+  UI.moveWorkflow = (name, folder) => {
+    if (UI.wfOwner(S.view().workflows.find((x) => x.name === name)) === 'bot') return;
+    const ch = UI.stageWorkflowMove(name, folder);
     S.save(); UI.refreshChrome(); UI.rerender();
     UI.toast(ch ? `Move staged: ${esc(name)} → ${esc(folder || 'top level')}` : 'Already there', ch ? 'folders live in config: review and apply it with the other staged changes' : '', ch ? 'run' : 'idle');
   };
   UI.act('wl-move', (b) => {
     const name = b.dataset.name, w = S.view().workflows.find((x) => x.name === name), cur = UI.folderOfWf(w), o = UI.wfOwner(w);
     UI.form({ caps: o === 'pack' ? `packs.${UI.packOf(w)}.folders.${name}` : `triggers[name=${name}].folder`, title: `Move ${name}`, values: { to: cur },
-      fields: [{ k: 'to', type: 'enum', label: 'Folder', options: [['', 'top level']].concat([...new Set(UI.allFolders().concat(o === 'pack' ? [`packs/${UI.packOf(w)}`] : []))].sort().map((f) => [f, f])), create: 'folder', createLabel: 'New folder', createCtx: { parent: cur } }],
+      fields: [{ k: 'to', type: 'enum', req: true, label: 'Folder', options: [['', 'top level']].concat([...new Set(UI.allFolders().concat(o === 'pack' ? [`packs/${UI.packOf(w)}`] : []))].sort().map((f) => [f, f])), create: 'folder', createLabel: 'New folder', createCtx: { parent: cur } }],
       note: o === 'pack' ? `A pack can't choose its own folder: its workflows sit under <span class="mono">packs/${esc(UI.packOf(w))}</span> until you place them. This is your pack override, so it goes through the diff.` : 'Folders live in config, so the move is staged for the diff. It changes nothing else: folders carry no behavior.',
       submit: 'Stage move', submitIcon: 'folder', onSubmit: (v) => UI.moveWorkflow(name, v.to || '') });
   });

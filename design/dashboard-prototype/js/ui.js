@@ -578,6 +578,8 @@
     if (opts.go !== false) UI.go('#/config/apply');
     else UI.toast(`Staged: ${UI.esc(ch.summary)}`, `${D.pending.length} change${D.pending.length > 1 ? 's' : ''} waiting · review in Config → apply`, 'run');
   };
+  /** The sticky bulk bar: n selected, actions [[label, icon, act, attrs?, offReason?]], and a clear action. */
+  UI.bulkBar = (n, noun, actions, clearAct) => `<div class="bulk-bar" role="region" aria-label="Bulk actions"><b>${n} ${noun}${n > 1 ? 's' : ''} selected</b>${actions.map(([l, ic, act, attrs = '', off]) => `<button class="btn sm" ${off ? UI.off(off) : `data-act="${act}" ${attrs}`}>${UI.icon(ic)}${l}</button>`).join('')}<button class="btn sm ghost" data-act="${clearAct}" style="margin-left:auto">Clear</button></div>`;
   /** Download a text file (exports). */
   UI.download = (name, text, type = 'application/json') => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 100); UI.lastDownload = name; };
 

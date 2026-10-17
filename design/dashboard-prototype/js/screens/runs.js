@@ -113,7 +113,7 @@
   });
 
   /* ---------- history ---------- */
-  const hv = { q: '', status: new Set(), wf: '', repo: '', since: '', cost: '' };
+  const hv = { q: '', status: new Set(), wf: '', repo: '', since: '', cost: '', sel: new Set(), last: null };
   const SL = { ok: 'ok', run: 'running', fail: 'failed', wait: 'waiting', idle: 'parked', stopped: 'stopped' };
   const histMatch = (r) => {
     if (!UI.scopeKeeps(UI.botOfRun(r))) return false;
@@ -129,6 +129,7 @@
   function histRows() {
     const rows = D.runs.filter(histMatch);
     return rows.map((r) => `<tr class="click" data-href="#/${r.status === 'run' ? 'live' : 'runs'}/${r.id}">
+      <td class="sel" data-l=""><input type="checkbox" class="cbx" data-act="hist-sel-row" data-id="${r.id}" aria-label="Select ${r.id}"${hv.sel.has(r.id) ? ' checked' : ''}></td>
       <td data-l="status">${st(r.status === 'stopped' ? 'fail' : r.status, SL[r.status] || r.status)}</td>
       <td data-l="run" class="mono"><a class="link-plain" href="#/${r.status === 'run' ? 'live' : 'runs'}/${r.id}">${r.id}</a></td>
       <td data-l="workflow"><b>${r.workflow}</b></td><td data-l="trigger" class="mono muted">${r.trigger}</td>
@@ -149,10 +150,24 @@
         ${!UI.usageOn() ? '' : chipSel('cost', 'Provider', 'zap', [['', 'provider: any']].concat(Object.keys(D.usage.providers).map((p) => [p, UI.provLabel(p)])))}
         ${UI.folderChip()}<span class="count-note" id="hist-n">${n} of ${D.runs.length}</span>
       </div>
-      <div class="panel"><table class="tbl responsive"><thead><tr><th>status</th><th>run</th><th>workflow</th><th>trigger</th><th>target</th><th>started</th><th class="num">took</th>${UI.usageOn() ? `<th class="num">usage · ${UI.measHead()}</th>` : ''}<th class="hide-phone">note</th></tr></thead><tbody id="hist-body">${histRows()}</tbody></table>
+      <div class="panel"><table class="tbl responsive"><thead><tr><th class="sel"><input type="checkbox" class="cbx" data-act="hist-sel-all" aria-label="Select all shown"></th><th>status</th><th>run</th><th>workflow</th><th>trigger</th><th>target</th><th>started</th><th class="num">took</th>${UI.usageOn() ? `<th class="num">usage · ${UI.measHead()}</th>` : ''}<th class="hide-phone">note</th></tr></thead><tbody id="hist-body">${histRows()}</tbody></table><div id="hist-bulk">${histBulk()}</div>
       <div class="panel-foot small muted"><span>Records are HMAC-signed in <span class="mono">${D.daemon.state_dir}/history/</span>; a record that fails its signature shows as tampered.</span></div></div>
     </div>`;
   });
+  function histBulk() { const ids = [...hv.sel], retryable = ids.filter((id) => { const r = D.runs.find((x) => x.id === id); return r && (r.status === 'fail' || r.status === 'stopped'); });
+    return ids.length ? UI.bulkBar(ids.length, 'run', [['Retry from the failed step', 'undo', 'hist-bulk-retry', '', retryable.length ? '' : 'None of the selected runs failed'], ['Export selected (JSONL)', 'download', 'hist-bulk-export']], 'hist-bulk-clear') : ''; }
+  const bulkRefresh = () => { const el = UI.$('#hist-bulk'); if (el) el.innerHTML = histBulk(); };
+  UI.act('hist-sel-row', (cb, e) => { const boxes = UI.$$('#hist-body input[data-act="hist-sel-row"]'), i = boxes.indexOf(cb), on = !hv.sel.has(cb.dataset.id);
+    const set = (x) => { x.checked = on; on ? hv.sel.add(x.dataset.id) : hv.sel.delete(x.dataset.id); };
+    if (e && e.shiftKey && hv.last != null) boxes.slice(Math.min(hv.last, i), Math.max(hv.last, i) + 1).forEach(set); else set(cb);
+    hv.last = i; setTimeout(() => { boxes.forEach((x) => { x.checked = hv.sel.has(x.dataset.id); }); bulkRefresh(); }); });
+  UI.act('hist-sel-all', (cb) => { const boxes = UI.$$('#hist-body input[data-act="hist-sel-row"]'), on = boxes.some((x) => !hv.sel.has(x.dataset.id)); boxes.forEach((x) => (on ? hv.sel.add(x.dataset.id) : hv.sel.delete(x.dataset.id))); setTimeout(() => { boxes.forEach((x) => { x.checked = hv.sel.has(x.dataset.id); }); cb.checked = on; bulkRefresh(); }); });
+  UI.act('hist-bulk-clear', () => { hv.sel.clear(); UI.$$('#hist-body input[data-act="hist-sel-row"]').forEach((x) => { x.checked = false; }); bulkRefresh(); });
+  UI.act('hist-bulk-export', () => { const rows = D.runs.filter((r) => hv.sel.has(r.id)); UI.download('conductor-runs-selected.jsonl', rows.map((r) => JSON.stringify(r)).join('\n') + '\n', 'application/x-ndjson'); UI.toast(`Exported ${rows.length} runs`, 'scrubbed', 'ok'); });
+  UI.act('hist-bulk-retry', () => { const rs = D.runs.filter((r) => hv.sel.has(r.id) && (r.status === 'fail' || r.status === 'stopped'));
+    UI.confirm({ title: `Retry ${rs.length} run${rs.length > 1 ? 's' : ''}?`, body: `Each re-runs from its failed step; earlier steps replay from their recorded outputs. ${rs.map((r) => `<span class="mono">${r.id}</span> from <b>${esc(r.failed_step || 'the start')}</b>`).join(', ')}.`, ok: 'Retry them' }).then((ok) => { if (!ok) return;
+      rs.forEach((r) => { const id = 'r-' + Math.random().toString(16).slice(2, 6); D.runs.unshift({ id, workflow: r.workflow, trigger: r.trigger + ' (retry)', repo: r.repo, number: r.number, status: 'run', started: now(), cost: 0, retry_of: r.id, steps: [] }); D.audit.unshift({ ts: now(), event: 'run_retry', who: 'operator:ops', detail: `${id} · retry_of ${r.id} · from ${r.failed_step || 'start'}`, run: id }); });
+      hv.sel.clear(); S.save(); UI.refreshChrome(); UI.rerender(); UI.toast(`Retried ${rs.length}`, 'they show in Live', 'run'); }); });
   const histRefresh = () => { UI.$('#hist-body').innerHTML = histRows(); UI.$('#hist-n').textContent = `${D.runs.filter(histMatch).length} of ${D.runs.length}`; };
   UI.act('hist-q', (el) => { hv.q = el.value; histRefresh(); });
   UI.act('hist-st', (b) => { hv.status.has(b.dataset.s) ? hv.status.delete(b.dataset.s) : hv.status.add(b.dataset.s); b.classList.toggle('on'); b.setAttribute('aria-pressed', hv.status.has(b.dataset.s)); histRefresh(); });

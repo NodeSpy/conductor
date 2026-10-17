@@ -418,7 +418,7 @@
       </div></div>`;
   }
   UI.act('case-f', (b) => { cv.f = b.dataset.v; UI.rerender(); });
-  document.addEventListener('click', (e) => { const tr = e.target.closest('tr[data-href]'); if (tr && !e.target.closest('a,button')) UI.go(tr.dataset.href); });
+  document.addEventListener('click', (e) => { const tr = e.target.closest('tr[data-href]'); if (tr && !e.target.closest('a,button,input,label,select,.sel')) UI.go(tr.dataset.href); });
   UI.act('case-note', (b) => { const inp = UI.$('#case-note'), v = inp.value.trim(); if (!v) return UI.nudge(inp, 'Type the note first'); const c = D.cases.find((x) => x.id === b.dataset.c); (c.notes = c.notes || []).push({ at: now(), who: 'operator:ops', text: v }); audit('bot_case_note', `${b.dataset.m} · ${c.id}`); S.save(); UI.rerender(); });
   UI.act('case-close', (b) => { const c = D.cases.find((x) => x.id === b.dataset.c); c.status = c.status === 'open' ? 'closed' : 'open';
     const d = D.delegations.find((x) => x.child === c.id && x.status === 'running');
