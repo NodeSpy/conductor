@@ -95,9 +95,14 @@
   UI.tag = (t, s) => `<span class="tag"${s ? ` data-s="${s}"` : ''}>${t}</span>`;
   UI.tier = (t) => `<span class="tier ${t}">${t}</span>`;
   /** The logo, from the one reference in assets/logo/logo.js: 'mark' (the symbol) or 'lockup' (mark + wordmark). */
-  UI.logo = (kind = 'mark', cls = '') => { const L = window.LOGO || {}, mark = `<svg class="logo-mark baton ${cls}" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="${L.mark}"/></svg>`;
+  /* The asset files are fetched once and their <symbol>s injected into a hidden sprite, so <use href="#id">
+     is a same-document reference (external <use> isn't reliable in WebKit) and still inherits the theme. */
+  const symId = (ref) => String(ref || '').split('#')[1] || '';
+  UI.loadLogo = () => { const L = window.LOGO || {}; [L.mark, L.lockup].filter(Boolean).forEach((ref) => { const [file, id] = ref.split('#'); if (document.getElementById(id)) return;
+    fetch(file).then((r) => r.text()).then((t) => { const doc = new DOMParser().parseFromString(t, 'image/svg+xml'), sym = doc.getElementById(id); if (!sym) return; let sp = document.getElementById('logo-sprite'); if (!sp) { sp = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); sp.id = 'logo-sprite'; sp.setAttribute('aria-hidden', 'true'); sp.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden'; document.body.prepend(sp); } sp.appendChild(document.importNode(sym, true)); }).catch(() => {}); }); };
+  UI.logo = (kind = 'mark', cls = '') => { const L = window.LOGO || {}, mark = `<svg class="logo-mark baton ${cls}" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#${symId(L.mark)}"/></svg>`;
     if (kind === 'mark') return mark;
-    return L.lockup ? `<svg class="logo-lockup ${cls}" viewBox="0 0 ${Math.round(24 * (L.lockupRatio || 5.5))} 24" role="img" aria-label="${UI.esc(L.wordmark || 'conductor')}"><use href="${L.lockup}"/></svg>` : `${mark}<span class="wordmark">${UI.esc(L.wordmark || 'conductor')}</span>`; };
+    return L.lockup ? `<svg class="logo-lockup ${cls}" viewBox="0 0 ${Math.round(24 * (L.lockupRatio || 5.5))} 24" role="img" aria-label="${UI.esc(L.wordmark || 'conductor')}"><use href="#${symId(L.lockup)}"/></svg>` : `${mark}<span class="wordmark">${UI.esc(L.wordmark || 'conductor')}</span>`; };
   UI.sigil = (mbr, size = '') => `<span class="sigil ${size}" style="--sig:${mbr.color}">${mbr.name[0]}${mbr.home === 'live' ? '<span class="live"></span>' : ''}</span>`;
   UI.ago = (iso) => { const s = (Date.now() - new Date(iso)) / 1000; if (s < 60) return Math.max(1, s | 0) + 's'; if (s < 3600) return (s / 60 | 0) + 'm'; if (s < 86400) return (s / 3600 | 0) + 'h'; return (s / 86400 | 0) + 'd'; };
   UI.clock = (iso) => new Date(iso).toTimeString().slice(0, 8);
@@ -197,6 +202,7 @@
     ['Work', [['runs', 'Run history', 'runs'], ['workflows', 'Workflows', 'workflows'], ['bots', 'Bots', 'bots'], ['browser', 'Browsers', 'browser', () => D.browsers.length]]],
     ['System', [['config', 'Config', 'config'], ['secrets', 'Secrets & vars', 'secrets'], ['extensions', 'Packs & plugins', 'extensions'], ['connectors', 'Connectors & hosts', 'connectors'], ['updates', 'Updates', 'updates', () => 1], ['logs', 'Logs & audit', 'logs'], ['security', 'Access', 'shield']]],
   ];
+  UI.navGroups = navGroups;
   UI.navHTML = () => navGroups.map(([g, items]) => `<div class="nav-group"><span class="caps">${g}</span><nav class="nav">${items.map(([k, l, ic, c, hot]) => {
     const n = c ? c() : null;
     return `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span class="lbl">${l}</span>${n ? `<span class="count${hot ? ' hot' : ''}">${n}</span>` : ''}</a>`;
@@ -288,31 +294,7 @@
   };
 
   /* ---------- command palette ---------- */
-  UI.palette = () => {
-    const items = [
-      ...navGroups.flatMap(([, it]) => it.map(([k, l, ic]) => [l, '#/' + k, ic])),
-      ...D.bots.map((mb) => [`Bot · ${mb.name}`, '#/bots/' + mb.name, 'bots']),
-      ...D.runs.slice(0, 8).map((r) => [`Run ${r.id} · ${r.workflow} ${r.repo ? UI.runTarget(r) : ''}`, '#/runs/' + r.id, 'runs']),
-      ...D.workflows.slice(0, 5).map((w) => [`Edit workflow · ${w.name}`, '#/workflows/' + w.name, 'canvas']),
-      ...(UI.paletteExtra ? UI.paletteExtra() : []),
-      ['Pause dispatch', '#/overview', 'pause'], ['Apply update v0.72.0', '#/updates', 'updates'], ['Phone layouts', 'phone.html', 'phone'], ['Sign-in & enrollment', '#/signin', 'passkey'],
-    ];
-    const el = document.createElement('div');
-    el.innerHTML = `<div class="scrim" id="pal-scrim" style="place-items:start center;background:rgba(8,8,6,.4)"></div><div class="palette"><input placeholder="Jump to a run, bot, workflow, setting…" autofocus><div class="res"></div></div>`;
-    document.body.appendChild(el);
-    const inp = $('input', el), res = $('.res', el); let sel = 0, list = items;
-    const draw = () => { res.innerHTML = list.slice(0, 12).map(([l, h, ic], i) => `<a href="${h}" class="${i === sel ? 'on' : ''}">${UI.icon(ic)}${UI.esc(l)}<span class="muted mono" style="margin-left:auto">${h.replace('#/', '')}</span></a>`).join(''); };
-    const close = () => el.remove();
-    inp.addEventListener('input', () => { const q = inp.value.toLowerCase(); list = items.filter(([l]) => l.toLowerCase().includes(q)); sel = 0; draw(); });
-    inp.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowDown') sel = Math.min(sel + 1, list.length - 1), draw(), e.preventDefault();
-      if (e.key === 'ArrowUp') sel = Math.max(sel - 1, 0), draw(), e.preventDefault();
-      if (e.key === 'Enter' && list[sel]) { location.href = list[sel][1]; close(); }
-      if (e.key === 'Escape') close();
-    });
-    $('#pal-scrim', el).addEventListener('click', close); res.addEventListener('click', close);
-    draw(); setTimeout(() => inp.focus(), 10);
-  };
+  // UI.palette (⌘K) and the single-key shortcuts live in js/palette.js
   document.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); UI.palette(); } if (e.key === 'Escape' && !e.defaultPrevented) { const pop = document.querySelector('#pop-menu'); if (pop) { pop.remove(); return; } if (!UI.dismissDrawer()) UI.dismissModal(); } });
 
   /* ---------- theme ---------- */
@@ -371,6 +353,7 @@
         <nav class="tabbar" id="tabbar"></nav>
       </div>`;
     UI.initTheme();
+    UI.loadLogo();
     UI.refreshChrome();
     UI.render();
   };

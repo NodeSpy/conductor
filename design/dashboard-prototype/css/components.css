@@ -159,8 +159,8 @@
 .kind-entries .f.on { background: var(--accent-wash); color: var(--ink); box-shadow: inset 2px 0 0 var(--accent); }
 .kind-entries .pin svg { width: 12px; height: 12px; color: var(--wait); }
 .tag-filter { padding: 8px 12px 4px; border-top: 1px dashed var(--line); display: flex; flex-direction: column; gap: 6px; }
-.kind-tag { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; background: var(--accent-wash); color: var(--accent-2); font: 500 10.5px/1.6 var(--font-mono); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
-.kind-tag svg { width: 12px; height: 12px; }
+.kind-tag { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; background: var(--accent-wash); color: var(--ink); font: 500 10.5px/1.6 var(--font-mono); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+.kind-tag svg { width: 12px; height: 12px; color: var(--accent); }
 .kind-tag.sm { padding: 0 6px; }
 .ke .ed-head { gap: 10px; }
 .ke-path { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--bg-1); }
@@ -367,3 +367,11 @@ svg.flip { transform: rotate(180deg); }
 .pk-why.needs { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .pk-why.needs svg { color: var(--accent); }
 .pk-why.none svg { color: var(--ok); }
+
+/* command line */
+.palette .res { max-height: min(60vh, 520px); overflow: auto; }
+.palette .pal-kind { font: 10px/1 var(--font-mono); color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 3px; padding: 2px 4px; text-transform: lowercase; flex: none; }
+.palette .pal-foot { display: flex; gap: 14px; padding: 8px 12px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.palette .pal-empty { padding: 16px; text-align: left; }
+.kbd-sel { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--r-sm); }
+.gloss.keys > div { grid-template-columns: 130px 1fr; }

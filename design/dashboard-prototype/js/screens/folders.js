@@ -246,5 +246,4 @@
   document.addEventListener('drop', (e) => { if (!drag) return; const f = e.target.closest('.ftree [data-drop]'); if (!f) return; e.preventDefault(); const [kind, name] = drag.split(':'); drag = null; move(kind, name, f.dataset.drop); });
 
   /* ⌘K: folders, teams and bots, with their paths */
-  UI.paletteExtra = () => UI.allFolders(false).map((f) => [`Folder · ${f}`, '#/folders/' + enc(f), 'folder']).concat(D.teams.map((t) => [`Team · ${t.name}${UI.folderOfTeam(t.name, false) ? ' · ' + UI.folderOfTeam(t.name, false) : ''}`, '#/teams/' + t.name, 'members'])).concat(D.bots.map((b) => [`Bot · ${b.name}${UI.folderOfBot(b.name, false) ? ' · ' + UI.folderOfBot(b.name, false) : ''}`, '#/bots/' + b.name, 'members']));
 })();

@@ -55,9 +55,9 @@ test('default is off: no usage or cost UI on any screen, and the screens are sti
   // budget forms keep run/turn/token caps, no dollar fields
   await go(page, '#/teams/platform/defaults');
   await page.locator('[data-act="team-edit"]').first().click();
-  await expect(page.locator('#f-budget_turns')).toBeVisible();
-  await expect(page.locator('#f-budget_tokens')).toBeVisible();
-  await expect(page.locator('#f-budget')).toBeHidden();
+  await expect(page.locator('#f-pool_turns')).toBeVisible();
+  await expect(page.locator('#f-pool_tokens')).toBeVisible();
+  await expect(page.locator('#f-pool_cost')).toBeHidden();
 });
 
 test('subscription with no source: per-provider counts observed by conductor, no limits, no tokens, no totals', async ({ page }) => {
@@ -116,7 +116,7 @@ test('api mode: dollars per provider, never added together; dollar budget fields
   for (const r of ROUTES) { await go(page, r); expect(await crossProviderFigures(page), r).toEqual([]); }
   await go(page, '#/teams/platform/defaults');
   await page.locator('[data-act="team-edit"]').first().click();
-  await expect(page.locator('#f-budget')).toBeVisible();
+  await expect(page.locator('#f-pool_cost')).toBeVisible();
 });
 
 test('switching back to off removes every trace again', async ({ page }) => {
