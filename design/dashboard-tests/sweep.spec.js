@@ -45,7 +45,8 @@ const audit = () => {
     const first = [...row.querySelectorAll('b, span, a, div')].find((x) => vis(x) && (x.innerText || '').trim()); if (!first) return;
     const fr = first.getBoundingClientRect(); if (r.width > 320 && fr.left - r.left > r.width * 0.3 && getComputedStyle(row).textAlign === 'center') out.push(`centred row content: ${label(row)}`);
     if (r.width > 320 && fr.left - r.left > r.width * 0.4) out.push(`row content starts mid-row: ${label(row)}`);
-    if (r.height > 220 && !row.querySelector('details[open], .open, textarea, .diff, pre, .hist-diff, .sec-detail')) out.push(`row height blown up: ${label(row)} (${Math.round(r.height)}px)`); });
+    // a knowledge proposal row shows the text it proposes, so it may be tall
+    if (r.height > 220 && !row.matches('.kprop') && !row.querySelector('details[open], .open, textarea, .diff, pre, .hist-diff, .sec-detail')) out.push(`row height blown up: ${label(row)} (${Math.round(r.height)}px)`); });
   // dropped interpolations: an element the browser doesn't know (an unescaped <name>), or a gap before punctuation
   const known = /^(a|abbr|article|aside|b|blockquote|br|button|code|dd|del|details|dfn|div|dl|dt|em|fieldset|figure|footer|form|h[1-6]|header|hr|i|img|input|ins|kbd|label|legend|li|main|mark|nav|ol|optgroup|option|p|pre|s|section|select|small|span|strong|sub|summary|sup|table|tbody|td|textarea|tfoot|th|thead|time|tr|u|ul|var|svg|path|circle|rect|line|polyline|polygon|g|text|tspan|title|defs|use|ellipse|lineargradient|stop|clippath|mask|pattern|foreignobject|template|script|style|iframe|canvas|picture|source|video|audio|output|progress|meter|dialog|wbr|q|cite|data|address|caption|col|colgroup|map|area|noscript|search|datalist|marker)$/i;
   document.querySelectorAll('#main *, .modal *').forEach((el) => { if (!known.test(el.tagName)) out.push(`unknown element <${el.tagName.toLowerCase()}> (an unescaped placeholder?) in ${label(el.parentElement)}`); });

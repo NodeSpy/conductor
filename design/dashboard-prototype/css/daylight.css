@@ -394,3 +394,28 @@ details.dl-card.acc-tech { padding: 14px 22px; }
   .dl-runs-phone li.attn > a { box-shadow: none; margin-left: 0; padding-left: 0; }
   .dl-runs-phone .cbx { margin: 0; }
 }
+.wl-table td[data-l="on"] { min-width: 200px; }
+.list .item.acc-row, .list > div.item.acc-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.tbl td[data-l="version"] { white-space: nowrap; }
+
+/* long unbreakable values (URLs, ids) wrap inside their column instead of running under the controls beside them */
+.dl-nt, .dl-nt b, .dl-why, .dl-facts dd { overflow-wrap: anywhere; }
+.dl-facts dd.mono, .dl-facts dd .mono { word-break: break-all; }
+.dl-ch { flex-wrap: wrap; row-gap: 8px; }
+/* phone: rows let their actions wrap under the text; logs put the message under the time and source */
+@media (max-width: 720px) {
+  .list .item { flex-wrap: wrap; row-gap: 6px; }
+  .list .item > .grow, .list .item > div:not([class]) { flex: 1 1 60%; min-width: 0; }
+  .list .item .row.wrap, .list .item .card-actions { flex: 1 1 100%; }
+  .frow { flex-wrap: wrap; row-gap: 2px; }
+  .frow .roll, .frow .calm-n { flex: 1 1 100%; order: 5; padding-left: 26px; white-space: normal; }
+  .log .l { grid-template-columns: 64px minmax(0, 1fr); row-gap: 0; }
+  .log .l .m { grid-column: 1 / -1; }
+  .callout { flex-wrap: wrap; }
+  .callout > .grow { flex: 1 1 100%; }
+  .upd-rel { grid-template-columns: minmax(0, 1fr); }
+  .upd-rel .dl-na { justify-content: flex-start; }
+  .panel-head .tools { flex-wrap: wrap; }
+}
+.drill .item .roll, .drill .item .calm-n { flex-wrap: wrap; white-space: normal; }
+.drill .item > a.grow { min-width: 0; }
