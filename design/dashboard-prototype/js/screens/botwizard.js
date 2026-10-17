@@ -59,7 +59,7 @@
   const trigName = (e) => `${bw.name}-${e.key.split('.')[1].replace(/_/g, '-')}`;
   const trigYAML = (e) => [`name: ${trigName(e)}`, ...(bw.team ? [] : bw.folder ? [`folder: "${bw.folder}"`] : []), `on: ${e.on}`, ...(e.use === 'github' && repos().length ? [`filter: { repo: [${repos().join(', ')}] }`] : []), 'steps:', '  - id: tell', `    bot: { name: ${bw.name}, title: "{{.title}}" }`].join('\n') + '\n';
 
-  const nameErr = () => (!/^[a-z][a-z0-9-]*$/.test(bw.name) ? 'lowercase letters, digits and dashes' : S.view().bots.some((b) => b.name === bw.name) ? 'a bot by that name exists' : '');
+  const nameErr = () => (!/^[a-z][a-z0-9-]*$/.test(bw.name) ? 'lowercase letters, digits and dashes' : bw.name.length > 40 ? 'at most 40 characters' : S.view().bots.some((b) => b.name === bw.name) ? 'a bot by that name exists' : '');
   function stepHTML() {
     const v = S.view();
     if (bw.at === 0) return `<div class="choice-grid">${Object.entries(PURPOSES).map(([k, p]) => UI.choice({ act: 'bw-purpose', attrs: `data-p="${k}"`, on: bw.purpose === k, icon: p.icon, title: p.title, desc: p.desc })).join('')}</div>
@@ -95,7 +95,8 @@
         <div class="item"><span class="caps" style="width:120px">may</span><span class="grow">${esc(PRESETS[bw.preset].title)}</span></div></div></div>
       <div class="panel"><div class="panel-head"><h3>The config this writes</h3><span class="muted small">bots.${esc(bw.name)}${evs.length ? ` and ${evs.length} trigger${evs.length > 1 ? 's' : ''}` : ''} · applied through the diff</span></div><div class="panel-body">${UI.yaml(YAML.stringify({ bots: { [bw.name]: c } }) + (evs.length ? '\ntriggers:\n' + evs.map((e) => '  - ' + trigYAML(e).trimEnd().split('\n').join('\n    ') + '\n').join('') : ''))}</div></div>`;
   }
-  const canNext = () => (bw.at === 0 ? (bw.purpose && !nameErr() ? '' : !bw.purpose ? 'Pick what it should do first' : 'Fix the name first') : bw.at === 2 && bw.tell === 'slack' && !bw.slack ? 'Pick a Slack connector' : '');
+  const canNext = () => (bw.at === 0 ? (bw.purpose && !nameErr() && !UI.folderPathErr(bw.folder) ? '' : !bw.purpose ? 'Pick what it should do first' : nameErr() ? 'Fix the name first' : 'Fix the folder first') : bw.at === 2 && bw.tell === 'slack' && !bw.slack ? 'Pick a Slack connector' : bw.at === 2 && bw.tell === 'slack' && !CHANNEL.test(bw.channel || '') ? 'A Slack channel is # and up to 80 lowercase letters, digits, - or _' : '');
+  const CHANNEL = /^#[a-z0-9][a-z0-9_-]{0,79}$/;
   UI.route('bots/new', () => { const why = canNext();
     return `<div class="page wizard">${UI.head('New bot', { crumbs: '<a href="#/bots">Bots</a>', sub: 'an AI teammate with memory: it watches what you pick, tells you what it finds, and asks before acting', actions: `<a class="btn ghost" href="#/bots" data-act="bw-cancel">Cancel</a>` })}
       ${UI.stepper(STEPS, bw.at)}
@@ -111,7 +112,9 @@
   UI.act('bw-shadow', () => { bw.shadow = !bw.shadow; redraw(); });
   UI.act('bw-tell', (b) => { bw.tell = b.dataset.v; if (bw.tell === 'slack' && !bw.slack) bw.slack = instOf('slack') || ''; redraw(); });
   UI.act('bw-preset', (b) => { bw.preset = b.dataset.v; redraw(); });
-  UI.act('bw-next', () => { if (canNext()) return; bw.at = Math.min(STEPS.length - 1, bw.at + 1); redraw(); });
+  const advance = () => { bw.at = Math.min(STEPS.length - 1, bw.at + 1); redraw(); };
+  // watching nothing is allowed, but never by accident
+  UI.act('bw-next', () => { if (canNext()) { redraw(); return; } if (bw.at === 1 && !bw.events.size && !bw.sweep) return UI.confirm({ title: 'Continue without anything to watch?', body: `${esc(bw.name)} won't hear about any event and won't check in on its own, so it only answers when you chat with it. You can add what it watches later.`, ok: 'Continue without events', cancel: 'Pick events' }).then((ok) => ok && advance()); advance(); });
   UI.act('bw-back', () => { bw.at = Math.max(0, bw.at - 1); redraw(); });
   UI.act('bw-cancel', () => { bw = fresh(); });
   UI.act('bw-create', () => { if (bw.at !== STEPS.length - 1 || nameErr() || canNext()) return; const name = bw.name; S.stage('bots', name, botCfg(), `new bot ${name}`); chosenEvents().forEach((e) => S.stage('workflows', trigName(e), trigYAML(e), `trigger ${trigName(e)} hands ${e.on} to ${name}`)); D.prefs.returnTo = { href: `#/bots/${name}`, label: name }; bw = fresh(); UI.staged(D.pending[D.pending.length - 1]); });

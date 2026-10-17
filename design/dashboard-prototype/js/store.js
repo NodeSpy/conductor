@@ -505,11 +505,25 @@
   };
   /** A copy of the state with the given changes applied. */
   /** What `conductor validate` on the copy prints for this state: the loader's own messages, exit status. */
+  /** The config nodes a change touches, as dotted paths, from the parsed before and after (leaves and whole added or
+      removed subtrees); and what happened to the comment lines (kept, added, removed, moved). */
+  S.changedPaths = (bText, aText) => { let b, a; try { b = YAML.parse(bText); a = YAML.parse(aText); } catch (e) { return []; } if (b && 'value' in b && 'meta' in b) { b = b.value; a = a.value; }
+    const out = [], walk = (x, y, p) => { if (JSON.stringify(x) === JSON.stringify(y)) return; const obj = (o) => o && typeof o === 'object' && !Array.isArray(o);
+      if (obj(x) && obj(y)) { new Set([...Object.keys(x), ...Object.keys(y)]).forEach((k) => walk(x[k], y[k], p ? `${p}.${k}` : k)); return; } out.push(p || '(root)'); };
+    walk(b, a, ''); return out; };
+  S.commentDelta = (bText, aText) => { const com = (t) => t.split('\n').map((l, i) => [l.trim(), i]).filter(([l]) => l.startsWith('#')), B = com(bText), A = com(aText);
+    const pool = new Map(); A.forEach(([l]) => pool.set(l, (pool.get(l) || 0) + 1)); let kept = 0; B.forEach(([l]) => { if (pool.get(l)) { pool.set(l, pool.get(l) - 1); kept++; } });
+    // a kept comment whose neighbour (the line after it) changed has moved
+    const after = (t) => { const ls = t.split('\n'); const m = new Map(); ls.forEach((l, i) => { if (l.trim().startsWith('#')) m.set(l.trim(), (ls[i + 1] || '').trim()); }); return m; }, nb = after(bText), na = after(aText);
+    let moved = 0; nb.forEach((next, l) => { if (na.has(l) && na.get(l) !== next) moved++; });
+    return { kept, added: A.length - kept, removed: B.length - kept, moved }; };
   S.validateOutput = (v) => {
     const st = S.view(), tmp = '/tmp/conductor-copy-' + (window.D.daemon.config_sha || '7f3a').slice(0, 4);
     const lines = [`$ conductor validate --config ${tmp}/config.yaml`];
-    v.warnings.forEach((w) => lines.push('warning: ' + w));
-    if (v.errors.length) { v.errors.forEach((e) => lines.push('config: ' + e)); lines.push(`Error: ${v.errors.length} problem${v.errors.length > 1 ? 's' : ''} in config.yaml`, 'exit status 1'); }
+    // as the CLI prints it: no dashboard annotations (the check a message belongs to is shown beside the checks instead)
+    const bare = (x) => String(x).replace(/ \((Team ceilings|[A-Z][a-z]+(?: [a-z]+)*)\)$/, '');
+    v.warnings.forEach((w) => lines.push('warning: ' + bare(w)));
+    if (v.errors.length) { v.errors.forEach((e) => lines.push('config.yaml: ' + bare(e))); lines.push(`Error: ${v.errors.length} problem${v.errors.length > 1 ? 's' : ''} in config.yaml`, 'exit status 1'); }
     else lines.push(`config.yaml: ${st.connectors.length} connectors, ${st.workflows.filter((w) => w.source === 'config' && w.kind !== 'workflow').length} triggers, ${st.workflows.filter((w) => w.kind === 'workflow').length} workflows, ${st.packs.length} packs, ${st.bots.length} bots, ${st.teams.length} teams`, 'ok');
     return lines.join('\n');
   };

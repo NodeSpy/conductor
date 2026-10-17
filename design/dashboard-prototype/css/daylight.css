@@ -485,3 +485,5 @@ details.dl-card.acc-tech { padding: 14px 22px; }
   .prop-page .prop-crumbs { margin-top: 0 !important; }
   .prop-back-wide { display: none; } .prop-back-phone { display: inline-flex; }
 }
+/* a long reason or name wraps inside its box (never past the page) */
+.dl-decided, .toast, .seal-words { overflow-wrap: anywhere; }

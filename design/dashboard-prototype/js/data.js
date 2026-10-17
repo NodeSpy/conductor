@@ -25,7 +25,7 @@
     { name: 'pd', use: 'pagerduty', status: 'ok', detail: 'webhook :8787/pd · 2 services', events: 14, verbs: 3 },
     { name: 'kv', use: 'kv', status: 'ok', detail: 'boltdb · 214 keys', events: 0, verbs: 902 },
     { name: 'tf-plan', use: 'terraform', status: 'ok', detail: 'engine tofu 1.8 · READ role', events: 0, verbs: 6 },
-    { name: 'tf-apply', use: 'terraform', status: 'idle', detail: 'engine tofu 1.8 · WRITE role · no bot verb reaches it', events: 0, verbs: 1 },
+    { name: 'tf-apply', use: 'terraform', status: 'idle', detail: 'engine tofu 1.8 · write role', events: 0, verbs: 1 },
     { name: 'handoff', use: 'web', status: 'wait', detail: 'listen :8099 · 1 draft awaiting answer', events: 3, verbs: 3 },
   ];
 

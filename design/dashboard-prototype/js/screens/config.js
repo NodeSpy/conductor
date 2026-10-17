@@ -175,14 +175,16 @@
     if (ap.checksFor !== key) { ap.checksFor = key; ap.phase = 'check'; ap.ack = false; }
     const before = S.configText(D), cand = S.candidate(), after = S.configText(cand), envB = S.envText(D), envA = S.envText(cand);
     // conductor.lock.yaml: what `conductor init` would pin for added or changed packs
-    const lockOf = (st) => 'packs:\n' + (st.packs || []).map((p) => { const u = String((p.cfg || {}).use || ''); const src = u.split('@')[0], ver = u.split('@')[1] || p.ver || 'latest'; return `  ${p.name}:\n    source: ${src.replace(/^conductor-packs\//, 'NodeSpy/conductor-packs/')}\n    version: ${ver.replace(/^\^/, '')}${/^\.\//.test(src) ? '\n    local: true' : `\n    sha: ${(p.name.length * 2654435761 >>> 0).toString(16).slice(0, 8)}`}`; }).join('\n') + '\n';
+    const lockOf = (st) => 'packs:\n' + (st.packs || []).map((p) => { const u = String((p.cfg || {}).use || ''); const src = u.split('@')[0], ver = u.split('@')[1] || p.ver || 'latest'; const cat = (UI.catalogItems ? UI.catalogItems() : []).find((x) => x.kind === 'pack' && src.endsWith('/' + x.name)), exact = /^\d+\.\d+\.\d+$/.test(ver) ? ver : (cat && cat.latest) || p.ver || ver; return `  ${p.name}:\n    source: ${src}\n    version: ${exact}${/^\.\//.test(src) ? '\n    local: true' : `\n    resolved: ${(p.name.length * 2654435761 >>> 0).toString(16).slice(0, 8)}`}`; }).join('\n') + '\n';
     const lockB = lockOf(D), lockA = lockOf(cand);
     const v = S.validate(), wid = S.widening();
     const dv = UI.diffView(before, after, ap.mode, { sections: true });
     const restoring = P.every((c) => /^restore /.test(c.summary));
     const blocked = v.errors.length ? `${v.errors.length} error${v.errors.length > 1 ? 's' : ''} block the apply — fix ${v.errors.length > 1 ? 'them' : 'it'} or discard the change` : ap.phase === 'check' ? 'Checks are still running on the copy' : wid.length && !ap.ack ? 'This change widens what agents can do: tick the acknowledgement first' : '';
+    // computed, never a constant: the config nodes the diff actually touches, and what happened to the comments
+    const touched = S.changedPaths(before, after), cm = S.commentDelta(before, after);
     const CHECKS = [
-      ['Node-level edit', `${P.length} node${P.length > 1 ? 's' : ''} changed · ${(before.match(/^\s*#/gm) || []).length} comment lines kept byte-for-byte`, true],
+      ['Node-level edit', `${touched.length} node${touched.length === 1 ? '' : 's'} changed${touched.length ? ` (${touched.slice(0, 4).map(esc).join(', ')}${touched.length > 4 ? ` and ${touched.length - 4} more` : ''})` : ''} · ${cm.kept} comment line${cm.kept === 1 ? '' : 's'} kept${cm.added ? `, ${cm.added} added` : ''}${cm.removed ? `, ${cm.removed} removed` : ''}${cm.moved ? `, ${cm.moved} moved` : ''}`, true, cm.removed ? 'wait' : 'ok'],
       ['Base unchanged', `config.yaml is still ${D.daemon.config_sha}: no one edited it since you started`, true],
       ['Loads in this binary', v.errors.length ? `${v.errors.length} error${v.errors.length > 1 ? 's' : ''}` : `${D.daemon.version} loader, in-process, on the candidate bytes: 0 errors`, !v.errors.length],
       ['conductor validate on a copy', `scratch HOME + copied plugin state, live dirs read-only: ${v.errors.length} errors, ${v.warnings.length} warning${v.warnings.length === 1 ? '' : 's'}`, !v.errors.length],

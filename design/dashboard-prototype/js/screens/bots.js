@@ -55,9 +55,10 @@
   function teamForm(t) {
     const isNew = !t, c = t ? staged('teams', t.name) : { operators: ['ops'], autonomy: { ceiling: 'reversible' }, isolation: { sandbox: 'required' } };
     const g = (p) => S.getPath(c, p);
+    const initial = isNew ? { ceiling: 'reversible', sandbox: 'required', peers: 'team' } : { description: c.description, folder: c.folder, operators: c.operators, ceiling: g('autonomy.ceiling') || 'reversible', shadow: !!g('autonomy.shadow'), sandbox: g('isolation.sandbox') || 'optional', handoff: g('isolation.handoff_workers') !== false, peers: c.peers || 'team', depth: g('delegation.max_depth'), pool_runs: g('budget.proactive.max_runs_per_day'), pool_turns: g('budget.proactive.max_turns_per_day'), pool_tokens: g('budget.proactive.max_tokens_per_day'), pool_cost: g('budget.proactive.max_cost_per_day'), cap_action: g('budget.spend_cap.per_action'), cap_period: g('budget.spend_cap.per_period'), secrets_via: g('credentials.secrets_via') || 'none', allow_secrets: g('credentials.allow_secrets'), logins: g('browser.logins'), credentials: g('browser.credentials'), repo: g('knowledge.repo'), promotion: g('knowledge.promotion') || 'proposal', lead: g('routing.lead'), fallback: g('routing.fallback') };
     UI.form({ caps: isNew ? 'teams:' : `teams.${t.name}`, title: isNew ? 'New team' : `Edit team ${t.name}`, wide: true,
       intro: 'A team groups bots: they share approvers and ceilings, and a bot on it can only be stricter. Teams are the unit for shared access.',
-      values: isNew ? { ceiling: 'reversible', sandbox: 'required', peers: 'team' } : { description: c.description, folder: c.folder, operators: c.operators, ceiling: g('autonomy.ceiling') || 'reversible', shadow: !!g('autonomy.shadow'), sandbox: g('isolation.sandbox') || 'optional', handoff: g('isolation.handoff_workers') !== false, peers: c.peers || 'team', depth: g('delegation.max_depth'), pool_runs: g('budget.proactive.max_runs_per_day'), pool_turns: g('budget.proactive.max_turns_per_day'), pool_tokens: g('budget.proactive.max_tokens_per_day'), pool_cost: g('budget.proactive.max_cost_per_day'), cap_action: g('budget.spend_cap.per_action'), cap_period: g('budget.spend_cap.per_period'), secrets_via: g('credentials.secrets_via') || 'none', allow_secrets: g('credentials.allow_secrets'), logins: g('browser.logins'), credentials: g('browser.credentials'), repo: g('knowledge.repo'), promotion: g('knowledge.promotion') || 'proposal', lead: g('routing.lead'), fallback: g('routing.fallback') },
+      values: initial,
       fields: [
         isNew ? { k: 'name', type: 'string', req: true, ph: 'e.g. data', pattern: /^[a-z][a-z0-9-]*$/, patternMsg: 'Lowercase letters, digits and dashes.', validate: (v) => (T(v) ? 'A team by that name exists.' : '') } : null,
         { k: 'description', type: 'string', mono: false, label: 'Description' },
@@ -86,8 +87,13 @@
         isNew ? null : { k: 'fallback', type: 'enum', label: 'Fallback (when the lead can\'t triage)', options: botsOf(t.name).map((m) => m.name) },
       ].filter(Boolean),
       submit: 'Review change', submitIcon: 'check',
-      onSubmit: (v) => {
-        const name = isNew ? v.name : t.name, n = {};
+      onSubmit: (vIn) => {
+        // a form edits only what you changed: the node is built from the submitted values and from the values the form
+        // opened with, and only the difference is applied to the current config (so unchanged fields, key order and
+        // keys the form doesn't show, such as knowledge.promotion, stay byte-for-byte)
+        const v0 = isNew ? {} : Object.assign({}, initial), empty = (x) => x == null || x === '' || (Array.isArray(x) && !x.length);
+        const v = Object.assign({}, vIn); Object.keys(v).forEach((k) => { if (empty(v[k]) && empty(v0[k])) v[k] = v0[k]; });
+        const build = (v) => { const name = isNew ? v.name : t.name, n = {};
         if (v.description) n.description = v.description;
         if (v.folder) n.folder = v.folder;
         if (isNew ? false : c.collections) n.collections = c.collections;
@@ -103,6 +109,11 @@
         if ((v.logins || []).length || (v.credentials || []).length) { n.browser = {}; if ((v.logins || []).length) n.browser.logins = v.logins; if ((v.credentials || []).length) n.browser.credentials = v.credentials; }
         if (v.repo) { n.knowledge = { repo: v.repo }; if (v.promotion === 'direct') n.knowledge.promotion = 'direct'; }
         const ro = Object.assign({}, isNew ? {} : c.routing || {}); if (v.lead) ro.lead = v.lead; if (v.fallback) ro.fallback = v.fallback; if (Object.keys(ro).length) n.routing = ro;
+        return n; };
+        const name = isNew ? v.name : t.name, n1 = build(v);
+        const apply = (tgt, a, b) => { new Set([...Object.keys(a || {}), ...Object.keys(b || {})]).forEach((k) => { const x = (a || {})[k], y = (b || {})[k]; if (JSON.stringify(x) === JSON.stringify(y)) return;
+          const obj = (o) => o && typeof o === 'object' && !Array.isArray(o); if (obj(x) && obj(y) && obj(tgt[k])) apply(tgt[k], x, y); else if (y === undefined) delete tgt[k]; else tgt[k] = y; }); return tgt; };
+        const n = isNew ? n1 : apply(Y_clone(c), build(v0), n1);
         S.stage('teams', name, n);
         (v.bots || []).forEach((mn) => { const mc = Y_clone(staged('bots', mn)); mc.team = name; S.stage('bots', mn, mc); });
         if (isNew && !D.teamKnowledge[name] && v.repo) D.teamKnowledge[name] = { repo: v.repo, files: {}, proposals: [] };
@@ -505,7 +516,7 @@
       <h2 class="dl-ptitle">${esc(p.title || p.summary)}</h2><p class="dl-ask">${ask}</p>
       ${shaped ? `<nav class="dl-tabs prop-tabs" role="tablist">${[['overview', 'Overview'], ['tech', 'Technical details']].map(([k, l]) => `<a href="#" role="tab" data-act="prop-tab" data-p="${p.id}" data-v="${k}" class="${tab === k ? 'on' : ''}" aria-selected="${tab === k}">${l}</a>`).join('')}</nav>
       <div class="prop-body">${tab === 'tech' ? tech : overview}</div>` : `<div class="prop-body">${overview}<details class="dl-tech-d"><summary>${icon('chev')}Technical details <span class="dl-sub">the proposal, its case and the digest your passkey signs</span></summary>${techFacts}</details></div>`}
-      ${pend ? `<div class="dl-decide prop-decide"><button class="btn lg primary" data-act="p-approve" data-p="${p.id}" data-d="approve">${icon('passkey')}Approve with passkey</button><button class="btn lg secondary" data-act="p-approve" data-p="${p.id}" data-d="deny">Deny…</button><span class="hint">Only operators${t ? ` on the ${esc(t.name)} team` : ''} can approve.</span></div>` : p.status === 'shadow' ? decided : ''}</article>`;
+      ${pend ? `<div class="dl-decide prop-decide"><button class="btn lg primary" data-act="p-approve" data-p="${p.id}" data-d="approve">${icon('passkey')}Approve with passkey</button><button class="btn lg secondary" data-act="p-approve" data-p="${p.id}" data-d="deny">Deny…</button><span class="hint">${(() => { const ops = S.effective(m).operators.v || []; return ops.length ? `Only ${ops.map(esc).join(' or ')} can approve.` : 'Any operator can approve.'; })()}</span></div>` : p.status === 'shadow' ? decided : ''}</article>`;
     const x = UI.botCan(m), plain = (i) => esc(String(i.text).replace(/ \([^)]*\)$/, ''));
     const can = `<section class="dl-card dl-can"><header class="dl-ch"><h2>What ${esc(m.name)} can do</h2></header>${[['Does on its own', 'ok', x.own], ['Asks you first', 'ember', x.asks], ['Never', 'fail', x.never]].map(([h, s2, xs]) => `<div class="cang" data-s="${s2}"><h3>${UI.mark(s2)}${h}</h3><ul>${xs.map((i) => `<li>${plain(i)}</li>`).join('') || '<li class="dl-sub">nothing</li>'}</ul></div>`).join('')}</section>`;
     const tl = `<section class="dl-card"><header class="dl-ch"><h2>Timeline</h2></header><ol class="dl-story"><li><span class="sg">${UI.mark('ok')}</span><div><b>Proposed by ${esc(m.name)}</b><span>${p.cls === 'event' ? 'while handling the event' : `in case ${p.case}`}</span></div><span class="t">${UI.agoText(p.at)}</span></li>
@@ -563,19 +574,28 @@
 
   /* ---------- access (config edits through the pipeline) ---------- */
   /** What a bot can do, in words: on its own / asks you first / never (the effective tier of every granted verb). */
+  /** What a bot does with a verb, in one place: 'never' (refused), 'own' (runs without asking: read-only, or reversible
+      and promoted under a ceiling that allows it) or 'asks' (waits for your passkey). Every statement about a bot's
+      reach (the three groups, the table's column, Safety's count) comes from this. */
+  UI.verbMode = (m, v) => { const c = (S.staged('bots', m.name) || m.cfg || {}), t = S.tierFor({ cfg: c, name: m.name }, v).tier, promote = S.getPath(c, 'autonomy.promote') || [], ceiling = S.ceilingOf(Object.assign({}, m, { cfg: c }));
+    return t === 'never' ? 'never' : t === 'observe' ? 'own' : t === 'reversible' && promote.includes(v) && ceiling !== 'observe' ? 'own' : 'asks'; };
+  // a verb pattern in plain words (the pattern itself is on hover): gh.get_* → "read GitHub", gh.delete_* → "delete in GitHub"
+  const PATWORD = [[/^(get|list|read|search|fetch|describe)_?$/, 'read'], [/^(delete|remove|destroy)_?$/, 'delete in'], [/^(create|add|post|comment)_?$/, 'add to'], [/^(update|edit|set)_?$/, 'change things in']];
+  const patternWords = (v) => { const [inst, rest = ''] = v.replace(/\*$/, '').split('.'), cn = S.view().connectors.find((x) => x.name === inst), svc = cn ? ((SCHEMA.connectors[(cn.cfg && cn.cfg.use || cn.use || '').split('@')[0]] || {}).label || inst) : inst, w = PATWORD.find(([re]) => re.test(rest)); return w ? `${w[1]} ${svc}` : `${svc}: anything starting “${rest}”`; };
   UI.botCan = (m) => {
     const c = (S.staged('bots', m.name) || m.cfg || {}), sv = S.getPath(c, 'skill.verbs'), verbs = Array.isArray(sv) ? sv : sv ? Object.keys(sv) : [];
     const promote = S.getPath(c, 'autonomy.promote') || [], shadow = S.getPath(c, 'autonomy.shadow') || S.getPath((teamOf(m) || { cfg: {} }).cfg, 'autonomy.shadow');
     const out = { own: [], asks: [], never: [], shadow: !!shadow };
-    const label = (v) => { const d = SCHEMA.verb(v.replace(/\*$/, '')) || null; return d ? `${d.label.replace(/^./, (x) => x.toLowerCase())} (${v})` : v.endsWith('*') ? `anything matching ${v}` : v; };
-    verbs.forEach((v) => { const t = S.tierFor({ cfg: c, name: m.name }, v).tier; const it = { v, t, text: label(v) }; if (t === 'never') out.never.push(it); else if (t === 'observe' || (t === 'reversible' && promote.includes(v))) out.own.push(it); else out.asks.push(it); });
+    const label = (v) => { const d = SCHEMA.verb(v.replace(/\*$/, '')) || null; return d ? `${d.label.replace(/^./, (x) => x.toLowerCase())} (${v})` : v.endsWith('*') ? `${patternWords(v)} (${v})` : v; };
+    verbs.forEach((v) => { const t = S.tierFor({ cfg: c, name: m.name }, v).tier, mode = UI.verbMode(m, v); const it = { v, t, text: label(v) }; (mode === 'never' ? out.never : mode === 'own' ? out.own : out.asks).push(it); }); void promote;
     return out;
   };
   /** What a bot can do, as the approved mock draws it: three plain groups (on its own · asks you first · never), each
       headed by its mark; items in plain words, where they land as a quiet word. The tier names live in the table below. */
   UI.botCanHTML = (m, compact) => { const x = UI.botCan(m), plain = (i) => esc(String(i.text).replace(/ \([^)]*\)$/, ''));
-    const grp = (h, s2, items, empty) => `<div class="cang" data-s="${s2}"><h3>${UI.mark(s2)}${h}</h3><ul>${items.map((i) => { const env = ((S.view().connectors.find((cc) => i.v.startsWith(cc.name + '.')) || {}).env); return `<li>${plain(i)}${env ? ` <span class="dl-sub">· ${esc(env)}</span>` : ''}</li>`; }).join('') || `<li class="dl-sub">${empty}</li>`}</ul></div>`;
+    const grp = (h, s2, items, empty) => `<div class="cang" data-s="${s2}"><h3>${UI.mark(s2)}${h}</h3><ul>${items.map((i) => { const env = ((S.view().connectors.find((cc) => i.v.startsWith(cc.name + '.')) || {}).env); return `<li title="${esc(i.v)}">${plain(i)}${env ? ` <span class="dl-sub">· ${esc(env)}</span>` : ''}</li>`; }).join('') || `<li class="dl-sub">${empty}</li>`}</ul></div>`;
     return `<div class="dl-can${compact ? ' compact' : ''}">${x.shadow ? '<p class="dl-sub">In shadow mode: even what it does on its own is only recorded, never done.</p>' : ''}<div class="dl-can-grid">${grp('Does on its own', 'ok', x.own, 'Nothing: it asks first')}${grp('Asks you first', 'ember', x.asks, 'Nothing needs your approval')}${grp('Never', 'fail', x.never, 'Nothing is refused outright')}</div></div>`; };
+  const TIERW = { observe: 'reads only', reversible: 'can be undone', propose: 'asks first', commit_money: 'spends money', never: 'never' };
   function access(m) {
     const c = staged('bots', m.name), promote = S.getPath(c, 'autonomy.promote') || [];
     const sv = S.getPath(c, 'skill.verbs'), vlist = Array.isArray(sv) ? sv : sv ? Object.keys(sv) : [];
@@ -585,13 +605,17 @@
     const logins = D.access.logins.filter((l) => l.identity === 'bot:' + m.name);
     const eff = S.effective(m);
     const stagedM = S.find('bots', m.name);
-    const tierSel = (x) => `<select class="select mono tier-sel" data-on-change="acc-tier" data-m="${m.name}" data-v="${esc(x.v)}" aria-label="Tier for ${esc(x.v)}">${S.LADDER.map((t) => { const looser = x.teamTier && S.LADDER.indexOf(t) < S.LADDER.indexOf(x.teamTier); return `<option${t === x.tier ? ' selected' : ''}${looser ? ` disabled title="team ${esc(team.name)} classifies ${esc(x.v)} as ${x.teamTier}; a bot can only be stricter"` : ''}>${t}${looser ? ' (team: ' + x.teamTier + ')' : ''}</option>`; }).join('')}</select>`;
-    const promoteCell = (x) => { if (!['observe', 'reversible'].includes(x.eff)) return `<span class="muted tiny" title="Only a reversible verb can run without your signature">asks</span>`; if (x.eff === 'observe') return '<span class="muted tiny">runs (read only)</span>'; const off = ceiling === 'observe' ? `Team ${team ? team.name : ''}'s ceiling is observe: no bot promotes anything` : ''; return UI.switchBtn(promote.includes(x.v), 'acc-promote', `data-m="${m.name}" data-v="${esc(x.v)}" aria-label="Let ${esc(x.v)} run without asking"${off ? ' ' + UI.off(off) : ''}`); };
+    const tierSel = (x) => `<select class="select mono tier-sel" data-on-change="acc-tier" data-m="${m.name}" data-v="${esc(x.v)}" aria-label="Tier for ${esc(x.v)}">${S.LADDER.map((t) => { const looser = x.teamTier && S.LADDER.indexOf(t) < S.LADDER.indexOf(x.teamTier); return `<option value="${t}"${t === x.tier ? ' selected' : ''}${looser ? ` disabled title="team ${esc(team.name)} classifies ${esc(x.v)} as ${x.teamTier}; a bot can only be stricter"` : ''}>${TIERW[t] || t} (${t})${looser ? ' · stricter on the team' : ''}</option>`; }).join('')}</select>`;
+    // the column says what happens, from UI.verbMode (the same answer as the groups above); a reversible verb also gets
+    // its switch, labelled in words
+    const promoteCell = (x) => { const mode = UI.verbMode(Object.assign({}, m, { cfg: c }), x.v), word = mode === 'never' ? 'never: refused' : mode === 'own' ? (x.eff === 'observe' ? 'on its own (it only reads)' : 'on its own') : 'asks you first';
+      if (x.eff !== 'reversible') return `<span class="small">${word}</span>`; const off = ceiling === 'observe' ? `Team ${team ? team.name : ''}'s ceiling is observe: no bot runs anything without asking` : '';
+      return `<label class="row small">${UI.switchBtn(promote.includes(x.v), 'acc-promote', `data-m="${m.name}" data-v="${esc(x.v)}" aria-label="Let ${esc(x.v)} run without asking"${off ? ' ' + UI.off(off) : ''}`)}<span>${word}</span></label>`; };
     return shell(m, 'access', `<section class="dl-card" style="margin-top:20px"><header class="dl-ch"><h2>What ${esc(m.name)} can do</h2><span class="dl-sp"></span><a class="dl-link" href="#/safety">Every bot</a></header>${UI.botCanHTML(Object.assign({}, m, { cfg: c }))}
         <p class="dl-sub" style="margin:12px 0 0">Change it below; each change waits for your review${team ? `, and on the ${esc(team.name)} team a bot may act without asking only up to ${UI.tier(ceiling)}` : ''}.${stagedM ? ` <a class="dl-link" href="#/config/apply">Review the change</a>` : ''}</p></section>
       <div class="acc-stack">
         <div class="panel"><div class="panel-head"><h3>Verbs and tiers</h3><span class="muted small">skill.verbs × autonomy.tiers</span><div class="tools"><button class="btn sm" data-act="acc-addverb" data-m="${m.name}">${icon('plus')}Grant a verb</button></div></div>
-          <table class="tbl compact responsive"><thead><tr><th>verb</th><th>tier</th><th>runs without asking</th><th></th></tr></thead><tbody>${verbs.map((x) => `<tr><td data-l="verb" class="mono">${x.v}${x.teamTier && x.teamTier !== x.tier ? `<div class="tiny muted">team: ${x.teamTier}</div>` : ''}</td><td data-l="tier">${tierSel(x)}</td><td data-l="runs without asking">${promoteCell(x)}</td><td class="num"><button class="icon-btn" data-act="acc-delverb" data-m="${m.name}" data-v="${esc(x.v)}" aria-label="Remove ${esc(x.v)}">${icon('trash')}</button></td></tr>`).join('') || '<tr class="empty-row"><td colspan="4">No verbs granted: it can only read what it\'s told.</td></tr>'}</tbody></table>
+          <table class="tbl compact responsive"><thead><tr><th>verb</th><th>tier</th><th>what it does</th><th></th></tr></thead><tbody>${verbs.map((x) => `<tr><td data-l="verb" class="mono">${x.v}${x.teamTier && x.teamTier !== x.tier ? `<div class="tiny muted">team: ${x.teamTier}</div>` : ''}</td><td data-l="tier">${tierSel(x)}</td><td data-l="what it does">${promoteCell(x)}</td><td class="num"><button class="icon-btn" data-act="acc-delverb" data-m="${m.name}" data-v="${esc(x.v)}" aria-label="Remove ${esc(x.v)}">${icon('trash')}</button></td></tr>`).join('') || '<tr class="empty-row"><td colspan="4">No verbs granted: it can only read what it\'s told.</td></tr>'}</tbody></table>
           <div class="panel-foot small muted">An unclassified verb is ${UI.tier('propose')} (asks first). Tiers looser than the team's are disabled, and validation refuses them.</div></div>
         <div class="stack">
           <div class="panel"><div class="panel-head"><h3>Sign-in credentials</h3><span class="muted small">browser.credentials naming bot:${m.name}</span><div class="tools"><button class="btn sm" data-act="cred-bind" data-m="${m.name}">${icon('plus')}Let it use a login</button></div></div><div class="list">${creds.map((x) => { const cf = S.staged('credentials', x.name) || x.cfg; return `<div class="item acc-row"><div class="dl-nt"><b>${x.name} <span class="dl-sub">${esc(cf.origin)}</span></b><span class="dl-why">signs in with ${['username', 'password', 'otp', 'passkey'].filter((k) => cf[k]).map((k) => ({ otp: 'a one-time code', passkey: 'a passkey' }[k] || `a ${k}`)).join(', ')}</span></div><span class="dl-na"><a class="btn sm secondary" href="#/browser/logins">Edit the login</a><button class="icon-btn" data-act="cred-more" data-m="${m.name}" data-c="${x.name}" aria-label="More for ${esc(x.name)}">${icon('more')}</button></span></div>`; }).join('') || '<div class="item small muted">No sign-in credentials name this bot.</div>'}</div></div>

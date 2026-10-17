@@ -219,7 +219,9 @@
               if (iso.mode === 'container' && !(isObj(iso.container) && iso.container.image)) err('isolation.container.image: required for mode container (the image must carry the runtime binary)', 'isolation.container.image');
               if (iso.mode === 'user' && !iso.user) err('isolation.user: required for mode user (the low-privilege account)', 'isolation.user');
               if (iso.privileged && iso.mode !== 'namespace') err('isolation.privileged: namespace mode only', 'isolation.privileged');
-              if (isObj(iso.network) && iso.network.deny && (iso.network.egress || []).length) err('isolation.network: egress and deny are mutually exclusive', 'isolation.network');
+              // Isolation.md "Enforced vs. advisory": deny: true + egress under namespace/container is the enforced allowlist
+              // (no interface, only the filtering proxy); egress without deny, or under mode user, is advisory only
+              if (isObj(iso.network) && (iso.network.egress || []).length && !(iso.network.deny && ['namespace', 'container'].includes(iso.mode))) err(`isolation.network.egress: advisory only${iso.mode === 'user' ? ' under mode user' : ' without deny: true'}: a runtime that ignores the proxy env still reaches the network. ${iso.mode === 'user' ? 'Use namespace or container with deny: true to enforce it.' : 'Add deny: true to enforce it.'}`, 'isolation.network', 'warning');
               if (rt && rt.use === 'paseo') err(`isolation: needs a runtime conductor launches itself; ${rt.name} is a paseo runtime, whose agents are children of the paseo daemon (validate rejects the combination)`, 'isolation');
             }
           }

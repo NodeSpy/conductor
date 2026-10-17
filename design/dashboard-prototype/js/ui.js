@@ -14,6 +14,9 @@
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   UI.$ = $; UI.$$ = $$;
+  /** A folder name: any letters or digits (Ü included), then spaces, . _ -; never "..", at most 48 characters. */
+  UI.FOLDER_SEG = /^(?!.*\.\.)[\p{L}\p{N}][\p{L}\p{N} ._-]{0,47}$/u;
+  UI.folderPathErr = (p) => (!p ? '' : p.split('/').every((x) => UI.FOLDER_SEG.test(x)) ? '' : 'Folder names are letters, digits, spaces, . _ and - (up to 48 each, no ".."), separated by /');
   UI.esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
   /* ---------- icons: Lucide at a 1.75 stroke (js/icons.js); status glyphs are Daylight's own ---------- */
@@ -345,7 +348,7 @@
         <div class="seal-words">${deny ? 'You\'re denying' : 'You\'re approving'} <b>${UI.esc(p.title || p.summary)}</b>, proposed by <b>${p.bot}</b>.${p.impact ? ` <span class="dim">${UI.esc(p.impact)}</span>` : ''}</div>
         ${UI.requesterBanner ? UI.requesterBanner(p) : ''}
         ${p.kind === 'terraform' ? `<div class="kv small"><dt>action</dt><dd class="mono">terraform apply · ${p.tf.repo} · ${p.tf.dir} · ${p.tf.workspace}</dd><dt>plan</dt><dd class="mono">+${p.tf.add} ~${p.tf.change} -${p.tf.destroy} · ${UI.statusMark('wait', `replaces ${p.tf.replaces.join(', ')}`, { sm: true })}</dd></div>` : UI.payloadHTML ? UI.payloadHTML(p) : ''}
-        ${deny ? `<div class="field"><label for="seal-reason">Tell the bot why <span class="opt">optional</span></label><textarea class="textarea" id="seal-reason" rows="2" placeholder="e.g. Not in #incidents; post it to #finance instead."></textarea></div>` : ''}
+        ${deny ? `<div class="field"><label for="seal-reason">Tell the bot why <span class="opt">optional</span></label><textarea class="textarea" id="seal-reason" rows="2" maxlength="500" placeholder="e.g. Not in #incidents; post it to #finance instead."></textarea></div>` : ''}
         <details class="tech"><summary>The exact payload the passkey signs</summary><div class="digest">{ bot: <b>${p.bot}</b>, proposal: <b>${p.id}</b>, decision: <b>${decision}</b>, action_sha256: <b>${p.digest.replace('sha256:', '')}</b>, nonce: <b>7Qx2…f9</b> }</div></details>
         <div class="seal" id="seal">
           <div id="seal-msg"><b>Confirm with your passkey</b><div class="muted small">User verification required · this assertion covers only this action</div></div>

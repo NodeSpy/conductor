@@ -338,8 +338,8 @@
           if (iso && iso.mode === 'user') G('isolation.user', { type: 'string', label: 'user', req: true, ph: 'conductor-agent' });
           if (iso && iso.mode === 'container') { G('isolation.container.image', { type: 'string', label: 'container image', req: true, ph: 'ghcr.io/acme/agents:latest' }); G('isolation.container.engine', { type: 'enum', label: 'engine', options: ['docker', 'podman'] }); }
           if (iso && iso.mode) {
-            G('isolation.network.egress', { type: 'list', label: 'egress allowlist', ph: 'api.github.com:443', help: 'Through conductor\'s egress proxy; an empty network block denies all. Adding a host widens.' });
-            G('isolation.network.deny', { type: 'bool', label: 'no network', on: 'cut the network structurally (exclusive with egress)' });
+            G('isolation.network.egress', { type: 'list', label: 'egress allowlist', ph: 'api.github.com:443', help: 'Only these hosts, through conductor\'s egress proxy. Adding a host widens.' });
+            G('isolation.network.deny', { type: 'bool', label: 'enforce it', on: (iso.network && (iso.network.egress || []).length) ? (['namespace', 'container'].includes(iso.mode) ? 'enforced: no network but the allowlist (deny: true)' : 'needs namespace or container to enforce') : 'no network at all (deny: true)' });
             G('isolation.fs', { type: 'list', label: 'extra paths (fs allowlist)', ph: '/srv/media' });
             G('isolation.limits.memory', { type: 'string', label: 'memory limit', ph: '2g' }); G('isolation.limits.cpu', { type: 'string', label: 'cpu limit', ph: '200%' }); G('isolation.limits.pids', { type: 'number', label: 'pids limit' });
             if (iso.mode === 'namespace') G('isolation.privileged', { type: 'bool', label: 'privileged', on: 'see the daemon\'s own files (widening)' });

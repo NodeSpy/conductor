@@ -181,19 +181,19 @@
   UI.act('f-toggle', (b) => { const s = closed(); s.has(b.dataset.path) ? s.delete(b.dataset.path) : s.add(b.dataset.path); D.prefs.closedFolders = [...s]; S.save(); UI.rerender(); });
 
   /* ---------- folder operations ---------- */
-  const SEG = /^[\w][\w .-]*$/;
+  const SEG = UI.FOLDER_SEG;
   const itemsUnder = (path) => ({ teams: D.teams.map((t) => t.name).filter((t) => within(UI.folderOfTeam(t), path) && UI.folderOfTeam(t)), bots: D.bots.map((b) => b.name).filter((b) => { const c = cfgOf('bots', b, true); return !c.team && c.folder && within(c.folder, path); }) });
   function stageFolder(coll, name, folder, summary) { const c = clone(S.staged(coll, name)); if (folder) c.folder = folder; else delete c.folder; return S.stage(coll, name, c, summary); }
   UI.act('f-new', (b) => UI.form({ caps: 'organization only', title: 'New folder', intro: 'A folder groups bots and teams for display, filtering and search. It has no permissions, defaults or behavior.',
     values: { parent: b.dataset.parent || '' },
-    fields: [{ k: 'parent', type: 'enum', label: 'Inside', options: [['', 'top level']].concat(UI.allFolders().map((f) => [f, f])), create: 'folder', createLabel: 'New folder' }, { k: 'name', type: 'string', req: true, ph: 'e.g. clients', pattern: SEG, patternMsg: 'Letters, digits, space, . _ -; no slashes (nest with Inside).' }],
+    fields: [{ k: 'parent', type: 'enum', label: 'Inside', options: [['', 'top level']].concat(UI.allFolders().map((f) => [f, f])), create: 'folder', createLabel: 'New folder' }, { k: 'name', type: 'string', req: true, ph: 'e.g. clients', pattern: SEG, patternMsg: 'Letters, digits, spaces, . _ and - (up to 48, no ".."); no slashes (nest with Inside).' }],
     submit: 'Create folder', submitIcon: 'folder',
     onSubmit: (v) => { const path = (v.parent ? v.parent + '/' : '') + v.name.trim(); if (UI.allFolders().includes(path)) return `${path} exists already.`; D.folderDrafts = (D.folderDrafts || []).concat([path]); S.save(); UI.rerender(); UI.toast(`Folder ${esc(path)} created`, 'it reaches config when you move a bot or team into it', 'ok'); } }));
   UI.act('f-menu', (b) => { const p = b.dataset.path, it = itemsUnder(p); UI.menu(b, [['New folder inside', 'folder', 'f-new', `data-parent="${esc(p)}"`], ['Rename…', 'edit', 'f-rename', `data-path="${esc(p)}"`], ['Open', 'chev', 'f-open', `data-path="${esc(p)}"`], ['-'], [it.teams.length + it.bots.length ? `Delete (moves ${it.teams.length + it.bots.length} up)` : 'Delete', 'trash', 'f-delete', `data-path="${esc(p)}"`]]); });
   UI.act('f-open', (b) => UI.go('#/folders/' + enc(b.dataset.path)));
   UI.act('f-rename', (b) => {
     const p = b.dataset.path;
-    UI.form({ caps: `folder ${esc(p)}`, title: 'Rename folder', edit: true, values: { name: leaf(p) }, fields: [{ k: 'name', type: 'string', req: true, pattern: SEG, patternMsg: 'Letters, digits, space, . _ -; no slashes.' }],
+    UI.form({ caps: `folder ${esc(p)}`, title: 'Rename folder', edit: true, values: { name: leaf(p) }, fields: [{ k: 'name', type: 'string', req: true, pattern: SEG, patternMsg: 'Letters, digits, spaces, . _ and - (up to 48, no ".."); no slashes.' }],
       note: 'Renaming rewrites the <span class="mono">folder:</span> of every team and solo bot inside it, so it goes through the config diff.',
       submit: 'Rename', submitIcon: 'check',
       onSubmit: (v) => {
