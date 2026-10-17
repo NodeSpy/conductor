@@ -1,17 +1,19 @@
-# conductor brand and design system
+# conductor brand and design system: Daylight
 
-This is the single source of truth for how conductor looks, reads and behaves on every surface: the README and docs, the dashboard, and anything that comes after them. This file is the written guide. Each rule comes with the reason for it.
+This is the single source of truth for how conductor looks, reads and behaves on every surface: the README and docs, the dashboard, and anything after them. This file is the written guide. Each rule comes with its reason.
 
 | | |
 |---|---|
 | **Brand book** (live, both themes, both densities) | [`system.html`](system.html) |
-| **Tokens** (source of truth, W3C DTCG format) | [`tokens/tokens.json`](tokens/tokens.json) → generated [`tokens/tokens.css`](tokens/tokens.css) |
+| **Tokens** (source of truth, W3C DTCG) | [`tokens/tokens.json`](tokens/tokens.json) → generated [`tokens/tokens.css`](tokens/tokens.css) |
+| **Prototype → Daylight mapping** | [`tokens/migration.json`](tokens/migration.json), [`tokens/prototype-compat.css`](tokens/prototype-compat.css), and the table in the book (*Tokens › Migrating the dashboard*) |
 | **Contrast report** (every declared pair, both themes) | [`tokens/CONTRAST.md`](tokens/CONTRAST.md) |
-| **Data-viz validation** | [`tokens/dataviz-validation.txt`](tokens/dataviz-validation.txt) |
-| **Logo files** | [`assets/`](assets/) (Fermata); other directions in [`directions/`](directions/) |
-| **Logo directions** (the original proposal) | [`index.html`](index.html) |
+| **Logo review** (pick a mark) | [`logo-review.html`](logo-review.html); kits in [`logo-kits/`](logo-kits/) |
+| **How we got here** | [`index.html`](index.html) (logo directions), [`directions-v2.html`](directions-v2.html) (system directions) |
 
-The working mark is **Fermata**. No direction has been chosen yet. The system is built so the mark is a swappable layer: see [What changes per direction](#what-changes-per-direction).
+**Daylight** is warm, light-first and built to be read: conductor as a calm colleague who tells you how things are going in a sentence before showing you a table. Daniel chose it over Broadsheet (editorial, densest) and Score (timeline-first, most graphic). It borrows one pattern from each: Broadsheet’s **“since you last looked”** digest for the overview, and Score’s **activity lanes** for the Activity page.
+
+The **logo is not chosen yet**. The working mark is **Fermata, strengthened**; Gate, Cue and Conduit are the alternatives. The system never names the logo: picking another one is a one-folder swap (see [Logo](#logo)).
 
 ---
 
@@ -19,84 +21,97 @@ The working mark is **Fermata**. No direction has been chosen yet. The system is
 
 | Area | Decision | Why |
 |---|---|---|
-| Palette | Warm graphite and paper neutrals, one ember accent | These keep the prototype's look, which both audits praised (“calm, distinctive, coherent”). One accent keeps “where do I act?” unambiguous. |
-| Accent | Ember means *you*: needs-you, the primary action, focus and the logo dot | A colour that means one thing can be scanned. The prototype also used it for text, links and decoration, which diluted it. |
-| Text accent | Separate `text.accent` (ember 700 on light, 400 on dark) | The light fill (`#cc4a0e`) is 3.8:1 on paper and fails AA as text. The text token is 5.2–6.7:1. |
-| Tertiary text | `#aea796` dark / `#666256` light | The prototype's `--ink-3` failed AA on cards (≈4.3:1 dark, 3.5:1 light), and it is the most-used metadata colour. |
-| Contrast | Declared per token, checked by the generator in both themes | 296 pairs, 0 failures. The build fails on a regression instead of one being found in an audit. |
-| Status | Six states, each with `fg/bg/border/solid`, always with a glyph and a word | The power-user audit praised glyph + label. This makes it a rule, so state survives one colour, colour blindness and sunlight. |
-| Data viz | Our own categorical order, validated with the dataviz method | The adjacent CVD ΔE is 16.5 (light) / 12.8 (dark), against a target of 8. Red and green sit at slots 5 and 7, so they rarely appear unless the chart means status. |
-| Type | Instrument Serif (italic titles) · Instrument Sans (UI) · Martian Mono (machine) | These are the prototype's faces, all OFL. The three voices map to human, interface and machine. |
-| Serif rule | Five words or fewer, human-written, 20px+, title roles only | The newcomer audit found long italic serif titles hard to read. |
-| Density | Comfortable (default) and compact as token sets | The power-user audit asked for 28–30px rows. A token set means every component gets it for free. |
-| Mono width | Martian Mono's width axis: 100% comfortable, 87.5% compact | Martian Mono is wide. The narrower cut keeps ids and digests readable in dense tables. |
-| Icons | Lucide (ISC) plus nine status glyphs of our own | The prototype's hand-drawn icons already match Lucide's style. A real set stops icon drift. |
-| Motion | Explains, never celebrates. Reduced motion stops spin and travel | Approvals are serious, so nothing about signing should feel like a game. |
-| Voice | Plain words first, the term second, risk stated plainly | The newcomer couldn't answer “what can my bots do without asking?” even though the mechanisms were excellent. |
-| Tokens | DTCG, three tiers, modes in `$extensions.mode`, CSS custom properties | Open standard and tool-friendly (Terrazzo, Style Dictionary). The dashboard can drop in one CSS file. |
+| Direction | Daylight: warm, light-first, sentence-first | Daniel found round one “engineery” and generic, and wanted conductor’s firehose easier to consume. Daylight leads with plain language and keeps colour for what needs attention. |
+| Information design | Ten rules (below): summary first, plain headline over technical detail, three type levels, colour only for attention… | These are the heart of the system. The audits’ biggest problems (no first step, “what can my bots do?”, hashes up front) were information problems, not paint. |
+| Palette | Cream and cocoa surfaces, sand neutrals, one ember accent | Warm paper reads as a product rather than a terminal, and one accent keeps “where do I act?” unambiguous. |
+| Status | Colour only on what needs attention; passing work is ink | When eleven of sixteen rows are green, green means nothing and the two red rows are harder to find. |
+| Type | Fraunces (titles) · Atkinson Hyperlegible Next (everything read) · Atkinson Hyperlegible Mono (code only) | A soft, upright serif gives a brand voice without the hard-to-read long italics of round one. Atkinson was designed by the Braille Institute so 1/l/I and 0/O stay distinct, which matters for ids and numbers. Mono stops being a decorative “machine voice”. |
+| Size | Body 15px, lead 17px; nothing under 11.5px; mono ≥ 12px | The audits flagged “tiny mono text everywhere”. |
+| Shape | Rounded: 10px controls, 14px cards, pill badges, warm soft shadows | Approachable, and the rounding groups content without extra rules. |
+| Density | Comfortable 52px rows; compact 36px as a token set | Newcomers get room to read; the power user’s compact mode is the same content, tighter. |
+| Theming robustness | Every page declares `color-scheme`; an explicit `data-theme` always beats the OS | The iPhone bug (below). |
+| Tokens | Same DTCG architecture, generator and contrast gate as round one | Only the values changed. The gate checks 302 pairs; 0 fail. |
+
+---
+
+## Reading at a glance (information design)
+
+conductor produces runs, cases, approvals, logs, diffs and bot activity around the clock. A person must be able to answer three questions in seconds: **does anything need me, is anything broken, and is everything else fine?** Every screen follows these rules. Before/after examples are in the book (*Reading at a glance*).
+
+1. **Summary first, detail on demand.** Every screen opens with one plain sentence (“**5 things need you.** Everything else is running normally: 18 of 20 runs in the last 12 hours went fine.”). Health checks, raw counts and system internals sit one step down, never across the top of every page.
+2. **A plain headline, the technical detail beneath.** “Replace the production web server”, then why it matters, then `p12 · infra@3f2a9c1d · +1 ~2 −0` in mono, last.
+3. **Three levels of type, and only three.** What (title or bold lead-in), why it matters (regular, secondary ink), machine detail (mono, small, tertiary, at the end).
+4. **Colour only for what needs attention.** Passing work is ink. Failed, waiting, running and needs-you get colour, always with a glyph and a word.
+5. **Numbers line up.** Durations, costs and counts are right-aligned in tabular figures, with units (“12 min”, “$1.12”).
+6. **Group and chunk.** Things to act on (“Needs you”) are separate from things that are merely true (“For your information”: an update that installs itself is not “needing you”). Groups are separated by space and a count, not boxes inside boxes.
+7. **Lead with what changed.** Coming back, you see “Since you last looked” (counts, one line each, linked) before any feed.
+8. **Timelines tell the story.** A run reads top to bottom: each step’s outcome in a sentence, the duration on the right, the failing step called out, and later steps marked “Not reached”.
+9. **Human times and schedules.** “52 min ago (17:03)”, “Mondays at 06:00”. Cron strings and exact timestamps go on hover; ids and hashes are never first on a line.
+10. **Whitespace that groups, density on request.** Comfortable by default; compact is the same content in the same order, only tighter.
+
+### Patterns
+
+- **Summary header:** title, one sentence that answers the page’s question (bold count first when something needs you), then actions.
+- **Needs you list:** glyph · plain title · why it matters · machine details last · age · one verb. Approvals get the primary button.
+- **Since you last looked** (from Broadsheet): the overview leads with what changed since your last visit, as counts with one line each. New failures and approvals carry their status colour; everything else is ink.
+- **Run story:** a run as steps in sentences, top to bottom, with durations on the right.
+- **Activity lanes** (from Score), for the Activity page: one named lane per workflow, time left to right, every run a mark whose shape and colour give its state (ink dot passed, red cross failed, blue arc running, ember diamond needs you, bars parked), and the “now” line in the accent. Lanes are labelled, not coloured.
+- **Approval card:** needs-you kicker · plain title · what it wants to run · *Why* · what changes (adds / changes / replaces / destroys) · *Where / Effect / Undo* · origin · “Approve with passkey” / “Deny…” · technical details collapsed. On a phone the decision buttons stay pinned above the tab bar.
 
 ---
 
 ## Logo
 
-**The idea.** A fermata tells an ensemble to hold until the conductor releases it. conductor works the same way: runs wait behind an approval, a bot pauses on “needs you”, and nothing moves until you sign. The arch over a point also reads as a signal arc over its source. The mark is an ink arch and an ember dot.
-
-### Files
-
-All files are generated by `tools/build.mjs` (SVG) and `tools/render.mjs` (PNG) from the geometry in `tools/directions.mjs`. Edit the geometry, never the outputs. The wordmarks are outlined, so no font is needed. Files with no suffix are for light backgrounds, and `-dark` files are for dark backgrounds.
+The logo is a swappable layer. Every candidate is a complete kit in `logo-kits/<id>/`, with the same file names, generated by `tools/build.mjs` and `tools/render.mjs` from the geometry in `tools/logos.mjs`:
 
 | File | Use |
 |---|---|
-| `logo-horizontal.svg` · `-dark` · `-mono` | **Default** lockup: README, docs, slides, co-branding. |
-| `logo-stacked.svg` · `-dark` · `-mono` | Square-ish spaces: title slides, stickers, the docs home. |
-| `logo-mark.svg` · `-dark` · `-mono` | Where the name is already present: the app icon, the dashboard on a phone, avatars. `-mono` uses `currentColor`. |
-| `wordmark.svg` · `-dark` · `-mono` | Rare: when the mark is already nearby. |
-| `favicon.svg` | The 16px cut, which follows `prefers-color-scheme`. |
-| `favicon-16/32/48.png` (+ `-dark`) | PNG fallbacks for light and dark browser chrome. |
-| `apple-touch-icon.png` (180, full-bleed) · `icon-192.png` · `icon-512.png` · `app-icon(-light).svg` | Home-screen and PWA icons. |
-| `social-card.png` (1280×640) | The repository's social preview. |
+| `logo-horizontal.svg` · `-dark` · `-mono` | Default lockup: README, docs, sign-in. |
+| `logo-stacked.svg` · `-dark` · `-mono` | Square spaces. |
+| `logo-mark.svg` · `-dark` · `-mono` | Mark alone on a 32-unit square. `-mono` uses `currentColor`. |
+| `wordmark.svg` · `-dark` · `-mono` | Name alone. |
+| `mark-inline.html` | Inline SVG for app chrome, coloured by `--color-logo-ink` and `--color-accent-default`. |
+| `favicon.svg` · `favicon-16/32/48.png` (+ `-dark`) | The 16px cut. The SVG follows the browser’s colour scheme. |
+| `apple-touch-icon.png` · `icon-192.png` · `icon-512.png` · `app-icon(-light).svg` | Home screen and PWA. |
 
-### Geometry, clear space and minimum size
+**Candidates:** Fermata, strengthened (working mark; the hold-until-released arch, redrawn heavier for cream) · Gate (a doorway with the dot standing in it) · Cue (a disc that gives way to the dot) · Conduit (round one’s runner-up). See [`logo-review.html`](logo-review.html) for each in the sidebar, top bar, phone header, browser tab and README, light and dark, from 16px up.
 
-- **Mark** (32-unit grid): the arch is the region between two ellipses, 13×14 and 9.8×10, that share a centre at (16, 21). That gives a 4-unit crown and 3.2-unit feet. The dot (r = 4) sits on the arch's baseline at (16, 21). The content box is 26×18, centred in the square.
-- **16px cut:** below 24px, use `favicon.svg`, never a scaled master. It is redrawn on a 16-unit grid with whole-pixel feet, so it stays crisp in a tab.
-- **Clear space:** one dot diameter on every side, measured on the rendered dot.
-- **Minimum size:** the mark at 16px (16px cut) or 24px (master); the horizontal lockup at 18px tall (96px wide); the stacked lockup at 64px wide.
+**Why Fermata was strengthened.** Daniel found it weak on light. On cream, a thin arch, a small dot and a light italic wordmark lost to the surface. The fix: crown 4 → 5.5 units and feet 3.2 → 5, a dot 25% bigger and higher under the arch, a deeper ink on cream (`--color-logo-ink`: sand 975 `#1c1712`, deeper than body text), and the wordmark in Fraunces SemiBold. The Daylight sunrise rays and hairline baseline are not part of the mark: they cluttered it at small sizes and stay in illustrations only.
 
-### Usage
+**Usage (any candidate).** Clear space is one dot diameter on every side. The minimum size is 16px for the mark (the 16px cut, never a scaled master), 20px tall for the horizontal lockup, and 72px wide for stacked. In app chrome, use the inline mark at 20px beside the live-text wordmark (`--type-brand`). Keep the dot in the accent and the rest in logo ink, or set the whole mark in one colour. Never stretch, rotate, recolour, add effects, re-type the wordmark, place it on busy imagery, or use it as a spinner. **Co-branding:** the partner logo goes to the right at equal optical height, after a hairline rule with two dot-widths of space; conductor comes first on our surfaces.
 
-- **Do** keep the dot in the accent and the arch in ink, or set the whole mark in one colour (ink, white, black, or bone or white on ember).
-- **Don't** stretch, rotate (upside down it becomes a smile), recolour the arch, add effects, outline it or re-type the wordmark. Don't place it on busy imagery without a solid field, and don't use it as a spinner.
-- **Co-branding:** the partner logo sits to the right at equal optical height, with a hairline rule between and two dot-widths of space on each side. conductor comes first on our surfaces. Never merge the marks.
-- **Social card:** dark, 1280×640: lockup, the one-line description, a mono footer with the repo URL, and a cropped ghost of the mark at low contrast. Keep 64px clear on every side, because GitHub and Slack crop the edges.
-- **Favicon:** use `favicon.svg` first (it adapts to the browser theme), the 32px PNG as the fallback, and the apple-touch icon on a solid graphite square (iOS adds its own corner mask).
-- **Never** bring back the mascot, the top hat or the Octocat pin.
+**Swapping the logo** copies a different kit into place. No token, component or page changes, because tokens never name the logo.
 
 ---
 
 ## Colour
 
-### Raw palettes (`primitive.color.*` → `--palette-*`)
+### Raw palettes (`--palette-*`)
 
-- **neutral**, **ember**, **red**, **amber**, **green**, **teal**, **sky**, **blue**, **violet** and **magenta** are 11-step OKLCH ramps (50 lightest … 950 darkest), derived by `tools/ramps.mjs` and then **frozen** as hex values in tokens.json. *Why frozen:* a later tweak to the generator must never silently move a shipped colour (the dataviz method's “documented palette only” rule).
-- **graphite** (dark) and **paper** (light) are six-step surface sets: 0 sunken, 1 canvas, 2 rail, 3 surface, 4 raised, 5 overlay. *Why separate:* dark UIs need several surfaces within L 0.17–0.27, and a perceptual ramp is too coarse there. The values are the prototype's hand-tuned ones, kept.
-- `green-700` was nudged from L 0.49 to 0.475 so that success text clears 4.5:1 on its own wash.
+- **sand** is the warm neutral ramp for text, borders and icons (50 lightest … 950), plus **975**, the logo ink.
+- **cream** (light) and **cocoa** (dark) are six-step surface sets: 0 sunken · 1 canvas · 2 rail · 3 surface · 4 raised · 5 overlay. *Why separate sets:* surfaces need finer steps than a perceptual ramp gives. They are hand-tuned, warm, and frozen as hex.
+- **ember** (the accent) and the status hues (**red, amber, green, teal, sky, blue, violet, magenta**) are 11-step OKLCH ramps, frozen in tokens.json so a later generator change can’t move a shipped colour.
 
-### Semantic roles (`semantic.color.*` → `--color-*`)
+### Semantic roles (`--color-*`)
 
-Components only ever use these. Each one resolves per theme.
-
-- **bg:** `canvas` (page) · `sunken` (wells, code) · `rail` · `surface` (cards, elevation 1) · `raised` (selected rows, nested cards) · `overlay` (menus, dialogs) · `field` (input interiors: sunken on dark, white on light) · `inverse` (tooltips).
-- **text:** `primary` (AAA everywhere) · `secondary` (AA everywhere, AAA on canvas and surface) · `tertiary` (AA everywhere, including fields) · `disabled` (exempt: disabled controls only) · `inverse` · `accent` (text-safe accent) · `on-accent`.
-- **icon:** `default` · `muted` (still 3:1).
-- **border:** `subtle` · `default` · `strong` (decorative) · **`control`**, at 3:1 against every surface (WCAG 1.4.11). *Why:* input and checkbox edges identify the control, and the prototype's `--line-2` was about 1.9:1.
-- **accent:** `default` (fills) · `hover` · `active` · `subtle` (wash). On dark, `active` steps *lighter* so the dark on-accent text keeps AA.
-- **focus.ring:** ember, 2px, with a 2px offset, on every focusable element.
-- **selection**, **state.hover / pressed** (translucent layers over any surface), **scrim**, **decor.dot**.
+| Role | Light | Dark | Use |
+|---|---|---|---|
+| `bg.canvas` | `#f7f3ec` | `#1d1915` | The page |
+| `bg.rail` | `#f1ebe1` | `#211c18` | Sidebar and top bar |
+| `bg.surface` | `#fffdf9` | `#26211c` | Cards |
+| `bg.raised` | `#ffffff` | `#2e2822` | Selected rows, nested cards |
+| `bg.sunken` | `#efe9df` | `#16130f` | Wells, code |
+| `text.primary` | `#2a231c` | `#f4eee4` | Titles, body (AAA everywhere) |
+| `text.secondary` | `#584e43` | `#ddd3c2` | The “why” line (AA everywhere) |
+| `text.tertiary` | `#6e6457` | `#ada291` | Times, metadata, machine detail (AA everywhere) |
+| `text.accent` | `#a33901` | `#ff8253` | Links and accent words. Never use the fill for text. |
+| `accent.default` | `#cc4a0e` | `#ff6a2b` | Fills that mean “you / act here” |
+| `border.control` | `#8f8577` | `#8f8577` | Input and checkbox edges (3:1) |
+| `logo.ink` | `#1c1712` | `#f4eee4` | The mark’s ink |
 
 ### Accent rule
 
-Ember marks a place where a person is needed or can act: the needs-you count and row bar, the primary button, the active nav indicator, the focus ring, the logo dot and the chart's “now” cursor. It is **not** used for decoration, headings, token names, ids or values. *Why:* one colour with one meaning can be scanned. The prototype's 105 `var(--accent)` uses, 43 of them as text colour, wore that meaning down.
+Ember marks the places a person is needed or can act: the needs-you count and kicker, the primary button, the focus ring, the logo dot and the chart’s “now” line. It is not used for decoration, headings, ids or values. *Why:* one colour with one meaning can be scanned.
 
 ### Status (`--color-status-{success,warning,danger,info,running,neutral}-{fg,bg,border,solid}`)
 
@@ -122,75 +137,66 @@ Built and checked with the dataviz method (`validate_palette.js`) against `bg.su
 
 ### Contrast policy
 
-Every token used as text, as a control edge or as a data mark declares the backgrounds it sits on, in `$extensions["org.conductor.contrast"]`. `node tools/tokens.mjs` checks every pair in both themes and **exits 1** if any falls below its minimum: 7 for primary text and any `aaaOn` pair, 4.5 for other text, 3 for control edges, focus rings, icons and marks. Translucent backgrounds are composited over their real backdrop first (`a@b`). There are currently **296 pairs and 0 failures** (96 AAA, 151 AA, 45 UI at 3:1, 4 disabled and exempt).
+Every token used as text, as a control edge or as a data mark declares the backgrounds it sits on, and `node tools/tokens.mjs` checks each pair in both themes and **exits 1** below its minimum (7 primary text, 4.5 other text, 3 for control edges, focus rings, icons and marks). Daylight currently has **302 pairs and 0 failures**. Token pairs aren’t enough on their own: see [Theming robustness](#theming-robustness), which measures what a reader actually sees.
 
 ---
 
 ## Type
 
-All three families are under the **SIL Open Font License 1.1**. The licence texts are in `fonts/OFL-*.txt`.
+All three families are under the **SIL Open Font License 1.1**, self-hosted as latin subsets with `font-display: swap`. The licences are in `fonts/OFL-*.txt`, and the loading strategy is in `fonts/fonts.css`.
 
-| Family | Role | Weights / styles | Source |
+| Family | Role | Weights | Notes |
 |---|---|---|---|
-| **Instrument Serif** | Display: page and section titles, one hero number, the wordmark | 400 italic (UI), 400 roman (brand pages only) | github.com/Instrument/instrument-serif |
-| **Instrument Sans** | UI and body: everything people read or act on | 400 · 500 · 600 (variable 400–700) | github.com/Instrument/instrument-sans |
-| **Martian Mono** | Machine values: ids, digests, times, costs, YAML, logs | 400 · 500; width 100% / 87.5% | github.com/evilmartians/mono |
+| **Fraunces** (Undercase Type) | Page and section titles, one hero number, the wordmark | 600, upright | Soft axis on (`'SOFT' 100`) for titles; the wordmark uses `'SOFT' 0`. Never italic. Preloaded. |
+| **Atkinson Hyperlegible Next** (Braille Institute) | Everything people read and act on | 400 · 600 · 700 | True tabular figures. Preloaded. |
+| **Atkinson Hyperlegible Mono** (Braille Institute) | Only literal code, ids, YAML, logs | 400 · 500 | Loaded on demand. |
 
-**Weights.** 400 for body, descriptions, cells and code. 500 for buttons, tabs, nav, form labels and entity names in lists. 600 for h3/h4, overlines and counts. 700 is not used. *Why:* three weights give enough hierarchy, and heavier weights shout.
-
-**Loading.** Self-hosted latin-subset woff2 files with `font-display: swap`. Only Instrument Sans and Martian Mono are preloaded, and the serif loads on demand. The files are variable, so one request covers every weight (and width): about 29 + 22 + 38 KB. See `fonts/fonts.css`. Fallback stacks: `ui-serif, Georgia` · `ui-sans-serif, system-ui, Segoe UI, Roboto` · `ui-monospace, SF Mono, Menlo, Consolas`.
+**Weights:** 400 for body and cells; 600 for buttons, tabs, nav, labels and Fraunces titles; 700 for item titles and the bold lead-in of a summary sentence. **Numbers:** `tabular-nums` in every table, counter and timer. Our Fraunces subset has no tabular figures, so serif numbers are limited to one hero value per card.
 
 ### Scale (1rem = 16px)
 
-| Token | Size | Line | Tracking | Face | Use |
-|---|---|---|---|---|---|
-| `display-xl` | 72 / 4.5rem | 0.95 | −0.025em | serif italic | Brand pages, social card. Never in the dashboard. |
-| `display` | 48 / 3rem | 1.0 | −0.02em | serif italic | Docs landing, onboarding hero |
-| `h1` | 36 / 2.25rem | 1.08 | −0.015em | serif italic | Page titles of one to four words |
-| `h2` | 24 / 1.5rem | 1.2 | −0.01em | serif italic | Section titles, empty-state headlines |
-| `h3` | 17 / 1.0625rem | 1.35 | −0.005em | sans 600 | Card, panel and dialog titles; anything long or generated |
-| `h4` | 14 / 0.875rem | 1.4 | 0 | sans 600 | Sub-sections, table group headers |
-| `body-l` | 16 / 1rem | 1.55 | 0 | sans 400 | Docs and README prose |
-| `body-m` | 14 / 0.875rem | 1.5 | +0.003em | sans 400 | **Dashboard default** (was 13.5) |
-| `body-s` | 13 / 0.8125rem | 1.45 | +0.005em | sans 400 | Dense lists, secondary text |
-| `label` | 13 / 0.8125rem | 1.2 | +0.005em | sans 500 | Buttons, tabs, labels, nav |
-| `caption` | 12 / 0.75rem | 1.4 | +0.01em | sans 400 | Helper text, chart labels |
-| `overline` | 11 / 0.6875rem | 1.3 | +0.09em | sans 600 caps | Rail groups, table headers, kickers |
-| `numeric-l` | 40 / 2.5rem | 1.0 | −0.02em | serif italic | One hero number per stat card |
-| `code` | 12.5 / 0.78125rem | 1.6 | 0 | mono 400 | Code, YAML, logs |
-| `code-s` | 11.5 / 0.71875rem | 1.45 | 0 | mono 400 | Inline ids, digests, times. **The mono minimum.** |
+| Token | px | Line | Face | Use |
+|---|---|---|---|---|
+| `display-xl` | 72 | 0.98 | Fraunces 600 | Brand pages, social card |
+| `display` | 48 | 1.04 | Fraunces 600 | Docs landing, onboarding |
+| `h1` | 34 | 1.1 | Fraunces 600 | Page titles and greetings |
+| `h2` | 21 | 1.25 | Fraunces 600 | Card and section titles |
+| `h3` | 17 | 1.35 | Atkinson 700 | Item and dialog titles; anything long or generated |
+| `h4` | 15 | 1.4 | Atkinson 700 | Sub-sections, list titles |
+| `body-l` | 17 | 1.55 | Atkinson 400 | Lead sentences, docs, README |
+| `body-m` | 15 | 1.5 | Atkinson 400 | **Dashboard default** |
+| `body-s` | 13.5 | 1.45 | Atkinson 400 | Secondary lines |
+| `label` | 14 | 1.2 | Atkinson 600 | Buttons, tabs, labels, nav |
+| `caption` | 12.5 | 1.4 | Atkinson 400 | Times, chart labels |
+| `overline` | 11.5 | 1.3 | Atkinson 700 caps | Rare group labels |
+| `numeric-l` | 30 | 1.0 | Fraunces 600 | One hero number |
+| `brand` | 21 | 1.0 | Fraunces 600 | Live-text wordmark |
+| `code` | 13 | 1.6 | Atkinson Mono | Code, YAML, logs |
+| `code-s` | 12 | 1.45 | Atkinson Mono | Inline ids, last on the line |
 
-Nothing in the product is smaller than 11px. *Why:* the newcomer audit flagged “heavy use of tiny mono text”, and the prototype set mono metadata at about 11px (0.82em of 13.5).
+Use `font: var(--type-h1); letter-spacing: var(--type-h1-tracking); font-variation-settings: var(--type-h1-variation);`.
 
-Use `font: var(--type-h1); letter-spacing: var(--type-h1-tracking);`. CSS's `font` shorthand can't carry tracking or text-transform.
-
-**Numbers.** Use `font-variant-numeric: tabular-nums` in tables, timers, counters and axes (Instrument Sans supports it), and proportional figures in prose. Instrument Serif has no tabular figures, so serif numbers are limited to one hero value and never appear in a column.
-
-**When to use the serif:** five words or fewer, written by a person, 20px or larger, in a title role. Never use it for generated titles, anything containing ids, paths or numbers, or controls, labels, tables, badges or fields. A generated title is an `h3` in the sans with the machine details on a mono line below (“Replace the production web server” / `infra@3f2a9c1d · envs/prod`). Use sentence case everywhere. Only the overline is uppercase.
+**Serif rule:** five words or fewer, written by a person, 20px or larger, in a title role. Generated titles (proposal and run titles) are `h3` in Atkinson, with the machine details on a mono line below.
 
 ---
 
-## Space and layout
+## Space, layout and density
 
-- **Spacing:** a 4px base: 0, 2, 4, 6, 8, 12, 16, 20, 24, 32, 40, 48, 64, 80 and 96 (`--space-0 … --space-24`). The 2px and 6px steps are for optical nudges inside controls only.
-- **Breakpoints (min-width):** phone < 600 (designed at 390) · tablet 600 (834) · desktop 1024 (1440) · wide 1600 (1920). CSS can't read custom properties in media queries, so use the numbers.
-- **Grid:** phone has 4 columns, a 16 margin and a 12 gutter. Tablet has 8 columns, a 24 margin and a 16 gutter. Desktop is the rail plus a 12-column page with a 28 (16) page padding and 16 (12) gutter. Wide caps the page at 1480 and centres it.
-- **Phone:** bottom tab bar, sheets instead of drawers, comfortable density only, 44px targets.
-- **Content widths:** prose 672 · form 640 · docs 960 · page 1480 · dialog 440 / 560 / 760 · drawer 520.
-- **Density:** set `data-density="compact"` on any element (the default is `comfortable`). Compact changes control heights (34 → 28 for md), rows (44 → 30), cell padding (10/12 → 4/8), card padding (16 → 12), page padding (28 → 16), nav items (32 → 26), the strip (34 → 30), the rail (224 → 200), icons (16 → 14), table text (14 → 13) and mono width (100% → 87.5%). Type sizes otherwise stay the same. *Why:* density should buy rows, not make text smaller.
+- **Spacing:** a 4px base (`--space-*`: 0, 2, 4, 6, 8, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96).
+- **Breakpoints:** phone below 600px (designed at 390), tablet from 600 (834), desktop from 1024 (1440), wide from 1600 (1920). Pages are capped at 1280px.
+- **Phone:** bottom tab bar, sheets instead of drawers, comfortable density only, 44px targets, approvals pinned above the tab bar.
+- **Density** (`data-density="compact"` on any element): rows 52 → 36, controls 38 → 32, the top bar 60 → 48, the rail 236 → 212, card padding 22 → 16, page padding 36 → 20, table text 15 → 13.5. Type sizes otherwise stay the same: density buys rows, not smaller text.
 
 ## Shape and depth
 
-- **Radii:** 0 · 3 (badges) · 5 (controls) · 8 (cards) · 12 (overlays) · 16 (phone sheets) · 24 · pill (chips, counts). They nest: control inside card inside overlay.
-- **Borders:** 1px hairline everywhere, a 2px focus ring with a 2px offset, and a 3px indicator (active nav, needs-you bar, selected row).
-- **Elevation:** `--shadow-0…4` pair with a surface: 0 canvas, 1 surface (cards), 2 raised (sticky headers, menus), 3 overlay (dialogs, drawers), 4 overlay (toasts, ⌘K). On dark, depth comes mostly from the lighter surface. On light, shadows do more of the work.
-- **Layers:** `--z-base 0 · raised 1 · sticky 10 · rail 20 · strip 30 · dropdown 100 · drawer 200 · modal 300 · popover 400 · toast 500 · tooltip 600 · decor 9999` (the grain overlay, which never takes pointer events). Use z-index only through these tokens.
+- **Radii:** 4 · 6 · 10 (controls, wells) · 14 (cards) · 18 (overlays) · 22 (phone sheets) · pill (badges, counts, chips).
+- **Elevation:** `--shadow-0…4`, warm brown-tinted on light (soft and diffuse) and simply darker on dark, where the lighter surface step carries the depth. Borders are 1px `border.subtle`. The focus ring is 2px with a 2px offset.
 
 ## Iconography
 
 - **Set:** [Lucide](https://lucide.dev) (ISC licence). The subset in use is vendored in `icons/lucide/` with its licence. Each concept gets exactly one icon (see the grid in the book).
-- **Style:** outline only, with round caps and joins, on a 24-unit grid with a 2-unit live-area padding. Keep the stroke at 2 for 14–20px and use 1.5 at 24px, so the line stays about 1.3px.
-- **Sizes:** 16 beside body text, 14 in compact density and badges, 20 in empty states and pickers, 24 in the phone tab bar.
+- **Style:** outline only, with round caps and joins, on a 24-unit grid with a 2-unit live-area padding. Daylight draws Lucide at a 1.75 stroke (rounded, a little softer than its default 2) at 16–20px, and 1.5 at 24px.
+- **Sizes:** 18 beside body text (16 compact), 14 in badges, 20 in empty states and pickers, 22–24 in the phone tab bar.
 - **Colour:** `icon.default` beside text, `icon.muted` for decoration, and a status colour only on status glyphs.
 - **Status glyphs** (`icons/status/`, ours): success, warning, danger, info, running, neutral, skipped, shadow and needs-you, drawn on a 16-unit grid with a 1.5 stroke. Each has a distinct *shape*, so they work in one colour.
 - **Never** show an icon alone without a label or tooltip (except a universal ×), fill an outline icon or mix sets. New icons follow Lucide's grid and stroke.
@@ -212,13 +218,13 @@ The book shows each component's states (default, hover, focus, active, disabled,
 - **Value source:** the source is a quiet menu inside the field. Secret is the default; Vault item and Environment variable are listed; typed value and setting sit under “Other sources”. This replaces the five-way segmented control on every field.
 - **Choice cards:** for decisions that need a sentence each (permission presets, connector methods). Five at most.
 - **Tabs** switch views of one thing, and **segmented controls** switch a setting. Neither navigates.
-- **Tables and dense lists:** text left, numbers right in tabular figures, status as glyph + word, ids in mono, focusable rows (j/k, x, Enter), and selection as the accent wash plus a 3px bar.
+- **Tables and dense lists:** text left, numbers right in tabular figures, status as glyph + word, ids in mono at the end of the row, passing rows in ink (colour only on rows that need attention), focusable rows (j/k, x, Enter), and selection as the accent wash plus a 3px bar.
 - **Badges** label state, **chips** filter, and the **count** (accent) appears only where a person is needed.
 - **Banners** are for persistent conditions. **Toasts** are for events: 6 seconds (errors stay), above the phone tab bar, with an action.
 - **Dialogs** are for decisions, **drawers** for detail beside a list, and **sheets** for the phone. All of them trap focus, close on Esc and return focus.
 - **Steppers:** at most five steps, each named for the decision, not the file. The review lives inside the wizard, and Back keeps input.
 - **Empty states:** say what appears here, why it's empty, and the one next step.
-- **Code, YAML and diffs:** mono at `code` size on `bg.sunken`, with syntax tokens at AA on sunken and surface. **No space before a colon**, ever. Diffs use +/− gutter marks and a 2px bar as well as the tint. The header names the file and the enclosing key, not only a line number.
+- **Code, YAML and diffs:** the only place mono is used at length: `code` size on `bg.sunken`, with syntax tokens at AA on sunken and surface. **No space before a colon**, ever. Diffs use +/− gutter marks and a 2px bar as well as the tint. The header names the file and the enclosing key, not only a line number.
 
 ## Voice and tone
 
@@ -246,79 +252,124 @@ conductor talks to someone who is nervous about giving an AI access to productio
 
 ---
 
+## Theming robustness
+
+**The iPhone bug.** On Daniel’s iPhone (paseo’s in-app browser, WebKit, OS in dark mode), `directions-v2.html` showed faint, light-grey text on the cream page, and every specimen labelled LIGHT rendered with a dark surface. **Cause:** the pages never declared a colour scheme. With no `color-scheme`, browsers that auto-darken pages repaint their colours: Chromium’s force-dark, and in-app WebViews that apply “algorithmic darkening”. That flipped our forced-light surfaces dark while some text was left in its light-theme colours. The token-pair contrast check passed, because the tokens were right; what the reader saw was not.
+
+**The fix, at the source** (`tools/tokens.mjs` generates it into `tokens.css`):
+- `:root { color-scheme: light dark; }` and `<meta name="color-scheme" content="light dark">` on every page, so the browser knows the page handles both and never auto-darkens it.
+- `[data-theme="light"] { color-scheme: only light; }` and `[data-theme="dark"] { color-scheme: only dark; }`, declared on the element after the media query. An explicit theme always wins over the OS, at any nesting depth, and `only` forbids the UA from adjusting it.
+- Light-only documents (the proposal pages) declare `color-scheme: only light`. Scoped specimens carry every token value plus their own `color-scheme`, so they are self-contained.
+
+**Tests** (run sequentially; caches on local disk, `~/.cache/conductor-design/`):
+- `node tools/theme-test.mjs` loads `tokens/test/theme-fixture.html` in every engine (WebKit with the iPhone 15 profile, WebKit desktop, Chromium desktop, and Chromium phone with force-dark), with the OS light and dark, and the root auto, light and dark. It checks every nested scope’s computed background and text against the tokens, **and the painted pixels** (which catches browser recolouring). There are 357 checks and 0 failures.
+- `node tools/rendered-contrast.mjs` loads every page in every engine and OS mode and measures each visible text element’s computed colour, including opacity, over its composited background (WCAG AA: 4.5, or 3 for large text). Deliberate demos (disabled states, misuse examples, verbatim “before” screenshots) are marked `data-contrast="exempt"` and counted. The report goes to `~/.cache/conductor-design/reports/`.
+
+**Don’t hide text with `font-size: 0`.** WebKit (the iPhone engine) aborts the page when text set in some variable webfonts is laid out at size 0. The book’s ramp labels crashed it on the iPhone profile. Clip instead: `color: transparent; overflow: hidden`, or a visually-hidden class.
+
+---
+
 ## Tokens
 
 - **Format:** [W3C Design Tokens](https://www.designtokens.org/) (DTCG 2025.10): colours as `{colorSpace, components, alpha?, hex}`, dimensions as `{value, unit}`, durations, cubic-béziers, shadows, and typography composites. Three tiers: `primitive` (raw values) → `semantic` (roles) → `component` (aliases of semantic only).
-- **Modes:** mode-dependent tokens list every mode in `$extensions.mode` (the Terrazzo convention): `dark`/`light`, `comfortable`/`compact` and `standard`/`reduced`. `$value` is the default (dark, comfortable, standard).
+- **Modes:** mode-dependent tokens list every mode in `$extensions.mode` (the Terrazzo convention): `dark`/`light`, `comfortable`/`compact` and `standard`/`reduced`. `$value` is the default (dark, comfortable, standard); Daylight pages render light unless the OS or `data-theme` says dark.
 - **CSS (`tokens/tokens.css`):** `--palette-*` (raw: never in components), `--color-*`, `--shadow-*`, `--type-*`, `--size-*`, `--pad-*`, `--gap-*`, `--radius-*`, `--border-*`, `--motion-*`, `--z-*`, `--layout-*` (semantic), and `--button-*`, `--input-*` and the like (component). The theme follows `prefers-color-scheme`; `[data-theme]`, `[data-density]` and `[data-motion]` work on **any element**, so a page can show both themes side by side (the book does).
 - **Generator:** `node tools/tokens.mjs` writes `tokens.css`, `prototype-compat.css`, `contrast.json`, `CONTRAST.md` and `migration.json`, and fails on any contrast regression. `--check` only verifies. Other tools: `tools/ramps.mjs` (ramp derivation, run once), `tools/icons.mjs` (icon bundle for the book), and `tools/build.mjs` and `tools/render.mjs` (logo assets).
 - **Adding a token:** add it to `tokens.json` at the lowest tier that makes sense. Declare its contrast intent if it colours text or marks, then re-run the generator.
 
 ---
 
-## What changes per direction
+## Migrating the dashboard (one pass)
 
-Tokens never name the logo. A different direction swaps the logo files and, at most, the accent.
+The prototype adopts Daylight in one pass:
 
-| Direction | Logo files | Accent | Token changes | Wordmark |
-|---|---|---|---|---|
-| **Fermata** (working) | `directions/fermata/` = `assets/` | ember | None | Instrument Serif Italic |
-| Conduit | `directions/conduit/` | copper | Add a `copper` ramp (hue ≈ 50, lower chroma) and re-point the accent set | Instrument Sans SemiBold, in the logo only |
-| Downbeat | `directions/downbeat/` | vermilion | Add a `vermilion` ramp (hue ≈ 32). It sits nearer danger red, but needs-you and failed still differ by glyph (diamond and cross) | Martian Mono Medium |
-| Signature | `directions/signature/` | brass | Brass collides with **status.warning** (amber, hue 80). Keep ember as the UI accent and use brass in the logo only, or move warning to a more orange amber | Instrument Serif roman |
+1. **Fonts:** copy `fonts/` (Fraunces, Atkinson Hyperlegible Next and Mono, with their OFL files) and load `fonts/fonts.css`. Preload Atkinson Next and Fraunces.
+2. **Tokens:** load `tokens/tokens.css`, add `<meta name="color-scheme" content="light dark">`, and delete the `:root` and theme blocks in `css/app.css` (its lines 9–51). If you want the old names to keep working while you edit, also load `tokens/prototype-compat.css` and delete it at the end.
+3. **Rename** every prototype variable to its Daylight token, using the table in `tokens/migration.json` (also in the book and summarised below). Each row has a note where the meaning or value changes, not just the name. The ones that change behaviour:
+   - `--accent` used as **text** (43 places across the CSS): use `--color-text-accent`. Keep `--color-accent-default` for fills.
+   - `--ink-3` → `--color-text-tertiary` (now AA on cards).
+   - `--ok`, `--run`, `--wait`, `--fail`, `--idle`, `--shadow`: use `-fg` for text and glyphs, `-solid` for dots and bars. **Passing rows stop being green**: they are ink, with a neutral check glyph.
+   - Inputs and checkboxes: `--color-border-control`.
+4. **Type:** body to `--type-body-m` (15px). Titles to `--type-h1`/`--type-h2` (Fraunces, upright), with long or generated titles (proposal, run and step titles) moved to `--type-h3` in the sans. **Decorative mono becomes sans with tabular figures**: the top strip, crumbs, counts, times and costs. Mono stays only for ids, digests, YAML and logs, at least 12px.
+5. **Shape:** radii from `--radius-*` (controls 10, cards 14, badges pill), shadows from `--shadow-*`. Drop the film grain and the dot grid on app surfaces.
+6. **Information design:** apply the patterns: a summary sentence under each page title, the needs-you list, “since you last looked” on the overview, the run story on run pages, activity lanes on Live/Activity, and the approval card.
+7. **Density:** `data-density="compact"` on `<html>` from a per-browser display preference. Replace fixed row and padding values with `--size-row`, `--pad-cell-*`, `--pad-card` and `--pad-page-*`. `.tbl.compact` becomes redundant.
+8. **Logo:** copy the chosen kit from `logo-kits/<id>/` and follow its README (favicon links, the strip mark in `js/ui.js`, the gate mark in `js/screens/access.js`).
 
-**The accent set** (re-point these eleven tokens, nothing else): `accent.default`, `accent.hover`, `accent.active`, `accent.subtle`, `text.accent`, `text.on-accent`, `focus.ring`, `selection.bg`, `selection.text`, `dataviz.now` and `code.anchor`. Then re-run `tools/tokens.mjs`; the contrast check covers the new ramp. UI type never changes with the logo.
+| Prototype | Daylight token | Note |
+|---|---|---|
+| `--font-ui` | `--font-family-sans` | Instrument Sans → Atkinson Hyperlegible Next. Body goes 13.5 → 15px (--type-body-m). |
+| `--font-title` | `--font-family-serif` | Instrument Serif italic → Fraunces SemiBold, upright. Use the --type-h1 / --type-h2 shorthands plus their -tracking and -variation. Long or generated titles move to --type-h3 (sans). |
+| `--font-mono` | `--font-family-mono` | Martian Mono → Atkinson Hyperlegible Mono, and only for literal code, ids, YAML and logs. Strip cells, crumbs, counts, times and costs move to the sans with tabular-nums. |
+| `--r-xs` | `--radius-badge` | 3 → pill (999). |
+| `--r-sm` | `--radius-control` | 5 → 10. |
+| `--r` | `--radius-card` | 8 → 14. |
+| `--r-lg` | `--radius-overlay` | 12 → 18. |
+| `--rail-w` | `--size-rail` | 224 → 236 (212 compact). |
+| `--strip-h` | `--size-strip` | 34 → 60 (48 compact): the mono status strip becomes a calm top bar (search, health, avatar). |
+| `--ease` | `--motion-easing-out` |  |
+| `--t-fast` | `--motion-duration-fast` | Drops to 0 under reduced motion. |
+| `--t` | `--motion-duration-base` | 220 → 200ms. |
+| `--bg` | `--color-bg-canvas` | Dark #0f100d → cocoa #1d1915; light #efeadf → cream #f7f3ec. Daylight is light-first. |
+| `--bg-1` | `--color-bg-rail` | Dark #13140f → #211c18; light #f4f0e6 → #f1ebe1. |
+| `--bg-2` | `--color-bg-surface` | Dark #181914 → #26211c; light #f9f6ef → #fffdf9. |
+| `--bg-3` | `--color-bg-raised` | Dark #1f201a → #2e2822; light #fffdf8 → #ffffff. |
+| `--bg-4` | `--color-bg-overlay` | Dark #272821 → #36302a; light #ffffff. |
+| `--line` | `--color-border-subtle` | Dark #2a2b23 → #352e27; light #ddd6c5 → #ece5d8. |
+| `--line-2` | `--color-border-default` | Inputs and checkboxes use --color-border-control (3:1) instead. |
+| `--line-3` | `--color-border-strong` |  |
+| `--ink` | `--color-text-primary` | Dark #ece8dc → #f4eee4; light #1b1a15 → #2a231c. |
+| `--ink-2` | `--color-text-secondary` | Dark #b6b1a2 → #ddd3c2; light #514d43 → #584e43. |
+| `--ink-3` | `--color-text-tertiary` | Changed for AA: dark #807c6f → #ada291, light #847f71 → #6e6457. The old values failed 4.5:1 on cards. |
+| `--ink-4` | `--color-text-disabled` | Disabled controls only. |
+| `--accent` | `--color-accent-default` | Fills only (buttons, counts, bars, the logo dot). Where it colours text (links, .cell.alert, crumbs:hover; 43 places), use --color-text-accent. |
+| `--accent-2` | `--color-accent-hover` |  |
+| `--accent-ink` | `--color-text-on-accent` |  |
+| `--accent-wash` | `--color-accent-subtle` |  |
+| `--ok` | `--color-status-success-fg` | Dots and bars: --color-status-success-solid. Passing rows stay ink: colour is for what needs attention. |
+| `--run` | `--color-status-running-fg` | Dots and bars: --color-status-running-solid. |
+| `--wait` | `--color-status-warning-fg` | Dots and bars: --color-status-warning-solid. |
+| `--fail` | `--color-status-danger-fg` | Dots and bars: --color-status-danger-solid. |
+| `--idle` | `--color-status-neutral-fg` |  |
+| `--shadow` | `--color-status-info-fg` | Shadow mode is shown as info (observes, never acts) with its own glyph. |
+| `--ok-wash` | `--color-status-success-bg` |  |
+| `--run-wash` | `--color-status-running-bg` |  |
+| `--wait-wash` | `--color-status-warning-bg` |  |
+| `--fail-wash` | `--color-status-danger-bg` |  |
+| `--idle-wash` | `--color-status-neutral-bg` |  |
+| `--shadow-wash` | `--color-status-info-bg` |  |
+| `--code-key` | `--color-code-key` |  |
+| `--code-str` | `--color-code-string` |  |
+| `--code-num` | `--color-code-number` |  |
+| `--code-com` | `--color-code-comment` | Light #9a9482 → #6e6457 (comments were 2.9:1). |
+| `--code-anchor` | `--color-code-anchor` |  |
+| `--code-bool` | `--color-code-bool` |  |
+| `--dot` | `--color-decor-dot` | Daylight drops the dot grid on app surfaces; keep it for brand pages only. |
+| `--elev` | `--shadow-2` | Warm, softer shadows in light. |
+| `--elev-pop` | `--shadow-3` | The old value included a 1px ring; add border: 1px solid var(--color-border-default). |
+| `--grain-op` | `--opacity-grain` | Daylight drops the film grain on app surfaces. |
 
 ---
 
-## What would change in the README and the dashboard
+## What would change in the README
 
-Nothing is changed yet.
-
-### README
-
-Replace lines 1–5 (the `<h1>` and `conductor.png`) with the block below, then delete `conductor.png` (808 KB) once nothing references it. Keep the tagline paragraph as it is. Upload `assets/social-card.png` under GitHub → Settings → General → Social preview. If `design/` shouldn't be the long-term home, move `assets/` to `.github/brand/` and update the two paths.
+Nothing has changed yet. Once a logo is picked, replace README lines 1–5 (the `<h1>` and `conductor.png`) with the following, then delete `conductor.png`:
 
 ```html
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="design/brand/assets/logo-horizontal-dark.svg">
-    <img src="design/brand/assets/logo-horizontal.svg" alt="conductor" width="360">
+    <source media="(prefers-color-scheme: dark)" srcset="design/brand/logo-kits/fermata-bold/logo-horizontal-dark.svg">
+    <img src="design/brand/logo-kits/fermata-bold/logo-horizontal.svg" alt="conductor" width="360">
   </picture>
 </p>
 ```
 
-Docs pages follow the type scale at `body-l`, with `h1`/`h2` in the serif only when the title is short.
-
-### Dashboard (`design/dashboard-prototype`)
-
-**Logo.**
-1. `js/ui.js:338`: replace the baton `<svg>` with the mark, themed by tokens:
-   ```html
-   <svg class="mark" viewBox="3 7 26 18" aria-hidden="true"><path fill="var(--color-text-primary)" d="M3 21a13 14 0 0 1 26 0h-3.2a9.8 10 0 0 0-19.6 0z"/><circle cx="16" cy="21" r="4" fill="var(--color-accent-default)"/></svg>
-   ```
-   The `viewBox` is the mark's content box, so the arch matches the wordmark's ascenders. In `js/screens/access.js:4` (the 34px gate mark), use the same paths with `viewBox="0 0 32 32"`.
-2. `css/app.css:95`: rename `.baton` to `.mark { width: 22px; height: 15.2px; margin-top: -2px }`, and set `.strip .brand` to `gap: 7px`. The live-text `.wordmark` (Instrument Serif Italic, 21px) stays. The book's top bar renders exactly this.
-3. `index.html:8`: replace the inline baton favicon with `favicon.svg`, `favicon-32.png` (sizes 32x32), `apple-touch-icon.png` and a manifest that lists `icon-192.png` and `icon-512.png`.
-
-**Tokens (migration).**
-1. Copy `fonts/` (now including `MartianMono-wdth.woff2`, which replaces `MartianMono-normal.woff2`) and load `fonts/fonts.css`, `tokens/tokens.css` and `tokens/prototype-compat.css`.
-2. Delete the theme blocks in `css/app.css` (lines 21–51) and the `:root` font, radius and timing variables. `prototype-compat.css` maps every old name (`--bg`, `--ink-3`, `--accent`…) onto the new tokens, so the prototype renders the same, with the AA fixes. The theme switch moves from `[data-theme]` on `<html>` (it already works) to also following the OS when it is unset.
-3. Migrate selector by selector to the new names (the full map with notes is in the book's *Migrating the dashboard* table and in `tokens/migration.json`). Then delete the shim. The changes that alter meaning, not just names:
-   - **`--accent` used as text colour (43 places across the five CSS files):** use `--color-text-accent`. Keep `--color-accent-default` for fills, bars and dots only.
-   - **`--ink-3` → `--color-text-tertiary`:** brighter on dark and darker on light, for AA.
-   - **`--ok`, `--run`, `--wait`, `--fail`, `--idle` and `--shadow`:** `-fg` for text and glyphs, `-solid` for dots and bars.
-   - **Inputs and checkboxes:** `--color-border-control` (3:1) instead of `--line-2`.
-   - **Mono:** add `font-stretch: calc(var(--dense-mono-stretch) * 1%)`.
-   - **Body text:** 13.5px → `--type-body-m` (14px). Tiny mono metadata (0.82em ≈ 11px) → `--type-code-s` (11.5px).
-4. Add the density toggle: put `data-density="compact"` on `<html>` from a display preference (stored per browser, not in config). Replace fixed row and padding values with `--size-row`, `--pad-cell-*`, `--pad-card` and `--pad-page-*`. `.tbl.compact` becomes redundant.
-5. Long serif titles (proposal and run titles) become `--type-h3` in the sans, with a mono metadata line.
+(Use the chosen kit’s path.) Keep the tagline. Regenerate the social card from the chosen kit, and upload it under GitHub → Settings → Social preview.
 
 ---
 
 ## Open decisions for Daniel
 
-1. **The logo direction.** The system is built on Fermata. The other three swap in as described above.
-2. **Where brand files live long-term:** `design/brand/` or `.github/brand/` (this decides the README paths).
-3. **The dashboard default theme:** follow the OS (as the tokens do now), or always dark unless the user switches.
-4. **Ship `prototype-compat.css` or migrate in one pass.** The shim is safer; one pass is cleaner.
+1. **The logo:** Fermata, strengthened (recommended), Gate, Cue or Conduit. See [`logo-review.html`](logo-review.html).
+2. **Where the brand files live long-term:** `design/brand/` or `.github/brand/`, which sets the README paths.
+3. **The dashboard default theme:** follow the OS (as the tokens do now), or light unless the user picks dark. Daylight is designed light-first.

@@ -1,11 +1,12 @@
 // Renders the brand book from tokens/tokens.json, tokens/contrast.json and tokens/migration.json.
 // Everything visual comes from tokens.css; this file only lays content out.
 import { LUCIDE, STATUS } from '../icons/icons.js';
+import { LOGOS, RECOMMENDED_LOGO } from '../tools/logos.mjs';
 
 const [T, CON, MIG] = await Promise.all(['tokens/tokens.json', 'tokens/contrast.json', 'tokens/migration.json'].map((u) => fetch(u).then((r) => r.json())));
 
 // ---------- helpers ----------
-const lu = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${LUCIDE[n] ?? ''}</svg>`;
+const lu = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${LUCIDE[n] ?? ''}</svg>`;
 const sg = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${STATUS[n].svg}</svg>`;
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const THEMES = ['dark', 'light'];
@@ -41,16 +42,57 @@ const ch = (id, title, blurb, subs, body) => chapters.push({ id, title, blurb, s
 const sub = (id, title, lede = '') => `<h3 class="sub" id="${id}">${title}</h3>${lede ? `<p class="lede">${lede}</p>` : ''}`;
 
 // =====================================================================
+// 0. Reading at a glance (information design)
+// =====================================================================
+const PRINCIPLES = [
+  ['Summary first, detail on demand', 'Every screen opens with one sentence answering: does anything need me, is anything broken, is everything else fine? Health checks, raw counts and internals sit one step down.',
+    'up 3d 4h 12m · v0.71.2 → v0.72.0 · sandbox enforcing · paseo ok · 3 running · 6 need you',
+    () => `<p class="ia-lead"><b>5 things need you.</b> Everything else is running normally: 18 of 20 runs in the last 12 hours went fine.</p>`],
+  ['A plain headline, the technical detail beneath', 'The title says what will happen in words a newcomer understands. The tool, ids and diff stats follow on a quieter line, in mono, last.',
+    'terraform apply · infra@3f2a9c1d / platform-sre · p12 · +1 ~2 -0 · REPLACES aws_instance.web',
+    () => `<div class="pt-need" data-s="accent"><span class="ng">${sg('needs-you')}</span><div><b>Replace the production web server</b><span>platform-sre wants to run terraform apply on production, for the SEV2 latency incident</span><code>p12 · infra@3f2a9c1d · +1 ~2 −0</code></div></div>`],
+  ['Three levels of type', 'What (title or bold lead-in), why it matters (regular, secondary ink), machine detail (mono, small, tertiary, last). Nothing else.',
+    'ci-fixer acme/web#1288 / Failed at step test. go test ./...: 2 failures (TestCheckout, TestRefund)',
+    () => `<div class="ia-levels"><b>ci-fixer couldn’t fix the failing check on acme/web#1288</b><span>Its change made 2 tests fail. It stopped before pushing anything.</span><code>r-7ef0 · step test</code></div>`],
+  ['Colour only for what needs attention', 'Passing work is ink, not green: when eleven of sixteen rows are green, green means nothing. Failed, waiting, running and needs-you get colour, always with a glyph and a word.',
+    '✓ ok · ✓ ok · × failed · ✓ ok · ◎ waiting · ✓ ok (every row coloured)',
+    () => `<div class="ia-rows">${[['success', 'pr-review', 'acme/api#480', ''], ['danger', 'ci-fixer', 'acme/web#1288', '2 tests fail after its change'], ['success', 'issue-triage', 'acme/api#486', ''], ['warning', 'pr-review', 'acme/infra#77', 'Waiting for your answer']].map(([st, w, t, n]) => `<div class="ia-row ${st === 'success' ? 'quiet' : ''}" data-s="${st}">${sg(st)}<span><b>${w}</b> ${t}</span><em>${n}</em></div>`).join('')}</div>`],
+  ['Numbers line up', 'Durations, costs and counts are right-aligned in tabular figures with units, so a column scans without reading every cell.',
+    '7m · 12m · 1m · … · 9m (left-aligned, mono, no units)',
+    () => `<div class="ia-nums">${[['7 min', '$0.41'], ['12 min', '$1.12'], ['1 min', '$0.06'], ['9 min', '$0.82']].map(([a, b]) => `<span>${a}</span><span>${b}</span>`).join('')}</div>`],
+  ['Group and chunk', 'Things to act on are separate from things that are merely true. An update that installs itself is not “needing you”.',
+    'Needs you · 6 items (2 approvals, a failure, a hand-off, a browser push, an update)',
+    () => `<div class="ia-groups"><div><b>Needs you <span class="c-count">5</span></b><span>2 approvals · 1 failed fix · 2 questions</span></div><div><b>For your information <em>2</em></b><span>Update v0.72.0 installs within 10 min · Sandbox blocked pastebin.com</span></div></div>`],
+  ['Lead with what changed', 'Coming back after a while, you want the difference, not the full feed. See the “since you last looked” pattern.',
+    'Activity · live: r-7f2c pr-review step review started · platform-sre wrote knowledge/db-prod-1.md (commit 8e1f0aa) · …',
+    () => digest(true)],
+  ['Timelines tell the story', 'A run reads top to bottom: what each step did and what came of it, in sentences, with the duration on the right. Steps after a failure say they weren’t reached.',
+    'logs ▬ ✓ · triage ▬ ✓ · fix ▬▬▬▬ ✓ · test ▬ × · push not reached',
+    () => story(true)],
+  ['Human times and schedules', 'Relative time with the exact time beside it, schedules in words, and the cron string on hover. Ids and hashes are never first on a line.',
+    'schedule 0 6 * * 1 · started 10/16/2026, 5:03:45 PM · r-7ef0',
+    () => `<dl class="ia-dl"><dt>Runs</dt><dd>Mondays at 06:00</dd><dt>Started</dt><dd>52 min ago <span>(17:03)</span></dd><dt>Run</dt><dd><code>r-7ef0</code></dd></dl>`],
+  ['Generous, then compact on request', 'Space does the grouping, so there are fewer boxes. Compact density is the same content in the same order, only tighter (36px rows).',
+    'NOW · Overview · Live 3 · Needs you 6 · WORK · Run history · … (dense mono everywhere)',
+    () => `<div class="ia-dens"><div data-density="comfortable">${sampleRows()}</div><div data-density="compact">${sampleRows()}</div></div>`],
+];
+function sampleRows() { return [['success', 'pr-review', 'acme/web#1291'], ['danger', 'ci-fixer', 'acme/web#1288'], ['success', 'issue-triage', 'acme/api#486']].map(([st, w, t]) => `<div class="ia-row ${st === 'success' ? 'quiet' : ''}" data-s="${st}">${sg(st)}<span><b>${w}</b> ${t}</span></div>`).join(''); }
+ch('glance', 'Reading at a glance', 'conductor produces a firehose of runs, cases, approvals, logs and diffs. These ten rules turn it into something a person can read in seconds. Every screen follows them.',
+  PRINCIPLES.map(([t], i) => [`p${i + 1}`, t]),
+  () => PRINCIPLES.map(([t, rule, before, after], i) => `<article class="principle" id="p${i + 1}"><div class="pr-t"><span class="pn">${String(i + 1).padStart(2, '0')}</span><div><h3>${t}</h3><p>${rule}</p></div></div>
+    <div class="pr-ba"><div class="pr-before" data-contrast="exempt"><span class="cap">Before · prototype</span><code>${esc(before)}</code></div><div class="pr-after"><span class="cap">After · Daylight</span>${after()}</div></div></article>`).join(''));
+
+// =====================================================================
 // 1. Colour
 // =====================================================================
 const RAMPS = Object.keys(T.primitive.color).filter((k) => !k.startsWith('$'));
 const rampRow = (name) => {
   const steps = Object.entries(T.primitive.color[name]);
-  const short = steps.length < 11;
+  const short = steps.length < 11; const pad = 12 - steps.length;
   return `<div class="ramp ${short ? 'short' : ''}"><b>${name}</b>${steps.map(([s, t]) => {
     const h = t.$value.hex; const L = lumi(h); const ink = (L + 0.05) / 0.05 >= 1.05 / (L + 0.05) ? '#000000' : '#ffffff';
     return `<i style="background:${h};color:${ink}" title="--palette-${name}-${s}: ${h}"><em>${s}</em>${h.slice(1)}</i>`;
-  }).join('')}${short ? '<span></span>' : ''}</div>`;
+  }).join('')}${'<span></span>'.repeat(short ? 1 : Math.max(pad, 0))}</div>`;
 };
 const SURF = ['canvas', 'sunken', 'rail', 'surface', 'raised', 'overlay'];
 const TEXTS = ['primary', 'secondary', 'tertiary', 'accent', 'disabled'];
@@ -144,21 +186,21 @@ function fillContrast() {
     <td><span class="lvl ${r.level === 'AAA' ? 'AAA' : r.level === 'AA' ? 'AA' : r.level === 'exempt' ? 'ex' : 'ui'}">${r.pass ? '' : 'FAIL · '}${r.level}</span></td></tr>`).join('');
 }
 
-ch('colour', 'Colour', 'Warm graphite and paper neutrals, one ember accent that means “you”, and status hues that never travel without a glyph.',
+ch('colour', 'Colour', 'Warm cream and cocoa surfaces, sand neutrals, one ember accent that means “you”, and status hues kept for what needs attention.',
   [['palettes', 'Raw palettes'], ['surfaces', 'Surfaces and text'], ['semantic', 'Semantic tokens'], ['status', 'Status'], ['dataviz', 'Data visualisation'], ['contrast', 'Contrast']],
   () => `
-  ${sub('palettes', 'Raw palettes', 'Eleven-step OKLCH ramps (50 is the lightest, 950 the darkest), plus a six-step surface set per theme. Components never use these directly: semantic tokens map them to roles.')}
-  <div class="ramp-head"><span></span>${['50', '100', '200', '300', '400', '500', '600', '700', '800', '900', '950'].map((s) => `<span>${s}</span>`).join('')}</div>
-  <div class="ramps">${RAMPS.filter((r) => !['graphite', 'paper'].includes(r)).map(rampRow).join('')}</div>
+  ${sub('palettes', 'Raw palettes', 'sand is the warm neutral (its extra 975 step is the logo ink); the hues are eleven-step OKLCH ramps (50 lightest, 950 darkest); cream and cocoa are the surface sets. Components never use these directly: semantic tokens map them to roles.')}
+  <div class="ramp-head"><span></span>${['50', '100', '200', '300', '400', '500', '600', '700', '800', '900', '950', ''].map((s) => `<span>${s}</span>`).join('')}</div>
+  <div class="ramps">${RAMPS.filter((r) => !['cocoa', 'cream'].includes(r)).map(rampRow).join('')}</div>
   <h4 class="cap">Surface sets: 0 sunken · 1 canvas · 2 rail · 3 surface · 4 raised · 5 overlay</h4>
-  <div class="ramps">${rampRow('graphite')}${rampRow('paper')}</div>
-  ${why('<b>Why separate surface sets?</b> Dark interfaces need several surfaces within a narrow lightness band (L 0.17–0.27). A perceptual ramp steps 0.08 at a time, too coarse for that band, so graphite and paper keep the prototype’s hand-tuned values. The ramps are frozen hex values in tokens.json, so nothing drifts if the generator changes.')}
+  <div class="ramps">${rampRow('cream')}${rampRow('cocoa')}</div>
+  ${why('<b>Why separate surface sets?</b> Surfaces need several fine steps within a narrow lightness band, closer together than a perceptual ramp’s steps. cream (light) and cocoa (dark) are hand-tuned, warm, and frozen as hex in tokens.json, so nothing drifts if a generator changes. sand carries text, borders and icons, and its deepest step (975) is the logo ink.')}
 
   ${sub('surfaces', 'Surfaces and text', 'Elevation is lightness: each surface sits one step above the one below. Every text role is checked on every surface it can land on, with the ratios shown below.')}
   ${pair((t) => `<div class="surfaces" style="background:var(--color-bg-canvas)">${SURF.map((s) => `<div style="background:var(--color-bg-${s})"><b>bg.${s}</b><span>${resolve('semantic.color.bg.' + s, t).hex}</span></div>`).join('')}</div>`)}
   <div style="height:12px"></div>
   ${stack((t) => textMatrix(t))}
-  ${why('<b>Changed from the prototype:</b> tertiary text was <code>#807c6f</code> (dark) and <code>#847f71</code> (light), about 4.3:1 and 3.5:1 on cards. It is now <code>#aea796</code> and <code>#666256</code>, at AA or better on every surface. The light accent was 3.8:1 as text on paper. Text now uses the separate <code>text.accent</code> (ember 700, 5.2–6.7:1), and the bright ember is kept for fills.')}
+  ${why('<b>Changed from the prototype:</b> graphite and paper became cocoa and cream, and Daylight is light-first. Tertiary text was <code>#807c6f</code> / <code>#847f71</code>, about 4.3:1 and 3.5:1 on cards; it is now <code>#ada291</code> / <code>#6e6457</code>, AA on every surface. Text never uses the light accent fill (3.8:1). It uses <code>text.accent</code> instead.')}
 
   ${sub('semantic', 'Semantic tokens', 'The names components use. Each resolves to a different raw value per theme.')}
   ${stack((t) => semSwatches(t))}
@@ -198,41 +240,41 @@ const typeRow = (k) => {
   const fam = v.fontFamily.split('.').pop().replace('}', '');
   const w = { '{primitive.font.weight.regular}': 400, '{primitive.font.weight.medium}': 500, '{primitive.font.weight.semibold}': 600 }[v.fontWeight];
   return `<div class="spec-row"><div class="nm">--type-${k}<small>${esc(t.$description)}</small></div>
-    <div class="sample" style="font:var(--type-${k});letter-spacing:var(--type-${k}-tracking);text-transform:var(--type-${k}-transform)">${esc(SAMPLE[k])}</div>
+    <div class="sample" style="font:var(--type-${k});letter-spacing:var(--type-${k}-tracking);text-transform:var(--type-${k}-transform);font-variation-settings:var(--type-${k}-variation)">${esc(SAMPLE[k])}</div>
     <div class="meta">${x.px}px · ${v.fontSize.value}rem / ${v.lineHeight}<br>${fam} ${w}${x.fontStyle === 'italic' ? ' italic' : ''} · ${v.letterSpacing.value ? (v.letterSpacing.value > 0 ? '+' : '') + v.letterSpacing.value + 'em' : '0'}${x.textTransform === 'uppercase' ? ' · caps' : ''}</div></div>`;
 };
-ch('type', 'Type', 'An italic serif for short human titles, a warm grotesque for everything people read, and a mono for what machines say.',
+ch('type', 'Type', 'A soft, upright serif for short human titles, a typeface built for legibility for everything people read, and mono only for literal code.',
   [['families', 'Families'], ['scale', 'Scale'], ['weights', 'Weights and figures'], ['serif-rule', 'When to use the serif']],
   () => `
   ${sub('families', 'Families', 'All three are open-licensed and self-hosted as latin subsets with <code>font-display: swap</code>. Only the sans and the mono are preloaded, because the serif appears in titles alone.')}
   <div class="families">
-    <div class="fam"><div class="glyph" style="font-family:var(--font-family-serif);font-style:italic">Aa</div><h4>Instrument Serif</h4><dl><dt>Role</dt><dd>Display: page and section titles, hero numbers, the wordmark</dd><dt>Styles</dt><dd>400 italic (UI), 400 roman (brand pages only)</dd><dt>Licence</dt><dd>SIL OFL 1.1 · Instrument</dd><dt>Fallback</dt><dd><code>ui-serif, Georgia, serif</code></dd><dt>File</dt><dd>22 KB woff2</dd></dl></div>
-    <div class="fam"><div class="glyph" style="font-family:var(--font-family-sans);font-weight:500">Aa</div><h4>Instrument Sans</h4><dl><dt>Role</dt><dd>UI and body: everything people read and act on</dd><dt>Weights</dt><dd>400 · 500 · 600 (variable 400–700)</dd><dt>Licence</dt><dd>SIL OFL 1.1 · Instrument</dd><dt>Fallback</dt><dd><code>ui-sans-serif, system-ui, Segoe UI, Roboto</code></dd><dt>File</dt><dd>29 KB woff2, preloaded</dd></dl></div>
-    <div class="fam"><div class="glyph" style="font-family:var(--font-family-mono);font-size:64px">Aa</div><h4>Martian Mono</h4><dl><dt>Role</dt><dd>Machine values: ids, digests, times, costs, YAML, logs</dd><dt>Weights</dt><dd>400 · 500, width 100% (comfortable) or 87.5% (compact)</dd><dt>Licence</dt><dd>SIL OFL 1.1 · Evil Martians</dd><dt>Fallback</dt><dd><code>ui-monospace, SF Mono, Menlo, Consolas</code></dd><dt>File</dt><dd>38 KB woff2 (weight and width axes), preloaded</dd></dl></div>
+    <div class="fam"><div class="glyph" style="font-family:var(--font-family-serif);font-weight:600;font-variation-settings:var(--type-h1-variation)">Aa</div><h4>Fraunces</h4><dl><dt>Role</dt><dd>Page and section titles, one hero number, the wordmark</dd><dt>Style</dt><dd>600, upright, soft axis on (SOFT 100). Never italic.</dd><dt>Licence</dt><dd>SIL OFL 1.1 · Undercase Type</dd><dt>Fallback</dt><dd><code>ui-serif, Georgia, serif</code></dd><dt>File</dt><dd>variable (weight, optical size, soft), preloaded</dd></dl></div>
+    <div class="fam"><div class="glyph" style="font-family:var(--font-family-sans);font-weight:600">Aa</div><h4>Atkinson Hyperlegible Next</h4><dl><dt>Role</dt><dd>Everything people read and act on</dd><dt>Weights</dt><dd>400 · 600 · 700 (variable 200–800)</dd><dt>Why</dt><dd>Designed by the Braille Institute so that 1/l/I, 0/O and rn/m stay distinct: right for ids and numbers read at a glance</dd><dt>Licence</dt><dd>SIL OFL 1.1 · Braille Institute</dd><dt>Fallback</dt><dd><code>ui-sans-serif, system-ui, Segoe UI, Roboto</code></dd></dl></div>
+    <div class="fam"><div class="glyph" style="font-family:var(--font-family-mono);font-size:64px">Aa</div><h4>Atkinson Hyperlegible Mono</h4><dl><dt>Role</dt><dd>Only literal code, ids, YAML and logs, never a decorative “machine voice”</dd><dt>Weights</dt><dd>400 · 500</dd><dt>Licence</dt><dd>SIL OFL 1.1 · Braille Institute</dd><dt>Fallback</dt><dd><code>ui-monospace, SF Mono, Menlo, Consolas</code></dd><dt>File</dt><dd>loaded on demand</dd></dl></div>
   </div>
-  ${sub('scale', 'Scale', '1rem = 16px. The dashboard reads at body-m (14px), and docs and the README read at body-l (16px). Nothing in the product is smaller than 11px, and mono text is never smaller than 11.5px.')}
+  ${sub('scale', 'Scale', '1rem = 16px. The dashboard reads at body-m (15px), and lead sentences, docs and the README read at body-l (17px). Nothing in the product is smaller than 11.5px, and mono is never smaller than 12px.')}
   <div class="specimen">${TYPES.map(typeRow).join('')}</div>
   ${why('<b>Use the shorthand, plus tracking.</b> <code>font: var(--type-h1)</code> sets style, weight, size, line height and family. CSS’s <code>font</code> shorthand can’t carry letter-spacing or text-transform, so add <code>letter-spacing: var(--type-h1-tracking)</code> (and <code>text-transform</code> for overline).')}
   ${sub('weights', 'Weights and figures')}
   <div class="weights">
     <div><b style="font-weight:400">Regular 400</b><span>Body, descriptions, table cells, code</span></div>
-    <div><b style="font-weight:500">Medium 500</b><span>Buttons, tabs, nav, form labels, entity names in lists</span></div>
-    <div><b style="font-weight:600">Semibold 600</b><span>h3/h4, overlines, counts. Nothing heavier: 700 is not used.</span></div>
+    <div><b style="font-weight:600">Semibold 600</b><span>Buttons, tabs, nav, form labels; Fraunces titles</span></div>
+    <div><b style="font-weight:700">Bold 700</b><span>Item titles (h3/h4), the bold lead-in of a summary sentence, counts</span></div>
   </div>
   <h4 class="cap">Numbers: tabular in columns, proportional in prose</h4>
   <div class="figs">
     <div class="panel surface"><table style="font-variant-numeric:proportional-nums"><tr><td>proportional (default)</td><td>1,111.10</td></tr><tr><td></td><td>$48.07</td></tr><tr><td></td><td>9,000.00</td></tr></table><p class="c-help" style="margin-top:8px">Digits wobble: wrong for tables.</p></div>
     <div class="panel surface"><table style="font-variant-numeric:tabular-nums"><tr><td>tabular-nums</td><td>1,111.10</td></tr><tr><td></td><td>$48.07</td></tr><tr><td></td><td>9,000.00</td></tr></table><p class="c-help" style="margin-top:8px">Use <code>font-variant-numeric: tabular-nums</code> in tables, timers, counters and axes.</p></div>
   </div>
-  ${why('Instrument Serif has no tabular figures, so <b>serif numbers are for one hero value per card</b> and never appear in a column. Martian Mono is monospaced, so its digits always align.')}
-  ${sub('serif-rule', 'When to use the serif', 'The audits found long italic titles hard to read. The serif is the product’s human voice, so it stays short and human.')}
+  ${why('Our Fraunces subset has no tabular figures, so <b>serif numbers are for one hero value per card</b> and never appear in a column. Atkinson Hyperlegible Next has true tabular figures: use them in every table, counter and timer.')}
+  ${sub('serif-rule', 'When to use the serif', 'The audits found long italic titles hard to read. Daylight’s serif is upright and soft, and it still stays short and human.')}
   <div class="dodont">
-    <div class="dd do">${verdict(true)}<div style="font:var(--type-h1);letter-spacing:var(--type-h1-tracking)">Needs you</div><div class="note">Page titles of one to four words, section titles, empty-state headlines and a single hero number.</div></div>
-    <div class="dd dont">${verdict(false)}<div style="font:var(--type-h2);letter-spacing:var(--type-h2-tracking)">terraform apply of infra@3f2a9c1d07e4, dir envs/prod, workspace prod: +1 ~2 -0</div><div class="note">Generated or long titles, anything containing ids, paths or numbers, and anything under 20px.</div></div>
+    <div class="dd do">${verdict(true)}<div style="font:var(--type-h1);letter-spacing:var(--type-h1-tracking);font-variation-settings:var(--type-h1-variation)">Good afternoon, ops.</div><div class="note">Page titles of one to four words, section titles, empty-state headlines and a single hero number.</div></div>
+    <div class="dd dont">${verdict(false)}<div style="font:var(--type-h2);letter-spacing:var(--type-h2-tracking);font-variation-settings:var(--type-h2-variation)">terraform apply of infra@3f2a9c1d07e4, dir envs/prod, workspace prod: +1 ~2 -0</div><div class="note">Generated or long titles, anything containing ids, paths or numbers, and anything under 20px.</div></div>
     <div class="dd do">${verdict(true)}<div><div style="font:var(--type-h3)">Replace the production web server</div><div class="c-mono" style="color:var(--color-text-tertiary);margin-top:4px">infra@3f2a9c1d · envs/prod · +1 ~2 −0</div></div><div class="note">Generated titles use h3 in the sans, with the machine details on a mono line below.</div></div>
-    <div class="dd dont">${verdict(false)}<div><span class="c-btn primary" style="font-family:var(--font-family-serif);font-style:italic;font-size:17px">Approve</span></div><div class="note">Never in controls, labels, tables, badges or form fields.</div></div>
+    <div class="dd dont">${verdict(false)}<div><span class="c-btn primary" style="font-family:var(--font-family-serif);font-size:17px">Approve</span></div><div class="note">Never in controls, labels, tables, badges or form fields.</div></div>
   </div>
-  ${rules(['<b>Serif:</b> five words or fewer, written by a person, at 20px or larger, in a title role.', '<b>Sans:</b> everything people read or act on.', '<b>Mono:</b> only values a machine produced or will parse, such as ids, hashes, paths, times, costs and config. It is never used for prose or labels.', '<b>Sentence case</b> everywhere. Only the overline style is uppercase.'])}
+  ${rules(['<b>Serif (Fraunces, upright):</b> five words or fewer, written by a person, at 20px or larger, in a title role.', '<b>Sans (Atkinson):</b> everything people read or act on, including times, costs and counts (with tabular figures).', '<b>Mono:</b> only literal code, ids, hashes, paths and YAML, placed last on a line. Never a decorative “machine voice” for labels, strips or timestamps.', '<b>Sentence case</b> everywhere. Only the overline style is uppercase.'])}
   `);
 
 // =====================================================================
@@ -256,7 +298,7 @@ ch('layout', 'Space and layout', 'A 4px base, a 12-column grid on desktop and tw
   </div>
   ${sub('containers', 'Content widths')}
   <div class="containers">${Object.entries(T.semantic.layout.container).map(([k, t]) => `<div><i style="width:calc(${t.$value.value} * 1rem * .62)">${t.$value.value * 16}px</i><span>--layout-container-${k}</span><span class="c-help">${t.$description ?? ''}</span></div>`).join('')}</div>
-  ${sub('density', 'Density', 'Comfortable is the default. Compact is for operators at scale: 30px rows, tighter padding, 13px tables and a narrower mono. It is a token set, not a separate design: set <code>data-density="compact"</code> on any element. Phones always use comfortable.')}
+  ${sub('density', 'Density', 'Comfortable is the default. Compact is for operators at scale: 36px rows, tighter padding and 13.5px tables. It is a token set, not a separate design: set <code>data-density="compact"</code> on any element. Phones always use comfortable.')}
   <div class="densities">
     <div><h4 class="cap">Comfortable</h4><div data-density="comfortable">${sampleTable()}</div></div>
     <div><h4 class="cap">Compact</h4><div data-density="compact">${sampleTable()}</div></div>
@@ -300,7 +342,7 @@ ch('icons', 'Iconography', 'Lucide outline icons for objects and actions, plus n
     <div>${rules([
       '<b>Set:</b> <a href="https://lucide.dev">Lucide</a> (ISC licence). The subset we use is vendored in <code>icons/lucide/</code>.',
       '<b>Sizes:</b> 16px beside body text, 14px in compact density and badges, 20px in empty states and pickers, 24px in phone tab bars.',
-      '<b>Stroke:</b> keep Lucide’s 2 at 14–20px and use 1.5 at 24px, so the line stays about 1.3px.',
+      '<b>Stroke:</b> Daylight draws Lucide at 1.75 (rounded, a touch lighter than its default 2) at 16–20px, and 1.5 at 24px.',
       '<b>Colour:</b> <code>icon.default</code> beside text and <code>icon.muted</code> for decoration (still 3:1). An icon takes the status colour only when it is a status glyph.',
       '<b>Never</b> show an icon alone without a label or tooltip (except a universal close ×), never fill outline icons, and never mix icon sets.',
       '<b>Drawing new icons:</b> 24 grid, 2px stroke, round caps and joins, 2px corner radius on rectangles, no fills, and the optical size of the Lucide neighbours.',
@@ -456,6 +498,62 @@ ch('components', 'Components', 'Guidance and token mapping, not a library. Each 
   () => COMP.map(([id, t, lede, fn]) => `${sub(id, t, lede ?? '')}${stack(fn)}`).join('') + why('<b>Token mapping:</b> every value in these sheets is a component token (<code>--button-primary-bg</code>, <code>--input-border-focus</code>, <code>--table-row-h</code>…) that aliases a semantic token. The full map is in <code>tokens.json › component</code>, and <code>book/components.css</code> shows how each one is used.'));
 
 // =====================================================================
+// Patterns (including the two borrowed from the other directions)
+// =====================================================================
+function digest(compact = false) {
+  return `<div class="pt-digest ${compact ? 'compact' : ''}"><h4>Since you last looked <span>2 h ago</span></h4><ul>
+    <li><b>14</b><span>runs passed, including 6 pull-request reviews</span></li>
+    <li data-s="danger"><b>1</b><span>new failure: ci-fixer on acme/web#1288</span>${sg('danger')}</li>
+    <li data-s="accent"><b>1</b><span>new approval: replace the production web server</span>${sg('needs-you')}</li>
+    <li><b>1</b><span>update ready: v0.72.0</span></li></ul></div>`;
+}
+function story(compact = false) {
+  const steps = [['success', 'Get the failing logs', '3 failing checks found', '2 s'], ['success', 'Decide what failed', 'A test failure (91% sure)', '8 s'], ['success', 'Fix it', 'Changed applyFee to round half-even', '7 min 40 s'], ['danger', 'Run the tests', '2 of 148 tests fail', '26 s'], ['skipped', 'Push the fix', 'Not reached', '']];
+  return `<ol class="pt-story">${steps.slice(0, compact ? 5 : 5).map(([st, t, d, x]) => `<li data-s="${st === 'skipped' ? 'neutral' : st}" class="${st}"><span class="sg">${sg(st)}</span><div><b>${t}</b><span>${d}</span></div><em>${x}</em></li>`).join('')}</ol>`;
+}
+function lanes() {
+  const L = [['pr-review', [[2, 'running'], [31, 'ok'], [95, 'waiting'], [252, 'ok'], [503, 'ok'], [640, 'ok']]], ['ci-fixer', [[6, 'running'], [52, 'failed'], [230, 'parked'], [588, 'ok']]], ['issue-triage', [[79, 'ok'], [299, 'ok'], [410, 'ok']]], ['platform-sre', [[7, 'approval'], [176, 'ok'], [716, 'ok']]], ['dep-bump', [[131, 'ok']]], ['release-notes', [[418, 'failed']]]];
+  const w = 900, left = 112, lh = 34, top = 8, H = top + L.length * lh + 24, span = 720, x = (m) => left + (1 - m / span) * (w - left - 12);
+  let g = '';
+  for (let h = 0; h <= 12; h += 3) { const xx = x(h * 60); g += `<line x1="${xx}" x2="${xx}" y1="${top}" y2="${H - 20}" class="lgrid"/><text x="${xx}" y="${H - 5}" class="lax" text-anchor="middle">${h ? h + ' h ago' : 'now'}</text>`; }
+  L.forEach(([n, notes], i) => {
+    const y = top + i * lh + lh / 2;
+    g += `<text x="0" y="${y + 4}" class="llab">${n}</text><line x1="${left}" x2="${w - 12}" y1="${y}" y2="${y}" class="lline"/>`;
+    for (const [m, st] of notes) {
+      const xx = x(m), c = { ok: 'var(--color-text-tertiary)', failed: 'var(--color-status-danger-solid)', running: 'var(--color-status-running-solid)', waiting: 'var(--color-status-warning-solid)', parked: 'var(--color-status-neutral-solid)', approval: 'var(--color-accent-default)' }[st];
+      g += st === 'failed' ? `<path d="M${xx - 5} ${y - 5}l10 10M${xx + 5} ${y - 5}l-10 10" stroke="${c}" stroke-width="2.6" stroke-linecap="round"><title>${n}: failed</title></path>`
+        : st === 'approval' || st === 'waiting' ? `<path d="M${xx} ${y - 7}l7 7-7 7-7-7z" fill="${c}"><title>${n}: ${st === 'approval' ? 'needs your approval' : 'waiting on you'}</title></path>`
+        : st === 'running' ? `<circle cx="${xx}" cy="${y}" r="6" fill="none" stroke="${c}" stroke-width="2.4" stroke-dasharray="26 12"><title>${n}: running</title></circle>`
+        : st === 'parked' ? `<path d="M${xx - 2.5} ${y - 5}v10M${xx + 2.5} ${y - 5}v10" stroke="${c}" stroke-width="2.4" stroke-linecap="round"><title>${n}: parked</title></path>`
+        : `<circle cx="${xx}" cy="${y}" r="5" fill="${c}"><title>${n}: passed</title></circle>`;
+    }
+  });
+  g += `<line x1="${x(0)}" x2="${x(0)}" y1="${top - 4}" y2="${H - 20}" stroke="var(--color-dataviz-now)" stroke-width="1.5"/>`;
+  return `<div class="pt-lanes"><div class="legend">${[['ok', 'Passed'], ['fail', 'Failed'], ['run', 'Running'], ['wait', 'Needs you'], ['park', 'Parked']].map(([k, l]) => `<span><i class="lgd ${k}"></i>${l}</span>`).join('')}</div><svg viewBox="0 0 ${w} ${H}" role="img" aria-label="Every run of every workflow, last 12 hours">${g}</svg></div>`;
+}
+const NEEDS = [
+  ['accent', 'needs-you', 'Replace the production web server', 'platform-sre wants to run terraform apply on production, for the SEV2 latency incident', 'p12 · infra@3f2a9c1d · +1 ~2 −0', '7 min ago', 'Review', 'primary'],
+  ['danger', 'danger', 'ci-fixer couldn’t fix acme/web#1288', 'Its change made 2 tests fail. Nothing was pushed.', 'r-7ef0 · step test', '52 min ago', 'Open', 'secondary'],
+  ['warning', 'warning', 'pr-review needs your call on a draft', 'Approve, revise or discard its review of acme/infra#77', 'r-7ed1 · hand-off', '1 h ago', 'Answer', 'secondary'],
+];
+const needsList = () => `<ul class="pt-needs">${NEEDS.map(([s, g, t, w, tech, age, act, kind]) => `<li data-s="${s}"><span class="ng">${sg(g)}</span><div><b>${t}</b><span>${w}</span><code>${tech}</code></div><em>${age}</em><button class="c-btn ${kind} sm" tabindex="-1">${act}</button></li>`).join('')}</ul>`;
+const PATTERNS = [
+  ['pt-summary', 'Summary header', 'Every page opens with its title and one sentence that answers the page’s question in plain words, then the actions. The sentence leads with a bold count when something needs you.',
+    () => `<div class="pt-head"><h1>Good afternoon, ops.</h1><p><b>5 things need you.</b> Everything else is running normally: 18 of 20 runs in the last 12 hours went fine.</p><div class="pt-act"><button class="c-btn primary" tabindex="-1">Review approvals</button><button class="c-btn secondary" tabindex="-1">${lu('play')}Run a workflow</button></div></div>`],
+  ['pt-needs', 'Needs you list', 'One row per thing waiting on a person: a status glyph, a plain title, why it matters, the machine details last in mono, the age, and one verb. Approvals get the primary button; the rest are secondary.',
+    () => needsList()],
+  ['pt-digest', 'Since you last looked (from Broadsheet)', 'Borrowed from the Broadsheet direction. When you come back, the overview leads with what changed since your last visit, as counts and one line each, linked to the detail. New failures and approvals carry their status colour; everything else stays ink.',
+    () => digest()],
+  ['pt-story', 'Run story', 'A run as a short story, top to bottom: each step’s outcome in a sentence, the duration on the right, and the failing step called out. Steps after a failure say “Not reached”.',
+    () => story()],
+  ['pt-lanes', 'Activity lanes (from Score)', 'Borrowed from the Score direction, for the Activity page. Every workflow is a named lane, time runs left to right, and each run is a mark whose shape and colour give its state. Passing runs are ink dots, so the failures and the ember diamonds on “now” stand out. Lanes are labelled rather than coloured.',
+    () => lanes()],
+];
+ch('patterns', 'Patterns', 'Recurring screen patterns built from the components, including the two borrowed from the other round-two directions.',
+  PATTERNS.map(([id, t]) => [id, t]),
+  () => PATTERNS.map(([id, t, lede, fn]) => `${sub(id, t, lede)}${stack(fn)}`).join('') + why('The approval card pattern (why, impact, undo, then approve with passkey) is shown in <a href="#microcopy">Voice and tone › Patterns</a>.'));
+
+// =====================================================================
 // 8. Voice
 // =====================================================================
 const VOICE = [
@@ -507,59 +605,52 @@ ch('voice', 'Voice and tone', 'Plain, specific and calm. The interface talks to 
   `);
 
 // =====================================================================
-// 9. Logo
+// 9. Logo (swappable: the working mark and every candidate come from tools/logos.mjs)
 // =====================================================================
-const A = 'assets/';
-// An image that follows this page's theme: light file by default, dark file on dark.
+const W = LOGOS.find((L) => L.id === RECOMMENDED_LOGO);
+const K = (L, f) => `logo-kits/${L.id}/${f}`;
 const th = (light, dark, attrs = '') => `<img src="${light}" data-l="${light}" data-d="${dark}" alt="" ${attrs}>`;
-ch('logo', 'Logo', 'Fermata is the working mark: an arch over a point, the conductor’s hold. These rules apply whichever direction ships.',
-  [['lockups', 'Lockups'], ['logo-space', 'Clear space and size'], ['misuse', 'Misuse'], ['cobrand', 'Co-branding'], ['logo-files', 'Favicon and social'], ['logo-directions', 'Per direction']],
+export const inlineMark = (L) => `<svg class="logo-mark" viewBox="${L.mark.box.join(' ')}" role="img" aria-label="conductor"><g fill="var(--color-logo-ink)">${L.mark.ink}</g><g fill="var(--color-accent-default)">${L.mark.acc}</g></svg>`;
+ch('logo', 'Logo', `The working mark is ${W.name}. The logo is a swappable layer: every candidate is a complete kit, and switching is a one-folder change.`,
+  [['lockups', 'Working mark'], ['logo-space', 'Clear space and size'], ['misuse', 'Misuse'], ['cobrand', 'Co-branding'], ['logo-candidates', 'Candidates']],
   () => `
-  ${sub('lockups', 'Lockups', 'Use the horizontal lockup by default. Use the stacked one for square spaces, and the mark alone where the name is already present (the app icon, the favicon, the dashboard on a phone).')}
+  ${sub('lockups', 'Working mark', `${W.why} Not chosen yet: compare all four on the <a href="logo-review.html">logo review</a>.`)}
   <div class="logo-tiles">
-    <div class="ltile" style="background:#efeadf;color:#1b1a15"><img src="${A}logo-horizontal.svg" alt=""><span>horizontal · light</span></div>
-    <div class="ltile" style="background:#0f100d;color:#ece8dc"><img src="${A}logo-horizontal-dark.svg" alt=""><span>horizontal · dark</span></div>
-    <div class="ltile" style="background:#f9f6ef;color:#1b1a15"><img src="${A}logo-stacked.svg" alt="" style="max-height:62%"><span>stacked</span></div>
-    <div class="ltile" style="background:#ffffff;color:#000"><img src="${A}logo-mark-mono.svg" alt="" style="height:64px"><span>mono · black</span></div>
-    <div class="ltile" style="background:#ff6a2b;color:#1d0c03"><div style="width:120px;height:72px;background:#fff;-webkit-mask:url(${A}logo-horizontal-mono.svg) center/contain no-repeat;mask:url(${A}logo-horizontal-mono.svg) center/contain no-repeat"></div><span>one colour on ember</span></div>
-    <div class="ltile" style="background:#181914;color:#ece8dc"><img src="${A}app-icon.svg" alt="" style="height:96px"><span>app icon</span></div>
+    <div class="ltile" data-theme="light" style="background:var(--color-bg-canvas)"><img src="${K(W, 'logo-horizontal.svg')}" alt=""><span>horizontal · light</span></div>
+    <div class="ltile" data-theme="dark" style="background:var(--color-bg-canvas)"><img src="${K(W, 'logo-horizontal-dark.svg')}" alt=""><span>horizontal · dark</span></div>
+    <div class="ltile" data-theme="light" style="background:var(--color-bg-surface)"><img src="${K(W, 'logo-stacked.svg')}" alt="" style="max-height:62%"><span>stacked</span></div>
+    <div class="ltile" style="background:#ffffff;color:#000"><img src="${K(W, 'logo-mark-mono.svg')}" alt="" style="height:64px"><span>mono · black</span></div>
+    <div class="ltile" data-theme="light" style="background:var(--color-accent-default);color:#fff"><div style="width:150px;height:72px;background:#fff;-webkit-mask:url(${K(W, 'logo-horizontal-mono.svg')}) center/contain no-repeat;mask:url(${K(W, 'logo-horizontal-mono.svg')}) center/contain no-repeat"></div><span>one colour on ember</span></div>
+    <div class="ltile" data-theme="dark" style="background:var(--color-bg-canvas)"><img src="${K(W, 'app-icon.svg')}" alt="" style="height:96px"><span>app icon</span></div>
   </div>
-  ${sub('logo-space', 'Clear space and size', 'Keep one dot diameter clear on every side (the dashed line). Below 24px, use the 16px cut (favicon.svg), not a scaled master.')}
+  ${why('<b>In app chrome</b> use the inline mark (<code>mark-inline.html</code> in the kit) at 20px tall beside the live-text wordmark (<code>--type-brand</code>: Fraunces SemiBold). The mark’s arch takes <code>--color-logo-ink</code>, which is deeper than body text on cream so the mark holds at small sizes, and the dot takes <code>--color-accent-default</code>. This page’s top bar uses exactly that.')}
+  ${sub('logo-space', 'Clear space and size', 'Keep one dot diameter clear on every side. Below 24px, use the 16px cut (favicon.svg), not a scaled master.')}
   <div style="display:flex;gap:var(--space-8);flex-wrap:wrap;align-items:center">
-    <div class="clear">${th(A + 'logo-horizontal.svg', A + 'logo-horizontal-dark.svg')}</div>
+    <div class="clear">${th(K(W, 'logo-horizontal.svg'), K(W, 'logo-horizontal-dark.svg'))}</div>
     <div class="mins">
-      <div><img src="${A}favicon.svg" width="16" height="16" alt="">mark 16px (16px cut)</div>
-      <div>${th(A + 'logo-mark.svg', A + 'logo-mark-dark.svg', 'width="24" height="24"')}mark 24px (master)</div>
-      <div>${th(A + 'logo-horizontal.svg', A + 'logo-horizontal-dark.svg', 'style="height:18px"')}horizontal 18px tall</div>
-      <div>${th(A + 'logo-stacked.svg', A + 'logo-stacked-dark.svg', 'style="width:64px"')}stacked 64px wide</div>
+      <div><img src="${K(W, 'favicon.svg')}" width="16" height="16" alt="">mark 16px (16px cut)</div>
+      <div>${th(K(W, 'logo-mark.svg'), K(W, 'logo-mark-dark.svg'), 'width="24" height="24"')}mark 24px</div>
+      <div>${th(K(W, 'logo-horizontal.svg'), K(W, 'logo-horizontal-dark.svg'), 'style="height:20px"')}horizontal 20px tall</div>
+      <div>${th(K(W, 'logo-stacked.svg'), K(W, 'logo-stacked-dark.svg'), 'style="width:72px"')}stacked 72px wide</div>
     </div>
   </div>
   ${sub('misuse', 'Misuse')}
-  <div class="logo-tiles">
-    ${[['transform:scaleX(1.35);max-width:52%', 'stretched'], ['filter:hue-rotate(180deg)', 'recoloured'], ['transform:rotate(180deg)', 'rotated (it becomes a smile)'], ['filter:drop-shadow(0 6px 8px rgba(0,0,0,.5))', 'effects and shadows'], ['', 'on a busy image', 'repeating-linear-gradient(45deg,#cc4a0e 0 12px,#3f9a86 12px 24px)'], ['letter-spacing:.4em;font:italic 34px var(--font-family-serif)', 're-typed wordmark', '', 'conductor']]
-      .map(([st, l, bg = '', txt = '']) => `<div class="ltile bad" style="background:${bg || '#efeadf'};color:#1b1a15">${txt ? `<span style="position:static;opacity:1;${st};text-transform:none">${txt}</span>` : `<img src="${A}logo-horizontal.svg" alt="" style="${st}">`}<span>${l}</span></div>`).join('')}
+  <div class="logo-tiles" data-contrast="exempt">
+    ${[['transform:scaleX(1.35);max-width:52%', 'stretched'], ['filter:hue-rotate(180deg)', 'recoloured'], ['transform:rotate(180deg)', 'rotated'], ['filter:drop-shadow(0 6px 8px rgba(0,0,0,.5))', 'effects and shadows'], ['', 'on a busy image', 'repeating-linear-gradient(45deg,#cc4a0e 0 12px,#3f9a86 12px 24px)'], ['letter-spacing:.4em;font:italic 34px Georgia,serif', 're-typed wordmark', '', 'conductor']]
+      .map(([st, l, bg = '', txt = '']) => `<div class="ltile bad" style="background:${bg || '#f7f3ec'};color:#1c1712">${txt ? `<span style="position:static;opacity:1;${st};text-transform:none">${txt}</span>` : `<img src="${K(W, 'logo-horizontal.svg')}" alt="" style="${st}">`}<span>${l}</span></div>`).join('')}
   </div>
-  ${sub('cobrand', 'Co-branding', 'Partner logos sit to the right at equal optical height, separated by a hairline rule with two dot-widths of space on each side. conductor always comes first on our surfaces, and we never merge the marks.')}
-  <div class="cobrand">${th(A + 'logo-horizontal.svg', A + 'logo-horizontal-dark.svg', 'style="height:40px"')}<span class="sep"></span><span class="partner"><i></i>Acme</span></div>
-  ${sub('logo-files', 'Favicon and social', 'The favicon is the 16px cut. Its SVG follows the browser’s colour scheme, and the PNG fallbacks come in light and dark. The social card is 1280×640, dark, with the lockup, the one-line description and the repository URL. Its safe area keeps 64px clear on every side.')}
-  <div style="display:grid;grid-template-columns:auto 1fr;gap:var(--space-6);align-items:center">
-    <div style="display:flex;gap:var(--space-4);align-items:flex-end">${[16, 32, 48].map((s) => `<img src="${A}favicon-${s}.png" width="${s}" height="${s}" alt="" style="image-rendering:pixelated">`).join('')}<img src="${A}apple-touch-icon.png" width="60" height="60" alt="" style="border-radius:13px"></div>
-    <img src="${A}social-card.png" alt="Social card" style="width:100%;max-width:640px;border-radius:var(--radius-card);box-shadow:var(--shadow-2)">
-  </div>
-  ${sub('logo-directions', 'What changes per direction', 'Tokens never name the logo. Switching direction swaps the logo files and, where a direction has its own accent, adds a ramp and re-points the eleven accent tokens. Every other token stays.')}
-  <table class="perdir"><thead><tr><th>Direction</th><th>Logo files</th><th>Accent</th><th>Token changes</th><th>Wordmark</th></tr></thead><tbody>
-    <tr class="cur"><td>${th('directions/fermata/logo-horizontal-light.svg', 'directions/fermata/logo-horizontal-dark.svg')}</td><td><code>directions/fermata/</code><br><span class="c-help">= assets/</span></td><td><span class="chip"><i style="background:#ff6a2b"></i>ember</span></td><td>None: this system is built on it.</td><td>Instrument Serif Italic (the dashboard’s title face)</td></tr>
-    <tr><td>${th('directions/conduit/logo-horizontal-light.svg', 'directions/conduit/logo-horizontal-dark.svg')}</td><td><code>directions/conduit/</code></td><td><span class="chip"><i style="background:#e07a3f"></i>copper</span></td><td>Add a <code>copper</code> ramp (hue ≈ 50, lower chroma) and re-point the accent set below. Re-run the contrast check.</td><td>Instrument Sans SemiBold, in the logo only. UI type is unchanged.</td></tr>
-    <tr><td>${th('directions/downbeat/logo-horizontal-light.svg', 'directions/downbeat/logo-horizontal-dark.svg')}</td><td><code>directions/downbeat/</code></td><td><span class="chip"><i style="background:#ff5533"></i>vermilion</span></td><td>Add a <code>vermilion</code> ramp (hue ≈ 32). It sits closer to danger red, so check that the needs-you and failed badges still differ by more than colour (they do: diamond and cross).</td><td>Martian Mono Medium</td></tr>
-    <tr><td>${th('directions/signature/logo-horizontal-light.svg', 'directions/signature/logo-horizontal-dark.svg')}</td><td><code>directions/signature/</code></td><td><span class="chip"><i style="background:#e0b25a"></i>brass</span></td><td>Brass collides with <b>status.warning</b> (amber, hue 80). Either keep ember as the UI accent and use brass in the logo only, or move warning to a more orange amber.</td><td>Instrument Serif roman</td></tr>
+  ${sub('cobrand', 'Co-branding', 'Partner logos sit to the right at equal optical height, separated by a hairline rule with two dot-widths of space on each side. conductor comes first on our surfaces, and we never merge the marks.')}
+  <div class="cobrand">${th(K(W, 'logo-horizontal.svg'), K(W, 'logo-horizontal-dark.svg'), 'style="height:40px"')}<span class="sep"></span><span class="partner"><i></i>Acme</span></div>
+  ${sub('logo-candidates', 'Candidates', 'Each candidate is a drop-in kit in <code>logo-kits/</code> with the same file names. Picking one copies its kit into place; tokens, components and this book do not change.')}
+  <table class="perdir"><thead><tr><th>Candidate</th><th>Idea</th><th>Kit</th></tr></thead><tbody>
+    ${LOGOS.map((L) => `<tr class="${L.id === W.id ? 'cur' : ''}"><td>${th(K(L, 'logo-horizontal.svg'), K(L, 'logo-horizontal-dark.svg'))}</td><td><b>${L.name}</b><br>${L.line}</td><td><a href="logo-kits/${L.id}/"><code>logo-kits/${L.id}/</code></a></td></tr>`).join('')}
   </tbody></table>
-  ${why('<b>The accent set</b> (re-point these, nothing else): <code>accent.default · hover · active · subtle</code>, <code>text.accent</code>, <code>text.on-accent</code>, <code>focus.ring</code>, <code>selection.bg · text</code>, <code>dataviz.now</code> and <code>code.anchor</code>.')}
   `);
 
 // =====================================================================
 // 10. Tokens
 // =====================================================================
-ch('tokens', 'Tokens', 'There is one file of truth and generated CSS. Raw values feed semantic roles, and semantic roles feed components.',
+ch('tokens', 'Tokens', 'There is one file of truth and generated CSS. Raw values feed semantic roles, semantic roles feed components, and an explicit theme always wins.',
   [['token-files', 'Files'], ['token-use', 'Using them'], ['migration', 'Migrating the dashboard']],
   () => `
   ${sub('token-files', 'Files')}
@@ -587,11 +678,12 @@ ch('tokens', 'Tokens', 'There is one file of truth and generated CSS. Raw values
     '<span class="k">h1</span> <span class="p">{</span> <span class="k">font</span><span class="p">:</span> var(--type-h1)<span class="p">;</span> <span class="k">letter-spacing</span><span class="p">:</span> var(--type-h1-tracking)<span class="p">;</span> <span class="p">}</span>',
   ].map((l, i) => `<div class="ln"><span class="n">${i + 1}</span><span class="m"></span><span>${l}</span></div>`).join('')}</pre></div>
   ${rules(['<b>Names:</b> <code>--palette-*</code> are raw (never use them in components). <code>--color-*</code>, <code>--shadow-*</code>, <code>--type-*</code>, <code>--size-*</code>, <code>--pad-*</code>, <code>--gap-*</code>, <code>--radius-*</code> and <code>--motion-*</code> are semantic. <code>--button-*</code>, <code>--input-*</code> and similar are component tokens.', '<b>Scoping:</b> <code>data-theme</code> and <code>data-density</code> work on any element, not just <code>&lt;html&gt;</code>. This page uses that to show both themes side by side.', '<b>Adding a token:</b> add it to tokens.json at the lowest tier that makes sense, declare its contrast intent if it colours text or marks, and re-run the generator.'])}
-  ${sub('migration', 'Migrating the dashboard', 'Load tokens.css and prototype-compat.css, and delete the theme blocks in css/app.css. The prototype renders the same way, with the AA fixes applied. Then replace old names with these, selector by selector.')}
+  ${sub('migration', 'Migrating the dashboard', 'Load fonts/fonts.css, tokens.css and prototype-compat.css, and delete the theme and :root blocks in css/app.css: the prototype takes on Daylight’s colours, radii and fonts at once. Then, in one pass, replace each old name with its token (this table), apply the type shorthands, and move decorative mono to the sans. The notes give the old and new values.')}
   <div class="ctable-wrap" style="max-height:440px"><table class="mig"><thead><tr><th>Prototype</th><th>Token</th><th>Note</th></tr></thead><tbody>${MIG.map((m) => `<tr><td><code>${m.from}</code></td><td><code>${m.to}</code></td><td>${m.note}</td></tr>`).join('')}</tbody></table></div>
   `);
 
 // ---------- mount ----------
+document.getElementById('brand-mark').outerHTML = inlineMark(W);
 const root = document.getElementById('chapters');
 root.innerHTML = chapters.map((c, i) => `<section class="ch" id="${c.id}"><div class="ch-head"><div><span class="num">${String(i + 1).padStart(2, '0')} · ${c.title}</span><h2>${c.title}</h2></div><p>${c.blurb}</p></div>${c.body()}</section>`).join('');
 document.getElementById('toc').innerHTML = `<ol><li><a href="#principles"><span class="n">00</span>Principles</a></li>${chapters.map((c, i) => `<li><a href="#${c.id}"><span class="n">${String(i + 1).padStart(2, '0')}</span>${c.title}</a><ol>${c.subs.map(([id, t]) => `<li><a href="#${id}">${t}</a></li>`).join('')}</ol></li>`).join('')}</ol>`;

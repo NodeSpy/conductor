@@ -1,27 +1,24 @@
-/* conductor webfonts. Self-hosted latin subsets (U+0000-00FF plus common punctuation),
- * SIL Open Font License 1.1: see OFL-*.txt in this folder.
+/* conductor webfonts (Daylight). Self-hosted latin subsets, SIL Open Font License 1.1:
+ * see OFL-*.txt in this folder.
  *
  * Loading strategy:
  *  - font-display: swap everywhere: text renders at once in the fallback and swaps in.
- *  - Preload only the two faces above the fold in the dashboard:
- *      <link rel="preload" href="fonts/InstrumentSans-normal.woff2" as="font" type="font/woff2" crossorigin>
- *      <link rel="preload" href="fonts/MartianMono-wdth.woff2" as="font" type="font/woff2" crossorigin>
- *  - The serif loads on demand (titles only); its roman cut only on brand pages.
- *  - Variable files: one request covers every weight (and, for Martian Mono, every width). */
+ *  - Preload the two faces above the fold in the dashboard:
+ *      <link rel="preload" href="fonts/AtkinsonNext.woff2" as="font" type="font/woff2" crossorigin>
+ *      <link rel="preload" href="fonts/Fraunces.woff2" as="font" type="font/woff2" crossorigin>
+ *  - The mono loads on demand (code and ids only).
+ *  - Variable files: one request covers every weight (and Fraunces' optical size and soft axes). */
 @font-face {
-  font-family: 'Instrument Sans'; font-style: normal; font-weight: 400 700; font-display: swap;
-  src: url(InstrumentSans-normal.woff2) format('woff2');
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2190-2199, U+2212, U+2215, U+FEFF, U+FFFD;
+  font-family: 'Atkinson Hyperlegible Next'; font-style: normal; font-weight: 200 800; font-display: swap;
+  src: url(AtkinsonNext.woff2) format('woff2');
 }
 @font-face {
-  font-family: 'Instrument Serif'; font-style: italic; font-weight: 400; font-display: swap;
-  src: url(InstrumentSerif-italic.woff2) format('woff2');
+  font-family: 'Fraunces'; font-style: normal; font-weight: 100 900; font-display: swap;
+  src: url(Fraunces.woff2) format('woff2');
 }
 @font-face {
-  font-family: 'Instrument Serif'; font-style: normal; font-weight: 400; font-display: swap;
-  src: url(InstrumentSerif-normal.woff2) format('woff2');
+  font-family: 'Atkinson Hyperlegible Mono'; font-style: normal; font-weight: 200 800; font-display: swap;
+  src: url(AtkinsonMono.woff2) format('woff2');
 }
-@font-face {
-  font-family: 'Martian Mono'; font-style: normal; font-weight: 100 800; font-stretch: 75% 112.5%; font-display: swap;
-  src: url(MartianMono-wdth.woff2) format('woff2');
-}
+/* Round-one faces, kept only for the archived round-one pages (index.html, page.css loads its own). */
+@font-face { font-family: 'Instrument Serif'; font-style: italic; font-weight: 400; font-display: swap; src: url(InstrumentSerif-italic.woff2) format('woff2'); }

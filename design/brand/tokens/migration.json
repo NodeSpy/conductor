@@ -2,47 +2,47 @@
  {
   "from": "--font-ui",
   "to": "--font-family-sans",
-  "note": ""
+  "note": "Instrument Sans → Atkinson Hyperlegible Next. Body goes 13.5 → 15px (--type-body-m)."
  },
  {
   "from": "--font-title",
   "to": "--font-family-serif",
-  "note": "Titles: use the --type-h1 / --type-h2 shorthands, which also set italic, size and tracking."
+  "note": "Instrument Serif italic → Fraunces SemiBold, upright. Use the --type-h1 / --type-h2 shorthands plus their -tracking and -variation. Long or generated titles move to --type-h3 (sans)."
  },
  {
   "from": "--font-mono",
   "to": "--font-family-mono",
-  "note": "Add font-stretch: var(--dense-mono-stretch)% so compact density narrows it."
+  "note": "Martian Mono → Atkinson Hyperlegible Mono, and only for literal code, ids, YAML and logs. Strip cells, crumbs, counts, times and costs move to the sans with tabular-nums."
  },
  {
   "from": "--r-xs",
   "to": "--radius-badge",
-  "note": ""
+  "note": "3 → pill (999)."
  },
  {
   "from": "--r-sm",
   "to": "--radius-control",
-  "note": ""
+  "note": "5 → 10."
  },
  {
   "from": "--r",
   "to": "--radius-card",
-  "note": ""
+  "note": "8 → 14."
  },
  {
   "from": "--r-lg",
   "to": "--radius-overlay",
-  "note": ""
+  "note": "12 → 18."
  },
  {
   "from": "--rail-w",
   "to": "--size-rail",
-  "note": "Now density-dependent (224 → 200 compact)."
+  "note": "224 → 236 (212 compact)."
  },
  {
   "from": "--strip-h",
   "to": "--size-strip",
-  "note": "Now density-dependent (34 → 30 compact)."
+  "note": "34 → 60 (48 compact): the mono status strip becomes a calm top bar (search, health, avatar)."
  },
  {
   "from": "--ease",
@@ -62,37 +62,37 @@
  {
   "from": "--bg",
   "to": "--color-bg-canvas",
-  "note": ""
+  "note": "Dark #0f100d → cocoa #1d1915; light #efeadf → cream #f7f3ec. Daylight is light-first."
  },
  {
   "from": "--bg-1",
   "to": "--color-bg-rail",
-  "note": ""
+  "note": "Dark #13140f → #211c18; light #f4f0e6 → #f1ebe1."
  },
  {
   "from": "--bg-2",
   "to": "--color-bg-surface",
-  "note": ""
+  "note": "Dark #181914 → #26211c; light #f9f6ef → #fffdf9."
  },
  {
   "from": "--bg-3",
   "to": "--color-bg-raised",
-  "note": ""
+  "note": "Dark #1f201a → #2e2822; light #fffdf8 → #ffffff."
  },
  {
   "from": "--bg-4",
   "to": "--color-bg-overlay",
-  "note": ""
+  "note": "Dark #272821 → #36302a; light #ffffff."
  },
  {
   "from": "--line",
   "to": "--color-border-subtle",
-  "note": ""
+  "note": "Dark #2a2b23 → #352e27; light #ddd6c5 → #ece5d8."
  },
  {
   "from": "--line-2",
   "to": "--color-border-default",
-  "note": "Inputs and checkboxes should use --color-border-control (3:1) instead."
+  "note": "Inputs and checkboxes use --color-border-control (3:1) instead."
  },
  {
   "from": "--line-3",
@@ -102,27 +102,27 @@
  {
   "from": "--ink",
   "to": "--color-text-primary",
-  "note": ""
+  "note": "Dark #ece8dc → #f4eee4; light #1b1a15 → #2a231c."
  },
  {
   "from": "--ink-2",
   "to": "--color-text-secondary",
-  "note": "Dark: #b6b1a2 → #c9c2b0 (AAA on every surface)."
+  "note": "Dark #b6b1a2 → #ddd3c2; light #514d43 → #584e43."
  },
  {
   "from": "--ink-3",
   "to": "--color-text-tertiary",
-  "note": "Changed for AA: dark #807c6f → #aea796, light #847f71 → #666256. The old values failed 4.5:1 on cards."
+  "note": "Changed for AA: dark #807c6f → #ada291, light #847f71 → #6e6457. The old values failed 4.5:1 on cards."
  },
  {
   "from": "--ink-4",
   "to": "--color-text-disabled",
-  "note": "Disabled only. Was also used for placeholder-like text: use --color-text-tertiary."
+  "note": "Disabled controls only."
  },
  {
   "from": "--accent",
   "to": "--color-accent-default",
-  "note": "Fills only. Where it colours text (links, .cell.alert, crumbs:hover), use --color-text-accent: the light fill is 3.8:1 on paper."
+  "note": "Fills only (buttons, counts, bars, the logo dot). Where it colours text (links, .cell.alert, crumbs:hover; 43 places), use --color-text-accent."
  },
  {
   "from": "--accent-2",
@@ -142,7 +142,7 @@
  {
   "from": "--ok",
   "to": "--color-status-success-fg",
-  "note": "Dots and bars: --color-status-success-solid."
+  "note": "Dots and bars: --color-status-success-solid. Passing rows stay ink: colour is for what needs attention."
  },
  {
   "from": "--run",
@@ -217,7 +217,7 @@
  {
   "from": "--code-com",
   "to": "--color-code-comment",
-  "note": "Light: #9a9482 → #666256 (comments were 2.9:1)."
+  "note": "Light #9a9482 → #6e6457 (comments were 2.9:1)."
  },
  {
   "from": "--code-anchor",
@@ -232,12 +232,12 @@
  {
   "from": "--dot",
   "to": "--color-decor-dot",
-  "note": ""
+  "note": "Daylight drops the dot grid on app surfaces; keep it for brand pages only."
  },
  {
   "from": "--elev",
   "to": "--shadow-2",
-  "note": ""
+  "note": "Warm, softer shadows in light."
  },
  {
   "from": "--elev-pop",
@@ -247,6 +247,6 @@
  {
   "from": "--grain-op",
   "to": "--opacity-grain",
-  "note": ""
+  "note": "Daylight drops the film grain on app surfaces."
  }
 ]

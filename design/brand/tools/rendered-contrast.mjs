@@ -56,6 +56,7 @@ function measure() {
     if (image) { out.unknown++; continue; }
     let bg = canvasBg(); for (let i = layers.length - 1; i >= 0; i--) bg = over(layers[i], bg);
     let fg = parse(cs.color); fg = [fg[0], fg[1], fg[2], fg[3] * op];
+    if (fg[3] < 0.05) continue; // fully transparent text is hidden by design, not low contrast
     const seenFg = over(fg, bg);
     const size = parseFloat(cs.fontSize), bold = Number(cs.fontWeight) >= 700;
     const need = size >= 24 || (size >= 18.66 && bold) ? 3 : 4.5;

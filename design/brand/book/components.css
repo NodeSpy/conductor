@@ -6,7 +6,7 @@
 
 .c-root { font: var(--type-body-m); letter-spacing: var(--type-body-m-tracking); color: var(--color-text-primary); }
 .c-root *, .c-root *::before, .c-root *::after { box-sizing: border-box; }
-.c-mono { font-family: var(--font-family-mono); font-size: var(--type-code-s-size); font-stretch: calc(var(--dense-mono-stretch) * 1%); letter-spacing: 0; }
+.c-mono { font-family: var(--font-family-mono); font-size: var(--type-code-s-size); letter-spacing: 0; }
 .c-tnum { font-variant-numeric: tabular-nums; }
 
 /* ---------- focus: one ring everywhere ---------- */
@@ -212,7 +212,7 @@
 .c-empty p { margin: 0 0 var(--space-3); max-width: 30rem; color: var(--color-text-secondary); font: var(--type-body-m); }
 
 /* ---------- code, YAML, diff ---------- */
-.c-code { background: var(--code-bg); border: var(--border-width) solid var(--code-border); border-radius: var(--radius-card); font: var(--type-code); font-stretch: calc(var(--dense-mono-stretch) * 1%); color: var(--code-fg); overflow: auto; }
+.c-code { background: var(--code-bg); border: var(--border-width) solid var(--code-border); border-radius: var(--radius-card); font: var(--type-code); color: var(--code-fg); overflow: auto; }
 .c-code .hd { display: flex; gap: var(--space-2); align-items: center; padding: var(--space-1_5) var(--space-3); border-bottom: var(--border-width) solid var(--code-border); font: var(--type-caption); color: var(--color-text-tertiary); font-family: var(--font-family-sans); }
 .c-code pre { margin: 0; padding: var(--space-2) 0; font: inherit; }
 .c-code .ln { display: grid; grid-template-columns: 3.2em 1.4em 1fr; padding-right: var(--space-3); white-space: pre; }
@@ -233,7 +233,7 @@
 .c-code .p { color: var(--color-code-punct); }
 .c-code .ln.add .k, .c-code .ln.add .s, .c-code .ln.add .num, .c-code .ln.add .p { color: inherit; }
 .c-code .ln.del .k, .c-code .ln.del .s, .c-code .ln.del .num, .c-code .ln.del .p { color: inherit; }
-.c-inline-code { font-family: var(--font-family-mono); font-size: .86em; font-stretch: calc(var(--dense-mono-stretch) * 1%); padding: .1em .35em; border-radius: var(--radius-badge); background: var(--color-bg-sunken); border: var(--border-width) solid var(--color-border-subtle); }
+.c-inline-code { font-family: var(--font-family-mono); font-size: .86em; padding: .1em .35em; border-radius: var(--radius-badge); background: var(--color-bg-sunken); border: var(--border-width) solid var(--color-border-subtle); }
 
 /* ---------- skeleton (loading content) ---------- */
 .c-skel { display: block; height: .9em; border-radius: var(--radius-badge); background: linear-gradient(90deg, var(--color-bg-raised) 0 40%, var(--color-bg-overlay) 50%, var(--color-bg-raised) 60% 100%); background-size: 300% 100%; animation: c-shimmer calc(var(--motion-duration-pulse) * .6) var(--motion-easing-in-out) infinite; }
