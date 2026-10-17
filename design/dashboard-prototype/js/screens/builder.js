@@ -324,22 +324,26 @@
         <div class="field"><label>Action</label><select class="select mono" ${ro ? 'disabled' : `data-wf-verb="${loc}"`} aria-label="Action">${decl ? Object.entries(decl.conn.verbs).map(([vn, vd]) => `<option value="${vn}"${vn === verb ? ' selected' : ''}>${vn} · ${esc(vd.label)}</option>`).join('') : `<option>${esc(verb)}</option>`}</select></div></div>`);
       if (decl) decl.fields.forEach((f) => G('options.' + f.k, Object.assign({}, f, { type: f.type === 'duration' ? 'string' : f.type === 'secret' ? 'string' : f.type })));
     } else if (k === 'agent') {
+      // the agent card in three named groups (Riley polish, waited for Daylight): what it does, where it runs, isolation
+      rows.push('<div class="sc-sec">What it does</div>');
       if (packRo) rows.push(`<div class="field"><label>prompt</label><div class="prompt-ro mono small">${esc(s.prompt || s.prompt_file || '')}</div><div class="hint">The prompt is the pack's.</div></div>`);
       else F('prompt', { type: 'text', rows: 5, help: 'Optional: omit it and the agent gets the event. Insert data with “Insert from the event” or by typing {{.' });
+      rows.push('<div class="sc-sec">Where it runs</div>');
       G('runtime', { type: 'enum', options: S.view().runtimes.map((r) => r.name), def: (D.runtimes.find((r) => r.cfg && r.cfg.default) || {}).name, create: 'runtime', createLabel: 'New runtime' });
       G('model', { type: 'string', list: 'dl-models', help: `A fleet (fixer, reviewer…), a model id, or a wildcard. Omit for a bare launch. <button type="button" class="link" data-act="create-inline" data-create="fleet" data-picker="fleet" data-target="wf-${loc.replace(/\./g, '_')}-model">+ New fleet</button>` });
       { const ovS = packRo ? (B.ov.steps || {})[ovPath] || {} : {}; const rtName = ovS.runtime || s.runtime || (D.runtimes.find((r) => r.cfg && r.cfg.default) || D.runtimes[0] || {}).name, rt = S.view().runtimes.find((r) => r.name === rtName), paseo = rt && rt.use === 'paseo', iso = isObj(ovS.isolation) ? Object.assign({}, s.isolation, ovS.isolation) : isObj(s.isolation) ? s.isolation : null;
         if (paseo && !iso) rows.push(`<div class="field"><label>isolation</label><div class="hint">${icon('shield')} ${esc(rtName)} is a paseo runtime: its agents are children of the paseo daemon, which conductor can't wrap, so a step isolation block isn't available. The daemon's agent sandbox (Connectors → Isolation) still applies to paseo provider entries. Pick a cli, acp, opencode or agent-deck runtime to isolate this step.</div></div>`);
         else {
-          G('isolation.mode', { type: 'seg', label: 'isolation', options: [['', 'none set'], ['user', 'user'], ['namespace', 'namespace'], ['container', 'container']], help: 'user: a low-privilege account · namespace: a mount/net namespace jail · container: an image. No block: the runtime\'s own isolation applies.' });
-          if (iso && iso.mode === 'user') G('isolation.user', { type: 'string', label: 'isolation · user', req: true, ph: 'conductor-agent' });
-          if (iso && iso.mode === 'container') { G('isolation.container.image', { type: 'string', label: 'isolation · container image', req: true, ph: 'ghcr.io/acme/agents:latest' }); G('isolation.container.engine', { type: 'enum', label: 'isolation · engine', options: ['docker', 'podman'] }); }
+          rows.push('<div class="sc-sec">Isolation <span>how the agent is fenced in</span></div>');
+          G('isolation.mode', { type: 'seg', label: 'mode', options: [['', 'none set'], ['user', 'user'], ['namespace', 'namespace'], ['container', 'container']], help: 'user: a low-privilege account · namespace: a mount/net namespace jail · container: an image. No block: the runtime\'s own isolation applies.' });
+          if (iso && iso.mode === 'user') G('isolation.user', { type: 'string', label: 'user', req: true, ph: 'conductor-agent' });
+          if (iso && iso.mode === 'container') { G('isolation.container.image', { type: 'string', label: 'container image', req: true, ph: 'ghcr.io/acme/agents:latest' }); G('isolation.container.engine', { type: 'enum', label: 'engine', options: ['docker', 'podman'] }); }
           if (iso && iso.mode) {
-            G('isolation.network.egress', { type: 'list', label: 'isolation · egress allowlist', ph: 'api.github.com:443', help: 'Through conductor\'s egress proxy; an empty network block denies all. Adding a host widens.' });
-            G('isolation.network.deny', { type: 'bool', label: 'isolation · no network', on: 'cut the network structurally (exclusive with egress)' });
-            G('isolation.fs', { type: 'list', label: 'isolation · extra paths (fs allowlist)', ph: '/srv/media' });
-            G('isolation.limits.memory', { type: 'string', label: 'isolation · memory limit', ph: '2g' }); G('isolation.limits.cpu', { type: 'string', label: 'isolation · cpu limit', ph: '200%' }); G('isolation.limits.pids', { type: 'number', label: 'isolation · pids limit' });
-            if (iso.mode === 'namespace') G('isolation.privileged', { type: 'bool', label: 'isolation · privileged', on: 'see the daemon\'s own files (widening)' });
+            G('isolation.network.egress', { type: 'list', label: 'egress allowlist', ph: 'api.github.com:443', help: 'Through conductor\'s egress proxy; an empty network block denies all. Adding a host widens.' });
+            G('isolation.network.deny', { type: 'bool', label: 'no network', on: 'cut the network structurally (exclusive with egress)' });
+            G('isolation.fs', { type: 'list', label: 'extra paths (fs allowlist)', ph: '/srv/media' });
+            G('isolation.limits.memory', { type: 'string', label: 'memory limit', ph: '2g' }); G('isolation.limits.cpu', { type: 'string', label: 'cpu limit', ph: '200%' }); G('isolation.limits.pids', { type: 'number', label: 'pids limit' });
+            if (iso.mode === 'namespace') G('isolation.privileged', { type: 'bool', label: 'privileged', on: 'see the daemon\'s own files (widening)' });
           }
         } }
       if (!packRo) {

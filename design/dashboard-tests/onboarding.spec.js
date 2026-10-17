@@ -101,7 +101,8 @@ test('terms explain themselves (hover or keyboard focus); the glossary lists the
   await t.focus();
   await expect(page.locator('.tooltip')).toContainText('A fixed recipe');
   await go(page, '#/bots');
-  await expect(page.locator('.roll-legend')).toContainText('approvals waiting');
+  // calm: the tree labels its exceptions directly ("1 pending"), so there is no legend to decode
+  if (page.viewportSize().width > 720) { await page.locator('[data-act="f-toggle"][data-path="work/billing"]').click(); await expect(page.locator('.frow.folder', { hasText: 'billing' }).locator('.roll')).toContainText('pending'); }
   await go(page, '#/glossary');
   await expect(page.locator('#g-provenance')).toContainText('no more trust');
   await expect(page.locator('#g-tier')).toContainText('observe');

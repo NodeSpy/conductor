@@ -412,3 +412,22 @@ tr.folded { display: none; }
 .lane.loud .lane-lbl .lane-name { color: var(--color-text-primary); font-weight: var(--font-weight-semibold); }
 .site .top.dark b { color: var(--color-text-inverse); }
 .ctrl-banner.wait { background: var(--color-bg-raised); color: var(--color-status-warning-fg); border: var(--border-width) solid var(--color-status-warning-border); }
+/* phones: run history and workflows are one-line list rows, not labelled cards */
+@media (max-width: 720px) {
+  #hist-body tr[data-href], #wl-body tr[data-row] { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--space-3); padding: var(--space-3) var(--space-4); position: relative; }
+  #hist-body tr[data-href] > td, #wl-body tr[data-row] > td { display: block; padding: 0; border: 0; }
+  #hist-body tr[data-href] > td::before, #wl-body tr[data-row] > td::before { content: none !important; }
+  #hist-body td[data-l="run"] { grid-column: 1; grid-row: 1 / span 2; padding-right: var(--space-8); }
+  #hist-body td[data-l="status"] { grid-column: 2; grid-row: 1; justify-self: end; }
+  /* the mark alone; the row's edge and reason line carry the word (clipped, never font-size 0: WebKit aborts on it) */
+  #hist-body td[data-l="status"] .st { width: 16px; overflow: hidden; color: transparent; gap: 0; }
+  #hist-body td[data-l="status"] .st i { color: var(--s-fg, var(--color-text-secondary)); }
+  #hist-body td[data-l="status"] .st[data-s="ok"] i { color: var(--color-status-success-fg); }
+  #hist-body td[data-l="started"] { grid-column: 2; grid-row: 2; justify-self: end; font: var(--type-caption); }
+  #hist-body td[data-l="took"] { display: none; }
+  #hist-body td.sel, #wl-body td.sel { position: absolute; right: var(--space-2); bottom: var(--space-2); top: auto; }
+  #wl-body td[data-l="workflow"] { grid-column: 1; grid-row: 1; }
+  #wl-body td[data-l="on"] { grid-column: 1; grid-row: 2; }
+  #wl-body td[data-l="last 24 hours"] { grid-column: 2; grid-row: 1; justify-self: end; }
+  #wl-body td[data-l="folder"], #wl-body td.wl-acts { display: none; }
+}

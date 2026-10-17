@@ -39,7 +39,7 @@ result, mostly in §3, §4.4, §4.11, §4.12, §6.5 and §7.
 |---|---|---|
 | m1 top-bar jargon, overflow | fixed | Every strip chip explains itself ("agents ok", update link, the address); on phones the strip is a status dot plus the needs-you count, the rest one tap away. |
 | m2 overview counts | fixed | Tiles in words ("6 bots", "3 in a live session"); counts checked against the data (numbers spec). |
-| m3 unlabeled tree icons | fixed | A legend under the Bots tree. |
+| m3 unlabeled tree icons | changed differently (Daylight, calm) | The tree no longer shows neutral counts at all: a collapsed folder rolls up only what needs you, in words ("1 pending", "2 failing"), so there is nothing to decode and no legend. |
 | m4 issue numbers in the UI | fixed | None left in copy or diff headers (bots:, browser:, planned features). |
 | m5 undefined terms | fixed | Glossary popovers and `#/glossary` (provenance, widening, digest, turn, sweep, hand-off, case, home session, fleet/rung, tiers …). |
 | m6 Add a login "teleports" to Config | changed differently | Review stays the one shared apply page (one pipeline for every config change), but it names where you came from and returns you there; the reason a passkey is needed is stated. |
@@ -47,7 +47,7 @@ result, mostly in §3, §4.4, §4.11, §4.12, §6.5 and §7.
 | m8 page fades to blank after approving | fixed | Re-renders after a decision don't animate. |
 | m9 deny without a reason | fixed | Deny takes a reason, sent to the bot. Deny still needs the passkey (Daniel: every approval and deny). |
 | m10 Guards card layout | fixed | Each guard is one line of text. |
-| m11 raw cron | fixed | "Mondays 06:00 (schedule)", raw expression on hover. |
+| m11 raw cron | fixed | "Mondays at 06:00", the raw expression on hover. |
 | m12 chat reply truncation, "(operator trust)" | fixed | A plain reply. |
 | m13 duplicate action handler | fixed | Renamed; any duplicate now logs an error, so the suite fails on it. |
 | m14 logins count mismatch | fixed | One count (credentials plus saved sessions) everywhere. |
@@ -128,7 +128,7 @@ result, mostly in §3, §4.4, §4.11, §4.12, §6.5 and §7.
 |---|---|
 | diff typography (space before colons) | fixed. |
 | parallel lanes truncate | fixed: branch cards show two lines. |
-| agent card height / grouping | deferred: a layout change better made with the Daylight restyle (on hold until the package arrives); the rarely used keys already sit under "More options" and "+N keys only in YAML". |
+| agent card height / grouping | fixed with Daylight: the agent card is three named groups (What it does · Where it runs · Isolation, with "isolation ·" dropped from every label), the rarely used keys under "More options" and "+N keys only in YAML". |
 | YAML pane stops at 2/3 height | fixed: it fills the column. |
 
 ## Also done during the audit work (Daniel's later directions)
@@ -139,12 +139,29 @@ result, mostly in §3, §4.4, §4.11, §4.12, §6.5 and §7.
 - **Knowledge on conductor's real content kinds**, collections on teams and bots.
 - **Logo as one swappable asset**: `design/dashboard-prototype/assets/logo/` (mark, lockup, favicon) referenced only through `assets/logo/logo.js` and `UI.logo()`.
 
+## Daylight (the items that waited for it are done)
+
+The restyle the audit response held back is done: Daylight is adopted across the prototype in one pass (tokens,
+fonts, the Fermata logo kit, components, type, density, copy), and then, after Daniel's review ("it all looks so
+busy"), the information design went exception-first (`docs/design/dashboard.md` §3.0). What changed for findings:
+
+- **Riley polish, agent card grouping**: done (above).
+- **Sam polish, serif on long titles**: now a rule the suite enforces (`daylight.spec.js`: the serif only on titles of
+  five words or fewer, at 20px or more); run, case and proposal titles are the UI face.
+- **Sam m1 top-bar jargon**: the top bar now says how things are in one word ("All systems normal") and the needs-you
+  count; the rest moved into its status menu.
+- **Sam B1 the score**: the lanes are Score's pattern, calm: passing runs a faint tick strip, failures and waits
+  labelled where they are, running work in ink.
+- **Riley M9 scale**: Compact is wired to Daylight's density tokens (36px rows); phones stay comfortable; finished
+  runs fold into one line by default.
+- **Status badges**: replaced by margin marks (glyph + word, no capsule, a leading edge only on rows that need
+  someone), drawn only by the shared helpers so the brand's final status system swaps in one place.
+
 ## Deferred, with why
 
 - Bulk on bots tree, packs, connectors, secrets, cases (M2): scope; the component and the one-diff staging are in place.
 - Pack dependency tree (M4): no catalog pack declares dependencies yet.
 - Visual AND/OR filter groups (M7): kept and validated in YAML; a visual builder is a larger piece.
-- Agent card regrouping (Riley polish): waits for the Daylight restyle.
 - New-trigger comment placement (Riley minor): belongs to the real emitter.
 - Planned multi-user previews (queued direction, not an audit finding): not built; the toggle says so.
 - Per-team "needs approval" tags in the step picker (Sam M6 suggestion): risk tags are per action; whether a given bot must ask depends on the bot, which the Safety page and each bot's Access tab show.

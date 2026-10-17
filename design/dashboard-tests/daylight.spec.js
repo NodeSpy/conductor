@@ -14,7 +14,7 @@ const files = (dir, ext) => fs.readdirSync(dir, { withFileTypes: true }).flatMap
 test('only tokens: no raw colours outside tokens.css, no retired prototype variables', () => {
   const bad = [];
   const OLD = /var\(--(ink(-\d)?|bg(-\d)?|line(-\d)?|accent(-2|-ink|-wash)?|ok|run|wait|fail|idle|shadow|ok-wash|run-wash|wait-wash|fail-wash|idle-wash|shadow-wash|font-ui|font-title|font-mono|r|r-xs|r-sm|r-lg|t|t-fast|ease|elev|elev-pop|rail-w|strip-h|dot|grain-op|code-(key|str|num|com|anchor|bool)|sc|sw)\)/g;
-  for (const f of files(path.join(PROTO, 'css'), /\.css$/).concat(files(path.join(PROTO, 'js'), /\.js$/), [path.join(PROTO, 'index.html')])) {
+  for (const f of files(path.join(PROTO, 'css'), /\.css$/).concat(files(path.join(PROTO, 'js'), /\.js$/), [path.join(PROTO, 'index.html'), path.join(PROTO, 'phone.html'), path.join(PROTO, 'review', 'calm.html')])) {
     if (f.endsWith('tokens.css')) continue;
     const text = fs.readFileSync(f, 'utf8');
     // a colour is a hex with a letter in it, or any hex where a colour goes (fill=, stroke=, color:, background …);
