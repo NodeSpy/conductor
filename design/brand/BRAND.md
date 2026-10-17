@@ -403,5 +403,7 @@ The prototype adopts Daylight in one pass:
 
 ## Open decisions for Daniel
 
+0. **The table status column** ([`explore/status-column.html`](explore/status-column.html)). The tinted capsule plus tinted row was judged generic. I recommend **D · Grouped, with the step trace**: runs that need a person sit in their own group at the top, each with a plain sentence and one action; running work comes next, then finished runs in quiet ink. The status column becomes a step trace (one mark per step, with the failing or waiting step marked). Emphasis comes from position and words, with no fills. Once it’s chosen, the components, the book and the mocks are updated to match.
+
 1. **Where the brand files live long-term:** `design/brand/` or `.github/brand/`, which sets the README paths.
 2. **The dashboard default theme:** follow the OS (as the tokens do now), or light unless the user picks dark. Daylight is designed light-first.
