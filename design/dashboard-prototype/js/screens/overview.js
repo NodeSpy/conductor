@@ -68,11 +68,14 @@
     const rows = shown.map((l) => { const ms = l.marks.filter(([a]) => a <= span || span >= 720), loud = ms.filter(([, , s]) => s !== 'ok'), fine = ms.length - loud.length;
       // normal work: one faint tick per passing run, no colour, no label
       const strip = ms.filter(([, , s]) => s === 'ok').map(([a, , , id]) => `<i class="tick" style="left:${pos(a)}%"${id ? ` data-tip="${esc(l.lane)} · passed · ${spanWords(a)}"` : ''}></i>`).join('');
-      const marks = loud.map(([a, b, s, id]) => { const run = id && D.runs.find((r) => r.id === id);
+      // marks that would sit on top of each other (a narrow phone track) are staggered above and below the line
+      let lastAt = -99, flipUp = false;
+      const order = loud.slice().sort((x, y) => pos(x[0]) - pos(y[0])), stagger = new Map(order.map((m) => { const p = pos(m[0]), near = p - lastAt < 7; lastAt = p; flipUp = near ? !flipUp : false; return [m, near ? (flipUp ? ' up' : ' down') : '']; }));
+      const marks = loud.map((mk) => { const [a, b, s, id] = mk, run = id && D.runs.find((r) => r.id === id);
         const say = s === 'run' ? 'running' : s === 'fail' ? `failed ${spanWords(b)}` : s === 'wait' ? 'waiting on you' : 'parked';
         const tip = `<b>${esc(l.lane)}</b> · ${MW[s] || s} · ${spanWords(a)}${run && run.repo ? `<br>${run.repo}#${run.number}` : ''}${id ? `<br><span class='mono'>${id}</span>` : ''}`;
         const inner = `${UI.laneMark(s)}${s === 'idle' ? '' : `<span class="mark-say">${say}</span>`}`;
-        const flip = pos(a) > 70 ? ' flip' : '';
+        const flip = (pos(a) > 70 ? ' flip' : '') + stagger.get(mk);
         return id ? `<a class="mark${flip}" data-m="${s}" style="left:${pos(a)}%" href="#/${s === 'run' ? 'live' : 'runs'}/${id}" data-tip="${tip}" aria-label="${esc(l.lane)}: ${MW[s]} run ${id}">${inner}</a>` : `<span class="mark${flip}" data-m="${s}" style="left:${pos(a)}%" data-tip="${tip}" role="img" aria-label="${esc(l.lane)}: ${MW[s]}">${inner}</span>`; }).join('');
       return `<div class="lane${loud.some(([, , s]) => s === 'fail' || s === 'wait') ? ' loud' : ''}"><div class="lane-lbl"><div class="lane-name">${esc(l.lane)}</div>${fine ? `<span class="lane-n">${fine} fine</span>` : ''}</div><div class="lane-track">${strip}${marks}</div></div>`; }).join('');
     return { kept, legend: '', html: `<div class="lanes">${rows || UI.empty({ title: 'No runs here', body: 'Nothing in this folder ran in that time.', small: true })}${rows ? `<div class="lane"><div></div><div class="lane-axis">${ticks}</div></div><div class="nowline" aria-hidden="true"></div>` : ''}</div>` };

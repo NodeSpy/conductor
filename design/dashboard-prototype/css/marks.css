@@ -122,3 +122,6 @@ tr[data-row] .why-line { color: var(--color-text-primary); }
 .st[data-s="run"] i { color: var(--color-status-running-fg); }
 /* running work doesn't need anyone: its arc keeps its shape (and spins) but is drawn in ink, not colour */
 .st[data-s="run"] i { color: var(--color-text-secondary); }
+/* calm labels: a staged change, a running thing, a shadow-mode bot or a healthy state is information, not an alarm;
+   only failed, waiting and needs-you labels keep their colour */
+.tag[data-s="run"], .tag[data-s="shadow"], .tag[data-s="success"], .tag[data-s="idle"], .tag[data-s="skip"] { color: var(--color-text-secondary); border-color: var(--color-border-default); }

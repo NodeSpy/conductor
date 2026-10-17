@@ -431,3 +431,5 @@ tr.folded { display: none; }
   #wl-body td[data-l="last 24 hours"] { grid-column: 2; grid-row: 1; justify-self: end; }
   #wl-body td[data-l="folder"], #wl-body td.wl-acts { display: none; }
 }
+.run-row .bar > i { background: var(--color-text-tertiary); }
+.lanes .mark.up { margin-top: -10px; } .lanes .mark.down { margin-top: 10px; }

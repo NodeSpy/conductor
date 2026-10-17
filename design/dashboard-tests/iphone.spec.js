@@ -44,6 +44,27 @@ test.describe('iPhone (WebKit): one theme, nothing too wide, nothing under the t
     await page.locator('#pop-menu [data-href="#/safety"]').tap();
     await expect(page).toHaveURL(/#\/safety/);
   });
+  test('the logo: the mark renders and holds contrast in this theme; the 16px favicon cut draws', async ({ page }) => {
+    await go(page, '#/overview', { fresh: true });
+    const r = await page.evaluate(async () => {
+      const lum = (c) => { const v = String(c).match(/\d+(\.\d+)?/g).slice(0, 3).map(Number).map((x) => { x /= 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); }); return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; };
+      const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+      const path = document.querySelector('.strip .logo-mark path'), bar = getComputedStyle(document.querySelector('.strip')).backgroundColor;
+      const ink = getComputedStyle(path).fill, dot = getComputedStyle(document.querySelector('.strip .logo-mark circle')).fill;
+      const box = document.querySelector('.strip .logo-mark').getBoundingClientRect();
+      // the favicon's 16px cut, drawn at 16×16: it must put real ink on the canvas
+      const img = new Image(16, 16); img.src = 'assets/logo/favicon.svg'; await img.decode();
+      const cv = document.createElement('canvas'); cv.width = cv.height = 16; const cx = cv.getContext('2d'); cx.drawImage(img, 0, 0, 16, 16);
+      const px = cx.getImageData(0, 0, 16, 16).data; let ink16 = 0; for (let i = 3; i < px.length; i += 4) if (px[i] > 128) ink16++;
+      return { arch: ratio(ink, bar), dot: ratio(dot, bar), h: box.height, ink16 };
+    });
+    expect(r.h, 'the mark is drawn at its chrome size').toBeGreaterThanOrEqual(16);
+    expect(r.arch, 'the arch against the header').toBeGreaterThanOrEqual(4.5);
+    expect(r.dot, 'the dot against the header').toBeGreaterThanOrEqual(3);
+    expect(r.ink16, 'the 16px favicon cut has ink').toBeGreaterThan(20);
+    const dir = require('path').join(test.info().project.outputDir, 'iphone', test.info().project.name); require('fs').mkdirSync(dir, { recursive: true });
+    await page.locator('.strip .brand').screenshot({ path: require('path').join(dir, 'logo-strip.png') });
+  });
   test('the theme toggle is an explicit choice that beats the OS, and stays after a reload', async ({ page, colorScheme }) => {
     await go(page, '#/more', { fresh: true });
     const other = colorScheme === 'dark' ? 'light' : 'dark';
