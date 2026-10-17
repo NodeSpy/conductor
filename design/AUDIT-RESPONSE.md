@@ -57,7 +57,7 @@ result, mostly in §3, §4.4, §4.11, §4.12, §6.5 and §7.
 | ID | Status | What changed |
 |---|---|---|
 | P1 Approve 1,700px down | fixed | On phones a proposal opens without the bot shell, summary first, with a sticky Approve/Deny bar; tiles in one row. |
-| P2 clipped controls | fixed | Tab rows scroll with an edge fade and keep the current tab in view; page-head actions beyond two fold into ⋯; tables become cards. |
+| P2 clipped controls | fixed | Tab rows scroll with an edge fade and keep the current tab in view; page-head and bot/team header actions beyond two fold into ⋯; tables become cards. |
 | P3 nav highlight jumps | fixed | The origin tab stays highlighted and Back returns there. |
 | P4 toast over the nav | fixed | Toasts sit above the tab bar and the safe area. |
 | P5 legend clipped | fixed | The legend wraps. |

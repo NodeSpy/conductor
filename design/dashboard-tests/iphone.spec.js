@@ -36,6 +36,7 @@ test.describe('iPhone (WebKit): one theme, nothing too wide, nothing under the t
   }
   test('the strip collapses to the status dot and the needs-you count; the rest is one tap away', async ({ page }) => {
     await go(page, '#/overview', { fresh: true });
+    await expect(page.locator('.strip .logo-mark path').first()).toBeAttached(); // the logo mark renders (from assets/logo/mark.svg)
     const shown = await page.locator('.strip .cell').evaluateAll((els) => els.filter((e) => getComputedStyle(e).display !== 'none').map((e) => e.className));
     expect(shown.map((c) => c.split(' ').pop())).toEqual(['status-btn', 'alert']);
     await page.locator('.strip .status-btn').tap();

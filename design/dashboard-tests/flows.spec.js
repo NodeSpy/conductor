@@ -1,7 +1,7 @@
 // Create / edit / delete flows, each ending in the config diff → passkey →
 // apply pipeline (or, for vault writes and ledger operations, the immediate
 // step-up path the design specifies). Run at desktop and phone sizes.
-const { test, expect, go, applyStaged, stagedCount } = require('./fixtures');
+const { test, expect, go, applyStaged, stagedCount, headAction } = require('./fixtures');
 
 const submit = (page) => page.locator('#gen-submit').click();
 const state = (page, fn, arg) => page.evaluate(fn, arg);
@@ -142,7 +142,7 @@ test.describe('bots', () => {
   });
   test('ledger operations are immediate: deliver, note, close, revoke a login, memory commit, stop a worker', async ({ page }) => {
     await go(page, '#/bots/platform-sre/cases');
-    await page.locator('[data-act="m-deliver"]').first().click();
+    await headAction(page, '[data-act="m-deliver"]');
     await page.fill('#f-title', 'Check the NAT gateway bill'); await submit(page);
     await expect(page.locator('.route-box')).toContainText('delivered to');
     await page.fill('#case-note', 'Owner is billing.'); await page.locator('[data-act="case-note"]').click();

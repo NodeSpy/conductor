@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
   <!-- The mark (the baton). Referenced as assets/logo/mark.svg#mark through <use>, so it follows the theme:
-       --logo-ink and --logo-accent come from the page (defaults below). Replace this file to change the mark. -->
+       the logo-ink variable and the logo-accent variable come from the page (defaults below). Replace this file to change the mark. -->
   <symbol id="mark" viewBox="0 0 24 24" fill="none">
     <path d="M4 20L18.5 5.5" stroke="var(--logo-ink, #ece8dc)" stroke-width="1.8" stroke-linecap="round"/>
     <circle cx="19.5" cy="4.5" r="2.3" fill="var(--logo-accent, #ff6a2b)"/>

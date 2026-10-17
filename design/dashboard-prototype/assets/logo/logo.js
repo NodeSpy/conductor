@@ -3,6 +3,8 @@
  *   mark.svg    a <symbol id="mark">, themed with var(--logo-ink) / var(--logo-accent)
  *   lockup.svg  a <symbol id="lockup"> (set lockup below to use it instead of mark + wordmark text)
  *   favicon.svg the tab icon
+ * The files must be well-formed XML (no "--" inside comments): the mark is parsed, and a file that fails to
+ * parse simply shows no mark. The iPhone suite checks the mark renders.
  */
 window.LOGO = {
   mark: 'assets/logo/mark.svg#mark',

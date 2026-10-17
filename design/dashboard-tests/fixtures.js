@@ -46,12 +46,12 @@ async function applyStaged(page, { expectWidening = false } = {}) {
 }
 async function stagedCount(page) { return page.evaluate(() => window.D.pending.length); }
 
-/** Click a page-head action; on a phone, actions beyond the first two live in the ⋯ menu. */
+/** Click a page-head (or bot/team header) action; on a phone, actions beyond the first two live in the ⋯ menu. */
 async function headAction(page, selector) {
   const el = page.locator(selector).first();
   if (await el.isVisible()) return el.click();
   const label = (await el.textContent()).trim();
-  await page.locator('.page-head .ph-more').click();
+  await page.locator('.page-head .ph-more, .bot-hero .ph-more').first().click();
   await page.locator('#pop-menu button', { hasText: label }).click();
 }
 module.exports = { test, expect: base.expect, go, isPhone, applyStaged, stagedCount, headAction };

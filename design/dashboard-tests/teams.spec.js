@@ -75,7 +75,7 @@ test('routing: add a rule, try it on a past event, route work with provenance ke
   await expect(page.locator('.diff').first()).toContainText('match: { on: gh.issue_opened, repo: acme/api }');
   await applyStaged(page);
   await go(page, '#/teams/platform');
-  await page.locator('[data-act="team-deliver"]').click();
+  await headAction(page, '[data-act="team-deliver"]');
   await page.selectOption('#f-event', 'ev-pd');
   await page.locator('#gen-submit').click();
   await expect(page).toHaveURL(/#\/bots\/platform-sre\/cases\/c\d+/);
@@ -182,7 +182,7 @@ test('across teams, delegation exists only between linked bots; a bot with no li
   await page.locator('.modal [data-close]').first().click();
   // a solo bot with no links can't delegate at all
   await go(page, '#/bots/release-scribe/cases');
-  await page.locator('[data-act="m-deliver"]').first().click();
+  await headAction(page, '[data-act="m-deliver"]');
   await page.fill('#f-title', 'Draft notes for v2.14'); await page.locator('#gen-submit').click();
   await expect(page.locator('button', { hasText: 'Delegate a task' })).toHaveAttribute('aria-disabled', 'true');
   await expect(page.locator('button', { hasText: 'Delegate a task' })).toHaveAttribute('data-reason', /no teammate or linked bot/);
