@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 132 24">
+  <!-- Horizontal lockup: the mark plus the wordmark. Unused while logo.js has lockup: null (the app then draws
+       the mark beside the wordmark text in the title font). Drop in a finished lockup and set lockup in logo.js. -->
+  <symbol id="lockup" viewBox="0 0 132 24" fill="none">
+    <path d="M4 20L18.5 5.5" stroke="var(--logo-ink, #ece8dc)" stroke-width="1.8" stroke-linecap="round"/>
+    <circle cx="19.5" cy="4.5" r="2.3" fill="var(--logo-accent, #ff6a2b)"/>
+    <path d="M3 21l2.4-.7-1.7-1.7z" fill="var(--logo-ink, #ece8dc)"/>
+    <text x="30" y="18" font-family="'Instrument Serif', Georgia, serif" font-style="italic" font-size="21" fill="var(--logo-ink, #ece8dc)">conductor</text>
+  </symbol>
+  <use href="#lockup"/>
+</svg>

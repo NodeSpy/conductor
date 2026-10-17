@@ -28,7 +28,7 @@
     const newOnes = [...new Set([...staged.filter((c) => c.before == null).map((c) => c.key), ...drafts.filter((n) => !D.workflows.find((w) => w.name === n))])];
     return D.workflows.map((w) => ({ w, owner: UI.wfOwner(w), folder: UI.folderOfWf(w) })).concat(newOnes.map((n) => ({ w: { name: n, on: 'draft', runs24: 0, ok: 1, cost24: 0, source: 'config', fresh: true }, owner: 'config', folder: '' })));
   };
-  const OWNER = { pack: (w) => `pack ${UI.packOf(w)}`, bot: () => 'bot · synthesized', config: () => 'your config' };
+  const OWNER = { pack: (w) => `pack ${UI.packOf(w)}`, bot: () => `bot · ${UI.term('synthesized')}`, config: () => 'your config' };
   const moveOff = (r) => (r.owner === 'bot' ? `Follows ${r.w.name.slice(4)}'s folder: move the bot (or its team) to move it` : r.w.fresh ? 'Save it first' : '');
   /** The workflows table, used by the Workflows page and by a folder's Workflows tab. */
   UI.wfTable = (ws, opts = {}) => {
@@ -57,7 +57,7 @@
     if (wl.folder && wl.folder !== '__top__' && !UI.allFolders().includes(wl.folder)) wl.folder = '';
     const crumbs = wl.folder && wl.folder !== '__top__' ? `<div class="crumbs wl-crumbs"><a href="#" data-act="wl-folder" data-f="">All workflows</a>${wl.folder.split('/').map((seg, i, a) => ` › <a href="#" data-act="wl-folder" data-f="${esc(a.slice(0, i + 1).join('/'))}">${esc(seg)}</a>`).join('')} <a class="link tiny" href="#/folders/${enc(wl.folder)}/workflows" style="margin-left:8px">open the folder</a></div>` : '';
     return `<div class="page">
-    ${UI.head('Workflows', { sub: 'triggers and the steps they run', actions: `<button class="btn primary" data-act="wf-new">${icon('plus')}New workflow</button>` })}
+    ${UI.head('Workflows', { sub: 'triggers and the steps they run', lede: `A ${UI.term('workflow')} is a fixed recipe: when something happens, run these steps. Want an AI to decide what to do? Hand the event to a <a class="link" href="#/bots">bot</a>.`, actions: `<button class="btn primary" data-act="wf-new">${icon('plus')}New workflow</button>` })}
     <div class="wl-layout"><aside class="panel wl-folders">${folderNav(rows)}</aside><div class="wl-main">
     ${crumbs}
     <div class="filters"><div class="input-icon">${icon('search')}<input class="input" placeholder="name, event or folder" value="${esc(wl.q)}" data-on-input="wl-q" aria-label="Filter workflows"></div>${UI.seg([['all', 'all'], ['config', 'yours'], ['pack', 'packs'], ['bot', 'bots']], wl.owner, 'wl-owner')}
@@ -194,7 +194,7 @@
     const evs = SCHEMA.events.filter((x) => WF.sources(B.value || {}).some((so) => so.on === x.on) || x.on === 'manual');
     return `<a class="btn sm ghost back" href="#/workflows" aria-label="All workflows">${icon('chev')}</a>
       <span class="serif wfb-title">${esc(name)}</span>
-      ${B.owner === 'pack' ? `<span class="owner pack">pack ${B.pack}</span>` : B.owner === 'bot' ? '<span class="owner pack">bot (synthesized)</span>' : '<span class="owner op">your config</span>'}
+      ${B.owner === 'pack' ? `<span class="owner pack">pack ${B.pack}</span>` : B.owner === 'bot' ? `<span class="owner pack">bot (${UI.term('synthesized')})</span>` : '<span class="owner op">your config</span>'}
       <span class="wf-state ${s}" id="wf-state">${s === 'draft' ? icon('edit') + 'unsaved draft' : s === 'saved' ? icon('check') + 'saved · not deployed' : icon('dot') + 'live'}</span>
       <div class="wfb-tools">
         <button class="icon-btn" data-act="wf-undo" ${B.hi > 0 ? 'data-tip="Undo (Ctrl+Z)"' : UI.off('Nothing to undo')} aria-label="Undo">${icon('undo')}</button>
@@ -217,13 +217,13 @@
     const sum = reusable ? `called with ${Object.keys(v.inputs).join(', ') || 'no inputs'}` : srcs.length ? srcs.map((s) => s.on).join(' · ') : 'no trigger yet';
     const filters = isObj(v.filter) ? Object.entries(v.filter).map(([k, x]) => tag(`${k}: ${[].concat(x).join(', ')}`)).join(' ') : '';
     const evs = B.ev && SCHEMA.events.find((e) => e.id === B.ev);
-    return `<div class="trig-card${open ? ' open' : ''}${iss.length ? ' has-err' : ''}" id="card-$trigger">
+    return `<div class="trig-card${open ? ' open' : ''}${iss.some((i) => !i.todo) ? ' has-err' : ''}" id="card-$trigger">
       <div class="sc-head" role="button" tabindex="0" data-act="wf-toggle" data-id="$trigger" aria-expanded="${open}">
         <span class="sc-ic trig">${icon(reusable ? 'link' : 'live')}</span>
         <div class="grow"><div class="caps">${reusable ? 'reusable workflow · inputs' : 'trigger'}</div><div class="sc-title mono">${esc(sum)}</div>${filters ? `<div class="row wrap" style="gap:4px;margin-top:4px">${filters}</div>` : ''}</div>
-        ${iss.length ? `<span class="tpill fail">${icon('x')}${iss.length}</span>` : evs ? `<span class="tpill ok" data-tip="Test event">${icon('play')}${esc(evs.label.split(' · ')[0])}</span>` : ''}
+        ${iss.some((i) => !i.todo) ? `<span class="tpill fail">${icon('x')}${iss.filter((i) => !i.todo).length}</span>` : iss.length ? `<span class="tpill todo">to do</span>` : evs ? `<span class="tpill ok" data-tip="Test event">${icon('play')}${esc(evs.label.split(' · ')[0])}</span>` : ''}
         <span class="chev">${icon(open ? 'chevd' : 'chev')}</span></div>
-      ${open ? `<div class="sc-body">${iss.map((i) => `<div class="callout danger small">${esc(i.msg)}</div>`).join('')}
+      ${open ? `<div class="sc-body">${iss.map((i) => i.todo ? `<div class="callout small todo">${icon('dot')} ${esc(i.todo)}</div>` : `<div class="callout danger small">${esc(i.msg)}</div>`).join('')}
         ${!srcs.length && !reusable ? `<div class="empty small"><span class="serif">What starts this workflow?</span>An event from a connector, a schedule, or a manual run.<button class="btn primary" style="margin-top:8px" ${ro ? UI.off(ro) : 'data-act="wf-trig-pick"'}>${icon('plus')}Choose a trigger</button></div>` : ''}
         ${reusable ? inputsEditor(v, ro) : srcs.length ? sourcesEditor(v, srcs, ro) : ''}
       </div>` : ''}
@@ -264,7 +264,7 @@
     const dis = ro ? 'readonly aria-readonly="true"' : '';
     const data = `data-wf-loc="${loc}" data-wf-path="${path}" data-wf-type="${fd.type}" id="${id}"`;
     const ph = fd.def != null && fd.type !== 'enum' && fd.type !== 'bool' ? `default ${fd.def}` : fd.ph || '';
-    const refBtn = fd.ref !== false && (TEMPLATED.has(fd.type) || fd.type === 'code') && !ro && fd.type !== 'enum' ? `<button type="button" class="ref-btn" data-act="wf-ref" data-target="${id}" data-tip="Insert data from the trigger or an earlier step" aria-label="Insert a reference">${icon('code')}</button>` : '';
+    const refBtn = fd.ref !== false && (TEMPLATED.has(fd.type) || fd.type === 'code') && !ro && fd.type !== 'enum' ? `<button type="button" class="ref-btn" data-act="wf-ref" data-target="${id}" data-tip="Insert a value from the event that started the run, or from an earlier step" aria-label="Insert from the event">${icon('code')}<span>Insert from the event</span></button>` : '';
     let input;
     const v = val == null ? '' : val;
     switch (fd.type) {
@@ -278,7 +278,8 @@
       case 'seg': input = `<div class="seg" role="group">${fd.options.map(([ov, ol]) => `<button type="button" ${ro ? UI.off(ro) : `data-act="wf-seg" data-loc="${loc}" data-path="${path}" data-v="${esc(ov)}"`} aria-pressed="${String(ov) === String(v || fd.def || '')}" class="${String(ov) === String(v || fd.def || '') ? 'on' : ''}">${ol}</button>`).join('')}</div>`; break;
       default: input = `<input class="input mono" value="${esc(typeof v === 'object' ? JSON.stringify(v) : v)}" ${data} ${dis} placeholder="${esc(ph)}" ${fd.list ? `list="${fd.list}"` : ''} autocomplete="off">`;
     }
-    return `<div class="field wf-field${isu.length ? ' bad' : ''}" data-field="${path}"><label for="${id}">${esc(label)} ${fd.req ? '<span class="req">*</span>' : ''}${refBtn}</label>${input}${fd.help ? `<div class="hint">${fd.help}</div>` : ''}${isu.map((i) => `<div class="ferr">${esc(i.msg)}</div>`).join('')}${extra}</div>`;
+    const hard = isu.filter((i) => !i.todo);
+    return `<div class="field wf-field${hard.length ? ' bad' : isu.length ? ' todo' : ''}" data-field="${path}"><label for="${id}">${esc(label)} ${fd.req ? '<span class="req">*</span>' : ''}${refBtn}</label>${input}${fd.help ? `<div class="hint">${fd.help}</div>` : ''}${isu.map((i) => i.todo ? `<div class="ftodo">${icon('dot')}${esc(i.todo)}</div>` : `<div class="ferr">${esc(i.msg)}</div>`).join('')}${extra}</div>`;
   }
   const entryAt = (loc) => WF.walk(B.value || {}).find((e) => e.list.concat([e.index]).join('.') === loc);
   function formFor(e, loc, ro) {
@@ -413,11 +414,11 @@
       return kids ? `<div class="dnode">${leaf}<div class="dkids">${tree(v, p, depth + 1, insertTarget)}</div></div>` : leaf; }).join('')}</div>`;
   }
 
-  function badges(id) { const iss = issuesFor(id), er = iss.filter((i) => i.level === 'error').length, wr = iss.filter((i) => i.level === 'warn').length; return er ? `<span class="tpill fail" data-tip="${esc(iss.find((i) => i.level === 'error').msg)}">${icon('x')}${er}</span>` : wr ? `<span class="tpill warn" data-tip="${esc(iss[0].msg)}">${icon('warn')}${wr}</span>` : ''; }
+  function badges(id) { const all = issuesFor(id), iss = all.filter((i) => !i.todo), td = all.filter((i) => i.todo), er = iss.filter((i) => i.level === 'error').length, wr = iss.filter((i) => i.level === 'warn').length; if (!er && !wr && td.length) return `<span class="tpill todo" data-tip="${esc(td.map((i) => i.todo).join(' · '))}">to do ${td.length}</span>`; return er ? `<span class="tpill fail" data-tip="${esc(iss.find((i) => i.level === 'error').msg)}">${icon('x')}${er}</span>` : wr ? `<span class="tpill warn" data-tip="${esc(iss[0].msg)}">${icon('warn')}${wr}</span>` : ''; }
   function stepCard(e, loc, num) {
     const s = e.step, k = e.kind, kc = KC(k), id = e.id, open = B.open.has(id), ro = readOnly();
     const iss = issuesFor(id), r = s && s.id && B.tests[s.id];
-    const er = iss.filter((i) => i.level === 'error').length, wr = iss.filter((i) => i.level === 'warn').length;
+    const er = iss.filter((i) => i.level === 'error' && !i.todo).length, wr = iss.filter((i) => i.level === 'warn').length;
     const first = e.index === 0, last = e.index === WF.at(B.value, e.list).length - 1;
     if (k === 'parallel') return parallelCard(e, loc, num);
     const general = iss.filter((i) => !i.field || !open);
@@ -432,7 +433,7 @@
         <span class="chev">${icon(open ? 'chevd' : 'chev')}</span>
       </div>
       ${open ? `<div class="sc-body">
-        ${general.filter((i) => !i.field).map((i) => `<div class="callout ${i.level === 'error' ? 'danger' : i.level === 'info' ? 'info' : 'warn'} small">${esc(i.msg)}</div>`).join('')}
+        ${general.filter((i) => !i.field).map((i) => i.todo ? `<div class="callout small todo">${esc(i.todo)}</div>` : `<div class="callout ${i.level === 'error' ? 'danger' : i.level === 'info' ? 'info' : 'warn'} small">${esc(i.msg)}</div>`).join('')}
         ${r && r.status === 'error' ? `<div class="callout danger small"><b>Test failed:</b> <span class="mono">${esc(r.error)}</span></div>` : ''}
         <div class="sc-form">${formFor(e, loc, ro && B.owner !== 'pack' ? ro : '')}</div>
         <div class="sc-test"><button class="btn sm" ${!s.id ? UI.off('Give this step an id to test it') : !B.ev ? UI.off('Pick a test event in the toolbar first') : B.err ? UI.off('Fix the YAML first') : `data-act="wf-test" data-id="${esc(s.id)}"`}>${icon('play')}Test${e.order ? ' up to here' : ''}</button><span class="muted tiny">runs earlier steps too, against the chosen event; writes are dry-runs</span></div>
@@ -499,10 +500,10 @@
       <div class="side-body">${body}</div><div class="side-foot" id="wf-issues">${issuesHTML()}</div>`;
   }
   function issuesHTML() {
-    const e = B.issues.filter((i) => i.level === 'error'), w = B.issues.filter((i) => i.level === 'warn');
+    const td = B.issues.filter((i) => i.todo), e = B.issues.filter((i) => i.level === 'error' && !i.todo), w = B.issues.filter((i) => i.level === 'warn');
     if (!B.issues.length) return `<span class="val-pill" style="color:var(--ok)">${icon('check')}valid</span><span class="mono tiny muted">checked on a copy · ${status() === 'draft' ? 'unsaved edits' : 'no unsaved edits'}</span>`;
-    return `<div class="issues">${e.length ? `<span class="val-pill" style="color:var(--fail)">${icon('x')}${e.length} error${e.length > 1 ? 's' : ''}</span>` : ''}${w.length ? `<span class="val-pill" style="color:var(--wait)">${icon('warn')}${w.length} warning${w.length > 1 ? 's' : ''}</span>` : ''}
-      ${B.issues.slice(0, 6).map((i, n) => `<button type="button" class="issue ${i.level}" data-act="wf-issue" data-n="${n}"><span class="mono tiny">L${i.line}</span>${esc(i.msg)}</button>`).join('')}</div>`;
+    return `<div class="issues">${td.length ? `<span class="val-pill todo">${td.length} to do</span>` : ''}${e.length ? `<span class="val-pill" style="color:var(--fail)">${icon('x')}${e.length} error${e.length > 1 ? 's' : ''}</span>` : ''}${w.length ? `<span class="val-pill" style="color:var(--wait)">${icon('warn')}${w.length} warning${w.length > 1 ? 's' : ''}</span>` : ''}
+      ${B.issues.slice(0, 6).map((i, n) => `<button type="button" class="issue ${i.todo ? 'todo' : i.level}" data-act="wf-issue" data-n="${n}">${i.todo ? `${icon('dot')}${esc(i.todo)}` : `<span class="mono tiny">L${i.line}</span>${esc(i.msg)}`}</button>`).join('')}</div>`;
   }
 
   function page() {
@@ -524,7 +525,7 @@
     else if (B.side === 'yaml' && B.owner === 'pack') drawSide();
     drawIssues();
     WF.walk(B.value || {}).forEach((e) => { const el = document.getElementById('sum-' + e.id); if (el) el.textContent = WF.summary(e.step); const card = document.getElementById('card-' + e.id); if (card) card.classList.toggle('has-err', issuesFor(e.id).some((i) => i.level === 'error')); const bd = document.getElementById('badge-' + e.id); if (bd) bd.innerHTML = badges(e.id); });
-    UI.$$('.wf-field').forEach((f) => { const inp = f.querySelector('[data-wf-loc]'); if (!inp) return; const loc = inp.dataset.wfLoc, path = inp.dataset.wfPath; const e = loc ? entryAt(loc) : null; const isu = loc ? B.issues.filter((i) => e && i.step === e.id && i.field && (i.field === path || i.field.startsWith(path + '.'))) : B.issues.filter((i) => i.trigger && i.field === path); f.classList.toggle('bad', isu.length > 0); f.querySelectorAll('.ferr').forEach((x) => x.remove()); isu.forEach((i) => { const d = document.createElement('div'); d.className = 'ferr'; d.textContent = i.msg; f.appendChild(d); }); });
+    UI.$$('.wf-field').forEach((f) => { const inp = f.querySelector('[data-wf-loc]'); if (!inp) return; const loc = inp.dataset.wfLoc, path = inp.dataset.wfPath; const e = loc ? entryAt(loc) : null; const isu = loc ? B.issues.filter((i) => e && i.step === e.id && i.field && (i.field === path || i.field.startsWith(path + '.'))) : B.issues.filter((i) => i.trigger && i.field === path); f.classList.toggle('bad', isu.some((i) => !i.todo)); f.classList.toggle('todo', isu.length > 0 && isu.every((i) => i.todo)); f.querySelectorAll('.ferr, .ftodo').forEach((x) => x.remove()); isu.forEach((i) => { const d = document.createElement('div'); d.className = i.todo ? 'ftodo' : 'ferr'; d.textContent = i.todo || i.msg; f.appendChild(d); }); });
   }
 
   UI.route('workflows/:name', ({ name }) => {
@@ -569,12 +570,19 @@
   function pickerItems(inBranch) {
     const items = [];
     SCHEMA.kinds.forEach((k) => items.push({ key: 'kind:' + k.k, group: 'Built-in', icon: k.icon, label: k.label, sub: k.desc, dis: inBranch && k.k === 'parallel' ? 'A parallel group can\'t nest inside a branch' : '' }));
+    items.push({ key: 'tpl:command', group: 'Built-in', icon: 'code', label: 'Run a command', sub: 'use: cli with command: [ … ], in the sandbox', risk: 'change' },
+      { key: 'tpl:wait_for', group: 'Built-in', icon: 'clock', label: 'Wait for a condition', sub: 'wait_for: check a read verb until a condition holds' },
+      { key: 'tpl:team', group: 'Built-in', icon: 'members', label: 'Hand to a team', sub: 'bot: { team }: the team\'s rules or its lead pick the bot' },
+      { key: 'tpl:fail', group: 'Built-in', icon: 'x', label: 'Fail the run', sub: 'fail: stop here with a message (pair it with if:)' });
+    const RISKY = /apply|merge|delete|resolve|push|deploy|destroy|close|revert|rollback/;
     const seen = new Set();
-    S.view().connectors.forEach((c) => { const d = SCHEMA.connectors[c.use]; if (!d) return; seen.add(c.use); Object.entries(d.verbs).forEach(([vn, vd]) => items.push({ key: `verb:${c.name}.${vn}`, group: `${d.label} · ${c.name}`, icon: d.icon, label: vd.label, sub: `${c.name}.${vn}${vd.read ? ' · read' : ''}` })); });
-    Object.entries(SCHEMA.connectors).forEach(([use, d]) => { if (seen.has(use) || d.registry) return; if (use === 'git') Object.entries(d.verbs).forEach(([vn, vd]) => items.push({ key: `verb:git.${vn}`, group: 'git · builtin', icon: d.icon, label: vd.label, sub: `git.${vn}` })); });
+    S.view().connectors.forEach((c) => { const d = SCHEMA.connectors[c.use]; if (!d) return; seen.add(c.use); Object.entries(d.verbs).forEach(([vn, vd]) => items.push({ key: `verb:${c.name}.${vn}`, group: `${d.label} · ${c.name}`, icon: d.icon, label: vd.label, sub: `${c.name}.${vn}`, risk: vd.read ? 'read' : RISKY.test(vn) ? 'high' : 'change' })); });
+    Object.entries(SCHEMA.connectors).forEach(([use, d]) => { if (seen.has(use) || d.registry) return; if (use === 'git') Object.entries(d.verbs).forEach(([vn, vd]) => items.push({ key: `verb:git.${vn}`, group: 'git · builtin', icon: d.icon, label: vd.label, sub: `git.${vn}`, risk: vd.read ? 'read' : RISKY.test(vn) ? 'high' : 'change' })); });
     Object.entries(SCHEMA.connectors).forEach(([use, d]) => { if (!d.registry) return; Object.entries(d.verbs).forEach(([vn, vd]) => items.push({ key: `verb:${use}.${vn}`, group: `${d.label} · not installed`, icon: d.icon, label: vd.label, sub: `${use}.${vn} · needs ${d.registry}`, notInstalled: true })); });
-    return items;
+    const R = { read: 0, change: 1, high: 2 };
+    return items.map((x, i) => [x, i]).sort((a, b) => (a[0].group === b[0].group ? (R[a[0].risk] || 0) - (R[b[0].risk] || 0) || a[1] - b[1] : a[1] - b[1])).map(([x]) => x);
   }
+  const RISK_TAG = { read: ['reads only', 'ok'], change: ['changes things', 'wait'], high: ['high impact', 'fail'] };
   function openPicker(onPick, opts = {}) {
     const items = opts.items || pickerItems(opts.inBranch);
     const recent = ((D.recentSteps || []).map((k) => items.find((x) => x.key === k)).filter(Boolean)).slice(0, 5);
@@ -585,7 +593,7 @@
       q = (q || '').toLowerCase().trim();
       const match = items.filter((x) => !q || (x.label + ' ' + x.sub + ' ' + x.group + ' ' + x.key).toLowerCase().includes(q));
       const groups = {}; match.forEach((x) => (groups[x.group] = groups[x.group] || []).push(x));
-      const sect = (title, list) => `<div class="pk-group"><div class="caps">${esc(title)}</div><div class="pk-grid">${list.map((x) => `<button type="button" class="pk-item${x.notInstalled ? ' ni' : ''}" role="option" ${x.dis ? UI.off(x.dis) : `data-act="pk-pick" data-key="${esc(x.key)}"`}><span class="sc-ic sm">${icon(x.icon)}</span><span class="grow"><b>${esc(x.label)}</b><span class="mono tiny muted">${esc(x.sub)}</span></span></button>`).join('')}</div></div>`;
+      const sect = (title, list) => `<div class="pk-group"><div class="caps">${esc(title)}</div><div class="pk-grid">${list.map((x) => `<button type="button" class="pk-item${x.notInstalled ? ' ni' : ''}" role="option" ${x.dis ? UI.off(x.dis) : `data-act="pk-pick" data-key="${esc(x.key)}"`}><span class="sc-ic sm">${icon(x.icon)}</span><span class="grow"><b>${esc(x.label)}</b>${x.risk && x.key.startsWith('verb:') ? ` <span class="tag risk" data-s="${RISK_TAG[x.risk][1]}">${RISK_TAG[x.risk][0]}</span>` : ''}<span class="mono tiny muted">${esc(x.sub)}</span></span></button>`).join('')}</div></div>`;
       UI.$('#pk-list', s).innerHTML = (!q && recent.length ? sect('Recently used', recent) : '') + (Object.keys(groups).length ? Object.entries(groups).map(([g, l]) => sect(g, l)).join('') : `<div class="empty small">Nothing matches “${esc(q)}”.</div>`);
     };
     draw('');
@@ -598,6 +606,8 @@
   function makeStep(v, item) {
     const [t, k] = item.key.split(/:(.*)/s);
     if (t === 'kind') { const kd = SCHEMA.kinds.find((x) => x.k === k); const base = { agent: 'agent', code: 'code', decide: 'decide', ask: 'approval', wait: 'wait', parallel: 'parallel', call: 'call', log: 'log', set: 'vars', assert: 'check', bot: 'handoff' }[k]; const id = uniqueId(v, base); const node = kd.make(id); if (k === 'parallel') { node.parallel[0][0].id = uniqueId(v, id + '-a'); node.parallel[1][0].id = uniqueId(Object.assign({}, v, { steps: (v.steps || []).concat([node]) }), id + '-b'); } if (k === 'call') { const w = D.workflows.find((x) => x.kind === 'workflow'); node.call = w ? w.name : 'assess-and-post'; } if (k === 'ask') { const c = D.connectors.find((x) => x.use === 'web') || D.connectors.find((x) => x.use === 'slack'); node.uses = (c ? c.name : 'hoff') + '.ask'; } return node; }
+    if (t === 'tpl') { const team = (S.view().teams[0] || {}).name || 'platform', read = Object.entries(SCHEMA.connectors).flatMap(([u, d]) => { const c = S.view().connectors.find((x) => x.use === u); return c ? Object.entries(d.verbs).filter(([, vd]) => vd.read).map(([vn]) => `${c.name}.${vn}`) : []; })[0] || 'gh.get_pr';
+      return { command: { id: uniqueId(v, 'run'), use: 'cli', command: ['make', 'test'] }, wait_for: { id: uniqueId(v, 'wait'), wait_for: { uses: read, until: '' } }, team: { id: uniqueId(v, 'route'), bot: { team, title: '{{.title}}' } }, fail: { id: uniqueId(v, 'stop'), fail: 'Explain why the run stops here' } }[k]; }
     const uses = k, verb = uses.split('.')[1];
     const decl = SCHEMA.verb(uses);
     const node = { id: uniqueId(v, verb), uses };

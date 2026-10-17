@@ -269,9 +269,9 @@ details.tech { border-top: 1px dashed var(--line); padding-top: 8px; }
 details.tech summary { cursor: pointer; font-size: 12.5px; color: var(--ink-2); }
 details.tech[open] summary { margin-bottom: 8px; }
 .seal-words { font-size: 14px; line-height: 1.55; }
-.sticky-decide { position: sticky; bottom: calc(var(--phone-nav, 64px) + 8px); z-index: 5; display: flex; gap: 8px; padding: 10px; margin-top: 10px; background: var(--bg-2); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--elev-pop); }
+.sticky-decide { position: sticky; bottom: 8px; z-index: 5; display: flex; gap: 8px; padding: 10px; margin-top: 10px; background: var(--bg-2); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--elev-pop); }
 @media (max-width: 720px) { .why-impact { grid-template-columns: 1fr; } .pl-row { grid-template-columns: 1fr; gap: 4px; } }
-@media (max-width: 720px) { .toasts { bottom: calc(76px + env(safe-area-inset-bottom)) !important; } }
+@media (max-width: 720px) { .toasts { bottom: calc(var(--fixb) + 76px + var(--sab)) !important; } }
 .widen-list { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; } .widen-list li { margin: 3px 0; }
 
 /* ---------- what a bot can do ---------- */
@@ -335,3 +335,35 @@ details.adv > summary::-webkit-details-marker { display: none; }
 .watch-empty { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .watch-line svg { width: 13px; height: 13px; vertical-align: -2px; }
 svg.flip { transform: rotate(180deg); }
+
+/* glossary terms */
+.term { text-decoration: underline dotted var(--ink-3); text-underline-offset: 3px; cursor: help; }
+.term:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.gloss { margin: 0; padding: 6px 16px; }
+.gloss > div { display: grid; grid-template-columns: 160px 1fr; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.gloss > div:last-child { border-bottom: 0; }
+.gloss dt { font-weight: 600; }
+.gloss dd { margin: 0; color: var(--ink-2); }
+@media (max-width: 720px) { .gloss > div { grid-template-columns: 1fr; gap: 2px; } }
+.roll-legend { display: inline-flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.roll-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.roll-legend svg { width: 13px; height: 13px; }
+.page-head .lede { margin: 6px 0 0; max-width: 78ch; color: var(--ink-2); font-size: 13px; line-height: 1.5; }
+
+/* builder to-dos: required fields not filled yet are a checklist, not errors */
+.tpill.todo { color: var(--ink-2); background: var(--bg-3); border: 1px dashed var(--line-3); }
+.val-pill.todo { color: var(--ink-2); }
+.issue.todo { color: var(--ink-2); }
+.issue.todo svg, .ftodo svg { width: 10px; height: 10px; color: var(--accent); }
+.ftodo { font-size: 11.5px; color: var(--ink-2); margin-top: 4px; display: flex; gap: 4px; align-items: center; }
+.wf-field.todo .input, .wf-field.todo .select, .wf-field.todo .textarea { border-style: dashed; }
+.callout.todo { border-left-color: var(--line-3); background: var(--bg-2); color: var(--ink-2); }
+.pk-item .tag.risk { font-size: 10px; padding: 0 5px; vertical-align: 1px; }
+.pk-item .grow b + .tag.risk { margin-left: 4px; }
+.pk-item .grow { white-space: normal; }
+.pk-item .grow .muted { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: normal; }
+.pk-why { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; line-height: 1.45; padding: 10px 12px; border-radius: var(--r); border: 1px solid var(--line); background: var(--bg-1); }
+.pk-why svg { width: 15px; height: 15px; flex: none; margin-top: 2px; }
+.pk-why.needs { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.pk-why.needs svg { color: var(--accent); }
+.pk-why.none svg { color: var(--ok); }

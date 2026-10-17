@@ -156,7 +156,7 @@
         }
       }
     }
-    if (!v.on && !reusable) add('error', 'name', 'on: is missing: choose what starts this workflow', { field: 'on', trigger: true });
+    if (!v.on && !reusable) add('error', 'name', 'on: is missing: choose what starts this workflow', { field: 'on', trigger: true, todo: 'Choose what starts this workflow' });
     WF.sources(v).forEach((s, i) => {
       const on = s.on, path = Array.isArray(v.on) ? `on.${i}` : 'on';
       if (on === 'manual' || /^timer\.[\w-]+$/.test(on) || /^conductor\.[\w_]+$/.test(on)) return;
@@ -190,7 +190,7 @@
         else if (ids[s.id]) add('error', P + '.id', `duplicate id "${s.id}" (also step ${ids[s.id]})`, { step: e.id, field: 'id' });
         else ids[s.id] = e.order + 1;
       }
-      const err = (msg, field, level = 'error') => add(level, field ? `${P}.${field}` : P, msg, { step: e.id, field });
+      const err = (msg, field, level = 'error', extra = {}) => add(level, field ? `${P}.${field}` : P, msg, Object.assign({ step: e.id, field }, extra));
       if (window.RS && e.kind !== 'parallel') RS.unknown(s, RS.step).bad.forEach((k) => err(`${k}: not a step key (${RS.notFound(lineOf(P + '.' + k), k, 'Step')})`, k));
       if (window.RS && Array.isArray(s.hooks)) s.hooks.forEach((h, i) => { if (!isObj(h)) return; RS.unknown(h, RS.hook).bad.forEach((k) => err(`hooks[${i}].${k}: not a hook key`, 'hooks')); if (h.at && !RS.hookAt.includes(h.at)) err(`hooks[${i}].at: one of start, done, fail, stop`, 'hooks'); });
       switch (e.kind) {
@@ -202,7 +202,7 @@
           if (!c && !['git', 'kv'].includes(inst)) { const reg = window.SCHEMA.connectors[inst]; err(reg ? `uses: ${s.uses}: no "${inst}" connector yet — add one (${reg.registry ? 'installs ' + reg.registry : 'builtin'}) in Connectors` : `uses: ${s.uses}: no connector named "${inst}"`, 'uses'); break; }
           if (!decl) { err(`uses: ${s.uses}: ${c ? c.use : inst} declares no verb "${verb}"`, 'uses'); break; }
           const opts = s.options || {};
-          decl.fields.forEach((f) => { if (f.req && f.def == null && (opts[f.k] == null || opts[f.k] === '' || (Array.isArray(opts[f.k]) && !opts[f.k].length))) err(`options.${f.k} is required by ${s.uses}`, `options.${f.k}`); if (f.type === 'enum' && opts[f.k] != null && !String(opts[f.k]).includes('{{') && !f.options.includes(opts[f.k])) err(`options.${f.k}: "${opts[f.k]}" is not one of ${f.options.join(', ')}`, `options.${f.k}`); });
+          decl.fields.forEach((f) => { if (f.req && f.def == null && (opts[f.k] == null || opts[f.k] === '' || (Array.isArray(opts[f.k]) && !opts[f.k].length))) err(`options.${f.k} is required by ${s.uses}`, `options.${f.k}`, 'error', { todo: `Fill in ${String(f.label || f.k).replace(/_/g, ' ')}` }); if (f.type === 'enum' && opts[f.k] != null && !String(opts[f.k]).includes('{{') && !f.options.includes(opts[f.k])) err(`options.${f.k}: "${opts[f.k]}" is not one of ${f.options.join(', ')}`, `options.${f.k}`); });
           Object.keys(opts).forEach((k) => { if (!decl.fields.find((f) => f.k === k)) err(`options.${k}: ${s.uses} has no option "${k}" (typo?)`, `options.${k}`); });
           break;
         }
@@ -248,7 +248,7 @@
           const w = V().workflows.find((x) => x.name === s.call && x.kind === 'workflow');
           if (!w) { err(`call: no reusable workflow "${s.call}"`, 'call'); break; }
           let ins = {}; try { ins = Y.parse(w.yaml).value.inputs || {}; } catch (x) {}
-          Object.entries(ins).forEach(([k, d]) => { if (d && d.required && !(s.with && s.with[k] != null && s.with[k] !== '')) err(`with.${k} is required by ${s.call}`, `with.${k}`); });
+          Object.entries(ins).forEach(([k, d]) => { if (d && d.required && !(s.with && s.with[k] != null && s.with[k] !== '')) err(`with.${k} is required by ${s.call}`, `with.${k}`, 'error', { todo: `Fill in ${k.replace(/_/g, ' ')}` }); });
           Object.keys(s.with || {}).forEach((k) => { if (!(k in ins)) err(`with.${k}: ${s.call} has no input "${k}"`, `with.${k}`); });
           break;
         }

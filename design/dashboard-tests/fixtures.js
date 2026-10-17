@@ -3,13 +3,16 @@
 const base = require('@playwright/test');
 
 const test = base.test.extend({
-  page: async ({ page }, use, info) => {
+  // project options: the prototype theme ('auto' follows the OS colorScheme) and the iOS Safari simulation
+  protoTheme: ['dark', { option: true }],
+  simIos: [false, { option: true }],
+  page: async ({ page, protoTheme, simIos }, use, info) => {
     const errors = [];
     page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
     page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
     await page.addInitScript(() => { window.__PROTO_FAST = true; });
-    await page.goto('/index.html#/overview');
-    await page.evaluate(() => { localStorage.removeItem('cd-proto-state-v4'); localStorage.setItem('cd-theme', 'dark'); });
+    await page.goto(`/index.html${simIos ? '?sim=ios' : ''}#/overview`);
+    await page.evaluate((t) => { localStorage.removeItem('cd-proto-state-v4'); if (t === 'auto') localStorage.removeItem('cd-theme'); else localStorage.setItem('cd-theme', t); }, protoTheme);
     await use(page);
     base.expect(errors, `console errors in ${info.title}`).toEqual([]);
   },
@@ -23,7 +26,7 @@ async function go(page, route, { fresh = false } = {}) {
   await page.waitForTimeout(80);
 }
 const isPhone = (page) => page.viewportSize().width <= 720;
-/** Complete the staged-change pipeline: wait for checks, ack widening, sign, wait for commit. */
+/** Complete the staged-change pipeline: wait for checks, ack widening, sign if it widens, wait for commit. */
 async function applyStaged(page, { expectWidening = false } = {}) {
   await page.waitForURL(/#\/config\/apply/);
   const go2 = page.locator('[data-act="apply-go"]');
@@ -33,8 +36,9 @@ async function applyStaged(page, { expectWidening = false } = {}) {
   if (expectWidening) { await base.expect(go2).toHaveAttribute('aria-disabled', 'true'); await ack.check(); }
   else if (await ack.count()) await ack.check();
   await base.expect(go2).not.toHaveAttribute('aria-disabled', 'true');
+  const needsPk = (await page.locator('#pk-why.needs').count()) > 0;
   await go2.click();
-  await page.locator('#su-go').click();
+  if (needsPk) await page.locator('#su-go').click(); // only a widening change asks for the passkey
   await base.expect(page.locator('.page-head h1')).toHaveText(/Applied/);
   await base.expect(page.locator('.callout.ember')).toContainText('Applied.', { timeout: 8000 });
 }

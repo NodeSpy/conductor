@@ -52,6 +52,7 @@
     send: '<path d="M4 12l16-8-6 16-2.5-6.5z"/>',
     branch: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-12 7"/>',
     split: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/>',
+    info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
     file: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
     folder: '<path d="M3 6a1 1 0 011-1h5l2 2h9a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1z"/>',
     commit: '<circle cx="12" cy="12" r="3.5"/><path d="M3 12h5.5M15.5 12H21"/>',
@@ -93,6 +94,10 @@
   UI.st = (s, label, pill = false) => { const g = SG[s] || SG.idle; return `<span class="st${pill ? ' pill' : ''}" data-s="${s}"><i>${UI.icon(g[0])}</i>${label ?? g[1]}</span>`; };
   UI.tag = (t, s) => `<span class="tag"${s ? ` data-s="${s}"` : ''}>${t}</span>`;
   UI.tier = (t) => `<span class="tier ${t}">${t}</span>`;
+  /** The logo, from the one reference in assets/logo/logo.js: 'mark' (the symbol) or 'lockup' (mark + wordmark). */
+  UI.logo = (kind = 'mark', cls = '') => { const L = window.LOGO || {}, mark = `<svg class="logo-mark baton ${cls}" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="${L.mark}"/></svg>`;
+    if (kind === 'mark') return mark;
+    return L.lockup ? `<svg class="logo-lockup ${cls}" viewBox="0 0 ${Math.round(24 * (L.lockupRatio || 5.5))} 24" role="img" aria-label="${UI.esc(L.wordmark || 'conductor')}"><use href="${L.lockup}"/></svg>` : `${mark}<span class="wordmark">${UI.esc(L.wordmark || 'conductor')}</span>`; };
   UI.sigil = (mbr, size = '') => `<span class="sigil ${size}" style="--sig:${mbr.color}">${mbr.name[0]}${mbr.home === 'live' ? '<span class="live"></span>' : ''}</span>`;
   UI.ago = (iso) => { const s = (Date.now() - new Date(iso)) / 1000; if (s < 60) return Math.max(1, s | 0) + 's'; if (s < 3600) return (s / 60 | 0) + 'm'; if (s < 86400) return (s / 3600 | 0) + 'h'; return (s / 86400 | 0) + 'd'; };
   UI.clock = (iso) => new Date(iso).toTimeString().slice(0, 8);
@@ -311,36 +316,42 @@
   document.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); UI.palette(); } if (e.key === 'Escape' && !e.defaultPrevented) { const pop = document.querySelector('#pop-menu'); if (pop) { pop.remove(); return; } if (!UI.dismissDrawer()) UI.dismissModal(); } });
 
   /* ---------- theme ---------- */
-  UI.theme = (t) => { document.documentElement.dataset.theme = t; try { localStorage.setItem('cd-theme', t); } catch (e) {} const b = $('#theme-btn'); if (b) b.innerHTML = UI.icon(t === 'dark' ? 'sun' : 'moon'); };
-  UI.initTheme = () => { let t = new URLSearchParams(location.search).get('theme'); try { t = t || localStorage.getItem('cd-theme'); } catch (e) {} UI.theme(t || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')); };
+  /* The head script applied the theme before paint; these keep it. UI.theme(t) is an explicit choice (saved);
+     UI.theme('auto') goes back to following the OS. */
+  UI.themeIcon = () => { const b = $('#theme-btn'); if (b) b.innerHTML = UI.icon(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon'); };
+  UI.theme = (t) => { const h = document.documentElement, m = document.querySelector('meta[name="theme-color"]');
+    if (t === 'auto') { try { localStorage.removeItem('cd-theme'); } catch (e) {} t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; h.dataset.themeSource = 'os'; }
+    else { try { localStorage.setItem('cd-theme', t); } catch (e) {} h.dataset.themeSource = 'explicit'; }
+    h.dataset.theme = t; if (m) m.content = t === 'light' ? '#efeadf' : '#0f100d'; UI.themeIcon(); };
+  UI.initTheme = () => { if (!document.documentElement.dataset.theme) document.documentElement.dataset.theme = 'dark'; UI.themeIcon(); if (document.documentElement.classList.contains('sim-ios') && !document.getElementById('sim-toolbar')) { const o = document.createElement('div'); o.id = 'sim-toolbar'; o.setAttribute('aria-hidden', 'true'); o.innerHTML = '<span></span>'; document.body.appendChild(o); } };
 
   /* ---------- chrome ---------- */
   UI.refreshChrome = () => {
     const d = D.daemon, need = D.attention.length, running = D.runs.filter((r) => r.status === 'run').length;
+    const warn = d.paused || D.connectors.some((c) => c.status !== 'ok');
     $('#strip-cells').innerHTML = `
-      <div class="cell"><span class="pulse"></span><b>${d.paused ? 'paused' : 'up'}</b>&nbsp;${d.uptime}</div>
-      <div class="cell wide">${d.version}${d.update.available ? ` <span style="color:var(--run)">→ ${d.update.available}</span>` : ''}</div>
+      <button type="button" class="cell status-btn" data-act="strip-status" aria-label="System status: ${d.paused ? 'dispatch paused' : warn ? 'something needs a look' : 'all running'}"><span class="dot" style="--sc:var(--${d.paused || warn ? 'wait' : 'ok'})"></span><b>${d.paused ? 'paused' : warn ? 'check' : 'ok'}</b></button>
+      <div class="cell" data-tip="${d.paused ? 'Dispatch is paused: no new runs start' : `conductor has been running for ${d.uptime}`}"><span class="pulse"></span><b>${d.paused ? 'paused' : 'up'}</b>&nbsp;${d.uptime}</div>
+      <a class="cell wide" href="#/updates" data-tip="conductor ${d.version}${d.update.available ? `; ${d.update.available} is available` : ', up to date'}">${d.version}${d.update.available ? ` <span style="color:var(--run)">→ ${d.update.available}</span>` : ''}</a>
       <a class="cell wide" href="#/safety" data-tip="The agent sandbox is enforcing: bots can't touch files or the network beyond what you allowed. Click to see what each bot may do on its own.<br><span class='mono'>backend ${d.sandbox.backend} · ${d.sandbox.containers} containers</span>">${UI.icon('shield')}<b>sandbox</b>&nbsp;enforcing</a>
-      <div class="cell wide">paseo <b>ok</b></div>
-      <div class="cell"><span class="pulse run"></span><b>${running}</b>&nbsp;running</div>
-      ${need ? `<a class="cell alert" href="#/attention">${UI.icon('diamond')}<b>${need}</b>&nbsp;need you</a>` : ''}
+      <a class="cell wide" href="#/connectors/runtimes" data-tip="paseo, which runs the agents, is healthy (${d.paseo.agents} agents)">agents <b>ok</b></a>
+      <a class="cell" href="#/live" data-tip="Runs in progress"><span class="pulse run"></span><b>${running}</b>&nbsp;running</a>
+      ${need ? `<a class="cell alert" href="#/attention" aria-label="${need} need you">${UI.icon('diamond')}<b>${need}</b><span class="lbl-long">&nbsp;need you</span></a>` : ''}
       ${D.pending.length ? `<a class="cell staged" href="#/config/apply" data-tip="Config changes staged but not applied">${UI.icon('edit')}<b>${D.pending.length}</b>&nbsp;staged</a>` : ''}
       <div class="spacer"></div>
-      <div class="cell wide">${d.magicdns} · TLS</div>`;
+      <div class="cell wide" data-tip="The address this dashboard is served on, over Tailscale, with TLS">${d.magicdns} · TLS</div>`;
     $('#rail-nav').innerHTML = UI.navHTML();
     $('#tabbar').innerHTML = [['overview', 'Overview', 'overview'], ['live', 'Live', 'live'], ['attention', 'Approvals', 'attention', need], ['bots', 'Bots', 'bots'], ['more', 'More', 'grid']].map(([k, l, ic, c]) => `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}${l}${c ? `<span class="count hot">${c}</span>` : ''}</a>`).join('');
     UI.setNav((location.hash.replace(/^#\/?/, '') || 'overview').split('/')[0]);
   };
 
   UI.boot = () => {
-    UI.initTheme();
     window.D = D;
     document.body.innerHTML = `
       <div class="shell">
         <header class="strip">
           <a class="brand" href="#/overview">
-            <svg class="baton" viewBox="0 0 24 24" fill="none"><path d="M4 20L18.5 5.5" stroke="var(--ink)" stroke-width="1.8" stroke-linecap="round"/><circle cx="19.5" cy="4.5" r="2.3" fill="var(--accent)"/><path d="M3 21l2.4-.7-1.7-1.7z" fill="var(--ink)"/></svg>
-            <span class="wordmark">conductor</span>
+            ${UI.logo('lockup')}
           </a>
           <div id="strip-cells" style="display:contents"></div>
           <div class="search" role="button" tabindex="0" data-act="palette">${UI.icon('search')}<span class="hide-phone">Search</span> <span class="kbd hide-phone">⌘K</span></div>
@@ -350,6 +361,7 @@
           <div id="rail-nav"></div>
           <div class="foot">
             <div class="op"><span class="avatar">op</span><div class="who"><b>${D.operator.name}</b><span>passkey · idle ${D.operator.session.idle}</span></div></div>
+            <a class="icon-btn" href="#/glossary" data-tip="Glossary: the words conductor uses">${UI.icon('info')}</a>
             <button class="icon-btn" id="theme-btn" data-tip="Light / dark theme" data-act="theme"></button>
             <button class="icon-btn" data-act="reset-demo" data-tip="Reset demo data: put the prototype's fake state back">${UI.icon('undo')}</button>
             <a class="icon-btn" href="#/signin" data-tip="Lock (sign out)">${UI.icon('lock')}</a>
@@ -358,13 +370,13 @@
         <main class="main" id="main"></main>
         <nav class="tabbar" id="tabbar"></nav>
       </div>`;
-    UI.theme(document.documentElement.dataset.theme);
+    UI.initTheme();
     UI.refreshChrome();
     UI.render();
   };
 
   /* small shared bits */
-  UI.head = (title, opts = {}) => `<div class="page-head"><div>${opts.crumbs ? `<div class="crumbs">${opts.crumbs}</div>` : ''}<h1>${title}${opts.sub ? `<span class="sub">${opts.sub}</span>` : ''}</h1></div>${opts.actions ? `<div class="actions">${opts.actions}</div>` : ''}</div>`;
+  UI.head = (title, opts = {}) => `<div class="page-head"><div>${opts.crumbs ? `<div class="crumbs">${opts.crumbs}</div>` : ''}<h1>${title}${opts.sub ? `<span class="sub">${opts.sub}</span>` : ''}</h1>${opts.lede ? `<p class="lede">${opts.lede}</p>` : ''}</div>${opts.actions ? `<div class="actions">${opts.actions}</div>` : ''}</div>`;
   UI.tabs = (items, on) => `<div class="tabs" role="tablist">${items.map(([k, l, href, c, hot]) => `<a href="${href}" role="tab" class="${k === on ? 'on' : ''}"${k === on ? ' aria-current="page" aria-selected="true"' : ''}>${l}${c != null ? ` <span class="count${hot ? ' hot' : ''}">${c}</span>` : ''}</a>`).join('')}</div>`;
   UI.bind = (root, sel, ev, fn) => $$(sel, root).forEach((el) => el.addEventListener(ev, (e) => fn(e, el)));
 
@@ -412,6 +424,9 @@
   /** Segmented control: items [[value, label]]; act receives el.dataset.v. */
   UI.seg = (items, value, act, extra = '') => `<div class="seg" role="group" ${extra}>${items.map(([v, l, dis]) => `<button type="button" data-v="${UI.esc(v)}" ${dis ? UI.off(dis) : `data-act="${act}"`} aria-pressed="${String(v) === String(value)}" class="${String(v) === String(value) ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   UI.switchBtn = (on, act, attrs = '') => `<button type="button" role="switch" class="switch${on ? ' on' : ''}" aria-checked="${!!on}" data-act="${act}" ${attrs}></button>`;
+  UI.act('strip-status', (b) => { const d = D.daemon, running = D.runs.filter((r) => r.status === 'run').length;
+    UI.menu(b, [[`conductor ${d.paused ? 'paused' : 'up'} ${d.uptime} · ${d.version}${d.update.available ? ' → ' + d.update.available : ''}`, 'server', 'strip-go', 'data-href="#/updates"'], [`Sandbox enforcing: what bots can do`, 'shield', 'strip-go', 'data-href="#/safety"'], [`Agents ok (${d.paseo.agents})`, 'zap', 'strip-go', 'data-href="#/connectors/runtimes"'], [`${running} running`, 'live', 'strip-go', 'data-href="#/live"'], ...(D.pending.length ? [[`${D.pending.length} staged change${D.pending.length > 1 ? 's' : ''}`, 'edit', 'strip-go', 'data-href="#/config/apply"']] : []), ['-'], [`${d.magicdns} · TLS`, 'lock', 'strip-go', 'data-href="#/security"']]); });
+  UI.act('strip-go', (b) => { UI.closeMenu(); UI.go(b.dataset.href); });
   UI.act('theme', () => UI.theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
   UI.act('palette', () => UI.palette());
   UI.act('close-modal', () => UI.closeModal());

@@ -882,6 +882,30 @@ At 390px:
 - chat takes the screen;
 - the proposal page puts **Approve** in reach of a thumb.
 
+On iPhones (Safari and in-app WebKit browsers such as paseo's) the shell is a
+locked column the height of the *visible* viewport (`100dvh`, not `100vh`,
+which reaches under Safari's floating toolbar); only the content area
+scrolls, and the tab bar is an ordinary in-flow row, never `position:
+fixed; bottom: 0`. The top strip, the tab bar, sheets and toasts honour the
+safe areas (`env(safe-area-inset-*)`, with `viewport-fit=cover`). On a phone
+the status strip collapses to a status dot and the needs-you count; the rest
+(version, sandbox, agents, running, staged, address) is one tap away in a
+sheet.
+
+**Themes.** Exactly one theme applies at a time, chosen before first paint:
+an explicit choice (`?theme=light|dark`, the toggle, or one saved earlier)
+always wins over the OS, for every surface and text colour; with none, the
+page follows `prefers-color-scheme`, live. All colours come from the theme
+tokens; no stylesheet reads `prefers-color-scheme` on its own, so light
+surfaces never get dark-theme text. `?theme=auto` forgets the choice.
+
+The suite's WebKit projects check this the way it's seen: iPhone 15 in
+WebKit, the OS in dark and light mode × auto/light/dark, with Safari's
+toolbar (80px) and the home-indicator inset (34px) simulated
+(`?sim=ios`). On every route: one theme only, nothing wider than the
+viewport, the tab bar and primary actions fully visible and not under the
+toolbar, and rendered text at least 3:1 against its rendered background.
+
 Every screen works at 390px by touch: navigation, tabs, filters, forms
 (as sheets), the builder's list mode and approvals. The flows that matter
 most are overview, approvals and chat; the prototype's `phone.html` shows
@@ -1273,15 +1297,32 @@ A session is enough for reads and for low-risk operations:
 A **fresh assertion bound to the request's digest** is required for:
 
 - approve/deny (its own payload, [§6.6](#66-the-approvals-boundary));
-- config apply and restore;
+- a config apply or restore **that widens** what bots or agents can do, as
+  the one widening classifier decides ([§7.3](#7-the-config-edit-pipeline)):
+  more autonomy (a tier loosened, a promotion, a ceiling raised, leaving
+  shadow), new verbs or grants (including broker secrets), credentials or
+  logins bound, egress or hosts added, isolation loosened, a trigger armed or
+  its repo scope widened, a pack added or a source trusted, operators or team
+  approvers added, links between bots;
 - a secret write;
-- any widening (grants, verbs, tiers, promotions, browser sites, logins,
-  credentials, evaluate, team approvers, ceilings and links);
 - a team knowledge promotion;
 - a browser takeover;
 - update now;
 - pack and plugin add/remove;
 - enrolling another passkey.
+
+**Non-widening config changes need no passkey**: folder moves, renames,
+descriptions, tightening a limit, disabling something, removing a grant.
+They get a plain **Apply** after the diff review in the signed-in session,
+and still go through validate-on-a-copy, the backup, the boot guard and
+rollback. A change set that mixes both needs the passkey. The review screen
+says which and why, in words: "Needs your passkey: binds a login to
+platform-sre", or "No passkey needed: nothing here lets bots or agents do
+more". The audit line records which path was taken.
+
+**Display preferences are not config.** Theme, density and the usage
+display are stored per browser and apply instantly; they never touch
+`config.yaml` or the pipeline.
 
 The step-up token is single use, lives 2 min, and is bound to `{session,
 purpose, sha256(request body)}`. The UI shows what you are signing before the
@@ -1497,7 +1538,8 @@ it does, step 4 still runs on a copy as defence in depth.
 
 ### 7.4 Apply, reload, verify
 
-After a step-up assertion over the change's digest:
+After the diff review: a step-up assertion over the change's digest when the
+change widens anything ([§6.5](#65-step-up)), otherwise the session alone:
 
 1. **Backup.** Every touched file is copied to
    `<state>/config-history/<id>/` (0600), with a manifest: file, sha before

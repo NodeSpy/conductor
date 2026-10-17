@@ -1,7 +1,7 @@
 /* Access: passkey sign-in, operator enrollment (CLI one-time localhost link), passkeys, sessions, listeners. */
 (function () {
   const { icon, st, tag, ago, esc } = UI;
-  const baton = `<svg width="34" height="34" viewBox="0 0 24 24" fill="none"><path d="M4 20L18.5 5.5" stroke="var(--ink)" stroke-width="1.6" stroke-linecap="round"/><circle cx="19.5" cy="4.5" r="2.3" fill="var(--accent)"/><path d="M3 21l2.4-.7-1.7-1.7z" fill="var(--ink)"/></svg>`;
+  const baton = UI.logo('mark', 'gate-mark');
   const gate = (inner) => `<div class="gate" style="position:fixed;inset:0;z-index:60;background:var(--bg);background-image:radial-gradient(var(--dot) 1px,transparent 1.2px);background-size:22px 22px">${inner}</div>`;
 
   UI.route('signin', () => ({

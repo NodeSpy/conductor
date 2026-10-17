@@ -42,7 +42,7 @@ button.link { background: none; border: 0; padding: 0; font: inherit; cursor: po
 .menu button:hover { background: var(--bg-4); color: var(--ink); }
 .menu button svg { width: 14px; height: 14px; color: var(--ink-3); }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
-.menu.as-sheet { left: 0; right: 0; bottom: 0; top: auto; border-radius: 16px 16px 0 0; padding: 10px 10px calc(10px + env(safe-area-inset-bottom)); }
+.menu.as-sheet { left: 0; right: 0; bottom: 0; top: auto; border-radius: 16px 16px 0 0; padding: 10px 10px calc(10px + var(--sab)); bottom: var(--fixb) !important; }
 .menu.as-sheet button { padding: 13px 12px; font-size: 14px; }
 
 /* config */

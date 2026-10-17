@@ -6,8 +6,10 @@ localStorage key `cd-proto-state-v4`, "Reset demo data" in the user menu). Serve
 user service `dashboard-prototype` at http://100.119.192.38:8767/ (don't stop or replace it).
 Design doc: `docs/design/dashboard.md`. Tests: `design/dashboard-tests/`.
 
-Guardrails (from Daniel): `df -h /` before heavy work (stop under 25 GB); npm cache/temp under
-`~/Projects/.cache/`; sequential work, no parallel subagents; commit and push early and often as
+Guardrails (from Daniel): `df -h /` before heavy work (stop under 25 GB); **all scratch, caches,
+node_modules, browsers, screenshots and test output on LOCAL disk under `~/.cache/conductor-design/`,
+never under `~/Projects` (NFS; heavy churn there was killing the machine); clean up after yourself; run
+suites sequentially, few browsers at once**; sequential work, no parallel subagents; commit and push early and often as
 Daniel, no AI attribution; prototype + docs only (no conductor product code, don't touch the live
 conductor/paseo services or configs); neutral fake data only (`platform-sre`, `acme/api`).
 Report once, when everything passes.
@@ -20,9 +22,12 @@ BASE_URL=http://100.119.192.38:8767 WORKERS=3 ./run.sh                    # ever
 BASE_URL=http://100.119.192.38:8767 ./run.sh knowledge.spec.js --project=desktop --reporter=line
 ```
 
-Deps live in `~/Projects/.cache/dashboard-tests-node` (Playwright 1.58.2, chromium-1208 cached).
+Deps live in `~/.cache/conductor-design/dashboard-tests-node` (Playwright 1.58.2); browsers in
+`~/.cache/conductor-design/ms-playwright` (chromium-1208 symlinked from `~/.cache/ms-playwright`, webkit-2248
+unpacked there); output in `~/.cache/conductor-design/out/`. WebKit iPhone projects: `./run-webkit.sh` (runs
+inside the local `mcr.microsoft.com/playwright:v1.62.0-noble` image, since WebKit needs Ubuntu libraries).
 Every test fails on any console error. `UI.act` logs an error on a duplicate action name, so name
-clashes fail tests. Screenshot helpers for the visual review: `~/Projects/.cache/shots/shot.js`
+clashes fail tests. Screenshot helpers for the visual review: `~/.cache/conductor-design/shots/shot.js`
 (`node shot.js '<route>' out.png <usageMode|''> <w> <h>`, with NODE_PATH and BASE set) and
 `overflow.js` (lists panels whose content overflows).
 

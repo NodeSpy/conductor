@@ -32,7 +32,7 @@ BASE_URL=http://127.0.0.1:8767 design/dashboard-tests/run.sh # against a running
 
 `run.sh` installs `@playwright/test` (pinned to 1.58.2, which matches the
 cached `~/.cache/ms-playwright/chromium-1208`) into a temp project at
-`$DEPS_DIR` (default `~/Projects/.cache/dashboard-tests-node`), never into
+`$DEPS_DIR` (default `~/.cache/conductor-design/dashboard-tests-node`, local disk), never into
 the repo or globally, and runs from there. Without `BASE_URL` the suite
 serves `design/dashboard-prototype/` itself with `python3 -m http.server` on
 `127.0.0.1:$PORT` (default 8799). Results and failure screenshots go to

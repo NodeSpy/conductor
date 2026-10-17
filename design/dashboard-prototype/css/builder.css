@@ -3,7 +3,7 @@
  * spine between plates; a parallel step forks the spine into lanes that join
  * before the next plate. Ember marks what you're acting on. */
 
-.wfb { display: flex; flex-direction: column; height: calc(100vh - var(--strip-h)); }
+.wfb { display: flex; flex-direction: column; height: calc(var(--dvh) - var(--strip-h)); }
 .wfb-bar { gap: 8px; }
 .wfb-title { font-size: 26px; line-height: 1; }
 .wfb-tools { margin-left: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
@@ -193,7 +193,7 @@ details.adv > summary::-webkit-details-marker { display: none; }
   .sc-form > * { grid-column: 1 / -1; }
 }
 @media (max-width: 720px) {
-  .wfb { height: auto; min-height: calc(100vh - 60px); }
+  .wfb { height: auto; min-height: 0; }
   .wfb-bar { padding: 8px 10px; }
   .wfb-title { font-size: 21px; }
   .wfb-tools { margin-left: 0; width: 100%; }

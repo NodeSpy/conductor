@@ -664,7 +664,7 @@ steps:
    * provider (Claude, Codex), never totalled; plan limits and tokens come only
    * from a configured usage.source. Cloud spend (commit_money, aws-cost) is
    * separate and always shown. */
-  D.usageCfg = { mode: 'off' };
+  D.usageCfg = {};
   const series = (a) => a.map((k) => k * 1000);
   D.usage = {
     providers: { claude: { label: 'Claude', vendor: 'Anthropic' }, codex: { label: 'Codex', vendor: 'OpenAI' } },

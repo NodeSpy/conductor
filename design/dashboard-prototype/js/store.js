@@ -266,8 +266,8 @@
     validate(k, n) { const e = []; (n.egress || []).forEach((h) => { if (h === '*') e.push('sandbox.egress: "*" is refused; name the hosts'); if (/(^|\.)tail0000\.ts\.net$|^127\.|^localhost/.test(h)) e.push(`sandbox.egress: ${h} is the dashboard's own address; the proxy hard-denies it`); }); return e; },
     widens(b, a) { const r = []; (a.egress || []).forEach((h) => { if (!(b.egress || []).includes(h)) r.push(`adds egress ${h}`); }); if (a.agents === 'off' && b.agents !== 'off') r.push('turns the agent sandbox off'); return r; },
   });
-  single('usage', () => D().usageCfg, (n) => { D().usageCfg = n; }, { label: 'usage mode', href: () => '#/config',
-    validate: (k, n) => [].concat(['off', 'subscription', 'api'].includes(n.mode) ? [] : [`usage.mode: "${n.mode}" is not off, subscription or api`], n.source && !n.source.name ? ['usage.source: needs a name'] : [], n.source && !/^https?:\/\/[^\s/]+/.test(n.source.url || '') ? ['usage.source.url: an http(s) URL the source reports usage on'] : []) });
+  single('usage', () => D().usageCfg, (n) => { D().usageCfg = n; }, { label: 'usage source', href: () => '#/config',
+    validate: (k, n) => [].concat(n.source && !n.source.name ? ['usage.source: needs a name'] : [], n.source && !/^https?:\/\/[^\s/]+/.test(n.source.url || '') ? ['usage.source.url: an http(s) URL the source reports usage on'] : []) });
   single('update', () => D().updateCfg, (n) => { D().updateCfg = n; D().daemon.update.auto = n.auto; D().daemon.update.interval = n.interval; }, { label: 'update policy', href: () => '#/updates',
     validate: (k, n) => (/^\d+[smh]$/.test(n.interval || '') ? [] : [`update.interval: "${n.interval}" is not a duration (e.g. 10m)`]) });
   C.operators = { section: 'operators', file: 'config.yaml', label: 'operator', href: () => '#/security',
@@ -436,7 +436,7 @@
   S.ORDER = ['settings', 'vaults', 'secrets', 'connectors', 'hosts', 'runtimes', 'sandbox', 'operators', 'teams', 'bots', 'botLinks', 'env', 'identities', 'credentials', 'packs', 'update', 'workflows'];
 
   /* ---------- config.yaml, generated from the state ---------- */
-  const HEAD = { settings: 'settings: — ${settings.NAME} anywhere below', vaults: 'vaults: — where secrets live; values never appear here', connectors: 'connectors: — use: names the plugin', hosts: 'hosts: — remote machines over SSH', runtimes: 'runtimes: — where agents run', models: 'models: — fleets of acceptable models', sandbox: 'sandbox: — the agent sandbox', operators: 'operators: — who can approve', bots: 'bots: — persistent agents with their own memory', teams: 'teams: — bots inherit team defaults and can only narrow them', browser: 'browser: — the agent browser: which sites bots may use, and how they sign in', packs: 'packs: — your overrides; the pack files are vendored', update: 'update: — the auto-update policy', bot_links: 'bot_links: — operator-side links: each pair of bots may message each other', usage: 'usage: — off | subscription | api, per provider; limits only from source:', triggers: 'triggers: — on / filter / steps', workflows: 'workflows: — reusable, called with call:', secrets: 'secret references' };
+  const HEAD = { settings: 'settings: — ${settings.NAME} anywhere below', vaults: 'vaults: — where secrets live; values never appear here', connectors: 'connectors: — use: names the plugin', hosts: 'hosts: — remote machines over SSH', runtimes: 'runtimes: — where agents run', models: 'models: — fleets of acceptable models', sandbox: 'sandbox: — the agent sandbox', operators: 'operators: — who can approve', bots: 'bots: — persistent agents with their own memory', teams: 'teams: — bots inherit team defaults and can only narrow them', browser: 'browser: — the agent browser: which sites bots may use, and how they sign in', packs: 'packs: — your overrides; the pack files are vendored', update: 'update: — the auto-update policy', bot_links: 'bot_links: — operator-side links: each pair of bots may message each other', usage: 'usage: — where plan limits and tokens come from (the display mode is a browser preference)', triggers: 'triggers: — on / filter / steps', workflows: 'workflows: — reusable, called with call:', secrets: 'secret references' };
   S.configText = (state) => {
     const st = state || window.D; const out = ['# conductor config — ops-box', '# managed by hand and by the dashboard; comments and unknown keys are kept', ''];
     const sec = (h, obj) => { if (obj == null || (typeof obj === 'object' && !Object.keys(obj).length)) return; out.push('# ' + HEAD[h]); out.push(Y.stringify({ [h]: obj })); out.push(''); };
@@ -463,7 +463,7 @@
     if (st.access.credentials.length) br.credentials = st.access.credentials.map((c) => Object.assign({ name: c.name }, c.cfg));
     sec('browser', br);
     sec('packs', Object.fromEntries(st.packs.map((p) => [p.name, p.cfg])));
-    sec('usage', st.usageCfg);
+    if (st.usageCfg && st.usageCfg.source) sec('usage', { source: st.usageCfg.source });
     sec('update', st.updateCfg);
     const item = (y) => y.replace(/\n$/, '').split('\n').map((l, i) => (i === 0 ? '  - ' + l : l ? '    ' + l : l)).join('\n');
     const own = st.workflows.filter((w) => w.yaml && w.source === 'config');

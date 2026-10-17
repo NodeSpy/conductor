@@ -11,7 +11,7 @@
 (function () {
   const U = UI;
   const hash = (s) => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h; };
-  U.usageMode = () => (D.usageCfg && D.usageCfg.mode) || 'off';
+  U.usageMode = () => (D.prefs && D.prefs.usageMode) || 'off'; // a display preference (this browser), not config
   U.isApi = () => U.usageMode() === 'api';
   U.usageOn = () => U.usageMode() !== 'off';
   U.usageSource = () => (D.usageCfg && D.usageCfg.source) || null;

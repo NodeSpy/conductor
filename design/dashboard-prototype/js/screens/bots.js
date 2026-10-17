@@ -342,7 +342,7 @@
     const t = teamOf(m), lead = t && leadOf(t) === m.name;
     return `<div class="bot-hero">${UI.sigil(m, 'lg')}<div class="grow"><div class="crumbs mono tiny muted">${UI.folderCrumbs(UI.folderOfBot(m.name, false))} › ${t ? `<a href="#/teams/${t.name}">team ${t.name}</a> › ` : ''}${m.name}</div><h1>${m.name}</h1>
       <div class="facts">${m.home === 'live' ? st('run', `home ${m.session} live`, true) : st('idle', `home ${m.session} idle`, true)}
-        ${t ? `<a href="#/teams/${t.name}">${tag('team ' + t.name + (lead ? ' · lead' : ''), 'ember')}</a>` : tag('no team')}${tag(`${m.turns}/${m.maxTurns} turns`)}${UI.usageOn() ? UI.provSet(UI.botProv(m.name)) : ''}${m.shadow ? tag('shadow mode', 'shadow') : tag('approved execution', 'ok')}
+        ${t ? `<a href="#/teams/${t.name}">${tag('team ' + t.name + (lead ? ' · lead' : ''), 'ember')}</a>` : tag('no team')}${tag(`${m.turns}/${m.maxTurns} ${UI.term('turns', 'turn')}`)}${UI.usageOn() ? UI.provSet(UI.botProv(m.name)) : ''}${m.shadow ? tag(UI.term('shadow mode', 'shadow'), 'shadow') : tag('approved execution', 'ok')}
         ${tag(`${icon('shield')} ${m.mode}`, 'ok')}${tag(`operators: ${(S.effective(m).operators.v || []).join(', ')}`)}</div></div>
       <div class="row wrap"><button class="btn" data-act="m-rotate" data-m="${m.name}">${icon('updates')}Rotate session</button><button class="btn" ${m.proactive ? `data-act="m-sweep" data-m="${m.name}"` : UI.off('No proactive: block in its definition')}>${icon('eye')}Sweep now</button><button class="btn" data-act="m-deliver" data-m="${m.name}">${icon('send')}Deliver event</button></div></div>`;
   }

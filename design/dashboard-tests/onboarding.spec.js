@@ -93,3 +93,18 @@ test('watching nothing in the wizard is allowed but explained', async ({ page })
   await page.locator('[data-act="bw-next"]').click();
   await expect(page.locator('.bw-body .callout')).toContainText("won't do anything until it watches something");
 });
+
+test('terms explain themselves (hover or keyboard focus); the glossary lists them; the top strip says what each chip means', async ({ page }) => {
+  await go(page, '#/workflows', { fresh: true });
+  await expect(page.locator('.page-head .lede')).toContainText('fixed recipe');
+  const t = page.locator('.page-head .term[data-term="workflow"]');
+  await t.focus();
+  await expect(page.locator('.tooltip')).toContainText('A fixed recipe');
+  await go(page, '#/bots');
+  await expect(page.locator('.roll-legend')).toContainText('approvals waiting');
+  await go(page, '#/glossary');
+  await expect(page.locator('#g-provenance')).toContainText('no more trust');
+  await expect(page.locator('#g-tier')).toContainText('observe');
+  await expect(page.locator('#strip-cells')).not.toContainText('paseo');
+  await expect(page.locator('#strip-cells a[href="#/updates"]')).toHaveAttribute('data-tip', /available/);
+});

@@ -4,7 +4,8 @@
 const { test, expect, go, applyStaged } = require('./fixtures');
 
 const ROUTES = ['#/overview', '#/runs', '#/runs/r-7f2c', '#/workflows', '#/bots', '#/folders/work', '#/teams/platform', '#/bots/platform-sre', '#/bots/platform-sre/workers'];
-const setMode = (page, cfg) => page.evaluate((c) => { window.D.usageCfg = c; window.S.save(); }, cfg);
+// the display mode is a browser preference; the source is config
+const setMode = (page, cfg) => page.evaluate((c) => { window.D.prefs.usageMode = c.mode; window.D.usageCfg = c.source ? { source: c.source } : {}; window.S.save(); }, cfg);
 
 /** Every usage-looking figure inside a [data-usage] block must sit inside one provider ([data-prov]) — or be a labelled budget counter or cloud spend. */
 async function crossProviderFigures(page) {
@@ -61,9 +62,8 @@ test('default is off: no usage or cost UI on any screen, and the screens are sti
 
 test('subscription with no source: per-provider counts observed by conductor, no limits, no tokens, no totals', async ({ page }) => {
   await go(page, '#/config', { fresh: true });
-  await page.locator('[data-act="usage-mode"][data-v="subscription"]').click();
-  await page.getByRole('link', { name: 'Review change' }).first().click();
-  await applyStaged(page);
+  await page.locator('[data-act="usage-mode"][data-v="subscription"]').click(); // instant, no config change
+  expect(await page.evaluate(() => D.pending.length)).toBe(0);
   await go(page, '#/overview');
   const cards = page.locator('.prov-card');
   await expect(cards).toHaveCount(2);
@@ -124,7 +124,5 @@ test('switching back to off removes every trace again', async ({ page }) => {
   await setMode(page, { mode: 'api', source: { name: 'llm-proxy', url: 'http://llm-proxy.internal:4000/usage' } });
   await go(page, '#/config');
   await page.locator('[data-act="usage-mode"][data-v="off"]').click();
-  await page.getByRole('link', { name: 'Review change' }).first().click();
-  await applyStaged(page);
   for (const r of ROUTES) { await go(page, r); expect(await noUsageUI(page), r).toEqual([]); }
 });

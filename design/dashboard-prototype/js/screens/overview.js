@@ -112,7 +112,7 @@
       },
       toString() {
         return `<div class="page">
-        ${UI.head('Overview', { crumbs: `${D.daemon.host} · ${D.daemon.magicdns}`, sub: 'conductor runs your bots and automations on this machine; anything risky waits for your passkey', actions: `${D.prefs.gsHidden ? `<button class="btn ghost" data-act="gs-show">${icon('sparkle')}Get started</button>` : ''}<button class="btn" data-act="pause">${D.daemon.paused ? icon('play') + 'Resume dispatch' : icon('pause') + 'Pause dispatch'}</button><a class="btn" href="#/workflows">${icon('play')}Run a workflow</a>` })}
+        ${UI.head('Overview', { crumbs: `${D.daemon.host} · ${D.daemon.magicdns}`, lede: `conductor runs your ${UI.term('bots', 'bot')} and ${UI.term('workflows', 'workflow')} on this machine; anything risky waits for your passkey.`, actions: `${D.prefs.gsHidden ? `<button class="btn ghost" data-act="gs-show">${icon('sparkle')}Get started</button>` : ''}<button class="btn" data-act="pause">${D.daemon.paused ? icon('play') + 'Resume dispatch' : icon('pause') + 'Pause dispatch'}</button><a class="btn" href="#/workflows">${icon('play')}Run a workflow</a>` })}
         ${getStarted()}
         <div class="grid ov-top">
           <div class="panel attn">
