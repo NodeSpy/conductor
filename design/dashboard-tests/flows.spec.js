@@ -288,7 +288,7 @@ test.describe('updates, config history, raw editor, access', () => {
     await applyStaged(page);
     await go(page, '#/updates');
     await page.locator('[data-act="upd-apply"]').click(); await page.locator('#su-go').click();
-    await expect(page.locator('.page-head .sub')).toContainText('v0.72.0');
+    await expect(page.locator('.page-head')).toContainText('up to date (v0.72.0)');
   });
   test('revert one change keeps the later ones', async ({ page }) => {
     await go(page, '#/config');

@@ -123,6 +123,10 @@
   /** Show the chosen source in the field's menu button and close the menu. */
   VS.markSrc = (el, src, m) => { el.querySelectorAll('[data-act="vs-src"]').forEach((x) => { const on = x.dataset.v === src; x.classList.toggle('on', on); x.setAttribute('aria-pressed', on); x.setAttribute('aria-checked', on); });
     const sum = el.querySelector('.vs-srcbtn'); if (sum) { sum.innerHTML = srcBtn(src, !!m.sensitive); sum.setAttribute('aria-label', `Where ${m.label} comes from: ${SRCW(src, !!m.sensitive)[0]}`); } const d = el.querySelector('.vs-menu'); if (d) d.open = false; };
+  // the source menu is a popover: one open at a time; it closes on a click outside it and on Esc
+  document.addEventListener('toggle', (e) => { const d = e.target; if (!d.classList || !d.classList.contains('vs-menu') || !d.open) return; document.querySelectorAll('.vs-menu[open]').forEach((x) => { if (x !== d) x.open = false; }); }, true);
+  document.addEventListener('click', (e) => { document.querySelectorAll('.vs-menu[open]').forEach((d) => { if (!d.contains(e.target)) d.open = false; }); }, true);
+  document.addEventListener('keydown', (e) => { if (e.key !== 'Escape') return; const d = document.querySelector('.vs-menu[open]'); if (d) { d.open = false; e.preventDefault(); const s = d.querySelector('summary'); if (s) s.focus(); } }, true);
   UI.act('vs-src', (b) => {
     const el = b.closest('.vs'), m = meta(el), src = b.dataset.v; if (el.dataset.src === src) { VS.markSrc(el, src, m); return; }
     el.dataset.src = src; el.dataset.pending = '';

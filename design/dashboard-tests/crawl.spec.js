@@ -68,7 +68,7 @@ async function inject(page) {
         window.__obs.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true, attributeFilter: ['class', 'aria-pressed', 'aria-checked', 'aria-expanded', 'aria-disabled', 'style', 'open', 'value', 'hidden'] });
         return { url: location.href, ls: localStorage.getItem('cd-proto-state-v5') || '', theme: localStorage.getItem('cd-theme'), demo: localStorage.getItem('cd-demo') };
       },
-      overlay() { const d = document.querySelectorAll('.drawer-scrim'); if (d.length) return '.drawer-scrim .cdrawer'; const o = document.querySelector('#pop-menu, #scrim, .palette'); return o ? (o.id ? '#' + o.id : '.palette') : null; },
+      overlay() { if (document.querySelector('.vs-menu[open] .vs-pop')) return '.vs-menu[open] .vs-pop'; const d = document.querySelectorAll('.drawer-scrim'); if (d.length) return '.drawer-scrim .cdrawer'; const o = document.querySelector('#pop-menu, #scrim, .palette'); return o ? (o.id ? '#' + o.id : '.palette') : null; },
     };
   });
 }
