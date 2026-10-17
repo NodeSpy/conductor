@@ -269,3 +269,9 @@ em{font-family:var(--serif);font-style:italic;font-size:1.12em;letter-spacing:-.
 
 .dash.light .rv{color:#fff}
 .dash .ch span,.dash .crumbs,.dash .host,.dash .grp,.dash .rail em{color:var(--p-ink2)}
+
+/* AA fixes for the round-one dashboard mocks (found by tools/rendered-contrast.mjs) */
+.dash .search, .dash kbd { color: var(--p-ink2); }
+.dash.light .cell .run { color: #155f8a; }
+.dash.light .cell.alert, .dash.light .cell.alert b { color: #a33901; }
+.dash.light .rail em.hot { color: #fff; }

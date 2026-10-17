@@ -252,3 +252,4 @@
 /* text in tinted diff lines and selected cards keeps AA: inherit the line's own ink */
 .c-code .ln.add .n, .c-code .ln.add .m, .c-code .ln.del .n, .c-code .ln.del .m { color: inherit; }
 .c-choice.is-selected .tag { background: var(--color-bg-surface); }
+.c-vs-menu .opt.on span { color: var(--color-text-secondary); }
