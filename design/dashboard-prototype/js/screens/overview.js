@@ -65,11 +65,20 @@
       // marks that would sit on top of each other (a narrow phone track) are staggered above and below the line
       let lastAt = -99, flipUp = false;
       const order = loud.slice().sort((x, y) => pos(x[0]) - pos(y[0])), stagger = new Map(order.map((m) => { const p = pos(m[0]), near = p - lastAt < 7; lastAt = p; flipUp = near ? !flipUp : false; return [m, near ? (flipUp ? ' up' : ' down') : '']; }));
+      // a label never covers another mark: it takes the free side; if both sides are taken, the labelled mark rises
+      // above the line and the marks under its label drop below it
+      const side = new Map(), lift = new Map();
+      loud.forEach((mk) => { const P = pos(mk[0]), labelled = mk[2] === 'fail' || mk[2] === 'wait';
+        const under = (l) => loud.filter((o) => o !== mk && (l ? pos(o[0]) > P - 26 && pos(o[0]) <= P : pos(o[0]) >= P && pos(o[0]) < P + 26));
+        const blocked = (l) => under(l).length || (l ? P < 24 : P > 76);
+        let left = P > 70; if (labelled && blocked(left) && !blocked(!left)) left = !left;
+        else if (labelled && blocked(left)) { lift.set(mk, ' up'); under(left).forEach((o) => lift.set(o, ' down')); }
+        side.set(mk, left); });
       const marks = loud.map((mk) => { const [a, b, s, id] = mk, run = id && D.runs.find((r) => r.id === id);
         const say = s === 'run' ? 'running' : s === 'fail' ? `failed ${spanWords(b)}` : s === 'wait' ? 'waiting on you' : 'parked';
         const tip = `<b>${esc(l.lane)}</b> · ${MW[s] || s} · ${spanWords(a)}${run && run.repo ? `<br>${run.repo}#${run.number}` : ''}${id ? `<br><span class='mono'>${id}</span>` : ''}`;
         const inner = `${UI.laneMark(s)}${s === 'idle' ? '' : `<span class="mark-say">${say}</span>`}`;
-        const flip = (pos(a) > 70 ? ' flip' : '') + stagger.get(mk);
+        const flip = (side.get(mk) ? ' flip' : '') + (lift.get(mk) || stagger.get(mk));
         return id ? `<a class="mark${flip}" data-m="${s}" style="left:${pos(a)}%" href="#/${s === 'run' ? 'live' : 'runs'}/${id}" data-tip="${tip}" aria-label="${esc(l.lane)}: ${MW[s]} run ${id}">${inner}</a>` : `<span class="mark${flip}" data-m="${s}" style="left:${pos(a)}%" data-tip="${tip}" role="img" aria-label="${esc(l.lane)}: ${MW[s]}">${inner}</span>`; }).join('');
       return `<div class="lane${loud.some(([, , s]) => s === 'fail' || s === 'wait') ? ' loud' : ''}"><div class="lane-lbl"><div class="lane-name">${esc(l.lane)}</div>${fine ? `<span class="lane-n">${fine} fine</span>` : ''}</div><div class="lane-track">${strip}${marks}</div></div>`; }).join('');
     const legend = `<div class="lane-legend"><span data-m="ok"><i class="tick-key"></i>Passed</span>${['fail', 'run', 'wait', 'idle'].map((k) => `<span data-m="${k}">${UI.laneMark(k)}${{ fail: 'Failed', run: 'Running', wait: 'Waiting on you', idle: 'Parked' }[k]}</span>`).join('')}</div>`;

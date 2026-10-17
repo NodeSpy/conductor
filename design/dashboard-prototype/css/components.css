@@ -366,6 +366,9 @@ th.sel, td.sel { width: 30px; padding-right: 0 !important; }
 [data-density="compact"] .ftree .frow { min-height: 28px; padding-top: 2px; padding-bottom: 2px; }
 [data-density="compact"] .ftree .frow .fsub, [data-density="compact"] .ftree .frow .muted.small { display: none; }
 [data-density="compact"] .panel-head { padding-top: 8px; padding-bottom: 8px; }
+/* compact: a table row is one line; the reason line follows the title on the same line (desktop; phones stay comfortable) */
+[data-density="compact"] .tbl td.run-what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 0; }
+[data-density="compact"] .tbl td.run-what .why-line { display: inline; margin: 0 0 0 var(--space-2); }
 .more-row td { text-align: center; padding: 10px; }
 
 /* phone: scrolling tab rows fade at the edge; folded header actions */

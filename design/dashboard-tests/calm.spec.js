@@ -4,7 +4,8 @@
 //   - the answer sentence is first in reading order after the title, in primary ink, with a bold lead-in; on the
 //     Overview it is also the largest text in the content;
 //   - loudness: in the first viewport of the content, few things carry colour (a budget that grows with the number of
-//     exceptions on the day), and no row is a wall of text;
+//     exceptions on the day; a row counts once, however many marks identify it: kind, risk, environment, status),
+//     and no row is a wall of text (facts sit in columns; no single block of prose runs past ~140 characters);
 //   - on the all-quiet day the Overview says so in one line and draws no exception colour at all.
 const { test, expect, go } = require('./fixtures');
 
@@ -35,10 +36,11 @@ const loudness = () => {
     const r = el.getBoundingClientRect(); if (!r.width || !r.height || r.bottom < top || r.top > bottom) return;
     const cs = getComputedStyle(el); if (cs.visibility === 'hidden' || +cs.opacity < 0.1) return;
     const loud = sat(cs.color) > 0.45 && el.textContent.trim() || sat(cs.backgroundColor) > 0.45 || (el.tagName === 'svg' && (sat(cs.color) > 0.45)) || parseFloat(cs.boxShadow.match(/inset (\d+)px/) ? 1 : 0) && sat(cs.boxShadow) > 0.45;
-    if (!loud) return; const u = el.closest(UNIT) || el; units.add(u);
+    if (!loud) return; const u = el.closest('.xrow, .item, tbody tr, .dg-row, .lane, .grp-head') || el.closest(UNIT) || el; units.add(u);
   });
-  main.querySelectorAll('.item, tbody tr').forEach((row) => { const r = row.getBoundingClientRect(); if (!r.height || r.bottom < top || r.top > bottom) return; const t = row.innerText.replace(/\s+/g, ' ').trim(); if (t.length > 160) heavy.push(t.slice(0, 60)); });
-  return { loud: [...units].map((u) => `${u.tagName.toLowerCase()}.${String(u.className).split(' ')[0]} "${(u.textContent || '').trim().slice(0, 30)}"`), heavy, exceptions: (window.D.attention || []).length };
+  main.querySelectorAll('.item, .xrow, tbody tr').forEach((row) => { const r = row.getBoundingClientRect(); if (!r.height || r.bottom < top || r.top > bottom) return;
+    row.querySelectorAll('*').forEach((el) => { const own = [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').replace(/\s+/g, ' ').trim(); const t = own.length > 40 ? el.innerText.replace(/\s+/g, ' ').trim() : ''; if (t.length > 140) heavy.push(t.slice(0, 60)); }); });
+  return { loud: [...units].map((u) => `${u.tagName.toLowerCase()}.${String(u.getAttribute('class') || '').split(' ')[0]} "${(u.textContent || '').trim().slice(0, 30)}"`), heavy: [...new Set(heavy)], exceptions: (window.D.attention || []).length };
 };
 
 for (const [route, sel, rx] of ANSWERS) {

@@ -431,7 +431,7 @@ tr.folded { display: none; }
 }
 }
 .run-row .bar > i { background: var(--color-text-tertiary); }
-.lanes .mark.up { margin-top: -10px; } .lanes .mark.down { margin-top: 10px; }
+.lanes .mark.up { margin-top: -11px; z-index: 1; } .lanes .mark.down { margin-top: 11px; }
 .paused-note { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--gap-section); }
 .paused-note .btn { margin-left: auto; }
 /* information restored: the overview keeps the digest, figures, events and workflows in view */

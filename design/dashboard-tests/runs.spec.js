@@ -15,7 +15,7 @@ test('a failed run: what happened, what you can do, and an audit scoped to the r
   await expect(audit).toContainText('run_started');
   for (const other of ['p12', 'acme/api#480', 'pastebin', 'dashboard_session']) await expect(audit).not.toContainText(other);
   // the timeline has a time axis spanning the run
-  await expect(page.locator('.gt-axis span')).toHaveCount(5);
+  await expect(page.locator('.gt-axis span')).toHaveCount(4);
   await expect(page.locator('.gt-axis span').last()).toHaveText('12 min');
 });
 
@@ -67,6 +67,46 @@ test('compare two runs: step status, durations, and the outputs diff with word h
   // the picker lists other runs of the same workflow
   await go(page, '#/runs/r-7ef0/compare');
   await expect(page.locator('a[href="#/runs/r-7ef0/compare/r-7ea0"]')).toBeVisible();
+});
+
+test('run detail: one run per page, a labelled metadata line, Back to Activity keeps filters and scroll', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await go(page, '#/live', { fresh: true });
+  await page.locator('[data-act="act-span"][data-v="24h"]').click();
+  const span = '24h';
+  const top = await page.evaluate(() => { const m = document.getElementById('main'); m.scrollTop = 240; return m.scrollTop; });
+  expect(top).toBeGreaterThan(100);
+  await page.evaluate(() => { location.hash = '#/live/r-7f3a'; });
+  await expect(page).toHaveURL(/#\/live\/r-7f3a/);
+  // no run tabs: the page is one run, with a way back and a pager through the running runs
+  await expect(page.locator('.run-tabs, .page-head ~ .chips [href^="#/live/"]')).toHaveCount(0);
+  await expect(page.locator('.run-nav a', { hasText: 'Back to Activity' })).toBeVisible();
+  await expect(page.locator('.run-nav .pager')).toContainText(/1 of 3 running/);
+  // the metadata line is labelled, with human durations
+  const meta = page.locator('.meta-line');
+  for (const [label, value] of [['Started', /\d\d:\d\d \(\d+ min ago\)/], ['Running for', /\d+ min/], ['Run', 'r-7f3a'], ['Workflow', 'ci-fixer'], ['Check on', 'acme/api#482']]) {
+    await expect(meta.locator('.ml-i', { has: page.locator('dt', { hasText: new RegExp(`^${label}$`) }) }).locator('dd')).toHaveText(value);
+  }
+  // whole-run actions only: Stop run, marked on the risk ladder; no paseo link in the header
+  await expect(page.locator('.page-head [data-act="stop-run"]')).toBeVisible();
+  await expect(page.locator('.page-head .risk[data-risk="5"]')).toBeVisible();
+  await expect(page.locator('.page-head', { hasText: 'Open in paseo' })).toHaveCount(0);
+  // back: Activity as you left it
+  await page.locator('.run-nav a', { hasText: 'Back to Activity' }).click();
+  await expect(page).toHaveURL(/#\/live$/);
+  await expect.poll(() => page.evaluate(() => document.getElementById('main').scrollTop)).toBe(top);
+  await expect(page.locator(`[data-act="act-span"][data-v="${span}"]`)).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('Open in paseo is on the step with a live paseo session, never on a run without one', async ({ page }) => {
+  // ci-fixer's running step is a claude-cli agent: nothing to open in paseo anywhere on the page
+  await go(page, '#/live/r-7f3a', { fresh: true });
+  await expect(page.getByText('Open in paseo')).toHaveCount(0);
+  // the bot run's step works in paseo: the step says what opening it is for
+  await go(page, '#/live/r-7f29');
+  const open = page.locator('.paseo-open');
+  await expect(open).toContainText('Open in paseo');
+  await expect(open).toContainText('Watch or take over this agent’s conversation');
 });
 
 test('dismiss a failed run from Needs you; the record stays in history', async ({ page }) => {

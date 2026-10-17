@@ -399,7 +399,7 @@
     UI.toast(`${who} committed to ${esc(p)}`, dirty ? 'saving now will show a conflict' : 'load it to see the change', 'run');
   });
   /* New… : choose a kind; the path follows from it */
-  const newEntry = (r, k) => { openEntry(r, k, null); ev.mode = 'split'; rerender(); setTimeout(() => { const t = UI.$('#ke-title, #ke-what'); if (t) t.focus(); }, 30); };
+  const newEntry = (r, k) => { openEntry(r, k, null); ev.mode = 'split'; rerender(); setTimeout(() => { const t = UI.$('#ke-title, #ke-what'), a = document.activeElement; if (t && !(a && a.closest && a.closest('#ke-form'))) t.focus(); }, 30); }; // never steal focus from a field already being typed in
   UI.act('rp-new-kind', (b) => { const r = repoOf(b); guardThen(() => newEntry(r, kindById(r, b.dataset.k))); });
   UI.act('rp-new', (b) => {
     const r = repoOf(b);
