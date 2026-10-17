@@ -258,6 +258,16 @@ allowlisted page. Now:
 `login` opens `login_url` when the current page has nothing to fill (found by
 the e2e).
 
+**A sign-in runs only in that separate browser.** Found live, with a real
+agent: a `login` with no page open ran in the anonymous browser. `pick` had
+no target to route by, and `login` then navigated to the sign-in page inside
+whatever browser was open. Now:
+- a `login` from no page (or from the anonymous browser) is routed by the
+  credential's own sign-in page;
+- `login` and `fill-credential` refuse in any browser but the logged-in one,
+  so an anonymous browser that reached the credential's origin (say, by an
+  open redirect on another allowlisted site) gets no fill.
+
 What happens after a fill, in that browser:
 - **Replies are scrubbed.** Every filled password and code is replaced in
   every reply (snapshots, titles, URLs, tab lists, downloads, dialogs) and in

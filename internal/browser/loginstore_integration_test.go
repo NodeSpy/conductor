@@ -57,8 +57,12 @@ func TestCredentialStoredLoginBindingAndRevoke(t *testing.T) {
 	stranger := r.caller("k-stranger", RequesterOperator)
 	stranger.Identity = "agent:other@acme/app"
 
-	r.do(bot, "open", map[string]any{"url": r.bound + "/"})
+	// No page open: the sign-in still starts in the separate, narrowed
+	// browser (found live: it ran in the anonymous one).
 	out := r.do(bot, "login", map[string]any{"credential": "stored"})
+	if p, _ := out["profile"].(string); !strings.Contains(p, "logged-in browser") {
+		t.Fatalf("a sign-in from no page ran in %q", p)
+	}
 	if got := r.site.SignIns(); len(got) != 1 {
 		t.Fatalf("sign-ins: %v (%v)", got, out)
 	}
@@ -75,6 +79,17 @@ func TestCredentialStoredLoginBindingAndRevoke(t *testing.T) {
 	snap := r.do(lk, "snapshot", nil)["snapshot"].(string)
 	ref := refOf(t, snap, "Password")
 	r.refused(lk, "fill-credential", map[string]any{"credential": "stored", "ref": ref, "field": "password"}, "not the credential's")
+
+	// The anonymous browser landed on the credential's own origin (an open
+	// redirect on another allowlisted origin): no fill there.
+	an := r.caller("k-anon-redirect", RequesterOperator)
+	an.Groups = []string{"bot:helper"}
+	landed := r.do(an, "open", map[string]any{"url": r.alike + "/out?to=" + r.bound + "/login"})
+	if p, _ := landed["profile"].(string); !strings.Contains(p, "anonymous") || !strings.HasPrefix(landed["url"].(string), r.bound) {
+		t.Fatalf("want the anonymous browser on the credential's origin: %v", landed)
+	}
+	snap = r.do(an, "snapshot", nil)["snapshot"].(string)
+	r.refused(an, "fill-credential", map[string]any{"credential": "stored", "ref": refOf(t, snap, "Password"), "field": "password"}, "only in the separate")
 
 	// A non-operator request is refused whatever the binding.
 	ev := r.caller("k-event", "event")

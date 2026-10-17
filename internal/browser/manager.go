@@ -774,7 +774,21 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 			}
 		}
 	}
-	in, err := m.pick(ctx, s, c, st, granted, target)
+	route := target
+	if action == "login" && route == "" && (s.active == nil || s.active != s.login || isDone(s.active)) {
+		// A sign-in starts in the separate, narrowed browser: routed by the
+		// credential's own sign-in page, never in whatever browser is open
+		// (found live: a login with no page open ran in the anonymous one).
+		for _, cr := range st.Credentials {
+			if cr.Name == str("credential") {
+				route = cr.LoginURL
+				if route == "" && len(cr.AllOrigins()) > 0 {
+					route = cr.AllOrigins()[0]
+				}
+			}
+		}
+	}
+	in, err := m.pick(ctx, s, c, st, granted, route)
 	if err != nil {
 		return nil, err
 	}
@@ -960,6 +974,12 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 			return nil, err
 		}
 		entry["origin"] = o.String()
+		// A credential fills only in the separate browser narrowed to its
+		// hosts, never beside an untrusted page.
+		notLogin := refuse("a credential is filled only in the separate, logged-in browser — open its sign-in page first (conductor browser open %s), or login --credential %s from no page", o.browserOrigin(), name)
+		if action == "login" && in != s.login {
+			return nil, notLogin
+		}
 		allow := allowFor(c, st)
 		if in == s.login {
 			allow = loginAllow(allow, s.sites, st)
@@ -980,6 +1000,9 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 		fr, err := m.checkPage(ctx, in, t, o, allow)
 		if err != nil {
 			return nil, err
+		}
+		if in != s.login {
+			return nil, notLogin
 		}
 		id, err := in.node(t, ref)
 		if err != nil {
