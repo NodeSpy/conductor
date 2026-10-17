@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { DIRS, RECOMMENDED } from './directions.mjs';
+import { LOGOS } from './logos.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_PATH || 'playwright');
@@ -64,6 +65,7 @@ async function shoot(html, w, h, out, transparent = true) {
 
 for (const dir of DIRS) {
   if (only && dir.id !== only) continue;
+  if (only === 'kits') continue;
   const d = path.join(root, 'directions', dir.id);
   for (const s of [16, 32, 48]) await shoot(imgHTML(svgFile(dir.id, 'favicon16-light'), s, s), s, s, path.join(d, `favicon-${s}.png`));
   await shoot(imgHTML(svgFile(dir.id, 'app-icon-dark'), 512, 512), 512, 512, path.join(d, 'app-icon-512.png'));
@@ -81,5 +83,17 @@ if (!only || only === RECOMMENDED) {
   for (const s of [192, 512]) await shoot(imgHTML(svgFile(id, 'app-icon-dark'), s, s), s, s, path.join(a, `icon-${s}.png`));
   fs.copyFileSync(path.join(root, 'directions', id, 'social-card.png'), path.join(a, 'social-card.png'));
   console.log('assets ok');
+}
+// PNGs for every logo kit.
+for (const dir of LOGOS) {
+  if (only && only !== 'kits' && only !== dir.id) continue;
+  const kit = path.join(root, 'logo-kits', dir.id), f = (n) => path.join(kit, n + '.svg');
+  for (const s of [16, 32, 48]) {
+    await shoot(imgHTML(f('favicon16-light'), s, s), s, s, path.join(kit, `favicon-${s}.png`));
+    await shoot(imgHTML(f('favicon16-dark'), s, s), s, s, path.join(kit, `favicon-${s}-dark.png`));
+  }
+  await shoot(imgHTML(f('apple-touch-icon'), 180, 180), 180, 180, path.join(kit, 'apple-touch-icon.png'), false);
+  for (const s of [192, 512]) await shoot(imgHTML(f('app-icon'), s, s), s, s, path.join(kit, `icon-${s}.png`));
+  console.log('kit', dir.id, 'ok');
 }
 await b.close();
