@@ -2,8 +2,11 @@
  * forms and sheets, menus, editors, diffs, disabled-with-reason controls. */
 
 /* disabled with a reason (aria-disabled keeps the tooltip working) */
-.btn[aria-disabled="true"], .icon-btn[aria-disabled="true"], .seg button[aria-disabled="true"], .chipsel[aria-disabled="true"], .menu button[aria-disabled="true"], a[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
-.btn[aria-disabled="true"]:hover { background: inherit; }
+/* disabled, per the book's Buttons sheet: the disabled tokens at full opacity (a pale accent read as clickable); a
+   disabled control keeps its reason, shown on hover, focus or tap */
+.btn[aria-disabled="true"], .btn[aria-disabled="true"]:hover { background: var(--button-disabled-bg); color: var(--button-disabled-fg); border-color: var(--button-disabled-border); box-shadow: none; opacity: 1; cursor: not-allowed; }
+.btn[aria-disabled="true"] svg { color: var(--button-disabled-fg); }
+.icon-btn[aria-disabled="true"], .seg button[aria-disabled="true"], .chipsel[aria-disabled="true"], .menu button[aria-disabled="true"], a[aria-disabled="true"]:not(.btn) { color: var(--color-text-disabled); opacity: 1; cursor: not-allowed; }
 .reason-flash { z-index: var(--z-tooltip); max-width: 280px; }
 .link { color: var(--color-text-accent); border-bottom: 1px dotted color-mix(in srgb, var(--color-accent-default) 50%, transparent); }
 .link:hover { border-bottom-style: solid; }

@@ -42,7 +42,7 @@
       ${bulk ? `<td class="sel" data-l=""><input type="checkbox" class="cbx" data-act="wl-sel" data-name="${esc(w.name)}" aria-label="Select ${esc(w.name)}"${UI.wlSel.has(w.name) ? ' checked' : ''}></td>` : ''}<td data-l="workflow"><a class="link-plain" href="#/workflows/${w.name}"><b>${w.name}</b></a> ${w.kind === 'workflow' ? tag('callable') : ''}${d ? tag('draft', 'wait') : ''}${st2 ? tag(st2.before == null ? 'new · staged' : 'edit staged', 'run') : ''}</td>
       <td data-l="on" class="small dim${UI.humanOn(w.on) === (w.on || '') ? ' mono' : ''}">${esc(UI.humanOn(w.on))}</td>
       <td data-l="folder">${r.folder ? `<a class="small link-plain folder-link muted" href="#/folders/${enc(r.folder)}/workflows">${esc(r.folder)}</a>` : '<span class="muted small">top level</span>'}</td>
-      <td data-l="owner">${UI.label(esc(String(OWNER[r.owner](w)).replace(/<[^>]+>/g, '')), { cls: 'owner ' + (r.owner === 'config' ? 'op' : 'pack') })}</td>
+      <td data-l="owner">${UI.label(esc(UI.plainText(OWNER[r.owner](w))), { cls: 'owner ' + (r.owner === 'config' ? 'op' : 'pack') })}</td>
       <td data-l="last 24 hours" class="num">${w.fail24 ? `${UI.statusMark('fail', `${w.fail24} failed`)} <span class="muted">of ${w.runs24}</span>` : `<span class="muted">${w.runs24 ? `${w.runs24} run${w.runs24 === 1 ? '' : 's'}` : 'no runs'}</span>`}</td>${UI.usageOn() ? `<td data-l="usage" class="small">${UI.provSet(UI.wfProv(w.name), { nosrc: true })}</td>` : ''}
       <td class="num nowrap wl-acts">${w.fresh ? '' : `<button class="btn sm ghost" data-act="wf-run" data-name="${w.name}">${icon('play')}Run</button>`}<button class="icon-btn" data-act="wl-more" data-name="${esc(w.name)}" aria-label="More for ${esc(w.name)}">${icon('more')}</button></td></tr>`; }).join('')}
     <tr class="empty-row${rows.some(vis) ? ' hidden' : ''}" id="${opts.folder != null ? 'fwl-empty' : 'wl-empty'}"><td colspan="9">No workflow matches.</td></tr></tbody></table></div>`;
@@ -50,7 +50,7 @@
   function folderNav(rows) {
     const fs = UI.allFolders().filter((f) => rows.some((r) => within(r.folder, f)));
     const item = (key, label, depth, rs) => { const ws = rs.map((r) => r.w), wr = UI.wfRoll(ws); return `<a href="#" class="wfn${wl.folder === key ? ' on' : ''}" data-act="wl-folder" data-f="${esc(key)}" ${key && key !== '__top__' ? `data-wf-drop="${esc(key)}"` : key === '__top__' ? 'data-wf-drop=""' : ''} style="--d:${depth}" aria-current="${wl.folder === key}">${icon(key ? 'folder' : 'workflows')}<span class="wfn-name"><span class="ellipsis" title="${esc(key && key !== '__top__' ? key : label)}">${esc(label)}</span>${wr.failing ? `<span class="wfn-roll"><b class="danger-text">${wr.failing} failing</b></span>` : ''}</span>${UI.count(wr.n)}</a>`; };
-    return `<div class="panel-head"><h3>Folders</h3><a class="link tiny" href="#/bots">shared with bots</a></div><div class="wfn-list">${item('', 'All workflows', 0, rows)}${fs.map((f) => item(f, f.split('/').pop(), f.split('/').length, rows.filter((r) => within(r.folder, f)))).join('')}${rows.some((r) => !r.folder) ? item('__top__', 'Top level', 1, rows.filter((r) => !r.folder)) : ''}</div><div class="panel-foot tiny muted">Drag a workflow onto a folder, or use Move to…. Pack workflows sit under their pack until you place them.</div>`;
+    return `<div class="panel-head"><h3>Folders</h3><a class="link tiny" href="#/bots">shared with bots</a></div><div class="wfn-list">${item('', 'All workflows', 0, rows)}${fs.map((f) => item(f, f.split('/').pop(), f.split('/').length, rows.filter((r) => within(r.folder, f)))).join('')}${rows.some((r) => !r.folder) ? item('__top__', 'Top level', 1, rows.filter((r) => !r.folder)) : ''}</div><div class="panel-foot tiny muted">Drag a workflow onto a folder, or use Move to… in its menu. Pack workflows sit under their pack until you place them.</div>`;
   }
   UI.route('workflows', () => {
     const rows = wfRows();
@@ -246,7 +246,7 @@
       <div class="sc-head" role="button" tabindex="0" data-act="wf-toggle" data-id="$trigger" aria-expanded="${open}">
         <span class="wl">${icon(reusable ? 'link' : 'zap')}${reusable ? 'Called' : 'When'}</span>
         <div class="grow"><b>${reusable ? esc(sum) : esc(whenWords(srcs))}</b> <span class="dl-sub">${esc(filterWords(v.filter))}</span></div>
-        ${iss.some((i) => !i.todo) ? UI.statusMark('fail', `${iss.filter((i) => !i.todo).length}`, { cls: 'tpill fail', sm: true }) : iss.length ? UI.statusMark('idle', `to do`, { cls: 'tpill todo', sm: true }) : evs ? UI.statusMark('ok', `${esc(evs.label.split(' · ')[0])}`, { cls: 'tpill ok', tip: 'Test event', sm: true }) : ''}
+        ${(() => { const n = iss.filter((i) => !i.todo).length; return n ? UI.statusMark('fail', `${n} error${n === 1 ? '' : 's'}`, { sm: true }) : iss.length ? `<span class="dl-sub">${iss.length} to do</span>` : evs ? `<span class="dl-sub">test event: ${esc(evs.label.split(' · ')[0])}</span>` : ''; })()}
         <span class="chev">${icon(open ? 'chevd' : 'chev')}</span></div>
       ${open ? `<div class="sc-body">${iss.map((i) => i.todo ? `<div class="callout small todo">${icon('dot')} ${esc(i.todo)}</div>` : `<div class="callout danger small">${esc(i.msg)}</div>`).join('')}
         ${!srcs.length && !reusable ? `<div class="empty small"><span class="serif">What starts this workflow?</span>An event from a connector, a schedule, or a manual run.<button class="btn primary" style="margin-top:8px" ${ro ? UI.off(ro) : 'data-act="wf-trig-pick"'}>${icon('plus')}Choose a trigger</button></div>` : ''}
@@ -447,7 +447,8 @@
       return kids ? `<div class="dnode">${leaf}<div class="dkids">${tree(v, p, depth + 1, insertTarget)}</div></div>` : leaf; }).join('')}</div>`;
   }
 
-  function badges(id) { const all = issuesFor(id), iss = all.filter((i) => !i.todo), td = all.filter((i) => i.todo), er = iss.filter((i) => i.level === 'error').length, wr = iss.filter((i) => i.level === 'warn').length; if (!er && !wr && td.length) return UI.statusMark('idle', `to do ${td.length}`, { cls: 'tpill todo', tip: td.map((i) => i.todo).join(' · '), sm: true }); return er ? UI.statusMark('fail', `${er}`, { cls: 'tpill fail', tip: iss.find((i) => i.level === 'error').msg, sm: true }) : wr ? UI.statusMark('wait', `${wr}`, { cls: 'tpill warn', tip: iss[0].msg, sm: true }) : ''; }
+  // a step's issues in words: "2 errors" with the failed mark, "1 warning" with the waiting mark, "1 to do" as plain text
+  function badges(id) { const all = issuesFor(id), iss = all.filter((i) => !i.todo), td = all.filter((i) => i.todo), er = iss.filter((i) => i.level === 'error').length, wr = iss.filter((i) => i.level === 'warn').length; if (!er && !wr && td.length) return `<span class="dl-sub" title="${esc(td.map((i) => i.todo).join(' · '))}">${td.length} to do</span>`; return er ? UI.statusMark('fail', `${er} error${er === 1 ? '' : 's'}`, { tip: iss.find((i) => i.level === 'error').msg, sm: true }) : wr ? UI.statusMark('wait', `${wr} warning${wr === 1 ? '' : 's'}`, { tip: iss[0].msg, sm: true }) : ''; }
   function stepCard(e, loc, num) {
     const s = e.step, k = e.kind, kc = KC(k), id = e.id, open = B.open.has(id), ro = readOnly();
     const iss = issuesFor(id), r = s && s.id && B.tests[s.id];
@@ -697,7 +698,7 @@
       let newId;
       mutate((v) => { const list = WF.at(v, loc); if (!Array.isArray(list)) { if (loc.length === 1) v.steps = []; } const L = WF.at(v, loc) || (v.steps = []); const node = makeStep(v, item); newId = node.id || null; L.splice(i, 0, node); });
       if (newId) { B.open.add(newId); B.sel = newId; drawList(); const c = document.getElementById('card-' + newId); if (c) { c.scrollIntoView({ block: 'center' }); c.classList.add('just-added'); } }
-      if (item.notInstalled) UI.toast(`${esc(item.sub.split(' · ')[0])} needs a plugin`, 'add the connector in Connectors & hosts; the validator flags it until then', 'wait');
+      if (item.notInstalled) UI.toast(`${esc(item.sub.split(' · ')[0])} needs a plugin`, 'add the connector in Connections; the validator flags it until then', 'wait');
     }, { inBranch: loc.length > 1 });
   });
   UI.act('wf-br-add', (b) => { const loc = locOf(b.dataset.loc); let nid; mutate((v) => { const g = WF.at(v, loc); nid = uniqueId(v, 'branch-' + 'abcdefgh'[g.parallel.length]); g.parallel.push([{ id: nid, log: 'new branch' }]); }); if (nid) { B.open.add(nid); drawList(); } });

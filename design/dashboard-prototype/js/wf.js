@@ -18,7 +18,7 @@
   // a step's kind is told by its icon and word, in ink; colour is kept for status (a fail step is the only red one)
   WF.KINDS = {
     agent: { icon: 'sparkle', label: 'Agent', color: 'var(--color-icon-default)' }, code: { icon: 'code', label: 'Code', color: 'var(--color-icon-default)' },
-    decide: { icon: 'diamond', label: 'Decide', color: 'var(--color-icon-default)' }, ask: { icon: 'hand', label: 'Hand-off', color: 'var(--color-icon-default)' },
+    decide: { icon: 'obj-question', label: 'Decide', color: 'var(--color-icon-default)' }, ask: { icon: 'hand', label: 'Hand-off', color: 'var(--color-icon-default)' },
     verb: { icon: 'zap', label: 'Action', color: 'var(--color-icon-default)' }, call: { icon: 'link', label: 'Call', color: 'var(--color-icon-default)' },
     wait: { icon: 'clock', label: 'Wait', color: 'var(--color-icon-default)' }, log: { icon: 'logs', label: 'Log', color: 'var(--color-icon-default)' },
     set: { icon: 'edit', label: 'Set', color: 'var(--color-icon-default)' }, assert: { icon: 'check', label: 'Assert', color: 'var(--color-icon-default)' },

@@ -92,7 +92,7 @@
   };
 
   /* ---------- single-key shortcuts ---------- */
-  const KEYS = [['⌘K / Ctrl K', 'command line: find anything, run actions'], ['?', 'this sheet'], ['/', 'focus the page\'s search or filter'], ['g h', 'Home'], ['g a', 'Needs you'], ['g r', 'Activity (every run)'], ['g w', 'Workflows'], ['g b', 'Bots'], ['g c', 'Config'], ['g s', 'Secrets & vars'], ['j / k', 'next / previous row in a list'], ['Enter', 'open the selected row'], ['x', 'tick the selected row (bulk select)'], ['Esc', 'close a dialog, drawer or menu']];
+  const KEYS = [['⌘K / Ctrl K', 'command line: find anything, run actions'], ['?', 'this sheet'], ['/', 'focus the page\'s search or filter'], ['g h', 'Home'], ['g a', 'Needs you'], ['g r', 'Activity (every run)'], ['g w', 'Workflows'], ['g b', 'Bots'], ['g c', 'Config'], ['g s', 'Secrets'], ['j / k', 'next / previous row in a list'], ['Enter', 'open the selected row'], ['x', 'tick the selected row (bulk select)'], ['Esc', 'close a dialog, drawer or menu']];
   UI.shortcuts = () => UI.modal(`<div class="modal-head"><div><div class="caps">help</div><h2>Keyboard shortcuts</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div><div class="modal-body"><dl class="gloss keys">${KEYS.map(([k, d]) => `<div><dt><span class="kbd">${esc(k)}</span></dt><dd>${esc(d)}</dd></div>`).join('')}</dl></div>`);
   const GO = { h: 'overview', o: 'overview', l: 'activity', a: 'attention', r: 'activity', w: 'workflows', b: 'bots', c: 'config', s: 'secrets' };
   let gAt = 0, kSel = -1;

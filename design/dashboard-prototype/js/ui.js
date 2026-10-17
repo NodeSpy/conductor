@@ -17,6 +17,8 @@
   /** A folder name: any letters or digits (Ü included), then spaces, . _ -; never "..", at most 48 characters. */
   UI.FOLDER_SEG = /^(?!.*\.\.)[\p{L}\p{N}][\p{L}\p{N} ._-]{0,47}$/u;
   UI.folderPathErr = (p) => (!p ? '' : p.split('/').every((x) => UI.FOLDER_SEG.test(x)) ? '' : 'Folder names are letters, digits, spaces, . _ and - (up to 48 each, no ".."), separated by /');
+  /** The text of a bit of markup (a glossary term's tooltip and attributes never leak into a cell). */
+  UI.plainText = (html) => { const d = document.createElement('div'); d.innerHTML = String(html); d.querySelectorAll('[data-tip]').forEach((x) => x.removeAttribute('data-tip')); return d.textContent; };
   UI.esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
   /* ---------- icons: Lucide at a 1.75 stroke (js/icons.js); status glyphs are Daylight's own ---------- */
@@ -103,6 +105,8 @@
   UI.clock = (iso) => new Date(iso).toTimeString().slice(0, 8);
   /* human times: "52 min ago (17:03)"; the exact local time (and UTC) on hover */
   UI.agoText = (iso) => { const s = (Date.now() - new Date(iso)) / 1000; if (s < 60) return 'just now'; if (s < 3600) return `${s / 60 | 0} min ago`; if (s < 86400) { const h = s / 3600 | 0; return `${h} h ago`; } const d = s / 86400 | 0; return d === 1 ? 'yesterday' : `${d} days ago`; };
+  /** A date and time in the one format the dashboard uses: "Oct 17, 21:07" (24-hour, local). */
+  UI.dateTime = (iso) => { const d = new Date(iso); return `${d.toLocaleString('en', { month: 'short' })} ${d.getDate()}, ${d.toTimeString().slice(0, 5)}`; };
   UI.hm = (iso) => new Date(iso).toTimeString().slice(0, 5);
   UI.when = (iso, withClock = false) => { const d = new Date(iso); return `<time datetime="${d.toISOString()}">${UI.agoText(iso)}${withClock ? ` <span class="muted">(${UI.hm(iso)})</span>` : ''}</time>`; };
   /** "7m" / "1h" / "3d" (the fake data's short ages) → "7 min ago" */
@@ -570,6 +574,8 @@
     const firstItem = menuItems()[0]; if (firstItem) firstItem.focus({ preventScroll: true });
   };
 
+  /** A field's label: its own, else its key in sentence case with the usual acronyms (app_id → "App ID"). */
+  UI.fieldLabel = (fd) => fd.label || fd.k.split('.').pop().replace(/^set__/, '').replace(/_/g, ' ').replace(/\b(id|url|api|ssh|otp|tls|sha|uri|dns|ip)\b/gi, (x) => x.toUpperCase()).replace(/^./, (c) => c.toUpperCase());
   /* ---------- generated forms ----------
    * UI.form({ caps, title, intro, fields, values, submit, onSubmit, wide, side })
    * fields: { k, label, type, req, options, help, ph, def, show(values), validate(v, values) }
@@ -580,7 +586,7 @@
   UI.createOpt = (fd) => (fd.create ? `<option value="__new__">+ ${UI.esc(fd.createLabel || 'New ' + fd.create)}…</option>` : '');
   UI.pickerAttrs = (fd) => (fd.create ? `data-picker="${fd.create}" data-ctx='${UI.esc(JSON.stringify(fd.createCtx || {}))}' data-ret="${fd.ret || 'name'}"` : '');
   UI.fieldHTML = (fd, v, pre = 'f-') => {
-    const id = fieldId(fd.k, pre), lbl = fd.label || fd.k.split('.').pop().replace(/_/g, ' ');
+    const id = fieldId(fd.k, pre), lbl = UI.fieldLabel(fd);
     const req = fd.req ? '<span class="req" aria-label="required">*</span>' : '<span class="opt">optional</span>';
     const help = fd.help ? `<div class="hint">${UI.ph(fd.help)}</div>` : '';
     const val = v == null ? '' : v;
@@ -692,7 +698,7 @@
   /* phone polish after every render: tab rows that scroll show a fade and keep the current tab in view;
      page-head actions beyond the first two fold into a ⋯ menu (the originals stay, hidden, and get the click) */
   UI.afterRender.push((main) => {
-    main.querySelectorAll('.tabs').forEach((t) => { const upd = () => { t.classList.toggle('scrolls', t.scrollWidth > t.clientWidth + 2); t.classList.toggle('at-end', t.scrollLeft + t.clientWidth >= t.scrollWidth - 2); }; const on = t.querySelector('.on'); if (on && t.scrollWidth > t.clientWidth) t.scrollLeft = Math.max(0, on.offsetLeft - t.clientWidth / 2 + on.offsetWidth / 2); upd(); t.addEventListener('scroll', upd, { passive: true }); });
+    main.querySelectorAll('.tabs, .dl-tabs').forEach((t) => { const upd = () => { t.classList.toggle('scrolls', t.scrollWidth > t.clientWidth + 2); t.classList.toggle('at-end', t.scrollLeft + t.clientWidth >= t.scrollWidth - 2); }; const on = t.querySelector('.on'); if (on && t.scrollWidth > t.clientWidth) t.scrollLeft = Math.max(0, on.offsetLeft - t.clientWidth / 2 + on.offsetWidth / 2); upd(); t.addEventListener('scroll', upd, { passive: true }); });
     if (innerWidth > 720) return;
     main.querySelectorAll('.page-head .actions, .bot-hero > .row.wrap').forEach((box) => { const btns = [...box.children].filter((x) => x.matches('.btn, a.btn') && !x.classList.contains('st')); if (btns.length <= 2) return;
       const keep = btns.filter((x) => x.classList.contains('primary')).slice(0, 1); btns.forEach((x) => { if (keep.length < 2 && !keep.includes(x)) keep.push(x); }); const extra = btns.filter((x) => !keep.includes(x));

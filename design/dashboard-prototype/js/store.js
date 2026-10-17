@@ -551,7 +551,8 @@
   /* ---------- apply / history ---------- */
   S.apply = (who = 'ops (dashboard)') => {
     const P = window.D.pending; if (!P.length) return null;
-    const id = 'cfg-' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '').replace(/^(\d{8})/, '$1-');
+    // the backup id reads in local time, like every time beside it
+    const n = new Date(), p2 = (x) => String(x).padStart(2, '0'), id = `cfg-${n.getFullYear()}${p2(n.getMonth() + 1)}${p2(n.getDate())}-${p2(n.getHours())}${p2(n.getMinutes())}`;
     P.forEach((c) => C[c.coll].set(c.key, clone(c.after)));
     window.D.configHistory.forEach((h) => (h.status = 'backup'));
     const summary = P.length === 1 ? P[0].summary : `${P.length} changes: ${P.map((c) => C[c.coll].path(c.key)).slice(0, 3).join(', ')}${P.length > 3 ? '…' : ''}`;

@@ -16,7 +16,7 @@
     D.audit.unshift({ ts: now(), event: 'run_retry', who: 'operator:ops', detail: `${id} · retry_of ${r.id} · from ${b.dataset.from}`, run: id }); S.save(); UI.refreshChrome(); UI.go('#/runs/' + id); UI.toast(`Restarted ${b.dataset.from}`, `${r.id} stopped · ${id} running`, 'run'); }); });
   UI.act('retry', (b) => {
     const r = D.runs.find((x) => x.id === b.dataset.run), steps = graphOf(r);
-    UI.form({ caps: 'retry-from-step', title: `Retry ${r.id}`, intro: 'Re-runs the pinned trigger. Steps before the chosen one are replayed from their recorded outputs; nothing they did is repeated.',
+    UI.form({ caps: `${esc(r.workflow.replace(/^bot:/, ''))}${r.repo ? ' on ' + UI.runTarget(r) : ''}`, title: 'Retry from a step', intro: 'Re-runs the pinned trigger. Steps before the chosen one are replayed from their recorded outputs; nothing they did is repeated.',
       fields: [{ k: 'from', type: 'enum', label: 'Resume from', req: true, options: steps.map((s) => [s.id, s.id + (s.id === (r.failed_step || b.dataset.from) ? ' (selected)' : '')]).concat([['$start', 'the beginning']]), def: b.dataset.from || r.failed_step || (steps[0] || {}).id }, { k: 'force', type: 'bool', label: 'Force replay', on: 'also re-run steps that already succeeded' }],
       submit: 'Retry', submitIcon: 'play',
       onSubmit: (v) => {
@@ -54,7 +54,7 @@
     const e = UI.plainError ? UI.plainError(r) : r.error || ''; return `${r.failed_step ? `Failed at “${esc(r.failed_step)}”` : 'Failed'}${e ? `: ${esc(e)}` : ''}${/\.$/.test(e) ? '' : '.'}`; };
   const runName = (r) => `<b>${esc(r.workflow.replace(/^bot:/, ''))}</b> <span class="tgt">${target(r)}</span>`;
   const statusCell = (r) => UI.statusMark(UI.runS(r.status), UI.runWord(r.status));
-  const actBtn = (r) => (r.status === 'wait' ? `<a class="btn sm primary" href="#/runs/${r.id}">Answer</a>` : `<a class="btn sm secondary" href="#/runs/${r.id}">Open</a>`);
+  const actBtn = (r) => (r.status === 'wait' ? `<a class="btn sm secondary" href="#/runs/${r.id}">Answer</a>` : `<a class="btn sm secondary" href="#/runs/${r.id}">Open</a>`);
   const edge = (r) => (r.status === 'wait' ? 'ember' : 'fail');
   const cbx = (r) => `<input type="checkbox" class="cbx" data-act="act-sel-row" data-id="${r.id}" aria-label="Select ${esc(r.workflow)} ${r.id}"${av.sel.has(r.id) ? ' checked' : ''}>`;
   function groups() {

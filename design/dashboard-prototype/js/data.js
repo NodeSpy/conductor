@@ -154,7 +154,7 @@
     { who: 'tool', at: m(47), text: 'conductor bot spawn --case c29 --group recon --read-only "p99 by route, last 60m"' },
     { who: 'tool', at: m(46), text: 'conductor bot spawn --case c29 --group recon --read-only "deploys + config changes, last 3h"' },
     { who: 'bot', at: m(31), text: 'Both workers reported. The regression lines up with **web** instances on the old AMI after the 14:02 scale-out; routes `/checkout` and `/refund` are the slow ones. The fix is in `infra` commit `3f2a9c1d`: it pins the launch template to the current AMI and replaces `aws_instance.web`.' },
-    { who: 'bot', at: m(8), text: 'I proposed **p12**: `terraform apply` of infra@3f2a9c1d, dir envs/prod, workspace prod. Conductor planned it: +1 ~2 -0, and it **replaces aws_instance.web**. Awaiting your approval.' },
+    { who: 'bot', at: m(8), text: 'I proposed **p12**: `terraform apply` of infra@3f2a9c1d, dir envs/prod, workspace prod. conductor planned it: +1 ~2 -0, and it **replaces aws_instance.web**. Awaiting your approval.' },
     { who: 'op', at: m(5), text: 'What happens to in-flight requests on web while it’s replaced?' },
     { who: 'bot', at: m(4), text: 'The ALB drains the old target for 30s (deregistration_delay in `modules/web/alb.tf`); create_before_destroy is set, so the new instance is healthy before the old one goes. Expect no dropped requests; a brief p99 bump during the swap.' },
   ];
@@ -266,7 +266,7 @@ Primary Postgres for the platform services (acme/api, acme/web).
 
   /* ---------- secrets & vars ---------- */
   D.vaults = [
-    { name: 'house', type: 'conductor', status: 'unlocked', detail: 'vault.json · entries encrypted · unlock: creds:', writable: true, count: 14 },
+    { name: 'house', type: 'conductor', status: 'unlocked', detail: 'vault.json · entries encrypted · unlocked by the systemd credential house', writable: true, count: 14 },
     { name: 'op', type: 'onepassword', status: 'ok', detail: 'service account · account acme', writable: false, count: null },
     { name: 'store', type: 'pass', status: 'ok', detail: 'GPG · prefix conductor', writable: true, count: 6 },
     { name: 'hcv', type: 'hashicorp', status: 'fail', detail: 'KV v2 · token expired 2h ago', writable: true, count: null },
@@ -303,7 +303,7 @@ Primary Postgres for the platform services (acme/api, acme/web).
     { name: 'js', kind: 'engine', ver: 'v0.3.1', src: 'conductor-plugins/js', status: 'ok', instances: ['run: js'], reload: 'in place', update: null },
   ];
   D.releases = [
-    { v: 'v0.72.0', date: '2026-10-16', notes: ['Bots: proactive sweeps report cost from run history', 'Browser: per-identity evaluate', 'Fix: a paused daemon still rotated bot sessions'], preflight: 'passed', current: false },
+    { v: 'v0.72.0', date: '2026-10-16', notes: ['Bots: proactive sweeps report cost in Activity', 'Browser: per-identity evaluate', 'Fix: a paused daemon still rotated bot sessions'], preflight: 'passed', current: false },
     { v: 'v0.71.2', date: '2026-10-12', notes: ['Reclaim a checkout:none run’s workspace when its launch fails'], current: true },
     { v: 'v0.71.1', date: '2026-10-09', notes: ['Remove a run’s directory when its workspace is reclaimed'], current: false },
   ];
