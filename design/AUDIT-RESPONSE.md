@@ -157,10 +157,9 @@ busy"), the information design went exception-first (`docs/design/dashboard.md` 
 - **Status badges**: replaced by margin marks (glyph + word, no capsule, a leading edge only on rows that need
   someone), drawn only by the shared helpers so the brand's final status system swaps in one place; one state has
   one look across the app, running in ink (`status.spec.js`).
-- **Risk at a glance** (follows Sam M6 and the review after the calm pass): every action that changes something
-  carries a rung of the risk ladder and, where it lands somewhere, an environment tag: approvals, proposals, Needs
-  you, activity rows, run headers, workflow steps, the step picker and each bot's "what it can do". Ids under titles
-  are labelled (`UI.metaLine`), durations human.
+- **After the first Daylight pass, a reset to the approved designs**: the approved mocks and the chosen status column
+  are now the spec, screen by screen (`design/CONFORMANCE.md`). The calm variant, the risk ladder, object and action
+  icons and the row-anatomy grid were removed; risk appears only inside approval content, in plain words.
 
 ## Deferred, with why
 
@@ -169,4 +168,4 @@ busy"), the information design went exception-first (`docs/design/dashboard.md` 
 - Visual AND/OR filter groups (M7): kept and validated in YAML; a visual builder is a larger piece.
 - New-trigger comment placement (Riley minor): belongs to the real emitter.
 - Planned multi-user previews (queued direction, not an audit finding): not built; the toggle says so.
-- Per-team "needs approval" tags in the step picker (Sam M6 suggestion): the picker now shows each action's risk rung; whether a given bot must ask still depends on the bot, which the Safety page and each bot's Access tab show.
+- Per-team "needs approval" tags in the step picker (Sam M6 suggestion): risk visuals wait for the brand's proposal (pending review); whether a given bot must ask depends on the bot, which the Safety page and each bot's "What it can do" tab show.

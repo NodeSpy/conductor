@@ -419,3 +419,9 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 }
 .drill .item .roll, .drill .item .calm-n { flex-wrap: wrap; white-space: normal; }
 .drill .item > a.grow { min-width: 0; }
+/* the recipe's Config file card is the live, two-way YAML (and the Data view), in a scroll box */
+.wfb-page .wfb-side-card { padding: 18px 0 0; overflow: hidden; }
+.wfb-page .wfb-side-card .dl-ch { padding: 0 18px; }
+.wfb-page .wfb-side-card .wfb-side { border: 0; background: none; max-height: 520px; min-height: 0; }
+.wfb-page .wfb-side-card .side-body { overflow: auto; }
+.tbl thead.selecting th { position: sticky; top: 0; z-index: 3; padding: 0; background: var(--color-bg-raised); text-transform: none; letter-spacing: 0; }

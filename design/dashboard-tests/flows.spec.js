@@ -24,7 +24,7 @@ test.describe('connectors, runtimes, hosts, isolation', () => {
     await expect(page.locator('.diff')).toContainText('slack-eng:');
     await applyStaged(page);
     await go(page, '#/connectors/connectors');
-    await expect(page.locator('.bot-card', { hasText: 'slack-eng' })).toContainText('use: slack');
+    await expect(page.locator('.conn-row', { hasText: 'slack-eng' })).toContainText('Slack');
   });
   test('edit a connector and delete one', async ({ page }) => {
     await go(page, '#/connectors/connectors');
@@ -35,7 +35,8 @@ test.describe('connectors, runtimes, hosts, isolation', () => {
     await applyStaged(page);
     expect(await state(page, () => D.connectors.find((c) => c.name === 'gh').cfg.sweep)).toBe('5m');
     await go(page, '#/connectors/connectors');
-    await page.locator('[data-act="conn-del"][data-c="tf-apply"]').click();
+    await page.locator('[data-act="conn-more"][data-c="tf-apply"]').click();
+    await page.locator('.menu [data-act="conn-del"][data-c="tf-apply"]').click();
     await page.locator('#cf-ok').click();
     await applyStaged(page);
     expect(await state(page, () => D.connectors.some((c) => c.name === 'tf-apply'))).toBe(false);
@@ -78,12 +79,13 @@ test.describe('connectors, runtimes, hosts, isolation', () => {
     await page.locator('[data-act="discard-all"]').click(); await page.locator('#cf-ok').click();
     expect(await stagedCount(page)).toBe(0);
   });
-  test('isolation: egress allowlist and backend, acknowledged widening', async ({ page }) => {
-    await go(page, '#/connectors/isolation');
+  test('Safety: allowed sites and the kind of sandbox, an acknowledged widening', async ({ page }) => {
+    await go(page, '#/connectors/isolation'); // the old link lands on Safety
+    await expect(page).toHaveURL(/#\/safety$/);
     await page.fill('#sb-eg-new', 'api.example.com:443');
     await page.locator('[data-act="sb-eg-add"]').click();
-    await page.locator('[data-act="sb-backend"][data-v="container"]').click();
-    await page.locator('a', { hasText: 'Review change' }).click();
+    await page.locator('input[name="sb-kind"][value="container"]').check();
+    await page.locator('.sb-card a', { hasText: 'Review the change' }).click();
     await expect(page.locator('.diff')).toContainText('api.example.com:443');
     await applyStaged(page, { expectWidening: true });
     expect(await state(page, () => D.sandboxCfg)).toMatchObject({ backend: 'container', egress: expect.arrayContaining(['api.example.com:443']) });
@@ -135,7 +137,8 @@ test.describe('bots', () => {
     expect(m.autonomy.tiers.reversible).toContain('kv.set');
     expect(m.skill.verbs).toContain('gh.label');
     await go(page, '#/bots/platform-sre/access');
-    await page.locator('[data-act="cred-unbind"][data-c="grafana"]').click();
+    await page.locator('[data-act="cred-more"][data-c="grafana"]').click();
+    await page.locator('#pop-menu [data-act="cred-unbind"][data-c="grafana"]').click();
     await page.locator('#cf-ok').click();
     await applyStaged(page);
     expect(await state(page, () => D.access.credentials.some((c) => c.name === 'grafana'))).toBe(false);
@@ -164,7 +167,7 @@ test.describe('bots', () => {
     await go(page, '#/bots/platform-sre/proposals/p12');
     await page.locator('[data-act="p-approve"][data-d="approve"]').click();
     await page.locator('#seal-go').click();
-    await expect(page.locator('.prop-head .st').first()).toContainText('approved');
+    await expect(page.locator('.dl-decided .st').first()).toContainText('Approved');
     expect(await state(page, () => D.proposals.find((p) => p.id === 'p12').status)).toBe('approved');
   });
 });
@@ -176,20 +179,23 @@ test.describe('secrets and vars', () => {
     await page.fill('#f-key', 'sentry-dsn'); await page.fill('#f-alias', 'SENTRY_DSN'); await page.fill('#f-value', 'https://abc@o0.ingest.example/1');
     await submit(page);
     await page.locator('#su-go').click();
-    await expect(page.locator('#sec-body tr[data-secret="house/sentry-dsn"]')).toContainText('{{ vault "house" "sentry-dsn" }}');
-    await expect(page.locator('#sec-body tr[data-secret="house/sentry-dsn"]')).toContainText('dashboard only');
+    await page.locator('[data-act="sec-open"][data-s="house/sentry-dsn"]').click(); // the reference is in the row's detail
+    await expect(page.locator('#sec-body li[data-secret="house/sentry-dsn"]')).toContainText('{{ vault "house" "sentry-dsn" }}');
+    await expect(page.locator('#sec-body li[data-secret="house/sentry-dsn"]')).toContainText('a short name the dashboard shows');
     expect(await state(page, () => JSON.stringify(D))).not.toContain('abc@o0.ingest');
-    await page.locator('[data-act="secret-set"][data-s="house/sentry-dsn"]').click();
+    await page.locator('[data-act="sec-more"][data-s="house/sentry-dsn"]').click();
+    await page.locator('#pop-menu [data-act="secret-set"]').click();
     await page.fill('#f-value', 'rotated'); await submit(page); await page.locator('#su-go').click();
     // no op:// anywhere: one reference syntax
     expect(await page.locator('#sec-body').textContent()).not.toContain('op://');
     // filters
     await page.locator('[data-act="sec-f"][data-v="unused"]').click();
-    await expect(page.locator('#sec-body tr[data-secret="house/sentry-dsn"]')).toBeVisible();
+    await expect(page.locator('#sec-body li[data-secret="house/sentry-dsn"]')).toBeVisible();
     await page.locator('[data-act="sec-f"][data-v="all"]').click();
     await page.fill('[data-on-input="sec-q"]', 'slack');
-    await expect(page.locator('#sec-body tr')).toHaveCount(2);
-    await page.locator('[data-act="secret-ref"][data-s="op/Agents/Slack/bot-token"]').click();
+    await expect(page.locator('#sec-body li[data-secret]')).toHaveCount(2);
+    await page.locator('[data-act="sec-more"][data-s="op/Agents/Slack/bot-token"]').click();
+    await page.locator('#pop-menu [data-act="secret-ref"]').click();
     await page.fill('#f-ref', 'op/Agents/Slack/bot-token-2'); await submit(page);
     await expect(page.locator('.diff').first()).toContainText('{{ vault \\"op\\" \\"Agents/Slack/bot-token-2\\" }}');
     await page.locator('[data-act="discard-all"]').click(); await page.locator('#cf-ok').click();
@@ -236,28 +242,39 @@ test.describe('browser', () => {
 test.describe('packs and plugins', () => {
   test('hold, update, overrides, remove, add from a source', async ({ page }) => {
     await go(page, '#/extensions/packs');
-    await page.locator('[data-act="pack-hold"][data-p="kit"]').click();
+    await page.locator('[data-act="pack-more"][data-p="kit"]').click();
+    await page.locator('#pop-menu [data-act="pack-hold"]').click();
     await page.locator('[data-act="pack-plan"][data-p="review"][data-update="1"]').click();
     await page.locator('#pp-go').click();
     await expect(page.locator('.diff').first()).toContainText('pr-review-team@1.5.0');
     await applyStaged(page);
     expect(await state(page, () => D.packs.find((p) => p.name === 'review').ver)).toBe('1.5.0');
     await go(page, '#/extensions/packs');
-    await page.locator('[data-act="pack-ov"][data-p="sre-bot"]').click();
-    // overrides are YAML; a step the pack doesn't have is refused with the names it does have
-    const y = page.locator('#f-yaml');
+    await page.locator('a[href="#/extensions/pack/sre-bot"]').first().click();
+    // the guided overrides: the step override is listed, with a way back to the pack's default
+    await expect(page.locator('.dl-card', { hasText: 'Your overrides' })).toContainText('sweep/check');
+    // the same block as YAML: a step the pack doesn't have is refused with the names it does have
+    await page.locator('.po-yaml summary').click();
+    const y = page.locator('#po-y');
     await expect(y).toHaveValue(/sweep\/check/);
-    await y.fill('steps:\n  sweep/check: { model: light }\n  sweep/nope: { model: summarizer }\n');
-    await submit(page);
-    await expect(page.locator('[data-field="yaml"] .ferr')).toContainText('the pack has no step by that name');
-    await y.fill('steps:\n  sweep/check: { model: light }\n  sweep/report: { model: summarizer }\n');
-    await submit(page);
+    await y.fill('steps:\n  sweep/check: { model: light }\n  sweep/nope: { model: summarizer }\n'); await y.blur();
+    await expect(page.locator('#po-y-err')).toContainText('the pack has no step by that name');
+    await page.locator('#po-y').fill('steps:\n  sweep/check: { model: light }\n  sweep/report: { model: summarizer }\n'); await page.locator('#po-y').blur();
+    await page.locator('.dl-actions a', { hasText: 'Review the change' }).click();
     await expect(page.locator('.diff')).toContainText('sweep/report');
     await go(page, '#/extensions/packs');
-    await page.locator('[data-act="pack-del"][data-p="house-style"]').click(); await page.locator('#cf-ok').click();
+    await page.locator('[data-act="pack-more"][data-p="house-style"]').click();
+    await page.locator('#pop-menu [data-act="pack-del"]').click(); await page.locator('#cf-ok').click();
+    // Add a pack opens the catalog; a source that isn't in it is the secondary path, read before it's added
     await page.goto('/index.html#/extensions/packs');
-    await page.locator('[data-act="pack-add"]').click();
-    await page.fill('#f-name', 'hygiene'); await page.fill('#f-use', 'conductor-packs/dep-hygiene@^2'); await submit(page);
+    await page.locator('.page-head a', { hasText: 'Add a pack' }).click();
+    await expect(page).toHaveURL(/#\/extensions\/browse/);
+    await page.locator('[data-act="pack-source"]').click();
+    await page.fill('#ps-use', 'conductor-packs/dep-hygiene@^2'); await page.locator('#ps-use').blur();
+    await page.locator('[data-act="ps-read"]').click();
+    await expect(page.locator('#ps-inst')).toHaveValue('dep-hygiene'); // named from the pack
+    await page.fill('#ps-inst', 'hygiene'); await page.locator('#ps-inst').blur();
+    await page.locator('[data-act="ps-add"]').click();
     await expect(page.locator('.list .item')).toHaveCount(3);
     await applyStaged(page);
     const names = await state(page, () => D.packs.map((p) => p.name));
@@ -283,16 +300,17 @@ test.describe('updates, config history, raw editor, access', () => {
     await go(page, '#/updates');
     await page.locator('[data-act="upd-pol"][data-k="deps"]').click();
     await page.fill('#upd-int', '30m'); await page.locator('#upd-int').press('Enter');
-    await page.locator('a', { hasText: 'Review policy change' }).click();
+    await page.locator('a', { hasText: 'Review the change' }).click();
     await expect(page.locator('.diff')).toContainText('interval: 30m');
     await applyStaged(page);
     await go(page, '#/updates');
-    await page.locator('[data-act="upd-apply"]').click(); await page.locator('#su-go').click();
-    await expect(page.locator('.page-head')).toContainText('up to date (v0.72.0)');
+    await page.locator('[data-act="upd-apply"]').click(); await page.locator('#cf-ok').click();
+    await expect(page.locator('.dl-phead')).toContainText('up to date (v0.72.0)');
   });
   test('revert one change keeps the later ones', async ({ page }) => {
     await go(page, '#/config');
-    await page.locator('[data-act="revert-one"][data-id="cfg-20261015-1412"]').click();
+    await page.locator('[data-act="cfg-h-more"][data-id="cfg-20261015-1412"]').click();
+    await page.locator('#pop-menu [data-act="revert-one"]').click();
     await expect(page).toHaveURL(/#\/config\/apply/);
     expect(await page.evaluate(() => D.pending.map((c) => c.key))).toEqual(['platform-sre']);
     await applyStaged(page);
@@ -300,7 +318,8 @@ test.describe('updates, config history, raw editor, access', () => {
   });
   test('restore a backup runs the same pipeline; raw YAML edits become node changes', async ({ page }) => {
     await go(page, '#/config');
-    await page.locator('[data-act="restore"][data-id="cfg-20261015-1412"]').click();
+    await page.locator('[data-act="cfg-h-more"][data-id="cfg-20261015-1412"]').click();
+    await page.locator('#pop-menu [data-act="restore"]').click();
     await expect(page.locator('.modal')).toContainText('also undoes 1 later change'); // and names it
     await expect(page.locator('.modal')).toContainText('cfg-20261016-0912');
     await page.locator('#cf-ok').click();
@@ -319,10 +338,10 @@ test.describe('updates, config history, raw editor, access', () => {
   test('access: device-bound policy, revoke a passkey, end a session, enroll', async ({ page }) => {
     await go(page, '#/security');
     await page.locator('[data-act="op-bound"]').click();
-    await page.locator('a', { hasText: 'Review change' }).click();
+    await page.locator('a', { hasText: 'Review the change' }).click();
     await applyStaged(page);
     await go(page, '#/security');
-    await page.locator('[data-act="pk-revoke"]').last().click(); await page.locator('#su-go').click();
+    await page.locator('[data-act="pk-revoke"]').last().click(); await page.locator('#cf-ok').click(); // removing access doesn't ask for a passkey
     await page.locator('[data-act="sess-end"]').click();
     expect(await state(page, () => [D.passkeys.length, D.sessions.length])).toEqual([2, 1]);
     await go(page, '#/enroll');
@@ -343,11 +362,11 @@ test.describe('updates, config history, raw editor, access', () => {
     await page.locator('#cf-ok').click();
     await page.reload();
     await expect(page.locator('#strip-cells .status-btn')).toContainText('Dispatch paused');
-    await expect(page.locator('.paused-note')).toContainText('Dispatch is paused');
+
     await go(page, '#/more');
     await page.locator('#main [data-act="reset-demo"]').click(); await page.locator('#cf-ok').click();
     await go(page, '#/overview');
-    await expect(page.locator('.paused-note')).toHaveCount(0);
+    await expect(page.locator('#strip-cells .status-btn')).not.toContainText('Dispatch paused');
     await page.locator('.strip .status-btn').click();
     await expect(page.locator('#pop-menu [data-act="pause"]')).toContainText('Pause dispatch');
   });

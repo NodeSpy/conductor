@@ -50,9 +50,9 @@ async function stagedCount(page) { return page.evaluate(() => window.D.pending.l
 /** Click a page-head (or bot/team header) action; on a phone, actions beyond the first two live in the ⋯ menu. */
 async function headAction(page, selector) {
   const el = page.locator(selector).first();
-  if (await el.isVisible()) return el.click();
-  const label = (await el.textContent()).trim();
-  await page.locator('.page-head .ph-more, .bot-hero .ph-more').first().click();
-  await page.locator('#pop-menu button', { hasText: label }).click();
+  if (await el.count() && await el.isVisible()) return el.click();
+  // a bot's own actions (rotate, sweep, deliver) live in the ⋯ menu beside its head
+  await page.locator('[data-act="bot-more"], .page-head .ph-more').first().click();
+  await page.locator(`#pop-menu ${selector}`).first().click();
 }
 module.exports = { test, expect: base.expect, go, isPhone, applyStaged, stagedCount, headAction };

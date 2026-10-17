@@ -11,7 +11,7 @@ async function newWorkflow(page, name) {
   await page.fill('#f-name', name); await page.locator('#gen-submit').click();
   await expect(page).toHaveURL(new RegExp('#/workflows/' + name));
 }
-const pasteYaml = async (page, text) => { if (isPhone(page)) await page.locator('[data-act="wf-pane"][data-v="yaml"]').click(); await yamlTa(page).fill(text); await page.waitForTimeout(500); if (isPhone(page)) await page.locator('[data-act="wf-pane"][data-v="steps"]').click(); };
+const pasteYaml = async (page, text) => { await yamlTa(page).fill(text); await page.waitForTimeout(500); };
 const validate = (page, yaml, reusable) => page.evaluate(([y, r]) => WF.validate(y, { reusable: r }).filter((i) => i.level === 'error').map((i) => i.msg), [yaml, !!reusable]);
 
 test('strict decode: unknown keys, budget keys, typed filters, isolation rules, optional prompt', async ({ page }) => {

@@ -57,54 +57,46 @@ These came in with the brief and are not reopened here.
 
 ### 2.1 Navigation
 
+The approved designs are the spec (`design/CONFORMANCE.md` says, screen by screen, which approved source each follows).
+The rail keeps the everyday destinations; the rarely visited system pages share one item.
+
 ```
-Now      Overview · Activity · Needs you
-Work     Run history · Workflows (+ builder) · Bots · Browsers
-System   Config · Secrets & vars · Packs & plugins · Connectors & hosts
-         (connectors, runtimes, hosts, isolation) · Updates · Logs & audit · Access
+Home · Needs you · Activity · Workflows · Bots · Browsers
+Settings   Connections · Secrets · Packs · Safety · System (Config · Updates · Logs & audit · Access)
 ```
 
 Some elements are on every screen:
 
-- **Top bar** (60px, 48px compact). Search (⌘K) on the left; on the right only how things are, in one word
-  ("All systems normal", "Something needs a look", "Dispatch paused"), the running count in quiet ink, and the
-  **needs-you count**, the one place ember marks a count. Uptime, version, the sandbox, agents and the address
-  (MagicDNS and TLS) are one tap away in the status menu.
-- **Rail** (left). Grouped navigation; only Needs you carries a count. The host card at the foot says the box is
-  healthy. It collapses to icons below 1100px. Below 720px it becomes a **bottom tab bar**: Overview, Activity,
-  Approvals, Bots, More.
-- **⌘K palette**. Jump to any run, bot, workflow or setting, or run an
-  action such as pausing dispatch or applying an update.
-- **Needs you**. One queue merges everything that waits on a human:
-  - pending proposals;
-  - failed runs;
-  - `needs_input` and escalations;
-  - hand-off drafts awaiting an answer;
-  - browser push approvals;
-  - parked work;
-  - an available update;
-  - a vault that can't be reached;
-  - a restored config.
+- **Top bar** (60px). Search (⌘K); then how things are, as a status mark and a word ("All systems normal",
+  "Something needs a look", "Dispatch paused", "An update needs you"); "N not applied" when config changes are staged;
+  the avatar (theme, display preferences, glossary, the prototype's demo data, Lock). The status menu holds Pause or
+  Resume dispatch and, quietly, an available update ("v0.72.0 installs itself within 10 min").
+- **Rail** (left, full height). The brand on top, the navigation, the host card at the foot; only Needs you carries a
+  hot count. It folds to icons below 1100px; below 720px it becomes a **tab bar**: Home, Needs you, Activity, Bots, More.
+- **⌘K palette**. Jump to any run, bot, workflow or setting, or run an action such as pausing dispatch.
+- **Needs you**. One queue of everything that waits on a person: pending approvals, failed runs, questions and
+  hand-off drafts, browser push approvals.
 
 ### 2.2 Routes
 
 | Route | Screen |
 |---|---|
-| `#/overview` | Overview |
-| `#/live`, `#/live/<run>` | Activity: what ran when (lanes), running now, latest events; one live run: step graph, streaming log, step inspector |
+| `#/overview` | Home |
+| `#/activity[?status=&wf=&bot=&repo=&since=&q=]` | Activity: every run, grouped by who needs to act, with filters, a time range and search (Run history merged in) |
+| `#/runs/<id>`, `#/runs/<id>/compare/<other>` | A run (running or finished), and two runs compared |
+| `#/runs`, `#/live`, `#/live/<id>` | Old links: redirect to Activity (with their filters) or to the run |
 | `#/attention` | Needs you |
-| `#/runs`, `#/runs/<id>` | Run history, run detail |
-| `#/workflows`, `#/workflows/<name>` | Workflows, builder |
-| `#/bots`, `#/folders/<path>` | Bots: the folder tree (a folder's subtree on desktop, one level at a time on a phone) |
-| `#/bots/<m>/<tab>[/<id>]`, `#/bots/new/settings[?team=]` | A bot. Tabs: chat, cases[/id], proposals[/id], memory, workers, access, definition |
-| `#/teams/<t>[/<tab>]` | A team. Tabs: overview, routing, defaults, knowledge |
-| `#/browser`, `#/browser/<id>`, `#/browser/seed`, `#/browser/passkey` | Browsers |
-| `#/config`, `#/config/raw`, `#/config/apply` | Config, raw editor, the apply pipeline |
-| `#/secrets` | Secrets & vars |
-| `#/extensions/<packs\|plugins\|browse>` | Packs & plugins |
-| `#/connectors/<connectors\|runtimes\|hosts\|isolation>` | Connectors & hosts |
-| `#/updates`, `#/logs/<daemon\|audit>`, `#/security` | Updates, logs and audit, access |
-| `/signin`, `/enroll` | Sign-in, enrollment |
+| `#/workflows`, `#/workflows/<name>` | Workflows, and the builder (Recipe, Config file, Runs, Settings) |
+| `#/bots`, `#/folders/<path>` | Bots: the folder tree |
+| `#/bots/<m>/<tab>[/<id>]`, `#/bots/new` | A bot. Tabs: approvals, chat, cases, memory, what it can do, settings |
+| `#/teams/<t>[/<tab>]` | A team |
+| `#/browser`, `#/browser/<id>`, `#/browser/logins` | Browsers and logins |
+| `#/connectors/<connectors\|runtimes\|hosts>` | Connections |
+| `#/secrets` | Secrets |
+| `#/extensions/<packs\|plugins\|browse>`, `#/extensions/pack/<name>`, `#/extensions/source` | Packs: installed, the catalog, a pack's overrides, add from a source |
+| `#/safety` | Safety: the sandbox and what each bot may do |
+| `#/config`, `#/updates`, `#/logs/<daemon\|audit>`, `#/security` | System: Config, Updates, Logs & audit, Access |
+| `/signin`, `/enroll` | Sign-in, enrolment |
 
 The product uses path routes. The prototype uses hash routes so it can be
 opened from a file.
@@ -116,37 +108,26 @@ The dashboard uses **Daylight**, conductor's brand and design system (`design/br
 be read: conductor tells you how things are going in a sentence before it shows you a table. This section is how
 the dashboard applies it; the brand book is the source of truth for values.
 
-### 3.0 Scannable at a glance (exception-first, information kept)
+### 3.0 The approved designs are the spec
 
-The most important rule, from the first review ("it all looks so busy … I have to read everything all the time"):
-every screen answers **is anything wrong, and what needs me?** in about three seconds without reading, and says
-almost nothing when nothing does. A second review corrected an over-correction: calm must not mean hidden. The
-goal is that every row is **identifiable at a glance** (what kind of thing, how risky, where it lands, how it is
-going) with the information kept on the page. So the rules below are about order and emphasis, not removal; the
-semantic icons, the risk ladder and the environment tags (§3.2) do the identifying.
+Every screen follows an approved source: Daylight's mocks (`design/brand/v2/`: Home, the failed run, the bot page with
+an approval, run history, the builder), the status column as chosen (`design/brand/explore/status-column.html`: D's
+grouping with A's margin marks, every row drawn), the brand book, and Home as approved in review. A screen without a
+mock uses only brand book components, in the approved screens' patterns. `design/CONFORMANCE.md` records, screen by
+screen, the source, the deliberate differences and why, and the approved mock beside the prototype.
 
-1. **One loud thing per screen.** What needs you is few, large and first: a plain title, one sentence, one action.
-   Everything else steps back: lower contrast, smaller, no colour.
-2. **Normal collapses into one quiet line.** Finished runs ("40 finished · all passed", expandable), healthy
-   connectors ("All 7 connectors are healthy"), the system ("All healthy"), and passing runs on the lanes (a faint
-   tick strip, not marks).
-3. **Colour only for exceptions.** Failed, waiting on you, needs you, and the "now" cursor. Running work keeps its
-   shape (a spinning arc) but is drawn in ink: it doesn't need anyone. More than about three coloured things on a
-   screen is too loud.
-4. **Information stays; only the truly secondary is disclosed.** Rows keep their facts (what, context, risk,
-   status, time) in fixed columns. Only hashes, raw ids and raw payloads go behind hover or a "Technical details"
-   fold; where an id is shown it is labelled ("Run r-7f3a", "Pull request acme/api#482") and durations are human
-   ("2 h 30 min", never "150 min" or "2h30m").
-5. **Direct labels.** Marks say what they are where they are ("failed 52 min ago"); no legends to decode.
-6. **Quiet states are complete.** "All quiet. Nothing needs you." with one line of how the day went is a whole
-   Overview.
+The judgment rule for everything else: every element earns its place; the obvious isn't explained; fewer, well-chosen
+signals. Concretely:
 
-Each screen's one-sentence answer and a loudness budget are asserted by `dashboard-tests/calm.spec.js` on the
-mostly healthy demo day. The demo data has three days (`js/scenario.js`, chosen under ✦ Demo data in the rail):
-**a mostly healthy day** (the default: dozens of runs, one approval and one failure), **all quiet**, and
-**everything at once** (every exception, which the test suite runs on). The before/after pairs are at
-`review/calm.html` in the prototype.
+1. **What needs someone comes first**, as a plain sentence and one action; everything else is quieter.
+2. **Aggregate the normal, list the exceptions.** Views stay readable at any scale: a runs-per-hour strip (the same
+   size for ten workflows or five hundred), the problems listed under it, the rest a count or a paged group. No view
+   grows one row per workflow or bot by design.
+3. **Colour only for status that needs a person or is live**, through the one status vocabulary.
+4. **Plain words first; technical detail one step down** (a "Details" fold, a row that opens, a ⋯ menu).
+5. **No decoration derived from the logo**, no capsules, no row tints, no meters.
 
+### 3.1 Tokens, type and shape
 ### 3.1 Tokens, type and shape
 
 - **Tokens only.** `css/tokens.css` is a verbatim copy of the brand's generated file; every colour, size, radius,
@@ -173,51 +154,37 @@ mostly healthy demo day. The demo data has three days (`js/scenario.js`, chosen 
   `mark-inline.html` beside the live-text wordmark (Fraunces); `index.html` links the kit's favicon set,
   apple-touch icon and `manifest.webmanifest` (PWA icons). Swapping the logo is copying another kit's files over
   the folder.
-- **Illustration.** Daylight's sunrise (the arch rising over a hairline horizon) appears only in empty states, the
-  greeting and the sign-in page, never in the mark.
+- **The logo is never altered**, decorated, animated or turned into an illustration or motif; it appears only as the
+  logo, in its approved lockups. Empty states are a plain, useful sentence and, when there is one, an action.
 
 ### 3.2 Shared components
 
 Repeated patterns are one component each, restyled once and used everywhere; screens compose them and don't
 restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
 
-- **Status marks, labels, filter chips, counts and row states** are drawn only by `UI.statusMark`, `UI.label`,
-  `UI.filterChip` / `UI.selectChip`, `UI.count` and `UI.rowState` (`css/marks.css`). A status is a **margin
-  mark**: a small glyph and a plain word, no capsule; passed and parked differ in shape and hue. A row that needs
-  someone gets a thin coloured leading edge and a reason line under its name; no row tints. The brand's final
-  status-and-label system swaps in there and nowhere else.
-- **One status, one look.** Every status a screen shows goes through `UI.statusMark`; no screen hand-writes a mark
-  or a status dot, and each state has one colour across the app. Running is ordinary work and is drawn in ink
-  everywhere (the mark, graph edges, progress bars, the run story); the running hue lives only in `tokens.css`. Step
-  kinds (agent, code, decide …) are told by icon and word in ink; status hues are not reused as kind colours
-  (`status.spec.js`).
-- **Object and action icons** (`UI.objectIcon(kind)`, `UI.actionIcon(kind)`): what a thing is (run, approval, pull
-  request, issue, check, incident, deploy, Terraform, cloud spend, bot, team, workflow, case, connector, login,
-  secret …) and what an action does (reads, comments or posts, pushes code, changes things, applies infrastructure,
-  spends money, deletes or destroys, changes permissions). Lucide glyphs, one meaning each, always with a word (or
-  a label for screen readers where the word is the column header). The icon audit gave every glyph one meaning: the bell is
-  "needs you" everywhere (no diamond), the diamond is only a decide step, the bolt only a connector action (pinning
-  is a pin, testing a host is a plug, CI work is a check list, deploying a rocket), and status glyphs are never
-  reused as object icons.
-- **The risk ladder** (`UI.riskOf`, `UI.riskMarker`): six rungs, a small stepped bar plus a word. 0 *Reads only*,
-  1 *Reversible* (comments, posts), 2 *Changes things*, 3 *Touches production*, 4 *Spends money*, 5 *Destructive*
-  (deletes, permission changes, anything at tier `never`). It is derived from the tier (`observe` → 0, `propose` →
-  2, `commit_money` → 4, `never` → 5), the verb (`.post`/`.comment` → 1, delete/destroy/grant → 5) and the
-  environment (a non-read action on production is at least 3). Rungs 3–5 carry colour (warning, info, danger);
-  rung 3 and up also hatch the row's leading edge. Shown on approvals, proposals, Needs you, activity rows, run
-  headers, workflow steps, the step picker and a bot's "what it can do"; destructive controls carry it too (Stop
-  run).
-- **Environment tags** (`UI.envTag`): *production* (uppercase, amber, a solid square), *staging* (outline), *local*
-  (dashed). Only where an action lands somewhere; never decorative.
-- **One row anatomy** (`UI.row`, `.xrow`): `[icon: what] · [title + reason line] · [context] · [risk] · [status +
-  word] · [time]`, fixed columns on desktop so the eye can run down one; on the phone the icon and title lead and
-  risk and status wrap under the title. Needs you, Activity, proposals and the Overview lists use it.
-- **Labelled metadata line** (`UI.metaLine`): the facts under a title as label–value pairs with object icons:
-  "Started 11:12 (2 h ago) · Running for 2 h 30 min · Run r-7f3a · Workflow ci-fixer · Pull request acme/api#482".
-  Used on runs, compare, proposals and cases; never a bare run of ids.
-- **Grouped lists** (`UI.groupHead`, `UI.groupRow`): "Needs attention · N" with one sentence and one action, then
-  "Running now", then "Finished" in quiet ink, folded to one line by default.
-- **Quiet rows** (`.quiet-row`): one line saying how a part is ("System · All healthy"), the detail one tap away.
+- **The status vocabulary** (`UI.statusMark`, `UI.mark`; `css/marks.css`), exactly as the brand's
+  `status/marks.js`: a 12px mark plus a word. The mark always carries its state colour; the word is coloured only when
+  a person is needed or the thing is live (failed, needs you, waiting, running, shadow), and bold when a person is
+  needed. Passed is a quiet sage dot with an ink word; parked is slate pause bars; not reached is a dash; needs you is
+  an ember diamond; running is a blue arc that turns. No capsules, no row tints. Every status on every screen goes
+  through it, and each state has one look across the app (`status.spec.js`).
+- **Rows** (Home's row, the model for every list): the mark · a plain title with the reason or detail under it · the
+  age · one action, and a ⋯ menu for the rest. A row that needs someone gets a 3px leading edge in its state's colour
+  and its reason in that colour under the name; nothing else in a list is coloured. Long values wrap inside their
+  column; actions never cover text (`sweep.spec.js`).
+- **Grouped run table** (Activity): "Needs attention · N" (its count in the accent), "Running now", "Finished" (paged),
+  as on the approved status column; the phone shows the same groups as lists.
+- **The selection bar**, one pattern for every list with bulk select: while anything is checked it replaces the
+  list's header row in place and stays pinned at the top while you scroll: "3 selected", the actions that apply,
+  "Select all N matching", Clear. Config changes still become one diff; destructive actions still confirm.
+- **Labelled facts** (`UI.facts`, the run page's Details card): label, then value; ids and times never bare, durations
+  in words ("2 h 30 min").
+- **Risk, in words, only where it informs a decision**: inside approval content ("Where: Production · workspace
+  prod", "Touches production", "Spends money"). There is no risk meter or ladder (the brand's proposal is pending
+  review), and nothing on the operator's own controls.
+- **Tooltips** only where they add something missing: an icon-only button's name, the full text of something
+  truncated, why a control can't be used, a glossary term's meaning. Always anchored to their element; never a copy of
+  what the row already shows.
 - **Summary header** (`UI.head`): the title, then one sentence that answers the page's question (bold count first
   when something needs you), an optional quieter second line, then actions.
 - **Choice cards** (`UI.choice`): a neutral icon, title over description, a radio on the right; the selected card
@@ -228,10 +195,10 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
   "Step 2 of 5 · Watches" over a thin bar. It never wraps, clips or overlaps (`wizard.spec.js` walks every wizard's
   states at 1440 and 390 in Chromium, and in WebKit on the iPhone).
 - **The passkey glyph means "this signs".** It appears only on a control that starts a WebAuthn signing (Approve,
-  Deny, Apply for a widening change, sign in, enrol, the signing sheet's own button) and on the passkeys themselves.
+  Apply for a widening change, sign in, enrol, the signing sheet's own button) and on the passkeys themselves.
   Opening, reviewing and navigating never carry it; "your passkey signs this" is said in the signing sheet, at the
   point of signing (`passkey.spec.js`).
-- **Empty states** (`UI.empty`): the sunrise, a short human title, why it's empty, the one next step.
+- **Empty states** (`UI.empty`): a short human title, why it's empty, the one next step. No illustration.
 - **Toasts** (`UI.toast`): past tense and specific, a status glyph, 6 seconds (errors stay until dismissed), above
   the phone tab bar. **Dialogs** for decisions, **drawers** for create-in-place beside a list (layered over a dialog
   when needed), **sheets** on the phone.
@@ -291,31 +258,30 @@ Each screen below lists its purpose, its data (with the API from
 [§5](#5-api)) and its operations. **NEW** marks something the daemon doesn't
 have today.
 
-### 4.1 Overview
+### 4.1 Home (the Overview)
 
-The purpose is to answer, in under five seconds: is it healthy, what is it
-doing, and what needs me?
+The purpose is to answer, in under five seconds: is it healthy, what is it doing, and what needs me? Home as it
+stands is approved (`design/CONFORMANCE.md`); it is the model for the other screens.
 
-In reading order (calm by default, §3.0):
+In reading order:
 
-1. **The answer**, the largest text on the page: "2 things need you." in ember, or "All quiet. Nothing needs you."
-   Beneath it one quiet line: "Everything else is fine: 49 of 54 runs fine in the last 12 hours · 3 running now ·
-   all systems healthy."
-2. **Needs you**, only when something does: at most three large rows (mark, plain title, one sentence, age, one
-   verb; ids behind hover), "See all" beyond three.
-3. **Get started** (until hidden): a compact four-step checklist.
-4. **Runs, last 12h** as activity lanes (Score's pattern): one named lane per workflow or bot, time left to right,
-   passing runs a faint tick strip, failures and runs waiting on you as labelled marks, running work as an ink arc,
-   the ember "now" line.
-5. **Quiet rows**, one line each, open on demand: Since you last looked (Broadsheet's digest: counts, one line
-   each, linked; new failures and approvals in bold), Today in numbers (the four figures), For your information
-   (an update that installs itself, a sandbox block), Latest events, Workflows (or Model usage), System.
+1. **The greeting and one sentence**: "5 things need you. Everything else is running normally: 19 of 26 runs in the
+   last 12 hours went fine."
+2. **At a glance**: four tiles. Running (links to Activity filtered to running; the longest-running time, no list of
+   names), Runs in the last 12 hours, Approvals waiting, Bots.
+3. **Needs you**: the mark, a plain title, why, the machine detail last, the age, one verb (Review is primary for
+   approvals); See all.
+4. Beside it: **Running now** (at most three, longest-running first, then "+N more running →"; hidden when nothing
+   runs), **Last 12 hours** (the figure, runs per hour with failures stacked in the danger colour, the failures named),
+   **For your information** (an update that installs itself, a sandbox block).
+5. **Get started**, only while something is left: the remaining steps, the next one as the primary button, what's done
+   in one quiet line.
 
 | Panel | Data | Source today |
 |---|---|---|
 | Needs you | `GET /api/v1/attention` | Bots ledger (pending proposals), run history (failed), audit (`escalate`/`needs_input`, which `status` already reads), hand-off drafts (web connector), backoff/hold (`state.json`), browser `needs_input`, update checker. Merging them is **NEW** (`attention` aggregator). |
 | Running / runs / approvals (or model usage) / bots tiles | `GET /api/v1/status`, `GET /api/v1/usage` when `usage.mode` is not `off` | `status.go` (live agents, in-flight workflows from `runs.json`); usage per provider ([§4.1.1](#411-usage-display-usagemode)) |
-| Runs, last 12h (activity lanes) | `GET /api/v1/runs?since=12h&fields=lane` | History records (`Kind`, `Variant`, `Started`, `Finished`, `Status`) |
+| Last 12 hours (runs per hour) | `GET /api/v1/runs?since=12h&fields=started,status` | History records, bucketed per hour |
 | Health | `GET /api/v1/status` | Version, pid, uptime, config sha, sandbox registry (identities, containers), paseo provider-entry merge result (#179), connector registry health, update state |
 | Activity | SSE `run`, `audit`, `bot`, `browser` topics | `flow.EventHub` (`RunEvent`), audit writer tap (**NEW**) |
 | Workflows (off) or Model usage (subscription/api) | `GET /api/v1/workflows`; `GET /api/v1/usage?days=14` | One card per provider, never a combined chart ([§4.1.1](#411-usage-display-usagemode)) |
@@ -323,8 +289,8 @@ In reading order (calm by default, §3.0):
 Operations (not on the Overview itself, which leads with the answer and what needs you):
 
 - **Pause/Resume dispatch**: `setPaused`, as `conductor pause` does. It lives in the status menu (the health word
-  in the top bar) and the System row: it says what pausing does, asks first, and while paused the top bar reads
-  "Dispatch paused" and the Overview carries a banner with Resume.
+  in the top bar): it says what pausing does, asks first, and while paused the top bar reads "Dispatch paused" and
+  the status menu offers Resume.
 - **Run a workflow**: control `run`, from the Workflows page (each workflow's Run) and ⌘K.
 
 #### 4.1.1 Usage display (`usage.mode`)
@@ -371,73 +337,44 @@ diff. **NEW** endpoint: `GET /api/v1/usage?days=` returns
 `{ providers: { <id>: { observed: {runs, turns}, reported?: {windows[], tokens, by_model{}, source}, usd? } } }`;
 the daemon never adds providers together, and the UI has no code path that does.
 
-### 4.2 Activity and one live run
+### 4.2 Activity (Run history merged in)
 
-**Activity** (`#/live`) answers "what is running, and how has the day gone?": a summary sentence, the lanes
-(what ran when, 1h / 12h / 24h), Running now (plain titles, step x of y) and the latest events.
+Run history duplicated Activity, so they are one page (`#/activity`). It answers "what ran, what's running, and what
+needs me?", as far back as you need.
 
-**One live run** (`#/live/<run>`) watches a run step by step. One run per page: there are no run tabs. A
-**Back to Activity** link returns to Activity with its filters and scroll position as you left them, and
-"‹ 1 of 3 running ›" steps through the running runs in Activity's order. The title is the run's plain headline
-("Fixing a failing check") with its status mark and risk rung; under it the labelled metadata line (started,
-running for, run, workflow, target). The header's actions are only those for the whole run: **Stop run…**, marked
-on the risk ladder and confirmed.
+- **The sentence**: "Last 12 hours: 15 runs. 3 need attention, 3 are running and 9 finished."
+- **Filters on the page**: search (repo, PR, run id, error), status, workflow, bot, folder, repo, and the time range
+  (last hour, 12 hours, 24 hours, 7 days, all time). Old `#/runs?…` links land here with the same filters.
+- **Runs per hour** for the range: the Overview's strip, failures stacked and named. It is the same size for ten
+  workflows or five hundred (the per-workflow lanes were removed: they grow with every workflow).
+- **The grouped table**, as on the approved status column: **Needs attention · N** (failed runs and runs waiting on
+  a person: the reason in its state's colour under the name, a leading edge, one action: Open, or Answer), **Running
+  now**, **Finished** (paged: "Show 20 more of N"). Columns: Run (workflow and target), Status, When, Took, ID (and
+  cost when usage display is on). On a phone the same groups are lists.
+- **Selection**: a checkbox per row; while anything is checked the header row is the selection bar (Retry…, Stop…,
+  Select all N matching, Clear).
+- Records are kept 14 days; each is signed, and one that fails its signature shows as tampered. Listing more than
+  ~500 cheaply needs a small **NEW** index (`history/index.jsonl`); the list pages by cursor (`GET /runs?cursor=`).
 
-- **Step graph.** The data comes from the config's step list. Steps run in
-  order, and `parallel: [[…],[…]]` branches join before the next step; there
-  is no `needs:` key. The graph is derived (**NEW**: `GET /api/v1/workflows/<name>/graph`),
-  and since it is series-parallel it lays out trivially. Step states come
-  from `RunHistory.Steps` and the live `step_started`/`step_done` events.
-  `for_each`, `call:` and `team:` render as compound plates.
-- **Streaming log.** Interleaved per-step output: agent turns, tool calls,
-  egress denials, `git.push`. Today `watch` streams coarse events only. A
-  **per-step log tap** is **NEW**:
-  - a bounded ring per running step, fed by the cli/acp runtime's output
-    (with the existing redaction) and by paseo's agent timeline for paseo
-    steps;
-  - persisted next to the history record (`history/<id>.steps/<step>.log`,
-    clipped and scrubbed).
-- **Step inspector.** Kind, runtime, the model resolved through the fleet
-  ladder (rung), the sandbox identity, the inputs and outputs (from the
-  record), cost and tokens, and the proposed diff so far. The diff is the
-  same capture as `{{.<id>.diff}}`, re-read on demand for a running step.
+### 4.3 A run
 
-Operations:
+One page (`#/runs/<id>`) for a running run and a finished one, as the approved run mock.
 
-- **Stop run**: **NEW** cancel through the engine's context, with the same
-  grace as a reload checkpoint.
-- **Retry from step**: control `retry {run_id, from_step, force_replay}`.
-- **Open in paseo** lives on the step, not the run: only a step with a live paseo session has it (an agent step on
-  a paseo runtime, a hand-off, a bot's home session), with the line "Watch or take over this agent's
-  conversation". A run with no such step shows no paseo link at all.
-
-### 4.3 Run history and run detail
-
-- **History** is a grouped list: **Needs attention · N** (failed or waiting on you, one sentence, one action:
-  retry the failed ones), **Running now**, then **Finished** folded to one line ("40 finished · 39 passed, 1
-  parked", Show them). Each row is one plain headline ("Couldn't fix a failing check") with a reason line under it
-  (the plain error, or workflow and target), the time in words and the duration; the run id and trigger are on
-  hover. Search is always there; status, workflow, repo, time range, provider (when usage display is on) and folder
-  sit behind one Filter button. Bulk select (retry the failed ones, export). Reads `<state>/history/*.json`. Listing
-  more than ~500 records cheaply needs a small **NEW** index: an append-only
-  `history/index.jsonl` written by `PutHistory` and rebuilt when missing.
-  Each record's HMAC (`Sig`) is verified, and a record that fails shows as
-  **tampered**.
-  History pages by cursor (`GET /runs?cursor=`), 50 at a time.
-- **Detail** (one run record, the shape of `RunHistory`/`StepRecord`): the plain headline as the title, the mark
-  and the risk rung, then the labelled metadata line (started, took, run, workflow, target, started by). The steps are a **run story**: top to bottom, each step's
-  outcome in a sentence, its duration on the right and a thin bar on the run's time axis; the failing step is
-  called out and later steps say "Not reached"; a nested workflow call is one node you can open.
-  - **What happened / What you can do** for failed, waiting and parked runs.
-  - A timeline with a time axis; every row selects its step (↑/↓ too); each
-    agent step's usage when usage display is on.
-  - The selected step's inputs, outputs, log and (agent steps) diff, all
-    scrubbed; tabs only for what the step recorded; a step that never ran
-    says so; its effective environment.
-  - The run's own audit lines (`GET /audit?run=`).
-  - Retry from any step; on a live run, **Restart this step** (stop first).
-  - **Compare** with another run of the workflow ("Compare two ci-fixer runs": this run and the one compared
-    with, labelled, step by step with human durations and the difference); **Download run record**.
+- **Back to Activity**, which keeps Activity's filters and scroll position. No run tabs, no previous/next.
+- **The head**: the plain title ("Couldn't fix a failing check on acme/web#1288"), what happened in a sentence, and the
+  status mark on the right; then the actions for the whole run: Retry (from the failed step), Open the pull request,
+  Compare…, Dismiss; on a running run, **Stop run…** (confirmed: "It stops mid-step; anything already pushed stays.").
+- **What happened**: the step tree (number, mark, what the step did, how long; a nested workflow call is one node you
+  open; the failing path opens by itself). Every step selects it.
+- **The selected step**: its outputs, inputs, log and diff (the tabs it recorded); a running step streams its log and,
+  only when it has a live paseo session (an agent on a paseo runtime, a hand-off, a bot's home session), offers
+  **Open in paseo**: "Watch or take over this agent's conversation."
+- **Details**: Started (with the clock), Took or Running for, Triggered by in words, Workflow, Run, Retry of, the
+  signature; Download the run record. **Audit** for this run under it.
+- **Compare** (`#/runs/<id>/compare/<other>`): this run and the one compared with, step by step with human durations
+  and the difference, then the chosen step's outputs as a diff.
+- Operations: Stop run (**NEW** cancel through the engine's context, with a reload checkpoint's grace); Retry from a
+  step (control `retry {run_id, from_step, force_replay}`).
 
 ### 4.4 Teams and bots (#178)
 

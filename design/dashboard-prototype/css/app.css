@@ -392,8 +392,10 @@ hr.rule { border: 0; border-top: var(--border-width) solid var(--color-border-su
   .strip .ph-brand b { font: var(--type-label); font-size: 16px; font-weight: var(--font-weight-bold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .strip .search { width: 44px; height: 44px; padding: 0; justify-content: center; border: 0; background: none; margin-left: auto; }
   .strip .search .kbd, .strip .search .lbl { display: none; }
-  .strip .spacer, .strip .cell.status-btn .st, .strip .cell.staged { display: none; }
-  .strip .cell.status-btn { display: none; }
+  .strip .spacer, .strip .cell.staged { display: none; }
+  /* the status menu (Pause or Resume dispatch, an update) stays reachable: the mark alone when all is well, the word too when it isn't */
+  .strip .cell.status-btn { padding: 0 6px; min-height: 44px; }
+  .strip .cell.status-btn.calm .sw { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .strip .op-btn .avatar { width: 28px; height: 28px; }
   .page { padding: var(--space-4) max(var(--space-4), var(--sar)) var(--space-8) max(var(--space-4), var(--sal)); }
   .page-head { margin-bottom: var(--space-6); }

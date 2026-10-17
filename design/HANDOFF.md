@@ -53,15 +53,17 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 - `js/schema.js` plugin/connector/verb/event declarations. `js/store.js` collections, staging, the config
   pipeline (`S.stage`, `S.view`, `S.configText`, `S.envText`, `S.validate`, `S.apply`).
 - `js/ui.js` router, forms (`UI.form`, `UI.fieldHTML`), drawers, guarded dismissal (`UI.dismissModal`), shared
-  component helpers (`UI.choice`, `UI.chosen`, `UI.stepper`, `UI.statusMark`, `UI.objectIcon`, `UI.actionIcon`,
-  `UI.riskMarker`, `UI.envTag`, `UI.row`, `UI.metaLine`). `css/components.css` holds the shared components.
+  component helpers (`UI.choice`, `UI.chosen`, `UI.stepper`, `UI.statusMark`, `UI.mark`, `UI.facts`, `UI.bulkBar`
+  (the selection bar), `UI.systemTabs`, `UI.ph` (escapes plain placeholders in prose)). `css/daylight.css` holds the
+  approved screens' components, ported from the brand's mocks with a `dl-` prefix. `css/components.css` holds the shared components.
 - `js/usage.js` usage display (off by default, per provider). `js/valuesource.js` the value-source field.
 - `js/runrec.js` one record per run (steps, timing, inputs, outputs, logs, diffs), the run story and run-scoped
   audit. `js/glossary.js` terms (`UI.term`) and `#/glossary`. `js/palette.js` ⌘K and single-key shortcuts.
 - `js/screens/botwizard.js` New bot (loaded before bots.js), `env.js` the Env tab and effective environment,
   `connect.js` the Slack/GitHub manifest flows. `assets/logo/` is a complete Daylight logo kit (Fermata, strengthened)
   plus `logo.js`, the one reference (`UI.logo()` inlines the kit's `mark-inline.html`); `manifest.webmanifest` PWA icons.
-- `review/calm.html` the before/after pairs for the calm-by-default pass (shots in `review/shots/`).
+- `design/CONFORMANCE.md` and `design/conformance/` (the approved mock beside the prototype, rendered by
+  `design/conformance/render.js`). `review/calm.html` is the earlier calm pass's record (superseded).
 - `index.html` head script picks the theme before paint (explicit wins, else the OS); `?sim=ios` is the
   test-only iPhone emulation (toolbar overlay + safe areas). Asset URLs carry `?v=<stamp>`; bump it on deploys.
 - `js/create.js` create-in-place drawers (`UI.CREATE`). `js/wf.js` workflow engine + validator.
@@ -72,21 +74,19 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Done (commits on this branch, newest first)
 
-- **Meaning at a glance** (the review that corrected "calm by default": scannable, with information kept): object and
-  action icons (`UI.objectIcon`, `UI.actionIcon`; one meaning per glyph, always with a word), the risk ladder
-  (`UI.riskOf`, `UI.riskMarker`: reads only → reversible → changes things → touches production → spends money →
-  destructive, from tier, verb and environment), environment tags (`UI.envTag`), one row anatomy (`UI.row`, `.xrow`:
-  icon · title + reason · context · risk · status · time) on Needs you, Activity, proposals and the Overview; the
-  information the calm pass had folded away is back on the page (lanes legend, workflow columns, bot facts, cases'
-  requester and route). Only hashes, raw ids and payloads are disclosed on demand.
-- **Run detail** (Activity › a running run): no run tabs; Back to Activity keeps Activity's filters and scroll
-  position; "‹ 1 of 3 running ›"; a labelled metadata line (`UI.metaLine`: Started 13:48 (6 min ago) · Running for
-  6 min · Run r-7f3a · Workflow ci-fixer · Check on acme/api#482) also on run detail, compare, proposals and cases;
-  Open in paseo moved onto the steps that have a live paseo session ("Watch or take over this agent's conversation");
-  the header keeps whole-run actions only (Stop run…, marked destructive on the risk ladder, confirmed). Running is
-  drawn in ink everywhere through the shared status mark (`status.spec.js` fails on a hand-written mark, on the
-  running hue outside tokens.css, or on one state rendered in two colours).
-
+- **Reset to the approved designs** (the approved designs are the spec; `design/CONFORMANCE.md` maps every screen to
+  its source with the mock beside the prototype). Daylight's v2 mocks for the shell, Home, the run page, the bot page
+  and approval, run history and the builder; the chosen status column (D's grouping with A's margin marks, every row
+  drawn) through one status vocabulary (`UI.statusMark`/`UI.mark`, exactly `status/marks.js`); the brand's current
+  `tokens.css`. Structural decisions folded in: Run history merged into **Activity** (filters, time range, search,
+  paged Finished, a runs-per-hour strip instead of per-workflow lanes); one **Safety** page (the sandbox in plain words
+  and what each bot may do); one **System** area (Config with readable applied changes, Updates in plain words, Logs,
+  Access in plain words); Packs with the catalog first, guided overrides and add-from-a-source; Secrets one line each;
+  the pinned **selection bar** for every bulk list. Removed: risk meters and the risk ladder, object/action icons, the
+  row anatomy grid, environment badges, step counts as status, "Since you last looked", exports, the sunrise motif, run
+  tabs and previous/next, explanatory captions on obvious controls, red buttons outside confirmations, tooltips that
+  repeat the row. New checks: `sweep.spec.js` (overlap, spill, one-word lines, centred or blown-up rows, dropped
+  interpolations, at 1440/900/390) and `status.spec.js`.
 - **From the iPhone review**: one stepper component everywhere, compact ("Step 2 of 5 · Watches" + a thin bar)
   whenever the labelled steps don't fit, never overlapping (`wizard.spec.js`, plus stepper checks in the layout and
   iPhone sweeps); the passkey glyph only on controls that sign (`passkey.spec.js`); Pause dispatch moved to the status
@@ -136,8 +136,9 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 | Knowledge kinds | done, on conductor's real kinds and collection locations |
 | Visual QA bar + shared components | done: layout (both themes), iPhone WebKit sweep, dismiss, copy-number, Daylight and calm specs |
 | Daylight adoption | done (this pass) |
-| Calm by default (exception-first) | done, then corrected: scannable with information kept (icons, risk ladder, env tags, one row anatomy); `calm.spec.js`; `review/calm.html` |
+| Calm by default (exception-first) | superseded by the reset to the approved designs (the calm variant and the later icon/risk/row-anatomy pass are gone) |
 | Run detail (no tabs, back with state, labelled ids, paseo per step, one status look) | done; `status.spec.js` |
+| Reset to the approved designs | done: `design/CONFORMANCE.md`; other open directions frozen |
 | Passkey enroll cancel + every flow has a way out | done (dismiss spec) |
 | Shared folders across workflows | done |
 
@@ -146,7 +147,5 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 - The phone breakpoint stays at 720px (Daylight's phone is < 600px): tablets in portrait between 600 and 720 get the
   phone layout, which keeps the tab bar and sheets. Revisit with real tablet use.
 - The WebKit projects need Docker (the Playwright Ubuntu image); WebKit's Ubuntu build doesn't run on the Arch host.
-- Running work is drawn in ink, not the brand's sky blue: the calm rule (colour only for what needs someone)
-  outranks the brand book here; flagged for the brand designer.
 - Deferred from the audits (why in AUDIT-RESPONSE): bulk on bots tree/packs/connectors/secrets/cases; pack dependency
   tree; visual AND/OR filter groups; new-trigger comment placement; multi-user previews.

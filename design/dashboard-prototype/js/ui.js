@@ -342,7 +342,7 @@
     $('#strip-cells').innerHTML = `
       <div class="spacer"></div>
       ${D.pending.length ? `<a class="cell staged" href="#/config/apply">${UI.statusMark('staged', `${D.pending.length} not applied`)}</a>` : ''}
-      <button type="button" class="cell status-btn" data-act="strip-status" aria-label="System status: ${health[1]}">${UI.statusMark(health[0], health[1])}</button>
+      <button type="button" class="cell status-btn${health[0] === 'ok' ? ' calm' : ''}" data-act="strip-status" aria-label="System status: ${health[1]}">${UI.statusMark(health[0], `<span class="sw">${health[1]}</span>`)}</button>
       <button type="button" class="cell op-btn" data-act="op-menu" aria-label="${D.operator.name}: account and display"><span class="avatar">${D.operator.name.slice(0, 2)}</span></button>`;
     $('#rail-nav').innerHTML = UI.navHTML();
     $('#tabbar').innerHTML = [['overview', 'Home', 'overview'], ['attention', 'Needs you', 'attention', need], ['activity', 'Activity', 'live'], ['bots', 'Bots', 'bots'], ['more', 'More', 'more']].map(([k, l, ic, c]) => `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span>${l}</span>${c ? UI.count(c, { hot: true }) : ''}</a>`).join('');

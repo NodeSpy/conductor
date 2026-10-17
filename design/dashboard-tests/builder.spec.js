@@ -15,10 +15,10 @@ test('build a workflow from scratch through the picker, then deploy it', async (
   await page.fill('#f-name', 'issue-labeler');
   await page.locator('#gen-submit').click();
   await expect(page).toHaveURL(/#\/workflows\/issue-labeler/);
-  await expect(page.locator('#wf-state')).toContainText('unsaved draft');
+  await expect(page.locator('#wf-state')).toContainText('Unsaved changes');
   await page.locator('[data-act="wf-trig-pick"]').click();
   await pick(page, 'issue opened', 'on:gh.issue_opened');
-  await expect(page.locator('#card-\\$trigger')).toContainText('gh.issue_opened');
+  await expect(page.locator('#card-\\$trigger')).toContainText('An issue is opened');
   // + after the trigger → a connector verb, found by search
   await page.locator('.spine-add .plus[data-loc="steps"][data-i="0"]').click();
   await pick(page, 'label', 'verb:gh.label');
@@ -35,8 +35,8 @@ test('build a workflow from scratch through the picker, then deploy it', async (
   const y = await yaml(page);
   expect(y).toMatch(/on: gh\.issue_opened[\s\S]*- id: label\n\s+uses: gh\.label[\s\S]*- id: agent\n\s+type: agent/);
   await expect(page.locator('[data-act="wf-deploy"]')).not.toHaveAttribute('aria-disabled', 'true');
-  await page.locator('[data-act="wf-save"]').click();
-  await expect(page.locator('#wf-state')).toContainText('saved · not deployed');
+  await page.keyboard.press('Control+s');
+  await expect(page.locator('#wf-state')).toContainText('Saved, not applied');
   await page.locator('[data-act="wf-deploy"]').click();
   await expect(page.locator('.diff')).toContainText('name: issue-labeler');
   await applyStaged(page);
@@ -112,7 +112,6 @@ test('add a parallel group and a branch', async ({ page }) => {
 
 test('edit the YAML and see the list update; undo a delete; keyboard reorder', async ({ page }) => {
   await go(page, '#/workflows/ci-fixer');
-  if (isPhone(page)) await page.locator('[data-act="wf-pane"][data-v="yaml"]').click();
   const ta = page.locator('#wf-yaml .ced-ta');
   await ta.fill((await ta.inputValue()).replace('- id: push', '- id: ship').replace('{{.push.sha}}', '{{.ship.sha}}'));
   await expect(card(page, 'ship')).toHaveCount(1);
@@ -122,13 +121,12 @@ test('edit the YAML and see the list update; undo a delete; keyboard reorder', a
   await expect(page.locator('#wf-issues')).toContainText('error');
   await expect(card(page, 'ship')).toHaveCount(1);
   await page.locator('[data-act="wf-undo"]').click();
-  if (isPhone(page)) await page.locator('[data-act="wf-pane"][data-v="steps"]').click();
   await page.locator('[data-act="wf-menu"][data-id="test"]').click();
   await page.locator('#pop-menu [data-act="wf-del-step"]').click();
   await expect(card(page, 'test')).toHaveCount(0);
   await page.locator('[data-act="wf-undo"]').click();
   await expect(card(page, 'test')).toHaveCount(1);
-  await page.locator('[data-act="wf-redo"]').click();
+  await page.keyboard.press('Control+Shift+z');
   await expect(card(page, 'test')).toHaveCount(0);
   await page.locator('[data-act="wf-undo"]').click();
   await page.locator('[data-card="logs"] .sc-head').focus();
@@ -140,7 +138,6 @@ test('edit the YAML and see the list update; undo a delete; keyboard reorder', a
 test('drag a step to reorder it', async ({ page }) => {
   test.skip(isPhone(page), 'touch uses Move up/down and Alt+arrows; drag is a mouse affordance');
   await go(page, '#/workflows/ci-fixer');
-  await page.locator('[data-act="wf-expand"][data-v="0"]').click(); // all plates in view
   await card(page, 'comment').locator('.sc-head').dragTo(card(page, 'logs'), { targetPosition: { x: 40, y: 6 } });
   const y = await yaml(page);
   expect(y.indexOf('id: comment')).toBeLessThan(y.indexOf('id: logs'));
@@ -171,7 +168,7 @@ test('pack-owned workflow: structure is read-only, field edits become overrides'
   await expect(card(page, 'review')).toContainText('paseo runtime');
   await card(page, 'review').locator('select[data-wf-path="runtime"]').selectOption('claude-cli');
   await page.locator('[data-act="wf-seg"][data-path="isolation.mode"][data-v="namespace"]').click();
-  await page.locator('[data-act="wf-save"]').click();
+  await page.keyboard.press('Control+s');
   await page.locator('[data-act="wf-deploy"]').click();
   await expect(page.locator('.diff')).toContainText('review-flow/review');
   await applyStaged(page);
