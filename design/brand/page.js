@@ -91,7 +91,7 @@ function dashboard(d, theme) {
     </div>
     <div class="body">
       <nav class="rail">
-        <div class="host"><i class="dot ok"></i><span>ops-box · 100.88.12.40</span></div>
+        <div class="host"><i class="dot ok"></i><span>ops-box · 192.0.2.40</span></div>
         <span class="grp">Now</span>
         ${nav('grid', 'Overview', '', true)}${nav('pulse', 'Live', '<em>3</em>')}${nav('diamond', 'Needs you', '<em class="hot">6</em>')}
         <span class="grp">Work</span>

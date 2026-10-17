@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { contrast } from './oklch.mjs';
+import { privacyCheck } from './privacy-check.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dir = path.resolve(here, '..', 'tokens');
@@ -315,4 +316,8 @@ if (!checkOnly) {
 }
 console.log(`${tokens.size} tokens · ${results.length} contrast pairs · ${fails.length} failing`);
 for (const f of fails) console.log(`  FAIL ${f.theme.padEnd(5)} ${short(f.token)} on ${short(f.on)}: ${f.ratio} < ${f.min}`);
-process.exit(fails.length ? 1 : 0);
+// The branch is public: no real names, home paths or private hosts anywhere under design/.
+const privateHits = privacyCheck();
+for (const h of privateHits) console.log(`  PRIVATE ${h.slice(0, 160)}`);
+console.log(`privacy: ${privateHits.length} hits under design/`);
+process.exit(fails.length || privateHits.length ? 1 : 0);

@@ -96,7 +96,7 @@ export const LOGOS = [
   },
 ];
 
-// Daniel picked Fermata, strengthened (Oct 2026). The official kit is generated into
+// Fermata, strengthened was picked (Oct 2026). The official kit is generated into
 // design/brand/assets/ (the one canonical location); the explored marks stay in logo-kits/.
 export const OFFICIAL_LOGO = 'fermata-bold';
 export const RECOMMENDED_LOGO = OFFICIAL_LOGO;

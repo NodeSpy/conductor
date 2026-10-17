@@ -40,7 +40,7 @@ const P = [
     BEFORE(`<dl class="b-dl"><dt>trigger</dt><dd class="b-mono">schedule 0 6 * * 1</dd><dt>started</dt><dd class="b-mono">10/16/2026, 5:03:45 PM</dd><dt>id</dt><dd class="b-mono">r-7ef0</dd></dl>`),
     AFTER(`<dl class="a-dl"><dt>Runs</dt><dd>Mondays at 06:00</dd><dt>Started</dt><dd>52 min ago <span>(17:03)</span></dd><dt>Run</dt><dd><code>r-7ef0</code></dd></dl>`)],
   ['Whitespace that groups, density on request', 'Space does the grouping, so boxes and rules can be fewer. Comfortable is the default; compact is a token set for operators at scale, with the same content and the same order, only tighter.',
-    BEFORE(`<div class="b-dense">${['ops-box · 100.88.12.40', 'NOW · Overview · Live 3 · Needs you 6', 'WORK · Run history · Workflows · Bots · Browsers 3', 'SYSTEM · Config · Secrets & vars · Packs & plugins · Connectors & hosts · Updates 1 · Logs & audit · Access'].map((t) => `<div class="b-mono">${t}</div>`).join('')}</div>`),
+    BEFORE(`<div class="b-dense">${['ops-box · 192.0.2.40', 'NOW · Overview · Live 3 · Needs you 6', 'WORK · Run history · Workflows · Bots · Browsers 3', 'SYSTEM · Config · Secrets & vars · Packs & plugins · Connectors & hosts · Updates 1 · Logs & audit · Access'].map((t) => `<div class="b-mono">${t}</div>`).join('')}</div>`),
     AFTER(`<div class="a-dens"><div><small>Comfortable · 52px</small>${['pr-review acme/web#1291', 'ci-fixer acme/web#1288'].map((t, i) => `<p class="${i ? 'f' : ''}">${gl(i ? 'danger' : 'success')}<b>${t.split(' ')[0]}</b> ${t.split(' ')[1]}</p>`).join('')}</div><div class="cmp"><small>Compact · 34px</small>${['pr-review acme/web#1291', 'ci-fixer acme/web#1288', 'issue-triage acme/api#486'].map((t, i) => `<p class="${i === 1 ? 'f' : ''}">${gl(i === 1 ? 'danger' : 'success')}<b>${t.split(' ')[0]}</b> ${t.split(' ')[1]}</p>`).join('')}</div></div>`)],
 ];
 document.getElementById('principle-list').innerHTML = P.map(([t, why, before, after], i) => `<article class="pr"><div class="pr-h"><span class="pn">${String(i + 1).padStart(2, '0')}</span><div><h3>${t}</h3><p>${why}</p></div></div>
@@ -78,7 +78,7 @@ function drawGrid() {
   document.getElementById('compare-grid').className = 'cgrid ' + vp;
   document.getElementById('compare-grid').innerHTML = SCREENS.map(([s, label, hash]) => `<div class="crow"><h3>${label}</h3><div class="ccols">${COLS.map(([k, name]) => {
     const src = `v2/shots/${k}-${s}-${vp}-${th}.png`;
-    const live = k === 'current' ? `http://100.119.192.38:8767/index.html${th === 'light' ? '?theme=light' : ''}${hash}` : `v2/mock.html?d=${k}&s=${s}&t=${th}`;
+    const live = k === 'current' ? `${location.protocol}//${location.hostname}:8767/index.html${th === 'light' ? '?theme=light' : ''}${hash}` : `v2/mock.html?d=${k}&s=${s}&t=${th}`;
     return `<figure class="${k === 'daylight' ? 'chosen' : ''}"><figcaption><b>${name}</b><a href="${live}" target="_blank" rel="noopener">Open live ↗</a></figcaption><img src="${src}" width="${vp === 'phone' ? 390 : 1440}" height="${vp === 'phone' ? 844 : 900}" alt="${name}: ${label}" data-cap="${name} · ${label} · ${vp} · ${th}"></figure>`;
   }).join('')}</div></div>`).join('');
 }

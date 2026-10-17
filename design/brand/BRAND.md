@@ -12,9 +12,9 @@ This is the single source of truth for how conductor looks, reads and behaves on
 | **Logo** (official kit, one canonical location) | [`assets/`](assets/); the choice is recorded on [`logo-review.html`](logo-review.html) |
 | **How we got here** | [`index.html`](index.html) (logo directions), [`directions-v2.html`](directions-v2.html) (system directions) |
 
-**Daylight** is warm, light-first and built to be read: conductor as a calm colleague who tells you how things are going in a sentence before showing you a table. Daniel chose it over Broadsheet (editorial, densest) and Score (timeline-first, most graphic). It borrows one pattern from each: Broadsheet’s **“since you last looked”** digest for the overview, and Score’s **activity lanes** for the Activity page.
+**Daylight** is warm, light-first and built to be read: conductor as a calm colleague who tells you how things are going in a sentence before showing you a table. It was chosen over Broadsheet (editorial, densest) and Score (timeline-first, most graphic). It borrows one pattern from each: Broadsheet’s **“since you last looked”** digest for the overview, and Score’s **activity lanes** for the Activity page.
 
-The logo is **Fermata, strengthened**: the hold-until-released arch, chosen by Daniel in October 2026. Its kit is in [`assets/`](assets/).
+The logo is **Fermata, strengthened**: the hold-until-released arch, chosen in October 2026. Its kit is in [`assets/`](assets/).
 
 ---
 
@@ -22,8 +22,8 @@ The logo is **Fermata, strengthened**: the hold-until-released arch, chosen by D
 
 | Area | Decision | Why |
 |---|---|---|
-| Direction | Daylight: warm, light-first, sentence-first | Daniel found round one “engineery” and generic, and wanted conductor’s firehose easier to consume. Daylight leads with plain language and keeps colour for what needs attention. |
-| Calm by default | Exception-first: the heading is the glance answer, one loud thing, everything normal folded into quiet summary lines and density bands | Daniel: “all of it just looks so busy… I have to read everything all the time.” A check (`tools/calm-check.mjs`) now holds every screen to a loudness budget. |
+| Direction | Daylight: warm, light-first, sentence-first | Round one read as “engineery” and generic; the brief asked for conductor’s firehose easier to consume. Daylight leads with plain language and keeps colour for what needs attention. |
+| Calm by default | Exception-first: the heading is the glance answer, one loud thing, everything normal folded into quiet summary lines and density bands | The first review: “all of it just looks so busy… I have to read everything all the time.” A check (`tools/calm-check.mjs`) now holds every screen to a loudness budget. |
 | Information design | Ten rules (below): summary first, plain headline over technical detail, three type levels, colour only for attention… | These are the heart of the system. The audits’ biggest problems (no first step, “what can my bots do?”, hashes up front) were information problems, not paint. |
 | Palette | Cream and cocoa surfaces, sand neutrals, one ember accent | Warm paper reads as a product rather than a terminal, and one accent keeps “where do I act?” unambiguous. |
 | Status | Colour only on what needs attention; passing work is ink | When eleven of sixteen rows are green, green means nothing and the two red rows are harder to find. |
@@ -38,7 +38,7 @@ The logo is **Fermata, strengthened**: the hold-until-released arch, chosen by D
 
 ## Calm by default (exception-first)
 
-Daniel’s review of the first Daylight mocks: *“all of it just looks so busy… there is no way for me to just pick out what’s going on… I have to read everything all the time.”* Everything was shown at equal weight, all the time. The fix is in the information design, not the decoration. This principle sits above the ten rules that follow, and it applies to every screen. The book chapter is [*Calm by default*](system.html#calm).
+The first review of the Daylight mocks: *“all of it just looks so busy… there is no way for me to just pick out what’s going on… I have to read everything all the time.”* Everything was shown at equal weight, all the time. The fix is in the information design, not the decoration. This principle sits above the ten rules that follow, and it applies to every screen. The book chapter is [*Calm by default*](system.html#calm).
 
 1. **The 3-second glance.** Every screen answers “is anything wrong, and what needs me?” in about three seconds, without reading. The answer *is* the page heading: “5 things need you”, “3 runs need attention”, “All quiet. Nothing needs you.” It is the largest, first and highest-contrast text on the screen. When nothing needs you, the screen says almost nothing.
 2. **Normal collapses into one quiet line.** Finished work is a summary line (“10 finished · 9 passed · 1 parked”) that expands in place, never a wall of rows. In timelines, passing runs are faint ticks in a **density band**; only failures, needs-you and running work are marks. Healthy systems, connections and bots collapse to “All healthy”.
@@ -359,7 +359,7 @@ conductor talks to someone who is nervous about giving an AI access to productio
 
 ## Theming robustness
 
-**The iPhone bug.** On Daniel’s iPhone (paseo’s in-app browser, WebKit, OS in dark mode), `directions-v2.html` showed faint, light-grey text on the cream page, and every specimen labelled LIGHT rendered with a dark surface. **Cause:** the pages never declared a colour scheme. With no `color-scheme`, browsers that auto-darken pages repaint their colours: Chromium’s force-dark, and in-app WebViews that apply “algorithmic darkening”. That flipped our forced-light surfaces dark while some text was left in its light-theme colours. The token-pair contrast check passed, because the tokens were right; what the reader saw was not.
+**The iPhone bug.** On an iPhone (paseo’s in-app browser, WebKit, OS in dark mode), `directions-v2.html` showed faint, light-grey text on the cream page, and every specimen labelled LIGHT rendered with a dark surface. **Cause:** the pages never declared a colour scheme. With no `color-scheme`, browsers that auto-darken pages repaint their colours: Chromium’s force-dark, and in-app WebViews that apply “algorithmic darkening”. That flipped our forced-light surfaces dark while some text was left in its light-theme colours. The token-pair contrast check passed, because the tokens were right; what the reader saw was not.
 
 **The fix, at the source** (`tools/tokens.mjs` generates it into `tokens.css`):
 - `:root { color-scheme: light dark; }` and `<meta name="color-scheme" content="light dark">` on every page, so the browser knows the page handles both and never auto-darkens it.
@@ -478,7 +478,7 @@ The prototype adopts Daylight in one pass:
 
 ---
 
-## Open decisions for Daniel
+## Open decisions
 
 0. ~~Labels and status~~: **decided.** Typed labels, with grouped rows and margin marks; see the Status section.
 
