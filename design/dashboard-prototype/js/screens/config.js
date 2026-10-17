@@ -40,17 +40,17 @@
       </div>
       <div class="stack">
         <div class="panel"><div class="panel-head"><h3>Applied changes</h3><span class="muted small">each keeps a backup</span></div><div class="list">${D.configHistory.map((h) => `
-          <div class="item hist" style="align-items:flex-start">${h.status === 'live' ? st('ok', '') : st('idle', '')}<div class="grow"><div class="small">${esc(h.summary)}</div><div class="mono tiny muted">${h.id} · ${esc(h.who)} · ${ago(h.at)} ago</div>
+          <div class="item hist" style="align-items:flex-start">${h.status === 'live' ? st('ok', '') : st('idle', '')}<div class="grow"><div class="small">${esc(h.summary)}</div><div class="mono tiny muted"><span title="backup ids are in UTC">${h.id} UTC</span> · ${esc(h.who)} · ${new Date(h.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} local (${ago(h.at)} ago)</div>
             ${view.open === h.id ? `<div class="hist-diff">${(h.changes || []).map((c) => UI.diffView(c.before == null ? '' : typeof c.before === 'string' ? c.before : YAML.stringify({ [C()[c.coll].path(c.key)]: c.before }), c.after == null ? '' : typeof c.after === 'string' ? c.after : YAML.stringify({ [C()[c.coll].path(c.key)]: c.after }), 'unified', { file: C()[c.coll].path(c.key) }).html).join('')}</div>` : ''}</div>
             <div class="row" style="gap:4px"><button class="btn sm ghost" data-act="hist-view" data-id="${h.id}" aria-expanded="${view.open === h.id}">${icon(view.open === h.id ? 'chevd' : 'eye')}${view.open === h.id ? 'Hide' : 'Diff'}</button>
             ${h.status === 'live' && D.configHistory[0] === h && D.configHistory.length === 1 ? tag('live', 'ok') : `${(() => { const cf = S.revertConflicts(h.id); return `<button class="btn sm" ${cf.length ? UI.off(`A later change also edits this: ${cf.map((x) => x.summary).join('; ')}. Restore to before this instead.`) : `data-act="revert-one" data-id="${h.id}"`}>${icon('undo')}Revert this change</button>`; })()}${D.configHistory.indexOf(h) > 0 ? `<button class="btn sm ghost" data-act="restore" data-id="${h.id}">Restore to before this</button>` : ''}`}${h.status === 'live' ? ' ' + tag('live', 'ok') : ''}</div></div>`).join('')}</div>
           <div class="panel-foot small muted">Revert undoes one change and keeps the ones after it. Restore goes back to before a change, undoing everything since. Both go through the same pipeline: validated on a copy, backed up, applied.</div></div>
         <div class="panel"><div class="panel-head"><h3>Guards</h3></div><div class="panel-body small stack tight">
-          <div class="row">${st('ok', '')}Edits are node-level: comments, anchors and unknown keys are kept.</div>
-          <div class="row">${st('ok', '')}Validated on a copy, with copied plugin state; <span class="mono">conductor validate</span> is not read-only.</div>
-          <div class="row">${st('ok', '')}A config this binary can't load is never written.</div>
-          <div class="row">${st('ok', '')}Also checked against the pending update (v0.72.0).</div>
-          <div class="row">${st('ok', '')}Boot guard: a config that fails at boot is restored automatically.</div></div></div>
+          <div class="row guard">${st('ok', '')}<span class="grow">Edits are node-level: comments, anchors and unknown keys are kept.</span></div>
+          <div class="row guard">${st('ok', '')}<span class="grow">Validated on a copy, with copied plugin state; <span class="mono">conductor validate</span> is not read-only.</span></div>
+          <div class="row guard">${st('ok', '')}<span class="grow">A config this binary can't load is never written.</span></div>
+          <div class="row guard">${st('ok', '')}<span class="grow">Also checked against the pending update (v0.72.0).</span></div>
+          <div class="row guard">${st('ok', '')}<span class="grow">Boot guard: a config that fails at boot is restored automatically.</span></div></div></div>
         <div class="panel"><div class="panel-body row small"><span class="muted grow">Prototype: everything here is fake state in this browser.</span><button class="btn sm" data-act="reset-demo">${icon('undo')}Reset demo data</button></div></div>
       </div></div></div>`;
   });

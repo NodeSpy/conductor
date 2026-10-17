@@ -590,6 +590,10 @@
   });
   UI.act('ph-more', (b) => { const box = b.closest('.actions'), extra = [...box.querySelectorAll('.ph-folded')]; UI.menu(b, extra.map((x) => [x.textContent.trim() || x.getAttribute('aria-label') || 'Action', 'chev', 'ph-fold-go', `data-i="${x.dataset.fold}"${x.getAttribute('aria-disabled') === 'true' ? ` aria-disabled="true" data-reason="${UI.esc(x.dataset.reason || '')}"` : ''}`])); UI.phFoldBox = box; });
   UI.act('ph-fold-go', (b) => { UI.closeMenu(); const x = UI.phFoldBox && UI.phFoldBox.querySelector(`.ph-folded[data-fold="${b.dataset.i}"]`); if (x) x.click(); });
+  /** A five-field cron in words where it's simple ("0 6 * * 1" → "Mondays 06:00"); otherwise the expression. */
+  UI.humanCron = (c) => { const f = String(c).trim().split(/\s+/); if (f.length !== 5 || !/^\d+$/.test(f[0]) || !/^\d+$/.test(f[1])) return c; const t = `${f[1].padStart(2, '0')}:${f[0].padStart(2, '0')}`, D7 = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'];
+    if (f[2] === '*' && f[3] === '*' && f[4] === '*') return `Every day ${t}`; if (f[2] === '*' && f[3] === '*' && /^[0-6]$/.test(f[4])) return `${D7[+f[4]]} ${t}`; if (f[2] === '*' && f[3] === '*' && f[4] === '1-5') return `Weekdays ${t}`; if (/^\d+$/.test(f[2]) && f[3] === '*' && f[4] === '*') return `Day ${f[2]} of each month, ${t}`; return c; };
+  UI.humanOn = (on) => String(on || '').replace(/schedule ((?:\S+\s+){4}\S+)/, (m, c) => { const h = UI.humanCron(c); return h === c ? m : `${h} (schedule)`; });
   /** The sticky bulk bar: n selected, actions [[label, icon, act, attrs?, offReason?]], and a clear action. */
   UI.bulkBar = (n, noun, actions, clearAct) => `<div class="bulk-bar" role="region" aria-label="Bulk actions"><b>${n} ${noun}${n > 1 ? 's' : ''} selected</b>${actions.map(([l, ic, act, attrs = '', off]) => `<button class="btn sm" ${off ? UI.off(off) : `data-act="${act}" ${attrs}`}>${UI.icon(ic)}${l}</button>`).join('')}<button class="btn sm ghost" data-act="${clearAct}" style="margin-left:auto">Clear</button></div>`;
   /** Download a text file (exports). */

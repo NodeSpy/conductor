@@ -88,11 +88,11 @@
   listColl('connectors', () => D().connectors, {
     label: 'connector', href: () => '#/connectors/connectors',
     fresh: (k, n) => ({ use: n.use, events: 0, verbs: 0, detail: `${n.use} · registered on reload` }),
-    set(k, node) { const L = D().connectors; if (node == null) return drop(L, k); const it = byName(L, k); if (it) { it.cfg = node; it.use = node.use; } else L.push({ name: k, use: node.use, status: 'idle', detail: `${node.use} · registered on reload`, events: 0, verbs: 0, cfg: node }); },
+    set(k, node) { const L = D().connectors; if (node == null) return drop(L, k); const it = byName(L, k); if (it) { it.cfg = node; it.use = String(node.use).split("@")[0]; } else L.push({ name: k, use: String(node.use).split("@")[0], status: 'idle', detail: `${node.use} · registered on reload`, events: 0, verbs: 0, cfg: node }); },
     validate(k, n, all) {
       const e = [];
       if (!/^[a-z][a-z0-9-]*$/.test(k)) e.push(`connector name "${k}": lowercase letters, digits and dashes`);
-      const decl = window.SCHEMA.connectors[n.use];
+      const decl = window.SCHEMA.connectors[String(n.use || "").split("@")[0]];
       if (!decl) e.push(`connectors.${k}.use: "${n.use}" is neither a builtin nor in the official registry`);
       else decl.settings.filter((s) => s.req).forEach((s) => { if (S.getPath(n, s.k) == null || S.getPath(n, s.k) === '') e.push(`connectors.${k}.${s.k} is required by the ${n.use} plugin`); });
       Object.entries(n).forEach(([fk, fv]) => { const r = vref(fv); if (r && r.vault !== 'env') { const v = byName(all.vaults, r.vault); if (!v) e.push(`connectors.${k}.${fk}: vault "${r.vault}" is not defined`); else if (v.status === 'fail') e.push(`connectors.${k}.${fk}: vault "${r.vault}" is unreachable (its unlock token expired)`); } });

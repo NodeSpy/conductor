@@ -396,3 +396,5 @@ th.sel, td.sel { width: 30px; padding-right: 0 !important; }
 /* phone: scrolling tab rows fade at the edge; folded header actions */
 .tabs.scrolls:not(.at-end) { -webkit-mask-image: linear-gradient(90deg, #000 80%, transparent); mask-image: linear-gradient(90deg, #000 80%, transparent); }
 @media (max-width: 720px) { .page-head .actions .ph-folded { display: none !important; } .page-head .actions { flex-wrap: nowrap; } .page-head .actions .btn { flex: 1 1 auto; } .page-head .actions .ph-more { flex: 0 0 auto; } }
+.row.guard { align-items: flex-start; } .row.guard .st { flex: none; margin-top: 1px; }
+.score .panel-foot { flex-wrap: wrap; row-gap: 6px; }

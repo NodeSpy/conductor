@@ -40,7 +40,7 @@
     ${rows.map((r) => { const w = r.w, d = (D.drafts || {})[w.name] != null, st2 = staged.find((c) => c.key === w.name);
       return `<tr class="click${vis(r) ? '' : ' hidden'}" data-row="${esc(w.name + ' ' + w.on + ' ' + r.folder)}" data-owner="${r.owner}" data-folder="${esc(r.folder)}" ${moveOff(r) ? '' : `draggable="true" data-wf-drag="${esc(w.name)}"`}>
       ${bulk ? `<td class="sel" data-l=""><input type="checkbox" class="cbx" data-act="wl-sel" data-name="${esc(w.name)}" aria-label="Select ${esc(w.name)}"${UI.wlSel.has(w.name) ? ' checked' : ''}></td>` : ''}<td data-l="workflow"><a class="link-plain" href="#/workflows/${w.name}"><b>${w.name}</b></a> ${w.kind === 'workflow' ? tag('callable') : ''}${d ? tag('draft', 'wait') : ''}${st2 ? tag(st2.before == null ? 'new · staged' : 'edit staged', 'run') : ''}</td>
-      <td data-l="on" class="mono small">${esc(w.on || '')}</td>
+      <td data-l="on" class="small${UI.humanOn(w.on) === (w.on || '') ? ' mono' : ''}" title="${esc(w.on || '')}">${esc(UI.humanOn(w.on))}</td>
       <td data-l="folder">${r.folder ? `<a class="mono small link-plain folder-link" href="#/folders/${enc(r.folder)}/workflows">${icon('folder')}${esc(r.folder)}</a>` : '<span class="muted small">top level</span>'}</td>
       <td data-l="owner"><span class="owner ${r.owner === 'config' ? 'op' : 'pack'}" title="${esc(OWNER[r.owner](w))}">${esc(OWNER[r.owner](w))}</span></td>
       <td data-l="runs" class="num mono">${w.runs24}</td><td data-l="ok" class="num mono">${Math.round(w.ok * 100)}%</td>${UI.usageOn() ? `<td data-l="usage" class="small">${UI.provSet(UI.wfProv(w.name), { nosrc: true })}</td>` : ''}

@@ -239,14 +239,18 @@ test.describe('packs and plugins', () => {
     await page.locator('[data-act="pack-hold"][data-p="kit"]').click();
     await page.locator('[data-act="pack-plan"][data-p="review"][data-update="1"]').click();
     await page.locator('#pp-go').click();
-    await expect(page.locator('.diff')).toContainText('pr-review-team@1.5.0');
+    await expect(page.locator('.diff').first()).toContainText('pr-review-team@1.5.0');
     await applyStaged(page);
     expect(await state(page, () => D.packs.find((p) => p.name === 'review').ver)).toBe('1.5.0');
     await go(page, '#/extensions/packs');
     await page.locator('[data-act="pack-ov"][data-p="sre-bot"]').click();
-    const row = page.locator('[data-mapk="steps"] .kvrow').nth(1); // the empty row after the one existing override
-    await row.locator('[data-mk=k]').fill('sweep/report');
-    await row.locator('[data-mk=v]').fill('{"model": "summarizer"}');
+    // overrides are YAML; a step the pack doesn't have is refused with the names it does have
+    const y = page.locator('#f-yaml');
+    await expect(y).toHaveValue(/sweep\/check/);
+    await y.fill('steps:\n  sweep/check: { model: light }\n  sweep/nope: { model: summarizer }\n');
+    await submit(page);
+    await expect(page.locator('[data-field="yaml"] .ferr')).toContainText('the pack has no step by that name');
+    await y.fill('steps:\n  sweep/check: { model: light }\n  sweep/report: { model: summarizer }\n');
     await submit(page);
     await expect(page.locator('.diff')).toContainText('sweep/report');
     await go(page, '#/extensions/packs');
@@ -264,9 +268,11 @@ test.describe('packs and plugins', () => {
     await page.locator('[data-act="plugin-update"][data-p="slack"]').click(); await page.locator('#su-go').click();
     await expect(page.locator('tr', { hasText: 'slack' })).toContainText('v1.7.0');
     await go(page, '#/extensions/browse');
-    await page.locator('[data-act="reg-add"][data-n="conductor-plugins/aws-cost"]').click(); await page.locator('#su-go').click();
-    await expect(page.locator('.modal h2')).toHaveText('Add a AWS Cost Explorer connector');
-    await page.fill('#f-name', 'aws'); await page.fill('#f-role_arn-in', 'arn:aws:iam::000000000000:role/cost-read'); await submit(page);
+    const card = page.locator(`[data-cat="connector:aws-cost"][data-origin="official"]`);
+    await card.locator("a.btn.primary").click();
+    await expect(page).toHaveURL(/#\/extensions\/install\/connector\/aws-cost$/);
+    await page.fill('#f-inst', 'aws'); await page.fill('#f-set__role_arn', 'arn:aws:iam::000000000000:role/cost-read');
+    await page.locator('[data-act="iw-review"]').click();
     await applyStaged(page);
     expect(await state(page, () => D.connectors.some((c) => c.name === 'aws' && c.use === 'aws-cost'))).toBe(true);
   });

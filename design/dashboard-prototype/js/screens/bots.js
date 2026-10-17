@@ -381,7 +381,7 @@
     const ta = UI.$('#say'), v = ta.value.trim(); if (!v) return UI.nudge(ta, `Type a message for ${b.dataset.m} first`);
     const L = (D.chats[b.dataset.m] = D.chats[b.dataset.m] || []); L.push({ who: 'op', at: now(), text: v }); ta.value = ''; S.save();
     const box = UI.$('#msgs'); box.innerHTML = L.map((c) => bubble(c, b.dataset.m)).join('') + `<div class="msg bot" id="typing"><div class="meta"><span>${b.dataset.m}</span><span>queued → delivered (idle)</span></div><div class="bubble typing"><i></i><i></i><i></i></div></div>`; box.scrollTop = box.scrollHeight;
-    setTimeout(() => { L.push({ who: 'bot', at: now(), text: `Noted: “${v.slice(0, 80)}”. I’ll act on it as your request (operator trust) and report back on the case.` }); S.save(); const bx = UI.$('#msgs'); if (bx) { bx.innerHTML = L.map((c) => bubble(c, b.dataset.m)).join(''); bx.scrollTop = bx.scrollHeight; } }, UI.fast ? 50 : 1400);
+    setTimeout(() => { L.push({ who: 'bot', at: now(), text: `Got it. I'll work on that as your request, with your level of trust, and report back here. Anything that changes something still comes to you for approval first.` }); S.save(); const bx = UI.$('#msgs'); if (bx) { bx.innerHTML = L.map((c) => bubble(c, b.dataset.m)).join(''); bx.scrollTop = bx.scrollHeight; } }, UI.fast ? 50 : 1400);
   });
   document.addEventListener('keydown', (e) => { if (e.target.id === 'say' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); const b = UI.$('[data-act="chat-send"]'); if (b) b.click(); } });
 
@@ -579,11 +579,11 @@
 
   /* ---------- definition editor: a form over bots.<m>, live YAML beside it ---------- */
   const DF = [
-    { k: 'description', type: 'string', mono: false, sec: 'Identity & charter' },
+    { k: 'description', type: 'string', mono: false, label: 'Description', sec: 'Identity & charter' },
     { k: 'team', type: 'enum', label: 'Team', options: () => S.view().teams.map((t) => t.name), create: 'team', createLabel: 'New team', help: 'Empty for a solo bot. On a team, defaults come from the team and this bot can only narrow them.' },
     { k: 'folder', type: 'enum', label: 'Folder', options: () => UI.allFolders(), create: 'folder', createLabel: 'New folder', help: 'Organization only. A bot on a team shows under its team instead.', solo: true },
     { k: 'operators', type: 'list', label: 'Operators (approvers)', help: 'Leave empty to inherit the team\'s.' },
-    { k: 'escalation', type: 'string', mono: false },
+    { k: 'escalation', type: 'string', mono: false, label: 'Escalation (when to involve you)' },
     { k: 'autonomy.shadow', type: 'bool', label: 'Shadow mode', on: 'record proposals; nothing executes', sec: 'Autonomy' },
     { k: 'autonomy.approval_ttl', type: 'duration', label: 'Approval expires after', help: 'An unapproved proposal lapses.' },
     { k: 'autonomy.spend_cap.per_action', type: 'number', label: 'Cloud spend cap · per action (commit_money)', cloud: true, help: 'Real money one approved action may commit. Not model spend.' },
