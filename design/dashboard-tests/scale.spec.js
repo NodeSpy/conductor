@@ -14,15 +14,16 @@ test('run history: the first 50, then "Load 50 more", with a cursor', async ({ p
   await expect(page.locator('#hist-body tr[data-href]')).toHaveCount(100);
 });
 
-test('Compact density: one-line rows, local and instant', async ({ page }) => {
+test('Compact density: tighter rows (Daylight compact: 36px), local and instant', async ({ page }) => {
   test.skip(isPhone(page), 'tables become cards on the phone');
   await go(page, '#/config', { fresh: true });
   await page.locator('[data-act="pref-density"][data-v="compact"]').click();
   expect(await page.evaluate(() => D.pending.length)).toBe(0);
   await go(page, '#/runs');
   expect(await page.evaluate(() => document.documentElement.dataset.density)).toBe('compact');
-  const h = await page.locator('#hist-body tr[data-href]').first().evaluate((el) => el.getBoundingClientRect().height);
-  expect(h).toBeLessThanOrEqual(34);
+  // a finished run is one line; Daylight's compact row is 36px (the same content as comfortable, only tighter)
+  const h = await page.locator('#hist-body tr.quiet[data-href]').first().evaluate((el) => el.getBoundingClientRect().height);
+  expect(h).toBeLessThanOrEqual(38);
 });
 
 test('the Running tile lists three names and a count, not every run', async ({ page }) => {

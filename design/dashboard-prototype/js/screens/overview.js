@@ -12,19 +12,25 @@
   /* ---------- needs you: the list pattern ---------- */
   const VERB = { approval: 'Review', failed: 'Open', needs_input: 'Answer', browser: 'Open' };
   const WORD = { ember: 'Needs you', fail: 'Failed', wait: 'Waiting on you', run: 'Running', idle: 'Parked' };
-  UI.attentionList = (limit) => {
+  UI.attentionList = (limit, grouped = false) => {
     const f = UI.attnFilter || 'all';
     const byKind = D.attention.filter((a) => f === 'all' || (f === 'approvals' ? a.kind === 'approval' : f === 'failures' ? a.kind === 'failed' : !['approval', 'failed'].includes(a.kind)));
     const items = byKind.filter((a) => UI.scopeKeeps(UI.botOfHref(a.href))).slice(0, limit || 99);
     const note = UI.scopeNote(byKind.length - byKind.filter((a) => UI.scopeKeeps(UI.botOfHref(a.href))).length);
     if (!items.length) return note + UI.empty({ title: `Nothing ${f === 'all' ? '' : 'here '}needs you`, body: 'When a bot asks for approval or a run fails, it shows up here.', small: true });
-    return note + `<div class="list needs">${items.map((a) => { const verb = a.verb || VERB[a.kind] || 'Open';
-      return `<a class="item click att" href="${a.href}"${UI.rowState(a.s)}>
+    // one item per row, large: a mark, the plain title, one sentence, the age, one verb. Ids and hashes sit behind
+    // hover (and on the item's own page), never on the row.
+    const row = (a) => { const verb = a.verb || VERB[a.kind] || 'Open';
+      return `<a class="item click att" href="${a.href}"${UI.rowState(a.s)} data-tip="<span class='mono'>${esc(a.plain ? `${a.title} · ${a.sub}` : a.sub)}</span>">
         ${UI.statusMark(a.s, `<span class="sr-only">${WORD[a.s] || a.s}</span>`, { cls: 'att-mark' })}
-        <div class="grow att-text"><div class="item-t">${esc(a.plain || a.title)}</div>${a.why ? `<div class="item-why">${esc(a.why)}</div>` : ''}<div class="item-id">${esc(a.plain ? `${a.title} · ${a.sub}` : a.sub)}</div></div>
+        <div class="grow att-text"><div class="item-t">${esc(a.plain || a.title)}</div>${a.why ? `<div class="item-why">${esc(a.why)}</div>` : ''}</div>
         <span class="att-age">${UI.ageText(a.age)}</span>
         <span class="btn sm${a.kind === 'approval' ? ' primary' : ''}">${a.kind === 'approval' ? icon('passkey') : ''}${verb}</span>
-      </a>`; }).join('')}</div>`;
+      </a>`; };
+    if (!grouped) return note + `<div class="list needs">${items.map(row).join('')}</div>`;
+    // grouped on the Needs you page: approvals, then failures, then questions; each with a sentence
+    const G = [['approval', 'Approvals', (n) => `${n === 1 ? 'A bot wants' : 'Bots want'} to do something that needs your passkey.`], ['failed', 'Failures', (n) => `${n === 1 ? 'A run' : 'Runs'} stopped and ${n === 1 ? 'needs' : 'need'} a decision: retry, fix or dismiss.`], ['other', 'Waiting on you', (n) => `${n === 1 ? 'Something is' : 'Things are'} paused until you answer.`]];
+    return note + G.map(([k, title, say]) => { const xs = items.filter((a) => (k === 'other' ? !['approval', 'failed'].includes(a.kind) : a.kind === k)); return xs.length ? `${UI.groupHead({ title, n: xs.length, say: say(xs.length), tone: 'attn' })}<div class="list needs">${xs.map(row).join('')}</div>` : ''; }).join('');
   };
 
   UI.bindApprove = (root) => UI.bind(root, '[data-approve]', 'click', (e, el) => {
@@ -58,15 +64,18 @@
     const kept = D.score.filter(laneKeeps).map((l) => Object.assign({ n: l.marks.filter(([a]) => a <= span).length }, l)).sort((a, b) => b.n - a.n);
     const shown = o.all ? kept : kept.slice(0, top);
     const ticks = [4, 3, 2, 1].map((k) => `<span style="left:${((4 - k) / 4) * 100}%">${spanWords((span / 4) * k)}</span>`).join('') + '<span class="now" style="left:100%">now</span>';
-    const rows = shown.map((l) => `<div class="lane"><div class="lane-name">${esc(l.lane)}</div><div class="lane-track">${l.marks.filter(([a]) => a <= span || span >= 720).map(([a, b, s, id]) => {
-      const left = Math.max(0, Math.min(100, ((span - Math.min(a, span)) / span) * 100));
-      const run = id && D.runs.find((r) => r.id === id);
-      const tip = `<b>${esc(l.lane)}</b> · ${MW[s] || s} · ${spanWords(a)}${run && run.repo ? `<br>${run.repo}#${run.number}` : ''}${id ? `<br><span class='mono'>${id}</span>` : ''}${run && UI.usageOn() ? ' · ' + UI.provLabel(UI.runProv(run)) + ' ' + (UI.isApi() ? UI.usd(run.cost) : UI.usageSource() ? UI.fmtTok(UI.tokOf(run)) + ' tok' : UI.runTurns(run) + ' turns') : ''}`;
-      // only marks with a recorded run open one; older marks are history without a record here
-      return id ? `<a class="mark" data-m="${s}" style="left:${left}%" href="#/${s === 'run' ? 'live' : 'runs'}/${id}" data-tip="${tip}" aria-label="${esc(l.lane)}: ${MW[s]} run ${id}">${UI.laneMark(s)}</a>` : `<span class="mark" data-m="${s}" style="left:${left}%" data-tip="${tip}" role="img" aria-label="${esc(l.lane)}: ${MW[s]}">${UI.laneMark(s)}</span>`;
-    }).join('')}</div></div>`).join('');
-    const legend = `<div class="lane-legend">${['ok', 'fail', 'run', 'wait', 'idle'].map((s) => `<span data-m="${s}">${UI.laneMark(s)}${{ ok: 'Passed', fail: 'Failed', run: 'Running', wait: 'Waiting on you', idle: 'Parked' }[s]}</span>`).join('')}</div>`;
-    return { kept, legend, html: `<div class="lanes">${rows || UI.empty({ title: 'No runs here', body: 'Nothing in this folder ran in that time.', small: true })}${rows ? `<div class="lane"><div></div><div class="lane-axis">${ticks}</div></div><div class="nowline" aria-hidden="true"></div>` : ''}</div>` };
+    const pos = (a) => Math.max(0, Math.min(100, ((span - Math.min(a, span)) / span) * 100));
+    const rows = shown.map((l) => { const ms = l.marks.filter(([a]) => a <= span || span >= 720), loud = ms.filter(([, , s]) => s !== 'ok'), fine = ms.length - loud.length;
+      // normal work: one faint tick per passing run, no colour, no label
+      const strip = ms.filter(([, , s]) => s === 'ok').map(([a, , , id]) => `<i class="tick" style="left:${pos(a)}%"${id ? ` data-tip="${esc(l.lane)} · passed · ${spanWords(a)}"` : ''}></i>`).join('');
+      const marks = loud.map(([a, b, s, id]) => { const run = id && D.runs.find((r) => r.id === id);
+        const say = s === 'run' ? 'running' : s === 'fail' ? `failed ${spanWords(b)}` : s === 'wait' ? 'waiting on you' : 'parked';
+        const tip = `<b>${esc(l.lane)}</b> · ${MW[s] || s} · ${spanWords(a)}${run && run.repo ? `<br>${run.repo}#${run.number}` : ''}${id ? `<br><span class='mono'>${id}</span>` : ''}`;
+        const inner = `${UI.laneMark(s)}${s === 'idle' ? '' : `<span class="mark-say">${say}</span>`}`;
+        const flip = pos(a) > 70 ? ' flip' : '';
+        return id ? `<a class="mark${flip}" data-m="${s}" style="left:${pos(a)}%" href="#/${s === 'run' ? 'live' : 'runs'}/${id}" data-tip="${tip}" aria-label="${esc(l.lane)}: ${MW[s]} run ${id}">${inner}</a>` : `<span class="mark${flip}" data-m="${s}" style="left:${pos(a)}%" data-tip="${tip}" role="img" aria-label="${esc(l.lane)}: ${MW[s]}">${inner}</span>`; }).join('');
+      return `<div class="lane${loud.some(([, , s]) => s === 'fail' || s === 'wait') ? ' loud' : ''}"><div class="lane-name">${esc(l.lane)}<span class="lane-n">${fine ? `${fine} fine` : ''}</span></div><div class="lane-track">${strip}${marks}</div></div>`; }).join('');
+    return { kept, legend: '', html: `<div class="lanes">${rows || UI.empty({ title: 'No runs here', body: 'Nothing in this folder ran in that time.', small: true })}${rows ? `<div class="lane"><div></div><div class="lane-axis">${ticks}</div></div><div class="nowline" aria-hidden="true"></div>` : ''}</div>` };
   };
   function score() {
     const L = UI.lanes({ span: SPAN, all: ALL_LANES });
@@ -74,7 +83,7 @@
       <div class="panel-head"><h3>Runs, last ${spanKey()}</h3><span class="muted small hide-phone">one row per workflow or bot, busiest first</span>
         <div class="tools">${UI.folderChip()}${UI.seg(Object.keys(SPANS).map((k) => [k, k]), spanKey(), 'score-span')}</div></div>
       <div class="panel-body">${L.legend}${L.html}</div>
-      <div class="panel-foot">${L.kept.length > TOP ? `<button class="link" data-act="score-all">${ALL_LANES ? 'Show the busiest ' + TOP : `Show all ${L.kept.length}`}</button>` : ''}<span style="margin-left:auto" class="muted">${SPAN > 720 ? 'Older runs aren’t in the prototype’s data.' : 'Select a mark to open the run.'}</span></div>
+      ${L.kept.length > TOP || SPAN > 720 ? `<div class="panel-foot">${L.kept.length > TOP ? `<button class="link" data-act="score-all">${ALL_LANES ? 'Show the busiest ' + TOP : `Show all ${L.kept.length}`}</button>` : ''}${SPAN > 720 ? '<span style="margin-left:auto" class="muted">Older runs aren’t in the prototype’s data.</span>' : ''}</div>` : ''}
     </div>`;
   }
 
@@ -134,16 +143,16 @@
   function health() {
     const d = D.daemon;
     const row = (s, k, v, href) => `<a class="item${href ? ' click' : ''}" ${href ? `href="${href}"` : ''}>${UI.statusMark(s, `<span class="sr-only">${s}</span>`)}<span class="sys-k">${k}</span><span class="muted small ellipsis grow">${v}</span></a>`;
-    const bad = D.connectors.filter((c) => c.status !== 'ok').length;
-    return `<details class="panel sys-card"${D.prefs.sysOpen ? ' open' : ''} data-on-toggle="sys-open">
-      <summary class="panel-head"><h3>System</h3><span class="muted small">${bad ? `${plural(bad, 'connector')} need${bad > 1 ? '' : 's'} a look` : 'Everything is running'}</span><div class="tools"><span class="muted small hide-phone">checked 4 s ago</span>${icon('chev')}</div></summary>
-      <div class="list">
+    const bad = D.connectors.filter((c) => !['ok', 'idle'].includes(c.status)).length;
+    return `<details class="quiet-row sys-card"${D.prefs.sysOpen ? ' open' : ''} data-on-toggle="sys-open">
+      <summary>${UI.statusMark(bad ? 'wait' : 'success', `<span class="sr-only">${bad ? 'needs a look' : 'healthy'}</span>`)}<b>System</b><span class="qr-line">${bad ? `${plural(bad, 'connector')} need${bad > 1 ? '' : 's'} a look` : 'All healthy: conductor, the sandbox, agents and every connector'}</span>${icon('chevd', 'qr-chev')}</summary>
+      <div class="qr-body"><div class="list">
         ${row('ok', 'conductor', `${d.version} · up ${d.uptime} · <span class="mono">pid ${d.pid} · config ${d.config_sha}</span>`, '#/logs')}
         ${row('ok', 'Sandbox', `enforcing · ${d.sandbox.identities} identities · ${d.sandbox.containers} containers · <span class="mono">${d.sandbox.backend}</span>`, '#/connectors')}
         ${row('ok', 'Agents', `paseo ${d.paseo.version} · ${d.paseo.agents} agents`, '#/connectors')}
         ${D.connectors.map((c) => row(c.status, esc(c.name), `${c.use} · ${c.detail}`, '#/connectors')).join('')}
         ${row('run', 'Update', `${d.update.available} ready · installs itself · next check within ${d.update.interval}`, '#/updates')}
-      </div></details>`;
+      </div></div></details>`;
   }
 
   function activity() {
@@ -175,6 +184,14 @@
     const rest = `${w.ok} of ${w.total} runs in the last 12 hours went fine${running ? `, and ${running} ${running === 1 ? 'is' : 'are'} running now` : ''}.`;
     return need ? `<b>${need} ${need === 1 ? 'thing needs' : 'things need'} you.</b> Everything else is running normally: ${rest}` : `<b>Nothing needs you.</b> ${rest.replace(/^./, (c) => c.toUpperCase())}`; };
 
+  /** A quiet row: one line that says how a part of the system is, expandable for the detail. */
+  const quiet = (key, title, line, body, open = false, s = '') => `<details class="quiet-row ${key}"${open ? ' open' : ''} data-on-toggle="ov-open" data-k="${key}"><summary>${s ? UI.statusMark(s, `<span class="sr-only">${s}</span>`) : '<span class="qr-dot"></span>'}<b>${title}</b><span class="qr-line">${line}</span>${icon('chevd', 'qr-chev')}</summary><div class="qr-body">${body}</div></details>`;
+  UI.act('ov-open', (el) => { D.prefs.ovOpen = Object.assign({}, D.prefs.ovOpen, { [el.dataset.k]: el.open }); S.save(); });
+  const isOpen = (k, def = false) => (D.prefs.ovOpen && k in D.prefs.ovOpen ? D.prefs.ovOpen[k] : def);
+  function digestLine() { const since = lastLooked(), mins = Math.max(1, Math.round((Date.now() - since) / 60000)), w = window12();
+    const passed = w.marks.filter((m) => m.s === 'ok' && m.b <= mins).length, fails = w.marks.filter((m) => m.s === 'fail' && m.b <= mins).length, appr = D.attention.filter((a) => a.kind === 'approval' && ageMin(a.age) <= mins).length;
+    return [passed ? `${passed} runs passed` : '', fails ? `<span class="loud-word">${plural(fails, 'new failure')}</span>` : '', appr ? `<span class="loud-word">${plural(appr, 'new approval')}</span>` : '', D.daemon.update.available ? 'update ready' : ''].filter(Boolean).join(' · ') || 'Nothing new'; }
+
   UI.route('overview', () => ({
     after(main) {
       // leaving the overview counts as having looked
@@ -187,22 +204,26 @@
       UI.every(5200, () => { if (!feed || i >= extra.length) return; const [s, t, w] = extra[i++]; feed.insertAdjacentHTML('afterbegin', feedItem(s, t, w, 'just now', true)); });
     },
     toString() {
-      return `<div class="page">
-      <div class="page-head hello"><div><h1>${greeting()}</h1><p class="lede">${UI.overviewSummary()}</p>
+      const need = D.attention.length, w = window12(), running = D.runs.filter((r) => r.status === 'run').length, bad = D.connectors.filter((c) => !['ok', 'idle'].includes(c.status)).length;
+      const quietLine = `${w.ok} of ${w.total} runs fine in the last 12 hours · ${running} running now · ${bad ? `${plural(bad, 'connector')} to look at` : 'all systems healthy'}`;
+      return `<div class="page calm">
+      <div class="page-head hello"><div><h1>${greeting()}</h1>
+        ${need ? `<p class="answer"><b>${need} ${need === 1 ? 'thing needs' : 'things need'} you.</b></p>` : '<p class="answer is-quiet">All quiet. Nothing needs you.</p>'}
+        <p class="quiet-line">${need ? 'Everything else is fine: ' : ''}${quietLine}.</p>
         <p class="lede-2">conductor runs your ${UI.term('bots', 'bot')} and ${UI.term('workflows', 'workflow')} on this machine; anything risky waits for your passkey.</p></div>
         ${UI.sunrise('hide-phone hello-art')}
-        <div class="actions">${D.prefs.gsHidden ? `<button class="btn ghost" data-act="gs-show">${icon('sparkle')}Get started</button>` : ''}<button class="btn" data-act="pause">${D.daemon.paused ? icon('play') + 'Resume dispatch' : icon('pause') + 'Pause dispatch'}</button><a class="btn" href="#/workflows">${icon('play')}Run a workflow</a></div></div>
+        <div class="actions">${D.prefs.gsHidden ? `<button class="btn ghost" data-act="gs-show">${icon('sparkle')}Get started</button>` : ''}<button class="btn ghost" data-act="pause">${D.daemon.paused ? icon('play') + 'Resume dispatch' : icon('pause') + 'Pause dispatch'}</button><a class="btn ghost" href="#/workflows">${icon('play')}Run a workflow</a></div></div>
+      ${need ? `<div class="panel attn"><div class="panel-head"><h2>Needs you</h2><span class="muted small">${need} items · approvals are signed with your passkey</span><div class="tools">${UI.folderChip()}${need > 3 ? `<a class="btn sm ghost" href="#/attention">See all ${need} ${icon('chev')}</a>` : ''}</div></div>${UI.attentionList(3)}</div>` : ''}
       ${getStarted()}
-      <div class="grid ov-top">
-        <div class="panel attn">
-          <div class="panel-head"><h2>Needs you</h2>${UI.count(D.attention.length, { hot: D.attention.length > 0 })}<span class="muted small">${D.attention.length} items · approvals are signed with your passkey</span><div class="tools">${UI.folderChip()}<a class="btn sm ghost" href="#/attention">See all ${icon('chev')}</a></div></div>
-          ${UI.attentionList(6)}
-        </div>
-        <div class="stack ov-side">${digest()}${glance()}</div>
-      </div>
       ${score()}
-      <div class="grid g3 ov-bottom">${fyi()}${activity()}${UI.usageOn() ? UI.usagePanel() : workflowsPanel()}</div>
-      <div class="ov-sys">${health()}</div>
+      <div class="quiet-rows">
+        ${quiet('since', 'Since you last looked', digestLine(), digest(), isOpen('since'))}
+        ${quiet('glance', 'Today in numbers', `${running} running · ${w.total} runs in 12 hours · ${D.bots.length} bots`, glance(), isOpen('glance'))}
+        ${quiet('fyi', 'For your information', (D.fyi || []).map((a) => esc(a.plain)).join(' · ') || 'Nothing new', fyi(), isOpen('fyi'))}
+        ${quiet('events', 'Latest events', D.activity[0] ? D.activity[0].text.replace(/<[^>]+>/g, '') : 'Nothing yet', activity(), isOpen('events'))}
+        ${quiet('wfs', UI.usageOn() ? 'Model usage' : 'Workflows', UI.usageOn() ? 'today, per provider' : `${D.workflows.filter((x) => x.runs24).length} ran in the last 24 hours`, UI.usageOn() ? UI.usagePanel() : workflowsPanel(), isOpen('wfs', UI.usageOn()))}
+        ${health()}
+      </div>
     </div>`;
     },
   }));

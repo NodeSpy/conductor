@@ -17,6 +17,14 @@
   const V = () => S.view();
   VS.SRC = { typed: 'Typed', env: 'Env var', vault: 'Vault', setting: 'Setting' };
   const ICON = { typed: 'edit', env: 'terminal', vault: 'lock', setting: 'config' };
+  /* Daylight: the source is a quiet menu inside the field, not a segmented control in front of it. A typed sensitive
+     value is a Secret (conductor stores it encrypted); a vault reference is a Vault item; typed plain values and
+     settings sit under "Other sources". */
+  const SRCW = (s, sensitive) => ({ typed: sensitive ? ['Secret', 'Type it once; conductor stores it encrypted in its vault. It never comes back to the browser.', 'key'] : ['Typed value', 'Written into the config as it is. Not for anything secret.', 'edit'], vault: ['Vault item', 'A conductor vault entry, or an item in 1Password or Bitwarden, read when needed.', 'lock'], env: ['Environment variable', 'Read from conductor’s environment when the value is used.', 'terminal'], setting: ['Setting', 'A shared value from Config → Settings. Plain config, so never for a secret.', 'config'] }[s]);
+  const srcBtn = (s, sensitive) => { const [t, , ic] = SRCW(s, sensitive); return `${icon(ic)}<span>${t}</span>${icon('chevd', 'chev')}`; };
+  const srcMenu = (sources, src, sensitive) => { const main = sources.filter((x) => (sensitive ? x !== 'setting' : x !== 'typed' && x !== 'setting')), other = sources.filter((x) => !main.includes(x));
+    const opt = (x) => { const [t, d, ic] = SRCW(x, sensitive); return `<button type="button" role="menuitemradio" class="vs-opt${x === src ? ' on' : ''}" aria-pressed="${x === src}" aria-checked="${x === src}" data-act="vs-src" data-v="${x}">${icon(ic)}<b>${t}</b><span>${d}</span></button>`; };
+    return `${main.map(opt).join('')}${other.length ? `<div class="vs-more">Other sources</div>${other.map(opt).join('')}` : ''}`; };
 
   VS.parse = (v) => {
     v = v == null ? '' : String(v); let m;
@@ -78,9 +86,9 @@
     const meta = esc(JSON.stringify({ k: fd.k, label: fd.label || fd.k, sensitive: !!fd.sensitive, otp: !!fd.otp, ph: fd.ph || '', sources, vaultOnly: !!fd.vaultOnly }));
     return `<div class="vs" data-vs="${esc(fd.k)}" data-src="${src}" data-meta="${meta}" data-id="${id}"${fd.sensitive ? ' data-sensitive="1"' : ''}>
       <input type="hidden" id="${id}" data-k="${esc(fd.k)}" value="${esc(p.src === src ? (src === 'typed' && fd.sensitive ? '' : val) : '')}"${p.src === 'typed' && fd.sensitive ? ' data-set="1"' : ''}>
-      <div class="vs-bar"><div class="vs-seg" role="group" aria-label="Where ${esc(fd.label || fd.k)} comes from">${sources.map((s) => `<button type="button" class="${s === src ? 'on' : ''}" aria-pressed="${s === src}" data-act="vs-src" data-v="${s}">${icon(ICON[s])}<span>${VS.SRC[s]}</span></button>`).join('')}</div>
-        <span class="vs-check" data-volatile aria-live="polite"></span></div>
-      <div class="vs-body">${body(fd, src, val, id)}</div>
+      <div class="vs-row"><details class="vs-menu"><summary class="vs-srcbtn" aria-label="Where ${esc(fd.label || fd.k)} comes from: ${SRCW(src, !!fd.sensitive)[0]}">${srcBtn(src, !!fd.sensitive)}</summary><div class="vs-pop vs-seg" role="menu">${srcMenu(sources, src, !!fd.sensitive)}</div></details>
+        <div class="vs-body">${body(fd, src, val, id)}</div></div>
+      <span class="vs-check" data-volatile aria-live="polite"></span>
       <div class="vs-msg" data-volatile></div></div>`;
   };
 
@@ -112,10 +120,13 @@
     if (!quiet) hid(el).dispatchEvent(new Event('input', { bubbles: true }));
   };
   const setVal = (el, v) => { hid(el).value = v; delete hid(el).dataset.set; el.dataset.pending = ''; VS.refresh(el); };
+  /** Show the chosen source in the field's menu button and close the menu. */
+  VS.markSrc = (el, src, m) => { el.querySelectorAll('[data-act="vs-src"]').forEach((x) => { const on = x.dataset.v === src; x.classList.toggle('on', on); x.setAttribute('aria-pressed', on); x.setAttribute('aria-checked', on); });
+    const sum = el.querySelector('.vs-srcbtn'); if (sum) { sum.innerHTML = srcBtn(src, !!m.sensitive); sum.setAttribute('aria-label', `Where ${m.label} comes from: ${SRCW(src, !!m.sensitive)[0]}`); } const d = el.querySelector('.vs-menu'); if (d) d.open = false; };
   UI.act('vs-src', (b) => {
-    const el = b.closest('.vs'), m = meta(el), src = b.dataset.v; if (el.dataset.src === src) return;
+    const el = b.closest('.vs'), m = meta(el), src = b.dataset.v; if (el.dataset.src === src) { VS.markSrc(el, src, m); return; }
     el.dataset.src = src; el.dataset.pending = '';
-    b.parentElement.querySelectorAll('button').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
+    VS.markSrc(el, src, m);
     hid(el).value = ''; delete hid(el).dataset.set;
     el.querySelector('.vs-body').innerHTML = body(m, src, '', el.dataset.id);
     VS.refresh(el);
@@ -162,9 +173,8 @@
         if (!D.secrets.some((s) => s.ref === ref)) D.secrets.unshift({ name: ref, ref, vault: 'house', key: i.name, alias: '', set: new Date().toISOString(), used: [] });
         D.audit.unshift({ ts: new Date().toISOString(), event: 'secret_write', who: 'operator:ops', detail: `${ref} · length ${i.len} · value not recorded`, run: '' });
         i.inp.value = '';
-        const segBtn = i.el.querySelector('[data-act="vs-src"][data-v="vault"]');
         i.el.dataset.pending = ''; i.el.dataset.src = 'vault';
-        i.el.querySelectorAll('.vs-seg button').forEach((x) => { x.classList.toggle('on', x === segBtn); x.setAttribute('aria-pressed', x === segBtn); });
+        VS.markSrc(i.el, 'vault', meta(i.el));
         hid(i.el).value = S.vaultExpr(ref);
         i.el.querySelector('.vs-body').innerHTML = body(meta(i.el), 'vault', hid(i.el).value, i.el.dataset.id);
         VS.refresh(i.el, true);

@@ -370,6 +370,7 @@ hr.rule { border: 0; border-top: var(--border-width) solid var(--color-border-su
 
 /* ---------- empty states: what appears here, why it's empty, the one next step; the sunrise motif ---------- */
 .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2); padding: var(--space-10) var(--space-6); text-align: center; color: var(--color-text-secondary); }
+svg.sunrise { height: auto; }
 .empty .sunrise { width: 112px; height: auto; margin-bottom: var(--space-2); }
 .empty .serif, .empty h4 { font: var(--type-h2); letter-spacing: var(--type-h2-tracking); font-variation-settings: var(--type-h2-variation); color: var(--color-text-primary); margin: 0; }
 .empty p { margin: 0; max-width: 30rem; }
@@ -459,3 +460,6 @@ html.sim-ios #sim-toolbar span { width: 70%; height: 44px; border-radius: 22px; 
 
 .gate-mark .logo-mark { height: 28px; }
 .tbl td.mono, .tbl td.num { white-space: nowrap; }
+/* calm top bar: only how things are (one word) and what needs you; the rest is in the status menu */
+.strip .cell.quiet, .strip .cell.quiet b { color: var(--color-text-tertiary); font-weight: var(--font-weight-regular); }
+.strip .cell.hide-calm { display: none; }

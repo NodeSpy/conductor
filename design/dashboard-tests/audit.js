@@ -1,6 +1,6 @@
 // In-page audits shared by the layout sweeps (iphone.spec.js, layout.spec.js). Each is a function the
 // page evaluates: page.evaluate(audit), page.evaluate(primaries).
-/** In-page audit: theme, overflow, overlap with the simulated toolbar, contrast. */
+/** In-page audit: theme, overflow, overlap with the simulated toolbar, contrast at Daylight's minimums. */
 const audit = () => {
   const h = document.documentElement, iw = innerWidth, ov = document.getElementById('sim-toolbar');
   const ovTop = ov ? ov.getBoundingClientRect().top : innerHeight;
@@ -23,8 +23,12 @@ const audit = () => {
   const low = [], weak = []; let n = 0;
   const seen = new Set();
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  for (let t = walker.nextNode(); t; t = walker.nextNode()) { if (!t.textContent.trim()) continue; const el = t.parentElement; if (!el || seen.has(el) || el.closest('#sim-toolbar, svg, .tooltip, [aria-hidden="true"], .sr-only, option')) continue; seen.add(el); if (!visible(el)) continue; const r = el.getBoundingClientRect(); if (r.bottom < 0 || r.top > innerHeight) continue; const fg = rgba(getComputedStyle(el).color); if (!fg || fg.a < 0.05) continue; const bg = bgOf(el), c = ratio(fg.a < 1 ? over(fg, bg) : fg, bg); n++; if (c < 3) low.push(`${label(el)} ${c.toFixed(2)}:1`); else if (c < 4.5) weak.push(c); }
-  return { theme: h.dataset.theme, src: h.dataset.themeSource, ink: getComputedStyle(h).getPropertyValue('--ink').trim(), bg: getComputedStyle(h).getPropertyValue('--bg').trim(), wide, hidden, low, weakShare: n ? weak.length / n : 0, n, sw: h.scrollWidth, iw };
+  for (let t = walker.nextNode(); t; t = walker.nextNode()) { if (!t.textContent.trim()) continue; const el = t.parentElement; if (!el || seen.has(el) || el.closest('#sim-toolbar, svg, .tooltip, [aria-hidden="true"], .sr-only, option')) continue; seen.add(el); if (!visible(el)) continue; const r = el.getBoundingClientRect(); if (r.bottom < 0 || r.top > innerHeight) continue; if (el.closest('[aria-disabled="true"], [disabled], .disabled')) continue; // Daylight: disabled controls are exempt
+    const cs = getComputedStyle(el), fg = rgba(cs.color); if (!fg || fg.a < 0.05) continue; const bg = bgOf(el), c = ratio(fg.a < 1 ? over(fg, bg) : fg, bg); n++;
+    // the brand's rendered minimums (WCAG AA): 4.5:1, or 3:1 for large text (24px, or 18.66px bold)
+    const px = parseFloat(cs.fontSize), large = px >= 24 || (px >= 18.66 && +cs.fontWeight >= 700); const min = large ? 3 : 4.5;
+    if (c < min - 0.005) low.push(`${label(el)} ${c.toFixed(2)}:1 (needs ${min})`); else if (c < 4.5) weak.push(c); }
+  return { theme: h.dataset.theme, src: h.dataset.themeSource, ink: getComputedStyle(h).getPropertyValue('--color-text-primary').trim(), bg: getComputedStyle(h).getPropertyValue('--color-bg-canvas').trim(), wide, hidden, low, weakShare: n ? weak.length / n : 0, n, sw: h.scrollWidth, iw };
 };
 
 /** Scroll each primary action into view inside the app's scroller, then check it isn't covered. */

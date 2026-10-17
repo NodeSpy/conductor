@@ -8,7 +8,8 @@ const { test, expect, go, applyStaged } = require('./fixtures');
 
 const PASSWORD = 'correct-horse-battery-staple';
 const vs = (page, k) => page.locator(`.vs[data-vs="${k}"]`).first();
-const src = (page, k, s) => vs(page, k).locator(`[data-act="vs-src"][data-v="${s}"]`).click();
+// the source is a quiet menu inside the field: open it, then pick
+const src = async (page, k, s) => { await vs(page, k).locator('.vs-srcbtn').click(); await vs(page, k).locator(`[data-act="vs-src"][data-v="${s}"]`).click(); };
 const hidden = (page, k) => vs(page, k).locator('input[type=hidden]');
 async function slackForm(page) {
   await go(page, '#/connectors/connectors', { fresh: true });
@@ -136,7 +137,8 @@ test('the same component in a workflow step input', async ({ page }) => {
   await page.locator('.spine-add .plus[data-loc="steps"][data-i="0"]').click();
   await page.fill('#pk-q', 'post'); await page.locator('.pk-item[data-key="verb:slack-ops.post"]').click();
   const ch = page.locator('[data-wf-path="options.channel"] .vs');
-  await expect(ch.locator('.vs-seg')).toBeVisible();
+  await expect(ch.locator('.vs-srcbtn')).toBeVisible();
+  await ch.locator('.vs-srcbtn').click();
   await ch.locator('[data-act="vs-src"][data-v="setting"]').click();
   await ch.locator('select').selectOption('review_channel');
   await expect.poll(() => page.evaluate(() => document.querySelector('#wf-yaml .ced-ta').value)).toContain('channel: "${settings.review_channel}"');

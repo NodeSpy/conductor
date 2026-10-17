@@ -4,8 +4,8 @@
 //   - exactly one theme: the one chosen, or the OS's when none is (never a mix of surfaces and text);
 //   - nothing wider than the viewport (except inside a scroller that clips it);
 //   - the tab bar's labels and every primary action are fully visible and not under the toolbar;
-//   - rendered text against its rendered background is readable (≥ 3:1 everywhere; the share under 4.5:1
-//     is reported).
+//   - rendered text against its rendered background meets the brand's minimums (4.5:1, 3:1 for large text;
+//     disabled controls exempt).
 // Runs only in the WebKit projects (WEBKIT=1; see run-webkit.sh). Screenshots land in OUT_DIR/iphone/.
 const fs = require('fs');
 const path = require('path');
@@ -29,7 +29,7 @@ test.describe('iPhone (WebKit): one theme, nothing too wide, nothing under the t
       expect(a.src).toBe(protoTheme === 'auto' ? 'os' : 'explicit');
       expect(a.wide, `wider than the viewport on ${route}`).toEqual([]);
       expect(a.hidden, `tab bar under the toolbar on ${route}`).toEqual([]);
-      expect(a.low, `text under 3:1 on ${route}`).toEqual([]);
+      expect(a.low, `text under the brand's contrast minimums on ${route}`).toEqual([]);
       test.info().annotations.push({ type: 'contrast', description: `${route}: ${a.n} text runs, ${(a.weakShare * 100).toFixed(0)}% between 3:1 and 4.5:1` });
       expect(await page.evaluate(primaries), `primary actions covered on ${route}`).toEqual([]);
     });

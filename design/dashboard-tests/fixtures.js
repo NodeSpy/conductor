@@ -12,7 +12,8 @@ const test = base.test.extend({
     page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
     await page.addInitScript(() => { window.__PROTO_FAST = true; });
     await page.goto(`/index.html${simIos ? '?sim=ios' : ''}#/overview`);
-    await page.evaluate((t) => { localStorage.removeItem('cd-proto-state-v5'); if (t === 'auto') localStorage.removeItem('cd-theme'); else localStorage.setItem('cd-theme', t); }, protoTheme);
+    // the suite exercises every flow, so it runs on the "everything at once" demo day (js/scenario.js)
+    await page.evaluate(([t, demo]) => { localStorage.setItem('cd-demo', demo); localStorage.removeItem('cd-proto-state-v5'); if (t === 'auto') localStorage.removeItem('cd-theme'); else localStorage.setItem('cd-theme', t); }, [protoTheme, process.env.DEMO || 'full']);
     await use(page);
     base.expect(errors, `console errors in ${info.title}`).toEqual([]);
   },

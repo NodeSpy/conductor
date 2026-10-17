@@ -1,6 +1,6 @@
 // Desktop layout and contrast sweep, both themes: on every route nothing is wider than the window (outside a
-// scroller that clips it), the page renders exactly the theme asked for, and rendered text is at least 3:1
-// against its rendered background. (The iPhone version, with the Safari toolbar simulated, is iphone.spec.js.)
+// scroller that clips it), the page renders exactly the theme asked for, and rendered text meets the brand's
+// minimums (4.5:1, or 3:1 for large text) against its rendered background. (The iPhone version, with the Safari toolbar simulated, is iphone.spec.js.)
 const { test, expect, go, isPhone } = require('./fixtures');
 const { ROUTES } = require('./routes');
 const { audit } = require('./audit');

@@ -117,3 +117,6 @@ tr.quiet td b, .item.quiet b { font-weight: var(--font-weight-semibold); color: 
 /* a reason line under the name */
 .why-line { display: block; font: var(--type-body-s); color: var(--color-text-secondary); margin-top: 2px; }
 tr[data-row] .why-line { color: var(--color-text-primary); }
+/* running is not an exception: the arc keeps its colour, the word stays ink */
+.st[data-s="run"] { color: var(--color-text-secondary); }
+.st[data-s="run"] i { color: var(--color-status-running-fg); }

@@ -36,8 +36,8 @@ test('overview: "Runs, last 12h" (not "The score"), busiest rows first, filtered
   await sys.locator('summary').click();
   await expect(sys.locator('.list')).toContainText('conductor');
   // the Bots tile reads "6 bots", with the live count in words
-  await expect(page.locator('.stat.hot .v')).toContainText('bots');
-  await expect(page.locator('.stat.hot .d')).toContainText('in a live session');
+  await expect(page.locator('.stat.bots .v')).toContainText('bots');
+  await expect(page.locator('.stat.bots .d')).toContainText('in a live session');
 });
 
 test('New bot: purpose → watches → tells you where → what it may do → review, staged as a bot plus a trigger', async ({ page }) => {

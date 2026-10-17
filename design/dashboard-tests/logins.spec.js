@@ -23,7 +23,7 @@ test('username & password: TOTP preview, password stored write-only behind a pas
   await expect(page.locator('.choice-chosen')).toContainText('Username & password'); // the chosen method carries through
   await page.fill('#la-username-in', 'svc-wiki');
   await page.fill('#la-password-in', PASSWORD);
-  await page.locator('.vs[data-vs="otp"] [data-act="vs-src"][data-v="typed"]').click();
+  await page.locator('.vs[data-vs="otp"] .vs-srcbtn').click(); await page.locator('.vs[data-vs="otp"] [data-act="vs-src"][data-v="typed"]').click();
   await page.fill('#la-otp-in', 'not-base32!');
   await expect(page.locator('#la-totp-ok')).toContainText('not a valid');
   await page.fill('#la-otp-in', SEED);
@@ -112,9 +112,9 @@ test('"+ Add a login" inside a credential picker: typed password stored, login s
   await expect(page.locator('.cdrawer')).toContainText('Add a login');
   await page.fill('#d-name', 'runbooks');
   await page.fill('#d-origin', 'https://runbooks.example.com');
-  await page.locator('.cdrawer .vs[data-vs="username"] [data-act="vs-src"][data-v="typed"]').click();
+  await page.locator('.cdrawer .vs[data-vs="username"] .vs-srcbtn').click(); await page.locator('.cdrawer .vs[data-vs="username"] [data-act="vs-src"][data-v="typed"]').click();
   await page.fill('#d-username-in', 'svc-runbooks');
-  await page.locator('.cdrawer .vs[data-vs="password"] [data-act="vs-src"][data-v="typed"]').click();
+  await page.locator('.cdrawer .vs[data-vs="password"] .vs-srcbtn').click(); await page.locator('.cdrawer .vs[data-vs="password"] [data-act="vs-src"][data-v="typed"]').click();
   await page.fill('#d-password-in', PASSWORD);
   await page.locator('.cdrawer [data-listk="identities"] select').selectOption('team:platform');
   await page.locator('#dr-submit').click();

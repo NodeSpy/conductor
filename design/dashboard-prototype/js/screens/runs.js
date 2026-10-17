@@ -161,18 +161,22 @@
       run: { title: 'Running now', n: n.run.length, tone: 'run', say: 'Open one to watch its steps live.' },
       done: { title: 'Finished', n: n.done.length, tone: 'done', say: `${n.done.filter((r) => r.status === 'ok').length} passed${n.done.some((r) => r.status === 'idle') ? `, ${n.done.filter((r) => r.status === 'idle').length} parked` : ''}.` },
     };
+    // finished work folds into one line unless you ask for it (or filter for it)
+    const fold = !hv.showDone && !hv.status.has('ok') && !hv.status.has('idle') && !hv.q;
+    const parked = n.done.filter((r) => r.status === 'idle').length;
+    heads.done = { title: 'Finished', n: n.done.length, tone: 'done', say: parked ? `${n.done.length - parked} passed, ${parked} parked.` : 'All passed.', action: `<button class="btn sm ghost" data-act="hist-done" aria-expanded="${!fold}">${fold ? 'Show them' : 'Hide them'}</button>` };
     let g = null;
     const html = rows.map((r) => { const gr = GROUP(r), head = gr !== g ? UI.groupRow(heads[gr]) : ''; g = gr; const href = `#/${r.status === 'run' ? 'live' : 'runs'}/${r.id}`, why = reason(r);
-      return head + `<tr class="click${gr === 'done' ? ' quiet' : ''}" data-href="${href}"${UI.rowState(r.status)}>
+      return head + `<tr class="click${gr === 'done' ? ' quiet' : ''}${gr === 'done' && fold ? ' folded' : ''}" data-href="${href}"${UI.rowState(r.status)}>
       <td class="sel" data-l=""><input type="checkbox" class="cbx" data-act="hist-sel-row" data-id="${r.id}" aria-label="Select ${r.id}"${hv.sel.has(r.id) ? ' checked' : ''}></td>
       <td data-l="status">${st(UI.runS(r.status), UI.runWord(r.status))}</td>
-      <td data-l="run" class="run-what"><a class="link-plain" href="${href}"><b>${esc(UI.runTitle(r))}</b></a>${why ? `<span class="why-line">${why}</span>` : ''}</td>
-      <td data-l="workflow">${esc(r.workflow)}</td>
-      <td data-l="target">${UI.runTarget(r)}</td><td data-l="started" class="nowrap">${UI.when(r.started)}</td>
-      <td data-l="took" class="num">${UI.runDur(r)}</td>
-      ${UI.usageOn() ? `<td data-l="usage" class="num">${UI.runFig(r)}</td>` : ''}<td data-l="id" class="mono hide-phone">${r.id}</td></tr>`; }).join('');
+      <td data-l="run" class="run-what" data-tip="<span class='mono'>${r.id} · ${esc(r.trigger)}</span>"><a class="link-plain" href="${href}"><b>${esc(UI.runTitle(r))}</b></a><span class="why-line">${why || `${esc(r.workflow)}${UI.runTarget(r) !== '—' ? ` · <span data-l="target">${UI.runTarget(r)}</span>` : ''}`}${why ? ` <span class="sub-target">· <span data-l="target">${UI.runTarget(r)}</span></span>` : ''}</span></td>
+      <td data-l="started" class="nowrap muted">${UI.when(r.started)}</td>
+      <td data-l="took" class="num muted">${r.status === 'run' ? '' : UI.runDur(r)}</td>
+      ${UI.usageOn() ? `<td data-l="usage" class="num">${UI.runFig(r)}</td>` : ''}</tr>`; }).join('');
     return (html || `<tr class="empty-row"><td colspan="10">No run matches these filters. <button class="link" data-act="hist-clear">Clear filters</button></td></tr>`) + (more > 0 ? `<tr class="more-row"><td colspan="10"><button class="btn sm" data-act="hist-more">Load ${Math.min(PAGE, more)} more</button> <span class="muted small">${more} older · next cursor <span class="mono">${esc(btoa(rows[rows.length - 1].id).slice(0, 10))}</span></span></td></tr>` : '');
   }
+  UI.act('hist-done', () => { hv.showDone = !hv.showDone; histRefresh(); });
   UI.act('hist-retry-failed', () => { hv.sel = new Set(D.runs.filter(histMatch).filter((r) => r.status === 'fail' || r.status === 'stopped').map((r) => r.id)); UI.acts['hist-bulk-retry'](); });
   UI.act('hist-more', () => { hv.limit += PAGE; histRefresh(); });
   /** Run history's one sentence. */
@@ -183,16 +187,17 @@
     return `<div class="page">
       ${UI.head('Run history', { lede: UI.runsSummary(), actions: `<button class="btn" data-act="hist-export">${icon('download')}Export JSONL</button>` })}
       <div class="filters">
-        <div class="input-icon">${icon('search')}<input class="input" placeholder="repo, #number, run id, error text…" value="${esc(hv.q)}" data-on-input="hist-q" aria-label="Search runs"></div>
+        <div class="input-icon">${icon('search')}<input class="input" placeholder="Search runs: repo, #number, run id, error" value="${esc(hv.q)}" data-on-input="hist-q" aria-label="Search runs"></div>
+        <details class="filter-more"${hv.status.size || hv.wf || hv.repo || hv.since || hv.cost || UI.folderScope() ? ' open' : ''}><summary class="btn ghost">${icon('filter')}Filter${(() => { const k = hv.status.size + ['wf', 'repo', 'since', 'cost'].filter((x) => hv[x]).length + (UI.folderScope() ? 1 : 0); return k ? ` · ${k}` : ''; })()}</summary><div class="filter-set">
         ${['ok', 'run', 'fail', 'wait', 'idle'].map((s) => UI.filterChip({ on: hv.status.has(s), act: 'hist-st', attrs: `data-st="${s}"`, noCheck: true, text: st(s, SL[s]) })).join('')}
         ${chipSel('wf', 'Workflow', 'workflows', [['', 'workflow: any']].concat([...new Set(D.runs.map((r) => r.workflow))].map((w) => [w, w])))}
         ${chipSel('repo', 'Repo', 'branch', [['', 'repo: any']].concat([...new Set(D.runs.map((r) => r.repo).filter(Boolean))].map((w) => [w, w])))}
         ${chipSel('since', 'Time range', 'clock', [['', 'any time'], ['60', 'last 1h'], ['360', 'last 6h'], ['1440', 'last 24h']])}
         ${!UI.usageOn() ? '' : chipSel('cost', 'Provider', 'zap', [['', 'provider: any']].concat(Object.keys(D.usage.providers).map((p) => [p, UI.provLabel(p)])))}
-        ${UI.folderChip()}<span class="count-note" id="hist-n">${n} of ${D.runs.length}</span>
+        ${UI.folderChip()}</div></details><span class="count-note" id="hist-n">${n} of ${D.runs.length}</span>
       </div>
-      <div class="panel"><table class="tbl responsive"><thead><tr><th class="sel"><input type="checkbox" class="cbx" data-act="hist-sel-all" aria-label="Select all shown"></th><th>Status</th><th>What happened</th><th>Workflow</th><th>Target</th><th>Started</th><th class="num">Took</th>${UI.usageOn() ? `<th class="num">Usage · ${UI.measHead()}</th>` : ''}<th class="hide-phone">Run</th></tr></thead><tbody id="hist-body">${histRows()}</tbody></table><div id="hist-bulk">${histBulk()}</div>
-      <div class="panel-foot"><span>${D.runs.length} of 500 kept for 14 days. Each record is signed; one that fails its signature shows as tampered. <span class="mono">${D.daemon.state_dir}/history/</span></span></div></div>
+      <div class="panel"><table class="tbl responsive"><thead><tr><th class="sel"><input type="checkbox" class="cbx" data-act="hist-sel-all" aria-label="Select all shown"></th><th>Status</th><th>What happened</th><th>Started</th><th class="num">Took</th>${UI.usageOn() ? `<th class="num">Usage · ${UI.measHead()}</th>` : ''}</tr></thead><tbody id="hist-body">${histRows()}</tbody></table><div id="hist-bulk">${histBulk()}</div>
+      <div class="panel-foot"><span data-tip="<span class='mono'>${D.daemon.state_dir}/history/</span>">Runs are kept for 14 days. Each record is signed; one that fails its signature shows as tampered.</span></div></div>
     </div>`;
   });
   function histBulk() { const ids = [...hv.sel], retryable = ids.filter((id) => { const r = D.runs.find((x) => x.id === id); return r && (r.status === 'fail' || r.status === 'stopped'); });
@@ -297,9 +302,10 @@
 
   /* ---------- needs you ---------- */
   UI.route('attention', () => `<div class="page">
-    ${UI.head('Needs you', { sub: `${D.attention.length} items`, actions: UI.folderChip() + UI.seg([['all', 'all'], ['approvals', 'approvals'], ['failures', 'failures'], ['waiting', 'waiting']], UI.attnFilter || 'all', 'attn-f') })}
+    ${UI.head('Needs you', { lede: UI.needsSummary(), actions: UI.folderChip() + UI.seg([['all', 'All'], ['approvals', 'Approvals'], ['failures', 'Failures'], ['waiting', 'Waiting']], UI.attnFilter || 'all', 'attn-f') })}
     <div class="grid g-side">
-      <div class="panel attn">${UI.attentionList()}</div>
+      <div class="stack"><div class="panel attn">${UI.attentionList(0, true)}</div>
+        ${(D.fyi || []).length ? `<div class="panel"><div class="panel-head"><h2>For your information</h2>${UI.count(D.fyi.length)}<span class="muted small">True, but not waiting on you.</span></div><div class="list">${D.fyi.map((a) => `<a class="item click quiet" href="${a.href}"><div class="grow"><div class="item-t">${esc(a.plain)}</div><div class="item-why">${esc(a.why)}</div></div><span class="att-age">${UI.ageText(a.age)}</span><span class="chev">${icon('chev')}</span></a>`).join('')}</div></div>` : ''}</div>
       <div class="stack">
         <div class="callout ember"><b>Approvals are yours alone.</b> Each one is a WebAuthn assertion over that proposal's digest, made on this device with user verification. No agent can reach this page, and no verb, chat text or peer message approves anything.</div>
         <div class="panel"><div class="panel-head"><h3>Notify me</h3></div><div class="panel-body stack tight small">
@@ -308,6 +314,10 @@
           <label class="row">${UI.switchBtn(D.prefs.notifyFailed, 'pref', 'data-k="notifyFailed" aria-label="Every failed run"')}Every failed run</label>
           <div class="muted tiny">Off-box alerts stay with your <span class="mono">conductor.*</span> lifecycle triggers (Slack, PagerDuty…).</div></div></div>
       </div></div></div>`);
+  UI.needsSummary = () => { const a = D.attention, n = (k) => a.filter((x) => (k === 'other' ? !['approval', 'failed'].includes(x.kind) : x.kind === k)).length;
+    if (!a.length) return '<b>Nothing needs you.</b> Approvals, failed runs and questions from bots land here.';
+    const parts = [[n('approval'), 'approval'], [n('failed'), 'failed run'], [n('other'), 'question']].filter(([k]) => k).map(([k, w]) => `${k} ${w}${k === 1 ? '' : 's'}`);
+    return `<b>${a.length} ${a.length === 1 ? 'thing needs' : 'things need'} you:</b> ${parts.join(', ').replace(/, ([^,]*)$/, ' and $1')}. Approvals are signed with your passkey.`; };
   UI.act('attn-f', (b) => { UI.attnFilter = b.dataset.v; UI.rerender(); });
   UI.act('pref', (b) => { D.prefs[b.dataset.k] = !D.prefs[b.dataset.k]; S.save(); b.classList.toggle('on', D.prefs[b.dataset.k]); b.setAttribute('aria-checked', D.prefs[b.dataset.k]); });
 })();

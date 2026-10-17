@@ -65,7 +65,7 @@
 .sc-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 10px; cursor: pointer; border-radius: var(--radius-card); outline-offset: -2px; }
 .sc-head:focus-visible { outline: 2px solid var(--color-accent-default); }
 .sc-head .chev svg { width: 14px; height: 14px; color: var(--color-text-tertiary); }
-.grip { color: var(--color-text-disabled); cursor: grab; display: grid; place-items: center; width: 14px; }
+.grip { color: var(--color-icon-muted); cursor: grab; display: grid; place-items: center; width: 14px; }
 .grip svg { width: 14px; height: 14px; transform: rotate(90deg); }
 .sc-num { font-size: 22px; line-height: 1; color: var(--color-text-tertiary); min-width: 22px; text-align: center; }
 .sc-ic { flex: none; width: 30px; height: 30px; border-radius: var(--radius-sm); display: grid; place-items: center; background: color-mix(in srgb, var(--kc, var(--color-text-tertiary)) 16%, var(--color-bg-raised)); color: var(--kc, var(--color-text-secondary)); border: 1px solid color-mix(in srgb, var(--kc, var(--color-text-tertiary)) 35%, transparent); }
@@ -130,7 +130,7 @@ details.adv > summary::-webkit-details-marker { display: none; }
 .dg-head .ellipsis { flex: 1; min-width: 0; }
 
 /* autocomplete */
-.ac { position: fixed; z-index: 150; max-width: 420px; background: var(--color-bg-raised); border: 1px solid var(--color-border-default); border-radius: var(--radius-control); box-shadow: var(--shadow-3); padding: 3px; }
+.ac { position: fixed; z-index: var(--z-popover); max-width: 420px; background: var(--color-bg-raised); border: 1px solid var(--color-border-default); border-radius: var(--radius-control); box-shadow: var(--shadow-3); padding: 3px; }
 .ac button { display: flex; gap: 10px; width: 100%; align-items: baseline; padding: 5px 8px; border: 0; background: none; color: var(--color-text-secondary); font: inherit; font-size: var(--type-caption-size); text-align: left; border-radius: var(--radius-sm); cursor: pointer; }
 .ac button.on, .ac button:hover { background: var(--color-accent-subtle); color: var(--color-text-primary); }
 

@@ -81,7 +81,7 @@
   /** A run's error in plain words; the raw text stays on the run's record and in the step log. */
   UI.plainError = (r) => { const e = String(r.error || ''); let m;
     if ((m = e.match(/(\d+) failures? \(([^)]*)\)/))) return `${m[1]} test${m[1] === '1' ? '' : 's'} failed (${m[2]})`;
-    if ((m = e.match(/max_cost_usd ([\d.]+) exceeded/))) return `It went over its $${m[1]} budget, so conductor stopped it`;
+    if (/max_cost_usd [\d.]+ exceeded/.test(e)) return 'It hit its budget cap, so conductor stopped it';
     if (/stopped by operator/.test(e)) return 'You stopped it';
     return e; };
   /** The words for a run's state, used in tables and stories. */
@@ -186,7 +186,8 @@
   UI.navGroups = navGroups;
   UI.navHTML = () => navGroups.map(([g, items]) => `<div class="nav-group"><span class="caps">${g}</span><nav class="nav">${items.map(([k, l, ic, c, hot]) => {
     const n = c ? c() : null;
-    return `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span class="lbl">${l}</span>${n ? UI.count(n, { hot }) : ''}</a>`;
+    // only what needs someone is counted in the rail; neutral counts are noise
+    return `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span class="lbl">${l}</span>${n && hot ? UI.count(n, { hot }) : ''}</a>`;
   }).join('')}</nav></div>`).join('');
   // a page opened from Approvals (or another nav section) keeps that section highlighted, and its Back returns there
   document.addEventListener('click', (e) => { const a = e.target.closest && e.target.closest('a[href^="#/"]'); if (!a) return; const from = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0]; const to = a.getAttribute('href'); if (['attention', 'overview'].includes(from) && /^#\/bots\/[^/]+\/proposals\//.test(to)) UI.navOrigin = { hash: to, nav: from === 'overview' ? 'overview' : 'attention', back: '#/' + from }; else if (!a.closest('.tabbar, .rail')) UI.navOrigin = UI.navOrigin && UI.navOrigin.hash === to ? UI.navOrigin : null; else UI.navOrigin = null; }, true);
@@ -297,15 +298,15 @@
   /* ---------- chrome ---------- */
   UI.refreshChrome = () => {
     const d = D.daemon, need = D.attention.length, running = D.runs.filter((r) => r.status === 'run').length;
-    const warn = d.paused || D.connectors.some((c) => c.status !== 'ok');
+    const warn = d.paused || D.connectors.some((c) => !['ok', 'idle'].includes(c.status));
     // the top bar says how things are in words; detail (uptime, version, agents, the address) is one step down
     const health = d.paused ? ['wait', 'Dispatch paused'] : warn ? ['wait', 'Something needs a look'] : ['ok', 'All systems normal'];
     $('#strip-cells').innerHTML = `
       <div class="spacer"></div>
-      <button type="button" class="cell status-btn" data-act="strip-status" aria-label="System status: ${health[1]}" data-tip="${d.paused ? 'Dispatch is paused: no new runs start' : `conductor ${d.version}, up ${d.uptime}`}">${UI.statusMark(health[0] === 'ok' ? 'success' : health[0], `<span class="lbl-long">${health[1]}</span>`)}</button>
-      <a class="cell" href="#/safety" data-tip="The agent sandbox is on: bots can't touch files or the network beyond what you allowed. See what each bot may do on its own.<br><span class='mono'>backend ${d.sandbox.backend} · ${d.sandbox.containers} containers</span>">${UI.icon('shield')}<span class="lbl-long">Sandbox on</span></a>
-      <a class="cell${d.update.available ? '' : ' quiet'}" href="#/updates" data-tip="conductor ${d.version}${d.update.available ? `; ${d.update.available} is available` : ', up to date'}">${UI.icon('updates')}<span class="lbl-long">${d.update.available ? `Update ready` : d.version}</span></a>
-      ${running ? `<a class="cell" href="#/live" data-tip="Runs in progress">${UI.statusMark('run', `<span><b>${running}</b> running</span>`)}</a>` : ''}
+      <button type="button" class="cell status-btn" data-act="strip-status" aria-label="System status: ${health[1]}" data-tip="${d.paused ? 'Dispatch is paused: no new runs start' : `conductor ${d.version}, up ${d.uptime}`}">${UI.statusMark(health[0], `<span class="lbl-long">${health[1]}</span>`)}</button>
+      <a class="cell quiet hide-calm" href="#/safety" data-tip="The agent sandbox is on: bots can't touch files or the network beyond what you allowed. See what each bot may do on its own.<br><span class='mono'>backend ${d.sandbox.backend} · ${d.sandbox.containers} containers</span>">${UI.icon('shield')}<span class="lbl-long">Sandbox on</span></a>
+      <a class="cell quiet hide-calm" href="#/updates" data-tip="conductor ${d.version}${d.update.available ? `; ${d.update.available} is available` : ', up to date'}">${UI.icon('updates')}<span class="lbl-long">${d.update.available ? `Update ready` : d.version}</span></a>
+      ${running ? `<a class="cell quiet" href="#/live" data-tip="Runs in progress"><span><b>${running}</b> running</span></a>` : ''}
       ${D.pending.length ? `<a class="cell staged" href="#/config/apply" data-tip="Config changes staged but not applied">${UI.icon('edit')}<span><b>${D.pending.length}</b><span class="lbl-long"> to review</span></span></a>` : ''}
       ${need ? `<a class="cell alert" href="#/attention" aria-label="${need} need you">${UI.count(need, { hot: true })}<span class="lbl-long">need you</span></a>` : ''}`;
     $('#rail-nav').innerHTML = UI.navHTML();
@@ -330,7 +331,7 @@
               <span class="op" data-tip="Signed in as ${D.operator.name}, with a passkey"><span class="avatar">${D.operator.name.slice(0, 2)}</span></span>
               <a class="icon-btn" href="#/glossary" data-tip="Glossary: the words conductor uses" aria-label="Glossary">${UI.icon('info')}</a>
               <button class="icon-btn" id="theme-btn" data-tip="Light or dark" aria-label="Light or dark" data-act="theme"></button>
-              <button class="icon-btn" data-act="reset-demo" data-tip="Reset demo data: put the prototype's fake state back" aria-label="Reset demo data">${UI.icon('undo')}</button>
+              <button class="icon-btn" data-act="demo-menu" data-tip="Demo data: which day the prototype shows, or reset it" aria-label="Demo data">${UI.icon('sparkle')}</button>
               <a class="icon-btn" href="#/signin" data-tip="Lock (sign out)" aria-label="Lock">${UI.icon('lock')}</a>
             </div>
           </div>
@@ -397,6 +398,11 @@
   UI.switchBtn = (on, act, attrs = '') => `<button type="button" role="switch" class="switch${on ? ' on' : ''}" aria-checked="${!!on}" data-act="${act}" ${attrs}></button>`;
   UI.act('strip-status', (b) => { const d = D.daemon, running = D.runs.filter((r) => r.status === 'run').length;
     UI.menu(b, [[`conductor ${d.version}, ${d.paused ? 'paused' : 'up'} ${d.uptime}${d.update.available ? ` · ${d.update.available} ready` : ''}`, 'server', 'strip-go', 'data-href="#/updates"'], [`Sandbox enforcing: what bots can do`, 'shield', 'strip-go', 'data-href="#/safety"'], [`Agents healthy (${d.paseo.agents})`, 'zap', 'strip-go', 'data-href="#/connectors/runtimes"'], [`${running} running now`, 'live', 'strip-go', 'data-href="#/live"'], ...(D.pending.length ? [[`${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review`, 'edit', 'strip-go', 'data-href="#/config/apply"']] : []), ['-'], [`${d.magicdns} · TLS`, 'lock', 'strip-go', 'data-href="#/security"']]); });
+  /** Demo data (prototype only): which fake day to show, chosen per browser (js/scenario.js), or reset the current one. */
+  UI.DEMOS = [['calm', 'A mostly healthy day', 'Dozens of runs; one approval and one failure need you'], ['quiet', 'All quiet', 'Nothing needs you; every system healthy'], ['full', 'Everything at once', 'Every kind of exception, to try each flow']];
+  UI.setDemo = (k) => { try { localStorage.setItem('cd-demo', k); localStorage.removeItem('cd-proto-state-v5'); localStorage.removeItem('cd-last-looked'); } catch (e) {} location.reload(); };
+  UI.act('demo-menu', (b) => UI.menu(b, UI.DEMOS.map(([k, t]) => [`${D.demo === k ? '● ' : ''}${t}`, k === 'quiet' ? 'check' : k === 'full' ? 'grid' : 'sun', 'demo-set', `data-k="${k}"`]).concat([['-'], ['Reset this day’s demo data', 'undo', 'reset-demo']])));
+  UI.act('demo-set', (b) => { UI.closeMenu(); UI.setDemo(b.dataset.k); });
   UI.act('strip-go', (b) => { UI.closeMenu(); UI.go(b.dataset.href); });
   UI.act('theme', () => UI.theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
   UI.act('palette', () => UI.palette());
