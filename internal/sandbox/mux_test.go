@@ -276,8 +276,8 @@ func TestMuxHostRefusesForgedFrames(t *testing.T) {
 	}
 }
 
-// A host-numbered stream id from the container, and an oversized frame,
-// end the mux.
+// A host-numbered stream id from the container, a malformed open, an
+// oversized frame and an unknown frame type end the mux.
 func TestMuxHostRejectsProtocolViolations(t *testing.T) {
 	for name, send := range map[string]func(w io.Writer){
 		"odd id": func(w io.Writer) {
@@ -286,6 +286,20 @@ func TestMuxHostRejectsProtocolViolations(t *testing.T) {
 			binary.BigEndian.PutUint32(hdr[1:5], 3)
 			binary.BigEndian.PutUint32(hdr[5:9], 4)
 			_, _ = w.Write(append(hdr[:], 0, 0, 0, 1))
+		},
+		"a short open": func(w io.Writer) { // the listener id is 4 bytes
+			var hdr [muxHeader]byte
+			hdr[0] = frOpen
+			binary.BigEndian.PutUint32(hdr[1:5], 2)
+			binary.BigEndian.PutUint32(hdr[5:9], 3)
+			_, _ = w.Write(append(hdr[:], 0, 0, 1))
+		},
+		"a long open": func(w io.Writer) {
+			var hdr [muxHeader]byte
+			hdr[0] = frOpen
+			binary.BigEndian.PutUint32(hdr[1:5], 2)
+			binary.BigEndian.PutUint32(hdr[5:9], 5)
+			_, _ = w.Write(append(hdr[:], 0, 0, 0, 1, 0))
 		},
 		"oversized": func(w io.Writer) {
 			var hdr [muxHeader]byte

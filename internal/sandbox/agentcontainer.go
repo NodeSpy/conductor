@@ -463,15 +463,15 @@ func allowedBindSource(src string) error {
 	return nil
 }
 
-// isHostSystemDir reports p is one of hostSystemDirs by its own path or by
-// the path it resolves to (macOS's /etc, /tmp and /var are symlinks into
-// /private).
+// isHostSystemDir reports p is one of hostSystemDirs as it resolves on this
+// host (macOS's /etc, /tmp and /var are symlinks into /private). The caller
+// passes a bind source's resolved path among its candidates.
 func isHostSystemDir(p string) bool {
 	for _, d := range hostSystemDirs {
-		if p == d {
-			return true
+		if r, err := filepath.EvalSymlinks(d); err == nil {
+			d = r
 		}
-		if r, err := filepath.EvalSymlinks(d); err == nil && p == r {
+		if p == d {
 			return true
 		}
 	}
