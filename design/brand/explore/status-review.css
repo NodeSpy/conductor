@@ -1,0 +1,71 @@
+/* status-review.html, on top of status-column.css. Tokens only (Daylight). */
+.note-src { font: var(--type-caption); color: var(--color-text-tertiary); margin: 10px 0 0; max-width: 46rem; }
+.h2s { margin-top: 32px; font-size: 24px; }
+.surfs { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; }
+.surf { background: var(--color-bg-surface); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-card); padding: 14px 16px; min-width: 0; }
+.surf .sh-t { font: var(--type-caption); font-weight: 700; color: var(--color-text-tertiary); margin-bottom: 10px; }
+.surf .sh-t code { font-weight: 400; margin-left: 4px; }
+.bot { display: grid; grid-template-columns: 44px 1fr; gap: 12px; align-items: start; }
+.bot .av { width: 44px; height: 44px; border-radius: var(--radius-card); display: grid; place-items: center; background: var(--color-bg-sunken); font: 600 18px var(--font-family-serif); }
+.bot .nm { font: var(--type-h3); display: block; margin-bottom: 6px; }
+.rows { list-style: none; margin: 0; padding: 0; }
+.rows li { padding: 9px 0; border-top: 1px solid var(--color-border-subtle); display: grid; gap: 5px; }
+.rows li:first-child { border-top: 0; padding-top: 0; }
+.rt b { font-weight: 700; display: block; } .rt code { font: var(--type-code-s); color: var(--color-text-tertiary); }
+.labels { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font: var(--type-body-s); }
+.ic { width: 14px; height: 14px; flex: none; }
+
+/* before */
+.v-before .labels { gap: 6px; }
+.b-tag { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 999px; font: var(--type-caption); font-weight: 600; color: var(--color-text-secondary); background: var(--color-bg-raised); border: 1px solid var(--color-border-default); }
+.b-tag[data-s="success"] { color: var(--color-status-success-fg); background: var(--color-status-success-bg); border-color: color-mix(in srgb, var(--color-status-success-solid) 40%, transparent); }
+.b-tag[data-s="running"] { color: var(--color-status-running-fg); background: var(--color-status-running-bg); border-color: color-mix(in srgb, var(--color-status-running-solid) 40%, transparent); }
+.b-tag[data-s="warning"] { color: var(--color-status-warning-fg); background: var(--color-status-warning-bg); border-color: color-mix(in srgb, var(--color-status-warning-solid) 40%, transparent); }
+.b-tag[data-s="danger"] { color: var(--color-status-danger-fg); background: var(--color-status-danger-bg); border-color: color-mix(in srgb, var(--color-status-danger-solid) 40%, transparent); }
+.b-tag[data-s="accent"] { color: var(--color-text-accent); background: var(--color-accent-subtle); border-color: color-mix(in srgb, var(--color-accent-default) 40%, transparent); }
+.b-tier { font: var(--type-code-s); padding: 2px 6px; border: 1px solid var(--color-status-warning-solid); color: var(--color-status-warning-fg); border-radius: 4px; }
+
+/* A outline */
+.v-outline .labels { gap: 6px; }
+.o-tag { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: var(--radius-xs); font: var(--type-caption); color: var(--color-text-secondary); border: 1px solid var(--color-border-default); }
+.o-tag.attn { color: var(--s-fg); border-color: var(--s-solid); font-weight: 700; }
+
+/* B typed */
+[data-s="quiet"] { --s-fg: var(--color-text-secondary); --s-solid: var(--color-text-tertiary); }
+[data-s="info"] { --s-fg: var(--color-status-info-fg); --s-solid: var(--color-status-info-solid); }
+.ty-state, .ty-tier, .ty-change, .ty-trust, .ty-count, .ty-fact { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.ty-state { color: var(--s-fg); font-weight: 700; }
+.ty-state[data-s="quiet"] { font-weight: 400; }
+.ty-state .sh, .ty-change .sh { width: 12px; height: 12px; color: var(--s-solid); }
+.ty-change { color: var(--color-status-running-fg); }
+.ty-change .sh { color: var(--color-status-running-solid); }
+.ty-tier { color: var(--color-text-primary); }
+.ladder { display: inline-flex; align-items: flex-end; gap: 2px; height: 13px; }
+.ladder i { width: 3px; border-radius: 1px; background: var(--color-border-strong); }
+.ladder i.on { background: var(--color-text-primary); }
+.ladder.never i { background: var(--color-border-default); }
+.ty-trust { color: var(--color-text-secondary); } .ty-trust .ic { color: var(--color-icon-default); }
+.ty-trust.warn { color: var(--color-status-warning-fg); font-weight: 700; } .ty-trust.warn .ic { color: var(--color-status-warning-fg); }
+.ty-count { color: var(--color-text-secondary); }
+.ty-count .bar { width: 44px; height: 4px; border-radius: 2px; background: var(--color-bg-sunken); box-shadow: inset 0 0 0 1px var(--color-border-subtle); display: block; overflow: hidden; }
+.ty-count .bar b { display: block; height: 100%; background: var(--color-text-secondary); }
+.ty-fact { color: var(--color-text-secondary); } .ty-fact .k { color: var(--color-text-tertiary); } .ty-fact .ic { color: var(--color-icon-muted); }
+.ty-role { color: var(--color-text-secondary); }
+
+/* C quiet */
+.v-quiet .labels { display: grid; gap: 3px; justify-items: start; }
+.q-line { color: var(--color-text-secondary); }
+
+/* reference table */
+.jobs { width: 100%; border-collapse: collapse; font: var(--type-body-s); margin-top: 14px; }
+.jobs th { text-align: left; font: var(--type-caption); font-weight: 700; color: var(--color-text-tertiary); padding: 8px 10px; border-bottom: 1px solid var(--color-border-default); }
+.jobs td { padding: 10px; border-bottom: 1px solid var(--color-border-subtle); vertical-align: top; white-space: normal; height: auto; }
+.jobs td:first-child { width: 130px; } .jobs .lbls { color: var(--color-text-tertiary); width: 30%; }
+.jshapes { display: flex; gap: 6px; margin-top: 6px; } .jshapes .sh { width: 12px; height: 12px; color: var(--s-solid); }
+
+@media (max-width: 599px) {
+  .surfs { grid-template-columns: 1fr; }
+  .jobs thead { display: none; } .jobs tr { display: grid; grid-template-columns: 1fr; gap: 4px; padding: 10px 0; border-bottom: 1px solid var(--color-border-subtle); }
+  .jobs td { border: 0; padding: 0; width: auto !important; }
+  .ty-state, .ty-fact, .ty-trust { white-space: normal; }
+}

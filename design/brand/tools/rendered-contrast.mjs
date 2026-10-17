@@ -20,7 +20,7 @@ const BASE = process.env.BRAND_BASE || 'http://localhost:8768';
 const [onlyEngines, filter] = process.argv.slice(2);
 
 const PAGES = [
-  'index.html', 'directions-v2.html', 'logo-review.html', 'explore/status-column.html',
+  'index.html', 'directions-v2.html', 'logo-review.html', 'explore/status-column.html', 'status-review.html',
   'system.html', 'system.html?theme=light', 'system.html?theme=dark', 'system.html?theme=dark&density=compact',
 ];
 for (const d of ['daylight', 'broadsheet', 'score']) for (const s of ['overview', 'run', 'approval', 'history', 'builder']) for (const t of ['light', 'dark']) PAGES.push(`v2/mock.html?d=${d}&s=${s}&t=${t}`);
