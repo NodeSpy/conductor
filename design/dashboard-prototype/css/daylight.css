@@ -436,6 +436,8 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 /* the Terraform plan in Terraform's conventions, on the diff tokens; symbols stay, so colour is never the only cue */
 .prop-plan { max-height: none; overflow-x: auto; }
 .prop-plan .pl { display: block; padding: 0 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* a wrapped plan line hangs under its own indent (each line carries its indent as --i), so the structure survives a phone */
+.prop-plan .pl[style] { padding-left: calc(14px + (var(--i) + 4) * 1ch); text-indent: calc(-1ch * (var(--i) + 4)); }
 .prop-plan .pl-create { color: var(--color-code-add-fg); background: var(--color-code-add-bg); }
 .prop-plan .pl-destroy { color: var(--color-code-del-fg); background: var(--color-code-del-bg); }
 .prop-plan .pl-update { color: var(--color-status-warning-fg); }
@@ -455,7 +457,9 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 .plan-jump a { color: var(--color-text-accent); }
 @media (max-width: 720px) {
   .prop-decide { bottom: 0; margin: 16px -16px 0; padding: 12px 16px calc(12px + var(--sab)); }
-  .prop-decide .btn { flex: 1 1 40%; justify-content: center; } .prop-decide .hint { flex: 1 1 100%; }
+  /* one row of buttons (Approve takes the room, Deny beside it), the note one quiet line under them */
+  .prop-decide { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 10px; }
+  .prop-decide .btn { justify-content: center; } .prop-decide .hint { grid-column: 1 / -1; font-size: 12px; }
 }
 /* Technical details take the full width; the side cards move below */
 .dl-cols.prop-wide { grid-template-columns: minmax(0, 1fr); }

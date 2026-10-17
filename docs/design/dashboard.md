@@ -1976,8 +1976,7 @@ scripts, no modules.
 survives navigation and reloads. **Demo data** (✦ in the rail footer) picks the
 day the prototype shows: *a mostly healthy day* (the default: dozens of runs,
 one approval and one failure), *all quiet*, or *everything at once* (every kind
-of exception; the test suite runs on it), and resets the current one. The
-before/after review of the calm-by-default pass is at `review/calm.html`. Config edits from every screen stage into the
+of exception; the test suite runs on it), and resets the current one. Config edits from every screen stage into the
 real pipeline: the diff is computed from the generated `config.yaml`,
 validation runs real checks (missing fields, unresolved references, team
 narrowing, widening), and apply needs a (simulated) passkey and writes a

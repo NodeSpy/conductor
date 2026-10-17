@@ -3,9 +3,9 @@
 Branch `design/dashboard` (worktree `~/Projects/paseo-home/worktrees/2ccqu2oy/design-dashboard`).
 Prototype: `design/dashboard-prototype/` (static HTML/CSS/JS, hash routes, fake state in
 localStorage key `cd-proto-state-v5`, demo day in `cd-demo`, "Reset" and the demo days under ✦ in the rail). Served live
-by the user service `dashboard-prototype` on this machine's tailnet address, port 8767 (don't stop or replace it); the
-before/after review is at `/review/calm.html` on it.
-Design doc: `docs/design/dashboard.md` (§3 is the visual language: Daylight and calm by default). Tests: `design/dashboard-tests/`.
+by the user service `dashboard-prototype` on this machine's tailnet address, port 8767 (don't stop or replace it).
+`design/CONFORMANCE.md` sets each screen beside the approved design it follows.
+Design doc: `docs/design/dashboard.md` (§3 is the visual language: Daylight, with the approved designs as the spec). Tests: `design/dashboard-tests/`.
 
 Guardrails: `df -h /` before heavy work (stop under 25 GB); **all scratch, caches,
 node_modules, browsers, screenshots and test output on LOCAL disk under `~/.cache/conductor-design/`,
@@ -25,13 +25,14 @@ While editing, run against a frozen snapshot so edits don't race the run: `~/.ca
 rsyncs the prototype to local disk and serves it on 127.0.0.1:8799 inside an `unshare` PID namespace (the server dies
 with it), then runs `run.sh` with your arguments. Deps in `~/.cache/conductor-design/dashboard-tests-node` (Playwright
 1.58.2), browsers in `~/.cache/conductor-design/ms-playwright`, output in `~/.cache/conductor-design/out/`. The suite
-runs on the "everything at once" demo day (fixtures.js); `calm.spec.js` switches to the calm and quiet days itself.
+runs on the "everything at once" demo day (fixtures.js); `home.spec.js` switches to the quiet days itself.
 Every test fails on any console error; `UI.act` logs an error on a duplicate action name.
 
 New specs in this pass: `daylight.spec.js` (tokens only: no raw colours or retired variables; rendered type floors,
-mono ≥ 12px, the serif only on short titles ≥ 20px; no tinted capsules) and `calm.spec.js` (on the mostly healthy day
-each key screen's one-sentence answer comes first, in bold; the Overview's answer is its largest text; a colour budget
-and no wall-of-text rows in the first viewport; the all-quiet Overview says so). `audit.js` now enforces the brand's
+mono ≥ 12px, the serif only on short titles ≥ 20px; no tinted capsules), `home.spec.js` (Home as approved; no header
+sentence that restates the rows below it), `status.spec.js` (one status vocabulary) and `sweep.spec.js` (every route
+at desktop, tablet and phone: overlaps, spills, one word per line, centred or blown-up rows, dropped interpolations, a
+sentence split into columns). `audit.js` now enforces the brand's
 rendered contrast minimums (4.5:1, 3:1 large; disabled exempt) in the layout and iPhone sweeps.
 
 Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <outdir> <theme> <w> <h> <density> <os>
@@ -63,7 +64,7 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
   `connect.js` the Slack/GitHub manifest flows. `assets/logo/` is a complete Daylight logo kit (Fermata, strengthened)
   plus `logo.js`, the one reference (`UI.logo()` inlines the kit's `mark-inline.html`); `manifest.webmanifest` PWA icons.
 - `design/CONFORMANCE.md` and `design/conformance/` (the approved mock beside the prototype, rendered by
-  `design/conformance/render.js`). `review/calm.html` is the earlier calm pass's record (superseded).
+  `design/conformance/render.js`). (The earlier calm pass's `review/calm.html` and `calm.spec.js` were removed in the reset.)
 - `index.html` head script picks the theme before paint (explicit wins, else the OS); `?sim=ios` is the
   test-only iPhone emulation (toolbar overlay + safe areas). Asset URLs carry `?v=<stamp>`; bump it on deploys.
 - `js/create.js` create-in-place drawers (`UI.CREATE`). `js/wf.js` workflow engine + validator.
@@ -105,8 +106,8 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
   a faint tick strip; failures and waits labelled where they are; running in ink), everything normal in quiet one-line
   rows; run history as grouped lists with finished work folded to one line; Needs you single-column; bots tree rolls up
   only what needs you; bot and team headers in one sentence; connectors, packs, workflows and cases one line per row with
-  detail on hover; calm approval head. Demo days (calm default, quiet, everything at once). `calm.spec.js`; before/after
-  pairs at `review/calm.html`.
+  detail on hover; calm approval head. Demo days (calm default, quiet, everything at once). (Superseded by the reset; its spec and
+  review page are gone.)
 - **Daylight adopted** in one pass: brand tokens, fonts, the Fermata (strengthened) logo kit as the one swappable asset
   with favicon/apple-touch/PWA icons, Lucide icons and Daylight status glyphs, every screen on semantic tokens (no raw
   colours; old variables gone; no compatibility shim), the type scale and floors, Comfortable/Compact on the density
@@ -141,7 +142,7 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 | Connectors catalog (real builtin vs plugin split, custom git connector) | **not started** (SCHEMA still marks github builtin); facts in summary: builtins web, cron, webhook, rss, command, rest, graphql, kv, sql, memory, workflow, conductor (+ lan, tunnel); everything vendor is an official plugin |
 | Value-source field | done; changes in step B (canonical vault syntax, no named secrets) |
 | Knowledge kinds | done, on conductor's real kinds and collection locations |
-| Visual QA bar + shared components | done: layout (both themes), iPhone WebKit sweep, dismiss, copy-number, Daylight and calm specs |
+| Visual QA bar + shared components | done: layout (both themes), iPhone WebKit sweep, dismiss, copy-number, Daylight, home, status and sweep specs |
 | Daylight adoption | done (this pass) |
 | Calm by default (exception-first) | superseded by the reset to the approved designs (the calm variant and the later icon/risk/row-anatomy pass are gone) |
 | Run detail (no tabs, back with state, labelled ids, paseo per step, one status look) | done; `status.spec.js` |

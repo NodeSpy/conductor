@@ -452,12 +452,12 @@
   const PLAN_ACT = [['replace', /must be replaced|will be replaced/], ['destroy', /will be destroyed/], ['create', /will be created/], ['update', /will be updated in-place/], ['read', /will be read during apply/]];
   const PLAN_WORD = { replace: 'Replaced', destroy: 'Destroyed', create: 'Created', update: 'Updated in place', read: 'Read' };
   function planHTML(t) {
-    const lines = String(t).split('\n'), res = [];
+    const lines = String(t).split('\n'), res = [], ind = (raw) => (raw.trim() ? ` style="--i:${raw.match(/^\s*/)[0].length}"` : '');
     const body = lines.map((raw, i) => { const l = esc(raw); let m;
-      if ((m = raw.match(/^\s*# (\S+) (.*)$/)) && /will be|must be/.test(raw)) { const act = (PLAN_ACT.find(([, re]) => re.test(raw)) || ['update'])[0]; res.push([act, m[1], i]); return `<span class="pl pl-h pl-${act}" id="plan-${i}">${l}</span>`; }
+      if ((m = raw.match(/^\s*# (\S+) (.*)$/)) && /will be|must be/.test(raw)) { const act = (PLAN_ACT.find(([, re]) => re.test(raw)) || ['update'])[0]; res.push([act, m[1], i]); return `<span class="pl pl-h pl-${act}" id="plan-${i}"${ind(raw)}>${l}</span>`; }
       const kind = /^\s*(-\/\+|\+\/-)\s/.test(raw) ? 'replace' : /^\s*\+\s/.test(raw) ? 'create' : /^\s*-\s/.test(raw) ? 'destroy' : /^\s*~\s/.test(raw) ? 'update' : /^\s*<=\s/.test(raw) ? 'read' : /^\s*#|unchanged|hidden/.test(raw) ? 'muted' : /^Plan:/.test(raw) ? 'sum' : '';
       const withMuted = l.replace(/\(known after apply\)/g, '<span class="pl-kaa">(known after apply)</span>').replace(/# forces replacement/g, '<b class="pl-force"># forces replacement</b>');
-      return `<span class="pl${kind ? ' pl-' + kind : ''}">${withMuted || ' '}</span>`; }).join('');
+      return `<span class="pl${kind ? ' pl-' + kind : ''}"${ind(raw)}>${withMuted || ' '}</span>`; }).join('');
     const groups = Object.keys(PLAN_WORD).map((k) => [k, res.filter(([a]) => a === k)]).filter(([, xs]) => xs.length);
     const jump = groups.length ? `<div class="plan-jump">${groups.map(([k, xs]) => `<span class="pj pj-${k}"><b>${PLAN_WORD[k]}</b> ${xs.map(([, r, i]) => `<a href="#" data-act="plan-jump" data-l="plan-${i}" class="mono">${esc(r)}</a>`).join(', ')}</span>`).join('')}</div>` : '';
     return { jump, body }; }

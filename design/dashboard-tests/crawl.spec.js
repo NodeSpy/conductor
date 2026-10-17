@@ -156,7 +156,7 @@ for (const route of ROUTES) {
 // and a disabled control that doesn't say why.
 test('crawler self-test: reports a dead button and an unexplained disabled one', async ({ page }, testInfo) => {
   const report = await crawlRoute(page, testInfo, '#/updates', { afterLoad: (p) => p.evaluate(() => {
-    const h = document.querySelector('.page-head .actions');
+    const h = document.querySelector('.page-head .actions, .dl-phead .dl-actions');
     h.insertAdjacentHTML('beforeend', '<button class="btn" id="planted-dead">Does nothing</button><button class="btn" id="planted-mute" aria-disabled="true">Off, no reason</button>');
   }) });
   expect(report.dead.some((d) => d.includes('planted-dead'))).toBe(true);
