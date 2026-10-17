@@ -1821,20 +1821,39 @@ func sendControl(cfg *config.Config, req controlRequest) (controlResponse, error
 // signalSweepNow tells the running daemon to run a catch-up sweep immediately by
 // sending it SIGUSR1 (pid read from the pidfile).
 func signalSweepNow(cfg *config.Config) error {
-	p := pidPath(cfg)
-	b, err := os.ReadFile(p)
+	pid, err := signalDaemon(cfg, syscall.SIGUSR1)
 	if err != nil {
-		return fmt.Errorf("read pidfile %s — is the daemon running? %w", p, err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil {
-		return fmt.Errorf("bad pidfile %s: %w", p, err)
-	}
-	if err := syscall.Kill(pid, syscall.SIGUSR1); err != nil {
-		return fmt.Errorf("signal daemon (pid %d): %w", pid, err)
+		return err
 	}
 	fmt.Printf("signaled conductor (pid %d) to run a sweep now\n", pid)
 	return nil
+}
+
+// signalProcess is syscall.Kill. Tests replace it, so no test sends a real
+// signal.
+var signalProcess = syscall.Kill
+
+// signalDaemon reads the daemon's pid from the pidfile and sends it sig. A pid
+// must be > 1: kill(-1) signals every process the caller may signal, kill(0)
+// the caller's own group, and a negative pid a whole group, so a corrupt or
+// hostile pidfile must never reach syscall.Kill.
+func signalDaemon(cfg *config.Config, sig syscall.Signal) (int, error) {
+	p := pidPath(cfg)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return 0, fmt.Errorf("read pidfile %s — is the daemon running? %w", p, err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return 0, fmt.Errorf("bad pidfile %s: %w", p, err)
+	}
+	if pid <= 1 {
+		return 0, fmt.Errorf("bad pidfile %s: pid %d is not a daemon process", p, pid)
+	}
+	if err := signalProcess(pid, sig); err != nil {
+		return 0, fmt.Errorf("signal daemon (pid %d): %w", pid, err)
+	}
+	return pid, nil
 }
 
 // cmdReload signals the running daemon to re-read its config. Config is read at
@@ -1853,17 +1872,9 @@ func cmdReload(args []string) error {
 // canonical "reread config" signal, which the daemon handles by re-execing
 // itself so the new config loads at boot.
 func signalReload(cfg *config.Config) error {
-	p := pidPath(cfg)
-	b, err := os.ReadFile(p)
+	pid, err := signalDaemon(cfg, syscall.SIGHUP)
 	if err != nil {
-		return fmt.Errorf("read pidfile %s — is the daemon running? %w", p, err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil {
-		return fmt.Errorf("bad pidfile %s: %w", p, err)
-	}
-	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
-		return fmt.Errorf("signal daemon (pid %d): %w", pid, err)
+		return err
 	}
 	fmt.Printf("signaled conductor (pid %d) to reload its config\n", pid)
 	return nil
