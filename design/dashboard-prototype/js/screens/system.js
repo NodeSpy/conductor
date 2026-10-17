@@ -112,7 +112,7 @@
     const pick = (use) => {
       const decl = SCHEMA.connectors[use];
       UI.form({ caps: name ? `connectors.${name} · use: ${use}` : `new connector · use: ${use}`, title: name ? `Configure ${name}` : `Add a ${decl.label} connector`, edit: !!name, wide: true,
-        intro: `Settings are declared by the <b>${use}</b> plugin${decl.registry ? ` (${decl.registry})` : ' (builtin)'}. Secrets are references, never values.`,
+        intro: `${!name && (use === 'slack' || use === 'github') ? `<div class="callout info small conn-manifest"><span class="grow"><b>No tokens yet?</b> conductor can create the ${use === 'slack' ? 'Slack app' : 'GitHub App'} for you from a manifest and fill all of this in.</span><button type="button" class="btn sm primary" data-act="conn-manifest" data-u="${use}">${icon('link')}Connect with ${use === 'slack' ? 'Slack' : 'GitHub'}</button></div><div class="caps" style="margin-top:10px">Or, if you already have tokens</div>` : ''}Settings are declared by the <b>${use}</b> plugin${decl.registry ? ` (${decl.registry})` : ' (builtin)'}. Secrets are references, never values.`,
         values: cur ? Object.assign({ name }, cur) : {},
         fields: [{ k: 'name', type: 'string', req: true, label: 'Instance name', readonly: !!name, ph: use === 'github' ? 'gh' : use, pattern: /^[a-z][a-z0-9-]*$/, patternMsg: 'lowercase, digits, dashes', validate: (v) => (!name && D.connectors.find((c) => c.name === v) ? 'An instance by that name exists.' : '') }].concat(decl.settings.map((f) => Object.assign({}, f, f.type === 'string' && !/path|listen|url$/.test(f.k) ? { type: 'value' } : {}))),
         note: decl.registry && !D.plugins.find((p) => p.name === use) ? `The <b>${use}</b> plugin isn't installed: applying runs <span class="mono">conductor init</span>, which fetches ${decl.registry}@${decl.ver} (official registry, trusted).` : '',
@@ -126,6 +126,7 @@
     UI.connPick = (u) => { UI.closeModal(); pick(u); };
   }
   UI.act('conn-pick', (b) => UI.connPick(b.dataset.u));
+  UI.act('conn-manifest', (b) => { UI.dismissModal ? UI.closeModal() : null; UI.connectManifest(b.dataset.u); });
   UI.act('conn-add', () => connForm(null));
   UI.act('conn-edit', (b) => connForm(b.dataset.c));
   UI.act('conn-del', (b) => { const used = D.workflows.filter((w) => (w.yaml || '').includes(b.dataset.c + '.')).map((w) => w.name); UI.confirm({ title: `Remove connector ${b.dataset.c}?`, body: `Stages removing it from connectors:.${used.length ? ` <b>Workflows that use it:</b> ${used.join(', ')} — the validator will flag them.` : ''}`, ok: 'Stage removal', danger: true }).then((ok) => ok && UI.staged(S.stage('connectors', b.dataset.c, null))); });
