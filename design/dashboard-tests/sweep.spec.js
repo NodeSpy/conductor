@@ -14,7 +14,7 @@ const audit = () => {
   const out = [];
   const vis = (el) => { const r = el.getBoundingClientRect(); if (!r.width || !r.height) return null; const cs = getComputedStyle(el); if (cs.visibility === 'hidden' || +cs.opacity < 0.05) return null; return r; };
   const label = (el) => `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}.${String(el.getAttribute('class') || '').split(' ').filter(Boolean).slice(0, 2).join('.')} "${(el.innerText || el.value || '').trim().replace(/\s+/g, ' ').slice(0, 40)}"`;
-  const clipped = (el, stop) => { for (let p = el.parentElement; p && p !== stop; p = p.parentElement) { const cs = getComputedStyle(p); if (/(auto|scroll|hidden|clip)/.test(cs.overflowX + cs.overflowY)) return true; } return false; };
+  const clipped = (el, stop) => { for (let p = el.parentElement; p && p !== stop.parentElement; p = p.parentElement) { const cs = getComputedStyle(p); if (/(auto|scroll|hidden|clip)/.test(cs.overflowX + cs.overflowY)) return true; } return false; };
   const ownText = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim();
   const cards = [...document.querySelectorAll('#main .dl-card, #main .panel, #main .modal')].filter((c) => vis(c) && !c.closest('.site'));
   for (const card of cards) {
@@ -28,7 +28,9 @@ const audit = () => {
     // spill: a leaf past its card's right edge (scrollable or clipped regions are allowed to hold more)
     for (const el of leaves) { const r = el.getBoundingClientRect(); if (r.right > cr.right + 2 && !clipped(el, card)) out.push(`spills out of its card: ${label(el)} (${Math.round(r.right - cr.right)}px)`); }
     // overlap: a control over text or another control it doesn't contain (and isn't inside)
-    const ctl = leaves.filter((el) => el.matches('button, a.btn, input, select, textarea'));
+    // a sticky or fixed bar (the phone's decision bar, a pinned selection bar) sits over content by design
+    const pinned = (el) => { for (let q = el; q && q !== card; q = q.parentElement) { if (/sticky|fixed/.test(getComputedStyle(q).position)) return true; } return false; };
+    const ctl = leaves.filter((el) => el.matches('button, a.btn, input, select, textarea') && !pinned(el));
     for (const a of ctl) { const ra = a.getBoundingClientRect();
       for (const b of leaves) { if (a === b || a.contains(b) || b.contains(a)) continue; const rb = b.getBoundingClientRect();
         const ix = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left), iy = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);

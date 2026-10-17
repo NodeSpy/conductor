@@ -50,7 +50,7 @@
   };
   UI.activityMatch = actMatch;
   const target = (r) => (r.repo ? `${r.repo}${r.number ? '#' + r.number : ''}` : botOf(r) ? (/sweep/.test(r.trigger) ? 'routine sweep' : /incident|pd\./.test(r.trigger) ? 'PagerDuty incident' : 'its own work') : esc(r.trigger));
-  const reason = (r) => { if (r.status === 'wait') return `Waiting for your answer: ${esc(String(r.detail || 'approve, revise or discard its draft').replace(/^hand-off[^:]*:\s*/, ''))}.`;
+  const reason = (r) => { if (r.status === 'wait') return `Waiting for your answer: ${esc(String(r.detail || 'approve, revise or discard its draft').replace(/^hand-off[^:]*:\s*/, '').replace(/^awaiting your answer\s*\(?/, '').replace(/\)$/, ''))}.`;
     const e = UI.plainError ? UI.plainError(r) : r.error || ''; return `${r.failed_step ? `Failed at “${esc(r.failed_step)}”` : 'Failed'}${e ? `: ${esc(e)}` : ''}${/\.$/.test(e) ? '' : '.'}`; };
   const runName = (r) => `<b>${esc(r.workflow.replace(/^bot:/, ''))}</b> <span class="tgt">${target(r)}</span>`;
   const statusCell = (r) => UI.statusMark(UI.runS(r.status), UI.runWord(r.status));

@@ -40,7 +40,7 @@
   function live(b) {
     return `<div class="page wide">
       ${UI.head(esc(b.title), { gen: true, crumbs: `<a href="#/browser">Browsers</a> ${icon('chev')} ${esc(b.title)}`,
-        actions: `${st(b.status, b.status === 'run' ? 'agent acting' : b.status === 'wait' ? 'waiting on you' : 'idle', true)}<button class="btn" data-act="b-peek" data-b="${b.id}">${icon('download')}Screenshot</button><button class="btn${bv.lease === b.id ? '' : ' primary'}" data-act="b-take" data-b="${b.id}" id="take">${icon(bv.lease === b.id ? 'undo' : 'hand')}${bv.lease === b.id ? 'Release' : 'Take over'}</button><button class="btn danger" data-act="b-close" data-b="${b.id}">${icon('x')}Close browser</button>` })}
+        actions: `${st(b.status, b.status === 'run' ? 'agent acting' : b.status === 'wait' ? 'waiting on you' : 'idle', true)}<button class="btn" data-act="b-peek" data-b="${b.id}">${icon('download')}Screenshot</button><button class="btn${bv.lease === b.id ? '' : ' primary'}" data-act="b-take" data-b="${b.id}" id="take">${icon(bv.lease === b.id ? 'undo' : 'hand')}${bv.lease === b.id ? 'Release' : 'Take over'}</button><button class="btn secondary" data-act="b-close" data-b="${b.id}">${icon('x')}Close browser</button>` })}
       ${UI.metaLine([{ obj: 'browser', label: 'Browser', value: b.id, mono: true }, { obj: 'run', label: 'Used by run', value: `<a class="mono" href="#/runs/${b.agent.startsWith('r-') ? b.agent : 'r-7f29'}">${b.agent}</a>` }, { obj: 'login', label: 'Signs in as', value: esc(b.identity), mono: true }, { label: 'Asked for by', value: esc(b.requester), mono: true }])}
       <div class="grid" style="grid-template-columns:minmax(0,1fr) 340px;align-items:start">
         <div class="panel">
