@@ -3,15 +3,16 @@
   const { icon, st, tag, ago, esc } = UI;
 
   const spark = (pts, color) => `<svg viewBox="0 0 200 80" preserveAspectRatio="none"><polyline fill="none" stroke="${color}" stroke-width="1.6" points="${pts.map((v, i) => `${(i / (pts.length - 1)) * 200},${80 - v}`).join(' ')}"/></svg>`;
+  // fake third-party pages inside the screencast: drawn by the .site classes (screens.css) with tokens, never raw colours
   const SITES = {
-    'b-01': () => `<div class="site"><div class="top" style="background:#181b1f"><b style="color:#ff8833">◢ Grafana</b><span>Dashboards › API latency</span><span style="margin-left:auto;opacity:.6">Last 1 hour</span></div><div class="grafana">
-      <div class="gp"><div>p99 latency by route</div>${spark([20, 22, 21, 25, 24, 52, 61, 66, 63, 64, 58, 22, 20], '#f2495c')}</div>
-      <div class="gp"><div>requests / s</div>${spark([40, 42, 44, 41, 45, 47, 46, 48, 45, 44, 46, 47, 45], '#73bf69')}</div>
-      <div class="gp"><div>web instances by AMI</div>${spark([30, 30, 30, 30, 50, 50, 50, 50, 50, 50, 50, 30, 30], '#5794f2')}</div>
-      <div class="gp"><div>5xx rate</div>${spark([5, 5, 6, 5, 9, 14, 12, 13, 11, 10, 9, 6, 5], '#fade2a')}</div></div></div>`,
-    'b-02': () => `<div class="site"><div class="top"><b>App</b><span style="opacity:.7">Sign in</span></div><div style="flex:1;display:grid"><div class="card"><div class="phone-ill">📱</div><h4>Approve the sign-in on your phone</h4><p>We sent a push notification to the device registered to <b>agent-triage@acme.example</b>. This page continues once it's approved.</p><div style="height:4px;background:#e9edf8;border-radius:2px;overflow:hidden"><div style="width:40%;height:100%;background:#3451d1;animation:indet 1.4s infinite"></div></div><p style="margin:14px 0 0;font-size:12px">Password <span class="masked">••••••••••••</span> accepted</p></div></div></div>`,
-    'b-03': () => `<div class="site" style="background:#fff"><div class="top" style="background:#fff;color:#1d2433;border-bottom:1px solid #e6e8ef"><b>Docs</b><span>API</span><span>Guides</span></div><div style="padding:22px 30px;font-family:Arial,'Liberation Sans',sans-serif"><div style="font-size:12px;color:#7a8396">API › Refunds</div><h2 style="font-family:Georgia,serif;font-weight:400;font-size:28px;margin:6px 0 10px">Create a refund</h2><p style="color:#4a5366;font-size:13.5px;max-width:520px">Refund fees are rounded <b>half-even</b> to the nearest cent. A partial refund keeps the original fee schedule.</p><pre style="background:#f4f5f8;padding:12px;border-radius:6px;font-size:12px">POST /v1/refunds { "charge": "ch_123", "amount": 2000 }</pre></div></div>`,
-    seed: () => `<div class="site"><div class="top"><b>Console</b></div><div style="flex:1;display:grid"><div class="card" style="text-align:left"><h4>Sign in to Console</h4><p>Use your work account.</p><div style="border:1px solid #d5d9e3;border-radius:6px;padding:9px 11px;font-size:13px;margin-bottom:8px;color:#1d2433">ops-agent@acme.example</div><div style="border:2px solid #3451d1;border-radius:6px;padding:9px 11px;font-size:13px;margin-bottom:14px;color:#9aa1b2">Password<span class="cursor-blink" style="background:#3451d1;margin-left:2px"></span></div><span class="sbtn">Continue</span><p style="margin:12px 0 0;font-size:12px">or <u>Sign in with a passkey</u></p></div></div></div>`,
+    'b-01': () => `<div class="site" data-theme="light"><div class="top dark"><b>◢ Grafana</b><span>Dashboards › API latency</span><span class="dim-on" style="margin-left:auto">Last 1 hour</span></div><div class="grafana" data-theme="dark">
+      <div class="gp"><div>p99 latency by route</div>${spark([20, 22, 21, 25, 24, 52, 61, 66, 63, 64, 58, 22, 20], 'var(--color-dataviz-categorical-5)')}</div>
+      <div class="gp"><div>requests / s</div>${spark([40, 42, 44, 41, 45, 47, 46, 48, 45, 44, 46, 47, 45], 'var(--color-dataviz-categorical-7)')}</div>
+      <div class="gp"><div>web instances by AMI</div>${spark([30, 30, 30, 30, 50, 50, 50, 50, 50, 50, 50, 30, 30], 'var(--color-dataviz-categorical-4)')}</div>
+      <div class="gp"><div>5xx rate</div>${spark([5, 5, 6, 5, 9, 14, 12, 13, 11, 10, 9, 6, 5], 'var(--color-dataviz-categorical-3)')}</div></div></div>`,
+    'b-02': () => `<div class="site" data-theme="light"><div class="top"><b>App</b><span class="dim-on">Sign in</span></div><div style="flex:1;display:grid"><div class="card"><div class="phone-ill">📱</div><h4>Approve the sign-in on your phone</h4><p>We sent a push notification to the device registered to <b>agent-triage@acme.example</b>. This page continues once it's approved.</p><div class="site-prog"><i></i></div><p class="site-small" style="margin:14px 0 0">Password <span class="masked">••••••••••••</span> accepted</p></div></div></div>`,
+    'b-03': () => `<div class="site plain" data-theme="light"><div class="top light"><b>Docs</b><span>API</span><span>Guides</span></div><div class="site-doc"><div class="site-small">API › Refunds</div><h2>Create a refund</h2><p>Refund fees are rounded <b>half-even</b> to the nearest cent. A partial refund keeps the original fee schedule.</p><pre>POST /v1/refunds { "charge": "ch_123", "amount": 2000 }</pre></div></div>`,
+    seed: () => `<div class="site" data-theme="light"><div class="top"><b>Console</b></div><div style="flex:1;display:grid"><div class="card" style="text-align:left"><h4>Sign in to Console</h4><p>Use your work account.</p><div class="site-field">ops-agent@acme.example</div><div class="site-field focus">Password<span class="cursor-blink"></span></div><span class="sbtn">Continue</span><p class="site-small" style="margin:12px 0 0">or <u>Sign in with a passkey</u></p></div></div></div>`,
   };
 
   /* ---------- list ---------- */
@@ -21,7 +22,7 @@
     ${UI.scopeNote(D.browsers.filter((b) => !UI.scopeKeeps(b.identity.startsWith('bot:') ? b.identity.slice(4) : null)).length)}
     <div class="grid g3">${D.browsers.filter((b) => UI.scopeKeeps(b.identity.startsWith('bot:') ? b.identity.slice(4) : null)).map((b) => `
       <a class="panel btile" href="#/browser/${b.id}">
-        <div class="thumb"><div class="mini" style="height:238%">${SITES[b.id]()}</div>${b.status === 'wait' ? `<span class="ctrl-banner" style="background:var(--wait);top:8px;font-size:11px">${icon('hold')}waiting on you</span>` : ''}</div>
+        <div class="thumb"><div class="mini" style="height:238%">${SITES[b.id]()}</div>${b.status === 'wait' ? `<span class="ctrl-banner wait">${icon('hold')}Waiting on you</span>` : ''}</div>
         <div class="panel-body stack tight">
           <div class="row">${st(b.status, b.status === 'run' ? 'agent acting' : b.status === 'wait' ? 'needs you' : 'idle')}<span class="mono tiny muted" style="margin-left:auto">${b.id} · ${b.actions} actions</span></div>
           <div class="ellipsis" style="font-weight:600">${esc(b.title)}</div>
@@ -44,15 +45,15 @@
         <div class="panel">
           <div class="bchrome">${['back', 'fwd', 'reload'].map((k) => `<button class="icon-btn${k === 'back' ? ' flip' : ''}" ${bv.lease === b.id ? (k === 'fwd' && !(bv.fwd || []).length ? UI.off('Nothing to go forward to') : k === 'back' && !(bv.hist || []).length ? UI.off('Nothing to go back to') : `data-act="b-nav" data-k="${k}" data-b="${b.id}"`) : UI.off('The agent is driving: take over to use the browser yourself')} aria-label="${k}">${icon(k === 'reload' ? 'updates' : 'chev')}</button>`).join('')}
             <div class="url">${icon('lock', 'lockic')}<span class="ellipsis">${esc(b.url)}</span></div>
-            <span class="tag">${b.tabs} tab${b.tabs > 1 ? 's' : ''}</span><span class="row tiny mono muted"><span class="rec"></span>CDP screencast · 12 fps</span></div>
-          <div class="bscreen${bv.lease === b.id ? ' takeover' : ''}" id="screen" data-volatile>${bv.lease === b.id ? `<div class="ctrl-banner" id="banner">${icon('hand')}You have control · agent paused<span class="kbd" style="background:rgba(0,0,0,.15);border-color:rgba(0,0,0,.2);color:inherit">Esc</span> to release</div>` : ''}${(SITES[b.id] || SITES['b-03'])()}
+            ${UI.label(`${b.tabs} tab${b.tabs > 1 ? 's' : ''}`)}<span class="row tiny mono muted"><span class="rec"></span>CDP screencast · 12 fps</span></div>
+          <div class="bscreen${bv.lease === b.id ? ' takeover' : ''}" id="screen" data-volatile>${bv.lease === b.id ? `<div class="ctrl-banner" id="banner">${icon('hand')}You have control · agent paused<span class="kbd on-accent">Esc</span> to release</div>` : ''}${(SITES[b.id] || SITES['b-03'])()}
             <svg class="fake-cursor" id="cur" style="left:62%;top:44%;${bv.lease === b.id ? 'display:none' : ''}" viewBox="0 0 24 24"><path d="M4 2l16 9-7 2-3 7z" fill="#111" stroke="#fff" stroke-width="1.5"/></svg>
           </div>
           <div class="panel-foot small"><span class="muted">${icon('shield')} jailed Chromium · CDP over a pipe (no debugging port) · egress via the allowlist proxy only</span><span style="margin-left:auto" class="mono tiny muted">${b.profile}</span></div>
         </div>
         <div class="stack">
           <div class="panel"><div class="panel-head"><h3>Session</h3></div><div class="panel-body"><dl class="kv small">
-            <dt>identity</dt><dd class="mono">${b.identity}</dd><dt>agent</dt><dd class="mono"><a href="#/live/${b.agent.startsWith('r-') ? b.agent : 'r-7f29'}" style="color:var(--accent)">${b.agent}</a></dd>
+            <dt>identity</dt><dd class="mono">${b.identity}</dd><dt>agent</dt><dd class="mono"><a href="#/live/${b.agent.startsWith('r-') ? b.agent : 'r-7f29'}" style="color:var(--color-text-accent)">${b.agent}</a></dd>
             <dt>requester</dt><dd class="mono">${b.requester}</dd><dt>profile</dt><dd>${b.loggedIn ? tag('logged-in browser · narrowed to its sites', 'wait') : tag('anonymous · ephemeral', 'ok')}</dd>
             <dt>evaluate</dt><dd>${tag(b.loggedIn ? 'off (a credential was filled)' : 'off', 'ok')}</dd></dl>
             ${b.note ? `<div class="callout ${b.status === 'wait' ? 'warn' : 'info'} small" style="margin-top:10px">${esc(b.note)}</div>` : ''}</div></div>

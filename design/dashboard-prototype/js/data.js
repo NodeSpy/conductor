@@ -135,11 +135,11 @@
 
   /* ---------- bots (#178) ---------- */
   D.bots = [
-    { name: 'platform-sre', color: '#ff6a2b', desc: 'SRE for the platform services', home: 'live', session: 's7', turns: 41, maxTurns: 100, age: '9h', maxAge: '24h', shadow: false, sandboxed: true, mode: 'namespace',
+    { name: 'platform-sre', color: 'var(--color-icon-default)', desc: 'SRE for the platform services', home: 'live', session: 's7', turns: 41, maxTurns: 100, age: '9h', maxAge: '24h', shadow: false, sandboxed: true, mode: 'namespace',
       operators: ['ops'], open: 4, pending: 1, workers: 2, spend: 0, proactive: { every: '4h', next: '1h 12m', quiet: '22:00-07:00', budget: '2/6 runs · $0.31/$2.00' }, peers: ['billing-sre'] },
-    { name: 'billing-sre', color: '#4fb8e8', desc: 'Cost and billing operations', home: 'idle', session: 's3', turns: 12, maxTurns: 100, age: '2h', maxAge: '24h', shadow: false, sandboxed: true, mode: 'container',
+    { name: 'billing-sre', color: 'var(--color-icon-default)', desc: 'Cost and billing operations', home: 'idle', session: 's3', turns: 12, maxTurns: 100, age: '2h', maxAge: '24h', shadow: false, sandboxed: true, mode: 'container',
       operators: ['ops'], open: 2, pending: 1, workers: 0, spend: 1240, proactive: null, peers: ['platform-sre'] },
-    { name: 'web-triage', color: '#3fbf7f', desc: 'Triage for the web app’s issues', home: 'live', session: 's1', turns: 3, maxTurns: 60, age: '40m', maxAge: '12h', shadow: true, sandboxed: true, mode: 'namespace',
+    { name: 'web-triage', color: 'var(--color-icon-default)', desc: 'Triage for the web app’s issues', home: 'live', session: 's1', turns: 3, maxTurns: 60, age: '40m', maxAge: '12h', shadow: true, sandboxed: true, mode: 'namespace',
       operators: ['ops', 'oncall'], open: 1, pending: 0, workers: 0, spend: 0, proactive: null, peers: [] },
   ];
 
@@ -567,7 +567,7 @@ steps:
   ];
   D.bots[0].cfg.team = 'platform'; D.bots[2].cfg.team = 'platform'; D.bots[1].cfg.team = 'finance';
   // inside a team peers are implicit, so the explicit cross-team link is the only one written
-  D.bots.push({ name: 'release-scribe', color: '#e6b33c', desc: 'Drafts release notes; no team', home: 'idle', session: 's1', turns: 0, maxTurns: 40, age: '1h', maxAge: '12h', shadow: true, sandboxed: true, mode: 'namespace', operators: ['ops'], open: 0, pending: 0, workers: 0, spend: 0, proactive: null, peers: [],
+  D.bots.push({ name: 'release-scribe', color: 'var(--color-icon-default)', desc: 'Drafts release notes; no team', home: 'idle', session: 's1', turns: 0, maxTurns: 40, age: '1h', maxAge: '12h', shadow: true, sandboxed: true, mode: 'namespace', operators: ['ops'], open: 0, pending: 0, workers: 0, spend: 0, proactive: null, peers: [],
     cfg: { description: 'Drafts release notes; no team', charter_file: 'bots/release-scribe.md', operators: ['ops'], home: { rotate: { max_age: '12h', max_turns: 40 } }, skill: { verbs: ['gh.get_*', 'slack-ops.post'] }, autonomy: { shadow: true, tiers: { observe: ['gh.get_*'], propose: ['slack-ops.post'] }, promote: [], approval_ttl: '24h' }, peers: [], isolation: { mode: 'namespace' } } });
   D.charters['release-scribe'] = 'Draft release notes from merged PRs. Never post without approval.\n';
   D.chats['release-scribe'] = [];
@@ -595,7 +595,7 @@ steps:
   };
 
   /* A fourth platform bot, so the team has someone to delegate data work to. */
-  D.bots.splice(3, 0, { name: 'platform-data', color: '#a59fc4', desc: 'Data pipelines and the warehouse', home: 'idle', session: 's2', turns: 9, maxTurns: 80, age: '3h', maxAge: '24h', shadow: false, sandboxed: true, mode: 'namespace', operators: ['ops'], open: 0, pending: 0, workers: 0, spend: 0, proactive: null, peers: [],
+  D.bots.splice(3, 0, { name: 'platform-data', color: 'var(--color-icon-default)', desc: 'Data pipelines and the warehouse', home: 'idle', session: 's2', turns: 9, maxTurns: 80, age: '3h', maxAge: '24h', shadow: false, sandboxed: true, mode: 'namespace', operators: ['ops'], open: 0, pending: 0, workers: 0, spend: 0, proactive: null, peers: [],
     cfg: { description: 'Data pipelines and the warehouse', team: 'platform', charter_file: 'bots/platform-data.md', home: { rotate: { max_age: '24h', max_turns: 80 } }, skill: { verbs: ['kv.get', 'gh.get_*'] }, autonomy: { shadow: false, tiers: { observe: ['kv.get', 'gh.get_*'] }, promote: [], approval_ttl: '24h' }, isolation: { mode: 'namespace' } } });
   D.charters['platform-data'] = 'Own the warehouse and its pipelines. Answer data questions from teammates with queries, never with guesses.\n';
   D.chats['platform-data'] = [];
@@ -642,7 +642,7 @@ steps:
   D.teams.find((t) => t.name === 'platform').cfg.folder = 'work/platform';
   D.teams.find((t) => t.name === 'finance').cfg.folder = 'work/billing';
   D.bots.find((b) => b.name === 'release-scribe').cfg.folder = 'work/platform';
-  D.bots.push({ name: 'homelab', color: '#3fbf7f', desc: 'Watches the home lab: backups, certificates, disks', home: 'live', session: 's4', turns: 18, maxTurns: 60, age: '5h', maxAge: '24h', shadow: false, sandboxed: true, mode: 'namespace', operators: ['ops'], open: 1, pending: 0, workers: 0, spend: 0, proactive: { every: '6h', next: '2h 40m', quiet: '23:00-08:00', budget: '1/3 runs' }, peers: [],
+  D.bots.push({ name: 'homelab', color: 'var(--color-icon-default)', desc: 'Watches the home lab: backups, certificates, disks', home: 'live', session: 's4', turns: 18, maxTurns: 60, age: '5h', maxAge: '24h', shadow: false, sandboxed: true, mode: 'namespace', operators: ['ops'], open: 1, pending: 0, workers: 0, spend: 0, proactive: { every: '6h', next: '2h 40m', quiet: '23:00-08:00', budget: '1/3 runs' }, peers: [],
     cfg: { description: 'Watches the home lab: backups, certificates, disks', folder: 'personal/home', charter_file: 'bots/homelab.md', operators: ['ops'], skill: { verbs: ['kv.get'] }, autonomy: { shadow: false, tiers: { observe: ['kv.get'] }, promote: [], approval_ttl: '24h' }, proactive: { every: '6h', quiet_hours: '23:00-08:00', budget: { max_runs_per_day: 3, max_cost_per_day: 0.5 } }, isolation: { mode: 'namespace' } } });
   D.charters.homelab = 'Keep an eye on the home lab. Report missed backups and expiring certificates; never change anything.\n';
   D.chats.homelab = [];
@@ -885,4 +885,22 @@ window.D.packMembers = {
   const plat = D.teams.find((t) => t.name === 'platform');
   if (plat) plat.cfg.collections = { postmortems: { from: '.conductor/packs/sre-bot/collections/postmortems.yaml' } };
   D.collections = []; D.packCollections = [];
+})();
+
+/* 2026-10 addendum (Daylight): plain headlines over the technical detail. Each needs-you item gets a title in
+ * words, the reason it matters and the one verb; the machine detail (the old title and sub) stays, last, in mono.
+ * An update that installs itself is not "needing you": it moves to "For your information". */
+(function () {
+  const D = window.D;
+  const PLAIN = {
+    '#/bots/platform-sre/proposals/p12': ['Replace the production web server', 'platform-sre wants to run terraform apply on production, for the SEV2 latency incident', 'Review'],
+    '#/bots/billing-sre/proposals': ['Post the monthly forecast to #incidents', 'billing-sre, asked by a Slack user who isn’t one of your operators', 'Review'],
+    '#/runs/r-7ef0': ['ci-fixer couldn’t fix acme/web#1288', 'Its change made 2 tests fail. Nothing was pushed.', 'Open'],
+    '#/runs/r-7ed1': ['pr-review needs your call on a draft', 'Approve, revise or discard its review of acme/infra#77', 'Answer'],
+    '#/browser/b-02': ['Approve a sign-in on app.example.com', 'The triage agent’s browser is waiting on a push approval', 'Open'],
+  };
+  D.fyi = D.attention.filter((a) => a.kind === 'update').map((a) => Object.assign({}, a, { plain: 'Update v0.72.0 is ready', why: 'It installs itself within 10 minutes; running work finishes first.' }));
+  D.fyi.push({ kind: 'sandbox', s: 'idle', plain: 'The sandbox blocked pastebin.com', why: 'A ci-fixer agent tried to reach it; nothing left the box.', title: 'egress denied', sub: 'agent:fixer@acme/web · once per browser', href: '#/logs/audit', age: '1h' });
+  D.attention = D.attention.filter((a) => a.kind !== 'update');
+  D.attention.forEach((a) => { const p = PLAIN[a.href]; if (p) [a.plain, a.why, a.verb] = p; });
 })();

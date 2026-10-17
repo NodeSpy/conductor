@@ -22,7 +22,7 @@ async function toCreds(page, method = 'password') {
   await expect(vs(page, 'username')).toBeVisible();
 }
 async function leaked(page, ...values) {
-  return page.evaluate((xs) => { const hay = document.documentElement.outerHTML + JSON.stringify(window.D) + (localStorage.getItem('cd-proto-state-v4') || '') + [...document.querySelectorAll('input')].map((i) => i.value).join('\n'); return xs.filter((v) => hay.includes(v)); }, values);
+  return page.evaluate((xs) => { const hay = document.documentElement.outerHTML + JSON.stringify(window.D) + (localStorage.getItem('cd-proto-state-v5') || '') + [...document.querySelectorAll('input')].map((i) => i.value).join('\n'); return xs.filter((v) => hay.includes(v)); }, values);
 }
 
 test('each source on a connector form: typed (write-only), env var, vault entry and setting', async ({ page }) => {

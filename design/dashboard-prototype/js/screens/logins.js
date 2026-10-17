@@ -24,9 +24,9 @@
   };
   const METHODS = {
     password: { icon: 'key', title: 'Username &amp; password', desc: 'Type them once. They go to conductor\'s vault, write-only, with an optional TOTP secret.' },
-    vault: { icon: 'lock', title: 'From a vault', desc: '1Password, pass, HashiCorp or conductor\'s vault. Pick the item and map its fields; only the reference is stored.', kc: 'var(--run)' },
-    takeover: { icon: 'hand', title: 'Sign in yourself', desc: 'A live browser: you sign in, conductor keeps the session. Best for SSO, CAPTCHA, SMS or email codes.', kc: 'var(--ok)' },
-    session: { icon: 'cookie', title: 'Saved session (signed in yourself)', desc: '', kc: 'var(--ok)' },
+    vault: { icon: 'lock', title: 'From a vault', desc: '1Password, pass, HashiCorp or conductor\'s vault. Pick the item and map its fields; only the reference is stored.', kc: 'var(--color-status-running-solid)' },
+    takeover: { icon: 'hand', title: 'Sign in yourself', desc: 'A live browser: you sign in, conductor keeps the session. Best for SSO, CAPTCHA, SMS or email codes.', kc: 'var(--color-status-success-solid)' },
+    session: { icon: 'cookie', title: 'Saved session (signed in yourself)', desc: '', kc: 'var(--color-status-success-solid)' },
   };
   const chosen = () => UI.chosen(Object.assign({ caps: 'method', act: 'la-change' }, METHODS[la.method]));
   function methodHTML() {
@@ -107,7 +107,7 @@
 
   /* ---------- the Logins tab ---------- */
   const meta = (n) => (D.loginMeta[n] = D.loginMeta[n] || { uses: [] });
-  const testTag = (t) => (!t ? tag('not tested') : t.result === 'ok' ? `<span data-s="ok" class="tag">${icon('check')} works · ${ago(t.at)} ago</span>` : t.result === 'needs you' ? tag('needs you: push approval', 'wait') : tag('failed', 'fail'));
+  const testTag = (t) => (!t ? tag('not tested') : t.result === 'ok' ? UI.statusMark('success', `works · ${UI.agoText(t.at)}`, { sm: true }) : t.result === 'needs you' ? tag('needs you: push approval', 'wait') : tag('failed', 'fail'));
   const lv = { open: null };
   UI.loginsPage = () => {
     const creds = D.access.credentials, sessions = D.access.logins;

@@ -95,12 +95,12 @@
     msg.innerHTML = blocked ? `<div class="vs-err">${icon('x')}${esc(blocked)}</div>` : warn ? `<div class="vs-warn">${icon('warn')}${esc(warn)} <a class="link" href="#/secrets">Secrets</a></div>` : '';
     el.classList.toggle('blocked', !!blocked);
     const pending = el.dataset.pending === '1';
-    if (pending) { chk.innerHTML = `<span class="vs-st wait">${icon('lock')}write-only · stored on save</span>`; }
-    else if (el.dataset.src === 'typed') chk.innerHTML = m.sensitive && hid(el).dataset.set ? `<span class="vs-st ok">${icon('check')}set</span>` : '';
-    else if (!v) chk.innerHTML = '<span class="vs-st">not set</span>';
+    if (pending) { chk.innerHTML = UI.statusMark('idle', 'write-only · stored on save', { cls: 'vs-st wait', sm: true }); }
+    else if (el.dataset.src === 'typed') chk.innerHTML = m.sensitive && hid(el).dataset.set ? UI.statusMark('ok', 'set', { cls: 'vs-st ok', sm: true }) : '';
+    else if (!v) chk.innerHTML = UI.statusMark('idle', 'not set', { cls: 'vs-st', sm: true });
     else {
-      const my = ++seq; el.dataset.seq = my; chk.innerHTML = `<span class="vs-st run">checking…</span>`;
-      setTimeout(() => { if (el.dataset.seq != my) return; const r = VS.resolve(hid(el).value); chk.innerHTML = r.state === 'ok' ? `<span class="vs-st ok" title="${esc(r.why)}">${icon('check')}resolves</span>` : r.state === 'fail' ? `<span class="vs-st fail">${icon('x')}doesn't resolve: ${esc(r.why)}</span>` : ''; el.dataset.resolve = r.state; }, UI.fast ? 15 : 260);
+      const my = ++seq; el.dataset.seq = my; chk.innerHTML = UI.statusMark('run', 'checking…', { cls: 'vs-st run', sm: true });
+      setTimeout(() => { if (el.dataset.seq != my) return; const r = VS.resolve(hid(el).value); chk.innerHTML = r.state === 'ok' ? UI.statusMark('success', 'resolves', { cls: 'vs-st ok', tip: r.why, sm: true }) : r.state === 'fail' ? UI.statusMark('fail', `doesn't resolve: ${esc(r.why)}`, { cls: 'vs-st fail', sm: true }) : ''; el.dataset.resolve = r.state; }, UI.fast ? 15 : 260);
     }
     // "use the same item" shortcuts: another field in this form came from a 1Password item
     const same = el.querySelector('.vs-same');

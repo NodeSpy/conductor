@@ -2,7 +2,7 @@
 (function () {
   const { icon, st, tag, ago, esc } = UI;
   const baton = UI.logo('mark', 'gate-mark');
-  const gate = (inner) => `<div class="gate" style="position:fixed;inset:0;z-index:60;background:var(--bg);background-image:radial-gradient(var(--dot) 1px,transparent 1.2px);background-size:22px 22px">${inner}</div>`;
+  const gate = (inner) => `<div class="gate" style="position:fixed;inset:0;z-index:60;background:var(--color-bg-canvas);background-image:radial-gradient(var(--color-decor-dot) 1px,transparent 1.2px);background-size:22px 22px">${inner}</div>`;
 
   UI.route('signin', () => ({
     toString: () => gate(`<div class="panel card"><div class="row">${baton}<span class="mono tiny muted" style="margin-left:auto">${D.daemon.magicdns}</span></div>
@@ -10,7 +10,7 @@
       <div class="seal" id="seal" style="padding:6px 0 16px"><div class="ring">${icon('passkey', 'key')}<svg class="arc" viewBox="0 0 108 108"><circle class="track" cx="54" cy="54" r="52"/><circle class="fill" cx="54" cy="54" r="53"/></svg></div></div>
       <button class="btn lg primary" style="width:100%;justify-content:center" data-act="signin">${icon('passkey')}Sign in with a passkey</button>
       <div class="muted tiny" style="margin-top:14px;line-height:1.6">Reachable only on 127.0.0.1 and this box's tailnet address. No passkey on this device? Run <span class="mono">conductor dashboard enroll</span> on the box for a one-time link.</div>
-      <div class="row tiny muted" style="margin-top:16px;border-top:1px dashed var(--line);padding-top:12px"><span>${icon('shield')} TLS · Tailscale cert</span><a style="margin-left:auto;color:var(--accent)" href="#/enroll?from=signin">Enrollment demo →</a></div></div>`),
+      <div class="row tiny muted" style="margin-top:16px;border-top:1px dashed var(--color-border-subtle);padding-top:12px"><span>${icon('shield')} TLS · Tailscale cert</span><a style="margin-left:auto;color:var(--color-text-accent)" href="#/enroll?from=signin">Enrollment demo →</a></div></div>`),
   }), { nav: 'security' });
 
   const ORD = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
@@ -19,7 +19,7 @@
   UI.route('enroll', () => {
     const n = D.passkeys.length, back = enFrom();
     if (en.void) return { toString: () => gate(`<div class="panel card" style="width:min(560px,100%)"><div class="row">${baton}<a class="icon-btn" style="margin-left:auto" href="${back}" aria-label="Close">${icon('x')}</a></div><h1>This link is void</h1><p class="dim">The one-time enrollment link was cancelled and can't be used again. Run <span class="mono">conductor dashboard enroll</span> on the box for a new one.</p><a class="btn" href="${back}" data-act="en-reset">${icon('chev')}Back to ${back === '#/signin' ? 'sign-in' : 'Access'}</a></div>`) };
-    return { toString: () => gate(`<div class="panel card" style="width:min(580px,100%)"><div class="gate-head">${baton}<span class="tag" data-s="wait">one-time link · 9:41 left</span><a class="icon-btn" style="margin-left:auto" href="${back}" aria-label="Close and go back" data-tip="Back without using the link">${icon('x')}</a></div>
+    return { toString: () => gate(`<div class="panel card" style="width:min(580px,100%)"><div class="gate-head">${baton}${UI.label(`one-time link · 9:41 left`, { s: 'wait' })}<a class="icon-btn" style="margin-left:auto" href="${back}" aria-label="Close and go back" data-tip="Back without using the link">${icon('x')}</a></div>
       <h1>Enroll a passkey</h1><p class="dim" style="margin:0 0 16px">You opened the link <span class="mono">conductor dashboard enroll</span> printed. It works once, on <b>localhost</b> only, for 10 minutes. Then registration continues on the tailnet origin, because a passkey belongs to one name.</p>
       <div class="code wrap" style="margin-bottom:16px"><span class="ln"><span class="y-c">$ conductor dashboard enroll --operator ops</span></span><span class="ln">operator ops: open this on THIS machine within 10m (single use):</span><span class="ln"><span class="y-s">http://localhost:7788/enroll#t=Hk3v…q9</span></span><span class="ln">pairing code: <span class="y-n">417-209</span></span></div>
       <div class="stack">

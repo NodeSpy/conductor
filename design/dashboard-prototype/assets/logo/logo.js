@@ -1,15 +1,12 @@
-/* The one reference to the logo. Every place that shows it (top bar / phone header, sign-in and enrolment,
- * the favicon) goes through UI.logo(), so swapping the logo is a file drop into assets/logo/:
- *   mark.svg    a <symbol id="mark">, themed with var(--logo-ink) / var(--logo-accent)
- *   lockup.svg  a <symbol id="lockup"> (set lockup below to use it instead of mark + wordmark text)
- *   favicon.svg the tab icon
- * The files must be well-formed XML (no "--" inside comments): the mark is parsed, and a file that fails to
- * parse simply shows no mark. The iPhone suite checks the mark renders.
- */
+/* The one reference to the logo. This folder holds a complete Daylight logo kit (design/brand/logo-kits/<id>/,
+ * currently fermata-bold, "Fermata, strengthened", the brand designer's recommended working mark) plus this file.
+ * Every place that shows the logo (the top bar, the phone header, sign-in and enrolment, the favicon and the
+ * home-screen icon) goes through UI.logo() and the links in index.html, which name the kit's standard file names.
+ * Swapping the logo is a file drop: copy another kit's files over this folder. Nothing else changes.
+ *   mark-inline.html  the inline mark for app chrome, coloured by tokens (--color-logo-ink, --color-accent-default)
+ *   favicon.svg       the 16px cut (follows the browser's colour scheme); apple-touch-icon.png the home-screen icon
+ * The iPhone suite checks the mark renders. */
 window.LOGO = {
-  mark: 'assets/logo/mark.svg#mark',
-  lockup: null, // e.g. 'assets/logo/lockup.svg#lockup' once a finished lockup exists
-  lockupRatio: 132 / 24,
+  inline: 'assets/logo/mark-inline.html',
   wordmark: 'conductor',
-  favicon: 'assets/logo/favicon.svg',
 };

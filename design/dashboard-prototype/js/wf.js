@@ -16,12 +16,12 @@
 
   /* ---------- kinds ---------- */
   WF.KINDS = {
-    agent: { icon: 'sparkle', label: 'Agent', color: 'var(--accent)' }, code: { icon: 'code', label: 'Code', color: 'var(--ok)' },
-    decide: { icon: 'diamond', label: 'Decide', color: 'var(--shadow)' }, ask: { icon: 'hand', label: 'Hand-off', color: 'var(--wait)' },
-    verb: { icon: 'zap', label: 'Action', color: 'var(--run)' }, call: { icon: 'link', label: 'Call', color: 'var(--ink-2)' },
-    wait: { icon: 'clock', label: 'Wait', color: 'var(--ink-3)' }, log: { icon: 'logs', label: 'Log', color: 'var(--ink-3)' },
-    set: { icon: 'edit', label: 'Set', color: 'var(--ink-3)' }, assert: { icon: 'check', label: 'Assert', color: 'var(--ink-3)' },
-    fail: { icon: 'x', label: 'Fail', color: 'var(--fail)' }, bot: { icon: 'members', label: 'Bot', color: 'var(--accent-2)' }, parallel: { icon: 'workflows', label: 'Parallel', color: 'var(--run)' }, unknown: { icon: 'warn', label: 'Unknown', color: 'var(--fail)' },
+    agent: { icon: 'sparkle', label: 'Agent', color: 'var(--color-accent-default)' }, code: { icon: 'code', label: 'Code', color: 'var(--color-status-success-solid)' },
+    decide: { icon: 'diamond', label: 'Decide', color: 'var(--color-status-info-solid)' }, ask: { icon: 'hand', label: 'Hand-off', color: 'var(--color-status-warning-solid)' },
+    verb: { icon: 'zap', label: 'Action', color: 'var(--color-status-running-solid)' }, call: { icon: 'link', label: 'Call', color: 'var(--color-text-secondary)' },
+    wait: { icon: 'clock', label: 'Wait', color: 'var(--color-text-tertiary)' }, log: { icon: 'logs', label: 'Log', color: 'var(--color-text-tertiary)' },
+    set: { icon: 'edit', label: 'Set', color: 'var(--color-text-tertiary)' }, assert: { icon: 'check', label: 'Assert', color: 'var(--color-text-tertiary)' },
+    fail: { icon: 'x', label: 'Fail', color: 'var(--color-status-danger-solid)' }, bot: { icon: 'members', label: 'Bot', color: 'var(--color-accent-hover)' }, parallel: { icon: 'workflows', label: 'Parallel', color: 'var(--color-status-running-solid)' }, unknown: { icon: 'warn', label: 'Unknown', color: 'var(--color-status-danger-solid)' },
   };
   WF.kind = (s) => {
     if (!isObj(s)) return 'unknown';

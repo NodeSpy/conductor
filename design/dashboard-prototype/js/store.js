@@ -12,7 +12,7 @@
  * beside the node (item.status, item.detail) and is never written. */
 (function () {
   const S = (window.S = {});
-  const KEY = 'cd-proto-state-v4';
+  const KEY = 'cd-proto-state-v5';
   const Y = window.YAML;
   const clone = Y.clone, eq = Y.eq;
   const SEED = clone(window.D);
@@ -185,7 +185,7 @@
     set(k, n) {
       const L = D().bots; if (n == null) return drop(L, k);
       let m = byName(L, k);
-      if (!m) { m = { name: k, color: ['#ff6a2b', '#4fb8e8', '#3fbf7f', '#e6b33c', '#a59fc4'][L.length % 5], home: 'idle', session: 's1', turns: 0, open: 0, pending: 0, workers: 0, spend: 0 }; L.push(m); D().chats[k] = D().chats[k] || []; }
+      if (!m) { m = { name: k, color: 'var(--color-icon-default)', home: 'idle', session: 's1', turns: 0, open: 0, pending: 0, workers: 0, spend: 0 }; L.push(m); D().chats[k] = D().chats[k] || []; }
       Object.assign(m, { cfg: n, team: n.team || null, desc: n.description || '', shadow: !!(n.autonomy && n.autonomy.shadow), mode: (n.isolation && n.isolation.mode) || 'namespace', operators: n.operators || [], peers: n.peers || [], maxTurns: S.getPath(n, 'home.rotate.max_turns') || 100, maxAge: S.getPath(n, 'home.rotate.max_age') || '24h', age: m.age || '0m', sandboxed: true,
         proactive: n.proactive ? { every: n.proactive.every, next: (m.proactive && m.proactive.next) || n.proactive.every, quiet: n.proactive.quiet_hours, budget: `0/${S.getPath(n, 'proactive.budget.max_runs_per_day') || '∞'} runs` } : null });
     },

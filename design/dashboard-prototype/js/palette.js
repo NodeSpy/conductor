@@ -68,7 +68,7 @@
     if (document.querySelector('.palette')) return;
     const all = index();
     const el = document.createElement('div');
-    el.innerHTML = `<div class="scrim" id="pal-scrim" style="place-items:start center;background:rgba(8,8,6,.4)"></div><div class="palette" role="dialog" aria-label="Command line"><input placeholder="Type a command, a name, a run id, a config key…" aria-label="Search or run a command" autocomplete="off" spellcheck="false"><div class="res" role="listbox"></div><div class="pal-foot muted tiny"><span><span class="kbd">↑↓</span> move</span><span><span class="kbd">↵</span> open or run</span><span><span class="kbd">esc</span> close</span><span><span class="kbd">?</span> all shortcuts</span></div></div>`;
+    el.innerHTML = `<div class="scrim" id="pal-scrim" style="place-items:start center"></div><div class="palette" role="dialog" aria-label="Command line"><input placeholder="Type a command, a name, a run id, a config key…" aria-label="Search or run a command" autocomplete="off" spellcheck="false"><div class="res" role="listbox"></div><div class="pal-foot muted tiny"><span><span class="kbd">↑↓</span> move</span><span><span class="kbd">↵</span> open or run</span><span><span class="kbd">esc</span> close</span><span><span class="kbd">?</span> all shortcuts</span></div></div>`;
     document.body.appendChild(el);
     const inp = el.querySelector('input'), res = el.querySelector('.res'); let sel = 0, list = search(all, '');
     const draw = () => { const q = inp.value.trim();

@@ -1,0 +1,102 @@
+/* Status marks, labels, filter chips, counts and row states: the only place they are drawn.
+ *
+ * Screens never write this markup by hand; they call the helpers in js/ui.js:
+ *   UI.statusMark(state, word, opts)  .st     a status glyph and a plain word ("Failed", "Waiting on you")
+ *   UI.label(text, opts)              .tag    a quiet label: a kind, an origin, a tier, an id
+ *   UI.filterChip(opts)               .chip   a toggle that filters a list
+ *   UI.count(n, opts)                 .count  a number beside a tab or nav item; ember only where a person is needed
+ *   UI.rowState(state)                data-row  emphasis on a row that needs attention (a bar, never a tint)
+ * The brand's status-and-label system is still being chosen (Daylight's tinted capsules read as stock UI): this
+ * interim set is deliberately plain (no capsules, no tinted rows) and swaps in here and in those helpers only.
+ *
+ * State words map to Daylight roles: ok → ink (passing work is not coloured), run → running, wait → warning,
+ * fail → danger, idle/skip → neutral, shadow → info, ember → needs you (the accent). */
+
+[data-s="ok"] { --s-fg: var(--color-text-secondary); --s-border: var(--color-border-default); --s-solid: var(--color-text-tertiary); --s-bg: var(--color-status-neutral-bg); }
+[data-s="success"] { --s-fg: var(--color-status-success-fg); --s-border: var(--color-status-success-border); --s-solid: var(--color-status-success-solid); --s-bg: var(--color-status-success-bg); }
+[data-s="run"] { --s-fg: var(--color-status-running-fg); --s-border: var(--color-status-running-border); --s-solid: var(--color-status-running-solid); --s-bg: var(--color-status-running-bg); }
+[data-s="wait"] { --s-fg: var(--color-status-warning-fg); --s-border: var(--color-status-warning-border); --s-solid: var(--color-status-warning-solid); --s-bg: var(--color-status-warning-bg); }
+[data-s="fail"] { --s-fg: var(--color-status-danger-fg); --s-border: var(--color-status-danger-border); --s-solid: var(--color-status-danger-solid); --s-bg: var(--color-status-danger-bg); }
+[data-s="idle"], [data-s="skip"] { --s-fg: var(--color-status-neutral-fg); --s-border: var(--color-status-neutral-border); --s-solid: var(--color-status-neutral-solid); --s-bg: var(--color-status-neutral-bg); }
+[data-s="shadow"] { --s-fg: var(--color-status-info-fg); --s-border: var(--color-status-info-border); --s-solid: var(--color-status-info-solid); --s-bg: var(--color-status-info-bg); }
+[data-s="ember"] { --s-fg: var(--color-text-accent); --s-border: var(--color-accent-default); --s-solid: var(--color-accent-default); --s-bg: var(--color-accent-subtle); }
+
+/* ---- status mark (a margin mark): a small glyph plus a word, no capsule. Passed and parked differ in hue and
+ * shape (a check in the success hue, pause bars in neutral); the word stays ink for passing work. ---- */
+.st { display: inline-flex; align-items: center; gap: var(--space-1_5); font: var(--type-label); font-size: var(--type-body-s-size); color: var(--s-fg, var(--color-text-secondary)); white-space: nowrap; line-height: 1.2; vertical-align: middle; }
+.st i { width: 16px; height: 16px; display: inline-grid; place-items: center; flex: none; }
+.st i svg { width: 16px; height: 16px; }
+.st[data-s="ok"] { color: var(--color-text-secondary); }
+.st[data-s="ok"] i { color: var(--color-status-success-fg); }
+.st.sm { font-size: var(--type-caption-size); gap: var(--space-1); }
+.st.sm i, .st.sm i svg { width: 14px; height: 14px; }
+.glyph.spin { animation: spin var(--motion-duration-spin) linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--s-solid, var(--color-status-neutral-solid)); display: inline-block; flex: none; }
+
+/* ---- label: a quiet word in a hairline box; status labels take the state's ink, never a fill ---- */
+.tag { display: inline-flex; align-items: center; gap: var(--space-1); min-height: 22px; padding: 0 var(--space-1_5); border-radius: var(--radius-sm); border: var(--border-width) solid var(--color-border-default); font: var(--type-caption); font-weight: var(--font-weight-medium); color: var(--color-text-secondary); background: transparent; white-space: nowrap; letter-spacing: 0; vertical-align: middle; }
+.tag[data-s] { color: var(--s-fg); border-color: var(--s-border); }
+.tag svg { width: 13px; height: 13px; flex: none; }
+.tag.mono { font-family: var(--font-family-mono); font-size: var(--type-code-s-size); font-weight: var(--font-weight-regular); }
+.tag.plain { border-color: transparent; padding: 0; min-height: 0; }
+.tag.wrap { white-space: normal; height: auto; padding-block: 1px; }
+.kv .tag { white-space: normal; height: auto; padding-block: 1px; }
+/* tiers: the fixed risk words lead ("Asks you first"); the tier name is second, as a mono label */
+.tier { display: inline-flex; align-items: center; min-height: 22px; font-family: var(--font-family-mono); font-size: var(--type-code-s-size); padding: 0 var(--space-1_5); border-radius: var(--radius-sm); border: var(--border-width) solid var(--color-border-default); color: var(--color-text-secondary); letter-spacing: 0; white-space: nowrap; vertical-align: middle; }
+.tier.propose { color: var(--color-status-warning-fg); border-color: var(--color-status-warning-border); }
+.tier.commit_money { color: var(--color-text-accent); border-color: var(--color-accent-default); }
+.tier.never { color: var(--color-status-danger-fg); border-color: var(--color-status-danger-border); text-decoration: line-through; text-decoration-thickness: 1px; }
+
+/* ---- filter chip: toggles a filter; selected is ink with a check, not a tint ---- */
+.chip { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: var(--space-1_5); min-height: var(--size-control-sm); padding: 0 var(--space-3); border: var(--border-width) solid var(--color-border-default); border-radius: var(--radius-control); font: var(--type-label); font-size: var(--type-caption-size); color: var(--color-text-secondary); background: var(--color-bg-surface); cursor: pointer; white-space: nowrap; transition: border-color var(--motion-duration-fast) var(--motion-easing-out), color var(--motion-duration-fast) var(--motion-easing-out); }
+.chip svg { width: 14px; height: 14px; flex: none; }
+.chip:hover { border-color: var(--color-border-strong); color: var(--color-text-primary); }
+.chip.on, .chip[aria-pressed="true"] { border-color: var(--color-text-primary); color: var(--color-text-primary); box-shadow: inset 0 0 0 1px var(--color-text-primary); }
+.chip:focus-visible, .chip:focus-within { outline: var(--border-focus) solid var(--color-focus-ring); outline-offset: 2px; }
+.chip select { appearance: none; background: transparent; border: 0; color: inherit; font: inherit; padding-right: 2px; cursor: pointer; }
+.chip select:focus { outline: none; }
+.chips { display: flex; flex-wrap: wrap; gap: var(--space-1_5); }
+
+/* ---- count: a plain tabular number; ember only where a person is needed ---- */
+.count { display: inline-grid; place-items: center; font: var(--type-caption); font-weight: var(--font-weight-semibold); color: var(--color-text-tertiary); font-variant-numeric: tabular-nums; }
+.count.hot { min-width: 20px; height: 20px; padding: 0 var(--space-1_5); border-radius: var(--radius-pill); background: var(--color-accent-default); color: var(--color-text-on-accent); font-weight: var(--font-weight-bold); }
+
+/* ---- row state: only a row that needs someone (failed, waiting on you, needs you) carries a thin leading edge in
+ * its state's colour; running and passing rows don't. The reason line under the name says why. ---- */
+[data-row] { position: relative; }
+tr[data-row] > td:first-child, .item[data-row], .frow[data-row] { box-shadow: inset var(--border-indicator) 0 0 var(--s-solid); }
+[data-row="sel"] { --s-solid: var(--color-accent-default); background: var(--color-accent-subtle); }
+[data-row="fail"] { --s-solid: var(--color-status-danger-solid); }
+[data-row="wait"] { --s-solid: var(--color-status-warning-solid); }
+[data-row="ember"] { --s-solid: var(--color-accent-default); }
+[data-row="moved"] { --s-solid: var(--color-status-running-solid); }
+
+/* ---- label kinds (all quiet; the word carries the meaning) ---- */
+.tag.owner { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.tag.owner.op { color: var(--color-text-primary); }
+.tag.origin.builtin, .tag.origin.official { color: var(--color-text-secondary); }
+.tag.origin.custom { color: var(--color-status-warning-fg); border-color: var(--color-status-warning-border); }
+.tag.kind-tag { color: var(--color-text-primary); font-weight: var(--font-weight-semibold); }
+.tag.kind-tag svg { color: var(--color-icon-default); }
+.tag.who svg { width: 12px; height: 12px; }
+.tag.who.operator { color: var(--color-text-primary); }
+/* requester taint: who started the work. Untrusted requesters (a user, a peer) are the ones to notice. */
+.tag.taint { font-family: var(--font-family-mono); font-size: var(--type-code-s-size); font-weight: var(--font-weight-regular); }
+.tag.taint.user, .tag.taint.peer { color: var(--color-status-warning-fg); border-color: var(--color-status-warning-border); }
+/* inheritance against the team: inherits / same as team / narrows / wider ✗ */
+.tag.inherit.nar { color: var(--color-text-primary); }
+.tag.inherit.wid { color: var(--color-status-danger-fg); border-color: var(--color-status-danger-border); }
+.tag.risk { margin-left: var(--space-1); }
+.inh-hint { color: var(--color-text-secondary); }
+/* a removable token inside a list field */
+.chip-x, .tag.removable { display: inline-flex; align-items: center; gap: 2px; min-height: 28px; padding: 0 2px 0 var(--space-2); border-radius: var(--radius-sm); border: var(--border-width) solid var(--color-border-default); background: var(--color-bg-raised); font: var(--type-caption); color: var(--color-text-primary); }
+.chip-x button, .chip-del { all: unset; width: 24px; height: 24px; display: grid; place-items: center; color: var(--color-text-tertiary); cursor: pointer; border-radius: var(--radius-sm); }
+.chip-x button:hover, .chip-del:hover { background: var(--color-state-hover); color: var(--color-status-danger-fg); }
+.chip-x button svg { width: 12px; height: 12px; }
+/* links to related entries (runbooks, cases, logs): a quiet link with its icon, not a capsule */
+.cite-link { display: inline-flex; align-items: center; gap: var(--space-1); font: var(--type-body-s); color: var(--color-text-accent); }
+.cite-link svg { width: 14px; height: 14px; color: var(--color-icon-default); }
+a.cite-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* the test-result and value-source marks are status marks; keep them small in dense rows */
+.st.tpill, .st.vs-st { font-size: var(--type-caption-size); }

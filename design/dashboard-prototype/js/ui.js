@@ -10,104 +10,72 @@
   UI.planned = () => !!(window.D && D.prefs && D.prefs.planned);
   UI.live = (p) => !p.planned || UI.planned();
   // Surface script errors visibly: a prototype should never fail silently.
-  window.addEventListener('error', (e) => { const b = document.createElement('div'); b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#ff00ff;color:#fff;font:12px monospace;padding:6px 10px'; b.textContent = 'prototype error: ' + e.message; document.body.appendChild(b); });
+  window.addEventListener('error', (e) => { const b = document.createElement('div'); b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:var(--color-status-danger-solid);color:var(--color-text-on-accent);font:12px monospace;padding:6px 10px'; b.textContent = 'prototype error: ' + e.message; document.body.appendChild(b); });
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   UI.$ = $; UI.$$ = $$;
   UI.esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-  /* ---------- icons (1.5 stroke, 24 grid) ---------- */
-  const P = {
-    overview: '<path d="M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-3H4zM14 7h6V4h-6z"/>',
-    live: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
-    attention: '<path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
-    runs: '<path d="M4 6h16M4 12h16M4 18h10"/>',
-    workflows: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="12" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M8.5 6H12a3 3 0 013 3v.5M8.5 18H12a3 3 0 003-3v-.5"/>',
-    bots: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 010 6.8M18.5 14.8c1.6.8 2.6 2.5 3 5.2"/>',
-    browser: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/>',
-    config: '<path d="M8 4H6a2 2 0 00-2 2v3l-2 3 2 3v3a2 2 0 002 2h2M16 4h2a2 2 0 012 2v3l2 3-2 3v3a2 2 0 01-2 2h-2"/>',
-    secrets: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
-    extensions: '<path d="M10 3h4v3a2 2 0 104 0V3h3v7h-3a2 2 0 100 4h3v7h-7v-3a2 2 0 10-4 0v3H3v-7h3a2 2 0 100-4H3V3z"/>',
-    connectors: '<path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 01-10 0zM12 16v5"/>',
-    updates: '<path d="M20 12a8 8 0 11-2.3-5.6M20 4v5h-5"/>',
-    logs: '<path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/>',
-    shield: '<path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"/>',
-    key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/>',
-    passkey: '<circle cx="10" cy="7" r="4"/><path d="M3 21c0-4 3-6.5 7-6.5 1.4 0 2.6.3 3.7.8"/><circle cx="18" cy="15" r="2.5"/><path d="M18 17.5V22M18 20h2"/>',
-    search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
-    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
-    moon: '<path d="M20 14.5A8 8 0 019.5 4 8 8 0 1020 14.5z"/>',
-    lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>',
-    check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
-    x: '<path d="M6 6l12 12M18 6L6 18"/>',
-    spin: '<path d="M12 3a9 9 0 019 9" /><path d="M12 21a9 9 0 01-9-9" opacity=".35"/>',
-    pause: '<path d="M8 5v14M16 5v14"/>',
-    play: '<path d="M7 4l13 8-13 8z"/>',
-    hold: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9v6M14.5 9v6"/>',
-    diamond: '<path d="M12 3l9 9-9 9-9-9z"/>',
-    dot: '<circle cx="12" cy="12" r="4.5"/>',
-    ghost: '<path d="M5 21V10a7 7 0 0114 0v11l-2.5-2-2.3 2-2.2-2-2.2 2-2.3-2z"/><path d="M9.5 10h.01M14.5 10h.01"/>',
-    chev: '<path d="M9 6l6 6-6 6"/>', chevd: '<path d="M6 9l6 6 6-6"/>',
-    plus: '<path d="M12 5v14M5 12h14"/>',
-    send: '<path d="M4 12l16-8-6 16-2.5-6.5z"/>',
-    branch: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-12 7"/>',
-    split: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/>',
-    info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
-    file: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
-    folder: '<path d="M3 6a1 1 0 011-1h5l2 2h9a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1z"/>',
-    commit: '<circle cx="12" cy="12" r="3.5"/><path d="M3 12h5.5M15.5 12H21"/>',
-    hand: '<path d="M8 13V5.5a1.5 1.5 0 013 0V12M11 11V4.5a1.5 1.5 0 013 0V12M14 11.5V6a1.5 1.5 0 013 0v8c0 4-2.5 7-6.5 7S5 18.5 4 16l-1.6-3.3a1.4 1.4 0 012.3-1.6L8 14"/>',
-    eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
-    eyeoff: '<path d="M3 3l18 18M10.6 5.1A10 10 0 0112 5c6.4 0 10 7 10 7a17 17 0 01-3.2 4M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7c1.7 0 3.2-.5 4.5-1.2"/>',
-    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9S14.5 18.3 12 21c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z"/>',
-    cookie: '<path d="M12 3a9 9 0 109 9 3 3 0 01-3.5-3A3 3 0 0114 5.5 3 3 0 0112 3z"/><path d="M8.5 10.5h.01M12 15h.01M15.5 13.5h.01M9 16h.01"/>',
-    terminal: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>',
-    copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 00-1-1H5a1 1 0 00-1 1v10a1 1 0 001 1h3"/>',
-    undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 010 10h-3"/>',
-    filter: '<path d="M4 5h16l-6 8v6l-4-2v-4z"/>',
-    dollar: '<path d="M12 3v18M16.5 7.5c-.6-1.5-2.3-2.5-4.5-2.5-2.5 0-4.5 1.3-4.5 3.3 0 4.7 9.5 2.3 9.5 7.4 0 2-2 3.3-5 3.3-2.3 0-4.2-1-4.8-2.6"/>',
-    zap: '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
-    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-    phone: '<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/>',
-    sparkle: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
-    code: '<path d="M9 7l-5 5 5 5M15 7l5 5-5 5"/>',
-    canvas: '<rect x="3" y="3" width="7" height="6" rx="1"/><rect x="14" y="15" width="7" height="6" rx="1"/><path d="M6.5 9v3.5a2 2 0 002 2H17.5V15"/>',
-    trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
-    edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>',
-    more: '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>',
-    link: '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>',
-    mouse: '<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 7v4"/>',
-    keyboard: '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
-    grid: '<path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/>',
-    warn: '<path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
-    box: '<path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/>',
-    server: '<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/>',
-    download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
-    upload: '<path d="M12 16V5M7 10l5-5 5 5M5 20h14"/>',
-    expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
-  };
-  P.members = P.bots; P.team = P.bots;
-  UI.icon = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || P.dot}</svg>`;
+  /* ---------- icons: Lucide at a 1.75 stroke (js/icons.js); status glyphs are Daylight's own ---------- */
+  const P = window.ICONS || {};
+  UI.icon = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || P.dot}</svg>`;
+  /** A status glyph (success, warning, danger, info, running, neutral, skipped, shadow, needs-you), 16-unit grid. */
+  UI.glyph = (n, cls = '') => `<svg class="glyph ${cls}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${(window.GLYPHS || {})[n] || ''}</svg>`;
 
   /* ---------- status ---------- */
-  const SG = { ok: ['check', 'ok'], run: ['spin', 'running'], wait: ['hold', 'waiting'], fail: ['x', 'failed'], idle: ['pause', 'idle'], shadow: ['ghost', 'shadow'], ember: ['diamond', 'needs you'] };
-  UI.st = (s, label, pill = false) => { const g = SG[s] || SG.idle; return `<span class="st${pill ? ' pill' : ''}" data-s="${s}"><i>${UI.icon(g[0])}</i>${label ?? g[1]}</span>`; };
-  UI.tag = (t, s) => `<span class="tag"${s ? ` data-s="${s}"` : ''}>${t}</span>`;
+  /* ---------- status marks, labels, filter chips, counts, row states (css/marks.css) ----------
+   * The only way screens draw these. The brand's final status-and-label system swaps in here and in marks.css. */
+  // state → Daylight glyph and default word. Passing work is ink; colour is for failed, waiting, running, needs you.
+  const SG = { ok: ['success', 'ok'], success: ['success', 'done'], run: ['running', 'running'], wait: ['warning', 'waiting'], fail: ['danger', 'failed'], idle: ['neutral', 'idle'], shadow: ['shadow', 'shadow'], ember: ['needs-you', 'needs you'], skip: ['skipped', 'not reached'] };
+  /** A status mark: glyph + word. opts: { cls, sm, tip, id } */
+  UI.statusMark = (s, word, o = {}) => { const g = SG[s] || SG.idle; return `<span class="st${o.sm ? ' sm' : ''}${o.cls ? ' ' + o.cls : ''}" data-s="${s}"${o.id ? ` id="${o.id}"` : ''}${o.tip ? ` data-tip="${UI.esc(o.tip)}"` : ''}><i>${UI.glyph(g[0], s === 'run' ? 'spin' : '')}</i>${word ?? g[1]}</span>`; };
+  UI.st = (s, label) => UI.statusMark(s, label);
+  /** A label: a quiet word. opts: { s (state), mono, cls, icon, tip, attrs } */
+  UI.label = (text, o = {}) => `<span class="tag${o.mono ? ' mono' : ''}${o.cls ? ' ' + o.cls : ''}"${o.s ? ` data-s="${o.s}"` : ''}${o.tip ? ` data-tip="${UI.esc(o.tip)}"` : ''}${o.attrs ? ' ' + o.attrs : ''}>${o.icon ? UI.icon(o.icon) : ''}${text}</span>`;
+  UI.tag = (t, s) => UI.label(t, { s });
+  /** A filter chip: { text, on, act, attrs, icon, cls, tag ('button'|'label'|'a'), href } */
+  UI.filterChip = (o) => { const t = o.tag || 'button', on = !!o.on; return `<${t}${t === 'button' ? ' type="button"' : ''}${o.href ? ` href="${o.href}"` : ''} class="chip${on ? ' on' : ''}${o.cls ? ' ' + o.cls : ''}"${t === 'button' ? ` aria-pressed="${on}"` : ''}${o.act ? ` data-act="${o.act}"` : ''}${o.attrs ? ' ' + o.attrs : ''}>${on && !o.icon && !o.noCheck ? UI.icon('check') : o.icon ? UI.icon(o.icon) : ''}${o.text}</${t}>`; };
+  /** Daylight's illustration motif (never part of the logo): the arch rising over a hairline horizon, rays above. */
+  UI.sunrise = (cls = '') => `<svg class="sunrise ${cls}" viewBox="0 0 160 92" aria-hidden="true"><g stroke="var(--color-border-default)" stroke-width="2" stroke-linecap="round">${[-62, -38, -14, 14, 38, 62].map((a) => { const r = Math.PI * (a - 90) / 180; return `<line x1="${(80 + Math.cos(r) * 44).toFixed(1)}" y1="${(70 + Math.sin(r) * 44).toFixed(1)}" x2="${(80 + Math.cos(r) * 54).toFixed(1)}" y2="${(70 + Math.sin(r) * 54).toFixed(1)}"/>`; }).join('')}</g><path d="M46 70a34 36 0 0 1 68 0h-9a25 26 0 0 0-50 0z" fill="var(--color-logo-ink)"/><circle cx="80" cy="70" r="10" fill="var(--color-accent-default)"/><path d="M8 76h144" stroke="var(--color-logo-ink)" stroke-width="2" stroke-linecap="round"/><path d="M30 84h40M90 84h28" stroke="var(--color-border-default)" stroke-width="2" stroke-linecap="round"/></svg>`;
+  /** An empty state: what appears here (a short human title), why it's empty, and the one next step. */
+  UI.empty = ({ title, body = '', action = '', small = false, art = true, cls = '' }) => `<div class="empty${small ? ' small' : ''}${cls ? ' ' + cls : ''}">${art ? UI.sunrise() : ''}<span class="serif">${title}</span>${body ? `<p>${body}</p>` : ''}${action}</div>`;
+  /** A filter that picks one value: a chip wrapping a native select. { icon, on, label, attrs (on the select), options (html), cls } */
+  UI.selectChip = (o) => `<label class="chip chip-sel${o.on ? ' on' : ''}${o.cls ? ' ' + o.cls : ''}"${o.wrapAttrs ? ' ' + o.wrapAttrs : ''}>${o.icon ? UI.icon(o.icon) : ''}<span class="sr-only">${o.label}</span><select ${o.attrs || ''} aria-label="${o.label}">${o.options}</select></label>`;
+  /** A count beside a tab or nav item; hot (ember) only where a person is needed. */
+  UI.count = (n, o = {}) => `<span class="count${o.hot ? ' hot' : ''}${o.cls ? ' ' + o.cls : ''}"${o.label ? ` aria-label="${UI.esc(o.label)}"` : ''}>${n}</span>`;
+  /** Attributes for a row (tr, .item) that needs someone: a thin leading edge in the state's colour, never a tint. */
+  UI.rowState = (s) => (['fail', 'stopped', 'wait', 'ember', 'sel', 'moved'].includes(s) ? ` data-row="${s === 'stopped' ? 'fail' : s}"` : '');
   UI.tier = (t) => `<span class="tier ${t}">${t}</span>`;
-  /** The logo, from the one reference in assets/logo/logo.js: 'mark' (the symbol) or 'lockup' (mark + wordmark). */
-  /* The asset files are fetched once and their <symbol>s injected into a hidden sprite, so <use href="#id">
-     is a same-document reference (external <use> isn't reliable in WebKit) and still inherits the theme. */
-  const symId = (ref) => String(ref || '').split('#')[1] || '';
-  UI.loadLogo = () => { const L = window.LOGO || {}; [L.mark, L.lockup].filter(Boolean).forEach((ref) => { const [file, id] = ref.split('#'); if (document.getElementById(id)) return;
-    fetch(file).then((r) => r.text()).then((t) => { const doc = new DOMParser().parseFromString(t, 'image/svg+xml'), sym = doc.querySelector(`[id="${id}"]`); if (!sym) return; UI.logoInner[id] = sym.innerHTML; document.querySelectorAll(`svg use[href="#${id}"]`).forEach((u) => { u.parentNode.innerHTML = sym.innerHTML; }); let sp = document.getElementById('logo-sprite'); if (!sp) { sp = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); sp.id = 'logo-sprite'; sp.setAttribute('aria-hidden', 'true'); sp.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden'; document.body.prepend(sp); } sp.appendChild(document.importNode(sym, true)); }).catch(() => {}); }); };
-  UI.logoInner = {}; // a symbol's shapes once fetched: inlined, since WebKit won't resolve a <use> whose symbol arrives later
-  const useOr = (id) => UI.logoInner[id] || `<use href="#${id}"/>`;
-  UI.logo = (kind = 'mark', cls = '') => { const L = window.LOGO || {}, mark = `<svg class="logo-mark baton ${cls}" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${useOr(symId(L.mark))}</svg>`;
-    if (kind === 'mark') return mark;
-    return L.lockup ? `<svg class="logo-lockup ${cls}" viewBox="0 0 ${Math.round(24 * (L.lockupRatio || 5.5))} 24" role="img" aria-label="${UI.esc(L.wordmark || 'conductor')}">${useOr(symId(L.lockup))}</svg>` : `${mark}<span class="wordmark">${UI.esc(L.wordmark || 'conductor')}</span>`; };
+  /** The logo, from the one reference in assets/logo/logo.js: 'mark' (the kit's inline mark) or 'lockup' (the mark
+      beside the live-text wordmark, Fraunces SemiBold). The kit's mark-inline.html is fetched once and inlined, so it
+      takes its colours from the tokens and needs no <use> (which WebKit won't resolve for late symbols). */
+  UI.logoSvg = '';
+  UI.loadLogo = () => { const L = window.LOGO || {}; if (!L.inline || UI.logoSvg) return;
+    fetch(L.inline).then((r) => r.text()).then((t) => { const svg = new DOMParser().parseFromString(t, 'text/html').querySelector('svg'); if (!svg) return;
+      svg.removeAttribute('role'); svg.removeAttribute('aria-label'); svg.setAttribute('aria-hidden', 'true'); svg.setAttribute('focusable', 'false');
+      UI.logoSvg = svg.outerHTML; document.querySelectorAll('.logo-slot').forEach((n) => { n.innerHTML = UI.logoSvg; }); }).catch(() => {}); };
+  UI.logo = (kind = 'mark', cls = '') => { const L = window.LOGO || {}, mark = `<span class="logo-slot ${cls}">${UI.logoSvg}</span>`;
+    return kind === 'mark' ? mark : `<span class="lockup" role="img" aria-label="${UI.esc(L.wordmark || 'conductor')}">${mark}<span class="wordmark" aria-hidden="true">${UI.esc(L.wordmark || 'conductor')}</span></span>`; };
   UI.sigil = (mbr, size = '') => `<span class="sigil ${size}" style="--sig:${mbr.color}">${mbr.name[0]}${mbr.home === 'live' ? '<span class="live"></span>' : ''}</span>`;
   UI.ago = (iso) => { const s = (Date.now() - new Date(iso)) / 1000; if (s < 60) return Math.max(1, s | 0) + 's'; if (s < 3600) return (s / 60 | 0) + 'm'; if (s < 86400) return (s / 3600 | 0) + 'h'; return (s / 86400 | 0) + 'd'; };
   UI.clock = (iso) => new Date(iso).toTimeString().slice(0, 8);
+  /* human times: "52 min ago (17:03)"; the exact local time (and UTC) on hover */
+  UI.agoText = (iso) => { const s = (Date.now() - new Date(iso)) / 1000; if (s < 60) return 'just now'; if (s < 3600) return `${s / 60 | 0} min ago`; if (s < 86400) { const h = s / 3600 | 0; return `${h} h ago`; } const d = s / 86400 | 0; return d === 1 ? 'yesterday' : `${d} days ago`; };
+  UI.hm = (iso) => new Date(iso).toTimeString().slice(0, 5);
+  UI.when = (iso, withClock = false) => { const d = new Date(iso); return `<time datetime="${d.toISOString()}" data-tip="${d.toLocaleString()} · ${d.toISOString().slice(0, 16).replace('T', ' ')} UTC">${UI.agoText(iso)}${withClock ? ` <span class="muted">(${UI.hm(iso)})</span>` : ''}</time>`; };
+  /** "7m" / "1h" / "3d" (the fake data's short ages) → "7 min ago" */
+  UI.ageText = (a) => { const m = String(a).match(/^(\d+)\s*([smhd])$/); if (!m) return a; return m[2] === 's' ? 'just now' : m[2] === 'm' ? `${m[1]} min ago` : m[2] === 'h' ? `${m[1]} h ago` : `${m[1]} days ago`; };
+  /** Durations in words with units: "12 min", "7 min 40 s", "26 s". */
+  UI.durText = (ms) => { if (!ms) return '—'; const s = Math.round(ms / 1000); if (s < 60) return `${Math.max(1, s)} s`; const m = Math.floor(s / 60), r = s % 60; return m < 10 && r ? `${m} min ${r} s` : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; };
+  UI.runDur = (r) => (r.finished ? UI.durText(new Date(r.finished) - new Date(r.started)) : '…');
+  /** A run's plain headline (what it is doing or did, in words); the workflow name and ids follow in the detail line. */
+  const RUN_WHAT = { 'ci-fixer': ['Fixing a failing check', 'Fixed a failing check', 'Couldn’t fix a failing check'], 'pr-review': ['Reviewing a pull request', 'Reviewed a pull request', 'Couldn’t review a pull request'], 'issue-triage': ['Triaging a new issue', 'Triaged a new issue', 'Couldn’t triage an issue'], 'dep-bump': ['Bumping dependencies', 'Bumped dependencies', 'Couldn’t bump dependencies'], 'release-notes': ['Drafting release notes', 'Drafted release notes', 'Couldn’t draft release notes'], 'incident-intake': ['Taking in an incident', 'Took in an incident', 'Couldn’t take in an incident'], 'assess-and-post': ['Assessing and posting', 'Assessed and posted', 'Couldn’t assess and post'] };
+  UI.runTitle = (r) => { const bot = String(r.workflow || '').startsWith('bot:') ? r.workflow.slice(4) : null; const i = r.status === 'run' ? 0 : ['fail', 'stopped'].includes(r.status) ? 2 : 1;
+    if (r.status === 'wait') return `Waiting for your answer${bot ? ` (${bot})` : ''}`; if (r.status === 'idle') return 'Parked: on hold';
+    if (bot) return [`${bot} is working`, `${bot} finished a task`, `${bot}’s task failed`][i]; const w = RUN_WHAT[r.workflow]; return w ? w[i] : [`Running ${r.workflow}`, `${r.workflow} finished`, `${r.workflow} failed`][i]; };
+  /** The words for a run's state, used in tables and stories. */
+  UI.runWord = (s) => ({ ok: 'Passed', run: 'Running', fail: 'Failed', wait: 'Waiting on you', idle: 'Parked', stopped: 'Stopped' }[s] || s);
+  UI.runS = (s) => (s === 'stopped' ? 'fail' : s);
   UI.usd = (v) => v == null ? '—' : v < 0.01 && v > 0 ? '<$0.01' : '$' + v.toFixed(2);
   UI.dur = (ms) => !ms ? '—' : ms < 1000 ? ms + 'ms' : ms < 60000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms / 60000) + 'm';
   UI.md = (t) => UI.esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code class="mono">$1</code>');
@@ -202,12 +170,12 @@
   const navGroups = [
     ['Now', [['overview', 'Overview', 'overview'], ['live', 'Live', 'live', () => D.runs.filter((r) => r.status === 'run').length], ['attention', 'Needs you', 'attention', () => D.attention.length, true]]],
     ['Work', [['runs', 'Run history', 'runs'], ['workflows', 'Workflows', 'workflows'], ['bots', 'Bots', 'bots'], ['browser', 'Browsers', 'browser', () => D.browsers.length]]],
-    ['System', [['config', 'Config', 'config'], ['secrets', 'Secrets & vars', 'secrets'], ['extensions', 'Packs & plugins', 'extensions'], ['connectors', 'Connectors & hosts', 'connectors'], ['updates', 'Updates', 'updates', () => 1], ['logs', 'Logs & audit', 'logs'], ['security', 'Access', 'shield']]],
+    ['System', [['config', 'Config', 'config'], ['secrets', 'Secrets & vars', 'secrets'], ['extensions', 'Packs & plugins', 'extensions'], ['connectors', 'Connectors & hosts', 'connectors'], ['updates', 'Updates', 'updates', () => (D.daemon.update.available ? 1 : 0)], ['logs', 'Logs & audit', 'logs'], ['security', 'Access', 'shield']]],
   ];
   UI.navGroups = navGroups;
   UI.navHTML = () => navGroups.map(([g, items]) => `<div class="nav-group"><span class="caps">${g}</span><nav class="nav">${items.map(([k, l, ic, c, hot]) => {
     const n = c ? c() : null;
-    return `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span class="lbl">${l}</span>${n ? `<span class="count${hot ? ' hot' : ''}">${n}</span>` : ''}</a>`;
+    return `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span class="lbl">${l}</span>${n ? UI.count(n, { hot }) : ''}</a>`;
   }).join('')}</nav></div>`).join('');
   // a page opened from Approvals (or another nav section) keeps that section highlighted, and its Back returns there
   document.addEventListener('click', (e) => { const a = e.target.closest && e.target.closest('a[href^="#/"]'); if (!a) return; const from = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0]; const to = a.getAttribute('href'); if (['attention', 'overview'].includes(from) && /^#\/bots\/[^/]+\/proposals\//.test(to)) UI.navOrigin = { hash: to, nav: from === 'overview' ? 'overview' : 'attention', back: '#/' + from }; else if (!a.closest('.tabbar, .rail')) UI.navOrigin = UI.navOrigin && UI.navOrigin.hash === to ? UI.navOrigin : null; else UI.navOrigin = null; }, true);
@@ -241,11 +209,14 @@
     return d;
   };
   UI.closeDrawer = () => { const all = document.querySelectorAll('.drawer-scrim'); if (all.length) { all[all.length - 1].remove(); return true; } return false; };
+  /** A toast: an event, past tense and specific. 6 seconds; errors stay until dismissed. s: ok | fail | wait | run | ember. */
   UI.toast = (title, sub, s = 'ember') => {
     let box = $('.toasts'); if (!box) { box = document.createElement('div'); box.className = 'toasts'; box.setAttribute('aria-live', 'polite'); document.body.appendChild(box); }
-    const t = document.createElement('div'); t.className = 'toast'; t.dataset.s = s; t.style.setProperty('--sc', `var(--${s === 'ember' ? 'accent' : s})`);
-    t.innerHTML = `<div>${title}${sub ? `<span class="mono">${sub}</span>` : ''}</div>`;
-    box.appendChild(t); setTimeout(() => t.remove(), 4200);
+    const t = document.createElement('div'); t.className = 'toast'; t.dataset.s = s === 'ok' ? 'success' : s; t.setAttribute('role', s === 'fail' ? 'alert' : 'status');
+    const g = { ok: 'success', fail: 'danger', wait: 'warning', run: 'running', ember: 'needs-you', idle: 'neutral' }[s] || 'info';
+    t.innerHTML = `<span class="st" data-s="${s === 'ok' ? 'success' : s}"><i>${UI.glyph(g)}</i></span><div><b>${title}</b>${sub ? `<p>${sub}</p>` : ''}</div>${s === 'fail' ? `<button class="icon-btn toast-x" aria-label="Dismiss">${UI.icon('x')}</button>` : '<span></span>'}`;
+    const x = t.querySelector('.toast-x'); if (x) x.addEventListener('click', () => t.remove());
+    box.appendChild(t); if (s !== 'fail') setTimeout(() => t.remove(), 6000); else setTimeout(() => t.remove(), 20000);
   };
   let tip;
   document.addEventListener('mouseover', (e) => {
@@ -273,7 +244,7 @@
       <div class="modal-body stack">
         <div class="seal-words">${deny ? 'You\'re denying' : 'You\'re approving'} <b>${UI.esc(p.title || p.summary)}</b>, proposed by <b>${p.bot}</b>.${p.impact ? ` <span class="dim">${UI.esc(p.impact)}</span>` : ''}</div>
         ${UI.requesterBanner ? UI.requesterBanner(p) : ''}
-        ${p.kind === 'terraform' ? `<div class="kv small"><dt>action</dt><dd class="mono">terraform apply · ${p.tf.repo} · ${p.tf.dir} · ${p.tf.workspace}</dd><dt>plan</dt><dd class="mono">+${p.tf.add} ~${p.tf.change} -${p.tf.destroy} · <span style="color:var(--wait)">replaces ${p.tf.replaces.join(', ')}</span></dd></div>` : UI.payloadHTML ? UI.payloadHTML(p) : ''}
+        ${p.kind === 'terraform' ? `<div class="kv small"><dt>action</dt><dd class="mono">terraform apply · ${p.tf.repo} · ${p.tf.dir} · ${p.tf.workspace}</dd><dt>plan</dt><dd class="mono">+${p.tf.add} ~${p.tf.change} -${p.tf.destroy} · <span style="color:var(--color-status-warning-fg)">replaces ${p.tf.replaces.join(', ')}</span></dd></div>` : UI.payloadHTML ? UI.payloadHTML(p) : ''}
         ${deny ? `<div class="field"><label for="seal-reason">Tell the bot why <span class="opt">optional</span></label><textarea class="textarea" id="seal-reason" rows="2" placeholder="e.g. Not in #incidents; post it to #finance instead."></textarea></div>` : ''}
         <details class="tech"><summary>The exact payload the passkey signs</summary><div class="digest">{ bot: <b>${p.bot}</b>, proposal: <b>${p.id}</b>, decision: <b>${decision}</b>, action_sha256: <b>${p.digest.replace('sha256:', '')}</b>, nonce: <b>7Qx2…f9</b> }</div></details>
         <div class="seal" id="seal">
@@ -306,26 +277,28 @@
   UI.theme = (t) => { const h = document.documentElement, m = document.querySelector('meta[name="theme-color"]');
     if (t === 'auto') { try { localStorage.removeItem('cd-theme'); } catch (e) {} t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; h.dataset.themeSource = 'os'; }
     else { try { localStorage.setItem('cd-theme', t); } catch (e) {} h.dataset.themeSource = 'explicit'; }
-    h.dataset.theme = t; if (m) m.content = t === 'light' ? '#efeadf' : '#0f100d'; UI.themeIcon(); };
-  UI.initTheme = () => { document.documentElement.dataset.density = (window.D && D.prefs && D.prefs.density) || 'comfortable'; if (!document.documentElement.dataset.theme) document.documentElement.dataset.theme = 'dark'; UI.themeIcon(); if (document.documentElement.classList.contains('sim-ios') && !document.getElementById('sim-toolbar')) { const o = document.createElement('div'); o.id = 'sim-toolbar'; o.setAttribute('aria-hidden', 'true'); o.innerHTML = '<span></span>'; document.body.appendChild(o); } };
+    h.dataset.theme = t; if (m) m.content = getComputedStyle(h).getPropertyValue('--color-bg-rail').trim(); UI.themeIcon(); };
+  /** Density from the per-browser display preference; phones are always comfortable (44px targets). */
+  UI.applyDensity = () => { const want = (window.D && D.prefs && D.prefs.density) || 'comfortable'; document.documentElement.dataset.density = innerWidth <= 720 ? 'comfortable' : want; };
+  window.addEventListener('resize', () => UI.applyDensity());
+  UI.initTheme = () => { UI.applyDensity(); { const m = document.querySelector('meta[name="theme-color"]'); if (m) m.content = getComputedStyle(document.documentElement).getPropertyValue('--color-bg-rail').trim(); } if (!document.documentElement.dataset.theme) document.documentElement.dataset.theme = 'dark'; UI.themeIcon(); if (document.documentElement.classList.contains('sim-ios') && !document.getElementById('sim-toolbar')) { const o = document.createElement('div'); o.id = 'sim-toolbar'; o.setAttribute('aria-hidden', 'true'); o.innerHTML = '<span></span>'; document.body.appendChild(o); } };
 
   /* ---------- chrome ---------- */
   UI.refreshChrome = () => {
     const d = D.daemon, need = D.attention.length, running = D.runs.filter((r) => r.status === 'run').length;
     const warn = d.paused || D.connectors.some((c) => c.status !== 'ok');
+    // the top bar says how things are in words; detail (uptime, version, agents, the address) is one step down
+    const health = d.paused ? ['wait', 'Dispatch paused'] : warn ? ['wait', 'Something needs a look'] : ['ok', 'All systems normal'];
     $('#strip-cells').innerHTML = `
-      <button type="button" class="cell status-btn" data-act="strip-status" aria-label="System status: ${d.paused ? 'dispatch paused' : warn ? 'something needs a look' : 'all running'}"><span class="dot" style="--sc:var(--${d.paused || warn ? 'wait' : 'ok'})"></span><b>${d.paused ? 'paused' : warn ? 'check' : 'ok'}</b></button>
-      <div class="cell" data-tip="${d.paused ? 'Dispatch is paused: no new runs start' : `conductor has been running for ${d.uptime}`}"><span class="pulse"></span><b>${d.paused ? 'paused' : 'up'}</b>&nbsp;${d.uptime}</div>
-      <a class="cell wide" href="#/updates" data-tip="conductor ${d.version}${d.update.available ? `; ${d.update.available} is available` : ', up to date'}">${d.version}${d.update.available ? ` <span style="color:var(--run)">→ ${d.update.available}</span>` : ''}</a>
-      <a class="cell wide" href="#/safety" data-tip="The agent sandbox is enforcing: bots can't touch files or the network beyond what you allowed. Click to see what each bot may do on its own.<br><span class='mono'>backend ${d.sandbox.backend} · ${d.sandbox.containers} containers</span>">${UI.icon('shield')}<b>sandbox</b>&nbsp;enforcing</a>
-      <a class="cell wide" href="#/connectors/runtimes" data-tip="paseo, which runs the agents, is healthy (${d.paseo.agents} agents)">agents <b>ok</b></a>
-      <a class="cell" href="#/live" data-tip="Runs in progress"><span class="pulse run"></span><b>${running}</b>&nbsp;running</a>
-      ${need ? `<a class="cell alert" href="#/attention" aria-label="${need} need you">${UI.icon('diamond')}<b>${need}</b><span class="lbl-long">&nbsp;need you</span></a>` : ''}
-      ${D.pending.length ? `<a class="cell staged" href="#/config/apply" data-tip="Config changes staged but not applied">${UI.icon('edit')}<b>${D.pending.length}</b>&nbsp;staged</a>` : ''}
       <div class="spacer"></div>
-      <div class="cell wide" data-tip="The address this dashboard is served on, over Tailscale, with TLS">${d.magicdns} · TLS</div>`;
+      <button type="button" class="cell status-btn" data-act="strip-status" aria-label="System status: ${health[1]}" data-tip="${d.paused ? 'Dispatch is paused: no new runs start' : `conductor ${d.version}, up ${d.uptime}`}">${UI.statusMark(health[0] === 'ok' ? 'success' : health[0], `<span class="lbl-long">${health[1]}</span>`)}</button>
+      <a class="cell" href="#/safety" data-tip="The agent sandbox is on: bots can't touch files or the network beyond what you allowed. See what each bot may do on its own.<br><span class='mono'>backend ${d.sandbox.backend} · ${d.sandbox.containers} containers</span>">${UI.icon('shield')}<span class="lbl-long">Sandbox on</span></a>
+      <a class="cell${d.update.available ? '' : ' quiet'}" href="#/updates" data-tip="conductor ${d.version}${d.update.available ? `; ${d.update.available} is available` : ', up to date'}">${UI.icon('updates')}<span class="lbl-long">${d.update.available ? `Update ready` : d.version}</span></a>
+      ${running ? `<a class="cell" href="#/live" data-tip="Runs in progress">${UI.statusMark('run', `<span><b>${running}</b> running</span>`)}</a>` : ''}
+      ${D.pending.length ? `<a class="cell staged" href="#/config/apply" data-tip="Config changes staged but not applied">${UI.icon('edit')}<span><b>${D.pending.length}</b><span class="lbl-long"> to review</span></span></a>` : ''}
+      ${need ? `<a class="cell alert" href="#/attention" aria-label="${need} need you">${UI.count(need, { hot: true })}<span class="lbl-long">need you</span></a>` : ''}`;
     $('#rail-nav').innerHTML = UI.navHTML();
-    $('#tabbar').innerHTML = [['overview', 'Overview', 'overview'], ['live', 'Live', 'live'], ['attention', 'Approvals', 'attention', need], ['bots', 'Bots', 'bots'], ['more', 'More', 'grid']].map(([k, l, ic, c]) => `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}${l}${c ? `<span class="count hot">${c}</span>` : ''}</a>`).join('');
+    $('#tabbar').innerHTML = [['overview', 'Overview', 'overview'], ['live', 'Live', 'live'], ['attention', 'Approvals', 'attention', need], ['bots', 'Bots', 'bots'], ['more', 'More', 'grid']].map(([k, l, ic, c]) => `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}${l}${c ? UI.count(c, { hot: true }) : ''}</a>`).join('');
     UI.setNav((location.hash.replace(/^#\/?/, '') || 'overview').split('/')[0]);
   };
 
@@ -334,21 +307,21 @@
     document.body.innerHTML = `
       <div class="shell">
         <header class="strip">
-          <a class="brand" href="#/overview">
-            ${UI.logo('lockup')}
-          </a>
+          <a class="brand" href="#/overview" aria-label="conductor: overview">${UI.logo('lockup')}</a>
+          <div class="search" role="button" tabindex="0" data-act="palette" aria-label="Search runs, bots and settings">${UI.icon('search')}<span class="lbl">Search runs, bots and settings</span><span class="kbd">⌘K</span></div>
           <div id="strip-cells" style="display:contents"></div>
-          <div class="search" role="button" tabindex="0" data-act="palette">${UI.icon('search')}<span class="hide-phone">Search</span> <span class="kbd hide-phone">⌘K</span></div>
         </header>
         <aside class="rail">
-          <div class="host"><span class="dot" style="--sc:var(--ok)"></span><span class="mono">${D.daemon.host} · ${D.daemon.tailscale_ip}</span></div>
           <div id="rail-nav"></div>
           <div class="foot">
-            <div class="op"><span class="avatar">op</span><div class="who"><b>${D.operator.name}</b><span>passkey · idle ${D.operator.session.idle}</span></div></div>
-            <a class="icon-btn" href="#/glossary" data-tip="Glossary: the words conductor uses">${UI.icon('info')}</a>
-            <button class="icon-btn" id="theme-btn" data-tip="Light / dark theme" data-act="theme"></button>
-            <button class="icon-btn" data-act="reset-demo" data-tip="Reset demo data: put the prototype's fake state back">${UI.icon('undo')}</button>
-            <a class="icon-btn" href="#/signin" data-tip="Lock (sign out)">${UI.icon('lock')}</a>
+            <a class="host" href="#/connectors/hosts" data-tip="This box, over Tailscale with TLS<br><span class='mono'>${D.daemon.magicdns}</span>"><span class="dot" data-s="success"></span><span class="who"><b>${D.daemon.host}</b><span id="host-line">Healthy · up ${D.daemon.uptime}</span></span></a>
+            <div class="tools">
+              <span class="op" data-tip="Signed in as ${D.operator.name}, with a passkey"><span class="avatar">${D.operator.name.slice(0, 2)}</span></span>
+              <a class="icon-btn" href="#/glossary" data-tip="Glossary: the words conductor uses" aria-label="Glossary">${UI.icon('info')}</a>
+              <button class="icon-btn" id="theme-btn" data-tip="Light or dark" aria-label="Light or dark" data-act="theme"></button>
+              <button class="icon-btn" data-act="reset-demo" data-tip="Reset demo data: put the prototype's fake state back" aria-label="Reset demo data">${UI.icon('undo')}</button>
+              <a class="icon-btn" href="#/signin" data-tip="Lock (sign out)" aria-label="Lock">${UI.icon('lock')}</a>
+            </div>
           </div>
         </aside>
         <main class="main" id="main"></main>
@@ -362,7 +335,7 @@
 
   /* small shared bits */
   UI.head = (title, opts = {}) => `<div class="page-head"><div>${opts.crumbs ? `<div class="crumbs">${opts.crumbs}</div>` : ''}<h1>${title}${opts.sub ? `<span class="sub">${opts.sub}</span>` : ''}</h1>${opts.lede ? `<p class="lede">${opts.lede}</p>` : ''}</div>${opts.actions ? `<div class="actions">${opts.actions}</div>` : ''}</div>`;
-  UI.tabs = (items, on) => `<div class="tabs" role="tablist">${items.map(([k, l, href, c, hot]) => `<a href="${href}" role="tab" class="${k === on ? 'on' : ''}"${k === on ? ' aria-current="page" aria-selected="true"' : ''}>${l}${c != null ? ` <span class="count${hot ? ' hot' : ''}">${c}</span>` : ''}</a>`).join('')}</div>`;
+  UI.tabs = (items, on) => `<div class="tabs" role="tablist">${items.map(([k, l, href, c, hot]) => `<a href="${href}" role="tab" class="${k === on ? 'on' : ''}"${k === on ? ' aria-current="page" aria-selected="true"' : ''}>${l}${c != null ? ' ' + UI.count(c, { hot }) : ''}</a>`).join('')}</div>`;
   UI.bind = (root, sel, ev, fn) => $$(sel, root).forEach((el) => el.addEventListener(ev, (e) => fn(e, el)));
 
   /* =================================================================
@@ -410,7 +383,7 @@
   UI.seg = (items, value, act, extra = '') => `<div class="seg" role="group" ${extra}>${items.map(([v, l, dis]) => `<button type="button" data-v="${UI.esc(v)}" ${dis ? UI.off(dis) : `data-act="${act}"`} aria-pressed="${String(v) === String(value)}" class="${String(v) === String(value) ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   UI.switchBtn = (on, act, attrs = '') => `<button type="button" role="switch" class="switch${on ? ' on' : ''}" aria-checked="${!!on}" data-act="${act}" ${attrs}></button>`;
   UI.act('strip-status', (b) => { const d = D.daemon, running = D.runs.filter((r) => r.status === 'run').length;
-    UI.menu(b, [[`conductor ${d.paused ? 'paused' : 'up'} ${d.uptime} · ${d.version}${d.update.available ? ' → ' + d.update.available : ''}`, 'server', 'strip-go', 'data-href="#/updates"'], [`Sandbox enforcing: what bots can do`, 'shield', 'strip-go', 'data-href="#/safety"'], [`Agents ok (${d.paseo.agents})`, 'zap', 'strip-go', 'data-href="#/connectors/runtimes"'], [`${running} running`, 'live', 'strip-go', 'data-href="#/live"'], ...(D.pending.length ? [[`${D.pending.length} staged change${D.pending.length > 1 ? 's' : ''}`, 'edit', 'strip-go', 'data-href="#/config/apply"']] : []), ['-'], [`${d.magicdns} · TLS`, 'lock', 'strip-go', 'data-href="#/security"']]); });
+    UI.menu(b, [[`conductor ${d.version}, ${d.paused ? 'paused' : 'up'} ${d.uptime}${d.update.available ? ` · ${d.update.available} ready` : ''}`, 'server', 'strip-go', 'data-href="#/updates"'], [`Sandbox enforcing: what bots can do`, 'shield', 'strip-go', 'data-href="#/safety"'], [`Agents healthy (${d.paseo.agents})`, 'zap', 'strip-go', 'data-href="#/connectors/runtimes"'], [`${running} running now`, 'live', 'strip-go', 'data-href="#/live"'], ...(D.pending.length ? [[`${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review`, 'edit', 'strip-go', 'data-href="#/config/apply"']] : []), ['-'], [`${d.magicdns} · TLS`, 'lock', 'strip-go', 'data-href="#/security"']]); });
   UI.act('strip-go', (b) => { UI.closeMenu(); UI.go(b.dataset.href); });
   UI.act('theme', () => UI.theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
   UI.act('palette', () => UI.palette());
@@ -592,9 +565,9 @@
   });
   UI.act('ph-more', (b) => { const box = b.closest('.actions, .bot-hero > .row.wrap'), extra = [...box.querySelectorAll('.ph-folded')]; UI.menu(b, extra.map((x) => [x.textContent.trim() || x.getAttribute('aria-label') || 'Action', 'chev', 'ph-fold-go', `data-i="${x.dataset.fold}"${x.getAttribute('aria-disabled') === 'true' ? ` aria-disabled="true" data-reason="${UI.esc(x.dataset.reason || '')}"` : ''}`])); UI.phFoldBox = box; });
   UI.act('ph-fold-go', (b) => { UI.closeMenu(); const x = UI.phFoldBox && UI.phFoldBox.querySelector(`.ph-folded[data-fold="${b.dataset.i}"]`); if (x) x.click(); });
-  /** A five-field cron in words where it's simple ("0 6 * * 1" → "Mondays 06:00"); otherwise the expression. */
+  /** A five-field cron in words where it's simple ("0 6 * * 1" → "Mondays at 06:00"); otherwise the expression. */
   UI.humanCron = (c) => { const f = String(c).trim().split(/\s+/); if (f.length !== 5 || !/^\d+$/.test(f[0]) || !/^\d+$/.test(f[1])) return c; const t = `${f[1].padStart(2, '0')}:${f[0].padStart(2, '0')}`, D7 = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'];
-    if (f[2] === '*' && f[3] === '*' && f[4] === '*') return `Every day ${t}`; if (f[2] === '*' && f[3] === '*' && /^[0-6]$/.test(f[4])) return `${D7[+f[4]]} ${t}`; if (f[2] === '*' && f[3] === '*' && f[4] === '1-5') return `Weekdays ${t}`; if (/^\d+$/.test(f[2]) && f[3] === '*' && f[4] === '*') return `Day ${f[2]} of each month, ${t}`; return c; };
+    if (f[2] === '*' && f[3] === '*' && f[4] === '*') return `Every day at ${t}`; if (f[2] === '*' && f[3] === '*' && /^[0-6]$/.test(f[4])) return `${D7[+f[4]]} at ${t}`; if (f[2] === '*' && f[3] === '*' && f[4] === '1-5') return `Weekdays at ${t}`; if (/^\d+$/.test(f[2]) && f[3] === '*' && f[4] === '*') return `On day ${f[2]} of each month at ${t}`; return c; };
   UI.humanOn = (on) => String(on || '').replace(/schedule ((?:\S+\s+){4}\S+)/, (m, c) => { const h = UI.humanCron(c); return h === c ? m : `${h} (schedule)`; });
   /** The sticky bulk bar: n selected, actions [[label, icon, act, attrs?, offReason?]], and a clear action. */
   UI.bulkBar = (n, noun, actions, clearAct) => `<div class="bulk-bar" role="region" aria-label="Bulk actions"><b>${n} ${noun}${n > 1 ? 's' : ''} selected</b>${actions.map(([l, ic, act, attrs = '', off]) => `<button class="btn sm" ${off ? UI.off(off) : `data-act="${act}" ${attrs}`}>${UI.icon(ic)}${l}</button>`).join('')}<button class="btn sm ghost" data-act="${clearAct}" style="margin-left:auto">Clear</button></div>`;

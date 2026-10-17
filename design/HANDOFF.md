@@ -2,7 +2,7 @@
 
 Branch `design/dashboard` (worktree `~/Projects/paseo-home/worktrees/2ccqu2oy/design-dashboard`).
 Prototype: `design/dashboard-prototype/` (static HTML/CSS/JS, hash routes, fake state in
-localStorage key `cd-proto-state-v4`, "Reset demo data" in the user menu). Served live by the
+localStorage key `cd-proto-state-v5`, "Reset demo data" in the user menu). Served live by the
 user service `dashboard-prototype` at http://100.119.192.38:8767/ (don't stop or replace it).
 Design doc: `docs/design/dashboard.md`. Tests: `design/dashboard-tests/`.
 

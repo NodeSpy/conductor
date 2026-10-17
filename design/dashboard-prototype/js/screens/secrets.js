@@ -75,7 +75,7 @@
   function rows() {
     const list = D.secrets.filter(match);
     return list.map((s) => { const v = vaultOf(s); const pend = S.find('secrets', s.ref); const ref = pend ? pend.after : s.ref; const [vv, ...kk] = ref.split('/');
-      return `<tr data-secret="${esc(s.ref)}"><td data-l="entry"><span class="row" style="gap:6px">${icon(VIC[(v || { type: 'env' }).type])}<b class="mono" style="font-size:12px">${esc(vv)} · ${esc(kk.join('/'))}</b></span><div class="mono tiny muted vexpr">{{ vault "${esc(vv)}" "${esc(kk.join('/'))}" }}</div>${s.warn ? `<div class="tiny" style="color:var(--wait)">${icon('warn')} ${esc(s.warn)}</div>` : ''}${pend ? ` ${tag('uses repointed · staged', 'run')}` : ''}</td>
+      return `<tr data-secret="${esc(s.ref)}"><td data-l="entry"><span class="row" style="gap:6px">${icon(VIC[(v || { type: 'env' }).type])}<b class="mono" style="font-size:12px">${esc(vv)} · ${esc(kk.join('/'))}</b></span><div class="mono tiny muted vexpr">{{ vault "${esc(vv)}" "${esc(kk.join('/'))}" }}</div>${s.warn ? `<div class="tiny" style="color:var(--color-status-warning-fg)">${icon('warn')} ${esc(s.warn)}</div>` : ''}${pend ? ` ${tag('uses repointed · staged', 'run')}` : ''}</td>
         <td data-l="alias">${s.alias ? `<span class="mono tiny">${esc(s.alias)}</span> <span class="muted tiny">dashboard only</span>` : '<span class="muted tiny">—</span>'}</td>
         <td data-l="value"><span class="wo">••••••••</span></td>
         <td data-l="used in" class="uses">${s.used.map((u) => `<a href="#/config/raw?at=${section(u)}">${esc(u)}</a>`).join('<br>') || '<span class="muted tiny">unused</span>'}</td>

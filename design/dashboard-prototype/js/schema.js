@@ -11,7 +11,7 @@
 
   SCHEMA.connectors = {
     github: {
-      label: 'GitHub', icon: 'branch', color: '#c9c3b4', builtin: true,
+      label: 'GitHub', icon: 'branch', color: 'var(--color-icon-default)', builtin: true,
       settings: [
         f('app_id', 'number', { req: true, help: 'The GitHub App id. Create one under Settings → Developer settings.' }),
         f('private_key', 'secret', { req: true, help: 'The App private key, as a vault reference.' }),
@@ -43,7 +43,7 @@
       },
     },
     slack: {
-      label: 'Slack', icon: 'send', color: '#e6b33c',
+      label: 'Slack', icon: 'send', color: 'var(--color-icon-default)',
       settings: [
         f('bot_token', 'secret', { req: true, help: 'xoxb- token, as a vault reference.' }),
         f('app_token', 'secret', { req: true, help: 'xapp- token for Socket Mode.' }),
@@ -61,7 +61,7 @@
       },
     },
     pagerduty: {
-      label: 'PagerDuty', icon: 'warn', color: '#3fbf7f',
+      label: 'PagerDuty', icon: 'warn', color: 'var(--color-icon-default)',
       settings: [f('token', 'secret', { req: true }), f('webhook_path', 'string', { def: '/pd', help: 'Mounted on the shared inbound listener.' }), f('services', 'list', { ph: 'PXXXXXX' })],
       events: { incident: { label: 'Incident triggered', fields: { incident: { id: 'Q1W2E3', title: 'api p99 latency > 2s', urgency: 'high', service: 'api' }, title: 'api p99 latency > 2s', url: 'https://acme.pagerduty.com/incidents/Q1W2E3' }, filters: ['service', 'urgency'] } },
       verbs: {
@@ -71,7 +71,7 @@
       },
     },
     kv: {
-      label: 'KV store', icon: 'box', color: '#8a877b', builtin: true,
+      label: 'KV store', icon: 'box', color: 'var(--color-icon-default)', builtin: true,
       settings: [f('store', 'string', { def: 'state', help: 'Names a stores: entry.' })],
       events: {},
       verbs: {
@@ -80,7 +80,7 @@
       },
     },
     terraform: {
-      label: 'Terraform', icon: 'server', color: '#a59fc4',
+      label: 'Terraform', icon: 'server', color: 'var(--color-icon-default)',
       settings: [f('engine', 'enum', { options: ['tofu', 'terraform'], def: 'tofu' }), f('role', 'enum', { req: true, options: ['READ', 'WRITE'], help: 'WRITE is reachable only through an approved bot proposal.' }), f('allow_destroy', 'list', { help: 'Stateful types it may destroy. Empty refuses all.' })],
       events: {},
       verbs: {
@@ -89,17 +89,17 @@
       },
     },
     web: {
-      label: 'Web hand-off', icon: 'globe', color: '#4fb8e8', builtin: true,
+      label: 'Web hand-off', icon: 'globe', color: 'var(--color-icon-default)', builtin: true,
       settings: [f('listen', 'string', { def: '127.0.0.1:8099', help: 'Loopback by default; draft pages carry approve actions.' }), f('base_url', 'string', { ph: 'https://review.example.com' }), f('ttl', 'duration', { def: '30m' })],
       events: {},
       verbs: { ask: { label: 'Ask a human (hand-off)', ask: true, fields: [f('prompt', 'text', { req: true }), f('draft', 'text'), f('timeout', 'duration', { def: '1h' })], outputs: { action: 'approve', text: 'Looks right.', ref: 'http://127.0.0.1:8099/d/7Hk2' } } },
     },
     git: {
-      label: 'git', icon: 'commit', color: '#ff8a55', builtin: true, settings: [], events: {},
+      label: 'git', icon: 'commit', color: 'var(--color-icon-default)', builtin: true, settings: [], events: {},
       verbs: { push: { label: 'Push the step\'s commits', fields: [f('branch', 'string', { help: 'Defaults to conductor/<workflow>-<number>.' }), f('force', 'bool', { help: 'Never allowed to a protected branch.' })], outputs: { sha: '7d02c4e', ref: 'refs/heads/conductor/fix-482', fast_forward: true } } },
     },
     'aws-cost': {
-      label: 'AWS Cost Explorer', icon: 'dollar', color: '#ff9b6b', registry: 'conductor-plugins/aws-cost', ver: 'v0.6.0',
+      label: 'AWS Cost Explorer', icon: 'dollar', color: 'var(--color-icon-default)', registry: 'conductor-plugins/aws-cost', ver: 'v0.6.0',
       settings: [f('role_arn', 'string', { req: true, ph: 'arn:aws:iam::000000000000:role/cost-read' }), f('region', 'enum', { options: ['us-east-1', 'us-west-2', 'eu-west-1'], def: 'us-east-1' }), f('granularity', 'enum', { options: ['DAILY', 'MONTHLY'], def: 'DAILY' })],
       events: { anomaly: { label: 'Cost anomaly detected', fields: { service: 'NAT Gateway', impact_usd: 412.5, pct: 44, window: '24h' }, filters: ['service'] } },
       verbs: {
@@ -108,13 +108,13 @@
       },
     },
     linear: {
-      label: 'Linear', icon: 'runs', color: '#a59fc4', registry: 'conductor-plugins/linear', ver: 'v1.1.0',
+      label: 'Linear', icon: 'runs', color: 'var(--color-icon-default)', registry: 'conductor-plugins/linear', ver: 'v1.1.0',
       settings: [f('api_key', 'secret', { req: true }), f('team', 'string', { ph: 'PLAT' })],
       events: { issue_created: { label: 'Issue created', fields: { id: 'PLAT-112', title: 'Rotate staging certs', url: 'https://linear.app/acme/issue/PLAT-112' }, filters: ['team', 'label_any'] } },
       verbs: { create_issue: { label: 'Create an issue', fields: [f('title', 'string', { req: true }), f('description', 'text'), f('team', 'string')], outputs: { id: 'PLAT-113', url: 'https://linear.app/acme/issue/PLAT-113' } } },
     },
     opsgenie: {
-      label: 'Opsgenie', icon: 'warn', color: '#4fb8e8', registry: 'conductor-plugins/opsgenie', ver: 'v0.8.2',
+      label: 'Opsgenie', icon: 'warn', color: 'var(--color-icon-default)', registry: 'conductor-plugins/opsgenie', ver: 'v0.8.2',
       settings: [f('api_key', 'secret', { req: true }), f('region', 'enum', { options: ['us', 'eu'], def: 'us' })],
       events: { alert: { label: 'Alert created', fields: { alert: { id: 'og-41', message: 'disk 92% on build-box', priority: 'P2' } }, filters: ['priority'] } },
       verbs: { close: { label: 'Close an alert', fields: [f('alert', 'string', { req: true })], outputs: { ok: true } } },
