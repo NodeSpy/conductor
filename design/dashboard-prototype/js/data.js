@@ -774,7 +774,7 @@ steps:
     { scope: 'daemon', name: 'BOT_CHANNEL', value: '#bots', plain: true },
     { scope: 'daemon', name: 'GH_HOST', value: 'github.com', plain: true },
     { scope: 'daemon', name: 'APP_PASSWORD', value: '', len: 24, plain: true, looksSecret: true },
-    { scope: 'daemon', name: 'VAULT_TOKEN', value: '${secret.VAULT_TOKEN}', plain: false },
+    { scope: 'daemon', name: 'VAULT_TOKEN', value: '{{ vault "op" "Agents/HCV/token" }}', plain: false },
     { scope: 'runtime:paseo', name: 'AWS_PROFILE', value: 'ops', plain: true },
     { scope: 'host:build-box', name: 'TZ', value: 'UTC', plain: true },
     { scope: 'workflow:ci-fixer', name: 'NODE_OPTIONS', value: '--max-old-space-size=4096', plain: true },
