@@ -130,3 +130,27 @@ export const QUIET_LANES = [
   ['dep-bump', [[131, 'ok'], [612, 'ok']]],
   ['release-notes', [[418, 'ok'], [560, 'parked']]],
 ];
+
+// Activity at a realistic scale: 14 workflows, a few hundred runs in 12 hours. Shown as one aggregate
+// (runs per hour, failures marked) plus the exceptions grouped by workflow; healthy workflows collapse
+// to a count. One lane per workflow doesn't scale to this, so it isn't used.
+export const ACTIVITY = {
+  hours: [[14, 0], [11, 0], [9, 0], [8, 0], [16, 1], [21, 0], [24, 0], [19, 0], [22, 0], [18, 0], [23, 1], [17, 1]], // [fine, failed], oldest first
+  exceptions: [
+    { workflow: 'ci-fixer', runs: 41, items: [
+      { state: 'failed', title: 'Couldn’t fix acme/web#1288', sentence: '2 tests fail after its change; nothing was pushed', age: '52 min ago', action: '<button class="btn secondary sm">Open</button>' },
+      { state: 'failed', title: 'Gave up on acme/api#479', sentence: 'The check is flaky: 3 retries, 3 different failures', age: '1 h ago', action: '<button class="btn secondary sm">Open</button>' },
+    ] },
+    { workflow: 'pr-review', runs: 37, items: [
+      { state: 'needs', title: 'Wants your call on a draft review', sentence: 'acme/infra#77: approve, revise or discard', age: '1 h ago', action: '<button class="btn primary sm">Answer</button>' },
+    ] },
+    { workflow: 'platform-sre', runs: 18, items: [
+      { state: 'needs', title: 'Wants to replace the production web server', sentence: 'terraform apply on envs/prod', age: '7 min ago', action: '<button class="btn primary sm">Review</button>' },
+    ] },
+    { workflow: 'release-notes', runs: 6, items: [
+      { state: 'failed', title: 'Stopped at its $0.05 budget', sentence: 'acme/api: drafted nothing', age: '7 h ago', action: '<button class="btn secondary sm">Open</button>' },
+    ] },
+  ],
+  healthy: [['issue-triage', 42], ['dep-bump', 8], ['docs-sync', 12], ['flaky-quarantine', 9], ['cost-report', 4], ['changelog', 6], ['security-scan', 14], ['stale-branches', 3], ['oncall-handoff', 2], ['label-sync', 3]],
+  running: 3,
+};

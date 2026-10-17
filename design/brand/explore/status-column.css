@@ -176,5 +176,7 @@ details[open] > summary .tl::after { transform: rotate(90deg); }
 .tX.calm tr.sum .parts { margin-left: 10px; color: var(--color-text-secondary); }
 .tX.calm tr.sum .more { float: right; font: var(--type-label); color: var(--color-text-tertiary); }
 .tX.calm tr.sum.open .more { visibility: hidden; }
-.lanes-calm { max-width: 900px; padding: 8px 4px; }
+.activity-wrap { max-width: 900px; padding: 8px 4px; }
 @media (max-width: 600px) { .tX.calm .why-c { white-space: normal; max-width: none; } .tX.calm tr.sum .more { display: none; } }
+.activity-wrap .btn { display: inline-flex; align-items: center; height: 30px; padding: 0 11px; border-radius: 8px; border: 1px solid var(--color-border-default); background: var(--color-bg-surface); color: var(--color-text-primary); font: 600 13px var(--font-family-sans); }
+.activity-wrap .btn.primary { background: var(--color-accent-default); border-color: transparent; color: var(--color-text-on-accent); }

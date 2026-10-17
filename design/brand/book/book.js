@@ -3,7 +3,8 @@
 import { LUCIDE, STATUS } from '../icons/icons.js';
 import { LOGOS, OFFICIAL_LOGO, kitDir } from '../tools/logos.mjs';
 import { STATES as STATUS_STATES, CHANGE, GLYPH_STATE, mark, injectMarkCSS } from '../status/marks.js';
-import { summaryLine, quietState, exception as calmException, excRows, calmLanes, injectCalmCSS } from '../status/calm.js';
+import { summaryLine, quietState, exception as calmException, excRows, runStrip, byWorkflow, atAGlance, injectCalmCSS } from '../status/calm.js';
+import { ACTIVITY } from '../v2/data.js';
 import { flag as scanFlag, env as scanEnv, rows as scanRows, injectScanCSS } from '../scannable/scan.js';
 import * as SCAN from '../scannable/data.js';
 injectMarkCSS(); injectCalmCSS(); injectScanCSS();
@@ -60,8 +61,8 @@ const CALM_RULES = [
   ['One meaning per icon, always with a word', 'An icon stands for one kind of thing or action, everywhere, and is never decorative or alone.'],
   ['Dense, but structured', 'One row anatomy with fixed, aligned columns: what · title · where · status · when · action.'],
 ];
-const CALM_SCREENS = [['overview', 'Overview'], ['quiet', 'Overview, quiet day'], ['history', 'Run history'], ['activity', 'Lanes (Activity)'], ['bot', 'Bot page'], ['approval', 'Approval header']];
-const CALM_CHECK_NAME = { overview: 'overview', quiet: 'quiet overview', history: 'run history', activity: 'lanes (activity)', bot: 'bot page', approval: 'approval header' };
+const CALM_SCREENS = [['overview', 'Overview'], ['quiet', 'Overview, quiet day'], ['history', 'Run history'], ['activity', 'Activity'], ['bot', 'Bot page'], ['approval', 'Approval header']];
+const CALM_CHECK_NAME = { overview: 'overview', quiet: 'quiet overview', history: 'run history', activity: 'activity', bot: 'bot page', approval: 'approval header' };
 const calmResult = (screen, version, vp, theme) => CALMCHK.find((r) => r.screen === CALM_CHECK_NAME[screen] && r.version === version && r.theme === theme && r.engine === (vp === 'phone' ? 'webkit-iphone' : 'chromium-desktop'));
 const calmChip = (r) => (r ? `<span class="calm-chip ${r.pass ? 'ok' : 'loud'}">${r.coloured} coloured · ${r.heavy} text-heavy · ${r.pass ? 'within budget' : 'too loud'}</span>` : '');
 const calmPair = (screen, vp = 'desktop', theme = 'light') => {
@@ -70,9 +71,10 @@ const calmPair = (screen, vp = 'desktop', theme = 'light') => {
   const fig = (v, label) => `<figure><figcaption><b>${label}</b>${calmChip(calmResult(screen, v, vp, theme))}<a href="${live(v)}">live</a></figcaption><img loading="lazy" src="${shot(v)}" alt="${label}: ${screen}, ${vp}, ${theme}"></figure>`;
   return `${screen === 'quiet' ? `<figure class="calm-none"><figcaption><b>Before</b></figcaption><p>The busy overview had no quiet state: on a calm day it still showed every card.</p></figure>` : fig('before', 'Before')}${fig('calm', 'Calm')}`;
 };
-const BOOK_LANES = [['pr-review', [[2, 'running'], [31, 'passed'], [95, 'needs'], [252, 'passed'], [503, 'passed'], [640, 'passed']]], ['ci-fixer', [[6, 'running'], [52, 'failed'], [230, 'parked'], [588, 'passed']]], ['issue-triage', [[79, 'passed'], [299, 'passed'], [410, 'passed']]], ['platform-sre', [[7, 'needs'], [176, 'passed'], [716, 'passed']]], ['dep-bump', [[131, 'passed']]], ['release-notes', [[418, 'failed']]]];
-const calmLanesDemo = () => `<div class="calm-lanes-wrap">${calmLanes(BOOK_LANES, { width: 860 })}</div>`;
-const CALM_TOKENS = ['semantic.color.emphasis', 'semantic.color.band', 'semantic.calm', 'component.summary-line', 'component.density-band', 'component.quiet-state', 'component.exception'];
+// Runs over time at scale: one aggregate strip (failures marked) plus the exceptions by workflow.
+const activityDemo = () => `<div class="activity-demo">${runStrip(ACTIVITY.hours)}${byWorkflow(ACTIVITY.exceptions, ACTIVITY.healthy)}</div>`;
+const glanceDemo = () => atAGlance([[6, 'Need you'], [2, 'Failed', '12 h'], [4, 'Running'], ['18 of 20', 'Went fine', '12 h'], ['$8.40', 'Spent', 'today']]);
+const CALM_TOKENS = ['semantic.color.emphasis', 'semantic.color.band', 'semantic.calm', 'component.summary-line', 'component.run-strip', 'component.quiet-state', 'component.exception'];
 const fmtTok = (v) => (v == null ? '' : v.hex ? hexOf(v) : v.value != null ? `${v.value}${v.unit ?? ''}` : typeof v === 'object' ? JSON.stringify(v) : String(v));
 const calmTokenRows = () => [...flat.keys()].filter((p) => CALM_TOKENS.some((g) => p.startsWith(g + '.'))).map((p) => { const t = flat.get(p); const raw = t.modes?.dark ?? t.modes?.light ?? t.value; return `<code>${cssName(p)}</code><span>${isAlias(raw) ? `<code>${raw.slice(1, -1).replace(/^semantic\./, '').replace(/^primitive\.color\./, 'palette.')}</code>` : esc(fmtTok(raw))}</span><span class="c-help">${t.desc ?? ''}</span>`; }).join('');
 const EMPH = [['loud', 'Replace the production web server', 'The one thing that needs you. The only level allowed colour (its mark, its edge, its action).'], ['normal', '18 of 20 runs went fine', 'What things are: summary-line leads, row titles.'], ['quiet', 'last 12 hours · $8.40 spent', 'Supporting facts and reasons.'], ['ghost', '7 min ago · Show', 'Times, disclosures and the band’s axis.']];
@@ -88,21 +90,21 @@ ch('scannable', 'Scannable by default', 'Identify before reading. Every item say
     ${sub('calm-pairs', 'For the record: the calm round', 'The busy version against the calm one, in the first viewport. The calm versions pass a loudness budget, but they hide what a person needs to decide; they are kept here as the over-correction the proposal replaces.')}
   <div class="calm-ctl"><div class="c-seg" id="calm-vp"><span data-v="desktop" class="is-active">Desktop</span><span data-v="phone">Phone</span></div><div class="c-seg" id="calm-th"><span data-v="light" class="is-active">Light</span><span data-v="dark">Dark</span></div></div>
   <div class="calm-pairs" data-vp="desktop">${CALM_SCREENS.map(([s, t]) => `<section class="calm-pair" data-screen="${s}"><h4>${t}</h4><p class="calm-answer">“${(calmResult(s, 'calm', 'desktop', 'light')?.glance ?? '').replace(/^./, (c) => c.toUpperCase())}.”</p><div class="calm-figs">${calmPair(s)}</div></section>`).join('')}</div>
-  ${sub('calm-glance', 'The glance answer and the loudness check', 'Kept: the page heading is the glance answer. Retired with this correction (pending review): the loudness budget, which rewarded hiding information. For each calm screen, the one sentence a person should get at a glance, marked on the page as <code>[data-glance]</code>. <code>tools/calm-check.mjs</code> checks that the glance element is the most prominent thing on screen (largest text, first large text in reading order, at least 7:1), and counts loudness in the first viewport: things in a saturated colour (OKLCH chroma ≥ 0.05, once per row or item) and text-heavy rows (over 110 characters or 3+ lines). With 3 or fewer exceptions the budget is <b>coloured ≤ exceptions + 2</b> and <b>text-heavy ≤ 2</b>; with more, 5 and 3. Calm pages must pass; the busy versions are measured against the same budget.')}
+  ${sub('calm-glance', 'The glance answer and the loudness check', 'Kept: the page heading is the glance answer. Retired with this correction (pending review): the loudness budget, which rewarded hiding information. For each calm screen, the one sentence a person should get at a glance, marked on the page as <code>[data-glance]</code>. <code>tools/calm-check.mjs</code> checks that the glance element is the most prominent thing on screen (largest text, first large text in reading order, at least 7:1), and counts loudness in the first viewport: things in a saturated colour (OKLCH chroma ≥ 0.05, once per row or item) and text-heavy rows (over 110 characters or 3+ lines). The budget is <b>coloured ≤ exceptions + 2</b>, and <b>text-heavy ≤ 2</b> (3 with more than three exceptions). Calm pages must pass; the busy versions are measured against the same budget.')}
   <div class="c-table-wrap"><table class="c-table calm-table"><thead><tr><th>Screen</th><th>Glance answer</th><th class="num">Needs a person</th><th class="num">Before</th><th class="num">Calm</th><th>Result</th></tr></thead><tbody>
   ${CALM_SCREENS.map(([s, t]) => { const n = (r) => (r ? `${r.coloured} · ${r.heavy}` : '—'); const c = calmResult(s, 'calm', 'desktop', 'light'); const all = CALMCHK.filter((r) => r.screen === CALM_CHECK_NAME[s] && r.version === 'calm'); return `<tr><td><b>${t}</b></td><td>${c?.glance ?? ''}</td><td class="num">${c?.exceptions ?? ''}</td><td class="num">${s === 'quiet' ? '—' : `${n(calmResult(s, 'before', 'desktop', 'light'))} / ${n(calmResult(s, 'before', 'phone', 'light'))}`}</td><td class="num">${n(c)} / ${n(calmResult(s, 'calm', 'phone', 'light'))}</td><td>${all.length && all.every((r) => r.pass && r.glanceOk) ? `${mark('passed')} ${all.length} renders pass` : `${mark('failed')} fails`}</td></tr>`; }).join('')}
   </tbody></table></div>
   ${why('Counts are “coloured · text-heavy”, desktop (Chromium) / iPhone (WebKit), light theme; dark is the same. The full matrix (both engines, both themes, before and calm) is generated into <a href="tokens/CALM-CHECK.md">tokens/CALM-CHECK.md</a>.')}
   ${sub('calm-emphasis', 'Emphasis levels', 'Four levels, and only the loudest may carry colour. At most three loud things per screen (<code>--calm-max-loud</code>).')}
   ${stack(emphasisSheet)}
-  ${sub('calm-components', 'Components kept from the calm round', 'Still useful, for what is genuinely secondary: the summary line for long finished lists, the quiet state for days when nothing needs anyone, and the exception card for an approval page header. They live in <code>status/calm.js</code>. The density band stays for long timelines, under the rows, never instead of them.')}
+  ${sub('calm-components', 'Components kept from the calm round', 'Still useful, for what is genuinely secondary: the summary line for long finished lists, the quiet state for days when nothing needs anyone, and the exception card for an approval page header. They live in <code>status/calm.js</code>.')}
   <h4 class="cap">One loud thing (exception)</h4><p class="lede">The thing that needs you most: a kicker with its mark, a serif title, one sentence, one action. The next few are exception rows: one line each, a 3px edge in the mark’s colour, one action. Anything beyond that folds into “N more need you”.</p>
   ${stack(() => `<div class="calm-demo">${calmException({ state: 'needs', kicker: 'Needs your approval · 7 min ago', title: 'Replace the production web server', sentence: 'platform-sre wants to run terraform apply on production to fix the SEV2 latency incident.', action: '<button class="c-btn primary" tabindex="-1">Review</button>' })}<div style="margin-top:24px">${excRows([{ state: 'failed', title: 'ci-fixer couldn’t fix acme/web#1288', sentence: '2 tests fail; nothing was pushed', age: '52 min ago', action: '<button class="c-btn secondary sm" tabindex="-1">Open</button>' }])}${summaryLine({ lead: '2 more need you', parts: ['pr-review needs your call on a draft', 'approve a sign-in on app.example.com'], label: 'Show' })}</div></div>`)}
   <h4 class="cap">Summary line</h4><p class="lede">Normal work as one quiet line: a count in ink, the parts in secondary, and “Show” in ghost. It expands in place (a native <code>&lt;details&gt;</code>), so the detail is one tap away and never in the way.</p>
   ${stack(() => `<div class="calm-demo">${summaryLine({ lead: '10 finished', parts: ['9 passed', '1 parked'], label: 'Show' })}${summaryLine({ lead: '3 running', parts: ['ci-fixer, pr-review, platform-sre'], label: 'Show' })}${summaryLine({ lead: 'All healthy', parts: ['ops-box', '6 connections', 'up 3 days'], label: 'Show' })}</div>`)}
-  <h4 class="cap">Density band</h4><p class="lede">A timeline where passing and parked runs are faint ticks on a track, so twenty normal runs read as texture rather than twenty marks. Only failures, things that need you and running work are drawn as marks, and each lane says in words what they are, so there is no legend. Lanes with exceptions come first; lanes where everything went fine fold into one row.</p>
-  ${stack(calmLanesDemo)}
-  <h4 class="cap">Quiet state</h4><p class="lede">When nothing needs you, the screen says so in one serif sentence and one supporting line, then the summary lines. The arch is drawn in border colours: present, never loud.</p>
+  <h4 class="cap">Runs over time: aggregate plus exceptions</h4><p class="lede">One strip of runs per hour, with failures marked, then the exceptions grouped by workflow; healthy workflows collapse to a count. It scales to any number of workflows and runs.</p>
+  ${stack(activityDemo)}
+  <h4 class="cap">Quiet state</h4><p class="lede">When nothing needs you, the screen says so in one serif sentence and one supporting line, then the summary lines. No illustration.</p>
   ${stack(() => `<div class="calm-demo">${quietState({ title: 'All quiet. Nothing needs you.', sub: '46 runs went fine in the last 12 hours. 2 are running now.' })}</div>`)}
   ${sub('calm-tokens', 'Tokens', 'The emphasis levels, the band colours, the loudness budget and the four components’ tokens. Values are the dark theme’s; aliases resolve per theme.')}
   <div class="dens-tbl calm-tok"><span class="h">Token</span><span class="h">Value</span><span class="h">Use</span>${calmTokenRows()}</div>
@@ -130,9 +132,9 @@ const PRINCIPLES = [
   ['Group and chunk', 'Things to act on are separate from things that are merely true. An update that installs itself is not “needing you”.',
     'Needs you · 6 items (2 approvals, a failure, a hand-off, a browser push, an update)',
     () => `<div class="ia-groups"><div><b>Needs you <span class="c-count">5</span></b><span>2 approvals · 1 failed fix · 2 questions</span></div><div><b>For your information <em>2</em></b><span>Update v0.72.0 installs within 10 min · Sandbox blocked pastebin.com</span></div></div>`],
-  ['Lead with what changed', 'Coming back after a while, you want the difference, not the full feed. See the “since you last looked” pattern.',
+  ['A few key counts, at a glance', 'The overview opens with a handful of counts: what needs you, what failed, what is running, how much went fine and what it cost. Each opens its list.',
     'Activity · live: r-7f2c pr-review step review started · platform-sre wrote knowledge/db-prod-1.md (commit 8e1f0aa) · …',
-    () => digest(true)],
+    () => glanceDemo()],
   ['Timelines tell the story', 'A run reads top to bottom: what each step did and what came of it, in sentences, with the duration on the right. Steps after a failure say they weren’t reached.',
     'logs ▬ ✓ · triage ▬ ✓ · fix ▬▬▬▬ ✓ · test ▬ × · push not reached',
     () => story(true)],
@@ -272,7 +274,7 @@ ch('colour', 'Colour', 'Warm cream and cocoa surfaces, sand neutrals, one ember 
   ${sub('semantic', 'Semantic tokens', 'The names components use. Each resolves to a different raw value per theme.')}
   ${stack((t) => semSwatches(t))}
 
-  ${sub('status', 'Status', 'One vocabulary of marks (<code>status/marks.js</code>), the same in tables, cards, lane charts, legends, the overview, the run page and on phones. The mark always carries its state colour, and the word is coloured only when a person is needed or the thing is live. Passed is a quiet sage dot and parked is slate pause bars, so they never share a hue or a shape. Rows are never tinted: a row that needs someone gets a thin leading edge, its reason and one action. Each state has fg (text), bg, border and solid (mark) tokens.')}
+  ${sub('status', 'Status', 'One vocabulary of marks (<code>status/marks.js</code>), the same in tables, cards, the run strip, legends, the overview, the run page and on phones. The mark always carries its state colour, and the word is coloured only when a person is needed or the thing is live. Passed is a quiet sage dot and parked is slate pause bars, so they never share a hue or a shape. Rows are never tinted: a row that needs someone gets a thin leading edge, its reason and one action. Each state has fg (text), bg, border and solid (mark) tokens.')}
   ${stack((t) => statusCards(t))}
 
   ${sub('dataviz', 'Data visualisation', 'The palettes were built with the dataviz method and checked with its validator against <code>bg.surface</code> in both themes. Categorical slots are assigned in this order and never cycled, and a ninth series folds into “Other”.')}
@@ -424,7 +426,7 @@ ch('icons', 'Iconography', 'Lucide outline icons for objects and actions, plus n
     <div class="big"><svg viewBox="0 0 24 24" aria-hidden="true"><g stroke="var(--color-border-default)" stroke-width=".05">${Array.from({ length: 25 }, (_, i) => `<line x1="${i}" y1="0" x2="${i}" y2="24"/><line x1="0" y1="${i}" x2="24" y2="${i}"/>`).join('')}</g><rect x="2" y="2" width="20" height="20" fill="none" stroke="var(--color-accent-default)" stroke-width=".08" stroke-dasharray=".4 .3"/><g fill="none" stroke="var(--color-text-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${LUCIDE.workflow}</g></svg></div>
     <div>${rules([
       '<b>Set:</b> <a href="https://lucide.dev">Lucide</a> (ISC licence). The subset we use is vendored in <code>icons/lucide/</code>.',
-      '<b>Sizes:</b> 16px beside body text, 14px in compact density and badges, 20px in empty states and pickers, 24px in phone tab bars.',
+      '<b>Sizes:</b> 16px beside body text, 14px in compact density and badges, 20px in pickers, 24px in phone tab bars.',
       '<b>Stroke:</b> Daylight draws Lucide at 1.75 (rounded, a touch lighter than its default 2) at 16–20px, and 1.5 at 24px.',
       '<b>Colour:</b> <code>icon.default</code> beside text and <code>icon.muted</code> for decoration (still 3:1). An icon takes the status colour only when it is a status glyph.',
       '<b>Never</b> show an icon alone without a label or tooltip (except a universal close ×), never fill outline icons, and never mix icon sets.',
@@ -534,8 +536,8 @@ const stepperSheet = () => `<div style="display:grid;gap:var(--space-4)">
   <span class="c-help">At most five steps, each named for what you decide, not for the file it edits. The review lives inside the wizard, and Back never loses input.</span>
 </div>`;
 const emptySheet = () => `<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3)">
-  <div class="panel surface" style="padding:0"><div class="c-empty"><div class="ic">${sg('success')}</div><h4>Nothing needs you</h4><p>When a bot asks for approval or a run fails, it shows up here. You can also get these on your phone.</p><button class="c-btn secondary" tabindex="-1">${lu('bell')}Set up notifications</button></div></div>
-  <div class="panel surface" style="padding:0"><div class="c-empty"><div class="ic">${lu('eye')}</div><h4>Not watching anything yet</h4><p>alert-watcher has no triggers, so it won’t do anything on its own. Add an alert, a repository or a schedule.</p><button class="c-btn primary" tabindex="-1">${lu('plus')}Add what it watches</button></div></div>
+  <div class="panel surface" style="padding:0"><div class="c-empty"><h4>Nothing needs you</h4><p>When a bot asks for approval or a run fails, it shows up here. You can also get these on your phone.</p><button class="c-btn secondary" tabindex="-1">${lu('bell')}Set up notifications</button></div></div>
+  <div class="panel surface" style="padding:0"><div class="c-empty"><h4>Not watching anything yet</h4><p>alert-watcher has no triggers, so it won’t do anything on its own. Add an alert, a repository or a schedule.</p><button class="c-btn primary" tabindex="-1">${lu('plus')}Add what it watches</button></div></div>
 </div>`;
 const Y = (k, rest) => `<span class="k">${k}</span><span class="p">:</span>${rest}`;
 const codeSheet = () => `<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3)">
@@ -571,7 +573,7 @@ const COMP = [
   ['feedback', 'Banners and toasts', 'Banners are for conditions that persist (until fixed). Toasts are for things that just happened, last 6 seconds (errors stay until dismissed) and sit above the phone tab bar. Every message says what happened and what to do next.', feedbackSheet, true],
   ['overlays', 'Dialogs, drawers and sheets', 'Dialogs are for decisions, drawers for detail beside a list, and sheets for the phone. All of them trap focus, close on Esc and return focus to where you were.', overlaySheet, true],
   ['steppers', 'Steppers and wizards', null, stepperSheet, true],
-  ['empty', 'Empty states', 'Say what will appear here, why it’s empty and the one next step. The headline is a short human sentence, so it can use the serif.', emptySheet, true],
+  ['empty', 'Empty states', 'Say what will appear here, why it’s empty and the one next step. The headline is a short human sentence, so it can use the serif. No illustration, and never the logo as decoration.', emptySheet, true],
   ['code', 'Code, YAML and diffs', null, codeSheet, true],
 ];
 ch('components', 'Components', 'Guidance and token mapping, not a library. Each sheet shows every state, in both themes, at the density selected in the header.',
@@ -579,15 +581,8 @@ ch('components', 'Components', 'Guidance and token mapping, not a library. Each 
   () => COMP.map(([id, t, lede, fn]) => `${sub(id, t, lede ?? '')}${stack(fn)}`).join('') + why('<b>Token mapping:</b> every value in these sheets is a component token (<code>--button-primary-bg</code>, <code>--input-border-focus</code>, <code>--table-row-h</code>…) that aliases a semantic token. The full map is in <code>tokens.json › component</code>, and <code>book/components.css</code> shows how each one is used.'));
 
 // =====================================================================
-// Patterns (including the two borrowed from the other directions)
+// Patterns
 // =====================================================================
-function digest(compact = false) {
-  return `<div class="pt-digest ${compact ? 'compact' : ''}"><h4>Since you last looked <span>2 h ago</span></h4><ul>
-    <li><b>14</b><span>runs passed, including 6 pull-request reviews</span></li>
-    <li data-s="danger"><b>1</b><span>new failure: ci-fixer on acme/web#1288</span>${sg('danger')}</li>
-    <li data-s="accent"><b>1</b><span>new approval: replace the production web server</span>${sg('needs-you')}</li>
-    <li><b>1</b><span>update ready: v0.72.0</span></li></ul></div>`;
-}
 function story(compact = false) {
   const steps = [['success', 'Get the failing logs', '3 failing checks found', '2 s'], ['success', 'Decide what failed', 'A test failure (91% sure)', '8 s'], ['success', 'Fix it', 'Changed applyFee to round half-even', '7 min 40 s'], ['danger', 'Run the tests', '2 of 148 tests fail', '26 s'], ['skipped', 'Push the fix', 'Not reached', '']];
   return `<ol class="pt-story">${steps.slice(0, compact ? 5 : 5).map(([st, t, d, x]) => `<li data-s="${st === 'skipped' ? 'neutral' : st}" class="${st}"><span class="sg">${sg(st)}</span><div><b>${t}</b><span>${d}</span></div><em>${x}</em></li>`).join('')}</ol>`;
@@ -598,14 +593,14 @@ const PATTERNS = [
     () => `<div class="pt-head"><h1>5 things need you</h1><p>Start with the first. Everything else is running normally.</p></div>`],
   ['pt-needs', 'Needs you', 'The one loud thing first: the most urgent item as an exception card with one sentence and one action. The next few are one-line rows with a 3px edge in their mark’s colour. The rest fold into “N more need you”. Machine details (ids, hashes, diff stats) live on the item’s own page.',
     () => `${calmException({ state: 'needs', kicker: 'Needs your approval · 7 min ago', title: 'Replace the production web server', sentence: 'platform-sre wants to run terraform apply on production to fix the SEV2 latency incident.', action: '<button class="c-btn primary" tabindex="-1">Review</button>' })}<div style="margin-top:24px">${excRows([{ state: 'needs', title: 'Post the monthly forecast to #incidents', sentence: 'asked by someone who isn’t an operator', age: '22 min ago', action: '<button class="c-btn secondary sm" tabindex="-1">Review</button>' }, { state: 'failed', title: 'ci-fixer couldn’t fix acme/web#1288', sentence: '2 tests fail; nothing was pushed', age: '52 min ago', action: '<button class="c-btn secondary sm" tabindex="-1">Open</button>' }])}${summaryLine({ lead: '2 more need you', parts: ['pr-review needs your call on a draft', 'approve a sign-in on app.example.com'], label: 'Show' })}</div>`],
-  ['pt-digest', 'Since you last looked (from Broadsheet)', 'Borrowed from the Broadsheet direction. When you come back, the overview leads with what changed since your last visit, as counts and one line each, linked to the detail. New failures and approvals carry their status colour; everything else stays ink.',
-    () => digest()],
+  ['pt-glance', 'At a glance', 'The overview’s few key counts, under the greeting: need you, failed, running, went fine and spent. Ink only; each count opens its list, which carries the colour.',
+    () => glanceDemo()],
   ['pt-story', 'Run story', 'A run as a short story, top to bottom: each step’s outcome in a sentence, the duration on the right, and the failing step called out. Steps after a failure say “Not reached”.',
     () => story()],
-  ['pt-lanes', 'Activity lanes (from Score)', 'Borrowed from the Score direction, for the Activity page, and made calm: every workflow is a lane and time runs left to right, but passing and parked runs are faint ticks in a density band. Only failures, things that need you and running work are marks, and each lane says in words what they are, so there is no legend to decode. Lanes with exceptions come first; lanes where everything went fine fold into one row.',
-    () => calmLanesDemo()],
+  ['pt-activity', 'Runs over time: aggregate plus exceptions', 'For the Activity page. One strip of runs per hour as quiet columns, with failures marked above; then the exceptions (failed, needs you) grouped by workflow, each with its reason and one action; healthy workflows collapse to a count that opens to their names. It scales to any number of workflows and runs, which one lane per workflow does not.',
+    () => activityDemo()],
 ];
-ch('patterns', 'Patterns', 'Recurring screen patterns built from the components, including the two borrowed from the other round-two directions.',
+ch('patterns', 'Patterns', 'Recurring screen patterns built from the components.',
   PATTERNS.map(([id, t]) => [id, t]),
   () => PATTERNS.map(([id, t, lede, fn]) => `${sub(id, t, lede)}${stack(fn)}`).join('') + why('The approval card pattern (why, impact, undo, then approve with passkey) is shown in <a href="#microcopy">Voice and tone › Patterns</a>.'));
 
@@ -692,7 +687,7 @@ ch('logo', 'Logo', `The conductor logo is ${W.name}: the hold-until-released arc
       <div>${th(K(W, 'logo-stacked.svg'), K(W, 'logo-stacked-dark.svg'), 'style="width:72px"')}stacked 72px wide</div>
     </div>
   </div>
-  ${sub('misuse', 'Misuse')}
+  ${sub('misuse', 'Misuse', '<b>The logo is never altered, decorated, animated or turned into an illustration or motif:</b> no rays, horizon lines, cropped or enlarged arches, watermarks or spinners. It appears only as the logo, in its approved lockups. Empty states and onboarding use a plain sentence and an action instead.')}
   <div class="logo-tiles" data-contrast="exempt">
     ${[['transform:scaleX(1.35);max-width:52%', 'stretched'], ['filter:hue-rotate(180deg)', 'recoloured'], ['transform:rotate(180deg)', 'rotated'], ['filter:drop-shadow(0 6px 8px rgba(0,0,0,.5))', 'effects and shadows'], ['', 'on a busy image', 'repeating-linear-gradient(45deg,#cc4a0e 0 12px,#3f9a86 12px 24px)'], ['letter-spacing:.4em;font:italic 34px Georgia,serif', 're-typed wordmark', '', 'conductor']]
       .map(([st, l, bg = '', txt = '']) => `<div class="ltile bad" style="background:${bg || '#f7f3ec'};color:#1c1712">${txt ? `<span style="position:static;opacity:1;${st};text-transform:none">${txt}</span>` : `<img src="${K(W, 'logo-horizontal.svg')}" alt="" style="${st}">`}<span>${l}</span></div>`).join('')}

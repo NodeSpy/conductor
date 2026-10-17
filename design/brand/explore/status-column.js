@@ -3,8 +3,8 @@
 import { HISTORY } from '../v2/data.js';
 import { LUCIDE } from '../icons/icons.js';
 import { mark, status, legend, injectMarkCSS } from '../status/marks.js';
-import { calmLanes, injectCalmCSS } from '../status/calm.js';
-import { LANES } from '../v2/data.js';
+import { runStrip, byWorkflow, injectCalmCSS } from '../status/calm.js';
+import { ACTIVITY } from '../v2/data.js';
 injectMarkCSS(); injectCalmCSS();
 
 const ROWS = HISTORY[0][1].map(([st, wf, target, by, when, took, cost, id, note]) => ({ st, wf, target, by, when, took, cost, id, note }));
@@ -90,7 +90,7 @@ function calm() {
     <tbody class="g-attn"><tr class="gh"><td colspan="5"><b>Needs attention</b><span>${attn.length}</span></td></tr>${attn.map(row).join('')}</tbody>
     ${sum(`${live.length} running`, live.map((r) => r.wf).join(', '), live, 'g-live')}${sum(`${rest.length} finished`, `${passed} passed · ${parked} parked`, rest, 'g-done')}</table>`;
 }
-const lanesCalm = () => `<div class="lanes-calm">${calmLanes(LANES, { width: 860 })}</div>`;
+const activity = () => `<div class="activity-wrap">${runStrip(ACTIVITY.hours)}${byWorkflow(ACTIVITY.exceptions, ACTIVITY.healthy)}</div>`;
 
 // BEFORE CALM (kept for the record): D's grouping + A's margin marks, every row drawn. Rows that need someone first (a thin leading edge, the
 // reason in words, one action), then what is running, then what finished in quiet ink. Status is a
@@ -132,7 +132,7 @@ const tree = () => `<div class="run-tree"><div class="rt-h"><b>ci-fixer</b> acme
 
 const VARIANTS = [
   ['chosen', 'Chosen: calm by default', 'The decision (D’s grouping with A’s margin marks), made calm. Only the runs that need someone are drawn: one line each, with a 3px edge, the mark and word, the reason and one action. <b>Running</b> and <b>Finished</b> are each one summary line (“10 finished · 9 passed · 1 parked”) that opens in place, and took, cost and ids live inside it. Passed is a quiet sage dot and parked is slate pause bars, so they never look alike when opened. See <a href="../system.html#scannable">Scannable by default (it replaces Calm by default)</a>.', calm],
-  ['lanes', 'Where lanes appear: the density band', 'On the Activity page and anywhere runs are drawn over time, passing and parked runs are faint ticks in a band, and only failures, things that need you and running work are marks. Each lane says in words what its marks are, so no legend is needed.', lanesCalm],
+  ['activity', 'Runs over time: aggregate plus exceptions', 'Where runs are shown over time (the Activity page), they are one aggregate: runs per hour as quiet columns, with failures marked. Below it, the exceptions, grouped by workflow; healthy workflows collapse to a count. One lane per workflow was dropped: it doesn’t scale to many workflows and runs.', activity],
   ['tree', 'Run detail: the step tree', 'Workflows can have many steps and can call other workflows, so the number of steps is unpredictable and has no place in a list. On the run page they are a collapsible tree: one line per step with its mark, what it did and how long it took. A nested workflow call is one node with its own status, and the failing path opens on its own.', tree],
   ['grouped-all', 'Explored · Chosen before calm: every row drawn', 'The first version of the decision: grouped rows with margin marks, but every run drawn at equal weight. The review: “all of it just looks so busy… I have to read everything all the time.” It became the calm version above.', chosen],
   ['before', 'Explored · Before: tinted capsule and tinted row', 'The stock pattern (the prototype’s, and round two’s mocks too): every row carries a coloured pill with an outline icon, and failing rows are washed in red. Five colours compete, the passing majority is as loud as the failure, and the tint muddies text contrast.', before],

@@ -3,7 +3,7 @@
 //   2. a mark whose rendered colour isn't its state's token (probed in the mark's own theme scope);
 //   3. a mark inside a chart (an <svg>) with no legend, or whose state is missing from the legend
 //      of its [data-legend-scope]: every mark on a chart must appear in its legend, unless it is
-//      labelled directly on the chart (data-labelled, as in the calm lanes);
+//      labelled in words beside it (data-labelled, as in the run strip);
 //   4. a legacy status glyph that bypasses the vocabulary (old .gl/.sh/.lgd/.c-dot marks);
 //   5. a needs-attention row whose leading edge is a different colour from its status mark.
 //

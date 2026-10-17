@@ -7,7 +7,7 @@ import { DIRS } from './directions.js';
 import * as C from './data.js';
 import { LUCIDE, STATUS } from '../icons/icons.js';
 import { STATES, GLYPH_STATE, mark, chartMark, status, legend, injectMarkCSS } from '../status/marks.js';
-import { summaryLine, quietState, exception, excRows, calmLanes, injectCalmCSS } from '../status/calm.js';
+import { summaryLine, quietState, exception, excRows, runStrip, byWorkflow, atAGlance, injectCalmCSS } from '../status/calm.js';
 import { injectScanCSS } from '../scannable/scan.js';
 import * as SCAN from '../scannable/screens.js';
 injectMarkCSS(); injectCalmCSS();
@@ -38,10 +38,6 @@ const SS = { ok: 'ok', failed: 'danger', running: 'running', waiting: 'warning',
 const SL = { ok: 'Passed', failed: 'Failed', running: 'Running', waiting: 'Waiting on you', parked: 'Parked', skipped: 'Not reached' };
 const badge = (st, label = SL[st]) => status(ST[st], label);
 const logoMark = `<svg class="logo" viewBox="3 7 26 18" aria-hidden="true"><path fill="currentColor" d="M3 21a13 14 0 0 1 26 0h-3.2a9.8 10 0 0 0-19.6 0z"/><circle cx="16" cy="21" r="4" fill="var(--color-accent-default)"/></svg>`;
-const sunrise = (w = 160) => `<svg class="sunrise" width="${w}" viewBox="0 0 160 92" aria-hidden="true">
-  <g stroke="var(--color-border-default)" stroke-width="1.5" stroke-linecap="round">${[-62, -38, -14, 14, 38, 62].map((a) => { const r = Math.PI * (a - 90) / 180; return `<line x1="${80 + Math.cos(r) * 44}" y1="${70 + Math.sin(r) * 44}" x2="${80 + Math.cos(r) * 54}" y2="${70 + Math.sin(r) * 54}"/>`; }).join('')}</g>
-  <path d="M46 70a34 36 0 0 1 68 0h-9a25 26 0 0 0-50 0z" fill="var(--color-text-primary)"/><circle cx="80" cy="70" r="10" fill="var(--color-accent-default)"/>
-  <path d="M8 76h144" stroke="var(--color-text-primary)" stroke-width="2" stroke-linecap="round"/><path d="M30 84h40M90 84h28" stroke="var(--color-border-default)" stroke-width="2" stroke-linecap="round"/></svg>`;
 const spark = (vals, w = 96, h = 26, cls = '') => {
   const mx = Math.max(...vals), mn = Math.min(...vals, 0);
   const pts = vals.map((v, i) => `${(i / (vals.length - 1)) * w},${h - 2 - ((v - mn) / (mx - mn || 1)) * (h - 4)}`).join(' ');
@@ -105,7 +101,7 @@ const scoreLegend = legend(['passed', 'running', 'failed', 'needs', 'parked']);
 function overview() {
   const sumLine = `<b>5 things need you.</b> Everything else is running normally: ${C.STATS.fine} of ${C.STATS.runs} runs in the last 12 hours went fine.`;
   if (d === 'daylight') return `
-    <section class="hello"><div><h1>Good afternoon, ops.</h1><p class="lead">${sumLine}</p></div>${sunrise(150)}</section>
+    <section class="hello"><div><h1>Good afternoon, ops.</h1><p class="lead">${sumLine}</p></div></section>
     <div class="cols"><div class="col-main">${needsCard()}</div>
     <div class="col-side">${runningCard()}<section class="card"><header class="ch"><h2>Last 12 hours</h2></header><div class="stat-line"><b>${C.STATS.fine}</b><span>of ${C.STATS.runs} runs went fine</span><b class="r">${C.STATS.cost}</b><span>spent</span></div>${hourBars()}<p class="foot-note">${gl('danger')}2 failed: ci-fixer at 17:03, release-notes at 10:55</p></section>${fyiCard()}</div></div>`;
   if (d === 'broadsheet') return `
@@ -118,8 +114,7 @@ function overview() {
       <div><span class="lbl">Spent, 14 days</span><b>$8.40</b>${spark(C.STATS.costTrend)}<span class="d">today</span></div>
     </section>
     <div class="cols"><div class="col-main">${needsCard()}</div><div class="col-side">
-      <section class="card digest"><header class="ch"><h2>Since you last looked</h2><span class="sub">2 h ago</span></header><ul class="list">
-        <li><b class="num">14</b><span>runs passed, including 6 pull-request reviews</span></li><li><b class="num bad">1</b><span>new failure: ci-fixer on acme/web#1288</span></li><li><b class="num acc">1</b><span>new approval: replace the production web server</span></li><li><b class="num">1</b><span>update ready: v0.72.0</span></li></ul></section>
+      
       ${runningCard()}</div></div>`;
   return `
     <section class="ov-head"><h1>Overview</h1><p class="lead">${sumLine}</p></section>
@@ -233,9 +228,11 @@ function runTreeDaylight() {
 
 // ---------- the busy “before” versions of the two screens added for the calm comparison ----------
 function activityBefore() {
-  return `<div class="phead"><div><h1>Activity</h1><p class="lead"><b>Last 12 hours: ${C.LANES.reduce((a, [, n]) => a + n.length, 0)} runs across ${C.LANES.length} workflows.</b> Every run is a mark on its workflow’s lane.</p></div><div class="filters"><span class="chip">${ic('clock')}Last 12 hours</span></div></div>
-    <section class="card score" data-legend-scope><header class="ch"><h2>Every run, one lane per workflow</h2><span class="sp"></span>${scoreLegend}</header>${scoreSVG(1060, 12)}<div class="score-phone">${scoreSVG(360, 12, true)}</div></section>
-    <div class="cols"><div class="col-main"><section class="card"><header class="ch"><h2>Runs per hour</h2></header>${hourBars(560, 110)}</section></div><div class="col-side">${runningCard()}</div></div>`;
+  const rows = C.HISTORY[0][1];
+  return `<div class="phead"><div><h1>Activity</h1><p class="lead"><b>Last 12 hours: ${rows.length} runs.</b> Every run, newest first.</p></div><div class="filters"><span class="chip">${ic('clock')}Last 12 hours</span></div></div>
+    <div class="cols"><div class="col-main"><section class="card"><header class="ch"><h2>Runs per hour</h2></header>${hourBars(560, 110)}</section>
+    <section class="card"><header class="ch"><h2>Every run</h2><span class="sub">${rows.length}</span></header><ul class="list">${rows.map((r) => `<li><span class="ng" data-s="${SS[r[0]]}">${gl(SG[r[0]], r[0] === 'running' ? 'spin' : '')}</span><div class="nt"><b>${r[1]} <span class="tgt">${r[2]}</span></b><span class="why">${r[8] || r[3]}</span><span class="tech mono">${r[7]} · ${r[6]}</span></div><span class="age">${r[4]}</span></li>`).join('')}</ul></section></div>
+    <div class="col-side">${runningCard()}</div></div>`;
 }
 function botBefore() {
   const B = C.BOT;
@@ -262,7 +259,8 @@ const KICK = { approval: 'Needs your approval', failed: 'Failed', question: 'Nee
 const needRow = (n) => ({ state: NEED_STATE[n.kind], title: n.title, sentence: n.short ?? n.why, age: n.age, action: `<button class="btn secondary sm">${n.act}</button>` });
 const runningLine = (list) => summaryLine({ lead: `${list.length} running`, parts: [list.map((r) => r.wf).join(', ')], label: 'Show',
   body: `<ul class="list running">${list.map((r) => `<li><span class="ng" data-s="running">${gl('running', 'spin')}</span><div class="nt"><b>${r.doing}</b><span class="why">${r.wf} · ${r.target}</span></div><div class="prog"><span>Step ${r.step} of ${r.of}</span><i><b style="width:${(r.step / r.of) * 100}%"></b></i></div></li>`).join('')}</ul>` });
-const lanesBoth = (lanes) => `<div class="cl-desk">${calmLanes(lanes, { width: 860 })}</div><div class="cl-phone">${calmLanes(lanes, { width: 330, stacked: true })}</div>`;
+// Runs per hour, [fine, failed], from [workflow, [[minutesAgo, state]]] data.
+const hourly = (lanes) => { const h = Array.from({ length: 12 }, () => [0, 0]); for (const [, n] of lanes) for (const [m, st] of n) if (m < 720) h[11 - Math.floor(m / 60)][st === 'failed' ? 1 : 0]++; return h; };
 const healthLine = () => summaryLine({ lead: 'All healthy', parts: ['ops-box', '6 connections', 'up 3 days'], label: 'Show',
   body: `<ul class="plain">${['ops-box: up 3 days, 41% disk', 'GitHub, Slack, Datadog, Terraform Cloud, PagerDuty, OpenAI: connected'].map((x) => `<li>${x}</li>`).join('')}</ul>` });
 const fyiLine = () => summaryLine({ lead: `${C.FYI.length} notes`, parts: ['update v0.72.0 is ready', 'sandbox blocked pastebin.com'], label: 'Show',
@@ -271,15 +269,17 @@ const fyiLine = () => summaryLine({ lead: `${C.FYI.length} notes`, parts: ['upda
 function overviewCalm() {
   if (quietDay) {
     return `${quietState({ title: 'All quiet. Nothing needs you.', sub: '46 runs went fine in the last 12 hours. 2 are running now.' })}
-      <div class="calm-rest">${summaryLine({ lead: 'Last 12 hours', parts: ['46 runs, all fine', '$6.90 spent'], body: lanesBoth(C.QUIET_LANES), label: 'Show' })}
+      ${atAGlance([[0, 'Need you'], [0, 'Failed', '12 h'], [2, 'Running'], ['46 of 46', 'Went fine', '12 h'], ['$6.90', 'Spent', 'today']])}
+      <div class="calm-rest">${summaryLine({ lead: 'Last 12 hours', parts: ['46 runs, all fine', '$6.90 spent'], body: runStrip(hourly(C.QUIET_LANES)), label: 'Show' })}
       ${runningLine(C.RUNNING.slice(0, 2))}${healthLine()}</div>`;
   }
   const [top, ...rest] = C.NEEDS;
   const loud = exception({ state: NEED_STATE[top.kind], kicker: `${KICK[top.kind]} · ${top.age}`, title: top.title, sentence: 'platform-sre wants to run terraform apply on production to fix the SEV2 latency incident.', action: `<button class="btn primary">${top.act}</button>` });
   return `${glanceHead({ title: `${C.NEEDS.length} things need you`, answer: `${C.NEEDS.length} things need you, starting with the production web server`, lead: 'Start with the first. Everything else is running normally.' })}
+    ${atAGlance([[C.NEEDS.length, 'Need you'], [C.STATS.failed, 'Failed', '12 h'], [C.RUNNING.length, 'Running'], [`${C.STATS.fine} of ${C.STATS.runs}`, 'Went fine', '12 h'], [C.STATS.cost, 'Spent', 'today']])}
     <div class="calm-stack">${loud}
     <div>${excRows(rest.slice(0, 2).map(needRow), { terse: true })}${summaryLine({ lead: `${rest.length - 2} more need you`, parts: rest.slice(2).map((n) => n.title.replace(/^./, (c) => c.toLowerCase())), label: 'Show', body: excRows(rest.slice(2).map(needRow), { terse: true }) })}</div>
-    <div class="calm-rest">${summaryLine({ lead: `${C.STATS.fine} of ${C.STATS.runs} runs went fine`, parts: ['last 12 hours', `${C.STATS.cost} spent`], body: lanesBoth(C.LANES), label: 'Show' })}
+    <div class="calm-rest">${summaryLine({ lead: `${C.STATS.fine} of ${C.STATS.runs} runs went fine`, parts: ['last 12 hours', `${C.STATS.cost} spent`], body: runStrip(C.HOURLY), label: 'Show' })}
       ${runningLine(C.RUNNING)}${healthLine()}${fyiLine()}</div></div>`;
 }
 
@@ -296,10 +296,10 @@ function historyCalm() {
 }
 
 function activityCalm() {
-  const all = C.LANES.flatMap(([, n]) => n), f = all.filter(([, s]) => s === 'failed').length, w = all.filter(([, s]) => s === 'approval').length, r = all.filter(([, s]) => s === 'running').length;
-  const fine = all.length - f - w - r;
-  return `${glanceHead({ over: 'Activity · last 12 hours', title: `${f} failed, ${w} wait for you`, answer: `In 12 hours ${f} runs failed and ${w} wait for you; everything else went fine`, lead: `Everything else went fine: ${fine} runs. ${r} are running now.` })}
-    <section class="card calm-card">${lanesBoth(C.LANES)}</section>`;
+  const A = C.ACTIVITY, items = A.exceptions.flatMap((g) => g.items);
+  const f = items.filter((x) => x.state === 'failed').length, w = items.length - f, total = A.hours.reduce((a, [x, y]) => a + x + y, 0);
+  return `${glanceHead({ over: 'Activity · last 12 hours', title: `${f} failed, ${w} wait for you`, answer: `In 12 hours ${f} runs failed and ${w} wait for you; everything else went fine`, lead: `Everything else went fine: ${total - items.length} of ${total} runs across ${A.exceptions.length + A.healthy.length} workflows. ${A.running} are running now.` })}
+    <section class="card calm-card">${runStrip(A.hours)}${byWorkflow(A.exceptions, A.healthy)}</section>`;
 }
 
 function approvalCalm() {
@@ -333,7 +333,7 @@ function botCalm() {
 // exceptions = how many things on the screen genuinely need a person (the loudness budget's input)
 const SCREENS = {
   overview: [overview, 'Home', 5], run: [runPage, 'Runs', 1], approval: [approvalPage, 'Bots', 1], history: [historyPage, 'Runs', 3], builder: [builderPage, 'Workflows', 0],
-  activity: [activityBefore, 'Activity', 4], bot: [botBefore, 'Bots', 1],
+  activity: [activityBefore, 'Activity', 5], bot: [botBefore, 'Bots', 1],
   perms: [SCAN.perms, 'Bots', 0], picker: [SCAN.picker, 'Workflows', 0],
 };
 const SCANS = { overview: SCAN.overview, history: SCAN.history, approval: SCAN.approval, perms: SCAN.perms, picker: SCAN.picker };

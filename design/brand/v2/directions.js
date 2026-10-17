@@ -12,7 +12,7 @@ export const DIRS = {
   daylight: {
     name: 'Daylight',
     tag: 'Warm, light-first, written like a good status note.',
-    pov: 'conductor as a calm colleague who tells you how things are going in a sentence before showing you a table. Warm paper surfaces and a legibility-first humanist face (Atkinson Hyperlegible, made by the Braille Institute for low-vision readers) carry most of the weight. A soft, friendly serif (Fraunces) gives the brand its voice in headings. Colour is reserved for things that need you. Cards are rounded and roomy, and every list opens with a plain-English summary. The fermata arch becomes a small sunrise motif for empty states and onboarding. This is the newcomer-friendly end; compact density keeps it workable at scale.',
+    pov: 'conductor as a calm colleague who tells you how things are going in a sentence before showing you a table. Warm paper surfaces and a legibility-first humanist face (Atkinson Hyperlegible, made by the Braille Institute for low-vision readers) carry most of the weight. A soft, friendly serif (Fraunces) gives the brand its voice in headings. Colour is reserved for things that need you. Cards are rounded and roomy, and every list opens with a plain-English summary. Empty states are a plain sentence and an action; the logo is never used as a motif. This is the newcomer-friendly end; compact density keeps it workable at scale.',
     fonts: {
       display: ['Fraunces', 'SIL OFL 1.1', 'Headings, 600, soft axis on, upright, never italic'],
       sans: ['Atkinson Hyperlegible Next', 'SIL OFL 1.1', 'All UI and body text; 400 / 600 / 700'],
@@ -20,7 +20,7 @@ export const DIRS = {
     },
     shape: 'Rounded: 14px cards, 10px controls, pill badges and soft warm shadows.',
     space: 'Generous: 8px base, 20–24px card padding, 48px rows (36 compact).',
-    icons: 'Lucide at 1.75 stroke with rounded joins, plus the sunrise arch as an illustration motif.',
+    icons: 'Lucide at 1.75 stroke with rounded joins. No illustration: the logo is never used as a motif.',
     data: 'Sentence first (“18 of 20 runs went fine”), then one simple chart with direct labels. Timelines read top to bottom, like a story.',
     light: {
       '--color-bg-canvas': '#f7f3ec', '--color-bg-sunken': '#efe9df', '--color-bg-surface': '#fffdf9', '--color-bg-raised': '#ffffff', '--color-bg-overlay': '#ffffff', '--color-bg-rail': '#f1ebe1',
@@ -62,7 +62,7 @@ export const DIRS = {
     shape: 'Square: 2px radii, hairline and 3px ink rules, no shadows and no cards.',
     space: 'Tight and rhythmic: a 4px baseline, 40px rows (30 compact) and a visible column grid.',
     icons: 'Few icons, 1.5px, only where they carry state. Data graphics (sparklines, small multiples) are the illustration.',
-    data: 'Front page first: headline numbers with sparklines, a “since you last looked” digest, then tables. It is the strictest about tabular alignment.',
+    data: 'Front page first: headline numbers with sparklines, then tables. It is the strictest about tabular alignment.',
     light: {
       '--color-bg-canvas': '#fbfaf7', '--color-bg-sunken': '#f1efe9', '--color-bg-surface': '#fbfaf7', '--color-bg-raised': '#ffffff', '--color-bg-overlay': '#ffffff', '--color-bg-rail': '#fbfaf7',
       '--color-border-subtle': '#e6e3da', '--color-border-default': '#cfcbbf', '--color-border-control': '#858175', '--d-rule-strong': '#111111',

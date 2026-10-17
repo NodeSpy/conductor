@@ -52,24 +52,21 @@ function socialHTML(dir) {
 }
 
 
-// The Daylight social card for the official logo: cream, the lockup, one plain sentence,
-// and the sunrise arch rising from the bottom-right edge as the brand's illustration motif.
+// The Daylight social card for the official logo: cream, the lockup and one plain sentence.
+// The logo is never cropped, enlarged into a motif or used as decoration.
 function socialDaylight(dir, kit) {
   const P = dir.pal.light;
   const font = (fam, f, w) => `@font-face{font-family:'${fam}';font-weight:${w};src:url(${dataURI(path.join(root, 'fonts', f + '.woff2'), 'font/woff2')})}`;
   const lock = fs.readFileSync(path.join(kit, 'logo-horizontal.svg'), 'utf8');
-  const [, , bw, bh] = dir.mark.box;
   return `<!doctype html><meta charset="utf-8"><style>${font('Atkinson Hyperlegible Next', 'AtkinsonNext', '200 800')}${font('Fraunces', 'Fraunces', '100 900')}
   *{box-sizing:border-box}html,body{margin:0;width:1280px;height:640px;overflow:hidden;color-scheme:only light}
   body{background:${P.bg};color:${P.ink};font-family:'Atkinson Hyperlegible Next';position:relative}
-  .sun{position:absolute;right:-60px;bottom:-150px;width:600px;height:${Math.round((600 * bh) / bw)}px}
   .lock{position:absolute;left:96px;top:176px;height:108px}
   .lock svg{height:100%;width:auto;display:block}
   .tag{position:absolute;left:100px;top:326px;width:660px;font-size:34px;line-height:1.3;color:${P.ink2}}
   .tag b{color:${P.ink};font-weight:700}
   .foot{position:absolute;left:100px;bottom:64px;font-size:20px;color:${P.ink3}}
   </style><body>
-  <svg class="sun" viewBox="${dir.mark.box.join(' ')}" aria-hidden="true"><g fill="${P.line}">${dir.mark.ink}</g><g fill="${P.acc}" opacity=".35">${dir.mark.acc}</g></svg>
   <div class="lock">${lock}</div>
   <div class="tag"><b>Event-driven orchestration for AI agents.</b> Self-hosted, config-as-code, and anything risky waits for your approval.</div>
   <div class="foot">github.com/NodeSpy/conductor</div>`;

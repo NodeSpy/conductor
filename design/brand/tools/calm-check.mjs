@@ -6,7 +6,8 @@
 //   glance     the page's [data-glance] answer must be the largest text in the viewport (the wordmark
 //              aside), the first large text in reading order, and at least 7:1 against what's behind it.
 // Budget, from the page's declared exceptions (main[data-exceptions], the things that need a person):
-//   ≤ 3 exceptions: coloured ≤ exceptions + 2, heavy ≤ 2;  more: coloured ≤ 5, heavy ≤ 3.
+//   coloured ≤ exceptions + 2 (each exception may be coloured, plus the nav count and one chart);
+//   heavy ≤ 2 with ≤ 3 exceptions, ≤ 3 with more.
 // Calm versions must pass; the busy "before" versions are measured too, to show what changed.
 //
 //   node tools/calm-check.mjs [engine,engine]   (serve design/brand over HTTP; BRAND_BASE=url)
@@ -18,7 +19,7 @@ import { available, context, closeAll } from './browsers.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const BASE = process.env.BRAND_BASE || 'http://localhost:8768';
-const SCREENS = [['overview', 'overview', ''], ['quiet overview', 'overview', '&day=quiet'], ['run history', 'history', ''], ['lanes (activity)', 'activity', ''], ['bot page', 'bot', ''], ['approval header', 'approval', '']];
+const SCREENS = [['overview', 'overview', ''], ['quiet overview', 'overview', '&day=quiet'], ['run history', 'history', ''], ['activity', 'activity', ''], ['bot page', 'bot', ''], ['approval header', 'approval', '']];
 const ENGINES = process.argv[2] || 'chromium-desktop,webkit-iphone';
 export const BUDGET = { chroma: 0.05, heavyChars: 110, heavyLines: 3, glanceContrast: 7, large: 20 };
 
@@ -104,7 +105,7 @@ function measure(B) {
   return { exceptions, coloured: [...coloured.values()], heavy, glance: glance?.dataset.glanceAnswer ?? null, glanceOk, glanceWhy };
 }
 
-const budgetOf = (ex) => (ex <= 3 ? { coloured: ex + 2, heavy: 2 } : { coloured: 5, heavy: 3 });
+const budgetOf = (ex) => ({ coloured: ex + 2, heavy: ex <= 3 ? 2 : 3 });
 const results = [];
 for (const engine of available(ENGINES)) {
   const ctx = await context(engine, 'light'); const page = await ctx.newPage();
@@ -132,7 +133,7 @@ const out = ['# Calm check: loudness of the first viewport', '',
   `- **Coloured**: things drawn in a saturated colour (OKLCH chroma ≥ ${BUDGET.chroma}), counted once per row, item, link or button.`,
   `- **Text-heavy rows**: rows (\`li\`, \`tr\`, summary lines) over ${BUDGET.heavyChars} characters or ${BUDGET.heavyLines}+ lines.`,
   `- **Glance**: the page’s \`[data-glance]\` answer must be the largest text, the first large text in reading order, and ≥ ${BUDGET.glanceContrast}:1.`,
-  '- **Budget**: with ≤ 3 exceptions, coloured ≤ exceptions + 2 and text-heavy ≤ 2; with more, coloured ≤ 5 and text-heavy ≤ 3.', '',
+  '- **Budget**: coloured ≤ exceptions + 2; text-heavy ≤ 2 with ≤ 3 exceptions, ≤ 3 with more.', '',
   `Result: ${results.filter((r) => r.version === 'calm').length - calmFails.length} of ${results.filter((r) => r.version === 'calm').length} calm renders pass; ${results.filter((r) => r.version === 'before' && !r.pass).length} of ${results.filter((r) => r.version === 'before').length} busy renders fail the same budget.`, '',
   '| Engine | Screen | Theme | Version | Needs a person | Coloured | Text-heavy | Glance answer | Result |', '|---|---|---|---|---|---|---|---|---|'];
 for (const r of results) out.push(`| ${r.engine} | ${r.screen} | ${r.theme} | ${r.version} | ${r.exceptions} | ${r.coloured.length} / ${r.budget.coloured} | ${r.heavy.length} / ${r.budget.heavy} | ${r.glance ? `${r.glanceOk ? '✓' : '✗'} ${r.glance}` : '✗ none'} | ${r.pass ? 'pass' : r.version === 'calm' ? '**FAIL**' : 'too loud'} |`);

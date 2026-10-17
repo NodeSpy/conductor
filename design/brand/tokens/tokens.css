@@ -330,7 +330,7 @@
   --color-button-danger-bg-active: var(--palette-red-800);
   --color-logo-ink: var(--palette-sand-975);
   --color-band-track: var(--palette-cream-0);
-  --color-band-tick: var(--palette-sand-300);
+  --color-band-tick: var(--palette-sand-400);
   --shadow-0: none;
   --shadow-1: 0 1px 2px 0 rgb(60 40 20 / 0.06), 0 6px 18px -10px rgb(60 40 20 / 0.16);
   --shadow-2: 0 2px 4px 0 rgb(60 40 20 / 0.06), 0 12px 30px -14px rgb(60 40 20 / 0.22);
@@ -443,7 +443,7 @@
     --color-button-danger-bg-active: var(--palette-red-300);
     --color-logo-ink: var(--palette-sand-100);
     --color-band-track: var(--palette-cocoa-0);
-    --color-band-tick: var(--palette-sand-800);
+    --color-band-tick: var(--palette-sand-600);
     --shadow-0: none;
     --shadow-1: 0 1px 2px 0 rgb(0 0 0 / 0.3);
     --shadow-2: 0 8px 24px -12px rgb(0 0 0 / 0.45);
@@ -560,7 +560,7 @@
   --color-button-danger-bg-active: var(--palette-red-300);
   --color-logo-ink: var(--palette-sand-100);
   --color-band-track: var(--palette-cocoa-0);
-  --color-band-tick: var(--palette-sand-800);
+  --color-band-tick: var(--palette-sand-600);
   --shadow-0: none;
   --shadow-1: 0 1px 2px 0 rgb(0 0 0 / 0.3);
   --shadow-2: 0 8px 24px -12px rgb(0 0 0 / 0.45);
@@ -931,11 +931,6 @@
   --summary-line-fg: var(--color-emphasis-quiet);
   --summary-line-count-fg: var(--color-text-primary);
   --summary-line-gap: var(--space-3);
-  --density-band-height: 10px;
-  --density-band-tick-width: 2px;
-  --density-band-track: var(--color-band-track);
-  --density-band-tick: var(--color-band-tick);
-  --density-band-radius: 5px;
   --quiet-state-fg: var(--color-text-primary);
   --quiet-state-sub: var(--color-emphasis-ghost);
   --quiet-state-art-size: 96px;
@@ -946,4 +941,8 @@
   --exception-bg: var(--color-bg-surface);
   --exception-shadow: var(--shadow-2);
   --exception-title: var(--color-emphasis-loud);
+  --run-strip-height: 64px;
+  --run-strip-gap: 3px;
+  --run-strip-bar: var(--color-band-tick);
+  --run-strip-radius: 2px;
 }

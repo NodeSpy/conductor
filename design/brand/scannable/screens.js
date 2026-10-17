@@ -2,15 +2,18 @@
 // Everything a person uses to understand or decide stays visible; only ids, hashes and raw payloads
 // sit behind a disclosure or a hover.
 import { KINDS, ACTIONS, STEPS, FLAGS, flagOf, flag, env, kind, lucide, rows, status } from './scan.js';
+import { atAGlance, injectCalmCSS } from '../status/calm.js';
 import * as S from './data.js';
 
 const chev = lucide('chevron-right', 14);
 const n = (xs, f) => xs.filter(f).length;
 
 export function overview() {
+  injectCalmCSS();
   const high = S.NEEDS.filter((x) => flagOf(x));
   return `<section class="hello scan-hello"><div><h1>Good afternoon, ops.</h1>
     <p class="lead"><b>${S.NEEDS.length} things need you</b>, ${high.length} of them high-risk: a production apply, an access grant and a $1,800 purchase. ${S.FAILING.length} runs are failing, ${S.RUNNING.length} are running, and 18 of 20 runs in the last 12 hours went fine.</p></div></section>
+    ${atAGlance([[S.NEEDS.length, 'Need you'], [S.FAILING.length, 'Failing'], [S.RUNNING.length, 'Running'], ['18 of 20', 'Went fine', '12 h'], ['$8.40', 'Spent', 'today']])}
     <section class="card scan-card">${rows([['needs', S.NEEDS], ['failing', S.FAILING], ['running', S.RUNNING], ['fine', S.FINISHED.slice(0, 4), `<em>4 most recent of ${S.FINISHED.length} · <a class="link">Run history</a></em>`]])}</section>`;
 }
 
