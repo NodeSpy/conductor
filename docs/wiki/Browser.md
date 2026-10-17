@@ -348,8 +348,9 @@ conductor browser credential rm app      # revoke: the login and every value it 
   sandboxed browser narrowed to the login's hosts). It answers `ok`, `failed`
   with the reason, or `needs-you` when the site waits for your approval on
   your phone. It returns no value and no screenshot, keeps no cookie, and the
-  result shows in the inventory. By default, success means the page left the
-  sign-in page and asks for no password or code. A login can name what
+  result shows in the inventory. By default, success means the page is on none
+  of the pages a sign-in step was submitted from, and asks for no password or
+  code. A login can name what
   signed-in looks like instead (`--check-url`, `--check-text`).
 - **Widening.** Every change that widens who may use a login, or where,
   answers `change: widening`: a new login, a new binding, a new origin. The

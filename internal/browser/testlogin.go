@@ -47,25 +47,10 @@ func (m *Manager) testLogin(ctx context.Context, name string) TestResult {
 	if cred == nil {
 		return TestResult{Status: TestFailed, Reason: fmt.Sprintf("no credential %q", name)}
 	}
-	var hosts []string
-	start := cred.LoginURL
-	for _, so := range cred.AllOrigins() {
-		o, err := parseOrigin(so)
-		if err != nil {
-			return TestResult{Status: TestFailed, Reason: err.Error()}
-		}
-		hosts = appendSite(hosts, o.host)
-		if start == "" {
-			start = o.String()
-		}
+	tst, start, err := testSettings(st, *cred)
+	if err != nil {
+		return TestResult{Status: TestFailed, Reason: err.Error()}
 	}
-	// The browser an agent would get for this credential: the allowlist's
-	// entries for its hosts, nothing else; no login site, no evaluate.
-	tst := st
-	one := *cred
-	one.Identities = []string{TestIdentity}
-	tst.Credentials, tst.Logins, tst.Evaluate = []Credential{one}, nil, nil
-	tst.Allow = loginAllow(st.Allow, hosts, st)
 
 	var rb [8]byte
 	_, _ = rand.Read(rb[:])
@@ -99,11 +84,38 @@ func (m *Manager) testLogin(ctx context.Context, name string) TestResult {
 			check = r.Check
 		}
 	}
-	ok, why := m.signedIn(ctx, c, check, cred.LoginURL)
+	ok, why := m.signedIn(ctx, c, check, start)
 	if !ok {
 		return TestResult{Status: TestFailed, Reason: why, Steps: steps}
 	}
 	return TestResult{Status: TestOK, Steps: steps}
+}
+
+// testSettings is the browser an agent would get for this one credential,
+// and where a sign-in starts: the allowlist's entries for its hosts and
+// nothing else, the credential bound to the test identity alone, no login
+// site, no evaluate.
+func testSettings(st Settings, cred Credential) (Settings, string, error) {
+	var hosts []string
+	start := cred.LoginURL
+	for _, so := range cred.AllOrigins() {
+		o, err := parseOrigin(so)
+		if err != nil {
+			return Settings{}, "", err
+		}
+		hosts = appendSite(hosts, o.host)
+		if start == "" {
+			start = o.String()
+		}
+	}
+	if len(hosts) == 0 {
+		return Settings{}, "", fmt.Errorf("credential %q has no origin", cred.Name)
+	}
+	tst := st
+	cred.Identities = []string{TestIdentity}
+	tst.Credentials, tst.Logins, tst.Evaluate = []Credential{cred}, nil, nil
+	tst.Allow = loginAllow(st.Allow, hosts, st)
+	return tst, start, nil
 }
 
 // reason is an error as a test result says it: refusals plainly.
@@ -125,8 +137,8 @@ func (m *Manager) dropSession(key string) {
 }
 
 // signedIn judges the page after a sign-in: the check's URL prefix and
-// text when given; by default, that the page left the sign-in page and no
-// longer asks for a password or a one-time code.
+// text when given; by default, that the page left the sign-in page (where
+// the test started) and no longer asks for a password or a one-time code.
 func (m *Manager) signedIn(ctx context.Context, c Principal, check *SignedInCheck, loginURL string) (bool, string) {
 	m.mu.Lock()
 	s := m.sessions[c.Key]
@@ -157,6 +169,9 @@ func (m *Manager) signedIn(ctx context.Context, c Principal, check *SignedInChec
 	}
 	if check != nil && (check.URL != "" || check.Text != "") {
 		return true, ""
+	}
+	if in.onSubmitted(u) {
+		return false, fmt.Sprintf("the site answered on the page the sign-in was submitted from (%s) — a wrong password or code?", u)
 	}
 	if lu, err := url.Parse(loginURL); err == nil && loginURL != "" {
 		if pu, err := url.Parse(u); err == nil && pu.Host == lu.Host && strings.TrimSuffix(pu.Path, "/") == strings.TrimSuffix(lu.Path, "/") {

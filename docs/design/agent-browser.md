@@ -400,7 +400,10 @@ with a settings view narrowed to that one credential:
 - a throwaway workspace and session are removed after.
 
 Signed in means the check's URL prefix or text when given; else the page
-left the login URL's path and asks for no password or code. The answer is
+is on none of the pages a sign-in step was submitted from (the instance
+records them), nor the start page, and asks for no password or code. Found
+by its test: a site that answers a wrong code on the code page itself, with
+no form, read as signed in under the first rule ("no field left"). The answer is
 `ok`, `failed` (why), or `needs-you` (an approval still waiting). No
 value, no screenshot and no cookie are kept. It is audited and recorded as
 the login's last test.
@@ -480,7 +483,7 @@ no browser.
   match). A logged-in site or a credential is a mutating
   capability, so it is allowed for an operator-requested case, and an event's,
   a third party's, a proactive case's, or a child of a non-operator case gets
-  the anonymous profile. A member's tier for `browser.*` can narrow it further
+  the anonymous profile. A bot's tier for `browser.*` can narrow it further
   there.
 - **Container backend.** Nothing changes: the agent keeps its socket and
   token, and the browser stays conductor's.

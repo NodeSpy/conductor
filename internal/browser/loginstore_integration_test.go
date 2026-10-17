@@ -145,13 +145,21 @@ func TestCredentialTestLogin(t *testing.T) {
 	// A wrong password: failed, with why.
 	s.SetValue("stored", "password", "wrong-"+browsertest.Password)
 	res = r.m.TestLogin(ctx, "stored")
-	if res.Status != TestFailed || !strings.Contains(res.Reason, "sign-in page") {
+	if res.Status != TestFailed || !strings.Contains(res.Reason, "submitted from") {
 		t.Fatalf("wrong password: %+v", res)
 	}
 	b, _ = json.Marshal(res)
 	r.shared = append(r.shared, string(b))
 	if strings.Contains(string(b), "wrong-"+browsertest.Password) {
 		t.Fatal("a failed test carries the value")
+	}
+
+	// A wrong one-time code: failed — the site still asks for one.
+	s.SetValue("stored", "password", browsertest.Password)
+	s.SetValue("stored", "otp", "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXQ")
+	res = r.m.TestLogin(ctx, "stored")
+	if res.Status != TestFailed || !strings.Contains(res.Reason, "submitted from") {
+		t.Fatalf("wrong code: %+v", res)
 	}
 
 	// An approval nobody gives: needs-you.
@@ -179,7 +187,7 @@ func TestCredentialTestLogin(t *testing.T) {
 		}
 	}
 	r.audit.mu.Unlock()
-	if n != 4 {
+	if n != 5 {
 		t.Fatalf("test-login audited %d times", n)
 	}
 	r.noLeak()

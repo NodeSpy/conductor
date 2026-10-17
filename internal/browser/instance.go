@@ -34,7 +34,10 @@ type Instance struct {
 	// secretNodes / secrets are the fields conductor filled from a
 	// credential and the values it filled (scrubbed from every reply).
 	secretNodes map[int64]bool
-	secrets     []string
+	// submitted are the pages (host and path) a sign-in step was submitted
+	// from: a test sign-in that ends on one of them did not get through.
+	submitted []string
+	secrets   []string
 
 	// onDownload is told when a download completes (the manager moves it
 	// into the workspace); it runs on its own goroutine.

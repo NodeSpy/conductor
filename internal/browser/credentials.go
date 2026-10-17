@@ -680,6 +680,7 @@ func (m *Manager) login(ctx context.Context, s *session, in *Instance, t *tab, c
 			return nil, err
 		}
 		since = time.Now().Add(-codeSkew)
+		in.noteSubmit(fr.URL)
 		if err := in.submitFrom(ctx, t, w2, submit); err != nil {
 			return nil, err
 		}
@@ -822,6 +823,35 @@ func (in *Instance) remember(nodeID int64, v string) {
 	if len(v) > 0 {
 		in.secrets = append(in.secrets, v)
 	}
+}
+
+// noteSubmit records the page a sign-in step was submitted from.
+func (in *Instance) noteSubmit(pageURL string) {
+	u, err := url.Parse(pageURL)
+	if err != nil {
+		return
+	}
+	in.mu.Lock()
+	in.submitted = append(in.submitted, u.Host+strings.TrimSuffix(u.Path, "/"))
+	in.mu.Unlock()
+}
+
+// onSubmitted reports whether pageURL is a page a sign-in step was
+// submitted from.
+func (in *Instance) onSubmitted(pageURL string) bool {
+	u, err := url.Parse(pageURL)
+	if err != nil {
+		return false
+	}
+	k := u.Host + strings.TrimSuffix(u.Path, "/")
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	for _, s := range in.submitted {
+		if s == k {
+			return true
+		}
+	}
+	return false
 }
 
 // filled reports whether a credential was ever filled here.

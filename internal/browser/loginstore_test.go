@@ -391,3 +391,37 @@ func TestUsageHistory(t *testing.T) {
 		t.Fatal("all")
 	}
 }
+
+// A test sign-in's browser is narrowed to the credential: the allowlist's
+// entries for its hosts only, bound to the test identity alone, no login
+// site, no evaluate; it starts at the login URL, else the first origin.
+func TestTestSettingsNarrow(t *testing.T) {
+	st := Settings{Allow: []string{"app.example.com", "other.example.com", "*.cdn.example"},
+		Logins:      []LoginSiteConfig{{LoginSite: LoginSite{Site: "other.example.com", Identities: []string{"x"}}}},
+		Evaluate:    []string{"*x"},
+		Credentials: []Credential{{Name: "a"}, {Name: "b"}}}
+	cred := Credential{Name: "app", Origins: []string{"https://app.example.com/in"}, Identities: []string{"agent:t@o/r"}}
+	tst, start, err := testSettings(st, cred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if start != "https://app.example.com:443/in" {
+		t.Fatalf("start: %s", start)
+	}
+	if strings.Join(tst.Allow, ",") != "app.example.com" || tst.Logins != nil || tst.Evaluate != nil {
+		t.Fatalf("narrowed: %+v", tst)
+	}
+	if len(tst.Credentials) != 1 || strings.Join(tst.Credentials[0].Identities, ",") != TestIdentity {
+		t.Fatalf("credential: %+v", tst.Credentials)
+	}
+	if len(st.Credentials) != 2 || st.Credentials[0].Name != "a" {
+		t.Fatal("the operator's settings changed")
+	}
+	cred.LoginURL = "https://app.example.com/login"
+	if _, start, _ := testSettings(st, cred); start != cred.LoginURL {
+		t.Fatalf("login url: %s", start)
+	}
+	if _, _, err := testSettings(st, Credential{Name: "none"}); err == nil {
+		t.Fatal("no origin")
+	}
+}
