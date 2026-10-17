@@ -1,4 +1,4 @@
-# conductor logo kit: Conduit
+# conductor logo kit: Conduit (explored, not chosen)
 
 Round one’s runner-up, re-set for Daylight.
 

@@ -48,6 +48,7 @@ export const LOGOS = [
       ink: '<path d="M2 14V7.5a6 6 0 0 1 12 0V14h-3V7.5a3 3 0 0 0-6 0V14z"/>',
       acc: '<circle cx="8" cy="11.5" r="2"/>',
     },
+    whyNot: 'The clearest favicon of the set, but beside the lowercase wordmark its arch-with-legs reads as a bold “n” (“nconductor”).',
     word: WORD,
     lock: { h: 0.98, align: 'baseline', dy: 0.0, gap: 0.3 },
     stack: { markW: 0.24, gap: 0.3 },
@@ -67,6 +68,7 @@ export const LOGOS = [
       ink: '<path d="M8.3 3.44A6 6 0 1 0 12.78 7.69A4.2 4.2 0 0 1 8.3 3.44Z"/>',
       acc: '<circle cx="12.5" cy="3.5" r="2.5"/>',
     },
+    whyNot: 'The boldest silhouette, but a disc and a dot is an abstract, familiar shape that says nothing about conductor without the name.',
     word: WORD,
     lock: { h: 1.0, align: 'baseline', dy: 0.02, gap: 0.28 },
     stack: { markW: 0.24, gap: 0.3 },
@@ -86,6 +88,7 @@ export const LOGOS = [
       ink: '<path d="M12.1 3.4a6.5 6.5 0 1 0 0 9.2l-1.77-1.77a4 4 0 1 1 0-5.66z"/>',
       acc: '<circle cx="13" cy="8" r="2"/>',
     },
+    whyNot: 'Clear and strong on light, but a C with a dot is a crowded genre and it carries the least of conductor’s own idea.',
     word: WORD,
     lock: { h: 1.0, align: 'center', dy: 0, gap: 0.28 },
     stack: { markW: 0.24, gap: 0.3 },
@@ -93,4 +96,8 @@ export const LOGOS = [
   },
 ];
 
-export const RECOMMENDED_LOGO = 'fermata-bold';
+// Daniel picked Fermata, strengthened (Oct 2026). The official kit is generated into
+// design/brand/assets/ (the one canonical location); the explored marks stay in logo-kits/.
+export const OFFICIAL_LOGO = 'fermata-bold';
+export const RECOMMENDED_LOGO = OFFICIAL_LOGO;
+export const kitDir = (id) => (id === OFFICIAL_LOGO ? 'assets' : `logo-kits/${id}`);

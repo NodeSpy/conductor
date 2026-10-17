@@ -1,4 +1,4 @@
-# conductor logo kit: Cue
+# conductor logo kit: Cue (explored, not chosen)
 
 The moment conductor hands it to you.
 

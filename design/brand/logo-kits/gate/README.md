@@ -1,4 +1,4 @@
-# conductor logo kit: Gate
+# conductor logo kit: Gate (explored, not chosen)
 
 A doorway with you standing in it.
 

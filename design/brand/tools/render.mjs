@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { DIRS, RECOMMENDED } from './directions.mjs';
-import { LOGOS } from './logos.mjs';
+import { LOGOS, kitDir, OFFICIAL_LOGO } from './logos.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_PATH || 'playwright');
@@ -51,6 +51,30 @@ function socialHTML(dir) {
   <div class="rule"></div><div class="foot"><span>triggers <b>→</b> workflows <b>·</b> bots <b>·</b> sandbox <b>·</b> packs</span><span>github.com/NodeSpy/conductor</span></div>`;
 }
 
+
+// The Daylight social card for the official logo: cream, the lockup, one plain sentence,
+// and the sunrise arch rising from the bottom-right edge as the brand's illustration motif.
+function socialDaylight(dir, kit) {
+  const P = dir.pal.light;
+  const font = (fam, f, w) => `@font-face{font-family:'${fam}';font-weight:${w};src:url(${dataURI(path.join(root, 'fonts', f + '.woff2'), 'font/woff2')})}`;
+  const lock = fs.readFileSync(path.join(kit, 'logo-horizontal.svg'), 'utf8');
+  const [, , bw, bh] = dir.mark.box;
+  return `<!doctype html><meta charset="utf-8"><style>${font('Atkinson Hyperlegible Next', 'AtkinsonNext', '200 800')}${font('Fraunces', 'Fraunces', '100 900')}
+  *{box-sizing:border-box}html,body{margin:0;width:1280px;height:640px;overflow:hidden;color-scheme:only light}
+  body{background:${P.bg};color:${P.ink};font-family:'Atkinson Hyperlegible Next';position:relative}
+  .sun{position:absolute;right:-60px;bottom:-150px;width:600px;height:${Math.round((600 * bh) / bw)}px}
+  .lock{position:absolute;left:96px;top:176px;height:108px}
+  .lock svg{height:100%;width:auto;display:block}
+  .tag{position:absolute;left:100px;top:326px;width:660px;font-size:34px;line-height:1.3;color:${P.ink2}}
+  .tag b{color:${P.ink};font-weight:700}
+  .foot{position:absolute;left:100px;bottom:64px;font-size:20px;color:${P.ink3}}
+  </style><body>
+  <svg class="sun" viewBox="${dir.mark.box.join(' ')}" aria-hidden="true"><g fill="${P.line}">${dir.mark.ink}</g><g fill="${P.acc}" opacity=".35">${dir.mark.acc}</g></svg>
+  <div class="lock">${lock}</div>
+  <div class="tag"><b>Event-driven orchestration for AI agents.</b> Self-hosted, config-as-code, and anything risky waits for your approval.</div>
+  <div class="foot">github.com/NodeSpy/conductor</div>`;
+}
+
 const imgHTML = (file, w, h) =>
   `<!doctype html><style>html,body{margin:0;background:transparent}img{display:block}</style><img src="${dataURI(file, 'image/svg+xml')}" width="${w}" height="${h}">`;
 
@@ -73,27 +97,17 @@ for (const dir of DIRS) {
   console.log(dir.id, 'ok');
 }
 
-// Ready-to-use PNGs for the recommended direction.
-if (!only || only === RECOMMENDED) {
-  const id = RECOMMENDED;
-  const a = path.join(root, 'assets');
-  for (const s of [16, 32, 48]) fs.copyFileSync(path.join(root, 'directions', id, `favicon-${s}.png`), path.join(a, `favicon-${s}.png`));
-  for (const s of [16, 32, 48]) await shoot(imgHTML(svgFile(id, 'favicon16-dark'), s, s), s, s, path.join(a, `favicon-${s}-dark.png`));
-  await shoot(imgHTML(svgFile(id, 'apple-touch-icon'), 180, 180), 180, 180, path.join(a, 'apple-touch-icon.png'), false);
-  for (const s of [192, 512]) await shoot(imgHTML(svgFile(id, 'app-icon-dark'), s, s), s, s, path.join(a, `icon-${s}.png`));
-  fs.copyFileSync(path.join(root, 'directions', id, 'social-card.png'), path.join(a, 'social-card.png'));
-  console.log('assets ok');
-}
 // PNGs for every logo kit.
 for (const dir of LOGOS) {
   if (only && only !== 'kits' && only !== dir.id) continue;
-  const kit = path.join(root, 'logo-kits', dir.id), f = (n) => path.join(kit, n + '.svg');
+  const kit = path.join(root, kitDir(dir.id)), f = (n) => path.join(kit, n + '.svg');
   for (const s of [16, 32, 48]) {
     await shoot(imgHTML(f('favicon16-light'), s, s), s, s, path.join(kit, `favicon-${s}.png`));
     await shoot(imgHTML(f('favicon16-dark'), s, s), s, s, path.join(kit, `favicon-${s}-dark.png`));
   }
   await shoot(imgHTML(f('apple-touch-icon'), 180, 180), 180, 180, path.join(kit, 'apple-touch-icon.png'), false);
   for (const s of [192, 512]) await shoot(imgHTML(f('app-icon'), s, s), s, s, path.join(kit, `icon-${s}.png`));
+  if (dir.id === OFFICIAL_LOGO) await shoot(socialDaylight(dir, kit), 1280, 640, path.join(kit, 'social-card.png'), false);
   console.log('kit', dir.id, 'ok');
 }
 await b.close();

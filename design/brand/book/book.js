@@ -1,7 +1,7 @@
 // Renders the brand book from tokens/tokens.json, tokens/contrast.json and tokens/migration.json.
 // Everything visual comes from tokens.css; this file only lays content out.
 import { LUCIDE, STATUS } from '../icons/icons.js';
-import { LOGOS, RECOMMENDED_LOGO } from '../tools/logos.mjs';
+import { LOGOS, OFFICIAL_LOGO, kitDir } from '../tools/logos.mjs';
 
 const [T, CON, MIG] = await Promise.all(['tokens/tokens.json', 'tokens/contrast.json', 'tokens/migration.json'].map((u) => fetch(u).then((r) => r.json())));
 
@@ -605,16 +605,16 @@ ch('voice', 'Voice and tone', 'Plain, specific and calm. The interface talks to 
   `);
 
 // =====================================================================
-// 9. Logo (swappable: the working mark and every candidate come from tools/logos.mjs)
+// 9. Logo (official: Fermata, strengthened, in assets/; explored marks in logo-kits/)
 // =====================================================================
-const W = LOGOS.find((L) => L.id === RECOMMENDED_LOGO);
-const K = (L, f) => `logo-kits/${L.id}/${f}`;
+const W = LOGOS.find((L) => L.id === OFFICIAL_LOGO);
+const K = (L, f) => `${kitDir(L.id)}/${f}`;
 const th = (light, dark, attrs = '') => `<img src="${light}" data-l="${light}" data-d="${dark}" alt="" ${attrs}>`;
 export const inlineMark = (L) => `<svg class="logo-mark" viewBox="${L.mark.box.join(' ')}" role="img" aria-label="conductor"><g fill="var(--color-logo-ink)">${L.mark.ink}</g><g fill="var(--color-accent-default)">${L.mark.acc}</g></svg>`;
-ch('logo', 'Logo', `The working mark is ${W.name}. The logo is a swappable layer: every candidate is a complete kit, and switching is a one-folder change.`,
-  [['lockups', 'Working mark'], ['logo-space', 'Clear space and size'], ['misuse', 'Misuse'], ['cobrand', 'Co-branding'], ['logo-candidates', 'Candidates']],
+ch('logo', 'Logo', `The conductor logo is ${W.name}: the hold-until-released arch. The official kit is in assets/.`,
+  [['lockups', 'The mark'], ['logo-files', 'Files'], ['logo-space', 'Clear space and size'], ['misuse', 'Misuse'], ['cobrand', 'Co-branding'], ['logo-explored', 'Explored directions']],
   () => `
-  ${sub('lockups', 'Working mark', `${W.why} Not chosen yet: compare all four on the <a href="logo-review.html">logo review</a>.`)}
+  ${sub('lockups', 'The mark', `A fermata tells an ensemble to hold until the conductor releases it. conductor works the same way: runs wait behind an approval, a bot pauses on “needs you”, and nothing moves until you sign. ${W.why} The choice is recorded on the <a href="logo-review.html">logo review</a>.`)}
   <div class="logo-tiles">
     <div class="ltile" data-theme="light" style="background:var(--color-bg-canvas)"><img src="${K(W, 'logo-horizontal.svg')}" alt=""><span>horizontal · light</span></div>
     <div class="ltile" data-theme="dark" style="background:var(--color-bg-canvas)"><img src="${K(W, 'logo-horizontal-dark.svg')}" alt=""><span>horizontal · dark</span></div>
@@ -624,6 +624,8 @@ ch('logo', 'Logo', `The working mark is ${W.name}. The logo is a swappable layer
     <div class="ltile" data-theme="dark" style="background:var(--color-bg-canvas)"><img src="${K(W, 'app-icon.svg')}" alt="" style="height:96px"><span>app icon</span></div>
   </div>
   ${why('<b>In app chrome</b> use the inline mark (<code>mark-inline.html</code> in the kit) at 20px tall beside the live-text wordmark (<code>--type-brand</code>: Fraunces SemiBold). The mark’s arch takes <code>--color-logo-ink</code>, which is deeper than body text on cream so the mark holds at small sizes, and the dot takes <code>--color-accent-default</code>. This page’s top bar uses exactly that.')}
+  ${sub('logo-files', 'Files', 'One canonical location: <a href="assets/"><code>design/brand/assets/</code></a>. Files with no suffix are for light backgrounds, <code>-dark</code> for dark, and <code>-mono</code> uses <code>currentColor</code>.')}
+  <div class="files-grid">${[['logo-horizontal.svg', 'Default lockup: README, docs, sign-in'], ['logo-stacked.svg', 'Square spaces'], ['logo-mark.svg', 'Mark alone (32-unit square)'], ['wordmark.svg', 'Name alone'], ['mark-inline.html', 'Inline SVG for app chrome, coloured by tokens'], ['favicon.svg', '16px cut; follows the browser scheme (+ 16/32/48 PNGs)'], ['apple-touch-icon.png', 'Home screen (+ icon-192, icon-512, app-icon.svg)'], ['social-card.png', '1280×640 social preview'], ['README.md', 'File list and the exact prototype changes']].map(([f, u]) => `<a class="file" href="assets/${f}"><b>${f}</b><span>${u}</span></a>`).join('')}</div>
   ${sub('logo-space', 'Clear space and size', 'Keep one dot diameter clear on every side. Below 24px, use the 16px cut (favicon.svg), not a scaled master.')}
   <div style="display:flex;gap:var(--space-8);flex-wrap:wrap;align-items:center">
     <div class="clear">${th(K(W, 'logo-horizontal.svg'), K(W, 'logo-horizontal-dark.svg'))}</div>
@@ -641,9 +643,13 @@ ch('logo', 'Logo', `The working mark is ${W.name}. The logo is a swappable layer
   </div>
   ${sub('cobrand', 'Co-branding', 'Partner logos sit to the right at equal optical height, separated by a hairline rule with two dot-widths of space on each side. conductor comes first on our surfaces, and we never merge the marks.')}
   <div class="cobrand">${th(K(W, 'logo-horizontal.svg'), K(W, 'logo-horizontal-dark.svg'), 'style="height:40px"')}<span class="sep"></span><span class="partner"><i></i>Acme</span></div>
-  ${sub('logo-candidates', 'Candidates', 'Each candidate is a drop-in kit in <code>logo-kits/</code> with the same file names. Picking one copies its kit into place; tokens, components and this book do not change.')}
-  <table class="perdir"><thead><tr><th>Candidate</th><th>Idea</th><th>Kit</th></tr></thead><tbody>
-    ${LOGOS.map((L) => `<tr class="${L.id === W.id ? 'cur' : ''}"><td>${th(K(L, 'logo-horizontal.svg'), K(L, 'logo-horizontal-dark.svg'))}</td><td><b>${L.name}</b><br>${L.line}</td><td><a href="logo-kits/${L.id}/"><code>logo-kits/${L.id}/</code></a></td></tr>`).join('')}
+  ${sub('logo-explored', 'Explored directions', 'Each was taken to a complete kit and tested in the same chrome before the choice. They are kept for reference, and are not for use.')}
+  <table class="perdir"><thead><tr><th>Mark</th><th>Idea</th><th>Why not</th></tr></thead><tbody>
+    ${LOGOS.filter((L) => L.id !== W.id).map((L) => `<tr><td>${th(K(L, 'logo-horizontal.svg'), K(L, 'logo-horizontal-dark.svg'))}</td><td><b>${L.name}</b><br>${L.line}</td><td>${L.whyNot}</td></tr>`).join('')}
+    ${[['fermata', 'Fermata (round one)', 'The same idea, drawn thin with an italic wordmark.', 'Weak on light surfaces: the hairline arch, small dot and light italic lost to cream. Strengthened into the official mark.'],
+       ['downbeat', 'Downbeat (round one)', 'The prototype’s baton, rebuilt heavier.', 'A diagonal and a dot is a common shape, and it carries the least meaning.'],
+       ['signature', 'Signature (round one)', 'The wordmark is the logo, with the full stop as the downbeat.', 'Elegant but not ownable, and its brass accent collided with the warning colour.']]
+      .map(([id, n, idea, why]) => `<tr><td>${th(`directions/${id}/logo-horizontal-light.svg`, `directions/${id}/logo-horizontal-dark.svg`)}</td><td><b>${n}</b><br>${idea}</td><td>${why}</td></tr>`).join('')}
   </tbody></table>
   `);
 
