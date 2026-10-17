@@ -8,7 +8,7 @@
 //
 // Elements inside [data-contrast="exempt"] are skipped (deliberate demos: disabled states,
 // misuse examples, verbatim "before" screenshots); every exemption is counted in the report.
-// Writes reports/rendered-contrast.md and exits 1 if anything fails.
+// Writes $REPORT_DIR/rendered-contrast.md (default ~/.cache/conductor-design/reports) and exits 1 if anything fails.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -96,8 +96,10 @@ const md = [
   ...rows.map((r) => `| ${r.engine} | ${r.os} | \`${r.page}\` | ${r.checked} | ${r.exempt} | ${r.unknown} | ${r.fails.length ? '**' + r.fails.length + '**' : 0} | ${r.schemeFail ? '**none**' : r.scheme} |`),
   '', ...rows.filter((r) => r.fails.length).flatMap((r) => [`## ${r.engine} · OS ${r.os} · \`${r.page}\``, '', ...r.fails.slice(0, 12).map((f) => `- ${f.ratio} < ${f.need}: “${f.text}” (${f.where}, rgb ${f.fg} on ${f.bg})`), '']),
 ].join('\n');
-fs.mkdirSync(path.join(root, 'reports'), { recursive: true });
-fs.writeFileSync(path.join(root, 'reports', 'rendered-contrast.md'), md + '\n');
+// Test output stays off the repo (and off network mounts): REPORT_DIR, default ~/.cache/conductor-design/reports.
+const reportDir = process.env.REPORT_DIR || path.join(process.env.HOME, '.cache', 'conductor-design', 'reports');
+fs.mkdirSync(reportDir, { recursive: true });
+fs.writeFileSync(path.join(reportDir, 'rendered-contrast.md'), md + '\n');
 if (process.env.DUMP) fs.writeFileSync(process.env.DUMP, JSON.stringify(rows.filter((r) => r.fails.length), null, 1));
 console.log(`${rows.length} renders · ${total} text elements · ${bad} below AA · ${failing} pages failing`);
 for (const r of rows.filter((x) => x.fails.length || x.schemeFail).slice(0, 25)) console.log(`  ${r.engine} ${r.os} ${r.page}: ${r.fails.length} below AA${r.schemeFail ? ', no color-scheme' : ''}${r.fails[0] ? ` (e.g. ${r.fails[0].ratio}: “${r.fails[0].text}”)` : ''}`);
