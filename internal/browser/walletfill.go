@@ -100,7 +100,7 @@ func purchaseView(p Purchase) map[string]any {
 	case PurchasePending:
 		out["note"] = "waiting for the operator's approval — check with conductor browser purchase-status " + p.ID
 	case PurchaseApproved:
-		out["note"] = "approved: on the merchant's checkout page, conductor browser pay --purchase " + p.ID + " --submit <the place-order button's ref>"
+		out["note"] = "approved: on the merchant's checkout page, conductor browser pay " + p.ID + " <the place-order button's ref>"
 	}
 	if r := p.Receipt; r != nil {
 		out["order_number"], out["charged"] = r.OrderNumber, r.Total
