@@ -506,9 +506,13 @@
   UI.switchBtn = (on, act, attrs = '') => `<button type="button" role="switch" class="switch${on ? ' on' : ''}" aria-checked="${!!on}" data-act="${act}" ${attrs}></button>`;
   UI.act('strip-status', (b) => { const d = D.daemon, u = d.update || {}, running = D.runs.filter((r) => r.status === 'run').length;
     // an available update is said quietly here; it only escalates (in the top bar) when it needs a person
-    UI.menu(b, [[d.paused ? 'Resume dispatch…' : 'Pause dispatch…', d.paused ? 'play' : 'pause', 'pause'], ['-'],
+    // first how things are (on a phone the top bar shows only the mark), with the cause one tap away; Pause, rarely
+    // wanted, comes last
+    const bad = D.connectors.filter((c) => !['ok', 'idle'].includes(c.status));
+    const how = d.paused ? ['Dispatch is paused: nothing new starts', 'pause', 'strip-go', 'data-href="#/activity"'] : bad.length ? [`${bad[0].name} needs a look: ${bad[0].detail}${bad.length > 1 ? ` (and ${bad.length - 1} more)` : ''}`, 'warn', 'strip-go', 'data-href="#/connectors"'] : ['All systems normal', 'check', 'strip-go', 'data-href="#/connectors"'];
+    UI.menu(b, [how, ['-'],
       u.available ? [u.blocked ? `${u.available} is waiting for you: ${u.blocked}` : `${u.available} installs itself within 10 min`, 'updates', 'strip-go', 'data-href="#/updates"'] : [`conductor ${d.version}, up to date`, 'updates', 'strip-go', 'data-href="#/updates"'],
-      [`The sandbox is on: see what bots may do`, 'shield', 'strip-go', 'data-href="#/safety"'], [`${running} running now`, 'live', 'strip-go', 'data-href="#/activity?status=run"'], ...(D.pending.length ? [[`${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review`, 'edit', 'strip-go', 'data-href="#/config/apply"']] : [])]); });
+      [`The sandbox is on: see what bots may do`, 'shield', 'strip-go', 'data-href="#/safety"'], [`${running} running now`, 'live', 'strip-go', 'data-href="#/activity?status=run"'], ...(D.pending.length ? [[`${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review`, 'edit', 'strip-go', 'data-href="#/config/apply"']] : []), ['-'], [d.paused ? 'Resume dispatch…' : 'Pause dispatch…', d.paused ? 'play' : 'pause', 'pause']]); });
   /** Demo data (prototype only): which fake day to show, chosen per browser (js/scenario.js), or reset the current one. */
   UI.DEMOS = [['calm', 'A mostly healthy day', 'Dozens of runs; one approval and one failure need you'], ['quiet', 'All quiet', 'Nothing needs you; every system healthy'], ['full', 'Everything at once', 'Every kind of exception, to try each flow']];
   UI.setDemo = (k) => { try { localStorage.setItem('cd-demo', k); localStorage.removeItem('cd-proto-state-v5'); } catch (e) {} location.reload(); };

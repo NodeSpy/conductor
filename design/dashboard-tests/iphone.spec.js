@@ -36,13 +36,13 @@ test.describe('iPhone (WebKit): one theme, nothing too wide, nothing under the t
       expect(await page.evaluate(primaries), `primary actions covered on ${route}`).toEqual([]);
     });
   }
-  test('the strip collapses to the status dot and the needs-you count; the rest is one tap away', async ({ page }) => {
+  test('the strip collapses to the status mark and your menu; the rest is one tap away', async ({ page }) => {
     await go(page, '#/overview', { fresh: true });
     await expect(page.locator('.strip .logo-mark path').first()).toBeAttached(); // the logo mark renders (from assets/logo/mark.svg)
     const shown = await page.locator('.strip .cell').evaluateAll((els) => els.filter((e) => getComputedStyle(e).display !== 'none').map((e) => e.className));
-    expect(shown.map((c) => c.split(' ').pop())).toEqual(['status-btn', 'alert']);
+    expect(shown.map((c) => c.split(' ').pop())).toEqual(['status-btn', 'op-btn']) // the status mark (its word is in its menu) and your menu;
     await page.locator('.strip .status-btn').tap();
-    await expect(page.locator('#pop-menu')).toContainText('Sandbox enforcing');
+    await expect(page.locator('#pop-menu')).toContainText('The sandbox is on');
     await page.locator('#pop-menu [data-href="#/safety"]').tap();
     await expect(page).toHaveURL(/#\/safety/);
   });
