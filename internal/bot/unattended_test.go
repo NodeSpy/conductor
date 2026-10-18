@@ -139,3 +139,21 @@ func TestUnattendedNeverDefault(t *testing.T) {
 		t.Fatalf("a proposal, no spend: %+v", rec)
 	}
 }
+
+// The unattended branch re-checks spend_cap inside the ledger write that
+// records the spend: two purchases that each passed the earlier check
+// cannot jointly overshoot it.
+func TestUnattendedRechecksSpendCapInTheLedgerWrite(t *testing.T) {
+	m := shopperBot()
+	m.Autonomy.SpendCap = &config.SpendCap{PerAction: 10, PerPeriod: 15}
+	f := newGateFixture(t, m, true)
+	cl := f.gate.caller(homeID())
+	ok, err := f.gate.unattended(homeID(), m, "browser.purchase", buy(10, shop, false), 10, cl)
+	if err != nil || !ok {
+		t.Fatalf("the first: %v %v", ok, err)
+	}
+	// The second already passed checkSpend (as a racing call would have).
+	if ok, err := f.gate.unattended(homeID(), m, "browser.purchase", buy(10, shop, false), 10, cl); ok || err == nil || !strings.Contains(err.Error(), "over the cap 15") {
+		t.Fatalf("the second overshot spend_cap: %v %v", ok, err)
+	}
+}

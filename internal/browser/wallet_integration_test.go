@@ -145,6 +145,13 @@ func TestWalletProfileSignup(t *testing.T) {
 	if !strings.Contains(snap, FilledMark) {
 		t.Fatalf("filled fields show their mark: %s", snap)
 	}
+	// A value too short to scrub by its text (a 2-letter region) is hidden
+	// by its field.
+	for _, l := range strings.Split(snap, "\n") {
+		if strings.Contains(l, "State") && strings.Contains(l, "textbox") && (!strings.Contains(l, FilledMark) || strings.Contains(l, `"IL"`)) {
+			t.Fatalf("the region shows: %s", l)
+		}
+	}
 	w.refused(op, "fill-profile", map[string]any{"profile": "personal", "field": "company", "ref": refOf(t, snap, "Company")}, "not opted in")
 	w.do(op, "click", map[string]any{"ref": refOf(t, snap, "Sign up")})
 	welcome := w.do(op, "snapshot", nil)["snapshot"].(string)

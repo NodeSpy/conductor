@@ -223,6 +223,9 @@ func TestParseMoneyAndCheckTotal(t *testing.T) {
 	if _, err := checkTotal([]string{"Shipping total: $1.00", "Grand total: $99.00"}, p); err == nil {
 		t.Fatal("the grand total was ignored")
 	}
+	if seen, err := checkTotal([]string{"Grand total: $99.00", "Shipping total: $1.00"}, p); err == nil || seen != 99 {
+		t.Fatalf("the largest total counts, wherever it is: %v %v", seen, err)
+	}
 }
 
 func TestCardValues(t *testing.T) {
