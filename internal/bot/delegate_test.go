@@ -65,7 +65,7 @@ func TestDelegateWorkReturnsToTheDelegatorsCase(t *testing.T) {
 	if bc.Delegation == nil || bc.Delegation.From != "a" || bc.Delegation.FromCase != ac || bc.Delegation.ID != d.ID {
 		t.Fatalf("the delegated case is not linked to the delegator's: %+v", bc)
 	}
-	if bc.Source != "bot:a" || bc.RequesterClass != ReqEvent || bc.Status != "open" || bc.Payload != "check the replica lag on db-main" {
+	if bc.Source != "bot:a" || bc.RequesterClass != ReqEvent || bc.Status != store.TicketInProgress || bc.Payload != "check the replica lag on db-main" {
 		t.Fatalf("delegated case: %+v", bc)
 	}
 	if d.From != "a" || d.To != "b" || d.ToCase != bc.ID || d.FromCase != ac || d.Status != DelegationOpen || d.Depth != 1 || strings.Join(d.Chain, ",") != "a" {
@@ -133,7 +133,7 @@ func TestDelegateWithoutACaseOpensOne(t *testing.T) {
 	f := newTeamFixture(t, nil)
 	bc, d := f.delegate(t, "a", "b", "", "rotate the cache keys")
 	ac := f.caseOf(t, "a", d.FromCase)
-	if ac.Status != "open" || ac.Source != "bot" || !strings.Contains(ac.Title, "delegated to b") || bc.Delegation.FromCase != ac.ID {
+	if ac.Status != store.TicketInProgress || ac.Source != "bot" || !strings.Contains(ac.Title, "delegated to b") || bc.Delegation.FromCase != ac.ID {
 		t.Fatalf("delegator case: %+v / %+v", ac, bc)
 	}
 }
@@ -161,7 +161,7 @@ func TestDelegateDecline(t *testing.T) {
 	if _, err := f.svc.Decline(ctx, f.homeOf("b"), bc.ID, "web is not in my scope — billing-sre owns it"); err != nil {
 		t.Fatal(err)
 	}
-	if c := f.caseOf(t, "b", bc.ID); c.Status != "closed" || !strings.HasPrefix(c.Outcome, "declined: ") {
+	if c := f.caseOf(t, "b", bc.ID); c.Status != store.TicketDeclined || !strings.HasPrefix(c.Outcome, "declined: ") {
 		t.Fatalf("declined case: %+v", c)
 	}
 	if e := f.st.Bot("a").Delegations[d.ID]; e.Status != DelegationDeclined || !strings.Contains(e.Result, "billing-sre owns it") {

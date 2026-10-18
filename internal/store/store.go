@@ -84,6 +84,9 @@ type Store struct {
 
 	// Operator conversations with bots and teams (conversations.go).
 	convs map[string]*Conversation
+
+	// Tickets no bot holds yet, and the ticket counter (tickets.go).
+	tickets ticketFile
 }
 
 // Options configure a Store.
@@ -171,6 +174,10 @@ func Open(o Options) (*Store, error) {
 	s.loadOutcomeState()
 	s.loadBots()
 	s.loadConversations()
+	s.loadTickets()
+	if err := s.migrateTickets(); err != nil {
+		return nil, err
+	}
 	a, err := openAudit(o.AuditPath, o.AuditMaxSize)
 	if err != nil {
 		return nil, err

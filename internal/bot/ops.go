@@ -696,7 +696,7 @@ func (s *Service) statusOf(name string) map[string]any {
 	rec := s.Ledger.Bot(name)
 	open, pending, workers := 0, 0, 0
 	for _, c := range rec.Cases {
-		if c.Status == "open" {
+		if store.Active(c.Status) {
 			open++
 		}
 	}

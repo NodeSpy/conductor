@@ -259,7 +259,7 @@ func archivable(rec store.BotRecord, repo *Repo, now time.Time) map[string]strin
 		}
 		fm, _, _, _ := SplitFrontmatter(text)
 		if c := fmString(fm["case"]); c != "" {
-			if cs := rec.Cases[c]; cs != nil && cs.Status == "open" {
+			if cs := rec.Cases[c]; cs != nil && !store.Closed(cs.Status) {
 				continue // its case may still append to it
 			}
 		}

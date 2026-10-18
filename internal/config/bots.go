@@ -148,6 +148,8 @@ type BotConfig struct {
 	// count, media types and how long they are kept (attachments.go). On by
 	// default.
 	Attachments AttachmentLimits `yaml:"attachments,omitempty"`
+	// Tickets: whether the bot may mark its own tickets ready (tickets.go).
+	Tickets TicketSettings `yaml:"tickets,omitempty"`
 	// Isolation is the bot's session policy (inherited from its team,
 	// and only ever stricter).
 	Isolation BotIsolation `yaml:"isolation,omitempty"`
@@ -1018,6 +1020,9 @@ func (c *Config) validateBot(name string, m BotConfig) error {
 	if err := m.Attachments.validate(); err != nil {
 		return fmt.Errorf("attachments.%w", err)
 	}
+	if err := m.Tickets.validate(false); err != nil {
+		return err
+	}
 	if m.Charter != "" && m.CharterFile != "" {
 		return fmt.Errorf("set charter or charter_file, not both")
 	}
@@ -1158,6 +1163,9 @@ func (c *Config) BotWarnings() []string {
 		}
 		if len(m.Autonomy.Promote) > 0 {
 			out = append(out, fmt.Sprintf("bots.%s: autonomy.promote takes effect only while bot sessions are sandboxed; until then promoted verbs stay proposals", name))
+		}
+		if c.BotMarksOwnReady(name) {
+			out = append(out, fmt.Sprintf("bots.%s: may mark the tickets it creates ready (tickets.mark_own_ready) — a WIDENING: its own ideas can start work without an operator", name))
 		}
 		if m.Skill == nil || len(m.Skill.Verbs) == 0 {
 			out = append(out, fmt.Sprintf("bots.%s: no skill.verbs — the bot can only observe through memory and its ledger", name))

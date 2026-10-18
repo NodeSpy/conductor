@@ -242,7 +242,7 @@ func (s *Service) Chat(ctx context.Context, req ChatSend) (store.ChatMessage, er
 		return store.ChatMessage{}, errors.New("--to and --everyone address a team's members")
 	}
 	if req.CaseID != "" {
-		if c := s.Ledger.Bot(name).Cases[req.CaseID]; c == nil || c.Status != "open" {
+		if c := s.Ledger.Bot(name).Cases[req.CaseID]; c == nil || !store.Active(c.Status) {
 			return store.ChatMessage{}, fmt.Errorf("no open case %s on bot %s", req.CaseID, name)
 		}
 	}
@@ -364,7 +364,7 @@ func (s *Service) chatCase(b string, req ChatSend, name, kind, op string, now ti
 	var id string
 	err := s.Ledger.UpdateBot(b, func(r *store.BotRecord) error {
 		for _, c := range r.Cases {
-			if c.Conversation == req.Conversation && c.Status == "open" {
+			if c.Conversation == req.Conversation && store.Active(c.Status) {
 				id = c.ID
 				c.Updated = now
 				return nil
@@ -374,7 +374,7 @@ func (s *Service) chatCase(b string, req ChatSend, name, kind, op string, now ti
 		if r.Cases == nil {
 			r.Cases = map[string]*store.Case{}
 		}
-		r.Cases[id] = &store.Case{ID: id, Title: "team " + name + " conversation", Status: "open", Source: "chat",
+		r.Cases[id] = &store.Case{ID: id, Title: "team " + name + " conversation", Status: store.TicketInProgress, Source: "chat",
 			Requester: who, RequesterClass: class, Team: name, Conversation: req.Conversation, Created: now, Updated: now}
 		return nil
 	})

@@ -312,7 +312,11 @@ func caseIDOf(c *store.Case) string {
 
 // EventMessage frames a routed event for the home inbox.
 func EventMessage(c store.Case, payload, note string) string {
-	hdr := fmt.Sprintf("[conductor event — case %s | source: %s | requester: %s (%s)", c.ID, c.Source, orDash(c.Requester), c.RequesterClass)
+	ref := c.ID
+	if c.Ticket != "" {
+		ref += " · ticket " + c.Ticket
+	}
+	hdr := fmt.Sprintf("[conductor event — case %s | source: %s | requester: %s (%s)", ref, c.Source, orDash(c.Requester), c.RequesterClass)
 	if c.Urgent {
 		hdr += " | URGENT"
 	}
@@ -340,7 +344,7 @@ func LedgerSummary(rec store.BotRecord) string {
 	var b strings.Builder
 	var open []*store.Case
 	for _, c := range rec.Cases {
-		if c.Status == "open" {
+		if store.Active(c.Status) {
 			open = append(open, c)
 		}
 	}
@@ -508,7 +512,7 @@ func SweepPrompt(cfg *config.Config, name string, rec store.BotRecord, sweepID, 
 	b.WriteString("## Already tracked (open cases — do not report again unless worse; reuse the key)\n\n")
 	var open []*store.Case
 	for _, c := range rec.Cases {
-		if c.Status == "open" {
+		if store.Active(c.Status) {
 			open = append(open, c)
 		}
 	}
