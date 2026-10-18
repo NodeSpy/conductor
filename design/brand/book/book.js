@@ -6,6 +6,7 @@ import { STATES as STATUS_STATES, CHANGE, GLYPH_STATE, mark, injectMarkCSS } fro
 import { summaryLine, quietState, exception as calmException, excRows, runStrip, byWorkflow, atAGlance, injectCalmCSS } from '../status/calm.js';
 import { ACTIVITY } from '../v2/data.js';
 import { FACES, faceSVG } from '../bot-identity/faces.js';
+import { DIRECTIONS, DIRECTION_FACES, dirSVG } from '../bot-identity/directions.js';
 import { env as scanEnv, rows as scanRows, KINDS, ACTIONS, ENV, lucide as rowIcon, injectScanCSS } from '../status/rows.js';
 import * as SCAN from '../v2/rows-data.js';
 injectMarkCSS(); injectCalmCSS(); injectScanCSS();
@@ -683,6 +684,13 @@ const facesGrid = (t) => `<div class="bf-grid">${FACES.map(([id, name, expr], k)
 const recolourMatrix = (t) => `<div class="bf-matrix" style="--cols:${BOT_COLOURS.length}"><span></span>${BOT_COLOURS.map((c) => `<span class="bf-ch">${c}</span>`).join('')}
   ${FACES.map(([id]) => `<span class="bf-rh">${id}</span>${BOT_COLOURS.map((c) => `<span class="bf-cell">${face(id, c, t, 48)}${face(id, c, t, 24)}</span>`).join('')}`).join('')}</div>
   <div class="bf-big">${BOT_COLOURS.map((c, k) => face(FACES[k % FACES.length][0], c, t, 96)).join('')}</div>`;
+const TONE = { light: '#ffffff', dark: '#000000' };
+const dface = (d, id, c, t, size) => dirSVG(d, id, { fill: botFill(c, t), ink: botInk(c, t), tone: TONE[t], rim: RIM[t], size });
+const DIR_COLOURS = ['teal', 'plum', 'olive'];
+const directionDemo = (d) => (t) => `<div class="bd-hero">${DIRECTION_FACES.map(([id, expr], k) => `<figure>${dface(d, id, DIR_COLOURS[k], t, 96)}<div class="bf-small">${dface(d, id, DIR_COLOURS[k], t, 48)}${dface(d, id, DIR_COLOURS[k], t, 24)}</div><figcaption>${expr}</figcaption></figure>`).join('')}</div>
+  <div class="bd-strip">${DIRECTION_FACES.map(([id]) => `<div>${BOT_COLOURS.map((c) => dface(d, id, c, t, 24)).join('')}</div>`).join('')}</div>
+  <div class="bd-row"><span class="bd-in">${dface(d, 'focus', 'teal', t, 24)}<b>Platform watch</b></span><span class="bd-in"><i style="background:${botFill('plum', t)};color:${botInk('plum', t)}">BS</i><b>billing-sre</b></span><span class="bd-in">${dface(d, 'beam', 'olive', t, 24)}<b>Triage</b></span></div>`;
+const directions = () => DIRECTIONS.map((d, k) => `<div class="bd-dir"><h4><span>${'ABC'[k]}</span>${d.name}</h4><p>${d.note}</p>${pair(directionDemo(d.id))}</div>`).join('');
 const initials = (name) => name.split(/[-\s_]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
 const fallbackDemo = (t) => `<div class="bf-fallback">${[['platform-sre', 'teal'], ['billing-sre', 'plum'], ['pr-review', 'rose'], ['triage', 'olive']].map(([n, c]) => `<span><i style="background:${botFill(c, t)};color:${botInk(c, t)}">${initials(n)}</i><b>${n}</b></span>`).join('')}
   <span><i style="background:${botFill('lagoon', t)};color:${botInk('lagoon', t)}">${rowIcon('telescope', 18)}</i><b>Icon and colour</b></span></div>`;
@@ -697,9 +705,11 @@ const VOICES = [
   ['Playful', 'A light touch in chat only, never in approvals, errors or risk.', 'db-prod-1 is getting full (86%). Task opened; I’ll go see what grew.'],
 ];
 ch('bots', 'Bot identity', 'A bot is recognisable at a glance: its face, its colour, its display name and tagline, and how it writes. The face and colour are its own; they never stand for a state.',
-  [['bot-faces', 'Faces'], ['bot-colours', 'Colours'], ['bot-rules', 'Where the colour goes'], ['bot-own', 'An icon of your own, and the fallback'], ['bot-voice', 'Voice presets'], ['bot-files', 'Files']],
+  [['bot-directions', 'Style directions (for review)'], ['bot-faces', 'Faces'], ['bot-colours', 'Colours'], ['bot-rules', 'Where the colour goes'], ['bot-own', 'An icon of your own, and the fallback'], ['bot-voice', 'Voice presets'], ['bot-files', 'Files']],
   () => `
-  ${sub('bot-faces', 'Faces', 'Twelve friendly robot faces, each with its own head shape and expression. The head takes the bot’s colour and the features are drawn in the theme’s ink, so any face works with any colour. Drawn to read at 24px (rows, the facts line) and to look good at 96px (the bot page, the chat header). They are Daylight’s own drawings, never derived from the logo: no arches and no dot under an arch.')}
+  ${sub('bot-directions', 'Style directions (for review)', 'Three directions for the faces, three faces each, before the full set of twelve is drawn in the chosen one. All three share one silhouette: the rounded square of the initials avatar, so grids and rows line up and a face sits beside initials without a jump. Identity comes from the face inside and the colour. Refined and minimal: a few precise shapes on one grid, one corner radius and one set of proportions; no cheeks, blush, sparkles or googly eyes. Each is shown at 96, 48 and 24px, in every identity colour at 24px, and in a list beside an initials tile.')}
+  ${directions()}
+  ${sub('bot-faces', 'Faces', 'The current set, to be replaced by the chosen direction. Twelve friendly robot faces, each with its own head shape and expression. The head takes the bot’s colour and the features are drawn in the theme’s ink, so any face works with any colour. Drawn to read at 24px (rows, the facts line) and to look good at 96px (the bot page, the chat header). They are Daylight’s own drawings, never derived from the logo: no arches and no dot under an arch.')}
   ${pair(facesGrid)}
   ${sub('bot-colours', 'Colours', 'Seven identity colours, every one at least 20° of hue from every status colour (danger, needs-you ember, waiting, passed, running, shadow) and a different lightness and chroma from the status marks, so a bot’s colour never reads as a state. Pastel in light, deep in dark; the face is AA on every fill. Any face takes any colour: the full grid, every face in every colour, at 48px and 24px:')}
   ${stack(recolourMatrix)}
