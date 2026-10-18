@@ -142,7 +142,7 @@
  {
   "from": "--ok",
   "to": "--color-status-success-fg",
-  "note": "Dots and bars: --color-status-success-solid. Passing rows stay ink: colour is for what needs attention."
+  "note": "The passed word is green (this token); the passed dot is --color-status-success-solid; chart bars for passed runs are --color-status-success-chart. Rows are never tinted."
  },
  {
   "from": "--run",

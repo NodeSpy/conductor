@@ -5,6 +5,7 @@ import { LOGOS, OFFICIAL_LOGO, kitDir } from '../tools/logos.mjs';
 import { STATES as STATUS_STATES, CHANGE, GLYPH_STATE, mark, injectMarkCSS } from '../status/marks.js';
 import { summaryLine, quietState, exception as calmException, excRows, runStrip, byWorkflow, atAGlance, injectCalmCSS } from '../status/calm.js';
 import { ACTIVITY } from '../v2/data.js';
+import { FACES, faceSVG } from '../bot-identity/faces.js';
 import { env as scanEnv, rows as scanRows, KINDS, ACTIONS, ENV, lucide as rowIcon, injectScanCSS } from '../status/rows.js';
 import * as SCAN from '../v2/rows-data.js';
 injectMarkCSS(); injectCalmCSS(); injectScanCSS();
@@ -80,8 +81,8 @@ const INFO = [
   ['Three levels of type', 'What (title or bold lead-in), why it matters (regular, secondary ink), machine detail (mono, small, tertiary, last). Nothing else.',
     'ci-fixer acme/web#1288 / Failed at step test. go test ./...: 2 failures (TestCheckout, TestRefund)',
     () => `<div class="ia-levels"><b>ci-fixer couldn’t fix the failing check on acme/web#1288</b><span>Its change made 2 tests fail. It stopped before pushing anything.</span><code>r-7ef0 · step test</code></div>`],
-  ['Colour only for what needs attention', 'Passing work is quiet: a small sage dot and an ink word, never a green row. Only a row that needs someone gets a coloured leading edge, its reason in words and one action, at the top. No row is ever tinted, and no status is a pill.',
-    '✓ ok · ✓ ok · × failed · ✓ ok · ◎ waiting · ✓ ok (every row coloured)',
+  ['Colour is the signal; failure comes first', 'Every state has its colour: passed is green, mark and word, in regular weight. What needs someone is bold, red or ember, gets a coloured leading edge, its reason in words and one action, and sits at the top, so on a mostly-green screen the rare failure is what you see first. No row is ever tinted, and no status is a pill.',
+    '✓ ok · ✓ ok · × failed · ✓ ok · ◎ waiting · ✓ ok (whole rows tinted, every state the same weight)',
     () => `<div class="ia-rows">${sampleRows()}</div>`],
   ['Say the risk plainly, where you decide', 'On approvals and a bot’s permissions, risk is a few plain words: “Changes production”, “Spends $1,800”, “Destroys”, “Grants access”. Most verbs need no risk label at all. Never a meter, bars or a ladder.',
     'risk ▂▄▆ · tier ▮▮▯▯ (a signal-strength meter)',
@@ -234,7 +235,7 @@ ch('colour', 'Colour', 'Warm cream and cocoa surfaces, sand neutrals, one ember 
   ${sub('semantic', 'Semantic tokens', 'The names components use. Each resolves to a different raw value per theme.')}
   ${stack((t) => semSwatches(t))}
 
-  ${sub('status', 'Status', 'One vocabulary of marks (<code>status/marks.js</code>), the same in tables, cards, the run strip, legends, the overview, the run page and on phones. The mark always carries its state colour, and the word is coloured only when a person is needed or the thing is live. Passed is a quiet sage dot and parked is slate pause bars, so they never share a hue or a shape. Rows are never tinted: a row that needs someone gets a thin leading edge, its reason and one action. Each state has fg (text), bg, border and solid (mark) tokens.')}
+  ${sub('status', 'Status', 'One vocabulary of marks (<code>status/marks.js</code>), the same in tables, cards, the run strip, legends, the overview, the run page and on phones. The mark always carries its state colour, and so does its word. Passed is green in regular weight; failed, needs you and waiting are bold, so failure still comes first. Passed is a small green dot and parked is slate pause bars, so they never share a hue or a shape. Rows are never tinted: a row that needs someone gets a thin leading edge, its reason and one action. Each state has fg (text), bg, border and solid (mark) tokens.')}
   ${stack((t) => statusCards(t))}
 
   ${sub('dataviz', 'Data visualisation', 'The palettes were built with the dataviz method and checked with its validator against <code>bg.surface</code> in both themes. Categorical slots are assigned in this order and never cycled, and a ninth series folds into “Other”.')}
@@ -668,6 +669,50 @@ ch('voice', 'Voice and tone', 'Plain, specific and calm. The interface talks to 
   ${sub('microcopy', 'Patterns')}
   ${stack(() => `<div class="micro">${microPatterns()}</div>`)}
   `);
+
+// =====================================================================
+// Bot identity
+// =====================================================================
+// Twelve faces (bot-identity/faces.js), recoloured with the identity palette (semantic.color.bot.*).
+const BOT_COLOURS = Object.keys(T.semantic.color.bot).filter((k) => !k.startsWith('$'));
+const botFill = (c, t) => resolve(`semantic.color.bot.${c}.bg`, t).hex;
+const botInk = (c, t) => resolve(`semantic.color.bot.${c}.fg`, t).hex;
+const RIM = { dark: 'rgba(244,238,228,.18)', light: '' };
+const face = (id, c, t, size) => faceSVG(id, { fill: botFill(c, t), ink: botInk(c, t), rim: RIM[t], size });
+const facesGrid = (t) => `<div class="bf-grid">${FACES.map(([id, name, expr], k) => { const c = BOT_COLOURS[k % BOT_COLOURS.length]; return `<figure>${face(id, c, t, 96)}<div class="bf-small">${face(id, c, t, 24)}${face(id, c, t, 32)}</div><figcaption><b>${name}</b><span>${expr} · <code>${id}</code></span></figcaption></figure>`; }).join('')}</div>`;
+const recolourMatrix = (t) => `<div class="bf-matrix" style="--cols:${BOT_COLOURS.length}"><span></span>${BOT_COLOURS.map((c) => `<span class="bf-ch">${c}</span>`).join('')}
+  ${FACES.map(([id]) => `<span class="bf-rh">${id}</span>${BOT_COLOURS.map((c) => `<span class="bf-cell">${face(id, c, t, 24)}</span>`).join('')}`).join('')}</div>
+  <div class="bf-big">${BOT_COLOURS.map((c, k) => face(FACES[k % FACES.length][0], c, t, 96)).join('')}</div>`;
+const initials = (name) => name.split(/[-\s_]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
+const fallbackDemo = (t) => `<div class="bf-fallback">${[['platform-sre', 'teal'], ['billing-sre', 'plum'], ['pr-review', 'rose'], ['triage', 'olive']].map(([n, c]) => `<span><i style="background:${botFill(c, t)};color:${botInk(c, t)}">${initials(n)}</i><b>${n}</b></span>`).join('')}
+  <span><i style="background:${botFill('lagoon', t)};color:${botInk('lagoon', t)}">${rowIcon('telescope', 18)}</i><b>Icon and colour</b></span></div>`;
+const placementDemo = (t) => `<div class="bf-place">
+  <div class="bf-hd">${face('focus', 'teal', t, 56)}<div><b>Platform watch</b><span>platform-sre · Keeps production healthy</span></div></div>
+  <div class="bf-msg" style="--bot-rule:${resolve('semantic.color.bot.teal.rule', t).hex}">${face('focus', 'teal', t, 24)}<div><b>Platform watch</b><p>Disk on db-prod-1 is at 86% and rising about 2% an hour. I’ve opened a task and I’m looking at what grew.</p></div></div>
+  <div class="bf-row">${face('focus', 'teal', t, 24)}<b>Platform watch</b><span class="c-status" data-s="danger">${sg('danger')}Failed</span><span class="bf-note">The status keeps its own colour; the bot’s colour is only behind its face.</span></div></div>`;
+const VOICES = [
+  ['Plain', 'The default. Short sentences, facts first, no flourish.', 'Disk on db-prod-1 is at 86%. I’ve opened a task.'],
+  ['Warm', 'Friendly and reassuring, still exact.', 'Heads up: db-prod-1 is at 86% disk. I’ve opened a task and I’m on it.'],
+  ['Terse', 'Fewest words; good for busy channels.', 'db-prod-1 disk 86%. Task opened.'],
+  ['Playful', 'A light touch in chat only, never in approvals, errors or risk.', 'db-prod-1 is getting full (86%). Task opened; I’ll go see what grew.'],
+];
+ch('bots', 'Bot identity', 'A bot is recognisable at a glance: its face, its colour, its display name and tagline, and how it writes. The face and colour are its own; they never stand for a state.',
+  [['bot-faces', 'Faces'], ['bot-colours', 'Colours'], ['bot-rules', 'Where the colour goes'], ['bot-own', 'An icon of your own, and the fallback'], ['bot-voice', 'Voice presets'], ['bot-files', 'Files']],
+  () => `
+  ${sub('bot-faces', 'Faces', 'Twelve friendly robot faces, each with its own head shape and expression. The head takes the bot’s colour and the features are drawn in the theme’s ink, so any face works with any colour. Drawn to read at 24px (rows, the facts line) and to look good at 96px (the bot page, the chat header). They are Daylight’s own drawings, never derived from the logo: no arches and no dot under an arch.')}
+  ${pair(facesGrid)}
+  ${sub('bot-colours', 'Colours', 'Seven identity colours, every one at least 20° of hue from every status colour (danger, needs-you ember, waiting, passed, running, shadow) and a different lightness and chroma from the status marks, so a bot’s colour never reads as a state. Pastel in light, deep in dark; the face is AA on every fill. Every face in every colour:')}
+  ${pair(recolourMatrix)}
+  ${why('Checks: <code>tools/bot-palette.mjs</code> writes <a href="bot-identity/PALETTE.md">bot-identity/PALETTE.md</a> (contrast, hue gap and distance to every status colour, in both themes), and <code>tools/tokens.mjs</code> gates the face-on-fill contrast with the other token pairs.')}
+  ${sub('bot-rules', 'Where the colour goes', 'Behind the bot’s face (its avatar, wherever it appears), and a 3px rule on the bot’s own chat messages (<code>--color-bot-*-rule</code>: the other theme’s fill, so it shows at 3:1 on either page). The name stays ink. Never on status marks, buttons, links, counts, row edges, charts, focus rings or text: those keep the system’s colours.')}
+  ${pair(placementDemo)}
+  ${sub('bot-own', 'An icon of your own, and the fallback', 'Instead of a face, a person can pick any Lucide icon plus one of the seven colours. Not allowed: the icons that already mean something (the object and action icons, the status marks, the nav icons, the passkey). With nothing picked, the bot shows its initials (the first letters of its first two words) on a colour chosen by its id, so it stays the same everywhere.')}
+  ${pair(fallbackDemo)}
+  ${sub('bot-voice', 'Voice presets', 'How a bot writes in chat, from the voice rules above. Every preset keeps them: plain words, say what changes, state the risk plainly, no internals. Approvals, errors and risk are always written in conductor’s own voice, whatever the preset.')}
+  <div class="c-table-wrap"><table class="c-table bf-voice"><thead><tr><th>Preset</th><th>How it writes</th><th>The same message</th></tr></thead><tbody>${VOICES.map(([n, d, ex]) => `<tr><td><b>${n}</b></td><td>${d}</td><td>${ex}</td></tr>`).join('')}</tbody></table></div>
+  ${sub('bot-files', 'Files', 'One SVG per face in <a href="bot-identity/faces/">bot-identity/faces/</a>, swappable, with <a href="bot-identity/faces/manifest.json">manifest.json</a> listing the ids, names, expressions and the palette in both themes. The ids are the config’s <code>avatar.preset</code> values: stable, never renamed. The files take <code>--bot-face</code>, <code>--bot-ink</code> and <code>--bot-rim</code>; the colours are the <code>--color-bot-*-bg</code>, <code>-fg</code> and <code>-rule</code> tokens.')}
+  `);
+
 
 // =====================================================================
 // 9. Logo (official: Fermata, strengthened, in assets/; explored marks in logo-kits/)

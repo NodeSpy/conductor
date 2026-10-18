@@ -220,7 +220,7 @@ export const MIGRATION = [
   ['--accent-2', '--color-accent-hover', ''],
   ['--accent-ink', '--color-text-on-accent', ''],
   ['--accent-wash', '--color-accent-subtle', ''],
-  ['--ok', '--color-status-success-fg', 'Dots and bars: --color-status-success-solid. Passing rows stay ink: colour is for what needs attention.'],
+  ['--ok', '--color-status-success-fg', 'The passed word is green (this token); the passed dot is --color-status-success-solid; chart bars for passed runs are --color-status-success-chart. Rows are never tinted.'],
   ['--run', '--color-status-running-fg', 'Dots and bars: --color-status-running-solid.'],
   ['--wait', '--color-status-warning-fg', 'Dots and bars: --color-status-warning-solid.'],
   ['--fail', '--color-status-danger-fg', 'Dots and bars: --color-status-danger-solid.'],

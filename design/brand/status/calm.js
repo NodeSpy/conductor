@@ -1,6 +1,7 @@
 // Calm by default: the four components that keep a screen quiet until something needs you.
 //   summaryLine  normal work collapses into one quiet line ("10 finished · 9 passed · 1 parked"), expandable
-//   runStrip     activity over time as one aggregate: runs per hour as quiet columns, failures marked
+//   runStrip     activity over time as one aggregate: runs per hour, passed in a soft green with the
+//                failures stacked on top in red and marked
 //   byWorkflow   the exceptions, grouped by workflow; healthy workflows collapse to a count
 //                (together: the aggregate-plus-exceptions pattern. It scales to any number of
 //                workflows and runs, unlike one lane per workflow, which doesn't.)
@@ -38,10 +39,15 @@ export function runStrip(hours, { axis = ['12 h ago', 'now'] } = {}) {
     const n = hours.length, top = 18, max = Math.max(...hours.map(([a, b]) => a + b), 1), slot = width / n, bw = Math.max(slot - 3, 2);
     let g = '';
     hours.forEach(([ok, bad], i) => {
-      const h = ((ok + bad) / max) * (height - top), x = i * slot + (slot - bw) / 2;
-      g += `<rect x="${x.toFixed(1)}" y="${(height - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(h, 1).toFixed(1)}" rx="2" class="rs-bar"><title>${ok + bad} runs${bad ? `, ${bad} failed` : ''}</title></rect>`;
+      // Passed runs in the soft success fill; failures stacked on top in red, with a 2px gap between.
+      const unit = (height - top) / max, h = (ok + bad) * unit, hOk = ok * unit, x = i * slot + (slot - bw) / 2;
+      const tip = `<title>${ok + bad} runs: ${ok} passed${bad ? `, ${bad} failed` : ''}</title>`;
+      if (ok) g += `<rect x="${x.toFixed(1)}" y="${(height - hOk).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(hOk, 1).toFixed(1)}" rx="2" class="rs-bar">${tip}</rect>`;
+      // A non-zero failure count is never thinner than 4 units, so one red run among many still shows.
+      const hBad = Math.max(bad * unit - (ok ? 2 : 0), 4);
+      if (bad) g += `<rect x="${x.toFixed(1)}" y="${(height - hOk - (ok ? 2 : 0) - hBad).toFixed(1)}" width="${bw.toFixed(1)}" height="${hBad.toFixed(1)}" rx="2" class="rs-fail">${tip}</rect>`;
       if (bad) {
-        const cx = x + bw / 2, cy = height - h - 9;
+        const cx = x + bw / 2, cy = height - hOk - (ok ? 2 : 0) - Math.max(bad * unit - (ok ? 2 : 0), 4) - 9;
         g += chartMark('failed', cx, cy, size, `${bad} failed`).replace('<svg ', '<svg data-labelled="1" ');
         if (bad > 1) g += `<text x="${(cx + 8).toFixed(1)}" y="${(cy + 4).toFixed(1)}" class="rs-n">${bad}</text>`;
       }
@@ -73,7 +79,7 @@ export const CALM_CSS = `
 .at-glance dd span{font-size:13px;color:var(--color-text-tertiary)}
 @media (max-width:600px){.at-glance{grid-template-columns:repeat(3,1fr)}.at-glance>div:nth-child(4){padding-left:0;border-left:0}.at-glance>div:nth-child(n+4){border-top:1px solid var(--color-border-subtle)}}
 .run-strip{margin:0}.run-strip>svg{display:block;width:100%;height:auto;overflow:visible}.run-strip>.rs-p{display:none}@media (max-width:600px){.run-strip>.rs-d{display:none}.run-strip>.rs-p{display:block}}
-.run-strip .rs-bar{fill:var(--run-strip-bar,var(--color-border-default))}
+.run-strip .rs-bar{fill:var(--run-strip-bar,var(--color-status-success-chart))}.run-strip .rs-fail{fill:var(--run-strip-failed,var(--color-status-danger-solid))}
 .run-strip .rs-n{font-size:11.5px;font-weight:700;fill:var(--color-status-danger-fg)}
 .run-strip figcaption{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:6px;font-size:12px;color:var(--color-text-tertiary)}
 .run-strip figcaption b{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--color-text-secondary)}

@@ -403,7 +403,7 @@ body { font-variation-settings: 'SOFT' 100, 'WONK' 0; }  /* Fraunces' soft axis;
 .ia-lead { margin: 0; font: var(--type-body-l); color: var(--color-text-secondary); } .ia-lead b { color: var(--color-text-primary); }
 .ia-levels { display: grid; gap: 2px; } .ia-levels b { font: var(--type-h3); } .ia-levels span { color: var(--color-text-secondary); } .ia-levels code, .pt-needs code, .pt-need code { font: var(--type-code-s); color: var(--color-text-tertiary); background: none; border: 0; padding: 0; }
 .ia-rows { display: grid; } .ia-row { display: grid; grid-template-columns: 20px 1fr auto; gap: var(--space-2); align-items: center; height: var(--size-row); border-bottom: var(--border-width) solid var(--color-border-subtle); color: var(--color-text-primary); }
-.ia-row svg { width: 16px; height: 16px; color: var(--s-fg); } .ia-row.quiet svg { color: var(--color-text-tertiary); }
+.ia-row svg { width: 16px; height: 16px; color: var(--s-fg); } .ia-row.quiet svg { color: var(--s-solid, var(--color-text-tertiary)); }
 .ia-row:not(.quiet) { box-shadow: inset 3px 0 0 var(--s-solid); padding-left: 10px; } .ia-row em { font-style: normal; font: var(--type-caption); font-weight: 700; color: var(--s-fg); padding-right: var(--space-2); }
 .ia-nums { display: grid; grid-template-columns: auto auto; justify-content: start; gap: 4px var(--space-8); font-variant-numeric: tabular-nums; text-align: right; }
 .ia-groups { display: grid; gap: var(--space-3); } .ia-groups b { display: flex; gap: var(--space-2); align-items: center; font: var(--type-h4); } .ia-groups em { font-style: normal; font: var(--type-caption); background: var(--color-bg-sunken); border-radius: 999px; padding: 0 7px; } .ia-groups span:not(.c-count) { color: var(--color-text-secondary); font: var(--type-body-s); }
@@ -475,3 +475,25 @@ body { font-variation-settings: 'SOFT' 100, 'WONK' 0; }  /* Fraunces' soft axis;
 .pt-ov-cols > div { border-top: 2px solid var(--color-border-default); padding-top: 8px; }
 .pt-ov-cols h4 { margin: 0 0 4px; font: var(--type-h4); } .pt-ov-cols h4 span { color: var(--color-text-tertiary); font-weight: 400; }
 .ia-more summary { cursor: pointer; font: var(--type-caption); color: var(--color-text-tertiary); margin-top: 4px; }
+
+/* Bot identity */
+.bf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--space-5) var(--space-4); }
+.bf-grid figure { margin: 0; display: grid; justify-items: center; gap: 8px; }
+.bf-small { display: flex; gap: 10px; align-items: center; }
+.bf-grid figcaption { display: grid; justify-items: center; gap: 2px; text-align: center; }
+.bf-grid figcaption b { font: var(--type-label); color: var(--color-text-primary); }
+.bf-grid figcaption span { font: var(--type-caption); color: var(--color-text-secondary); }
+.bf-grid code { font: var(--type-code-s); }
+.bf-matrix { display: grid; grid-template-columns: 70px repeat(var(--cols), minmax(0, 1fr)); gap: 6px 4px; align-items: center; max-width: 560px; }
+.bf-ch, .bf-rh { font: var(--type-caption); color: var(--color-text-secondary); }
+.bf-ch { text-align: center; } .bf-cell { display: grid; place-items: center; }
+.bf-big { display: flex; flex-wrap: wrap; gap: 14px; margin-top: var(--space-5); }
+.bf-fallback { display: flex; flex-wrap: wrap; gap: 14px 26px; }
+.bf-fallback span { display: inline-flex; align-items: center; gap: 10px; }
+.bf-fallback i { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; font: 700 13px var(--font-family-sans); font-style: normal; letter-spacing: .02em; }
+.bf-fallback b { font-weight: 600; }
+.bf-place { display: grid; gap: var(--space-4); max-width: 640px; }
+.bf-hd { display: flex; gap: 14px; align-items: center; } .bf-hd b { display: block; font: var(--type-h3); } .bf-hd span { color: var(--color-text-secondary); font: var(--type-body-s); }
+.bf-msg { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px; padding: 10px 14px; background: var(--color-bg-surface); border-radius: var(--radius-md); box-shadow: inset 3px 0 0 var(--bot-rule); }
+.bf-msg b { font-weight: 600; } .bf-msg p { margin: 2px 0 0; color: var(--color-text-primary); }
+.bf-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; } .bf-row b { font-weight: 600; } .bf-note { font: var(--type-caption); color: var(--color-text-tertiary); }

@@ -2,13 +2,14 @@
 // from here, so a state has the same shape, colour and word everywhere. tools/mark-check.mjs
 // verifies that every rendered [data-mark] matches its token and appears in its chart's legend.
 //
-// Colour rules: the mark always carries its state colour. The word is coloured only when a person
-// is needed or the thing is live (failed, needs you, waiting, running, shadow); passed and parked
-// words stay ink. Passed is a quiet sage dot; parked is slate pause bars: never the same hue or shape.
+// Colour rules: the mark always carries its state colour. Passed is green, mark and word, in regular
+// weight; the states that need a person (failed, needs you, waiting) are bold, so on a mostly-green
+// screen the rare failure still comes first. Parked and not-reached words stay ink. Passed is a small
+// green dot; parked is slate pause bars: never the same hue or shape.
 import { STATUS } from '../icons/icons.js';
 
 export const STATES = {
-  passed:  { word: 'Passed',    glyph: 'success',   mark: '--color-status-success-solid', fg: null,                           shape: 'filled dot' },
+  passed:  { word: 'Passed',    glyph: 'success',   mark: '--color-status-success-solid', fg: '--color-status-success-fg',    shape: 'filled dot' },
   running: { word: 'Running',   glyph: 'running',   mark: '--color-status-running-solid', fg: '--color-status-running-fg',    shape: 'open arc', spin: true },
   failed:  { word: 'Failed',    glyph: 'danger',    mark: '--color-status-danger-solid',  fg: '--color-status-danger-fg',     shape: 'cross', attn: true },
   needs:   { word: 'Needs you', glyph: 'needs-you', mark: '--color-accent-default',       fg: '--color-text-accent',          shape: 'diamond', attn: true },

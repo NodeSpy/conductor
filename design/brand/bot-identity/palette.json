@@ -1,0 +1,90 @@
+{
+ "light": [
+  {
+   "name": "olive",
+   "hue": 102,
+   "bg": "#afa767",
+   "fg": "#2a231c"
+  },
+  {
+   "name": "lime",
+   "hue": 124,
+   "bg": "#cce1a7",
+   "fg": "#2a231c"
+  },
+  {
+   "name": "teal",
+   "hue": 182,
+   "bg": "#6cb4a8",
+   "fg": "#2a231c"
+  },
+  {
+   "name": "lagoon",
+   "hue": 206,
+   "bg": "#a9e3eb",
+   "fg": "#2a231c"
+  },
+  {
+   "name": "plum",
+   "hue": 316,
+   "bg": "#ba94c9",
+   "fg": "#2a231c"
+  },
+  {
+   "name": "rose",
+   "hue": 348,
+   "bg": "#fec4e0",
+   "fg": "#2a231c"
+  },
+  {
+   "name": "stone",
+   "hue": 70,
+   "bg": "#c4bcb4",
+   "fg": "#2a231c"
+  }
+ ],
+ "dark": [
+  {
+   "name": "olive",
+   "hue": 102,
+   "bg": "#726b33",
+   "fg": "#f4eee4"
+  },
+  {
+   "name": "lime",
+   "hue": 124,
+   "bg": "#4a592a",
+   "fg": "#f4eee4"
+  },
+  {
+   "name": "teal",
+   "hue": 182,
+   "bg": "#0a534a",
+   "fg": "#f4eee4"
+  },
+  {
+   "name": "lagoon",
+   "hue": 206,
+   "bg": "#0a6770",
+   "fg": "#f4eee4"
+  },
+  {
+   "name": "plum",
+   "hue": 316,
+   "bg": "#583a64",
+   "fg": "#f4eee4"
+  },
+  {
+   "name": "rose",
+   "hue": 348,
+   "bg": "#7c4c65",
+   "fg": "#f4eee4"
+  },
+  {
+   "name": "stone",
+   "hue": 70,
+   "bg": "#423c36",
+   "fg": "#f4eee4"
+  }
+ ]
+}

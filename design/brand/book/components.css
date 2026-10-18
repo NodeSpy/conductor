@@ -268,6 +268,8 @@
 .c-status svg { width: 12px; height: 12px; flex: none; color: var(--s-solid); }
 .c-status[data-s="danger"], .c-status[data-s="accent"], .c-status[data-s="warning"] { color: var(--s-fg); font-weight: 700; }
 .c-status[data-s="running"] { color: var(--s-fg); }
+/* Passed is green, in regular weight: calm, while the states that need someone are bold. */
+.c-status[data-s="success"], .c-badge[data-s="success"] { color: var(--s-fg); font-weight: 400; }
 .c-table td .c-status svg, .c-table td .c-badge svg { width: 12px; height: 12px; vertical-align: 0; color: var(--s-solid); }
 .c-table tr.attn td:first-child { box-shadow: inset 3px 0 0 var(--s-solid); }
 .c-table tr.attn td { height: auto; padding-top: calc(var(--table-cell-y) + 4px); padding-bottom: calc(var(--table-cell-y) + 4px); }

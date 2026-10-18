@@ -15,6 +15,8 @@ This is the single source of truth for how conductor looks, reads and behaves on
 
 ## Changelog
 
+- **2026-10-18. Bot identity.** Twelve bot faces (`bot-identity/faces/`, ids for `avatar.preset`), seven identity colours that keep clear of every status hue (`--color-bot-*`), where the colour may and may not go, the icon-and-colour option, the initials fallback and voice presets. A new book chapter shows the set in both themes, at both sizes, in every colour.
+- **2026-10-18. Passed is green.** The passed mark and word now use the success green everywhere, and chart bars for passed runs use a softer success fill with failures stacked on top in red. New token `status.success.chart`; `status.success.solid` moves from sage to green. A mostly-green screen still reads calm: passed is regular weight, while failures are bold, red, edged and listed first. Passed and parked still differ in hue and shape.
 - **2026-10-17. Brought up to date with every decision so far.** Superseded explorations moved to the archive, which is labelled as not current and is out of the main navigation. The brand book now shows only the current system. This file was rewritten rather than appended to.
   - **Removed:** the “since you last looked” digest; one lane per workflow; meter or bar risk visuals; the greeting and summary sentences that restate the screen; the sunrise motif and every illustration made from the logo; pill or capsule badges, counts and filters; tinted rows; step traces in lists; the calm-round components (collapsed summary lines for normal work, the “one loud thing” card, the loudness budget and its check); run tabs and previous/next between runs; export buttons; Pause/Run on the overview; captions that explain obvious controls.
   - **Added or made current:** the object and action icons, environment tags and the fixed row anatomy; At a glance (four tiles); the runs-per-hour strip with exceptions grouped by workflow; the approved Overview; approval tabs for technical decisions, with a colourised plan, and a sticky decision bar; the passkey only on actions that authenticate; the information architecture (Activity holds the run history, one System area, bots in folders).
@@ -35,7 +37,7 @@ This is the single source of truth for how conductor looks, reads and behaves on
 | Direction | Daylight, in light and dark. Pages follow the OS; an explicit theme always beats it. | Plain language first, colour kept for what needs attention, and legible type throughout. |
 | Logo | Fermata, strengthened (the `fermata-bold` kit, in `assets/`). Never altered, decorated, animated or turned into an illustration. | It holds its own on cream and says what conductor does: nothing moves until you release it. |
 | Information design | Keep the information; make every item identifiable at a glance (icons for what it is, environment tags, status marks, attention order, one row anatomy). Fold only hashes, ids and raw payloads. | The problem was never the amount; it was having to read every item to know what it was and whether it mattered. |
-| Status | Grouped rows (needs attention → running now → finished) with margin marks: a mark and a word. A coloured leading edge only on rows that need someone. No tinted rows, no pills, no step traces in lists. | Position and a small mark carry the state; the two failures don’t hide among eleven green rows. |
+| Status | Grouped rows (needs attention → running now → finished) with margin marks: a mark and a word. Passed is green (mark and word) in regular weight. A coloured leading edge only on rows that need someone. No tinted rows, no pills, no step traces in lists. | Green says “passed” at a glance; weight, edge and position keep the rare failure first on a mostly-green screen. |
 | Labels | Status labels, filters, counts and tags each have their own treatment, and none is a pill. | A pill for everything made states, facts and controls look alike. |
 | Risk | Plain words where someone decides (approvals, a bot’s permissions): “Changes production”, “Spends $1,800”, “Destroys”, “Grants access”. No meters, bars or ladders. | Bars read as signal strength, not danger. The visual marker for risk is still a proposal on the archive, not part of the system. |
 | Scale | No view grows linearly with the number of workflows, bots or runs. | One lane per workflow broke at twenty workflows. |
@@ -58,7 +60,7 @@ conductor produces runs, cases, approvals, logs, diffs and bot activity around t
 3. **A plain headline, the technical detail beneath.** “Replace the production web server”, then why it matters, then `p12 · infra@3f2a9c1d · +1 ~2 −0` in mono, last.
 4. **Keep the information; fold only what is secondary.** Everything a person uses to understand or decide stays visible. Only hashes, ids and raw payloads go behind a disclosure.
 5. **Three levels of type, and only three.** What (title or bold lead-in), why it matters (regular, secondary ink), machine detail (mono, small, tertiary, at the end).
-6. **Colour only for what needs attention.** Passing work is ink with a small sage mark. Only a row that needs someone gets a coloured leading edge, its reason in words and one action.
+6. **Colour is the signal; failure comes first.** Passed is green, mark and word, in regular weight. What needs someone is bold, red or ember, gets a coloured leading edge, its reason in words and one action, and sits at the top. No row is ever tinted.
 7. **Say the risk plainly, where you decide.** A few words on approvals and permissions; most verbs need no risk label.
 8. **A header sentence must add information.** No greetings, and no sentence that restates what is below it. A header line exists only to say something not already on the screen: an expiry, a scope, a filter that hides rows.
 9. **Views that don’t grow with the fleet.** Runs over time are one strip with failures marked; exceptions are grouped by workflow; healthy workflows collapse to a count.
@@ -169,7 +171,7 @@ Every status mark, in a table, card, the run strip, a legend, the overview, the 
 
 | State | Mark | Colour (light · dark) | Word |
 |---|---|---|---|
-| Passed | filled dot, small (r 3.4 on the 16 grid) | sage `#568663` · `#6fa07c` | ink (quiet: it is most marks) |
+| Passed | filled dot, small (r 3.4 on the 16 grid) | green `#059149` · `#59c47c` (`status.success.solid`) | green text, regular weight (`status.success.fg`) |
 | Running | open arc (spins; static under reduced motion) | blue `#2f76db` · sky `#51b7e8` | blue |
 | Failed | cross | wine `#8a032e` · salmon `#ffa9b0` | red text (`status.danger.fg`) |
 | Needs you | diamond | ember (`accent.default`) | ember text (`text.accent`) |
@@ -179,15 +181,16 @@ Every status mark, in a table, card, the run strip, a legend, the overview, the 
 | Shadow | half disc | violet | violet text |
 | Staged (not a status) | dashed ring | blue | blue text |
 
-- **Passed and parked never share a hue or a shape:** a sage dot vs slate pause bars.
-- **The mark always carries its colour.** The word is coloured only when a person is needed or the thing is live.
+- **Passed and parked never share a hue or a shape:** a green dot vs slate pause bars.
+- **Charts:** passed runs are a softer, greyer green (`status.success.chart`, sage, ≥ 3:1 on every surface), with failures stacked on top in `status.danger.solid` and marked, so a mostly-passed chart reads calm and the red pops first.
+- **The mark always carries its colour, and so does its word.** Passed is regular weight; failed, needs you and waiting are bold; parked and not reached stay ink.
 - **No tinted rows, pills or capsules.** In a list, rows are grouped: **Needs attention** first (failed or needs you), then **Running now**, then **Finished**, which stays listed and is paged. Only a row that needs someone gets a 3px leading edge in its mark’s colour, its reason as a plain sentence and one action.
 - **Status labels, filters, counts and tags each have their own treatment, and none is a pill:** a status label is a mark and a word; a filter is a rectangle that toggles; a count is a numeral, in ember only where a person is needed; a tag (an environment, “read only”) is a small outlined label.
 - **No step trace in lists.** Step detail lives on the run page as a collapsible tree, where a nested workflow call is one node with its own status and the failing path opens by itself.
 - **Every chart mark is explained:** labelled in words beside it (the run strip, `data-labelled`) or listed in its legend. Legends are generated from the same list (`legend()`).
 
 **Checks.**
-- `tools/status-cvd.mjs` (the dataviz skill’s validator, run pairwise against `bg.surface`) writes `tokens/STATUS-CVD.md`. The five table states (passed, running, failed, needs you, parked) are distinct by colour for colour-blind readers in dark (all 10 pairs) and in light (9 of 10). The exception is passed vs needs you in light, at CVD ΔE 6.5: the floor band, with normal-vision ΔE 27 and different shapes. Passed vs parked is ΔE 11–12 for colour-blind readers and 12.7 to normal vision: clearly different hues, plus different shapes. Waiting and shadow (label-only states) lean on shape against needs you and running. All marks are ≥ 3:1 on every surface, and no two states share a shape.
+- `tools/status-cvd.mjs` (the dataviz skill’s validator, run pairwise against `bg.surface`) writes `tokens/STATUS-CVD.md`. All marks are ≥ 3:1 on every surface and no two states share a shape. With passed green, colour alone separates most pairs for colour-blind readers; where it doesn’t, shape does: passed vs waiting in light (CVD ΔE 5.6, a filled dot vs an outlined triangle), passed vs needs you in light and passed vs failed in dark (the floor band, a dot vs a diamond or a cross). Passed vs parked is clearly different in hue (ΔE 14–20) and in shape.
 - `tools/mark-check.mjs` loads every page in WebKit (iPhone and desktop) and Chromium, with the OS light and dark. It fails if a rendered mark isn’t its state’s token, a chart mark is neither labelled on the chart nor in its legend, a legacy status glyph bypasses the vocabulary, or a needs-attention row’s edge differs from its mark.
 
 The explored alternatives are on the [archive](archive/index.html).
@@ -324,6 +327,17 @@ conductor talks to someone who is nervous about giving an AI access to productio
 
 ---
 
+## Bot identity
+
+A bot is recognisable at a glance: its **face**, its **colour**, a **display name** (separate from its config id), a one-line **tagline** and a **voice**. The face and colour belong to the bot; they never stand for a state. The book shows the full set (*Bot identity*).
+
+- **Faces** (`bot-identity/faces/`, one SVG each, with `manifest.json`): twelve friendly robot faces, each with its own head shape and expression: `beam` (cheerful), `focus` (focused), `curio` (curious), `doze` (sleepy), `grit` (determined), `imp` (mischievous), `calm` (calm), `wow` (surprised), `wink` (playful), `shy` (bashful), `chirp` (excited), `steady` (steady). The ids are the config’s `avatar.preset` values: stable, never renamed; add a face rather than change one. Drawn on a 48-unit grid with bold features, to read at 24px (rows, the facts line) and look good at 96px (the bot page, the chat header). Daylight’s own drawings, **never derived from the logo**: no arches and no dot under an arch.
+- **Colours** (`--color-bot-<name>-bg`, `-fg`, `-rule`; `tools/bot-palette.mjs`): olive, lime, teal, lagoon, plum, rose and stone. Every hue is at least 20° from every status hue, and the fills differ in lightness and chroma from the status marks, so a bot’s colour never reads as a state. Pastel in light, deep in dark; the face is drawn in the theme’s ink and is AA on every fill. The checks are in [`bot-identity/PALETTE.md`](bot-identity/PALETTE.md).
+- **Where the colour goes:** behind the bot’s face, wherever it appears, and a 3px rule on the bot’s own chat messages (`-rule`: the other theme’s fill, 3:1 on either page). The bot’s name stays ink. **Never** on status marks, buttons, links, counts, row edges, charts, focus rings or text.
+- **An icon of your own:** any Lucide icon plus one of the seven colours, except the icons that already mean something (the object and action icons, the status marks, the nav icons, the passkey).
+- **Fallback:** the initials (first letters of the first two words of the name) on a colour chosen from the bot’s id, so it is the same everywhere.
+- **Voice presets:** Plain (the default), Warm, Terse and Playful (a light touch in chat only). Every preset keeps the voice rules above; approvals, errors and risk are always in conductor’s own voice.
+
 ## Theming robustness
 
 **The iPhone bug.** On an iPhone (paseo’s in-app browser, WebKit, OS in dark mode), an early direction page (now on the archive) showed faint, light-grey text on the cream page, and every specimen labelled LIGHT rendered with a dark surface. **Cause:** the pages never declared a colour scheme. With no `color-scheme`, browsers that auto-darken pages repaint their colours: Chromium’s force-dark, and in-app WebViews that apply “algorithmic darkening”. That flipped our forced-light surfaces dark while some text was left in its light-theme colours. The token-pair contrast check passed, because the tokens were right; what the reader saw was not.
@@ -360,7 +374,7 @@ The prototype adopts Daylight in one pass:
 3. **Rename** every prototype variable to its Daylight token, using the table in `tokens/migration.json` (also in the book and summarised below). Each row has a note where the meaning or value changes, not just the name. The ones that change behaviour:
    - `--accent` used as **text** (43 places across the CSS): use `--color-text-accent`. Keep `--color-accent-default` for fills.
    - `--ink-3` → `--color-text-tertiary` (now AA on cards).
-   - `--ok`, `--run`, `--wait`, `--fail`, `--idle`, `--shadow`: use `-fg` for text and glyphs, `-solid` for dots and bars. **Passing rows stop being green**: they are ink, with the small sage passed mark.
+   - `--ok`, `--run`, `--wait`, `--fail`, `--idle`, `--shadow`: use `-fg` for text and glyphs, `-solid` for dots and bars. **Passed is green** (mark and word, regular weight), but rows are never tinted green.
    - Inputs and checkboxes: `--color-border-control`.
 4. **Type:** body to `--type-body-m` (15px). Titles to `--type-h1`/`--type-h2` (Fraunces, upright), with long or generated titles (proposal, run and step titles) moved to `--type-h3` in the sans. **Decorative mono becomes sans with tabular figures**: the top strip, crumbs, counts, times and costs. Mono stays only for ids, digests, YAML and logs, at least 12px.
 5. **Shape:** radii from `--radius-*` (controls 10, cards 14, tags 3; nothing is a pill), shadows from `--shadow-*`. Drop the film grain and the dot grid on app surfaces.
@@ -398,7 +412,7 @@ The prototype adopts Daylight in one pass:
 | `--accent-2` | `--color-accent-hover` |  |
 | `--accent-ink` | `--color-text-on-accent` |  |
 | `--accent-wash` | `--color-accent-subtle` |  |
-| `--ok` | `--color-status-success-fg` | Dots and bars: --color-status-success-solid. Passing rows stay ink: colour is for what needs attention. |
+| `--ok` | `--color-status-success-fg` | The passed word is green (this token); the passed dot is --color-status-success-solid; chart bars for passed runs are --color-status-success-chart. Rows are never tinted. |
 | `--run` | `--color-status-running-fg` | Dots and bars: --color-status-running-solid. |
 | `--wait` | `--color-status-warning-fg` | Dots and bars: --color-status-warning-solid. |
 | `--fail` | `--color-status-danger-fg` | Dots and bars: --color-status-danger-solid. |

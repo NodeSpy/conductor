@@ -10,7 +10,7 @@ const read = (sub) => Object.fromEntries(fs.readdirSync(path.join(dir, sub)).fil
   .map((f) => [f.slice(0, -4), inner(fs.readFileSync(path.join(dir, sub, f), 'utf8'))]));
 // Status glyph meanings, shown in the book next to each glyph.
 const LABELS = {
-  success: 'Passed, done, healthy (quiet green)', warning: 'Waiting, at risk, degraded', danger: 'Failed, refused', info: 'News, updates',
+  success: 'Passed, done, healthy (green)', warning: 'Waiting, at risk, degraded', danger: 'Failed, refused', info: 'News, updates',
   running: 'Running (rotates)', neutral: 'Parked, idle (slate)', skipped: 'Skipped, cancelled', shadow: 'Shadow mode: observes, never acts',
   'needs-you': 'Needs you (accent)',
   staged: 'Staged change, not applied',
