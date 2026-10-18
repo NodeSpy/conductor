@@ -67,6 +67,7 @@ func TestCheck(t *testing.T) {
 		"empty":                  {nil, "not a PNG, JPEG or WebP image"},
 		"png + html after IEND":  {append(append([]byte{}, good...), []byte("<html><script>alert(1)</script></html>")...), "bytes after the image's end"},
 		"png + zip after IEND":   {append(append([]byte{}, good...), []byte("PK\x03\x04payload")...), "bytes after the image's end"},
+		"png, SCRIPT in tEXt":    {withChunk(good, "tEXt", []byte("Comment\x00<SCRIPT SRC=x></SCRIPT>")), "markup in its text metadata"},
 		"png, script in tEXt":    {withChunk(good, "tEXt", []byte("Comment\x00<script>alert(1)</script>")), "markup in its text metadata"},
 		"png, svg in iTXt":       {withChunk(good, "iTXt", []byte("XML\x00\x00\x00\x00\x00<svg onload=x>")), "markup in its text metadata"},
 		"png, plain tEXt":        {withChunk(good, "tEXt", []byte("Comment\x00just a caption")), "png"},
