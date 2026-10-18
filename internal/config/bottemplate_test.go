@@ -328,6 +328,7 @@ func TestTemplateForbiddenKeys(t *testing.T) {
 		"    seed: /etc":                                                                              "must be a path inside the pack",
 		"    connectors:\n      gh: my-gh-connector":                                                  "is not a version constraint — a template declares the connector it needs",
 		"    triggers:\n      - { name: x, on: slack.message }":                                       "on: is <input>.<event>",
+		"    credentials: { secrets_via: env }":                                                       "field credentials not found",
 	} {
 		man := sreKitManifest
 		switch {
@@ -343,6 +344,9 @@ func TestTemplateForbiddenKeys(t *testing.T) {
 			man = strings.Replace(man, "    charter_file: charter.md", frag, 1)
 		case strings.HasPrefix(frag, "    seed:"):
 			man = strings.Replace(man, "    seed: seed", frag, 1)
+		case strings.HasPrefix(frag, "    credentials:"):
+			// a key the forbidden list does not name: strict decoding is the backstop
+			man = strings.Replace(man, "    scope: compute and deploys\n", "    scope: compute and deploys\n"+frag+"\n", 1)
 		}
 		_, _, err := loadTemplateCfg(t, man, "")
 		if want == "" {
@@ -479,5 +483,24 @@ func TestTemplateCatalog(t *testing.T) {
 	}
 	if _, _, err := RegistryDir("git://example.com/x"); err == nil {
 		t.Fatal("a plaintext registry")
+	}
+}
+
+// What the operator sets wins over the template's: description, a
+// collection of the same name.
+func TestTemplateOperatorWins(t *testing.T) {
+	c, _, err := loadTemplateCfg(t, sreKitManifest, `bots:
+  sre:
+    use: kit/first-line
+    description: "my own words"
+    collections:
+      postmortems: { dir: reviews, writers: [operator], fields: { title: { type: string, required: true } } }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := c.Bots["sre"]
+	if m.Description != "my own words" || m.Collections["postmortems"].Dir != "reviews" || m.Scope != "compute and deploys" {
+		t.Fatalf("operator's settings lost: %+v", m)
 	}
 }

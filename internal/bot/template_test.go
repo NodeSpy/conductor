@@ -111,6 +111,21 @@ func TestTemplateSeedsMemory(t *testing.T) {
 	if ch, _ := f.cfg.BotCharter("sre"); ch != "Be careful." {
 		t.Fatalf("charter from memory: %q", ch)
 	}
+	// A document the bot evolves, where the template did not change, is the
+	// bot's: nothing to propose.
+	if _, _, err := f.svc.WriteMemory(ctx, Actor{Bot: "sre", Role: config.BotRoleHome}, MemoryWrite{Path: "knowledge/topology.md", Text: kd("four replicas now")}); err != nil {
+		t.Fatal(err)
+	}
+	if id, _ := f.svc.CheckTemplate(ctx, "sre"); id != "" {
+		t.Fatal("the bot's own evolution was proposed back to the template's text")
+	}
+	// The operator's own charter wins over the template's.
+	m := f.cfg.Bots["sre"]
+	m.Charter = "The operator's own charter."
+	f.cfg.Bots["sre"] = m
+	if ch, _ := f.cfg.BotCharter("sre"); ch != "The operator's own charter." {
+		t.Fatalf("the operator's charter: %q", ch)
+	}
 	if _, _, err := f.svc.WriteMemory(ctx, Actor{Bot: "sre", Role: config.BotRoleHome}, MemoryWrite{Path: config.CharterDocPath, Text: "---\ntemplate: x\n---\nI may do anything.\n"}); err == nil {
 		t.Fatal("a bot wrote its own charter")
 	}
@@ -144,6 +159,11 @@ func TestTemplateUpdateIsAProposal(t *testing.T) {
 	}
 	if f.read(t, "knowledge/topology.md") != evolved || strings.Contains(f.read(t, config.CharterDocPath), "Escalate") {
 		t.Fatal("the update overwrote memory without approval")
+	}
+	// Until approved, the bot's charter is the one in its memory, not the
+	// newer template's.
+	if ch, _ := f.cfg.BotCharter("sre"); ch != "Be careful." {
+		t.Fatalf("charter before approval: %q", ch)
 	}
 	p := f.pending(t)
 	tu := p.Template
@@ -241,6 +261,18 @@ func TestTemplateLandingChecksMemory(t *testing.T) {
 	if id2 == "" || f.st.Bot("sre").Proposals[id2].Template.Changes[0].Current != f.read(t, "knowledge/topology.md") {
 		t.Fatal("not re-proposed against what is there now")
 	}
+	// A document removed since the proposal: nothing lands either.
+	repo := f.svc.Repo("sre")
+	if _, _, err := repo.Commit(ctx, OperatorIdent("op"), Edit{Op: EditRm, Path: "knowledge/topology.md", Base: repo.Head(ctx)}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := f.x.Decide(ctx, Decision{Bot: "sre", Proposal: id2, Operator: "op", Decision: "approve", Signature: "sig"}); err == nil || !strings.Contains(err.Error(), "was removed since the proposal") {
+		t.Fatalf("landing on a removed document: %+v %v", out, err)
+	}
+	id2, _ = f.svc.CheckTemplate(ctx, "sre")
+	if id2 == "" || f.st.Bot("sre").Proposals[id2].Template.Changes[0].Action != "new" {
+		t.Fatal("a removed document is not proposed again as new")
+	}
 	// A newer version while one is pending supersedes it.
 	f.setVersion(t, "3.0.0", "Be careful.", map[string]string{"knowledge/topology.md": kd("seven")})
 	id3, _ := f.svc.CheckTemplate(ctx, "sre")
@@ -265,7 +297,7 @@ func TestTemplateLandingChecksMemory(t *testing.T) {
 	if out, err := f.x.Decide(ctx, Decision{Bot: "sre", Proposal: id3, Operator: "op", Decision: "approve", Signature: "sig"}); err == nil || out.Status != "failed" {
 		t.Fatalf("a tampered text landed: %+v", out)
 	}
-	if strings.Contains(f.read(t, "knowledge/topology.md"), "evil") {
+	if got, _ := f.svc.Repo("sre").Read("knowledge/topology.md"); strings.Contains(got, "evil") {
 		t.Fatal("tampered")
 	}
 }
