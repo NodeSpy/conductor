@@ -9,8 +9,8 @@ reviewers proved false are corrected in the round-1 tables below (marked *correc
 
 **Decided otherwise, so not done:** the Overview greeting and summary line (bugs B8, brand B1, power N18) stay removed,
 on review ("useless info"); a summary sentence on every page (brand M1) is replaced by the rule that a header sentence
-must say something the page doesn't (`home.spec.js`); approval details as tabs only when a plan or diff decides them
-(brand m4) is the direction given in review.
+must say something the page doesn't (`home.spec.js`); approval tabs (brand m4) are gone after a later review: the approval is one column in decision order with the
+plan and the audit data folded (`approvals.spec.js`, `toggles.spec.js`).
 
 ### Blockers
 
@@ -41,6 +41,17 @@ must say something the page doesn't (`home.spec.js`); approval details as tabs o
 | bugs M13, newcomer N15 | Get started and Display preferences | fixed | Hide has Undo and a "Show Get started" item in your menu; Display preferences opens Config at that card; its row height is stated correctly (36px). |
 | bugs M15 | Downloads remained | fixed | No run-record or log downloads; Env export gone. |
 | brand M12 | Sign-in | fixed | No decorative passkey ring; no app shell while signed out; the kit's horizontal logo file. |
+
+### After round 2: hierarchy (review: "using the tabs on approvals breaks the page")
+
+- **Approval**: no tabs; what will change → why → effect and undo → who asked, always in view; the full plan opens in
+  place; ids, hashes and the signed digest fold into one quiet audit line; the approval stands alone at every width.
+- **The same lens elsewhere**: a case leads with its state and its actions (routing one line, audit facts folded,
+  reassign in its menu); workflows show folder and owner as a quiet line under the name; connections lead with which
+  bots reach them, not event counts; config's files and browsers' per-identity settings fold.
+- **Checked**: `toggles.spec.js` clicks every tab, segmented control, disclosure and switch on every route (desktop and
+  phone) and fails if the page breaks, loses its title or empties, or if an approval loses what will change, why, who
+  asked or the decision bar.
 
 ### Not done (and why)
 

@@ -135,14 +135,19 @@ Source: v2 `approvalPage()`.
 Matches: the bot head (avatar, name, its purpose in a line); the tabs (Approvals, Chat, Cases, Memory, What it can do,
 Settings); the approval card (the needs-you kicker with age and expiry, the plain title, what it asks, Why, the four
 change counts with Replaces in the warning colour and its note, Where / Effect / Undo, who started it, Approve with
-passkey, Deny…, who can approve, Technical details folded); What it can do in three groups; the Timeline.
+passkey, Deny…, who can approve, the technical detail folded); What it can do in three groups.
 
 Deliberate differences:
 - What the bot is doing now is a **status mark and a word** ("Running", "Parked", "Shadow"), not the mock's capsule (the
   status rule's vocabulary).
 - The proposal title is the **sans** (BRAND.md's serif rule for generated titles; the mock sets it in Fraunces).
-- **Overview | Technical details tabs** only when a plan or diff decides it (Terraform); otherwise Technical details is
-  a folded disclosure as in the mock. The decision bar is pinned to the bottom on both tabs (direction from review).
+- **No tabs** (from review: a tab hid the why and the change summary). One column in the order the decision needs:
+  what will change (the counts, the replaces note, the plan's resources by action in Terraform's colours), why,
+  where/effect/undo, who asked. The full plan opens in place below them (a resource in the summary opens it at its
+  block); the integrity data (proposal id and tier, verb, command, commit, plan sha256, case, digest, signer) is one
+  quiet folded line at the end of the card, smaller and muted when open. The decision bar is pinned.
+- The approval **stands alone at every width**: no bot head or tabs above it, one Back to where it was opened from;
+  the side column keeps only what the bot can do (the Timeline repeated the kicker and the origin).
 - **On a phone** the approval stands alone: no bot head, tabs or crumbs above it, one Back to where it was opened from,
   and Approve and Deny in one row.
 - "Who can approve" names the bot's own approvers (not the team's).
