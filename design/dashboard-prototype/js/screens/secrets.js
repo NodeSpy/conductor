@@ -106,9 +106,9 @@
     <div><b>${icon('settings')}A setting</b> is a plain value your config and workflows read, visible to anyone who can read the config. A field uses it as <code class="mono">\${settings.org}</code>; an environment variable as <code class="mono">\${env.NAME}</code>.</div></div>`;
   /** One row, the same for both: name and exact reference · used by · value or where it lives · ⋯ */
   const row = ({ id, name, ref, uses, value, note, menu, open, extra }) => `<li class="sec-row${open ? ' open' : ''}${!uses.length ? ' unused' : ''}" data-secret="${esc(id)}">
-    <div class="sec-line"><button type="button" class="sec-main" data-act="sec-open" data-s="${esc(id)}" aria-expanded="${!!open}"><span class="sec-name"><b>${esc(name)}</b><span class="sec-ref mono">${esc(ref)}</span></span>
+    <div class="sec-line">${extra ? `<button type="button" class="sec-main" data-act="sec-open" data-s="${esc(id)}" aria-expanded="${!!open}">` : '<div class="sec-main">'}<span class="sec-name"><b>${esc(name)}</b><span class="sec-ref mono">${esc(ref)}</span></span>
       <span class="sec-uses">${uses.length ? `<span class="dl-sub">Used by</span> ${uses.map(esc).join(', ')}` : UI.label('Unused')}</span>
-      <span class="sec-when">${value}${note || ''}</span></button>${copyBtn(ref, name)}
+      <span class="sec-when">${value}${note || ''}</span>${extra ? '</button>' : '</div>'}${copyBtn(ref, name)}
       <button class="icon-btn" data-act="${menu}" data-s="${esc(id)}" aria-label="More for ${esc(name)}">${icon('more')}</button></div>${open && extra ? `<div class="sec-detail">${extra}</div>` : ''}</li>`;
   function rows() {
     const list = D.secrets.filter(match);
@@ -162,7 +162,9 @@
     ${UI.envSectionHTML ? UI.envSectionHTML(row) : ''}
   </div>`; }, { nav: 'secrets' });
   UI.act('sec-open', (b) => { ov.open = ov.open === b.dataset.s ? null : b.dataset.s; const el = UI.$('#sec-body'); if (el) el.innerHTML = rows(); });
-  UI.act('sec-copy', (b) => { UI.closeMenu(); try { const w = navigator.clipboard && navigator.clipboard.writeText(b.dataset.v); if (w && w.catch) w.catch(() => {}); } catch (e) {} UI.toast('Copied', `<span class="mono">${esc(b.dataset.v)}</span>`, 'ok'); });
+  // copied: the button says so where you clicked (a menu item, which closes, says it in a toast)
+  UI.act('sec-copy', (b) => { const inMenu = !!b.closest('#pop-menu'); UI.closeMenu(); try { const w = navigator.clipboard && navigator.clipboard.writeText(b.dataset.v); if (w && w.catch) w.catch(() => {}); } catch (e) {}
+    if (inMenu) { UI.toast('Copied', `<span class="mono">${esc(b.dataset.v)}</span>`, 'ok'); return; } b.dataset.copied = Date.now(); if (b.dataset.was) return; b.dataset.was = b.innerHTML; b.innerHTML = `${icon('check')}Copied`; setTimeout(() => { if (b.isConnected) { b.innerHTML = b.dataset.was; delete b.dataset.was; } }, 1600); });
   // the same menu as a setting's: change the value, copy the reference, delete (a secret can also repoint its uses)
   UI.act('sec-more', (b) => { const s = D.secrets.find((x) => x.ref === b.dataset.s), v = vaultOf(s) || {};
     UI.menu(b, [['Change the value…', 'edit', 'secret-set', v.writable !== false && v.status !== 'fail' && s.vault !== 'env' ? `data-s="${esc(s.ref)}"` : UI.off(`Its value is set in ${VNAME[v.type] || v.name}`)], ['Copy the reference', 'copy', 'sec-copy', `data-v="${esc(refOf(s))}"`], ['Point its uses at another secret…', 'link', 'secret-ref', s.used.length ? `data-s="${esc(s.ref)}"` : UI.off('Nothing uses it yet')], ['-'], ['Delete…', 'trash', 'secret-del', s.used.length ? UI.off(`Still used by ${s.used.map(useWords).join(', ')}: point those elsewhere first`) : s.set ? `data-s="${esc(s.ref)}"` : UI.off(`It lives in ${VNAME[v.type] || v.name}: delete it there`)]]); });
