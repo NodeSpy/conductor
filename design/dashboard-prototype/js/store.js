@@ -34,6 +34,7 @@
       if (at && Date.now() - at > 60000) shiftTimes(saved, Date.now() - at);
       // a saved demo keeps its own conversations unless the chat fixture's shape has moved on since
       if (saved.chatsVer !== window.D.chatsVer) { delete saved.chats; delete saved.chat; delete saved.chatsVer; }
+      if (saved.ticketsVer !== window.D.ticketsVer) { delete saved.cases; delete saved.ticketsVer; }
       Object.keys(saved).forEach((k) => (window.D[k] = saved[k]));
       return true;
     } catch (e) { return false; }

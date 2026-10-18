@@ -130,7 +130,7 @@
     });
   });
 
-  const routeLabel = (r) => !r ? '' : r.by === 'rule' ? `routed to <b>${r.team}</b> by rule <span class="mono">${esc(r.rule)}</span>${r.via === 'lead' ? ` → assigned by lead <b>${esc(r.lead)}</b> to <b>${esc(r.to)}</b>` : ` → <b>${esc(r.to)}</b>`}` : r.by === 'lead' ? `assigned by lead <b>${esc(r.lead)}</b> to <b>${esc(r.to)}</b>` : r.by === 'operator' ? `reassigned by operator <b>ops</b> to <b>${esc(r.to)}</b>${r.from ? ` (was ${esc(r.from)})` : ''}` : r.by === 'link' ? `arrived over the team link from <b>${esc(r.team)}</b>` : r.by === 'proactive' ? 'opened by a proactive sweep' : r.by === 'delegate' ? `delegated by <b>${esc(r.from)}</b> → <b>${esc(r.to)}</b> from task <span class="mono">${esc(r.parent)}</span>${r.cross ? ` (across the ${esc(r.team)} link)` : ''}` : `delivered to <b>${esc(r.to)}</b> directly`;
+  const routeLabel = (r) => !r ? '' : r.by === 'rule' ? `routed to <b>${r.team}</b> by rule <span class="mono">${esc(r.rule)}</span>${r.via === 'lead' ? ` → assigned by lead <b>${esc(r.lead)}</b> to <b>${esc(r.to)}</b>` : ` → <b>${esc(r.to)}</b>`}` : r.by === 'lead' ? `assigned by lead <b>${esc(r.lead)}</b> to <b>${esc(r.to)}</b>` : r.by === 'operator' ? `reassigned by operator <b>ops</b> to <b>${esc(r.to)}</b>${r.from ? ` (was ${esc(r.from)})` : ''}` : r.by === 'link' ? `arrived over the team link from <b>${esc(r.team)}</b>` : r.by === 'proactive' ? 'opened by a proactive sweep' : r.by === 'delegate' ? `delegated by <b>${esc(r.from)}</b> → <b>${esc(r.to)}</b> from ticket <span class="mono">${esc(r.parent)}</span>${r.cross ? ` (across the ${esc(r.team)} link)` : ''}` : `delivered to <b>${esc(r.to)}</b> directly`;
   UI.routeLabel = routeLabel;
   const glob = (pat, v) => new RegExp('^' + String(pat).split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$').test(String(v));
   const matchRule = (t, ev) => (((t.cfg.routing || {}).rules) || []).find((r) => r.match && Object.entries(r.match).every(([k, v]) => (k === 'on' ? glob(v, ev.on) : glob(v, ev.payload[k] != null ? ev.payload[k] : S.getPath(ev.payload, 'incident.' + k) || ''))));
@@ -144,8 +144,8 @@
     return `<div class="page dl-page team-page"><div class="dl-crumbs"><a href="#/bots">Bots</a></div>
       <div class="dl-bothead"><span class="dl-bot-av">${esc(t.name.slice(0, 2))}</span><div><h1>${esc(t.name)}</h1><p class="dl-lead">${ms.length} bot${ms.length === 1 ? '' : 's'}${lead ? `, led by ${esc(lead)}` : ''}. ${(c.operators || []).length ? `${(c.operators || []).map(esc).join(' or ')} approve${(c.operators || []).length === 1 ? 's' : ''}` : 'Any operator approves'}; on their own, its bots may ${ceilW}.</p></div>${S.find('teams', t.name) ? UI.statusMark('staged', 'Change not applied') : ''}
         <button class="icon-btn" data-act="team-more" data-t="${t.name}" aria-label="More for team ${esc(t.name)}">${icon('more')}</button></div>
-      <div class="dl-actions"><button class="btn secondary" data-act="team-deliver" data-t="${t.name}">${icon('send')}Route work here</button><button class="btn secondary" data-act="team-edit" data-t="${t.name}">${icon('edit')}Edit team</button></div>
-      ${UI.tabs([['overview', 'Overview', `#/teams/${t.name}`], ['routing', 'Routing', `#/teams/${t.name}/routing`, ((c.routing || {}).rules || []).length], ['defaults', 'Ceilings & scopes', `#/teams/${t.name}/defaults`], ['knowledge', 'Knowledge', `#/teams/${t.name}/knowledge`, pend || null]], tab)}
+      <div class="dl-actions"><a class="btn secondary" href="#/tickets/new?team=${encodeURIComponent(t.name)}">${icon('plus')}New ticket</a><button class="btn secondary" data-act="team-deliver" data-t="${t.name}">${icon('send')}Route an event here</button><button class="btn secondary" data-act="team-edit" data-t="${t.name}">${icon('edit')}Edit team</button></div>
+      ${UI.tabs([['overview', 'Overview', `#/teams/${t.name}`], ['routing', 'Routing', `#/teams/${t.name}/routing`, ((c.routing || {}).rules || []).length], ['defaults', 'Ceilings & scopes', `#/teams/${t.name}/defaults`], ['tickets', 'Tickets', `#/teams/${t.name}/tickets`, D.cases.filter((x) => x.status === 'open' && UI.ticketTeam(x) === t.name).length || null], ['knowledge', 'Knowledge', `#/teams/${t.name}/knowledge`, pend || null]], tab)}
       ${body}</div>`;
   }
   /* ---------- delegation ---------- */
@@ -159,7 +159,7 @@
       return { name: b.name, team: bt, ok: !why, why, cross: !!(bt && ft && bt !== ft) }; });
   };
   const edgeHTML = (d) => `<div class="item deleg" data-deleg="${d.id}" style="align-items:flex-start">${st(DST[d.status], '')}<div class="grow small">
-      <div><span class="mono tiny muted">${d.id}</span> delegated by <b>${esc(d.from)}</b> → <a class="link" href="#/bots/${d.to}/cases/${d.child}"><b>${esc(d.to)}</b></a> ${UI.statusMark(DST[d.status], d.status, { sm: true })}${M(d.from) && M(d.to) && teamOf(M(d.from)) && teamOf(M(d.to)) && teamOf(M(d.from)).name !== teamOf(M(d.to)).name ? ' ' + tag('linked bots') : ''}</div>
+      <div><span class="mono tiny muted">${d.id}</span> delegated by <b>${esc(d.from)}</b> → <a class="link" href="#/tickets/${d.child}"><b>${esc(d.to)}</b></a> ${UI.statusMark(DST[d.status], d.status, { sm: true })}${M(d.from) && M(d.to) && teamOf(M(d.from)) && teamOf(M(d.to)) && teamOf(M(d.from)).name !== teamOf(M(d.to)).name ? ' ' + tag('linked bots') : ''}</div>
       <div class="muted">“${esc(d.task)}”</div>
       ${d.result ? `<div class="deleg-result">↩ result: ${esc(d.result)}</div>` : ''}
       <div class="tiny muted">requester ${UI.label(`${esc(d.requester)}`, { cls: 'taint ' + d.cls })} kept · ${ago(d.at)} ago${d.done ? ` · reported back ${ago(d.done)} ago` : ''}</div></div>
@@ -219,7 +219,7 @@
           <div class="panel-foot"><label class="row small grow"><span class="muted">Add a bot</span><select class="select mono" id="team-add-sel" aria-label="Bot to add" data-picker="bot" data-ctx='${esc(JSON.stringify({ page: `#/bots/new/settings?team=${t.name}&back=${encodeURIComponent('#/teams/' + t.name)}` }))}'><option value="">Choose a bot…</option>${others.map((m) => `<option value="${m.name}">${m.name}${teamOf(m) ? ' (moves from ' + teamOf(m).name + ')' : ' (solo)'}</option>`).join('')}<option value="__new__">+ Create a new bot in this team…</option></select></label><button class="btn sm" ${others.length ? `data-act="team-add" data-t="${t.name}"` : UI.off('Every existing bot is already here: create a new one from the list')}>${icon('plus')}Add to team</button></div></div>
         <div class="panel"><div class="panel-head"><h3>Delegations</h3><span class="muted small">teammates hand each other tasks; results report back</span></div><div class="list">${D.delegations.filter((d) => botsOf(t.name).some((b) => b.name === d.from || b.name === d.to)).map(edgeHTML).join('') || '<div class="item small muted">No delegations yet.</div>'}</div>
           <div class="panel-foot small muted">Beyond the team, a bot delegates only to a bot it's linked with (both list each other as peers, or an operator's bot_links pair).</div></div>
-        <div class="panel"><div class="panel-head"><h3>Routing decisions</h3><span class="muted small">requester provenance kept through every hop</span></div><div class="list">${cases.map((x) => `<a class="item click" href="#/bots/${x.bot}/cases/${x.id}"><span class="mono tiny muted">${x.id}</span><div class="grow small"><div class="ellipsis"><b>${esc(x.title)}</b></div><div class="tiny muted">${routeLabel(x.routed)} · requester ${UI.label(`${x.requester}`, { cls: 'taint ' + x.cls })}</div></div><span class="chev">${icon('chev')}</span></a>`).join('') || '<div class="item muted small">Nothing routed yet.</div>'}</div></div>
+        <div class="panel"><div class="panel-head"><h3>Routing decisions</h3><span class="muted small">requester provenance kept through every hop</span></div><div class="list">${cases.map((x) => `<a class="item click" href="#/tickets/${x.id}"><span class="mono tiny muted">${x.id}</span><div class="grow small"><div class="ellipsis"><b>${esc(x.title)}</b></div><div class="tiny muted">${routeLabel(x.routed)} · requester ${UI.label(`${x.requester}`, { cls: 'taint ' + x.cls })}</div></div><span class="chev">${icon('chev')}</span></a>`).join('') || '<div class="item muted small">Nothing routed yet.</div>'}</div></div>
       </div>
       <div class="stack">
         ${!UI.usageOn() ? '' : (() => { const bp = UI.botsProv(ms.map((m) => m.name)), b0 = {}, rc = b0.max_runs_per_day, tc = b0.max_tokens_per_day, uc = UI.isApi() ? b0.max_cost_per_day : null, runs = ms.reduce((a, m) => a + Object.values(D.usage.bots[m.name] || {}).reduce((x, y) => x + (y.runs || 0), 0), 0), src = UI.usageSource();
@@ -283,7 +283,7 @@
   UI.route('teams/:name/:tab?', ({ name, tab }) => {
     const t = T(name);
     if (!t) return `<div class="page"><div class="empty"><span class="serif">No team named ${esc(name)}</span><a class="btn" href="#/bots">Bots</a></div></div>`;
-    return tab === 'routing' ? teamRouting(t) : tab === 'defaults' ? teamDefaults(t) : tab === 'knowledge' ? teamKnowledge(t) : teamOverview(t);
+    return tab === 'tickets' ? teamShell(t, 'tickets', UI.teamTickets(t)) : tab === 'routing' ? teamRouting(t) : tab === 'defaults' ? teamDefaults(t) : tab === 'knowledge' ? teamKnowledge(t) : teamOverview(t);
   }, { nav: 'bots' });
   UI.act('team-lead', (b) => { const c = Y_clone(staged('teams', b.dataset.t)); c.routing = Object.assign({}, c.routing, { lead: b.dataset.m }); UI.staged(S.stage('teams', b.dataset.t, c)); });
   // removing the lead leaves routing without one: say so first
@@ -319,6 +319,7 @@
       UI.toast(approve ? `Promoted to ${esc(p.to)}` : 'Denied', approve ? `one commit to ${kn.repo}` : 'the bot is told', approve ? 'ok' : 'fail');
     });
   });
+  UI.ticketKit = { M, T, teamOf, botsOf, routeLabel: (r) => routeLabel(r), edgeHTML: (d) => edgeHTML(d) };
   function newCase(bot, o) {
     const id = 'c' + (40 + D.cases.length);
     D.cases.unshift(Object.assign({ id, bot, status: 'open', opened: now(), workers: 0, proposals: 0, notes: [] }, o));
@@ -340,7 +341,7 @@
         else { const assignee = (ms.find((m) => m.name !== lead) || ms[0]).name; to = assignee; routed = hit ? { by: 'rule', rule: hit.name, team: t.name, via: 'lead', lead, to, note: 'the lead triaged and assigned it' } : { by: 'lead', lead: lead || assignee, team: t.name, to }; }
         const id = newCase(to, { title: ev ? ev.label : v.title, requester: ev ? 'event:' + ev.on : 'operator:ops', cls: ev ? 'event' : 'operator', routed: Object.assign({ requester_kept: true }, routed) });
         audit('bot_route', `${t.name} · ${id} → ${to} · ${routed.by}${routed.rule ? ' ' + routed.rule : ''}`); S.save();
-        UI.go(`#/bots/${to}/cases/${id}`);
+        UI.go(`#/tickets/${id}`);
       } });
   });
 
@@ -356,7 +357,7 @@
     const role = (S.staged('bots', m.name) || m.cfg || {}).description || m.role || (t ? `A bot on the ${t.name} team` : 'A bot');
     const now = m.shadow ? UI.statusMark('shadow', 'Shadow: practice mode') : m.home === 'live' ? UI.statusMark('run', 'Running') : UI.statusMark('idle', 'Parked');
     return `<div class="dl-crumbs"><a href="#/bots">Bots</a>${t ? ` › <a href="#/teams/${t.name}">team ${t.name}</a>` : ''}</div>
-      <div class="dl-bothead"><span class="dl-bot-av">${esc(m.name.split(/[-_]/).map((w) => w[0]).join('').slice(0, 2))}</span><div><h1>${esc(m.name)}</h1><p class="dl-lead">${esc(role)}</p>${cur && m.home === 'live' ? `<p class="bot-working">Working on: <a href="#/bots/${m.name}/cases/${cur.id}">${esc(cur.title)}</a></p>` : ''}</div>${now}
+      <div class="dl-bothead"><span class="dl-bot-av">${esc(m.name.split(/[-_]/).map((w) => w[0]).join('').slice(0, 2))}</span><div><h1>${esc(m.name)}</h1><p class="dl-lead">${esc(role)}</p>${cur && m.home === 'live' ? `<p class="bot-working">Working on: <a href="#/tickets/${cur.id}">${esc(cur.title)}</a></p>` : ''}</div>${now}
         <button class="icon-btn" data-act="bot-more" data-m="${m.name}" aria-label="More for ${esc(m.name)}">${icon('more')}</button></div>`;
   }
   UI.act('bot-more', (b) => { const m = M(b.dataset.m); UI.menu(b, [['Rotate session…', 'updates', 'm-rotate', `data-m="${m.name}"`], ['Sweep now', 'eye', 'm-sweep', m.proactive ? `data-m="${m.name}"` : UI.off('It has no proactive: block in its definition')], ['Deliver an event…', 'send', 'm-deliver', `data-m="${m.name}"`], ['-'], ['Workers', 'workflows', 'strip-go', `data-href="#/bots/${m.name}/workers"`]]); });
@@ -368,14 +369,14 @@
   function shell(m, tab, body, cls = '') {
     const pc = pending(m.name).length, w = UI.botWatches(m.name), cases = D.cases.filter((c) => c.bot === m.name && c.status === 'open').length;
     const watchNote = !w.triggers.length && !w.sweep ? `<div class="callout wait watch-empty" style="margin-top:14px">${UI.statusMark('wait', `<b>${m.name} isn't watching anything yet.</b>`)} <span class="grow">No trigger hands it events and it doesn't check in on its own, so it only answers when someone talks to it: you here, or anyone in a chat it's in.</span><button class="btn sm primary" data-act="bot-watch-add" data-m="${m.name}">${icon('plus')}Choose what it watches</button></div>` : '';
-    const T = [['proposals', 'Approvals', pc, true], ['chat', 'Chat'], ['cases', 'Tasks', cases], ['memory', 'Memory'], ['access', 'What it can do'], ['settings', 'Settings']];
+    const T = [['proposals', 'Approvals', pc, true], ['chat', 'Chat'], ['cases', 'Tickets', cases], ['memory', 'Memory'], ['access', 'What it can do'], ['settings', 'Settings']];
     return `<div class="page dl-page${cls ? ' ' + cls : ''}">${hero(m)}${watchNote}
       <nav class="dl-tabs" role="tablist">${T.map(([k, l, n, hot]) => `<a href="#/bots/${m.name}/${k}" role="tab" class="${k === tab ? 'on' : ''}"${k === tab ? ' aria-current="page" aria-selected="true"' : ''}>${l}${n ? ` <em class="${hot ? 'hot' : ''}">${n}</em>` : ''}</a>`).join('')}</nav>
       <div class="dl-tab-body">${body}</div></div>`;
   }
   UI.act('m-rotate', (b) => { const m = M(b.dataset.m); UI.confirm({ title: 'Rotate the home session?', body: `<p style="margin:0 0 8px">conductor asks the current session for a hand-off note, waits for that turn to settle, launches a fresh session, and only then archives the old one. Its token is revoked at once.</p><div class="kv"><dt>current</dt><dd class="mono">${m.session} · ${m.turns} turns</dd><dt>next</dt><dd class="mono">s${+m.session.slice(1) + 1} · resumes from handoff/${m.session}.md + ledger</dd></div>`, ok: 'Rotate' }).then((ok) => { if (!ok) return; const old = m.session; m.session = 's' + (+old.slice(1) + 1); m.turns = 0; m.age = '0m'; m.home = 'live'; audit('bot_rotate', `${m.name} · ${old} → ${m.session}`); S.save(); UI.rerender(); UI.toast('Rotated', `${old} archived · ${m.session} live`, 'ok'); }); });
   UI.act('m-sweep', (b) => { const m = M(b.dataset.m); const id = 'x' + (5 + D.workers.filter((w) => w.parent === 'sweep').length); D.workers.unshift({ id, bot: m.name, parent: 'sweep', case: '—', group: '', status: 'run', verbs: 'observe only', readOnly: true, cls: 'proactive', brief: 'Proactive checks (charter §)', run: 'r-7f29', cost: 0, started: now() }); audit('bot_sweep', `${m.name} · ${id} · read-only`); S.save(); UI.go(`#/bots/${m.name}/workers`); UI.toast(`Sweep ${id} started`, 'read-only · draws on the team pool', 'run'); });
-  UI.act('m-deliver', (b) => { const m = M(b.dataset.m); UI.form({ caps: `bot ${esc(m.name)}`, title: `Deliver an event to ${m.name}`, fields: [{ k: 'title', type: 'string', req: true, mono: false, ph: 'Investigate elevated 5xx on /refund' }, { k: 'text', type: 'text', label: 'Text (reaches the bot fenced as untrusted data)' }, { k: 'requester', type: 'enum', req: true, options: [['operator:ops', 'operator:ops (you)'], ['event:manual', 'event']], def: 'operator:ops' }, { k: 'urgent', type: 'bool', on: 'start a worker now' }], submit: 'Deliver', submitIcon: 'send', onSubmit: (v) => { const id = newCase(m.name, { title: v.title, requester: v.requester, cls: v.requester.startsWith('operator') ? 'operator' : 'event', urgent: !!v.urgent, routed: { by: 'direct', to: m.name, requester_kept: true }, notes: v.text ? [{ at: now(), who: v.requester, text: v.text }] : [] }); (D.chats[m.name] = D.chats[m.name] || []).push({ who: 'event', at: now(), case: id, text: v.title + (v.text ? ' · ' + v.text : ''), fenced: true }); audit('bot_deliver', `${m.name} · ${id} · ${v.requester}`); S.save(); UI.go(`#/bots/${m.name}/cases/${id}`); } }); });
+  UI.act('m-deliver', (b) => { const m = M(b.dataset.m); UI.form({ caps: `bot ${esc(m.name)}`, title: `Deliver an event to ${m.name}`, fields: [{ k: 'title', type: 'string', req: true, mono: false, ph: 'Investigate elevated 5xx on /refund' }, { k: 'text', type: 'text', label: 'Text (reaches the bot fenced as untrusted data)' }, { k: 'requester', type: 'enum', req: true, options: [['operator:ops', 'operator:ops (you)'], ['event:manual', 'event']], def: 'operator:ops' }, { k: 'urgent', type: 'bool', on: 'start a worker now' }], submit: 'Deliver', submitIcon: 'send', onSubmit: (v) => { const id = newCase(m.name, { title: v.title, requester: v.requester, cls: v.requester.startsWith('operator') ? 'operator' : 'event', urgent: !!v.urgent, routed: { by: 'direct', to: m.name, requester_kept: true }, notes: v.text ? [{ at: now(), who: v.requester, text: v.text }] : [] }); (D.chats[m.name] = D.chats[m.name] || []).push({ who: 'event', at: now(), case: id, text: v.title + (v.text ? ' · ' + v.text : ''), fenced: true }); audit('bot_deliver', `${m.name} · ${id} · ${v.requester}`); S.save(); UI.go(`#/tickets/${id}`); } }); });
 
   /** Who asked for a task, in words: you, a PagerDuty incident, someone in chat, its own routine check, another bot. */
   const askedBy = (c) => { const r = String(c.requester || ''); return /^operator:/.test(r) ? (r === 'operator:ops' ? 'you' : r.slice(9)) : /^event:pd/.test(r) ? 'a PagerDuty incident' : /^event:gh/.test(r) ? 'a GitHub event' : /^event:/.test(r) ? 'an event' : /^chat:/.test(r) ? 'someone in chat' : c.cls === 'proactive' ? 'its own routine check' : /^bot:/.test(r) ? `${r.slice(4)} (another bot)` : r || 'someone'; };
@@ -392,64 +393,27 @@
     const pp = pending(m.name), msgs = D.chats[m.name] || [], open = D.cases.filter((c) => c.bot === m.name && c.status === 'open');
     const paseo = ((D.daemon || {}).paseo || {}).status === 'ok';
     const need = (p) => `<li><a class="cm-side-a" href="#/bots/${m.name}/proposals/${p.id}"><b>${esc(p.title || p.summary)}</b>${UI.factsLine([UI.envFact(p.env), UI.actionFact(p.verb, p.env, p.tier)])}<span class="cm-side-f"><span class="btn sm secondary">Review</span><span class="dl-sub">expires in ${esc(p.expires)}</span></span></a></li>`;
-    const task = (c) => `<li><a class="cm-side-a" href="#/bots/${m.name}/cases/${c.id}"><b>${c.urgent ? UI.mark('wait', { label: 'Urgent' }) + ' ' : ''}${esc(c.title)}</b>${UI.factsLine([{ icon: 'message', value: `Asked by ${askedBy(c)}`, pri: 1, label: 'Who asked' }, { icon: 'clock', value: UI.agoText(c.opened), pri: 2, label: 'Opened' }])}</a></li>`;
+    const task = (c) => `<li><a class="cm-side-a" href="#/tickets/${c.id}"><b>${c.urgent ? UI.mark('wait', { label: 'Urgent' }) + ' ' : ''}${esc(c.title)}</b>${UI.factsLine([{ icon: 'message', value: `Asked by ${askedBy(c)}`, pri: 1, label: 'Who asked' }, { icon: 'clock', value: UI.agoText(c.opened), pri: 2, label: 'Opened' }])}</a></li>`;
     return shell(m, 'chat', `<div class="grid g-side chat-grid">
       <div class="panel chat"><div class="panel-head cm-head"><h3>Home session</h3><span class="dl-sub cm-rule">Your messages reach it between turns, never mid-turn</span>
         ${paseo ? `<button class="btn sm secondary" data-act="chat-paseo" data-m="${m.name}">${icon('external')}Open in paseo</button>` : '<span class="dl-sub">paseo isn’t reachable, so its own view can’t open</span>'}</div>
         ${UI.chatThread(msgs, m.name)}${UI.chatComposer(m.name)}<div class="cm-drop" aria-hidden="true">${icon('attach')}Drop to attach to your message</div></div>
       <div class="stack cm-side">
         ${pp.length ? `<section class="panel cm-need"><div class="panel-head">${UI.statusMark('ember', 'Waiting for you')}${UI.count(pp.length, { hot: true })}</div><ul class="cm-side-l">${pp.map(need).join('')}</ul></section>` : ''}
-        <section class="panel"><div class="panel-head"><h3>Working on</h3><a class="btn sm ghost" style="margin-left:auto" href="#/bots/${m.name}/cases">All tasks</a></div>${open.length ? `<ul class="cm-side-l">${open.map(task).join('')}</ul>` : '<p class="dl-sub cm-side-none">Nothing open.</p>'}</section>
+        <section class="panel"><div class="panel-head"><h3>Working on</h3><a class="btn sm ghost" style="margin-left:auto" href="#/bots/${m.name}/cases">All tickets</a></div>${open.length ? `<ul class="cm-side-l">${open.map(task).join('')}</ul>` : '<p class="dl-sub cm-side-none">Nothing open.</p>'}</section>
       </div></div>`);
   }
 
   /* ---------- cases ---------- */
-  const cv = { f: 'open' };
+  // a bot's Tickets tab: the tickets assigned to it (js/screens/tickets.js); a ticket opens on its own page
   function cases(m, sub) {
-    const list = D.cases.filter((c) => c.bot === m.name);
-    const c = sub && list.find((x) => x.id === sub);
-    if (c) return shell(m, 'cases', caseDetail(m, c));
-    const vis = list.filter((c) => cv.f === 'all' || c.status === cv.f);
-    // what it's working on and whether any of it needs you: a task per row (its title, who asked in words, when); routing
-    // and ids live on the task itself
-    const who = askedBy;
-    const row = (c) => `<li class="dl-need${c.urgent && c.status === 'open' ? ' attn' : ''}"${c.urgent && c.status === 'open' ? ' data-s="wait"' : ''}><a class="dl-need-a" href="#/bots/${m.name}/cases/${c.id}"><span class="dl-ng">${c.urgent && c.status === 'open' ? UI.mark('wait', { lg: true, label: 'Urgent' }) : ''}</span>
-      <span class="dl-nt"><b>${esc(c.title)}</b><span class="dl-why">Asked by ${esc(who(c))}${c.urgent && c.status === 'open' ? ' · <span class="reason">urgent</span>' : ''}${c.status === 'closed' ? ' · done' : ''}</span></span><span class="dl-age">${UI.agoText(c.opened)}</span></a></li>`;
-    const open = list.filter((x) => x.status === 'open'), done = list.filter((x) => x.status !== 'open');
-    return shell(m, 'cases', `<section class="dl-card"><header class="dl-ch"><h2>Working on</h2>${open.length ? `<span class="dl-sub">${open.length}</span>` : ''}<span class="dl-sp"></span><button class="btn sm secondary" data-act="m-deliver" data-m="${m.name}">${icon('send')}Give it a task…</button></header>
-        <p class="dl-sub" style="margin:0 0 8px">A task is one thing ${esc(m.name)} is handling: from an event, a chat message or its own check. It keeps its notes and the work it hands to teammates.</p>
-        ${open.length ? `<ul class="dl-list">${open.map(row).join('')}</ul>` : '<p class="dl-sub">Nothing open.</p>'}</section>
-      ${done.length ? `<details class="dl-card dl-files-d past-d"><summary class="panel-head"><h3>Done</h3><span class="muted small">${done.length}</span></summary><ul class="dl-list">${done.map(row).join('')}</ul></details>` : ''}`);
+    if (sub) { setTimeout(() => location.replace(`#/tickets/${sub}`)); return ''; }
+    return shell(m, 'cases', UI.botTickets(m));
   }
-  function caseDetail(m, c) {
-    const t = teamOf(m), mates = t ? botsOf(t.name).filter((x) => x.name !== m.name) : [];
-    // what the case is and where it stands, what's been done (delegations, notes) and what you can do; how it was routed
-    // is one quiet line, and the audit facts (id, class, the requester carried through, counts) fold at the end
-    const open = c.status === 'open', canDel = open && UI.delegationReach(m.name).some((r) => r.ok);
-    const delWhy = !open ? 'Reopen the task to delegate from it' : `${m.name} has no teammate or linked bot to delegate to: put it on a team or link it with another bot`;
-    const deleg = (() => { const out = D.delegations.filter((d) => d.parent === c.id), inn = D.delegations.find((d) => d.child === c.id); return out.length || inn ? `<div class="panel"><div class="panel-head"><h3>Delegation</h3><span class="muted small">${out.length ? `${out.length} handed out from this case` : ''}${inn ? 'this case is a delegated task' : ''}</span></div><div class="list">${inn ? edgeHTML(inn).replace('class="item deleg"', 'class="item deleg inbound"') : ''}${out.map(edgeHTML).join('')}</div>${inn && inn.status === 'running' ? '<div class="panel-foot small muted">Closing this case reports its last note back to the delegating bot as the result.</div>' : ''}</div>` : ''; })();
-    return `<div class="dl-crumbs"><a href="#/bots/${m.name}/cases">${icon('chev', 'flip')}All tasks</a></div>
-      <div class="stack case-page">
-        <section class="dl-card case-head"><h2 class="case-title">${esc(c.title)}</h2>
-          <p class="dl-sub case-state">${open ? 'Open' : 'Closed'}${c.urgent && open ? ' · <b class="danger-text">urgent</b>' : ''} · opened ${UI.agoText(c.opened)} (${UI.hm(c.opened)})</p>
-          <div class="dl-actions">${open ? `<button class="btn secondary" data-act="case-close" data-m="${m.name}" data-c="${c.id}">${icon('check')}Mark done</button>` : `<button class="btn secondary" data-act="case-close" data-m="${m.name}" data-c="${c.id}">${icon('undo')}Reopen</button>`}<button class="btn secondary" ${canDel ? `data-act="case-delegate" data-m="${m.name}" data-c="${c.id}"` : UI.off(delWhy)}>${icon('send')}Delegate a task…</button>${t ? `<button class="icon-btn" data-act="case-more" data-m="${m.name}" data-c="${c.id}" aria-label="More for case ${c.id}">${icon('more')}</button>` : ''}</div>
-          <p class="dl-sub case-route">${c.routed ? routeLabel(c.routed) : 'Delivered to it directly'}${c.routed && c.routed.note ? ` · ${esc(c.routed.note)}` : ''}.</p>
-          <details class="dl-audit-d"><summary>${icon('chev')}Details: task id, who asked, linked work</summary><dl class="dl-facts"><dt>Task</dt><dd class="mono">${c.id}</dd><dt>Asked by</dt><dd><span class="mono">${esc(c.requester)}</span> (${esc(c.cls)}); carried through every hop, so whoever works it runs with no more trust than that</dd><dt>Workers</dt><dd>${c.workers}</dd><dt>Approvals asked</dt><dd>${c.proposals}</dd></dl></details></section>
-        ${deleg}
-        <div class="panel"><div class="panel-head"><h3>Notes</h3></div><div class="list">${(c.notes || []).map((n) => `<div class="item small" style="align-items:flex-start"><span class="tiny muted" style="width:72px">${UI.agoText(n.at)}</span><div class="grow"><span class="mono tiny">${esc(n.who)}</span><div>${esc(n.text)}</div></div></div>`).join('') || '<div class="item small muted">No notes yet.</div>'}</div>
-          <div class="panel-foot"><input class="input grow" id="case-note" placeholder="Add a note" aria-label="Note"><button class="btn sm" data-act="case-note" data-m="${m.name}" data-c="${c.id}">${icon('plus')}Add note</button></div></div>
-      </div>`;
-  }
-  UI.act('case-more', (b) => { const m = M(b.dataset.m), c = D.cases.find((x) => x.id === b.dataset.c), t = teamOf(m), mates = t ? botsOf(t.name).filter((x) => x.name !== m.name) : [];
-    UI.menu(b, mates.length ? mates.map((x) => [`Reassign to ${x.name}`, 'send', 'case-reassign', c.status === 'open' ? `data-m="${m.name}" data-c="${c.id}" data-to="${x.name}"` : UI.off('Reopen it first')]) : [['Reassign…', 'send', 'case-reassign', UI.off('Nobody else on the team')]]); });
-  UI.act('case-f', (b) => { cv.f = b.dataset.v; UI.rerender(); });
   document.addEventListener('click', (e) => { const tr = e.target.closest('tr[data-href]'); if (tr && !e.target.closest('a,button,input,label,select,.sel')) UI.go(tr.dataset.href); });
-  UI.act('case-note', (b) => { const inp = UI.$('#case-note'), v = inp.value.trim(); if (!v) return UI.nudge(inp, 'Type the note first'); const c = D.cases.find((x) => x.id === b.dataset.c); (c.notes = c.notes || []).push({ at: now(), who: 'operator:ops', text: v }); audit('bot_case_note', `${b.dataset.m} · ${c.id}`); S.save(); UI.rerender(); });
   UI.act('case-close', (b) => { const c = D.cases.find((x) => x.id === b.dataset.c); c.status = c.status === 'open' ? 'closed' : 'open';
     const d = D.delegations.find((x) => x.child === c.id && x.status === 'running');
-    if (d && c.status === 'closed') { const last = (c.notes || []).slice(-1)[0]; d.status = 'done'; d.done = now(); d.result = last ? last.text : `closed by operator ops with no note`; const par = D.cases.find((x) => x.id === d.parent); if (par) (par.notes = par.notes || []).push({ at: now(), who: `bot:${d.to}`, text: `↩ result of ${d.id}: ${d.result}` }); audit('bot_delegate_done', `${d.id} · ${d.to} → ${d.from} · ${d.result.slice(0, 60)}`); } audit('bot_case_' + (c.status === 'open' ? 'reopen' : 'close'), `${b.dataset.m} · ${c.id}`); S.save(); UI.rerender(); UI.refreshChrome(); });
-  UI.act('case-reassign', (b) => { const c = D.cases.find((x) => x.id === b.dataset.c), to = b.dataset.to || (UI.$('#case-to') || {}).value; const t = teamOf(M(b.dataset.m)); c.routed = { by: 'operator', from: c.bot, to, team: t.name, requester_kept: true }; c.bot = to; audit('bot_route', `${c.id} → ${to} · operator reassign · requester ${c.requester} kept`); S.save(); UI.go(`#/bots/${to}/cases/${c.id}`); });
-
+    if (d && c.status === 'closed') { const last = (c.notes || []).filter((n) => !n.ack && n.text).slice(-1)[0]; d.status = 'done'; d.done = now(); d.result = last ? last.text : `closed by operator ops with no note`; const par = D.cases.find((x) => x.id === d.parent); if (par) (par.notes = par.notes || []).push({ at: now(), who: `bot:${d.to}`, text: `↩ result of ${d.id}: ${d.result}` }); audit('bot_delegate_done', `${d.id} · ${d.to} → ${d.from} · ${d.result.slice(0, 60)}`); } audit('bot_case_' + (c.status === 'open' ? 'reopen' : 'close'), `${b.dataset.m} · ${c.id}`); S.save(); UI.rerender(); UI.refreshChrome(); });
   /* ---------- proposals ---------- */
   const PS = { pending: 'ember', shadow: 'shadow', executed: 'ok', approved: 'ok', refused: 'fail', denied: 'fail', failed: 'fail' };
   const pv = { f: 'all', plan: {} };
@@ -517,7 +481,7 @@
       : p.cls === 'proactive' ? `${icon('clock')}Found on the bot’s own routine check; nobody asked.` : p.cls === 'peer' ? `${icon('bots')}Asked for by another bot (<span class="mono">${esc(p.requester)}</span>), carrying the original requester’s trust.` : `${icon('users')}Asked for by an operator (<span class="mono">${esc(p.requester || '')}</span>).`;
     const techFacts = `<dl class="dl-facts prop-tech-facts"><dt>Proposal</dt><dd><span class="mono">${p.id}</span> · tier <span class="mono">${esc(p.tier)}</span></dd><dt>Verb</dt><dd class="mono">${esc(p.verb)}</dd>
       ${tf ? `<dt>Exact command</dt><dd class="mono">terraform apply · repo ${esc(tf.repo)} · dir ${esc(tf.dir)} · workspace ${esc(tf.workspace)}${(tf.var_files || []).length ? ` · var files ${tf.var_files.map(esc).join(', ')}` : ''}</dd><dt>Commit</dt><dd class="mono">${tf.commit}</dd><dt>Plan sha256</dt><dd class="mono">${tf.plan_sha}</dd>` : ''}
-      <dt>Case</dt><dd><a class="mono dl-link" href="#/bots/${m.name}/cases/${p.case}">${p.case}</a></dd><dt>Asked for by</dt><dd class="mono">${esc(p.requester || '—')}${p.cls ? ` (${esc(p.cls)})` : ''}</dd><dt>Digest</dt><dd class="mono">${p.digest}</dd><dt>Signed by</dt><dd>${p.approver ? esc(p.approver) : 'not yet: your passkey signs this digest'}</dd></dl>`;
+      <dt>Ticket</dt><dd><a class="mono dl-link" href="#/tickets/${p.case}">${p.case}</a></dd><dt>Asked for by</dt><dd class="mono">${esc(p.requester || '—')}${p.cls ? ` (${esc(p.cls)})` : ''}</dd><dt>Digest</dt><dd class="mono">${p.digest}</dd><dt>Signed by</dt><dd>${p.approver ? esc(p.approver) : 'not yet: your passkey signs this digest'}</dd></dl>`;
     const decided = !pend && p.status !== 'shadow' ? `<p class="dl-decided">${UI.statusMark(PS[p.status] || 'idle', p.status.startsWith('approved') || p.status === 'executed' ? 'Approved' : p.status[0].toUpperCase() + p.status.slice(1))}${p.approver ? ` by ${esc(p.approver)}` : ''}${p.reason ? `: “${esc(p.reason)}”` : ''}. ${p.status.startsWith('approved') || p.status === 'executed' ? 'conductor applied exactly what was signed.' : 'The bot was told.'}</p>` : p.status === 'shadow' ? '<p class="dl-decided dl-sub">Practice only (shadow mode): what the bot would have done. It can’t be approved.</p>' : '';
     // one column, in the order the decision needs and always in view: what will change (for a plan, the counts and the
     // resources by action, in Terraform's colours; otherwise exactly what it sends), why, where and what it does and how

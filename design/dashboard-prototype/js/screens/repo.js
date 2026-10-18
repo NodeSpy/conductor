@@ -99,7 +99,7 @@
   const derive = (kind, title, free) => `${kind.dir}/${kind.free && free ? free.replace(/^\/+/, '').replace(/\.md$/, '') : slug(title)}.md`;
   const botsOfTeam = (t) => D.bots.filter((b) => b.cfg && b.cfg.team === t).map((b) => b.name);
   const related = (r) => { const repos = [r]; if (r.kind === 'team') botsOfTeam(r.name).forEach((b) => repos.push(R.get('bot:' + b))); else { const b = D.bots.find((x) => x.name === r.name); if (b && b.cfg && b.cfg.team) repos.push(R.get('team:' + b.cfg.team)); } return repos; };
-  const caseHref = (id) => { const c = D.cases.find((x) => x.id === id); return c ? `#/bots/${c.bot}/cases/${id}` : null; };
+  const caseHref = (id) => { const c = D.cases.find((x) => x.id === id); return c ? `#/tickets/${id}` : null; };
   /** Who cites an entry: runbooks and log entries that link it, and the cases behind them. */
   const cites = (r, path) => {
     const stem = path.replace(/\.md$/, ''), out = { runbooks: [], logs: [], cases: new Set() };

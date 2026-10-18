@@ -921,3 +921,27 @@ window.D.packMembers = {
   const p12 = D.proposals.find((p) => p.id === 'p12'); if (p12) p12.env = 'production';
   D.connectors.forEach((c) => { if (c.name === 'tf-apply' || c.name === 'tf-plan') c.env = 'production'; if (c.name === 'kv') c.env = 'local'; });
 })();
+
+/* Tickets: a task is a ticket. Each has a priority, labels, maybe a due date and a description; it is assigned to a bot,
+ * to a team (its lead or routing picks a bot), or to nobody yet (triage). A ticket that came from an outside system
+ * (a GitHub issue, a PagerDuty incident) stays linked and mirrored through that connector. */
+(function () {
+  const D = window.D, now = Date.now(), m = (min) => new Date(now - min * 60000).toISOString(), inD = (d) => new Date(now + d * 86400000).toISOString().slice(0, 10);
+  const C = (id) => D.cases.find((c) => c.id === id) || {};
+  const set = (id, o) => Object.assign(C(id), o);
+  set('c29', { priority: 'urgent', labels: ['incident', 'api'], desc: 'PagerDuty paged: api p99 latency above 2s for 10 minutes in us-east. Find the cause, fix it, and keep the incident updated.', external: { connector: 'pd', kind: 'incident', system: 'PagerDuty', ref: 'SEV2 · api latency', url: 'https://acme.pagerduty.com/incidents/Q3RT8K', sync: 'mirrored', synced: m(1) } });
+  set('c31', { priority: 'normal', labels: ['drill'], due: inD(1), desc: 'Write down how the db-prod-1 failover drill went: time to fail over, what paged, what to change in the runbook.' });
+  set('c27', { priority: 'high', labels: ['cost'], desc: 'The routine cost check found NAT gateway spend up 44% week over week. Find which traffic grew and who owns it.' });
+  set('c24', { priority: 'low', labels: ['performance'], desc: 'Someone in #ops asked whether the /search cache TTL can go from 60s to 300s.' });
+  set('c33', { priority: 'normal', labels: ['bug', 'web'], desc: 'The checkout button sits 4px low on Safari 18 (macOS and iOS). Reported with a screenshot.', external: { connector: 'gh', kind: 'issue', system: 'GitHub', ref: 'acme/web#1284', url: 'https://github.com/acme/web/issues/1284', sync: 'mirrored', synced: m(3) } });
+  set('c34', { priority: 'urgent', labels: ['incident', 'web'], external: { connector: 'pd', kind: 'incident', system: 'PagerDuty', ref: 'web 5xx on /cart', url: 'https://acme.pagerduty.com/incidents/Q7LM2P', sync: 'mirrored', synced: m(2) } });
+  set('c7', { priority: 'normal', labels: ['finance'], due: inD(3), desc: 'Post the October forecast for AWS spend to #incidents with the main drivers.' });
+  set('c38', { priority: 'high', labels: ['backup'], desc: 'The nightly backup of nas-01 didn’t run. Find out why and re-run it.' });
+  set('c36', { priority: 'high', labels: ['incident', 'web'] });
+  D.ticketsVer = 1;
+  D.cases.forEach((c) => { c.priority = c.priority || 'normal'; c.labels = c.labels || []; });
+  D.cases.push(
+    { id: 'c40', team: 'platform', title: 'Rotate the staging TLS certificate before it expires', status: 'open', requester: 'operator:ops', cls: 'operator', opened: m(95), workers: 0, proposals: 0, priority: 'high', labels: ['security'], due: inD(5), desc: 'The staging certificate expires in 9 days. Rotate it with the usual process and confirm the new expiry.', notes: [] },
+    { id: 'c41', title: 'Add a public status page for the API', status: 'open', requester: 'event:gh.issue_opened', cls: 'event', opened: m(80), workers: 0, proposals: 0, priority: 'normal', labels: ['feature'], desc: 'A customer asks for a public status page showing API uptime and incidents.', external: { connector: 'gh', kind: 'issue', system: 'GitHub', ref: 'acme/api#486', url: 'https://github.com/acme/api/issues/486', sync: 'mirrored', synced: m(4) }, notes: [] },
+    { id: 'c42', title: 'Checkout end-to-end test times out on CI', status: 'open', requester: 'chat:U-THIRD', cls: 'user', opened: m(150), workers: 0, proposals: 0, priority: 'normal', labels: ['bug', 'ci'], desc: 'The checkout e2e test has timed out in 3 of the last 10 CI runs on main.', notes: [] });
+})();

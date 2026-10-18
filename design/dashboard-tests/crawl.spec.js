@@ -93,6 +93,9 @@ async function crawlRoute(page, testInfo, route, { afterLoad } = {}) {
     let downloads = 0;
     page.on('download', () => downloads++);
     page.on('filechooser', () => downloads++); // a control that opens the system file picker (attach, upload) has done its job
+    // a link out of the dashboard (Open in GitHub) opens a new tab: that is its effect; the tab closes, and nothing leaves the machine
+    await page.context().route(/^https?:\/\/(?!127\.0\.0\.1|localhost)/, (r) => r.abort());
+    page.on('popup', (p) => { downloads++; p.close().catch(() => {}); });
     const fresh = async () => { await go(page, route, { fresh: true }); if (afterLoad) await afterLoad(page); await inject(page); };
     await fresh();
     const initial = await page.evaluate((c) => window.__crawl.list(null, c), chrome);

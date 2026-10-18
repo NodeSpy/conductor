@@ -235,9 +235,9 @@
   const ACT_FACT = { read: ['act-read', 'Reads'], post: ['act-post', 'Posts a message'], push: ['act-push', 'Pushes code'], change: ['act-change', 'Changes a setting'], infra: ['act-infra', 'Changes infrastructure'], money: ['act-money', 'Spends money'], destroy: ['act-destroy', 'Deletes things'], permission: ['act-permission', 'Changes permissions'] };
   UI.actionFact = (verb, env, tier) => { const a = UI.actionOf(verb), [icon, value] = ACT_FACT[a] || ACT_FACT.change; return { icon, value, pri: 2, risky: UI.riskOf({ verb, env, tier }).level >= 3, label: 'What it does' }; };
   UI.envFact = (env) => (env ? { icon: 'server', value: env, prod: env === 'production', pri: 1, label: 'Environment' } : null);
-  /** A task id in prose ("(task c29)") said in words: the task's own name; as a link where the page can carry one. */
-  UI.taskWords = (text, link = false) => UI.esc(text).replace(/\(task (c\d+)\)/g, (m, id) => { const c = (D.cases || []).find((x) => x.id === id); if (!c) return ''; const name = `the task “${UI.esc(c.title)}”`;
-    return link && c.bot ? `(<a class="dl-link" href="#/bots/${c.bot}/cases/${id}">${name}</a>)` : `(${name})`; });
+  /** A ticket id in prose ("(task c29)", the ledger's word) said in words: the task's own name; as a link where the page can carry one. */
+  UI.taskWords = (text, link = false) => UI.esc(text).replace(/\(task (c\d+)\)/g, (m, id) => { const c = (D.cases || []).find((x) => x.id === id); if (!c) return ''; const name = `the ticket “${UI.esc(c.title)}”`;
+    return link ? `(<a class="dl-link" href="#/tickets/${id}">${name}</a>)` : `(${name})`; });
   /** A set of runs in words whose parts add up to the whole: "19 went fine · 2 failed · 3 running". */
   UI.runParts = (rs) => [[rs.filter((r) => r.status === 'ok').length, 'went fine'], [rs.filter((r) => r.status === 'fail' || r.status === 'stopped').length, 'failed'], [rs.filter((r) => r.status === 'run').length, 'running'], [rs.filter((r) => r.status === 'wait').length, 'waiting on you'], [rs.filter((r) => r.status === 'idle').length, 'parked']].filter(([n]) => n).map(([n, t]) => `${n} ${t}`).join(' · ');
   /** The tab bars on the page, each as the set of places its tabs go: two renders that share one are tabs of one page. */
@@ -309,7 +309,7 @@
   /* ---------- nav ---------- */
   // the rail, as in Daylight's mocks (design/brand/v2): the work, then Settings; only "Needs you" is counted hot
   const navGroups = [
-    ['', [['overview', 'Home', 'overview'], ['attention', 'Needs you', 'attention', () => D.attention.length, true], ['activity', 'Activity', 'live'], ['workflows', 'Workflows', 'workflows'], ['bots', 'Bots', 'bots'], ['browser', 'Browsers', 'globe']]],
+    ['', [['overview', 'Home', 'overview'], ['attention', 'Needs you', 'attention', () => D.attention.length, true], ['activity', 'Activity', 'live'], ['tickets', 'Tickets', 'ticket', () => D.cases.filter((c) => c.status === 'open' && !c.bot && !c.team).length], ['workflows', 'Workflows', 'workflows'], ['bots', 'Bots', 'bots'], ['browser', 'Browsers', 'globe']]],
     ['Settings', [['connectors', 'Connections', 'connectors'], ['secrets', 'Secrets', 'secrets'], ['extensions', 'Packs', 'extensions'], ['system', 'System', 'settings']]],
   ];
   UI.navGroups = navGroups;

@@ -1,0 +1,218 @@
+/* Tickets: the work conductor's bots do, as tickets. A ticket is for a team (its lead or routing picks a bot) or
+ * assigned to a bot, or waits in triage until someone assigns it. It has a priority, labels, maybe a due date, a
+ * description and a comment thread (the chat component: its assignee answers there); its runs, approvals, workers and
+ * hand-offs are linked; one that came from an outside system (a GitHub issue, a PagerDuty incident) stays linked and
+ * mirrored through that connector. The store is the bots' ledger (D.cases): a ticket is what the ledger calls a case.
+ * Pages: #/tickets (triage, then everything, with the shared filter bar), #/tickets/new, #/tickets/<id>; a bot's
+ * Tickets tab and a team's Tickets tab are the same rows, narrowed. */
+(function () {
+  const esc = UI.esc, icon = UI.icon, K = () => UI.ticketKit;
+  const now = () => new Date().toISOString();
+  const audit = (event, detail) => D.audit.unshift({ ts: now(), event, who: 'operator:ops', detail, run: '' });
+  const T = (id) => D.cases.find((c) => c.id === id);
+  const PRI = [['urgent', 'Urgent'], ['high', 'High'], ['normal', 'Normal'], ['low', 'Low']];
+  const priWord = (p) => (PRI.find(([k]) => k === p) || PRI[2])[1];
+  const teamOf = (c) => c.team || ((K().teamOf(K().M(c.bot)) || {}).name) || '';
+  UI.ticketTeam = teamOf;
+  /** Where a ticket stands, in words: [key, word, mark]. */
+  const STATUS = { new: ['Not assigned', 'wait'], team: ['With the team', 'idle'], open: ['Open', 'idle'], progress: ['In progress', 'run'], waiting: ['Waiting for you', 'ember'], done: ['Done', 'ok'] };
+  const statusOf = (c) => c.status === 'closed' ? 'done' : !c.bot && !c.team ? 'new' : (D.proposals || []).some((p) => p.case === c.id && p.status === 'pending') ? 'waiting'
+    : !c.bot ? 'team' : c.workers > 0 || (D.delegations || []).some((d) => d.parent === c.id && d.status === 'running') ? 'progress' : 'open';
+  UI.ticketStatus = (c) => { const k = statusOf(c); return { k, word: STATUS[k][0], mark: STATUS[k][1] }; };
+  const assignee = (c) => (c.bot ? c.bot : c.team ? `team ${c.team}` : 'Nobody yet');
+  /** Who asked, in words. */
+  const askedBy = (c) => { const r = String(c.requester || ''); return /^operator:/.test(r) ? (r === 'operator:ops' ? 'you' : r.slice(9)) : /^event:pd/.test(r) ? 'a PagerDuty incident' : /^event:gh/.test(r) ? 'a GitHub issue' : /^event:/.test(r) ? 'an event' : /^chat:/.test(r) ? 'someone in chat' : c.cls === 'proactive' ? 'a routine check' : /^bot:/.test(r) ? `${r.slice(4)} (a bot)` : r || 'someone'; };
+  const dueWord = (d) => { if (!d) return ''; const days = Math.round((Date.parse(d + 'T12:00:00') - Date.now()) / 86400000); return days < 0 ? `overdue by ${-days} day${days === -1 ? '' : 's'}` : days === 0 ? 'due today' : days === 1 ? 'due tomorrow' : `due in ${days} days`; };
+  const extFact = (x) => (x ? { icon: x.kind === 'incident' ? 'obj-incident' : 'obj-issue', value: x.ref, href: x.url, pri: 2, label: `${x.system} ${x.kind}, ${x.sync}` } : null);
+  /** A ticket's facts: who has it, priority when it isn't normal, when it's due, where it's mirrored, its labels. */
+  UI.ticketFacts = (c, o = {}) => [o.noAssignee ? null : c.bot ? { icon: 'obj-bot', value: c.bot, href: `#/bots/${c.bot}`, pri: 1, label: 'Assigned to' } : c.team ? { icon: 'team', value: `team ${c.team}`, href: `#/teams/${c.team}`, pri: 1, label: 'Assigned to the team' } : null,
+    c.priority === 'urgent' || c.priority === 'high' ? { icon: 'warn', value: priWord(c.priority), risky: c.priority === 'urgent', pri: 1, label: 'Priority' } : null,
+    c.due && c.status !== 'closed' ? { icon: 'calendar', value: dueWord(c.due), risky: /overdue|today/.test(dueWord(c.due)), pri: 2, label: 'Due' } : null,
+    extFact(c.external), ...(c.labels || []).map((l) => ({ icon: 'tag', value: l, pri: 3, label: 'Label' }))];
+  /** A ticket's row: the same anatomy as every list (mark, title, a line in words, the facts, the age, the action). */
+  UI.ticketRow = (c, o = {}) => { const s = UI.ticketStatus(c), verb = s.k === 'new' ? 'Assign' : s.k === 'waiting' ? 'Review' : '';
+    return `<li class="dl-need tk-row" data-s="${s.mark}" data-t="${c.id}"><a class="dl-need-a" href="#/tickets/${c.id}"><span class="dl-ng">${UI.mark(s.mark, { lg: true, label: s.word })}</span>
+      <span class="dl-nt"><b>${esc(c.title)}</b><span class="dl-why">${o.byStatus ? 'Asked' : `${s.word} · asked`} by ${esc(askedBy(c))}</span>${UI.factsLine(UI.ticketFacts(c, o))}</span>
+      <span class="dl-age">${UI.agoText(c.opened)}</span><span class="dl-na">${verb ? `<span class="btn sm secondary">${verb}</span>` : ''}</span></a></li>`; };
+
+  /* ---------- the comment thread: notes as chat rows ---------- */
+  UI.ticketRows = (id) => { const c = T(id); return ((c && c.notes) || []).map((n) => { const w = String(n.who || '');
+    if (/^operator:/.test(w)) return Object.assign({}, n, { who: 'op' });
+    if (/^bot:/.test(w)) return Object.assign({}, n, { who: 'bot', bot: w.slice(4), text: String(n.text || '').replace(/^↩ result of d\d+: /, 'Reporting back on the part I was handed: ') });
+    if (/^event:/.test(w)) return { who: 'event', at: n.at, text: n.text, source: askedBy({ requester: w }) };
+    return { who: 'sys', at: n.at, text: n.text }; }); };
+  UI.ticketComment = (id, key, v, done) => { const c = T(id); if (!c) return;
+    const note = { at: now(), who: 'operator:ops', text: v.text, state: 'queued' };
+    if (v.attachments.length) note.attachments = v.attachments.map(({ id: aid, kind, name, mime, size, thumb, preview }) => ({ id: aid, kind, name, mime, size, src: thumb, preview }));
+    if (v.links.length) note.links = v.links.map(({ url, host, path }) => ({ url, host, path }));
+    (c.notes = c.notes || []).push(note); audit('ticket_comment', `${id}`); S.save(); done(); UI.chatRedraw(key, '', id);
+    setTimeout(() => { note.state = 'delivered'; S.save(); UI.chatRedraw(key, '', id); }, UI.fast ? 60 : 1400);
+    if (c.bot && c.status === 'open') setTimeout(() => { c.notes.push({ at: now(), who: 'bot:' + c.bot, text: 'Noted on the ticket. I’ll take it into account and report back here.', ack: true }); S.save(); UI.chatRedraw(key, '', id); }, UI.fast ? 140 : 2800);
+  };
+
+  /* ---------- the list ---------- */
+  const tv = { q: '', who: [], status: [], priority: [], label: [], linked: [], group: 'status' };
+  const allLabels = () => [...new Set(D.cases.flatMap((c) => c.labels || []))].sort();
+  const keep = (c) => { const s = statusOf(c);
+    return (!tv.who.length || tv.who.includes(c.bot || (c.team ? 'team:' + c.team : 'nobody')) || (c.team && tv.who.includes('team:' + c.team)) || (!c.bot && !c.team && tv.who.includes('nobody')) || (c.bot && tv.who.includes('team:' + teamOf(c))))
+      && (!tv.status.length || tv.status.includes(s)) && (!tv.priority.length || tv.priority.includes(c.priority)) && (!tv.label.length || (c.labels || []).some((l) => tv.label.includes(l)))
+      && (!tv.linked.length || tv.linked.includes(c.external ? c.external.connector : 'none'))
+      && (!tv.q || `${c.title} ${c.desc || ''} ${c.bot || ''} ${c.team || ''} ${(c.labels || []).join(' ')} ${c.external ? c.external.ref : ''}`.toLowerCase().includes(tv.q.toLowerCase())); };
+  const tally = (xs) => { const mm = new Map(); xs.forEach((x) => mm.set(x, (mm.get(x) || 0) + 1)); return mm; };
+  const bar = (list) => UI.filterBar({ id: 'tk', state: tv, placeholder: 'Find a ticket, or filter: status:new', label: 'Find and filter tickets', fields: [
+    { k: 'who', label: 'Assignee', multi: true, alias: 'assignee', options: () => { const m = tally(list.map((c) => c.bot || (c.team ? 'team:' + c.team : 'nobody')));
+      D.teams.forEach((t) => { if (!m.has('team:' + t.name)) m.set('team:' + t.name, 0); });
+      return [...m].map(([v, n]) => ({ v, label: v === 'nobody' ? 'Nobody yet' : v.startsWith('team:') ? `team ${v.slice(5)}` : v, n: v.startsWith('team:') ? list.filter((c) => c.team === v.slice(5) || teamOf(c) === v.slice(5)).length : n })).filter((o) => o.n); } },
+    { k: 'status', label: 'Status', multi: true, keepOrder: true, options: () => Object.entries(STATUS).map(([v, [label]]) => ({ v, label, n: list.filter((c) => statusOf(c) === v).length })).filter((o) => o.n) },
+    { k: 'priority', label: 'Priority', multi: true, keepOrder: true, options: () => PRI.map(([v, label]) => ({ v, label, n: list.filter((c) => c.priority === v).length })).filter((o) => o.n) },
+    { k: 'label', label: 'Label', multi: true, more: true, options: () => [...tally(list.flatMap((c) => c.labels || []))].map(([v, n]) => ({ v, label: v, n })) },
+    { k: 'linked', label: 'Linked to', multi: true, more: true, options: () => [['gh', 'GitHub issues'], ['pd', 'PagerDuty incidents'], ['none', 'Not linked']].map(([v, label]) => ({ v, label, n: list.filter((c) => (c.external ? c.external.connector : 'none') === v).length })).filter((o) => o.n) },
+    { k: 'group', label: 'Group by', view: true, keepOrder: true, def: 'status', title: 'Group by', find: 'Group by', options: () => [{ v: 'status', label: 'Status' }, { v: 'who', label: 'Assignee' }, { v: 'none', label: 'None' }] }],
+    onChange: () => UI.rerender({ keepScroll: true }) });
+  const ORDER = ['waiting', 'progress', 'open', 'team', 'done'];
+  const byPri = (a, b) => PRI.findIndex(([k]) => k === a.priority) - PRI.findIndex(([k]) => k === b.priority) || Date.parse(b.opened) - Date.parse(a.opened);
+  const section = (title, rows, o = {}) => `<section class="dl-card tk-sec"${o.id ? ` id="${o.id}"` : ''}><header class="dl-ch"><h2>${title}</h2>${UI.count(rows.length, { hot: !!o.hot })}${o.sub ? `<span class="dl-sub">${o.sub}</span>` : ''}</header><ul class="dl-list">${rows.sort(byPri).map((c) => UI.ticketRow(c, o)).join('')}</ul></section>`;
+  /** A list of tickets grouped: triage first (when the list can have any), then by status or assignee. */
+  UI.ticketList = (list, o = {}) => { const shown = list.filter(keep), triage = shown.filter((c) => statusOf(c) === 'new'), rest = shown.filter((c) => statusOf(c) !== 'new');
+    const open = rest.filter((c) => c.status !== 'closed'), done = rest.filter((c) => c.status === 'closed');
+    let body = triage.length ? section('Not assigned yet', triage, { hot: true, byStatus: true, id: 'tk-triage', sub: 'Assign each to a team or a bot. Until then nobody works on it.' }) : '';
+    if (tv.group === 'none') body += open.length ? section('Open', open, o) : '';
+    else if (tv.group === 'who') { const g = new Map(); open.forEach((c) => { const k = assignee(c); g.set(k, (g.get(k) || []).concat(c)); }); [...g].sort((a, b) => a[0].localeCompare(b[0])).forEach(([k, xs]) => { body += section(esc(k), xs, { noAssignee: true }); }); }
+    else ORDER.filter((k) => k !== 'done').forEach((k) => { const xs = open.filter((c) => statusOf(c) === k); if (xs.length) body += section(STATUS[k][0], xs, Object.assign({ byStatus: true }, o)); });
+    if (done.length) body += `<details class="dl-card dl-files-d past-d"><summary class="panel-head"><h3>Done</h3><span class="muted small">${done.length}</span></summary><ul class="dl-list">${done.sort(byPri).map((c) => UI.ticketRow(c, o)).join('')}</ul></details>`;
+    const filtered = shown.length < list.length;
+    return `${bar(list)}${filtered ? `<p class="dl-sub tk-showing">Showing ${shown.length} of ${list.length} · <button class="link" data-act="tk-clear">Clear</button></p>` : ''}${body || `<p class="dl-sub">${filtered ? 'No ticket matches.' : o.none || 'No tickets yet.'}</p>`}`; };
+  UI.act('tk-clear', () => { Object.assign(tv, { q: '', who: [], status: [], priority: [], label: [], linked: [] }); UI.rerender({ keepScroll: true }); });
+
+  UI.route('tickets/:id?', ({ id }) => {
+    if (id === 'new') return newTicket();
+    if (id) return detail(id);
+    const list = D.cases, open = list.filter((c) => c.status !== 'closed').length, triage = list.filter((c) => statusOf(c) === 'new').length;
+    return `<div class="page dl-page tk-page"><div class="dl-phead"><div><h1>Tickets <span class="h1-count">${open} open${triage ? ` · ${triage} not assigned` : ''}</span></h1>
+      <p class="lede-2">A ticket is one piece of work for a team or a bot: from you, a chat, an event or a bot’s own check. Tickets that came from GitHub issues or PagerDuty incidents stay in sync with them.</p></div>
+      <div class="dl-actions"><a class="btn primary" href="#/tickets/new">${icon('plus')}New ticket</a></div></div>
+      ${UI.ticketList(list)}</div>`;
+  }, { nav: 'tickets' });
+
+  /* ---------- a ticket ---------- */
+  function detail(id) {
+    const c = T(id); if (!c) return `<div class="page"><div class="empty"><span class="serif">No ticket here</span><a class="btn" href="#/tickets">Tickets</a></div></div>`;
+    const k = K(), m = k.M(c.bot), s = UI.ticketStatus(c), open = c.status !== 'closed', team = teamOf(c);
+    const props = (D.proposals || []).filter((p) => p.case === c.id), workers = (D.workers || []).filter((w) => w.case === c.id), dels = (D.delegations || []).filter((d) => d.parent === c.id || d.child === c.id);
+    const canDel = open && m && UI.delegationReach(m.name).some((r) => r.ok);
+    const ext = c.external, key = 't:' + c.id;
+    const hist = [{ at: c.opened, t: `Opened by ${askedBy(c)}` }].concat(c.routed ? [{ at: c.opened, t: k.routeLabel(c.routed).replace(/<[^>]+>/g, '') }] : [])
+      .concat(D.audit.filter((a) => new RegExp(`\\b${c.id}\\b`).test(a.detail || '')).map((a) => ({ at: a.ts, t: histWord(a) }))).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+    const ctl = (k2, label, val, opts) => `<div class="tk-f"><span class="dl-lbl">${label}</span><button class="tk-pick" data-act="tk-set" data-k="${k2}" data-t="${c.id}" aria-label="${label}: ${esc(val)}. Change">${esc(val)}${icon('chevd')}</button></div>`;
+    return `<div class="page dl-page tk-page">
+      <div class="dl-crumbs"><a href="#/tickets">Tickets</a></div>
+      <section class="dl-card case-head tk-head"><div class="tk-ht">${UI.mark(s.mark, { lg: true, label: s.word })}<h1 class="case-title">${esc(c.title)}</h1></div>
+        <p class="dl-sub case-state">${s.word}${c.urgent && open ? ' · <b class="danger-text">urgent</b>' : ''} · ${open ? 'opened' : 'closed'} ${UI.agoText(c.opened)} by ${esc(askedBy(c))}</p>
+        ${UI.factsLine(UI.ticketFacts(c))}
+        <div class="dl-actions">${s.k === 'new' ? `<button class="btn primary" data-act="tk-set" data-k="who" data-t="${c.id}">${icon('users')}Assign…</button>` : ''}
+          <button class="btn secondary" data-act="case-close" data-m="${esc(c.bot || '')}" data-c="${c.id}">${icon(open ? 'check' : 'undo')}${open ? 'Mark done' : 'Reopen'}</button>
+          ${m ? `<button class="btn secondary" ${canDel ? `data-act="case-delegate" data-m="${m.name}" data-c="${c.id}"` : UI.off(!open ? 'Reopen the ticket to hand off part of it' : `${m.name} has no teammate or linked bot to hand off to`)}>${icon('send')}Hand off part of it</button>` : ''}
+          <button class="icon-btn" data-act="tk-more" data-t="${c.id}" aria-label="More for this ticket">${icon('more')}</button></div>
+        <p class="dl-sub case-route">${c.routed ? k.routeLabel(c.routed) + '.' : c.bot ? 'Assigned to it directly.' : c.team ? `Assigned to team ${esc(c.team)}: its lead or routing picks a bot.` : 'Not assigned yet: nobody works on it until it is.'}</p>
+        <details class="dl-audit-d"><summary>${icon('chev')}For audit: the ticket id and who asked, as recorded</summary><dl class="dl-facts"><dt>Ticket</dt><dd class="mono">${c.id}</dd><dt>Asked by</dt><dd><span class="mono">${esc(c.requester)}</span> (${esc(c.cls)}); carried through every hop, so whoever works it runs with no more trust than that</dd></dl></details></section>
+      <div class="grid g-side tk-grid">
+        <div class="stack">
+          <section class="dl-card tk-desc"><header class="dl-ch"><h2>Description</h2><span class="dl-sp"></span><button class="btn sm ghost" data-act="tk-edit" data-t="${c.id}">${icon('edit')}Edit</button></header>${c.desc ? `<p class="tk-body">${UI.md(c.desc)}</p>` : '<p class="dl-sub">No description.</p>'}</section>
+          <section class="panel chat tk-chat"><div class="panel-head"><h3>Comments</h3><span class="dl-sub">${c.bot ? `${esc(c.bot)} reads them and answers here` : 'The bot that takes it reads them'}</span></div>
+            ${UI.chatThread(UI.ticketRows(c.id), c.bot || 'conductor', { ticket: c.id, empty: 'No comments yet.' })}${UI.chatComposer(key, { ticket: c.id })}<div class="cm-drop" aria-hidden="true">${icon('attach')}Drop to attach to your comment</div></section>
+          ${dels.length ? `<div class="panel"><div class="panel-head"><h3>Hand-offs</h3><span class="muted small">parts handed to teammates; results report back here</span></div><div class="list">${dels.map((d) => (d.child === c.id ? k.edgeHTML(d).replace('class="item deleg"', 'class="item deleg inbound"') : k.edgeHTML(d))).join('')}</div></div>` : ''}
+        </div>
+        <div class="stack tk-side">
+          <section class="panel"><div class="panel-head"><h3>Details</h3></div><div class="tk-fields">
+            <div class="tk-f"><span class="dl-lbl">Status</span><span class="tk-st">${UI.mark(s.mark)} ${s.word}</span></div>${ctl('who', 'Assigned to', assignee(c))}${c.bot && team ? `<div class="tk-f"><span class="dl-lbl">Team</span><a class="dl-link" href="#/teams/${team}">${esc(team)}</a></div>` : ''}
+            ${ctl('priority', 'Priority', priWord(c.priority))}${ctl('due', 'Due', c.due ? `${c.due} · ${dueWord(c.due)}` : 'No date')}${ctl('labels', 'Labels', (c.labels || []).join(', ') || 'None')}</div></section>
+          <section class="panel tk-ext"><div class="panel-head"><h3>Outside conductor</h3></div>${ext ? `<div class="tk-x">${icon(ext.kind === 'incident' ? 'obj-incident' : 'obj-issue')}<div><b>${esc(ext.system)} ${esc(ext.kind)} · ${esc(ext.ref)}</b><span class="dl-sub">${ext.sync === 'mirrored' ? 'Mirrored' : esc(ext.sync)}: status, assignee and comments stay in sync · synced ${UI.agoText(ext.synced)}</span></div></div>
+              <div class="tk-xa"><a class="btn sm secondary" href="${esc(ext.url)}" target="_blank" rel="noopener noreferrer">${icon('external')}Open in ${esc(ext.system)}</a><button class="btn sm ghost" data-act="tk-sync" data-t="${c.id}">${icon('updates')}Sync now</button><button class="btn sm ghost" data-act="tk-unlink" data-t="${c.id}">Unlink</button></div>`
+            : `<p class="dl-sub tk-pad">Not linked. Link it to a GitHub issue or a PagerDuty incident and the two stay in sync.</p><div class="tk-xa"><button class="btn sm secondary" data-act="tk-link" data-t="${c.id}">${icon('link')}Link…</button></div>`}</section>
+          ${props.length || workers.length ? `<section class="panel"><div class="panel-head"><h3>Linked work</h3></div><ul class="cm-side-l">${props.map((p) => `<li><a class="cm-side-a" href="#/bots/${p.bot}/proposals/${p.id}"><b>${UI.mark(p.status === 'pending' ? 'ember' : p.status === 'executed' || p.status === 'approved' ? 'ok' : 'idle')} ${esc(p.title || p.summary)}</b>${UI.factsLine([UI.envFact(p.env), UI.actionFact(p.verb, p.env, p.tier)])}<span class="dl-sub">${p.status === 'pending' ? 'Waiting for you' : esc(p.status)}</span></a></li>`).join('')}
+            ${workers.map((w) => `<li><a class="cm-side-a" href="${w.run ? `#/runs/${w.run}` : `#/bots/${w.bot || c.bot}/workers`}"><b>${UI.mark(w.status === 'run' ? 'run' : w.status === 'ok' ? 'ok' : 'idle')} ${esc(w.brief || 'A worker')}</b><span class="dl-sub">${w.readOnly ? 'Read-only worker' : 'Worker'} · ${w.status === 'run' ? 'running' : 'finished'}</span></a></li>`).join('')}</ul></section>` : ''}
+          <section class="panel"><div class="panel-head"><h3>History</h3></div><ol class="tk-hist">${hist.map((h) => `<li><span>${esc(h.t)}</span><span class="dl-sub">${UI.agoText(h.at)}</span></li>`).join('')}</ol></section>
+        </div></div></div>`;
+  }
+  const histWord = (a) => ({ ticket_comment: 'You commented', ticket_assign: 'Assigned', ticket_edit: 'Edited', ticket_link: 'Linked outside conductor', ticket_unlink: 'Unlinked', ticket_new: 'Created', bot_case_close: 'Marked done', bot_case_reopen: 'Reopened', bot_case_note: 'You commented', bot_route: 'Reassigned', bot_delegate: 'Part handed off', bot_delegate_done: 'A hand-off reported back' }[a.event] || a.event.replace(/_/g, ' '));
+  UI.afterRender.push((main) => { const t = main.querySelector('.tk-chat #msgs'); if (t) t.scrollTop = t.scrollHeight; });
+
+  /* ---------- changing a ticket ---------- */
+  const whoOptions = () => [['', 'Nobody yet (triage)']].concat(D.teams.map((t) => ['team:' + t.name, `team ${t.name}: its lead or routing picks a bot`]), D.bots.map((b) => [b.name, `${b.name}${b.cfg && b.cfg.team ? ' · ' + b.cfg.team : ' · solo'}`]));
+  const assign = (c, v) => { const was = assignee(c); if (!v) { delete c.bot; delete c.team; } else if (v.startsWith('team:')) { c.team = v.slice(5); delete c.bot; } else { c.bot = v; c.team = ((K().teamOf(K().M(v)) || {}).name) || undefined; if (!c.team) delete c.team; }
+    c.routed = Object.assign({}, c.routed || {}, { by: 'operator', from: was, to: assignee(c).replace('Nobody yet', 'nobody (triage)'), team: c.team, requester_kept: true });
+    (c.notes = c.notes || []).push({ at: now(), who: 'conductor', text: `Assigned to ${assignee(c)} by you` }); audit('ticket_assign', `${c.id} → ${assignee(c)}`); };
+  UI.act('tk-set', (b) => { const c = T(b.dataset.t), k = b.dataset.k;
+    const F = { who: { k: 'who', type: 'enum', label: 'Assign to', options: whoOptions(), def: c.bot || (c.team ? 'team:' + c.team : '') },
+      priority: { k: 'priority', type: 'enum', label: 'Priority', options: PRI, def: c.priority },
+      due: { k: 'due', type: 'string', label: 'Due date (YYYY-MM-DD, empty for none)', mono: false, ph: '2026-10-25', def: c.due || '', validate: (x) => (!x || /^\d{4}-\d\d-\d\d$/.test(x) ? '' : 'A date like 2026-10-25') },
+      labels: { k: 'labels', type: 'list', label: 'Labels', def: c.labels || [], help: `In use: ${allLabels().join(', ')}` } }[k];
+    UI.form({ caps: 'ticket', title: { who: 'Assign the ticket', priority: 'Priority', due: 'Due date', labels: 'Labels' }[k], values: { [k]: F.def }, fields: [F], submit: 'Save',
+      onSubmit: (v) => { if (k === 'who') assign(c, v.who); else { if (k === 'due' && !v.due) delete c.due; else c[k] = v[k]; audit('ticket_edit', `${c.id} · ${k}`); }
+        S.save(); UI.closeModal(); UI.rerender({ keepScroll: true }); UI.refreshChrome(); } }); });
+  UI.act('tk-edit', (b) => { const c = T(b.dataset.t); UI.form({ caps: 'ticket', title: 'Edit the ticket', values: { title: c.title, desc: c.desc || '' }, fields: [{ k: 'title', type: 'string', req: true, mono: false }, { k: 'desc', type: 'text', label: 'Description' }], submit: 'Save',
+    onSubmit: (v) => { c.title = v.title; c.desc = v.desc; audit('ticket_edit', `${c.id} · text`); S.save(); UI.closeModal(); UI.rerender({ keepScroll: true }); } }); });
+  UI.act('tk-more', (b) => { const c = T(b.dataset.t); UI.menu(b, [['Assign…', 'users', 'tk-set', `data-k="who" data-t="${c.id}"`], ['Edit…', 'edit', 'tk-edit', `data-t="${c.id}"`], [c.external ? 'Unlink from ' + c.external.system : 'Link outside conductor…', 'link', c.external ? 'tk-unlink' : 'tk-link', `data-t="${c.id}"`], ['-'], ['Copy a link to it', 'copy', 'tk-copy', `data-t="${c.id}"`]]); });
+  UI.act('tk-copy', (b) => { try { navigator.clipboard.writeText(location.origin + location.pathname + '#/tickets/' + b.dataset.t).catch(() => {}); } catch (e) {} UI.toast('Link copied', esc(T(b.dataset.t).title), 'ok'); });
+  UI.act('tk-sync', (b) => { const c = T(b.dataset.t); c.external.synced = now(); S.save(); UI.rerender({ keepScroll: true }); UI.toast('In sync', `${esc(c.external.system)} ${esc(c.external.ref)}`, 'ok'); });
+  UI.act('tk-unlink', (b) => { const c = T(b.dataset.t); UI.confirm({ title: `Unlink from ${esc(c.external.system)}?`, body: `The ticket stays here and the ${esc(c.external.kind)} stays in ${esc(c.external.system)}; they stop syncing.`, ok: 'Unlink', danger: true }).then((ok) => { if (!ok) return; audit('ticket_unlink', `${c.id} · ${c.external.ref}`); delete c.external; S.save(); UI.rerender({ keepScroll: true }); }); });
+  UI.act('tk-link', (b) => { const c = T(b.dataset.t);
+    UI.form({ caps: 'ticket', title: 'Link outside conductor', intro: 'Through a connector that can mirror tickets. Status, assignee and comments stay in sync both ways.',
+      fields: [{ k: 'via', type: 'enum', req: true, label: 'Where', options: [['gh-new', 'Open a new GitHub issue'], ['gh', 'An existing GitHub issue'], ['pd', 'An existing PagerDuty incident']], def: 'gh-new' },
+        { k: 'repo', type: 'enum', label: 'Repository', options: [['acme/api', 'acme/api'], ['acme/web', 'acme/web'], ['acme/infra', 'acme/infra']], def: 'acme/api', show: (v) => v.via !== 'pd' },
+        { k: 'ref', type: 'string', label: 'Issue number or incident URL', mono: false, ph: '512', show: (v) => v.via !== 'gh-new', validate: (x) => (x ? '' : 'Which one?') }],
+      submit: 'Link', onSubmit: (v) => { const gh = v.via !== 'pd', num = v.via === 'gh-new' ? 500 + D.cases.length : String(v.ref).replace(/\D/g, '') || v.ref;
+        c.external = gh ? { connector: 'gh', kind: 'issue', system: 'GitHub', ref: `${v.repo}#${num}`, url: `https://github.com/${v.repo}/issues/${num}`, sync: 'mirrored', synced: now() } : { connector: 'pd', kind: 'incident', system: 'PagerDuty', ref: 'incident', url: /^https?:/.test(v.ref) ? v.ref : 'https://acme.pagerduty.com/incidents', sync: 'mirrored', synced: now() };
+        audit('ticket_link', `${c.id} · ${c.external.ref}`); S.save(); UI.closeModal(); UI.rerender({ keepScroll: true }); } }); });
+
+  /* ---------- New ticket ---------- */
+  const nv = { files: [], err: '' };
+  function newTicket() {
+    const q = new URLSearchParams((location.hash.split('?')[1]) || ''), bot = q.get('bot'), team = q.get('team'), from = q.get('from');
+    const msg = bot && from != null ? (D.chats[bot] || [])[+from] : null, text = msg ? String(msg.text || '') : '';
+    const title = text ? (text.split(/(?<=[.?!])\s/)[0] || text).replace(/\*\*|`/g, '').slice(0, 90) : '';
+    const def = bot ? bot : team ? 'team:' + team : '';
+    const opts = whoOptions().map(([v, l]) => `<option value="${esc(v)}"${v === def ? ' selected' : ''}>${esc(l)}</option>`).join('');
+    return `<div class="page dl-page tk-page tk-new"><div class="dl-crumbs"><a href="#/tickets">Tickets</a></div>
+      <div class="dl-phead"><div><h1>New ticket</h1>${msg ? `<p class="lede-2">From a message in ${esc(bot)}’s chat. It keeps a link back to the conversation.</p>` : ''}</div></div>
+      <form class="dl-card tk-form" novalidate>
+        <label class="tk-l"><span class="dl-lbl">Title</span><input class="input" id="tk-title" required maxlength="140" value="${esc(title)}" placeholder="What needs doing, in a line"></label>
+        <label class="tk-l"><span class="dl-lbl">Description</span><textarea class="textarea" id="tk-desc" rows="5" placeholder="What you know, what done looks like, links">${esc(text)}</textarea></label>
+        <div class="tk-l"><span class="dl-lbl">Attachments</span><div class="tk-att"><button type="button" class="btn sm secondary" data-act="tk-attach">${icon('attach')}Attach files or images</button><input type="file" id="tk-file" multiple hidden accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,text/*,.log,.csv,.json,.yaml,.yml,.md">
+          <span class="dl-sub">Up to ${UI.chatLimits.files} files, ${UI.bytes(UI.chatLimits.bytes)} each: images, PDF and text</span></div><div class="cm-pend" id="tk-pend"${nv.files.length ? '' : ' hidden'}>${nv.files.map(fileChip).join('')}</div><p class="cm-err" id="tk-err"${nv.err ? '' : ' hidden'}>${esc(nv.err)}</p></div>
+        <div class="tk-row2"><label class="tk-l"><span class="dl-lbl">Assign to</span><select class="select" id="tk-who">${opts}</select><span class="dl-sub">A team’s lead or routing picks the bot. Nobody yet puts it in triage.</span></label>
+          <label class="tk-l"><span class="dl-lbl">Priority</span><select class="select" id="tk-pri">${PRI.map(([v, l]) => `<option value="${v}"${v === 'normal' ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div>
+        <div class="tk-row2"><label class="tk-l"><span class="dl-lbl">Due</span><input class="input" type="date" id="tk-due"></label>
+          <label class="tk-l"><span class="dl-lbl">Labels</span><input class="input" id="tk-labels" placeholder="bug, web" list="tk-label-list"><datalist id="tk-label-list">${allLabels().map((l) => `<option value="${esc(l)}">`).join('')}</datalist></label></div>
+        <label class="tk-l tk-chk"><input type="checkbox" id="tk-gh"> <span>Also open it as a GitHub issue in <select class="select sm" id="tk-repo" aria-label="Repository"><option>acme/api</option><option>acme/web</option><option>acme/infra</option></select>, kept in sync</span></label>
+        <input type="hidden" id="tk-from" value="${msg ? esc(bot + ':' + from) : ''}">
+        <div class="dl-actions"><button class="btn primary" type="button" data-act="tk-create">${icon('plus')}Create ticket</button><a class="btn ghost" href="${bot ? `#/bots/${bot}/chat` : '#/tickets'}">Cancel</a></div></form></div>`;
+  }
+  const fileChip = (a, i) => `<span class="cm-p"><span>${icon(a.kind === 'image' ? 'image' : 'file')}</span><span class="cm-pt"><b>${esc(a.name)}</b><span class="dl-sub">${UI.bytes(a.size)}</span></span><button type="button" class="icon-btn sm" data-act="tk-unattach" data-i="${i}" aria-label="Remove ${esc(a.name)}">${icon('x')}</button></span>`;
+  const drawFiles = () => { const el = UI.$('#tk-pend'), er = UI.$('#tk-err'); if (el) { el.innerHTML = nv.files.map(fileChip).join(''); el.hidden = !nv.files.length; } if (er) { er.textContent = nv.err; er.hidden = !nv.err; } };
+  UI.act('tk-attach', () => UI.$('#tk-file').click());
+  UI.act('tk-unattach', (b) => { nv.files.splice(+b.dataset.i, 1); nv.err = ''; drawFiles(); });
+  document.addEventListener('change', (e) => { if (e.target.id !== 'tk-file') return; const L = UI.chatLimits, errs = [];
+    [...e.target.files].forEach((f) => { const img = /^image\/(png|jpeg|gif|webp)$/.test(f.type), ok = img || L.types[1][1].test(f.type || '') || L.exts.test(f.name);
+      if (!ok) errs.push(`${f.name} wasn’t attached: only images, PDF and text files can be attached`); else if (f.size > L.bytes) errs.push(`${f.name} wasn’t attached: it’s ${UI.bytes(f.size)}, and the limit is ${UI.bytes(L.bytes)} each`); else if (nv.files.length >= L.files) errs.push(`${f.name} wasn’t attached: up to ${L.files} files`); else nv.files.push({ kind: img ? 'image' : 'file', name: f.name, mime: f.type || 'text/plain', size: f.size, id: 'att_' + Math.random().toString(16).slice(2, 6) }); });
+    nv.err = errs.join('. '); e.target.value = ''; drawFiles(); });
+  UI.act('tk-create', () => { const ti = UI.$('#tk-title'), title = ti.value.trim(); if (!title) return UI.nudge(ti, 'Give it a title');
+    const who = UI.$('#tk-who').value, id = 'c' + (40 + D.cases.length), from = UI.$('#tk-from').value;
+    const c = { id, title, desc: UI.$('#tk-desc').value.trim(), status: 'open', requester: 'operator:ops', cls: 'operator', opened: now(), workers: 0, proposals: 0, priority: UI.$('#tk-pri').value || 'normal',
+      labels: UI.$('#tk-labels').value.split(',').map((x) => x.trim()).filter(Boolean), notes: [] };
+    if (UI.$('#tk-due').value) c.due = UI.$('#tk-due').value;
+    if (nv.files.length) c.notes.push({ at: now(), who: 'operator:ops', text: '', state: 'delivered', attachments: nv.files.slice() });
+    if (from) c.notes.unshift({ at: now(), who: 'conductor', text: `Made from a message in ${from.split(':')[0]}’s chat` });
+    if (UI.$('#tk-gh').checked) { const repo = UI.$('#tk-repo').value, num = 500 + D.cases.length; c.external = { connector: 'gh', kind: 'issue', system: 'GitHub', ref: `${repo}#${num}`, url: `https://github.com/${repo}/issues/${num}`, sync: 'mirrored', synced: now() }; }
+    D.cases.unshift(c); if (who) assign(c, who); c.notes = c.notes.filter((n) => !/^Assigned to/.test(n.text) || who); if (!who) delete c.routed; else c.routed = who.startsWith('team:') ? { by: 'direct', team: who.slice(5), to: `team ${who.slice(5)}`, requester_kept: true } : { by: 'direct', to: who, requester_kept: true };
+    audit('ticket_new', `${id} · ${title.slice(0, 60)} · ${assignee(c)}`); nv.files = []; nv.err = ''; S.save(); UI.refreshChrome(); UI.go(`#/tickets/${id}`); UI.toast('Ticket created', esc(assignee(c) === 'Nobody yet' ? 'It waits in triage until someone assigns it' : `Assigned to ${assignee(c)}`), 'ok'); });
+  document.addEventListener('submit', (e) => { if (e.target.matches && e.target.matches('.tk-form')) { e.preventDefault(); UI.$('[data-act="tk-create"]').click(); } });
+
+  /* ---------- a bot's tickets and a team's tickets: the same rows, narrowed ---------- */
+  UI.botTickets = (m) => { const list = D.cases.filter((c) => c.bot === m.name);
+    return `<section class="tk-in"><header class="dl-ch tk-inh"><p class="dl-sub">Tickets assigned to ${esc(m.name)}: from you, a chat, an event or its own checks. It keeps its notes on each and the parts it hands to teammates.</p><span class="dl-sp"></span><a class="btn sm secondary" href="#/tickets/new?bot=${encodeURIComponent(m.name)}">${icon('plus')}New ticket for it</a></header>
+      ${UI.ticketList(list, { noAssignee: true, none: `Nothing assigned to ${esc(m.name)}.` })}</section>`; };
+  UI.teamTickets = (t) => { const list = D.cases.filter((c) => c.team === t.name || teamOf(c) === t.name);
+    return `<section class="tk-in"><header class="dl-ch tk-inh"><p class="dl-sub">Tickets for team ${esc(t.name)} and its bots. One for the team goes to its lead or routing, which picks a bot.</p><span class="dl-sp"></span><a class="btn sm secondary" href="#/tickets/new?team=${encodeURIComponent(t.name)}">${icon('plus')}New ticket for the team</a></header>
+      ${UI.ticketList(list, { none: `No tickets for ${esc(t.name)}.` })}</section>`; };
+})();

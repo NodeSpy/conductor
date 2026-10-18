@@ -81,13 +81,14 @@ test('routing: add a rule, try it on a past event, route work with provenance ke
   await headAction(page, '[data-act="team-deliver"]');
   await page.selectOption('#f-event', 'ev-pd');
   await page.locator('#gen-submit').click();
-  await expect(page).toHaveURL(/#\/bots\/platform-sre\/cases\/c\d+/);
+  await expect(page).toHaveURL(/#\/tickets\/c\d+/);
+  await expect(page.locator('.tk-head .fx')).toContainText('platform-sre');
   await expect(page.locator('.case-head')).toContainText('routed to platform by rule pd-api');
   await expect(page.locator('.case-head')).toContainText('→ platform-sre');
   await expect(page.locator('.case-head')).toContainText('event:pd.incident');
   // an operator reassignment is recorded too, requester still kept
-  await go(page, '#/bots/web-triage/cases/c33');
-  await page.locator('[data-act="case-more"]').click(); await page.locator('#pop-menu [data-act="case-reassign"][data-to="platform-sre"]').click();
+  await go(page, '#/tickets/c33');
+  await page.locator('[data-act="tk-set"][data-k="who"]').click(); await page.selectOption('#f-who', 'platform-sre'); await page.locator('#gen-submit').click();
   await expect(page.locator('.case-head')).toContainText('reassigned by operator ops to platform-sre');
   await expect(page.locator('.case-head')).toContainText('event:gh.issue_opened');
 });
@@ -136,21 +137,22 @@ test('a case shows its delegation edges with status and the reported result', as
   await expect(page.locator('.item.deleg[data-deleg="d2"]')).toContainText('running');
   // the recipient's child case carries the original requester
   await page.locator('.item.deleg[data-deleg="d1"] a', { hasText: 'platform-data' }).click();
-  await expect(page).toHaveURL(/#\/bots\/platform-data\/cases\/c35/);
-  await expect(page.locator('.case-head')).toContainText('delegated by platform-sre → platform-data from task c29');
+  await expect(page).toHaveURL(/#\/tickets\/c35/);
+  await expect(page.locator('.case-head')).toContainText('delegated by platform-sre → platform-data from ticket c29');
   await expect(page.locator('.case-head')).toContainText('event:pd.incident');
 });
 
 test('closing a delegated case reports its result back to the delegating case', async ({ page }) => {
   await go(page, '#/bots/web-triage/cases/c36');
   await expect(page.locator('.item.deleg.inbound')).toContainText('running');
-  await page.fill('#case-note', 'Canary shows the same p99 step at 14:03.');
-  await page.locator('[data-act="case-note"]').click();
+  await page.fill('#say', 'Canary shows the same p99 step at 14:03.');
+  await page.locator('#say').press('Enter');
+  await expect(page.locator('#msgs .cm-op')).toContainText('Canary shows the same p99 step');
   await page.locator('[data-act="case-close"]').click();
   await expect(page.locator('.item.deleg.inbound')).toContainText('done');
   await go(page, '#/bots/platform-sre/cases/c29');
   await expect(page.locator('.item.deleg[data-deleg="d2"] .deleg-result')).toContainText('Canary shows the same p99 step');
-  await expect(page.locator('.panel', { hasText: 'Notes' })).toContainText('↩ result of d2');
+  await expect(page.locator('.tk-chat #msgs')).toContainText('Reporting back on the part I was handed: Canary shows the same p99 step');
 });
 
 test('have a bot delegate to a teammate; the child case works under the original requester', async ({ page }) => {
@@ -187,8 +189,8 @@ test('across teams, delegation exists only between linked bots; a bot with no li
   await go(page, '#/bots/release-scribe/cases');
   await headAction(page, '[data-act="m-deliver"]');
   await page.fill('#f-title', 'Draft notes for v2.14'); await page.locator('#gen-submit').click();
-  await expect(page.locator('button', { hasText: 'Delegate a task' })).toHaveAttribute('aria-disabled', 'true');
-  await expect(page.locator('button', { hasText: 'Delegate a task' })).toHaveAttribute('data-reason', /no teammate or linked bot/);
+  await expect(page.locator('button', { hasText: 'Hand off part of it' })).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.locator('button', { hasText: 'Hand off part of it' })).toHaveAttribute('data-reason', /no teammate or linked bot/);
 });
 
 test('the team page lists delegations and each bot\'s delegation reach (the activity graph is gone: it overlapped and isn\'t in the mocks)', async ({ page }) => {
