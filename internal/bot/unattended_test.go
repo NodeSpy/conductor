@@ -139,4 +139,3 @@ func TestUnattendedNeverDefault(t *testing.T) {
 		t.Fatalf("a proposal, no spend: %+v", rec)
 	}
 }
-
