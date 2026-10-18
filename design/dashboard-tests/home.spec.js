@@ -16,9 +16,12 @@ test('Home: no greeting or summary line; At a glance, Needs you with one action 
   await expect(page.locator('.dl-page > :not(.sr-only)').first()).toHaveClass(/dl-glance/);
   const tiles = page.locator('.dl-glance .dl-tile');
   await expect(tiles).toHaveCount(4);
-  await expect(tiles.locator('.dl-lbl')).toHaveText(['Running', 'Runs, last 12 h', 'Approvals', 'Bots']);
-  await expect(tiles.first()).toHaveAttribute('href', '#/activity?status=run');
-  await expect(tiles.first()).not.toContainText('ci-fixer'); // no names under the count
+  await expect(tiles.locator('.dl-lbl')).toHaveText(['Needs you', 'Running', 'Runs, last 12 h', 'Bots']);
+  // Needs you agrees with the badge, broken down by kind
+  const badge = await page.locator('#rail-nav [data-nav="attention"] .count').textContent();
+  await expect(tiles.first().locator('b')).toHaveText(badge.trim());
+  await expect(tiles.nth(1)).toHaveAttribute('href', '#/activity?status=run');
+  await expect(tiles.nth(1)).not.toContainText('ci-fixer'); // no names under the count
   await expect(tiles.locator('text=/passkey/')).toHaveCount(0);
   // Needs you: every item is one plain title with its reason and exactly one action
   const needs = page.locator('.dl-needs-card .dl-need');
@@ -68,7 +71,7 @@ test('Get started shows only what is left, the next step as the primary button, 
 
 test('the Running tile opens Activity filtered to running', async ({ page }) => {
   await go(page, '#/overview', { fresh: true });
-  await page.locator('.dl-glance .dl-tile').first().click();
+  await page.locator('.dl-glance .dl-tile[href="#/activity?status=run"]').click();
   await expect(page).toHaveURL(/#\/activity\?status=run/);
   await expect(page.locator('select[data-k="status"]')).toHaveValue('run');
   await expect(page.locator('#act-tbl tbody.g-attn')).toHaveCount(0);

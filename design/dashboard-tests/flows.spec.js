@@ -121,9 +121,11 @@ test.describe('bots', () => {
   });
   test('access: tier change and promotion are widening config edits; add verb; bind and unbind a credential', async ({ page }) => {
     await go(page, '#/bots/platform-sre/access');
-    await page.selectOption('select[data-v="kv.set"]', 'reversible');
+    // the plain list is the editor: move kv.set to "on its own" from its menu
+    await page.locator('[data-act="can-more"][data-v="kv.set"]').click();
+    await page.locator('#pop-menu [data-act="can-move"][data-mode="own"]').click();
     await page.locator('[data-act="acc-addverb"]').click();
-    await page.selectOption('#f-verb', 'gh.label'); await page.selectOption('#f-tier', 'propose');
+    await page.selectOption('#f-verb', 'gh.label'); // asks first, the default
     await submit(page);
     await page.locator('[data-act="cred-bind"]').first().click();
     await page.selectOption('#f-cred', 'app');
@@ -155,7 +157,7 @@ test.describe('bots', () => {
     await expect(page.locator('.case-state').first()).toContainText('Closed');
     await go(page, '#/bots/platform-sre/access');
     await page.locator('[data-act="login-revoke"]').click(); await page.locator('#cf-ok').click();
-    await expect(page.locator('.panel', { hasText: 'Browser logins' })).toContainText('No saved logins');
+    await expect(page.locator('.panel', { hasText: 'Saved browser sessions' })).toContainText('No saved logins');
     await go(page, '#/bots/platform-sre/memory');
     await page.locator('#rp-ed .ced-ta').fill('# db-prod-1\n\nPgbouncer pool: 200.\n');
     await page.locator('[data-act="rp-save"]').click();

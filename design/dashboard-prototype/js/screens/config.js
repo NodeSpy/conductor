@@ -28,7 +28,7 @@
     return `<section class="dl-card cfg-hist"><header class="dl-ch"><h2>Applied changes</h2><span class="dl-sub">newest first · each keeps a backup you can go back to</span></header>
       <ul class="dl-list">${D.configHistory.map((h, i) => { const open = view.open === h.id, cf = S.revertConflicts(h.id), live = h.status === 'live';
         return `<li class="cfg-h"><div class="cfg-h-row"><span class="dl-ng"></span>
-          <span class="dl-nt"><b>${esc(plainChange(h))}</b><span class="dl-tech mono">${esc(yamlPath(h))}</span></span>
+          <span class="dl-nt"><b>${esc(plainChange(h))}</b>${open ? `<span class="dl-tech mono">${esc(yamlPath(h))}</span>` : ''}</span>
           <span class="cfg-who"><span>${whoWords(h.who)}</span><span class="dl-sub">${UI.agoText(h.at)} · ${UI.dateTime(h.at)}</span></span>
           <span class="dl-na">${live ? '<span class="dl-sub">in use now</span>' : ''}<button class="btn sm ghost" data-act="hist-view" data-id="${h.id}" aria-expanded="${open}">${open ? 'Hide the diff' : 'Diff'}</button>
             ${live && D.configHistory.length === 1 ? '' : `<button class="icon-btn" data-act="cfg-h-more" data-id="${h.id}" data-i="${i}"${cf.length ? ` data-cf="${esc(cf.map((x) => x.summary).join('; '))}"` : ''} aria-label="More for this change">${icon('more')}</button>`}</span></div>
@@ -65,18 +65,18 @@
 
     <div class="dl-cols">
       <div class="dl-col-main">
-        <div class="panel"><div class="panel-head"><h3>Sections</h3><span class="muted small">open one in its visual editor, or jump to it in the YAML</span></div><div class="panel-body"><div class="sec-grid">${SECTIONS.map(([s, href, c]) => `<div class="sec-chip"><a href="#/${href}" class="grow"><b>${s}</b> <span class="mono tiny muted">${c()}</span></a><a class="icon-btn" href="#/config/raw?at=${s}" data-tip="${s}: in the YAML" aria-label="${s} in the YAML">${icon('code')}</a></div>`).join('')}</div></div></div>
+        <details class="panel dl-files-d cfg-sections"><summary class="panel-head"><h3>Edit the config by section</h3><span class="muted small">each section in its editor, or in the YAML</span></summary><div class="panel-body"><div class="sec-grid">${SECTIONS.map(([s, href, c]) => `<div class="sec-chip"><a href="#/${href}" class="grow"><b>${s}</b> <span class="mono tiny muted">${c()}</span></a><a class="icon-btn" href="#/config/raw?at=${s}" data-tip="${s}: in the YAML" aria-label="${s} in the YAML">${icon('code')}</a></div>`).join('')}</div></div></details>
         
       </div>
       <div class="dl-col-side">
         ${UI.usageMode() === 'off' ? '' : (() => { const src = (S.staged('usage', 'usage') || {}).source; return `<div class="panel" id="general"><div class="panel-head"><h3>Usage source</h3><span class="muted small">config: usage.source</span>${S.find('usage', 'usage') ? tag('staged', 'run') : ''}</div><div class="panel-body stack tight small"><div class="field">${src ? `<div class="row"><span class="mono grow">${esc(src.name)} · ${esc(src.url)}</span><button class="btn sm" data-act="usage-src">Edit</button><button class="btn sm ghost" data-act="usage-src-del">Remove</button></div>` : `<div class="row"><span class="muted grow">none: only counts conductor observes (runs, turns), per provider</span><button class="btn sm" data-act="usage-src">${icon('plus')}Add a usage source</button></div>`}<div class="hint">The proxy or load balancer in front of your model accounts, which reports plan limits and tokens. Config, so it goes through the diff.</div></div>${S.find('usage', 'usage') ? '<a class="btn sm primary" href="#/config/apply" style="align-self:flex-start">Review change</a>' : ''}</div></div>`; })()}
         
-        <div class="panel"><div class="panel-head"><h3>Guards</h3></div><div class="panel-body small stack tight">
+        <details class="panel dl-files-d"><summary class="panel-head"><h3>How a change is kept safe</h3></summary><div class="panel-body small stack tight">
           <div class="row guard"><span class="grow">Edits are node-level: comments, anchors and unknown keys are kept.</span></div>
           <div class="row guard"><span class="grow">Validated on a copy, with copied plugin state; <span class="mono">conductor validate</span> is not read-only.</span></div>
           <div class="row guard"><span class="grow">A config this binary can't load is never written.</span></div>
           <div class="row guard"><span class="grow">Also checked against the pending update (v0.72.0).</span></div>
-          <div class="row guard"><span class="grow">Boot guard: a config that fails at boot is restored automatically.</span></div></div></div>
+          <div class="row guard"><span class="grow">Boot guard: a config that fails at boot is restored automatically.</span></div></div></details>
         
         <div class="panel"><div class="panel-body row small"><span class="muted grow">Prototype: everything here is fake state in this browser.</span><button class="btn sm" data-act="reset-demo">${icon('undo')}Reset demo data</button></div></div>
       

@@ -41,7 +41,7 @@ test('build a workflow from scratch through the picker, then deploy it', async (
   await expect(page.locator('.diff')).toContainText('name: issue-labeler');
   await applyStaged(page);
   await go(page, '#/workflows');
-  await expect(page.locator('tr', { hasText: 'issue-labeler' })).toContainText('gh.issue_opened');
+  await expect(page.locator('tr', { hasText: 'issue-labeler' })).toContainText('An issue is opened'); // what it does, in words
 });
 
 test('insert a step between two others, keeping comments', async ({ page }) => {

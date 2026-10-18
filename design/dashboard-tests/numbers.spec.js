@@ -10,7 +10,7 @@ test('overview, rail and tab counts agree with the data', async ({ page }) => {
   const tile = (l) => page.locator('.dl-tile', { has: page.locator(`.dl-lbl:text-is("${l}")`) });
   await expect(tile('Bots').locator('b')).toHaveText(String(d.bots));
   await expect(tile('Bots').locator('.d')).toContainText(`${d.live} working`);
-  await expect(tile('Approvals').locator('b')).toHaveText(String(d.pending));
+  await expect(tile('Needs you').locator('b')).toHaveText(String(d.need)); // the same count as the badge
   await expect(tile('Running').locator('b')).toHaveText(String(d.running));
   await go(page, '#/browser/logins');
   await expect(page.locator('.tabs a[href="#/browser/logins"] .count')).toHaveText(String(d.logins));

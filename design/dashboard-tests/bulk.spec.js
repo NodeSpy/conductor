@@ -4,6 +4,7 @@
 const { test, expect, go, isPhone } = require('./fixtures');
 
 test('workflows: select two, move both to a folder, one diff, applied without a passkey', async ({ page }) => {
+  test.skip(isPhone(page), 'bulk selection is desktop-only');
   await go(page, '#/workflows', { fresh: true });
   await page.locator('input[data-act="wl-sel"][data-name="ci-fixer"]').click();
   await page.locator('input[data-act="wl-sel"][data-name="dep-bump"]').click();
@@ -19,6 +20,7 @@ test('workflows: select two, move both to a folder, one diff, applied without a 
 });
 
 test('workflows: shift-click selects a range; disable stages enabled: false', async ({ page }) => {
+  test.skip(isPhone(page), 'bulk selection is desktop-only');
   await go(page, '#/workflows', { fresh: true });
   const boxes = page.locator('#wl-body tr[data-row]:not(.hidden) input[data-act="wl-sel"]');
   await boxes.nth(0).click();

@@ -560,3 +560,11 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 @media (max-width: 720px) { #wl-body .wl-acts [data-act="wf-run"] { display: none; } .tbl.responsive td[data-l="what it does"]::before { display: none; } }
 /* Activity on a phone: the lists first (the strip's failures are the first group anyway); filters wrap, never scroll off */
 @media (max-width: 720px) { #act-strip { display: none; } .dl-filters { flex-wrap: wrap; } }
+/* phones: bulk selection is desktop-only (no checkboxes); a workflow card is its name and health, its sentence, its
+   menu; the header's status is its mark alone (the page's name keeps the room; the menu says the rest) */
+@media (max-width: 720px) {
+  #wl-body tr[data-row] > td.sel, .wl-table thead { display: none !important; }
+  #wl-body tr[data-row] { grid-template-columns: minmax(0, 1fr) auto !important; grid-template-areas: "wf last" "on on" "meta acts" !important; }
+  #wl-body tr[data-row] > td.wl-acts { grid-area: acts; }
+  .strip .status-btn .sw { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}

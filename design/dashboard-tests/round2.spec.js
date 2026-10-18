@@ -11,7 +11,7 @@ test('one source for the last 12 hours: Home\'s tile, its failures and Activity 
   expect(sum).toBe(n);
   const failedAt = (await page.locator('.dl-card', { hasText: 'Last 12 hours' }).locator('.dl-foot-note').textContent()).match(/ci-fixer at (\d\d:\d\d)/)[1];
   // the same page load (the demo's times are relative to the load, so a reload could cross a minute)
-  await page.evaluate(() => { location.hash = '#/activity?since=720'; }); await page.waitForSelector('#act-strip');
+  await page.evaluate(() => { location.hash = '#/activity?since=720'; }); await page.waitForSelector('#act-strip', { state: 'attached' });
   // the runs Activity lists for the same 12 hours (desktop table or phone list): shown rows, plus the rest of Finished
   const listed = await page.evaluate(() => { const vis = (e) => e.getClientRects().length > 0; const rows = [...document.querySelectorAll('#act-tbl tr[data-href], #act-phone li a[href^="#/runs/"]')].filter(vis);
     const more = [...document.querySelectorAll('[data-act="act-more"]')].find(vis), m = more && more.textContent.match(/Show (\d+) more \((\d+) in all\)/);
@@ -81,8 +81,8 @@ test('one empty choice per folder picker (bugs B3)', async ({ page }) => {
 
 test('a bot\'s reach is said once: a verb it may never run says never in its table too (newcomer N1, power N15)', async ({ page }) => {
   await go(page, '#/bots/platform-sre/access', { fresh: true });
-  const row = page.locator('.tbl tr', { hasText: 'gh.delete_*' });
-  await expect(row.locator('td[data-l="what it does"]')).toContainText('never');
+  await expect(page.locator('.cang[data-s="fail"] .can-item', { hasText: 'gh.delete_*' })).toHaveCount(1);
+  await expect(page.locator('.cang[data-s="ok"], .cang[data-s="ember"]').locator('.can-item', { hasText: 'gh.delete_*' })).toHaveCount(0);
   await expect(page.locator('.cang[data-s="fail"]')).toContainText('Delete in GitHub');
 });
 

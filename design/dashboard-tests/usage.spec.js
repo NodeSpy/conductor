@@ -50,7 +50,7 @@ test('default is off: no usage or cost UI on any screen, and the screens are sti
     if (r === '#/overview') { await expect(page.locator('.dl-glance .dl-tile')).toHaveCount(4); await expect(page.locator('.dl-card', { hasText: 'Last 12 hours' })).not.toContainText('spent'); }
   }
   // cloud spend is a real-world action, not model usage: still visible
-  await go(page, '#/bots/platform-sre/cases');
+  await go(page, '#/bots/platform-sre/access');
   await expect(page.locator('[data-cloud-spend]').first()).toBeVisible();
   // budget forms keep run/turn/token caps, no dollar fields
   await go(page, '#/teams/platform/defaults');

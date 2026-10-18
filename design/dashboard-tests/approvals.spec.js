@@ -42,7 +42,7 @@ test('terraform: one column in the order the decision needs, the plan and the au
   await expect(page.locator('.dl-ptitle')).toHaveText('Replace the production web server');
   await expect(page.locator('.prop-tabs')).toHaveCount(0);
   // the order: what will change, why, where/effect/undo, who asked
-  const order = await page.locator('.prop-body > *').evaluateAll((xs) => xs.map((x) => x.className.split(' ').find((c) => /prop-what|dl-pwhy|dl-where|dl-origin|prop-plan-d|dl-audit-d/.test(c))).filter(Boolean));
+  const order = await page.locator('.prop-body > *').evaluateAll((xs) => xs.map((x) => ['prop-what', 'dl-pwhy', 'dl-where', 'dl-origin', 'prop-plan-d', 'dl-audit-d'].find((c) => x.classList.contains(c))).filter(Boolean));
   expect(order.slice(0, 4)).toEqual(['prop-what', 'dl-pwhy', 'dl-where', 'dl-origin']);
   await expect(page.locator('.prop-what')).toContainText('Replaces');
   await expect(page.locator('.prop-what .plan-jump')).toContainText('aws_instance.web');

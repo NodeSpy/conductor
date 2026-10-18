@@ -8,8 +8,11 @@ test('a failed run: what happened, what you can do, and an audit scoped to the r
   await expect(page.locator('.dl-phead .dl-lead')).toContainText('The fix made it worse');
   // the check failed on the fix step's change, so the primary redoes the fix; rerunning the test alone is secondary
   await expect(page.locator('.dl-actions .btn.primary[data-act="retry"]')).toHaveAttribute('data-from', 'fix');
-  await expect(page.locator('.dl-actions .btn.secondary[data-act="retry"][data-from="test"]')).toContainText('Rerun “test” only');
-  await expect(page.locator('.dl-actions [data-act="run-dismiss"]')).toBeVisible();
+  await expect(page.locator('.run-next-why')).toContainText('redo that step'); // why it's the recommended step
+  await page.locator('[data-act="run-more"]').click();
+  await expect(page.locator('#pop-menu [data-act="retry"][data-from="test"]')).toContainText('Rerun “test” only');
+  await page.keyboard.press('Escape');
+  await page.locator('[data-act="run-more"]').click(); await expect(page.locator('#pop-menu [data-act="run-dismiss"]')).toBeVisible(); await page.keyboard.press('Escape');
   await expect(page.locator('[data-act="run-record"]')).toHaveCount(0); // export is retired: no downloads
   const audit = page.locator('.run-audit');
   await expect(audit).toContainText('workflow failed');
@@ -51,7 +54,7 @@ test('outputs carry no spend while usage display is off; targets never show #0',
 
 test('compare two runs: step status, durations, and the outputs diff with word highlights', async ({ page }) => {
   await go(page, '#/runs/r-7ef0', { fresh: true });
-  await page.locator('.dl-actions a', { hasText: 'Compare' }).click();
+  await page.locator('[data-act="run-more"]').click(); await page.locator('#pop-menu [data-act="strip-go"]', { hasText: 'Compare' }).click();
   await expect(page).toHaveURL(/#\/runs\/r-7ef0\/compare$/);
   await expect(page.locator('a[href="#/runs/r-7ef0/compare/r-7ea0"]')).toBeVisible(); // the other runs of the workflow
   await page.locator('a[href="#/runs/r-7ef0/compare/r-7e40"]').click();
@@ -76,7 +79,7 @@ test('a run page: Back to Activity keeps the filters and scroll; labelled detail
   await expect(page.locator('.pager, .run-tabs')).toHaveCount(0);
   // the details are labelled, with human durations
   const facts = page.locator('.dl-facts').first();
-  for (const [label, value] of [['Started', /\d+ min ago \(\d\d:\d\d\)/], ['Running for', /\d+ min/], ['Run', 'r-7f3a'], ['Workflow', 'ci-fixer'], ['Triggered by', 'A check failed on acme/api#482']]) {
+  for (const [label, value] of [['Started', /\d+ min ago \(\d\d:\d\d\)/], ['Running for', /\d+ min/], ['Workflow', 'ci-fixer'], ['Triggered by', 'A check failed on acme/api#482']]) {
     await expect(facts.locator(`dt:text-is("${label}") + dd`)).toHaveText(value);
   }
   // whole-run actions only: Stop run (confirmed), no risk meter, no paseo link in the head
@@ -102,7 +105,7 @@ test('Open in paseo is on the step with a live paseo session, never on a run wit
 
 test('dismiss a failed run from Needs you; the record stays in Activity', async ({ page }) => {
   await go(page, '#/runs/r-7ef0', { fresh: true });
-  await page.locator('[data-act="run-dismiss"]').click();
+  await page.locator('[data-act="run-more"]').click(); await page.locator('#pop-menu [data-act="run-dismiss"]').click();
   expect(await page.evaluate(() => D.attention.some((a) => a.href === '#/runs/r-7ef0'))).toBe(false);
   await go(page, '#/activity');
   await expect(page.locator('tr[data-href="#/runs/r-7ef0"]:visible, #act-phone a[href="#/runs/r-7ef0"]:visible').first()).toBeVisible();

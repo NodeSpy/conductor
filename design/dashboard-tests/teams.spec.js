@@ -32,14 +32,16 @@ test('assign a bot from its definition; the team ceiling and team tiers are enfo
   await expect(page.locator('.dl-crumbs')).toContainText('team platform');
   // finance's ceiling is observe: no bot on it may run anything without asking
   await go(page, '#/bots/billing-sre/access');
-  await page.selectOption('select[data-v="slack-ops.post"]', 'reversible');
-  await go(page, '#/bots/billing-sre/access');
-  await expect(page.locator('[data-act="acc-promote"][data-v="slack-ops.post"]')).toHaveAttribute('data-reason', /ceiling is observe/);
-  // platform classifies gh.delete_* as never: looser tiers are disabled for its bots
+  await page.locator('[data-act="can-more"][data-v="slack-ops.post"]').click();
+  await expect(page.locator('#pop-menu button', { hasText: 'Do it on its own' })).toHaveAttribute('data-reason', /only things that read/);
+  await page.keyboard.press('Escape');
+  // platform classifies gh.delete_* as never: a looser place is disabled for its bots, with the reason
   await go(page, '#/bots/platform-sre/access');
-  await expect(page.locator('select[data-v="gh.delete_*"] option', { hasText: 'propose' })).toBeDisabled();
+  await page.locator('[data-act="can-more"][data-v="gh.delete_*"]').click();
+  await expect(page.locator('#pop-menu button', { hasText: 'Ask me first' })).toHaveAttribute('aria-disabled', 'true');
+  await page.keyboard.press('Escape');
   // and validation refuses a promotion above the ceiling even if it's written by hand
-  await page.evaluate(() => { const c = JSON.parse(JSON.stringify(S.staged('bots', 'billing-sre'))); c.autonomy.promote = ['slack-ops.post']; S.stage('bots', 'billing-sre', c); });
+  await page.evaluate(() => { const c = JSON.parse(JSON.stringify(S.staged('bots', 'billing-sre'))); const T = c.autonomy.tiers = c.autonomy.tiers || {}; Object.keys(T).forEach((t) => { T[t] = T[t].filter((v) => v !== 'slack-ops.post'); if (!T[t].length) delete T[t]; }); T.reversible = ['slack-ops.post']; c.autonomy.promote = ['slack-ops.post']; S.stage('bots', 'billing-sre', c); });
   await go(page, '#/config/apply');
   await expect(page.locator('#chk-state')).toContainText('failed');
   await expect(page.locator('.callout.danger').first()).toContainText("team finance's ceiling is observe");

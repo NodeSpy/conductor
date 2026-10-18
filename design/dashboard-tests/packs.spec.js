@@ -28,8 +28,8 @@ test('Browse → Add → the install wizard: roles, arming with repos, loud gran
 test('where each pack comes from, on its row: the official catalog, your own, or a third party (named)', async ({ page }) => {
   await go(page, '#/extensions/packs', { fresh: true });
   const row = (n) => page.locator(`.pack-row`, { hasText: n }).first();
-  await expect(row('review')).toContainText('official catalog');
-  await expect(row('house-style')).toContainText('your own, local');
+  await expect(row('review')).toContainText('official');
+  await expect(row('house-style')).toContainText('your own');
   await expect(row('kit')).toContainText('third party · acme/conductor-packs/kit');
   await expect(page.locator('.pack-row[data-tip]')).toHaveCount(0); // nothing repeats the row in a tooltip
 });
