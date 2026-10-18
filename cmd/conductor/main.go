@@ -1898,6 +1898,21 @@ func signalSweepNow(cfg *config.Config) error {
 // signal.
 var signalProcess = syscall.Kill
 
+// isConductorProcess reports whether pid runs conductor: its command
+// line's program is conductor, by name (Linux, /proc). Without /proc only a pid > 1
+// is trusted, as before. A var, so tests decide.
+var isConductorProcess = func(pid int) bool {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		if _, perr := os.Stat("/proc/self"); perr == nil {
+			return false // /proc exists and the pid is gone (or not readable)
+		}
+		return pid > 1
+	}
+	prog, _, _ := strings.Cut(string(b), "\x00")
+	return filepath.Base(prog) == "conductor"
+}
+
 // signalDaemon reads the daemon's pid from the pidfile and sends it sig. A pid
 // must be > 1: kill(-1) signals every process the caller may signal, kill(0)
 // the caller's own group, and a negative pid a whole group, so a corrupt or
@@ -1912,8 +1927,15 @@ func signalDaemon(cfg *config.Config, sig syscall.Signal) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("bad pidfile %s: %w", p, err)
 	}
-	if pid <= 1 {
+	// Never 0 or a negative pid (a group, or every process the caller may
+	// signal). Any other only when it is a conductor process: a stale
+	// pidfile's pid may now be anyone's, and pid 1 is legitimately the
+	// daemon in a container (where conductor is the init), never otherwise.
+	if pid <= 0 {
 		return 0, fmt.Errorf("bad pidfile %s: pid %d is not a daemon process", p, pid)
+	}
+	if !isConductorProcess(pid) {
+		return 0, fmt.Errorf("pidfile %s: pid %d is not a conductor process (a stale pidfile?) — nothing was signalled", p, pid)
 	}
 	if err := signalProcess(pid, sig); err != nil {
 		return 0, fmt.Errorf("signal daemon (pid %d): %w", pid, err)
