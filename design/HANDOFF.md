@@ -2,7 +2,7 @@
 
 Branch `design/dashboard` (worktree `~/Projects/paseo-home/worktrees/2ccqu2oy/design-dashboard`).
 Prototype: `design/dashboard-prototype/` (static HTML/CSS/JS, hash routes, fake state in
-localStorage key `cd-proto-state-v5`, demo day in `cd-demo`, "Reset" and the demo days under ✦ in the rail). Served live
+localStorage key `cd-proto-state-v6`, demo day in `cd-demo`, "Reset" and the demo days under ✦ in the rail). Served live
 by the user service `dashboard-prototype` on this machine's tailnet address, port 8767 (don't stop or replace it).
 `design/CONFORMANCE.md` sets each screen beside the approved design it follows.
 Design doc: `docs/design/dashboard.md` (§3 is the visual language: Daylight, with the approved designs as the spec). Tests: `design/dashboard-tests/`.
@@ -110,8 +110,8 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
   interpolations, at 1440/900/390) and `status.spec.js`.
 - **From the iPhone review**: one stepper component everywhere, compact ("Step 2 of 5 · Watches" + a thin bar)
   whenever the labelled steps don't fit, never overlapping (`wizard.spec.js`, plus stepper checks in the layout and
-  iPhone sweeps); the passkey glyph only on controls that sign (`passkey.spec.js`); Pause dispatch moved to the status
-  menu and the System row (explained, confirmed, visible paused state, Resume); Run a workflow off the Overview (it's on
+  iPhone sweeps); the passkey glyph only on controls that sign (`passkey.spec.js`); Pause all automation lives in
+  System → Safety and ⌘K (explained, confirmed; while paused, Needs you says so with Resume); Run a workflow off the Overview (it's on
   each workflow and in ⌘K).
 
 - **Calm by default** (from the first review: "all of it just looks so busy"): exception-first on every key screen. The Overview's

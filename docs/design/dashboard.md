@@ -62,20 +62,51 @@ The rail keeps the everyday destinations; the rarely visited system pages share 
 
 ```
 Home · Needs you · Activity · Workflows · Bots · Browsers
-Settings   Connections · Secrets · Packs · Safety · System (Config · Updates · Logs & audit · Access)
+Settings   Connections · Secrets · Packs · System (Config · Safety · Updates · Logs & audit · Access)
 ```
 
 Some elements are on every screen:
 
-- **Top bar** (60px). Search (⌘K); then how things are, as a status mark and a word ("All systems normal",
-  "Something needs a look", "Dispatch paused", "An update needs you"); "N not applied" when config changes are staged;
-  the avatar (theme, display preferences, glossary, the prototype's demo data, Lock). The status menu holds Pause or
-  Resume dispatch and, quietly, an available update ("v0.72.0 installs itself within 10 min").
-- **Rail** (left, full height). The brand on top, the navigation, the host card at the foot; only Needs you carries a
-  hot count. It folds to icons below 1100px; below 720px it becomes a **tab bar**: Home, Needs you, Activity, Bots, More.
-- **⌘K palette**. Jump to any run, bot, workflow or setting, or run an action such as pausing dispatch.
+- **Top bar** (60px). Search (⌘K), "N not applied" when config changes are staged, and the avatar (theme, display
+  preferences, glossary, the prototype's demo data, Lock). There is no status menu: anything that needs a person is an
+  item in **Needs you** (a plain sentence and one action), and the Needs you count is the one attention signal.
+- **Rail** (left, full height). The brand on top, the navigation, and the **machine card** at the foot: the machine and
+  how it is ("Healthy · up 3 days"), with its update said quietly underneath ("v0.72.0 installs within 10 min"); the
+  whole card opens System → Updates. It takes the attention edge only when a person is needed (automation paused, or
+  an update that failed, is held or waits for an approval), and then that is also in Needs you. On a phone the card
+  is at the top of More. Only Needs you carries a hot count. It folds to icons below 1100px; below 720px it becomes a **tab bar**: Home, Needs you, Activity, Bots, More.
+- **⌘K palette**. Jump to any run, bot, workflow or setting, or run an action such as pausing all automation.
 - **Needs you**. One queue of everything that waits on a person: pending approvals, failed runs, questions and
-  hand-off drafts, browser push approvals.
+  hand-off drafts, browser push approvals, a connection that's down, an update that needs a person, and paused
+  automation. It opens on one tile per kind (the same counts as Home's tile and the badge; a tile sets the Kind
+  filter), then the shared filter bar (quiet while the list is short), then the list. A filter that hides items says
+  so ("Showing 2 of 6 · Show all"). Routine news (the sandbox blocked a site) is under "For your information"; a
+  routine update is not news, it's on the machine card.
+- **Lists of peers**. Every row of a list gets the same action treatment, in a fixed-width column, with a verb that
+  names what you'll do (Review an approval, Answer a question, Approve a sign-in, See why a run failed, Fix it for a
+  connection, Resume). One primary per view means one per decision surface (a dialog, a form, an approval's decision
+  bar), never one per list: what's more urgent says so with its mark and its place in the list.
+- **The filter bar** (`js/filter.js`, one component on every filtered list). One search field that holds readable
+  qualifiers and free text (`status:failed bot:platform-sre`), then plain text buttons with a caret (Status ▾, Bot ▾,
+  Folder ▾ …), each opening a searchable select menu: typeahead on top, checkmarks, several at once where that makes
+  sense, what's chosen and what you picked recently first, the keyboard throughout, at most 40 rows drawn (the rest
+  one keystroke away). Folder is a path (work ▸ platform), shown only when there's more than one folder. The field and
+  the menus are one state, and the field autocompletes qualifiers and their values. On a phone: the field and one
+  Filter button that opens a sheet with the same menus. There is no standalone folder button anywhere.
+  **conductor's own filters** (Kind, Status, Bot, Workflow, Time, and Folder when there's more than one) are always
+  there. **Every other filter is published by a connector** ([§5.0](#50-connector-attributes-and-the-filters-they-publish)):
+  GitHub publishes Repo and PR (and Branch, Author, Label, Check), PagerDuty Service and Urgency, Slack Channel, and
+  a third-party connector its own, the same way. A connector's primary filters are menus beside conductor's (Repo ▾
+  PR ▾ when GitHub is configured); the rest are under **More filters ▾**, grouped by connector; a set one gets its own
+  button. Every published filter is also a **search qualifier**, namespaced by connector (`github.repo:acme/web`,
+  `pagerduty.service:api`) with a short alias when no other configured connector uses the name (`repo:`); typing, or
+  "Filter by…" inside the field, lists them grouped by connector, and values autocomplete from the items in view.
+  Only configured connectors' filters appear, and only those that match something in the current list (no GitHub
+  connection, or nothing from GitHub here: no Repo menu). Screen code never names a connector field; the same
+  declarations drive a row's connector facts and what a run is "about" ("acme/web#1288").
+  **Layout, one everywhere**: a light toolbar above the content. A compact search field at input height (it widens
+  while focused or holding qualifiers), the menus on the same row, wrapping only when they don't fit; set filters
+  show their value in ink with an accent rule, and one Clear filters resets everything.
 
 ### 2.2 Routes
 
@@ -91,10 +122,10 @@ Some elements are on every screen:
 | `#/bots/<m>/<tab>[/<id>]`, `#/bots/new` | A bot. Tabs: approvals, chat, cases, memory, what it can do, settings |
 | `#/teams/<t>[/<tab>]` | A team |
 | `#/browser`, `#/browser/<id>`, `#/browser/logins` | Browsers and logins |
-| `#/connectors/<connectors\|runtimes\|hosts>` | Connections |
-| `#/secrets` | Secrets |
-| `#/extensions/<packs\|plugins\|browse>`, `#/extensions/pack/<name>`, `#/extensions/source` | Packs: installed, the catalog, a pack's overrides, add from a source |
-| `#/safety` | Safety: the sandbox and what each bot may do |
+| `#/connectors/<connectors\|runtimes\|languages\|hosts>` | Connections, what conductor can use: Services (each service with its version, updates and connections), Agent runtimes, Code languages, Machines; the catalog pages for a service, runtime or language sit under Connections |
+| `#/secrets`, `#/secrets/settings` | Secrets (the vaults at its foot) and Settings (settings and environment variables; old `#/secrets/env` links land here) |
+| `#/extensions/<packs\|browse>`, `#/extensions/pack/<name>`, `#/extensions/source` | Packs (bundles of workflows only): installed, browse packs, a pack's overrides, add from a source; `#/extensions/plugins` lands on Connections |
+| `#/safety` | System → Safety: the sandbox, what each bot may do, and Pause all automation |
 | `#/config`, `#/updates`, `#/logs/<daemon\|audit>`, `#/security` | System: Config, Updates, Logs & audit, Access |
 | `/signin`, `/enroll` | Sign-in, enrolment |
 
@@ -177,8 +208,9 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
   a button; a form focuses its first field, a destructive confirm its Cancel), keep Tab inside, return focus to the
   opener on any close. Menus take ↑/↓/Home/End/Esc. A double-click is one action.
 - **Rows** (Home's row, the model for every list): the mark · a plain title with the reason or detail under it · the
-  age · one action, and a ⋯ menu for the rest. A healthy row carries no mark at all (no bare dots); the view's first
-  item may take the one primary button, the rest are secondary. A row that needs someone gets a 3px leading edge in its state's colour
+  age · one action, and a ⋯ menu for the rest. A healthy row carries no mark at all (no bare dots); every row's action
+  is the same secondary button in a fixed-width column (rows are peers; one primary is per decision surface, never
+  per list). A row that needs someone gets a 3px leading edge in its state's colour
   and its reason in that colour under the name; nothing else in a list is coloured. Long values wrap inside their
   column; actions never cover text (`sweep.spec.js`).
 - **Grouped run table** (Activity): "Needs attention · N" (its count in the accent), "Running now", "Finished" (paged),
@@ -303,9 +335,9 @@ normally" sat beside failed runs), so the page opens on the figures, with Needs 
 
 Operations (not on the Overview itself, which leads with the answer and what needs you):
 
-- **Pause/Resume dispatch**: `setPaused`, as `conductor pause` does. It lives in the status menu (the health word
-  in the top bar): it says what pausing does, asks first, and while paused the top bar reads "Dispatch paused" and
-  the status menu offers Resume.
+- **Pause all automation / Resume**: `setPaused`, as `conductor pause` does. It lives in System → Safety ("Pause all
+  automation", with what it does and how to resume) and in ⌘K; it asks first. While paused, Needs you has "All
+  automation is paused" with Resume, the Safety tab leads with it, and the machine card says "Paused".
 - **Run a workflow**: control `run`, from the Workflows page (each workflow's Run) and ⌘K.
 
 #### 4.1.1 Usage display (`usage.mode`)
@@ -509,9 +541,11 @@ folder tree (folders → teams → bots, solo bots alongside teams) with
 - search across folders (names, descriptions, paths, teams);
 - a folder breadcrumb on bot and team pages (`Bots › work › platform ›
   team platform › platform-sre`);
-- a **folder filter** wherever it helps: Needs you on the overview and its
-  own page (approvals), run history, browsers. Items not tied to a bot in
-  that folder are hidden, and the page says how many;
+- **Folder ▾ in the filter bar** where it helps at scale: Activity and Needs
+  you (and Bots and Workflows when they adopt the bar). It is a searchable
+  path list and appears only when there's more than one folder; there is no
+  standalone folder button (it was on Needs you, Home and Browsers, where it
+  added nothing);
 - on a phone, the tree becomes a drill-down list, one level at a time;
   search there is a flat list across every folder;
 - below the tree, the peers and links map: team boundaries, intra-team peers
@@ -887,7 +921,7 @@ back on the team. A bot can be created solo.
   (`${settings.org}/deploys`), `${env.…}` sources and reference counts.
   Changes go through the pipeline.
 
-### 4.9 Packs and plugins, updates, connectors and hosts, logs
+### 4.9 Packs, updates, what conductor can use (services, runtimes, code languages, machines), logs
 
 - **Packs** (`packs:` + `conductor.lock.yaml`):
   - version and sha, official or third party, hold;
@@ -900,9 +934,15 @@ back on the team. A bot can be created solo.
   **Add / update / remove / hold** are `packs:` edits plus the fetch and lock
   that `conductor init` does, all validated on a copy. `pack_trust:` limits
   sources.
-- **Plugins.** Kind, version, source, instances, and whether an update
-  hot-reloads (`SameReloadSurface`) or restarts. Update, pin, remove.
-  **Browse** lists the official registry.
+- **Plugins are not a page of their own.** A plugin is what teaches conductor a service (or an agent runtime, or a
+  code language), and a connection is a configured use of it, so they live together on **Connections**, under "what
+  conductor can use": the **Services** tab lists each service (built in, official, or from a source) with its
+  version, an update when there is one (Update…, with the step-up), Keep at this version / Show permissions / Remove
+  in its ⋯ menu, and its connections under it, each saying whether it's working; a service with no connection yet
+  offers Connect. **Add a service** opens one searchable catalog (the official registry) with "from a git URL" in the
+  same flow. **Agent runtimes** and **Code languages** (the engines behind code steps) list theirs the same way.
+  Whether an update hot-reloads (`SameReloadSurface`) or restarts is in its detail. The word "plugin" stays in the
+  technical layer. **Packs** are only bundles of workflows, with their own Browse.
 - **Updates.**
   - The available release and its preflight: the **downloaded** binary's
     `validate` against this config, on a copy, with
@@ -1058,6 +1098,36 @@ These came out of two UX audits (a newcomer and a power user; responses in
   Backup ids are labelled UTC beside local times.
 
 ## 5. API
+
+### 5.0 Connector attributes and the filters they publish
+
+This is part of the **one plugin contract**: every connector (built in, official or third party, with no special
+cases for built-ins) declares, alongside its events and verbs, the attributes its items carry and the filters it
+publishes. Each attribute: `name`, `label`, `icon`, `type` (string, number, enum, list), `from` (where the value
+sits in an event's fields), `format` and `link` (how it reads, where it opens), `display` (a fact on a row),
+`search` (it's a published filter), `menu` (a primary filter: its own menu by default), `multi` (several values at
+once; the default) and `values` (where the choices come from: `items`, the items in view, or `enum`). The dashboard
+API serves these for each configured connection, and the dashboard never hard-codes any of them:
+
+```
+GET /api/v1/connectors/attrs
+→ [{ connector: "github", connection: "gh", label: "GitHub",
+     attrs: [{ name: "repo", label: "Repo", icon: "branch", type: "string", search: true, menu: true, display: true, from: "repo", values: "items" },
+             { name: "pr", label: "PR", search: true, menu: true, display: true, from: "number",
+               format: "{repo}#{number}", link: "https://github.com/{repo}/pull/{number}" }, …],
+     target: "{repo}#{number}" }, …]
+```
+
+- `search` attributes are published filters: a menu each when `menu` (the rest under More filters), and qualifiers
+  `<connector>.<name>:` (alias `<name>:` when unique among configured connections); a filter appears only when a
+  value of it is in the list in view. The list endpoints accept them (`GET /api/v1/runs?github.repo=acme/web`) and
+  `GET /api/v1/connectors/attrs/values?key=github.repo&prefix=acme/` serves autocomplete values.
+- `display` attributes are a row's connector facts; `format` says how a value reads, `link` where it opens.
+- `target` says what an item is about in the connector's words; an event's `label` (from the connector's
+  declaration) says what started a run ("A check failed").
+- A third-party connector declares the same shape in its plugin manifest; nothing in the dashboard changes.
+- In the prototype, `js/connattrs.js` plays this endpoint from `js/schema.js`; `connattrs.spec.js` fails if the
+  list, filter, search or facts code names a connector field, and checks that only configured connectors publish.
 
 ### 5.1 Conventions
 

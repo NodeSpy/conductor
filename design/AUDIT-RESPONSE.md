@@ -81,6 +81,37 @@ section paths, event names and hashes appear only in detail layers.
   row's menu stays in reach on a phone. **Packs**: plain grammar for what's switched on, **Customize** instead of
   Overrides, no prototype note. **Connections**: the menu sits inline.
 
+### The owner's notes after r4 (built; options waiting on a pick)
+
+- **Tabs keep the page still**: switching a tab never replays the page's entrance; the frame and the tab bar stay
+  where they were, and every tab of a page puts its tab bar in one place (`still.spec.js`, every tab of every tabbed
+  page, sampled each frame, with classic scrollbars forced). The shell keeps a stable scrollbar gutter, never
+  scrolls sideways, and wide content scrolls in its own box.
+- **Safety is a System tab**; old `#/safety` links open it. **Pause all automation** lives there, in plain words.
+- **No top-bar status menu**: whatever needs a person is an item in Needs you (paused automation, a connection that's
+  down, an update that needs someone); the machine card at the rail's foot (More on a phone) says how the machine is
+  and, quietly, its update, linking to System → Updates.
+- **Needs you** opens on one stat tile per kind (Home's tile, Home's grid, the same counts as Home and the badge); a
+  tile filters to its kind. The shared filter bar sits under them; "Showing 2 of 6 · Show all" whenever a filter
+  hides anything.
+- **One filter bar everywhere** (`js/filter.js`, in the brand book for review): a compact search field holding
+  readable qualifiers, menus that read as dropdowns, each searchable with selected and recent first; a folder is a
+  path; on a phone one Filter button and a sheet. The standalone folder button is gone from every screen.
+- **Connectors publish their filters**: GitHub's Repo ▾ and PR ▾ (the rest under More filters ▾) and qualifiers
+  (`github.repo:`, `repo:`), only for configured connectors and only when something in view matches; screen code
+  names no connector field (`connattrs.spec.js`).
+- **List rows are peers**: the same secondary button on every row, verbs that say what you'll do, time and action in
+  fixed columns that line up (`rows.spec.js`).
+- **The demo stays a normal day**: saved timestamps move forward with the clock; Activity's chart and lists cover the
+  same hours (an older failure is one click away); the hand-off text is plain words.
+- **Secrets**: two tabs, one system (Secrets; Settings with settings and environment variables), the same row and
+  menu on both, readable names with the exact reference and Copy, vaults always open at the foot with their own Add a
+  vault, the unlock described in words.
+- **What conductor can use** is one place (Connections: Services, Agent runtimes, Code languages, Machines); Packs is
+  packs only.
+- **Waiting on a pick** (`browse-options.html`): Bots and Workflows browsing, the facts line, and the New bot flow
+  with community bots.
+
 ### Not done (and why)
 
 - Bulk on the bots tree, retarget connector / set model in bulk (power N24): scope, unchanged from round 1.

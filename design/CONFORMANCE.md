@@ -37,9 +37,11 @@ bar.
 
 Deliberate differences:
 - **Navigation** follows the later structural decisions: Run history is merged into **Activity**; the Settings group is
-  Connections, Secrets, Packs, **Safety** and **System** (Config, Updates, Logs & audit and Access, under one item with
-  its own sub-navigation). Updates is not in the rail; an available update is said quietly in the status menu and only
-  escalates when it needs a person.
+  Connections, Secrets, Packs and **System** (Config, Safety, Updates, Logs & audit and Access, under one item with its
+  own sub-navigation; old `#/safety` links open the Safety tab). There is no top-bar status menu: what needs a person
+  is in Needs you, and the machine card at the rail's foot (More on a phone) says how the machine is and, quietly, its
+  update; an update escalates (attention edge on the card, and an item in Needs you) only when it needs a person.
+  Pause all automation lives on the Safety tab.
 - The avatar opens a small menu (theme, display preferences, glossary, the prototype's demo data, Lock): the mock has
   no place for these.
 - When config changes are staged, the top bar shows "N not applied" (the staged-change mark) linking to the review.
@@ -69,7 +71,7 @@ Deliberate differences:
 - **Running now** shows at most three runs, longest-running first, then "+N more running →"; no step counts (the status
   rule); hidden when nothing runs.
 - **No sunrise** (the logo rule). Cost ("$8.40 spent") appears only when usage display is on (it is off by default).
-- **Get started** appears only while something is left, with the next step as the one primary button.
+- **Get started** appears only while something is left; its steps are peers, each with the same secondary button.
 
 | | Approved | Prototype |
 |---|---|---|
@@ -193,9 +195,9 @@ folded. Teams take the bot page's header.
 | Screen | What it follows | Prototype |
 |---|---|---|
 | Needs you | Home's Needs you list, every item | ![](conformance/needs-desktop-light-prototype.jpg) |
-| Connections | the row anatomy; the attention state as the reason line | ![](conformance/connections-desktop-light-prototype.jpg) |
-| Secrets | one line each: name and vault, used by in words, changed; the reference in the row's detail | ![](conformance/secrets-desktop-light-prototype.jpg) |
-| Packs | compact rows; Add a pack opens the catalog; guided overrides | ![](conformance/packs-desktop-light-prototype.jpg) |
+| Connections | what conductor can use: Services (each service, built in, official or from a source, with its version, an update, and its connections under it), Agent runtimes, Code languages, Machines; Add a service opens one catalog (search, or a git URL) | ![](conformance/connections-desktop-light-prototype.jpg) |
+| Secrets | two tabs, one system: Secrets and Settings (settings and environment variables) share one row (readable name with the exact reference and Copy, used by, value or where it lives, ⋯ Change the value / Copy the reference / Delete) and the same two-sentence explanation; the filter bar; vaults always open at the foot of Secrets with their own Add a vault | ![](conformance/secrets-desktop-light-prototype.jpg) |
+| Packs | packs only (bundles of workflows): Installed and Browse; compact rows; Add a pack opens the catalog; guided overrides | ![](conformance/packs-desktop-light-prototype.jpg) |
 | Pack overrides | roles → compatible connections, triggers with consent, steps via the builder, YAML second | ![](conformance/pack-overrides-desktop-light-prototype.jpg) |
 | Safety | the sandbox in plain words; exceptions; containers; each bot's three groups (no tier ladder) | ![](conformance/safety-desktop-light-prototype.jpg) |
 | System · Config | applied changes full width, readable at a glance | ![](conformance/config-desktop-light-prototype.jpg) |
