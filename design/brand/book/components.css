@@ -320,3 +320,15 @@
 .c-fb-sheet .handle { width: 36px; height: 4px; border-radius: 2px; background: var(--color-border-strong); margin: 8px auto 2px; }
 .c-fb-sheet .row { display: grid; grid-template-columns: auto minmax(0, 1fr) 16px; gap: 10px; align-items: center; min-height: 48px; padding: 0 8px; border-bottom: var(--border-width) solid var(--color-border-subtle); font: var(--type-body-m); }
 .c-fb-sheet .row b { text-align: right; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .c-fb-sheet .row .any { text-align: right; color: var(--color-text-tertiary); } .c-fb-sheet .row svg { width: 15px; height: 15px; color: var(--color-icon-default); }
+
+/* ---------- Facts line (dashboard UI.facts) ---------- */
+.c-fx-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) 92px 104px; gap: 4px 16px; align-items: center; padding: 14px 0; border-top: var(--border-width) solid var(--color-border-subtle); }
+.c-fx-row:first-child { border-top: 0; }
+.c-fx-row .m svg { width: 14px; height: 14px; } .c-fx-row b { font-weight: 700; } .c-fx-row p { margin: 2px 0 0; color: var(--color-text-secondary); font-size: 14px; }
+.c-fx-row .age { justify-self: end; font: var(--type-body-s); color: var(--color-text-tertiary); white-space: nowrap; } .c-fx-row .c-btn { justify-content: center; }
+.panel[style*="max-width:340px"] .c-fx-row { grid-template-columns: 18px minmax(0, 1fr) auto; } .panel[style*="max-width:340px"] .c-fx-row > div { grid-column: 2 / -1; } .panel[style*="max-width:340px"] .c-fx-row .age { grid-column: 2; justify-self: start; } .panel[style*="max-width:340px"] .c-fx-i.low { display: none; }
+.c-fx { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 14px; margin-top: 5px; font-size: 12.5px; color: var(--color-text-secondary); }
+.c-fx-i { display: inline-flex; align-items: center; gap: 5px; } .c-fx-i svg { width: 13px; height: 13px; color: var(--color-icon-default); }
+.c-fx-i.ln { color: var(--color-text-primary); text-decoration: underline; text-decoration-color: var(--color-border-strong); text-underline-offset: 3px; }
+.c-fx-i.hi { color: var(--color-text-primary); font-weight: 700; } .c-fx-i.hi svg { color: var(--color-text-primary); }
+.c-fx-i.prod { color: var(--color-status-warning-fg); font-weight: 700; } .c-fx-i.prod svg { color: var(--color-status-warning-fg); }
