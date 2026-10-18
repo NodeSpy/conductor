@@ -499,3 +499,18 @@ func dropIndex(t *testing.T, repo *Repo) {
 		}
 	}
 }
+
+// A recall's hint names a command that exists: a session reads sections;
+// an operator's cat reads the whole document.
+func TestRecallHints(t *testing.T) {
+	hits := []Hit{{Path: "knowledge/a.md", Kind: "knowledge", Title: "A"}}
+	if n := recallOut(hits, "conductor bot read", "conductor bot index")["note"].(string); !strings.Contains(n, "conductor bot read <path> --section") {
+		t.Fatalf("session hint: %s", n)
+	}
+	if n := recallOut(hits, "conductor bot memory cat sre", "conductor bot memory index sre")["note"].(string); strings.Contains(n, "--section") || !strings.Contains(n, "conductor bot memory cat sre <path>") {
+		t.Fatalf("operator hint: %s", n)
+	}
+	if n := recallOut(nil, "conductor bot team read", "conductor bot team index")["note"].(string); !strings.Contains(n, "conductor bot team index") {
+		t.Fatalf("no hits: %s", n)
+	}
+}

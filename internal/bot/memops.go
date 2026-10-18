@@ -71,9 +71,12 @@ func recallOut(hits []Hit, read, index string) map[string]any {
 		out = append(out, e)
 	}
 	res := map[string]any{"hits": out, "count": len(out)}
-	if len(out) > 0 {
+	switch {
+	case len(out) > 0 && strings.HasSuffix(read, " read"):
 		res["note"] = "Best match first. Read what you need: `" + read + " <path> --section \"<heading>\"` (sections are listed when a read is cut)."
-	} else {
+	case len(out) > 0:
+		res["note"] = "Best match first. Read one: `" + read + " <path>`."
+	default:
 		res["note"] = "No document matched. Try other words, or list what there is: `" + index + "`."
 	}
 	return res
