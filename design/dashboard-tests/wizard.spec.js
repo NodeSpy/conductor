@@ -9,10 +9,14 @@ test('every wizard header fits in every state', async ({ page }) => {
   expect(await walkWizards(page)).toEqual([]);
 });
 
-test('New bot on a phone: the stepper is compact; on a desktop the five labelled steps show', async ({ page }) => {
+test('New bot is a sheet over the Bots page (full screen on a phone) with a quiet progress line, not a stepper', async ({ page }) => {
   const { go } = require('./fixtures');
   await go(page, '#/bots/new', { fresh: true });
-  const compact = await page.locator('.stepper').evaluate((el) => el.classList.contains('compact'));
-  if (page.viewportSize().width <= 720) { expect(compact).toBe(true); await expect(page.locator('.step-compact .sc-t')).toHaveText('Step 1 of 5 · Purpose'); }
-  else { expect(compact).toBe(false); await expect(page.locator('.stepper .as')).toHaveCount(5); }
+  await expect(page.locator('.nb-sheet[role="dialog"]')).toBeVisible();
+  await expect(page.locator('.nb-under .bot-list')).toBeAttached(); // the Bots page is underneath
+  await expect(page.locator('.nb-head .dl-sub')).toHaveText('Step 1 of 5 · Purpose');
+  await expect(page.locator('.nb-prog[role="progressbar"]')).toHaveAttribute('aria-valuenow', '1');
+  await expect(page.locator('#main .stepper')).toHaveCount(0);
+  const r = await page.locator('.nb-sheet').boundingBox(), w = page.viewportSize().width;
+  if (w <= 720) expect(Math.round(r.width)).toBe(w); else expect(r.width).toBeLessThan(w - 200);
 });

@@ -406,3 +406,17 @@ th.sel, td.sel { width: 30px; padding-right: 0 !important; }
 .can-i .grow { min-width: 0; }
 .prop-head { gap: var(--space-3); }
 .prop-head .sep { width: 1px; height: 16px; background: var(--color-border-default); }
+
+/* New bot: a large sheet over the Bots page (full screen on a phone) */
+.nb-under { pointer-events: none; }
+.nb-scrim { position: fixed; inset: 0; z-index: 150; background: var(--color-scrim); }
+.nb-sheet { position: fixed; z-index: 160; top: 24px; bottom: 24px; left: 50%; transform: translateX(-50%); width: min(920px, calc(100vw - 48px)); display: flex; flex-direction: column; background: var(--color-bg-canvas); border: var(--border-width) solid var(--color-border-default); border-radius: var(--radius-overlay, 14px); box-shadow: var(--shadow-3); outline: none; }
+.nb-head { display: flex; align-items: center; gap: 14px; padding: 16px 22px 0; }
+.nb-head h1 { font: var(--type-h2); font-family: var(--font-family-serif); font-size: 22px; margin: 0; }
+.nb-x { width: 40px; height: 40px; flex: none; border: var(--border-width) solid var(--color-border-default); border-radius: var(--radius-control); }
+.nb-x svg { width: 18px; height: 18px; }
+.nb-prog { height: 3px; margin: 12px 22px 0; border-radius: 2px; background: var(--color-border-subtle); } .nb-prog i { display: block; height: 100%; border-radius: 2px; background: var(--color-accent-default); transition: width var(--motion-duration-fast, .15s) var(--motion-easing-out, ease-out); }
+.nb-body { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 18px 22px 22px; }
+.nb-foot { margin: 0; padding: 12px 22px; border-top: var(--border-width) solid var(--color-border-subtle); }
+.nb-esc { font-size: 12.5px; }
+@media (max-width: 720px) { .nb-sheet { inset: 0; top: 0; bottom: var(--fixb, 0); transform: none; width: auto; border: 0; border-radius: 0; } .nb-head { padding-top: calc(12px + var(--sat, 0px)); } .nb-esc { display: none; } .nb-foot { padding-bottom: calc(12px + var(--sab, 0px)); } }

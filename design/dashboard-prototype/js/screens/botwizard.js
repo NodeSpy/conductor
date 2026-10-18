@@ -97,12 +97,19 @@
   }
   const canNext = () => (bw.at === 0 ? (bw.purpose && !nameErr() && !UI.folderPathErr(bw.folder) ? '' : !bw.purpose ? 'Pick what it should do first' : nameErr() ? 'Fix the name first' : 'Fix the folder first') : bw.at === 2 && bw.tell === 'slack' && !bw.slack ? 'Pick a Slack connector' : bw.at === 2 && bw.tell === 'slack' && !CHANNEL.test(bw.channel || '') ? 'A Slack channel is # and up to 80 lowercase letters, digits, - or _' : '');
   const CHANNEL = /^#[a-z0-9][a-z0-9_-]{0,79}$/;
-  UI.route('bots/new', () => { const why = canNext();
-    return `<div class="page wizard">${UI.head('New bot', { crumbs: '<a href="#/bots">Bots</a>', sub: 'an AI teammate with memory: it watches what you pick, tells you what it finds, and asks before acting', actions: `<button type="button" class="btn secondary bw-close" data-act="bw-close" aria-label="Close the new bot (Esc)">${icon('x')}Close</button>` })}
-      ${UI.stepper(STEPS, bw.at)}
-      <div class="stack bw-body" style="gap:14px">${stepHTML()}</div>
-      <div class="wizard-foot">${bw.at ? `<button class="btn" data-act="bw-back">${icon('chev', 'flip')}Back</button>` : ''}<span class="grow"></span>
-        ${bw.at < STEPS.length - 1 ? `<button class="btn primary" ${why ? UI.off(why) : 'data-act="bw-next"'}>Next</button>` : `<button class="btn primary" data-act="bw-create">${icon('check')}Review and apply</button>`}</div></div>`; }, { nav: 'bots' });
+  /* New bot is a large sheet over the Bots page (the chosen option A): you can see where you came from; a ✕ where people
+     look for it, Esc, or the scrim closes it (asking first only once something's been entered); a thin progress line
+     instead of a big stepper; full screen on a phone. */
+  UI.route('bots/new', () => { const why = canNext(), pct = Math.round(((bw.at + 1) / STEPS.length) * 100);
+    return `${UI.botsPage ? `<div class="nb-under" aria-hidden="true" inert>${UI.botsPage()}</div>` : ''}<div class="nb-scrim" aria-hidden="true"></div>
+    <section class="nb-sheet" role="dialog" aria-modal="true" aria-labelledby="nb-title" tabindex="-1">
+      <header class="nb-head"><button type="button" class="icon-btn nb-x bw-close" data-act="bw-close" aria-label="Close the new bot (Esc)">${icon('x')}<span class="sr-only">Close</span></button>
+        <div><h1 id="nb-title">New bot</h1><span class="dl-sub">Step ${bw.at + 1} of ${STEPS.length} · ${esc(STEPS[bw.at])}</span></div></header>
+      <div class="nb-prog" role="progressbar" aria-valuemin="1" aria-valuemax="${STEPS.length}" aria-valuenow="${bw.at + 1}" aria-label="Step ${bw.at + 1} of ${STEPS.length}"><i style="width:${pct}%"></i></div>
+      <div class="nb-body"><div class="stack bw-body" style="gap:14px">${stepHTML()}</div></div>
+      <footer class="wizard-foot nb-foot">${bw.at ? `<button class="btn" data-act="bw-back">${icon('chev', 'flip')}Back</button>` : ''}<span class="grow dl-sub nb-esc">Esc closes; you’re asked first once you’ve entered something.</span>
+        ${bw.at < STEPS.length - 1 ? `<button class="btn primary" ${why ? UI.off(why) : 'data-act="bw-next"'}>Next</button>` : `<button class="btn primary" data-act="bw-create">${icon('check')}Review and apply</button>`}</footer>
+    </section>`; }, { nav: 'bots', after: (p, main) => { const s = main.querySelector('.nb-sheet'); if (s && !s.contains(document.activeElement)) s.focus({ preventScroll: true }); } });
   const redraw = () => UI.rerender();
   UI.act('bw-purpose', (b) => { const p = PURPOSES[b.dataset.p], prev = bw.purpose && PURPOSES[bw.purpose]; bw.purpose = b.dataset.p; if (!bw.name || (prev && bw.name === prev.name)) bw.name = p.name; if (!bw.description || (prev && bw.description === prev.description)) bw.description = p.description; bw.events = new Set(p.events.filter((k) => events().some((e) => e.key === k))); redraw(); });
   UI.act('bw-set', (el) => { bw[el.dataset.k] = el.value; if (el.tagName === 'SELECT') { redraw(); return; } const f = el.closest('.field');
@@ -125,6 +132,7 @@
   UI.act('bw-close', () => { if (!dirty()) { bw = fresh(); UI.go('#/bots'); return; }
     UI.confirm({ title: 'Discard this new bot?', body: 'What you’ve entered so far is thrown away. Nothing has been created yet.', ok: 'Discard', cancel: 'Keep editing', danger: true }).then((ok) => { if (ok) { bw = fresh(); UI.go('#/bots'); } }); });
   UI.act('bw-cancel', () => { bw = fresh(); });
+  document.addEventListener('click', (e) => { if (e.target.classList && e.target.classList.contains('nb-scrim')) UI.acts['bw-close'](); }); // a click beside the sheet closes it
   document.addEventListener('keydown', (e) => { if (e.key !== 'Escape' || location.hash.split('?')[0] !== '#/bots/new' || document.querySelector('.modal, .drawer-scrim, #pop-menu, .fb-menu, .palette')) return; e.preventDefault(); UI.acts['bw-close'](); }, true); // capture: decided before any dialog's own Esc closes it
   UI.act('bw-create', () => { if (bw.at !== STEPS.length - 1 || nameErr() || canNext()) return; const name = bw.name; S.stage('bots', name, botCfg(), `new bot ${name}`); chosenEvents().forEach((e) => S.stage('workflows', trigName(e), trigYAML(e), `trigger ${trigName(e)} hands ${e.on} to ${name}`)); D.prefs.returnTo = { href: `#/bots/${name}`, label: name }; bw = fresh(); UI.staged(D.pending[D.pending.length - 1]); });
 })();
