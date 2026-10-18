@@ -75,6 +75,11 @@ type Settings struct {
 	// Unavailable refuses every launch, with why (a container still being
 	// prepared, or required and impossible).
 	Unavailable string
+	// Profiles are personal details, Cards payment cards (wallet.go), by
+	// name; PurchaseTTL how long an approved purchase may be filled.
+	Profiles    map[string]Profile
+	Cards       map[string]Card
+	PurchaseTTL time.Duration
 }
 
 // LoginSiteConfig is one opted-in site: who may use it, and what further
@@ -116,6 +121,16 @@ type Manager struct {
 	// EnvFile is conductor.env (a plain file), named in a resolve check's
 	// warning when a secret comes from a variable it sets.
 	EnvFile string
+	// Purchases is the purchase ledger (purchases.go); nil: no card can be
+	// used. Paused reports "pause all automation" (no payment while it
+	// holds). BotPurchase hands a bot's purchase to its gate (its
+	// commit_money tier and spend cap): the bot proposal's id, or
+	// unattended (allowed now under the bot's opt-in caps).
+	Purchases   *Purchases
+	Paused      func() bool
+	BotPurchase func(ctx context.Context, c Principal, p Purchase) (proposal string, unattended bool, err error)
+	// OnPurchase tells the operator a purchase waits on them (Needs you).
+	OnPurchase func(p Purchase)
 	// Store is the logins the operator added at runtime (nil = none): they
 	// join the config's credentials and login sites.
 	Store *LoginStore
@@ -153,7 +168,17 @@ func (m *Manager) settings() Settings {
 		m.logf("browser: the login store: %v", err)
 		return st
 	}
-	return WithStore(st, recs)
+	st = WithStore(st, recs)
+	ps, cs, frozen, err := m.Store.Wallet()
+	if err != nil {
+		m.logf("browser: the wallet: %v", err)
+		// Unreadable: no stored profile or card, and every card frozen.
+		frozen = map[string]time.Time{}
+		for name := range st.Cards {
+			frozen[name] = time.Now()
+		}
+	}
+	return WithWallet(st, ps, cs, frozen)
 }
 
 // Effective is the settings every browser action sees: the config's and the
@@ -197,6 +222,7 @@ var Actions = []string{
 	"screenshot", "evaluate", "back", "forward", "reload", "tabs", "tab-new", "tab-select",
 	"tab-close", "downloads", "upload", "status", "close",
 	"login", "fill-credential", "await-approval",
+	"profiles", "fill-profile", "fill-form", "cards", "purchase", "purchase-status", "pay",
 }
 
 func knownAction(a string) bool {
@@ -758,6 +784,8 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 	case "close":
 		m.closeSession(s)
 		return map[string]any{"closed": true}, nil
+	case "profiles", "cards", "purchase", "purchase-status":
+		return m.walletInfo(ctx, c, st, action, args, entry)
 	}
 
 	var target string
@@ -1013,6 +1041,53 @@ func (m *Manager) act(ctx context.Context, s *session, c Principal, st Settings,
 			return nil, err
 		}
 		out["filled"] = field
+	case "fill-profile":
+		name, field := str("profile"), str("field")
+		entry["profile"], entry["field"] = name, field
+		allow := allowFor(c, st)
+		if in == s.login {
+			allow = loginAllow(allow, s.sites, st)
+		}
+		id, err := in.node(t, ref)
+		if err != nil {
+			return nil, err
+		}
+		if err := m.fillProfile(ctx, in, t, c, st, name, field, id, allow, entry); err != nil {
+			return nil, err
+		}
+		out["filled"] = field
+	case "fill-form":
+		name := str("profile")
+		entry["profile"] = name
+		only := map[string]bool{}
+		for _, f := range strings.Split(str("fields"), ",") {
+			if f = strings.TrimSpace(f); f != "" {
+				only[f] = true
+			}
+		}
+		allow := allowFor(c, st)
+		if in == s.login {
+			allow = loginAllow(allow, s.sites, st)
+		}
+		res, err := m.fillForm(ctx, in, t, c, st, name, only, allow, entry)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range res {
+			out[k] = v
+		}
+	case "pay":
+		allow := allowFor(c, st)
+		if in == s.login {
+			allow = loginAllow(allow, s.sites, st)
+		}
+		res, err := m.pay(ctx, s, in, t, c, st, args, allow, entry)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range res {
+			out[k] = v
+		}
 	case "await-approval":
 		name := str("credential")
 		entry["credential"] = name

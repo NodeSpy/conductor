@@ -403,13 +403,8 @@ func (g *Gate) checkSpend(m config.BotConfig, rec store.BotRecord, amt float64, 
 	if g.Ledger.BotsDegraded() {
 		return errors.New("the bot ledger was unreadable at boot (spend history unknown) — commit_money is refused until an operator restores bots.json")
 	}
-	cur := sc.CurrencyOr()
-	if amt > sc.PerAction {
-		return fmt.Errorf("amount %.2f %s exceeds the per-action cap %.2f %s", amt, cur, sc.PerAction, cur)
-	}
-	spent := spentSince(rec, g.now().Add(-sc.PeriodD()))
-	if spent+amt > sc.PerPeriod {
-		return fmt.Errorf("amount %.2f %s would bring spend in the last %s to %.2f, over the cap %.2f %s", amt, cur, sc.PeriodD(), spent+amt, sc.PerPeriod, cur)
+	if err := sc.Check(amt, g.now(), func(since time.Time) float64 { return spentSince(rec, since) }); err != nil {
+		return err
 	}
 	_ = atExecution
 	return nil

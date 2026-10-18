@@ -254,6 +254,9 @@ func (c *Config) instantiateTemplate(name string, m BotConfig, lt LoadedTemplate
 	if len(m.Autonomy.Promote) > 0 {
 		o.Widenings = append(o.Widenings, "promoted to run unapproved: "+strings.Join(m.Autonomy.Promote, ", "))
 	}
+	for pat := range m.Autonomy.Unattended {
+		o.Widenings = append(o.Widenings, "buys unattended: "+pat)
+	}
 	// Behavior the operator left unset.
 	if m.Description == "" {
 		m.Description = t.Description

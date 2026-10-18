@@ -78,6 +78,15 @@ func (in *Instance) snapshot(ctx context.Context, t *tab, max int) (string, int,
 	if err := in.conn().Call(ctx, t.session, "Accessibility.getFullAXTree", map[string]any{}, &r); err != nil {
 		return "", 0, err
 	}
+	// A field conductor filled never shows its value (a CVC or a region
+	// code is too short to scrub from text: its node is what is known).
+	in.mu.Lock()
+	for i := range r.Nodes {
+		if in.secretNodes[r.Nodes[i].BackendID] && r.Nodes[i].Value != nil {
+			r.Nodes[i].Value = &axValue{Value: json.RawMessage(`"` + FilledMark + `"`)}
+		}
+	}
+	in.mu.Unlock()
 	text, refs := renderAX(r.Nodes, max)
 	in.mu.Lock()
 	if t.refs == nil {
@@ -89,6 +98,9 @@ func (in *Instance) snapshot(ctx context.Context, t *tab, max int) (string, int,
 	in.mu.Unlock()
 	return text, len(refs), nil
 }
+
+// FilledMark stands in a snapshot for the value of a field conductor filled.
+const FilledMark = "«filled by conductor»"
 
 // renderAX turns an AX tree into the snapshot text, and the refs it shows.
 func renderAX(nodes []axNode, max int) (string, map[string]int64) {

@@ -93,8 +93,9 @@ func (c *Config) MaxDelegationDepth(bot string) int {
 // TeamAutonomy is a team's ceiling on its bots' gates.
 type TeamAutonomy struct {
 	// Ceiling is the highest tier any bot may be PROMOTED to, i.e. run
-	// without an operator's signature: "reversible" (the default — the most
-	// promotion can reach) or "observe" (no bot promotes anything).
+	// without an operator's signature: "reversible" (the default), "observe"
+	// (no bot promotes anything), or "commit_money" (a bot may also buy
+	// unattended, under its autonomy.unattended caps — never the default).
 	Ceiling string `yaml:"ceiling,omitempty"`
 	// Shadow, when true, holds every bot in shadow mode; a bot cannot
 	// set shadow: false. Bots that don't set shadow inherit it.
@@ -368,6 +369,9 @@ func checkTeamCeilings(team string, t TeamConfig, m BotConfig) error {
 		}
 	}
 	a := m.Autonomy
+	if len(a.Unattended) > 0 && t.Autonomy.Ceiling != TierCommitMoney {
+		return fmt.Errorf("autonomy.unattended buys without approval, above team %s's autonomy.ceiling %q — the team must set autonomy.ceiling: %s", team, t.Autonomy.Ceiling, TierCommitMoney)
+	}
 	if t.Autonomy.Ceiling == TierObserve && len(a.Promote) > 0 {
 		return fmt.Errorf("autonomy.promote [%s] promotes to %s, above team %s's autonomy.ceiling %s", strings.Join(a.Promote, ", "), TierReversible, team, TierObserve)
 	}
@@ -583,9 +587,9 @@ func (c *Config) validateBotTeam(name string, t TeamConfig) error {
 		return fmt.Errorf("delegation.max_depth: want 1 to 10 hops, got %d", d.MaxDepth)
 	}
 	switch t.Autonomy.Ceiling {
-	case "", TierObserve, TierReversible:
+	case "", TierObserve, TierReversible, TierCommitMoney:
 	default:
-		return fmt.Errorf("autonomy.ceiling: want %s or %s (the highest tier promotion can reach), got %q", TierObserve, TierReversible, t.Autonomy.Ceiling)
+		return fmt.Errorf("autonomy.ceiling: want %s, %s or %s (the highest tier promotion can reach; %s lets a bot buy unattended under autonomy.unattended), got %q", TierObserve, TierReversible, TierCommitMoney, TierCommitMoney, t.Autonomy.Ceiling)
 	}
 	for tier, pats := range t.Autonomy.Tiers {
 		if TierRank(tier) < 0 {

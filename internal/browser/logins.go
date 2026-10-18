@@ -48,6 +48,9 @@ type Principal struct {
 	// Groups are the bots and teams the session acts for ("bot:<name>",
 	// "team:<name>"): a login bound to one of them is bound to it.
 	Groups []string
+	// Bot / BotRole / CaseID are a bot session's binding (a purchase goes
+	// through the bot's gate).
+	Bot, BotRole, CaseID string
 }
 
 // Provenance decides whether a caller may use its logged-in session on a

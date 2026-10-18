@@ -517,6 +517,33 @@ type BotAutonomy struct {
 	SpendCap *SpendCap `yaml:"spend_cap,omitempty"`
 	// ApprovalTTL is how long a proposal stays approvable (default 24h).
 	ApprovalTTL Duration `yaml:"approval_ttl,omitempty"`
+	// Unattended lets a commit_money verb run WITHOUT an operator's
+	// approval, under a smaller cap and only at named merchants: per verb
+	// pattern. Never the default and a widening; it must fit inside
+	// spend_cap (and so the team's), a team's bot needs the team's
+	// autonomy.ceiling: commit_money, and it runs only while the bot is not
+	// in shadow mode, its sessions are sandboxed, and the request is the
+	// operator's or the bot's own. A recurring charge always needs approval.
+	Unattended map[string]Unattended `yaml:"unattended,omitempty"`
+}
+
+// Unattended is one commit_money verb's unattended allowance: a spend cap
+// (counted in the same ledger as every approved spend) and the merchants.
+type Unattended struct {
+	SpendCap `yaml:",inline"`
+	// Merchants are the exact origins it may buy from unattended.
+	Merchants []string `yaml:"merchants"`
+	// MerchantOption is the verb option naming the merchant (default
+	// "merchant").
+	MerchantOption string `yaml:"merchant_option,omitempty"`
+}
+
+// MerchantOptionOr is the option carrying the merchant.
+func (u Unattended) MerchantOptionOr() string {
+	if u.MerchantOption != "" {
+		return u.MerchantOption
+	}
+	return "merchant"
 }
 
 // SpendCap bounds commit-money actions.
@@ -567,6 +594,22 @@ func (s SpendCap) PeriodD() time.Duration {
 		return s.Period.D()
 	}
 	return DefaultSpendPeriod
+}
+
+// Check is the one spend-cap rule (a bot's commit_money, a payment card's
+// and an identity's limits all use it): amt may not exceed PerAction, and
+// with what was spent in the trailing Period it may not exceed PerPeriod.
+// spentSince sums what was spent since a time. Zero caps allow nothing.
+func (s SpendCap) Check(amt float64, now time.Time, spentSince func(since time.Time) float64) error {
+	cur := s.CurrencyOr()
+	if amt > s.PerAction {
+		return fmt.Errorf("amount %.2f %s exceeds the per-action cap %.2f %s", amt, cur, s.PerAction, cur)
+	}
+	spent := spentSince(now.Add(-s.PeriodD()))
+	if spent+amt > s.PerPeriod {
+		return fmt.Errorf("amount %.2f %s would bring spend in the last %s to %.2f, over the cap %.2f %s", amt, cur, s.PeriodD(), spent+amt, s.PerPeriod, cur)
+	}
+	return nil
 }
 
 // CurrencyOr is the cap's currency.
@@ -1113,6 +1156,36 @@ func (c *Config) validateBot(name string, m BotConfig) error {
 		}
 		if sc.PerAction > sc.PerPeriod {
 			return fmt.Errorf("autonomy.spend_cap: per_action exceeds per_period")
+		}
+	}
+	for pat, u := range a.Unattended {
+		where := "autonomy.unattended." + pat
+		money := false
+		for _, p := range a.Tiers[TierCommitMoney] {
+			if p == pat {
+				money = true
+			}
+		}
+		switch {
+		case !money:
+			return fmt.Errorf("%s: only a commit_money verb can be unattended — list %s under autonomy.tiers.commit_money", where, pat)
+		case a.SpendCap == nil:
+			return fmt.Errorf("%s needs autonomy.spend_cap", where)
+		case u.PerAction <= 0 || u.PerPeriod <= 0 || u.PerAction > u.PerPeriod:
+			return fmt.Errorf("%s: per_action and per_period are required, per_action ≤ per_period", where)
+		case u.CurrencyOr() != a.SpendCap.CurrencyOr():
+			return fmt.Errorf("%s: currency %s differs from spend_cap's %s", where, u.CurrencyOr(), a.SpendCap.CurrencyOr())
+		case u.PerAction > a.SpendCap.PerAction || u.PerPeriod > a.SpendCap.PerPeriod:
+			// Both caps apply at every unattended purchase; this keeps the
+			// smaller one honest.
+			return fmt.Errorf("%s: its cap must fit inside autonomy.spend_cap (per_action %g, per_period %g)", where, a.SpendCap.PerAction, a.SpendCap.PerPeriod)
+		case len(u.Merchants) == 0:
+			return fmt.Errorf("%s: name the merchants (exact origins) it may buy from unattended", where)
+		}
+		for _, mo := range u.Merchants {
+			if err := exactOrigin(mo); err != nil {
+				return fmt.Errorf("%s.merchants: %v", where, err)
+			}
 		}
 	}
 	return nil

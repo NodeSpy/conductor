@@ -62,6 +62,12 @@ type BrowserConfig struct {
 	// Mailboxes are where emailed sign-in codes are read (IMAP, read-only),
 	// by name: a credential's email_code names one. Opt-in: none by default.
 	Mailboxes map[string]BrowserMailbox `yaml:"mailboxes,omitempty"`
+	// Profiles are personal details conductor fills for an agent, by name
+	// (browser_wallet.go); Cards are payment cards; Payments how a purchase
+	// is approved. None by default.
+	Profiles map[string]BrowserProfile `yaml:"profiles,omitempty"`
+	Cards    map[string]BrowserCard    `yaml:"cards,omitempty"`
+	Payments *BrowserPayments          `yaml:"payments,omitempty"`
 }
 
 // BrowserMailbox is one IMAP mailbox: its login comes from a vault (an app
@@ -437,6 +443,9 @@ func (c *Config) validateBrowser() error {
 			return fmt.Errorf("%s: %s is not reachable through browser.allow", where, cr.Origin)
 		}
 	}
+	if err := c.validateWallet(); err != nil {
+		return err
+	}
 	for name, mb := range b.Mailboxes {
 		where := fmt.Sprintf("config: browser.mailboxes.%s", name)
 		host, port, err := net.SplitHostPort(mb.IMAP)
@@ -576,6 +585,36 @@ func checkSecretSources(path string, raw []byte) error {
 				k, v := cr.Content[j].Value, cr.Content[j+1]
 				if browserCredentialSecretFields[k] && v.Kind == yaml.ScalarNode {
 					if err := check(fmt.Sprintf("browser.credentials[%d]", idx), k, v.Value); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	// Profiles' fields and cards' values: every one is a value the agent
+	// never sees.
+	if profs := mapValue(browserNode, "profiles"); profs != nil && profs.Kind == yaml.MappingNode {
+		for j := 0; j+1 < len(profs.Content); j += 2 {
+			name := profs.Content[j].Value
+			fields := mapValue(profs.Content[j+1], "fields")
+			if fields == nil || fields.Kind != yaml.MappingNode {
+				continue
+			}
+			for k := 0; k+1 < len(fields.Content); k += 2 {
+				if v := fields.Content[k+1]; v.Kind == yaml.ScalarNode {
+					if err := check("browser.profiles."+name+".fields", fields.Content[k].Value, v.Value); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	if cards := mapValue(browserNode, "cards"); cards != nil && cards.Kind == yaml.MappingNode {
+		for j := 0; j+1 < len(cards.Content); j += 2 {
+			name, cd := cards.Content[j].Value, cards.Content[j+1]
+			for _, f := range []string{"number", "expiry", "cvc", "name"} {
+				if v := mapValue(cd, f); v != nil && v.Kind == yaml.ScalarNode {
+					if err := check("browser.cards."+name, f, v.Value); err != nil {
 						return err
 					}
 				}
