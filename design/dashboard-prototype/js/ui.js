@@ -309,7 +309,7 @@
   /* ---------- nav ---------- */
   // the rail, as in Daylight's mocks (design/brand/v2): the work, then Settings; only "Needs you" is counted hot
   const navGroups = [
-    ['', [['overview', 'Home', 'overview'], ['attention', 'Needs you', 'attention', () => D.attention.length, true], ['activity', 'Activity', 'live'], ['tickets', 'Tickets', 'ticket', () => D.cases.filter((c) => c.status === 'open' && !c.bot && !c.team).length], ['workflows', 'Workflows', 'workflows'], ['bots', 'Bots', 'bots'], ['browser', 'Browsers', 'globe']]],
+    ['', [['overview', 'Home', 'overview'], ['attention', 'Needs you', 'attention', () => D.attention.length, true], ['activity', 'Activity', 'live'], ['tickets', 'Tickets', 'ticket'], ['workflows', 'Workflows', 'workflows'], ['bots', 'Bots', 'bots'], ['browser', 'Browsers', 'globe']]],
     ['Settings', [['connectors', 'Connections', 'connectors'], ['secrets', 'Secrets', 'secrets'], ['extensions', 'Packs', 'extensions'], ['system', 'System', 'settings']]],
   ];
   UI.navGroups = navGroups;

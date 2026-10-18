@@ -1,31 +1,39 @@
-// Tickets (ledger item 22): tasks are tickets. A ticket is for a team or assigned to a bot, or waits in triage; the list
-// has the shared filter bar; New ticket; a ticket's page with its comments (the chat component), details, the work it
-// links to and its mirror outside conductor; a bot's and a team's Tickets tabs; a ticket made from a chat message.
+// Tickets (ledger item 22, with 22b–d): tasks are tickets in conductor's own system (no outside ticketing). A ticket
+// moves draft → ready → in progress → waiting on you → done, or is declined; a draft is an idea you and the bots shape,
+// and nobody starts work on it until an operator marks it ready with an assignee. A list or a board by status, New
+// ticket, a ticket's page with its comments (the chat component), a bot's and a team's Tickets tabs, a ticket made
+// from a chat message.
 const { test, expect, go } = require('./fixtures');
 
-test('Tickets is in the nav; triage first; rows in words with the facts line', async ({ page }) => {
+test('Tickets is in the nav; drafts first; rows in words with the facts line, no ids', async ({ page }) => {
   await go(page, '#/tickets', { fresh: true });
   await expect(page.locator('#main h1')).toContainText('Tickets');
   if (page.viewportSize().width > 720) await expect(page.locator('#rail-nav [data-nav="tickets"]')).toHaveClass(/on/);
-  const triage = page.locator('#tk-triage');
-  await expect(triage.locator('h2')).toHaveText('Not assigned yet');
-  await expect(triage.locator('.tk-row')).toHaveCount(2);
-  await expect(triage.locator('.tk-row', { hasText: 'Add a public status page' }).locator('.fx')).toContainText('acme/api#486');
-  await expect(triage.locator('.tk-row').first().locator('.dl-na .btn')).toHaveText('Assign');
+  const drafts = page.locator('#tk-draft');
+  await expect(drafts.locator('h2')).toHaveText('Draft');
+  await expect(drafts).toContainText('Nobody starts work on a draft until someone marks it ready');
+  await expect(drafts.locator('.tk-row')).toHaveCount(4);
+  await expect(drafts.locator('.tk-row', { hasText: 'Idea: move the nightly backups' })).toContainText('Drafted by homelab');
   const urgent = page.locator('.tk-row', { hasText: 'SEV2 api p99 latency' });
   await expect(urgent.locator('.fx-i.hi')).toContainText('Urgent');
   await expect(urgent.locator('.fx')).toContainText('platform-sre');
-  // no ticket ids in the rows
   for (const t of await page.locator('.tk-row .dl-nt').allTextContents()) expect(t).not.toMatch(/\bc\d{2}\b/);
 });
 
-test('the filter bar narrows by status, assignee and label, and says what it hides', async ({ page }) => {
+test('nothing about outside ticket systems', async ({ page }) => {
+  for (const route of ['#/tickets', '#/tickets/c29', '#/tickets/c33', '#/tickets/new']) {
+    await go(page, route, { fresh: true });
+    await expect(page.locator('#main')).not.toContainText(/GitHub issue|mirrored|Sync now|Outside conductor|Linked to/i);
+  }
+});
+
+test('the filter bar narrows by status and label, and says what it hides', async ({ page }) => {
   await go(page, '#/tickets', { fresh: true });
   const all = await page.locator('.tk-row').count();
-  await page.fill('#main .fb-in', 'status:new');
+  await page.fill('#main .fb-in', 'status:draft');
   await page.keyboard.press('Enter');
-  await expect(page.locator('.tk-row')).toHaveCount(2);
-  await expect(page.locator('.tk-showing')).toContainText(`Showing 2 of ${all}`);
+  await expect(page.locator('.tk-row')).toHaveCount(4);
+  await expect(page.locator('.tk-showing')).toContainText('Showing 4 of');
   await page.locator('[data-act="tk-clear"]').click();
   await expect(page.locator('.tk-row')).toHaveCount(all);
   await page.fill('#main .fb-in', 'label:incident');
@@ -33,60 +41,84 @@ test('the filter bar narrows by status, assignee and label, and says what it hid
   for (const t of await page.locator('.tk-row .fx').allTextContents()) expect(t).toContain('incident');
 });
 
-test('New ticket for a team: it lands with the team, and a comment reaches it', async ({ page }) => {
+test('the board: one column per status, drafts first; on a phone the columns stack', async ({ page }) => {
+  await go(page, '#/tickets', { fresh: true });
+  await page.locator('[data-act="tk-view"][data-v="board"]').click();
+  await expect(page.locator('.tk-col h2')).toHaveText(['Draft', 'Ready', 'In progress', 'Waiting on you', 'Done']);
+  await expect(page.locator('.tk-col[data-col="draft"] .tk-card')).toHaveCount(4);
+  await expect(page.locator('.tk-col[data-col="waiting"] .tk-card', { hasText: 'SEV2 api p99 latency' })).toBeVisible();
+  expect(await page.evaluate(() => { const m = document.getElementById('main'); return m.scrollWidth <= m.clientWidth + 1; })).toBe(true);
+  if (page.viewportSize().width <= 720) { const xs = await page.locator('.tk-col').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().left))); expect(new Set(xs).size).toBe(1); }
+});
+
+test('a draft: no work starts; Mark ready asks who does it, then it is ready for them', async ({ page }) => {
+  await go(page, '#/tickets/new', { fresh: true });
+  await page.fill('#tk-title', 'Try a cheaper instance type for the CI runners');
+  await page.fill('#tk-desc', 'Just an idea for now.');
+  await page.locator('[data-act="tk-create"][data-stage="draft"]').click();
+  await expect(page).toHaveURL(/#\/tickets\/c\d+$/);
+  await expect(page.locator('.tk-head .case-state')).toContainText('Draft');
+  await expect(page.locator('.tk-ready')).toContainText('until you mark it ready');
+  await expect(page.locator('[data-act="case-delegate"]')).toHaveCount(0);
+  await page.locator('[data-act="tk-ready"]').click();
+  await page.selectOption('#f-who', 'team:platform');
+  await page.locator('#gen-submit').click();
+  await expect(page.locator('.tk-head .case-state')).toContainText('Ready');
+  await expect(page.locator('.tk-chat')).toContainText('Marked ready by you');
+  await expect(page.locator('.tk-head .fx')).toContainText('team platform');
+  await go(page, '#/teams/platform/tickets');
+  await expect(page.locator('.tk-row', { hasText: 'Try a cheaper instance type' })).toBeVisible();
+});
+
+test('Create, ready to start needs someone to do it', async ({ page }) => {
+  await go(page, '#/tickets/new', { fresh: true });
+  await page.fill('#tk-title', 'Nobody to do it');
+  await page.locator('[data-act="tk-create"][data-stage="ready"]').click();
+  await expect(page).toHaveURL(/#\/tickets\/new/);
+  await expect(page.locator('.toast').last()).toContainText('needs someone to do it');
+});
+
+test('New ticket for a team, ready: attachments, priority, labels; a comment reaches it', async ({ page }) => {
   await go(page, '#/tickets/new?team=platform', { fresh: true });
   await expect(page.locator('#tk-who')).toHaveValue('team:platform');
   await page.fill('#tk-title', 'Renew the api.example.com certificate');
-  await page.fill('#tk-desc', 'Expires in 12 days.');
   await page.selectOption('#tk-pri', 'high');
   await page.fill('#tk-labels', 'security, api');
   await page.setInputFiles('#tk-file', [{ name: 'cert.txt', mimeType: 'text/plain', buffer: Buffer.from('notAfter=…') }, { name: 'clip.mov', mimeType: 'video/quicktime', buffer: Buffer.alloc(4) }]);
   await expect(page.locator('#tk-pend .cm-p')).toHaveCount(1);
   await expect(page.locator('#tk-err')).toContainText('clip.mov wasn’t attached');
-  await page.locator('#tk-gh').check();
-  await page.locator('[data-act="tk-create"]').click();
-  await expect(page).toHaveURL(/#\/tickets\/c\d+$/);
+  await page.locator('[data-act="tk-create"][data-stage="ready"]').click();
   await expect(page.locator('.tk-head h1')).toHaveText('Renew the api.example.com certificate');
-  await expect(page.locator('.tk-head .fx')).toContainText('team platform');
-  await expect(page.locator('.tk-head .fx-i.hi, .tk-head .fx')).toContainText('High');
-  await expect(page.locator('.tk-ext')).toContainText('GitHub issue');
+  await expect(page.locator('.tk-head .case-state')).toContainText('Ready');
+  await expect(page.locator('.tk-head .fx')).toContainText('High');
   await expect(page.locator('.tk-chat .cm-file')).toContainText('cert.txt');
   await page.fill('#say', 'The renewal window opens on Monday.'); await page.locator('#say').press('Enter');
   await expect(page.locator('.tk-chat .cm-op').last()).toContainText('The renewal window opens on Monday.');
-  await go(page, '#/teams/platform/tickets');
-  await expect(page.locator('.tk-row', { hasText: 'Renew the api.example.com certificate' })).toBeVisible();
 });
 
-test('assign from triage; the ticket moves to its bot’s Tickets tab', async ({ page }) => {
-  await go(page, '#/tickets/c42', { fresh: true });
-  await expect(page.locator('.case-route')).toContainText('Not assigned yet');
-  await page.locator('.tk-head [data-act="tk-set"][data-k="who"]').click();
+test('decline closes a ticket without doing it; reopening brings it back', async ({ page }) => {
+  await go(page, '#/tickets/c27', { fresh: true });
+  await page.locator('[data-act="tk-decline"]').click(); await page.locator('#cf-ok').click();
+  await expect(page.locator('.tk-head .case-state')).toContainText('Declined');
+  await page.locator('[data-act="case-close"]').click();
+  await expect(page.locator('.tk-head .case-state')).not.toContainText('Declined');
+});
+
+test('details change in place; a ticket shows its linked work', async ({ page }) => {
+  await go(page, '#/tickets/c29', { fresh: true });
+  await expect(page.locator('.tk-side')).toContainText('Replace the production web server');
+  await page.locator('[data-act="tk-set"][data-k="priority"]').click();
+  await page.selectOption('#f-priority', 'low');
+  await page.locator('#gen-submit').click();
+  await expect(page.locator('[data-act="tk-set"][data-k="priority"]')).toContainText('Low');
+  await page.locator('[data-act="tk-set"][data-k="who"]').click();
   await page.selectOption('#f-who', 'web-triage');
   await page.locator('#gen-submit').click();
   await expect(page.locator('.tk-head .fx')).toContainText('web-triage');
   await expect(page.locator('.tk-hist')).toContainText('Assigned');
   await go(page, '#/bots/web-triage/cases');
   await expect(page.locator('.dl-tabs a[aria-current="page"]')).toContainText('Tickets');
-  await expect(page.locator('.tk-row', { hasText: 'Checkout end-to-end test times out' })).toBeVisible();
-  await go(page, '#/tickets');
-  await expect(page.locator('#tk-triage .tk-row')).toHaveCount(1);
-});
-
-test('a ticket shows its mirror outside conductor, its linked work, and its details change in place', async ({ page }) => {
-  await go(page, '#/tickets/c29', { fresh: true });
-  await expect(page.locator('.tk-ext')).toContainText('PagerDuty incident');
-  await expect(page.locator('.tk-ext a', { hasText: 'Open in PagerDuty' })).toHaveAttribute('target', '_blank');
-  await expect(page.locator('.tk-side')).toContainText('Replace the production web server');
-  await page.locator('[data-act="tk-set"][data-k="priority"]').click();
-  await page.selectOption('#f-priority', 'low');
-  await page.locator('#gen-submit').click();
-  await expect(page.locator('[data-act="tk-set"][data-k="priority"]')).toContainText('Low');
-  await page.locator('[data-act="tk-unlink"]').click(); await page.locator('#cf-ok').click();
-  await expect(page.locator('.tk-ext')).toContainText('Not linked');
-  await page.locator('[data-act="tk-link"]').click();
-  await page.selectOption('#f-repo', 'acme/infra');
-  await page.locator('#gen-submit').click();
-  await expect(page.locator('.tk-ext')).toContainText('acme/infra#');
+  await expect(page.locator('.tk-row', { hasText: 'SEV2 api p99 latency' })).toBeVisible();
 });
 
 test('make a ticket from a chat message; old task links open the ticket', async ({ page }) => {
@@ -97,7 +129,7 @@ test('make a ticket from a chat message; old task links open the ticket', async 
   await expect(page.locator('#tk-who')).toHaveValue('platform-sre');
   await expect(page.locator('#tk-desc')).toHaveValue(/what the dashboard showed/);
   await expect(page.locator('#tk-title')).not.toHaveValue('');
-  await page.locator('[data-act="tk-create"]').click();
+  await page.locator('[data-act="tk-create"][data-stage="ready"]').click();
   await expect(page.locator('.tk-chat')).toContainText('Made from a message in platform-sre’s chat');
   await go(page, '#/bots/platform-sre/cases/c29');
   await expect(page).toHaveURL(/#\/tickets\/c29$/);

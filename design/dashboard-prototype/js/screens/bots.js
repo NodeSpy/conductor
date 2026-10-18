@@ -414,7 +414,7 @@
     return shell(m, 'cases', UI.botTickets(m));
   }
   document.addEventListener('click', (e) => { const tr = e.target.closest('tr[data-href]'); if (tr && !e.target.closest('a,button,input,label,select,.sel')) UI.go(tr.dataset.href); });
-  UI.act('case-close', (b) => { const c = D.cases.find((x) => x.id === b.dataset.c); c.status = c.status === 'open' ? 'closed' : 'open';
+  UI.act('case-close', (b) => { const c = D.cases.find((x) => x.id === b.dataset.c); c.status = c.status === 'open' ? 'closed' : 'open'; if (c.status === 'open') delete c.declined;
     const d = D.delegations.find((x) => x.child === c.id && x.status === 'running');
     if (d && c.status === 'closed') { const last = (c.notes || []).filter((n) => !n.ack && n.text).slice(-1)[0]; d.status = 'done'; d.done = now(); d.result = last ? last.text : `closed by operator ops with no note`; const par = D.cases.find((x) => x.id === d.parent); if (par) (par.notes = par.notes || []).push({ at: now(), who: `bot:${d.to}`, text: `↩ result of ${d.id}: ${d.result}` }); audit('bot_delegate_done', `${d.id} · ${d.to} → ${d.from} · ${d.result.slice(0, 60)}`); } audit('bot_case_' + (c.status === 'open' ? 'reopen' : 'close'), `${b.dataset.m} · ${c.id}`); S.save(); UI.rerender(); UI.refreshChrome(); });
   /* ---------- proposals ---------- */

@@ -122,7 +122,7 @@ Some elements are on every screen:
 | `#/workflows`, `#/workflows/<name>` | Workflows, and the builder (Recipe, Config file, Runs, Settings) |
 | `#/bots` | Bots: each team a section, solo bots last (old `#/folders/…` links land here) |
 | `#/bots/<m>/<tab>[/<id>]`, `#/bots/new` | A bot. Tabs: approvals, chat, tickets (`cases`), memory, what it can do, settings; `#/bots/<m>/cases/<id>` opens the ticket |
-| `#/tickets`, `#/tickets/new[?bot=|team=]`, `#/tickets/<id>` | Tickets: triage and the list; a new ticket; one ticket ([§4.4.1](#441-tickets)) |
+| `#/tickets`, `#/tickets/new[?bot=|team=]`, `#/tickets/<id>` | Tickets: the list or board by status; a new ticket; one ticket ([§4.4.1](#441-tickets)) |
 | `#/teams/<t>[/<tab>]` | A team |
 | `#/browser`, `#/browser/<id>`, `#/browser/logins` | Browsers and logins |
 | `#/connectors/<connectors\|runtimes\|languages\|hosts>` | Connections, what conductor can use: Services (each service with its version, updates and connections), Agent runtimes, Code languages, Machines; the catalog pages for a service, runtime or language sit under Connections |
@@ -719,37 +719,38 @@ back on the team. A bot can be created solo.
 
 #### 4.4.1 Tickets
 
-A task is a **ticket**: one piece of work for a team or a bot, from the operator, a chat, an event or a bot's own
-check. The store is the bots' ledger (a ticket is what the ledger calls a case), so everything a case already carries
-(the requester and its trust, routing, hand-offs to teammates, workers, approvals) is on the ticket.
+A task is a **ticket**: one piece of work for a team or a bot, in conductor's own ticket system (there is no outside
+ticket system to link or mirror). The store is the bots' ledger (a ticket is what the ledger calls a case), so
+everything a case already carries (the requester and its trust, routing, hand-offs to teammates, workers, approvals) is
+on the ticket.
 
-- **Who has it.** A ticket is assigned to a **bot**, to a **team** (the team's routing rules or its lead pick a bot), or
-  to **nobody yet**, which puts it in **triage**: nobody works on it until someone assigns it. Reassigning keeps the
-  original requester, as routing always has.
+- **Statuses: draft → ready → in progress → waiting on you → done, or declined.**
+  - A **draft** is an idea. You and the bots shape drafts together: a bot may draft one (labelled as from that bot),
+    refine its description, add notes and attachments in its comments. **No bot starts work on a draft.**
+  - **Mark ready** is what lets work start: an explicit act by an operator (bots draft and refine; only an operator
+    marks ready), and only with an assignee set (a bot, or a team whose routing or lead picks one). A ready ticket can
+    go back to draft, which pauses work.
+  - **In progress** (a worker or a hand-off is running) and **waiting on you** (an approval it asked for is pending)
+    follow from the work; nobody sets them by hand.
+  - **Done** (Mark done) or **declined** (Decline: closed without being done) close it; either can be reopened.
 - **What it says.** Title, description, priority (urgent, high, normal, low), an optional due date, labels, and
   attachments (the chat's attachment rules and limits, [§5.3](#53-endpoints)).
-- **Tickets** (a rail item after Activity; its count is the tickets not assigned yet). Triage first ("Not assigned
-  yet", each with Assign), then the rest grouped by status (waiting for you, in progress, open, with the team) or by
-  assignee, done folded at the end. The shared filter bar: Assignee (a bot, a team, nobody), Status, Priority, and
-  under More filters Label and Linked to (the connectors that mirror tickets). Each row is the list row: the mark,
-  the title, who asked in words, the facts line (assignee, priority when it isn't normal, due, the outside ticket,
-  labels), the age and the action.
-- **A ticket's page.** The title, where it stands in words and the facts line; Mark done or Reopen, Assign, Hand off
-  part of it (a delegation, [§4.4](#44-teams-and-bots-178)); how it was routed in one line; the ids and the recorded
-  requester folded "for audit". Then the description; **comments**, which are the chat component (its assignee reads
-  them and answers; attachments, links, queued and delivered work the same); hand-offs with their results. Beside it:
-  details that change in place (assigned to, priority, due, labels), **outside conductor** (the mirrored ticket), the
-  linked work (approvals and workers) and the history.
-- **Outside ticket systems** are connectors. A connector that can mirror tickets (GitHub issues, PagerDuty incidents;
-  Linear or Jira as plugins) links a ticket to its own: "GitHub issue · acme/web#1284 · mirrored, synced 3 min ago",
-  with Open in GitHub, Sync now and Unlink. Status, assignee and comments sync both ways; a ticket that arrived as an
-  issue or incident is linked from the start. New ticket can open the outside one too ("Also open it as a GitHub
-  issue in acme/api"). What comes in from outside is data, fenced like any event.
-- **New ticket** is a page: title, description, attachments, assign to (nobody, a team, a bot), priority, due,
-  labels, and the outside mirror. It opens prefilled from a bot (New ticket for it), a team (New ticket for the team)
-  or a **chat message** (each message has Make a ticket: the message becomes the description, the bot the assignee,
-  and the ticket notes where it came from).
-- **A bot's Tickets tab** and **a team's Tickets tab** are the same rows, narrowed to that bot or that team and its
+- **Tickets** (a rail item after Activity). A **list** grouped by status (or by assignee, or not at all), done and
+  declined folded at the end; or a **board**, one column per status from Draft to Done (on a phone the columns
+  stack). The shared filter bar: Assignee (a bot, a team, nobody yet), Status, Priority, and under More filters Label.
+  Each row is the list row: the mark, the title, who asked (or drafted it) in words, the facts line (assignee,
+  priority when it isn't normal, due, labels), the age and the action.
+- **A ticket's page.** The title, where it stands in words and the facts line; on a draft, **Mark ready** first and
+  prominent, with what it means; Mark done or Reopen, Decline, Hand off part of it (a delegation,
+  [§4.4](#44-teams-and-bots-178)); how it was routed in one line; the ids and the recorded requester folded "for
+  audit". Then the description; **comments**, which are the chat component (its assignee reads them and answers;
+  attachments, links, queued and delivered work the same); hand-offs with their results. Beside it: details that
+  change in place (assigned to, priority, due, labels), the linked work (approvals and workers) and the history.
+- **New ticket** is a page: title, description, attachments, assign to (nobody yet, a team, a bot), priority, due,
+  labels; then **Create, ready to start** (needs an assignee) or **Save as a draft**. It opens prefilled from a bot (New
+  ticket for it), a team (New ticket for the team) or a **chat message** (each message has Make a ticket: the message
+  becomes the description, the bot the assignee, and the ticket notes where it came from).
+- **A bot's Tickets tab** and **a team's Tickets tab** are the same list, narrowed to that bot or that team and its
   bots, each with New ticket.
 
 ### 4.5 Browsers (#182)
@@ -1249,12 +1250,12 @@ Rows marked **NEW** need new daemon code. The others wrap code that exists on
 | `POST /api/v1/bots/<m>/cases/<c>/assign` `{to}` | operator reassignment within the team; provenance kept | **NEW** (`bot assign`) |
 | `POST /api/v1/bots/<m>/cases/<c>/delegate` `{to, task}` | hand a teammate (or a linked team's bot) a task; child case under the original requester | **NEW** (`bot delegate`) |
 | `GET /api/v1/bots/<m>/delegations`, `DELETE …/<d>` | delegation edges (from, to, parent, child, status, result); cancel | **NEW** |
-| `GET /api/v1/tickets?assignee&team&status&priority&label&linked&q&cursor` | the ticket list (the ledger's cases across bots and teams, plus triage) | **NEW** (over the ledgers) |
-| `POST /api/v1/tickets` `{title, description, assignee?: {bot}\|{team}, priority, due?, labels[], attachments[], mirror?: {connector, repo}}` | a new ticket; with no assignee it waits in triage; a team assignee goes through the team's routing | **NEW** (`bot case open` + routing) |
-| `PATCH /api/v1/tickets/<c>` `{title?, description?, assignee?, priority?, due?, labels?}` | change it; reassignment keeps the requester; each change is in the ticket's history and the audit log | **NEW** |
+| `GET /api/v1/tickets?assignee&team&status&priority&label&q&cursor` | the ticket list across bots and teams; `status` is draft, ready, in_progress, waiting, done or declined | **NEW** (over the ledgers) |
+| `POST /api/v1/tickets` `{title, description, assignee?: {bot}\|{team}, priority, due?, labels[], attachments[], stage: "draft"\|"ready"}` | a new ticket; `ready` needs an assignee; a team assignee goes through the team's routing | **NEW** (`bot case open` + routing) |
+| `PATCH /api/v1/tickets/<c>` `{title?, description?, assignee?, priority?, due?, labels?}` | change it (operators, and bots on drafts they can see); reassignment keeps the requester; each change is in the history and the audit log | **NEW** |
+| `POST /api/v1/tickets/<c>/{ready,draft}` | mark ready (operators only; needs an assignee) or move back to draft (pauses work) | **NEW** |
 | `POST /api/v1/tickets/<c>/comments` `{text, attachments?, links?}` | a comment (the assignee's inbox, delivered when it's idle) | **NEW** (`bot case note` + `say`) |
-| `POST /api/v1/tickets/<c>/{close,reopen}` | done, or back to open; closing a handed-off ticket reports its last comment back | `bot case close\|reopen` |
-| `POST /api/v1/tickets/<c>/link` `{connector, ref \| create: {repo}}`, `DELETE …/link`, `POST …/sync` | link to (or open) a mirrored ticket through a connector that declares `tickets: mirror`; unlink; sync now | **NEW** (connector capability) |
+| `POST /api/v1/tickets/<c>/{close,decline,reopen}` | done, declined, or back to open; closing a handed-off ticket reports its last comment back | `bot case close\|reopen` + **NEW** decline |
 | `GET /api/v1/teams/<t>/activity?since=` | ask and delegate counts between bots, for the activity graph | **NEW** (from the ledgers) |
 | `GET /api/v1/teams`, `GET /api/v1/teams/<t>` | teams, bots, effective defaults (inherited / narrowed per bot), routing, links | **NEW** teams follow-up to #178 |
 | `POST /api/v1/teams/<t>/deliver` `{title, text \| event}` | route work to a team: rules, else the lead | **NEW** |
