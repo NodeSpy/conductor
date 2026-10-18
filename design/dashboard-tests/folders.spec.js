@@ -110,15 +110,15 @@ test('workflows in folders: move one through the diff; folder filters and search
     await expect(wlRow(page, 'ci-fixer')).toBeVisible();
     await expect(wlRow(page, 'dep-bump')).toBeHidden();
     await expect(page.locator('.wl-crumbs')).toContainText('platform');
-    // ownership is orthogonal to folders
-    await page.locator('[data-act="wl-owner"][data-v="pack"]').click();
+    // the folder picked in the tree is a qualifier in the filter bar; source is orthogonal to folders
+    const fb = page.locator('.fb[data-fb="wl"] .fb-in');
+    await expect(fb).toHaveValue('folder:work/platform');
+    await fb.fill('folder:work/platform source:pack');
     await expect(page.locator('#wl-empty')).toBeVisible();
-    await page.locator('[data-act="wl-owner"][data-v="all"]').click();
-    // search spans every folder
-    await page.fill('[data-on-input="wl-q"]', 'dep-bump');
+    // a plain search spans every folder
+    await fb.fill('dep-bump');
     await expect(wlRow(page, 'dep-bump')).toBeVisible();
-    await expect(page.locator('#wl-note')).toContainText('every folder');
-    await page.fill('[data-on-input="wl-q"]', '');
+    await fb.fill('');
   }
   await page.locator('[data-act="wl-more"][data-name="ci-fixer"]').click();
   await page.locator('#pop-menu [data-act="wl-move"]').click();

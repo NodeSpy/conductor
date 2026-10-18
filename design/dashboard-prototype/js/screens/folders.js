@@ -127,14 +127,27 @@
   /** Every bot in one list, answering "what are my bots doing, and does any need me?": the ones waiting for you first,
       then what's running, then the rest; each says what it's doing in words (its task by name), where it lives and what
       waits for you. The folder tree below is for organizing. */
+  const bv = { q: '', status: [], team: [], folder: '' };
   const botList = () => { const bots = S.view().bots.map((b) => M(b.name) || b), need = (b) => D.attention.filter((a) => UI.botOfHref(a.href) === b.name).length;
-    const rank = (b) => (need(b) ? 0 : b.home === 'live' ? 1 : 2);
-    const row = (b) => { const task = D.cases.find((c) => c.bot === b.name && c.status === 'open'), n = need(b), team = cfgOf('bots', b.name, true).team, folder = UI.folderOfBot(b.name);
+    const rank = (b) => (need(b) ? 0 : b.home === 'live' ? 1 : 2), statusOf = (b) => (need(b) ? 'needs-you' : b.home === 'live' ? 'working' : 'idle');
+    const teamOf2 = (b) => cfgOf('bots', b.name, true).team || '';
+    const keep = (b) => (!bv.status.length || bv.status.includes(statusOf(b))) && (!bv.team.length || bv.team.includes(teamOf2(b))) && (!bv.folder || UI.inFolder(b.name, bv.folder))
+      && (!bv.q || `${b.name} ${b.desc || ''} ${teamOf2(b)} ${UI.folderOfBot(b.name) || ''}`.toLowerCase().includes(bv.q.toLowerCase()));
+    const row = (b) => { const task = D.cases.find((c) => c.bot === b.name && c.status === 'open'), n = need(b), team = teamOf2(b), folder = UI.folderOfBot(b.name);
       const doing = b.shadow ? UI.statusMark('shadow', 'Practice mode') : b.home === 'live' ? UI.statusMark('run', 'Running') : UI.statusMark('idle', 'Parked');
       return `<li class="dl-need bot-li${n ? ' attn' : ''}"${n ? ' data-s="ember"' : ''}><a class="dl-need-a" href="#/bots/${b.name}"><span class="dl-ng"><span class="dl-bot-av sm">${esc(b.name.split(/[-_]/).map((w) => w[0]).join('').slice(0, 2))}</span></span>
         <span class="dl-nt"><b>${esc(b.name)}</b><span class="dl-why">${b.home === 'live' && task ? `Working on: ${esc(task.title)}` : esc(b.desc || '')}</span><span class="bot-where">${[folder, team ? `team ${esc(team)}` : ''].filter(Boolean).join(' · ') || 'not in a folder'}</span></span>
         <span class="dl-age">${doing}</span><span class="dl-na">${n ? UI.statusMark('ember', `${n} need${n === 1 ? 's' : ''} you`) : ''}</span></a></li>`; };
-    return `<section class="dl-card bot-list"><header class="dl-ch"><h2>Your bots</h2><span class="dl-sub">${bots.length} · ${bots.filter((b) => b.home === 'live').length} running</span></header><ul class="dl-list">${bots.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name)).map(row).join('')}</ul></section>`; };
+    const shown = bots.filter(keep);
+    const body = () => `${shown.length < bots.length ? `<p class="need-shown">Showing ${shown.length} of ${bots.length} · <button class="link" data-act="bv-clear">Clear</button></p>` : ''}<ul class="dl-list">${shown.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name)).map(row).join('') || '<li class="dl-empty-row">No bot matches.</li>'}</ul>`;
+    UI.botListBody = () => { const el = UI.$('#bot-list-body'); if (el) { const fresh = botList(); const d = document.createElement('div'); d.innerHTML = fresh; el.innerHTML = d.querySelector('#bot-list-body').innerHTML; } };
+    const tally = (xs) => { const m = new Map(); xs.filter(Boolean).forEach((x) => m.set(x, (m.get(x) || 0) + 1)); return [...m].map(([v, n]) => ({ v, label: v, n })); };
+    const bar = UI.filterBar({ id: 'bots', state: bv, placeholder: 'Find a bot, or filter: team:platform', label: 'Find and filter bots', fields: [
+      { k: 'status', label: 'Status', multi: true, keepOrder: true, plural: 'statuses', options: () => [['needs-you', 'Needs you'], ['working', 'Working'], ['idle', 'Idle']].map(([v, label]) => ({ v, label, n: bots.filter((b) => statusOf(b) === v).length })).filter((o) => o.n) },
+      { k: 'team', label: 'Team', multi: true, options: () => tally(bots.map(teamOf2)) },
+      ...(UI.allFolders(true, true).length > 1 ? [{ k: 'folder', label: 'Folder', path: true, allLabel: 'Every folder', find: 'Find a folder', options: () => UI.allFolders(true, true).map((f) => ({ v: f, label: f })) }] : [])], onChange: () => UI.botListBody() });
+    return `<section class="dl-card bot-list"><header class="dl-ch"><h2>Your bots</h2><span class="dl-sub">${bots.length} · ${bots.filter((b) => b.home === 'live').length} running</span></header>${bar}<div id="bot-list-body">${body()}</div></section>`; };
+  UI.act('bv-clear', () => { Object.assign(bv, { q: '', status: [], team: [], folder: '' }); UI.rerender(); });
   function page(path) {
     const root = build();
     let n = findNode(root, path);
