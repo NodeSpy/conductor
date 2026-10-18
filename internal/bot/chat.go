@@ -593,8 +593,9 @@ func (s *Service) Conversations(op string) ([]ConversationSummary, error) {
 	return out, nil
 }
 
-// ChatMessages are a conversation's messages after seq, for op; mark sets
-// op's read mark to the last one returned.
+// ChatMessages are a conversation's messages after seq (-1: after op's read
+// mark — what is new to op), for op; mark sets op's read mark to the last one
+// returned.
 func (s *Service) ChatMessages(conv, op string, after int, mark bool) ([]store.ChatMessage, error) {
 	if _, _, err := s.ParseConversation(conv); err != nil {
 		return nil, err
@@ -608,7 +609,11 @@ func (s *Service) ChatMessages(conv, op string, after int, mark bool) ([]store.C
 		return nil, errors.New("no conversations on this daemon")
 	}
 	out := []store.ChatMessage{}
-	for _, m := range l.Conversation(conv).Messages {
+	cv := l.Conversation(conv)
+	if after < 0 {
+		after = cv.ReadUpTo[op]
+	}
+	for _, m := range cv.Messages {
 		if m.Seq > after {
 			out = append(out, m)
 		}

@@ -59,12 +59,7 @@ func cmdTeam(args []string) error {
 		}
 		a["conversation"] = conv
 		if fl["all"] == "" {
-			// Only what is new to this operator.
-			list, _, err := botControl(cfg, "chats", map[string]any{"as": fl["as"]})
-			if err != nil {
-				return err
-			}
-			a["after"] = unreadFrom(list, conv)
+			a["after"] = -1 // only what is new to this operator
 		}
 		out, _, err := botControl(cfg, "chat_read", a)
 		if err != nil {
@@ -96,29 +91,6 @@ func cmdTeam(args []string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown team command %q\n%s", sub, teamUsage)
-}
-
-// unreadFrom is the seq to read after: the operator's read mark, computed
-// from the conversation's last seq and its unread count (0 reads all).
-func unreadFrom(list map[string]any, conv string) int {
-	cs, _ := list["conversations"].([]any)
-	for _, x := range cs {
-		c, _ := x.(map[string]any)
-		if c["id"] != conv {
-			continue
-		}
-		l, ok := c["last"].(map[string]any)
-		if !ok {
-			return 0
-		}
-		seq, _ := l["seq"].(float64)
-		unread, _ := c["unread"].(float64)
-		if unread == 0 {
-			return int(seq)
-		}
-		return 0
-	}
-	return 0
 }
 
 func chatLineCLI(m map[string]any) string {

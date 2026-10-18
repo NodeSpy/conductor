@@ -321,6 +321,9 @@ func TestConversationsUnreadPerOperator(t *testing.T) {
 	if unread("op2", "team:platform") != 0 || unread("op", "team:platform") != 1 {
 		t.Fatal("reading moved another operator's mark")
 	}
+	if ms, _ := f.svc.ChatMessages("team:platform", "op", -1, false); len(ms) != 1 || ms[0].From != "bot:lead" {
+		t.Fatalf("what is new to op: %+v", ms)
+	}
 	if err := f.svc.MarkRead("team:platform", "op", 0); err != nil || unread("op", "team:platform") != 0 {
 		t.Fatalf("mark read: %v", err)
 	}

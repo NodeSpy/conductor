@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -415,6 +416,29 @@ func TestTeamDelegationDepth(t *testing.T) {
 	for _, d := range []string{"1", "10"} {
 		if _, err := loadTeams(t, "teams:\n  x: { delegation: { max_depth: "+d+" } }\nbots:\n  a: { team: x }\n"); err != nil {
 			t.Errorf("max_depth %s: %v", d, err)
+		}
+	}
+}
+
+// Team chat's knobs: on by default, bounded.
+func TestTeamChatLimits(t *testing.T) {
+	var c TeamChat
+	if c.EveryonePerHourOr() != DefaultEveryonePerHour || c.MaxReplyOr() != DefaultChatReply {
+		t.Fatalf("defaults: %d %d", c.EveryonePerHourOr(), c.MaxReplyOr())
+	}
+	base := "teams:\n  platform:\n    routing: { fallback: sre }\n    chat: %s\nbots:\n  sre: { team: platform }\n"
+	for body, want := range map[string]string{
+		"{ everyone_per_hour: 3, max_reply: 8k }": "",
+		"{ everyone_per_hour: 61 }":               "chat.everyone_per_hour: want 1 to 60",
+		"{ max_reply: 20k }":                      "chat.max_reply: want 1 to 16384 bytes",
+		"{ everyone: 3 }":                         "everyone",
+	} {
+		_, err := loadBots(t, fmt.Sprintf(base, body))
+		switch {
+		case want == "" && err != nil:
+			t.Errorf("%s: %v", body, err)
+		case want != "" && (err == nil || !strings.Contains(err.Error(), want)):
+			t.Errorf("%s: got %v, want %q", body, err, want)
 		}
 	}
 }
