@@ -159,12 +159,54 @@ triggers:
         agent: br_op
         runtime: cli_claude
         prompt: "Sign in to the test site [[browser-probe operator]]"
+  # Group PAY: the operator's own run signs up at the fake shop from a
+  # profile and buys a widget — the purchase approved by the harness, signed.
+  - "on": manual
+    name: pay_operator
+    steps:
+      - type: agent
+        name: pay_op
+        agent: pay_op
+        runtime: cli_claude
+        prompt: "Buy a widget [[wallet-probe]]"
+# The operator who approves purchases: a throwaway key the entrypoint mints
+# (it replaces this placeholder in the daemon's copy of the config).
+operators:
+  ops: { ssh_key: "ssh-ed25519 AAAA-E2E-OPS-KEY-PLACEHOLDER" }
 vaults:
   e2evault:
     type: file
     dir: /home/conductor/data/vault
 browser:
-  allow: ["localhost:8090", "127.0.0.1:8090"]
+  allow: ["localhost:8090", "127.0.0.1:8090", "localhost:8091", "127.0.0.1:8092"]
+  # Group PAY: TEST personal details and the test card 4242 4242 4242 4242 in
+  # the file vault; nothing real.
+  profiles:
+    shopper:
+      identities: ["agent:pay_*"]
+      fields:
+        name: '{{ vault "e2evault" "p_name" }}'
+        email: '{{ vault "e2evault" "p_email" }}'
+        phone: '{{ vault "e2evault" "p_phone" }}'
+        address.line1: '{{ vault "e2evault" "p_street" }}'
+        address.city: '{{ vault "e2evault" "p_city" }}'
+        address.region: '{{ vault "e2evault" "p_region" }}'
+        address.postal_code: '{{ vault "e2evault" "p_zip" }}'
+        address.country: '{{ vault "e2evault" "p_country" }}'
+      sites:
+        - { origin: "http://localhost:8091", fields: [name, email, phone, address] }
+      visible: { email: fact }
+  cards:
+    e2ecard:
+      kind: virtual
+      number: '{{ vault "e2evault" "card_number" }}'
+      expiry: '{{ vault "e2evault" "card_expiry" }}'
+      cvc: '{{ vault "e2evault" "card_cvc" }}'
+      name: '{{ vault "e2evault" "p_name" }}'
+      merchants: ["http://localhost:8091"]
+      identities: ["agent:pay_*"]
+      limits: { per_purchase: 30, per_day: 60, per_month: 100 }
+  payments: { approvers: [ops], approval_ttl: 10m }
   logins:
     - site: localhost
       identities: ["agent:br_*"]

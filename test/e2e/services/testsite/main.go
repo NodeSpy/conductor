@@ -10,6 +10,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/NodeSpy/conductor/internal/browser/browsertest"
@@ -21,7 +22,13 @@ func main() {
 	imap := flag.String("imap", "", "serve a fake IMAP mailbox here (plaintext, loopback) and mail a code after the password")
 	imapUser := flag.String("imap-user", "agent-inbox", "the mailbox's login")
 	imapPass := flag.String("imap-pass", "", "the mailbox's (app) password")
+	var shops shopAddrs
+	flag.Var(&shops, "shop", "also serve a fake shop (no real merchant, no real card) at this address; repeat for several")
 	flag.Parse()
+	for _, a := range shops {
+		shop := browsertest.NewShop()
+		go func(a string) { log.Fatal(http.ListenAndServe(a, shop)) }(a)
+	}
 	site := browsertest.New()
 	site.TOTPSeed = *seed
 	if *imap != "" {
@@ -55,3 +62,9 @@ func main() {
 	mux.Handle("/", site)
 	log.Fatal(http.ListenAndServe(*addr, mux))
 }
+
+// shopAddrs is a repeatable -shop flag.
+type shopAddrs []string
+
+func (s *shopAddrs) String() string     { return strings.Join(*s, ",") }
+func (s *shopAddrs) Set(v string) error { *s = append(*s, v); return nil }

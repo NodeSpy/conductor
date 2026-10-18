@@ -1811,6 +1811,7 @@ main() {
   want W && group_W_stepdone
   want Z && group_Z_sandbox
   want BR && group_BR_browser
+  want PAY && group_PAY_wallet
   want BM && group_BM_bots
   want L && group_L_templates
   print_matrix
@@ -2146,6 +2147,96 @@ br_login_setup() {
   out="$(cexec "$C" sh -c 'grep -rl -e test-password-not-secret /home/conductor/data /home/conductor/.conductor 2>/dev/null | grep -v -e "/vault/" -e "/testsite.log$"' | tr -d '\r')"
   if [ -z "$out" ]; then ok "BR the typed password is nowhere in plain text after setup, test and revoke" BR setup/leak
   else bad "BR typed password leaked" BR setup/leak "$out"; fi
+}
+
+# pay_status <id> — a purchase's status on the sandbox daemon ("" if none).
+pay_status() {
+  cexec conductor-sandbox conductor browser purchase show "$1" --config /etc/conductor/sandbox.yaml 2>/dev/null |
+    python3 -c 'import json,sys
+try: print(json.load(sys.stdin)["purchase"]["status"])
+except Exception: print("")' | tr -d '\r'
+}
+pay_is_pending() { [ "$(pay_status "$1")" = pending ]; }
+# pay_approve <id> — the operator approves, signed with the throwaway key.
+pay_approve() {
+  cexec conductor-sandbox conductor browser purchase approve "$1" --as ops --key /home/conductor/data/keys/ops \
+    --reason "e2e approves" --config /etc/conductor/sandbox.yaml 2>&1 | tr -d '\r'
+}
+pay_probe_done() { cexec conductor-sandbox sh -c 'grep -q "^done: yes" $(find /home/conductor -name WALLET_PROBE.md 2>/dev/null | head -1) 2>/dev/null'; }
+pay_expect() {
+  local got
+  got="$(printf '%s\n' "$1" | sed -n "s/^$2: //p" | head -1)"
+  # shellcheck disable=SC2254
+  case "$got" in $3) ok "PAY $2 → $got" PAY "$2" ;; *) bad "PAY $2" PAY "$2" "want $3, got '$got'" ;; esac
+}
+
+group_PAY_wallet() {
+  banner "Group PAY — personal details and cards: filled by conductor, purchases approved and signed, the total re-read"
+  local C=conductor-sandbox CFG=/etc/conductor/sandbox.yaml probe out st leak
+  cexec "$C" conductor run pay_operator --config "$CFG" >/dev/null 2>&1
+  # The first purchase: approved as proposed.
+  if wait_for 150 pay_is_pending pu1; then
+    out="$(pay_approve pu1)"
+    case "$out" in *'"status": "approved"'*) ok "PAY the operator's signed approval of pu1" PAY approve ;; *) bad "PAY approve pu1" PAY approve "$out" ;; esac
+  else
+    bad "PAY a purchase was proposed" PAY propose "no pending pu1"
+  fi
+  # The second: the shop raises its price before the approval.
+  if wait_for 150 pay_is_pending pu2; then
+    cexec "$C" curl -s "127.0.0.1:8091/_harness/bump?amount=3" >/dev/null
+    pay_approve pu2 >/dev/null
+  else
+    bad "PAY a second purchase was proposed" PAY propose2 "no pending pu2"
+  fi
+  if wait_for 150 pay_probe_done; then
+    probe="$(cexec "$C" sh -c 'cat $(find /home/conductor -name WALLET_PROBE.md | head -1)' | tr -d '\r')"
+    printf '%s\n' "$probe" | sed 's/^/      /'
+    pay_expect "$probe" facts '*domain example.test*'
+    pay_expect "$probe" fill-form 'ok *name*email*phone*address.line1*address.country*'
+    pay_expect "$probe" form-shows-mark true
+    pay_expect "$probe" signup ok
+    pay_expect "$probe" welcome-scrubbed true
+    pay_expect "$probe" propose pending
+    pay_expect "$probe" pay-before-approval 'refused:*is pending*'
+    pay_expect "$probe" decision approved
+    pay_expect "$probe" pay 'ok FS-* 12'
+    pay_expect "$probe" confirmation-scrubbed true
+    pay_expect "$probe" second-use 'refused:*completed*'
+    pay_expect "$probe" decision2 approved
+    pay_expect "$probe" price-bump 'refused:*higher than the approved 12.00*'
+    pay_expect "$probe" over-cap 'refused:*per-action cap 30.00*'
+    pay_expect "$probe" other-merchant "refused:*not one of card e2ecard's merchants*"
+  else
+    bad "PAY the wallet probe ran" PAY probe "no finished WALLET_PROBE.md"
+    dc logs --tail 60 "$C"
+  fi
+  st="$(cexec "$C" curl -s 127.0.0.1:8091/_harness/state | tr -d '\r')"
+  case "$st" in *'"orders":[{"number":"FS-'*'"total":12,"last4":"4242"'*) ok "PAY the shop took exactly one order, 12.00 on the test card" PAY shop/order ;;
+    *) bad "PAY one order" PAY shop/order "$st" ;; esac
+  case "$st" in *'"email":"e2e.jane.private@example.test"'*'"password":""'*|*'"password":""'*'"email":"e2e.jane.private@example.test"'*) ok "PAY the shop got the sign-up from the profile (and no password)" PAY shop/signup ;;
+    *) bad "PAY the sign-up" PAY shop/signup "$st" ;; esac
+  case "$(pay_status pu3)" in pending) ok "PAY the price bump proposed a new approval (pu3)" PAY rebid ;; *) bad "PAY a new approval after the bump" PAY rebid "pu3: $(pay_status pu3)" ;; esac
+  st="$(cexec "$C" curl -s 127.0.0.1:8092/_harness/state | tr -d '\r')"
+  case "$st" in *'"orders":null'*|*'"orders":[]'*) ok "PAY the other shop got nothing" PAY shop/other ;; *) bad "PAY the other shop" PAY shop/other "$st" ;; esac
+  if z_audit '"action":"card-completed"' '"order_number":"FS-' '"purchase":"pu1"'; then
+    ok "PAY the receipt is in the audit (merchant, total, order number)" PAY audit/receipt
+  else bad "PAY receipt audited" PAY audit/receipt "no card-completed line"; fi
+  if z_audit '"action":"purchase-approve"' '"purchase":"pu1"' '"operator":"ops"'; then
+    ok "PAY the approval is in the audit" PAY audit/approve
+  else bad "PAY approval audited" PAY audit/approve "no purchase-approve line"; fi
+  # No card or profile value anywhere the agent or the logs reach.
+  leak="$(cexec "$C" sh -c '
+    for s in 4242424242424242 "4242 4242 4242 4242" e2e.jane.private@example.test "E2E Jane Tester" "1 Hidden Lane" "+1 555 0100 777"; do
+      grep -rl --exclude-dir=vault -e "$s" /home/conductor/data /home/conductor/.conductor 2>/dev/null | grep -v "/testsite.log$" | sed "s|^|$s in |"
+    done' | tr -d '\r')"
+  if dc logs "$C" 2>&1 | grep -q -e 4242424242424242 -e e2e.jane.private@example.test; then
+    leak="$leak the daemon log"
+  fi
+  if [ -z "$leak" ]; then
+    ok "PAY no card number or profile value in any workspace, transcript, audit, ledger or log" PAY leak
+  else
+    bad "PAY a value leaked" PAY leak "$leak"
+  fi
 }
 
 group_BM_bots() {
