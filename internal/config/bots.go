@@ -1195,6 +1195,11 @@ func (c *Config) validateBot(name string, m BotConfig) error {
 func (c *Config) BotWarnings() []string {
 	var out []string
 	for _, name := range c.BotNames() {
+		for _, pat := range walletKeys(c.Bots[name].Autonomy.Unattended) {
+			u := c.Bots[name].Autonomy.Unattended[pat]
+			out = append(out, fmt.Sprintf("bots.%s: autonomy.unattended lets %s spend without approval — up to %g %s per action, %g per %s, at %s (a widening)",
+				name, pat, u.PerAction, u.CurrencyOr(), u.PerPeriod, u.PeriodD(), strings.Join(u.Merchants, ", ")))
+		}
 		m := c.Bots[name]
 		if len(c.BotOperators(name)) == 0 {
 			out = append(out, fmt.Sprintf("bots.%s: no operators are configured — its proposals can never be approved", name))
