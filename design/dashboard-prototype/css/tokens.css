@@ -263,7 +263,8 @@
   --color-status-success-fg: var(--palette-green-700);
   --color-status-success-bg: rgb(5 145 73 / 0.08);
   --color-status-success-border: rgb(5 145 73 / 0.34);
-  --color-status-success-solid: var(--palette-sage-600);
+  --color-status-success-solid: var(--palette-green-600);
+  --color-status-success-chart: color-mix(in srgb, var(--palette-green-600) 85%, var(--color-bg-surface));
   --color-status-warning-fg: var(--palette-amber-700);
   --color-status-warning-bg: rgb(157 112 4 / 0.08);
   --color-status-warning-border: rgb(157 112 4 / 0.34);
@@ -376,7 +377,8 @@
     --color-status-success-fg: var(--palette-green-400);
     --color-status-success-bg: rgb(40 173 94 / 0.14);
     --color-status-success-border: rgb(40 173 94 / 0.38);
-    --color-status-success-solid: var(--palette-sage-500);
+    --color-status-success-solid: var(--palette-green-500);
+    --color-status-success-chart: color-mix(in srgb, var(--palette-green-500) 72%, var(--color-bg-surface));
     --color-status-warning-fg: var(--palette-amber-400);
     --color-status-warning-bg: rgb(189 135 3 / 0.14);
     --color-status-warning-border: rgb(189 135 3 / 0.38);
@@ -493,7 +495,8 @@
   --color-status-success-fg: var(--palette-green-400);
   --color-status-success-bg: rgb(40 173 94 / 0.14);
   --color-status-success-border: rgb(40 173 94 / 0.38);
-  --color-status-success-solid: var(--palette-sage-500);
+  --color-status-success-solid: var(--palette-green-500);
+  --color-status-success-chart: color-mix(in srgb, var(--palette-green-500) 72%, var(--color-bg-surface));
   --color-status-warning-fg: var(--palette-amber-400);
   --color-status-warning-bg: rgb(189 135 3 / 0.14);
   --color-status-warning-border: rgb(189 135 3 / 0.38);

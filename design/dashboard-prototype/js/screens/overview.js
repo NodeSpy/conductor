@@ -56,12 +56,17 @@
     return { runs, total: runs.length, ok: runs.filter((r) => r.status === 'ok').length, fail: runs.filter(FAILED).length, running: runs.filter((r) => r.status === 'run').length, parked: runs.filter((r) => r.status === 'idle').length, waiting: runs.filter((r) => r.status === 'wait').length }; };
   UI.window12 = window12;
   /** Runs per hour over the last 12 hours, failures stacked on top in the danger colour (the mock's hourBars). */
-  const hourBars = (w = 300, h = 96) => { const n = 12, per = Array.from({ length: n }, () => [0, 0]);
-    window12().runs.forEach((r) => { const ago = (Date.now() - new Date(r.started)) / 60000, i = Math.min(n - 1, Math.max(0, n - 1 - Math.floor(ago / 60))); if (FAILED(r)) per[i][1]++; else per[i][0]++; });
-    const mx = Math.max(4, ...per.map(([a, b]) => a + b)), bw = w / n - 6;
-    const bars = per.map(([ok, f], i) => { const x = i * (w / n) + 3, ho = (ok / mx) * (h - 22), hf = (f / mx) * (h - 22);
-      return `<rect x="${x}" y="${h - 18 - ho}" width="${bw}" height="${Math.max(ho - (hf ? 2 : 0), 0)}" rx="2" class="hb-ok"/>${f ? `<rect x="${x}" y="${h - 18 - ho - hf}" width="${bw}" height="${Math.max(0, hf - 1)}" rx="2" class="hb-fail"/>` : ''}`; }).join('');
-    const fails = per.reduce((a, [, f]) => a + f, 0);
+  /** One bar per bucket, stacked from the ground: passed (a softer green), waiting or parked (neutral), running (blue),
+      failed (red, on top, so the rare failure pops first). per[i] = { ok, other, run, fail }. */
+  const SEG = [['ok', 'hb-ok'], ['other', 'hb-other'], ['run', 'hb-run'], ['fail', 'hb-fail']];
+  UI.runBucket = (r) => (r.status === 'fail' || r.status === 'stopped' ? 'fail' : r.status === 'ok' ? 'ok' : r.status === 'run' ? 'run' : 'other');
+  UI.stackBars = (per, w, h) => { const n = per.length, mx = Math.max(4, ...per.map((p) => p.ok + p.other + p.run + p.fail)), bw = w / n - 6;
+    return per.map((p, i) => { const x = i * (w / n) + 3; let y = h - 18; const segs = SEG.filter(([k]) => p[k]);
+      return segs.map(([k, cls], j) => { const hh = (p[k] / mx) * (h - 22); y -= hh; return `<rect x="${x}" y="${y}" width="${bw}" height="${Math.max(0, hh - (j < segs.length - 1 ? 2 : 0))}" rx="2" class="${cls}"/>`; }).join(''); }).join(''); };
+  /** Runs per hour over the last 12 hours (the mock's hourBars). */
+  const hourBars = (w = 300, h = 96) => { const n = 12, per = Array.from({ length: n }, () => ({ ok: 0, other: 0, run: 0, fail: 0 }));
+    window12().runs.forEach((r) => { const ago = (Date.now() - new Date(r.started)) / 60000, i = Math.min(n - 1, Math.max(0, n - 1 - Math.floor(ago / 60))); per[i][FAILED(r) ? 'fail' : UI.runBucket(r)]++; });
+    const bars = UI.stackBars(per, w, h), fails = per.reduce((a, p) => a + p.fail, 0);
     return `<svg class="dl-hours" viewBox="0 0 ${w} ${h}" role="img" aria-label="Runs per hour, last 12 hours: ${plural(fails, 'failure')}">${bars}<line x1="0" x2="${w}" y1="${h - 17}" y2="${h - 17}" class="hb-axis"/><text x="0" y="${h - 3}" class="hb-ax">12 h ago</text><text x="${w}" y="${h - 3}" class="hb-ax" text-anchor="end">now</text></svg>`; };
   function last12() {
     const w = window12(), fails = w.runs.filter(FAILED).sort((a, b) => new Date(b.finished || b.started) - new Date(a.finished || a.started));

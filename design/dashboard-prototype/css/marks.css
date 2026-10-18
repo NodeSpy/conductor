@@ -8,9 +8,10 @@
  *   UI.count(n, opts)                 .count  a number beside a tab or nav item; ember only where a person is needed
  *   UI.rowState(state)                data-row  the leading edge of a row that needs someone (never a tint)
  *
- * The status vocabulary (marks.js): the mark always carries its state colour; the word is coloured only when a
- * person is needed or the thing is live (failed, needs you, waiting, running, shadow), and bold when a person is
- * needed. Passed is a quiet sage dot with an ink word; parked is slate pause bars: never the same hue or shape.
+ * The status vocabulary (marks.js): the mark always carries its state colour; the word is coloured when a person
+ * is needed, the thing is live, or it passed (failed, needs you, waiting, running, shadow, passed), and bold when a
+ * person is needed. Passed is green, mark and word: success is coloured, so a screen of passes reads green and calm
+ * and the rare red still pops first. Parked is slate pause bars: never the same hue or shape.
  * Prototype state keys: ok/success → passed, run → running, fail → failed, ember → needs you, wait → waiting,
  * idle → parked, skip → not reached, shadow → shadow, staged → not applied. */
 
@@ -26,7 +27,7 @@
 .st { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; color: var(--color-text-secondary); vertical-align: middle; line-height: 1.3; }
 .st i { display: inline-grid; place-items: center; flex: none; width: 12px; height: 12px; color: var(--mk, var(--color-icon-muted)); }
 .st i svg { width: 12px; height: 12px; display: block; }
-.st[data-s="run"], .st[data-s="shadow"], .st[data-s="staged"] { color: var(--s-fg); }
+.st[data-s="run"], .st[data-s="shadow"], .st[data-s="staged"], .st[data-s="ok"], .st[data-s="success"] { color: var(--s-fg); }
 .st[data-s="fail"], .st[data-s="ember"], .st[data-s="wait"] { color: var(--s-fg); font-weight: var(--font-weight-bold); }
 .st.lg i, .st.lg i svg { width: 16px; height: 16px; }
 .st.mk-only { gap: 0; }
@@ -124,3 +125,7 @@ tr[data-row] .why-line { color: var(--color-text-primary); }
 
 /* phone: a list chip's remove button is a 44px target (the chip keeps its size; the button reaches past it) */
 @media (max-width: 720px) { .chip-x { min-height: 36px; } .chip-x button, .chip-del { width: 36px; height: 44px; margin: -4px -2px -4px 0; } }
+
+/* ---- runs per hour (UI.stackBars): passed in a softer green, waiting or parked neutral, running blue, failures red on
+   top so the rare one pops first ---- */
+.dl-hours .hb-ok { fill: var(--color-status-success-chart); } .dl-hours .hb-other { fill: var(--color-border-strong); } .dl-hours .hb-run { fill: var(--color-status-running-solid); } .dl-hours .hb-fail { fill: var(--color-status-danger-solid); }

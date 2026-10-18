@@ -92,7 +92,7 @@ Took, ID; the phone's grouped list.
 Deliberate differences:
 - **Run history and Activity are one page** (a structural decision): the filters (status, workflow, bot, and what the connectors publish such as repository and PR),
   the time range (up to all time) and search sit on the page; Finished is paged ("Show 20 more of N").
-- **Runs per hour** for the chosen range sits above the table: the Overview's approved strip, the same size for ten
+- **Runs per hour** for the chosen range sits above the table: the Overview's approved strip, the same size for ten Departure, by request: passed runs are green (bars in a softer green, running blue, failures red on top), and the Passed word and mark are green everywhere, where the approved mock kept passes grey and ink.
   workflows or five hundred. The per-workflow lanes are gone (they don't scale).
 - **Selection**: a checkbox column; while anything is checked, the header row becomes a pinned selection bar
   ("3 selected", Retry…, Stop…, Select all N matching, Clear). The same bar serves every list with bulk select.

@@ -62,7 +62,6 @@
 .dl-stat-line b.r { font-size: 20px; }
 .dl-stat-line span { color: var(--color-text-secondary); font-size: 13.5px; }
 .dl-hours { width: 100%; height: auto; display: block; }
-.dl-hours .hb-ok { fill: var(--color-border-default); } .dl-hours .hb-fail { fill: var(--color-status-danger-solid); }
 .dl-hours .hb-axis { stroke: var(--color-border-default); } .dl-hours .hb-ax { font: 11px var(--font-family-sans); fill: var(--color-text-tertiary); }
 .dl-foot-note { display: flex; gap: 8px; align-items: center; font: var(--type-body-s); color: var(--color-text-secondary); margin: 8px 0 0; }
 

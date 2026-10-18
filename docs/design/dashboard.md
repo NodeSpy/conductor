@@ -198,9 +198,11 @@ Repeated patterns are one component each, restyled once and used everywhere; scr
 restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
 
 - **The status vocabulary** (`UI.statusMark`, `UI.mark`; `css/marks.css`), exactly as the brand's
-  `status/marks.js`: a 12px mark plus a word. The mark always carries its state colour; the word is coloured only when
-  a person is needed or the thing is live (failed, needs you, waiting, running, shadow), and bold when a person is
-  needed. Passed is a quiet sage dot with an ink word; parked is slate pause bars; not reached is a dash; needs you is
+  `status/marks.js`: a 12px mark plus a word. The mark always carries its state colour; the word is coloured when a
+  person is needed, the thing is live or it passed (failed, needs you, waiting, running, shadow, passed), and bold when
+  a person is needed. **Passed is green, the mark and the word** (success is coloured: a screen of passes reads green
+  and calm, and the rare red still pops first; contrast 4:1 or more for the mark and 6:1 for the word, light and
+  dark); parked is slate pause bars, never the same hue or shape; not reached is a dash; needs you is
   an ember diamond; running is a blue arc that turns. No capsules, no row tints. Every status on every screen goes
   through it, and each state has one look across the app (`status.spec.js`). The words are the brand's nine (Passed,
   Running, Failed, Needs you, Waiting, Parked, Not reached, Shadow, Staged); a mark is used only for a state, never a
@@ -322,7 +324,7 @@ normally" sat beside failed runs), so the page opens on the figures, with Needs 
 3. **Needs you**: the mark, a plain title, why, the machine detail last, the age, one verb (Review is primary for
    approvals); See all.
 4. Beside it: **Running now** (at most three, longest-running first, then "+N more running →"; hidden when nothing
-   runs), **Last 12 hours** (the figure, runs per hour with failures stacked in the danger colour, the failures named),
+   runs), **Last 12 hours** (the figure, runs per hour: passed in a softer green (`--color-status-success-chart`, 3:1 or more), waiting or parked neutral, running blue, failures red on top, the failures named),
    **For your information** (an update that installs itself, a sandbox block).
 5. **Get started**, only while something is left: the remaining steps, the next one as the primary button, what's done
    in one quiet line.
@@ -395,7 +397,7 @@ needs me?", as far back as you need.
 - **The sentence**: "Last 12 hours: 15 runs. 3 need attention, 3 are running and 9 finished."
 - **Filters on the page**: search (repo, PR, run id, error), status, workflow, bot, what the connectors publish (a repository, a pull request), and the time range
   (last hour, 12 hours, 24 hours, 7 days, all time). Old `#/runs?…` links land here with the same filters.
-- **Runs per hour** for the range: the Overview's strip, failures stacked and named. It is the same size for ten
+- **Runs per hour** for the range: the Overview's strip (passed green, running blue, failures red on top), failures named. It is the same size for ten
   workflows or five hundred (the per-workflow lanes were removed: they grow with every workflow).
 - **The grouped table**, as on the approved status column: **Needs attention · N** (failed runs and runs waiting on
   a person: the reason in its state's colour under the name, a leading edge, one action: Open, or Answer), **Running
