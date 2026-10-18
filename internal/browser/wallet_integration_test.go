@@ -155,8 +155,11 @@ func TestWalletProfileSignup(t *testing.T) {
 	if len(signups) != 1 || signups[0]["email"] != "jane.private@example.test" || signups[0]["country"] != "US" || signups[0]["company"] != "" || signups[0]["password"] != "" {
 		t.Fatalf("the shop got: %+v", signups)
 	}
-	// Not the operator's request: no profile.
+	// Not the operator's request: no profile, not even its visible facts.
 	ev := w.caller("k-ev", "event")
+	if f := w.do(ev, "profiles", nil); strings.Contains(fmt.Sprint(f), "domain") {
+		t.Fatalf("an event's session learned a fact: %v", f)
+	}
 	w.do(ev, "open", map[string]any{"url": w.a + "/signup"})
 	w.refused(ev, "fill-form", map[string]any{"profile": "personal"}, "not the operator")
 	// Another site: nothing is opted in there.
@@ -262,6 +265,15 @@ func TestWalletPurchase(t *testing.T) {
 	w.refused(op, "pay", map[string]any{"purchase": p3, "submit": place}, "paused")
 	w.refused(op, "purchase", map[string]any{"card": "visa", "merchant": w.a, "total": "5"}, "paused")
 	w.m.Paused = nil
+	// A merchant the operator removed after the approval: refused at pay.
+	cd = w.st.Cards["visa"]
+	cd.Merchants = []string{"https://elsewhere.example"}
+	w.st.Cards["visa"] = cd
+	w.do(op, "open", map[string]any{"url": w.a + "/checkout"})
+	place = refOf(t, w.do(op, "snapshot", nil)["snapshot"].(string), "Place order")
+	w.refused(op, "pay", map[string]any{"purchase": p3, "submit": place}, "no longer one of card visa's merchants")
+	cd.Merchants = []string{w.a}
+	w.st.Cards["visa"] = cd
 	// Another identity cannot pay with this session's approval.
 	other := w.caller("k-other", RequesterOperator)
 	other.Identity = "agent:else@acme/app"

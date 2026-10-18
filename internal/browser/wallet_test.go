@@ -1,7 +1,9 @@
 package browser
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -353,5 +355,64 @@ func TestWalletRecordChecks(t *testing.T) {
 		if err := checkProfileRecord(&q); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// A bot's purchase goes to its gate: a proposal stays pending (approved
+// through the bot's proposal, never the browser's path), an unattended
+// verdict approves it at once — unless it is recurring — and a refusal
+// records the purchase refused.
+func TestProposePurchaseBotPath(t *testing.T) {
+	card := testCardDef()
+	st := Settings{Allow: []string{"shop.example.com"}, Cards: map[string]Card{"visa": card}, PurchaseTTL: time.Minute}
+	var verdict struct {
+		proposal   string
+		unattended bool
+		err        error
+	}
+	m := &Manager{Settings: func() Settings { return st }, Purchases: &Purchases{Dir: t.TempDir()},
+		BotPurchase: func(ctx context.Context, c Principal, p Purchase) (string, bool, error) {
+			return verdict.proposal, verdict.unattended, verdict.err
+		}}
+	bot := Principal{Identity: "agent:b@o/r", Bot: "shopper", Groups: []string{"bot:shopper"}, Requester: "bot"}
+	args := func(recurring bool) map[string]any {
+		return map[string]any{"card": "visa", "merchant": "https://shop.example.com", "total": "5", "recurring": recurring, "interval": "month"}
+	}
+	verdict.proposal = "p7"
+	p, err := m.proposePurchase(context.Background(), bot, st, args(false), map[string]any{})
+	if err != nil || p.Status != PurchasePending || p.BotProposal != "p7" {
+		t.Fatalf("proposal: %+v %v", p, err)
+	}
+	if _, err := m.ApprovePurchase(p.ID, p.Digest, "daniel"); err == nil || !strings.Contains(err.Error(), "bot approve") {
+		t.Fatalf("a bot's purchase approved on the browser's path: %v", err)
+	}
+	if _, err := m.ApproveBotPurchase(p.ID, "shopper", "p8"); err == nil {
+		t.Fatal("another proposal approved it")
+	}
+	if q, err := m.ApproveBotPurchase(p.ID, "shopper", "p7"); err != nil || q.Status != PurchaseApproved {
+		t.Fatalf("its proposal approves it: %+v %v", q, err)
+	}
+	verdict.proposal, verdict.unattended = "", true
+	u, err := m.proposePurchase(context.Background(), bot, st, args(false), map[string]any{})
+	if err != nil || u.Status != PurchaseApproved || !u.Unattended {
+		t.Fatalf("unattended: %+v %v", u, err)
+	}
+	r, err := m.proposePurchase(context.Background(), bot, st, args(true), map[string]any{})
+	if err != nil || r.Status != PurchasePending {
+		t.Fatalf("a recurring purchase ran unattended: %+v %v", r, err)
+	}
+	verdict.unattended, verdict.err = false, errors.New("over the bot's spend cap")
+	if _, err := m.proposePurchase(context.Background(), bot, st, args(false), map[string]any{}); err == nil {
+		t.Fatal("the gate's refusal")
+	}
+	if ps, _ := m.Purchases.List(PurchaseRefused); len(ps) != 1 {
+		t.Fatalf("the refused purchase is recorded: %+v", ps)
+	}
+	// An operator's approval needs the card as it stands now.
+	h, _ := m.Purchases.Propose(Purchase{Card: "visa", Merchant: "https://shop.example.com", Total: 5, Currency: "USD", Identity: "agent:t@o/r"}, time.Hour)
+	card.Frozen = true
+	st.Cards["visa"] = card
+	if _, err := m.ApprovePurchase(h.ID, h.Digest, "daniel"); err == nil || !strings.Contains(err.Error(), "frozen") {
+		t.Fatalf("approved on a frozen card: %v", err)
 	}
 }
