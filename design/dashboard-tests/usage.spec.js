@@ -61,7 +61,7 @@ test('default is off: no usage or cost UI on any screen, and the screens are sti
 });
 
 test('subscription with no source: per-provider counts observed by conductor, no limits, no tokens, no totals', async ({ page }) => {
-  await go(page, '#/config', { fresh: true });
+  await go(page, '#/preferences', { fresh: true });
   await page.locator('[data-act="usage-mode"][data-v="subscription"]').click(); // instant, no config change
   expect(await page.evaluate(() => D.pending.length)).toBe(0);
   await go(page, '#/overview');
@@ -122,7 +122,7 @@ test('api mode: dollars per provider, never added together; dollar budget fields
 test('switching back to off removes every trace again', async ({ page }) => {
   await go(page, '#/overview', { fresh: true });
   await setMode(page, { mode: 'api', source: { name: 'llm-proxy', url: 'http://llm-proxy.internal:4000/usage' } });
-  await go(page, '#/config');
+  await go(page, '#/preferences');
   await page.locator('[data-act="usage-mode"][data-v="off"]').click();
   for (const r of ROUTES) { await go(page, r); expect(await noUsageUI(page), r).toEqual([]); }
 });

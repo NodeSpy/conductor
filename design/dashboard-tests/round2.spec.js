@@ -16,7 +16,8 @@ test('one source for the last 12 hours: Home\'s tile, its failures and Activity 
   const listed = await page.evaluate(() => { const vis = (e) => e.getClientRects().length > 0; const rows = [...document.querySelectorAll('#act-tbl tr[data-href], #act-phone li a[href^="#/runs/"]')].filter(vis);
     const more = [...document.querySelectorAll('[data-act="act-more"]')].find(vis), m = more && more.textContent.match(/Show (\d+) more \((\d+) in all\)/);
     const shownDone = [...document.querySelectorAll('#act-tbl tbody.g-done tr[data-href], #act-phone .dl-runs-phone:last-of-type li')].filter(vis).length;
-    return rows.length + (m ? Number(m[2]) - shownDone : 0); });
+    const folded = [...document.querySelectorAll('#act-phone .ph-done b')].find(vis), nf = folded ? Number(folded.textContent.match(/\d+/)[0]) : 0;
+    return rows.length + (m ? Number(m[2]) - shownDone : 0) + nf; });
   expect(listed).toBe(n);
   await expect(page.locator('#act-strip')).toContainText(`ci-fixer at ${failedAt}`);
 });
@@ -87,7 +88,9 @@ test('a bot\'s reach is said once: a verb it may never run says never in its tab
 
 test('a connection says which bots reach it, from their grants (power N4)', async ({ page }) => {
   await go(page, '#/connectors', { fresh: true });
-  await expect(page.locator('.conn-row', { hasText: 'tf-apply' })).toContainText('reached by platform-sre (asks first)');
+  const row = page.locator('.conn-row', { hasText: 'tf-apply' });
+  await expect(row).toContainText('used by 1 bot');
+  await expect(row.locator('[title]')).toHaveAttribute('title', 'reached by platform-sre (asks first)');
 });
 
 test('the approval names who can approve, from the bot\'s operators (power N14)', async ({ page }) => {

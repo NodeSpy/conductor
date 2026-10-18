@@ -32,15 +32,14 @@ test('workflows: shift-click selects a range; disable stages enabled: false', as
   expect(await page.evaluate(() => D.pending.find((c) => c.key === 'ci-fixer').after)).toContain('enabled: false');
 });
 
-test('phone: ticking runs in Activity shows the selection bar at the top of the list', async ({ page }) => {
+test('phone: Activity shows what needs attention and what runs; finished runs are one line; no bulk selection', async ({ page }) => {
   test.skip(!isPhone(page), 'phone list');
   await go(page, '#/activity', { fresh: true });
-  await page.locator('#act-phone input[data-act="act-sel-row"][data-id="r-7ef0"]').click();
-  await page.locator('#act-phone input[data-act="act-sel-row"][data-id="r-7e64"]').click();
-  await expect(page.locator('#act-phone .dl-selbar')).toContainText('2 selected');
-  await page.locator('#act-phone [data-act="act-bulk-retry"]').click();
-  await page.locator('#cf-ok').click();
-  expect(await page.evaluate(() => D.runs.filter((r) => ['r-7ef0', 'r-7e64'].includes(r.retry_of)).length)).toBe(2);
+  await expect(page.locator('#act-phone input.cbx')).toHaveCount(0);
+  await expect(page.locator('#act-phone .ph-done')).toContainText(/\d+ finished/);
+  await expect(page.locator('#act-phone .dl-runs-phone')).toHaveCount(2); // needs attention, running
+  await page.locator('#act-phone .ph-done').click();
+  await expect(page.locator('#act-phone .dl-runs-phone')).toHaveCount(3);
 });
 
 test('runs: the selection bar takes the header row; retry the failed ones in one go; stop running ones with a confirmation', async ({ page }) => {

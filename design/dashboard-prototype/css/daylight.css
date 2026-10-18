@@ -392,7 +392,7 @@ details.dl-card.acc-tech { padding: 14px 22px; }
   .dl-runs-phone li.attn > a { box-shadow: none; margin-left: 0; padding-left: 0; }
   .dl-runs-phone .cbx { margin: 0; }
 }
-.wl-table td[data-l="on"] { min-width: 200px; }
+.wl-table td[data-l="what it does"] { min-width: 260px; color: var(--color-text-primary); }
 .list .item.acc-row, .list > div.item.acc-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
 .tbl td[data-l="version"] { white-space: nowrap; }
 
@@ -543,3 +543,20 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 .dl-files-d[open] > summary h3::before { transform: rotate(90deg); }
 .ident-d { margin-top: 16px; } .case-route::first-letter { text-transform: uppercase; }
 .case-page .case-head .dl-actions { margin: 12px 0 8px; }
+/* a bot's permissions, edited where they're read: each item in words, its action name small beneath, a menu to move it */
+.can-edit .can-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.can-edit .can-item > div { display: grid; gap: 1px; min-width: 0; }
+.can-edit .can-id { font-size: var(--type-code-s-size); color: var(--color-text-tertiary); overflow-wrap: anywhere; }
+.can-edit .can-item .icon-btn { margin-top: -4px; flex: none; }
+.bot-now { display: grid; justify-items: end; gap: 2px; max-width: 320px; } .bot-now > a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; color: var(--color-text-secondary); }
+.past-d { margin-top: 16px; padding: 0; } .past-d > summary { padding: 16px 22px; } .past-d .dl-list { padding: 0 22px 12px; }
+/* the Needs you tile takes the needs-you ink when something waits (the one figure that asks for action) */
+.dl-tile.hot b, .dl-tile.hot .dl-lbl { color: var(--color-text-accent); }
+.run-audit { padding: 0; } .run-audit > summary { padding: 16px 22px; } .run-audit > .dl-list, .run-audit > .dl-foot-note { padding: 0 22px; } .run-audit > .dl-foot-note { padding-bottom: 14px; }
+.dl-bothead > .bot-now { margin-left: auto; }
+.ph-done { all: unset; box-sizing: border-box; display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; padding: 14px 4px; border-top: var(--border-width) solid var(--color-border-subtle); font: var(--type-body-s); color: var(--color-text-secondary); cursor: pointer; }
+.ph-done b { color: var(--color-text-primary); }
+/* phones: a workflow card shows its sentence, its health and its menu (no Run button squeezed off the edge) */
+@media (max-width: 720px) { #wl-body .wl-acts [data-act="wf-run"] { display: none; } .tbl.responsive td[data-l="what it does"]::before { display: none; } }
+/* Activity on a phone: the lists first (the strip's failures are the first group anyway); filters wrap, never scroll off */
+@media (max-width: 720px) { #act-strip { display: none; } .dl-filters { flex-wrap: wrap; } }

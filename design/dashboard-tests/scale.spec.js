@@ -8,6 +8,7 @@ test('Activity: Finished pages by 20 ("Show 20 more (N in all)"), however many r
   await go(page, '#/activity', { fresh: true });
   await many(page, 400);
   await go(page, '#/activity?since=');
+  if (await page.locator('#act-phone .ph-done:visible').count()) await page.locator('#act-phone .ph-done').click(); // a phone folds finished runs
   // the desktop table or the phone list, whichever is showing
   const done = page.locator('#act-tbl tbody.g-done tr[data-href]:visible, #act-phone .dl-runs-phone:last-of-type > li:visible');
   await expect(done).toHaveCount(20);
@@ -21,7 +22,7 @@ test('Activity: Finished pages by 20 ("Show 20 more (N in all)"), however many r
 
 test('Compact density: tighter rows (Daylight compact: 36px), local and instant', async ({ page }) => {
   test.skip(isPhone(page), 'the phone shows lists, always comfortable');
-  await go(page, '#/config', { fresh: true });
+  await go(page, '#/preferences', { fresh: true });
   await page.locator('[data-act="pref-density"][data-v="compact"]').click();
   expect(await page.evaluate(() => D.pending.length)).toBe(0);
   await go(page, '#/activity');

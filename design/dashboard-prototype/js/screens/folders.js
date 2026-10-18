@@ -70,9 +70,9 @@
   const botsUnder = (n) => { const out = []; n.teams.forEach((t) => D.bots.forEach((b) => { if (cfgOf('bots', b.name, true).team === t) out.push(b.name); })); out.push(...n.solos); Object.values(n.kids).forEach((k) => out.push(...botsUnder(k))); return out; };
   // a folder's roll-up says only what needs you there (pending approvals, failing workflows); the neutral counts are a hover away
   const roll = (n) => { const bs = botsUnder(n); const p = bs.reduce((a, b) => a + pendingOf(b), 0), c = bs.reduce((a, b) => a + openCases(b), 0), live = bs.filter((b) => (M(b) || {}).home === 'live').length; const wr = UI.wfRoll(UI.wfsIn(n.path));
-    const tip = `${bs.length} bot${bs.length === 1 ? '' : 's'} · ${wr.n} workflow${wr.n === 1 ? '' : 's'} · ${c} open case${c === 1 ? '' : 's'} · ${live} working now`;
+    const tip = `${bs.length} bot${bs.length === 1 ? '' : 's'} · ${wr.n} workflow${wr.n === 1 ? '' : 's'} · ${c} open task${c === 1 ? '' : 's'} · ${live} working now`;
     // in words, so there is no legend to decode; what needs you first and coloured, the rest quiet
-    return `<span class="roll">${p ? `<span class="hot">${p} need${p === 1 ? 's' : ''} you</span>` : ''}${wr.failing ? `<span class="hot">${wr.failing} failing</span>` : ''}<span class="calm-n">${bs.length} bot${bs.length === 1 ? '' : 's'} · ${wr.n} workflow${wr.n === 1 ? '' : 's'} · ${c} open case${c === 1 ? '' : 's'}${live ? ` · ${live} running` : ''}</span></span>`; };
+    return `<span class="roll">${p ? `<span class="hot">${p} need${p === 1 ? 's' : ''} you</span>` : ''}${wr.failing ? `<span class="hot">${wr.failing} failing</span>` : ''}<span class="calm-n">${bs.length} bot${bs.length === 1 ? '' : 's'} · ${wr.n} workflow${wr.n === 1 ? '' : 's'} · ${c} open task${c === 1 ? '' : 's'}${live ? ` · ${live} running` : ''}</span></span>`; };
   const fv = { q: '' };
   const closed = () => new Set(D.prefs.closedFolders || []);
   const matchBot = (b) => { const m = M(b) || { name: b, desc: '' }; const q = fv.q.toLowerCase(); return (m.name + ' ' + (m.desc || '') + ' ' + UI.folderOfBot(b) + ' ' + (cfgOf('bots', b, true).team || '')).toLowerCase().includes(q); };

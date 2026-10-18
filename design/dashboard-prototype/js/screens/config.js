@@ -38,6 +38,15 @@
   UI.act('cfg-h-more', (b) => { const i = +b.dataset.i, cf = b.dataset.cf;
     UI.menu(b, [['Revert this change…', 'undo', 'revert-one', cf ? UI.off(`A later change also edits this (${cf}); restore to before it instead`) : `data-id="${b.dataset.id}"`], i > 0 ? ['Restore to before this…', 'history', 'restore', `data-id="${b.dataset.id}"`] : null].filter(Boolean)); });
   UI.route('system', () => { setTimeout(() => location.replace('#/config')); return ''; }, { nav: 'system' });
+  /** Your preferences (this browser only): how it looks and how you're told. Reached from your menu, top right. */
+  UI.displayPrefsHTML = () => `<div class="panel" id="display"><div class="panel-head"><h3>How it looks</h3></div><div class="panel-body stack tight small">
+          <div class="field"><label>Theme</label>${UI.seg([['auto', 'Match my device'], ['light', 'Light'], ['dark', 'Dark']], document.documentElement.dataset.themeSource === 'os' ? 'auto' : document.documentElement.dataset.theme, 'pref-theme')}</div>
+          <div class="field"><label>Density</label>${UI.seg([['comfortable', 'Comfortable'], ['compact', 'Compact']], D.prefs.density || 'comfortable', 'pref-density')}<div class="hint">Compact shows one-line rows (36px) in tables, lists and the bot tree.</div></div>
+          <div class="field"><label>Usage display</label>${UI.seg([['off', 'Off'], ['subscription', 'Subscription'], ['api', 'API ($)']], UI.usageMode(), 'usage-mode')}
+            <div class="hint">Off by default. <b>Subscription</b> shows runs per provider; <b>API</b> adds what they cost. Providers are never added together.</div></div>
+          <label class="row">${UI.switchBtn(!!D.prefs.planned, 'planned-toggle', 'aria-label="Show planned features"')}<span><b>Show planned features</b> <span class="muted">previews of multi-user sign-in, designed but not built yet; off by default</span></span></label></div></div>`;
+  UI.route('preferences', () => `<div class="page dl-page"><div class="dl-phead"><div><h1>Preferences</h1><p class="dl-lead">For this browser only: they change nothing in conductor and need no review.</p></div></div>
+    <div class="dl-cols"><div class="dl-col-main">${UI.displayPrefsHTML()}</div><div class="dl-col-side">${UI.notifyPrefsHTML()}</div></div></div>`);
   UI.route('config', () => {
     const n = D.pending.length;
     return `<div class="page dl-page">${UI.systemTabs('config')}
@@ -60,12 +69,6 @@
         
       </div>
       <div class="dl-col-side">
-        <div class="panel" id="display"><div class="panel-head"><h3>Display preferences</h3><span class="muted small">this browser only · instant · not config, no passkey</span></div><div class="panel-body stack tight small">
-          <div class="field"><label>Theme</label>${UI.seg([['auto', 'Match my device'], ['light', 'Light'], ['dark', 'Dark']], document.documentElement.dataset.themeSource === 'os' ? 'auto' : document.documentElement.dataset.theme, 'pref-theme')}</div>
-          <div class="field"><label>Density</label>${UI.seg([['comfortable', 'Comfortable'], ['compact', 'Compact']], D.prefs.density || 'comfortable', 'pref-density')}<div class="hint">Compact shows one-line rows (36px) in tables, lists and the bot tree.</div></div>
-          <div class="field"><label>Usage display</label>${UI.seg([['off', 'off'], ['subscription', 'subscription'], ['api', 'api ($)']], UI.usageMode(), 'usage-mode')}
-            <div class="hint"><b>off</b> (the default): no usage or spend anywhere; your real usage lives in the proxy or load balancer in front of your model accounts. <b>subscription</b>: runs and turns conductor observes, per provider; plan limits and tokens only from a usage source. <b>api</b>: dollars, per provider. Providers are never added together. Cloud spend (commit_money, aws-cost) shows in every mode.</div></div>
-          <label class="row">${UI.switchBtn(!!D.prefs.planned, 'planned-toggle', 'aria-label="Show planned features"')}<span><b>Show planned features</b> <span class="muted">previews of multi-user sign-in, designed but not built yet; off by default</span></span></label></div></div>
         ${UI.usageMode() === 'off' ? '' : (() => { const src = (S.staged('usage', 'usage') || {}).source; return `<div class="panel" id="general"><div class="panel-head"><h3>Usage source</h3><span class="muted small">config: usage.source</span>${S.find('usage', 'usage') ? tag('staged', 'run') : ''}</div><div class="panel-body stack tight small"><div class="field">${src ? `<div class="row"><span class="mono grow">${esc(src.name)} · ${esc(src.url)}</span><button class="btn sm" data-act="usage-src">Edit</button><button class="btn sm ghost" data-act="usage-src-del">Remove</button></div>` : `<div class="row"><span class="muted grow">none: only counts conductor observes (runs, turns), per provider</span><button class="btn sm" data-act="usage-src">${icon('plus')}Add a usage source</button></div>`}<div class="hint">The proxy or load balancer in front of your model accounts, which reports plan limits and tokens. Config, so it goes through the diff.</div></div>${S.find('usage', 'usage') ? '<a class="btn sm primary" href="#/config/apply" style="align-self:flex-start">Review change</a>' : ''}</div></div>`; })()}
         
         <div class="panel"><div class="panel-head"><h3>Guards</h3></div><div class="panel-body small stack tight">

@@ -217,7 +217,7 @@ tr.dragging { opacity: .45; }
 .wl-main { min-width: 0; }
 .wl-main > .panel, .folder-wl > .panel { overflow-x: auto; }
 .wl-table td[data-l="workflow"] b, .wl-table td[data-l="workflow"] a { white-space: nowrap; }
-.wl-table td[data-l="on"] { max-width: 190px; } .wl-table th, .wl-table td { padding-left: 10px; padding-right: 10px; }
+.wl-table td[data-l="what it does"] { max-width: 420px; } .wl-table th, .wl-table td { padding-left: 10px; padding-right: 10px; }
 .wl-acts { white-space: nowrap; }
 .wl-acts .btn { padding-left: 7px; padding-right: 7px; }
 

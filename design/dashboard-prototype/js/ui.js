@@ -226,6 +226,7 @@
       UI.fitSteppers(main);
       return;
     }
+    { const pt = $('#ph-title'); if (pt) pt.textContent = 'Not found'; $$('[data-nav]').forEach((a) => a.classList.remove('on')); } // the header never keeps the last page's name
     $('#main').innerHTML = `<div class="page"><div class="empty"><span class="serif">No such page</span><a class="btn" href="#/overview">Back to overview</a></div></div>`;
   };
   UI.afterRender = [];
@@ -256,7 +257,7 @@
     ['Settings', [['connectors', 'Connections', 'connectors'], ['secrets', 'Secrets', 'secrets'], ['extensions', 'Packs', 'extensions'], ['safety', 'Safety', 'shield'], ['system', 'System', 'settings']]],
   ];
   UI.navGroups = navGroups;
-  UI.pageTitle = (nav) => { const k = nav || (location.hash.replace(/^#\/?/, '') || 'overview').split(/[/?]/)[0]; const map = { live: 'activity', runs: 'activity', teams: 'bots', folders: 'bots', config: 'system', updates: 'system', logs: 'system', security: 'system', more: 'more' }; const key = map[k] || k; const hit = navGroups.flatMap(([, x]) => x).find(([n]) => n === key); return hit ? hit[1] : key === 'more' ? 'More' : 'conductor'; };
+  UI.pageTitle = (nav) => { const k = nav || (location.hash.replace(/^#\/?/, '') || 'overview').split(/[/?]/)[0]; const map = { live: 'activity', runs: 'activity', teams: 'bots', folders: 'bots', config: 'system', updates: 'system', logs: 'system', security: 'system', more: 'more', preferences: 'preferences' }; const key = map[k] || k; const hit = navGroups.flatMap(([, x]) => x).find(([n]) => n === key); return hit ? hit[1] : key === 'more' ? 'More' : key === 'preferences' ? 'Preferences' : key === 'glossary' ? 'Glossary' : 'conductor'; };
   UI.navHTML = () => navGroups.map(([g, items]) => `<div class="nav-group">${g ? `<span class="grp">${g}</span>` : ''}<nav class="nav">${items.map(([k, l, ic, c, hot]) => {
     const n = c ? c() : null;
     return `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span class="lbl">${l}</span>${n ? UI.count(n, { hot }) : ''}</a>`;
@@ -519,7 +520,7 @@
     UI.confirm(on ? { title: 'Pause dispatch?', body: 'conductor stops dispatching: no new run starts until you resume (the runtime kill switch, no restart). <span class="dl-sub">What happens to events that arrive while paused isn’t documented yet, so don’t count on them being kept.</span>', ok: 'Pause dispatch', danger: true } : { title: 'Resume dispatch?', body: 'conductor starts dispatching again; new events start their runs.', ok: 'Resume dispatch' }).then((ok) => { if (ok) UI.setPaused(on); }); });
   UI.act('strip-go', (b) => { UI.closeMenu(); UI.go(b.dataset.href); });
   /** The avatar menu: who you are, the display preferences, the glossary, the prototype's demo data, and Lock. */
-  UI.act('op-menu', (b) => UI.menu(b, [[`Signed in as ${D.operator.name}`, 'shield', 'strip-go', 'data-href="#/security"'], ['-'], [document.documentElement.dataset.theme === 'dark' ? 'Light theme' : 'Dark theme', document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon', 'theme-menu'], ['Display preferences', 'settings', 'strip-go', 'data-href="#/config?show=display"'], ...(D.prefs.gsHidden ? [['Show Get started', 'check', 'gs-show']] : []), ['Glossary', 'info', 'strip-go', 'data-href="#/glossary"'], ['Demo data…', 'sparkle', 'demo-menu'], ['-'], ['Lock', 'lock', 'strip-go', 'data-href="#/signin"']]));
+  UI.act('op-menu', (b) => UI.menu(b, [[`Signed in as ${D.operator.name}`, 'shield', 'strip-go', 'data-href="#/security"'], ['-'], [document.documentElement.dataset.theme === 'dark' ? 'Light theme' : 'Dark theme', document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon', 'theme-menu'], ['Preferences', 'settings', 'strip-go', 'data-href="#/preferences"'], ...(D.prefs.gsHidden ? [['Show Get started', 'check', 'gs-show']] : []), ['Glossary', 'info', 'strip-go', 'data-href="#/glossary"'], ['Demo data…', 'sparkle', 'demo-menu'], ['-'], ['Lock', 'lock', 'strip-go', 'data-href="#/signin"']]));
   UI.act('theme-menu', () => { UI.closeMenu(); UI.theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); });
   UI.act('theme', () => UI.theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
   UI.act('palette', () => UI.palette());

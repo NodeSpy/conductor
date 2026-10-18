@@ -19,7 +19,7 @@
   UI.attentionList = (limit) => {
     const items = D.attention.filter((a) => UI.scopeKeeps(UI.botOfHref(a.href)));
     const note = UI.scopeNote(D.attention.length - items.length);
-    if (!items.length) return note + UI.empty({ title: 'Nothing needs you', body: 'When a bot asks for approval or a run fails, it shows up here.', action: location.hash.startsWith('#/attention') ? '' : '<a class="btn sm secondary" href="#/attention?show=notify">Choose how you’re told</a>', small: true });
+    if (!items.length) return note + UI.empty({ title: 'Nothing needs you', body: 'When a bot asks for approval or a run fails, it shows up here.', action: location.hash.startsWith('#/attention') ? '' : '<a class="btn sm secondary" href="#/preferences">Choose how you’re told</a>', small: true });
     // a long list folds: the first few, then "N more need you" (Needs you itself pages by 20)
     const cap = limit || 20, more = items.length - cap;
     return note + `<ul class="dl-list dl-needs">${items.slice(0, cap).map((a, i) => needItem(a, i)).join('')}</ul>${more > 0 ? `<p class="dl-foot-note dl-more"><a class="dl-link" href="#/attention${limit ? '' : '?all=1'}">${more} more need${more === 1 ? 's' : ''} you →</a></p>` : ''}`;
@@ -91,14 +91,18 @@
   UI.act('sys-open', (el) => { D.prefs.sysOpen = el.open; S.save(); });
 
   /* At a glance: four quiet figures at the top (the bot page's stat tiles, design/brand/v2 botBefore) */
+  // four figures that agree with each other and with the badge: Needs you is the same count as the rail's, broken down
+  // by kind; every run in the last 12 hours is in one of its parts
   function glance() {
-    const running = D.runs.filter((r) => r.status === 'run'), w = window12(), pending = D.proposals.filter((p) => p.status === 'pending' && UI.live(p)).length;
-    const tile = (href, l, v, d) => `<a class="dl-tile" href="${href}"><span class="dl-lbl">${l}</span><b>${v}</b><span class="d">${d}</span></a>`;
+    const running = D.runs.filter((r) => r.status === 'run'), w = window12(), A = D.attention;
+    const KIND = [['approval', 'approval'], ['failed', 'failed run'], ['needs_input', 'question'], ['browser', 'sign-in']];
+    const needs = KIND.map(([k, word]) => [A.filter((a) => a.kind === k).length, word]).filter(([n]) => n).map(([n, word]) => plural(n, word)).join(' · ');
+    const tile = (href, l, v, d, hot) => `<a class="dl-tile${hot ? ' hot' : ''}" href="${href}"><span class="dl-lbl">${l}</span><b>${v}</b><span class="d">${d}</span></a>`;
     return `<section class="dl-glance" aria-label="At a glance">
+      ${tile('#/attention', 'Needs you', A.length, needs || 'nothing', A.length > 0)}
       ${tile('#/activity?status=run', 'Running', running.length, running.length ? `longest ${UI.runningFor(Math.min(...running.map((r) => new Date(r.started))))}` : 'nothing right now')}
       ${tile('#/activity?since=720', 'Runs, last 12 h', w.total, UI.runParts(w.runs) || 'none')}
-      ${tile('#/attention', 'Approvals', pending, pending ? 'waiting for you' : 'none waiting')}
-      ${tile('#/bots', 'Bots', D.bots.length, `${D.bots.filter((m) => m.home === 'live').length} working · ${plural(D.cases.filter((c) => c.status === 'open').length, 'open case')}`)}
+      ${tile('#/bots', 'Bots', D.bots.length, `${D.bots.filter((m) => m.home === 'live').length} working now`)}
     </section>`;
   }
 

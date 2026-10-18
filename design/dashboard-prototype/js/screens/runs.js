@@ -80,10 +80,12 @@
       ${G.done.length ? `<tbody class="g-done">${head('g-done', 'Finished', G.done.length)}${shown.map((r) => row(r)).join('')}${more > 0 ? `<tr class="more"><td colspan="${cols() + 1}"><button class="btn sm secondary" data-act="act-more" id="act-more">Show ${Math.min(PAGE, more)} more (${G.done.length} in all)</button></td></tr>` : ''}</tbody>` : ''}`;
   }
   function phoneBody(G) {
-    const li = (r, rich) => `<li class="${rich ? 'attn' : ''}"${rich ? ` data-s="${edge(r)}"` : ''}>${cbx(r)}<a href="#/runs/${r.id}"><span class="dl-nt"><b>${runName(r)}</b>${rich ? `<span class="reason">${reason(r)}</span>` : ''}${statusCell(r)}</span><span class="dl-age">${UI.agoText(r.started).replace(' ago', '')}</span></a></li>`;
+    // on a phone: what needs attention and what's running; finished runs are one line until you ask; no bulk selection
+    const li = (r, rich) => `<li class="${rich ? 'attn' : ''}"${rich ? ` data-s="${edge(r)}"` : ''}><a href="#/runs/${r.id}"><span class="dl-nt"><b>${runName(r)}</b>${rich ? `<span class="reason">${reason(r)}</span>` : ''}${statusCell(r)}</span><span class="dl-age">${UI.agoText(r.started).replace(' ago', '')}</span></a></li>`;
     const grp = (t, xs, rich, total = xs.length) => (xs.length ? `<h3 class="ph-g">${t}<span>${total}</span></h3><ul class="dl-list dl-runs-phone">${xs.map((r) => li(r, rich)).join('')}</ul>` : '');
     const shown = G.done.slice(0, av.limit), more = G.done.length - shown.length;
-    return grp('Needs attention', G.attn, true) + grp('Running now', G.run) + grp('Finished', shown, false, G.done.length) + (more > 0 ? `<button class="btn sm secondary" data-act="act-more">Show ${Math.min(PAGE, more)} more (${G.done.length} in all)</button>` : '');
+    const doneLine = G.done.length ? `<button type="button" class="ph-done" data-act="act-done-toggle" aria-expanded="${!!av.showDone}"><span><b>${G.done.length} finished</b> · ${UI.runParts(G.done)}</span><span class="dl-link">${av.showDone ? 'Hide' : 'Show'}</span></button>` : '';
+    return grp('Needs attention', G.attn, true) + grp('Running now', G.run) + doneLine + (av.showDone ? grp('Finished', shown, false, G.done.length) + (more > 0 ? `<button class="btn sm secondary" data-act="act-more">Show ${Math.min(PAGE, more)} more (${G.done.length} in all)</button>` : '') : '');
   }
   const theadHTML = (G) => (av.sel.size ? `<thead class="selecting"><tr><th colspan="${cols() + 1}">${selBar(G)}</th></tr></thead>`
     : `<thead><tr><th class="sel"><input type="checkbox" class="cbx" data-act="act-sel-all" aria-label="Select every run shown"></th><th>Run</th><th>Status</th><th>When</th><th class="num">Took</th>${UI.usageOn() ? `<th class="num">${UI.measHead()}</th>` : ''}<th class="id-h">ID</th><th></th></tr></thead>`);
@@ -162,7 +164,11 @@
     const lines = (s.log || []).map(([, t]) => String(t)); const bad = lines.find((t) => /FAIL|error|exceeded/i.test(t));
     if (s.status === 'fail' || s.status === 'stopped') return (r.failed_step === s.id && r.error ? UI.plainError(r) : '') || bad || 'Failed';
     if (s.status === 'wait') return esc(String(r.detail || 'Waiting for your answer'));
-    const out = s.outputs || {}; return out.summary || lines[0] || 'Done'; };
+    const out = s.outputs || {};
+    // a decision in words ("Decided it's a test failure, 91% sure"), never its raw key=value line
+    if (out.choice != null) return `Decided it’s ${/^[aeiou]/i.test(String(out.choice)) ? 'an' : 'a'} ${esc(String(out.choice).replace(/_/g, ' '))}${out.confidence != null ? `, ${Math.round(out.confidence * 100)}% sure` : ''}`;
+    if (out.exit_code === 0) return 'Passed: every check came back clean';
+    return out.summary || (lines[0] || 'Done').replace(/^fetched /, 'Fetched '); };
   const tree = (r, rec, sel) => `<ol class="dl-tree">${rec.steps.map((s, i) => `<li class="${s.status === 'fail' ? 'failed' : s.status === 'idle' ? 'skipped' : ''}"><button type="button" class="tl${s.id === sel ? ' on' : ''}" data-act="run-step" data-run="${r.id}" data-step="${s.id}" aria-pressed="${s.id === sel}"><span class="tn">${i + 1}</span>${UI.mark(STEP_S[s.status] || 'skip', { label: true })}<span class="tt"><b>${esc(s.id)}</b><span>${esc(stepSentence(r, s))}</span></span><span></span><em>${s.t0 != null ? UI.durText(s.ms) : ''}</em></button></li>`).join('')}</ol>`;
   // the run's live log, in the running step's card
   const lv = { follow: true, n: 9 };
@@ -196,14 +202,18 @@
     const title = `${esc(UI.runTitle(r))}${r.repo ? ` on ${UI.runTarget(r)}` : ''}`;
     const lead = story ? story.happened : r.status === 'run' ? `${trigWords(r)} ${UI.agoText(r.started)}; now on step <b>${esc((r.steps.find((x) => x.status === 'run') || s).id)}</b>.` : r.status === 'ok' ? `Finished in ${UI.runDur(r)}; every step passed.` : '';
     const prBtn = r.repo && r.number ? `<a class="btn secondary" href="#/runs/${r.id}" ${UI.off('Opens the pull request on GitHub (not in the prototype)')}>${icon('pr')}Open the ${/issue/.test(r.trigger) ? 'issue' : 'pull request'}</a>` : '';
-    const actions = r.status === 'run' ? `<button class="btn secondary" data-act="stop-run" data-run="${r.id}">${icon('x')}Stop run…</button>${prBtn}`
-      : `${['fail', 'stopped', 'idle'].includes(r.status) ? (() => {
-          // when a check failed on a change an earlier step made, rerunning the check fails again: the primary redoes the
-          // step that made the change (its agent gets the failure), and rerunning the check alone is secondary
-          const at = rec.steps.findIndex((x) => x.id === rec.failAt), maker = at > 0 ? rec.steps.slice(0, at).reverse().find((x) => x.diff) : null, failed = rec.steps[at];
-          const one = (from, label, cls) => `<button class="btn ${cls}" data-act="retry" data-run="${r.id}" data-from="${esc(from)}">${icon('updates')}${label}…</button>`;
-          return maker && failed && failed.kind !== 'agent' ? one(maker.id, `Retry from “${esc(maker.id)}”`, 'primary') + one(rec.failAt, `Rerun “${esc(rec.failAt)}” only`, 'secondary') : one(rec.failAt || '', `Retry${rec.failAt ? ` from “${esc(rec.failAt)}”` : ''}`, 'primary'); })() : r.status === 'wait' ? `<a class="btn primary" href="#/attention">Answer it</a>` : ''}${prBtn}${same.length ? `<a class="btn secondary" href="#/runs/${r.id}/compare">${icon('split')}Compare…</a>` : ''}${inNeeds ? `<button class="btn ghost" data-act="run-dismiss" data-run="${r.id}">Dismiss</button>` : ''}`;
-    const facts = [['Started', `${UI.agoText(r.started)} <span class="dl-sub">(${UI.hm(r.started)})</span>`], r.status === 'run' ? ['Running for', UI.durText(Date.now() - new Date(r.started))] : ['Took', UI.runDur(r)], UI.usageOn() ? ['Cost', UI.runFig(r)] : null, ['Triggered by', trigWords(r)], ['Workflow', `<a class="dl-link" href="#/workflows/${encodeURIComponent(r.workflow)}">${esc(r.workflow)}</a>`], ['Run', `<span class="mono">${r.id}</span>`], r.retry_of ? ['Retry of', `<a class="mono dl-link" href="#/runs/${r.retry_of}">${r.retry_of}</a>`] : null, ['Record', r.status === 'run' || r.status === 'wait' ? 'signed when it finishes' : 'signed; the signature checks out']];
+    // one recommended next step, with its reason in a line; everything else in the ⋯ menu
+    const at = rec.steps.findIndex((x) => x.id === rec.failAt), maker = at > 0 ? rec.steps.slice(0, at).reverse().find((x) => x.diff) : null, failed = rec.steps[at];
+    const rec1 = r.status === 'run' ? null : ['fail', 'stopped', 'idle'].includes(r.status)
+      ? (maker && failed && failed.kind !== 'agent' ? { act: `data-act="retry" data-run="${r.id}" data-from="${esc(maker.id)}"`, label: `Retry from “${esc(maker.id)}”…`, why: `“${esc(rec.failAt)}” failed on the change “${esc(maker.id)}” made, so redo that step; its agent sees the failure.` }
+        : r.status === 'idle' ? { act: `data-act="retry" data-run="${r.id}" data-from=""`, label: 'Run it now…', why: 'It was held before any step ran.' } : { act: `data-act="retry" data-run="${r.id}" data-from="${esc(rec.failAt || '')}"`, label: `Retry${rec.failAt ? ` from “${esc(rec.failAt)}”` : ''}…`, why: '' })
+      : r.status === 'wait' ? { href: '#/attention', label: 'Answer it', why: 'It’s waiting for your answer before it goes on.' } : null;
+    const more = [rec1 && maker && failed && failed.kind !== 'agent' ? [`Rerun “${rec.failAt}” only…`, 'updates', 'retry', `data-run="${r.id}" data-from="${esc(rec.failAt)}"`] : null, same.length ? ['Compare with an earlier run', 'split', 'strip-go', `data-href="#/runs/${r.id}/compare"`] : null, r.repo && r.number ? [`Open the ${/issue/.test(r.trigger) ? 'issue' : 'pull request'}`, 'pr', 'noop', UI.off('Opens it on GitHub (not in the prototype)')] : null, inNeeds ? ['Dismiss from Needs you', 'check', 'run-dismiss', `data-run="${r.id}"`] : null].filter(Boolean);
+    UI.runMore = more;
+    const actions = r.status === 'run' ? `<button class="btn secondary" data-act="stop-run" data-run="${r.id}">${icon('x')}Stop run…</button>${more.length ? `<button class="icon-btn" data-act="run-more" aria-label="More for this run">${icon('more')}</button>` : ''}`
+      : `${rec1 ? (rec1.href ? `<a class="btn primary" href="${rec1.href}">${rec1.label}</a>` : `<button class="btn primary" ${rec1.act}>${icon('updates')}${rec1.label}</button>`) : ''}${more.length ? `<button class="icon-btn" data-act="run-more" aria-label="More for this run">${icon('more')}</button>` : ''}${rec1 && rec1.why ? `<p class="dl-sub run-next-why">${rec1.why}</p>` : ''}`;
+    const facts = [['Started', `${UI.agoText(r.started)} <span class="dl-sub">(${UI.hm(r.started)})</span>`], r.status === 'run' ? ['Running for', UI.durText(Date.now() - new Date(r.started))] : ['Took', UI.runDur(r)], UI.usageOn() ? ['Cost', UI.runFig(r)] : null, ['Triggered by', trigWords(r)], ['Workflow', `<a class="dl-link" href="#/workflows/${encodeURIComponent(r.workflow)}">${esc(r.workflow)}</a>`], r.retry_of ? ['Retry of', `<a class="mono dl-link" href="#/runs/${r.retry_of}">${r.retry_of}</a>`] : null];
+    const auditFacts = `<details class="dl-audit-d"><summary>${icon('chev')}For audit: the run id and its signed record</summary><dl class="dl-facts"><dt>Run</dt><dd class="mono">${r.id}</dd><dt>Record</dt><dd>${r.status === 'run' || r.status === 'wait' ? 'signed when it finishes' : 'signed; the signature checks out'}</dd></dl></details>`;
     return { toString: () => `<div class="page dl-page">
       <div class="dl-crumbs run-nav"><a href="#/activity">${icon('chev', 'flip')}Back to Activity</a></div>
       <div class="dl-phead"><div><h1 class="dl-h1-long">${title}</h1>${lead ? `<p class="dl-lead">${lead}</p>` : ''}</div>${UI.statusMark(UI.runS(r.status), UI.runWord(r.status), { lg: true })}</div>
@@ -211,8 +221,8 @@
       <div class="dl-cols"><div class="dl-col-main">
         <section class="dl-card"><header class="dl-ch"><h2>What happened</h2><span class="dl-sub">${rec.steps.length} steps · ${r.status === 'run' ? 'running' : UI.durText(rec.total)}</span></header>${tree(r, rec, s.id)}</section>
         ${stepCard(r, rec, s)}</div>
-        <div class="dl-col-side"><section class="dl-card"><header class="dl-ch"><h2>Details</h2></header>${UI.facts(facts)}</section>
-          <section class="dl-card run-audit"><header class="dl-ch"><h2>Audit</h2><span class="dl-sp"></span><a class="dl-link" href="#/logs/audit?run=${r.id}">All</a></header><ul class="dl-list">${audit.slice(0, 6).map((a) => `<li class="dl-audit"><span class="dl-nt"><b>${esc(a.event.replace(/_/g, ' '))}</b><span class="dl-why">${esc(a.detail || '')}</span></span><span class="dl-age">${UI.agoText(a.ts)}</span></li>`).join('')}</ul></section></div></div>
+        <div class="dl-col-side"><section class="dl-card"><header class="dl-ch"><h2>Details</h2></header>${UI.facts(facts)}${auditFacts}</section>
+          <details class="dl-card dl-files-d run-audit"><summary class="panel-head"><h3>Audit trail</h3><span class="muted small">${audit.length} event${audit.length === 1 ? '' : 's'} for this run</span></summary><ul class="dl-list">${audit.slice(0, 6).map((a) => `<li class="dl-audit"><span class="dl-nt"><b>${esc(a.event.replace(/_/g, ' '))}</b><span class="dl-why">${esc(a.detail || '')}</span></span><span class="dl-age">${UI.agoText(a.ts)}</span></li>`).join('')}</ul><p class="dl-foot-note"><a class="dl-link" href="#/logs/audit?run=${r.id}">The full audit log for this run →</a></p></details></div></div>
     </div>`,
     after(main) { if (r.status !== 'run') return; const log = UI.$('#log', main); if (!log) return; log.scrollTop = log.scrollHeight;
       UI.every(UI.fast ? 400 : 1500, () => { if (lv.n >= LOG.length) return; log.lastElementChild.insertAdjacentHTML('beforebegin', logLine(LOG[lv.n], lv.n, true)); lv.n++; log.scrollTop = log.scrollHeight; }); } };
@@ -225,6 +235,8 @@
   document.addEventListener('keydown', (e) => { if (!['ArrowDown', 'ArrowUp'].includes(e.key) || !e.target.matches || !e.target.matches('.dl-tree .tl')) return;
     const all = [...document.querySelectorAll('.dl-tree .tl')], i = all.indexOf(e.target), next = all[i + (e.key === 'ArrowDown' ? 1 : -1)]; if (!next) return;
     e.preventDefault(); const step = next.dataset.step; next.click(); setTimeout(() => { const b = document.querySelector(`.dl-tree .tl[data-step="${step}"]`); if (b) b.focus(); }); });
+  UI.act('act-done-toggle', () => { av.showDone = !av.showDone; actRefresh(); });
+  UI.act('run-more', (b) => UI.menu(b, UI.runMore || []));
   UI.act('run-dismiss', (b) => { const href = '#/runs/' + b.dataset.run, was = D.attention.some((a) => a.href === href); D.dismissed = [...new Set((D.dismissed || []).concat(href))]; S.save(); UI.rerender();
     UI.toast(was ? 'Dismissed from Needs you' : 'Not in Needs you', 'the run and its record stay in Activity', 'ok', was ? { label: 'Undo', fn: () => { D.dismissed = D.dismissed.filter((h) => h !== href); S.save(); UI.rerender(); } } : null); });
 
@@ -257,17 +269,18 @@
   UI.act('cmp-other', (el) => UI.go(`#/runs/${el.dataset.run}/compare/${el.value}`));
 
   /* ---------- Needs you: the Overview's list, every item, then the quiet things ---------- */
+  UI.notifyPrefsHTML = () => `<section class="dl-card" id="notify"><header class="dl-ch"><h2>How you’re told</h2></header>
+          <div class="dl-prefs">
+          <label class="row">${UI.switchBtn(D.prefs.notifyApprovals, 'pref', 'data-k="notifyApprovals" aria-label="When a bot asks for approval"')}When a bot asks for approval</label>
+          <label class="row">${UI.switchBtn(D.prefs.notifyPush, 'pref', 'data-k="notifyPush" aria-label="When a browser sign-in needs me"')}When a browser sign-in needs me</label>
+          <label class="row">${UI.switchBtn(D.prefs.notifyFailed, 'pref', 'data-k="notifyFailed" aria-label="When any run fails"')}When any run fails</label></div>
+          <p class="dl-sub">Alerts outside the dashboard (Slack, PagerDuty) are set up as workflows on conductor’s own events.</p></section>`;
   UI.route('attention', () => `<div class="page dl-page">
     <div class="dl-phead"><div><h1>Needs you</h1></div>${UI.folderChip()}</div>
     <div class="dl-cols"><div class="dl-col-main"><section class="dl-card">${UI.attentionList(/[?&]all=1/.test(location.hash) ? 1e9 : 0)}</section></div>
       <div class="dl-col-side">
         ${(D.fyi || []).length ? `<section class="dl-card"><header class="dl-ch"><h2>For your information</h2></header><ul class="dl-list">${D.fyi.map((a) => `<li><a class="dl-row-a" href="${a.href}"><span class="dl-ng">${icon(/update/i.test(a.title + a.plain) ? 'updates' : 'shield')}</span><span class="dl-nt"><b>${esc(a.plain)}</b><span class="dl-why">${esc(a.why)}</span></span></a></li>`).join('')}</ul></section>` : ''}
-        <section class="dl-card" id="notify"><header class="dl-ch"><h2>Tell me in this browser</h2></header>
-          <div class="dl-prefs">
-          <label class="row">${UI.switchBtn(D.prefs.notifyApprovals, 'pref', 'data-k="notifyApprovals" aria-label="When a bot asks for approval"')}When a bot asks for approval</label>
-          <label class="row">${UI.switchBtn(D.prefs.notifyPush, 'pref', 'data-k="notifyPush" aria-label="When a browser sign-in needs me"')}When a browser sign-in needs me</label>
-          <label class="row">${UI.switchBtn(D.prefs.notifyFailed, 'pref', 'data-k="notifyFailed" aria-label="When any run fails"')}When any run fails</label></div>
-          <p class="dl-sub">Alerts outside the dashboard (Slack, PagerDuty) are set up as workflows on conductor’s own events.</p></section>
+
       </div></div></div>`);
   UI.act('pref', (b) => { D.prefs[b.dataset.k] = !D.prefs[b.dataset.k]; S.save(); b.classList.toggle('on', D.prefs[b.dataset.k]); b.setAttribute('aria-checked', D.prefs[b.dataset.k]); });
 })();

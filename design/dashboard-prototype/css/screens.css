@@ -425,7 +425,7 @@ tr.folded { display: none; }
   #hist-body tr[data-href] > td[data-l="took"] { display: none; }
   #hist-body tr[data-href] > td.sel, #wl-body tr[data-row] > td.sel { position: static; grid-area: sel; width: auto !important; padding: 0 !important; }
   #wl-body tr[data-row] { grid-template-areas: "sel wf last" ". on last" ". risk risk"; }
-  #wl-body td[data-l="workflow"] { grid-area: wf; } #wl-body td[data-l="on"] { grid-area: on; } #wl-body td[data-l="last 24 hours"] { grid-area: last; justify-self: end; }
+  #wl-body td[data-l="workflow"] { grid-area: wf; } #wl-body td[data-l="what it does"] { grid-area: on; } #wl-body td[data-l="last 24 hours"] { grid-area: last; justify-self: end; }
   #wl-body tr[data-row] > td[data-l="folder"], #wl-body tr[data-row] > td.wl-acts, #wl-body tr[data-row] > td[data-l="owner"] { display: none; }
   #wl-body tr[data-row] > td[data-l="risk"] { grid-area: risk; }
 }
