@@ -207,8 +207,11 @@ func TestBotIdentityAttributesAndView(t *testing.T) {
 		t.Fatalf("an empty identity's view: %v", v)
 	}
 	v = Identity{DisplayName: "Owl", Avatar: &BotAvatar{Preset: "owl"}, Personality: &BotPersonality{Tone: "dry"}}.View("sre", "kit/first-line")
-	if v["display_name"] != "Owl" || v["avatar"] != (BotAvatar{Preset: "owl"}) || v["suggested_by"] != "kit/first-line" || v["personality"] != (BotPersonality{Tone: "dry"}) {
+	if v["display_name"] != "Owl" || v["avatar"] != (BotAvatar{Preset: "owl"}) || v["suggested_by"] != "kit/first-line" || v["personality"] != (BotPersonality{Tone: "dry"}) || v["picture"] != nil {
 		t.Fatalf("view: %v", v)
+	}
+	if v := (Identity{Avatar: &BotAvatar{Image: "a.png", ImagePath: "/x/a.png"}}).View("sre", ""); v["picture"] != "/v1/bots/sre/avatar" {
+		t.Fatalf("a picture's view: %v", v)
 	}
 }
 

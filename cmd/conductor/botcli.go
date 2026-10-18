@@ -33,6 +33,8 @@ const botUsage = `usage:
     conductor bot ls [--flat]                # bots by team (--flat: one line each)
     conductor bot show <bot>                 # status, identity (name, initials, avatar, voice), template
     conductor bot identity-options           # the avatar presets, icons, colors and tones an identity may name
+    conductor bot avatar set <bot> <file> [--crop x,y,side] [--write]   # its own picture: PNG/JPEG/WebP, re-encoded, avatars/<bot>.png
+    conductor bot avatar clear <bot> [--write]
     conductor bot cases <bot> [--all]
     conductor bot workers <bot>
     conductor bot delegations <bot> [--all]
@@ -147,6 +149,11 @@ func cmdBot(args []string) error {
 	case "identity-options":
 		// The built-in lists an identity is validated against.
 		return printJSON(config.IdentityOptions())
+	case "avatar":
+		if inSession {
+			return fmt.Errorf("refusing: this shell is a conductor agent session — only an operator changes a bot's picture")
+		}
+		return botAvatarCmd(args[1:])
 	case "templates", "template", "new", "grant":
 		if inSession {
 			return fmt.Errorf("refusing: this shell is a conductor agent session — only an operator instantiates bots and grants them verbs")

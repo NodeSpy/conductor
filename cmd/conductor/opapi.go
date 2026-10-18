@@ -50,5 +50,11 @@ func serveOperatorAPI(ctx context.Context, path string, h http.Handler, log func
 	}
 }
 
-// operatorAPI is the bot service's operator API handler.
-func (m *botStack) operatorAPI() http.Handler { return bot.OperatorAPI(m.svc) }
+// operatorAPI is the bot service's operator API handler, with the avatar
+// endpoints (config changes, planned here in cmd).
+func (m *botStack) operatorAPI() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/", bot.OperatorAPI(m.svc))
+	avatarRoutes(mux, m.svc.Cfg, func() string { return botConfigPath })
+	return mux
+}

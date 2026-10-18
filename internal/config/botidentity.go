@@ -309,6 +309,11 @@ func (id Identity) View(botID, from string) map[string]any {
 	}
 	if id.Avatar != nil {
 		out["avatar"] = *id.Avatar
+		if id.Avatar.Image != "" {
+			// The operator API serves it, re-encoded; elsewhere the face (a
+			// preset or an icon) or the initials stand in.
+			out["picture"] = "/v1/bots/" + botID + "/avatar"
+		}
 	}
 	if id.Personality != nil {
 		out["personality"] = *id.Personality

@@ -338,30 +338,8 @@ func InsertTopLevel(src []byte, key, block string) ([]byte, error) {
 // SetBotGrants sets verbs → tiers in bots.<name>.grant, re-rendering that one
 // entry.
 func SetBotGrants(src []byte, name string, grants map[string]string) ([]byte, error) {
-	sec, _, err := findTop(src, "bots")
-	if err != nil {
-		return nil, err
-	}
-	if !sec.found || sec.val.Kind != yaml.MappingNode || sec.val.Style == yaml.FlowStyle {
-		return nil, fmt.Errorf("no bots: block (in block style) to change")
-	}
-	lines := strings.Split(string(src), "\n")
-	for i := 0; i+1 < len(sec.val.Content); i += 2 {
-		k, v := sec.val.Content[i], sec.val.Content[i+1]
-		if k.Value != name {
-			continue
-		}
-		next := sec.end + 1
-		if i+2 < len(sec.val.Content) {
-			next = sec.val.Content[i+2].Line
-		}
-		end := blockEnd(lines, maxLine(v, k.Line), next)
-		var g *yaml.Node
-		for j := 0; j+1 < len(v.Content); j += 2 {
-			if v.Content[j].Value == "grant" {
-				g = v.Content[j+1]
-			}
-		}
+	return editBotEntry(src, name, func(v *yaml.Node) {
+		g := mapKey(v, "grant")
 		if g == nil {
 			g = &yaml.Node{Kind: yaml.MappingNode}
 			v.Content = append(v.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: "grant"}, g)
@@ -379,6 +357,70 @@ func SetBotGrants(src []byte, name string, grants map[string]string) ([]byte, er
 				g.Content = append(g.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: verb}, &yaml.Node{Kind: yaml.ScalarNode, Value: grants[verb]})
 			}
 		}
+	})
+}
+
+// SetBotAvatar sets a bot's `avatar:` (nil removes it), leaving the rest of
+// the file as it is.
+func SetBotAvatar(src []byte, name string, a *BotAvatar) ([]byte, error) {
+	return editBotEntry(src, name, func(v *yaml.Node) {
+		for j := 0; j+1 < len(v.Content); j += 2 {
+			if v.Content[j].Value == "avatar" {
+				v.Content = append(v.Content[:j], v.Content[j+2:]...)
+				break
+			}
+		}
+		if a == nil {
+			return
+		}
+		m := &yaml.Node{Kind: yaml.MappingNode, Style: yaml.FlowStyle}
+		for _, kv := range [][2]string{{"image", a.Image}, {"preset", a.Preset}, {"icon", a.Icon}, {"color", a.Color}} {
+			if kv[1] != "" {
+				m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: kv[0]}, &yaml.Node{Kind: yaml.ScalarNode, Value: kv[1]})
+			}
+		}
+		v.Content = append(v.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: "avatar"}, m)
+	})
+}
+
+func mapKey(v *yaml.Node, key string) *yaml.Node {
+	for j := 0; j+1 < len(v.Content); j += 2 {
+		if v.Content[j].Value == key {
+			return v.Content[j+1]
+		}
+	}
+	return nil
+}
+
+// editBotEntry re-renders one bot's entry in bots: after edit, leaving the
+// rest of the file as it is.
+func editBotEntry(src []byte, name string, edit func(v *yaml.Node)) ([]byte, error) {
+	sec, _, err := findTop(src, "bots")
+	if err != nil {
+		return nil, err
+	}
+	if !sec.found || sec.val.Kind != yaml.MappingNode || sec.val.Style == yaml.FlowStyle {
+		return nil, fmt.Errorf("no bots: block (in block style) to change")
+	}
+	lines := strings.Split(string(src), "\n")
+	for i := 0; i+1 < len(sec.val.Content); i += 2 {
+		k, v := sec.val.Content[i], sec.val.Content[i+1]
+		if k.Value != name {
+			continue
+		}
+		if v.Kind == yaml.ScalarNode && v.Tag == "!!null" { // `name:` with nothing yet
+			v.Kind, v.Tag, v.Value = yaml.MappingNode, "", ""
+		}
+		if v.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("bots.%s is not a block to change", name)
+		}
+		next := sec.end + 1
+		if i+2 < len(sec.val.Content) {
+			next = sec.val.Content[i+2].Line
+		}
+		end := blockEnd(lines, maxLine(v, k.Line), next)
+		v.Style = 0
+		edit(v)
 		k.HeadComment, k.LineComment = "", ""
 		rendered, err := encodeYAMLNode(&yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{k, v}})
 		if err != nil {
