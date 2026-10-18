@@ -225,6 +225,20 @@ func (s *Service) agentOp(ctx context.Context, c Actor, sub string, args map[str
 		return s.Tell(ctx, c, str(args, "to"), str(args, "text"))
 	case "report":
 		return map[string]any{"ok": true}, s.Report(c, str(args, "text"))
+	case "reply":
+		to, _ := strconv.Atoi(str(args, "to"))
+		m, err := s.ChatReply(ctx, c, str(args, "conversation"), to, str(args, "text"))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"recorded": true, "seq": m.Seq, "reply_to": m.ReplyTo}, nil
+	case "chat":
+		n, _ := strconv.Atoi(str(args, "last"))
+		t, err := s.ChatRead(c, str(args, "conversation"), n)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"conversation": t}, nil
 	case "instructions":
 		// The delivery itself happens in AgentOp; this op only asks.
 		return map[string]any{"ok": true}, nil
@@ -470,7 +484,7 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 		if err != nil {
 			return nil, err
 		}
-		atts, err := s.SayWith(name, str(args, "text"), files, str(args, "case"))
+		atts, err := s.SayAs(str(args, "as"), name, str(args, "text"), files, str(args, "case"))
 		if err != nil {
 			return nil, err
 		}
@@ -494,6 +508,30 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 			return nil, err
 		}
 		return map[string]any{"case": id}, nil
+	case "chat_send":
+		files, err := filesArg(args)
+		if err != nil {
+			return nil, err
+		}
+		m, err := s.Chat(ctx, ChatSend{Conversation: str(args, "conversation"), Operator: str(args, "as"), Text: str(args, "text"),
+			To: listArg(args, "to"), Everyone: boolArg(args, "everyone"), Files: files})
+		if err != nil {
+			return nil, err
+		}
+		return toMap(m), nil
+	case "chat_read":
+		after, _ := strconv.Atoi(str(args, "after"))
+		ms, err := s.ChatMessages(str(args, "conversation"), str(args, "as"), after, true)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"conversation": str(args, "conversation"), "messages": toList(ms)}, nil
+	case "chats":
+		cs, err := s.Conversations(str(args, "as"))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"conversations": toList(cs)}, nil
 	case "attachments":
 		if err := need(); err != nil {
 			return nil, err

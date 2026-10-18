@@ -66,6 +66,41 @@ type TeamConfig struct {
 	// Routing picks who handles work routed to the team (`bot: { team:
 	// … }`). Nil: the team cannot be routed to.
 	Routing *TeamRouting `yaml:"routing,omitempty"`
+	// Chat bounds the team conversation (`conductor team say`).
+	Chat TeamChat `yaml:"chat,omitempty"`
+}
+
+// TeamChat bounds a team conversation. On by default.
+type TeamChat struct {
+	// EveryonePerHour caps `--everyone` messages per hour (each reaches
+	// every member: one session turn and one reply each).
+	EveryonePerHour int `yaml:"everyone_per_hour,omitempty"`
+	// MaxReply caps one bot's reply (bytes).
+	MaxReply ByteSize `yaml:"max_reply,omitempty"`
+}
+
+// Team chat defaults and ceilings.
+const (
+	DefaultEveryonePerHour = 6
+	MaxEveryonePerHour     = 60
+	DefaultChatReply       = 4000
+	MaxChatReply           = 16 << 10
+)
+
+// EveryonePerHourOr is the effective fan-out cap.
+func (t TeamChat) EveryonePerHourOr() int {
+	if t.EveryonePerHour > 0 {
+		return t.EveryonePerHour
+	}
+	return DefaultEveryonePerHour
+}
+
+// MaxReplyOr is the effective reply cap.
+func (t TeamChat) MaxReplyOr() int {
+	if t.MaxReply > 0 {
+		return int(t.MaxReply)
+	}
+	return DefaultChatReply
 }
 
 // TeamDelegation bounds delegation chains.
@@ -556,6 +591,12 @@ func (c *Config) validateTeams() error {
 func (c *Config) validateBotTeam(name string, t TeamConfig) error {
 	if !validBotName(name) {
 		return fmt.Errorf("name must be lowercase letters, digits, - or _")
+	}
+	if t.Chat.EveryonePerHour < 0 || t.Chat.EveryonePerHour > MaxEveryonePerHour {
+		return fmt.Errorf("chat.everyone_per_hour: want 1 to %d, got %d", MaxEveryonePerHour, t.Chat.EveryonePerHour)
+	}
+	if t.Chat.MaxReply < 0 || t.Chat.MaxReply > MaxChatReply {
+		return fmt.Errorf("chat.max_reply: want 1 to %d bytes, got %d", MaxChatReply, t.Chat.MaxReply)
 	}
 	if err := validateCollections(t.Collections, true); err != nil {
 		return err

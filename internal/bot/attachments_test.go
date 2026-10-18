@@ -50,14 +50,7 @@ func attachSvc(t *testing.T) (*svcFixture, *time.Time) {
 	f.svc.Blobs = bs
 	// The message directories are read-only: make them removable again
 	// before the temp dir is cleaned up.
-	t.Cleanup(func() {
-		_ = filepath.Walk(state, func(p string, fi os.FileInfo, err error) error {
-			if err == nil && fi.IsDir() {
-				_ = os.Chmod(p, 0o755)
-			}
-			return nil
-		})
-	})
+	t.Cleanup(func() { chmodTree(state) })
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	f.svc.Now = func() time.Time { return now }
 	return f, &now
@@ -531,4 +524,15 @@ func TestConnectorFilesAreTheSendersData(t *testing.T) {
 	if msg = f.home.sent["agent-1"][2]; !strings.Contains(msg, "not accepted: 2 files, over the cap of 1") {
 		t.Fatalf("over the count:\n%s", msg)
 	}
+}
+
+// chmodTree makes read-only message directories removable again, for the
+// temp dir's cleanup.
+func chmodTree(root string) {
+	_ = filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
+		if err == nil && fi.IsDir() {
+			_ = os.Chmod(p, 0o755)
+		}
+		return nil
+	})
 }

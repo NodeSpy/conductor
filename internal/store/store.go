@@ -81,6 +81,9 @@ type Store struct {
 	botsDegraded bool
 	botLocksMu   sync.Mutex
 	botLocks     map[string]*sync.Mutex
+
+	// Operator conversations with bots and teams (conversations.go).
+	convs map[string]*Conversation
 }
 
 // Options configure a Store.
@@ -167,6 +170,7 @@ func Open(o Options) (*Store, error) {
 	}
 	s.loadOutcomeState()
 	s.loadBots()
+	s.loadConversations()
 	a, err := openAudit(o.AuditPath, o.AuditMaxSize)
 	if err != nil {
 		return nil, err

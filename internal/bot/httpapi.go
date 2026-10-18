@@ -10,6 +10,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // THE OPERATOR API (docs/wiki/Bots.md#the-operator-api) is HTTP for the
@@ -24,6 +27,16 @@ import (
 //	GET  /v1/bots/{bot}/attachments/{id}              → one attachment's record
 //	GET  /v1/bots/{bot}/attachments/{id}/content      → its bytes (always a download)
 //	GET  /v1/bots/{bot}/attachments/{id}/thumbnail[?size=N]   → a PNG thumbnail of an image
+//
+//	GET  /v1/conversations[?operator=]                → bots' and teams' conversations: last message, unread
+//	GET  /v1/conversations/{id}/messages[?after=N&operator=&mark=1]   → messages after N (mark=1: read)
+//	POST /v1/conversations/{id}/messages              → send: JSON {text, operator, to, everyone}, or multipart with file parts
+//	POST /v1/conversations/{id}/read                  → operator, upto: the read mark
+//	GET  /v1/conversations/stream                     → live updates (server-sent events)
+//
+// {id} is bot:<name> or team:<name>. operator names who is reading or
+// writing (unread state is per operator); it may be left out when one
+// operator is configured.
 
 // multipartSlack is room for a multipart body's boundaries and headers over
 // the files themselves.
@@ -37,6 +50,11 @@ func OperatorAPI(s *Service) http.Handler {
 	mux.HandleFunc("GET /v1/bots/{bot}/attachments/{id}", s.apiAttachment)
 	mux.HandleFunc("GET /v1/bots/{bot}/attachments/{id}/content", s.apiAttachmentContent)
 	mux.HandleFunc("GET /v1/bots/{bot}/attachments/{id}/thumbnail", s.apiAttachmentThumbnail)
+	mux.HandleFunc("GET /v1/conversations", s.apiConversations)
+	mux.HandleFunc("GET /v1/conversations/stream", s.apiConversationStream)
+	mux.HandleFunc("GET /v1/conversations/{id}/messages", s.apiConversationMessages)
+	mux.HandleFunc("POST /v1/conversations/{id}/messages", s.apiConversationSend)
+	mux.HandleFunc("POST /v1/conversations/{id}/read", s.apiConversationRead)
 	return mux
 }
 
@@ -200,4 +218,131 @@ func (s *Service) apiAttachmentThumbnail(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 	_, _ = w.Write(th)
+}
+
+func (s *Service) apiConversations(w http.ResponseWriter, r *http.Request) {
+	cs, err := s.Conversations(r.URL.Query().Get("operator"))
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err)
+		return
+	}
+	apiJSON(w, http.StatusOK, map[string]any{"conversations": cs})
+}
+
+func (s *Service) apiConversationMessages(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	after, _ := strconv.Atoi(q.Get("after"))
+	ms, err := s.ChatMessages(r.PathValue("id"), q.Get("operator"), after, q.Get("mark") == "1")
+	if err != nil {
+		apiError(w, http.StatusNotFound, err)
+		return
+	}
+	apiJSON(w, http.StatusOK, map[string]any{"conversation": r.PathValue("id"), "messages": ms})
+}
+
+// apiConversationSend takes a message as JSON, or as multipart (text,
+// operator, to…, everyone, file…) when it carries files — capped as it
+// streams, like the bot messages endpoint.
+func (s *Service) apiConversationSend(w http.ResponseWriter, r *http.Request) {
+	req := ChatSend{Conversation: r.PathValue("id")}
+	kind, name, err := s.ParseConversation(req.Conversation)
+	if err != nil {
+		apiError(w, http.StatusNotFound, err)
+		return
+	}
+	limit := int64(MaxChatMessage) + multipartSlack
+	if kind == "bot" {
+		limit += s.Cfg().Bots[name].Attachments.MaxMessageOr()
+	} else {
+		limit += 25 << 20
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if ct == "multipart/form-data" {
+		if err := r.ParseMultipartForm(4 << 20); err != nil {
+			apiError(w, bodyErrCode(err), fmt.Errorf("reading the upload: %w", err))
+			return
+		}
+		defer r.MultipartForm.RemoveAll()
+		req.Text, req.Operator = r.FormValue("text"), r.FormValue("operator")
+		req.To, req.Everyone = r.MultipartForm.Value["to"], r.FormValue("everyone") == "true" || r.FormValue("everyone") == "1"
+		for _, fh := range r.MultipartForm.File["file"] {
+			f, err := fh.Open()
+			if err != nil {
+				apiError(w, http.StatusBadRequest, err)
+				return
+			}
+			b, err := io.ReadAll(io.LimitReader(f, config.MaxAttachFile+1))
+			f.Close()
+			if err != nil {
+				apiError(w, bodyErrCode(err), err)
+				return
+			}
+			req.Files = append(req.Files, AttachmentIn{Name: fh.Filename, Data: b})
+		}
+	} else {
+		var body struct {
+			Text     string   `json:"text"`
+			Operator string   `json:"operator"`
+			To       []string `json:"to"`
+			Everyone bool     `json:"everyone"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			apiError(w, bodyErrCode(err), fmt.Errorf("want JSON {text, operator, to, everyone} or multipart: %w", err))
+			return
+		}
+		req.Text, req.Operator, req.To, req.Everyone = body.Text, body.Operator, body.To, body.Everyone
+	}
+	m, err := s.Chat(r.Context(), req)
+	if err != nil {
+		apiError(w, http.StatusUnprocessableEntity, err)
+		return
+	}
+	apiJSON(w, http.StatusCreated, m)
+}
+
+func (s *Service) apiConversationRead(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	_ = r.ParseForm()
+	upto, _ := strconv.Atoi(r.FormValue("upto"))
+	if err := s.MarkRead(r.PathValue("id"), r.FormValue("operator"), upto); err != nil {
+		apiError(w, http.StatusNotFound, err)
+		return
+	}
+	apiJSON(w, http.StatusOK, map[string]any{"read": true})
+}
+
+// apiConversationStream sends every recorded message as a server-sent
+// event until the client goes away; a comment every 25s keeps it open.
+func (s *Service) apiConversationStream(w http.ResponseWriter, r *http.Request) {
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		apiError(w, http.StatusInternalServerError, errors.New("streaming unsupported"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	ch, cancel := s.SubscribeChat()
+	defer cancel()
+	_, _ = fmt.Fprint(w, ": connected\n\n")
+	fl.Flush()
+	tick := time.NewTicker(25 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-tick.C:
+			_, _ = fmt.Fprint(w, ": ping\n\n")
+			fl.Flush()
+		case ev, ok := <-ch:
+			if !ok {
+				return
+			}
+			b, _ := json.Marshal(ev)
+			_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", b)
+			fl.Flush()
+		}
+	}
 }

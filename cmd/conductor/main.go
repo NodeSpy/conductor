@@ -144,6 +144,8 @@ func main() {
 		err = cmdSecret(args)
 	case "bot", "bots":
 		err = cmdBot(args)
+	case "team":
+		err = cmdTeam(args)
 	case "workflows":
 		err = cmdWorkflows(args)
 	case "init":
@@ -209,6 +211,7 @@ usage:
   conductor unlock                      seed the default vault key for non-interactive restarts
   conductor mcp memory --socket <path>  stdio MCP server: memory + skill broker (agent-facing)
   conductor bot <cmd> …             bots: ls/show/cases/proposals/approve/deny/rotate/say/deliver (conductor bot help)
+  conductor team say|chat|chats …   talk to a team: its lead, @bot, or --everyone (conductor team help)
   conductor mcp callable --token <name> [--config PATH]  stdio MCP server: invoke callable workflows (external MCP clients)
   conductor workflows ls                 config workflows and triggers; saved workflows (review|rm)
   conductor init [--config PATH] [--allow-unlisted]  fetch the packs: block, write the lockfile, preview

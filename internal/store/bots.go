@@ -95,6 +95,9 @@ type Case struct {
 	// sender's case — where a reply is routed.
 	Peer     string `json:"peer,omitempty"`
 	PeerCase string `json:"peer_case,omitempty"`
+	// Conversation is the team conversation this case carries for the bot
+	// ("team:<name>"): one per bot, while open.
+	Conversation string `json:"conversation,omitempty"`
 	// Team is the team a team-routed case came in through, and Routing how
 	// it reached this bot (or, on a lead's triage case, where it went).
 	// Payload keeps a triage case's event text for its assignee.

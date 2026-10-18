@@ -76,6 +76,8 @@ const botUsage = `usage:
     conductor bot spawn [--case <id>] [--title "…"] --brief "…" [--group <label>] [--verbs a,b] [--read-only] [--handoff] [--attach <attachment id>]…
     conductor bot tell <worker|group> "<instructions>"     # to your own workers (home session)
     conductor bot report "<progress>"                      # to your parent (a worker)
+    conductor bot reply [--conversation <id> --to <n>] "…" # answer an operator's chat message (once per message; home session)
+    conductor bot chat [--conversation <id>] [--last N]    # your conversation, or your team's, as data
     conductor bot instructions [--wait 5m]                 # new instructions from your parent (a worker); --wait blocks for them
     conductor bot join (<group> | --case <id> --group <label>) [--timeout 30m]
     conductor bot ask <bot> [--case <id>] "<text>"        # a linked peer bot (data only)
@@ -241,6 +243,12 @@ func botAgent(sub string, args []string) error {
 		if t := strings.Join(pos, " "); t != "" {
 			a["text"] = t
 		}
+	case "reply":
+		if len(pos) == 0 {
+			return fmt.Errorf("usage: conductor bot reply [--conversation <id> --to <message #>] \"<text>\"")
+		}
+		a["text"] = strings.Join(pos, " ")
+	case "chat":
 	case "ask":
 		if len(pos) < 2 {
 			return fmt.Errorf("usage: conductor bot ask <bot> [--case <id>] \"<text>\"")
@@ -376,6 +384,10 @@ func botAgent(sub string, args []string) error {
 	showInstructions(out)
 	if mem := memView(sub, pos); mem != "" && fl["json"] == "" {
 		printMem(mem, out)
+		return nil
+	}
+	if t, ok := out["conversation"].(string); ok && sub == "chat" && fl["json"] == "" {
+		fmt.Println(t)
 		return nil
 	}
 	if msg, ok := out["message"].(string); ok && len(out) <= 7 {

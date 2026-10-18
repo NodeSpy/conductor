@@ -98,6 +98,8 @@ type Service struct {
 	Workers WorkerLauncher
 	// Blobs stores attachments (nil: messages can't carry files).
 	Blobs *blob.Store
+
+	chat chatHub
 	// SessionRoot is where per-session worktrees live (each live agent its
 	// own cwd). Default ~/.conductor/runs, which conductor's paseo project
 	// prune already covers.
@@ -470,32 +472,24 @@ func (s *Service) Say(name, text string) error {
 // files are then removed when it closes; otherwise after attachments.ttl).
 // It returns the message's attachments.
 func (s *Service) SayWith(name, text string, files []AttachmentIn, caseID string) ([]*store.Attachment, error) {
-	m, err := s.bot(name)
+	return s.SayAs("", name, text, files, caseID)
+}
+
+// SayAs is SayWith as a named operator (""; the only one, or an unnamed
+// operator when several are configured): recorded in the bot's
+// conversation, delivered through Chat.
+func (s *Service) SayAs(op, name, text string, files []AttachmentIn, caseID string) ([]*store.Attachment, error) {
+	m, err := s.Chat(context.Background(), ChatSend{Conversation: BotConversation(name), Operator: op, Text: text, Files: files,
+		CaseID: caseID, anyOperator: op == ""})
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(text) == "" && len(files) == 0 {
-		return nil, errors.New("say something, or attach a file")
+	var out []*store.Attachment
+	for _, a := range liveAttachments(s.Ledger.Bot(name), m.Attachments) {
+		a := a
+		out = append(out, &a)
 	}
-	if caseID != "" {
-		if c := s.Ledger.Bot(name).Cases[caseID]; c == nil || c.Status != "open" {
-			return nil, fmt.Errorf("no open case %s on bot %s", caseID, name)
-		}
-	}
-	types, err := checkAttachments(m.Attachments, files)
-	if err != nil {
-		return nil, err
-	}
-	msg, err := s.reserveMessage(name)
-	if err != nil {
-		return nil, err
-	}
-	atts, err := s.storeAttachments(name, msg, caseID, files, types, attachOrigin{Source: "operator", Class: ReqOperator})
-	if err != nil {
-		return nil, err
-	}
-	s.enqueueMsg(name, store.InboxMsg{ID: msg, CaseID: caseID, Text: "[conductor: message from your operator]\n" + text, Attachments: attachmentIDs(atts)})
-	return atts, nil
+	return out, nil
 }
 
 func attachmentIDs(atts []*store.Attachment) []string {
