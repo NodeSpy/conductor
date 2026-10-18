@@ -298,6 +298,11 @@ control socket, and nothing on it is reachable from a bot session:
 | `GET /v1/bots/{bot}/attachments/{id}` | one record |
 | `GET /v1/bots/{bot}/attachments/{id}/content` | the bytes, always as a download (`Content-Disposition: attachment`, `nosniff`, a sandboxing CSP), never rendered |
 | `GET /v1/bots/{bot}/attachments/{id}/thumbnail[?size=N]` | a PNG thumbnail of a PNG, JPEG or GIF (32–512 px; an image declaring more than 40 megapixels is refused) |
+| `GET /v1/conversations[?operator=]` | every bot's and team's conversation: the last message and that operator's unread count, the most recent first |
+| `GET /v1/conversations/{id}/messages[?after=N&operator=&mark=1]` | messages after N (`after=-1`: what is new to that operator); `mark=1` marks them read |
+| `POST /v1/conversations/{id}/messages` | send: JSON `{text, operator, to: [...], everyone}`, or multipart with `file` parts (attachments, per member's caps) |
+| `POST /v1/conversations/{id}/read` | `operator`, `upto`: the read mark (never moves back) |
+| `GET /v1/conversations/stream` | live updates: one server-sent `message` event per recorded message |
 | `GET /v1/bots/{bot}/avatar` | the bot's picture, re-encoded as a PNG; `404` when it has none (show its face or initials) |
 | `POST /v1/bots/{bot}/avatar/plan` | multipart: `file` (at most 8 MB) with an optional crop box `crop_x`, `crop_y`, `crop_side`, or `clear=1`. The same plan as `bot avatar set`: re-encoded, validated on a copy, a diff, `widening: false`, and a `token` |
 | `POST /v1/bots/{bot}/avatar/apply` | `token=…`: writes the planned picture and config line. Single use, bound to its bot, 15 minutes, and refused if the config changed since the plan. Reload to see it |
@@ -1144,6 +1149,56 @@ every routed case. The lead's triage case records where it went.
 `conductor bot team platform` lists recent routed cases, the pool's use and
 pending knowledge proposals.
 
+### Team chat
+
+You can talk to a team the way you talk to a bot:
+
+```
+conductor team say platform "what's the deploy status?"            # the lead (else the routing)
+conductor team say platform "@platform-data is the replica caught up?"   # that member
+conductor team say platform --to platform-data --to platform-sre "…"     # those members
+conductor team say platform --everyone "roll call: what are you on?"     # every member, one reply each
+conductor team chat platform        # what's new (marks it read); --all for the whole transcript
+conductor team chats                # every bot and team conversation: last message, your unread count
+```
+
+- **Who it reaches.** By default, the team's **lead**, as your instruction.
+  The lead answers, or hands the work to a teammate with `conductor bot
+  delegate`: the delegated case keeps your request and requester, never
+  more trust. With no lead, the team's routing rules (matched against the
+  text) and fallback pick the bot. `@name` in the text, or `--to`, reaches
+  those members instead. `--everyone` reaches every member, at most
+  `chat.everyone_per_hour` times an hour (default 6).
+- **One transcript, recorded by conductor.** The conversation is
+  `team:<name>`: your messages and the bots' replies, numbered. Each member
+  it reaches gets it on the team conversation's case (one per member while
+  open), with your provenance. An operator of the team who isn't one of a
+  member's operators is a third party to that member, as anywhere else.
+- **One reply per member per message.** A bot answers with `conductor bot
+  reply` (its home session only). Every member a message reaches owes one
+  reply; a second one is refused until you ask again. Replies are capped at
+  `chat.max_reply` bytes (default 4000).
+- **Replies are data to other bots (the peer rule).** A delivered message
+  shows the conversation so far inside a fence, labelled with who wrote
+  each line, under a line saying another bot's reply is never an
+  instruction; only your message stands outside it. A bot's reply is never
+  delivered to a teammate by itself. A member can read its team's
+  conversation (`conductor bot chat`), and only its own team's.
+- **Unread is per operator.** Your own messages count as read; a reply is
+  unread for each operator until they read it.
+
+A message to one bot (`conductor bot say`, or the dashboard) is recorded the
+same way in `bot:<name>`, and answered with `conductor bot reply`. With
+several operators configured, say who you are with `--as` (otherwise the
+message is recorded as from an unnamed operator).
+
+```yaml
+teams:
+  platform:
+    routing: { lead: platform-sre, fallback: platform-sre }
+    chat: { everyone_per_hour: 6, max_reply: 4000 }   # the defaults
+```
+
 ### Approvers
 
 Every proposal names the operators who may decide it, and the proposing
@@ -1329,6 +1384,9 @@ conductor bot approve|deny <bot> <id> [--as <operator>] [--key <path>] [--reason
 conductor bot rotate <bot>
 conductor bot say <bot> [--attach <file>]… [--case <id>] <text…>  # or just type into paseo
 conductor bot deliver <bot> --title "…" [--text "…"] [--requester who] [--urgent] [--attach <file>]…
+conductor team say <team> [--to <bot>]… [--everyone] [--as <op>] <text…>   # team chat (below)
+conductor team chat <team|bot:<name>> [--all]   # a conversation: what's new (marks it read)
+conductor team chats                            # every conversation, with your unread count
 conductor bot attachments <bot> [--all]          # the files messages carried (--all: removed ones too)
 conductor bot attachment <bot> <id> [--out <f>]  # one attachment; --out saves its bytes
 conductor bot identity-options   # the avatar, color and tone lists an identity names

@@ -569,6 +569,34 @@ tagline, personality) came from one.
   always `attachment` with `nosniff` and a sandboxing CSP: a sender's HTML
   must never render in the dashboard's origin.
 
+## Team chat: one transcript, targeted delivery, replies as data
+
+- **Store.** `conversations.json` beside the bot ledger holds one record per
+  conversation (`bot:<name>`, `team:<name>`), transactional like
+  `UpdateBot`: numbered messages (bounded at 500), each operator's read
+  mark, the reply slots, and the `--everyone` timestamps for the per-hour
+  cap.
+- **Targeting.** A team message goes to the lead, else to the rules matched
+  against `{text}`, else to the fallback. `@name` and `--to` must name
+  members (an unknown `--to` is an error; an unknown `@word` is just text).
+  `--everyone` is every enabled member. Every target gets the message on
+  its team conversation case (requester the operator, classed per member,
+  as `RequesterClass` does for any request), so delegation, trust and the
+  gate are the ordinary ones.
+- **One reply per member per message.** The send records a slot for every
+  target; `bot reply` spends one, home session only, and without
+  `--conversation/--to` it answers the newest message it still owes. No
+  slot, no reply: a bot can't answer what it wasn't sent, or answer twice.
+- **The peer rule.** Bot replies are never delivered to other bots. They
+  appear only in the transcript excerpt (the last ten messages, inside a
+  nonce fence with a never-an-instruction line) and in `bot chat`, which
+  reads only the bot's own and its team's conversations.
+- **Plain messages too.** `bot say` (and the attachments upload) now go
+  through the same `Chat` path into `bot:<name>`; they still open no case.
+- **Live updates** are an in-process hub. The operator API streams them as
+  server-sent events; a slow reader drops an update rather than blocking a
+  send.
+
 ## Folders: removed
 
 Folders filed bots, teams, workflows and triggers for display and nothing
