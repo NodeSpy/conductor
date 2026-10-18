@@ -24,3 +24,11 @@ func TestChatLineCLI(t *testing.T) {
 		t.Fatalf("reply line: %q", r)
 	}
 }
+
+// --everyone is a switch: it never swallows the message.
+func TestTeamSayEveryoneIsABoolFlag(t *testing.T) {
+	pos, fl, _, _ := botFlags([]string{"platform", "--everyone", "roll", "call"})
+	if fl["everyone"] != "true" || strings.Join(pos, " ") != "platform roll call" {
+		t.Fatalf("pos %v, flags %v", pos, fl)
+	}
+}

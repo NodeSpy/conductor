@@ -95,7 +95,7 @@ const botUsage = `usage:
     conductor bot proposals [--all]
     conductor bot wait <proposal> [--timeout 30m]`
 
-var botBoolFlags = map[string]bool{"all": true, "append": true, "handoff": true, "urgent": true, "read-only": true, "flat": true, "json": true,
+var botBoolFlags = map[string]bool{"all": true, "everyone": true, "append": true, "handoff": true, "urgent": true, "read-only": true, "flat": true, "json": true,
 	"installed": true, "proactive": true, "write": true}
 
 // botFlags parses --k v / --k=v, boolean flags, repeated --file, and a
