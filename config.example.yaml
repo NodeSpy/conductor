@@ -1526,6 +1526,8 @@ teams:
     #   fallback: platform-sre                   # else, or unassigned after timeout:, the fallback (required)
     #   # timeout: 10m
     # chat: { everyone_per_hour: 6, max_reply: 4000 }   # `conductor team say`: --everyone per hour; one bot reply's bytes
+    # tickets: { default_priority: normal, mark_own_ready: false }   # wiki: Tickets. Only operators mark tickets ready;
+    #                                            # mark_own_ready: true lets the team's bots ready their OWN ideas (a widening)
   # billing: { description: "Billing and invoicing" }   # isolated from platform unless bot_links: pairs bots
 
 # bot_links:                                # operator-side peer links: each pair may message each other.

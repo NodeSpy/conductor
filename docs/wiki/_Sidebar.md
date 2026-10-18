@@ -31,6 +31,7 @@ The model
 - [[Gates]]
 - [[Teams]]
 - [[Bots]]
+- [[Tickets]]
 - [[Outcomes]]
 - [[Cost-Accounting]]
 - [[Secrets]]

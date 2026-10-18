@@ -26,7 +26,7 @@ replaceable at any time; continuity lives on disk:
 | knowledge | infra map, runbooks, what to watch, learned facts — [typed documents](#content-kinds) | the bot's **memory repo** (git) |
 | log | past cases, actions, outcomes — summarized into digests, then [archived](#consolidation-and-the-archive) | the memory repo's `log/` and `digests/` |
 | recall index | what a session searches and its prompt's [memory index](#reading-memory) is drawn from — derived from the repo | conductor's state dir |
-| case ledger | open events, proposals awaiting approval, running workers, the home session, the inbox, spend | `bots.json` in conductor's state dir |
+| case ledger | its tickets (every case is one: [[Tickets]]), proposals awaiting approval, running workers, the home session, the inbox, spend | `bots.json` in conductor's state dir |
 
 Each bot is isolated: its own memory repo, ledger, home session, verb policy,
 operators and pack instance. A session token is bound to exactly one bot,
@@ -322,7 +322,9 @@ conductor bot episode  --case c12 --text "…"
 conductor bot recall   <words> [--limit N] [--kind <kind>]               # ranked, with a snippet each
 conductor bot read     <path> [--section "<heading>"] [--offset N]      # at most read_max bytes
 conductor bot index    [--kind <kind> | --all]                          # the memory index
-conductor bot cases | case open|note|close
+conductor bot cases | case open|note|close                              # every case is a ticket (T-<n>)
+conductor bot ticket new "<title>" [--description "…"] [--assignee …]   # an idea: a DRAFT, for an operator to mark ready ([[Tickets]])
+conductor bot ticket comment|wait|done|decline <T-n> "…"                # on a ticket it holds
 conductor bot spawn    --case c12 --brief "…" [--group g] [--handoff]
 conductor bot handoff  --text "…"
 conductor bot proposals | wait <proposal>
@@ -1384,6 +1386,7 @@ conductor bot approve|deny <bot> <id> [--as <operator>] [--key <path>] [--reason
 conductor bot rotate <bot>
 conductor bot say <bot> [--attach <file>]… [--case <id>] <text…>  # or just type into paseo
 conductor bot deliver <bot> --title "…" [--text "…"] [--requester who] [--urgent] [--attach <file>]…
+conductor ticket new|list|show|edit|assign|comment|ready|wait|done|decline|reopen …   # tickets ([[Tickets]])
 conductor team say <team> [--to <bot>]… [--everyone] [--as <op>] <text…>   # team chat (below)
 conductor team chat <team|bot:<name>> [--all]   # a conversation: what's new (marks it read)
 conductor team chats                            # every conversation, with your unread count

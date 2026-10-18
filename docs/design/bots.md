@@ -597,6 +597,41 @@ tagline, personality) came from one.
   server-sent events; a slow reader drops an update rather than blocking a
   send.
 
+## Tickets: cases are tickets, and the ready gate
+
+- **One object.** `store.Case` gained the ticket fields (a conductor-wide
+  `T-<n>`, assignee, description, priority, due, labels, created/ready by,
+  comments, history, and `moved_to` on a copy left behind) rather than a
+  second record type. A bot's ledger holds the tickets it holds;
+  `tickets.json` holds the rest (a team's queue of drafts, the unassigned
+  triage queue) and the counter.
+- **Ids are minted at the store chokepoint.** `UpdateBot` gives any case
+  without one an id, an assignee, a priority and its creator, so every
+  existing case-creation site became ticket-creating unchanged. The same
+  function migrates a stored case (open → in_progress, closed → done) at
+  boot, oldest first, written back once.
+- **Statuses replace open/closed with predicates.** `store.Active` (ready,
+  in progress, waiting) wherever work happens: spawn, delegation, decline,
+  peer replies, a conversation case, prompts. `store.Closed` (done,
+  declined) for retention. `!Closed` for trust: a third party's draft still
+  lowers a home session's attribution, because its words are in front of
+  the bot.
+- **The ready gate is one function**, `dispatchable`, called by spawn and by
+  the delegation's case lookup. Routing and delivery happen only from
+  `dispatchTicket`, which runs only on the transition to ready. Who may
+  mark ready: an operator, or a bot for a ticket it wrote, with
+  `mark_own_ready` (a team's false is a ceiling, and on is a validate-named
+  widening).
+- **Assignment authority** reuses the delegation rule (`BotLinked`) plus
+  "its own team" and "unassigned"; a bot touches only tickets it holds or
+  wrote. Moving an active ticket re-dispatches it through delivery or
+  routing with the requester kept; a bot's move takes the less trusted of
+  the ticket's and its own attribution.
+- **Moving.** A queue drops a ticket that leaves it (its history says
+  where). A bot's ledger keeps a closed copy with `moved_to`, because the
+  lead's triage case and its delegations still point at it. Lookups and
+  lists skip such copies.
+
 ## Folders: removed
 
 Folders filed bots, teams, workflows and triggers for display and nothing
