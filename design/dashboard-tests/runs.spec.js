@@ -68,7 +68,7 @@ test('compare two runs: step status, durations, and the outputs diff with word h
   await expect(page.locator('.dl-card', { hasText: 'r-7e40 · fix diff' })).toContainText('tax.go');
 });
 
-test('a run page: Back to Activity keeps the filters and scroll; labelled details; whole-run actions only', async ({ page }) => {
+test('a run page: the Activity crumb keeps the filters and scroll; labelled details; whole-run actions only', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 600 });
   await go(page, '#/activity', { fresh: true });
   await page.locator('.fb[data-fb="act"] .fb-in').fill('since:24h');
@@ -76,7 +76,7 @@ test('a run page: Back to Activity keeps the filters and scroll; labelled detail
   expect(top).toBeGreaterThan(100);
   await page.evaluate(() => { location.hash = '#/runs/r-7f3a'; });
   // one run per page: a way back, no tabs and no previous/next
-  await expect(page.locator('.run-nav a', { hasText: 'Back to Activity' })).toBeVisible();
+  await expect(page.locator('.run-nav a', { hasText: 'Activity' })).toBeVisible();
   await expect(page.locator('.pager, .run-tabs')).toHaveCount(0);
   // the details are labelled, with human durations
   const facts = page.locator('.dl-facts').first();
@@ -87,7 +87,7 @@ test('a run page: Back to Activity keeps the filters and scroll; labelled detail
   await expect(page.locator('.dl-actions [data-act="stop-run"]')).toBeVisible();
   await expect(page.locator('.risk, .risk-ladder')).toHaveCount(0);
   await expect(page.locator('.dl-actions', { hasText: 'Open in paseo' })).toHaveCount(0);
-  await page.locator('.run-nav a', { hasText: 'Back to Activity' }).click();
+  await page.locator('.run-nav a', { hasText: 'Activity' }).click();
   await expect(page).toHaveURL(/#\/activity$/);
   await expect.poll(() => page.evaluate(() => document.getElementById('main').scrollTop)).toBe(top);
   await expect(page.locator('.fb[data-fb="act"] .fb-in')).toHaveValue('since:24h');

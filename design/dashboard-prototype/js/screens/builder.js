@@ -188,7 +188,7 @@
     const s = status(), ro = readOnly(), e = errs();
     const applyBlock = B.err ? 'Fix the YAML first' : e.length ? `${e.length} error${e.length > 1 ? 's' : ''} to fix first` : B.owner === 'bot' ? ro : s === 'live' ? 'Nothing to apply: this is what’s live' : '';
     const v = B.value || {}, desc = esc(v.description || '');
-    return `<div class="dl-crumbs"><a href="#/workflows">Workflows</a></div>
+    return `${UI.crumbs([['Workflows', '#/workflows'], [B.name || 'A new workflow']])}
       <div class="dl-phead"><div><h1 class="wfb-title">${esc(B.name)}</h1><p class="dl-lead">${desc}</p>
         <p class="wfb-owner">${B.owner === 'pack' ? `From the pack <b>${esc(B.pack)}</b>: your changes are saved as overrides.` : B.owner === 'bot' ? `Made by conductor for the bot (${UI.term('synthesized')}); read-only here.` : ''} ${s === 'saved' ? UI.statusMark('staged', 'Saved, not applied', { id: 'wf-state', cls: 'wf-state ' + s }) : `<span class="dl-sub wf-state ${s}" id="wf-state">${s === 'draft' ? 'Unsaved changes' : 'Live'}</span>`}</p></div>
         <div class="dl-actions tight"><button class="btn ghost" data-act="wf-undo" ${B.hi > 0 ? '' : UI.off('Nothing to undo')}>${icon('undo')}Undo</button><button class="btn secondary" data-act="wf-test-all" ${!B.ev ? UI.off('Pick a test event under Try it first') : B.err ? UI.off('Fix the YAML first') : ''}>${icon('play')}Test</button><button class="btn primary" data-act="wf-deploy" ${applyBlock ? UI.off(applyBlock) : ''}>Save and apply</button></div></div>

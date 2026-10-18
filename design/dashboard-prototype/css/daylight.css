@@ -25,7 +25,12 @@
 .dl-ch { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
 .dl-ch .count { align-self: center; }
 .dl-ch.dl-pad { padding: var(--pad-card) var(--pad-card) 0; }
-.dl-crumbs { display: flex; align-items: center; gap: 6px; font: var(--type-body-s); color: var(--color-text-tertiary); margin-bottom: 10px; flex-wrap: wrap; }
+.dl-crumbs { display: flex; align-items: center; gap: 4px 6px; font: var(--type-body-s); color: var(--color-text-tertiary); margin-bottom: 10px; flex-wrap: wrap; min-width: 0; }
+.dl-crumbs a { color: var(--color-text-secondary); } .dl-crumbs .sep { color: var(--color-text-tertiary); }
+.dl-crumbs .cur { color: var(--color-text-tertiary); min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-head .dl-crumbs { font: var(--type-caption); margin-bottom: var(--space-2); }
+/* below a page's tabs, the standard gap: the same on every tab of every page */
+.dl-tab-body { margin-top: var(--gap-stack); } .dl-tab-body > :first-child { margin-top: 0 !important; }
 .dl-crumbs a:hover { color: var(--color-text-primary); }
 .dl-crumbs svg { width: 14px; height: 14px; }
 .dl-phead { display: flex; gap: 20px; align-items: flex-start; justify-content: space-between; }
@@ -489,10 +494,10 @@ button.sec-main:hover { background: var(--color-state-hover); }
 /* a collection a pack defines: the note sits beside the row, and under it on a phone */
 .coll-row .coll-note { max-width: 220px; overflow-wrap: anywhere; }
 @media (max-width: 720px) { .coll-row { flex-wrap: wrap; } .coll-row .coll-note { max-width: none; flex-basis: 100%; padding-left: 34px; } }
-/* an approval stands alone (every width): no bot header, watch note or tabs above it, one Back to where it was opened
-   from; the decision is the page */
-.prop-page > .dl-crumbs, .prop-page > .dl-bothead, .prop-page .watch-empty, .prop-page > .dl-tabs { display: none; }
-.prop-page .dl-tab-body { margin-top: 0; }
+/* an approval stands alone (every width): no bot header, watch note or tabs above it; the breadcrumb carries its whole
+   path (Bots › team › bot › Approvals › the approval); the decision is the page */
+.prop-page > .dl-bothead, .prop-page .watch-empty, .prop-page > .dl-tabs { display: none; }
+.prop-page .dl-tab-body { margin-top: var(--gap-stack); }
 .prop-page .prop-crumbs { margin: 8px 0 0; }
 /* the integrity data: one quiet line at the end of the card, folded; open, it's small and muted (never louder than the
    decision) */

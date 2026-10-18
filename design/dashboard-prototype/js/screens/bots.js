@@ -142,7 +142,7 @@
     const pend = c.knowledge ? R.pending('team:' + t.name) : 0;
     // the bot page's header (crumbs, avatar, name, one line): what's true of the whole team, in words, never capsules
     const lead = leadOf({ cfg: c }), ceilW = { observe: 'only read', reversible: 'do undoable things' }[S.getPath(c, 'autonomy.ceiling') || 'reversible'] || S.getPath(c, 'autonomy.ceiling');
-    return `<div class="page dl-page team-page"><div class="dl-crumbs"><a href="#/bots">Bots</a></div>
+    return `<div class="page dl-page team-page">${UI.crumbs([['Bots', '#/bots'], [t.name]])}
       <div class="dl-bothead"><span class="dl-bot-av">${esc(t.name.slice(0, 2))}</span><div><h1>${esc(t.name)}</h1><p class="dl-lead">${ms.length} bot${ms.length === 1 ? '' : 's'}${lead ? `, led by ${esc(lead)}` : ''}. ${(c.operators || []).length ? `${(c.operators || []).map(esc).join(' or ')} approve${(c.operators || []).length === 1 ? 's' : ''}` : 'Any operator approves'}; on their own, its bots may ${ceilW}.</p></div>${S.find('teams', t.name) ? UI.statusMark('staged', 'Change not applied') : ''}
         <button class="icon-btn" data-act="team-more" data-t="${t.name}" aria-label="More for team ${esc(t.name)}">${icon('more')}</button></div>
       <div class="dl-actions"><a class="btn secondary" href="#/tickets/new?team=${encodeURIComponent(t.name)}">${icon('plus')}New ticket</a><button class="btn secondary ph-hide" data-act="team-deliver" data-t="${t.name}">${icon('send')}Route an event here</button><button class="btn secondary ph-hide" data-act="team-edit" data-t="${t.name}">${icon('edit')}Edit team</button></div>
@@ -364,11 +364,11 @@
     const doing = m.shadow ? 'In shadow mode: it watches and proposes, and never acts.' : m.home === 'live' ? `Working in a live session${open ? ` on ${open} open task${open === 1 ? '' : 's'}` : ''}.` : open ? `Idle, with ${open} open task${open === 1 ? '' : 's'}.` : 'Idle. Nothing open.';
     return first + doing; };
   /** The bot's head, as in the approved mock: avatar, name, what it's for in one line, and what it's doing now. */
-  function hero(m) {
+  function hero(m, sub) {
     const t = teamOf(m), open = D.cases.filter((c) => c.bot === m.name && c.status === 'open'), cur = open[0];
     const role = (S.staged('bots', m.name) || m.cfg || {}).description || m.role || (t ? `A bot on the ${t.name} team` : 'A bot');
     const now = m.shadow ? UI.statusMark('shadow', 'Shadow: practice mode') : m.home === 'live' ? UI.statusMark('run', 'Running') : UI.statusMark('idle', 'Parked');
-    return `<div class="dl-crumbs"><a href="#/bots">Bots</a>${t ? ` › <a href="#/teams/${t.name}">team ${t.name}</a>` : ''}</div>
+    return `${UI.crumbs([['Bots', '#/bots'], t ? [t.name, `#/teams/${t.name}`] : null, sub ? [m.name, `#/bots/${m.name}`] : [m.name], ...(sub || [])])}
       <div class="dl-bothead"><span class="dl-bot-av">${esc(m.name.split(/[-_]/).map((w) => w[0]).join('').slice(0, 2))}</span><div><h1>${esc(m.name)}</h1><p class="dl-lead">${esc(role)}</p>${cur && m.home === 'live' ? `<p class="bot-working">Working on: <a href="#/tickets/${cur.id}">${esc(cur.title)}</a></p>` : ''}</div>${now}
         <button class="icon-btn" data-act="bot-more" data-m="${m.name}" aria-label="More for ${esc(m.name)}">${icon('more')}</button></div>`;
   }
@@ -378,11 +378,12 @@
       fields: [{ k: 'on', type: 'enum', req: true, label: 'When this happens', options: evs.map(([v, l]) => [v, l]) }, { k: 'repos', type: 'list', label: 'Only these repos (GitHub events)', ph: 'acme/api', show: (v) => /^gh\./.test(v.on || '') }],
       submit: 'Review change', submitIcon: 'check',
       onSubmit: (v) => { const tn = `${name}-${v.on.split('.')[1].replace(/_/g, '-')}`; const y = [`name: ${tn}`, `on: ${v.on}`, ...((v.repos || []).length ? [`filter: { repo: [${v.repos.join(', ')}] }`] : []), 'steps:', '  - id: tell', `    bot: { name: ${name}, title: "{{.title}}" }`].join('\n') + '\n'; D.prefs.returnTo = { href: `#/bots/${name}`, label: name }; UI.staged(S.stage('workflows', tn, y, `trigger ${tn} hands ${v.on} to ${name}`)); } }); });
-  function shell(m, tab, body, cls = '') {
+  /** A bot's page: its header and tabs, then the tab; sub is the path of a page a tab drills into ([[label, href], …, [title]]). */
+  function shell(m, tab, body, cls = '', sub) {
     const pc = pending(m.name).length, w = UI.botWatches(m.name), cases = D.cases.filter((c) => c.bot === m.name && c.status === 'open').length;
     const watchNote = !w.triggers.length && !w.sweep ? `<div class="callout wait watch-empty" style="margin:0 0 14px">${UI.statusMark('wait', `<b>${m.name} isn't watching anything yet.</b>`)} <span class="grow">No trigger hands it events and it doesn't check in on its own, so it only answers when someone talks to it: you here, or anyone in a chat it's in.</span><button class="btn sm primary" data-act="bot-watch-add" data-m="${m.name}">${icon('plus')}Choose what it watches</button></div>` : '';
     const T = [['proposals', 'Approvals', pc, true], ['chat', 'Chat'], ['cases', 'Tickets', cases], ['memory', 'Memory'], ['access', 'What it can do'], ['settings', 'Settings']];
-    return `<div class="page dl-page${cls ? ' ' + cls : ''}">${hero(m)}
+    return `<div class="page dl-page${cls ? ' ' + cls : ''}">${hero(m, sub)}
       <nav class="dl-tabs" role="tablist">${T.map(([k, l, n, hot]) => `<a href="#/bots/${m.name}/${k}" role="tab" class="${k === tab ? 'on' : ''}"${k === tab ? ' aria-current="page" aria-selected="true"' : ''}>${l}${n ? ` <em class="${hot ? 'hot' : ''}">${n}</em>` : ''}</a>`).join('')}</nav>
       <div class="dl-tab-body">${watchNote}${body}</div></div>`;
   }
@@ -419,6 +420,8 @@
   /* ---------- cases ---------- */
   // a bot's Tickets tab: the tickets assigned to it (js/screens/tickets.js); a ticket opens on its own page
   function cases(m, sub) {
+    const c = sub && D.cases.find((x) => x.id === sub);
+    if (c) return shell(m, 'cases', UI.ticketBody(c.id, { base: `#/bots/${m.name}/cases` }), 'tk-page', [['Tickets', `#/bots/${m.name}/cases`], [c.title]]);
     if (sub) { setTimeout(() => location.replace(`#/tickets/${sub}`)); return ''; }
     return shell(m, 'cases', UI.botTickets(m));
   }
@@ -433,7 +436,7 @@
     const list = props(m.name);
     const p = sub && list.find((x) => x.id === sub);
     // on a phone the approval stands on its own (no bot header or tabs above it): the title, why and effect come first
-    if (p) return shell(m, 'proposals', proposalDetail(m, p), 'prop-page');
+    if (p) return shell(m, 'proposals', proposalDetail(m, p), 'prop-page', [['Approvals', `#/bots/${m.name}/proposals`], [p.title || p.summary]]);
     // what's waiting for you first; what was decided is history, folded to a count; a practice-mode item says so in words
     const waiting = list.filter((x) => x.status === 'pending'), past = list.filter((x) => x.status !== 'pending');
     const word = (x) => x.status === 'shadow' ? 'Practice only: what it would have done in shadow mode (nothing was done)' : `${esc(x.status[0].toUpperCase() + x.status.slice(1))}${x.approver ? ` by ${esc(x.approver)}` : ''}`;
@@ -511,8 +514,7 @@
       <h2 class="dl-ptitle">${esc(p.title || p.summary)}</h2><p class="dl-ask">${ask}</p>
       <div class="prop-body">${body}</div>
       ${pend ? `<div class="dl-decide prop-decide"><button class="btn lg primary" data-act="p-approve" data-p="${p.id}" data-d="approve">${icon('passkey')}Approve with passkey</button><button class="btn lg secondary" data-act="p-approve" data-p="${p.id}" data-d="deny">Deny…</button><span class="hint">${(() => { const ops = S.effective(m).operators.v || []; return ops.length ? `Only ${ops.map(esc).join(' or ')} can approve.` : 'Any operator can approve.'; })()}</span></div>` : p.status === 'shadow' ? decided : ''}</article>`;
-    const from = UI.navOrigin && UI.navOrigin.hash === location.hash ? UI.navOrigin.nav : '', back = from === 'attention' ? ['#/attention', 'Needs you'] : from === 'overview' ? ['#/overview', 'Home'] : [`#/bots/${m.name}/proposals`, `${esc(m.name)}’s approvals`];
-    return `<div class="dl-crumbs prop-crumbs"><a class="prop-back" href="${back[0]}">${icon('chev', 'flip')}${back[1]}</a></div><div class="prop-single" style="margin-top:6px">${card}</div>`;
+    return `<div class="prop-single">${card}</div>`;
   }
   const decidedWord = (p) => (p.status === 'executed' || String(p.status).startsWith('approved') ? 'Approved' : p.status === 'shadow' ? 'Shadow: not for approval' : p.status[0].toUpperCase() + p.status.slice(1));
   // a resource in the summary opens the full plan at its block
@@ -711,7 +713,7 @@
         <div class="stack def-yaml"><div class="panel"><div class="panel-head"><h3>As YAML</h3><span class="muted small">config.yaml · <span class="mono">bots.${esc(name)}</span></span><div class="tools">${errs.length ? st('fail', `${errs.length} error${errs.length > 1 ? 's' : ''}`) : st('ok', 'validates')}</div></div><div class="panel-body tight" id="df-yaml">${UI.yaml(yaml)}</div>
           ${errs.length || warns.length ? `<div class="panel-body" style="border-top:1px solid var(--color-border-subtle)">${errs.map((e) => `<div class="callout danger small" style="margin-bottom:6px">${esc(e)}</div>`).join('')}${warns.map((e) => `<div class="callout warn small" style="margin-bottom:6px">${esc(e)}</div>`).join('')}</div>` : ''}
           <div class="panel-foot"><button class="btn ghost" data-act="df-reset" ${changed ? '' : UI.off('No edits')}>${icon('undo')}Reset</button><button class="btn primary" style="margin-left:auto" data-act="df-review" ${!changed ? UI.off('Change something first') : errs.length ? UI.off('Fix the errors first') : ''}>${icon('check')}Review changes</button></div></div></div></div>`;
-    return isNew ? `<div class="page">${UI.head('New bot', { crumbs: '<a href="#/bots">Bots</a>', sub: dv.team ? `on team ${esc(dv.team)} · starts in shadow mode` : 'solo or on a team · starts in shadow mode' })}${body}</div>` : shell(m, 'settings', body);
+    return isNew ? `<div class="page">${UI.head('New bot', { crumbs: [['Bots', '#/bots'], ['New bot']], sub: dv.team ? `on team ${esc(dv.team)} · starts in shadow mode` : 'solo or on a team · starts in shadow mode' })}${body}</div>` : shell(m, 'settings', body);
   }
   let dfT;
   document.addEventListener('input', (e) => { const f = e.target.closest('.def-form'); if (!f) return; clearTimeout(dfT); dfT = setTimeout(() => readDef(f), 350); });

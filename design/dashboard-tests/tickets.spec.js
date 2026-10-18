@@ -131,6 +131,9 @@ test('make a ticket from a chat message; old task links open the ticket', async 
   await expect(page.locator('#tk-title')).not.toHaveValue('');
   await page.locator('[data-act="tk-create"][data-stage="ready"]').click();
   await expect(page.locator('.tk-chat')).toContainText('Made from a message in platform-sre’s chat');
+  // a ticket opened from a bot's Tickets tab stays in the bot's page, the tab selected and the path in the breadcrumb
   await go(page, '#/bots/platform-sre/cases/c29');
-  await expect(page).toHaveURL(/#\/tickets\/c29$/);
+  await expect(page.locator('.dl-crumbs')).toHaveText(/Bots\s*›\s*platform\s*›\s*platform-sre\s*›\s*Tickets\s*›\s*SEV2 api p99 latency > 2s/);
+  await expect(page.locator('.dl-tabs a[aria-current="page"]')).toContainText('Tickets');
+  await expect(page.locator('.tk-head h1')).toHaveText('SEV2 api p99 latency > 2s');
 });

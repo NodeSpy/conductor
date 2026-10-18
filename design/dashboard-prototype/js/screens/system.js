@@ -93,7 +93,7 @@
     const current = [].concat(Object.entries(c.connectors || {}).map(([k, v]) => ['connectors', k, `the ${k} role → ${v}`]), Object.entries(c.triggers || {}).filter(([, v]) => v.enabled).map(([k, v]) => ['triggers', k, `${k} armed${v.repos ? ' on ' + v.repos.join(', ') : ''}`]), Object.entries(c.steps || {}).map(([k, v]) => ['steps', k, `${k}: ${Object.keys(v).join(', ')}`]), c.policy ? [['policy', '', 'policy changed']] : [], c.models ? [['models', '', 'models changed']] : []);
     const yamlNow = YAML.stringify(Object.fromEntries(Object.entries(c).filter(([k]) => !['use', 'hold'].includes(k))));
     return `<div class="page dl-page">
-      <div class="dl-crumbs"><a href="#/extensions/packs">Packs</a>${icon('chev')}<span>${esc(name)}</span></div>
+      ${UI.crumbs([['Packs', '#/extensions/packs'], [name, `#/extensions/item/pack/${encodeURIComponent(name)}`], ['Customize']])}
       <div class="dl-phead"><div><h1>Customize ${esc(name)}</h1><p class="dl-lead">What you change about this pack lives in your config, never in its files, and survives its updates. A pack can only narrow what it does; anything that loosens it is marked and asks for your passkey when you apply.</p></div>
         <div class="dl-actions tight">${staged ? '<a class="btn primary" href="#/config/apply">Review the change</a>' : ''}</div></div>
       <div class="dl-cols"><div class="dl-col-main">
@@ -117,7 +117,7 @@
   const ps = { use: '', read: null, inst: '' };
   UI.route('extensions/source/add', () => {
     const m = ps.read, conns = S.view().connectors, kindOf = (cn) => ((S.staged('connectors', cn.name) || cn.cfg || {}).use || cn.use);
-    return `<div class="page dl-page"><div class="dl-crumbs"><a href="#/extensions/browse">${icon('chev', 'flip')}Back to the catalog</a></div>
+    return `<div class="page dl-page">${UI.crumbs([['Packs', '#/extensions/packs'], ['Browse', '#/extensions/browse'], ['A pack from a source']])}
       <div class="dl-phead"><div><h1>A pack from a source</h1><p class="dl-lead">For a pack that isn’t in the official catalog: one of your own, or a team’s. conductor reads what it needs before anything is added.</p></div></div>
       <div class="dl-cols"><div class="dl-col-main">
         <section class="dl-card"><header class="dl-ch"><h2>Where it is</h2></header>

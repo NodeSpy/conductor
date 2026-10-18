@@ -128,7 +128,7 @@
     const changed = YAML.diff(raw.base, raw.text).filter((r) => r.t !== ' ').length;
     return {
       toString: () => `<div class="page wide">
-      ${UI.head('config.yaml', { crumbs: `<a href="#/config">Config</a>`, sub: `~/.config/conductor/config.yaml · sha ${D.daemon.config_sha}${D.pending.length ? ' · shown with your staged changes' : ''}`,
+      ${UI.head('config.yaml', { crumbs: [['Config', '#/config'], ['The config file']], sub: `~/.config/conductor/config.yaml · sha ${D.daemon.config_sha}${D.pending.length ? ' · shown with your staged changes' : ''}`,
         actions: `<span class="mono tiny muted" id="raw-state">${changed ? changed + ' lines edited' : 'no edits'}</span><button class="btn" data-act="raw-revert" ${changed ? '' : UI.off('No edits to throw away')}>${icon('undo')}Revert edits</button><button class="btn primary" data-act="raw-review" ${changed ? '' : UI.off('Edit the YAML first; the review shows the node-level diff')}>${icon('check')}Validate &amp; review</button>` })}
       <div class="grid raw-grid">
         <div class="panel"><div class="panel-head"><span class="mono small">editing</span><div class="tools"><span class="mono tiny muted">schema from <span class="mono">conductor schema</span></span></div></div>
@@ -172,7 +172,7 @@
     const P = D.pending;
     if (ap.done && !P.length) return doneView();
     ap.done = null;
-    if (!P.length) return `<div class="page">${UI.head('Review and apply', { crumbs: `<a href="#/config">Config</a>` })}
+    if (!P.length) return `<div class="page">${UI.head('Review and apply', { crumbs: [['Config', '#/config'], ['Review and apply']] })}
       <div class="panel"><div class="empty"><span class="serif">Nothing staged</span>Edit a connector, a bot, a secret reference or a workflow and its change waits here: validated on a copy, shown as a diff, applied with your passkey.<div class="row" style="justify-content:center;margin-top:10px"><a class="btn" href="#/config">Config</a><a class="btn" href="#/connectors">Connectors</a><a class="btn" href="#/workflows">Workflows</a></div></div></div></div>`;
     const key = JSON.stringify(P.map((c) => c.id));
     if (ap.checksFor !== key) { ap.checksFor = key; ap.phase = 'check'; ap.ack = false; }
@@ -200,7 +200,7 @@
     const cur = ap.phase === 'check' ? 1 : 2;
     return {
       toString: () => `<div class="page">
-        ${UI.head(restoring ? 'Restore a backup' : 'Review and apply', { crumbs: D.prefs.returnTo ? `<a href="${D.prefs.returnTo.href}" data-act="return-to">${esc(D.prefs.returnTo.label)}</a>` : `<a href="#/config">Config</a>`, sub: `${P.length} staged change${P.length > 1 ? 's' : ''} · +${dv.adds} −${dv.dels}`, actions: `<button class="btn ghost" data-act="discard-all">${icon('trash')}Discard all</button>` })}
+        ${UI.head(restoring ? 'Restore a backup' : 'Review and apply', { crumbs: [D.prefs.returnTo ? [D.prefs.returnTo.label, D.prefs.returnTo.href] : ['Config', '#/config'], [restoring ? 'Restore a backup' : 'Review and apply']], sub: `${P.length} staged change${P.length > 1 ? 's' : ''} · +${dv.adds} −${dv.dels}`, actions: `<button class="btn ghost" data-act="discard-all">${icon('trash')}Discard all</button>` })}
         ${UI.stepper(STEPS, cur, false, { id: 'steps', states: STEPS.map((s, i) => (i < cur ? 'done' : i === cur ? (v.errors.length && i === 1 ? 'bad' : 'cur') : '')) })}
         <div class="grid g-side">
           <div class="stack">
@@ -254,7 +254,7 @@
     const stages = [ap.done.pk ? ['Passkey assertion verified', 'operator ops · credential laptop · it widens what bots can do'] : ['Signed-in session checked', 'operator ops · nothing widens, so no passkey'], ['A backup of the old config', `${e.id} · readable only by you (0600)`], ['The change is recorded, so a crash can finish or undo it', '<state>/config-apply/pending.json'], ['The new config is in place', `config.yaml swapped in one step · sha ${D.daemon.config_sha}`], ['conductor restarted with it', 'running steps were paused and resumed (SIGHUP path)'], ['The dashboard reconnected', 'event stream resumed from event 88412'], [`It started cleanly`, `${D.daemon.version} on ${D.daemon.config_sha} · all connectors up`], ['Watched for a minute: healthy, so it’s kept', '60 s with no crash and every connector up → committed']];
     const k = ap.done.stage, fin = k >= stages.length;
     return {
-      toString: () => `<div class="page">${UI.head('Applied', { crumbs: `<a href="#/config">Config</a>`, sub: esc(e.summary) })}
+      toString: () => `<div class="page">${UI.head('Applied', { crumbs: [['Config', '#/config'], ['Applied']], sub: esc(e.summary) })}
         ${UI.stepper(STEPS, 0, false, { states: STEPS.map((s, i) => (i < (fin ? 5 : k >= 4 ? 4 : 3) ? 'done' : 'cur')) })}
         <div class="grid g-side"><div class="panel"><div class="panel-head"><h3>Reload &amp; verify</h3>${fin ? st('ok', 'committed') : st('run', 'in progress')}</div><div class="panel-body" id="stages">${stages.slice(0, Math.min(k + 1, stages.length)).map(([a, b], i) => `<div class="check-row">${i < k || fin ? st('ok', '') : st('run', '')}<div><b>${a}</b><div class="muted tiny mono">${esc(b)}</div></div></div>`).join('')}</div></div>
         <div class="stack">${fin ? `<div class="callout small applied-note">${UI.statusMark("ok", "<b>Applied</b>")} Live config is <span class="mono">${D.daemon.config_sha}</span>. Backup <span class="mono">${e.id}</span> holds what it replaced.</div>

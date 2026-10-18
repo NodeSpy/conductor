@@ -34,7 +34,7 @@
   /** A ticket's row: the same anatomy as every list (mark, title, a line in words, the facts, the age, the action). */
   const by = (c) => (statusOf(c) === 'draft' ? `drafted by ${esc(askedBy(c).replace(' (a bot)', ''))}` : `asked by ${esc(askedBy(c))}`);
   UI.ticketRow = (c, o = {}) => { const s = UI.ticketStatus(c), verb = s.k === 'draft' ? 'Open' : s.k === 'waiting' ? 'Review' : '';
-    return `<li class="dl-need tk-row" data-s="${s.mark}" data-t="${c.id}"><a class="dl-need-a" href="#/tickets/${c.id}"><span class="dl-ng">${UI.mark(s.mark, { lg: true, label: s.word })}</span>
+    return `<li class="dl-need tk-row" data-s="${s.mark}" data-t="${c.id}"><a class="dl-need-a" href="${o.base || '#/tickets'}/${c.id}"><span class="dl-ng">${UI.mark(s.mark, { lg: true, label: s.word })}</span>
       <span class="dl-nt"><b>${esc(c.title)}</b><span class="dl-why">${o.byStatus ? by(c).replace(/^./, (x) => x.toUpperCase()) : `${s.word} · ${by(c)}`}</span>${UI.factsLine(UI.ticketFacts(c, o))}</span>
       <span class="dl-age">${UI.agoText(c.opened)}</span><span class="dl-na">${verb ? `<span class="btn sm secondary">${verb}</span>` : ''}</span></a></li>`; };
 
@@ -74,14 +74,14 @@
   const section = (title, rows, o = {}) => `<section class="dl-card tk-sec"${o.id ? ` id="${o.id}"` : ''}><header class="dl-ch"><h2>${title}</h2>${UI.count(rows.length, { hot: !!o.hot })}${o.sub ? `<span class="dl-sub">${o.sub}</span>` : ''}</header><ul class="dl-list">${rows.sort(byPri).map((c) => UI.ticketRow(c, o)).join('')}</ul></section>`;
   /** The list, or the board: one column per status, from draft to done (done and declined fold on the list). */
   const col = (k, xs, o) => `<section class="tk-col" data-col="${k}"><header class="tk-colh">${UI.mark(STATUS[k][1])}<h2>${STATUS[k][0]}</h2>${UI.count(xs.length, { hot: k === 'waiting' && xs.length > 0 })}</header>
-    <ul class="tk-cards">${xs.sort(byPri).map((c) => `<li class="tk-card" data-t="${c.id}"><a href="#/tickets/${c.id}"><b>${esc(c.title)}</b><span class="dl-why">${by(c).replace(/^./, (x) => x.toUpperCase())}</span>${UI.factsLine(UI.ticketFacts(c, o))}</a></li>`).join('') || `<li class="tk-none dl-sub">${k === 'draft' ? 'No drafts. Write one, or a bot will when it has an idea.' : 'None'}</li>`}</ul></section>`;
+    <ul class="tk-cards">${xs.sort(byPri).map((c) => `<li class="tk-card" data-t="${c.id}"><a href="${o.base || '#/tickets'}/${c.id}"><b>${esc(c.title)}</b><span class="dl-why">${by(c).replace(/^./, (x) => x.toUpperCase())}</span>${UI.factsLine(UI.ticketFacts(c, o))}</a></li>`).join('') || `<li class="tk-none dl-sub">${k === 'draft' ? 'No drafts. Write one, or a bot will when it has an idea.' : 'None'}</li>`}</ul></section>`;
   const viewCtl = () => `<div class="seg tk-view" role="group" aria-label="Show as">${[['list', 'List'], ['board', 'Board']].map(([v, l]) => `<button type="button" data-act="tk-view" data-v="${v}" aria-pressed="${tv.view === v}">${icon(v === 'list' ? 'logs' : 'grid')}${l}</button>`).join('')}</div>`;
   UI.ticketList = (list, o = {}) => { const shown = list.filter(keep), open = shown.filter((c) => c.status !== 'closed'), closed = shown.filter((c) => c.status === 'closed');
     let body = '';
     if (tv.view === 'board') body = `<div class="tk-board">${ORDER.filter((k) => k !== 'declined').map((k) => col(k, shown.filter((c) => statusOf(c) === k || (k === 'done' && statusOf(c) === 'declined')), o)).join('')}</div>`;
     else {
       if (tv.group === 'none') body += open.length ? section('Open', open, o) : '';
-      else if (tv.group === 'who') { const g = new Map(); open.forEach((c) => { const k = assignee(c); g.set(k, (g.get(k) || []).concat(c)); }); [...g].sort((a, b) => a[0].localeCompare(b[0])).forEach(([k, xs]) => { body += section(esc(k), xs, { noAssignee: true }); }); }
+      else if (tv.group === 'who') { const g = new Map(); open.forEach((c) => { const k = assignee(c); g.set(k, (g.get(k) || []).concat(c)); }); [...g].sort((a, b) => a[0].localeCompare(b[0])).forEach(([k, xs]) => { body += section(esc(k), xs, Object.assign({}, o, { noAssignee: true })); }); }
       else ORDER.filter((k) => k !== 'done' && k !== 'declined').forEach((k) => { const xs = open.filter((c) => statusOf(c) === k); if (xs.length) body += section(STATUS[k][0], xs, Object.assign({ byStatus: true, id: 'tk-' + k, sub: k === 'draft' ? 'Ideas you and the bots are shaping. Nobody starts work on a draft until someone marks it ready.' : '' }, o)); });
       if (closed.length) body += `<details class="dl-card dl-files-d past-d"><summary class="panel-head"><h3>Done or declined</h3><span class="muted small">${closed.length}</span></summary><ul class="dl-list">${closed.sort(byPri).map((c) => UI.ticketRow(c, o)).join('')}</ul></details>`;
     }
@@ -103,6 +103,10 @@
   /* ---------- a ticket ---------- */
   function detail(id) {
     const c = T(id); if (!c) return `<div class="page"><div class="empty"><span class="serif">No ticket here</span><a class="btn" href="#/tickets">Tickets</a></div></div>`;
+    return `<div class="page dl-page tk-page">${UI.crumbs([['Tickets', '#/tickets'], [c.title]])}${UI.ticketBody(id)}</div>`;
+  }
+  /** A ticket: on its own page under Tickets, or inside a bot's Tickets tab (the breadcrumb says which). */
+  UI.ticketBody = (id, o = {}) => { const c = T(id);
     const k = K(), m = k.M(c.bot), s = UI.ticketStatus(c), open = c.status !== 'closed', team = teamOf(c);
     const props = (D.proposals || []).filter((p) => p.case === c.id), workers = (D.workers || []).filter((w) => w.case === c.id), dels = (D.delegations || []).filter((d) => d.parent === c.id || d.child === c.id);
     const canDel = open && m && UI.delegationReach(m.name).some((r) => r.ok);
@@ -110,9 +114,7 @@
     const hist = [{ at: c.opened, t: c.stage === 'draft' || /^bot:/.test(c.requester || '') ? `Drafted by ${askedBy(c).replace(' (a bot)', '')}` : `Opened by ${askedBy(c)}` }].concat(c.routed ? [{ at: c.opened, t: (([x]) => x.toUpperCase() + x.slice(1))(k.routeLabel(c.routed).replace(/<[^>]+>/g, '')) }] : [])
       .concat(D.audit.filter((a) => new RegExp(`\\b${c.id}\\b`).test(a.detail || '')).map((a) => ({ at: a.ts, t: histWord(a) }))).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
     const ctl = (k2, label, val, opts) => `<div class="tk-f"><span class="dl-lbl">${label}</span><button class="tk-pick" data-act="tk-set" data-k="${k2}" data-t="${c.id}" aria-label="${label}: ${esc(val)}. Change">${esc(val)}${icon('chevd')}</button></div>`;
-    return `<div class="page dl-page tk-page">
-      <div class="dl-crumbs"><a href="#/tickets">Tickets</a></div>
-      <section class="dl-card case-head tk-head"><div class="tk-ht">${UI.mark(s.mark, { lg: true, label: s.word })}<h1 class="case-title">${esc(c.title)}</h1><button class="icon-btn" data-act="tk-more" data-t="${c.id}" aria-label="More for this ticket">${icon('more')}</button></div>
+    return `<section class="dl-card case-head tk-head"><div class="tk-ht">${UI.mark(s.mark, { lg: true, label: s.word })}<h1 class="case-title">${esc(c.title)}</h1><button class="icon-btn" data-act="tk-more" data-t="${c.id}" aria-label="More for this ticket">${icon('more')}</button></div>
         <p class="dl-sub case-state">${s.word}${c.urgent && open ? ' · <b class="danger-text">urgent</b>' : ''} · ${draft ? `${by(c)} ${UI.agoText(c.opened)}` : `${open ? 'opened' : 'closed'} ${UI.agoText(c.opened)} by ${esc(askedBy(c))}`}</p>
         ${UI.factsLine(UI.ticketFacts(c))}
         ${draft ? `<div class="tk-ready"><p><b>A draft.</b> ${c.bot || c.team ? `${esc(assignee(c))} can help shape it, but won’t start` : 'Nobody works on it'} until you mark it ready${c.bot || c.team ? '' : ', and it needs someone to do it first'}.</p><button class="btn primary" data-act="tk-ready" data-t="${c.id}">${icon('check')}Mark ready</button></div>` : ''}
@@ -136,8 +138,8 @@
           ${props.length || workers.length ? `<section class="panel"><div class="panel-head"><h3>Linked work</h3></div><ul class="cm-side-l">${props.map((p) => `<li><a class="cm-side-a" href="#/bots/${p.bot}/proposals/${p.id}"><b>${UI.mark(p.status === 'pending' ? 'ember' : p.status === 'executed' || p.status === 'approved' ? 'ok' : 'idle')} ${esc(p.title || p.summary)}</b>${UI.factsLine([UI.envFact(p.env), UI.actionFact(p.verb, p.env, p.tier)])}<span class="dl-sub">${p.status === 'pending' ? 'Waiting for you' : esc(p.status)}</span></a></li>`).join('')}
             ${workers.map((w) => `<li><a class="cm-side-a" href="${w.run ? `#/runs/${w.run}` : `#/bots/${w.bot || c.bot}/workers`}"><b>${UI.mark(w.status === 'run' ? 'run' : w.status === 'ok' ? 'ok' : 'idle')} ${esc(w.brief || 'A worker')}</b><span class="dl-sub">${w.readOnly ? 'Read-only worker' : 'Worker'} · ${w.status === 'run' ? 'running' : 'finished'}</span></a></li>`).join('')}</ul></section>` : ''}
           <section class="panel"><div class="panel-head"><h3>History</h3></div><ol class="tk-hist">${hist.map((h) => `<li><span>${esc(h.t)}</span><span class="dl-sub">${UI.agoText(h.at)}</span></li>`).join('')}</ol></section>
-        </div></div></div>`;
-  }
+        </div></div>`;
+  };
   const histWord = (a) => ({ ticket_comment: 'You commented', ticket_assign: 'Assigned', ticket_edit: 'Edited', ticket_ready: 'Marked ready', ticket_decline: 'Declined', ticket_new: 'Created', bot_case_close: 'Marked done', bot_case_reopen: 'Reopened', bot_case_note: 'You commented', bot_route: 'Reassigned', bot_delegate: 'Part handed off', bot_delegate_done: 'A hand-off reported back' }[a.event] || a.event.replace(/_/g, ' '));
   UI.afterRender.push((main) => { const t = main.querySelector('.tk-chat #msgs'); if (t) t.scrollTop = t.scrollHeight; });
 
@@ -175,7 +177,7 @@
     const title = text ? (text.split(/(?<=[.?!])\s/)[0] || text).replace(/\*\*|`/g, '').slice(0, 90) : '';
     const def = bot ? bot : team ? 'team:' + team : '';
     const opts = whoOptions().map(([v, l]) => `<option value="${esc(v)}"${v === def ? ' selected' : ''}>${esc(l)}</option>`).join('');
-    return `<div class="page dl-page tk-page tk-new"><div class="dl-crumbs"><a href="#/tickets">Tickets</a></div>
+    return `<div class="page dl-page tk-page tk-new">${UI.crumbs([['Tickets', '#/tickets'], ['New ticket']])}
       <div class="dl-phead"><div><h1>New ticket</h1>${msg ? `<p class="lede-2">From a message in ${esc(bot)}’s chat. It keeps a link back to the conversation.</p>` : ''}</div></div>
       <form class="dl-card tk-form" novalidate>
         <label class="tk-l"><span class="dl-lbl">Title</span><input class="input" id="tk-title" required maxlength="140" value="${esc(title)}" placeholder="What needs doing, in a line"></label>
@@ -212,7 +214,7 @@
   /* ---------- a bot's tickets and a team's tickets: the same rows, narrowed ---------- */
   UI.botTickets = (m) => { const list = D.cases.filter((c) => c.bot === m.name);
     return `<section class="tk-in"><header class="dl-ch tk-inh"><p class="dl-sub">Tickets assigned to ${esc(m.name)}: from you, a chat, an event or its own checks. It keeps its notes on each and the parts it hands to teammates.</p><span class="dl-sp"></span><a class="btn sm secondary" href="#/tickets/new?bot=${encodeURIComponent(m.name)}">${icon('plus')}New ticket for it</a></header>
-      ${UI.ticketList(list, { noAssignee: true, none: `Nothing assigned to ${esc(m.name)}.` })}</section>`; };
+      ${UI.ticketList(list, { noAssignee: true, base: `#/bots/${m.name}/cases`, none: `Nothing assigned to ${esc(m.name)}.` })}</section>`; };
   UI.teamTickets = (t) => { const list = D.cases.filter((c) => c.team === t.name || teamOf(c) === t.name);
     return `<section class="tk-in"><header class="dl-ch tk-inh"><p class="dl-sub">Tickets for team ${esc(t.name)} and its bots. One for the team goes to its lead or routing, which picks a bot.</p><span class="dl-sp"></span><a class="btn sm secondary" href="#/tickets/new?team=${encodeURIComponent(t.name)}">${icon('plus')}New ticket for the team</a></header>
       ${UI.ticketList(list, { none: `No tickets for ${esc(t.name)}.` })}</section>`; };

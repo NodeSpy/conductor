@@ -214,7 +214,7 @@
     return ev ? `${esc(ev)}${where}` : /schedule/.test(t) ? 'Its schedule' : /spawn/.test(t) && String(r.workflow).startsWith('bot:') ? `${esc(r.workflow.slice(4))} started it itself${(t.match(/spawn (\w+)/) || [])[1] ? ` (worker ${esc(t.match(/spawn (\w+)/)[1])})` : ''}` : /manual/.test(t) ? 'You started it' : /incident|pd\./.test(t) ? 'A PagerDuty incident' : /sweep/.test(t) ? 'Its routine sweep' : `${esc(t)}${where}`; };
   UI.route('runs/:id', ({ id }) => {
     const r = D.runs.find((x) => x.id === id);
-    if (!r) return `<div class="page dl-page"><div class="dl-crumbs"><a href="#/activity">${icon('chev', 'flip')}Back to Activity</a></div>${UI.empty({ title: `There is no run ${esc(id)}`, body: 'It may be older than the 14 days runs are kept.', action: '<a class="btn" href="#/activity">Back to Activity</a>' })}</div>`;
+    if (!r) return `<div class="page dl-page">${UI.crumbs([['Activity', '#/activity'], ['A run that isn’t here']])}${UI.empty({ title: `There is no run ${esc(id)}`, body: 'It may be older than the 14 days runs are kept.', action: '<a class="btn" href="#/activity">Back to Activity</a>' })}</div>`;
     const rec = UI.runRecord(r), sel = dv.sel[r.id] || (r.steps.find((x) => x.status === 'run') || {}).id || rec.failAt || rec.waitAt || (rec.steps.find((x) => x.kind === 'agent') || rec.steps[rec.steps.length - 1]).id, s = rec.steps.find((x) => x.id === sel) || rec.steps[0];
     const story = UI.runStory(r), audit = UI.runAudit(r), same = D.runs.filter((x) => x.workflow === r.workflow && x.id !== r.id && x.status !== 'run'), inNeeds = D.attention.some((a) => a.href === '#/runs/' + r.id);
     if (r.status === 'run') LOG = logOf(r);
@@ -234,7 +234,7 @@
     const facts = [['Started', `${UI.agoText(r.started)} <span class="dl-sub">(${UI.hm(r.started)})</span>`], r.status === 'run' ? ['Running for', UI.durText(Date.now() - new Date(r.started))] : ['Took', UI.runDur(r)], UI.usageOn() ? ['Cost', UI.runFig(r)] : null, ['Triggered by', trigWords(r)], ['Workflow', `<a class="dl-link" href="#/workflows/${encodeURIComponent(r.workflow)}">${esc(r.workflow)}</a>`], r.retry_of ? ['Retry of', `<a class="mono dl-link" href="#/runs/${r.retry_of}">${r.retry_of}</a>`] : null];
     const auditFacts = `<details class="dl-audit-d"><summary>${icon('chev')}For audit: the run id and its signed record</summary><dl class="dl-facts"><dt>Run</dt><dd class="mono">${r.id}</dd><dt>Record</dt><dd>${r.status === 'run' || r.status === 'wait' ? 'signed when it finishes' : 'signed; the signature checks out'}</dd></dl></details>`;
     return { toString: () => `<div class="page dl-page">
-      <div class="dl-crumbs run-nav"><a href="#/activity">${icon('chev', 'flip')}Back to Activity</a></div>
+      ${UI.crumbs([['Activity', '#/activity'], [`${UI.runTitle(r)}${UI.runTarget(r) ? ` on ${UI.runTarget(r)}` : ''}`]]).replace('class="dl-crumbs"', 'class="dl-crumbs run-nav"')}
       <div class="dl-phead"><div><h1 class="dl-h1-long">${title}</h1>${lead ? `<p class="dl-lead">${lead}</p>` : ''}</div>${UI.statusMark(UI.runS(r.status), UI.runWord(r.status), { lg: true })}</div>
       <div class="dl-actions">${actions}</div>
       <div class="dl-cols"><div class="dl-col-main">
@@ -265,7 +265,7 @@
   UI.route('runs/:id/compare/:other?', ({ id, other }) => {
     const a = D.runs.find((x) => x.id === id); if (!a) return `<div class="page dl-page">${UI.empty({ title: `There is no run ${esc(id)}`, action: '<a class="btn" href="#/activity">Back to Activity</a>' })}</div>`;
     const same = D.runs.filter((x) => x.workflow === a.workflow && x.id !== a.id && x.status !== 'run');
-    const head = `<div class="dl-crumbs"><a href="#/runs/${a.id}">${icon('chev', 'flip')}Back to the run</a></div><div class="dl-phead"><div><h1>Compare two ${esc(a.workflow)} runs</h1></div></div>`;
+    const head = `${UI.crumbs([['Activity', '#/activity'], [`${UI.runTitle(a)}${UI.runTarget(a) ? ` on ${UI.runTarget(a)}` : ''}`, `#/runs/${a.id}`], ['Compare']])}<div class="dl-phead"><div><h1>Compare two ${esc(a.workflow)} runs</h1></div></div>`;
     if (!other) return `<div class="page dl-page">${head}<section class="dl-card" style="margin-top:20px"><header class="dl-ch"><h2>Pick a run to compare with</h2></header><ul class="dl-list">${same.map((x) => `<li><a class="dl-row-a" href="#/runs/${a.id}/compare/${x.id}"><span class="dl-ng">${UI.mark(UI.runS(x.status), { label: UI.runWord(x.status) })}</span><span class="dl-nt"><b>${esc(x.workflow)} <span class="tgt">${esc(UI.runTarget(x))}</span></b><span class="dl-why">${UI.runWord(x.status)} · ${UI.agoText(x.started)} · <span class="mono">${x.id}</span></span></span></a></li>`).join('') || '<li class="dl-sub">No other run of this workflow to compare with.</li>'}</ul></section></div>`;
     const b = D.runs.find((x) => x.id === other); if (!b) return `<div class="page dl-page">${head}${UI.empty({ title: `There is no run ${esc(other)}` })}</div>`;
     const ra = UI.runRecord(a), rb = UI.runRecord(b), ids = [...new Set(ra.steps.map((s) => s.id).concat(rb.steps.map((s) => s.id)))];
