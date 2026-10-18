@@ -1,0 +1,21 @@
+# The bots daemon (group Z): one bot whose memory repo is seeded, so its home
+# session's first prompt carries a memory index. No LLM: the fake paseo
+# records the prompt, and the harness acts as the session with its token.
+# The index budget is small on purpose, so a handful of seeded documents
+# already overflows it.
+runtimes:
+  paseo: { use: paseo, bin: /usr/local/bin/fakepaseo, default: true }
+  clibot: { use: cli, tool: claude-code }
+operators:
+  ops: { ssh_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample ops@e2e" }
+bots:
+  memo:
+    description: "e2e bot for memory reads"
+    seed_dir: /fixtures/bot-seed
+    worker: { runtime: clibot, timeout: 2m }
+    memory:
+      index_budget: 1k
+      read_max: 400
+store:
+  state_file: /data/state.json
+  audit_log: /data/audit.jsonl

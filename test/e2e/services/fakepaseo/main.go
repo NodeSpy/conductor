@@ -91,6 +91,10 @@ func main() {
 		// substring — its id and the CONDUCTOR_* env its run was launched with —
 		// so the e2e can act AS that agent (call step.done with its token).
 		cmdCreds(os.Args[2:])
+	case "_prompt":
+		// Harness-only: print the first prompt of the newest agent whose title
+		// contains the given substring (group Z reads a bot session's prompt).
+		cmdPrompt(os.Args[2:])
 	case "_archived":
 		// Harness-only: exit 0 iff the given agent id is archived.
 		cmdIsArchived(os.Args[2:])
@@ -353,7 +357,9 @@ func cmdRun(args []string) {
 	// If it's a git repo, make the scripted edit. Normally commit + push as the
 	// user; with the `dirty` directive (§17 diff preview) leave the change
 	// UNCOMMITTED so the worktree carries a proposed diff conductor can read.
-	if isGitRepo(cwd) {
+	// A bot's home session (group Z) works in a worktree of its memory repo
+	// and never commits there itself: no scripted edit.
+	if isGitRepo(cwd) && p.labels["bot"] == "" {
 		applyEdit(cwd, prompt, p, dir)
 	}
 
@@ -930,6 +936,24 @@ func cmdCreds(args []string) {
 			fmt.Printf("%s=%s\n", k, v)
 		}
 	}
+}
+
+func cmdPrompt(args []string) {
+	if len(args) == 0 {
+		os.Exit(2)
+	}
+	var best *agent
+	withState(func(s *state) {
+		for _, a := range s.Agents {
+			if strings.Contains(a.Title, args[0]) && (best == nil || a.CreatedAt.After(best.CreatedAt)) {
+				best = a
+			}
+		}
+	})
+	if best == nil {
+		os.Exit(1)
+	}
+	fmt.Print(best.Prompt)
 }
 
 func cmdIsArchived(args []string) {

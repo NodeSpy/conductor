@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -368,5 +369,89 @@ func TestMemoryAgentOps(t *testing.T) {
 	out, err = f.svc.AgentOp(ctx, hc, "index", map[string]any{"kind": "knowledge"})
 	if err != nil || out["entries"] != 1 {
 		t.Fatalf("index --kind: %v %v", out, err)
+	}
+}
+
+// The index lists what changed most recently first — by the commit that
+// last touched each document, not the order of the files.
+func TestIndexNewestFirst(t *testing.T) {
+	f := newSvc(t)
+	ctx := context.Background()
+	repo := f.svc.Repo("sre")
+	commitAt := func(slug, body, date string) {
+		t.Helper()
+		_ = os.WriteFile(filepath.Join(repo.Dir, "knowledge", slug+".md"), []byte(know("Doc "+slug, "", "", body)), 0o600)
+		cmd := exec.Command("git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "-q", "-m", slug, "--", "knowledge/"+slug+".md")
+		_, _ = repo.git(ctx, repo.Dir, "add", "--", "knowledge/"+slug+".md")
+		cmd.Dir = repo.Dir
+		cmd.Env = append(os.Environ(), "GIT_COMMITTER_DATE="+date, "GIT_AUTHOR_DATE="+date, "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+	}
+	commitAt("zeta", "x", "2030-01-01T00:00:00Z")
+	commitAt("alpha", "x", "2030-01-02T00:00:00Z")
+	commitAt("mid", "x", "2030-01-03T00:00:00Z")
+	order := func() string {
+		es, _, err := repo.Entries(ctx, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, e := range es {
+			got = append(got, strings.TrimSuffix(strings.TrimPrefix(e.Path, "knowledge/"), ".md"))
+		}
+		return strings.Join(got, " ")
+	}
+	if got := order(); got != "mid alpha zeta" {
+		t.Fatalf("by commit time: %v", got)
+	}
+	// Rewriting the oldest makes it the newest — its LAST commit counts.
+	commitAt("zeta", "rewritten", "2030-01-04T00:00:00Z")
+	if got := order(); got != "zeta mid alpha" {
+		t.Fatalf("after a rewrite: %v", got)
+	}
+}
+
+// An archived read is for log entries only: a document an operator removed
+// is gone, not read back from history.
+func TestReadArchivedOnlyLogs(t *testing.T) {
+	f := newSvc(t)
+	ctx := context.Background()
+	repo := f.svc.Repo("sre")
+	writeDoc(t, f, "knowledge", "gone", know("Gone", "", "", "was here"))
+	if _, _, err := repo.Commit(ctx, OperatorIdent("op"), Edit{Op: EditRm, Path: "knowledge/gone.md", Base: repo.Head(ctx)}); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := repo.ReadPart(ctx, "knowledge/gone.md", "", 0, 0); err == nil {
+		t.Fatalf("a removed knowledge document read back: %+v", res)
+	}
+	if _, err := repo.ReadPart(ctx, "log/2026/10/never.md", "", 0, 0); err == nil {
+		t.Fatal("a log entry that never existed")
+	}
+}
+
+// A home session's index is ranked against its open cases.
+func TestHomeIndexRankedByOpenCases(t *testing.T) {
+	f := newSvc(t)
+	ctx := context.Background()
+	m := f.cfg.Bots["sre"]
+	m.Memory.IndexBudget = 700
+	f.cfg.Bots["sre"] = m
+	writeDoc(t, f, "knowledge", "kafka", know("Kafka consumer lag", "kafka", "", "x"))
+	for i := 0; i < 12; i++ {
+		writeDoc(t, f, "knowledge", fmt.Sprintf("other-%d", i), know(fmt.Sprintf("Other topic %d", i), "", "", "x"))
+	}
+	if _, err := f.svc.Deliver(ctx, Event{Bot: "sre", Source: "pd.incident", Title: "kafka consumer lag is growing"}); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Tick(ctx, "sre")
+	idx := promptSection(f.home.launched[len(f.home.launched)-1].Prompt, "## Your memory index")
+	first := strings.SplitN(strings.SplitN(idx, "\n\n", 2)[1], "\n", 2)[0]
+	if !strings.HasPrefix(first, "- knowledge/kafka.md") || !strings.Contains(idx, "more not shown") {
+		t.Fatalf("home index not ranked by the open case:\n%s", idx)
+	}
+	if q := homeQuery(f.st.Bot("sre")); !strings.Contains(q, "kafka consumer lag") {
+		t.Fatalf("home query: %q", q)
 	}
 }

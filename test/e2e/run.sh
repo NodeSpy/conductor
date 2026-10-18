@@ -39,6 +39,11 @@ source "$DIR/lib/assert.sh"
 MODE="${MODE:-stub}"
 PROJECT="${PROJECT:-pc-e2e}"
 KEEP="${KEEP:-0}"
+# ONLY="Z" (group letters, space-separated) runs only those groups; group Z
+# alone brings up only its daemon. (Not GROUPS: bash reserves that name.)
+ONLY="${ONLY:-}"
+want() { [ -z "$ONLY" ] || [[ " $ONLY " == *" $1 "* ]]; }
+only_bots() { [ "$(echo $ONLY)" = "Z" ]; }
 COMPOSE=(docker compose -f "$DIR/docker-compose.yml")
 # Live mode layers an override that swaps the stub controllers for real agents and
 # mounts the operator's credentials (see docker-compose.live.yml + README).
@@ -179,13 +184,19 @@ setup() {
   docker run --rm -v "$DIR/config:/c" conductor-e2e:latest \
     chmod 644 /c/github-app.pem >/dev/null 2>&1
 
+  if only_bots; then
+    dc up -d conductor-bots || { echo "up failed"; dc logs; exit 1; }
+    wait_for 60 cexec conductor-bots test -S /data/control.sock || fatal "conductor-bots daemon not ready (control socket)"
+    echo "stack ready (group Z only)"
+    return
+  fi
   dc up -d || { echo "up failed"; dc logs; exit 1; }
 
   banner "wait for readiness"
   wait_for 60 cexec mock-github  curl -sf http://localhost:8080/_health  || fatal "mock-github not ready"
   wait_for 60 cexec sink-catcher curl -sf http://localhost:8080/_health  || fatal "sink-catcher not ready"
   wait_for 60 cexec forge git ls-remote git://localhost/acme/web.git      || fatal "forge not ready"
-  for c in conductor conductor-ctrl conductor-fail conductor-conn; do
+  for c in conductor conductor-ctrl conductor-fail conductor-conn conductor-bots; do
     wait_for 60 cexec "$c" test -S /data/control.sock || fatal "$c daemon not ready (control socket)"
   done
   echo "stack ready"
@@ -1753,30 +1764,31 @@ main() {
     [ "$FAIL" -eq 0 ]
     return
   fi
-  group_A_resolution
-  group_B_fixer
-  group_I_identity
-  group_G_notify
-  group_H_webhook
-  group_C_session_model
-  group_D_broker
-  group_E_handoff
-  group_F_capability
-  group_J_failure
-  group_K_connectors
-  group_M_cost
-  group_N_budget
-  group_O_gate
-  group_P_blob
-  group_Q_history
-  group_R_watch
-  group_S_callable
-  group_T_output_schema
-  group_U_filter
-  group_V_engine_plugin
-  group_X_listeners
-  group_Y_listeners_github_smee
-  group_W_stepdone
+  want A && group_A_resolution
+  want B && group_B_fixer
+  want I && group_I_identity
+  want G && group_G_notify
+  want H && group_H_webhook
+  want C && group_C_session_model
+  want D && group_D_broker
+  want E && group_E_handoff
+  want F && group_F_capability
+  want J && group_J_failure
+  want K && group_K_connectors
+  want M && group_M_cost
+  want N && group_N_budget
+  want O && group_O_gate
+  want P && group_P_blob
+  want Q && group_Q_history
+  want R && group_R_watch
+  want S && group_S_callable
+  want T && group_T_output_schema
+  want U && group_U_filter
+  want V && group_V_engine_plugin
+  want X && group_X_listeners
+  want Y && group_Y_listeners_github_smee
+  want W && group_W_stepdone
+  want Z && group_Z_bots
   print_matrix
   [ "$FAIL" -eq 0 ]
 }
@@ -1834,6 +1846,86 @@ group_W_stepdone() {
   else
     ok "W user workspace untouched (ownership ledger)" W foreign
   fi
+}
+
+group_Z_bots() {
+  banner "Group Z — bot memory: the index in the prompt, ranked recall, reads in parts, caps"
+
+  # The daemon starts the bot's home session on the fake paseo, which keeps
+  # its first prompt and its conductor creds.
+  wait_for 60 cexec conductor-bots paseo _creds "bot memo" || {
+    bad "Z home session launched" Z launch "no fake-paseo agent titled 'bot memo'"
+    return
+  }
+  local creds tok ep prompt out
+  creds="$(cexec conductor-bots paseo _creds "bot memo")"
+  tok="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_SKILL_TOKEN=//p' | head -1)"
+  ep="$(printf '%s\n' "$creds" | sed -n 's/^CONDUCTOR_ENDPOINT=//p' | head -1)"
+  [ -n "$tok" ] && [ -n "$ep" ] || { bad "Z session creds" Z creds "no token/endpoint in the home session's env"; return; }
+  as_bot() { cexec conductor-bots env CONDUCTOR_ENDPOINT="$ep" CONDUCTOR_SKILL_TOKEN="$tok" conductor bot "$@" 2>&1; }
+
+  # Z1: the first prompt carries the memory index — within its budget — and
+  # the read rules, never an instruction to read the repo.
+  prompt="$(cexec conductor-bots paseo _prompt "bot memo")"
+  assert_contains "$prompt" "## Your memory index (9 documents)" Z Z1-index "Z1 the first prompt carries the memory index"
+  assert_contains "$prompt" "RECALL before you open a file" Z Z1-rules "Z1 the prompt says: recall before you open a file"
+  assert_contains "$prompt" "more not shown" Z Z1-budget "Z1 past index_budget the index stops and counts the rest"
+  assert_not_contains "$prompt" "Read README.md and knowledge/" Z Z1-noread "Z1 the prompt no longer says to read knowledge/"
+  local idx
+  idx="$(printf '%s' "$prompt" | awk '/^## Your memory index/{p=1} p&&/^## Where you left off/{exit} p')"
+  if [ "${#idx}" -le 1024 ]; then ok "Z1 the index section is within index_budget (${#idx} <= 1024 bytes)" Z Z1-size
+  else bad "Z1 index within budget" Z Z1-size "index section is ${#idx} bytes, budget 1024"; fi
+
+  # Z2: recall ranks a title/scope/summary match first.
+  out="$(as_bot recall replica lag)"
+  if printf '%s' "$out" | head -1 | grep -qF "1. knowledge/replica-lag.md (knowledge)"; then
+    ok "Z2 recall ranks the matching document first" Z Z2-rank
+  else bad "Z2 recall ranking" Z Z2-rank "first line: $(printf '%s' "$out" | head -1)"; fi
+
+  # Z3: a section read returns that section only; a whole read past
+  # read_max says it was cut and where to read on.
+  out="$(as_bot read runbooks/db-failover.md --section Rollback)"
+  assert_contains "$out" "Repoint back only after" Z Z3-section "Z3 read --section returns the section"
+  assert_not_contains "$out" "Check replica lag" Z Z3-only "Z3 ... and nothing outside it"
+  out="$(as_bot read knowledge/network.md)"
+  assert_contains "$out" "TRUNCATED: showing bytes 0–" Z Z3-cut "Z3 a read past read_max says it was truncated"
+  assert_contains "$out" "== sections: Subnets | Peering | Firewall rules ==" Z Z3-sections "Z3 ... and names the sections"
+
+  # Z4: an oversized write is refused with the exact cap; nothing lands.
+  local big
+  big="$(printf -- '---\ntitle: Too big\nevidence: e\nconfidence: low\n---\n'; head -c 9000 /dev/zero | tr '\0' x)"
+  out="$(as_bot remember --kind knowledge --slug too-big --text "$big")"
+  assert_contains "$out" "over its cap of 8192 bytes (memory.max_bytes.knowledge)" Z Z4-cap "Z4 an oversized document is refused with its cap"
+  if cexec conductor-bots conductor bot memory cat memo knowledge/too-big.md --config /etc/conductor/bots.e2e.yaml >/dev/null 2>&1; then
+    bad "Z4 refused write left nothing" Z Z4-nothing "knowledge/too-big.md exists"
+  else ok "Z4 the refused document did not land" Z Z4-nothing; fi
+  out="$(as_bot handoff --text "$(head -c 5000 /dev/zero | tr '\0' h)")"
+  assert_contains "$out" "handoff is 5000 bytes, over its cap of 4096 bytes" Z Z4-handoff "Z4 an oversized handoff is refused with the limit"
+
+  # Z5: a fresh document is in the index and recalled at once (the index
+  # follows every commit).
+  as_bot remember --kind knowledge --slug kestrel --text "$(printf -- '---\ntitle: Kestrel queue\nevidence: e\nconfidence: low\nsummary: The kestrel queue drains at night.\n---\nbody\n')" >/dev/null
+  out="$(as_bot recall kestrel)"
+  assert_contains "$out" "1. knowledge/kestrel.md" Z Z5-fresh "Z5 a new document is recalled right after its commit"
+  out="$(cexec conductor-bots conductor bot memory index memo --kind knowledge --config /etc/conductor/bots.e2e.yaml 2>&1)"
+  assert_contains "$out" "knowledge/kestrel.md · knowledge · Kestrel queue · The kestrel queue drains at night." Z Z5-operator "Z5 the operator sees the session's index"
+
+  # Z6: a consolidation that ends without step.done (the fake cli agent
+  # never reports) consolidates and archives nothing.
+  as_bot case open --title "e2e case" >/dev/null
+  local cid
+  cid="$(as_bot cases | sed -n 's/.*"id": *"\(c[0-9]*\)".*/\1/p' | head -1)"
+  as_bot episode --case "$cid" --text "an episode for the archive check" >/dev/null
+  as_bot case close "$cid" --outcome "done" >/dev/null
+  cexec conductor-bots conductor bot consolidate memo --config /etc/conductor/bots.e2e.yaml >/dev/null 2>&1
+  if wait_for 60 audit_match conductor-bots '"event":"bot_consolidation"' '"outcome":"not done'; then
+    ok "Z6 a consolidation that never reported done consolidated nothing" Z Z6-consolidation
+  else bad "Z6 unreported consolidation" Z Z6-consolidation "no bot_consolidation 'not done' audit"; fi
+  out="$(cexec conductor-bots conductor bot memory ls memo --config /etc/conductor/bots.e2e.yaml 2>&1)"
+  assert_contains "$out" "log/" Z Z6-kept "Z6 the case log is still in the working tree"
+  if audit_match conductor-bots '"event":"bot_memory_archive"'; then
+    bad "Z6 nothing archived" Z Z6-noarchive "an archive commit was made"
+  else ok "Z6 nothing was archived" Z Z6-noarchive; fi
 }
 
 main "$@"

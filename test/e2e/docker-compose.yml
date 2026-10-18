@@ -127,6 +127,18 @@ services:
       - ./fixtures:/fixtures:ro
     command: ["bash", "/etc/conductor/entrypoint-conn.sh", "/etc/conductor/connectors.e2e.yaml"]
 
+  # The bots daemon (group Z): a bot with a seeded memory repo; its home
+  # session launches on the fake paseo, which records the prompt.
+  conductor-bots:
+    <<: *image
+    environment:
+      HOME: /home/conductor
+      FAKE_PASEO_STATE: /data/fakepaseo
+    volumes:
+      - ./config:/etc/conductor:ro
+      - ./fixtures:/fixtures:ro
+    command: ["bash", "/etc/conductor/entrypoint.sh", "/etc/conductor/bots.e2e.yaml"]
+
   # A daemon whose fake paseo fails a WORKTREE `workspace create` — group J2
   # (worktree creation fails → loud escalate, never a silent $HOME fallback).
   conductor-fail:
