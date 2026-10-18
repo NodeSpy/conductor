@@ -28,6 +28,8 @@ func TestCheckSemanticsIsMustUnderstand(t *testing.T) {
 		{"optional does not excuse a bad known key", `{"events":[{"name":"e","semantics":{"cursor":{"x":1},"optional":["cursor"]}}]}`, []string{`unknown field "x"`}},
 		{"bad completion", `{"events":[{"name":"e","semantics":{"completion":"sometimes"}}]}`, []string{"completion must be edge or level"}},
 		{"identity is known", `{"verbs":[{"name":"post","semantics":{"identity":{"username":"name"}}}]}`, nil},
+		{"attachments is known", `{"events":[{"name":"e","semantics":{"attachments":{"list":"files","fetch":"get","content":"c"}}}]}`, nil},
+		{"attachments decodes strictly", `{"events":[{"name":"e","semantics":{"attachments":{"list":"files","fetch":"get","content":"c","url":"u"}}}]}`, []string{`unknown field "url"`}},
 		{"identity is a map of strings", `{"verbs":[{"name":"post","semantics":{"identity":{"username":{"from":"name"}}}}]}`, []string{"verbs[post].semantics"}},
 	}
 	for _, c := range cases {
@@ -481,5 +483,25 @@ func TestValidateSemanticsIdentity(t *testing.T) {
 		if p := ValidateSemantics(post(Schema{"o": {Type: "string"}}, false, map[string]string{"o": a})); len(p) != 0 {
 			t.Fatalf("attribute %q: %q", a, p)
 		}
+	}
+}
+
+// attachments: list, fetch and content are required, and fetch names a verb
+// the plugin declares.
+func TestValidateSemanticsAttachments(t *testing.T) {
+	ev := func(a *AttachmentsSemantics) Decl {
+		return Decl{Verbs: []Verb{{Name: "file_get"}}, Events: []Event{{Name: "message", Semantics: &EventSemantics{Attachments: a}}}}
+	}
+	if p := ValidateSemantics(ev(&AttachmentsSemantics{List: "files", Fetch: "file_get", Content: "content", Name: "name", Size: "size"})); len(p) != 0 {
+		t.Fatalf("a good declaration reported %q", p)
+	}
+	for _, a := range []*AttachmentsSemantics{{Fetch: "file_get", Content: "c"}, {List: "f", Content: "c"}, {List: "f", Fetch: "file_get"}} {
+		if p := strings.Join(ValidateSemantics(ev(a)), "\n"); !strings.Contains(p, "events[message].semantics.attachments: list, fetch and content are required") {
+			t.Errorf("%+v: %q", a, p)
+		}
+	}
+	p := strings.Join(ValidateSemantics(ev(&AttachmentsSemantics{List: "f", Fetch: "download_all", Content: "c"})), "\n")
+	if !strings.Contains(p, `attachments.fetch: names verb "download_all", which the plugin does not declare`) {
+		t.Fatalf("an undeclared fetch verb: %q", p)
 	}
 }

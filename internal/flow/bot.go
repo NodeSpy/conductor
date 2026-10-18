@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/core"
 )
 
@@ -20,6 +21,10 @@ type BotRoute struct {
 	// Source is the event the run is for ("<instance>.<kind>"), stamped by
 	// the runner from the trigger — never from the step's options.
 	Source string
+	// Files fetches the files the event carries (its connector's declared
+	// `attachments`), within the receiving bot's caps; the bot service calls
+	// it once it knows which bot that is. nil: the event carries none.
+	Files func(ctx context.Context, maxFiles int, maxFile int64) ([]connector.File, error)
 }
 
 // BotRouter is the daemon's bot service as the flow runner sees it.
@@ -67,6 +72,13 @@ func (r *Runner) execBot(ctx context.Context, t core.Trigger, step config.Step, 
 	}
 	if t.Source == config.ManualSource {
 		rt.Source = "manual." + t.Variant
+	}
+	if connector.EventFileCount(t) > 0 && r.Conns != nil {
+		if in, ok := r.Conns.Get(t.Instance); ok {
+			rt.Files = func(ctx context.Context, maxFiles int, maxFile int64) ([]connector.File, error) {
+				return in.FetchAttachments(ctx, t, maxFiles, maxFile)
+			}
+		}
 	}
 	if shadow {
 		if rt.Team != "" {

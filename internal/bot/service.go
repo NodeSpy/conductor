@@ -15,6 +15,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/blob"
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/dispatch"
 	"github.com/NodeSpy/conductor/internal/store"
 )
@@ -78,10 +79,13 @@ type Event struct {
 	Title     string
 	Text      string // the payload (data)
 	Urgent    bool
-	// Attachments are files the event carried (an operator's, or a chat
-	// user's through a connector that declares them): checked against the
-	// bot's caps before the case opens.
+	// Attachments are files the event carried (an operator's): checked
+	// against the bot's caps before the case opens, and refused with it.
 	Attachments []AttachmentIn
+	// files fetches a connector event's files (flow.BotRoute.Files) once
+	// the receiving bot is known. A chat user's files that can't be taken
+	// don't refuse their message: it arrives with a note saying why.
+	files func(ctx context.Context, maxFiles int, maxFile int64) ([]connector.File, error)
 }
 
 // Service is the bot service.
@@ -745,6 +749,27 @@ func (s *Service) eventAttachments(ev Event) (types []string, msg string, err er
 func (s *Service) deliverCase(ctx context.Context, ev Event, who, class string, rt *store.Routing, pre string) (string, error) {
 	title := eventTitle(ev.Title, ev.Text, ev.Source)
 	src := srcOr(ev.Source)
+	filesNote := ""
+	if ev.files != nil && len(ev.Attachments) == 0 {
+		lim := s.Cfg().Bots[ev.Bot].Attachments
+		var err error
+		if lim.Off {
+			err = errors.New("this bot takes no attachments")
+		} else {
+			var got []connector.File
+			if got, err = ev.files(ctx, lim.MaxFilesOr(), lim.MaxFileOr()); err == nil {
+				for _, f := range got {
+					ev.Attachments = append(ev.Attachments, AttachmentIn{Name: f.Name, Data: f.Data})
+				}
+				if _, err = checkAttachments(lim, ev.Attachments); err != nil {
+					ev.Attachments = nil
+				}
+			}
+		}
+		if err != nil {
+			filesNote = "(The files that came with this event were not accepted: " + oneLine(err.Error(), 300) + ")"
+		}
+	}
 	types, msgID, err := s.eventAttachments(ev)
 	if err != nil {
 		return "", err
@@ -775,18 +800,18 @@ func (s *Service) deliverCase(ctx context.Context, ev Event, who, class string, 
 		ae["team"], ae["via"] = rt.Team, rt.Via
 	}
 	s.audit(ae)
-	note := ""
+	note := filesNote
 	atts, err := s.storeAttachments(ev.Bot, msgID, c.ID, ev.Attachments, types, attachOrigin{Source: src, Requester: who, Class: class})
 	if err != nil {
-		note = "(The event's files could not be stored: " + err.Error() + ")"
+		note = strings.TrimSpace(note + "\n(The event's files could not be stored: " + err.Error() + ")")
 	}
 	if ev.Urgent {
 		brief := "URGENT event — triage it now. Investigate, act within your autonomy, propose anything beyond it, and escalate per your charter if needed. Report what you found and did.\n\n" + EventMessage(c, ev.Text, "")
 		w, err := s.Spawn(ctx, Actor{Bot: ev.Bot, Role: config.BotRoleHome}, SpawnRequest{CaseID: c.ID, Brief: brief, byConductor: true, Attachments: attachmentIDs(atts)})
 		if err != nil {
-			note = "(conductor could not start a worker for this urgent event: " + err.Error() + " — handle it yourself.)"
+			note = strings.TrimSpace(note + "\n(conductor could not start a worker for this urgent event: " + err.Error() + " — handle it yourself.)")
 		} else {
-			note = fmt.Sprintf("(Urgent: conductor already started worker %s on this case; it will report here.)", w.ID)
+			note = strings.TrimSpace(note + fmt.Sprintf("\n(Urgent: conductor already started worker %s on this case; it will report here.)", w.ID))
 		}
 	}
 	if rt != nil {

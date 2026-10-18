@@ -45,8 +45,29 @@ type EventSemantics struct {
 	// feedback (an acknowledgement when work starts, a note when it
 	// finishes or fails). See OptionHook.
 	OptionHooks []OptionHook `json:"option_hooks,omitempty"`
+	// Attachments: the event can carry files (a chat message's uploads),
+	// which the engine fetches through a verb when it routes the event to a
+	// bot. See AttachmentsSemantics.
+	Attachments *AttachmentsSemantics `json:"attachments,omitempty"`
 	// Optional lists semantic keys an older host may ignore.
 	Optional []string `json:"optional,omitempty"`
+}
+
+// AttachmentsSemantics: the files an event carries. List names the event
+// fact holding them (a list of objects); Name and Size name each item's file
+// name and byte size. Fetch is the verb the engine calls for one file, with
+// Args (verb option → template over the item's fields); its output named
+// Content holds the file's bytes, base64-encoded. The engine fetches only
+// for an `assigned` target (the fetch spends the instance's credentials on
+// whatever file the event names), only files within the receiving bot's
+// caps, and treats the files as the sender's data.
+type AttachmentsSemantics struct {
+	List    string            `json:"list"`
+	Name    string            `json:"name,omitempty"`
+	Size    string            `json:"size,omitempty"`
+	Fetch   string            `json:"fetch"`
+	Args    map[string]string `json:"args,omitempty"`
+	Content string            `json:"content"`
 }
 
 // OptionHook: when the operator sets `options.<Option>` on a trigger using
@@ -405,7 +426,7 @@ type PreflightSemantics struct {
 var semanticKeys = map[string][]string{
 	"event": {"target", "revision", "checkout", "closes_target", "bound_to_target", "completion", "cursor",
 		"attempts", "priority", "feedback", "verification_failed", "remediate", "author", "labels",
-		"private", "secret", "conversation_reply", "option_hooks"},
+		"private", "secret", "conversation_reply", "option_hooks", "attachments"},
 	"verb": {"reads_revision", "mints_credential", "opens_conversation", "conversation_post", "host_only",
 		"target_args", "exposes", "identity"},
 	"connection": {"credentials", "scope", "poll", "translate", "listeners", "preflight"},
@@ -616,6 +637,14 @@ func ValidateSemantics(d Decl) []string {
 		}
 		if s.Priority != "" && s.Priority != "interactive" && s.Priority != "normal" {
 			p = append(p, path+".priority: must be interactive or normal")
+		}
+		if a := s.Attachments; a != nil {
+			if a.List == "" || a.Fetch == "" || a.Content == "" {
+				p = append(p, path+".attachments: list, fetch and content are required")
+			}
+			if a.Fetch != "" {
+				need(path+".attachments.fetch", a.Fetch)
+			}
 		}
 		if s.Author != nil && s.Author.Login == "" {
 			p = append(p, path+".author.login: required")

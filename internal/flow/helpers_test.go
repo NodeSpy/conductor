@@ -134,6 +134,13 @@ var fakeDecl = &connector.TypeDecl{
 			Semantics: &sdk.VerbSemantics{Identity: map[string]string{"username": "name", "icon": "avatar_preset", "color": "color"}},
 		},
 		{
+			// An event's file, base64 in `content`: the fetch verb of an
+			// event's `attachments` semantic.
+			Name: "file_get", Desc: "returns one of an event's files",
+			Options: connector.Schema{"id": {Type: connector.TString}},
+			Outputs: connector.Schema{"content": {Type: connector.TString}},
+		},
+		{
 			Name: "download", Desc: "returns raw bytes as a declared binary output (#36 §21)",
 			Options:   connector.Schema{"url": {Type: connector.TString}},
 			Outputs:   connector.Schema{"body": {Type: connector.TAny}},

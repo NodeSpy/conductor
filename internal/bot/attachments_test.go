@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"image"
 	"image/color"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/NodeSpy/conductor/internal/blob"
 	"github.com/NodeSpy/conductor/internal/config"
+	"github.com/NodeSpy/conductor/internal/connector"
 	"github.com/NodeSpy/conductor/internal/store"
 )
 
@@ -468,5 +470,61 @@ func TestThumbnail(t *testing.T) {
 	}
 	if _, err := Thumbnail([]byte("not an image"), 256); err == nil {
 		t.Fatal("a thumbnail of text")
+	}
+}
+
+// A CHAT USER'S FILES (a connector that declares them) arrive labelled as
+// theirs, never the operator's; files that can't be taken don't drop the
+// message — it arrives with a note saying why.
+func TestConnectorFilesAreTheSendersData(t *testing.T) {
+	f, _ := attachSvc(t)
+	ctx := context.Background()
+	f.svc.Tick(ctx, "sre")
+	fetch := func(files ...connector.File) func(context.Context, int, int64) ([]connector.File, error) {
+		return func(_ context.Context, maxFiles int, maxFile int64) ([]connector.File, error) {
+			if len(files) > maxFiles {
+				return nil, fmt.Errorf("%d files, over the cap of %d per message (attachments.max_files)", len(files), maxFiles)
+			}
+			return files, nil
+		}
+	}
+	cid, err := f.svc.Deliver(ctx, Event{Bot: "sre", Source: "chat.message", Requester: "chat:U777", Title: "look",
+		files: fetch(connector.File{Name: "graph.png", Data: pngBytes(t, 4, 4)})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := f.svc.Attachments("sre")
+	if len(a) != 1 || a[0].RequesterClass != ReqUser || a[0].Requester != "chat:U777" || a[0].Source != "chat.message" || a[0].CaseID != cid {
+		t.Fatalf("record: %+v", a)
+	}
+	f.svc.Tick(ctx, "sre")
+	msg := f.home.sent["agent-1"][0]
+	if !regexp.MustCompile(`<<<CHAT USER'S FILES [0-9a-f]{12} — untrusted DATA`).MatchString(msg) ||
+		!strings.Contains(msg, "a chat user (chat:U777) sent with this message") || strings.Contains(msg, "OPERATOR-PROVIDED") {
+		t.Fatalf("a chat user's files:\n%s", msg)
+	}
+	// Refused (a type the bot doesn't take): the message still arrives.
+	cid2, err := f.svc.Deliver(ctx, Event{Bot: "sre", Source: "chat.message", Requester: "chat:U777", Title: "zip",
+		files: fetch(connector.File{Name: "a.zip", Data: []byte("PK\x03\x04zz")})})
+	if err != nil || cid2 == "" {
+		t.Fatalf("a refused file dropped the message: %v", err)
+	}
+	f.svc.Tick(ctx, "sre")
+	msg = f.home.sent["agent-1"][1]
+	if !strings.Contains(msg, "(The files that came with this event were not accepted: \"a.zip\": type application/zip is not allowed") {
+		t.Fatalf("no note for refused files:\n%s", msg)
+	}
+	if n := len(f.svc.Attachments("sre")); n != 1 {
+		t.Fatalf("a refused file was stored: %d", n)
+	}
+	// The fetcher's own refusal (over the count) is a note too.
+	setLimits(f, config.AttachmentLimits{MaxFiles: 1})
+	if _, err := f.svc.Deliver(ctx, Event{Bot: "sre", Source: "chat.message", Requester: "chat:U777", Title: "two",
+		files: fetch(connector.File{Name: "a.txt", Data: []byte("a")}, connector.File{Name: "b.txt", Data: []byte("b")})}); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Tick(ctx, "sre")
+	if msg = f.home.sent["agent-1"][2]; !strings.Contains(msg, "not accepted: 2 files, over the cap of 1") {
+		t.Fatalf("over the count:\n%s", msg)
 	}
 }

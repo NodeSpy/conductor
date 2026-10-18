@@ -150,6 +150,12 @@ func validateInstanceRefinement(typeDecl, instanceDecl *sdk.Decl) error {
 				problems = append(problems, fmt.Sprintf(
 					"event %q: a brand-new event (absent from the type-level declaration) declares option_hooks — not permitted", ev.Name))
 			}
+			// attachments invokes a verb too (its fetch), on the instance's
+			// credentials: the same class.
+			if ev.Semantics != nil && ev.Semantics.Attachments != nil {
+				problems = append(problems, fmt.Sprintf(
+					"event %q: a brand-new event (absent from the type-level declaration) declares attachments — not permitted", ev.Name))
+			}
 			continue
 		}
 		if msg, ok := eventSemanticsRefine(te.Semantics, ev.Semantics); !ok {
@@ -223,6 +229,16 @@ func eventSemanticsRefine(t, i *sdk.EventSemantics) (string, bool) {
 	}
 	if !optionHooksEqual(tOH, iOH) {
 		return "option_hooks differ from the type-level declaration's same-named event", false
+	}
+	var tAt, iAt *sdk.AttachmentsSemantics
+	if t != nil {
+		tAt = t.Attachments
+	}
+	if i != nil {
+		iAt = i.Attachments
+	}
+	if !reflect.DeepEqual(tAt, iAt) {
+		return "attachments differ from the type-level declaration's same-named event", false
 	}
 	return "", true
 }

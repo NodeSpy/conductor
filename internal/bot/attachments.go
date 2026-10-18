@@ -417,6 +417,8 @@ func attachmentLabel(class string) string {
 		return "OPERATOR-PROVIDED FILES"
 	case "user":
 		return "CHAT USER'S FILES"
+	case "event":
+		return "EVENT FILES"
 	}
 	return "FILES FROM " + strings.ToUpper(class)
 }
@@ -456,6 +458,9 @@ func AttachmentSection(atts []store.Attachment, asImages map[string]bool, passed
 		who = "a chat user (" + atts[0].Requester + ") sent"
 	default:
 		who = "came from " + atts[0].Source
+		if class == "event" {
+			who = "came with an event from " + atts[0].Source
+		}
 	}
 	pass := ""
 	if passedBy != "" {
