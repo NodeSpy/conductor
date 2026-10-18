@@ -178,8 +178,8 @@ arm's own `policy:` (most specific wins).
 This single rule decides what a pack may *ship* vs must *bind*:
 
 - **Define-in-pack** (shipped, namespaced, overridable): `workflows:`, `models:`
-  (fleets), `workflows:`, `policy:`, `checks:`, and its disarmed `triggers:`.
-  Pure behavior.
+  (fleets), `policy:`, `checks:`, its disarmed `triggers:`, and bot templates
+  (`bots:`, [below](#bot-templates)). Pure behavior.
 - **Bind-only** (declared in `requires:`, wired in the block, **never shipped**):
   `connectors:`, `secrets:`, `vaults:`, `stores:`, `runtimes:`, `hosts:`,
   `handoffs:`. Anything carrying credentials, endpoints, or infra identity.
@@ -443,6 +443,48 @@ surface, and that is the only place consent lives.
 Guarantee: a freshly-added pack does **nothing** until you arm a trigger, and a
 github trigger **cannot be armed at all** without explicitly scoping its repos.
 
+## Bot templates
+
+A pack can ship **bots** the way it ships workflows: as templates an
+operator instantiates. A template carries a charter, typed seed documents,
+collections, the connectors it needs (inputs), the verbs it requests — each
+with a maximum tier — and suggested triggers, proactive checks, runtime and
+model:
+
+```yaml
+bots:
+  sre:
+    description: First-line SRE
+    charter_file: charter.md
+    seed: seed
+    connectors: { pagerduty: { use: pagerduty } }
+    verbs:
+      pagerduty.get_incident: observe
+      pagerduty.acknowledge: { max: reversible, why: "stop the re-notifications" }
+    triggers:
+      - { name: page, on: pagerduty.incident, title: "page: {{.title}}", urgent: true }
+```
+
+The operator instantiates it in their own `bots:`, naming it the way a
+pack's other members are named — `<pack instance>/<template>`:
+
+```yaml
+packs:
+  sre: { use: conductor-packs/sre-bot, version: "~> 2.0" }
+bots:
+  platform-sre: { use: sre/sre, grant: { pagerduty.get_incident: observe } }
+```
+
+The bot is the operator's config, not the pack's: a template only
+**requests**, and every verb it requests is active only where the bot's
+`grant:` says so. It follows define behavior / bind environment strictly —
+a template that names operators, a team, a folder, connector bindings,
+secrets, autonomy, the sandbox or egress is rejected at load, by name. The
+pack instance carries the version, hold, trust and lockfile for every bot
+made from it, and a newer version reaches those bots' memory only as a
+proposal their operators approve. `conductor bot templates` lists installed
+templates and the registry's, with search. See [[Bot-Templates]].
+
 ## Composition and dependencies
 
 - **Workflows are addressable by qualified name** (`review/review-flow`) — call
@@ -500,7 +542,13 @@ conductor pack show <pack-dir>    # render a pack's docs: settings, requires, ex
 conductor pack remove <instance>  # clear a pack's vendored tree + lockfile entries (alias: rm)
 conductor pack update [--allow-unlisted] # re-resolve the packs: block and diff the lockfile
 conductor update --packs          # alias for `conductor pack update`
+conductor bot templates [--search …] # bot templates installed packs and the registry ship ([[Bot-Templates]])
 ```
+
+`conductor pack lint` also checks a pack's bot templates: the keys a
+template may not set, its file references (inside the pack), its requested
+verbs (inputs it declares, tiers it may name), and every seed document
+against its kind and size cap.
 
 `conductor pack add` and `remove` do **not** edit your config: `add` prints a
 block for you to paste (so you review the binds first), and `remove` clears the
@@ -607,4 +655,6 @@ The following are **not yet** implemented and are called out honestly:
   namespace. (The manifest-level `memory:` *backend* is bind-only and rejected —
   it selects a store/dir, which is environment.)
 - **Registry / discovery search** — packs are URL/path-addressable; there is no
-  central index yet.
+  central index yet. Bot templates are the exception: `conductor bot templates
+  --search` scans a registry (the official one, or `--registry <dir|git url>`)
+  for the templates its packs ship.

@@ -378,6 +378,130 @@ budget and a full handoff.
   call, and is deterministic to test. Uncommitted files in a hand-managed
   memory repo are not indexed: conductor's memory is what is committed.
 
+## Community bots: templates in packs
+
+`internal/config/bottemplate*.go`, `internal/bot/template.go`,
+`cmd/conductor/bottemplates.go`. A pack can ship bot TEMPLATES (`bots:` in its
+manifest); an operator instantiates one into a bot. Packs already had the
+whole distribution story — remote fetch, version constraints, `hold:`, the
+lockfile, the registry, trust at install — so templates ride on it instead of
+growing a second channel.
+
+### The config shape, and why
+
+```yaml
+packs:
+  sre: { use: conductor-packs/sre-bot, version: "~> 2.0" }
+bots:
+  platform-sre: { use: sre/sre, connectors: { pagerduty: pd }, grant: { pagerduty.get_incident: observe } }
+```
+
+- **`use:` on the bot.** `use:` is already the one field for "what implements
+  this" on connectors, runtimes and packs; a template implements a bot.
+- **`<pack instance>/<template>`, not a remote ref.** Everything a pack
+  defines is addressed qualified by its instance (`call: review/review-flow`);
+  a template is one more member. Naming the instance, never
+  `conductor-packs/sre-bot/sre`, keeps distribution in one place: the version,
+  hold, trust decision and lockfile pin live on the pack instance, and every
+  bot from a template shares them — five bots from `sre/sre` move together on
+  `pack update`, or not at all under `hold:`. A remote `use:` on each bot would
+  have been a second fetch path with per-bot versions and per-bot trust.
+- **Top-level `bots:`, not `packs.<i>.bots`.** A bot is the operator's
+  config: teams route to it by name, triggers deliver to it, operators approve
+  for it, and nothing a pack ships may decide any of that. Instantiating
+  inside the packs block would have namespaced the bot (`sre/platform-sre`),
+  which bot names cannot carry, and put operator decisions inside a pack's
+  override surface.
+- **`connectors:` binds, as on a pack instance;** an input of a type the
+  operator has exactly one connector of binds itself (`autoBindConnectors`'s
+  rule).
+- **`grant:` is the only source of a template bot's verbs, in the template's
+  vocabulary.** Grants stay stable across rebinding, compare directly against
+  the requests, and are expanded at load onto the bound connector into the
+  bot's `skill.verbs` and `autonomy.tiers` (`instantiateTemplate`).
+
+### Requests, grants, and what "read-only" means
+
+A template's maximum tiers are CLAIMS by a stranger: connectors do not
+declare which verbs are read-only, so conductor cannot check that a verb
+labeled observe is harmless. So no claim takes effect by itself. `conductor
+bot new` writes the observe requests into `grant:` — the operator reviews them
+in the diff — and nothing else ever activates a verb: no grant, no verb, even
+when the template requests it. A later version that relabels a verb or adds
+one changes nothing until the operator writes a grant; `validate` shows the
+new requests as "requested, not granted". A grant looser than the request's
+maximum is cut to it at load (refused at write time by `bot new`/`bot grant`)
+— cut rather than refused at load because a pack update can lower a maximum
+under an existing config, and a load error there would hold an auto-updating
+daemon in degraded boot. `GrantAllowed` is the one rule: the same tier or
+stricter in `BotTiers` order, and a `commit_money` request only as
+`commit_money` or `never` (`propose` would drop the spend cap).
+
+Widenings are computed, not declared: a grant above observe, an operator's own
+verb, practice mode off, promotion. `BotTemplateNotes` prints them at
+`validate`; plans carry `widening: true` for the dashboard's passkey.
+
+### What a template cannot set
+
+`forbiddenTemplateKeys` refuses, by name and before strict decoding, every key
+that is the operator's: operators, approvers, team, folder, secrets, skill,
+grant, autonomy, isolation, browser, network, egress, memory_repo, seed_dir,
+memory, peers, terraform, home, worker, disabled, use — and a proactive
+budget. The template struct does not have those fields at all, so strict
+decoding is the backstop: a key the list misses is still an unknown-field
+error. File references (`charter_file`, `seed`, a collection's `from:`, a
+checklist file) must stay inside the vendored pack, symlinks included.
+
+### Memory, charter and updates
+
+- The template's charter lands in the memory repo as `charter/charter.md`, a
+  `charter` kind whose only writer is `system`: no bot writes it (and
+  `config.BotCharter` reads it for a template bot without its own charter).
+  It is excluded from the recall index (the prompt carries it).
+- The first commit seeds charter and documents and names the template
+  (`Bot-Template:`, `Template-Digest:` trailers).
+- `CheckTemplate` (at start, and once per reloaded config — a newer vendored
+  pack arrives only through `init`/`pack update` and a reload) compares each
+  template file with memory. A path counts as applied when memory holds
+  exactly the template's text; otherwise, if the template text differs from
+  what was last applied there (`TemplateState.Applied`, SHA-256 per path), it
+  is a change. All changes go into ONE `template` proposal with the memory
+  content and hash each was proposed against. Same change set → no new
+  proposal; denied → its digest is remembered; a newer version supersedes a
+  pending one.
+- `Executor.execTemplate` re-checks the digest, and `LandTemplate` refuses if
+  any document moved since the proposal (hash mismatch, or removed) — the bot's
+  later evolution is never overwritten — then writes all of them in one
+  operator commit through the kinds' chokepoint.
+- Practice mode does not hold a template proposal (`Decide`): practice mode is
+  about what the bot does; this is the operator deciding about memory.
+- Provenance (`BotOrigin`: pack, template, version, source, digest, bindings,
+  read-only, widenings, ungranted) is computed at load; the ledger's
+  `TemplateState` keeps the applied version. `conductor bot show` and the
+  control socket return both.
+
+### Plans
+
+`bot new` / `bot grant` splice text into the operator's file
+(`InsertTopLevel`, `SetBotGrants`) so nothing else changes, write the result
+beside the config, validate it there, and print a diff (`bot.UnifiedDiff`).
+The CLI runs the full `validate` pipeline on the copy; the daemon's plans for
+the dashboard (control socket `template_plan`, `grant_plan`) load and
+validate the copy without building connectors — the daemon is already running
+them, and a second build in one process collides with its own plugin
+registrations. Suggested triggers are written disarmed; one whose event is
+taken (a cron schedule drives exactly one trigger) is skipped with a note,
+which is what lets several bots come from one template.
+
+### Left out
+
+- Templates of a pack's DEPENDENCIES are not addressable (only top-level
+  instances): a bot names `<instance>/<template>`, one level.
+- A registry is scanned, not indexed: one shallow clone cached an hour under
+  the state dir, or a directory.
+- Seed documents are validated against kinds by `pack lint` and at seeding,
+  not at config load (the config package cannot import the kinds).
+
 ## Folders: display only
 
 `folder:` on a bot or a team (`internal/config/folders.go`) exists so an

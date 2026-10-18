@@ -1462,6 +1462,21 @@ bots:
     #   # stateful: [aws_db_instance, aws_s3_bucket]      # default: built-in databases/buckets/disks/keys list
     #   # allow_destroy: [module.old.aws_s3_bucket.logs] # addresses a plan may still destroy/replace
     #   # timeout: 30m
+  # A COMMUNITY BOT: one instantiated from a bot template a pack ships (wiki:
+  # Bot-Templates). The pack instance (packs: above) carries its version, hold
+  # and trust; the template supplies the charter, seed memory, collections and
+  # REQUESTS verbs — none active until granted here. It starts in practice mode
+  # with its read-only verbs; each grant above observe is a widening `conductor
+  # validate` names. `conductor bot new <name> --from sre/sre` writes this for you,
+  # on a copy of the config, shown as a diff.
+  # oncall-sre:
+  #   use: sre/sre                               # <pack instance>/<template>; packs: { sre: { use: conductor-packs/sre-bot } }
+  #   connectors: { pagerduty: pd }              # bind its inputs (one connector of the type binds itself)
+  #   grant:                                     # template vocabulary: <input>.<verb> → tier, at most its maximum
+  #     pagerduty.get_incident: observe
+  #     pagerduty.list_incidents: observe
+  #     pagerduty.acknowledge: reversible        # a widening
+  #   # description:, escalation:, operators:, team:, folder:, autonomy: … — yours, and yours win
 
 teams:
   platform:
