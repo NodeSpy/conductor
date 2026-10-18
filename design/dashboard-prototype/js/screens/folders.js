@@ -136,7 +136,7 @@
     const row = (b) => { const task = D.cases.find((c) => c.bot === b.name && c.status === 'open'), n = need(b), team = teamOf2(b), folder = UI.folderOfBot(b.name);
       const doing = b.shadow ? UI.statusMark('shadow', 'Practice mode') : b.home === 'live' ? UI.statusMark('run', 'Running') : UI.statusMark('idle', 'Parked');
       return `<li class="dl-need bot-li${n ? ' attn' : ''}"${n ? ' data-s="ember"' : ''}><a class="dl-need-a" href="#/bots/${b.name}"><span class="dl-ng"><span class="dl-bot-av sm">${esc(b.name.split(/[-_]/).map((w) => w[0]).join('').slice(0, 2))}</span></span>
-        <span class="dl-nt"><b>${esc(b.name)}</b><span class="dl-why">${b.home === 'live' && task ? `Working on: ${esc(task.title)}` : esc(b.desc || '')}</span><span class="bot-where">${[folder, team ? `team ${esc(team)}` : ''].filter(Boolean).join(' · ') || 'not in a folder'}</span></span>
+        <span class="dl-nt"><b>${esc(b.name)}</b><span class="dl-why">${b.home === 'live' && task ? `Working on: ${esc(task.title)}` : esc(b.desc || '')}</span>${UI.factsLine([team ? { icon: 'obj-team', value: team, href: `#/teams/${team}`, pri: 1, label: 'Team' } : null, folder ? { icon: 'folder', value: folder.split('/').join(' ▸ '), href: `#/folders/${encodeURIComponent(folder)}`, pri: 2, label: 'Folder' } : { icon: 'folder', value: 'not in a folder', pri: 3 }])}</span>
         <span class="dl-age">${doing}</span><span class="dl-na">${n ? UI.statusMark('ember', `${n} need${n === 1 ? 's' : ''} you`) : ''}</span></a></li>`; };
     const shown = bots.filter(keep);
     const body = () => `${shown.length < bots.length ? `<p class="need-shown">Showing ${shown.length} of ${bots.length} · <button class="link" data-act="bv-clear">Clear</button></p>` : ''}<ul class="dl-list">${shown.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name)).map(row).join('') || '<li class="dl-empty-row">No bot matches.</li>'}</ul>`;
@@ -195,6 +195,7 @@
       <div class="small muted" style="margin-top:12px">Folders are organization only: no permissions, defaults or behavior.</div></div>`;
   }
   UI.route('bots', () => page(''), { nav: 'bots' });
+  UI.botsPage = () => page(''); // drawn under the New bot sheet
   UI.route('folders/:path/:tab?', ({ path, tab }) => folderView(path, tab), { nav: 'bots' });
   document.addEventListener('toggle', (e) => { if (e.target.matches && e.target.matches('details.peers-panel')) { D.prefs.peersOpen = e.target.open; S.save(); } }, true);
 

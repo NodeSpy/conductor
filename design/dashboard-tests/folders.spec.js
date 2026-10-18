@@ -104,7 +104,7 @@ test('folder is one menu in the filter bar where it helps; no standalone folder 
 const wlRow = (page, name) => page.locator(`#wl-body tr[data-row^="${name} "]`);
 test('workflows in folders: move one through the diff; folder filters and search across folders', async ({ page }) => {
   await go(page, '#/workflows', { fresh: true });
-  await expect(wlRow(page, 'ci-fixer').locator('[data-l="folder"]')).toContainText('work/platform');
+  await expect(wlRow(page, 'ci-fixer').locator('.fx-i[title="Folder"]')).toContainText('work ▸ platform');
   if (!isPhone(page)) {
     await page.locator('.wfn[data-f="work/platform"]').click();
     await expect(wlRow(page, 'ci-fixer')).toBeVisible();
@@ -128,13 +128,13 @@ test('workflows in folders: move one through the diff; folder filters and search
   await expect(page.locator('.diff')).toContainText('# folder: work/web');
   await applyStaged(page);
   await go(page, '#/workflows');
-  await expect(wlRow(page, 'ci-fixer').locator('[data-l="folder"]')).toContainText('work/web');
+  await expect(wlRow(page, 'ci-fixer').locator('.fx-i[title="Folder"]')).toContainText('work ▸ web');
 });
 
 test('a pack workflow sits under its pack until placed by an override; a bot workflow follows its bot', async ({ page }) => {
   await go(page, '#/workflows', { fresh: true });
-  await expect(wlRow(page, 'pr-review').locator('[data-l="folder"]')).toContainText('packs/review');
-  await expect(wlRow(page, 'bot:platform-sre').locator('[data-l="folder"]')).toContainText('work/platform');
+  await expect(wlRow(page, 'pr-review').locator('.fx-i[title="Folder"]')).toContainText('packs ▸ review');
+  await expect(wlRow(page, 'bot:platform-sre').locator('.fx-i[title="Folder"]')).toContainText('work ▸ platform');
   await page.locator('[data-act="wl-more"][data-name="bot:platform-sre"]').click();
   await expect(page.locator('#pop-menu button', { hasText: 'Move to a folder' })).toHaveAttribute('data-reason', /move the bot/);
   await page.keyboard.press('Escape');
@@ -151,8 +151,8 @@ test('a pack workflow sits under its pack until placed by an override; a bot wor
   await go(page, '#/teams/platform');
   await page.evaluate(() => { const c = JSON.parse(JSON.stringify(S.staged('teams', 'platform'))); c.folder = 'work/sre'; S.stage('teams', 'platform', c); });
   await go(page, '#/workflows');
-  await expect(wlRow(page, 'bot:platform-sre').locator('[data-l="folder"]')).toContainText('work/sre');
-  await expect(wlRow(page, 'pr-review').locator('[data-l="folder"]')).toContainText('work/platform');
+  await expect(wlRow(page, 'bot:platform-sre').locator('.fx-i[title="Folder"]')).toContainText('work ▸ sre');
+  await expect(wlRow(page, 'pr-review').locator('.fx-i[title="Folder"]')).toContainText('work ▸ platform');
 });
 
 test('a folder shows everything in it: bots, teams and workflows, roll-ups and what needs you there', async ({ page }) => {

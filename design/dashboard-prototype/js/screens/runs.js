@@ -59,7 +59,10 @@
   const target = (r) => (UI.runTarget(r) ? esc(UI.runTarget(r)) : UI.eventLabel(r) ? esc(UI.eventLabel(r).toLowerCase()) : /sweep/.test(r.trigger) ? 'routine sweep' : /spawn/.test(r.trigger) ? 'a task it started itself' : botOf(r) ? 'its own work' : /schedule|cron/.test(r.trigger) ? 'on its schedule' : 'run by hand');
   const reason = (r) => { if (r.status === 'wait') return 'Waiting for you: approve, revise or discard its draft.';
     const e = UI.plainError ? UI.plainError(r) : r.error || ''; return `${r.failed_step ? `Failed at “${esc(r.failed_step)}”` : 'Failed'}${e ? `: ${esc(e)}` : ''}${/\.$/.test(e) ? '' : '.'}`; };
-  const runName = (r) => `<b>${esc(r.workflow.replace(/^bot:/, ''))}</b> <span class="tgt">${target(r)}</span>`;
+  // a run's name, then its facts (the bot, what the connector says it's about); with nothing to show, its target in words
+  const runFacts = (r) => { const b = UI.botOfRun(r); return [b && !String(r.workflow).startsWith('bot:') ? { icon: 'obj-bot', value: b, href: `#/bots/${b}`, pri: 2, label: 'Bot' } : null, ...UI.itemFacts(r).map((f) => ({ ...f, pri: /#/.test(f.value) ? 1 : 3 }))].filter(Boolean); };
+  const runName = (r) => `<b>${esc(r.workflow.replace(/^bot:/, ''))}</b>${runFacts(r).length ? '' : ` <span class="tgt">${target(r)}</span>`}`;
+  const runFx = (r) => UI.factsLine(runFacts(r));
   const statusCell = (r) => UI.statusMark(UI.runS(r.status), UI.runWord(r.status));
   // the same verbs as Needs you, every row's button the same size (rows are peers)
   const actBtn = (r) => `<a class="btn sm secondary row-act" href="#/runs/${r.id}">${r.status === 'wait' ? 'Answer' : 'See why'}</a>`;
@@ -73,7 +76,7 @@
   function tableBody(G) {
     const row = (r, rich) => `<tr class="${rich ? 'attn' : ''}" data-href="#/runs/${r.id}"${rich ? ` data-s="${edge(r)}"` : ''}>
       <td class="sel">${cbx(r)}</td>
-      <td class="run">${runName(r)}${rich ? `<span class="reason">${reason(r)}</span>` : ''}</td>
+      <td class="run">${runName(r)}${rich ? `<span class="reason">${reason(r)}</span>` : ''}${runFx(r)}</td>
       <td class="st-c">${statusCell(r)}</td>
       <td class="when nowrap">${UI.agoText(r.started)}</td>
       <td class="num">${r.status === 'run' || r.status === 'wait' ? `<span class="dl-sub">${UI.runningFor(r.started)} so far</span>` : UI.runDur(r)}</td>
@@ -89,7 +92,7 @@
   }
   function phoneBody(G) {
     // on a phone: what needs attention and what's running; finished runs are one line until you ask; no bulk selection
-    const li = (r, rich) => `<li class="${rich ? 'attn' : ''}"${rich ? ` data-s="${edge(r)}"` : ''}><a href="#/runs/${r.id}"><span class="dl-nt"><b>${runName(r)}</b>${rich ? `<span class="reason">${reason(r)}</span>` : ''}${statusCell(r)}</span><span class="dl-age">${UI.agoText(r.started).replace(' ago', '')}</span></a></li>`;
+    const li = (r, rich) => `<li class="${rich ? 'attn' : ''}"${rich ? ` data-s="${edge(r)}"` : ''}><a href="#/runs/${r.id}"><span class="dl-nt"><b>${runName(r)}</b>${rich ? `<span class="reason">${reason(r)}</span>` : ''}${runFx(r)}${statusCell(r)}</span><span class="dl-age">${UI.agoText(r.started).replace(' ago', '')}</span></a></li>`;
     const grp = (t, xs, rich, total = xs.length) => (xs.length ? `<h3 class="ph-g">${t}<span>${total}</span></h3><ul class="dl-list dl-runs-phone">${xs.map((r) => li(r, rich)).join('')}</ul>` : '');
     const shown = G.done.slice(0, av.limit), more = G.done.length - shown.length;
     const doneLine = G.done.length ? `<button type="button" class="ph-done" data-act="act-done-toggle" aria-expanded="${!!av.showDone}"><span><b>${G.done.length} finished</b> · ${UI.runParts(G.done)}</span><span class="dl-link">${av.showDone ? 'Hide' : 'Show'}</span></button>` : '';

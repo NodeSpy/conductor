@@ -346,7 +346,7 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 .sec-list { padding: 0 8px; }
 .sec-line { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; }
 .sec-main { all: unset; box-sizing: border-box; display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(0, 1.4fr) minmax(150px, .8fr); gap: 16px; align-items: center; padding: 10px 10px; cursor: pointer; border-radius: var(--radius-control); min-height: 48px; text-align: left; }
-.sec-main:hover { background: var(--color-state-hover); }
+button.sec-main:hover { background: var(--color-state-hover); }
 .sec-main:focus-visible { outline: var(--border-focus) solid var(--color-focus-ring); }
 .sec-name { display: grid; gap: 1px; min-width: 0; } .sec-name b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sec-vault { display: inline-flex; align-items: center; gap: 6px; font: var(--type-caption); color: var(--color-text-secondary); }
@@ -635,3 +635,19 @@ button.dl-tile { font: inherit; text-align: left; color: inherit; cursor: pointe
 @media (max-width: 720px) { .svc-list > .svc-head { flex-wrap: wrap; } .svc-list > .dl-conn, .svc-list > .svc-empty { margin-left: 0; } }
 @media (max-width: 720px) { .vaults .section-title, #env .section-title { flex-wrap: wrap; } .vaults .section-title h2, #env .section-title h2 { flex: 1 1 100%; } .vaults-add { margin-left: 0; }
   .svc-head .svc-name { flex: 1 1 160px; } .svc-head .dl-na { margin-left: auto; } }
+/* the facts line (UI.facts): one object icon and one value per fact, quiet ink, gaps not separators; a fact that
+   leads somewhere is underlined; a risky action in bold ink; production with the warning mark in its colour. On a
+   phone the low-value facts (pri 3) drop first and the rest wrap under. */
+.fx { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 14px; margin-top: 5px; font-size: 12.5px; line-height: 1.4; color: var(--color-text-secondary); font-family: var(--font-family-sans, inherit); }
+.fx-i { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; }
+.fx-i > svg { width: 13px; height: 13px; flex: none; color: var(--color-icon-default); }
+.fx-i.ln { color: var(--color-text-primary); text-decoration: underline; text-decoration-color: var(--color-border-strong); text-underline-offset: 3px; cursor: pointer; }
+.fx-i.ln:hover { text-decoration-color: currentColor; }
+.fx-i.ln:focus-visible { outline: var(--border-focus) solid var(--color-focus-ring); outline-offset: 2px; border-radius: 2px; }
+.fx-i.hi { color: var(--color-text-primary); font-weight: var(--font-weight-bold); } .fx-i.hi > svg { color: var(--color-text-primary); }
+.fx-i.prod { color: var(--color-status-warning-fg); font-weight: var(--font-weight-bold); }
+.fx-g { display: inline-flex; width: 13px; height: 13px; } .fx-g svg { width: 13px; height: 13px; }
+td.run .fx { margin-top: 4px; }
+@media (max-width: 720px) { .fx { gap: 2px 12px; } .fx-i[data-pri="3"] { display: none; }
+  /* on a phone a row is one tap target: its facts are plain there (a small inline link inside it would steal the tap) */
+  a .fx-i.ln, [data-href] .fx-i.ln { pointer-events: none; text-decoration: none; color: inherit; } }

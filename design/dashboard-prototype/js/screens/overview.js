@@ -14,9 +14,18 @@
   const MARK = { approval: 'ember', failed: 'fail', needs_input: 'ember', browser: 'ember' };
   // the rows of a list are peers: every row's action looks the same, in a fixed-width column so the times and the
   // buttons line up; what's more urgent says so with its mark and its place in the list, never with a louder button
+  /** An item's facts: who (the bot, the workflow), where (what the connector says it's about, a site), the environment,
+      and what kind of action, from the item's own source (the approval, the run, the sign-in). */
+  UI.needFacts = (a) => { const href = String(a.href || ''), bot = UI.botOfHref(href), botF = (b) => (b ? { icon: 'obj-bot', value: b, href: `#/bots/${b}`, pri: 1, label: 'Bot' } : null);
+    const pm = href.match(/proposals\/([\w-]+)/), p = pm && (D.proposals || []).find((x) => x.id === pm[1] && (!bot || x.bot === bot));
+    if (p) return [botF(p.bot), UI.envFact(p.env), ...UI.verbFacts(p.verb, p.options), UI.actionFact(p.verb, p.env, p.tier)];
+    const rm = href.match(/#\/runs\/([\w-]+)/), r = rm && D.runs.find((x) => x.id === rm[1]);
+    if (r) { const wf = r.workflow.replace(/^bot:/, ''), b = UI.botOfRun(r); return [b ? botF(b) : { icon: 'obj-workflow', value: wf, href: `#/workflows/${encodeURIComponent(r.workflow)}`, pri: 1, label: 'Workflow' }, ...UI.itemFacts(r).map((f) => ({ ...f, pri: /#/.test(f.value) ? 1 : 3 }))]; }
+    const site = ((a.sub || '').match(/https?:\/\/([^/\s]+)/) || (a.plain || '').match(/on ([\w.-]+\.[a-z]{2,})/) || [])[1];
+    return [botF(bot), site ? { icon: 'globe', value: site, pri: 2, label: 'Site' } : null]; };
   const needItem = (a) => { const verb = VERB[a.kind] || a.verb || 'Open', s = MARK[a.kind] || a.s;
     return `<li class="dl-need" data-s="${s}"><a class="dl-need-a" href="${a.href}"><span class="dl-ng">${UI.mark(s, { lg: true, label: true })}</span>
-      <span class="dl-nt"><b>${esc(a.plain || a.title)}</b>${a.why ? `<span class="dl-why">${UI.taskWords(a.why)}</span>` : ''}<span class="dl-tech mono">${esc(a.plain ? a.title : a.sub)}</span></span>
+      <span class="dl-nt"><b>${esc(a.plain || a.title)}</b>${a.why ? `<span class="dl-why">${UI.taskWords(a.why)}</span>` : ''}${UI.factsLine(UI.needFacts(a))}</span>
       <span class="dl-age">${UI.ageText(a.age)}</span><span class="dl-na"><span class="btn sm secondary">${verb}</span></span></a></li>`; };
   UI.needItem = needItem;
   /** The kinds of thing that wait on a person, one vocabulary for Home's tile, Needs you's breakdown and its Kind menu:

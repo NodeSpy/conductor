@@ -220,6 +220,24 @@
   UI.statTile = (o) => { const inner = `<span class="dl-lbl">${o.label}</span><b>${o.value}</b>${o.detail != null ? `<span class="d">${o.detail}</span>` : ''}`, cls = `dl-tile${o.hot ? ' hot' : ''}${o.on ? ' on' : ''}`;
     return o.href ? `<a class="${cls}" href="${o.href}">${inner}</a>` : `<button type="button" class="${cls}" data-act="${o.act}" ${o.attrs || ''} aria-pressed="${!!o.on}">${inner}</button>`; };
   UI.glance = (tiles, label = 'At a glance') => `<section class="dl-glance" aria-label="${label}">${tiles.join('')}</section>`;
+  /* ---------- the facts line: what a person scans a row for, one icon and one value per fact ----------
+   * Which bot or workflow, where (a pull request, a repository, a channel, a site), the environment, what kind of
+   * action and how risky, what it touches. One object icon per kind of fact, the value in quiet ink; a fact that leads
+   * somewhere is underlined and opens it (a row's own link stays the row's); a risky action is in bold ink; production
+   * carries the warning mark and colour. IDs and hashes never: they're on the detail page. On a phone the low-value
+   * facts (pri 3) drop first and the rest wrap under.
+   *   UI.factsLine([{ icon, value, href, pri: 1|2|3, risky, prod, label }])  (UI.facts is the details list) */
+  UI.factsLine = (xs) => { xs = (xs || []).filter((f) => f && f.value); if (!xs.length) return '';
+    return `<span class="fx">${xs.map((f) => { const ext = /^https?:/.test(f.href || ''), inner = `${f.prod ? `<i class="fx-g">${UI.glyph('warning')}</i>` : UI.icon(f.icon || 'dot')}${UI.esc(f.value)}`;
+      return `<span class="fx-i${f.href ? ' ln' : ''}${f.risky ? ' hi' : ''}${f.prod ? ' prod' : ''}" data-pri="${f.pri || 2}"${f.label ? ` title="${UI.esc(f.label)}"` : ''}${f.href ? ` role="link" tabindex="0" data-fx-href="${UI.esc(f.href)}"${ext ? ' data-fx-ext="1"' : ''}` : ''}>${inner}</span>`; }).join('')}</span>`; };
+  // a fact's link inside a row that is itself a link: it opens the fact's own page, never the row's
+  const fxGo = (el, e) => { e.preventDefault(); e.stopPropagation(); const h = el.dataset.fxHref; if (el.dataset.fxExt) UI.toast('Opens outside the dashboard', UI.esc(h), 'idle'); else UI.go(h); };
+  document.addEventListener('click', (e) => { const el = e.target.closest && e.target.closest('[data-fx-href]'); if (el) fxGo(el, e); }, true);
+  document.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('[data-fx-href]')) fxGo(e.target, e); }, true);
+  /** What kind of action, in words, with its icon and whether it's risky: from the verb and where it lands. */
+  const ACT_FACT = { read: ['act-read', 'Reads'], post: ['act-post', 'Posts a message'], push: ['act-push', 'Pushes code'], change: ['act-change', 'Changes a setting'], infra: ['act-infra', 'Changes infrastructure'], money: ['act-money', 'Spends money'], destroy: ['act-destroy', 'Deletes things'], permission: ['act-permission', 'Changes permissions'] };
+  UI.actionFact = (verb, env, tier) => { const a = UI.actionOf(verb), [icon, value] = ACT_FACT[a] || ACT_FACT.change; return { icon, value, pri: 2, risky: UI.riskOf({ verb, env, tier }).level >= 3, label: 'What it does' }; };
+  UI.envFact = (env) => (env ? { icon: 'server', value: env, prod: env === 'production', pri: 1, label: 'Environment' } : null);
   /** A task id in prose ("(task c29)") said in words: the task's own name; as a link where the page can carry one. */
   UI.taskWords = (text, link = false) => UI.esc(text).replace(/\(task (c\d+)\)/g, (m, id) => { const c = (D.cases || []).find((x) => x.id === id); if (!c) return ''; const name = `the task “${UI.esc(c.title)}”`;
     return link && c.bot ? `(<a class="dl-link" href="#/bots/${c.bot}/cases/${id}">${name}</a>)` : `(${name})`; });

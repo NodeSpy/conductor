@@ -51,6 +51,10 @@
   UI.runTarget = (r) => { const e = eventOf(r); if (!e) return ''; const t = e.sc.target ? fill(e.sc.target, e.fields) : ''; if (t) return t; const f = UI.itemFacts(r)[0]; return f ? f.value : ''; };
   UI.itemLinks = (r) => { const e = eventOf(r); if (!e) return []; return Object.values(e.sc.attrs || {}).filter((a) => a.link).map((a) => ({ label: a.linkLabel || `Open in ${e.sc.label}`, href: fill(a.link, e.fields) })).filter((x) => x.href); };
 
+  /** A verb's display facts from the options it carries (the channel a post goes to), by the connection it runs on. */
+  UI.verbFacts = (verb, options) => { const inst = String(verb || '').split('.')[0], c = (view().connectors || []).find((x) => x.name === inst); if (!c) return [];
+    const use = useOf(c), sc = schemaOf(use); if (!sc || !sc.attrs) return [];
+    return Object.entries(sc.attrs).filter(([, a]) => a.display).map(([name, a]) => ({ icon: a.icon || 'dot', label: a.label || name, value: a.format ? fill(a.format, options || {}) : getPath(options || {}, a.from || name), href: a.link ? fill(a.link, options || {}) : '', pri: 1 })).filter((f) => f.value); };
   /** The filter bar's connector qualifiers: search-only (no menu), grouped by connector, values from the items in view. */
   UI.attrQualifiers = (items, attrsOf = UI.itemAttrs) => UI.connAttrs().filter((a) => a.search).map((a) => {
     const m = new Map(); items.forEach((it) => { const v = attrsOf(it)[a.key]; if (v) m.set(v, (m.get(v) || 0) + 1); });
