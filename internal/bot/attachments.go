@@ -73,6 +73,9 @@ func DetectMediaType(name string, data []byte) string {
 		}
 		return sniff
 	}
+	if isSVG(data) {
+		return "image/svg+xml" // text the sniffer misses: an image that can carry script
+	}
 	if sniff != "text/plain" && sniff != "application/octet-stream" {
 		return sniff // text/html, text/xml, …: what it is, for the allowlist to decide
 	}
@@ -87,6 +90,21 @@ func DetectMediaType(name string, data []byte) string {
 		return "application/yaml"
 	}
 	return "text/plain"
+}
+
+// isSVG reports text that is an SVG document: its root element, after any
+// whitespace, XML prolog, comments or doctype.
+func isSVG(data []byte) bool {
+	head := strings.ToLower(string(data[:min(len(data), 1024)]))
+	head = strings.TrimSpace(strings.TrimPrefix(head, "\ufeff"))
+	for strings.HasPrefix(head, "<?") || strings.HasPrefix(head, "<!") {
+		end := strings.Index(head, ">")
+		if end < 0 {
+			return false
+		}
+		head = strings.TrimSpace(head[end+1:])
+	}
+	return strings.HasPrefix(head, "<svg")
 }
 
 // checkAttachments applies the bot's caps and allowlist to a message's files,

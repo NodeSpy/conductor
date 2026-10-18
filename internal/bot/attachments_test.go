@@ -93,6 +93,9 @@ func TestDetectMediaType(t *testing.T) {
 		{"nul.txt", []byte("text\x00with a nul"), "application/octet-stream"},
 		{"latin1.txt", []byte("caf\xe9 au lait, cr\xe8me br\xfbl\xe9e"), "application/octet-stream"}, // not UTF-8: not text
 		{"arch.zip", []byte("PK\x03\x04rest"), "application/zip"},
+		{"evil.png", []byte(`<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>`), "image/svg+xml"},
+		{"evil.txt", []byte("<?xml version=\"1.0\"?>\n<!-- c -->\n<!DOCTYPE svg>\n  <SVG/>"), "image/svg+xml"},
+		{"about.txt", []byte("notes about <svg> elements"), "text/plain"},
 	} {
 		if got := DetectMediaType(c.name, c.data); got != c.want {
 			t.Errorf("%s: %s, want %s", c.name, got, c.want)

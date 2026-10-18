@@ -498,7 +498,7 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 		if err := need(); err != nil {
 			return nil, err
 		}
-		var vs []any
+		vs := []any{}
 		for _, a := range s.Attachments(name) {
 			if a.Removed.IsZero() || boolArg(args, "all") {
 				vs = append(vs, attachmentView(a))

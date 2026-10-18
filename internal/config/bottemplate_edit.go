@@ -364,13 +364,16 @@ func SetBotGrants(src []byte, name string, grants map[string]string) ([]byte, er
 // the file as it is.
 func SetBotAvatar(src []byte, name string, a *BotAvatar) ([]byte, error) {
 	return editBotEntry(src, name, func(v *yaml.Node) {
+		at := -1
 		for j := 0; j+1 < len(v.Content); j += 2 {
 			if v.Content[j].Value == "avatar" {
-				v.Content = append(v.Content[:j], v.Content[j+2:]...)
-				break
+				at = j
 			}
 		}
 		if a == nil {
+			if at >= 0 {
+				v.Content = append(v.Content[:at], v.Content[at+2:]...)
+			}
 			return
 		}
 		m := &yaml.Node{Kind: yaml.MappingNode, Style: yaml.FlowStyle}
@@ -378,6 +381,10 @@ func SetBotAvatar(src []byte, name string, a *BotAvatar) ([]byte, error) {
 			if kv[1] != "" {
 				m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: kv[0]}, &yaml.Node{Kind: yaml.ScalarNode, Value: kv[1]})
 			}
+		}
+		if at >= 0 { // in place: the entry keeps its order
+			v.Content[at+1] = m
+			return
 		}
 		v.Content = append(v.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: "avatar"}, m)
 	})
