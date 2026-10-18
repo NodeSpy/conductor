@@ -220,6 +220,9 @@
   UI.statTile = (o) => { const inner = `<span class="dl-lbl">${o.label}</span><b>${o.value}</b>${o.detail != null ? `<span class="d">${o.detail}</span>` : ''}`, cls = `dl-tile${o.hot ? ' hot' : ''}${o.on ? ' on' : ''}`;
     return o.href ? `<a class="${cls}" href="${o.href}">${inner}</a>` : `<button type="button" class="${cls}" data-act="${o.act}" ${o.attrs || ''} aria-pressed="${!!o.on}">${inner}</button>`; };
   UI.glance = (tiles, label = 'At a glance') => `<section class="dl-glance" aria-label="${label}">${tiles.join('')}</section>`;
+  /** A task id in prose ("(task c29)") said in words: the task's own name; as a link where the page can carry one. */
+  UI.taskWords = (text, link = false) => UI.esc(text).replace(/\(task (c\d+)\)/g, (m, id) => { const c = (D.cases || []).find((x) => x.id === id); if (!c) return ''; const name = `the task “${UI.esc(c.title)}”`;
+    return link && c.bot ? `(<a class="dl-link" href="#/bots/${c.bot}/cases/${id}">${name}</a>)` : `(${name})`; });
   /** A set of runs in words whose parts add up to the whole: "19 went fine · 2 failed · 3 running". */
   UI.runParts = (rs) => [[rs.filter((r) => r.status === 'ok').length, 'went fine'], [rs.filter((r) => r.status === 'fail' || r.status === 'stopped').length, 'failed'], [rs.filter((r) => r.status === 'run').length, 'running'], [rs.filter((r) => r.status === 'wait').length, 'waiting on you'], [rs.filter((r) => r.status === 'idle').length, 'parked']].filter(([n]) => n).map(([n, t]) => `${n} ${t}`).join(' · ');
   /** The tab bars on the page, each as the set of places its tabs go: two renders that share one are tabs of one page. */
@@ -241,9 +244,15 @@
       // switching tabs keeps the page still: no entrance, the frame and the tab bar where they were (the scroll kept,
       // up to the tab bar, so a tab opens at its top when you'd scrolled past it); only the content below changes
       const tabSwitch = !opts.keepScroll && tabSigs(main).some((x) => prev.includes(x));
-      if (tabSwitch) { const bar = main.querySelector('.dl-subnav, .tabs, .dl-tabs, [role="tablist"]'), barTop = bar ? bar.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop : 0; keep = Math.min(prevTop, Math.max(0, barTop - 8)); }
       main.classList.toggle('still', !!opts.keepScroll || tabSwitch);
-      main.scrollTop = keep;
+      if (tabSwitch) {
+        // a shorter tab keeps the page's height for this view (set before anything is measured, so the scroll is never
+        // clamped first), and the scroll comes back instantly, not smoothly: the tab bar doesn't move at all
+        if (main.firstElementChild) main.firstElementChild.style.minHeight = prevTop + main.clientHeight + 'px';
+        const bar = main.querySelector('.dl-subnav, .tabs, .dl-tabs, [role="tablist"]'), barTop = bar ? bar.getBoundingClientRect().top - main.getBoundingClientRect().top + prevTop : 0;
+        keep = Math.min(prevTop, Math.max(0, barTop - 8));
+      }
+      main.scrollTo({ top: keep, behavior: 'instant' });
       UI.params = params;
       // the review page keeps the section you came from highlighted (it belongs to whatever you were changing)
       UI.setNav(path === 'config/apply' && D.prefs && D.prefs.returnTo ? (D.prefs.returnTo.href.replace(/^#\/?/, '').split(/[/?]/)[0] || 'overview') : (typeof r.opts.nav === 'function' ? r.opts.nav(params) : r.opts.nav) || path.split('/')[0]);

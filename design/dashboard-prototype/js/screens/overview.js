@@ -16,7 +16,7 @@
   // buttons line up; what's more urgent says so with its mark and its place in the list, never with a louder button
   const needItem = (a) => { const verb = VERB[a.kind] || a.verb || 'Open', s = MARK[a.kind] || a.s;
     return `<li class="dl-need" data-s="${s}"><a class="dl-need-a" href="${a.href}"><span class="dl-ng">${UI.mark(s, { lg: true, label: true })}</span>
-      <span class="dl-nt"><b>${esc(a.plain || a.title)}</b>${a.why ? `<span class="dl-why">${esc(a.why)}</span>` : ''}<span class="dl-tech mono">${esc(a.plain ? a.title : a.sub)}</span></span>
+      <span class="dl-nt"><b>${esc(a.plain || a.title)}</b>${a.why ? `<span class="dl-why">${UI.taskWords(a.why)}</span>` : ''}<span class="dl-tech mono">${esc(a.plain ? a.title : a.sub)}</span></span>
       <span class="dl-age">${UI.ageText(a.age)}</span><span class="dl-na"><span class="btn sm secondary">${verb}</span></span></a></li>`; };
   UI.needItem = needItem;
   /** The kinds of thing that wait on a person, one vocabulary for Home's tile, Needs you's breakdown and its Kind menu:

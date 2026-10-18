@@ -460,7 +460,7 @@
     const word = (x) => x.status === 'shadow' ? 'Practice only: what it would have done in shadow mode (nothing was done)' : `${esc(x.status[0].toUpperCase() + x.status.slice(1))}${x.approver ? ` by ${esc(x.approver)}` : ''}`;
     const row = (x) => { const pend = x.status === 'pending';
       return `<li class="dl-need proposal-row ${x.status}"><a class="dl-need-a" href="#/bots/${m.name}/proposals/${x.id}"><span class="dl-ng">${UI.mark(PS[x.status] || 'idle', { lg: true, label: pend ? 'Needs you' : x.status })}</span>
-        <span class="dl-nt"><b>${esc(x.title || x.summary)}</b><span class="dl-why">${pend ? esc(x.ask || x.why || x.summary) : word(x)}</span></span>
+        <span class="dl-nt"><b>${esc(x.title || x.summary)}</b><span class="dl-why">${pend ? UI.taskWords(x.ask || x.why || x.summary) : word(x)}</span></span>
         <span class="dl-age">${UI.agoText(x.at)}</span><span class="dl-na">${pend ? '<span class="btn sm secondary">Review</span>' : ''}</span></a></li>`; };
     return shell(m, 'proposals', `<section class="dl-card"><header class="dl-ch"><h2>Waiting for you</h2>${waiting.length ? UI.count(waiting.length, { hot: true }) : ''}</header>${waiting.length ? `<ul class="dl-list">${waiting.map(row).join('')}</ul>` : `<p class="dl-sub">Nothing waits for you. When ${esc(m.name)} wants to do something it has to ask about, it shows up here and in Needs you.</p>`}</section>
       ${past.length ? `<details class="dl-card dl-files-d past-d"${pv.f === 'decided' ? ' open' : ''}><summary class="panel-head"><h3>Past decisions</h3><span class="muted small">${past.length}</span></summary><ul class="dl-list">${past.map(row).join('')}</ul></details>` : ''}`);
@@ -471,7 +471,8 @@
      blue); resource headers emphasised; "(known after apply)" and hidden lines muted. The symbols stay, so colour is never
      the only cue. A jump list of the resources, grouped by action, sits on top. */
   const PLAN_ACT = [['replace', /must be replaced|will be replaced/], ['destroy', /will be destroyed/], ['create', /will be created/], ['update', /will be updated in-place/], ['read', /will be read during apply/]];
-  const PLAN_WORD = { replace: 'Replaced', destroy: 'Destroyed', create: 'Created', update: 'Updated in place', read: 'Read' };
+  // one vocabulary for a plan: the tiles, the list under them and the plan's own groups say the same verbs
+  const PLAN_WORD = { create: 'Adds', update: 'Changes', replace: 'Replaces', destroy: 'Destroys', read: 'Reads' };
   function planHTML(t) {
     const lines = String(t).split('\n'), res = [], ind = (raw) => (raw.trim() ? ` style="--i:${raw.match(/^\s*/)[0].length}"` : '');
     const body = lines.map((raw, i) => { const l = esc(raw); let m;
@@ -504,7 +505,7 @@
     const tf = p.tf, pend = p.status === 'pending', t = teamOf(m);
     const ask = p.ask || (tf ? `${m.name} wants to run terraform apply on ${p.env || tf.workspace}.` : `${m.name} wants to ${esc(String(p.summary || p.verb))}.`);
     const pc = tf ? planHTML(D.tfPlan || '').counts : null;
-    const changes = tf ? `<div class="dl-changes">${[['Adds', pc.create], ['Changes', pc.update], ['Replaces', pc.replace, 'wait'], ['Destroys', pc.destroy, 'fail']].map(([l, n, st]) => `<div${n && st ? ` data-s="${st}"` : ''}><b>${n}</b><span>${l}</span></div>`).join('')}
+    const changes = tf ? `<div class="dl-changes">${[[PLAN_WORD.create, pc.create], [PLAN_WORD.update, pc.update], [PLAN_WORD.replace, pc.replace, 'wait'], [PLAN_WORD.destroy, pc.destroy, 'fail']].map(([l, n, st]) => `<div${n && st ? ` data-s="${st}"` : ''}><b>${n}</b><span>${l}</span></div>`).join('')}
       ${tf.replaces.length ? `<p class="dl-chg-note">${UI.mark('wait')}<span><b>Replaces ${tf.replaces.length} ${tf.replaces.length === 1 ? 'server' : 'resources'}</b> (${tf.replaces.map(esc).join(', ')}). Stateful things such as databases are never replaced without a separate rule.</span></p>` : ''}</div>`
       : `<div class="dl-pwhy"><span class="dl-lbl">Exactly what runs</span>${UI.payloadHTML(p)}</div>`;
     const where = [['Where', p.env ? `${p.env[0].toUpperCase()}${p.env.slice(1)}${tf ? ` · workspace ${esc(tf.workspace)}` : ''}` : tf ? `workspace ${esc(tf.workspace)}` : ''], ['Effect', esc(p.impact || '')], ['Undo', esc(p.reversible ? p.reversible.replace(/^./, (c) => c.toUpperCase()) : 'conductor can’t undo this')]].filter(([, v]) => v);
@@ -524,7 +525,7 @@
     const plan = tf ? `<details class="dl-tech-d prop-plan-d"${pv.plan[p.id] ? ' open' : ''} data-on-toggle="prop-plan-t" data-p="${p.id}"><summary>${icon('chev')}The full plan <span class="dl-sub">as tf-plan ran it, with the read role</span></summary><pre class="dl-code prop-plan">${pl.body}</pre></details>` : '';
     const audit = `<details class="dl-audit-d"><summary>${icon('chev')}For audit: ids, hashes and the digest your passkey signs</summary>${techFacts}</details>`;
     const body = `${what}
-      ${p.why ? `<div class="dl-pwhy"><span class="dl-lbl">Why</span><p>${esc(p.why)}</p></div>` : ''}
+      ${p.why ? `<div class="dl-pwhy"><span class="dl-lbl">Why</span><p>${UI.taskWords(p.why, true)}</p></div>` : ''}
       ${where.length ? `<dl class="dl-where">${where.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>` : ''}
       <p class="dl-origin">${origin}</p>${pend ? '' : decided}${plan}<p class="dl-sub prop-can-link"><a class="dl-link" href="#/bots/${m.name}/access">What ${esc(m.name)} may do on its own, and what it asks first →</a></p>${audit}`;
     const card = `<article class="dl-card dl-proposal">${pend ? `<div class="dl-kick">${UI.mark('ember')}Needs you · <span class="nowrap">asked ${UI.agoText(p.at)}</span>${p.expires ? ` · <span class="nowrap">expires in ${UI.humanSpan(p.expires)}</span>` : ''}</div>` : `<div class="dl-kick dl-sub">${UI.agoText(p.at)}</div>`}

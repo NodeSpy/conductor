@@ -145,7 +145,8 @@ Deliberate differences:
   status rule's vocabulary).
 - The proposal title is the **sans** (BRAND.md's serif rule for generated titles; the mock sets it in Fraunces).
 - **No tabs** (from review: a tab hid the why and the change summary). One column in the order the decision needs:
-  what will change (the counts, the replaces note, the plan's resources by action in Terraform's colours), why,
+  what will change (the counts, the replaces note, the plan's resources by action in Terraform's colours; the tiles and
+  the list say the same verbs: Adds, Changes, Replaces, Destroys), why (a task named in words and linked, never an id),
   where/effect/undo, who asked. The full plan opens in place below them (a resource in the summary opens it at its
   block); the integrity data (proposal id and tier, verb, command, commit, plan sha256, case, digest, signer) is one
   quiet folded line at the end of the card, smaller and muted when open. The decision bar is pinned.
