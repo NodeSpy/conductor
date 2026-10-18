@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -241,8 +242,28 @@ type VerbSemantics struct {
 	HostOnly          bool               `json:"host_only,omitempty"`
 	TargetArgs        map[string]string  `json:"target_args,omitempty"`
 	Exposes           *Exposes           `json:"exposes,omitempty"`
-	Optional          []string           `json:"optional,omitempty"`
+	// Identity maps verb options to bot identity attributes (IdentityAttributes):
+	// when a bot calls this verb, the engine fills each named option with
+	// that bot's attribute, e.g. a chat post's `username` from `name`. A bot
+	// can't set these options itself. The engine overwrites them, so a bot
+	// never posts as anyone else.
+	Identity map[string]string `json:"identity,omitempty"`
+	Optional []string          `json:"optional,omitempty"`
 }
+
+// IdentityAttributes are the bot identity attributes a verb's `identity`
+// semantic may name:
+//   - name: the display name, or the config id when there is none;
+//   - id: the config id;
+//   - initials;
+//   - tagline;
+//   - avatar_preset, avatar_icon, avatar_color: names from conductor's built-in
+//     avatar lists, never a URL or file; the plugin maps them to its own icons;
+//   - color: the bot's identity color name.
+//
+// An attribute the bot doesn't set fills its option with "", and the engine
+// then leaves that option out.
+var IdentityAttributes = []string{"name", "id", "initials", "tagline", "avatar_preset", "avatar_icon", "avatar_color", "color"}
 
 // ReadsRevision: the verb that reads a target's current revision and state.
 // States maps each generic state (open, closed, accepted) to the verb's own
@@ -386,7 +407,7 @@ var semanticKeys = map[string][]string{
 		"attempts", "priority", "feedback", "verification_failed", "remediate", "author", "labels",
 		"private", "secret", "conversation_reply", "option_hooks"},
 	"verb": {"reads_revision", "mints_credential", "opens_conversation", "conversation_post", "host_only",
-		"target_args", "exposes"},
+		"target_args", "exposes", "identity"},
 	"connection": {"credentials", "scope", "poll", "translate", "listeners", "preflight"},
 }
 
@@ -655,6 +676,14 @@ func ValidateSemantics(d Decl) []string {
 				if _, ok := v.Options[x.Path]; !ok {
 					p = append(p, fmt.Sprintf("%s.exposes.path: names option %q, which verb %q does not declare", path, x.Path, v.Name))
 				}
+			}
+		}
+		for opt, attr := range s.Identity {
+			if !slices.Contains(IdentityAttributes, attr) {
+				p = append(p, fmt.Sprintf("%s.identity.%s: unknown identity attribute %q (one of %s)", path, opt, attr, strings.Join(IdentityAttributes, ", ")))
+			}
+			if _, ok := v.Options[opt]; !ok && !v.Open {
+				p = append(p, fmt.Sprintf("%s.identity: names option %q, which verb %q does not declare", path, opt, v.Name))
 			}
 		}
 		if s.MintsCredential != nil && !s.HostOnly {

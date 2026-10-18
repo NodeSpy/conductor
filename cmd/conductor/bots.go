@@ -85,7 +85,7 @@ func buildBots(cfg *config.Config, st *store.Store, runner *flow.Runner, reg *co
 		svc.Notify = func(ctx context.Context, n bot.Notice) {
 			notifier.Publish(ctx, bot.NotifyEvent, core.Trigger{Title: n.Title},
 				fmt.Sprintf("bot %s: proactive sweep %s found %s — %s (%s)", n.Bot, n.Sweep, strings.ToUpper(n.Severity), n.Title, n.Text),
-				map[string]any{"bot": n.Bot, "sweep": n.Sweep, "case": n.CaseID, "severity": n.Severity, "key": n.Key})
+				map[string]any{"bot": n.Bot, "bot_name": botDisplayName(runner, n.Bot), "sweep": n.Sweep, "case": n.CaseID, "severity": n.Severity, "key": n.Key})
 		}
 	}
 	registerSandboxSessions(svc)
@@ -212,6 +212,14 @@ func (m *botStack) agentOp(sb *skill.Broker) func(ctx context.Context, token, su
 	}
 }
 
+// botDisplayName is a bot's display name, or its config id.
+func botDisplayName(r *flow.Runner, name string) string {
+	if r != nil && r.Cfg != nil {
+		return r.Cfg.Bots[name].Identity.Attributes(name)["name"]
+	}
+	return name
+}
+
 // botCtl is the running daemon's bot service, for the control socket
 // (nil when no bot is configured).
 var botCtl *bot.Service
@@ -227,6 +235,10 @@ func handleBotControl(ctx context.Context, conn net.Conn, req controlRequest, lo
 		// The catalog and the plans need no bot to exist yet: the dashboard's
 		// New bot flow starts here.
 		templateControl(conn, req)
+		return
+	case "identity_options":
+		// The avatar, color and tone lists, for the dashboard's pickers.
+		writeControlResp(conn, controlResponse{OK: true, Result: config.IdentityOptions()})
 		return
 	}
 	svc := botCtl

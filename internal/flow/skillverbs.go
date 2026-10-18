@@ -615,6 +615,19 @@ func skillVerbUniverse(reg *connector.Registry) []string {
 	return out
 }
 
+// applyBotIdentity fills a verb's identity-mapped options (option -> attribute)
+// from a bot's attributes. An attribute the bot doesn't have removes the
+// option, so a value the bot passed itself never survives.
+func applyBotIdentity(options map[string]any, mapping, attrs map[string]string) {
+	for opt, attr := range mapping {
+		if v := attrs[attr]; v != "" {
+			options[opt] = v
+		} else {
+			delete(options, opt)
+		}
+	}
+}
+
 // RunSkillVerb executes one verb on behalf of a token-authorized agent.
 func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string, options map[string]any) (map[string]any, error) {
 	t := core.Trigger{
@@ -714,6 +727,23 @@ func (r *Runner) RunSkillVerb(ctx context.Context, id SkillIdentity, uses string
 		if !v.Allow {
 			r.auditSkillVerb(t, id.Agent, uses, options, "proposed", nil)
 			return v.Output, nil
+		}
+	}
+	// A BOT SPEAKS AS ITSELF. A verb whose connector declares an `identity`
+	// semantic (option -> identity attribute: a chat post's display name or
+	// icon) gets those options filled from the bot's config, overwriting
+	// whatever the bot passed, so a bot never posts as anyone else. This runs
+	// after the gate, so an approved proposal re-entering here is filled
+	// with the same values, and its options digest is unaffected.
+	if id.Bot != "" {
+		if vd, ok := in.Decl.Verb(verb); ok && vd.Semantics != nil && len(vd.Semantics.Identity) > 0 {
+			var attrs map[string]string
+			if r.Cfg != nil {
+				if m, ok := r.Cfg.Bots[id.Bot]; ok {
+					attrs = m.Identity.Attributes(id.Bot)
+				}
+			}
+			applyBotIdentity(options, vd.Semantics.Identity, attrs)
 		}
 	}
 	// handoff.* / step.* act on the CALLER's own dispatch: inject the

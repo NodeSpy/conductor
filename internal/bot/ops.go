@@ -596,6 +596,7 @@ func (s *Service) statusOf(name string) map[string]any {
 		"sandboxed": s.Gate != nil && s.Gate.sandboxed(), "memory_repo": cfg.BotRepoDir(name),
 		"open_cases": open, "pending_proposals": pending, "live_workers": workers,
 		"home_runtime": cfg.BotHomeRuntime(name), "worker_role": config.BotRoleWorker,
+		"identity": m.Identity.View(name, m.IdentityFrom),
 	}
 	if o := m.Origin; o != nil {
 		t := toMap(o)

@@ -313,6 +313,9 @@ func describeVerbSemantics(s *sdk.VerbSemantics) string {
 	if len(s.TargetArgs) > 0 {
 		parts = append(parts, "target_args")
 	}
+	if len(s.Identity) > 0 {
+		parts = append(parts, "identity")
+	}
 	if len(parts) == 0 {
 		return "none"
 	}

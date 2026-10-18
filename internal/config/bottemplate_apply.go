@@ -277,6 +277,14 @@ func (c *Config) instantiateTemplate(name string, m BotConfig, lt LoadedTemplate
 		}
 		m.Collections = cols
 	}
+	// Identity: the template suggests, the operator's own win field by field.
+	// A display name, tagline or personality taken from the template is
+	// remembered, so the prompt says whose words they are.
+	merged := m.Identity.Merge(t.Identity)
+	if (m.DisplayName == "" && t.DisplayName != "") || (m.Tagline == "" && t.Tagline != "") || (m.Personality == nil && t.Personality != nil) {
+		m.IdentityFrom = lt.Ref()
+	}
+	m.Identity = merged
 	if !m.Home.Model.Set() && t.Model.Set() {
 		m.Home.Model = t.Model
 	}

@@ -29,7 +29,8 @@ import (
 const botUsage = `usage:
   operator:
     conductor bot ls [--flat]                # bots by team (--flat: one line each)
-    conductor bot show <bot>
+    conductor bot show <bot>                 # status, identity (name, initials, avatar, voice), template
+    conductor bot identity-options           # the avatar presets, icons, colors and tones an identity may name
     conductor bot cases <bot> [--all]
     conductor bot workers <bot>
     conductor bot delegations <bot> [--all]
@@ -138,6 +139,9 @@ func cmdBot(args []string) error {
 	sub := args[0]
 	inSession := os.Getenv("CONDUCTOR_SKILL_TOKEN") != ""
 	switch sub {
+	case "identity-options":
+		// The built-in lists an identity is validated against.
+		return printJSON(config.IdentityOptions())
 	case "templates", "template", "new", "grant":
 		if inSession {
 			return fmt.Errorf("refusing: this shell is a conductor agent session — only an operator instantiates bots and grants them verbs")
@@ -804,7 +808,11 @@ func botLine(m map[string]any) string {
 	if m["shadow"] == true {
 		mode = "shadow"
 	}
-	return fmt.Sprintf("%-6s %s · %v open cases · %v pending proposals · %v workers", mode, home, m["open_cases"], m["pending_proposals"], m["live_workers"])
+	line := fmt.Sprintf("%-6s %s · %v open cases · %v pending proposals · %v workers", mode, home, m["open_cases"], m["pending_proposals"], m["live_workers"])
+	if id, ok := m["identity"].(map[string]any); ok && id["display_name"] != nil {
+		line += fmt.Sprintf(" · shown as %q", id["display_name"])
+	}
+	return line
 }
 
 func orDashCLI(t string) string {

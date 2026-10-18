@@ -137,3 +137,15 @@ func TestBotMemoryPlainText(t *testing.T) {
 		t.Fatalf("recall:\n%s", out)
 	}
 }
+
+// `bot ls` shows a display name; `bot show` (JSON) carries the whole view.
+func TestBotListShowsDisplayName(t *testing.T) {
+	out := botListFixture()
+	bots := out["bots"].([]any)
+	bots[0].(map[string]any)["identity"] = map[string]any{"name": "Night Owl", "initials": "NO", "display_name": "Night Owl"}
+	bots[1].(map[string]any)["identity"] = map[string]any{"name": "platform-sre", "initials": "PS"}
+	s := botListText(out, false)
+	if !strings.Contains(s, `solo `) || !strings.Contains(s, `· shown as "Night Owl"`) || strings.Count(s, "shown as") != 1 {
+		t.Fatalf("listing:\n%s", s)
+	}
+}

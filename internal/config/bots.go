@@ -134,6 +134,12 @@ type BotConfig struct {
 	// Origin is where a template bot came from — computed at load, never
 	// written.
 	Origin *BotOrigin `yaml:"-"`
+	// Identity is how the bot presents: avatar, color, display_name, tagline,
+	// personality (botidentity.go). Presentation only.
+	Identity `yaml:",inline"`
+	// IdentityFrom names the template a display name, tagline or
+	// personality came from ("" when the operator wrote them) — computed.
+	IdentityFrom string `yaml:"-"`
 	// Memory bounds what the bot's sessions read from and write to its
 	// memory repo: the prompt's index budget, the per-read cap, the
 	// per-kind document caps (memlimits.go). On by default.
@@ -980,6 +986,9 @@ func (c *Config) validateBotProactive(name string, p *BotProactive) error {
 func (c *Config) validateBot(name string, m BotConfig) error {
 	if !validBotName(name) {
 		return fmt.Errorf("name must be lowercase letters, digits, - or _")
+	}
+	if err := m.Identity.Validate(); err != nil {
+		return err
 	}
 	if err := validateCollections(m.Collections, false); err != nil {
 		return err

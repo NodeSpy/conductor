@@ -65,6 +65,9 @@ type BotTemplate struct {
 	Runtime string    `yaml:"runtime,omitempty"`
 	// Folder is removed (removed.go): accepted, ignored, warned about.
 	Folder RemovedField `yaml:"folder,omitempty"`
+	// Identity is a SUGGESTED avatar, color, display name, tagline and
+	// personality (botidentity.go); the operator's own win, field by field.
+	Identity `yaml:",inline"`
 }
 
 // forbiddenTemplateKeys are what a template can never set, with why. Each is
@@ -419,6 +422,9 @@ func loadTemplate(name string, t BotTemplate, dir string) (LoadedTemplate, error
 		if p.NotifyAt != "" && SeverityRank(p.NotifyAt) < 0 {
 			return lt, fmt.Errorf("proactive.notify_at: %q is not one of %s", p.NotifyAt, strings.Join(FindingSeverities, ", "))
 		}
+	}
+	if err := t.Identity.Validate(); err != nil {
+		return lt, err
 	}
 	if len(t.Runtime) > 200 {
 		return lt, fmt.Errorf("runtime: a short suggestion (at most 200 characters)")

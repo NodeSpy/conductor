@@ -227,3 +227,39 @@ func TestStarterConfigFreshSeedLayout(t *testing.T) {
 		t.Fatalf("drop-in config must validate: %v", err)
 	}
 }
+
+// The example's commented identity block is valid as written: uncommented,
+// it loads and every field lands.
+func TestExampleConfigIdentityBlock(t *testing.T) {
+	raw, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(raw)
+	for _, k := range []string{"display_name:", "tagline:", "avatar:", "color:", "personality:", "  tone:", "  style:"} {
+		old := "    # " + k
+		if strings.Count(doc, old) != 1 {
+			t.Fatalf("the example's identity block: %q appears %d times", old, strings.Count(doc, old))
+		}
+		doc = strings.Replace(doc, old, "    "+k, 1)
+	}
+	keyPath := writeTempRSAKey(t)
+	doc = strings.Replace(doc, "~/.config/conductor/github-app.pem", keyPath, 1)
+	for _, v := range []string{"GH_WEBHOOK_SECRET", "GH_SMEE_URL", "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "CW_SECRET", "GH_PAT",
+		"CONDUCTOR_INVOKE_TOKEN", "CONDUCTOR_INVOKE_HMAC"} {
+		t.Setenv(v, "dummy-"+v)
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("the uncommented identity block: %v", err)
+	}
+	id := cfg.Bots["platform-sre"].Identity
+	if id.DisplayName != "Night Owl" || id.Tagline == "" || id.Avatar == nil || id.Avatar.Preset != "owl" || id.Color != "indigo" ||
+		id.Personality == nil || id.Personality.Tone != "terse" || id.Personality.Style == "" {
+		t.Fatalf("identity: %+v", id)
+	}
+}

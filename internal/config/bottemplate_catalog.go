@@ -43,6 +43,8 @@ type TemplateSummary struct {
 	UsedBy      []string       `json:"used_by,omitempty"`
 	Digest      string         `json:"digest"`
 	Charter     string         `json:"charter,omitempty"`
+	// Identity is the template's suggested identity.
+	Identity *Identity `json:"identity,omitempty"`
 }
 
 // InputView is a template input.
@@ -132,6 +134,9 @@ func Summarize(lt LoadedTemplate, full bool) TemplateSummary {
 	}
 	if full {
 		s.Charter = lt.Charter
+	}
+	if id := t.Identity; id != (Identity{}) {
+		s.Identity = &id
 	}
 	return s
 }
