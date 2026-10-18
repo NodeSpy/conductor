@@ -263,25 +263,6 @@ wraps the same three.
   proposal keeps `ProposedSHA256` and `EditedBy`. `OnDecision` fences an
   operator's reason as `OPERATOR REASON`.
 
-### Folders across entity types
-
-Workflows and triggers take `folder:` with the same rule. Three things keep
-it inert:
-
-- `contentHandle` drops it, so a trigger instance's identity (its dedup,
-  session and outcome state) does not move with it;
-- a pack's manifest may not set it (`packSetsNoFolder`, at load and in lint),
-  because filing is the operator's organization;
-- the operator's `packs.<instance>.folder`, `.workflows.<name>.folder` and
-  `.triggers.<name>.folder` are applied at instantiation, the per-name one
-  winning.
-
-Provenance (`PackInstance`, `Bot`, both `yaml:"-"`) is only for display: an
-unfiled pack entity is listed under `packs/<instance>`, and a bot's
-synthesized workers under the bot's folder. `TestEntityFoldersChangeNothing`
-compares the effective triggers and workflows, instance names included, with
-and without folders.
-
 ## Content kinds
 
 `internal/bot/kinds.go`, `internal/config/collections.go`. A repo's kinds are
@@ -444,7 +425,7 @@ verb, practice mode off, promotion. `BotTemplateNotes` prints them at
 ### What a template cannot set
 
 `forbiddenTemplateKeys` refuses, by name and before strict decoding, every key
-that is the operator's: operators, approvers, team, folder, secrets, skill,
+that is the operator's: operators, approvers, team, secrets, skill,
 grant, autonomy, isolation, browser, network, egress, memory_repo, seed_dir,
 memory, peers, terraform, home, worker, disabled, use — and a proactive
 budget. The template struct does not have those fields at all, so strict
@@ -502,19 +483,26 @@ which is what lets several bots come from one template.
 - Seed documents are validated against kinds by `pack lint` and at seeding,
   not at config load (the config package cannot import the kinds).
 
-## Folders: display only
+## Folders: removed
 
-`folder:` on a bot or a team (`internal/config/folders.go`) exists so an
-operator with many bots can file them (`work/platform`, `personal/home`).
-It is deliberately inert: nothing outside the listings reads it — not
-`ResolveTeams` (it is not a ceiling and is not inherited), not `BotLinked`,
-not the gate, not routing — and `TestFoldersChangeNothing` /
-`TestFoldersChangeNoRuntimeBehavior` hold that line. Behavior that wants a
-grouping belongs to a team. A bot on a team is displayed under the team's
-folder (`Config.BotFolder`), so a bot's own `folder:` there is a validate
-warning, not an error: it is harmless, just ignored. Paths are validated by
-one function (`NormFolder`) at load, and the CLI's `--folder` filter goes
-through the same one.
+Folders filed bots, teams, workflows and triggers for display and nothing
+else; they were removed. Because conductor auto-updates and a config the new
+binary rejects crash-loops a box, `folder:` stays decodable everywhere it was
+read (`internal/config/removed.go`):
+
+- each field is a `RemovedField`: it decodes from any value, keeps nothing,
+  and is never marshaled (`IsZero` is always true, every use `omitempty`);
+- the warnings come from the raw YAML document (`removedFolderWarnings`, and
+  `manifestFolderWarnings` for a pack's workflows, triggers and templates,
+  which used to refuse it), not from decoded structs, so nothing a later
+  pass re-marshals can lose one; `flow.DeprecationWarnings` prints them in
+  `validate` and the daemon logs them at boot;
+- `contentHandle` still drops a `folder` key, so an old config's folder never
+  changes which instance a trigger is (it hashes the raw node).
+
+`TestRemovedFolderIsIgnored` loads a config with `folder:` everywhere —
+values that were never valid paths included — and compares the effective
+bots, teams, workflows and triggers with the same config without them.
 
 ## Teams
 

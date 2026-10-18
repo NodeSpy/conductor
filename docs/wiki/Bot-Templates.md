@@ -13,7 +13,7 @@ hold, trust and lockfile. There is no second distribution system.
 > **A template only requests.** A bot made from one starts in practice mode
 > with only its read-only verbs. Everything above observe is a widening you
 > grant yourself, one verb at a time, and the template can never set your
-> operators, team, folder, connector bindings, secrets, autonomy, sandbox
+> operators, team, connector bindings, secrets, autonomy, sandbox
 > or egress.
 
 ## Using one
@@ -77,7 +77,6 @@ Nothing is written without `--write`. Flags:
 |---|---|
 | `--connector <input>=<connector>` | bind an input (repeatable); an input you have exactly one connector of the type for binds itself |
 | `--grant <verb>=<tier>` | a widening at instantiation (repeatable) — refused past the template's maximum |
-| `--folder <path>` | file the bot somewhere else (default: the pack instance's placement) |
 | `--proactive` | turn on the template's suggested proactive checks (`proactive: {}`) |
 
 Suggested triggers are written **disarmed** (`enabled: false`); turn on the
@@ -103,7 +102,7 @@ bots:
 `use:` is how a pack's other members are named (`call: review/review-flow`),
 and the field connectors and runtimes already use for "what implements
 this". The rest of the entry is an ordinary bot: anything you set —
-description, charter, escalation, operators, team, folder, autonomy,
+description, charter, escalation, operators, team, autonomy,
 proactive, Terraform — is yours and wins over the template.
 
 **Grants are in the template's vocabulary** (`<input>.<verb>`), so they stay
@@ -262,7 +261,6 @@ pack lint`:
 |---|---|
 | `operators`, `approvers` | who approves a bot is the operator's choice |
 | `team` | which team a bot joins is the operator's choice |
-| `folder` | where a bot is filed is the operator's choice (default: the pack instance's placement) |
 | `secrets` | secrets are the operator's environment |
 | `skill`, `grant` | a template requests verbs; the operator grants them |
 | `autonomy` | tiers, practice mode, promotion and spend caps are the operator's |
@@ -292,7 +290,7 @@ The operator control socket serves the same catalog and plans (`cmd: "bot"`):
 |---|---|---|
 | `templates` | `search`, `registry`, `installed` | `{ templates: [ { ref, template, pack, version, description, tags, installed, install, inputs, verbs, read_only, above_observe, triggers, proactive, model, runtime, seed, collections, used_by, digest } ] }` |
 | `template` | `ref`, `registry` | one template, with its `charter` |
-| `template_plan` | `name`, `template`, `connectors`, `grants`, `folder`, `proactive` | `{ bot, template, entry, triggers, diff, valid, error, review, notes, widening }` |
+| `template_plan` | `name`, `template`, `connectors`, `grants`, `proactive` | `{ bot, template, entry, triggers, diff, valid, error, review, notes, widening }` |
 | `grant_plan` | `bot`, `grants` | the same, for a widening |
 
 A plan writes nothing; `widening: true` is the dashboard's cue to ask for the

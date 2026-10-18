@@ -120,7 +120,7 @@ conductor bot grant platform-sre pagerduty.acknowledge=reversible
 
 A template only requests: the bot starts in practice mode with only its
 read-only verbs, every widening is your grant (named by `conductor validate`),
-and the template can never set operators, team, folder, connector bindings,
+and the template can never set operators, team, connector bindings,
 secrets, autonomy, sandbox or egress. A newer pack version reaches a bot's
 memory only as a proposal you approve. See [[Bot-Templates]].
 
@@ -701,36 +701,13 @@ false` keeps consolidated entries in place (they are still consolidated
 once). The audit records each consolidation's outcome
 (`bot_consolidation`) and each archive (`bot_memory_archive`).
 
-## Folders
+## Folders (removed)
 
-Folders organize bots and teams for display, nothing more:
-
-```yaml
-teams:
-  platform: { folder: work/platform, … }
-bots:
-  home-helper: { folder: personal/home, … }   # a solo bot files itself
-```
-
-`conductor bot ls` prints a tree grouped by folder, then team, then bot;
-`--folder work` shows that folder and everything under it, `--flat` one line
-per bot (with its folder and team).
-
-- **Folders have no behavior.** A folder confers no permissions, defaults,
-  isolation, peering or routing; moving a bot or a team to another folder
-  changes nothing it does. **Teams own all behavior.** Two bots in one folder
-  are no more linked than two bots in different folders.
-- **A bot on a team is listed under its team's folder.** A bot that sets its
-  own `folder:` while on a team gets a `conductor validate` warning, and the
-  team's folder wins.
-- A folder is a `/`-separated path: segments are trimmed, may hold letters,
-  digits, `.`, `-` and `_`, and may not be empty, `.` or `..` (at most 8
-  levels, 64 characters a segment). No folder means the root.
-
-Folders are **one organization across entity types**: workflows and triggers
-take `folder:` too ([[Workflows]]), and a bot's synthesized workers are listed
-under the bot's (or its team's) folder. `conductor folders ls [path]` lists
-everything in a folder — teams, bots, workflows, triggers — and below it.
+Folders (display-only filing of bots, teams, workflows and triggers) were
+removed. A `folder:` still in a config loads and is ignored: `conductor
+validate` and the daemon log say `folders were removed; this field is ignored
+and can be deleted`, and it never fails validation. Delete it when convenient. `conductor bot ls` lists bots by team (`--flat`: one
+line per bot).
 
 ## Teams
 
@@ -1166,7 +1143,7 @@ the daemon (`conductor bot show` reports `sandboxed`). Without it:
 ## Operator commands
 
 ```
-conductor bot ls [--folder <path>] [--flat]   # a tree: folder, team, bot
+conductor bot ls [--flat]        # bots by team (--flat: one line each)
 conductor bot show <bot>         # home session, open work, memory log, charter
 conductor bot cases|workers|proposals <bot> [--all]
 conductor bot proposal <bot> <id>

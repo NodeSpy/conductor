@@ -478,7 +478,7 @@ bots:
 The bot is the operator's config, not the pack's: a template only
 **requests**, and every verb it requests is active only where the bot's
 `grant:` says so. It follows define behavior / bind environment strictly —
-a template that names operators, a team, a folder, connector bindings,
+a template that names operators, a team, connector bindings,
 secrets, autonomy, the sandbox or egress is rejected at load, by name. The
 pack instance carries the version, hold, trust and lockfile for every bot
 made from it, and a newer version reaches those bots' memory only as a

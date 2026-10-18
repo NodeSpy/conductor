@@ -74,42 +74,13 @@ reordering keys within an entry, does not move an instance's dedup or attempt
 state. Two byte-identical entries are an error rather than one trigger silently
 written twice.
 
-### Folders
+### Folders (removed)
 
-A workflow or a trigger can be filed in a folder, for display:
-
-```yaml
-workflows:
-  release: { folder: work/platform, steps: [ … ] }
-triggers:
-  nightly-report: { on: timer.nightly, folder: work/reports, steps: [ … ] }
-```
-
-`conductor workflows ls --folder work` prints the config's workflows and
-triggers as a tree (that folder and everything under it; `--flat` for one line
-each), and `conductor folders ls [path]` shows bots and teams alongside them
-([[Bots#folders]]).
-
-- **No behavior.** A folder changes nothing about how a workflow runs: not its
-  gating, scope, policy or isolation, and not a trigger instance's identity
-  (its dedup, session and outcome state stay put when you re-file it).
-- **A pack cannot file its own workflows or triggers**: a `folder:` in a pack's
-  manifest is refused at load and by `conductor pack lint`. Filing them is the
-  operator's call, in the instance's `packs:` entry:
-
-  ```yaml
-  packs:
-    review:
-      use: conductor-packs/pr-review-team
-      folder: work/review                      # every workflow and trigger of this instance
-      workflows: { verify: { folder: work/review/checks } }   # one workflow (wins)
-      triggers:  { review: { enabled: true, repos: [acme/web], folder: work/review/prs } }
-  ```
-
-  Left unfiled, a pack's workflows and triggers are listed under
-  `packs/<instance>`.
-- A folder path follows the same rules as a bot's (letters, digits, `.`, `-`,
-  `_`; no empty, `.` or `..` segment; at most 8 levels).
+Folders (display-only filing of bots, teams, workflows and triggers) were
+removed. A `folder:` still in a config loads and is ignored: `conductor
+validate` and the daemon log say `folders were removed; this field is ignored
+and can be deleted`, and it never fails validation. Delete it when convenient. `conductor workflows ls` lists the config's workflows and
+triggers by name.
 
 ## Step forms
 

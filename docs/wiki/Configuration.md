@@ -749,6 +749,11 @@ way on a connectors-model config.
 
 ## Validation and fleet safety
 
+- **A removed field is ignored, never an error.** Conductor auto-updates, so a
+  key a release removes stays readable: it loads, does nothing, and is named
+  in a warning by `conductor validate` and in the daemon's log. `folder:`
+  (on bots, teams, workflows, triggers and `packs:` entries) is one: folders
+  were removed — delete it when convenient.
 - **Unknown keys are load errors.** The whole document (and every imported
   file) decodes strictly: a typo'd key (`known_hostss:`, `filtres:`, a
   misplaced `approve:`) fails the load naming the key and line, instead of
