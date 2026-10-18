@@ -74,8 +74,18 @@ func TestArchiveOnlyConsolidatedEntries(t *testing.T) {
 	if len(w1.Consolidates) != 3 || w1.Consolidates[logOf(cases[0])] == "" {
 		t.Fatalf("given: %v", w1.Consolidates)
 	}
-	if !strings.Contains(w1.Brief, logOf(cases[0])) || !strings.Contains(w1.Brief, "--kind digest") || strings.Index(w1.Brief, logOf(cases[0])) > strings.Index(w1.Brief, logOf(cases[2])) {
+	if !strings.Contains(w1.Brief, "--kind digest") {
 		t.Fatalf("brief:\n%s", w1.Brief)
+	}
+	// Oldest first: the brief lists them in the order of their last commits.
+	logs, _ := repo.LogDocs(ctx)
+	last := -1
+	for _, e := range logs {
+		i := strings.Index(w1.Brief, e.Path)
+		if i < last {
+			t.Fatalf("brief not oldest first (%s):\n%s", e.Path, w1.Brief)
+		}
+		last = i
 	}
 	// A second consolidation while it runs takes nothing it was given.
 	if w, err := f.svc.Consolidate(ctx, "sre"); err != nil || w.ID != "" {
@@ -140,10 +150,13 @@ func TestArchiveOnlyConsolidatedEntries(t *testing.T) {
 		t.Fatalf("archived read: %+v %v", res, err)
 	}
 	// ... after a rebuild from nothing, too.
-	repo.idx.Close()
-	repo.idx = nil
+	rebuilds := repo.rebuilds
+	dropIndex(t, repo)
 	if hits, err := repo.Recall(ctx, "zanzibar-1", 5, ""); err != nil || len(hits) == 0 || hits[0].Path != logOf(cases[1]) || hits[0].Archived == "" {
 		t.Fatalf("archived recall after a rebuild: %+v %v", hits, err)
+	}
+	if repo.rebuilds != rebuilds+1 {
+		t.Fatal("the index was not rebuilt")
 	}
 	// The digest is what the index shows; the raw logs are counted.
 	out, _ := repo.RenderIndex(ctx, IndexView{Budget: 6000})
@@ -246,6 +259,9 @@ func TestArchivableSelection(t *testing.T) {
 	}
 	if removed, err := repo.ArchiveIf(ctx, map[string]string{}, nil); err != nil || removed != nil {
 		t.Fatal("an empty archive made a commit")
+	}
+	if repo.wroteDigest(ctx, "") {
+		t.Fatal("no dispatch, no digest")
 	}
 	// archive: false keeps everything in place.
 	m := f.cfg.Bots["sre"]

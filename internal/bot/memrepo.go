@@ -83,16 +83,6 @@ func (r *Repo) Kinds() *Kinds {
 	return NewKinds(r.Team, nil)
 }
 
-// dirs is the repo's layout: every kind's home, then legacy homes.
-func (r *Repo) dirs() []string {
-	var out, legacy []string
-	for _, k := range r.Kinds().List() {
-		out = append(out, k.Dir)
-		legacy = append(legacy, k.Legacy...)
-	}
-	return append(out, legacy...)
-}
-
 func (r *Repo) now() time.Time {
 	if r.Now != nil {
 		return r.Now()

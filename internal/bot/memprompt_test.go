@@ -172,6 +172,8 @@ func TestSessionStartPromptStaysUnderBudget(t *testing.T) {
 		t.Fatalf("session-start prompt %d bytes, over %d (fixed %d + index %d + handoff %d + 1KiB)", len(prompt), limit, fixed, budget, config.DefaultMaxBytes["handoff"])
 	}
 	before := len(HomePrompt(f.cfg, "sre", store.BotRecord{}, "", "", "")) + len(readme) + kb
+	firstAfter := len(HomePrompt(f.cfg, "sre", f.st.Bot("sre"), "", "", index))
+	t.Logf("first session (no handoff) with the index: %d chars (~%d tokens)", firstAfter, firstAfter/4)
 	t.Logf("MEASUREMENT (500 knowledge, 100 runbooks, 2000 episodes): session start, before = prompt + README.md + knowledge/ it was told to read = %d chars (~%d tokens); after = prompt with the index and a full handoff = %d chars (~%d tokens), of which the index %d chars; index rebuild from nothing %v, launch (index sync + render) %v",
 		before, before/4, len(prompt), len(prompt)/4, len(index), rebuild.Round(time.Millisecond), launch.Round(time.Millisecond))
 	// A worker's prompt is bounded the same way.

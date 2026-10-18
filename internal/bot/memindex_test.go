@@ -81,6 +81,10 @@ func TestRecallRanksFrontmatterAboveBody(t *testing.T) {
 	if hits, _ := repo.Recall(ctx, "replication", 2, ""); len(hits) != 2 {
 		t.Fatalf("limit: %d", len(hits))
 	}
+	// The limit holds across the any-word pass too.
+	if hits, _ := repo.Recall(ctx, "replication lag notes", 3, ""); len(hits) != 3 || hits[0].Path != "knowledge/title.md" {
+		t.Fatalf("limit across passes: %v", paths(hits))
+	}
 	writeDoc(t, f, "runbook", "replication-repair", "---\ntitle: Repair replication\nwhen_to_use: lag\nsteps: [a]\nverification: v\nrollback: r\nowner: o\n---\n")
 	if hits, _ := repo.Recall(ctx, "replication", 10, "runbook"); len(hits) != 1 || hits[0].Path != "runbooks/replication-repair.md" {
 		t.Fatalf("kind filter: %v", paths(hits))
@@ -182,10 +186,16 @@ func TestIndexFollowsCommits(t *testing.T) {
 // The default index lives in conductor's state dir, per bot.
 func TestIndexPathInStateDir(t *testing.T) {
 	cfg := &config.Config{}
-	if p := cfg.BotIndexPath("sre"); !strings.HasPrefix(p, config.StateDir()) || !strings.HasSuffix(p, filepath.Join("bots", "sre", "recall.db")) {
+	p := cfg.BotIndexPath("sre")
+	if !strings.HasPrefix(p, filepath.Join(config.StateDir(), "bots", "sre", "recall-")) || filepath.Ext(p) != ".db" {
 		t.Fatalf("bot index path %s", p)
 	}
-	if p := cfg.TeamIndexPath("platform"); !strings.HasSuffix(p, filepath.Join("teams", "platform", "recall.db")) {
+	// Another repo location, another index.
+	cfg.Bots = map[string]config.BotConfig{"sre": {MemoryRepo: "/elsewhere"}}
+	if q := cfg.BotIndexPath("sre"); q == p {
+		t.Fatal("two repo locations share an index")
+	}
+	if p := cfg.TeamIndexPath("platform"); !strings.Contains(p, filepath.Join("teams", "platform", "recall-")) {
 		t.Fatalf("team index path %s", p)
 	}
 	f := newSvc(t)
@@ -406,10 +416,15 @@ func TestIndexNewestFirst(t *testing.T) {
 	if got := order(); got != "mid alpha zeta" {
 		t.Fatalf("by commit time: %v", got)
 	}
-	// Rewriting the oldest makes it the newest — its LAST commit counts.
+	// Rewriting the oldest makes it the newest — its LAST commit counts,
+	// caught up or rebuilt from nothing.
 	commitAt("zeta", "rewritten", "2030-01-04T00:00:00Z")
 	if got := order(); got != "zeta mid alpha" {
 		t.Fatalf("after a rewrite: %v", got)
+	}
+	dropIndex(t, repo)
+	if got := order(); got != "zeta mid alpha" {
+		t.Fatalf("after a rebuild: %v", got)
 	}
 }
 
@@ -453,5 +468,25 @@ func TestHomeIndexRankedByOpenCases(t *testing.T) {
 	}
 	if q := homeQuery(f.st.Bot("sre")); !strings.Contains(q, "kafka consumer lag") {
 		t.Fatalf("home query: %q", q)
+	}
+}
+
+// dropIndex removes a repo's index file, so the next query rebuilds it from
+// nothing.
+func dropIndex(t *testing.T, repo *Repo) {
+	t.Helper()
+	repo.idxMu.Lock()
+	defer repo.idxMu.Unlock()
+	if repo.idx != nil {
+		repo.idx.Close()
+		repo.idx = nil
+	}
+	if repo.IndexPath == "" {
+		return
+	}
+	for _, sfx := range []string{"", "-wal", "-shm"} {
+		if err := os.Remove(repo.IndexPath + sfx); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
 	}
 }

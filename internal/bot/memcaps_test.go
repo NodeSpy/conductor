@@ -26,9 +26,9 @@ func TestDocumentCapsOnWrite(t *testing.T) {
 	if _, _, err := f.svc.WriteMemory(ctx, hc, MemoryWrite{Kind: "knowledge", Slug: "fits", Text: fits}); err != nil {
 		t.Fatalf("a document exactly at the cap: %v", err)
 	}
-	over := fits + "y"
+	over := fits[:len(fits)-1] + "y\n" // one byte over
 	_, _, err := f.svc.WriteMemory(ctx, hc, MemoryWrite{Kind: "knowledge", Slug: "over", Text: over})
-	want := fmt.Sprintf("knowledge/over.md: knowledge document is %d bytes, over its cap of %d bytes (memory.max_bytes.knowledge) — keep one topic per document", len(over)+1, config.DefaultMaxBytes["knowledge"])
+	want := fmt.Sprintf("knowledge/over.md: knowledge document is %d bytes, over its cap of %d bytes (memory.max_bytes.knowledge) — keep one topic per document", config.DefaultMaxBytes["knowledge"]+1, config.DefaultMaxBytes["knowledge"])
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("over the cap: %v\nwant: %s", err, want)
 	}
@@ -145,6 +145,30 @@ func TestHandoffCap(t *testing.T) {
 	}
 	if capHandoff("short", "p", 1000) != "short" {
 		t.Fatal("a short note was changed")
+	}
+}
+
+// The handoff conductor writes itself, when the session did not, is cut to
+// the cap too.
+func TestMechanicalHandoffCut(t *testing.T) {
+	f := newSvc(t)
+	ctx := context.Background()
+	f.svc.Tick(ctx, "sre")
+	hc := homeCaller(f)
+	max := config.DefaultMaxBytes["handoff"]
+	for i := 0; i < 80; i++ {
+		if _, err := f.svc.CaseOpen(hc, fmt.Sprintf("open case %d with a long enough title to fill the ledger summary quickly", i), strings.Repeat("notes ", 40)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.home.set(f.st.Bot("sre").Home.AgentID, "gone")
+	if err := f.svc.Rotate(ctx, "sre", "test"); err != nil {
+		t.Fatal(err)
+	}
+	_, note := f.svc.Repo("sre").LatestHandoff()
+	_, body, _, _ := SplitFrontmatter(note)
+	if !strings.Contains(body, "written by conductor") || len(body) > max+200 || !strings.Contains(body, "cut at the handoff cap") {
+		t.Fatalf("conductor's handoff: %d bytes (cap %d)", len(body), max)
 	}
 }
 

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -151,14 +153,20 @@ func (l MemoryLimits) validate(team bool) error {
 
 // BotIndexPath is where a bot's recall index lives: conductor's state dir,
 // never inside the memory repo (sessions cannot read it, and it is rebuilt
-// from the repo whenever it is missing or stale).
+// from the repo whenever it is missing or stale). One file per repo
+// location, so pointing memory_repo elsewhere never reuses another repo's.
 func (c *Config) BotIndexPath(name string) string {
-	return filepath.Join(StateDir(), "bots", name, "recall.db")
+	return filepath.Join(StateDir(), "bots", name, indexFile(c.BotRepoDir(name)))
 }
 
 // TeamIndexPath is a team knowledge repo's recall index.
 func (c *Config) TeamIndexPath(team string) string {
-	return filepath.Join(StateDir(), "teams", team, "recall.db")
+	return filepath.Join(StateDir(), "teams", team, indexFile(c.TeamKnowledgeDir(team)))
+}
+
+func indexFile(repo string) string {
+	h := sha256.Sum256([]byte(filepath.Clean(repo)))
+	return "recall-" + hex.EncodeToString(h[:4]) + ".db"
 }
 
 // TeamLimits is a team knowledge repo's limits (zero without knowledge:).

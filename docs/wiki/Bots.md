@@ -565,8 +565,9 @@ the log — including entries archived out of the working copy (marked
 prompt carries the latest.
 
 **The index.** One SQLite file per repo, in conductor's state dir
-(`<state>/bots/<bot>/recall.db`, `<state>/teams/<team>/recall.db`) — never in
-the repo, where a session could read it. It is derived from the repo: it
+(`<state>/bots/<bot>/recall-<id>.db`, `<state>/teams/<team>/recall-<id>.db`,
+the id derived from the repo's location) — never in the repo, where a session
+could read it. It is derived from the repo: it
 records the commit it reflects, catches up from git after every commit
 conductor makes and before every query (an operator's own commits included),
 and is rebuilt from scratch when it is missing, unreadable, behind a

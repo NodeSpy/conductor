@@ -324,7 +324,8 @@ to a prompt of ~17k characters (~4.3k tokens) with the index at its 6000-byte
 budget and a full handoff.
 
 - **The index is derived, and lives outside the repo.** One SQLite database
-  per repo under the state dir (`config.BotIndexPath` / `TeamIndexPath`):
+  per repo location under the state dir (`config.BotIndexPath` /
+  `TeamIndexPath`; a different `memory_repo` gets its own file):
   `docs` (path, archive commit, kind, title, scope, summary, size, last commit
   time) and an FTS5 table (title, scope, summary field, other fields, body;
   porter stemming). `meta` holds the commit it reflects and a signature of the
