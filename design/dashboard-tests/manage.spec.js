@@ -18,9 +18,26 @@ test('Bots: each team is a section that says its rules and builds the team; solo
   // no needs-you / working-now sections: status is a quiet mark that links there
   await expect(page.locator('#main h2', { hasText: /need you|working now/i })).toHaveCount(0);
   await expect(plat.locator('.m-row[data-bot="platform-sre"] .q-st')).toHaveAttribute('href', '#/attention');
-  await page.locator('[data-act="bv-group"][data-v="none"]').click();
+  await groupBy(page, 'bots', 'None');
   await expect(page.locator('.m-flat .m-row')).toHaveCount(await page.evaluate(() => S.view().bots.length));
+  // with None, each row says its team (or solo) as a fact
+  await expect(page.locator('.m-row[data-bot="platform-sre"] .fx-i[title="Team"]')).toHaveText('platform');
+  await expect(page.locator('.m-row[data-bot="homelab"] .fx-i[title="Not on a team"]')).toHaveText('solo');
 });
+
+/** Group by is a view control in the filter bar: at the far right on a desktop, a row in the Filter sheet on a phone. */
+async function groupBy(page, id, label) {
+  if (!isPhone(page)) {
+    const btn = page.locator(`.fb[data-fb="${id}"] [data-fb-open="group"]`);
+    const [b, bar] = await Promise.all([btn.boundingBox(), page.locator(`.fb[data-fb="${id}"] .fb-bar`).boundingBox()]);
+    expect(Math.round(b.x + b.width)).toBeGreaterThan(Math.round(bar.x + bar.width) - 4); // at the far right
+    await btn.click();
+  } else { await page.locator(`.fb[data-fb="${id}"] [data-fb-sheet]`).click(); await page.locator('.fb-sheet [data-fb-row="group"]').click(); }
+  await page.locator('.fb-menu .fb-opt', { hasText: label }).click();
+  if (isPhone(page) && await page.locator('.fb-sheet').count()) await page.locator('.fb-sheet [data-fb-done]').click();
+  // it filters nothing: the search field holds no qualifier for it
+  await expect(page.locator(`.fb[data-fb="${id}"] .fb-in`)).not.toHaveValue(/group:/);
+}
 
 test('Bots: add a bot to a team, clone one, archive one, each staged into the diff', async ({ page }) => {
   await go(page, '#/bots', { fresh: true });
@@ -64,6 +81,10 @@ test('Workflows: yours, each pack with its update and Customize, made-for-bots a
   await expect(review.locator('a', { hasText: 'Customize' })).toBeVisible();
   await expect(page.locator('.m-team[data-src="bot"]')).toContainText('platform-sre');
   await expect(page.locator('.m-row[data-wf="dep-bump"] .fx-i[title="What starts it"]')).toHaveText('Mondays at 06:00');
+  // with Group by None, each row says where it came from
+  await groupBy(page, 'wl', 'None');
+  await expect(page.locator('.m-row[data-wf="pr-review"] .fx-i[title="From a pack"]')).toHaveText('review 1.4.2');
+  await expect(page.locator('.m-row[data-wf="ci-fixer"] .fx-i[title="In your config"]')).toHaveText('yours');
   await page.locator('.m-row[data-wf="ci-fixer"] [data-act="wl-toggle"]').click();
   await expect(page).toHaveURL(/#\/config\/apply/);
   expect(await page.evaluate(() => D.pending.find((c) => c.key === 'ci-fixer').after)).toContain('enabled: false');

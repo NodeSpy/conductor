@@ -27,7 +27,7 @@
   const mayWords = (m) => { const x = UI.botCan ? UI.botCan(m) : { own: [], asks: [] }; return x.own.length && x.asks.length ? `${x.own.length} on its own · asks before ${x.asks.length}` : x.asks.length ? `asks before everything (${x.asks.length})` : x.own.length ? `${x.own.length} on its own` : 'only reads'; };
   const needOf = (b) => D.attention.filter((a) => UI.botOfHref(a.href) === b).length;
   const quiet = (m) => { const n = needOf(m.name); return n ? `<a class="q-st need" href="#/attention">${UI.mark('ember')}${n} need${n > 1 ? '' : 's'} you</a>` : m.home === 'live' ? `<a class="q-st" href="#/activity?bot=${encodeURIComponent(m.name)}">${UI.mark('run')}Working</a>` : ''; };
-  const facts = (m, o = {}) => UI.factsLine([o.team && teamOf(m.name) ? { icon: 'obj-team', value: teamOf(m.name), href: `#/teams/${teamOf(m.name)}`, pri: 1, label: 'Team' } : null,
+  const facts = (m, o = {}) => UI.factsLine([o.team ? (teamOf(m.name) ? { icon: 'obj-team', value: teamOf(m.name), href: `#/teams/${teamOf(m.name)}`, pri: 1, label: 'Team' } : { icon: 'obj-team', value: 'solo', pri: 1, label: 'Not on a team' }) : null,
     teamOf(m.name) && leadOf(teamOf(m.name)) === m.name ? { icon: 'sparkle', value: 'lead', pri: 1, label: 'Leads its team' } : null,
     archived(m.name) ? { icon: 'box', value: 'archived', pri: 1, label: 'Switched off' } : practice(m.name) ? { icon: 'ghost', value: 'practice mode', pri: 1, label: 'Proposes, never acts' } : { icon: 'play', value: 'live', pri: 3, label: 'Acts as allowed' },
     { icon: 'shield', value: mayWords(m), href: `#/bots/${m.name}/access`, pri: 2, label: 'What it may do' },
@@ -54,7 +54,8 @@
     { k: 'team', label: 'Team', multi: true, options: () => tally(bots.map((m) => teamOf(m.name) || 'solo')) },
     { k: 'mode', label: 'Mode', multi: true, keepOrder: true, options: () => [['live', 'Live'], ['practice', 'Practice mode'], ['archived', 'Archived']].map(([v, label]) => ({ v, label, n: bots.filter((m) => modeOf(m) === v).length })).filter((o) => o.n) },
     { k: 'model', label: 'Model', multi: true, options: () => tally(bots.map((m) => modelOf(m.name))) },
-    { k: 'conn', label: 'Connected to', multi: true, plural: 'services', options: () => tally(bots.flatMap((m) => connsOf(m.name))) }], onChange: () => UI.rerender({ keepScroll: true }) });
+    { k: 'conn', label: 'Connected to', multi: true, plural: 'services', options: () => tally(bots.flatMap((m) => connsOf(m.name))) },
+    { k: 'group', label: 'Group by', view: true, keepOrder: true, def: 'team', title: 'Group by', find: 'Group by', options: () => [{ v: 'team', label: 'Team' }, { v: 'none', label: 'None' }] }], onChange: () => UI.rerender({ keepScroll: true }) });
   const cbx = (m) => `<input type="checkbox" class="cbx m-cbx" data-act="bv-sel" data-m="${esc(m.name)}" aria-label="Select ${esc(m.name)}"${bv.sel.has(m.name) ? ' checked' : ''}>`;
   const row = (m, o = {}) => `<li class="m-row${archived(m.name) ? ' off' : ''}" data-bot="${esc(m.name)}"><span class="m-sel">${cbx(m)}</span><span class="dl-bot-av sm">${esc(m.name.split(/[-_]/).map((w) => w[0]).join('').slice(0, 2))}</span>
     <a class="m-main" href="#/bots/${m.name}"><b>${esc(m.name)}</b><span class="dl-why">${esc(cfgOf('bots', m.name).description || m.desc || '')}</span>${facts(m, o)}</a>
@@ -74,9 +75,8 @@
         + ((!bv.team.length || bv.team.includes('solo')) && solo.length ? (() => { const open = isOpen('solo', 1, total), sh = solo.filter(keep);
           return `<section class="dl-card m-team" data-team="solo"><header class="m-team-h"><button type="button" class="m-tog" data-act="bv-tog" data-k="solo" aria-expanded="${open}" aria-label="${open ? 'Fold' : 'Show'} solo bots">${icon(open ? 'chevd' : 'chev')}</button><div class="m-team-t"><h2>Solo</h2><span class="dl-sub">${solo.length} bot${solo.length === 1 ? '' : 's'} not on a team</span></div><span class="m-st"></span><div class="m-team-a"><button type="button" class="btn sm secondary" data-act="team-new">${icon('members')}Make a team…</button></div></header>${open ? `<ul class="m-list">${sh.map((m) => row(m)).join('') || '<li class="dl-empty-row">No solo bot matches the filter.</li>'}</ul>` : ''}</section>`; })() : '');
     return `<div class="page dl-page bot-list m-page">
-      <div class="dl-phead"><div><h1>Bots</h1><p class="lede-2">A ${UI.term('bot')} is an AI teammate with memory; on a ${UI.term('team')}, bots share who approves, the most they may do, and the work routed to them.</p></div><div class="dl-actions tight"><button class="btn secondary" data-act="team-new">${icon('members')}New team</button><a class="btn primary" href="#/bots/new">${icon('plus')}New bot</a></div></div>
+      <div class="dl-phead"><div><h1>Bots <span class="h1-count">${total} bot${total === 1 ? '' : 's'} · ${teams.length} team${teams.length === 1 ? '' : 's'} · ${solo.length} solo${shown.length < total ? ` · showing ${shown.length}` : ''}</span></h1><p class="lede-2">A ${UI.term('bot')} is an AI teammate with memory; on a ${UI.term('team')}, bots share who approves, the most they may do, and the work routed to them.</p></div><div class="dl-actions tight"><button class="btn secondary" data-act="team-new">${icon('members')}New team</button><a class="btn primary" href="#/bots/new">${icon('plus')}New bot</a></div></div>
       ${bar(bots)}
-      <div class="m-grp"><span class="dl-sub">Group by</span>${UI.seg([['team', 'Team'], ['none', 'None']], bv.group, 'bv-group')}<span class="dl-sub m-count">${total} bot${total === 1 ? '' : 's'} · ${teams.length} team${teams.length === 1 ? '' : 's'} · ${solo.length} solo${shown.length < total ? ` · showing ${shown.length} · <button class="link" data-act="bv-clear">Clear</button>` : ''}</span></div>
       ${bulk}${groups}</div>`;
   }
   UI.route('bots', () => page(), { nav: 'bots' });
@@ -86,7 +86,6 @@
 
   /* ---------- actions: each change is staged into the one diff ---------- */
   const stageBot = (name, fn, why) => { const c = clone(cfgOf('bots', name)); fn(c); return S.stage('bots', name, c, why); };
-  UI.act('bv-group', (b) => { bv.group = b.dataset.v; UI.rerender({ keepScroll: true }); });
   UI.act('bv-tog', (b) => { bv.open = bv.open || {}; bv.open[b.dataset.k] = b.getAttribute('aria-expanded') !== 'true'; UI.rerender({ keepScroll: true }); });
   UI.act('bv-clear', () => { Object.assign(bv, { q: '', team: [], mode: [], model: [], conn: [] }); UI.rerender({ keepScroll: true }); });
   UI.act('bv-sel', (cb) => { cb.checked ? bv.sel.add(cb.dataset.m) : bv.sel.delete(cb.dataset.m); UI.rerender({ keepScroll: true }); });

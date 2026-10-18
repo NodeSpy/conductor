@@ -91,7 +91,9 @@ Some elements are on every screen:
   Workflow ▾ …), each opening a searchable select menu: typeahead on top, checkmarks, several at once where that makes
   sense, what's chosen and what you picked recently first, the keyboard throughout, at most 40 rows drawn (the rest
   one keystroke away). The field and
-  the menus are one state, and the field autocompletes qualifiers and their values. On a phone: the field and one
+  the menus are one state, and the field autocompletes qualifiers and their values. A **view control** (Group by)
+  sits at the far right of the same row: it changes how the list is grouped, never what's in it, so it's not a
+  qualifier. On a phone: the field and one
   Filter button that opens a sheet with the same menus.
   **conductor's own filters** (Kind, Status, Bot, Workflow, Team, Mode, Time) are always
   there. **Every other filter is published by a connector** ([§5.0](#50-connector-attributes-and-the-filters-they-publish)):
@@ -520,7 +522,9 @@ come later; they're not designed here.)
   lead and member count, with **Add a bot** (pick any bot; it moves into the team and takes its rules) and **Shape the
   team** (its defaults and ceilings page), and a menu for routing, knowledge and editing the team. Its bots are listed
   below. **Solo** bots come last, with **Make a team…**. At more than 40 bots the sections fold to their headers
-  except the first, so the organisation is visible at a glance; Group by switches between Team and None (one list).
+  except the first, so the organisation is visible at a glance. **Group by** (Team or None) is a menu at the far right of the filter
+  row (in the Filter sheet on a phone); with None, each row says its team (or solo) as a fact. The count (bots ·
+  teams · solo) sits beside the title.
 - **A row** says what the bot is for, then the facts line: lead, live / practice mode / archived, what it may do in
   words (linking to its access page), what it's connected to, its model or runtime. Its status is one quiet mark that
   links to Needs you or Activity; there are no "needs you" or "working now" sections here (those pages answer that).
@@ -693,7 +697,9 @@ path, and the apply needs an explicit acknowledgement.
 switch (yours stages `enabled: false`; a pack's goes through your pack override), the name, what it does in a
 sentence, what starts it in words (a fact), and a quiet mark for a failed or running last run that links to Activity.
 Its menu: open in the builder, run now, duplicate (a copy of yours, switched off), customize in its pack, delete. Bulk
-switch on or off on a desktop. The filter bar: Source, On or off, Last run. Group by Source or None.
+switch on or off on a desktop. The filter bar: Source, On or off, Last run, and **Group by** (Source or None) at its
+far right (in the Filter sheet on a phone); with None, each row says where it came from as a fact (yours, the pack and
+its version, made for a bot); grouped by source the section says it. The count sits beside the title.
 
 **Create in place.** Every picker that references another entity offers
 **+ New …** as its first option: team → bot, bot → team, step →

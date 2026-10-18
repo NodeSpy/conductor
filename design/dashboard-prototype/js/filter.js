@@ -10,7 +10,8 @@
  *   FB.html(cfg) → markup for the bar; call it on every render with the page's own state object.
  *   cfg: { id, placeholder, label, state, onChange(state),
  *          fields: [{ k, label, multi, path, all, value(v) (button text), options() → [{ v, label, sub, n }],
- *                     more (listed under More filters until it's set), alias (a short key), group (its connector) }] }
+ *                     more (listed under More filters until it's set), alias (a short key), group (its connector),
+ *                     view (a view control such as Group by: a menu at the far right, never a qualifier or a filter) }] }
  * conductor's own filters (kind, status, bot, workflow, time, folder) are always there. Everything a connector's items
  * carry comes from the filters that connector publishes (js/connattrs.js): its primary ones are menus beside
  * conductor's (GitHub's Repo ▾ and PR ▾), the rest under More filters ▾ grouped by connector, and every one is also a
@@ -37,11 +38,12 @@
   const remember = (k, v) => { try { const all = JSON.parse(localStorage.getItem(RK) || '{}'); all[k] = [v].concat((all[k] || []).filter((x) => x !== v)).slice(0, 5); localStorage.setItem(RK, JSON.stringify(all)); } catch (e) {} };
 
   /* ---------- the query text: qualifiers and free text, both ways ---------- */
+  const qf = (cfg) => cfg.fields.filter((f) => !f.view); // the fields that filter (a view control doesn't)
   FB.serialize = (cfg) => { const st = cfg.state;
-    const quals = cfg.fields.filter((f) => isSet(f, st)).map((f) => `${f.alias || f.k}:${vals(f, st).map(qv).join(',')}`);
+    const quals = qf(cfg).filter((f) => isSet(f, st)).map((f) => `${f.alias || f.k}:${vals(f, st).map(qv).join(',')}`);
     return quals.concat(st.q ? [st.q] : []).join(' '); };
   const TOK = /(\w[\w.-]*):("[^"]*"?|[^\s]*)|"[^"]*"?|\S+/g;
-  const fieldFor = (cfg, key) => { key = String(key).toLowerCase(); return cfg.fields.find((x) => x.k.toLowerCase() === key || (x.alias && x.alias === key) || x.label.toLowerCase() === key); };
+  const fieldFor = (cfg, key) => { key = String(key).toLowerCase(); return qf(cfg).find((x) => x.k.toLowerCase() === key || (x.alias && x.alias === key) || x.label.toLowerCase() === key); };
   /** Reads the field's text into state: known qualifiers set their filter (a value matches its id or its label), the
    * rest stays free text. A qualifier being typed (no value yet) changes nothing. */
   FB.parse = (cfg, text) => { const st = cfg.state, free = [], seen = {};
@@ -52,25 +54,27 @@
       const vs = (f.multi ? raw.split(',') : [raw]).map((x) => x.trim()).filter(Boolean).map((x) => { const o = opts(f).find((y) => y.v.toLowerCase() === x.toLowerCase() || String(y.label).toLowerCase() === x.toLowerCase()); return o ? o.v : x; });
       seen[f.k] = f.multi ? [...new Set((seen[f.k] || []).concat(vs))] : vs[vs.length - 1];
     }
-    cfg.fields.forEach((f) => { st[f.k] = f.k in seen ? seen[f.k] : f.multi ? [] : f.def || ''; });
+    qf(cfg).forEach((f) => { st[f.k] = f.k in seen ? seen[f.k] : f.multi ? [] : f.def || ''; });
     st.q = free.join(' '); };
 
   /* ---------- markup ---------- */
   const btnText = (f, st) => { const v = vals(f, st);
     // a field with a default (a time range) always names what it shows; the rest name themselves until they're set
+    if (f.view) return `<span class="fb-l">${esc(f.label)}:</span> <span class="fb-v">${esc(labelOf(f, st[f.k] || f.def))}</span>`;
     if (!v.length && f.bare && f.def) return `<span class="fb-l">${esc(labelOf(f, f.def))}</span>`;
     if (!v.length) return `<span class="fb-l">${esc(f.label)}</span>`;
     const first = f.value ? f.value(v[0]) : f.path ? pathText(v[0]) : labelOf(f, v[0]);
     return f.bare ? `<span class="fb-v">${esc(first)}</span>` : `<span class="fb-l">${esc(f.label)}:</span> <span class="fb-v">${esc(first)}${v.length > 1 ? ` +${v.length - 1}` : ''}</span>`; };
-  FB.html = (cfg) => { FB.reg[cfg.id] = cfg; const st = cfg.state, n = cfg.fields.filter((f) => isSet(f, st) && !f.bare).length + (st.q ? 1 : 0), quals = cfg.fields.some((f) => f.group);
-    const any = cfg.fields.some((f) => isSet(f, st)) || st.q;
+  FB.html = (cfg) => { FB.reg[cfg.id] = cfg; const st = cfg.state, n = qf(cfg).filter((f) => isSet(f, st) && !f.bare).length + (st.q ? 1 : 0), quals = cfg.fields.some((f) => f.group);
+    const any = qf(cfg).some((f) => isSet(f, st)) || st.q, views = cfg.fields.filter((f) => f.view);
     return `<div class="fb" data-fb="${cfg.id}">
       <div class="fb-search${FB.serialize(cfg) ? ' has-q' : ''}">${ic('search')}<input class="fb-in" type="search" value="${esc(FB.serialize(cfg))}" placeholder="${esc(cfg.placeholder || 'Search')}" aria-label="${esc(cfg.label || 'Search and filter')}" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="fb-ac-${cfg.id}">${quals ? `<button type="button" class="fb-by" data-fb-by title="Every qualifier you can search by, by connector">Filter by…</button>` : ''}${any ? `<button type="button" class="fb-x" data-fb-clear aria-label="Clear the search and every filter">${ic('x')}</button>` : ''}
         <ul class="fb-ac" id="fb-ac-${cfg.id}" role="listbox" hidden></ul></div>
-      <div class="fb-bar" role="group" aria-label="Filters">${cfg.fields.filter((f) => !f.more || isSet(f, st)).map((f) => `<button type="button" class="fb-btn${isSet(f, st) ? ' on' : ''}" data-fb-open="${f.k}" aria-haspopup="listbox" aria-expanded="false">${btnText(f, st)}${ic('chevd')}</button>`).join('')}
+      <div class="fb-bar" role="group" aria-label="Filters">${qf(cfg).filter((f) => !f.more || isSet(f, st)).map((f) => `<button type="button" class="fb-btn${isSet(f, st) ? ' on' : ''}" data-fb-open="${f.k}" aria-haspopup="listbox" aria-expanded="false">${btnText(f, st)}${ic('chevd')}</button>`).join('')}
         <button type="button" class="fb-phone${n ? ' on' : ''}" data-fb-sheet aria-haspopup="dialog">${ic('filter')}Filter${n ? ` <span class="fb-n">${n}</span>` : ''}</button>
         ${cfg.fields.some((f) => f.more && !isSet(f, st)) ? `<button type="button" class="fb-btn fb-more-btn" data-fb-more aria-haspopup="menu" aria-expanded="false"><span class="fb-l">More filters</span>${ic('chevd')}</button>` : ''}
-        ${any ? `<button type="button" class="fb-reset" data-fb-clear>${ic('x')}Clear filters</button>` : ''}</div></div>`; };
+        ${any ? `<button type="button" class="fb-reset" data-fb-clear>${ic('x')}Clear filters</button>` : ''}
+        ${views.map((f) => `<button type="button" class="fb-btn fb-view" data-fb-open="${f.k}" aria-haspopup="listbox" aria-expanded="false">${btnText(f, st)}${ic('chevd')}</button>`).join('')}</div></div>`; };
 
   /* ---------- after a change: the field's text, the buttons, the page's list ---------- */
   const commit = (cfg, keepText) => { const root = document.querySelector(`.fb[data-fb="${cfg.id}"]`);
@@ -80,7 +84,7 @@
       const x = root.querySelector('.fb-x'), nx = nb.querySelector('.fb-x'); if (x && !nx) x.remove(); else if (!x && nx) input.after(nx);
       if (keepText) { input.value = text; if (focused) input.setSelectionRange(pos, pos); } else input.value = FB.serialize(cfg);  root.querySelector('.fb-search').classList.toggle('has-q', !!FB.serialize(cfg)); }
     if (cfg.onChange) cfg.onChange(cfg.state); };
-  FB.clear = (cfg) => { cfg.fields.forEach((f) => { cfg.state[f.k] = f.multi ? [] : f.def || ''; }); cfg.state.q = ''; commit(cfg); };
+  FB.clear = (cfg) => { qf(cfg).forEach((f) => { cfg.state[f.k] = f.multi ? [] : f.def || ''; }); cfg.state.q = ''; commit(cfg); };
 
   /* ---------- the searchable select menu ---------- */
   let open = null; // { cfg, f, el, opener, active, sheet }
@@ -110,7 +114,7 @@
     o.el.querySelector('.fb-find').setAttribute('aria-activedescendant', a ? a.id : ''); if (a) a.scrollIntoView({ block: 'nearest' }); };
   const pick = (o, v) => { const { cfg, f } = o, st = cfg.state;
     if (f.multi) { const cur = vals(f, st); st[f.k] = cur.includes(v) ? cur.filter((x) => x !== v) : cur.concat([v]); if (v && !cur.includes(v)) remember(f.k, v); commit(cfg); paint(o); }
-    else { st[f.k] = v; if (v) remember(f.k, v); commit(cfg); if (o.sheet) showSheet(cfg, o); else close(); } };
+    else { st[f.k] = v; if (v && !f.view) remember(f.k, v); commit(cfg); if (o.sheet) showSheet(cfg, o); else close(); } };
   const menuBody = (cfg, f) => `<div class="fb-mh"><b>${esc(f.title || 'Filter by ' + f.label.toLowerCase())}</b>${f.multi && isSet(f, cfg.state) ? `<button type="button" class="link" data-fb-none>Clear</button>` : ''}</div>
     <div class="fb-fs">${ic('search')}<input class="fb-find" type="text" placeholder="${esc(f.find || 'Filter ' + (f.plural || f.label.toLowerCase() + 's'))}" aria-label="${esc(f.find || 'Filter ' + (f.plural || f.label.toLowerCase() + 's'))}" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="fb-list"></div>
     <ul class="fb-list" id="fb-list" role="listbox"${f.multi ? ' aria-multiselectable="true"' : ''} aria-label="${esc(f.label)}"></ul>`;
@@ -146,8 +150,8 @@
   /* ---------- the phone: one Filter button, one sheet, each filter's menu inside it ---------- */
   const showSheet = (cfg, o, k) => { const st = cfg.state, f = k && cfg.fields.find((x) => x.k === k); o.f = f; o.active = 0;
     o.el.innerHTML = `<div class="fb-handle"></div>${f ? `<div class="fb-back"><button type="button" class="link" data-fb-back>${ic('chev')}All filters</button><button type="button" class="btn sm" data-fb-done>Done</button></div>${menuBody(cfg, f)}`
-      : `<div class="fb-mh"><b>Filter</b><button type="button" class="btn sm" data-fb-done>Done</button></div><ul class="fb-rows">${cfg.fields.map((x, i, all) => `${x.group && (i === 0 || all[i - 1].group !== x.group) ? `<li class="fb-gh">${esc(x.group)}</li>` : ''}<li><button type="button" data-fb-row="${x.k}"><span>${esc(x.label)}</span><span class="fb-rv${isSet(x, st) ? ' on' : ''}">${isSet(x, st) ? esc(vals(x, st).map((v) => (x.path ? pathText(v) : labelOf(x, v))).join(', ')) : esc(x.allLabel || 'Any')}</span>${ic('chev')}</button></li>`).join('')}</ul>
-        ${cfg.fields.some((x) => isSet(x, st)) ? `<button type="button" class="btn sm secondary fb-sheet-clear" data-fb-sheet-clear>Clear filters</button>` : ''}`}`;
+      : `<div class="fb-mh"><b>Filter</b><button type="button" class="btn sm" data-fb-done>Done</button></div><ul class="fb-rows">${cfg.fields.map((x, i, all) => `${x.group && (i === 0 || all[i - 1].group !== x.group) ? `<li class="fb-gh">${esc(x.group)}</li>` : ''}<li><button type="button" data-fb-row="${x.k}"><span>${esc(x.label)}</span><span class="fb-rv${isSet(x, st) && !x.view ? ' on' : ''}">${x.view ? esc(labelOf(x, st[x.k] || x.def)) : isSet(x, st) ? esc(vals(x, st).map((v) => (x.path ? pathText(v) : labelOf(x, v))).join(', ')) : esc(x.allLabel || 'Any')}</span>${ic('chev')}</button></li>`).join('')}</ul>
+        ${qf(cfg).some((x) => isSet(x, st)) ? `<button type="button" class="btn sm secondary fb-sheet-clear" data-fb-sheet-clear>Clear filters</button>` : ''}`}`;
     if (f) { paint(o); o.el.querySelector('.fb-find').focus({ preventScroll: true }); } else { const first = o.el.querySelector('[data-fb-row]'); if (first) first.focus({ preventScroll: true }); } };
   FB.openSheet = (cfg, opener, k) => { close(false);
     const scrim = document.createElement('div'); scrim.className = 'fb-scrim'; document.body.appendChild(scrim); scrim.addEventListener('click', () => close());
@@ -165,8 +169,8 @@
     const keyItem = (f) => ({ ins: `${keyOf(f)}:`, group: f.group || '', html: `<span class="fb-ak">${esc(keyOf(f))}:</span><small>${esc(f.hint || f.label)}${f.alias && f.alias !== f.k ? ` · ${esc(f.k)}` : ''}</small>` });
     if (m) { const f = fieldFor(cfg, m[1]); if (f) { const parts = m[2].replace(/^"/, '').split(','), cur = parts.pop().toLowerCase(), done = parts;
       out = opts(f).filter((o) => !done.includes(o.v) && (`${o.v} ${o.label}`).toLowerCase().includes(cur)).slice(0, 8).map((o) => ({ ins: `${keyOf(f)}:${(f.multi ? done.concat([o.v]) : [o.v]).map(qv).join(',')} `, html: `<span class="fb-ak">${esc(keyOf(f))}:</span><b>${esc(f.path ? pathText(o.v) : o.v)}</b>${o.label !== o.v && !f.path ? `<small>${esc(o.label)}</small>` : ''}` })); } }
-    else if (w.length) { const lw = w.toLowerCase(); out = cfg.fields.filter((f) => f.k.toLowerCase().startsWith(lw) || (f.alias || '').startsWith(lw) || f.label.toLowerCase().startsWith(lw) || (f.group || '').toLowerCase().startsWith(lw)).map(keyItem); }
-    else if (!input.value.trim() || input._by) out = cfg.fields.map(keyItem);
+    else if (w.length) { const lw = w.toLowerCase(); out = qf(cfg).filter((f) => f.k.toLowerCase().startsWith(lw) || (f.alias || '').startsWith(lw) || f.label.toLowerCase().startsWith(lw) || (f.group || '').toLowerCase().startsWith(lw)).map(keyItem); }
+    else if (!input.value.trim() || input._by) out = qf(cfg).map(keyItem);
     input._by = false;
     input._ac = { list: out, active: 0 };
     // the qualifiers come in groups: conductor's own first, then each configured connector's under its name

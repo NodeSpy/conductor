@@ -95,3 +95,5 @@
 .fb-more .fb-mi > svg { visibility: visible; width: 13px; height: 13px; color: var(--color-icon-default); }
 .fb-more .fb-mi small { font-family: var(--font-family-mono, ui-monospace, monospace); }
 .fb-rows .fb-gh { list-style: none; }
+.fb-view { margin-left: auto; color: var(--color-text-secondary); } .fb-view .fb-v { color: var(--color-text-primary); }
+.fb-reset + .fb-view, .fb-view:only-of-type { margin-left: auto; } .fb-bar:has(.fb-view) .fb-reset { margin-left: 0; }

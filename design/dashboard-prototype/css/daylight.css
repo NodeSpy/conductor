@@ -680,3 +680,5 @@ td.run .fx { margin-top: 4px; }
 .m-flat { border-top: 0; }
 [data-density="compact"] #act-tbl tbody.g-done td.run .fx { display: inline-flex; margin: 0 0 0 10px; vertical-align: middle; }
 .m-page .dl-phead .lede-2 { margin: 6px 0 0; font: var(--type-body-s); color: var(--color-text-tertiary); max-width: var(--layout-container-prose); }
+.h1-count { font: var(--type-body-s); font-family: var(--font-family-sans, inherit); font-variation-settings: normal; letter-spacing: 0; color: var(--color-text-tertiary); margin-left: 10px; vertical-align: middle; white-space: nowrap; }
+@media (max-width: 720px) { .h1-count { display: block; margin: 4px 0 0; } }
