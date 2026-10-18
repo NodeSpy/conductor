@@ -134,7 +134,8 @@ bots:
   platform-sre:
     display_name: Night Owl                  # one line, at most 40 characters
     tagline: Watches the pager so you can sleep.   # one line, at most 120
-    avatar: { preset: owl }                  # or { icon: radar, color: teal }
+    avatar: { preset: owl, color: teal }     # color optional (default: color: below); or { icon: radar, color: teal }
+    # avatar: { image: avatars/platform-sre.png, preset: owl }   # your own picture; the face is its fallback
     color: indigo                            # the bot's identity color
     personality:
       tone: terse                            # terse | friendly | formal | warm | dry | playful
@@ -142,14 +143,39 @@ bots:
         Lead with the answer, then the evidence. No exclamation marks.
 ```
 
-- **Avatar and color** are names from built-in lists: an avatar is a
-  `preset`, or an `icon` with a `color`. They are never a URL or a file, so a
-  config stays self-contained and safe to share. Identity colors exclude the
-  status hues (red, green, amber, yellow, orange), so a bot's color never
-  reads as failing or healthy. `conductor bot identity-options` prints the
-  lists. They are placeholders for now and will change with the dashboard.
-  With no avatar, the dashboard shows the bot's initials (from its display
-  name, else its id).
+- **Avatar and color.** A face is a `preset` with an optional `color`
+  (default: the bot's `color`), or an `icon` with a color (its own, or the
+  bot's). Both are names from built-in lists, never URLs. Identity colors
+  exclude the status hues (red, green, amber, yellow, orange), so a bot's
+  color never reads as failing or healthy. `conductor bot identity-options`
+  prints the lists. They are placeholders for now and will change with the
+  dashboard. With no avatar, the dashboard shows the bot's initials (from
+  its display name, else its id).
+- **Your own picture.** `avatar: { image: avatars/platform-sre.png }` names a
+  file relative to the config's directory, so it travels with the config. A
+  template names one inside its pack. PNG, JPEG or WebP only, never SVG (it
+  can carry script). Conductor checks it by content and structure, never by
+  name: the signature must match, nothing may follow the image's own end
+  (where a polyglot hides its second format), and there may be no markup in
+  its text metadata. It must decode, stay within 2 MB and 2048px a side, and
+  stay inside the directory (no `..`, no symlink out). An SVG or a polyglot
+  renamed `.png` fails `conductor validate`, naming the bot. A preset or an
+  icon beside the image is the fallback face, for anywhere the picture
+  can't go.
+
+  ```
+  conductor bot avatar set platform-sre me.jpg [--crop x,y,side]   # a diff; --write writes it
+  conductor bot avatar clear platform-sre [--write]
+  ```
+
+  An upload (at most 8 MB) is decoded and **re-encoded**: cropped to a
+  square (the centre, or your crop box), scaled to at most 512px, and
+  written as a PNG with no metadata to `avatars/<bot>.png` beside the
+  config, plus one `avatar:` line. Like any config change it's validated on
+  a copy and shown as a diff, and nothing is written without `--write`.
+  It's not a widening: a picture changes nothing a bot may do. The
+  dashboard does the same through the operator API (below), and gets the
+  picture back re-encoded, whatever the file on disk holds.
 - **Display name** is what the bot calls itself and what a chat connector
   shows. The config id (`platform-sre`) stays the bot's address everywhere:
   in commands, in routing, on approvals and in the ledger.
@@ -175,12 +201,19 @@ conductor's avatar names to its own icons. Conductor has nothing
 connector-specific for this; see
 [plugin contract §2.3](https://github.com/NodeSpy/conductor/blob/main/docs/design/plugin-contract.md#23-verb-semantics).
 A proactive finding's `conductor.*` event also carries `bot_name` (the
-display name) for a trigger that posts it.
+display name) for a trigger that posts it. **A picture never leaves
+conductor this way.** A chat post can only show an image the platform can
+fetch from a reachable URL, or one the connector uploads, and conductor
+serves pictures only on its operator socket: it has no public endpoint, on
+purpose. So connectors get the fallback face (`avatar_preset` or
+`avatar_icon`, and `avatar_color`), or with neither, just the name and the
+platform's default icon.
 
 `conductor bot show <bot>` (and the dashboard, over the same control-socket
 op) returns `identity`: always `name` and `initials`, plus `display_name`,
-`tagline`, `avatar`, `color`, `personality`, and `suggested_by` (the template)
-when set. `conductor bot ls` shows a display name next to the id.
+`tagline`, `avatar`, `color`, `personality`, `picture` (the operator API path
+that serves the picture, when there is one), and `suggested_by` (the
+template) when set. `conductor bot ls` shows a display name next to the id.
 
 ### Attachments
 
@@ -265,6 +298,9 @@ control socket, and nothing on it is reachable from a bot session:
 | `GET /v1/bots/{bot}/attachments/{id}` | one record |
 | `GET /v1/bots/{bot}/attachments/{id}/content` | the bytes, always as a download (`Content-Disposition: attachment`, `nosniff`, a sandboxing CSP), never rendered |
 | `GET /v1/bots/{bot}/attachments/{id}/thumbnail[?size=N]` | a PNG thumbnail of a PNG, JPEG or GIF (32–512 px; an image declaring more than 40 megapixels is refused) |
+| `GET /v1/bots/{bot}/avatar` | the bot's picture, re-encoded as a PNG; `404` when it has none (show its face or initials) |
+| `POST /v1/bots/{bot}/avatar/plan` | multipart: `file` (at most 8 MB) with an optional crop box `crop_x`, `crop_y`, `crop_side`, or `clear=1`. The same plan as `bot avatar set`: re-encoded, validated on a copy, a diff, `widening: false`, and a `token` |
+| `POST /v1/bots/{bot}/avatar/apply` | `token=…`: writes the planned picture and config line. Single use, bound to its bot, 15 minutes, and refused if the config changed since the plan. Reload to see it |
 
 ## The home session
 
@@ -1296,6 +1332,8 @@ conductor bot deliver <bot> --title "…" [--text "…"] [--requester who] [--ur
 conductor bot attachments <bot> [--all]          # the files messages carried (--all: removed ones too)
 conductor bot attachment <bot> <id> [--out <f>]  # one attachment; --out saves its bytes
 conductor bot identity-options   # the avatar, color and tone lists an identity names
+conductor bot avatar set <bot> <file> [--crop x,y,side] [--write]   # its own picture (re-encoded; a diff first)
+conductor bot avatar clear <bot> [--write]
 conductor bot consolidate <bot>
 conductor bot replan <bot> <id>  # re-plan a stale terraform proposal
 conductor bot sweep <bot>        # a proactive sweep now (budget applies)

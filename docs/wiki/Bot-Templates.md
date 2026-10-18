@@ -234,7 +234,7 @@ bots:
     proactive: { every: 4h, quiet_hours: "22:00-07:00", checklist: { section: "Proactive checks" }, notify_at: high }
     model: claude-opus-5                # a suggested home model (applied when the operator sets none)
     display_name: Pager Pal             # a suggested identity: every field optional, each one the operator's to override
-    avatar: { preset: lighthouse }
+    avatar: { preset: lighthouse }      # or { image: face.png, preset: lighthouse }: a picture inside the pack
     personality: { tone: friendly, style: "Explain the why behind every step." }
     runtime: "a use: cli runtime with claude-code"   # a suggestion, shown — runtimes are the operator's
 ```

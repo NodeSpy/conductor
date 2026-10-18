@@ -495,8 +495,22 @@ tagline, personality) came from one.
   holds the avatar presets, icons, identity colors, the status hues they
   exclude, and the tones. Validation, the error messages, `bot
   identity-options`, the dashboard op and the tests all read those lists, so
-  changing a list is a one-file change. There are no URLs or files: a config
-  stays hermetic and safe to publish.
+  changing a list is a one-file change. There are no URLs. A preset takes an
+  optional color that defaults to the bot's.
+- **The operator's own picture** is a file beside the config (or in a
+  template's pack): `avatar.image`, resolved and checked at load by
+  `internal/avatar`. PNG/JPEG/WebP by signature; whole (nothing after IEND
+  or EOI, and the RIFF size covers the file, which is where a polyglot keeps
+  its second format); no markup in PNG text chunks or JPEG comment/APP
+  segments; decodable within 40 MP; 2 MB and 2048px for a file a config
+  names. Uploads (`bot avatar set`, the operator API) are re-encoded: square
+  crop, at most 512px, a fresh PNG, so no metadata survives. Serving
+  re-encodes too, so a file swapped in by hand can't pass anything but
+  pixels. The change is a normal plan (validated on a copy, with the new
+  picture staged under a temp name, then a diff); the dashboard's apply
+  takes a single-use token and refuses a config that changed since the
+  plan. A picture never reaches a connector: there's no public endpoint, so
+  the fallback face stands in.
 - **The voice section is subordinate, by position and by statement.** It is
   rendered after the charter, every rule and (in a sweep) the notify
   threshold. It says it governs how the bot writes, never what it may do,

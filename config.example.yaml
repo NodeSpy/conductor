@@ -1400,10 +1400,12 @@ bots:
       and the infra map in your memory current.
     # charter_file: bots/platform-sre.md      # or keep the charter in a file
     # Identity (wiki: Bots → Identity): presentation and voice only, never permissions.
-    # Avatars and colors are names from built-in lists (`conductor bot identity-options`), never URLs.
+    # Faces and colors are names from built-in lists (`conductor bot identity-options`), never URLs.
     # display_name: Night Owl                    # what it calls itself and chat shows; the id stays its address
     # tagline: Watches the pager so you can sleep.
-    # avatar: { preset: owl }                    # or { icon: radar, color: teal }; none: the dashboard shows initials
+    # avatar: { preset: owl, color: teal }       # or { icon: radar, color: teal }; none: the dashboard shows initials
+    #                                            # or your own picture: { image: avatars/platform-sre.png, preset: owl }
+    #                                            #   (`conductor bot avatar set platform-sre me.jpg`: re-encoded, PNG/JPEG/WebP, no SVG)
     # color: indigo                              # identity colors exclude status hues (red, green, amber, …)
     # personality:                               # a voice section in its prompt, fenced, below the charter and rules
     #   tone: terse                              # terse | friendly | formal | warm | dry | playful
