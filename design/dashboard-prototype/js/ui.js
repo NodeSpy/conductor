@@ -753,10 +753,27 @@
     if (opts.go !== false) { if (!D.prefs.returnTo && !location.hash.startsWith('#/config')) { D.prefs.returnTo = { href: location.hash, label: (document.querySelector('#main h1') || {}).textContent || UI.pageTitle() }; S.save(); } UI.go('#/config/apply'); }
     else UI.toast(`Staged: ${UI.esc(ch.summary)}`, `${D.pending.length} change${D.pending.length > 1 ? 's' : ''} waiting · review in Config → apply`, 'run');
   };
-  /* phone polish after every render: tab rows that scroll show a fade and keep the current tab in view;
+  /** A tab bar that doesn't fit never cuts a label: the tabs that don't fit go into a "More" menu at its end, and the
+      current tab always stays in view (it takes the place of the last one that fits). Hidden tabs stay in the DOM, so
+      the bar's set of places is the same on every tab (UI.render keeps tab switches still). */
+  UI.fitTabs = (t) => { const tabs = [...t.querySelectorAll(':scope > a')]; t.querySelector(':scope > .tab-more')?.remove(); tabs.forEach((a) => a.classList.remove('tab-over'));
+    if (t.scrollWidth <= t.clientWidth + 1 || tabs.length < 3) return;
+    const gap = parseFloat(getComputedStyle(t).columnGap) || 16, room = t.clientWidth - 76, w = tabs.map((a) => a.getBoundingClientRect().width), on = tabs.findIndex((a) => a.classList.contains('on'));
+    let used = 0, keep = []; tabs.forEach((a, i) => { if (used + w[i] <= room) { keep.push(i); used += w[i] + gap; } });
+    if (on >= 0 && !keep.includes(on)) { while (keep.length && keep.reduce((x, i) => x + w[i] + gap, 0) + w[on] > room) keep.pop(); keep.push(on); keep.sort((x, y) => x - y); }
+    const over = tabs.filter((a, i) => !keep.includes(i)); if (!over.length) return;
+    over.forEach((a) => a.classList.add('tab-over'));
+    const hot = over.some((a) => a.querySelector('.hot, em.hot'));
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'tab-more' + (hot ? ' hot' : ''); b.dataset.act = 'tab-more'; b.setAttribute('aria-haspopup', 'menu');
+    b.innerHTML = `More${UI.icon('chevd')}`; b.setAttribute('aria-label', `More tabs: ${over.map((a) => a.textContent.trim()).join(', ')}`); t.appendChild(b); };
+  let fitT = 0; addEventListener('resize', () => { clearTimeout(fitT); fitT = setTimeout(() => document.querySelectorAll('#main .tabs, #main .dl-tabs').forEach(UI.fitTabs), 120); });
+  UI.act('tab-more', (b) => UI.menu(b, [...b.parentElement.querySelectorAll(':scope > a.tab-over')].map((a) => [a.textContent.trim().replace(/\s+/g, ' '), 'chev', 'strip-go', `data-href="${a.getAttribute('href')}"`])));
+  /* phone polish after every render: tab rows fit (UI.fitTabs);
      page-head actions beyond the first two fold into a ⋯ menu (the originals stay, hidden, and get the click) */
   UI.afterRender.push((main) => {
-    main.querySelectorAll('.tabs, .dl-tabs').forEach((t) => { const upd = () => { t.classList.toggle('scrolls', t.scrollWidth > t.clientWidth + 2); t.classList.toggle('at-end', t.scrollLeft + t.clientWidth >= t.scrollWidth - 2); }; const on = t.querySelector('.on'); if (on && t.scrollWidth > t.clientWidth) t.scrollLeft = Math.max(0, on.offsetLeft - t.clientWidth / 2 + on.offsetWidth / 2); upd(); t.addEventListener('scroll', upd, { passive: true }); });
+    main.querySelectorAll('.tabs, .dl-tabs').forEach(UI.fitTabs);
+    // a responsive table's cells carry their column's name, so a phone can show it beside the value
+    main.querySelectorAll('table.responsive').forEach((tb) => { const hs = [...tb.querySelectorAll('thead th')].map((th) => th.textContent.trim()); tb.querySelectorAll('tbody tr').forEach((tr) => [...tr.children].forEach((td, i) => { if (!td.dataset.l && hs[i] && !td.classList.contains('sel')) td.dataset.l = hs[i]; })); });
     if (innerWidth > 720) return;
     main.querySelectorAll('.page-head .actions, .bot-hero > .row.wrap').forEach((box) => { const btns = [...box.children].filter((x) => x.matches('.btn, a.btn') && !x.classList.contains('st')); if (btns.length <= 2) return;
       const keep = btns.filter((x) => x.classList.contains('primary')).slice(0, 1); btns.forEach((x) => { if (keep.length < 2 && !keep.includes(x)) keep.push(x); }); const extra = btns.filter((x) => !keep.includes(x));

@@ -164,7 +164,7 @@ test.describe('bots', () => {
     await expect(page.locator('#rp-prev')).toContainText('Pgbouncer pool: 200.');
     await go(page, '#/bots/platform-sre/workers');
     await page.locator('[data-act="w-stop"]').first().click(); await page.locator('#cf-ok').click();
-    await expect(page.locator('.wcard', { hasText: 'w41' })).toContainText('stopped');
+    await expect(page.locator('.wk-row[data-w="w41"]')).toContainText('Stopped');
   });
   test('approve a proposal with the passkey seal', async ({ page }) => {
     await go(page, '#/bots/platform-sre/proposals/p12');

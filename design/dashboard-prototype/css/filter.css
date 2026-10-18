@@ -97,3 +97,4 @@
 .fb-rows .fb-gh { list-style: none; }
 .fb-view { margin-left: auto; color: var(--color-text-secondary); } .fb-view .fb-v { color: var(--color-text-primary); }
 .fb-reset + .fb-view, .fb-view:only-of-type { margin-left: auto; } .fb-bar:has(.fb-view) .fb-reset { margin-left: 0; }
+

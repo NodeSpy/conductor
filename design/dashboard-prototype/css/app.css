@@ -96,7 +96,7 @@ hr.rule { border: 0; border-top: var(--border-width) solid var(--color-border-su
 .host:hover { border-color: var(--color-border-default); }
 .host .who { min-width: 0; line-height: 1.3; }
 .host b { display: block; font-size: 13px; font-weight: var(--font-weight-bold); }
-.host .who span { display: block; color: var(--color-text-tertiary); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.host .who span { display: block; color: var(--color-text-tertiary); font-size: var(--type-caption-size); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .op { display: flex; align-items: center; gap: var(--space-2); min-width: 0; flex: 1; }
 
 .main { overflow-y: auto; overflow-x: hidden; position: relative; scroll-behavior: smooth; scrollbar-gutter: stable; }
@@ -437,7 +437,11 @@ html, body { overflow: hidden; overscroll-behavior-x: none; }
   .drawer { bottom: var(--fixb); padding-bottom: var(--sab); }
   .tbl.responsive thead { display: none; }
   .tbl.responsive tr { display: block; border-bottom: var(--border-width) solid var(--color-border-subtle); padding: var(--space-2) var(--space-1); }
-  .tbl.responsive td { display: flex; border: 0; height: auto; padding: var(--space-1) var(--space-3); justify-content: space-between; gap: var(--space-3); }
+  /* a row is a block; each cell is its label above-left and its value, which wraps rather than clips */
+  .tbl.responsive td { display: block; position: relative; border: 0; height: auto; padding: var(--space-1) var(--space-3) var(--space-1) calc(var(--space-3) + 32% + var(--space-3)); text-align: left; overflow-wrap: anywhere; white-space: normal; }
+  .tbl.responsive td:not([data-l]) { padding-left: var(--space-3); }
+  .tbl.responsive td[data-l]::before { position: absolute; left: var(--space-3); top: var(--space-1); width: 32%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tbl.responsive td > * { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
   .tbl.responsive td[data-l]::before { content: attr(data-l); color: var(--color-text-tertiary); font: var(--type-caption); }
   .toasts { left: var(--space-3); right: var(--space-3); align-items: center; }
 }
@@ -465,9 +469,10 @@ body.bare .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: mi
 
 /* the machine card (rail foot; top of More on a phone): how the machine is, and its update said quietly underneath;
    it takes the attention edge only when a person is needed (paused, or an update that needs you) */
-.host .host-upd { display: block; color: var(--color-text-tertiary); font-size: 12px; line-height: 1.3; }
+.host .host-upd { display: block; color: var(--color-text-tertiary); font-size: var(--type-caption-size); line-height: 1.3; }
 .host.need { border-color: var(--color-accent-default); box-shadow: inset 3px 0 0 var(--color-accent-default); }
 .host.need #host-line { color: var(--color-text-accent); font-weight: var(--font-weight-bold); }
 .more-host { margin-bottom: var(--space-4); }
 .more-host .host { padding: 14px; }
 .safety-stop.need { box-shadow: inset 3px 0 0 var(--color-accent-default); }
+

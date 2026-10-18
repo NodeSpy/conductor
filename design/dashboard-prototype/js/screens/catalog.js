@@ -41,7 +41,7 @@
   // a search matches words (in the name, description or tags); only the name tolerates a typo-style subsequence, so
   // "incident" no longer matches every long description that happens to contain those letters in order
   const fuzzy = (q, s) => { q = q.toLowerCase().trim(); s = s.toLowerCase(); if (s.includes(q)) return true; const name = s.split(' ')[0]; let i = 0; for (const c of name) if (c === q[i]) i++; return q.length > 2 && i === q.length; };
-  const cv = { q: '', kind: 'all', origin: 'all', inst: 'all', needs: '', sort: 'name' };
+  const cv = { q: '', kind: [], origin: [], inst: [], needs: [], sort: 'name' };
   function cards(items, mode) {
     return items.map((it) => `<div class="cat-card${it.installed && it.installed !== 'built-in' ? ' inst' : ''}" data-cat="${it.kind}:${esc(it.name)}" data-origin="${it.origin}">
       <div class="cc-top"><span class="sc-ic sm">${icon(it.kind === 'pack' ? 'extensions' : it.kind === 'runtime' ? 'server' : it.kind === 'engine' ? 'code' : 'connectors')}</span><b class="cc-name">${esc(it.name)}</b><span class="cc-ver mono">${esc(it.latest)}</span></div>
@@ -51,26 +51,31 @@
   }
   const enc = encodeURIComponent;
   function filtered(kinds) {
-    let items = UI.catalogItems().filter((it) => kinds.includes(it.kind) && (cv.kind === 'all' || it.kind === cv.kind) && (cv.origin === 'all' || it.origin === cv.origin) && (cv.inst === 'all' || (cv.inst === 'installed') === !!(it.installed && it.installed !== 'built-in')) && (!cv.needs || (it.needs || []).includes(cv.needs)) && (!cv.q || fuzzy(cv.q, `${it.name} ${it.desc} ${(it.tags || []).join(' ')} ${it.kind}`)));
+    const inst = (it) => (it.installed && it.installed !== 'built-in' ? 'installed' : 'not');
+    let items = UI.catalogItems().filter((it) => kinds.includes(it.kind) && (!cv.kind.length || cv.kind.includes(it.kind)) && (!cv.origin.length || cv.origin.includes(it.origin)) && (!cv.inst.length || cv.inst.includes(inst(it))) && (!cv.needs.length || (it.needs || []).some((n) => cv.needs.includes(n))) && (!cv.q || fuzzy(cv.q, `${it.name} ${it.desc} ${(it.tags || []).join(' ')} ${it.kind}`)));
     items.sort((a, b) => (cv.sort === 'updated' ? String(b.updated || '').localeCompare(String(a.updated || '')) : a.name.localeCompare(b.name)));
     return items;
   }
-  UI.catalogHTML = (kinds, mode) => `<div class="cat" data-kinds="${kinds.join(',')}" data-mode="${mode}"><div class="filters"><div class="input-icon">${icon('search')}<input class="input" id="cat-q" placeholder="search name, use: key, category, description" value="${esc(cv.q)}" data-on-input="cat-q" aria-label="Search the catalog"></div>
-    ${kinds.length > 1 ? UI.seg([['all', 'all']].concat(kinds.map((k) => [k, k + 's'])), cv.kind, 'cat-kind') : ''}${UI.seg([['all', 'any origin'], ['builtin', 'built-in'], ['official', 'official'], ['custom', 'custom']], cv.origin, 'cat-origin')}${UI.seg([['all', 'all'], ['installed', 'installed'], ['not', 'not installed']], cv.inst, 'cat-inst')}
-    ${kinds.includes('pack') ? UI.selectChip({ icon: 'connectors', on: !!cv.needs, label: 'Needs connector', attrs: 'data-on-change="cat-needs"', options: `<option value="">needs: any</option>${['github', 'pagerduty', 'cron', 'fswatch'].map((n) => `<option${cv.needs === n ? ' selected' : ''}>${n}</option>`).join('')}` }) : ''}
-    ${UI.selectChip({ icon: 'runs', label: 'Sort', attrs: 'data-on-change="cat-sort"', options: `<option value="name">sort: name</option><option value="updated"${cv.sort === 'updated' ? ' selected' : ''}>sort: recently updated</option>` })}</div>
+  // the browse page filters with the one shared filter bar; the picker (in a modal) is a search, nothing more
+  const ORIGIN = [['builtin', 'Built in'], ['official', 'Official'], ['custom', 'Custom source']];
+  const catBar = (kinds) => { const all = UI.catalogItems().filter((it) => kinds.includes(it.kind)), n = (f) => all.filter(f).length;
+    return UI.filterBar({ id: 'cat', state: cv, placeholder: 'Find by name, what it does or a tag', label: 'Find and filter the catalog', fields: [
+      ...(kinds.length > 1 ? [{ k: 'kind', label: 'Kind', multi: true, keepOrder: true, options: () => kinds.map((k) => ({ v: k, label: k[0].toUpperCase() + k.slice(1) + 's', n: n((it) => it.kind === k) })) }] : []),
+      { k: 'origin', label: 'Origin', multi: true, keepOrder: true, options: () => ORIGIN.map(([v, label]) => ({ v, label, n: n((it) => it.origin === v) })).filter((o) => o.n) },
+      { k: 'inst', label: 'Installed', alias: 'installed', multi: true, keepOrder: true, options: () => [{ v: 'installed', label: 'Installed', n: n((it) => it.installed && it.installed !== 'built-in') }, { v: 'not', label: 'Not installed', n: n((it) => !it.installed) }].filter((o) => o.n) },
+      ...(kinds.includes('pack') ? [{ k: 'needs', label: 'Needs', more: true, multi: true, title: 'Needs a connection to', options: () => ['github', 'pagerduty', 'cron', 'fswatch'].map((v) => ({ v, label: v, n: n((it) => (it.needs || []).includes(v)) })).filter((o) => o.n) }] : []),
+      { k: 'sort', label: 'Sort', view: true, keepOrder: true, def: 'name', title: 'Sort by', find: 'Sort by', options: () => [{ v: 'name', label: 'Name' }, { v: 'updated', label: 'Recently updated' }] }],
+      onChange: () => UI.rerender({ keepScroll: true }) }); };
+  UI.catalogHTML = (kinds, mode) => `<div class="cat" data-kinds="${kinds.join(',')}" data-mode="${mode}">${mode === 'picker' ? `<div class="filters"><div class="input-icon">${icon('search')}<input class="input" id="cat-q" placeholder="Find a service by name or what it does" value="${esc(cv.q)}" data-on-input="cat-q" aria-label="Search the catalog"></div></div>` : catBar(kinds)}
     ${mode === 'browse' && kinds.includes('pack') ? `<p class="dl-sub cat-source">Not in the catalog? <button class="link" data-act="pack-source">Add a pack from a source or git URL</button></p>` : ''}
     <div class="cat-grid" id="cat-grid">${cards(filtered(kinds), mode)}</div></div>`;
-  UI.catalogKind = (k) => { cv.kind = k; };
+  UI.catalogKind = (k) => { cv.kind = k === 'all' ? [] : [k]; };
   const redrawCat = () => { const c = UI.$('.cat'); if (!c) return; UI.$('#cat-grid').innerHTML = cards(filtered(c.dataset.kinds.split(',')), c.dataset.mode); };
   UI.act('cat-q', (el) => { cv.q = el.value; redrawCat(); });
-  ['kind', 'origin', 'inst'].forEach((k) => UI.act('cat-' + k, (b) => { cv[k] = b.dataset.v; b.parentElement.querySelectorAll('button').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); redrawCat(); }));
-  UI.act('cat-needs', (s) => { cv.needs = s.value; redrawCat(); });
-  UI.act('cat-sort', (s) => { cv.sort = s.value; redrawCat(); });
 
   /* the picker (connectors, runtimes, engines): same catalog, in a modal */
   UI.catalogPicker = (kind, onPick) => {
-    Object.assign(cv, { q: '', kind: 'all', origin: 'all', inst: 'all', needs: '' });
+    Object.assign(cv, { q: '', kind: [], origin: [], inst: [], needs: [] });
     UI.modal(`<div class="modal-head"><div><div class="caps">A new ${kind === 'connector' ? 'connection' : kind}</div><h2>Which ${kind === 'connector' ? 'service' : kind}?</h2></div><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div><div class="modal-body">${UI.catalogHTML([kind], 'picker')}<div class="row" style="margin-top:10px"><button class="btn sm" data-act="src-add" data-kind="${kind}">${icon('link')}Add a custom ${kind} from git…</button><span class="muted tiny">built-in → official → custom, as <span class="mono">use:</span> resolves</span></div></div>`, { wide: true });
     UI.catPick = onPick; setTimeout(() => { const q = UI.$('#cat-q'); if (q) q.focus(); }, 30);
   };

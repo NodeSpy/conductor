@@ -222,3 +222,5 @@ details.adv > summary::-webkit-details-marker { display: none; }
 .sc-form > .sc-sec span { font: var(--type-caption); color: var(--color-text-tertiary); margin-left: var(--space-2); }
 .sc-risk { display: inline-flex; align-items: center; gap: var(--space-2); flex: none; }
 @media (max-width: 720px) { .sc-risk .risk-w { display: none; } }
+/* the four "add a hook" buttons: two by two on a phone, never three and one */
+@media (max-width: 720px) { .hook-adds { display: grid !important; grid-template-columns: 1fr 1fr; } .hook-adds .btn { justify-content: center; } }

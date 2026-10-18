@@ -250,20 +250,21 @@ test('a bot commits while you edit: the conflict is shown and you rebase explici
 
 test('unsaved changes are guarded; browse by kind with tag filters; search spans team knowledge and bot memory', async ({ page }) => {
   await go(page, '#/bots/platform-sre/memory', { fresh: true });
-  await page.locator('.chip[data-act="rp-tag"][data-t="nat"]').click();
+  // the shared filter bar: a qualifier narrows to what an entry applies to
+  await page.fill('.fb[data-fb="rp"] .fb-in', 'about:nat'); await page.locator('.fb[data-fb="rp"] .fb-in').press('Enter');
   await expect(page.locator('.kind-entries .entry')).toHaveCount(1);
   await expect(page.locator('.kind-entries')).toContainText('Infra map');
-  await page.locator('.chip[data-act="rp-tag"][data-t="nat"]').click();
+  await page.fill('.fb[data-fb="rp"] .fb-in', ''); await page.locator('.fb[data-fb="rp"] .fb-in').press('Enter');
   await page.fill('#ke-title', 'changed');
   await page.evaluate(() => { location.hash = '#/overview'; });
   await expect(page.locator('.modal, .cdrawer').first()).toContainText('aren\'t saved');
   await page.locator('#cf-cancel, .modal [data-close]').first().click();
   await expect(page).toHaveURL(/memory/);
   await page.locator('[data-act="rp-discard"]').click(); await page.locator('#cf-ok').click();
-  await page.fill('[data-on-change="rp-q"]', 'Safari'); await page.locator('[data-on-change="rp-q"]').press('Enter');
+  await page.fill('.fb[data-fb="rp"] .fb-in', 'Safari'); await page.locator('.fb[data-fb="rp"] .fb-in').press('Enter');
   await expect(page.locator('.search-res')).toHaveCount(1);
   await go(page, '#/teams/platform/knowledge');
-  await page.fill('[data-on-change="rp-q"]', 'deregistration'); await page.locator('[data-on-change="rp-q"]').press('Enter');
+  await page.fill('.fb[data-fb="rp"] .fb-in', 'deregistration'); await page.locator('.fb[data-fb="rp"] .fb-in').press('Enter');
   await page.locator('.search-res [data-act="rp-hit"][data-repo="bot:platform-sre"]').first().click();
   await expect(page).toHaveURL(/#\/bots\/platform-sre\/memory/);
   await expect(page.locator('#ke-evidence, #rp-ed .ced-ta').first()).toBeVisible();

@@ -55,7 +55,7 @@ test('the ceilings tab shows inherits / narrows / same as team; editing the team
   await expect(page.locator('.tier-ladder')).toHaveCount(0); // no risk ladder (not approved)
   await expect(page.locator('.inherit-tbl')).toContainText('inherits');
   await expect(page.locator('.inherit-tbl')).toContainText('same as team'); // web-triage's approvers equal the team's: not "narrows"
-  await page.locator('[data-act="team-edit"]').first().click();
+  await headAction(page, '[data-act="team-edit"]');
   await page.fill('#f-pool_runs', '5');
   await page.locator('#gen-submit').click();
   // platform-sre's 6 sweep runs no longer fit the pool
@@ -71,7 +71,7 @@ test('routing: add a rule, try it on a past event, route work with provenance ke
   await page.locator('[data-mapk="conds"] [data-mk=v]').first().fill('acme/api');
   await page.selectOption('#f-to', 'web-triage');
   await page.locator('#gen-submit').click();
-  await expect(page.locator('.list')).toContainText('web-alerts');
+  await expect(page.locator('.rule-list')).toContainText('web-alerts');
   await page.selectOption('[data-on-change="route-ev"]', 'ev-pd');
   await expect(page.locator('.callout.ok')).toContainText('pd-api');
   await page.locator('a', { hasText: 'Review staged change' }).click();

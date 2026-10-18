@@ -112,14 +112,14 @@
     const ctl = (k2, label, val, opts) => `<div class="tk-f"><span class="dl-lbl">${label}</span><button class="tk-pick" data-act="tk-set" data-k="${k2}" data-t="${c.id}" aria-label="${label}: ${esc(val)}. Change">${esc(val)}${icon('chevd')}</button></div>`;
     return `<div class="page dl-page tk-page">
       <div class="dl-crumbs"><a href="#/tickets">Tickets</a></div>
-      <section class="dl-card case-head tk-head"><div class="tk-ht">${UI.mark(s.mark, { lg: true, label: s.word })}<h1 class="case-title">${esc(c.title)}</h1></div>
+      <section class="dl-card case-head tk-head"><div class="tk-ht">${UI.mark(s.mark, { lg: true, label: s.word })}<h1 class="case-title">${esc(c.title)}</h1><button class="icon-btn" data-act="tk-more" data-t="${c.id}" aria-label="More for this ticket">${icon('more')}</button></div>
         <p class="dl-sub case-state">${s.word}${c.urgent && open ? ' · <b class="danger-text">urgent</b>' : ''} · ${draft ? `${by(c)} ${UI.agoText(c.opened)}` : `${open ? 'opened' : 'closed'} ${UI.agoText(c.opened)} by ${esc(askedBy(c))}`}</p>
         ${UI.factsLine(UI.ticketFacts(c))}
         ${draft ? `<div class="tk-ready"><p><b>A draft.</b> ${c.bot || c.team ? `${esc(assignee(c))} can help shape it, but won’t start` : 'Nobody works on it'} until you mark it ready${c.bot || c.team ? '' : ', and it needs someone to do it first'}.</p><button class="btn primary" data-act="tk-ready" data-t="${c.id}">${icon('check')}Mark ready</button></div>` : ''}
         <div class="dl-actions">${draft ? '' : `<button class="btn secondary" data-act="case-close" data-m="${esc(c.bot || '')}" data-c="${c.id}">${icon(open ? 'check' : 'undo')}${open ? 'Mark done' : 'Reopen'}</button>`}
           ${open ? `<button class="btn secondary" data-act="tk-decline" data-t="${c.id}">${icon('x')}Decline</button>` : ''}
           ${m && !draft ? `<button class="btn secondary" ${canDel ? `data-act="case-delegate" data-m="${m.name}" data-c="${c.id}"` : UI.off(!open ? 'Reopen the ticket to hand off part of it' : `${m.name} has no teammate or linked bot to hand off to`)}>${icon('send')}Hand off part of it</button>` : ''}
-          <button class="icon-btn" data-act="tk-more" data-t="${c.id}" aria-label="More for this ticket">${icon('more')}</button></div>
+</div>
         <p class="dl-sub case-route">${c.routed ? k.routeLabel(c.routed) + '.' : c.bot ? 'Assigned to it directly.' : c.team ? `Assigned to team ${esc(c.team)}: its lead or routing picks a bot.` : 'Not assigned yet: nobody works on it until it is.'}</p>
         <details class="dl-audit-d"><summary>${icon('chev')}For audit: the ticket id and who asked, as recorded</summary><dl class="dl-facts"><dt>Ticket</dt><dd class="mono">${c.id}</dd><dt>Asked by</dt><dd><span class="mono">${esc(c.requester)}</span> (${esc(c.cls)}); carried through every hop, so whoever works it runs with no more trust than that</dd></dl></details></section>
       <div class="grid g-side tk-grid">

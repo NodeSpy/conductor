@@ -121,3 +121,6 @@ tr[data-row] .why-line { color: var(--color-text-primary); }
 /* calm labels: a staged change, a running thing, a shadow-mode bot or a healthy state is information, not an alarm;
    only failed, waiting and needs-you labels keep their colour */
 .tag[data-s="run"], .tag[data-s="shadow"], .tag[data-s="success"], .tag[data-s="idle"], .tag[data-s="skip"] { color: var(--color-text-secondary); border-color: var(--color-border-default); }
+
+/* phone: a list chip's remove button is a 44px target (the chip keeps its size; the button reaches past it) */
+@media (max-width: 720px) { .chip-x { min-height: 36px; } .chip-x button, .chip-del { width: 36px; height: 44px; margin: -4px -2px -4px 0; } }

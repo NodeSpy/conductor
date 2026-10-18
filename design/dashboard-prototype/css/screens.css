@@ -117,7 +117,7 @@ svg.hello-art { width: 132px; height: auto; flex: none; align-self: flex-start; 
 .bot-card:hover { border-color: var(--color-border-strong); }
 .bot-card h3 { margin: 0; font: var(--type-h3); }
 /* the bot chat (js/chat.js): a normal chat scroller, newest at the bottom; a short thread sits against the composer */
-.chat { position: relative; display: flex; flex-direction: column; height: calc(var(--dvh) - 300px); min-height: 460px; }
+.chat { position: relative; display: flex; flex-direction: column; max-height: max(460px, calc(var(--dvh) - 300px)); } /* as tall as the conversation, up to the screen: never an empty block */
 .cm-head { flex-wrap: wrap; gap: var(--space-1) var(--space-3); } .cm-head .cm-rule { flex: 1; min-width: 12ch; } .cm-head .btn svg { width: 14px; height: 14px; }
 .cm-thread { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: var(--space-4) var(--pad-card); display: flex; flex-direction: column; gap: var(--space-4); }
 .cm-thread > :first-child { margin-top: auto; }
@@ -191,9 +191,9 @@ svg.hello-art { width: 132px; height: auto; flex: none; align-self: flex-start; 
 @media (max-width: 720px) {
   /* a full-height chat: the thread scrolls, the composer stays pinned above the tab bar and the safe area */
   .chat-grid { display: flex; flex-direction: column; }
-  .chat { height: calc(var(--dvh) - 136px - var(--sab)); min-height: 380px; border-radius: var(--radius-card); }
+  .chat { max-height: calc(var(--dvh) - 136px - var(--sab)); border-radius: var(--radius-card); }
   .cm-thread { padding: var(--space-3); } .cm-row { max-width: 92%; } .cm-tools { margin-left: 0; max-width: 100%; }
-  .cm-bot { grid-template-columns: 28px minmax(0, 1fr); gap: var(--space-2); } .cm-bot .dl-bot-av.sm { width: 28px; height: 28px; font-size: 12px; }
+  .cm-bot { grid-template-columns: 28px minmax(0, 1fr); gap: var(--space-2); } .cm-bot .dl-bot-av.sm { width: 28px; height: 28px; font-size: var(--type-caption-size); }
   .cm-head .cm-rule { display: none; }
   .cm-comp { padding: var(--space-2) var(--space-2) calc(var(--space-2) + env(safe-area-inset-bottom, 0px)); }
   .cm-img { width: 150px; }
@@ -553,7 +553,7 @@ tr.folded { display: none; }
 .tk-ht { display: flex; gap: var(--space-3); align-items: center; } .tk-ht .case-title { margin: 0; font: var(--type-h3); font-size: var(--type-h2-size); letter-spacing: normal; font-variation-settings: normal; } /* a ticket's title is a sentence: sans, like any long title */
 .tk-head .case-state, .tk-head .case-route { margin: 0; }
 .tk-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.tk-chat { height: auto; min-height: 0; max-height: calc(var(--dvh) - 160px); }
+.tk-chat { max-height: calc(var(--dvh) - 160px); }
 .tk-chat .cm-thread { min-height: 120px; }
 .tk-fields { display: grid; padding: 0 var(--pad-card) var(--space-3); }
 .tk-f { display: grid; grid-template-columns: 9.5em minmax(0, 1fr); gap: var(--space-2); align-items: center; padding: var(--space-1_5) 0; border-top: var(--border-width) solid var(--color-border-subtle); }
@@ -576,7 +576,7 @@ tr.folded { display: none; }
 .btile .panel-body .mono { overflow-wrap: anywhere; }
 .log .l { padding: 0 var(--pad-card); }
 @media (max-width: 720px) {
-  .panel table, .dl-card table { display: block; max-width: 100%; overflow-x: auto; }
+  .panel table:not(.responsive), .dl-card table:not(.responsive) { display: block; max-width: 100%; overflow-x: auto; }
 }
 .item.deleg { align-items: flex-start; } .item.deleg > .st { margin-top: 2px; } .deleg-b { display: grid; gap: var(--space-1); min-width: 0; } .deleg-task { color: var(--color-text-secondary); } .deleg-st { color: var(--color-text-secondary); }
 
@@ -593,3 +593,24 @@ tr.folded { display: none; }
 .tk-ready { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-3); border-radius: var(--radius-control); background: var(--color-bg-sunken); border: var(--border-width) solid var(--color-border-subtle); }
 .tk-ready p { margin: 0; flex: 1 1 28ch; }
 @media (max-width: 720px) { .tk-board { grid-template-columns: 1fr; overflow: visible; } .tk-bar > .fb { flex-basis: 100%; } }
+
+/* the audit log: one line per entry (who did what, when); its recorded event, actor and detail open on a tap */
+.au-n { margin: 0 0 var(--space-2); }
+.au-list { list-style: none; margin: 0; padding: 0; }
+.au-list > li + li { border-top: var(--border-width) solid var(--color-border-subtle); }
+.au-row > summary { display: flex; gap: var(--space-3); align-items: baseline; padding: var(--space-3) 0; cursor: pointer; list-style: none; min-height: 44px; box-sizing: border-box; }
+.au-row > summary::-webkit-details-marker { display: none; }
+.au-what { flex: 1; min-width: 0; } .au-when { white-space: nowrap; }
+.au-row[open] > summary .au-what { font-weight: var(--font-weight-semibold); }
+.au-row .dl-facts { margin: 0 0 var(--space-3); }
+
+/* a knowledge proposal's three decisions: one row on a desktop, stacked evenly and full width on a phone */
+@media (max-width: 720px) { .kprop { flex-wrap: wrap; } .kp-acts { display: grid !important; grid-template-columns: 1fr; width: 100%; } .kp-acts .btn { justify-content: center; } }
+
+/* routing rules: each a sentence, in the order they're tried; Edit and a ⋯ (move, delete) beside it */
+.rule-list { list-style: none; margin: 0; padding: 0; }
+.rule-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: var(--space-3); align-items: center; padding: var(--space-3) var(--pad-card); border-top: var(--border-width) solid var(--color-border-subtle); }
+.rule-row:first-child { border-top: 0; } .rule-n { color: var(--color-text-tertiary); font-variant-numeric: tabular-nums; } .rule-t { display: grid; gap: 2px; min-width: 0; } .rule-t b { font-weight: var(--font-weight-semibold); }
+.rp-coll { padding: var(--space-2) var(--space-3); margin: 0; }
+.rule-none { padding: var(--space-3) var(--pad-card); margin: 0; }
+@media (max-width: 720px) { .rule-row { grid-template-columns: 20px minmax(0, 1fr) 44px; } .rule-row > .dl-na { display: contents; } .rule-row > .dl-na > .icon-btn { grid-column: 3; grid-row: 1; } .rule-row > .dl-na > .btn { grid-column: 2; grid-row: 2; justify-self: start; } }
