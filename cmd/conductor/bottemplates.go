@@ -49,9 +49,17 @@ type botPlan struct {
 	Config   string `json:"-"`
 }
 
-// validateCopy writes text beside the config, validates it in full, and
-// returns the loaded copy (nil and the error when it does not load).
-func validateCopy(cfgPath string, text []byte) (*config.Config, error) {
+// planFull says a plan runs the full `conductor validate` pipeline on its
+// copy (connectors built, dry run). The CLI does; the daemon's plans for the
+// dashboard do not — it is already running those connectors, and a second
+// build in one process collides with them — so they load and validate the
+// copy, which is every config rule.
+var planFull = true
+
+// validateCopy writes text beside the config, validates it (in full when
+// full), and returns the loaded copy (nil and the error when it does not
+// load).
+func validateCopy(cfgPath string, text []byte, full bool) (*config.Config, error) {
 	f, err := os.CreateTemp(filepath.Dir(cfgPath), ".conductor-plan-*.yaml")
 	if err != nil {
 		return nil, err
@@ -63,10 +71,14 @@ func validateCopy(cfgPath string, text []byte) (*config.Config, error) {
 		return nil, err
 	}
 	f.Close()
+	cfg, err := config.Load(p)
+	if err != nil || !full {
+		return cfg, err
+	}
 	if err := validateConfigFile(p); err != nil {
 		return nil, err
 	}
-	return config.Load(p)
+	return cfg, nil
 }
 
 func notesFor(cfg *config.Config, name string) []string {
@@ -110,8 +122,29 @@ func planNewBot(cfgPath string, d config.TemplateBotDraft, ref string) (*botPlan
 		return nil, err
 	}
 	final := step1
-	c1, verr := validateCopy(cfgPath, step1)
+	c1, verr := validateCopy(cfgPath, step1, false)
 	if verr == nil {
+		// An optional input left unbound: its read-only grants stay out of
+		// the entry (they would turn on silently once such a connector
+		// appears).
+		var unbound []string
+		for in, req := range lt.T.Connectors {
+			if _, ok := c1.Bots[d.Name].Origin.Bindings[in]; !ok && !req.IsRequired() {
+				unbound = append(unbound, in)
+			}
+		}
+		if len(unbound) > 0 {
+			sort.Strings(unbound)
+			d.Unbound = unbound
+			if entry, err = config.BotEntryYAML(d); err != nil {
+				return nil, err
+			}
+			plan.Entry = entry
+			if step1, err = config.InsertTopLevel(src, "bots", entry); err != nil {
+				return nil, err
+			}
+			plan.Notes = append(plan.Notes, "input "+strings.Join(unbound, ", ")+" is unbound: its verbs are not granted (bind it and grant them when you have one)")
+		}
 		taken := map[string]string{}
 		for _, tr := range c1.Triggers {
 			if tr.On != "" {
@@ -127,7 +160,7 @@ func planNewBot(cfgPath string, d config.TemplateBotDraft, ref string) (*botPlan
 		if final, err = config.InsertTopLevel(step1, "triggers", trig); err != nil {
 			return nil, err
 		}
-		c2, err := validateCopy(cfgPath, final)
+		c2, err := validateCopy(cfgPath, final, planFull)
 		if err != nil {
 			verr = err
 		} else {
@@ -183,7 +216,7 @@ func planGrant(cfgPath, name string, grants map[string]string) (*botPlan, error)
 		return nil, err
 	}
 	plan := &botPlan{Bot: name, Template: m.Use, Widening: anyAbove(grants)}
-	c, verr := validateCopy(cfgPath, out)
+	c, verr := validateCopy(cfgPath, out, planFull)
 	plan.Valid = verr == nil
 	if verr != nil {
 		plan.Error = verr.Error()
@@ -533,6 +566,7 @@ func templateControl(conn net.Conn, req controlRequest) {
 		writeControlResp(conn, controlResponse{Error: "this daemon does not know its config file"})
 		return
 	}
+	planFull = false
 	_ = conn.SetDeadline(time.Now().Add(3 * time.Minute))
 	var out any
 	var err error

@@ -23,6 +23,9 @@ type TemplateBotDraft struct {
 	Grants     map[string]string // widenings asked for, on top of the read-only ones
 	Folder     string
 	Proactive  bool
+	// Unbound are optional inputs left unbound: their requests are not
+	// granted.
+	Unbound []string
 }
 
 // ReadOnlyGrants are a template's requests at observe: what a new bot
@@ -62,6 +65,14 @@ func BotEntryYAML(d TemplateBotDraft) (string, error) {
 		return "", fmt.Errorf("bot name %q: lowercase letters, digits, - or _", d.Name)
 	}
 	grants := ReadOnlyGrants(d.Template.T)
+	for v := range grants {
+		in, _, _ := strings.Cut(v, ".")
+		for _, u := range d.Unbound {
+			if in == u {
+				delete(grants, v)
+			}
+		}
+	}
 	if err := CheckGrants(d.Template, d.Grants); err != nil {
 		return "", err
 	}

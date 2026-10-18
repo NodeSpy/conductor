@@ -247,6 +247,16 @@ func TestTemplateLandingChecksMemory(t *testing.T) {
 	if id3 == "" || f.st.Bot("sre").Proposals[id2].Status != "superseded" {
 		t.Fatal("not superseded")
 	}
+	// A proposal whose signed fields changed does not land.
+	_ = f.st.UpdateBot("sre", func(r *store.BotRecord) error {
+		r.Proposals[id3].Template.ToVersion = "9.9.9"
+		return nil
+	})
+	if out, err := f.x.Decide(ctx, Decision{Bot: "sre", Proposal: id3, Operator: "op", Decision: "approve", Signature: "sig"}); err == nil || !strings.Contains(err.Error(), "changed since it was signed") {
+		t.Fatalf("a re-versioned proposal landed: %+v %v", out, err)
+	}
+	f.setVersion(t, "3.1.0", "Be careful.", map[string]string{"knowledge/topology.md": kd("seven and a half")})
+	id3, _ = f.svc.CheckTemplate(ctx, "sre")
 	// A tampered proposal does not land.
 	_ = f.st.UpdateBot("sre", func(r *store.BotRecord) error {
 		r.Proposals[id3].Template.Changes[0].Text = kd("evil")
@@ -293,5 +303,60 @@ func TestUnifiedDiff(t *testing.T) {
 	}
 	if d := UnifiedDiff("", "new\n"); d != "@@ -0,0 +1,1 @@\n+new\n" {
 		t.Fatalf("new file: %q", d)
+	}
+}
+
+// pack lint's seed check: every file a template would seed is a valid,
+// capped document of its kind — or named.
+func TestLintSeed(t *testing.T) {
+	dir := t.TempDir()
+	for rel, body := range map[string]string{
+		"README.md":              "top-level files are not memory",
+		"knowledge/ok.md":        kd("fine"),
+		"knowledge/bad.md":       "no frontmatter",
+		"knowledge/huge.md":      kd(strings.Repeat("x", 9000)),
+		"runbooks/Nested/x.md":   rd("x"),
+		"log/2026/x.md":          "---\ntitle: x\n---\n",
+		"charter/charter.md":     "---\ntemplate: x\n---\nme\n",
+		"scratch/notes.md":       "where?",
+		"postmortems/review.md":  "---\ntitle: r\n---\n",
+		"postmortems/missing.md": "---\nseverity: high\n---\n",
+	} {
+		p := filepath.Join(dir, rel)
+		_ = os.MkdirAll(filepath.Dir(p), 0o700)
+		_ = os.WriteFile(p, []byte(body), 0o600)
+	}
+	probs := strings.Join(LintSeed(dir, map[string]config.Collection{"postmortems": {Dir: "postmortems", Writers: []string{"bots"},
+		Fields: map[string]config.CollectionField{"title": {Type: "string", Required: true}}}}), "\n")
+	for _, want := range []string{"knowledge/bad.md: knowledge: no frontmatter", "knowledge/huge.md: knowledge document is", "runbooks/Nested/x.md:",
+		"log/2026/x.md: log documents are conductor's", "charter/charter.md: charter documents are conductor's", "scratch/notes.md: in no kind's home",
+		"postmortems/missing.md: postmortems schema: missing required field title"} {
+		if !strings.Contains(probs, want) {
+			t.Errorf("lint lacks %q:\n%s", want, probs)
+		}
+	}
+	for _, clean := range []string{"knowledge/ok.md", "README.md", "postmortems/review.md"} {
+		if strings.Contains(probs, clean) {
+			t.Errorf("%s flagged:\n%s", clean, probs)
+		}
+	}
+}
+
+// The loop checks a bot's template once per loaded config — at start and
+// after a reload — not on every tick.
+func TestTemplateCheckedOncePerConfig(t *testing.T) {
+	f := newTplFixture(t)
+	ctx := context.Background()
+	f.svc.Tick(ctx, "sre")
+	f.setVersion(t, "2.0.0", "Be careful.", map[string]string{"knowledge/topology.md": kd("five")})
+	f.svc.Tick(ctx, "sre")
+	if f.pending(t) != nil {
+		t.Fatal("checked again under the same config")
+	}
+	cp := *f.cfg // a reload: a new config
+	f.svc.Cfg = func() *config.Config { return &cp }
+	f.svc.Tick(ctx, "sre")
+	if f.pending(t) == nil {
+		t.Fatal("a reloaded config was not checked")
 	}
 }

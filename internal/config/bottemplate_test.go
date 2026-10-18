@@ -305,11 +305,12 @@ func TestTemplateForbiddenKeys(t *testing.T) {
 		"browser": "{ logins: [x.example.com] }", "network": "[x:443]", "egress": "[x:443]", "memory_repo": "/tmp/m", "seed_dir": "/tmp/s",
 		"memory": "{ index_budget: 60k }", "peers": "[other]", "terraform": "{ plan_connector: x }", "home": "{ mode: bypass }",
 		"worker": "{ runtime: x }", "disabled": "true", "use": "kit/other", "charter_digest": "abc"}
-	for k := range forbiddenTemplateKeys {
-		v, ok := values[k]
-		if !ok {
-			t.Fatalf("no test value for forbidden key %s", k)
-		}
+	// The list is fixed here, not read from the map: dropping a key from
+	// forbiddenTemplateKeys must fail this test.
+	if len(values) != len(forbiddenTemplateKeys) {
+		t.Fatalf("forbiddenTemplateKeys has %d keys, the test expects %d", len(forbiddenTemplateKeys), len(values))
+	}
+	for k, v := range values {
 		man := strings.Replace(sreKitManifest, "    scope: compute and deploys\n", "    scope: compute and deploys\n    "+k+": "+v+"\n", 1)
 		_, _, err := loadTemplateCfg(t, man, "")
 		if err == nil || !strings.Contains(err.Error(), "a bot template cannot set "+k+" (") {
@@ -376,6 +377,14 @@ func TestTemplateConfigEdits(t *testing.T) {
 	}
 	if !strings.Contains(entry, "gh.get_pr: observe") || !strings.Contains(entry, "gh.comment: reversible") || strings.Contains(entry, "gh.merge") {
 		t.Fatalf("entry:\n%s", entry)
+	}
+	// An optional input left unbound: its read-only requests are not granted.
+	ub, _ := BotEntryYAML(TemplateBotDraft{Name: "sre", Template: lt, Unbound: []string{"alerts"}})
+	if strings.Contains(ub, "alerts.get_issue") || !strings.Contains(ub, "gh.get_pr: observe") {
+		t.Fatalf("unbound input's grants:\n%s", ub)
+	}
+	if ro := ReadOnlyGrants(lt.T); len(ro) != 3 || ro["gh.comment"] != "" {
+		t.Fatalf("read-only grants: %v", ro)
 	}
 	src, _ := os.ReadFile(p)
 	out, err := InsertTopLevel(src, "bots", entry)
