@@ -557,7 +557,7 @@ Header actions:
 
 | Tab | Purpose and data | Operations |
 |---|---|---|
-| **Chat** | The home conversation: operator messages, bot turns, tool calls, and fenced events (rendered as *untrusted data*). The transcript comes from paseo's agent timeline through conductor (**NEW** `GET /bots/<m>/transcript`, plus the SSE topic `bot.transcript`). A side rail shows pending proposals and open cases. | **Send**: `bot say`. The requester is `operator:<name>`, so it is the operator's own request with full operator trust. Delivered when the agent is idle, never into a turn in progress, as today. |
+| **Chat** | The home conversation as a normal chat scroller (newest at the bottom, anchored there, no gaps): operator messages, bot turns with the bot's identity, fenced events (a quiet note: *untrusted data*), an approval the bot asks for as a card in the thread, and **tool calls folded**: a run of consecutive calls is one line ("Ran 2 commands · started 2 read-only workers") that opens to each command and its output in a bounded box. What the operator attaches shows as data they gave it: image thumbnails that open larger, file chips with name and size, link cards. The transcript is conductor's own record (**NEW** `GET /bots/<m>/transcript`, plus the SSE topic `bot.transcript`). Beside it: what waits on you (each approval in its own words and facts) and what it's working on (each task by name, who asked, when). | **Send**: `bot say`, with attachments ([§5.3](#53-endpoints), *Chat attachments*). The requester is `operator:<name>`, so it is the operator's own request with full operator trust. Each message shows **Queued: delivered when the bot is idle** until the agent is between turns, then **Delivered**; never into a turn in progress, as today. The composer: attach (button, drag and drop, paste an image), a pasted URL becomes a link card, pending attachments preview and can be removed, the limits are stated under the field, Enter sends and Shift+Enter starts a new line. **Open in paseo** is a secondary link to paseo's own view of the session; when paseo isn't reachable it says so instead. |
 | **Cases** | The ledger's cases: id, title, requester, class (`operator`/`event`/`user`/`peer`/`proactive`), **how it was routed** (rule, lead, operator, or "delegated by platform-sre → platform-data from case c29"), **delegation edges** with status and the reported result, workers and proposals. Shows the spend against the cap and the ledger's health (degraded or not). | Open, note, close or reopen a case (`bot case …`); reassign within the team (operator, provenance kept); have the bot delegate a task to a teammate (`bot delegate`); cancel a running delegation. Closing a delegated case reports its last note back as the result. |
 | **Proposals** | Pending, shadow, executed, refused, denied and failed proposals, each with tier, verb, case, requester class and worker. **Detail:** the exact action, or for Terraform: repo, commit, dir, workspace, var files, targets, the `+a ~c -d` counts, *replaces* list, plan text (`show -no-color`), plan sha256 and the approval digest. | **Approve / Deny with passkey** ([§6.6](#66-the-approvals-boundary)), and **Replan** for a stale plan. |
 | **Memory** | The bot's memory by kind (knowledge, runbooks, watch, log, handoff, collections) in the knowledge editor (below), with pinned entries marked. | Read, correct, pin and delete what it knows; every save is one operator commit. Annotate or flag log entries. Promote knowledge or a runbook to the team. The bot keeps writing its own memory. |
@@ -1202,8 +1202,12 @@ Rows marked **NEW** need new daemon code. The others wrap code that exists on
 | `GET /api/v1/bots/<m>/proposals/<id>` | detail + **canonical approval payload** + digest; Terraform plan text and counts | `bot proposal` |
 | `POST /api/v1/bots/<m>/proposals/<id>/decision` `{decision, assertion}` | approve/deny with WebAuthn | **NEW** WebAuthn verifier → `Executor.Decide` ([§6.6](#66-the-approvals-boundary)) |
 | `POST /api/v1/bots/<m>/proposals/<id>/replan` | replan stale Terraform | `bot replan` |
-| `POST /api/v1/bots/<m>/say` `{text}` | talk to the home session | `bot say` (requester `operator:<name>`) |
-| `GET /api/v1/bots/<m>/transcript?cursor` | home conversation | **NEW** paseo timeline relay |
+| `POST /api/v1/bots/<m>/say` `{text, attachments?: [id], links?: [url]}` | talk to the home session → `{id, state: "queued"\|"delivered"}`; `bot.transcript` reports `delivered` when the agent takes it | `bot say` (requester `operator:<name>`) + **NEW** attachments |
+| `GET /api/v1/bots/<m>/transcript?cursor` | home conversation: messages with `who`, `at`, `text`, `state`, `attachments`, `links`, `proposal`; tool calls with `kind` (`spawn`/`cmd`), `text`, `out` | **NEW** conductor's own transcript (§12, 4) |
+| `POST /api/v1/bots/<m>/attachments` (multipart, one file) | upload a file for the next message → `{id, name, mime, size, kind, sha256, width?, height?, expires_at}`; refused with **413**/**415** and a reason in words | **NEW** (see *Chat attachments*) |
+| `DELETE /api/v1/bots/<m>/attachments/<id>` | drop an unsent upload | **NEW** |
+| `GET /api/v1/bots/<m>/attachments/<id>[?thumb=1]` | the file, or a 640px thumbnail for images | **NEW** |
+| `GET /api/v1/chat/limits` | `{max_files, max_bytes, types[]}` the composer states | **NEW** |
 | `POST /api/v1/bots/<m>/{deliver,rotate,sweep,consolidate}` | as the CLI | `bot deliver\|rotate\|sweep\|consolidate` |
 | `POST /api/v1/bots/<m>/cases/<c>/{note,close,reopen}` | case ops | `bot case …` |
 | `POST /api/v1/bots/<m>/cases/<c>/assign` `{to}` | operator reassignment within the team; provenance kept | **NEW** (`bot assign`) |
@@ -1221,6 +1225,26 @@ Rows marked **NEW** need new daemon code. The others wrap code that exists on
 | `POST /api/v1/teams/<t>/knowledge/proposals/decision` `{ids[], decision, assertion, content?, reason?}` | approve (optionally with edited content), or deny with a reason sent to the bot; one or many | **NEW** |
 | `POST /api/v1/bots/<m>/workers/<w>/stop` | cancel a worker's run | **NEW** (run cancel) |
 | `GET/POST /api/v1/bots/<m>/memory/…` | the bot's memory through the same repo endpoints as team knowledge (above) | `memrepo` |
+
+**Chat attachments** (a builder is adding these to conductor; the prototype mocks this shape)
+
+- **Upload first, then send.** Each file is uploaded on its own (`POST …/attachments`) as soon as it is added, so the
+  preview shows real progress and a refusal comes back before the message is written. The message then refers to the
+  ids: `POST …/say {text, attachments: ["att_7f2c", …], links: ["https://…"]}`. An upload not sent within 24 hours is
+  dropped (`expires_at`).
+- **Limits** (`GET /api/v1/chat/limits`, stated under the composer): up to 10 files per message, 20 MB each; images
+  (PNG, JPEG, GIF, WebP), PDF and text (logs, CSV, JSON, YAML, Markdown). Anything else is refused with the reason in
+  words ("clip.mov wasn't attached: only images, PDF and text files can be attached"); the daemon checks the bytes, not
+  the name.
+- **What the bot gets.** conductor writes each file into the bot's inbox (`<state>/bots/<m>/inbox/<id>/<name>`,
+  read-only to the agent) and the delivered message lists them, fenced as data from the operator: the bot reads them,
+  and nothing in a file is an instruction. The transcript keeps `{id, name, mime, size, kind}` per attachment; the
+  dashboard fetches thumbnails and files through `GET …/attachments/<id>` (same-origin, `Content-Disposition:
+  attachment` for non-images, `X-Content-Type-Options: nosniff`; images render as `img-src 'self'`).
+- **Links** are cards made in the browser from the URL alone (host and path). The daemon never fetches a pasted URL to
+  preview it: that would let a message make conductor reach an arbitrary address.
+- **Queued and delivered.** `say` answers `queued` when the agent is mid-turn; the `bot.transcript` stream sends
+  `{id, state: "delivered"}` when conductor hands it over between turns.
 
 **Browser (#182)**
 

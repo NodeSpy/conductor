@@ -116,21 +116,85 @@ svg.hello-art { width: 132px; height: auto; flex: none; align-self: flex-start; 
 .bot-card { padding: var(--pad-card); display: flex; flex-direction: column; gap: var(--space-3); text-decoration: none; transition: border-color var(--motion-duration-fast) var(--motion-easing-out); }
 .bot-card:hover { border-color: var(--color-border-strong); }
 .bot-card h3 { margin: 0; font: var(--type-h3); }
-.chat { display: flex; flex-direction: column; height: calc(var(--dvh) - 300px); min-height: 460px; }
-.chat .msgs { flex: 1; overflow-y: auto; padding: var(--space-4) var(--pad-card); display: flex; flex-direction: column; gap: var(--space-4); }
-.msg { max-width: 76%; display: flex; flex-direction: column; gap: var(--space-1); }
-.msg .meta { font: var(--type-caption); color: var(--color-text-tertiary); display: flex; gap: var(--space-2); font-variant-numeric: tabular-nums; }
-.msg .bubble { padding: var(--space-3) var(--space-4); border-radius: var(--radius-card); font: var(--type-body-m); line-height: 1.55; }
-.msg.bot .bubble { background: var(--color-bg-raised); border: var(--border-width) solid var(--color-border-subtle); border-top-left-radius: var(--radius-xs); }
-.msg.op { align-self: flex-end; } .msg.op .meta { justify-content: flex-end; }
-.msg.op .bubble { background: var(--color-bg-sunken); border: var(--border-width) solid var(--color-border-default); border-top-right-radius: var(--radius-xs); }
-.msg.event, .msg.tool { max-width: 100%; align-self: stretch; }
-.msg.event .bubble { background: transparent; border: var(--border-width) dashed var(--color-status-warning-border); color: var(--color-text-secondary); font: var(--type-body-s); border-radius: var(--radius-control); }
-.msg.event .bubble::before { content: "Event · untrusted data, not instructions"; display: block; color: var(--color-status-warning-fg); font: var(--type-caption); font-weight: var(--font-weight-semibold); margin-bottom: var(--space-1); }
-.msg.tool .bubble { background: var(--color-bg-sunken); border: var(--border-width) solid var(--color-border-subtle); font-family: var(--font-family-mono); font-size: var(--type-code-s-size); color: var(--color-text-secondary); padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); }
-.msg code.mono { background: var(--color-bg-sunken); padding: 1px var(--space-1); border-radius: var(--radius-xs); }
-.composer { border-top: var(--border-width) solid var(--color-border-subtle); padding: var(--space-3); display: flex; gap: var(--space-2); align-items: flex-end; border-radius: 0 0 var(--radius-card) var(--radius-card); }
-.composer textarea { flex: 1; min-height: 44px; max-height: 140px; resize: none; }
+/* the bot chat (js/chat.js): a normal chat scroller, newest at the bottom; a short thread sits against the composer */
+.chat { position: relative; display: flex; flex-direction: column; height: calc(var(--dvh) - 300px); min-height: 460px; }
+.cm-head { flex-wrap: wrap; gap: var(--space-1) var(--space-3); } .cm-head .cm-rule { flex: 1; min-width: 12ch; } .cm-head .btn svg { width: 14px; height: 14px; }
+.cm-thread { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: var(--space-4) var(--pad-card); display: flex; flex-direction: column; gap: var(--space-4); }
+.cm-thread > :first-child { margin-top: auto; }
+.cm-empty { text-align: center; margin: auto 0 0; }
+.cm-row { max-width: 78%; }
+.cm-meta { display: flex; gap: var(--space-2); align-items: baseline; font: var(--type-caption); color: var(--color-text-secondary); margin-bottom: var(--space-1); flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.cm-meta b { color: var(--color-text-primary); font-weight: var(--font-weight-semibold); } .cm-meta svg { width: 14px; height: 14px; align-self: center; color: var(--color-icon-default); }
+.cm-bubble { padding: 10px var(--space-4); border-radius: var(--radius-card); font: var(--type-body-m); line-height: 1.55; overflow-wrap: anywhere; }
+.cm-bubble code.mono { background: var(--color-bg-sunken); padding: 1px var(--space-1); border-radius: var(--radius-xs); }
+.cm-bot { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: var(--space-3); align-items: start; }
+.cm-bot .cm-bubble { background: var(--color-bg-raised); border: var(--border-width) solid var(--color-border-subtle); border-top-left-radius: var(--radius-xs); }
+.cm-op { align-self: flex-end; display: grid; justify-items: end; }
+.cm-op .cm-meta { justify-content: flex-end; }
+.cm-op .cm-bubble { background: var(--color-bg-sunken); border: var(--border-width) solid var(--color-border-default); border-top-right-radius: var(--radius-xs); }
+.cm-q { display: inline-flex; gap: var(--space-1); align-items: center; color: var(--color-text-secondary); } .cm-q svg { width: 13px; height: 13px; }
+/* a burst of tool calls: one quiet line under the bot's column; opens to each command and what came back */
+.cm-tools { margin-left: calc(32px + var(--space-3)); max-width: calc(100% - 32px - var(--space-3)); }
+.cm-tools summary { display: inline-flex; align-items: center; gap: var(--space-1_5); list-style: none; cursor: pointer; padding: var(--space-1) 10px; border-radius: var(--radius-control); border: var(--border-width) solid var(--color-border-subtle); font: var(--type-body-s); color: var(--color-text-secondary); }
+.cm-tools summary::-webkit-details-marker { display: none; } .cm-tools summary:hover { color: var(--color-text-primary); border-color: var(--color-border-default); }
+.cm-tools summary svg { width: 14px; height: 14px; transition: transform var(--motion-duration-fast) var(--motion-easing-out); } .cm-tools[open] summary svg { transform: rotate(90deg); }
+.cm-tools ol { list-style: none; margin: var(--space-2) 0 0; padding: 0 0 0 var(--space-3); border-left: 2px solid var(--color-border-subtle); display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+.cm-tools li { min-width: 0; }
+.cm-tw { display: flex; flex-wrap: wrap; gap: 0 var(--space-2); font: var(--type-body-s); color: var(--color-text-primary); }
+.cm-cmd { display: block; margin-top: var(--space-1); font-family: var(--font-family-mono); font-size: var(--type-code-s-size); color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.cm-out { margin: var(--space-1) 0 0; padding: var(--space-2) var(--space-3); max-height: 9.5em; overflow: auto; background: var(--code-bg); border: var(--border-width) solid var(--code-border); border-radius: var(--radius-control); font-family: var(--font-family-mono); font-size: var(--type-code-s-size); line-height: 1.5; color: var(--code-fg); white-space: pre; }
+/* an event: quiet, its source and task in words; the untrusted note stays, small and plain */
+.cm-event { max-width: 100%; align-self: stretch; }
+.cm-ev { padding: var(--space-2) var(--space-3); border: var(--border-width) dashed var(--color-border-default); border-radius: var(--radius-control); font: var(--type-body-s); color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.cm-note { margin-top: var(--space-1); font: var(--type-caption); color: var(--color-text-tertiary); }
+/* an approval the bot asks for, in the thread */
+.cm-card { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: var(--space-3); align-items: center; margin-top: var(--space-2); padding: var(--space-3); border-radius: var(--radius-card); border: var(--border-width) solid var(--color-border-default); background: var(--color-bg-raised); color: inherit; text-decoration: none; max-width: 62ch; }
+.cm-card.pend { box-shadow: inset 3px 0 0 var(--color-accent-default); } .cm-card:hover { border-color: var(--color-border-strong); }
+.cm-ct { display: grid; gap: 2px; min-width: 0; }
+/* what you gave it: thumbnails, file chips, link cards */
+.cm-atts { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: flex-end; margin-top: var(--space-2); max-width: 100%; }
+.cm-given { flex-basis: 100%; display: inline-flex; justify-content: flex-end; align-items: center; gap: var(--space-1); font: var(--type-caption); color: var(--color-text-tertiary); } .cm-given svg { width: 12px; height: 12px; }
+.cm-img { padding: 0; border: var(--border-width) solid var(--color-border-default); border-radius: var(--radius-control); overflow: hidden; background: var(--color-bg-sunken); cursor: zoom-in; width: 200px; aspect-ratio: 16 / 9; }
+.cm-img img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.cm-file, .cm-link { display: inline-flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); border: var(--border-width) solid var(--color-border-default); background: var(--color-bg-raised); font: var(--type-body-s); color: var(--color-text-primary); text-decoration: none; cursor: pointer; max-width: 100%; }
+.cm-file svg, .cm-link svg { width: 16px; height: 16px; color: var(--color-icon-default); flex: none; } .cm-file:hover, .cm-link:hover { border-color: var(--color-border-strong); }
+.cm-link > span { display: grid; min-width: 0; } .cm-link .dl-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cm-big { display: block; max-width: 100%; max-height: 70vh; margin: 0 auto; border-radius: var(--radius-control); }
+.cm-prev { max-height: 60vh; }
+/* the composer */
+.cm-comp { border-top: var(--border-width) solid var(--color-border-subtle); padding: var(--space-3); display: grid; gap: var(--space-2); }
+.cm-pend { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.cm-p { display: inline-grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2); border-radius: var(--radius-control); border: var(--border-width) solid var(--color-border-default); background: var(--color-bg-raised); max-width: 260px; }
+.cm-p img { width: 36px; height: 36px; object-fit: cover; border-radius: var(--radius-xs); } .cm-p > svg { width: 18px; height: 18px; color: var(--color-icon-default); }
+.cm-p.up { opacity: .7; } .cm-pt { display: grid; min-width: 0; font: var(--type-body-s); } .cm-pt b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: var(--font-weight-medium, 500); }
+.cm-in { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--space-2); align-items: end; }
+.cm-ta { width: 100%; min-height: 44px; max-height: 180px; resize: none; padding: 11px var(--space-3); border-radius: var(--radius-control); border: var(--border-width) solid var(--color-border-control); background: var(--color-bg-field); color: var(--color-text-primary); font: var(--type-body-m); line-height: 1.4; }
+.cm-ta:focus { outline: 2px solid var(--color-focus-ring, var(--color-accent-default)); outline-offset: 1px; }
+.cm-in .icon-btn, .cm-in .btn { height: 44px; }
+.cm-hint { margin: 0; font: var(--type-caption); }
+.cm-err { margin: 0; font: var(--type-body-s); color: var(--color-status-danger-fg); }
+.cm-drop { display: none; position: absolute; inset: 0; border-radius: inherit; place-items: center; align-content: center; gap: var(--space-2); background: color-mix(in srgb, var(--color-bg-surface) 88%, transparent); border: 2px dashed var(--color-accent-default); font: var(--type-body-l, var(--type-body-m)); color: var(--color-text-primary); pointer-events: none; z-index: 2; }
+.chat.drop .cm-drop { display: grid; } .cm-drop svg { width: 24px; height: 24px; justify-self: center; }
+/* beside the chat: what waits on you, and what it's working on, in words */
+.cm-side .panel-head .count { margin-left: auto; }
+.cm-side-l { list-style: none; margin: 0; padding: 0; }
+.cm-side-l li + li { border-top: var(--border-width) solid var(--color-border-subtle); }
+.cm-side-a { display: grid; gap: var(--space-1); padding: var(--space-3) var(--pad-card); color: inherit; text-decoration: none; }
+.cm-side-a:hover { background: var(--color-state-hover); } .cm-side-a b { font-weight: var(--font-weight-semibold); }
+.cm-side-f { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-1); }
+.cm-side-none { padding: 0 var(--pad-card) var(--space-3); margin: 0; }
+.cm-need { border-color: color-mix(in srgb, var(--color-accent-default) 40%, var(--color-border-subtle)); }
+@media (max-width: 720px) {
+  /* a full-height chat: the thread scrolls, the composer stays pinned above the tab bar and the safe area */
+  .chat-grid { display: flex; flex-direction: column; }
+  .chat { height: calc(var(--dvh) - 136px - var(--sab)); min-height: 380px; border-radius: var(--radius-card); }
+  .cm-thread { padding: var(--space-3); } .cm-row { max-width: 92%; } .cm-tools { margin-left: 0; max-width: 100%; }
+  .cm-bot { grid-template-columns: 28px minmax(0, 1fr); gap: var(--space-2); } .cm-bot .dl-bot-av.sm { width: 28px; height: 28px; font-size: 12px; }
+  .cm-head .cm-rule { display: none; }
+  .cm-comp { padding: var(--space-2) var(--space-2) calc(var(--space-2) + env(safe-area-inset-bottom, 0px)); }
+  .cm-sendw { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .cm-img { width: 150px; }
+}
 .typing { display: inline-flex; gap: 3px; padding: var(--space-3) var(--space-4); } .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--color-text-tertiary); animation: bob 1.2s infinite; }
 .typing i:nth-child(2) { animation-delay: .15s; } .typing i:nth-child(3) { animation-delay: .3s; }
 @keyframes bob { 0%, 60%, 100% { transform: none; opacity: .5; } 30% { transform: translateY(-3px); opacity: 1; } }

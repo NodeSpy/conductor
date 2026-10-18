@@ -92,6 +92,7 @@ async function crawlRoute(page, testInfo, route, { afterLoad } = {}) {
     const sampled = {};
     let downloads = 0;
     page.on('download', () => downloads++);
+    page.on('filechooser', () => downloads++); // a control that opens the system file picker (attach, upload) has done its job
     const fresh = async () => { await go(page, route, { fresh: true }); if (afterLoad) await afterLoad(page); await inject(page); };
     await fresh();
     const initial = await page.evaluate((c) => window.__crawl.list(null, c), chrome);

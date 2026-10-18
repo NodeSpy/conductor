@@ -148,15 +148,24 @@
       operators: ['ops', 'oncall'], open: 1, pending: 0, workers: 0, spend: 0, proactive: null, peers: [] },
   ];
 
+  // the home conversation, as the transcript endpoint returns it (§5.3): each message has who, when and its words; a tool
+  // call says what ran (a worker spawn or a command) and what came back; an operator message may carry attachments
+  // (uploaded first, then referenced by id) and says whether it was delivered or is queued until the bot is idle
+  D.chatsVer = 2;
   D.chat = [
-    { who: 'event', at: m(48), case: 'c29', text: 'pd.incident · SEV2 · api p99 latency > 2s for 10m (acme/api, us-east)', fenced: true },
-    { who: 'bot', at: m(47), text: 'Opened **c29**. Checking the runbook `runbooks/latency.md`. I’ll start a read-only worker to pull the last hour of p99 by route and the deploy log.' },
-    { who: 'tool', at: m(47), text: 'conductor bot spawn --task c29 --group recon --read-only "p99 by route, last 60m"' },
-    { who: 'tool', at: m(46), text: 'conductor bot spawn --task c29 --group recon --read-only "deploys + config changes, last 3h"' },
-    { who: 'bot', at: m(31), text: 'Both workers reported. The regression lines up with **web** instances on the old AMI after the 14:02 scale-out; routes `/checkout` and `/refund` are the slow ones. The fix is in `infra` commit `3f2a9c1d`: it pins the launch template to the current AMI and replaces `aws_instance.web`.' },
-    { who: 'bot', at: m(8), text: 'I proposed **p12**: `terraform apply` of infra@3f2a9c1d, dir envs/prod, workspace prod. conductor planned it: +1 ~2 -0, and it **replaces aws_instance.web**. Awaiting your approval.' },
-    { who: 'op', at: m(5), text: 'What happens to in-flight requests on web while it’s replaced?' },
-    { who: 'bot', at: m(4), text: 'The ALB drains the old target for 30s (deregistration_delay in `modules/web/alb.tf`); create_before_destroy is set, so the new instance is healthy before the old one goes. Expect no dropped requests; a brief p99 bump during the swap.' },
+    { id: 't1', who: 'event', at: m(48), case: 'c29', source: 'PagerDuty', text: 'pd.incident · SEV2 · api p99 latency > 2s for 10m (acme/api, us-east)', fenced: true },
+    { id: 't2', who: 'bot', at: m(47), text: 'I’ve opened a task for this incident. Checking the runbook `runbooks/latency.md` first, then I’ll have two read-only workers pull the last hour of p99 by route and the deploy log.' },
+    { id: 't3', who: 'tool', at: m(47), kind: 'spawn', readOnly: true, brief: 'p99 by route, last 60m', text: 'conductor bot spawn --task c29 --group recon --read-only "p99 by route, last 60m"', out: 'worker w31 started · read-only · group recon' },
+    { id: 't4', who: 'tool', at: m(46), kind: 'spawn', readOnly: true, brief: 'deploys and config changes, last 3h', text: 'conductor bot spawn --task c29 --group recon --read-only "deploys + config changes, last 3h"', out: 'worker w32 started · read-only · group recon' },
+    { id: 't5', who: 'op', at: m(44), state: 'delivered', text: 'Here’s what the dashboard showed when it paged, and a sample of the load balancer log.', attachments: [
+      { id: 'att_7f2c', kind: 'image', name: 'p99-by-route.png', mime: 'image/png', size: 248320, src: 'assets/chat/p99-by-route.svg', w: 960, h: 540 },
+      { id: 'att_91ab', kind: 'file', name: 'alb-access-sample.log', mime: 'text/plain', size: 18432 }] },
+    { id: 't6', who: 'bot', at: m(31), text: 'Both workers reported, and your graph matches: the regression lines up with the **web** servers still on the old image after the 14:02 scale-out; `/checkout` and `/refund` are the slow routes. The fix is already in `infra`: it pins the launch template to the current image.' },
+    { id: 't7', who: 'tool', at: m(12), kind: 'cmd', text: 'git -C infra log --oneline -3 -- envs/prod', out: '3f2a9c1 pin web launch template to current AMI\n9b01e2d bump alb idle timeout to 120s\n71c4a0f nat: tag gateways by owner' },
+    { id: 't8', who: 'tool', at: m(11), kind: 'cmd', text: 'terraform -chdir=envs/prod plan -no-color -out=plan.bin', out: '  # aws_instance.web must be replaced\n-/+ resource "aws_instance" "web" {\n      ~ ami = "ami-0a1b…" -> "ami-0c9d…" # forces replacement\n    }\n\nPlan: 1 to add, 2 to change, 0 to destroy.' },
+    { id: 't9', who: 'bot', at: m(8), text: 'To roll it out I need to replace the production web server, so I’m asking you first.', proposal: 'p12' },
+    { id: 't10', who: 'op', at: m(5), state: 'delivered', text: 'What happens to in-flight requests on web while it’s replaced?' },
+    { id: 't11', who: 'bot', at: m(4), text: 'The load balancer drains the old server for 30 seconds before it goes, and the new one is healthy before that starts (`create_before_destroy`). Expect no dropped requests; a brief p99 bump during the swap.' },
   ];
 
   D.cases = [
@@ -522,7 +531,7 @@ steps:
   D.workflows.find((w) => w.name === 'release-notes').pack = 'house-style';
 
   /* Chat per bot; memory files; access; preferences; staged changes. */
-  D.chats = { 'platform-sre': D.chat, 'billing-sre': [{ who: 'bot', at: m(30), text: 'Forecast for October is **$41.2k**, +6% on September. Proposal **p4** posts it to #incidents; awaiting approval.' }], 'web-triage': [] };
+  D.chats = { 'platform-sre': D.chat, 'billing-sre': [{ who: 'bot', at: m(30), text: 'Forecast for October is **$41.2k**, +6% on September. I’d like to post it to #incidents, so I’m asking you first.', proposal: 'p4' }], 'web-triage': [] };
   D.memory.files = {
     'knowledge/README.md': '# Knowledge\n\nWhat platform-sre has learned about the systems it runs.\n',
     'knowledge/db-prod-1.md': D.memory.file,

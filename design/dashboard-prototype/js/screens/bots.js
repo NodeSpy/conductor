@@ -377,26 +377,31 @@
   UI.act('m-sweep', (b) => { const m = M(b.dataset.m); const id = 'x' + (5 + D.workers.filter((w) => w.parent === 'sweep').length); D.workers.unshift({ id, bot: m.name, parent: 'sweep', case: '—', group: '', status: 'run', verbs: 'observe only', readOnly: true, cls: 'proactive', brief: 'Proactive checks (charter §)', run: 'r-7f29', cost: 0, started: now() }); audit('bot_sweep', `${m.name} · ${id} · read-only`); S.save(); UI.go(`#/bots/${m.name}/workers`); UI.toast(`Sweep ${id} started`, 'read-only · draws on the team pool', 'run'); });
   UI.act('m-deliver', (b) => { const m = M(b.dataset.m); UI.form({ caps: `bot ${esc(m.name)}`, title: `Deliver an event to ${m.name}`, fields: [{ k: 'title', type: 'string', req: true, mono: false, ph: 'Investigate elevated 5xx on /refund' }, { k: 'text', type: 'text', label: 'Text (reaches the bot fenced as untrusted data)' }, { k: 'requester', type: 'enum', req: true, options: [['operator:ops', 'operator:ops (you)'], ['event:manual', 'event']], def: 'operator:ops' }, { k: 'urgent', type: 'bool', on: 'start a worker now' }], submit: 'Deliver', submitIcon: 'send', onSubmit: (v) => { const id = newCase(m.name, { title: v.title, requester: v.requester, cls: v.requester.startsWith('operator') ? 'operator' : 'event', urgent: !!v.urgent, routed: { by: 'direct', to: m.name, requester_kept: true }, notes: v.text ? [{ at: now(), who: v.requester, text: v.text }] : [] }); (D.chats[m.name] = D.chats[m.name] || []).push({ who: 'event', at: now(), case: id, text: v.title + (v.text ? ' · ' + v.text : ''), fenced: true }); audit('bot_deliver', `${m.name} · ${id} · ${v.requester}`); S.save(); UI.go(`#/bots/${m.name}/cases/${id}`); } }); });
 
+  /** Who asked for a task, in words: you, a PagerDuty incident, someone in chat, its own routine check, another bot. */
+  const askedBy = (c) => { const r = String(c.requester || ''); return /^operator:/.test(r) ? (r === 'operator:ops' ? 'you' : r.slice(9)) : /^event:pd/.test(r) ? 'a PagerDuty incident' : /^event:gh/.test(r) ? 'a GitHub event' : /^event:/.test(r) ? 'an event' : /^chat:/.test(r) ? 'someone in chat' : c.cls === 'proactive' ? 'its own routine check' : /^bot:/.test(r) ? `${r.slice(4)} (another bot)` : r || 'someone'; };
   /* ---------- chat ---------- */
-  const bubble = (c, name) => { const who = c.who === 'op' ? 'you · ops' : c.who === 'bot' ? name : c.who === 'event' ? `event → case ${c.case}` : 'tool'; return `<div class="msg ${c.who}"><div class="meta"><span>${who}</span><span>${UI.clock(c.at)}</span></div><div class="bubble">${c.who === 'tool' ? '$ ' + esc(c.text) : md(c.text)}</div></div>`; };
+  // the thread and the composer are js/chat.js; beside them, what waits on you (the approval in its own words and facts)
+  // and what the bot is working on (each task by name, who asked, how long ago)
+  // paseo's own view of the home session lives outside the dashboard: say what it is, then open it
+  UI.act('chat-paseo', (b) => { const m = M(b.dataset.m);
+    UI.modal(`<div class="modal-head"><h2>Open in paseo</h2><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></div>
+      <div class="modal-body"><p style="margin:0 0 10px">${esc(m.name)}’s home session is a paseo agent. paseo shows all of it: every turn, the files it touched and its terminal. The chat here is the conversation only.</p>
+      <p class="dl-sub" style="margin:0">It opens in paseo on ${esc(D.daemon.host)}, in a new tab.</p></div>
+      <div class="modal-foot"><button class="btn ghost" data-close>Cancel</button><a class="btn primary" href="http://${esc(D.daemon.host)}:6767/" target="_blank" rel="noopener noreferrer" data-close>${icon('external')}Open paseo</a></div>`); });
   function chat(m) {
-    const pp = pending(m.name), msgs = D.chats[m.name] || [];
-    return shell(m, 'chat', `<div class="grid g-side">
-      <div class="panel chat"><div class="panel-head"><h3>Home session <span class="mono muted">${m.session}</span></h3><span class="muted small">messages arrive when the agent is idle, never mid-turn</span><div class="tools"><button class="btn sm ghost" ${UI.off('Opens paseo\'s own agent view, outside the dashboard (not in the prototype)')}>${icon('terminal')}Open in paseo</button></div></div>
-        <div class="msgs" id="msgs">${msgs.map((c) => bubble(c, m.name)).join('') || '<div class="empty small">No conversation yet. Say hello.</div>'}</div>
-        <div class="composer"><textarea class="textarea" id="say" rows="1" placeholder="Message ${m.name}…  (you are the requester: operator:ops)" aria-label="Message"></textarea><button class="btn primary" data-act="chat-send" data-m="${m.name}">${icon('send')}Send</button></div></div>
-      <div class="stack">
-        ${pp.map((p) => `<div class="panel" style="border-color:color-mix(in srgb,var(--color-accent-default) 40%,var(--color-border-subtle))"><div class="panel-head">${UI.statusMark('ember', 'Needs you')}<span class="mono tiny muted" style="margin-left:auto">${p.id} · ${ago(p.at)}</span></div><div class="panel-body small"><div style="font-weight:600;margin-bottom:6px">${esc(p.summary)}</div><div class="row"><a class="btn sm primary" href="#/bots/${m.name}/proposals/${p.id}">Review</a><span class="muted tiny">expires in ${p.expires}</span></div></div></div>`).join('')}
-        <div class="panel"><div class="panel-head"><h3>Open tasks</h3><a class="btn sm ghost" style="margin-left:auto" href="#/bots/${m.name}/cases">All</a></div><div class="list">${D.cases.filter((c) => c.bot === m.name && c.status === 'open').map((c) => `<a class="item small click" href="#/bots/${m.name}/cases/${c.id}"><span class="mono tiny muted">${c.id}</span><span class="grow ellipsis">${esc(c.title)}</span>${UI.label(`${c.cls}`, { cls: 'taint ' + c.cls })}</a>`).join('') || '<div class="item small muted">None open.</div>'}</div></div>
+    const pp = pending(m.name), msgs = D.chats[m.name] || [], open = D.cases.filter((c) => c.bot === m.name && c.status === 'open');
+    const paseo = ((D.daemon || {}).paseo || {}).status === 'ok';
+    const need = (p) => `<li><a class="cm-side-a" href="#/bots/${m.name}/proposals/${p.id}"><b>${esc(p.title || p.summary)}</b>${UI.factsLine([UI.envFact(p.env), UI.actionFact(p.verb, p.env, p.tier)])}<span class="cm-side-f"><span class="btn sm secondary">Review</span><span class="dl-sub">expires in ${esc(p.expires)}</span></span></a></li>`;
+    const task = (c) => `<li><a class="cm-side-a" href="#/bots/${m.name}/cases/${c.id}"><b>${c.urgent ? UI.mark('wait', { label: 'Urgent' }) + ' ' : ''}${esc(c.title)}</b>${UI.factsLine([{ icon: 'message', value: `Asked by ${askedBy(c)}`, pri: 1, label: 'Who asked' }, { icon: 'clock', value: UI.agoText(c.opened), pri: 2, label: 'Opened' }])}</a></li>`;
+    return shell(m, 'chat', `<div class="grid g-side chat-grid">
+      <div class="panel chat"><div class="panel-head cm-head"><h3>Home session</h3><span class="dl-sub cm-rule">Your messages reach it between turns, never mid-turn</span>
+        ${paseo ? `<button class="btn sm secondary" data-act="chat-paseo" data-m="${m.name}">${icon('external')}Open in paseo</button>` : '<span class="dl-sub">paseo isn’t reachable, so its own view can’t open</span>'}</div>
+        ${UI.chatThread(msgs, m.name)}${UI.chatComposer(m.name)}<div class="cm-drop" aria-hidden="true">${icon('attach')}Drop to attach to your message</div></div>
+      <div class="stack cm-side">
+        ${pp.length ? `<section class="panel cm-need"><div class="panel-head">${UI.statusMark('ember', 'Waiting for you')}${UI.count(pp.length, { hot: true })}</div><ul class="cm-side-l">${pp.map(need).join('')}</ul></section>` : ''}
+        <section class="panel"><div class="panel-head"><h3>Working on</h3><a class="btn sm ghost" style="margin-left:auto" href="#/bots/${m.name}/cases">All tasks</a></div>${open.length ? `<ul class="cm-side-l">${open.map(task).join('')}</ul>` : '<p class="dl-sub cm-side-none">Nothing open.</p>'}</section>
       </div></div>`);
   }
-  UI.act('chat-send', (b) => {
-    const ta = UI.$('#say'), v = ta.value.trim(); if (!v) return UI.nudge(ta, `Type a message for ${b.dataset.m} first`);
-    const L = (D.chats[b.dataset.m] = D.chats[b.dataset.m] || []); L.push({ who: 'op', at: now(), text: v }); ta.value = ''; S.save();
-    const box = UI.$('#msgs'); box.innerHTML = L.map((c) => bubble(c, b.dataset.m)).join('') + `<div class="msg bot" id="typing"><div class="meta"><span>${b.dataset.m}</span><span>queued → delivered (idle)</span></div><div class="bubble typing"><i></i><i></i><i></i></div></div>`; box.scrollTop = box.scrollHeight;
-    setTimeout(() => { L.push({ who: 'bot', at: now(), text: `Got it. I'll work on that as your request, with your level of trust, and report back here. Anything that changes something still comes to you for approval first.` }); S.save(); const bx = UI.$('#msgs'); if (bx) { bx.innerHTML = L.map((c) => bubble(c, b.dataset.m)).join(''); bx.scrollTop = bx.scrollHeight; } }, UI.fast ? 50 : 1400);
-  });
-  document.addEventListener('keydown', (e) => { if (e.target.id === 'say' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); const b = UI.$('[data-act="chat-send"]'); if (b) b.click(); } });
 
   /* ---------- cases ---------- */
   const cv = { f: 'open' };
@@ -407,7 +412,7 @@
     const vis = list.filter((c) => cv.f === 'all' || c.status === cv.f);
     // what it's working on and whether any of it needs you: a task per row (its title, who asked in words, when); routing
     // and ids live on the task itself
-    const who = (c) => { const r = String(c.requester || ''); return /^operator:/.test(r) ? (r === 'operator:ops' ? 'you' : r.slice(9)) : /^event:pd/.test(r) ? 'a PagerDuty incident' : /^event:gh/.test(r) ? 'a GitHub event' : /^event:/.test(r) ? 'an event' : /^chat:/.test(r) ? 'someone in chat' : c.cls === 'proactive' ? 'its own routine check' : /^bot:/.test(r) ? `${r.slice(4)} (another bot)` : r || 'someone'; };
+    const who = askedBy;
     const row = (c) => `<li class="dl-need${c.urgent && c.status === 'open' ? ' attn' : ''}"${c.urgent && c.status === 'open' ? ' data-s="wait"' : ''}><a class="dl-need-a" href="#/bots/${m.name}/cases/${c.id}"><span class="dl-ng">${c.urgent && c.status === 'open' ? UI.mark('wait', { lg: true, label: 'Urgent' }) : ''}</span>
       <span class="dl-nt"><b>${esc(c.title)}</b><span class="dl-why">Asked by ${esc(who(c))}${c.urgent && c.status === 'open' ? ' · <span class="reason">urgent</span>' : ''}${c.status === 'closed' ? ' · done' : ''}</span></span><span class="dl-age">${UI.agoText(c.opened)}</span></a></li>`;
     const open = list.filter((x) => x.status === 'open'), done = list.filter((x) => x.status !== 'open');
