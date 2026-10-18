@@ -220,6 +220,11 @@ func (g *Gate) CheckVerb(ctx context.Context, id flow.SkillIdentity, uses string
 		if err := g.checkSpend(m, g.Ledger.Bot(id.Bot), amt, false); err != nil {
 			return flow.BotVerdict{}, err
 		}
+		if ok, err := g.unattended(id, m, uses, options, amt, cl); err != nil {
+			return flow.BotVerdict{}, err
+		} else if ok {
+			return flow.BotVerdict{Allow: true}, nil
+		}
 		return g.propose(id, m, tier, uses, options, digest, amt)
 	}
 	return g.propose(id, m, tier, uses, options, digest, 0)
@@ -241,6 +246,79 @@ func (g *Gate) autonomous(m config.BotConfig, uses, class string) bool {
 		return false
 	}
 	return autonomyClass[class]
+}
+
+// unattendedClass are the requesters a commit_money verb may run
+// unattended for: the operator's own request, or the bot's own work with no
+// third party's case open. Never an event, a peer, a sweep or a third party.
+var unattendedClass = map[string]bool{ReqBot: true, ReqOperator: true}
+
+// UnattendedTag marks an unattended spend in the bot ledger.
+const UnattendedTag = "unattended"
+
+// unattended reports whether a commit_money call runs without approval —
+// only when the operator opted the verb in (autonomy.unattended: never the
+// default), the bot is out of shadow mode and sandboxed, the requester is
+// the operator or the bot itself, the charge is not recurring, the merchant
+// is one the operator named, and the amount fits the unattended cap (its
+// own spends) and the spend cap (every spend). The spend is recorded in the
+// same ledger transaction that re-checks both caps, so two calls cannot
+// jointly overshoot.
+func (g *Gate) unattended(id flow.SkillIdentity, m config.BotConfig, uses string, options map[string]any, amt float64, cl callerInfo) (bool, error) {
+	var u config.Unattended
+	found := false
+	for pat, x := range m.Autonomy.Unattended {
+		if flow.MatchVerbPattern([]string{pat}, uses) {
+			u, found = x, true
+			break
+		}
+	}
+	if !found || m.Autonomy.ShadowMode() || !g.sandboxed() || !unattendedClass[cl.class] || cl.readOnly() {
+		return false, nil
+	}
+	if rec, _ := options["recurring"].(bool); rec {
+		return false, nil
+	}
+	merchant, _ := options[u.MerchantOptionOr()].(string)
+	merchant = strings.TrimSuffix(strings.TrimSpace(merchant), "/")
+	listed := false
+	for _, mo := range u.Merchants {
+		if strings.EqualFold(strings.TrimSuffix(mo, "/"), merchant) && merchant != "" {
+			listed = true
+		}
+	}
+	if !listed {
+		return false, nil
+	}
+	sc := m.Autonomy.SpendCap
+	if sc == nil || g.Ledger.BotsDegraded() {
+		return false, nil
+	}
+	allowed := false
+	err := g.Ledger.UpdateBot(id.Bot, func(r *store.BotRecord) error {
+		now := g.now()
+		if u.SpendCap.Check(amt, now, func(since time.Time) float64 {
+			var t float64
+			for _, s := range r.Spend {
+				if s.Proposal == UnattendedTag && s.At.After(since) {
+					t += s.Amount
+				}
+			}
+			return t
+		}) != nil {
+			return nil // over the unattended cap: an approval decides it
+		}
+		if err := sc.Check(amt, now, func(since time.Time) float64 { return spentSince(*r, since) }); err != nil {
+			return err
+		}
+		r.Spend = append(r.Spend, store.SpendEntry{At: now, Amount: amt, Proposal: UnattendedTag})
+		allowed = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return allowed, nil
 }
 
 // autonomyClass is the allowlist of requester classes a promoted verb may

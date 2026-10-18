@@ -98,6 +98,10 @@ func TestTeamCeilingsNarrowNeverWiden(t *testing.T) {
 		{"domain wider than a host", "browser: { logins: [app.example.com] }", "browser: { logins: [\"*.example.com\"] }", []string{`"*.example.com"`}},
 		{"host outside a domain", "browser: { logins: [\"*.example.com\"] }", "browser: { logins: [app.example.org] }", []string{`"app.example.org"`, `browser.logins [*.example.com]`}},
 		{"browser credential outside", "browser: { credentials: [app] }", "browser: { credentials: [admin] }", []string{`browser.credentials "admin"`, "browser.credentials [app]"}},
+		{"unattended under the default ceiling", "", "autonomy: { tiers: { commit_money: [browser.purchase] }, amounts: { browser.purchase: total }, spend_cap: { per_action: 50, per_period: 100 }, unattended: { browser.purchase: { per_action: 5, per_period: 10, merchants: [\"https://shop.example.com\"] } } }", []string{"autonomy.unattended", `autonomy.ceiling ""`, "commit_money"}},
+		{"unattended under a reversible ceiling", "autonomy: { ceiling: reversible }", "autonomy: { tiers: { commit_money: [browser.purchase] }, amounts: { browser.purchase: total }, spend_cap: { per_action: 50, per_period: 100 }, unattended: { browser.purchase: { per_action: 5, per_period: 10, merchants: [\"https://shop.example.com\"] } } }", []string{"autonomy.unattended", "reversible"}},
+		{"unattended under a commit_money ceiling", "autonomy: { ceiling: commit_money }", "autonomy: { tiers: { commit_money: [browser.purchase] }, amounts: { browser.purchase: total }, spend_cap: { per_action: 50, per_period: 100 }, unattended: { browser.purchase: { per_action: 5, per_period: 10, merchants: [\"https://shop.example.com\"] } } }", nil},
+		{"unattended past the team's spend cap", "autonomy: { ceiling: commit_money }, budget: { spend_cap: { per_action: 20, per_period: 100 } }", "autonomy: { tiers: { commit_money: [browser.purchase] }, amounts: { browser.purchase: total }, spend_cap: { per_action: 50, per_period: 100 }, unattended: { browser.purchase: { per_action: 5, per_period: 10, merchants: [\"https://shop.example.com\"] } } }", []string{"per_action 50", "per_action 20"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -415,6 +419,33 @@ func TestTeamDelegationDepth(t *testing.T) {
 	for _, d := range []string{"1", "10"} {
 		if _, err := loadTeams(t, "teams:\n  x: { delegation: { max_depth: "+d+" } }\nbots:\n  a: { team: x }\n"); err != nil {
 			t.Errorf("max_depth %s: %v", d, err)
+		}
+	}
+}
+
+// autonomy.unattended's own rules, for a bot in no team: a commit_money
+// verb, inside spend_cap, in its currency, with exact merchants.
+func TestUnattendedValidation(t *testing.T) {
+	body := func(u string) string {
+		return "bots:\n  m: { autonomy: { tiers: { commit_money: [browser.purchase], reversible: [pd.ack] }, amounts: { browser.purchase: total }, " +
+			"spend_cap: { per_action: 50, per_period: 100 }, unattended: { " + u + " } } }\n"
+	}
+	ok := `browser.purchase: { per_action: 5, per_period: 10, merchants: ["https://shop.example.com"] }`
+	if _, err := loadTeams(t, body(ok)); err != nil {
+		t.Fatalf("a valid opt-in: %v", err)
+	}
+	for name, u := range map[string]string{
+		"not commit_money":    `pd.ack: { per_action: 5, per_period: 10, merchants: ["https://shop.example.com"] }`,
+		"over per_action":     `browser.purchase: { per_action: 51, per_period: 60, merchants: ["https://shop.example.com"] }`,
+		"over per_period":     `browser.purchase: { per_action: 5, per_period: 101, merchants: ["https://shop.example.com"] }`,
+		"no merchant":         `browser.purchase: { per_action: 5, per_period: 10 }`,
+		"a wildcard merchant": `browser.purchase: { per_action: 5, per_period: 10, merchants: ["https://*.example.com"] }`,
+		"a merchant path":     `browser.purchase: { per_action: 5, per_period: 10, merchants: ["https://shop.example.com/cart"] }`,
+		"another currency":    `browser.purchase: { per_action: 5, per_period: 10, currency: EUR, merchants: ["https://shop.example.com"] }`,
+		"no caps":             `browser.purchase: { merchants: ["https://shop.example.com"] }`,
+	} {
+		if _, err := loadTeams(t, body(u)); err == nil {
+			t.Errorf("%s: accepted", name)
 		}
 	}
 }
