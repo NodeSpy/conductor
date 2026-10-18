@@ -115,7 +115,8 @@ test('one widening classifier: egress, grants and repos are caught; an official 
 
 test('Safety: every bot in words (on its own / asks you first / never), linked from the sandbox chip', async ({ page }) => {
   await go(page, '#/overview', { fresh: true });
-  await page.locator('.nav a[data-nav="safety"]').first().click().catch(() => go(page, '#/safety'));
+  await go(page, '#/safety'); // a System tab now
+  await expect(page.locator('.dl-subnav a[aria-current="page"]')).toHaveText('Safety');
   await expect(page.locator('.dl-phead h1')).toHaveText(/Safety/);
   await expect(page.locator('.tier-ladder')).toHaveCount(0); // no risk ladder: each bot's reach is said in words below
   // each bot's three groups, as the approved "What it can do": in plain words

@@ -576,11 +576,17 @@
     if (!D.prefs.seenSafety) { D.prefs.seenSafety = true; S.save(); }
     const rows = D.bots.map((m) => ({ m, x: UI.botCan(m) }));
     const own = rows.reduce((a, r) => a + r.x.own.filter((i) => i.t !== 'observe').length, 0);
-    return `<div class="page dl-page"><div class="dl-phead"><div><h1>Safety</h1><p class="dl-lead"><b>Nothing risky happens without you.</b> Agents run sandboxed, and every bot does only what you allowed: some things on its own, some only after asking you, some never.</p></div></div>
-      ${UI.sandboxHTML()}
+    const paused = D.daemon.paused;
+    // the emergency stop: findable, in plain words, with what it does and how to undo it
+    const stop = `<section class="dl-card safety-stop${paused ? ' need' : ''}" id="pause"><header class="dl-ch"><h2>${paused ? 'All automation is paused' : 'Pause all automation'}</h2></header>
+      <p>${paused ? 'Nothing new starts: workflows don’t run and bots don’t pick up new work. Runs that were already going have finished or are finishing.' : 'An emergency stop. Nothing new starts until you resume: no workflow runs and no bot picks up new work. Runs already going finish; nothing is lost from your config.'}</p>
+      <p class="dl-sub">${paused ? 'Resuming starts dispatching again straight away.' : 'Resume here (or from Needs you, where it waits while paused). Events that arrive while paused may not be kept.'}</p>
+      <div class="dl-actions"><button class="btn ${paused ? 'primary' : 'secondary danger-text'}" data-act="pause">${icon(paused ? 'play' : 'pause')}${paused ? 'Resume automation' : 'Pause all automation…'}</button></div></section>`;
+    return `<div class="page dl-page">${UI.systemTabs('safety')}<div class="dl-phead"><div><h1>Safety</h1><p class="dl-lead"><b>Nothing risky happens without you.</b> Agents run sandboxed, and every bot does only what you allowed: some things on its own, some only after asking you, some never.</p></div></div>
+      ${paused ? stop : ''}${UI.sandboxHTML()}
       <div class="dl-phead" style="margin-top:28px"><div><h2>What each bot may do</h2><p class="dl-sub" style="margin-top:4px">${own ? `${own} action${own > 1 ? 's' : ''} beyond reading run${own > 1 ? '' : 's'} without asking.` : 'Nothing beyond reading runs without asking.'}</p></div></div>
-      <div class="stack" style="margin-top:14px">${rows.map(({ m }) => `<div class="panel"><div class="panel-head">${UI.sigil(m, 'sm')}<h3><a class="link-plain" href="#/bots/${m.name}/access">${esc(m.name)}</a></h3><span class="muted small">${teamOf(m) ? `team ${esc(teamOf(m).name)} · runs alone up to ${S.ceilingOf(m)}` : 'solo'}</span><div class="tools"><a class="btn sm ghost" href="#/bots/${m.name}/access">${icon('edit')}Change</a></div></div><div class="panel-body">${UI.botCanHTML(m, true)}</div></div>`).join('')}</div></div>`;
-  }, { nav: 'safety' });
+      <div class="stack" style="margin-top:14px">${rows.map(({ m }) => `<div class="panel"><div class="panel-head">${UI.sigil(m, 'sm')}<h3><a class="link-plain" href="#/bots/${m.name}/access">${esc(m.name)}</a></h3><span class="muted small">${teamOf(m) ? `team ${esc(teamOf(m).name)} · runs alone up to ${S.ceilingOf(m)}` : 'solo'}</span><div class="tools"><a class="btn sm ghost" href="#/bots/${m.name}/access">${icon('edit')}Change</a></div></div><div class="panel-body">${UI.botCanHTML(m, true)}</div></div>`).join('')}</div>${paused ? '' : `<div style="margin-top:28px">${stop}</div>`}</div>`;
+  }, { nav: 'system' });
 
   /* ---------- access (config edits through the pipeline) ---------- */
   /** What a bot can do, in words: on its own / asks you first / never (the effective tier of every granted verb). */

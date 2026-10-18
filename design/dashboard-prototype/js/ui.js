@@ -110,7 +110,7 @@
   UI.hm = (iso) => new Date(iso).toTimeString().slice(0, 5);
   UI.when = (iso, withClock = false) => { const d = new Date(iso); return `<time datetime="${d.toISOString()}">${UI.agoText(iso)}${withClock ? ` <span class="muted">(${UI.hm(iso)})</span>` : ''}</time>`; };
   /** "7m" / "1h" / "3d" (the fake data's short ages) → "7 min ago" */
-  UI.ageText = (a) => { const m = String(a).match(/^(\d+)\s*([smhd])$/); if (!m) return a; return m[2] === 's' ? 'just now' : m[2] === 'm' ? `${m[1]} min ago` : m[2] === 'h' ? `${m[1]} h ago` : `${m[1]} days ago`; };
+  UI.ageText = (a) => { const m = String(a).match(/^(\d+)\s*([smhd])$/); if (!m) return a; return m[2] === 's' ? 'just now' : m[2] === 'm' ? `${m[1]} min ago` : m[2] === 'h' ? `${m[1]} h ago` : m[1] === '1' ? 'yesterday' : `${m[1]} days ago`; };
   /** Durations in words with units: "12 min", "7 min 40 s", "26 s". */
   /** How long something has been running, in whole minutes (a list of live runs never mixes "6 min" and "6 min 2 s"). */
   UI.runningFor = (iso) => { const m = Math.floor((Date.now() - new Date(iso)) / 60000); return m < 1 ? 'under a minute' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; };
@@ -192,19 +192,42 @@
   UI.syncAttention = () => { if (!window.D || !D.attention || !D.proposals) return;
     const dismissed = new Set(D.dismissed || []), want = [], ago = (iso) => (iso ? UI.ago(iso) : '');
     D.proposals.filter((p) => p.status === 'pending' && UI.live(p)).forEach((p) => want.push({ kind: 'approval', href: `#/bots/${p.bot}/proposals/${p.id}`, title: `${p.verb} · ${p.id}`, sub: `${p.bot} · case ${p.case}`, plain: p.title || p.summary || p.verb, why: `${p.bot} asks before it does this`, verb: 'Review', age: ago(p.at) }));
-    D.runs.filter((r) => r.status === 'fail' && Date.now() - new Date(r.finished || r.started) < 864e5).forEach((r) => want.push({ kind: 'failed', href: `#/runs/${r.id}`, title: `${r.workflow} failed${r.repo ? ' on ' + UI.runTarget(r) : ''}`, sub: r.error || '', plain: `${r.workflow.replace(/^bot:/, '')} failed${r.repo ? ' on ' + UI.runTarget(r) : ''}`, why: r.error || '', verb: 'Open', age: ago(r.finished || r.started) }));
+    D.runs.filter((r) => r.status === 'fail' && Date.now() - new Date(r.finished || r.started) < 864e5).forEach((r) => want.push({ kind: 'failed', href: `#/runs/${r.id}`, title: `${r.workflow} failed${UI.runTarget(r) ? ' on ' + UI.runTarget(r) : ''}`, sub: r.error || '', plain: `${r.workflow.replace(/^bot:/, '')} failed${UI.runTarget(r) ? ' on ' + UI.runTarget(r) : ''}`, why: r.error || '', verb: 'Open', age: ago(r.finished || r.started) }));
     D.runs.filter((r) => r.status === 'wait').forEach((r) => want.push({ kind: 'needs_input', href: `#/runs/${r.id}`, title: `${r.workflow} is waiting on you`, sub: r.detail || '', plain: `${r.workflow.replace(/^bot:/, '')} needs your answer`, why: r.detail || '', verb: 'Answer', age: ago(r.started) }));
     const waitingOrigins = new Set();
     (D.browsers || []).filter((b) => b.status === 'wait').forEach((b) => { try { waitingOrigins.add(new URL(b.url).origin); } catch (e) {} want.push({ kind: 'browser', href: `#/browser/${b.id}`, title: `${b.title || 'a sign-in'} · ${b.identity}`, sub: b.url || '', plain: `Approve a sign-in for ${b.identity}`, why: 'Its browser is waiting on you', verb: 'Open', age: '' }); });
     Object.entries(D.loginMeta || {}).forEach(([n, m]) => { const c = (D.access && D.access.credentials || []).find((x) => x.name === n), origin = c && c.origin; if (m.test && m.test.result === 'needs you' && !waitingOrigins.has(origin)) want.push({ kind: 'browser', href: '#/browser/logins', title: `login ${n} · push approval`, sub: origin || '', plain: `Approve a sign-in on ${origin ? origin.replace(/^https?:\/\//, '') : n}`, why: 'A push approval is waiting on your phone', verb: 'Open', age: ago(m.test.at) }); });
+    if (D.daemon && D.daemon.paused) want.push({ kind: 'paused', s: 'ember', href: '#/safety?show=pause', title: 'dispatch paused', sub: '', plain: 'All automation is paused', why: 'Nothing new starts until you resume it. Events that arrive meanwhile may not be kept.', verb: 'Resume', age: '' });
+    const us = UI.updateState(); if (us.need) want.push({ kind: 'update', s: 'ember', href: '#/updates', title: `update ${us.v}`, sub: us.need, plain: `Update ${us.v} needs you`, why: us.need, verb: 'Review', age: '' });
+    (D.connectors || []).filter((c) => c.status === 'fail').forEach((c) => want.push({ kind: 'connection', s: 'fail', href: `#/connectors/connectors?show=conn-${c.name}`, title: `${c.name} · ${c.use}`, sub: c.detail || '', plain: `conductor can’t reach ${(window.SCHEMA && SCHEMA.connectors[c.use] && SCHEMA.connectors[c.use].label) || c.use} (${c.name})`, why: c.detail ? `${c.detail}. Workflows that use it will fail until it’s fixed.` : 'Workflows that use it will fail until it’s fixed.', verb: 'Fix it', age: '' }));
     const keep = D.attention.filter((a) => want.some((w) => w.href === a.href) && !dismissed.has(a.href));
     D.attention = keep.concat(want.filter((w) => !dismissed.has(w.href) && !keep.some((a) => a.href === w.href)));
   };
+  /** The update, in words: quiet when it installs itself, `need` when a person has to act (it failed, it's held, or it
+      waits for an approval). The machine card in the rail says it; Needs you lists it only when it needs someone. */
+  UI.updateState = () => { const d = (window.D && D.daemon) || {}, u = d.update || {}, v = u.available; if (!v) return {};
+    if (u.blocked) return { v, need: u.blocked };
+    if (u.installing) return { v, quiet: `Installing ${v}…` };
+    const pol = (window.S && S.staged ? S.staged('update', 'update') : null) || u;
+    if (pol.apply === 'workflow') return { v, quiet: `${v} is ready; a workflow decides when` };
+    return { v, quiet: pol.auto === false ? `${v} is ready to install` : `${v} installs within ${UI.humanSpan ? UI.humanSpan(pol.interval || '10m') : '10 min'}` }; };
+  /** The machine card: the rail's foot on a desktop, the top of More on a phone. It links to System → Updates. */
+  UI.hostCard = () => { const d = D.daemon, us = UI.updateState();
+    const [s, line] = d.paused ? ['wait', 'Paused: nothing new starts'] : us.need ? ['ember', `Update ${us.v} needs you`] : ['ok', `Healthy · up ${UI.upFor(d.uptime)}`];
+    return `<a class="host${us.need || d.paused ? ' need' : ''}" href="#/updates" aria-label="${UI.esc(d.host)}: ${UI.esc(line)}${us.quiet ? '. ' + UI.esc(us.quiet) : ''}">${UI.statusMark(s, '<span class="sr-only">' + (s === 'ok' ? 'healthy' : 'needs a look') + '</span>')}<span class="who"><b>${UI.esc(d.host)}</b><span id="host-line">${UI.esc(line)}</span>${us.quiet && !us.need ? `<span class="host-upd">${UI.esc(us.quiet)}</span>` : ''}</span></a>`; };
+  /** The one stat tile (Home's At a glance, Needs you's kinds, a folder's figures): label on top, the number, a detail
+      line; a link, or a button that filters (with its selected state); the row of them is UI.glance, Home's grid. */
+  UI.statTile = (o) => { const inner = `<span class="dl-lbl">${o.label}</span><b>${o.value}</b>${o.detail != null ? `<span class="d">${o.detail}</span>` : ''}`, cls = `dl-tile${o.hot ? ' hot' : ''}${o.on ? ' on' : ''}`;
+    return o.href ? `<a class="${cls}" href="${o.href}">${inner}</a>` : `<button type="button" class="${cls}" data-act="${o.act}" ${o.attrs || ''} aria-pressed="${!!o.on}">${inner}</button>`; };
+  UI.glance = (tiles, label = 'At a glance') => `<section class="dl-glance" aria-label="${label}">${tiles.join('')}</section>`;
   /** A set of runs in words whose parts add up to the whole: "19 went fine · 2 failed · 3 running". */
   UI.runParts = (rs) => [[rs.filter((r) => r.status === 'ok').length, 'went fine'], [rs.filter((r) => r.status === 'fail' || r.status === 'stopped').length, 'failed'], [rs.filter((r) => r.status === 'run').length, 'running'], [rs.filter((r) => r.status === 'wait').length, 'waiting on you'], [rs.filter((r) => r.status === 'idle').length, 'parked']].filter(([n]) => n).map(([n, t]) => `${n} ${t}`).join(' · ');
+  /** The tab bars on the page, each as the set of places its tabs go: two renders that share one are tabs of one page. */
+  const tabSigs = (root) => [...root.querySelectorAll('.dl-subnav, .tabs, .dl-tabs, [role="tablist"]')].map((t) => [...t.querySelectorAll('a[href]')].map((a) => a.getAttribute('href').split('?')[0]).sort().join(' ')).filter(Boolean);
   UI.render = (opts = {}) => {
     UI.syncRunStats(); UI.syncAttention();
-    const keep = opts.keepScroll ? $('#main').scrollTop : 0;
+    const prev = tabSigs($('#main')), prevTop = $('#main').scrollTop;
+    let keep = opts.keepScroll ? prevTop : 0;
     cleanup.forEach((f) => f()); cleanup = [];
     UI.closeMenu && UI.closeMenu();
     const path = (location.hash.replace(/^#\/?/, '') || 'overview').split('?')[0];
@@ -214,11 +237,16 @@
       const params = {}; r.keys.forEach((k, i) => (params[k] = mt[i + 1] ? decodeURIComponent(mt[i + 1]) : undefined));
       const main = $('#main');
       const out = r.fn(params);
-      main.classList.toggle("still", !!opts.keepScroll); main.innerHTML = String(out);
+      main.innerHTML = String(out);
+      // switching tabs keeps the page still: no entrance, the frame and the tab bar where they were (the scroll kept,
+      // up to the tab bar, so a tab opens at its top when you'd scrolled past it); only the content below changes
+      const tabSwitch = !opts.keepScroll && tabSigs(main).some((x) => prev.includes(x));
+      if (tabSwitch) { const bar = main.querySelector('.dl-subnav, .tabs, .dl-tabs, [role="tablist"]'), barTop = bar ? bar.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop : 0; keep = Math.min(prevTop, Math.max(0, barTop - 8)); }
+      main.classList.toggle('still', !!opts.keepScroll || tabSwitch);
       main.scrollTop = keep;
       UI.params = params;
       // the review page keeps the section you came from highlighted (it belongs to whatever you were changing)
-      UI.setNav(path === 'config/apply' && D.prefs && D.prefs.returnTo ? (D.prefs.returnTo.href.replace(/^#\/?/, '').split(/[/?]/)[0] || 'overview') : r.opts.nav || path.split('/')[0]);
+      UI.setNav(path === 'config/apply' && D.prefs && D.prefs.returnTo ? (D.prefs.returnTo.href.replace(/^#\/?/, '').split(/[/?]/)[0] || 'overview') : (typeof r.opts.nav === 'function' ? r.opts.nav(params) : r.opts.nav) || path.split('/')[0]);
       document.body.classList.toggle('bare', !!r.opts.bare); // signed out: no rail, top bar or tab bar
       if (r.opts.after) r.opts.after(params, main);
       if (typeof out === 'object' && out && out.after) out.after(main);
@@ -230,6 +258,10 @@
     $('#main').innerHTML = `<div class="page"><div class="empty"><span class="serif">No such page</span><a class="btn" href="#/overview">Back to overview</a></div></div>`;
   };
   UI.afterRender = [];
+  // belt and braces: overflow:hidden can still be scrolled by script, focus or find-in-page; the window and the main
+  // column snap back to their left edge if anything ever moves them sideways
+  addEventListener('scroll', () => { if (scrollX) scrollTo(0, scrollY); }, { passive: true });
+  document.addEventListener('scroll', (e) => { const t = e.target; if (t && t.classList && (t.classList.contains('main') || t.classList.contains('shell')) && t.scrollLeft) t.scrollLeft = 0; }, { capture: true, passive: true });
   // a link can ask for a section of a page (?show=<id>): it scrolls into view and takes the focus outline briefly
   UI.afterRender.push((main) => { const m = location.hash.match(/[?&]show=([\w-]+)/); const el = m && main.querySelector('#' + m[1]); if (el) setTimeout(() => { el.scrollIntoView({ block: 'start' }); el.classList.add('flash-target'); setTimeout(() => el.classList.remove('flash-target'), 1600); }, 30); });
   UI.go = (h) => { if (location.hash === h) UI.render(); else location.hash = h; };
@@ -254,10 +286,10 @@
   // the rail, as in Daylight's mocks (design/brand/v2): the work, then Settings; only "Needs you" is counted hot
   const navGroups = [
     ['', [['overview', 'Home', 'overview'], ['attention', 'Needs you', 'attention', () => D.attention.length, true], ['activity', 'Activity', 'live'], ['workflows', 'Workflows', 'workflows'], ['bots', 'Bots', 'bots'], ['browser', 'Browsers', 'globe']]],
-    ['Settings', [['connectors', 'Connections', 'connectors'], ['secrets', 'Secrets', 'secrets'], ['extensions', 'Packs', 'extensions'], ['safety', 'Safety', 'shield'], ['system', 'System', 'settings']]],
+    ['Settings', [['connectors', 'Connections', 'connectors'], ['secrets', 'Secrets', 'secrets'], ['extensions', 'Packs', 'extensions'], ['system', 'System', 'settings']]],
   ];
   UI.navGroups = navGroups;
-  UI.pageTitle = (nav) => { const k = nav || (location.hash.replace(/^#\/?/, '') || 'overview').split(/[/?]/)[0]; const map = { live: 'activity', runs: 'activity', teams: 'bots', folders: 'bots', config: 'system', updates: 'system', logs: 'system', security: 'system', more: 'more', preferences: 'preferences' }; const key = map[k] || k; const hit = navGroups.flatMap(([, x]) => x).find(([n]) => n === key); return hit ? hit[1] : key === 'more' ? 'More' : key === 'preferences' ? 'Preferences' : key === 'glossary' ? 'Glossary' : 'conductor'; };
+  UI.pageTitle = (nav) => { const k = nav || (location.hash.replace(/^#\/?/, '') || 'overview').split(/[/?]/)[0]; const map = { live: 'activity', runs: 'activity', teams: 'bots', folders: 'bots', config: 'system', updates: 'system', logs: 'system', security: 'system', safety: 'system', more: 'more', preferences: 'preferences' }; const key = map[k] || k; const hit = navGroups.flatMap(([, x]) => x).find(([n]) => n === key); return hit ? hit[1] : key === 'more' ? 'More' : key === 'preferences' ? 'Preferences' : key === 'glossary' ? 'Glossary' : 'conductor'; };
   UI.navHTML = () => navGroups.map(([g, items]) => `<div class="nav-group">${g ? `<span class="grp">${g}</span>` : ''}<nav class="nav">${items.map(([k, l, ic, c, hot]) => {
     const n = c ? c() : null;
     return `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span class="lbl">${l}</span>${n ? UI.count(n, { hot }) : ''}</a>`;
@@ -265,7 +297,7 @@
   // a page opened from Approvals (or another nav section) keeps that section highlighted, and its Back returns there
   document.addEventListener('click', (e) => { const a = e.target.closest && e.target.closest('a[href^="#/"]'); if (!a) return; const from = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0]; const to = a.getAttribute('href'); if (['attention', 'overview'].includes(from) && /^#\/bots\/[^/]+\/proposals\//.test(to)) UI.navOrigin = { hash: to, nav: from === 'overview' ? 'overview' : 'attention', back: '#/' + from }; else if (!a.closest('.tabbar, .rail')) UI.navOrigin = UI.navOrigin && UI.navOrigin.hash === to ? UI.navOrigin : null; else UI.navOrigin = null; }, true);
   // pages that live inside another nav destination
-  const NAV_ALIAS = { live: 'activity', runs: 'activity', teams: 'bots', folders: 'bots', config: 'system', updates: 'system', logs: 'system', security: 'system' };
+  const NAV_ALIAS = { live: 'activity', runs: 'activity', teams: 'bots', folders: 'bots', config: 'system', updates: 'system', logs: 'system', security: 'system', safety: 'system' };
   UI.setNav = (k) => {
     k = NAV_ALIAS[k] || k;
     if (UI.navOrigin && location.hash === UI.navOrigin.hash) { k = UI.navOrigin.nav; UI.backHref = UI.navOrigin.back; } else UI.backHref = null;
@@ -399,16 +431,15 @@
   UI.refreshChrome = () => {
     UI.syncAttention();
     const d = D.daemon, need = D.attention.length, running = D.runs.filter((r) => r.status === 'run').length;
-    const warn = d.paused || D.connectors.some((c) => !['ok', 'idle'].includes(c.status));
-    // the top bar says how things are in words; detail (uptime, version, agents, the address) is one step down
-    const health = d.paused ? ['wait', 'Dispatch paused'] : d.update && d.update.blocked ? ['wait', 'An update needs you'] : warn ? ['wait', 'Something needs a look'] : ['ok', 'All systems normal'];
-    void running;
+    // the top bar is search and your account; whatever needs a person is in Needs you (the one attention signal), and
+    // the machine and its updates are the card at the foot of the rail
+    void d; void running;
     $('#strip-cells').innerHTML = `
       <div class="spacer"></div>
       ${D.pending.length ? `<a class="cell staged" href="#/config/apply">${UI.statusMark('staged', `${D.pending.length} not applied`)}</a>` : ''}
-      <button type="button" class="cell status-btn${health[0] === 'ok' ? ' calm' : ''}" data-act="strip-status" aria-label="System status: ${health[1]}">${UI.statusMark(health[0], `<span class="sw">${health[1]}</span>`)}</button>
       <button type="button" class="cell op-btn" data-act="op-menu" aria-label="${D.operator.name}: account and display"><span class="avatar">${D.operator.name.slice(0, 2)}</span></button>`;
     $('#rail-nav').innerHTML = UI.navHTML();
+    $('#rail-host').innerHTML = UI.hostCard();
     $('#tabbar').innerHTML = [['overview', 'Home', 'overview'], ['attention', 'Needs you', 'attention', need], ['activity', 'Activity', 'live'], ['bots', 'Bots', 'bots'], ['more', 'More', 'more']].map(([k, l, ic, c]) => `<a href="#/${k}" data-nav="${k}">${UI.icon(ic)}<span>${l}</span>${c ? UI.count(c, { hot: true }) : ''}</a>`).join('');
     UI.setNav((location.hash.replace(/^#\/?/, '') || 'overview').split('/')[0]);
   };
@@ -421,7 +452,7 @@
         <aside class="rail">
           <a class="brand" href="#/overview" aria-label="conductor: home">${UI.logo('lockup')}</a>
           <div id="rail-nav"></div>
-          <a class="host" href="#/connectors/hosts">${UI.statusMark('ok', '<span class="sr-only">healthy</span>')}<span class="who"><b>${D.daemon.host}</b><span id="host-line">Healthy · up ${UI.upFor(D.daemon.uptime)}</span></span></a>
+          <div id="rail-host" class="rail-host"></div>
         </aside>
         <header class="strip">
           <a class="brand ph-brand" href="#/overview" aria-label="conductor: home">${UI.logo('mark')}<b id="ph-title"></b></a>
@@ -442,7 +473,7 @@
       one sentence that answers the page's question (lede), an optional detail line (machine detail last), actions. */
   UI.head = (title, opts = {}) => `<div class="page-head"><div>${opts.crumbs ? `<div class="crumbs">${opts.crumbs}</div>` : ''}<h1${opts.gen ? ' class="gen"' : ''}>${title}</h1>${opts.sub ? `<p class="sub">${String(opts.sub).replace(/^([a-z])/, (c) => c.toUpperCase())}</p>` : ''}${opts.lede ? `<p class="lede">${opts.lede}</p>` : ''}${opts.lede2 ? `<p class="lede-2">${opts.lede2}</p>` : ''}${opts.detail ? `<div class="head-detail">${opts.detail}</div>` : ''}</div>${opts.actions ? `<div class="actions">${opts.actions}</div>` : ''}</div>`;
   /** The System area's own navigation: the rarely visited pages, one sidebar item (Settings → System). */
-  UI.systemTabs = (on) => `<nav class="dl-tabs dl-subnav" aria-label="System">${[['config', 'Config', '#/config'], ['updates', 'Updates', '#/updates', D.daemon.update && D.daemon.update.blocked ? '!' : ''], ['logs', 'Logs & audit', '#/logs'], ['security', 'Access', '#/security']].map(([k, l, h, n]) => `<a href="${h}" class="${k === on ? 'on' : ''}"${k === on ? ' aria-current="page"' : ''}>${l}${n ? ` <em class="hot">${n}</em>` : ''}</a>`).join('')}</nav>`;
+  UI.systemTabs = (on) => `<nav class="dl-tabs dl-subnav" aria-label="System">${[['config', 'Config', '#/config'], ['safety', 'Safety', '#/safety', D.daemon.paused ? '!' : ''], ['updates', 'Updates', '#/updates', D.daemon.update && D.daemon.update.blocked ? '!' : ''], ['logs', 'Logs & audit', '#/logs'], ['security', 'Access', '#/security']].map(([k, l, h, n]) => `<a href="${h}" class="${k === on ? 'on' : ''}"${k === on ? ' aria-current="page"' : ''}>${l}${n ? ` <em class="hot">${n}</em>` : ''}</a>`).join('')}</nav>`;
   UI.tabs = (items, on) => `<div class="tabs" role="tablist">${items.map(([k, l, href, c, hot]) => `<a href="${href}" role="tab" class="${k === on ? 'on' : ''}"${k === on ? ' aria-current="page" aria-selected="true"' : ''}>${l}${c != null ? ' ' + UI.count(c, { hot }) : ''}</a>`).join('')}</div>`;
   UI.bind = (root, sel, ev, fn) => $$(sel, root).forEach((el) => el.addEventListener(ev, (e) => fn(e, el)));
 
@@ -504,24 +535,15 @@
   /** Segmented control: items [[value, label]]; act receives el.dataset.v. */
   UI.seg = (items, value, act, extra = '') => `<div class="seg" role="group" ${extra}>${items.map(([v, l, dis]) => `<button type="button" data-v="${UI.esc(v)}" ${dis ? UI.off(dis) : `data-act="${act}"`} aria-pressed="${String(v) === String(value)}" class="${String(v) === String(value) ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   UI.switchBtn = (on, act, attrs = '') => `<button type="button" role="switch" class="switch${on ? ' on' : ''}" aria-checked="${!!on}" data-act="${act}" ${attrs}></button>`;
-  UI.act('strip-status', (b) => { const d = D.daemon, u = d.update || {}, running = D.runs.filter((r) => r.status === 'run').length;
-    // an available update is said quietly here; it only escalates (in the top bar) when it needs a person
-    // first how things are (on a phone the top bar shows only the mark), with the cause one tap away; Pause, rarely
-    // wanted, comes last
-    const bad = D.connectors.filter((c) => !['ok', 'idle'].includes(c.status));
-    const how = d.paused ? ['Dispatch is paused: nothing new starts', 'pause', 'strip-go', 'data-href="#/activity"'] : bad.length ? [`${bad[0].name} needs a look: ${bad[0].detail}${bad.length > 1 ? ` (and ${bad.length - 1} more)` : ''}`, 'warn', 'strip-go', 'data-href="#/connectors"'] : ['All systems normal', 'check', 'strip-go', 'data-href="#/connectors"'];
-    UI.menu(b, [how, ['-'],
-      u.available ? [u.blocked ? `${u.available} is waiting for you: ${u.blocked}` : `${u.available} installs itself within 10 min`, 'updates', 'strip-go', 'data-href="#/updates"'] : [`conductor ${d.version}, up to date`, 'updates', 'strip-go', 'data-href="#/updates"'],
-      [`The sandbox is on: see what bots may do`, 'shield', 'strip-go', 'data-href="#/safety"'], [`${running} running now`, 'live', 'strip-go', 'data-href="#/activity?status=run"'], ...(D.pending.length ? [[`${D.pending.length} change${D.pending.length > 1 ? 's' : ''} to review`, 'edit', 'strip-go', 'data-href="#/config/apply"']] : []), ['-'], [d.paused ? 'Resume dispatch…' : 'Pause dispatch…', d.paused ? 'play' : 'pause', 'pause']]); });
   /** Demo data (prototype only): which fake day to show, chosen per browser (js/scenario.js), or reset the current one. */
   UI.DEMOS = [['calm', 'A mostly healthy day', 'Dozens of runs; one approval and one failure need you'], ['quiet', 'All quiet', 'Nothing needs you; every system healthy'], ['full', 'Everything at once', 'Every kind of exception, to try each flow']];
-  UI.setDemo = (k) => { try { localStorage.setItem('cd-demo', k); localStorage.removeItem('cd-proto-state-v5'); } catch (e) {} location.reload(); };
+  UI.setDemo = (k) => { try { localStorage.setItem('cd-demo', k); localStorage.removeItem('cd-proto-state-v6'); } catch (e) {} location.reload(); };
   UI.act('demo-menu', (b) => UI.menu(b, UI.DEMOS.map(([k, t]) => [`${D.demo === k ? '● ' : ''}${t}`, k === 'quiet' ? 'check' : k === 'full' ? 'grid' : 'sun', 'demo-set', `data-k="${k}"`]).concat([['-'], ['Reset this day’s demo data', 'undo', 'reset-demo']])));
   UI.act('demo-set', (b) => { UI.closeMenu(); UI.setDemo(b.dataset.k); });
-  /** Pause or resume dispatch: weighty, so it says what it does and asks first. Lives in the status menu and the System row. */
-  UI.setPaused = (on) => { D.daemon.paused = on; D.audit.unshift({ ts: new Date().toISOString(), event: on ? 'daemon_pause' : 'daemon_resume', who: 'operator:ops', detail: 'dispatch ' + (on ? 'paused' : 'resumed') + ' from the dashboard', run: '' }); S.save(); UI.refreshChrome(); UI.rerender(); UI.toast(on ? 'Dispatch paused' : 'Dispatch resumed', on ? 'Runs already going finish; new events wait until you resume.' : 'Queued events are dispatching now.', on ? 'wait' : 'ok'); };
+  /** Pause or resume dispatch: weighty, so it says what it does and asks first. Lives in System → Safety (and ⌘K). */
+  UI.setPaused = (on) => { D.daemon.paused = on; D.audit.unshift({ ts: new Date().toISOString(), event: on ? 'daemon_pause' : 'daemon_resume', who: 'operator:ops', detail: 'dispatch ' + (on ? 'paused' : 'resumed') + ' from the dashboard', run: '' }); S.save(); UI.refreshChrome(); UI.rerender(); UI.toast(on ? 'All automation paused' : 'Automation resumed', on ? 'Runs already going finish; nothing new starts until you resume.' : 'New events start their runs again.', on ? 'wait' : 'ok'); };
   UI.act('pause', () => { UI.closeMenu(); const on = !D.daemon.paused;
-    UI.confirm(on ? { title: 'Pause dispatch?', body: 'conductor stops dispatching: no new run starts until you resume (the runtime kill switch, no restart). <span class="dl-sub">What happens to events that arrive while paused isn’t documented yet, so don’t count on them being kept.</span>', ok: 'Pause dispatch', danger: true } : { title: 'Resume dispatch?', body: 'conductor starts dispatching again; new events start their runs.', ok: 'Resume dispatch' }).then((ok) => { if (ok) UI.setPaused(on); }); });
+    UI.confirm(on ? { title: 'Pause all automation?', body: 'Nothing new starts until you resume: no workflow runs and no bot picks up new work. Runs already going finish. <span class="dl-sub">Events that arrive while paused may not be kept. Resume from System → Safety or from Needs you.</span>', ok: 'Pause all automation', danger: true } : { title: 'Resume automation?', body: 'conductor starts dispatching again; new events start their runs.', ok: 'Resume' }).then((ok) => { if (ok) UI.setPaused(on); }); });
   UI.act('strip-go', (b) => { UI.closeMenu(); UI.go(b.dataset.href); });
   /** The avatar menu: who you are, the display preferences, the glossary, the prototype's demo data, and Lock. */
   UI.act('op-menu', (b) => UI.menu(b, [[`Signed in as ${D.operator.name}`, 'shield', 'strip-go', 'data-href="#/security"'], ['-'], [document.documentElement.dataset.theme === 'dark' ? 'Light theme' : 'Dark theme', document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon', 'theme-menu'], ['Preferences', 'settings', 'strip-go', 'data-href="#/preferences"'], ...(D.prefs.gsHidden ? [['Show Get started', 'check', 'gs-show']] : []), ['Glossary', 'info', 'strip-go', 'data-href="#/glossary"'], ['Demo data…', 'sparkle', 'demo-menu'], ['-'], ['Lock', 'lock', 'strip-go', 'data-href="#/signin"']]));

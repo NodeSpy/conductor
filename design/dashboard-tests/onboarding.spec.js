@@ -86,8 +86,7 @@ test('terms explain themselves (hover or keyboard focus); the glossary lists the
   await expect(page.locator('#g-provenance')).toContainText('no more trust');
   await expect(page.locator('#g-tier')).toContainText('observe');
   await expect(page.locator('#strip-cells')).not.toContainText('paseo');
-  // an available update is said quietly in the status menu, not as a chip in the top bar
+  // an available update is said quietly on the machine card (the rail's foot; More on a phone), never in the top bar
   await expect(page.locator('#strip-cells a[href="#/updates"]')).toHaveCount(0);
-  await page.locator('#strip-cells .status-btn').click();
-  await expect(page.locator('#pop-menu')).toContainText('installs itself within 10 min');
+  if (page.viewportSize().width > 720) await expect(page.locator('.rail .host')).toContainText('installs within 10 min');
 });

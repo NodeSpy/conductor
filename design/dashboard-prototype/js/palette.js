@@ -32,10 +32,10 @@
     add('action', 'New team', () => { UI.go('#/bots'); setTimeout(act('team-new'), 60); }, { icon: 'plus' });
     add('action', 'Add a login', go('#/browser/add'), { icon: 'passkey', words: 'credential password site browser' });
     add('action', 'Connect a service (Slack, GitHub…)', go('#/connectors/connectors'), { icon: 'plus', words: 'connector slack github pagerduty add integrate' });
-    add('action', D.daemon.paused ? 'Resume dispatch' : 'Pause dispatch', () => UI.acts.pause(), { icon: 'pause', words: 'stop halt' });
+    add('action', D.daemon.paused ? 'Resume automation' : 'Pause all automation', () => UI.acts.pause(), { icon: 'pause', words: 'stop halt dispatch emergency kill' });
     add('action', 'Review and apply staged changes', go('#/config/apply'), { icon: 'check', words: 'apply diff staged', hint: D.pending.length ? `${D.pending.length} staged` : 'nothing staged' });
     add('action', 'Switch to the ' + (document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark') + ' theme', () => UI.theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'), { icon: 'sun', words: 'theme dark light mode' });
-    add('action', 'What can my bots do? (Safety)', go('#/safety'), { icon: 'shield', words: 'safety permissions tiers sandbox' });
+    add('action', 'What can my bots do? (System → Safety)', go('#/safety'), { icon: 'shield', words: 'safety permissions tiers sandbox' });
     add('action', 'Keyboard shortcuts', () => UI.shortcuts(), { icon: 'keyboard', words: 'keys help ?' });
     add('action', 'Update conductor', go('#/updates'), { icon: 'updates', words: 'upgrade version', hint: D.daemon.update.available || '' });
     // what needs you
@@ -48,7 +48,7 @@
     v.teams.forEach((t) => add('team', t.name, go('#/teams/' + t.name), { icon: 'members', words: t.cfg && t.cfg.description }));
     (UI.allFolders ? UI.allFolders(true) : []).forEach((f) => add('folder', f, go('#/folders/' + encodeURIComponent(f)), { icon: 'folder' }));
     v.workflows.forEach((w) => add('workflow', w.name, go('#/workflows/' + w.name), { icon: 'workflows', hint: w.source === 'config' ? 'your config' : w.source, words: (w.yaml || '').slice(0, 200) }));
-    D.runs.forEach((r) => add('run', `${r.id} · ${r.workflow}${r.repo ? ' · ' + UI.runTarget(r) : ''}`, go(`#/runs/${r.id}`), { icon: 'runs', hint: UI.runWord(r.status), words: `${r.error || ''} ${r.trigger}` }));
+    D.runs.forEach((r) => add('run', `${r.id} · ${r.workflow}${UI.runTarget(r) ? ' · ' + UI.runTarget(r) : ''}`, go(`#/runs/${r.id}`), { icon: 'runs', hint: UI.runWord(r.status), words: `${r.error || ''} ${r.trigger}` }));
     v.connectors.forEach((c) => { add('connector', `${c.name} (${c.use})`, go('#/connectors/connectors'), { icon: 'link' }); const d = SCHEMA.connectors[c.use]; if (d) Object.entries(d.verbs || {}).forEach(([vn, vd]) => add('verb', `${c.name}.${vn}`, go('#/safety'), { icon: 'zap', hint: vd.label, words: vd.label })); });
     (v.vaults || []).forEach((x) => add('vault', x.name, go('#/secrets/vaults'), { icon: 'lock', hint: x.kind || x.type || '' }));
     (v.secrets || []).forEach((x) => add('secret', `${x.vault}/${x.key}`, go('#/secrets'), { icon: 'lock', hint: x.alias ? 'alias ' + x.alias : '', words: x.alias }));
@@ -102,7 +102,7 @@
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target; if (t && (t.closest('input, textarea, select, [contenteditable="true"]') || document.querySelector('.scrim, .drawer-scrim, .palette'))) return;
     if (e.key === '?') { e.preventDefault(); UI.shortcuts(); return; }
-    if (e.key === '/') { const f = document.querySelector('#main .dl-filters input, #main .filters input, #main input[type="search"], #main .input-icon input, #main [data-on-change="rp-q"]'); e.preventDefault(); if (f) f.focus(); else UI.palette(); return; } // a page with no filter of its own: / opens the search
+    if (e.key === '/') { const f = document.querySelector('#main .fb-in, #main .dl-filters input, #main .filters input, #main input[type="search"], #main .input-icon input, #main [data-on-change="rp-q"]'); e.preventDefault(); if (f) f.focus(); else UI.palette(); return; } // a page with no filter of its own: / opens the search
     if (e.key === 'g') { gAt = Date.now(); return; }
     if (gAt && Date.now() - gAt < 1200 && GO[e.key]) { e.preventDefault(); gAt = 0; UI.go('#/' + GO[e.key]); kSel = -1; return; }
     gAt = 0;

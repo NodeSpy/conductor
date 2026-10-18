@@ -54,7 +54,7 @@ hr.rule { border: 0; border-top: var(--border-width) solid var(--color-border-su
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ---------- shell, as in Daylight's mocks (design/brand/v2 mock.css): the rail full height on the left with the
- * brand on top and the host at the foot; a quiet top bar over the page (search, how things are, the avatar) ---------- */
+ * brand on top and the host at the foot; a quiet top bar over the page (search and the avatar) ---------- */
 .shell { display: grid; grid-template-columns: var(--size-rail) minmax(0, 1fr); grid-template-rows: var(--size-strip) minmax(0, 1fr); height: var(--dvh); }
 .rail { grid-row: 1 / -1; grid-column: 1; background: var(--color-bg-rail); display: flex; flex-direction: column; gap: 18px; overflow-y: auto; padding: 18px 14px; }
 .rail .brand { display: flex; align-items: center; gap: 9px; padding: 4px 8px; color: var(--color-logo-ink); }
@@ -89,14 +89,22 @@ hr.rule { border: 0; border-top: var(--border-width) solid var(--color-border-su
 .nav a:hover { background: var(--color-state-hover); color: var(--color-text-primary); }
 .nav a.on { background: var(--color-bg-surface); color: var(--color-text-primary); box-shadow: var(--shadow-1); font-weight: var(--font-weight-semibold); }
 .nav a .count { margin-left: auto; }
-.rail .host { margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: var(--radius-card); background: var(--color-bg-surface); border: var(--border-width) solid var(--color-border-subtle); color: inherit; min-width: 0; }
-.rail .host:hover { border-color: var(--color-border-default); }
-.rail .host .who { min-width: 0; line-height: 1.3; }
-.rail .host b { display: block; font-size: 13px; font-weight: var(--font-weight-bold); }
-.rail .host .who span { display: block; color: var(--color-text-tertiary); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rail-host { margin-top: auto; }
+.host { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: var(--radius-card); background: var(--color-bg-surface); border: var(--border-width) solid var(--color-border-subtle); color: inherit; min-width: 0; }
+.host:hover { border-color: var(--color-border-default); }
+.host .who { min-width: 0; line-height: 1.3; }
+.host b { display: block; font-size: 13px; font-weight: var(--font-weight-bold); }
+.host .who span { display: block; color: var(--color-text-tertiary); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .op { display: flex; align-items: center; gap: var(--space-2); min-width: 0; flex: 1; }
 
-.main { overflow-y: auto; overflow-x: hidden; position: relative; scroll-behavior: smooth; }
+.main { overflow-y: auto; overflow-x: hidden; position: relative; scroll-behavior: smooth; scrollbar-gutter: stable; }
+/* the shell never scrolls sideways: the window and the shell clip, and every wide thing (logs, code, YAML, tables,
+   diffs) scrolls inside its own box; an always-visible scrollbar (a mouse, or macOS set to show them) reserves its
+   gutter, so a short page and a long one put the content in the same place */
+html, body { overflow: hidden; overscroll-behavior-x: none; }
+.shell { overflow: clip; }
+.main pre, .main .code, .main .yaml, .main .log, .main .diff { max-width: 100%; overflow-x: auto; }
+.main .log { overscroll-behavior: contain; }
 .page { padding: var(--pad-page-y) var(--pad-page-x) var(--space-16); max-width: calc(var(--layout-container-page) + 2 * var(--pad-page-x)); margin: 0 auto; }
 .page.wide { max-width: none; }
 .page.flush { padding: 0; max-width: none; height: 100%; }
@@ -397,8 +405,6 @@ hr.rule { border: 0; border-top: var(--border-width) solid var(--color-border-su
   .strip .search .kbd, .strip .search .lbl { display: none; }
   .strip .spacer, .strip .cell.staged { display: none; }
   /* the status menu (Pause or Resume dispatch, an update) stays reachable: the mark alone when all is well, the word too when it isn't */
-  .strip .cell.status-btn { padding: 0 6px; min-height: 44px; }
-  .strip .cell.status-btn.calm .sw { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .strip .op-btn .avatar { width: 28px; height: 28px; }
   .page { padding: var(--space-4) max(var(--space-4), var(--sar)) var(--space-8) max(var(--space-4), var(--sal)); }
   .page-head { margin-bottom: var(--space-6); }
@@ -454,3 +460,12 @@ body.bare .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: mi
 .skip { position: fixed; left: 12px; top: -60px; z-index: calc(var(--z-modal) + 20); padding: 10px 14px; border-radius: var(--radius-control); background: var(--color-bg-raised); color: var(--color-text-primary); font: var(--type-label); box-shadow: var(--shadow-2); }
 .skip:focus { top: 12px; }
 .main:focus { outline: none; }
+
+/* the machine card (rail foot; top of More on a phone): how the machine is, and its update said quietly underneath;
+   it takes the attention edge only when a person is needed (paused, or an update that needs you) */
+.host .host-upd { display: block; color: var(--color-text-tertiary); font-size: 12px; line-height: 1.3; }
+.host.need { border-color: var(--color-accent-default); box-shadow: inset 3px 0 0 var(--color-accent-default); }
+.host.need #host-line { color: var(--color-text-accent); font-weight: var(--font-weight-bold); }
+.more-host { margin-bottom: var(--space-4); }
+.more-host .host { padding: 14px; }
+.safety-stop.need { box-shadow: inset 3px 0 0 var(--color-accent-default); }

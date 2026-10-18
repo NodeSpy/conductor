@@ -29,15 +29,16 @@ test('finds actions, approvals, verbs, config paths and terms; no duplicates; an
   await expect(page).toHaveURL(/#\/bots\/new$/);
 });
 
-test('actions execute: Pause dispatch pauses (after a confirm)', async ({ page }) => {
+test('actions execute: Pause all automation pauses (after a confirm)', async ({ page }) => {
   await go(page, '#/runs', { fresh: true });
   await open(page);
-  await type(page, 'pause dispatch');
+  await type(page, 'pause all automation');
   await page.keyboard.press('Enter');
   await expect(page.locator('#cf-cancel')).toBeFocused();
   await page.locator('#cf-ok').click();
   expect(await page.evaluate(() => D.daemon.paused)).toBe(true);
-  await expect(page.locator('#strip-cells')).toContainText('paused');
+  await go(page, '#/attention');
+  await expect(page.locator('.dl-needs')).toContainText('All automation is paused');
 });
 
 test('? shows the shortcuts; g r goes to Activity; / focuses the filter; j/k pick a row and Enter opens it', async ({ page }) => {
@@ -49,7 +50,7 @@ test('? shows the shortcuts; g r goes to Activity; / focuses the filter; j/k pic
   await expect(page).toHaveURL(/#\/activity$/);
   await page.locator('#main h1').click();
   await page.keyboard.press('/');
-  await expect(page.locator('#main .dl-filters input').first()).toBeFocused();
+  await expect(page.locator('#main .fb-in').first()).toBeFocused();
   await page.locator('#main h1').click();
   await page.keyboard.press('j'); await page.keyboard.press('j');
   await expect(page.locator('#main .kbd-sel')).toHaveCount(1);
