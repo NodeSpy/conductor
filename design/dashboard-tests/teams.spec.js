@@ -79,14 +79,14 @@ test('routing: add a rule, try it on a past event, route work with provenance ke
   await page.selectOption('#f-event', 'ev-pd');
   await page.locator('#gen-submit').click();
   await expect(page).toHaveURL(/#\/bots\/platform-sre\/cases\/c\d+/);
-  await expect(page.locator('.route-box')).toContainText('routed to platform by rule pd-api');
-  await expect(page.locator('.route-box')).toContainText('→ platform-sre');
-  await expect(page.locator('.route-box')).toContainText('event:pd.incident');
+  await expect(page.locator('.case-head')).toContainText('routed to platform by rule pd-api');
+  await expect(page.locator('.case-head')).toContainText('→ platform-sre');
+  await expect(page.locator('.case-head')).toContainText('event:pd.incident');
   // an operator reassignment is recorded too, requester still kept
   await go(page, '#/bots/web-triage/cases/c33');
-  await page.locator('[data-act="case-reassign"]').click();
-  await expect(page.locator('.route-box')).toContainText('reassigned by operator ops to platform-sre');
-  await expect(page.locator('.route-box')).toContainText('event:gh.issue_opened');
+  await page.locator('[data-act="case-more"]').click(); await page.locator('#pop-menu [data-act="case-reassign"][data-to="platform-sre"]').click();
+  await expect(page.locator('.case-head')).toContainText('reassigned by operator ops to platform-sre');
+  await expect(page.locator('.case-head')).toContainText('event:gh.issue_opened');
 });
 
 test('knowledge: approve a promotion with a passkey; a bot proposes one from memory', async ({ page }) => {
@@ -134,8 +134,8 @@ test('a case shows its delegation edges with status and the reported result', as
   // the recipient's child case carries the original requester
   await page.locator('.item.deleg[data-deleg="d1"] a', { hasText: 'platform-data' }).click();
   await expect(page).toHaveURL(/#\/bots\/platform-data\/cases\/c35/);
-  await expect(page.locator('.route-box')).toContainText('delegated by platform-sre → platform-data from case c29');
-  await expect(page.locator('.route-box')).toContainText('event:pd.incident');
+  await expect(page.locator('.case-head')).toContainText('delegated by platform-sre → platform-data from case c29');
+  await expect(page.locator('.case-head')).toContainText('event:pd.incident');
 });
 
 test('closing a delegated case reports its result back to the delegating case', async ({ page }) => {
@@ -160,7 +160,7 @@ test('have a bot delegate to a teammate; the child case works under the original
   await expect(edge).toContainText('delegated by platform-sre → platform-data');
   await expect(edge).toContainText('running');
   await edge.locator('a', { hasText: 'platform-data' }).click();
-  await expect(page.locator('.route-box')).toContainText('event:pd.incident');
+  await expect(page.locator('.case-head')).toContainText('event:pd.incident');
   await go(page, '#/teams/platform');
   await expect(page.locator('.panel', { hasText: 'Delegations' }).first()).toContainText('Split p99 by AMI');
 });

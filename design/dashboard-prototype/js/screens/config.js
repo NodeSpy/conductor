@@ -44,14 +44,14 @@
     <div class="dl-phead"><div><h1>Config</h1><p class="dl-lead">Edits to a section, a bot or a workflow wait here; nothing applies until you review it.</p></div>
       <div class="dl-actions tight"><a class="btn secondary" href="#/config/raw">${icon('code')}Edit the file</a>${n ? `<a class="btn primary" href="#/config/apply">Review ${n} change${n > 1 ? 's' : ''}</a>` : ''}</div></div>
     <div class="cfg-stack">${historyCard()}
-        <div class="panel cfg-files"><div class="panel-head"><h3>Files</h3><span class="muted small">what the daemon loaded at boot</span><div class="tools"><span class="dl-sub">on disk matches what's loaded</span></div></div>
+        <details class="panel cfg-files dl-files-d"><summary class="panel-head"><h3>Files</h3><span class="muted small">what conductor loaded at boot · on disk matches what's loaded</span></summary>
           <table class="tbl compact responsive"><thead><tr><th>file</th><th>owner</th><th>sha</th><th>loaded</th></tr></thead><tbody>
             <tr><td data-l="file" class="mono"><a class="link" href="#/config/raw">~/.config/conductor/config.yaml</a></td><td data-l="owner">${UI.label(`you`, { cls: 'owner op' })}</td><td data-l="sha" class="mono">${D.daemon.config_sha}</td><td data-l="loaded" class="muted">${ago(D.configHistory[0].at)} ago</td></tr>
             <tr><td data-l="file" class="mono">~/.config/conductor/conf.d/connectors/pd.yaml</td><td data-l="owner">${UI.label(`you, through imports:`, { cls: 'owner op' })}</td><td data-l="sha" class="mono">91d0c7e3</td><td data-l="loaded" class="muted">50m ago</td></tr>
             <tr><td data-l="file" class="mono">.conductor/packs/review/ (vendored)</td><td data-l="owner">${UI.label(`pack review · c81e09a`, { cls: 'owner pack' })}</td><td data-l="sha" class="mono">c81e09a</td><td data-l="loaded" class="muted">re-vendored 6m ago</td></tr>
             <tr><td data-l="file" class="mono">.conductor/packs/sre-bot/ (vendored)</td><td data-l="owner">${UI.label(`pack sre-bot · hold`, { cls: 'owner pack' })}</td><td data-l="sha" class="mono">3d70b2e</td><td data-l="loaded" class="muted">held</td></tr>
             <tr><td data-l="file" class="mono">conductor.lock.yaml</td><td data-l="owner">${UI.label(`conductor`, { cls: 'owner pack' })}</td><td data-l="sha" class="mono">5e2c91aa</td><td data-l="loaded" class="muted">6m ago</td></tr>
-          </tbody></table></div>
+          </tbody></table></details>
         
 
     <div class="dl-cols">

@@ -148,11 +148,11 @@ test.describe('bots', () => {
     await go(page, '#/bots/platform-sre/cases');
     await headAction(page, '[data-act="m-deliver"]');
     await page.fill('#f-title', 'Check the NAT gateway bill'); await submit(page);
-    await expect(page.locator('.route-box')).toContainText('delivered to');
+    await expect(page.locator('.case-head')).toContainText(/delivered to/i);
     await page.fill('#case-note', 'Owner is billing.'); await page.locator('[data-act="case-note"]').click();
     await expect(page.locator('.panel', { hasText: 'Notes' })).toContainText('Owner is billing.');
     await page.locator('[data-act="case-close"]').click();
-    await expect(page.locator('.panel-head .case-state').first()).toContainText('Closed');
+    await expect(page.locator('.case-state').first()).toContainText('Closed');
     await go(page, '#/bots/platform-sre/access');
     await page.locator('[data-act="login-revoke"]').click(); await page.locator('#cf-ok').click();
     await expect(page.locator('.panel', { hasText: 'Browser logins' })).toContainText('No saved logins');
@@ -220,6 +220,7 @@ test.describe('secrets and vars', () => {
 test.describe('browser', () => {
   test('identity settings widen through the pipeline; seed a login; take over and release', async ({ page }) => {
     await go(page, '#/browser');
+    await page.locator('.ident-d summary').click(); // per-identity settings are folded
     await page.locator('[data-act="ident-edit"][data-i="agent:docs@acme/web"]').click();
     await page.locator('[data-listk="allow"] .list-add').fill('status.example.com');
     await page.locator('[data-listk="allow"] .list-add').press('Enter');

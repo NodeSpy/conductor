@@ -415,35 +415,36 @@
   }
   function caseDetail(m, c) {
     const t = teamOf(m), mates = t ? botsOf(t.name).filter((x) => x.name !== m.name) : [];
-    return `<div class="row" style="margin-bottom:12px"><a class="btn sm ghost back" href="#/bots/${m.name}/cases">${icon('chev')}All cases</a></div>
-      <div class="grid g-side"><div class="stack">
-        <div class="panel"><div class="panel-head"><span class="dl-sub case-state">${c.status === 'open' ? 'Open case' : 'Closed'}</span>${c.urgent ? tag('urgent', 'fail') : ''}</div>
-          <div class="panel-body"><h2 class="case-title">${esc(c.title)}</h2>
-          ${UI.metaLine([{ label: 'Case', value: c.id, mono: true }, { label: 'Opened', value: `${UI.agoText(c.opened)} <span class="dl-sub">(${UI.hm(c.opened)})</span>` }])}
-          <div class="route-box"><div class="caps">routing</div><div class="small">${c.routed ? routeLabel(c.routed) : 'delivered directly'}${c.routed && c.routed.note ? ` <span class="muted">· ${esc(c.routed.note)}</span>` : ''}</div><div class="tiny muted">requester ${UI.label(`${c.requester}`, { cls: 'taint ' + c.cls })} preserved through every hop: the assignee runs on no more trust than that.</div></div></div></div>
-        ${(() => { const out = D.delegations.filter((d) => d.parent === c.id), inn = D.delegations.find((d) => d.child === c.id); return out.length || inn ? `<div class="panel"><div class="panel-head"><h3>Delegation</h3><span class="muted small">${out.length ? `${out.length} handed out from this case` : ''}${inn ? 'this case is a delegated task' : ''}</span></div><div class="list">${inn ? edgeHTML(inn).replace('class="item deleg"', 'class="item deleg inbound"') : ''}${out.map(edgeHTML).join('')}</div>${inn && inn.status === 'running' ? '<div class="panel-foot small muted">Closing this case reports its last note back to the delegating bot as the result.</div>' : ''}</div>` : ''; })()}
+    // what the case is and where it stands, what's been done (delegations, notes) and what you can do; how it was routed
+    // is one quiet line, and the audit facts (id, class, the requester carried through, counts) fold at the end
+    const open = c.status === 'open', canDel = open && UI.delegationReach(m.name).some((r) => r.ok);
+    const delWhy = !open ? 'Reopen the case to delegate from it' : `${m.name} has no teammate or linked bot to delegate to: put it on a team or link it with another bot`;
+    const deleg = (() => { const out = D.delegations.filter((d) => d.parent === c.id), inn = D.delegations.find((d) => d.child === c.id); return out.length || inn ? `<div class="panel"><div class="panel-head"><h3>Delegation</h3><span class="muted small">${out.length ? `${out.length} handed out from this case` : ''}${inn ? 'this case is a delegated task' : ''}</span></div><div class="list">${inn ? edgeHTML(inn).replace('class="item deleg"', 'class="item deleg inbound"') : ''}${out.map(edgeHTML).join('')}</div>${inn && inn.status === 'running' ? '<div class="panel-foot small muted">Closing this case reports its last note back to the delegating bot as the result.</div>' : ''}</div>` : ''; })();
+    return `<div class="dl-crumbs"><a href="#/bots/${m.name}/cases">${icon('chev', 'flip')}All cases</a></div>
+      <div class="stack case-page">
+        <section class="dl-card case-head"><h2 class="case-title">${esc(c.title)}</h2>
+          <p class="dl-sub case-state">${open ? 'Open' : 'Closed'}${c.urgent && open ? ' · <b class="danger-text">urgent</b>' : ''} · opened ${UI.agoText(c.opened)} (${UI.hm(c.opened)})</p>
+          <div class="dl-actions">${open ? `<button class="btn secondary" data-act="case-close" data-m="${m.name}" data-c="${c.id}">${icon('check')}Close case</button>` : `<button class="btn secondary" data-act="case-close" data-m="${m.name}" data-c="${c.id}">${icon('undo')}Reopen</button>`}<button class="btn secondary" ${canDel ? `data-act="case-delegate" data-m="${m.name}" data-c="${c.id}"` : UI.off(delWhy)}>${icon('send')}Delegate a task…</button>${t ? `<button class="icon-btn" data-act="case-more" data-m="${m.name}" data-c="${c.id}" aria-label="More for case ${c.id}">${icon('more')}</button>` : ''}</div>
+          <p class="dl-sub case-route">${c.routed ? routeLabel(c.routed) : 'Delivered to it directly'}${c.routed && c.routed.note ? ` · ${esc(c.routed.note)}` : ''}.</p>
+          <details class="dl-audit-d"><summary>${icon('chev')}Details: case id, who asked, linked work</summary><dl class="dl-facts"><dt>Case</dt><dd class="mono">${c.id}</dd><dt>Asked by</dt><dd><span class="mono">${esc(c.requester)}</span> (${esc(c.cls)}); carried through every hop, so whoever works it runs with no more trust than that</dd><dt>Workers</dt><dd>${c.workers}</dd><dt>Proposals</dt><dd>${c.proposals}</dd></dl></details></section>
+        ${deleg}
         <div class="panel"><div class="panel-head"><h3>Notes</h3></div><div class="list">${(c.notes || []).map((n) => `<div class="item small" style="align-items:flex-start"><span class="tiny muted" style="width:72px">${UI.agoText(n.at)}</span><div class="grow"><span class="mono tiny">${esc(n.who)}</span><div>${esc(n.text)}</div></div></div>`).join('') || '<div class="item small muted">No notes yet.</div>'}</div>
-          <div class="panel-foot"><input class="input grow" id="case-note" placeholder="Add a note (bot case note)" aria-label="Note"><button class="btn sm" data-act="case-note" data-m="${m.name}" data-c="${c.id}">${icon('plus')}Add note</button></div></div>
-      </div><div class="stack">
-        <div class="panel"><div class="panel-body stack tight">
-          <button class="btn" ${c.status !== 'open' ? UI.off('Reopen the case to delegate from it') : !UI.delegationReach(m.name).some((r) => r.ok) ? UI.off(`${m.name} has no teammate or linked bot to delegate to: put it on a team or link it with another bot`) : `data-act="case-delegate" data-m="${m.name}" data-c="${c.id}"`}>${icon('send')}Delegate a task…</button>
-          ${c.status === 'open' ? `<button class="btn" data-act="case-close" data-m="${m.name}" data-c="${c.id}">${icon('check')}Close case</button>` : `<button class="btn" data-act="case-close" data-m="${m.name}" data-c="${c.id}">${icon('undo')}Reopen</button>`}
-          ${t ? `<label class="field"><span class="caps">reassign within ${t.name}</span><select class="select mono" id="case-to" aria-label="Reassign to">${mates.map((x) => `<option>${x.name}</option>`).join('')}</select></label><button class="btn sm" ${mates.length && c.status === 'open' ? `data-act="case-reassign" data-m="${m.name}" data-c="${c.id}"` : UI.off(c.status !== 'open' ? 'Reopen it first' : 'Nobody else in the team')}>${icon('send')}Reassign</button>` : '<div class="muted tiny">Not in a team: no one to reassign to.</div>'}
-        </div></div>
-        <div class="panel"><div class="panel-head"><h3>Linked</h3></div><div class="panel-body small"><dl class="kv"><dt>workers</dt><dd class="mono">${c.workers}</dd><dt>proposals</dt><dd class="mono">${c.proposals}</dd><dt>class</dt><dd>${UI.label(`${c.cls}`, { cls: 'taint ' + c.cls })}</dd></dl></div></div>
-      </div></div>`;
+          <div class="panel-foot"><input class="input grow" id="case-note" placeholder="Add a note" aria-label="Note"><button class="btn sm" data-act="case-note" data-m="${m.name}" data-c="${c.id}">${icon('plus')}Add note</button></div></div>
+      </div>`;
   }
+  UI.act('case-more', (b) => { const m = M(b.dataset.m), c = D.cases.find((x) => x.id === b.dataset.c), t = teamOf(m), mates = t ? botsOf(t.name).filter((x) => x.name !== m.name) : [];
+    UI.menu(b, mates.length ? mates.map((x) => [`Reassign to ${x.name}`, 'send', 'case-reassign', c.status === 'open' ? `data-m="${m.name}" data-c="${c.id}" data-to="${x.name}"` : UI.off('Reopen it first')]) : [['Reassign…', 'send', 'case-reassign', UI.off('Nobody else on the team')]]); });
   UI.act('case-f', (b) => { cv.f = b.dataset.v; UI.rerender(); });
   document.addEventListener('click', (e) => { const tr = e.target.closest('tr[data-href]'); if (tr && !e.target.closest('a,button,input,label,select,.sel')) UI.go(tr.dataset.href); });
   UI.act('case-note', (b) => { const inp = UI.$('#case-note'), v = inp.value.trim(); if (!v) return UI.nudge(inp, 'Type the note first'); const c = D.cases.find((x) => x.id === b.dataset.c); (c.notes = c.notes || []).push({ at: now(), who: 'operator:ops', text: v }); audit('bot_case_note', `${b.dataset.m} · ${c.id}`); S.save(); UI.rerender(); });
   UI.act('case-close', (b) => { const c = D.cases.find((x) => x.id === b.dataset.c); c.status = c.status === 'open' ? 'closed' : 'open';
     const d = D.delegations.find((x) => x.child === c.id && x.status === 'running');
     if (d && c.status === 'closed') { const last = (c.notes || []).slice(-1)[0]; d.status = 'done'; d.done = now(); d.result = last ? last.text : `closed by operator ops with no note`; const par = D.cases.find((x) => x.id === d.parent); if (par) (par.notes = par.notes || []).push({ at: now(), who: `bot:${d.to}`, text: `↩ result of ${d.id}: ${d.result}` }); audit('bot_delegate_done', `${d.id} · ${d.to} → ${d.from} · ${d.result.slice(0, 60)}`); } audit('bot_case_' + (c.status === 'open' ? 'reopen' : 'close'), `${b.dataset.m} · ${c.id}`); S.save(); UI.rerender(); UI.refreshChrome(); });
-  UI.act('case-reassign', (b) => { const c = D.cases.find((x) => x.id === b.dataset.c), to = UI.$('#case-to').value; const t = teamOf(M(b.dataset.m)); c.routed = { by: 'operator', from: c.bot, to, team: t.name, requester_kept: true }; c.bot = to; audit('bot_route', `${c.id} → ${to} · operator reassign · requester ${c.requester} kept`); S.save(); UI.go(`#/bots/${to}/cases/${c.id}`); });
+  UI.act('case-reassign', (b) => { const c = D.cases.find((x) => x.id === b.dataset.c), to = b.dataset.to || (UI.$('#case-to') || {}).value; const t = teamOf(M(b.dataset.m)); c.routed = { by: 'operator', from: c.bot, to, team: t.name, requester_kept: true }; c.bot = to; audit('bot_route', `${c.id} → ${to} · operator reassign · requester ${c.requester} kept`); S.save(); UI.go(`#/bots/${to}/cases/${c.id}`); });
 
   /* ---------- proposals ---------- */
   const PS = { pending: 'ember', shadow: 'shadow', executed: 'ok', approved: 'ok', refused: 'fail', denied: 'fail', failed: 'fail' };
-  const pv = { f: 'all', tab: {} };
+  const pv = { f: 'all', plan: {} };
   function proposals(m, sub) {
     const list = props(m.name);
     const p = sub && list.find((x) => x.id === sub);
@@ -505,30 +506,32 @@
     const techFacts = `<dl class="dl-facts prop-tech-facts"><dt>Proposal</dt><dd><span class="mono">${p.id}</span> · tier <span class="mono">${esc(p.tier)}</span></dd><dt>Verb</dt><dd class="mono">${esc(p.verb)}</dd>
       ${tf ? `<dt>Exact command</dt><dd class="mono">terraform apply · repo ${esc(tf.repo)} · dir ${esc(tf.dir)} · workspace ${esc(tf.workspace)}${(tf.var_files || []).length ? ` · var files ${tf.var_files.map(esc).join(', ')}` : ''}</dd><dt>Commit</dt><dd class="mono">${tf.commit}</dd><dt>Plan sha256</dt><dd class="mono">${tf.plan_sha}</dd>` : ''}
       <dt>Case</dt><dd><a class="mono dl-link" href="#/bots/${m.name}/cases/${p.case}">${p.case}</a></dd><dt>Asked for by</dt><dd class="mono">${esc(p.requester || '—')}${p.cls ? ` (${esc(p.cls)})` : ''}</dd><dt>Digest</dt><dd class="mono">${p.digest}</dd><dt>Signed by</dt><dd>${p.approver ? esc(p.approver) : 'not yet: your passkey signs this digest'}</dd></dl>`;
-    const tech = `${techFacts}
-      ${tf ? `<h3 class="po-h3">The plan, as tf-plan ran it with the read role</h3>${(() => { const pl = planHTML(D.tfPlan || ''); return `${pl.jump}<pre class="dl-code prop-plan">${pl.body}</pre>`; })()}` : `<h3 class="po-h3">Exactly what runs</h3>${UI.payloadHTML(p)}`}`;
     const decided = !pend && p.status !== 'shadow' ? `<p class="dl-decided">${UI.statusMark(PS[p.status] || 'idle', p.status.startsWith('approved') || p.status === 'executed' ? 'Approved' : p.status[0].toUpperCase() + p.status.slice(1))}${p.approver ? ` by ${esc(p.approver)}` : ''}${p.reason ? `: “${esc(p.reason)}”` : ''}. ${p.status.startsWith('approved') || p.status === 'executed' ? 'conductor applied exactly what was signed.' : 'The bot was told.'}</p>` : p.status === 'shadow' ? '<p class="dl-decided dl-sub">A shadow proposal: what the bot would have done. It can’t be approved.</p>' : '';
-    // tabs only when the technical details change the decision: a plan or a diff (terraform, anything diff-shaped);
-    // a simple action's decision content (exactly what runs) is already on the Overview, so its details collapse
-    const shaped = !!(tf || p.diff || p.plan), tab = shaped ? pv.tab[p.id] || 'overview' : 'overview';
-    const overview = `${p.why ? `<div class="dl-pwhy"><span class="dl-lbl">Why</span><p>${esc(p.why)}</p></div>` : ''}${tf ? changes : ''}
+    // one column, in the order the decision needs and always in view: what will change (for a plan, the counts and the
+    // resources by action, in Terraform's colours; otherwise exactly what it sends), why, where and what it does and how
+    // to undo it, who or what asked. The full plan opens in place; the integrity data (ids, hashes, the digest the passkey
+    // signs) is for audit: one quiet line at the end, folded. No tabs: nothing the decision depends on is ever hidden.
+    const pl = tf ? planHTML(D.tfPlan || '') : null;
+    const what = tf ? `<div class="dl-pwhy prop-what"><span class="dl-lbl">What will change</span>${changes}${pl.jump}</div>` : `<div class="dl-pwhy"><span class="dl-lbl">Exactly what it sends</span>${UI.payloadHTML(p)}</div>`;
+    const plan = tf ? `<details class="dl-tech-d prop-plan-d"${pv.plan[p.id] ? ' open' : ''} data-on-toggle="prop-plan-t" data-p="${p.id}"><summary>${icon('chev')}The full plan <span class="dl-sub">as tf-plan ran it, with the read role</span></summary><pre class="dl-code prop-plan">${pl.body}</pre></details>` : '';
+    const audit = `<details class="dl-audit-d"><summary>${icon('chev')}For audit: ids, hashes and the digest your passkey signs</summary>${techFacts}</details>`;
+    const body = `${what}
+      ${p.why ? `<div class="dl-pwhy"><span class="dl-lbl">Why</span><p>${esc(p.why)}</p></div>` : ''}
       ${where.length ? `<dl class="dl-where">${where.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>` : ''}
-      <p class="dl-origin">${origin}</p>${pend ? '' : decided}${!tf ? `<div class="dl-pwhy"><span class="dl-lbl">What it sends</span>${UI.payloadHTML(p)}</div>` : ''}`;
+      <p class="dl-origin">${origin}</p>${pend ? '' : decided}${plan}${audit}`;
     const card = `<article class="dl-card dl-proposal">${pend ? `<div class="dl-kick">${UI.mark('ember')}Needs you · <span class="nowrap">asked ${UI.agoText(p.at)}</span>${p.expires ? ` · <span class="nowrap">expires in ${UI.humanSpan(p.expires)}</span>` : ''}</div>` : `<div class="dl-kick dl-sub">${UI.agoText(p.at)}</div>`}
       <h2 class="dl-ptitle">${esc(p.title || p.summary)}</h2><p class="dl-ask">${ask}</p>
-      ${shaped ? `<nav class="dl-tabs prop-tabs" role="tablist">${[['overview', 'Overview'], ['tech', 'Technical details']].map(([k, l]) => `<a href="#" role="tab" data-act="prop-tab" data-p="${p.id}" data-v="${k}" class="${tab === k ? 'on' : ''}" aria-selected="${tab === k}">${l}</a>`).join('')}</nav>
-      <div class="prop-body">${tab === 'tech' ? tech : overview}</div>` : `<div class="prop-body">${overview}<details class="dl-tech-d"><summary>${icon('chev')}Technical details <span class="dl-sub">the proposal, its case and the digest your passkey signs</span></summary>${techFacts}</details></div>`}
+      <div class="prop-body">${body}</div>
       ${pend ? `<div class="dl-decide prop-decide"><button class="btn lg primary" data-act="p-approve" data-p="${p.id}" data-d="approve">${icon('passkey')}Approve with passkey</button><button class="btn lg secondary" data-act="p-approve" data-p="${p.id}" data-d="deny">Deny…</button><span class="hint">${(() => { const ops = S.effective(m).operators.v || []; return ops.length ? `Only ${ops.map(esc).join(' or ')} can approve.` : 'Any operator can approve.'; })()}</span></div>` : p.status === 'shadow' ? decided : ''}</article>`;
     const x = UI.botCan(m), plain = (i) => esc(String(i.text).replace(/ \([^)]*\)$/, '').replace(/^./, (c) => c.toUpperCase()));
     const can = `<section class="dl-card dl-can"><header class="dl-ch"><h2>What ${esc(m.name)} can do</h2></header>${[['Does on its own', 'ok', x.own], ['Asks you first', 'ember', x.asks], ['Never', 'fail', x.never]].map(([h, s2, xs]) => `<div class="cang" data-s="${s2}"><h3>${UI.mark(s2)}${h}</h3><ul>${xs.map((i) => `<li>${plain(i)}</li>`).join('') || '<li class="dl-sub">nothing</li>'}</ul></div>`).join('')}</section>`;
-    const tl = `<section class="dl-card"><header class="dl-ch"><h2>Timeline</h2></header><ol class="dl-story"><li><span class="sg">${UI.mark('ok')}</span><div><b>Proposed by ${esc(m.name)}</b><span>${p.cls === 'event' ? 'while handling the event' : `in case ${p.case}`}</span></div><span class="t">${UI.agoText(p.at)}</span></li>
-      <li><span class="sg">${UI.mark(pend ? 'ember' : PS[p.status] || 'idle')}</span><div><b>${pend ? 'Waiting for your decision' : decidedWord(p)}</b><span>${pend && p.expires ? `expires in ${UI.humanSpan(p.expires)}` : esc(p.approver || '')}</span></div><span class="t">${pend ? 'now' : ''}</span></li></ol></section>`;
     const from = UI.navOrigin && UI.navOrigin.hash === location.hash ? UI.navOrigin.nav : '', back = from === 'attention' ? ['#/attention', 'Needs you'] : from === 'overview' ? ['#/overview', 'Home'] : [`#/bots/${m.name}/proposals`, `${esc(m.name)}’s approvals`];
-    return `<div class="dl-crumbs prop-crumbs" style="margin-top:16px"><a class="prop-back-wide" href="#/bots/${m.name}/proposals">${icon('chev', 'flip')}All approvals</a><a class="prop-back-phone" href="${back[0]}">${icon('chev', 'flip')}${back[1]}</a></div><div class="dl-cols${shaped && tab === 'tech' ? ' prop-wide' : ''}" style="margin-top:6px"><div class="dl-col-main">${card}</div><div class="dl-col-side">${can}${tl}</div></div>`;
+    return `<div class="dl-crumbs prop-crumbs"><a class="prop-back" href="${back[0]}">${icon('chev', 'flip')}${back[1]}</a></div><div class="dl-cols" style="margin-top:6px"><div class="dl-col-main">${card}</div><div class="dl-col-side">${can}</div></div>`;
   }
   const decidedWord = (p) => (p.status === 'executed' || String(p.status).startsWith('approved') ? 'Approved' : p.status === 'shadow' ? 'Shadow: not for approval' : p.status[0].toUpperCase() + p.status.slice(1));
-  UI.act('plan-jump', (b) => { const el = document.getElementById(b.dataset.l); if (el) el.scrollIntoView({ block: 'center' }); });
-  UI.act('prop-tab', (b) => { pv.tab[b.dataset.p] = b.dataset.v; UI.rerender(); });
+  // a resource in the summary opens the full plan at its block
+  UI.act('plan-jump', (b) => { const el = document.getElementById(b.dataset.l); if (!el) return; const d = el.closest('details'); if (d && !d.open) { d.open = true; pv.plan[d.dataset.p] = true; } setTimeout(() => { el.scrollIntoView({ block: 'center' }); el.classList.add('flash-target'); setTimeout(() => el.classList.remove('flash-target'), 1600); }); });
+  UI.act('prop-plan-t', (d) => { pv.plan[d.dataset.p] = d.open; });
   UI.act('p-approve', (b) => { const p = D.proposals.find((x) => x.id === b.dataset.p); UI.approve(p, b.dataset.d, () => { S.save(); UI.rerender(); }); });
 
   /* ---------- memory ---------- */

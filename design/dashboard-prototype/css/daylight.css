@@ -479,13 +479,25 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 /* a collection a pack defines: the note sits beside the row, and under it on a phone */
 .coll-row .coll-note { max-width: 220px; overflow-wrap: anywhere; }
 @media (max-width: 720px) { .coll-row { flex-wrap: wrap; } .coll-row .coll-note { max-width: none; flex-basis: 100%; padding-left: 34px; } }
-/* an approval on a phone: no bot header, tabs or crumbs above it; one Back to where it was opened from */
-.prop-back-phone { display: none; }
-@media (max-width: 720px) {
-  .prop-page > .dl-crumbs, .prop-page > .dl-bothead, .prop-page > .watch-empty, .prop-page > .dl-tabs { display: none; }
-  .prop-page .prop-crumbs { margin-top: 0 !important; }
-  .prop-back-wide { display: none; } .prop-back-phone { display: inline-flex; }
-}
+/* an approval stands alone (every width): no bot header, watch note or tabs above it, one Back to where it was opened
+   from; the decision is the page */
+.prop-page > .dl-crumbs, .prop-page > .dl-bothead, .prop-page > .watch-empty, .prop-page > .dl-tabs { display: none; }
+.prop-page .dl-tab-body { margin-top: 0; }
+.prop-page .prop-crumbs { margin: 8px 0 0; }
+/* the integrity data: one quiet line at the end of the card, folded; open, it's small and muted (never louder than the
+   decision) */
+.dl-audit-d { margin-top: 14px; border-top: var(--border-width) solid var(--color-border-subtle); padding-top: 6px; color: var(--color-text-tertiary); font: var(--type-caption); }
+.dl-audit-d summary { list-style: none; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; padding: 6px 0; }
+.dl-audit-d summary::-webkit-details-marker { display: none; }
+.dl-audit-d summary svg { width: 13px; height: 13px; transition: transform var(--motion-duration-fast); }
+.dl-audit-d[open] summary svg { transform: rotate(90deg); }
+.dl-audit-d .dl-facts { font: var(--type-caption); color: var(--color-text-secondary); grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin-top: 6px; }
+.dl-audit-d .dl-facts dt { color: var(--color-text-tertiary); }
+.dl-audit-d .dl-facts dd.mono, .dl-audit-d .dl-facts .mono { font-size: var(--type-code-s-size); overflow-wrap: anywhere; }
+.prop-plan-d { margin-top: 16px; }
+.prop-plan-d .prop-plan { margin-top: 8px; }
+/* the plan summary sits with the counts: what will change, by action */
+.dl-proposal .plan-jump { margin: 12px 0 4px; }
 /* a long reason or name wraps inside its box (never past the page) */
 .dl-decided, .toast, .seal-words { overflow-wrap: anywhere; }
 /* the step picker: a description wraps in the sans (an action's id stays mono); what an action does to the world in
@@ -520,3 +532,14 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 /* phones: the builder's side cards (Try it, At a glance, the config file) and the Config file tab stack under the recipe
    (an old pane rule hid them, which left the Config file tab blank) */
 @media (max-width: 720px) { .wfb-page .wfb.pane-steps .wfb-side { display: block; } .wfb-page .wfb-side-card .wfb-side { max-height: 60vh; } }
+.dl-proposal .plan-jump a { color: var(--color-text-primary); text-decoration: none; } .dl-proposal .plan-jump a:hover { text-decoration: underline; }
+.prop-what .dl-changes { margin-top: 6px; }
+/* a workflow's folder and owner are a quiet line under its name (scanning the list is about what's failing and what
+   each one does) */
+.wl-table .wl-meta { display: block; font: var(--type-caption); color: var(--color-text-tertiary); margin-top: 2px; } .wl-table .wl-meta a { color: inherit; }
+/* config's Files: audit material, folded to one line */
+.dl-files-d > summary { list-style: none; cursor: pointer; } .dl-files-d > summary::-webkit-details-marker { display: none; }
+.dl-files-d > summary h3::before { content: "›"; display: inline-block; margin-right: 8px; transition: transform var(--motion-duration-fast); color: var(--color-text-tertiary); }
+.dl-files-d[open] > summary h3::before { transform: rotate(90deg); }
+.ident-d { margin-top: 16px; } .case-route::first-letter { text-transform: uppercase; }
+.case-page .case-head .dl-actions { margin: 12px 0 8px; }

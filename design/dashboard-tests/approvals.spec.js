@@ -8,11 +8,11 @@ test('a chat-requested Slack post: full message, why, impact, untrusted-requeste
   await go(page, '#/bots/billing-sre/proposals/p4', { fresh: true });
   await expect(page.locator('.dl-ptitle')).toHaveText('Post the monthly forecast to #incidents');
   await expect(page.locator('.dl-origin')).toContainText('isn’t one of your operators');
-  await expect(page.locator('.dl-pwhy').first()).toContainText('Why');
+  await expect(page.locator('.dl-pwhy').nth(1)).toContainText('Why'); // after exactly what it sends
   await expect(page.locator('.dl-proposal')).toContainText('unusual for a forecast');
   const text = await page.evaluate(() => D.proposals.find((p) => p.id === 'p4').options.text);
   await expect(page.locator('.payload .pl-long')).toHaveText(text); // untruncated
-  await expect(page.locator('details.dl-tech-d')).not.toHaveAttribute('open', '');
+  await expect(page.locator('details.dl-audit-d')).not.toHaveAttribute('open', '');
 });
 
 test('the seal modal says what you approve, shows the payload, and records the authenticator', async ({ page }) => {
@@ -37,34 +37,37 @@ test('deny with a reason: the reason reaches the bot', async ({ page }) => {
   expect(await page.evaluate(() => D.chats['billing-sre'].slice(-1)[0].text)).toContain('post it to #finance');
 });
 
-test('terraform: the plan decides it, so Overview | Technical details; the colorized plan full width; the decision pinned on both tabs', async ({ page }) => {
+test('terraform: one column in the order the decision needs, the plan and the audit data folded, never a tab (from review)', async ({ page }) => {
   await go(page, '#/bots/platform-sre/proposals/p12', { fresh: true });
   await expect(page.locator('.dl-ptitle')).toHaveText('Replace the production web server');
-  await expect(page.locator('.dl-origin')).toContainText('Started by an event');
-  await expect(page.locator('.dl-changes')).toContainText('Replaces');
-  await expect(page.locator('.prop-tabs [data-v]')).toHaveText(['Overview', 'Technical details']);
-  const bar = page.locator('.dl-proposal .prop-decide');
-  await expect(bar.locator('[data-d="approve"]')).toBeVisible();
-  expect(await bar.evaluate((el) => getComputedStyle(el).position)).toBe('sticky');
-  await page.locator('[data-act="prop-tab"][data-v="tech"]').click();
-  await expect(page.locator('.prop-tech-facts')).toContainText('Plan sha256');
-  await expect(page.locator('.prop-tech-facts')).toContainText('terraform apply');
-  // the plan in Terraform's conventions: the replace line strongest, updates amber, symbols kept
+  await expect(page.locator('.prop-tabs')).toHaveCount(0);
+  // the order: what will change, why, where/effect/undo, who asked
+  const order = await page.locator('.prop-body > *').evaluateAll((xs) => xs.map((x) => x.className.split(' ').find((c) => /prop-what|dl-pwhy|dl-where|dl-origin|prop-plan-d|dl-audit-d/.test(c))).filter(Boolean));
+  expect(order.slice(0, 4)).toEqual(['prop-what', 'dl-pwhy', 'dl-where', 'dl-origin']);
+  await expect(page.locator('.prop-what')).toContainText('Replaces');
+  await expect(page.locator('.prop-what .plan-jump')).toContainText('aws_instance.web');
+  // the integrity data is folded and quiet; opening it hides nothing
+  await expect(page.locator('.dl-audit-d')).not.toHaveAttribute('open', '');
+  await page.locator('.dl-audit-d summary').click();
+  await expect(page.locator('.dl-audit-d')).toContainText('Plan sha256');
+  expect(await page.locator('.dl-audit-d .dl-facts').evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeLessThan(14);
+  // a resource in the summary opens the full plan at its block, colourised in Terraform's conventions
+  await page.locator('.plan-jump a', { hasText: 'aws_instance.web' }).click();
+  await expect(page.locator('.prop-plan-d')).toHaveAttribute('open', '');
   await expect(page.locator('.prop-plan .pl-replace', { hasText: /[-+]\/[-+]/ }).first()).toBeVisible();
-  await expect(page.locator('.prop-plan .pl-update').first()).toContainText('~');
   await expect(page.locator('.prop-plan .pl-kaa').first()).toHaveText('(known after apply)');
-  await expect(page.locator('.plan-jump')).toContainText('Replaced');
-  await expect(page.locator('.dl-cols.prop-wide')).toHaveCount(1); // the details take the full width
-  await expect(bar.locator('[data-d="approve"]')).toBeVisible(); // and the decision is still there
+  for (const s of ['.prop-what', '.dl-pwhy', '.dl-where', '.dl-origin']) await expect(page.locator(s).first()).toBeVisible();
+  const bar = page.locator('.dl-proposal .prop-decide');
+  expect(await bar.evaluate((el) => getComputedStyle(el).position)).toBe('sticky');
+  await expect(bar.locator('[data-d="approve"]')).toBeVisible();
 });
 
-test('a simple action: what runs is on the Overview; the rest is a collapsed disclosure, no tabs; inline ids flow in the sentence', async ({ page }) => {
+test('a simple action: exactly what it sends comes first; the audit data folded; inline ids flow in the sentence', async ({ page }) => {
   await go(page, '#/bots/billing-sre/proposals/p4', { fresh: true });
   await expect(page.locator('.prop-tabs')).toHaveCount(0);
-  await expect(page.locator('.dl-proposal .payload')).toBeVisible();
-  await expect(page.locator('details.dl-tech-d')).not.toHaveAttribute('open', '');
+  await expect(page.locator('.prop-body > .dl-pwhy').first()).toContainText('Exactly what it sends');
+  await expect(page.locator('details.dl-audit-d')).not.toHaveAttribute('open', '');
   await expect(page.locator('.dl-proposal .prop-decide [data-d="approve"]')).toBeVisible();
-  // the requester sentence is one line of text, the inline id inside it
   expect(await page.locator('.dl-origin').evaluate((el) => getComputedStyle(el).display)).toBe('block');
 });
 
