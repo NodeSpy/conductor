@@ -17,10 +17,9 @@
 
   /* ---------- list ---------- */
   UI.route('browser', () => `<div class="page">
-    ${UI.head('Browsers', { lede2: 'conductor’s Chromium: one per agent session, sandboxed.', actions: `${UI.folderChip()}<a class="btn" href="#/browser/add">${icon('key')}Add a login</a><a class="btn" href="#/browser/passkey">${icon('plus')}Register a passkey</a>` })}
+    ${UI.head('Browsers', { lede2: 'conductor’s Chromium: one per agent session, sandboxed.', actions: `<a class="btn" href="#/browser/add">${icon('key')}Add a login</a><a class="btn" href="#/browser/passkey">${icon('plus')}Register a passkey</a>` })}
     ${UI.tabs([['sessions', 'Sessions', '#/browser', D.browsers.length], ['logins', 'Logins', '#/browser/logins', D.access.credentials.length + D.access.logins.length]], 'sessions')}
-    ${UI.scopeNote(D.browsers.filter((b) => !UI.scopeKeeps(b.identity.startsWith('bot:') ? b.identity.slice(4) : null)).length)}
-    <div class="grid g3">${D.browsers.filter((b) => UI.scopeKeeps(b.identity.startsWith('bot:') ? b.identity.slice(4) : null)).map((b) => `
+    <div class="grid g3">${D.browsers.map((b) => `
       <a class="panel btile" href="#/browser/${b.id}">
         <div class="thumb"><div class="mini" style="height:238%">${SITES[b.id]()}</div>${b.status === 'wait' ? `<span class="ctrl-banner wait">${icon('hold')}Waiting on you</span>` : ''}</div>
         <div class="panel-body stack tight">
@@ -31,7 +30,7 @@
         </div></a>`).join('')}
     </div>
     <details class="panel dl-files-d ident-d"><summary class="panel-head"><h3>Settings per identity</h3><span class="muted small">which sites each may reach, its logins and credentials (browser.* in config)</span></summary><table class="tbl responsive"><thead><tr><th>identity</th><th>allowlist</th><th>logged-in sites</th><th>credentials</th><th>evaluate</th><th></th></tr></thead><tbody>
-      ${D.identities.filter((i) => UI.scopeKeeps(i.id.startsWith('bot:') ? i.id.slice(4) : null)).map((i) => { const c = S.staged('identities', i.id) || {}; const creds = D.access.credentials.filter((x) => x.identity === i.id).map((x) => `${x.name} (${x.fields})`).join(' · ') || '—'; return `<tr><td data-l="identity" class="mono">${esc(i.id)} ${S.find('identities', i.id) ? tag('staged', 'run') : ''}</td><td data-l="allow" class="mono small">${(c.allow || []).join(', ') || '—'}</td><td data-l="logins" class="mono small">${(c.logins || []).join(', ') || '—'}</td><td data-l="credentials" class="small">${esc(creds)}</td><td data-l="evaluate">${tag(c.evaluate || 'off', (c.evaluate || 'off') === 'off' ? 'ok' : 'wait')}</td><td class="num"><button class="btn sm" data-act="ident-edit" data-i="${esc(i.id)}">${icon('edit')}Edit</button></td></tr>`; }).join('')}
+      ${D.identities.map((i) => { const c = S.staged('identities', i.id) || {}; const creds = D.access.credentials.filter((x) => x.identity === i.id).map((x) => `${x.name} (${x.fields})`).join(' · ') || '—'; return `<tr><td data-l="identity" class="mono">${esc(i.id)} ${S.find('identities', i.id) ? tag('staged', 'run') : ''}</td><td data-l="allow" class="mono small">${(c.allow || []).join(', ') || '—'}</td><td data-l="logins" class="mono small">${(c.logins || []).join(', ') || '—'}</td><td data-l="credentials" class="small">${esc(creds)}</td><td data-l="evaluate">${tag(c.evaluate || 'off', (c.evaluate || 'off') === 'off' ? 'ok' : 'wait')}</td><td class="num"><button class="btn sm" data-act="ident-edit" data-i="${esc(i.id)}">${icon('edit')}Edit</button></td></tr>`; }).join('')}
     </tbody></table><div class="panel-foot small muted"><button class="btn sm" data-act="ident-edit" data-i="">${icon('plus')}Add identity</button><span style="margin-left:8px">A <span class="mono">"*"</span> allowlist is refused. Edits go through the config pipeline; anything that widens (a site, a login, a credential, evaluate) also asks for your passkey.</span></div></details>
   </div>`);
 

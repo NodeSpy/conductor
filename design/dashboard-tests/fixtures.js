@@ -13,7 +13,7 @@ const test = base.test.extend({
     await page.addInitScript(() => { window.__PROTO_FAST = true; });
     await page.goto(`/index.html${simIos ? '?sim=ios' : ''}#/overview`);
     // the suite exercises every flow, so it runs on the "everything at once" demo day (js/scenario.js)
-    await page.evaluate(([t, demo]) => { localStorage.setItem('cd-demo', demo); localStorage.removeItem('cd-proto-state-v5'); if (t === 'auto') localStorage.removeItem('cd-theme'); else localStorage.setItem('cd-theme', t); }, [protoTheme, process.env.DEMO || 'full']);
+    await page.evaluate(([t, demo]) => { localStorage.setItem('cd-demo', demo); localStorage.removeItem('cd-proto-state-v6'); if (t === 'auto') localStorage.removeItem('cd-theme'); else localStorage.setItem('cd-theme', t); }, [protoTheme, process.env.DEMO || 'full']);
     await use(page);
     base.expect(errors, `console errors in ${info.title}`).toEqual([]);
   },
@@ -21,7 +21,7 @@ const test = base.test.extend({
 
 /** Navigate to a route with a reload, so module state resets too. */
 async function go(page, route, { fresh = false } = {}) {
-  if (fresh) await page.evaluate(() => localStorage.removeItem('cd-proto-state-v5'));
+  if (fresh) await page.evaluate(() => localStorage.removeItem('cd-proto-state-v6'));
   await page.goto('/index.html?r=' + Date.now() + route);
   await page.waitForSelector('#main > *');
   // let the page's entrance animation settle, so drags and positions are measured on a still page

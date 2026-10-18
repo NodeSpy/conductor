@@ -12,20 +12,26 @@
  * beside the node (item.status, item.detail) and is never written. */
 (function () {
   const S = (window.S = {});
-  const KEY = 'cd-proto-state-v5';
+  const KEY = 'cd-proto-state-v6';
   const Y = window.YAML;
   const clone = Y.clone, eq = Y.eq;
   const SEED = clone(window.D);
 
   /* ---------- persistence ---------- */
-  S.save = () => { S._ver = (S._ver || 0) + 1; try { localStorage.setItem(KEY, JSON.stringify(window.D)); } catch (e) {} };
+  S.save = () => { S._ver = (S._ver || 0) + 1; try { localStorage.setItem(KEY, JSON.stringify(window.D)); localStorage.setItem(KEY + ':at', String(Date.now())); } catch (e) {} };
+  /** Every timestamp in the fake state moves forward by the time since it was saved, so the demo always reads as a
+   * normal day: a run that was "3 min ago" when saved is still 3 min ago tomorrow, and the last 12 hours stay full. */
+  const ISO = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/;
+  const shiftTimes = (o, by) => { if (Array.isArray(o)) { o.forEach((v, i) => { if (typeof v === 'string' && ISO.test(v)) o[i] = new Date(Date.parse(v) + by).toISOString(); else if (v && typeof v === 'object') shiftTimes(v, by); }); return; }
+    Object.keys(o).forEach((k) => { const v = o[k]; if (typeof v === 'string' && ISO.test(v)) o[k] = new Date(Date.parse(v) + by).toISOString(); else if (v && typeof v === 'object') shiftTimes(v, by); }); };
   /** The state as it will be once staged changes apply: what pickers offer and validation resolves against. */
   S.view = () => { const k = (S._ver || 0) + ':' + window.D.pending.length; if (S._vk !== k || !S._v) { S._v = window.D.pending.length ? S.candidate() : window.D; S._vk = k; } return S._v; };
   S.load = () => {
     try {
       const raw = localStorage.getItem(KEY);
       if (!raw) return false;
-      const saved = JSON.parse(raw);
+      const saved = JSON.parse(raw), at = +localStorage.getItem(KEY + ':at') || 0;
+      if (at && Date.now() - at > 60000) shiftTimes(saved, Date.now() - at);
       Object.keys(saved).forEach((k) => (window.D[k] = saved[k]));
       return true;
     } catch (e) { return false; }
@@ -114,7 +120,7 @@
   });
   /* env: environment variables by scope; daemon scope is conductor.env, not config.yaml */
   const envKey = (e) => e.scope + ':' + e.name;
-  C.env = { section: 'env', file: 'conductor.env', label: 'env var', href: () => '#/secrets/env',
+  C.env = { section: 'env', file: 'conductor.env', label: 'env var', href: () => '#/secrets/settings?show=env',
     keys: () => (D().env || []).map(envKey),
     get: (k) => { const e = (D().env || []).find((x) => envKey(x) === k); return e ? clone(e) : null; },
     set: (k, n) => { const L = D().env = D().env || []; const i = L.findIndex((x) => envKey(x) === k); if (n == null) { if (i >= 0) L.splice(i, 1); return; } if (i >= 0) L[i] = Object.assign({}, n); else L.push(Object.assign({}, n)); },
@@ -149,7 +155,7 @@
     validate(k, n) { const e = []; if (!/^[a-z][a-z0-9-]*$/.test(k)) e.push(`vault name "${k}": lowercase letters, digits and dashes`); const KEYS = { conductor: ['type', 'path', 'unlock'], onepassword: ['type', 'account', 'service_account'], pass: ['type', 'prefix'], file: ['type', 'dir'], hashicorp: ['type', 'addr', 'mount', 'namespace', 'unlock'] }[n.type]; if (!KEYS) e.push(`vaults.${k}.type: conductor, onepassword, pass, file or hashicorp`); else Object.keys(n).forEach((x) => { if (!KEYS.includes(x)) e.push(`vaults.${k}.${x}: not a ${n.type} vault key (${KEYS.slice(1).join(', ')})`); }); if (n.type === 'file' && !n.dir) e.push(`vaults.${k}.dir: required for a file vault`); if (n.type === 'hashicorp' && !n.addr) e.push(`vaults.${k}.addr: required`); return e; },
     refs(k, all) { return all.secrets.filter((s) => s.vault === k).map((s) => s.used[0] || s.name).filter(Boolean); },
   });
-  C.settings = { section: 'settings', file: 'config.yaml', label: 'setting', href: () => '#/secrets',
+  C.settings = { section: 'settings', file: 'config.yaml', label: 'setting', href: () => '#/secrets/settings',
     keys: () => D().settings.map((s) => s.name), get: (k) => { const s = byName(D().settings, k); return s ? s.value : null; },
     set: (k, v) => { if (v == null) drop(D().settings, k); else { const s = byName(D().settings, k); if (s) s.value = v, (s.chains = String(v).includes('${settings.')), (s.env = String(v).includes('${env.')); else D().settings.push({ name: k, value: v, used: 0, chains: String(v).includes('${settings.'), env: String(v).includes('${env.') }); } },
     path: (k) => `settings.${k}`,

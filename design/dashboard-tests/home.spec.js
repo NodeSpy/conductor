@@ -6,7 +6,7 @@
 // only what's left. No sunrise, no "Since you last looked", no lanes.
 const { test, expect, go } = require('./fixtures');
 
-const day = async (page, demo) => { await page.evaluate((d) => { localStorage.setItem('cd-demo', d); localStorage.removeItem('cd-proto-state-v5'); }, demo); };
+const day = async (page, demo) => { await page.evaluate((d) => { localStorage.setItem('cd-demo', d); localStorage.removeItem('cd-proto-state-v6'); }, demo); };
 
 test('Home: no greeting or summary line; At a glance, Needs you with one action each, the last 12 hours, For your information', async ({ page }) => {
   await go(page, '#/overview', { fresh: true });
@@ -27,7 +27,12 @@ test('Home: no greeting or summary line; At a glance, Needs you with one action 
   const needs = page.locator('.dl-needs-card .dl-need');
   expect(await needs.count()).toBeGreaterThan(0);
   for (let i = 0; i < await needs.count(); i++) await expect(needs.nth(i).locator('.dl-na .btn')).toHaveCount(1);
-  await expect(page.locator('.dl-needs-card .dl-need').first().locator('.btn.primary')).toHaveText('Review');
+  // rows are peers: every row's action is the same secondary button, the same width, with the verb for its kind
+  await expect(page.locator('.dl-needs-card .dl-need').first().locator('.btn')).toHaveText('Review');
+  await expect(page.locator('.dl-needs-card .dl-need .btn.primary')).toHaveCount(0);
+  if (page.viewportSize().width > 720) expect(new Set(await page.locator('.dl-needs-card .dl-need .dl-na .btn').evaluateAll((bs) => bs.map((b) => Math.round(b.getBoundingClientRect().width)))).size).toBe(1);
+  await expect(page.locator('.dl-needs-card .dl-need', { hasText: 'Approve a sign-in' }).locator('.btn')).toHaveText('Approve');
+  await expect(page.locator('.dl-needs-card .dl-need', { hasText: 'couldn’t fix' }).locator('.btn')).toHaveText('See why');
   // the last 12 hours: one strip for every workflow, its failures named
   await expect(page.locator('svg.dl-hours')).toHaveCount(1);
   await expect(page.locator('.dl-card', { hasText: 'Last 12 hours' }).locator('.dl-foot-note')).toContainText(/failed: .+ at \d\d:\d\d/);
@@ -57,12 +62,11 @@ test('Running now shows at most three, longest-running first, then a quiet link;
   await expect(page.locator('.dl-running')).toHaveCount(0);
 });
 
-test('Get started shows only what is left, the next step as the primary button, what is done in one quiet line', async ({ page }) => {
+test('Get started shows only what is left, its steps as peers, what is done in one quiet line', async ({ page }) => {
   await go(page, '#/overview', { fresh: true });
   const gs = page.locator('.dl-gs');
   await expect(gs).toBeVisible();
-  await expect(gs.locator('.dl-gs-step .btn.primary')).toHaveCount(1);
-  await expect(gs.locator('.dl-gs-step').first().locator('.btn')).toHaveClass(/primary/);
+  await expect(gs.locator('.dl-gs-step .btn.primary')).toHaveCount(0);
   await expect(gs.locator('.dl-gs-done')).toContainText('Done:');
   expect(await gs.evaluate((el) => [...el.querySelectorAll('*')].some((x) => getComputedStyle(x).textDecorationLine.includes('line-through')))).toBe(false);
   await gs.locator('[data-act="gs-hide"]').click();
@@ -73,7 +77,7 @@ test('the Running tile opens Activity filtered to running', async ({ page }) => 
   await go(page, '#/overview', { fresh: true });
   await page.locator('.dl-glance .dl-tile[href="#/activity?status=run"]').click();
   await expect(page).toHaveURL(/#\/activity\?status=run/);
-  await expect(page.locator('select[data-k="status"]')).toHaveValue('run');
+  await expect(page.locator('.fb[data-fb="act"] .fb-in')).toHaveValue('status:running');
   await expect(page.locator('#act-tbl tbody.g-attn')).toHaveCount(0);
 });
 

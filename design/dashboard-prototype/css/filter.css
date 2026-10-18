@@ -1,0 +1,97 @@
+/* The filter bar (js/filter.js): one search field that holds qualifiers, then plain text buttons with a caret, each
+   opening a searchable select menu. Buttons read as dropdowns, not pills: a label and a caret, no outline; a filter
+   that's set shows its value in the primary ink, bold, with a short accent rule under it; Clear filters is one click. */
+/* one layout everywhere: a light toolbar above the content. A compact search field at input height (it grows while
+   focused or holding qualifiers), the menus on the same row, wrapping only when they don't fit */
+.fb { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 16px 0 14px; }
+.fb-search { flex: 0 1 340px; min-width: 240px; transition: flex-basis var(--motion-duration-fast, .15s) var(--motion-easing-out, ease-out); }
+.fb-search:focus-within, .fb-search.has-q { flex-basis: 480px; }
+.fb-bar { flex: 1 1 auto; }
+.fb-search { position: relative; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 8px 0 12px; border-radius: var(--radius-control); border: var(--border-width) solid var(--color-border-control); background: var(--color-bg-field); }
+.fb-search > svg { width: 16px; height: 16px; flex: none; color: var(--color-icon-default); }
+.fb-search:focus-within { outline: var(--border-focus) solid var(--color-focus-ring); outline-offset: 1px; }
+.fb-in { flex: 1; min-width: 0; border: 0; background: transparent; outline: none; font: var(--type-body-s); font-family: var(--font-family-mono, ui-monospace, monospace); font-size: 13.5px; color: var(--color-text-primary); }
+.fb-in::placeholder { font-family: var(--font-family-sans, inherit); color: var(--color-text-tertiary); }
+.fb-in::-webkit-search-cancel-button { display: none; }
+.fb-x { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: var(--radius-control); background: none; color: var(--color-icon-default); cursor: pointer; }
+.fb-x:hover { background: var(--color-state-hover); color: var(--color-text-primary); }
+.fb-x svg { width: 15px; height: 15px; }
+
+/* qualifier autocomplete, under the field */
+.fb-ac { position: absolute; z-index: var(--z-popover); top: calc(100% + 4px); left: 0; min-width: 280px; max-width: min(460px, 100%); margin: 0; padding: 4px; list-style: none; background: var(--color-bg-raised); border: var(--border-width) solid var(--color-border-default); border-radius: var(--radius-card); box-shadow: var(--shadow-3); }
+.fb-ac li { display: flex; align-items: baseline; gap: 8px; padding: 7px 10px; border-radius: var(--radius-control); cursor: pointer; font-size: 13.5px; }
+.fb-ac li.act, .fb-ac li:hover { background: var(--color-state-hover); }
+.fb-ac .fb-ak { font-family: var(--font-family-mono, ui-monospace, monospace); color: var(--color-text-accent); }
+.fb-ac small { color: var(--color-text-tertiary); margin-left: auto; padding-left: 12px; }
+
+/* the buttons: text with a caret */
+.fb-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; }
+.fb-btn, .fb-phone, .fb-reset { display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 8px; border: 0; border-radius: var(--radius-control); background: none; font: var(--type-body-s); font-size: 13.5px; color: var(--color-text-secondary); cursor: pointer; white-space: nowrap; position: relative; }
+.fb-btn svg, .fb-phone svg, .fb-reset svg { width: 14px; height: 14px; color: var(--color-icon-default); }
+.fb-btn:hover, .fb-phone:hover, .fb-reset:hover, .fb-btn[aria-expanded="true"] { background: var(--color-state-hover); color: var(--color-text-primary); }
+.fb-btn:focus-visible, .fb-phone:focus-visible, .fb-reset:focus-visible { outline: var(--border-focus) solid var(--color-focus-ring); outline-offset: 1px; }
+.fb-btn.on { color: var(--color-text-primary); }
+.fb-btn.on .fb-v { font-weight: var(--font-weight-bold); }
+.fb-btn.on::after { content: ''; position: absolute; left: 8px; right: 24px; bottom: 3px; height: 2px; border-radius: 1px; background: var(--color-accent-default); }
+.fb-btn .fb-v { max-width: 22ch; overflow: hidden; text-overflow: ellipsis; }
+.fb-reset { margin-left: auto; color: var(--color-text-tertiary); }
+.fb-phone { display: none; }
+.fb-n { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--color-text-primary); color: var(--color-bg-canvas); font-size: 11.5px; font-weight: var(--font-weight-bold); }
+
+/* the searchable select menu */
+.fb-menu { position: fixed; z-index: var(--z-popover); width: 300px; max-height: min(440px, 70vh); display: flex; flex-direction: column; background: var(--color-bg-raised); border: var(--border-width) solid var(--color-border-default); border-radius: var(--radius-card); box-shadow: var(--shadow-3); animation: pop .14s var(--motion-easing-out); }
+.fb-mh { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; font-size: 13px; }
+.fb-mh b { font-weight: var(--font-weight-bold); }
+.fb-mh > :last-child:not(b) { margin-left: auto; }
+.fb-fs { display: flex; align-items: center; gap: 8px; margin: 0 8px 6px; padding: 0 10px; height: 34px; border: var(--border-width) solid var(--color-border-control); border-radius: var(--radius-control); background: var(--color-bg-field); }
+.fb-fs:focus-within { outline: var(--border-focus) solid var(--color-focus-ring); outline-offset: 1px; }
+.fb-fs svg { width: 14px; height: 14px; color: var(--color-icon-default); }
+.fb-find { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font: var(--type-body-s); color: var(--color-text-primary); }
+.fb-list { list-style: none; margin: 0; padding: 0 4px 6px; overflow-y: auto; overscroll-behavior: contain; border-top: var(--border-width) solid var(--color-border-subtle); }
+.fb-gh { padding: 8px 8px 3px; font: var(--type-overline); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--color-text-tertiary); }
+.fb-opt { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 7px 8px; border-radius: var(--radius-control); cursor: pointer; font-size: 13.5px; color: var(--color-text-secondary); }
+.fb-opt > svg { width: 14px; height: 14px; visibility: hidden; color: var(--color-text-primary); }
+.fb-opt.sel > svg { visibility: visible; }
+.fb-opt.sel { color: var(--color-text-primary); }
+.fb-opt.act { background: var(--color-state-hover); color: var(--color-text-primary); }
+.fb-ol { min-width: 0; display: grid; }
+.fb-ol b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-opt.sel .fb-ol b { font-weight: var(--font-weight-bold); }
+.fb-ol small { color: var(--color-text-tertiary); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-on { color: var(--color-text-tertiary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.fb-none, .fb-more { padding: 10px 8px; font-size: 12.5px; color: var(--color-text-tertiary); list-style: none; }
+
+/* the phone: the field and one Filter button; the menus open in a sheet */
+.fb-scrim { position: fixed; inset: 0; z-index: calc(var(--z-popover) - 1); background: var(--color-scrim); }
+.fb-sheet { left: 0 !important; right: 0; top: auto !important; bottom: var(--fixb, 0); width: auto; max-height: 78vh; border-radius: 16px 16px 0 0; padding-bottom: calc(8px + var(--sab, 0px)); animation: none; }
+.fb-handle { width: 36px; height: 4px; border-radius: 2px; background: var(--color-border-strong); margin: 8px auto 2px; }
+.fb-sheet .fb-mh { font-size: 15px; padding: 10px 16px; }
+.fb-back { display: flex; align-items: center; justify-content: space-between; padding: 6px 16px; }
+.fb-back .link svg { transform: rotate(180deg); width: 14px; height: 14px; vertical-align: -2px; }
+.fb-rows { list-style: none; margin: 0; padding: 0 8px; }
+.fb-rows button { display: grid; grid-template-columns: auto minmax(0, 1fr) 16px; gap: 10px; align-items: center; width: 100%; min-height: 48px; padding: 0 8px; border: 0; border-bottom: var(--border-width) solid var(--color-border-subtle); background: none; font: var(--type-body-m); color: var(--color-text-primary); text-align: left; cursor: pointer; }
+.fb-rows .fb-rv { text-align: right; color: var(--color-text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-rows .fb-rv.on { color: var(--color-text-primary); font-weight: var(--font-weight-bold); }
+.fb-rows svg { width: 15px; height: 15px; color: var(--color-icon-default); }
+.fb-sheet .fb-opt { padding: 12px 10px; font-size: 15px; }
+.fb-sheet .fb-fs { margin: 0 12px 8px; height: 40px; }
+.fb-sheet-clear { margin: 12px 16px 4px; }
+@media (max-width: 720px) {
+  .fb { flex-wrap: nowrap; } .fb-search, .fb-search:focus-within, .fb-search.has-q { flex: 1 1 auto; min-width: 0; } .fb-bar { flex: none; }
+  .fb-btn, .fb-reset { display: none; }
+  .fb-phone { display: inline-flex; }
+  .fb-bar { gap: 6px; }
+}
+/* connector qualifiers: grouped in the suggestions by connector; "Filter by…" lists them all; a set one shows in the
+   bar as a removable "Repository: acme/web ×" */
+.fb-by { flex: none; height: 26px; padding: 0 8px; border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-control); background: none; font: var(--type-body-s); font-size: 12.5px; color: var(--color-text-secondary); cursor: pointer; white-space: nowrap; }
+.fb-by:hover { color: var(--color-text-primary); border-color: var(--color-border-default); }
+.fb-ac li.fb-ach { padding: 8px 10px 3px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--color-text-tertiary); cursor: default; }
+.fb-ac li.fb-ach:hover { background: none; }
+.fb-ac { max-height: min(380px, 60vh); overflow-y: auto; }
+.fb-btn.fb-q svg { width: 12px; height: 12px; }
+@media (max-width: 720px) { .fb-by { display: none; } .fb-btn.fb-q { display: inline-flex; } }
+.fb-more .fb-mi { width: 100%; border: 0; background: none; font: inherit; text-align: left; }
+.fb-more .fb-mi > svg { visibility: visible; width: 13px; height: 13px; color: var(--color-icon-default); }
+.fb-more .fb-mi small { font-family: var(--font-family-mono, ui-monospace, monospace); }
+.fb-rows .fb-gh { list-style: none; }

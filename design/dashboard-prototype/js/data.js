@@ -26,7 +26,7 @@
     { name: 'kv', use: 'kv', status: 'ok', detail: 'boltdb · 214 keys', events: 0, verbs: 902 },
     { name: 'tf-plan', use: 'terraform', status: 'ok', detail: 'engine tofu 1.8 · READ role', events: 0, verbs: 6 },
     { name: 'tf-apply', use: 'terraform', status: 'idle', detail: 'engine tofu 1.8 · write role', events: 0, verbs: 1 },
-    { name: 'handoff', use: 'web', status: 'wait', detail: 'A hand-off draft is waiting for your answer', events: 3, verbs: 3 },
+    { name: 'handoff', use: 'web', status: 'ok', detail: 'Serving hand-off pages on this machine', events: 3, verbs: 3 },
   ];
 
   D.runtimes = [
@@ -70,7 +70,7 @@
     { id: 'r-7f11', workflow: 'pr-review', trigger: 'gh.review_requested', repo: 'acme/api', number: 480, status: 'ok', started: m(38), finished: m(31), cost: 0.41, tokens: 30110, steps: [] },
     { id: 'r-7ef0', workflow: 'ci-fixer', trigger: 'gh.check_failed', repo: 'acme/web', number: 1288, status: 'fail', started: m(64), finished: m(52), cost: 1.12, failed_step: 'test', error: 'go test ./...: 2 failures (TestCheckout, TestRefund)', steps: [] },
     { id: 'r-7ee3', workflow: 'issue-triage', trigger: 'gh.issue_opened', repo: 'acme/api', number: 486, status: 'ok', started: m(80), finished: m(79), cost: 0.06, steps: [] },
-    { id: 'r-7ed1', workflow: 'pr-review', trigger: 'gh.review_requested', repo: 'acme/infra', number: 77, status: 'wait', started: m(95), cost: 0.38, detail: 'hand-off: awaiting your answer (approve, revise or discard)', steps: [] },
+    { id: 'r-7ed1', workflow: 'pr-review', trigger: 'gh.review_requested', repo: 'acme/infra', number: 77, status: 'wait', started: m(95), cost: 0.38, detail: 'Its draft review is ready for you to approve, revise or discard.', steps: [] },
     { id: 'r-7ec8', workflow: 'dep-bump', trigger: 'schedule', repo: 'acme/web', number: 0, status: 'ok', started: m(140), finished: m(131), cost: 0.82, steps: [] },
     { id: 'r-7eb2', workflow: 'bot:platform-sre', trigger: 'pd.incident', repo: '', number: 0, status: 'ok', started: m(190), finished: m(176), cost: 0.54, steps: [] },
     { id: 'r-7ea0', workflow: 'ci-fixer', trigger: 'gh.check_failed', repo: 'acme/api', number: 471, status: 'idle', started: m(230), finished: m(230), cost: 0, detail: 'parked: conductor:hold label', steps: [] },
@@ -98,7 +98,7 @@
     { kind: 'approval', s: 'ember', title: 'terraform apply · infra@3f2a9c1d', sub: 'platform-sre · p12 · +1 ~2 -0 · REPLACES aws_instance.web', href: '#/bots/platform-sre/proposals/p12', age: '7m' },
     { kind: 'approval', s: 'ember', title: 'slack-ops.post to #incidents', sub: 'billing-sre · p4 · requester chat:U-THIRD (user)', href: '#/bots/billing-sre/proposals/p4', age: '22m' },
     { kind: 'failed', s: 'fail', title: 'ci-fixer failed on acme/web#1288', sub: 'step test · 2 failures', href: '#/runs/r-7ef0', age: '52m' },
-    { kind: 'needs_input', s: 'wait', title: 'hand-off awaiting answer · acme/infra#77', sub: 'pr-review · handoff draft (approve / revise / discard)', href: '#/runs/r-7ed1', age: '1h' },
+    { kind: 'needs_input', s: 'wait', title: 'pr-review is waiting for your answer · acme/infra#77', sub: 'Its draft review is ready for you to approve, revise or discard.', href: '#/runs/r-7ed1', age: '1h' },
     { kind: 'browser', s: 'wait', title: 'push approval requested by app.example.com', sub: 'agent:triage@acme/app · browser login', href: '#/browser/b-02', age: '3m' },
     { kind: 'update', s: 'run', title: 'v0.72.0 available', sub: 'auto-update applies within 10m · preflight passed', href: '#/updates', age: '4m' },
   ];
@@ -901,11 +901,12 @@ window.D.packMembers = {
   const PLAIN = {
     '#/bots/platform-sre/proposals/p12': ['Replace the production web server', 'platform-sre wants to run terraform apply on production, for the SEV2 latency incident', 'Review'],
     '#/bots/billing-sre/proposals/p4': ['Post the monthly forecast to #incidents', 'billing-sre, asked by a Slack user who isn’t one of your operators', 'Review'],
-    '#/runs/r-7ef0': ['ci-fixer couldn’t fix acme/web#1288', 'Its change made 2 tests fail. Nothing was pushed.', 'Open'],
+    '#/runs/r-7ef0': ['ci-fixer couldn’t fix acme/web#1288', 'Its change made 2 tests fail. Nothing was pushed.', 'See why'],
     '#/runs/r-7ed1': ['pr-review needs your call on a draft', 'Approve, revise or discard its review of acme/infra#77', 'Answer'],
-    '#/browser/b-02': ['Approve a sign-in on app.example.com', 'The triage agent’s browser is waiting on a push approval', 'Open'],
+    '#/browser/b-02': ['Approve a sign-in on app.example.com', 'The triage agent’s browser is waiting on a push approval', 'Approve'],
   };
-  D.fyi = D.attention.filter((a) => a.kind === 'update').map((a) => Object.assign({}, a, { plain: 'Update v0.72.0 is ready', why: 'It installs itself within 10 minutes; running work finishes first.' }));
+  // a routine update isn't news: it's said on the machine card in the rail (and on More on a phone)
+  D.fyi = [];
   D.fyi.push({ kind: 'sandbox', s: 'idle', plain: 'The sandbox blocked pastebin.com', why: 'A ci-fixer agent tried to reach it; nothing left the box.', title: 'egress denied', sub: 'agent:fixer@acme/web · once per browser', href: '#/logs/audit', age: '1h' });
   D.attention = D.attention.filter((a) => a.kind !== 'update');
   D.attention.forEach((a) => { const p = PLAIN[a.href]; if (p) [a.plain, a.why, a.verb] = p; });

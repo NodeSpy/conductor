@@ -37,7 +37,16 @@
 .dl-list { list-style: none; margin: 0; padding: 0; }
 .dl-list > li { border-top: var(--border-width) solid var(--color-border-subtle); }
 .dl-list > li:first-child { border-top: 0; }
-.dl-need-a, .dl-row-a { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto auto; gap: 4px 12px; align-items: center; padding: 14px 0; color: inherit; text-align: left; }
+/* the shared list row: mark | content | time | action. Time and action are fixed-width columns with one gap, so down a
+   whole list the times' right edges and the buttons' left edges line up whatever the label ("7 min ago", "yesterday",
+   "3 days ago"), the button fills its column, and both centre on the row. On a phone they sit under the text. */
+:root { --row-time: 92px; --row-act: 104px; --row-gap: 16px; }
+.dl-need-a, .dl-row-a { display: grid; grid-template-columns: 18px minmax(0, 1fr) var(--row-time) var(--row-act); gap: 4px var(--row-gap); align-items: center; padding: 14px 0; color: inherit; text-align: left; }
+.dl-row-a { grid-template-columns: 18px minmax(0, 1fr) auto; }
+.dl-need-a > .dl-age { justify-self: end; font-variant-numeric: tabular-nums; }
+.dl-need-a > .dl-na { justify-self: stretch; justify-content: stretch; }
+.dl-need-a > .dl-na > .btn { width: 100%; justify-content: center; }
+.dl-need-a > .dl-na > .st { margin-left: auto; }
 .dl-list > li:first-child > a { padding-top: 4px; }
 .dl-row-a { grid-template-columns: 18px minmax(0, 1fr) auto; padding: 12px 0; }
 .dl-ng { width: 18px; display: grid; place-items: center; color: var(--s-fg); }
@@ -191,7 +200,9 @@
   .dl-lead { font: var(--type-body-m); }
   .dl-cols { gap: 14px; margin-top: 14px; } .dl-col-main, .dl-col-side { gap: 14px; }
   .dl-card { padding: 16px; } .dl-ch.dl-pad { padding: 16px 16px 0; }
-  .dl-need-a { grid-template-columns: 18px minmax(0, 1fr) auto; } .dl-need-a .dl-na { grid-column: 2 / -1; }
+  .dl-need-a { grid-template-columns: 18px minmax(0, 1fr) auto; row-gap: 8px; } .dl-need-a > .dl-nt { grid-column: 2 / -1; }
+  .dl-need-a > .dl-age { grid-column: 2; grid-row: 2; justify-self: start; } .dl-need-a > .dl-na { grid-column: 3; grid-row: 2; justify-self: end; } .dl-need-a > .dl-na > .btn { width: auto; min-width: var(--row-act); }
+  .dl-need-a > .dl-age:empty { display: none; }
   .dl-need-a .dl-tech { display: none; }
   .dl-phead { flex-direction: column; gap: 10px; }
   .dl-actions .btn { flex: 1 1 auto; justify-content: center; }
@@ -333,7 +344,7 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 .sec-head, .sec-main { display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(0, 1.4fr) minmax(150px, .8fr); gap: 16px; align-items: center; }
 .sec-head { padding: 12px 56px 8px 18px; font: var(--type-label); color: var(--color-text-tertiary); border-bottom: var(--border-width) solid var(--color-border-default); }
 .sec-list { padding: 0 8px; }
-.sec-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.sec-line { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; }
 .sec-main { all: unset; box-sizing: border-box; display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(0, 1.4fr) minmax(150px, .8fr); gap: 16px; align-items: center; padding: 10px 10px; cursor: pointer; border-radius: var(--radius-control); min-height: 48px; text-align: left; }
 .sec-main:hover { background: var(--color-state-hover); }
 .sec-main:focus-visible { outline: var(--border-focus) solid var(--color-focus-ring); }
@@ -566,7 +577,6 @@ details.dl-card.acc-tech { padding: 14px 22px; }
   #wl-body tr[data-row] > td.sel, .wl-table thead { display: none !important; }
   #wl-body tr[data-row] { grid-template-columns: minmax(0, 1fr) auto !important; grid-template-areas: "wf last" "on on" "meta acts" !important; }
   #wl-body tr[data-row] > td.wl-acts { grid-area: acts; }
-  .strip .status-btn .sw { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 }
 /* the Bots page's list: an initials avatar in the margin, what it's doing, where it lives as a quiet line */
 .dl-bot-av.sm { width: 32px; height: 32px; font-size: 13px; border-radius: 8px; }
@@ -580,9 +590,46 @@ details.dl-card.acc-tech { padding: 14px 22px; }
   .act-filters-d { display: block; width: 100%; } .act-filters-d > summary { display: inline-flex; list-style: none; } .act-filters-d > summary::-webkit-details-marker { display: none; }
   .act-filters-d .act-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 }
-.bot-list .dl-need-a { grid-template-columns: 32px minmax(0, 1fr) auto auto; column-gap: 14px; }
+.bot-list .dl-need-a { grid-template-columns: 32px minmax(0, 1fr) var(--row-time) var(--row-act); }
 .bot-list .dl-na .st { white-space: nowrap; }
-@media (max-width: 720px) { .bot-list .dl-need-a { grid-template-columns: 32px minmax(0, 1fr) auto; } .bot-list .dl-need-a .dl-na { grid-column: 2 / -1; justify-content: flex-start; } }
+@media (max-width: 720px) { .bot-list .dl-need-a { grid-template-columns: 32px minmax(0, 1fr) auto; } }
 @media (max-width: 720px) { #wl-body tr[data-row] > td.wl-acts { width: auto !important; justify-self: end; } #wl-body tr[data-row] { grid-template-areas: "wf last" "on acts" !important; } }
 .pack-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .dl-bot-av.sm { font-family: var(--font-family-sans); font-weight: var(--font-weight-semibold); }
+
+/* a list's rows are peers: the time and the action sit in fixed columns, so every row's button is the same size and
+   lines up (one primary per view means per decision surface, a dialog or a form, never per list row) */
+
+/* a stat tile that filters (Needs you's kinds): a button in Home's tile style, its selected state an ink border */
+button.dl-tile { font: inherit; text-align: left; color: inherit; cursor: pointer; }
+.dl-tile.on { border-color: var(--color-text-primary); box-shadow: inset 0 0 0 1px var(--color-text-primary); }
+.dl-tile:focus-visible { outline: var(--border-focus) solid var(--color-focus-ring); outline-offset: 2px; }
+#need-tiles .dl-glance { margin-top: 18px; }
+.need-shown { margin: 0 0 10px; font-size: 13.5px; color: var(--color-text-secondary); }
+.dl-glance .dl-tile .d { overflow-wrap: normal; }
+.btn.row-act { width: 92px; justify-content: center; }
+/* Secrets and Settings: one system. The difference in two sentences on both tabs; the same row on both (name and its
+   exact reference, used by, value or where it lives, Copy, ⋯); vaults at the foot of Secrets, always open */
+.sec-explain { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 16px 0 18px; }
+.sec-explain > div { padding: 12px 14px; border-radius: var(--radius-card); background: var(--color-bg-sunken); font-size: 13.5px; color: var(--color-text-secondary); line-height: 1.5; }
+.sec-explain b { color: var(--color-text-primary); display: inline-flex; gap: 6px; align-items: center; } .sec-explain b svg { width: 15px; height: 15px; }
+.sec-explain code { font-size: 12.5px; color: var(--color-text-primary); overflow-wrap: anywhere; }
+.sec-name { display: grid; gap: 2px; min-width: 0; } .sec-name .sec-ref { font-size: 12px; color: var(--color-text-tertiary); overflow-wrap: anywhere; }
+.sec-val { color: var(--color-text-primary); overflow-wrap: anywhere; }
+.sec-when svg { width: 13px; height: 13px; vertical-align: -2px; margin-right: 4px; }
+.sec-copy { flex: none; }
+.vaults { margin-top: 28px; } .vaults .section-title, #env .section-title { display: flex; align-items: center; gap: 12px; } .vaults-add { margin-left: auto; }
+#env { margin-top: 28px; }
+@media (max-width: 720px) { .sec-explain { grid-template-columns: 1fr; } .sec-copy { display: none; } }
+.sec-name .sec-ref { background: none; border: 0; padding: 0; margin: 0; font-size: 12px; color: var(--color-text-tertiary); }
+.sec-explain b { display: inline; } .sec-explain b svg { vertical-align: -2px; margin-right: 5px; }
+@media (max-width: 720px) { .sec-explain { gap: 8px; margin: 12px 0 14px; } .sec-explain > div { padding: 10px 12px; font-size: 13px; } }
+/* Connections → Services: each service a heading row (name, where it comes from, version; Update when there is one,
+   Connect or Another, its ⋯ menu), its connections under it */
+.svc-list > .svc-head { display: flex; align-items: center; gap: 12px; padding: 18px 0 8px; list-style: none; border-top: var(--border-width) solid var(--color-border-default); }
+.svc-list > .svc-head:first-child { border-top: 0; padding-top: 6px; }
+.svc-head .svc-name { flex: 1; min-width: 0; font-size: 15px; } .svc-head .svc-name b { font-weight: 700; }
+.svc-head .dl-na { flex: none; }
+.svc-list > .dl-conn { margin-left: 18px; }
+.svc-list > .svc-empty { margin-left: 18px; padding: 8px 0 12px; list-style: none; }
+@media (max-width: 720px) { .svc-list > .svc-head { flex-wrap: wrap; } .svc-list > .dl-conn, .svc-list > .svc-empty { margin-left: 0; } }

@@ -70,7 +70,7 @@ test('compare two runs: step status, durations, and the outputs diff with word h
 test('a run page: Back to Activity keeps the filters and scroll; labelled details; whole-run actions only', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 600 });
   await go(page, '#/activity', { fresh: true });
-  await page.locator('select[data-k="since"]').selectOption('1440');
+  await page.locator('.fb[data-fb="act"] .fb-in').fill('since:24h');
   const top = await page.evaluate(() => { const m = document.getElementById('main'); m.style.scrollBehavior = 'auto'; m.scrollTop = 240; return m.scrollTop; });
   expect(top).toBeGreaterThan(100);
   await page.evaluate(() => { location.hash = '#/runs/r-7f3a'; });
@@ -89,7 +89,7 @@ test('a run page: Back to Activity keeps the filters and scroll; labelled detail
   await page.locator('.run-nav a', { hasText: 'Back to Activity' }).click();
   await expect(page).toHaveURL(/#\/activity$/);
   await expect.poll(() => page.evaluate(() => document.getElementById('main').scrollTop)).toBe(top);
-  await expect(page.locator('select[data-k="since"]')).toHaveValue('1440');
+  await expect(page.locator('.fb[data-fb="act"] .fb-in')).toHaveValue('since:24h');
 });
 
 test('Open in paseo is on the step with a live paseo session, never on a run without one', async ({ page }) => {
@@ -126,7 +126,7 @@ test('a running step offers "Restart this step", which stops the run first (Canc
 test('old links: Run history and the live pages land on Activity and the run page', async ({ page }) => {
   await go(page, '#/runs?wf=ci-fixer', { fresh: true });
   await expect(page).toHaveURL(/#\/activity$/);
-  await expect(page.locator('select[data-k="wf"]')).toHaveValue('ci-fixer');
+  await expect(page.locator('.fb[data-fb="act"] .fb-in')).toHaveValue('workflow:ci-fixer');
   await go(page, '#/live/r-7f3a');
   await expect(page).toHaveURL(/#\/runs\/r-7f3a$/);
   await expect(page.locator('.nav a[data-nav="runs"]')).toHaveCount(0); // no Run history in the rail

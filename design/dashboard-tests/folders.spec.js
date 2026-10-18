@@ -82,25 +82,22 @@ test('phone: the tree collapses to a drill-down list', async ({ page }) => {
   await expect(page.locator('.page-head .crumbs')).toContainText('work');
 });
 
-test('folder filters: Needs you (and Home with it), Activity, browsers', async ({ page }) => {
-  await go(page, '#/attention');
-  await page.locator('select[data-on-change="folder-scope"]').first().selectOption('work/billing');
-  await expect(page.locator('.dl-needs')).toContainText('Post the monthly forecast to #incidents');
-  await expect(page.locator('.dl-needs')).not.toContainText('Replace the production web server');
-  await expect(page.locator('.scope-note').first()).toContainText('work/billing');
-  await go(page, '#/overview');
-  await expect(page.locator('.dl-needs')).not.toContainText('Replace the production web server');
-  await go(page, '#/attention');
-  await expect(page.locator('select[data-on-change="folder-scope"]').first()).toHaveValue('work/billing');
-  await page.locator('select[data-on-change="folder-scope"]').first().selectOption('work/platform');
-  await expect(page.locator('.dl-needs')).toContainText('Replace the production web server');
+test('folder is one menu in the filter bar where it helps; no standalone folder button anywhere', async ({ page }) => {
+  for (const r of ['#/attention', '#/overview', '#/activity', '#/browser', '#/bots', '#/workflows']) {
+    await go(page, r);
+    await expect(page.locator('select[data-on-change="folder-scope"], .scope-note')).toHaveCount(0);
+  }
+  // Activity: Folder ▾ is a searchable path list; picking one writes the qualifier into the search field
   await go(page, '#/activity');
+  if (page.viewportSize().width > 720) await page.locator('.fb[data-fb="act"] [data-fb-open="folder"]').click();
+  else { await page.locator('.fb[data-fb="act"] [data-fb-sheet]').click(); await page.locator('.fb-sheet [data-fb-row="folder"]').click(); }
+  await page.locator('.fb-menu .fb-find').fill('platform');
+  await expect(page.locator('.fb-menu .fb-opt').first()).toContainText('work ▸ platform');
+  await page.locator('.fb-menu .fb-opt', { hasText: 'work ▸ platform' }).first().click();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.fb[data-fb="act"] .fb-in')).toHaveValue(/folder:work\/platform/);
   await expect(page.locator('#act-tbl')).toContainText('platform-sre');
   await expect(page.locator('#act-tbl')).not.toContainText('ci-fixer');
-  await go(page, '#/browser');
-  await expect(page.locator('.btile')).toHaveCount(1);
-  await page.locator('[data-act="folder-clear"]').first().click();
-  await expect(page.locator('.btile')).toHaveCount(3);
 });
 
 /* ---- one shared folder tree: bots, teams and workflows ---- */

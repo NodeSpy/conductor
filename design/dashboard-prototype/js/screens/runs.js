@@ -12,16 +12,16 @@
   UI.act('restart-step', (b) => { const r = D.runs.find((x) => x.id === b.dataset.run); UI.confirm({ title: `Restart ${esc(b.dataset.from)}?`, body: `This stops ${r.id} first (the step gets a short grace to checkpoint), then starts a retry from <b>${esc(b.dataset.from)}</b>. Steps before it are replayed from their recorded outputs; what this step did so far is discarded.`, ok: 'Stop and restart', cancel: 'Keep it running', danger: true }).then((ok) => { if (!ok) return;
     r.status = 'stopped'; r.finished = now(); r.failed_step = b.dataset.from; r.error = 'stopped by operator:ops to restart ' + b.dataset.from; r.steps.forEach((s) => { if (s.status === 'run') s.status = 'stopped'; }); D.audit.unshift({ ts: now(), event: 'run_stop', who: 'operator:ops', detail: `${r.id} · ${r.workflow} · grace 10s · restart ${b.dataset.from}`, run: r.id });
     const steps = graphOf(r), from = steps.findIndex((s) => s.id === b.dataset.from), id = 'r-' + Math.random().toString(16).slice(2, 6);
-    D.runs.unshift({ id, workflow: r.workflow, trigger: r.trigger + ' (retry)', repo: r.repo, number: r.number, status: 'run', started: now(), cost: 0, retry_of: r.id, steps: steps.map((s, i) => ({ id: s.id, status: i < from ? 'ok' : i === from ? 'run' : 'idle', duration_ms: i < from ? 900 : 0, cost_usd: 0, started: i === from ? now() : undefined })) });
+    D.runs.unshift({ id, workflow: r.workflow, trigger: r.trigger + ' (retry)', ...UI.eventFields(r), status: 'run', started: now(), cost: 0, retry_of: r.id, steps: steps.map((s, i) => ({ id: s.id, status: i < from ? 'ok' : i === from ? 'run' : 'idle', duration_ms: i < from ? 900 : 0, cost_usd: 0, started: i === from ? now() : undefined })) });
     D.audit.unshift({ ts: now(), event: 'run_retry', who: 'operator:ops', detail: `${id} · retry_of ${r.id} · from ${b.dataset.from}`, run: id }); S.save(); UI.refreshChrome(); UI.go('#/runs/' + id); UI.toast(`Restarted ${b.dataset.from}`, `${r.id} stopped · ${id} running`, 'run'); }); });
   UI.act('retry', (b) => {
     const r = D.runs.find((x) => x.id === b.dataset.run), steps = graphOf(r);
-    UI.form({ caps: `${esc(r.workflow.replace(/^bot:/, ''))}${r.repo ? ' on ' + UI.runTarget(r) : ''}`, title: 'Retry from a step', intro: 'Re-runs the pinned trigger. Steps before the chosen one are replayed from their recorded outputs; nothing they did is repeated.',
+    UI.form({ caps: `${esc(r.workflow.replace(/^bot:/, ''))}${UI.runTarget(r) ? ' on ' + UI.runTarget(r) : ''}`, title: 'Retry from a step', intro: 'Re-runs the pinned trigger. Steps before the chosen one are replayed from their recorded outputs; nothing they did is repeated.',
       fields: [{ k: 'from', type: 'enum', label: 'Resume from', req: true, options: steps.map((s) => [s.id, s.id + (s.id === (r.failed_step || b.dataset.from) ? ' (selected)' : '')]).concat([['$start', 'the beginning']]), def: b.dataset.from || r.failed_step || (steps[0] || {}).id }, { k: 'force', type: 'bool', label: 'Force replay', on: 'also re-run steps that already succeeded' }],
       submit: 'Retry', submitIcon: 'play',
       onSubmit: (v) => {
         const id = 'r-' + Math.random().toString(16).slice(2, 6); const from = v.from === '$start' ? 0 : steps.findIndex((s) => s.id === v.from);
-        D.runs.unshift({ id, workflow: r.workflow, trigger: r.trigger + ' (retry)', repo: r.repo, number: r.number, status: 'run', started: now(), cost: 0, retry_of: r.id, steps: steps.map((s, i) => ({ id: s.id, status: i < from && !v.force ? 'ok' : i === from ? 'run' : 'idle', duration_ms: i < from ? 900 : 0, cost_usd: 0, started: i === from ? now() : undefined })) });
+        D.runs.unshift({ id, workflow: r.workflow, trigger: r.trigger + ' (retry)', ...UI.eventFields(r), status: 'run', started: now(), cost: 0, retry_of: r.id, steps: steps.map((s, i) => ({ id: s.id, status: i < from && !v.force ? 'ok' : i === from ? 'run' : 'idle', duration_ms: i < from ? 900 : 0, cost_usd: 0, started: i === from ? now() : undefined })) });
         D.audit.unshift({ ts: now(), event: 'run_retry', who: 'operator:ops', detail: `${id} · retry_of ${r.id} · from ${v.from}${v.force ? ' · force_replay' : ''}`, run: id });
         S.save(); UI.refreshChrome(); UI.go('#/runs/' + id);
       } });
@@ -33,28 +33,36 @@
    * Above it, runs per hour for the chosen range (the Overview's strip: the same size for 10 workflows or 500), and
    * the filters, the time range and search on the same page, as far back as you need. */
   const PAGE = 20;
-  const RANGES = [['60', 'Last hour'], ['720', 'Last 12 hours'], ['1440', 'Last 24 hours'], ['10080', 'Last 7 days'], ['', 'All time']];
-  const av = { q: '', status: '', wf: '', bot: '', repo: '', since: '720', sel: new Set(), last: null, limit: PAGE };
+  const RANGES = [['1h', 'Last hour', 60], ['12h', 'Last 12 hours', 720], ['24h', 'Last 24 hours', 1440], ['7d', 'Last 7 days', 10080], ['all', 'All time', 0]];
+  const MINS = Object.fromEntries(RANGES.map(([k, , m]) => [k, m]));
+  // the filters, as the shared filter bar keeps them (js/filter.js): several statuses, workflows or bots at once; what a
+  // connector's events carry (github.repo:…) is a search qualifier the connector declares (js/connattrs.js)
+  const av = { q: '', status: [], workflow: [], bot: [], folder: '', since: '12h', sel: new Set(), last: null, limit: PAGE };
+  const STATUSES = [['failed', 'Failed', (r) => r.status === 'fail' || r.status === 'stopped'], ['waiting', 'Waiting on you', (r) => r.status === 'wait'], ['running', 'Running', (r) => r.status === 'run'], ['passed', 'Passed', (r) => r.status === 'ok'], ['parked', 'Parked', (r) => r.status === 'idle']];
+  const sinceMin = () => MINS[av.since] || 0;
   UI.activityState = av;
   const GROUP = (r) => (['fail', 'stopped', 'wait'].includes(r.status) ? 'attn' : r.status === 'run' ? 'run' : 'done');
+  const LIVE = (r) => r.status === 'run' || r.status === 'wait';
   const botOf = (r) => (String(r.workflow).startsWith('bot:') ? r.workflow.slice(4) : '');
   const actMatch = (r) => {
-    if (!UI.scopeKeeps(UI.botOfRun(r))) return false;
-    if (av.status) { const st = r.status === 'stopped' ? 'fail' : r.status; if (av.status === 'attn' ? GROUP(r) !== 'attn' : st !== av.status) return false; }
-    if (av.wf && r.workflow !== av.wf) return false;
-    if (av.bot && botOf(r) !== av.bot) return false;
-    if (av.repo && r.repo !== av.repo) return false;
-    if (av.since && r.status !== 'run' && GROUP(r) !== 'attn' && Date.now() - new Date(r.started) > +av.since * 60000) return false;
-    if (av.q) { const t = `${r.id} ${r.workflow} ${r.repo}#${r.number} ${r.error || ''} ${r.detail || ''} ${r.trigger}`.toLowerCase(); if (!t.includes(av.q.toLowerCase())) return false; }
+    if (av.folder && !UI.scopeKeeps(UI.botOfRun(r), av.folder)) return false;
+    if (av.status.length && !STATUSES.some(([k, , f]) => av.status.includes(k) && f(r))) return false;
+    if (av.workflow.length && !av.workflow.includes(r.workflow.replace(/^bot:/, ''))) return false;
+    if (av.bot.length && !av.bot.includes(UI.botOfRun(r) || '')) return false;
+    if (!UI.attrsMatch(r, av)) return false;
+    if (sinceMin() && !LIVE(r) && Date.now() - new Date(r.started) > sinceMin() * 60000) return false;
+    if (av.q) { const t = `${r.id} ${r.workflow} ${UI.attrText(r)} ${UI.runTarget(r)} ${r.error || ''} ${r.detail || ''} ${r.trigger}`.toLowerCase(); if (!t.includes(av.q.toLowerCase())) return false; }
     return true;
   };
   UI.activityMatch = actMatch;
-  const target = (r) => (r.repo ? `${r.repo}${r.number ? '#' + r.number : ''}` : botOf(r) ? (/sweep/.test(r.trigger) ? 'routine sweep' : /incident|pd\./.test(r.trigger) ? 'PagerDuty incident' : /spawn/.test(r.trigger) ? 'a task it started itself' : 'its own work') : esc(r.trigger));
-  const reason = (r) => { if (r.status === 'wait') return `Waiting for your answer: ${esc(String(r.detail || 'approve, revise or discard its draft').replace(/^hand-off[^:]*:\s*/, '').replace(/^awaiting your answer\s*\(?/, '').replace(/\)$/, ''))}.`;
+  // what a run is about: the connector's words for its item, else its event's label, else conductor's own (a sweep, a spawn)
+  const target = (r) => (UI.runTarget(r) ? esc(UI.runTarget(r)) : UI.eventLabel(r) ? esc(UI.eventLabel(r).toLowerCase()) : /sweep/.test(r.trigger) ? 'routine sweep' : /spawn/.test(r.trigger) ? 'a task it started itself' : botOf(r) ? 'its own work' : /schedule|cron/.test(r.trigger) ? 'on its schedule' : 'run by hand');
+  const reason = (r) => { if (r.status === 'wait') return 'Waiting for you: approve, revise or discard its draft.';
     const e = UI.plainError ? UI.plainError(r) : r.error || ''; return `${r.failed_step ? `Failed at “${esc(r.failed_step)}”` : 'Failed'}${e ? `: ${esc(e)}` : ''}${/\.$/.test(e) ? '' : '.'}`; };
   const runName = (r) => `<b>${esc(r.workflow.replace(/^bot:/, ''))}</b> <span class="tgt">${target(r)}</span>`;
   const statusCell = (r) => UI.statusMark(UI.runS(r.status), UI.runWord(r.status));
-  const actBtn = (r) => (r.status === 'wait' ? `<a class="btn sm secondary" href="#/runs/${r.id}">Answer</a>` : `<a class="btn sm secondary" href="#/runs/${r.id}">Open</a>`);
+  // the same verbs as Needs you, every row's button the same size (rows are peers)
+  const actBtn = (r) => `<a class="btn sm secondary row-act" href="#/runs/${r.id}">${r.status === 'wait' ? 'Answer' : 'See why'}</a>`;
   const edge = (r) => (r.status === 'wait' ? 'ember' : 'fail');
   const cbx = (r) => `<input type="checkbox" class="cbx" data-act="act-sel-row" data-id="${r.id}" aria-label="Select ${esc(r.workflow)} ${r.id}"${av.sel.has(r.id) ? ' checked' : ''}>`;
   function groups() {
@@ -95,33 +103,37 @@
   }
   /** Runs per hour for the chosen range: an aggregate strip, failures stacked in the danger colour and named below. */
   function strip(G) {
-    const span = +av.since || 10080, n = span <= 60 ? 12 : span <= 1440 ? Math.round(span / 60) : 7, bucket = span / n, w = 960, h = 96;
+    const span = sinceMin() || 10080, n = span <= 60 ? 12 : span <= 1440 ? Math.round(span / 60) : 7, bucket = span / n, w = 960, h = 96;
     const per = Array.from({ length: n }, () => [0, 0]);
     G.all.forEach((r) => { const m = (Date.now() - new Date(r.started)) / 60000; if (m > span) return; const i = Math.min(n - 1, Math.max(0, n - 1 - Math.floor(m / bucket))); if (r.status === 'fail' || r.status === 'stopped') per[i][1]++; else per[i][0]++; });
     const mx = Math.max(4, ...per.map(([a, b]) => a + b)), bw = w / n - 6;
     const bars = per.map(([ok, f], i) => { const x = i * (w / n) + 3, ho = (ok / mx) * (h - 22), hf = (f / mx) * (h - 22); return `<rect x="${x}" y="${h - 18 - ho}" width="${bw}" height="${Math.max(ho - (hf ? 2 : 0), 0)}" rx="2" class="hb-ok"/>${f ? `<rect x="${x}" y="${h - 18 - ho - hf}" width="${bw}" height="${Math.max(0, hf - 1)}" rx="2" class="hb-fail"/>` : ''}`; }).join('');
-    const label = RANGES.find(([v]) => v === av.since)[1].toLowerCase().replace('last ', ''), unit = span <= 60 ? '5 minutes' : span <= 1440 ? 'hour' : 'day';
+    const label = (RANGES.find(([v]) => v === av.since) || RANGES[1])[1].toLowerCase().replace('last ', ''), unit = span <= 60 ? '5 minutes' : span <= 1440 ? 'hour' : 'day';
     const fails = G.all.filter((r) => (r.status === 'fail' || r.status === 'stopped') && (Date.now() - new Date(r.started)) / 60000 <= span);
-    return `<section class="dl-card dl-strip"><header class="dl-ch"><h2>Runs per ${unit}</h2><span class="dl-sub">${av.since ? `the last ${label}` : 'the last 7 days'}</span></header>
-      <svg class="dl-hours" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Runs per ${unit}: ${fails.length} failed">${bars}<line x1="0" x2="${w}" y1="${h - 17}" y2="${h - 17}" class="hb-axis"/></svg><div class="dl-axis"><span>${av.since ? `${label.replace(/^hour$/, '1 hour')} ago` : '7 days ago'}</span><span>now</span></div>
-      ${fails.length ? `<p class="dl-foot-note">${UI.mark('fail')}<span>${fails.length} failed: ${fails.slice(0, 4).map((r) => `<a class="dl-link" href="#/runs/${r.id}">${esc(r.workflow.replace(/^bot:/, ''))} at ${UI.failedAt(r)}</a>`).join(', ')}${fails.length > 4 ? ` and ${fails.length - 4} more` : ''}</span></p>` : `<p class="dl-foot-note">${UI.mark('ok')}Nothing failed.</p>`}</section>`;
+    // failures from before the range aren't listed either; say how many still wait for a look, one click from showing them
+    const older = (() => { if (!sinceMin()) return 0; const keep = av.since, m = sinceMin(); av.since = 'all'; const n = D.runs.filter((r) => (r.status === 'fail' || r.status === 'stopped') && actMatch(r) && Date.now() - new Date(r.started) > m * 60000).length; av.since = keep; return n; })();
+    const olderNote = older ? ` <button class="link" data-act="act-all-time">${older} older failure${older > 1 ? 's' : ''} · show all time</button>` : '';
+    return `<section class="dl-card dl-strip"><header class="dl-ch"><h2>Runs per ${unit}</h2><span class="dl-sub">${sinceMin() ? `the last ${label}` : 'the last 7 days'}</span></header>
+      <svg class="dl-hours" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Runs per ${unit}: ${fails.length} failed">${bars}<line x1="0" x2="${w}" y1="${h - 17}" y2="${h - 17}" class="hb-axis"/></svg><div class="dl-axis"><span>${sinceMin() ? `${label.replace(/^hour$/, '1 hour')} ago` : '7 days ago'}</span><span>now</span></div>
+      ${fails.length ? `<p class="dl-foot-note">${UI.mark('fail')}<span>${fails.length} failed: ${fails.slice(0, 4).map((r) => `<a class="dl-link" href="#/runs/${r.id}">${esc(r.workflow.replace(/^bot:/, ''))} at ${UI.failedAt(r)}</a>`).join(', ')}${fails.length > 4 ? ` and ${fails.length - 4} more` : ''}.${olderNote}</span></p>` : `<p class="dl-foot-note">${UI.mark('ok')}<span>Nothing failed ${sinceMin() ? `in the last ${label.replace(/^hour$/, 'hour')}` : 'in the last 7 days'}.${olderNote}</span></p>`}</section>`;
   }
-  const chip = (key, icon_, label, opts) => `<label class="dl-chip${av[key] ? ' on' : ''}">${icon(icon_)}<span class="sr-only">${label}</span><select data-on-change="act-f" data-k="${key}" aria-label="${label}">${opts.map(([v, l]) => `<option value="${esc(v)}"${String(av[key]) === String(v) ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
+  /** The filter bar's fields for a list of runs: each menu offers what's actually there, with how many of each. */
+  const count = (xs) => { const m = new Map(); xs.forEach((x) => x && m.set(x, (m.get(x) || 0) + 1)); return [...m]; };
+  UI.runFields = (runs) => [
+    { k: 'status', label: 'Status', multi: true, plural: 'statuses', keepOrder: true, hint: 'failed, running, waiting…', options: () => STATUSES.map(([v, label, f]) => ({ v, label, n: runs.filter(f).length })) },
+    { k: 'workflow', label: 'Workflow', multi: true, options: () => count(runs.filter((r) => !r.workflow.startsWith('bot:')).map((r) => r.workflow)).map(([v, n]) => ({ v, label: v, n })) },
+    { k: 'bot', label: 'Bot', multi: true, options: () => count(runs.map((r) => UI.botOfRun(r))).map(([v, n]) => ({ v, label: v, n })) },
+    ...(UI.allFolders(false).length > 1 ? [{ k: 'folder', label: 'Folder', path: true, allLabel: 'Every folder', find: 'Find a folder', hint: 'work/platform', options: () => UI.allFolders(false).map((f) => ({ v: f, label: f })) }] : []),
+    ...UI.attrQualifiers(runs),
+  ];
+  const actBar = () => UI.filterBar({ id: 'act', state: av, placeholder: 'Search, or filter: status:failed', label: 'Search and filter runs',
+    fields: UI.runFields(D.runs).concat([{ k: 'since', label: 'Time', bare: true, keepOrder: true, def: '12h', title: 'Show runs from', find: 'Find a range', hint: '1h, 12h, 24h, 7d, all', options: () => RANGES.map(([v, label]) => ({ v, label })) }]),
+    onChange: () => { av.limit = PAGE; actRefresh(); } });
   function activityPage() {
     const G = groups(), wfs = [...new Set(D.runs.map((r) => r.workflow).filter((w) => !w.startsWith('bot:')))].sort(), bots = [...new Set(D.runs.map(botOf).filter(Boolean))].sort();
     return `<div class="page dl-page">
       <div class="dl-phead"><div><h1>Activity</h1></div></div>
-      <div class="dl-filters" id="act-filters">
-        <label class="dl-search">${icon('search')}<input value="${esc(av.q)}" placeholder="Search repo, PR, run or error" data-on-input="act-q" aria-label="Search runs"></label>
-        <details class="act-filters-d"${innerWidth > 720 || av.filtersOpen ? ' open' : ''} data-on-toggle="act-filters-t"><summary class="btn sm secondary">${icon('filter')}Filter${(() => { const n = ['status', 'wf', 'bot', 'repo'].filter((k) => av[k]).length + (UI.folderScope() ? 1 : 0); return n ? ` · ${n} on` : ''; })()}</summary><div class="act-chips">
-        ${chip('status', 'filter', 'Status', [['', 'Any status'], ['attn', 'Needs attention'], ['run', 'Running'], ['fail', 'Failed'], ['wait', 'Needs you'], ['ok', 'Passed'], ['idle', 'Parked']])}
-        ${chip('wf', 'workflows', 'Workflow', [['', 'Any workflow']].concat(wfs.map((w) => [w, w])))}
-        ${chip('bot', 'bots', 'Bot', [['', 'Any bot']].concat(bots.map((b) => [b, b])))}
-        ${UI.folderChip()}
-        ${chip('repo', 'branch', 'Repo', [['', 'Any repo']].concat([...new Set(D.runs.map((r) => r.repo).filter(Boolean))].sort().map((x) => [x, x])))}
-        ${chip('since', 'clock', 'Time range', RANGES)}
-      </div></details>
-      </div>
+      <div id="act-filters">${actBar()}</div>
       <div id="act-strip">${strip(G)}</div>
       <section class="dl-card dl-flush dl-runs-card" style="margin-top:20px"><table class="dl-tbl grouped" id="act-tbl">${theadHTML(G)}${tableBody(G)}</table></section>
       <div class="dl-phone-groups" id="act-phone">${av.sel.size ? selBar(G) : ''}${phoneBody(G)}</div>
@@ -129,9 +141,8 @@
     </div>`;
   }
   const actRefresh = () => { const G = groups(), t = UI.$('#act-tbl'); if (!t) return; t.innerHTML = theadHTML(G) + tableBody(G); UI.$('#act-phone').innerHTML = (av.sel.size ? selBar(G) : '') + phoneBody(G); UI.$('#act-strip').innerHTML = strip(G); };
-  UI.act('act-q', (el) => { av.q = el.value; av.limit = PAGE; actRefresh(); });
-  UI.act('act-f', (sel) => { av[sel.dataset.k] = sel.value; av.limit = PAGE; sel.closest('.dl-chip').classList.toggle('on', !!sel.value); actRefresh(); });
-  UI.act('act-clear', () => { Object.assign(av, { q: '', status: '', wf: '', bot: '', repo: '', since: '' }); UI.rerender(); });
+  UI.act('act-clear', () => { Object.assign(av, { q: '', status: [], workflow: [], bot: [], folder: '', since: 'all' }); UI.connAttrs().forEach((a) => delete av[a.key]); UI.rerender(); });
+  UI.act('act-all-time', () => { av.since = 'all'; av.limit = PAGE; UI.rerender(); });
   UI.act('act-more', () => { av.limit += PAGE; actRefresh(); });
   UI.act('act-sel-row', (cb, e) => { const boxes = UI.$$('#act-tbl input[data-act="act-sel-row"]'), i = boxes.findIndex((x) => x.dataset.id === cb.dataset.id), on = !av.sel.has(cb.dataset.id);
     if (e && e.shiftKey && av.last != null && i >= 0) boxes.slice(Math.min(av.last, i), Math.max(av.last, i) + 1).forEach((x) => (on ? av.sel.add(x.dataset.id) : av.sel.delete(x.dataset.id)));
@@ -140,7 +151,7 @@
   UI.act('act-sel-all', () => { groups().all.slice(0, 999).filter((r) => GROUP(r) !== 'done' || groups().done.indexOf(r) < av.limit).forEach((r) => av.sel.add(r.id)); setTimeout(actRefresh); });
   UI.act('act-sel-matching', () => { groups().all.forEach((r) => av.sel.add(r.id)); actRefresh(); });
   UI.act('act-sel-clear', () => { av.sel.clear(); actRefresh(); });
-  const newRun = (r, from) => { const id = 'r-' + Math.random().toString(16).slice(2, 6); D.runs.unshift({ id, workflow: r.workflow, trigger: r.trigger + ' (retry)', repo: r.repo, number: r.number, status: 'run', started: now(), cost: 0, retry_of: r.id, steps: [] }); D.audit.unshift({ ts: now(), event: 'run_retry', who: 'operator:ops', detail: `${id} · retry_of ${r.id} · from ${from || 'the start'}`, run: id }); return id; };
+  const newRun = (r, from) => { const id = 'r-' + Math.random().toString(16).slice(2, 6); D.runs.unshift({ id, workflow: r.workflow, trigger: r.trigger + ' (retry)', ...UI.eventFields(r), status: 'run', started: now(), cost: 0, retry_of: r.id, steps: [] }); D.audit.unshift({ ts: now(), event: 'run_retry', who: 'operator:ops', detail: `${id} · retry_of ${r.id} · from ${from || 'the start'}`, run: id }); return id; };
   UI.act('act-bulk-retry', () => { const rs = D.runs.filter((r) => av.sel.has(r.id) && (r.status === 'fail' || r.status === 'stopped'));
     UI.confirm({ title: `Retry ${rs.length} run${rs.length > 1 ? 's' : ''}?`, body: `Each starts again from the step that failed; the steps before it are replayed from what they recorded, so nothing they did is repeated.`, ok: `Retry ${rs.length}` }).then((ok) => { if (!ok) return;
       rs.forEach((r) => newRun(r, r.failed_step)); av.sel.clear(); S.save(); UI.refreshChrome(); actRefresh(); UI.toast(`Retried ${rs.length} run${rs.length > 1 ? 's' : ''}`, 'they’re running now', 'run'); }); });
@@ -152,10 +163,15 @@
 
   // Activity keeps its filters (module state) and its scroll position, so Back from a run lands where you were
   UI.route('activity', () => { const q = new URLSearchParams(location.hash.split('?')[1] || '');
-    if ([...q.keys()].length) { Object.assign(av, { q: '', status: '', wf: '', bot: '', repo: '', limit: PAGE }); ['status', 'wf', 'bot', 'repo', 'since', 'q'].forEach((k) => { if (q.has(k)) av[k] = q.get(k); }); if (av.status === 'run') av.since = ''; }
+    if ([...q.keys()].length) UI.activityFromQuery(q);
     return { toString: activityPage, after(main) { if (/^#\/runs\/./.test(UI.prevHash || '')) main.scrollTop = UI.actScroll || 0; UI.onLeave(() => { UI.actScroll = main.scrollTop; }); } }; }, { nav: 'activity' });
   // old links: Run history and the live pages are Activity now; their filters carry over
-  UI.route('runs', () => { const q = new URLSearchParams((location.hash.split('?')[1] || '')); ['status', 'wf', 'bot', 'repo', 'since', 'q'].forEach((k) => { if (q.has(k)) av[k] = q.get(k); }); if (q.has('workflow')) av.wf = q.get('workflow'); setTimeout(() => location.replace('#/activity')); return ''; }, { nav: 'activity' });
+  UI.activityFromQuery = (q) => { const ST = { run: 'running', fail: 'failed', wait: 'waiting', ok: 'passed', idle: 'parked', attn: ['failed', 'waiting'] }, M = { 60: '1h', 720: '12h', 1440: '24h', 10080: '7d', '': 'all' };
+    Object.assign(av, { q: q.get('q') || '', status: [], workflow: [], bot: [], folder: q.get('folder') || '', limit: PAGE }); UI.connAttrs().forEach((a) => { av[a.key] = q.get(a.key) ? q.get(a.key).split(',') : []; });
+    if (q.has('status')) av.status = [].concat(ST[q.get('status')] || q.get('status').split(','));
+    ['wf', 'workflow'].forEach((k) => { if (q.get(k)) av.workflow = q.get(k).split(','); }); if (q.get('bot')) av.bot = q.get('bot').split(',');
+    if (q.has('since')) av.since = MINS[q.get('since')] != null ? q.get('since') : M[q.get('since')] || '12h'; };
+  UI.route('runs', () => { const q = new URLSearchParams((location.hash.split('?')[1] || '')); UI.activityFromQuery(q); setTimeout(() => location.replace('#/activity')); return ''; }, { nav: 'activity' });
   UI.route('live/:id?', ({ id }) => { setTimeout(() => location.replace(id ? '#/runs/' + id : '#/activity')); return ''; }, { nav: 'activity' });
 
   /* ---------- one run: the approved run page (mock runPage + the step tree), for a running run and a finished one ---------- */
@@ -193,24 +209,25 @@
       ${live ? `<div class="dl-step-open"><button class="btn sm secondary" data-act="restart-step" data-run="${r.id}" data-from="${s.id}">${icon('undo')}Restart this step…</button></div>` : r.status !== 'run' && s.status !== 'idle' ? `<div class="dl-step-open"><button class="btn sm secondary" data-act="retry" data-run="${r.id}" data-from="${s.id}">${icon('undo')}Retry from here…</button></div>` : ''}
       ${body}${['agent', 'code', 'decide'].includes(s.kind) && !live ? `<details class="dl-tech-d env-tech"><summary>${icon('chev')}Its environment <span class="dl-sub">the variables this step saw, by scope; values are never shown</span></summary>${UI.effectiveEnvHTML({ runtime: s.kind === 'code' ? '' : 'claude-cli', workflow: r.workflow, sandboxed: s.kind !== 'code' })}</details>` : ''}</section>`;
   }
-  const trigWords = (r) => { const t = String(r.trigger); const where = r.repo ? ` on ${UI.runTarget(r)}` : '';
-    return /check_failed/.test(t) ? `A check failed${where}` : /review_requested/.test(t) ? `A review was requested${where}` : /issue_opened/.test(t) ? `An issue was opened${where}` : /schedule/.test(t) ? 'Its schedule' : /spawn/.test(t) && String(r.workflow).startsWith('bot:') ? `${esc(r.workflow.slice(4))} started it itself${(t.match(/spawn (\w+)/) || [])[1] ? ` (worker ${esc(t.match(/spawn (\w+)/)[1])})` : ''}` : /manual/.test(t) ? 'You started it' : /incident|pd\./.test(t) ? 'A PagerDuty incident' : /sweep/.test(t) ? 'Its routine sweep' : `${esc(t)}${where}`; };
+  // what started a run: the connector's own words for its event (from its schema), or conductor's (a schedule, a spawn)
+  const trigWords = (r) => { const t = String(r.trigger); const where = UI.runTarget(r) ? ` on ${esc(UI.runTarget(r))}` : '', ev = UI.eventLabel(r);
+    return ev ? `${esc(ev)}${where}` : /schedule/.test(t) ? 'Its schedule' : /spawn/.test(t) && String(r.workflow).startsWith('bot:') ? `${esc(r.workflow.slice(4))} started it itself${(t.match(/spawn (\w+)/) || [])[1] ? ` (worker ${esc(t.match(/spawn (\w+)/)[1])})` : ''}` : /manual/.test(t) ? 'You started it' : /incident|pd\./.test(t) ? 'A PagerDuty incident' : /sweep/.test(t) ? 'Its routine sweep' : `${esc(t)}${where}`; };
   UI.route('runs/:id', ({ id }) => {
     const r = D.runs.find((x) => x.id === id);
     if (!r) return `<div class="page dl-page"><div class="dl-crumbs"><a href="#/activity">${icon('chev', 'flip')}Back to Activity</a></div>${UI.empty({ title: `There is no run ${esc(id)}`, body: 'It may be older than the 14 days runs are kept.', action: '<a class="btn" href="#/activity">Back to Activity</a>' })}</div>`;
     const rec = UI.runRecord(r), sel = dv.sel[r.id] || (r.steps.find((x) => x.status === 'run') || {}).id || rec.failAt || rec.waitAt || (rec.steps.find((x) => x.kind === 'agent') || rec.steps[rec.steps.length - 1]).id, s = rec.steps.find((x) => x.id === sel) || rec.steps[0];
     const story = UI.runStory(r), audit = UI.runAudit(r), same = D.runs.filter((x) => x.workflow === r.workflow && x.id !== r.id && x.status !== 'run'), inNeeds = D.attention.some((a) => a.href === '#/runs/' + r.id);
     if (r.status === 'run') LOG = logOf(r);
-    const title = `${esc(UI.runTitle(r))}${r.repo ? ` on ${UI.runTarget(r)}` : ''}`;
+    const title = `${esc(UI.runTitle(r))}${UI.runTarget(r) ? ` on ${esc(UI.runTarget(r))}` : ''}`;
     const lead = story ? story.happened : r.status === 'run' ? `${trigWords(r)} ${UI.agoText(r.started)}; now on step <b>${esc((r.steps.find((x) => x.status === 'run') || s).id)}</b>.` : r.status === 'ok' ? `Finished in ${UI.runDur(r)}; every step passed.` : '';
-    const prBtn = r.repo && r.number ? `<a class="btn secondary" href="#/runs/${r.id}" ${UI.off('Opens the pull request on GitHub (not in the prototype)')}>${icon('pr')}Open the ${/issue/.test(r.trigger) ? 'issue' : 'pull request'}</a>` : '';
+    const links = UI.itemLinks(r), prBtn = links.length ? `<a class="btn secondary" href="#/runs/${r.id}" ${UI.off(`${links[0].label} (not in the prototype)`)}>${icon('external')}${esc(links[0].label.replace(/ on \w+$/, ''))}</a>` : '';
     // one recommended next step, with its reason in a line; everything else in the ⋯ menu
     const at = rec.steps.findIndex((x) => x.id === rec.failAt), maker = at > 0 ? rec.steps.slice(0, at).reverse().find((x) => x.diff) : null, failed = rec.steps[at];
     const rec1 = r.status === 'run' ? null : ['fail', 'stopped', 'idle'].includes(r.status)
       ? (maker && failed && failed.kind !== 'agent' ? { act: `data-act="retry" data-run="${r.id}" data-from="${esc(maker.id)}"`, label: `Retry from “${esc(maker.id)}”…`, why: `“${esc(rec.failAt)}” failed on the change “${esc(maker.id)}” made, so redo that step; its agent sees the failure.` }
         : r.status === 'idle' ? { act: `data-act="retry" data-run="${r.id}" data-from=""`, label: 'Run it now…', why: 'It was held before any step ran.' } : { act: `data-act="retry" data-run="${r.id}" data-from="${esc(rec.failAt || '')}"`, label: `Retry${rec.failAt ? ` from “${esc(rec.failAt)}”` : ''}…`, why: '' })
       : r.status === 'wait' ? { href: '#/attention', label: 'Answer it', why: 'It’s waiting for your answer before it goes on.' } : null;
-    const more = [rec1 && maker && failed && failed.kind !== 'agent' ? [`Rerun “${rec.failAt}” only…`, 'updates', 'retry', `data-run="${r.id}" data-from="${esc(rec.failAt)}"`] : null, same.length ? ['Compare with an earlier run', 'split', 'strip-go', `data-href="#/runs/${r.id}/compare"`] : null, r.repo && r.number ? [`Open the ${/issue/.test(r.trigger) ? 'issue' : 'pull request'}`, 'pr', 'noop', UI.off('Opens it on GitHub (not in the prototype)')] : null, inNeeds ? ['Dismiss from Needs you', 'check', 'run-dismiss', `data-run="${r.id}"`] : null].filter(Boolean);
+    const more = [rec1 && maker && failed && failed.kind !== 'agent' ? [`Rerun “${rec.failAt}” only…`, 'updates', 'retry', `data-run="${r.id}" data-from="${esc(rec.failAt)}"`] : null, same.length ? ['Compare with an earlier run', 'split', 'strip-go', `data-href="#/runs/${r.id}/compare"`] : null, links.length ? [links[0].label, 'external', 'noop', UI.off('Opens it there (not in the prototype)')] : null, inNeeds ? ['Dismiss from Needs you', 'check', 'run-dismiss', `data-run="${r.id}"`] : null].filter(Boolean);
     UI.runMore = more;
     const actions = r.status === 'run' ? `<button class="btn secondary" data-act="stop-run" data-run="${r.id}">${icon('x')}Stop run…</button>${more.length ? `<button class="icon-btn" data-act="run-more" aria-label="More for this run">${icon('more')}</button>` : ''}`
       : `${rec1 ? (rec1.href ? `<a class="btn primary" href="${rec1.href}">${rec1.label}</a>` : `<button class="btn primary" ${rec1.act}>${icon('updates')}${rec1.label}</button>`) : ''}${more.length ? `<button class="icon-btn" data-act="run-more" aria-label="More for this run">${icon('more')}</button>` : ''}${rec1 && rec1.why ? `<p class="dl-sub run-next-why">${rec1.why}</p>` : ''}`;
@@ -237,7 +254,6 @@
   document.addEventListener('keydown', (e) => { if (!['ArrowDown', 'ArrowUp'].includes(e.key) || !e.target.matches || !e.target.matches('.dl-tree .tl')) return;
     const all = [...document.querySelectorAll('.dl-tree .tl')], i = all.indexOf(e.target), next = all[i + (e.key === 'ArrowDown' ? 1 : -1)]; if (!next) return;
     e.preventDefault(); const step = next.dataset.step; next.click(); setTimeout(() => { const b = document.querySelector(`.dl-tree .tl[data-step="${step}"]`); if (b) b.focus(); }); });
-  UI.act('act-filters-t', (d) => { av.filtersOpen = d.open; });
   UI.act('act-done-toggle', () => { av.showDone = !av.showDone; actRefresh(); });
   UI.act('run-more', (b) => UI.menu(b, UI.runMore || []));
   UI.act('run-dismiss', (b) => { const href = '#/runs/' + b.dataset.run, was = D.attention.some((a) => a.href === href); D.dismissed = [...new Set((D.dismissed || []).concat(href))]; S.save(); UI.rerender();
@@ -250,7 +266,7 @@
     const a = D.runs.find((x) => x.id === id); if (!a) return `<div class="page dl-page">${UI.empty({ title: `There is no run ${esc(id)}`, action: '<a class="btn" href="#/activity">Back to Activity</a>' })}</div>`;
     const same = D.runs.filter((x) => x.workflow === a.workflow && x.id !== a.id && x.status !== 'run');
     const head = `<div class="dl-crumbs"><a href="#/runs/${a.id}">${icon('chev', 'flip')}Back to the run</a></div><div class="dl-phead"><div><h1>Compare two ${esc(a.workflow)} runs</h1></div></div>`;
-    if (!other) return `<div class="page dl-page">${head}<section class="dl-card" style="margin-top:20px"><header class="dl-ch"><h2>Pick a run to compare with</h2></header><ul class="dl-list">${same.map((x) => `<li><a class="dl-row-a" href="#/runs/${a.id}/compare/${x.id}"><span class="dl-ng">${UI.mark(UI.runS(x.status), { label: UI.runWord(x.status) })}</span><span class="dl-nt"><b>${esc(x.workflow)} <span class="tgt">${UI.runTarget(x)}</span></b><span class="dl-why">${UI.runWord(x.status)} · ${UI.agoText(x.started)} · <span class="mono">${x.id}</span></span></span></a></li>`).join('') || '<li class="dl-sub">No other run of this workflow to compare with.</li>'}</ul></section></div>`;
+    if (!other) return `<div class="page dl-page">${head}<section class="dl-card" style="margin-top:20px"><header class="dl-ch"><h2>Pick a run to compare with</h2></header><ul class="dl-list">${same.map((x) => `<li><a class="dl-row-a" href="#/runs/${a.id}/compare/${x.id}"><span class="dl-ng">${UI.mark(UI.runS(x.status), { label: UI.runWord(x.status) })}</span><span class="dl-nt"><b>${esc(x.workflow)} <span class="tgt">${esc(UI.runTarget(x))}</span></b><span class="dl-why">${UI.runWord(x.status)} · ${UI.agoText(x.started)} · <span class="mono">${x.id}</span></span></span></a></li>`).join('') || '<li class="dl-sub">No other run of this workflow to compare with.</li>'}</ul></section></div>`;
     const b = D.runs.find((x) => x.id === other); if (!b) return `<div class="page dl-page">${head}${UI.empty({ title: `There is no run ${esc(other)}` })}</div>`;
     const ra = UI.runRecord(a), rb = UI.runRecord(b), ids = [...new Set(ra.steps.map((s) => s.id).concat(rb.steps.map((s) => s.id)))];
     const pick = cv.step && ids.includes(cv.step) ? cv.step : (ids.find((i) => { const x = ra.steps.find((s) => s.id === i), y = rb.steps.find((s) => s.id === i); return !x || !y || x.status !== y.status; }) || ids[0]);
@@ -259,9 +275,9 @@
     const delta = (x, y) => (x && y && x.t0 != null && y.t0 != null ? `<span class="${y.ms > x.ms * 1.2 ? 'warn-t' : 'dl-sub'}">${y.ms >= x.ms ? '+' : '−'}${UI.durText(Math.abs(y.ms - x.ms))}</span>` : '');
     const sa = ra.steps.find((s) => s.id === pick), sb = rb.steps.find((s) => s.id === pick);
     const yA = sa && sa.outputs ? UI.stepOutputsYAML(a, sa) : '', yB = sb && sb.outputs ? UI.stepOutputsYAML(b, sb) : '';
-    const runCell = (x) => `${UI.statusMark(UI.runS(x.status), UI.runWord(x.status))} <a class="mono dl-link" href="#/runs/${x.id}">${x.id}</a> <span class="dl-sub">${UI.runTarget(x)} · ${UI.agoText(x.started)}</span>`;
+    const runCell = (x) => `${UI.statusMark(UI.runS(x.status), UI.runWord(x.status))} <a class="mono dl-link" href="#/runs/${x.id}">${x.id}</a> <span class="dl-sub">${[esc(UI.runTarget(x)), UI.agoText(x.started)].filter(Boolean).join(' · ')}</span>`;
     return `<div class="page dl-page">${head}
-      <div class="dl-filters"><span class="dl-sub">This run</span>${runCell(a)}<span class="dl-sub">compared with</span><label class="dl-chip on">${icon('split')}<select data-on-change="cmp-other" data-run="${a.id}" aria-label="Compare with">${same.map((x) => `<option value="${x.id}"${x.id === b.id ? ' selected' : ''}>${x.id} · ${SL[x.status] || x.status} · ${UI.runTarget(x)}</option>`).join('')}</select></label></div>
+      <div class="dl-filters"><span class="dl-sub">This run</span>${runCell(a)}<span class="dl-sub">compared with</span><label class="dl-chip on">${icon('split')}<select data-on-change="cmp-other" data-run="${a.id}" aria-label="Compare with">${same.map((x) => `<option value="${x.id}"${x.id === b.id ? ' selected' : ''}>${[x.id, SL[x.status] || x.status, esc(UI.runTarget(x))].filter(Boolean).join(' · ')}</option>`).join('')}</select></label></div>
       <section class="dl-card dl-flush"><table class="dl-tbl cmp-tbl"><thead><tr><th>Step</th><th>This run</th><th>Compared with</th><th class="num">Difference</th></tr></thead><tbody>
         ${ids.map((i) => { const x = ra.steps.find((s) => s.id === i), y = rb.steps.find((s) => s.id === i); const differs = !x || !y || x.status !== y.status || JSON.stringify(x.outputs) !== JSON.stringify(y.outputs); return `<tr class="click${i === pick ? ' on' : ''}"${i === pick ? UI.rowState('sel') : ''} data-act="cmp-step" data-step="${esc(i)}" tabindex="0" data-step-row><td><b>${esc(i)}</b>${differs ? ' ' + UI.label('differs', { s: 'wait' }) : ''}</td><td>${cell(x)}</td><td>${cell(y)}</td><td class="num">${delta(x, y)}</td></tr>`; }).join('')}
         <tr><td class="dl-sub">Total</td><td>${UI.durText(ra.total)}</td><td>${UI.durText(rb.total)}</td><td class="num">${delta({ t0: 0, ms: ra.total }, { t0: 0, ms: rb.total })}</td></tr></tbody></table></section>
@@ -278,9 +294,45 @@
           <label class="row">${UI.switchBtn(D.prefs.notifyPush, 'pref', 'data-k="notifyPush" aria-label="When a browser sign-in needs me"')}When a browser sign-in needs me</label>
           <label class="row">${UI.switchBtn(D.prefs.notifyFailed, 'pref', 'data-k="notifyFailed" aria-label="When any run fails"')}When any run fails</label></div>
           <p class="dl-sub">Alerts outside the dashboard (Slack, PagerDuty) are set up as workflows on conductor’s own events.</p></section>`;
+  /* Needs you: what kinds of thing wait, and how many (the same counts as Home's tile and the rail's badge, from the one
+   * list), each a tile that sets the Kind filter; then the shared filter bar, quiet when the list is short; then the list.
+   * A filter that hides anything says so, so nothing that needs you is ever silently out of view. */
+  const nv = { q: '', kind: [], bot: [], workflow: [], folder: '' };
+  const runOfItem = (a) => { const m = String(a.href).match(/#\/runs\/([\w-]+)/); return m && D.runs.find((r) => r.id === m[1]); };
+  const factsOf = (a) => { const r = runOfItem(a); return { bot: UI.botOfHref(a.href) || (r && UI.botOfRun(r)) || '', workflow: r ? r.workflow.replace(/^bot:/, '') : '' }; };
+  // what a connector's event carries (from its declared attributes), for the items that came from a run
+  const itemAttrs = (a) => UI.itemAttrs(runOfItem(a));
+  const needMatch = (a) => { const f = factsOf(a);
+    if (nv.kind.length && !nv.kind.includes(a.kind)) return false;
+    if (nv.bot.length && !nv.bot.includes(f.bot)) return false;
+    if (nv.workflow.length && !nv.workflow.includes(f.workflow)) return false;
+    if (!UI.attrsMatch(a, nv, itemAttrs)) return false;
+    if (nv.folder && !UI.scopeKeeps(f.bot, nv.folder)) return false;
+    if (nv.q && !`${a.plain} ${a.why} ${a.title} ${a.sub} ${f.bot} ${f.workflow} ${UI.attrText(a, itemAttrs)}`.toLowerCase().includes(nv.q.toLowerCase())) return false;
+    return true; };
+  const tally = (xs) => { const m = new Map(); xs.filter(Boolean).forEach((x) => m.set(x, (m.get(x) || 0) + 1)); return [...m].map(([v, n]) => ({ v, label: v, n })); };
+  const needFields = () => { const A = D.attention, F = A.map(factsOf);
+    return [{ k: 'kind', label: 'Kind', multi: true, keepOrder: true, plural: 'kinds', hint: 'approval, failed, question, sign-in', options: () => UI.NEED_KINDS.map(([v, , many]) => ({ v, label: many[0].toUpperCase() + many.slice(1), n: A.filter((a) => a.kind === v).length })).filter((o) => o.n) },
+      { k: 'bot', label: 'Bot', multi: true, options: () => tally(F.map((f) => f.bot)) },
+      { k: 'workflow', label: 'Workflow', multi: true, options: () => tally(F.map((f) => f.workflow)) },
+      ...(UI.allFolders(false).length > 1 ? [{ k: 'folder', label: 'Folder', path: true, allLabel: 'Every folder', find: 'Find a folder', options: () => UI.allFolders(false).map((x) => ({ v: x, label: x })) }] : []), ...UI.attrQualifiers(A, itemAttrs)]; };
+  // one tile per kind, Home's tile in Home's grid (the same counts as Home's Needs you tile and the badge); a tile
+  // filters the list to its kind, and says so; clicking it again shows everything
+  const MIN = { s: 0, m: 1, h: 60, d: 1440 }, mins = (a) => { const m = String(a.age || '').match(/^(\d+)\s*([smhd])$/); return m ? +m[1] * MIN[m[2]] : 0; };
+  const needTiles = () => { const A = D.attention; if (!A.length) return '';
+    return UI.glance(UI.NEED_KINDS.map(([k, one, many]) => { const xs = A.filter((a) => a.kind === k), n = xs.length; if (!n) return ''; const on = nv.kind.length === 1 && nv.kind[0] === k, old = xs.reduce((m, a) => (mins(a) > mins(m) ? a : m), xs[0]);
+      return UI.statTile({ act: 'need-kind', attrs: `data-k="${k}"`, label: (n === 1 ? one : many).replace(/^./, (c) => c.toUpperCase()), value: n, detail: on ? 'showing only these · show all' : old.age ? `oldest ${UI.ageText(old.age)}` : 'waiting on you', on, hot: k !== 'failed' && k !== 'connection' }); }), 'What needs you, by kind'); };
+  const needBody = () => { const shown = D.attention.filter(needMatch), all = D.attention.length;
+    const note = shown.length < all ? `<p class="need-shown">Showing ${shown.length} of ${all} · <button class="link" data-act="need-clear">Show all</button></p>` : '';
+    return UI.attentionList(/[?&]all=1/.test(location.hash) ? 1e9 : 0, shown, note) + (shown.length || !all ? '' : ''); };
+  const needRefresh = () => { const t = UI.$('#need-tiles'), b = UI.$('#need-body'); if (t) t.innerHTML = needTiles(); if (b) b.innerHTML = needBody(); };
+  UI.act('need-kind', (b) => { const k = b.dataset.k; nv.kind = nv.kind.length === 1 && nv.kind[0] === k ? [] : [k]; UI.rerender(); });
+  UI.act('need-clear', () => { Object.assign(nv, { q: '', kind: [], bot: [], workflow: [], folder: '' }); UI.connAttrs().forEach((x) => delete nv[x.key]); UI.rerender(); });
   UI.route('attention', () => `<div class="page dl-page">
-    <div class="dl-phead"><div><h1>Needs you</h1></div>${UI.folderChip()}</div>
-    <div class="dl-cols"><div class="dl-col-main"><section class="dl-card">${UI.attentionList(/[?&]all=1/.test(location.hash) ? 1e9 : 0)}</section></div>
+    <div class="dl-phead"><div><h1>Needs you</h1></div></div>
+    <div id="need-tiles">${needTiles()}</div>
+    ${D.attention.length ? `<div class="need-filter">${UI.filterBar({ id: 'need', state: nv, placeholder: 'Search, or filter: kind:approval', label: 'Search and filter what needs you', fields: needFields(), onChange: needRefresh })}</div>` : ''}
+    <div class="dl-cols"><div class="dl-col-main"><section class="dl-card" id="need-body">${needBody()}</section></div>
       <div class="dl-col-side">
         ${(D.fyi || []).length ? `<section class="dl-card"><header class="dl-ch"><h2>For your information</h2></header><ul class="dl-list">${D.fyi.map((a) => `<li><a class="dl-row-a" href="${a.href}"><span class="dl-ng">${icon(/update/i.test(a.title + a.plain) ? 'updates' : 'shield')}</span><span class="dl-nt"><b>${esc(a.plain)}</b><span class="dl-why">${esc(a.why)}</span></span></a></li>`).join('')}</ul></section>` : ''}
 

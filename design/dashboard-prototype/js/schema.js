@@ -12,6 +12,15 @@
   SCHEMA.connectors = {
     github: {
       label: 'GitHub', icon: 'branch', color: 'var(--color-icon-default)', builtin: true,
+      attrs: {
+        repo: { label: 'Repo', icon: 'branch', search: true, menu: true, display: true },
+        pr: { label: 'PR', icon: 'obj-pr', search: true, menu: true, display: true, from: 'number', format: '{repo}#{number}', link: 'https://github.com/{repo}/pull/{number}', linkLabel: 'Open the pull request on GitHub' },
+        branch: { label: 'Branch', icon: 'branch', search: true, from: 'head' },
+        author: { label: 'Author', icon: 'members', search: true },
+        label: { label: 'Label', icon: 'pin', search: true, from: 'labels' },
+        check_name: { label: 'Check', icon: 'obj-check', search: true },
+      },
+      target: '{repo}#{number}',
       settings: [
         f('app_id', 'number', { req: true, help: 'The GitHub App id. Create one under Settings → Developer settings.' }),
         f('private_key', 'secret', { req: true, help: 'The App private key, as a vault reference.' }),
@@ -44,6 +53,8 @@
     },
     slack: {
       label: 'Slack', icon: 'send', color: 'var(--color-icon-default)',
+      attrs: { channel: { label: 'Channel', icon: 'message', search: true, menu: true, display: true }, user: { label: 'User', icon: 'members', search: true } },
+      target: '{channel}',
       settings: [
         f('bot_token', 'secret', { req: true, help: 'xoxb- token, as a vault reference.' }),
         f('app_token', 'secret', { req: true, help: 'xapp- token for Socket Mode.' }),
@@ -62,6 +73,8 @@
     },
     pagerduty: {
       label: 'PagerDuty', icon: 'warn', color: 'var(--color-icon-default)',
+      attrs: { service: { label: 'Service', icon: 'server', search: true, menu: true, display: true, from: 'incident.service' }, urgency: { label: 'Urgency', icon: 'warn', search: true, from: 'incident.urgency' } },
+      target: '{service} incident',
       settings: [f('token', 'secret', { req: true }), f('webhook_path', 'string', { def: '/pd', help: 'Mounted on the shared inbound listener.' }), f('services', 'list', { ph: 'PXXXXXX' })],
       events: { incident: { label: 'Incident triggered', fields: { incident: { id: 'Q1W2E3', title: 'api p99 latency > 2s', urgency: 'high', service: 'api' }, title: 'api p99 latency > 2s', url: 'https://acme.pagerduty.com/incidents/Q1W2E3' }, filters: ['service', 'urgency'] } },
       verbs: {

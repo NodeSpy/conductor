@@ -33,7 +33,7 @@
     'pr-review': {
       fetch: { w: 3, in: (r) => ({ repo: r.repo, number: r.number }), out: () => ({ files: 7, additions: 214, deletions: 61 }), log: () => [['ok', 'gh.pr_diff · 7 files · +214 -61']] },
       lint: { w: 40, in: (r, s) => ({ use: 'cli', command: ['golangci-lint', 'run'], workdir: `<state>/runs/${r.id}/${s}` }), out: () => ({ exit_code: 0, stdout: '0 issues.' }), log: () => [['ok', 'golangci-lint run · 0 issues.']] },
-      review: { w: 300, cost: 1, in: () => ({ runtime: 'paseo', model: 'fleet reviewer → claude-sonnet-5', prompt: 'Review the diff for correctness, queries and tests.' }), out: (r, c) => (c.wait ? { handoff: 'awaiting answer on handoff', choices: ['approve', 'revise', 'discard'] } : { verdict: 'request_changes', comments: 3, summary: 'Two N+1 queries in the orders handler; missing index on (tenant_id, created_at).' }), log: (r, c) => [['info', 'claude-sonnet-5 (fleet reviewer, rung 1)'], ['tool', '▸ Read handlers/orders.go'], ['tool', '▸ Grep "SELECT" handlers/'], c.wait ? ['warn', 'hand-off: waiting for an answer on handoff'] : ['info', 'Found 2 N+1 queries; drafting 3 comments.']] },
+      review: { w: 300, cost: 1, in: () => ({ runtime: 'paseo', model: 'fleet reviewer → claude-sonnet-5', prompt: 'Review the diff for correctness, queries and tests.' }), out: (r, c) => (c.wait ? { handoff: 'waiting for your answer on the draft', choices: ['approve', 'revise', 'discard'] } : { verdict: 'request_changes', comments: 3, summary: 'Two N+1 queries in the orders handler; missing index on (tenant_id, created_at).' }), log: (r, c) => [['info', 'claude-sonnet-5 (fleet reviewer, rung 1)'], ['tool', '▸ Read handlers/orders.go'], ['tool', '▸ Grep "SELECT" handlers/'], c.wait ? ['warn', 'Draft ready; waiting for a person to approve, revise or discard it'] : ['info', 'Found 2 N+1 queries; drafting 3 comments.']] },
       post: { w: 2, in: () => ({ event: 'REQUEST_CHANGES', comments: 3 }), out: (r) => ({ review: `https://github.com/${r.repo}/pull/${r.number}#pullrequestreview-1` }), log: () => [['ok', 'gh.review posted as the bot']] },
     },
     'issue-triage': {
@@ -88,12 +88,12 @@
     d.del.forEach((l) => rows.push(`<div class="dl del"><span>${a++}</span><span></span><span>-</span><span>${E(l)}</span></div>`)); d.add.forEach((l) => rows.push(`<div class="dl add"><span></span><span>${b++}</span><span>+</span><span>${E(l)}</span></div>`));
     return `<div class="diff"><div class="h">${E(d.file)} · <span class="muted">${d.add.length ? '+' + d.add.length : ''} ${d.del.length ? '−' + d.del.length : ''}</span></div>${rows.join('')}</div>`; };
   /** The run's target, never a fake "#0". */
-  UI.runTarget = (r) => (r.repo ? r.repo + (r.number ? '#' + r.number : '') : '—');
+  // UI.runTarget (what a run's event is about) comes from the connector's declared attributes: js/connattrs.js
   /** Audit lines that belong to this run, plus the record's own events. */
   UI.runAudit = (r) => { const rec = UI.runRecord(r), at = (ms) => new Date(new Date(r.started).getTime() + ms).toISOString();
     const own = D.audit.filter((a) => a.run === r.id || a.who === r.id || new RegExp('\\b' + r.id + '\\b').test(a.detail || ''));
-    const syn = [{ ts: r.started, event: 'run_started', who: r.id, detail: `${r.workflow} · ${r.trigger}${r.repo ? ' · ' + UI.runTarget(r) : ''}` }];
-    rec.steps.filter((s) => s.kind === 'verb' && s.status === 'ok').forEach((s) => syn.push({ ts: at(s.t0 + s.ms), event: 'verb', who: r.id, detail: `${s.what}${r.repo ? ' ' + UI.runTarget(r) : ''} · step ${s.id}` }));
+    const syn = [{ ts: r.started, event: 'run_started', who: r.id, detail: `${r.workflow} · ${r.trigger}${UI.runTarget(r) ? ' · ' + UI.runTarget(r) : ''}` }];
+    rec.steps.filter((s) => s.kind === 'verb' && s.status === 'ok').forEach((s) => syn.push({ ts: at(s.t0 + s.ms), event: 'verb', who: r.id, detail: `${s.what}${UI.runTarget(r) ? ' ' + UI.runTarget(r) : ''} · step ${s.id}` }));
     rec.steps.filter((s) => s.diff && s.status === 'ok').forEach((s) => syn.push({ ts: at(s.t0 + s.ms), event: 'agent_commit', who: r.id, detail: `step ${s.id} · ${s.diff.file}` }));
     if (r.status === 'ok' && r.finished) syn.push({ ts: r.finished, event: 'workflow_done', who: r.id, detail: `${r.workflow} · ${rec.steps.length} steps` });
     const seen = new Set(own.map((a) => a.event)); return own.concat(syn.filter((a) => !(a.event === 'workflow_failed' && seen.has(a.event)))).sort((a, b) => new Date(b.ts) - new Date(a.ts)); };

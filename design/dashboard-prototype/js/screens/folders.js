@@ -44,16 +44,12 @@
   };
   UI.folderCrumbs = (path, tail = '') => `<a href="#/bots">Bots</a>${path ? path.split('/').map((seg, i, a) => ` › <a href="#/folders/${enc(a.slice(0, i + 1).join('/'))}">${esc(seg)}</a>`).join('') : ''}${tail}`;
 
-  /* ---------- the folder filter, shared by Needs you, approvals, runs, browsers ---------- */
-  UI.folderScope = () => (D.prefs && D.prefs.folder) || '';
-  UI.folderChip = (extra = '') => { const f = UI.folderScope(); return UI.selectChip({ icon: 'folder', on: !!f, label: 'Folder filter', wrapAttrs: extra, attrs: 'data-on-change="folder-scope"', options: `<option value="">All folders</option>${UI.allFolders(false).map((x) => `<option value="${esc(x)}"${x === f ? ' selected' : ''}>${esc(x)}</option>`).join('')}` }); };
-  UI.act('folder-scope', (sel) => { D.prefs.folder = sel.value; S.save(); UI.rerender(); });
+  /* ---------- folder as a filter: one menu of the shared filter bar (Folder ▾, a searchable path list) where it helps ---------- */
   /** The bot an attention item, a run or a browser session belongs to, if any. */
   UI.botOfHref = (href) => { const m = String(href || '').match(/#\/bots\/([^/]+)/); if (m) return m[1]; const b = String(href || '').match(/#\/browser\/([^/]+)/); if (b) { const s = D.browsers.find((x) => x.id === b[1]); return s && s.identity.startsWith('bot:') ? s.identity.slice(4) : null; } return null; };
   UI.botOfRun = (r) => (r.workflow.startsWith('bot:') ? r.workflow.slice(4) : (D.workers.find((w) => w.run === r.id) || {}).bot || null);
-  UI.scopeKeeps = (bot) => { const f = UI.folderScope(); return !f || (bot && UI.inFolder(bot, f)); };
-  UI.scopeNote = (hidden) => { const f = UI.folderScope(); return f ? `<div class="scope-note small">${icon('folder')} Showing <b>${esc(f)}</b>${hidden ? ` · ${hidden} item${hidden > 1 ? 's' : ''} not tied to a bot there are hidden` : ''} · <button class="link" data-act="folder-clear">show all</button></div>` : ''; };
-  UI.act('folder-clear', () => { D.prefs.folder = ''; S.save(); UI.rerender(); });
+  /** Whether an item tied to a bot (or to none) is in a folder: an empty folder keeps everything. */
+  UI.scopeKeeps = (bot, f) => !f || !!(bot && UI.inFolder(bot, f));
 
   /* ---------- the tree ---------- */
   const pendingOf = (b) => D.proposals.filter((p) => p.bot === b && p.status === 'pending' && UI.live(p)).length;

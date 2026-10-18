@@ -7,22 +7,30 @@
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + 's'}`;
 
   /* ---------- needs you: the mock's list (mark · title, why, detail · age · one verb) ---------- */
-  const VERB = { approval: 'Review', failed: 'Open', needs_input: 'Answer', browser: 'Open' };
+  // the verb is the first thing you'll do on the page it opens, the same for every item of a kind: review an approval,
+  // answer a question, approve a sign-in, see why a run failed, fix a connection, resume automation
+  const VERB = { approval: 'Review', failed: 'See why', needs_input: 'Answer', browser: 'Approve', connection: 'Fix it', paused: 'Resume', update: 'Review' };
   // everything here waits on a person, so it all takes the needs-you mark; only a failure has its own
   const MARK = { approval: 'ember', failed: 'fail', needs_input: 'ember', browser: 'ember' };
-  // the first item's action is the view's one primary button; the rest are secondary
-  const needItem = (a, i = 1) => { const verb = a.verb || VERB[a.kind] || 'Open', s = MARK[a.kind] || a.s;
+  // the rows of a list are peers: every row's action looks the same, in a fixed-width column so the times and the
+  // buttons line up; what's more urgent says so with its mark and its place in the list, never with a louder button
+  const needItem = (a) => { const verb = VERB[a.kind] || a.verb || 'Open', s = MARK[a.kind] || a.s;
     return `<li class="dl-need" data-s="${s}"><a class="dl-need-a" href="${a.href}"><span class="dl-ng">${UI.mark(s, { lg: true, label: true })}</span>
       <span class="dl-nt"><b>${esc(a.plain || a.title)}</b>${a.why ? `<span class="dl-why">${esc(a.why)}</span>` : ''}<span class="dl-tech mono">${esc(a.plain ? a.title : a.sub)}</span></span>
-      <span class="dl-age">${UI.ageText(a.age)}</span><span class="dl-na"><span class="btn sm ${i === 0 ? 'primary' : 'secondary'}">${verb}</span></span></a></li>`; };
+      <span class="dl-age">${UI.ageText(a.age)}</span><span class="dl-na"><span class="btn sm secondary">${verb}</span></span></a></li>`; };
   UI.needItem = needItem;
-  UI.attentionList = (limit) => {
-    const items = D.attention.filter((a) => UI.scopeKeeps(UI.botOfHref(a.href)));
-    const note = UI.scopeNote(D.attention.length - items.length);
+  /** The kinds of thing that wait on a person, one vocabulary for Home's tile, Needs you's breakdown and its Kind menu:
+      [kind, one, many, icon]. */
+  UI.NEED_KINDS = [['approval', 'approval', 'approvals', 'hand'], ['failed', 'failed run', 'failed runs', 'x'], ['needs_input', 'question', 'questions', 'message'], ['browser', 'sign-in', 'sign-ins', 'login'], ['connection', 'connection', 'connections', 'obj-connector'], ['update', 'update', 'updates', 'obj-update'], ['paused', 'pause', 'pauses', 'pause']];
+  /** "3 approvals · 1 failed run": each count kept with its noun (a no-break space), so a wrap never orphans a number. */
+  UI.needBreakdown = (items) => UI.NEED_KINDS.map(([k, one, many]) => [items.filter((a) => a.kind === k).length, one, many]).filter(([n]) => n).map(([n, one, many]) => `${n}\u00a0${n === 1 ? one : many}`).join(' · ');
+  UI.attentionList = (limit, list, note = '') => {
+    const items = list || D.attention;
+    if (!items.length && list && D.attention.length) return note;
     if (!items.length) return note + UI.empty({ title: 'Nothing needs you', body: 'When a bot asks for approval or a run fails, it shows up here.', action: location.hash.startsWith('#/attention') ? '' : '<a class="btn sm secondary" href="#/preferences">Choose how you’re told</a>', small: true });
     // a long list folds: the first few, then "N more need you" (Needs you itself pages by 20)
     const cap = limit || 20, more = items.length - cap;
-    return note + `<ul class="dl-list dl-needs">${items.slice(0, cap).map((a, i) => needItem(a, i)).join('')}</ul>${more > 0 ? `<p class="dl-foot-note dl-more"><a class="dl-link" href="#/attention${limit ? '' : '?all=1'}">${more} more need${more === 1 ? 's' : ''} you →</a></p>` : ''}`;
+    return note + `<ul class="dl-list dl-needs">${items.slice(0, cap).map((a) => needItem(a)).join('')}</ul>${more > 0 ? `<p class="dl-foot-note dl-more"><a class="dl-link" href="#/attention${limit ? '' : '?all=1'}">${more} more need${more === 1 ? 's' : ''} you →</a></p>` : ''}`;
   };
   UI.bindApprove = (root) => UI.bind(root, '[data-approve]', 'click', (e, el) => {
     e.preventDefault(); e.stopPropagation();
@@ -61,7 +69,7 @@
     const live = D.runs.filter((r) => r.status === 'run').sort((x, y) => new Date(x.started) - new Date(y.started)), top = live.slice(0, 3), more = live.length - top.length;
     if (!live.length) return '';
     return `<section class="dl-card dl-running"><header class="dl-ch"><h2>Running now</h2><span class="dl-sub">${live.length}</span></header>
-      <ul class="dl-list">${top.map((r) => `<li><a class="dl-row-a" href="#/runs/${r.id}"><span class="dl-ng">${UI.mark('run', { lg: true, label: 'Running' })}</span><span class="dl-nt"><b>${esc(UI.runTitle(r))}</b><span class="dl-why">${r.workflow.startsWith('bot:') ? (r.repo ? UI.runTarget(r) : /spawn/.test(r.trigger) ? 'a task it started itself' : /sweep/.test(r.trigger) ? 'its routine sweep' : 'its own work') : `${esc(r.workflow)} · ${r.repo ? UI.runTarget(r) : esc(r.trigger)}`}</span></span><span class="dl-age">${UI.runningFor(r.started)}</span></a></li>`).join('')}</ul>
+      <ul class="dl-list">${top.map((r) => `<li><a class="dl-row-a" href="#/runs/${r.id}"><span class="dl-ng">${UI.mark('run', { lg: true, label: 'Running' })}</span><span class="dl-nt"><b>${esc(UI.runTitle(r))}</b><span class="dl-why">${r.workflow.startsWith('bot:') ? (UI.runTarget(r) ? esc(UI.runTarget(r)) : /spawn/.test(r.trigger) ? 'a task it started itself' : /sweep/.test(r.trigger) ? 'its routine sweep' : 'its own work') : `${esc(r.workflow)} · ${UI.runTarget(r) ? esc(UI.runTarget(r)) : esc(r.trigger)}`}</span></span><span class="dl-age">${UI.runningFor(r.started)}</span></a></li>`).join('')}</ul>
       ${more > 0 ? `<a class="dl-link dl-more" href="#/activity?status=run">+${more} more running →</a>` : ''}</section>`;
   }
 
@@ -84,7 +92,7 @@
   function getStarted() { if (D.prefs.gsHidden) return ''; const st = gsSteps(), left = st.filter((x) => !x.done), done = st.filter((x) => x.done);
     if (!left.length) return '';
     return `<section class="dl-card dl-gs"><header class="dl-ch"><h2>Get started</h2><span class="dl-sub">${done.length} of ${st.length} done</span><span class="dl-sp"></span><button class="btn sm ghost" data-act="gs-hide">Hide</button></header>
-      <ul class="dl-list">${left.map((x, i) => `<li class="dl-gs-step" data-gs="${x.id}"><div class="dl-nt"><b>${x.title}</b><span class="dl-why">${x.text}</span></div><a class="btn sm ${i === 0 ? 'primary' : 'secondary'}" href="${x.href}">${x.go}</a></li>`).join('')}</ul>
+      <ul class="dl-list">${left.map((x) => `<li class="dl-gs-step" data-gs="${x.id}"><div class="dl-nt"><b>${x.title}</b><span class="dl-why">${x.text}</span></div><a class="btn sm secondary" href="${x.href}">${x.go}</a></li>`).join('')}</ul>
       ${done.length ? `<p class="dl-gs-done">${UI.mark('ok')}Done: ${done.map((x) => x.title).join(' · ')}</p>` : ''}</section>`; }
   UI.act('gs-hide', () => { D.prefs.gsHidden = true; S.save(); UI.rerender(); UI.toast('Get started hidden', 'Bring it back from your menu, top right: Show Get started.', 'ok', { label: 'Undo', fn: () => { D.prefs.gsHidden = false; S.save(); UI.rerender(); } }); });
   UI.act('gs-show', () => { D.prefs.gsHidden = false; S.save(); UI.rerender(); });
@@ -95,15 +103,14 @@
   // by kind; every run in the last 12 hours is in one of its parts
   function glance() {
     const running = D.runs.filter((r) => r.status === 'run'), w = window12(), A = D.attention;
-    const KIND = [['approval', 'approval'], ['failed', 'failed run'], ['needs_input', 'question'], ['browser', 'sign-in']];
-    const needs = KIND.map(([k, word]) => [A.filter((a) => a.kind === k).length, word]).filter(([n]) => n).map(([n, word]) => plural(n, word)).join(' · ');
-    const tile = (href, l, v, d, hot) => `<a class="dl-tile${hot ? ' hot' : ''}" href="${href}"><span class="dl-lbl">${l}</span><b>${v}</b><span class="d">${d}</span></a>`;
-    return `<section class="dl-glance" aria-label="At a glance">
-      ${tile('#/attention', 'Needs you', A.length, needs || 'nothing', A.length > 0)}
-      ${tile('#/activity?status=run', 'Running', running.length, running.length ? `longest ${UI.runningFor(Math.min(...running.map((r) => new Date(r.started))))}` : 'nothing right now')}
-      ${tile('#/activity?since=720', 'Runs, last 12 h', w.total, UI.runParts(w.runs) || 'none')}
-      ${tile('#/bots', 'Bots', D.bots.length, `${D.bots.filter((m) => m.home === 'live').length} working now`)}
-    </section>`;
+    const needs = UI.needBreakdown(A);
+    const tile = (href, label, value, detail, hot) => UI.statTile({ href, label, value, detail, hot });
+    return UI.glance([
+      tile('#/attention', 'Needs you', A.length, needs || 'nothing', A.length > 0),
+      tile('#/activity?status=run', 'Running', running.length, running.length ? `longest ${UI.runningFor(Math.min(...running.map((r) => new Date(r.started))))}` : 'nothing right now'),
+      tile('#/activity?since=720', 'Runs, last 12 h', w.total, UI.runParts(w.runs) || 'none'),
+      tile('#/bots', 'Bots', D.bots.length, `${D.bots.filter((m) => m.home === 'live').length} working now`),
+    ]);
   }
 
   UI.route('overview', () => {
