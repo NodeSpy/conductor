@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="">
+<script>
+/* Theme, before first paint. An explicit choice (?theme=light|dark, the toggle, or one saved earlier) always
+   wins over the OS, for every surface and text colour; ?theme=auto clears it. With no explicit choice the page
+   follows the OS (prefers-color-scheme), live. Exactly one theme is ever applied: all tokens come from
+   [data-theme], and no stylesheet reads prefers-color-scheme. ?sim=ios is a test-only iPhone emulation. */
+(function () {
+  var q = new URLSearchParams(location.search), t = q.get('theme'), saved = null;
+  
+  var explicit = t === 'light' || t === 'dark' ? t : saved === 'light' || saved === 'dark' ? saved : null;
+  var mq = window.matchMedia ? matchMedia('(prefers-color-scheme: dark)') : null;
+  var apply = function (th, src) { var h = document.documentElement; h.dataset.theme = th; h.dataset.themeSource = src; };
+  apply(explicit || (mq && !mq.matches ? 'light' : 'dark'), explicit ? 'explicit' : 'os');
+  if (mq && mq.addEventListener) mq.addEventListener('change', function (e) { if (document.documentElement.dataset.themeSource === 'os') { apply(e.matches ? 'dark' : 'light', 'os'); if (window.UI && UI.themeIcon) UI.themeIcon(); } });
+  if (q.get('sim') === 'ios') { document.documentElement.classList.add('sim-ios'); try { sessionStorage.setItem('cd-sim', 'ios'); } catch (e) {} }
+  else { try { if (sessionStorage.getItem('cd-sim') === 'ios') document.documentElement.classList.add('sim-ios'); } catch (e) {} }
+})();
+</script>
+<title>conductor · browse options (frame)</title>
+<link rel="icon" href="assets/logo/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/logo/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="assets/logo/apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="preload" href="fonts/AtkinsonNext.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/Fraunces.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="fonts/fonts.css?v=202610181215">
+<link rel="stylesheet" href="css/tokens.css?v=202610181215">
+<link rel="stylesheet" href="css/app.css?v=202610181215">
+<link rel="stylesheet" href="css/marks.css?v=202610181215">
+<link rel="stylesheet" href="css/screens.css?v=202610181215">
+<link rel="stylesheet" href="css/interact.css?v=202610181215">
+<link rel="stylesheet" href="css/builder.css?v=202610181215">
+<link rel="stylesheet" href="css/components.css?v=202610181215">
+<link rel="stylesheet" href="css/daylight.css?v=202610181215">
+<link rel="stylesheet" href="css/filter.css?v=202610181215">
+</head>
+<body>
+<noscript>This prototype needs JavaScript.</noscript>
+<script src="assets/logo/logo.js?v=202610181215"></script>
+<script src="js/icons.js?v=202610181215"></script>
+<script src="js/yaml.js?v=202610181215"></script>
+<script src="js/data.js?v=202610181215"></script>
+<script src="js/scenario.js?v=202610181215"></script>
+<script src="js/schema.js?v=202610181215"></script>
+<script src="js/realschema.js?v=202610181215"></script>
+<script src="js/store.js?v=202610181215"></script>
+<script src="js/ui.js?v=202610181215"></script>
+<script src="js/filter.js?v=202610181215"></script>
+  <script src="js/glossary.js?v=202610181215"></script>
+<script src="js/usage.js?v=202610181215"></script>
+  <script src="js/runrec.js?v=202610181215"></script>
+<script src="js/wf.js?v=202610181215"></script>
+<script src="js/connattrs.js?v=202610181215"></script>
+<script src="js/screens/overview.js?v=202610181215"></script>
+<script src="js/screens/runs.js?v=202610181215"></script>
+<script src="js/screens/repo.js?v=202610181215"></script>
+<script src="js/screens/botwizard.js?v=202610181215"></script>
+  <script src="js/screens/bots.js?v=202610181215"></script>
+<script src="js/screens/folders.js?v=202610181215"></script>
+<script src="js/create.js?v=202610181215"></script>
+<script src="js/valuesource.js?v=202610181215"></script>
+<script src="js/screens/browser.js?v=202610181215"></script>
+<script src="js/screens/logins.js?v=202610181215"></script>
+<script src="js/screens/builder.js?v=202610181215"></script>
+<script src="js/screens/config.js?v=202610181215"></script>
+<script src="js/screens/secrets.js?v=202610181215"></script>
+  <script src="js/screens/env.js?v=202610181215"></script>
+<script src="js/screens/system.js?v=202610181215"></script>
+  <script src="js/screens/connect.js?v=202610181215"></script>
+<script src="js/screens/catalog.js?v=202610181215"></script>
+<script src="js/screens/access.js?v=202610181215"></script>
+  <script src="js/palette.js?v=202610181215"></script>
+<script src="js/options.js?v=202610181215"></script>
+<script>OPT.render();</script>
+</body>
+</html>
