@@ -1,7 +1,7 @@
 // Add a login: three methods, each ending in a binding and the diff;
 // Test login; the Logins tab; inline "+ Add a login" in credential pickers.
 // No secret value ever reaches the DOM or the saved state.
-const { test, expect, go, isPhone, applyStaged } = require('./fixtures');
+const { test, expect, go, isPhone, applyStaged, headAction } = require('./fixtures');
 
 const PASSWORD = 'hunter2-Very-Secret';
 const SEED = 'JBSWY3DPEHPK3PXP';
@@ -112,7 +112,7 @@ test('Logins tab: usage history, edit binding and revoke, all through the diff',
 
 test('"+ Add a login" inside a credential picker: typed password stored, login staged with the parent', async ({ page }) => {
   await go(page, '#/teams/platform/defaults', { fresh: true });
-  await page.locator('[data-act="team-edit"]').first().click();
+  await headAction(page, '[data-act="team-edit"]');
   await page.locator('[data-listk="credentials"] select').selectOption('__new__');
   await expect(page.locator('.cdrawer')).toContainText('Add a login');
   await page.fill('#d-name', 'runbooks');

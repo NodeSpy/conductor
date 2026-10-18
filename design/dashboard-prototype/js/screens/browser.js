@@ -23,10 +23,10 @@
       <a class="panel btile" href="#/browser/${b.id}">
         <div class="thumb"><div class="mini" style="height:238%">${SITES[b.id]()}</div>${b.status === 'wait' ? `<span class="ctrl-banner wait">${icon('hold')}Waiting on you</span>` : ''}</div>
         <div class="panel-body stack tight">
-          <div class="row">${st(b.status === 'wait' ? 'ember' : b.status, b.status === 'run' ? 'Running' : b.status === 'wait' ? 'Needs you' : 'Parked')}<span class="mono tiny muted" style="margin-left:auto">${b.id} · ${b.actions} actions</span></div>
+          <div class="row">${st(b.status === 'wait' ? 'ember' : b.status, b.status === 'run' ? 'Running' : b.status === 'wait' ? 'Needs you' : 'Parked')}<span class="dl-sub" style="margin-left:auto">${b.actions} action${b.actions === 1 ? '' : 's'}</span></div>
           <div class="ellipsis" style="font-weight:600">${esc(b.title)}</div>
-          <div class="mono tiny muted ellipsis">${b.url}</div>
-          <div class="row wrap" style="gap:5px">${tag(b.identity)}${b.loggedIn ? tag(icon('cookie') + ' logged in', 'wait') : tag('anonymous', 'ok')}</div>
+          <div class="dl-sub ellipsis">${esc(String(b.url).replace(/^https?:\/\//, ''))}</div>
+          ${UI.factsLine([{ icon: 'obj-bot', value: String(b.identity).replace(/^(bot|agent):/, '').replace(/@.*/, (x) => ` (${x.slice(1)})`), pri: 1, label: 'Signs in as' }, { icon: b.loggedIn ? 'cookie' : 'eyeoff', value: b.loggedIn ? 'Signed in' : 'Not signed in', pri: 2, label: 'Session' }])}
         </div></a>`).join('')}
     </div>
     <details class="panel dl-files-d ident-d"><summary class="panel-head"><h3>Settings per identity</h3><span class="muted small">which sites each may reach, its logins and credentials (browser.* in config)</span></summary><table class="tbl responsive"><thead><tr><th>identity</th><th>allowlist</th><th>logged-in sites</th><th>credentials</th><th>evaluate</th><th></th></tr></thead><tbody>

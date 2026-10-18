@@ -1,7 +1,7 @@
 // Round 2 of the adversarial reviews, as code: each finding that was fixed has a check here, so a later pass can't
 // quietly undo it. Blockers first (truth and safety), then the majors. IDs are the reviewers' (bugs B/M, brand B/M,
 // newcomer N, power N).
-const { test, expect, go, isPhone } = require('./fixtures');
+const { test, expect, go, isPhone, headAction } = require('./fixtures');
 
 test('one source for the last 12 hours: Home\'s tile, its failures and Activity agree, and the parts add up (bugs B5, power N8)', async ({ page }) => {
   await go(page, '#/overview', { fresh: true });
@@ -88,7 +88,7 @@ test('the approval names who can approve, from the bot\'s operators (power N14)'
 test('the review check counts what changed: a one-field team edit is one node, and nothing else moves (power N2/N3)', async ({ page }) => {
   test.skip(isPhone(page), 'desktop form');
   await go(page, '#/teams/platform', { fresh: true });
-  await page.locator('[data-act="team-edit"]').first().click();
+  await headAction(page, '[data-act="team-edit"]');
   await page.locator('.modal button[data-v="observe"]').first().click();
   await page.locator('.modal .modal-foot .btn.primary').click();
   await page.waitForURL(/#\/config\/apply/);

@@ -700,8 +700,8 @@ td.run .fx { margin-top: 4px; }
   .dl-bothead .dl-lead { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; } .dl-bothead .bot-working { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .dl-bothead .dl-lead { font: var(--type-body-s); }
   .dl-actions .ph-hide { display: none; }
-  .dl-actions:has(> .btn:not(.ph-hide) ~ .btn:not(.ph-hide) ~ .btn:not(.ph-hide)) { flex-direction: column; align-items: stretch; }
-  .dl-actions:has(> .btn:not(.ph-hide) ~ .btn:not(.ph-hide) ~ .btn:not(.ph-hide)) > .btn { width: 100%; }
+  .dl-actions:not(.tight):has(> .btn:not(.ph-hide) ~ .btn:not(.ph-hide) ~ .btn:not(.ph-hide)) { flex-direction: column; align-items: stretch; }
+  .dl-actions:not(.tight):has(> .btn:not(.ph-hide) ~ .btn:not(.ph-hide) ~ .btn:not(.ph-hide)) > .btn { width: 100%; }
 }
 
 /* ===== phone: every control is a 44px target (Apple's minimum). Buttons grow to it; a switch keeps its look and

@@ -102,3 +102,14 @@ test('phone: a full-height chat with the composer pinned in view', async ({ page
   expect(r.h).toBeGreaterThan(r.vh * 0.6);
   expect(r.compBottom).toBeLessThanOrEqual(r.barTop + 1);
 });
+
+test('the chat card is exactly as tall as its conversation: no empty block above or below, short or long', async ({ page }) => {
+  for (const bot of ['billing-sre', 'platform-sre']) {
+    await go(page, `#/bots/${bot}/chat`, { fresh: true });
+    const r = await page.evaluate(() => { const c = document.querySelector('.chat'), kids = [...c.children].filter((k) => getComputedStyle(k).position !== 'absolute' && k.offsetHeight);
+      const t = document.querySelector('#msgs'), rows = [...t.children], first = rows[0].getBoundingClientRect().top - t.getBoundingClientRect().top;
+      return { card: c.getBoundingClientRect().height, sum: kids.reduce((a, k) => a + k.getBoundingClientRect().height, 0) + 2, first: Math.round(first - parseFloat(getComputedStyle(t).paddingTop)) }; });
+    expect(Math.abs(r.card - r.sum), `${bot}: card ${r.card} vs content ${r.sum}`).toBeLessThanOrEqual(3);
+    if (bot === 'billing-sre') expect(r.first, 'a short thread starts at the top of the card').toBeLessThanOrEqual(2);
+  }
+});

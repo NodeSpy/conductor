@@ -88,7 +88,7 @@ test('every entity picker has a create option', async ({ page }) => {
   };
   const close = () => page.keyboard.press('Escape');
   await go(page, '#/teams/platform'); await audit('team page');
-  await page.locator('[data-act="team-edit"]').first().click(); await audit('team form'); await close();
+  await headAction(page, '[data-act="team-edit"]'); await audit('team form'); await close();
   await go(page, '#/members'); await go(page, '#/bots'); await headAction(page, '[data-act="team-new"]'); await audit('new team'); await close();
   await go(page, '#/teams/platform/routing'); await page.locator('[data-act="rule-edit"][data-i="-1"]').click(); await audit('routing rule'); await close();
   await go(page, '#/bots/release-scribe/settings'); await audit('bot definition');

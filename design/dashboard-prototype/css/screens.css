@@ -117,10 +117,9 @@ svg.hello-art { width: 132px; height: auto; flex: none; align-self: flex-start; 
 .bot-card:hover { border-color: var(--color-border-strong); }
 .bot-card h3 { margin: 0; font: var(--type-h3); }
 /* the bot chat (js/chat.js): a normal chat scroller, newest at the bottom; a short thread sits against the composer */
-.chat { position: relative; display: flex; flex-direction: column; max-height: max(460px, calc(var(--dvh) - 300px)); } /* as tall as the conversation, up to the screen: never an empty block */
+.chat { position: relative; } .chat-grid { align-items: start; } /* as tall as the conversation; the thread scrolls once it reaches the screen: never an empty block */
 .cm-head { flex-wrap: wrap; gap: var(--space-1) var(--space-3); } .cm-head .cm-rule { flex: 1; min-width: 12ch; } .cm-head .btn svg { width: 14px; height: 14px; }
-.cm-thread { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: var(--space-4) var(--pad-card); display: flex; flex-direction: column; gap: var(--space-4); }
-.cm-thread > :first-child { margin-top: auto; }
+.cm-thread { max-height: max(320px, calc(var(--dvh) - 440px)); min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: var(--space-4) var(--pad-card); display: flex; flex-direction: column; gap: var(--space-4); }
 .cm-empty { text-align: center; margin: auto 0 0; }
 .cm-row { max-width: 78%; }
 .cm-meta { display: flex; gap: var(--space-2); align-items: baseline; font: var(--type-caption); color: var(--color-text-secondary); margin-bottom: var(--space-1); flex-wrap: wrap; font-variant-numeric: tabular-nums; }
@@ -191,7 +190,7 @@ svg.hello-art { width: 132px; height: auto; flex: none; align-self: flex-start; 
 @media (max-width: 720px) {
   /* a full-height chat: the thread scrolls, the composer stays pinned above the tab bar and the safe area */
   .chat-grid { display: flex; flex-direction: column; }
-  .chat { max-height: calc(var(--dvh) - 136px - var(--sab)); border-radius: var(--radius-card); }
+  .chat { border-radius: var(--radius-card); } .chat .cm-thread { max-height: calc(var(--dvh) - 290px - var(--sab)); }
   .cm-thread { padding: var(--space-3); } .cm-row { max-width: 92%; } .cm-tools { margin-left: 0; max-width: 100%; }
   .cm-bot { grid-template-columns: 28px minmax(0, 1fr); gap: var(--space-2); } .cm-bot .dl-bot-av.sm { width: 28px; height: 28px; font-size: var(--type-caption-size); }
   .cm-head .cm-rule { display: none; }
@@ -295,8 +294,6 @@ svg.gate-art { position: absolute; width: min(560px, 90vw); height: auto; right:
   .lane-name { font-size: var(--type-caption-size); }
   .lane-axis span:nth-child(2), .lane-axis span:nth-child(4) { display: none; }
   .glance .stat .v { font-size: 1.375rem; }
-  .chat { height: calc(var(--dvh) - 300px); min-height: 0; }
-  .msg { max-width: 92%; }
   .bot-hero { gap: var(--space-3); margin-bottom: var(--space-3); }
   .bot-hero h1 { font-size: 1.875rem; }
   .bot-hero .sigil.lg { width: 40px; height: 40px; font-size: 1.125rem; }
@@ -553,7 +550,7 @@ tr.folded { display: none; }
 .tk-ht { display: flex; gap: var(--space-3); align-items: center; } .tk-ht .case-title { margin: 0; font: var(--type-h3); font-size: var(--type-h2-size); letter-spacing: normal; font-variation-settings: normal; } /* a ticket's title is a sentence: sans, like any long title */
 .tk-head .case-state, .tk-head .case-route { margin: 0; }
 .tk-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.tk-chat { max-height: calc(var(--dvh) - 160px); }
+.tk-chat .cm-thread { max-height: max(320px, calc(var(--dvh) - 320px)); }
 .tk-chat .cm-thread { min-height: 120px; }
 .tk-fields { display: grid; padding: 0 var(--pad-card) var(--space-3); }
 .tk-f { display: grid; grid-template-columns: 9.5em minmax(0, 1fr); gap: var(--space-2); align-items: center; padding: var(--space-1_5) 0; border-top: var(--border-width) solid var(--color-border-subtle); }

@@ -1,7 +1,7 @@
 // usage.mode: off by default (no usage or spend UI anywhere, screens still
 // complete); subscription and api show figures per provider, never a total
 // across providers; plan limits and tokens only from a configured usage source.
-const { test, expect, go, applyStaged } = require('./fixtures');
+const { test, expect, go, applyStaged, headAction } = require('./fixtures');
 
 const ROUTES = ['#/overview', '#/runs', '#/runs/r-7f2c', '#/workflows', '#/bots', '#/teams/platform', '#/bots/platform-sre', '#/bots/platform-sre/workers'];
 // the display mode is a browser preference; the source is config
@@ -54,7 +54,7 @@ test('default is off: no usage or cost UI on any screen, and the screens are sti
   await expect(page.locator('[data-cloud-spend]').first()).toBeVisible();
   // budget forms keep run/turn/token caps, no dollar fields
   await go(page, '#/teams/platform/defaults');
-  await page.locator('[data-act="team-edit"]').first().click();
+  await headAction(page, '[data-act="team-edit"]');
   await expect(page.locator('#f-pool_turns')).toBeVisible();
   await expect(page.locator('#f-pool_tokens')).toBeVisible();
   await expect(page.locator('#f-pool_cost')).toBeHidden();
@@ -115,7 +115,7 @@ test('api mode: dollars per provider, never added together; dollar budget fields
   await expect(page.locator('#main')).not.toContainText('$' + sum);
   for (const r of ROUTES) { await go(page, r); expect(await crossProviderFigures(page), r).toEqual([]); }
   await go(page, '#/teams/platform/defaults');
-  await page.locator('[data-act="team-edit"]').first().click();
+  await headAction(page, '[data-act="team-edit"]');
   await expect(page.locator('#f-pool_cost')).toBeVisible();
 });
 
