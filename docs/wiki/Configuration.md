@@ -46,8 +46,8 @@ in a config.
 | `usage:` | what reports show of model usage: `mode: off` (default) \| `subscription` (observed units per runtime/model) \| `api` (+ dollars); optional `sources:` for plan-window data. Display only — caps enforce in every mode | [[Cost-Accounting]] |
 | `vaults:` | named secret stores (`conductor`/`onepassword`/`pass`/`file`/`hashicorp`), read as `{{ vault "<name>" "<key>" }}` with per-vault read/write verbs | [[Secrets]] |
 | `operators:` | the humans who approve bot proposals: `ssh_key` (approvals are SSH-signed), `aliases` (chat ids that are this operator) | [[Bots]] |
-| `bots:` | persistent conversational agents: charter, memory repo, home session (paseo), workers (cli), opt-in `proactive:` sweeps, `peers:`, `team:`, skill grant, `autonomy:` tiers / promotion / shadow / spend cap | [[Bots]] |
-| `teams:` | groups of bots: ceilings bots inherit and can only narrow (operators, autonomy, budgets with a proactive pool, isolation, credentials, browser logins), intra-team peering, a shared `knowledge:` repo, `routing:` (rules, lead, fallback) | [[Bots#teams]] |
+| `bots:` | persistent conversational agents: charter, memory repo, home session (paseo), workers (cli), opt-in `proactive:` sweeps, `peers:`, `team:`, skill grant, `autonomy:` tiers / promotion / shadow / spend cap, `memory:` limits (the prompt's index budget, read and recall sizes, per-kind document caps, archiving) | [[Bots]] · [[Bots#size-limits]] |
+| `teams:` | groups of bots: ceilings bots inherit and can only narrow (operators, autonomy, budgets with a proactive pool, isolation, credentials, browser logins), intra-team peering, a shared `knowledge:` repo (with the same index, read and cap limits), `routing:` (rules, lead, fallback) | [[Bots#teams]] |
 | `checks:` | named quality-gate checks (command / code / verb / critic agent) that `gate: run:` lists reference | [[Gates]] |
 | `pricing:` | model→$ overrides for cost estimation (`models:` glob patterns, `default:`) | [[Cost-Accounting]] |
 | `imports:` | split the config across files (globs, deep-merged) | below |

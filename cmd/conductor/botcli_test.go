@@ -135,3 +135,33 @@ func TestBotRepoEditNeedsABase(t *testing.T) {
 		t.Errorf("usage: %v", err)
 	}
 }
+
+// A session reads memory as text: a recall's ranked list, a read's
+// truncation note BEFORE the text and its sections after, an index as is.
+func TestBotMemoryPlainText(t *testing.T) {
+	for _, c := range []struct {
+		sub  string
+		pos  []string
+		want string
+	}{{"recall", nil, "recall"}, {"read", nil, "read"}, {"index", nil, "index"}, {"team", []string{"recall", "x"}, "recall"},
+		{"team", []string{"promote"}, ""}, {"cases", nil, ""}} {
+		if got := memView(c.sub, c.pos); got != c.want {
+			t.Errorf("memView(%s %v) = %q, want %q", c.sub, c.pos, got, c.want)
+		}
+	}
+	out, _ := captureStdout(t, func() error {
+		printMem("read", map[string]any{"path": "knowledge/n.md", "bytes": 300, "text": "## A\nbody", "note": "TRUNCATED: read on with --offset 9.",
+			"sections": []any{"A", "B"}})
+		return nil
+	})
+	if !strings.HasPrefix(out, "== knowledge/n.md (300 bytes) ==\nTRUNCATED") || !strings.Contains(out, "## A\nbody\n== sections: A | B ==") {
+		t.Fatalf("read:\n%s", out)
+	}
+	out, _ = captureStdout(t, func() error {
+		printMem("recall", map[string]any{"hits": []any{map[string]any{"path": "log/x.md", "kind": "log", "title": "T", "snippet": "…s…", "archived": "abc123"}}, "note": "Best match first."})
+		return nil
+	})
+	if !strings.Contains(out, "1. log/x.md (log) [archived abc123] — T\n   …s…\nBest match first.") {
+		t.Fatalf("recall:\n%s", out)
+	}
+}

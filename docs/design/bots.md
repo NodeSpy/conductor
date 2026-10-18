@@ -304,10 +304,78 @@ proposal, system), the named kind, and the frontmatter schema.
   gives each its own frontmatter, history and revert, and the chokepoint stays
   one rule per file.
 - **Migration** never deletes. `episodes/` is the log's legacy home, still
-  read, searched and consolidated. A seed copies only valid documents (the
+  read, recalled and consolidated. A seed copies only valid documents (the
   rest go into `SeedSkipped`). `Repo.Inventory` classifies every file (`ok`,
   `invalid`, `legacy`, `unmapped`); conductor reports it at start and `ls`
   shows it.
+
+## Reading memory: index, recall, parts, caps
+
+`internal/bot/memindex.go`, `memread.go`, `memops.go`, `archive.go`,
+`internal/config/memlimits.go`. Storage did not change — typed Markdown in
+git stays what an operator reads, reviews and reverts, and what promotion
+copies. What changed is how a session reads it: the old first prompt said
+"read README.md and knowledge/", recall was a substring match returning the
+first 20 lines, and the log and the handoff grew without bound. Measured on a
+synthetic repo of 500 knowledge documents, 100 runbooks and 2,000 episodes
+(`TestSessionStartPromptStaysUnderBudget`), a session start went from the
+prompt plus everything it was told to read (~725k characters, ~180k tokens)
+to a prompt of ~17k characters (~4.3k tokens) with the index at its 6000-byte
+budget and a full handoff.
+
+- **The index is derived, and lives outside the repo.** One SQLite database
+  per repo under the state dir (`config.BotIndexPath` / `TeamIndexPath`):
+  `docs` (path, archive commit, kind, title, scope, summary, size, last commit
+  time) and an FTS5 table (title, scope, summary field, other fields, body;
+  porter stemming). `meta` holds the commit it reflects and a signature of the
+  kinds. `SyncIndex` catches up with `git diff-tree` from that commit, reading
+  content with one `git cat-file --batch` at the target commit — never the
+  working tree, so a write in flight cannot tear it. A missing, unreadable or
+  non-ancestor commit, or a kinds change, rebuilds it. It runs after each
+  commit conductor makes (`indexCommitLocked`, best effort) and before every
+  query, so a hand commit is never missed. modernc's SQLite is pure Go and
+  already a dependency; FTS5 is compiled in, and the build stays CGO-free.
+- **Ranking.** BM25 with column weights 20 (title) / 10 (scope: `applies_to`,
+  `when_to_use`, a log's case or sweep, a digest's period and cases) / 6 (an
+  explicit `summary` field) / 2 (other fields) / 1 (body). A summary that falls
+  back to the body's first sentence is shown in the index but not searched with
+  the summary's weight — it is body text already, and weighting it let a body
+  that repeats a word outrank a title. All-words matches come before
+  any-word matches. Query words are extracted and each quoted, so no FTS5
+  syntax reaches `MATCH`.
+- **The prompt's index** (`renderIndex`) is pure: entries (everything live
+  but the log), the query's ranked paths, a budget. It writes lines while the
+  line, the footer for what would remain, and the log-count tail still fit,
+  then the footer; the result is cut to the budget regardless. Relevance comes
+  from the session's purpose: a worker's case and brief, a sweep's checklist, a
+  home session's open cases; the rest is newest first.
+- **Reads** cut at `read_max` on a line when that keeps at least half, never
+  inside a rune, and report the next offset; offsets reassemble the document
+  exactly. Sections follow ATX headings outside fenced code.
+- **Caps** are one more rule in `Kinds.CheckWrite` (`ContentKind.CheckSize`),
+  applied to every writer but `system`: conductor's log entries and handoffs
+  are bounded where they are composed, and a refusal there would lose a
+  worker's result. The handoff cap is on the session's text
+  (`Service.Handoff`); the episode cap on one entry (`Service.Episode`); a
+  prompt carries at most the handoff cap of a note edited by hand
+  (`capHandoff`).
+- **Consolidation and the archive.** A worker's `Consolidates` records the
+  log entries it was given with their git blobs; the bot record's
+  `ConsolidatedDocs` gains them only when it finishes done and a commit with
+  its `Bot-Dispatch` trailer touched `digests/`. `archivable` picks entries
+  whose case is not open (and sweep logs of past days); `Repo.ArchiveIf`
+  re-checks every blob under the repo lock and `git rm`s the ones that still
+  match, in one commit. Archived entries stay in the index — the catch-up treats
+  a removed log entry as archived and indexes it at the archive commit's
+  parent; a rebuild finds them with `git log --diff-filter=D` — and
+  `ReadPart` reads them back from history. Only conductor removes a log entry
+  (the log kind's writers are `system`), so a removed one is an archived one.
+  The successful consolidation's own case log is marked consolidated with it,
+  so a scheduled consolidation does not wake every week for its own record.
+- **Left out.** Semantic (embedding) search: BM25 over typed frontmatter
+  ranks well for the vocabulary an operator and a bot share, needs no model
+  call, and is deterministic to test. Uncommitted files in a hand-managed
+  memory repo are not indexed: conductor's memory is what is committed.
 
 ## Folders: display only
 

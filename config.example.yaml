@@ -1410,10 +1410,18 @@ bots:
     # operators: [ops]                           # default: the team's operators, else every operator
     team: platform                               # at most one team (teams: below); bots without one are unaffected
     # folder: work/platform                      # display only (`conductor bot ls`); on a team, the team's folder wins
-    # Memory is typed: knowledge/, runbooks/, watch/ (built-in kinds with frontmatter
+    # Memory is typed: knowledge/, runbooks/, watch/, digests/ (built-in kinds with frontmatter
     # schemas — `conductor bot kinds`), log/ and handoff/ (conductor's). Custom kinds:
     # collections:
     #   postmortems: { from: .conductor/packs/platform-sre/collections/postmortems.yaml }   # one a pack ships
+    # Sessions read memory through a budgeted index, ranked recall and reads in parts
+    # (wiki: Bots → Reading memory). Every limit is on by default; a bigger value loosens it:
+    # memory:
+    #   index_budget: 6k                         # the memory index in a session's first prompt
+    #   read_max: 12k                            # one `conductor bot read`
+    #   recall_limit: 8                          # documents per recall (at most 25)
+    #   max_bytes: { knowledge: 8k, runbook: 12k, watch: 4k, digest: 8k, handoff: 4k, episode: 4k }
+    #   archive: true                            # consolidated raw logs leave the working copy (recall still finds them)
     home:
       rotate: { max_age: 24h, max_turns: 100 }   # a fresh session resumes from the handoff note + ledger;
                                                  # max_age <= 144h (its conductor token lives 7d from last use)
@@ -1460,6 +1468,7 @@ teams:
     description: "Platform services: the shared runtime, its data stores and deploys"
     folder: work/platform                        # display only: files the team and its bots in `conductor bot ls` — no permissions, defaults or routing
     knowledge: { promotion: proposal }           # a shared repo every bot reads; promotions need an operator of the team
+                                                 # + index_budget (default 2k), read_max, recall_limit, max_bytes: { knowledge, runbook, watch }
     collections:                                 # a custom document kind in the team's knowledge (wiki: Bots → Content kinds)
       postmortems:
         dir: postmortems
@@ -1469,6 +1478,7 @@ teams:
           action_items: { type: list }
         template: "## Timeline\n\n## Cause\n\n## Follow-ups\n"
         writers: [operator, proposal]            # a team's: operator / proposal; a bot's: operator / bots
+        # max_bytes: 8k                          # one document (default 8k)
     # operators: [ops]                           # who approves for the team; bots' operators: must be a subset
     # peers: none                                # default team: teammates may `ask` (data) and `delegate` (work) to each other
     # delegation: { max_depth: 3 }               # most hops a `conductor bot delegate` chain may take (1–10, default 3)

@@ -24,7 +24,8 @@ replaceable at any time; continuity lives on disk:
 |---|---|---|
 | charter | identity, scope, escalation policy, autonomy tiers | `bots:` config — the bot can never write it |
 | knowledge | infra map, runbooks, what to watch, learned facts — [typed documents](#content-kinds) | the bot's **memory repo** (git) |
-| log | past cases, actions, outcomes | the memory repo's `log/` |
+| log | past cases, actions, outcomes — summarized into digests, then [archived](#consolidation-and-the-archive) | the memory repo's `log/` and `digests/` |
+| recall index | what a session searches and its prompt's [memory index](#reading-memory) is drawn from — derived from the repo | conductor's state dir |
 | case ledger | open events, proposals awaiting approval, running workers, the home session, the inbox, spend | `bots.json` in conductor's state dir |
 
 Each bot is isolated: its own memory repo, ledger, home session, verb policy,
@@ -103,14 +104,17 @@ bot: its memory repo, its connectors and verbs, its operators.
 
 Each bot has one pinned **home** session on paseo — the one you talk to.
 Its working directory is its **own worktree** of the bot's memory repo
-(`~/.conductor/runs/bot-<name>-<session>`), so it reads knowledge and
-runbooks directly. It writes memory only through conductor:
+(`~/.conductor/runs/bot-<name>-<session>`). It starts from its
+[memory index](#reading-memory) and reads memory through conductor — recall
+first, then a section at a time — and writes it only through conductor:
 
 ```
-conductor bot kinds                                                     # the document kinds and their schemas
+conductor bot kinds                                                     # the document kinds, their schemas and caps
 conductor bot remember --kind knowledge --title "DB primary" --text "<document>" [--append]
 conductor bot episode  --case c12 --text "…"
-conductor bot recall   <words>
+conductor bot recall   <words> [--limit N] [--kind <kind>]               # ranked, with a snippet each
+conductor bot read     <path> [--section "<heading>"] [--offset N]      # at most read_max bytes
+conductor bot index    [--kind <kind> | --all]                          # the memory index
 conductor bot cases | case open|note|close
 conductor bot spawn    --case c12 --brief "…" [--group g] [--handoff]
 conductor bot handoff  --text "…"
@@ -207,8 +211,10 @@ restart is marked interrupted and reported.
 over: it runs on paseo through the ordinary background hand-off path.
 
 `bot: { action: consolidate }` (or `conductor bot consolidate`) starts a
-worker that distils the episodes since the last consolidation into knowledge;
-with nothing new it is a no-op.
+worker that summarizes the oldest unconsolidated log entries into a digest
+(and knowledge, where something durable emerged); with nothing new it is a
+no-op. Once it finishes, the entries it summarized leave the working copy:
+see [Consolidation and the archive](#consolidation-and-the-archive).
 
 ### Parents, children and peers
 
@@ -430,11 +436,16 @@ team's repo — at one chokepoint. Nothing is written anywhere else.
 | **knowledge** | `knowledge/` | `title`, `applies_to` (list), `evidence`, `confidence` (low \| medium \| high) | the bot (its memory) or an operator; a team's: an operator or a promotion |
 | **runbook** | `runbooks/` | `title`, `when_to_use`, `prerequisites` (list), `steps` (an ordered list), `verification`, `rollback`, `owner` | as knowledge |
 | **watch** | `watch/` | `what`, `signal`, `threshold`, `why` | as knowledge |
+| **digest** | `digests/` | `title`, `summary`, `period`, `cases` (list) | the bot (a consolidation writes one) or an operator |
 | **log** | `log/` (`episodes/`: older entries, read-only) | `title`, `case` or `sweep` | conductor, per case (`conductor bot episode`); an operator may **annotate** or **flag wrong**, never rewrite |
 | **handoff** | `handoff/` | `session` | conductor only (`conductor bot handoff`) |
 
-Every field is required except `applies_to`, `prerequisites`, and the log's
-`case`/`sweep`. `conductor bot kinds` (a session) or
+Knowledge, runbooks and watch also take an optional one-line `summary`:
+what the [memory index](#reading-memory) shows for the document (its body's
+first sentence when there is none). Every field is required except
+`applies_to`, `prerequisites`, `summary`, the digest's `period`/`cases`, and
+the log's `case`/`sweep`. A team's knowledge repo has knowledge, runbooks and
+watch. `conductor bot kinds` (a session) or
 `conductor bot knowledge|memory kinds <team|bot>` (an operator) prints each
 kind's home, path rule, writers, fields and a skeleton.
 
@@ -447,6 +458,9 @@ kind's home, path rule, writers, fields and a skeleton.
 - **Watch is a directory**, one document per thing to watch. Each item then has
   its own frontmatter, history and revert, and nothing has to parse several
   items out of one file.
+- **One topic per document.** Each kind has a byte cap
+  ([Size limits](#size-limits)): a larger document is refused, with its size
+  and the cap — split it.
 
 **Custom collections** add kinds of your own, on a bot (its memory) or a team
 (its knowledge repo), or shipped by a pack and used with `from:`:
@@ -464,6 +478,7 @@ teams:
         template: "## Timeline\n\n## Cause\n\n## Follow-ups\n"
         free_paths: false
         writers: [operator, proposal]      # a team's: operator, proposal; a bot's: operator, bots
+        max_bytes: 16k                     # one document (default 8k)
 bots:
   platform-sre:
     collections:
@@ -481,7 +496,184 @@ failing its kind's schema — in its log and the `bot_memory_inventory` audit
 event. Those files stay readable; the next write to one must be a valid
 document. `ls` shows each file's kind and status (`ok`, `invalid`, `legacy`,
 `unmapped`). Older `episodes/` entries are read as the log's legacy home:
-recall and consolidation still see them.
+recall and consolidation still see them. A document already over its kind's
+cap stays readable; the next write to it must fit.
+
+## Reading memory
+
+A memory repo grows to hundreds of documents and thousands of log entries.
+A session never reads it wholesale: it starts from its **memory index**,
+finds documents with **recall**, and **reads sections**, not whole
+documents. Every prompt says so:
+
+> read your memory index; recall before you open a file; read sections, not
+> whole documents.
+
+### The memory index
+
+Every session's first prompt — home, worker, sweep — carries the bot's
+memory index: one line per document, generated by conductor from the typed
+frontmatter.
+
+```
+## Your memory index (612 documents)
+
+- runbooks/db-failover.md · runbook · DB failover · for: the primary is down · Promote the replica and repoint the app.
+- knowledge/db-primary.md · knowledge · DB primary · for: db-main, prod · The primary is db-1 in us-east-1a.
+- digests/episodes-2026-10-01-to-2026-10-14.md · digest · Episodes 2026-10-01 to 2026-10-14 · for: c41, c42 · Two failovers, both from disk pressure.
+- … 590 more not shown (402 knowledge, 96 runbook, 92 digest): find them with `conductor bot recall <words>`, list them with `conductor bot index --kind <kind>`
+
+log/: 37 raw case logs in your working copy, 1904 archived after consolidation — digests/ summarize them; `conductor bot recall` searches all of them.
+```
+
+- **A hard budget.** The whole section stays within `memory.index_budget`
+  (default 6000 bytes, about 1,500 tokens), whatever the repo holds.
+- **The most relevant first.** A worker's index is ranked against its brief
+  and case, a sweep's against its checklist, a home session's against its
+  open cases; the rest follow, most recently changed first. Past the budget
+  it stops and counts what it left out, by kind.
+- **Digests, not raw logs.** The index lists knowledge, runbooks, watch,
+  digests and collections. Raw case logs are only counted: recall finds
+  them, digests summarize them.
+- A bot on a team with a knowledge repo gets the **team's knowledge index**
+  too, within the team's `knowledge.index_budget` (default 2000 bytes).
+- `conductor bot index` prints it; `--kind <kind>` (or `--all`) lists every
+  document, a page at a time (`--offset`).
+
+### Recall
+
+```
+conductor bot recall db failover
+1. runbooks/db-failover.md (runbook) — DB failover
+   …the primary is down: promote the «replica» and repoint…
+2. knowledge/db-primary.md (knowledge) — DB primary
+   …
+```
+
+`conductor bot recall <words>` returns the best-matching documents — the top
+`memory.recall_limit` (default 8; `--limit` up to 25), each with its path,
+kind, title and a short snippet. It ranks with BM25 over a full-text index,
+weighting where a word appears: the title most, then the scope fields
+(`applies_to`, `when_to_use`, a log's case), the `summary`, the other
+frontmatter fields, and the body least. Documents matching every word come
+before those matching some. `--kind` narrows it to one kind. Words are only
+words: quotes, operators and column names in a query are searched as text.
+
+It searches everything: knowledge, runbooks, watch, digests, collections,
+the log — including entries archived out of the working copy (marked
+`[archived <commit>]`). Handoff notes are not searched; a session's first
+prompt carries the latest.
+
+**The index.** One SQLite file per repo, in conductor's state dir
+(`<state>/bots/<bot>/recall.db`, `<state>/teams/<team>/recall.db`) — never in
+the repo, where a session could read it. It is derived from the repo: it
+records the commit it reflects, catches up from git after every commit
+conductor makes and before every query (an operator's own commits included),
+and is rebuilt from scratch when it is missing, unreadable, behind a
+rewritten history, or the kinds changed. It indexes committed content only.
+SQLite is the pure-Go driver conductor already uses; the build stays
+CGO-free.
+
+### Reading in parts
+
+```
+conductor bot read runbooks/db-failover.md --section "Rollback"
+conductor bot read knowledge/network.md --offset 12000
+```
+
+A read returns the document — or one section: a Markdown heading through the
+next heading at its level or above — at most `memory.read_max` bytes
+(default 12000). Past that it stops at a line, and says so first:
+
+```
+== knowledge/network.md (31240 bytes) ==
+TRUNCATED: showing bytes 0–11987 of 31240 (read_max 12000). Read on with --offset 11987, or read one section with --section "<heading>".
+…
+== sections: Overview | Subnets | Peering | Firewall rules | History ==
+```
+
+An unknown section is an error that lists the document's sections. An
+archived log entry reads back from git history, marked as archived.
+`--json` prints the raw result.
+
+### Size limits
+
+On by default; a bigger value loosens one.
+
+| what | default | knob |
+|---|---|---|
+| a knowledge document | 8 KiB | `memory.max_bytes.knowledge` |
+| a runbook | 12 KiB | `memory.max_bytes.runbook` |
+| a watch document | 4 KiB | `memory.max_bytes.watch` |
+| a digest | 8 KiB | `memory.max_bytes.digest` |
+| a collection's document | 8 KiB | `collections.<name>.max_bytes` |
+| a handoff note (the session's text) | 4 KiB | `memory.max_bytes.handoff` |
+| one `conductor bot episode` entry | 4 KiB | `memory.max_bytes.episode` |
+| one `conductor bot read` | 12000 bytes | `memory.read_max` |
+| the memory index in a prompt | 6000 bytes | `memory.index_budget` |
+| a recall | 8 documents (at most 25) | `memory.recall_limit` |
+
+A team's knowledge repo takes the same knobs beside the rest of
+`knowledge:` (`index_budget` defaults to 2000 there; `max_bytes` for
+knowledge, runbook and watch):
+
+```yaml
+bots:
+  platform-sre:
+    memory:
+      index_budget: 8k
+      read_max: 16k
+      max_bytes: { knowledge: 16k, handoff: 6k }
+      # archive: false                 # keep consolidated logs in the working copy
+teams:
+  platform:
+    knowledge: { promotion: proposal, index_budget: 3k, max_bytes: { runbook: 20k } }
+```
+
+Caps are checked where every document is checked — on what the file will
+hold, an `--append` included — for a bot's own writes, an operator's edits
+and a promotion (refused when it is proposed). Conductor's own log entries
+and handoffs are bounded where it composes them. A refusal gives the exact
+numbers and the knob, in the same style as a schema error:
+
+```
+knowledge/db.md: knowledge document is 9312 bytes, over its cap of 8192 bytes (memory.max_bytes.knowledge) — keep one topic per document: split it into focused documents, or trim it
+handoff is 5230 bytes, over its cap of 4096 bytes (memory.max_bytes.handoff) — rewrite it shorter and run `conductor bot handoff` again: …
+```
+
+A session's prompt carries the latest handoff note's body, never more than
+its cap (one an operator edited by hand is cut, with the path to read the
+rest). Values are validated at load: nothing negative, `max_bytes` and
+`read_max` at most 256 KiB, `index_budget` at most 64 KiB, `recall_limit` at
+most 25.
+
+### Consolidation and the archive
+
+Raw case logs grow without limit; what a session should see of its past is
+their summaries.
+
+1. **A consolidation** (`conductor bot consolidate <bot>`, or a trigger's
+   `bot: { action: consolidate }`) starts a worker given the oldest log
+   entries not yet consolidated — at most 60; it says how many wait. It reads
+   them a section at a time, writes **one digest** summarizing them, and
+   updates knowledge where something durable emerged.
+2. **Only a finished one counts.** When that worker finishes done *and* has
+   committed a digest, its entries count as consolidated — each at the exact
+   content it was given. A consolidation that fails, ends without reporting,
+   or writes no digest consolidates nothing.
+3. **Conductor archives** the consolidated entries whose case is closed
+   (and past days' sweep logs): one commit, `memory: archive N consolidated
+   log entries`, removes them from the tree, so they leave every session's
+   working copy. Git history keeps them; recall still finds them; `conductor
+   bot read <path>` reads them back. Revert the commit to bring them back.
+
+An entry never leaves the working copy unless a finished consolidation
+covered exactly what it holds now. Anything appended since (a late note, a
+case's closing line), anything not yet consolidated, and an open case's log
+all stay, and the next consolidation takes what changed. `memory.archive:
+false` keeps consolidated entries in place (they are still consolidated
+once). The audit records each consolidation's outcome
+(`bot_consolidation`) and each archive (`bot_memory_archive`).
 
 ## Folders
 
@@ -622,6 +814,11 @@ conductor bot team recall <words>
 conductor bot team read knowledge/databases.md
 ```
 
+Its sessions see the team's [knowledge index](#the-memory-index) in their
+prompts, and recall and read it like their own memory (`conductor bot team
+read <path> --section "<heading>"`, `conductor bot team index`), under the
+team's [limits](#size-limits).
+
 No bot writes it directly (an operator can: [below](#editing-knowledge-and-memory-yourself)).
 A bot **proposes** promoting one of its own
 `knowledge/` or `runbooks/` files:
@@ -669,6 +866,8 @@ conductor bot knowledge ls platform --kind runbook                # one kind; ev
 conductor bot knowledge revert platform 9a4b691 --base c0ffee1    # undo one commit, as a new commit
 
 conductor bot memory new|put|rm|mv|revert|ls|cat|log|kinds platform-sre …   # the same for a bot's memory [--case <id>]
+conductor bot memory index platform-sre [--kind runbook | --all]       # the memory index its sessions see
+conductor bot memory recall platform-sre db failover                   # ranked recall, as its sessions run it
 conductor bot memory annotate platform-sre log/2026/10/…-c12-….md --text "the cache, not the db" --base …
 conductor bot memory flag     platform-sre log/2026/10/…-c12-….md --text "wrong root cause" --base …
 ```
@@ -959,6 +1158,7 @@ conductor bot team <team>        # …and recent routed cases, delegations, know
 conductor bot delegations <bot> [--all]  # its delegation edges: handed out, and held
 conductor bot knowledge put|rm|mv|revert|ls|cat|log <team> …   # edit a team's knowledge (above)
 conductor bot memory put|rm|mv|revert|ls|cat|log <bot> …       # edit a bot's memory
+conductor bot memory|knowledge index|recall <bot|team> …       # what its sessions see and find
 conductor bot approve <bot> <id> --edit-file <f>               # approve a promotion with your changes
 ```
 
