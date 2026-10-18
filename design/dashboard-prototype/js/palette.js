@@ -102,7 +102,7 @@
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target; if (t && (t.closest('input, textarea, select, [contenteditable="true"]') || document.querySelector('.scrim, .drawer-scrim, .palette'))) return;
     if (e.key === '?') { e.preventDefault(); UI.shortcuts(); return; }
-    if (e.key === '/') { const f = document.querySelector('#main .dl-filters input, #main .filters input, #main input[type="search"], #main .input-icon input, #main [data-on-change="rp-q"]'); if (f) { e.preventDefault(); f.focus(); } return; }
+    if (e.key === '/') { const f = document.querySelector('#main .dl-filters input, #main .filters input, #main input[type="search"], #main .input-icon input, #main [data-on-change="rp-q"]'); e.preventDefault(); if (f) f.focus(); else UI.palette(); return; } // a page with no filter of its own: / opens the search
     if (e.key === 'g') { gAt = Date.now(); return; }
     if (gAt && Date.now() - gAt < 1200 && GO[e.key]) { e.preventDefault(); gAt = 0; UI.go('#/' + GO[e.key]); kSel = -1; return; }
     gAt = 0;

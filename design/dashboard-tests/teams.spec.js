@@ -49,7 +49,7 @@ test('assign a bot from its definition; the team ceiling and team tiers are enfo
 
 test('the ceilings tab shows inherits / narrows / same as team; editing the team stages a change', async ({ page }) => {
   await go(page, '#/teams/platform/defaults');
-  await expect(page.locator('.tier-ladder')).toContainText('observe');
+  await expect(page.locator('.tier-ladder')).toHaveCount(0); // no risk ladder (not approved)
   await expect(page.locator('.inherit-tbl')).toContainText('inherits');
   await expect(page.locator('.inherit-tbl')).toContainText('same as team'); // web-triage's approvers equal the team's: not "narrows"
   await page.locator('[data-act="team-edit"]').first().click();
@@ -188,12 +188,10 @@ test('across teams, delegation exists only between linked bots; a bot with no li
   await expect(page.locator('button', { hasText: 'Delegate a task' })).toHaveAttribute('data-reason', /no teammate or linked bot/);
 });
 
-test('the team page shows ask and delegate activity and each bot\'s delegation reach', async ({ page }) => {
+test('the team page lists delegations and each bot\'s delegation reach (the activity graph is gone: it overlapped and isn\'t in the mocks)', async ({ page }) => {
   await go(page, '#/teams/platform');
-  const g = page.locator('svg.act-graph');
-  await expect(g.locator('line.ag-delegate')).not.toHaveCount(0);
-  await expect(g.locator('line.ag-ask')).not.toHaveCount(0);
-  await expect(g).toContainText('billing-sre · finance'); // a linked bot from another team, outside the circle
+  await expect(page.locator('svg.act-graph')).toHaveCount(0);
+  await expect(page.locator('.panel', { hasText: 'Delegations' }).first()).toBeVisible();
   await expect(page.locator('.panel:has(h3:text-is("Links"))')).toContainText('delegation reach');
 });
 

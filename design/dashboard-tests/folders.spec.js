@@ -14,7 +14,7 @@ test('the Bots page: a folder tree with teams, solo bots and roll-ups; New bot /
   await expect(row(page, 'platform-sre')).toBeVisible();
   // calm: an open folder lets its rows speak; a collapsed one rolls up only what needs you
   await page.locator('[data-act="f-toggle"][data-path="work/billing"]').click();
-  await expect(page.locator('.frow.folder', { hasText: 'billing' }).locator('.roll')).toContainText('1 pending');
+  await expect(page.locator('.frow.folder', { hasText: 'billing' }).locator('.roll')).toContainText('1 needs you');
   await page.locator('[data-act="f-toggle"][data-path="work/billing"]').click();
   await expect(page.locator('.frow.bot', { hasText: 'homelab' })).toContainText('solo');
 });
@@ -68,7 +68,7 @@ test('search across folders; breadcrumbs on bot and team pages', async ({ page }
   await go(page, '#/bots/platform-data');
   await expect(page.locator('.dl-crumbs')).toContainText('Bots › work › platform › team platform');
   await go(page, '#/teams/finance');
-  await expect(page.locator('.crumbs').first()).toContainText('Bots › work › billing');
+  await expect(page.locator('.dl-crumbs').first()).toContainText('Bots › work › billing');
 });
 
 test('phone: the tree collapses to a drill-down list', async ({ page }) => {
@@ -161,7 +161,7 @@ test('a pack workflow sits under its pack until placed by an override; a bot wor
 test('a folder shows everything in it: bots, teams and workflows, roll-ups and what needs you there', async ({ page }) => {
   await go(page, '#/folders/work%2Fplatform', { fresh: true });
   await expect(page.locator('.folder-stats')).toContainText('Workflows');
-  await expect(page.locator('.panel', { hasText: 'Needs you here' })).toContainText('terraform');
+  await expect(page.locator('.folder-needs')).toContainText('terraform');
   await expect(page.locator('.tabs')).toContainText('Bots');
   await expect(page.locator('#ftree, .drill').first()).toContainText('platform-sre');
   await page.locator('.tabs a', { hasText: 'Workflows' }).click();

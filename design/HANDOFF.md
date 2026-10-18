@@ -70,7 +70,7 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 - `js/create.js` create-in-place drawers (`UI.CREATE`). `js/wf.js` workflow engine + validator.
 - Screens in `js/screens/`: overview, runs, repo (knowledge by kind), bots (teams, bots), folders (shared folder
   tree, folder pages), browser, logins, builder (workflows list + builder), config, secrets, system (packs,
-  plugins, updates, connectors, runtimes, hosts, isolation, logs), catalog (catalog component; **not routed yet**),
+  plugins, updates, connectors, runtimes, hosts, isolation, logs), catalog (`#/extensions/browse`, and the picker behind Add a connector),
   access (sign-in, enroll, passkeys).
 
 ## Done (commits on this branch, newest first)
@@ -137,7 +137,7 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 | Usage mode (off default, per provider, source-only limits) | done |
 | Planned multi-user behind a toggle | deferred (toggle says so); issue numbers removed from copy |
 | Add a login | done; folder principals removed in step D |
-| Environment variables (scopes, effective env, import/export, restart via boot guard) | done (`#/secrets/env`) |
+| Environment variables (scopes, effective env, import, restart via boot guard) | done (`#/secrets/env`) |
 | Packs & plugins catalog (browse/detail/install wizard/sources/trust) | done (routed; lockfile hunk) |
 | Connectors catalog (real builtin vs plugin split, custom git connector) | **not started** (SCHEMA still marks github builtin); facts in summary: builtins web, cron, webhook, rss, command, rest, graphql, kv, sql, memory, workflow, conductor (+ lan, tunnel); everything vendor is an official plugin |
 | Value-source field | done; changes in step B (canonical vault syntax, no named secrets) |

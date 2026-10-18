@@ -112,6 +112,8 @@
   /** "7m" / "1h" / "3d" (the fake data's short ages) → "7 min ago" */
   UI.ageText = (a) => { const m = String(a).match(/^(\d+)\s*([smhd])$/); if (!m) return a; return m[2] === 's' ? 'just now' : m[2] === 'm' ? `${m[1]} min ago` : m[2] === 'h' ? `${m[1]} h ago` : `${m[1]} days ago`; };
   /** Durations in words with units: "12 min", "7 min 40 s", "26 s". */
+  /** How long something has been running, in whole minutes (a list of live runs never mixes "6 min" and "6 min 2 s"). */
+  UI.runningFor = (iso) => { const m = Math.floor((Date.now() - new Date(iso)) / 60000); return m < 1 ? 'under a minute' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; };
   UI.durText = (ms) => { if (!ms) return '—'; const s = Math.round(ms / 1000); if (s < 60) return `${Math.max(1, s)} s`; const m = Math.floor(s / 60), r = s % 60; return m < 10 && r ? `${m} min ${r} s` : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; };
   UI.runDur = (r) => (r.finished ? UI.durText(new Date(r.finished) - new Date(r.started)) : '…');
   /** A run's plain headline (what it is doing or did, in words); the workflow name and ids follow in the detail line. */
@@ -215,7 +217,8 @@
       main.classList.toggle("still", !!opts.keepScroll); main.innerHTML = String(out);
       main.scrollTop = keep;
       UI.params = params;
-      UI.setNav(r.opts.nav || path.split('/')[0]);
+      // the review page keeps the section you came from highlighted (it belongs to whatever you were changing)
+      UI.setNav(path === 'config/apply' && D.prefs && D.prefs.returnTo ? (D.prefs.returnTo.href.replace(/^#\/?/, '').split(/[/?]/)[0] || 'overview') : r.opts.nav || path.split('/')[0]);
       document.body.classList.toggle('bare', !!r.opts.bare); // signed out: no rail, top bar or tab bar
       if (r.opts.after) r.opts.after(params, main);
       if (typeof out === 'object' && out && out.after) out.after(main);
@@ -226,6 +229,8 @@
     $('#main').innerHTML = `<div class="page"><div class="empty"><span class="serif">No such page</span><a class="btn" href="#/overview">Back to overview</a></div></div>`;
   };
   UI.afterRender = [];
+  // a link can ask for a section of a page (?show=<id>): it scrolls into view and takes the focus outline briefly
+  UI.afterRender.push((main) => { const m = location.hash.match(/[?&]show=([\w-]+)/); const el = m && main.querySelector('#' + m[1]); if (el) setTimeout(() => { el.scrollIntoView({ block: 'start' }); el.classList.add('flash-target'); setTimeout(() => el.classList.remove('flash-target'), 1600); }, 30); });
   UI.go = (h) => { if (location.hash === h) UI.render(); else location.hash = h; };
   /** Re-render the current route in place (after a state change), keeping scroll. */
   UI.rerender = () => { UI.refreshChrome(); UI.render({ keepScroll: true }); };
@@ -459,7 +464,8 @@
     // a double-click is one action: its second click (detail 2) never stages, signs or applies twice
     if (e.detail > 1 && !el.matches('input, select, textarea, label')) { e.preventDefault(); e.stopPropagation(); return; }
     const fn = UI.acts[el.dataset.act];
-    if (fn) { e.preventDefault(); e.stopPropagation(); fn(el, e); }
+    // a checkbox or radio keeps its own toggle (preventing it made a tick look ignored until the re-render)
+    if (fn) { if (!el.matches('input[type="checkbox"], input[type="radio"]')) e.preventDefault(); e.stopPropagation(); fn(el, e); }
   });
   document.addEventListener('click', (e) => { const a = e.target.closest('a[aria-disabled="true"]'); if (a && !a.dataset.act) { e.preventDefault(); UI.flashReason(a); } }, true);
   document.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[data-act][role="button"]')) { e.preventDefault(); e.target.click(); } });
@@ -513,7 +519,7 @@
     UI.confirm(on ? { title: 'Pause dispatch?', body: 'conductor stops dispatching: no new run starts until you resume (the runtime kill switch, no restart). <span class="dl-sub">What happens to events that arrive while paused isn’t documented yet, so don’t count on them being kept.</span>', ok: 'Pause dispatch', danger: true } : { title: 'Resume dispatch?', body: 'conductor starts dispatching again; new events start their runs.', ok: 'Resume dispatch' }).then((ok) => { if (ok) UI.setPaused(on); }); });
   UI.act('strip-go', (b) => { UI.closeMenu(); UI.go(b.dataset.href); });
   /** The avatar menu: who you are, the display preferences, the glossary, the prototype's demo data, and Lock. */
-  UI.act('op-menu', (b) => UI.menu(b, [[`Signed in as ${D.operator.name}`, 'shield', 'strip-go', 'data-href="#/security"'], ['-'], [document.documentElement.dataset.theme === 'dark' ? 'Light theme' : 'Dark theme', document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon', 'theme-menu'], ['Display preferences', 'settings', 'strip-go', 'data-href="#/config"'], ['Glossary', 'info', 'strip-go', 'data-href="#/glossary"'], ['Demo data…', 'sparkle', 'demo-menu'], ['-'], ['Lock', 'lock', 'strip-go', 'data-href="#/signin"']]));
+  UI.act('op-menu', (b) => UI.menu(b, [[`Signed in as ${D.operator.name}`, 'shield', 'strip-go', 'data-href="#/security"'], ['-'], [document.documentElement.dataset.theme === 'dark' ? 'Light theme' : 'Dark theme', document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon', 'theme-menu'], ['Display preferences', 'settings', 'strip-go', 'data-href="#/config?show=display"'], ...(D.prefs.gsHidden ? [['Show Get started', 'check', 'gs-show']] : []), ['Glossary', 'info', 'strip-go', 'data-href="#/glossary"'], ['Demo data…', 'sparkle', 'demo-menu'], ['-'], ['Lock', 'lock', 'strip-go', 'data-href="#/signin"']]));
   UI.act('theme-menu', () => { UI.closeMenu(); UI.theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); });
   UI.act('theme', () => UI.theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
   UI.act('palette', () => UI.palette());
@@ -692,7 +698,8 @@
   UI.staged = (ch, opts = {}) => {
     UI.refreshChrome();
     if (!ch) { UI.toast('No change', 'the node is the same as the live config', 'idle'); return; }
-    if (opts.go !== false) UI.go('#/config/apply');
+    // the review remembers where you came from: its Back and its Done return there, and the rail keeps that section
+    if (opts.go !== false) { if (!D.prefs.returnTo && !location.hash.startsWith('#/config')) { D.prefs.returnTo = { href: location.hash, label: (document.querySelector('#main h1') || {}).textContent || UI.pageTitle() }; S.save(); } UI.go('#/config/apply'); }
     else UI.toast(`Staged: ${UI.esc(ch.summary)}`, `${D.pending.length} change${D.pending.length > 1 ? 's' : ''} waiting · review in Config → apply`, 'run');
   };
   /* phone polish after every render: tab rows that scroll show a fade and keep the current tab in view;

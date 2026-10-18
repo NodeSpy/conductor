@@ -497,3 +497,8 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 /* the builder's When box is a quiet surface (no accent or danger wash); an error says so with its mark and count */
 .wfb-page .trig-card, .wfb-page .trig-card.has-err { background: var(--color-bg-sunken); border: var(--border-width) solid var(--color-border-subtle); }
 .wfb-page .trig-card .wl { color: var(--color-text-secondary); }
+.flash-target { outline: 2px solid var(--color-accent-default); outline-offset: 4px; transition: outline-color .6s; }
+/* compact density: rows and their text both tighten (Daylight compact: 36px rows, 13.5px text) */
+[data-density="compact"] .dl-tbl td, [data-density="compact"] .tbl td, [data-density="compact"] .dl-list > li { font-size: var(--table-font-size); }
+/* the When box on a phone: its sentence takes the row; the test event and issue counts wrap under it */
+@media (max-width: 720px) { .wfb-page .trig-card .sc-head { flex-wrap: wrap; } .wfb-page .trig-card .sc-head > .grow { flex: 1 1 calc(100% - 120px); min-width: 0; } .wfb-page .trig-card .sc-head > .dl-sub, .wfb-page .trig-card .sc-head > .st { flex-basis: 100%; order: 3; padding-left: 4px; white-space: normal; } }

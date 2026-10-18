@@ -72,8 +72,10 @@
   UI.act('wl-more', (b) => { const w = S.view().workflows.find((x) => x.name === b.dataset.name) || D.workflows.find((x) => x.name === b.dataset.name), r = { w, owner: UI.wfOwner(w), folder: UI.folderOfWf(w) }, off = moveOff(r);
     UI.menu(b, [['Open in the builder', 'canvas', 'strip-go', `data-href="#/workflows/${encodeURIComponent(w.name)}"`], ['Move to a folder…', 'folder', 'wl-move', off ? UI.off(off) : `data-name="${esc(w.name)}"`], r.owner === 'config' ? ['-'] : null, r.owner === 'config' && !w.fresh ? ['Delete…', 'trash', 'wf-del', `data-name="${esc(w.name)}"`] : r.owner === 'config' ? ['Discard the draft…', 'trash', 'wf-discard', `data-name="${esc(w.name)}"`] : null].filter(Boolean)); });
   UI.act('wl-sel', (cb, e) => { const boxes = UI.$$('#wl-body input[data-act="wl-sel"]').filter((x) => !x.closest('tr').classList.contains('hidden')), i = boxes.indexOf(cb);
-    if (e && e.shiftKey && wlLast != null) { const [a, b] = [Math.min(wlLast, i), Math.max(wlLast, i)]; boxes.slice(a, b + 1).forEach((x) => { x.checked = cb.checked; cb.checked ? UI.wlSel.add(x.dataset.name) : UI.wlSel.delete(x.dataset.name); }); } else cb.checked ? UI.wlSel.add(cb.dataset.name) : UI.wlSel.delete(cb.dataset.name);
-    wlLast = i; UI.rerender({ keepScroll: true }); });
+    // the anchor is the last row you clicked, found again by name (an index from the previous render can point elsewhere)
+    const at = wlLast != null ? boxes.findIndex((x) => x.dataset.name === wlLast) : -1;
+    if (e && e.shiftKey && at >= 0) { const [a, b] = [Math.min(at, i), Math.max(at, i)]; boxes.slice(a, b + 1).forEach((x) => { x.checked = cb.checked; cb.checked ? UI.wlSel.add(x.dataset.name) : UI.wlSel.delete(x.dataset.name); }); } else cb.checked ? UI.wlSel.add(cb.dataset.name) : UI.wlSel.delete(cb.dataset.name);
+    wlLast = cb.dataset.name; UI.rerender({ keepScroll: true }); });
   UI.act('wl-sel-all', (cb) => { UI.$$('#wl-body tr[data-row]:not(.hidden) input[data-act="wl-sel"]').forEach((x) => (cb.checked ? UI.wlSel.add(x.dataset.name) : UI.wlSel.delete(x.dataset.name))); UI.rerender({ keepScroll: true }); });
   UI.act('wl-sel-matching', () => { UI.$$('#wl-body tr[data-row]:not(.hidden) input[data-act="wl-sel"]').forEach((x) => UI.wlSel.add(x.dataset.name)); UI.rerender({ keepScroll: true }); });
   UI.act('wl-bulk-clear', () => { UI.wlSel.clear(); UI.rerender({ keepScroll: true }); });
@@ -925,7 +927,7 @@
     if (status() !== 'draft') return;
     S.stage('workflows', B.name, B.text); delete D.drafts[B.name]; S.save();
     UI.refreshChrome(); drawBar(); drawIssues();
-    UI.toast('Saved', 'staged in config · Deploy reviews the diff and applies it', 'run');
+    UI.toast('Saved', 'staged · Save and apply shows the diff, then applies it', 'run');
   });
   UI.act('wf-deploy', () => { flushPending();
     if (status() === 'draft') UI.acts['wf-save']();

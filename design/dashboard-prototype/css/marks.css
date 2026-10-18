@@ -47,10 +47,8 @@
 .tag.wrap { white-space: normal; height: auto; padding-block: 1px; }
 .kv .tag { white-space: normal; height: auto; padding-block: 1px; }
 /* tiers: the fixed risk words lead ("Asks you first"); the tier name is second, as a mono label */
-.tier { display: inline-flex; align-items: center; min-height: 22px; font-family: var(--font-family-mono); font-size: var(--type-code-s-size); padding: 0 var(--space-1_5); border-radius: var(--radius-sm); border: var(--border-width) solid var(--color-border-default); color: var(--color-text-secondary); letter-spacing: 0; white-space: nowrap; vertical-align: middle; }
-.tier.propose { color: var(--color-status-warning-fg); border-color: var(--color-status-warning-border); }
-.tier.commit_money { color: var(--color-text-accent); border-color: var(--color-accent-default); }
-.tier.never { color: var(--color-status-danger-fg); border-color: var(--color-status-danger-border); text-decoration: line-through; text-decoration-thickness: 1px; }
+/* a tier's name is a config value: plain mono text, never a coloured or struck-through capsule (no risk visuals) */
+.tier { font-family: var(--font-family-mono); font-size: var(--type-code-s-size); color: inherit; }
 
 /* ---- filter chip: toggles a filter; selected is ink with a check, not a tint ---- */
 .chip { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: var(--space-1_5); min-height: var(--size-control-sm); padding: 0 var(--space-3); border: var(--border-width) solid var(--color-border-default); border-radius: var(--radius-control); font: var(--type-label); font-size: var(--type-caption-size); color: var(--color-text-secondary); background: var(--color-bg-surface); cursor: pointer; white-space: nowrap; transition: border-color var(--motion-duration-fast) var(--motion-easing-out), color var(--motion-duration-fast) var(--motion-easing-out); }

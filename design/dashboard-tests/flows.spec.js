@@ -10,9 +10,10 @@ test.describe('connectors, runtimes, hosts, isolation', () => {
   test('add a connector with its plugin-declared settings form, then apply', async ({ page }) => {
     await go(page, '#/connectors/connectors');
     await page.locator('[data-act="conn-add"]').click();
-    await page.locator('[data-act="conn-pick"][data-u="slack"]').click();
+    await page.locator('[data-act="cat-pick"][data-kind="connector"][data-name="slack"]').click();
     await expect(page.locator('.modal h2')).toHaveText('Add a Slack connector');
-    // required fields come from the plugin's declaration
+    // required fields come from the plugin's declaration (the instance name is prefilled; empty it to see it's required)
+    await page.fill('#f-name', '');
     await submit(page);
     await expect(page.locator('[data-field="name"].bad')).toBeVisible();
     await expect(page.locator('[data-field="bot_token"]')).toBeVisible();
@@ -151,7 +152,7 @@ test.describe('bots', () => {
     await page.fill('#case-note', 'Owner is billing.'); await page.locator('[data-act="case-note"]').click();
     await expect(page.locator('.panel', { hasText: 'Notes' })).toContainText('Owner is billing.');
     await page.locator('[data-act="case-close"]').click();
-    await expect(page.locator('.panel-head .st').first()).toContainText('closed');
+    await expect(page.locator('.panel-head .case-state').first()).toContainText('Closed');
     await go(page, '#/bots/platform-sre/access');
     await page.locator('[data-act="login-revoke"]').click(); await page.locator('#cf-ok').click();
     await expect(page.locator('.panel', { hasText: 'Browser logins' })).toContainText('No saved logins');
@@ -286,7 +287,7 @@ test.describe('packs and plugins', () => {
     await expect(page.locator('tr', { hasText: 'slack' })).toContainText('v1.7.0');
     await go(page, '#/extensions/browse');
     const card = page.locator(`[data-cat="connector:aws-cost"][data-origin="official"]`);
-    await card.locator("a.btn.primary").click();
+    await card.locator('a.btn', { hasText: 'Add' }).click();
     await expect(page).toHaveURL(/#\/extensions\/install\/connector\/aws-cost$/);
     await page.fill('#f-inst', 'aws'); await page.fill('#f-set__role_arn', 'arn:aws:iam::000000000000:role/cost-read');
     await page.locator('[data-act="iw-review"]').click();
@@ -358,7 +359,7 @@ test.describe('updates, config history, raw editor, access', () => {
     await go(page, '#/overview');
     await page.locator('.strip .status-btn').click();
     await page.locator('#pop-menu [data-act="pause"]').click();
-    await expect(page.locator('.modal')).toContainText('No new runs start');
+    await expect(page.locator('.modal')).toContainText('no new run starts');
     await page.locator('#cf-ok').click();
     await page.reload();
     await expect(page.locator('#strip-cells .status-btn')).toContainText('Dispatch paused');

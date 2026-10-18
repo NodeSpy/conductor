@@ -71,7 +71,7 @@
           <p class="dl-sub acc-note">A session ends after 30 minutes idle, or 12 hours at most.</p></section>
       </div><div class="dl-col-side">
         <section class="dl-card"><header class="dl-ch"><h2>When it needs your passkey</h2></header>
-          <ul class="acc-asks"><li>Approving or denying what a bot asks to do</li><li>Changes that give bots more access or loosen safety: a new permission, a new allowed site, the sandbox off</li><li>Taking over a browser a bot is signed in to</li></ul>
+          <ul class="acc-asks"><li>Approving or denying what a bot asks to do</li><li>Changes that give bots more access or loosen safety: a new permission, a new allowed site, the sandbox off</li><li>Storing or replacing a secret value in a vault</li><li>Taking over a browser a bot is signed in to</li></ul>
           <p class="dl-sub">Everything else, including routine config changes, uses your signed-in session.</p></section>
         <section class="dl-card"><header class="dl-ch"><h2>Approvals</h2>${S.find('operators', 'ops') ? UI.statusMark('staged', 'Not applied') : ''}</header>
           <label class="row">${UI.switchBtn(!!pol.require_device_bound, 'op-bound', 'aria-label="Approve only with a passkey that stays on its device"')}<span><b>Approve only with a passkey that stays on its device</b></span></label>

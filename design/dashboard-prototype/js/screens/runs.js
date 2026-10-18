@@ -49,7 +49,7 @@
     return true;
   };
   UI.activityMatch = actMatch;
-  const target = (r) => (r.repo ? `${r.repo}${r.number ? '#' + r.number : ''}` : botOf(r) ? (/sweep/.test(r.trigger) ? 'routine sweep' : /incident|pd\./.test(r.trigger) ? 'PagerDuty incident' : 'its own work') : esc(r.trigger));
+  const target = (r) => (r.repo ? `${r.repo}${r.number ? '#' + r.number : ''}` : botOf(r) ? (/sweep/.test(r.trigger) ? 'routine sweep' : /incident|pd\./.test(r.trigger) ? 'PagerDuty incident' : /spawn/.test(r.trigger) ? 'a task it started itself' : 'its own work') : esc(r.trigger));
   const reason = (r) => { if (r.status === 'wait') return `Waiting for your answer: ${esc(String(r.detail || 'approve, revise or discard its draft').replace(/^hand-off[^:]*:\s*/, '').replace(/^awaiting your answer\s*\(?/, '').replace(/\)$/, ''))}.`;
     const e = UI.plainError ? UI.plainError(r) : r.error || ''; return `${r.failed_step ? `Failed at “${esc(r.failed_step)}”` : 'Failed'}${e ? `: ${esc(e)}` : ''}${/\.$/.test(e) ? '' : '.'}`; };
   const runName = (r) => `<b>${esc(r.workflow.replace(/^bot:/, ''))}</b> <span class="tgt">${target(r)}</span>`;
@@ -68,7 +68,7 @@
       <td class="run">${runName(r)}${rich ? `<span class="reason">${reason(r)}</span>` : ''}</td>
       <td class="st-c">${statusCell(r)}</td>
       <td class="when nowrap">${UI.agoText(r.started)}</td>
-      <td class="num">${r.status === 'run' || r.status === 'wait' ? '<span class="dl-sub">…</span>' : UI.runDur(r)}</td>
+      <td class="num">${r.status === 'run' || r.status === 'wait' ? `<span class="dl-sub">${UI.runningFor(r.started)} so far</span>` : UI.runDur(r)}</td>
       ${UI.usageOn() ? `<td class="num">${UI.runFig(r)}</td>` : ''}
       <td class="mono id">${r.id}</td>
       <td class="act">${rich ? actBtn(r) : ''}</td></tr>`;
@@ -186,7 +186,7 @@
       ${body}${['agent', 'code', 'decide'].includes(s.kind) && !live ? `<details class="dl-tech-d env-tech"><summary>${icon('chev')}Its environment <span class="dl-sub">the variables this step saw, by scope; values are never shown</span></summary>${UI.effectiveEnvHTML({ runtime: s.kind === 'code' ? '' : 'claude-cli', workflow: r.workflow, sandboxed: s.kind !== 'code' })}</details>` : ''}</section>`;
   }
   const trigWords = (r) => { const t = String(r.trigger); const where = r.repo ? ` on ${UI.runTarget(r)}` : '';
-    return /check_failed/.test(t) ? `A check failed${where}` : /review_requested/.test(t) ? `A review was requested${where}` : /issue_opened/.test(t) ? `An issue was opened${where}` : /schedule/.test(t) ? 'Its schedule' : /manual/.test(t) ? 'You started it' : /incident|pd\./.test(t) ? 'A PagerDuty incident' : /sweep/.test(t) ? 'Its routine sweep' : `${esc(t)}${where}`; };
+    return /check_failed/.test(t) ? `A check failed${where}` : /review_requested/.test(t) ? `A review was requested${where}` : /issue_opened/.test(t) ? `An issue was opened${where}` : /schedule/.test(t) ? 'Its schedule' : /spawn/.test(t) && String(r.workflow).startsWith('bot:') ? `${esc(r.workflow.slice(4))} started it itself${(t.match(/spawn (\w+)/) || [])[1] ? ` (worker ${esc(t.match(/spawn (\w+)/)[1])})` : ''}` : /manual/.test(t) ? 'You started it' : /incident|pd\./.test(t) ? 'A PagerDuty incident' : /sweep/.test(t) ? 'Its routine sweep' : `${esc(t)}${where}`; };
   UI.route('runs/:id', ({ id }) => {
     const r = D.runs.find((x) => x.id === id);
     if (!r) return `<div class="page dl-page"><div class="dl-crumbs"><a href="#/activity">${icon('chev', 'flip')}Back to Activity</a></div>${UI.empty({ title: `There is no run ${esc(id)}`, body: 'It may be older than the 14 days runs are kept.', action: '<a class="btn" href="#/activity">Back to Activity</a>' })}</div>`;
@@ -221,6 +221,10 @@
   UI.act('run-step', (b) => { dv.sel[b.dataset.run] = b.dataset.step; if (b.dataset.tab) dv.tab = b.dataset.tab; UI.rerender(); });
   UI.act('run-pick', (b) => { dv.sel[b.dataset.run] = b.dataset.step; dv.tab = b.dataset.tab || dv.tab; UI.rerender(); });
   // dismissing is reversible, so it asks nothing; its toast carries the Undo
+  // the step list is one control to the keyboard: ↑/↓ move the selection (and the step card follows)
+  document.addEventListener('keydown', (e) => { if (!['ArrowDown', 'ArrowUp'].includes(e.key) || !e.target.matches || !e.target.matches('.dl-tree .tl')) return;
+    const all = [...document.querySelectorAll('.dl-tree .tl')], i = all.indexOf(e.target), next = all[i + (e.key === 'ArrowDown' ? 1 : -1)]; if (!next) return;
+    e.preventDefault(); const step = next.dataset.step; next.click(); setTimeout(() => { const b = document.querySelector(`.dl-tree .tl[data-step="${step}"]`); if (b) b.focus(); }); });
   UI.act('run-dismiss', (b) => { const href = '#/runs/' + b.dataset.run, was = D.attention.some((a) => a.href === href); D.dismissed = [...new Set((D.dismissed || []).concat(href))]; S.save(); UI.rerender();
     UI.toast(was ? 'Dismissed from Needs you' : 'Not in Needs you', 'the run and its record stay in Activity', 'ok', was ? { label: 'Undo', fn: () => { D.dismissed = D.dismissed.filter((h) => h !== href); S.save(); UI.rerender(); } } : null); });
 
@@ -258,7 +262,7 @@
     <div class="dl-cols"><div class="dl-col-main"><section class="dl-card">${UI.attentionList(/[?&]all=1/.test(location.hash) ? 1e9 : 0)}</section></div>
       <div class="dl-col-side">
         ${(D.fyi || []).length ? `<section class="dl-card"><header class="dl-ch"><h2>For your information</h2></header><ul class="dl-list">${D.fyi.map((a) => `<li><a class="dl-row-a" href="${a.href}"><span class="dl-ng">${icon(/update/i.test(a.title + a.plain) ? 'updates' : 'shield')}</span><span class="dl-nt"><b>${esc(a.plain)}</b><span class="dl-why">${esc(a.why)}</span></span></a></li>`).join('')}</ul></section>` : ''}
-        <section class="dl-card"><header class="dl-ch"><h2>Tell me in this browser</h2></header>
+        <section class="dl-card" id="notify"><header class="dl-ch"><h2>Tell me in this browser</h2></header>
           <div class="dl-prefs">
           <label class="row">${UI.switchBtn(D.prefs.notifyApprovals, 'pref', 'data-k="notifyApprovals" aria-label="When a bot asks for approval"')}When a bot asks for approval</label>
           <label class="row">${UI.switchBtn(D.prefs.notifyPush, 'pref', 'data-k="notifyPush" aria-label="When a browser sign-in needs me"')}When a browser sign-in needs me</label>

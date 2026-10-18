@@ -117,12 +117,12 @@ test('Safety: every bot in words (on its own / asks you first / never), linked f
   await go(page, '#/overview', { fresh: true });
   await page.locator('.nav a[data-nav="safety"]').first().click().catch(() => go(page, '#/safety'));
   await expect(page.locator('.dl-phead h1')).toHaveText(/Safety/);
-  await expect(page.locator('.tier-ladder')).toContainText('commit_money');
+  await expect(page.locator('.tier-ladder')).toHaveCount(0); // no risk ladder: each bot's reach is said in words below
   // each bot's three groups, as the approved "What it can do": in plain words
   const sre = page.locator('.panel', { hasText: 'platform-sre' }).first();
   await expect(sre.locator('.cang[data-s="ok"]')).toContainText('post a message');
   await expect(sre.locator('.cang[data-s="ember"]')).toContainText('apply a signed plan');
-  await expect(sre.locator('.cang[data-s="fail"]')).toContainText('anything matching gh.delete_*');
+  await expect(sre.locator('.cang[data-s="fail"]')).toContainText('delete in GitHub');
   await go(page, '#/bots/platform-sre/access');
   await expect(page.locator('.dl-can .cang[data-s="ok"]')).toContainText('post a message');
 });

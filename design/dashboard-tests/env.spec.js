@@ -23,9 +23,9 @@ test('effective environment: the narrowest scope wins, and the sandbox passes on
   await go(page, '#/secrets/env', { fresh: true });
   const eff = page.locator('#env-preview');
   await expect(eff.locator('tr', { hasText: 'NODE_OPTIONS' })).toContainText('workflow ci-fixer');
-  await expect(eff.locator('tr', { hasText: 'APP_USER' })).toContainText('not on sandbox.env_allow');
+  await expect(eff.locator('tr', { hasText: 'APP_USER' })).toContainText('scrubbed environment'); // a sandboxed launch never gets the daemon's own env (Isolation.md)
   await page.locator('[data-act="env-sbx"]').click();
-  await expect(eff.locator('tr', { hasText: 'APP_USER' })).not.toContainText('not on sandbox.env_allow');
+  await expect(eff.locator('tr', { hasText: 'APP_USER' })).not.toContainText('scrubbed environment'); // a sandboxed launch never gets the daemon's own env (Isolation.md)
   await expect(eff).toContainText('values are never shown');
   // the same view on a run's agent step
   await go(page, '#/runs/r-7ef0');

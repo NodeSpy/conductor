@@ -1,5 +1,55 @@
 # UX audit response
 
+## Round 2 (the four adversarial reports)
+
+Source: `round2-fixes.md` (QA `bugs/REPORT.md`, brand `brand/REPORT.md`, `newcomer/REPORT-r2.md`, `power/REPORT-r2.md`).
+Every item marked **fixed** here has a check in `design/dashboard-tests/round2.spec.js` (or the spec named), run on
+Chromium desktop and phone and the WebKit iPhone sweep; nothing is claimed from reading the code. Earlier claims the
+reviewers proved false are corrected in the round-1 tables below (marked *corrected in round 2*).
+
+**Decided otherwise, so not done:** the Overview greeting and summary line (bugs B8, brand B1, power N18) stay removed,
+on review ("useless info"); a summary sentence on every page (brand M1) is replaced by the rule that a header sentence
+must say something the page doesn't (`home.spec.js`); approval details as tabs only when a plan or diff decides them
+(brand m4) is the direction given in review.
+
+### Blockers
+
+| ID | Finding | Status | What changed |
+|---|---|---|---|
+| power N2, N3 | The review screen lied: a one-field form edit rewrote other nodes; the comment count was a constant | fixed | Forms apply only the fields you changed (the team form diffs what it opened with against what you submit); the node check names the paths the diff touches and counts comments kept, added, removed and moved. The `conductor validate` disclosure prints the CLI's lines without the dashboard's annotations (still simulated in the prototype). |
+| power N4, N14, N15; newcomer N1, N3 | Security statements contradicted the grants | fixed | One function (`UI.verbMode`) says whether a bot runs a verb on its own, asks, or never; the three groups, the table's column ("never: refused") and Safety's count all use it. A connection says which bots reach it, from their grants. The approval names the bot's own approvers. The pack wizard says only an armed trigger widens, matching the review. |
+| power N1 | The enforced egress allowlist was refused | fixed | `deny: true` + `egress` under namespace or container validates (Isolation.md "enforced"); egress without `deny`, or under `user`, is flagged as advisory only. |
+| bugs B5, M4, M12; power N7, N8 | Counts and times disagreed | fixed | Home's figures, its strip and "failed at", Activity, folder roll-ups and workflow figures all come from the run records; a failure is timed at its finish everywhere; the tile's parts add up. Needs you is derived from what needs a person (approvals, failed and waiting runs, a waiting browser or login sign-in), so anything marked "Needs you" elsewhere is in it and its count. Times still regenerate per page load in the demo data (they're relative to now), so two loads minutes apart differ by those minutes. |
+| power N5, newcomer N5, bugs M7, brand M13 | Signing dialog focus | fixed | Every dialog opens on itself (Enter does nothing until you move to a button), traps Tab, and returns focus to its opener however it closes. Menus take ↑/↓/Home/End/Esc. A skip link reaches the page (on an approval, its decision). |
+| bugs B1, B2, B3; power N6 | Connector picker regression | fixed | Add a connector is the catalog's searchable picker (built-in / official plugin / custom source, from-git last); the instance name is prefilled (`-2` when taken) and a vault entry named for the service is chosen; selects carry one empty choice. |
+| bugs B6 | Double-click staged a nameless bot | fixed | A double-click is one action everywhere; New bot refuses an invalid state. |
+| bugs B7, M5, M6; brand B3, M6; newcomer N4, N7 | Phone | fixed | The phone header follows every route; an approval on a phone has no bot shell, title and why above a one-row bar; the entrance animation moves content but never hides it. |
+| bugs B4, brand B2 | The tier ladder still shipped | fixed (the earlier claim was false) | Removed from Safety and team ceilings; a tier name is plain text, never a coloured or struck-through capsule. |
+
+### Majors
+
+| ID | Finding | Status | What changed |
+|---|---|---|---|
+| bugs M8–M10, brand M2–M4, newcomer N13/N14 | Status discipline | fixed, with two notes | Marks only on states, each with its word; healthy rows carry no mark; Working/pending/stopped/idle words replaced by the vocabulary; case and release states are plain words; "N to do" is text, "N failed" has the failed mark; no capsules (a label is plain text); the team page takes the bot page's header; installed catalog cards have no edge. *Notes:* Passed and Parked already differ in hue and shape (sage dot, slate bars, measured); only their words share ink, as BRAND.md specifies. The approved mock has no leading edge on the Overview's needs list, so none was added there (brand M3). The approved mock tints the "Replaces" tile, so it stays. |
+| brand B4 | Generated titles in the serif | fixed | Run, proposal and case titles use the sans h3 style at the h2 size; the type spec allows the serif only on five words or fewer. |
+| newcomer N2 | Step picker risk words missing | fixed | "reads only / changes things / high impact" on every action, reads first in each group; no duplicate built-ins; descriptions wrap in the sans. |
+| bugs M1–M3, newcomer N6/N10, power N17/N19/N20/N23 | Run page | fixed | The primary action on a failed check redoes the step that made the change; each running run streams its own workflow's log; the time column never wraps; the story is a sentence; a parked run doesn't stutter; a running run is "signed when it finishes"; ↑/↓ move between steps. |
+| newcomer N8, N11, N12, N17; bugs m10 | Validation | fixed | Slack channels, name and folder lengths, `..` in folders, Unicode letters allowed; a bare `*` repo scope refused; watching nothing asks first; a deny reason is capped at 500 characters and long text wraps. |
+| power N11, N12, N13, N16 | Invented semantics | fixed | A sole candidate is bound automatically and nothing is written for it; Env describes the scrubbed sandbox env and marks workflow-wide env and precedence **NEW**; Pause promises only the documented switch; a workflow's folder is a comment its trigger still loads with. |
+| brand M5, M7, M8 | Tokens | fixed, with one note | Disabled buttons use the disabled tokens at full opacity; repeated row actions are secondary; compact text follows the density token; dates are one 24-hour format. *Note:* nav weight 500 and the 12px group label match the approved mock (`mock.css` `.rail nav a`, `.rail .grp`); the book and the mock disagree, so it's left for the brand designer. |
+| brand M11, bugs m1–m8 | Voice | fixed | No codenames; page titles match the nav; "1 actions", "creds:", "imports:" and the doubled "reachable" fixed; conductor lowercase; field labels in sentence case; plain dialog kickers; ⌘K's empty state is one paragraph and shows status words. |
+| bugs M13, newcomer N15 | Get started and Display preferences | fixed | Hide has Undo and a "Show Get started" item in your menu; Display preferences opens Config at that card; its row height is stated correctly (36px). |
+| bugs M15 | Downloads remained | fixed | No run-record or log downloads; Env export gone. |
+| brand M12 | Sign-in | fixed | No decorative passkey ring; no app shell while signed out; the kit's horizontal logo file. |
+
+### Not done (and why)
+
+- Bulk on the bots tree, retarget connector / set model in bulk (power N24): scope, unchanged from round 1.
+- Comment placement on a new trigger's dash (power minor): the real emitter's job.
+- A dedicated proposal route for phones (power N22): the bot shell is hidden on phones instead, same result.
+- The Overview's left column ends early on desktop (bugs m11): the approved layout; not changed without review.
+
+
 Responses to the two audits of the dashboard prototype: **Sam** (newcomer,
 `newcomer/REPORT.md`) and **Riley** (power user, `power/REPORT.md`). Each
 finding is **fixed**, **changed differently** (with why), or **deferred**
@@ -39,7 +89,7 @@ result, mostly in §3, §4.4, §4.11, §4.12, §6.5 and §7.
 |---|---|---|
 | m1 top-bar jargon, overflow | fixed | Every strip chip explains itself ("agents ok", update link, the address); on phones the strip is a status dot plus the needs-you count, the rest one tap away. |
 | m2 overview counts | fixed | Tiles in words ("6 bots", "3 in a live session"); counts checked against the data (numbers spec). |
-| m3 unlabeled tree icons | changed differently (Daylight, calm) | The tree no longer shows neutral counts at all: a collapsed folder rolls up only what needs you, in words ("1 pending", "2 failing"), so there is nothing to decode and no legend. |
+| m3 unlabeled tree icons | changed differently (Daylight, calm); *corrected in round 2* | A folder rolls up what needs you first ("1 needs you", "2 failing"), so there is nothing to decode and no legend. |
 | m4 issue numbers in the UI | fixed | None left in copy or diff headers (bots:, browser:, planned features). |
 | m5 undefined terms | fixed | Glossary popovers and `#/glossary` (provenance, widening, digest, turn, sweep, hand-off, case, home session, fleet/rung, tiers …). |
 | m6 Add a login "teleports" to Config | changed differently | Review stays the one shared apply page (one pipeline for every config change), but it names where you came from and returns you there; the reason a passkey is needed is stated. |
@@ -56,7 +106,7 @@ result, mostly in §3, §4.4, §4.11, §4.12, §6.5 and §7.
 
 | ID | Status | What changed |
 |---|---|---|
-| P1 Approve 1,700px down | fixed | On phones a proposal opens without the bot shell, summary first, with a sticky Approve/Deny bar; tiles in one row. |
+| P1 Approve 1,700px down | fixed (*corrected in round 2*: the shell was still there) | On phones a proposal opens without the bot shell, summary first, with a one-row sticky Approve/Deny bar. |
 | P2 clipped controls | fixed | Tab rows scroll with an edge fade and keep the current tab in view; page-head and bot/team header actions beyond two fold into ⋯; tables become cards. |
 | P3 nav highlight jumps | fixed | The origin tab stays highlighted and Back returns there. |
 | P4 toast over the nav | fixed | Toasts sit above the tab bar and the safe area. |
@@ -88,11 +138,11 @@ result, mostly in §3, §4.4, §4.11, §4.12, §6.5 and §7.
 | ID | Finding | Status | What changed | Spec |
 |---|---|---|---|---|
 | M1 | Run detail panels wrong | fixed | One run record per run: per-step selection (↑/↓), step-scoped log/diff, tabs only for what the step recorded, run-scoped audit, time axis, **compare two runs**, consistent fake data. | runs |
-| M2 | No bulk operations | partly fixed | Checkboxes, shift-click ranges and a sticky bulk bar on **workflows** (move to folder, enable, disable; one change set, one diff) and **run history** (retry failed, export); knowledge proposals already had bulk approve/deny. **Deferred:** bulk on the bots tree, packs, connectors, secrets and cases (the tree already has drag-and-drop and Move to; the pattern is in place to extend). | bulk |
+| M2 | No bulk operations | partly fixed | Checkboxes, shift-click ranges and a sticky bulk bar on **workflows** (move to folder, enable, disable; one change set, one diff) and **Activity** (retry the failed, stop the running; *corrected in round 2*: export was retired); knowledge proposals already had bulk approve/deny. **Deferred:** bulk on the bots tree, packs, connectors, secrets and cases (the tree already has drag-and-drop and Move to; the pattern is in place to extend). | bulk |
 | M3 | Classifier misses and invents widenings | fixed | One classifier (`S.classify`) for every edit surface, itemized with YAML paths; official packs aren't flagged as a new source. | semantics |
 | M4 | Pack install has no review | fixed | Browse → **Add** opens the routed install wizard: roles, arming with repos (refused without them), a pack plan with grants shown loudly, the `conductor.lock.yaml` hunk in the diff. **Deferred:** the dependency tree (no pack in the catalog declares dependencies yet). | packs |
 | M5 | Four spellings of vault references | fixed | One syntax, `{{ vault "<vault>" "<key>" }}` (label `vault · key`); secrets keyed by `<vault>/<key>`, names only as dashboard aliases; broker grants `<vault>/<key>` with `secrets_via` shown. | valuesource, semantics |
-| M6 | No env management or effective env | fixed | **Env** tab by scope with uses, move-to-vault, import/export; effective environment on the Env tab, run steps and bot workers. | env |
+| M6 | No env management or effective env | fixed | **Env** tab by scope with uses, move-to-vault, import (export retired); effective environment on the Env tab, run steps and bot workers. | env |
 | M7 | Builder hides real constructs | mostly fixed | Hooks lane (start/done/fail/stop) and step hook badges; `output_schema` summary; the isolation editor covers mode, container image, network egress/deny, fs, limits and privileged; filters take typed keys, `not_` forms and an `expr` row; "+N keys only in YAML" with an in-place YAML editor; the picker has Run a command, Wait for a condition, Hand to a team, Fail the run. **Deferred:** a visual AND/OR group builder for list-form filters (edit them in the YAML pane; they're kept and validated). | builder2, semantics |
 | M8 | Test can't use real events | fixed | Past events of the trigger's source from history, **Paste a payload…**, and "no gh.pull_request events in the last 14 days" when history has none. | builder2 |
 | M9 | Nothing paginates; no density | fixed / changed differently | Run history pages by cursor (50 + Load more); **Compact** density (one-line rows, the bot tree too); tiles capped ("3 + N more"); the runs panel shows the busiest six and filters by folder. Virtual scrolling was **changed to cursor paging**, which matches the cursor-paginated API and keeps the DOM small. | scale |

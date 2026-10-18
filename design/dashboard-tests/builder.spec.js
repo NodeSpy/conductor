@@ -148,7 +148,7 @@ test('inline validation blocks deploy; a fix deploys through the diff with comme
   await go(page, '#/workflows/ci-fixer');
   await open(page, 'fix');
   await page.locator('#wf-steps_2-model').fill('gpt-x');
-  await expect(card(page, 'fix').locator('.tpill.fail')).toBeVisible();
+  await expect(card(page, 'fix').locator('.st[data-s="fail"]', { hasText: 'error' })).toBeVisible();
   await expect(card(page, 'fix').locator('.ferr')).toContainText('no fleet in models:');
   await expect(page.locator('[data-act="wf-deploy"]')).toHaveAttribute('aria-disabled', 'true');
   await page.locator('#wf-steps_2-model').fill('claude-opus-5');

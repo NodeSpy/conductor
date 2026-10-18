@@ -263,7 +263,6 @@
     const ceiling = S.getPath(c, 'autonomy.ceiling') || 'reversible';
     const pool = S.getPath(c, 'budget.proactive');
     return teamShell(t, 'defaults', `<div class="callout small" style="margin-bottom:12px">A bot on a team can only be <b>stricter</b>: approvers from the team's list, promotions no higher than the ceiling, the team's tier classifications and sandbox, sweeps inside the shared pool, logins inside the team's scope. Anything wider is refused when the config is validated, naming the team value it breaks.</div>
-      ${UI.tierLadder()}
       <div class="panel" style="margin-top:14px"><div class="panel-head"><h3>Team values and what each bot does with them</h3><div class="tools"><button class="btn sm" data-act="team-edit" data-t="${t.name}">${icon('edit')}Edit team</button></div></div>
       <table class="tbl responsive inherit-tbl"><thead><tr><th>setting</th><th>team</th>${effs.map((x) => `<th><a href="#/bots/${x.m.name}/settings">${x.m.name}</a></th>`).join('')}</tr></thead><tbody>
         ${row('approvers', (c.operators || []).join(', ') || 'every operator', ({ e }) => `<span class="mono">${(e.operators.v || []).join(', ') || '—'}</span> ${badge(e.operators.src, subset(e.operators.v, c.operators))}`)}
@@ -278,7 +277,6 @@
       </tbody></table></div>`);
   }
   /** The tier ladder, explained once: what each tier means for execution. */
-  UI.tierLadder = () => `<div class="tier-ladder" role="list" aria-label="Tiers, least to most cautious">${[['observe', 'Reads only: runs on its own.'], ['reversible', 'Acts, and the action can be undone: runs on its own only if promoted (up to the team ceiling), otherwise asks.'], ['propose', 'Asks you first: a proposal you approve with your passkey.'], ['commit_money', 'Spends real money: asks you, within the spend cap.'], ['never', 'Refused outright.']].map(([t, d], i) => `<div class="tl-step" role="listitem">${UI.tier(t)}<span class="small">${d}</span>${i < 4 ? '<span class="tl-arrow" aria-hidden="true">›</span>' : ''}</div>`).join('')}</div>`;
   function teamKnowledge(t) {
     const c = staged('teams', t.name) || t.cfg;
     if (!c.knowledge) return teamShell(t, 'knowledge', `<div class="panel"><div class="empty"><span class="serif">No shared knowledge repo</span>A team can keep one repo every bot on it reads. You write to it directly; bots propose and you approve.<button class="btn primary" data-act="team-edit" data-t="${t.name}">${icon('plus')}Add a knowledge repo</button></div></div>`);
@@ -371,7 +369,7 @@
       onSubmit: (v) => { const tn = `${name}-${v.on.split('.')[1].replace(/_/g, '-')}`; const y = [`name: ${tn}`, `on: ${v.on}`, ...((v.repos || []).length ? [`filter: { repo: [${v.repos.join(', ')}] }`] : []), 'steps:', '  - id: tell', `    bot: { name: ${name}, title: "{{.title}}" }`].join('\n') + '\n'; D.prefs.returnTo = { href: `#/bots/${name}`, label: name }; UI.staged(S.stage('workflows', tn, y, `trigger ${tn} hands ${v.on} to ${name}`)); } }); });
   function shell(m, tab, body, cls = '') {
     const pc = pending(m.name).length, w = UI.botWatches(m.name), cases = D.cases.filter((c) => c.bot === m.name && c.status === 'open').length;
-    const watchNote = !w.triggers.length && !w.sweep ? `<div class="callout wait watch-empty" style="margin-top:14px">${UI.statusMark('wait', `<b>${m.name} isn't watching anything yet.</b>`)} <span class="grow">Nothing hands it events and it doesn't check in on its own, so it only answers when you chat with it.</span><button class="btn sm primary" data-act="bot-watch-add" data-m="${m.name}">${icon('plus')}Choose what it watches</button></div>` : '';
+    const watchNote = !w.triggers.length && !w.sweep ? `<div class="callout wait watch-empty" style="margin-top:14px">${UI.statusMark('wait', `<b>${m.name} isn't watching anything yet.</b>`)} <span class="grow">No trigger hands it events and it doesn't check in on its own, so it only answers when someone talks to it: you here, or anyone in a chat it's in.</span><button class="btn sm primary" data-act="bot-watch-add" data-m="${m.name}">${icon('plus')}Choose what it watches</button></div>` : '';
     const T = [['proposals', 'Approvals', pc, true], ['chat', 'Chat'], ['cases', 'Cases', cases], ['memory', 'Memory'], ['access', 'What it can do'], ['settings', 'Settings']];
     return `<div class="page dl-page${cls ? ' ' + cls : ''}">${hero(m)}${watchNote}
       <nav class="dl-tabs" role="tablist">${T.map(([k, l, n, hot]) => `<a href="#/bots/${m.name}/${k}" role="tab" class="${k === tab ? 'on' : ''}"${k === tab ? ' aria-current="page" aria-selected="true"' : ''}>${l}${n ? ` <em class="${hot ? 'hot' : ''}">${n}</em>` : ''}</a>`).join('')}</nav>
@@ -516,7 +514,7 @@
     const overview = `${p.why ? `<div class="dl-pwhy"><span class="dl-lbl">Why</span><p>${esc(p.why)}</p></div>` : ''}${tf ? changes : ''}
       ${where.length ? `<dl class="dl-where">${where.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>` : ''}
       <p class="dl-origin">${origin}</p>${pend ? '' : decided}${!tf ? `<div class="dl-pwhy"><span class="dl-lbl">What it sends</span>${UI.payloadHTML(p)}</div>` : ''}`;
-    const card = `<article class="dl-card dl-proposal">${pend ? `<div class="dl-kick">${UI.mark('ember')}Needs you · asked ${UI.agoText(p.at)}${p.expires ? ` · expires in ${UI.humanSpan(p.expires)}` : ''}</div>` : `<div class="dl-kick dl-sub">${UI.agoText(p.at)}</div>`}
+    const card = `<article class="dl-card dl-proposal">${pend ? `<div class="dl-kick">${UI.mark('ember')}Needs you · <span class="nowrap">asked ${UI.agoText(p.at)}</span>${p.expires ? ` · <span class="nowrap">expires in ${UI.humanSpan(p.expires)}</span>` : ''}</div>` : `<div class="dl-kick dl-sub">${UI.agoText(p.at)}</div>`}
       <h2 class="dl-ptitle">${esc(p.title || p.summary)}</h2><p class="dl-ask">${ask}</p>
       ${shaped ? `<nav class="dl-tabs prop-tabs" role="tablist">${[['overview', 'Overview'], ['tech', 'Technical details']].map(([k, l]) => `<a href="#" role="tab" data-act="prop-tab" data-p="${p.id}" data-v="${k}" class="${tab === k ? 'on' : ''}" aria-selected="${tab === k}">${l}</a>`).join('')}</nav>
       <div class="prop-body">${tab === 'tech' ? tech : overview}</div>` : `<div class="prop-body">${overview}<details class="dl-tech-d"><summary>${icon('chev')}Technical details <span class="dl-sub">the proposal, its case and the digest your passkey signs</span></summary>${techFacts}</details></div>`}
@@ -572,7 +570,6 @@
     return `<div class="page dl-page"><div class="dl-phead"><div><h1>Safety</h1><p class="dl-lead"><b>Nothing risky happens without you.</b> Agents run sandboxed, and every bot does only what you allowed: some things on its own, some only after asking you, some never.</p></div></div>
       ${UI.sandboxHTML()}
       <div class="dl-phead" style="margin-top:28px"><div><h2>What each bot may do</h2><p class="dl-sub" style="margin-top:4px">${own ? `${own} action${own > 1 ? 's' : ''} beyond reading run${own > 1 ? '' : 's'} without asking.` : 'Nothing beyond reading runs without asking.'}</p></div></div>
-      ${UI.tierLadder()}
       <div class="stack" style="margin-top:14px">${rows.map(({ m }) => `<div class="panel"><div class="panel-head">${UI.sigil(m, 'sm')}<h3><a class="link-plain" href="#/bots/${m.name}/access">${esc(m.name)}</a></h3><span class="muted small">${teamOf(m) ? `team ${esc(teamOf(m).name)} · runs alone up to ${S.ceilingOf(m)}` : 'solo'}</span><div class="tools"><a class="btn sm ghost" href="#/bots/${m.name}/access">${icon('edit')}Change</a></div></div><div class="panel-body">${UI.botCanHTML(m, true)}</div></div>`).join('')}</div></div>`;
   }, { nav: 'safety' });
 

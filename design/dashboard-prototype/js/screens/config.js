@@ -62,7 +62,7 @@
       <div class="dl-col-side">
         <div class="panel" id="display"><div class="panel-head"><h3>Display preferences</h3><span class="muted small">this browser only · instant · not config, no passkey</span></div><div class="panel-body stack tight small">
           <div class="field"><label>Theme</label>${UI.seg([['auto', 'Match my device'], ['light', 'Light'], ['dark', 'Dark']], document.documentElement.dataset.themeSource === 'os' ? 'auto' : document.documentElement.dataset.theme, 'pref-theme')}</div>
-          <div class="field"><label>Density</label>${UI.seg([['comfortable', 'Comfortable'], ['compact', 'Compact']], D.prefs.density || 'comfortable', 'pref-density')}<div class="hint">Compact shows one-line rows (about 28px) in tables, lists and the bot tree.</div></div>
+          <div class="field"><label>Density</label>${UI.seg([['comfortable', 'Comfortable'], ['compact', 'Compact']], D.prefs.density || 'comfortable', 'pref-density')}<div class="hint">Compact shows one-line rows (36px) in tables, lists and the bot tree.</div></div>
           <div class="field"><label>Usage display</label>${UI.seg([['off', 'off'], ['subscription', 'subscription'], ['api', 'api ($)']], UI.usageMode(), 'usage-mode')}
             <div class="hint"><b>off</b> (the default): no usage or spend anywhere; your real usage lives in the proxy or load balancer in front of your model accounts. <b>subscription</b>: runs and turns conductor observes, per provider; plan limits and tokens only from a usage source. <b>api</b>: dollars, per provider. Providers are never added together. Cloud spend (commit_money, aws-cost) shows in every mode.</div></div>
           <label class="row">${UI.switchBtn(!!D.prefs.planned, 'planned-toggle', 'aria-label="Show planned features"')}<span><b>Show planned features</b> <span class="muted">previews of multi-user sign-in, designed but not built yet; off by default</span></span></label></div></div>
@@ -197,7 +197,7 @@
     const cur = ap.phase === 'check' ? 1 : 2;
     return {
       toString: () => `<div class="page">
-        ${UI.head(restoring ? 'Restore a backup' : 'Review and apply', { crumbs: `<a href="#/config">Config</a>`, sub: `${P.length} staged change${P.length > 1 ? 's' : ''} · +${dv.adds} −${dv.dels}`, actions: `<button class="btn ghost" data-act="discard-all">${icon('trash')}Discard all</button>` })}
+        ${UI.head(restoring ? 'Restore a backup' : 'Review and apply', { crumbs: D.prefs.returnTo ? `<a href="${D.prefs.returnTo.href}" data-act="return-to">${esc(D.prefs.returnTo.label)}</a>` : `<a href="#/config">Config</a>`, sub: `${P.length} staged change${P.length > 1 ? 's' : ''} · +${dv.adds} −${dv.dels}`, actions: `<button class="btn ghost" data-act="discard-all">${icon('trash')}Discard all</button>` })}
         ${UI.stepper(STEPS, cur, false, { id: 'steps', states: STEPS.map((s, i) => (i < cur ? 'done' : i === cur ? (v.errors.length && i === 1 ? 'bad' : 'cur') : '')) })}
         <div class="grid g-side">
           <div class="stack">

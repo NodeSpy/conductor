@@ -19,7 +19,7 @@
   UI.attentionList = (limit) => {
     const items = D.attention.filter((a) => UI.scopeKeeps(UI.botOfHref(a.href)));
     const note = UI.scopeNote(D.attention.length - items.length);
-    if (!items.length) return note + UI.empty({ title: 'Nothing needs you', body: 'When a bot asks for approval or a run fails, it shows up here.', small: true });
+    if (!items.length) return note + UI.empty({ title: 'Nothing needs you', body: 'When a bot asks for approval or a run fails, it shows up here.', action: location.hash.startsWith('#/attention') ? '' : '<a class="btn sm secondary" href="#/attention?show=notify">Choose how you’re told</a>', small: true });
     // a long list folds: the first few, then "N more need you" (Needs you itself pages by 20)
     const cap = limit || 20, more = items.length - cap;
     return note + `<ul class="dl-list dl-needs">${items.slice(0, cap).map((a, i) => needItem(a, i)).join('')}</ul>${more > 0 ? `<p class="dl-foot-note dl-more"><a class="dl-link" href="#/attention${limit ? '' : '?all=1'}">${more} more need${more === 1 ? 's' : ''} you →</a></p>` : ''}`;
@@ -61,7 +61,7 @@
     const live = D.runs.filter((r) => r.status === 'run').sort((x, y) => new Date(x.started) - new Date(y.started)), top = live.slice(0, 3), more = live.length - top.length;
     if (!live.length) return '';
     return `<section class="dl-card dl-running"><header class="dl-ch"><h2>Running now</h2><span class="dl-sub">${live.length}</span></header>
-      <ul class="dl-list">${top.map((r) => `<li><a class="dl-row-a" href="#/runs/${r.id}"><span class="dl-ng">${UI.mark('run', { lg: true, label: 'Running' })}</span><span class="dl-nt"><b>${esc(UI.runTitle(r))}</b><span class="dl-why">${esc(r.workflow.replace(/^bot:/, ''))} · ${r.repo ? `${r.repo}${r.number ? '#' + r.number : ''}` : 'its own work'}</span></span><span class="dl-age">${UI.durText(Date.now() - new Date(r.started))}</span></a></li>`).join('')}</ul>
+      <ul class="dl-list">${top.map((r) => `<li><a class="dl-row-a" href="#/runs/${r.id}"><span class="dl-ng">${UI.mark('run', { lg: true, label: 'Running' })}</span><span class="dl-nt"><b>${esc(UI.runTitle(r))}</b><span class="dl-why">${r.workflow.startsWith('bot:') ? (r.repo ? UI.runTarget(r) : /spawn/.test(r.trigger) ? 'a task it started itself' : /sweep/.test(r.trigger) ? 'its routine sweep' : 'its own work') : `${esc(r.workflow)} · ${r.repo ? UI.runTarget(r) : esc(r.trigger)}`}</span></span><span class="dl-age">${UI.runningFor(r.started)}</span></a></li>`).join('')}</ul>
       ${more > 0 ? `<a class="dl-link dl-more" href="#/activity?status=run">+${more} more running →</a>` : ''}</section>`;
   }
 
@@ -86,7 +86,7 @@
     return `<section class="dl-card dl-gs"><header class="dl-ch"><h2>Get started</h2><span class="dl-sub">${done.length} of ${st.length} done</span><span class="dl-sp"></span><button class="btn sm ghost" data-act="gs-hide">Hide</button></header>
       <ul class="dl-list">${left.map((x, i) => `<li class="dl-gs-step" data-gs="${x.id}"><div class="dl-nt"><b>${x.title}</b><span class="dl-why">${x.text}</span></div><a class="btn sm ${i === 0 ? 'primary' : 'secondary'}" href="${x.href}">${x.go}</a></li>`).join('')}</ul>
       ${done.length ? `<p class="dl-gs-done">${UI.mark('ok')}Done: ${done.map((x) => x.title).join(' · ')}</p>` : ''}</section>`; }
-  UI.act('gs-hide', () => { D.prefs.gsHidden = true; S.save(); UI.rerender(); UI.toast('Get started hidden', 'Bring it back from the button at the top of the Overview.', 'ok'); });
+  UI.act('gs-hide', () => { D.prefs.gsHidden = true; S.save(); UI.rerender(); UI.toast('Get started hidden', 'Bring it back from your menu, top right: Show Get started.', 'ok', { label: 'Undo', fn: () => { D.prefs.gsHidden = false; S.save(); UI.rerender(); } }); });
   UI.act('gs-show', () => { D.prefs.gsHidden = false; S.save(); UI.rerender(); });
   UI.act('sys-open', (el) => { D.prefs.sysOpen = el.open; S.save(); });
 
@@ -95,7 +95,7 @@
     const running = D.runs.filter((r) => r.status === 'run'), w = window12(), pending = D.proposals.filter((p) => p.status === 'pending' && UI.live(p)).length;
     const tile = (href, l, v, d) => `<a class="dl-tile" href="${href}"><span class="dl-lbl">${l}</span><b>${v}</b><span class="d">${d}</span></a>`;
     return `<section class="dl-glance" aria-label="At a glance">
-      ${tile('#/activity?status=run', 'Running', running.length, running.length ? `longest ${UI.durText(Date.now() - Math.min(...running.map((r) => new Date(r.started))))}` : 'nothing right now')}
+      ${tile('#/activity?status=run', 'Running', running.length, running.length ? `longest ${UI.runningFor(Math.min(...running.map((r) => new Date(r.started))))}` : 'nothing right now')}
       ${tile('#/activity?since=720', 'Runs, last 12 h', w.total, UI.runParts(w.runs) || 'none')}
       ${tile('#/attention', 'Approvals', pending, pending ? 'waiting for you' : 'none waiting')}
       ${tile('#/bots', 'Bots', D.bots.length, `${D.bots.filter((m) => m.home === 'live').length} working · ${plural(D.cases.filter((c) => c.status === 'open').length, 'open case')}`)}

@@ -281,3 +281,14 @@ button.node { font: inherit; color: inherit; text-align: left; }
 .prov-lines { display: flex; flex-direction: column; gap: 2px; font-size: var(--type-body-s-size); margin: 4px 0; }
 .win-meter { display: flex; flex-direction: column; gap: 4px; }
 .cchart.sm { height: 46px; padding-left: 0; }
+/* checkboxes drawn with the tokens (WebKit painted native white squares on the dark theme): the control border, the
+   accent when ticked */
+.cbx { appearance: none; -webkit-appearance: none; display: inline-grid; place-content: center; width: 16px; height: 16px; flex: none; border: 1.5px solid var(--color-border-control, var(--color-border-strong)); border-radius: 4px; background: var(--color-bg-surface); cursor: pointer; vertical-align: middle; }
+.cbx:checked { background: var(--color-accent-default); border-color: var(--color-accent-default); }
+.cbx:checked::after { content: ""; width: 8px; height: 4px; border-left: 2px solid var(--color-text-on-accent); border-bottom: 2px solid var(--color-text-on-accent); transform: translateY(-1px) rotate(-45deg); }
+.cbx:indeterminate::after { content: ""; width: 8px; height: 2px; background: var(--color-text-primary); }
+.cbx:focus-visible { outline: 2px solid var(--color-focus-ring, var(--color-accent-default)); outline-offset: 2px; }
+.cbx:disabled { opacity: 1; background: var(--button-disabled-bg); border-color: var(--button-disabled-border); cursor: not-allowed; }
+[data-theme="dark"] { color-scheme: dark; } [data-theme="light"] { color-scheme: light; }
+/* the unified diff wraps a long line under itself instead of clipping it */
+.diff .dl { white-space: normal; } .diff .dl > span:nth-child(4) { white-space: pre-wrap; overflow-wrap: anywhere; }

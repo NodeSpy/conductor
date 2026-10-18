@@ -7,16 +7,20 @@ test('Browse → Add → the install wizard: roles, arming with repos, loud gran
   await go(page, '#/extensions/browse', { fresh: true });
   await page.locator('[data-cat="pack:pr-autopilot"] a', { hasText: 'Add' }).click();
   await expect(page).toHaveURL(/#\/extensions\/install\/pack\/pr-autopilot$/);
-  await expect(page.locator('#iw-role-github')).toHaveValue('gh');
-  await expect(page.locator('.grants-loud')).toContainText('git.push');
+  // one github connection: bound automatically, nothing written for it (Packs.md); the grants as the bound connection's verbs
+  await expect(page.locator('#iw-form')).toContainText('Bound automatically to gh');
+  await expect(page.locator('.grants-loud')).toContainText('gh.merge');
+  await expect(page.locator('.grants-loud')).toContainText('With nothing armed, installing widens nothing');
   await page.locator('#iw-arm-on_check_failed').check();
+  await expect(page.locator('.grants-loud')).toContainText('widening, so applying needs your passkey');
   await page.locator('[data-act="iw-review"]').click();
   await expect(page.locator('#iw-err')).toContainText('needs the repos');
   await page.fill('#iw-repos-on_check_failed', 'acme/api');
   await page.locator('[data-act="iw-review"]').click();
   await expect(page).toHaveURL(/#\/config\/apply/);
   await expect(page.locator('.diff').first()).toContainText('pr-autopilot');
-  await expect(page.locator('.lock-diff')).toContainText('NodeSpy/conductor-packs/pr-autopilot');
+  await expect(page.locator('.lock-diff')).toContainText('source: conductor-packs/pr-autopilot');
+  await expect(page.locator('.lock-diff')).toContainText('version: 1.3.0');
   await expect(page.locator('#chk-state')).toContainText('passed');
   await expect(page.locator('#pk-why')).toContainText('Needs your passkey');
 });

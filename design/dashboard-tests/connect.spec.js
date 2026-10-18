@@ -6,7 +6,7 @@ const { test, expect, go } = require('./fixtures');
 test('Connect with Slack: manifest, install, tokens into the vault, connector staged with references', async ({ page }) => {
   await go(page, '#/connectors/connectors', { fresh: true });
   await page.locator('[data-act="conn-add"]').first().click();
-  await page.locator('[data-act="conn-pick"][data-u="slack"]').click();
+  await page.locator('[data-act="cat-pick"][data-kind="connector"][data-name="slack"]').click();
   await expect(page.locator('.conn-manifest')).toContainText('No tokens yet?');
   await expect(page.locator('.vs[data-vs="bot_token"]')).toBeVisible(); // the manual form is still here
   await page.locator('[data-act="conn-manifest"]').click();
