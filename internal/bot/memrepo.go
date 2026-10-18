@@ -3,6 +3,7 @@ package bot
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/NodeSpy/conductor/internal/config"
 )
 
 // THE MEMORY REPO. A bot's long-term memory is a plain git repository:
@@ -57,8 +60,17 @@ type Repo struct {
 	// SeedSkipped lists seed files Init did not copy (not a valid document
 	// of any kind here), with why — reported, never silently dropped.
 	SeedSkipped []string
+	// IndexPath is the recall index (memindex.go), in conductor's state dir;
+	// "" keeps it in memory for this handle's life. LimitsFn is the repo's
+	// memory limits (nil: the defaults).
+	IndexPath string
+	LimitsFn  func() config.MemoryLimits
 
-	mu sync.Mutex
+	mu    sync.Mutex
+	idxMu sync.Mutex // the index: its sync and its queries
+	idx   *sql.DB
+	// rebuilds counts full index rebuilds (catch-ups are incremental).
+	rebuilds int
 }
 
 // Kinds is the repo's content kinds.
@@ -252,6 +264,10 @@ func (r *Repo) seed() error {
 			r.SeedSkipped = append(r.SeedSkipped, rel+": "+err.Error())
 			return nil
 		}
+		if err := k.CheckSize(string(b)); err != nil {
+			r.SeedSkipped = append(r.SeedSkipped, rel+": "+err.Error())
+			return nil
+		}
 		dst := filepath.Join(r.Dir, rel)
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			return err
@@ -353,7 +369,15 @@ func (r *Repo) WriteIdent(ctx context.Context, id Ident, w Writer, rel, text, mo
 	}
 	head := r.headLocked(ctx)
 	r.refreshLocked(ctx)
+	r.indexCommitLocked(ctx)
 	return head, nil
+}
+
+// indexCommitLocked brings the recall index up to a commit conductor just
+// made. A failure is not the write's: the next query syncs again, and
+// reports it.
+func (r *Repo) indexCommitLocked(ctx context.Context) {
+	_ = r.SyncIndex(ctx)
 }
 
 // AppendLog appends an entry to a conductor-composed document (a case's log,
@@ -474,40 +498,6 @@ func (r *Repo) List(dir string) []string {
 	return out
 }
 
-// Search returns (path, line) hits for a case-insensitive substring across
-// knowledge, runbooks and episodes, newest episodes first, capped.
-func (r *Repo) Search(query string, limit int) []map[string]string {
-	q := strings.ToLower(strings.TrimSpace(query))
-	if q == "" {
-		return nil
-	}
-	if limit <= 0 {
-		limit = 20
-	}
-	var out []map[string]string
-	for _, d := range r.dirs() {
-		files := r.List(d)
-		if d == DirLog || d == DirEpisodes || d == DirHandoff {
-			sort.Sort(sort.Reverse(sort.StringSlice(files)))
-		}
-		for _, f := range files {
-			b, err := os.ReadFile(filepath.Join(r.Dir, f))
-			if err != nil {
-				continue
-			}
-			for _, line := range strings.Split(string(b), "\n") {
-				if strings.Contains(strings.ToLower(line), q) {
-					out = append(out, map[string]string{"path": f, "line": strings.TrimSpace(line)})
-					if len(out) >= limit {
-						return out
-					}
-				}
-			}
-		}
-	}
-	return out
-}
-
 // LatestHandoff returns the newest handoff note ("" when there is none).
 func (r *Repo) LatestHandoff() (string, string) {
 	files := r.List(DirHandoff)
@@ -523,33 +513,6 @@ func (r *Repo) LatestHandoff() (string, string) {
 // HandoffPath names a new handoff note for a session.
 func (r *Repo) HandoffPath(session string) string {
 	return filepath.Join(DirHandoff, r.now().UTC().Format("20060102T150405Z")+"-"+session+".md")
-}
-
-// EpisodesSince lists episode files committed after t.
-func (r *Repo) EpisodesSince(ctx context.Context, t time.Time) []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	args := []string{"log", "--name-only", "--pretty=format:", "--", DirLog, DirEpisodes}
-	if !t.IsZero() {
-		args = append(args[:1], append([]string{"--since=" + t.UTC().Format(time.RFC3339)}, args[1:]...)...)
-	}
-	out, err := r.git(ctx, r.Dir, args...)
-	if err != nil {
-		return nil
-	}
-	seen := map[string]bool{}
-	var files []string
-	for _, l := range strings.Split(out, "\n") {
-		l = strings.TrimSpace(l)
-		if l != "" && !seen[l] && !strings.HasSuffix(l, ".gitkeep") {
-			if _, err := os.Stat(filepath.Join(r.Dir, l)); err == nil {
-				seen[l] = true
-				files = append(files, l)
-			}
-		}
-	}
-	sort.Strings(files)
-	return files
 }
 
 // Log returns recent commit subjects (for `conductor bot show`).

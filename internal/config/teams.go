@@ -169,6 +169,10 @@ type TeamKnowledge struct {
 	// "direct" (it lands as a commit at once, when the bot's request
 	// provenance would let a promoted verb run; otherwise it is a proposal).
 	Promotion string `yaml:"promotion,omitempty"`
+	// MemoryLimits bound what the team's bots read from the repo (its index
+	// in their prompts, a read, a recall) and what a promotion or an
+	// operator may write to it (memlimits.go).
+	MemoryLimits `yaml:",inline"`
 }
 
 // PromotionMode is the effective promotion setting.
@@ -559,6 +563,11 @@ func (c *Config) validateBotTeam(name string, t TeamConfig) error {
 	}
 	if err := validateCollections(t.Collections, true); err != nil {
 		return err
+	}
+	if t.Knowledge != nil {
+		if err := t.Knowledge.MemoryLimits.validate(true); err != nil {
+			return fmt.Errorf("knowledge.%w", err)
+		}
 	}
 	for _, op := range t.Operators {
 		if _, ok := c.Operators[op]; !ok {

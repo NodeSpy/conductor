@@ -144,7 +144,12 @@ func (s *Service) Repo(name string) *Repo {
 	r := s.repos[name]
 	if r == nil {
 		r = &Repo{Dir: s.Cfg().BotRepoDir(name), Bot: name, Now: s.Now, Seed: s.Cfg().BotSeedDir(name),
-			KindsFn: func() *Kinds { return NewKinds(false, s.Cfg().Bots[name].Collections) }}
+			IndexPath: s.Cfg().BotIndexPath(name),
+			LimitsFn:  func() config.MemoryLimits { return s.Cfg().Bots[name].Memory },
+			KindsFn: func() *Kinds {
+				m := s.Cfg().Bots[name]
+				return NewKinds(false, m.Collections).WithLimits(m.Memory)
+			}}
 		s.repos[name] = r
 	}
 	return r
@@ -532,7 +537,7 @@ func (s *Service) Rotate(ctx context.Context, name, reason string) error {
 		return fmt.Errorf("session worktree: %w", err)
 	}
 	dispatchID := fmt.Sprintf("bot:%s:home:%s:%s", name, sid, strconv.FormatInt(s.now().UnixNano(), 36))
-	prompt := HomePrompt(s.Cfg(), name, rec, hPath, hText)
+	prompt := HomePrompt(s.Cfg(), name, rec, hPath, hText, s.MemoryIndex(ctx, name, homeQuery(rec)))
 	agentID, err := s.Home.Launch(ctx, HomeSpec{Bot: name, Session: sid, Dispatch: dispatchID, Cwd: cwd, Prompt: prompt})
 	if err != nil {
 		_ = repo.RemoveWorktree(ctx, cwd)
@@ -590,6 +595,9 @@ func (s *Service) collectHandoff(ctx context.Context, name string, old *store.Ho
 		return
 	}
 	note := MechanicalHandoff(s.Ledger.Bot(name), reason)
+	if max := s.Cfg().Bots[name].Memory.MaxBytesOf("handoff"); len(note) > max {
+		note = strings.TrimRight(cutBytes(note, max), "\n") + "\n\n[… cut at the handoff cap; `conductor bot cases` has all open work]\n"
+	}
 	if _, err := repo.AppendLog(ctx, repo.HandoffPath(old.ID), map[string]any{"session": old.ID}, note, "handoff: session "+old.ID+" (written by conductor)", map[string]string{"Bot-Session": old.ID}); err != nil {
 		s.logf("%s: mechanical handoff: %v", name, err)
 	}
@@ -702,6 +710,9 @@ type SpawnRequest struct {
 	// observe: anything else it calls becomes a proposal.
 	Verbs    []string
 	ReadOnly bool
+	// consolidates are the log entries a consolidation worker is given
+	// (archive.go).
+	consolidates map[string]string
 	// byConductor marks a worker conductor starts itself (an urgent
 	// event's, a consolidation's): its parent is conductor, not a possibly
 	// tainted home session, so it takes its case's provenance alone. Not
@@ -803,7 +814,8 @@ func (s *Service) Spawn(ctx context.Context, c Actor, req SpawnRequest) (store.W
 		}
 		w = store.Worker{ID: wid, CaseID: caseID, Brief: req.Brief, Handoff: req.Handoff, HistoryID: hid,
 			Dispatch: hid + ":" + config.BotWorkerStepID, Cwd: s.sessionDir(c.Bot, wid), Status: "starting", Started: now,
-			Parent: parent, Requester: tWho, RequesterClass: tClass, Verbs: req.Verbs, ReadOnly: req.ReadOnly}
+			Parent: parent, Requester: tWho, RequesterClass: tClass, Verbs: req.Verbs, ReadOnly: req.ReadOnly,
+			Consolidates: req.consolidates}
 		if r.Workers == nil {
 			r.Workers = map[string]*store.Worker{}
 		}
@@ -846,7 +858,7 @@ func (s *Service) Spawn(ctx context.Context, c Actor, req SpawnRequest) (store.W
 		trig = config.BotHandoffTrigger(c.Bot)
 	}
 	inputs := map[string]any{
-		"prompt":                WorkerPrompt(s.Cfg(), c.Bot, &cs, w.ID, req.Brief),
+		"prompt":                WorkerPrompt(s.Cfg(), c.Bot, &cs, w.ID, req.Brief, s.MemoryIndex(ctx, c.Bot, cs.Title+" "+req.Brief)),
 		"workdir":               w.Cwd,
 		"worker":                w.ID,
 		dispatch.BotContextCase: w.CaseID,
@@ -1045,6 +1057,7 @@ func (s *Service) finishWorker(ctx context.Context, name string, w store.Worker,
 		s.logf("%s: episode for worker %s: %v", name, w.ID, err)
 	}
 	s.audit(map[string]any{"event": "bot_worker", "bot": name, "worker": w.ID, "case": w.CaseID, "group": w.Group, "action": status})
+	s.consolidationDone(ctx, name, w, status)
 	switch {
 	case isTriage(cs):
 		// A triage worker reports by assigning; the lead's conversation is
@@ -1203,6 +1216,9 @@ func (s *Service) Episode(ctx context.Context, c Actor, caseID, text string) (st
 	if cs == nil {
 		return "", fmt.Errorf("no case %q", caseID)
 	}
+	if max := s.Cfg().Bots[c.Bot].Memory.MaxBytesOf("episode"); len(text) > max {
+		return "", fmt.Errorf("episode entry is %d bytes, over its cap of %d bytes (memory.max_bytes.episode) — write what happened in fewer words; durable facts belong in knowledge/ (`conductor bot remember`)", len(text), max)
+	}
 	repo := s.Repo(c.Bot)
 	entry := fmt.Sprintf("## %s — %s\n\n%s\n", s.now().UTC().Format(time.RFC3339), c.Role, strings.TrimSpace(text))
 	return repo.AppendLog(ctx, repo.EpisodePath(cs.ID, cs.Title, cs.Created), logFM(*cs), entry, "episode: case "+cs.ID, map[string]string{"Bot-Case": cs.ID, "Bot-Role": c.Role})
@@ -1221,6 +1237,9 @@ func (s *Service) Handoff(ctx context.Context, c Actor, text string) (string, er
 	repo := s.Repo(c.Bot)
 	if strings.TrimSpace(text) == "" {
 		return "", errors.New("empty handoff")
+	}
+	if max := s.Cfg().Bots[c.Bot].Memory.MaxBytesOf("handoff"); len(text) > max {
+		return "", fmt.Errorf("handoff is %d bytes, over its cap of %d bytes (memory.max_bytes.handoff) — rewrite it shorter and run `conductor bot handoff` again: what is in flight, what you promised whom, what to watch; durable facts belong in knowledge/ (`conductor bot remember`) and are in your next session's index", len(text), max)
 	}
 	return repo.AppendLog(ctx, repo.HandoffPath(sid), map[string]any{"session": sid}, "# Handoff from session "+sid+"\n\n"+text, "handoff: session "+sid, map[string]string{"Bot-Session": sid})
 }

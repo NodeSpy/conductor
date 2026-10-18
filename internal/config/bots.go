@@ -117,6 +117,10 @@ type BotConfig struct {
 	// Collections are custom content kinds in the bot's memory repo, beside
 	// the built-ins (collections.go).
 	Collections map[string]Collection `yaml:"collections,omitempty"`
+	// Memory bounds what the bot's sessions read from and write to its
+	// memory repo: the prompt's index budget, the per-read cap, the
+	// per-kind document caps (memlimits.go). On by default.
+	Memory MemoryLimits `yaml:"memory,omitempty"`
 	// Isolation is the bot's session policy (inherited from its team,
 	// and only ever stricter).
 	Isolation BotIsolation `yaml:"isolation,omitempty"`
@@ -962,6 +966,9 @@ func (c *Config) validateBot(name string, m BotConfig) error {
 	}
 	if err := validateCollections(m.Collections, false); err != nil {
 		return err
+	}
+	if err := m.Memory.validate(false); err != nil {
+		return fmt.Errorf("memory.%w", err)
 	}
 	if m.Charter != "" && m.CharterFile != "" {
 		return fmt.Errorf("set charter or charter_file, not both")

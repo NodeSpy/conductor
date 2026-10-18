@@ -47,6 +47,11 @@ type BotRecord struct {
 	Delegations map[string]*Delegation `json:"delegations,omitempty"`
 	// Consolidated is when episodes were last distilled into knowledge.
 	Consolidated time.Time `json:"consolidated,omitempty"`
+	// ConsolidatedDocs are log entries a FINISHED consolidation covered, by
+	// path, with the git blob each was consolidated at: an entry is
+	// archivable only while it still holds exactly that content. Archived
+	// entries leave the map.
+	ConsolidatedDocs map[string]string `json:"consolidated_docs,omitempty"`
 	// Seq numbers ids within this bot so they stay short and readable.
 	Seq int `json:"seq"`
 }
@@ -277,6 +282,10 @@ type Worker struct {
 	Verbs          []string      `json:"verbs,omitempty"`
 	ReadOnly       bool          `json:"read_only,omitempty"`
 	Instructions   []Instruction `json:"instructions,omitempty"`
+	// Consolidates are the log entries a consolidation worker was given
+	// (path → git blob): they count as consolidated only once it finishes
+	// done having written a digest.
+	Consolidates map[string]string `json:"consolidates,omitempty"`
 }
 
 // Instruction is a follow-up from a worker's parent: an instruction, not

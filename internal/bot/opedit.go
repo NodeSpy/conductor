@@ -285,6 +285,7 @@ func (r *Repo) Commit(ctx context.Context, id Ident, e Edit) (head string, chang
 	}
 	head = r.headLocked(ctx)
 	r.refreshLocked(ctx)
+	r.indexCommitLocked(ctx)
 	return head, true, nil
 }
 

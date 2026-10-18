@@ -463,7 +463,7 @@ func TestMemoryWritesAreCommitsAndConfined(t *testing.T) {
 	if _, err := f.svc.Repo("other").Read("knowledge/db.md"); err == nil {
 		t.Fatal("memory crossed bots")
 	}
-	if hits := f.svc.Repo("sre").Search("REPLICA", 5); len(hits) != 1 {
+	if hits, err := f.svc.Repo("sre").Recall(ctx, "REPLICA", 5, ""); err != nil || len(hits) != 1 {
 		t.Fatalf("search: %v", hits)
 	}
 }

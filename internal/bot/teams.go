@@ -66,7 +66,11 @@ func (s *Service) TeamRepo(team string) *Repo {
 	r := s.repos[key]
 	if r == nil {
 		r = &Repo{Dir: dir, Bot: team, Team: true, Now: s.Now, Seed: cfg.TeamSeedDir(team),
-			KindsFn: func() *Kinds { return NewKinds(true, s.Cfg().Teams[team].Collections) }}
+			IndexPath: cfg.TeamIndexPath(team),
+			LimitsFn:  func() config.MemoryLimits { return s.Cfg().TeamLimits(team) },
+			KindsFn: func() *Kinds {
+				return NewKinds(true, s.Cfg().Teams[team].Collections).WithLimits(s.Cfg().TeamLimits(team))
+			}}
 		s.repos[key] = r
 	}
 	return r
@@ -500,16 +504,16 @@ func (s *Service) TeamRead(ctx context.Context, bot, rel string) (string, error)
 	return repo.Read(rel)
 }
 
-// TeamRecall searches team knowledge.
-func (s *Service) TeamRecall(ctx context.Context, bot, query string) ([]map[string]string, error) {
-	_, _, repo, err := s.teamRepoOf(bot)
+// TeamRecall ranks team knowledge against a query.
+func (s *Service) TeamRecall(ctx context.Context, bot, query string) ([]Hit, error) {
+	team, _, repo, err := s.teamRepoOf(bot)
 	if err != nil {
 		return nil, err
 	}
 	if err := repo.Init(ctx); err != nil {
 		return nil, err
 	}
-	return repo.Search(query, 20), nil
+	return repo.Recall(ctx, query, s.Cfg().TeamLimits(team).RecallLimitOr(), "")
 }
 
 // knowledgeOptions are what a promotion's digest covers.

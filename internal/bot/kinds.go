@@ -43,6 +43,9 @@ const (
 	KindWatch   = "watch"
 	KindLog     = "log"
 	KindHandoff = "handoff"
+	// KindDigest is a consolidated summary of episodes: the episodic memory
+	// a session sees once raw log entries are archived (archive.go).
+	KindDigest = "digest"
 )
 
 // Field is one frontmatter field of a kind's schema.
@@ -71,6 +74,10 @@ type ContentKind struct {
 	Annotate bool
 	Template string
 	Builtin  bool
+	// MaxBytes caps one document (0: only the hard write ceiling); CapKnob
+	// names the config key that loosens it, for the refusal.
+	MaxBytes int
+	CapKnob  string
 }
 
 // Writable reports whether w may write this kind.
@@ -97,8 +104,10 @@ type Kinds struct {
 	list []*ContentKind
 }
 
-// builtinKinds is the built-in set: a bot's memory has all five; a team's
+// builtinKinds is the built-in set: a bot's memory has all six; a team's
 // knowledge repo the shared three (written by operators and promotions).
+// Each shared kind takes an optional one-line summary: what the memory
+// index shows for it (the body's first sentence when it has none).
 func builtinKinds(team bool) []*ContentKind {
 	shared := []Writer{WriterOperator, WriterBot}
 	if team {
@@ -110,6 +119,7 @@ func builtinKinds(team bool) []*ContentKind {
 			{Name: "applies_to", Type: "list"},
 			{Name: "evidence", Type: "text", Required: true},
 			{Name: "confidence", Type: "enum", Required: true, Values: []string{"low", "medium", "high"}},
+			{Name: "summary", Type: "string"},
 		}, Template: "What is true, and why you believe it.\n"},
 		{Name: KindRunbook, Dir: "runbooks", Builtin: true, Writers: shared, Fields: []Field{
 			{Name: "title", Type: "string", Required: true},
@@ -119,16 +129,24 @@ func builtinKinds(team bool) []*ContentKind {
 			{Name: "verification", Type: "text", Required: true},
 			{Name: "rollback", Type: "text", Required: true},
 			{Name: "owner", Type: "string", Required: true},
+			{Name: "summary", Type: "string"},
 		}, Template: "Notes on the procedure (the steps are in the frontmatter).\n"},
 		{Name: KindWatch, Dir: "watch", Builtin: true, Writers: shared, Fields: []Field{
 			{Name: "what", Type: "string", Required: true},
 			{Name: "signal", Type: "text", Required: true},
 			{Name: "threshold", Type: "text", Required: true},
 			{Name: "why", Type: "text", Required: true},
+			{Name: "summary", Type: "string"},
 		}},
 	}
 	if !team {
 		ks = append(ks,
+			&ContentKind{Name: KindDigest, Dir: "digests", Builtin: true, Writers: shared, Fields: []Field{
+				{Name: "title", Type: "string", Required: true},
+				{Name: "summary", Type: "string", Required: true},
+				{Name: "period", Type: "string"},
+				{Name: "cases", Type: "list"},
+			}, Template: "What happened, per case: the cause, what was done, how it ended.\n"},
 			&ContentKind{Name: KindLog, Dir: "log", Legacy: []string{"episodes"}, Builtin: true, FreePaths: true,
 				Writers: []Writer{WriterSystem}, Annotate: true, Fields: []Field{
 					{Name: "title", Type: "string", Required: true},
@@ -142,10 +160,20 @@ func builtinKinds(team bool) []*ContentKind {
 				}},
 		)
 	}
+	knob := "memory.max_bytes."
+	if team {
+		knob = "knowledge.max_bytes."
+	}
+	for _, k := range ks {
+		if n := config.DefaultMaxBytes[k.Name]; n > 0 {
+			k.MaxBytes, k.CapKnob = n, knob+k.Name
+		}
+	}
 	return ks
 }
 
-// NewKinds is the built-in kinds plus a repo's collections.
+// NewKinds is the built-in kinds plus a repo's collections, at the default
+// caps (WithLimits applies a repo's own).
 func NewKinds(team bool, cols map[string]config.Collection) *Kinds {
 	ks := &Kinds{list: builtinKinds(team)}
 	names := make([]string, 0, len(cols))
@@ -155,7 +183,11 @@ func NewKinds(team bool, cols map[string]config.Collection) *Kinds {
 	sort.Strings(names)
 	for _, n := range names {
 		c := cols[n]
-		k := &ContentKind{Name: n, Dir: strings.Trim(c.Dir, "/"), FreePaths: c.FreePaths, Template: c.Template}
+		k := &ContentKind{Name: n, Dir: strings.Trim(c.Dir, "/"), FreePaths: c.FreePaths, Template: c.Template,
+			MaxBytes: config.DefaultCollectionMaxBytes, CapKnob: "collections." + n + ".max_bytes"}
+		if c.MaxBytes > 0 {
+			k.MaxBytes = int(c.MaxBytes)
+		}
 		fns := make([]string, 0, len(c.Fields))
 		for fn := range c.Fields {
 			fns = append(fns, fn)
@@ -169,6 +201,16 @@ func NewKinds(team bool, cols map[string]config.Collection) *Kinds {
 			k.Writers = append(k.Writers, Writer(w))
 		}
 		ks.list = append(ks.list, k)
+	}
+	return ks
+}
+
+// WithLimits applies a repo's max_bytes to its built-in kinds.
+func (ks *Kinds) WithLimits(l config.MemoryLimits) *Kinds {
+	for _, k := range ks.list {
+		if k.Builtin && k.MaxBytes > 0 {
+			k.MaxBytes = l.MaxBytesOf(k.Name)
+		}
 	}
 	return ks
 }
@@ -426,7 +468,23 @@ func (ks *Kinds) CheckWrite(p, text string, w Writer, wantKind string) (*Content
 	if err := k.Validate(text); err != nil {
 		return nil, fmt.Errorf("%s: %w", p, err)
 	}
+	// Conductor's own writes (log entries, handoffs) are bounded where they
+	// are composed; everyone else's document fits its kind's cap.
+	if w != WriterSystem {
+		if err := k.CheckSize(text); err != nil {
+			return nil, fmt.Errorf("%s: %w", p, err)
+		}
+	}
 	return k, nil
+}
+
+// CheckSize refuses a document over the kind's cap, with the exact numbers
+// and the knob that loosens it.
+func (k *ContentKind) CheckSize(text string) error {
+	if k.MaxBytes > 0 && len(text) > k.MaxBytes {
+		return fmt.Errorf("%s document is %d bytes, over its cap of %d bytes (%s) — keep one topic per document: split it into focused documents, or trim it", k.Name, len(text), k.MaxBytes, k.CapKnob)
+	}
+	return nil
 }
 
 // CheckRemove is the rule for deleting or moving a document away.
@@ -476,8 +534,12 @@ func (k *ContentKind) Describe() map[string]any {
 	if k.FreePaths {
 		pathRule = k.Dir + "/<any path>.md"
 	}
-	return map[string]any{"kind": k.Name, "dir": k.Dir + "/", "path": pathRule, "writers": writerList(k.Writers),
+	out := map[string]any{"kind": k.Name, "dir": k.Dir + "/", "path": pathRule, "writers": writerList(k.Writers),
 		"fields": fields, "skeleton": k.Skeleton(nil)}
+	if k.MaxBytes > 0 {
+		out["max_bytes"] = k.MaxBytes
+	}
+	return out
 }
 
 // Skeleton is a document of this kind with the given fields set and every

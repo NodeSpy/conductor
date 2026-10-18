@@ -27,6 +27,7 @@ import (
 //	    template: "## Timeline\n\n## Cause\n\n## Follow-ups\n"
 //	    free_paths: false
 //	    writers: [operator, bots]        # a team's: operator, proposal
+//	    max_bytes: 16k                   # one document (default 8k)
 //	  # or a definition a pack ships:
 //	  postmortems: { from: .conductor/packs/platform-sre/collections/postmortems.yaml }
 type Collection struct {
@@ -35,6 +36,8 @@ type Collection struct {
 	Template  string                     `yaml:"template,omitempty"`
 	FreePaths bool                       `yaml:"free_paths,omitempty"`
 	Writers   []string                   `yaml:"writers,omitempty"`
+	// MaxBytes caps one document of the collection (default 8KiB).
+	MaxBytes ByteSize `yaml:"max_bytes,omitempty"`
 	// From loads the whole definition from a YAML file (config-relative),
 	// e.g. one a pack ships. Exclusive with the inline keys.
 	From string `yaml:"from,omitempty"`
@@ -60,7 +63,7 @@ const (
 
 // BuiltinKindDirs are the dirs the built-in kinds own (and legacy homes):
 // no collection may claim one.
-var BuiltinKindDirs = []string{"knowledge", "runbooks", "watch", "log", "handoff", "episodes"}
+var BuiltinKindDirs = []string{"knowledge", "runbooks", "watch", "digests", "log", "handoff", "episodes"}
 
 var collectionName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,39}$`)
 
@@ -71,7 +74,7 @@ func (c *Config) resolveCollections() error {
 			if col.From == "" {
 				continue
 			}
-			if col.Dir != "" || len(col.Fields) > 0 || col.Template != "" || col.FreePaths || len(col.Writers) > 0 {
+			if col.Dir != "" || len(col.Fields) > 0 || col.Template != "" || col.FreePaths || len(col.Writers) > 0 || col.MaxBytes != 0 {
 				return fmt.Errorf("config: %s.collections.%s: from: is the whole definition — drop the inline keys", where, name)
 			}
 			p := expandHome(col.From)
@@ -155,6 +158,9 @@ func validateCollections(cs map[string]Collection, team bool) error {
 			if (f.Type == "enum") != (len(f.Values) > 0) {
 				return fmt.Errorf("%s.fields.%s: values: go with type enum, and an enum needs them", where, fn)
 			}
+		}
+		if col.MaxBytes < 0 || col.MaxBytes > MaxDocBytes {
+			return fmt.Errorf("%s: max_bytes: want 1 to %d bytes, got %d", where, MaxDocBytes, col.MaxBytes)
 		}
 		allowed := map[string]bool{WriterOperator: true, WriterBots: !team, WriterProposal: team}
 		if len(col.Writers) == 0 {

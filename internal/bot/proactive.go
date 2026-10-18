@@ -222,7 +222,7 @@ func (s *Service) StartSweep(ctx context.Context, name string, byOperator bool) 
 		return fail(fmt.Errorf("sweep worktree: %w", err))
 	}
 	inputs := map[string]any{
-		"prompt":                SweepPrompt(s.Cfg(), name, rec, sw.ID, w.ID, checklist),
+		"prompt":                SweepPrompt(s.Cfg(), name, rec, sw.ID, w.ID, checklist, s.MemoryIndex(ctx, name, checklist)),
 		"workdir":               w.Cwd,
 		"worker":                w.ID,
 		dispatch.BotContextCase: sw.ID,

@@ -54,8 +54,9 @@ const botUsage = `usage:
     conductor bot kinds [--kind <kind>]                    # the document kinds of your memory: homes, fields, skeletons
     conductor bot remember --kind <kind> [--title "…" | --slug <s> | --path <p>] --text "<document>" [--append]
     conductor bot episode [--case <id>] --text "…"
-    conductor bot recall <words…>
-    conductor bot read <path>
+    conductor bot recall <words…> [--limit N] [--kind <kind>]       # ranked: the best-matching documents, each with a snippet
+    conductor bot read <path> [--section "<heading>"] [--offset N]   # at most read_max bytes; says when it cut
+    conductor bot index [--kind <kind> | --all] [--offset N]         # your memory index; --kind/--all lists every document
     conductor bot cases [--all]
     conductor bot case open --title "…" [--summary "…"]
     conductor bot case note <case> --text "…"
@@ -71,7 +72,7 @@ const botUsage = `usage:
     conductor bot delegations [--all]                      # what you delegated (out) and hold (in)
     conductor bot peers
     conductor bot team                                     # your team: teammates, lead, knowledge
-    conductor bot team recall <words…> | team read <path>  # the team's shared knowledge
+    conductor bot team recall <words…> | team read <path> [--section …] | team index [--kind …]  # the team's shared knowledge
     conductor bot team promote --path knowledge/<f>.md [--to <team path>] [--note "…"]
     conductor bot assign <case> <bot> [--note "…"]         # the team's lead hands a triage case to a teammate
     conductor bot handoff --text "…"
@@ -80,7 +81,7 @@ const botUsage = `usage:
     conductor bot proposals [--all]
     conductor bot wait <proposal> [--timeout 30m]`
 
-var botBoolFlags = map[string]bool{"all": true, "append": true, "handoff": true, "urgent": true, "read-only": true, "flat": true}
+var botBoolFlags = map[string]bool{"all": true, "append": true, "handoff": true, "urgent": true, "read-only": true, "flat": true, "json": true}
 
 // botFlags parses --k v / --k=v, boolean flags, repeated --file, and a
 // `--` that ends flag parsing (everything after is positional).
@@ -165,7 +166,7 @@ func botAgent(sub string, args []string) error {
 	}
 	call := sub
 	switch sub {
-	case "whoami", "remember", "episode", "handoff", "proposals", "cases", "peers", "delegations", "kinds":
+	case "whoami", "remember", "episode", "handoff", "proposals", "cases", "peers", "delegations", "kinds", "index":
 	case "instructions":
 		// --wait blocks until the parent sends something (or the timeout):
 		// how a child waits on its parent, like wait/join.
@@ -252,7 +253,7 @@ func botAgent(sub string, args []string) error {
 				a["query"] = strings.Join(pos[1:], " ")
 			case "read":
 				if len(pos) != 2 {
-					return fmt.Errorf("usage: conductor bot team read <path>")
+					return fmt.Errorf("usage: conductor bot team read <path> [--section \"<heading>\"] [--offset N]")
 				}
 				a["path"] = pos[1]
 			}
@@ -266,7 +267,7 @@ func botAgent(sub string, args []string) error {
 		a["query"] = strings.Join(pos, " ")
 	case "read":
 		if len(pos) != 1 {
-			return fmt.Errorf("usage: conductor bot read <path>")
+			return fmt.Errorf("usage: conductor bot read <path> [--section \"<heading>\"] [--offset N]")
 		}
 		a["path"] = pos[0]
 	case "case":
@@ -333,15 +334,80 @@ func botAgent(sub string, args []string) error {
 	default:
 		return fmt.Errorf("unknown bot command %q\n%s", sub, botUsage)
 	}
+	delete(a, "json")
 	out, err := botAgentCall(call, a)
 	if err != nil {
 		return err
 	}
 	showInstructions(out)
+	if mem := memView(sub, pos); mem != "" && fl["json"] == "" {
+		printMem(mem, out)
+		return nil
+	}
 	if msg, ok := out["message"].(string); ok && len(out) <= 7 {
 		fmt.Println(msg)
 	}
 	return printJSON(out)
+}
+
+// memView is which memory read a call is ("recall", "read", "index"), for
+// plain-text output: what a session reads is text, not escaped JSON.
+func memView(sub string, pos []string) string {
+	switch sub {
+	case "recall", "read", "index":
+		return sub
+	case "team":
+		if len(pos) > 0 && (pos[0] == "recall" || pos[0] == "read" || pos[0] == "index") {
+			return pos[0]
+		}
+	}
+	return ""
+}
+
+// printMem prints a recall, read or index result as plain text: the note
+// (a truncation says so first), then the content.
+func printMem(view string, out map[string]any) {
+	note, _ := out["note"].(string)
+	switch view {
+	case "recall":
+		hits, _ := out["hits"].([]any)
+		for i, x := range hits {
+			h, _ := x.(map[string]any)
+			arch := ""
+			if a, _ := h["archived"].(string); a != "" {
+				arch = " [archived " + a + "]"
+			}
+			fmt.Printf("%d. %v (%v)%s — %v\n   %v\n", i+1, h["path"], h["kind"], arch, h["title"], h["snippet"])
+		}
+		if note != "" {
+			fmt.Println(note)
+		}
+	case "read":
+		hdr := fmt.Sprint(out["path"])
+		if s, _ := out["section"].(string); s != "" {
+			hdr += " § " + s
+		}
+		fmt.Printf("== %s (%v bytes) ==\n", hdr, out["bytes"])
+		if note != "" {
+			fmt.Println(note)
+		}
+		fmt.Print(out["text"])
+		if t, _ := out["text"].(string); !strings.HasSuffix(t, "\n") {
+			fmt.Println()
+		}
+		if secs, _ := out["sections"].([]any); len(secs) > 0 {
+			var names []string
+			for _, s := range secs {
+				names = append(names, fmt.Sprint(s))
+			}
+			fmt.Printf("== sections: %s ==\n", strings.Join(names, " | "))
+		}
+	case "index":
+		fmt.Print(out["text"])
+		if note != "" {
+			fmt.Println(note)
+		}
+	}
 }
 
 // showInstructions prints instructions from a worker's parent first and
@@ -471,7 +537,9 @@ const botRepoUsage = `usage:
   conductor bot %[1]s ls <%[2]s> [--kind <kind>]   # documents (kind, status), and the head to write against
   conductor bot %[1]s cat <%[2]s> <path>           # a document (the head on stderr)
   conductor bot %[1]s log <%[2]s> [<path>] [--limit N]   # commits: author, kind, case, proposal
-  conductor bot %[1]s kinds <%[2]s> [--kind <kind>]     # the kinds here: homes, fields, writers, skeletons`
+  conductor bot %[1]s kinds <%[2]s> [--kind <kind>]     # the kinds here: homes, fields, writers, skeletons, caps
+  conductor bot %[1]s index <%[2]s> [--kind <kind> | --all]   # the memory index a session sees (or every document)
+  conductor bot %[1]s recall <%[2]s> <words…> [--limit N]     # ranked recall, as a session runs it`
 
 // botRepoEdit is `conductor bot knowledge|memory …`: an operator's direct
 // reads and writes of a team's knowledge repo or a bot's memory repo.
@@ -521,6 +589,28 @@ func botRepoEdit(cfg *config.Config, repoKind string, pos []string, fl map[strin
 			return nil
 		}
 		return printJSON(out)
+	case "index", "recall":
+		if action == "recall" {
+			if len(pos) < 3 {
+				return usage
+			}
+			a["query"], a["limit"] = strings.Join(pos[2:], " "), fl["limit"]
+		} else if err := need(2); err != nil {
+			return err
+		}
+		a["kind"], a["offset"] = fl["kind"], fl["offset"]
+		if fl["all"] != "" {
+			a["all"] = true
+		}
+		out, _, err := botControl(cfg, "mem_"+action, a)
+		if err != nil {
+			return err
+		}
+		if fl["json"] != "" {
+			return printJSON(out)
+		}
+		printMem(action, out)
+		return nil
 	case "log":
 		if len(pos) > 3 {
 			return usage

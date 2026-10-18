@@ -376,7 +376,7 @@ func TestInventoryAndLegacy(t *testing.T) {
 	if text, err := repo.Read("episodes/2026/09/c1.md"); err != nil || !strings.Contains(text, "db-main") {
 		t.Fatalf("a legacy episode no longer reads: %q %v", text, err)
 	}
-	if hits := repo.Search("db-main", 10); len(hits) == 0 || hits[0]["path"] != "episodes/2026/09/c1.md" {
+	if hits, err := repo.Recall(ctx, "db-main", 10, ""); err != nil || len(hits) == 0 || hits[0].Path != "episodes/2026/09/c1.md" {
 		t.Fatalf("legacy episodes are not searched: %v", hits)
 	}
 	// Rewriting an invalid old file must make it valid.

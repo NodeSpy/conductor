@@ -570,7 +570,7 @@ func TestTeamKnowledgePromotionIsAProposal(t *testing.T) {
 	if text, err := f.svc.TeamRead(ctx, "b", "knowledge/databases.md"); err != nil || !strings.Contains(text, "db-prod-1") {
 		t.Fatalf("teammate read: %q %v", text, err)
 	}
-	if hits, _ := f.svc.TeamRecall(ctx, "lead", "primary"); len(hits) != 1 || hits[0]["path"] != "knowledge/databases.md" {
+	if hits, _ := f.svc.TeamRecall(ctx, "lead", "primary"); len(hits) != 1 || hits[0].Path != "knowledge/databases.md" {
 		t.Fatalf("team recall: %v", hits)
 	}
 	if hits, _ := f.svc.TeamRecall(ctx, "b", "own notes"); len(hits) != 0 {

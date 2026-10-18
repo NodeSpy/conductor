@@ -135,18 +135,12 @@ func (s *Service) agentOp(ctx context.Context, c Actor, sub string, args map[str
 		}
 		return map[string]any{"commit": sha}, nil
 	case "recall":
-		hits := s.Repo(c.Bot).Search(str(args, "query"), 20)
-		out := make([]any, 0, len(hits))
-		for _, h := range hits {
-			out = append(out, map[string]any{"path": h["path"], "line": h["line"]})
-		}
-		return map[string]any{"hits": out, "count": len(out)}, nil
+		return memRecall(ctx, s.Repo(c.Bot), args, "conductor bot read", "conductor bot index")
 	case "read":
-		text, err := s.Repo(c.Bot).Read(str(args, "path"))
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"path": str(args, "path"), "text": text}, nil
+		return memRead(ctx, s.Repo(c.Bot), args)
+	case "index":
+		m := s.Cfg().Bots[c.Bot]
+		return memIndex(ctx, s.Repo(c.Bot), args, IndexView{Budget: m.Memory.IndexBudgetOr(config.DefaultIndexBudget)})
 	case "cases":
 		return map[string]any{"cases": toList(s.Cases(c.Bot, boolArg(args, "all")))}, nil
 	case "case_open":
@@ -247,26 +241,26 @@ func (s *Service) teamOp(ctx context.Context, c Actor, args map[string]any) (map
 	switch a := str(args, "action"); a {
 	case "", "info":
 		return s.TeamInfo(ctx, c.Bot)
-	case "read":
-		text, err := s.TeamRead(ctx, c.Bot, str(args, "path"))
+	case "read", "recall", "index":
+		team, _, repo, err := s.teamRepoOf(c.Bot)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"path": str(args, "path"), "text": text}, nil
-	case "recall":
-		hits, err := s.TeamRecall(ctx, c.Bot, str(args, "query"))
-		if err != nil {
+		if err := repo.Init(ctx); err != nil {
 			return nil, err
 		}
-		out := make([]any, 0, len(hits))
-		for _, h := range hits {
-			out = append(out, map[string]any{"path": h["path"], "line": h["line"]})
+		switch a {
+		case "read":
+			return memRead(ctx, repo, args)
+		case "recall":
+			return memRecall(ctx, repo, args, "conductor bot team read", "conductor bot team index")
 		}
-		return map[string]any{"hits": out, "count": len(out)}, nil
+		return memIndex(ctx, repo, args, IndexView{Budget: s.Cfg().TeamLimits(team).IndexBudgetOr(config.DefaultTeamIndexBudget),
+			Heading: "## Team " + team + "'s knowledge index", Recall: "conductor bot team recall", IndexCmd: "conductor bot team index"})
 	case "promote":
 		return s.Promote(ctx, c, str(args, "path"), str(args, "to"), str(args, "note"))
 	default:
-		return nil, fmt.Errorf("unknown team action %q (info, read, recall, promote)", a)
+		return nil, fmt.Errorf("unknown team action %q (info, read, recall, index, promote)", a)
 	}
 }
 
@@ -315,6 +309,27 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 			return nil, err
 		}
 		return kindsInfo(repo.Kinds(), str(args, "kind"))
+	case "mem_index", "mem_recall":
+		team := str(args, "team")
+		repo, _, _, err := s.editTarget(team, name)
+		if err != nil {
+			return nil, err
+		}
+		if err := repo.Init(ctx); err != nil {
+			return nil, err
+		}
+		if sub == "mem_recall" {
+			face, target := "memory", name
+			if team != "" {
+				face, target = "knowledge", team
+			}
+			return memRecall(ctx, repo, args, "conductor bot "+face+" cat "+target, "conductor bot "+face+" index "+target)
+		}
+		v := IndexView{Budget: cfg.Bots[name].Memory.IndexBudgetOr(config.DefaultIndexBudget)}
+		if team != "" {
+			v = IndexView{Budget: cfg.TeamLimits(team).IndexBudgetOr(config.DefaultTeamIndexBudget), Heading: "## Team " + team + "'s knowledge index"}
+		}
+		return memIndex(ctx, repo, args, v)
 	case "history":
 		n, _ := strconv.Atoi(str(args, "limit"))
 		return s.RepoHistory(ctx, str(args, "team"), name, str(args, "path"), n)
