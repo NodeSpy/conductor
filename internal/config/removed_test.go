@@ -197,3 +197,42 @@ func TestRemovedFieldShape(t *testing.T) {
 		t.Fatalf("marshaled: %q", b)
 	}
 }
+
+// The walk reaches every place folder: was read: a dependency's packs:
+// entry, map-form trigger lists, and a manifest's map-form triggers.
+func TestRemovedFolderWalk(t *testing.T) {
+	if FolderRemoved != "folders were removed; this field is ignored and can be deleted" {
+		t.Fatalf("the warning's text: %q", FolderRemoved)
+	}
+	got := strings.Join(removedFolderWarnings([]byte(`
+triggers:
+  nightly: { on: manual, folder: x }
+packs:
+  top:
+    triggers:
+      t: { folder: y }
+    packs:
+      dep:
+        folder: z
+        workflows: { w: { folder: q } }
+        packs:
+          deeper: { folder: r }
+`)), "\n")
+	want := strings.Join([]string{
+		"packs.top.packs.dep.folder: " + FolderRemoved,
+		"packs.top.packs.dep.packs.deeper.folder: " + FolderRemoved,
+		"packs.top.packs.dep.workflows.w.folder: " + FolderRemoved,
+		"packs.top.triggers.t.folder: " + FolderRemoved,
+		"triggers.nightly.folder: " + FolderRemoved,
+	}, "\n")
+	if got != want {
+		t.Fatalf("walk:\n%s\nwant:\n%s", got, want)
+	}
+	m := strings.Join(manifestFolderWarnings([]byte("triggers:\n  a: { folder: x }\n  b: { on: manual }\n"), "p"), "\n")
+	if m != "pack p: triggers.a.folder: "+FolderRemoved {
+		t.Fatalf("manifest walk: %q", m)
+	}
+	if len(removedFolderWarnings([]byte("bots: {}\n"))) != 0 || len(removedFolderWarnings([]byte("::not yaml"))) != 0 {
+		t.Fatal("warnings from nothing")
+	}
+}
