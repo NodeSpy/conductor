@@ -228,15 +228,15 @@ func TestStarterConfigFreshSeedLayout(t *testing.T) {
 	}
 }
 
-// The example's commented identity block is valid as written: uncommented,
-// it loads and every field lands.
+// The example's commented identity and attachments lines are valid as
+// written: uncommented, they load and every field lands.
 func TestExampleConfigIdentityBlock(t *testing.T) {
 	raw, err := os.ReadFile("../../config.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	doc := string(raw)
-	for _, k := range []string{"display_name:", "tagline:", "avatar:", "color:", "personality:", "  tone:", "  style:"} {
+	for _, k := range []string{"display_name:", "tagline:", "avatar:", "color:", "personality:", "  tone:", "  style:", "attachments:"} {
 		old := "    # " + k
 		if strings.Count(doc, old) != 1 {
 			t.Fatalf("the example's identity block: %q appears %d times", old, strings.Count(doc, old))
@@ -261,5 +261,8 @@ func TestExampleConfigIdentityBlock(t *testing.T) {
 	if id.DisplayName != "Night Owl" || id.Tagline == "" || id.Avatar == nil || id.Avatar.Preset != "owl" || id.Color != "indigo" ||
 		id.Personality == nil || id.Personality.Tone != "terse" || id.Personality.Style == "" {
 		t.Fatalf("identity: %+v", id)
+	}
+	if l := cfg.Bots["platform-sre"].Attachments; l.MaxFileOr() != 10<<20 || l.MaxFilesOr() != 10 || l.TTL == 0 {
+		t.Fatalf("attachments: %+v", l)
 	}
 }

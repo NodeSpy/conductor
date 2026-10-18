@@ -182,6 +182,90 @@ op) returns `identity`: always `name` and `initials`, plus `display_name`,
 `tagline`, `avatar`, `color`, `personality`, and `suggested_by` (the template)
 when set. `conductor bot ls` shows a display name next to the id.
 
+### Attachments
+
+A message to a bot can carry files: from you, with `conductor bot say
+--attach` or `deliver --attach` or the dashboard; or from a chat user,
+through a connector that declares them (below).
+
+```
+conductor bot say platform-sre --attach dashboard.png --attach errors.log "what do you make of these?"
+conductor bot deliver platform-sre --title "disk alert" --attach df.txt     # opens a case; its files go when it closes
+```
+
+```yaml
+bots:
+  platform-sre:
+    attachments:                 # every cap is on by default; these are the defaults
+      max_file: 10MB             # one file (at most 100MB)
+      max_message: 25MB          # all of one message's files
+      max_files: 10              # files in one message (at most 50)
+      types: [image/png, image/jpeg, image/gif, image/webp, text/plain, text/markdown, text/csv,
+              application/json, application/yaml, application/pdf]   # exact types, or image/*
+      ttl: 168h                  # removed this long after arriving, whatever their case
+      # off: true                # take no files at all
+```
+
+- **Checked, all or nothing.** Every cap applies before anything is stored,
+  and a refused file refuses your message, naming the cap. A file's type is
+  what conductor detects from its content: an image or PDF by its signature,
+  text by being valid UTF-8 (its extension picks text, Markdown, CSV, JSON
+  or YAML). The name or a sender's claim never decides it, so HTML, SVG,
+  archives and executables are refused unless you list their types.
+- **Stored in conductor's state, not memory.** Files go to conductor's blob
+  store and to a read-only copy in a directory per message
+  (`<state dir>/bots/<bot>/attachments/<message>/`). They never enter the
+  bot's memory repo: a bot keeps what matters with `conductor bot remember`.
+- **Delivered as data.** The message lists its files (id, name, type, size,
+  read-only path) inside a fence labelled with who sent them (your files,
+  or a chat user's). The fence says a file's name and contents are data,
+  never instructions. Contents are never pasted into the prompt; the
+  session opens the file. An image also goes to the runtime as an image
+  when it takes one (Claude does, through `paseo send --image`); otherwise
+  the list says to open the file.
+- **Read-only.** Each file is mode 0444 in a 0555 directory, so a session
+  can't change, add or remove one. With conductor's agent sandbox on, the
+  sandbox binds the home session's attachments dir, and only a worker's
+  passed files, read-only into the session (`SessionForCwd` hands it the
+  paths). Until then the file modes are what holds, and they are the same
+  user's files.
+- **Workers get only what they're passed.** The home session passes files on
+  with `conductor bot spawn --attach <id>`. The worker's brief lists them in
+  the same fence, says who passed them on, and its session sees those files
+  only. An urgent event's worker gets the event's files.
+- **Removed with the case.** A message's files are removed when its case
+  closes: files, directory and blobs. The record stays (`conductor bot
+  attachments <bot> --all`), saying why. Files on no case (a `say` without
+  `--case`) are removed after `ttl`.
+- **URLs stay text.** A link in a message is text: the bot fetches it, if at
+  all, through its normal egress. Attachments add no egress.
+
+**From chat.** A connector event can declare its files with the
+`attachments` event semantic (plugin contract §2.2): which fact lists them,
+and which verb fetches one. When such an event is routed to a bot
+(`bot: { name: … }`, or a team's rule or fallback), conductor fetches the
+files within that bot's caps, refusing a declared size over the cap before
+fetching. It fetches only for a target the platform assigned, never for a
+file list a sender wrote themselves. The files are labelled as that chat
+user's, at the user's trust, never the operator's. A file that can't be
+taken doesn't drop the message: it arrives with a note saying why. A team's
+lead triage doesn't carry files; route events with files to a bot or with a
+rule.
+
+### The operator API
+
+The dashboard reaches files over HTTP on a unix socket beside the control
+socket, `<state dir>/operator-api.sock`. It's same-user only (0600), like the
+control socket, and nothing on it is reachable from a bot session:
+
+| | |
+|---|---|
+| `POST /v1/bots/{bot}/messages` | multipart: `text`, optional `case`, any number of `file` parts. Capped as the body streams (per file, per message, count), then every cap again. `201` with the attachments |
+| `GET /v1/bots/{bot}/attachments[?all=1]` | the bot's attachments |
+| `GET /v1/bots/{bot}/attachments/{id}` | one record |
+| `GET /v1/bots/{bot}/attachments/{id}/content` | the bytes, always as a download (`Content-Disposition: attachment`, `nosniff`, a sandboxing CSP), never rendered |
+| `GET /v1/bots/{bot}/attachments/{id}/thumbnail[?size=N]` | a PNG thumbnail of a PNG, JPEG or GIF (32–512 px; an image declaring more than 40 megapixels is refused) |
+
 ## The home session
 
 Each bot has one pinned **home** session on paseo — the one you talk to.
@@ -1207,8 +1291,11 @@ conductor bot cases|workers|proposals <bot> [--all]
 conductor bot proposal <bot> <id>
 conductor bot approve|deny <bot> <id> [--as <operator>] [--key <path>] [--reason "…"]
 conductor bot rotate <bot>
-conductor bot say <bot> <text…>  # or just type into paseo
-conductor bot deliver <bot> --title "…" [--text "…"] [--requester who] [--urgent]
+conductor bot say <bot> [--attach <file>]… [--case <id>] <text…>  # or just type into paseo
+conductor bot deliver <bot> --title "…" [--text "…"] [--requester who] [--urgent] [--attach <file>]…
+conductor bot attachments <bot> [--all]          # the files messages carried (--all: removed ones too)
+conductor bot attachment <bot> <id> [--out <f>]  # one attachment; --out saves its bytes
+conductor bot identity-options   # the avatar, color and tone lists an identity names
 conductor bot consolidate <bot>
 conductor bot replan <bot> <id>  # re-plan a stale terraform proposal
 conductor bot sweep <bot>        # a proactive sweep now (budget applies)

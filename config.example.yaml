@@ -1417,6 +1417,10 @@ bots:
     # schemas — `conductor bot kinds`), log/ and handoff/ (conductor's). Custom kinds:
     # collections:
     #   postmortems: { from: .conductor/packs/platform-sre/collections/postmortems.yaml }   # one a pack ships
+    # Files on messages (`conductor bot say --attach`, the dashboard, a chat connector's attachments
+    # semantic) live in conductor's state, never in memory, and go when their case closes
+    # (wiki: Bots → Attachments). Every cap is on by default:
+    # attachments: { max_file: 10MB, max_message: 25MB, max_files: 10, ttl: 168h }   # types: [image/*, text/plain, …]
     # Sessions read memory through a budgeted index, ranked recall and reads in parts
     # (wiki: Bots → Reading memory). Every limit is on by default; a bigger value loosens it:
     # memory:

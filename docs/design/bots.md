@@ -516,6 +516,45 @@ tagline, personality) came from one.
   a value it chose. The semantic is must-understand, so an older host
   refuses a plugin that needs it, unless the plugin lists it in `optional`.
 
+## Attachments: files are data, kept by conductor, gone with the case
+
+- **Storage.** `internal/blob` fits as it is: content-addressed bytes, an
+  owner per message (`attach/<bot>/<message>`), and `ReleaseRun` deletes
+  what no owner references. A message's files are also copied, read-only, to
+  `<state>/bots/<bot>/attachments/<message>/` for its sessions. That's a
+  copy, not a hardlink: a session that could chmod a hardlink would write
+  into the content-addressed store. Nothing goes to the memory repo; keeping
+  a file is a `remember`, through the kinds' chokepoint.
+- **Checks before storage, all or nothing.** Caps and the allowlist apply to
+  the detected type (signature or UTF-8 plus extension), never to the
+  sender's claim. An operator's refused file refuses the message (they get
+  the error); a chat user's refused file becomes a note on a message that
+  still arrives (a chat user can't see an error).
+- **Fenced, labelled by sender.** The list (never the contents) sits in a
+  nonce fence labelled `OPERATOR-PROVIDED FILES`, `CHAT USER'S FILES` or
+  `EVENT FILES`. File names are reduced to a safe base name, but they stay
+  inside the fence anyway. The section is rendered at delivery, so it knows
+  whether the runtime takes images and whether a file was removed while the
+  message waited.
+- **Retention is a sweep, not a hook.** Every tick removes attachments whose
+  case isn't open, or whose TTL has passed. That covers every way a case
+  closes (the lead's triage, a decline, a worker, a future ticket status)
+  without hooking each one.
+- **Workers.** Spawn takes attachment ids. They must be the bot's own and
+  live, and the worker record keeps them, so the sandbox binding exposes
+  exactly those files. Passing files on doesn't change a worker's trust:
+  files are data, like a peer's message.
+- **Connectors.** The `attachments` event semantic is the generic shape (a
+  list fact plus a fetch verb returning base64), lazily invoked with the
+  receiving bot's caps and gated on an assigned target, like `option_hooks`.
+  Lead triage doesn't carry files: the fetch would have to happen before
+  the bot is chosen, and the trigger is gone by assignment.
+- **The operator API** is HTTP on a second unix socket with the control
+  socket's authentication (same user), because multipart uploads and
+  downloads don't fit the control socket's JSON lines. Downloads are
+  always `attachment` with `nosniff` and a sandboxing CSP: a sender's HTML
+  must never render in the dashboard's origin.
+
 ## Folders: removed
 
 Folders filed bots, teams, workflows and triggers for display and nothing
