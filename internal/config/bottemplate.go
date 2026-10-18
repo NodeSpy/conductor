@@ -23,7 +23,7 @@ import (
 //
 // A template only requests. Everything that decides what a bot may do, who
 // approves it, where it sits and what it reaches is the operator's:
-// operators, folder, team, connector bindings, secrets, autonomy, sandbox
+// operators, team, connector bindings, secrets, autonomy, sandbox
 // and egress. A template that names any of them is refused by name
 // (forbiddenTemplateKeys), and the verbs it requests are active only where
 // the operator's own `bots.<b>.grant:` says so, at a tier no looser than
@@ -63,6 +63,8 @@ type BotTemplate struct {
 	// shown, never applied.
 	Model   ModelSpec `yaml:"model,omitempty"`
 	Runtime string    `yaml:"runtime,omitempty"`
+	// Folder is removed (removed.go): accepted, ignored, warned about.
+	Folder RemovedField `yaml:"folder,omitempty"`
 }
 
 // forbiddenTemplateKeys are what a template can never set, with why. Each is
@@ -70,7 +72,6 @@ type BotTemplate struct {
 var forbiddenTemplateKeys = map[string]string{
 	"operators":      "who approves a bot is the operator's choice",
 	"approvers":      "who approves a bot is the operator's choice",
-	"folder":         "where a bot is filed is the operator's choice (by default it follows the pack instance's placement)",
 	"team":           "which team a bot joins is the operator's choice",
 	"secrets":        "secrets are the operator's environment",
 	"skill":          "a template requests verbs (verbs:) and never grants them — the operator grants them (bots.<b>.grant)",

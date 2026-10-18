@@ -18,7 +18,7 @@ import (
 //
 //	conductor bot templates [--search <words>] [--registry <dir|git url>] [--installed]
 //	conductor bot template <ref> [--registry …]
-//	conductor bot new <name> --from <pack instance>/<template> [--connector in=conn]… [--grant verb=tier]… [--folder f] [--proactive] [--write]
+//	conductor bot new <name> --from <pack instance>/<template> [--connector in=conn]… [--grant verb=tier]… [--proactive] [--write]
 //	conductor bot grant <bot> <verb>=<tier>… [--write]
 //
 // `new` and `grant` are config changes, made the way every config change is
@@ -336,9 +336,9 @@ func botTemplatesCmd(sub string, args []string) error {
 		return fmt.Errorf("no template %q (`conductor bot templates` lists them)", pos[0])
 	case "new":
 		if len(pos) != 1 || fl["from"] == "" {
-			return fmt.Errorf("usage: conductor bot new <name> --from <pack instance>/<template> [--connector input=connector]… [--grant verb=tier]… [--folder <f>] [--proactive] [--write]")
+			return fmt.Errorf("usage: conductor bot new <name> --from <pack instance>/<template> [--connector input=connector]… [--grant verb=tier]… [--proactive] [--write]")
 		}
-		d := config.TemplateBotDraft{Name: pos[0], Connectors: multi("connector"), Grants: multi("grant"), Folder: fl["folder"], Proactive: fl["proactive"] != ""}
+		d := config.TemplateBotDraft{Name: pos[0], Connectors: multi("connector"), Grants: multi("grant"), Proactive: fl["proactive"] != ""}
 		plan, err := planNewBot(cfgPath, d, fl["from"])
 		if err != nil {
 			return err
@@ -587,7 +587,7 @@ func templateControl(conn net.Conn, req controlRequest) {
 		}
 	case "template_plan":
 		out, err = planNewBot(botConfigPath, config.TemplateBotDraft{Name: str("name"), Connectors: strMap("connectors"), Grants: strMap("grants"),
-			Folder: str("folder"), Proactive: str("proactive") == "true"}, str("template"))
+			Proactive: str("proactive") == "true"}, str("template"))
 	case "grant_plan":
 		out, err = planGrant(botConfigPath, str("bot"), strMap("grants"))
 	}

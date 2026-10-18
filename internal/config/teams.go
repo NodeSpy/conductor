@@ -32,9 +32,8 @@ import (
 type TeamConfig struct {
 	// Description is the team's one-line identity.
 	Description string `yaml:"description,omitempty"`
-	// Folder files the team, and the bots on it, for display only
-	// (folders.go): no behavior.
-	Folder string `yaml:"folder,omitempty"`
+	// Folder is removed (removed.go): accepted, ignored, warned about.
+	Folder RemovedField `yaml:"folder,omitempty"`
 	// Collections are custom content kinds in the team's knowledge repo
 	// (collections.go): written by an operator, or by approved promotion.
 	Collections map[string]Collection `yaml:"collections,omitempty"`
@@ -557,9 +556,6 @@ func (c *Config) validateTeams() error {
 func (c *Config) validateBotTeam(name string, t TeamConfig) error {
 	if !validBotName(name) {
 		return fmt.Errorf("name must be lowercase letters, digits, - or _")
-	}
-	if _, err := NormFolder(t.Folder); err != nil {
-		return fmt.Errorf("folder: %w", err)
 	}
 	if err := validateCollections(t.Collections, true); err != nil {
 		return err

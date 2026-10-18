@@ -43,6 +43,9 @@ func TestExampleConfigValidates(t *testing.T) {
 	if !cfg.HasConnectors() {
 		t.Fatal("example config should be on the connectors schema")
 	}
+	if w := cfg.RemovedFieldWarnings(); len(w) != 0 {
+		t.Errorf("the example config still uses a removed field: %v", w)
+	}
 	stack, err := buildFlowStack(cfg, nil, nil, true)
 	if err != nil {
 		t.Fatalf("the example config must pass semantic validation: %v", err)

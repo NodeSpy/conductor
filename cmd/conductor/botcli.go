@@ -28,7 +28,7 @@ import (
 
 const botUsage = `usage:
   operator:
-    conductor bot ls [--folder <path>] [--flat]   # a tree: folder, team, bot
+    conductor bot ls [--flat]                # bots by team (--flat: one line each)
     conductor bot show <bot>
     conductor bot cases <bot> [--all]
     conductor bot workers <bot>
@@ -51,7 +51,7 @@ const botUsage = `usage:
     conductor bot approve <bot> <id> --edit-file <f>              # approve a knowledge promotion with your changes
     conductor bot templates [--search <words>] [--registry <dir|git url>] [--installed]   # community bots: templates packs ship
     conductor bot template <ref> [--registry …]                   # one template: inputs, requested verbs, suggestions, charter
-    conductor bot new <name> --from <pack instance>/<template> [--connector in=conn]… [--grant verb=tier]… [--folder f] [--proactive] [--write]
+    conductor bot new <name> --from <pack instance>/<template> [--connector in=conn]… [--grant verb=tier]… [--proactive] [--write]
     conductor bot grant <bot> <verb>=<tier>… [--write]            # widen a template bot (validated on a copy, shown as a diff)
     conductor bot template-check <bot>                            # compare its memory with its template now (a newer one → a proposal)
   from a bot session:
@@ -481,15 +481,11 @@ func botOperator(sub string, args []string) error {
 	case "knowledge", "memory":
 		return botRepoEdit(cfg, sub, pos, fl)
 	case "ls", "list":
-		folder, err := config.NormFolder(fl["folder"])
-		if err != nil {
-			return fmt.Errorf("--folder: %w", err)
-		}
 		out, _, err := botControl(cfg, "list", map[string]any{})
 		if err != nil {
 			return err
 		}
-		fmt.Print(botListText(out, folder, fl["flat"] == "true"))
+		fmt.Print(botListText(out, fl["flat"] == "true"))
 		return nil
 	case "teams":
 	case "team":
@@ -753,34 +749,22 @@ func botRepoEdit(cfg *config.Config, repoKind string, pos []string, fl map[strin
 	return nil
 }
 
-// botListText renders `conductor bot ls`: a tree grouped by folder, then
-// team, then bot — or, with flat, one line per bot. A folder filter keeps
-// that folder and everything under it.
-func botListText(out map[string]any, folder string, flat bool) string {
+// botListText renders `conductor bot ls`: bots grouped by team (teamless
+// last), or with flat one line per bot with its team.
+func botListText(out map[string]any, flat bool) string {
 	ms, _ := out["bots"].([]any)
-	type row struct{ folder, team, bot, line string }
+	type row struct{ team, bot, line string }
 	var rows []row
 	for _, x := range ms {
 		m, _ := x.(map[string]any)
-		f, _ := m["folder"].(string)
-		if folder != "" && f != folder && !strings.HasPrefix(f, folder+"/") {
-			continue
-		}
 		t, _ := m["team"].(string)
-		rows = append(rows, row{f, t, fmt.Sprint(m["bot"]), botLine(m)})
+		rows = append(rows, row{t, fmt.Sprint(m["bot"]), botLine(m)})
 	}
 	if len(rows) == 0 {
-		if folder != "" {
-			return fmt.Sprintf("no bots in folder %s\n", folder)
-		}
 		return "no bots\n"
 	}
-	// Folder, then team (teamless last), then bot.
 	sort.Slice(rows, func(i, j int) bool {
 		a, b := rows[i], rows[j]
-		if a.folder != b.folder {
-			return a.folder < b.folder
-		}
 		if (a.team == "") != (b.team == "") {
 			return a.team != ""
 		}
@@ -790,38 +774,21 @@ func botListText(out map[string]any, folder string, flat bool) string {
 		return a.bot < b.bot
 	})
 	var sb strings.Builder
-	if flat {
-		for _, r := range rows {
-			fmt.Fprintf(&sb, "%-16s %-20s %-14s %s\n", r.bot, orRoot(r.folder), orDashCLI(r.team), r.line)
-		}
-		return sb.String()
-	}
-	var printed []string // the folder segments already printed
-	lastTeam, lastFolder := "\x00", "\x00"
+	lastTeam := "\x00"
 	for _, r := range rows {
-		var segs []string
-		if r.folder != "" {
-			segs = strings.Split(r.folder, "/")
+		if flat {
+			fmt.Fprintf(&sb, "%-16s %-14s %s\n", r.bot, orDashCLI(r.team), r.line)
+			continue
 		}
-		if r.folder != lastFolder {
-			common := 0
-			for common < len(printed) && common < len(segs) && printed[common] == segs[common] {
-				common++
-			}
-			for d := common; d < len(segs); d++ {
-				fmt.Fprintf(&sb, "%s%s/\n", strings.Repeat("  ", d), segs[d])
-			}
-			printed, lastFolder, lastTeam = segs, r.folder, "\x00"
-		}
-		ind := strings.Repeat("  ", len(segs))
 		if r.team != lastTeam {
 			if r.team != "" {
-				fmt.Fprintf(&sb, "%steam %s\n", ind, r.team)
+				fmt.Fprintf(&sb, "team %s\n", r.team)
 			}
 			lastTeam = r.team
 		}
+		ind := ""
 		if r.team != "" {
-			ind += "  "
+			ind = "  "
 		}
 		fmt.Fprintf(&sb, "%s%-16s %s\n", ind, r.bot, r.line)
 	}
@@ -838,13 +805,6 @@ func botLine(m map[string]any) string {
 		mode = "shadow"
 	}
 	return fmt.Sprintf("%-6s %s · %v open cases · %v pending proposals · %v workers", mode, home, m["open_cases"], m["pending_proposals"], m["live_workers"])
-}
-
-func orRoot(f string) string {
-	if f == "" {
-		return "/"
-	}
-	return f
 }
 
 func orDashCLI(t string) string {

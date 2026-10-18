@@ -280,13 +280,6 @@ func (c *Config) instantiateTemplate(name string, m BotConfig, lt LoadedTemplate
 	if !m.Home.Model.Set() && t.Model.Set() {
 		m.Home.Model = t.Model
 	}
-	if m.Folder == "" && m.Team == "" {
-		f := c.Packs[lt.Instance].Folder
-		if f == "" {
-			f = "packs/" + lt.Instance
-		}
-		m.Folder = f
-	}
 	if p, tp := m.Proactive, t.Proactive; p != nil && tp != nil {
 		cp := *p
 		if cp.Every == 0 {

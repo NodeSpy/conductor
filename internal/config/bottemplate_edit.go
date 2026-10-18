@@ -21,7 +21,6 @@ type TemplateBotDraft struct {
 	Template   LoadedTemplate
 	Connectors map[string]string // explicit bindings
 	Grants     map[string]string // widenings asked for, on top of the read-only ones
-	Folder     string
 	Proactive  bool
 	// Unbound are optional inputs left unbound: their requests are not
 	// granted.
@@ -107,9 +106,6 @@ func BotEntryYAML(d TemplateBotDraft) (string, error) {
 	}
 	if len(grants) > 0 {
 		add("grant", mapping(grants, false), "what you allow of what the template requests — anything above observe is a widening")
-	}
-	if d.Folder != "" {
-		add("folder", scalar(d.Folder), "")
 	}
 	if d.Proactive {
 		add("proactive", &yaml.Node{Kind: yaml.MappingNode, Style: yaml.FlowStyle}, "the template's suggested proactive checks; set a budget: to bound them")

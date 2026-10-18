@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/flow"
 )
 
@@ -15,11 +17,47 @@ import (
 // version; `review` clears it for unattended reuse (dry-run it first with
 // `conductor replay`). The daemon picks a review up without a restart (the
 // registry reloads on file change).
-func cmdWorkflows(args []string) error {
-	args, folder, flat, err := takeFolderFlags(args)
-	if err != nil {
-		return err
+// configWorkflowLines lists the config's workflows, then its triggers, one
+// line each, sorted by name, with where each came from (a pack instance, a
+// bot's synthesized workers).
+func configWorkflowLines(cfg *config.Config) []string {
+	var wfs, trs []string
+	for name, w := range cfg.Workflows {
+		l := fmt.Sprintf("workflow %-28s %s", name, w.Description)
+		if w.PackInstance != "" {
+			l += " (pack " + w.PackInstance + ")"
+		}
+		wfs = append(wfs, strings.TrimRight(l, " "))
 	}
+	for i, t := range cfg.Triggers {
+		if t.Abstract {
+			continue
+		}
+		name := t.Name
+		if name == "" {
+			name = fmt.Sprintf("#%d", i+1)
+		}
+		l := fmt.Sprintf("trigger  %-28s on: %s", name, t.On)
+		if t.Enabled != nil && !*t.Enabled {
+			l += " (disabled)"
+		}
+		if t.Bot != "" {
+			l += " — bot " + t.Bot
+		} else if t.PackInstance != "" {
+			l += " — pack " + t.PackInstance
+		}
+		trs = append(trs, l)
+	}
+	sort.Strings(wfs)
+	sort.Strings(trs)
+	out := append(wfs, trs...)
+	if len(out) == 0 {
+		out = []string{"(none)"}
+	}
+	return out
+}
+
+func cmdWorkflows(args []string) error {
 	cfg, _, err := loadConfig(args)
 	if err != nil {
 		return err
@@ -30,14 +68,9 @@ func cmdWorkflows(args []string) error {
 	}
 	rest := positional(args)
 	if len(rest) == 0 || rest[0] == "ls" {
-		// Config workflows and triggers, as a folder tree (--folder keeps
-		// one folder and below; --flat one line each).
 		fmt.Println("config workflows and triggers:")
-		for _, l := range strings.Split(strings.TrimRight(folderTreeText(workflowEntries(cfg), folder, flat), "\n"), "\n") {
+		for _, l := range configWorkflowLines(cfg) {
 			fmt.Println("  " + l)
-		}
-		if folder != "" {
-			return nil // saved workflows are not filed in folders
 		}
 		saved := st.All()
 		if len(saved) == 0 {

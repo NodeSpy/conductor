@@ -222,8 +222,9 @@ func contentHandle(v any) (string, error) {
 	if err := yaml.Unmarshal(b, &body); err != nil {
 		return "", err
 	}
-	// folder: is display only: filing an instance elsewhere must not change
-	// which instance it is (its dedup, session and outcome state).
+	// folder: was removed (removed.go): an old config's folder must never
+	// change which instance a trigger is (its dedup, session and outcome
+	// state).
 	delete(body, "folder")
 	canon, err := yaml.Marshal(body)
 	if err != nil {
