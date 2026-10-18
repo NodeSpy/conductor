@@ -108,7 +108,10 @@ func TestLoginStoreValuesAreWriteOnly(t *testing.T) {
 func TestLoginStoreHasNoExportedReader(t *testing.T) {
 	typ := reflect.TypeOf(&LoginStore{})
 	allowed := map[string]bool{"List": true, "Get": true, "Put": true, "Update": true, "Remove": true, "SetValue": true, "SetRef": true,
-		"ClearField": true, "HasValue": true, "RecordUse": true, "UsageOf": true, "SetTest": true}
+		"ClearField": true, "HasValue": true, "RecordUse": true, "UsageOf": true, "SetTest": true,
+		// The wallet's: records (sources, freezes) and writes, never a value.
+		"Wallet": true, "PutProfile": true, "PutCard": true, "SetWalletValue": true, "SetWalletRef": true,
+		"ClearWalletField": true, "RemoveWallet": true, "Freeze": true}
 	for i := 0; i < typ.NumMethod(); i++ {
 		if n := typ.Method(i).Name; !allowed[n] {
 			t.Errorf("LoginStore.%s is new — is it a way to read a value back?", n)
