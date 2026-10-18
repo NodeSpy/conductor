@@ -1,4 +1,4 @@
-// Scannable by default (PROPOSAL): a visual language that says what each thing is, where it happens
+// The row vocabulary (current): a visual language that says what each thing is, where it happens
 // and how it went, before anyone reads a word, and flags the few things worth stopping for.
 //   KINDS    one icon per kind of object or event (approval, run, bot, PR, incident, Terraform…)
 //   ACTIONS  one icon per kind of action (reads, writes, posts, pushes code, applies infra, spends…)
@@ -8,7 +8,7 @@
 // and one row anatomy: kind · title · where · status · time · action.
 // Icons are Lucide (ISC, lucide-static 1.59.0, 24 grid, 1.75 stroke); the environment glyphs are ours.
 import { LUCIDE } from '../icons/icons.js';
-import { mark, status, STATES } from '../status/marks.js';
+import { mark, status, STATES } from './marks.js';
 
 // ---------- object and event kinds ----------
 export const KINDS = {
@@ -99,9 +99,9 @@ export function row(it) {
     <span class="c-time" role="cell">${it.time ?? ''}</span>
     <span class="c-act" role="cell">${it.act ? `<button class="btn ${it.primary ? 'primary' : 'secondary'} sm" tabindex="-1">${it.act}</button>` : ''}</span></div>`;
 }
-const GROUP = { needs: 'Needs you', failing: 'Failing', running: 'Running', fine: 'Finished' };
+const GROUP = { needs: 'Needs you', attn: 'Needs attention', failing: 'Failing', running: 'Running now', fine: 'Finished' };
 export const rows = (groups, { head = true } = {}) => `<div class="srows" role="table">${head ? `<div class="srow shead" role="row">${COLS.map((c) => `<span role="columnheader">${c}</span>`).join('')}</div>` : ''}
-  ${groups.map(([g, items, extra = '']) => `<div class="sgroup" role="rowgroup"><div class="sgh g-${g}"><b>${GROUP[g]}</b><span>${items.length}</span>${extra}</div>${items.map((it) => row({ ...it, group: g })).join('')}</div>`).join('')}</div>`;
+  ${groups.map(([g, items, extra = '', count = items.length]) => `<div class="sgroup" role="rowgroup"><div class="sgh g-${g}"><b>${GROUP[g]}</b><span>${count}</span>${extra}</div>${items.map((it) => row({ ...it, group: g })).join('')}</div>`).join('')}</div>`;
 
 export const SCAN_CSS = `
 .ki { flex: none; display: inline-block; vertical-align: -3px; }
@@ -117,7 +117,7 @@ export const SCAN_CSS = `
 .env[data-env="production"] { color: var(--color-text-primary); font-weight: 700; border: 1.5px solid var(--color-text-primary); }
 .env[data-env="local"] { border-style: dashed; }
 /* the row anatomy: fixed columns, aligned */
-.srows { --cols: 118px minmax(0, 1fr) minmax(160px, 240px) 112px 50px 80px; }
+.srows { --cols: 118px minmax(0, 1fr) minmax(160px, 240px) 112px 50px 80px; container-type: inline-size; }
 .srow { display: grid; grid-template-columns: var(--cols); gap: 14px; align-items: center; min-height: 52px; padding: 7px 10px 7px 14px; border-top: 1px solid var(--color-border-subtle); }
 .srow[data-s] { box-shadow: inset 3px 0 0 var(--s-solid, transparent); }
 .srow.shead { min-height: 0; padding-top: 0; padding-bottom: 6px; border-top: 0; font-size: 12px; font-weight: 600; color: var(--color-text-tertiary); }
@@ -139,8 +139,8 @@ export const SCAN_CSS = `
 /* attention order by weight: needs you and failing are bold, finished titles step back to regular */
 .srow.g-running .c-title b { font-weight: 500; }
 .srow.g-fine .c-title b { font-weight: 400; }
-@media (max-width: 600px) {
-  .srows { --cols: none; }
+/* The phone layout applies wherever the list is narrow (a phone, a side panel, a book column). */
+@container (max-width: 640px) {
   .srow.shead { display: none; }
   .srow { grid-template-columns: 22px minmax(0, 1fr) auto; grid-template-areas: "k t time" "k m m" "k a a"; gap: 4px 10px; align-items: start; padding: 10px 6px 10px 12px; }
   .srow .c-kind { grid-area: k; padding-top: 2px; } .srow .c-kind .kind > span { display: none; }

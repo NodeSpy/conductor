@@ -55,7 +55,7 @@ function construction(d, theme) {
 function github(d, theme) {
   const v = theme === 'dark' ? 'dark' : 'light';
   return `<div class="gh ${theme}">
-    <div class="gh-top"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M2 2.5A1.5 1.5 0 0 1 3.5 1h9A1.5 1.5 0 0 1 14 2.5v11a.5.5 0 0 1-.5.5h-10A1.5 1.5 0 0 1 2 12.5zM3.5 2a.5.5 0 0 0-.5.5v10c0 .28.22.5.5.5H13V2z"/></svg><span>NodeSpy</span><span class="sl" data-contrast="exempt">/</span><b>conductor</b><span class="pill">Public</span></div>
+    <div class="gh-top"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M2 2.5A1.5 1.5 0 0 1 3.5 1h9A1.5 1.5 0 0 1 14 2.5v11a.5.5 0 0 1-.5.5h-10A1.5 1.5 0 0 1 2 12.5zM3.5 2a.5.5 0 0 0-.5.5v10c0 .28.22.5.5.5H13V2z"/></svg><span>your-org</span><span class="sl" data-contrast="exempt">/</span><b>conductor</b><span class="pill">Public</span></div>
     <div class="gh-tabs"><span class="on">Code</span><span>Issues</span><span>Pull requests</span><span>Actions</span></div>
     <div class="gh-readme">
       <div class="gh-rh">README</div>

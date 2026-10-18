@@ -1,21 +1,30 @@
 # conductor brand and design system: Daylight
 
-This is the single source of truth for how conductor looks, reads and behaves on every surface: the README and docs, the dashboard, and anything after them. This file is the written guide. Each rule comes with its reason.
+This is the single source of truth for how conductor looks, reads and behaves on every surface: the README and docs, the dashboard, and anything after them. This file is the written guide, and each rule comes with its reason. It describes only the current system; earlier explorations and drafts are on the [archive](archive/index.html), clearly labelled as not current.
 
 | | |
 |---|---|
 | **Brand book** (live, both themes, both densities) | [`system.html`](system.html) |
+| **Approved screens** (the dashboard’s reference) | [`v2/mock.html?d=daylight`](v2/mock.html?d=daylight): Overview, Activity, approvals, a bot, a run, the builder |
 | **Tokens** (source of truth, W3C DTCG) | [`tokens/tokens.json`](tokens/tokens.json) → generated [`tokens/tokens.css`](tokens/tokens.css) |
-| **Prototype → Daylight mapping** | [`tokens/migration.json`](tokens/migration.json), [`tokens/prototype-compat.css`](tokens/prototype-compat.css), and the table in the book (*Tokens › Migrating the dashboard*) |
+| **Prototype → Daylight mapping** | [`tokens/migration.json`](tokens/migration.json), [`tokens/prototype-compat.css`](tokens/prototype-compat.css), and *Tokens › Migrating the dashboard* in the book |
 | **Contrast report** (every declared pair, both themes) | [`tokens/CONTRAST.md`](tokens/CONTRAST.md) |
-| **Scannable by default** (proposal under review) | [`scannable-review.html`](scannable-review.html), [`system.html#scannable`](system.html#scannable) |
-| **Calm by default** (the record of the previous round) | [`v2/shots/calm/`](v2/shots/calm/), [`tokens/CALM-CHECK.md`](tokens/CALM-CHECK.md) |
-| **Logo** (official kit, one canonical location) | [`assets/`](assets/); the choice is recorded on [`logo-review.html`](logo-review.html) |
-| **How we got here** | [`index.html`](index.html) (logo directions), [`directions-v2.html`](directions-v2.html) (system directions) |
+| **Logo** (the official kit) | the `fermata-bold` kit, whose one canonical location is [`assets/`](assets/) (the other folders in `logo-kits/` are archived candidates) |
+| **Design QA** (what the dashboard is checked against) | [`qa/SPEC.md`](qa/SPEC.md) |
+| **Archive** (not the current system) | [`archive/index.html`](archive/index.html) |
 
-**Daylight** is warm, light-first and built to be read: conductor as a calm colleague who tells you how things are going in a sentence before showing you a table. It was chosen over Broadsheet (editorial, densest) and Score (timeline-first, most graphic). The overview opens with an **At a glance** row of a few key counts, and the Activity page shows runs over time as **one aggregate plus the exceptions**, grouped by workflow.
+## Changelog
 
-The logo is **Fermata, strengthened**: the hold-until-released arch, chosen in October 2026. Its kit is in [`assets/`](assets/).
+- **2026-10-17. Brought up to date with every decision so far.** Superseded explorations moved to the archive, which is labelled as not current and is out of the main navigation. The brand book now shows only the current system. This file was rewritten rather than appended to.
+  - **Removed:** the “since you last looked” digest; one lane per workflow; meter or bar risk visuals; the greeting and summary sentences that restate the screen; the sunrise motif and every illustration made from the logo; pill or capsule badges, counts and filters; tinted rows; step traces in lists; the calm-round components (collapsed summary lines for normal work, the “one loud thing” card, the loudness budget and its check); run tabs and previous/next between runs; export buttons; Pause/Run on the overview; captions that explain obvious controls.
+  - **Added or made current:** the object and action icons, environment tags and the fixed row anatomy; At a glance (four tiles); the runs-per-hour strip with exceptions grouped by workflow; the approved Overview; approval tabs for technical decisions, with a colourised plan, and a sticky decision bar; the passkey only on actions that authenticate; the information architecture (Activity holds the run history, one System area, bots in folders).
+- **2026-10-17. Logo never used as illustration.** The sunrise motif removed from empty states, the overview, the social card and the mocks; a misuse rule added.
+- **2026-10-17. Activity at scale; At a glance.** One lane per workflow replaced by a runs-over-time strip plus exceptions by workflow. The digest replaced by At a glance.
+- **2026-10-17. Risk in words.** The meter risk marker withdrawn; risk is plain words where someone decides.
+- **2026-10-17. The calm round reversed.** It hid information; the system keeps the information and makes it identifiable at a glance.
+- **2026-10-16. Status decided.** Grouping (needs attention · running now · finished) with margin marks; passed and parked differ in hue and shape.
+- **2026-10-16. Logo decided.** Fermata, strengthened.
+- **2026-10-16. Direction decided.** Daylight, light and dark.
 
 ---
 
@@ -23,128 +32,61 @@ The logo is **Fermata, strengthened**: the hold-until-released arch, chosen in O
 
 | Area | Decision | Why |
 |---|---|---|
-| Direction | Daylight: warm, light-first, sentence-first | Round one read as “engineery” and generic; the brief asked for conductor’s firehose easier to consume. Daylight leads with plain language and keeps colour for what needs attention. |
-| Scannable by default *(proposal)* | Keep the information; add icons for what each thing is, environment tags, one row anatomy, and plain risk flags only where someone decides | The calm round hid too much. The real problem was telling items apart without reading them. Replaces the calm round once reviewed. |
-| Information design | Ten rules (below): summary first, plain headline over technical detail, three type levels, colour only for attention… | These are the heart of the system. The audits’ biggest problems (no first step, “what can my bots do?”, hashes up front) were information problems, not paint. |
+| Direction | Daylight, in light and dark. Pages follow the OS; an explicit theme always beats it. | Plain language first, colour kept for what needs attention, and legible type throughout. |
+| Logo | Fermata, strengthened (the `fermata-bold` kit, in `assets/`). Never altered, decorated, animated or turned into an illustration. | It holds its own on cream and says what conductor does: nothing moves until you release it. |
+| Information design | Keep the information; make every item identifiable at a glance (icons for what it is, environment tags, status marks, attention order, one row anatomy). Fold only hashes, ids and raw payloads. | The problem was never the amount; it was having to read every item to know what it was and whether it mattered. |
+| Status | Grouped rows (needs attention → running now → finished) with margin marks: a mark and a word. A coloured leading edge only on rows that need someone. No tinted rows, no pills, no step traces in lists. | Position and a small mark carry the state; the two failures don’t hide among eleven green rows. |
+| Labels | Status labels, filters, counts and tags each have their own treatment, and none is a pill. | A pill for everything made states, facts and controls look alike. |
+| Risk | Plain words where someone decides (approvals, a bot’s permissions): “Changes production”, “Spends $1,800”, “Destroys”, “Grants access”. No meters, bars or ladders. | Bars read as signal strength, not danger. The visual marker for risk is still a proposal on the archive, not part of the system. |
+| Scale | No view grows linearly with the number of workflows, bots or runs. | One lane per workflow broke at twenty workflows. |
+| Passkey | The fingerprint appears only on actions that authenticate: approve, deny and changes that widen access. Everything else is a normal Apply. Never on “Review”. | The icon promises a signature; using it elsewhere teaches people to ignore it. |
 | Palette | Cream and cocoa surfaces, sand neutrals, one ember accent | Warm paper reads as a product rather than a terminal, and one accent keeps “where do I act?” unambiguous. |
-| Status | Colour only on what needs attention; passing work is ink | When eleven of sixteen rows are green, green means nothing and the two red rows are harder to find. |
-| Type | Fraunces (titles) · Atkinson Hyperlegible Next (everything read) · Atkinson Hyperlegible Mono (code only) | A soft, upright serif gives a brand voice without the hard-to-read long italics of round one. Atkinson was designed by the Braille Institute so 1/l/I and 0/O stay distinct, which matters for ids and numbers. Mono stops being a decorative “machine voice”. |
-| Size | Body 15px, lead 17px; nothing under 11.5px; mono ≥ 12px | The audits flagged “tiny mono text everywhere”. |
-| Shape | Rounded: 10px controls, 14px cards, pill badges, warm soft shadows | Approachable, and the rounding groups content without extra rules. |
-| Density | Comfortable 52px rows; compact 36px as a token set | Newcomers get room to read; the power user’s compact mode is the same content, tighter. |
+| Type | Fraunces (titles) · Atkinson Hyperlegible Next (everything read) · Atkinson Hyperlegible Mono (code only) | A soft, upright serif for the voice; Atkinson keeps 1/l/I and 0/O distinct, which matters for ids and numbers. |
+| Size | Body 15px, lead 17px; nothing under 11.5px; mono ≥ 12px | Small mono text everywhere made the prototype hard to read. |
+| Density | Comfortable 52px rows; compact 36px as a token set | Room to read by default; the same content, tighter, on request. |
 | Theming robustness | Every page declares `color-scheme`; an explicit `data-theme` always beats the OS | The iPhone bug (below). |
-| Tokens | Same DTCG architecture, generator and contrast gate as round one | Only the values changed. The gate checks 302 pairs; 0 fail. |
+| Tokens | DTCG tokens, a generator and a contrast gate | The gate checks 302 pairs; 0 fail. |
 
 ---
 
-## Scannable by default (proposal under review)
+## Information design
 
-**A correction to “Calm by default”, below.** The calm round answered “too busy” by showing less, and over-corrected: it hid information. The real problem was identification. Every item looked the same, so each had to be read to learn what it was and whether it mattered, and icons were missing or didn’t make sense. The goal is **scannable and identifiable at a glance, with the information kept**. The full proposal is [`scannable-review.html`](scannable-review.html); the book chapter is [*Scannable by default*](system.html#scannable). Nothing is adopted into the tokens or the mocks until it is reviewed.
+conductor produces runs, cases, approvals, logs, diffs and bot activity around the clock. **The test:** in about three seconds, without reading, a person can say what needs them, what broke and whether anything is dangerous. Every screen follows these rules; the book shows each one with a do and a don’t (*Information design*).
 
-1. **Identify before reading.** Every item shows what it is, how risky it is, where it happens and how it went, in the same place on every screen.
-2. **Keep the information.** Titles, the one-line why, bot, repo, environment, risk, status and time stay on the row. Only ids, hashes and raw payloads go behind a disclosure or a hover.
-3. **Order by attention.** Needs you → failing → running → finished, by position (groups), weight and the status marks. Kept from the calm round: the greeting with the needs-you summary, grouping by attention, margin marks, no tinted capsules.
-4. **Flag only what is worth stopping for.** Production, money, destructive or access changes, in words, where someone decides; nothing else carries a risk label.
-5. **One meaning per icon, always with a word.** Never decorative, never reused, legible at 16px.
-6. **Dense, but structured.** One row anatomy with fixed, aligned columns.
+1. **Identifiable at a glance.** Every item shows what it is (an object icon and its word), where it happens (bot, target and an environment tag) and how it went (a status mark and its word), in the same columns on every list.
+2. **The three-second test.** Position (groups), weight, the status marks and the icons carry the answer; the words confirm it.
+3. **A plain headline, the technical detail beneath.** “Replace the production web server”, then why it matters, then `p12 · infra@3f2a9c1d · +1 ~2 −0` in mono, last.
+4. **Keep the information; fold only what is secondary.** Everything a person uses to understand or decide stays visible. Only hashes, ids and raw payloads go behind a disclosure.
+5. **Three levels of type, and only three.** What (title or bold lead-in), why it matters (regular, secondary ink), machine detail (mono, small, tertiary, at the end).
+6. **Colour only for what needs attention.** Passing work is ink with a small sage mark. Only a row that needs someone gets a coloured leading edge, its reason in words and one action.
+7. **Say the risk plainly, where you decide.** A few words on approvals and permissions; most verbs need no risk label.
+8. **A header sentence must add information.** No greetings, and no sentence that restates what is below it. A header line exists only to say something not already on the screen: an expiry, a scope, a filter that hides rows.
+9. **Views that don’t grow with the fleet.** Runs over time are one strip with failures marked; exceptions are grouped by workflow; healthy workflows collapse to a count.
+10. **Step detail lives on the run page,** as a collapsible tree. Lists never carry step traces. No run tabs and no previous/next stepping between runs.
+11. **Numbers line up:** right-aligned, tabular figures, with units.
+12. **Human times and schedules:** “52 min ago (17:03)”, “Mondays at 06:00”; cron strings and exact timestamps on hover.
+13. **Generous, then compact on request.** Comfortable by default; compact is the same content in the same order, only tighter.
+14. **No captions that explain obvious controls,** and no export buttons or overview-level Pause/Run controls.
 
-**The four parts** (`scannable/scan.js`):
+### The row anatomy (`status/rows.js`)
 
-- **Icons.** One per kind of object or event: approval `stamp`, run `circle-play`, bot, team `users`, workflow, pull request, incident `siren`, deploy `rocket`, Terraform `layers`, cloud spend `receipt`, connector `plug`, login `key-round`, knowledge `book-open`, config change `settings-2`. A run’s state is the status mark beside it, never its icon. One per kind of action: reads `eye`, writes / updates `pencil-line`, comments / posts `message-square`, pushes code `git-commit-horizontal`, applies infra `hammer`, spends money `banknote`, deletes / destroys `trash-2`, changes permissions `lock-open`. Lucide (ISC, lucide-static 1.59.0). The review page has the audit of every icon in the dashboard prototype.
-- **Risk flags, only where someone decides.** No meter, no bars (bars read as signal strength) and no ladder. Most verbs need no risk label: their action icon and word already say what they do. Three things are worth stopping for, shown on approvals, proposals and a bot’s permissions, in plain words with one mark that means the same everywhere: **Changes production** (the production glyph), **Spends money** with the amount (`banknote`), and **Destroys** (`trash-2`) or **Grants access** (`lock-open`), the last two in danger red. Lists of runs carry no flags.
-- **Environment tags.** Production (solid square, strong outline, bold) · Staging (outlined square with a centre) · Local (dashed circle, dashed outline). Told apart by fill and shape, never by colour alone.
-- **Row anatomy.** What (icon and word) · title and one line of why · where (bot, target, environment) · status · when · action. On a needs-you approval, a flag leads the why line.
-
-**Checks.** `tools/icon-check.mjs` renders every glyph at 16 CSS px on a 1× screen and measures its real pixels: 43 glyphs, all in the ink range, no two too alike (report: [`scannable/ICON-CHECK.md`](scannable/ICON-CHECK.md), with the enlarged pixels in [`scannable/icon-16px-sheet.png`](scannable/icon-16px-sheet.png)). It led to two refinements of the status marks, applied everywhere: **passed** is a smaller dot (r 3.4) and **waiting** is an outlined triangle, so neither reads as the needs-you diamond.
-
----
-
-## For the record: Calm by default (superseded by the proposal above)
-
-*Kept as the record of the over-correction. Its components (summary line, quiet state, exception card) remain for genuinely secondary detail; its loudness budget is retired pending review.*
-
-
-The first review of the Daylight mocks: *“all of it just looks so busy… there is no way for me to just pick out what’s going on… I have to read everything all the time.”* Everything was shown at equal weight, all the time. The fix is in the information design, not the decoration. This principle sits above the ten rules that follow, and it applies to every screen. The book chapter is [*Calm by default*](system.html#calm-pairs).
-
-1. **The 3-second glance.** Every screen answers “is anything wrong, and what needs me?” in about three seconds, without reading. The answer *is* the page heading: “5 things need you”, “3 runs need attention”, “All quiet. Nothing needs you.” It is the largest, first and highest-contrast text on the screen. When nothing needs you, the screen says almost nothing.
-2. **Normal collapses into one quiet line.** Finished work is a summary line (“10 finished · 9 passed · 1 parked”) that expands in place, never a wall of rows. Over time, runs are one aggregate strip with failures marked, plus the exceptions by workflow. Healthy systems, connections and bots collapse to “All healthy”.
-3. **One loud thing per screen.** What needs you is few, large and at the top: one plain sentence and one action. Everything else steps back: lower contrast, smaller, no colour. If more than about three things on screen are coloured, it’s too loud.
-4. **Less text by default.** One line per row. Ids, hashes, timestamps, counts and technical detail move behind a disclosure, hover or tap. Marks are labelled on the item (direct labelling), so there’s no legend to decode.
-5. **Quiet states are first-class.** “All quiet. Nothing needs you. 46 runs went fine in the last 12 hours.” is a complete overview.
-6. **Fewer, bigger, more space.** Fewer cards, columns and chips per row, clear grouping, generous spacing at comfortable density. Compact stays available for operators at scale.
-
-### Before and after
-
-The same data, busy against calm, first viewport only. Shots are in [`v2/shots/calm/`](v2/shots/calm/) (`{screen}-{before|calm}-{desktop|phone}-{light|dark}.png`, rendered by `v2/render-calm.mjs`); the live mocks are `v2/mock.html?d=daylight&s={screen}` (calm) and `&v=before` (busy), with `&day=quiet` for the quiet overview.
-
-| Screen | Glance answer (the heading) | Needs a person | Before: coloured · text-heavy (desktop / iPhone) | Calm (desktop / iPhone) |
-|---|---|---|---|---|
-| Overview | 5 things need you, starting with the production web server | 5 | 19 · 7 / 8 · 3 | 4 · 0 / 4 · 0 |
-| Overview, quiet day | All quiet. Nothing needs you. | 0 | no quiet state existed | 0 · 0 / 0 · 0 |
-| Run history | 3 runs need attention: 2 failed and 1 waits for you | 3 | 14 · 3 / 4 · 4 | 4 · 0 / 4 · 0 |
-| Activity | In 12 hours 3 runs failed and 2 wait for you; everything else went fine | 5 | (re-measured by `tools/calm-check.mjs`; see `tokens/CALM-CHECK.md`) | |
-| Bot page | platform-sre needs one decision from you; otherwise all is well | 1 | 21 · 3 / 7 · 1 | 2 · 0 / 2 · 0 |
-| Approval header | platform-sre wants to replace the production web server: approve or deny | 1 | 20 · 0 / 8 · 0 | 2 · 0 / 2 · 0 |
-
-Light theme shown; dark is identical in every count. The nav’s “Needs you” count is included in “coloured”: it is one of the loud things.
-
-![Overview, before and calm (desktop, light)](v2/shots/calm/overview-before-desktop-light.png)
-![](v2/shots/calm/overview-calm-desktop-light.png)
-
-### The components (`status/calm.js`, with the marks)
-
-- **Summary line** (`summaryLine`): a count in ink, its parts in secondary, “Show” in ghost; a native `<details>` that opens in place. Used for Running, Finished, health, notes, “N more need you”, and every collapsed fact on the bot and approval pages. Parts stay on one line (ellipsis), so it is always one row.
-- **Run strip and exceptions by workflow** (`runStrip`, `byWorkflow`): runs per hour as quiet columns with the failed mark above any hour that had failures, then the exceptions (failed, needs you) grouped by workflow, each with its reason and one action; healthy workflows collapse to one “N workflows healthy” summary line. It replaces one lane per workflow, which doesn’t scale to many workflows and runs.
-- **Quiet state** (`quietState`): one serif sentence, one supporting line, no illustration. It carries the glance answer.
-- **One loud thing** (`exception`): kicker with mark, serif title, one sentence, one action, a 4px edge in the mark’s colour, on a raised surface. The next few are **exception rows** (`excRows`): one line each (mark, title, a short reason that truncates, age, one action) with a 3px edge. Anything beyond two rows folds into “N more need you”. With `terse`, a phone drops the reason line when the title is already a sentence.
-
-### Emphasis levels and tokens
-
-| Level | Token | Use | Colour? |
-|---|---|---|---|
-| Loud | `--color-emphasis-loud` (text.primary) | The one thing that needs you: largest type | Its mark, edge and one action only |
-| Normal | `--color-emphasis-normal` (text.primary) | What things are: summary-line leads, row titles | No |
-| Quiet | `--color-emphasis-quiet` (text.secondary) | Reasons, parts, supporting facts | No |
-| Ghost | `--color-emphasis-ghost` (text.tertiary) | Times, “Show”, axes, the band’s note | No |
-
-Also: `--color-band-track` and `--color-band-tick` (the run strip’s columns: sand 400 light, sand 600 dark); the budget `--calm-max-loud: 3` and `--calm-max-dense-rows: 2`; and the component tokens `--summary-line-*`, `--run-strip-*`, `--quiet-state-*` and `--exception-*`. The full list, with values, is in the book.
-
-### The loudness check (`tools/calm-check.mjs`)
-
-Loads every before/after pair in Chromium desktop and WebKit iPhone, light and dark, and measures only the first viewport:
-
-- **Coloured:** anything drawn in a saturated colour (OKLCH chroma ≥ 0.05: text, SVG marks and bars, backgrounds, edges), counted once per item, row, link or button. Sage passed dots count; slate parked marks and the band’s ticks do not.
-- **Text-heavy rows:** `li`, `tr` or summary lines over 110 characters or 3+ lines of text (button labels aside). Content in a closed disclosure isn’t visible and isn’t counted.
-- **Glance:** the page’s `[data-glance]` element must be the largest text (the wordmark aside), the first large text in reading order, and ≥ 7:1.
-- **Budget** from the page’s declared exceptions (`main[data-exceptions]`): coloured ≤ exceptions + 2; text-heavy ≤ 2 with ≤ 3 exceptions, ≤ 3 with more.
-
-It writes [`tokens/CALM-CHECK.md`](tokens/CALM-CHECK.md) and `tokens/calm-check.json` (the book reads it), and exits 1 if any calm render fails. **Result: all 24 calm renders pass; all 20 busy renders fail the same budget.**
-
----
-
-## Reading at a glance (information design)
-
-conductor produces runs, cases, approvals, logs, diffs and bot activity around the clock. A person must be able to answer three questions in seconds: **does anything need me, is anything broken, and is everything else fine?** Every screen follows these rules. Before/after examples are in the book (*Reading at a glance*).
-
-1. **Summary first, detail on demand.** Every screen’s heading answers its question (“5 things need you”), with one supporting sentence (“Start with the first. Everything else is running normally.”). Health checks, raw counts and system internals sit one step down, in summary lines, never across the top of every page.
-2. **A plain headline, the technical detail beneath.** “Replace the production web server”, then why it matters, then `p12 · infra@3f2a9c1d · +1 ~2 −0` in mono, last.
-3. **Three levels of type, and only three.** What (title or bold lead-in), why it matters (regular, secondary ink), machine detail (mono, small, tertiary, at the end).
-4. **Colour only for what needs attention.** Passing work is ink. Failed, waiting, running and needs-you get colour, always with a glyph and a word.
-5. **Numbers line up.** Durations, costs and counts are right-aligned in tabular figures, with units (“12 min”, “$1.12”).
-6. **Group and chunk.** Things to act on (“Needs you”) are separate from things that are merely true (“For your information”: an update that installs itself is not “needing you”). Groups are separated by space and a count, not boxes inside boxes.
-7. **A few key counts, at a glance.** The overview opens with a handful of counts (need you, failed, running, went fine, spent), each opening its list. There is no “since you last looked” digest.
-8. **Timelines tell the story.** A run reads top to bottom: each step’s outcome in a sentence, the duration on the right, the failing step called out, and later steps marked “Not reached”.
-9. **Human times and schedules.** “52 min ago (17:03)”, “Mondays at 06:00”. Cron strings and exact timestamps go on hover; ids and hashes are never first on a line.
-10. **Whitespace that groups, density on request.** Comfortable by default; compact is the same content in the same order, only tighter.
+What (object icon and word) · title and one line of why · where (bot, target, environment tag) · status (mark and word) · when · one action. On a phone: the icon and title with the time, then the kind word, bot and environment, then the status. On an approval that spends money, destroys something or grants access, the plain-words risk leads the why line; production is said by the environment tag.
 
 ### Patterns
 
-- **Summary header:** the heading *is* the answer to the page’s question (“5 things need you”, “All quiet. Nothing needs you.”), then one supporting sentence. Actions belong to the thing that needs you, not to the header.
-- **Needs you:** the most urgent item as the one loud thing (exception card: kicker, title, one sentence, one action), the next two as one-line exception rows, the rest as “N more need you”. Machine details live on the item’s own page.
-- **At a glance** (overview): a row of a few key counts under the greeting: need you, failed, running, went fine and spent. Ink only; each opens its list, which carries the colour.
-- **Run story:** a run as steps in sentences, top to bottom, with durations on the right.
-- **Runs over time: aggregate plus exceptions** (Activity page): one strip of runs per hour with failures marked, then the exceptions grouped by workflow, with healthy workflows collapsed to a count. Never one lane per workflow: it doesn’t scale to many workflows and runs.
-- **Approval card:** needs-you kicker · plain title · what it wants to run · *Why* · what changes (adds / changes / replaces / destroys) · *Where / Effect / Undo* · origin · “Approve with passkey” / “Deny…” · technical details collapsed. On a phone the decision buttons stay pinned above the tab bar.
+- **Overview** (approved; see the mock): four **At a glance** tiles (need you, running, failed, spent); **Needs you**, one row and one action per item; **Running now**, capped at three with “+N more”; the **runs-per-hour strip** with the failures named beneath it; **For your information**; and **Get started**, showing only the steps that remain. No greeting and no summary sentence.
+- **Activity** (it holds what was the run history): the runs-per-hour strip with failures marked; the exceptions (failed, needs you) grouped by workflow, with healthy workflows collapsed to a count; then every run in the grouped table, running now and finished, paged. Filters are rectangles, not pills.
+- **Page header:** the title, plus a sentence only when it adds information. Actions belong to the items, not the header.
+- **Run page:** the step tree. A nested workflow call is one node with its own status; the failing path opens on its own.
+- **Approval:** Overview and Technical details tabs only when the technical detail matters to the decision (a Terraform apply, with the plan colourised). Simple actions, such as a Slack post, keep the detail folded. Approve and Deny sit in a sticky bar at the bottom that never covers the title or the why; both carry the passkey, because both are signed.
+- **Empty states:** a plain, useful sentence and an action, if there is one. No illustration.
+
+### Information architecture
+
+- **Now:** Overview · Needs you · Activity (the run history lives here).
+- **Work:** Workflows · Bots (with folders; there are no “members”) · Browsers.
+- **System:** Config · Secrets · Packs · Connections · Updates · Logs & audit · Access.
+- On a phone: Overview · Needs you · Activity · Bots · More.
 
 ---
 
@@ -188,16 +130,7 @@ Generated by `tools/build.mjs` and `tools/render.mjs` from the geometry in `tool
 - **Co-branding:** the partner logo goes to the right at equal optical height, after a hairline rule with two dot-widths of space on each side. conductor comes first on our surfaces, and the marks are never merged.
 - **Never** bring back the mascot, the top hat or the Octocat pin.
 
-### Explored directions (not for use)
-
-Each was taken to a complete kit and tested in the same dashboard chrome before the choice. The round-two kits are in `logo-kits/` and round one’s are in `directions/`, kept for reference.
-
-- **Gate** (a doorway with the dot standing in it): the clearest favicon of the set, but beside the lowercase wordmark its arch-with-legs reads as a bold “n”.
-- **Cue** (a disc that gives way to the dot): the boldest silhouette, but a disc and a dot is abstract and says nothing about conductor without the name.
-- **Conduit** (a C as a circuit, the dot passing through its gap): clear and strong, but a C with a dot is a crowded genre and it carries the least of conductor’s own idea.
-- **Fermata, round one:** the same idea, but too thin on light. It became the official mark once strengthened.
-- **Downbeat** (the prototype’s baton, rebuilt): a diagonal and a dot is a common shape with the least meaning.
-- **Signature** (the wordmark as the logo): elegant but not ownable, and its brass accent collided with the warning colour.
+The candidates explored before this one are on the [archive](archive/index.html); none of them is for use.
 
 ---
 
@@ -248,7 +181,8 @@ Every status mark, in a table, card, the run strip, a legend, the overview, the 
 
 - **Passed and parked never share a hue or a shape:** a sage dot vs slate pause bars.
 - **The mark always carries its colour.** The word is coloured only when a person is needed or the thing is live.
-- **No tinted rows, capsules or icon chips.** In a list, a row that needs someone (failed or needs you) gets a 3px leading edge in its mark’s colour, its reason as a plain sentence and one action, and it sits in the **Needs attention · N** group at the top. **Running** and **Finished** are each one summary line (“10 finished · 9 passed · 1 parked”) that opens in place; took, cost and ids live inside.
+- **No tinted rows, pills or capsules.** In a list, rows are grouped: **Needs attention** first (failed or needs you), then **Running now**, then **Finished**, which stays listed and is paged. Only a row that needs someone gets a 3px leading edge in its mark’s colour, its reason as a plain sentence and one action.
+- **Status labels, filters, counts and tags each have their own treatment, and none is a pill:** a status label is a mark and a word; a filter is a rectangle that toggles; a count is a numeral, in ember only where a person is needed; a tag (an environment, “read only”) is a small outlined label.
 - **No step trace in lists.** Step detail lives on the run page as a collapsible tree, where a nested workflow call is one node with its own status and the failing path opens by itself.
 - **Every chart mark is explained:** labelled in words beside it (the run strip, `data-labelled`) or listed in its legend. Legends are generated from the same list (`legend()`).
 
@@ -256,7 +190,7 @@ Every status mark, in a table, card, the run strip, a legend, the overview, the 
 - `tools/status-cvd.mjs` (the dataviz skill’s validator, run pairwise against `bg.surface`) writes `tokens/STATUS-CVD.md`. The five table states (passed, running, failed, needs you, parked) are distinct by colour for colour-blind readers in dark (all 10 pairs) and in light (9 of 10). The exception is passed vs needs you in light, at CVD ΔE 6.5: the floor band, with normal-vision ΔE 27 and different shapes. Passed vs parked is ΔE 11–12 for colour-blind readers and 12.7 to normal vision: clearly different hues, plus different shapes. Waiting and shadow (label-only states) lean on shape against needs you and running. All marks are ≥ 3:1 on every surface, and no two states share a shape.
 - `tools/mark-check.mjs` loads every page in WebKit (iPhone and desktop) and Chromium, with the OS light and dark. It fails if a rendered mark isn’t its state’s token, a chart mark is neither labelled on the chart nor in its legend, a legacy status glyph bypasses the vocabulary, or a needs-attention row’s edge differs from its mark.
 
-The decisions and the explored alternatives are in [`explore/status-column.html`](explore/status-column.html) and [`status-review.html`](status-review.html).
+The explored alternatives are on the [archive](archive/index.html).
 
 ### Data visualisation (`--color-dataviz-*`)
 
@@ -283,7 +217,7 @@ All three families are under the **SIL Open Font License 1.1**, self-hosted as l
 | **Atkinson Hyperlegible Next** (Braille Institute) | Everything people read and act on | 400 · 600 · 700 | True tabular figures. Preloaded. |
 | **Atkinson Hyperlegible Mono** (Braille Institute) | Only literal code, ids, YAML, logs | 400 · 500 | Loaded on demand. |
 
-**Weights:** 400 for body and cells; 600 for buttons, tabs, nav, labels and Fraunces titles; 700 for item titles and the bold lead-in of a summary sentence. **Numbers:** `tabular-nums` in every table, counter and timer. Our Fraunces subset has no tabular figures, so serif numbers are limited to one hero value per card.
+**Weights:** 400 for body and cells; 600 for buttons, tabs, nav, labels and Fraunces titles; 700 for item titles and the bold lead-in of a sentence. **Numbers:** `tabular-nums` in every table, counter and timer. Our Fraunces subset has no tabular figures, so serif numbers are limited to one hero value per card.
 
 ### Scale (1rem = 16px)
 
@@ -291,7 +225,7 @@ All three families are under the **SIL Open Font License 1.1**, self-hosted as l
 |---|---|---|---|---|
 | `display-xl` | 72 | 0.98 | Fraunces 600 | Brand pages, social card |
 | `display` | 48 | 1.04 | Fraunces 600 | Docs landing, onboarding |
-| `h1` | 34 | 1.1 | Fraunces 600 | Page titles and greetings |
+| `h1` | 34 | 1.1 | Fraunces 600 | Page titles |
 | `h2` | 21 | 1.25 | Fraunces 600 | Card and section titles |
 | `h3` | 17 | 1.35 | Atkinson 700 | Item and dialog titles; anything long or generated |
 | `h4` | 15 | 1.4 | Atkinson 700 | Sub-sections, list titles |
@@ -321,17 +255,22 @@ Use `font: var(--type-h1); letter-spacing: var(--type-h1-tracking); font-variati
 
 ## Shape and depth
 
-- **Radii:** 4 · 6 · 10 (controls, wells) · 14 (cards) · 18 (overlays) · 22 (phone sheets) · pill (badges, counts, chips).
+- **Radii:** 4 · 6 · 10 (controls, wells) · 14 (cards) · 18 (overlays) · 22 (phone sheets) · pill (round avatars only; nothing else is a pill).
 - **Elevation:** `--shadow-0…4`, warm brown-tinted on light (soft and diffuse) and simply darker on dark, where the lighter surface step carries the depth. Borders are 1px `border.subtle`. The focus ring is 2px with a 2px offset.
 
 ## Iconography
 
-- **Set:** [Lucide](https://lucide.dev) (ISC licence). The subset in use is vendored in `icons/lucide/` with its licence. Each concept gets exactly one icon (see the grid in the book).
-- **Style:** outline only, with round caps and joins, on a 24-unit grid with a 2-unit live-area padding. Daylight draws Lucide at a 1.75 stroke (rounded, a little softer than its default 2) at 16–20px, and 1.5 at 24px.
-- **Sizes:** 18 beside body text (16 compact), 14 in badges, 20 in empty states and pickers, 22–24 in the phone tab bar.
-- **Colour:** `icon.default` beside text, `icon.muted` for decoration, and a status colour only on status glyphs.
-- **Status glyphs** (`icons/status/`, ours): success, warning, danger, info, running, neutral, skipped, shadow and needs-you, drawn on a 16-unit grid with a 1.5 stroke. Each has a distinct *shape*, so they work in one colour.
-- **Never** show an icon alone without a label or tooltip (except a universal ×), fill an outline icon or mix sets. New icons follow Lucide's grid and stroke.
+- **Set:** [Lucide](https://lucide.dev) (ISC licence). The subset in use is vendored in `icons/lucide/` with its licence.
+- **One icon per kind of thing** (`status/rows.js`): approval `stamp` · run `circle-play` · bot `bot` · team `users` · workflow `workflow` · pull request `git-pull-request` · incident `siren` · deploy `rocket` · Terraform `layers` · cloud spend `receipt` · connector `plug` · login `key-round` · knowledge `book-open` · config change `settings-2`. A run’s state is its status mark beside it, never a different icon.
+- **One icon per kind of action:** reads `eye` · writes / updates `pencil-line` · comments / posts `message-square` · pushes code `git-commit-horizontal` · applies infra `hammer` · spends money `banknote` · deletes / destroys `trash-2` · changes permissions `lock-open`.
+- **Rules:** one meaning per icon, used for nothing else; always next to its word; never decorative; legible at 16px (`tools/icon-check.mjs` measures every glyph’s real 16px pixels).
+- **Environment tags:** Production (solid square, strong outline, bold) · Staging (outlined square with a centre) · Local (dashed circle). Told apart by fill and shape, never by colour alone.
+- **Style:** outline only, round caps and joins, on a 24-unit grid; drawn at a 1.75 stroke at 16–20px and 1.5 at 24px.
+- **Sizes:** 16–18 beside body text, 14 in compact density, 20 in pickers, 22–24 in the phone tab bar.
+- **Colour:** `icon.default` beside text and `icon.muted` in secondary positions; a status colour only on status marks.
+- **Status marks** (`icons/status/`, ours): passed, running, failed, needs you, waiting, parked, not reached, shadow and staged, each a distinct *shape* on a 16-unit grid, so they work in one colour.
+- **The passkey icon** (`fingerprint`) appears only on actions that authenticate: approve, deny and changes that widen access.
+- **Never** show an icon alone without its word (except a universal ×), fill an outline icon or mix sets.
 
 ## Motion
 
@@ -350,8 +289,9 @@ The book shows each component's states (default, hover, focus, active, disabled,
 - **Value source:** the source is a quiet menu inside the field. Secret is the default; Vault item and Environment variable are listed; typed value and setting sit under “Other sources”. This replaces the five-way segmented control on every field.
 - **Choice cards:** for decisions that need a sentence each (permission presets, connector methods). Five at most.
 - **Tabs** switch views of one thing, and **segmented controls** switch a setting. Neither navigates.
-- **Tables and dense lists:** grouped by who needs to act; only rows that need someone are drawn by default, and Running and Finished are summary lines that open in place. Text left, numbers right in tabular figures, status as mark + word, ids in mono at the end of an opened row, focusable rows (j/k, x, Enter), and selection as the accent wash plus a 3px bar.
-- **Badges** label state, **chips** filter, and the **count** (accent) appears only where a person is needed.
+- **Tables and dense lists:** the fixed row anatomy; grouped needs attention → running now → finished, with finished rows listed and paged. Text left, numbers right in tabular figures, status as mark + word, ids in mono at the end, focusable rows (j/k, x, Enter), and selection as the accent wash plus a 3px bar. No step traces in rows.
+- **Status labels, filters, counts and tags:** a status label is a mark and a word; a filter is a rectangle that toggles; a count is a numeral (ember only where a person is needed); a tag is a small outlined label. None of them is a pill.
+- **Approvals:** the strip above the title (what it is, environment or risk words, status, age and expiry), the title as a question, the why. Overview / Technical details tabs only when technical detail matters to the decision (a Terraform plan, colourised); otherwise details are folded. A sticky bar at the bottom holds Approve and Deny, both with the passkey; it never covers the title or the why.
 - **Banners** are for persistent conditions. **Toasts** are for events: 6 seconds (errors stay), above the phone tab bar, with an action.
 - **Dialogs** are for decisions, **drawers** for detail beside a list, and **sheets** for the phone. All of them trap focus, close on Esc and return focus.
 - **Steppers:** at most five steps, each named for the decision, not the file. The review lives inside the wizard, and Back keeps input.
@@ -371,12 +311,12 @@ conductor talks to someone who is nervous about giving an AI access to productio
 7. **Humans read times:** “Mondays at 06:00”, “52 minutes ago”, with the exact value on hover.
 8. **Calm, not cute:** no exclamation marks, “oops”, “please” or “I'm thinking”. Only bots speak in the first person, and only in chat.
 
-**Names:** bot · team · workflow · trigger · step · run · approval · case · folder · pack · plugin · connector · host · login · secret, each defined once in the book's table and used the same way in the UI, docs, CLI and README. Entity names are lowercase-kebab (`platform-sre`). Third-party services keep their own casing (GitHub, PagerDuty). **conductor is always lowercase**: rewrite the sentence rather than start it with the name.
+**Names:** bot · team · workflow · trigger · step · run · approval · case · folder · pack · plugin · connector · host · login · secret, each defined once in the book’s table and used the same way in the UI, docs, CLI and README. Bots live in folders (never “members”); **Activity** holds the run history; **System** is the area for Config, Secrets, Packs, Connections, Updates, Logs & audit and Access.
 
 **Fixed risk vocabulary:** “Does on its own” · “Asks you first” · “Never”, with the tier name second.
 
 **Patterns** (rendered in the book):
-- **Approvals** show *Why* (the reason, linked to the case), *Impact* (where, how much, how long) and *Undo* (how, and for how long), then “Approve and run” and “Deny…”. Technical details are collapsed.
+- **Approvals** show *Why* (the reason, linked to the case), *Impact* (where, how much, how long) and *Undo* (how, and for how long), then “Approve” and “Deny…”, both with the passkey because both are signed. Technical details are folded, or a tab when they matter to the decision.
 - **Errors:** what happened, why, and what to do, with the raw code last, in mono.
 - **Validation:** “Pick a channel to post to.”, not the schema path.
 - **Confirmations:** the title states the action and object (“Delete the nightly-backup workflow?”) and the body states the consequences. A change that widens access needs a plain-words acknowledgement (“I understand homelab can sign in as me”). Never ask “Are you sure?”.
@@ -386,7 +326,7 @@ conductor talks to someone who is nervous about giving an AI access to productio
 
 ## Theming robustness
 
-**The iPhone bug.** On an iPhone (paseo’s in-app browser, WebKit, OS in dark mode), `directions-v2.html` showed faint, light-grey text on the cream page, and every specimen labelled LIGHT rendered with a dark surface. **Cause:** the pages never declared a colour scheme. With no `color-scheme`, browsers that auto-darken pages repaint their colours: Chromium’s force-dark, and in-app WebViews that apply “algorithmic darkening”. That flipped our forced-light surfaces dark while some text was left in its light-theme colours. The token-pair contrast check passed, because the tokens were right; what the reader saw was not.
+**The iPhone bug.** On an iPhone (paseo’s in-app browser, WebKit, OS in dark mode), an early direction page (now on the archive) showed faint, light-grey text on the cream page, and every specimen labelled LIGHT rendered with a dark surface. **Cause:** the pages never declared a colour scheme. With no `color-scheme`, browsers that auto-darken pages repaint their colours: Chromium’s force-dark, and in-app WebViews that apply “algorithmic darkening”. That flipped our forced-light surfaces dark while some text was left in its light-theme colours. The token-pair contrast check passed, because the tokens were right; what the reader saw was not.
 
 **The fix, at the source** (`tools/tokens.mjs` generates it into `tokens.css`):
 - `:root { color-scheme: light dark; }` and `<meta name="color-scheme" content="light dark">` on every page, so the browser knows the page handles both and never auto-darkens it.
@@ -420,11 +360,11 @@ The prototype adopts Daylight in one pass:
 3. **Rename** every prototype variable to its Daylight token, using the table in `tokens/migration.json` (also in the book and summarised below). Each row has a note where the meaning or value changes, not just the name. The ones that change behaviour:
    - `--accent` used as **text** (43 places across the CSS): use `--color-text-accent`. Keep `--color-accent-default` for fills.
    - `--ink-3` → `--color-text-tertiary` (now AA on cards).
-   - `--ok`, `--run`, `--wait`, `--fail`, `--idle`, `--shadow`: use `-fg` for text and glyphs, `-solid` for dots and bars. **Passing rows stop being green**: they are ink, with a neutral check glyph.
+   - `--ok`, `--run`, `--wait`, `--fail`, `--idle`, `--shadow`: use `-fg` for text and glyphs, `-solid` for dots and bars. **Passing rows stop being green**: they are ink, with the small sage passed mark.
    - Inputs and checkboxes: `--color-border-control`.
 4. **Type:** body to `--type-body-m` (15px). Titles to `--type-h1`/`--type-h2` (Fraunces, upright), with long or generated titles (proposal, run and step titles) moved to `--type-h3` in the sans. **Decorative mono becomes sans with tabular figures**: the top strip, crumbs, counts, times and costs. Mono stays only for ids, digests, YAML and logs, at least 12px.
-5. **Shape:** radii from `--radius-*` (controls 10, cards 14, badges pill), shadows from `--shadow-*`. Drop the film grain and the dot grid on app surfaces.
-6. **Information design:** apply the patterns: a summary sentence under each page title, At a glance on the overview, the needs-you list, the run story on run pages, the run strip plus exceptions by workflow on Activity, and the approval card. No “since you last looked” digest, no lanes, no illustrations.
+5. **Shape:** radii from `--radius-*` (controls 10, cards 14, tags 3; nothing is a pill), shadows from `--shadow-*`. Drop the film grain and the dot grid on app surfaces.
+6. **Information design:** apply the rules and patterns above: the row anatomy with icons and environment tags; the approved Overview (At a glance, Needs you, Running now capped, the runs-per-hour strip, For your information, Get started); Activity with the strip, exceptions by workflow and the paged run list; the step tree on run pages; the approval tabs and sticky decision bar. Remove the greeting, the summary sentences that restate the screen, run tabs, previous/next between runs, export buttons, Pause/Run on the overview, pills and tinted rows.
 7. **Density:** `data-density="compact"` on `<html>` from a per-browser display preference. Replace fixed row and padding values with `--size-row`, `--pad-cell-*`, `--pad-card` and `--pad-page-*`. `.tbl.compact` becomes redundant.
 8. **Logo:** copy `design/brand/assets/` into the prototype and follow its README: the favicon links, the strip mark in `js/ui.js` and the gate mark in `js/screens/access.js` (both from `mark-inline.html`), and the live-text wordmark in `--type-brand`.
 
@@ -433,12 +373,12 @@ The prototype adopts Daylight in one pass:
 | `--font-ui` | `--font-family-sans` | Instrument Sans → Atkinson Hyperlegible Next. Body goes 13.5 → 15px (--type-body-m). |
 | `--font-title` | `--font-family-serif` | Instrument Serif italic → Fraunces SemiBold, upright. Use the --type-h1 / --type-h2 shorthands plus their -tracking and -variation. Long or generated titles move to --type-h3 (sans). |
 | `--font-mono` | `--font-family-mono` | Martian Mono → Atkinson Hyperlegible Mono, and only for literal code, ids, YAML and logs. Strip cells, crumbs, counts, times and costs move to the sans with tabular-nums. |
-| `--r-xs` | `--radius-badge` | 3 → pill (999). |
+| `--r-xs` | `--radius-badge` | 3 → 3: tags only. Nothing is a pill. |
 | `--r-sm` | `--radius-control` | 5 → 10. |
 | `--r` | `--radius-card` | 8 → 14. |
 | `--r-lg` | `--radius-overlay` | 12 → 18. |
 | `--rail-w` | `--size-rail` | 224 → 236 (212 compact). |
-| `--strip-h` | `--size-strip` | 34 → 60 (48 compact): the mono status strip becomes a calm top bar (search, health, avatar). |
+| `--strip-h` | `--size-strip` | 34 → 60 (48 compact): the mono status strip becomes a quiet top bar (search, health, avatar). |
 | `--ease` | `--motion-easing-out` |  |
 | `--t-fast` | `--motion-duration-fast` | Drops to 0 under reduced motion. |
 | `--t` | `--motion-duration-base` | 220 → 200ms. |
@@ -454,7 +394,7 @@ The prototype adopts Daylight in one pass:
 | `--ink-2` | `--color-text-secondary` | Dark #b6b1a2 → #ddd3c2; light #514d43 → #584e43. |
 | `--ink-3` | `--color-text-tertiary` | Changed for AA: dark #807c6f → #ada291, light #847f71 → #6e6457. The old values failed 4.5:1 on cards. |
 | `--ink-4` | `--color-text-disabled` | Disabled controls only. |
-| `--accent` | `--color-accent-default` | Fills only (buttons, counts, bars, the logo dot). Where it colours text (links, .cell.alert, crumbs:hover; 43 places), use --color-text-accent. |
+| `--accent` | `--color-accent-default` | Fills only (primary buttons, the active nav bar, the logo dot). Counts are ember text. Where it colours text (links, .cell.alert, crumbs:hover; 43 places), use --color-text-accent. |
 | `--accent-2` | `--color-accent-hover` |  |
 | `--accent-ink` | `--color-text-on-accent` |  |
 | `--accent-wash` | `--color-accent-subtle` |  |
@@ -507,7 +447,5 @@ The prototype adopts Daylight in one pass:
 
 ## Open decisions
 
-0. ~~Labels and status~~: **decided.** Typed labels, with grouped rows and margin marks; see the Status section.
-
 1. **Where the brand files live long-term:** `design/brand/` or `.github/brand/`, which sets the README paths.
-2. **The dashboard default theme:** follow the OS (as the tokens do now), or light unless the user picks dark. Daylight is designed light-first.
+2. **The visual marker for risk** (beyond the words): the proposal is on the archive and is not part of the system until it is decided.

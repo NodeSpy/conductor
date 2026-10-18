@@ -500,3 +500,13 @@ h2 { font: var(--d-title-weight) var(--d-h2)/1.25 var(--font-family-display); fo
 }
 
 [data-calm] .at-glance, .scan-hello + .at-glance { margin: 0 0 28px; }
+
+/* ---------- Daylight, current system: counts, filters and tags are never pills ---------- */
+[data-d="daylight"] .rail nav a em.hot { background: none; color: var(--color-text-accent); padding: 0; border-radius: 0; font-size: 13px; font-weight: 700; }
+[data-d="daylight"] .count-pill { background: none; color: var(--color-text-accent); padding: 0; border-radius: 0; font-size: 15px; }
+[data-d="daylight"] .tabs a em, [data-d="daylight"] .tabs a.on em { background: none; padding: 0; border-radius: 0; font-weight: 600; color: var(--color-text-tertiary); }
+[data-d="daylight"] .tabs a.on em { color: var(--color-text-primary); }
+[data-d="daylight"] .chip { border-radius: var(--radius-control); border-color: var(--color-border-control); height: 32px; }
+[data-d="daylight"] .badge { background: none; padding: 0; height: auto; border-radius: 0; color: var(--s-fg); }
+@media (max-width: 600px) { [data-d="daylight"] .tabbar a em { background: none; color: var(--color-text-accent); border-radius: 0; padding: 0; font-size: 11px; } }
+.archived { margin: 0 0 14px; padding: 8px 12px; border: 1px dashed var(--color-border-strong, var(--color-border-default)); border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }

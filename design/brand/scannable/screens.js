@@ -1,9 +1,9 @@
 // The five proposed screens for the scannable review (rendered by v2/mock.html?d=daylight&v=scan&s=…).
 // Everything a person uses to understand or decide stays visible; only ids, hashes and raw payloads
 // sit behind a disclosure or a hover.
-import { KINDS, ACTIONS, STEPS, FLAGS, flagOf, flag, env, kind, lucide, rows, status } from './scan.js';
+import { KINDS, ACTIONS, STEPS, FLAGS, flagOf, flag, env, kind, lucide, rows, status } from '../status/rows.js';
 import { atAGlance, injectCalmCSS } from '../status/calm.js';
-import * as S from './data.js';
+import * as S from '../v2/rows-data.js';
 
 const chev = lucide('chevron-right', 14);
 const n = (xs, f) => xs.filter(f).length;

@@ -11,12 +11,9 @@
 import { available, context, closeAll } from './browsers.mjs';
 
 const BASE = process.env.BRAND_BASE || 'http://localhost:8768';
-const PAGES = ['system.html', 'system.html?theme=dark', 'status-review.html', 'explore/status-column.html'];
-for (const s of ['overview', 'run', 'approval', 'history', 'builder', 'activity', 'bot']) for (const t of ['light', 'dark']) PAGES.push(`v2/mock.html?d=daylight&s=${s}&t=${t}`, `v2/mock.html?d=daylight&s=${s}&t=${t}&v=before`);
-for (const t of ['light', 'dark']) PAGES.push(`v2/mock.html?d=daylight&s=overview&t=${t}&day=quiet`);
-// The scannable proposal: its review page and its five proposed screens.
-PAGES.push('scannable-review.html');
-for (const s of ['overview', 'history', 'approval', 'perms', 'picker']) for (const t of ['light', 'dark']) PAGES.push(`v2/mock.html?d=daylight&v=scan&s=${s}&t=${t}`);
+const PAGES = ['system.html', 'system.html?theme=dark', 'status-review.html', 'explore/status-column.html', 'scannable-review.html'];
+for (const s of ['overview', 'activity', 'approval', 'approval&a=slack', 'approval&tab=tech', 'bot', 'perms', 'picker', 'run', 'builder']) for (const t of ['light', 'dark']) PAGES.push(`v2/mock.html?d=daylight&s=${s}&t=${t}`);
+for (const v of ['before', 'calm', 'scan']) for (const s of ['overview', 'history', 'approval', 'activity', 'bot']) PAGES.push(`v2/mock.html?d=daylight&s=${s}&t=light&v=${v}`);
 const LEGACY = '.lgd, .c-dot, svg.gl, svg.sh, .ty-state > svg:not([data-mark]), .c-status > svg:not([data-mark]), .c-badge[data-s] > svg:not([data-mark])';
 
 function audit({ base, legacy }) {

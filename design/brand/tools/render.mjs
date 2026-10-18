@@ -29,26 +29,20 @@ const inline = (id, name) => fs.readFileSync(svgFile(id, name), 'utf8');
 
 function socialHTML(dir) {
   const P = dir.pal.dark;
-  // The mark, huge, low-contrast and cropped off the top-right corner.
-  const [gs, gr, gt] = { fermata: [620, -170, -230], downbeat: [640, -300, -250] }[dir.id] || [760, -300, -230];
-  const ghost = inline(dir.id, 'logo-mark-mono').replace(
-    '<svg ',
-    `<svg class="ghost" style="color:${P.line};width:${gs}px;height:${gs}px;right:${gr}px;top:${gt}px" `,
-  );
+  // No motif: the logo is never enlarged, cropped or used as decoration.
   return `<!doctype html><meta charset="utf-8"><style>${fontCSS()}
   *{box-sizing:border-box}html,body{margin:0;width:1280px;height:640px;overflow:hidden}
   body{background:${P.bg};color:${P.ink};font-family:'Instrument Sans';position:relative;
     background-image:radial-gradient(${P.ink}10 1px,transparent 1.3px);background-size:24px 24px;background-position:12px 12px}
-  .ghost{position:absolute;opacity:.85}
   .lock{position:absolute;left:96px;top:196px;height:112px}
   .lock svg{height:100%;width:auto;display:block}
   .tag{position:absolute;left:100px;top:350px;width:760px;font-size:31px;line-height:1.28;color:${P.ink2};letter-spacing:-.005em}
   .foot{position:absolute;left:100px;right:96px;bottom:64px;display:flex;justify-content:space-between;font-family:'Martian Mono';font-size:17px;color:${P.ink3};letter-spacing:-.01em}
   .foot b{color:${P.acc};font-weight:400}
   .rule{position:absolute;left:100px;right:96px;bottom:112px;border-top:1px solid ${P.line}}
-  </style><body>${ghost}<div class="lock">${inline(dir.id, 'logo-horizontal-dark')}</div>
+  </style><body><div class="lock">${inline(dir.id, 'logo-horizontal-dark')}</div>
   <div class="tag">Event-driven orchestration for AI agents. Self-hosted, config-as-code, behind your approvals.</div>
-  <div class="rule"></div><div class="foot"><span>triggers <b>→</b> workflows <b>·</b> bots <b>·</b> sandbox <b>·</b> packs</span><span>github.com/NodeSpy/conductor</span></div>`;
+  <div class="rule"></div><div class="foot"><span>triggers <b>→</b> workflows <b>·</b> bots <b>·</b> sandbox <b>·</b> packs</span></div>`;
 }
 
 
@@ -69,7 +63,7 @@ function socialDaylight(dir, kit) {
   </style><body>
   <div class="lock">${lock}</div>
   <div class="tag"><b>Event-driven orchestration for AI agents.</b> Self-hosted, config-as-code, and anything risky waits for your approval.</div>
-  <div class="foot">github.com/NodeSpy/conductor</div>`;
+  `;
 }
 
 const imgHTML = (file, w, h) =>

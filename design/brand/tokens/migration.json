@@ -17,7 +17,7 @@
  {
   "from": "--r-xs",
   "to": "--radius-badge",
-  "note": "3 → pill (999)."
+  "note": "3 → 3: tags only. Nothing is a pill."
  },
  {
   "from": "--r-sm",
@@ -42,7 +42,7 @@
  {
   "from": "--strip-h",
   "to": "--size-strip",
-  "note": "34 → 60 (48 compact): the mono status strip becomes a calm top bar (search, health, avatar)."
+  "note": "34 → 60 (48 compact): the mono status strip becomes a quiet top bar (search, health, avatar)."
  },
  {
   "from": "--ease",

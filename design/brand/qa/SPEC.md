@@ -5,19 +5,24 @@ What the dashboard prototype is checked against, and how. The findings go in
 
 ## Approved designs (the only references)
 
-- **Daylight mocks:** [`v2/mock.html?d=daylight`](../v2/mock.html?d=daylight), every screen (`s=overview|run|approval|history|builder|activity|bot`). The Broadsheet and Score directions and the `&v=before` views are records, not references. The `&v=scan` screens are a proposal under review, not yet approved.
-- **The brand book:** [`system.html`](../system.html) and [`BRAND.md`](../BRAND.md): tokens, type, colour, components, patterns, voice, logo usage.
-- **The status column:** grouped rows (needs attention · running · finished) with margin marks, from [`status/marks.js`](../status/marks.js); no tinted rows or capsules; step detail on the run page as a tree.
-- **The logo:** Fermata, strengthened, from [`assets/`](../assets/), in its approved lockups only.
+- **The Daylight mocks:** [`v2/mock.html?d=daylight`](../v2/mock.html?d=daylight), the default view of each screen: `s=overview`, `activity` (which holds the run history), `approval` (Terraform; `&tab=tech` for its Technical details tab, `&a=slack` for a simple action), `bot`, `perms` (a bot’s Access tab), `picker` (the step picker), `run` and `builder`. Anything with `&v=` (before, calm, scan) and the Broadsheet and Score directions are archived drafts, not references.
+- **The brand book:** [`system.html`](../system.html) and [`BRAND.md`](../BRAND.md): tokens, type, colour, icons, components, patterns, voice, logo usage and the information architecture.
+- **The status design:** grouped rows (needs attention → running now → finished) with margin marks (a mark and a word), from [`status/marks.js`](../status/marks.js); a coloured leading edge only on rows that need someone; step detail on the run page as a tree.
+- **The logo:** Fermata, strengthened, from [`assets/`](../assets/) (the `fermata-bold` kit), in its approved lockups only.
 
-Anything on a screen that isn’t in one of these is a deviation.
+Anything on a screen that isn’t in one of these is a deviation. Nothing on the [archive](../archive/index.html) is a reference.
 
 ## Removed from the system (any appearance is a deviation)
 
-- **One lane per workflow** (the Score lane view). Activity is **runs over time as one aggregate** (runs per hour, failures marked) **plus the exceptions grouped by workflow**, with healthy workflows collapsed to a count.
-- **“Since you last looked”** digests, anywhere. The overview pattern is **At a glance**: a few key counts (need you, failed, running, went fine, spent).
-- **The sunrise motif**, or any illustration made from the mark: rays, horizon lines, cropped or enlarged arches, watermarks, animated or decorated logos. Empty states and onboarding are a plain sentence and an action, if there is one.
-- **Meters or bars as risk or autonomy markers.** Tiers and risk are words.
+- **One lane per workflow,** or any view that grows linearly with the number of workflows, bots or runs. Activity is runs over time as one strip (failures marked) plus the exceptions grouped by workflow, with healthy workflows collapsed to a count, then the paged run list.
+- **“Since you last looked”** digests, anywhere. The overview opens with **At a glance**: four tiles.
+- **Greetings** (“Good afternoon, …”) and **header sentences that restate what is on the screen.**
+- **The sunrise motif,** or any illustration made from the mark, and any altered, decorated or animated logo. Empty states are a plain sentence and an action, if there is one.
+- **Meters or bars as risk or autonomy markers.** Risk is words, where someone decides.
+- **Pills and capsules** for status, counts, filters or tags; **tinted rows**; **step-dot traces in lists.**
+- **Run tabs** and **previous/next** between runs; **export buttons**; **Pause/Run on the Overview**; **captions that explain obvious controls.**
+- **The fingerprint** on anything that doesn’t authenticate (it belongs only on approve, deny and changes that widen access), including “Review” buttons.
+- **Old names:** “Run history” (it is Activity), “Members” (they are bots, in folders), settings outside the one System area.
 
 ## How each screen is checked
 

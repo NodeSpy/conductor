@@ -32,7 +32,7 @@ for (const [vp, w, h] of [['desktop', 1440, 900], ['phone', 390, 844]]) {
     await p.goto(`${PROTO}/index.html?theme=${t}${route}`); await p.waitForTimeout(700);
     if (click) { const bs = await p.$$(click); if (bs[1] ?? bs[0]) await (bs[1] ?? bs[0]).click(); }
     await shot('before');
-    if (calmS) { await p.goto(`${BASE}/v2/mock.html?d=daylight&s=${calmS}&t=${t}`); await shot('calm'); }
+    if (calmS) { await p.goto(`${BASE}/v2/mock.html?d=daylight&s=${calmS}&t=${t}&v=calm`); await shot('calm'); }
     await p.goto(`${BASE}/v2/mock.html?d=daylight&v=scan&s=${s}&t=${t}`); await shot('scan');
   }
   console.log(vp, errs.length ? 'ERR ' + [...new Set(errs)].join(' | ') : 'ok');

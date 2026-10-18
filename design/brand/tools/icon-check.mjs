@@ -26,7 +26,7 @@ const b = await chromium.launch();
 const p = await b.newPage({ deviceScaleFactor: 1 });
 await p.goto(`${BASE}/v2/mock.html?d=daylight&v=scan`);
 const res = await p.evaluate(async ({ base, LIMITS }) => {
-  const S = await import(`${base}/scannable/scan.js`);
+  const S = await import(`${base}/status/rows.js`);
   const M = await import(`${base}/status/marks.js`);
   const I = await import(`${base}/icons/icons.js`);
   const luc = (n) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#000" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${I.LUCIDE[n]}</svg>`;

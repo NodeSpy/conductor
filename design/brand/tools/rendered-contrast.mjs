@@ -19,19 +19,14 @@ const root = path.resolve(here, '..');
 const BASE = process.env.BRAND_BASE || 'http://localhost:8768';
 const [onlyEngines, filter] = process.argv.slice(2);
 
-const PAGES = [
-  'index.html', 'directions-v2.html', 'logo-review.html', 'explore/status-column.html', 'status-review.html',
-  'system.html', 'system.html?theme=light', 'system.html?theme=dark', 'system.html?theme=dark&density=compact',
-];
-for (const d of ['daylight', 'broadsheet', 'score']) for (const s of ['overview', 'run', 'approval', 'history', 'builder']) for (const t of ['light', 'dark']) PAGES.push(`v2/mock.html?d=${d}&s=${s}&t=${t}`);
-// Daylight is calm by default; its busy versions (&v=before), the two calm-only screens and the quiet day too.
-for (const t of ['light', 'dark']) {
-  for (const s of ['overview', 'approval', 'history', 'activity', 'bot']) PAGES.push(`v2/mock.html?d=daylight&s=${s}&t=${t}&v=before`);
-  PAGES.push(`v2/mock.html?d=daylight&s=activity&t=${t}`, `v2/mock.html?d=daylight&s=bot&t=${t}`, `v2/mock.html?d=daylight&s=overview&t=${t}&day=quiet`);
-}
-// The scannable proposal.
-PAGES.push('scannable-review.html');
-for (const t of ['light', 'dark']) for (const s of ['overview', 'history', 'approval', 'perms', 'picker']) PAGES.push(`v2/mock.html?d=daylight&v=scan&s=${s}&t=${t}`);
+// The current system, then the archive (labelled pages that stay public, so they must stay readable).
+const CURRENT = ['overview', 'activity', 'history', 'approval', 'approval&a=slack', 'approval&tab=tech', 'bot', 'perms', 'picker', 'run', 'builder'];
+const PAGES = ['index.html', 'system.html', 'system.html?theme=light', 'system.html?theme=dark', 'system.html?theme=dark&density=compact', 'archive/index.html'];
+for (const t of ['light', 'dark']) for (const s of CURRENT) PAGES.push(`v2/mock.html?d=daylight&s=${s}&t=${t}`);
+// Archive: earlier directions and drafts.
+PAGES.push('logo-directions.html', 'directions-v2.html', 'logo-review.html', 'explore/status-column.html', 'status-review.html', 'scannable-review.html');
+for (const d of ['broadsheet', 'score']) for (const s of ['overview', 'run', 'approval', 'history', 'builder']) for (const t of ['light', 'dark']) PAGES.push(`v2/mock.html?d=${d}&s=${s}&t=${t}`);
+for (const t of ['light', 'dark']) for (const v of ['before', 'calm', 'scan']) for (const s of ['overview', 'approval', 'history', 'activity', 'bot']) PAGES.push(`v2/mock.html?d=daylight&s=${s}&t=${t}&v=${v}`);
 
 function measure() {
   const parse = (s) => { const m = s.match(/rgba?\(([^)]+)\)/); if (!m) return null; const p = m[1].split(/[\s,/]+/).filter(Boolean).map(Number); return [p[0], p[1], p[2], p[3] ?? 1]; };

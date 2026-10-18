@@ -5,11 +5,11 @@ import { LOGOS, OFFICIAL_LOGO, kitDir } from '../tools/logos.mjs';
 import { STATES as STATUS_STATES, CHANGE, GLYPH_STATE, mark, injectMarkCSS } from '../status/marks.js';
 import { summaryLine, quietState, exception as calmException, excRows, runStrip, byWorkflow, atAGlance, injectCalmCSS } from '../status/calm.js';
 import { ACTIVITY } from '../v2/data.js';
-import { flag as scanFlag, env as scanEnv, rows as scanRows, injectScanCSS } from '../scannable/scan.js';
-import * as SCAN from '../scannable/data.js';
+import { env as scanEnv, rows as scanRows, KINDS, ACTIONS, ENV, lucide as rowIcon, injectScanCSS } from '../status/rows.js';
+import * as SCAN from '../v2/rows-data.js';
 injectMarkCSS(); injectCalmCSS(); injectScanCSS();
 
-const [T, CON, MIG, CALMCHK] = await Promise.all(['tokens/tokens.json', 'tokens/contrast.json', 'tokens/migration.json', 'tokens/calm-check.json'].map((u) => fetch(u).then((r) => r.json())));
+const [T, CON, MIG] = await Promise.all(['tokens/tokens.json', 'tokens/contrast.json', 'tokens/migration.json'].map((u) => fetch(u).then((r) => r.json())));
 
 // ---------- helpers ----------
 const lu = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${LUCIDE[n] ?? ''}</svg>`;
@@ -50,106 +50,66 @@ const ch = (id, title, blurb, subs, body) => chapters.push({ id, title, blurb, s
 const sub = (id, title, lede = '') => `<h3 class="sub" id="${id}">${title}</h3>${lede ? `<p class="lede">${lede}</p>` : ''}`;
 
 // =====================================================================
-// Calm by default (exception-first information design)
+// 0. Information design
 // =====================================================================
-// Scannable by default (a correction to Calm by default, which hid too much). Proposal under review.
-const CALM_RULES = [
-  ['Identify before reading', 'Every item shows what it is (an icon and a word), where it happens (an environment tag) and how it went (the status mark), in the same place on every screen.'],
-  ['Keep the information', 'Nothing a person uses to understand or decide is hidden. Only ids, hashes and raw payloads go behind a disclosure or a hover.'],
-  ['Order by attention', 'Needs you, then failing, then running, then finished: by position, weight and the status marks. The page heading still answers “what needs me?”.'],
-  ['Flag only what is worth stopping for', 'Production changes, money and destructive or access changes, in plain words with one mark, only where someone decides: approvals and a bot’s permissions. No meters or ladders.'],
-  ['One meaning per icon, always with a word', 'An icon stands for one kind of thing or action, everywhere, and is never decorative or alone.'],
-  ['Dense, but structured', 'One row anatomy with fixed, aligned columns: what · title · where · status · when · action.'],
-];
-const CALM_SCREENS = [['overview', 'Overview'], ['quiet', 'Overview, quiet day'], ['history', 'Run history'], ['activity', 'Activity'], ['bot', 'Bot page'], ['approval', 'Approval header']];
-const CALM_CHECK_NAME = { overview: 'overview', quiet: 'quiet overview', history: 'run history', activity: 'activity', bot: 'bot page', approval: 'approval header' };
-const calmResult = (screen, version, vp, theme) => CALMCHK.find((r) => r.screen === CALM_CHECK_NAME[screen] && r.version === version && r.theme === theme && r.engine === (vp === 'phone' ? 'webkit-iphone' : 'chromium-desktop'));
-const calmChip = (r) => (r ? `<span class="calm-chip ${r.pass ? 'ok' : 'loud'}">${r.coloured} coloured · ${r.heavy} text-heavy · ${r.pass ? 'within budget' : 'too loud'}</span>` : '');
-const calmPair = (screen, vp = 'desktop', theme = 'light') => {
-  const shot = (v) => `v2/shots/calm/${screen}-${v}-${vp}-${theme}.png`;
-  const live = (v) => `v2/mock.html?d=daylight&s=${screen === 'quiet' ? 'overview' : screen}&t=${theme}${screen === 'quiet' ? '&day=quiet' : ''}${v === 'before' ? '&v=before' : ''}`;
-  const fig = (v, label) => `<figure><figcaption><b>${label}</b>${calmChip(calmResult(screen, v, vp, theme))}<a href="${live(v)}">live</a></figcaption><img loading="lazy" src="${shot(v)}" alt="${label}: ${screen}, ${vp}, ${theme}"></figure>`;
-  return `${screen === 'quiet' ? `<figure class="calm-none"><figcaption><b>Before</b></figcaption><p>The busy overview had no quiet state: on a calm day it still showed every card.</p></figure>` : fig('before', 'Before')}${fig('calm', 'Calm')}`;
-};
-// Runs over time at scale: one aggregate strip (failures marked) plus the exceptions by workflow.
+// The current rules. Superseded drafts (the calm round, the scannable proposal) are on archive/.
 const activityDemo = () => `<div class="activity-demo">${runStrip(ACTIVITY.hours)}${byWorkflow(ACTIVITY.exceptions, ACTIVITY.healthy)}</div>`;
-const glanceDemo = () => atAGlance([[6, 'Need you'], [2, 'Failed', '12 h'], [4, 'Running'], ['18 of 20', 'Went fine', '12 h'], ['$8.40', 'Spent', 'today']]);
-const CALM_TOKENS = ['semantic.color.emphasis', 'semantic.color.band', 'semantic.calm', 'component.summary-line', 'component.run-strip', 'component.quiet-state', 'component.exception'];
-const fmtTok = (v) => (v == null ? '' : v.hex ? hexOf(v) : v.value != null ? `${v.value}${v.unit ?? ''}` : typeof v === 'object' ? JSON.stringify(v) : String(v));
-const calmTokenRows = () => [...flat.keys()].filter((p) => CALM_TOKENS.some((g) => p.startsWith(g + '.'))).map((p) => { const t = flat.get(p); const raw = t.modes?.dark ?? t.modes?.light ?? t.value; return `<code>${cssName(p)}</code><span>${isAlias(raw) ? `<code>${raw.slice(1, -1).replace(/^semantic\./, '').replace(/^primitive\.color\./, 'palette.')}</code>` : esc(fmtTok(raw))}</span><span class="c-help">${t.desc ?? ''}</span>`; }).join('');
-const EMPH = [['loud', 'Replace the production web server', 'The one thing that needs you. The only level allowed colour (its mark, its edge, its action).'], ['normal', '18 of 20 runs went fine', 'What things are: summary-line leads, row titles.'], ['quiet', 'last 12 hours · $8.40 spent', 'Supporting facts and reasons.'], ['ghost', '7 min ago · Show', 'Times, disclosures and the band’s axis.']];
-const emphasisSheet = () => `<div class="calm-emph">${EMPH.map(([k, sample, use]) => `<div class="em-${k}"><code>--color-emphasis-${k}</code><span class="em-sample" style="color:var(--color-emphasis-${k})">${k === 'loud' ? mark('needs', { size: 14 }) : ''}${sample}</span><span class="c-help">${use}</span></div>`).join('')}</div>`;
-
-ch('scannable', 'Scannable by default', 'Identify before reading. Every item says what it is, how risky it is, where it happens and how it went, in fixed places, so you can tell at a glance what needs you and whether it is dangerous or routine. A correction to “Calm by default”, which hid too much. Proposal under review.',
-  [['calm-rules', 'Principles'], ['scan-proposal', 'The proposal'], ['calm-pairs', 'For the record: the calm round'], ['calm-glance', 'The glance answer and the loudness check'], ['calm-emphasis', 'Emphasis levels'], ['calm-components', 'Components kept from the calm round'], ['calm-tokens', 'Tokens']],
-  () => `
-  ${sub('calm-rules', 'Principles', 'The first review of the Daylight mocks found them busy: “there is no way for me to just pick out what’s going on… I have to read everything all the time.” The calm round answered by showing less, and over-corrected. The real problem was identification: every item looked the same, so each had to be read to learn what it was and whether it mattered, and icons were missing or didn’t make sense. The fix keeps the information and adds a visual language that encodes meaning.')}
-  <ol class="calm-rules">${CALM_RULES.map(([t, d]) => `<li><b>${t}</b><span>${d}</span></li>`).join('')}</ol>
-  ${sub('scan-proposal', 'The proposal', 'Specified on <a href="scannable-review.html">the scannable review page</a>: the icon set, the risk flags, the environment tags, the icon audit of the prototype and before / calm / proposed on five screens. Not yet adopted into the tokens or the mocks.')}
-  ${stack(() => `<div class="scan-demo"><div class="sd-flags">${['prod', 'money', 'destroy', 'access'].map((k) => scanFlag(k)).join('')}</div><div class="sd-env">${['production', 'staging', 'local'].map((e) => scanEnv(e)).join('')}</div>${scanRows([['needs', [SCAN.NEEDS[0], SCAN.NEEDS[3]]], ['running', [SCAN.RUNNING[2]]]])}</div>`)}
-    ${sub('calm-pairs', 'For the record: the calm round', 'The busy version against the calm one, in the first viewport. The calm versions pass a loudness budget, but they hide what a person needs to decide; they are kept here as the over-correction the proposal replaces.')}
-  <div class="calm-ctl"><div class="c-seg" id="calm-vp"><span data-v="desktop" class="is-active">Desktop</span><span data-v="phone">Phone</span></div><div class="c-seg" id="calm-th"><span data-v="light" class="is-active">Light</span><span data-v="dark">Dark</span></div></div>
-  <div class="calm-pairs" data-vp="desktop">${CALM_SCREENS.map(([s, t]) => `<section class="calm-pair" data-screen="${s}"><h4>${t}</h4><p class="calm-answer">“${(calmResult(s, 'calm', 'desktop', 'light')?.glance ?? '').replace(/^./, (c) => c.toUpperCase())}.”</p><div class="calm-figs">${calmPair(s)}</div></section>`).join('')}</div>
-  ${sub('calm-glance', 'The glance answer and the loudness check', 'Kept: the page heading is the glance answer. Retired with this correction (pending review): the loudness budget, which rewarded hiding information. For each calm screen, the one sentence a person should get at a glance, marked on the page as <code>[data-glance]</code>. <code>tools/calm-check.mjs</code> checks that the glance element is the most prominent thing on screen (largest text, first large text in reading order, at least 7:1), and counts loudness in the first viewport: things in a saturated colour (OKLCH chroma ≥ 0.05, once per row or item) and text-heavy rows (over 110 characters or 3+ lines). The budget is <b>coloured ≤ exceptions + 2</b>, and <b>text-heavy ≤ 2</b> (3 with more than three exceptions). Calm pages must pass; the busy versions are measured against the same budget.')}
-  <div class="c-table-wrap"><table class="c-table calm-table"><thead><tr><th>Screen</th><th>Glance answer</th><th class="num">Needs a person</th><th class="num">Before</th><th class="num">Calm</th><th>Result</th></tr></thead><tbody>
-  ${CALM_SCREENS.map(([s, t]) => { const n = (r) => (r ? `${r.coloured} · ${r.heavy}` : '—'); const c = calmResult(s, 'calm', 'desktop', 'light'); const all = CALMCHK.filter((r) => r.screen === CALM_CHECK_NAME[s] && r.version === 'calm'); return `<tr><td><b>${t}</b></td><td>${c?.glance ?? ''}</td><td class="num">${c?.exceptions ?? ''}</td><td class="num">${s === 'quiet' ? '—' : `${n(calmResult(s, 'before', 'desktop', 'light'))} / ${n(calmResult(s, 'before', 'phone', 'light'))}`}</td><td class="num">${n(c)} / ${n(calmResult(s, 'calm', 'phone', 'light'))}</td><td>${all.length && all.every((r) => r.pass && r.glanceOk) ? `${mark('passed')} ${all.length} renders pass` : `${mark('failed')} fails`}</td></tr>`; }).join('')}
-  </tbody></table></div>
-  ${why('Counts are “coloured · text-heavy”, desktop (Chromium) / iPhone (WebKit), light theme; dark is the same. The full matrix (both engines, both themes, before and calm) is generated into <a href="tokens/CALM-CHECK.md">tokens/CALM-CHECK.md</a>.')}
-  ${sub('calm-emphasis', 'Emphasis levels', 'Four levels, and only the loudest may carry colour. At most three loud things per screen (<code>--calm-max-loud</code>).')}
-  ${stack(emphasisSheet)}
-  ${sub('calm-components', 'Components kept from the calm round', 'Still useful, for what is genuinely secondary: the summary line for long finished lists, the quiet state for days when nothing needs anyone, and the exception card for an approval page header. They live in <code>status/calm.js</code>.')}
-  <h4 class="cap">One loud thing (exception)</h4><p class="lede">The thing that needs you most: a kicker with its mark, a serif title, one sentence, one action. The next few are exception rows: one line each, a 3px edge in the mark’s colour, one action. Anything beyond that folds into “N more need you”.</p>
-  ${stack(() => `<div class="calm-demo">${calmException({ state: 'needs', kicker: 'Needs your approval · 7 min ago', title: 'Replace the production web server', sentence: 'platform-sre wants to run terraform apply on production to fix the SEV2 latency incident.', action: '<button class="c-btn primary" tabindex="-1">Review</button>' })}<div style="margin-top:24px">${excRows([{ state: 'failed', title: 'ci-fixer couldn’t fix acme/web#1288', sentence: '2 tests fail; nothing was pushed', age: '52 min ago', action: '<button class="c-btn secondary sm" tabindex="-1">Open</button>' }])}${summaryLine({ lead: '2 more need you', parts: ['pr-review needs your call on a draft', 'approve a sign-in on app.example.com'], label: 'Show' })}</div></div>`)}
-  <h4 class="cap">Summary line</h4><p class="lede">Normal work as one quiet line: a count in ink, the parts in secondary, and “Show” in ghost. It expands in place (a native <code>&lt;details&gt;</code>), so the detail is one tap away and never in the way.</p>
-  ${stack(() => `<div class="calm-demo">${summaryLine({ lead: '10 finished', parts: ['9 passed', '1 parked'], label: 'Show' })}${summaryLine({ lead: '3 running', parts: ['ci-fixer, pr-review, platform-sre'], label: 'Show' })}${summaryLine({ lead: 'All healthy', parts: ['ops-box', '6 connections', 'up 3 days'], label: 'Show' })}</div>`)}
-  <h4 class="cap">Runs over time: aggregate plus exceptions</h4><p class="lede">One strip of runs per hour, with failures marked, then the exceptions grouped by workflow; healthy workflows collapse to a count. It scales to any number of workflows and runs.</p>
-  ${stack(activityDemo)}
-  <h4 class="cap">Quiet state</h4><p class="lede">When nothing needs you, the screen says so in one serif sentence and one supporting line, then the summary lines. No illustration.</p>
-  ${stack(() => `<div class="calm-demo">${quietState({ title: 'All quiet. Nothing needs you.', sub: '46 runs went fine in the last 12 hours. 2 are running now.' })}</div>`)}
-  ${sub('calm-tokens', 'Tokens', 'The emphasis levels, the band colours, the loudness budget and the four components’ tokens. Values are the dark theme’s; aliases resolve per theme.')}
-  <div class="dens-tbl calm-tok"><span class="h">Token</span><span class="h">Value</span><span class="h">Use</span>${calmTokenRows()}</div>
-  `);
-
-// =====================================================================
-// 0. Reading at a glance (information design)
-// =====================================================================
-const PRINCIPLES = [
-  ['Summary first, detail on demand', 'Every screen opens with one sentence answering: does anything need me, is anything broken, is everything else fine? Health checks, raw counts and internals sit one step down.',
-    'up 3d 4h 12m · v0.71.2 → v0.72.0 · sandbox enforcing · paseo ok · 3 running · 6 need you',
-    () => `<p class="ia-lead"><b>5 things need you.</b> Everything else is running normally: 18 of 20 runs in the last 12 hours went fine.</p>`],
+const glanceDemo = () => atAGlance([[6, 'Need you'], [4, 'Running'], [2, 'Failed', '12 h'], ['$8.40', 'Spent', 'today']]);
+// The run page's step tree: one line per step; a nested workflow call is one node that opens.
+const TREE_DEMO = [
+  ['passed', 'Get the failing logs', '3 failing checks found', '2 s'],
+  ['passed', 'Fix it', 'Calls workflow fix-and-verify', '7 min 40 s', [['passed', 'Reproduce locally', 'TestRefund fails on main', '40 s'], ['passed', 'Patch applyFee', 'Rounds half-even now', '6 min 12 s']]],
+  ['failed', 'Run the tests', '2 of 148 tests fail', '26 s', [['failed', 'Unit tests', 'TestCheckout, TestRefund fail', '21 s'], ['skipped', 'End-to-end tests', 'Not reached', '']]],
+  ['skipped', 'Push the fix', 'Not reached', ''],
+];
+const treeNode = ([st, t, d, x, kids]) => { const line = `<span class="tl">${mark(st, { label: true, size: 14 })}<span class="tt"><b>${t}</b><span>${d}</span></span><em>${x}</em></span>`; return kids ? `<li><details ${st === 'failed' ? 'open' : ''}><summary>${line}</summary><ol>${kids.map(treeNode).join('')}</ol></details></li>` : `<li>${line}</li>`; };
+const treeDemo = () => `<ol class="pt-tree">${TREE_DEMO.map(treeNode).join('')}</ol>`;
+const INFO = [
+  ['Identifiable at a glance', 'Every item shows what it is (an icon and its word), where it happens (bot, target and an environment tag) and how it went (a status mark and its word), in the same columns on every list. You can tell an approval to change production from a bot posting a comment without reading either.',
+    'Approval · terraform apply · infra@3f2a9c1d · p12 / Post · slack-ops.post · p4 (every row the same shape)',
+    () => scanRows([['needs', [SCAN.NEEDS[0], SCAN.NEEDS[3]]], ['running', [SCAN.RUNNING[2]]]])],
+  ['The three-second test', 'Without reading, in about three seconds, a person can say what needs them, what broke and whether anything is dangerous. Position (groups), weight, the status marks and the icons carry that; the words confirm it.',
+    'Needs you · 6 items (an approval, a failure, a hand-off and an update, all the same weight)',
+    () => `<div class="ia-groups"><div><b>Needs you <span class="c-count">5</span></b><span>2 approvals · 1 failed fix · 2 questions</span></div><div><b>For your information <em>2</em></b><span>Update v0.72.0 installs within 10 min · Sandbox blocked pastebin.com</span></div></div>`],
   ['A plain headline, the technical detail beneath', 'The title says what will happen in words a newcomer understands. The tool, ids and diff stats follow on a quieter line, in mono, last.',
     'terraform apply · infra@3f2a9c1d / platform-sre · p12 · +1 ~2 -0 · REPLACES aws_instance.web',
     () => `<div class="pt-need" data-s="accent"><span class="ng">${sg('needs-you')}</span><div><b>Replace the production web server</b><span>platform-sre wants to run terraform apply on production, for the SEV2 latency incident</span><code>p12 · infra@3f2a9c1d · +1 ~2 −0</code></div></div>`],
+  ['Keep the information; fold only what is secondary', 'Everything a person uses to understand or decide stays visible. Only hashes, ids and raw payloads go behind a disclosure.',
+    '“Show” on the reason, the target and the environment (folding what people decide with)',
+    () => `<div class="pt-need" data-s="danger"><span class="ng">${sg('danger')}</span><div><b>ci-fixer couldn’t fix acme/web#1288</b><span>Its change made 2 tests fail. Nothing was pushed.</span><details class="ia-more"><summary>Technical details</summary><code>r-7ef0 · step test · go test ./...</code></details></div></div>`],
   ['Three levels of type', 'What (title or bold lead-in), why it matters (regular, secondary ink), machine detail (mono, small, tertiary, last). Nothing else.',
     'ci-fixer acme/web#1288 / Failed at step test. go test ./...: 2 failures (TestCheckout, TestRefund)',
     () => `<div class="ia-levels"><b>ci-fixer couldn’t fix the failing check on acme/web#1288</b><span>Its change made 2 tests fail. It stopped before pushing anything.</span><code>r-7ef0 · step test</code></div>`],
-  ['Colour only for what needs attention', 'Passing work is quiet: a small green mark and an ink word, never a green row. When eleven of sixteen rows shout “passed”, the two failures hide. A row that needs someone gets a thin leading edge, its reason in words, and a place at the top. No row is ever tinted.',
+  ['Colour only for what needs attention', 'Passing work is quiet: a small sage dot and an ink word, never a green row. Only a row that needs someone gets a coloured leading edge, its reason in words and one action, at the top. No row is ever tinted, and no status is a pill.',
     '✓ ok · ✓ ok · × failed · ✓ ok · ◎ waiting · ✓ ok (every row coloured)',
-    () => `<div class="ia-rows">${[['success', 'pr-review', 'acme/api#480', ''], ['danger', 'ci-fixer', 'acme/web#1288', '2 tests fail after its change'], ['success', 'issue-triage', 'acme/api#486', ''], ['warning', 'pr-review', 'acme/infra#77', 'Waiting for your answer']].map(([st, w, t, n]) => `<div class="ia-row ${['danger', 'warning', 'accent'].includes(st) ? 'attn' : 'quiet'}" data-s="${st}"><span class="c-status" data-s="${st}">${sg(st)}</span><span><b>${w}</b> ${t}${n ? `<em>${n}</em>` : ''}</span></div>`).join('')}</div>`],
+    () => `<div class="ia-rows">${sampleRows()}</div>`],
+  ['Say the risk plainly, where you decide', 'On approvals and a bot’s permissions, risk is a few plain words: “Changes production”, “Spends $1,800”, “Destroys”, “Grants access”. Most verbs need no risk label at all. Never a meter, bars or a ladder.',
+    'risk ▂▄▆ · tier ▮▮▯▯ (a signal-strength meter)',
+    () => `<p class="ia-lead"><b>Changes production</b> · <b>Spends $1,800</b> · <b>Destroys</b> · <b>Grants access</b></p>`],
+  ['A header sentence must add information', 'No greetings, and no sentence that restates what is below it. A page’s header line exists only to say something not already on the screen: an expiry, a scope, a filter that hides rows.',
+    'Good afternoon, ops. 5 things need you. (above a list of the same 5 things)',
+    () => `<div class="pt-head"><h1>Needs you</h1><p>2 approvals expire today.</p></div>`],
+  ['Views that don’t grow with the fleet', 'No view adds a row, lane or card per workflow, bot or run. Runs over time are one strip with failures marked; exceptions are grouped by workflow; healthy workflows collapse to a count.',
+    'one lane per workflow · 14 lanes · 205 marks',
+    () => runStrip(ACTIVITY.hours)],
+  ['Step detail lives on the run page', 'Lists never carry step traces. A run’s steps are a collapsible tree on its page; a nested workflow call is one node, and the failing path opens on its own.',
+    'logs ● · triage ● · fix ●●●● · test × · push ○ (a dot per step in every list row)',
+    () => treeDemo()],
   ['Numbers line up', 'Durations, costs and counts are right-aligned in tabular figures with units, so a column scans without reading every cell.',
     '7m · 12m · 1m · … · 9m (left-aligned, mono, no units)',
     () => `<div class="ia-nums">${[['7 min', '$0.41'], ['12 min', '$1.12'], ['1 min', '$0.06'], ['9 min', '$0.82']].map(([a, b]) => `<span>${a}</span><span>${b}</span>`).join('')}</div>`],
-  ['Group and chunk', 'Things to act on are separate from things that are merely true. An update that installs itself is not “needing you”.',
-    'Needs you · 6 items (2 approvals, a failure, a hand-off, a browser push, an update)',
-    () => `<div class="ia-groups"><div><b>Needs you <span class="c-count">5</span></b><span>2 approvals · 1 failed fix · 2 questions</span></div><div><b>For your information <em>2</em></b><span>Update v0.72.0 installs within 10 min · Sandbox blocked pastebin.com</span></div></div>`],
-  ['A few key counts, at a glance', 'The overview opens with a handful of counts: what needs you, what failed, what is running, how much went fine and what it cost. Each opens its list.',
-    'Activity · live: r-7f2c pr-review step review started · platform-sre wrote knowledge/db-prod-1.md (commit 8e1f0aa) · …',
-    () => glanceDemo()],
-  ['Timelines tell the story', 'A run reads top to bottom: what each step did and what came of it, in sentences, with the duration on the right. Steps after a failure say they weren’t reached.',
-    'logs ▬ ✓ · triage ▬ ✓ · fix ▬▬▬▬ ✓ · test ▬ × · push not reached',
-    () => story(true)],
   ['Human times and schedules', 'Relative time with the exact time beside it, schedules in words, and the cron string on hover. Ids and hashes are never first on a line.',
     'schedule 0 6 * * 1 · started 10/16/2026, 5:03:45 PM · r-7ef0',
     () => `<dl class="ia-dl"><dt>Runs</dt><dd>Mondays at 06:00</dd><dt>Started</dt><dd>52 min ago <span>(17:03)</span></dd><dt>Run</dt><dd><code>r-7ef0</code></dd></dl>`],
   ['Generous, then compact on request', 'Space does the grouping, so there are fewer boxes. Compact density is the same content in the same order, only tighter (36px rows).',
-    'NOW · Overview · Live 3 · Needs you 6 · WORK · Run history · … (dense mono everywhere)',
+    'NOW · Overview · Live 3 · Needs you 6 · … (dense mono everywhere)',
     () => `<div class="ia-dens"><div data-density="comfortable">${sampleRows()}</div><div data-density="compact">${sampleRows()}</div></div>`],
 ];
 function sampleRows() { return [['danger', 'ci-fixer', 'acme/web#1288'], ['success', 'pr-review', 'acme/web#1291'], ['neutral', 'dep-bump', 'acme/web']].map(([st, w, t]) => `<div class="ia-row ${st === 'danger' ? 'attn' : 'quiet'}" data-s="${st}"><span class="c-status" data-s="${st}">${sg(st)}</span><span><b>${w}</b> ${t}</span></div>`).join(''); }
-ch('glance', 'Reading at a glance', 'conductor produces a firehose of runs, cases, approvals, logs and diffs. These ten rules turn it into something a person can read in seconds. Every screen follows them.',
-  PRINCIPLES.map(([t], i) => [`p${i + 1}`, t]),
-  () => PRINCIPLES.map(([t, rule, before, after], i) => `<article class="principle" id="p${i + 1}"><div class="pr-t"><span class="pn">${String(i + 1).padStart(2, '0')}</span><div><h3>${t}</h3><p>${rule}</p></div></div>
-    <div class="pr-ba"><div class="pr-before" data-contrast="exempt"><span class="cap">Before · prototype</span><code>${esc(before)}</code></div><div class="pr-after"><span class="cap">After · Daylight</span>${after()}</div></div></article>`).join(''));
+ch('info', 'Information design', 'conductor produces a firehose of runs, cases, approvals, logs and diffs. These rules make every item identifiable at a glance without hiding what a person decides with. Every screen follows them.',
+  INFO.map(([t], i) => [`p${i + 1}`, t]),
+  () => INFO.map(([t, rule, before, after], i) => `<article class="principle" id="p${i + 1}"><div class="pr-t"><span class="pn">${String(i + 1).padStart(2, '0')}</span><div><h3>${t}</h3><p>${rule}</p></div></div>
+    <div class="pr-ba"><div class="pr-before" data-contrast="exempt"><span class="cap">Don’t</span><code>${esc(before)}</code></div><div class="pr-after"><span class="cap">Do · Daylight</span>${after()}</div></div></article>`).join(''));
 
 // =====================================================================
 // 1. Colour
@@ -328,7 +288,7 @@ ch('type', 'Type', 'A soft, upright serif for short human titles, a typeface bui
   <div class="weights">
     <div><b style="font-weight:400">Regular 400</b><span>Body, descriptions, table cells, code</span></div>
     <div><b style="font-weight:600">Semibold 600</b><span>Buttons, tabs, nav, form labels; Fraunces titles</span></div>
-    <div><b style="font-weight:700">Bold 700</b><span>Item titles (h3/h4), the bold lead-in of a summary sentence, counts</span></div>
+    <div><b style="font-weight:700">Bold 700</b><span>Item titles (h3/h4), the bold lead-in of a sentence, counts</span></div>
   </div>
   <h4 class="cap">Numbers: tabular in columns, proportional in prose</h4>
   <div class="figs">
@@ -338,7 +298,7 @@ ch('type', 'Type', 'A soft, upright serif for short human titles, a typeface bui
   ${why('Our Fraunces subset has no tabular figures, so <b>serif numbers are for one hero value per card</b> and never appear in a column. Atkinson Hyperlegible Next has true tabular figures: use them in every table, counter and timer.')}
   ${sub('serif-rule', 'When to use the serif', 'The audits found long italic titles hard to read. Daylight’s serif is upright and soft, and it still stays short and human.')}
   <div class="dodont">
-    <div class="dd do">${verdict(true)}<div style="font:var(--type-h1);letter-spacing:var(--type-h1-tracking);font-variation-settings:var(--type-h1-variation)">Good afternoon, ops.</div><div class="note">Page titles of one to four words, section titles, empty-state headlines and a single hero number.</div></div>
+    <div class="dd do">${verdict(true)}<div style="font:var(--type-h1);letter-spacing:var(--type-h1-tracking);font-variation-settings:var(--type-h1-variation)">Needs you</div><div class="note">Page titles of one to four words, section titles, empty-state headlines and a single hero number.</div></div>
     <div class="dd dont">${verdict(false)}<div style="font:var(--type-h2);letter-spacing:var(--type-h2-tracking);font-variation-settings:var(--type-h2-variation)">terraform apply of infra@3f2a9c1d07e4, dir envs/prod, workspace prod: +1 ~2 -0</div><div class="note">Generated or long titles, anything containing ids, paths or numbers, and anything under 20px.</div></div>
     <div class="dd do">${verdict(true)}<div><div style="font:var(--type-h3)">Replace the production web server</div><div class="c-mono" style="color:var(--color-text-tertiary);margin-top:4px">infra@3f2a9c1d · envs/prod · +1 ~2 −0</div></div><div class="note">Generated titles use h3 in the sans, with the machine details on a mono line below.</div></div>
     <div class="dd dont">${verdict(false)}<div><span class="c-btn primary" style="font-family:var(--font-family-serif);font-size:17px">Approve</span></div><div class="note">Never in controls, labels, tables, badges or form fields.</div></div>
@@ -364,11 +324,8 @@ const sampleTable = (extra = '') => {
   const groups = [['attn', 'Needs attention', 'attn-h'], ['live', 'Running now', ''], ['done', 'Finished', '']];
   return `<div class="c-table-wrap"><table class="c-table"><thead><tr><th style="width:28px"></th><th>Run</th><th>Status</th><th class="num">Took</th><th class="num">Cost</th><th>ID</th><th></th></tr></thead>
   ${groups.map(([g, title, cls]) => { const rows = TABLE_SAMPLE.filter((r) => r[0] === g);
-    // Calm by default: Finished is one summary line ("2 finished · 1 passed · 1 parked") that opens in place.
-    const head = g === 'done'
-      ? `<tr class="grp done-sum"><td colspan="7"><b>${rows.length} finished</b><span class="cs-parts">${rows.filter((r) => r[6] === 'Passed').length} passed · ${rows.filter((r) => r[6] === 'Parked').length} parked</span><span class="cs-more">Show</span></td></tr>`
-      : `<tr class="grp ${cls}"><td colspan="7"><b>${title}</b><span>${rows.length}</span></td></tr>`;
-    return `<tbody class="${g}">${head}${rows.map(([, id, wf, tgt, s, glyph, word, reason, d, c, act], i) => `<tr${g === 'done' ? ' hidden' : ''} class="${g === 'attn' ? 'attn' : ''} ${g === 'live' && i === 0 ? 'is-selected' : ''} ${extra && g === 'live' ? extra : ''}" data-s="${s}"><td><span class="check">${g === 'live' && i === 0 ? lu('check') : ''}</span></td><td class="run"><b>${wf}</b> <span class="sub">${tgt}</span>${reason ? `<span class="reason">${reason}</span>` : ''}</td><td><span class="c-status" data-s="${s}">${sg(glyph, s === 'running' ? 'c-glyph-spin' : '')}${word}</span></td><td class="num">${d}</td><td class="num">${c}</td><td><span class="c-mono sub">${id}</span></td><td class="act">${act ? `<button class="c-btn ${s === 'accent' ? 'primary' : 'secondary'} sm" tabindex="-1">${act}</button>` : ''}</td></tr>`).join('')}</tbody>`; }).join('')}
+    const head = `<tr class="grp ${cls}"><td colspan="7"><b>${title}</b><span>${rows.length}</span></td></tr>`;
+    return `<tbody class="${g}">${head}${rows.map(([, id, wf, tgt, s, glyph, word, reason, d, c, act], i) => `<tr class="${g === 'attn' ? 'attn' : ''} ${g === 'live' && i === 0 ? 'is-selected' : ''} ${extra && g === 'live' ? extra : ''}" data-s="${s}"><td><span class="check">${g === 'live' && i === 0 ? lu('check') : ''}</span></td><td class="run"><b>${wf}</b> <span class="sub">${tgt}</span>${reason ? `<span class="reason">${reason}</span>` : ''}</td><td><span class="c-status" data-s="${s}">${sg(glyph, s === 'running' ? 'c-glyph-spin' : '')}${word}</span></td><td class="num">${d}</td><td class="num">${c}</td><td><span class="c-mono sub">${id}</span></td><td class="act">${act ? `<button class="c-btn ${s === 'accent' ? 'primary' : 'secondary'} sm" tabindex="-1">${act}</button>` : ''}</td></tr>`).join('')}</tbody>`; }).join('')}
 </table></div>`;
 };
 ch('layout', 'Space and layout', 'A 4px base, a 12-column grid on desktop and two density modes for the same components.',
@@ -399,8 +356,8 @@ ch('layout', 'Space and layout', 'A 4px base, a 12-column grid on desktop and tw
 ch('shape', 'Shape and depth', 'Small radii, hairline borders, and depth that comes from surface lightness first and shadow second.',
   [['radii', 'Radii and borders'], ['elevation', 'Elevation'], ['layers', 'Layers']],
   () => `
-  ${sub('radii', 'Radii and borders', 'Radii nest: a control (5) inside a card (8) inside an overlay (12). Pills are only for chips and counts.')}
-  <div class="radii">${Object.entries(T.primitive.radius).filter(([k]) => !k.startsWith('$')).map(([k, t]) => `<div><i style="border-radius:min(var(--radius-${k}), 38px)"></i><span>--radius-${k}</span><small>${t.$value.value}px${{ xs: ' · badges', sm: ' · controls', md: ' · cards', lg: ' · overlays', xl: ' · sheets', pill: ' · chips' }[k] ?? ''}</small></div>`).join('')}</div>
+  ${sub('radii', 'Radii and borders', 'Radii nest: a control (5) inside a card (8) inside an overlay (12). Nothing is a pill: counts are numerals, filters are rectangles and tags are small outlined labels. The full radius is for round avatars only.')}
+  <div class="radii">${Object.entries(T.primitive.radius).filter(([k]) => !k.startsWith('$')).map(([k, t]) => `<div><i style="border-radius:min(var(--radius-${k}), 38px)"></i><span>--radius-${k}</span><small>${t.$value.value}px${{ xs: ' · badges', sm: ' · controls', md: ' · cards', lg: ' · overlays', xl: ' · sheets', pill: ' · avatars only' }[k] ?? ''}</small></div>`).join('')}</div>
   <h4 class="cap">Borders</h4>
   <div class="borders">
     <div><i style="border:var(--border-width) solid var(--color-border-default)"></i>hairline 1px · every edge</div>
@@ -419,7 +376,7 @@ ch('shape', 'Shape and depth', 'Small radii, hairline borders, and depth that co
 // =====================================================================
 const GLYPH_S = { success: 'success', warning: 'warning', danger: 'danger', info: 'info', running: 'running', neutral: 'neutral', skipped: 'neutral', shadow: 'info', 'needs-you': 'accent' };
 ch('icons', 'Iconography', 'Lucide outline icons for objects and actions, plus nine status glyphs of our own drawn to match.',
-  [['icon-style', 'Style'], ['icon-set', 'Set'], ['glyphs', 'Status glyphs']],
+  [['icon-style', 'Style'], ['icon-kinds', 'Objects and actions'], ['env-tags', 'Environment tags'], ['icon-set', 'Set'], ['glyphs', 'Status glyphs']],
   () => `
   ${sub('icon-style', 'Style', 'Outline only, with round caps and joins, drawn on a 24-unit grid with a 2-unit live-area padding. At 16px a 2-unit stroke renders at 1.33px, which matches the type’s stem weight.')}
   <div class="icon-anatomy">
@@ -428,12 +385,16 @@ ch('icons', 'Iconography', 'Lucide outline icons for objects and actions, plus n
       '<b>Set:</b> <a href="https://lucide.dev">Lucide</a> (ISC licence). The subset we use is vendored in <code>icons/lucide/</code>.',
       '<b>Sizes:</b> 16px beside body text, 14px in compact density and badges, 20px in pickers, 24px in phone tab bars.',
       '<b>Stroke:</b> Daylight draws Lucide at 1.75 (rounded, a touch lighter than its default 2) at 16–20px, and 1.5 at 24px.',
-      '<b>Colour:</b> <code>icon.default</code> beside text and <code>icon.muted</code> for decoration (still 3:1). An icon takes the status colour only when it is a status glyph.',
+      '<b>Colour:</b> <code>icon.default</code> beside text and <code>icon.muted</code> in secondary positions (still 3:1). Icons are never decorative. An icon takes the status colour only when it is a status glyph.',
       '<b>Never</b> show an icon alone without a label or tooltip (except a universal close ×), never fill outline icons, and never mix icon sets.',
       '<b>Drawing new icons:</b> 24 grid, 2px stroke, round caps and joins, 2px corner radius on rectangles, no fills, and the optical size of the Lucide neighbours.',
     ])}
     <div class="icon-sizes">${[14, 16, 20, 24].map((s) => `<div><span style="width:${s}px;height:${s}px;display:block;color:var(--color-icon-default)">${lu('bot').replace('<svg ', `<svg width="${s}" height="${s}" ${s === 24 ? 'stroke-width="1.5" ' : ''}`)}</span>${s}px</div>`).join('')}</div></div>
   </div>
+    ${sub('icon-kinds', 'Objects and actions', 'One icon per kind of thing and per kind of action. Each has one meaning, is used for nothing else and always sits next to its word. A run’s state is its status mark, never a different icon.')}
+  ${pair(() => `<div class="kinds-grid"><h4 class="cap">Objects and events</h4>${Object.values(KINDS).map((k) => `<span>${rowIcon(k.icon, 18)}<b>${k.word}</b><code>${k.icon}</code></span>`).join('')}<h4 class="cap">Actions</h4>${Object.values(ACTIONS).map((k) => `<span>${rowIcon(k.icon, 18)}<b>${k.word}</b><code>${k.icon}</code></span>`).join('')}</div>`)}
+  ${sub('env-tags', 'Environment tags', 'Told apart by fill and outline, never by colour alone. Production is the only bold one. No tag means the item isn’t tied to an environment.')}
+  ${pair(() => `<div class="env-row">${Object.keys(ENV).map((e) => scanEnv(e)).join('')}</div>`)}
   ${sub('icon-set', 'Set', 'This is the vocabulary the dashboard uses. Each concept gets exactly one icon.')}
   <div class="icon-grid">${Object.keys(LUCIDE).map((n) => `<div>${lu(n)}<span>${n}</span></div>`).join('')}</div>
   ${sub('glyphs', 'Status glyphs', 'Drawn on a 16-unit grid with a 1.5 stroke and round caps, so each is legible at 13px. Each state has a distinct shape, so they read in one colour and to colour-blind readers. Running is the only one that moves.')}
@@ -509,9 +470,9 @@ const tabsSheet = () => `<div style="display:grid;gap:var(--space-5)">
 </div>`;
 const listSheet = () => sampleTable('is-focus');
 const badgeSheet = () => `<div style="display:grid;gap:var(--space-4)">
-  <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">${STAT.map((s) => `<span class="c-badge" data-s="${s}">${sg(STAT_GLYPH[s])}${STAT_EX[s][0]}</span>`).join('')}<span class="c-badge" data-s="accent">${sg('needs-you')}Needs you</span><span class="c-badge">${lu('package')}pack</span><span class="c-badge">read</span></div>
+  <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">${STAT.map((s) => `<span class="c-badge" data-s="${s}">${sg(STAT_GLYPH[s])}${STAT_EX[s][0]}</span>`).join('')}<span class="c-badge" data-s="accent">${sg('needs-you')}Needs you</span><span class="c-badge tag">pack</span><span class="c-badge tag">read only</span></div>
   <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center"><span class="c-chip">${lu('folder')}All folders</span><span class="c-chip is-hover">work</span><span class="c-chip is-selected">${lu('check')}personal</span><span class="c-count">6</span>${mark("running")}<span class="c-help">live</span></div>
-  <span class="c-help">Badges label state (glyph + word). Chips filter (they toggle). The orange count appears only where a person is needed.</span>
+  <span class="c-help">Status labels: mark + word. Filters toggle. The ember count appears only where a person is needed.</span>
 </div>`;
 const feedbackSheet = () => `<div style="display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:var(--space-4);align-items:start">
   <div style="display:grid;gap:var(--space-3)">
@@ -528,7 +489,7 @@ const feedbackSheet = () => `<div style="display:grid;grid-template-columns:minm
 const overlaySheet = () => `<div style="display:grid;grid-template-columns:1.1fr 1.1fr .8fr;gap:var(--space-3)">
   <div class="c-stage" style="height:280px;display:grid;place-items:center"><div class="scrim"></div><div class="c-modal"><div class="hd"><h3>Delete the nightly-backup workflow?</h3></div><div class="bd">Its 412 past runs stay in history. Scheduled runs stop immediately. You can’t undo this.</div><div class="ft"><button class="c-btn ghost" tabindex="-1">Cancel</button><button class="c-btn danger" tabindex="-1">Delete workflow</button></div></div></div>
   <div class="c-stage" style="height:280px"><div class="scrim"></div><div class="c-drawer"><div class="hd">${lu('bot')}platform-sre</div><div class="bd"><span class="c-badge" data-s="running">${sg('running', 'c-glyph-spin')}Working on case c29</span><span class="c-help">Drawers show detail without leaving the list. Esc closes them, and focus returns to the row.</span><span class="c-skel" style="width:80%"></span><span class="c-skel" style="width:60%"></span></div></div></div>
-  <div class="c-stage" style="height:280px"><div class="scrim"></div><div class="c-sheet"><div class="handle"></div><div style="font:var(--type-h3);margin-bottom:4px">Approve p12?</div><div class="c-help" style="margin-bottom:12px">Replace the production web server.</div><div style="display:grid;gap:8px"><button class="c-btn primary lg" tabindex="-1" style="width:100%">${lu('fingerprint')}Approve</button><button class="c-btn secondary lg" tabindex="-1" style="width:100%">Deny…</button></div></div></div>
+  <div class="c-stage" style="height:280px"><div class="scrim"></div><div class="c-sheet"><div class="handle"></div><div style="font:var(--type-h3);margin-bottom:4px">Approve p12?</div><div class="c-help" style="margin-bottom:12px">Replace the production web server.</div><div style="display:grid;gap:8px"><button class="c-btn primary lg" tabindex="-1" style="width:100%">${lu('fingerprint')}Approve</button><button class="c-btn secondary lg" tabindex="-1" style="width:100%">${lu('fingerprint')}Deny…</button></div></div></div>
 </div>`;
 const stepperSheet = () => `<div style="display:grid;gap:var(--space-4)">
   <div class="c-stepper"><span class="c-step done"><i>${lu('check')}</i>Purpose</span><span class="c-step-line done"></span><span class="c-step done"><i>${lu('check')}</i>Watches</span><span class="c-step-line done"></span><span class="c-step current"><i>3</i>Tells you where</span><span class="c-step-line"></span><span class="c-step"><i>4</i>Permissions</span><span class="c-step-line"></span><span class="c-step"><i>5</i>Review</span></div>
@@ -568,8 +529,8 @@ const COMP = [
   ['value-source', 'Value source', 'This field takes a value from a source. Secret is the default and the source sits in a quiet menu, instead of a five-way segmented control in front of every field (from the newcomer audit).', vsSheet, true],
   ['choice', 'Choice cards', 'Use these for decisions that need a sentence each, such as permission presets, connector methods and wizard forks. Never use more than five; the rest go under “Advanced”.', choiceSheet, true],
   ['tabs', 'Tabs and segmented controls', null, tabsSheet, true],
-  ['tables', 'Tables and dense lists', 'Rows are grouped: <b>Needs attention</b> (a thin leading edge, the reason in words and one action), then <b>Running now</b>, then <b>Finished</b> in quiet ink. Status is a mark plus a word, and no row is ever tinted. The decision is recorded on the <a href="explore/status-column.html">status column</a> and <a href="status-review.html">labels</a> pages. Text is left-aligned and numbers are right-aligned with tabular figures. The status column always has a glyph and a word, and ids are in mono. Rows are focusable (j/k to move, x to select, Enter to open). Selection uses the accent wash and a 3px bar.', listSheet, true],
-  ['badges', 'Badges, chips and counts', null, badgeSheet, true],
+  ['tables', 'Tables and dense lists', 'Rows are grouped: <b>Needs attention</b> (a thin leading edge, the reason in words and one action), then <b>Running now</b>, then <b>Finished</b> in quiet ink. Status is a mark plus a word, and no row is ever tinted. Finished rows stay listed (paged), with their marks. No step traces in rows: step detail is the tree on the run page. Text is left-aligned and numbers are right-aligned with tabular figures. The status column always has a glyph and a word, and ids are in mono. Rows are focusable (j/k to move, x to select, Enter to open). Selection uses the accent wash and a 3px bar.', listSheet, true],
+  ['badges', 'Status labels, filters, counts and tags', 'Each has its own treatment, and none is a pill. A status label is a mark and a word. A filter is a rectangle that toggles. A count is a numeral (ember only where a person is needed). A tag is a small outlined label.', badgeSheet, true],
   ['feedback', 'Banners and toasts', 'Banners are for conditions that persist (until fixed). Toasts are for things that just happened, last 6 seconds (errors stay until dismissed) and sit above the phone tab bar. Every message says what happened and what to do next.', feedbackSheet, true],
   ['overlays', 'Dialogs, drawers and sheets', 'Dialogs are for decisions, drawers for detail beside a list, and sheets for the phone. All of them trap focus, close on Esc and return focus to where you were.', overlaySheet, true],
   ['steppers', 'Steppers and wizards', null, stepperSheet, true],
@@ -583,26 +544,32 @@ ch('components', 'Components', 'Guidance and token mapping, not a library. Each 
 // =====================================================================
 // Patterns
 // =====================================================================
-function story(compact = false) {
-  const steps = [['success', 'Get the failing logs', '3 failing checks found', '2 s'], ['success', 'Decide what failed', 'A test failure (91% sure)', '8 s'], ['success', 'Fix it', 'Changed applyFee to round half-even', '7 min 40 s'], ['danger', 'Run the tests', '2 of 148 tests fail', '26 s'], ['skipped', 'Push the fix', 'Not reached', '']];
-  return `<ol class="pt-story">${steps.slice(0, compact ? 5 : 5).map(([st, t, d, x]) => `<li data-s="${st === 'skipped' ? 'neutral' : st}" class="${st}"><span class="sg">${sg(st)}</span><div><b>${t}</b><span>${d}</span></div><em>${x}</em></li>`).join('')}</ol>`;
-}
-
+const PLAN = [['#', '  # aws_instance.web must be replaced'], ['-', '-/+ resource "aws_instance" "web" {'], ['~', '      ~ ami = "ami-0a1b" -> "ami-0c3d"'], ['+', '  + resource "aws_lb_target_group" "web_v2" {'], ['', '    Plan: 1 to add, 2 to change, 0 to destroy.']];
+const approvalDemo = () => `<div class="pt-appr"><div class="pa-k">${sg('needs-you')}Needs your approval · platform-sre · 7 min ago</div><h4>Replace the production web server</h4>
+  <p>Rolls out the new image to fix the SEV2 latency incident. About 2 minutes of drain; undo by re-applying the previous plan.</p>
+  <div class="c-tabs"><span class="c-tab is-active">Overview</span><span class="c-tab">Technical details</span></div>
+  <pre class="pa-plan">${PLAN.map(([k, l]) => `<span class="pl${k === '+' ? ' add' : k === '-' ? ' del' : k === '~' ? ' chg' : ''}">${esc(l)}</span>`).join('')}</pre>
+  <div class="pa-bar"><button class="c-btn primary" tabindex="-1">${lu('fingerprint')}Approve</button><button class="c-btn secondary" tabindex="-1">${lu('fingerprint')}Deny…</button><span class="c-help">Sticky at the bottom; it never covers the title or the why.</span></div></div>`;
+const overviewDemo = () => `<div class="pt-ov">${glanceDemo()}<div class="pt-ov-cols"><div><h4>Needs you <span class="c-count">6</span></h4><p class="c-help">One row per item, one action each.</p></div><div><h4>Running now <span>4</span></h4><p class="c-help">The first three, then “+1 more”.</p></div><div><h4>Runs per hour</h4><p class="c-help">The strip, with the failures named below it.</p></div><div><h4>For your information</h4><p class="c-help">Updates and notices that need no action.</p></div><div><h4>Get started</h4><p class="c-help">Only the steps still remaining; gone when done.</p></div></div></div>`;
 const PATTERNS = [
-  ['pt-summary', 'Summary header', 'Every page heading is the answer to the page’s question, in plain words: “5 things need you”, “3 runs need attention”, “All quiet. Nothing needs you.” It is the largest text on screen, so the glance lands on it first. One supporting sentence follows; actions belong to the thing that needs you, not to the header.',
-    () => `<div class="pt-head"><h1>5 things need you</h1><p>Start with the first. Everything else is running normally.</p></div>`],
-  ['pt-needs', 'Needs you', 'The one loud thing first: the most urgent item as an exception card with one sentence and one action. The next few are one-line rows with a 3px edge in their mark’s colour. The rest fold into “N more need you”. Machine details (ids, hashes, diff stats) live on the item’s own page.',
-    () => `${calmException({ state: 'needs', kicker: 'Needs your approval · 7 min ago', title: 'Replace the production web server', sentence: 'platform-sre wants to run terraform apply on production to fix the SEV2 latency incident.', action: '<button class="c-btn primary" tabindex="-1">Review</button>' })}<div style="margin-top:24px">${excRows([{ state: 'needs', title: 'Post the monthly forecast to #incidents', sentence: 'asked by someone who isn’t an operator', age: '22 min ago', action: '<button class="c-btn secondary sm" tabindex="-1">Review</button>' }, { state: 'failed', title: 'ci-fixer couldn’t fix acme/web#1288', sentence: '2 tests fail; nothing was pushed', age: '52 min ago', action: '<button class="c-btn secondary sm" tabindex="-1">Open</button>' }])}${summaryLine({ lead: '2 more need you', parts: ['pr-review needs your call on a draft', 'approve a sign-in on app.example.com'], label: 'Show' })}</div>`],
-  ['pt-glance', 'At a glance', 'The overview’s few key counts, under the greeting: need you, failed, running, went fine and spent. Ink only; each count opens its list, which carries the colour.',
+  ['pt-overview', 'Overview', 'In this order: four At a glance tiles; Needs you, one row and one action per item; Running now, capped with “+N more”; the runs-per-hour strip with the failures named; For your information; and Get started, showing only what remains. No greeting and no summary sentence. The live reference is <a href="v2/mock.html?d=daylight&amp;s=overview">the Overview mock</a>.',
+    () => overviewDemo()],
+  ['pt-glance', 'At a glance', 'Four counts at the top of the overview: need you, running, failed and spent. Ink only; each opens its list, which carries the colour.',
     () => glanceDemo()],
-  ['pt-story', 'Run story', 'A run as a short story, top to bottom: each step’s outcome in a sentence, the duration on the right, and the failing step called out. Steps after a failure say “Not reached”.',
-    () => story()],
-  ['pt-activity', 'Runs over time: aggregate plus exceptions', 'For the Activity page. One strip of runs per hour as quiet columns, with failures marked above; then the exceptions (failed, needs you) grouped by workflow, each with its reason and one action; healthy workflows collapse to a count that opens to their names. It scales to any number of workflows and runs, which one lane per workflow does not.',
+  ['pt-header', 'Page header', 'The title, and a sentence only when it adds something not already on the screen: an expiry, a scope, a filter that hides rows. Actions belong to the items, not the header.',
+    () => `<div class="pt-head"><h1>Needs you</h1><p>2 approvals expire today.</p></div>`],
+  ['pt-needs', 'Needs you', 'One row per item in the fixed row anatomy: what it is, the title and why, where, status and time, and one action. Approvals use the primary button; nothing else does.',
+    () => scanRows([['needs', SCAN.NEEDS.slice(0, 4)]])],
+  ['pt-activity', 'Activity: runs over time and every run', 'Activity holds what used to be the run history. First one strip of runs per hour with failures marked; then the exceptions (failed, needs you) grouped by workflow, with healthy workflows collapsed to a count; then every run in the grouped table (needs attention, running now, finished), paged. Nothing grows with the number of workflows.',
     () => activityDemo()],
+  ['pt-tree', 'Step tree (run page)', 'A run’s steps, one line each with its mark, what it did and how long it took. A nested workflow call is one node; the failing path opens on its own. No run tabs and no previous / next stepping between runs.',
+    () => treeDemo()],
+  ['pt-approval', 'Approval', 'Overview and Technical details tabs only when the technical detail matters to the decision (a Terraform apply, with the plan colourised). Simple actions, such as a Slack post, keep the detail folded. Approve and Deny sit in a sticky bar at the bottom that never covers the title or the why; both use the passkey, because both are signed.',
+    () => approvalDemo()],
 ];
 ch('patterns', 'Patterns', 'Recurring screen patterns built from the components.',
   PATTERNS.map(([id, t]) => [id, t]),
-  () => PATTERNS.map(([id, t, lede, fn]) => `${sub(id, t, lede)}${stack(fn)}`).join('') + why('The approval card pattern (why, impact, undo, then approve with passkey) is shown in <a href="#microcopy">Voice and tone › Patterns</a>.'));
+  () => PATTERNS.map(([id, t, lede, fn]) => `${sub(id, t, lede)}${stack(fn)}`).join('') );
 
 // =====================================================================
 // 8. Voice
@@ -611,21 +578,23 @@ const VOICE = [
   ['Plain words first', 'Then the technical term, if anyone needs it.', '“Asks you first” <span class="c-mono">(propose)</span>', '“tier: propose”'],
   ['Say what changes', 'Name what, where, how much, and whether it can be undone.', 'Replaces 1 production server. You can roll back by re-applying the previous image.', '+1 ~2 −0 · REPLACES aws_instance.web'],
   ['State the risk plainly', 'Don’t reassure. Describe.', 'homelab will be able to sign in to nas.home.example as you.', 'Binds credential to principal. Not a stateful type, so it isn’t refused.'],
-  ['No internals', 'No issue numbers, codenames or raw ids in headings.', 'Only when you started the task', 'Provenance (recommended, as in #182)'],
+  ['No internals', 'No issue numbers, codenames or raw ids in headings.', 'Only when you started the task', 'Provenance (recommended, see the tracker)'],
   ['Define every noun once', 'Put a dotted underline and a one-line definition on first use.', 'A <u style="text-decoration-style:dotted">workflow</u> is a fixed recipe: when something happens, do these steps.', 'Workflows: triggers and the steps they run'],
   ['Verbs on buttons', 'The button says what happens. There is no “OK”, “Submit” or “Yes”.', '<span class="c-btn primary sm">Delete workflow</span>', '<span class="c-btn primary sm">OK</span>'],
   ['Humans read times', 'Use words for schedules and relative times, with the exact value on hover.', 'Mondays at 06:00 · 52 minutes ago', '0 6 * * 1 · 2026-10-16T22:11:04Z'],
   ['Calm, not cute', 'No exclamation marks, “oops”, “please” or “I’m thinking”. Only bots speak in the first person, and only in chat.', 'Couldn’t reach GitHub. Retrying in 30 seconds.', 'Oops! Something went wrong :('],
 ];
 const NAMES = [
-  ['bot', 'An AI teammate with memory. You can chat with it; it watches things and proposes actions.', 'lowercase-kebab: platform-sre. In prose: “the platform-sre bot”.'],
+  ['bot', 'An AI teammate with memory. You can chat with it; it watches things and proposes actions. (Never “member”.)', 'lowercase-kebab: platform-sre. In prose: “the platform-sre bot”. Bots live in folders.'],
   ['team', 'Bots that share a lead and a permission ceiling.', 'lowercase: billing, platform.'],
   ['workflow', 'A fixed recipe: when a trigger fires, run these steps. No judgement involved.', 'lowercase-kebab verbs or nouns: pr-review, nightly-backup.'],
   ['trigger · step', 'What starts a workflow · one thing it does.', 'Sentence case labels from the picker: “Incident triggered”, “Post a message”.'],
   ['run', 'One execution of a workflow or a bot task.', 'id in mono: r-7f2c. Never in a heading.'],
   ['approval', 'A proposed action waiting for a person to approve it with a passkey.', 'Titled by the action in plain words, never by its hash.'],
   ['case', 'A bot’s investigation of one problem, with its reasoning.', '“case c29”, linked wherever an approval came from one.'],
-  ['folder', 'Organisation only. It changes nothing, except logins bound to it.', 'lowercase paths: work/billing.'],
+  ['folder', 'Where bots and workflows are kept. Organisation only: it changes nothing, except logins bound to it.', 'lowercase paths: work/billing.'],
+  ['Activity', 'Runs over time and every run: the runs-per-hour strip, the exceptions by workflow and the run list. (It replaced “Run history”.)', 'A nav item and a page title.'],
+  ['System', 'One area for Config, Secrets, Packs, Connections, Updates, Logs & audit and Access.', 'A nav group. Its pages keep their own names.'],
   ['pack · plugin', 'An installable bundle of workflows and bots · new steps and connectors.', 'Named by publisher/name: acme/oncall.'],
   ['connector · host', 'A connection to a service (Slack, GitHub) · a machine conductor runs work on.', 'The service’s own name and casing: GitHub, PagerDuty.'],
   ['login · secret', 'A website sign-in from your vault · an encrypted value conductor stores.', 'secret names are paths: slack/bot-token.'],
@@ -635,7 +604,7 @@ const microPatterns = () => `
   <div><h4 class="cap">Approval</h4><div class="approval"><div class="hd"><div class="k" data-s="accent" style="color:var(--color-text-accent)">${sg('needs-you')}Needs you · platform-sre · 7 minutes ago</div><h5>Replace the production web server</h5></div>
     <dl><dt>Why</dt><dd>Rolling out a new image in response to SEV2 “api p99 latency” (case c29).</dd><dt>Impact</dt><dd>Production · replaces 1 server · about 2 minutes of drain.</dd><dt>Undo</dt><dd>Re-apply the previous image. conductor keeps the old plan for 7 days.</dd></dl>
     <div class="det">${lu('chevron-right')}Technical details: plan, hashes and the exact command</div>
-    <div class="ft"><button class="c-btn primary" tabindex="-1">${lu('fingerprint')}Approve and run</button><button class="c-btn secondary" tabindex="-1">Deny…</button><span class="hint">${lu('lock')}Signed with your passkey</span></div></div></div>
+    <div class="ft"><button class="c-btn primary" tabindex="-1">${lu('fingerprint')}Approve and run</button><button class="c-btn secondary" tabindex="-1">${lu('fingerprint')}Deny…</button><span class="hint">Both are signed with your passkey</span></div></div></div>
   <div><h4 class="cap">Error</h4><div class="c-banner" data-s="danger">${sg('danger')}<div><b>Couldn’t post to #incidents</b><p>Slack says the bot isn’t in that channel. Invite @conductor to #incidents, then retry. <span class="c-mono">channel_not_found</span></p></div><button class="c-btn secondary sm" tabindex="-1">Retry</button></div>
     <p class="c-help" style="margin-top:8px">What happened, why, and what to do, in that order. The raw error code goes last, in mono.</p>
     <h4 class="cap">Validation</h4><div class="c-error">${sg('danger')}Pick a channel to post to.</div><p class="c-help">Not “options.channel is required by slack-ops.post”.</p>
@@ -663,9 +632,9 @@ const K = (L, f) => `${kitDir(L.id)}/${f}`;
 const th = (light, dark, attrs = '') => `<img src="${light}" data-l="${light}" data-d="${dark}" alt="" ${attrs}>`;
 export const inlineMark = (L) => `<svg class="logo-mark" viewBox="${L.mark.box.join(' ')}" role="img" aria-label="conductor"><g fill="var(--color-logo-ink)">${L.mark.ink}</g><g fill="var(--color-accent-default)">${L.mark.acc}</g></svg>`;
 ch('logo', 'Logo', `The conductor logo is ${W.name}: the hold-until-released arch. The official kit is in assets/.`,
-  [['lockups', 'The mark'], ['logo-files', 'Files'], ['logo-space', 'Clear space and size'], ['misuse', 'Misuse'], ['cobrand', 'Co-branding'], ['logo-explored', 'Explored directions']],
+  [['lockups', 'The mark'], ['logo-files', 'Files'], ['logo-space', 'Clear space and size'], ['misuse', 'Misuse'], ['cobrand', 'Co-branding']],
   () => `
-  ${sub('lockups', 'The mark', `A fermata tells an ensemble to hold until the conductor releases it. conductor works the same way: runs wait behind an approval, a bot pauses on “needs you”, and nothing moves until you sign. ${W.why} The choice is recorded on the <a href="logo-review.html">logo review</a>.`)}
+  ${sub('lockups', 'The mark', `A fermata tells an ensemble to hold until the conductor releases it. conductor works the same way: runs wait behind an approval, a bot pauses on “needs you”, and nothing moves until you sign. ${W.why}`)}
   <div class="logo-tiles">
     <div class="ltile" data-theme="light" style="background:var(--color-bg-canvas)"><img src="${K(W, 'logo-horizontal.svg')}" alt=""><span>horizontal · light</span></div>
     <div class="ltile" data-theme="dark" style="background:var(--color-bg-canvas)"><img src="${K(W, 'logo-horizontal-dark.svg')}" alt=""><span>horizontal · dark</span></div>
@@ -694,14 +663,7 @@ ch('logo', 'Logo', `The conductor logo is ${W.name}: the hold-until-released arc
   </div>
   ${sub('cobrand', 'Co-branding', 'Partner logos sit to the right at equal optical height, separated by a hairline rule with two dot-widths of space on each side. conductor comes first on our surfaces, and we never merge the marks.')}
   <div class="cobrand">${th(K(W, 'logo-horizontal.svg'), K(W, 'logo-horizontal-dark.svg'), 'style="height:40px"')}<span class="sep"></span><span class="partner"><i></i>Acme</span></div>
-  ${sub('logo-explored', 'Explored directions', 'Each was taken to a complete kit and tested in the same chrome before the choice. They are kept for reference, and are not for use.')}
-  <table class="perdir"><thead><tr><th>Mark</th><th>Idea</th><th>Why not</th></tr></thead><tbody>
-    ${LOGOS.filter((L) => L.id !== W.id).map((L) => `<tr><td>${th(K(L, 'logo-horizontal.svg'), K(L, 'logo-horizontal-dark.svg'))}</td><td><b>${L.name}</b><br>${L.line}</td><td>${L.whyNot}</td></tr>`).join('')}
-    ${[['fermata', 'Fermata (round one)', 'The same idea, drawn thin with an italic wordmark.', 'Weak on light surfaces: the hairline arch, small dot and light italic lost to cream. Strengthened into the official mark.'],
-       ['downbeat', 'Downbeat (round one)', 'The prototype’s baton, rebuilt heavier.', 'A diagonal and a dot is a common shape, and it carries the least meaning.'],
-       ['signature', 'Signature (round one)', 'The wordmark is the logo, with the full stop as the downbeat.', 'Elegant but not ownable, and its brass accent collided with the warning colour.']]
-      .map(([id, n, idea, why]) => `<tr><td>${th(`directions/${id}/logo-horizontal-light.svg`, `directions/${id}/logo-horizontal-dark.svg`)}</td><td><b>${n}</b><br>${idea}</td><td>${why}</td></tr>`).join('')}
-  </tbody></table>
+  ${why('The logo candidates that were explored before this one are on the <a href="archive/index.html">archive</a>; they are not part of the system.')}
   `);
 
 // =====================================================================
@@ -745,21 +707,6 @@ const root = document.getElementById('chapters');
 root.innerHTML = chapters.map((c, i) => `<section class="ch" id="${c.id}"><div class="ch-head"><div><span class="num">${String(i + 1).padStart(2, '0')} · ${c.title}</span><h2>${c.title}</h2></div><p>${c.blurb}</p></div>${c.body()}</section>`).join('');
 document.getElementById('toc').innerHTML = `<ol><li><a href="#principles"><span class="n">00</span>Principles</a></li>${chapters.map((c, i) => `<li><a href="#${c.id}"><span class="n">${String(i + 1).padStart(2, '0')}</span>${c.title}</a><ol>${c.subs.map(([id, t]) => `<li><a href="#${id}">${t}</a></li>`).join('')}</ol></li>`).join('')}</ol>`;
 
-// calm before/after pairs: viewport and theme toggles swap the screenshots and their check counts
-const calmState = { vp: 'desktop', th: 'light' };
-for (const [id, k] of [['calm-vp', 'vp'], ['calm-th', 'th']]) document.getElementById(id).addEventListener('click', (e) => {
-  const v = e.target.closest('span[data-v]')?.dataset.v; if (!v) return;
-  calmState[k] = v;
-  for (const x of document.querySelectorAll(`#${id} span`)) x.classList.toggle('is-active', x.dataset.v === v);
-  document.querySelector('.calm-pairs').dataset.vp = calmState.vp;
-  for (const sec of document.querySelectorAll('.calm-pair')) sec.querySelector('.calm-figs').innerHTML = calmPair(sec.dataset.screen, calmState.vp, calmState.th);
-});
-// a collapsed Finished group in the sample tables opens in place
-document.addEventListener('click', (e) => {
-  const sum = e.target.closest('tr.done-sum'); if (!sum) return;
-  const open = sum.classList.toggle('open');
-  for (const r of sum.parentElement.querySelectorAll('tr:not(.done-sum)')) r.hidden = !open;
-});
 
 // theme-dependent logo images (in this page's own theme)
 function syncLogos() {

@@ -1,8 +1,8 @@
 // scannable-review.html: the proposal page. Everything is rendered live from scannable/scan.js, except
 // the before / calm / proposed comparisons, which are screenshots (v2/render-scan.mjs).
-import { KINDS, ACTIONS, STEPS, FLAGS, ENV, flag, env, lucide, rows, injectScanCSS } from './scan.js';
+import { KINDS, ACTIONS, STEPS, FLAGS, ENV, flag, env, lucide, rows, injectScanCSS } from '../status/rows.js';
 import { injectMarkCSS } from '../status/marks.js';
-import * as S from './data.js';
+import * as S from '../v2/rows-data.js';
 injectMarkCSS(); injectScanCSS();
 
 const [ICONCHK] = await Promise.all(['scannable/icon-check.json'].map((u) => fetch(u).then((r) => r.json()).catch(() => null)));
@@ -73,7 +73,7 @@ const CMP = [
 const VERS = [['before', 'Before (the dashboard prototype)'], ['calm', 'Calm by default (the over-correction)'], ['scan', 'Proposed: scannable by default']];
 const cmpFigs = (s, vp, th) => VERS.map(([v, label]) => {
   if (v === 'calm' && s === 'picker') return `<figure class="none"><figcaption><b>${label}</b></figcaption><p>The calm round didn’t change the step picker.</p></figure>`;
-  const live = v === 'before' ? '' : `<a href="v2/mock.html?d=daylight&s=${v === 'calm' ? { perms: 'bot' }[s] ?? s : s}&t=${th}${v === 'scan' ? '&v=scan' : ''}">live</a>`;
+  const live = v === 'before' ? '' : `<a href="v2/mock.html?d=daylight&s=${v === 'calm' ? { perms: 'bot' }[s] ?? s : s}&t=${th}${v === 'scan' ? '&v=scan' : '&v=calm'}">live</a>`;
   return `<figure class="${v === 'scan' ? 'chosen' : ''}"><figcaption><b>${label}</b>${live}</figcaption><img src="scannable/shots/${s}-${v}-${vp}-${th}.png" alt="${label}: ${s}, ${vp}, ${th}"></figure>`;
 }).join('');
 const compare = () => `<div class="sr-ctl"><div class="c-seg" id="cmp-vp"><span data-v="desktop" class="is-active">Desktop</span><span data-v="phone">Phone</span></div><div class="c-seg" id="cmp-th"><span data-v="light" class="is-active">Light</span><span data-v="dark">Dark</span></div></div>

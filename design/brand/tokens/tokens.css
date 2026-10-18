@@ -212,8 +212,6 @@
   --z-tooltip: 600;
   --z-decor: 9999;
   --layout-columns: 12;
-  --calm-max-loud: 3;
-  --calm-max-dense-rows: 2;
 }
 
 /* ---------- themes ----------
@@ -654,10 +652,6 @@
 
 /* ---------- aliases (re-resolved wherever theme, density or motion changes) ---------- */
 :root, [data-theme], [data-density], [data-motion] {
-  --color-emphasis-loud: var(--color-text-primary);
-  --color-emphasis-normal: var(--color-text-primary);
-  --color-emphasis-quiet: var(--color-text-secondary);
-  --color-emphasis-ghost: var(--color-text-tertiary);
   --type-display-xl-family: var(--font-family-serif);
   --type-display-xl-size: 4.5rem;
   --type-display-xl-weight: var(--font-weight-semibold);
@@ -808,8 +802,8 @@
   --motion-easing-linear: var(--easing-linear);
   --radius-control: var(--radius-md);
   --radius-box: var(--radius-md);
-  --radius-badge: var(--radius-pill);
-  --radius-chip: var(--radius-pill);
+  --radius-badge: var(--radius-xs);
+  --radius-chip: var(--radius-sm);
   --radius-card: var(--radius-lg);
   --radius-overlay: var(--radius-xl);
   --radius-sheet: var(--radius-2xl);
@@ -927,20 +921,6 @@
   --code-border: var(--color-border-subtle);
   --code-fg: var(--color-text-primary);
   --code-gutter: var(--color-text-tertiary);
-  --summary-line-height: var(--size-row);
-  --summary-line-fg: var(--color-emphasis-quiet);
-  --summary-line-count-fg: var(--color-text-primary);
-  --summary-line-gap: var(--space-3);
-  --quiet-state-fg: var(--color-text-primary);
-  --quiet-state-sub: var(--color-emphasis-ghost);
-  --quiet-state-art-size: 96px;
-  --quiet-state-pad: var(--space-16);
-  --exception-pad: var(--pad-card);
-  --exception-edge: 4px;
-  --exception-radius: var(--radius-card);
-  --exception-bg: var(--color-bg-surface);
-  --exception-shadow: var(--shadow-2);
-  --exception-title: var(--color-emphasis-loud);
   --run-strip-height: 64px;
   --run-strip-gap: 3px;
   --run-strip-bar: var(--color-band-tick);

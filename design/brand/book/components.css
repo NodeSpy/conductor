@@ -160,11 +160,13 @@
 .c-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--s-solid); display: inline-block; flex: none; }
 .c-dot.live { box-shadow: 0 0 0 0 var(--s-solid); animation: c-pulse var(--motion-duration-pulse) infinite; }
 @keyframes c-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--s-solid) 55%, transparent); } 70%, 100% { box-shadow: 0 0 0 7px transparent; } }
-.c-count { display: inline-grid; place-items: center; min-width: 20px; height: 18px; padding: 0 6px; border-radius: var(--radius-chip); font: var(--type-code-s); font-weight: 600; background: var(--color-accent-default); color: var(--color-text-on-accent); }
-.c-chip { display: inline-flex; align-items: center; gap: var(--space-1_5); height: var(--size-control-sm); padding: 0 var(--space-3); border-radius: var(--radius-chip); border: var(--border-width) solid var(--color-border-default); background: var(--color-bg-surface); font: var(--type-label); font-size: var(--type-caption-size); color: var(--color-text-secondary); cursor: pointer; white-space: nowrap; }
+/* Counts, filters and tags each have their own treatment; none of them is a pill. */
+.c-count { display: inline; font: var(--type-label); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-text-accent); }
+.c-chip { display: inline-flex; align-items: center; gap: var(--space-1_5); height: var(--size-control-sm); padding: 0 var(--space-2_5, 10px); border-radius: var(--radius-control); border: var(--border-width) solid var(--color-border-control); background: var(--color-bg-surface); font: var(--type-label); color: var(--color-text-secondary); }
 .c-chip svg { width: 13px; height: 13px; }
 .c-chip.is-hover { border-color: var(--color-border-strong); color: var(--color-text-primary); }
-.c-chip.is-selected { background: var(--color-accent-subtle); border-color: var(--color-accent-default); color: var(--color-text-primary); }
+.c-chip.is-selected { border-color: var(--color-text-primary); color: var(--color-text-primary); box-shadow: inset 0 0 0 1px var(--color-text-primary); }
+.c-badge.tag { height: auto; padding: 1px 6px; border: var(--border-width) solid var(--color-border-strong); border-radius: var(--radius-xs); font: var(--type-caption); font-weight: 600; color: var(--color-text-secondary); }
 
 /* ---------- banners & toasts ---------- */
 .c-banner { display: grid; grid-template-columns: auto 1fr auto; gap: var(--space-3); align-items: start; padding: var(--space-3) var(--space-4); border-radius: var(--radius-card); background: var(--s-bg); border: var(--border-width) solid var(--s-border); }
@@ -251,7 +253,7 @@
 
 /* text in tinted diff lines and selected cards keeps AA: inherit the line's own ink */
 .c-code .ln.add .n, .c-code .ln.add .m, .c-code .ln.del .n, .c-code .ln.del .m { color: inherit; }
-.c-choice.is-selected .tag { background: var(--color-bg-surface); }
+.c-choice.is-selected .tag { background: none; }
 .c-vs-menu .opt.on span { color: var(--color-text-secondary); }
 
 /* ---------- status, the chosen system (status-review.html + explore/status-column.html) ----------
@@ -274,14 +276,8 @@
 .c-table tr.grp:first-child td { padding-top: var(--space-3); }
 .c-table tr.grp b { font: var(--type-h4); color: var(--color-text-primary); }
 .c-table tr.grp span { margin-left: var(--space-2); font: var(--type-caption); color: var(--color-text-tertiary); }
-.c-table tr.grp.attn-h span { background: var(--color-accent-default); color: var(--color-text-on-accent); font-weight: 700; border-radius: 999px; padding: 1px 8px; }
+.c-table tr.grp.attn-h span { color: var(--color-text-accent); font-weight: 700; }
 .c-table tr.grp:hover td { background: none; }
-/* Calm by default: the Finished group is one summary line that opens in place. */
-.c-table tr.done-sum { cursor: pointer; }
-.c-table tr.done-sum td { padding-bottom: var(--space-4); border-bottom-color: var(--color-border-subtle); }
-.c-table tr.done-sum .cs-parts { font: var(--type-body-s); color: var(--color-text-secondary); }
-.c-table tr.done-sum .cs-more { float: right; font: var(--type-label); color: var(--color-text-tertiary); }
-.c-table tr.done-sum.open .cs-more { visibility: hidden; }
 .c-table tbody.done td { color: var(--color-text-secondary); }
 .c-table tbody.done .run b { color: var(--color-text-primary); font-weight: 600; }
 .c-table td.act { width: 1%; text-align: right; }

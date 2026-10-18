@@ -21,7 +21,7 @@ for (const [vp, w, h] of [['desktop', 1440, 900], ['phone', 390, 844]]) {
     if (only && only !== name) continue;
     if (name === 'quiet' && v === 'before') continue;
     const s = name === 'quiet' ? 'overview' : name;
-    await p.goto(`${BASE}/v2/mock.html?d=daylight&s=${s}&t=${t}${extra}${v === 'before' ? '&v=before' : ''}`); await p.waitForTimeout(400);
+    await p.goto(`${BASE}/v2/mock.html?d=daylight&s=${s}&t=${t}${extra}${v === 'before' ? '&v=before' : '&v=calm'}`); await p.waitForTimeout(400);
     await p.evaluate(() => document.fonts.ready);
     await p.screenshot({ path: path.join(out, `${name}-${v}-${vp}-${t}.png`) });
   }
