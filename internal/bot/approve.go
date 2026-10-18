@@ -138,6 +138,9 @@ type Executor struct {
 	// Knowledge lands an approved knowledge promotion in its team's repo
 	// (Service.LandApproved; nil: refused).
 	Knowledge func(ctx context.Context, bot string, p store.Proposal) (string, error)
+	// Template lands an approved template update in the bot's memory and
+	// returns the commit (Service.LandTemplate).
+	Template func(ctx context.Context, bot string, p store.Proposal, operator string) (string, error)
 	// RunVerb is flow.Runner.RunSkillVerb: an approved verb runs through the
 	// same chokepoint every agent call does (access, scope, then the gate,
 	// which admits it because ctx carries this approval).
@@ -234,7 +237,10 @@ func (x *Executor) Decide(ctx context.Context, d Decision) (store.Proposal, erro
 		_ = x.setStatus(d.Bot, p.ID, "expired", "", nil)
 		return refuse(fmt.Errorf("proposal %s expired at %s", p.ID, p.Expires.Format(time.RFC3339)))
 	}
-	if m.Autonomy.ShadowMode() {
+	// Practice mode holds what the BOT would do. A template update is the
+	// operator deciding about the bot's memory, so practice mode does not
+	// hold it.
+	if m.Autonomy.ShadowMode() && p.Kind != KindTemplate {
 		return refuse(fmt.Errorf("bot %s is in shadow mode; set autonomy.shadow: false to allow approved execution", d.Bot))
 	}
 	if d.Decision == "deny" {
@@ -257,6 +263,8 @@ func (x *Executor) Decide(ctx context.Context, d Decision) (store.Proposal, erro
 		out, err = x.execVerb(ctx, d, *p)
 	case KindKnowledge:
 		out, err = x.execKnowledge(ctx, d, *p)
+	case KindTemplate:
+		out, err = x.execTemplate(ctx, d, *p)
 	case KindTerraform:
 		if x.Terraform == nil {
 			_ = x.setStatus(d.Bot, p.ID, "failed", "no terraform runner on this daemon", nil)
@@ -365,6 +373,30 @@ func Approvers(cfg *config.Config, bot string, p store.Proposal) []string {
 		return cfg.TeamOperators(p.Knowledge.Team)
 	}
 	return cfg.BotOperators(bot)
+}
+
+// execTemplate lands an approved template update: the digest re-checked,
+// then exactly the approved texts.
+func (x *Executor) execTemplate(ctx context.Context, d Decision, p store.Proposal) (store.Proposal, error) {
+	fail := func(err error) (store.Proposal, error) {
+		_ = x.setStatus(d.Bot, p.ID, "failed", err.Error(), nil)
+		p.Status, p.Reason = "failed", err.Error()
+		return p, err
+	}
+	if p.Template == nil || x.Template == nil {
+		return fail(errors.New("no template update to land"))
+	}
+	digest, err := ActionDigest(d.Bot, KindTemplate, templateVerb, map[string]any{"ref": p.Template.Ref, "to": p.Template.ToVersion, "changes": p.Template.Digest})
+	if err != nil || digest != p.Digest {
+		return fail(errors.New("the proposal changed since it was signed — nothing landed"))
+	}
+	commit, err := x.Template(ctx, d.Bot, p, d.Operator)
+	if err != nil {
+		return fail(err)
+	}
+	_ = x.setStatus(d.Bot, p.ID, "executed", "", map[string]any{"commit": commit})
+	p.Status, p.Result = "executed", map[string]any{"commit": commit}
+	return p, nil
 }
 
 // execKnowledge lands an approved promotion: exactly the signed text (its

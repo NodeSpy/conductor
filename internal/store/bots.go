@@ -52,6 +52,9 @@ type BotRecord struct {
 	// archivable only while it still holds exactly that content. Archived
 	// entries leave the map.
 	ConsolidatedDocs map[string]string `json:"consolidated_docs,omitempty"`
+	// Template is a template bot's applied template state (nil for a bot
+	// not instantiated from a template).
+	Template *TemplateState `json:"template,omitempty"`
 	// Seq numbers ids within this bot so they stay short and readable.
 	Seq int `json:"seq"`
 }
@@ -169,6 +172,9 @@ type Proposal struct {
 	// Knowledge is a "knowledge" proposal: promoting a file of the bot's
 	// memory into its team's knowledge repo.
 	Knowledge *KnowledgeChange `json:"knowledge,omitempty"`
+	// Template is a "template" proposal: a newer template's charter and
+	// seed documents, as changes to the bot's memory repo.
+	Template *TemplateUpdate `json:"template,omitempty"`
 	// Team is the proposing bot's team, and Approvers the operators who
 	// may decide it (the bot's; for a knowledge promotion, the team's) —
 	// recorded for display; the daemon re-checks the config at decision.
@@ -247,6 +253,54 @@ type KnowledgeChange struct {
 	// then the operator's final content and ProposedSHA256 the bot's.
 	EditedBy       string `json:"edited_by,omitempty"`
 	ProposedSHA256 string `json:"proposed_sha256,omitempty"`
+}
+
+// TemplateState is what a template bot's memory took from its template:
+// the template, the version last applied, and — per memory path — the
+// SHA-256 of the template text applied there. A newer template's text that
+// differs reaches the bot only as a proposal; a path whose memory content
+// already equals the template's counts as applied.
+type TemplateState struct {
+	Ref     string            `json:"ref"` // <pack instance>/<template>
+	Pack    string            `json:"pack"`
+	Version string            `json:"version"`
+	Applied map[string]string `json:"applied,omitempty"`
+	// Since is when the bot was first seen from this template.
+	Since time.Time `json:"since"`
+	// Declined is the change-set digest an operator denied, so the same
+	// changes are not proposed again (a newer template's are).
+	Declined string `json:"declined,omitempty"`
+}
+
+// TemplateUpdate is a template proposal: each change is one memory path,
+// with the template's new text and the memory content it was proposed
+// against (landing refuses if the memory moved since).
+type TemplateUpdate struct {
+	Ref         string           `json:"ref"`
+	Pack        string           `json:"pack"`
+	FromVersion string           `json:"from_version,omitempty"`
+	ToVersion   string           `json:"to_version"`
+	Changes     []TemplateChange `json:"changes"`
+	// Digest identifies the change set (what a denial remembers).
+	Digest string `json:"digest"`
+	// Requests are requested-verb changes in this version — shown, never
+	// applied: a grant is the operator's config.
+	Requests []string `json:"requests,omitempty"`
+	Landed   string   `json:"landed,omitempty"` // the memory commit, once it lands
+}
+
+// TemplateChange is one memory path a template update would write.
+type TemplateChange struct {
+	Path   string `json:"path"`
+	Action string `json:"action"` // new | update
+	Text   string `json:"text"`   // the template's text
+	SHA256 string `json:"sha256"` // of Text
+	// Current is the memory content when proposed ("" for new) and its
+	// SHA-256; Evolved is set when that content is not what the template
+	// last gave (the bot or an operator changed it since).
+	Current       string `json:"current,omitempty"`
+	CurrentSHA256 string `json:"current_sha256,omitempty"`
+	Evolved       bool   `json:"evolved,omitempty"`
 }
 
 // Worker is one worker launched for a case.

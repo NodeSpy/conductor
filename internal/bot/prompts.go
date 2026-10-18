@@ -343,6 +343,9 @@ func ProposalAction(p store.Proposal) string {
 	if p.Kind == KindTerraform && p.Terraform != nil {
 		return TerraformAction(p)
 	}
+	if p.Kind == KindTemplate && p.Template != nil {
+		return TemplateAction(p)
+	}
 	if k := p.Knowledge; p.Kind == KindKnowledge && k != nil {
 		s := fmt.Sprintf("promote %s into team %s's knowledge as %s (%d bytes, sha256 %s)", k.From, k.Team, k.To, len(k.Text), short(k.SHA256))
 		if k.Note != "" {

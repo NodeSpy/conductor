@@ -425,6 +425,9 @@ type PackManifest struct {
 	Triggers  TriggerList            `yaml:"triggers,omitempty"` // shipped DISARMED
 	Policy    *Policy                `yaml:"policy,omitempty"`
 	Checks    map[string]Step        `yaml:"checks,omitempty"`
+	// Bots are bot TEMPLATES (bottemplate.go): behavior an operator
+	// instantiates into real bots, never a bot by itself.
+	Bots map[string]BotTemplate `yaml:"bots,omitempty"`
 
 	// Bind-only sections — FORBIDDEN here. Captured as raw nodes so an offending
 	// pack is rejected by name (see (*PackManifest).checkNoEnvironment). The

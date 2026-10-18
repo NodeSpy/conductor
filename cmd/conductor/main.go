@@ -408,6 +408,11 @@ func cmdValidate(args []string) error {
 	// a problem to flag), and every one of them was already logged above
 	// (connector.Build's own logf call), hence "see above" rather than
 	// repeating the reason here.
+	// Template bots: where each came from, what it may do, every widening —
+	// never silent.
+	for _, n := range cfg.BotTemplateNotes() {
+		fmt.Println("notice: " + n)
+	}
 	disabled := disabledConnectorNames(cfg, stack)
 	if len(disabled) == 0 {
 		fmt.Printf("ok: %d connector(s), %d trigger(s), %d workflow(s)\n",
@@ -519,6 +524,7 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
+	botConfigPath, _ = configPath(args)
 
 	st, err := store.Open(store.Options{
 		StatePath:      cfg.Store.StateFile,

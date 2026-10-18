@@ -91,6 +91,7 @@ func buildBots(cfg *config.Config, st *store.Store, runner *flow.Runner, reg *co
 	registerSandboxSessions(svc)
 	gate.OnProposal = svc.OnProposal
 	exec.Knowledge = svc.LandApproved
+	exec.Template = svc.LandTemplate
 	exec.Notify = svc.OnDecision
 	if tf != nil {
 		tf.OnPlanned = svc.OnProposal
@@ -221,6 +222,13 @@ var botCtl *bot.Service
 // additionally carries the operator's SSH signature, verified against the
 // configured key — the socket alone never approves anything.
 func handleBotControl(ctx context.Context, conn net.Conn, req controlRequest, log func(string, ...any)) {
+	switch req.Sub {
+	case "templates", "template", "template_plan", "grant_plan":
+		// The catalog and the plans need no bot to exist yet: the dashboard's
+		// New bot flow starts here.
+		templateControl(conn, req)
+		return
+	}
 	svc := botCtl
 	if svc == nil {
 		writeControlResp(conn, controlResponse{Error: "no bots are configured on this daemon"})

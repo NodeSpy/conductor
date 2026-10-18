@@ -330,6 +330,15 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 			v = IndexView{Budget: cfg.TeamLimits(team).IndexBudgetOr(config.DefaultTeamIndexBudget), Heading: "## Team " + team + "'s knowledge index"}
 		}
 		return memIndex(ctx, repo, args, v)
+	case "template_check":
+		if err := need(); err != nil {
+			return nil, err
+		}
+		id, err := s.CheckTemplate(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"proposal": id, "template": toMap(s.Ledger.Bot(name).Template)}, nil
 	case "history":
 		n, _ := strconv.Atoi(str(args, "limit"))
 		return s.RepoHistory(ctx, str(args, "team"), name, str(args, "path"), n)
@@ -389,6 +398,9 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 		out["operators"] = Approvers(cfg, name, cp)
 		if cp.Knowledge != nil {
 			out["text"] = cp.Knowledge.Text
+		}
+		if cp.Template != nil {
+			out["diff"] = TemplateDiff(cp.Template)
 		}
 		return out, nil
 	case "decide":
@@ -587,6 +599,21 @@ func (s *Service) statusOf(name string) map[string]any {
 		"sandboxed": s.Gate != nil && s.Gate.sandboxed(), "memory_repo": cfg.BotRepoDir(name),
 		"open_cases": open, "pending_proposals": pending, "live_workers": workers,
 		"home_runtime": cfg.BotHomeRuntime(name), "worker_role": config.BotRoleWorker,
+	}
+	if o := m.Origin; o != nil {
+		t := toMap(o)
+		t["ref"] = o.Ref()
+		if st := rec.Template; st != nil {
+			t["applied_version"] = st.Version
+			t["since"] = st.Since.Format(time.RFC3339)
+		}
+		for _, p := range rec.Proposals {
+			if p.Kind == KindTemplate && p.Status == "pending" {
+				t["pending_update"] = p.ID
+			}
+		}
+		out["template"] = t
+		out["folder"] = m.Folder
 	}
 	if h := rec.Home; h != nil {
 		out["home"] = map[string]any{"session": h.ID, "agent": h.AgentID, "cwd": h.Cwd,

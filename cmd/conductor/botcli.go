@@ -49,6 +49,11 @@ const botUsage = `usage:
     conductor bot knowledge new|put|rm|mv|revert|ls|cat|log|kinds <team> …   # a team's knowledge, typed documents (as an operator)
     conductor bot memory new|put|rm|mv|revert|annotate|flag|ls|cat|log|kinds <bot> …   # a bot's memory (as an operator)
     conductor bot approve <bot> <id> --edit-file <f>              # approve a knowledge promotion with your changes
+    conductor bot templates [--search <words>] [--registry <dir|git url>] [--installed]   # community bots: templates packs ship
+    conductor bot template <ref> [--registry …]                   # one template: inputs, requested verbs, suggestions, charter
+    conductor bot new <name> --from <pack instance>/<template> [--connector in=conn]… [--grant verb=tier]… [--folder f] [--proactive] [--write]
+    conductor bot grant <bot> <verb>=<tier>… [--write]            # widen a template bot (validated on a copy, shown as a diff)
+    conductor bot template-check <bot>                            # compare its memory with its template now (a newer one → a proposal)
   from a bot session:
     conductor bot whoami
     conductor bot kinds [--kind <kind>]                    # the document kinds of your memory: homes, fields, skeletons
@@ -81,7 +86,8 @@ const botUsage = `usage:
     conductor bot proposals [--all]
     conductor bot wait <proposal> [--timeout 30m]`
 
-var botBoolFlags = map[string]bool{"all": true, "append": true, "handoff": true, "urgent": true, "read-only": true, "flat": true, "json": true}
+var botBoolFlags = map[string]bool{"all": true, "append": true, "handoff": true, "urgent": true, "read-only": true, "flat": true, "json": true,
+	"installed": true, "proactive": true, "write": true}
 
 // botFlags parses --k v / --k=v, boolean flags, repeated --file, and a
 // `--` that ends flag parsing (everything after is positional).
@@ -122,7 +128,7 @@ func botFlags(args []string) (pos []string, flags map[string]string, files []str
 
 var operatorOnly = map[string]bool{"ls": true, "list": true, "show": true, "workers": true, "proposal": true,
 	"approve": true, "deny": true, "rotate": true, "say": true, "deliver": true, "consolidate": true,
-	"sweep": true, "sweeps": true, "teams": true, "knowledge": true, "memory": true}
+	"sweep": true, "sweeps": true, "teams": true, "knowledge": true, "memory": true, "template-check": true}
 
 func cmdBot(args []string) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
@@ -131,6 +137,13 @@ func cmdBot(args []string) error {
 	}
 	sub := args[0]
 	inSession := os.Getenv("CONDUCTOR_SKILL_TOKEN") != ""
+	switch sub {
+	case "templates", "template", "new", "grant":
+		if inSession {
+			return fmt.Errorf("refusing: this shell is a conductor agent session — only an operator instantiates bots and grants them verbs")
+		}
+		return botTemplatesCmd(sub, args[1:])
+	}
 	if operatorOnly[sub] {
 		if inSession && (sub == "knowledge" || sub == "memory") {
 			return fmt.Errorf("refusing: this shell is a conductor agent session — only an operator edits a repo directly; a bot proposes team knowledge (`conductor bot team promote`) and writes its own memory (`conductor bot remember`)")
@@ -488,6 +501,11 @@ func botOperator(sub string, args []string) error {
 		if err := needBot(1); err != nil {
 			return err
 		}
+	case "template-check":
+		if err := needBot(1); err != nil {
+			return err
+		}
+		sub = "template_check"
 	case "replan":
 		if err := needBot(2); err != nil {
 			return err
@@ -523,6 +541,10 @@ func botOperator(sub string, args []string) error {
 		fmt.Println(msg)
 	}
 	if out == nil {
+		return nil
+	}
+	if d, ok := out["diff"].(string); ok && sub == "proposal" && fl["json"] == "" {
+		fmt.Printf("proposal %v (%v): %v\noperators: %v\n\n%s", out["id"], out["status"], out["action"], out["operators"], d)
 		return nil
 	}
 	return printJSON(out)

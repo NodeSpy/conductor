@@ -135,7 +135,7 @@ func (r *Repo) indexed(ks *Kinds, p string) (*ContentKind, bool) {
 		return nil, false
 	}
 	k, ok := ks.Of(p)
-	if !ok || k.Name == KindHandoff {
+	if !ok || k.Name == KindHandoff || k.Name == KindCharter {
 		return nil, false
 	}
 	return k, true

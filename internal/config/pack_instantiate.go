@@ -184,6 +184,26 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		st.warnf("pack %q: %s", ns, w)
 	}
 
+	// Bot templates: validated with the pack (a forbidden key or a broken
+	// file reference fails it), and kept for the top-level instance — a
+	// bot names <instance>/<template>.
+	if len(man.Bots) > 0 {
+		lts, err := loadTemplates(man, req.nodeDir)
+		if err != nil {
+			return fmt.Errorf("pack %q: %w", ns, err)
+		}
+		if len(req.chain) == 1 {
+			if st.cfg.templates == nil {
+				st.cfg.templates = map[string]map[string]LoadedTemplate{}
+			}
+			for n, lt := range lts {
+				lt.Instance, lt.Source = ns, req.inst.Source
+				lts[n] = lt
+			}
+			st.cfg.templates[ns] = lts
+		}
+	}
+
 	// Resolve environment bindings for this node. A binding may be given
 	// concretely on this instance, or forwarded from a parent.
 	env := envBindings{

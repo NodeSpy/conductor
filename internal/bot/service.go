@@ -108,8 +108,9 @@ type Service struct {
 	Notify   func(ctx context.Context, n Notice)
 
 	mu       sync.Mutex
-	skipped  map[string]string    // last sweep-skip reason, per bot (logged once)
-	failedAt map[string]time.Time // last failed home launch, per bot (backoff)
+	tplCfg   map[string]*config.Config // the config each bot's template was last checked against
+	skipped  map[string]string         // last sweep-skip reason, per bot (logged once)
+	failedAt map[string]time.Time      // last failed home launch, per bot (backoff)
 	repos    map[string]*Repo
 	locks    map[string]*sync.Mutex
 	wake     map[string]chan struct{}
@@ -144,8 +145,9 @@ func (s *Service) Repo(name string) *Repo {
 	r := s.repos[name]
 	if r == nil {
 		r = &Repo{Dir: s.Cfg().BotRepoDir(name), Bot: name, Now: s.Now, Seed: s.Cfg().BotSeedDir(name),
-			IndexPath: s.Cfg().BotIndexPath(name),
-			LimitsFn:  func() config.MemoryLimits { return s.Cfg().Bots[name].Memory },
+			IndexPath:  s.Cfg().BotIndexPath(name),
+			TemplateFn: func() *config.BotOrigin { return s.Cfg().Bots[name].Origin },
+			LimitsFn:   func() config.MemoryLimits { return s.Cfg().Bots[name].Memory },
 			KindsFn: func() *Kinds {
 				m := s.Cfg().Bots[name]
 				return NewKinds(false, m.Collections).WithLimits(m.Memory)
@@ -229,6 +231,7 @@ func (s *Service) Start(ctx context.Context) {
 			continue
 		}
 		s.reportInventory("bot "+name, s.Repo(name))
+		s.maybeCheckTemplate(ctx, name)
 		s.recoverWorkers(name)
 		if s.Terraform != nil {
 			s.Terraform.Recover(name)
@@ -333,6 +336,7 @@ func (s *Service) Tick(ctx context.Context, name string) {
 		return
 	}
 	s.expireTriage(ctx, name)
+	s.maybeCheckTemplate(ctx, name)
 	if err := s.sandboxGate(name, m); err != nil {
 		// Nothing of this bot starts until the sandbox does.
 		s.noteSkip(name, err)
@@ -1392,6 +1396,9 @@ func (s *Service) OnProposal(bot string, p store.Proposal) {
 
 // OnDecision is wired as Executor.Notify.
 func (s *Service) OnDecision(bot string, p store.Proposal) {
+	if p.Kind == KindTemplate && p.Status == "denied" {
+		s.templateDenied(bot, p)
+	}
 	res := ""
 	switch {
 	case p.Reason != "" && (p.Status == "denied" || p.Status == "approved" || p.Status == "executed"):

@@ -46,6 +46,9 @@ const (
 	// KindDigest is a consolidated summary of episodes: the episodic memory
 	// a session sees once raw log entries are archived (archive.go).
 	KindDigest = "digest"
+	// KindCharter is a template bot's charter, in its memory repo: written
+	// only by conductor (seeding, and an approved template update).
+	KindCharter = "charter"
 )
 
 // Field is one frontmatter field of a kind's schema.
@@ -157,6 +160,10 @@ func builtinKinds(team bool) []*ContentKind {
 			&ContentKind{Name: KindHandoff, Dir: "handoff", Builtin: true, FreePaths: true,
 				Writers: []Writer{WriterSystem}, Fields: []Field{
 					{Name: "session", Type: "string", Required: true},
+				}},
+			&ContentKind{Name: KindCharter, Dir: "charter", Builtin: true,
+				Writers: []Writer{WriterSystem}, Fields: []Field{
+					{Name: "template", Type: "string", Required: true},
 				}},
 		)
 	}

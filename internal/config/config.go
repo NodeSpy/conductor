@@ -263,6 +263,12 @@ type Config struct {
 	// one that merely DECLARES packs. Only the former can answer "which
 	// plugins does this config need?" completely — see PluginRefsComplete.
 	packsInstantiated bool `yaml:"-"`
+
+	// templates are the bot templates each top-level pack instance ships
+	// (by instance, then template name), loaded with the packs; templateNotes
+	// what applying them to bots found worth saying (BotTemplateNotes).
+	templates     map[string]map[string]LoadedTemplate `yaml:"-"`
+	templateNotes []string                             `yaml:"-"`
 }
 
 // Update configures periodic self-update checks.
@@ -942,6 +948,13 @@ func Load(path string) (*Config, error) {
 	// existing configs are unaffected. Offline — the network fetch is
 	// `conductor init`.
 	if err := c.instantiatePacks(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	// Bots instantiated from a pack's templates take their charter, seed,
+	// collections and the verbs their operator granted — before collections,
+	// teams and bot validation see them, so a template bot is checked (and
+	// held to its team's ceilings) like any other.
+	if err := c.applyBotTemplates(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 	// Trigger `extends:` resolves + abstract bases are stripped BEFORE

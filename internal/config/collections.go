@@ -63,7 +63,7 @@ const (
 
 // BuiltinKindDirs are the dirs the built-in kinds own (and legacy homes):
 // no collection may claim one.
-var BuiltinKindDirs = []string{"knowledge", "runbooks", "watch", "digests", "log", "handoff", "episodes"}
+var BuiltinKindDirs = []string{"knowledge", "runbooks", "watch", "digests", "log", "handoff", "episodes", "charter"}
 
 var collectionName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,39}$`)
 

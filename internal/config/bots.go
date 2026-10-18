@@ -117,6 +117,24 @@ type BotConfig struct {
 	// Collections are custom content kinds in the bot's memory repo, beside
 	// the built-ins (collections.go).
 	Collections map[string]Collection `yaml:"collections,omitempty"`
+	// Use instantiates a bot TEMPLATE a pack ships (bottemplate.go):
+	// "<pack instance>/<template>", the way a pack's other members are
+	// named. The template supplies the charter, seed memory, collections and
+	// a list of REQUESTED verbs; nothing it requests is active until Grant
+	// says so.
+	Use string `yaml:"use,omitempty"`
+	// Connectors binds the template's connector inputs to your connectors
+	// (input → connector instance). An input you have exactly one connector
+	// of the type for binds itself.
+	Connectors map[string]string `yaml:"connectors,omitempty"`
+	// Grant is what you allow of the template's requested verbs: verb (in
+	// the template's vocabulary, <input>.<verb>) → tier. A tier looser than
+	// the template's maximum is cut to it. `conductor bot new` writes the
+	// read-only ones; anything above observe is a widening you add.
+	Grant map[string]string `yaml:"grant,omitempty"`
+	// Origin is where a template bot came from — computed at load, never
+	// written.
+	Origin *BotOrigin `yaml:"-"`
 	// Memory bounds what the bot's sessions read from and write to its
 	// memory repo: the prompt's index budget, the per-read cap, the
 	// per-kind document caps (memlimits.go). On by default.
@@ -645,6 +663,9 @@ func (c *Config) BotSeedDir(name string) string {
 // BotCharter is the bot's charter text: inline, from its file, or "".
 func (c *Config) BotCharter(name string) (string, error) {
 	m := c.Bots[name]
+	if m.CharterFile == "" && m.Charter == "" && m.Origin != nil {
+		return c.templateCharter(name, m), nil
+	}
 	if m.CharterFile == "" {
 		return m.Charter, nil
 	}

@@ -65,6 +65,9 @@ type Repo struct {
 	// memory limits (nil: the defaults).
 	IndexPath string
 	LimitsFn  func() config.MemoryLimits
+	// TemplateFn is a template bot's provenance (nil otherwise): a NEW
+	// repo's first commit carries the template's charter and names it.
+	TemplateFn func() *config.BotOrigin
 
 	mu    sync.Mutex
 	idxMu sync.Mutex // the index: its sync and its queries
@@ -195,12 +198,25 @@ over it.
 	if err := r.seed(); err != nil {
 		return fmt.Errorf("seed %s: %w", r.Seed, err)
 	}
+	var o *config.BotOrigin
+	if r.TemplateFn != nil && !r.Team {
+		o = r.TemplateFn()
+	}
+	if o != nil && o.Charter != "" {
+		if err := r.writeCharterLocked(o, o.Charter); err != nil {
+			return err
+		}
+	}
 	if _, err := r.git(ctx, r.Dir, "add", "-A"); err != nil {
 		return err
 	}
 	subject := "memory: initialize"
 	if r.Team {
 		subject = "knowledge: initialize"
+	}
+	if o != nil {
+		subject = commitMessage(fmt.Sprintf("memory: initialize from template %s (%s %s)", o.Ref(), o.Pack, o.Version),
+			map[string]string{"Bot-Template": o.Ref() + "@" + o.Version, "Template-Digest": o.Digest})
 	}
 	_, err := r.git(ctx, r.Dir, "commit", "-q", "-m", subject)
 	return err
@@ -264,6 +280,23 @@ func (r *Repo) seed() error {
 		}
 		return os.WriteFile(dst, b, 0o600)
 	})
+}
+
+// CharterDoc renders a template bot's charter document.
+func CharterDoc(ks *Kinds, o *config.BotOrigin, charter string) string {
+	k, err := ks.Get(KindCharter)
+	if err != nil {
+		return charter
+	}
+	return k.JoinFrontmatter(map[string]any{"template": o.Ref()}, strings.TrimSpace(charter)+"\n")
+}
+
+func (r *Repo) writeCharterLocked(o *config.BotOrigin, charter string) error {
+	p := filepath.Join(r.Dir, config.CharterDocPath)
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(CharterDoc(r.Kinds(), o, charter)), 0o600)
 }
 
 // CleanPath validates the shape of a memory path an agent or operator
