@@ -1361,6 +1361,22 @@ sandbox:
 #       # email_code: { mailbox: agent-inbox, from: no-reply@app.example.com, subject: "sign-in code", code: "code is ([0-9]{6})" }
 #   # mailboxes:                                   # emailed codes: IMAP, read-only, an app password from a vault
 #   #   agent-inbox: { imap: "imap.example.com:993", username: { vault: op, key: "Agents/Mail/username" }, password: { vault: op, key: "Agents/Mail/app-password" } }
+#   # profiles:                                    # personal details conductor fills by meaning; the agent never sees them
+#   #   work:
+#   #     identities: ["bot:shopper"]              # nobody by default
+#   #     fields: { name: '{{ vault "op" "Me/Work/name" }}', email: '{{ vault "op" "Me/Work/email" }}', address.city: '${env.WORK_CITY}' }
+#   #     sites: [{ origin: "https://shop.example.com", fields: [name, email, address] }]   # per site, per field
+#   #     visible: { email: fact }                 # hidden | exists | fact (the domain) | value
+#   # cards:                                       # every purchase is a signed approval; the card never reaches the agent
+#   #   shopping:
+#   #     kind: virtual                            # prefer a virtual / single-use card with its own provider limits
+#   #     number: '{{ vault "op" "Cards/Shopping/number" }}'
+#   #     expiry: '{{ vault "op" "Cards/Shopping/expiry" }}'
+#   #     cvc: '{{ vault "op" "Cards/Shopping/cvc" }}'
+#   #     merchants: ["https://shop.example.com"]  # none by default: nothing can be bought
+#   #     identities: ["bot:shopper"]
+#   #     limits: { per_purchase: 50, per_day: 100, per_month: 300, currency: USD }
+#   # payments: { approvers: [daniel], approval_ttl: 1h }   # operators: entries with an ssh_key
 #
 # Hand-offs (background: true agent steps on paseo) and detached launches
 # (detach: true — e.g. a Slack handover, whose thread can carry anyone's
@@ -1528,6 +1544,8 @@ bots:
       #   tiers: { commit_money: [aws.purchase_savings_plan] }
       #   amounts: { aws.purchase_savings_plan: commitment_usd }
       #   spend_cap: { per_action: 2000, per_period: 5000, period: 720h, currency: USD }
+      #   unattended:                  # opt-in, a widening: a commit_money verb runs WITHOUT approval under a smaller cap
+      #     browser.purchase: { per_action: 10, per_period: 30, period: 24h, merchants: ["https://shop.example.com"] }
       approval_ttl: 24h
     # proactive:                                 # OFF unless set: read-only sweeps on a schedule (wiki: Bots → Proactive sweeps)
     #   every: 4h
@@ -1580,7 +1598,7 @@ teams:
     # peers: none                                # default team: teammates may `ask` (data) and `delegate` (work) to each other
     # delegation: { max_depth: 3 }               # most hops a `conductor bot delegate` chain may take (1–10, default 3)
     # autonomy:
-    #   ceiling: observe                         # observe | reversible: the highest tier any bot may be PROMOTED to
+    #   ceiling: observe                         # observe | reversible | commit_money: the highest tier any bot may be PROMOTED to (commit_money: unattended buys)
     #   shadow: true                             # hold every bot in shadow mode (none may set shadow: false)
     #   tiers: { never: [gh.delete_*] }          # classified into every bot (the strictest tier wins)
     # budget:

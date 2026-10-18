@@ -434,6 +434,135 @@ outcome and origin to `credential-usage.jsonl` (bounded). **Revoking**
 removes the record and its stored values, and a session login's saved
 sessions. The next use is refused ("no credential").
 
+## 4b. Personal details and payment cards
+
+Bots fill forms, sign up for things and buy things. The login model
+carries over: values the agent never sees, conductor fills them, a
+per-site opt-in by the operator, provenance gating, and values in vaults or
+stored write-only. Code: `internal/browser/wallet.go` (types, the store),
+`purchases.go` (the ledger), `walletfill.go` (the agent's actions), and
+`cmd/conductor/browserwallet.go` (the operator's ops and CLI).
+
+**Profiles.**
+- **Fields.** Each canonical field (name, email, phone, company, birthday,
+  `address.*`, `billing.*`, `custom.*`) takes any value source. Typed values
+  go into the login store's sealed vault, write-only.
+- **Who.** Identities, `bot:` and `team:` bindings; `OperatorOnly`
+  provenance, as for logins.
+- **Where.** A list of sites, each an exact origin with the fields allowed
+  there. `address`/`billing` allow every part of that address.
+- **The fill.**
+  - `fill-profile` and `fill-form` (a finder maps a form by `autocomplete`
+    tokens, with billing sections, then by labels) resolve the field in the
+    main frame's isolated world.
+  - The fill re-checks the origin atomically with the set (`walletSet`, for
+    inputs, textareas and selects), and refuses password, hidden and file
+    inputs.
+  - The value is remembered for the scrub (4 characters and up) and by its
+    node.
+- **Snapshots** show `«filled by conductor»` in place of any filled field's
+  value, so a CVC or a region code (too short to scrub from text) is still
+  hidden.
+- **Visible facts.** For a field the operator marks: `exists`; `fact`
+  (`profileFact`: an email's domain, a country, a phone's country code, 18 or
+  older); or `value`. Facts too need the operator's provenance.
+
+**Cards and purchases.**
+- **A card** holds:
+  - its sources (number, expiry, CVC, name), Luhn- and MM/YY-checked when
+    typed;
+  - its exact merchants (none by default);
+  - its bindings and `limits` (per purchase, day, month), plus
+    `identity_limits`;
+  - a freeze (in the store, so it covers config cards too).
+- **The flow.**
+  1. **Propose.** The card is bound and unfrozen, the merchant listed, the
+     limits hold; the purchase is recorded pending, with a digest over its
+     terms.
+  2. **Approve.** An operator in `PaymentApprovers` signs
+     `ApprovalPayload("browser-purchase", id, digest, decision, …)` with
+     their SSH key: #178's `SignApproval`/`VerifyApproval`, the same path as
+     a bot's proposal. `Approve` is once-only under the ledger's lock, and
+     the approval expires (`approval_ttl`, default 1h).
+  3. **Pay**, all in one browser action, so no agent action can interleave:
+     - the page's main-frame security origin must equal the merchant;
+     - the total re-check reads every total-labelled amount in the main
+       document (script, style and template excluded; hidden elements
+       included, since an extra total can only cause a refusal) and the
+       agent's `--total-ref`. No total, another currency, or a maximum above
+       the approval is refused, and a superseding purchase is proposed;
+     - the card fields are found (in the page's own document only);
+     - `Consume` spends the approval and re-checks the limits under the
+       ledger's lock (the period boundary at the moment of spending: a
+       spend counts while strictly inside the window, as the bot ledger
+       counts);
+     - the card is filled;
+     - the total is re-read, and conductor clicks place-order itself. A
+       change after the fill clears the card, nothing is submitted, and the
+       spend is released (`Unspend`; the approval stays used).
+  4. **Receipt.** The confirmation's order number and charged total are
+     recorded, and a charge above the approval is flagged and notified.
+- **Scrubbing.** The card number in every form (bare, groups of four by space
+  or dash), the expiry forms, and the holder's name are scrubbed from every
+  reply. The CVC is hidden by its node. Screenshots mask filled fields, and
+  `evaluate` is off.
+- **One spend-cap rule.** `config.SpendCap.Check` is the rule a bot's
+  `commit_money` uses: the bot gate now calls it, and card and identity
+  limits are expressed as spend caps (a day and a 30-day month).
+- **Kill switches.** A card freeze, and the engine's pause file ("pause all
+  automation"), stop proposals and fills.
+
+**Bots.**
+- **The gate.** A bot session's purchase goes to its gate as the verb
+  `browser.purchase` (`commit_money`, amount `total`, under `spend_cap`).
+  The proposal's execution (`conductor bot approve`) runs through a
+  `RunVerb` interceptor. It re-checks the gate in the approved context, then
+  approves the browser's purchase (`ApproveBotPurchase`, matched by the
+  executing proposal: `bot.ApprovedProposal`).
+- **Unattended** is a new gate branch for `commit_money` (`Gate.unattended`).
+  Every condition must hold:
+  - an operator's `autonomy.unattended` entry for the verb;
+  - not shadow, sandboxed;
+  - requester class operator or bot;
+  - not recurring;
+  - a named merchant;
+  - the unattended cap (counting only unattended spends) and `spend_cap`
+    (all spends), both re-checked inside the ledger write that records the
+    spend.
+
+  Config refuses an entry that isn't `commit_money`, or doesn't fit inside
+  `spend_cap`. A team's bot needs the team's new `autonomy.ceiling:
+  commit_money`, and the entry is a template widening.
+- **Provenance.** `requesterFor` reads the gate's class for a bot session
+  (`Gate.RequesterClass`), and `groupsFor` gives `bot:<name>` and
+  `team:<team>`.
+
+**Classification for the dashboard.**
+- **Widening:** adding a profile or card, a binding, a site or field, a
+  merchant, a higher limit or a looser identity limit, a visibility raised,
+  an unfreeze.
+- **Narrowing:** removals, a lower limit, a new identity limit, a freeze.
+- `dry_run` answers without changing anything.
+
+**The operator's threat model** (also in the wiki):
+- **What the agent can learn:**
+  - the profile and card names it's bound to, their sites, merchants and
+    limits;
+  - the visible facts;
+  - a purchase's status;
+  - after it, the order number and the charged total.
+- **What it can do:**
+  - fill an allowed field on an allowed site;
+  - propose a purchase;
+  - pay an approved one once, on its merchant, at or under its total.
+- **What it cannot do:**
+  - read a value;
+  - approve, enlarge, redirect or reuse a purchase;
+  - fill a card without one;
+  - use a profile or card for a third party's request.
+- **What a merchant sees:** the values filled into its page (that is the
+  point). Exact origins and limited cards bound the damage.
+
 ## 5. Files: only through the workspace, by conductor
 
 - The browser never sees the workspace:
@@ -599,7 +728,42 @@ no browser.
    - Use a `${settings.…}` as a secret source past the raw-body check
      (imports, packs, flow mappings, anchors).
    - Use a revoked login (a live browser, a racing write-back).
-11. **Resource abuse.** Unbounded tabs, downloads, or wait loops; the
+11. **Personal details and cards.**
+   - Read a profile or card value back:
+     - a page echoing it in another form (spaced, reversed, split across
+       elements, in an attribute, a title, a URL);
+     - a CVC or 2-letter code by its text;
+     - screenshots of a transformed rendering;
+     - the receipt text;
+     - errors, the audit, the ledger.
+   - **The total re-check:**
+     - show a low "Total" and charge a higher one (server side, or a total
+       that isn't labelled "total");
+     - a currency trick (`$` that is CAD);
+     - change the total between the check and the click (the click follows
+       the re-read without a page action in between, but a page timer could
+       race it);
+     - a total split across nodes;
+     - a total only in an image.
+   - **The merchant check:** a same-origin page that isn't the checkout; an
+     open redirect on the merchant; a card form in a frame of another origin
+     (refused); a merchant on `localhost` vs `127.0.0.1`.
+   - **The approval:**
+     - reuse it, race two pays (`Consume` is under the ledger's lock);
+     - approve with a signature for other terms (the digest covers card,
+       merchant, items, total, currency, recurring, identity, bot);
+     - approve a bot's purchase on the browser path (refused);
+     - an expired one; a refusal that leaves the approval usable.
+   - **The caps:** the period boundary, an identity limit through a group, a
+     purchase in another currency, two unattended purchases racing the bot
+     ledger.
+   - **Autonomy:** make a bot buy unattended without the opt-in, in shadow,
+     unsandboxed, for an event or a third party, recurring, at an unnamed or
+     lookalike merchant; or a template or team that widens it.
+   - **The kill switches:** fill after a freeze or a pause; a pay already
+     past its checks when the freeze lands (the freeze is read at the start
+     of the pay).
+12. **Resource abuse.** Unbounded tabs, downloads, or wait loops; the
    `max_browsers` cap; idle reaping during a held action.
 
 ## 9a. What remains (plain language)
@@ -631,6 +795,19 @@ no browser.
   the same trust as the conductor vault's default key file.
 - **HashiCorp field names are entered by hand** (`path#field`): listing them
   would mean reading the secret's data.
+- **Hosted card fields aren't filled.** Stripe Elements, Braintree and Adyen
+  put the card inputs in a frame of the provider's origin, and `pay` fills
+  only the page's own document. It refuses such a checkout.
+- **The total is the page's word.** A merchant that charges more on its
+  server than its page shows is caught after the fact (the receipt check). A
+  limited card is the layer that stops it.
+- **A total check can be raced by a page timer** in the milliseconds between
+  the last re-read and the click.
+- **A bot's home session can't use the browser, and nothing buys unattended,
+  until #178's sandbox seam is wired** (`sandboxSeam` still answers "no
+  sandbox"). A bot's sandboxed workers can use profiles and propose
+  purchases.
+- **SMS codes and receipts by email** are follow-ups.
 
 ## 10. Found on the way (outside the browser)
 

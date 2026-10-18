@@ -441,6 +441,202 @@ This works headless on Linux and macOS (the DevTools WebAuthn domain).
 **Prefer agent-specific credentials**: a separate passkey, or a separate
 account where the site allows one. They are revocable without touching yours.
 
+## Personal details (profiles)
+
+Agents filling in forms and signing up for things need your name, email,
+address and the like. A **profile** is a named set of those details. Several
+are allowed: a personal one, a work one. **The agent never receives a value.**
+It asks conductor to fill a field by its meaning, and conductor types the value
+into the page in the confined browser, the way it fills a password.
+
+```yaml
+browser:
+  profiles:
+    work:
+      identities: ["bot:shopper"]                 # who may use it; nobody by default
+      fields:                                      # each field: any value source
+        name:          '{{ vault "op" "Me/Work/name" }}'
+        email:         '{{ vault "op" "Me/Work/email" }}'
+        phone:         '${env.WORK_PHONE}'
+        company:       '{{ vault "house" "work/company" }}'
+        address.line1: '{{ vault "op" "Me/Work/street" }}'
+        address.city:  '{{ vault "op" "Me/Work/city" }}'
+        # also: given_name, family_name, birthday, address.line2/region/postal_code/country,
+        # billing.* (the same parts), custom.<anything>
+      sites:                                       # where it may be filled, and which fields there
+        - { origin: "https://shop.example.com", fields: [name, email, address] }
+      visible: { email: fact }                     # hidden (default) | exists | fact | value
+```
+
+- **Values.** They come from a vault (1Password, the conductor vault, pass,
+  HashiCorp, a file), `${env.NAME}`, or a named secret. A typed value goes in
+  write-only (`conductor browser profile set work email --stdin`), never in
+  the config.
+- **Opt-in per site and per field.** A field is filled only on an exact origin
+  that lists it. `address` and `billing` allow every part of that address.
+- **Who.** Only the identities, bots (`bot:<name>`) and teams (`team:<name>`)
+  it names. Only for the operator's own request: the same provenance rule as
+  logins, so a bot's case requested by a third party gets nothing.
+- **Visible facts.** The agent may learn a non-sensitive fact it needs to
+  reason with, only for a field you mark:
+  - `exists`: the field is set;
+  - `fact`: an email's domain, an address's country, a phone's country code,
+    or "18 or older" for a birthday;
+  - `value`: the value itself.
+
+  Everything else is hidden.
+
+The agent's side:
+
+```sh
+conductor browser profiles                          # names, sites and fields allowed there, visible facts
+conductor browser fill-form --profile work          # fills every field of the form it may; says which, never what
+conductor browser fill-profile e12 email --profile work
+```
+
+Every fill is audited with the profile, the field, the site, the identity and
+the case: never the value. A value the page echoes back ("Welcome, Jane!") is
+scrubbed from what the agent sees, as a password is. A field conductor filled
+shows `«filled by conductor»` in a snapshot. A value under 4 characters (a
+region code, say) is hidden by its field, not scrubbed from the page's text.
+
+## Payment cards and purchases
+
+Agents can buy things, with protections that are strong by default: **every
+purchase is an approval.**
+
+```yaml
+operators:
+  daniel: { ssh_key: "ssh-ed25519 AAAA…" }       # who may approve (signs with this key)
+browser:
+  cards:
+    shopping:
+      kind: virtual                              # virtual | single-use | physical
+      number: '{{ vault "op" "Cards/Shopping/number" }}'
+      expiry: '{{ vault "op" "Cards/Shopping/expiry" }}'      # MM/YY
+      cvc:    '{{ vault "op" "Cards/Shopping/cvc" }}'
+      name:   '{{ vault "op" "Cards/Shopping/name" }}'
+      merchants: ["https://shop.example.com"]    # none by default: nothing can be bought
+      identities: ["bot:shopper"]
+      limits: { per_purchase: 50, per_day: 100, per_month: 300, currency: USD }
+      identity_limits:
+        "bot:shopper": { per_purchase: 20, per_day: 40, per_month: 100 }
+  payments:
+    approvers: [daniel]                          # default: every operator with a key
+    approval_ttl: 1h                             # an approval is single-use and expires
+```
+
+**How a purchase goes:**
+
+1. **The agent proposes it:** the card, the merchant (an exact origin on the
+   card's list), the items, the total and currency, recurring or one-off, and
+   why.
+
+   ```sh
+   conductor browser purchase --card shopping --merchant https://shop.example.com \
+     --total 24.00 --currency USD --items '[{"name":"Widget","qty":2,"amount":12}]' \
+     --why "the case asks for two widgets"
+   ```
+
+   Conductor checks the card's merchants and limits, and the identity's,
+   before anything else.
+2. **You approve it.** It waits in Needs you (a `needs_input` notice). Your
+   approval is signed with your operator key, as a bot's proposal is:
+
+   ```sh
+   conductor browser purchases --status pending
+   conductor browser purchase approve pu7          # shows merchant, total, recurring, who, why; then signs
+   ```
+
+   The signature covers the purchase's terms (card, merchant, items, total,
+   currency, recurring, identity).
+3. **The agent pays, on the checkout page:**
+
+   ```sh
+   conductor browser pay pu7 e41                  # e41: the place-order button
+   ```
+
+   Conductor then:
+   - checks the page is the approved merchant's, exactly;
+   - **re-reads the total on the page**. A higher total, another currency, or
+     another merchant is refused, and a new purchase for what the page shows
+     is proposed for your approval;
+   - spends the approval (single-use) and re-checks the limits at that
+     moment;
+   - fills the card;
+   - re-reads the total once more, and places the order itself. If the page
+     raised its price under the card, the card is cleared and nothing is
+     submitted.
+4. **The receipt.** Conductor reads the order confirmation (order number and
+   the total charged) into the purchase record and the audit. The agent may
+   see the order number and the total. A confirmation charging more than you
+   approved is flagged and notified.
+
+**What protects you:**
+
+- **The card never reaches the agent.** Not its number, CVC or expiry; not in
+  a reply, a log, the run record or a screenshot. A page echoing the number
+  (in full, in groups of four, with dashes) is scrubbed, and the card's fields
+  are masked in screenshots. `evaluate` stays off in that browser.
+- **Limits.** Per purchase, per day and per month, for the card and for each
+  identity, bot or team you list. They are checked when a purchase is
+  proposed, approved and paid.
+- **Recurring charges** are flagged. A subscription needs your explicit
+  approval for its recurring nature, and never runs unattended.
+- **Merchants.** Each card has its own allowlist of exact origins; none by
+  default.
+- **Kill switch.**
+  - `conductor browser card freeze shopping` stops every fill at once (config
+    cards included).
+  - `conductor pause` (pause all automation) also blocks every payment.
+- **Defense in depth: use a limited card.** Conductor's checks are the first
+  layer. A virtual or single-use card with its own limits is the second:
+  1Password's masked cards, Privacy.com, Stripe Issuing, or a card number in a
+  vault. `conductor validate` reminds you when a card isn't one.
+
+**Unattended purchases (opt-in, narrow).**
+- **Bots only, and never the default.** A bot may buy without a per-purchase
+  approval only under a small cap, at named merchants. It's #178's
+  `commit_money` tier with its spend cap, so a bot's every purchase also
+  counts against its `autonomy.spend_cap`:
+
+  ```yaml
+  bots:
+    shopper:
+      autonomy:
+        tiers:   { commit_money: [browser.purchase] }
+        amounts: { browser.purchase: total }
+        spend_cap: { per_action: 50, per_period: 200 }
+        unattended:                                  # a widening: never the default
+          browser.purchase: { per_action: 10, per_period: 30, period: 24h, merchants: ["https://shop.example.com"] }
+  ```
+
+- **It must fit.** The unattended cap must fit inside `spend_cap`. A bot in a
+  team needs the team's `autonomy.ceiling: commit_money`.
+- **When it applies.** Only when all of these hold:
+  - the bot is out of shadow mode and its sessions are sandboxed;
+  - the request is yours or the bot's own (never a third party's, an event's
+    or a sweep's);
+  - the charge isn't recurring;
+  - the merchant is named.
+
+  Anything else is a proposal you approve with `conductor bot approve`.
+- **The card still applies.** Its own merchant list and limits hold either
+  way.
+
+## What an agent can and can't learn or do
+
+| | the agent can | the agent can't |
+|---|---|---|
+| **Logins** | ask conductor to sign it in, on the bound origin | read a password, code, passkey or session cookie |
+| **Personal details** | ask conductor to fill a field, on an opted-in site; learn the facts you made visible | read a value; fill a field on a site or of a kind you didn't allow; use a profile on a third party's request |
+| **Cards** | propose a purchase; pay an approved one, once, on its merchant; see the order number and total | read the number, CVC or expiry; pay without your signed approval (or outside its unattended cap); pay more, elsewhere, or twice; approve its own purchase |
+| **Pages** | see what the page shows, scrubbed of every value conductor filled | run `evaluate` in a browser where a value was filled |
+
+What a site can do is what any site can: a page on an origin you opted in
+sees the values filled into it. Bind profiles and cards to exact origins you
+trust, and prefer a limited card.
+
 ## Watching and taking over
 
 - `conductor browser sessions`: the live agent browsers.
@@ -508,6 +704,20 @@ These are the limits that still hold:
   Listing field names would mean reading the secret.
 - **The macOS container path hasn't run on a real Mac yet.** It's the same
   code as on Linux, through Docker Desktop's VM.
+- **A card form inside an embedded frame isn't filled.** Hosted payment fields
+  (Stripe Elements, Braintree, Adyen) live in a frame of the payment
+  provider's origin, so `pay` refuses them for now. The checkout must have the
+  card fields in its own page.
+- **Conductor reads the total the page shows.** A merchant that charges more
+  on its server than its page shows is caught only after the fact, by the
+  receipt check. A limited card is the layer that stops it.
+- **A bot's home session can't use the browser yet on this branch, and no bot
+  buys unattended yet.** A bot's workers launch sandboxed, so they can use
+  profiles and propose purchases, each approved by you. The home session runs
+  through paseo, which is sandboxed only once #178's sandbox seam is wired.
+  Unattended purchases need that same seam to report the sandbox; until then
+  every bot purchase is a proposal. The gate, its approvals and the
+  unattended path are in place and tested.
 
 ## Identities
 

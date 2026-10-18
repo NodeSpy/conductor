@@ -46,6 +46,10 @@ conductor browser sessions | peek <session> [--out F.png]   live agent browsers;
 conductor browser passkey register <credential> [--url U]   register a dedicated passkey for a credential (a takeover)
 conductor browser credential add|ls|usage|check|test|set|unset|bind|rm …   logins you add: typed (write-only), from a vault, or your own sign-in
 conductor browser vault-items <vault> [--query Q] | vault-item <vault> <item>   a vault's items for picking: names and fields, never a value
+conductor browser profile add|set|unset|bind|rm …   personal details conductor fills by meaning (never shown to an agent)
+conductor browser card add|set|unset|bind|freeze|unfreeze|rm …   payment cards: merchants, limits, the kill switch
+conductor browser purchases [--status pending] | purchase show|approve|deny <id>   purchase approvals (signed with your operator key)
+conductor browser spend                    profiles, cards, spend per card and identity
 conductor browser <action> …               (inside an agent) open, snapshot, click, fill, login --credential, … — conductor browser --help
 conductor bot ls [--folder <p>] [--flat]  bots as a tree: folder, team, bot (operator)
 conductor bot show|cases|workers|proposals …  bots: state, open work, proposals (operator)

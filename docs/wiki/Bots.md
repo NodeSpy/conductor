@@ -1030,7 +1030,7 @@ the bot's gate:
 | `observe` | runs |
 | `reversible` | a proposal — unless promoted, not in shadow mode, the sessions are sandboxed, and the requester is an event, the bot itself or an operator (never a third party, a peer bot or a proactive sweep) |
 | `propose` | always a proposal; runs when an operator approves it |
-| `commit_money` | a proposal with a **typed amount** (`autonomy.amounts` names the option, a number) under the hard `spend_cap`: over `per_action`, or over `per_period` counting what has already been spent, is refused outright — and the period is re-checked at execution |
+| `commit_money` | a proposal with a **typed amount** (`autonomy.amounts` names the option, a number) under the hard `spend_cap`: over `per_action`, or over `per_period` counting what has already been spent, is refused outright — and the period is re-checked at execution. **Unattended** only where you opt a verb in with `autonomy.unattended` (below) |
 | `never` | refused |
 
 - A verb matching several tiers takes the strictest; an **unclassified verb is
@@ -1051,6 +1051,40 @@ the bot's gate:
 - A gated call returns a proposal id instead of running:
   `{executed: false, proposal: p7, status: pending, …}`. The agent can block on
   `conductor bot wait p7`.
+
+### Purchases (`browser.purchase`)
+
+A bot's purchase through the agent browser ([[Browser]], "Payment cards and
+purchases") is the verb `browser.purchase` at its gate: classify it
+`commit_money` with `amounts: { browser.purchase: total }`, and every purchase
+is a proposal under `spend_cap`. Approving it (`conductor bot approve`)
+approves the purchase; the card is filled later, once, on its merchant, after
+conductor re-reads the total.
+
+`autonomy.unattended` lets it run without a per-purchase approval, narrowly.
+It's never the default, and `conductor validate` names it as a widening:
+
+```yaml
+autonomy:
+  tiers: { commit_money: [browser.purchase] }
+  amounts: { browser.purchase: total }
+  spend_cap: { per_action: 50, per_period: 200 }
+  unattended:
+    browser.purchase: { per_action: 10, per_period: 30, period: 24h, merchants: ["https://shop.example.com"] }
+```
+
+- It must fit inside `spend_cap`, which is checked too.
+- A team's bot needs the team's `autonomy.ceiling: commit_money`.
+- It runs only when all of these hold:
+  - the bot is out of shadow mode and its sessions are sandboxed;
+  - the requester is the operator or the bot itself;
+  - the charge isn't recurring;
+  - the merchant is one you named;
+  - it fits the unattended cap (its own spend) and `spend_cap` (all spend).
+
+  Both caps are checked in the ledger write that records the spend.
+- Anything else is a proposal.
+- The card's own merchants and limits apply either way.
 
 ### Terraform changes
 
