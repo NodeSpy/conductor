@@ -233,6 +233,9 @@ bots:
       - { name: weekly, on: schedule.weekly-consolidate, action: consolidate }
     proactive: { every: 4h, quiet_hours: "22:00-07:00", checklist: { section: "Proactive checks" }, notify_at: high }
     model: claude-opus-5                # a suggested home model (applied when the operator sets none)
+    display_name: Pager Pal             # a suggested identity: every field optional, each one the operator's to override
+    avatar: { preset: lighthouse }
+    personality: { tone: friendly, style: "Explain the why behind every step." }
     runtime: "a use: cli runtime with claude-code"   # a suggestion, shown — runtimes are the operator's
 ```
 
@@ -248,6 +251,12 @@ bots:
   `requester`, or `action: consolidate|rotate`.
 - **Proactive** is used only by a bot whose operator writes `proactive: {}`;
   a template never sets a budget.
+- **Identity** (`display_name`, `tagline`, `avatar`, `color`,
+  `personality`) is a suggestion, validated like a bot's
+  ([Bots → Identity](Bots#identity)). A field the operator sets wins. Voice
+  text that came from the template is fenced in the bot's prompt as
+  template-suggested style, below the charter and the rules, and the
+  catalog shows it as `identity`.
 - **Seed** documents are typed, like any memory write: each must be a valid
   document of its kind within its [size cap](Bots#size-limits). `conductor
   pack lint` checks every one; a file that would not seed is a lint problem.
@@ -288,7 +297,8 @@ The operator control socket serves the same catalog and plans (`cmd: "bot"`):
 
 | `sub` | args | returns |
 |---|---|---|
-| `templates` | `search`, `registry`, `installed` | `{ templates: [ { ref, template, pack, version, description, tags, installed, install, inputs, verbs, read_only, above_observe, triggers, proactive, model, runtime, seed, collections, used_by, digest } ] }` |
+| `templates` | `search`, `registry`, `installed` | `{ templates: [ { ref, template, pack, version, description, tags, installed, install, inputs, verbs, read_only, above_observe, triggers, proactive, model, runtime, identity, seed, collections, used_by, digest } ] }` |
+| `identity_options` | — | the avatar presets, icons, identity colors, status hues, tones and caps (no bot needed) |
 | `template` | `ref`, `registry` | one template, with its `charter` |
 | `template_plan` | `name`, `template`, `connectors`, `grants`, `proactive` | `{ bot, template, entry, triggers, diff, valid, error, review, notes, widening }` |
 | `grant_plan` | `bot`, `grants` | the same, for a widening |

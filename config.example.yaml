@@ -1399,6 +1399,15 @@ bots:
       tools, propose fixes, and escalate per the policy below. Keep runbooks
       and the infra map in your memory current.
     # charter_file: bots/platform-sre.md      # or keep the charter in a file
+    # Identity (wiki: Bots → Identity): presentation and voice only, never permissions.
+    # Avatars and colors are names from built-in lists (`conductor bot identity-options`), never URLs.
+    # display_name: Night Owl                    # what it calls itself and chat shows; the id stays its address
+    # tagline: Watches the pager so you can sleep.
+    # avatar: { preset: owl }                    # or { icon: radar, color: teal }; none: the dashboard shows initials
+    # color: indigo                              # identity colors exclude status hues (red, green, amber, …)
+    # personality:                               # a voice section in its prompt, fenced, below the charter and rules
+    #   tone: terse                              # terse | friendly | formal | warm | dry | playful
+    #   style: "Lead with the answer, then the evidence."   # at most 600 bytes
     escalation: "Page the operator if a sev1 is not mitigated in 15 minutes or you are unsure."
     # memory_repo: ~/bots/platform-sre        # default <state dir>/bots/platform-sre/memory
     # seed_dir: .conductor/packs/platform-sre    # seed a NEW memory repo with a pack's knowledge/ + runbooks/

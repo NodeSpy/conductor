@@ -124,6 +124,64 @@ and the template can never set operators, team, connector bindings,
 secrets, autonomy, sandbox or egress. A newer pack version reaches a bot's
 memory only as a proposal you approve. See [[Bot-Templates]].
 
+### Identity
+
+A bot can have a face and a voice. Every field is optional, and none of them
+changes what the bot may do:
+
+```yaml
+bots:
+  platform-sre:
+    display_name: Night Owl                  # one line, at most 40 characters
+    tagline: Watches the pager so you can sleep.   # one line, at most 120
+    avatar: { preset: owl }                  # or { icon: radar, color: teal }
+    color: indigo                            # the bot's identity color
+    personality:
+      tone: terse                            # terse | friendly | formal | warm | dry | playful
+      style: |                               # free text, at most 600 bytes
+        Lead with the answer, then the evidence. No exclamation marks.
+```
+
+- **Avatar and color** are names from built-in lists: an avatar is a
+  `preset`, or an `icon` with a `color`. They are never a URL or a file, so a
+  config stays self-contained and safe to share. Identity colors exclude the
+  status hues (red, green, amber, yellow, orange), so a bot's color never
+  reads as failing or healthy. `conductor bot identity-options` prints the
+  lists. They are placeholders for now and will change with the dashboard.
+  With no avatar, the dashboard shows the bot's initials (from its display
+  name, else its id).
+- **Display name** is what the bot calls itself and what a chat connector
+  shows. The config id (`platform-sre`) stays the bot's address everywhere:
+  in commands, in routing, on approvals and in the ledger.
+- **Personality** shapes how the bot writes. Its sessions get the display
+  name, tagline, tone and style in a **voice section** that comes after the
+  charter and every rule and says it is subordinate to them. The text sits
+  inside a fence labelled as operator-written style (or template-suggested,
+  below). A style that reads like an instruction ("ignore the charter",
+  "you may merge") is still only style: the gate, the tiers and the rules are
+  unaffected, and the bot is told to ignore it.
+
+`conductor validate` checks every field against the lists and caps, naming
+the bot and the field. A bot from a [template](Bot-Templates) takes the
+template's suggested identity for any field you leave out. You override
+field by field, and the prompt says when the voice text came from the
+template.
+
+**Outbound messages.** A connector whose verb declares the `identity`
+semantic (a chat post's display-name and icon options, say) gets those
+options filled from the bot's identity whenever the bot calls it. Conductor
+overwrites them, so a bot can't post as someone else. The plugin maps
+conductor's avatar names to its own icons. Conductor has nothing
+connector-specific for this; see
+[plugin contract §2.3](https://github.com/NodeSpy/conductor/blob/main/docs/design/plugin-contract.md#23-verb-semantics).
+A proactive finding's `conductor.*` event also carries `bot_name` (the
+display name) for a trigger that posts it.
+
+`conductor bot show <bot>` (and the dashboard, over the same control-socket
+op) returns `identity`: always `name` and `initials`, plus `display_name`,
+`tagline`, `avatar`, `color`, `personality`, and `suggested_by` (the template)
+when set. `conductor bot ls` shows a display name next to the id.
+
 ## The home session
 
 Each bot has one pinned **home** session on paseo — the one you talk to.

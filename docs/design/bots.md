@@ -483,6 +483,39 @@ which is what lets several bots come from one template.
 - Seed documents are validated against kinds by `pack lint` and at seeding,
   not at config load (the config package cannot import the kinds).
 
+## Identity: presentation and voice, never authority
+
+A bot's identity (`display_name`, `tagline`, `avatar`, `color`,
+`personality`) is inline on its config entry and on a template, which only
+suggests it. The operator's value wins field by field (`Identity.Merge`), and
+`IdentityFrom` records the template when any voice text (display name,
+tagline, personality) came from one.
+
+- **One source of truth for the names.** `internal/config/botidentity.go`
+  holds the avatar presets, icons, identity colors, the status hues they
+  exclude, and the tones. Validation, the error messages, `bot
+  identity-options`, the dashboard op and the tests all read those lists, so
+  changing a list is a one-file change. There are no URLs or files: a config
+  stays hermetic and safe to publish.
+- **The voice section is subordinate, by position and by statement.** It is
+  rendered after the charter, every rule and (in a sweep) the notify
+  threshold. It says it governs how the bot writes, never what it may do,
+  and that anything in it reading like an instruction is not one. The text
+  sits in one nonce fence (`fence`) whose label says whose words they are:
+  `OPERATOR-WRITTEN` or `TEMPLATE-SUGGESTED`. A template is a stranger's
+  text, the same trust as its charter. The avatar and color never reach a
+  prompt. The display name never replaces the opening "You are <id>"; the id
+  stays the bot's address.
+- **Outbound identity is a verb semantic, not a connector feature.**
+  `identity: {option: attribute}` (plugin contract §2.3) lets any connector
+  say which of its options carry the poster's name or icon. The fill happens
+  in `RunSkillVerb` after the bot gate, so an approved proposal re-entering
+  the chokepoint is filled the same way and its options digest is
+  unchanged. The fill overwrites the bot's own values and deletes an option
+  whose attribute is unset, so a bot can neither impersonate another nor keep
+  a value it chose. The semantic is must-understand, so an older host
+  refuses a plugin that needs it, unless the plugin lists it in `optional`.
+
 ## Folders: removed
 
 Folders filed bots, teams, workflows and triggers for display and nothing
