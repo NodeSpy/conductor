@@ -295,7 +295,7 @@
 .dl-code.small .ln { white-space: pre; overflow-wrap: normal; }
 @media (max-width: 720px) {
   .wfb-page .wfb-title { font-size: 27px; }
-  .wfb-page .dl-actions.tight { width: 100%; } .wfb-page .dl-actions.tight .btn.ghost { display: none; } .wfb-page .dl-actions .btn { flex: 1 1 auto; justify-content: center; }
+  .wfb-page .dl-actions.tight { width: 100%; } .wfb-page .dl-actions.tight .btn.ghost { flex: 0 0 auto; } .wfb-page .dl-actions .btn { flex: 1 1 auto; justify-content: center; }
   .wfb-page .sc-ty { display: none; }
   .wfb-page .dl-recipe { padding: 12px; }
 }

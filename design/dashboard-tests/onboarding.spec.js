@@ -35,8 +35,8 @@ test('New bot: purpose → watches → tells you where → what it may do → re
   await page.fill('#bw-channel', '#incidents');
   await page.locator('[data-act="bw-next"]').click();
   await page.locator('[data-act="bw-preset"][data-v="read"]').click();
-  await expect(page.locator('.dl-can .cang[data-s="ok"]')).toContainText('post a message'); // it tells you on its own
-  await expect(page.locator('.dl-can .cang[data-s="fail"]')).toContainText('comment on an issue or PR');
+  await expect(page.locator('.dl-can .cang[data-s="ok"]')).toContainText('Post a message'); // it tells you on its own
+  await expect(page.locator('.dl-can .cang[data-s="fail"]')).toContainText('Comment on an issue or PR');
   await expect(page.locator('details.adv')).not.toHaveAttribute('open', '');
   await page.locator('[data-act="bw-next"]').click();
   await expect(page.locator('.bw-body')).toContainText('in #incidents via slack-ops');
