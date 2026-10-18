@@ -75,6 +75,15 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Done (commits on this branch, newest first)
 
+- **Round 2 of the adversarial reviews** (`design/AUDIT-RESPONSE.md` "Round 2"; every fix pinned in
+  `dashboard-tests/round2.spec.js`): the review screen computes its checks and forms change only what you changed;
+  every statement about a bot's reach comes from one function (`UI.verbMode`); the enforced egress allowlist validates;
+  one source for counts and times (`UI.syncRunStats`, `UI.syncAttention`, the run records); dialogs focus themselves,
+  trap Tab and return focus; the catalog's picker is Add a connector; a double-click acts once; the phone header follows
+  every route and a phone approval stands alone; the entrance animation never hides content; the status vocabulary
+  (marks only on states, labels as plain words, no tier ladder); generated titles in the sans; the step picker's risk
+  words; the run page's primary retry and per-workflow logs; validation; only documented semantics (NEW where not);
+  tokens and voice passes. Not done: bulk on the bots tree and bulk retarget/set-model (scope).
 - **Header sentences earn their place** (from review: the Overview's greeting and summary were "useless info"): Home
   opens on At a glance and Needs you; the count-and-health sentence under the title is gone from Activity, Needs you,
   Workflows, Bots, Browsers, Logins, Packs, Connectors, Logs and Updates (the rows say it). Kept where the sentence says

@@ -195,3 +195,14 @@ test('no risk ladder or escalating tier capsules anywhere: Safety, team ceilings
     expect(styled).toBe(0);
   }
 });
+
+test('navigating in the app, a page is visible at once: never left at opacity 0 (brand B3, on WebKit too)', async ({ page }) => {
+  await go(page, '#/overview', { fresh: true });
+  for (const r of ['#/activity', '#/bots/platform-sre/proposals/p12', '#/attention', '#/workflows']) {
+    await page.evaluate((h) => { location.hash = h; }, r);
+    await page.waitForTimeout(300);
+    const hidden = await page.evaluate(() => [...document.querySelectorAll('#main .page > *')].filter((x) => getComputedStyle(x).opacity !== '1').length);
+    expect(hidden, r).toBe(0);
+    await expect(page.locator('#main h1, #main .dl-ptitle').first()).toBeVisible();
+  }
+});

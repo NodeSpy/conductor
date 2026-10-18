@@ -16,7 +16,7 @@ test('a non-widening change (a description) applies with a plain Apply, no passk
   await expect(page.locator('[data-act="apply-go"]')).toHaveText(/^\s*Apply\s*$/);
   await page.locator('[data-act="apply-go"]').click();
   await expect(page.locator('#su-go')).toHaveCount(0);
-  await expect(page.locator('.callout.ember')).toContainText('Applied.', { timeout: 8000 });
+  await expect(page.locator('.applied-note')).toContainText('Applied', { timeout: 8000 });
   await expect(page.locator('main')).toContainText('nothing widens, so no passkey');
   expect(await page.evaluate(() => D.audit[0].detail)).toContain('no passkey');
   await expect(page.locator('[data-act="rollback-now"]')).toBeVisible();
@@ -32,7 +32,7 @@ test('a widening change (a promotion) needs the passkey and says why', async ({ 
   await page.locator('[data-act="apply-go"]').click();
   await expect(page.locator('#su-go')).toBeVisible();
   await page.locator('#su-go').click();
-  await expect(page.locator('.callout.ember')).toContainText('Applied.', { timeout: 8000 });
+  await expect(page.locator('.applied-note')).toContainText('Applied', { timeout: 8000 });
 });
 
 test('mixing a widening and a non-widening change in one set needs the passkey', async ({ page }) => {

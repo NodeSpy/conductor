@@ -48,7 +48,8 @@ async function inject(page) {
         const out = [], seenHref = new Set();
         root.querySelectorAll(INTERACTIVE).forEach((el) => {
           if (!visible(el)) return;
-          if (!includeChrome && el.closest('.strip, .rail, .tabbar, .skip, .toasts')) return; // chrome (incl. the skip link) and transient toasts
+          if (!includeChrome && el.closest('.strip, .rail, .tabbar')) return;
+          if (el.closest('.skip, .toasts')) return; // the skip link (off screen until focused) and transient toasts
           if (el.closest('[data-volatile]') && !el.dataset.act) return;
           if (el.parentElement && el.parentElement.closest('a[href], button')) return; // nested inside another control
           const href = el.tagName === 'A' ? el.getAttribute('href') : null;

@@ -502,3 +502,9 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 [data-density="compact"] .dl-tbl td, [data-density="compact"] .tbl td, [data-density="compact"] .dl-list > li { font-size: var(--table-font-size); }
 /* the When box on a phone: its sentence takes the row; the test event and issue counts wrap under it */
 @media (max-width: 720px) { .wfb-page .trig-card .sc-head { flex-wrap: wrap; } .wfb-page .trig-card .sc-head > .grow { flex: 1 1 calc(100% - 120px); min-width: 0; } .wfb-page .trig-card .sc-head > .dl-sub, .wfb-page .trig-card .sc-head > .st { flex-basis: 100%; order: 3; padding-left: 4px; white-space: normal; } }
+/* the parallel group's "join" label reads at the text contrast floor */
+.par-join .caps { color: var(--color-text-secondary) !important; background: var(--color-bg-surface) !important; }
+/* on a phone a diff keeps each line whole and scrolls sideways inside its box (wrapping a narrow column left one word
+   per line); the approval kicker flows as text */
+@media (max-width: 720px) { .diff { overflow-x: auto; } .diff .dl > span:nth-child(4) { white-space: pre; overflow-wrap: normal; } }
+.dl-kick { display: block; } .dl-kick > .st { vertical-align: -2px; margin-right: 6px; }

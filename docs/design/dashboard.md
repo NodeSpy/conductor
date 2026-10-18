@@ -168,9 +168,17 @@ restyle them (`css/app.css`, `css/components.css`, helpers in `js/ui.js`).
   a person is needed or the thing is live (failed, needs you, waiting, running, shadow), and bold when a person is
   needed. Passed is a quiet sage dot with an ink word; parked is slate pause bars; not reached is a dash; needs you is
   an ember diamond; running is a blue arc that turns. No capsules, no row tints. Every status on every screen goes
-  through it, and each state has one look across the app (`status.spec.js`).
+  through it, and each state has one look across the app (`status.spec.js`). The words are the brand's nine (Passed,
+  Running, Failed, Needs you, Waiting, Parked, Not reached, Shadow, Staged); a mark is used only for a state, never a
+  value, count or ratio ("1 failed" has the failed mark; "3 to do" is text).
+- **Labels** (`UI.label`): plain words in secondary ink, a middot between neighbours; no box, no fill (the status rule
+  allows no capsules). A tier name is a plain config value.
+- **Dialogs** (`UI.modal`, drawers, the command line): open on the dialog itself (Enter does nothing until you move to
+  a button; a form focuses its first field, a destructive confirm its Cancel), keep Tab inside, return focus to the
+  opener on any close. Menus take ↑/↓/Home/End/Esc. A double-click is one action.
 - **Rows** (Home's row, the model for every list): the mark · a plain title with the reason or detail under it · the
-  age · one action, and a ⋯ menu for the rest. A row that needs someone gets a 3px leading edge in its state's colour
+  age · one action, and a ⋯ menu for the rest. A healthy row carries no mark at all (no bare dots); the view's first
+  item may take the one primary button, the rest are secondary. A row that needs someone gets a 3px leading edge in its state's colour
   and its reason in that colour under the name; nothing else in a list is coloured. Long values wrap inside their
   column; actions never cover text (`sweep.spec.js`).
 - **Grouped run table** (Activity): "Needs attention · N" (its count in the accent), "Running now", "Finished" (paged),

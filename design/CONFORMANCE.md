@@ -43,6 +43,10 @@ Deliberate differences:
 - The avatar opens a small menu (theme, display preferences, glossary, the prototype's demo data, Lock): the mock has
   no place for these.
 - When config changes are staged, the top bar shows "N not applied" (the staged-change mark) linking to the review.
+- The phone header's page name follows every route (it went stale before round 2); the rail's link weight (500) and the
+  12px group label are the mock's, which the book's type sheet disagrees with (left for the brand designer).
+- A skip link ("Skip to the page") appears on keyboard focus; sign-in shows no rail, top bar or tab bar, and uses the
+  kit's horizontal logo file.
 
 | | Approved | Prototype |
 |---|---|---|
@@ -103,13 +107,17 @@ Deliberate differences:
 Source: v2 `runPage()` and `runTreeDaylight()`, and the status-column run tree.
 
 Matches: the plain title, the summary sentence, the status mark on the right; the actions row (Retry primary, Open the
-pull request, Dismiss); What happened as the step tree (number, mark, what it did, how long; nested workflow calls as
+pull request, Dismiss: when a check failed on an earlier step's change, the primary retries from that step and rerunning
+the check alone is secondary); What happened as the step tree (number, mark, what it did, how long; nested workflow calls as
 one node); Details (Started with the clock, Took, Triggered by in words, Run id, the signature).
 
 Deliberate differences:
 - **One page for a running and a finished run**: a running run's actions are Stop run… (confirmed) and its running step
   shows its live log; **Open in paseo** appears only on a step with a live paseo session.
 - **Back to Activity** (keeping Activity's filters and scroll) instead of crumbs; no run tabs or previous/next.
+- The title is the **sans** (the h3 style at the h2 size): BRAND.md's serif rule puts generated titles in Atkinson,
+  though the mock sets it in Fraunces (a conflict for the brand designer to settle at the source).
+- No "Download the run record" (export is retired). A running run's record says "signed when it finishes".
 - Below the tree, the **selected step** (outputs, inputs, log, diff) instead of the mock's "Why the tests failed" card,
   which is that view for the failing step. An Audit card sits under Details.
 
@@ -130,8 +138,14 @@ change counts with Replaces in the warning colour and its note, Where / Effect /
 passkey, Deny…, who can approve, Technical details folded); What it can do in three groups; the Timeline.
 
 Deliberate differences:
-- What the bot is doing now is a **status mark and a word** ("Working on case c31"), not the mock's capsule (the status
-  rule).
+- What the bot is doing now is a **status mark and a word** ("Running", "Parked", "Shadow"), not the mock's capsule (the
+  status rule's vocabulary).
+- The proposal title is the **sans** (BRAND.md's serif rule for generated titles; the mock sets it in Fraunces).
+- **Overview | Technical details tabs** only when a plan or diff decides it (Terraform); otherwise Technical details is
+  a folded disclosure as in the mock. The decision bar is pinned to the bottom on both tabs (direction from review).
+- **On a phone** the approval stands alone: no bot head, tabs or crumbs above it, one Back to where it was opened from,
+  and Approve and Deny in one row.
+- "Who can approve" names the bot's own approvers (not the team's).
 - Rotate session, Sweep now, Deliver an event and Workers sit in a **⋯ menu** beside the head (the mock has no place for
   them).
 
@@ -165,9 +179,10 @@ Deliberate differences:
 ## Screens without a mock (brand book components only, in the approved screens' patterns)
 
 Each uses only the brand book's components (cards, the status mark, labels, buttons, fields, tables, tabs) and the
-approved screens' patterns: one compact row per thing (its mark, name and kind, what it's doing or why it needs you, one
-action and a ⋯ menu), a page title (with a sentence only when it says something the rows don't), quiet secondary
-panels, technical detail folded.
+approved screens' patterns: one compact row per thing (its name and kind, what it's doing, one action and a ⋯ menu;
+only a row that needs someone carries a mark, with its reason), a page title that matches the nav (with a sentence only
+when it says something the rows don't), labels as plain words (no capsules), quiet secondary panels, technical detail
+folded. Teams take the bot page's header.
 
 | Screen | What it follows | Prototype |
 |---|---|---|
@@ -176,7 +191,7 @@ panels, technical detail folded.
 | Secrets | one line each: name and vault, used by in words, changed; the reference in the row's detail | ![](conformance/secrets-desktop-light-prototype.jpg) |
 | Packs | compact rows; Add a pack opens the catalog; guided overrides | ![](conformance/packs-desktop-light-prototype.jpg) |
 | Pack overrides | roles → compatible connections, triggers with consent, steps via the builder, YAML second | ![](conformance/pack-overrides-desktop-light-prototype.jpg) |
-| Safety | the sandbox in plain words; exceptions; containers; each bot's three groups | ![](conformance/safety-desktop-light-prototype.jpg) |
+| Safety | the sandbox in plain words; exceptions; containers; each bot's three groups (no tier ladder) | ![](conformance/safety-desktop-light-prototype.jpg) |
 | System · Config | applied changes full width, readable at a glance | ![](conformance/config-desktop-light-prototype.jpg) |
 | System · Updates | plain words first; technical detail folded | ![](conformance/updates-desktop-light-prototype.jpg) |
 | System · Access | who can get in, passkeys, sessions, when it asks; technical detail folded | ![](conformance/access-desktop-light-prototype.jpg) |

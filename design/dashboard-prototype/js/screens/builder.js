@@ -61,7 +61,7 @@
     <div class="wl-layout"><aside class="panel wl-folders">${folderNav(rows)}</aside><div class="wl-main">
     ${crumbs}
     <div class="filters"><div class="input-icon">${icon('search')}<input class="input" placeholder="name, event or folder" value="${esc(wl.q)}" data-on-input="wl-q" aria-label="Filter workflows"></div>${UI.seg([['all', 'all'], ['config', 'yours'], ['pack', 'packs'], ['bot', 'bots']], wl.owner, 'wl-owner')}
-      ${UI.selectChip({ icon: 'folder', on: !!wl.folder, label: 'Folder', cls: 'wl-fsel', attrs: 'data-on-change="wl-folder-sel"', options: `<option value="">all folders</option>${UI.allFolders().filter((f) => rows.some((r) => within(r.folder, f))).map((f) => `<option value="${esc(f)}"${f === wl.folder ? ' selected' : ''}>${esc(f)}</option>`).join('')}` })}
+      ${UI.selectChip({ icon: 'folder', on: !!wl.folder, label: 'Folder', cls: 'wl-fsel', attrs: 'data-on-change="wl-folder-sel"', options: `<option value="">All folders</option>${UI.allFolders().filter((f) => rows.some((r) => within(r.folder, f))).map((f) => `<option value="${esc(f)}"${f === wl.folder ? ' selected' : ''}>${esc(f)}</option>`).join('')}` })}
       <span class="count-note small muted" id="wl-note">${wl.q && wl.folder ? 'searching every folder' : ''}</span></div>
     ${UI.wfTable(rows)}</div></div></div>`;
   });

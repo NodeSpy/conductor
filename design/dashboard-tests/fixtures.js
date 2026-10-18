@@ -43,7 +43,7 @@ async function applyStaged(page, { expectWidening = false } = {}) {
   await go2.click();
   if (needsPk) await page.locator('#su-go').click(); // only a widening change asks for the passkey
   await base.expect(page.locator('.page-head h1')).toHaveText(/Applied/);
-  await base.expect(page.locator('.callout.ember')).toContainText('Applied.', { timeout: 8000 });
+  await base.expect(page.locator('.applied-note')).toContainText('Applied', { timeout: 8000 });
 }
 async function stagedCount(page) { return page.evaluate(() => window.D.pending.length); }
 

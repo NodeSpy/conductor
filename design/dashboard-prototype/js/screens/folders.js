@@ -46,7 +46,7 @@
 
   /* ---------- the folder filter, shared by Needs you, approvals, runs, browsers ---------- */
   UI.folderScope = () => (D.prefs && D.prefs.folder) || '';
-  UI.folderChip = (extra = '') => { const f = UI.folderScope(); return UI.selectChip({ icon: 'folder', on: !!f, label: 'Folder filter', wrapAttrs: extra, attrs: 'data-on-change="folder-scope"', options: `<option value="">all folders</option>${UI.allFolders(false).map((x) => `<option value="${esc(x)}"${x === f ? ' selected' : ''}>${esc(x)}</option>`).join('')}` }); };
+  UI.folderChip = (extra = '') => { const f = UI.folderScope(); return UI.selectChip({ icon: 'folder', on: !!f, label: 'Folder filter', wrapAttrs: extra, attrs: 'data-on-change="folder-scope"', options: `<option value="">All folders</option>${UI.allFolders(false).map((x) => `<option value="${esc(x)}"${x === f ? ' selected' : ''}>${esc(x)}</option>`).join('')}` }); };
   UI.act('folder-scope', (sel) => { D.prefs.folder = sel.value; S.save(); UI.rerender(); });
   /** The bot an attention item, a run or a browser session belongs to, if any. */
   UI.botOfHref = (href) => { const m = String(href || '').match(/#\/bots\/([^/]+)/); if (m) return m[1]; const b = String(href || '').match(/#\/browser\/([^/]+)/); if (b) { const s = D.browsers.find((x) => x.id === b[1]); return s && s.identity.startsWith('bot:') ? s.identity.slice(4) : null; } return null; };

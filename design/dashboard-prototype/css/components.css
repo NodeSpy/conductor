@@ -97,7 +97,7 @@
 .wz-note { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; row-gap: 2px; font-size: var(--type-caption-size); color: var(--color-text-tertiary); line-height: 1.45; }
 .wz-note svg { width: 15px; height: 15px; color: var(--color-text-secondary); grid-row: span 2; margin-top: 1px; }
 .wz-note b { color: var(--color-text-secondary); font-weight: 600; }
-@media (max-width: 720px) { .page-head h1 .sub { display: block; margin: 6px 0 0; } }
+
 
 /* ---------- value-source field: where a value comes from, never the value. The source is a quiet menu inside the
  * field (Daylight), the reference sits beside it in mono, and the check ("resolves") follows below. ---------- */
