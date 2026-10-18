@@ -52,7 +52,13 @@ async function headAction(page, selector) {
   const el = page.locator(selector).first();
   if (await el.count() && await el.isVisible()) return el.click();
   // a bot's own actions (rotate, sweep, deliver) live in the ⋯ menu beside its head
-  await page.locator('[data-act="bot-more"], .page-head .ph-more').first().click();
+  // a folded page-head action: its ⋯ menu lists it by its label
+  if (await el.count() && await el.evaluate((x) => x.classList.contains('ph-folded'))) {
+    const label = (await el.textContent()).trim() || await el.getAttribute('aria-label');
+    await page.locator('.page-head .ph-more').first().click();
+    return page.locator('#pop-menu button', { hasText: label }).first().click();
+  }
+  await page.locator('[data-act="bot-more"]:visible, [data-act="team-more"]:visible').first().click();
   await page.locator(`#pop-menu ${selector}`).first().click();
 }
 module.exports = { test, expect: base.expect, go, isPhone, applyStaged, stagedCount, headAction };

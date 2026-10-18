@@ -122,7 +122,7 @@ test('Safety: every bot in words (on its own / asks you first / never), linked f
   const sre = page.locator('.panel', { hasText: 'platform-sre' }).first();
   await expect(sre.locator('.cang[data-s="ok"]')).toContainText('post a message');
   await expect(sre.locator('.cang[data-s="ember"]')).toContainText('apply a signed plan');
-  await expect(sre.locator('.cang[data-s="fail"]')).toContainText('delete in GitHub');
+  await expect(sre.locator('.cang[data-s="fail"]')).toContainText('Delete in GitHub');
   await go(page, '#/bots/platform-sre/access');
   await expect(page.locator('.dl-can .cang[data-s="ok"]')).toContainText('post a message');
 });

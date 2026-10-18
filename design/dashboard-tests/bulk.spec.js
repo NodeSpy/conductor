@@ -1,7 +1,7 @@
 // Bulk: tick rows (shift-click for a range); the selection bar replaces the list's header in place, pinned at the
 // top ("2 selected", the actions that apply, Select all matching, Clear); config changes land as one change set in one
 // diff (here non-widening, so a plain Apply); destructive actions confirm. (Riley M2)
-const { test, expect, go } = require('./fixtures');
+const { test, expect, go, isPhone } = require('./fixtures');
 
 test('workflows: select two, move both to a folder, one diff, applied without a passkey', async ({ page }) => {
   await go(page, '#/workflows', { fresh: true });
@@ -32,7 +32,19 @@ test('workflows: shift-click selects a range; disable stages enabled: false', as
   expect(await page.evaluate(() => D.pending.find((c) => c.key === 'ci-fixer').after)).toContain('enabled: false');
 });
 
+test('phone: ticking runs in Activity shows the selection bar at the top of the list', async ({ page }) => {
+  test.skip(!isPhone(page), 'phone list');
+  await go(page, '#/activity', { fresh: true });
+  await page.locator('#act-phone input[data-act="act-sel-row"][data-id="r-7ef0"]').click();
+  await page.locator('#act-phone input[data-act="act-sel-row"][data-id="r-7e64"]').click();
+  await expect(page.locator('#act-phone .dl-selbar')).toContainText('2 selected');
+  await page.locator('#act-phone [data-act="act-bulk-retry"]').click();
+  await page.locator('#cf-ok').click();
+  expect(await page.evaluate(() => D.runs.filter((r) => ['r-7ef0', 'r-7e64'].includes(r.retry_of)).length)).toBe(2);
+});
+
 test('runs: the selection bar takes the header row; retry the failed ones in one go; stop running ones with a confirmation', async ({ page }) => {
+  test.skip(isPhone(page), 'the desktop table (the phone list has its own test)');
   await go(page, '#/activity', { fresh: true });
   await page.locator('#act-tbl input[data-act="act-sel-row"][data-id="r-7ef0"]').click();
   await page.locator('#act-tbl input[data-act="act-sel-row"][data-id="r-7e64"]').click();

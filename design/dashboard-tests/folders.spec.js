@@ -74,7 +74,7 @@ test('search across folders; breadcrumbs on bot and team pages', async ({ page }
 test('phone: the tree collapses to a drill-down list', async ({ page }) => {
   test.skip(!isPhone(page), 'phone layout');
   await go(page, '#/bots');
-  await page.locator('.drill a.grow', { hasText: 'work' }).click();
+  await page.locator('.drill a.grow[href="#/folders/work"]').click(); // by href: "work" also matches "workflow" in other rows
   await expect(page).toHaveURL(/#\/folders\/work$/);
   await page.locator('.drill a.grow', { hasText: 'platform' }).first().click();
   await expect(page.locator('.drill')).toContainText('release-scribe');

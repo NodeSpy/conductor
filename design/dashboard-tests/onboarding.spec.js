@@ -11,6 +11,7 @@ test('Home: Get started lists what is left, derived from the setup; done steps s
   await expect(gs.locator('[data-gs="safety"]')).toBeVisible();
   await gs.locator('[data-gs="safety"] .btn').click();
   await expect(page).toHaveURL(/#\/safety/);
+  await expect(page.locator('#main h1').first()).toHaveText(/Safety/); // rendered (visiting it is what ticks the step)
   await go(page, '#/overview');
   await expect(page.locator('.dl-gs [data-gs="safety"]')).toHaveCount(0);
   await expect(page.locator('.dl-gs .dl-gs-done')).toContainText('Check what your bots can do');

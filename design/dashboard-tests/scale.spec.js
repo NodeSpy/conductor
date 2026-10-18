@@ -8,10 +8,12 @@ test('Activity: Finished pages by 20 ("Show 20 more (N in all)"), however many r
   await go(page, '#/activity', { fresh: true });
   await many(page, 400);
   await go(page, '#/activity?since=');
-  const done = page.locator('#act-tbl tbody.g-done tr[data-href]');
+  // the desktop table or the phone list, whichever is showing
+  const done = page.locator('#act-tbl tbody.g-done tr[data-href]:visible, #act-phone .dl-runs-phone:last-of-type > li:visible');
   await expect(done).toHaveCount(20);
-  await expect(page.locator('#act-more')).toContainText(/Show 20 more \(\d+ in all\)/);
-  await page.locator('#act-more').click();
+  const more = page.locator('[data-act="act-more"]:visible');
+  await expect(more).toContainText(/Show 20 more \(\d+ in all\)/);
+  await more.click();
   await expect(done).toHaveCount(40);
   // the runs-per-hour strip stays one strip, whatever the count
   await expect(page.locator('#act-strip svg.dl-hours')).toHaveCount(1);

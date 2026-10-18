@@ -508,3 +508,15 @@ details.dl-card.acc-tech { padding: 14px 22px; }
    per line); the approval kicker flows as text */
 @media (max-width: 720px) { .diff { overflow-x: auto; } .diff .dl > span:nth-child(4) { white-space: pre; overflow-wrap: normal; } }
 .dl-kick { display: block; } .dl-kick > .st { vertical-align: -2px; margin-right: 6px; }
+/* phones: lists with bulk select keep their selection bar (the table header is otherwise hidden) and each workflow card
+   keeps its ⋯ menu; the tab bar's count stays above the type floor */
+@media (max-width: 720px) {
+  .tbl.responsive thead.selecting { display: block; position: sticky; top: 0; z-index: 3; background: var(--color-bg-surface); }
+  .tbl.responsive thead.selecting tr, .tbl.responsive thead.selecting th { display: block; padding: 0; border: 0; }
+  #wl-body tr[data-row] { grid-template-areas: "sel wf last" ". on acts" ". risk risk"; }
+  #wl-body tr[data-row] > td.wl-acts { display: block; grid-area: acts; justify-self: end; padding: 0 !important; }
+  .tabbar .count { font-size: 11.5px; min-width: 18px; }
+}
+/* phones: the builder's side cards (Try it, At a glance, the config file) and the Config file tab stack under the recipe
+   (an old pane rule hid them, which left the Config file tab blank) */
+@media (max-width: 720px) { .wfb-page .wfb.pane-steps .wfb-side { display: block; } .wfb-page .wfb-side-card .wfb-side { max-height: 60vh; } }

@@ -13,7 +13,7 @@ test('team page: "Add a bot" creates a new bot on the team, applies, and lands b
   await expect(page.locator('#team-add-sel')).toContainText('billing-sre (moves from finance)');
   await page.locator('#team-add-sel').selectOption('__new__');
   await expect(page).toHaveURL(/#\/bots\/new\/settings\?team=platform/);
-  await expect(page.locator('.page-head .sub')).toContainText('on team platform');
+  await expect(page.locator('.page-head .sub')).toContainText(/on team platform/i);
   await expect(page.locator('#f-df_team')).toHaveValue('platform');
   await expect(page.locator('.inh-hint').first()).toContainText('team platform'); // inherited, narrowable
   await page.fill('[id="f-df__name"]', 'platform-cost'); await page.locator('[id="f-df__name"]').blur();

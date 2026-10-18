@@ -105,7 +105,7 @@ test('dismiss a failed run from Needs you; the record stays in Activity', async 
   await page.locator('[data-act="run-dismiss"]').click();
   expect(await page.evaluate(() => D.attention.some((a) => a.href === '#/runs/r-7ef0'))).toBe(false);
   await go(page, '#/activity');
-  await expect(page.locator('tr[data-href="#/runs/r-7ef0"]')).toBeVisible();
+  await expect(page.locator('tr[data-href="#/runs/r-7ef0"]:visible, #act-phone a[href="#/runs/r-7ef0"]:visible').first()).toBeVisible();
 });
 
 test('a running step offers "Restart this step", which stops the run first (Cancel focused)', async ({ page }) => {

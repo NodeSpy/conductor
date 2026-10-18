@@ -11,8 +11,13 @@ test('one source for the last 12 hours: Home\'s tile, its failures and Activity 
   expect(sum).toBe(n);
   const failedAt = (await page.locator('.dl-card', { hasText: 'Last 12 hours' }).locator('.dl-foot-note').textContent()).match(/ci-fixer at (\d\d:\d\d)/)[1];
   // the same page load (the demo's times are relative to the load, so a reload could cross a minute)
-  await page.evaluate(() => { location.hash = '#/activity?since=720'; }); await page.waitForSelector('#act-tbl');
-  expect(await page.locator('#act-tbl tbody tr[data-href]').count() + await page.locator('#act-tbl tbody.g-done').evaluate((t) => { const m = (t.querySelector('#act-more') || {}).textContent || ''; const x = m.match(/\((\d+) in all\)/); return x ? Number(x[1]) - t.querySelectorAll('tr[data-href]').length : 0; })).toBe(n);
+  await page.evaluate(() => { location.hash = '#/activity?since=720'; }); await page.waitForSelector('#act-strip');
+  // the runs Activity lists for the same 12 hours (desktop table or phone list): shown rows, plus the rest of Finished
+  const listed = await page.evaluate(() => { const vis = (e) => e.getClientRects().length > 0; const rows = [...document.querySelectorAll('#act-tbl tr[data-href], #act-phone li a[href^="#/runs/"]')].filter(vis);
+    const more = [...document.querySelectorAll('[data-act="act-more"]')].find(vis), m = more && more.textContent.match(/Show (\d+) more \((\d+) in all\)/);
+    const shownDone = [...document.querySelectorAll('#act-tbl tbody.g-done tr[data-href], #act-phone .dl-runs-phone:last-of-type li')].filter(vis).length;
+    return rows.length + (m ? Number(m[2]) - shownDone : 0); });
+  expect(listed).toBe(n);
   await expect(page.locator('#act-strip')).toContainText(`ci-fixer at ${failedAt}`);
 });
 
@@ -76,7 +81,7 @@ test('a bot\'s reach is said once: a verb it may never run says never in its tab
   await go(page, '#/bots/platform-sre/access', { fresh: true });
   const row = page.locator('.tbl tr', { hasText: 'gh.delete_*' });
   await expect(row.locator('td[data-l="what it does"]')).toContainText('never');
-  await expect(page.locator('.cang[data-s="fail"]')).toContainText('delete in GitHub');
+  await expect(page.locator('.cang[data-s="fail"]')).toContainText('Delete in GitHub');
 });
 
 test('a connection says which bots reach it, from their grants (power N4)', async ({ page }) => {
@@ -203,6 +208,6 @@ test('navigating in the app, a page is visible at once: never left at opacity 0 
     await page.waitForTimeout(300);
     const hidden = await page.evaluate(() => [...document.querySelectorAll('#main .page > *')].filter((x) => getComputedStyle(x).opacity !== '1').length);
     expect(hidden, r).toBe(0);
-    await expect(page.locator('#main h1, #main .dl-ptitle').first()).toBeVisible();
+    await expect(page.locator('#main .page > :not(.sr-only):not(.dl-crumbs)').first()).toBeVisible();
   }
 });

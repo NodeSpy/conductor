@@ -356,7 +356,7 @@
   function hero(m) {
     const t = teamOf(m), open = D.cases.filter((c) => c.bot === m.name && c.status === 'open'), cur = open[0];
     const role = (S.staged('bots', m.name) || m.cfg || {}).description || m.role || (t ? `A bot on the ${t.name} team` : 'A bot');
-    const now = m.shadow ? UI.statusMark('shadow', 'In shadow mode') : m.home === 'live' ? UI.statusMark('run', cur ? `Working on case ${cur.id}` : 'Working') : UI.statusMark('idle', 'Idle');
+    const now = m.shadow ? UI.statusMark('shadow', 'Shadow') : m.home === 'live' ? `${UI.statusMark('run', 'Running')}${cur ? ` <span class="dl-sub">case ${cur.id}</span>` : ''}` : UI.statusMark('idle', 'Parked');
     return `<div class="dl-crumbs">${UI.folderCrumbs(UI.folderOfBot(m.name, false))}${t ? ` › <a href="#/teams/${t.name}">team ${t.name}</a>` : ''}</div>
       <div class="dl-bothead"><span class="dl-bot-av">${esc(m.name.split(/[-_]/).map((w) => w[0]).join('').slice(0, 2))}</span><div><h1>${esc(m.name)}</h1><p class="dl-lead">${esc(role)}</p></div>${now}
         <button class="icon-btn" data-act="bot-more" data-m="${m.name}" aria-label="More for ${esc(m.name)}">${icon('more')}</button></div>`;
@@ -519,7 +519,7 @@
       ${shaped ? `<nav class="dl-tabs prop-tabs" role="tablist">${[['overview', 'Overview'], ['tech', 'Technical details']].map(([k, l]) => `<a href="#" role="tab" data-act="prop-tab" data-p="${p.id}" data-v="${k}" class="${tab === k ? 'on' : ''}" aria-selected="${tab === k}">${l}</a>`).join('')}</nav>
       <div class="prop-body">${tab === 'tech' ? tech : overview}</div>` : `<div class="prop-body">${overview}<details class="dl-tech-d"><summary>${icon('chev')}Technical details <span class="dl-sub">the proposal, its case and the digest your passkey signs</span></summary>${techFacts}</details></div>`}
       ${pend ? `<div class="dl-decide prop-decide"><button class="btn lg primary" data-act="p-approve" data-p="${p.id}" data-d="approve">${icon('passkey')}Approve with passkey</button><button class="btn lg secondary" data-act="p-approve" data-p="${p.id}" data-d="deny">Deny…</button><span class="hint">${(() => { const ops = S.effective(m).operators.v || []; return ops.length ? `Only ${ops.map(esc).join(' or ')} can approve.` : 'Any operator can approve.'; })()}</span></div>` : p.status === 'shadow' ? decided : ''}</article>`;
-    const x = UI.botCan(m), plain = (i) => esc(String(i.text).replace(/ \([^)]*\)$/, ''));
+    const x = UI.botCan(m), plain = (i) => esc(String(i.text).replace(/ \([^)]*\)$/, '').replace(/^./, (c) => c.toUpperCase()));
     const can = `<section class="dl-card dl-can"><header class="dl-ch"><h2>What ${esc(m.name)} can do</h2></header>${[['Does on its own', 'ok', x.own], ['Asks you first', 'ember', x.asks], ['Never', 'fail', x.never]].map(([h, s2, xs]) => `<div class="cang" data-s="${s2}"><h3>${UI.mark(s2)}${h}</h3><ul>${xs.map((i) => `<li>${plain(i)}</li>`).join('') || '<li class="dl-sub">nothing</li>'}</ul></div>`).join('')}</section>`;
     const tl = `<section class="dl-card"><header class="dl-ch"><h2>Timeline</h2></header><ol class="dl-story"><li><span class="sg">${UI.mark('ok')}</span><div><b>Proposed by ${esc(m.name)}</b><span>${p.cls === 'event' ? 'while handling the event' : `in case ${p.case}`}</span></div><span class="t">${UI.agoText(p.at)}</span></li>
       <li><span class="sg">${UI.mark(pend ? 'ember' : PS[p.status] || 'idle')}</span><div><b>${pend ? 'Waiting for your decision' : decidedWord(p)}</b><span>${pend && p.expires ? `expires in ${UI.humanSpan(p.expires)}` : esc(p.approver || '')}</span></div><span class="t">${pend ? 'now' : ''}</span></li></ol></section>`;
@@ -593,7 +593,7 @@
   };
   /** What a bot can do, as the approved mock draws it: three plain groups (on its own · asks you first · never), each
       headed by its mark; items in plain words, where they land as a quiet word. The tier names live in the table below. */
-  UI.botCanHTML = (m, compact) => { const x = UI.botCan(m), plain = (i) => esc(String(i.text).replace(/ \([^)]*\)$/, ''));
+  UI.botCanHTML = (m, compact) => { const x = UI.botCan(m), plain = (i) => esc(String(i.text).replace(/ \([^)]*\)$/, '').replace(/^./, (c) => c.toUpperCase()));
     const grp = (h, s2, items, empty) => `<div class="cang" data-s="${s2}"><h3>${UI.mark(s2)}${h}</h3><ul>${items.map((i) => { const env = ((S.view().connectors.find((cc) => i.v.startsWith(cc.name + '.')) || {}).env); return `<li title="${esc(i.v)}">${plain(i)}${env ? ` <span class="dl-sub">· ${esc(env)}</span>` : ''}</li>`; }).join('') || `<li class="dl-sub">${empty}</li>`}</ul></div>`;
     return `<div class="dl-can${compact ? ' compact' : ''}">${x.shadow ? '<p class="dl-sub">In shadow mode: even what it does on its own is only recorded, never done.</p>' : ''}<div class="dl-can-grid">${grp('Does on its own', 'ok', x.own, 'Nothing: it asks first')}${grp('Asks you first', 'ember', x.asks, 'Nothing needs your approval')}${grp('Never', 'fail', x.never, 'Nothing is refused outright')}</div></div>`; };
   const TIERW = { observe: 'reads only', reversible: 'can be undone', propose: 'asks first', commit_money: 'spends money', never: 'never' };
