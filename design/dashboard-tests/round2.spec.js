@@ -147,7 +147,7 @@ test('page content is never hidden behind an entrance animation (brand B3, bugs 
 });
 
 test('no downloads anywhere: export is retired (bugs M15)', async ({ page }) => {
-  for (const r of ['#/runs/r-7ef0', '#/logs', '#/logs/audit', '#/secrets/env', '#/activity']) {
+  for (const r of ['#/runs/r-7ef0', '#/logs', '#/logs/audit', '#/secrets/settings', '#/activity']) {
     await go(page, r, { fresh: true });
     await expect(page.locator('#main').getByRole('button', { name: /download|export/i })).toHaveCount(0);
   }

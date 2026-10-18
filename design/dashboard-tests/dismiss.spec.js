@@ -7,7 +7,7 @@ const OPENERS = [
   ['#/bots', '[data-act="team-new"]', 'new team'],
   ['#/bots', '[data-act="f-new"]', 'new folder'],
   ['#/secrets', '[data-act="secret-add"]', 'add a secret'],
-  ['#/secrets/env', '[data-act="env-add"]', 'add an env var'],
+  ['#/secrets/settings', '#env [data-act="env-add"]', 'add an env var'],
   ['#/connectors/connectors', '[data-act="conn-add"]', 'add a connector'],
   ['#/runs/r-7ef0', '[data-act="retry"]', 'retry a run'],
   ['#/bots/platform-sre/proposals/p12', '[data-act="p-approve"][data-d="approve"]', 'approve (seal)'],
@@ -51,8 +51,9 @@ for (const [from, to, how] of [['#/bots', '#/bots/new', 'New bot wizard'], ['#/b
 }
 
 test('destructive confirmations focus Cancel', async ({ page }) => {
-  await go(page, '#/secrets/env', { fresh: true });
-  await page.locator('[data-act="env-del"]').first().click();
+  await go(page, '#/secrets/settings', { fresh: true });
+  await page.locator('[data-act="env-more"]').first().click();
+  await page.locator('#pop-menu [data-act="env-del"]').click();
   await expect(page.locator('#cf-cancel')).toBeFocused();
   await page.keyboard.press('Escape');
   await go(page, '#/config/collections');

@@ -184,7 +184,7 @@ test.describe('secrets and vars', () => {
     await page.locator('#su-go').click();
     await page.locator('[data-act="sec-open"][data-s="house/sentry-dsn"]').click(); // the reference is in the row's detail
     await expect(page.locator('#sec-body li[data-secret="house/sentry-dsn"]')).toContainText('{{ vault "house" "sentry-dsn" }}');
-    await expect(page.locator('#sec-body li[data-secret="house/sentry-dsn"]')).toContainText('a short name the dashboard shows');
+    await expect(page.locator('#sec-body li[data-secret="house/sentry-dsn"]')).toContainText('a label for this list');
     expect(await state(page, () => JSON.stringify(D))).not.toContain('abc@o0.ingest');
     await page.locator('[data-act="sec-more"][data-s="house/sentry-dsn"]').click();
     await page.locator('#pop-menu [data-act="secret-set"]').click();
@@ -192,10 +192,9 @@ test.describe('secrets and vars', () => {
     // no op:// anywhere: one reference syntax
     expect(await page.locator('#sec-body').textContent()).not.toContain('op://');
     // filters
-    await page.locator('[data-act="sec-f"][data-v="unused"]').click();
+    await page.fill('.fb[data-fb="sec"] .fb-in', 'used:unused');
     await expect(page.locator('#sec-body li[data-secret="house/sentry-dsn"]')).toBeVisible();
-    await page.locator('[data-act="sec-f"][data-v="all"]').click();
-    await page.fill('[data-on-input="sec-q"]', 'slack');
+    await page.fill('.fb[data-fb="sec"] .fb-in', 'slack');
     await expect(page.locator('#sec-body li[data-secret]')).toHaveCount(2);
     await page.locator('[data-act="sec-more"][data-s="op/Agents/Slack/bot-token"]').click();
     await page.locator('#pop-menu [data-act="secret-ref"]').click();
@@ -203,14 +202,17 @@ test.describe('secrets and vars', () => {
     await expect(page.locator('.diff').first()).toContainText('{{ vault \\"op\\" \\"Agents/Slack/bot-token-2\\" }}');
     await page.locator('[data-act="discard-all"]').click(); await page.locator('#cf-ok').click();
     await go(page, '#/secrets');
-    await page.locator('.callout.danger [data-act="vault-edit"]').click();
+    await page.locator('.callout.danger a', { hasText: 'See the vault' }).click(); // the banner leads to the vault's card
+    await page.locator('#vault-hcv [data-act="vault-edit"]').click();
     await page.fill('#f-hashicorp__unlock_token', 'env:VAULT_TOKEN_2026');
     await submit(page);
     await applyStaged(page);
     expect(await state(page, () => D.vaults.find((v) => v.name === 'hcv').status)).toBe('ok');
-    await go(page, '#/secrets');
-    await page.fill('input[data-k="review_channel"]', '#reviews'); await page.locator('input[data-k="review_channel"]').press('Enter');
-    await page.locator('[data-act="setting-add"]').click();
+    await go(page, '#/secrets/settings');
+    await page.locator('[data-act="setting-more"][data-s="settings.review_channel"]').click();
+    await page.locator('#pop-menu [data-act="setting-change"]').click();
+    await page.fill('#f-value', '#reviews'); await submit(page);
+    await page.locator('[data-act="setting-add"]').first().click();
     await page.fill('#f-name', 'oncall_channel'); await page.fill('#f-value', '#oncall'); await submit(page);
     await page.locator('a', { hasText: /^Review/ }).click();
     await expect(page.locator('.diff')).toContainText('oncall_channel');
@@ -358,20 +360,20 @@ test.describe('updates, config history, raw editor, access', () => {
     expect(await state(page, () => D.passkeys.length)).toBe(3);
   });
   test('state persists across navigation and reloads; reset demo data restores the seed', async ({ page }) => {
-    // Pause dispatch lives in the status menu (the health word in the top bar): it explains itself and asks first
-    await go(page, '#/overview');
-    await page.locator('.strip .status-btn').click();
-    await page.locator('#pop-menu [data-act="pause"]').click();
-    await expect(page.locator('.modal')).toContainText('no new run starts');
+    // Pause all automation lives in System → Safety: it explains itself and asks first; while paused, Needs you says so
+    await go(page, '#/safety');
+    await page.locator('#pause [data-act="pause"]').click();
+    await expect(page.locator('.modal')).toContainText('Nothing new starts until you resume');
     await page.locator('#cf-ok').click();
     await page.reload();
-    await expect(page.locator('#strip-cells .status-btn')).toContainText('Dispatch paused');
+    await go(page, '#/attention');
+    await expect(page.locator('.dl-needs')).toContainText('All automation is paused');
 
     await go(page, '#/more');
     await page.locator('#main [data-act="reset-demo"]').click(); await page.locator('#cf-ok').click();
     await go(page, '#/overview');
-    await expect(page.locator('#strip-cells .status-btn')).not.toContainText('Dispatch paused');
-    await page.locator('.strip .status-btn').click();
-    await expect(page.locator('#pop-menu [data-act="pause"]')).toContainText('Pause dispatch');
+    await expect(page.locator('.dl-needs')).not.toContainText('All automation is paused');
+    await go(page, '#/safety');
+    await expect(page.locator('#pause [data-act="pause"]')).toContainText('Pause all automation');
   });
 });

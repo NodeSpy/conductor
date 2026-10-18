@@ -3,13 +3,15 @@
 // step or worker (names and sources only). (Riley M6)
 const { test, expect, go, headAction } = require('./fixtures');
 
-test('the Env tab: scopes, uses, a plain-text secret moved into the vault', async ({ page }) => {
+test('Settings: environment variables in the same rows, a plain-text secret moved into the vault; old Env links land here', async ({ page }) => {
+  await go(page, '#/secrets/env', { fresh: true });
+  await expect(page).toHaveURL(/#\/secrets\/settings/);
   await go(page, '#/secrets', { fresh: true });
-  await page.locator('.tabs a[href="#/secrets/env"]').click();
-  await expect(page).toHaveURL(/#\/secrets\/env$/);
-  await expect(page.locator('tr[data-env="runtime:paseo:AWS_PROFILE"]')).toContainText('runtime paseo');
-  const pw = page.locator('tr[data-env="daemon:APP_PASSWORD"]');
-  await expect(pw).toContainText('plain text');
+  await page.locator('.tabs a[href="#/secrets/settings"]').click();
+  await expect(page.locator('li[data-secret="env.runtime:paseo:AWS_PROFILE"]')).toContainText('agents on the runtime paseo');
+  await expect(page.locator('li[data-secret="env.runtime:paseo:AWS_PROFILE"]')).toContainText('${env.AWS_PROFILE}');
+  const pw = page.locator('li[data-secret="env.daemon:APP_PASSWORD"]');
+  await expect(pw).toContainText('Plain text');
   await expect(pw).not.toContainText('svc');
   await page.locator('[data-act="env-to-vault"][data-k="daemon:APP_PASSWORD"]').click();
   await page.locator('#cf-ok').click();
@@ -20,7 +22,8 @@ test('the Env tab: scopes, uses, a plain-text secret moved into the vault', asyn
 });
 
 test('effective environment: the narrowest scope wins, and the sandbox passes only allowed daemon vars', async ({ page }) => {
-  await go(page, '#/secrets/env', { fresh: true });
+  await go(page, '#/secrets/settings', { fresh: true });
+  await page.locator('#env-preview summary').click();
   const eff = page.locator('#env-preview');
   await expect(eff.locator('tr', { hasText: 'NODE_OPTIONS' })).toContainText('workflow ci-fixer');
   await expect(eff.locator('tr', { hasText: 'APP_USER' })).toContainText('scrubbed environment'); // a sandboxed launch never gets the daemon's own env (Isolation.md)
@@ -35,8 +38,8 @@ test('effective environment: the narrowest scope wins, and the sandbox passes on
 });
 
 test('import: secret-looking values go to the vault, never into the file', async ({ page }) => {
-  await go(page, '#/secrets/env', { fresh: true });
-  await headAction(page, '[data-act="env-import"]');
+  await go(page, '#/secrets/settings', { fresh: true });
+  await page.locator('[data-act="env-import"]').click();
   await page.locator('#f-scope').selectOption('daemon');
   await page.fill('#f-text', 'REGION=eu-west-1\nDEPLOY_TOKEN=tok-not-a-real-one-9911\n');
   await page.locator('#gen-submit').click();
@@ -44,6 +47,6 @@ test('import: secret-looking values go to the vault, never into the file', async
   await expect(page).toHaveURL(/#\/config\/apply/);
   const staged = await page.evaluate(() => D.pending.filter((c) => c.coll === 'env').map((c) => [c.key, c.after.value]));
   expect(staged).toEqual(expect.arrayContaining([['daemon:REGION', 'eu-west-1'], ['daemon:DEPLOY_TOKEN', '{{ vault "house" "env-deploy-token" }}']]));
-  const hay = await page.evaluate(() => document.documentElement.outerHTML + JSON.stringify(D) + localStorage.getItem('cd-proto-state-v5'));
+  const hay = await page.evaluate(() => document.documentElement.outerHTML + JSON.stringify(D) + localStorage.getItem('cd-proto-state-v6'));
   expect(hay).not.toContain('tok-not-a-real-one-9911');
 });
