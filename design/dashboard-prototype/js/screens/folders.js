@@ -128,6 +128,17 @@
       ${!kids.length && !n.teams.length && !n.solos.length ? '<div class="item muted small">Empty folder.</div>' : ''}</div>`;
   }
 
+  /** Every bot in one list, answering "what are my bots doing, and does any need me?": the ones waiting for you first,
+      then what's running, then the rest; each says what it's doing in words (its task by name), where it lives and what
+      waits for you. The folder tree below is for organizing. */
+  const botList = () => { const bots = S.view().bots.map((b) => M(b.name) || b), need = (b) => D.attention.filter((a) => UI.botOfHref(a.href) === b.name).length;
+    const rank = (b) => (need(b) ? 0 : b.home === 'live' ? 1 : 2);
+    const row = (b) => { const task = D.cases.find((c) => c.bot === b.name && c.status === 'open'), n = need(b), team = cfgOf('bots', b.name, true).team, folder = UI.folderOfBot(b.name);
+      const doing = b.shadow ? UI.statusMark('shadow', 'Practice mode') : b.home === 'live' ? UI.statusMark('run', 'Running') : UI.statusMark('idle', 'Parked');
+      return `<li class="dl-need bot-li${n ? ' attn' : ''}"${n ? ' data-s="ember"' : ''}><a class="dl-need-a" href="#/bots/${b.name}"><span class="dl-ng"><span class="dl-bot-av sm">${esc(b.name.split(/[-_]/).map((w) => w[0]).join('').slice(0, 2))}</span></span>
+        <span class="dl-nt"><b>${esc(b.name)}</b><span class="dl-why">${b.home === 'live' && task ? `Working on: ${esc(task.title)}` : esc(b.desc || '')}</span><span class="bot-where">${[folder, team ? `team ${esc(team)}` : ''].filter(Boolean).join(' · ') || 'not in a folder'}</span></span>
+        <span class="dl-age">${doing}</span><span class="dl-na">${n ? UI.statusMark('ember', `${n} need${n === 1 ? 's' : ''} you`) : ''}</span></a></li>`; };
+    return `<section class="dl-card bot-list"><header class="dl-ch"><h2>Your bots</h2><span class="dl-sub">${bots.length} · ${bots.filter((b) => b.home === 'live').length} running</span></header><ul class="dl-list">${bots.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name)).map(row).join('')}</ul></section>`; };
   function page(path) {
     const root = build();
     let n = findNode(root, path);
@@ -138,11 +149,12 @@
     return `<div class="page">
       ${UI.head(path ? esc(leaf(path)) : 'Bots', { crumbs: path ? UI.folderCrumbs(parentOf(path)) : '', sub: path ? `folder ${esc(path)}` : '', lede2: path ? '' : `A ${UI.term('bot')} is an AI teammate with memory you can chat with; it watches what you pick and proposes actions. Bots work alone or on a ${UI.term('team')}.`, actions: `<button class="btn" data-act="f-new" data-parent="${esc(path)}">${icon('folder')}New folder</button><button class="btn" data-act="team-new">${icon('plus')}New team</button><a class="btn primary" href="#/bots/new">${icon('plus')}New bot</a>` })}
       ${moves ? `<div class="callout small staged-moves">${icon('folder')} <b>${moves} move${moves > 1 ? 's' : ''} staged.</b> Folders live in config, so moves apply through the diff.<a class="btn sm primary" href="#/config/apply">Review &amp; apply</a></div>` : ''}
+      ${path ? '' : botList()}
+      <div class="section-title" style="margin-top:24px"><h2>${path ? 'In this folder' : 'Folders and teams'}</h2></div>
       <div class="filters"><div class="input-icon">${icon('search')}<input class="input" placeholder="search bots, teams and folders" value="${esc(fv.q)}" data-on-input="f-q" aria-label="Search bots, teams and folders"></div></div>
       <div class="panel ftree-panel"><div class="ftree" id="ftree" role="tree" data-path="${esc(path)}">
         ${phone ? levelHTML(n) : `${!path ? '<div class="frow rootdrop" data-drop="" style="--d:0"><span class="fic">' + icon('folder') + '</span><span class="muted small">top level · drop here to take something out of its folder</span></div>' : `<div class="frow rootdrop" data-drop="${esc(path)}" style="--d:0"><span class="fic">${icon('folder')}</span><span class="muted small">${esc(path)}</span>${roll(n)}</div>`}${treeHTML(n)}`}
-      </div><div class="panel-foot small muted"><span>${UI.term('Folders', 'folder')} are organization only: no permissions, defaults or behavior. Teams own those.</span></div></div>
-      ${path ? '' : `<details class="panel peers-panel"${D.prefs.peersOpen ? ' open' : ''}><summary class="panel-head"><h3>Peers &amp; links map</h3><span class="muted small">inside a team bots are peers; across teams they're isolated unless linked</span></summary><div class="panel-body tight">${UI.peersGraph()}</div></details>`}
+      </div></div>
     </div>`;
   }
   /* a folder, everything in it: bots, teams and workflows, with roll-ups and what needs you there */

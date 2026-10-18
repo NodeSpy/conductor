@@ -105,11 +105,11 @@
 
   D.activity = [
     { t: m(0.2), s: 'run', text: 'r-7f2c pr-review step <b>review</b> started', who: 'acme/web#1291' },
-    { t: m(1), s: 'ok', text: 'platform-sre wrote <b>knowledge/db-prod-1.md</b> (commit 8e1f0aa)', who: 'case c31' },
+    { t: m(1), s: 'ok', text: 'platform-sre wrote <b>knowledge/db-prod-1.md</b> (commit 8e1f0aa)', who: 'task c31' },
     { t: m(3), s: 'wait', text: 'browser b-02 awaiting push approval on <b>app.example.com</b>', who: 'agent:triage' },
     { t: m(4), s: 'run', text: 'update available <b>v0.72.0</b> · preflight validate passed on a copy', who: 'conductor' },
     { t: m(6), s: 'run', text: 'r-7f3a ci-fixer started on <b>acme/api#482</b>', who: 'gh.check_failed' },
-    { t: m(7), s: 'ember', text: 'platform-sre proposed <b>terraform apply</b> p12 (+1 ~2 -0)', who: 'case c29' },
+    { t: m(7), s: 'ember', text: 'platform-sre proposed <b>terraform apply</b> p12 (+1 ~2 -0)', who: 'task c29' },
     { t: m(31), s: 'ok', text: 'r-7f11 pr-review posted review on <b>acme/api#480</b>', who: '$0.41' },
     { t: m(52), s: 'fail', text: 'r-7ef0 ci-fixer failed at <b>test</b>', who: 'acme/web#1288' },
     { t: m(70), s: 'idle', text: 'egress denied: <b>pastebin.com</b> from agent:fixer@acme/web (once per browser)', who: 'sandbox' },
@@ -135,7 +135,7 @@
   // what a running step of another workflow prints (each workflow streams its own lines)
   D.liveLogs = {
     'pr-review': [['info', 'claude-sonnet-5 (the reviewer fleet’s first choice) · sandbox namespace'], ['tool', '▸ Read internal/api/handlers.go'], ['tool', '▸ Read internal/api/handlers_test.go'], ['info', 'The new handler skips the auth middleware for /export.'], ['tool', '▸ Bash go test ./internal/api/...'], ['ok', 'ok  acme/web/internal/api 1.022s'], ['info', 'Drafting 3 review comments.']],
-    'bot:platform-sre': [['info', 'platform-sre · home session s7 · case c31'], ['tool', '▸ Read knowledge/db-prod-1.md'], ['tool', '▸ aws.rds describe db-prod-1'], ['info', 'Replica lag is 0.4s; no action needed.'], ['tool', '▸ Write log/2026-10-17.md']],
+    'bot:platform-sre': [['info', 'platform-sre · home session s7 · task c31'], ['tool', '▸ Read knowledge/db-prod-1.md'], ['tool', '▸ aws.rds describe db-prod-1'], ['info', 'Replica lag is 0.4s; no action needed.'], ['tool', '▸ Write log/2026-10-17.md']],
   };
 
   /* ---------- bots (#178) ---------- */
@@ -151,8 +151,8 @@
   D.chat = [
     { who: 'event', at: m(48), case: 'c29', text: 'pd.incident · SEV2 · api p99 latency > 2s for 10m (acme/api, us-east)', fenced: true },
     { who: 'bot', at: m(47), text: 'Opened **c29**. Checking the runbook `runbooks/latency.md`. I’ll start a read-only worker to pull the last hour of p99 by route and the deploy log.' },
-    { who: 'tool', at: m(47), text: 'conductor bot spawn --case c29 --group recon --read-only "p99 by route, last 60m"' },
-    { who: 'tool', at: m(46), text: 'conductor bot spawn --case c29 --group recon --read-only "deploys + config changes, last 3h"' },
+    { who: 'tool', at: m(47), text: 'conductor bot spawn --task c29 --group recon --read-only "p99 by route, last 60m"' },
+    { who: 'tool', at: m(46), text: 'conductor bot spawn --task c29 --group recon --read-only "deploys + config changes, last 3h"' },
     { who: 'bot', at: m(31), text: 'Both workers reported. The regression lines up with **web** instances on the old AMI after the 14:02 scale-out; routes `/checkout` and `/refund` are the slow ones. The fix is in `infra` commit `3f2a9c1d`: it pins the launch template to the current AMI and replaces `aws_instance.web`.' },
     { who: 'bot', at: m(8), text: 'I proposed **p12**: `terraform apply` of infra@3f2a9c1d, dir envs/prod, workspace prod. conductor planned it: +1 ~2 -0, and it **replaces aws_instance.web**. Awaiting your approval.' },
     { who: 'op', at: m(5), text: 'What happens to in-flight requests on web while it’s replaced?' },
@@ -309,7 +309,7 @@ Primary Postgres for the platform services (acme/api, acme/web).
   ];
 
   D.audit = [
-    { ts: m(1), event: 'memory_remember', who: 'bot:platform-sre', detail: 'knowledge/db-prod-1.md · commit 8e1f0aa · case c31' },
+    { ts: m(1), event: 'memory_remember', who: 'bot:platform-sre', detail: 'knowledge/db-prod-1.md · commit 8e1f0aa · task c31' },
     { ts: m(3), event: 'browser_action', who: 'agent:triage@acme/app', detail: 'await-approval · app.example.com/login/approve · logged_in: app.example.com' },
     { ts: m(3), event: 'browser_fill', who: 'agent:triage@acme/app', detail: 'credential app · origin https://app.example.com · field password · len 24' },
     { ts: m(5), event: 'dashboard_session', who: 'operator:ops', detail: 'passkey assertion · credential laptop · 127.0.0.1' },
@@ -731,7 +731,7 @@ steps:
   const D = window.D;
   const fm = (o, body) => '---\n' + YAML.stringify(o).replace(/\n?$/, '\n') + '---\n' + (body || '');
   D.memory.files = {
-    'knowledge/db-prod-1.md': fm({ kind: 'knowledge', title: 'db-prod-1', statement: 'Primary Postgres for the platform services (acme/api, acme/web): Postgres 16, Multi-AZ, db.r6g.2xlarge.', applies_to: ['db-prod-1', 'postgres', 'acme/api'], source: 'RDS console; failover drill 2026-10-16 (case c31)', confidence: 'high' },
+    'knowledge/db-prod-1.md': fm({ kind: 'knowledge', title: 'db-prod-1', statement: 'Primary Postgres for the platform services (acme/api, acme/web): Postgres 16, Multi-AZ, db.r6g.2xlarge.', applies_to: ['db-prod-1', 'postgres', 'acme/api'], source: 'RDS console; failover drill 2026-10-16 (task c31)', confidence: 'high' },
       '- **Failover drill:** 2026-10-16 — promoted standby in 48s; app reconnect\n  storm capped by pgbouncer `max_client_conn`. No data loss.\n\nSee [[runbooks/page-triage]] and [[runbooks/latency]].\n'),
     'knowledge/infra-map.md': fm({ kind: 'knowledge', title: 'Infra map', statement: 'api runs on ECS in us-east-1 behind the shared ALB; web is an EC2 ASG on launch template web.', applies_to: ['acme/api', 'acme/web', 'nat'], source: 'terraform state, modules/web and modules/api', confidence: 'high' }, '- NAT gateways: api, web, data (owners: platform)\n'),
     'knowledge/alb.md': fm({ kind: 'knowledge', title: 'ALB', statement: 'deregistration_delay is 30s on every target group.', applies_to: ['alb', 'acme/web'], source: 'modules/web/alb.tf', confidence: 'high' }, ''),
@@ -753,15 +753,15 @@ steps:
   };
   tk.proposals = [
     { id: 'k4', bot: 'platform-sre', kind: 'knowledge', to: 'knowledge/alb.md', summary: 'ALB deregistration delay is 30s on every target group', status: 'pending', at: new Date(Date.now() - 25 * 60000).toISOString(), case: 'c29',
-      content: fm({ kind: 'knowledge', title: 'ALB', statement: 'Shared target groups: deregistration_delay is 30s on every target group; check it before blaming the app.', applies_to: ['alb', 'acme/web'], source: 'modules/web/alb.tf (case c29)', confidence: 'high' }, '') },
+      content: fm({ kind: 'knowledge', title: 'ALB', statement: 'Shared target groups: deregistration_delay is 30s on every target group; check it before blaming the app.', applies_to: ['alb', 'acme/web'], source: 'modules/web/alb.tf (task c29)', confidence: 'high' }, '') },
     { id: 'k3', bot: 'web-triage', kind: 'knowledge', to: 'knowledge/safari-18-flex-gap.md', summary: 'Safari 18 flex gap bug: use margin fallback in checkout', status: 'pending', at: new Date(Date.now() - 55 * 60000).toISOString(), case: 'c33',
-      content: fm({ kind: 'knowledge', title: 'Safari 18 flex gap', statement: 'Safari 18 mis-sizes flex gap inside buttons; checkout uses a margin fallback.', applies_to: ['acme/web', 'safari'], source: 'case c33 repro', confidence: 'medium' }, '') },
+      content: fm({ kind: 'knowledge', title: 'Safari 18 flex gap', statement: 'Safari 18 mis-sizes flex gap inside buttons; checkout uses a margin fallback.', applies_to: ['acme/web', 'safari'], source: 'task c33 repro', confidence: 'medium' }, '') },
     { id: 'k5', bot: 'web-triage', kind: 'runbook', to: 'runbooks/checkout-errors.md', summary: 'Runbook for checkout 5xx bursts', status: 'pending', at: new Date(Date.now() - 70 * 60000).toISOString(), case: 'c33',
       content: fm({ kind: 'runbook', title: 'Checkout errors', when: 'checkout 5xx above 2% for 5 minutes', steps: [{ do: 'Check the canary' }, { run: 'kubectl rollout undo deploy/web' }, { do: 'Tell #incidents', verb: 'slack-ops.post', run: 'echo hi' }] }, '') },
     { id: 'k2', bot: 'platform-sre', kind: 'runbook', to: 'runbooks/page-triage.md', summary: 'Ack within 5 minutes; one case per page', status: 'approved', at: new Date(Date.now() - 3000 * 60000).toISOString(), approver: 'ops (passkey · laptop)', content: '' },
   ];
   D.botMemory = {
-    'web-triage': { 'knowledge/checkout-margin.md': fm({ kind: 'knowledge', title: 'Checkout margin fallback', statement: 'Checkout buttons use a margin fallback instead of flex gap, for Safari 18.', applies_to: ['acme/web', 'safari'], source: 'case c33', confidence: 'high' }, '') },
+    'web-triage': { 'knowledge/checkout-margin.md': fm({ kind: 'knowledge', title: 'Checkout margin fallback', statement: 'Checkout buttons use a margin fallback instead of flex gap, for Safari 18.', applies_to: ['acme/web', 'safari'], source: 'task c33', confidence: 'high' }, '') },
     'billing-sre': { 'knowledge/nat-owners.md': fm({ kind: 'knowledge', title: 'NAT owners', statement: 'Three NAT gateways (api, web, data), all owned by platform.', applies_to: ['nat'], source: 'delegation d3 from platform-sre', confidence: 'medium' }, '') },
   };
   // collections: the operator's own (config, collections:) and those packs ship
@@ -833,9 +833,9 @@ window.D.packMembers = {
 /* Approvals say why and what happens, in words; the payload is shown whole. */
 (function () {
   const P = (id) => window.D.proposals.find((p) => p.id === id) || {};
-  Object.assign(P('p12'), { title: 'Replace the production web server', why: 'platform-sre is answering the SEV2 “api p99 latency” incident (case c29): the web servers still run the old AMI, and the plan rolls the new one out.', impact: 'A brief drain on the web servers while the instance is replaced.', reversible: 'by re-applying the previous plan' });
-  Object.assign(P('p4'), { title: 'Post the monthly forecast to #incidents', options: { channel: '#incidents', text: 'October forecast: AWS spend is tracking $41.2k against a $38k budget (+8%). Main driver: NAT gateway transfer (+44% week over week). Savings Plan coverage is 64%. Full breakdown in the billing dashboard.' }, why: 'A Slack user asked billing-sre (case c7) to share the monthly forecast. They aren\'t one of your operators.', impact: 'Posts one public message to #incidents, a channel for live incidents, which is unusual for a forecast · can be deleted afterwards, but people will have seen it.', reversible: 'the message can be deleted' });
-  Object.assign(P('p11'), { title: 'Change the /search cache TTL to 300s', options: Object.assign({ store: 'state', namespace: 'search', key: 'cache_ttl_s', value: '300' }, P('p11').options || {}), why: 'A Slack user asked platform-sre to evaluate the /search cache TTL (case c24); a worker measured hit rates at 300s and proposes it.', impact: 'Changes one key in the shared KV store; /search caches results longer (up to 5 minutes stale) · undo by setting it back.', reversible: 'set the key back' });
+  Object.assign(P('p12'), { title: 'Replace the production web server', why: 'platform-sre is answering the SEV2 “api p99 latency” incident (task c29): the web servers still run the old AMI, and the plan rolls the new one out.', impact: 'A brief drain on the web servers while the instance is replaced.', reversible: 'by re-applying the previous plan' });
+  Object.assign(P('p4'), { title: 'Post the monthly forecast to #incidents', options: { channel: '#incidents', text: 'October forecast: AWS spend is tracking $41.2k against a $38k budget (+8%). Main driver: NAT gateway transfer (+44% week over week). Savings Plan coverage is 64%. Full breakdown in the billing dashboard.' }, why: 'A Slack user asked billing-sre (task c7) to share the monthly forecast. They aren\'t one of your operators.', impact: 'Posts one public message to #incidents, a channel for live incidents, which is unusual for a forecast · can be deleted afterwards, but people will have seen it.', reversible: 'the message can be deleted' });
+  Object.assign(P('p11'), { title: 'Change the /search cache TTL to 300s', options: Object.assign({ store: 'state', namespace: 'search', key: 'cache_ttl_s', value: '300' }, P('p11').options || {}), why: 'A Slack user asked platform-sre to evaluate the /search cache TTL (task c24); a worker measured hit rates at 300s and proposes it.', impact: 'Changes one key in the shared KV store; /search caches results longer (up to 5 minutes stale) · undo by setting it back.', reversible: 'set the key back' });
 })();
 
 /* Teams and bots in conductor's real shapes (feat/members teams.go, bots.go).

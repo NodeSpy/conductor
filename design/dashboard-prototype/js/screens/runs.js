@@ -113,12 +113,14 @@
       <div class="dl-phead"><div><h1>Activity</h1></div></div>
       <div class="dl-filters" id="act-filters">
         <label class="dl-search">${icon('search')}<input value="${esc(av.q)}" placeholder="Search repo, PR, run or error" data-on-input="act-q" aria-label="Search runs"></label>
+        <details class="act-filters-d"${innerWidth > 720 || av.filtersOpen ? ' open' : ''} data-on-toggle="act-filters-t"><summary class="btn sm secondary">${icon('filter')}Filter${(() => { const n = ['status', 'wf', 'bot', 'repo'].filter((k) => av[k]).length + (UI.folderScope() ? 1 : 0); return n ? ` · ${n} on` : ''; })()}</summary><div class="act-chips">
         ${chip('status', 'filter', 'Status', [['', 'Any status'], ['attn', 'Needs attention'], ['run', 'Running'], ['fail', 'Failed'], ['wait', 'Needs you'], ['ok', 'Passed'], ['idle', 'Parked']])}
         ${chip('wf', 'workflows', 'Workflow', [['', 'Any workflow']].concat(wfs.map((w) => [w, w])))}
         ${chip('bot', 'bots', 'Bot', [['', 'Any bot']].concat(bots.map((b) => [b, b])))}
         ${UI.folderChip()}
         ${chip('repo', 'branch', 'Repo', [['', 'Any repo']].concat([...new Set(D.runs.map((r) => r.repo).filter(Boolean))].sort().map((x) => [x, x])))}
         ${chip('since', 'clock', 'Time range', RANGES)}
+      </div></details>
       </div>
       <div id="act-strip">${strip(G)}</div>
       <section class="dl-card dl-flush dl-runs-card" style="margin-top:20px"><table class="dl-tbl grouped" id="act-tbl">${theadHTML(G)}${tableBody(G)}</table></section>
@@ -235,6 +237,7 @@
   document.addEventListener('keydown', (e) => { if (!['ArrowDown', 'ArrowUp'].includes(e.key) || !e.target.matches || !e.target.matches('.dl-tree .tl')) return;
     const all = [...document.querySelectorAll('.dl-tree .tl')], i = all.indexOf(e.target), next = all[i + (e.key === 'ArrowDown' ? 1 : -1)]; if (!next) return;
     e.preventDefault(); const step = next.dataset.step; next.click(); setTimeout(() => { const b = document.querySelector(`.dl-tree .tl[data-step="${step}"]`); if (b) b.focus(); }); });
+  UI.act('act-filters-t', (d) => { av.filtersOpen = d.open; });
   UI.act('act-done-toggle', () => { av.showDone = !av.showDone; actRefresh(); });
   UI.act('run-more', (b) => UI.menu(b, UI.runMore || []));
   UI.act('run-dismiss', (b) => { const href = '#/runs/' + b.dataset.run, was = D.attention.some((a) => a.href === href); D.dismissed = [...new Set((D.dismissed || []).concat(href))]; S.save(); UI.rerender();

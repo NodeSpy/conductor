@@ -132,7 +132,7 @@
     });
   });
 
-  const routeLabel = (r) => !r ? '' : r.by === 'rule' ? `routed to <b>${r.team}</b> by rule <span class="mono">${esc(r.rule)}</span>${r.via === 'lead' ? ` → assigned by lead <b>${esc(r.lead)}</b> to <b>${esc(r.to)}</b>` : ` → <b>${esc(r.to)}</b>`}` : r.by === 'lead' ? `assigned by lead <b>${esc(r.lead)}</b> to <b>${esc(r.to)}</b>` : r.by === 'operator' ? `reassigned by operator <b>ops</b> to <b>${esc(r.to)}</b>${r.from ? ` (was ${esc(r.from)})` : ''}` : r.by === 'link' ? `arrived over the team link from <b>${esc(r.team)}</b>` : r.by === 'proactive' ? 'opened by a proactive sweep' : r.by === 'delegate' ? `delegated by <b>${esc(r.from)}</b> → <b>${esc(r.to)}</b> from case <span class="mono">${esc(r.parent)}</span>${r.cross ? ` (across the ${esc(r.team)} link)` : ''}` : `delivered to <b>${esc(r.to)}</b> directly`;
+  const routeLabel = (r) => !r ? '' : r.by === 'rule' ? `routed to <b>${r.team}</b> by rule <span class="mono">${esc(r.rule)}</span>${r.via === 'lead' ? ` → assigned by lead <b>${esc(r.lead)}</b> to <b>${esc(r.to)}</b>` : ` → <b>${esc(r.to)}</b>`}` : r.by === 'lead' ? `assigned by lead <b>${esc(r.lead)}</b> to <b>${esc(r.to)}</b>` : r.by === 'operator' ? `reassigned by operator <b>ops</b> to <b>${esc(r.to)}</b>${r.from ? ` (was ${esc(r.from)})` : ''}` : r.by === 'link' ? `arrived over the team link from <b>${esc(r.team)}</b>` : r.by === 'proactive' ? 'opened by a proactive sweep' : r.by === 'delegate' ? `delegated by <b>${esc(r.from)}</b> → <b>${esc(r.to)}</b> from task <span class="mono">${esc(r.parent)}</span>${r.cross ? ` (across the ${esc(r.team)} link)` : ''}` : `delivered to <b>${esc(r.to)}</b> directly`;
   UI.routeLabel = routeLabel;
   const glob = (pat, v) => new RegExp('^' + String(pat).split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$').test(String(v));
   const matchRule = (t, ev) => (((t.cfg.routing || {}).rules) || []).find((r) => r.match && Object.entries(r.match).every(([k, v]) => (k === 'on' ? glob(v, ev.on) : glob(v, ev.payload[k] != null ? ev.payload[k] : S.getPath(ev.payload, 'incident.' + k) || ''))));
@@ -166,7 +166,7 @@
       ${d.result ? `<div class="deleg-result">↩ result: ${esc(d.result)}</div>` : ''}
       <div class="tiny muted">requester ${UI.label(`${esc(d.requester)}`, { cls: 'taint ' + d.cls })} kept · ${ago(d.at)} ago${d.done ? ` · reported back ${ago(d.done)} ago` : ''}</div></div>
       ${d.status === 'running' ? `<button class="btn sm ghost" data-act="deleg-cancel" data-id="${d.id}">${icon('x')}Cancel</button>` : ''}</div>`;
-  UI.act('deleg-cancel', (b) => UI.confirm({ title: `Cancel delegation ${b.dataset.id}?`, body: 'The recipient\'s child case is closed and the delegating bot is told the task was cancelled. Immediate, audited.', ok: 'Cancel delegation', danger: true }).then((ok) => {
+  UI.act('deleg-cancel', (b) => UI.confirm({ title: `Cancel delegation ${b.dataset.id}?`, body: 'The recipient\'s child task is closed and the delegating bot is told the task was cancelled. Immediate, audited.', ok: 'Cancel delegation', danger: true }).then((ok) => {
     if (!ok) return; const d = D.delegations.find((x) => x.id === b.dataset.id); d.status = 'cancelled'; d.done = now();
     const ch = D.cases.find((x) => x.id === d.child); if (ch) ch.status = 'closed';
     const par = D.cases.find((x) => x.id === d.parent); if (par) (par.notes = par.notes || []).push({ at: now(), who: 'conductor', text: `delegation ${d.id} to ${d.to} cancelled by operator ops` });
@@ -174,7 +174,7 @@
   }));
   UI.act('case-delegate', (b) => {
     const m = M(b.dataset.m), c = D.cases.find((x) => x.id === b.dataset.c), reach = UI.delegationReach(m.name);
-    UI.form({ caps: `conductor bot delegate ${m.name} --case ${c.id}`, title: `Have ${m.name} delegate a task`, intro: `${m.name} hands a teammate a task from <b>${c.id}</b>. The recipient works it as a child case under the original requester (<span class="mono">${esc(c.requester)}</span>), and the result reports back here.`,
+    UI.form({ caps: `conductor bot delegate ${m.name} --case ${c.id}`, title: `Have ${m.name} delegate a task`, intro: `${m.name} hands a teammate a task from <b>${c.id}</b>. The recipient works it as a child task under the original requester (<span class="mono">${esc(c.requester)}</span>), and the result reports back here.`,
       fields: [{ k: 'to', type: 'enum', req: true, label: 'Delegate to', options: reach.map((r) => [r.name, `${r.name}${r.team ? ' · ' + r.team : ' · solo'}${r.ok ? (r.cross ? ' (linked)' : '') : ' — not linked'}`]), def: (reach.find((r) => r.ok) || reach[0]).name, validate: (v) => { const r = reach.find((x) => x.name === v); return r && !r.ok ? r.why : ''; } },
         { k: 'task', type: 'text', req: true, label: 'Task', ph: 'What should the teammate do, and what should it report back?' }],
       submit: 'Delegate', submitIcon: 'send',
@@ -183,7 +183,7 @@
         const id = 'd' + (D.delegations.length + 1), child = newCase(v.to, { title: v.task.split('\n')[0].slice(0, 90), requester: c.requester, cls: c.cls, routed: { by: 'delegate', from: m.name, to: v.to, parent: c.id, delegation: id, team: teamOf(m) ? teamOf(m).name : null, cross: r.cross, requester_kept: true }, notes: [] });
         D.delegations.unshift({ id, from: m.name, to: v.to, parent: c.id, child, task: v.task, requester: c.requester, cls: c.cls, status: 'running', at: now() });
         audit('bot_delegate', `${id} · ${m.name} → ${v.to} · case ${c.id} → ${child} · requester ${c.requester} kept`); S.save(); UI.rerender();
-        UI.toast(`Delegated to ${v.to}`, `child case ${child} · result reports back to ${c.id}`, 'run');
+        UI.toast(`Delegated to ${v.to}`, `child task ${child} · result reports back to ${c.id}`, 'run');
       } });
   });
 
@@ -350,15 +350,15 @@
   /** A bot's state in one sentence: what needs you first, then what it's doing; quiet when nothing does. */
   UI.botLine = (m) => { const pend = D.proposals.filter((p) => p.bot === m.name && p.status === 'pending' && UI.live(p)).length, open = D.cases.filter((c) => c.bot === m.name && c.status === 'open').length || m.open || 0;
     const first = pend ? `<b class="loud-word">${pend} ${pend === 1 ? 'approval waits' : 'approvals wait'} for you.</b> ` : '';
-    const doing = m.shadow ? 'In shadow mode: it watches and proposes, and never acts.' : m.home === 'live' ? `Working in a live session${open ? ` on ${open} open task${open === 1 ? '' : 's'}` : ''}.` : open ? `Idle, with ${open} open case${open === 1 ? '' : 's'}.` : 'Idle. Nothing open.';
+    const doing = m.shadow ? 'In shadow mode: it watches and proposes, and never acts.' : m.home === 'live' ? `Working in a live session${open ? ` on ${open} open task${open === 1 ? '' : 's'}` : ''}.` : open ? `Idle, with ${open} open task${open === 1 ? '' : 's'}.` : 'Idle. Nothing open.';
     return first + doing; };
   /** The bot's head, as in the approved mock: avatar, name, what it's for in one line, and what it's doing now. */
   function hero(m) {
     const t = teamOf(m), open = D.cases.filter((c) => c.bot === m.name && c.status === 'open'), cur = open[0];
     const role = (S.staged('bots', m.name) || m.cfg || {}).description || m.role || (t ? `A bot on the ${t.name} team` : 'A bot');
-    const now = m.shadow ? UI.statusMark('shadow', 'Shadow: practice mode') : m.home === 'live' ? `<span class="bot-now">${UI.statusMark('run', 'Running')}${cur ? `<a class="dl-sub" href="#/bots/${m.name}/cases/${cur.id}">on “${esc(cur.title)}”</a>` : ''}</span>` : UI.statusMark('idle', 'Parked');
+    const now = m.shadow ? UI.statusMark('shadow', 'Shadow: practice mode') : m.home === 'live' ? UI.statusMark('run', 'Running') : UI.statusMark('idle', 'Parked');
     return `<div class="dl-crumbs">${UI.folderCrumbs(UI.folderOfBot(m.name, false))}${t ? ` › <a href="#/teams/${t.name}">team ${t.name}</a>` : ''}</div>
-      <div class="dl-bothead"><span class="dl-bot-av">${esc(m.name.split(/[-_]/).map((w) => w[0]).join('').slice(0, 2))}</span><div><h1>${esc(m.name)}</h1><p class="dl-lead">${esc(role)}</p></div>${now}
+      <div class="dl-bothead"><span class="dl-bot-av">${esc(m.name.split(/[-_]/).map((w) => w[0]).join('').slice(0, 2))}</span><div><h1>${esc(m.name)}</h1><p class="dl-lead">${esc(role)}</p>${cur && m.home === 'live' ? `<p class="bot-working">Working on: <a href="#/bots/${m.name}/cases/${cur.id}">${esc(cur.title)}</a></p>` : ''}</div>${now}
         <button class="icon-btn" data-act="bot-more" data-m="${m.name}" aria-label="More for ${esc(m.name)}">${icon('more')}</button></div>`;
   }
   UI.act('bot-more', (b) => { const m = M(b.dataset.m); UI.menu(b, [['Rotate session…', 'updates', 'm-rotate', `data-m="${m.name}"`], ['Sweep now', 'eye', 'm-sweep', m.proactive ? `data-m="${m.name}"` : UI.off('It has no proactive: block in its definition')], ['Deliver an event…', 'send', 'm-deliver', `data-m="${m.name}"`], ['-'], ['Workers', 'workflows', 'strip-go', `data-href="#/bots/${m.name}/workers"`]]); });
@@ -481,7 +481,8 @@
       return `<span class="pl${kind ? ' pl-' + kind : ''}"${ind(raw)}>${withMuted || ' '}</span>`; }).join('');
     const groups = Object.keys(PLAN_WORD).map((k) => [k, res.filter(([a]) => a === k)]).filter(([, xs]) => xs.length);
     const jump = groups.length ? `<div class="plan-jump">${groups.map(([k, xs]) => `<span class="pj pj-${k}"><b>${PLAN_WORD[k]}</b> ${xs.map(([, r, i]) => `<a href="#" data-act="plan-jump" data-l="plan-${i}" class="mono">${esc(r)}</a>`).join(', ')}</span>`).join('')}</div>` : '';
-    return { jump, body }; }
+    const count = (k) => res.filter(([a]) => a === k).length;
+    return { jump, body, counts: { create: count('create'), update: count('update'), replace: count('replace'), destroy: count('destroy') } }; }
   /** Who asked, in words: a non-operator requester gets a banner, never just a colored chip. */
   UI.requesterBanner = (p) => {
     const r = p.requester || '';
@@ -502,7 +503,8 @@
   function proposalDetail(m, p) {
     const tf = p.tf, pend = p.status === 'pending', t = teamOf(m);
     const ask = p.ask || (tf ? `${m.name} wants to run terraform apply on ${p.env || tf.workspace}.` : `${m.name} wants to ${esc(String(p.summary || p.verb))}.`);
-    const changes = tf ? `<div class="dl-changes">${[['Adds', tf.add], ['Changes', tf.change], ['Replaces', tf.replaces.length, 'wait'], ['Destroys', tf.destroy, 'fail']].map(([l, n, st]) => `<div${n && st ? ` data-s="${st}"` : ''}><b>${n}</b><span>${l}</span></div>`).join('')}
+    const pc = tf ? planHTML(D.tfPlan || '').counts : null;
+    const changes = tf ? `<div class="dl-changes">${[['Adds', pc.create], ['Changes', pc.update], ['Replaces', pc.replace, 'wait'], ['Destroys', pc.destroy, 'fail']].map(([l, n, st]) => `<div${n && st ? ` data-s="${st}"` : ''}><b>${n}</b><span>${l}</span></div>`).join('')}
       ${tf.replaces.length ? `<p class="dl-chg-note">${UI.mark('wait')}<span><b>Replaces ${tf.replaces.length} ${tf.replaces.length === 1 ? 'server' : 'resources'}</b> (${tf.replaces.map(esc).join(', ')}). Stateful things such as databases are never replaced without a separate rule.</span></p>` : ''}</div>`
       : `<div class="dl-pwhy"><span class="dl-lbl">Exactly what runs</span>${UI.payloadHTML(p)}</div>`;
     const where = [['Where', p.env ? `${p.env[0].toUpperCase()}${p.env.slice(1)}${tf ? ` · workspace ${esc(tf.workspace)}` : ''}` : tf ? `workspace ${esc(tf.workspace)}` : ''], ['Effect', esc(p.impact || '')], ['Undo', esc(p.reversible ? p.reversible.replace(/^./, (c) => c.toUpperCase()) : 'conductor can’t undo this')]].filter(([, v]) => v);
@@ -524,15 +526,13 @@
     const body = `${what}
       ${p.why ? `<div class="dl-pwhy"><span class="dl-lbl">Why</span><p>${esc(p.why)}</p></div>` : ''}
       ${where.length ? `<dl class="dl-where">${where.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>` : ''}
-      <p class="dl-origin">${origin}</p>${pend ? '' : decided}${plan}${audit}`;
+      <p class="dl-origin">${origin}</p>${pend ? '' : decided}${plan}<p class="dl-sub prop-can-link"><a class="dl-link" href="#/bots/${m.name}/access">What ${esc(m.name)} may do on its own, and what it asks first →</a></p>${audit}`;
     const card = `<article class="dl-card dl-proposal">${pend ? `<div class="dl-kick">${UI.mark('ember')}Needs you · <span class="nowrap">asked ${UI.agoText(p.at)}</span>${p.expires ? ` · <span class="nowrap">expires in ${UI.humanSpan(p.expires)}</span>` : ''}</div>` : `<div class="dl-kick dl-sub">${UI.agoText(p.at)}</div>`}
       <h2 class="dl-ptitle">${esc(p.title || p.summary)}</h2><p class="dl-ask">${ask}</p>
       <div class="prop-body">${body}</div>
       ${pend ? `<div class="dl-decide prop-decide"><button class="btn lg primary" data-act="p-approve" data-p="${p.id}" data-d="approve">${icon('passkey')}Approve with passkey</button><button class="btn lg secondary" data-act="p-approve" data-p="${p.id}" data-d="deny">Deny…</button><span class="hint">${(() => { const ops = S.effective(m).operators.v || []; return ops.length ? `Only ${ops.map(esc).join(' or ')} can approve.` : 'Any operator can approve.'; })()}</span></div>` : p.status === 'shadow' ? decided : ''}</article>`;
-    const x = UI.botCan(m), plain = (i) => esc(String(i.text).replace(/ \([^)]*\)$/, '').replace(/^./, (c) => c.toUpperCase()));
-    const can = `<section class="dl-card dl-can"><header class="dl-ch"><h2>What ${esc(m.name)} can do</h2></header>${[['Does on its own', 'ok', x.own], ['Asks you first', 'ember', x.asks], ['Never', 'fail', x.never]].map(([h, s2, xs]) => `<div class="cang" data-s="${s2}"><h3>${UI.mark(s2)}${h}</h3><ul>${xs.map((i) => `<li>${plain(i)}</li>`).join('') || '<li class="dl-sub">nothing</li>'}</ul></div>`).join('')}</section>`;
     const from = UI.navOrigin && UI.navOrigin.hash === location.hash ? UI.navOrigin.nav : '', back = from === 'attention' ? ['#/attention', 'Needs you'] : from === 'overview' ? ['#/overview', 'Home'] : [`#/bots/${m.name}/proposals`, `${esc(m.name)}’s approvals`];
-    return `<div class="dl-crumbs prop-crumbs"><a class="prop-back" href="${back[0]}">${icon('chev', 'flip')}${back[1]}</a></div><div class="dl-cols" style="margin-top:6px"><div class="dl-col-main">${card}</div><div class="dl-col-side">${can}</div></div>`;
+    return `<div class="dl-crumbs prop-crumbs"><a class="prop-back" href="${back[0]}">${icon('chev', 'flip')}${back[1]}</a></div><div class="prop-single" style="margin-top:6px">${card}</div>`;
   }
   const decidedWord = (p) => (p.status === 'executed' || String(p.status).startsWith('approved') ? 'Approved' : p.status === 'shadow' ? 'Shadow: not for approval' : p.status[0].toUpperCase() + p.status.slice(1));
   // a resource in the summary opens the full plan at its block

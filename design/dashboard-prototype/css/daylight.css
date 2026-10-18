@@ -258,7 +258,7 @@
 .dl-conn .tgt { color: var(--color-text-secondary); font-weight: 400; }
 .dl-conn .reason, .dl-row .reason { font: var(--type-body-s); font-weight: var(--font-weight-semibold); color: var(--s-fg); }
 .dl-na { display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
-@media (max-width: 720px) { .dl-conns { padding: 4px 16px; } .dl-conn.attn { margin-left: -16px; padding-left: 13px; } .dl-conn { grid-template-columns: 18px minmax(0, 1fr); } .dl-conn .dl-na { grid-column: 2; justify-content: flex-start; } }
+@media (max-width: 720px) { .dl-conns { padding: 4px 16px; } .dl-conn.attn { margin-left: -16px; padding-left: 13px; } .dl-conn { grid-template-columns: 18px minmax(0, 1fr) auto; align-items: start; } .dl-conn .dl-na { flex-direction: column-reverse; align-items: flex-end; gap: 4px; } }
 
 /* the workflow builder as the approved mock (builderPage): a page with a head and tabs; the recipe is a card of step
    cards (number, title over summary, the kind with its icon, chevron); Try it, At a glance and the config file beside */
@@ -568,3 +568,20 @@ details.dl-card.acc-tech { padding: 14px 22px; }
   #wl-body tr[data-row] > td.wl-acts { grid-area: acts; }
   .strip .status-btn .sw { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 }
+/* the Bots page's list: an initials avatar in the margin, what it's doing, where it lives as a quiet line */
+.dl-bot-av.sm { width: 32px; height: 32px; font-size: 13px; border-radius: 8px; }
+.bot-list .bot-where { display: block; font: var(--type-caption); color: var(--color-text-tertiary); }
+.bot-list .dl-age .st { white-space: nowrap; }
+.bot-working { margin: 4px 0 0; font: var(--type-body-s); color: var(--color-text-secondary); } .bot-working a { color: var(--color-text-primary); }
+.prop-single { max-width: 860px; }
+/* Activity's filters: on a wide screen they're simply there; on a phone they sit behind one Filter control */
+.act-filters-d { display: contents; } .act-filters-d > summary { display: none; } .act-filters-d .act-chips { display: contents; }
+@media (max-width: 720px) {
+  .act-filters-d { display: block; width: 100%; } .act-filters-d > summary { display: inline-flex; list-style: none; } .act-filters-d > summary::-webkit-details-marker { display: none; }
+  .act-filters-d .act-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+}
+.bot-list .dl-need-a { grid-template-columns: 32px minmax(0, 1fr) auto auto; column-gap: 14px; }
+.bot-list .dl-na .st { white-space: nowrap; }
+@media (max-width: 720px) { .bot-list .dl-need-a { grid-template-columns: 32px minmax(0, 1fr) auto; } .bot-list .dl-need-a .dl-na { grid-column: 2 / -1; justify-content: flex-start; } }
+@media (max-width: 720px) { #wl-body tr[data-row] > td.wl-acts { width: auto !important; justify-self: end; } #wl-body tr[data-row] { grid-template-areas: "wf last" "on acts" !important; } }
+.pack-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

@@ -136,7 +136,7 @@ test('a case shows its delegation edges with status and the reported result', as
   // the recipient's child case carries the original requester
   await page.locator('.item.deleg[data-deleg="d1"] a', { hasText: 'platform-data' }).click();
   await expect(page).toHaveURL(/#\/bots\/platform-data\/cases\/c35/);
-  await expect(page.locator('.case-head')).toContainText('delegated by platform-sre → platform-data from case c29');
+  await expect(page.locator('.case-head')).toContainText('delegated by platform-sre → platform-data from task c29');
   await expect(page.locator('.case-head')).toContainText('event:pd.incident');
 });
 

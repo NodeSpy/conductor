@@ -27,7 +27,7 @@
     provenance: ['Provenance', 'Where a request came from. A bot acts with no more trust than the person or event that started it.'],
     widening: ['Widening', 'A change that lets bots or agents do more: a new permission, host, repo or promotion. Widenings are listed before you apply.'],
     digest: ['Digest', 'A fingerprint of exactly what you approve. If anything changes after you sign, the approval no longer matches and is refused.'],
-    case: ['Case', 'One piece of work a bot is handling, like a ticket: what started it, notes, proposals and the result.'],
+    case: ['Task', 'One piece of work a bot is handling, like a ticket: what started it, its notes, the approvals it asked for and the result. (conductor’s config and CLI call it a case.)'],
     home: ['Home session', 'The bot\'s ongoing conversation. It is rotated (started fresh) after a number of turns or hours; memory carries over.'],
     turn: ['Turn', 'One reply from the bot\'s model. Counted to rotate sessions and to cap how much a bot may run.'],
     sweep: ['Sweep', 'A bot checking in on its own on a schedule, without an event.'],
