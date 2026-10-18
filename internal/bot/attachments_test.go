@@ -91,6 +91,7 @@ func TestDetectMediaType(t *testing.T) {
 		{"page.txt", []byte("<!DOCTYPE html><html><script>x</script></html>"), "text/html"},
 		{"bin.txt", []byte{0xff, 0xfe, 0x00, 0x01, 0x02}, "application/octet-stream"},
 		{"nul.txt", []byte("text\x00with a nul"), "application/octet-stream"},
+		{"latin1.txt", []byte("caf\xe9 au lait, cr\xe8me br\xfbl\xe9e"), "application/octet-stream"}, // not UTF-8: not text
 		{"arch.zip", []byte("PK\x03\x04rest"), "application/zip"},
 	} {
 		if got := DetectMediaType(c.name, c.data); got != c.want {

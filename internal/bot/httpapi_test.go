@@ -133,6 +133,14 @@ func TestOperatorAPISizeChecked(t *testing.T) {
 	if w := apiDo(t, h, "POST", "/v1/bots/sre/messages", strings.NewReader("{}"), "application/json"); w.Code != http.StatusBadRequest {
 		t.Fatalf("not multipart: %d", w.Code)
 	}
+	// Every file and the count within their caps, the body over the
+	// message's: refused while it streams, before the files are all read.
+	setLimits(f, config.AttachmentLimits{MaxFile: 1 << 20, MaxMessage: 1 << 20, MaxFiles: 3})
+	big := bytes.Repeat([]byte("q"), 1<<20)
+	body, ct = multipartBody(t, "x", map[string][]byte{"a.txt": big, "b.txt": big, "c.txt": big})
+	if w := apiDo(t, h, "POST", "/v1/bots/sre/messages", body, ct); w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("a body over max_message: %d %s", w.Code, w.Body)
+	}
 	if n := len(f.st.Bot("sre").Inbox); n != 0 {
 		t.Fatalf("a refused upload queued %d messages", n)
 	}
