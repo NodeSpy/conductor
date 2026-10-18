@@ -360,3 +360,55 @@ func TemplateDiff(tu *store.TemplateUpdate) string {
 	}
 	return b.String()
 }
+
+// LintSeed checks a template's seed the way a new bot's memory would take
+// it: every file under a kind's home must be a valid document of that kind,
+// within its cap — a file that is not would be skipped at seeding, so the
+// author hears about it now. Files outside every kind's home are named too.
+func LintSeed(seedDir string, cols map[string]config.Collection) []string {
+	ks := NewKinds(false, cols)
+	var problems []string
+	_ = filepath.WalkDir(seedDir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			problems = append(problems, err.Error())
+			return nil
+		}
+		rel, _ := filepath.Rel(seedDir, p)
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			if rel != "." && strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.Contains(rel, "/") {
+			return nil // a top-level file (a README) is not memory
+		}
+		if !d.Type().IsRegular() {
+			problems = append(problems, rel+": not a regular file (a seed copies regular files only)")
+			return nil
+		}
+		k, ok := ks.Of(rel)
+		switch {
+		case !ok:
+			problems = append(problems, rel+": in no kind's home — it would not be seeded")
+			return nil
+		case k.Name == KindLog || k.Name == KindHandoff || k.Name == KindCharter:
+			problems = append(problems, rel+": "+k.Name+" documents are conductor's — a seed cannot ship them")
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			problems = append(problems, err.Error())
+			return nil
+		}
+		for _, e := range []error{k.CheckPath(rel), k.Validate(string(b)), k.CheckSize(string(b))} {
+			if e != nil {
+				problems = append(problems, rel+": "+e.Error())
+				break
+			}
+		}
+		return nil
+	})
+	return problems
+}

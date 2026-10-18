@@ -18,7 +18,7 @@ make e2e-down     # tear down a leftover stack (e.g. after KEEP=1)
 ```
 
 Useful env: `ONLY="Z"` runs only the named groups (letters, space-separated;
-group Z — bot memory — alone brings up only its `conductor-bots` daemon);
+groups Z and L — bots — alone bring up only their `conductor-bots` daemon);
 `KEEP=1` leaves the stack up for inspection; `PROJECT=<name>` isolates
 parallel runs.
 
@@ -35,7 +35,7 @@ overrides `command:`.
 | `conductor` | the real daemon, **no `controllers:` block** → paseo default path; webhook receiver for group H; web hand-off channel for C/D/E |
 | `conductor-ctrl` | a second daemon **with** a `controllers:` block → group A resolution + every non-paseo controller (group B) + resumable hand-off (C/D2/F) + ACP crash (J3) |
 | `conductor-fail` | a daemon whose fake paseo fails `workspace create` → group J2 |
-| `conductor-bots` | a daemon with one bot and a seeded memory repo → group Z (the memory index in the home prompt, recall, reads in parts, caps, an unreported consolidation archives nothing) |
+| `conductor-bots` | a daemon with a bot on a seeded memory repo and one from a pack's template (its config copied somewhere writable and the pack vendored by `entrypoint-bots.sh`) → group Z (the memory index in the home prompt, recall, reads in parts, caps, an unreported consolidation archives nothing) and group L (community bots: the template catalog, practice mode with read-only verbs, `bot new` on a copy, a refused and a named widening, a newer template arriving as a proposal and landing on a signed approval) |
 
 ### Stub controller runtimes (per transport)
 

@@ -96,9 +96,33 @@ with no operators, no verbs, a promotion that cannot take effect yet, or
 a home mode that skips permission prompts. A `skill.verbs` entry that could
 reach the `terraform.apply_connector` is an error.
 
-A pack can ship the charter, runbooks and workflows of a kind of bot (see
-the `sre-bot` pack in conductor-packs); each `bots:` entry binds it to one
-bot: its memory repo, its connectors and verbs, its operators.
+### Community bots
+
+A pack can ship a **bot template** — a community bot you pull in: its
+charter, the documents its memory starts with, the connectors it needs, the
+verbs it requests (each with a maximum tier), and suggested triggers and
+proactive checks. You instantiate it into as many bots as you want:
+
+```yaml
+packs:
+  sre: { use: conductor-packs/sre-bot, version: "~> 2.0" }
+bots:
+  platform-sre:
+    use: sre/sre                          # <pack instance>/<template>
+    grant: { pagerduty.get_incident: observe, pagerduty.acknowledge: reversible }
+```
+
+```
+conductor bot templates --search sre          # installed and registry templates
+conductor bot new platform-sre --from sre/sre # planned on a copy of your config, shown as a diff; --write
+conductor bot grant platform-sre pagerduty.acknowledge=reversible
+```
+
+A template only requests: the bot starts in practice mode with only its
+read-only verbs, every widening is your grant (named by `conductor validate`),
+and the template can never set operators, team, folder, connector bindings,
+secrets, autonomy, sandbox or egress. A newer pack version reaches a bot's
+memory only as a proposal you approve. See [[Bot-Templates]].
 
 ## The home session
 
@@ -439,6 +463,7 @@ team's repo — at one chokepoint. Nothing is written anywhere else.
 | **digest** | `digests/` | `title`, `summary`, `period`, `cases` (list) | the bot (a consolidation writes one) or an operator |
 | **log** | `log/` (`episodes/`: older entries, read-only) | `title`, `case` or `sweep` | conductor, per case (`conductor bot episode`); an operator may **annotate** or **flag wrong**, never rewrite |
 | **handoff** | `handoff/` | `session` | conductor only (`conductor bot handoff`) |
+| **charter** | `charter/` | `template` | conductor only — a [template bot](Bot-Templates)'s charter: seeded with its memory, changed only by an approved template update |
 
 Knowledge, runbooks and watch also take an optional one-line `summary`:
 what the [memory index](#reading-memory) shows for the document (its body's
@@ -1154,6 +1179,10 @@ conductor bot replan <bot> <id>  # re-plan a stale terraform proposal
 conductor bot sweep <bot>        # a proactive sweep now (budget applies)
 conductor usage [--since 24h]    # model usage per runtime/model (per usage.mode; see [[Configuration]])
 conductor bot sweeps <bot>
+conductor bot templates [--search …] [--registry …]   # community bots: templates packs ship ([[Bot-Templates]])
+conductor bot new <name> --from <instance>/<template> [--grant verb=tier]… [--write]   # instantiate one (planned on a copy, a diff)
+conductor bot grant <bot> <verb>=<tier>… [--write]    # widen a template bot
+conductor bot template-check <bot>                    # compare its memory with its template now
 conductor bot teams              # every team: bots, routing, pool, knowledge
 conductor bot team <team>        # …and recent routed cases, delegations, knowledge log, pending promotions
 conductor bot delegations <bot> [--all]  # its delegation edges: handed out, and held

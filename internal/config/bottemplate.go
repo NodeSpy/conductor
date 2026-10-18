@@ -242,6 +242,12 @@ type LoadedTemplate struct {
 // Ref is how a bot names it: <pack instance>/<template>.
 func (l LoadedTemplate) Ref() string { return l.Instance + "/" + l.Name }
 
+// LoadPackTemplates validates a pack's bot templates (for `conductor pack
+// lint` and the catalog).
+func LoadPackTemplates(man *PackManifest, dir string) (map[string]LoadedTemplate, error) {
+	return loadTemplates(man, dir)
+}
+
 // loadTemplates validates every template a pack ships and resolves its
 // files inside the pack. A template that breaks a rule fails the pack.
 func loadTemplates(man *PackManifest, dir string) (map[string]LoadedTemplate, error) {
