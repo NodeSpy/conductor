@@ -18,8 +18,9 @@ test('define a team with bots and defaults, through the diff', async ({ page }) 
   await applyStaged(page);
   await go(page, '#/teams/docs');
   await expect(page.locator('.panel', { hasText: 'peers of each other by default' })).toContainText('release-scribe');
+  // the Bots page lists the bot with its team
   await go(page, '#/bots');
-  await expect(page.locator('svg.peers-graph rect.pg-team')).toHaveCount(3);
+  await expect(page.locator('.bot-list li', { hasText: 'release-scribe' })).toContainText('team docs');
 });
 
 test('assign a bot from its definition; the team ceiling and team tiers are enforced in the controls and refused on validation', async ({ page }) => {

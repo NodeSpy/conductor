@@ -585,3 +585,4 @@ details.dl-card.acc-tech { padding: 14px 22px; }
 @media (max-width: 720px) { .bot-list .dl-need-a { grid-template-columns: 32px minmax(0, 1fr) auto; } .bot-list .dl-need-a .dl-na { grid-column: 2 / -1; justify-content: flex-start; } }
 @media (max-width: 720px) { #wl-body tr[data-row] > td.wl-acts { width: auto !important; justify-self: end; } #wl-body tr[data-row] { grid-template-areas: "wf last" "on acts" !important; } }
 .pack-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dl-bot-av.sm { font-family: var(--font-family-sans); font-weight: var(--font-weight-semibold); }

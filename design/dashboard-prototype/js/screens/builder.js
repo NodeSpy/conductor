@@ -234,7 +234,7 @@
   }
 
   // the trigger in words: "A CI check fails", then where and unless (the mock's When box)
-  const EV_WORDS = { 'gh.check_failed': 'A CI check fails', 'gh.review_requested': 'Someone asks for a review', 'gh.issue_opened': 'An issue is opened', 'gh.pr_opened': 'A pull request is opened', 'gh.pull_request': 'A pull request opens or changes', 'gh.release_drafted': 'A release is drafted', 'pd.incident': 'A PagerDuty incident opens', 'conductor.escalate': 'conductor needs a person', 'conductor.needs_input': 'a run asks a question', 'conductor.failed': 'a run fails', manual: 'You start it' };
+  const EV_WORDS = { 'gh.check_failed': 'A CI check fails', 'gh.review_requested': 'Someone asks for a review', 'gh.issue_opened': 'An issue is opened', 'gh.pr_opened': 'A pull request is opened', 'gh.pull_request': 'A pull request opens or changes', 'gh.release_drafted': 'A release is drafted', 'gh.release': 'A release is published', 'pd.incident': 'A PagerDuty incident opens', 'conductor.escalate': 'conductor needs a person', 'conductor.needs_input': 'a run asks a question', 'conductor.failed': 'a run fails', manual: 'You start it' };
   /** What a workflow does, in one sentence a person reads first: when it starts, then what happens (its agent work and
       the actions that change something), from its own config; its description wins when it has one. */
   // an action's label is an imperative ("Post a review"); in a sentence about the workflow it reads "posts a review"
@@ -249,7 +249,7 @@
     steps.forEach((st) => { const k = st.kind || (st.uses ? 'uses' : ''); if (k === 'agent') add('an agent works on it'); else if (k === 'code') add('runs a command'); else if (st.bot) add('hands it to a bot'); else if (st.uses || k === 'uses') { const d = SCHEMA.verb(String(st.uses || '')); if (d && !d.read) add(third(d.label)); } });
     const list = did.slice(0, 3), tail = list.length > 1 ? `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}` : list[0] || 'it runs its steps';
     return `${when}: ${tail}`; };
-  const whenWords = (srcs) => (srcs.length ? srcs.map((x) => EV_WORDS[x.on] || (/^timer\./.test(x.on) ? 'On its schedule' : x.on)).join(' or ') : 'Nothing starts it yet');
+  const whenWords = (srcs) => (srcs.length ? srcs.map((x) => EV_WORDS[x.on] || (SCHEMA.event && SCHEMA.event(x.on) && SCHEMA.event(x.on).label) || (/^timer\./.test(x.on) ? 'On its schedule' : x.on)).join(' or ') : 'Nothing starts it yet');
   const filterWords = (f) => { if (!isObj(f)) return ''; const out = []; if (f.repo) out.push(`on ${[].concat(f.repo).join(' or ')}`); if (f.not_label_any) out.push(`unless it’s labelled “${[].concat(f.not_label_any).join('” or “')}”`); if (f.label_any) out.push(`only when labelled “${[].concat(f.label_any).join('” or “')}”`); Object.keys(f).filter((k) => !['repo', 'not_label_any', 'label_any'].includes(k)).forEach((k) => out.push(`with ${k.replace(/_/g, ' ')} ${[].concat(f[k]).join(' or ')}`)); return out.join(', '); };
   function triggerCard() {
     const v = B.value || {}, open = B.open.has('$trigger'), srcs = WF.sources(v), iss = B.issues.filter((i) => i.trigger), reusable = !!v.inputs;

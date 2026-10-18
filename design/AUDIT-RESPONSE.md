@@ -69,6 +69,18 @@ section paths, event names and hashes appear only in detail layers.
   menu. **Secrets** first, vaults folded. **Packs** say what they do. **Config**: changes in words, paths when opened,
   sections and safety notes folded. **Preferences** (your menu) holds display and notification settings.
 
+### The owner's walkthrough, r4
+
+- **Bots page** opens on every bot: what it's doing (its task by name), whether it needs you (those first), its folder
+  and team as a quiet line. Folders and teams follow for organizing; no footnote, no peers map.
+- **One word: task** (data, routing, citations; the glossary notes that config and the CLI say "case"). The bot header
+  labels its current task: "Working on: …".
+- **Approval**: the change tiles are counted from the plan's own resources (they match the list); what the bot may do
+  is a link instead of a side card.
+- **Activity on a phone**: the filters sit behind one Filter control. **Workflows**: every trigger reads in words; the
+  row's menu stays in reach on a phone. **Packs**: plain grammar for what's switched on, **Customize** instead of
+  Overrides, no prototype note. **Connections**: the menu sits inline.
+
 ### Not done (and why)
 
 - Bulk on the bots tree, retarget connector / set model in bulk (power N24): scope, unchanged from round 1.
