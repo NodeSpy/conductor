@@ -3,7 +3,7 @@
 // across providers; plan limits and tokens only from a configured usage source.
 const { test, expect, go, applyStaged } = require('./fixtures');
 
-const ROUTES = ['#/overview', '#/runs', '#/runs/r-7f2c', '#/workflows', '#/bots', '#/folders/work', '#/teams/platform', '#/bots/platform-sre', '#/bots/platform-sre/workers'];
+const ROUTES = ['#/overview', '#/runs', '#/runs/r-7f2c', '#/workflows', '#/bots', '#/teams/platform', '#/bots/platform-sre', '#/bots/platform-sre/workers'];
 // the display mode is a browser preference; the source is config
 const setMode = (page, cfg) => page.evaluate((c) => { window.D.prefs.usageMode = c.mode; window.D.usageCfg = c.source ? { source: c.source } : {}; window.S.save(); }, cfg);
 

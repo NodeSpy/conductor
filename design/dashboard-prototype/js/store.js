@@ -137,9 +137,9 @@
       if (!/^[a-z][a-z0-9_-]{0,39}$/.test(name)) e.push(`${Q}: names are lowercase letters, digits, _ and -, up to 40`);
       if (c.from) { if (['dir', 'fields', 'template', 'free_paths', 'writers'].some((x) => c[x] != null)) e.push(`${Q}: from: names a pack's definition, so it can't also set dir, fields, template, free_paths or writers`); return; }
       const dir = String(c.dir || name).replace(/\/$/, '');
-      if (!/^[a-z][a-z0-9_-]*(\/[a-z0-9_-]+)*$/.test(dir)) e.push(`${Q}.dir: a relative folder such as postmortems or notes/vendors`);
-      else if (S.RESERVED_DIRS.includes(dir.split('/')[0])) e.push(`${Q}.dir: ${dir.split('/')[0]}/ belongs to a built-in kind; pick another folder`);
-      else if (dirs[dir]) e.push(`${Q}.dir: ${dir}/ is already ${dirs[dir]}'s folder`); else dirs[dir] = name;
+      if (!/^[a-z][a-z0-9_-]*(\/[a-z0-9_-]+)*$/.test(dir)) e.push(`${Q}.dir: a relative directory such as postmortems or notes/vendors`);
+      else if (S.RESERVED_DIRS.includes(dir.split('/')[0])) e.push(`${Q}.dir: ${dir.split('/')[0]}/ belongs to a built-in kind; pick another directory`);
+      else if (dirs[dir]) e.push(`${Q}.dir: ${dir}/ is already ${dirs[dir]}'s directory`); else dirs[dir] = name;
       Object.entries(c.fields || {}).forEach(([f, d]) => { d = d || {}; if (!/^[a-z][a-z0-9_]*$/.test(f)) e.push(`${Q}.fields.${f}: field names are lowercase letters, digits and _`); if (!S.FIELD_TYPES.includes(d.type || 'string')) e.push(`${Q}.fields.${f}.type: one of ${S.FIELD_TYPES.join(', ')}, not "${d.type}"`); if (d.type === 'enum' && !(d.values || []).length) e.push(`${Q}.fields.${f}.values: an enum needs its values`); if (d.values && d.type !== 'enum') e.push(`${Q}.fields.${f}.values: only an enum has values`); });
       const W = owner === 'team' ? ['operator', 'proposal'] : ['operator', 'bots']; (c.writers || []).forEach((w) => { if (!W.includes(w)) e.push(`${Q}.writers: "${w}" — a ${owner}'s writers are ${W.join(' or ')}`); }); });
     return e; };
@@ -200,7 +200,6 @@
       const e = [];
       if (!/^[a-z][a-z0-9-]*$/.test(k)) e.push(`bot name "${k}": lowercase letters, digits and dashes`);
       e.push(...S.collErrors(`bots.${k}`, n.collections, 'bot'));
-      if (n.folder != null && !S.FOLDER_RE.test(n.folder)) e.push(`bots.${k}.folder: "${n.folder}" — segments of letters, digits, space, . _ -, joined by /`);
       if (!Object.keys(all.operatorsCfg || {}).length) e.push(`bots.${k}.operators: no operators: are configured, so nobody could approve its proposals`); // empty = the team's, or every operator
       (n.operators || []).forEach((o) => { if (!all.operatorsCfg[o]) e.push(`bots.${k}.operators: "${o}" is not in operators:`); });
       (n.peers || []).forEach((p) => { if (p === k) e.push(`bots.${k}.peers: a bot can't peer with itself`); else if (!byName(all.bots, p)) e.push(`bots.${k}.peers: no bot named "${p}"`); });
@@ -215,7 +214,7 @@
       e.push(...S.narrowErrors(k, n, all));
       return e;
     },
-    warn(k, n, all) { const w = []; (n.peers || []).forEach((p) => { const o = byName(all.bots, p); if (o && o.cfg && n.team && o.cfg.team === n.team) { w.push(`bots.${k}.peers: ${p} is in the same team, so they are already peers`); return; } if (o && !((o.cfg && o.cfg.peers) || []).includes(k)) w.push(`bots.${k}.peers: ${p} doesn't list ${k} back, so the link stays closed until it does`); }); if (n.team && n.folder) w.push(`bots.${k}.folder: ${k} is on team ${n.team}, so it shows under the team; its own folder is ignored`); if (!S.getPath(n, 'autonomy.shadow') && !all.bots.find((m) => m.name === k)) w.push(`bots.${k}: a new bot normally starts in shadow mode`); return w; },
+    warn(k, n, all) { const w = []; (n.peers || []).forEach((p) => { const o = byName(all.bots, p); if (o && o.cfg && n.team && o.cfg.team === n.team) { w.push(`bots.${k}.peers: ${p} is in the same team, so they are already peers`); return; } if (o && !((o.cfg && o.cfg.peers) || []).includes(k)) w.push(`bots.${k}.peers: ${p} doesn't list ${k} back, so the link stays closed until it does`); }); if (!S.getPath(n, 'autonomy.shadow') && !all.bots.find((m) => m.name === k)) w.push(`bots.${k}: a new bot normally starts in shadow mode`); return w; },
     widens(b, a) {
       const r = [], B = b || {}, A = a || {};
       const bv = new Set(S.getPath(B, 'skill.verbs') || []); (S.getPath(A, 'skill.verbs') || []).forEach((v) => { if (!bv.has(v)) r.push(`adds verb ${v}`); });
@@ -245,7 +244,7 @@
       Object.keys(n).forEach((f) => { if (!['name', 'origin', 'identities', 'login_url', 'username', 'password', 'otp', 'passkey', 'approval', 'email_code'].includes(f)) e.push(`${P}.${f}: not a credential key (field ${f} not found in type config.BrowserCredential)`); });
       if (!/^https:\/\/[\w.-]+(:\d+)?(\/[\w./-]*)?$/.test(n.origin || '')) e.push(`${P}.origin: "${n.origin || ''}" must be an exact https:// origin (scheme://host[:port], optional path prefix)`);
       if (!(n.identities || []).length) e.push(`${P}.identities: name at least one identity that may use it (a bot: bot:<name>)`);
-      (n.identities || []).forEach((id) => { if (/^(folder|team):/.test(id)) e.push(`${P}.identities: "${id}" is not an identity; folders and teams don't hold access (name the bots)`); else if (/^bot:/.test(id) && !byName(all.bots, id.slice(4))) e.push(`${P}.identities: no bot "${id.slice(4)}"`); });
+      (n.identities || []).forEach((id) => { if (/^team:/.test(id)) e.push(`${P}.identities: "${id}" is not an identity; teams don't hold access (name the bots)`); else if (/^bot:/.test(id) && !byName(all.bots, id.slice(4))) e.push(`${P}.identities: no bot "${id.slice(4)}"`); });
       ['username', 'password', 'otp', 'passkey'].forEach((f) => { const r = n[f]; if (r == null) return; if (typeof r !== 'object' || !r.vault || !r.key) return e.push(`${P}.${f}: { vault, key } naming where the value lives, never a value`); const v = byName(all.vaults, r.vault); if (!v) e.push(`${P}.${f}: no vault "${r.vault}"`); else if (v.status === 'fail') e.push(`${P}.${f}: vault ${r.vault} is unreachable`); });
       if (!n.passkey && !(n.username && n.password)) e.push(`${P}: needs username and password (or a passkey)`);
       return e; },
@@ -254,7 +253,7 @@
     keys: () => D().packs.map((p) => p.name), get: (k) => { const p = byName(D().packs, k); return p ? clone(p.cfg) : null; },
     set(k, n) { const L = D().packs; if (n == null) return drop(L, k); const p = byName(L, k); const ver = (n.use.split('@')[1] || '').replace('^', ''); const ov = Object.keys(n.steps || {}).length + Object.keys(n.triggers || {}).length; if (p) { const moved = ver && p.update && ver === p.update; Object.assign(p, { cfg: n, use: n.use.split('@')[0], hold: !!n.hold, overrides: ov, ver: moved ? ver : p.ver, update: moved ? null : p.update, sha: moved ? '0e47d12' : p.sha }); } else L.push({ name: k, use: n.use.split('@')[0], ver: ver || '1.0.0', sha: 'b51d0a2', status: 'ok', official: n.use.startsWith('conductor-packs/'), hold: !!n.hold, triggers: '0 armed / 1 · arm one to start', overrides: ov, cfg: n }); },
     path: (k) => `packs.${k}`,
-    validate(k, n, all) { const e = []; if (!n.use) e.push(`packs.${k}.use is required`); else if (!/^(conductor-packs\/|\.\/|acme\/)/.test(n.use)) e.push(`packs.${k}.use: ${n.use.split('@')[0]} is not allowed by pack_trust (add a pack_trust source first)`); const mem = (D().packMembers || {})[k]; if (mem) { const addr = Object.entries(mem.workflows).flatMap(([w, ss]) => ss.map((x) => `${w}/${x}`)); Object.keys(n.steps || {}).forEach((key) => { if (!addr.includes(key)) e.push(`packs.${k}.steps["${key}"]: matches nothing in the pack (its steps: ${addr.join(', ')}); an overlay key that matches nothing is an error`); }); Object.keys(n.triggers || {}).forEach((t) => { if (!mem.triggers.includes(t)) e.push(`packs.${k}.triggers.${t}: the pack has no trigger "${t}" (it has ${mem.triggers.join(', ')})`); }); Object.keys(n.connectors || {}).forEach((role) => { if (!mem.roles.includes(role)) e.push(`packs.${k}.connectors.${role}: the pack declares no "${role}" role (requires: ${mem.roles.join(', ')})`); }); Object.keys(n).forEach((key) => { if (!['use', 'connectors', 'steps', 'triggers', 'hold', 'secrets', 'folders', 'settings'].includes(key)) e.push(`packs.${k}.${key}: not a pack instance key`); }); Object.entries(n.triggers || {}).forEach(([t, arm]) => { if (arm && arm.enabled && /github|gh/.test((mem.roles || []).join(',')) && !(arm.repos || []).length) e.push(`packs.${k}.triggers.${t}: arming a github trigger needs repos: (the repos are your consent)`); }); } Object.entries(n.connectors || {}).forEach(([role, inst]) => { if (!byName(all.connectors, inst)) e.push(`packs.${k}.connectors.${role}: no connector "${inst}"`); }); return e; },
+    validate(k, n, all) { const e = []; if (!n.use) e.push(`packs.${k}.use is required`); else if (!/^(conductor-packs\/|\.\/|acme\/)/.test(n.use)) e.push(`packs.${k}.use: ${n.use.split('@')[0]} is not allowed by pack_trust (add a pack_trust source first)`); const mem = (D().packMembers || {})[k]; if (mem) { const addr = Object.entries(mem.workflows).flatMap(([w, ss]) => ss.map((x) => `${w}/${x}`)); Object.keys(n.steps || {}).forEach((key) => { if (!addr.includes(key)) e.push(`packs.${k}.steps["${key}"]: matches nothing in the pack (its steps: ${addr.join(', ')}); an overlay key that matches nothing is an error`); }); Object.keys(n.triggers || {}).forEach((t) => { if (!mem.triggers.includes(t)) e.push(`packs.${k}.triggers.${t}: the pack has no trigger "${t}" (it has ${mem.triggers.join(', ')})`); }); Object.keys(n.connectors || {}).forEach((role) => { if (!mem.roles.includes(role)) e.push(`packs.${k}.connectors.${role}: the pack declares no "${role}" role (requires: ${mem.roles.join(', ')})`); }); Object.keys(n).forEach((key) => { if (!['use', 'connectors', 'steps', 'triggers', 'hold', 'secrets', 'settings'].includes(key)) e.push(`packs.${k}.${key}: not a pack instance key`); }); Object.entries(n.triggers || {}).forEach(([t, arm]) => { if (arm && arm.enabled && /github|gh/.test((mem.roles || []).join(',')) && !(arm.repos || []).length) e.push(`packs.${k}.triggers.${t}: arming a github trigger needs repos: (the repos are your consent)`); }); } Object.entries(n.connectors || {}).forEach(([role, inst]) => { if (!byName(all.connectors, inst)) e.push(`packs.${k}.connectors.${role}: no connector "${inst}"`); }); return e; },
     widens(b, a) { const r = []; Object.entries((a && a.steps) || {}).forEach(([s, o]) => { if (o && o.isolation && o.isolation.mode === 'none' && !S.getPath(b || {}, `steps`)?.[s]?.isolation) r.push(`runs pack step ${s} unsandboxed`); }); if (a && !b) r.push(`adds pack source ${a.use.split('@')[0]}`); return r; },
   };
   C.workflows = { section: 'triggers', file: 'config.yaml', label: 'workflow', href: (k) => `#/workflows/${k}`, text: true,
@@ -283,7 +282,6 @@
   /* ---------- teams ---------- */
   const TIER_ORDER = ['never', 'propose', 'commit_money', 'reversible', 'observe']; // looser →
   S.TIER_ORDER = TIER_ORDER;
-  S.FOLDER_RE = /^[\w][\w .-]*(\/[\w][\w .-]*)*$/;
   S.teamOf = (bot, st = window.D) => { const m = byName(st.bots, bot); const t = m && m.cfg && m.cfg.team; return t ? byName(st.teams, t) : null; };
   /** Tier strictness: observe < reversible < propose < commit_money < never (a verb in several tiers takes the strictest). */
   /** least to most cautious: observe < reversible < propose < commit_money < never */
@@ -349,7 +347,6 @@
       const e = [];
       if (!/^[a-z][a-z0-9-]*$/.test(k)) e.push(`team name "${k}": lowercase letters, digits and dashes`);
       if (window.RS) Object.keys(n).forEach((x) => { if (!RS.team.has(x)) e.push(`teams.${k}.${x}: not a team key (field ${x} not found in type config.TeamConfig)`); });
-      if (n.folder != null && !S.FOLDER_RE.test(n.folder)) e.push(`teams.${k}.folder: "${n.folder}" — segments of letters, digits, space, . _ -, joined by /`);
       const mem = all.bots.filter((m) => m.cfg && m.cfg.team === k).map((m) => m.name);
       e.push(...S.collErrors(`teams.${k}`, n.collections, 'team'));
       const c = S.getPath(n, 'autonomy.ceiling'); if (c != null && !['reversible', 'observe'].includes(c)) e.push(`teams.${k}.autonomy.ceiling: reversible (the most promotion can reach) or observe (no bot promotes anything), not "${c}"`);

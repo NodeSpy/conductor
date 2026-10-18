@@ -50,7 +50,7 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 - `js/scenario.js` the demo days: `calm` (default, mostly healthy), `quiet`, `full` (everything at once; the suite
   sets it in fixtures.js). Per browser in localStorage `cd-demo`; switch from ✦ in the rail.
 - `js/yaml.js` comment-preserving YAML; loads before `data.js`.
-- `js/data.js` fake state (several dated addenda at the end: usage, logins, typed knowledge, env, workflow folders).
+- `js/data.js` fake state (several dated addenda at the end: usage, logins, typed knowledge, env).
 - `js/schema.js` plugin/connector/verb/event declarations. `js/store.js` collections, staging, the config
   pipeline (`S.stage`, `S.view`, `S.configText`, `S.envText`, `S.validate`, `S.apply`).
 - `js/ui.js` router, forms (`UI.form`, `UI.fieldHTML`), drawers, guarded dismissal (`UI.dismissModal`), shared
@@ -68,8 +68,7 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 - `index.html` head script picks the theme before paint (explicit wins, else the OS); `?sim=ios` is the
   test-only iPhone emulation (toolbar overlay + safe areas). Asset URLs carry `?v=<stamp>`; bump it on deploys.
 - `js/create.js` create-in-place drawers (`UI.CREATE`). `js/wf.js` workflow engine + validator.
-- Screens in `js/screens/`: overview, runs, repo (knowledge by kind), bots (teams, bots), folders (shared folder
-  tree, folder pages), browser, logins, builder (workflows list + builder), config, secrets, system (packs,
+- Screens in `js/screens/`: overview, runs, repo (knowledge by kind), bots (teams, bots), botlist (the Bots page: teams are the page), browser, logins, builder (workflows list + builder), config, secrets, system (packs,
   plugins, updates, connectors, runtimes, hosts, isolation, logs), catalog (`#/extensions/browse`, and the picker behind Add a connector),
   access (sign-in, enroll, passkeys).
 
@@ -146,7 +145,7 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 |---|---|
 | Original brief (no dead controls, CRUD via diff, builder, phone, Playwright) | done; re-verify in final run |
 | Pipedream-style builder | done; audit adds hooks/isolation/filter/test-events (P1 18) |
-| Teams; members → bots; delegation; Bots + folders; inline creation; knowledge authoring | done; teams move to the real schema in step D |
+| Teams; members → bots; delegation; the Bots page (teams are the page; no folders); inline creation; knowledge authoring | done; teams move to the real schema in step D |
 | Usage mode (off default, per provider, source-only limits) | done |
 | Planned multi-user behind a toggle | deferred (toggle says so); issue numbers removed from copy |
 | Add a login | done; folder principals removed in step D |
@@ -161,7 +160,7 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 | Run detail (no tabs, back with state, labelled ids, paseo per step, one status look) | done; `status.spec.js` |
 | Reset to the approved designs | done: `design/CONFORMANCE.md`; other open directions frozen |
 | Passkey enroll cancel + every flow has a way out | done (dismiss spec) |
-| Shared folders across workflows | done |
+| Folders | removed: conductor has no folders; teams group bots, sources group workflows |
 
 ## Known gaps
 

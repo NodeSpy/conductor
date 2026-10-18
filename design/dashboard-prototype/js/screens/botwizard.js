@@ -1,6 +1,6 @@
 /* New bot, guided: Purpose → Watches → Tells you where → What it may do →
  * Review. Each answer becomes real config: bots.<name> (description,
- * escalation, team or folder, skill.verbs, autonomy.tiers/promote/shadow)
+ * escalation, team, skill.verbs, autonomy.tiers/promote/shadow)
  * plus one trigger per watched event whose step hands the event to the bot
  * (bot: { name, title }). Everything else (runtime, operators, approval TTL)
  * sits under Advanced; the full definition form is one link away. Loaded
@@ -19,7 +19,7 @@
     ask: { title: 'Asks before anything else', desc: 'Looks things up on its own. Comments, posts and every other change wait for your approval.' },
   };
   const STEPS = ['Purpose', 'Watches', 'Tells you where', 'What it may do', 'Review'];
-  const fresh = () => ({ at: 0, purpose: null, name: '', description: '', team: '', folder: '', events: new Set(), repos: 'acme/api', sweep: false, every: '4h', tell: 'dashboard', slack: '', channel: '#ops', preset: 'ask', shadow: true, runtime: 'claude-cli', operators: [], ttl: '24h' });
+  const fresh = () => ({ at: 0, purpose: null, name: '', description: '', team: '', events: new Set(), repos: 'acme/api', sweep: false, every: '4h', tell: 'dashboard', slack: '', channel: '#ops', preset: 'ask', shadow: true, runtime: 'claude-cli', operators: [], ttl: '24h' });
   let bw = fresh();
 
   const conns = () => S.view().connectors;
@@ -47,7 +47,7 @@
   function botCfg() {
     const g = grants(), c = {};
     if (bw.description) c.description = bw.description;
-    if (bw.team) c.team = bw.team; else if (bw.folder) c.folder = bw.folder;
+    if (bw.team) c.team = bw.team;
     c.escalation = bw.tell === 'slack' && bw.slack ? `Tell the operator in ${bw.channel} (${bw.slack}.post). Anything urgent also goes to Needs you.` : 'Tell the operator in the dashboard: its chat and Needs you.';
     if (bw.operators.length) c.operators = bw.operators.slice();
     c.worker = { runtime: bw.runtime };
@@ -57,7 +57,7 @@
     return c;
   }
   const trigName = (e) => `${bw.name}-${e.key.split('.')[1].replace(/_/g, '-')}`;
-  const trigYAML = (e) => [`name: ${trigName(e)}`, ...(bw.team ? [] : bw.folder ? [`folder: "${bw.folder}"`] : []), `on: ${e.on}`, ...(e.use === 'github' && repos().length ? [`filter: { repo: [${repos().join(', ')}] }`] : []), 'steps:', '  - id: tell', `    bot: { name: ${bw.name}, title: "{{.title}}" }`].join('\n') + '\n';
+  const trigYAML = (e) => [`name: ${trigName(e)}`, `on: ${e.on}`, ...(e.use === 'github' && repos().length ? [`filter: { repo: [${repos().join(', ')}] }`] : []), 'steps:', '  - id: tell', `    bot: { name: ${bw.name}, title: "{{.title}}" }`].join('\n') + '\n';
 
   const nameErr = () => (!/^[a-z][a-z0-9-]*$/.test(bw.name) ? 'lowercase letters, digits and dashes' : bw.name.length > 40 ? 'at most 40 characters' : S.view().bots.some((b) => b.name === bw.name) ? 'a bot by that name exists' : '');
   function stepHTML() {
@@ -67,7 +67,7 @@
         <div class="field${nameErr() ? ' bad' : ''}" data-field="name"><label for="bw-name">Name <span class="req">*</span></label><input class="input mono" id="bw-name" value="${esc(bw.name)}" data-on-input="bw-set" data-k="name" autocomplete="off"><div class="hint">How you'll refer to it, in chat and in config.</div><div class="ferr" role="alert">${nameErr()}</div></div>
         <div class="field"><label for="bw-desc">What it's for, in a line</label><input class="input" id="bw-desc" value="${esc(bw.description)}" data-on-input="bw-set" data-k="description" placeholder="Triages incidents for the API"></div>
         <div class="row wrap" style="gap:12px"><div class="field grow"><label for="bw-team">Team</label><select class="select" id="bw-team" data-on-change="bw-set" data-k="team"><option value="">none (a solo bot)</option>${v.teams.map((t) => `<option value="${esc(t.name)}"${bw.team === t.name ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select><div class="hint">A team shares approvers, limits and knowledge; its bots can only be stricter.</div></div>
-          ${bw.team ? '' : `<div class="field grow"><label for="bw-folder">Folder <span class="opt">optional, organization only</span></label><input class="input mono" id="bw-folder" value="${esc(bw.folder)}" data-on-input="bw-set" data-k="folder" placeholder="work/platform"></div>`}</div></div>` : ''}`;
+        </div></div>` : ''}`;
     if (bw.at === 1) { const evs = events(), gh = chosenEvents().some((e) => e.use === 'github');
       return `<p class="muted small" style="margin:0">Pick the events it should hear about. Each becomes a trigger that hands the event to ${esc(bw.name)}.</p>
       <div class="panel"><div class="list">${evs.map((e) => `<label class="item click bw-ev"><input type="checkbox" class="cbx" data-on-change="bw-ev" data-k="${e.key}"${bw.events.has(e.key) ? ' checked' : ''}><span class="grow"><b>${esc(e.label)}</b> <span class="muted small">from ${esc(e.inst)}</span></span><span class="mono tiny muted">${esc(e.on)}</span></label>`).join('') || '<div class="empty small">No connected service delivers events yet. <a class="link" href="#/connectors/connectors">Connect one</a>.</div>'}</div></div>
@@ -95,7 +95,7 @@
         <div class="item"><span class="caps" style="width:120px">may</span><span class="grow">${esc(PRESETS[bw.preset].title)}</span></div></div></div>
       <div class="panel"><div class="panel-head"><h3>The config this writes</h3><span class="muted small">bots.${esc(bw.name)}${evs.length ? ` and ${evs.length} trigger${evs.length > 1 ? 's' : ''}` : ''} · applied through the diff</span></div><div class="panel-body">${UI.yaml(YAML.stringify({ bots: { [bw.name]: c } }) + (evs.length ? '\ntriggers:\n' + evs.map((e) => '  - ' + trigYAML(e).trimEnd().split('\n').join('\n    ') + '\n').join('') : ''))}</div></div>`;
   }
-  const canNext = () => (bw.at === 0 ? (bw.purpose && !nameErr() && !UI.folderPathErr(bw.folder) ? '' : !bw.purpose ? 'Pick what it should do first' : nameErr() ? 'Fix the name first' : 'Fix the folder first') : bw.at === 2 && bw.tell === 'slack' && !bw.slack ? 'Pick a Slack connector' : bw.at === 2 && bw.tell === 'slack' && !CHANNEL.test(bw.channel || '') ? 'A Slack channel is # and up to 80 lowercase letters, digits, - or _' : '');
+  const canNext = () => (bw.at === 0 ? (bw.purpose && !nameErr() ? '' : !bw.purpose ? 'Pick what it should do first' : 'Fix the name first') : bw.at === 2 && bw.tell === 'slack' && !bw.slack ? 'Pick a Slack connector' : bw.at === 2 && bw.tell === 'slack' && !CHANNEL.test(bw.channel || '') ? 'A Slack channel is # and up to 80 lowercase letters, digits, - or _' : '');
   const CHANNEL = /^#[a-z0-9][a-z0-9_-]{0,79}$/;
   /* New bot is a large sheet over the Bots page (the chosen option A): you can see where you came from; a ✕ where people
      look for it, Esc, or the scrim closes it (asking first only once something's been entered); a thin progress line
@@ -114,7 +114,7 @@
   UI.act('bw-purpose', (b) => { const p = PURPOSES[b.dataset.p], prev = bw.purpose && PURPOSES[bw.purpose]; bw.purpose = b.dataset.p; if (!bw.name || (prev && bw.name === prev.name)) bw.name = p.name; if (!bw.description || (prev && bw.description === prev.description)) bw.description = p.description; bw.events = new Set(p.events.filter((k) => events().some((e) => e.key === k))); redraw(); });
   UI.act('bw-set', (el) => { bw[el.dataset.k] = el.value; if (el.tagName === 'SELECT') { redraw(); return; } const f = el.closest('.field');
     if (el.dataset.k === 'name' && f) { const e = nameErr(); f.classList.toggle('bad', !!e); f.querySelector('.ferr').textContent = e; }
-    // every field re-checks Next as you type (a channel, a folder, the name), not only on the next render
+    // every field re-checks Next as you type (a channel, the name), not only on the next render
     const nx = UI.$('.wizard-foot .btn.primary'); if (nx && bw.at < STEPS.length - 1) { const why = canNext(); if (why) { nx.setAttribute('aria-disabled', 'true'); nx.dataset.reason = why; nx.removeAttribute('data-act'); } else { nx.removeAttribute('aria-disabled'); delete nx.dataset.reason; nx.dataset.act = 'bw-next'; } } });
   UI.act('bw-ev', (el) => { el.checked ? bw.events.add(el.dataset.k) : bw.events.delete(el.dataset.k); redraw(); });
   UI.act('bw-op', (el) => { bw.operators = el.checked ? bw.operators.concat(el.dataset.k) : bw.operators.filter((o) => o !== el.dataset.k); });
@@ -128,7 +128,7 @@
   UI.act('bw-back', () => { bw.at = Math.max(0, bw.at - 1); redraw(); });
   // leaving is obvious and safe: a Close button where people look for one, Esc, and a confirm only once something has
   // been entered (nothing typed or picked: it just closes)
-  const dirty = () => bw.at > 0 || !!bw.purpose || !!bw.name || !!bw.description || !!bw.folder || !!bw.team;
+  const dirty = () => bw.at > 0 || !!bw.purpose || !!bw.name || !!bw.description || !!bw.team;
   UI.act('bw-close', () => { if (!dirty()) { bw = fresh(); UI.go('#/bots'); return; }
     UI.confirm({ title: 'Discard this new bot?', body: 'What you’ve entered so far is thrown away. Nothing has been created yet.', ok: 'Discard', cancel: 'Keep editing', danger: true }).then((ok) => { if (ok) { bw = fresh(); UI.go('#/bots'); } }); });
   UI.act('bw-cancel', () => { bw = fresh(); });

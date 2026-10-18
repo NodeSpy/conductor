@@ -55,7 +55,7 @@
   function teamForm(t) {
     const isNew = !t, c = t ? staged('teams', t.name) : { operators: ['ops'], autonomy: { ceiling: 'reversible' }, isolation: { sandbox: 'required' } };
     const g = (p) => S.getPath(c, p);
-    const initial = isNew ? { ceiling: 'reversible', sandbox: 'required', peers: 'team' } : { description: c.description, folder: c.folder, operators: c.operators, ceiling: g('autonomy.ceiling') || 'reversible', shadow: !!g('autonomy.shadow'), sandbox: g('isolation.sandbox') || 'optional', handoff: g('isolation.handoff_workers') !== false, peers: c.peers || 'team', depth: g('delegation.max_depth'), pool_runs: g('budget.proactive.max_runs_per_day'), pool_turns: g('budget.proactive.max_turns_per_day'), pool_tokens: g('budget.proactive.max_tokens_per_day'), pool_cost: g('budget.proactive.max_cost_per_day'), cap_action: g('budget.spend_cap.per_action'), cap_period: g('budget.spend_cap.per_period'), secrets_via: g('credentials.secrets_via') || 'none', allow_secrets: g('credentials.allow_secrets'), logins: g('browser.logins'), credentials: g('browser.credentials'), repo: g('knowledge.repo'), promotion: g('knowledge.promotion') || 'proposal', lead: g('routing.lead'), fallback: g('routing.fallback') };
+    const initial = isNew ? { ceiling: 'reversible', sandbox: 'required', peers: 'team' } : { description: c.description, operators: c.operators, ceiling: g('autonomy.ceiling') || 'reversible', shadow: !!g('autonomy.shadow'), sandbox: g('isolation.sandbox') || 'optional', handoff: g('isolation.handoff_workers') !== false, peers: c.peers || 'team', depth: g('delegation.max_depth'), pool_runs: g('budget.proactive.max_runs_per_day'), pool_turns: g('budget.proactive.max_turns_per_day'), pool_tokens: g('budget.proactive.max_tokens_per_day'), pool_cost: g('budget.proactive.max_cost_per_day'), cap_action: g('budget.spend_cap.per_action'), cap_period: g('budget.spend_cap.per_period'), secrets_via: g('credentials.secrets_via') || 'none', allow_secrets: g('credentials.allow_secrets'), logins: g('browser.logins'), credentials: g('browser.credentials'), repo: g('knowledge.repo'), promotion: g('knowledge.promotion') || 'proposal', lead: g('routing.lead'), fallback: g('routing.fallback') };
     UI.form({ caps: isNew ? 'teams:' : `teams.${t.name}`, title: isNew ? 'New team' : `Edit team ${t.name}`, wide: true,
       intro: 'A team groups bots: they share approvers and ceilings, and a bot on it can only be stricter. Teams are the unit for shared access.',
       values: initial,
@@ -63,7 +63,6 @@
         isNew ? { k: 'name', type: 'string', req: true, ph: 'e.g. data', pattern: /^[a-z][a-z0-9-]*$/, patternMsg: 'Lowercase letters, digits and dashes.', validate: (v) => (T(v) ? 'A team by that name exists.' : '') } : null,
         { k: 'description', type: 'string', mono: false, label: 'Description' },
         isNew ? { k: 'bots', type: 'select-multi', label: 'Bots', options: S.view().bots.map((m) => m.name), create: 'bot', createLabel: 'New bot', help: 'A bot is on at most one team: adding one here moves it.' } : null,
-        { k: 'folder', type: 'enum', label: 'Folder', options: UI.allFolders(), create: 'folder', createLabel: 'New folder', help: 'Organization only: where the team shows. No permissions.' },
         { section: 'Who approves', k: 'operators', type: 'select-multi', label: 'Operators (approvers)', options: Object.keys(D.operatorsCfg), help: 'May approve the bots\' proposals and knowledge promotions. A bot\'s operators must be a subset. Empty: every operator.' },
         { section: 'What bots may do on their own', k: 'ceiling', type: 'seg', label: 'Ceiling (the most a bot may run without asking)', options: [['reversible', 'reversible: undoable actions'], ['observe', 'observe: read only']], help: 'A bot may promote a verb (run it without your signature) only up to this tier. propose, commit_money and never always ask or refuse.' },
         { k: 'shadow', type: 'bool', label: 'Shadow mode', on: 'hold every bot in shadow mode (proposals are recorded, nothing executes)' },
@@ -95,7 +94,6 @@
         const v = Object.assign({}, vIn); Object.keys(v).forEach((k) => { if (empty(v[k]) && empty(v0[k])) v[k] = v0[k]; });
         const build = (v) => { const name = isNew ? v.name : t.name, n = {};
         if (v.description) n.description = v.description;
-        if (v.folder) n.folder = v.folder;
         if (isNew ? false : c.collections) n.collections = c.collections;
         if ((v.operators || []).length) n.operators = v.operators;
         if (v.peers === 'none') n.peers = 'none';
@@ -143,7 +141,7 @@
     const pend = c.knowledge ? R.pending('team:' + t.name) : 0;
     // the bot page's header (crumbs, avatar, name, one line): what's true of the whole team, in words, never capsules
     const lead = leadOf({ cfg: c }), ceilW = { observe: 'only read', reversible: 'do undoable things' }[S.getPath(c, 'autonomy.ceiling') || 'reversible'] || S.getPath(c, 'autonomy.ceiling');
-    return `<div class="page dl-page team-page"><div class="dl-crumbs">${UI.folderCrumbs(UI.folderOfTeam(t.name, false))}</div>
+    return `<div class="page dl-page team-page"><div class="dl-crumbs"><a href="#/bots">Bots</a></div>
       <div class="dl-bothead"><span class="dl-bot-av">${esc(t.name.slice(0, 2))}</span><div><h1>${esc(t.name)}</h1><p class="dl-lead">${ms.length} bot${ms.length === 1 ? '' : 's'}${lead ? `, led by ${esc(lead)}` : ''}. ${(c.operators || []).length ? `${(c.operators || []).map(esc).join(' or ')} approve${(c.operators || []).length === 1 ? 's' : ''}` : 'Any operator approves'}; on their own, its bots may ${ceilW}.</p></div>${S.find('teams', t.name) ? UI.statusMark('staged', 'Change not applied') : ''}
         <button class="icon-btn" data-act="team-more" data-t="${t.name}" aria-label="More for team ${esc(t.name)}">${icon('more')}</button></div>
       <div class="dl-actions"><button class="btn secondary" data-act="team-deliver" data-t="${t.name}">${icon('send')}Route work here</button><button class="btn secondary" data-act="team-edit" data-t="${t.name}">${icon('edit')}Edit team</button></div>
@@ -357,7 +355,7 @@
     const t = teamOf(m), open = D.cases.filter((c) => c.bot === m.name && c.status === 'open'), cur = open[0];
     const role = (S.staged('bots', m.name) || m.cfg || {}).description || m.role || (t ? `A bot on the ${t.name} team` : 'A bot');
     const now = m.shadow ? UI.statusMark('shadow', 'Shadow: practice mode') : m.home === 'live' ? UI.statusMark('run', 'Running') : UI.statusMark('idle', 'Parked');
-    return `<div class="dl-crumbs">${UI.folderCrumbs(UI.folderOfBot(m.name, false))}${t ? ` › <a href="#/teams/${t.name}">team ${t.name}</a>` : ''}</div>
+    return `<div class="dl-crumbs"><a href="#/bots">Bots</a>${t ? ` › <a href="#/teams/${t.name}">team ${t.name}</a>` : ''}</div>
       <div class="dl-bothead"><span class="dl-bot-av">${esc(m.name.split(/[-_]/).map((w) => w[0]).join('').slice(0, 2))}</span><div><h1>${esc(m.name)}</h1><p class="dl-lead">${esc(role)}</p>${cur && m.home === 'live' ? `<p class="bot-working">Working on: <a href="#/bots/${m.name}/cases/${cur.id}">${esc(cur.title)}</a></p>` : ''}</div>${now}
         <button class="icon-btn" data-act="bot-more" data-m="${m.name}" aria-label="More for ${esc(m.name)}">${icon('more')}</button></div>`;
   }
@@ -675,7 +673,6 @@
   const DF = [
     { k: 'description', type: 'string', mono: false, label: 'Description', sec: 'Identity & charter' },
     { k: 'team', type: 'enum', label: 'Team', options: () => S.view().teams.map((t) => t.name), create: 'team', createLabel: 'New team', help: 'Empty for a solo bot. On a team, defaults come from the team and this bot can only narrow them.' },
-    { k: 'folder', type: 'enum', label: 'Folder', options: () => UI.allFolders(), create: 'folder', createLabel: 'New folder', help: 'Organization only. A bot on a team shows under its team instead.', solo: true },
     { k: 'operators', type: 'list', label: 'Operators (approvers)', help: 'Leave empty to inherit the team\'s.' },
     { k: 'escalation', type: 'string', mono: false, label: 'Escalation (when to involve you)' },
     { k: 'autonomy.shadow', type: 'bool', label: 'Practice mode (shadow)', on: 'it says what it would do; nothing is done', sec: 'Autonomy' },
@@ -711,7 +708,7 @@
     const inhMap = { operators: 'operators', 'autonomy.approval_ttl': 'autonomy.approval_ttl', 'isolation.sandbox': 'isolation.sandbox', 'proactive.budget.max_runs_per_day': 'budget.proactive.max_runs_per_day', 'proactive.budget.max_cost_per_day': 'budget.proactive.max_cost_per_day' };
     let sec = 'Identity & charter';
     const charter = `<div class="field"><label for="df-charter">Charter <span class="opt">bots/${esc(name)}.md · config only</span></label><textarea class="textarea" rows="6" id="df-charter" data-df-charter="1">${esc(dv.charter)}</textarea><div class="hint">Nothing on the agent-facing surface writes it.</div></div>`;
-    const fields = DF.map((f) => { const fd = Object.assign({}, f, { options: typeof f.options === 'function' ? f.options() : f.options }); const head = f.sec && f.sec !== sec ? (`${sec === 'Identity & charter' ? charter : ''}</div></div><div class="panel"><div class="panel-head"><h3>${(sec = f.sec)}</h3></div><div class="panel-body def-grid">`) : ''; if (f.api && !UI.isApi()) return head; if (f.solo && dv.draft.team) return head + `<div class="field"><label>Folder</label><div class="hint inh-hint">${icon('folder')} shows under team ${esc(dv.draft.team)}${UI.folderOfTeam(dv.draft.team) ? ' in ' + esc(UI.folderOfTeam(dv.draft.team)) : ''}</div></div>`; const html = UI.fieldHTML(Object.assign({}, fd, { k: 'df.' + f.k }), S.getPath(dv.draft, f.k)); return head + html.replace('<div class="ferr"', (inhMap[f.k] && team ? inh(inhMap[f.k]) : '') + '<div class="ferr"'); }).join('');
+    const fields = DF.map((f) => { const fd = Object.assign({}, f, { options: typeof f.options === 'function' ? f.options() : f.options }); const head = f.sec && f.sec !== sec ? (`${sec === 'Identity & charter' ? charter : ''}</div></div><div class="panel"><div class="panel-head"><h3>${(sec = f.sec)}</h3></div><div class="panel-body def-grid">`) : ''; if (f.api && !UI.isApi()) return head; const html = UI.fieldHTML(Object.assign({}, fd, { k: 'df.' + f.k }), S.getPath(dv.draft, f.k)); return head + html.replace('<div class="ferr"', (inhMap[f.k] && team ? inh(inhMap[f.k]) : '') + '<div class="ferr"'); }).join('');
     const yaml = YAML.stringify({ bots: { [name]: dv.draft } });
     const changed = !YAML.eq(dv.draft, dv.base) || (isNew ? !!dv.newName : dv.charter !== (D.charters[m.name] || ''));
     const body = `<div class="grid g2" style="align-items:start">

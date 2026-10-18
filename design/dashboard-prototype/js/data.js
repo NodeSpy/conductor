@@ -641,18 +641,12 @@ steps:
       text: "{{.incident.service}} · {{.url}}"
 ` });
 
-  /* Folders: an optional `folder: "a/b"` on any bot or team. Organization only
-   * (display, filter, search): no permissions, defaults or behavior. A bot on
-   * a team shows under its team; the team sits in a folder. */
-  D.teams.find((t) => t.name === 'platform').cfg.folder = 'work/platform';
-  D.teams.find((t) => t.name === 'finance').cfg.folder = 'work/billing';
-  D.bots.find((b) => b.name === 'release-scribe').cfg.folder = 'work/platform';
+  /* A solo bot for the home lab. */
   D.bots.push({ name: 'homelab', color: 'var(--color-icon-default)', desc: 'Watches the home lab: backups, certificates, disks', home: 'live', session: 's4', turns: 18, maxTurns: 60, age: '5h', maxAge: '24h', shadow: false, sandboxed: true, mode: 'namespace', operators: ['ops'], open: 1, pending: 0, workers: 0, spend: 0, proactive: { every: '6h', next: '2h 40m', quiet: '23:00-08:00', budget: '1/3 runs' }, peers: [],
-    cfg: { description: 'Watches the home lab: backups, certificates, disks', folder: 'personal/home', charter_file: 'bots/homelab.md', operators: ['ops'], skill: { verbs: ['kv.get'] }, autonomy: { shadow: false, tiers: { observe: ['kv.get'] }, promote: [], approval_ttl: '24h' }, proactive: { every: '6h', quiet_hours: '23:00-08:00', budget: { max_runs_per_day: 3, max_cost_per_day: 0.5 } }, isolation: { mode: 'namespace' } } });
+    cfg: { description: 'Watches the home lab: backups, certificates, disks', charter_file: 'bots/homelab.md', operators: ['ops'], skill: { verbs: ['kv.get'] }, autonomy: { shadow: false, tiers: { observe: ['kv.get'] }, promote: [], approval_ttl: '24h' }, proactive: { every: '6h', quiet_hours: '23:00-08:00', budget: { max_runs_per_day: 3, max_cost_per_day: 0.5 } }, isolation: { mode: 'namespace' } } });
   D.charters.homelab = 'Keep an eye on the home lab. Report missed backups and expiring certificates; never change anything.\n';
   D.chats.homelab = [];
   D.cases.push({ id: 'c38', bot: 'homelab', title: 'Nightly backup missed on nas-01', status: 'open', requester: 'proactive (sweep x2)', cls: 'proactive', opened: m(140), workers: 0, proposals: 0, routed: { by: 'proactive', to: 'homelab', requester_kept: true }, notes: [] });
-  D.folderDrafts = [];
 
   /* models: fleets — ranked acceptable models a step names instead of a model id */
   D.fleets = [
@@ -697,7 +691,7 @@ steps:
   ];
   D.people = [
     { name: 'ops', roles: [['owner', '']], passkeys: ['laptop · Touch ID', 'phone · Face ID'], active: m(4) },
-    { name: 'alex', roles: [['approver', 'team platform'], ['operator', 'folder work']], passkeys: ['phone · Face ID'], active: m(40) },
+    { name: 'alex', roles: [['approver', 'team platform'], ['operator', 'team finance']], passkeys: ['phone · Face ID'], active: m(40) },
     { name: 'sam', roles: [['viewer', '']], passkeys: ['security key'], active: m(3000) },
     { name: 'ci-bot', roles: [['operator', 'bot release-scribe']], passkeys: [], active: m(600), service: true },
   ];
@@ -786,16 +780,6 @@ steps:
   ];
 })();
 
-/* Folders are one shared organization: the same folder: path places bots,
- * teams and workflows. Your workflows carry folder: in config; pack workflows
- * sit under packs/<instance>/ unless you place them (packs.<i>.folders); a
- * bot's synthesized workflow follows its bot or team. */
-(function () {
-  const D = window.D;
-    // a workflow's folder is a comment on its first line (# folder: …): organization only, invisible to today's loader
-  const put = (name, folder) => { const w = D.workflows.find((x) => x.name === name); if (w && w.yaml && !/^#\s*folder:/m.test(w.yaml)) w.yaml = w.yaml.replace(/^(name: .*\n)/m, `$1# folder: ${folder}\n`); };
-  put('ci-fixer', 'work/platform'); put('incident-intake', 'work/platform'); put('assess-and-post', 'work/platform'); put('issue-triage', 'work/web'); put('alert', 'personal/home');
-})();
 
 /* What each installed pack exposes to overrides (conductor pack plan): its
  * workflows' step ids and its trigger names. An overlay key that matches
@@ -849,8 +833,8 @@ window.D.packMembers = {
   const T = (n) => D.teams.find((t) => t.name === n);
   const B = (n) => D.bots.find((b) => b.name === n);
   const plat = T('platform'), fin = T('finance');
-  if (plat) plat.cfg = { description: 'Platform services: api, web, infra', folder: plat.cfg.folder || 'work/platform', operators: ['ops', 'oncall'], autonomy: { ceiling: 'reversible', tiers: { never: ['gh.delete_*'] } }, budget: { proactive: { max_runs_per_day: 10, max_turns_per_day: 120 } }, isolation: { sandbox: 'required' }, browser: { logins: ['console.example.com'], credentials: ['grafana', 'statuspage'] }, knowledge: { repo: 'team-knowledge/platform', promotion: 'proposal' }, routing: { rules: [{ name: 'pd-api', match: { on: 'pd.incident', service: 'api*' }, to: 'platform-sre' }, { name: 'web-issues', match: { on: 'gh.issue_opened', repo: 'acme/web' }, to: 'web-triage' }], lead: 'platform-sre', fallback: 'platform-sre' } };
-  if (fin) fin.cfg = { description: 'Cost, billing and forecasts', folder: fin.cfg.folder || 'work/billing', operators: ['ops'], autonomy: { ceiling: 'observe' }, budget: { spend_cap: { per_action: 2500, per_period: 6000 } }, isolation: { sandbox: 'required', handoff_workers: false }, routing: { rules: [{ name: 'cost-anomaly', match: { on: 'aws-cost.anomaly' }, to: 'billing-sre' }], fallback: 'billing-sre' } };
+  if (plat) plat.cfg = { description: 'Platform services: api, web, infra', operators: ['ops', 'oncall'], autonomy: { ceiling: 'reversible', tiers: { never: ['gh.delete_*'] } }, budget: { proactive: { max_runs_per_day: 10, max_turns_per_day: 120 } }, isolation: { sandbox: 'required' }, browser: { logins: ['console.example.com'], credentials: ['grafana', 'statuspage'] }, knowledge: { repo: 'team-knowledge/platform', promotion: 'proposal' }, routing: { rules: [{ name: 'pd-api', match: { on: 'pd.incident', service: 'api*' }, to: 'platform-sre' }, { name: 'web-issues', match: { on: 'gh.issue_opened', repo: 'acme/web' }, to: 'web-triage' }], lead: 'platform-sre', fallback: 'platform-sre' } };
+  if (fin) fin.cfg = { description: 'Cost, billing and forecasts', operators: ['ops'], autonomy: { ceiling: 'observe' }, budget: { spend_cap: { per_action: 2500, per_period: 6000 } }, isolation: { sandbox: 'required', handoff_workers: false }, routing: { rules: [{ name: 'cost-anomaly', match: { on: 'aws-cost.anomaly' }, to: 'billing-sre' }], fallback: 'billing-sre' } };
   const fix = (n, f) => { const b = B(n); if (b && b.cfg) f(b.cfg); };
   D.bots.forEach((b) => { const c = b.cfg || {}; if (c.isolation && c.isolation.mode) c.isolation = c.isolation.mode === 'container' ? { sandbox: 'required' } : {}; if (c.isolation && !Object.keys(c.isolation).length) delete c.isolation; if (c.autonomy && c.autonomy.spend) { c.autonomy.spend_cap = c.autonomy.spend; delete c.autonomy.spend; } if (c.autonomy && Array.isArray(c.autonomy.promote) && !c.autonomy.promote.length) delete c.autonomy.promote; });
   fix('platform-sre', (c) => { c.proactive = { every: '4h', quiet_hours: '22:00-07:00', budget: { max_runs_per_day: 6, max_turns_per_day: 60 }, checklist: { section: 'Proactive checks' }, notify_at: 'high' }; });

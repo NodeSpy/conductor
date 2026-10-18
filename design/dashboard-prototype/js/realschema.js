@@ -33,10 +33,10 @@
     filterKeys: { github: ['repo', 'branch', 'base_branch', 'title', 'label_any', 'label_all', 'require_label', 'author', 'comment_author', 'author_bot', 'draft', 'sole_assignee', 'merge_state', 'review_decision', 'non_author_approval', 'threads_resolved', 'check_name'] },
     boolFilterKeys: new Set(['draft', 'author_bot', 'sole_assignee', 'non_author_approval', 'threads_resolved']),
     // proposed with the dashboard (docs/design/dashboard.md), not in conductor yet
-    NEW: { trigger: { folder: 'workflow folders (organization only)' }, workflow: { folder: 'workflow folders (organization only)' }, pack: { folders: 'placing pack workflows in folders' } },
+    NEW: { trigger: {}, workflow: {}, pack: {} },
     // bots and teams (feat/members)
-    bot: set('description charter charter_file scope escalation operators memory_repo seed_dir home worker skill autonomy disabled terraform proactive peers team folder collections isolation browser'),
-    team: set('description folder collections operators peers delegation autonomy budget isolation credentials browser knowledge routing'),
+    bot: set('description charter charter_file scope escalation operators memory_repo seed_dir home worker skill autonomy disabled terraform proactive peers team collections isolation browser'),
+    team: set('description collections operators peers delegation autonomy budget isolation credentials browser knowledge routing'),
     teamCeilings: ['observe', 'reversible'],
     tiers: ['observe', 'reversible', 'propose', 'commit_money', 'never'],
   });

@@ -112,6 +112,18 @@ section paths, event names and hashes appear only in detail layers.
 - **Waiting on a pick** (`browse-options.html`): Bots and Workflows browsing, the facts line, and the New bot flow
   with community bots.
 
+### The owner's picks (facts line, New bot, Bots and Workflows) and no folders
+
+- **The facts line** (option 1, icon and value) is in every list: Needs you (it replaces the grey mono line),
+  Activity, a bot's approvals, Bots and Workflows; connector facts come from the connector's declared attributes.
+- **New bot** is a sheet over the Bots page (option A), full screen on a phone.
+- **Bots** (direction 1, teams are the page): each team a section that says its rules and builds the team; solo bots
+  last; status a quiet mark that links to Needs you or Activity; bulk move, model, practice mode, archive.
+- **Workflows** (direction 1): yours, each pack with its update and Customize, made-for-bots as one line; an on/off
+  switch per row; bulk on/off.
+- **No folders**: conductor has no folders, so the dashboard has none (no folder menus, crumbs, pages, moves, forms or
+  copy; old `#/folders/…` links land on Bots). Earlier entries in this file that mention folders are history.
+
 ### Not done (and why)
 
 - Bulk on the bots tree, retarget connector / set model in bulk (power N24): scope, unchanged from round 1.

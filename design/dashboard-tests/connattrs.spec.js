@@ -8,9 +8,9 @@ const path = require('path');
 const { test, expect, go } = require('./fixtures');
 
 const P = path.join(__dirname, '..', 'dashboard-prototype', 'js');
-// the list, filter, search and facts surfaces: Activity, Needs you and a run (runs.js), Home, Bots (folders.js), ⌘K,
+// the list, filter, search and facts surfaces: Activity, Needs you and a run (runs.js), Home, Bots (botlist.js), ⌘K,
 // the filter bar itself, and the options frames that preview Bots and Workflows
-const SURFACES = ['screens/runs.js', 'screens/overview.js', 'screens/folders.js', 'palette.js', 'filter.js'];
+const SURFACES = ['screens/runs.js', 'screens/overview.js', 'screens/botlist.js', 'palette.js', 'filter.js'];
 const FIELD = /\.(repo|repos|branch|channel|urgency|check_name|number)\b|['"`](repo|branch|channel|urgency|check_name)['"`]|\b(repo|branch|channel|urgency|check_name):\s/;
 const strip = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/([;,{(])\s*\/\/ .*$/gm, '$1');
 

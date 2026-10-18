@@ -29,12 +29,6 @@ test('anything shown as needing you is in Needs you and its count, a waiting sig
   await expect(page.locator('#rail-nav [data-nav="attention"] .count')).toHaveText(String(items.length));
 });
 
-test('the folder page narrows the global list: its failure and approval are there, with the same marks (bugs M4)', async ({ page }) => {
-  await go(page, '#/folders/work', { fresh: true });
-  await expect(page.locator('.folder-needs')).toContainText('ci-fixer');
-  await expect(page.locator('.folder-stats')).not.toContainText(/Failing\s*0/);
-});
-
 test('the signing dialog opens on itself, keeps Tab inside, and Enter twice never signs (power N5, newcomer N5)', async ({ page }) => {
   test.skip(isPhone(page), 'keyboard focus: desktop');
   await go(page, '#/bots/platform-sre/proposals/p12', { fresh: true });
@@ -70,13 +64,6 @@ test('Add a connector is the searchable catalog with a git source; the instance 
   await page.fill('.modal #cat-q', 'linear');
   await page.locator('.modal [data-act="cat-pick"][data-name="linear"]').click();
   await expect(page.locator('#f-name')).toHaveValue('linear');
-});
-
-test('one empty choice per folder picker (bugs B3)', async ({ page }) => {
-  await go(page, '#/folders/work', { fresh: true });
-  await page.locator('[data-act="f-new"]').first().click();
-  const opts = await page.locator('.modal select[data-k="parent"] option').allTextContents();
-  expect(opts.filter((o) => /none|top level/i.test(o))).toEqual(['top level']);
 });
 
 test('a bot\'s reach is said once: a verb it may never run says never in its table too (newcomer N1, power N15)', async ({ page }) => {

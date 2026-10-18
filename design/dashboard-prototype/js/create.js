@@ -29,14 +29,9 @@
   C.team = (ctx, done) => drawer({ caps: 'new team', title: 'New team', intro: 'Bots on a team share its approvers and ceilings, and can only be stricter.',
     fields: [Object.assign({ k: 'name', type: 'string', req: true, validate: taken(() => V().teams) }, NAME), { k: 'description', type: 'string', mono: false },
       { k: 'operators', type: 'select-multi', label: 'Operators / approvers', req: true, options: Object.keys(D.operatorsCfg) },
-      { k: 'ceiling', type: 'seg', label: 'Bots may run on their own', options: [['reversible', 'up to reversible (undoable)'], ['observe', 'reads only']], def: 'reversible' },
-      { k: 'folder', type: 'enum', label: 'Folder', options: UI.allFolders(), create: 'folder', createLabel: 'New folder' }],
+      { k: 'ceiling', type: 'seg', label: 'Bots may run on their own', options: [['reversible', 'up to reversible (undoable)'], ['observe', 'reads only']], def: 'reversible' }],
     note: note('team'),
-    onSubmit: (v) => { const n = { operators: v.operators, autonomy: { ceiling: v.ceiling || 'reversible' }, isolation: { sandbox: 'required' } }; if (v.description) n.description = v.description; if (v.folder) n.folder = v.folder; stage('teams', v.name, n, done); } });
-  C.folder = (ctx, done) => drawer({ caps: 'new folder · organization only', title: 'New folder', values: { parent: ctx.parent || '' },
-    fields: [{ k: 'parent', type: 'enum', label: 'Inside', options: [['', 'top level']].concat(UI.allFolders().map((f) => [f, f])) }, { k: 'name', type: 'string', req: true, pattern: UI.FOLDER_SEG, patternMsg: 'Letters, digits, spaces, . _ and - (up to 48, no ".."); no slashes.' }],
-    submit: 'Create folder',
-    onSubmit: (v) => { const path = (v.parent ? v.parent + '/' : '') + v.name.trim(); if (UI.allFolders().includes(path)) return `${path} exists already.`; D.folderDrafts = (D.folderDrafts || []).concat([path]); S.save(); done(path); } });
+    onSubmit: (v) => { const n = { operators: v.operators, autonomy: { ceiling: v.ceiling || 'reversible' }, isolation: { sandbox: 'required' } }; if (v.description) n.description = v.description; stage('teams', v.name, n, done); } });
   C.connector = (ctx, done) => {
     const uses = Object.keys(SCHEMA.connectors).filter((u) => u !== 'git' && (!ctx.uses || ctx.uses.includes(u)));
     const fields = [Object.assign({ k: 'name', type: 'string', req: true, label: 'Instance name', validate: taken(() => V().connectors) }, NAME), { k: 'use', type: 'enum', req: true, label: 'Plugin', options: uses.map((u) => [u, `${SCHEMA.connectors[u].label} (${u})`]), def: ctx.use || uses[0] }];

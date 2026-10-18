@@ -37,7 +37,7 @@
   const MINS = Object.fromEntries(RANGES.map(([k, , m]) => [k, m]));
   // the filters, as the shared filter bar keeps them (js/filter.js): several statuses, workflows or bots at once; what a
   // connector's events carry (github.repo:…) is a search qualifier the connector declares (js/connattrs.js)
-  const av = { q: '', status: [], workflow: [], bot: [], folder: '', since: '12h', sel: new Set(), last: null, limit: PAGE };
+  const av = { q: '', status: [], workflow: [], bot: [], since: '12h', sel: new Set(), last: null, limit: PAGE };
   const STATUSES = [['failed', 'Failed', (r) => r.status === 'fail' || r.status === 'stopped'], ['waiting', 'Waiting on you', (r) => r.status === 'wait'], ['running', 'Running', (r) => r.status === 'run'], ['passed', 'Passed', (r) => r.status === 'ok'], ['parked', 'Parked', (r) => r.status === 'idle']];
   const sinceMin = () => MINS[av.since] || 0;
   UI.activityState = av;
@@ -45,7 +45,6 @@
   const LIVE = (r) => r.status === 'run' || r.status === 'wait';
   const botOf = (r) => (String(r.workflow).startsWith('bot:') ? r.workflow.slice(4) : '');
   const actMatch = (r) => {
-    if (av.folder && !UI.scopeKeeps(UI.botOfRun(r), av.folder)) return false;
     if (av.status.length && !STATUSES.some(([k, , f]) => av.status.includes(k) && f(r))) return false;
     if (av.workflow.length && !av.workflow.includes(r.workflow.replace(/^bot:/, ''))) return false;
     if (av.bot.length && !av.bot.includes(UI.botOfRun(r) || '')) return false;
@@ -126,7 +125,6 @@
     { k: 'status', label: 'Status', multi: true, plural: 'statuses', keepOrder: true, hint: 'failed, running, waiting…', options: () => STATUSES.map(([v, label, f]) => ({ v, label, n: runs.filter(f).length })) },
     { k: 'workflow', label: 'Workflow', multi: true, options: () => count(runs.filter((r) => !r.workflow.startsWith('bot:')).map((r) => r.workflow)).map(([v, n]) => ({ v, label: v, n })) },
     { k: 'bot', label: 'Bot', multi: true, options: () => count(runs.map((r) => UI.botOfRun(r))).map(([v, n]) => ({ v, label: v, n })) },
-    ...(UI.allFolders(false).length > 1 ? [{ k: 'folder', label: 'Folder', path: true, allLabel: 'Every folder', find: 'Find a folder', hint: 'work/platform', options: () => UI.allFolders(false).map((f) => ({ v: f, label: f })) }] : []),
     ...UI.attrQualifiers(runs),
   ];
   const actBar = () => UI.filterBar({ id: 'act', state: av, placeholder: 'Search, or filter: status:failed', label: 'Search and filter runs',
@@ -144,7 +142,7 @@
     </div>`;
   }
   const actRefresh = () => { const G = groups(), t = UI.$('#act-tbl'); if (!t) return; t.innerHTML = theadHTML(G) + tableBody(G); UI.$('#act-phone').innerHTML = (av.sel.size ? selBar(G) : '') + phoneBody(G); UI.$('#act-strip').innerHTML = strip(G); };
-  UI.act('act-clear', () => { Object.assign(av, { q: '', status: [], workflow: [], bot: [], folder: '', since: 'all' }); UI.connAttrs().forEach((a) => delete av[a.key]); UI.rerender(); });
+  UI.act('act-clear', () => { Object.assign(av, { q: '', status: [], workflow: [], bot: [], since: 'all' }); UI.connAttrs().forEach((a) => delete av[a.key]); UI.rerender(); });
   UI.act('act-all-time', () => { av.since = 'all'; av.limit = PAGE; UI.rerender(); });
   UI.act('act-more', () => { av.limit += PAGE; actRefresh(); });
   UI.act('act-sel-row', (cb, e) => { const boxes = UI.$$('#act-tbl input[data-act="act-sel-row"]'), i = boxes.findIndex((x) => x.dataset.id === cb.dataset.id), on = !av.sel.has(cb.dataset.id);
@@ -170,7 +168,7 @@
     return { toString: activityPage, after(main) { if (/^#\/runs\/./.test(UI.prevHash || '')) main.scrollTop = UI.actScroll || 0; UI.onLeave(() => { UI.actScroll = main.scrollTop; }); } }; }, { nav: 'activity' });
   // old links: Run history and the live pages are Activity now; their filters carry over
   UI.activityFromQuery = (q) => { const ST = { run: 'running', fail: 'failed', wait: 'waiting', ok: 'passed', idle: 'parked', attn: ['failed', 'waiting'] }, M = { 60: '1h', 720: '12h', 1440: '24h', 10080: '7d', '': 'all' };
-    Object.assign(av, { q: q.get('q') || '', status: [], workflow: [], bot: [], folder: q.get('folder') || '', limit: PAGE }); UI.connAttrs().forEach((a) => { av[a.key] = q.get(a.key) ? q.get(a.key).split(',') : []; });
+    Object.assign(av, { q: q.get('q') || '', status: [], workflow: [], bot: [], limit: PAGE }); UI.connAttrs().forEach((a) => { av[a.key] = q.get(a.key) ? q.get(a.key).split(',') : []; });
     if (q.has('status')) av.status = [].concat(ST[q.get('status')] || q.get('status').split(','));
     ['wf', 'workflow'].forEach((k) => { if (q.get(k)) av.workflow = q.get(k).split(','); }); if (q.get('bot')) av.bot = q.get('bot').split(',');
     if (q.has('since')) av.since = MINS[q.get('since')] != null ? q.get('since') : M[q.get('since')] || '12h'; };
@@ -300,7 +298,7 @@
   /* Needs you: what kinds of thing wait, and how many (the same counts as Home's tile and the rail's badge, from the one
    * list), each a tile that sets the Kind filter; then the shared filter bar, quiet when the list is short; then the list.
    * A filter that hides anything says so, so nothing that needs you is ever silently out of view. */
-  const nv = { q: '', kind: [], bot: [], workflow: [], folder: '' };
+  const nv = { q: '', kind: [], bot: [], workflow: [] };
   const runOfItem = (a) => { const m = String(a.href).match(/#\/runs\/([\w-]+)/); return m && D.runs.find((r) => r.id === m[1]); };
   const factsOf = (a) => { const r = runOfItem(a); return { bot: UI.botOfHref(a.href) || (r && UI.botOfRun(r)) || '', workflow: r ? r.workflow.replace(/^bot:/, '') : '' }; };
   // what a connector's event carries (from its declared attributes), for the items that came from a run
@@ -310,7 +308,6 @@
     if (nv.bot.length && !nv.bot.includes(f.bot)) return false;
     if (nv.workflow.length && !nv.workflow.includes(f.workflow)) return false;
     if (!UI.attrsMatch(a, nv, itemAttrs)) return false;
-    if (nv.folder && !UI.scopeKeeps(f.bot, nv.folder)) return false;
     if (nv.q && !`${a.plain} ${a.why} ${a.title} ${a.sub} ${f.bot} ${f.workflow} ${UI.attrText(a, itemAttrs)}`.toLowerCase().includes(nv.q.toLowerCase())) return false;
     return true; };
   const tally = (xs) => { const m = new Map(); xs.filter(Boolean).forEach((x) => m.set(x, (m.get(x) || 0) + 1)); return [...m].map(([v, n]) => ({ v, label: v, n })); };
@@ -318,7 +315,7 @@
     return [{ k: 'kind', label: 'Kind', multi: true, keepOrder: true, plural: 'kinds', hint: 'approval, failed, question, sign-in', options: () => UI.NEED_KINDS.map(([v, , many]) => ({ v, label: many[0].toUpperCase() + many.slice(1), n: A.filter((a) => a.kind === v).length })).filter((o) => o.n) },
       { k: 'bot', label: 'Bot', multi: true, options: () => tally(F.map((f) => f.bot)) },
       { k: 'workflow', label: 'Workflow', multi: true, options: () => tally(F.map((f) => f.workflow)) },
-      ...(UI.allFolders(false).length > 1 ? [{ k: 'folder', label: 'Folder', path: true, allLabel: 'Every folder', find: 'Find a folder', options: () => UI.allFolders(false).map((x) => ({ v: x, label: x })) }] : []), ...UI.attrQualifiers(A, itemAttrs)]; };
+      ...UI.attrQualifiers(A, itemAttrs)]; };
   // one tile per kind, Home's tile in Home's grid (the same counts as Home's Needs you tile and the badge); a tile
   // filters the list to its kind, and says so; clicking it again shows everything
   const MIN = { s: 0, m: 1, h: 60, d: 1440 }, mins = (a) => { const m = String(a.age || '').match(/^(\d+)\s*([smhd])$/); return m ? +m[1] * MIN[m[2]] : 0; };
@@ -330,7 +327,7 @@
     return UI.attentionList(/[?&]all=1/.test(location.hash) ? 1e9 : 0, shown, note) + (shown.length || !all ? '' : ''); };
   const needRefresh = () => { const t = UI.$('#need-tiles'), b = UI.$('#need-body'); if (t) t.innerHTML = needTiles(); if (b) b.innerHTML = needBody(); };
   UI.act('need-kind', (b) => { const k = b.dataset.k; nv.kind = nv.kind.length === 1 && nv.kind[0] === k ? [] : [k]; UI.rerender(); });
-  UI.act('need-clear', () => { Object.assign(nv, { q: '', kind: [], bot: [], workflow: [], folder: '' }); UI.connAttrs().forEach((x) => delete nv[x.key]); UI.rerender(); });
+  UI.act('need-clear', () => { Object.assign(nv, { q: '', kind: [], bot: [], workflow: [] }); UI.connAttrs().forEach((x) => delete nv[x.key]); UI.rerender(); });
   UI.route('attention', () => `<div class="page dl-page">
     <div class="dl-phead"><div><h1>Needs you</h1></div></div>
     <div id="need-tiles">${needTiles()}</div>

@@ -88,12 +88,12 @@ Some elements are on every screen:
   bar), never one per list: what's more urgent says so with its mark and its place in the list.
 - **The filter bar** (`js/filter.js`, one component on every filtered list). One search field that holds readable
   qualifiers and free text (`status:failed bot:platform-sre`), then plain text buttons with a caret (Status ▾, Bot ▾,
-  Folder ▾ …), each opening a searchable select menu: typeahead on top, checkmarks, several at once where that makes
+  Workflow ▾ …), each opening a searchable select menu: typeahead on top, checkmarks, several at once where that makes
   sense, what's chosen and what you picked recently first, the keyboard throughout, at most 40 rows drawn (the rest
-  one keystroke away). Folder is a path (work ▸ platform), shown only when there's more than one folder. The field and
+  one keystroke away). The field and
   the menus are one state, and the field autocompletes qualifiers and their values. On a phone: the field and one
-  Filter button that opens a sheet with the same menus. There is no standalone folder button anywhere.
-  **conductor's own filters** (Kind, Status, Bot, Workflow, Time, and Folder when there's more than one) are always
+  Filter button that opens a sheet with the same menus.
+  **conductor's own filters** (Kind, Status, Bot, Workflow, Team, Mode, Time) are always
   there. **Every other filter is published by a connector** ([§5.0](#50-connector-attributes-and-the-filters-they-publish)):
   GitHub publishes Repo and PR (and Branch, Author, Label, Check), PagerDuty Service and Urgency, Slack Channel, and
   a third-party connector its own, the same way. A connector's primary filters are menus beside conductor's (Repo ▾
@@ -118,7 +118,7 @@ Some elements are on every screen:
 | `#/runs`, `#/live`, `#/live/<id>` | Old links: redirect to Activity (with their filters) or to the run |
 | `#/attention` | Needs you |
 | `#/workflows`, `#/workflows/<name>` | Workflows, and the builder (Recipe, Config file, Runs, Settings) |
-| `#/bots`, `#/folders/<path>` | Bots: the folder tree |
+| `#/bots` | Bots: each team a section, solo bots last (old `#/folders/…` links land here) |
 | `#/bots/<m>/<tab>[/<id>]`, `#/bots/new` | A bot. Tabs: approvals, chat, cases, memory, what it can do, settings |
 | `#/teams/<t>[/<tab>]` | A team |
 | `#/browser`, `#/browser/<id>`, `#/browser/logins` | Browsers and logins |
@@ -368,7 +368,7 @@ usage:
 - **Never a total across providers or models.** Claude and Codex (and any
   other provider) are always shown side by side, each in its own units: one
   card per provider on the overview, a provider column and filter in run
-  history, provider chips on bot, team, folder and workflow rows. A run uses
+  history, provider chips on bot, team and workflow rows. A run uses
   one provider and model, so its own figure is never a mix. No "overall"
   bar, no summed tokens or dollars.
 - **Budgets.** Run, turn and token caps are always available (`budget.*`,
@@ -390,7 +390,7 @@ Run history duplicated Activity, so they are one page (`#/activity`). It answers
 needs me?", as far back as you need.
 
 - **The sentence**: "Last 12 hours: 15 runs. 3 need attention, 3 are running and 9 finished."
-- **Filters on the page**: search (repo, PR, run id, error), status, workflow, bot, folder, repo, and the time range
+- **Filters on the page**: search (repo, PR, run id, error), status, workflow, bot, what the connectors publish (a repository, a pull request), and the time range
   (last hour, 12 hours, 24 hours, 7 days, all time). Old `#/runs?…` links land here with the same filters.
 - **Runs per hour** for the range: the Overview's strip, failures stacked and named. It is the same size for ten
   workflows or five hundred (the per-workflow lanes were removed: they grow with every workflow).
@@ -438,7 +438,6 @@ operator cuts them any way they like; there is no org concept.
 teams:
   platform:
     description: Platform services
-    folder: work/platform                # organization only
     operators: [ops, oncall]             # who may approve the team's bots
     peers: team                          # teammates may ask each other (or none)
     delegation: { max_depth: 2 }
@@ -510,46 +509,25 @@ triggers:
   approver, raising the ceiling, dropping a sandbox requirement, linking a
   pair of bots, and `promotion: direct`.
 
-**Folders.** Any bot or team may carry an optional `folder: "a/b"` (slashes
-nest): everything for one company, "personal" bots, or by what they do or
-watch. **Folders are organization only**: display, filter and search. They
-carry no permissions, defaults or behavior; teams own behavior (shared
-defaults and ceilings, peering and delegation, knowledge, routing). A bot on
-a team shows under its team, and the team sits in a folder; solo bots sit in
-folders beside teams. Config holds no empty folders, so a folder created in
-the dashboard exists only in the browser until something moves into it.
+**There are no folders.** conductor has no folders (they are being removed from conductor itself), so the dashboard
+has none: no folder menus, qualifiers, crumbs, pages, moves or copy. A team is the one way bots are grouped. (Labels may
+come later; they're not designed here.)
 
-```yaml
-teams:
-  platform: { folder: work/platform, … }
-  finance:  { folder: work/billing, … }
-bots:
-  release-scribe: { folder: work/platform, … }   # solo, beside team platform
-  homelab:        { folder: personal/home, … }
-```
+**Bots screen** (`#/bots`, the chosen direction "teams are the page"). It's for managing bots and building teams:
 
-**Bots screen.** The sidebar item is **Bots**. The screen is a collapsible
-folder tree (folders → teams → bots, solo bots alongside teams) with
-**New bot**, **New team** and **New folder**, and:
-
-- folder roll-ups: bots, pending approvals, open cases, live home sessions;
-- create, rename and delete folders. Rename rewrites the `folder:` of
-  everything inside; delete moves the contents up. Both are staged edits;
-- move a team or a solo bot by drag-and-drop onto a folder, or with
-  **Move to…**. Folders live in config, so moves stage into the diff and
-  apply with the passkey (a bot on a team moves with its team);
-- search across folders (names, descriptions, paths, teams);
-- a folder breadcrumb on bot and team pages (`Bots › work › platform ›
-  team platform › platform-sre`);
-- **Folder ▾ in the filter bar** where it helps at scale: Activity and Needs
-  you (and Bots and Workflows when they adopt the bar). It is a searchable
-  path list and appears only when there's more than one folder; there is no
-  standalone folder button (it was on Needs you, Home and Browsers, where it
-  added nothing);
-- on a phone, the tree becomes a drill-down list, one level at a time;
-  search there is a flat list across every folder;
-- below the tree, the peers and links map: team boundaries, intra-team peers
-  dashed, team links and explicit cross-team peers drawn, the lead ringed.
+- **Each team is a section.** Its header says, in words, the team's shared rules (the most its bots may do, who
+  approves, how work is routed to it, the sandbox, its run budget; a dollar budget only when spend is shown) and its
+  lead and member count, with **Add a bot** (pick any bot; it moves into the team and takes its rules) and **Shape the
+  team** (its defaults and ceilings page), and a menu for routing, knowledge and editing the team. Its bots are listed
+  below. **Solo** bots come last, with **Make a team…**. At more than 40 bots the sections fold to their headers
+  except the first, so the organisation is visible at a glance; Group by switches between Team and None (one list).
+- **A row** says what the bot is for, then the facts line: lead, live / practice mode / archived, what it may do in
+  words (linking to its access page), what it's connected to, its model or runtime. Its status is one quiet mark that
+  links to Needs you or Activity; there are no "needs you" or "working now" sections here (those pages answer that).
+- **Actions**, each staged into the one diff: New bot (the sheet), New team, and per bot Open, Edit its settings,
+  Clone (a copy in practice mode), Move to a team, Practice mode / live, Archive (`disabled: true`) or switch back on.
+  On a desktop, select rows for bulk Move to a team, Change model, Practice mode and Archive.
+- **Find one** at 150 with the filter bar: Team (and solo), Mode, Model, Connected to.
 
 **Team page.**
 
@@ -610,7 +588,7 @@ operator save, on a bot proposal or promotion, and on import.
   markdown body where relevant; the **path is derived** from kind and title
   (slug), shown read-only, and **renaming is changing the title** (one commit
   that moves the file). A free path field appears only inside a collection
-  that declares `free_paths: true`, and stays inside its folder.
+  that declares `free_paths: true`, and stays inside its directory.
 - **Browsing is by kind** (Knowledge / Runbooks / Watch / Log / Handoff /
   collections) with counts, search, and filters by applies-to tag. A
   **Files** view exists as a secondary, read-mostly view: raw files, with
@@ -651,11 +629,11 @@ operator save, on a bot proposal or promotion, and on import.
   one missing fields opens in its form with the errors.
 - **Collections** add a kind: **Config → Collections**
   (`#/config/collections`) lists every team's and bot's collections and
-  declares one (which team or bot it belongs to, name, folder, fields as
+  declares one (which team or bot it belongs to, name, directory, fields as
   `name:type` lines with `!` for required and `enum(a|b)` for choices, a
   body template, `free_paths`, writers) as an edit to
   `teams.<t>.collections` or `bots.<b>.collections`, through the diff. A
-  collection's folder may not be a built-in kind's (`knowledge`, `runbooks`,
+  collection's directory may not be a built-in kind's (`knowledge`, `runbooks`,
   `watch`, `log`, `handoff`, `episodes`), and a team's writers are
   `operator`/`proposal`, a bot's `operator`/`bots`. A pack ships a
   collection as a file that the team or bot points at with `from:` (the
@@ -709,29 +687,18 @@ local pack; armed triggers and their repos; override egress), browser,
 sandbox, runtimes and connectors. The review lists each widening with its
 path, and the apply needs an explicit acknowledgement.
 
-**Folders are one shared organization.** The same `folder: "a/b"` path
-places bots, teams **and workflows**, so `work/platform` holds that area's
-bots, teams and workflows together. Placement: your workflows carry
-`folder:` in config; **pack workflows** sit under `packs/<instance>/` by
-default and the operator can place them elsewhere with a pack override
-(`packs.<instance>.folders.<workflow>`), but a pack can't assign its own
-folder; **a bot's synthesized workflow follows its bot (or its team)**.
-Connector and pack instances are deliberately *not* foldered: they're shared
-infrastructure used across areas, and placing them would duplicate them
-across folders. The **Workflows** page has a folder tree beside the table
-(per-folder runs 24h, success rate and failing count), breadcrumbs, folder
-filters orthogonal to the ownership filter (all / yours / packs / bots),
-search across folders, and moves by drag-and-drop or *Move to…*, staged
-through the diff. **A folder's page** (`#/folders/<path>/<tab>`) shows
-everything in it: roll-ups, what needs you there, and Bots / Teams /
-Workflows tabs. The Bots tree shows only folders that hold bots or teams.
-Folders stay organization only: no behavior, permissions or defaults.
+**Workflows screen** (`#/workflows`, the same pattern as Bots). It's for managing workflows: **Yours**, then each
+**pack** as a section (its version, **Update to …** when there is one, how many settings you've customised,
+**Customize**), then **Made for bots** as one line (each is on its bot's page, where it's changed). A row: an on/off
+switch (yours stages `enabled: false`; a pack's goes through your pack override), the name, what it does in a
+sentence, what starts it in words (a fact), and a quiet mark for a failed or running last run that links to Activity.
+Its menu: open in the builder, run now, duplicate (a copy of yours, switched off), customize in its pack, delete. Bulk
+switch on or off on a desktop. The filter bar: Source, On or off, Last run. Group by Source or None.
 
 **Create in place.** Every picker that references another entity offers
-**+ New …** as its first option: team → bot, bot → team and folder, step →
+**+ New …** as its first option: team → bot, bot → team, step →
 connector instance, runtime, model fleet, credential binding and secret,
-routing rule → bot, credential binding → secret and vault, folder pickers →
-folder, and the step and trigger pickers → connector. It opens a drawer over
+routing rule → bot, credential binding → secret and vault, and the step and trigger pickers → connector. It opens a drawer over
 the current flow, which keeps its unsaved state, and the new thing is
 selected on return. **One rule: the child is staged, never applied on its
 own**, so parent and child apply together as one combined diff; pickers and
@@ -784,8 +751,8 @@ back on the team. A bot can be created solo.
     session is expected to expire. Desktop only; on the phone the card is
     disabled with that reason and points at the vault method.
   - **Binding.** A name, the **exact origins** (scheme + host, checked
-    atomically with the fill), **who may use it** (bots, teams or folders;
-    a team or folder covers its bots) and **operator-started cases only**,
+    atomically with the fill), **who may use it** (bots or teams;
+    a team covers its bots) and **operator-started cases only**,
     on by default (#182's provenance rule). A team's credential scope still
     caps what its bots can use.
 - **Test login.** Runs the login in a throwaway sandboxed browser and logs
@@ -793,7 +760,7 @@ back on the team. A bot can be created solo.
   (a push to approve; the result updates when you do). No values or
   screenshots of filled fields are recorded.
 - **Logins tab** (`#/browser/logins`). Every credential, passkey and saved
-  session: method, site, bound bots/teams/folders, last used, last test,
+  session: method, site, bound bots/teams, last used, last test,
   expiry; **Test**, **Usage** (which bot, which case, when — never a value),
   **Edit binding**, **Replace** (password logins), **Revoke** (through the
   diff; a password login's stored values are deleted from the vault when
@@ -1029,15 +996,14 @@ These came out of two UX audits (a newcomer and a power user; responses in
   A **Get started** panel offers four steps with ticks derived from the setup
   (connect a service, make a bot that watches something, check what bots can
   do, try an approval); hiding it is a browser preference. The timeline is
-  **Runs, last 12h**, busiest rows first, the top six by default, filtered by
-  folder; health folds into a collapsed **System** card; the Running tile
+  **Runs, last 12h**, busiest rows first, the top six by default; health folds into a collapsed **System** card; the Running tile
   lists three names and a count.
 - **New bot** is a guided page (`#/bots/new`): *Purpose → Watches → Tells you
   where → What it may do → Review*. Leaving is obvious and safe: a Close button at the top (a button, not a text
   link), Esc, and a "Discard this new bot?" confirm only once something has been entered. Next re-checks every
-  field as you type (a channel, a folder, the name), with the reason when it's held. (Whether it becomes a sheet over
-  Bots, and the community-bot start, wait on the pick in `browse-options.html`.) It writes `bots.<name>` (description,
-  escalation, team or folder, `skill.verbs`, `autonomy.tiers/promote/shadow`,
+  field as you type (a channel, the name), with the reason when it's held. It is a large sheet over the Bots page (the chosen option A), full screen on a phone, with a thin progress line
+  instead of a big stepper. It writes `bots.<name>` (description,
+  escalation, team, `skill.verbs`, `autonomy.tiers/promote/shadow`,
   optional `proactive`) and one trigger per watched event whose step is
   `bot: { name, title }`. Permission presets: read only; can comment and post;
   asks before anything else. Runtime, approvers and approval TTL sit under
@@ -1048,7 +1014,7 @@ These came out of two UX audits (a newcomer and a power user; responses in
   hover, focus or tap, and `#/glossary` lists them all. The top strip says
   what each chip means; no issue numbers appear in the UI.
 - **⌘K** is one command line: actions that run (destructive ones confirm),
-  pending approvals, pages, bots, teams, folders, workflows, runs, connectors,
+  pending approvals, pages, bots, teams, workflows, runs, connectors,
   verbs, vaults, secrets, settings, config paths
   (`triggers[ci-fixer].policy.budget`) and glossary terms, deduped, with an
   empty state that suggests what to try. Single keys: `?` shortcuts, `/`
@@ -1062,7 +1028,7 @@ These came out of two UX audits (a newcomer and a power user; responses in
   durations, the outputs diff with word highlights, both diffs). A running
   step offers **Restart this step** (stop first, confirmed), never "retry".
 - **Bulk.** Lists take checkboxes with shift-click ranges and a sticky bulk
-  bar: workflows (move to folder, enable, disable) and run history (retry the
+  bar: bots (move to a team, change model, practice mode, archive), workflows (switch on, switch off) and run history (retry the
   failed ones, export). Config changes from one bulk action are one change
   set and one diff.
 - **Scale.** Run history pages by cursor (50, then *Load 50 more*); a
@@ -1530,7 +1496,7 @@ A **fresh assertion bound to the request's digest** is required for:
 - pack and plugin add/remove;
 - enrolling another passkey.
 
-**Non-widening config changes need no passkey**: folder moves, renames,
+**Non-widening config changes need no passkey**: renames,
 descriptions, tightening a limit, disabling something, removing a grant.
 They get a plain **Apply** after the diff review in the signed-in session,
 and still go through validate-on-a-copy, the backup, the boot guard and
@@ -2068,8 +2034,7 @@ backup you can restore. Things to try:
   `{{.triage.kind}}` into `fix`'s prompt from the data tree. Type `gpt-x` as a
   model to see inline validation; edit the YAML and watch the list follow;
   Ctrl+Z.
-- **Folders:** Bots → New folder; drag `finance` onto `personal`, or
-  **Move to…**; filter Needs you by folder; on a phone, drill down.
+- **Teams:** Bots → a team's Add a bot; select two bots and Move to a team; Shape the team.
 - **Create in place:** on team `platform`, *Add a bot* → *Create a new bot
   in this team*. In a workflow step, the account picker → *New connector*.
 - **Knowledge:** team `platform` → Knowledge: New file, edit, Split

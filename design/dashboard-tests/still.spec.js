@@ -5,7 +5,7 @@
 // shift the content if the gutter weren't stable.
 const { test, expect, go } = require('./fixtures');
 
-const START = ['#/config', '#/logs/daemon', '#/connectors/connectors', '#/secrets', '#/extensions/packs', '#/bots/platform-sre', '#/teams/platform', '#/folders/work'];
+const START = ['#/config', '#/logs/daemon', '#/connectors/connectors', '#/secrets', '#/extensions/packs', '#/bots/platform-sre', '#/teams/platform'];
 const BARS = '#main .dl-subnav, #main .tabs, #main .dl-tabs, #main [role="tablist"]';
 const CLASSIC = '::-webkit-scrollbar { width: 15px; height: 15px; } ::-webkit-scrollbar-thumb { background: #888; } ::-webkit-scrollbar-track { background: #ddd; }';
 

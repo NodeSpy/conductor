@@ -5,7 +5,6 @@ const { test, expect, go, isPhone, headAction } = require('./fixtures');
 const OPENERS = [
   ['#/workflows', '[data-act="wf-new"]', 'new workflow'],
   ['#/bots', '[data-act="team-new"]', 'new team'],
-  ['#/bots', '[data-act="f-new"]', 'new folder'],
   ['#/secrets', '[data-act="secret-add"]', 'add a secret'],
   ['#/secrets/settings', '#env [data-act="env-add"]', 'add an env var'],
   ['#/connectors/connectors', '[data-act="conn-add"]', 'add a connector'],

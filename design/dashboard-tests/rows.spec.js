@@ -4,7 +4,7 @@
 // still apart). A long time label ("yesterday", "3 days ago") is part of the check.
 const { test, expect, go } = require('./fixtures');
 
-const LISTS = [['#/attention', '.dl-needs'], ['#/overview', '.dl-needs'], ['#/bots', '.bot-list .dl-list'], ['#/bots/platform-sre/proposals', '.dl-list'], ['#/folders/work', '.dl-needs']];
+const LISTS = [['#/attention', '.dl-needs'], ['#/overview', '.dl-needs'], ['#/bots/platform-sre/proposals', '.dl-list']];
 
 test('list rows: time and action never touch, and line up down the list', async ({ page }) => {
   // one item a day old, so the longest time label is in the list

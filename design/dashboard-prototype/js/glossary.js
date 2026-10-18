@@ -9,7 +9,6 @@
     step: ['Step', 'One thing a workflow does: call a service, run a command, ask an agent, or hand the event to a bot.'],
     agent: ['Agent', 'An AI model run for one step with a prompt, in a sandbox. It finishes with the step; a bot is the one that remembers.'],
     team: ['Team', 'A group of bots that share approvers, limits and knowledge. A bot on a team can only be stricter than its team.'],
-    folder: ['Folder', 'Organization only: where something shows in lists. Folders never grant or limit anything.'],
     pack: ['Pack', 'A bundle of workflows (and sometimes bots) someone else wrote, installed and updated as one unit.'],
     plugin: ['Plugin', 'Code that teaches conductor a new service or engine, such as a vendor connector.'],
     connector: ['Connector', 'Your connection to a service (GitHub, Slack, PagerDuty…): the account and the events it delivers.'],
@@ -41,7 +40,7 @@
     synthesized: ['Synthesized', 'Made by conductor from a bot\'s definition. Edit the bot to change it.'],
     knowledge: ['Knowledge', 'Facts your bots read, with the evidence for each. Kept in git.'],
     runbook: ['Runbook', 'A step-by-step procedure your bots (and you) follow, with how to check it worked and how to undo it.'],
-    collection: ['Collection', 'A custom kind of entry (say, postmortems) with its own folder and fields.'],
+    collection: ['Collection', 'A custom kind of entry (say, postmortems) with its own directory and fields.'],
   });
   /** A dotted term with its definition; key defaults to the lower-cased text. */
   UI.term = (text, key) => { const k = key || String(text).toLowerCase().replace(/\s+/g, '_'); const d = G[k]; return d ? `<span class="term" tabindex="0" data-tip="<b>${UI.esc(d[0])}</b><br>${UI.esc(d[1])}" data-term="${k}">${text}</span>` : text; };

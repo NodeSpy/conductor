@@ -1,7 +1,7 @@
 /* Browser logins. "Add a login" has three methods — a username and
  * password stored in conductor's vault, a reference to a vault item (1Password,
  * pass, HashiCorp, conductor), or signing in yourself (takeover) — and every
- * method ends in a binding: the exact origin and which bots may use it (folders
+ * method ends in a binding: the exact origin and which bots may use it (teams
  * never hold access), then the config diff. Credentials are browser.credentials
  * entries naming each value as { vault, key }; a saved session is a logins:
  * opt-in per site. Used only on work the operator started (conductor's rule).

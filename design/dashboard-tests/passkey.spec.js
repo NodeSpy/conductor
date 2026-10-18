@@ -38,7 +38,7 @@ test('a widening change (a promotion) needs the passkey and says why', async ({ 
 test('mixing a widening and a non-widening change in one set needs the passkey', async ({ page }) => {
   await go(page, '#/bots', { fresh: true });
   await page.evaluate(() => {
-    const a = S.staged('bots', 'release-scribe'); a.folder = 'personal'; S.stage('bots', 'release-scribe', a);
+    const a = S.staged('bots', 'release-scribe'); a.description = 'Drafts release notes, edited'; S.stage('bots', 'release-scribe', a);
     const b = S.staged('bots', 'platform-sre'); b.autonomy.promote = (b.autonomy.promote || []).concat('kv.set'); b.autonomy.tiers.reversible = (b.autonomy.tiers.reversible || []).concat('kv.set'); b.autonomy.tiers.propose = b.autonomy.tiers.propose.filter((v) => v !== 'kv.set'); S.stage('bots', 'platform-sre', b);
   });
   await toReview(page);

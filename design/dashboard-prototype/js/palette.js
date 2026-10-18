@@ -1,4 +1,4 @@
-/* ⌘K: one command line for everything. It indexes the live, staged-aware view (pages, bots, teams, folders,
+/* ⌘K: one command line for everything. It indexes the live, staged-aware view (pages, bots, teams,
  * workflows, runs, pending approvals, connectors, verbs, vaults, secret references, settings, config paths,
  * glossary terms) and actions that do what they say (destructive ones confirm first). Results are deduped,
  * every query that finds nothing says so and suggests what to try.
@@ -44,9 +44,8 @@
     UI.navGroups.forEach(([, items]) => items.forEach(([k, l, ic]) => add('page', l, go('#/' + k), { icon: ic })));
     [['Glossary', 'glossary', 'info'], ['Collections', 'config/collections', 'folder'], ['Raw config', 'config/raw', 'code'], ['Isolation', 'connectors/isolation', 'shield'], ['Runtimes', 'connectors/runtimes', 'server'], ['Hosts', 'connectors/hosts', 'server'], ['Audit log', 'logs/audit', 'runs'], ['Phone layouts', 'phone.html', 'phone']].forEach(([l, h, ic]) => add('page', l, () => { if (h.endsWith('.html')) location.href = h; else UI.go('#/' + h); }, { icon: ic }));
     // things
-    v.bots.forEach((b) => add('bot', b.name, go('#/bots/' + b.name), { icon: 'members', hint: [b.cfg && b.cfg.team ? 'team ' + b.cfg.team : '', UI.folderOfBot ? UI.folderOfBot(b.name) : ''].filter(Boolean).join(' · '), words: b.cfg && b.cfg.description }));
+    v.bots.forEach((b) => add('bot', b.name, go('#/bots/' + b.name), { icon: 'members', hint: [b.cfg && b.cfg.team ? 'team ' + b.cfg.team : ''].filter(Boolean).join(' · '), words: b.cfg && b.cfg.description }));
     v.teams.forEach((t) => add('team', t.name, go('#/teams/' + t.name), { icon: 'members', words: t.cfg && t.cfg.description }));
-    (UI.allFolders ? UI.allFolders(true) : []).forEach((f) => add('folder', f, go('#/folders/' + encodeURIComponent(f)), { icon: 'folder' }));
     v.workflows.forEach((w) => add('workflow', w.name, go('#/workflows/' + w.name), { icon: 'workflows', hint: w.source === 'config' ? 'your config' : w.source, words: (w.yaml || '').slice(0, 200) }));
     D.runs.forEach((r) => add('run', `${r.id} · ${r.workflow}${UI.runTarget(r) ? ' · ' + UI.runTarget(r) : ''}`, go(`#/runs/${r.id}`), { icon: 'runs', hint: UI.runWord(r.status), words: `${r.error || ''} ${r.trigger}` }));
     v.connectors.forEach((c) => { add('connector', `${c.name} (${c.use})`, go('#/connectors/connectors'), { icon: 'link' }); const d = SCHEMA.connectors[c.use]; if (d) Object.entries(d.verbs || {}).forEach(([vn, vd]) => add('verb', `${c.name}.${vn}`, go('#/safety'), { icon: 'zap', hint: vd.label, words: vd.label })); });
@@ -57,7 +56,7 @@
     Object.entries(UI.GLOSSARY || {}).forEach(([k, [t, d]]) => add('term', `${t}: what it means`, go('#/glossary#g-' + k), { icon: 'info', words: d }));
     const seen = new Set(); return I.filter((x) => (seen.has(x.key) ? false : seen.add(x.key)));
   }
-  const RANK = { action: 0, approval: 1, page: 2, bot: 3, team: 3, workflow: 3, run: 4, folder: 4, connector: 5, verb: 6, vault: 6, secret: 6, setting: 6, config: 7, term: 8 };
+  const RANK = { action: 0, approval: 1, page: 2, bot: 3, team: 3, workflow: 3, run: 4, connector: 5, verb: 6, vault: 6, secret: 6, setting: 6, config: 7, term: 8 };
   function search(all, q) {
     q = q.trim().toLowerCase(); if (!q) return all.filter((x) => ['action', 'approval', 'page'].includes(x.kind)).slice(0, 14);
     const toks = q.split(/\s+/);

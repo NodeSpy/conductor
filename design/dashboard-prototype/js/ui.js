@@ -14,9 +14,6 @@
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   UI.$ = $; UI.$$ = $$;
-  /** A folder name: any letters or digits (Ü included), then spaces, . _ -; never "..", at most 48 characters. */
-  UI.FOLDER_SEG = /^(?!.*\.\.)[\p{L}\p{N}][\p{L}\p{N} ._-]{0,47}$/u;
-  UI.folderPathErr = (p) => (!p ? '' : p.split('/').every((x) => UI.FOLDER_SEG.test(x)) ? '' : 'Folder names are letters, digits, spaces, . _ and - (up to 48 each, no ".."), separated by /');
   /** The text of a bit of markup (a glossary term's tooltip and attributes never leak into a cell). */
   UI.plainText = (html) => { const d = document.createElement('div'); d.innerHTML = String(html); d.querySelectorAll('[data-tip]').forEach((x) => x.removeAttribute('data-tip')); return d.textContent; };
   UI.esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -215,7 +212,7 @@
   UI.hostCard = () => { const d = D.daemon, us = UI.updateState();
     const [s, line] = d.paused ? ['wait', 'Paused: nothing new starts'] : us.need ? ['ember', `Update ${us.v} needs you`] : ['ok', `Healthy · up ${UI.upFor(d.uptime)}`];
     return `<a class="host${us.need || d.paused ? ' need' : ''}" href="#/updates" aria-label="${UI.esc(d.host)}: ${UI.esc(line)}${us.quiet ? '. ' + UI.esc(us.quiet) : ''}">${UI.statusMark(s, '<span class="sr-only">' + (s === 'ok' ? 'healthy' : 'needs a look') + '</span>')}<span class="who"><b>${UI.esc(d.host)}</b><span id="host-line">${UI.esc(line)}</span>${us.quiet && !us.need ? `<span class="host-upd">${UI.esc(us.quiet)}</span>` : ''}</span></a>`; };
-  /** The one stat tile (Home's At a glance, Needs you's kinds, a folder's figures): label on top, the number, a detail
+  /** The one stat tile (Home's At a glance, Needs you's kinds): label on top, the number, a detail
       line; a link, or a button that filters (with its selected state); the row of them is UI.glance, Home's grid. */
   UI.statTile = (o) => { const inner = `<span class="dl-lbl">${o.label}</span><b>${o.value}</b>${o.detail != null ? `<span class="d">${o.detail}</span>` : ''}`, cls = `dl-tile${o.hot ? ' hot' : ''}${o.on ? ' on' : ''}`;
     return o.href ? `<a class="${cls}" href="${o.href}">${inner}</a>` : `<button type="button" class="${cls}" data-act="${o.act}" ${o.attrs || ''} aria-pressed="${!!o.on}">${inner}</button>`; };

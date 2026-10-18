@@ -12,8 +12,7 @@ async function bind(page, name, origin, who) {
   await page.fill('#f-name', name);
   await page.fill('#f-origin', origin);
   await page.locator('#la-bind [data-listk="identities"] select').selectOption(who);
-  // folders are never principals; the "work you started" rule is shown, not a toggle
-  expect(await page.locator('#la-bind [data-listk="identities"] select option').allTextContents()).not.toContain(expect.stringMatching(/^folder:/));
+  // the "work you started" rule is shown, not a toggle
   await expect(page.locator('#la-bind')).toContainText('work you started');
 }
 
