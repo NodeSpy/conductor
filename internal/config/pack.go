@@ -128,6 +128,12 @@ type PackInstance struct {
 	// (N instances of the same trigger, each with its own repos/filters/gate).
 	// See TriggerArms.
 	Triggers map[string]TriggerArms `yaml:"triggers,omitempty"`
+	// Folder files every workflow and trigger of this instance for display
+	// (folders.go); Workflows files one workflow (a trigger: its
+	// triggers.<name>.folder). Absent: shown under the instance
+	// (packs/<instance>).
+	Folder    string                 `yaml:"folder,omitempty"`
+	Workflows map[string]WorkflowArm `yaml:"workflows,omitempty"`
 
 	// Packs instantiates the pack's own pack dependencies (requires.packs),
 	// recursively — the identical default/override/bind surface, one level down.
@@ -290,6 +296,15 @@ type TriggerArm struct {
 	// pack's workflow (a hand-off's included) out of the agent sandbox, which
 	// the pack itself may not do.
 	Isolation *IsolationConfig `yaml:"isolation,omitempty"`
+	// Folder files the trigger for display (folders.go) — the operator's
+	// choice, never the pack's. Not part of an instance's identity.
+	Folder string `yaml:"folder,omitempty"`
+}
+
+// WorkflowArm is the operator's per-workflow overlay on a pack's workflow:
+// only where it is filed.
+type WorkflowArm struct {
+	Folder string `yaml:"folder,omitempty"`
 }
 
 // UnmarshalYAML decodes an arming block, naming the retired `filters:` key
@@ -383,6 +398,9 @@ func mergeArm(star, named TriggerArm) TriggerArm {
 	if named.Isolation != nil {
 		out.Isolation = named.Isolation
 	}
+	if named.Folder != "" {
+		out.Folder = named.Folder
+	}
 	return out
 }
 
@@ -415,6 +433,9 @@ type PackManifest struct {
 	Triggers  TriggerList            `yaml:"triggers,omitempty"` // shipped DISARMED
 	Policy    *Policy                `yaml:"policy,omitempty"`
 	Checks    map[string]Step        `yaml:"checks,omitempty"`
+	// Bots are bot TEMPLATES (bottemplate.go): behavior an operator
+	// instantiates into real bots, never a bot by itself.
+	Bots map[string]BotTemplate `yaml:"bots,omitempty"`
 
 	// Bind-only sections — FORBIDDEN here. Captured as raw nodes so an offending
 	// pack is rejected by name (see (*PackManifest).checkNoEnvironment). The

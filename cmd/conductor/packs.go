@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/NodeSpy/conductor/internal/bot"
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/plugin"
 )
@@ -518,6 +519,23 @@ func cmdPackLint(args []string) error {
 		return err
 	}
 	problems := config.LintPackManifest(man)
+	// Bot templates: their rules, and their seed documents against the kinds
+	// and caps a new bot's memory holds them to.
+	if len(man.Bots) > 0 {
+		lts, err := config.LoadPackTemplates(man, dir)
+		if err != nil {
+			problems = append(problems, err.Error())
+		}
+		for _, n := range sortedTemplateNames(lts) {
+			lt := lts[n]
+			if lt.SeedDir == "" {
+				continue
+			}
+			for _, p := range bot.LintSeed(lt.SeedDir, lt.T.Collections) {
+				problems = append(problems, "bots."+n+": seed: "+p)
+			}
+		}
+	}
 	if len(problems) == 0 {
 		fmt.Printf("ok: pack %q v%s is well-formed\n", man.Pack.Name, man.Pack.Version)
 		return nil
@@ -526,6 +544,15 @@ func cmdPackLint(args []string) error {
 		fmt.Printf("  - %s\n", p)
 	}
 	return fmt.Errorf("%d lint problem(s)", len(problems))
+}
+
+func sortedTemplateNames(m map[string]config.LoadedTemplate) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // cmdPackShow renders a pack's docs: metadata, requires, settings, presets,

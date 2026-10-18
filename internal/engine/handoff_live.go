@@ -248,6 +248,8 @@ func (e *Engine) StepDone(ctx context.Context, dispatchID, agentID, reason strin
 	runner := e.dispatcherFor(dispatchID)
 	if resolved := runner.AgentForDispatch(dispatchID); resolved != "" {
 		agentID = resolved
+	} else if handled, err := e.controllerStepDone(ctx, dispatchID, reason); handled {
+		return err
 	}
 	if agentID != "" {
 		if lh := e.lookupLiveHandoff(agentID); lh != nil {
@@ -269,4 +271,25 @@ func (e *Engine) StepDone(ctx context.Context, dispatchID, agentID, reason strin
 		return e.archiveAgent(context.WithoutCancel(ctx), agentID)
 	}
 	return e.disp.Archive(context.WithoutCancel(ctx), agentID)
+}
+
+// controllerStepDone resolves a done call for a dispatch a controller runtime
+// (cli, acp, …) launched: a foreground dispatch still in flight defers to the
+// step boundary; otherwise the runner that opened the session archives it.
+// handled=false when no controller knows the dispatch.
+func (e *Engine) controllerStepDone(ctx context.Context, dispatchID, reason string) (bool, error) {
+	if dispatchID == "" || e.controllers == nil {
+		return false, nil
+	}
+	for _, r := range e.controllers.Runners() {
+		if r.DispatchInFlight(dispatchID) {
+			e.log("step.done for dispatch %s (%s) — still in flight; reclaiming at step boundary", dispatchID, reason)
+			return true, nil
+		}
+		if id := r.AgentForDispatch(dispatchID); id != "" {
+			e.log("step.done from session %s: %s — reclaiming", id, reason)
+			return true, r.Archive(context.WithoutCancel(ctx), id)
+		}
+	}
+	return false, nil
 }

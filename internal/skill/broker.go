@@ -34,8 +34,10 @@ const (
 	// a human who may not get to it for hours or days, so a 2h dispatch window
 	// leaves its conductor creds (how it auths `conductor call …` to the broker)
 	// dead by the time the human engages it. A week is plenty for a real
-	// hand-off and still bounds a scraped token.
-	HandoffSessionTTL = 7 * 24 * time.Hour
+	// hand-off and still bounds a scraped token. Bot sessions use the same
+	// durable token, so the constant lives in config, where a bot's
+	// rotation age is validated against it.
+	HandoffSessionTTL = config.HandoffSessionTTL
 	// SessionTTL bounds a dispatch token's life — roughly a dispatch's
 	// lifetime (typical wait_timeouts are minutes; 2h leaves room for slow
 	// runs). A long-lived affinity session whose token ages out simply loses
@@ -98,6 +100,12 @@ type Identity struct {
 	// dispatch.Request.DispatchID): the anchor a live tool's reconstructed
 	// trigger is confined to when the target itself cannot be trusted.
 	Dispatch string
+	// Bot / BotRole / CaseID bind the session to a bot (home or
+	// worker) and, for a worker, its case: what the bot autonomy gate
+	// decides against. Minted daemon-side from config and the ledger.
+	Bot     string
+	BotRole string
+	CaseID  string
 	// Context is the originating trigger's context, held daemon-side for the
 	// session's lifetime. It exists for RESOURCE SCOPING: the trigger's
 	// declared target scope (Sem) reads its facts to decide which channel

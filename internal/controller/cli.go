@@ -139,6 +139,14 @@ func (c *cliController) NewSession(ctx context.Context, spec Spec, _ Handler) (S
 	opt := withAgent(launchOptsFor(c.iso, req), c.recipe.tool, &req, true)
 	if sandboxApplies(host, opt) {
 		prompt += sandboxNote(req)
+	} else if host == "" {
+		// Unsandboxed and local: the conductor skill surface (`conductor
+		// call step.done`, the granted verbs) over the daemon's local
+		// socket — the same env the paseo path hands a local agent. A
+		// sandboxed launch mints its own token, bound to its sandbox.
+		for k, v := range dispatch.SkillEnv(req, dispatch.LocalSkillEndpoint()) {
+			env = append(env, k+"="+v)
+		}
 	}
 	id := c.recipe.tool + "-" + strconv.FormatInt(c.seq.Add(1), 10)
 	cwd, cmd := spec.Cwd, c.recipe.cmd(spec.Request.Model, prompt)

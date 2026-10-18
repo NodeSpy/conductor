@@ -237,9 +237,13 @@ func SkillEnvFor(req Request, endpoint string, sb *skill.SandboxBinding) map[str
 	// exactly why memory/run_step ops derive Source from the token, not the peer.
 	id, _ := SkillIdentityFor(req)
 	id.Sandbox = sb
+	mb := botBinding(req)
 	var tok string
 	var err error
-	if req.Interactive {
+	// A bot session (home or worker) is durable like a hand-off: a home
+	// lives for days and a worker may wait hours on an approval, across
+	// daemon restarts, and neither env can be rewritten.
+	if req.Interactive || mb.Name != "" {
 		tok, err = b.MintHandoffSession(id, uint32(os.Getuid()))
 	} else {
 		tok, err = b.MintSession(id, uint32(os.Getuid()), skill.SessionTTL)
@@ -261,6 +265,7 @@ func SkillIdentityFor(req Request) (skill.Identity, bool) {
 	if req.AgentAuthored {
 		return skill.Identity{}, false
 	}
+	mb := botBinding(req)
 	return skill.Identity{
 		Agent:         req.Action.Agent,
 		Repo:          req.Trigger.Target.Repo,
@@ -272,6 +277,11 @@ func SkillIdentityFor(req Request) (skill.Identity, bool) {
 		TargetTrusted: req.Trigger.TargetTrusted,
 		Dispatch:      req.DispatchID,
 		Requester:     requesterOf(req),
+		// A bot session's binding: its bot, role and case (the bot gate
+		// reads them at every call).
+		Bot:     mb.Name,
+		BotRole: mb.Role,
+		CaseID:  mb.CaseID,
 	}, true
 }
 

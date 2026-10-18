@@ -184,6 +184,26 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 		st.warnf("pack %q: %s", ns, w)
 	}
 
+	// Bot templates: validated with the pack (a forbidden key or a broken
+	// file reference fails it), and kept for the top-level instance — a
+	// bot names <instance>/<template>.
+	if len(man.Bots) > 0 {
+		lts, err := loadTemplates(man, req.nodeDir)
+		if err != nil {
+			return fmt.Errorf("pack %q: %w", ns, err)
+		}
+		if len(req.chain) == 1 {
+			if st.cfg.templates == nil {
+				st.cfg.templates = map[string]map[string]LoadedTemplate{}
+			}
+			for n, lt := range lts {
+				lt.Instance, lt.Source = ns, req.inst.Source
+				lts[n] = lt
+			}
+			st.cfg.templates[ns] = lts
+		}
+	}
+
 	// Resolve environment bindings for this node. A binding may be given
 	// concretely on this instance, or forwarded from a parent.
 	env := envBindings{
@@ -355,7 +375,19 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 	for _, name := range sortedWorkflowKeys(man.Workflows) {
 		wf := man.Workflows[name]
 		rw.rewriteWorkflow(&wf)
+		// Where it is filed is the operator's (packs.<inst>.workflows.<name>
+		// / packs.<inst>.folder); provenance is recorded for display.
+		wf.PackInstance = ns
+		wf.Folder = req.inst.Folder
+		if arm, ok := req.inst.Workflows[name]; ok && arm.Folder != "" {
+			wf.Folder = arm.Folder
+		}
 		st.cfg.setWorkflow(rw.workflowName(name), wf)
+	}
+	for name := range req.inst.Workflows {
+		if _, ok := man.Workflows[name]; !ok {
+			return fmt.Errorf("pack %q: workflows: %q names no workflow this pack ships (shipped: %s)", ns, name, strings.Join(sortedWorkflowKeys(man.Workflows), ", "))
+		}
 	}
 
 	// Lint for references the rewriter cannot reach: a `{{ vault … }}` template
@@ -432,6 +464,11 @@ func (st *packInstantiation) instantiate(req instantiateReq) error {
 				}
 				arms, ok = merged, true
 			}
+		}
+		// Display only: the instance's folder, else the arm's (below).
+		tr.PackInstance, tr.Folder = ns, req.inst.Folder
+		if ok && len(arms) > 0 && arms[0].Folder != "" {
+			tr.Folder = arms[0].Folder
 		}
 		if !ok || dormant {
 			st.cfg.Triggers = append(st.cfg.Triggers, tr)
@@ -811,7 +848,30 @@ func loadPackManifest(nodeDir string) (*PackManifest, error) {
 	if man.Pack.Name == "" {
 		return nil, fmt.Errorf("%s: pack.name is required", PackManifestFile)
 	}
+	if err := packSetsNoFolder(&man); err != nil {
+		return nil, fmt.Errorf("%s: %w", PackManifestFile, err)
+	}
 	return &man, nil
+}
+
+// packSetsNoFolder refuses a pack that files its own workflows or triggers:
+// where something is filed is the operator's organization, not the pack's.
+func packSetsNoFolder(man *PackManifest) error {
+	for _, name := range sortedWorkflowKeys(man.Workflows) {
+		if man.Workflows[name].Folder != "" {
+			return fmt.Errorf("workflow %q sets folder: — a pack cannot file its own workflows; the operator does, with packs.<instance>.workflows.%s.folder (or packs.<instance>.folder for all of them)", name, name)
+		}
+	}
+	for i, t := range man.Triggers {
+		if t.Folder != "" {
+			label := t.Name
+			if label == "" {
+				label = fmt.Sprintf("#%d", i+1)
+			}
+			return fmt.Errorf("trigger %s sets folder: — a pack cannot file its own triggers; the operator does, with packs.<instance>.triggers.<name>.folder (or packs.<instance>.folder for all of them)", label)
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -938,6 +998,9 @@ func applyTriggerArm(tr *TriggerSpec, arm TriggerArm) error {
 	}
 	if arm.Isolation != nil {
 		tr.Isolation = arm.Isolation
+	}
+	if arm.Folder != "" {
+		tr.Folder = arm.Folder
 	}
 	return nil
 }
@@ -1192,5 +1255,6 @@ func cloneTriggerSpec(t TriggerSpec) (TriggerSpec, error) {
 	if err := yaml.Unmarshal(b, &out); err != nil {
 		return TriggerSpec{}, err
 	}
+	out.PackInstance, out.Bot = t.PackInstance, t.Bot // not YAML: provenance
 	return out, nil
 }

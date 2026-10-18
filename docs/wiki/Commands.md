@@ -10,7 +10,8 @@ conductor replay <event.json>              run a saved webhook through the pipel
 conductor sweep [--now]                    one catch-up sweep (dry-run print / signal the daemon)
 conductor force <kind> <owner/repo>#<n>    force an action for a target now (via the daemon)
 conductor status                           live agents, in-flight workflows, stuck/attention
-conductor report [--days N]                dispatches by kind/outcome + attention counts + spend
+conductor report [--days N]                dispatches by kind/outcome + attention counts + usage per runtime/model (per usage.mode)
+conductor usage [--since 24h]              model usage per runtime/model: observed by conductor, and what usage.sources report
 conductor runs [--limit N]                 recorded executions, newest first (id, status, cost)
 conductor runs <id>                        one run's step-by-step detail (also: conductor run <id>)
 conductor runs retry <id> [--from <step>] [--force-replay]  re-run a recorded execution (recorded inputs pinned; succeeded steps need --force-replay)
@@ -33,7 +34,8 @@ conductor vault <name> init|add|get|ls|rm  manage a named vaults: entry
 conductor unlock                           seed the default vault key for non-interactive restarts
 conductor config migrate                   removed with the legacy config schema — run it on the release before the plugin contract, then upgrade
 conductor mcp memory --socket <path>       stdio MCP server for the live agent tools (memory + run_step; launched by runtimes, not by hand)
-conductor workflows [ls]                   config + saved (agent-promoted) workflows with review state and health
+conductor workflows [ls] [--folder p] [--flat]  config workflows and triggers as a folder tree, then saved (agent-promoted) workflows with review state and health
+conductor folders ls [path] [--flat]       everything filed in a folder — teams, bots, workflows, triggers (display only)
 conductor workflows review <name>          print the workflow's provenance + FULL steps, then clear it for reuse (dry-run it first; runs stay policy-guarded)
 conductor workflows rm <name>              remove a saved workflow
 conductor browser logins                   saved browser sessions, login sites, credentials (never values) — [[Browser]]
@@ -45,6 +47,18 @@ conductor browser passkey register <credential> [--url U]   register a dedicated
 conductor browser credential add|ls|usage|check|test|set|unset|bind|rm …   logins you add: typed (write-only), from a vault, or your own sign-in
 conductor browser vault-items <vault> [--query Q] | vault-item <vault> <item>   a vault's items for picking: names and fields, never a value
 conductor browser <action> …               (inside an agent) open, snapshot, click, fill, login --credential, … — conductor browser --help
+conductor bot ls [--folder <p>] [--flat]  bots as a tree: folder, team, bot (operator)
+conductor bot show|cases|workers|proposals …  bots: state, open work, proposals (operator)
+conductor bot approve|deny <bot> <id>  decide a bot proposal — SSH-signed with your operator key ([[Bots]])
+conductor bot rotate|say|deliver|consolidate <bot> …  drive a bot from the operator side
+conductor bot memory|knowledge index|recall <bot|team> …  the memory index a bot's sessions see, and ranked recall over it ([[Bots#reading-memory]])
+conductor bot templates [--search …] [--registry …]  community bots: bot templates installed packs and a registry ship ([[Bot-Templates]])
+conductor bot template <ref>                 one template: inputs, requested verbs with their maximum tiers, suggestions, seed, charter
+conductor bot new <name> --from <instance>/<template> [--connector i=c]… [--grant verb=tier]… [--write]  instantiate a template: planned on a copy of your config, validated, shown as a diff
+conductor bot grant <bot> <verb>=<tier>… [--write]  widen a template bot, the same way
+conductor bot template-check <bot>           compare a template bot's memory with its template now (a newer one opens a proposal)
+conductor bot teams | team <team>  bot teams: bots, routing, routed cases, delegations, knowledge, the proactive pool ([[Bots]])
+conductor bot delegations <bot>  a bot's delegation edges: work it handed to peers, and work it holds ([[Bots]])
 conductor version
 ```
 

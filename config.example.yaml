@@ -148,6 +148,7 @@ connectors:
       nightly-tidy: { cron: "0 4 * * *" }
       weekly-audit: { cron: "0 5 * * 0" }
       rate-check: { every: 6h, run_on_start: true }
+      sre-weekly: { cron: "0 9 * * 1" }   # the sre bot's weekly spend review (bots: below)
 
   # Local-event SOURCES are official plugins (fetched by `conductor init`), not
   # builtins — `use: fswatch` fires on a matching file settling, `use: logwatch`
@@ -485,6 +486,18 @@ engines:
 #     "claude-opus-*": { input: 15.00, output: 75.00 }   # $ per 1M tokens
 #   default: { input: 3.00, output: 15.00 }
 
+# usage: — what reports and notifications SHOW of model usage (display only:
+# every cap above enforces in every mode). off (the default) shows no usage
+# or cost figures; subscription shows what conductor observed of its own runs
+# (runs, turns, tokens) per runtime/model, never summed across providers;
+# api adds dollar figures. Plan windows / utilization come ONLY from a usage
+# source you configure (type http: a JSON report from e.g. a proxy) —
+# `conductor usage` shows both, labelled. (wiki: Cost-Accounting)
+# usage:
+#   mode: subscription
+#   sources:
+#     - { name: proxy, type: http, url: "http://127.0.0.1:8080/usage" }
+
 # ---------------------------------------------------------------------------
 # checks: + gate: — quality gates on agent output (#36 §16). A gate runs
 # named checks against the agent's PROPOSED change (in its worktree) before
@@ -633,6 +646,9 @@ runtimes:
     #   prefer:  [claude-opus-5, gpt-5.6-sol]   # ranking when a fleet offers a choice
     #   allow:   ["claude-opus-*", "gpt-5.6-*"] # a hard ceiling on what may run
   gpu-paseo: { use: paseo, bin: /usr/local/bin/paseo, host: build-box }
+  # A local cli runtime: background agent work (bot workers) runs directly
+  # on the tool, with no paseo workspace. Only what you talk to lives in paseo.
+  claude-cli: { use: cli, tool: claude-code }
   # deck:   { use: agent-deck }                     # sandboxed through agent-deck's --wrapper
   # oc:     { use: opencode }                       # one sandboxed `opencode serve` per dispatch
   # gemini: { use: acp, agent: gemini }              # ACP transport
@@ -1020,6 +1036,11 @@ callable:
 #       - { on: github.pull_request, filter: { repo: [me/api] } }
 # ---------------------------------------------------------------------------
 triggers:
+  # A trigger (and a workflow) can be filed in a folder for display only —
+  # `conductor workflows ls --folder work`, `conductor folders ls work`. No behavior:
+  #   - { on: manual, name: release-notes, folder: work/platform, steps: [ … ] }
+  # A pack's own workflows/triggers are filed by YOU, in its packs: entry
+  # (packs.<instance>.folder / .workflows.<name>.folder / .triggers.<name>.folder).
   # Near-identical triggers can share a base: a trigger `extends: <name>` inherits
   # another's steps/filter/policy/options (options deep-merge; filter and steps
   # replace when set), and a base marked `abstract: true` never fires and is
@@ -1205,6 +1226,24 @@ triggers:
         uses: slack-ops.post
         options: { text: "alarm {{.shape.name}} ({{.shape.sev}})" }
 
+  # Route events into a BOT (bots: below): the `bot:` helper opens a
+  # case, queues the event into the bot's home conversation as DATA, and —
+  # urgent — starts a worker at once instead of waiting on the conversation.
+  - on: timer.sre-weekly
+    steps:
+      - bot:
+          name: platform-sre
+          title: "weekly cloud spend and reservation review"
+          text: "Review last week's spend against reservations and savings plans; propose purchases within the spend cap."
+  # - on: pd.incident_triggered          # a PagerDuty connector (conductor-plugins)
+  #   steps:
+  #     - bot: { name: platform-sre, title: "{{.title}}", text: "{{.summary}}", urgent: true }
+  # - on: slack-ops.mention              # a chat request; requester decides what the gate lets run
+  #   steps:
+  #     - bot: { name: platform-sre, title: "chat request", text: "{{.text}}", requester: "slack:{{.user}}" }
+  # - on: timer.sre-weekly               # action: rotate | consolidate instead of a delivery
+  #   steps: [ { bot: { name: platform-sre, action: consolidate } } ]
+
   # Scheduled work; a command step's stdout becomes its outputs.
   - on: timer.nightly-tidy
     steps:
@@ -1383,6 +1422,190 @@ sandbox:
 #           - { at: fail,  uses: slack-ops.post, options: { text: "conductor update FAILED: {{.error}}" } }
 #       - { uses: build-box.run, options: { command: "smoke-test.sh" } }
 
+# ---------------------------------------------------------------------------
+# operators: + bots: — persistent conversational agents (wiki: Bots).
+#
+# A BOT is a named teammate with a charter (here, never writable by it), a
+# git MEMORY REPO (knowledge + episodic log + handoff notes; every write is a
+# reviewable commit), a durable CASE LEDGER (open events, proposals awaiting
+# approval, running workers), a pinned HOME session in paseo you talk to, and
+# WORKERS it delegates to on the cli runtime. Every mutating verb its sessions
+# call passes its AUTONOMY GATE:
+#
+#   observe       runs autonomously
+#   reversible    a proposal until promoted (promote:), and only while sandboxed
+#   propose       always a proposal; runs when an operator approves it
+#   commit_money  a proposal with a typed amount under the hard spend_cap
+#   never         refused
+#
+# An unclassified verb is `propose`. New bots start in SHADOW mode (nothing
+# above observe executes; proposals are a calibration record). Approvals are
+# SSH-signed by an operator — `conductor bot approve <bot> <id>` signs
+# the proposal's digest with your key (an ssh-agent key works) and the daemon
+# verifies it against ssh_key below. A bot session can never approve.
+#
+# Promotion beyond observe/propose takes effect only while bot sessions are
+# sandboxed (conductor's agent sandbox; `conductor bot show` says which).
+#
+# Bots never apply infrastructure themselves: with terraform: below, a
+# session proposes a pushed COMMIT, conductor plans it in its own private dir
+# with the plan connector's role, the operator signs that exact plan hash, and
+# conductor applies the saved plan with the apply connector's role. Plans that
+# destroy or replace stateful resources are refused unless allow_destroy names
+# them; plan files are deleted once the proposal is settled.
+#
+# Coordination: instructions flow down, authority never grows. A worker the
+# home session starts is its CHILD — the brief and `conductor bot tell`
+# follow-ups are instructions; what the child sends back is data. A child runs
+# with the bot's verbs or fewer (spawn --verbs / --read-only) and inherits
+# the provenance of the request behind it, so a third party's (or a peer's, or
+# a proactive sweep's) request can never be laundered through a child into an
+# unapproved write. Bots that an operator LINKS (peers: on both sides, or
+# bot_links:) can message each other — data only, never instructions — and
+# hand each other work (`conductor bot delegate`): the recipient works it under
+# its own authority, at the original request's trust, never more.
+#
+# TEAMS group bots however you cut your work — by system, function,
+# environment (conductor has no notion of an org). A bot names at most one
+# team; the team's settings are CEILINGS it inherits and can only narrow, never
+# widen (a bot past its team's is a load error naming both values).
+# Teammates are peers by default; a team can share a knowledge repo (bots
+# PROPOSE promotions from their own memory; an operator of the team approves);
+# and `bot: { team: … }` routes an event to the team, whose rules, lead or
+# fallback pick the bot — still the original requester's request at the gate.
+# ---------------------------------------------------------------------------
+operators:
+  ops:
+    ssh_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample operator@laptop"
+    aliases: ["slack:U0EXAMPLE"] # chat ids that ARE this operator when an event names them
+bots:
+  platform-sre:
+    description: "SRE for the platform services"
+    charter: |
+      You are the platform services' first-line SRE. Triage pages, investigate with read-only
+      tools, propose fixes, and escalate per the policy below. Keep runbooks
+      and the infra map in your memory current.
+    # charter_file: bots/platform-sre.md      # or keep the charter in a file
+    escalation: "Page the operator if a sev1 is not mitigated in 15 minutes or you are unsure."
+    # memory_repo: ~/bots/platform-sre        # default <state dir>/bots/platform-sre/memory
+    # seed_dir: .conductor/packs/platform-sre    # seed a NEW memory repo with a pack's knowledge/ + runbooks/
+    # operators: [ops]                           # default: the team's operators, else every operator
+    team: platform                               # at most one team (teams: below); bots without one are unaffected
+    # folder: work/platform                      # display only (`conductor bot ls`); on a team, the team's folder wins
+    # Memory is typed: knowledge/, runbooks/, watch/, digests/ (built-in kinds with frontmatter
+    # schemas — `conductor bot kinds`), log/ and handoff/ (conductor's). Custom kinds:
+    # collections:
+    #   postmortems: { from: .conductor/packs/platform-sre/collections/postmortems.yaml }   # one a pack ships
+    # Sessions read memory through a budgeted index, ranked recall and reads in parts
+    # (wiki: Bots → Reading memory). Every limit is on by default; a bigger value loosens it:
+    # memory:
+    #   index_budget: 6k                         # the memory index in a session's first prompt
+    #   read_max: 12k                            # one `conductor bot read`
+    #   recall_limit: 8                          # documents per recall (at most 25)
+    #   max_bytes: { knowledge: 8k, runbook: 12k, watch: 4k, digest: 8k, handoff: 4k, episode: 4k }
+    #   archive: true                            # consolidated raw logs leave the working copy (recall still finds them)
+    home:
+      rotate: { max_age: 24h, max_turns: 100 }   # a fresh session resumes from the handoff note + ledger;
+                                                 # max_age <= 144h (its conductor token lives 7d from last use)
+      # runtime: paseo                           # the paseo runtime (default: the default paseo)
+      # model: claude-opus-5                     # a fleet / id / list, resolved like a step's
+    worker:
+      runtime: claude-cli                        # default: the one `use: cli` runtime
+      timeout: 2h
+      max_concurrent: 4
+      # max_per_case: 3                          # live workers on one case (a fan-out's width)
+    skill:
+      verbs: [slack-ops.post, gh.comment]        # the bot's verbs; workers carry these or fewer
+    autonomy:
+      shadow: true                               # the default; false allows approved execution
+      tiers:
+        observe: [gh.get_*]
+        reversible: [slack-ops.post]
+        propose: [gh.comment]
+        never: [gh.delete_*]
+      # promote: [slack-ops.post]                # reversible classes that may run unapproved (needs the sandbox)
+      # commit_money: a typed amount option per verb, under a hard cap:
+      #   tiers: { commit_money: [aws.purchase_savings_plan] }
+      #   amounts: { aws.purchase_savings_plan: commitment_usd }
+      #   spend_cap: { per_action: 2000, per_period: 5000, period: 720h, currency: USD }
+      approval_ttl: 24h
+    # proactive:                                 # OFF unless set: read-only sweeps on a schedule (wiki: Bots → Proactive sweeps)
+    #   every: 4h
+    #   quiet_hours: "22:00-07:00"               # no sweep starts in this window (local time; timezone: to pin a zone)
+    #   budget: { max_runs_per_day: 6, max_turns_per_day: 120, max_tokens_per_day: 2m }   # rolling 24h, any or none;
+    #                                                               # + max_cost_per_day (USD) only on API billing
+    #   checklist: { section: "Proactive checks" }                # a charter heading, or { file: checklists/sre.md }
+    #   notify_at: high                          # findings at/above this open a case and notify (conductor.bot_notify)
+    # peers: [billing-sre]                       # bots this one may message — they must list it back (or bot_links:)
+    # terraform:                                 # conductor-executed Terraform (wiki: Bots → Terraform changes)
+    #   plan_connector: tf-plan                  # a `use: terraform` connector: its env is the READ role
+    #   apply_connector: tf-apply                # its env is the WRITE role; no bot verb may reach it
+    #   repos: { infra: git@git.example.com:platform/infra.git }   # the only repos a bot may propose from
+    #   # stateful: [aws_db_instance, aws_s3_bucket]      # default: built-in databases/buckets/disks/keys list
+    #   # allow_destroy: [module.old.aws_s3_bucket.logs] # addresses a plan may still destroy/replace
+    #   # timeout: 30m
+  # A COMMUNITY BOT: one instantiated from a bot template a pack ships (wiki:
+  # Bot-Templates). The pack instance (packs: above) carries its version, hold
+  # and trust; the template supplies the charter, seed memory, collections and
+  # REQUESTS verbs — none active until granted here. It starts in practice mode
+  # with its read-only verbs; each grant above observe is a widening `conductor
+  # validate` names. `conductor bot new <name> --from sre/sre` writes this for you,
+  # on a copy of the config, shown as a diff.
+  # oncall-sre:
+  #   use: sre/sre                               # <pack instance>/<template>; packs: { sre: { use: conductor-packs/sre-bot } }
+  #   connectors: { pagerduty: pd }              # bind its inputs (one connector of the type binds itself)
+  #   grant:                                     # template vocabulary: <input>.<verb> → tier, at most its maximum
+  #     pagerduty.get_incident: observe
+  #     pagerduty.list_incidents: observe
+  #     pagerduty.acknowledge: reversible        # a widening
+  #   # description:, escalation:, operators:, team:, folder:, autonomy: … — yours, and yours win
+
+teams:
+  platform:
+    description: "Platform services: the shared runtime, its data stores and deploys"
+    folder: work/platform                        # display only: files the team and its bots in `conductor bot ls` — no permissions, defaults or routing
+    knowledge: { promotion: proposal }           # a shared repo every bot reads; promotions need an operator of the team
+                                                 # + index_budget (default 2k), read_max, recall_limit, max_bytes: { knowledge, runbook, watch }
+    collections:                                 # a custom document kind in the team's knowledge (wiki: Bots → Content kinds)
+      postmortems:
+        dir: postmortems
+        fields:
+          title:    { type: string, required: true }
+          severity: { type: enum, values: [sev1, sev2, sev3], required: true }
+          action_items: { type: list }
+        template: "## Timeline\n\n## Cause\n\n## Follow-ups\n"
+        writers: [operator, proposal]            # a team's: operator / proposal; a bot's: operator / bots
+        # max_bytes: 8k                          # one document (default 8k)
+    # operators: [ops]                           # who approves for the team; bots' operators: must be a subset
+    # peers: none                                # default team: teammates may `ask` (data) and `delegate` (work) to each other
+    # delegation: { max_depth: 3 }               # most hops a `conductor bot delegate` chain may take (1–10, default 3)
+    # autonomy:
+    #   ceiling: observe                         # observe | reversible: the highest tier any bot may be PROMOTED to
+    #   shadow: true                             # hold every bot in shadow mode (none may set shadow: false)
+    #   tiers: { never: [gh.delete_*] }          # classified into every bot (the strictest tier wins)
+    # budget:
+    #   spend_cap: { per_action: 500, per_period: 2000, period: 720h }   # each bot's commit_money cap fits inside
+    #   proactive: { max_runs_per_day: 12, max_tokens_per_day: 5m }      # a POOL: all bots' sweeps together, rolling 24h; per unit
+    # isolation:
+    #   sandbox: required                        # bots start only while conductor's agent sandbox is on
+    #   handoff_workers: false                   # no `spawn --handoff` paseo workers
+    #   skip_permission_prompts: false           # a home.mode that skips prompts is a load error
+    # credentials: { secrets_via: broker, allow_secrets: [house/pd-token] }   # bots' skill.allow_secrets fit inside
+    # browser: { logins: [status.example.com], credentials: [statuspage] }   # saved logins bots may use (agent browser)
+    # knowledge: { repo: ~/teams/platform, seed_dir: .conductor/packs/sre-bot, promotion: direct }
+    # routing:                                   # `bot: { team: platform, … }` in a trigger
+    #   rules:                                   # first match wins: event fields against globs, no model
+    #     - { name: data, match: { source: "pd.*", service: "db-*" }, to: platform-data }
+    #   lead: platform-sre                       # else the lead triages (a read-only worker) and runs `conductor bot assign`
+    #   fallback: platform-sre                   # else, or unassigned after timeout:, the fallback (required)
+    #   # timeout: 10m
+  # billing: { description: "Billing and invoicing", folder: work/billing }   # isolated from platform unless bot_links: pairs bots
+# A solo bot files itself:  bots: { home-helper: { folder: personal/home, … } }
+
+# bot_links:                                # operator-side peer links: each pair may message each other.
+#   - [platform-sre, billing-sre]              # Linking two bots is a channel for data to cross between them —
+#                                              # what one writes reaches the other; only link bots whose data may mix.
+
 update: { auto: true } # self-update (auto-applies by default); auto-migration runs on the new binary's first boot.
 #                      # deps follows auto: packs: and `use:` plugins are kept current on the same cycle — a changed
 #                      # dep that still validates restarts to apply, every change logged with the sha it moved from.
@@ -1439,6 +1662,8 @@ update: { auto: true } # self-update (auto-applies by default); auto-migration r
 #       review-flow/post:   { workspace: local }  #   …or <workflow>[<n>] for a step with no id:
 #     models:
 #       reviewer: claude-opus-5                   # OVERRIDE a bundled fleet
+#     folder: work/review                         # file its workflows + triggers (display only;
+#     workflows: { review-flow: { folder: work/review/flows } }   #   a pack cannot set folder: itself)
 #     on:                                          # its triggers, by qualified name
 #       github.pull_request: { filter: { not_label_any: [wip] } }
 #     # Scope lives on the CONNECTOR, not the pack: each trigger binds to your

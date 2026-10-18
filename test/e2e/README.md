@@ -17,9 +17,11 @@ make e2e-live     # real agents + mounted keys (manual; see below)
 make e2e-down     # tear down a leftover stack (e.g. after KEEP=1)
 ```
 
-Useful env: `KEEP=1` leaves the stack up for inspection. Each checkout gets its own
-compose project and image tag (`pc-e2e-<checkout dir>`), so runs from different
-worktrees don't collide; `PROJECT=<name>` overrides it.
+Useful env: `ONLY="BR"` (or `E2E_GROUPS`) runs only the named groups
+(space-separated; groups BM and L — bots — alone bring up only their
+`conductor-bots` daemon). `KEEP=1` leaves the stack up for inspection. Each
+checkout gets its own compose project and image tag (`pc-e2e-<checkout dir>`),
+so runs from different worktrees don't collide; `PROJECT=<name>` overrides it.
 
 ## What comes up (`docker-compose.yml`)
 
@@ -34,6 +36,7 @@ overrides `command:`.
 | `conductor` | the real daemon, **no `controllers:` block** → paseo default path; webhook receiver for group H; web hand-off channel for C/D/E |
 | `conductor-ctrl` | a second daemon **with** a `controllers:` block → group A resolution + every non-paseo controller (group B) + resumable hand-off (C/D2/F) + ACP crash (J3) |
 | `conductor-fail` | a daemon whose fake paseo fails `workspace create` → group J2 |
+| `conductor-bots` | a daemon with a bot on a seeded memory repo and one from a pack's template (its config copied somewhere writable and the pack vendored by `entrypoint-bots.sh`) → group BM (bot memory: the memory index in the home prompt, recall, reads in parts, caps, an unreported consolidation archives nothing) and group L (community bots: the template catalog, practice mode with read-only verbs, `bot new` on a copy, a refused and a named widening, a newer template arriving as a proposal and landing on a signed approval) |
 
 ### Stub controller runtimes (per transport)
 

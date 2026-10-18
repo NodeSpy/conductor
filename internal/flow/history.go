@@ -157,13 +157,15 @@ func (h *histRec) setInputs(id string, inputs map[string]any) {
 }
 
 // setCost attaches an agent step's usage (#36 §14).
-func (h *histRec) setCost(id string, u cost.Usage) {
+func (h *histRec) setCost(id, runtime string, u cost.Usage) {
 	if h == nil {
 		return
 	}
 	h.mu.Lock()
 	if i, ok := h.byID[id]; ok {
 		h.rec.Steps[i].Tokens = u.TotalTokens
+		h.rec.Steps[i].Turns = u.Turns
+		h.rec.Steps[i].Runtime, h.rec.Steps[i].Model = runtime, u.Model
 		h.rec.Steps[i].CostUSD = u.CostUSD
 	}
 	h.mu.Unlock()
@@ -180,6 +182,8 @@ func (h *histRec) finish(status, errStr, failedStep string, acc *costAcc) {
 	h.rec.FailedStep = failedStep
 	h.rec.Finished = time.Now()
 	h.rec.Tokens, h.rec.CostUSD, h.rec.ApproxCost = acc.totals()
+	h.rec.Turns = acc.turnsTotal()
+	h.rec.Usage = acc.usage()
 	h.mu.Unlock()
 	h.persist()
 	h.emit("run_done", failedStep, status, errStr, 0)
@@ -211,8 +215,8 @@ func historySetInputs(ctx context.Context, stepID string, inputs map[string]any)
 }
 
 // historySetCost is the recordUsage-facing hook.
-func historySetCost(ctx context.Context, stepID string, u cost.Usage) {
-	histFrom(ctx).setCost(stepID, u)
+func historySetCost(ctx context.Context, stepID, runtime string, u cost.Usage) {
+	histFrom(ctx).setCost(stepID, runtime, u)
 }
 
 // clipText bounds a recorded text input (prompts can be huge).

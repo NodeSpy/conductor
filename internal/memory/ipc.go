@@ -105,6 +105,12 @@ type LiveOps struct {
 	// session: Uses is the action, Options its arguments. Authorized by
 	// token + peer; nil → no browser on this daemon.
 	Browser func(ctx context.Context, token, action string, args map[string]any, peer Peer) (map[string]any, error)
+	// Bot serves `conductor bot <sub>` from a bot session (op
+	// "bot": Uses carries the sub-command, Options its arguments),
+	// authorized by token + peer to the bot and role the token is bound
+	// to. Approvals are deliberately NOT here: they arrive only on the
+	// operator control socket, signed. nil → unavailable.
+	Bot func(ctx context.Context, token, sub string, args map[string]any, peer Peer) (map[string]any, error)
 }
 
 // Peer is the socket-peer identity of the calling process (Linux
@@ -398,6 +404,16 @@ func handleIPC(m *Manager, req IPCRequest, peer Peer, audit func(map[string]any)
 			return IPCResponse{Error: "verb: the skill verb surface is not available on this daemon"}
 		}
 		out, err := ops.RunVerb(context.Background(), req.Token, req.Uses, req.Options, peer)
+		if err != nil {
+			return IPCResponse{Error: err.Error()}
+		}
+		return IPCResponse{OK: true, Result: out}
+	case "bot":
+		ops := getLiveOps()
+		if ops.Bot == nil {
+			return IPCResponse{Error: "bot: no bot service on this daemon"}
+		}
+		out, err := ops.Bot(context.Background(), req.Token, req.Uses, req.Options, peer)
 		if err != nil {
 			return IPCResponse{Error: err.Error()}
 		}
