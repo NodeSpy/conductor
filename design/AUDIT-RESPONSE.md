@@ -53,6 +53,22 @@ plan and the audit data folded (`approvals.spec.js`, `toggles.spec.js`).
   phone) and fails if the page breaks, loses its title or empties, or if an approval loses what will change, why, who
   asked or the decision bar.
 
+### Usability: each screen around the question a person brings (from the owner's phone walkthrough)
+
+Plan: `.scratch/ui-audit/usability-plan.md`. Concepts a person learns are bot, workflow, run, approval, connection and
+secret; a bot's work items are **tasks**, "proposal" is always "approval", "shadow" is "practice mode"; tiers, verbs,
+section paths, event names and hashes appear only in detail layers.
+- **Home**: Needs you is a tile with the badge's count, broken down by kind; every run in the last 12 hours is in a part.
+- **A bot**: the header says what it's working on (the task's title); Approvals shows only what waits; Tasks lists
+  what it's handling in words; **what it can do is edited in the plain list** (move between on its own / asks first /
+  never, take away, allow something new); no verbs-by-tiers table.
+- **A run**: one recommended next step with its reason, the rest in a menu; steps in words; audit trail and signature
+  folded.
+- **Activity on a phone**: what needs attention and what runs; finished runs one line; no bulk selection (desktop-only).
+- **Workflows**: a sentence for what each one does. **Connections**: connected and working, in words; Configure in the
+  menu. **Secrets** first, vaults folded. **Packs** say what they do. **Config**: changes in words, paths when opened,
+  sections and safety notes folded. **Preferences** (your menu) holds display and notification settings.
+
 ### Not done (and why)
 
 - Bulk on the bots tree, retarget connector / set model in bulk (power N24): scope, unchanged from round 1.

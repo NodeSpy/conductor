@@ -75,6 +75,10 @@ Screenshot helpers (local disk): `~/.cache/conductor-design/daylight/batch.js <o
 
 ## Done (commits on this branch, newest first)
 
+- **Usability pass** (each screen around its person-level question; `design/AUDIT-RESPONSE.md` "Usability"): Home's
+  Needs you tile, the bot page (tasks, waiting approvals, the plain-list permission editor), the run page's one
+  recommended step, Activity on a phone, workflow sentences, connection states, Secrets/Packs/Config hierarchy, and a
+  Preferences page (`#/preferences`).
 - **Round 2 of the adversarial reviews** (`design/AUDIT-RESPONSE.md` "Round 2"; every fix pinned in
   `dashboard-tests/round2.spec.js`): the review screen computes its checks and forms change only what you changed;
   every statement about a bot's reach comes from one function (`UI.verbMode`); the enforced egress allowlist validates;

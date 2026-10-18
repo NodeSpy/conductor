@@ -29,7 +29,7 @@ test.describe('connectors, runtimes, hosts, isolation', () => {
   });
   test('edit a connector and delete one', async ({ page }) => {
     await go(page, '#/connectors/connectors');
-    await page.locator('[data-act="conn-edit"][data-c="gh"]').click();
+    await page.locator('[data-act="conn-more"][data-c="gh"]').click(); await page.locator('#pop-menu [data-act="conn-edit"]').click();
     await page.selectOption('#f-sweep', '5m');
     await submit(page);
     await expect(page.locator('.diff')).toContainText('sweep: 5m');

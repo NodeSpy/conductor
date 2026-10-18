@@ -63,7 +63,8 @@ failures stacked in the danger colour, the failures named); For your information
 Deliberate differences:
 - **No greeting or summary sentence** (removed in review): they carried nothing the tiles and Needs you don't, and the
   summary contradicted itself ("everything else is running normally" beside failed runs). The page opens on At a glance.
-- **At a glance** tiles at the top (approved in review). The Running tile links to Activity filtered to running
+- **At a glance** tiles at the top (approved in review); after the usability walkthrough, the Approvals tile became
+  **Needs you** (the badge's count, broken down by kind), so the tiles and the badge agree. The Running tile links to Activity filtered to running
   and carries no list of names.
 - **Running now** shows at most three runs, longest-running first, then "+N more running →"; no step counts (the status
   rule); hidden when nothing runs.

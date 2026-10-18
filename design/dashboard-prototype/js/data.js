@@ -26,7 +26,7 @@
     { name: 'kv', use: 'kv', status: 'ok', detail: 'boltdb · 214 keys', events: 0, verbs: 902 },
     { name: 'tf-plan', use: 'terraform', status: 'ok', detail: 'engine tofu 1.8 · READ role', events: 0, verbs: 6 },
     { name: 'tf-apply', use: 'terraform', status: 'idle', detail: 'engine tofu 1.8 · write role', events: 0, verbs: 1 },
-    { name: 'handoff', use: 'web', status: 'wait', detail: 'listen :8099 · 1 draft awaiting answer', events: 3, verbs: 3 },
+    { name: 'handoff', use: 'web', status: 'wait', detail: 'A hand-off draft is waiting for your answer', events: 3, verbs: 3 },
   ];
 
   D.runtimes = [
