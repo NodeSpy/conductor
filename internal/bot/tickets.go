@@ -288,7 +288,8 @@ func (s *Service) requesterFor(a TicketActor, assignee string) (string, string) 
 	if a.isBot() {
 		rec := s.Ledger.Bot(a.Bot.Bot)
 		class, who, _ := homeAttribution(&rec)
-		return lessTrusted(class, who, ReqBot, "bot:"+a.Bot.Bot)
+		class, who = lessTrusted(class, who, ReqBot, "bot:"+a.Bot.Bot)
+		return who, class
 	}
 	if a.Operator == "" {
 		return "", ReqOperator

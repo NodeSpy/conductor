@@ -149,6 +149,9 @@ func (s *Service) agentOp(ctx context.Context, c Actor, sub string, args map[str
 	if operatorOnlyOps[sub] {
 		return nil, fmt.Errorf("a bot session cannot %s a repo directly — only an operator does, on the operator control socket; propose team knowledge with `conductor bot team promote`, and write your own memory with `conductor bot remember`", sub)
 	}
+	if isTicketOp(sub) {
+		return s.ticketOp(ctx, TicketActor{Bot: c}, sub, args)
+	}
 	switch sub {
 	case "whoami":
 		rec := s.Ledger.Bot(c.Bot)
@@ -342,6 +345,13 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 			return err
 		}
 		return nil
+	}
+	if isTicketOp(sub) {
+		a, err := s.operatorActor(str(args, "as"))
+		if err != nil {
+			return nil, err
+		}
+		return s.ticketOp(ctx, a, sub, args)
 	}
 	switch sub {
 	case "edit":

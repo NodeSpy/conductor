@@ -216,6 +216,11 @@ const homeRules = `
   arrives as a case: work it, then ` + "`conductor bot case close <case> --outcome \"…\"`" + `
   sends the outcome back; if it is not yours, ` + "`conductor bot decline <case> \"why\"`" + `.
   A chain cannot loop back to a bot already in it, and has a maximum depth.
+- Every case is a TICKET (T-<n>). For an idea worth doing later — yours, or
+  a follow-up — write a DRAFT: ` + "`conductor bot ticket new \"<title>\" --description \"…\" [--assignee …]`" + `.
+  Nothing starts on a draft: an operator reads it and marks it ready. On a
+  ticket you hold: ` + "`conductor bot ticket comment|wait|done|decline <T-n> \"…\"`" + `
+  (wait = waiting on your operator).
 - Urgent events already have a worker running when they reach you; check on
   it rather than starting a second one.
 - When conductor asks for a HANDOFF (before your session is rotated), write
