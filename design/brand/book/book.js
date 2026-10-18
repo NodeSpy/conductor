@@ -681,7 +681,7 @@ const RIM = { dark: 'rgba(244,238,228,.18)', light: '' };
 const face = (id, c, t, size) => faceSVG(id, { fill: botFill(c, t), ink: botInk(c, t), rim: RIM[t], size });
 const facesGrid = (t) => `<div class="bf-grid">${FACES.map(([id, name, expr], k) => { const c = BOT_COLOURS[k % BOT_COLOURS.length]; return `<figure>${face(id, c, t, 96)}<div class="bf-small">${face(id, c, t, 24)}${face(id, c, t, 32)}</div><figcaption><b>${name}</b><span>${expr} · <code>${id}</code></span></figcaption></figure>`; }).join('')}</div>`;
 const recolourMatrix = (t) => `<div class="bf-matrix" style="--cols:${BOT_COLOURS.length}"><span></span>${BOT_COLOURS.map((c) => `<span class="bf-ch">${c}</span>`).join('')}
-  ${FACES.map(([id]) => `<span class="bf-rh">${id}</span>${BOT_COLOURS.map((c) => `<span class="bf-cell">${face(id, c, t, 24)}</span>`).join('')}`).join('')}</div>
+  ${FACES.map(([id]) => `<span class="bf-rh">${id}</span>${BOT_COLOURS.map((c) => `<span class="bf-cell">${face(id, c, t, 48)}${face(id, c, t, 24)}</span>`).join('')}`).join('')}</div>
   <div class="bf-big">${BOT_COLOURS.map((c, k) => face(FACES[k % FACES.length][0], c, t, 96)).join('')}</div>`;
 const initials = (name) => name.split(/[-\s_]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
 const fallbackDemo = (t) => `<div class="bf-fallback">${[['platform-sre', 'teal'], ['billing-sre', 'plum'], ['pr-review', 'rose'], ['triage', 'olive']].map(([n, c]) => `<span><i style="background:${botFill(c, t)};color:${botInk(c, t)}">${initials(n)}</i><b>${n}</b></span>`).join('')}
@@ -701,8 +701,8 @@ ch('bots', 'Bot identity', 'A bot is recognisable at a glance: its face, its col
   () => `
   ${sub('bot-faces', 'Faces', 'Twelve friendly robot faces, each with its own head shape and expression. The head takes the bot’s colour and the features are drawn in the theme’s ink, so any face works with any colour. Drawn to read at 24px (rows, the facts line) and to look good at 96px (the bot page, the chat header). They are Daylight’s own drawings, never derived from the logo: no arches and no dot under an arch.')}
   ${pair(facesGrid)}
-  ${sub('bot-colours', 'Colours', 'Seven identity colours, every one at least 20° of hue from every status colour (danger, needs-you ember, waiting, passed, running, shadow) and a different lightness and chroma from the status marks, so a bot’s colour never reads as a state. Pastel in light, deep in dark; the face is AA on every fill. Every face in every colour:')}
-  ${pair(recolourMatrix)}
+  ${sub('bot-colours', 'Colours', 'Seven identity colours, every one at least 20° of hue from every status colour (danger, needs-you ember, waiting, passed, running, shadow) and a different lightness and chroma from the status marks, so a bot’s colour never reads as a state. Pastel in light, deep in dark; the face is AA on every fill. Any face takes any colour: the full grid, every face in every colour, at 48px and 24px:')}
+  ${stack(recolourMatrix)}
   ${why('Checks: <code>tools/bot-palette.mjs</code> writes <a href="bot-identity/PALETTE.md">bot-identity/PALETTE.md</a> (contrast, hue gap and distance to every status colour, in both themes), and <code>tools/tokens.mjs</code> gates the face-on-fill contrast with the other token pairs.')}
   ${sub('bot-rules', 'Where the colour goes', 'Behind the bot’s face (its avatar, wherever it appears), and a 3px rule on the bot’s own chat messages (<code>--color-bot-*-rule</code>: the other theme’s fill, so it shows at 3:1 on either page). The name stays ink. Never on status marks, buttons, links, counts, row edges, charts, focus rings or text: those keep the system’s colours.')}
   ${pair(placementDemo)}
