@@ -2,9 +2,13 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/NodeSpy/conductor/internal/avatar"
 )
 
 // BOT IDENTITY (docs/wiki/Bots.md#identity): what makes a bot recognizable —
@@ -14,8 +18,9 @@ import (
 // THE NAME LISTS BELOW ARE THE ONE SOURCE OF TRUTH: validation, the
 // catalog, `conductor bot show` and the dashboard API all read them. They are
 // placeholders until the dashboard's options are settled — changing a list is
-// a one-file change. No URLs or files: an avatar is a name from a list, which
-// keeps a config hermetic and safe to publish.
+// a one-file change. No URLs: an avatar is a name from a list, or the
+// operator's own picture — a PNG, JPEG or WebP file beside the config (never
+// SVG), checked by content and re-encoded whenever conductor serves it.
 
 // AvatarPresets are the precanned avatars (`avatar: { preset: … }`).
 var AvatarPresets = []string{"robot", "owl", "fox", "octopus", "lighthouse", "satellite", "compass", "anvil"}
@@ -45,9 +50,61 @@ const (
 
 // BotAvatar is a precanned avatar, or an icon with a color — exactly one.
 type BotAvatar struct {
+	// Preset is a face from AvatarPresets; Icon one from AvatarIcons. At
+	// most one. Color colors either (default: the bot's identity color).
 	Preset string `yaml:"preset,omitempty" json:"preset,omitempty"`
 	Icon   string `yaml:"icon,omitempty" json:"icon,omitempty"`
 	Color  string `yaml:"color,omitempty" json:"color,omitempty"`
+	// Image is the operator's own picture: a PNG, JPEG or WebP file,
+	// relative to the config's directory (a template's: relative to its
+	// pack), so it travels with the config. A preset or an icon beside it is
+	// the face shown where an image can't go.
+	Image string `yaml:"image,omitempty" json:"image,omitempty"`
+	// ImagePath is Image resolved at load (computed).
+	ImagePath string `yaml:"-" json:"-"`
+}
+
+// resolveAvatarImage resolves an avatar image inside dir (the config's
+// directory, or a template's pack) and checks the file: inside dir (no
+// symlink out), a PNG, JPEG or WebP by its content, whole, within the caps.
+// It sets ImagePath on a copy and returns it.
+func resolveAvatarImage(a *BotAvatar, dir, where string) (*BotAvatar, error) {
+	if a == nil || a.Image == "" || a.ImagePath != "" {
+		return a, nil
+	}
+	p, err := packFile(dir, a.Image, "avatar.image")
+	if err != nil {
+		return nil, fmt.Errorf("%s", strings.Replace(err.Error(), "the pack", where, 1))
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return nil, fmt.Errorf("avatar.image: %w", err)
+	}
+	if err := avatar.CheckFile(b); err != nil {
+		return nil, fmt.Errorf("avatar.image: %s: %w", a.Image, err)
+	}
+	cp := *a
+	cp.ImagePath = p
+	return &cp, nil
+}
+
+// AvatarImageExts are the file extensions an avatar image may have (its
+// content is checked too: the extension never decides).
+var AvatarImageExts = []string{".png", ".jpg", ".jpeg", ".webp"}
+
+// checkAvatarImageName refuses an image path that is not a plain relative
+// path to a PNG, JPEG or WebP file.
+func checkAvatarImageName(p string) error {
+	clean := filepath.ToSlash(filepath.Clean(p))
+	switch {
+	case strings.TrimSpace(p) == "" || filepath.IsAbs(p) || strings.HasPrefix(p, "~") || strings.Contains(p, "://"):
+		return fmt.Errorf("avatar.image: %q must be a path relative to the config's directory (e.g. avatars/bot.png) — no URLs", p)
+	case clean == ".." || strings.HasPrefix(clean, "../"):
+		return fmt.Errorf("avatar.image: %q leaves the config's directory", p)
+	case !oneOf(AvatarImageExts, strings.ToLower(filepath.Ext(p))):
+		return fmt.Errorf("avatar.image: %q: a PNG, JPEG or WebP file (%s) — not SVG", p, strings.Join(AvatarImageExts, ", "))
+	}
+	return nil
 }
 
 // BotPersonality is a bot's voice: a tone from the list and a short free-text
@@ -109,19 +166,31 @@ func checkLine(field, s string, max int) error {
 // Validate checks the identity fields against the lists and caps.
 func (id Identity) Validate() error {
 	if a := id.Avatar; a != nil {
+		if a.Image != "" {
+			if err := checkAvatarImageName(a.Image); err != nil {
+				return err
+			}
+		}
 		switch {
-		case a.Preset != "" && (a.Icon != "" || a.Color != ""):
-			return fmt.Errorf("avatar: a preset, or an icon with a color — not both")
+		case a.Preset != "" && a.Icon != "":
+			return fmt.Errorf("avatar: a preset or an icon — not both")
 		case a.Preset != "":
 			if err := checkName("avatar.preset", "preset", a.Preset, AvatarPresets); err != nil {
 				return err
 			}
-		case a.Icon == "" || a.Color == "":
-			return fmt.Errorf("avatar: set preset: <name>, or icon: <name> with color: <name>")
-		default:
+		case a.Icon != "":
 			if err := checkName("avatar.icon", "icon", a.Icon, AvatarIcons); err != nil {
 				return err
 			}
+			if a.Color == "" && id.Color == "" {
+				return fmt.Errorf("avatar: an icon needs a color (avatar.color, or the bot's color)")
+			}
+		case a.Image == "":
+			return fmt.Errorf("avatar: set preset: <face> (color optional), icon: <name> with a color, or image: <file>")
+		case a.Color != "":
+			return fmt.Errorf("avatar.color colors a preset or an icon; an image has its own")
+		}
+		if a.Color != "" {
 			if err := checkColor("avatar.color", a.Color); err != nil {
 				return err
 			}
@@ -215,6 +284,9 @@ func (id Identity) Attributes(botID string) map[string]string {
 		"tagline": id.Tagline, "color": id.Color}
 	if a := id.Avatar; a != nil {
 		out["avatar_preset"], out["avatar_icon"], out["avatar_color"] = a.Preset, a.Icon, a.Color
+		if a.Color == "" && (a.Preset != "" || a.Icon != "") {
+			out["avatar_color"] = id.Color // a face takes the bot's color by default
+		}
 	}
 	return out
 }

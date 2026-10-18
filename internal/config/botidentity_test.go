@@ -1,6 +1,11 @@
 package config
 
 import (
+	"bytes"
+	"image"
+	"image/png"
+	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
@@ -30,10 +35,23 @@ func TestBotIdentityValidate(t *testing.T) {
 
 		{"unknown preset", Identity{Avatar: &BotAvatar{Preset: "dragon"}}, `avatar.preset: unknown preset "dragon" (presets: robot, owl`},
 		{"preset is a URL", Identity{Avatar: &BotAvatar{Preset: "https://example.com/a.png"}}, "avatar.preset: unknown preset"},
-		{"preset and icon", Identity{Avatar: &BotAvatar{Preset: "owl", Icon: "radar"}}, "avatar: a preset, or an icon with a color — not both"},
-		{"preset and color", Identity{Avatar: &BotAvatar{Preset: "owl", Color: "teal"}}, "not both"},
-		{"icon without color", Identity{Avatar: &BotAvatar{Icon: "radar"}}, "avatar: set preset: <name>, or icon: <name> with color: <name>"},
-		{"color without icon", Identity{Avatar: &BotAvatar{Color: "teal"}}, "avatar: set preset"},
+		{"preset and icon", Identity{Avatar: &BotAvatar{Preset: "owl", Icon: "radar"}}, "avatar: a preset or an icon — not both"},
+		{"preset with a color", Identity{Avatar: &BotAvatar{Preset: "owl", Color: "teal"}}, ""},
+		{"preset, bad color", Identity{Avatar: &BotAvatar{Preset: "owl", Color: "red"}}, `avatar.color: "red" is a status color`},
+		{"icon with the bot's color", Identity{Avatar: &BotAvatar{Icon: "radar"}, Color: "plum"}, ""},
+		{"icon without any color", Identity{Avatar: &BotAvatar{Icon: "radar"}}, "avatar: an icon needs a color (avatar.color, or the bot's color)"},
+		{"color without a face", Identity{Avatar: &BotAvatar{Color: "teal"}}, "avatar: set preset: <face> (color optional), icon: <name> with a color, or image: <file>"},
+		{"image", Identity{Avatar: &BotAvatar{Image: "avatars/sre.png"}}, ""},
+		{"image, jpeg", Identity{Avatar: &BotAvatar{Image: "a/b/sre.JPEG"}}, ""},
+		{"image with a fallback face", Identity{Avatar: &BotAvatar{Image: "avatars/sre.webp", Preset: "owl", Color: "teal"}}, ""},
+		{"image and a color alone", Identity{Avatar: &BotAvatar{Image: "avatars/sre.png", Color: "teal"}}, "avatar.color colors a preset or an icon; an image has its own"},
+		{"image svg", Identity{Avatar: &BotAvatar{Image: "avatars/sre.svg"}}, `avatar.image: "avatars/sre.svg": a PNG, JPEG or WebP file (.png, .jpg, .jpeg, .webp) — not SVG`},
+		{"image gif", Identity{Avatar: &BotAvatar{Image: "sre.gif"}}, "a PNG, JPEG or WebP file"},
+		{"image url", Identity{Avatar: &BotAvatar{Image: "https://example.com/a.png"}}, "must be a path relative to the config's directory (e.g. avatars/bot.png) — no URLs"},
+		{"image absolute", Identity{Avatar: &BotAvatar{Image: "/etc/a.png"}}, "must be a path relative"},
+		{"image home", Identity{Avatar: &BotAvatar{Image: "~/a.png"}}, "must be a path relative"},
+		{"image escapes", Identity{Avatar: &BotAvatar{Image: "../../a.png"}}, `avatar.image: "../../a.png" leaves the config's directory`},
+		{"image escapes after clean", Identity{Avatar: &BotAvatar{Image: "avatars/../../a.png"}}, "leaves the config's directory"},
 		{"empty avatar", Identity{Avatar: &BotAvatar{}}, "avatar: set preset"},
 		{"unknown icon", Identity{Avatar: &BotAvatar{Icon: "./me.svg", Color: "teal"}}, `avatar.icon: unknown icon "./me.svg" (icons: radar`},
 		{"unknown avatar color", Identity{Avatar: &BotAvatar{Icon: "radar", Color: "beige"}}, `avatar.color: unknown color "beige" (colors: indigo`},
@@ -172,6 +190,13 @@ func TestBotIdentityAttributesAndView(t *testing.T) {
 	if none["name"] != "sre" || none["id"] != "sre" || none["initials"] != "S" || none["avatar_preset"] != "" {
 		t.Fatalf("no identity: %v", none)
 	}
+	// A face with no color of its own takes the bot's.
+	if a := (Identity{Color: "plum", Avatar: &BotAvatar{Preset: "owl"}}).Attributes("sre"); a["avatar_preset"] != "owl" || a["avatar_color"] != "plum" {
+		t.Fatalf("a preset's default color: %v", a)
+	}
+	if a := (Identity{Color: "plum", Avatar: &BotAvatar{Image: "a.png"}}).Attributes("sre"); a["avatar_color"] != "" || a["avatar_preset"] != "" {
+		t.Fatalf("an image alone has no face: %v", a)
+	}
 	full := Identity{DisplayName: "Night Owl", Tagline: "t", Color: "plum", Avatar: &BotAvatar{Icon: "radar", Color: "teal"}}.Attributes("sre")
 	if full["name"] != "Night Owl" || full["id"] != "sre" || full["initials"] != "NO" || full["avatar_icon"] != "radar" ||
 		full["avatar_color"] != "teal" || full["color"] != "plum" || full["tagline"] != "t" {
@@ -213,5 +238,100 @@ func TestIdentityListsAreSound(t *testing.T) {
 	if !reflect.DeepEqual(o["presets"], AvatarPresets) || !reflect.DeepEqual(o["colors"], IdentityColors) || !reflect.DeepEqual(o["icons"], AvatarIcons) ||
 		!reflect.DeepEqual(o["tones"], PersonalityTones) || !reflect.DeepEqual(o["status_hues"], StatusHues) {
 		t.Fatalf("the options are not the lists: %v", o)
+	}
+}
+
+func testPNG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewNRGBA(image.Rect(0, 0, 8, 8))
+	var b bytes.Buffer
+	if err := png.Encode(&b, img); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+// THE OPERATOR'S OWN PICTURE: a file beside the config, checked at load by
+// its content — a PNG, JPEG or WebP, whole, inside the config's directory.
+// An SVG or a polyglot renamed .png is refused, naming the bot.
+func TestBotAvatarImageLoads(t *testing.T) {
+	load := func(t *testing.T, files map[string][]byte, avatar string) (*Config, error) {
+		dir := t.TempDir()
+		SetStateDir(filepath.Join(dir, "state"))
+		t.Cleanup(func() { SetStateDir("") })
+		for name, b := range files {
+			_ = os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755)
+			if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		p := filepath.Join(dir, "config.yaml")
+		_ = os.WriteFile(p, []byte(botsBase+"bots:\n  sre:\n    avatar: "+avatar+"\n"), 0o600)
+		return Load(p)
+	}
+	img := testPNG(t)
+	c, err := load(t, map[string][]byte{"avatars/sre.png": img}, "{ image: avatars/sre.png, preset: owl }")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := c.Bots["sre"].Avatar
+	if a.Image != "avatars/sre.png" || !strings.HasSuffix(a.ImagePath, filepath.Join("avatars", "sre.png")) || !filepath.IsAbs(a.ImagePath) || a.Preset != "owl" {
+		t.Fatalf("avatar: %+v", a)
+	}
+	for name, c := range map[string]struct {
+		files  map[string][]byte
+		avatar string
+		want   string
+	}{
+		"missing":           {nil, "{ image: avatars/sre.png }", "avatar.image: open"},
+		"svg renamed .png":  {map[string][]byte{"a.png": []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>x</script></svg>`)}, "{ image: a.png }", "SVG is not accepted"},
+		"html renamed .png": {map[string][]byte{"a.png": []byte("<html><script>x</script></html>")}, "{ image: a.png }", "not a PNG, JPEG or WebP image"},
+		"polyglot png+html": {map[string][]byte{"a.png": append(append([]byte{}, img...), "<html><script>x</script>"...)}, "{ image: a.png }", "bytes after the image's end"},
+		"jpeg named .png":   {map[string][]byte{"a.png": []byte{0xff, 0xd8, 0xff, 0xd9}}, "{ image: a.png }", "avatar.image: a.png"},
+		"svg extension":     {map[string][]byte{"a.svg": img}, "{ image: a.svg }", "not SVG"},
+		"leaves the dir":    {nil, "{ image: ../a.png }", "leaves the config's directory"},
+	} {
+		_, err := load(t, c.files, c.avatar)
+		if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "sre") {
+			t.Errorf("%s: got %v, want %q", name, err, c.want)
+		}
+	}
+	// A symlink out of the config's directory.
+	outside := filepath.Join(t.TempDir(), "x.png")
+	_ = os.WriteFile(outside, img, 0o644)
+	dir := t.TempDir()
+	SetStateDir(filepath.Join(dir, "state"))
+	t.Cleanup(func() { SetStateDir("") })
+	_ = os.Symlink(outside, filepath.Join(dir, "link.png"))
+	p := filepath.Join(dir, "config.yaml")
+	_ = os.WriteFile(p, []byte(botsBase+"bots:\n  sre:\n    avatar: { image: link.png }\n"), 0o600)
+	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "leaves the config's directory (a symlink)") {
+		t.Fatalf("a symlink out: %v", err)
+	}
+}
+
+// A TEMPLATE SHIPS ITS PICTURE IN ITS PACK: resolved there, checked at pack
+// load, and the operator's avatar still wins.
+func TestTemplateAvatarImage(t *testing.T) {
+	manifest := strings.Replace(sreKitManifest, "    model: claude-opus-5\n", "    model: claude-opus-5\n    avatar: { image: face.png }\n", 1)
+	write := func(t *testing.T, b []byte) func(dir string) {
+		return func(dir string) { _ = os.WriteFile(filepath.Join(dir, "packs", "sre-kit", "face.png"), b, 0o644) }
+	}
+	c, _, err := loadTemplateCfgWith(t, manifest, "bots:\n  sre: { use: kit/first-line }\n  own:\n    use: kit/first-line\n    avatar: { preset: fox }\n", write(t, testPNG(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := c.Bots["sre"].Avatar; a == nil || a.Image != "face.png" || !strings.HasSuffix(a.ImagePath, filepath.Join(".conductor", "packs", "kit", "face.png")) {
+		t.Fatalf("the template's picture: %+v", a)
+	}
+	if a := c.Bots["own"].Avatar; a.Preset != "fox" || a.Image != "" {
+		t.Fatalf("the operator's avatar: %+v", a)
+	}
+	if _, _, err := loadTemplateCfgWith(t, manifest, "", write(t, []byte("<svg/>"))); err == nil || !strings.Contains(err.Error(), "SVG is not accepted") {
+		t.Fatalf("a pack's SVG: %v", err)
+	}
+	escape := strings.Replace(sreKitManifest, "    model: claude-opus-5\n", "    model: claude-opus-5\n    avatar: { image: ../face.png }\n", 1)
+	if _, _, err := loadTemplateCfgWith(t, escape, "", nil); err == nil || !strings.Contains(err.Error(), "leaves") {
+		t.Fatalf("out of the pack: %v", err)
 	}
 }

@@ -948,6 +948,14 @@ func (c *Config) validateBots() error {
 		if err := c.validateBot(name, m); err != nil {
 			return fmt.Errorf("config: bots.%s: %w", name, err)
 		}
+		// The operator's own avatar image, beside the config (a template's
+		// was resolved in its pack).
+		if a, err := resolveAvatarImage(m.Avatar, c.baseDir, "the config's directory"); err != nil {
+			return fmt.Errorf("config: bots.%s: %w", name, err)
+		} else if a != m.Avatar {
+			m.Avatar = a
+			c.Bots[name] = m
+		}
 	}
 	for i, l := range c.BotLinks {
 		if len(l) != 2 || l[0] == l[1] {

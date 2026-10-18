@@ -427,6 +427,12 @@ func loadTemplate(name string, t BotTemplate, dir string) (LoadedTemplate, error
 	if err := t.Identity.Validate(); err != nil {
 		return lt, err
 	}
+	a, err := resolveAvatarImage(t.Identity.Avatar, dir, "the pack")
+	if err != nil {
+		return lt, err
+	}
+	t.Identity.Avatar = a
+	lt.T.Identity.Avatar = a
 	if len(t.Runtime) > 200 {
 		return lt, fmt.Errorf("runtime: a short suggestion (at most 200 characters)")
 	}

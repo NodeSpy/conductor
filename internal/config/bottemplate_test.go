@@ -76,10 +76,25 @@ func loadTemplateCfg(t *testing.T, manifest, body string) (*Config, string, erro
 // loadTemplateCfgConn is loadTemplateCfg with more connectors.
 func loadTemplateCfgConn(t *testing.T, manifest, conns, body string) (*Config, string, error) {
 	t.Helper()
+	return loadTemplateCfgFull(t, manifest, conns, body, nil)
+}
+
+// loadTemplateCfgWith is loadTemplateCfg with extra files written by prep
+// (given the config's directory) before the load.
+func loadTemplateCfgWith(t *testing.T, manifest, body string, prep func(dir string)) (*Config, string, error) {
+	t.Helper()
+	return loadTemplateCfgFull(t, manifest, "", body, prep)
+}
+
+func loadTemplateCfgFull(t *testing.T, manifest, conns, body string, prep func(dir string)) (*Config, string, error) {
+	t.Helper()
 	dir := t.TempDir()
 	SetStateDir(filepath.Join(dir, "state"))
 	t.Cleanup(func() { SetStateDir("") })
 	writeSREKit(t, dir, manifest)
+	if prep != nil {
+		prep(dir)
+	}
 	p := filepath.Join(dir, "config.yaml")
 	base := strings.Replace(botsBase, "connectors:\n", "connectors:\n"+conns, 1)
 	if err := os.WriteFile(p, []byte(base+"packs:\n  kit: { use: ./packs/sre-kit }\n"+body), 0o600); err != nil {
