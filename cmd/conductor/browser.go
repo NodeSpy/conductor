@@ -39,12 +39,17 @@ var (
 // the token's own requester. Bots (#178, internal/bot) replace it with
 // their case provenance — the bot gate's requester class ("operator", or
 // "bot:<name>" for a bot's own initiative, …), read at every action.
-var requesterFor = func(id skill.Identity) string { return id.Requester }
+var requesterFor = func(id skill.Identity) string {
+	if id.Bot != "" {
+		return botRequester(id)
+	}
+	return id.Requester
+}
 
 // groupsFor is the bots and teams a session acts for ("bot:<name>",
-// "team:<name>"): a login bound to one of them is bound to the session.
-// None until bots (#178) wire it.
-var groupsFor = func(id skill.Identity) []string { return nil }
+// "team:<name>"): a login, profile or card bound to one of them is bound to
+// the session.
+var groupsFor = botGroups
 
 // browserSettings resolves the browser: section.
 func browserSettings(cfg *config.Config) browser.Settings {
@@ -92,6 +97,7 @@ func browserSettings(cfg *config.Config) browser.Settings {
 		}
 		st.Credentials = append(st.Credentials, cr)
 	}
+	walletSettings(cfg, &st)
 	for name, mb := range b.Mailboxes {
 		if st.Mailboxes == nil {
 			st.Mailboxes = map[string]browser.Mailbox{}
@@ -141,10 +147,22 @@ func wireBrowser(ctx context.Context, cfg *config.Config, notifier *notify.Notif
 		PutSecret: func(ctx context.Context, vault, key, value string) error {
 			return vaults.Write(ctx, vault, key, value)
 		},
-		LookupEnv: os.LookupEnv,
-		Taint:     vaults.Taint,
-		Store:     &browser.LoginStore{Dir: cfg.BrowserStateDir()},
-		EnvFile:   filepath.Join(cfg.BaseDir(), "conductor.env"),
+		LookupEnv:   os.LookupEnv,
+		Taint:       vaults.Taint,
+		Store:       &browser.LoginStore{Dir: cfg.BrowserStateDir()},
+		EnvFile:     filepath.Join(cfg.BaseDir(), "conductor.env"),
+		Purchases:   &browser.Purchases{Dir: cfg.BrowserStateDir()},
+		Paused:      pausedFor(cfg),
+		BotPurchase: botPurchase,
+		OnPurchase: func(p browser.Purchase) {
+			msg := fmt.Sprintf("purchase %s waits for your approval: %.2f %s at %s on card %s (conductor browser purchase approve %s)", p.ID, p.Total, p.Currency, p.Merchant, p.Card, p.ID)
+			if p.Bot != "" {
+				msg = fmt.Sprintf("bot %s's purchase %s waits for your approval: %.2f %s at %s (conductor bot approve %s %s)", p.Bot, p.ID, p.Total, p.Currency, p.Merchant, p.Bot, p.BotProposal)
+			}
+			if notifier != nil {
+				notifier.Emit(context.Background(), notify.EventNeedsInput, core.Trigger{Kind: "browser", Title: msg}, msg)
+			}
+		},
 		Notify: func(msg string) {
 			if notifier != nil {
 				notifier.Emit(context.Background(), notify.EventNeedsInput, core.Trigger{Kind: "browser", Title: msg}, msg)
@@ -194,7 +212,8 @@ func wireBrowser(ctx context.Context, cfg *config.Config, notifier *notify.Notif
 // (bound into the token at mint, else its dispatch's registered workspace),
 // its provenance, and a session of its own.
 func browserCaller(token string, id skill.Identity) (browser.Principal, error) {
-	c := browser.Principal{Key: browser.SessionKey(token), Agent: id.Agent, Repo: id.Repo, Dispatch: id.Dispatch, Requester: requesterFor(id), Groups: groupsFor(id)}
+	c := browser.Principal{Key: browser.SessionKey(token), Agent: id.Agent, Repo: id.Repo, Dispatch: id.Dispatch, Requester: requesterFor(id), Groups: groupsFor(id),
+		Bot: id.Bot, BotRole: id.BotRole, CaseID: id.CaseID}
 	switch {
 	case id.Sandbox != nil:
 		c.Identity, c.Workspace, c.Egress, c.Deny = id.Sandbox.Identity, id.Sandbox.Workspace, id.Sandbox.Egress, id.Sandbox.Deny
@@ -224,6 +243,9 @@ func browserControl(conn net.Conn, req controlRequest) controlResponse {
 	}
 	if browserLoginOps[req.Cmd] {
 		return browserLoginControl(cfg, m, req)
+	}
+	if browserWalletOps[req.Cmd] {
+		return browserWalletControl(cfg, m, req)
 	}
 	st := browserEffective(cfg, m)
 	audit := func(e map[string]any) {
@@ -404,6 +426,14 @@ An agent's browser (inside a sandboxed agent; over CONDUCTOR_ENDPOINT):
   login --credential NAME [--passkey --ref REF]   conductor signs you in; you never see a value
   fill-credential REF FIELD --credential NAME     FIELD: username | password | otp
   await-approval --credential NAME [--timeout S]  wait while the operator approves on their phone
+  profiles | cards                      what you may use: names, sites, limits, visible facts (never a value)
+  fill-profile REF FIELD --profile NAME   conductor types FIELD (email, phone, address.city, …); you never see it
+  fill-form --profile NAME [--fields a,b] conductor fills every field of the form it may
+  purchase --card C --merchant ORIGIN --total N [--currency USD] [--items JSON] [--recurring --interval month] --why TEXT
+                                        propose a purchase: the operator approves it before any card is filled
+  purchase-status PURCHASE              pending | approved | completed (order number, total) | refused (why)
+  pay PURCHASE PLACE_ORDER_REF [--total-ref REF]   on the checkout page: conductor re-reads the total,
+                                        fills the card, places the order and keeps the receipt
 
 The operator's (on the daemon's control socket):
   logins                                   saved sessions, login sites, credentials (no values)
@@ -420,6 +450,9 @@ The operator's (on the daemon's control socket):
                                            (conductor browser credential --help)
   vault-items VAULT [--query Q] | vault-item VAULT ITEM
                                            a vault's items for picking — names and fields, never a value
+  profile … | card … | purchases | purchase show|approve|deny ID | spend
+                                           personal details, payment cards, purchase approvals, spend
+                                           (conductor browser profile --help)
   --config PATH / --socket PATH            which daemon
 `
 
@@ -438,6 +471,15 @@ func cmdBrowser(args []string) int {
 		err = browserOperator(args[0], args[1:])
 	case "credential", "credentials":
 		err = browserCredentialCmd(args[1:])
+	case "profile", "card", "purchases", "spend":
+		err = browserWalletCmd(args[0], args[1:])
+	case "purchase":
+		// The operator's purchase show|approve|deny; else the agent proposes one.
+		if len(args) > 1 && (args[1] == "show" || args[1] == "approve" || args[1] == "deny") {
+			err = browserWalletCmd(args[0], args[1:])
+		} else {
+			err = browserAgent(args[0], args[1:])
+		}
 	case "vault-items", "vault-item":
 		err = browserVaultCmd(args[0], args[1:])
 	default:
@@ -469,7 +511,7 @@ func splitBrowserArgs(args []string) (pos []string, flags map[string]any) {
 			continue
 		}
 		switch k {
-		case "submit", "full", "passkey", "headless":
+		case "submit", "full", "passkey", "headless", "recurring":
 			flags[k] = true
 		default:
 			if i+1 < len(args) {
@@ -549,6 +591,21 @@ func browserAgent(action string, rest []string) error {
 			return err
 		}
 		a["ref"], a["field"] = pos[0], pos[1]
+	case "fill-profile":
+		if err := need(2, "REF FIELD --profile NAME"); err != nil {
+			return err
+		}
+		a["ref"], a["field"] = pos[0], pos[1]
+	case "purchase-status":
+		if err := need(1, "PURCHASE"); err != nil {
+			return err
+		}
+		a["purchase"] = pos[0]
+	case "pay":
+		if err := need(2, "PURCHASE PLACE_ORDER_REF [--total-ref REF]"); err != nil {
+			return err
+		}
+		a["purchase"], a["submit"] = pos[0], pos[1]
 	case "tab":
 		if err := need(1, "new [URL] | select N | close N"); err != nil {
 			return err

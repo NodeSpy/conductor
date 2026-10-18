@@ -135,6 +135,23 @@ func withApproved(ctx context.Context, bot, proposal, digest string) context.Con
 	return context.WithValue(ctx, approvedKey{}, approvedCall{bot: bot, proposal: proposal, digest: digest})
 }
 
+// ApprovedProposal reports the approved proposal a context executes (the
+// executor's withApproved), for a verb that acts on it elsewhere (a bot's
+// purchase approves the browser's purchase record).
+func ApprovedProposal(ctx context.Context) (bot, proposal string, ok bool) {
+	ac, ok := ctx.Value(approvedKey{}).(approvedCall)
+	return ac.bot, ac.proposal, ok
+}
+
+// RequesterClass is who the gate holds responsible for a bot session's
+// calls right now: the requester class (operator, bot, event, proactive,
+// user, peer) and the case. The browser's provenance reads it at every
+// action.
+func (g *Gate) RequesterClass(id flow.SkillIdentity) (class, caseID string) {
+	cl := g.caller(id)
+	return cl.class, cl.caseID
+}
+
 // Classify returns the tier a verb resolves to for a bot: the strictest
 // tier any pattern admits it under, `propose` when nothing does. step.* and
 // handoff.* act only on the caller's own dispatch (its done signal) and are

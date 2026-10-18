@@ -1463,6 +1463,9 @@ type controlRequest struct {
 	// Login is a browser-login-* / browser-vault-* command's body
 	// (browserlogins.go).
 	Login *browserLoginReq `json:"login,omitempty"`
+	// Wallet is a browser-profile-* / -card-* / -purchase* / -wallet
+	// command's body (browserwallet.go).
+	Wallet *browserWalletReq `json:"wallet,omitempty"`
 }
 
 type controlResponse struct {
@@ -1608,7 +1611,10 @@ func handleControlConn(ctx context.Context, conn net.Conn, igs []core.Integratio
 		writeControlResp(conn, sandboxPolicyResponse(conn, req, log))
 	case "browser-logins", "browser-cookies-save", "browser-logout", "browser-sessions", "browser-peek", "browser-takeover", "browser-passkey-save",
 		"browser-login-add", "browser-login-set", "browser-login-unset", "browser-login-bind", "browser-login-remove", "browser-login-list",
-		"browser-login-usage", "browser-login-check", "browser-login-test", "browser-vault-items", "browser-vault-item":
+		"browser-login-usage", "browser-login-check", "browser-login-test", "browser-vault-items", "browser-vault-item",
+		"browser-profile-add", "browser-profile-set", "browser-profile-unset", "browser-profile-bind", "browser-profile-rm",
+		"browser-card-add", "browser-card-set", "browser-card-unset", "browser-card-bind", "browser-card-rm",
+		"browser-card-freeze", "browser-card-unfreeze", "browser-wallet", "browser-purchases", "browser-purchase", "browser-purchase-decide":
 		writeControlResp(conn, browserControl(conn, req))
 	case "retry":
 		if retry == nil {

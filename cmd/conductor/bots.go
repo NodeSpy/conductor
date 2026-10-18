@@ -49,7 +49,17 @@ func buildBots(cfg *config.Config, st *store.Store, runner *flow.Runner, reg *co
 			break
 		}
 	}
-	exec := &bot.Executor{Cfg: cfgFn, Ledger: st, Gate: gate, RunVerb: runner.RunSkillVerb, Audit: audit, Terraform: tf}
+	// An approved browser.purchase approves the browser's purchase record
+	// (the card is filled later, once, by pay); every other verb runs
+	// through the skill chokepoint.
+	runVerb := func(ctx context.Context, id flow.SkillIdentity, uses string, options map[string]any) (map[string]any, error) {
+		if uses == BrowserPurchaseVerb {
+			return runBotPurchaseApproved(ctx, gate, id, options)
+		}
+		return runner.RunSkillVerb(ctx, id, uses, options)
+	}
+	exec := &bot.Executor{Cfg: cfgFn, Ledger: st, Gate: gate, RunVerb: runVerb, Audit: audit, Terraform: tf}
+	browserBotGate.Store(gate)
 	home := &bot.PaseoHome{
 		Cfg: cfgFn,
 		For: func(rt string) (bot.PaseoDispatcher, error) {
