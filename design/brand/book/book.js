@@ -261,7 +261,7 @@ const SAMPLE = {
   'display-xl': 'Hold, then release.', display: 'Calm under load.', h1: 'Needs you', h2: 'Runs, last 12 hours', h3: 'terraform apply on envs/prod: replace 1 server',
   h4: 'What it can do without asking', 'body-l': 'conductor runs AI bots and automations on your own machine. Anything risky waits for your passkey.',
   'body-m': 'platform-sre wants to replace the production web server to roll out a new image, in response to SEV2 “api p99 latency”.',
-  'body-s': 'Folders only organise. They never grant access, except logins bound to a folder.', label: 'Approve and run', caption: 'Signed with your passkey · 2 minutes ago',
+  'body-s': 'A team shares approvers and limits. A bot on a team can only be stricter.', label: 'Approve and run', caption: 'Signed with your passkey · 2 minutes ago',
   overline: 'Running · 12h', 'numeric-l': '20', code: 'trigger: pagerduty.incident', 'code-s': 'r-7f2c · sha256:3f2a9c1d07e4',
 };
 const typeRow = (k) => {
@@ -471,7 +471,7 @@ const tabsSheet = () => `<div style="display:grid;gap:var(--space-5)">
 const listSheet = () => sampleTable('is-focus');
 const badgeSheet = () => `<div style="display:grid;gap:var(--space-4)">
   <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">${STAT.map((s) => `<span class="c-badge" data-s="${s}">${sg(STAT_GLYPH[s])}${STAT_EX[s][0]}</span>`).join('')}<span class="c-badge" data-s="accent">${sg('needs-you')}Needs you</span><span class="c-badge tag">pack</span><span class="c-badge tag">read only</span></div>
-  <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center"><span class="c-chip">${lu('folder')}All folders</span><span class="c-chip is-hover">work</span><span class="c-chip is-selected">${lu('check')}personal</span><span class="c-count">6</span>${mark("running")}<span class="c-help">live</span></div>
+  <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center"><span class="c-chip">${lu('bot')}All teams</span><span class="c-chip is-hover">platform</span><span class="c-chip is-selected">${lu('check')}finance</span><span class="c-count">6</span>${mark("running")}<span class="c-help">live</span></div>
   <span class="c-help">Status labels: mark + word. Filters toggle. The ember count appears only where a person is needed.</span>
 </div>`;
 const feedbackSheet = () => `<div style="display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:var(--space-4);align-items:start">
@@ -531,28 +531,26 @@ const filterSheet = () => `<div style="display:grid;gap:var(--space-5)">
     <div style="display:grid;gap:var(--space-4)">
       <div><div class="c-help" style="margin-bottom:6px">Nothing set: the field and the buttons, which read as dropdowns (a label and a caret, no outline)</div>
         <div class="c-fb"><div class="c-fb-search">${lu('search')}<span class="ph">Search runs, or filter: status:failed bot:platform-sre</span><span class="c-fb-by">Filter by…</span></div>
-        <div class="c-fb-bar"><span class="c-fb-btn">Status${cv()}</span><span class="c-fb-btn">Workflow${cv()}</span><span class="c-fb-btn">Bot${cv()}</span><span class="c-fb-btn">Folder${cv()}</span><span class="c-fb-btn">Last 12 hours${cv()}</span></div></div></div>
+        <div class="c-fb-bar"><span class="c-fb-btn">Status${cv()}</span><span class="c-fb-btn">Workflow${cv()}</span><span class="c-fb-btn">Bot${cv()}</span><span class="c-fb-btn">Repo${cv()}</span><span class="c-fb-btn">Last 12 hours${cv()}</span></div></div></div>
       <div><div class="c-help" style="margin-bottom:6px">Two set: the value in ink and bold, a short accent rule under it; the field holds the same filters as readable qualifiers; Clear filters is one click</div>
         <div class="c-fb"><div class="c-fb-search is-focus">${lu('search')}<span class="c-fb-q">status:<b>failed,waiting</b> repo:<b>acme/web</b> refund</span><span class="c-fb-x">${lu('x')}</span></div>
-        <div class="c-fb-bar"><span class="c-fb-btn on">Status: <b>Failed +1</b>${cv()}</span><span class="c-fb-btn">Workflow${cv()}</span><span class="c-fb-btn">Bot${cv()}</span><span class="c-fb-btn">Folder${cv()}</span><span class="c-fb-btn">Last 12 hours${cv()}</span><span class="c-fb-btn on q">Repository: <b>acme/web</b>${lu('x')}</span><span class="c-fb-reset">${lu('x')}Clear filters</span></div></div></div>
+        <div class="c-fb-bar"><span class="c-fb-btn on">Status: <b>Failed +1</b>${cv()}</span><span class="c-fb-btn">Workflow${cv()}</span><span class="c-fb-btn">Bot${cv()}</span><span class="c-fb-btn">Repo${cv()}</span><span class="c-fb-btn">Last 12 hours${cv()}</span><span class="c-fb-btn on q">Repository: <b>acme/web</b>${lu('x')}</span><span class="c-fb-reset">${lu('x')}Clear filters</span></div></div></div>
       <div><div class="c-help" style="margin-bottom:6px">Typing in the field: qualifiers autocomplete, conductor’s own first, then each configured connector’s, namespaced (a short alias when it’s unambiguous)</div>
-        <div class="c-fb-ac"><div class="h">conductor</div><div class="o act"><code>status:</code><small>failed, running, waiting…</small></div><div class="o"><code>bot:</code><small>Bot</small></div><div class="o"><code>folder:</code><small>work/platform</small></div><div class="h">GitHub</div><div class="o"><code>repo:</code><small>Repository · github.repo</small></div><div class="o"><code>branch:</code><small>Branch · github.branch</small></div><div class="h">PagerDuty</div><div class="o"><code>service:</code><small>Service · pagerduty.service</small></div></div></div>
+        <div class="c-fb-ac"><div class="h">conductor</div><div class="o act"><code>status:</code><small>failed, running, waiting…</small></div><div class="o"><code>bot:</code><small>Bot</small></div><div class="o"><code>workflow:</code><small>Workflow</small></div><div class="h">GitHub</div><div class="o"><code>repo:</code><small>Repository · github.repo</small></div><div class="o"><code>branch:</code><small>Branch · github.branch</small></div><div class="h">PagerDuty</div><div class="o"><code>service:</code><small>Service · pagerduty.service</small></div></div></div>
     </div>
     <div style="display:grid;gap:var(--space-4)">
       <div><div class="c-help" style="margin-bottom:6px">A menu: typeahead on top, checkmarks, what’s chosen and recent first, at most 40 rows drawn</div>
         <div class="c-fb-menu"><div class="mh"><b>Filter by bot</b><span class="c-fb-link">Clear</span></div><div class="c-fb-find">${lu('search')}<span>plat</span></div>
         <ul><li class="gh">Selected</li>${fbOpt(true, 'platform-sre', 12)}<li class="gh">Recent</li>${fbOpt(false, 'platform-data', 4, true)}<li class="gh">All</li>${fbOpt(false, 'platform-watcher', 3)}${fbOpt(false, 'platform-janitor', 1)}<li class="more">146 more. Type to narrow the 150.</li></ul></div></div>
-      <div><div class="c-help" style="margin-bottom:6px">A folder is a path, never a tree</div>
-        <div class="c-fb-menu"><div class="mh"><b>Filter by folder</b></div><div class="c-fb-find">${lu('search')}<span class="ph">Find a folder</span></div><ul>${fbOpt(true, 'Every folder', '')}${fbOpt(false, 'work ▸ platform', 22)}${fbOpt(false, 'work ▸ billing', 8)}${fbOpt(false, 'ops ▸ oncall', 5)}</ul></div></div>
     </div>
   </div>
   <div style="display:grid;grid-template-columns:repeat(2, 300px);gap:var(--space-5);align-items:start">
     <div><div class="c-help" style="margin-bottom:6px">Phone: the field and one Filter button (with how many are set)</div><div class="c-fb"><div class="c-fb-search">${lu('search')}<span class="ph">Search runs…</span></div><div class="c-fb-bar"><span class="c-fb-btn on">${lu('filter')}Filter <span class="c-fb-n">2</span></span></div></div></div>
     <div><div class="c-help" style="margin-bottom:6px">…which opens a sheet: each filter one row, its menu one tap in</div><div class="c-fb-sheet"><div class="handle"></div><div class="mh"><b>Filter</b><span class="c-btn sm secondary">Done</span></div>
-      <div class="row"><span>Status</span><b>Failed, Waiting on you</b>${lu('chevron-right')}</div><div class="row"><span>Bot</span><span class="any">Any</span>${lu('chevron-right')}</div><div class="row"><span>Folder</span><span class="any">Every folder</span>${lu('chevron-right')}</div></div></div>
+      <div class="row"><span>Status</span><b>Failed, Waiting on you</b>${lu('chevron-right')}</div><div class="row"><span>Bot</span><span class="any">Any</span>${lu('chevron-right')}</div><div class="row"><span>Repo</span><span class="any">Any</span>${lu('chevron-right')}</div></div></div>
   </div>
 </div>
-${rules(['<b>Fixed menus are conductor’s own concepts only</b>: kind, status, bot, workflow, time, and folder when there’s more than one. What a connector’s items carry (a repository, a channel, a service) is a search qualifier the connector declares, never a menu.', '<b>Buttons read as dropdowns</b>: label and caret, no pill, no outline. A set filter shows its value in ink and bold with a 2px accent rule; a time range always names itself (“Last 12 hours”).', '<b>The field and the menus are one state</b>: picking writes the qualifier; typing one sets the menu. Esc closes a menu, then clears the field.', '<b>Never a giant list</b>: at most 40 rows drawn; the rest one keystroke away. Selected, then recent, then the rest.', '<b>Nothing hidden silently</b>: a list that a filter narrows says “Showing 2 of 6 · Show all”.'])}`;
+${rules(['<b>Fixed menus are conductor’s own concepts only</b>: kind, status, bot, workflow, team, time. What a connector’s items carry (a repository, a channel, a service) is a search qualifier the connector declares, never a menu.', '<b>Buttons read as dropdowns</b>: label and caret, no pill, no outline. A set filter shows its value in ink and bold with a 2px accent rule; a time range always names itself (“Last 12 hours”).', '<b>The field and the menus are one state</b>: picking writes the qualifier; typing one sets the menu. Esc closes a menu, then clears the field.', '<b>Never a giant list</b>: at most 40 rows drawn; the rest one keystroke away. Selected, then recent, then the rest.', '<b>Nothing hidden silently</b>: a list that a filter narrows says “Showing 2 of 6 · Show all”.'])}`;
 // the facts line: under a row's title and reason, what a person scans for (dashboard UI.facts)
 const fxI = (ic, v, o = {}) => `<span class="c-fx-i${o.ln ? ' ln' : ''}${o.hi ? ' hi' : ''}${o.prod ? ' prod' : ''}${o.low ? ' low' : ''}">${o.prod ? sg('warning') : lu(ic)}${v}</span>`;
 const fxRow = (mark, title, why, facts, age, verb) => `<div class="c-fx-row"><span class="m">${sg(mark)}</span><div><b>${title}</b><p>${why}</p><div class="c-fx">${facts}</div></div><span class="age">${age}</span><span class="c-btn secondary sm" tabindex="-1">${verb}</span></div>`;
@@ -564,8 +562,8 @@ const factsSheet = () => `<div style="display:grid;grid-template-columns:minmax(
     ${fxRow('needs-you', 'Approve a sign-in on app.example.com', 'The triage agent’s browser is waiting on a push approval', fxI('globe', 'app.example.com'), '3 min ago', 'Approve')}
   </div>
   <div style="display:grid;gap:var(--space-3)">
-    <div class="c-help">On a phone the facts wrap under the reason, and the low-value ones (a repository already in a pull request's name, “not in a folder”) drop first.</div>
-    <div class="panel surface" style="padding:4px 14px;max-width:340px">${fxRow('needs-you', 'Replace the production web server', 'platform-sre wants to run terraform apply on production', fxI('bot', 'platform-sre', { ln: 1 }) + fxI('', 'production', { prod: 1 }) + fxI('layers', 'Changes infrastructure', { hi: 1 }) + fxI('folder', 'work ▸ platform', { low: 1 }), '7 min', 'Review')}</div>
+    <div class="c-help">On a phone the facts wrap under the reason, and the low-value ones (a repository already named by its pull request, the model) drop first.</div>
+    <div class="panel surface" style="padding:4px 14px;max-width:340px">${fxRow('needs-you', 'Replace the production web server', 'platform-sre wants to run terraform apply on production', fxI('bot', 'platform-sre', { ln: 1 }) + fxI('', 'production', { prod: 1 }) + fxI('layers', 'Changes infrastructure', { hi: 1 }) + fxI('git-pull-request', 'acme/infra', { low: 1 }), '7 min', 'Review')}</div>
   </div>
 </div>
 ${rules(['<b>One icon per kind of fact</b> (bot, workflow, pull request, repository, channel, site, environment, action), the value in quiet ink, gaps instead of separators. No pills, no tints.', '<b>Links where they lead somewhere</b> (the bot, the pull request), underlined; the row keeps its own link.', '<b>Risk is said in the facts</b>: a risky action in bold ink; production with the warning mark in its colour, noticeable without being loud.', '<b>Never ids or hashes</b> (p11, 3f2a9c1d): they live on the detail page.', '<b>Connector facts come from the connector</b> (its declared display attributes), so a third-party service’s facts appear with nothing added to the dashboard.'])}`;
@@ -633,14 +631,13 @@ const VOICE = [
   ['Calm, not cute', 'No exclamation marks, “oops”, “please” or “I’m thinking”. Only bots speak in the first person, and only in chat.', 'Couldn’t reach GitHub. Retrying in 30 seconds.', 'Oops! Something went wrong :('],
 ];
 const NAMES = [
-  ['bot', 'An AI teammate with memory. You can chat with it; it watches things and proposes actions. (Never “member”.)', 'lowercase-kebab: platform-sre. In prose: “the platform-sre bot”. Bots live in folders.'],
+  ['bot', 'An AI teammate with memory. You can chat with it; it watches things and proposes actions. (Never “member”.)', 'lowercase-kebab: platform-sre. In prose: “the platform-sre bot”. Bots are grouped by team.'],
   ['team', 'Bots that share a lead and a permission ceiling.', 'lowercase: billing, platform.'],
   ['workflow', 'A fixed recipe: when a trigger fires, run these steps. No judgement involved.', 'lowercase-kebab verbs or nouns: pr-review, nightly-backup.'],
   ['trigger · step', 'What starts a workflow · one thing it does.', 'Sentence case labels from the picker: “Incident triggered”, “Post a message”.'],
   ['run', 'One execution of a workflow or a bot task.', 'id in mono: r-7f2c. Never in a heading.'],
   ['approval', 'A proposed action waiting for a person to approve it with a passkey.', 'Titled by the action in plain words, never by its hash.'],
   ['case', 'A bot’s investigation of one problem, with its reasoning.', '“case c29”, linked wherever an approval came from one.'],
-  ['folder', 'Where bots and workflows are kept. Organisation only: it changes nothing, except logins bound to it.', 'lowercase paths: work/billing.'],
   ['Activity', 'Runs over time and every run: the runs-per-hour strip, the exceptions by workflow and the run list. (It replaced “Run history”.)', 'A nav item and a page title.'],
   ['System', 'One area for Config, Secrets, Packs, Connections, Updates, Logs & audit and Access.', 'A nav group. Its pages keep their own names.'],
   ['pack · plugin', 'An installable bundle of workflows and bots · new steps and connectors.', 'Named by publisher/name: acme/oncall.'],

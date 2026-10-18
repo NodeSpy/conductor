@@ -84,7 +84,7 @@ What (object icon and word) · title and one line of why · where (bot, target, 
 ### Information architecture
 
 - **Now:** Overview · Needs you · Activity (the run history lives here).
-- **Work:** Workflows · Bots (with folders; there are no “members”) · Browsers.
+- **Work:** Workflows · Bots (grouped by team; there are no “members” and no folders) · Browsers.
 - **System:** Config · Secrets · Packs · Connections · Updates · Logs & audit · Access.
 - On a phone: Overview · Needs you · Activity · Bots · More.
 
@@ -311,7 +311,7 @@ conductor talks to someone who is nervous about giving an AI access to productio
 7. **Humans read times:** “Mondays at 06:00”, “52 minutes ago”, with the exact value on hover.
 8. **Calm, not cute:** no exclamation marks, “oops”, “please” or “I'm thinking”. Only bots speak in the first person, and only in chat.
 
-**Names:** bot · team · workflow · trigger · step · run · approval · case · folder · pack · plugin · connector · host · login · secret, each defined once in the book’s table and used the same way in the UI, docs, CLI and README. Bots live in folders (never “members”); **Activity** holds the run history; **System** is the area for Config, Secrets, Packs, Connections, Updates, Logs & audit and Access.
+**Names:** bot · team · workflow · trigger · step · run · approval · case · pack · plugin · connector · host · login · secret, each defined once in the book’s table and used the same way in the UI, docs, CLI and README. Bots are grouped by team (never “members”; there are no folders); **Activity** holds the run history; **System** is the area for Config, Secrets, Packs, Connections, Updates, Logs & audit and Access.
 
 **Fixed risk vocabulary:** “Does on its own” · “Asks you first” · “Never”, with the tier name second.
 
