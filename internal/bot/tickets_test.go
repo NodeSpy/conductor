@@ -489,3 +489,16 @@ func TestTicketAPI(t *testing.T) {
 		t.Fatalf("no title: %d", r.StatusCode)
 	}
 }
+
+// A bot's prompt lists its drafts as ideas nothing has started on, apart
+// from its open work.
+func TestLedgerSummaryShowsDrafts(t *testing.T) {
+	f := newTeamFixture(t, nil)
+	d := f.ticket(t, TicketActor{Bot: f.homeOf("a")}, TicketNew{Title: "add a disk alert", Assignee: "bot:a"})
+	r := f.ticket(t, opActor, TicketNew{Title: "rotate keys", Assignee: "bot:a", Ready: true})
+	s := LedgerSummary(f.st.Bot("a"))
+	if !strings.Contains(s, "- draft "+d.Ticket+": add a disk alert (written by bot:a; an idea — nothing starts on it until it is marked ready)") ||
+		!strings.Contains(s, "("+r.Ticket+", in progress)") || strings.Contains(s, "case "+d.ID+" (") {
+		t.Fatalf("summary:\n%s", s)
+	}
+}
