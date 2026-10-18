@@ -23,6 +23,7 @@ test('switching tabs moves nothing: not the tab bar, the rail, the content colum
         const sig = hrefs.map((h) => h.split('?')[0]).sort().join(' ');
         const link = page.locator(`#main a[href="${href}"]`).first();
         if (!(await link.isVisible().catch(() => false))) continue;
+        await link.scrollIntoViewIfNeeded(); // the click would scroll it into view: measure from there
         const before = await page.evaluate(([sel, sig]) => {
           const find = () => [...document.querySelectorAll(sel)].find((t) => [...t.querySelectorAll('a[href]')].map((a) => a.getAttribute('href').split('?')[0]).sort().join(' ') === sig);
           const pos = () => { const b = find(), r = b && b.getBoundingClientRect(), rail = document.querySelector('.rail'), pg = document.querySelector('#main .page');

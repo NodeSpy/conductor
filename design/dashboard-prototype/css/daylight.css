@@ -633,3 +633,5 @@ button.dl-tile { font: inherit; text-align: left; color: inherit; cursor: pointe
 .svc-list > .dl-conn { margin-left: 18px; }
 .svc-list > .svc-empty { margin-left: 18px; padding: 8px 0 12px; list-style: none; }
 @media (max-width: 720px) { .svc-list > .svc-head { flex-wrap: wrap; } .svc-list > .dl-conn, .svc-list > .svc-empty { margin-left: 0; } }
+@media (max-width: 720px) { .vaults .section-title, #env .section-title { flex-wrap: wrap; } .vaults .section-title h2, #env .section-title h2 { flex: 1 1 100%; } .vaults-add { margin-left: 0; }
+  .svc-head .svc-name { flex: 1 1 160px; } .svc-head .dl-na { margin-left: auto; } }

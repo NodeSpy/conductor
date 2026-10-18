@@ -1,7 +1,7 @@
 // Create / edit / delete flows, each ending in the config diff → passkey →
 // apply pipeline (or, for vault writes and ledger operations, the immediate
 // step-up path the design specifies). Run at desktop and phone sizes.
-const { test, expect, go, applyStaged, stagedCount, headAction } = require('./fixtures');
+const { test, expect, go, applyStaged, stagedCount, headAction, isPhone } = require('./fixtures');
 
 const submit = (page) => page.locator('#gen-submit').click();
 const state = (page, fn, arg) => page.evaluate(fn, arg);
@@ -286,14 +286,13 @@ test.describe('packs and plugins', () => {
     const names = await state(page, () => D.packs.map((p) => p.name));
     expect(names).toContain('hygiene'); expect(names).not.toContain('house-style');
   });
-  test('plugins: update with step-up, install from browse into a new connector', async ({ page }) => {
-    await go(page, '#/extensions/plugins');
-    await page.locator('[data-act="plugin-update"][data-p="slack"]').click(); await page.locator('#su-go').click();
-    await expect(page.locator('tr', { hasText: 'slack' })).toContainText('v1.7.0');
-    await go(page, '#/extensions/browse');
-    const card = page.locator(`[data-cat="connector:aws-cost"][data-origin="official"]`);
-    await card.locator('a.btn', { hasText: 'Add' }).click();
-    await expect(page).toHaveURL(/#\/extensions\/install\/connector\/aws-cost$/);
+  test('services: update one with step-up on Connections, install a new one into a new connection', async ({ page }) => {
+    await go(page, '#/extensions/plugins'); // the old Plugins tab lands on Connections
+    await expect(page).toHaveURL(/#\/connectors\/connectors/);
+    await page.locator('.svc-head[data-svc="slack"] [data-act="plugin-update"]').click(); await page.locator('#su-go').click();
+    await expect(page.locator('.svc-head[data-svc="slack"]')).toContainText('v1.7.0');
+    await go(page, '#/extensions/install/connector/aws-cost');
+    await expect(page.locator('.nav a[data-nav="connectors"].on')).toHaveCount(1); // a service's pages sit under Connections (the rail, hidden on a phone, still marks it)
     await page.fill('#f-inst', 'aws'); await page.fill('#f-set__role_arn', 'arn:aws:iam::000000000000:role/cost-read');
     await page.locator('[data-act="iw-review"]').click();
     await applyStaged(page);
