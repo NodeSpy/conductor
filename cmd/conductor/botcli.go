@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -39,8 +41,10 @@ const botUsage = `usage:
     conductor bot approve <bot> <id> [--as <operator>] [--key <path>] [--reason "…"]
     conductor bot deny <bot> <id> [--as <operator>] [--key <path>] [--reason "…"]
     conductor bot rotate <bot>
-    conductor bot say <bot> <text…>
-    conductor bot deliver <bot> --title "…" [--text "…"] [--requester who] [--urgent]
+    conductor bot say <bot> [--attach <file>]… [--case <id>] <text…>   # files: removed when the case closes, else after attachments.ttl
+    conductor bot deliver <bot> --title "…" [--text "…"] [--requester who] [--urgent] [--attach <file>]…
+    conductor bot attachments <bot> [--all]                         # the files messages carried (--all: removed ones too)
+    conductor bot attachment <bot> <id> [--out <file>]              # one attachment's record; --out saves its bytes
     conductor bot consolidate <bot>
     conductor bot replan <bot> <id>          # re-plan a stale terraform proposal
     conductor bot sweep <bot>                # run a proactive sweep now (budget still applies)
@@ -67,7 +71,7 @@ const botUsage = `usage:
     conductor bot case open --title "…" [--summary "…"]
     conductor bot case note <case> --text "…"
     conductor bot case close <case> --outcome "…"
-    conductor bot spawn [--case <id>] [--title "…"] --brief "…" [--group <label>] [--verbs a,b] [--read-only] [--handoff]
+    conductor bot spawn [--case <id>] [--title "…"] --brief "…" [--group <label>] [--verbs a,b] [--read-only] [--handoff] [--attach <attachment id>]…
     conductor bot tell <worker|group> "<instructions>"     # to your own workers (home session)
     conductor bot report "<progress>"                      # to your parent (a worker)
     conductor bot instructions [--wait 5m]                 # new instructions from your parent (a worker); --wait blocks for them
@@ -118,7 +122,7 @@ func botFlags(args []string) (pos []string, flags map[string]string, files []str
 			files = append(files, v)
 			continue
 		}
-		if k == "field" && flags[k] != "" { // repeatable: --field k=v …
+		if (k == "field" || k == "attach") && flags[k] != "" { // repeatable: --field k=v …, --attach <f> …
 			flags[k] += "\x00" + v
 			continue
 		}
@@ -129,7 +133,8 @@ func botFlags(args []string) (pos []string, flags map[string]string, files []str
 
 var operatorOnly = map[string]bool{"ls": true, "list": true, "show": true, "workers": true, "proposal": true,
 	"approve": true, "deny": true, "rotate": true, "say": true, "deliver": true, "consolidate": true,
-	"sweep": true, "sweeps": true, "teams": true, "knowledge": true, "memory": true, "template-check": true}
+	"sweep": true, "sweeps": true, "teams": true, "knowledge": true, "memory": true, "template-check": true,
+	"attachments": true, "attachment": true}
 
 func cmdBot(args []string) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
@@ -214,6 +219,11 @@ func botAgent(sub string, args []string) error {
 		if fl["read-only"] != "" {
 			a["read_only"] = true
 			delete(a, "read-only")
+		}
+		if fl["attach"] != "" {
+			// Attachment ids this bot received, passed on to the worker.
+			a["attachments"] = strings.Split(fl["attach"], "\x00")
+			delete(a, "attach")
 		}
 	case "tell":
 		if len(pos) < 2 {
@@ -517,13 +527,48 @@ func botOperator(sub string, args []string) error {
 		}
 		a["id"] = pos[1]
 	case "say":
-		if err := needBot(2); err != nil {
+		if fl["attach"] == "" {
+			if err := needBot(2); err != nil {
+				return err
+			}
+		} else if err := needBot(1); err != nil {
 			return err
 		}
 		a["text"] = strings.Join(pos[1:], " ")
+		if err := attachFiles(a, fl["attach"]); err != nil {
+			return err
+		}
 	case "deliver":
 		if err := needBot(1); err != nil {
 			return err
+		}
+		if err := attachFiles(a, fl["attach"]); err != nil {
+			return err
+		}
+	case "attachments":
+		if err := needBot(1); err != nil {
+			return err
+		}
+	case "attachment":
+		if err := needBot(2); err != nil {
+			return err
+		}
+		a["id"] = pos[1]
+		if out := fl["out"]; out != "" {
+			a["data"] = true
+			res, _, err := botControl(cfg, sub, a)
+			if err != nil {
+				return err
+			}
+			b, err := base64.StdEncoding.DecodeString(fmt.Sprint(res["data"]))
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(out, b, 0o600); err != nil {
+				return err
+			}
+			fmt.Printf("%v (%v, %d bytes) → %s\n", res["name"], res["media_type"], len(b), out)
+			return nil
 		}
 	case "approve", "deny":
 		if err := needBot(2); err != nil {
@@ -820,6 +865,36 @@ func orDashCLI(t string) string {
 		return "-"
 	}
 	return t
+}
+
+// attachFiles reads the files a message carries (--attach, repeatable) into
+// the control request. The daemon applies the bot's caps; this only refuses
+// what could never pass.
+func attachFiles(a map[string]any, list string) error {
+	delete(a, "attach")
+	if list == "" {
+		return nil
+	}
+	var files []any
+	for _, p := range strings.Split(list, "\x00") {
+		st, err := os.Stat(p)
+		if err != nil {
+			return fmt.Errorf("--attach %s: %w", p, err)
+		}
+		if !st.Mode().IsRegular() {
+			return fmt.Errorf("--attach %s: not a regular file", p)
+		}
+		if st.Size() > config.MaxAttachFile {
+			return fmt.Errorf("--attach %s: %d bytes, over conductor's ceiling of %d", p, st.Size(), config.MaxAttachFile)
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return fmt.Errorf("--attach %s: %w", p, err)
+		}
+		files = append(files, map[string]any{"name": filepath.Base(p), "data": base64.StdEncoding.EncodeToString(b)})
+	}
+	a["attachments"] = files
+	return nil
 }
 
 // botDecide signs and submits an approval or denial.

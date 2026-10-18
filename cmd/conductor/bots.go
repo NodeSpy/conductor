@@ -68,7 +68,7 @@ func buildBots(cfg *config.Config, st *store.Store, runner *flow.Runner, reg *co
 	}
 	manual := manualTriggersByName(cfg)
 	svc := &bot.Service{
-		Cfg: cfgFn, Ledger: st, Gate: gate, Exec: exec, Home: home, Terraform: tf,
+		Cfg: cfgFn, Ledger: st, Gate: gate, Exec: exec, Home: home, Terraform: tf, Blobs: runner.Blobs,
 		Workers: workerFirer(func(ctx context.Context, trig, hid string, inputs map[string]any) error {
 			_, err := runManualTrigger(ctx, manual, controlRequest{Name: trig, Inputs: inputs, HistoryID: hid}, eng.Emit)
 			return err

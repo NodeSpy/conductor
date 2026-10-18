@@ -144,6 +144,10 @@ type BotConfig struct {
 	// memory repo: the prompt's index budget, the per-read cap, the
 	// per-kind document caps (memlimits.go). On by default.
 	Memory MemoryLimits `yaml:"memory,omitempty"`
+	// Attachments bounds the files a message can carry to the bot: sizes,
+	// count, media types and how long they are kept (attachments.go). On by
+	// default.
+	Attachments AttachmentLimits `yaml:"attachments,omitempty"`
 	// Isolation is the bot's session policy (inherited from its team,
 	// and only ever stricter).
 	Isolation BotIsolation `yaml:"isolation,omitempty"`
@@ -652,6 +656,13 @@ func (c *Config) BotRepoDir(name string) string {
 	return filepath.Join(StateDir(), "bots", name, "memory")
 }
 
+// BotAttachmentsDir is where the bot's attachments are kept for its
+// sessions: a read-only directory per message, in conductor's state and
+// never in the memory repo (even one the operator placed elsewhere).
+func (c *Config) BotAttachmentsDir(name string) string {
+	return filepath.Join(StateDir(), "bots", name, "attachments")
+}
+
 // BotSeedDir is the bot's seed directory, resolved ("" when unset).
 func (c *Config) BotSeedDir(name string) string {
 	m := c.Bots[name]
@@ -995,6 +1006,9 @@ func (c *Config) validateBot(name string, m BotConfig) error {
 	}
 	if err := m.Memory.validate(false); err != nil {
 		return fmt.Errorf("memory.%w", err)
+	}
+	if err := m.Attachments.validate(); err != nil {
+		return fmt.Errorf("attachments.%w", err)
 	}
 	if m.Charter != "" && m.CharterFile != "" {
 		return fmt.Errorf("set charter or charter_file, not both")

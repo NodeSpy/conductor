@@ -3,6 +3,8 @@ package bot
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 
 	"github.com/NodeSpy/conductor/internal/config"
 	"github.com/NodeSpy/conductor/internal/core"
@@ -18,6 +20,7 @@ type PaseoDispatcher interface {
 	CreateLocalWorkspace(ctx context.Context, path, title string) (string, error)
 	AgentStatus(ctx context.Context, id string) (string, error)
 	Send(ctx context.Context, id, prompt string) error
+	SendImages(ctx context.Context, id, prompt string, images []string) error
 	Archive(ctx context.Context, agentID string) error
 	ReleaseWorkspace(ctx context.Context, id string) error
 }
@@ -53,6 +56,41 @@ type PaseoHome struct {
 	// Sandbox, while active, launches the home session on the sandboxed
 	// paseo provider entry (`conductor paseo setup`) for its base provider.
 	Sandbox Sandbox
+
+	mu       sync.Mutex
+	provider map[string]string // bot → the provider its live home launched on
+}
+
+// ImageProvider reports whether a paseo provider takes images with a
+// message: Claude's do (claude, and its sandboxed entry).
+func ImageProvider(provider string) bool {
+	return provider == "claude" || strings.HasPrefix(provider, "claude-")
+}
+
+// AcceptsImages implements HomeLauncher: whether the bot's home session
+// runs on a provider that takes images.
+func (h *PaseoHome) AcceptsImages(ctx context.Context, bot string) bool {
+	h.mu.Lock()
+	p, ok := h.provider[bot]
+	h.mu.Unlock()
+	if !ok && h.Resolve != nil {
+		// Not launched by this process (a daemon restart): resolve it the
+		// way the launch did.
+		_, _, p = h.Resolve(ctx, h.homeStep(h.Cfg(), bot))
+	}
+	return ImageProvider(p)
+}
+
+// homeStep is the step a bot's home session launches as.
+func (h *PaseoHome) homeStep(cfg *config.Config, bot string) config.Step {
+	m := cfg.Bots[bot]
+	var sk *config.SkillPolicy
+	if m.Skill != nil {
+		cp := *m.Skill
+		sk = &cp
+	}
+	return config.Step{Type: "agent", Runtime: cfg.BotHomeRuntime(bot), Model: m.Home.Model, Mode: m.Home.Mode, Skill: sk, Checkout: "none",
+		BoundBot: bot, BoundBotRole: config.BotRoleHome}
 }
 
 var _ HomeLauncher = (*PaseoHome)(nil)
@@ -65,7 +103,6 @@ func (h *PaseoHome) disp(bot string) (PaseoDispatcher, error) {
 // Launch implements HomeLauncher.
 func (h *PaseoHome) Launch(ctx context.Context, spec HomeSpec) (string, error) {
 	cfg := h.Cfg()
-	m := cfg.Bots[spec.Bot]
 	d, err := h.disp(spec.Bot)
 	if err != nil {
 		return "", err
@@ -79,11 +116,6 @@ func (h *PaseoHome) Launch(ctx context.Context, spec HomeSpec) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("home workspace: %w", err)
 	}
-	var sk *config.SkillPolicy
-	if m.Skill != nil {
-		cp := *m.Skill
-		sk = &cp
-	}
 	act := config.Action{Type: "agent", Agent: "bot:" + spec.Bot, Prompt: spec.Prompt, Checkout: "none", Name: "bot:" + spec.Bot}
 	t := core.Trigger{
 		Source: "bot", Instance: "bot", Kind: "bot",
@@ -91,9 +123,8 @@ func (h *PaseoHome) Launch(ctx context.Context, spec HomeSpec) (string, error) {
 		Title:  "bot " + spec.Bot,
 		Action: act,
 	}
-	step := config.Step{Type: "agent", Runtime: cfg.BotHomeRuntime(spec.Bot), Model: m.Home.Model, Mode: m.Home.Mode, Skill: sk, Checkout: "none",
-		Labels:   map[string]string{"bot": spec.Bot, "bot_role": config.BotRoleHome, "bot_session": spec.Session},
-		BoundBot: spec.Bot, BoundBotRole: config.BotRoleHome}
+	step := h.homeStep(cfg, spec.Bot)
+	step.Labels = map[string]string{"bot": spec.Bot, "bot_role": config.BotRoleHome, "bot_session": spec.Session}
 	model, provider := "", ""
 	if h.Resolve != nil {
 		model, _, provider = h.Resolve(ctx, step)
@@ -138,14 +169,23 @@ func (h *PaseoHome) Launch(ctx context.Context, spec HomeSpec) (string, error) {
 	if h.Hold != nil {
 		h.Hold(ref.AgentID)
 	}
+	h.mu.Lock()
+	if h.provider == nil {
+		h.provider = map[string]string{}
+	}
+	h.provider[spec.Bot] = req.Provider
+	h.mu.Unlock()
 	return ref.AgentID, nil
 }
 
 // Send implements HomeLauncher.
-func (h *PaseoHome) Send(ctx context.Context, bot, agentID, text string) error {
+func (h *PaseoHome) Send(ctx context.Context, bot, agentID, text string, images []string) error {
 	d, err := h.disp(bot)
 	if err != nil {
 		return err
+	}
+	if len(images) > 0 {
+		return d.SendImages(ctx, agentID, text, images)
 	}
 	return d.Send(ctx, agentID, text)
 }

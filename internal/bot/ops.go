@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -68,6 +69,44 @@ func verbList(args map[string]any) []string {
 		}
 	}
 	return out
+}
+
+// listArg is a list argument, comma-separated entries split.
+func listArg(args map[string]any, k string) []string {
+	var out []string
+	for _, v := range strs(args, k) {
+		for _, p := range strings.Split(v, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+// filesArg decodes a message's files from the control socket:
+// [{name, data: base64}].
+func filesArg(args map[string]any) ([]AttachmentIn, error) {
+	raw, _ := args["attachments"].([]any)
+	var out []AttachmentIn
+	for i, x := range raw {
+		m, _ := x.(map[string]any)
+		data, err := base64.StdEncoding.DecodeString(str(m, "data"))
+		if err != nil {
+			return nil, fmt.Errorf("attachment %d: %w", i+1, err)
+		}
+		out = append(out, AttachmentIn{Name: str(m, "name"), Data: data})
+	}
+	return out, nil
+}
+
+// attachmentView is an attachment as the operator surfaces show it.
+func attachmentView(a store.Attachment) map[string]any {
+	v := toMap(a)
+	if a.Removed.IsZero() {
+		delete(v, "removed")
+	}
+	return v
 }
 
 func toMap(v any) map[string]any {
@@ -155,7 +194,8 @@ func (s *Service) agentOp(ctx context.Context, c Actor, sub string, args map[str
 		return map[string]any{"ok": true}, s.CaseClose(ctx, c, str(args, "case"), str(args, "outcome"))
 	case "spawn":
 		w, err := s.Spawn(ctx, c, SpawnRequest{CaseID: str(args, "case"), Title: str(args, "title"), Brief: str(args, "brief"),
-			Handoff: boolArg(args, "handoff"), Group: str(args, "group"), Verbs: verbList(args), ReadOnly: boolArg(args, "read_only")})
+			Handoff: boolArg(args, "handoff"), Group: str(args, "group"), Verbs: verbList(args), ReadOnly: boolArg(args, "read_only"),
+			Attachments: listArg(args, "attachments")})
 		if err != nil {
 			return nil, err
 		}
@@ -426,17 +466,58 @@ func (s *Service) OperatorOp(ctx context.Context, sub string, args map[string]an
 		}
 		return s.statusOf(name), nil
 	case "say":
-		if err := s.Say(name, str(args, "text")); err != nil {
+		files, err := filesArg(args)
+		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"queued": true}, nil
+		atts, err := s.SayWith(name, str(args, "text"), files, str(args, "case"))
+		if err != nil {
+			return nil, err
+		}
+		out := map[string]any{"queued": true}
+		if len(atts) > 0 {
+			var vs []any
+			for _, a := range atts {
+				vs = append(vs, attachmentView(*a))
+			}
+			out["attachments"] = vs
+		}
+		return out, nil
 	case "deliver":
+		files, err := filesArg(args)
+		if err != nil {
+			return nil, err
+		}
 		id, err := s.Deliver(ctx, Event{Bot: name, Source: "operator", Requester: str(args, "requester"),
-			Title: str(args, "title"), Text: str(args, "text"), Urgent: boolArg(args, "urgent")})
+			Title: str(args, "title"), Text: str(args, "text"), Urgent: boolArg(args, "urgent"), Attachments: files})
 		if err != nil {
 			return nil, err
 		}
 		return map[string]any{"case": id}, nil
+	case "attachments":
+		if err := need(); err != nil {
+			return nil, err
+		}
+		var vs []any
+		for _, a := range s.Attachments(name) {
+			if a.Removed.IsZero() || boolArg(args, "all") {
+				vs = append(vs, attachmentView(a))
+			}
+		}
+		return map[string]any{"attachments": vs}, nil
+	case "attachment":
+		if err := need(); err != nil {
+			return nil, err
+		}
+		a, data, err := s.AttachmentBytes(name, str(args, "id"))
+		if err != nil {
+			return nil, err
+		}
+		v := attachmentView(a)
+		if boolArg(args, "data") {
+			v["data"] = base64.StdEncoding.EncodeToString(data)
+		}
+		return v, nil
 	case "replan":
 		if err := need(); err != nil {
 			return nil, err

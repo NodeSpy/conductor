@@ -275,6 +275,7 @@ pack lint`:
 | `autonomy` | tiers, practice mode, promotion and spend caps are the operator's |
 | `isolation`, `browser`, `network`, `egress` | a template cannot widen the sandbox, browser logins or egress |
 | `memory_repo`, `seed_dir`, `memory` | where memory lives and its limits are the operator's; seed with `seed:` |
+| `attachments` | attachment sizes, types and retention are the operator's |
 | `peers` | linking bots is a channel for data to cross |
 | `terraform` | it binds connectors and repos — environment |
 | `home`, `worker` | runtimes are environment; suggest a `model:` and a `runtime:` |

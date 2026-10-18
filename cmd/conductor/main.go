@@ -1102,6 +1102,7 @@ func cmdRun(args []string) error {
 		}
 		bots.start(ctx, hub)
 		botCtl = bots.svc
+		go serveOperatorAPI(ctx, operatorAPISockPath(cfg), bots.operatorAPI(), logf)
 	}
 	connector.SetSweepHook(func(_ context.Context, instance string) (int, error) {
 		n := 0

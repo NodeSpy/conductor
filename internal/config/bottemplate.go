@@ -87,6 +87,7 @@ var forbiddenTemplateKeys = map[string]string{
 	"memory_repo":    "where a bot's memory lives is the operator's choice — ship seed documents with seed:",
 	"seed_dir":       "a template seeds memory from its own pack (seed:), not from a path on the operator's machine",
 	"memory":         "memory limits are the operator's knob",
+	"attachments":    "attachment limits (sizes, types, retention) are the operator's knob",
 	"peers":          "linking bots is a channel for data to cross — the operator's choice",
 	"terraform":      "conductor-executed Terraform binds connectors and repos — environment",
 	"home":           "the home runtime is environment — suggest a model with model:",

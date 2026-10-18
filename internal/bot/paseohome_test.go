@@ -15,6 +15,7 @@ type fakePaseo struct {
 	released []string
 	fail     error
 	status   string
+	images   [][]string
 }
 
 func (f *fakePaseo) Dispatch(_ context.Context, r dispatch.Request) (dispatch.RunRef, error) {
@@ -34,6 +35,10 @@ func (f *fakePaseo) AgentStatus(context.Context, string) (string, error) {
 	return "idle", nil
 }
 func (f *fakePaseo) Send(context.Context, string, string) error { return nil }
+func (f *fakePaseo) SendImages(_ context.Context, _, _ string, images []string) error {
+	f.images = append(f.images, images)
+	return nil
+}
 func (f *fakePaseo) ReleaseWorkspace(_ context.Context, id string) error {
 	f.released = append(f.released, id)
 	return nil

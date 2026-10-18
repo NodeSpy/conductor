@@ -34,7 +34,10 @@ type BotRecord struct {
 	Home  *HomeSession   `json:"home,omitempty"`
 	Past  []*HomeSession `json:"past,omitempty"`
 	Inbox []*InboxMsg    `json:"inbox,omitempty"`
-	Spend []SpendEntry   `json:"spend,omitempty"`
+	// Attachments are the files messages carried to the bot, newest last;
+	// removed ones keep their record (bounded) for the audit trail.
+	Attachments []*Attachment `json:"attachments,omitempty"`
+	Spend       []SpendEntry  `json:"spend,omitempty"`
 	// Sweeps are proactive sweeps (bounded, newest kept); Groups are worker
 	// fan-outs a join waits on; Peer is the bot-to-bot message log
 	// (metadata only — the text lives in the audit and the receiving case).
@@ -340,6 +343,9 @@ type Worker struct {
 	// (path → git blob): they count as consolidated only once it finishes
 	// done having written a digest.
 	Consolidates map[string]string `json:"consolidates,omitempty"`
+	// Attachments are the attachment ids its parent passed on: the only
+	// attachments the worker's session can see.
+	Attachments []string `json:"attachments,omitempty"`
 }
 
 // Instruction is a follow-up from a worker's parent: an instruction, not
@@ -419,12 +425,34 @@ type HomeSession struct {
 
 // InboxMsg is one message waiting to reach (or delivered to) the home agent.
 type InboxMsg struct {
-	ID        string    `json:"id"`
-	CaseID    string    `json:"case_id,omitempty"`
-	Text      string    `json:"text"`
-	Created   time.Time `json:"created"`
-	Delivered time.Time `json:"delivered,omitempty"`
-	Attempts  int       `json:"attempts,omitempty"`
+	ID          string    `json:"id"`
+	CaseID      string    `json:"case_id,omitempty"`
+	Text        string    `json:"text"`
+	Attachments []string  `json:"attachments,omitempty"`
+	Created     time.Time `json:"created"`
+	Delivered   time.Time `json:"delivered,omitempty"`
+	Attempts    int       `json:"attempts,omitempty"`
+}
+
+// Attachment is one file a message carried to a bot. Its bytes live in
+// conductor's blob store and, for the bot's sessions, as a read-only copy
+// in a directory per message (Path); never in the memory repo. Source,
+// Requester and RequesterClass are its provenance, daemon-recorded.
+type Attachment struct {
+	ID             string    `json:"id"`
+	Message        string    `json:"message"`
+	CaseID         string    `json:"case_id,omitempty"`
+	Name           string    `json:"name"`
+	MediaType      string    `json:"media_type"`
+	Size           int64     `json:"size"`
+	Digest         string    `json:"digest"`
+	Path           string    `json:"path"`
+	Source         string    `json:"source"` // operator | <conn>.<event>
+	Requester      string    `json:"requester,omitempty"`
+	RequesterClass string    `json:"requester_class"`
+	Created        time.Time `json:"created"`
+	Removed        time.Time `json:"removed,omitempty"`
+	RemovedWhy     string    `json:"removed_why,omitempty"`
 }
 
 // SpendEntry is one executed commit-money action.
