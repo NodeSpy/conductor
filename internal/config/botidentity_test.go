@@ -110,6 +110,10 @@ func TestTemplateSuggestsIdentity(t *testing.T) {
     display_name: Own
     tagline: mine
     personality: { tone: formal }
+  voice:
+    use: kit/first-line
+    display_name: Voice
+    tagline: its own tagline
 `)
 	if err != nil {
 		t.Fatal(err)
@@ -131,9 +135,14 @@ func TestTemplateSuggestsIdentity(t *testing.T) {
 	if o := c.Bots["own"]; o.IdentityFrom != "" || o.Identity.Personality.Tone != "formal" || o.Identity.Color != "ocean" {
 		t.Fatalf("an operator-written voice: %+v from %q", o.Identity, o.IdentityFrom)
 	}
-	// A template's identity is validated like a bot's.
+	// Only the personality came from the template: still its voice.
+	if v := c.Bots["voice"]; v.IdentityFrom != "kit/first-line" || v.Identity.Personality.Tone != "friendly" {
+		t.Fatalf("a template-suggested personality: %+v from %q", v.Identity, v.IdentityFrom)
+	}
+	// A template's identity is validated like a bot's, when the pack loads:
+	// with no bot using it yet (the catalog, a new bot's plan).
 	bad := strings.Replace(sreKitManifest, "    model: claude-opus-5\n", "    model: claude-opus-5\n    color: red\n", 1)
-	if _, _, err := loadTemplateCfg(t, bad, "bots:\n  sre: { use: kit/first-line }\n"); err == nil || !strings.Contains(err.Error(), "status color") {
+	if _, _, err := loadTemplateCfg(t, bad, ""); err == nil || !strings.Contains(err.Error(), "first-line") || !strings.Contains(err.Error(), "status color") {
 		t.Fatalf("a template's status color: %v", err)
 	}
 	// The catalog shows the suggestion.
