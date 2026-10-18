@@ -33,6 +33,12 @@ func TestConversations(t *testing.T) {
 	if c.Seq != 2 || len(c.Messages) != 2 || c.Messages[1].Seq != 2 || c.Messages[1].ReplyTo != 1 {
 		t.Fatalf("after a reopen: %+v", c)
 	}
+	// One's own message is never unread, even below no read mark.
+	c0 := c
+	c0.ReadUpTo = nil
+	if c0.Unread("op") != 1 {
+		t.Fatalf("op's own message counted unread: %d", c0.Unread("op"))
+	}
 	if c.Unread("op") != 1 || c.Unread("op2") != 2 {
 		t.Fatalf("unread: op %d, op2 %d", c.Unread("op"), c.Unread("op2"))
 	}

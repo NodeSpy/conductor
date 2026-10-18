@@ -415,3 +415,31 @@ func TestConversationAPI(t *testing.T) {
 		t.Fatalf("a non-member: %d", resp.StatusCode)
 	}
 }
+
+// A disabled member is not a member for chat; a closed conversation case is
+// never reused; the default reply answers the newest message owed.
+func TestTeamChatEdges(t *testing.T) {
+	f := newTeamFixture(t, func(c *config.Config) {
+		b := c.Bots["b"]
+		b.Disabled = true
+		c.Bots["b"] = b
+	})
+	ctx := context.Background()
+	if m := f.chat(t, ChatSend{Text: "all hands", Everyone: true}); strings.Join(m.To, ",") != "a,lead" {
+		t.Fatalf("everyone with b disabled: %+v", m)
+	}
+	if _, err := f.svc.Chat(ctx, ChatSend{Conversation: "team:platform", Operator: "op", Text: "x", To: []string{"b"}}); err == nil {
+		t.Fatal("reached a disabled member")
+	}
+	first := f.conversationCase(t, "lead")
+	_ = f.st.UpdateBot("lead", func(r *store.BotRecord) error { r.Cases[first.ID].Status = "closed"; return nil })
+	f.chat(t, ChatSend{Text: "one"})
+	m2 := f.chat(t, ChatSend{Text: "two"})
+	if c := f.conversationCase(t, "lead"); c.ID == first.ID {
+		t.Fatal("a closed conversation case was reused")
+	}
+	r, err := f.svc.ChatReply(ctx, f.homeOf("lead"), "", 0, "answering")
+	if err != nil || r.ReplyTo != m2.Seq {
+		t.Fatalf("the default reply answered #%d, want the newest (#%d): %v", r.ReplyTo, m2.Seq, err)
+	}
+}
