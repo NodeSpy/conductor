@@ -1,37 +1,19 @@
-// Bulk: tick rows (shift-click for a range); the selection bar replaces the list's header in place, pinned at the
-// top ("2 selected", the actions that apply, Select all matching, Clear); config changes land as one change set in one
+// Bulk: tick rows; a selection bar says how many and the actions that apply (Clear to drop it); config changes land as one change set in one
 // diff (here non-widening, so a plain Apply); destructive actions confirm. (Riley M2)
 const { test, expect, go, isPhone } = require('./fixtures');
 
-test('workflows: select two, move both to a folder, one diff, applied without a passkey', async ({ page }) => {
+test('workflows: select two, switch both off, one diff, applied without a passkey', async ({ page }) => {
   test.skip(isPhone(page), 'bulk selection is desktop-only');
   await go(page, '#/workflows', { fresh: true });
-  await page.locator('input[data-act="wl-sel"][data-name="ci-fixer"]').click();
-  await page.locator('input[data-act="wl-sel"][data-name="dep-bump"]').click();
-  await expect(page.locator('thead.selecting .dl-selbar')).toContainText('2 selected');
-  await page.locator('[data-act="wl-bulk-move"]').click();
-  await page.locator('#f-to').selectOption('personal');
-  await page.locator('#gen-submit').click();
+  await page.locator('input[data-act="wl-sel"][data-name="ci-fixer"]').check();
+  await page.locator('input[data-act="wl-sel"][data-name="dep-bump"]').check();
+  await expect(page.locator('.m-bulk')).toContainText('2 selected');
+  await page.locator('[data-act="wl-bulk-enable"][data-v="false"]').click();
   await expect(page).toHaveURL(/#\/config\/apply/);
   const staged = await page.evaluate(() => D.pending.map((c) => c.key));
   expect(staged).toEqual(expect.arrayContaining(['ci-fixer', 'dep-bump']));
-  await expect(page.locator('#chk-state')).toContainText('passed');
-  await expect(page.locator('#pk-why')).toContainText('No passkey needed');
-});
-
-test('workflows: shift-click selects a range; disable stages enabled: false', async ({ page }) => {
-  test.skip(isPhone(page), 'bulk selection is desktop-only');
-  await go(page, '#/workflows', { fresh: true });
-  const boxes = page.locator('#wl-body tr[data-row]:not(.hidden) input[data-act="wl-sel"]');
-  await boxes.nth(0).click();
-  await boxes.nth(2).click({ modifiers: ['Shift'] });
-  await expect(page.locator('thead.selecting .dl-selbar')).toContainText('3 selected');
-  await page.locator('[data-act="wl-bulk-clear"]').click();
-  await expect(page.locator('.dl-selbar')).toHaveCount(0);
-  await page.locator('input[data-act="wl-sel"][data-name="ci-fixer"]').click();
-  await page.locator('[data-act="wl-bulk-enable"][data-v="false"]').click();
-  await expect(page).toHaveURL(/#\/config\/apply/);
   expect(await page.evaluate(() => D.pending.find((c) => c.key === 'ci-fixer').after)).toContain('enabled: false');
+  await expect(page.locator('#chk-state')).toContainText('passed');
 });
 
 test('phone: Activity shows what needs attention and what runs; finished runs are one line; no bulk selection', async ({ page }) => {

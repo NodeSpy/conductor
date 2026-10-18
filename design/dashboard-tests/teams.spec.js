@@ -20,7 +20,7 @@ test('define a team with bots and defaults, through the diff', async ({ page }) 
   await expect(page.locator('.panel', { hasText: 'peers of each other by default' })).toContainText('release-scribe');
   // the Bots page lists the bot with its team
   await go(page, '#/bots');
-  await expect(page.locator('.bot-list li', { hasText: 'release-scribe' }).locator('.fx-i[title="Team"]')).toHaveText('docs');
+  await expect(page.locator('.m-team[data-team="docs"] .m-row[data-bot="release-scribe"]')).toBeVisible(); // under its team's section
 });
 
 test('assign a bot from its definition; the team ceiling and team tiers are enforced in the controls and refused on validation', async ({ page }) => {
@@ -123,8 +123,8 @@ test('old member links land on the bots pages', async ({ page }) => {
   await expect(page).toHaveURL(/#\/bots\/platform-sre\/cases/);
   await expect(page.locator('.page-head, .dl-bothead').first()).toContainText('platform-sre');
   await go(page, '#/bots');
-  await expect(page.locator('.page-head h1')).toContainText('Bots');
-  if (page.viewportSize().width > 720) await expect(page.locator('.frow.bot', { hasText: 'release-scribe' })).toContainText('solo'); // a solo bot
+  await expect(page.locator('#main h1')).toContainText('Bots');
+  await expect(page.locator('.m-team[data-team="solo"] .m-row[data-bot="release-scribe"]')).toBeVisible(); // a solo bot
 });
 
 test('a case shows its delegation edges with status and the reported result', async ({ page }) => {

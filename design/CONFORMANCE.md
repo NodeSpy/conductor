@@ -90,7 +90,7 @@ name, a 3px leading edge, one action; Running now; Finished in quieter ink); the
 Took, ID; the phone's grouped list.
 
 Deliberate differences:
-- **Run history and Activity are one page** (a structural decision): the filters (status, workflow, bot, folder, repo),
+- **Run history and Activity are one page** (a structural decision): the filters (status, workflow, bot, and what the connectors publish such as repository and PR),
   the time range (up to all time) and search sit on the page; Finished is paged ("Show 20 more of N").
 - **Runs per hour** for the chosen range sits above the table: the Overview's approved strip, the same size for ten
   workflows or five hundred. The per-workflow lanes are gone (they don't scale).
@@ -196,6 +196,8 @@ folded. Teams take the bot page's header.
 | Screen | What it follows | Prototype |
 |---|---|---|
 | Needs you | Home's Needs you list, every item | ![](conformance/needs-desktop-light-prototype.jpg) |
+| Bots | the chosen direction 1 (teams are the page): each team a section whose header says its rules and builds the team, solo bots last; rows with the facts line and a quiet status mark; no folders | ![](conformance/bots-desktop-light-prototype.jpg) |
+| Workflows | the chosen direction 1: yours, each pack (update, Customize), made-for-bots as one line; an on/off switch, what it does, what starts it | ![](conformance/workflows-desktop-light-prototype.jpg) |
 | Connections | what conductor can use: Services (each service, built in, official or from a source, with its version, an update, and its connections under it), Agent runtimes, Code languages, Machines; Add a service opens one catalog (search, or a git URL) | ![](conformance/connections-desktop-light-prototype.jpg) |
 | Secrets | two tabs, one system: Secrets and Settings (settings and environment variables) share one row (readable name with the exact reference and Copy, used by, value or where it lives, ⋯ Change the value / Copy the reference / Delete) and the same two-sentence explanation; the filter bar; vaults always open at the foot of Secrets with their own Add a vault | ![](conformance/secrets-desktop-light-prototype.jpg) |
 | Packs | packs only (bundles of workflows): Installed and Browse; compact rows; Add a pack opens the catalog; guided overrides | ![](conformance/packs-desktop-light-prototype.jpg) |

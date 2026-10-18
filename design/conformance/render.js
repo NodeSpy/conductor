@@ -5,7 +5,7 @@
 const { chromium } = require('@playwright/test'); const fs = require('fs'); const path = require('path');
 const OUT = process.argv[2] || __dirname, BRAND = process.env.BRAND || 'http://127.0.0.1:8798', PROTO = process.env.PROTO || 'http://127.0.0.1:8799';
 const PAIRS = [['overview', 'overview', '#/overview'], ['activity', 'history', '#/activity'], ['run', 'run', '#/runs/r-7ef0'], ['approval', 'approval', '#/bots/platform-sre/proposals/p12'], ['builder', 'builder', '#/workflows/ci-fixer']];
-const SOLO = [['needs', '#/attention'], ['connections', '#/connectors/connectors'], ['secrets', '#/secrets'], ['packs', '#/extensions/packs'], ['pack-overrides', '#/extensions/pack/kit'], ['safety', '#/safety'], ['config', '#/config'], ['updates', '#/updates'], ['access', '#/security'], ['logins', '#/browser/logins']];
+const SOLO = [['needs', '#/attention'], ['bots', '#/bots'], ['workflows', '#/workflows'], ['connections', '#/connectors/connectors'], ['secrets', '#/secrets'], ['packs', '#/extensions/packs'], ['pack-overrides', '#/extensions/pack/kit'], ['safety', '#/safety'], ['config', '#/config'], ['updates', '#/updates'], ['access', '#/security'], ['logins', '#/browser/logins']];
 (async () => { fs.mkdirSync(OUT, { recursive: true }); const b = await chromium.launch();
   const proto = async (p, route, t) => { await p.goto(`${PROTO}/index.html#/overview`); await p.evaluate((th) => { localStorage.clear(); localStorage.setItem('cd-demo', 'full'); localStorage.setItem('cd-theme', th); }, t); await p.goto(`${PROTO}/index.html?x=${Date.now()}${route}`); await p.waitForTimeout(900); await p.evaluate(() => document.fonts.ready); };
   for (const [dev, w, h] of [['desktop', 1440, 900], ['phone', 390, 844]]) {

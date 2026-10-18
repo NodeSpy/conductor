@@ -21,7 +21,7 @@ test('Home: Get started lists what is left, derived from the setup; done steps s
 
 test('New bot: purpose → watches → tells you where → what it may do → review, staged as a bot plus a trigger', async ({ page }) => {
   await go(page, '#/bots', { fresh: true });
-  await page.locator('.page-head a', { hasText: 'New bot' }).click();
+  await page.locator('#main .dl-phead a', { hasText: 'New bot' }).click();
   await expect(page).toHaveURL(/#\/bots\/new$/);
   await expect(page.locator('[data-act="bw-next"]')).toHaveCount(0); // Next is disabled until a purpose is picked
   await page.locator('[data-act="bw-purpose"][data-p="incidents"]').click();
@@ -75,13 +75,13 @@ test('watching nothing in the wizard is allowed but explained', async ({ page })
 
 test('terms explain themselves (hover or keyboard focus); the glossary lists them; the top strip says what each chip means', async ({ page }) => {
   await go(page, '#/workflows', { fresh: true });
-  await expect(page.locator('.page-head')).toContainText('fixed recipe');
-  const t = page.locator('.page-head .term[data-term="workflow"]');
+  await expect(page.locator('#main .dl-phead')).toContainText('fixed recipe');
+  const t = page.locator('#main .dl-phead .term[data-term="workflow"]');
   await t.focus();
   await expect(page.locator('.tooltip')).toContainText('A fixed recipe');
   await go(page, '#/bots');
-  // calm: the tree labels its exceptions directly ("1 pending"), so there is no legend to decode
-  if (page.viewportSize().width > 720) { await page.locator('[data-act="f-toggle"][data-path="work/billing"]').click(); await expect(page.locator('.frow.folder', { hasText: 'billing' }).locator('.roll')).toContainText('needs you'); }
+  // calm: a team says what needs you there directly, so there is no legend to decode
+  await expect(page.locator('.m-team[data-team="finance"] .m-team-h')).toContainText('needs you');
   await go(page, '#/glossary');
   await expect(page.locator('#g-provenance')).toContainText('no more trust');
   await expect(page.locator('#g-tier')).toContainText('observe');

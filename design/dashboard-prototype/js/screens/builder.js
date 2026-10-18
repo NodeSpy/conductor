@@ -19,110 +19,70 @@
   const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
   let B = null;
 
-  /* ================= workflows list ================= */
-  // the shared filter bar's state: where a workflow comes from (yours, a pack's, made for a bot), whether it's failing,
-  // and a folder (a path); the search matches name, trigger and folder
-  const wl = { q: '', source: [], status: [], folder: '' };
-  const ownerOk = (o) => !wl.source.length || wl.source.includes(o);
-  const statusOf = (w) => (w.fail24 ? 'failing' : w.enabled === false ? 'off' : 'healthy');
+  /* ================= workflows: managing them (the chosen direction 1, grouped by where they come from) =================
+   * Yours, then each pack as a section (its version, its update, how much you've customised, Customize), then the ones
+   * made for bots as one line (each is on its bot's page). A row: an on/off switch, the name, what it does in a sentence,
+   * what starts it, and a quiet mark for a failed or running last run that links to Activity. Folders are gone. */
   const enc = encodeURIComponent;
-  const within = (x, f) => !f || x === f || x.startsWith(f + '/');
-  const wfRows = () => {
-    const staged = D.pending.filter((c) => c.coll === 'workflows'), drafts = Object.keys(D.drafts || {});
-    const newOnes = [...new Set([...staged.filter((c) => c.before == null).map((c) => c.key), ...drafts.filter((n) => !D.workflows.find((w) => w.name === n))])];
-    return D.workflows.map((w) => ({ w, owner: UI.wfOwner(w), folder: UI.folderOfWf(w) })).concat(newOnes.map((n) => ({ w: { name: n, on: 'draft', runs24: 0, ok: 1, cost24: 0, source: 'config', fresh: true }, owner: 'config', folder: '' })));
-  };
-  const OWNER = { pack: (w) => `pack ${UI.packOf(w)}`, bot: () => `bot · ${UI.term('synthesized')}`, config: () => 'your config' };
-  const moveOff = (r) => (r.owner === 'bot' ? `Follows ${r.w.name.slice(4)}'s folder: move the bot (or its team) to move it` : r.w.fresh ? 'Save it first' : '');
-  /** The workflows table, used by the Workflows page and by a folder's Workflows tab. */
-  UI.wfTable = (ws, opts = {}) => {
-    const staged = D.pending.filter((c) => c.coll === 'workflows');
-    const rows = Array.isArray(ws) && ws.length && ws[0].w ? ws : (ws || []).map((w) => ({ w, owner: UI.wfOwner(w), folder: UI.folderOfWf(w) }));
-    const vis = (r) => opts.folder != null || (ownerOk(r.owner) && (!wl.status.length || wl.status.includes(statusOf(r.w))) && (wl.q ? (r.w.name + ' ' + r.w.on + ' ' + r.folder).toLowerCase().includes(wl.q.toLowerCase()) : !wl.folder || (wl.folder === '__top__' ? !r.folder : within(r.folder, wl.folder))));
-    const bulk = opts.folder == null;
-    return `<div class="panel wl-panel"><table class="tbl responsive wl-table">${bulk && UI.wlSel.size ? `<thead class="selecting"><tr><th colspan="9">${wlBulkBar()}</th></tr></thead>` : `<thead><tr>${bulk ? `<th class="sel"><input type="checkbox" class="cbx" data-on-change="wl-sel-all" aria-label="Select all shown"${UI.wlSel.size && rows.filter(vis).every((r) => UI.wlSel.has(r.w.name)) ? ' checked' : ''}></th>` : ''}<th>Workflow</th><th>What it does</th><th class="num">Last 24 hours</th>${UI.usageOn() ? `<th>Usage by provider</th>` : ''}<th></th></tr></thead>`}<tbody id="${opts.folder != null ? 'fwl-body' : 'wl-body'}">
-    ${rows.map((r) => { const w = r.w, d = (D.drafts || {})[w.name] != null, st2 = staged.find((c) => c.key === w.name);
-      return `<tr class="click${vis(r) ? '' : ' hidden'}" data-row="${esc(w.name + ' ' + w.on + ' ' + r.folder)}" data-owner="${r.owner}" data-status="${statusOf(w)}" data-folder="${esc(r.folder)}" ${moveOff(r) ? '' : `draggable="true" data-wf-drag="${esc(w.name)}"`}>
-      ${bulk ? `<td class="sel" data-l=""><input type="checkbox" class="cbx" data-act="wl-sel" data-name="${esc(w.name)}" aria-label="Select ${esc(w.name)}"${UI.wlSel.has(w.name) ? ' checked' : ''}></td>` : ''}<td data-l="workflow"><a class="link-plain" href="#/workflows/${w.name}"><b>${w.name}</b></a> ${w.kind === 'workflow' ? tag('callable') : ''}${d ? tag('draft', 'wait') : ''}${st2 ? tag(st2.before == null ? 'new · staged' : 'edit staged', 'run') : ''}
-        ${UI.factsLine([r.owner === 'pack' ? { icon: 'obj-pack', value: `from ${UI.packOf(w)}`, href: `#/extensions/pack/${encodeURIComponent(UI.packOf(w))}`, pri: 1, label: 'Comes from a pack' } : r.owner === 'bot' ? { icon: 'obj-bot', value: w.name.slice(4), href: `#/bots/${w.name.slice(4)}`, pri: 1, label: 'Made for this bot' } : null,
-          { icon: 'folder', value: r.folder ? r.folder.split('/').join(' ▸ ') : 'top level', href: r.folder ? `#/folders/${enc(r.folder)}/workflows` : '', pri: 2, label: 'Folder' }])}</td>
-      <td data-l="what it does" class="small wl-does" title="${esc(w.on)}">${esc(UI.wfSentence(w))}</td>
-      <td data-l="last 24 hours" class="num">${w.fail24 ? `${UI.statusMark('fail', `${w.fail24} failed`)} <span class="muted">of ${w.runs24}</span>` : `<span class="muted">${w.runs24 ? `${w.runs24} run${w.runs24 === 1 ? '' : 's'}` : 'no runs'}</span>`}</td>${UI.usageOn() ? `<td data-l="usage" class="small">${UI.provSet(UI.wfProv(w.name), { nosrc: true })}</td>` : ''}
-      <td class="num nowrap wl-acts">${w.fresh ? '' : `<button class="btn sm ghost" data-act="wf-run" data-name="${w.name}">${icon('play')}Run</button>`}<button class="icon-btn" data-act="wl-more" data-name="${esc(w.name)}" aria-label="More for ${esc(w.name)}">${icon('more')}</button></td></tr>`; }).join('')}
-    <tr class="empty-row${rows.some(vis) ? ' hidden' : ''}" id="${opts.folder != null ? 'fwl-empty' : 'wl-empty'}"><td colspan="9">No workflow matches.</td></tr></tbody></table></div>`;
-  };
-  function folderNav(rows) {
-    const fs = UI.allFolders().filter((f) => rows.some((r) => within(r.folder, f)));
-    const item = (key, label, depth, rs) => { const ws = rs.map((r) => r.w), wr = UI.wfRoll(ws); return `<a href="#" class="wfn${wl.folder === key ? ' on' : ''}" data-act="wl-folder" data-f="${esc(key)}" ${key && key !== '__top__' ? `data-wf-drop="${esc(key)}"` : key === '__top__' ? 'data-wf-drop=""' : ''} style="--d:${depth}" aria-current="${wl.folder === key}">${icon(key ? 'folder' : 'workflows')}<span class="wfn-name"><span class="ellipsis" title="${esc(key && key !== '__top__' ? key : label)}">${esc(label)}</span>${wr.failing ? `<span class="wfn-roll"><b class="danger-text">${wr.failing} failing</b></span>` : ''}</span>${UI.count(wr.n)}</a>`; };
-    return `<div class="panel-head"><h3>Folders</h3><a class="link tiny" href="#/bots">shared with bots</a></div><div class="wfn-list">${item('', 'All workflows', 0, rows)}${fs.map((f) => item(f, f.split('/').pop(), f.split('/').length, rows.filter((r) => within(r.folder, f)))).join('')}${rows.some((r) => !r.folder) ? item('__top__', 'Top level', 1, rows.filter((r) => !r.folder)) : ''}</div><div class="panel-foot tiny muted">Drag a workflow onto a folder, or use Move to… in its menu. Pack workflows sit under their pack until you place them.</div>`;
-  }
+  const wl = { q: '', source: [], on: [], last: [], group: 'source', open: null };
+  UI.wlSel = UI.wlSel || new Set();
+  const yamlOf = (w) => S.staged('workflows', w.name) || w.yaml || '';
+  const packCfg = (inst) => S.staged('packs', inst) || (D.packs.find((p) => p.name === inst) || {}).cfg || {};
+  const isOn = (w) => { const o = UI.wfOwner(w); if (o === 'pack') { const t = (packCfg(UI.packOf(w)).triggers || {})[w.name]; return !(t && t.enabled === false); } return !/^enabled:\s*false/m.test(yamlOf(w)); };
+  const lastOf = (w) => (D.runs.some((r) => r.workflow === w.name && r.status === 'run') ? 'running' : w.fail24 ? 'failing' : 'fine');
+  const srcKey = (w) => (UI.wfOwner(w) === 'pack' ? `pack:${UI.packOf(w)}` : UI.wfOwner(w));
+  const split = (w) => [UI.wfWhen(w), UI.wfDoes(w)];
+  const keepWf = (w) => (!wl.source.length || wl.source.includes(srcKey(w))) && (!wl.on.length || wl.on.includes(isOn(w) ? 'on' : 'off')) && (!wl.last.length || wl.last.includes(lastOf(w)))
+    && (!wl.q || `${w.name} ${UI.wfSentence(w)} ${w.on}`.toLowerCase().includes(wl.q.toLowerCase()));
+  const lastMark = (w) => { const l = lastOf(w); return l === 'failing' ? `<a class="q-st fail" href="#/activity?workflow=${enc(w.name)}&status=fail">${UI.mark('fail')}Failed today</a>` : l === 'running' ? `<a class="q-st" href="#/activity?workflow=${enc(w.name)}&status=run">${UI.mark('run')}Running</a>` : ''; };
+  const wfRow = (w) => { const [starts, does] = split(w), on = isOn(w), o = UI.wfOwner(w), cust = o === 'pack' && ((packCfg(UI.packOf(w)).triggers || {})[w.name] || (packCfg(UI.packOf(w)).steps || {})[w.name]);
+    return `<li class="m-row${on ? '' : ' off'}" data-wf="${esc(w.name)}"><span class="m-sel">${o === 'bot' ? '' : `<input type="checkbox" class="cbx m-cbx" data-act="wl-sel" data-name="${esc(w.name)}" aria-label="Select ${esc(w.name)}"${UI.wlSel.has(w.name) ? ' checked' : ''}>`}</span>
+      <span class="m-sw">${w.fresh ? '' : UI.switchBtn(on, 'wl-toggle', `data-name="${esc(w.name)}" aria-label="${on ? 'Switch off' : 'Switch on'} ${esc(w.name)}"`)}</span>
+      <a class="m-main" href="#/workflows/${enc(w.name)}"><b>${esc(w.name.replace(/^bot:/, ''))}</b><span class="dl-why">${esc(does)}</span>${UI.factsLine([{ icon: /schedule|every|cron|Mondays|night|day at/i.test(starts) ? 'clock' : 'zap', value: starts, pri: 1, label: 'What starts it' }, cust ? { icon: 'edit', value: 'customised', pri: 2, label: 'You changed some of its settings' } : null, w.fresh ? { icon: 'edit', value: 'draft, not applied', pri: 1 } : null])}</a>
+      <span class="m-st">${lastMark(w)}</span><button type="button" class="icon-btn" data-act="wl-more" data-name="${esc(w.name)}" aria-label="More for ${esc(w.name)}">${icon('more')}</button></li>`; };
+  const wfAll = () => { const staged = D.pending.filter((c) => c.coll === 'workflows'), drafts = Object.keys(D.drafts || {});
+    const fresh = [...new Set([...staged.filter((c) => c.before == null).map((c) => c.key), ...drafts.filter((n) => !D.workflows.find((w) => w.name === n))])];
+    return S.view().workflows.filter((w) => !fresh.includes(w.name) || D.workflows.find((x) => x.name === w.name)).concat(fresh.filter((n) => !S.view().workflows.find((w) => w.name === n)).map((n) => ({ name: n, on: 'draft', runs24: 0, ok: 1, source: 'config', fresh: true }))); };
+  const isOpenWl = (k, def) => (wl.open && k in wl.open ? wl.open[k] : def);
+  const section = (key, title, sub, acts, rows, open, extra = '') => `<section class="dl-card m-team" data-src="${esc(key)}"><header class="m-team-h"><button type="button" class="m-tog" data-act="wl-tog" data-k="${esc(key)}" aria-expanded="${open}" aria-label="${open ? 'Fold' : 'Show'} ${esc(title)}">${icon(open ? 'chevd' : 'chev')}</button><div class="m-team-t"><h2>${title}</h2><span class="dl-sub">${sub}</span>${extra}</div><span class="m-st"></span><div class="m-team-a">${acts}</div></header>${open ? `<ul class="m-list">${rows || '<li class="dl-empty-row">No workflow here matches the filter.</li>'}</ul>` : ''}</section>`;
   UI.route('workflows', () => {
-    const rows = wfRows();
-    if (wl.folder && wl.folder !== '__top__' && !UI.allFolders().includes(wl.folder)) wl.folder = '';
-    const crumbs = wl.folder && wl.folder !== '__top__' ? `<div class="crumbs wl-crumbs"><a href="#" data-act="wl-folder" data-f="">All workflows</a>${wl.folder.split('/').map((seg, i, a) => ` › <a href="#" data-act="wl-folder" data-f="${esc(a.slice(0, i + 1).join('/'))}">${esc(seg)}</a>`).join('')} <a class="link tiny" href="#/folders/${enc(wl.folder)}/workflows" style="margin-left:8px">open the folder</a></div>` : '';
-    return `<div class="page">
-    ${UI.head('Workflows', { lede2: `A ${UI.term('workflow')} is a fixed recipe: when something happens, run these steps. Want an AI to decide what to do? Hand the event to a <a class="link" href="#/bots">bot</a>.`, actions: `<button class="btn primary" data-act="wf-new">${icon('plus')}New workflow</button>` })}
-    <div class="wl-layout"><aside class="panel wl-folders">${folderNav(rows)}</aside><div class="wl-main">
-    ${crumbs}
-    ${UI.filterBar({ id: 'wl', state: wl, placeholder: 'Search, or filter: source:pack', label: 'Search and filter workflows', fields: [
-      { k: 'source', label: 'Source', multi: true, keepOrder: true, plural: 'sources', options: () => [['config', 'Yours'], ['pack', 'From a pack'], ['bot', 'Made for a bot']].map(([v, label]) => ({ v, label, n: rows.filter((x) => x.owner === v).length })).filter((o) => o.n) },
-      { k: 'status', label: 'Status', multi: true, keepOrder: true, plural: 'statuses', options: () => [['failing', 'Failing today'], ['healthy', 'Healthy'], ['off', 'Switched off']].map(([v, label]) => ({ v, label, n: rows.filter((x) => statusOf(x.w) === v).length })).filter((o) => o.n) },
-      ...(UI.allFolders().length > 1 ? [{ k: 'folder', label: 'Folder', path: true, allLabel: 'Every folder', find: 'Find a folder', options: () => UI.allFolders().filter((f) => rows.some((x) => within(x.folder, f))).map((f) => ({ v: f, label: f })) }] : [])],
-      onChange: () => { if (UI.$('.wfn')) UI.$$('.wfn').forEach((a) => a.classList.toggle('on', a.dataset.f === wl.folder)); wlFilter(); } })}
-    <span class="count-note small muted" id="wl-note">${wl.q && wl.folder ? 'searching every folder' : ''}</span>
-    ${UI.wfTable(rows)}</div></div></div>`;
+    const all = wfAll(), shown = all.filter(keepWf), mine = all.filter((w) => UI.wfOwner(w) === 'config'), bots = all.filter((w) => UI.wfOwner(w) === 'bot'), big = all.length > 40;
+    const packs = D.packs.filter((p) => all.some((w) => UI.wfOwner(w) === 'pack' && UI.packOf(w) === p.name));
+    const tally = (xs) => { const m = new Map(); xs.forEach((x) => m.set(x, (m.get(x) || 0) + 1)); return m; }, src = tally(all.map(srcKey));
+    const bar = UI.filterBar({ id: 'wl', state: wl, placeholder: 'Find a workflow, or filter: source:yours', label: 'Find and filter workflows', fields: [
+      { k: 'source', label: 'Source', multi: true, keepOrder: true, plural: 'sources', options: () => [['config', 'Yours'], ...packs.map((p) => [`pack:${p.name}`, `From ${p.name}`]), ['bot', 'Made for a bot']].map(([v, label]) => ({ v, label, n: src.get(v) || 0 })).filter((o) => o.n) },
+      { k: 'on', label: 'On or off', multi: true, keepOrder: true, options: () => [['on', 'On'], ['off', 'Off']].map(([v, label]) => ({ v, label, n: all.filter((w) => (isOn(w) ? 'on' : 'off') === v).length })).filter((o) => o.n) },
+      { k: 'last', label: 'Last run', multi: true, keepOrder: true, plural: 'results', options: () => [['failing', 'Failed today'], ['running', 'Running'], ['fine', 'Fine']].map(([v, label]) => ({ v, label, n: all.filter((w) => lastOf(w) === v).length })).filter((o) => o.n) }], onChange: () => UI.rerender({ keepScroll: true }) });
+    const bulk = UI.wlSel.size ? `<div class="m-bulk"><b>${UI.wlSel.size} selected</b><button class="btn sm secondary" data-act="wl-bulk-enable" data-v="true">Switch on</button><button class="btn sm secondary" data-act="wl-bulk-enable" data-v="false">Switch off</button><button class="link" data-act="wl-bulk-clear">Clear</button></div>` : '';
+    const groups = wl.group === 'none' ? `<section class="dl-card m-team"><ul class="m-list m-flat">${shown.filter((w) => UI.wfOwner(w) !== 'bot').sort((a, b) => a.name.localeCompare(b.name)).map(wfRow).join('') || '<li class="dl-empty-row">No workflow matches.</li>'}</ul></section>`
+      : (!wl.source.length || wl.source.includes('config') ? section('config', 'Yours', `${mine.length} in your config${mine.filter((w) => !isOn(w)).length ? ` · ${mine.filter((w) => !isOn(w)).length} off` : ''}`, '', mine.filter(keepWf).map(wfRow).join(''), isOpenWl('config', true)) : '')
+        + packs.filter((p) => !wl.source.length || wl.source.includes(`pack:${p.name}`)).map((p, i) => { const xs = all.filter((w) => UI.wfOwner(w) === 'pack' && UI.packOf(w) === p.name), cfg = S.staged('packs', p.name) || p.cfg || {}, upd = p.update && !String(cfg.use || '').endsWith('@' + p.update);
+          return section(`pack:${p.name}`, `From ${esc(p.name)}`, `${xs.length} workflow${xs.length === 1 ? '' : 's'} · ${p.ver === 'local' ? 'your own pack' : `pack ${esc(p.ver)}`}${p.overrides ? ` · ${p.overrides} customised setting${p.overrides === 1 ? '' : 's'}` : ''}`,
+            `${upd ? `<button class="btn sm secondary" data-act="pack-plan" data-p="${esc(p.name)}" data-update="1">${icon('updates')}Update to ${esc(p.update)}…</button>` : ''}<a class="btn sm secondary" href="#/extensions/pack/${enc(p.name)}">Customize</a>`, xs.filter(keepWf).map(wfRow).join(''), isOpenWl(`pack:${p.name}`, !big && i < 2)); }).join('')
+        + (bots.length && (!wl.source.length || wl.source.includes('bot')) ? `<section class="dl-card m-team" data-src="bot"><header class="m-team-h"><span></span><div class="m-team-t"><h2>Made for bots</h2><span class="dl-sub">${bots.length} · each is on its bot’s page, where it’s changed: ${bots.map((w) => `<a class="dl-link" href="#/bots/${enc(w.name.slice(4))}">${esc(w.name.slice(4))}</a>`).join(', ')}</span></div><span class="m-st"></span><div class="m-team-a"></div></header></section>` : '');
+    return `<div class="page dl-page m-page">
+      <div class="dl-phead"><div><h1>Workflows</h1><p class="lede-2">A ${UI.term('workflow')} is a fixed recipe: when something happens, run these steps. Want an AI to decide what to do? Hand the event to a <a class="link" href="#/bots">bot</a>.</p></div><div class="dl-actions tight"><button class="btn primary" data-act="wf-new">${icon('plus')}New workflow</button></div></div>
+      ${bar}<div class="m-grp"><span class="dl-sub">Group by</span>${UI.seg([['source', 'Source'], ['none', 'None']], wl.group, 'wl-group')}<span class="dl-sub m-count">${all.length} workflow${all.length === 1 ? '' : 's'} · ${all.filter((w) => !isOn(w)).length} off${shown.length < all.length ? ` · showing ${shown.length} · <button class="link" data-act="wl-clear">Clear</button>` : ''}</span></div>
+      ${bulk}${groups}</div>`;
   });
-  /* bulk: tick rows (shift-click for a range), then one action stages one change per workflow, reviewed as one diff */
-  UI.wlSel = UI.wlSel || new Set(); let wlLast = null;
-  const wlBulkBar = () => { const n = UI.wlSel.size; if (!n) return ''; const ws = [...UI.wlSel].map((x) => S.view().workflows.find((w) => w.name === x)).filter(Boolean), cfg = ws.filter((w) => UI.wfOwner(w) === 'config').length;
-    return UI.bulkBar(n, 'workflow', [['Move to folder…', 'folder', 'wl-bulk-move'], ['Disable', 'pause', 'wl-bulk-enable', 'data-v="false"', cfg ? '' : 'Only workflows in your config can be switched off here'], ['Enable', 'play', 'wl-bulk-enable', 'data-v="true"', cfg ? '' : 'Only workflows in your config can be switched on here']], 'wl-bulk-clear', { all: S.view().workflows.length, allAct: 'wl-sel-matching' }); };
-  UI.act('wl-more', (b) => { const w = S.view().workflows.find((x) => x.name === b.dataset.name) || D.workflows.find((x) => x.name === b.dataset.name), r = { w, owner: UI.wfOwner(w), folder: UI.folderOfWf(w) }, off = moveOff(r);
-    UI.menu(b, [['Open in the builder', 'canvas', 'strip-go', `data-href="#/workflows/${encodeURIComponent(w.name)}"`], ['Move to a folder…', 'folder', 'wl-move', off ? UI.off(off) : `data-name="${esc(w.name)}"`], r.owner === 'config' ? ['-'] : null, r.owner === 'config' && !w.fresh ? ['Delete…', 'trash', 'wf-del', `data-name="${esc(w.name)}"`] : r.owner === 'config' ? ['Discard the draft…', 'trash', 'wf-discard', `data-name="${esc(w.name)}"`] : null].filter(Boolean)); });
-  UI.act('wl-sel', (cb, e) => { const boxes = UI.$$('#wl-body input[data-act="wl-sel"]').filter((x) => !x.closest('tr').classList.contains('hidden')), i = boxes.indexOf(cb);
-    // the anchor is the last row you clicked, found again by name (an index from the previous render can point elsewhere)
-    const at = wlLast != null ? boxes.findIndex((x) => x.dataset.name === wlLast) : -1;
-    if (e && e.shiftKey && at >= 0) { const [a, b] = [Math.min(at, i), Math.max(at, i)]; boxes.slice(a, b + 1).forEach((x) => { x.checked = cb.checked; cb.checked ? UI.wlSel.add(x.dataset.name) : UI.wlSel.delete(x.dataset.name); }); } else cb.checked ? UI.wlSel.add(cb.dataset.name) : UI.wlSel.delete(cb.dataset.name);
-    wlLast = cb.dataset.name; UI.rerender({ keepScroll: true }); });
-  UI.act('wl-sel-all', (cb) => { UI.$$('#wl-body tr[data-row]:not(.hidden) input[data-act="wl-sel"]').forEach((x) => (cb.checked ? UI.wlSel.add(x.dataset.name) : UI.wlSel.delete(x.dataset.name))); UI.rerender({ keepScroll: true }); });
-  UI.act('wl-sel-matching', () => { UI.$$('#wl-body tr[data-row]:not(.hidden) input[data-act="wl-sel"]').forEach((x) => UI.wlSel.add(x.dataset.name)); UI.rerender({ keepScroll: true }); });
+  UI.act('wl-group', (b) => { wl.group = b.dataset.v; UI.rerender({ keepScroll: true }); });
+  UI.act('wl-tog', (b) => { wl.open = wl.open || {}; wl.open[b.dataset.k] = b.getAttribute('aria-expanded') !== 'true'; UI.rerender({ keepScroll: true }); });
+  UI.act('wl-clear', () => { Object.assign(wl, { q: '', source: [], on: [], last: [] }); UI.rerender({ keepScroll: true }); });
+  UI.act('wl-sel', (cb) => { cb.checked ? UI.wlSel.add(cb.dataset.name) : UI.wlSel.delete(cb.dataset.name); UI.rerender({ keepScroll: true }); });
   UI.act('wl-bulk-clear', () => { UI.wlSel.clear(); UI.rerender({ keepScroll: true }); });
-  UI.act('wl-bulk-move', () => { const names = [...UI.wlSel], bots = names.filter((n) => UI.wfOwner(S.view().workflows.find((w) => w.name === n)) === 'bot');
-    UI.form({ caps: 'move', title: `Move ${names.length} workflow${names.length > 1 ? 's' : ''}`, values: { to: '' }, fields: [{ k: 'to', type: 'enum', req: true, label: 'Folder', options: [['', 'top level']].concat(UI.allFolders().map((f) => [f, f])), create: 'folder', createLabel: 'New folder' }],
-      note: `One staged change per workflow, reviewed together as one diff.${bots.length ? ` ${bots.length} bot workflow${bots.length > 1 ? 's follow their bot' : ' follows its bot'} and stay${bots.length > 1 ? '' : 's'} put.` : ''}`, submit: 'Stage moves', submitIcon: 'folder',
-      onSubmit: (v) => { let last = null; names.forEach((n) => { const ch = UI.stageWorkflowMove(n, v.to || ''); if (ch) last = ch; }); UI.wlSel.clear(); UI.staged(last); } }); });
-  UI.act('wl-bulk-enable', (b) => { const on = b.dataset.v === 'true'; let last = null, skipped = 0;
-    [...UI.wlSel].forEach((n) => { const w = S.view().workflows.find((x) => x.name === n); if (UI.wfOwner(w) !== 'config') { skipped++; return; } const y = S.staged('workflows', n) || w.yaml || ''; const ny = /^enabled:.*$/m.test(y) ? (on ? y.replace(/^enabled:.*\n/m, '') : y.replace(/^enabled:.*$/m, 'enabled: false')) : on ? y : y.replace(/^(name: .*\n)/m, '$1enabled: false\n'); const ch = S.stage('workflows', n, ny, `${on ? 'enable' : 'disable'} workflow ${n}`); if (ch) last = ch; });
-    if (skipped) UI.toast(`${skipped} skipped`, 'pack and bot workflows are switched on or off in their pack or bot', 'idle'); UI.wlSel.clear(); UI.staged(last); });
-  const wlFilter = () => { let n = 0; UI.$$('#wl-body tr[data-row]').forEach((tr) => { const f = tr.dataset.folder; const ok = ownerOk(tr.dataset.owner) && (!wl.status.length || wl.status.includes(tr.dataset.status)) && (wl.q ? tr.dataset.row.toLowerCase().includes(wl.q.toLowerCase()) : !wl.folder || (wl.folder === '__top__' ? !f : within(f, wl.folder))); tr.classList.toggle('hidden', !ok); if (ok) n++; }); const e = UI.$('#wl-empty'); if (e) e.classList.toggle('hidden', n > 0); const note = UI.$('#wl-note'); if (note) note.textContent = wl.q && wl.folder ? 'searching every folder' : ''; };
-  UI.act('wl-folder', (a) => { wl.folder = a.dataset.f; UI.rerender(); });
-  /** Move a workflow: your config gets folder:; a pack workflow is placed by your pack override; a bot's follows the bot. */
-  UI.stageWorkflowMove = (name, folder) => {
-    const w = S.view().workflows.find((x) => x.name === name), o = UI.wfOwner(w); let ch = null;
+  /** Switch a workflow on or off: yours in config (enabled: false), a pack's through your pack override. */
+  const setOn = (name, on) => { const w = S.view().workflows.find((x) => x.name === name); if (!w) return null; const o = UI.wfOwner(w);
+    if (o === 'pack') { const inst = UI.packOf(w), c = JSON.parse(JSON.stringify(packCfg(inst))); c.triggers = Object.assign({}, c.triggers); c.triggers[name] = Object.assign({}, c.triggers[name], { enabled: on }); return S.stage('packs', inst, c, `${on ? 'switch on' : 'switch off'} ${name} (pack ${inst})`); }
     if (o === 'bot') return null;
-    if (o === 'pack') { const inst = UI.packOf(w), c = JSON.parse(JSON.stringify(S.staged('packs', inst))); c.folders = Object.assign({}, c.folders); if (folder === `packs/${inst}`) delete c.folders[name]; else c.folders[name] = folder; if (!Object.keys(c.folders).length) delete c.folders; ch = S.stage('packs', inst, c, `move pack workflow ${name} → ${folder || 'top level'} (packs.${inst}.folders)`); }
-    else { const y = S.staged('workflows', name) || w.yaml || ''; // the folder is a comment line (# folder: …), so the trigger still loads in today's conductor
-      const line = `# folder: ${folder}`, re = /^#?\s*folder:.*$/m; const ny = re.test(y) ? (folder ? y.replace(re, line) : y.replace(/^#?\s*folder:.*\n/m, '')) : folder ? y.replace(/^(name: .*\n)/m, `$1${line}\n`) : y; ch = S.stage('workflows', name, ny, `move workflow ${name} → ${folder || 'top level'}`); }
-    D.folderDrafts = (D.folderDrafts || []).filter((f) => !within(folder || '\u0000', f));
-    return ch;
-  };
-  UI.moveWorkflow = (name, folder) => {
-    if (UI.wfOwner(S.view().workflows.find((x) => x.name === name)) === 'bot') return;
-    const ch = UI.stageWorkflowMove(name, folder);
-    S.save(); UI.refreshChrome(); UI.rerender();
-    UI.toast(ch ? `Move staged: ${esc(name)} → ${esc(folder || 'top level')}` : 'Already there', ch ? 'folders live in config: review and apply it with the other staged changes' : '', ch ? 'run' : 'idle');
-  };
-  UI.act('wl-move', (b) => {
-    const name = b.dataset.name, w = S.view().workflows.find((x) => x.name === name), cur = UI.folderOfWf(w), o = UI.wfOwner(w);
-    UI.form({ caps: o === 'pack' ? `packs.${UI.packOf(w)}.folders.${name}` : `triggers[name=${name}].folder`, title: `Move ${name}`, values: { to: cur },
-      fields: [{ k: 'to', type: 'enum', req: true, label: 'Folder', options: [['', 'top level']].concat([...new Set(UI.allFolders().concat(o === 'pack' ? [`packs/${UI.packOf(w)}`] : []))].sort().map((f) => [f, f])), create: 'folder', createLabel: 'New folder', createCtx: { parent: cur } }],
-      note: o === 'pack' ? `A pack can't choose its own folder: its workflows sit under <span class="mono">packs/${esc(UI.packOf(w))}</span> until you place them. This is your pack override, so it goes through the diff.` : 'Folders live in config, so the move is staged for the diff. It changes nothing else: folders carry no behavior.',
-      submit: 'Stage move', submitIcon: 'folder', onSubmit: (v) => UI.moveWorkflow(name, v.to || '') });
-  });
-  // drag a row onto a folder in the tree (mouse; touch uses Move to…)
-  document.addEventListener('dragstart', (e) => { const tr = e.target.closest && e.target.closest('[data-wf-drag]'); if (!tr) return; e.dataTransfer.setData('text/wf', tr.dataset.wfDrag); e.dataTransfer.effectAllowed = 'move'; tr.classList.add('dragging'); });
-  document.addEventListener('dragend', (e) => { const tr = e.target.closest && e.target.closest('[data-wf-drag]'); if (tr) tr.classList.remove('dragging'); UI.$$('.wfn.drop-on').forEach((x) => x.classList.remove('drop-on')); });
-  document.addEventListener('dragover', (e) => { const t = e.target.closest && e.target.closest('[data-wf-drop]'); if (!t || ![...(e.dataTransfer.types || [])].includes('text/wf')) return; e.preventDefault(); UI.$$('.wfn.drop-on').forEach((x) => x !== t && x.classList.remove('drop-on')); t.classList.add('drop-on'); });
-  document.addEventListener('drop', (e) => { const t = e.target.closest && e.target.closest('[data-wf-drop]'); const name = e.dataTransfer && e.dataTransfer.getData('text/wf'); if (!t || !name) return; e.preventDefault(); UI.moveWorkflow(name, t.dataset.wfDrop); });
+    const y = yamlOf(w), ny = /^enabled:.*$/m.test(y) ? (on ? y.replace(/^enabled:.*\n/m, '') : y.replace(/^enabled:.*$/m, 'enabled: false')) : on ? y : y.replace(/^(name: .*\n)/m, '$1enabled: false\n'); return S.stage('workflows', name, ny, `${on ? 'enable' : 'disable'} workflow ${name}`); };
+  UI.act('wl-toggle', (b) => { const ch = setOn(b.dataset.name, b.getAttribute('aria-checked') !== 'true'); if (ch) UI.staged(ch); });
+  UI.act('wl-bulk-enable', (b) => { const on = b.dataset.v === 'true'; let last = null; [...UI.wlSel].forEach((n) => { const ch = setOn(n, on); if (ch) last = ch; }); UI.wlSel.clear(); if (last) UI.staged(last); else UI.rerender(); });
+  UI.act('wl-more', (b) => { const w = S.view().workflows.find((x) => x.name === b.dataset.name) || { name: b.dataset.name, source: 'config', fresh: true }, o = UI.wfOwner(w);
+    UI.menu(b, [['Open in the builder', 'canvas', 'strip-go', `data-href="#/workflows/${enc(w.name)}"`], w.fresh ? null : ['Run now…', 'play', 'wf-run', `data-name="${esc(w.name)}"`], o === 'bot' ? null : ['Duplicate…', 'copy', 'wl-dup', `data-name="${esc(w.name)}"`], o === 'pack' ? ['Customize in its pack', 'edit', 'strip-go', `data-href="#/extensions/pack/${enc(UI.packOf(w))}"`] : null,
+      o === 'config' ? ['-'] : null, o === 'config' && !w.fresh ? ['Delete…', 'trash', 'wf-del', `data-name="${esc(w.name)}"`] : o === 'config' ? ['Discard the draft…', 'trash', 'wf-discard', `data-name="${esc(w.name)}"`] : null].filter(Boolean)); });
+  UI.act('wl-dup', (b) => { const n = b.dataset.name, w = S.view().workflows.find((x) => x.name === n);
+    UI.form({ caps: `a copy of ${n}`, title: `Duplicate ${n}`, values: { name: `${n}-copy` }, fields: [{ k: 'name', type: 'string', req: true, pattern: /^[a-z][a-z0-9-]*$/, patternMsg: 'Lowercase letters, digits and dashes.', validate: (x) => (S.view().workflows.some((y) => y.name === x) ? 'A workflow by that name exists.' : '') }], note: 'The copy is yours, in your config, switched off until you switch it on.', submit: 'Stage the copy',
+      onSubmit: (v) => { let y = yamlOf(w) || `name: ${n}\n`; y = y.replace(/^name: .*$/m, `name: ${v.name}`); if (!/^name:/m.test(y)) y = `name: ${v.name}\n` + y; y = /^enabled:/m.test(y) ? y.replace(/^enabled:.*$/m, 'enabled: false') : y.replace(/^(name: .*\n)/m, '$1enabled: false\n'); UI.staged(S.stage('workflows', v.name, y, `new workflow ${v.name}, a copy of ${n}`)); } }); });
   UI.act('wf-new', () => UI.form({ caps: 'new workflow', title: 'Name your workflow', fields: [{ k: 'name', label: 'Name', type: 'string', req: true, ph: 'e.g. release-notify', pattern: /^[a-z][a-z0-9-]*$/, patternMsg: 'Lowercase letters, digits and dashes.', validate: (v) => (D.workflows.find((w) => w.name === v) || (D.drafts || {})[v] != null ? 'A workflow by that name exists.' : '') }, { k: 'kind', label: 'Kind', type: 'seg', options: [['trigger', 'Triggered (on: an event)'], ['workflow', 'Reusable (call: it)']], def: 'trigger' }], submit: 'Create', onSubmit: (v) => { D.drafts = D.drafts || {}; D.drafts[v.name] = v.kind === 'workflow' ? `name: ${v.name}\ninputs:\n  repo: { type: string, required: true }\nsteps: []\n` : `name: ${v.name}\nsteps: []\n`; S.save(); UI.go('#/workflows/' + v.name); } }));
   UI.act('wf-run', (b) => {
     const w = D.workflows.find((x) => x.name === b.dataset.name); let ins = {};
@@ -204,7 +164,7 @@
     commit(Y.emit(canonical(v, had), B.meta), opts);
     return true;
   }
-  /* A newly added trigger key goes where you'd write it (name, folder, on, enabled, filter, group, policy … before steps), not after steps. Existing keys keep their order. */
+  /* A newly added trigger key goes where you'd write it (name, on, enabled, filter, group, policy … before steps), not after steps. Existing keys keep their order. */
   const CANON = ['name', 'extends', 'abstract', 'folder', 'description', 'on', 'enabled', 'repo', 'filter', 'group', 'policy', 'gate', 'shadow', 'callable', 'options', 'inputs', 'outputs', 'steps', 'hooks'];
   function canonical(v, had) { if (!v || typeof v !== 'object' || Array.isArray(v)) return v; const keys = Object.keys(v), fresh = keys.filter((k) => !had.has(k) && CANON.includes(k)); if (!fresh.length) return v;
     const out = {}, rank = (k) => CANON.indexOf(k); keys.filter((k) => !fresh.includes(k)).forEach((k) => { fresh.filter((f) => !(f in out) && rank(f) < rank(k) && rank(k) >= 0).sort((a, b) => rank(a) - rank(b)).forEach((f) => { out[f] = v[f]; }); out[k] = v[k]; }); fresh.forEach((f) => { if (!(f in out)) out[f] = v[f]; }); return out; }
@@ -226,8 +186,7 @@
     const s = status(), ro = readOnly(), e = errs();
     const applyBlock = B.err ? 'Fix the YAML first' : e.length ? `${e.length} error${e.length > 1 ? 's' : ''} to fix first` : B.owner === 'bot' ? ro : s === 'live' ? 'Nothing to apply: this is what’s live' : '';
     const v = B.value || {}, desc = esc(v.description || '');
-    const folder = (() => { try { const w = D.workflows.find((x) => x.name === B.name); return w && UI.folderOfWf ? UI.folderOfWf(w, false) : (B.value || {}).folder || ""; } catch (e) { return (B.value || {}).folder || ""; } })();
-    return `<div class="dl-crumbs"><a href="#/workflows">Workflows</a>${folder ? `${icon('chev')}<span>${esc(folder)}</span>` : ''}</div>
+    return `<div class="dl-crumbs"><a href="#/workflows">Workflows</a></div>
       <div class="dl-phead"><div><h1 class="wfb-title">${esc(B.name)}</h1><p class="dl-lead">${desc}</p>
         <p class="wfb-owner">${B.owner === 'pack' ? `From the pack <b>${esc(B.pack)}</b>: your changes are saved as overrides.` : B.owner === 'bot' ? `Made by conductor for the bot (${UI.term('synthesized')}); read-only here.` : ''} ${s === 'saved' ? UI.statusMark('staged', 'Saved, not applied', { id: 'wf-state', cls: 'wf-state ' + s }) : `<span class="dl-sub wf-state ${s}" id="wf-state">${s === 'draft' ? 'Unsaved changes' : 'Live'}</span>`}</p></div>
         <div class="dl-actions tight"><button class="btn ghost" data-act="wf-undo" ${B.hi > 0 ? '' : UI.off('Nothing to undo')}>${icon('undo')}Undo</button><button class="btn secondary" data-act="wf-test-all" ${!B.ev ? UI.off('Pick a test event under Try it first') : B.err ? UI.off('Fix the YAML first') : ''}>${icon('play')}Test</button><button class="btn primary" data-act="wf-deploy" ${applyBlock ? UI.off(applyBlock) : ''}>Save and apply</button></div></div>
@@ -244,16 +203,18 @@
       the actions that change something), from its own config; its description wins when it has one. */
   // an action's label is an imperative ("Post a review"); in a sentence about the workflow it reads "posts a review"
   const third = (t) => String(t).replace(/^(\w+)/, (w0) => { const w = w0.toLowerCase(); return /(s|sh|ch|x|z)$/.test(w) ? w + 'es' : /[^aeiou]y$/.test(w) ? w.slice(0, -1) + 'ies' : w + 's'; });
-  UI.wfSentence = (w) => { let v = {}; try { v = YAML.parse(w.yaml || '').value || {}; } catch (e) {} if (v.description) return String(v.description).replace(/^./, (c) => c.toUpperCase());
-    const srcs = v.on || v.triggers ? WF.sources(v) : [], bot = String(w.name).startsWith('bot:') ? w.name.slice(4) : '';
-    const ons = String(w.on || '').split(/\s*·\s*/), firstOn = ons[0];
-    const when = srcs.length ? `${whenWords(srcs)}${filterWords(v.filter) ? ' ' + filterWords(v.filter) : ''}` : w.kind === 'workflow' || /call/.test(w.on) ? 'When another workflow calls it' : /schedule/.test(w.on) ? UI.humanOn(w.on).replace(/ \(schedule\)$/, '') : ons.every((o) => EV_WORDS[o]) ? ons.map((o, i) => (i ? EV_WORDS[o].replace(/^A /, 'a ') : EV_WORDS[o].replace(/^./, (c) => c.toUpperCase()))).join(' or ') : EV_WORDS[firstOn] || 'When it’s triggered';
-    if (bot) return `${when}: hands it to ${bot}`;
+  /** What starts a workflow, in words; what it does, in words; and the two as one sentence. */
+  const parsed = (w) => { try { return YAML.parse(w.yaml || '').value || {}; } catch (e) { return {}; } };
+  UI.wfWhen = (w) => { const v = parsed(w), srcs = v.on || v.triggers ? WF.sources(v) : [], ons = String(w.on || '').split(/\s*·\s*/), firstOn = ons[0];
+    if (/schedule/.test(w.on || '') && UI.humanOn(w.on) !== w.on) return UI.humanOn(w.on).replace(/ \(schedule\)$/, '').replace(/^./, (c) => c.toUpperCase());
+    return srcs.length ? `${whenWords(srcs)}${filterWords(v.filter) ? ' ' + filterWords(v.filter) : ''}` : w.kind === 'workflow' || /call/.test(w.on) ? 'When another workflow calls it' : ons.every((o) => EV_WORDS[o]) ? ons.map((o, i) => (i ? EV_WORDS[o].replace(/^A /, 'a ') : EV_WORDS[o].replace(/^./, (c) => c.toUpperCase()))).join(' or ') : EV_WORDS[firstOn] || 'When it’s triggered'; };
+  UI.wfDoes = (w) => { const v = parsed(w), bot = String(w.name).startsWith('bot:') ? w.name.slice(4) : ''; if (v.description) return String(v.description).replace(/^./, (c) => c.toUpperCase()); if (bot) return `Hands it to ${bot}`;
     const steps = w.steps && w.steps.length ? w.steps : S.deriveGraph(w.yaml || ''), did = [];
     const add = (x) => { if (x && !did.includes(x)) did.push(x); };
     steps.forEach((st) => { const k = st.kind || (st.uses ? 'uses' : ''); if (k === 'agent') add('an agent works on it'); else if (k === 'code') add('runs a command'); else if (st.bot) add('hands it to a bot'); else if (st.uses || k === 'uses') { const d = SCHEMA.verb(String(st.uses || '')); if (d && !d.read) add(third(d.label)); } });
     const list = did.slice(0, 3), tail = list.length > 1 ? `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}` : list[0] || 'it runs its steps';
-    return `${when}: ${tail}`; };
+    return tail.replace(/^./, (c) => c.toUpperCase()); };
+  UI.wfSentence = (w) => { const v = parsed(w); if (v.description) return UI.wfDoes(w); return `${UI.wfWhen(w)}: ${UI.wfDoes(w).replace(/^./, (c) => c.toLowerCase())}`; };
   const whenWords = (srcs) => (srcs.length ? srcs.map((x) => EV_WORDS[x.on] || (SCHEMA.event && SCHEMA.event(x.on) && SCHEMA.event(x.on).label) || (/^timer\./.test(x.on) ? 'On its schedule' : x.on)).join(' or ') : 'Nothing starts it yet');
   const filterWords = (f) => { if (!isObj(f)) return ''; const out = []; if (f.repo) out.push(`on ${[].concat(f.repo).join(' or ')}`); if (f.not_label_any) out.push(`unless it’s labelled “${[].concat(f.not_label_any).join('” or “')}”`); if (f.label_any) out.push(`only when labelled “${[].concat(f.label_any).join('” or “')}”`); Object.keys(f).filter((k) => !['repo', 'not_label_any', 'label_any'].includes(k)).forEach((k) => out.push(`with ${k.replace(/_/g, ' ')} ${[].concat(f[k]).join(' or ')}`)); return out.join(', '); };
   function triggerCard() {

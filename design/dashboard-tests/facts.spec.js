@@ -3,7 +3,7 @@
 // row's; on a phone the low-value facts drop first.
 const { test, expect, go } = require('./fixtures');
 
-const LISTS = [['#/attention', '.dl-needs .dl-need'], ['#/activity', '#act-tbl tbody tr[data-href], #act-phone li'], ['#/bots', '.bot-list .bot-li'], ['#/workflows', '#wl-body tr[data-row]'], ['#/bots/platform-sre/proposals', '.proposal-row']];
+const LISTS = [['#/attention', '.dl-needs .dl-need'], ['#/activity', '#act-tbl tbody tr[data-href], #act-phone li'], ['#/bots', '.m-team .m-row'], ['#/workflows', '.m-team .m-row'], ['#/bots/platform-sre/proposals', '.proposal-row']];
 
 test('list rows carry a facts line, never a mono machine line, ids or hashes', async ({ page }) => {
   for (const [route, rows] of LISTS) {

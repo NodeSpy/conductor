@@ -116,7 +116,7 @@ test.describe('bots', () => {
     await expect(page.locator('.diff')).toContainText('shadow: true');
     await applyStaged(page);
     await go(page, '#/bots');
-    await expect(page.locator('#ftree')).toContainText('docs-steward');
+    await expect(page.locator('.m-row[data-bot="docs-steward"]')).toContainText('practice mode');
     expect(await page.evaluate(() => D.bots.find((b) => b.name === 'docs-steward').cfg.autonomy.shadow)).toBe(true);
   });
   test('access: tier change and promotion are widening config edits; add verb; bind and unbind a credential', async ({ page }) => {
