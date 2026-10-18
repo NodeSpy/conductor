@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
-<title>conductor · browse options (Bots, Workflows, the facts line, New bot)</title>
+<title>conductor · Bots and Workflows, round 2</title>
 <link rel="stylesheet" href="fonts/fonts.css">
 <link rel="stylesheet" href="css/tokens.css">
 <style>
@@ -33,75 +33,43 @@
 </head>
 <body>
 <main>
-  <h1>Browse options</h1>
-  <p>Directions to choose from before anything is built: <b>Bots</b> and <b>Workflows</b> (one browsing pattern for both), the <b>facts line</b> under a list item, and the <b>New bot</b> flow with community bots. Each frame is the real shell and the prototype’s own components on fake data at the scale shown; open any frame full size from its caption. Every direction uses the one filter bar (search with qualifiers, then Status ▾ Team ▾ Folder ▾ menus, each searchable), which is already live on Activity and Needs you.</p>
-  <nav class="toc"><a href="#bots">Bots</a><a href="#workflows">Workflows</a><a href="#facts">The facts line</a><a href="#newbot">New bot</a></nav>
+  <h1>Bots and Workflows, round 2</h1>
+  <p>These are <b>management</b> pages: the Bots page is for managing bots and building teams, the Workflows page for managing workflows. There is no “Needs you” or “Working now” section on either (Needs you and Activity answer those); a row’s status is one quiet mark that links there. Every row uses the chosen facts line, the names are a realistic fleet, and both pages use the same row and the same browsing pattern. Each frame is the real shell, desktop and phone; open any one full size from its caption.</p>
+  <p class="dl-sub">Already chosen and built: the facts line (option 1, icon and value) and New bot (option A, a sheet over the Bots page).</p>
+  <nav class="toc"><a href="#bots">Bots</a><a href="#workflows">Workflows</a></nav>
 
-  <h2 id="bots">Bots</h2>
-  <p>The page answers, in order: does any bot need me (or is something wrong); what are my bots doing; how do I get to a bot or a group. The duplicate list (every bot, then the tree with every bot again) goes in every direction. Folders are organisation only and teams are real groups with shared defaults: neither is an always-open tree.</p>
-  <div class="ctl" data-for="bots">Scale: <button data-n="6" class="on">6 bots</button><button data-n="40">40</button><button data-n="150">150</button></div>
-  <h3>A · Exceptions first (your suggestion)</h3>
-  <dl class="verdict"><dt>Good</dt><dd>Questions 1 and 2 answered at the top, and the page is the same size at 6 or 150 (needs you, then working, then “N other bots” as one line). Finding a bot is search plus Team ▾ and Folder ▾; teams are a line of links to their own pages.</dd><dt>Bad</dt><dd>An idle bot is only reachable by search or a filter; nothing shows how the fleet is organised at a glance.</dd></dl>
-  <div class="frames" data-what="bots" data-dir="A"></div>
-  <h3>B · Lanes, with groups as scopes</h3>
-  <dl class="verdict"><dt>Good</dt><dd>Status and organisation in one view: a row of group tiles (all, each team or folder, with its own needs-you and working counts) scopes three capped lanes, Need you · Working · Idle. The groups row grows with the number of teams, not bots.</dd><dt>Bad</dt><dd>Busiest at 150: three lanes and a row of tiles compete; on a phone the lanes stack and Idle drops below the fold.</dd></dl>
-  <div class="frames" data-what="bots" data-dir="B"></div>
-  <h3>C · One status line, then groups that open</h3>
-  <dl class="verdict"><dt>Good</dt><dd>Organisation first: each team or folder is one row with its roll-up (“2 need you · 3 working”), sorted so trouble is on top; open one at a time. Short at any scale (one row per group).</dd><dt>Bad</dt><dd>“What are my bots doing” takes a click per group; it is the tree again, only flatter and collapsed.</dd></dl>
-  <div class="frames" data-what="bots" data-dir="C"></div>
-  <div class="rec"><b>My pick: A</b>, with one thing borrowed from B: when there’s more than one team or folder, the Team ▾ and Folder ▾ menus show each group’s needs-you count, so scoping to “work ▸ platform” is one pick and says what it holds. Teams keep their own pages (defaults and members).</div>
+  <h2 id="bots">Bots: manage bots, build teams</h2>
+  <p>Each row says what the bot is for, then its team (and whether it leads it), live or practice mode, what it may do in words, what it’s connected to and its model. Select rows for bulk actions (move to a team, change model, practice mode, archive). Find one at 150 with the filter bar (Team, Mode, Model, Connected to, Folder).</p>
+  <div class="ctl" data-for="mbots">Scale: <button data-n="6" class="on">6 bots</button><button data-n="40">40</button><button data-n="150">150</button></div>
+  <h3>1 · Teams are the page</h3>
+  <dl class="verdict"><dt>Good</dt><dd>Team building is the page itself: each team is a section whose header says its shared rules in words (the most its bots may do, who approves, what work is routed to it, its budget) with Add a bot and Shape the team, and its members below; solo bots come last, with “Make a team from these”. At 150 the teams collapse to their headers (12 lines), so the organisation is visible at a glance; Group by switches to folders or none.</dd><dt>Bad</dt><dd>A team’s full settings are one click away (Shape the team), not on the page; long teams page by “Show all”.</dd></dl>
+  <div class="frames" data-what="mbots" data-dir="1"></div>
+  <h3>2 · A teams panel beside the fleet</h3>
+  <dl class="verdict"><dt>Good</dt><dd>Teams on the left (all, each team, solo, + new team); picking one opens its builder at the top (lead, the most its bots may do, who approves, routing, sandbox, budget, each changeable in place, Add bots) with its members below. Team building is in plain view whenever a team is picked.</dd><dt>Bad</dt><dd>One team at a time; comparing teams means switching. On a phone the panel becomes a scrolling row of teams.</dd></dl>
+  <div class="frames" data-what="mbots" data-dir="2"></div>
+  <div class="rec"><b>My pick: 1</b>: teams as the page answers “how is my fleet organised” at any scale, and shaping a team starts from its own header.</div>
 
-  <h2 id="workflows">Workflows</h2>
-  <p>The same three questions, the same pattern as Bots so it is learned once: what’s broken or needs me, what’s running, how do I find one. Each row says what the workflow does in a sentence, then its health; where it lives and where it came from are filters (Source ▾, Folder ▾), not the second line. <b>Workflows a bot generated for itself are on that bot’s page</b>, not peers in this list (my call: they’re the bot’s machinery, and a person reaches them through the bot).</p>
-  <div class="ctl" data-for="workflows">Scale: <button data-n="9" class="on">9 workflows</button><button data-n="40">40</button><button data-n="200">200</button></div>
-  <h3>A · Exceptions first</h3>
-  <dl class="verdict"><dt>Good</dt><dd>Failing and not-running workflows first with the reason and one action, then running, then “N more, all healthy”. Constant size; the sentence says what each one does.</dd><dt>Bad</dt><dd>The healthy ones (most of them) are behind a click or a search.</dd></dl>
-  <div class="frames" data-what="workflows" data-dir="A"></div>
-  <h3>B · Lanes, with sources as scopes</h3>
-  <dl class="verdict"><dt>Good</dt><dd>All / Yours / each pack as scope tiles, three capped lanes below. Reads well when packs bring many workflows.</dd><dt>Bad</dt><dd>Lanes are cramped for a sentence per workflow on desktop and stack on a phone.</dd></dl>
-  <div class="frames" data-what="workflows" data-dir="B"></div>
-  <h3>C · One status line, then groups that open</h3>
-  <dl class="verdict"><dt>Good</dt><dd>Grouped by folder or pack with a health roll-up per group; trouble sorts to the top.</dd><dt>Bad</dt><dd>A failing workflow is one click deep inside its group.</dd></dl>
-  <div class="frames" data-what="workflows" data-dir="C"></div>
-  <div class="rec"><b>My pick: A</b>, the same as Bots: one pattern, learned once.</div>
-
-  <h2 id="facts">The facts line</h2>
-  <p>The third line of a list item, redesigned instead of dropped: a few facts a person scans for (which bot or workflow, where, what kind of action and how risky, what it touches), each recognisable at a glance; IDs and hashes go to the detail page; links where they lead somewhere; production noticeable without being loud; no tinted pills. Real rows from Needs you and Activity.</p>
-  <div class="ctl" data-for="facts">Theme: <button data-theme="dark" class="on">Dark</button><button data-theme="light">Light</button></div>
-  <h3>1 · Icon and value</h3>
-  <dl class="verdict"><dt>Good</dt><dd>The most scannable: one icon per object type (bot, workflow, pull request, service, site, environment), values in quiet ink, links underlined; a risky action and production in bold, production with the warning mark and colour.</dd><dt>Bad</dt><dd>Icons must be learned; with five facts it gets long on a phone (it wraps).</dd></dl>
-  <div class="frames" data-what="facts" data-dir="A"></div>
-  <h3>2 · Labelled facts</h3>
-  <dl class="verdict"><dt>Good</dt><dd>Nothing to learn: a tiny small-caps key over each value (Bot, Pull request, Environment, Does); production underlined in the warning colour.</dd><dt>Bad</dt><dd>Taller (two lines per fact) and closer to a form than a glance.</dd></dl>
-  <div class="frames" data-what="facts" data-dir="B"></div>
-  <h3>3 · A sentence of facts</h3>
-  <dl class="verdict"><dt>Good</dt><dd>Reads as words: “platform-sre changes infrastructure on acme/infra ▲PRODUCTION aws_instance.web”, the objects in ink and linked, production in small caps with its mark. Most ownable in Daylight’s plain-words voice.</dd><dt>Bad</dt><dd>Least scannable down a column: the same fact sits at a different place on each row.</dd></dl>
-  <div class="frames" data-what="facts" data-dir="C"></div>
-  <div class="rec"><b>My pick: 1</b> (icon and value): it’s the one that scans down a list, the icons are the object icons used everywhere else, and it can go into the brand book as one component.</div>
-
-  <h2 id="newbot">New bot</h2>
-  <p>Leaving is obvious and safe in both: a visible close button, Esc, and a confirm only once something has been entered. The first step offers <b>From a community bot</b> (templates from installed packs and the official registry, with the same search and filters), <b>From a starting point</b> (the built-in shapes) and <b>Blank</b>. A community bot starts in practice mode, read-only; anything more is a visible grant signed with the passkey; its page says where it came from, and pack updates to its knowledge arrive in Needs you as an approval.</p>
-  <h3>A · A large sheet over the Bots page</h3>
-  <dl class="verdict"><dt>Good</dt><dd>You can see where you came from and the ✕ is where people look; a thin progress line replaces the big stepper (“Step 1 of 5 · How to start”). Full screen on a phone, ✕ top left.</dd><dt>Bad</dt><dd>Less room for the longer steps (permissions) on a small laptop.</dd></dl>
-  <div class="frames" data-what="newbot" data-dir="A"></div>
-  <h3>B · Its own page, with a clear way out</h3>
-  <dl class="verdict"><dt>Good</dt><dd>All the room; a sticky bar with “← Bots”, the steps as a quiet line of words and a Close button.</dd><dt>Bad</dt><dd>Still a takeover: the Bots page is gone while you’re in it.</dd></dl>
-  <div class="frames" data-what="newbot" data-dir="B"></div>
-  <h3>The review step for a community bot (either direction)</h3>
-  <p>What the template filled in: how it starts (practice mode, read-only), each thing it asks for as a grant you switch on, and what it comes with. A widening grant is signed with the passkey.</p>
-  <div class="frames" data-what="newbot" data-dir="C"></div>
-  <div class="rec"><b>My pick: A</b> (the sheet). The Packs page then lists which packs include bots, and a bot made from a template shows “from sre-bot 0.9.0” on its page.</div>
+  <h2 id="workflows">Workflows: manage workflows</h2>
+  <p>Each row: an on/off switch, the name, what it does in a sentence, then what starts it and its folder as facts, and a quiet mark for a failed or running last run. Bulk switch on/off and move. Pack workflows sit under their pack, with the pack’s update and Customise; workflows made for bots are on their bot’s page (counted here).</p>
+  <div class="ctl" data-for="mwfs">Scale: <button data-n="9" class="on">9 workflows</button><button data-n="40">40</button><button data-n="200">200</button></div>
+  <h3>1 · Grouped by where they come from</h3>
+  <dl class="verdict"><dt>Good</dt><dd>Yours (with your folders as chips at scale), then each pack as a section with its version, update and how much you’ve customised, then “Made for bots” as one line. At 200 it’s a handful of sections, not a list of 200. The same shape as Bots 1.</dd><dt>Bad</dt><dd>Browsing all of yours across folders means picking folders one at a time (or Group by: none).</dd></dl>
+  <div class="frames" data-what="mwfs" data-dir="1"></div>
+  <h3>2 · A sources panel beside the list</h3>
+  <dl class="verdict"><dt>Good</dt><dd>Yours and its folders, each pack (marked when it has an update) and Made for bots on the left; the list on the right. The same shape as Bots 2.</dd><dt>Bad</dt><dd>A pack’s update and customisation live one click in, on its own view.</dd></dl>
+  <div class="frames" data-what="mwfs" data-dir="2"></div>
+  <div class="rec"><b>My pick: 1</b>, with Bots 1: one pattern for both pages.</div>
 </main>
 <script>
   const SCALE = 0.56, DESK = [1280, 860], PHONE = [390, 844];
-  const state = { bots: 6, workflows: 9, facts: 'dark' };
+  const state = { mbots: 6, mwfs: 9 };
   function frame(what, dir, w, h, extra) {
     const src = `browse-options-frame.html?what=${what}&dir=${dir}&${extra}`;
     return `<div class="fr"><div class="box" style="width:${Math.round(w * SCALE)}px;height:${Math.round(h * SCALE)}px"><iframe loading="lazy" title="${what} ${dir} ${w}px" src="${src}" width="${w}" height="${h}" style="transform:scale(${SCALE})"></iframe></div><span>${w > 500 ? 'Desktop' : 'Phone'} · <a href="${src}" target="_blank">open full size</a></span></div>`;
   }
   function draw() {
     document.querySelectorAll('.frames').forEach((f) => { const what = f.dataset.what, dir = f.dataset.dir;
-      const extra = what === 'facts' ? `theme=${state.facts}` : what === 'newbot' ? 'theme=dark' : `n=${state[what]}&theme=dark`;
+      const extra = `n=${state[what]}&theme=dark`;
       f.innerHTML = frame(what, dir, DESK[0], DESK[1], extra) + frame(what, dir, PHONE[0], PHONE[1], extra); });
   }
   document.querySelectorAll('.ctl').forEach((c) => c.addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return;

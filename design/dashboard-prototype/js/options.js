@@ -206,10 +206,10 @@
   @media (max-width: 720px) { .opt-lanes { grid-template-columns: 1fr; } .opt-starts, .opt-tpls { grid-template-columns: 1fr; } .opt-sheet { inset: 0; transform: none; width: auto; border-radius: 0; border: 0; } .opt-sh { padding-top: calc(10px + var(--sat, 0px)); } .opt-sf { flex-direction: column; align-items: stretch; } .opt-wsteps span:not(.on) { display: none; } .opt-wbar { padding: 8px 16px; } .opt-gh .st { font-size: 12px; } }`;
 
   window.OPT = { render() {
-    UI.route('opt', () => { const body = WHAT === 'bots' ? BOTS[DIR](fleet(N)) : WHAT === 'workflows' ? WFS[DIR](flows(N)) : WHAT === 'facts' ? FACTS(DIR) : NEWBOT[DIR]();
-      return WHAT === 'newbot' && DIR === 'B' ? `<div>${body}</div>` : `<div class="page dl-page${WHAT === 'bots' || WHAT === 'newbot' ? ' bot-list' : ''}">${body}</div>`; }, { nav: WHAT === 'workflows' ? 'workflows' : WHAT === 'facts' ? 'attention' : 'bots' });
+    UI.route('opt', () => { if (window.OPT2 && OPT2.handles(WHAT)) return `<div class="page dl-page${WHAT === 'mbots' ? ' bot-list' : ''}">${OPT2.page(WHAT, DIR, N)}</div>`; const body = WHAT === 'bots' ? BOTS[DIR](fleet(N)) : WHAT === 'workflows' ? WFS[DIR](flows(N)) : WHAT === 'facts' ? FACTS(DIR) : NEWBOT[DIR]();
+      return WHAT === 'newbot' && DIR === 'B' ? `<div>${body}</div>` : `<div class="page dl-page${WHAT === 'bots' || WHAT === 'newbot' ? ' bot-list' : ''}">${body}</div>`; }, { nav: WHAT === 'workflows' || WHAT === 'mwfs' ? 'workflows' : WHAT === 'facts' ? 'attention' : 'bots' });
     history.replaceState(null, '', location.pathname + location.search + '#/opt');
-    const s = document.createElement('style'); s.textContent = CSS; document.head.appendChild(s);
+    const s = document.createElement('style'); s.textContent = CSS + (window.OPT2 ? OPT2.css : ''); document.head.appendChild(s);
     window.__PROTO_FAST = true; UI.boot(); document.documentElement.dataset.theme = THEME;
   } };
 })();
