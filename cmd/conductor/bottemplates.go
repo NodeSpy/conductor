@@ -479,7 +479,7 @@ func printTemplate(t map[string]any) {
 		if r, _ := m["required"].(bool); !r {
 			req = "optional"
 		}
-		s := fmt.Sprintf("%v: a %v connector", m["name"], m["type"])
+		s := fmt.Sprintf("%v: a connector of type %v", m["name"], m["type"])
 		if v, _ := m["version"].(string); v != "" {
 			s += " " + v
 		}

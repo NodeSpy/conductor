@@ -146,7 +146,7 @@ func (c *Config) instantiateTemplate(name string, m BotConfig, lt LoadedTemplate
 				return m, nil, fmt.Errorf("connectors.%s: %q is not one of your connectors", in, b)
 			}
 			if got := connectorType(ref); got != "" && got != typ {
-				return m, nil, fmt.Errorf("connectors.%s: %q is a %s connector; template %s needs a %s one here", in, b, got, lt.Ref(), typ)
+				return m, nil, fmt.Errorf("connectors.%s: %q is a connector of type %s; template %s needs one of type %s here", in, b, got, lt.Ref(), typ)
 			}
 			o.Bindings[in] = b
 			continue
@@ -164,9 +164,9 @@ func (c *Config) instantiateTemplate(name string, m BotConfig, lt LoadedTemplate
 		case len(cands) > 1:
 			return m, nil, fmt.Errorf("connectors.%s: ambiguous — you have %d %s connectors (%s); name one: connectors: { %s: <connector> }", in, len(cands), typ, strings.Join(cands, ", "), in)
 		case req.IsRequired():
-			return m, nil, fmt.Errorf("connectors.%s: template %s needs a %s connector and you have none — add one, or bind it: connectors: { %s: <connector> }", in, lt.Ref(), typ, in)
+			return m, nil, fmt.Errorf("connectors.%s: template %s needs a connector of type %s and you have none — add one, or bind it: connectors: { %s: <connector> }", in, lt.Ref(), typ, in)
 		default:
-			notes = append(notes, fmt.Sprintf("bot %s: template input %s (a %s connector) is unbound — the verbs on it are off", name, in, typ))
+			notes = append(notes, fmt.Sprintf("bot %s: template input %s (a connector of type %s) is unbound — the verbs on it are off", name, in, typ))
 		}
 	}
 	// The operator's own verbs and autonomy, before the grant adds to them.

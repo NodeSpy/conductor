@@ -111,6 +111,9 @@ func TestTemplateSeedsMemory(t *testing.T) {
 	if ch, _ := f.cfg.BotCharter("sre"); ch != "Be careful." {
 		t.Fatalf("charter from memory: %q", ch)
 	}
+	if ct := CharterText(f.cfg, "sre"); !strings.Contains(ct, "## Charter (from template kit/first-line, kept in your memory repo") || !strings.Contains(ct, "Be careful.") {
+		t.Fatalf("charter section: %s", ct)
+	}
 	// A document the bot evolves, where the template did not change, is the
 	// bot's: nothing to propose.
 	if _, _, err := f.svc.WriteMemory(ctx, Actor{Bot: "sre", Role: config.BotRoleHome}, MemoryWrite{Path: "knowledge/topology.md", Text: kd("four replicas now")}); err != nil {

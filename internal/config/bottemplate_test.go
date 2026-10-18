@@ -266,10 +266,10 @@ func TestTemplateInputBinding(t *testing.T) {
 		t.Fatalf("bound verbs: %s", v)
 	}
 	noGH := strings.Replace(sreKitManifest, "gh: { use: github, desc: \"the repos it reads\" }", "gh: { use: rss }", 1)
-	if _, _, err := loadTemplateCfg(t, noGH, "bots:\n  sre: { use: kit/first-line }\n"); err == nil || !strings.Contains(err.Error(), "needs a rss connector and you have none") {
+	if _, _, err := loadTemplateCfg(t, noGH, "bots:\n  sre: { use: kit/first-line }\n"); err == nil || !strings.Contains(err.Error(), "needs a connector of type rss and you have none") {
 		t.Fatalf("a required input with no connector: %v", err)
 	}
-	if _, _, err := loadTemplateCfg(t, noGH, "bots:\n  sre: { use: kit/first-line, connectors: { gh: gh } }\n"); err == nil || !strings.Contains(err.Error(), `"gh" is a github connector; template kit/first-line needs a rss one here`) {
+	if _, _, err := loadTemplateCfg(t, noGH, "bots:\n  sre: { use: kit/first-line, connectors: { gh: gh } }\n"); err == nil || !strings.Contains(err.Error(), `"gh" is a connector of type github; template kit/first-line needs one of type rss here`) {
 		t.Fatalf("the wrong type: %v", err)
 	}
 }

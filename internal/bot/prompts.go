@@ -40,7 +40,13 @@ func CharterText(cfg *config.Config, name string) string {
 		ch = genericCharter
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "## Charter (set by your operator in conductor config — you cannot change it)\n\n%s\n", strings.TrimSpace(ch))
+	where := "set by your operator in conductor config"
+	if o := m.Origin; o != nil && m.Charter == "" && m.CharterFile == "" {
+		// A template bot's charter is in its memory repo, where only conductor
+		// writes — changed only by an update its operator approved.
+		where = fmt.Sprintf("from template %s, kept in your memory repo where only conductor writes; only an update your operator approves changes it", o.Ref())
+	}
+	fmt.Fprintf(&b, "## Charter (%s — you cannot change it)\n\n%s\n", where, strings.TrimSpace(ch))
 	if s := strings.TrimSpace(m.Scope); s != "" {
 		fmt.Fprintf(&b, "\n### Scope\n%s\n", s)
 	}
