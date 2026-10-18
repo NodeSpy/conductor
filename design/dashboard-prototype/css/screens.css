@@ -167,11 +167,15 @@ svg.hello-art { width: 132px; height: auto; flex: none; align-self: flex-start; 
 .cm-p { display: inline-grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2); border-radius: var(--radius-control); border: var(--border-width) solid var(--color-border-default); background: var(--color-bg-raised); max-width: 260px; }
 .cm-p img { width: 36px; height: 36px; object-fit: cover; border-radius: var(--radius-xs); } .cm-p > svg { width: 18px; height: 18px; color: var(--color-icon-default); }
 .cm-p.up { opacity: .7; } .cm-pt { display: grid; min-width: 0; font: var(--type-body-s); } .cm-pt b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: var(--font-weight-medium, 500); }
-.cm-in { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--space-2); align-items: end; }
-.cm-ta { width: 100%; min-height: 44px; max-height: 180px; resize: none; padding: 11px var(--space-3); border-radius: var(--radius-control); border: var(--border-width) solid var(--color-border-control); background: var(--color-bg-field); color: var(--color-text-primary); font: var(--type-body-m); line-height: 1.4; }
-.cm-ta:focus { outline: 2px solid var(--color-focus-ring, var(--color-accent-default)); outline-offset: 1px; }
-.cm-in .icon-btn, .cm-in .btn { height: 44px; }
-.cm-hint { margin: 0; font: var(--type-caption); }
+.cm-in { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); align-items: end; }
+/* one field: the paperclip sits inside it, at the start, so attaching reads as part of writing */
+.cm-field { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: end; border-radius: var(--radius-control); border: var(--border-width) solid var(--color-border-control); background: var(--color-bg-field); }
+.cm-field:focus-within { outline: 2px solid var(--color-focus-ring, var(--color-accent-default)); outline-offset: 1px; }
+.cm-attach { width: 40px; height: 42px; display: grid; place-items: center; border: 0; background: none; color: var(--color-icon-default); cursor: pointer; border-radius: var(--radius-control); }
+.cm-attach:hover { color: var(--color-text-primary); } .cm-attach svg { width: 18px; height: 18px; }
+.cm-ta { width: 100%; min-height: 42px; max-height: 180px; resize: none; padding: 10px var(--space-3) 10px 0; border: 0; background: none; color: var(--color-text-primary); font: var(--type-body-m); line-height: 1.4; }
+.cm-ta:focus { outline: none; }
+.cm-send { width: 44px; height: 44px; padding: 0; justify-content: center; } .cm-send svg { width: 18px; height: 18px; margin: 0; }
 .cm-err { margin: 0; font: var(--type-body-s); color: var(--color-status-danger-fg); }
 .cm-drop { display: none; position: absolute; inset: 0; border-radius: inherit; place-items: center; align-content: center; gap: var(--space-2); background: color-mix(in srgb, var(--color-bg-surface) 88%, transparent); border: 2px dashed var(--color-accent-default); font: var(--type-body-l, var(--type-body-m)); color: var(--color-text-primary); pointer-events: none; z-index: 2; }
 .chat.drop .cm-drop { display: grid; } .cm-drop svg { width: 24px; height: 24px; justify-self: center; }
@@ -192,7 +196,6 @@ svg.hello-art { width: 132px; height: auto; flex: none; align-self: flex-start; 
   .cm-bot { grid-template-columns: 28px minmax(0, 1fr); gap: var(--space-2); } .cm-bot .dl-bot-av.sm { width: 28px; height: 28px; font-size: 12px; }
   .cm-head .cm-rule { display: none; }
   .cm-comp { padding: var(--space-2) var(--space-2) calc(var(--space-2) + env(safe-area-inset-bottom, 0px)); }
-  .cm-sendw { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   .cm-img { width: 150px; }
 }
 .typing { display: inline-flex; gap: 3px; padding: var(--space-3) var(--space-4); } .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--color-text-tertiary); animation: bob 1.2s infinite; }
@@ -533,12 +536,13 @@ tr.folded { display: none; }
 .paseo-open { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); padding-bottom: var(--space-3); border-bottom: var(--border-width) solid var(--color-border-subtle); }
 @media (max-width: 720px) { .meta-line { margin-top: calc(-1 * var(--space-3)); gap: var(--space-2) var(--space-4); } }
 
-/* a message's own action (Make a ticket): quiet, beside the message, shown on hover or focus; always there on touch */
-.cm-op, .cm-bot { position: relative; }
-.cm-mk { position: absolute; top: 0; width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--radius-control); border: var(--border-width) solid var(--color-border-subtle); background: var(--color-bg-surface); color: var(--color-icon-default); cursor: pointer; opacity: 0; transition: opacity var(--motion-duration-fast) var(--motion-easing-out); }
-.cm-mk svg { width: 15px; height: 15px; } .cm-op .cm-mk { left: -36px; } .cm-bot .cm-mk { right: -36px; }
-.cm-op:hover .cm-mk, .cm-bot:hover .cm-mk, .cm-mk:focus-visible { opacity: 1; } .cm-mk:hover { color: var(--color-text-primary); border-color: var(--color-border-default); }
-@media (hover: none) { .cm-mk { opacity: .8; } }
+/* a message's own action (Make a ticket): a quiet icon in its name-and-time line, shown on hover or focus; always there
+   on touch */
+.cm-mk { width: 24px; height: 20px; display: inline-grid; place-items: center; align-self: center; border: 0; border-radius: var(--radius-xs); background: none; color: var(--color-icon-default); cursor: pointer; opacity: 0; transition: opacity var(--motion-duration-fast) var(--motion-easing-out); }
+.cm-mk svg { width: 14px; height: 14px; } .cm-op .cm-mk { order: -1; }
+.cm-op:hover .cm-mk, .cm-bot:hover .cm-mk, .cm-mk:focus-visible { opacity: 1; } .cm-mk:hover { color: var(--color-text-primary); background: var(--color-state-hover); }
+@media (hover: none) { .cm-mk { opacity: .75; } }
+.cm-evm { flex-wrap: nowrap; align-items: flex-start; } .cm-evm > span:not(.dl-sub) { flex: 1; min-width: 0; } .cm-evm .dl-sub { white-space: nowrap; } .cm-evm svg { margin-top: 1px; }
 /* a line from conductor itself in a ticket's comments: who did what, quietly */
 .cm-sys { align-self: center; max-width: 100%; display: flex; gap: var(--space-2); align-items: baseline; font: var(--type-body-s); color: var(--color-text-secondary); text-align: center; }
 
@@ -567,4 +571,14 @@ tr.folded { display: none; }
 .tk-row2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
 .tk-att { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); align-items: center; }
 .tk-chk { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; } .tk-chk span { display: inline-flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; } .tk-chk .select { width: auto; min-width: 12ch; }
-@media (max-width: 720px) { .tk-row2 { grid-template-columns: 1fr; } .tk-f { grid-template-columns: 8em minmax(0, 1fr); } .cm-op .cm-mk, .cm-bot .cm-mk { position: static; justify-self: end; margin-bottom: var(--space-1); } .tk-chat { max-height: none; } }
+@media (max-width: 720px) { .tk-row2 { grid-template-columns: 1fr; } .tk-f { grid-template-columns: 8em minmax(0, 1fr); } .tk-chat { max-height: none; }
+  .cm-card { grid-template-columns: 18px minmax(0, 1fr); } .cm-card > .btn { grid-column: 2; justify-self: start; } }
+
+/* a card never lets its content run past its edge: a long address wraps; on a phone a wide table scrolls inside its
+   card; a log's lines keep the card's padding */
+.btile .panel-body .mono { overflow-wrap: anywhere; }
+.log .l { padding: 0 var(--pad-card); }
+@media (max-width: 720px) {
+  .panel table, .dl-card table { display: block; max-width: 100%; overflow-x: auto; }
+}
+.item.deleg { align-items: flex-start; } .item.deleg > .st { margin-top: 2px; } .deleg-b { display: grid; gap: var(--space-1); min-width: 0; } .deleg-task { color: var(--color-text-secondary); } .deleg-st { color: var(--color-text-secondary); }

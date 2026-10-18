@@ -39,7 +39,7 @@ test('consecutive tool calls are one quiet line that opens to each command and i
 
 test('attach, refuse with the reason, a link card, remove; send is queued until the bot is idle, then delivered', async ({ page }) => {
   await go(page, '#/bots/platform-sre/chat', { fresh: true });
-  await expect(page.locator('.cm-hint')).toContainText('Up to 10 files, 20 MB each');
+  await expect(page.locator('[data-act="chat-attach"]')).toHaveAttribute('title', /up to 10 files, 20 MB each/);
   await page.setInputFiles('#cm-file', [{ name: 'trace.log', mimeType: 'text/plain', buffer: Buffer.from('GET /checkout 2.31s\n') }, { name: 'clip.mov', mimeType: 'video/quicktime', buffer: Buffer.alloc(8) }]);
   await expect(page.locator('#cm-pend .cm-p')).toHaveCount(1);
   await expect(page.locator('#cm-err')).toContainText('clip.mov wasn’t attached: only images, PDF and text files');

@@ -101,7 +101,7 @@
     const props = (D.proposals || []).filter((p) => p.case === c.id), workers = (D.workers || []).filter((w) => w.case === c.id), dels = (D.delegations || []).filter((d) => d.parent === c.id || d.child === c.id);
     const canDel = open && m && UI.delegationReach(m.name).some((r) => r.ok);
     const ext = c.external, key = 't:' + c.id;
-    const hist = [{ at: c.opened, t: `Opened by ${askedBy(c)}` }].concat(c.routed ? [{ at: c.opened, t: k.routeLabel(c.routed).replace(/<[^>]+>/g, '') }] : [])
+    const hist = [{ at: c.opened, t: `Opened by ${askedBy(c)}` }].concat(c.routed ? [{ at: c.opened, t: (([x]) => x.toUpperCase() + x.slice(1))(k.routeLabel(c.routed).replace(/<[^>]+>/g, '')) }] : [])
       .concat(D.audit.filter((a) => new RegExp(`\\b${c.id}\\b`).test(a.detail || '')).map((a) => ({ at: a.ts, t: histWord(a) }))).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
     const ctl = (k2, label, val, opts) => `<div class="tk-f"><span class="dl-lbl">${label}</span><button class="tk-pick" data-act="tk-set" data-k="${k2}" data-t="${c.id}" aria-label="${label}: ${esc(val)}. Change">${esc(val)}${icon('chevd')}</button></div>`;
     return `<div class="page dl-page tk-page">

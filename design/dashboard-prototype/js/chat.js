@@ -31,7 +31,7 @@
     const pend = p.status === 'pending', st = pend ? 'Waiting for you' : p.status[0].toUpperCase() + p.status.slice(1);
     return `<a class="cm-card${pend ? ' pend' : ''}" href="#/bots/${p.bot}/proposals/${p.id}">${UI.mark(pend ? 'ember' : p.status === 'executed' || p.status === 'approved' ? 'ok' : 'fail')}<span class="cm-ct"><b>${esc(p.title || p.summary)}</b>${UI.factsLine([UI.envFact(p.env), UI.actionFact(p.verb, p.env, p.tier)])}<span class="dl-sub">${st}${pend && p.expires ? ` · expires in ${esc(p.expires)}` : ''}</span></span>${pend ? '<span class="btn sm secondary">Review</span>' : ''}</a>`; };
   const att = (a, i, mi) => a.kind === 'image'
-    ? `<button class="cm-img" data-act="chat-img" data-mi="${mi}" data-i="${i}" aria-label="Open ${esc(a.name)} larger"><img src="${esc(a.src || a.thumb)}" alt="${esc(a.name)}" loading="lazy"></button>`
+    ? `<button class="cm-img" data-act="chat-img" data-mi="${mi}" data-i="${i}" aria-label="Open ${esc(a.name)} larger"><img src="${esc(a.src || a.thumb)}" alt="${esc(a.name)}"></button>`
     : `<button class="cm-file" data-act="chat-img" data-mi="${mi}" data-i="${i}">${icon('file')}<span>${esc(a.name)}</span><span class="dl-sub">${UI.bytes(a.size)}</span></button>`;
   const linkCard = (l) => `<a class="cm-link" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${icon('globe')}<span><b>${esc(l.host)}</b><span class="dl-sub">${esc(l.path || '/')}</span></span></a>`;
   const stateWord = (c, bot) => c.state === 'queued' ? `<span class="cm-q">${icon('clock')}Queued: delivered when ${esc(bot)} is idle</span>` : c.state === 'delivered' ? '<span>Delivered</span>' : '';
@@ -40,14 +40,14 @@
   const msg = (c, bot0, mi, o) => { const bot = c.bot || bot0;
     if (c.who === 'sys') return `<div class="cm-row cm-sys"><span>${UI.taskWords(c.text, true)}</span><span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span></div>`;
     if (c.who === 'event') { const t = (D.cases || []).find((x) => x.id === c.case);
-      return `<div class="cm-row cm-event"><div class="cm-meta">${icon('obj-incident')}<span>From ${esc(c.source || 'an event')}${t ? ` · for the ticket <a class="dl-link" href="#/tickets/${t.id}">${esc(t.title)}</a>` : ''}</span><span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span></div>
+      return `<div class="cm-row cm-event"><div class="cm-meta cm-evm">${icon('obj-incident')}<span>From ${esc(c.source || 'an event')}${t ? ` · for the ticket <a class="dl-link" href="#/tickets/${t.id}">${esc(t.title)}</a>` : ''}</span><span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span></div>
         <div class="cm-ev">${esc(c.text)}</div><div class="cm-note">Untrusted data: ${esc(bot)} reads it, never takes orders from it</div></div>`; }
     if (c.who === 'op') { const as = c.attachments || [], ls = c.links || [];
-      return `<div class="cm-row cm-op">${mk(mi, o)}<div class="cm-meta"><span>You</span><span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span>${stateWord(c, bot)}</div>
+      return `<div class="cm-row cm-op"><div class="cm-meta">${mk(mi, o)}<span>You</span><span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span>${stateWord(c, bot)}</div>
         ${c.text ? `<div class="cm-bubble">${linkify(UI.md(c.text))}</div>` : ''}
         ${as.length || ls.length ? `<div class="cm-atts"><span class="cm-given">${icon('attach')}Data you gave it</span>${as.map((a, i) => att(a, i, mi)).join('')}${ls.map(linkCard).join('')}</div>` : ''}</div>`; }
     if (c.who === 'typing') return `<div class="cm-row cm-bot" id="typing">${UI.botAv(bot)}<div><div class="cm-meta"><b>${esc(bot)}</b><span class="dl-sub">is writing…</span></div><div class="cm-bubble typing"><i></i><i></i><i></i></div></div></div>`;
-    return `<div class="cm-row cm-bot">${UI.botAv(bot)}<div><div class="cm-meta"><b>${esc(bot)}</b><span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span></div><div class="cm-bubble">${UI.md(c.text)}</div>${c.proposal ? card(c.proposal, bot) : ''}</div>${mk(mi, o)}</div>`;
+    return `<div class="cm-row cm-bot">${UI.botAv(bot)}<div><div class="cm-meta"><b>${esc(bot)}</b><span class="dl-sub">${UI.clock(c.at).slice(0, 5)}</span>${mk(mi, o)}</div><div class="cm-bubble">${UI.md(c.text)}</div>${c.proposal ? card(c.proposal, bot) : ''}</div></div>`;
   };
   /** The thread's rows: consecutive tool calls fold into one group line. */
   UI.chatRows = (L, bot, o) => { const out = []; for (let i = 0; i < L.length; i++) {
@@ -78,13 +78,15 @@
   const links = (bot) => { const ta = UI.$('#say'), st = pend(bot); return [...new Set(((ta && ta.value) || '').match(URL_RE) || [])].filter((u) => !st.gone.includes(u)).map(linkOf).filter(Boolean).map((l) => ({ kind: 'link', ...l })); };
   const drawPend = (bot) => { const el = UI.$('#cm-pend'); if (!el) return; const st = pend(bot), all = [...st.items, ...links(bot)];
     el.innerHTML = all.map(pendItem).join(''); el.hidden = !all.length; const er = UI.$('#cm-err'); if (er) { er.textContent = st.err; er.hidden = !st.err; } };
-  UI.chatComposer = (bot, o = {}) => { const st = pend(bot), phone = innerWidth <= 720;
+  // the limits are said where they matter: in the attach button's tooltip, and in words when a file is refused
+  const limitWords = `Attach up to ${LIMITS.files} files, ${UI.bytes(LIMITS.bytes)} each: images, PDF and text; paste or drop them too`;
+  UI.chatComposer = (bot, o = {}) => { const st = pend(bot);
     return `<div class="cm-comp" data-bot="${esc(bot)}"${o.ticket ? ` data-t="${esc(o.ticket)}"` : ''}><div class="cm-pend" id="cm-pend"${st.items.length ? '' : ' hidden'}>${st.items.map(pendItem).join('')}</div>
       <p class="cm-err" id="cm-err" role="alert"${st.err ? '' : ' hidden'}>${esc(st.err)}</p>
-      <div class="cm-in"><button class="icon-btn" data-act="chat-attach" aria-label="Attach files or images" title="Attach files or images">${icon('attach')}</button><input type="file" id="cm-file" multiple accept="${ACCEPT}" hidden>
-        <textarea class="cm-ta" id="say" rows="1" placeholder="${o.ticket ? 'Add a comment' : `Message ${esc(bot)}`}" aria-label="${o.ticket ? 'Comment' : `Message ${esc(bot)}`}" aria-describedby="cm-hint"></textarea>
-        <button class="btn primary" data-act="chat-send" data-m="${esc(bot)}"${o.ticket ? ` data-t="${esc(o.ticket)}"` : ''}>${icon('send')}<span class="cm-sendw">${o.ticket ? 'Comment' : 'Send'}</span></button></div>
-      <p class="cm-hint dl-sub" id="cm-hint">${phone ? '' : 'Enter sends · Shift+Enter for a new line · '}Up to ${LIMITS.files} files, ${UI.bytes(LIMITS.bytes)} each: images, PDF and text. Paste or drop them here.</p></div>`; };
+      <div class="cm-in"><div class="cm-field"><button type="button" class="cm-attach" data-act="chat-attach" aria-label="Attach files or images" title="${esc(limitWords)}">${icon('attach')}</button><input type="file" id="cm-file" multiple accept="${ACCEPT}" hidden>
+        <textarea class="cm-ta" id="say" rows="1" placeholder="${o.ticket ? 'Add a comment' : `Message ${esc(bot)}`}" aria-label="${o.ticket ? 'Comment' : `Message ${esc(bot)}`}" aria-describedby="cm-hint"></textarea></div>
+        <button class="btn primary cm-send" data-act="chat-send" data-m="${esc(bot)}"${o.ticket ? ` data-t="${esc(o.ticket)}"` : ''} aria-label="${o.ticket ? 'Post comment' : 'Send'}" title="${o.ticket ? 'Post comment' : 'Send'} (Enter; Shift+Enter for a new line)">${icon('send')}</button></div>
+      <span class="sr-only" id="cm-hint">Enter sends; Shift+Enter starts a new line. ${esc(limitWords)}.</span></div>`; };
   /** Add files: check each against the limits, then upload it (the mock of POST …/attachments). */
   const addFiles = (bot, files) => { const st = pend(bot), errs = [];
     for (const f of files) {

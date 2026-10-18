@@ -154,7 +154,7 @@
   D.chatsVer = 2;
   D.chat = [
     { id: 't1', who: 'event', at: m(48), case: 'c29', source: 'PagerDuty', text: 'pd.incident · SEV2 · api p99 latency > 2s for 10m (acme/api, us-east)', fenced: true },
-    { id: 't2', who: 'bot', at: m(47), text: 'I’ve opened a task for this incident. Checking the runbook `runbooks/latency.md` first, then I’ll have two read-only workers pull the last hour of p99 by route and the deploy log.' },
+    { id: 't2', who: 'bot', at: m(47), text: 'I’ve opened a ticket for this incident. Checking the runbook `runbooks/latency.md` first, then I’ll have two read-only workers pull the last hour of p99 by route and the deploy log.' },
     { id: 't3', who: 'tool', at: m(47), kind: 'spawn', readOnly: true, brief: 'p99 by route, last 60m', text: 'conductor bot spawn --task c29 --group recon --read-only "p99 by route, last 60m"', out: 'worker w31 started · read-only · group recon' },
     { id: 't4', who: 'tool', at: m(46), kind: 'spawn', readOnly: true, brief: 'deploys and config changes, last 3h', text: 'conductor bot spawn --task c29 --group recon --read-only "deploys + config changes, last 3h"', out: 'worker w32 started · read-only · group recon' },
     { id: 't5', who: 'op', at: m(44), state: 'delivered', text: 'Here’s what the dashboard showed when it paged, and a sample of the load balancer log.', attachments: [

@@ -158,11 +158,14 @@
       const why = mates || S.linked(from, b.name) ? '' : ft && bt === ft ? `team ${ft} sets peers: none; link the two bots to delegate` : `${from} and ${b.name} aren't linked: both list each other under peers, or add a bot_links pair`;
       return { name: b.name, team: bt, ok: !why, why, cross: !!(bt && ft && bt !== ft) }; });
   };
-  const edgeHTML = (d) => `<div class="item deleg" data-deleg="${d.id}" style="align-items:flex-start">${st(DST[d.status], '')}<div class="grow small">
-      <div><span class="mono tiny muted">${d.id}</span> delegated by <b>${esc(d.from)}</b> → <a class="link" href="#/tickets/${d.child}"><b>${esc(d.to)}</b></a> ${UI.statusMark(DST[d.status], d.status, { sm: true })}${M(d.from) && M(d.to) && teamOf(M(d.from)) && teamOf(M(d.to)) && teamOf(M(d.from)).name !== teamOf(M(d.to)).name ? ' ' + tag('linked bots') : ''}</div>
-      <div class="muted">“${esc(d.task)}”</div>
+  // a hand-off in words: who handed what to whom, where it stands, what came back; the requester said plainly (it is
+  // carried through, so the teammate works with no more trust than whoever asked)
+  const reqWords = (r) => (/^operator:/.test(r) ? 'you' : /^event:pd/.test(r) ? 'a PagerDuty incident' : /^event:gh/.test(r) ? 'a GitHub event' : /^event:/.test(r) ? 'an event' : /^chat:/.test(r) ? 'someone in chat' : /^bot:/.test(r) ? r.slice(4) : 'a routine check');
+  const edgeHTML = (d) => `<div class="item deleg" data-deleg="${d.id}">${UI.mark(DST[d.status] || 'idle')}<div class="grow small deleg-b">
+      <div>delegated by <b>${esc(d.from)}</b> → <a class="dl-link" href="#/tickets/${d.child}"><b>${esc(d.to)}</b></a>${M(d.from) && M(d.to) && teamOf(M(d.from)) && teamOf(M(d.to)) && teamOf(M(d.from)).name !== teamOf(M(d.to)).name ? ' · linked bots' : ''} · <span class="deleg-st">${esc(d.status)}</span></div>
+      <div class="deleg-task">“${esc(d.task)}”</div>
       ${d.result ? `<div class="deleg-result">↩ result: ${esc(d.result)}</div>` : ''}
-      <div class="tiny muted">requester ${UI.label(`${esc(d.requester)}`, { cls: 'taint ' + d.cls })} kept · ${ago(d.at)} ago${d.done ? ` · reported back ${ago(d.done)} ago` : ''}</div></div>
+      <div class="dl-sub">For ${esc(reqWords(d.requester || ''))}, whose trust it keeps · ${ago(d.at)} ago${d.done ? ` · reported back ${ago(d.done)} ago` : ''}</div></div>
       ${d.status === 'running' ? `<button class="btn sm ghost" data-act="deleg-cancel" data-id="${d.id}">${icon('x')}Cancel</button>` : ''}</div>`;
   UI.act('deleg-cancel', (b) => UI.confirm({ title: `Cancel delegation ${b.dataset.id}?`, body: 'The recipient\'s child task is closed and the delegating bot is told the task was cancelled. Immediate, audited.', ok: 'Cancel delegation', danger: true }).then((ok) => {
     if (!ok) return; const d = D.delegations.find((x) => x.id === b.dataset.id); d.status = 'cancelled'; d.done = now();

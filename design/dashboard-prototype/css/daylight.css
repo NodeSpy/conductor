@@ -20,11 +20,11 @@
 /* layout */
 .dl-cols { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(300px, 1fr); gap: 20px; margin-top: 20px; align-items: start; }
 .dl-col-main, .dl-col-side { display: grid; gap: 20px; min-width: 0; }
-.dl-card { background: var(--color-bg-surface); border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-card); box-shadow: var(--shadow-1); padding: 22px; min-width: 0; }
+.dl-card { background: var(--color-bg-surface); border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-card); box-shadow: var(--shadow-1); padding: var(--pad-card); min-width: 0; }
 .dl-card.dl-flush { padding: 0; overflow: hidden; }
 .dl-ch { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
 .dl-ch .count { align-self: center; }
-.dl-ch.dl-pad { padding: 22px 22px 0; }
+.dl-ch.dl-pad { padding: var(--pad-card) var(--pad-card) 0; }
 .dl-crumbs { display: flex; align-items: center; gap: 6px; font: var(--type-body-s); color: var(--color-text-tertiary); margin-bottom: 10px; flex-wrap: wrap; }
 .dl-crumbs a:hover { color: var(--color-text-primary); }
 .dl-crumbs svg { width: 14px; height: 14px; }
@@ -199,7 +199,7 @@
 
   .dl-lead { font: var(--type-body-m); }
   .dl-cols { gap: 14px; margin-top: 14px; } .dl-col-main, .dl-col-side { gap: 14px; }
-  .dl-card { padding: 16px; } .dl-ch.dl-pad { padding: 16px 16px 0; }
+  .dl-ch.dl-pad { padding: var(--pad-card) var(--pad-card) 0; }
   .dl-need-a { grid-template-columns: 18px minmax(0, 1fr) auto; row-gap: 8px; } .dl-need-a > .dl-nt { grid-column: 2 / -1; }
   .dl-need-a > .dl-age { grid-column: 2; grid-row: 2; justify-self: start; } .dl-need-a > .dl-na { grid-column: 3; grid-row: 2; justify-self: end; } .dl-need-a > .dl-na > .btn { width: auto; min-width: var(--row-act); }
   .dl-need-a > .dl-age:empty { display: none; }

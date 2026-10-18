@@ -18,6 +18,8 @@
   --dvh: 100vh; --fixb: 0px;
   --sat: env(safe-area-inset-top, 0px); --sab: env(safe-area-inset-bottom, 0px); --sal: env(safe-area-inset-left, 0px); --sar: env(safe-area-inset-right, 0px);
 }
+/* a card's padding is one token, tighter on a phone: every card and panel uses it, so their content lines up */
+@media (max-width: 720px) { :root { --pad-card: 16px; } }
 
 /* ---------- base ---------- */
 * { box-sizing: border-box; }
