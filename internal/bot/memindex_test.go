@@ -81,6 +81,15 @@ func TestRecallRanksFrontmatterAboveBody(t *testing.T) {
 	if hits, _ := repo.Recall(ctx, "replication", 2, ""); len(hits) != 2 {
 		t.Fatalf("limit: %d", len(hits))
 	}
+	// The limit holds across both passes, even when the every-word hit ranks
+	// below the any-word ones.
+	writeDoc(t, f, "knowledge", "both-low", know("Misc", "", "", filler+" ocelot and also a pangolin "+filler))
+	for i := 0; i < 4; i++ {
+		writeDoc(t, f, "knowledge", fmt.Sprintf("ocelot-%d", i), know(fmt.Sprintf("Ocelot %d", i), "", "", "x"))
+	}
+	if hits, _ := repo.Recall(ctx, "ocelot pangolin", 2, ""); len(hits) != 2 || hits[0].Path != "knowledge/both-low.md" {
+		t.Fatalf("limit across passes: %v", paths(hits))
+	}
 	// The limit holds across the any-word pass too.
 	if hits, _ := repo.Recall(ctx, "replication lag notes", 3, ""); len(hits) != 3 || hits[0].Path != "knowledge/title.md" {
 		t.Fatalf("limit across passes: %v", paths(hits))
