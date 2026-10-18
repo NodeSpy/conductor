@@ -98,14 +98,17 @@
   const canNext = () => (bw.at === 0 ? (bw.purpose && !nameErr() && !UI.folderPathErr(bw.folder) ? '' : !bw.purpose ? 'Pick what it should do first' : nameErr() ? 'Fix the name first' : 'Fix the folder first') : bw.at === 2 && bw.tell === 'slack' && !bw.slack ? 'Pick a Slack connector' : bw.at === 2 && bw.tell === 'slack' && !CHANNEL.test(bw.channel || '') ? 'A Slack channel is # and up to 80 lowercase letters, digits, - or _' : '');
   const CHANNEL = /^#[a-z0-9][a-z0-9_-]{0,79}$/;
   UI.route('bots/new', () => { const why = canNext();
-    return `<div class="page wizard">${UI.head('New bot', { crumbs: '<a href="#/bots">Bots</a>', sub: 'an AI teammate with memory: it watches what you pick, tells you what it finds, and asks before acting', actions: `<a class="btn ghost" href="#/bots" data-act="bw-cancel">Cancel</a>` })}
+    return `<div class="page wizard">${UI.head('New bot', { crumbs: '<a href="#/bots">Bots</a>', sub: 'an AI teammate with memory: it watches what you pick, tells you what it finds, and asks before acting', actions: `<button type="button" class="btn secondary bw-close" data-act="bw-close" aria-label="Close the new bot (Esc)">${icon('x')}Close</button>` })}
       ${UI.stepper(STEPS, bw.at)}
       <div class="stack bw-body" style="gap:14px">${stepHTML()}</div>
       <div class="wizard-foot">${bw.at ? `<button class="btn" data-act="bw-back">${icon('chev', 'flip')}Back</button>` : ''}<span class="grow"></span>
         ${bw.at < STEPS.length - 1 ? `<button class="btn primary" ${why ? UI.off(why) : 'data-act="bw-next"'}>Next</button>` : `<button class="btn primary" data-act="bw-create">${icon('check')}Review and apply</button>`}</div></div>`; }, { nav: 'bots' });
   const redraw = () => UI.rerender();
   UI.act('bw-purpose', (b) => { const p = PURPOSES[b.dataset.p], prev = bw.purpose && PURPOSES[bw.purpose]; bw.purpose = b.dataset.p; if (!bw.name || (prev && bw.name === prev.name)) bw.name = p.name; if (!bw.description || (prev && bw.description === prev.description)) bw.description = p.description; bw.events = new Set(p.events.filter((k) => events().some((e) => e.key === k))); redraw(); });
-  UI.act('bw-set', (el) => { bw[el.dataset.k] = el.value; if (el.tagName === 'SELECT') redraw(); else { const f = el.closest('.field'); if (el.dataset.k === 'name' && f) { const e = nameErr(); f.classList.toggle('bad', !!e); f.querySelector('.ferr').textContent = e; const nx = UI.$('.wizard-foot .btn.primary'); if (nx) { const why = canNext(); if (why) { nx.setAttribute('aria-disabled', 'true'); nx.dataset.reason = why; nx.removeAttribute('data-act'); } else { nx.removeAttribute('aria-disabled'); nx.dataset.act = 'bw-next'; } } } } });
+  UI.act('bw-set', (el) => { bw[el.dataset.k] = el.value; if (el.tagName === 'SELECT') { redraw(); return; } const f = el.closest('.field');
+    if (el.dataset.k === 'name' && f) { const e = nameErr(); f.classList.toggle('bad', !!e); f.querySelector('.ferr').textContent = e; }
+    // every field re-checks Next as you type (a channel, a folder, the name), not only on the next render
+    const nx = UI.$('.wizard-foot .btn.primary'); if (nx && bw.at < STEPS.length - 1) { const why = canNext(); if (why) { nx.setAttribute('aria-disabled', 'true'); nx.dataset.reason = why; nx.removeAttribute('data-act'); } else { nx.removeAttribute('aria-disabled'); delete nx.dataset.reason; nx.dataset.act = 'bw-next'; } } });
   UI.act('bw-ev', (el) => { el.checked ? bw.events.add(el.dataset.k) : bw.events.delete(el.dataset.k); redraw(); });
   UI.act('bw-op', (el) => { bw.operators = el.checked ? bw.operators.concat(el.dataset.k) : bw.operators.filter((o) => o !== el.dataset.k); });
   UI.act('bw-sweep', () => { bw.sweep = !bw.sweep; redraw(); });
@@ -116,6 +119,12 @@
   // watching nothing is allowed, but never by accident
   UI.act('bw-next', () => { if (canNext()) { redraw(); return; } if (bw.at === 1 && !bw.events.size && !bw.sweep) return UI.confirm({ title: 'Continue without anything to watch?', body: `${esc(bw.name)} won't hear about any event and won't check in on its own, so it only answers when you chat with it. You can add what it watches later.`, ok: 'Continue without events', cancel: 'Pick events' }).then((ok) => ok && advance()); advance(); });
   UI.act('bw-back', () => { bw.at = Math.max(0, bw.at - 1); redraw(); });
+  // leaving is obvious and safe: a Close button where people look for one, Esc, and a confirm only once something has
+  // been entered (nothing typed or picked: it just closes)
+  const dirty = () => bw.at > 0 || !!bw.purpose || !!bw.name || !!bw.description || !!bw.folder || !!bw.team;
+  UI.act('bw-close', () => { if (!dirty()) { bw = fresh(); UI.go('#/bots'); return; }
+    UI.confirm({ title: 'Discard this new bot?', body: 'What you’ve entered so far is thrown away. Nothing has been created yet.', ok: 'Discard', cancel: 'Keep editing', danger: true }).then((ok) => { if (ok) { bw = fresh(); UI.go('#/bots'); } }); });
   UI.act('bw-cancel', () => { bw = fresh(); });
+  document.addEventListener('keydown', (e) => { if (e.key !== 'Escape' || location.hash.split('?')[0] !== '#/bots/new' || document.querySelector('.modal, .drawer-scrim, #pop-menu, .fb-menu, .palette')) return; e.preventDefault(); UI.acts['bw-close'](); }, true); // capture: decided before any dialog's own Esc closes it
   UI.act('bw-create', () => { if (bw.at !== STEPS.length - 1 || nameErr() || canNext()) return; const name = bw.name; S.stage('bots', name, botCfg(), `new bot ${name}`); chosenEvents().forEach((e) => S.stage('workflows', trigName(e), trigYAML(e), `trigger ${trigName(e)} hands ${e.on} to ${name}`)); D.prefs.returnTo = { href: `#/bots/${name}`, label: name }; bw = fresh(); UI.staged(D.pending[D.pending.length - 1]); });
 })();

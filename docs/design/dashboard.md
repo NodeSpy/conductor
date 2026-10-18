@@ -1033,7 +1033,10 @@ These came out of two UX audits (a newcomer and a power user; responses in
   folder; health folds into a collapsed **System** card; the Running tile
   lists three names and a count.
 - **New bot** is a guided page (`#/bots/new`): *Purpose → Watches → Tells you
-  where → What it may do → Review*. It writes `bots.<name>` (description,
+  where → What it may do → Review*. Leaving is obvious and safe: a Close button at the top (a button, not a text
+  link), Esc, and a "Discard this new bot?" confirm only once something has been entered. Next re-checks every
+  field as you type (a channel, a folder, the name), with the reason when it's held. (Whether it becomes a sheet over
+  Bots, and the community-bot start, wait on the pick in `browse-options.html`.) It writes `bots.<name>` (description,
   escalation, team or folder, `skill.verbs`, `autonomy.tiers/promote/shadow`,
   optional `proactive`) and one trigger per watched event whose step is
   `bot: { name, title }`. Permission presets: read only; can comment and post;
