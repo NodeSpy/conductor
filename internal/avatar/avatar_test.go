@@ -57,10 +57,10 @@ func TestCheck(t *testing.T) {
 		data []byte
 		want string // format, or an error substring
 	}{
-		"png":  {good, "png"},
-		"jpeg": {jpg, "jpeg"},
-		"webp": {webp, "webp"},
-		"svg":  {[]byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`), "SVG is not accepted"},
+		"png":                    {good, "png"},
+		"jpeg":                   {jpg, "jpeg"},
+		"webp":                   {webp, "webp"},
+		"svg":                    {[]byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`), "SVG is not accepted"},
 		"svg with an xml prolog": {[]byte(`<?xml version="1.0"?><svg/>`), "SVG is not accepted"},
 		"html named .png":        {[]byte("<html><body><script>alert(1)</script></body></html>"), "not a PNG, JPEG or WebP image"},
 		"gif":                    {[]byte("GIF89a\x01\x00\x01\x00\x00\x00\x00;"), "not a PNG, JPEG or WebP image"},
