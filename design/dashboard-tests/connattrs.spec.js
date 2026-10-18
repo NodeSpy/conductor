@@ -64,6 +64,7 @@ test('Needs you: the same qualifiers, and "Showing N of M" whenever one hides an
   await bar.locator('.fb-in').fill('repo:acme/web');
   await expect(page.locator('.need-shown')).toContainText(/Showing \d+ of \d+/);
   await expect(page.locator('#need-body .dl-need').first()).toContainText('acme/web');
+  await bar.locator('.fb-in').press('Escape'); // the suggestions close, as when a person moves on
   await page.locator('.need-shown [data-act="need-clear"]').click();
   await expect(page.locator('.need-shown')).toHaveCount(0);
 });

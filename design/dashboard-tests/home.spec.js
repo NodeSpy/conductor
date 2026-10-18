@@ -36,7 +36,8 @@ test('Home: no greeting or summary line; At a glance, Needs you with one action 
   // the last 12 hours: one strip for every workflow, its failures named
   await expect(page.locator('svg.dl-hours')).toHaveCount(1);
   await expect(page.locator('.dl-card', { hasText: 'Last 12 hours' }).locator('.dl-foot-note')).toContainText(/failed: .+ at \d\d:\d\d/);
-  await expect(page.locator('.dl-card', { hasText: 'For your information' })).toContainText('v0.72.0');
+  // a routine update isn't news: it's on the machine card, not under For your information
+  await expect(page.locator('.dl-card', { hasText: 'For your information' })).not.toContainText('v0.72.0');
   // retired: the sunrise, the digest, the lanes
   await expect(page.locator('.sunrise, svg.sunrise')).toHaveCount(0);
   await expect(page.getByText(/since you last looked/i)).toHaveCount(0);

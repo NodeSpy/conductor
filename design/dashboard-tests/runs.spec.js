@@ -48,7 +48,8 @@ test('outputs carry no spend while usage display is off; targets never show #0',
   await expect(page.locator('#run-step')).toContainText('summary');
   await expect(page.locator('#run-step')).not.toContainText('cost_usd');
   await go(page, '#/activity?since=');
-  await expect(page.locator('tr[data-href="#/runs/r-7ec8"] td.run')).toContainText('acme/web');
+  // a scheduled run has no connector event: it says so in words, not a repository it doesn't have
+  await expect(page.locator('tr[data-href="#/runs/r-7ec8"] td.run')).toContainText('on its schedule');
   await expect(page.locator('#act-tbl')).not.toContainText('#0');
 });
 

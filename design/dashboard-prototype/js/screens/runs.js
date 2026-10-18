@@ -321,9 +321,9 @@
   const MIN = { s: 0, m: 1, h: 60, d: 1440 }, mins = (a) => { const m = String(a.age || '').match(/^(\d+)\s*([smhd])$/); return m ? +m[1] * MIN[m[2]] : 0; };
   const needTiles = () => { const A = D.attention; if (!A.length) return '';
     return UI.glance(UI.NEED_KINDS.map(([k, one, many]) => { const xs = A.filter((a) => a.kind === k), n = xs.length; if (!n) return ''; const on = nv.kind.length === 1 && nv.kind[0] === k, old = xs.reduce((m, a) => (mins(a) > mins(m) ? a : m), xs[0]);
-      return UI.statTile({ act: 'need-kind', attrs: `data-k="${k}"`, label: (n === 1 ? one : many).replace(/^./, (c) => c.toUpperCase()), value: n, detail: on ? 'showing only these · show all' : old.age ? `oldest ${UI.ageText(old.age)}` : 'waiting on you', on, hot: k !== 'failed' && k !== 'connection' }); }), 'What needs you, by kind'); };
+      return UI.statTile({ act: 'need-kind', attrs: `data-k="${k}"`, label: (n === 1 ? one : many).replace(/^./, (c) => c.toUpperCase()), value: n, detail: on ? 'showing only these' : old.age ? `oldest ${UI.ageText(old.age)}` : 'waiting on you', on, hot: k !== 'failed' && k !== 'connection' }); }), 'What needs you, by kind'); };
   const needBody = () => { const shown = D.attention.filter(needMatch), all = D.attention.length;
-    const note = shown.length < all ? `<p class="need-shown">Showing ${shown.length} of ${all} · <button class="link" data-act="need-clear">Show all</button></p>` : '';
+    const note = shown.length < all ? `<p class="need-shown">Showing ${shown.length} of ${all} · <button class="link" data-act="need-clear">Clear</button></p>` : '';
     return UI.attentionList(/[?&]all=1/.test(location.hash) ? 1e9 : 0, shown, note) + (shown.length || !all ? '' : ''); };
   const needRefresh = () => { const t = UI.$('#need-tiles'), b = UI.$('#need-body'); if (t) t.innerHTML = needTiles(); if (b) b.innerHTML = needBody(); };
   UI.act('need-kind', (b) => { const k = b.dataset.k; nv.kind = nv.kind.length === 1 && nv.kind[0] === k ? [] : [k]; UI.rerender(); });

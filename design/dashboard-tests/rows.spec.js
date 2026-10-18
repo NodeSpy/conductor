@@ -17,7 +17,7 @@ test('list rows: time and action never touch, and line up down the list', async 
       document.querySelectorAll(`#main ${sel}`).forEach((ul) => { const rows = [...ul.querySelectorAll(':scope > li > .dl-need-a')].filter((r) => r.getClientRects().length);
         const timeR = [], btnL = [];
         rows.forEach((r) => { const t = r.querySelector(':scope > .dl-age'), b = r.querySelector(':scope > .dl-na > .btn, :scope > .dl-na > .st'); if (!t || !t.textContent.trim() || !b) return;
-          const tr = t.getBoundingClientRect(), br = b.getBoundingClientRect(), rr = r.getBoundingClientRect(), name = (r.querySelector('b') || r).textContent.trim().slice(0, 30);
+          const tr = t.getBoundingClientRect(), br = b.getBoundingClientRect(), cs = getComputedStyle(r), r0 = r.getBoundingClientRect(), rr = { top: r0.top + parseFloat(cs.paddingTop), bottom: r0.bottom - parseFloat(cs.paddingBottom) }, name = (r.querySelector('b') || r).textContent.trim().slice(0, 30);
           const sameLine = Math.abs((tr.top + tr.bottom) / 2 - (br.top + br.bottom) / 2) < 12;
           if (sameLine && br.left - tr.right < gap) bad.push(`"${name}": time and action ${Math.round(br.left - tr.right)}px apart`);
           if (!sameLine && (tr.bottom > br.top && tr.top < br.bottom && tr.right > br.left)) bad.push(`"${name}": time and action overlap`);
