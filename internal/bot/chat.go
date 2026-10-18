@@ -157,13 +157,10 @@ var mentionRE = regexp.MustCompile(`(^|[^\w@])@([a-z0-9][a-z0-9_-]*)`)
 func (s *Service) chatTargets(team string, req ChatSend) ([]string, string, error) {
 	cfg := s.Cfg()
 	t := cfg.Teams[team]
+	all := cfg.TeamBots(team) // enabled bots only
 	members := map[string]bool{}
-	var all []string
-	for _, b := range cfg.TeamBots(team) {
-		if !cfg.Bots[b].Disabled {
-			members[b] = true
-			all = append(all, b)
-		}
+	for _, b := range all {
+		members[b] = true
 	}
 	if len(all) == 0 {
 		return nil, "", fmt.Errorf("team %s has no bots", team)
@@ -578,9 +575,7 @@ func (s *Service) Conversations(op string) ([]ConversationSummary, error) {
 		add("team", t)
 	}
 	for _, b := range cfg.BotNames() {
-		if !cfg.Bots[b].Disabled {
-			add("bot", b)
-		}
+		add("bot", b)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i].Last, out[j].Last
