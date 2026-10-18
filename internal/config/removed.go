@@ -149,6 +149,14 @@ func eachItem(n *yaml.Node, fn func(string, *yaml.Node)) {
 			fn(label, it)
 		}
 	case yaml.MappingNode:
-		eachEntry(n, func(k string, v *yaml.Node) { fn("."+k, v) })
+		eachEntry(n, func(k string, v *yaml.Node) {
+			if v.Kind == yaml.SequenceNode { // the instance-array form
+				for i, it := range v.Content {
+					fn(fmt.Sprintf(".%s[%d]", k, i), it)
+				}
+				return
+			}
+			fn("."+k, v)
+		})
 	}
 }

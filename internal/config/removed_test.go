@@ -67,7 +67,7 @@ bots:
 packs:
   kit:
     use: ./packs/tidy
-    folder: my/packs
+    folder: [my, packs]
     workflows:
       tidy-flow:
         folder: ops
@@ -234,5 +234,34 @@ packs:
 	}
 	if len(removedFolderWarnings([]byte("bots: {}\n"))) != 0 || len(removedFolderWarnings([]byte("::not yaml"))) != 0 {
 		t.Fatal("warnings from nothing")
+	}
+}
+
+// Map-form triggers written as an instance array are keyed by a hash of each
+// instance's raw YAML: a folder: in one never changes which instance it is.
+func TestRemovedFolderKeepsInstanceIdentity(t *testing.T) {
+	body := func(f1, f2 string) string {
+		return "triggers:\n  nightly:\n    - on: manual\n" + f1 + "      steps: [ { log: one } ]\n    - on: manual\n" + f2 + "      steps: [ { log: two } ]\n"
+	}
+	names := func(c *Config) string {
+		var out []string
+		for _, tr := range c.Triggers {
+			out = append(out, tr.Name)
+		}
+		return strings.Join(out, " ")
+	}
+	with, err := loadBots(t, body("      folder: a\n", "      folder: [b, c]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, err := loadBots(t, body("", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names(with) != names(without) || !strings.Contains(names(with), "nightly#") {
+		t.Fatalf("instance names with folder: %q, without: %q", names(with), names(without))
+	}
+	if got := strings.Join(with.RemovedFieldWarnings(), "\n"); got != "triggers.nightly[0].folder: "+FolderRemoved+"\ntriggers.nightly[1].folder: "+FolderRemoved {
+		t.Fatalf("instance-array warnings:\n%s", got)
 	}
 }
